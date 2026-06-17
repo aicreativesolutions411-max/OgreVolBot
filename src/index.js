@@ -2781,6 +2781,10 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "autopilot-pro.html");
       return;
     }
+    if (request.method === "GET" && ["/chart", "/chart-lab", "/chart-preview"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "chart-lab.html");
+      return;
+    }
 
     if (request.method === "GET" && /^[/](call|u|g|hype)([/]|$)/.test(requestUrl.pathname)) {
       await serveProofSharePage(requestUrl, request, response);

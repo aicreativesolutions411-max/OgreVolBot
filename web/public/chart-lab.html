@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#07120c" />
+<title>SlimeWire Chart — preview</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;background:#07120c;color:#e8f5ec;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  body{padding:max(12px,env(safe-area-inset-top)) 12px max(16px,env(safe-area-inset-bottom));max-width:760px;margin:0 auto}
+  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:600;font-size:15px}
+  .brand .dot{width:26px;height:26px;border-radius:7px;background:#0e2417;border:1px solid #2a6b3f;display:flex;align-items:center;justify-content:center;color:#7CFF4F;font-size:15px}
+  .tag{font-size:11px;color:#9dff6a;background:#10261a;border:1px solid #20502f;border-radius:20px;padding:4px 11px}
+  .card{background:#0a1610;border:1px solid #1a3524;border-radius:15px;padding:13px 13px 11px}
+  .hdr{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+  .tk{display:flex;align-items:center;gap:10px}
+  .av{width:34px;height:34px;border-radius:50%;background:#13351f;border:1px solid #2f6b3f;display:flex;align-items:center;justify-content:center;color:#9dff6a;font-weight:600;font-size:14px}
+  .tk .sym{font-size:15px;font-weight:600}
+  .tk .sub{font-size:11px;color:#5d8a6e}
+  .px{font-size:18px;font-weight:600;color:#9dff6a;text-align:right}
+  .live{font-size:11px;color:#7CFF4F;display:flex;align-items:center;gap:5px;justify-content:flex-end}
+  .live .pls{width:7px;height:7px;border-radius:50%;background:#7CFF4F;animation:pls 1.4s ease-in-out infinite}
+  @keyframes pls{0%,100%{opacity:1}50%{opacity:.25}}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+  .chip{font-size:11px;color:#cfeede;background:#0e2417;border-radius:6px;padding:4px 9px}
+  .chip.buy{color:#9dff6a;background:#10261a}
+  canvas{display:block;width:100%;border-radius:10px}
+  .note{font-size:11px;color:#6c9a80;margin-top:7px;display:flex;align-items:center;gap:6px}
+  .tape{margin-top:9px;border-top:1px solid #142c1d;padding-top:8px;display:flex;flex-direction:column;gap:4px;font-size:12px}
+  .trow{display:flex;justify-content:space-between}
+  .buyc{color:#21d07a}.sellc{color:#ff3b4e}.dim{color:#6c9a80}
+  .cta{display:block;text-align:center;margin-top:12px;background:#7CFF4F;color:#06210f;font-weight:700;text-decoration:none;padding:13px;border-radius:12px;font-size:15px}
+  .foot{text-align:center;font-size:11px;color:#3f7a59;margin-top:14px;line-height:1.6}
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="brand"><span class="dot">◢</span> SlimeWire</div>
+    <span class="tag">Style 1 · gooey slime + blood drip</span>
+  </div>
+
+  <div class="card">
+    <div class="hdr">
+      <div class="tk">
+        <span class="av">OG</span>
+        <div>
+          <div class="sym">$OGRE <span style="color:#5d8a6e;font-weight:400">· Swamp Ogre</span></div>
+          <div class="sub">9wX…pump · live preview</div>
+        </div>
+      </div>
+      <div>
+        <div class="px" id="px">$0.000182</div>
+        <div class="live"><span class="pls"></span>LIVE</div>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="chip">MC <b id="mc">$182K</b></span>
+      <span class="chip">Liq $44K</span>
+      <span class="chip">Vol $1.2M</span>
+      <span class="chip buy" id="bias">68% buys</span>
+    </div>
+    <canvas id="goo" role="img" aria-label="Live gooey slime and blood drip candlestick chart"></canvas>
+    <div class="note"><span>⚡</span> loads live · re-drips on every buy &amp; sell</div>
+    <div class="tape" id="tape"></div>
+  </div>
+
+  <a class="cta" href="/t?ca=DEMO">⚡ Quick Buy on SlimeWire</a>
+  <div class="foot">Preview with synthetic data — final pulls free GeckoTerminal candles (post-DEX) + Pump bonding-curve data (pre-DEX), edge-cached.<br/>Tell me: keep this, tweak it, or see Style 2.</div>
+
+<script>
+(function(){
+  var cv=document.getElementById('goo'); if(!cv) return;
+  var ctx,W,H,dpr=Math.min(2,window.devicePixelRatio||1);
+  function hgt(){return Math.max(260,Math.min(440,Math.round(window.innerHeight*0.50)));}
+  function size(){var w=Math.max(280,cv.parentElement.getBoundingClientRect().width-0);var h=hgt();cv.width=w*dpr;cv.height=h*dpr;cv.style.height=h+'px';ctx=cv.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);W=w;H=h;}
+  size();
+  var N=26,bars=[],drops=[],price=13;
+  function mk(prev){var o=prev,drift=(Math.random()-0.46)*2.4,c=Math.max(3,o+drift);var h=Math.max(o,c)+Math.random()*1.5+0.3,l=Math.min(o,c)-Math.random()*1.5-0.3;var up=c>=o;var ss=up?0.26+Math.random()*0.18:0.6+Math.random()*0.24;return {o:o,h:h,l:l,c:c,up:up,ss:ss,ph:Math.random()*6.28};}
+  for(var i=0;i<N;i++){bars.push(mk(price));price=bars[i].c;}
+  function targetBounds(){var mn=1e9,mx=-1e9;bars.forEach(function(b){mn=Math.min(mn,b.l);mx=Math.max(mx,b.h);});var pad=(mx-mn)*0.10+0.5;return {mn:mn-pad,mx:mx+pad};}
+  var cur=targetBounds(),top=16,dripZone=70,t=0,lastSpawn=0;
+  function blob(x,w,y1,y2,up){
+    if(y2-y1<6){var m=(y1+y2)/2;y1=m-3;y2=m+3;}
+    var rx=w/2,r=Math.min(7,rx),mid=(y1+y2)/2,g=ctx.createLinearGradient(0,y1,0,y2);
+    if(up){g.addColorStop(0,'#b6ff7a');g.addColorStop(1,'#249b34');}else{g.addColorStop(0,'#ff6470');g.addColorStop(1,'#740a11');}
+    ctx.beginPath();ctx.moveTo(x-rx,y1+r);ctx.quadraticCurveTo(x-rx,y1,x-rx+r,y1);ctx.lineTo(x+rx-r,y1);ctx.quadraticCurveTo(x+rx,y1,x+rx,y1+r);
+    ctx.quadraticCurveTo(x+rx+2.5,mid,x+rx,y2-r);ctx.quadraticCurveTo(x+rx,y2,x+rx-r,y2);ctx.lineTo(x-rx+r,y2);ctx.quadraticCurveTo(x-rx,y2,x-rx,y2-r);
+    ctx.quadraticCurveTo(x-rx-2.5,mid,x-rx,y1+r);ctx.closePath();
+    ctx.shadowColor=up?'#3ddc4a':'#ff2d3f';ctx.shadowBlur=13;ctx.fillStyle=g;ctx.fill();ctx.shadowBlur=0;
+    ctx.beginPath();ctx.ellipse(x-rx*0.28,y1+(y2-y1)*0.26,Math.max(2,rx*0.34),Math.max(1.5,(y2-y1)*0.16),-0.3,0,6.3);ctx.fillStyle='rgba(255,255,255,0.20)';ctx.fill();
+  }
+  function drip(x,yTop,len,up){
+    if(len<2)return;var sw=3.0,g=ctx.createLinearGradient(0,yTop,0,yTop+len);
+    if(up){g.addColorStop(0,'#7CFF4F');g.addColorStop(1,'#1c8a2c');}else{g.addColorStop(0,'#ff2d3f');g.addColorStop(1,'#7a0810');}
+    ctx.beginPath();ctx.moveTo(x-sw,yTop);ctx.quadraticCurveTo(x-sw*0.4,yTop+len*0.65,x,yTop+len);ctx.quadraticCurveTo(x+sw*0.4,yTop+len*0.65,x+sw,yTop);ctx.closePath();
+    ctx.shadowColor=up?'#3ddc4a':'#ff2d3f';ctx.shadowBlur=8;ctx.fillStyle=g;ctx.fill();ctx.beginPath();ctx.arc(x,yTop+len,2.7,0,6.3);ctx.fill();ctx.shadowBlur=0;
+  }
+  function frame(ts){
+    t+=0.03;var tb=targetBounds();cur.mn+=(tb.mn-cur.mn)*0.08;cur.mx+=(tb.mx-cur.mx)*0.08;
+    var priceBot=H-dripZone,ph=priceBot-top,step=W/N,yFor=function(p){return top+(1-(p-cur.mn)/(cur.mx-cur.mn))*ph;};
+    ctx.clearRect(0,0,W,H);
+    for(var g=0;g<5;g++){var gy=top+ph*g/4;ctx.strokeStyle='rgba(255,255,255,0.035)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}
+    for(var i=0;i<N;i++){
+      var b=bars[i],x=i*step+step/2,bw=Math.max(5,step*0.62),live=(i===N-1);
+      ctx.strokeStyle=b.up?'rgba(124,255,79,0.6)':'rgba(255,45,63,0.6)';ctx.lineWidth=1.4;ctx.beginPath();ctx.moveTo(x,yFor(b.h));ctx.lineTo(x,yFor(b.l));ctx.stroke();
+      var y1=yFor(Math.max(b.o,b.c)),y2=yFor(Math.min(b.o,b.c));
+      if(live){ctx.shadowColor=b.up?'#7CFF4F':'#ff2d3f';ctx.shadowBlur=6+Math.sin(t*3)*5;}
+      blob(x,bw,y1,y2,b.up);ctx.shadowBlur=0;
+      var dl=(b.up?6:10)+(Math.sin(t+b.ph)*0.5+0.5)*(b.ss>0.55?16:8);
+      drip(x-bw*0.18,y2,dl*0.7,b.up);if(b.ss>0.5||b.up)drip(x+bw*0.22,y2,dl,b.up);
+    }
+    if(ts-lastSpawn>90){lastSpawn=ts;for(var k=0;k<N;k++){var bb=bars[k];if((bb.ss>0.62||k>=N-3)&&Math.random()<(bb.ss>0.62?0.5:0.25)&&drops.length<46){var xx=k*step+step/2;drops.push({x:xx+(Math.random()-0.5)*6,y:yFor(Math.min(bb.o,bb.c))+(bb.up?10:14),vy:0.2+Math.random()*0.4,r:1.8+Math.random()*1.6,up:bb.up,life:1});}}}
+    for(var d=drops.length-1;d>=0;d--){var p=drops[d];p.vy+=0.022;p.y+=p.vy;p.life-=0.007;if(p.life<=0||p.y>H-4){drops.splice(d,1);continue;}ctx.globalAlpha=Math.max(0,p.life);ctx.fillStyle=p.up?'#7CFF4F':'#ff2d3f';ctx.shadowColor=ctx.fillStyle;ctx.shadowBlur=7;ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,6.3);ctx.fill();ctx.shadowBlur=0;ctx.globalAlpha=1;}
+    requestAnimationFrame(frame);
+  }
+  function tape(){
+    var el=document.getElementById('tape');if(!el)return;
+    var last=bars.slice(-5).reverse();
+    el.innerHTML=last.map(function(b){var buy=b.up;var amt=(Math.random()*4+0.4).toFixed(2);return '<div class="trow"><span class="'+(buy?'buyc':'sellc')+'">'+(buy?'BUY':'SELL')+'</span><span>'+(buy?'+':'')+amt+' SOL</span><span class="dim">$0.000'+(180+Math.floor(Math.random()*8))+'</span></div>';}).join('');
+  }
+  setInterval(function(){var last=bars[N-1].c;bars.push(mk(last));bars.shift();tape();},1700);
+  window.addEventListener('resize',function(){size();frame(performance.now());});
+  tape();frame(performance.now());
+})();
+</script>
+</body>
+</html>
