@@ -3,213 +3,102 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>SlimeWire Launchpad — Launch & Presale</title>
-<meta name="description" content="The SlimeWire Launchpad: launch your coin in one tap or run a presale to build hype first. Your launch becomes a raid boss + a catchable Swamp creature with crew raids, alerts and share cards.">
-<meta property="og:title" content="SlimeWire Launchpad — Launch & Presale">
-<meta property="og:description" content="Launch or presale your coin on SlimeWire. It becomes a raid boss + Swamp creature with built-in hype.">
+<title>SlimeWire Launchpad — launch your coin</title>
+<meta name="description" content="The SlimeWire Launchpad: mint your coin on pump.fun in one tap with dev buy + multi-wallet bundle, then build prelaunch hype and rally raids on X & Telegram.">
+<meta property="og:title" content="SlimeWire Launchpad — launch your coin">
+<meta property="og:description" content="Mint on pump.fun in one tap with dev buy + bundle. Build prelaunch hype and rally raids on X & Telegram.">
 <meta property="og:image" content="https://www.slimewire.org/assets/slimewire/swamp/art/og-survivors.jpg">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" type="image/svg+xml" href="/assets/slimewire/svg/slimewire-mark.svg">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700;800;900&family=Cinzel:wght@700;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700;800;900&display=swap" rel="stylesheet">
 <style>
-  :root{ --bg:#070f0a;--card:#0e1812;--card2:#0b140e;--line:rgba(120,255,90,0.12);--line2:rgba(120,255,90,0.28);--tx:#e6f5e0;--dim:#8fa897;--green:#72ff23;--green2:#bbff63;--gold:#ffd24a;--red:#ff6b6b;--blue:#5ab0ff;--purp:#b06bff;--orange:#ff8a5a; }
-  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-  html,body{margin:0;background:#050a07;color:var(--tx);font-family:Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased;}
-  body::before{content:"";position:fixed;inset:0;z-index:-1;background:radial-gradient(circle at 15% 0%,rgba(114,255,35,0.10),transparent 42%),radial-gradient(circle at 90% 8%,rgba(176,107,255,0.08),transparent 40%),linear-gradient(180deg,#070f0a,#050a07);}
-  a{color:inherit;text-decoration:none;}
-  .wrap{max-width:980px;margin:0 auto;padding:0 16px calc(70px + env(safe-area-inset-bottom));}
-  header.top{position:sticky;top:0;z-index:20;background:rgba(7,15,10,0.72);backdrop-filter:blur(16px);border-bottom:1px solid var(--line);}
-  .topin{max-width:980px;margin:0 auto;display:flex;align-items:center;gap:12px;padding:11px 16px;}
-  .brand{display:flex;align-items:center;gap:9px;font-weight:900;} .brand img{width:26px;height:26px;} .brand b{color:var(--green);}
-  .navlinks{margin-left:auto;display:flex;gap:5px;} .navlinks a{color:var(--dim);font-weight:800;font-size:0.86rem;padding:7px 11px;border-radius:9px;}
-  .navlinks a:hover{color:var(--tx);background:rgba(255,255,255,0.05);} .navlinks a.cta{color:#06140a;background:linear-gradient(135deg,var(--green),var(--green2));}
+  :root{ --bg:#04070a; --card:rgba(9,17,12,0.72); --line:rgba(141,255,90,0.16); --line2:rgba(141,255,90,0.34);
+    --tx:#eafff0; --dim:#8fae9b; --green:#8dff5a; --green2:#27e06a; --gold:#ffd45a; --orange:#ff8a5a; --purp:#a98bff; }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; background:var(--bg); color:var(--tx); font-family:Inter,system-ui,sans-serif; -webkit-font-smoothing:antialiased;}
+  body{min-height:100vh; position:relative; overflow-x:hidden;
+    background:radial-gradient(120% 70% at 18% -8%, rgba(39,224,106,0.13), transparent 60%),
+      radial-gradient(120% 80% at 50% 120%, rgba(20,60,32,0.5), transparent 60%), linear-gradient(180deg,#04070a,#050b08 60%,#04070a);}
+  .herovid{position:fixed; inset:0; width:100%; height:100%; object-fit:cover; z-index:-2; opacity:0.42; pointer-events:none;}
+  body::before{content:""; position:fixed; inset:0; z-index:-1; pointer-events:none; background:linear-gradient(180deg,rgba(4,7,10,0.55) 0%,rgba(4,7,10,0.8) 60%,rgba(4,7,10,0.92) 100%);}
+  a{color:inherit; text-decoration:none;}
+  .wrap{max-width:980px; margin:0 auto; padding:0 16px calc(70px + env(safe-area-inset-bottom));}
+  header.top{position:sticky; top:0; z-index:20; background:rgba(4,7,10,0.86); border-bottom:1px solid var(--line);}
+  .topin{max-width:980px; margin:0 auto; display:flex; align-items:center; gap:12px; padding:11px 16px;}
+  .brand{display:flex; align-items:center; gap:9px; font-weight:900;} .brand img{width:26px; height:26px;} .brand b{color:var(--green);}
+  .navlinks{margin-left:auto; display:flex; gap:4px;} .navlinks a{color:var(--dim); font-weight:800; font-size:0.86rem; padding:7px 11px; border-radius:10px;}
+  .navlinks a:hover{color:var(--tx); background:rgba(141,255,90,0.08);} .navlinks a.cta{color:#05210f; background:linear-gradient(135deg,var(--green),var(--green2));}
   @media(max-width:600px){ .navlinks a:not(.cta){display:none;} }
-  .hero{text-align:center;padding:34px 10px 14px;}
-  .hero .tag{color:var(--green2);font-weight:900;letter-spacing:3px;text-transform:uppercase;font-size:0.78rem;}
-  .hero h1{font-family:Cinzel,serif;font-size:clamp(1.9rem,6vw,3rem);margin:8px 0 6px;text-shadow:0 0 26px rgba(114,255,35,0.35);}
-  .hero p{color:#bcd3bf;max-width:560px;margin:0 auto;line-height:1.55;font-size:1rem;}
-  /* two big action cards */
-  .acts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:22px;}
+  .hero{text-align:center; padding:46px 12px 16px;}
+  .hero .tag{color:var(--green); font-weight:900; letter-spacing:3px; text-transform:uppercase; font-size:0.76rem;}
+  .hero h1{font-size:clamp(2rem,6vw,3.1rem); margin:10px 0 6px; font-weight:900; letter-spacing:-0.5px;}
+  .hero h1 b{color:var(--green); text-shadow:0 0 28px rgba(141,255,90,0.4);}
+  .hero p{color:#bfe9cc; max-width:580px; margin:0 auto; line-height:1.55; font-size:1.02rem;}
+  .acts{display:grid; grid-template-columns:1fr 1fr; gap:13px; margin-top:26px;}
   @media(max-width:560px){ .acts{grid-template-columns:1fr;} }
-  .act{position:relative;overflow:hidden;border-radius:18px;padding:20px;border:1px solid var(--line);background:linear-gradient(180deg,var(--card),var(--card2));cursor:pointer;transition:.14s;}
-  .act:hover{transform:translateY(-3px);border-color:var(--line2);box-shadow:0 16px 40px rgba(0,0,0,0.45);}
-  .act .em{font-size:2rem;} .act h2{margin:8px 0 4px;font-size:1.25rem;} .act p{color:var(--dim);font-size:0.9rem;margin:0;line-height:1.5;}
-  .act.launch{border-color:rgba(255,138,90,0.35);} .act.launch .em{filter:drop-shadow(0 0 12px rgba(255,138,90,0.6));}
-  .act.presale{border-color:rgba(176,107,255,0.35);} .act.presale .em{filter:drop-shadow(0 0 12px rgba(176,107,255,0.6));}
-  .act .go{display:inline-block;margin-top:12px;font-weight:900;color:var(--green2);}
-  /* section */
-  .sec{margin-top:30px;} .sech{display:flex;align-items:center;gap:10px;margin:0 0 12px;}
-  .sech .ic{font-size:1.3rem;} .sech h3{font-family:Cinzel,serif;font-size:1.3rem;margin:0;color:#fff;} .sech .ln{flex:1;height:1px;background:linear-gradient(90deg,var(--line2),transparent);}
-  .sech .new{cursor:pointer;border:1px solid var(--line2);background:rgba(176,107,255,0.12);color:var(--green2);font-weight:800;font-size:0.82rem;padding:7px 13px;border-radius:999px;}
-  /* presale cards */
-  .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;}
-  .pcard{background:linear-gradient(180deg,var(--card),var(--card2));border:1px solid var(--line);border-radius:16px;padding:15px;display:flex;flex-direction:column;gap:9px;}
-  .pcard.dead{opacity:0.55;}
-  .pcard .ph{display:flex;align-items:center;gap:9px;} .pcard .em{font-size:1.5rem;}
-  .pcard .nm{font-weight:900;font-size:1.05rem;} .pcard .nm small{display:block;color:var(--dim);font-weight:700;font-size:0.74rem;}
-  .pcard .blurb{color:#bcd3bf;font-size:0.86rem;line-height:1.45;min-height:36px;}
-  .pbar{height:9px;border-radius:6px;background:rgba(0,0,0,0.45);overflow:hidden;}
-  .pbar>i{display:block;height:100%;background:linear-gradient(90deg,var(--green),var(--green2));}
-  .pmeta{display:flex;justify-content:space-between;font-size:0.78rem;color:var(--dim);font-weight:700;}
-  .pcd{color:var(--gold);font-weight:800;}
-  .pfoot{display:flex;gap:8px;align-items:center;}
-  .imin{flex:1;border:0;border-radius:11px;padding:11px;font-weight:900;cursor:pointer;background:linear-gradient(135deg,var(--green),var(--green2));color:#06140a;}
-  .imin.done{background:rgba(120,255,90,0.16);color:var(--green2);}
-  .psoc{display:flex;gap:6px;} .psoc a{width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:10px;background:rgba(255,255,255,0.05);border:1px solid var(--line);}
-  .empty{color:var(--dim);text-align:center;padding:30px 16px;background:var(--card);border:1px solid var(--line);border-radius:16px;}
-  .spin{width:30px;height:30px;border-radius:50%;border:3px solid rgba(255,255,255,0.1);border-top-color:var(--green);animation:sp 1s linear infinite;margin:30px auto;}@keyframes sp{to{transform:rotate(360deg);}}
-  /* modal create form */
-  .modal{position:fixed;inset:0;z-index:60;display:none;align-items:flex-end;justify-content:center;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);}
-  .modal.on{display:flex;}
-  .sheet{width:100%;max-width:560px;background:#0c1410;border:1px solid var(--line2);border-radius:18px 18px 0 0;padding:20px 18px calc(24px + env(safe-area-inset-bottom));max-height:92vh;overflow-y:auto;}
-  @media(min-width:620px){ .modal{align-items:center;} .sheet{border-radius:18px;} }
-  .sheet h3{font-family:Cinzel,serif;margin:0 0 4px;font-size:1.35rem;}
-  .sheet .sub{color:var(--dim);font-size:0.86rem;margin:0 0 14px;}
-  .fld{margin-bottom:12px;} .fld label{display:block;font-weight:800;font-size:0.8rem;color:#cde8c4;margin-bottom:4px;}
-  .fld input,.fld textarea{width:100%;background:rgba(0,0,0,0.35);border:1px solid var(--line);border-radius:11px;color:var(--tx);padding:11px;font-size:0.95rem;font-family:inherit;}
-  .fld textarea{resize:vertical;min-height:60px;} .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
-  .mkbtn{width:100%;border:0;border-radius:13px;padding:14px;font-weight:900;font-size:1rem;cursor:pointer;background:linear-gradient(135deg,var(--green),var(--green2));color:#06140a;margin-top:4px;}
-  .mclose{background:none;border:0;color:var(--dim);font-weight:800;cursor:pointer;float:right;font-size:1.2rem;}
-  .note{font-size:0.78rem;color:var(--dim);margin-top:10px;line-height:1.4;}
-  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#0c1410;border:1px solid var(--line2);color:var(--tx);padding:11px 18px;border-radius:999px;font-weight:800;z-index:80;opacity:0;transition:.2s;pointer-events:none;}
-  .toast.on{opacity:1;}
-  .perks{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px;}
-  .perk{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:12px;font-size:0.84rem;color:var(--dim);} .perk b{display:block;color:var(--tx);margin-bottom:2px;}
-  .foot{color:var(--dim);font-size:0.8rem;text-align:center;padding:30px 0 10px;} .foot a{color:var(--green);}
+  .act{position:relative; overflow:hidden; border-radius:18px; padding:22px; border:1px solid var(--line); background:var(--card); backdrop-filter:blur(10px); transition:.14s; display:block;}
+  .act::before{content:""; position:absolute; left:0; right:0; top:0; height:1px; background:linear-gradient(90deg,transparent,var(--line2),transparent);}
+  .act:hover{transform:translateY(-3px); border-color:var(--line2); box-shadow:0 16px 40px rgba(0,0,0,0.45);}
+  .act .em{font-size:2rem;} .act h2{margin:9px 0 5px; font-size:1.3rem;} .act p{color:var(--dim); font-size:0.92rem; margin:0; line-height:1.5;}
+  .act.launch{border-color:rgba(255,138,90,0.4);} .act.launch .em{filter:drop-shadow(0 0 12px rgba(255,138,90,0.6));}
+  .act.hype{border-color:rgba(255,212,90,0.4);} .act.hype .em{filter:drop-shadow(0 0 12px rgba(255,212,90,0.6));}
+  .act .go{display:inline-block; margin-top:14px; font-weight:900; color:var(--green);}
+  .perks{display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:11px; margin-top:24px;}
+  .perk{background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; font-size:0.86rem; color:var(--dim); backdrop-filter:blur(8px);} .perk b{display:block; color:var(--tx); margin-bottom:3px; font-size:0.95rem;}
+  .sec{margin-top:34px;} .sech{display:flex; align-items:center; gap:11px; margin:0 0 14px;}
+  .sech h3{font-size:1.18rem; margin:0; color:#fff; font-weight:900;} .sech .ln{flex:1; height:1px; background:linear-gradient(90deg,var(--line2),transparent);}
+  .steps{display:grid; gap:10px; counter-reset:s;}
+  .stepc{position:relative; background:var(--card); border:1px solid var(--line); border-radius:13px; padding:14px 16px 14px 52px; backdrop-filter:blur(8px); font-size:0.92rem; color:#cfe9d6;}
+  .stepc::before{counter-increment:s; content:counter(s); position:absolute; left:13px; top:12px; width:28px; height:28px; border-radius:50%; background:linear-gradient(135deg,var(--green),var(--green2)); color:#05210f; font-weight:900; display:flex; align-items:center; justify-content:center; font-size:0.9rem;}
+  .stepc b{color:#fff;}
+  .foot{color:var(--dim); font-size:0.8rem; text-align:center; padding:34px 0 10px;} .foot a{color:var(--green);}
 </style>
 </head>
 <body>
+<video class="herovid" autoplay muted loop playsinline preload="auto" src="/assets/slimewire/hero-launch.mp4"></video>
 <header class="top"><div class="topin">
   <a class="brand" href="/"><img src="/assets/slimewire/svg/slimewire-mark.svg" alt="" onerror="this.style.display='none'">Slime<b>Wire</b></a>
-  <nav class="navlinks"><a href="/hub">🧭 Hub</a><a href="/swamp">🐸 Swamp</a><a href="/raids">🔥 Raids</a><a href="/radar">📡 Radar</a><a class="cta" href="/terminal">Terminal</a></nav>
+  <nav class="navlinks"><a href="/hub">Hub</a><a href="/prelaunch">Prelaunch</a><a href="/raids">Raids</a><a class="cta" href="/terminal">Terminal</a></nav>
 </div></header>
 
 <div class="wrap">
   <section class="hero">
-    <div class="tag">launch · presale · hype</div>
-    <h1>SlimeWire Launchpad</h1>
-    <p>Launch your coin in one tap — or run a <b>presale</b> first to rally a crew and build hype. Every launch becomes a <b>raid boss</b> and a catchable <b>Swamp creature</b>, with alerts, share cards and radar exposure baked in.</p>
+    <div class="tag">launch · dev buy · bundle</div>
+    <h1>SlimeWire <b>Launchpad</b></h1>
+    <p>Mint your coin on <b>pump.fun</b> in one tap — name, ticker, image, dev buy, multi-wallet bundle. Build <b>prelaunch hype</b> first if you want a crew waiting when it drops.</p>
     <div class="acts">
       <a class="act launch" href="/terminal">
         <div class="em">🚀</div>
-        <h2>Launch a Coin</h2>
-        <p>Mint instantly on pump.fun via SlimeWire — name, ticker, image, dev buy. Do it on the site or right inside the Telegram bot.</p>
+        <h2>Launch a coin</h2>
+        <p>Mint instantly on pump.fun via SlimeWire — set your name, ticker, image and dev buy. Do it on the site or right inside the Telegram bot.</p>
         <span class="go">Open the Launchpad →</span>
       </a>
-      <div class="act presale" id="startPresale">
+      <a class="act hype" href="/prelaunch">
         <div class="em">🔥</div>
-        <h2>Start a Presale</h2>
-        <p>Post your coin early, set a hype goal + countdown, and let the crew pile in before it launches. Build the buzz, then send it.</p>
-        <span class="go">Create a presale →</span>
-      </div>
+        <h2>Build hype first</h2>
+        <p>Run a prelaunch: a countdown, a hype meter, an allowlist and a referral leaderboard so a crew is ready to ape the second you launch.</p>
+        <span class="go">Open Prelaunch →</span>
+      </a>
     </div>
     <div class="perks">
-      <div class="perk"><b>👹 Becomes a boss</b>Your coin spawns as a live raid boss other traders fight.</div>
-      <div class="perk"><b>🐸 Catchable creature</b>It roams the Swamp as an ogre creature to catch.</div>
-      <div class="perk"><b>📣 Built-in hype</b>TG alerts, X share cards, radar + crew raids on launch.</div>
-      <div class="perk"><b>🏆 Climb the boards</b>Catches, raids & presale interest all rank.</div>
+      <div class="perk"><b>⚡ One-tap mint</b>Launch on pump.fun from the site or the Telegram bot.</div>
+      <div class="perk"><b>📦 Dev buy + bundle</b>Open your position and spread an opening buy across your wallets.</div>
+      <div class="perk"><b>📣 Built-in hype</b>TG alerts, X scan cards, and a raid board to rally your crew.</div>
+      <div class="perk"><b>🔥 Prelaunch allowlist</b>Gather a crew with a countdown + hype meter before you drop.</div>
     </div>
   </section>
 
   <section class="sec">
-    <div class="sech"><span class="ic">🔥</span><h3>Live Presales</h3><span class="ln"></span><span class="new" id="newPresale2">+ New presale</span></div>
-    <div id="board"><div class="spin"></div></div>
+    <div class="sech"><span class="em" style="font-size:1.2rem">🚀</span><h3>How a launch works</h3><span class="ln"></span></div>
+    <div class="steps">
+      <div class="stepc">Open the <b>Launchpad</b> (Ogre Tek → Pump Launch in the Terminal, or the Telegram bot).</div>
+      <div class="stepc">Fill the sheet — <b>name, ticker, image, description, socials</b> — and set your <b>dev buy</b>.</div>
+      <div class="stepc">Tap <b>Launch on Pump</b>; SlimeWire mints it and hands you the live <b>contract address</b>.</div>
+      <div class="stepc">Optionally <b>bundle</b> an opening buy across your wallets, then rally the <b>raid board</b> on X &amp; Telegram.</div>
+    </div>
   </section>
 
-  <div class="foot">🐸 <b>SlimeWire</b> · launch · presale · raid · <a href="/manual">read the playbook</a><br>
-    <span style="font-size:0.72rem">Presales here are hype/allowlist for now — no funds are held. On-chain escrow with auto-refund is coming.</span>
-  </div>
+  <div class="foot">🐸 <b style="color:var(--green)">SlimeWire</b> · launch · prelaunch · raid · <a href="/manual">read the guide</a></div>
 </div>
-
-<!-- CREATE PRESALE MODAL -->
-<div class="modal" id="modal">
-  <div class="sheet">
-    <button class="mclose" id="mclose">✕</button>
-    <h3>🔥 Start a Presale</h3>
-    <p class="sub">Post your coin to the board to gather a crew before launch. No funds are collected — this builds the hype + allowlist.</p>
-    <div class="fld"><label>Coin name *</label><input id="f_name" maxlength="32" placeholder="Ogre Mode"></div>
-    <div class="row2">
-      <div class="fld"><label>Ticker *</label><input id="f_symbol" maxlength="12" placeholder="OGRE"></div>
-      <div class="fld"><label>Hype goal (SOL)</label><input id="f_target" type="number" min="1" max="100000" placeholder="50"></div>
-    </div>
-    <div class="row2">
-      <div class="fld"><label>Runs for (days)</label><input id="f_days" type="number" min="1" max="30" placeholder="3"></div>
-      <div class="fld"><label>Your @ / name</label><input id="f_by" maxlength="16" placeholder="@you"></div>
-    </div>
-    <div class="fld"><label>Pitch</label><textarea id="f_blurb" maxlength="400" placeholder="What's the coin? Why ape early?"></textarea></div>
-    <div class="row2">
-      <div class="fld"><label>X / Twitter</label><input id="f_x" maxlength="120" placeholder="https://x.com/..."></div>
-      <div class="fld"><label>Telegram</label><input id="f_tg" maxlength="120" placeholder="https://t.me/..."></div>
-    </div>
-    <div class="fld"><label>Website</label><input id="f_web" maxlength="120" placeholder="https://..."></div>
-    <button class="mkbtn" id="mkbtn">🚀 Post my presale</button>
-    <p class="note">When you're ready to go live, launch the coin from the Launchpad or the Telegram bot — your presale crew gets first dibs.</p>
-  </div>
-</div>
-
-<div class="toast" id="toast"></div>
-
-<script>
-"use strict";
-(function(){
-const API=(location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1")?"":"https://ogrevolbot.onrender.com";
-const $=(id)=>document.getElementById(id);
-function esc(s){return String(s==null?"":s).replace(/[<>&"]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;","\"":"&quot;"}[c]));}
-let toastT=null; function toast(m){const t=$("toast");t.textContent=m;t.classList.add("on");clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove("on"),2200);}
-function who(){ try{ return localStorage.getItem("slimewireLbName")||localStorage.getItem("swampName")||""; }catch(_){ return ""; } }
-function cd(deadline){ const ms=Date.parse(deadline||"")-Date.now(); if(!(ms>0)) return "ended"; const d=Math.floor(ms/86400000),h=Math.floor(ms%86400000/3600000),m=Math.floor(ms%3600000/60000); if(d>0) return d+"d "+h+"h left"; if(h>0) return h+"h "+m+"m left"; return m+"m left"; }
-function backedKey(id){ return "ps_backed_"+id; }
-function isBacked(id){ try{ return localStorage.getItem(backedKey(id))==="1"; }catch(_){ return false; } }
-function pcard(p){
-  const live=p.live!==false && Date.parse(p.deadline||"")>Date.now();
-  const goal=Math.max(1,Number(p.target)||10); const interest=Number(p.interest)||0;
-  const pct=Math.max(4,Math.min(100,Math.round(interest/goal*100)));
-  const backed=isBacked(p.id);
-  const soc=[p.x&&`<a href="${esc(p.x)}" target="_blank" rel="noopener">𝕏</a>`,p.tg&&`<a href="${esc(p.tg)}" target="_blank" rel="noopener">✈️</a>`,p.web&&`<a href="${esc(p.web)}" target="_blank" rel="noopener">🌐</a>`].filter(Boolean).join("");
-  return `<div class="pcard ${live?"":"dead"}">
-    <div class="ph"><span class="em">${live?"🔥":"⌛"}</span><div class="nm">${esc(p.name)} <small>$${esc(p.symbol)} · by ${esc(p.by||"anon")}</small></div></div>
-    ${p.blurb?`<div class="blurb">${esc(p.blurb)}</div>`:""}
-    <div class="pbar"><i style="width:${pct}%"></i></div>
-    <div class="pmeta"><span>🙌 ${interest} in · goal ${goal} SOL</span><span class="pcd">${cd(p.deadline)}</span></div>
-    <div class="pfoot">
-      <button class="imin ${backed?"done":""}" data-in="${esc(p.id)}" ${live?"":"disabled"}>${backed?"✅ You're in":(live?"🙌 I'm in":"Ended")}</button>
-      ${soc?`<div class="psoc">${soc}</div>`:""}
-    </div>
-  </div>`;
-}
-async function load(){
-  const box=$("board");
-  try{ const r=await fetch(API+"/api/web/presales",{cache:"no-store"}); const j=await r.json();
-    const ps=(j&&j.presales)||[];
-    if(!ps.length){ box.innerHTML='<div class="empty">No presales yet — be the first. Tap <b>+ New presale</b> to rally a crew before you launch.</div>'; return; }
-    box.innerHTML='<div class="pgrid">'+ps.map(pcard).join("")+'</div>';
-    box.querySelectorAll("[data-in]").forEach(b=>b.onclick=()=>backPresale(b.getAttribute("data-in"),b));
-  }catch(_){ box.innerHTML='<div class="empty">Presale board offline — try again soon.</div>'; }
-}
-async function backPresale(id,btn){
-  if(isBacked(id)){ toast("You're already in 🙌"); return; }
-  try{ localStorage.setItem(backedKey(id),"1"); }catch(_){}
-  if(btn){ btn.classList.add("done"); btn.textContent="✅ You're in"; }
-  try{ await fetch(API+"/api/web/presale-interest",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id,by:who()})}); }catch(_){}
-  toast("🙌 You're in! You'll get first dibs at launch."); setTimeout(load,500);
-}
-function openModal(){ $("modal").classList.add("on"); } function closeModal(){ $("modal").classList.remove("on"); }
-$("startPresale").onclick=openModal; $("newPresale2").onclick=openModal; $("mclose").onclick=closeModal;
-$("modal").addEventListener("click",e=>{ if(e.target===$("modal")) closeModal(); });
-$("mkbtn").onclick=async()=>{
-  const name=$("f_name").value.trim(), symbol=$("f_symbol").value.trim();
-  if(!name||!symbol){ toast("Add a name and ticker"); return; }
-  const body={ name, symbol, target:$("f_target").value||10, days:$("f_days").value||3, by:$("f_by").value||who()||"anon",
-    blurb:$("f_blurb").value, x:$("f_x").value, tg:$("f_tg").value, web:$("f_web").value };
-  $("mkbtn").disabled=true; $("mkbtn").textContent="Posting…";
-  try{ const r=await fetch(API+"/api/web/presales",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}); const j=await r.json();
-    if(j&&j.ok){ try{ if($("f_by").value) localStorage.setItem("slimewireLbName",$("f_by").value); }catch(_){} closeModal(); toast("🔥 Presale posted!"); ["f_name","f_symbol","f_target","f_days","f_blurb","f_x","f_tg","f_web"].forEach(k=>$(k).value=""); load(); }
-    else toast((j&&j.error)||"Could not post"); }
-  catch(_){ toast("Network error — try again"); }
-  finally{ $("mkbtn").disabled=false; $("mkbtn").textContent="🚀 Post my presale"; }
-};
-load(); setInterval(()=>{ if(!document.hidden) load(); },30000);
-})();
-</script>
 </body>
 </html>

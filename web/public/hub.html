@@ -3,65 +3,73 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>SlimeWire — Trade · Play · Raid</title>
-<meta name="description" content="SlimeWire — the degen trading terminal with a game on top. Trade live coins, hunt fresh launches, play the Swamp, raid bosses with your crew. Everything in one place.">
-<meta property="og:title" content="SlimeWire — Trade · Play · Raid">
-<meta property="og:description" content="The degen terminal with a game on top. Trade, hunt, play, raid — all in one swamp.">
+<title>SlimeWire — the Solana memecoin terminal</title>
+<meta name="description" content="SlimeWire — a fast Solana memecoin terminal with a personal A.I. trading agent. Trade live coins, automate buys & sells, launch, build prelaunch hype, and rally raids on X & Telegram.">
+<meta property="og:title" content="SlimeWire — the Solana memecoin terminal">
+<meta property="og:description" content="Trade live coins, let your A.I. agent handle buys & sells, launch, hype, and raid — all in one place.">
 <meta property="og:image" content="https://www.slimewire.org/assets/slimewire/swamp/art/og-survivors.jpg">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" type="image/svg+xml" href="/assets/slimewire/svg/slimewire-mark.svg">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700;800;900&family=Cinzel:wght@700;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700;800;900&display=swap" rel="stylesheet">
 <style>
-  :root{ --bg:#070f0a;--panel:#0e1812;--panel2:#0b140e;--line:rgba(120,255,90,0.12);--line2:rgba(120,255,90,0.28);
-    --tx:#e6f5e0;--dim:#8fa897;--green:#72ff23;--green2:#bbff63;--gold:#ffd24a;--blue:#5ab0ff;--purp:#b06bff;--red:#ff6b6b; }
-  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-  html,body{margin:0;background:#050a07;color:var(--tx);font-family:Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased;}
-  body::before{content:"";position:fixed;inset:0;z-index:-1;background:
-    radial-gradient(circle at 15% 0%,rgba(114,255,35,0.10),transparent 42%),
-    radial-gradient(circle at 90% 8%,rgba(176,107,255,0.08),transparent 40%),
-    linear-gradient(180deg,#070f0a,#050a07);}
-  a{color:inherit;text-decoration:none;}
-  .wrap{max-width:1080px;margin:0 auto;padding:0 16px calc(70px + env(safe-area-inset-bottom));}
-  /* top bar */
-  header.top{position:sticky;top:0;z-index:20;background:rgba(7,15,10,0.72);backdrop-filter:blur(16px);border-bottom:1px solid var(--line);}
-  .topin{max-width:1080px;margin:0 auto;display:flex;align-items:center;gap:12px;padding:12px 16px;}
-  .brand{display:flex;align-items:center;gap:9px;font-weight:900;font-size:1.1rem;} .brand img{width:28px;height:28px;} .brand b{color:var(--green);}
-  .topnav{margin-left:auto;display:flex;gap:4px;}
-  .topnav a{color:var(--dim);font-weight:800;font-size:0.86rem;padding:8px 13px;border-radius:9px;}
-  .topnav a:hover{color:var(--tx);background:rgba(255,255,255,0.05);} .topnav a.cta{color:#06140a;background:linear-gradient(135deg,var(--green),var(--green2));}
-  @media(max-width:620px){ .topnav a:not(.cta){display:none;} }
-  /* hero */
-  .hero{text-align:center;padding:46px 16px 30px;position:relative;}
-  .hero .logo{width:74px;height:74px;filter:drop-shadow(0 0 24px rgba(114,255,35,0.55));}
-  .hero h1{font-family:Cinzel,serif;font-size:clamp(2.2rem,7vw,3.6rem);margin:10px 0 2px;letter-spacing:1px;text-shadow:0 0 30px rgba(114,255,35,0.4);}
-  .hero .tag{color:var(--green2);font-weight:900;letter-spacing:3px;text-transform:uppercase;font-size:0.84rem;}
-  .hero p{color:#bcd3bf;max-width:540px;margin:14px auto 0;font-size:1.02rem;line-height:1.55;}
-  .heroCtas{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:22px;}
-  .bigbtn{border-radius:13px;padding:15px 30px;font-weight:900;font-size:1.02rem;}
-  .bigbtn.p{background:linear-gradient(135deg,var(--green),var(--green2));color:#06140a;box-shadow:0 0 30px rgba(114,255,35,0.35);}
-  .bigbtn.s{background:linear-gradient(135deg,var(--purp),#caa9ff);color:#0a0814;}
-  .bigbtn.g{background:rgba(255,255,255,0.05);border:1px solid var(--line2);color:var(--tx);}
-  /* sections */
-  .grp{margin-top:34px;}
-  .grph{display:flex;align-items:center;gap:10px;margin:0 0 14px;}
-  .grph .ic{font-size:1.3rem;} .grph h2{font-family:Cinzel,serif;font-size:1.35rem;margin:0;color:#fff;}
-  .grph .ln{flex:1;height:1px;background:linear-gradient(90deg,var(--line2),transparent);}
-  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;}
-  .card{display:flex;gap:13px;align-items:flex-start;background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:16px;padding:16px;transition:.14s;position:relative;overflow:hidden;}
-  .card:hover{border-color:var(--line2);transform:translateY(-3px);box-shadow:0 14px 34px rgba(0,0,0,0.4);}
-  .card .em{font-size:1.7rem;flex:0 0 auto;line-height:1;}
-  .card .tx b{display:block;font-size:1.02rem;color:#fff;}
-  .card .tx span{display:block;color:var(--dim);font-size:0.85rem;margin-top:3px;line-height:1.4;}
-  .card .arr{margin-left:auto;color:var(--green);font-weight:900;opacity:0;transition:.14s;} .card:hover .arr{opacity:1;}
-  .card.hot{border-color:rgba(255,107,107,0.3);} .card.gold{border-color:rgba(255,210,74,0.3);}
-  .foot{text-align:center;color:var(--dim);font-size:0.84rem;padding:38px 0 6px;} .foot a{color:var(--green);} .foot .soc{margin-top:8px;display:flex;gap:14px;justify-content:center;}
+  :root{ --bg:#04070a; --card:rgba(9,17,12,0.72); --line:rgba(141,255,90,0.16); --line2:rgba(141,255,90,0.34);
+    --tx:#eafff0; --dim:#8fae9b; --green:#8dff5a; --green2:#27e06a; --gold:#ffd45a; --gold2:#b9892b; --blue:#5ab0ff; }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; background:var(--bg); color:var(--tx); font-family:Inter,system-ui,sans-serif; -webkit-font-smoothing:antialiased;}
+  body{min-height:100vh; position:relative; overflow-x:hidden;
+    background:
+      radial-gradient(120% 70% at 18% -8%, rgba(39,224,106,0.14), transparent 60%),
+      radial-gradient(110% 60% at 92% 2%, rgba(255,212,90,0.07), transparent 55%),
+      radial-gradient(140% 90% at 50% 120%, rgba(20,60,32,0.55), transparent 60%),
+      linear-gradient(180deg,#04070a,#050b08 60%,#04070a);}
+  a{color:inherit; text-decoration:none;}
+  .wrap{max-width:1080px; margin:0 auto; padding:0 16px calc(70px + env(safe-area-inset-bottom));}
+  header.top{position:sticky; top:0; z-index:20; background:rgba(4,7,10,0.86); border-bottom:1px solid var(--line);}
+  .topin{max-width:1080px; margin:0 auto; display:flex; align-items:center; gap:12px; padding:12px 16px;}
+  .brand{display:flex; align-items:center; gap:9px; font-weight:900; font-size:1.1rem;} .brand img{width:28px; height:28px;} .brand b{color:var(--green);}
+  .topnav{margin-left:auto; display:flex; gap:4px;}
+  .topnav a{color:var(--dim); font-weight:800; font-size:0.86rem; padding:8px 12px; border-radius:10px;}
+  .topnav a:hover{color:var(--tx); background:rgba(141,255,90,0.08);}
+  .topnav a.cta{color:#05210f; background:linear-gradient(135deg,var(--green),var(--green2));}
+  .topnav a.pro{color:#ffd45a; border:1px solid rgba(255,212,90,0.5); background:linear-gradient(135deg,rgba(255,212,90,0.15),rgba(141,255,90,0.1));}
+  @media(max-width:660px){ .topnav a:not(.cta):not(.pro){display:none;} }
+  .hero{text-align:center; padding:50px 16px 26px; position:relative;}
+  .hero .logo{width:72px; height:72px; filter:drop-shadow(0 0 24px rgba(141,255,90,0.5));}
+  .hero .tag{color:var(--green); font-weight:900; letter-spacing:3px; text-transform:uppercase; font-size:0.78rem; margin-top:10px;}
+  .hero h1{font-size:clamp(2.1rem,7vw,3.4rem); margin:8px 0 4px; letter-spacing:-0.5px; font-weight:900;}
+  .hero h1 b{color:var(--green); text-shadow:0 0 30px rgba(141,255,90,0.4);}
+  .hero p{color:#bfe9cc; max-width:560px; margin:12px auto 0; font-size:1.04rem; line-height:1.55;}
+  .heroCtas{display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-top:24px;}
+  .bigbtn{border-radius:13px; padding:15px 28px; font-weight:900; font-size:1rem; display:inline-flex; align-items:center; gap:9px;}
+  .bigbtn.p{background:linear-gradient(135deg,var(--green),var(--green2)); color:#05210f; box-shadow:0 8px 30px rgba(39,224,106,0.3);}
+  .bigbtn.pro{color:#ffd45a; border:1px solid rgba(255,212,90,0.55); background:linear-gradient(135deg,rgba(255,212,90,0.16),rgba(141,255,90,0.1)); box-shadow:0 0 18px rgba(255,212,90,0.22);}
+  .bigbtn.pro .em{width:22px; height:22px; border-radius:6px; background:center/cover no-repeat url("/assets/slimewire/pro-emblem.webp");}
+  .bigbtn.g{background:rgba(141,255,90,0.05); border:1px solid var(--line2); color:var(--tx);}
+  .grp{margin-top:36px;}
+  .grph{display:flex; align-items:center; gap:11px; margin:0 0 14px;}
+  .grph h2{font-size:1.25rem; margin:0; color:#fff; font-weight:900;}
+  .grph .ln{flex:1; height:1px; background:linear-gradient(90deg,var(--line2),transparent);}
+  .cards{display:grid; grid-template-columns:repeat(auto-fill,minmax(224px,1fr)); gap:12px;}
+  .card{display:flex; gap:13px; align-items:flex-start; background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; transition:.14s; position:relative; overflow:hidden; backdrop-filter:blur(8px);}
+  .card::before{content:""; position:absolute; left:0; right:0; top:0; height:1px; background:linear-gradient(90deg,transparent,var(--line2),transparent);}
+  .card:hover{border-color:var(--line2); transform:translateY(-3px); box-shadow:0 14px 34px rgba(0,0,0,0.4);}
+  .card .em{font-size:1.6rem; flex:0 0 auto; line-height:1;}
+  .card .em.emblem{width:30px; height:30px; border-radius:8px; background:center/cover no-repeat url("/assets/slimewire/pro-emblem.webp");}
+  .card .tx b{display:block; font-size:1.02rem; color:#fff;}
+  .card .tx span{display:block; color:var(--dim); font-size:0.85rem; margin-top:3px; line-height:1.42;}
+  .card .arr{margin-left:auto; color:var(--green); font-weight:900; opacity:0; transition:.14s;} .card:hover .arr{opacity:1;}
+  .card.gold{border-color:rgba(255,212,90,0.4);} .card.hot{border-color:rgba(255,107,107,0.32);}
+  .foot{text-align:center; color:var(--dim); font-size:0.84rem; padding:40px 0 6px;} .foot a{color:var(--green);}
 </style>
 </head>
 <body>
 <header class="top"><div class="topin">
   <a class="brand" href="/hub"><img src="/assets/slimewire/svg/slimewire-mark.svg" alt="" onerror="this.style.display='none'">Slime<b>Wire</b></a>
   <nav class="topnav">
-    <a href="/swamp">🐸 Swamp</a><a href="/raids">🔥 Raids</a><a href="/radar">📡 Radar</a><a href="/manual">📖 Guide</a>
+    <a class="pro" href="/pro">👑 Pro</a>
+    <a href="/prelaunch">Prelaunch</a>
+    <a href="/raids">Raids</a>
+    <a href="/manual">Guide</a>
     <a class="cta" href="/terminal">Open Terminal</a>
   </nav>
 </div></header>
@@ -69,58 +77,46 @@
 <div class="wrap">
   <section class="hero">
     <img class="logo" src="/assets/slimewire/svg/slimewire-mark.svg" alt="" onerror="this.style.display='none'">
-    <div class="tag">trade · play · raid</div>
-    <h1>SLIMEWIRE</h1>
-    <p>The degen trading terminal with a game on top. Trade live coins, hunt fresh launches, catch them in the Swamp, and raid bosses with your crew — all in one place.</p>
+    <div class="tag">trade · automate · launch</div>
+    <h1>The Solana <b>memecoin terminal</b></h1>
+    <p>Fast live trading, one-tap presets, and a <b>personal A.I. agent</b> that handles your buying and selling for you. Launch coins, build prelaunch hype, and rally raids on X &amp; Telegram — all in one place.</p>
     <div class="heroCtas">
       <a class="bigbtn p" href="/terminal">⚡ Open Terminal</a>
-      <a class="bigbtn s" href="/swamp">🐸 Play The Swamp</a>
+      <a class="bigbtn pro" href="/pro"><span class="em" aria-hidden="true"></span> Pro Autopilot</a>
       <a class="bigbtn g" href="/manual">📖 How it works</a>
     </div>
   </section>
 
   <div class="grp">
-    <div class="grph"><span class="ic">💹</span><h2>Trade</h2><span class="ln"></span></div>
+    <div class="grph"><h2>Trade &amp; automate</h2><span class="ln"></span></div>
     <div class="cards">
       <a class="card" href="/terminal"><span class="em">🖥️</span><span class="tx"><b>Terminal</b><span>Live pairs, charts, swaps, wallets, PnL — the full desk.</span></span><span class="arr">→</span></a>
-      <a class="card" href="/radar"><span class="em">📡</span><span class="tx"><b>Fresh Launch Radar</b><span>Fast clean scan of what's launching right now.</span></span><span class="arr">→</span></a>
-      <a class="card gold" href="/launch"><span class="em">🚀</span><span class="tx"><b>Launch a coin</b><span>Your coin becomes a boss + a creature.</span></span><span class="arr">→</span></a>
-      <a class="card" href="/proof"><span class="em">🧾</span><span class="tx"><b>Proof wall</b><span>Public track record — wins and losses.</span></span><span class="arr">→</span></a>
+      <a class="card gold" href="/pro"><span class="em emblem" aria-hidden="true"></span><span class="tx"><b>Pro Autopilot</b><span>Your personal A.I. agent — it does the buying and selling for you.</span></span><span class="arr">→</span></a>
+      <a class="card" href="/radar"><span class="em">📡</span><span class="tx"><b>Fresh Launch Radar</b><span>Fast, clean scan of what's launching right now.</span></span><span class="arr">→</span></a>
+      <a class="card" href="/proof"><span class="em">🧾</span><span class="tx"><b>Proof wall</b><span>Public track record — the wins and the losses.</span></span><span class="arr">→</span></a>
     </div>
   </div>
 
   <div class="grp">
-    <div class="grph"><span class="ic">🐸</span><h2>Play &amp; Raid</h2><span class="ln"></span></div>
+    <div class="grph"><h2>Launch &amp; hype</h2><span class="ln"></span></div>
     <div class="cards">
-      <a class="card s" href="/swamp"><span class="em">🎮</span><span class="tx"><b>The Swamp</b><span>Catch live coins, fight mobs, build your Dex.</span></span><span class="arr">→</span></a>
-      <a class="card hot" href="/raids"><span class="em">🔥</span><span class="tx"><b>Live Boss Raids</b><span>Every launch is a boss. Raid with your crew.</span></span><span class="arr">→</span></a>
-      <a class="card" href="/events"><span class="em">🗓️</span><span class="tx"><b>Events</b><span>Raid Night, Fresh Launch Hour, contests.</span></span><span class="arr">→</span></a>
-      <a class="card" href="/crews"><span class="em">👥</span><span class="tx"><b>Crews</b><span>Your TG/X group competes together.</span></span><span class="arr">→</span></a>
+      <a class="card gold" href="/launch"><span class="em">🚀</span><span class="tx"><b>Launch a coin</b><span>Mint on pump.fun in one tap, with dev buy + bundle.</span></span><span class="arr">→</span></a>
+      <a class="card" href="/prelaunch"><span class="em">🔥</span><span class="tx"><b>Prelaunch hype</b><span>Countdown, hype meter, allowlist &amp; referrals before you drop.</span></span><span class="arr">→</span></a>
+      <a class="card hot" href="/raids"><span class="em">⚔️</span><span class="tx"><b>Raid board</b><span>Rally your X &amp; Telegram crew — fill the gauge, climb the board.</span></span><span class="arr">→</span></a>
     </div>
   </div>
 
   <div class="grp">
-    <div class="grph"><span class="ic">🏆</span><h2>You</h2><span class="ln"></span></div>
+    <div class="grph"><h2>Learn &amp; connect</h2><span class="ln"></span></div>
     <div class="cards">
-      <a class="card" href="/profile"><span class="em">🪪</span><span class="tx"><b>Profile</b><span>Your catches, raids, badges &amp; crew.</span></span><span class="arr">→</span></a>
-      <a class="card" href="/receipts"><span class="em">🖼️</span><span class="tx"><b>Swamp Card</b><span>One-tap shareable card of your run.</span></span><span class="arr">→</span></a>
-      <a class="card" href="/locker"><span class="em">🎒</span><span class="tx"><b>Locker</b><span>Skins, titles &amp; badges you unlock.</span></span><span class="arr">→</span></a>
-      <a class="card" href="/watchtower"><span class="em">🔭</span><span class="tx"><b>Watchtower</b><span>Most-raided, trending, your watchlist.</span></span><span class="arr">→</span></a>
-    </div>
-  </div>
-
-  <div class="grp">
-    <div class="grph"><span class="ic">📖</span><h2>Discover &amp; Learn</h2><span class="ln"></span></div>
-    <div class="cards">
-      <a class="card" href="/replay"><span class="em">🎬</span><span class="tx"><b>Coin Story</b><span>Replay any coin's journey, beat by beat.</span></span><span class="arr">→</span></a>
-      <a class="card" href="/manual"><span class="em">📘</span><span class="tx"><b>The Playbook</b><span>Full guide — trade, presets, tools, game.</span></span><span class="arr">→</span></a>
-      <a class="card" href="https://t.me/" id="tg"><span class="em">✈️</span><span class="tx"><b>Telegram bot</b><span>/look, /alpha, /raid &amp; live alerts.</span></span><span class="arr">→</span></a>
-      <a class="card" href="https://x.com/" id="xl"><span class="em">𝕏</span><span class="tx"><b>Follow on X</b><span>Drops, raids &amp; alpha.</span></span><span class="arr">→</span></a>
+      <a class="card" href="/manual"><span class="em">📘</span><span class="tx"><b>The Guide</b><span>Everything, step by step — how to use the whole site.</span></span><span class="arr">→</span></a>
+      <a class="card" href="https://t.me/SlimeWireBot?start=hub" id="tg"><span class="em">✈️</span><span class="tx"><b>Telegram bot</b><span>/look, /alpha, /raid, scan cards &amp; live alerts.</span></span><span class="arr">→</span></a>
+      <a class="card" href="https://x.com/i/communities/1930265213917425858" id="xl"><span class="em">𝕏</span><span class="tx"><b>Follow on X</b><span>Drops, raids &amp; alpha.</span></span><span class="arr">→</span></a>
     </div>
   </div>
 
   <div class="foot">
-    🐸 <b>SlimeWire</b> · trade · play · raid · <a href="/manual">read the playbook</a>
+    🐸 <b style="color:var(--green)">SlimeWire</b> · trade · automate · launch · <a href="/manual">read the guide</a>
   </div>
 </div>
 </body>
