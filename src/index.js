@@ -24893,7 +24893,21 @@ async function postGroupBuy(mint, { solAmount = 0, mcUsd = 0, trader = "", sym =
 // subs → trades:0). Also FEEDS the early-buyer wallet flywheel (free per-trade buyer wallets). ----
 let buyWs = null, buyWsSubs = new Set(), buyWsReconnect = null;
 function buyWsSend(o) { try { if (buyWs && buyWs.readyState === 1) { buyWs.send(JSON.stringify(o)); return true; } } catch {} return false; }
-async function buyWsDesired() { const store = await readGroupBot(); const s = new Set(); for (const e of Object.values(store.groups || {})) { if (groupBotFeatureOn(e, "buybot") && e.token) s.add(e.token); } return s; }
+async function buyWsDesired() {
+  const store = await readGroupBot();
+  const s = new Set();
+  // Group buy-bot tokens FIRST (priority — these drive the per-buy alerts).
+  for (const e of Object.values(store.groups || {})) { if (groupBotFeatureOn(e, "buybot") && e.token) s.add(e.token); }
+  // DATA GOD 24/7: also learn early-buyer wallets across the coins the autopilot is actively
+  // watching (freshest first, bounded), so the copy-trade winner-roster builds continuously from
+  // the live market — not just group tokens. These only feed recordEarlyBuyer (no alert is posted
+  // unless a group is tracking the coin). Bounded so the socket stays healthy.
+  try {
+    const fresh = [...obsCoins.entries()].sort((a, b) => (b[1].seen || 0) - (a[1].seen || 0)).map(([m]) => m);
+    for (const m of fresh) { if (s.size >= 120) break; s.add(m); }
+  } catch {}
+  return s;
+}
 async function buyWsSync() {
   if (!buyWs || buyWs.readyState !== 1) return;
   const want = await buyWsDesired();
