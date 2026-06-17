@@ -16189,12 +16189,10 @@ function smartChartFrameUrl(token = {}, mode = "chart") {
   // not FDV) + live candles itself.
   if (mint) {
     const symq = String(token.symbol || "").slice(0, 12);
-    // STABLE MC anchor: the exact value the top bar shows (marketCap → fdv), passed ONCE. The chart
-    // anchors its MC axis + label to this so they MATCH the top bar (GT's own market_cap_usd was
-    // disagreeing). Safe to include — the SPA preserves the iframe by mint (keepByMint), so this
-    // never live-updates the src or triggers the reload/flash a changing value used to cause.
-    const mcAnchor = Math.round(firstUsefulNumber(token.marketCap, token.fdv, token.marketCapUsd) || 0);
-    return `/chart-lab?ca=${encodeURIComponent(mint)}&embed=1${symq ? `&sym=${encodeURIComponent(symq)}` : ""}${mcAnchor > 0 ? `&mc=${mcAnchor}` : ""}`;
+    // STABLE src — only ca + symbol, both fixed per coin. NO live values (a changing ?mc= made the
+    // iframe reload/flash). The chart fetches its OWN authoritative stats straight from DexScreener
+    // (the same source as the top bar), so MC/liq/vol always match without anything in the URL.
+    return `/chart-lab?ca=${encodeURIComponent(mint)}&embed=1${symq ? `&sym=${encodeURIComponent(symq)}` : ""}`;
   }
   const bootstrap = smartChartBootstrapForMint(mint);
   if (mode === "info" && bootstrap?.infoUrl) return bootstrap.infoUrl;

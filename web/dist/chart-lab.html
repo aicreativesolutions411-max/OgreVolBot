@@ -233,27 +233,47 @@
     renderTape();safeDraw();
   }
   function esc(s){return String(s||'').replace(/[<>&"]/g,'');}
+  // AUTHORITATIVE STATS come from DexScreener — the SAME source the app's top bar uses — so the
+  // bottom info (MC / Liq / Vol / price / 24h) always MATCHES the top bar instead of disagreeing
+  // with GeckoTerminal's own market-cap basis. dexStats is applied on top of whatever candle shape
+  // we draw (GT candles, or Pump for fresh pre-DEX coins).
+  var dexStats=null,dexPair=null;
+  function applyDexStats(s){
+    if(!s||!(s.priceUsd>0))return; dexStats=s; var e;
+    realPrice=s.priceUsd; liveTarget=s.priceUsd;
+    if(s.mc>0)mcScale=s.mc/s.priceUsd;                 // anchor MC axis to the authoritative MC/price → label == top bar
+    if(s.change24!=null&&isFinite(s.change24))chg24=s.change24;
+    if(e=document.getElementById('s_liq'))e.textContent=fmtMcRaw(s.liq);
+    if(e=document.getElementById('s_vol'))e.textContent=fmtMcRaw(s.vol24);
+    if((s.buys24||s.sells24)&&(e=document.getElementById('s_bs')))e.textContent=s.buys24+' / '+s.sells24;
+    var symShow=SYMP||s.symbol; if(symShow&&(e=document.querySelector('.tk .sym'))){var nm=(s.name&&s.name!==symShow)?(' <span style="color:#5d8a6e;font-weight:400">· '+esc(String(s.name).slice(0,22))+'</span>'):'';e.innerHTML='$'+esc(symShow)+nm;}
+    if(usdMode)tickLabels(); kick();
+  }
   function applyData(d){
     if(!d||!d.ok||!Array.isArray(d.candles)||d.candles.length<2)return false;
     var cs=d.candles.slice(-N),nb=cs.map(function(k,idx){var up=k.c>=k.o;return {o:k.o,h:k.h,l:k.l,c:k.c,up:up,ss:up?0.4:0.66,vol:Math.max(0.0001,k.v),ph:(idx*1.37)%6.28,fl:idx%2===0};});
     while(nb.length<N)nb.unshift(Object.assign({},nb[0]));
-    bars=nb;usdMode=true;chg24=Number(d.change24h);realPrice=(Number(d.priceUsd)>0)?Number(d.priceUsd):null;
-    // MC: the app-passed anchor (MCP) is AUTHORITATIVE — it's the exact value the top bar shows, so the
-    // chart's MC matches it. GT's market_cap_usd/fdv only fill in when the app didn't pass one.
-    var realMc=MCP>0?MCP:(Number(d.mc)||Number(d.fdv)||0);
-    if(realMc>0&&bars[N-1].c>0)mcScale=realMc/bars[N-1].c;
-    // Live-glide: keep the previously displayed last close and let the rAF loop ease it toward the new
-    // real close (so a poll update slides in smoothly instead of snapping). First load snaps to real.
+    bars=nb;usdMode=true;
+    // Authoritative numbers: DexScreener first (matches the top bar), this feed's own only as fallback.
+    var st=dexStats||{mc:Number(d.mc)||Number(d.fdv)||0,priceUsd:Number(d.priceUsd)||0,liq:Number(d.liq)||0,vol24:Number(d.vol24)||0,change24:Number(d.change24h)};
+    chg24=(st.change24!=null&&isFinite(st.change24))?st.change24:Number(d.change24h);
+    realPrice=(st.priceUsd>0)?st.priceUsd:(Number(d.priceUsd)>0?Number(d.priceUsd):null);
+    var anchorPrice=(st.priceUsd>0)?st.priceUsd:bars[N-1].c;
+    if(st.priceUsd>0)bars[N-1].c=st.priceUsd;          // pin last close to the real price so MC label == top bar exactly
+    var realMc=st.mc||MCP||0;
+    if(realMc>0&&anchorPrice>0)mcScale=realMc/anchorPrice;
+    // Live-glide: keep the previously displayed close and let the rAF loop ease it toward the new
+    // real close (a poll update slides in smoothly instead of snapping). First load snaps to real.
     liveTarget=bars[N-1].c;
     if(dispClose!=null)bars[N-1].c=dispClose; else dispClose=bars[N-1].c;
     var e;
-    var symShow=SYMP||d.symbol;if(symShow&&(e=document.querySelector('.tk .sym'))){var nm=(d.name&&d.name!==symShow)?(' <span style="color:#5d8a6e;font-weight:400">· '+esc(String(d.name).slice(0,22))+'</span>'):'';e.innerHTML='$'+esc(symShow)+nm;}
+    var symShow=SYMP||(st.symbol||d.symbol);if(symShow&&(e=document.querySelector('.tk .sym'))){var nm0=st.name||d.name;var nm=(nm0&&nm0!==symShow)?(' <span style="color:#5d8a6e;font-weight:400">· '+esc(String(nm0).slice(0,22))+'</span>'):'';e.innerHTML='$'+esc(symShow)+nm;}
     if(CA&&(e=document.querySelector('.tk .sub')))e.textContent=CA.slice(0,4)+'…'+CA.slice(-4);
-    if(d.liq&&(e=document.getElementById('s_liq')))e.textContent=fmtMcRaw(d.liq);
-    if(d.vol24&&(e=document.getElementById('s_vol')))e.textContent=fmtMcRaw(d.vol24);
-    if(d.trades&&d.trades.length){var bc=0,sc=0;d.trades.forEach(function(x){if(x.side==='buy')bc++;else sc++;});if(e=document.getElementById('s_bs'))e.textContent=bc+' / '+sc;
+    if(st.liq&&(e=document.getElementById('s_liq')))e.textContent=fmtMcRaw(st.liq);
+    if(st.vol24&&(e=document.getElementById('s_vol')))e.textContent=fmtMcRaw(st.vol24);
+    if(d.trades&&d.trades.length){var bc=0,sc=0;d.trades.forEach(function(x){if(x.side==='buy')bc++;else sc++;});if(!dexStats&&(e=document.getElementById('s_bs')))e.textContent=bc+' / '+sc;
       vclock=0;txns=d.trades.map(function(x,i){return {buy:x.side==='buy',sol:Math.round(x.usd||0),price:fmtUsd(x.price),at:-(i*3),usd:true};});}
-    try{ if(CA) sessionStorage.setItem('cl:'+CA, JSON.stringify({at:Date.now(),d:{ok:1,stage:d.stage,symbol:d.symbol,name:d.name,priceUsd:d.priceUsd,mc:d.mc,fdv:d.fdv,liq:d.liq,vol24:d.vol24,change24h:d.change24h,candles:(d.candles||[]).slice(-60),trades:(d.trades||[]).slice(0,30)}})); }catch(e){}
+    try{ if(CA) sessionStorage.setItem('cl:'+CA, JSON.stringify({at:Date.now(),d:{ok:1,stage:d.stage,symbol:st.symbol||d.symbol,name:st.name||d.name,priceUsd:st.priceUsd||d.priceUsd,mc:st.mc||d.mc,fdv:d.fdv,liq:st.liq||d.liq,vol24:st.vol24||d.vol24,change24h:st.change24!=null?st.change24:d.change24h,candles:(d.candles||[]).slice(-60),trades:(d.trades||[]).slice(0,30)}})); }catch(e){}
     refresh();kick();return true;
   }
   // GeckoTerminal is CORS-enabled and rate-limits by IP — so we fetch it straight from the BROWSER
@@ -280,14 +300,36 @@
       });
     }).catch(function(){return null;});
   }
+  // DexScreener token endpoint (CORS-enabled, free, 300 req/min/IP) — the SAME data the app's top
+  // bar reads, so the chart's MC / Liq / Vol / price / 24h match it exactly. This is the authoritative
+  // STATS source; GeckoTerminal stays the candle-shape source. dexPair lets the fast poll hit one pair.
+  function loadDex(mint){
+    return gtj('https://api.dexscreener.com/latest/dex/tokens/'+encodeURIComponent(mint)).then(function(j){
+      var pairs=(j&&j.pairs)||[];
+      var best=pairs.filter(function(p){return p.chainId==='solana';}).sort(function(a,b){return ((b.liquidity&&b.liquidity.usd)||0)-((a.liquidity&&a.liquidity.usd)||0);})[0];
+      if(!best)return null; dexPair=best.pairAddress||null; var base=best.baseToken||{};
+      return {priceUsd:+best.priceUsd||0,mc:+best.marketCap||+best.fdv||0,fdv:+best.fdv||0,liq:(best.liquidity&&+best.liquidity.usd)||0,vol24:(best.volume&&+best.volume.h24)||0,change24:(best.priceChange&&best.priceChange.h24!=null)?+best.priceChange.h24:null,buys24:(best.txns&&best.txns.h24&&+best.txns.h24.buys)||0,sells24:(best.txns&&best.txns.h24&&+best.txns.h24.sells)||0,symbol:base.symbol||'',name:base.name||''};
+    });
+  }
+  // Fast authoritative poll: pull DexScreener stats → live price/MC the candle eases toward + exact
+  // bottom info. ~6s, browser IP, free. This is what makes the ticker MOVE on real buys/sells.
+  function pollDex(){ if(!CA)return; loadDex(CA).then(applyDexStats).catch(function(){}); }
   function loadServer(){fetch('/api/chart?ca='+encodeURIComponent(CA)+'&tf='+encodeURIComponent(TF)).then(function(r){return r.json();}).then(applyData).catch(function(){});}
-  function loadReal(){if(!CA)return;loadGT(CA,TF).then(function(d){if(d&&d.candles&&d.candles.length)applyData(d);else loadServer();}).catch(loadServer);}
+  function loadReal(){
+    if(!CA)return;
+    Promise.all([loadDex(CA).catch(function(){return null;}),loadGT(CA,TF).catch(function(){return null;})]).then(function(r){
+      var dex=r[0],gt=r[1];
+      if(dex)applyDexStats(dex);                              // authoritative stats first (matches top bar)
+      if(gt&&gt.candles&&gt.candles.length)applyData(gt);     // GT candle shape, dex stats layered on
+      else loadServer();                                      // no GT candles (fresh pre-DEX) → Pump candles
+    }).catch(function(){loadServer();});
+  }
   if(!CA){setInterval(function(){bars.push(mk(bars[N-1].c));bars.shift();vclock+=2;var nadd=1+(Math.random()<0.5?1:0);for(var z=0;z<nadd;z++)txns.unshift(newTx(0));if(txns.length>160)txns.length=160;liveTarget=bars[N-1].c;dispClose=bars[N-2]?bars[N-2].c:bars[N-1].c;bars[N-1].c=dispClose;refresh();kick();},1700);}
   else{
     // Instant seamless reload: if we drew this coin moments ago, repaint the REAL data immediately
     // from sessionStorage (no synthetic flash, no empty), then refresh live.
     try{ var cc=JSON.parse(sessionStorage.getItem('cl:'+CA)||'null'); if(cc&&cc.d&&Date.now()-cc.at<180000) applyData(cc.d); }catch(e){}
-    loadReal();setInterval(loadReal,12000);
+    loadReal();setInterval(loadReal,15000);setInterval(pollDex,6000); // candles every 15s, authoritative price/MC every 6s
   }
   var _tb=document.getElementById('txtoggle');if(_tb)_tb.addEventListener('click',function(){expanded=!expanded;var tp=document.getElementById('tape');if(tp)tp.classList.toggle('expanded',expanded);_tb.textContent=expanded?'Collapse ▴':'Expand ▾';renderTape();});
   Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(b){b.addEventListener('click',function(){Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(x){x.classList.remove('on');});b.classList.add('on');TF=b.getAttribute('data-tf')||'5m';if(CA)loadReal();});});
@@ -304,8 +346,10 @@
   }
   var _lastLabelC=null;
   function tickLabels(){var b=bars[N-1],e;
+    // MC + price both tick off the GLIDING close so the numbers move with the candle (a real buy
+    // pushes price up → MC up, a sell drags both down). They land exactly on the DexScreener values.
     if(e=document.getElementById('s_mc'))e.textContent=fmtMc(b.c);
-    if(e=document.getElementById('px'))e.textContent=(usdMode&&realPrice)?fmtUsd(realPrice):priceLabel(b.c);}
+    if(e=document.getElementById('px'))e.textContent=usdMode?fmtUsd(b.c):priceLabel(b.c);}
   // SELF-STOPPING loop: animates (eases + bobs) while the price is moving toward a new target, then
   // fully idles — no perpetual 60fps repaint (saves battery on mobile, lets the page settle). Each
   // new price tick (poll) calls kick() to wake it for the next glide. This is "moves like a chart",
@@ -319,15 +363,8 @@
     rafId=requestAnimationFrame(loop);
   }
   function kick(){if(rafId==null){idleFrames=0;rafId=requestAnimationFrame(loop);}}
-  // Fast live-price poll (every 5s, browser IP, free): nudges the easing target between the 12s full
-  // data polls so the candle keeps moving on real ticks. Only the price moves — MC scales off the
-  // frozen app anchor when present, else off GT's live market cap.
-  function pollLivePrice(){
-    if(!CA||!usdMode||!gtPool)return;
-    gtj(GTB+'/pools/'+gtPool).then(function(pj){var a=pj&&pj.data&&pj.data.attributes;if(!a)return;
-      var p=+a.base_token_price_usd||0;if(p>0){liveTarget=p;if(realPrice!=null)realPrice=p;if(MCP<=0){var mc=+a.market_cap_usd||0;if(mc>0)mcScale=mc/p;}kick();}});
-  }
-  if(CA)setInterval(pollLivePrice,5000);
+  // (The authoritative live price/MC poll is pollDex — DexScreener, every 6s — wired above. It feeds
+  // liveTarget + mcScale so the candle eases to the exact value the top bar shows.)
   refresh();safeDraw();kick();
 })();
 </script>
