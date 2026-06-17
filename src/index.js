@@ -657,6 +657,7 @@ async function loadAutopilotEvents() {
     autopilotEvents = (j && Array.isArray(j.events)) ? j.events : [];
   } catch { autopilotEvents = []; }
 }
+const AUTOPILOT_ALERT_CHAT = String(process.env.AUTOPILOT_ALERT_CHAT || "").trim();
 function pushAutopilotEvent(level, msg) {
   try {
     const text = String(msg || "");
@@ -664,6 +665,12 @@ function pushAutopilotEvent(level, msg) {
     autopilotEvents.push({ at: Date.now(), level, msg: text.slice(0, 300) });
     if (autopilotEvents.length > 4000) autopilotEvents.splice(0, autopilotEvents.length - 4000);
     autopilotEventsDirty = true;
+    // OWNER copy-trade watch (private, never public — the autopilot edge stays secret): forward the
+    // key live events — copy-trade entries (🐳), fills (🟢 APED), and banked exits/wins — to the chat
+    // set in AUTOPILOT_ALERT_CHAT, so the owner can watch it work in real time from Telegram.
+    if (AUTOPILOT_ALERT_CHAT && (/^🐳|^🟢 APED|banked|🏆|🎉|stopped out|took profit|smart-exit/i.test(text))) {
+      void telegram("sendMessage", { chat_id: AUTOPILOT_ALERT_CHAT, text: "🤖 " + text, disable_web_page_preview: true }).catch(() => {});
+    }
   } catch {}
 }
 setInterval(() => {
@@ -9179,7 +9186,7 @@ async function handleMessage(message, userId) {
     if (!isPrivateChat(message.chat)) {
       const e = await getGroupBotEntry(chatId).catch(() => null);
       if (e && !groupBotFeatureOn(e, "raid")) {
-        await say(chatId, "⚔️ Raid Bot is off in this group. An admin can turn it on in /settings.");
+        await say(chatId, "⚔️ Raid Bot is off here. An admin can turn it on: send /raid on (or open /settings).");
         return;
       }
     }
@@ -25063,8 +25070,28 @@ function groupBotMenuMarkup(entry) {
 function groupBotMenuText(entry) {
   const lines = ["🤖 <b>SlimeWire — all-in-one</b>", "One bot for your group. Tap to turn each part on/off (admins only):", ""];
   for (const f of GROUP_BOT_FEATURES) lines.push(`${f.emoji} <b>${f.label}</b> — ${escapeTelegramHtml(f.desc)}`);
-  lines.push("", "Everything starts <b>off</b> so nothing floods. Re-open anytime with /settings.");
+  lines.push("", "Everything starts <b>off</b> so nothing floods. Tap a button to flip it, or use commands — type <b>/help</b> for the full list. Re-open anytime with /settings.");
   return lines.join("\n");
+}
+// Clean command guide — what each module does + the exact command to use it.
+function groupBotHelpText() {
+  return [
+    "🤖 <b>SlimeWire bot — quick guide</b>",
+    "",
+    "<b>⚙️ Admin setup</b>",
+    "• <code>/settings</code> — open the on/off panel",
+    "• <code>/buybot on</code> · <code>/raid on</code> · <code>/scan on</code> · <code>/rose on</code> — turn a part on (or <code>off</code>)",
+    "",
+    "🟢 <b>Buy Bot</b> — posts every buy of your coin",
+    "• <code>/track &lt;CA&gt;</code> — set the coin to watch (or just paste a CA once)",
+    "• <code>/minbuy &lt;SOL&gt;</code> — only show buys ≥ that size (0 = show all)",
+    "",
+    "⚔️ <b>Raid Bot</b> — <code>/raid &lt;X post link&gt; [$TICKER] [target]</code>",
+    "🔍 <b>Scan Bot</b> — paste any CA → instant scan card with Quick-Buy",
+    "🛡️ <b>Rose</b> — <code>/rules</code> <code>/setrules</code> <code>/welcome</code> <code>/antilinks</code> · reply to a user + <code>/warn</code> <code>/mute</code> <code>/kick</code> <code>/ban</code>",
+    "",
+    "Everything's off until an admin turns it on. Trade any coin at <a href=\"https://www.slimewire.org\">slimewire.org</a> ⚡"
+  ].join("\n");
 }
 async function groupBotPostSetup(chatId, entry, messageId = null) {
   const e = entry || (await getGroupBotEntry(chatId)) || defaultGroupBotEntry();
@@ -25087,6 +25114,22 @@ async function handleGroupBotCommand(message, userId) {
   const chat = message?.chat;
   if (!chat || isPrivateChat(chat)) return false;
   const text = String(message.text || message.caption || "").trim();
+  // /help — clean command guide (anyone can read it).
+  if (/^\/help(?:@\w+)?\b/i.test(text)) { await sayHtml(chat.id, groupBotHelpText()); return true; }
+  // /track <CA> — explicitly set the Buy Bot's coin (works even with bot privacy mode ON, since it's
+  // a command). Also flips Buy Bot on. This is the reliable way to "grab the CA" without relying on
+  // the bot seeing a plain paste.
+  const tk = text.match(/^\/track(?:@\w+)?(?:\s+([A-HJ-NP-Za-km-z1-9]{32,48}))?\b/i);
+  if (tk) {
+    const chatId = chat.id;
+    if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only group admins can set the tracked coin."); return true; }
+    const ca = tk[1] || "";
+    if (!ca || !solanaPublicKeyLike(ca)) { const e = await getGroupBotEntry(chatId); await say(chatId, e?.token ? `Buy Bot is tracking ${shortMint(e.token)}. Change it with /track <CA>.` : "Usage: /track <CA> — sets the coin the Buy Bot watches."); return true; }
+    const store = await readGroupBot(); const k = String(chatId); const e = store.groups[k] || defaultGroupBotEntry(); e.token = ca; e.features = e.features || {}; e.features.buybot = true; store.groups[k] = e; await writeGroupBot(store);
+    await say(chatId, `🟢 Buy Bot now tracking ${escapeTelegramHtml(ca.slice(0, 4))}…${escapeTelegramHtml(ca.slice(-4))} — I'll post every buy here. Floor it with /minbuy <SOL>.`);
+    try { await buyWsSync(); } catch {}
+    return true;
+  }
   // /minbuy <SOL> — Buy Bot min-buy filter (0 = show every buy, no matter how small).
   const mb = text.match(/^\/minbuy(?:@\w+)?(?:\s+([\d.]+))?\b/i);
   if (mb) {
