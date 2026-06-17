@@ -276,6 +276,19 @@
         <div class="stat" style="margin-top:8px"><span>Balance</span><b id="walletBal">—</b></div>
         <div class="warn" style="margin-top:6px">⚠️ Only deposit what you'll risk. Memecoin trading is high-risk; you can lose it.</div>
       </div>
+      <!-- CASH OUT & RECOVER: sell leftover coins to SOL, or withdraw SOL to your own wallet -->
+      <details id="cashoutWrap" class="hidden" style="margin-top:12px">
+        <summary style="cursor:pointer;color:#cfe9d5;font-weight:700;list-style:none">💸 Cash out &amp; recover</summary>
+        <div style="margin-top:12px">
+          <button class="b-ghost" id="sellAllBtn">🪙 Sell all coins → SOL</button>
+          <div class="muted" style="margin:6px 0 14px">Sells every token still in this wallet back to SOL — recovers leftover/stuck coins. Best with the bot stopped.</div>
+          <label>Withdraw SOL to your own wallet</label>
+          <input type="text" id="cashoutDest" placeholder="destination address (e.g. your Phantom)" autocomplete="off"/>
+          <button class="b-stop" id="cashoutBtn" style="margin-top:8px">📤 Send all SOL out</button>
+          <div class="muted" style="margin-top:6px">Stops the bot, sells open positions to SOL, then sends the wallet's SOL to that address. <b>Can't be undone.</b></div>
+          <div id="cashoutMsg" class="muted" style="margin-top:6px"></div>
+        </div>
+      </details>
       <div id="msg" class="muted" style="margin-top:8px"></div>
     </div>
 
@@ -287,6 +300,10 @@
           <select id="mins"><option value="60">1 hour</option><option value="180">3 hours</option><option value="360">6 hours</option><option value="720" selected>12 hours</option><option value="1440">24 hours</option></select>
         </div>
       </div>
+      <label style="display:flex;align-items:center;gap:9px;margin:2px 0 6px;cursor:pointer">
+        <input type="checkbox" id="useAll" style="width:18px;height:18px;accent-color:#8dff5a"/>
+        <span>💰 Use my whole wallet balance — it sizes itself (keeps a little SOL back for fees)</span>
+      </label>
       <!-- STYLE: how it trades — 3 honest, distinct profiles -->
       <label style="margin-top:4px">Style — how it trades</label>
       <div class="modeSel" id="modeSel">
@@ -622,22 +639,39 @@ async function loadWallets(){
   showWalletInfo();
 }
 function selWallet(){return wallets.find(w=>String(w.index)===String($("walletSel").value));}
-function showWalletInfo(){const w=selWallet();if(!w){$("walletInfo").classList.add("hidden");return;}$("walletInfo").classList.remove("hidden");$("walletAddr").textContent=w.pubkey;$("walletBal").textContent=(w.balanceSol!=null?(+w.balanceSol).toFixed(4):"?")+" SOL";}
+function showWalletInfo(){const w=selWallet();if(!w){$("walletInfo").classList.add("hidden");$("cashoutWrap").classList.add("hidden");return;}$("walletInfo").classList.remove("hidden");$("cashoutWrap").classList.remove("hidden");$("walletAddr").textContent=w.pubkey;$("walletBal").textContent=(w.balanceSol!=null?(+w.balanceSol).toFixed(4):"?")+" SOL";}
 $("walletSel").addEventListener("change",showWalletInfo);
 $("newWallet").addEventListener("click",async()=>{await withBtn($("newWallet"),async()=>{const r=await api("/api/web/wallets/create",{method:"POST",body:JSON.stringify({label:"Auto",count:1})});if(r&&r.downloads){if(r.downloads.recoveryKeys?.text)dl(r.downloads.recoveryKeys.filename,"data:text/plain;base64,"+btoa(unescape(encodeURIComponent(r.downloads.recoveryKeys.text))));}$("msg").innerHTML='<span class="ok">Wallet created — key file downloaded, keep it safe.</span>';await loadWallets();});});
 $("refresh").addEventListener("click",()=>withBtn($("refresh"),loadWallets));
 $("backup").addEventListener("click",async()=>{await withBtn($("backup"),async()=>{const r=await api("/api/web/wallets/export",{method:"POST",body:JSON.stringify({})});if(r&&r.ok&&r.backup?.downloads?.recoveryKeys?.text){dl(r.backup.downloads.recoveryKeys.filename,"data:text/plain;base64,"+btoa(unescape(encodeURIComponent(r.backup.downloads.recoveryKeys.text))));$("msg").innerHTML='<span class="ok">Backup downloaded.</span>';}});});
 $("copyWallet").addEventListener("click",()=>{const w=selWallet();if(w){navigator.clipboard?.writeText(w.pubkey);$("copyWallet").textContent="Copied ✓";setTimeout(()=>$("copyWallet").textContent="Copy",1200);}});
+// CASH OUT & RECOVER — sell leftover coins to SOL, or withdraw all SOL to your own wallet.
+$("sellAllBtn").addEventListener("click",async()=>{const w=selWallet();if(!w){$("cashoutMsg").innerHTML='<span class="warn">Pick a wallet first.</span>';return;}
+  if(!confirm("Sell ALL tokens in this wallet back to SOL?\n\nRecovers leftover/stuck coins. Best with the bot stopped.")) return;
+  await withBtn($("sellAllBtn"),async()=>{$("cashoutMsg").textContent="Selling coins back to SOL…";
+    const r=await api("/api/web/wallets/sell-all-tokens",{method:"POST",body:JSON.stringify({walletIndexes:[w.index]})});
+    if(r&&r.ok){$("cashoutMsg").innerHTML='<span class="ok">Done — leftover coins sold back to SOL.</span>';loadWallets();}
+    else{$("cashoutMsg").innerHTML='<span class="warn">'+((r&&r.error)||"could not sell")+'</span>';}});});
+$("cashoutBtn").addEventListener("click",async()=>{const w=selWallet();if(!w){$("cashoutMsg").innerHTML='<span class="warn">Pick a wallet first.</span>';return;}
+  const dest=$("cashoutDest").value.trim();
+  if(dest.length<32){$("cashoutMsg").innerHTML='<span class="warn">Enter a destination wallet address.</span>';return;}
+  if(!confirm("Send ALL SOL from this wallet to:\n\n"+dest+"\n\nThis stops the bot, sells open positions to SOL, then withdraws. It can't be undone.")) return;
+  await withBtn($("cashoutBtn"),async()=>{$("cashoutMsg").textContent="Cashing out…";
+    const r=await api("/api/web/autopilot/sweep",{method:"POST",body:JSON.stringify({wallet:w.index,destination:dest})});
+    if(r&&r.ok){$("cashoutMsg").innerHTML='<span class="ok">Sent — your SOL is on the way to '+dest.slice(0,4)+'…'+dest.slice(-4)+'.</span>';activatingUntil=0;setState("idle");loadWallets();poll();}
+    else{$("cashoutMsg").innerHTML='<span class="warn">'+((r&&r.error)||"sweep failed")+'</span>';}});});
 
 // STYLE selector — pick one of three distinct trading profiles (default Steady = most consistent).
 let selectedMode="steady";
 $("modeSel").addEventListener("click",(e)=>{const b=e.target.closest(".modeBtn");if(!b)return;
   selectedMode=b.dataset.mode||"steady";
   [...$("modeSel").querySelectorAll(".modeBtn")].forEach(x=>x.classList.toggle("on",x===b));});
+// "Use whole balance" — grey out the manual amount; the server sizes off the full wallet (less a fee reserve).
+$("useAll").addEventListener("change",()=>{$("amt").disabled=$("useAll").checked;});
 $("startBtn").addEventListener("click",async()=>{
   const w=selWallet();
   if(!w){$("startMsg").innerHTML='<span class="warn">Create + fund a wallet first.</span>';return;}
-  const body={sol:Number($("amt").value),minutes:Number($("mins").value),wallet:w.index,live:true,confirm:"LIVE",lowChurn:true,mode:selectedMode,
+  const body={sol:$("useAll").checked?"all":(Number($("amt").value)||undefined),minutes:Number($("mins").value),wallet:w.index,live:true,confirm:"LIVE",lowChurn:true,mode:selectedMode,
     maxTradeSol:Number($("maxTrade").value)||undefined, maxOpen:Number($("maxOpen").value)||undefined,
     lossCapPct:Number($("lossCap").value)||undefined,
     lockGainsContinue:$("keepGoing").checked};

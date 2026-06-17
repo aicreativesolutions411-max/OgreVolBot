@@ -971,7 +971,14 @@ export function createAutopilotEngine(deps) {
     // NOT the raw single-tick getInstantMc that made the per-position number flicker).
     const markedOpenVal = state.open.reduce((a, p) => {
       const raw = p.entryMc > 0 ? (Number(p.lastMc) || p.entryMc) / p.entryMc : 1;
-      const mv = raw >= 1 ? 1 + (Math.min(raw, 4) - 1) * 0.6 : Math.max(0, raw);
+      let mv = raw >= 1 ? 1 + (Math.min(raw, 4) - 1) * 0.6 : Math.max(0, raw);
+      // HONEST: a bag we can't actually SELL (no real liquidity) must NEVER show as profit — that's
+      // the "it reads coins I can't sell and makes me look up in profit" bug. Cap an unsellable
+      // bag's mark at COST (downside still counts — that's real risk), so a phantom up-mark on a
+      // thin/zero-liquidity coin can't inflate the marked/"riding" number. Real-liquidity bags keep
+      // their (haircut) upside. The realized headline is unaffected (it's always at cost).
+      const sellable = (Number(p.lastLiq) || 0) >= 1500;
+      if (!sellable) mv = Math.min(mv, 1);
       return a + p.costSol * p.remFrac * mv;
     }, 0);
     const markedEquity = state.bank + (state.secured || 0) + markedOpenVal;

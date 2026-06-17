@@ -997,23 +997,25 @@ const autopilotEngine = createAutopilotEngine({
       bestPickScore: r.bestPickScore || r.bestPick || 0
     }));
   },
-  // SCALP feed: LIQUID last-hour movers (real depth + traded volume → realizable marks, clean
-  // fills). Sourced from the data-driven liquidity/volume/momentum sorts (which pull the under-1h
-  // window), deduped, sorted deepest-liquidity-first. Rows with a KNOWN-thin pool (< $1.5k) are
-  // dropped here; rows with no reported liquidity are KEPT (the engine's liquidScore + volume gate
-  // + fast in/out exits vet them) so the feed is never empty when the window has movers.
+  // SCALP feed: LIQUID movers across the FULL range — from fresh small caps to mid-cap runners
+  // (the 30k→150k / 50k→200k quick-win movers the user wants). It pulls the data-driven
+  // liquidity/volume/momentum sorts across MULTIPLE AGE buckets (fresh 0-60m + 1-2h + 3-6h), not
+  // just the fresh window — that's why earlier it "only found small pairs": the fresh bucket misses
+  // the minutes-to-hours-old climbers. Deduped, KNOWN-thin (<$1.5k) dropped, unknown-liq KEPT
+  // (the engine's liquidScore + volume gate + fast exits vet them). The engine's wide MC band
+  // (4k..12M) + liquidScore then pick whatever has quick-win momentum, low or high cap.
   getLiquidFeed: async () => {
-    let vol = null, mom = null, liqf = null;
-    try {
-      [vol, mom, liqf] = await Promise.all([
-        webLivePairs("autopilot", "live", { sort: "volume" }).catch(() => null),
-        webLivePairs("autopilot", "live", { sort: "momentum" }).catch(() => null),
-        webLivePairs("autopilot", "live", { sort: "liquidity" }).catch(() => null)
-      ]);
-    } catch {}
+    const BUCKETS = ["live", "under1h", "under3h"]; // fresh + 1-2h + 3-6h climbers
+    const SORTS = ["liquidity", "volume", "momentum"];
+    const jobs = [];
+    for (const b of BUCKETS) for (const s of SORTS) {
+      jobs.push(webLivePairs("autopilot", b, { sort: s }).catch(() => null));
+    }
+    let feeds = [];
+    try { feeds = await Promise.all(jobs); } catch {}
     const seen = new Set();
     const out = [];
-    for (const feed of [liqf, vol, mom]) {
+    for (const feed of feeds) {
       for (const r of (Array.isArray(feed?.rows) ? feed.rows : [])) {
         if (!r || !r.tokenMint || seen.has(r.tokenMint)) continue;
         // Only drop KNOWN-thin coins. Many last-hour movers (esp. pump.fun bonding curves)
@@ -1043,9 +1045,11 @@ const autopilotEngine = createAutopilotEngine({
         });
       }
     }
-    // Deepest liquidity first — scalp should prefer the most realizable (cleanest-fill) movers.
+    // Deepest liquidity first — scalp prefers the most realizable (cleanest-fill) movers. The
+    // engine then re-scores the whole pool with liquidScore (which rewards quick-win momentum at
+    // any MC), so a wider cap just gives it more distinct shots across the low→high range.
     out.sort((a, b) => (Number(b.liquidityUsd) || 0) - (Number(a.liquidityUsd) || 0));
-    return out.slice(0, 60);
+    return out.slice(0, 120);
   },
   getPairLite: async (mint) => {
     // FAST PATH for pump.fun coins: the live PumpPortal trade tick is in-memory
