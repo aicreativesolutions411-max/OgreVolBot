@@ -9710,6 +9710,28 @@ body {
   border-color: rgba(114, 255, 35, 0.6);
   font-weight: 800;
 }
+/* link items (Prelaunch, Raid Board → real pages) match the tab buttons exactly */
+.nav-drop-bar .nav-side-items a.nav-side-link {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  padding: 8px 9px; border-radius: 9px; border: 1px solid transparent; background: transparent;
+  color: rgba(226, 255, 215, 0.82); font-weight: 700; font-size: 0.84rem; cursor: pointer;
+  white-space: nowrap; text-decoration: none;
+}
+.nav-drop-bar .nav-side-items a.nav-side-link:hover { background: rgba(114, 255, 35, 0.1); color: #eaffe0; }
+/* premium standalone Pro pill — gold ring + slime-crown emblem, sits at the front of the bar */
+.nav-drop-bar .nav-drop-pro {
+  display: flex; align-items: center; gap: 9px; text-decoration: none; white-space: nowrap;
+  padding: 8px 13px; border-radius: 12px; font-weight: 900; font-size: 0.86rem; letter-spacing: 0.3px;
+  color: #ffd45a; border: 1px solid rgba(255, 212, 90, 0.55);
+  background: linear-gradient(135deg, rgba(255, 212, 90, 0.16), rgba(141, 255, 90, 0.1));
+  box-shadow: 0 0 14px rgba(255, 212, 90, 0.25);
+}
+.nav-drop-bar .nav-drop-pro:hover { filter: brightness(1.08); }
+.nav-drop-pro-emblem {
+  width: 26px; height: 26px; border-radius: 8px; flex: 0 0 auto;
+  background: center / cover no-repeat url("./assets/slimewire/pro-emblem.webp");
+  box-shadow: inset 0 0 0 1px rgba(255, 212, 90, 0.3);
+}
 /* Colourful icon chips: each SVG carries its own vibrant colour + tinted chip.
    The container is a dark backing so the colours POP on both the nav and the
    active green pill. */

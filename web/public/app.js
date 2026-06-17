@@ -24371,7 +24371,7 @@ const DESKTOP_NAV_GROUPS = [
   { key: "live", label: "Live", items: [["terminal", "Live Terminal"], ["live", "Cooks"], ["liveTrades", "Live Trades"]] },
   { key: "chart", label: "Swap & Chart", items: [["trade", "Slime Swap"], ["smartChart", "Smart Chart"]] },
   { key: "intel", label: "Intel", items: [["slimeScope", "Slime Scope"], ["watchlist", "Watchlist"], ["kol", "KOL Tracker"], ["sniper", "OgreSniper"], ["txAudit", "TP/SL Audit"]] },
-  { key: "tools", label: "Ogre Tek", items: [["tek", "Tek Hub"], ["ogreAi", "Ogre A.I."], ["launchCoin", "Pump Launch"], ["bundle", "Bundle"], ["volume", "SlimeBot"], ["launch", "Launch Watch"]] },
+  { key: "tools", label: "Ogre Tek", items: [["tek", "Tek Hub"], ["ogreAi", "Ogre A.I."], ["launchCoin", "Pump Launch"], ["prelaunch", "Prelaunch", "/prelaunch"], ["raids", "Raid Board", "/raids"], ["bundle", "Bundle"], ["volume", "SlimeBot"], ["launch", "Launch Watch"]] },
   { key: "portfolio", label: "Portfolio", items: [["wallets", "Wallets"], ["positions", "Positions"], ["pnl", "PnL"]] },
   { key: "profile", label: "Profile", items: [["profile", "Home / Profile"]] }
 ];
@@ -24435,7 +24435,11 @@ const SWAMP_ICON_PATHS = {
   // PnL — bar chart
   pnl: '<path d="M4 20V11"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M21 20H3"/>',
   // Profile — frog face
-  profile: '<path d="M5 12a7 6 0 0 1 14 0v2a5 5 0 0 1-5 5h-4a5 5 0 0 1-5-5z"/><circle cx="8" cy="8" r="2.2"/><circle cx="16" cy="8" r="2.2"/><path d="M9 14.5c1.2 1.4 4.8 1.4 6 0"/>'
+  profile: '<path d="M5 12a7 6 0 0 1 14 0v2a5 5 0 0 1-5 5h-4a5 5 0 0 1-5-5z"/><circle cx="8" cy="8" r="2.2"/><circle cx="16" cy="8" r="2.2"/><path d="M9 14.5c1.2 1.4 4.8 1.4 6 0"/>',
+  // Prelaunch — bubbling cauldron
+  prelaunch: '<path d="M4 11h16"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M7 18l-1 2"/><path d="M17 18l1 2"/><path d="M10 7c0-1.3 1-1.3 1-2.5"/><path d="M14 8c0-1.3 1-1.3 1-2.5"/>',
+  // Raid — crossed swords
+  raids: '<path d="M5 4l9 9"/><path d="M19 4l-9 9"/><path d="M11 13l-4 7"/><path d="M13 13l4 7"/>'
 };
 const DESKTOP_NAV_ICONS = Object.fromEntries(
   Object.entries(SWAMP_ICON_PATHS).map(([key, paths]) => [key, swampIcon(paths, ICON_COLORS[key])])
@@ -24462,7 +24466,22 @@ function buildDesktopNavDropBar() {
   bar.className = "nav-drop-bar";
   bar.setAttribute("data-nav-drop", "");
   bar.setAttribute("aria-label", "Portal areas");
-  bar.innerHTML = DESKTOP_NAV_GROUPS.map((group) => `
+  // Premium standalone "Pro" pill (its own thing, not buried in a dropdown) → the /pro app.
+  const proPill = `<a class="nav-drop-pro" href="/pro" title="SlimeWire Auto — Pro autopilot">
+      <span class="nav-drop-pro-emblem" aria-hidden="true"></span>
+      <span class="nav-side-label">Pro</span>
+    </a>`;
+  // Items are [tab, label] (an SPA tab → <button data-tab>) OR [id, label, href] (a real page → <a>).
+  const renderItem = ([tab, label, href]) => href
+    ? `<a href="${escapeHtml(href)}" title="${escapeHtml(label)}" class="nav-side-link">
+         <span class="nav-side-icon" aria-hidden="true">${DESKTOP_NAV_ICONS[tab] || "•"}</span>
+         <span class="nav-side-label">${escapeHtml(label)}</span>
+       </a>`
+    : `<button type="button" data-tab="${escapeHtml(tab)}" title="${escapeHtml(label)}">
+         <span class="nav-side-icon" aria-hidden="true">${DESKTOP_NAV_ICONS[tab] || "•"}</span>
+         <span class="nav-side-label">${escapeHtml(label)}</span>
+       </button>`;
+  bar.innerHTML = proPill + DESKTOP_NAV_GROUPS.map((group) => `
     <div class="nav-drop-group" data-nav-drop-group="${escapeHtml(group.key)}">
       <button type="button" class="nav-side-group-toggle" aria-expanded="false">
         <span class="nav-side-icon" aria-hidden="true">${DESKTOP_NAV_GROUP_ICONS[group.key] || "•"}</span>
@@ -24470,11 +24489,7 @@ function buildDesktopNavDropBar() {
         <span class="nav-side-caret" aria-hidden="true">▾</span>
       </button>
       <div class="nav-side-items">
-        ${group.items.map(([tab, label]) => `
-          <button type="button" data-tab="${escapeHtml(tab)}" title="${escapeHtml(label)}">
-            <span class="nav-side-icon" aria-hidden="true">${DESKTOP_NAV_ICONS[tab] || "•"}</span>
-            <span class="nav-side-label">${escapeHtml(label)}</span>
-          </button>`).join("")}
+        ${group.items.map(renderItem).join("")}
       </div>
     </div>
   `).join("");
