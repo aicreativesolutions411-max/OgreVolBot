@@ -177,6 +177,13 @@
     var plotR=W-AX,plotB=H-BX,ph=plotB-TOP,step=plotR/N;
     var yFor=function(p){return TOP+(1-(p-cur.mn)/(cur.mx-cur.mn))*ph;};
     ctx.clearRect(0,0,W,H);
+    // Real coin still loading → clean placeholder (NEVER show synthetic fake-price candles, which is
+    // what flashed wrong pricing on every iframe reload). Only the real chart is ever drawn for a CA.
+    if(CA && !usdMode){
+      for(var gp=0;gp<=4;gp++){var gyy=TOP+ph*gp/4;ctx.strokeStyle='rgba(255,255,255,.04)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,gyy);ctx.lineTo(W-AX,gyy);ctx.stroke();}
+      ctx.fillStyle='#5d8a6e';ctx.font='12px -apple-system,system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('Loading '+(SYMP?('$'+SYMP):'chart')+'…',(W-AX)/2,(TOP+plotB)/2);
+      return;
+    }
     ctx.font='10px -apple-system,system-ui,sans-serif';ctx.textBaseline='middle';
     for(var gi=0;gi<=4;gi++){var gy=TOP+ph*gi/4;ctx.strokeStyle='rgba(255,255,255,.045)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(plotR,gy);ctx.stroke();
       var pv=cur.mx-(cur.mx-cur.mn)*gi/4;ctx.fillStyle='#5d8a6e';ctx.textAlign='left';ctx.fillText(fmtMc(pv),plotR+6,gy);}
@@ -234,6 +241,7 @@
     if(d.vol24&&(e=document.getElementById('s_vol')))e.textContent=fmtMcRaw(d.vol24);
     if(d.trades&&d.trades.length){var bc=0,sc=0;d.trades.forEach(function(x){if(x.side==='buy')bc++;else sc++;});if(e=document.getElementById('s_bs'))e.textContent=bc+' / '+sc;
       vclock=0;txns=d.trades.map(function(x,i){return {buy:x.side==='buy',sol:Math.round(x.usd||0),price:fmtUsd(x.price),at:-(i*3),usd:true};});}
+    try{ if(CA) sessionStorage.setItem('cl:'+CA, JSON.stringify({at:Date.now(),d:{ok:1,stage:d.stage,symbol:d.symbol,name:d.name,priceUsd:d.priceUsd,mc:d.mc,fdv:d.fdv,liq:d.liq,vol24:d.vol24,change24h:d.change24h,candles:(d.candles||[]).slice(-60),trades:(d.trades||[]).slice(0,30)}})); }catch(e){}
     refresh();return true;
   }
   // GeckoTerminal is CORS-enabled and rate-limits by IP — so we fetch it straight from the BROWSER
@@ -263,7 +271,12 @@
   function loadServer(){fetch('/api/chart?ca='+encodeURIComponent(CA)+'&tf='+encodeURIComponent(TF)).then(function(r){return r.json();}).then(applyData).catch(function(){});}
   function loadReal(){if(!CA)return;loadGT(CA,TF).then(function(d){if(d&&d.candles&&d.candles.length)applyData(d);else loadServer();}).catch(loadServer);}
   if(!CA){setInterval(function(){bars.push(mk(bars[N-1].c));bars.shift();vclock+=2;var nadd=1+(Math.random()<0.5?1:0);for(var z=0;z<nadd;z++)txns.unshift(newTx(0));if(txns.length>160)txns.length=160;refresh();},1700);}
-  else{loadReal();setInterval(loadReal,12000);}
+  else{
+    // Instant seamless reload: if we drew this coin moments ago, repaint the REAL data immediately
+    // from sessionStorage (no synthetic flash, no empty), then refresh live.
+    try{ var cc=JSON.parse(sessionStorage.getItem('cl:'+CA)||'null'); if(cc&&cc.d&&Date.now()-cc.at<180000) applyData(cc.d); }catch(e){}
+    loadReal();setInterval(loadReal,12000);
+  }
   var _tb=document.getElementById('txtoggle');if(_tb)_tb.addEventListener('click',function(){expanded=!expanded;var tp=document.getElementById('tape');if(tp)tp.classList.toggle('expanded',expanded);_tb.textContent=expanded?'Collapse ▴':'Expand ▾';renderTape();});
   Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(b){b.addEventListener('click',function(){Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(x){x.classList.remove('on');});b.classList.add('on');TF=b.getAttribute('data-tf')||'5m';if(CA)loadReal();});});
   window.addEventListener('resize',function(){size();safeDraw();});
