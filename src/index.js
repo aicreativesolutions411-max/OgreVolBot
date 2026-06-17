@@ -8760,6 +8760,15 @@ async function handleMessage(message, userId) {
     }
   }
 
+  // A pasted X/tweet link → embed the full post (image/video + text) in chat. In groups only
+  // when the message is basically just the link (avoid hijacking normal chatter); always in DM.
+  const tweetIn = text.match(TWEET_LINK_RE);
+  if (tweetIn && (isPrivateChat(message.chat) || text.trim().length < tweetIn[0].length + 30)) {
+    if (tgCommandOnCooldown(chatId, "xpost", 4000)) return;
+    await postXPost(chatId, tweetIn[0]).catch(() => {});
+    return;
+  }
+
   // Cashtag like "$OGRE" → resolve the ticker to its token and post the SAME scan card as a CA
   // (records the channel call too, via the look handler). Works in groups + DM.
   const cashtag = /^\$([A-Za-z][A-Za-z0-9._]{1,19})$/.exec(text.trim());
@@ -19871,23 +19880,69 @@ async function resolveCoinGeckoId(input) {
     return out;
   } catch { return null; }
 }
-async function fetchCoinGeckoPrices(id, days) {
-  const d = await fetchJson(`https://api.coingecko.com/api/v3/coins/${encodeURIComponent(id)}/market_chart?vs_currency=usd&days=${days}`, { timeoutMs: 6500 }).catch(() => null);
-  const prices = Array.isArray(d?.prices) ? d.prices : [];
-  return prices.map((p) => Number(p?.[1])).filter((n) => Number.isFinite(n));
+async function fetchCoinGeckoOhlc(id, days) {
+  const d = await fetchJson(`https://api.coingecko.com/api/v3/coins/${encodeURIComponent(id)}/ohlc?vs_currency=usd&days=${days}`, { timeoutMs: 7500 }).catch(() => null);
+  const list = Array.isArray(d) ? d : [];
+  return list.map((r) => ({ t: Number(r[0]) || 0, o: Number(r[1]), h: Number(r[2]), l: Number(r[3]), c: Number(r[4]) })).filter((k) => k.h > 0 && k.l > 0);
 }
-function quickChartLineUrl(closes, label) {
-  const step = Math.max(1, Math.floor(closes.length / 64));
-  const pts = closes.filter((_, i) => i % step === 0);
-  const up = pts.length >= 2 && pts[pts.length - 1] >= pts[0];
-  const color = up ? "rgb(57,255,20)" : "rgb(255,77,77)";
-  const fillC = up ? "rgba(57,255,20,0.14)" : "rgba(255,77,77,0.14)";
-  const cfg = {
-    type: "line",
-    data: { labels: pts.map(() => ""), datasets: [{ data: pts, borderColor: color, backgroundColor: fillC, fill: true, pointRadius: 0, borderWidth: 2, tension: 0.25 }] },
-    options: { plugins: { legend: { display: false }, title: { display: true, text: label, color: "#cfeac0", font: { size: 16 } } }, scales: { x: { display: false }, y: { position: "right", ticks: { color: "#8aa680" }, grid: { color: "rgba(255,255,255,0.05)" } } } }
-  };
-  return `https://quickchart.io/chart?bkg=%230b140c&w=760&h=420&c=${encodeURIComponent(JSON.stringify(cfg))}`;
+async function fetchCoinGeckoMarket(id) {
+  const d = await fetchJson(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${encodeURIComponent(id)}`, { timeoutMs: 7000 }).catch(() => null);
+  return (Array.isArray(d) && d[0]) ? d[0] : null;
+}
+function fmtChartPrice(p) {
+  p = Number(p) || 0;
+  if (p >= 1000) return "$" + Math.round(p).toLocaleString("en-US");
+  if (p >= 1) return "$" + p.toFixed(2);
+  if (p >= 0.01) return "$" + p.toFixed(4);
+  return "$" + p.toPrecision(3);
+}
+// Self-rendered candlestick chart (SVG -> PNG via sharp) — clean + detailed (price axis, grid,
+// time labels, green/red candles, last-price line). No flaky external chart service.
+function candleChartSvg(candles, opts = {}) {
+  const W = 880, H = 470, padL = 12, padR = 80, padT = 52, padB = 30;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const cs = candles.slice(-120);
+  const hi = Math.max(...cs.map((c) => c.h)), lo = Math.min(...cs.map((c) => c.l));
+  const pad = (hi - lo) * 0.08 || (hi * 0.08) || 1;
+  const top = hi + pad, bot = Math.max(0, lo - pad), span = (top - bot) || 1;
+  const xAt = (i) => padL + (cs.length <= 1 ? plotW / 2 : (i / (cs.length - 1)) * plotW);
+  const yAt = (p) => padT + (1 - (p - bot) / span) * plotH;
+  const cw = Math.max(2.2, Math.min(13, (plotW / Math.max(1, cs.length)) * 0.64));
+  let grid = "", ylab = "";
+  for (let g = 0; g <= 4; g++) {
+    const p = bot + (g / 4) * span, yy = yAt(p);
+    grid += `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${(padL + plotW).toFixed(1)}" y2="${yy.toFixed(1)}" stroke="rgba(255,255,255,0.06)"/>`;
+    ylab += `<text x="${padL + plotW + 7}" y="${(yy + 4).toFixed(1)}" fill="#8aa680" font-size="13" font-family="monospace">${escapeSvg(fmtChartPrice(p))}</text>`;
+  }
+  let body = "";
+  for (let i = 0; i < cs.length; i++) {
+    const c = cs[i], up = c.c >= c.o, col = up ? "#39ff14" : "#ff5470", cx = xAt(i);
+    const yH = yAt(c.h), yL = yAt(c.l), yo = yAt(c.o), yc = yAt(c.c);
+    const t2 = Math.min(yo, yc), h2 = Math.max(1.2, Math.abs(yc - yo));
+    body += `<line x1="${cx.toFixed(1)}" y1="${yH.toFixed(1)}" x2="${cx.toFixed(1)}" y2="${yL.toFixed(1)}" stroke="${col}" stroke-width="1.3"/>`;
+    body += `<rect x="${(cx - cw / 2).toFixed(1)}" y="${t2.toFixed(1)}" width="${cw.toFixed(1)}" height="${h2.toFixed(1)}" fill="${col}" rx="1"/>`;
+  }
+  const lastY = yAt(cs[cs.length - 1].c);
+  const lastCol = cs[cs.length - 1].c >= cs[0].o ? "#39ff14" : "#ff5470";
+  const lastLine = `<line x1="${padL}" y1="${lastY.toFixed(1)}" x2="${(padL + plotW).toFixed(1)}" y2="${lastY.toFixed(1)}" stroke="${lastCol}" stroke-width="1" stroke-dasharray="4 4" opacity="0.55"/>`;
+  let xlab = "";
+  if (cs.length > 1) {
+    const fmtT = (ms) => { const dt = new Date(ms); return `${dt.getUTCMonth() + 1}/${dt.getUTCDate()}`; };
+    for (const i of [0, Math.floor(cs.length / 2), cs.length - 1]) {
+      xlab += `<text x="${xAt(i).toFixed(1)}" y="${H - 10}" fill="#6f8a66" font-size="12" font-family="monospace" text-anchor="middle">${fmtT(cs[i].t)}</text>`;
+    }
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+  <defs><linearGradient id="cbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0e1c10"/><stop offset="1" stop-color="#060d07"/></linearGradient></defs>
+  <rect width="${W}" height="${H}" fill="url(#cbg)"/>
+  ${grid}${lastLine}
+  <text x="${padL}" y="30" fill="#d6ffbf" font-size="21" font-weight="800" font-family="Inter, sans-serif">${escapeSvg(opts.title || "")}</text>
+  <text x="${padL}" y="46" fill="#7fae6f" font-size="13" font-family="Inter, sans-serif">${escapeSvg(opts.sub || "")}</text>
+  ${body}${ylab}${xlab}
+</svg>`;
+}
+async function renderCandleChartPng(candles, opts) {
+  return sharp(Buffer.from(candleChartSvg(candles, opts))).png().toBuffer();
 }
 function chartTickerKeyboard(id, symbol, activeTf) {
   const tfRow = Object.keys(CHART_TF_DAYS).map((tf) => ({ text: tf === activeTf ? `· ${tf} ·` : tf, callback_data: `chartx:${id}:${symbol}:${tf}` }));
@@ -19895,25 +19950,23 @@ function chartTickerKeyboard(id, symbol, activeTf) {
 }
 async function sendCryptoChart(chatId, id, symbol, tf, messageId = null) {
   const days = CHART_TF_DAYS[tf] || 1;
-  const closes = await fetchCoinGeckoPrices(id, days);
-  if (!closes.length) {
-    if (!messageId) await say(chatId, `Couldn't pull ${symbol} price data right now — try again in a moment.`);
-    return false;
-  }
-  const last = closes[closes.length - 1];
-  const first = closes[0];
-  const pct = first > 0 ? ((last / first - 1) * 100) : 0;
-  const label = `${symbol}/USD  $${last >= 1 ? last.toLocaleString("en-US", { maximumFractionDigits: 2 }) : last.toPrecision(3)}  ${pct >= 0 ? "+" : ""}${pct.toFixed(1)}% (${tf})`;
-  const img = quickChartLineUrl(closes, label);
+  const [candles, mkt] = await Promise.all([fetchCoinGeckoOhlc(id, days), fetchCoinGeckoMarket(id)]);
+  if (!candles.length) { if (!messageId) await say(chatId, `Couldn't pull ${symbol} chart data right now — try again in a moment.`); return false; }
+  const price = Number(mkt?.current_price) || candles[candles.length - 1].c;
+  const ch = Number(mkt?.price_change_percentage_24h);
+  const name = mkt?.name || symbol;
+  const mc = Number(mkt?.market_cap) || 0;
+  const mcStr = mc ? `MC ${mc >= 1e9 ? "$" + (mc / 1e9).toFixed(2) + "B" : "$" + (mc / 1e6).toFixed(0) + "M"}` : "";
+  const title = `${name}  ${fmtChartPrice(price)}  ${Number.isFinite(ch) ? (ch >= 0 ? "▲ +" : "▼ ") + ch.toFixed(1) + "%" : ""}`;
+  const png = await renderCandleChartPng(candles, { title, sub: `${symbol}/USD · ${tf}${mcStr ? " · " + mcStr : ""}` }).catch(() => null);
+  if (!png) { if (!messageId) await say(chatId, `${title}\nhttps://www.tradingview.com/chart/?symbol=${symbol}USD`); return false; }
+  const cap = `<b>${escapeTelegramHtml(name)}</b> ($${escapeTelegramHtml(symbol)})\n💵 <b>${escapeTelegramHtml(fmtChartPrice(price))}</b>  ${Number.isFinite(ch) ? (ch >= 0 ? "🟢 +" : "🔴 ") + ch.toFixed(1) + "% 24h" : ""}${mcStr ? "\n📊 " + escapeTelegramHtml(mcStr) : ""}  ·  ${tf}`;
   const kb = chartTickerKeyboard(id, symbol, tf);
   try {
-    if (messageId) {
-      await telegram("editMessageMedia", { chat_id: chatId, message_id: messageId, media: { type: "photo", media: img, caption: label }, reply_markup: kb });
-    } else {
-      await telegram("sendPhoto", { chat_id: chatId, photo: img, caption: label, reply_markup: kb });
-    }
-    return true;
-  } catch { if (!messageId) await say(chatId, `${label}\nChart: https://www.tradingview.com/chart/?symbol=${symbol}USD`); return false; }
+    const sent = await sendPhoto(chatId, `chart-${symbol}.png`, png, cap, kb, "HTML");
+    if (messageId) { try { await telegram("deleteMessage", { chat_id: chatId, message_id: messageId }); } catch {} } // re-render: replace the old chart
+    return Boolean(sent);
+  } catch { if (!messageId) await say(chatId, `${title}\nhttps://www.tradingview.com/chart/?symbol=${symbol}USD`); return false; }
 }
 
 async function fetchGeckoOhlcv(mint, tfKey) {
@@ -23510,15 +23563,33 @@ function parseTweetUrl(url) {
   if (!m) return null;
   return { user: m[1], id: m[2], original: `https://x.com/${m[1]}/status/${m[2]}`, embed: `https://fxtwitter.com/${m[1]}/status/${m[2]}` };
 }
-// Post an X tweet INTO chat with its image/video + text (via the fxtwitter embed) plus a
-// "See full post on X" button to the original. Use this anywhere the bot shares a tweet.
+// Post an X tweet INTO chat with its image/video + text. We FETCH the tweet from the fxtwitter
+// API and send the actual media (sendVideo/sendPhoto) + text + a "See full post on X" button —
+// instead of relying on Telegram to unfurl an x.com link (Twitter blocks Telegram's crawler, so
+// that never shows media). Falls back to the fxtwitter link preview if the API is unreachable.
 async function postXPost(chatId, tweetUrl, prefix = "") {
   const t = parseTweetUrl(tweetUrl);
   if (!t) return false;
-  const text = `${prefix ? escapeTelegramHtml(prefix) + "\n" : ""}<a href="${t.embed}">𝕏 post →</a>`;
+  const button = { inline_keyboard: [[{ text: "See full post on X →", url: t.original }]] };
+  try {
+    const j = await fetchJson(`https://api.fxtwitter.com/${t.user}/status/${t.id}`, { timeoutMs: 7000, headers: { "User-Agent": "SlimeWireBot/1.0" } }).catch(() => null);
+    const tw = j && j.tweet;
+    if (tw) {
+      const author = tw.author?.name ? `${tw.author.name} (@${tw.author.screen_name || t.user})` : `@${t.user}`;
+      const cap = `${prefix ? escapeTelegramHtml(prefix) + "\n\n" : ""}𝕏 <b>${escapeTelegramHtml(author)}</b>\n${escapeTelegramHtml(String(tw.text || "").slice(0, 700))}`.slice(0, 1024);
+      const video = (tw.media?.videos || [])[0];
+      const photo = (tw.media?.photos || [])[0];
+      if (video?.url) { await sendTelegramVideo(chatId, { url: video.url }, cap, button, "HTML"); return true; }
+      if (photo?.url) { await telegram("sendPhoto", { chat_id: chatId, photo: photo.url, caption: cap, parse_mode: "HTML", reply_markup: button }); return true; }
+      // text-only tweet
+      await telegram("sendMessage", { chat_id: chatId, text: cap, parse_mode: "HTML", reply_markup: button, disable_web_page_preview: true });
+      return true;
+    }
+  } catch {}
+  // Fallback: the fxtwitter link with preview enabled.
   await telegram("sendMessage", {
-    chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: false,
-    reply_markup: { inline_keyboard: [[{ text: "See full post on X →", url: t.original }]] }
+    chat_id: chatId, text: `${prefix ? escapeTelegramHtml(prefix) + "\n" : ""}<a href="${t.embed}">𝕏 post →</a>`,
+    parse_mode: "HTML", disable_web_page_preview: false, reply_markup: button
   });
   return true;
 }
