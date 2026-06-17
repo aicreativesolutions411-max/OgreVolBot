@@ -836,17 +836,22 @@ test("scalp: hunts the LIQUID feed, not the fresh-dust feed", async () => {
   await engine.stop("test");
 });
 
-test("liquid modes (scalp/steady/blend) hunt by SETUP, not age — a days-old runner is accepted", () => {
-  for (const mode of ["scalp", "steady", "blend"]) {
+test("only QUICK (scalp) uses the liquid/any-age hunt; Steady + Balanced hunt the proven fresh pocket", () => {
+  // QUICK = scalp: liquid, age-agnostic, wide MC (the experimental wide-net).
+  const q = aggParams(baseState({ mode: "scalp" }));
+  assert.ok(q.liquid, "scalp uses the liquid hunt profile");
+  assert.ok(q.maxAge >= 172800, "scalp does not cap age");
+  assert.ok(q.mcCeil >= 1000000, "scalp reaches high MC");
+  const oldRunner = goodRow({ marketCap: 250000, liquidityUsd: 80000, pairAgeSeconds: 172800, volume5m: 30000, buys5m: 40, sells5m: 12, m5: 8, h1: 20, bestPickScore: 60 });
+  assert.equal(entryReject(oldRunner, q), null, "scalp accepts a days-old liquid runner");
+  // STEADY + BALANCED: NOT liquid — they hunt the proven FRESH low-MC pocket (the +EV engine),
+  // differing only in how they bank. A days-old higher-MC coin is rejected here (fresh window).
+  for (const mode of ["steady", "blend"]) {
     const P = aggParams(baseState({ mode }));
-    assert.ok(P.liquid, `${mode} uses the shared liquid hunt profile`);
-    assert.ok(P.maxAge >= 172800, `${mode} does not cap age — days-old coins allowed`);
-    assert.ok(P.minAge <= 60, `${mode} keeps only a tiny age floor (skip the snipe seconds)`);
-    assert.ok(P.mcCeil >= 1000000, `${mode} reaches high MC`);
-    // A 2-day-old, deep-liquidity, buy-led mover: age would have rejected it before; now the
-    // setup (liquidScore) decides and it passes.
-    const oldRunner = goodRow({ marketCap: 250000, liquidityUsd: 80000, pairAgeSeconds: 172800, volume5m: 30000, buys5m: 40, sells5m: 12, m5: 8, h1: 20, bestPickScore: 60 });
-    assert.equal(entryReject(oldRunner, P), null, `${mode} accepts a 2-day-old liquid runner`);
+    assert.ok(!P.liquid, `${mode} hunts the fresh pocket, not the liquid wide-net`);
+    assert.ok(P.maxAge <= 3600, `${mode} keeps a tight fresh age window`);
+    assert.ok(P.mcCeil <= 20000, `${mode} stays in the low-MC pocket`);
+    assert.ok(entryReject(oldRunner, P), `${mode} rejects a days-old higher-MC coin`);
   }
 });
 

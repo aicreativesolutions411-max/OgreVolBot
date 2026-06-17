@@ -48,13 +48,13 @@ export function aggParams(state) {
   // recycles. This is the fix for "finds pairs slowly + phantom +300% marks that don't fill":
   // a liquid coin's mark is actually sellable, so the displayed win is the real win.
   const scalp = mode === "scalp";
-  // LIQUID winner-hunt profile shared by all three user-facing Pro modes (Quick=scalp,
-  // Steady, Balanced=blend). They HUNT identically — the liquid feed, real-depth + buy-led
-  // setup scoring (liquidScore), a wide MC band, and almost NO age limit (a good coin can run
-  // days after launch; age is a weak signal, the SETUP is what matters). They differ only in how
-  // they BANK (exit params below). This is the "it's alive — find winners all around, doesn't
-  // matter how it gets them, stop limiting by age" direction.
-  const liquid = scalp || mode === "steady" || mode === "blend";
+  // LIQUID winner-hunt profile = QUICK (scalp) ONLY. We tried routing Steady + Balanced through
+  // it too (wide MC, any age, trending/older coins) but the live scorecard was blunt: that book
+  // bled (steady ran a 40% rug rate, −EV), while the proven money-maker is the FRESH low-MC pocket
+  // (score 62-66, <30s, ~2-2.5k MC — the +EV "normal" engine). So Steady + Balanced now hunt that
+  // proven fresh recipe and differ only in how they BANK; Quick stays the experimental liquid/
+  // trending wide-net. (See aggParams data note + the autopilot-engine-modes memory.)
+  const liquid = scalp;
   const baseFrac = mode === "degen" ? 0.10 : mode === "chill" ? 0.04 : scalp ? 0.07 : grind ? 0.07 : 0.06;
 
   // Softer streak/regime scaling: a hot streak no longer balloons size right
@@ -469,11 +469,13 @@ export function convictionMult(row, rep, sm, ci, caps = {}) {
   const noEdge = !(rep && rep.runners >= 1) && !(sm && (sm.kol || sm.winners >= 1)) && !(ci && ci.trusted);
   if (!caps.scalp) {
     const fsv = freshScore(row);
-    if (fsv >= 70) c += 0.15;                                // top-tier setup
+    // NOTE: we used to size UP on fs>=70 ("top-tier"). The live scorecard killed that idea — the
+    // 72+ band has the BEST win-rate (29%) but LOSES the most SOL (−0.93), i.e. its losers are
+    // bigger than its wins. Sizing up there was throwing more money at the worst-EV band. The
+    // proven +EV pocket is the mid 62-66 band. So no fs-based size-UP anymore — score gates entry,
+    // it does NOT earn a bigger bet (only PROVEN dev / smart-money confluence sizes up, below).
     // SIZE DOWN the lowest-confidence bets: no proven dev, no smart money, only a marginal
-    // score. A rug/dump on these gaps PAST any stop (waewa rugged -60% past the 6% stop), so
-    // betting smaller is the only thing that shrinks the hit. Strong/proven setups keep full
-    // size — this just trims the weakest, highest-rug-risk entries so losers cost less.
+    // score. A rug/dump on these gaps PAST any stop, so betting smaller shrinks the hit.
     if (noEdge && fsv < 66) c -= 0.25;
   }
   // CRITICAL: freshness/score do NOT predict instant-rugs. Only let conviction size
@@ -1464,7 +1466,7 @@ export function createAutopilotEngine(deps) {
     // window is often thin, so rather than sit idle forever it FALLS BACK to the fresh feed and
     // trades those with its fast in/out exits — a trading scalp beats a waiting one. (The honest
     // realized-anchored display keeps phantom dust marks out of the headline regardless.)
-    const useLiquid = ["scalp", "steady", "blend"].includes(state.mode) && typeof getLiquidFeed === "function";
+    const useLiquid = state.mode === "scalp" && typeof getLiquidFeed === "function";
     try {
       rows = useLiquid ? await getLiquidFeed() : await getFreshFeed();
       if (useLiquid && (!Array.isArray(rows) || !rows.length)) rows = await getFreshFeed();
