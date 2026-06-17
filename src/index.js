@@ -24168,9 +24168,11 @@ async function buildChartData(mint, tf) {
   }
   if (!candles.length) {
     stage = best ? "dex" : "pump";
-    const pc = await fetch(`https://frontend-api.pump.fun/candlesticks/${mint}?offset=0&limit=150&timeframe=5`, { headers: { accept: "application/json" } }).then((r) => r.ok ? r.json() : null).catch(() => null);
+    // Pump bonding-curve candles for FRESH pre-DEX launches (GeckoTerminal has no pool until migration).
+    // swap-api.pump.fun returns OHLC for the curve; the old frontend-api endpoint is dead (530).
+    const pc = await fetch(`https://swap-api.pump.fun/v1/coins/${mint}/candles?interval=${tf}&limit=150`, { headers: { accept: "application/json" } }).then((r) => r.ok ? r.json() : null).catch(() => null);
     if (Array.isArray(pc) && pc.length) {
-      candles = pc.map((k) => ({ t: Number(k.timestamp) || 0, o: Number(k.open) || 0, h: Number(k.high) || 0, l: Number(k.low) || 0, c: Number(k.close) || 0, v: Number(k.volume) || 0 })).filter((k) => k.c > 0).sort((x, y) => x.t - y.t);
+      candles = pc.map((k) => ({ t: Math.floor((Number(k.timestamp) || 0) / 1000), o: Number(k.open) || 0, h: Number(k.high) || 0, l: Number(k.low) || 0, c: Number(k.close) || 0, v: Number(k.volume) || 0 })).filter((k) => k.c > 0).sort((x, y) => x.t - y.t);
       if (candles.length) stage = "pump";
     }
     if (!best) {

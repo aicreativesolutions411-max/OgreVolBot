@@ -123,7 +123,7 @@
 (function(){
   var cv=document.getElementById('goo'); if(!cv) return;
   var QP=new URLSearchParams(location.search),CA=(QP.get('ca')||'').trim(),EMBED=QP.get('embed')==='1',TF=QP.get('tf')||'5m';
-  var usdMode=false,mcScale=8.4,chg24=null;
+  var usdMode=false,mcScale=8.4,chg24=null,realPrice=null;
   if(EMBED&&document.body)document.body.classList.add('embed');
   function fmtUsd(p){p=Number(p)||0;if(p<=0)return '$0';if(p>=1)return '$'+p.toLocaleString(undefined,{maximumFractionDigits:3});if(p>=0.001)return '$'+p.toFixed(5);return '$'+p.toPrecision(3);}
   function fmtMcRaw(v){v=Number(v)||0;return v>=1e9?'$'+(v/1e9).toFixed(2)+'B':v>=1e6?'$'+(v/1e6).toFixed(2)+'M':v>=1e3?'$'+Math.round(v/1e3)+'K':'$'+Math.round(v);}
@@ -209,7 +209,7 @@
     el.innerHTML=list.map(function(x){var amt=x.usd?('$'+Number(x.sol).toLocaleString()):((x.buy?'+':'-')+x.sol+' SOL');return '<div class="trow"><span class="dim">'+fmtAgo(vclock-x.at)+'</span><span class="pill '+(x.buy?'b':'s')+'">'+(x.buy?'BUY':'SELL')+'</span><span>'+amt+'</span><span class="dim">'+x.price+'</span></div>';}).join('');}
   function refresh(){
     var lb=bars[N-1];var e;
-    if(e=document.getElementById('px'))e.textContent=priceLabel(lb.c);
+    if(e=document.getElementById('px'))e.textContent=(usdMode&&realPrice)?fmtUsd(realPrice):priceLabel(lb.c);
     if(e=document.getElementById('s_mc'))e.textContent=fmtMc(lb.c);
     var chg=usdMode&&chg24!=null&&isFinite(chg24)?Math.round(chg24):Math.round((lb.c/bars[0].o-1)*100);
     if(e=document.getElementById('chg')){e.textContent=(chg>=0?'+':'')+chg+'% 24h';e.className='chg '+(chg>=0?'buyc':'sellc');}
@@ -220,8 +220,8 @@
     if(!d||!d.ok||!Array.isArray(d.candles)||d.candles.length<2)return false;
     var cs=d.candles.slice(-N),nb=cs.map(function(k,idx){var up=k.c>=k.o;return {o:k.o,h:k.h,l:k.l,c:k.c,up:up,ss:up?0.4:0.66,vol:Math.max(0.0001,k.v),ph:(idx*1.37)%6.28,fl:idx%2===0};});
     while(nb.length<N)nb.unshift(Object.assign({},nb[0]));
-    bars=nb;usdMode=true;chg24=Number(d.change24h);
-    if(d.priceUsd>0&&d.mc>0)mcScale=d.mc/d.priceUsd;else if(d.mc>0&&bars[N-1].c>0)mcScale=d.mc/bars[N-1].c;
+    bars=nb;usdMode=true;chg24=Number(d.change24h);realPrice=(Number(d.priceUsd)>0)?Number(d.priceUsd):null;
+    if(d.mc>0&&bars[N-1].c>0)mcScale=d.mc/bars[N-1].c;
     var e;
     if(d.symbol&&(e=document.querySelector('.tk .sym')))e.innerHTML='$'+esc(d.symbol)+' <span style="color:#5d8a6e;font-weight:400">· '+esc((d.name||'Token').slice(0,22))+'</span>';
     if(CA&&(e=document.querySelector('.tk .sub')))e.textContent=CA.slice(0,4)+'…'+CA.slice(-4);

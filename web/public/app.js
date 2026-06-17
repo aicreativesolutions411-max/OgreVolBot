@@ -16182,6 +16182,9 @@ function dexChartEmbedUrl(tokenOrMint, options = {}) {
 
 function smartChartFrameUrl(token = {}, mode = "chart") {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
+  // SlimeWire NATIVE chart is the only chart now — keep users on-site (it shows the same info via our
+  // free /api/chart: GeckoTerminal candles once on a DEX, Pump bonding-curve candles for fresh launches).
+  if (mint) return `/chart-lab?ca=${encodeURIComponent(mint)}&embed=1`;
   const bootstrap = smartChartBootstrapForMint(mint);
   if (mode === "info" && bootstrap?.infoUrl) return bootstrap.infoUrl;
   if ((mode === "chartTxns" || mode === "txns") && (bootstrap?.chartTxnsUrl || bootstrap?.txnsUrl)) {
@@ -16264,10 +16267,10 @@ function smartChartDexFrameHtml(token = {}, mode = "chart") {
   const isInfo = mode === "info";
   const resolvingPair = queueSmartChartBootstrap(token) || queueSmartChartDexResolution(token);
   const title = isInfo
-    ? `DexScreener info for ${token.symbol || shortAddress(mint)}`
+    ? `SlimeWire info for ${token.symbol || shortAddress(mint)}`
     : isTransactions
-      ? `DexScreener chart and transactions for ${token.symbol || shortAddress(mint)}`
-      : `DexScreener chart for ${token.symbol || shortAddress(mint)}`;
+      ? `SlimeWire chart and transactions for ${token.symbol || shortAddress(mint)}`
+      : `SlimeWire chart for ${token.symbol || shortAddress(mint)}`;
   const className = [
     "smart-chart-frame",
     "smart-chart-dex-frame",
@@ -16275,8 +16278,8 @@ function smartChartDexFrameHtml(token = {}, mode = "chart") {
     mode === "chartTxns" ? "smart-chart-combined-frame" : "",
     isInfo ? "smart-chart-info-frame" : ""
   ].filter(Boolean).join(" ");
-  const loadingLabel = isInfo ? "Loading token info..." : isTransactions ? "Loading DEX transactions..." : "Loading DEX chart...";
-  const frameLoadingLabel = resolvingPair ? "Loading DEX chart while resolving fastest pair..." : loadingLabel;
+  const loadingLabel = isInfo ? "Loading token info..." : isTransactions ? "Loading live chart..." : "Loading live chart...";
+  const frameLoadingLabel = loadingLabel;
   const frameSrc = smartChartFrameUrl(token, mode);
   return `
     <div class="${escapeHtml(className)}" data-chart-frame-loading="${escapeHtml(frameLoadingLabel)}" data-chart-resolving="${resolvingPair ? "true" : "false"}" data-chart-mint="${escapeHtml(mint)}" data-chart-mode="${escapeHtml(mode)}" data-chart-src="${escapeHtml(frameSrc)}">
@@ -18992,7 +18995,7 @@ function smartChartHtml() {
       <div class="terminal-title-row smart-chart-clean-title">
         <div>
           <h3>${escapeHtml(tokenLabel)} Chart</h3>
-          <p>DEX chart, live transactions, and wallet trade controls for the selected CA.</p>
+          <p>Live SlimeWire chart, transactions, and wallet trade controls for the selected CA.</p>
         </div>
         <button type="button" data-tab="terminal">Back to Live Terminal</button>
       </div>
