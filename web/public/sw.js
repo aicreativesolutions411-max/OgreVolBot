@@ -3,7 +3,12 @@
 // /api/ responses or non-GET requests, so trading data is never served stale. Offline just
 // shows the cached shell, which then loads live data when the connection returns.
 
-const SHELL_CACHE = "slimewire-shell-v1";
+const SHELL_CACHE = "slimewire-shell-v2";
+// Standalone pages are their OWN documents (Pro, raid board, prelaunch, hub, launch, guide, share
+// pages). The SW must NEVER treat their navigations as the app shell — doing so served the cached
+// main-app (the "/pro shows the old intro then the main page" bug). Only the SPA's own routes are
+// shell navigations; everything else passes straight through to the network.
+const APP_NAV_ROUTES = new Set(["/", "/terminal", "/portal", "/connect", "/login", "/account/login"]);
 
 self.addEventListener("install", () => {
   self.skipWaiting();
@@ -23,8 +28,12 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;           // 3rd-party (RPC, dex, etc.) -> network
   if (url.pathname.startsWith("/api/")) return;              // live data -> network only, NEVER cached
-  const isShellAsset = req.mode === "navigate" || /\.(css|js|mjs|png|jpg|jpeg|svg|webp|ico|json|webmanifest|woff2?)$/i.test(url.pathname);
-  if (!isShellAsset) return;
+  // Only the SPA's own routes are shell navigations. Standalone pages (/pro, /raids, /prelaunch,
+  // /hub, /launch, /manual, share pages, …) pass through so they always load their real document,
+  // never the cached app shell.
+  const isAppNav = req.mode === "navigate" && APP_NAV_ROUTES.has(url.pathname);
+  const isStaticAsset = req.mode !== "navigate" && /\.(css|js|mjs|png|jpg|jpeg|svg|webp|ico|json|webmanifest|woff2?)$/i.test(url.pathname);
+  if (!isAppNav && !isStaticAsset) return;
   event.respondWith((async () => {
     try {
       const res = await fetch(req);                          // network-first: always fresh when online

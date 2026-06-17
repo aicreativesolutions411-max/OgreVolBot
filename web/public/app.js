@@ -24467,9 +24467,8 @@ function buildDesktopNavDropBar() {
   bar.setAttribute("data-nav-drop", "");
   bar.setAttribute("aria-label", "Portal areas");
   // Premium standalone "Pro" pill (its own thing, not buried in a dropdown) → the /pro app.
-  const proPill = `<a class="nav-drop-pro" href="/pro" title="SlimeWire Auto — Pro autopilot">
+  const proPill = `<a class="nav-drop-pro" href="/pro" title="SlimeWire Auto — Pro autopilot" aria-label="Pro autopilot">
       <span class="nav-drop-pro-emblem" aria-hidden="true"></span>
-      <span class="nav-side-label">Pro</span>
     </a>`;
   // Items are [tab, label] (an SPA tab → <button data-tab>) OR [id, label, href] (a real page → <a>).
   const renderItem = ([tab, label, href]) => href
