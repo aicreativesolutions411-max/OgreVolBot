@@ -8628,6 +8628,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("gb:")) {
     if (await handleGroupBotCallback(query, userId).catch(() => false)) return;
   }
+  // Raid setup menu (rd:*) — tap-to-configure goals + duration, then Start.
+  if (String(query.data || "").startsWith("rd:")) {
+    if (await handleRaidSetupCallback(query, userId).catch(() => false)) return;
+  }
 
   if (ADMIN_ACTIONS.has(query.data) && !isAdmin(userId)) {
     await say(chatId, "Only bot admins can use that control.");
@@ -24861,50 +24865,43 @@ async function handleTelegramRaidCommand(chatId, message, argument) {
   const arg = String(argument || "").trim();
   const from = message?.from || {};
   const by = "@" + String(from.username || from.first_name || "anon").replace(/[^A-Za-z0-9_]/g, "").slice(0, 24);
-  if (!arg || !/x\.com|twitter\.com/i.test(arg)) {
+  const url = (arg.match(/https?:\/\/\S+/) || [])[0] || arg;
+  const tid = parseTweetId(url);
+  if (!arg || !tid) {
     await sayHtml(chatId, [
-      "⚔️ <b>/raid &lt;X post link&gt; [$TICKER] [likes] [retweets] [replies]</b>",
+      "⚔️ <b>/raid &lt;X post link&gt;</b>",
       "",
-      "Drop your post and it becomes a <b>live raid card</b> — a slime gauge for likes, retweets &amp; replies that <b>fills itself</b> as the swamp raids (real counts, no API key, no cost).",
-      "Set goals to smash, e.g.:",
-      "<code>/raid &lt;link&gt; $OGRE 500 150 80</code>  — 500 likes · 150 RTs · 80 replies",
-      "<code>/raid &lt;link&gt; 500</code>  — just a likes goal (RT/reply goals auto-set)",
-      "Hit every goal → <b>RAID SMASHED</b> 🔥. Board: <a href=\"https://www.slimewire.org/raids\">slimewire.org/raids</a>"
+      "Drop the post link and I open a <b>setup menu</b> — tap to set how many <b>likes, retweets, replies &amp; bookmarks</b> to hit and a duration, then 🚀 Start.",
+      "The posted card then <b>updates itself live</b> as the swamp raids (real counts, no API key, no cost) — each goal flips 🟥→🟨→🟩, and it shows <b>RAID SMASHED</b> when they're all hit (or <b>Raid Ended</b> when time's up).",
+      "",
+      "Power users: <code>/raid &lt;link&gt; $SYM 500 150 80 50</code> = 500 likes · 150 RT · 80 replies · 50 bookmarks (skips the menu).",
+      "Board: <a href=\"https://www.slimewire.org/raids\">slimewire.org/raids</a>"
     ].join("\n"));
     return;
   }
-  // Parse: the X link, an optional $TICKER, and up to 3 numeric goals (likes / retweets / replies).
+  // Parse: optional $TICKER + up to 4 numeric goals (likes / retweets / replies / bookmarks).
   // Strip the URL first so the tweet id's digits aren't mistaken for a goal.
-  const url = (arg.match(/https?:\/\/\S+/) || [])[0] || arg;
   const rest = arg.replace(url, " ");
   const symMatch = rest.match(/\$?([A-Za-z][A-Za-z0-9_]{1,11})\b/);
   const symbol = symMatch ? symMatch[1] : "";
   const nums = (rest.match(/\d{1,7}/g) || []).map(Number).filter((n) => n > 0);
-  let targets = null;
-  if (nums.length >= 3) targets = { likes: nums[0], rts: nums[1], replies: nums[2] };
-  else if (nums.length === 2) targets = { likes: nums[0], rts: nums[1], replies: Math.max(1, Math.ceil(nums[0] / 8)) };
-  else if (nums.length === 1) targets = { likes: nums[0], rts: Math.max(1, Math.ceil(nums[0] / 4)), replies: Math.max(1, Math.ceil(nums[0] / 8)) }; // single number = likes goal; sensible RT/reply goals
-  const res = await submitRaidPost({ url, by, symbol, targets });
-  if (res.ok) {
-    // The post IS the raid: people tap the link and like/RT/reply to fill the gauge. The card then
-    // EDITS ITSELF every ~50s (refreshRaidTgCards) until every goal is smashed. Custom group art
-    // (image/video set via /setmedia) rides on top as the message media.
-    const ge = await getGroupBotEntry(chatId).catch(() => null);
-    const card = buildRaidProgressCard({ symbol: res.symbol || symbol, targets: res.targets, likes: res.likes, rts: res.rts, replies: res.replies, url: res.url || url });
-    const media = (ge && ge.customMedia && ge.customMedia.value) ? ge.customMedia : null;
-    const sent = await sendGroupAlertMedia(chatId, media, card.text, card.markup);
-    if (sent && sent.result && sent.result.message_id) {
-      await attachRaidTgCard(res.tid, {
-        url: res.url || url,
-        symbol: res.symbol || symbol,
-        targets: res.targets,
-        ref: { chatId, messageId: sent.result.message_id, hasMedia: sent.hasMedia },
-        eng: { likes: res.likes, rts: res.rts, replies: res.replies }
-      });
-    }
-  } else {
-    await say(chatId, "Send a valid X post link, e.g.\n/raid https://x.com/you/status/123");
+  // No goals typed → open the interactive tap-to-set menu (the "fill out + submit" flow).
+  if (!nums.length) {
+    const d = { tid, url, symbol, by, targets: { likes: 100, rts: 25, replies: 10, bookmarks: 10 }, durationH: 2, at: Date.now() };
+    const card = raidSetupCard(d);
+    const sent = await sendGroupAlertMedia(chatId, null, card.text, card.markup);
+    if (sent && sent.result && sent.result.message_id) raidDrafts.set(raidDraftKey(chatId, sent.result.message_id), d);
+    // GC stale drafts so the map can't grow unbounded.
+    if (raidDrafts.size > 200) { const cutoff = Date.now() - 3600_000; for (const [k, v] of raidDrafts) if ((v.at || 0) < cutoff) raidDrafts.delete(k); }
+    return;
   }
+  // Goals typed → start immediately (power path).
+  const targets = nums.length >= 4
+    ? { likes: nums[0], rts: nums[1], replies: nums[2], bookmarks: nums[3] }
+    : nums.length === 3 ? { likes: nums[0], rts: nums[1], replies: nums[2], bookmarks: Math.max(1, Math.ceil(nums[0] / 10)) }
+    : nums.length === 2 ? { likes: nums[0], rts: nums[1], replies: Math.max(1, Math.ceil(nums[0] / 8)), bookmarks: Math.max(1, Math.ceil(nums[0] / 10)) }
+    : { likes: nums[0], rts: Math.max(1, Math.ceil(nums[0] / 4)), replies: Math.max(1, Math.ceil(nums[0] / 8)), bookmarks: Math.max(1, Math.ceil(nums[0] / 10)) };
+  await startRaidFromDraft(chatId, { tid, url, symbol, by, targets, durationH: 2 });
 }
 
 // Channels: only /look, /alpha, /slimewire - posts have no from user, admin implied.
@@ -25114,7 +25111,7 @@ function groupBotHelpText() {
     "• <code>/minbuy &lt;SOL&gt;</code> — only show buys ≥ that size (0 = show all)",
     "• <code>/setbuyemoji 🐸 0.1</code> — pick the emoji + how many show per buy (one per 0.1 SOL here)",
     "",
-    "⚔️ <b>Raid Bot</b> — <code>/raid &lt;X post link&gt; [$TICKER] [likes] [retweets] [replies]</code> → posts a <b>live raid card</b> that fills itself as likes/RTs/replies climb, then <b>RAID SMASHED</b> 🔥 + climbs the leaderboard",
+    "⚔️ <b>Raid Bot</b> — <code>/raid &lt;X post link&gt;</code> → opens a <b>setup menu</b> (tap to set likes/RT/reply/bookmark goals + a duration, then 🚀 Start). The card then updates itself live (🟥→🟨→🟩 per goal), shows <b>RAID SMASHED</b> 🔥 or <b>Raid Ended</b> on the timer. Set your own image/video with <code>/setmedia</code>.",
     "🔍 <b>Scan Bot</b> — paste any CA → instant scan card with Quick-Buy",
     "",
     "🎨 <b>Customize the look</b> (buy + raid posts)",
@@ -28102,7 +28099,7 @@ async function fetchXEngagement(tweetId) {
       const r = await fetch(`https://api.twitter.com/2/tweets/${tweetId}?tweet.fields=public_metrics`, { headers: { Authorization: `Bearer ${token}` } });
       if (r.ok) {
         const j = await r.json(); const m = j && j.data && j.data.public_metrics;
-        if (m) return { likes: m.like_count || 0, rts: (m.retweet_count || 0) + (m.quote_count || 0), replies: m.reply_count || 0, views: Number(m.impression_count) || 0, source: "x-api" };
+        if (m) return { likes: m.like_count || 0, rts: (m.retweet_count || 0) + (m.quote_count || 0), replies: m.reply_count || 0, bookmarks: Number(m.bookmark_count) || 0, views: Number(m.impression_count) || 0, source: "x-api" };
       }
     } catch {}
   }
@@ -28117,6 +28114,7 @@ async function fetchXEngagement(tweetId) {
         likes: Number(t.likes) || 0,
         rts: (Number(t.retweets) || 0) + (Number(t.quotes) || 0),
         replies: Number(t.replies) || 0,
+        bookmarks: Number(t.bookmarks) || 0,
         views: Number(t.views) || 0,
         source: "fxtwitter"
       };
@@ -28156,64 +28154,147 @@ async function submitRaidPost(body = {}) {
   if (!tid) return { ok: false, error: "need an x.com post link" };
   const by = String(body.by || "anon").replace(/[^A-Za-z0-9_@. -]/g, "").slice(0, 24) || "anon";
   const sym = String(body.symbol || "").replace(/[^A-Za-z0-9_$]/g, "").slice(0, 12);
-  // Per-metric raid targets (Raidar-style live checklist): likes / retweets / replies. Optional.
+  // Per-metric raid targets (Raidar-style live checklist): likes / retweets / replies / bookmarks. Optional.
   const clampT = (v) => Math.max(0, Math.min(1000000, Math.round(Number(v) || 0)));
   const targets = body.targets && typeof body.targets === "object"
-    ? { likes: clampT(body.targets.likes), rts: clampT(body.targets.rts), replies: clampT(body.targets.replies) }
+    ? { likes: clampT(body.targets.likes), rts: clampT(body.targets.rts), replies: clampT(body.targets.replies), bookmarks: clampT(body.targets.bookmarks) }
     : null;
-  const target = Math.max(0, Math.min(1000000, Math.round(Number(body.target) || (targets ? targets.likes + targets.rts + targets.replies : 0)))); // 0 = auto milestone on the board
+  const target = Math.max(0, Math.min(1000000, Math.round(Number(body.target) || (targets ? targets.likes + targets.rts + targets.replies + targets.bookmarks : 0)))); // 0 = auto milestone on the board
   const store = await readRaidPosts();
   const now = new Date().toISOString();
   const eng = await fetchXEngagement(tid);
   let p = store.posts.find((x) => x.tid === tid);
-  if (p) { p.bumps = (p.bumps || 1) + 1; p.at = now; if (sym) p.symbol = sym; if (target) p.target = target; if (targets) p.targets = targets; if (eng) { p.likes = eng.likes; p.rts = eng.rts; p.replies = eng.replies; } }
-  else { p = { tid, url: `https://x.com/i/status/${tid}`, by, symbol: sym, target, targets, at: now, bumps: 1, likes: eng ? eng.likes : 0, rts: eng ? eng.rts : 0, replies: eng ? eng.replies : 0 }; store.posts.push(p); }
+  if (p) { p.bumps = (p.bumps || 1) + 1; p.at = now; if (sym) p.symbol = sym; if (target) p.target = target; if (targets) p.targets = targets; if (eng) { p.likes = eng.likes; p.rts = eng.rts; p.replies = eng.replies; p.bookmarks = eng.bookmarks || 0; } }
+  else { p = { tid, url: `https://x.com/i/status/${tid}`, by, symbol: sym, target, targets, at: now, bumps: 1, likes: eng ? eng.likes : 0, rts: eng ? eng.rts : 0, replies: eng ? eng.replies : 0, bookmarks: eng ? (eng.bookmarks || 0) : 0 }; store.posts.push(p); }
   p.score = raidPostScore(p);
   store.posts = store.posts.sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 200);
   await writeJsonFile(raidPostsPath(), store);
-  return { ok: true, score: p.score, liveMetrics: !!eng, tid, url: p.url, symbol: p.symbol, targets: p.targets || null, likes: p.likes || 0, rts: p.rts || 0, replies: p.replies || 0 };
+  return { ok: true, score: p.score, liveMetrics: !!eng, tid, url: p.url, symbol: p.symbol, targets: p.targets || null, likes: p.likes || 0, rts: p.rts || 0, replies: p.replies || 0, bookmarks: p.bookmarks || 0 };
 }
 
 // ---- RAIDAR-STYLE LIVE RAID CARDS (Telegram) ----------------------------------------------
-// A /raid post becomes a card that EDITS ITSELF as engagement climbs: a slime gauge per metric
-// (likes / retweets / replies) that fills toward the target and flips to ✅, then "RAID SMASHED"
-// when all targets are hit. Engagement comes from the free fxtwitter mirror (no X API key, no
-// cost). State lives in raid-tg.json (separate from the leaderboard's raid-posts.json so the
-// board's own refresh never clobbers the live message refs).
-function raidBar(cur, tgt, width = 8) {
-  const pct = tgt > 0 ? Math.max(0, Math.min(1, cur / tgt)) : (cur > 0 ? 1 : 0);
-  const fill = Math.round(pct * width);
-  return "🟩".repeat(fill) + "⬛".repeat(Math.max(0, width - fill));
-}
+// /raid <link> opens an interactive SETUP menu (tap to set likes/RT/reply/bookmark goals + a
+// duration, then Start). The posted card then EDITS ITSELF as engagement climbs: a colored status
+// box per metric (🟩 hit / 🟨 partial / 🟥 none) with N | target [%], a live countdown, and
+// "RAID SMASHED" when every goal is hit or "Raid Ended — Time limit reached!" when the timer runs
+// out. Counts come from the free fxtwitter mirror (no X API key, no cost). State lives in
+// raid-tg.json (separate from the leaderboard's raid-posts.json so the board refresh never clobbers
+// the live message refs).
+function raidDurStr(ms) { ms = Math.max(0, Number(ms) || 0); const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000); return h > 0 ? (h + "h" + (m > 0 ? " " + m + "m" : "")) : (m + "m"); }
 function buildRaidProgressCard(p) {
   const sym = p.symbol ? "$" + String(p.symbol).replace(/[^A-Za-z0-9_]/g, "").slice(0, 12) + " " : "";
   const t = p.targets || {};
   const defs = [
-    { e: "❤️", label: "Likes", cur: Number(p.likes) || 0, tgt: Number(t.likes) || 0 },
-    { e: "🔁", label: "Retweets", cur: Number(p.rts) || 0, tgt: Number(t.rts) || 0 },
-    { e: "💬", label: "Replies", cur: Number(p.replies) || 0, tgt: Number(t.replies) || 0 }
+    { label: "Likes", cur: Number(p.likes) || 0, tgt: Number(t.likes) || 0 },
+    { label: "Retweets", cur: Number(p.rts) || 0, tgt: Number(t.rts) || 0 },
+    { label: "Replies", cur: Number(p.replies) || 0, tgt: Number(t.replies) || 0 },
+    { label: "Bookmarks", cur: Number(p.bookmarks) || 0, tgt: Number(t.bookmarks) || 0 }
   ];
   const active = defs.filter((d) => d.tgt > 0);
   const hasTargets = active.length > 0;
-  let done = hasTargets, pctSum = 0;
+  const startedAt = Number(p.startedAt) || 0, durationMs = Number(p.durationMs) || 0;
+  const elapsed = startedAt ? Date.now() - startedAt : 0;
+  const timedOut = Boolean(startedAt && durationMs && elapsed >= durationMs);
+  let allHit = hasTargets, pctSum = 0;
   const rows = (hasTargets ? active : defs).map((d) => {
     if (d.tgt > 0) {
-      const hit = d.cur >= d.tgt; if (!hit) done = false;
+      const pct = Math.min(999, Math.round(d.cur / d.tgt * 100));
+      const hit = d.cur >= d.tgt; if (!hit) allHit = false;
       pctSum += Math.min(1, d.cur / d.tgt);
-      return `${d.e} <b>${d.label}</b>  ${d.cur}/${d.tgt}${hit ? " ✅" : ""}\n<code>${raidBar(d.cur, d.tgt)}</code>`;
+      const sq = hit ? "🟩" : (d.cur > 0 ? "🟨" : "🟥");
+      return `${sq} <b>${d.label}</b> ${d.cur.toLocaleString()} | ${d.tgt.toLocaleString()} [${pct >= 100 ? "💯" : pct}%]`;
     }
-    return `${d.e} <b>${d.label}</b> · ${d.cur.toLocaleString()}`;
+    return `▫️ <b>${d.label}</b> ${d.cur.toLocaleString()}`;
   });
   const overall = hasTargets ? Math.round((pctSum / active.length) * 100) : 0;
-  const header = done
+  const done = allHit || timedOut; // stop editing once smashed or timed out
+  const header = allHit
     ? `🔥🔥 <b>${sym}RAID SMASHED!</b> 🔥🔥`
-    : `⚔️ <b>${sym}RAID</b>${hasTargets ? ` — <b>${overall}%</b>` : " — like, RT &amp; reply to fill it"}`;
-  const lines = [header, "", ...rows, "", done ? "🏆 Boss down. GG swamp. 🐸" : "👇 Every like, RT &amp; reply fills the gauge — auto-updates live."];
+    : timedOut
+      ? "⚠️ <b>Raid Ended — Time limit reached!</b>"
+      : `⚔️ <b>${sym}RAID is LIVE</b>${hasTargets ? ` — <b>${overall}%</b>` : ""}`;
+  const durLine = (startedAt && durationMs)
+    ? (done ? `🕐 Duration: ${raidDurStr(durationMs)}` : `🕐 Ends in ${raidDurStr(Math.max(0, durationMs - elapsed))}`)
+    : "";
+  const lines = [
+    header, "",
+    ...rows, "",
+    `👉 <a href="${p.url}">The post</a>`,
+    durLine,
+    done ? "🔥 <a href=\"https://www.slimewire.org/raids\">Trending board</a>" : "👇 Like, RT, reply &amp; bookmark — this card updates live."
+  ].filter(Boolean);
   const markup = { inline_keyboard: [[
     { text: done ? "✅ Raided" : "⚔️ Raid this post", url: p.url },
-    { text: "🏆 Leaderboard", url: "https://www.slimewire.org/raids" }
+    { text: "🔥 Trending", url: "https://www.slimewire.org/raids" }
   ]] };
   return { text: lines.join("\n"), markup, done };
+}
+// ---- Interactive /raid setup: tap-to-set goals + duration, then Start (no typing needed) -------
+const raidDrafts = new Map(); // `${chatId}:${messageId}` -> draft {tid,url,symbol,by,targets,durationH,at}
+const RAID_LADDERS = { likes: [0, 25, 50, 100, 250, 500, 1000], rts: [0, 10, 25, 50, 100, 250, 500], replies: [0, 5, 10, 25, 50, 100, 200], bookmarks: [0, 5, 10, 25, 50, 100], dur: [1, 2, 4, 6, 12, 24] };
+function raidLadderNext(arr, cur) { const i = arr.indexOf(Number(cur)); return arr[(i + 1) % arr.length]; }
+function raidDraftKey(chatId, msgId) { return String(chatId) + ":" + String(msgId); }
+function raidSetupCard(d) {
+  const sym = d.symbol ? "$" + escapeTelegramHtml(d.symbol) + " " : "";
+  const v = (n) => (Number(n) > 0 ? n : "—");
+  return {
+    text: [
+      `⚔️ <b>Set up the ${sym}raid</b>`,
+      "Tap each goal to set it, pick a duration, then 🚀 Start.",
+      "",
+      `👉 <a href="${escapeTelegramHtml(d.url)}">The post you're raiding</a>`
+    ].join("\n"),
+    markup: { inline_keyboard: [
+      [{ text: `❤️ Likes: ${v(d.targets.likes)}`, callback_data: "rd:c:likes" }, { text: `🔁 RT: ${v(d.targets.rts)}`, callback_data: "rd:c:rts" }],
+      [{ text: `💬 Replies: ${v(d.targets.replies)}`, callback_data: "rd:c:replies" }, { text: `🔖 Bookmarks: ${v(d.targets.bookmarks)}`, callback_data: "rd:c:bm" }],
+      [{ text: `🕐 Duration: ${d.durationH}h`, callback_data: "rd:c:dur" }],
+      [{ text: "🚀 Start Raid", callback_data: "rd:go" }, { text: "✖ Cancel", callback_data: "rd:x" }]
+    ] }
+  };
+}
+// Launch a configured raid: record it, post the live card, register the auto-updating message ref.
+async function startRaidFromDraft(chatId, d) {
+  const res = await submitRaidPost({ url: d.url, by: d.by, symbol: d.symbol, targets: d.targets });
+  if (!res.ok) { await say(chatId, "Couldn't start that raid — send a valid X post link."); return; }
+  const ge = await getGroupBotEntry(chatId).catch(() => null);
+  const startedAt = Date.now(), durationMs = Math.max(1, Number(d.durationH) || 2) * 3600_000;
+  const card = buildRaidProgressCard({ symbol: res.symbol || d.symbol, targets: d.targets, likes: res.likes, rts: res.rts, replies: res.replies, bookmarks: res.bookmarks || 0, url: res.url || d.url, startedAt, durationMs });
+  const media = (ge && ge.customMedia && ge.customMedia.value) ? ge.customMedia : null;
+  const sent = await sendGroupAlertMedia(chatId, media, card.text, card.markup);
+  if (sent && sent.result && sent.result.message_id) {
+    await attachRaidTgCard(res.tid, { url: res.url || d.url, symbol: res.symbol || d.symbol, targets: d.targets, startedAt, durationMs, ref: { chatId, messageId: sent.result.message_id, hasMedia: sent.hasMedia }, eng: { likes: res.likes, rts: res.rts, replies: res.replies, bookmarks: res.bookmarks || 0 } });
+  }
+}
+// Route raid-setup CALLBACKS (rd:*) — the tap-to-configure menu. Returns true if handled.
+async function handleRaidSetupCallback(query, userId) {
+  const data = String(query?.data || "");
+  if (!data.startsWith("rd:")) return false;
+  const chatId = query.message?.chat?.id, msgId = query.message?.message_id;
+  const key = raidDraftKey(chatId, msgId);
+  const d = raidDrafts.get(key);
+  if (!d) { try { await telegram("editMessageText", { chat_id: chatId, message_id: msgId, text: "This raid setup expired — run /raid <link> again." }); } catch {} return true; }
+  if (!(await isGroupBotAdmin(chatId, userId, query.message).catch(() => false))) return true; // only admins configure (callback already answered)
+  if (data === "rd:x") { raidDrafts.delete(key); try { await telegram("editMessageText", { chat_id: chatId, message_id: msgId, text: "Raid setup cancelled." }); } catch {} return true; }
+  if (data === "rd:go") {
+    if (!(d.targets.likes || d.targets.rts || d.targets.replies || d.targets.bookmarks)) { try { await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "Set at least one goal first.", show_alert: true }); } catch {} return true; }
+    raidDrafts.delete(key);
+    try { await telegram("deleteMessage", { chat_id: chatId, message_id: msgId }); } catch {}
+    await startRaidFromDraft(chatId, d).catch(() => {});
+    return true;
+  }
+  if (data.startsWith("rd:c:")) {
+    const m = data.slice(5);
+    if (m === "dur") d.durationH = raidLadderNext(RAID_LADDERS.dur, d.durationH);
+    else if (m === "likes") d.targets.likes = raidLadderNext(RAID_LADDERS.likes, d.targets.likes);
+    else if (m === "rts") d.targets.rts = raidLadderNext(RAID_LADDERS.rts, d.targets.rts);
+    else if (m === "replies") d.targets.replies = raidLadderNext(RAID_LADDERS.replies, d.targets.replies);
+    else if (m === "bm") d.targets.bookmarks = raidLadderNext(RAID_LADDERS.bookmarks, d.targets.bookmarks);
+    raidDrafts.set(key, d);
+    const card = raidSetupCard(d);
+    try { await telegram("editMessageText", { chat_id: chatId, message_id: msgId, text: card.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: card.markup }); } catch {}
+    return true;
+  }
+  return true;
 }
 function raidTgPath() { return path.join(CONFIG.dataDir, "raid-tg.json"); }
 async function readRaidTg() {
@@ -28225,16 +28306,18 @@ async function readRaidTg() {
 }
 // Attach (or refresh) the live TG message ref for a raided tweet. One ref per chat (newest wins),
 // so the same tweet raided in several groups updates all of them.
-async function attachRaidTgCard(tid, { url, symbol, targets, ref, eng } = {}) {
+async function attachRaidTgCard(tid, { url, symbol, targets, ref, eng, startedAt, durationMs } = {}) {
   if (!tid || !ref || !ref.messageId) return;
   await withFileLock(raidTgPath(), async () => {
     const s = await readRaidTg();
     let c = s.cards[tid];
-    if (!c) c = s.cards[tid] = { tid, url: url || `https://x.com/i/status/${tid}`, symbol: symbol || "", targets: targets || null, refs: [], likes: 0, rts: 0, replies: 0, done: false, lastCard: "", at: new Date().toISOString() };
+    if (!c) c = s.cards[tid] = { tid, url: url || `https://x.com/i/status/${tid}`, symbol: symbol || "", targets: targets || null, refs: [], likes: 0, rts: 0, replies: 0, bookmarks: 0, done: false, lastCard: "", at: new Date().toISOString() };
     if (url) c.url = url;
     if (symbol) c.symbol = symbol;
     if (targets) c.targets = targets;
-    if (eng) { c.likes = Number(eng.likes) || 0; c.rts = Number(eng.rts) || 0; c.replies = Number(eng.replies) || 0; }
+    if (startedAt) c.startedAt = startedAt;
+    if (durationMs) c.durationMs = durationMs;
+    if (eng) { c.likes = Number(eng.likes) || 0; c.rts = Number(eng.rts) || 0; c.replies = Number(eng.replies) || 0; c.bookmarks = Number(eng.bookmarks) || 0; }
     c.refs = (c.refs || []).filter((r) => String(r.chatId) !== String(ref.chatId));
     c.refs.push({ chatId: String(ref.chatId), messageId: ref.messageId, hasMedia: !!ref.hasMedia });
     c.done = false; c.lastCard = ""; // re-arm so the new card edits at least once
@@ -28247,7 +28330,7 @@ async function attachRaidTgCard(tid, { url, symbol, targets, ref, eng } = {}) {
     await writeJsonFile(raidTgPath(), s);
   }).catch(() => {});
 }
-async function updateRaidTgCard(tid, { likes, rts, replies, lastCard, done, dropRefMessageIds } = {}) {
+async function updateRaidTgCard(tid, { likes, rts, replies, bookmarks, lastCard, done, dropRefMessageIds } = {}) {
   await withFileLock(raidTgPath(), async () => {
     const s = await readRaidTg();
     const c = s.cards[tid];
@@ -28255,6 +28338,7 @@ async function updateRaidTgCard(tid, { likes, rts, replies, lastCard, done, drop
     if (likes != null) c.likes = likes;
     if (rts != null) c.rts = rts;
     if (replies != null) c.replies = replies;
+    if (bookmarks != null) c.bookmarks = bookmarks;
     if (lastCard != null) c.lastCard = lastCard;
     if (done != null) c.done = done;
     if (Array.isArray(dropRefMessageIds) && dropRefMessageIds.length) c.refs = (c.refs || []).filter((r) => !dropRefMessageIds.includes(r.messageId));
@@ -28274,8 +28358,9 @@ async function refreshRaidTgCards() {
       const likes = eng ? eng.likes : (c.likes || 0);
       const rts = eng ? eng.rts : (c.rts || 0);
       const replies = eng ? eng.replies : (c.replies || 0);
-      const card = buildRaidProgressCard({ symbol: c.symbol, targets: c.targets, likes, rts, replies, url: c.url });
-      if (card.text === c.lastCard && !card.done) { await updateRaidTgCard(c.tid, { likes, rts, replies }); continue; }
+      const bookmarks = eng ? (eng.bookmarks || 0) : (c.bookmarks || 0);
+      const card = buildRaidProgressCard({ symbol: c.symbol, targets: c.targets, likes, rts, replies, bookmarks, url: c.url, startedAt: c.startedAt, durationMs: c.durationMs });
+      if (card.text === c.lastCard && !card.done) { await updateRaidTgCard(c.tid, { likes, rts, replies, bookmarks }); continue; }
       const dead = [];
       for (const ref of c.refs) {
         try {
@@ -28287,7 +28372,7 @@ async function refreshRaidTgCards() {
           if (!/not modified/i.test(m) && /not found|to edit not found|message_id_invalid|chat not found|bot was kicked|forbidden|blocked/i.test(m)) dead.push(ref.messageId);
         }
       }
-      await updateRaidTgCard(c.tid, { likes, rts, replies, lastCard: card.text, done: card.done, dropRefMessageIds: dead });
+      await updateRaidTgCard(c.tid, { likes, rts, replies, bookmarks, lastCard: card.text, done: card.done, dropRefMessageIds: dead });
     }
   } catch {} finally { _raidTgRefreshing = false; }
 }
