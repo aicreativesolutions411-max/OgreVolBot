@@ -1679,6 +1679,7 @@ async function main() {
   }
   startOgreAutopilotRunner();
   startDevObservatory();
+  startGroupBuyBot();
   startSubscriptionWatcher();
   startTrialUsageWatcher();
   void startLiveAutopilotResume();
@@ -8965,7 +8966,17 @@ async function handleMessage(message, userId) {
     // the most natural funnel there is. Cooldown inside the handler stops spam.
     const bareCa = /^\$?([A-HJ-NP-Za-km-z1-9]{32,48})$/.exec(text.replace(/\s+/g, ""));
     if (bareCa) {
-      await handleTelegramLookCommand(chatId, message, bareCa[1]);
+      const gbEntry = await getGroupBotEntry(chatId).catch(() => null);
+      // BUY BOT auto-CA: the first CA pasted becomes the group's tracked token (when Buy Bot is on).
+      if (groupBotFeatureOn(gbEntry, "buybot") && !gbEntry.token) {
+        await setGroupBotToken(chatId, bareCa[1]).catch(() => {});
+        await say(chatId, `🟢 Buy Bot locked onto ${escapeTelegramHtml(bareCa[1].slice(0, 4))}…${escapeTelegramHtml(bareCa[1].slice(-4))} — I'll post buys here with a Quick-Buy link.`);
+      }
+      // SCAN BOT: auto-scan pasted CAs. Off-by-default for configured groups (Scan toggle); legacy
+      // groups that never opened the menu (no entry) keep auto-scanning so nothing regresses.
+      if (!gbEntry || groupBotFeatureOn(gbEntry, "scan")) {
+        await handleTelegramLookCommand(chatId, message, bareCa[1]);
+      }
       return;
     }
   }
@@ -9037,6 +9048,15 @@ async function handleMessage(message, userId) {
   }
   const raidCommand = parseCommandWithArgument(text, ["raid"]);
   if (raidCommand) {
+    // RAID BOT module: in a configured group, require the Raid toggle on (off by default). Legacy
+    // groups (no entry) and DMs work as before. The raid post already carries the SlimeWire link.
+    if (!isPrivateChat(message.chat)) {
+      const e = await getGroupBotEntry(chatId).catch(() => null);
+      if (e && !groupBotFeatureOn(e, "raid")) {
+        await say(chatId, "⚔️ Raid Bot is off in this group. An admin can turn it on in /settings.");
+        return;
+      }
+    }
     await handleTelegramRaidCommand(chatId, message, raidCommand.argument);
     return;
   }
@@ -24690,7 +24710,7 @@ const GROUP_BOT_FILE = path.join(CONFIG.dataDir, "group-bot.json");
 const GROUP_BOT_FEATURES = [
   { key: "buybot", label: "Buy Bot", emoji: "🟢", desc: "auto-grabs the CA + posts buys with a Quick-Buy link to the coin on SlimeWire" },
   { key: "raid", label: "Raid Bot", emoji: "⚔️", desc: "X-raid posts with live progress + a SlimeWire link" },
-  { key: "rose", label: "Rose Manager", emoji: "🛡️", desc: "welcome, rules, anti-spam, warn / mute / ban, locks" },
+  { key: "rose", label: "Rose Manager", emoji: "🛡️", desc: "welcome, rules, anti-spam, warn / mute / ban, locks (coming soon)" },
   { key: "scan", label: "Scan Bot", emoji: "🔍", desc: "paste a CA → instant SlimeShield scan card" }
 ];
 let groupBotCache = null;
@@ -24710,6 +24730,16 @@ async function setGroupBotFeature(chatId, key, on) {
   const e = store.groups[k] || defaultGroupBotEntry();
   e.features = e.features || {};
   e.features[key] = Boolean(on);
+  store.groups[k] = e;
+  await writeGroupBot(store);
+  return e;
+}
+async function setGroupBotToken(chatId, token) {
+  const store = await readGroupBot();
+  const k = String(chatId);
+  const e = store.groups[k] || defaultGroupBotEntry();
+  e.token = String(token || "").trim() || null;
+  e.tokenAt = Date.now();
   store.groups[k] = e;
   await writeGroupBot(store);
   return e;
@@ -24802,6 +24832,54 @@ async function handleGroupBotCallback(query, userId) {
   await groupBotPostSetup(chatId, e, messageId);
   return true;
 }
+
+// BUY BOT detection — free DexScreener polling (NO Helius, no credits — the buybot's free path).
+// For each group with Buy Bot on + a tracked token, poll the pair and post a buy alert when new
+// buys roll in, with a Quick-Buy button straight to the coin on SlimeWire + a slimewire.org link.
+const groupBuyState = new Map(); // mint -> { lastBuys, lastAlertAt }
+function groupBuyQuickBuyUrl(mint) { return `https://slimewire.org/t?ca=${encodeURIComponent(mint)}`; }
+async function pollGroupBuyBots() {
+  try {
+    const store = await readGroupBot();
+    const tokenChats = new Map(); // token -> [chatId,...]
+    for (const [chatId, e] of Object.entries(store.groups || {})) {
+      if (!groupBotFeatureOn(e, "buybot") || !e.token) continue;
+      const arr = tokenChats.get(e.token) || []; arr.push(chatId); tokenChats.set(e.token, arr);
+    }
+    if (!tokenChats.size) return;
+    const mints = [...tokenChats.keys()].slice(0, 30);
+    const pairs = await fetchDexScreenerTokenPairsBatch(mints).catch(() => []);
+    const now = Date.now();
+    for (const mint of mints) {
+      const p = bestDexPairForToken(mint, pairs);
+      if (!p) continue;
+      const buys = Number(p.txns?.m5?.buys) || 0;
+      const prev = groupBuyState.get(mint) || { lastBuys: buys, lastAlertAt: 0 };
+      const delta = buys - prev.lastBuys;
+      // New buys since the last poll + a 45s per-token cooldown so a chat never floods.
+      if (delta > 0 && now - prev.lastAlertAt > 45_000) {
+        const sym = String(p.baseToken?.symbol || "").replace(/[<>&]/g, "") || shortMint(mint);
+        const mc = Number(p.marketCap || p.fdv) || 0;
+        const m5 = Number(p.priceChange?.m5);
+        const lines = [
+          `🟢 <b>Buys rolling in — $${escapeTelegramHtml(sym)}</b>`,
+          `${delta} new buy${delta > 1 ? "s" : ""}${Number.isFinite(m5) ? ` · ${m5 >= 0 ? "+" : ""}${m5.toFixed(0)}% (5m)` : ""}`,
+          mc > 0 ? `🏦 MC $${Math.round(mc).toLocaleString()}` : "",
+          `⚡ <a href="${groupBuyQuickBuyUrl(mint)}">Quick Buy on SlimeWire</a> · <a href="https://slimewire.org">slimewire.org</a>`
+        ].filter(Boolean);
+        const markup = { inline_keyboard: [[
+          { text: "⚡ Quick Buy on SlimeWire", url: groupBuyQuickBuyUrl(mint) },
+          { text: "📈 Chart", url: `https://dexscreener.com/solana/${mint}` }
+        ]] };
+        for (const chatId of tokenChats.get(mint)) await sayHtml(chatId, lines.join("\n"), markup).catch(() => {});
+        groupBuyState.set(mint, { lastBuys: buys, lastAlertAt: now });
+      } else {
+        groupBuyState.set(mint, { lastBuys: buys, lastAlertAt: prev.lastAlertAt });
+      }
+    }
+  } catch {}
+}
+function startGroupBuyBot() { setInterval(() => { void pollGroupBuyBots(); }, 25_000); }
 
 // /slimewire on|off (group admins): opt the group in/out of launch + TP/SL + KOL alerts.
 // adminImplied covers channels (only admins can post) and anonymous group admins
