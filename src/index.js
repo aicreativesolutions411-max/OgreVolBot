@@ -24144,40 +24144,48 @@ async function buildChartData(mint, tf) {
   const key = `${mint}:${tf}`;
   const hit = CHART_API_CACHE.get(key);
   if (hit && Date.now() - hit.at < 8000) return hit.data;
-  let stage = "dex", pairAddress = "";
+  let stage = "pump", pairAddress = "";
   let stats = { symbol: "", name: "", priceUsd: 0, mc: 0, liq: 0, vol24: 0, change24h: 0 };
-  let best = null;
-  try { best = bestDexPairForToken(mint, await fetchDexScreenerTokenPairsFallback(mint).catch(() => null)); } catch {}
-  if (best) {
-    pairAddress = String(best.pairAddress || "");
-    stats = {
-      symbol: best.baseToken?.symbol || "", name: best.baseToken?.name || "",
-      priceUsd: Number(best.priceUsd) || 0, mc: Number(best.marketCap || best.fdv) || 0,
-      liq: Number(best.liquidity?.usd) || 0, vol24: Number(best.volume?.h24) || 0, change24h: Number(best.priceChange?.h24) || 0
-    };
-  }
   let candles = [], trades = [];
-  if (pairAddress) {
+  // 1) DEX path — resolve the pool DIRECTLY via GeckoTerminal's token→pools endpoint (reliable; the
+  // DexScreener-pair shape didn't yield a usable pool address on the server). Works once migrated.
+  const tp = await gtFetch(`/networks/solana/tokens/${mint}/pools?page=1`);
+  const pool = tp && tp.data && tp.data[0];
+  if (pool && pool.attributes && pool.attributes.address) {
+    stage = "dex";
+    pairAddress = String(pool.attributes.address);
+    stats.change24h = Number(pool.attributes.price_change_percentage && pool.attributes.price_change_percentage.h24) || 0;
+    const ti = await gtFetch(`/networks/solana/tokens/${mint}`);
+    const a = (ti && ti.data && ti.data.attributes) || {};
+    stats.symbol = a.symbol || ""; stats.name = a.name || "";
+    stats.priceUsd = Number(a.price_usd) || 0;
+    stats.mc = Number(a.market_cap_usd || a.fdv_usd) || 0;
+    stats.liq = Number(a.total_reserve_in_usd) || 0;
+    stats.vol24 = Number(a.volume_usd && a.volume_usd.h24) || 0;
     const [tfName, agg] = gtTimeframe(tf);
     const oh = await gtFetch(`/networks/solana/pools/${pairAddress}/ohlcv/${tfName}?aggregate=${agg}&limit=150&currency=usd`);
     const list = (oh && oh.data && oh.data.attributes && oh.data.attributes.ohlcv_list) || [];
-    candles = list.map((a) => ({ t: Number(a[0]) || 0, o: Number(a[1]) || 0, h: Number(a[2]) || 0, l: Number(a[3]) || 0, c: Number(a[4]) || 0, v: Number(a[5]) || 0 })).filter((k) => k.c > 0).sort((x, y) => x.t - y.t);
+    candles = list.map((x) => ({ t: Number(x[0]) || 0, o: Number(x[1]) || 0, h: Number(x[2]) || 0, l: Number(x[3]) || 0, c: Number(x[4]) || 0, v: Number(x[5]) || 0 })).filter((k) => k.c > 0).sort((p, q) => p.t - q.t);
     const tr = await gtFetch(`/networks/solana/pools/${pairAddress}/trades?trade_volume_in_usd_greater_than=0`);
     const trl = (tr && tr.data) || [];
-    trades = trl.slice(0, 60).map((d) => { const a = d.attributes || {}; const buy = a.kind === "buy"; return { t: Math.floor(Date.parse(a.block_timestamp) / 1000) || 0, side: buy ? "buy" : "sell", usd: Number(a.volume_in_usd) || 0, price: Number(buy ? a.price_to_in_usd : a.price_from_in_usd) || 0 }; });
+    trades = trl.slice(0, 60).map((d) => { const x = d.attributes || {}; const buy = x.kind === "buy"; return { t: Math.floor(Date.parse(x.block_timestamp) / 1000) || 0, side: buy ? "buy" : "sell", usd: Number(x.volume_in_usd) || 0, price: Number(buy ? x.price_to_in_usd : x.price_from_in_usd) || 0 }; });
   }
+  // 2) FRESH pre-DEX launch (no GeckoTerminal pool yet) → Pump bonding-curve candles (swap-api;
+  // the old frontend-api candlesticks endpoint is dead). Stats from Pump metadata.
   if (!candles.length) {
-    stage = best ? "dex" : "pump";
-    // Pump bonding-curve candles for FRESH pre-DEX launches (GeckoTerminal has no pool until migration).
-    // swap-api.pump.fun returns OHLC for the curve; the old frontend-api endpoint is dead (530).
     const pc = await fetch(`https://swap-api.pump.fun/v1/coins/${mint}/candles?interval=${tf}&limit=150`, { headers: { accept: "application/json" } }).then((r) => r.ok ? r.json() : null).catch(() => null);
     if (Array.isArray(pc) && pc.length) {
-      candles = pc.map((k) => ({ t: Math.floor((Number(k.timestamp) || 0) / 1000), o: Number(k.open) || 0, h: Number(k.high) || 0, l: Number(k.low) || 0, c: Number(k.close) || 0, v: Number(k.volume) || 0 })).filter((k) => k.c > 0).sort((x, y) => x.t - y.t);
+      candles = pc.map((k) => ({ t: Math.floor((Number(k.timestamp) || 0) / 1000), o: Number(k.open) || 0, h: Number(k.high) || 0, l: Number(k.low) || 0, c: Number(k.close) || 0, v: Number(k.volume) || 0 })).filter((k) => k.c > 0).sort((p, q) => p.t - q.t);
       if (candles.length) stage = "pump";
     }
-    if (!best) {
+    if (!stats.symbol || !stats.mc) {
       const pm = await getPumpFunTokenMetadata(mint).catch(() => null);
-      if (pm) stats = { symbol: pm.symbol || "", name: pm.name || "", priceUsd: Number(pm.priceUsd) || 0, mc: Number(pm.marketCap) || 0, liq: Number(pm.liquidityUsd) || 0, vol24: Number(pm.volume24h) || 0, change24h: Number(pm.priceChange24h) || 0 };
+      if (pm) {
+        stats.symbol = stats.symbol || pm.symbol || ""; stats.name = stats.name || pm.name || "";
+        if (!stats.priceUsd) stats.priceUsd = Number(pm.priceUsd) || 0;
+        if (!stats.mc) stats.mc = Number(pm.marketCap) || 0;
+        if (!stats.liq) stats.liq = Number(pm.liquidityUsd) || 0;
+      }
     }
   }
   const data = { ok: true, mint, tf, stage, symbol: stats.symbol, name: stats.name, priceUsd: stats.priceUsd, mc: stats.mc, liq: stats.liq, vol24: stats.vol24, change24h: stats.change24h, candles, trades, at: Date.now() };
