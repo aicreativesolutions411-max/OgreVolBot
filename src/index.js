@@ -8493,6 +8493,11 @@ async function handleCallback(query, userId) {
   const messageId = query.message?.message_id;
   void telegram("answerCallbackQuery", { callback_query_id: query.id }).catch(() => {});
 
+  // All-in-one group bot: module toggle buttons (gb:*) are handled here first.
+  if (String(query.data || "").startsWith("gb:")) {
+    if (await handleGroupBotCallback(query, userId).catch(() => false)) return;
+  }
+
   if (ADMIN_ACTIONS.has(query.data) && !isAdmin(userId)) {
     await say(chatId, "Only bot admins can use that control.");
     return;
@@ -8921,6 +8926,10 @@ async function handleMessage(message, userId) {
   const chatId = message.chat.id;
   const text = (message.text || "").trim();
   const session = sessions.get(chatId);
+
+  // All-in-one group bot: /settings + module toggles (/buybot|raid|rose|scan on|off). Group-only,
+  // admin-gated; returns false (no-op) for DMs and non-matching text, so existing flows are untouched.
+  if (await handleGroupBotCommand(message, userId).catch(() => false)) return;
 
   if (message.photo && session?.step === "lb_image") {
     try {
@@ -24654,6 +24663,8 @@ async function handleBotChatMembershipUpdate(memberUpdate) {
     return;
   }
   registerTelegramGroup(chat);
+  // All-in-one setup menu: let admins toggle Buy / Raid / Rose / Scan for this group.
+  await groupBotOnAdded(chat).catch(() => {});
   await say(chat.id, [
     "🐸 SlimeWire is in the chat. Three things I do here:",
     "",
@@ -24666,6 +24677,130 @@ async function handleBotChatMembershipUpdate(memberUpdate) {
     "",
     "DM me for wallets, buys, sells, and PnL cards. Full terminal: slimewire.org"
   ].join("\n"));
+}
+
+// ============================================================================
+// ALL-IN-ONE GROUP BOT — one bot per group; admins toggle the modules they want
+// (Buy / Raid / Rose manager / Scan), so it never floods. Everything OFF by default.
+// This consolidates Ogrebuybot + OgreScanBot into SlimeWire. FOUNDATION here:
+// per-group settings + on-add setup menu + admin-gated toggle commands/callbacks.
+// The modules (buy alerts, raid, moderation, scan) hook off these flags incrementally.
+// ============================================================================
+const GROUP_BOT_FILE = path.join(CONFIG.dataDir, "group-bot.json");
+const GROUP_BOT_FEATURES = [
+  { key: "buybot", label: "Buy Bot", emoji: "🟢", desc: "auto-grabs the CA + posts buys with a Quick-Buy link to the coin on SlimeWire" },
+  { key: "raid", label: "Raid Bot", emoji: "⚔️", desc: "X-raid posts with live progress + a SlimeWire link" },
+  { key: "rose", label: "Rose Manager", emoji: "🛡️", desc: "welcome, rules, anti-spam, warn / mute / ban, locks" },
+  { key: "scan", label: "Scan Bot", emoji: "🔍", desc: "paste a CA → instant SlimeShield scan card" }
+];
+let groupBotCache = null;
+async function readGroupBot() {
+  if (groupBotCache) return groupBotCache;
+  try { const j = await readJson(GROUP_BOT_FILE).catch(() => null); groupBotCache = (j && j.groups) ? j : { groups: {} }; }
+  catch { groupBotCache = { groups: {} }; }
+  return groupBotCache;
+}
+async function writeGroupBot(store) { groupBotCache = store; try { await writeJsonFile(GROUP_BOT_FILE, store); } catch {} }
+function defaultGroupBotEntry() { return { features: { buybot: false, raid: false, rose: false, scan: false }, token: null, addedAt: new Date().toISOString() }; }
+async function getGroupBotEntry(chatId) { return (await readGroupBot()).groups[String(chatId)] || null; }
+function groupBotFeatureOn(entry, key) { return Boolean(entry && entry.features && entry.features[key]); }
+async function setGroupBotFeature(chatId, key, on) {
+  const store = await readGroupBot();
+  const k = String(chatId);
+  const e = store.groups[k] || defaultGroupBotEntry();
+  e.features = e.features || {};
+  e.features[key] = Boolean(on);
+  store.groups[k] = e;
+  await writeGroupBot(store);
+  return e;
+}
+// Admin gate (cached ~60s): only group creators/admins can toggle modules.
+const groupBotAdminCache = new Map();
+async function isGroupBotAdmin(chatId, userId, message = null) {
+  // Anonymous group admins post AS the group (sender_chat === chat) — treat as admin.
+  if (message?.sender_chat && String(message.sender_chat.id) === String(chatId)) return true;
+  const key = `${chatId}:${userId}`;
+  const c = groupBotAdminCache.get(key);
+  if (c && Date.now() - c.at < 60_000) return c.ok;
+  let ok = false;
+  try {
+    const m = await telegram("getChatMember", { chat_id: chatId, user_id: userId });
+    const status = m?.status || m?.result?.status || "";
+    ok = ["creator", "administrator"].includes(status);
+  } catch {}
+  groupBotAdminCache.set(key, { ok, at: Date.now() });
+  return ok;
+}
+function groupBotMenuMarkup(entry) {
+  const e = entry || defaultGroupBotEntry();
+  const btn = (f) => ({ text: `${f.emoji} ${f.label}: ${groupBotFeatureOn(e, f.key) ? "ON ✅" : "off"}`, callback_data: `gb:t:${f.key}` });
+  return { inline_keyboard: [
+    [btn(GROUP_BOT_FEATURES[0]), btn(GROUP_BOT_FEATURES[1])],
+    [btn(GROUP_BOT_FEATURES[2]), btn(GROUP_BOT_FEATURES[3])],
+    [{ text: "✓ Done", callback_data: "gb:close" }]
+  ] };
+}
+function groupBotMenuText(entry) {
+  const lines = ["🤖 <b>SlimeWire — all-in-one</b>", "One bot for your group. Tap to turn each part on/off (admins only):", ""];
+  for (const f of GROUP_BOT_FEATURES) lines.push(`${f.emoji} <b>${f.label}</b> — ${escapeTelegramHtml(f.desc)}`);
+  lines.push("", "Everything starts <b>off</b> so nothing floods. Re-open anytime with /settings.");
+  return lines.join("\n");
+}
+async function groupBotPostSetup(chatId, entry, messageId = null) {
+  const e = entry || (await getGroupBotEntry(chatId)) || defaultGroupBotEntry();
+  if (messageId) {
+    await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: groupBotMenuText(e), parse_mode: "HTML", disable_web_page_preview: true, reply_markup: groupBotMenuMarkup(e) }).catch(() => {});
+  } else {
+    await sayHtml(chatId, groupBotMenuText(e), groupBotMenuMarkup(e));
+  }
+}
+// Called when the bot is added to a group — register + post the setup menu.
+async function groupBotOnAdded(chat) {
+  if (!chat?.id) return;
+  const store = await readGroupBot();
+  const k = String(chat.id);
+  if (!store.groups[k]) { store.groups[k] = defaultGroupBotEntry(); store.groups[k].title = String(chat.title || "").slice(0, 80); await writeGroupBot(store); }
+  await groupBotPostSetup(chat.id, store.groups[k]);
+}
+// Route group-bot COMMANDS (/settings, /buybot|raid|rose|scan [on|off]). Returns true if handled.
+async function handleGroupBotCommand(message, userId) {
+  const chat = message?.chat;
+  if (!chat || isPrivateChat(chat)) return false;
+  const text = String(message.text || message.caption || "").trim();
+  const m = text.match(/^\/(settings|buybot|raid|rose|scan)(?:@\w+)?(?:\s+(on|off))?\b/i);
+  if (!m) return false;
+  const cmd = m[1].toLowerCase();
+  const arg = (m[2] || "").toLowerCase();
+  const chatId = chat.id;
+  if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only group admins can change the bot's settings."); return true; }
+  if (cmd === "settings") { await groupBotPostSetup(chatId); return true; }
+  if (arg === "on" || arg === "off") {
+    const e = await setGroupBotFeature(chatId, cmd, arg === "on");
+    const f = GROUP_BOT_FEATURES.find((x) => x.key === cmd);
+    await say(chatId, `${f.emoji} ${f.label} is now ${arg === "on" ? "ON" : "OFF"}.`);
+    if (arg === "on") await groupBotPostSetup(chatId, e); // show the panel so they can flip more
+    return true;
+  }
+  await groupBotPostSetup(chatId);
+  return true;
+}
+// Route group-bot CALLBACKS (toggle buttons). Returns true if handled.
+async function handleGroupBotCallback(query, userId) {
+  const data = String(query?.data || "");
+  if (!data.startsWith("gb:")) return false;
+  const chatId = query.message?.chat?.id;
+  const messageId = query.message?.message_id;
+  if (data === "gb:close") {
+    await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } }).catch(() => {});
+    return true;
+  }
+  const tm = data.match(/^gb:t:(buybot|raid|rose|scan)$/);
+  if (!tm) return true;
+  if (!(await isGroupBotAdmin(chatId, userId, query.message))) { await say(chatId, "Only group admins can change the bot's settings."); return true; }
+  const cur = await getGroupBotEntry(chatId);
+  const e = await setGroupBotFeature(chatId, tm[1], !groupBotFeatureOn(cur, tm[1]));
+  await groupBotPostSetup(chatId, e, messageId);
+  return true;
 }
 
 // /slimewire on|off (group admins): opt the group in/out of launch + TP/SL + KOL alerts.
