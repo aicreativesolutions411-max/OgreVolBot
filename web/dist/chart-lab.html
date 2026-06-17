@@ -177,6 +177,8 @@
       candle(b.up?slimeTex:bloodTex,x,bw,y1,y2,b.up,b.fl);
       drawDrip(b.up?dsTex:dbTex,x,bw,y2,dripH,i);
     }
+    // TOP OOZE — slime drips down INTO the chart from the top edge, animated (oozes lower, pulls back)
+    if(dsTex){var od=ph*0.16+(Math.sin(t*0.45)*0.5+0.5)*ph*0.16;ctx.save();ctx.globalAlpha=0.6;ctx.drawImage(dsTex,0,0,dsTex.width,dsTex.height*0.74, 0,TOP-8,plotR,od);ctx.restore();}
     var lb=bars[N-1],ly=yFor(lb.c),up=lb.up;
     ctx.setLineDash([4,4]);ctx.strokeStyle=up?'rgba(124,255,79,.5)':'rgba(255,66,84,.5)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,ly);ctx.lineTo(plotR,ly);ctx.stroke();ctx.setLineDash([]);
     ctx.fillStyle=up?'#7CFF4F':'#ff4254';rrect(plotR+2,ly-9,AX-4,18,4);ctx.fill();ctx.fillStyle='#06150c';ctx.font='700 10px -apple-system,system-ui';ctx.textAlign='center';ctx.fillText(fmtMc(lb.c),plotR+2+(AX-4)/2,ly);
