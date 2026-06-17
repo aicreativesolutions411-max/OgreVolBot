@@ -179,14 +179,37 @@ function isTransientSendError(error) {
 // One shared PumpPortal websocket: sub-second token creations + live trade
 // ticks. Feeds the fresh live-pairs bucket, Ogre A.I. fresh mode, and chart
 // trade ticks without any polling. Free tier, same provider we launch through.
+// SMART-MONEY DATA CAPTURE (the flywheel that was broken): record the first ~15 DISTINCT buyer
+// wallets of every trade-subscribed coin, in REAL TIME as each trade lands. The 45s observatory
+// scan used to be the only capture path, but coins get trade-unsubscribed (90-cap, age-out) before
+// it runs — so buyers were lost and walletObs sat EMPTY (smartMoney/KOL copy-trade never activated).
+// Capturing on every trade tick fixes it at the source; sampleDevObservatory merges these in and
+// scores them into walletObs (persisted), building the proven-winner roster the brain trades on.
+const earlyBuyers = new Map(); // mint -> string[] (first distinct buyer wallets, capture order)
+function recordEarlyBuyer(mint, trade) {
+  try {
+    if (!mint || !trade || trade.side !== "buy") return;
+    const w = String(trade.trader || ""); if (!w) return;
+    let arr = earlyBuyers.get(mint);
+    if (!arr) {
+      if (earlyBuyers.size > 6000) { const k = earlyBuyers.keys().next().value; if (k) earlyBuyers.delete(k); } // bound memory
+      arr = []; earlyBuyers.set(mint, arr);
+    }
+    if (arr.length < 15 && !arr.includes(w)) arr.push(w);
+  } catch {}
+}
 const pumpPortalStream = createPumpPortalStream({
   url: CONFIG.pumpPortalWsUrl,
+  // Wider trade coverage = more early-buyer data captured per cycle (the brain's raw material).
+  maxTradeSubs: 150,
   getSolUsd: () => (Number.isFinite(solUsdPriceCache?.value) && solUsdPriceCache.value > 0 ? solUsdPriceCache.value : null),
   log: (message) => console.log(`[pumpportal-ws] ${message}`),
   // Instant dev-watch: every pump.fun creation carries its creator wallet.
   onCreation: (entry) => {
     void handlePumpPortalCreationForDevWatch(entry).catch(() => {});
-  }
+  },
+  // Live smart-money capture: record early buyers the instant they trade (see recordEarlyBuyer).
+  onTrade: (mint, trade) => recordEarlyBuyer(mint, trade)
 });
 // --- Live Autopilot (Fresh-Ape, server-side, always-on) -------------------
 // The browser /autopilot page proved the brain on real data with paper fills.
@@ -866,12 +889,17 @@ function sampleDevObservatory() {
       // them), and the gain-multiple at which any known WINNER wallet SELLS (to learn
       // each winner's exit style, so we can bank just BEFORE them next time).
       if (!c.buyers) c.buyers = [];
+      // Merge the LIVE-captured early buyers (recordEarlyBuyer, via the stream's onTrade) — these
+      // survive even after the coin's trade-sub is evicted, which is what the getTrades scan below
+      // can't (it's empty once unsubscribed). This is the fix that makes walletObs actually fill.
+      const eb = earlyBuyers.get(mint);
+      if (eb) { for (const w of eb) { if (c.buyers.length < 15 && !c.buyers.includes(w)) c.buyers.push(w); } }
       try {
         for (const t of (pumpPortalStream.getTrades(mint, { limit: 40 }) || [])) {
           if (!t || !t.trader) continue;
           const w = String(t.trader);
           if (t.side === "buy") {
-            if (c.buyers.length < 12 && !c.buyers.includes(w)) c.buyers.push(w);
+            if (c.buyers.length < 15 && !c.buyers.includes(w)) c.buyers.push(w);
           } else if (t.side === "sell" && c.firstMc > 0) {
             const r = walletObs.get(w);
             if (isWinnerWallet(r)) {
@@ -901,6 +929,7 @@ function sampleDevObservatory() {
         for (const w of (c.buyers || [])) walletObsBump(w, ranMult, rugged); // score early buyers
         marketRecent.push({ ranMult, rugged, at: now }); // feed the market-wide tape
         if (marketRecent.length > 600) marketRecent.splice(0, marketRecent.length - 600);
+        earlyBuyers.delete(mint); // done with this coin's live buyer buffer
         obsCoins.delete(mint);
       }
     }
