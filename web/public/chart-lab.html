@@ -19,7 +19,8 @@
       linear-gradient(180deg,#0b1812,#081209);
     border:1px solid #1d3a28;box-shadow:0 18px 50px -24px rgba(0,0,0,.8),inset 0 1px 0 rgba(255,255,255,.04)}
   .bgart{position:absolute;inset:0;background-size:cover;background-position:center;opacity:.55;mix-blend-mode:screen;pointer-events:none}
-  .inner{position:relative}
+  .ooze{position:absolute;top:0;left:0;right:0;height:58px;background:url('/assets/slimewire/drip-slime.webp') no-repeat top center;background-size:cover;mix-blend-mode:screen;opacity:.92;pointer-events:none;z-index:1}
+  .inner{position:relative;z-index:2;padding-top:40px}
   .hdr{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px}
   .tk{display:flex;align-items:center;gap:11px}
   .av{width:38px;height:38px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#1f5e33,#0d2716);border:1px solid #347a44;display:flex;align-items:center;justify-content:center;color:#b6ff7a;font-weight:700;font-size:14px;box-shadow:0 0 16px rgba(124,255,79,.3)}
@@ -58,6 +59,7 @@
   </div>
 
   <div class="glass">
+    <div class="ooze"></div>
     <div class="bgart" id="bgart" style="background-image:url('/assets/slimewire/chart-bg.webp')"></div>
     <div class="inner">
       <div class="hdr">
@@ -119,9 +121,12 @@
   }
   var si=new Image();si.crossOrigin='anonymous';si.onload=function(){slimeTex=keyBlack(si);};si.src='/assets/slimewire/candle-slime.webp';
   var bi=new Image();bi.crossOrigin='anonymous';bi.onload=function(){bloodTex=keyBlack(bi);};bi.src='/assets/slimewire/candle-blood.webp';
+  var dsTex=null,dbTex=null;                                       // dedicated premium drip strips
+  var dsi=new Image();dsi.crossOrigin='anonymous';dsi.onload=function(){dsTex=keyBlack(dsi);};dsi.src='/assets/slimewire/drip-slime.webp';
+  var dbi=new Image();dbi.crossOrigin='anonymous';dbi.onload=function(){dbTex=keyBlack(dbi);};dbi.src='/assets/slimewire/drip-blood.webp';
 
   var N=18,bars=[],drops=[],splats=[],price=20;
-  function mk(prev){var o=prev,drift=(Math.random()-0.45)*3.0,c=Math.max(4,o+drift);var h=Math.max(o,c)+Math.random()*1.6+0.4,l=Math.min(o,c)-Math.random()*1.6-0.4;var up=c>=o;var ss=up?0.24+Math.random()*0.18:0.62+Math.random()*0.24;return {o:o,h:h,l:l,c:c,up:up,ss:ss,ph:Math.random()*6.28,fl:Math.random()<0.5};}
+  function mk(prev){var o=prev,drift=(Math.random()-0.45)*3.0,c=Math.max(4,o+drift);var h=Math.max(o,c)+Math.random()*1.6+0.4,l=Math.min(o,c)-Math.random()*1.6-0.4;var up=c>=o;var ss=up?0.24+Math.random()*0.18:0.62+Math.random()*0.24;var vol=Math.random()<0.18?(0.78+Math.random()*0.22):(0.16+Math.random()*0.42);return {o:o,h:h,l:l,c:c,up:up,ss:ss,vol:vol,ph:Math.random()*6.28,fl:Math.random()<0.5};}
   for(var i=0;i<N;i++){bars.push(mk(price));price=bars[i].c;}
   var AX=56,BX=20,TOP=14;
   function bnds(){var mn=1e9,mx=-1e9;bars.forEach(function(b){mn=Math.min(mn,b.l);mx=Math.max(mx,b.h);});var pad=(mx-mn)*0.12+0.6;return {mn:mn-pad,mx:mx+pad};}
@@ -129,19 +134,23 @@
   function fmtMc(v){var k=v*MCK;return k>=1000?('$'+(k/1000).toFixed(2)+'M'):('$'+Math.round(k)+'K');}
   function pxs(p){return '$0.000'+String(Math.max(1,Math.round(p*8.3))).padStart(3,'0').slice(0,3);}
   function rrect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
-  function candle(tex,x,w,y1,y2,up,dripH,flip){
+  function candle(tex,x,w,y1,y2,up,flip){
     if(y2-y1<10){var m=(y1+y2)/2;y1=m-5;y2=m+5;}
     var dx=x-w/2;
-    if(!tex){var g=ctx.createLinearGradient(0,y1,0,y2+dripH);if(up){g.addColorStop(0,'#9dff6a');g.addColorStop(1,'#1c8a2c');}else{g.addColorStop(0,'#ff5a6a');g.addColorStop(1,'#5a040a');}ctx.fillStyle=g;rrect(dx,y1,w,(y2-y1)+dripH*0.5,5);ctx.fill();return;}
-    var iw=tex.width,ih=tex.height,colX=iw*0.17,colW=iw*0.66;                 // crop to the slime/blood column (drop black side margins → thick, full-width candle)
+    if(!tex){ctx.fillStyle=up?'#1c8a2c':'#7a0810';rrect(dx,y1,w,(y2-y1),5);ctx.fill();return;}
+    var iw=tex.width,ih=tex.height,colX=iw*0.17,colW=iw*0.66;                 // crop to the column (drop black margins → thick full-width candle)
     ctx.save();
     if(flip){ctx.translate(dx+w,0);ctx.scale(-1,1);ctx.translate(-dx,0);}
     var capH=Math.min(w*0.5,Math.max(6,(y2-y1)*0.5));
     ctx.drawImage(tex,colX,0,colW,ih*0.16, dx,y1,w,capH);                     // glossy top
     var mTop=y1+capH,mH=Math.max(1,y2-mTop);
-    ctx.drawImage(tex,colX,ih*0.16,colW,ih*0.50, dx,mTop,w,mH);               // body (stretch)
-    ctx.drawImage(tex,0,ih*0.66,iw,ih*0.34, dx-w*0.12,y2,w*1.24,dripH);       // real drips below (full width — drips spread wider)
+    ctx.drawImage(tex,colX,ih*0.16,colW,ih*0.66, dx,mTop,w,mH);               // body (no built-in drip — strip handles drips)
     ctx.restore();
+  }
+  function drawDrip(st,x,w,top,len,idx){                                       // premium drip from the dedicated Higgs drip strip
+    if(!st)return;var sw=st.width,sh=st.height,sliceW=sw*0.12;
+    var sx=((idx*0.41)%1)*(sw-sliceW);                                         // vary which drip each candle gets
+    ctx.drawImage(st,sx,sh*0.12,sliceW,sh*0.84, x-w*0.62,top-2,w*1.24,Math.max(2,len));
   }
   function frame(ts){
     t+=0.03;var tb=bnds();cur.mn+=(tb.mn-cur.mn)*0.08;cur.mx+=(tb.mx-cur.mx)*0.08;
@@ -153,13 +162,20 @@
       var pv=cur.mx-(cur.mx-cur.mn)*gi/4;ctx.fillStyle='#5d8a6e';ctx.textAlign='left';ctx.fillText(fmtMc(pv),plotR+6,gy);}
     ctx.textAlign='center';ctx.fillStyle='#3f6b52';
     for(var xi=0;xi<N;xi+=4){var mm=(54+xi*2)%60;ctx.fillText((xi<6?'12':'13')+':'+String(mm).padStart(2,'0'),xi*step+step/2,plotB+11);}
+    // PREMIUM VOLUME — glossy translucent gel bars (slime=buys, blood=sells), rounded + soft glow, taller on spikes; behind the candles
+    var volMax=0.0001;for(var vm=0;vm<N;vm++)if(bars[vm].vol>volMax)volMax=bars[vm].vol;
+    for(var vi=0;vi<N;vi++){var vb=bars[vi],vh=(vb.vol/volMax)*(ph*0.22);if(vh<2)continue;var vx=vi*step+step/2,vw=Math.max(5,step*0.58),buyDom=vb.ss<0.5,vy=plotB-vh;
+      var vg=ctx.createLinearGradient(0,vy,0,plotB);if(buyDom){vg.addColorStop(0,'rgba(124,255,79,.5)');vg.addColorStop(1,'rgba(20,90,40,.08)');}else{vg.addColorStop(0,'rgba(255,70,84,.5)');vg.addColorStop(1,'rgba(80,8,12,.08)');}
+      ctx.save();ctx.shadowColor=buyDom?'rgba(124,255,79,.45)':'rgba(255,60,76,.45)';ctx.shadowBlur=6;ctx.fillStyle=vg;rrect(vx-vw/2,vy,vw,vh,Math.min(4,vw/2));ctx.fill();ctx.restore();
+      ctx.fillStyle=buyDom?'rgba(190,255,150,.7)':'rgba(255,165,175,.7)';rrect(vx-vw/2,vy,vw,Math.min(3,vh),Math.min(2,vw/2));ctx.fill();}
     for(var i=0;i<N;i++){
       var b=bars[i],x=i*step+step/2,bw=Math.max(10,step*0.84),live=(i===N-1);
       ctx.strokeStyle=b.up?'rgba(124,255,79,.5)':'rgba(255,45,63,.5)';ctx.lineWidth=1.6;ctx.beginPath();ctx.moveTo(x,yFor(b.h));ctx.lineTo(x,yFor(b.l));ctx.stroke();
       var y1=yFor(Math.max(b.o,b.c)),y2=yFor(Math.min(b.o,b.c));
       var base=(Math.sin(t+b.ph)*0.5+0.5),heavy=b.ss>0.55;
-      var dripH=bw*(0.55+base*(heavy?0.9:0.4));
-      candle(b.up?slimeTex:bloodTex,x,bw,y1,y2,b.up,dripH,b.fl);
+      var dripH=bw*(0.8+base*(heavy?1.5:0.7));
+      candle(b.up?slimeTex:bloodTex,x,bw,y1,y2,b.up,b.fl);
+      drawDrip(b.up?dsTex:dbTex,x,bw,y2,dripH,i);
     }
     var lb=bars[N-1],ly=yFor(lb.c),up=lb.up;
     ctx.setLineDash([4,4]);ctx.strokeStyle=up?'rgba(124,255,79,.5)':'rgba(255,66,84,.5)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,ly);ctx.lineTo(plotR,ly);ctx.stroke();ctx.setLineDash([]);
