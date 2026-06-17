@@ -143,6 +143,7 @@
         <input class="tagin" id="pName" maxlength="32" placeholder="project name">
         <input class="tagin" id="pSym" maxlength="12" placeholder="$TICKER">
         <div style="display:flex;gap:8px"><input class="tagin" id="pDays" inputmode="numeric" placeholder="days (1-30)" style="flex:1"><input class="tagin" id="pTarget" inputmode="numeric" placeholder="hype goal" style="flex:1"></div>
+        <input class="tagin" id="pWallet" placeholder="💰 deposit wallet — your address, where funds go" autocomplete="off" spellcheck="false">
         <input class="tagin" id="pX" placeholder="X link (optional)">
         <input class="tagin" id="pTg" placeholder="Telegram link (optional)">
         <textarea class="tagin" id="pBlurb" maxlength="280" placeholder="one-line pitch (optional)"></textarea>
@@ -205,6 +206,7 @@ function renderFeatured(){
     <div class="cd" id="cd"></div>
     <div class="meter"><div class="ml"><span>🔥 Hype meter</span><b>${fmtN(interest)} / ${fmtN(target)}</b></div><div class="mbar"><div class="mfill" style="width:${hypePct}%"></div></div></div>
     <div class="allow"><div class="an">${fmtN(backers)}</div><div class="al">on the <b>allowlist</b> — claim your spot before launch</div></div>
+    ${p.wallet?`<div class="allow" style="margin-top:10px"><div class="an">${num(p.raisedSol).toFixed(2)}</div><div class="al"><b>SOL raised</b> · ${fmtN(num(p.contributors))} wallets sent<br><span style="font-size:0.72rem;opacity:0.85">send SOL to <code style="color:var(--green);font-family:ui-monospace,monospace">${esc(p.wallet.slice(0,4))}…${esc(p.wallet.slice(-4))}</code></span></div><button id="copyWallet" style="margin-left:auto;align-self:center;background:rgba(141,255,90,0.12);border:1px solid var(--line2);color:var(--tx);border-radius:9px;padding:8px 12px;font-weight:800;cursor:pointer;font-family:inherit;font-size:0.8rem">Copy</button></div>`:""}
     <div class="tasks">
       <button class="task ${tdone.x?'done':''}" data-task="x" ${p.x?"":"disabled style=opacity:.4"}>${tdone.x?'✓ ':''}𝕏 Follow</button>
       <button class="task ${tdone.tg?'done':''}" data-task="tg" ${p.tg?"":"disabled style=opacity:.4"}>${tdone.tg?'✓ ':''}✈ Join TG</button>
@@ -221,6 +223,7 @@ function renderFeatured(){
   $("#joinBtn").onclick=()=>joinHype(true);
   $("#shareBtn").onclick=shareFeat;
   $("#copyRef").onclick=()=>{ navigator.clipboard&&navigator.clipboard.writeText(refUrl); toast("Referral link copied — share to climb the board!"); };
+  const cw=$("#copyWallet"); if(cw) cw.onclick=()=>{ navigator.clipboard&&navigator.clipboard.writeText(p.wallet); toast("Deposit address copied — send SOL to join the presale."); };
 }
 function doTask(kind,btn){ const p=FEAT; if(!p) return;
   if(kind==="x"&&p.x) window.open(p.x,"_blank");
@@ -245,6 +248,7 @@ async function joinHype(claim){ const p=FEAT; if(!p) return;
 async function load(){
   try{ const r=await fetch(API+"/api/web/presales",{cache:"no-store"}); const j=await r.json(); LIST=(j&&j.presales)||[]; }catch(_){ LIST=[]; }
   if(!LIST.length){ LIST=[{id:"demo",symbol:"OGRE",name:"Swamp King",by:"slimewire",live:true,interest:312,backerCount:208,target:500,
+    wallet:"4Nd1mYabcExampleDEPOSITwa11et5678ZyxWvuTsrQ", raisedSol:18.42, contributors:42,
     deadline:new Date(Date.now()+ (1*86400+6*3600+12*60)*1000).toISOString(), blurb:"The boss of the swamp. Fill the cauldron.", x:"https://twitter.com/SlimeWire", tg:"https://t.me/SlimeWireBot", topRefs:[{tag:"frogfather",n:34},{tag:"slimelord",n:21}]}]; }
   renderFeatured(); renderMore(); renderRefs();
 }
@@ -264,9 +268,10 @@ $("#pSubmit").onclick=async()=>{
   const name=($("#pName").value||"").trim(), symbol=($("#pSym").value||"").trim();
   if(!name||!symbol){ toast("Project name + ticker required"); return; }
   const body={ name, symbol, days:num($("#pDays").value)||3, target:num($("#pTarget").value)||50,
+    wallet:($("#pWallet").value||"").trim(),
     x:($("#pX").value||"").trim(), tg:($("#pTg").value||"").trim(), blurb:($("#pBlurb").value||"").trim(), by:(myTag()||"anon") };
   try{ const r=await fetch(API+"/api/web/presales",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}); const j=await r.json();
-    if(j&&j.ok){ toast("🔥 In the cauldron! Share to fill the hype meter."); ["pName","pSym","pDays","pTarget","pX","pTg","pBlurb"].forEach(id=>$("#"+id).value=""); load(); }
+    if(j&&j.ok){ toast("🔥 In the cauldron! Share to fill the hype meter."); ["pName","pSym","pDays","pTarget","pWallet","pX","pTg","pBlurb"].forEach(id=>$("#"+id).value=""); load(); }
     else toast(j&&j.error?("Couldn't add: "+j.error):"Couldn't add prelaunch"); }catch(_){ toast("Network error"); }
 };
 load();

@@ -3981,6 +3981,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
     // Presales: hype/commit listings (no custody yet).
     if (request.method === "GET" && pathname === "/api/web/presales") {
+      void refreshPresaleChain(); // fire-and-forget: keep raised SOL + contributor counts live (throttled)
       const store = await readPresales().catch(() => ({ presales: [] }));
       const now = Date.now();
       const presales = (store.presales || [])
@@ -26961,10 +26962,15 @@ async function submitPresale(body = {}) {
   const blurb = String(body.blurb || "").replace(/[^\x20-\x7E]/g, "").slice(0, 400);
   const by = String(body.by || "anon").replace(/[^A-Za-z0-9_$. -]/g, "").slice(0, 16) || "anon";
   const x = String(body.x || "").slice(0, 120), tg = String(body.tg || "").slice(0, 120), web = String(body.web || "").slice(0, 120);
+  // NON-CUSTODIAL deposit wallet: the creator's OWN Solana address where supporters send SOL. We
+  // never hold funds — we just display it and read its balance + incoming count on-chain to show
+  // "raised" + "contributors". Stored only if it's a valid pubkey.
+  const walletRaw = String(body.wallet || "").trim();
+  const wallet = solanaPublicKeyLike(walletRaw) ? walletRaw : "";
   const store = await readPresales();
   const now = Date.now();
   const id = "ps" + now.toString(36) + Math.random().toString(36).slice(2, 6);
-  store.presales.push({ id, name, symbol, target, blurb, by, x, tg, web, interest: 1, backers: [], at: new Date(now).toISOString(), deadline: new Date(now + days * 86400000).toISOString() });
+  store.presales.push({ id, name, symbol, target, blurb, by, x, tg, web, wallet, raisedSol: 0, contributors: 0, interest: 1, backers: [], at: new Date(now).toISOString(), deadline: new Date(now + days * 86400000).toISOString() });
   store.presales = store.presales.slice(-120);
   await writeJsonFile(presalesPath(), store);
   return { ok: true, id, name, symbol };
@@ -26984,6 +26990,32 @@ async function bumpPresaleInterest(body = {}) {
   if (ref && ref !== who) { p.refs = p.refs && typeof p.refs === "object" ? p.refs : {}; p.refs[ref] = (p.refs[ref] || 0) + 1; }
   await writeJsonFile(presalesPath(), store);
   return { ok: true, interest: p.interest, backerCount: p.backers.length };
+}
+// NON-CUSTODIAL on-chain tracking: for each ACTIVE presale that set a deposit wallet, read the
+// wallet's SOL balance (= raised) and its transfer count (= contributors / how many sent) straight
+// from the chain. Throttled + fire-and-forget from the GET so the board stays live without us ever
+// touching the funds. Best-effort: a failed RPC just keeps the last value.
+let _presaleChainAt = 0, _presaleChainBusy = false;
+async function refreshPresaleChain(maxAgeMs = 90_000) {
+  if (_presaleChainBusy || Date.now() - _presaleChainAt < maxAgeMs) return;
+  _presaleChainBusy = true; _presaleChainAt = Date.now();
+  try {
+    const store = await readPresales();
+    const now = Date.now();
+    const active = (store.presales || []).filter((p) => p.wallet && Date.parse(p.deadline || "") > now).slice(0, 20);
+    let changed = false;
+    for (const p of active) {
+      try {
+        const key = new PublicKey(p.wallet);
+        const lamports = await rpcRead("presale balance", (c) => c.getBalance(key, "confirmed"), {}).catch(() => null);
+        if (lamports != null) { p.raisedSol = Math.round((Number(lamports) / 1_000_000_000) * 1000) / 1000; changed = true; }
+        const sigs = await rpcRead("presale signatures", (c) => c.getSignaturesForAddress(key, { limit: 1000 }), {}).catch(() => null);
+        if (Array.isArray(sigs)) { p.contributors = sigs.length; changed = true; }
+        p.chainAt = new Date().toISOString();
+      } catch {}
+    }
+    if (changed) await writeJsonFile(presalesPath(), store);
+  } catch {} finally { _presaleChainBusy = false; }
 }
 
 // --- Raid posts: /raid in Telegram registers an X post, ranked by likes+RTs ---

@@ -24371,8 +24371,8 @@ const DESKTOP_NAV_GROUPS = [
   { key: "live", label: "Live", items: [["terminal", "Live Terminal"], ["live", "Cooks"], ["liveTrades", "Live Trades"]] },
   { key: "chart", label: "Swap & Chart", items: [["trade", "Slime Swap"], ["smartChart", "Smart Chart"]] },
   { key: "intel", label: "Intel", items: [["slimeScope", "Slime Scope"], ["watchlist", "Watchlist"], ["kol", "KOL Tracker"], ["sniper", "OgreSniper"], ["txAudit", "TP/SL Audit"]] },
-  { key: "tools", label: "Ogre Tek", items: [["tek", "Tek Hub"], ["ogreAi", "Ogre A.I."], ["launchCoin", "Pump Launch"], ["prelaunch", "Prelaunch", "/prelaunch"], ["raids", "Raid Board", "/raids"], ["bundle", "Bundle"], ["volume", "SlimeBot"], ["launch", "Launch Watch"]] },
-  { key: "portfolio", label: "Portfolio", items: [["wallets", "Wallets"], ["positions", "Positions"], ["pnl", "PnL"]] },
+  { key: "tools", label: "Ogre Tek", items: [["tek", "Tek Hub"], ["ogreAi", "Ogre A.I."], ["launchCoin", "Pump Launch"], ["bundle", "Bundle"], ["volume", "SlimeBot"], ["launch", "Launch Watch"]] },
+  { key: "portfolio", label: "Portfolio", items: [["wallets", "Wallets"], ["positions", "Positions"], ["pnl", "PnL"], ["raids", "Raid Board", "/raids"]] },
   { key: "profile", label: "Profile", items: [["profile", "Home / Profile"]] }
 ];
 

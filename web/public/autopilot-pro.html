@@ -574,13 +574,17 @@ updateSoundBtn();
 
 // ---- subscribe view ----
 async function showSubscribe(a){
-  $("subView").classList.remove("hidden");$("app").classList.add("hidden");
+  $("subView").classList.remove("hidden");$("app").classList.add("hidden");$("boot").classList.add("hidden");
+  a=a||{};
+  // Self-heal: if the boot's access call was empty/failed, fetch price + sub status here so the pay
+  // screen is never blank — some people land on /pro only to subscribe.
+  if(a.priceSol==null||a.subEnabled==null){ try{ const x=await api("/api/web/autopilot/access",{method:"POST",body:JSON.stringify({})}); if(x&&x.ok) a=x; }catch(_){} }
   $("priceLbl").innerHTML=(a.priceSol||"—")+' SOL<span style="font-size:16px;color:var(--dim)">/mo</span>';
   $("priceInline").textContent=a.priceSol||"—";
-  if(!a.subEnabled){$("payAddr").textContent="Subscriptions not enabled yet — contact the owner.";return;}
-  const d=await api("/api/web/autopilot/access",{method:"POST",body:JSON.stringify({deposit:true})});
-  $("payAddr").textContent=d.depositAddress||"could not get address — reload";
-  $("copyPay").onclick=()=>{navigator.clipboard?.writeText(d.depositAddress||"");$("copyPay").textContent="Copied ✓";setTimeout(()=>$("copyPay").textContent="Copy address",1200);};
+  if(!a.subEnabled){$("payAddr").textContent="Subscriptions opening soon — use an access code or key below, or check back shortly.";return;}
+  const d=await api("/api/web/autopilot/access",{method:"POST",body:JSON.stringify({deposit:true})}).catch(()=>({}));
+  $("payAddr").textContent=(d&&d.depositAddress)||"could not get address — reload";
+  $("copyPay").onclick=()=>{navigator.clipboard?.writeText((d&&d.depositAddress)||"");$("copyPay").textContent="Copied ✓";setTimeout(()=>$("copyPay").textContent="Copy address",1200);};
 }
 
 // ---- app (subscribed) ----
@@ -734,18 +738,19 @@ $("endPay").addEventListener("click",()=>{ $("endModal").classList.add("hidden")
 
 (async function boot(){
   const urlCode=new URLSearchParams(location.search).get("code");
-  let a=await ensureAccount();
-  if(!a||!a.ok){$("boot").innerHTML='<span class="warn">Could not connect. Reload the page.</span>';return;}
+  let a=await ensureAccount().catch(()=>null);
   // A code in the URL auto-redeems for first-time visitors who aren't already in.
-  if(urlCode && !(a.owner||a.subscribed||(a.trial&&a.trial.active))){
+  if(urlCode && a && !(a.owner||a.subscribed||(a.trial&&a.trial.active))){
     const ok=await redeem(urlCode); if(ok)return; // reloads on success
   }
-  LAST_ACCESS=a;
+  LAST_ACCESS=a||{};
   $("boot").classList.add("hidden");
-  $("tierPill").textContent=a.owner?"OWNER":"PRO";
-  const trialActive=a.trial&&a.trial.active;
-  const trialExpired=a.trial&&a.trial.expired&&!a.owner&&!a.subscribed;
-  if(a.owner||a.subscribed||trialActive){
+  $("tierPill").textContent=(a&&a.owner)?"OWNER":"PRO";
+  const trialActive=a&&a.trial&&a.trial.active;
+  const trialExpired=a&&a.trial&&a.trial.expired&&!a.owner&&!a.subscribed;
+  // SUBSCRIBE-FIRST: anyone WITHOUT access (or if the access call failed entirely) lands on the
+  // pay/unlock screen — never a dead "could not connect". The app only shows once access is real.
+  if(a&&(a.owner||a.subscribed||trialActive)){
     if(a.expiresAt&&!trialActive){const d=Math.max(0,Math.ceil((Date.parse(a.expiresAt)-Date.now())/86400000));$("expLbl").textContent=a.owner?"owner":`${d} days left`;}
     if(trialActive)setupTrial(a);
     $("app").classList.remove("hidden");
