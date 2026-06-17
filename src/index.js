@@ -9273,7 +9273,7 @@ async function handleMessage(message, userId) {
       // CA form → render the card RIGHT IN THIS CHAT. In a group it's the CALL's PnL (first caller +
       // % from the entry MC) — "pnl based off first call and caller"; DM falls to the personal card.
       const pm = (String(pnlCommand.argument).match(/[A-HJ-NP-Za-km-z1-9]{32,48}/) || [])[0];
-      if (!isPrivateChat(message.chat) && pm && await postCallFlexCard(chatId, pm).catch(() => false)) { /* call card posted */ }
+      if (!isPrivateChat(message.chat) && pm && await postCallFlexCard(chatId, pm, message).catch(() => false)) { /* call card posted */ }
       else await sendPnlCardForTokenText(chatId, userId, pnlCommand.argument);
     } else if (!isPrivateChat(message.chat)) {
       await say(chatId, "Open the bot in DM for your full PnL list. In a group, post a card with `/pnl <CA>`.");
@@ -9288,7 +9288,7 @@ async function handleMessage(message, userId) {
     if (pnlCardCommand.argument) {
       // CA form posts in-chat (group-friendly) — call-based in a group, personal in DM.
       const cm = (String(pnlCardCommand.argument).match(/[A-HJ-NP-Za-km-z1-9]{32,48}/) || [])[0];
-      if (!isPrivateChat(message.chat) && cm && await postCallFlexCard(chatId, cm).catch(() => false)) { /* call card posted */ }
+      if (!isPrivateChat(message.chat) && cm && await postCallFlexCard(chatId, cm, message).catch(() => false)) { /* call card posted */ }
       else await sendPnlCardForTokenText(chatId, userId, pnlCardCommand.argument);
     } else if (!isPrivateChat(message.chat)) {
       await say(chatId, "In a group, post a card with `/pnlcard <CA>` in one message. Open the bot in DM to build one interactively.");
@@ -9306,7 +9306,7 @@ async function handleMessage(message, userId) {
     if (flexCommand.argument) {
       // In a group, /flex <CA> flexes THE CALL (first caller + % from entry), not a personal trade.
       const fm = (String(flexCommand.argument).match(/[A-HJ-NP-Za-km-z1-9]{32,48}/) || [])[0];
-      if (!isPrivateChat(message.chat) && fm && await postCallFlexCard(chatId, fm).catch(() => false)) { /* call card posted */ }
+      if (!isPrivateChat(message.chat) && fm && await postCallFlexCard(chatId, fm, message).catch(() => false)) { /* call card posted */ }
       else await sendPnlCardForTokenText(chatId, userId, flexCommand.argument);
     } else if (!isPrivateChat(message.chat)) {
       await say(chatId, "In a group, flex with `/flex <CA>` in one message so everyone sees your card. Open the bot in DM to flex interactively.");
@@ -24113,14 +24113,20 @@ async function handleScanCallback(query, chatId, messageId) {
 // it's done since the call (live X / %, plus peak). Also refreshes the call's last/peak MC so
 // the caller-intel warehouse stays current on every look/refresh. Channel-only (no record in
 // DMs). Returns "" when there's no recorded call (e.g. a DM or a never-called coin).
-async function buildScanCallerFooter(chatId, mint, currentMc) {
+async function buildScanCallerFooter(chatId, mint, currentMc, message) {
   try {
     if (!mint) return "";
     const store = await readTelegramCalls();
     if (!store.calls) return "";
     const mc = Number(currentMc) || 0;
     // Freshen THIS chat's record if it exists (per-channel warehouse stays current).
-    const here = chatId ? store.calls[`${chatId}:${mint}`] : null;
+    let here = chatId ? store.calls[`${chatId}:${mint}`] : null;
+    // SELF-SEED: if this is a channel look and nobody has recorded a call for THIS chat yet, record
+    // it now so the footer appears from the very first look (and any later Refresh keeps tracking it).
+    // Belt-and-suspenders for paths that build the footer without recording first.
+    if (!here && message && !isPrivateChat(message.chat)) {
+      here = await recordTelegramCall(message, mint, mc).catch(() => null);
+    }
     if (here && mc > 0) { here.lastMc = mc; here.lastAt = Date.now(); if (mc > (here.peakMc || 0)) here.peakMc = mc; scheduleTelegramCallsFlush(); }
     // The footer shows the EARLIEST caller of this mint ANYWHERE in the warehouse (not just this
     // chat) — so it appears in DM and on $ticker looks too, surfacing who really called it first
@@ -24156,20 +24162,54 @@ async function buildScanCallerFooter(chatId, mint, currentMc) {
 
 // Group /flex and /pnl: render the CALL's performance — credited to the FIRST caller, measured from
 // the call's entry MC (not a personal buy/sell). This is "flex/pnl based off first call and caller".
-// Returns true if a call existed (and a card was posted), false if nobody has called this coin.
-async function postCallFlexCard(chatId, mint) {
+// NEVER dead-ends in a group: if nobody has called this coin yet, it RECORDS the call right now
+// (seeding the caller-intel warehouse so the footer + future /pnl track it) and posts a live-stats
+// card from the coin's real DexScreener momentum + ATH — so /pnl <CA> always answers with something
+// useful instead of the old "No PnL data... only works for buys/sells made from this bot." dead-end.
+// Returns true whenever a card was posted (effectively always, for a valid mint with a live read).
+async function postCallFlexCard(chatId, mint, message) {
   try {
-    const store = await readTelegramCalls();
+    // Always pull the live read first — needed for both the recorded-call card and the seed/fallback.
+    let curMc = 0, sym = "", meta = null, ath = null;
+    try {
+      const scan = await gatherSlimeScan(mint);
+      curMc = Number(scan?.meta?.marketCap || scan?.meta?.fdv || scan?.bonding?.marketCap || 0);
+      sym = scan?.meta?.symbol || scan?.bonding?.symbol || "";
+      meta = scan?.meta || null; ath = scan?.ath || null;
+    } catch {}
+
     let rec = null, bestPeak = 0;
+    const store = await readTelegramCalls();
     for (const k in (store.calls || {})) {
       const r = store.calls[k];
       if (!r || r.mint !== mint) continue;
       if (Number(r.peakMc) > bestPeak) bestPeak = Number(r.peakMc) || 0;
       if (!rec || (Number(r.firstAt) || 0) < (Number(rec.firstAt) || 0)) rec = r;
     }
-    if (!rec) return false;
-    let curMc = 0, sym = "";
-    try { const scan = await gatherSlimeScan(mint); curMc = Number(scan?.meta?.marketCap || scan?.meta?.fdv || scan?.bonding?.marketCap || 0); sym = scan?.meta?.symbol || scan?.bonding?.symbol || ""; } catch {}
+
+    // No call on record yet → SEED it now (so the caller-intel warehouse + footer start tracking
+    // from this moment) and re-read so the rest of the function treats it like any recorded call.
+    if (!rec && message && !isPrivateChat(message.chat)) {
+      rec = await recordTelegramCall(message, mint, curMc).catch(() => null);
+      if (rec) bestPeak = Math.max(bestPeak, Number(rec.peakMc) || 0);
+    }
+
+    // Still no record (e.g. couldn't seed) → post an honest live-momentum card from DexScreener
+    // so the command never dead-ends. Real recent change + ATH, credited to "just spotted".
+    if (!rec) {
+      const ch24 = meta?.priceChange?.h24, ch1 = meta?.priceChange?.h1;
+      const live = curMc > 0 ? curMc : Number(meta?.fdv || meta?.marketCap || 0);
+      const lines = [
+        `🟢 <b>$${escapeTelegramHtml(sym || shortMint(mint))}</b>${live > 0 ? ` — now ${scanFmtMoney(live)}` : ""}`,
+        `📣 First spotted here — tracking from now`,
+        (ch24 != null || ch1 != null) ? `📊 24h <b>${scanFmtPct(ch24)}</b>${ch1 != null ? ` · 1h <b>${scanFmtPct(ch1)}</b>` : ""}` : null,
+        (ath && Number(ath.mc) > 0 && live > 0 && Number(ath.mc) > live * 1.05) ? `🏔 ATH ${scanFmtMoney(ath.mc)} <i>(${Math.round((live / ath.mc - 1) * 100)}% from peak)</i>` : null,
+        `⚡ <a href="https://slimewire.org/t?ca=${mint}">Trade $${escapeTelegramHtml(sym || "it")} on SlimeWire</a>`
+      ].filter(Boolean);
+      await sayHtml(chatId, lines.join("\n"), slimeScanKeyboard(mint));
+      return true;
+    }
+
     const entry = Number(rec.entryMc) || 0;
     const live = curMc > 0 ? curMc : (Number(rec.lastMc) || 0);
     if (live > 0) { rec.lastMc = live; if (live > (rec.peakMc || 0)) { rec.peakMc = live; bestPeak = Math.max(bestPeak, live); } scheduleTelegramCallsFlush(); }
@@ -24177,12 +24217,17 @@ async function postCallFlexCard(chatId, mint) {
     const x = entry > 0 && live > 0 ? live / entry : 0;
     const peakPct = entry > 0 && bestPeak > 0 ? Math.round((bestPeak / entry - 1) * 100) : 0;
     const up = pct >= 0;
+    const fresh = (Date.now() - Number(rec.firstAt || Date.now())) < 90_000; // seeded in the last ~90s
     const ago = alphaAgeLabel(Math.max(0, Date.now() - Number(rec.firstAt || Date.now())));
     const lines = [
       `${up ? "🟢" : "🔴"} <b>$${escapeTelegramHtml(sym || shortMint(mint))} — the call</b>`,
-      `📣 Called by <b>${escapeTelegramHtml(rec.callerName || "someone")}</b>${rec.chatTitle ? ` in ${escapeTelegramHtml(String(rec.chatTitle).slice(0, 28))}` : ""} · ${ago} ago`,
+      fresh
+        ? `📣 First spotted here — tracking from now`
+        : `📣 Called by <b>${escapeTelegramHtml(rec.callerName || "someone")}</b>${rec.chatTitle ? ` in ${escapeTelegramHtml(String(rec.chatTitle).slice(0, 28))}` : ""} · ${ago} ago`,
       entry > 0 ? `🎯 Entry ${scanFmtMoney(entry)} → ${scanFmtMoney(live)}` : `now ${scanFmtMoney(live)}`,
-      `${up ? "📈" : "📉"} <b>${up ? "+" : ""}${pct}%</b>${x >= 2 ? ` · <b>${x.toFixed(1)}x</b>` : ""}${peakPct >= pct + 25 ? ` · peak +${peakPct}%` : ""}`,
+      fresh && meta?.priceChange
+        ? `📊 24h <b>${scanFmtPct(meta.priceChange.h24)}</b>${meta.priceChange.h1 != null ? ` · 1h <b>${scanFmtPct(meta.priceChange.h1)}</b>` : ""}`
+        : `${up ? "📈" : "📉"} <b>${up ? "+" : ""}${pct}%</b>${x >= 2 ? ` · <b>${x.toFixed(1)}x</b>` : ""}${peakPct >= pct + 25 ? ` · peak +${peakPct}%` : ""}`,
       `⚡ <a href="https://slimewire.org/t?ca=${mint}">Trade $${escapeTelegramHtml(sym || "it")} on SlimeWire</a>`
     ].filter(Boolean);
     await sayHtml(chatId, lines.join("\n"), slimeScanKeyboard(mint));
@@ -24305,7 +24350,7 @@ async function handleTelegramLookCommand(chatId, message, argument) {
   // Footer is built ALWAYS now (DM + $ticker too): buildScanCallerFooter looks up the earliest
   // caller of this mint across the whole warehouse, so it surfaces who called it first even when
   // this exact chat never did. Empty only when nobody anywhere has called the coin.
-  const callerLine = await buildScanCallerFooter(message?.chat?.id, mint, curMc).catch(() => "");
+  const callerLine = await buildScanCallerFooter(message?.chat?.id, mint, curMc, message).catch(() => "");
   let text = null;
   if (scan && (scan.meta || scan.bonding || scan.shield)) {
     try { text = formatSlimeScanCard({ mint, ...scan, callerLine }); } catch { text = null; }
