@@ -150,7 +150,7 @@
   for(var i=0;i<N;i++){bars.push(mk(price));price=bars[i].c;}
   var AX=56,BX=20,TOP=14;
   function bnds(){var mn=1e9,mx=-1e9;bars.forEach(function(b){mn=Math.min(mn,b.l);mx=Math.max(mx,b.h);});var pad=(mx-mn)*0.12+0.6;return {mn:mn-pad,mx:mx+pad};}
-  var cur=bnds(),t=0,lastSpawn=0;
+  var cur=bnds(),t=0,lastSpawn=0,lastDraw=0;
   function fmtMc(v){return fmtMcRaw(v*mcScale);}
   function pxs(p){return '$0.000'+String(Math.max(1,Math.round(p*8.3))).padStart(3,'0').slice(0,3);}
   function rrect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
@@ -169,7 +169,8 @@
     ctx.restore();
   }
   function frame(ts){
-    t+=0.03;var tb=bnds();cur.mn+=(tb.mn-cur.mn)*0.08;cur.mx+=(tb.mx-cur.mx)*0.08;
+    if(ts&&lastDraw&&ts-lastDraw<45){requestAnimationFrame(frame);return;}lastDraw=ts||0;
+    t+=0.012;var tb=bnds();cur.mn+=(tb.mn-cur.mn)*0.08;cur.mx+=(tb.mx-cur.mx)*0.08;
     var plotR=W-AX,plotB=H-BX,ph=plotB-TOP,step=plotR/N;
     var yFor=function(p){return TOP+(1-(p-cur.mn)/(cur.mx-cur.mn))*ph;};
     ctx.clearRect(0,0,W,H);
@@ -181,7 +182,7 @@
     // VOLUME — premium gel columns made of the SAME Higgs material as the candles: green slime for
     // buy-dominant bars, blood red for sell-dominant, matching the candles. Subtle live bob = moving.
     var volMax=0.0001;for(var vm=0;vm<N;vm++)if(bars[vm].vol>volMax)volMax=bars[vm].vol;
-    for(var vi=0;vi<N;vi++){var vb=bars[vi],vh=(vb.vol/volMax)*(ph*0.20);if(vh<3)continue;var vbuy=vb.ss<0.5,vtex=vbuy?slimeTex:bloodTex,vx=vi*step+step/2,vw=Math.max(6,step*0.56),vy=plotB-vh+Math.sin(t*1.6+vi*0.8)*1.6;
+    for(var vi=0;vi<N;vi++){var vb=bars[vi],vh=(vb.vol/volMax)*(ph*0.20);if(vh<3)continue;var vbuy=vb.ss<0.5,vtex=vbuy?slimeTex:bloodTex,vx=vi*step+step/2,vw=Math.max(6,step*0.56),vy=plotB-vh+Math.sin(t*0.5+vi*0.6)*1.1;
       if(vtex){var iw=vtex.width,ih=vtex.height,cX=iw*0.2,cW=iw*0.6,cH=Math.min(vw*0.5,vh*0.5);ctx.save();ctx.globalAlpha=0.85;
         ctx.drawImage(vtex,cX,0,cW,ih*0.16, vx-vw/2,vy,vw,cH);
         ctx.drawImage(vtex,cX,ih*0.16,cW,ih*0.66, vx-vw/2,vy+cH,vw,Math.max(1,plotB-(vy+cH)));
@@ -191,8 +192,8 @@
       var b=bars[i],x=i*step+step/2,bw=Math.max(10,step*0.84),live=(i===N-1);
       var y1=yFor(Math.max(b.o,b.c)),y2=yFor(Math.min(b.o,b.c)),yH=yFor(b.h),yL=yFor(b.l);
       ctx.strokeStyle=b.up?'rgba(205,245,210,.4)':'rgba(245,210,212,.42)';ctx.lineWidth=1.3;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(x,yH);ctx.lineTo(x,y1);ctx.moveTo(x,y2);ctx.lineTo(x,yL);ctx.stroke();
-      var base=(Math.sin(t+b.ph)*0.5+0.5),heavy=b.ss>0.55;
-      var dripH=bw*(0.7+base*(heavy?1.3:0.6));
+      var base=(Math.sin(b.ph)*0.5+0.5),heavy=b.ss>0.55;
+      var dripH=bw*(0.7+base*(heavy?1.0:0.5));
       candle(b.up?slimeTex:bloodTex,x,bw,y1,y2,b.up,dripH,b.fl);
     }
     var lb=bars[N-1],ly=yFor(lb.c),up=lb.up;

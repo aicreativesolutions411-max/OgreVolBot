@@ -327,7 +327,7 @@ const state = {
         : "terminal",
   terminalSubtab: "positions",
   terminalSort: "best",
-  liveFeedCategory: (() => { try { return localStorage.getItem("liveFeedCategory") || "best"; } catch { return "best"; } })(),
+  liveFeedCategory: (() => { try { return localStorage.getItem("liveFeedCategory") || "fresh"; } catch { return "fresh"; } })(),
   liveTerminalCategory: (() => { try { return localStorage.getItem("liveTerminalCategory") || "dexTrending"; } catch { return "dexTrending"; } })(),
   cookSpotCategory: (() => { try { return localStorage.getItem("cookSpotCategory") || "dexTrending"; } catch { return "dexTrending"; } })(),
   terminalLaunchFilters: {
