@@ -25252,10 +25252,55 @@ async function pollGroupBuyBots() {
     }
   } catch {}
 }
+// TRUE PER-BUY (free, works server-side): Pump's swap-api v2 trades feed returns real per-trade
+// data across ALL DEXes (type/amountSol/userAddress/priceUsd/tx) — the replacement for the dead
+// PumpPortal trade socket. Poll each group's token, alert on every NEW buy (admin min-buy filter
+// applies), capped per poll so a hot coin can't flood the chat. Also feeds the early-buyer flywheel.
+const groupBuySeenTx = new Map();
+async function pollGroupBuyTrades() {
+  try {
+    const store = await readGroupBot();
+    const mints = [];
+    for (const e of Object.values(store.groups || {})) { if (groupBotFeatureOn(e, "buybot") && e.token && !mints.includes(e.token)) mints.push(e.token); }
+    if (!mints.length) return;
+    const pairs = await fetchDexScreenerTokenPairsBatch(mints.slice(0, 30)).catch(() => []);
+    for (const mint of mints.slice(0, 30)) {
+      let j = null;
+      try { j = await fetch(`https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=40`, { headers: { accept: "application/json" } }).then((r) => r.ok ? r.json() : null); } catch {}
+      const trades = (j && Array.isArray(j.trades)) ? j.trades : [];
+      if (!trades.length) continue;
+      const seen = groupBuySeenTx.get(mint) || new Set();
+      const firstPoll = !groupBuySeenTx.has(mint);
+      const p = bestDexPairForToken(mint, pairs);
+      const mcUsd = p ? Number(p.marketCap || p.fdv) || 0 : 0;
+      const sym = (p && p.baseToken && p.baseToken.symbol) || "";
+      const fresh = [];
+      for (const t of trades) {
+        const sig = String(t.tx || t.slotIndexId || "");
+        if (!sig || seen.has(sig)) continue;
+        seen.add(sig);
+        if (String(t.type || "").toLowerCase() === "buy") fresh.push(t);
+      }
+      if (seen.size > 400) { const arr = [...seen]; groupBuySeenTx.set(mint, new Set(arr.slice(arr.length - 300))); } else groupBuySeenTx.set(mint, seen);
+      if (firstPoll) continue; // baseline only — don't alert on the backfill
+      fresh.sort((a, b) => (Number(b.amountSol) || 0) - (Number(a.amountSol) || 0));
+      let posted = 0;
+      for (const t of fresh) {
+        const trader = String(t.userAddress || "");
+        if (trader) { try { recordEarlyBuyer(mint, { side: "buy", trader }); } catch {} }
+        if (posted >= 6) continue; // flood cap per poll (largest first); min-buy filter still applies in postGroupBuy
+        await postGroupBuy(mint, { solAmount: Number(t.amountSol) || 0, mcUsd, trader, sym });
+        posted += 1;
+      }
+      if (posted) groupBuyLastAlertAt.set(mint, Date.now());
+    }
+  } catch {}
+}
 function startGroupBuyBot() {
   buyWsConnect();
   setInterval(() => { void buyWsSync(); }, 20_000);   // keep subs in step with toggles/tokens
-  setInterval(() => { void pollGroupBuyBots(); }, 25_000); // graduated-token fallback
+  setInterval(() => { void pollGroupBuyTrades(); }, 12_000); // TRUE per-buy via Pump swap-api (primary)
+  setInterval(() => { void pollGroupBuyBots(); }, 25_000); // DexScreener aggregate (secondary fallback)
 }
 
 // ROSE MANAGER — group moderation (welcome, rules, anti-links, warn/mute/kick/ban). Per-group,
