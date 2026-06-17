@@ -10,7 +10,7 @@ import zlib from "node:zlib";
 import bs58 from "bs58";
 import sharp from "sharp";
 import ffmpegPath from "ffmpeg-static";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 import nacl from "tweetnacl";
 import {
   classifySlimeScopePair,
@@ -24711,7 +24711,7 @@ async function handleBotChatMembershipUpdate(memberUpdate) {
 // ============================================================================
 const GROUP_BOT_FILE = path.join(CONFIG.dataDir, "group-bot.json");
 const GROUP_BOT_FEATURES = [
-  { key: "buybot", label: "Buy Bot", emoji: "🟢", desc: "auto-grabs the CA + posts buys with a Quick-Buy link to the coin on SlimeWire" },
+  { key: "buybot", label: "Buy Bot", emoji: "🟢", desc: "auto-grabs the CA + posts EVERY buy (set a floor with /minbuy) with a Quick-Buy link to the coin on SlimeWire" },
   { key: "raid", label: "Raid Bot", emoji: "⚔️", desc: "X-raid posts with live progress + a SlimeWire link" },
   { key: "rose", label: "Rose Manager", emoji: "🛡️", desc: "welcome, rules, anti-links, warn / mute / kick / ban (reply to a user)" },
   { key: "scan", label: "Scan Bot", emoji: "🔍", desc: "paste a CA → instant SlimeShield scan card" }
@@ -24800,6 +24800,17 @@ async function handleGroupBotCommand(message, userId) {
   const chat = message?.chat;
   if (!chat || isPrivateChat(chat)) return false;
   const text = String(message.text || message.caption || "").trim();
+  // /minbuy <SOL> — Buy Bot min-buy filter (0 = show every buy, no matter how small).
+  const mb = text.match(/^\/minbuy(?:@\w+)?(?:\s+([\d.]+))?\b/i);
+  if (mb) {
+    const chatId = chat.id;
+    if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only group admins can change the bot's settings."); return true; }
+    if (mb[1] == null) { const e = await getGroupBotEntry(chatId); await say(chatId, `Min buy is ${Number(e?.minBuySol) || 0} SOL (0 = show all). Set with /minbuy 0.5`); return true; }
+    const v = Math.max(0, Number(mb[1]) || 0);
+    const store = await readGroupBot(); const k = String(chatId); const e = store.groups[k] || defaultGroupBotEntry(); e.minBuySol = v; store.groups[k] = e; await writeGroupBot(store);
+    await say(chatId, v > 0 ? `🟢 Buy Bot will only post buys ≥ ${v} SOL.` : "🟢 Buy Bot will post every buy, no matter how small.");
+    return true;
+  }
   const m = text.match(/^\/(settings|buybot|raid|rose|scan)(?:@\w+)?(?:\s+(on|off))?\b/i);
   if (!m) return false;
   const cmd = m[1].toLowerCase();
@@ -24839,50 +24850,109 @@ async function handleGroupBotCallback(query, userId) {
 // BUY BOT detection — free DexScreener polling (NO Helius, no credits — the buybot's free path).
 // For each group with Buy Bot on + a tracked token, poll the pair and post a buy alert when new
 // buys roll in, with a Quick-Buy button straight to the coin on SlimeWire + a slimewire.org link.
-const groupBuyState = new Map(); // mint -> { lastBuys, lastAlertAt }
 function groupBuyQuickBuyUrl(mint) { return `https://slimewire.org/t?ca=${encodeURIComponent(mint)}`; }
+const groupBuyLastAlertAt = new Map(); // mint -> ts (shared so the socket + the poll fallback never double-alert)
+const groupBuyMarkup = (mint) => ({ inline_keyboard: [[
+  { text: "⚡ Quick Buy on SlimeWire", url: groupBuyQuickBuyUrl(mint) },
+  { text: "📈 Chart", url: `https://dexscreener.com/solana/${mint}` }
+]] });
+// Post a buy alert to every group tracking this token. solAmount>0 = a TRUE per-buy (from the
+// dedicated trade socket); solAmount<=0 = the DexScreener aggregate fallback ("buys rolling in").
+async function postGroupBuy(mint, { solAmount = 0, mcUsd = 0, trader = "", sym = "" } = {}) {
+  const store = await readGroupBot();
+  const perBuy = solAmount > 0;
+  const symClean = (String(sym || "").replace(/[<>&]/g, "")) || shortMint(mint);
+  for (const [chatId, e] of Object.entries(store.groups || {})) {
+    if (!groupBotFeatureOn(e, "buybot") || e.token !== mint) continue;
+    const min = Number(e.minBuySol) || 0;
+    if (perBuy && min > 0 && solAmount < min) continue; // admin min-buy filter (per-buy only)
+    let lines;
+    if (perBuy) {
+      const emo = "🟢".repeat(Math.max(1, Math.min(14, Math.round(solAmount / 0.2) || 1)));
+      lines = [
+        emo,
+        `<b>$${escapeTelegramHtml(symClean)} — BUY</b>`,
+        `💰 ${solAmount.toFixed(3)} SOL` + (mcUsd > 0 ? ` · 🏦 MC $${Math.round(mcUsd).toLocaleString()}` : ""),
+        trader ? `👤 <code>${escapeTelegramHtml(trader.slice(0, 4))}…${escapeTelegramHtml(trader.slice(-4))}</code>` : "",
+        `⚡ <a href="${groupBuyQuickBuyUrl(mint)}">Quick Buy on SlimeWire</a> · slimewire.org`
+      ].filter(Boolean);
+    } else {
+      lines = [
+        `🟢 <b>Buys rolling in — $${escapeTelegramHtml(symClean)}</b>`,
+        mcUsd > 0 ? `🏦 MC $${Math.round(mcUsd).toLocaleString()}` : "",
+        `⚡ <a href="${groupBuyQuickBuyUrl(mint)}">Quick Buy on SlimeWire</a> · slimewire.org`
+      ].filter(Boolean);
+    }
+    await sayHtml(chatId, lines.join("\n"), groupBuyMarkup(mint)).catch(() => {});
+  }
+  groupBuyLastAlertAt.set(mint, Date.now());
+}
+
+// ---- Dedicated PumpPortal trade socket: TRUE per-buy alerts (free), no firehose so token-trade
+// subs actually deliver (the main stream firehoses new-tokens, which makes PumpPortal drop trade
+// subs → trades:0). Also FEEDS the early-buyer wallet flywheel (free per-trade buyer wallets). ----
+let buyWs = null, buyWsSubs = new Set(), buyWsReconnect = null;
+function buyWsSend(o) { try { if (buyWs && buyWs.readyState === 1) { buyWs.send(JSON.stringify(o)); return true; } } catch {} return false; }
+async function buyWsDesired() { const store = await readGroupBot(); const s = new Set(); for (const e of Object.values(store.groups || {})) { if (groupBotFeatureOn(e, "buybot") && e.token) s.add(e.token); } return s; }
+async function buyWsSync() {
+  if (!buyWs || buyWs.readyState !== 1) return;
+  const want = await buyWsDesired();
+  const add = [...want].filter((m) => !buyWsSubs.has(m));
+  const rem = [...buyWsSubs].filter((m) => !want.has(m));
+  if (add.length && buyWsSend({ method: "subscribeTokenTrade", keys: add })) add.forEach((m) => buyWsSubs.add(m));
+  if (rem.length && buyWsSend({ method: "unsubscribeTokenTrade", keys: rem })) rem.forEach((m) => buyWsSubs.delete(m));
+}
+function scheduleBuyWsReconnect() { if (buyWsReconnect) return; buyWsReconnect = setTimeout(() => { buyWsReconnect = null; buyWsConnect(); }, 5000); }
+function buyWsConnect() {
+  try {
+    buyWs = new WebSocket(CONFIG.pumpPortalWsUrl || "wss://pumpportal.fun/api/data");
+    buyWs.on("open", () => { buyWsSubs = new Set(); void buyWsSync(); });
+    buyWs.on("message", (raw) => { try { const d = JSON.parse(raw.toString()); const tx = String(d.txType || "").toLowerCase(); if (tx === "buy" || tx === "sell") void onGroupBuyTrade(d).catch(() => {}); } catch {} });
+    buyWs.on("close", () => scheduleBuyWsReconnect());
+    buyWs.on("error", () => { try { buyWs.close(); } catch {} });
+  } catch { scheduleBuyWsReconnect(); }
+}
+async function onGroupBuyTrade(d) {
+  const mint = String(d.mint || "").trim(); if (!mint) return;
+  const side = String(d.txType || "").toLowerCase();
+  const trader = String(d.traderPublicKey || "");
+  // FLYWHEEL: capture the early buyer (free per-trade wallet) → builds the copy-trade roster.
+  if (side === "buy" && trader) { try { recordEarlyBuyer(mint, { side: "buy", trader }); } catch {} }
+  if (side !== "buy") return;
+  const solUsd = Number(solUsdPriceCache?.value) || 0;
+  const mcSol = Number(d.marketCapSol) || 0;
+  let sym = "";
+  try { sym = pumpPortalStream.getCreationEntry(mint)?.event?.symbol || ""; } catch {}
+  await postGroupBuy(mint, { solAmount: Number(d.solAmount) || 0, mcUsd: (mcSol > 0 && solUsd > 0) ? mcSol * solUsd : 0, trader, sym });
+}
+
+// DexScreener fallback — covers GRADUATED tokens (no pump-portal trades) or when the socket is down.
+// Only fires when the socket hasn't alerted this token recently, so no double alerts.
+const groupBuyPollState = new Map();
 async function pollGroupBuyBots() {
   try {
     const store = await readGroupBot();
-    const tokenChats = new Map(); // token -> [chatId,...]
-    for (const [chatId, e] of Object.entries(store.groups || {})) {
-      if (!groupBotFeatureOn(e, "buybot") || !e.token) continue;
-      const arr = tokenChats.get(e.token) || []; arr.push(chatId); tokenChats.set(e.token, arr);
-    }
-    if (!tokenChats.size) return;
-    const mints = [...tokenChats.keys()].slice(0, 30);
-    const pairs = await fetchDexScreenerTokenPairsBatch(mints).catch(() => []);
+    const mints = [];
+    for (const e of Object.values(store.groups || {})) { if (groupBotFeatureOn(e, "buybot") && e.token && !mints.includes(e.token)) mints.push(e.token); }
+    if (!mints.length) return;
+    const pairs = await fetchDexScreenerTokenPairsBatch(mints.slice(0, 30)).catch(() => []);
     const now = Date.now();
-    for (const mint of mints) {
-      const p = bestDexPairForToken(mint, pairs);
-      if (!p) continue;
+    for (const mint of mints.slice(0, 30)) {
+      if (now - (groupBuyLastAlertAt.get(mint) || 0) < 120_000) continue; // socket is covering it
+      const p = bestDexPairForToken(mint, pairs); if (!p) continue;
       const buys = Number(p.txns?.m5?.buys) || 0;
-      const prev = groupBuyState.get(mint) || { lastBuys: buys, lastAlertAt: 0 };
+      const prev = groupBuyPollState.get(mint) || { lastBuys: buys };
       const delta = buys - prev.lastBuys;
-      // New buys since the last poll + a 45s per-token cooldown so a chat never floods.
-      if (delta > 0 && now - prev.lastAlertAt > 45_000) {
-        const sym = String(p.baseToken?.symbol || "").replace(/[<>&]/g, "") || shortMint(mint);
-        const mc = Number(p.marketCap || p.fdv) || 0;
-        const m5 = Number(p.priceChange?.m5);
-        const lines = [
-          `🟢 <b>Buys rolling in — $${escapeTelegramHtml(sym)}</b>`,
-          `${delta} new buy${delta > 1 ? "s" : ""}${Number.isFinite(m5) ? ` · ${m5 >= 0 ? "+" : ""}${m5.toFixed(0)}% (5m)` : ""}`,
-          mc > 0 ? `🏦 MC $${Math.round(mc).toLocaleString()}` : "",
-          `⚡ <a href="${groupBuyQuickBuyUrl(mint)}">Quick Buy on SlimeWire</a> · <a href="https://slimewire.org">slimewire.org</a>`
-        ].filter(Boolean);
-        const markup = { inline_keyboard: [[
-          { text: "⚡ Quick Buy on SlimeWire", url: groupBuyQuickBuyUrl(mint) },
-          { text: "📈 Chart", url: `https://dexscreener.com/solana/${mint}` }
-        ]] };
-        for (const chatId of tokenChats.get(mint)) await sayHtml(chatId, lines.join("\n"), markup).catch(() => {});
-        groupBuyState.set(mint, { lastBuys: buys, lastAlertAt: now });
-      } else {
-        groupBuyState.set(mint, { lastBuys: buys, lastAlertAt: prev.lastAlertAt });
-      }
+      groupBuyPollState.set(mint, { lastBuys: buys });
+      if (delta > 0) await postGroupBuy(mint, { solAmount: 0, mcUsd: Number(p.marketCap || p.fdv) || 0, sym: p.baseToken?.symbol || "" });
     }
   } catch {}
 }
-function startGroupBuyBot() { setInterval(() => { void pollGroupBuyBots(); }, 25_000); }
+function startGroupBuyBot() {
+  buyWsConnect();
+  setInterval(() => { void buyWsSync(); }, 20_000);   // keep subs in step with toggles/tokens
+  setInterval(() => { void pollGroupBuyBots(); }, 25_000); // graduated-token fallback
+}
 
 // ROSE MANAGER — group moderation (welcome, rules, anti-links, warn/mute/kick/ban). Per-group,
 // gated on the `rose` flag (off by default), admin-gated. Reply-based moderation targets.
