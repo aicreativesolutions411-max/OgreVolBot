@@ -16184,12 +16184,12 @@ function smartChartFrameUrl(token = {}, mode = "chart") {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
   // SlimeWire NATIVE chart is the only chart now — keep users on-site (it shows the same info via our
   // free /api/chart: GeckoTerminal candles once on a DEX, Pump bonding-curve candles for fresh launches).
+  // STABLE src — no live values in the URL (a changing ?mc= made the iframe reload/flash each
+  // refresh). Symbol is stable per coin, so it's safe to pass; the chart pulls real MC (market_cap_usd,
+  // not FDV) + live candles itself.
   if (mint) {
-    // Pass the app's authoritative MC + symbol so the chart's MC matches the top bar exactly
-    // (GeckoTerminal sometimes only has FDV, which read way higher). Chart still pulls live candles.
-    const mcq = Math.round(Number(token.marketCap || token.fdv) || 0);
     const symq = String(token.symbol || "").slice(0, 12);
-    return `/chart-lab?ca=${encodeURIComponent(mint)}&embed=1${mcq > 0 ? `&mc=${mcq}` : ""}${symq ? `&sym=${encodeURIComponent(symq)}` : ""}`;
+    return `/chart-lab?ca=${encodeURIComponent(mint)}&embed=1${symq ? `&sym=${encodeURIComponent(symq)}` : ""}`;
   }
   const bootstrap = smartChartBootstrapForMint(mint);
   if (mode === "info" && bootstrap?.infoUrl) return bootstrap.infoUrl;

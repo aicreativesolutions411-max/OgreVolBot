@@ -143,8 +143,8 @@
       o.putImageData(d,0,0);}catch(e){}
     return oc;
   }
-  var si=new Image();si.crossOrigin='anonymous';si.onload=function(){slimeTex=keyBlack(si);};si.src='/assets/slimewire/candle-slime.webp';
-  var bi=new Image();bi.crossOrigin='anonymous';bi.onload=function(){bloodTex=keyBlack(bi);};bi.src='/assets/slimewire/candle-blood.webp';
+  var si=new Image();si.crossOrigin='anonymous';si.onload=function(){slimeTex=keyBlack(si);safeDraw();};si.src='/assets/slimewire/candle-slime.webp';
+  var bi=new Image();bi.crossOrigin='anonymous';bi.onload=function(){bloodTex=keyBlack(bi);safeDraw();};bi.src='/assets/slimewire/candle-blood.webp';
 
   var N=18,bars=[],drops=[],splats=[],price=20;
   function mk(prev){var o=prev,drift=(Math.random()-0.45)*3.0,c=Math.max(4,o+drift);var h=Math.max(o,c)+Math.random()*1.6+0.4,l=Math.min(o,c)-Math.random()*1.6-0.4;var up=c>=o;var ss=up?0.24+Math.random()*0.18:0.62+Math.random()*0.24;var vol=Math.random()<0.18?(0.78+Math.random()*0.22):(0.16+Math.random()*0.42);return {o:o,h:h,l:l,c:c,up:up,ss:ss,vol:vol,ph:Math.random()*6.28,fl:Math.random()<0.5};}
@@ -169,9 +169,11 @@
     ctx.drawImage(tex,0,ih*0.66,iw,ih*0.34, dx-w*0.10,y2,w*1.2,dripH);        // drips from the SAME candle material (matches the body exactly)
     ctx.restore();
   }
-  function frame(ts){
-    if(ts&&lastDraw&&ts-lastDraw<45){requestAnimationFrame(frame);return;}lastDraw=ts||0;
-    t+=0.012;var tb=bnds();cur.mn+=(tb.mn-cur.mn)*0.08;cur.mx+=(tb.mx-cur.mx)*0.08;
+  // STATIC render — drawn ONCE per data update (no requestAnimationFrame loop), so it can never
+  // flash/strobe. Candles, drips, volume + glow are all static between ticks; the chart repaints
+  // only when new data arrives (poll) or on resize.
+  function frame(){
+    var tb=bnds();cur.mn=tb.mn;cur.mx=tb.mx;
     var plotR=W-AX,plotB=H-BX,ph=plotB-TOP,step=plotR/N;
     var yFor=function(p){return TOP+(1-(p-cur.mn)/(cur.mx-cur.mn))*ph;};
     ctx.clearRect(0,0,W,H);
@@ -200,8 +202,8 @@
     var lb=bars[N-1],ly=yFor(lb.c),up=lb.up;
     ctx.setLineDash([4,4]);ctx.strokeStyle=up?'rgba(124,255,79,.5)':'rgba(255,66,84,.5)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,ly);ctx.lineTo(plotR,ly);ctx.stroke();ctx.setLineDash([]);
     ctx.fillStyle=up?'#7CFF4F':'#ff4254';rrect(plotR+2,ly-9,AX-4,18,4);ctx.fill();ctx.fillStyle='#06150c';ctx.font='700 10px -apple-system,system-ui';ctx.textAlign='center';ctx.fillText(fmtMc(lb.c),plotR+2+(AX-4)/2,ly);
-    requestAnimationFrame(frame);
   }
+  function safeDraw(){try{frame();}catch(e){}}
   // TRANSACTION HISTORY — expandable Dexscreener-style feed (full scrollable list, not just a few)
   var txns=[],expanded=false,vclock=0;
   function fmtAgo(s){s=Math.max(0,s);return s<60?s+'s':s<3600?Math.floor(s/60)+'m':Math.floor(s/3600)+'h';}
@@ -215,7 +217,7 @@
     if(e=document.getElementById('s_mc'))e.textContent=fmtMc(lb.c);
     var chg=usdMode&&chg24!=null&&isFinite(chg24)?Math.round(chg24):Math.round((lb.c/bars[0].o-1)*100);
     if(e=document.getElementById('chg')){e.textContent=(chg>=0?'+':'')+chg+'% 24h';e.className='chg '+(chg>=0?'buyc':'sellc');}
-    renderTape();
+    renderTape();safeDraw();
   }
   function esc(s){return String(s||'').replace(/[<>&"]/g,'');}
   function applyData(d){
@@ -264,8 +266,8 @@
   else{loadReal();setInterval(loadReal,12000);}
   var _tb=document.getElementById('txtoggle');if(_tb)_tb.addEventListener('click',function(){expanded=!expanded;var tp=document.getElementById('tape');if(tp)tp.classList.toggle('expanded',expanded);_tb.textContent=expanded?'Collapse ▴':'Expand ▾';renderTape();});
   Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(b){b.addEventListener('click',function(){Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(x){x.classList.remove('on');});b.classList.add('on');TF=b.getAttribute('data-tf')||'5m';if(CA)loadReal();});});
-  window.addEventListener('resize',function(){size();frame(performance.now());});
-  refresh();frame(performance.now());
+  window.addEventListener('resize',function(){size();safeDraw();});
+  refresh();safeDraw();
 })();
 </script>
 </body>
