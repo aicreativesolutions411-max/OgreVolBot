@@ -2488,7 +2488,10 @@ function startHealthServer() {
     }
 
     if ((request.method === "GET" || request.method === "HEAD") && (requestUrl.pathname.startsWith("/assets/")
-      || /\.(?:css|js|png|jpe?g|svg|webp|ico)$/i.test(requestUrl.pathname))) {
+      || requestUrl.pathname.startsWith("/icons/")
+      || /\.(?:css|js|mjs|png|jpe?g|svg|webp|ico|json|webmanifest|woff2?)$/i.test(requestUrl.pathname))) {
+      // .json/.webmanifest added so /manifest.json (the PWA manifest) serves. serveWebPortal is
+      // path-constrained to web/dist, which holds no sensitive json (data files live in /var/data).
       await serveWebPortal(requestUrl, response, request.method, request.headers["accept-encoding"]);
       return;
     }
