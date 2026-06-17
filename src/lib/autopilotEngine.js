@@ -48,6 +48,13 @@ export function aggParams(state) {
   // recycles. This is the fix for "finds pairs slowly + phantom +300% marks that don't fill":
   // a liquid coin's mark is actually sellable, so the displayed win is the real win.
   const scalp = mode === "scalp";
+  // LIQUID winner-hunt profile shared by all three user-facing Pro modes (Quick=scalp,
+  // Steady, Balanced=blend). They HUNT identically — the liquid feed, real-depth + buy-led
+  // setup scoring (liquidScore), a wide MC band, and almost NO age limit (a good coin can run
+  // days after launch; age is a weak signal, the SETUP is what matters). They differ only in how
+  // they BANK (exit params below). This is the "it's alive — find winners all around, doesn't
+  // matter how it gets them, stop limiting by age" direction.
+  const liquid = scalp || mode === "steady" || mode === "blend";
   const baseFrac = mode === "degen" ? 0.10 : mode === "chill" ? 0.04 : scalp ? 0.07 : grind ? 0.07 : 0.06;
 
   // Softer streak/regime scaling: a hot streak no longer balloons size right
@@ -114,7 +121,7 @@ export function aggParams(state) {
   // rows often lack BOTH m5 momentum AND a reported liquidity number, so a higher bar starved it to
   // zero entries. 22 is reachable from buy-led flow + a sane MC band alone, while still docking
   // thin/fading/dumping coins. Stays adaptive: the auto-tuner's scoreBonus raises it in cold tape.
-  if (scalp) minScore = 22 + ((state.tune && state.tune.scoreBonus) || 0);
+  if (liquid) minScore = 22 + ((state.tune && state.tune.scoreBonus) || 0);
 
   // ENTRY MC WINDOW. Default: tiny floor (a low-MC runner like ZUL +56% @ $1973 stays in),
   // ceiling 20k (these are fresh launches). GRIND skips the brand-new sub-$5k curve — where
@@ -130,29 +137,30 @@ export function aggParams(state) {
   // a tiny bet. The $4k floor sits just above pure phantom dust but stays reachable in the last-hour
   // window (higher floors starved it); the real depth/quality vetting is liquidScore + the volume
   // gate + fast exits, not the MC floor. grind stays mid; default is the fresh sub-$20k.
-  const mcFloor = scalp ? 4000 : grind ? 6000 : 1800;
-  const mcCeil = scalp ? 12000000 : grind ? 80000 : 20000;
+  const mcFloor = liquid ? 4000 : grind ? 6000 : 1800;
+  const mcCeil = liquid ? 12000000 : grind ? 80000 : 20000;
   // ANTI-PHANTOM depth floor — applied ONLY to coins that REPORT a liquidity number (see
   // entryReject). A phantom +400% spike comes from a thin curve where one tiny buy moves the marked
   // cap but nothing can fill, so a coin whose KNOWN liquidity is below this floor is rejected.
   // Coins that report no liquidity at all are NOT rejected here (that bypass-closer starved scalp
   // to an empty feed) — liquidScore + the volume gate + fast exits vet those. grind asks for $4k.
-  const minLiqAbs = scalp ? 3000 : grind ? 4000 : 0;
+  const minLiqAbs = liquid ? 3000 : grind ? 4000 : 0;
   // GRIND waits out the first ~15s (the worst instant-rug/sniper-dump seconds — the fresh
   // feed is mostly sub-30s, so a 45s gate starved it to zero entries) and asks for slightly
   // deeper liquidity than default (cleaner fills, less drain risk) without being so strict
   // it can't find candidates. The 0.7x size cap + liquidity-pull/feed-death exits do the
   // rest of the rug-dodging.
-  // SCALP takes any already-survived coin (>= 60s, past the sniper seconds) up to a day old —
-  // it hunts the liquid last-hour window, not brand-new launches.
-  const minAge = scalp ? 60 : grind ? 20 : 4;
-  // GRIND also raises the age CEILING: it targets survived/climbed coins from the last-hour
-  // window (often 20-60min old), which the default 20-min cap would reject outright.
-  const maxAge = scalp ? 86400 : grind ? 3600 : 1200;
-  // SCALP disables the RELATIVE liquidity gate (liqFrac 0): a healthy $1M coin legitimately has
-  // liq well under mc*0.3, so the relative test would wrongly reject it. Its absolute $20k floor
-  // (minLiqAbs) does the real depth check instead.
-  const liqFrac = scalp ? 0 : grind ? 0.35 : 0.3;
+  // AGE: the LIQUID profile basically ignores age — a good coin can run hours or DAYS after launch,
+  // so age is a weak signal and the SETUP (liquidScore: real depth + turnover + buy-led momentum)
+  // is what decides. Keep only a tiny 30s floor to skip the literal launch-snipe seconds (pure rug
+  // roulette, not a setup), and an effectively-unbounded ceiling (~30d) so nothing good is excluded
+  // for being "too old". grind targets survived/climbed coins; default stays fresh-launch tight.
+  const minAge = liquid ? 30 : grind ? 20 : 4;
+  const maxAge = liquid ? 2592000 : grind ? 3600 : 1200;
+  // LIQUID disables the RELATIVE liquidity gate (liqFrac 0): a healthy $1M coin legitimately has
+  // liq well under mc*0.3, so the relative test would wrongly reject it. The absolute floor
+  // (minLiqAbs, known-thin only) does the real depth check instead.
+  const liqFrac = liquid ? 0 : grind ? 0.35 : 0.3;
 
   // BANK STYLE — three exit personalities:
   //  • "steady": lock the bulk at the first DOABLE pop (80%) + free-roll 20% to +400%,
@@ -215,7 +223,7 @@ export function aggParams(state) {
   // tape already pulled it in via the bankHard clamp above).
   if (mode === "degen" && !bankHard) moonTarget = Math.max(moonTarget, 700);
 
-  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, mcCeil, minAge, maxAge, liqFrac, minLiqAbs, steady, blend, grind, scalp, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct, unprovenConvCap, provenConvCap };
+  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, mcCeil, minAge, maxAge, liqFrac, minLiqAbs, steady, blend, grind, scalp, liquid, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct, unprovenConvCap, provenConvCap };
 }
 
 // SELF-TUNING / market-regime brain: reads the recent runner & rug rate and sets
@@ -524,7 +532,7 @@ export function entryReject(row, P) {
   if (buys > 0 && sells > buys * 2 + 3) return "dumping";
   // SCALP scores liquid movers (liquidScore); GRIND scores survivors (grindScore); the rest use
   // freshScore. Each mode's gate lives on its own scale (see the minScore overrides in aggParams).
-  const setupScore = P.scalp ? liquidScore(row) : P.grind ? grindScore(row) : freshScore(row);
+  const setupScore = P.liquid ? liquidScore(row) : P.grind ? grindScore(row) : freshScore(row);
   if (setupScore < P.minScore) return "score";
   return null;
 }
@@ -1451,7 +1459,7 @@ export function createAutopilotEngine(deps) {
     // window is often thin, so rather than sit idle forever it FALLS BACK to the fresh feed and
     // trades those with its fast in/out exits — a trading scalp beats a waiting one. (The honest
     // realized-anchored display keeps phantom dust marks out of the headline regardless.)
-    const useLiquid = state.mode === "scalp" && typeof getLiquidFeed === "function";
+    const useLiquid = ["scalp", "steady", "blend"].includes(state.mode) && typeof getLiquidFeed === "function";
     try {
       rows = useLiquid ? await getLiquidFeed() : await getFreshFeed();
       if (useLiquid && (!Array.isArray(rows) || !rows.length)) rows = await getFreshFeed();
@@ -1487,8 +1495,8 @@ export function createAutopilotEngine(deps) {
     // recycles liquid movers, so allow a couple recycles — but cap it so the bot spreads across
     // DIFFERENT coins instead of churning one or two ("it only traded 2 coins"). Re-entry cooldown
     // is also longer for scalp so a just-sold coin doesn't immediately jump back to the front.
-    const maxPerCoin = P.scalp ? 3 : 2;
-    const reentryCoolMs = P.scalp ? 120_000 : 45_000;
+    const maxPerCoin = P.liquid ? 3 : 2;
+    const reentryCoolMs = P.liquid ? 120_000 : 45_000;
     const scoredAll = rows
       .filter((r) => r && r.tokenMint && !held.has(r.tokenMint))
       .filter((r) => (state.coinLosses[r.tokenMint] || 0) < 2)  // stop re-aping a repeat loser
@@ -1517,7 +1525,7 @@ export function createAutopilotEngine(deps) {
         const a = state.recentApeNames[ns];
         return !a || nowMs - a > 15_000;
       })
-      .map((r) => ({ r, reject: entryReject(r, P), fs: P.scalp ? liquidScore(r) : P.grind ? grindScore(r) : freshScore(r) }));
+      .map((r) => ({ r, reject: entryReject(r, P), fs: P.liquid ? liquidScore(r) : P.grind ? grindScore(r) : freshScore(r) }));
     // Reject-reason tally so a persistently-dry feed shows WHY (mc/age/liquidity/score/etc.)
     // — turns "0 passed the bar" into an actionable breakdown in the scan heartbeat.
     const rejTally = {};
@@ -1597,7 +1605,7 @@ export function createAutopilotEngine(deps) {
       const ciRec = callerIntel ? callerIntel(cand.r.tokenMint) : null;
       const ci = ciRec && ciRec.signal ? ciRec.signal : null;
       // Conviction = confluence of proven-dev rep + buy flow + freshness + score + smart money + caller intel.
-      const conv = convictionMult(cand.r, rep, sm, ci, { unprovenCap: P.unprovenConvCap, provenCap: P.provenConvCap, scalp: P.scalp });
+      const conv = convictionMult(cand.r, rep, sm, ci, { unprovenCap: P.unprovenConvCap, provenCap: P.provenConvCap, scalp: P.liquid });
       if (sm) record("info", `🐳 smart money on ${cand.r.symbol} — ${sm.kol ? "KOL " : ""}${sm.winners || 0} winner-wallet(s) → conv ${conv.toFixed(2)}`);
       if (ci && ci.trusted) record("info", `📣 caller intel on ${cand.r.symbol} — ${ci.reason} (+${ci.convictionDelta.toFixed(2)} conv) → conv ${conv.toFixed(2)}`);
       // ADAPTIVE QUALITY GATE (smarter picks): when the tape is risky, take ONLY the
@@ -1622,7 +1630,7 @@ export function createAutopilotEngine(deps) {
       // deep coins ever cleared instant entry while transient distinct movers timed out waiting for
       // a 30s re-confirm. A lower instant bar + the per-coin diversify cap spreads trades across
       // MANY more coins. Only marginal setups (22-44) or ones we already traded/lost get one confirm.
-      const elite = P.scalp ? cand.fs >= 44 : cand.fs >= 72;
+      const elite = P.liquid ? cand.fs >= 44 : cand.fs >= 72;
       const stoppedBefore = (state.coinLosses[cand.r.tokenMint] || 0) > 0;
       const needsConfirm = !proven && (stoppedBefore || tune.tape === "COLD" || !elite);
       if (needsConfirm) {
@@ -1649,7 +1657,7 @@ export function createAutopilotEngine(deps) {
     // and every smart-money position still rides the same rug/stop/trailing exits.
     // SCALP opts OUT of these: the smart-money feed surfaces fresh dust (where phantom marks live),
     // which would break scalp's promise of liquid, realizable fills. Scalp stays liquid-only.
-    if (state.mode !== "scalp" && smartMoneyReady() && state.open.length < maxNow && openedThisCycle < perCycle) {
+    if (!P.liquid && smartMoneyReady() && state.open.length < maxNow && openedThisCycle < perCycle) {
       let smRows = [];
       try { smRows = await smartMoneyFeed(); } catch (e) { record("warn", `smart-money feed: ${e && e.message}`); }
       for (const r of (smRows || [])) {
@@ -1691,7 +1699,7 @@ export function createAutopilotEngine(deps) {
       const rejStr = (!scored.length && Object.keys(rej).length)
         ? ` [${Object.entries(rej).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}:${v}`).join(" ")}]`
         : "";
-      record("info", `🔍 scanning (${tune.tape || "warming"}) — ${rows.length} ${P.scalp ? "liquid" : "fresh"}, ${scored.length} passed the bar${scored.length ? `, best ${P.scalp ? "ls" : "fs"} ${best}` : ""}${rejStr}; holding for a clean setup`);
+      record("info", `🔍 scanning (${tune.tape || "warming"}) — ${rows.length} ${P.liquid ? "liquid" : "fresh"}, ${scored.length} passed the bar${scored.length ? `, best ${P.liquid ? "ls" : "fs"} ${best}` : ""}${rejStr}; holding for a clean setup`);
     }
   }
 

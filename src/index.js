@@ -1005,7 +1005,7 @@ const autopilotEngine = createAutopilotEngine({
   // (the engine's liquidScore + volume gate + fast exits vet them). The engine's wide MC band
   // (4k..12M) + liquidScore then pick whatever has quick-win momentum, low or high cap.
   getLiquidFeed: async () => {
-    const BUCKETS = ["live", "under1h", "under3h"]; // fresh + 1-2h + 3-6h climbers
+    const BUCKETS = ["live", "under1h", "under3h", "under1d"]; // fresh + 1-2h + 3-6h + 24-48h climbers
     const SORTS = ["liquidity", "volume", "momentum"];
     const jobs = [];
     for (const b of BUCKETS) for (const s of SORTS) {

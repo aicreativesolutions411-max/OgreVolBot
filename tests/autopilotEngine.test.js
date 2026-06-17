@@ -836,6 +836,20 @@ test("scalp: hunts the LIQUID feed, not the fresh-dust feed", async () => {
   await engine.stop("test");
 });
 
+test("liquid modes (scalp/steady/blend) hunt by SETUP, not age — a days-old runner is accepted", () => {
+  for (const mode of ["scalp", "steady", "blend"]) {
+    const P = aggParams(baseState({ mode }));
+    assert.ok(P.liquid, `${mode} uses the shared liquid hunt profile`);
+    assert.ok(P.maxAge >= 172800, `${mode} does not cap age — days-old coins allowed`);
+    assert.ok(P.minAge <= 60, `${mode} keeps only a tiny age floor (skip the snipe seconds)`);
+    assert.ok(P.mcCeil >= 1000000, `${mode} reaches high MC`);
+    // A 2-day-old, deep-liquidity, buy-led mover: age would have rejected it before; now the
+    // setup (liquidScore) decides and it passes.
+    const oldRunner = goodRow({ marketCap: 250000, liquidityUsd: 80000, pairAgeSeconds: 172800, volume5m: 30000, buys5m: 40, sells5m: 12, m5: 8, h1: 20, bestPickScore: 60 });
+    assert.equal(entryReject(oldRunner, P), null, `${mode} accepts a 2-day-old liquid runner`);
+  }
+});
+
 // ── Honest, non-jumping live display ────────────────────────────────────────────────────────
 
 test("status: headline PnL is realized-anchored — a phantom open mark never inflates it (the no-phantom fix)", async () => {
