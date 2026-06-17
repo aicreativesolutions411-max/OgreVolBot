@@ -8816,6 +8816,16 @@ async function handleMessage(message, userId) {
       return;
     }
   }
+  // DM: a bare CA pasted with NO pending prompt → the same automatic scan card groups get (this is
+  // the "I pasted a CA and nothing came up" fix). Gated on !session so it never hijacks a flow that's
+  // waiting for a CA (e.g. the /pnlcard "paste the mint" prompt).
+  if (isPrivateChat(message.chat) && !session) {
+    const bareCaDm = /^\$?([A-HJ-NP-Za-km-z1-9]{32,48})$/.exec(text.replace(/\s+/g, ""));
+    if (bareCaDm) {
+      await handleTelegramLookCommand(chatId, message, bareCaDm[1]);
+      return;
+    }
+  }
 
   // A pasted X/tweet link → embed the full post (image/video + text) in chat. In groups only
   // when the message is basically just the link (avoid hijacking normal chatter); always in DM.
@@ -23922,29 +23932,42 @@ async function handleScanCallback(query, chatId, messageId) {
 // DMs). Returns "" when there's no recorded call (e.g. a DM or a never-called coin).
 async function buildScanCallerFooter(chatId, mint, currentMc) {
   try {
-    if (!chatId || !mint) return "";
+    if (!mint) return "";
     const store = await readTelegramCalls();
-    const rec = store.calls && store.calls[`${chatId}:${mint}`];
-    if (!rec) return "";
+    if (!store.calls) return "";
     const mc = Number(currentMc) || 0;
-    if (mc > 0) { // keep the warehouse fresh on every render
-      rec.lastMc = mc; rec.lastAt = Date.now();
-      if (mc > (rec.peakMc || 0)) rec.peakMc = mc;
-      scheduleTelegramCallsFlush();
+    // Freshen THIS chat's record if it exists (per-channel warehouse stays current).
+    const here = chatId ? store.calls[`${chatId}:${mint}`] : null;
+    if (here && mc > 0) { here.lastMc = mc; here.lastAt = Date.now(); if (mc > (here.peakMc || 0)) here.peakMc = mc; scheduleTelegramCallsFlush(); }
+    // The footer shows the EARLIEST caller of this mint ANYWHERE in the warehouse (not just this
+    // chat) — so it appears in DM and on $ticker looks too, surfacing who really called it first
+    // and where. Also track the best peak across every channel that called it.
+    let rec = null, bestPeak = 0;
+    for (const k in store.calls) {
+      const r = store.calls[k];
+      if (!r || r.mint !== mint) continue;
+      if (Number(r.peakMc) > bestPeak) bestPeak = Number(r.peakMc) || 0;
+      if (!rec || (Number(r.firstAt) || 0) < (Number(rec.firstAt) || 0)) rec = r;
     }
+    if (!rec) return "";
     const entry = Number(rec.entryMc) || 0;
     const ago = alphaAgeLabel(Math.max(0, Date.now() - Number(rec.firstAt || Date.now())));
     // Scanner-bot footer the user asked for: WHO first called it · the MC then · the move since
     // (green/red %), plus the peak if it ran. e.g. "📣 First called by @x at $12k · 🟢 +340% · 2h ago".
     const atMc = entry > 0 ? ` at ${scanFmtMoney(entry)}` : "";
+    // Live MC to measure the move: prefer the current scan's MC, else the freshest stored value.
+    const liveMc = mc > 0 ? mc : (Number(rec.lastMc) || 0);
     let bracket = "";
-    if (entry > 0 && mc > 0) {
-      const pct = Math.round((mc / entry - 1) * 100);
+    if (entry > 0 && liveMc > 0) {
+      const pct = Math.round((liveMc / entry - 1) * 100);
       bracket = ` · ${pct >= 0 ? "🟢" : "🔴"} ${pct >= 0 ? "+" : ""}${pct}%`;
     }
-    const peakX = entry > 0 ? (Number(rec.peakMc) || 0) / entry : 0;
+    const peakX = entry > 0 ? bestPeak / entry : 0;
     const peakStr = peakX >= 2 ? ` · peak +${Math.round((peakX - 1) * 100)}%` : "";
-    return `📣 First called by <b>${escapeTelegramHtml(rec.callerName || "someone")}</b>${atMc}${bracket}${peakStr} · ${ago} ago`;
+    // Name the room it was first called in when that's somewhere other than here (informative in DM).
+    const sameChat = chatId && String(rec.chatId || "") === String(chatId);
+    const where = !sameChat && rec.chatTitle ? ` in ${escapeTelegramHtml(String(rec.chatTitle).slice(0, 28))}` : "";
+    return `📣 First called by <b>${escapeTelegramHtml(rec.callerName || "someone")}</b>${where}${atMc}${bracket}${peakStr} · ${ago} ago`;
   } catch { return ""; }
 }
 
@@ -24060,7 +24083,10 @@ async function handleTelegramLookCommand(chatId, message, argument) {
   const inChannel = Boolean(message && message.chat && !isPrivateChat(message.chat));
   const curMc = Number(scan?.meta?.marketCap || scan?.meta?.fdv || scan?.bonding?.marketCap || 0);
   if (inChannel) await recordTelegramCall(message, mint, curMc).catch(() => {});
-  const callerLine = inChannel ? await buildScanCallerFooter(message.chat.id, mint, curMc).catch(() => "") : "";
+  // Footer is built ALWAYS now (DM + $ticker too): buildScanCallerFooter looks up the earliest
+  // caller of this mint across the whole warehouse, so it surfaces who called it first even when
+  // this exact chat never did. Empty only when nobody anywhere has called the coin.
+  const callerLine = await buildScanCallerFooter(message?.chat?.id, mint, curMc).catch(() => "");
   let text = null;
   if (scan && (scan.meta || scan.bonding || scan.shield)) {
     try { text = formatSlimeScanCard({ mint, ...scan, callerLine }); } catch { text = null; }
