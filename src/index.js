@@ -23708,7 +23708,13 @@ let telegramCallsCache = null;
 let telegramCallsFlushTimer = null;
 async function readTelegramCalls() {
   if (telegramCallsCache) return telegramCallsCache;
-  const store = await readJson(telegramCallsPath());
+  // The file doesn't exist until the first call is recorded — readJson THROWS ENOENT on a missing
+  // file, which (because every caller wraps this in try/catch) silently broke ALL caller-intel:
+  // no calls recorded, empty scan footer, /pnl & /flex falling back to "only for buys". Default to
+  // an empty store on any read error so the very first recordTelegramCall succeeds and creates it.
+  let store = null;
+  try { store = await readJson(telegramCallsPath()); } catch { store = null; }
+  if (!store || typeof store !== "object") store = {};
   if (!store.calls || typeof store.calls !== "object") store.calls = {};
   telegramCallsCache = store;
   return store;
