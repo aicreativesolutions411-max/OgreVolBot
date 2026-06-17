@@ -9124,13 +9124,22 @@ async function handleMessage(message, userId) {
     }
   }
 
-  // A pasted X/tweet link → embed the full post (image/video + text) in chat. In groups only
-  // when the message is basically just the link (avoid hijacking normal chatter); always in DM.
+  // A pasted X/tweet link → embed the full post (image/video + text) in chat. NEVER for command
+  // messages (so "/raid <link>" reaches the raid handler instead of just embedding the tweet). In
+  // groups it's a Scan-bot feature: only when the message is basically just the link AND Scan is on
+  // (off-by-default groups don't auto-embed). Always in DM.
   const tweetIn = text.match(TWEET_LINK_RE);
-  if (tweetIn && (isPrivateChat(message.chat) || text.trim().length < tweetIn[0].length + 30)) {
-    if (tgCommandOnCooldown(chatId, "xpost", 4000)) return;
-    await postXPost(chatId, tweetIn[0]).catch(() => {});
-    return;
+  if (tweetIn && !text.trim().startsWith("/")) {
+    let allow = isPrivateChat(message.chat) || text.trim().length < tweetIn[0].length + 30;
+    if (allow && !isPrivateChat(message.chat)) {
+      const gb = await getGroupBotEntry(chatId).catch(() => null);
+      if (gb && !groupBotFeatureOn(gb, "scan")) allow = false; // X-post preview rides with Scan Bot
+    }
+    if (allow) {
+      if (tgCommandOnCooldown(chatId, "xpost", 4000)) return;
+      await postXPost(chatId, tweetIn[0]).catch(() => {});
+      return;
+    }
   }
 
   // Cashtag like "$OGRE" → resolve the ticker to its token and post the SAME scan card as a CA
