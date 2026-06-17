@@ -62,6 +62,18 @@
   .card .arr{margin-left:auto; color:var(--green); font-weight:900; opacity:0; transition:.16s; transform:translateX(-4px);} .card:hover .arr{opacity:1; transform:none;}
   .card.gold{border-color:rgba(255,212,90,0.45);} .card.gold:hover{box-shadow:0 18px 40px rgba(0,0,0,0.5), 0 0 30px rgba(255,212,90,0.14);}
   .card.hot{border-color:rgba(255,107,107,0.34);}
+  /* ✨ WOW BORDER — a flowing slime-green/gold outline that slowly rotates around every option.
+     Uses @property to animate the conic angle; degrades to a static glow on older browsers. */
+  @property --ba{ syntax:"<angle>"; inherits:false; initial-value:0deg; }
+  .card::after{ content:""; position:absolute; inset:0; border-radius:inherit; padding:1.6px; pointer-events:none; z-index:2;
+    background:conic-gradient(from var(--ba), rgba(141,255,90,0) 0deg, #8dff5a 46deg, #27e06a 82deg, rgba(141,255,90,0) 145deg, rgba(141,255,90,0) 232deg, #ffd45a 292deg, rgba(141,255,90,0) 360deg);
+    -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite:xor;
+    mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); mask-composite:exclude;
+    animation:borderspin 7s linear infinite; opacity:0.6; transition:opacity .2s;}
+  .card:hover::after{ opacity:1; }
+  .card.gold::after{ background:conic-gradient(from var(--ba), rgba(255,212,90,0) 0deg, #ffd45a 50deg, #8dff5a 95deg, rgba(255,212,90,0) 150deg, rgba(255,212,90,0) 240deg, #ffd45a 300deg, rgba(255,212,90,0) 360deg); }
+  @keyframes borderspin{ to{ --ba:360deg; } }
+  @media(prefers-reduced-motion:reduce){ .card::after{ animation:none; } }
   .foot{text-align:center; color:var(--dim); font-size:0.84rem; padding:44px 0 6px;} .foot a{color:var(--green);} .foot b{font-family:Cinzel,serif;}
 </style>
 </head>
