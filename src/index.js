@@ -25141,7 +25141,10 @@ async function handleGroupBotCommand(message, userId) {
     await say(chatId, v > 0 ? `🟢 Buy Bot will only post buys ≥ ${v} SOL.` : "🟢 Buy Bot will post every buy, no matter how small.");
     return true;
   }
-  const m = text.match(/^\/(settings|buybot|raid|rose|scan)(?:@\w+)?(?:\s+(on|off))?\b/i);
+  // Only intercept the bare command or an explicit on/off toggle. Anything with another argument
+  // (e.g. "/raid <X link>") must FALL THROUGH to its real handler — matching it here was opening the
+  // settings panel instead of posting the raid (the "/raid isn't working" bug).
+  const m = text.match(/^\/(settings|buybot|raid|rose|scan)(?:@\w+)?(?:\s+(on|off))?\s*$/i);
   if (!m) return false;
   const cmd = m[1].toLowerCase();
   const arg = (m[2] || "").toLowerCase();
