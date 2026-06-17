@@ -3622,7 +3622,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
               runners100: trades.filter((t) => (t.peakPct || 0) >= 100).length,
               runners400: trades.filter((t) => (t.peakPct || 0) >= 400).length,
               netPnlSol: r2(trades.reduce((a, t) => a + (Number(t.pnl) || 0), 0)),
-              observatory: (() => { let s = {}; try { s = pumpPortalStream.stats() || {}; } catch {} return { devsTracked: devObs.size, coinsWatching: obsCoins.size, walletsTracked: walletObs.size, winnerWallets: [...walletObs.values()].filter(isWinnerWallet).length, earlyBuyersTracked: earlyBuyers.size, autoKols: autoKolWallets.size, smartMoneyActive: smartMoneyReady(), streamConnected: Boolean(s.connected), streamLastMsgSec: Number.isFinite(s.lastMessageAgoMs) ? Math.round(s.lastMessageAgoMs / 1000) : null, streamTrades: (s.counters && s.counters.trades) || 0, streamCreations: (s.counters && s.counters.creations) || 0, tradeSubs: s.tradeSubscriptions || 0, mintsWithTrades: s.mintsWithTrades || 0, marketSample: (marketTape()?.sample) || 0 }; })(),
+              observatory: (() => { let s = {}; try { s = pumpPortalStream.stats() || {}; } catch {} return { devsTracked: devObs.size, coinsWatching: obsCoins.size, walletsTracked: walletObs.size, winnerWallets: [...walletObs.values()].filter(isWinnerWallet).length, earlyBuyersTracked: earlyBuyers.size, autoKols: autoKolWallets.size, smartMoneyActive: smartMoneyReady(), streamConnected: Boolean(s.connected), streamLastMsgSec: Number.isFinite(s.lastMessageAgoMs) ? Math.round(s.lastMessageAgoMs / 1000) : null, streamTrades: (s.counters && s.counters.trades) || 0, streamCreations: (s.counters && s.counters.creations) || 0, tradeSubs: s.tradeSubscriptions || 0, mintsWithTrades: s.mintsWithTrades || 0, buyWsConnected: buyWsDiag.connected, buyWsSubs: buyWsSubs.size, buyWsTrades: buyWsDiag.trades, marketSample: (marketTape()?.sample) || 0 }; })(),
               marketTape: marketTape(),
               topWallets: [...walletObs.entries()].filter(([, r]) => isWinnerWallet(r)).sort((a, b) => b[1].peakSum - a[1].peakSum).slice(0, 8).map(([w, r]) => ({ wallet: shortMint(w), kol: KOL_WALLETS.has(w), coins: r.coins, ran: r.ran, rugged: r.rugged, avgPeak: r.coins ? r2(r.peakSum / r.coins) : 0 })),
               byScore: bucket((t) => t.fs == null ? null : (t.fs < 57 ? "<57" : t.fs < 62 ? "57-61" : t.fs < 67 ? "62-66" : t.fs < 72 ? "67-71" : "72+")),
@@ -24892,6 +24892,9 @@ async function postGroupBuy(mint, { solAmount = 0, mcUsd = 0, trader = "", sym =
 // subs actually deliver (the main stream firehoses new-tokens, which makes PumpPortal drop trade
 // subs → trades:0). Also FEEDS the early-buyer wallet flywheel (free per-trade buyer wallets). ----
 let buyWs = null, buyWsSubs = new Set(), buyWsReconnect = null;
+// Diagnostics so we can SEE the dedicated socket from /stats: is it open, how many trade subs,
+// how many trade messages have actually arrived (0 = PumpPortal isn't delivering token-trades).
+const buyWsDiag = { connected: false, opens: 0, trades: 0, lastTradeAgoMs: null, lastOpenAt: 0 };
 function buyWsSend(o) { try { if (buyWs && buyWs.readyState === 1) { buyWs.send(JSON.stringify(o)); return true; } } catch {} return false; }
 async function buyWsDesired() {
   const store = await readGroupBot();
@@ -24920,9 +24923,9 @@ function scheduleBuyWsReconnect() { if (buyWsReconnect) return; buyWsReconnect =
 function buyWsConnect() {
   try {
     buyWs = new WebSocket(CONFIG.pumpPortalWsUrl || "wss://pumpportal.fun/api/data");
-    buyWs.on("open", () => { buyWsSubs = new Set(); void buyWsSync(); });
-    buyWs.on("message", (raw) => { try { const d = JSON.parse(raw.toString()); const tx = String(d.txType || "").toLowerCase(); if (tx === "buy" || tx === "sell") void onGroupBuyTrade(d).catch(() => {}); } catch {} });
-    buyWs.on("close", () => scheduleBuyWsReconnect());
+    buyWs.on("open", () => { buyWsDiag.connected = true; buyWsDiag.opens += 1; buyWsDiag.lastOpenAt = Date.now(); buyWsSubs = new Set(); void buyWsSync(); });
+    buyWs.on("message", (raw) => { try { const d = JSON.parse(raw.toString()); const tx = String(d.txType || "").toLowerCase(); if (tx === "buy" || tx === "sell") { buyWsDiag.trades += 1; buyWsDiag.lastTradeAgoMs = 0; void onGroupBuyTrade(d).catch(() => {}); } } catch {} });
+    buyWs.on("close", () => { buyWsDiag.connected = false; scheduleBuyWsReconnect(); });
     buyWs.on("error", () => { try { buyWs.close(); } catch {} });
   } catch { scheduleBuyWsReconnect(); }
 }
