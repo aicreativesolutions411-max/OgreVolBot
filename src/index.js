@@ -24879,15 +24879,20 @@ async function handleTelegramRaidCommand(chatId, message, argument) {
   const target = numMatch ? Number(numMatch[1]) : 0;
   const res = await submitRaidPost({ url, by, symbol, target });
   if (res.ok) {
-    const shareTxt = `⚔️ RAID THIS${symbol ? " for $" + symbol : ""} on @SlimeWire 🐸🔥 — like + RT to fill the gauge\n${url}`;
-    await sayHtml(chatId, [
-      `🔥 <b>${symbol ? "$" + escapeTelegramHtml(symbol) + " " : ""}raid is live on the board!</b>`,
-      target ? `Target: <b>${target}</b> likes + RTs to smash. ` : "",
-      "The whole swamp can pile on — tap below to raid it. 🐸"
-    ].join("\n"), {
+    // No share button — the post IS the raid: people tap the link and like/RT/comment to fill the
+    // gauge, which climbs the SlimeWire leaderboard. Custom group art (image/video) rides on top.
+    const ge = await getGroupBotEntry(chatId).catch(() => null);
+    const lines = [
+      ge?.customText ? `<b>${escapeTelegramHtml(String(ge.customText).slice(0, 160))}</b>` : "",
+      `⚔️ <b>${symbol ? "$" + escapeTelegramHtml(symbol) + " " : ""}RAID is live</b> — like, RT &amp; comment to fill the gauge`,
+      target ? `🎯 Target: <b>${target}</b> engagements to smash` : "",
+      `👉 <a href="${escapeTelegramHtml(url)}">Raid this post on X</a>`,
+      "🏆 It climbs the SlimeWire raid leaderboard as it fills. 🐸"
+    ].filter(Boolean);
+    await sendGroupAlertMedia(chatId, (ge && ge.customMedia && ge.customMedia.value) ? ge.customMedia : null, lines.join("\n"), {
       inline_keyboard: [[
-        { text: "⚔️ Raid board", url: "https://www.slimewire.org/raids" },
-        { text: "𝕏 Share", url: "https://twitter.com/intent/tweet?text=" + encodeURIComponent(shareTxt) }
+        { text: "⚔️ Raid this post", url },
+        { text: "🏆 Leaderboard", url: "https://www.slimewire.org/raids" }
       ]]
     });
   } else {
@@ -25101,8 +25106,12 @@ function groupBotHelpText() {
     "• <code>/track &lt;CA&gt;</code> — set the coin to watch (or just paste a CA once)",
     "• <code>/minbuy &lt;SOL&gt;</code> — only show buys ≥ that size (0 = show all)",
     "",
-    "⚔️ <b>Raid Bot</b> — <code>/raid &lt;X post link&gt; [$TICKER] [target]</code>",
+    "⚔️ <b>Raid Bot</b> — <code>/raid &lt;X post link&gt; [$TICKER] [target]</code> → posts the link to raid + climbs the leaderboard",
     "🔍 <b>Scan Bot</b> — paste any CA → instant scan card with Quick-Buy",
+    "",
+    "🎨 <b>Customize the look</b> (buy + raid posts)",
+    "• <code>/setmedia</code> — reply to a photo/video, or <code>/setmedia &lt;image-url&gt;</code> (default = the coin's own image from Dex, Pump fallback; <code>/setmedia off</code> to reset)",
+    "• <code>/setmessage &lt;text&gt;</code> — a custom header line (<code>off</code> to clear)",
     "🛡️ <b>Rose</b> — <code>/rules</code> <code>/setrules</code> <code>/welcome</code> <code>/antilinks</code> · reply to a user + <code>/warn</code> <code>/mute</code> <code>/kick</code> <code>/ban</code>",
     "",
     "Everything's off until an admin turns it on. Trade any coin at <a href=\"https://www.slimewire.org\">slimewire.org</a> ⚡"
@@ -25131,6 +25140,38 @@ async function handleGroupBotCommand(message, userId) {
   const text = String(message.text || message.caption || "").trim();
   // /help — clean command guide (anyone can read it).
   if (/^\/help(?:@\w+)?\b/i.test(text)) { await sayHtml(chat.id, groupBotHelpText()); return true; }
+  // /setmedia — custom picture/video for this group's buy + raid posts (reply to a photo/video, paste
+  // an image/video URL, or 'off' to use the coin's own metadata image). Admin only.
+  const sm = text.match(/^\/setmedia(?:@\w+)?(?:\s+(\S+))?\b/i);
+  if (sm) {
+    const chatId = chat.id;
+    if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only group admins can set the bot media."); return true; }
+    const reply = message.reply_to_message;
+    let media; let handled = true;
+    if (reply && reply.photo && reply.photo.length) media = { type: "photo", value: reply.photo[reply.photo.length - 1].file_id };
+    else if (reply && reply.video) media = { type: "video", value: reply.video.file_id };
+    else if (reply && reply.animation) media = { type: "video", value: reply.animation.file_id };
+    else if (sm[1] && /^https?:\/\//i.test(sm[1])) media = { type: /\.(mp4|mov|webm)$/i.test(sm[1]) ? "video" : "photo", value: sm[1] };
+    else if (sm[1] && sm[1].toLowerCase() === "off") media = null;
+    else { handled = false; await say(chatId, "Custom buy/raid art: reply to a photo or video with /setmedia, or send /setmedia <image-url>. Use /setmedia off to go back to the coin's own image (Dex, Pump fallback)."); }
+    if (handled) {
+      const store = await readGroupBot(); const k = String(chatId); const e = store.groups[k] || defaultGroupBotEntry(); e.customMedia = media; store.groups[k] = e; await writeGroupBot(store);
+      await say(chatId, media ? `🟢 Custom ${media.type} set for buy + raid posts.` : "🟢 Cleared — posts use the coin's own image (Dex, or Pump if it's not on a DEX yet).");
+    }
+    return true;
+  }
+  // /setmessage <text> — custom header line on buy + raid posts ('off' to clear). Admin only.
+  const smsg = text.match(/^\/setmessage(?:@\w+)?(?:\s+([\s\S]+))?$/i);
+  if (smsg) {
+    const chatId = chat.id;
+    if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only group admins can set the bot message."); return true; }
+    const t = (smsg[1] || "").trim();
+    const store = await readGroupBot(); const k = String(chatId); const e = store.groups[k] || defaultGroupBotEntry();
+    e.customText = (t && t.toLowerCase() !== "off") ? t.slice(0, 160) : "";
+    store.groups[k] = e; await writeGroupBot(store);
+    await say(chatId, e.customText ? "🟢 Custom message set for buy + raid posts." : "🟢 Custom message cleared.");
+    return true;
+  }
   // /track <CA> — explicitly set the Buy Bot's coin (works even with bot privacy mode ON, since it's
   // a command). Also flips Buy Bot on. This is the reliable way to "grab the CA" without relying on
   // the bot seeing a plain paste.
@@ -25204,12 +25245,41 @@ const groupBuyMarkup = (mint) => ({ inline_keyboard: [[
   { text: "⚡ Quick Buy on SlimeWire", url: groupBuyQuickBuyUrl(mint) },
   { text: "📈 Chart", url: `https://dexscreener.com/solana/${mint}` }
 ]] });
+// Token IMAGE for buy/raid cards — the coin's own art: DexScreener metadata first, Pump fallback
+// (exactly "metadata default from dex, backup pump"). Cached 5 min so per-buy alerts stay cheap.
+const groupTokenImgCache = new Map();
+async function resolveGroupTokenImage(mint) {
+  const c = groupTokenImgCache.get(mint);
+  if (c && Date.now() - c.at < 300_000) return c.url;
+  let url = "";
+  try { const scan = await gatherSlimeScan(mint); url = firstString(scan?.meta?.imageUrl, scan?.bonding?.imageUrl, scan?.bonding?.imageUri) || ""; } catch {}
+  groupTokenImgCache.set(mint, { url, at: Date.now() });
+  return url;
+}
+// Send a group alert with a picture/video when one is set, else plain text. `media` = {type,value}
+// where value is a TG file_id (admin-uploaded) or a URL. Caption carries the HTML card.
+async function sendGroupAlertMedia(chatId, media, caption, markup) {
+  if (media && media.value) {
+    const isVid = media.type === "video";
+    const payload = { chat_id: chatId, caption, parse_mode: "HTML", reply_markup: markup };
+    payload[isVid ? "video" : "photo"] = media.value;
+    try { await telegram(isVid ? "sendVideo" : "sendPhoto", payload); return; } catch {}
+  }
+  await sayHtml(chatId, caption, markup).catch(() => {});
+}
+// Per-group buy/raid media override: e.customMedia {type,value} (admin /setmedia) or the coin's own
+// metadata image. Custom text header from e.customText (/setmessage).
+function groupAlertMediaFor(entry, fallbackImageUrl) {
+  if (entry && entry.customMedia && entry.customMedia.value) return entry.customMedia;
+  return fallbackImageUrl ? { type: "photo", value: fallbackImageUrl } : null;
+}
 // Post a buy alert to every group tracking this token. solAmount>0 = a TRUE per-buy (from the
-// dedicated trade socket); solAmount<=0 = the DexScreener aggregate fallback ("buys rolling in").
+// swap-api trade feed); solAmount<=0 = the DexScreener aggregate fallback ("buys rolling in").
 async function postGroupBuy(mint, { solAmount = 0, mcUsd = 0, trader = "", sym = "" } = {}) {
   const store = await readGroupBot();
   const perBuy = solAmount > 0;
   const symClean = (String(sym || "").replace(/[<>&]/g, "")) || shortMint(mint);
+  const defImg = await resolveGroupTokenImage(mint).catch(() => "");
   for (const [chatId, e] of Object.entries(store.groups || {})) {
     if (!groupBotFeatureOn(e, "buybot") || e.token !== mint) continue;
     const min = Number(e.minBuySol) || 0;
@@ -25231,7 +25301,8 @@ async function postGroupBuy(mint, { solAmount = 0, mcUsd = 0, trader = "", sym =
         `⚡ <a href="${groupBuyQuickBuyUrl(mint)}">Quick Buy on SlimeWire</a> · slimewire.org`
       ].filter(Boolean);
     }
-    await sayHtml(chatId, lines.join("\n"), groupBuyMarkup(mint)).catch(() => {});
+    if (e.customText) lines.unshift(`<b>${escapeTelegramHtml(String(e.customText).slice(0, 160))}</b>`);
+    await sendGroupAlertMedia(chatId, groupAlertMediaFor(e, defImg), lines.join("\n"), groupBuyMarkup(mint));
   }
   groupBuyLastAlertAt.set(mint, Date.now());
 }
