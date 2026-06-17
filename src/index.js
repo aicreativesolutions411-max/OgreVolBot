@@ -3507,6 +3507,19 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/chart") {
+      // FREE, edge-cacheable chart data for the SlimeWire native chart: GeckoTerminal OHLCV+trades
+      // (post-DEX) + Pump bonding-curve fallback (pre-DEX) + DexScreener stats. No Helius / no RPC.
+      const cmint = String(requestUrl.searchParams.get("ca") || requestUrl.searchParams.get("mint") || "").trim();
+      const ctf = String(requestUrl.searchParams.get("tf") || "5m");
+      if (!solanaPublicKeyLike(cmint)) { sendWebJson(request, response, 400, { ok: false, error: "invalid mint" }); return; }
+      let cdata;
+      try { cdata = await buildChartData(cmint, ["1m", "5m", "15m", "1h"].includes(ctf) ? ctf : "5m"); }
+      catch (e) { cdata = { ok: false, error: String((e && e.message) || e) }; }
+      sendWebJson(request, response, 200, cdata);
+      return;
+    }
+
     if (request.method === "GET" && pathname === "/api/web/launch-card-test") {
       // Read-only diagnostic: renders the launch card/trailer and reports byte sizes
       // or the exact error. No channel sends, no side effects. Gated by a fixed token.
@@ -24111,6 +24124,64 @@ async function resolveCashtagToMint(symbol) {
     cashtagMintCache.set(key, { at: Date.now(), mint });
     return mint;
   } catch { return null; }
+}
+
+// ── SLIMEWIRE NATIVE CHART DATA (free, no Helius) ───────────────────────────────────────────
+// GeckoTerminal public API (free, no key) gives OHLCV candles + recent trades for any DEX pool;
+// DexScreener (free) resolves the pool + supplies headline stats; Pump's bonding-curve candles are
+// the pre-migration fallback. Cached ~8s so many viewers hit our cache, not the upstreams.
+const CHART_API_CACHE = new Map();
+const GT_API = "https://api.geckoterminal.com/api/v2";
+async function gtFetch(p, timeoutMs = 6000) {
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), timeoutMs);
+  try { const r = await fetch(GT_API + p, { headers: { accept: "application/json" }, signal: ctrl.signal }); if (!r.ok) return null; return await r.json(); }
+  catch { return null; }
+  finally { clearTimeout(to); }
+}
+function gtTimeframe(tf) { if (tf === "1m") return ["minute", 1]; if (tf === "15m") return ["minute", 15]; if (tf === "1h") return ["hour", 1]; return ["minute", 5]; }
+async function buildChartData(mint, tf) {
+  const key = `${mint}:${tf}`;
+  const hit = CHART_API_CACHE.get(key);
+  if (hit && Date.now() - hit.at < 8000) return hit.data;
+  let stage = "dex", pairAddress = "";
+  let stats = { symbol: "", name: "", priceUsd: 0, mc: 0, liq: 0, vol24: 0, change24h: 0 };
+  let best = null;
+  try { best = bestDexPairForToken(mint, await fetchDexScreenerTokenPairsFallback(mint).catch(() => null)); } catch {}
+  if (best) {
+    pairAddress = String(best.pairAddress || "");
+    stats = {
+      symbol: best.baseToken?.symbol || "", name: best.baseToken?.name || "",
+      priceUsd: Number(best.priceUsd) || 0, mc: Number(best.marketCap || best.fdv) || 0,
+      liq: Number(best.liquidity?.usd) || 0, vol24: Number(best.volume?.h24) || 0, change24h: Number(best.priceChange?.h24) || 0
+    };
+  }
+  let candles = [], trades = [];
+  if (pairAddress) {
+    const [tfName, agg] = gtTimeframe(tf);
+    const oh = await gtFetch(`/networks/solana/pools/${pairAddress}/ohlcv/${tfName}?aggregate=${agg}&limit=150&currency=usd`);
+    const list = (oh && oh.data && oh.data.attributes && oh.data.attributes.ohlcv_list) || [];
+    candles = list.map((a) => ({ t: Number(a[0]) || 0, o: Number(a[1]) || 0, h: Number(a[2]) || 0, l: Number(a[3]) || 0, c: Number(a[4]) || 0, v: Number(a[5]) || 0 })).filter((k) => k.c > 0).sort((x, y) => x.t - y.t);
+    const tr = await gtFetch(`/networks/solana/pools/${pairAddress}/trades?trade_volume_in_usd_greater_than=0`);
+    const trl = (tr && tr.data) || [];
+    trades = trl.slice(0, 60).map((d) => { const a = d.attributes || {}; const buy = a.kind === "buy"; return { t: Math.floor(Date.parse(a.block_timestamp) / 1000) || 0, side: buy ? "buy" : "sell", usd: Number(a.volume_in_usd) || 0, price: Number(buy ? a.price_to_in_usd : a.price_from_in_usd) || 0 }; });
+  }
+  if (!candles.length) {
+    stage = best ? "dex" : "pump";
+    const pc = await fetch(`https://frontend-api.pump.fun/candlesticks/${mint}?offset=0&limit=150&timeframe=5`, { headers: { accept: "application/json" } }).then((r) => r.ok ? r.json() : null).catch(() => null);
+    if (Array.isArray(pc) && pc.length) {
+      candles = pc.map((k) => ({ t: Number(k.timestamp) || 0, o: Number(k.open) || 0, h: Number(k.high) || 0, l: Number(k.low) || 0, c: Number(k.close) || 0, v: Number(k.volume) || 0 })).filter((k) => k.c > 0).sort((x, y) => x.t - y.t);
+      if (candles.length) stage = "pump";
+    }
+    if (!best) {
+      const pm = await getPumpFunTokenMetadata(mint).catch(() => null);
+      if (pm) stats = { symbol: pm.symbol || "", name: pm.name || "", priceUsd: Number(pm.priceUsd) || 0, mc: Number(pm.marketCap) || 0, liq: Number(pm.liquidityUsd) || 0, vol24: Number(pm.volume24h) || 0, change24h: Number(pm.priceChange24h) || 0 };
+    }
+  }
+  const data = { ok: true, mint, tf, stage, symbol: stats.symbol, name: stats.name, priceUsd: stats.priceUsd, mc: stats.mc, liq: stats.liq, vol24: stats.vol24, change24h: stats.change24h, candles, trades, at: Date.now() };
+  CHART_API_CACHE.set(key, { at: Date.now(), data });
+  if (CHART_API_CACHE.size > 400) { const old = [...CHART_API_CACHE.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, 200); for (const [k] of old) CHART_API_CACHE.delete(k); }
+  return data;
 }
 
 async function gatherSlimeScan(mint) {
