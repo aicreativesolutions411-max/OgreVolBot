@@ -1815,10 +1815,16 @@ export function createAutopilotEngine(deps) {
       entryVol5m: Number(row.volume5m) || 0,
       entryBuys: Number(row.buys5m) || 0,
       entrySells: Number(row.sells5m) || 0,
-      // SMART-MONEY EXIT: if proven winner wallets are in this coin, exit just BEFORE
-      // the earliest-exiting one historically sells — bank at ~85% of their typical
-      // exit gain. null = no smart-money exit signal (use the normal ladder).
-      smartExitPct: (sm && sm.exitMult) ? Math.max(30, Math.min(400, Math.round((sm.exitMult - 1) * 100 * 0.85))) : null
+      // SMART-MONEY / COPY EXIT — "ride the pop, get out before they dump":
+      //  • If we've LEARNED the smart wallet's exit (exitMult), bank at ~85% of their typical exit
+      //    gain — out just ahead of the earliest one.
+      //  • If smart money is in but we DON'T know their exit yet (a KOL / freshly-learned wallet),
+      //    still bank the pop fast at a default (+35%) instead of riding into the dump. This is the
+      //    "in-and-out, win steady" behavior for copy-trades — they flip fast, so we flip faster.
+      //  • No smart money → null → use the normal mode ladder.
+      smartExitPct: sm
+        ? (sm.exitMult ? Math.max(30, Math.min(400, Math.round((sm.exitMult - 1) * 100 * 0.85))) : 35)
+        : null
     };
     state.open.push(pos);
     state.recentApeNames[normSym(sym)] = now(); // remember the NAME to block clone-swarm pile-ins

@@ -968,7 +968,13 @@ function sampleDevObservatory() {
     for (const [mint, c] of obsCoins) {
       const old = now - c.at > 25 * 60 * 1000;
       const gone = !seen.has(mint) && now - c.seen > 90 * 1000;
-      if (old || gone) {
+      // EARLY-RUNNER CREDIT: the moment a watched coin confirms a 2x (and is >2min old, so it's a
+      // real move not a single-tick blip), score its early buyers as winners NOW instead of waiting
+      // ~25-30min to finalize. This builds the "wallets that get into coins early that run" roster
+      // in MINUTES — the copy-trade roster the bot trades on — and judges each coin exactly once
+      // (it's deleted right after). Non-runners still wait the full window to confirm they faded.
+      const ranEarly = c.firstMc > 0 && c.maxMc >= c.firstMc * 2 && (now - c.at) > 120_000;
+      if (old || gone || ranEarly) {
         const ranMult = c.firstMc > 0 ? c.maxMc / c.firstMc : 1;
         const rugged = (c.maxMc >= c.firstMc * 1.2 && c.lastMc <= c.maxMc * 0.3) || (c.firstMc > 0 && c.lastMc <= c.firstMc * 0.4);
         devObsBump(c.dev, ranMult, rugged);
@@ -3615,7 +3621,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
               runners100: trades.filter((t) => (t.peakPct || 0) >= 100).length,
               runners400: trades.filter((t) => (t.peakPct || 0) >= 400).length,
               netPnlSol: r2(trades.reduce((a, t) => a + (Number(t.pnl) || 0), 0)),
-              observatory: (() => { let s = {}; try { s = pumpPortalStream.stats() || {}; } catch {} return { devsTracked: devObs.size, coinsWatching: obsCoins.size, walletsTracked: walletObs.size, winnerWallets: [...walletObs.values()].filter(isWinnerWallet).length, autoKols: autoKolWallets.size, smartMoneyActive: smartMoneyReady(), streamConnected: Boolean(s.connected), streamLastMsgSec: Number.isFinite(s.lastMessageAgoMs) ? Math.round(s.lastMessageAgoMs / 1000) : null, marketSample: (marketTape()?.sample) || 0 }; })(),
+              observatory: (() => { let s = {}; try { s = pumpPortalStream.stats() || {}; } catch {} return { devsTracked: devObs.size, coinsWatching: obsCoins.size, walletsTracked: walletObs.size, winnerWallets: [...walletObs.values()].filter(isWinnerWallet).length, earlyBuyersTracked: earlyBuyers.size, autoKols: autoKolWallets.size, smartMoneyActive: smartMoneyReady(), streamConnected: Boolean(s.connected), streamLastMsgSec: Number.isFinite(s.lastMessageAgoMs) ? Math.round(s.lastMessageAgoMs / 1000) : null, marketSample: (marketTape()?.sample) || 0 }; })(),
               marketTape: marketTape(),
               topWallets: [...walletObs.entries()].filter(([, r]) => isWinnerWallet(r)).sort((a, b) => b[1].peakSum - a[1].peakSum).slice(0, 8).map(([w, r]) => ({ wallet: shortMint(w), kol: KOL_WALLETS.has(w), coins: r.coins, ran: r.ran, rugged: r.rugged, avgPeak: r.coins ? r2(r.peakSum / r.coins) : 0 })),
               byScore: bucket((t) => t.fs == null ? null : (t.fs < 57 ? "<57" : t.fs < 62 ? "57-61" : t.fs < 67 ? "62-66" : t.fs < 72 ? "67-71" : "72+")),
