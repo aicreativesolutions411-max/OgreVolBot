@@ -9270,9 +9270,11 @@ async function handleMessage(message, userId) {
   const pnlCommand = parseCommandWithArgument(text, ["pnl"]);
   if (pnlCommand) {
     if (pnlCommand.argument) {
-      // CA form → render the card RIGHT IN THIS CHAT. Works in groups/channels so everyone sees
-      // the result, win or loss (the whole point of a flex/PnL card).
-      await sendPnlCardForTokenText(chatId, userId, pnlCommand.argument);
+      // CA form → render the card RIGHT IN THIS CHAT. In a group it's the CALL's PnL (first caller +
+      // % from the entry MC) — "pnl based off first call and caller"; DM falls to the personal card.
+      const pm = (String(pnlCommand.argument).match(/[A-HJ-NP-Za-km-z1-9]{32,48}/) || [])[0];
+      if (!isPrivateChat(message.chat) && pm && await postCallFlexCard(chatId, pm).catch(() => false)) { /* call card posted */ }
+      else await sendPnlCardForTokenText(chatId, userId, pnlCommand.argument);
     } else if (!isPrivateChat(message.chat)) {
       await say(chatId, "Open the bot in DM for your full PnL list. In a group, post a card with `/pnl <CA>`.");
     } else {
@@ -9284,8 +9286,10 @@ async function handleMessage(message, userId) {
   const pnlCardCommand = parseCommandWithArgument(text, ["pnlcard", "pnl_card", "card"]);
   if (pnlCardCommand) {
     if (pnlCardCommand.argument) {
-      // CA form posts in-chat (group-friendly).
-      await sendPnlCardForTokenText(chatId, userId, pnlCardCommand.argument);
+      // CA form posts in-chat (group-friendly) — call-based in a group, personal in DM.
+      const cm = (String(pnlCardCommand.argument).match(/[A-HJ-NP-Za-km-z1-9]{32,48}/) || [])[0];
+      if (!isPrivateChat(message.chat) && cm && await postCallFlexCard(chatId, cm).catch(() => false)) { /* call card posted */ }
+      else await sendPnlCardForTokenText(chatId, userId, pnlCardCommand.argument);
     } else if (!isPrivateChat(message.chat)) {
       await say(chatId, "In a group, post a card with `/pnlcard <CA>` in one message. Open the bot in DM to build one interactively.");
     } else {
@@ -9300,7 +9304,10 @@ async function handleMessage(message, userId) {
   const flexCommand = parseCommandWithArgument(text, ["flex"]);
   if (flexCommand) {
     if (flexCommand.argument) {
-      await sendPnlCardForTokenText(chatId, userId, flexCommand.argument);
+      // In a group, /flex <CA> flexes THE CALL (first caller + % from entry), not a personal trade.
+      const fm = (String(flexCommand.argument).match(/[A-HJ-NP-Za-km-z1-9]{32,48}/) || [])[0];
+      if (!isPrivateChat(message.chat) && fm && await postCallFlexCard(chatId, fm).catch(() => false)) { /* call card posted */ }
+      else await sendPnlCardForTokenText(chatId, userId, flexCommand.argument);
     } else if (!isPrivateChat(message.chat)) {
       await say(chatId, "In a group, flex with `/flex <CA>` in one message so everyone sees your card. Open the bot in DM to flex interactively.");
     } else {
@@ -24145,6 +24152,42 @@ async function buildScanCallerFooter(chatId, mint, currentMc) {
     const where = !sameChat && rec.chatTitle ? ` in ${escapeTelegramHtml(String(rec.chatTitle).slice(0, 28))}` : "";
     return `📣 First called by <b>${escapeTelegramHtml(rec.callerName || "someone")}</b>${where}${atMc}${bracket}${peakStr} · ${ago} ago`;
   } catch { return ""; }
+}
+
+// Group /flex and /pnl: render the CALL's performance — credited to the FIRST caller, measured from
+// the call's entry MC (not a personal buy/sell). This is "flex/pnl based off first call and caller".
+// Returns true if a call existed (and a card was posted), false if nobody has called this coin.
+async function postCallFlexCard(chatId, mint) {
+  try {
+    const store = await readTelegramCalls();
+    let rec = null, bestPeak = 0;
+    for (const k in (store.calls || {})) {
+      const r = store.calls[k];
+      if (!r || r.mint !== mint) continue;
+      if (Number(r.peakMc) > bestPeak) bestPeak = Number(r.peakMc) || 0;
+      if (!rec || (Number(r.firstAt) || 0) < (Number(rec.firstAt) || 0)) rec = r;
+    }
+    if (!rec) return false;
+    let curMc = 0, sym = "";
+    try { const scan = await gatherSlimeScan(mint); curMc = Number(scan?.meta?.marketCap || scan?.meta?.fdv || scan?.bonding?.marketCap || 0); sym = scan?.meta?.symbol || scan?.bonding?.symbol || ""; } catch {}
+    const entry = Number(rec.entryMc) || 0;
+    const live = curMc > 0 ? curMc : (Number(rec.lastMc) || 0);
+    if (live > 0) { rec.lastMc = live; if (live > (rec.peakMc || 0)) { rec.peakMc = live; bestPeak = Math.max(bestPeak, live); } scheduleTelegramCallsFlush(); }
+    const pct = entry > 0 && live > 0 ? Math.round((live / entry - 1) * 100) : 0;
+    const x = entry > 0 && live > 0 ? live / entry : 0;
+    const peakPct = entry > 0 && bestPeak > 0 ? Math.round((bestPeak / entry - 1) * 100) : 0;
+    const up = pct >= 0;
+    const ago = alphaAgeLabel(Math.max(0, Date.now() - Number(rec.firstAt || Date.now())));
+    const lines = [
+      `${up ? "🟢" : "🔴"} <b>$${escapeTelegramHtml(sym || shortMint(mint))} — the call</b>`,
+      `📣 Called by <b>${escapeTelegramHtml(rec.callerName || "someone")}</b>${rec.chatTitle ? ` in ${escapeTelegramHtml(String(rec.chatTitle).slice(0, 28))}` : ""} · ${ago} ago`,
+      entry > 0 ? `🎯 Entry ${scanFmtMoney(entry)} → ${scanFmtMoney(live)}` : `now ${scanFmtMoney(live)}`,
+      `${up ? "📈" : "📉"} <b>${up ? "+" : ""}${pct}%</b>${x >= 2 ? ` · <b>${x.toFixed(1)}x</b>` : ""}${peakPct >= pct + 25 ? ` · peak +${peakPct}%` : ""}`,
+      `⚡ <a href="https://slimewire.org/t?ca=${mint}">Trade $${escapeTelegramHtml(sym || "it")} on SlimeWire</a>`
+    ].filter(Boolean);
+    await sayHtml(chatId, lines.join("\n"), slimeScanKeyboard(mint));
+    return true;
+  } catch { return false; }
 }
 
 function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, supply, callerLine, ath }) {
