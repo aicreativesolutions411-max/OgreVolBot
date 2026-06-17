@@ -774,6 +774,10 @@ function freshState(opts) {
     // mint so the bot spreads across DIFFERENT movers instead of churning one or two coins all
     // session ("it only traded 2 coins / keeps aping the same one"). See DIVERSIFY in hunt().
     coinTrades: {},
+    // Per-coin SESSION win counter: a coin that WON for us earns a higher re-entry allowance so
+    // the bot can rebuy a dip on a proven winner and trade it again, while meh/losing coins keep
+    // the tight cap (so it doesn't spam the same old pairs). See DIVERSIFY in hunt().
+    coinWins: {},
     // Per-NAME loss memory: clones of a hot name flood the feed and dump. After a
     // name loses, cool off / cap re-entries on that name (different mints, same name).
     symLosses: {},
@@ -1380,6 +1384,7 @@ export function createAutopilotEngine(deps) {
     const realLoss = net <= -pos.costSol * 0.025;
     if (win) {
       if (!pos.countedWin) markWin(pos);
+      state.coinWins[pos.mint] = (state.coinWins[pos.mint] || 0) + 1; // proven winner → earns dip-rebuys
     } else if (realLoss) {
       markLoss(pos);
       state.coinLosses[pos.mint] = (state.coinLosses[pos.mint] || 0) + 1; // remember repeat losers
@@ -1495,12 +1500,17 @@ export function createAutopilotEngine(deps) {
     // recycles liquid movers, so allow a couple recycles — but cap it so the bot spreads across
     // DIFFERENT coins instead of churning one or two ("it only traded 2 coins"). Re-entry cooldown
     // is also longer for scalp so a just-sold coin doesn't immediately jump back to the front.
-    const maxPerCoin = P.liquid ? 3 : 2;
+    // DIVERSIFY vs REBUY-WINNERS: cap same-coin churn so it doesn't spam the same old pairs, BUT
+    // a coin that has WON for us this session earns extra re-entries — so it can buy a dip on a
+    // proven winner and trade it again (the wave cooldown below makes it wait for the pullback, not
+    // rebuy the top). Meh/losing coins keep the tight cap.
+    const baseMaxPerCoin = P.liquid ? 3 : 2;
+    const maxFor = (mint) => baseMaxPerCoin + ((state.coinWins[mint] || 0) > 0 ? 4 : 0);
     const reentryCoolMs = P.liquid ? 120_000 : 45_000;
     const scoredAll = rows
       .filter((r) => r && r.tokenMint && !held.has(r.tokenMint))
       .filter((r) => (state.coinLosses[r.tokenMint] || 0) < 2)  // stop re-aping a repeat loser
-      .filter((r) => (state.coinTrades[r.tokenMint] || 0) < maxPerCoin) // DIVERSIFY: don't churn one coin all session
+      .filter((r) => (state.coinTrades[r.tokenMint] || 0) < maxFor(r.tokenMint)) // DIVERSIFY (winners earn more re-entries)
       .filter((r) => {
         // Wave cooldown: allow re-entry on a coin we sold, but space it out (longer for scalp).
         const last = state.recentSells[r.tokenMint];
@@ -1570,7 +1580,7 @@ export function createAutopilotEngine(deps) {
     const freshSincePause = closedCount > (state.chopTrippedAtTrades || 0);
     const trip = freshSincePause && (lossStreak >= 3 || netBleed || (tune.tape === "COLD" && recentP.length >= 5 && recentNet < 0) || (peakGiveback && recentNet < 0));
     if (trip && (!state.chopPauseUntil || nowMs > state.chopPauseUntil)) {
-      state.chopPauseUntil = nowMs + 180_000; // 3-min cool-off, then resume and try again
+      state.chopPauseUntil = nowMs + 90_000; // short 90s cool-off, then resume — never feel "stopped"
       state.chopTrippedAtTrades = closedCount; // won't re-arm until new trades close
       const why = lossStreak >= 3 ? `${lossStreak} losses in a row`
         : netBleed ? `net ${round(recentNet, 4)} SOL over last ${recentP.length}`
@@ -1655,9 +1665,12 @@ export function createAutopilotEngine(deps) {
     // (e.g. higher-MC coins past the freshness gate). Works in paper AND live. The
     // main fresh scan above is completely unchanged; these are pure bonus entries,
     // and every smart-money position still rides the same rug/stop/trailing exits.
-    // SCALP opts OUT of these: the smart-money feed surfaces fresh dust (where phantom marks live),
-    // which would break scalp's promise of liquid, realizable fills. Scalp stays liquid-only.
-    if (!P.liquid && smartMoneyReady() && state.open.length < maxNow && openedThisCycle < perCycle) {
+    // COPY-TRADE / KOL TRACKER: also enter coins our tracked smart-money wallets / KOLs are buying
+    // — the bot uses the whole observatory (thousands of dev + wallet outcomes), not just the
+    // momentum scan. LIQUID modes used to opt out (the feed can surface fresh dust); now they take
+    // these too but ONLY when the coin has REAL, sellable liquidity (verified below), so a
+    // copy-trade can't drag scalp into an unsellable phantom. Non-liquid modes keep the old path.
+    if (smartMoneyReady() && state.open.length < maxNow && openedThisCycle < perCycle) {
       let smRows = [];
       try { smRows = await smartMoneyFeed(); } catch (e) { record("warn", `smart-money feed: ${e && e.message}`); }
       for (const r of (smRows || [])) {
@@ -1666,7 +1679,7 @@ export function createAutopilotEngine(deps) {
         if (openedThisCycle >= perCycle) break;
         if (!r || !r.tokenMint || held.has(r.tokenMint)) continue;
         if ((state.coinLosses[r.tokenMint] || 0) >= 2) continue; // don't re-ape a repeat loser
-        if ((state.coinTrades[r.tokenMint] || 0) >= 2) continue; // DIVERSIFY: cap same-coin churn
+        if ((state.coinTrades[r.tokenMint] || 0) >= maxFor(r.tokenMint)) continue; // DIVERSIFY (winners earn more)
         const last = state.recentSells[r.tokenMint];
         if (last && now() - last < 45_000) continue;             // wave cooldown
         const dev = getDevWallet(r.tokenMint);
@@ -1674,14 +1687,23 @@ export function createAutopilotEngine(deps) {
         if (rep && rep.rugs >= 2 && rep.runners === 0) continue;  // dev rug history still vetoes
         const sm = r._smartMoney || (smartMoney ? smartMoney(r.tokenMint) : null);
         if (!sm || !(sm.kol || sm.winners >= 1)) continue;
+        // LIQUID modes only copy-trade into SELLABLE coins — verify real depth (the feed row may
+        // not carry liquidity; confirm via getPairLite) so a copy can't be an unsellable phantom.
+        if (P.liquid) {
+          let liq = Number(r.liquidityUsd) || 0;
+          if (liq < 3000 && typeof getPairLite === "function") {
+            try { const pl = await getPairLite(r.tokenMint); liq = Number(pl && pl.liquidityUsd) || 0; if (pl && pl.marketCap) r.marketCap = r.marketCap || pl.marketCap; } catch {}
+          }
+          if (liq < 3000) continue; // not realizable → skip for liquid modes
+        }
         const ciRec = callerIntel ? callerIntel(r.tokenMint) : null;
         const ci = ciRec && ciRec.signal ? ciRec.signal : null;
-        const conv = convictionMult(r, rep, sm, ci, { unprovenCap: P.unprovenConvCap, provenCap: P.provenConvCap });
+        const conv = convictionMult(r, rep, sm, ci, { unprovenCap: P.unprovenConvCap, provenCap: P.provenConvCap, scalp: P.liquid });
         if (conv < 1.0) continue;                                 // must carry real smart-money confluence
         let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv, state.maxTradeSol));
         if (!canOpen(state, size)) break;
-        record("info", `🐳 smart-money entry ${r.symbol || shortMint(r.tokenMint)} @ MC $${Math.round(Number(r.marketCap) || 0)} — ${sm.kol ? "KOL " : ""}${sm.winners || 0} winner-wallet(s) → conv ${conv.toFixed(2)}`);
-        await openPosition(r, size, freshScore(r), dev, rep, sm);
+        record("info", `🐳 copy-trade ${r.symbol || shortMint(r.tokenMint)} @ MC $${Math.round(Number(r.marketCap) || 0)} — ${sm.kol ? "KOL " : ""}${sm.winners || 0} winner-wallet(s) → conv ${conv.toFixed(2)}`);
+        await openPosition(r, size, P.liquid ? liquidScore(r) : freshScore(r), dev, rep, sm);
         state.lastOpenAt = now();
         openedThisCycle += 1;
       }

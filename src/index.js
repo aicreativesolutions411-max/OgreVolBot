@@ -935,6 +935,52 @@ function combinedDevRep(dev) {
   return { trades, runners, rugs, avgPeak, peakSum: minePct + obsPct, pnl: mine?.pnl || 0 };
 }
 
+// TRENDING feed cache for the autopilot liquid hunt — the boosted/trending tokens (dexscreener
+// boosts/profiles) are coins of ANY age that are "starting to move" (a 6-month-old coin can boost
+// and run). Enriched with full market data in ONE batch call, refreshed at most every ~30s so the
+// hot scan path never hammers the API. The engine's liquidScore + safety gates still vet every row.
+let autopilotTrendingCache = { at: 0, rows: [] };
+async function autopilotTrendingRows() {
+  if (Date.now() - autopilotTrendingCache.at < 30_000) return autopilotTrendingCache.rows;
+  let rows = [];
+  try {
+    const cands = await fetchSniperCandidates({ ttlMs: 15_000 }).catch(() => []);
+    const mints = [...new Set((cands || []).map((c) => c && c.tokenMint).filter(Boolean))].slice(0, 30);
+    if (mints.length) {
+      const pairs = await fetchDexScreenerTokenPairsBatch(mints).catch(() => []);
+      const seen = new Set();
+      for (const mint of mints) {
+        const p = bestDexPairForToken(mint, pairs);
+        if (!p) continue;
+        const tm = (p.baseToken && p.baseToken.address) || mint;
+        if (seen.has(tm)) continue;
+        seen.add(tm);
+        const created = Number(p.pairCreatedAt) || 0;
+        rows.push({
+          tokenMint: tm,
+          symbol: (p.baseToken && p.baseToken.symbol) || "",
+          pairAgeSeconds: created ? Math.max(0, Math.round((Date.now() - created) / 1000)) : undefined,
+          marketCap: Number(p.marketCap || p.fdv) || 0,
+          liquidityUsd: Number(p.liquidity && p.liquidity.usd) || 0,
+          volume5m: Number(p.volume && p.volume.m5) || 0,
+          volumeH1: Number(p.volume && p.volume.h1) || 0,
+          buys5m: Number(p.txns && p.txns.m5 && p.txns.m5.buys) || 0,
+          sells5m: Number(p.txns && p.txns.m5 && p.txns.m5.sells) || 0,
+          buysH1: Number(p.txns && p.txns.h1 && p.txns.h1.buys) || 0,
+          sellsH1: Number(p.txns && p.txns.h1 && p.txns.h1.sells) || 0,
+          m5: Number.isFinite(Number(p.priceChange && p.priceChange.m5)) ? Number(p.priceChange.m5) : undefined,
+          h1: Number.isFinite(Number(p.priceChange && p.priceChange.h1)) ? Number(p.priceChange.h1) : undefined,
+          sniperCount: 0,
+          bestPickScore: 0,
+          _trending: true
+        });
+      }
+    }
+  } catch {}
+  autopilotTrendingCache = { at: Date.now(), rows };
+  return rows;
+}
+
 const autopilotEngine = createAutopilotEngine({
   exitMs: 1000,
   huntMs: 5000,
@@ -1013,6 +1059,9 @@ const autopilotEngine = createAutopilotEngine({
     }
     let feeds = [];
     try { feeds = await Promise.all(jobs); } catch {}
+    // TRENDING/boosted tokens (any age — a 6-month-old coin that's "starting to move" shows up
+    // here, not in the age-windowed launch buckets). Merged in and vetted by the same gates.
+    try { const trending = await autopilotTrendingRows(); if (trending && trending.length) feeds.push({ rows: trending }); } catch {}
     const seen = new Set();
     const out = [];
     for (const feed of feeds) {

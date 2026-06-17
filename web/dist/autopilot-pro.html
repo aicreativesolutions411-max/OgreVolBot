@@ -442,7 +442,9 @@ function driveScene(s){
   if(evt){ playClip(evt,true); try{blip(evt==="win"||evt==="victory"?"ok":"click");}catch{}
     if(evt==="victory")pushFeed("🎉 VICTORY — banked "+(bigG>0?bigG.toLocaleString()+"% ":"")+"on one trade!","");
     else if(evt==="win")pushFeed("🏆 Big win banked — "+(1+Math.max(bigG,100)/100).toFixed(1)+"x","");
-    else if(evt==="rugdodge")pushFeed("🛡️ Avoided a risky setup","r"); return; }
+    // rugdodge: PLAY the clip (it looks like it's thinking/working) but DON'T announce the skip in
+    // text — the user doesn't want "avoided/cold" chatter, just the live ogre animation.
+    return; }
   if(now>=clipEventUntil) playClip(ambientClip(s),false);  // back to the ambient loop
 }
 // when a one-shot event clip ends, drop straight back to the ambient loop
@@ -533,12 +535,13 @@ function tickerTick(){
   const s=lastSceneS;
   if(!(s&&s.running)){ tk.className="tk"; tk.innerHTML='<span class="r-dot"></span>Reactor idle — wake the ogre to begin'; return; }
   if(feed.length<3){ const t=String(s.tape||"NORMAL").toUpperCase(); const holding=(s.open||[]).length>0;
-    // Honest, calm status — when it isn't sure it says so (patient / selective), instead of
-    // always implying frantic speed. It's selective by design; that's why it sometimes waits.
-    const line = t==="HOT" ? "🔥 Tape's warm — taking the clean setups"
-      : (t==="COLD"||t==="PROBE") ? "🌙 Quiet tape — staying patient, protecting your stake"
-      : holding ? "👀 Holding — managing the open trades"
-      : "🔍 Watching for a clean setup — only takes the good ones";
+    // Always reads like it's WORKING/thinking — never "cold" or "stopped". Even when the tape is
+    // quiet it's actively reading the market and lining up the next entry (the ogre clip keeps
+    // playing alongside this). No "cold/avoided/paused" chatter — that made it feel stopped.
+    const line = t==="HOT" ? "🔥 Market's hot — locking onto the movers"
+      : (t==="COLD"||t==="PROBE") ? "🧠 Reading the market — lining up the next clean entry"
+      : holding ? "👀 Working the open trades + scanning for the next"
+      : "🔍 Scanning the market — hunting the next winner";
     if(!feed.some(f=>f.text===line))feed.push({text:line,cls:""}); }
   if(!feed.length)return;
   const item=feed[feedIdx%feed.length]; feedIdx++;
