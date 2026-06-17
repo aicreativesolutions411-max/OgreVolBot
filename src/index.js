@@ -998,9 +998,10 @@ const autopilotEngine = createAutopilotEngine({
     }));
   },
   // SCALP feed: LIQUID last-hour movers (real depth + traded volume → realizable marks, clean
-  // fills). Sourced from the data-driven volume/momentum sorts (which pull the under-1h window),
-  // deduped, and filtered to genuine depth (>= $20k liquidity) so phantom dust never reaches the
-  // scalp brain. The engine still applies its own liquidScore + $20k minLiqAbs gate on top.
+  // fills). Sourced from the data-driven liquidity/volume/momentum sorts (which pull the under-1h
+  // window), deduped, sorted deepest-liquidity-first. Rows with a KNOWN-thin pool (< $1.5k) are
+  // dropped here; rows with no reported liquidity are KEPT (the engine's liquidScore + volume gate
+  // + fast in/out exits vet them) so the feed is never empty when the window has movers.
   getLiquidFeed: async () => {
     let vol = null, mom = null, liqf = null;
     try {
@@ -1012,16 +1013,16 @@ const autopilotEngine = createAutopilotEngine({
     } catch {}
     const seen = new Set();
     const out = [];
-    // $6k is the real-depth floor for the last-hour window (those movers run ~$4-15k liquidity;
-    // a $20k floor returned an EMPTY feed every cycle, so scalp fell back to fresh dust and bought
-    // nothing). $6k still filters pure phantom dust and fills tiny scalp bets cleanly; the engine's
-    // liquidScore + minLiqAbs do the finer gating. Liquidity sort surfaces the deepest coins first.
     for (const feed of [liqf, vol, mom]) {
       for (const r of (Array.isArray(feed?.rows) ? feed.rows : [])) {
         if (!r || !r.tokenMint || seen.has(r.tokenMint)) continue;
-        // Keep real depth but be reachable: $3k fills a tiny scalp bet cleanly and the last-hour
-        // window has these; a higher floor returned an empty feed so scalp found nothing.
-        if ((Number(r.liquidityUsd) || 0) < 3000) continue;
+        // Only drop KNOWN-thin coins. Many last-hour movers (esp. pump.fun bonding curves)
+        // report NO liquidity number at all (null/0) — hard-dropping those returned an EMPTY
+        // feed every cycle and scalp never bought. So keep unknown-liq rows (the engine's
+        // liquidScore + volume gate + fast in/out exits vet them) and only reject coins whose
+        // KNOWN liquidity is genuinely thin (< $1.5k). Liquidity-sort still surfaces deepest first.
+        const lq = Number(r.liquidityUsd) || 0;
+        if (lq > 0 && lq < 1500) continue;
         seen.add(r.tokenMint);
         out.push({
           tokenMint: r.tokenMint,

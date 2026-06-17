@@ -122,7 +122,7 @@ test("terminal nav exposes the requested tool set without blank links", () => {
 });
 
 test("mobile overflow and sponsor ticker hardening stays in place", () => {
-  assert.match(htmlSource, /<meta name="viewport" content="width=device-width, initial-scale=1">/);
+  assert.match(htmlSource, /<meta name="viewport" content="width=device-width, initial-scale=1(?:, viewport-fit=cover)?">/);
   assert.match(overridesSource, /FUNCTIONAL_QA_SWEEP_20260608_V1/);
   assert.match(overridesSource, /overflow-x: clip !important/);
   assert.match(overridesSource, /main\.shell\[data-app\] \.swamp-market-ticker,[\s\S]*main\.shell\[data-app\] \.swamp-ticker-mask/);

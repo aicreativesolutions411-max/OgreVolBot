@@ -774,12 +774,12 @@ test("liquidScore: a liquid, buy-led, early-momentum mover beats a thin, fading 
   assert.ok(liquidScore(strong) > liquidScore(late), "an early push beats a blown-off top");
 });
 
-test("scalp: flexible higher-MC window, hard $20k liquidity floor, fast bank-and-recycle exits", () => {
+test("scalp: flexible higher-MC window, known-thin liquidity floor, fast bank-and-recycle exits", () => {
   const P = aggParams(baseState({ mode: "scalp" }));
   assert.ok(P.scalp, "scalp flag is set");
-  assert.ok(P.mcFloor >= 6000 && P.mcFloor < 15000, "scalp floors above the dust zone but reachable in the last-hour window");
+  assert.ok(P.mcFloor >= 4000 && P.mcFloor < 10000, "scalp floors just above dust but reachable in the last-hour window");
   assert.ok(P.mcCeil >= 1000000, "scalp reaches into the millions (flexible MC)");
-  assert.ok(P.minLiqAbs >= 3000, "scalp enforces a hard absolute liquidity floor (anti-phantom, but achievable)");
+  assert.ok(P.minLiqAbs >= 3000, "scalp keeps an absolute depth floor for coins that REPORT liquidity (anti-phantom)");
   assert.equal(P.liqFrac, 0, "scalp disables the RELATIVE liquidity gate (abs floor only)");
   assert.ok(P.tp1 <= 16, "scalp banks the first pop fast (~14%)");
   assert.ok(P.tp1Pct >= 80, "scalp banks the BULK at the first pop");
@@ -797,10 +797,14 @@ test("scalp: accepts a deep-liquidity $1M mover (the relative gate would reject)
   const relGateCoin = goodRow({ marketCap: 70000, liquidityUsd: 20000, pairAgeSeconds: 600, volume5m: 15000, buys5m: 40, sells5m: 12, m5: 10, h1: 20, bestPickScore: 60 });
   assert.equal(entryReject(relGateCoin, aggParams(baseState({ mode: "grind" }))), "liquidity", "grind rejects it on the relative liquidity gate");
   assert.equal(entryReject(relGateCoin, P), null, "scalp accepts it (relative gate disabled, abs floor met)");
-  // Thin liquidity (< $3k) is rejected even at a fine MC — this is the phantom-mark guard.
+  // KNOWN-thin liquidity (reported, < $3k) is rejected even at a fine MC — the phantom-mark guard.
   assert.equal(entryReject(goodRow({ marketCap: 500000, liquidityUsd: 2000, pairAgeSeconds: 600, volume5m: 5000, buys5m: 30, sells5m: 10 }), P), "liquidity");
-  // Low-cap dust is out of scalp's window entirely.
-  assert.equal(entryReject(goodRow({ marketCap: 4000, liquidityUsd: 25000, pairAgeSeconds: 600, volume5m: 5000 }), P), "mc");
+  // UNKNOWN liquidity (no number reported — common on last-hour pump.fun movers) is NOT rejected
+  // for liquidity: the feed-empty starvation came from rejecting these. liquidScore + the volume
+  // gate + fast exits vet them instead. A buy-led mover in-band with healthy volume passes.
+  assert.equal(entryReject(goodRow({ marketCap: 500000, liquidityUsd: 0, pairAgeSeconds: 600, volume5m: 5000, buys5m: 40, sells5m: 8, m5: 8, h1: 15 }), P), null);
+  // Low-cap dust (below the $4k floor) is out of scalp's window entirely.
+  assert.equal(entryReject(goodRow({ marketCap: 3000, liquidityUsd: 25000, pairAgeSeconds: 600, volume5m: 5000 }), P), "mc");
 });
 
 test("scalp: banks the bulk fast at the first ~14% pop (high hit-rate, not a moonshot)", () => {

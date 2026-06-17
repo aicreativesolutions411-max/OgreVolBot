@@ -1025,6 +1025,7 @@ function routeForPath(pathname = window.location.pathname) {
   if (pathname.startsWith("/login") || pathname.startsWith("/account/login")) return "login";
   if (pathname.startsWith("/connect")) return "connect";
   if (pathname.startsWith("/ogre-tek")) return "terminal";
+  if (pathname.startsWith("/launch-coin")) return "terminal";
   if (pathname.startsWith("/terminal")) return "terminal";
   return "intro";
 }
@@ -8562,7 +8563,7 @@ function ogreAutopilotPanelHtml() {
         <div>
           <h3>Autopilot</h3>
           <p>Auto-ape the best <strong>${escapeHtml(catLabel)}</strong> pick on a timer, using the TP/SL/timer/slippage and wallets above — within hard guards.</p>
-          <p style="margin-top:6px"><a href="/pro" style="color:#8dff5a;font-weight:800;text-decoration:none">⚡ Open SlimeWire Auto (Pro) →</a></p>
+          <p style="margin-top:6px"><a href="/autopilot-pro" style="color:#8dff5a;font-weight:800;text-decoration:none">⚡ Open SlimeWire Auto (Pro) →</a></p>
         </div>
         <label class="ogre-autopilot-switch">
           <input type="checkbox" data-autopilot-enabled ${enabled ? "checked" : ""}>
@@ -8622,7 +8623,7 @@ function ogreAiHtml() {
 
         <div class="ogre-ai-tier">
           <span class="tier-badge">CO-PILOT</span>
-          <span class="tier-copy">Ogre A.I. scans, apes the best setup, and arms your exits — you stay in the loop. Want it fully hands-off with smart-money entries, laddered banking &amp; auto cash-out? <a href="/pro" class="tier-link">Unlock Pro Autopilot →</a></span>
+          <span class="tier-copy">Ogre A.I. scans, apes the best setup, and arms your exits — you stay in the loop. Want it fully hands-off with smart-money entries, laddered banking &amp; auto cash-out? <a href="/autopilot-pro" class="tier-link">Unlock Pro Autopilot →</a></span>
         </div>
 
         <div class="ogre-cat-field" data-preserve-focus>
@@ -24482,7 +24483,7 @@ function buildDesktopNavDropBar() {
   bar.setAttribute("data-nav-drop", "");
   bar.setAttribute("aria-label", "Portal areas");
   // Premium standalone "Pro" pill (its own thing, not buried in a dropdown) → the /pro app.
-  const proPill = `<a class="nav-drop-pro" href="/pro" title="SlimeWire Auto — Pro autopilot" aria-label="Pro autopilot">
+  const proPill = `<a class="nav-drop-pro" href="/autopilot-pro" title="SlimeWire Auto — Pro autopilot" aria-label="Pro autopilot">
       <span class="nav-drop-pro-emblem" aria-hidden="true"></span>
     </a>`;
   // Items are [tab, label] (an SPA tab → <button data-tab>) OR [id, label, href] (a real page → <a>).

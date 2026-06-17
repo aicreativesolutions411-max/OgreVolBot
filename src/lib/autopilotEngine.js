@@ -110,10 +110,11 @@ export function aggParams(state) {
   // rug-heavy tape. ~50 passes solid survived coins, filters thin/dumping ones.
   if (grind) minScore = 46 + ((state.tune && state.tune.scoreBonus) || 0);
   // SCALP gates on liquidScore (liquidity + turnover + early buy-led momentum), NOT freshScore —
-  // its bar lives on that scale. ~36 passes genuinely liquid, buy-led movers (real last-hour data
-  // often lacks m5 momentum, so a 44 bar was too high and starved it) while still filtering thin/
-  // fading ones. Stays adaptive: the auto-tuner's scoreBonus still raises it in cold tape.
-  if (scalp) minScore = 30 + ((state.tune && state.tune.scoreBonus) || 0);
+  // its bar lives on that scale. ~22 passes genuinely liquid/active, buy-led movers: real last-hour
+  // rows often lack BOTH m5 momentum AND a reported liquidity number, so a higher bar starved it to
+  // zero entries. 22 is reachable from buy-led flow + a sane MC band alone, while still docking
+  // thin/fading/dumping coins. Stays adaptive: the auto-tuner's scoreBonus raises it in cold tape.
+  if (scalp) minScore = 22 + ((state.tune && state.tune.scoreBonus) || 0);
 
   // ENTRY MC WINDOW. Default: tiny floor (a low-MC runner like ZUL +56% @ $1973 stays in),
   // ceiling 20k (these are fresh launches). GRIND skips the brand-new sub-$5k curve — where
@@ -125,16 +126,17 @@ export function aggParams(state) {
   // phantom-spiked (Specs fake +400% that couldn't fill). Float the floor above the
   // instant-rug/phantom zone. Frequency drops, but that's the price of not bleeding —
   // the real higher-frequency edge is smart-money copy, not aping fresher dust.
-  // SCALP takes a FLEXIBLE MC band (not low-cap dust) — $15k..$12M — where there's real liquidity
-  // to fill clean. $15k floor sits above the instant-rug/phantom dust zone but is reachable in the
-  // last-hour window (a $30k floor starved it). grind stays mid; default is the fresh sub-$20k.
-  const mcFloor = scalp ? 6000 : grind ? 6000 : 1800;
+  // SCALP takes a FLEXIBLE MC band (not micro dust) — $4k..$12M — where there's enough size to fill
+  // a tiny bet. The $4k floor sits just above pure phantom dust but stays reachable in the last-hour
+  // window (higher floors starved it); the real depth/quality vetting is liquidScore + the volume
+  // gate + fast exits, not the MC floor. grind stays mid; default is the fresh sub-$20k.
+  const mcFloor = scalp ? 4000 : grind ? 6000 : 1800;
   const mcCeil = scalp ? 12000000 : grind ? 80000 : 20000;
-  // ANTI-PHANTOM hard liquidity floor: a phantom +400% spike comes from a thin curve where one
-  // tiny buy moves the marked cap but nothing can actually fill. Require REAL depth so those
-  // un-sellable coins never pass. SCALP asks for $6k — enough to fill its tiny bets cleanly and
-  // filter pure phantom dust, while still being achievable in the last-hour window (a $20k floor
-  // returned an empty feed, so scalp bought nothing); grind asks for $4k.
+  // ANTI-PHANTOM depth floor — applied ONLY to coins that REPORT a liquidity number (see
+  // entryReject). A phantom +400% spike comes from a thin curve where one tiny buy moves the marked
+  // cap but nothing can fill, so a coin whose KNOWN liquidity is below this floor is rejected.
+  // Coins that report no liquidity at all are NOT rejected here (that bypass-closer starved scalp
+  // to an empty feed) — liquidScore + the volume gate + fast exits vet those. grind asks for $4k.
   const minLiqAbs = scalp ? 3000 : grind ? 4000 : 0;
   // GRIND waits out the first ~15s (the worst instant-rug/sniper-dump seconds — the fresh
   // feed is mostly sub-30s, so a 45s gate starved it to zero entries) and asks for slightly
@@ -511,9 +513,13 @@ export function entryReject(row, P) {
   if (!Number.isFinite(age) || age < minAge || age > maxAge) return "age";
   if (!Number.isFinite(mc) || mc < mcFloor || mc > mcCeil) return "mc";
   if (liqFrac > 0 && liq > 0 && liq < mc * liqFrac) return "liquidity";
-  // GRIND/SCALP: liquidity must be PRESENT and meet an absolute floor — kills phantom thin-curve
-  // coins (the ones that flash fake +400% but can't fill). Closes the liq===0 bypass too.
-  if (P.minLiqAbs && (!(liq > 0) || liq < P.minLiqAbs)) return "liquidity";
+  // GRIND/SCALP absolute depth floor — kills coins whose KNOWN liquidity is genuinely thin (the
+  // ones that flash fake +400% but can't fill). NOTE: only rejects when liquidity is REPORTED and
+  // below the floor. Many real last-hour movers (esp. pump.fun curves) report NO liquidity number
+  // at all; rejecting those (the old `!(liq>0)` bypass-closer) starved scalp to an empty feed and
+  // it never traded. Unknown-liq rows are let through and judged by liquidScore + the volume gate
+  // below; scalp's fast in/out exits + honest realized-anchored display handle the residual risk.
+  if (P.minLiqAbs && liq > 0 && liq < P.minLiqAbs) return "liquidity";
   if (vol < 25) return "volume";
   if (buys > 0 && sells > buys * 2 + 3) return "dumping";
   // SCALP scores liquid movers (liquidScore); GRIND scores survivors (grindScore); the rest use
@@ -1425,13 +1431,14 @@ export function createAutopilotEngine(deps) {
 
   async function hunt() {
     let rows = [];
-    // SCALP hunts the LIQUID last-hour feed (real depth/volume) so its marks are sellable. It does
-    // NOT fall back to the fresh-dust feed — its strict liquid gates would reject all of it (that
-    // was the "48 fresh, 0 passed" bug), and trading dust is the exact thing scalp exists to avoid.
-    // If the liquid feed is momentarily empty, it simply waits for the next cycle.
+    // SCALP prefers the LIQUID last-hour feed (real depth → realizable marks). But the last-hour
+    // window is often thin, so rather than sit idle forever it FALLS BACK to the fresh feed and
+    // trades those with its fast in/out exits — a trading scalp beats a waiting one. (The honest
+    // realized-anchored display keeps phantom dust marks out of the headline regardless.)
     const useLiquid = state.mode === "scalp" && typeof getLiquidFeed === "function";
     try {
       rows = useLiquid ? await getLiquidFeed() : await getFreshFeed();
+      if (useLiquid && (!Array.isArray(rows) || !rows.length)) rows = await getFreshFeed();
     } catch (e) {
       record("warn", `feed error: ${e && e.message}`);
       return;
@@ -1439,7 +1446,7 @@ export function createAutopilotEngine(deps) {
     if (!Array.isArray(rows) || !rows.length) {
       if (now() - (state.lastScanLogAt || 0) > 45_000) {
         state.lastScanLogAt = now();
-        record("info", useLiquid ? "🔍 scanning — no liquid movers with real depth right now (waiting)" : "🔍 scanning — feed quiet (0 fresh pairs right now)");
+        record("info", "🔍 scanning — feed quiet (0 fresh pairs right now)");
       }
       return;
     }

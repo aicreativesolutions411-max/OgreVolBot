@@ -565,7 +565,7 @@ $("trialBtn").addEventListener("click", async () => {
   const r = await api("/api/web/autopilot/trial", { method:"POST", body:JSON.stringify({ minutes: mins }) });
   $("trialBtn").textContent = "🎟️ Generate access code"; $("trialBtn").disabled = false;
   if (r && r.ok && r.code) {
-    const link = location.origin + "/pro?code=" + encodeURIComponent(r.code);
+    const link = location.origin + "/autopilot-pro?code=" + encodeURIComponent(r.code);
     TRIAL_CODES.unshift({ code:r.code, mins:r.capMinutes, link });
     $("trialMsg").innerHTML = '<span class="ok">✅ '+r.capMinutes+'-min pass created. Send them the link (or the code).</span>';
     renderTrialCodes();
