@@ -686,6 +686,14 @@ const obsCoins = new Map();  // mint -> { dev, firstMc, maxMc, lastMc, at, seen,
 // Lets the bot lean harder when proven winners / tracked KOLs are aping a coin.
 const walletObs = new Map(); // wallet -> { coins, ran, rugged, peakSum }
 const KOL_WALLETS = new Set(String(process.env.KOL_WALLETS || "").split(",").map((s) => s.trim()).filter(Boolean));
+// AUTO-KOL ROSTER: trusted KOL wallets HARVESTED from our own KOL tracker leaderboard (Solana
+// Tracker "top"), so the bot copy-trades any proven KOL with a real win-rate — no manual list.
+// The moment one of these wallets shows up in a fresh coin's early buyers, the smart-money entry
+// path follows them. Refreshed on a timer (refreshAutoKolWallets) + persisted across restarts.
+const autoKolWallets = new Map(); // wallet -> { name, winRate, roi, trades, at }
+const KOL_COPY_MIN_WINRATE = Number(process.env.KOL_COPY_MIN_WINRATE || 50); // only copy KOLs at/above this win%
+const KOL_COPY_MIN_TRADES = Number(process.env.KOL_COPY_MIN_TRADES || 30);   // ignore tiny-sample flukes
+function isKolWallet(w) { return KOL_WALLETS.has(w) || autoKolWallets.has(w); }
 
 // MARKET-WIDE TAPE: rolling record of FINALIZED market outcomes across every coin the
 // observatory watches (not just ours). The autopilot reads this to know if the WHOLE
@@ -775,7 +783,7 @@ function smartMoneyScore(mint) {
     let winners = 0, kol = false;
     const exitMults = [];
     for (const w of buyers) {
-      if (KOL_WALLETS.has(w)) kol = true;
+      if (isKolWallet(w)) kol = true;
       const r = walletObs.get(w);
       if (isWinnerWallet(r)) {
         winners += 1;
@@ -793,7 +801,7 @@ function smartMoneyScore(mint) {
 // AND a deep sample of scored coins. Until then it's pure observation. KOLs you list
 // in KOL_WALLETS are trusted immediately, so any KOL also flips it on.
 function smartMoneyReady() {
-  if (KOL_WALLETS.size > 0) return true;
+  if (KOL_WALLETS.size > 0 || autoKolWallets.size > 0) return true;
   let winners = 0, coins = 0;
   for (const r of walletObs.values()) { if (isWinnerWallet(r)) winners += 1; coins += (r.coins || 0); }
   return winners >= 8 && coins >= 300;
@@ -851,6 +859,44 @@ async function loadWalletObservatory() {
 }
 async function saveWalletObservatory() {
   try { await writeJsonFile(WALLET_OBS_FILE, { wallets: Object.fromEntries(walletObs), savedAt: Date.now() }); } catch {}
+}
+// AUTO-KOL: harvest proven KOL wallets (real win-rate) from our KOL tracker leaderboard so the bot
+// can copy them. Persisted so the roster survives restarts and keeps growing.
+const AUTO_KOL_FILE = path.join(CONFIG.dataDir, "auto-kol-wallets.json");
+async function loadAutoKolWallets() {
+  try {
+    const j = await readJson(AUTO_KOL_FILE).catch(() => null);
+    if (j && j.wallets) for (const [w, r] of Object.entries(j.wallets)) autoKolWallets.set(w, r);
+  } catch {}
+}
+async function saveAutoKolWallets() {
+  try { await writeJsonFile(AUTO_KOL_FILE, { wallets: Object.fromEntries(autoKolWallets), savedAt: Date.now() }); } catch {}
+}
+async function refreshAutoKolWallets() {
+  try {
+    // "top" = the Solana Tracker KOL PnL leaderboard — wallets WITH a proven win-rate + trade count.
+    const scan = await buildKolScan("autopilot", "top", "").catch(() => null);
+    const kols = (scan && Array.isArray(scan.kols)) ? scan.kols : [];
+    let added = 0;
+    for (const k of kols) {
+      const w = String(k.wallet || "").trim();
+      if (!w) continue;
+      const win = Number(k.winRatePct);
+      const trades = Number(k.trades || k.callsTracked || 0);
+      if (!Number.isFinite(win) || win < KOL_COPY_MIN_WINRATE) continue;   // must clear the win-rate bar
+      if (trades && trades < KOL_COPY_MIN_TRADES) continue;                // and have a real sample
+      if (!autoKolWallets.has(w)) added += 1;
+      autoKolWallets.set(w, { name: k.name || shortMint(w), winRate: win, roi: Number(k.roiPct) || null, trades: trades || null, at: Date.now() });
+    }
+    // Keep the roster bounded to the strongest win-rates.
+    if (autoKolWallets.size > 500) {
+      const top = [...autoKolWallets.entries()].sort((a, b) => (b[1].winRate || 0) - (a[1].winRate || 0)).slice(0, 500);
+      autoKolWallets.clear();
+      for (const [w, r] of top) autoKolWallets.set(w, r);
+    }
+    if (added) { void saveAutoKolWallets(); }
+    console.log(`[auto-kol] roster ${autoKolWallets.size} proven KOLs (+${added}; win>=${KOL_COPY_MIN_WINRATE}%, trades>=${KOL_COPY_MIN_TRADES})`);
+  } catch (e) { console.warn(`[auto-kol] ${e && e.message}`); }
 }
 // Persist the market-wide tape so the bot isn't "blind" (marketTape() => null) for the
 // first ~30 min after a redeploy. On load we keep only entries inside the 30-min window;
@@ -947,6 +993,10 @@ function startDevObservatory() {
   void loadMarketTape();
   void loadCoinBanners();
   setInterval(sampleDevObservatory, 45_000);
+  // AUTO-KOL: load the saved roster, then harvest proven KOLs from the tracker leaderboard now and
+  // every 10 min so the copy-trade roster stays fresh (cheap — the KOL scan is cached internally).
+  void loadAutoKolWallets().then(() => { void refreshAutoKolWallets(); });
+  setInterval(() => { void refreshAutoKolWallets(); }, 10 * 60 * 1000);
 }
 // Combined dev reputation = our own trades + the market-wide observatory.
 function combinedDevRep(dev) {
@@ -3565,7 +3615,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
               runners100: trades.filter((t) => (t.peakPct || 0) >= 100).length,
               runners400: trades.filter((t) => (t.peakPct || 0) >= 400).length,
               netPnlSol: r2(trades.reduce((a, t) => a + (Number(t.pnl) || 0), 0)),
-              observatory: (() => { let s = {}; try { s = pumpPortalStream.stats() || {}; } catch {} return { devsTracked: devObs.size, coinsWatching: obsCoins.size, walletsTracked: walletObs.size, winnerWallets: [...walletObs.values()].filter(isWinnerWallet).length, smartMoneyActive: smartMoneyReady(), streamConnected: Boolean(s.connected), streamLastMsgSec: Number.isFinite(s.lastMessageAgoMs) ? Math.round(s.lastMessageAgoMs / 1000) : null, marketSample: (marketTape()?.sample) || 0 }; })(),
+              observatory: (() => { let s = {}; try { s = pumpPortalStream.stats() || {}; } catch {} return { devsTracked: devObs.size, coinsWatching: obsCoins.size, walletsTracked: walletObs.size, winnerWallets: [...walletObs.values()].filter(isWinnerWallet).length, autoKols: autoKolWallets.size, smartMoneyActive: smartMoneyReady(), streamConnected: Boolean(s.connected), streamLastMsgSec: Number.isFinite(s.lastMessageAgoMs) ? Math.round(s.lastMessageAgoMs / 1000) : null, marketSample: (marketTape()?.sample) || 0 }; })(),
               marketTape: marketTape(),
               topWallets: [...walletObs.entries()].filter(([, r]) => isWinnerWallet(r)).sort((a, b) => b[1].peakSum - a[1].peakSum).slice(0, 8).map(([w, r]) => ({ wallet: shortMint(w), kol: KOL_WALLETS.has(w), coins: r.coins, ran: r.ran, rugged: r.rugged, avgPeak: r.coins ? r2(r.peakSum / r.coins) : 0 })),
               byScore: bucket((t) => t.fs == null ? null : (t.fs < 57 ? "<57" : t.fs < 62 ? "57-61" : t.fs < 67 ? "62-66" : t.fs < 72 ? "67-71" : "72+")),
