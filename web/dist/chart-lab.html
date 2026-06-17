@@ -150,8 +150,12 @@
   function mk(prev){var o=prev,drift=(Math.random()-0.45)*3.0,c=Math.max(4,o+drift);var h=Math.max(o,c)+Math.random()*1.6+0.4,l=Math.min(o,c)-Math.random()*1.6-0.4;var up=c>=o;var ss=up?0.24+Math.random()*0.18:0.62+Math.random()*0.24;var vol=Math.random()<0.18?(0.78+Math.random()*0.22):(0.16+Math.random()*0.42);return {o:o,h:h,l:l,c:c,up:up,ss:ss,vol:vol,ph:Math.random()*6.28,fl:Math.random()<0.5};}
   for(var i=0;i<N;i++){bars.push(mk(price));price=bars[i].c;}
   var AX=56,BX=20,TOP=14;
-  function bnds(){var mn=1e9,mx=-1e9;bars.forEach(function(b){mn=Math.min(mn,b.l);mx=Math.max(mx,b.h);});var pad=(mx-mn)*0.12+0.6;return {mn:mn-pad,mx:mx+pad};}
+  // Axis bounds: padding MUST be RELATIVE to the price range. (An old absolute +0.6 — tuned for the
+  // synthetic preview's ~4-30 prices — blew up on real tiny prices like 0.0000088: pad≈0.6 made the
+  // range ±0.6, and ×mcScale(~1e9) rendered the axis as $600M over -$5.9B. Relative pad fixes it.)
+  function bnds(){var mn=1e9,mx=-1e9;bars.forEach(function(b){mn=Math.min(mn,b.l);mx=Math.max(mx,b.h);});if(!isFinite(mn)||!isFinite(mx)||mn>mx){mn=0;mx=1;}var pad=(mx-mn)*0.12;if(!(pad>0))pad=(Math.abs(mx)||1)*0.04;return {mn:Math.max(0,mn-pad),mx:mx+pad};}
   var cur=bnds(),t=0,lastSpawn=0,lastDraw=0;
+  var liveTarget=null,dispClose=null,gtPool=null; // live-movement: target price the last candle eases toward, the displayed close, and the cached GT pool for the fast price poll
   function fmtMc(v){return fmtMcRaw(v*mcScale);}
   function pxs(p){return '$0.000'+String(Math.max(1,Math.round(p*8.3))).padStart(3,'0').slice(0,3);}
   function rrect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
@@ -169,9 +173,11 @@
     ctx.drawImage(tex,0,ih*0.66,iw,ih*0.34, dx-w*0.10,y2,w*1.2,dripH);        // drips from the SAME candle material (matches the body exactly)
     ctx.restore();
   }
-  // STATIC render — drawn ONCE per data update (no requestAnimationFrame loop), so it can never
-  // flash/strobe. Candles, drips, volume + glow are all static between ticks; the chart repaints
-  // only when new data arrives (poll) or on resize.
+  // Render one frame. A single rAF loop (see bottom) drives this so the chart MOVES like a live
+  // chart — the last candle EASES toward the latest real price (green up / red down) and the volume
+  // gel bobs off the clock. This is smooth motion, NOT the old flash: the flash was iframe RELOADS
+  // showing synthetic prices; here we only ever draw REAL data (clean "Loading" until it arrives),
+  // ease instead of snap, and the iframe is preserved by mint so it never remounts.
   function frame(){
     var tb=bnds();cur.mn=tb.mn;cur.mx=tb.mx;
     var plotR=W-AX,plotB=H-BX,ph=plotB-TOP,step=plotR/N;
@@ -232,8 +238,14 @@
     var cs=d.candles.slice(-N),nb=cs.map(function(k,idx){var up=k.c>=k.o;return {o:k.o,h:k.h,l:k.l,c:k.c,up:up,ss:up?0.4:0.66,vol:Math.max(0.0001,k.v),ph:(idx*1.37)%6.28,fl:idx%2===0};});
     while(nb.length<N)nb.unshift(Object.assign({},nb[0]));
     bars=nb;usdMode=true;chg24=Number(d.change24h);realPrice=(Number(d.priceUsd)>0)?Number(d.priceUsd):null;
-    var realMc=Number(d.mc)||0; if(realMc<=0)realMc=MCP>0?MCP:(Number(d.fdv)||0); // real MC first, app-passed MC fills GT gaps, FDV only last resort (was inflating the chart MC)
+    // MC: the app-passed anchor (MCP) is AUTHORITATIVE — it's the exact value the top bar shows, so the
+    // chart's MC matches it. GT's market_cap_usd/fdv only fill in when the app didn't pass one.
+    var realMc=MCP>0?MCP:(Number(d.mc)||Number(d.fdv)||0);
     if(realMc>0&&bars[N-1].c>0)mcScale=realMc/bars[N-1].c;
+    // Live-glide: keep the previously displayed last close and let the rAF loop ease it toward the new
+    // real close (so a poll update slides in smoothly instead of snapping). First load snaps to real.
+    liveTarget=bars[N-1].c;
+    if(dispClose!=null)bars[N-1].c=dispClose; else dispClose=bars[N-1].c;
     var e;
     var symShow=SYMP||d.symbol;if(symShow&&(e=document.querySelector('.tk .sym'))){var nm=(d.name&&d.name!==symShow)?(' <span style="color:#5d8a6e;font-weight:400">· '+esc(String(d.name).slice(0,22))+'</span>'):'';e.innerHTML='$'+esc(symShow)+nm;}
     if(CA&&(e=document.querySelector('.tk .sub')))e.textContent=CA.slice(0,4)+'…'+CA.slice(-4);
@@ -242,7 +254,7 @@
     if(d.trades&&d.trades.length){var bc=0,sc=0;d.trades.forEach(function(x){if(x.side==='buy')bc++;else sc++;});if(e=document.getElementById('s_bs'))e.textContent=bc+' / '+sc;
       vclock=0;txns=d.trades.map(function(x,i){return {buy:x.side==='buy',sol:Math.round(x.usd||0),price:fmtUsd(x.price),at:-(i*3),usd:true};});}
     try{ if(CA) sessionStorage.setItem('cl:'+CA, JSON.stringify({at:Date.now(),d:{ok:1,stage:d.stage,symbol:d.symbol,name:d.name,priceUsd:d.priceUsd,mc:d.mc,fdv:d.fdv,liq:d.liq,vol24:d.vol24,change24h:d.change24h,candles:(d.candles||[]).slice(-60),trades:(d.trades||[]).slice(0,30)}})); }catch(e){}
-    refresh();return true;
+    refresh();kick();return true;
   }
   // GeckoTerminal is CORS-enabled and rate-limits by IP — so we fetch it straight from the BROWSER
   // (each user = own IP, no shared-server 429, scales free). Pump's swap-api blocks browsers (403),
@@ -254,7 +266,7 @@
     return gtj(GTB+'/tokens/'+mint+'/pools?page=1').then(function(tp){
       var pool=tp&&tp.data&&tp.data[0];
       if(!pool||!pool.attributes||!pool.attributes.address)return null;
-      var a=pool.attributes,addr=a.address,tfa=gtTf(tf);
+      var a=pool.attributes,addr=a.address,tfa=gtTf(tf);gtPool=addr; // cache for the fast live-price poll
       return gtj(GTB+'/pools/'+addr+'/ohlcv/'+tfa[0]+'?aggregate='+tfa[1]+'&limit=150&currency=usd').then(function(oh){
         var list=(oh&&oh.data&&oh.data.attributes&&oh.data.attributes.ohlcv_list)||[];
         if(!list.length)return null;
@@ -270,7 +282,7 @@
   }
   function loadServer(){fetch('/api/chart?ca='+encodeURIComponent(CA)+'&tf='+encodeURIComponent(TF)).then(function(r){return r.json();}).then(applyData).catch(function(){});}
   function loadReal(){if(!CA)return;loadGT(CA,TF).then(function(d){if(d&&d.candles&&d.candles.length)applyData(d);else loadServer();}).catch(loadServer);}
-  if(!CA){setInterval(function(){bars.push(mk(bars[N-1].c));bars.shift();vclock+=2;var nadd=1+(Math.random()<0.5?1:0);for(var z=0;z<nadd;z++)txns.unshift(newTx(0));if(txns.length>160)txns.length=160;refresh();},1700);}
+  if(!CA){setInterval(function(){bars.push(mk(bars[N-1].c));bars.shift();vclock+=2;var nadd=1+(Math.random()<0.5?1:0);for(var z=0;z<nadd;z++)txns.unshift(newTx(0));if(txns.length>160)txns.length=160;liveTarget=bars[N-1].c;dispClose=bars[N-2]?bars[N-2].c:bars[N-1].c;bars[N-1].c=dispClose;refresh();kick();},1700);}
   else{
     // Instant seamless reload: if we drew this coin moments ago, repaint the REAL data immediately
     // from sessionStorage (no synthetic flash, no empty), then refresh live.
@@ -280,7 +292,43 @@
   var _tb=document.getElementById('txtoggle');if(_tb)_tb.addEventListener('click',function(){expanded=!expanded;var tp=document.getElementById('tape');if(tp)tp.classList.toggle('expanded',expanded);_tb.textContent=expanded?'Collapse ▴':'Expand ▾';renderTape();});
   Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(b){b.addEventListener('click',function(){Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(x){x.classList.remove('on');});b.classList.add('on');TF=b.getAttribute('data-tf')||'5m';if(CA)loadReal();});});
   window.addEventListener('resize',function(){size();safeDraw();});
-  refresh();safeDraw();
+  // ---- LIVE MOVEMENT ENGINE ----------------------------------------------------------------
+  // Ease the last candle toward the latest REAL price every frame (buys push it up green, sells
+  // drag it down red), so the chart visibly moves between polls without any strobe. The MC label
+  // ticks with it (MC = price × the frozen anchor ratio, so it scales correctly).
+  function easeLive(){
+    if(liveTarget==null||!bars.length)return false;
+    var b=bars[N-1],d=liveTarget-b.c;
+    if(Math.abs(d)<=Math.abs(liveTarget||1)*1e-5){if(b.c!==liveTarget){b.c=liveTarget;dispClose=b.c;return true;}return false;}
+    b.c+=d*0.14;b.up=b.c>=b.o;b.ss=b.up?0.4:0.66;if(b.c>b.h)b.h=b.c;if(b.c<b.l)b.l=b.c;dispClose=b.c;return true;
+  }
+  var _lastLabelC=null;
+  function tickLabels(){var b=bars[N-1],e;
+    if(e=document.getElementById('s_mc'))e.textContent=fmtMc(b.c);
+    if(e=document.getElementById('px'))e.textContent=(usdMode&&realPrice)?fmtUsd(realPrice):priceLabel(b.c);}
+  // SELF-STOPPING loop: animates (eases + bobs) while the price is moving toward a new target, then
+  // fully idles — no perpetual 60fps repaint (saves battery on mobile, lets the page settle). Each
+  // new price tick (poll) calls kick() to wake it for the next glide. This is "moves like a chart",
+  // not a strobe: it paints only when there's real motion.
+  var rafId=null,idleFrames=0;
+  function loop(){
+    t+=0.016;var moving=easeLive();
+    if(moving){idleFrames=0;}else{idleFrames++;}
+    if((usdMode||!CA)&&(moving||idleFrames<8)){if(moving&&bars[N-1].c!==_lastLabelC){tickLabels();_lastLabelC=bars[N-1].c;}safeDraw();}
+    if(idleFrames>24){rafId=null;return;}          // settled → stop the loop entirely
+    rafId=requestAnimationFrame(loop);
+  }
+  function kick(){if(rafId==null){idleFrames=0;rafId=requestAnimationFrame(loop);}}
+  // Fast live-price poll (every 5s, browser IP, free): nudges the easing target between the 12s full
+  // data polls so the candle keeps moving on real ticks. Only the price moves — MC scales off the
+  // frozen app anchor when present, else off GT's live market cap.
+  function pollLivePrice(){
+    if(!CA||!usdMode||!gtPool)return;
+    gtj(GTB+'/pools/'+gtPool).then(function(pj){var a=pj&&pj.data&&pj.data.attributes;if(!a)return;
+      var p=+a.base_token_price_usd||0;if(p>0){liveTarget=p;if(realPrice!=null)realPrice=p;if(MCP<=0){var mc=+a.market_cap_usd||0;if(mc>0)mcScale=mc/p;}kick();}});
+  }
+  if(CA)setInterval(pollLivePrice,5000);
+  refresh();safeDraw();kick();
 })();
 </script>
 </body>
