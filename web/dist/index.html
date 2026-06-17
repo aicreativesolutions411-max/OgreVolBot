@@ -2,10 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <base href="/">
     <title>SlimeWire</title>
     <meta name="description" content="SlimeWire web dashboard for meme token trading, wallets, balances, positions, PnL, and sniper scans.">
+    <!-- PWA: installable app shell (manifest + icons) and iOS full-screen standalone mode. -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#0a140c">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="SlimeWire">
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
     <link rel="preconnect" href="https://dexscreener.com">
     <link rel="dns-prefetch" href="https://dexscreener.com">
     <link rel="preconnect" href="https://api.dexscreener.com">
@@ -40,13 +48,50 @@
     <link rel="preload" as="image" href="/assets/slimewire/svg/icons/wallet.svg">
     <link rel="preload" as="image" href="/assets/slimewire/svg/powered-by-ogres-badge.svg">
     <link rel="stylesheet" href="/tailwind.css?v=20260611-nav-v4">
-    <link rel="stylesheet" href="/styles.css?v=20260616232339">
-    <link rel="stylesheet" href="/slimewire-final-overrides.css?v=20260616232339">
-    <link rel="stylesheet" href="/ogre-stages.css?v=20260616232339">
+    <link rel="stylesheet" href="/styles.css?v=20260617002513">
+    <link rel="stylesheet" href="/slimewire-final-overrides.css?v=20260617002513">
+    <link rel="stylesheet" href="/ogre-stages.css?v=20260617002513">
     <script defer src="/config.js"></script>
     <script defer src="/vendor/tweetnacl-fast.min.js"></script>
     <script defer src="/vendor/solana-web3.iife.min.js?v=20260605-browser-trade-v1"></script>
-    <script type="module" src="/app.js?v=20260616232339"></script>
+    <script type="module" src="/app.js?v=20260617002513"></script>
+    <script>
+      // PWA: register the service worker (installable shell + push) and offer "Install app".
+      (() => {
+        if ("serviceWorker" in navigator) {
+          window.addEventListener("load", () => { navigator.serviceWorker.register("/sw.js").catch(() => {}); });
+        }
+        const standalone = window.matchMedia && window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+        if (standalone) return; // already installed
+        let dismissed = false;
+        try { dismissed = localStorage.getItem("swInstallDismissed") === "1"; } catch {}
+        let deferred = null;
+        function chip(label, onClick) {
+          if (dismissed || document.getElementById("pwa-install-chip") || !document.body) return;
+          const b = document.createElement("button");
+          b.id = "pwa-install-chip"; b.type = "button"; b.textContent = label;
+          b.setAttribute("style", "position:fixed;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:99999;padding:11px 18px;border-radius:999px;border:1px solid rgba(114,255,35,0.5);background:linear-gradient(135deg,#72ff23,#bbff63);color:#071006;font-weight:800;font-family:Inter,system-ui,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,0.55);cursor:pointer;font-size:14px");
+          const x = document.createElement("span"); x.textContent = "  ✕"; x.style.opacity = "0.6";
+          x.onclick = (e) => { e.stopPropagation(); b.remove(); try { localStorage.setItem("swInstallDismissed", "1"); } catch {} };
+          b.appendChild(x); b.onclick = onClick; document.body.appendChild(b);
+        }
+        window.addEventListener("beforeinstallprompt", (e) => {
+          e.preventDefault(); deferred = e;
+          chip("📲 Install SlimeWire app", async () => {
+            const c = document.getElementById("pwa-install-chip"); if (c) c.remove();
+            try { deferred.prompt(); await deferred.userChoice; } catch {} deferred = null;
+          });
+        });
+        window.addEventListener("appinstalled", () => { const c = document.getElementById("pwa-install-chip"); if (c) c.remove(); });
+        // iOS Safari has no beforeinstallprompt — show a one-time Add-to-Home-Screen hint.
+        const ua = navigator.userAgent || "";
+        if (/iphone|ipad|ipod/i.test(ua) && !/crios|fxios|edgios/i.test(ua)) {
+          window.addEventListener("load", () => setTimeout(() => chip("📲 Install: tap Share, then Add to Home Screen", () => {
+            const c = document.getElementById("pwa-install-chip"); if (c) c.remove(); try { localStorage.setItem("swInstallDismissed", "1"); } catch {}
+          }), 3000));
+        }
+      })();
+    </script>
   </head>
   <body>
     <main class="shell" data-app data-route="intro">

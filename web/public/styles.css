@@ -9909,3 +9909,24 @@ body {
 @media (max-width: 760px) {
   .connect-ogre { width: 140px !important; margin: 6px auto 0 !important; }
 }
+
+/* ===== PWA: installed-app polish ===========================================================
+   Stable dynamic-viewport height (kills the address-bar resize jump on mobile web too), and
+   safe-area insets so the installed full-screen app never clips content under the notch or the
+   home indicator. Safe-area padding only applies in standalone mode (insets are 0 in a browser
+   tab where the chrome already covers the notch), so normal web layout is unchanged. */
+@supports (min-height: 100dvh) {
+  body { min-height: 100dvh; }
+}
+@media (display-mode: standalone) {
+  .shell {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 4px);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+  /* keep the sticky bars below the notch when they stick */
+  .tabs { top: calc(env(safe-area-inset-top, 0px) + 10px); }
+  [data-app][data-route="terminal"] .topbar { top: calc(env(safe-area-inset-top, 0px) + 10px); }
+  .command-title { top: calc(env(safe-area-inset-top, 0px) + 76px); }
+}

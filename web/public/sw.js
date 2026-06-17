@@ -1,12 +1,43 @@
-// SlimeWire service worker: web push alerts only (no offline caching - trading data
-// must never be served stale from a cache).
+// SlimeWire service worker: web push alerts + an installable PWA app shell. The fetch handler
+// is NETWORK-FIRST and only ever caches the static SHELL (html/css/js/icons) — it NEVER caches
+// /api/ responses or non-GET requests, so trading data is never served stale. Offline just
+// shows the cached shell, which then loads live data when the connection returns.
+
+const SHELL_CACHE = "slimewire-shell-v1";
 
 self.addEventListener("install", () => {
   self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter((k) => k.startsWith("slimewire-shell-") && k !== SHELL_CACHE).map((k) => caches.delete(k)));
+    await self.clients.claim();
+  })());
+});
+
+self.addEventListener("fetch", (event) => {
+  const req = event.request;
+  if (req.method !== "GET") return;                          // never touch writes
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;           // 3rd-party (RPC, dex, etc.) -> network
+  if (url.pathname.startsWith("/api/")) return;              // live data -> network only, NEVER cached
+  const isShellAsset = req.mode === "navigate" || /\.(css|js|mjs|png|jpg|jpeg|svg|webp|ico|json|webmanifest|woff2?)$/i.test(url.pathname);
+  if (!isShellAsset) return;
+  event.respondWith((async () => {
+    try {
+      const res = await fetch(req);                          // network-first: always fresh when online
+      if (res && res.ok) {
+        const copy = res.clone();
+        caches.open(SHELL_CACHE).then((c) => c.put(req, copy)).catch(() => {});
+      }
+      return res;
+    } catch {
+      const cached = await caches.match(req);                // offline: serve the cached shell
+      return cached || (req.mode === "navigate" ? caches.match("/terminal") : Response.error());
+    }
+  })());
 });
 
 self.addEventListener("push", (event) => {
