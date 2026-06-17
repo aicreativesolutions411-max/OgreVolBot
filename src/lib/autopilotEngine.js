@@ -762,6 +762,10 @@ function freshState(opts) {
     // Per-coin loss memory: stop re-aping a coin that keeps stopping us out this
     // session (the log showed one coin entered 6x, almost all losses).
     coinLosses: {},
+    // Per-coin SESSION trade counter (wins included): caps how many times we recycle the SAME
+    // mint so the bot spreads across DIFFERENT movers instead of churning one or two coins all
+    // session ("it only traded 2 coins / keeps aping the same one"). See DIVERSIFY in hunt().
+    coinTrades: {},
     // Per-NAME loss memory: clones of a hot name flood the feed and dump. After a
     // name loses, cool off / cap re-entries on that name (different mints, same name).
     symLosses: {},
@@ -1406,15 +1410,20 @@ export function createAutopilotEngine(deps) {
         });
       } catch {}
     }
-    // Win card trigger: BIG wins only — peaked >= +300%.
-    if (win && (pos.peakPct || 0) >= 300) {
+    // Win card trigger: BIG REALIZED wins only — what actually BANKED, not a phantom peak that
+    // never filled. The old gate used pos.peakPct (the marked high), so a coin that flashed +400%
+    // on a thin curve but was sold for +12% still screamed "4x monster win" — exactly the "it says
+    // I got a 4x I never got close to" bug. Gate + report on the REALIZED multiple instead.
+    const realizedPct = pos.costSol > 0 ? (totalProceeds / pos.costSol - 1) * 100 : 0;
+    if (win && realizedPct >= 100) {
       const winData = {
         symbol: pos.sym,
         mint: pos.mint,
-        gainPct: Math.round(pos.peakPct),
-        multiple: Math.round((1 + pos.peakPct / 100) * 10) / 10,
+        gainPct: Math.round(realizedPct),
+        multiple: Math.round((totalProceeds / Math.max(pos.costSol, 1e-9)) * 10) / 10,
         entryMc: Math.round(pos.entryMc),
-        peakMc: Math.round(pos.entryMc * (1 + pos.peakPct / 100)),
+        peakMc: Math.round(pos.entryMc * (1 + (pos.peakPct || 0) / 100)),
+        peakPct: Math.round(pos.peakPct || 0),
         profitSol: round(pnl, 4),
         // For the site-style PnL card (spent/received/held).
         costSol: round(pos.costSol, 6),
@@ -1467,13 +1476,20 @@ export function createAutopilotEngine(deps) {
       if (nowMs - (state.watching[m].at || 0) > 60_000) delete state.watching[m];
     }
 
+    // DIVERSIFY: how many times we'll trade the SAME mint in one session before moving on. Scalp
+    // recycles liquid movers, so allow a couple recycles — but cap it so the bot spreads across
+    // DIFFERENT coins instead of churning one or two ("it only traded 2 coins"). Re-entry cooldown
+    // is also longer for scalp so a just-sold coin doesn't immediately jump back to the front.
+    const maxPerCoin = P.scalp ? 3 : 2;
+    const reentryCoolMs = P.scalp ? 120_000 : 45_000;
     const scoredAll = rows
       .filter((r) => r && r.tokenMint && !held.has(r.tokenMint))
       .filter((r) => (state.coinLosses[r.tokenMint] || 0) < 2)  // stop re-aping a repeat loser
+      .filter((r) => (state.coinTrades[r.tokenMint] || 0) < maxPerCoin) // DIVERSIFY: don't churn one coin all session
       .filter((r) => {
-        // Wave cooldown: allow re-entry on a coin we sold, but not within 45s.
+        // Wave cooldown: allow re-entry on a coin we sold, but space it out (longer for scalp).
         const last = state.recentSells[r.tokenMint];
-        return !last || nowMs - last > 45_000;
+        return !last || nowMs - last > reentryCoolMs;
       })
       .filter((r) => {
         // CLONE-SWARM guard: when a NAME just lost (different mint, same name flooding
@@ -1562,8 +1578,8 @@ export function createAutopilotEngine(deps) {
       const dev = getDevWallet(cand.r.tokenMint);
       const rep = dev ? devReputation(dev) : null;
       if (rep && rep.rugs >= 2 && rep.runners === 0) {
-        state.blocked = (state.blocked || 0) + 1; // rug dodged — drives the panel's rug-dodge clip
-        record("info", `⛔ skip ${cand.r.symbol} — dev rugged ${rep.rugs}x before`);
+        state.blocked = (state.blocked || 0) + 1; // weak-setup skip — drives the panel's "avoided" clip
+        record("info", `🛡️ Avoiding ${cand.r.symbol} — weak setup`);
         continue;
       }
       // Smart-money read — proven-winner wallets / tracked KOLs in the early buyers.
@@ -1592,10 +1608,14 @@ export function createAutopilotEngine(deps) {
       // the strongest fresh movers are never missed. Also re-confirms a coin that already
       // stopped us this session (coinLosses>0) so we stop instantly re-aping a chopper.
       const proven = (rep && rep.runners >= 1 && rep.rugs === 0) || (sm && (sm.kol || sm.winners >= 2)) || (ci && ci.trusted);
-      // SCALP scores on the liquidScore scale (top setups ~60-80, not 72+), and a liquid coin's
-      // real depth already removes the rug risk that confirmation guards against — so a strong
-      // scalp setup (>=58) enters instantly (fast) while only marginal ones get one confirm.
-      const elite = P.scalp ? cand.fs >= 58 : cand.fs >= 72;
+      // SCALP scores on the liquidScore scale (top setups ~45-80). A liquid, buy-led mover's real
+      // depth + scalp's tight 7% stop / fast ~14% bank already handle the risk confirmation guards
+      // against — so a solid scalp setup (>=44, a clearly buy-led in-band mover) enters INSTANTLY.
+      // This is also the "it only traded 2 coins" fix: a higher bar meant only the 1-2 persistent
+      // deep coins ever cleared instant entry while transient distinct movers timed out waiting for
+      // a 30s re-confirm. A lower instant bar + the per-coin diversify cap spreads trades across
+      // MANY more coins. Only marginal setups (22-44) or ones we already traded/lost get one confirm.
+      const elite = P.scalp ? cand.fs >= 44 : cand.fs >= 72;
       const stoppedBefore = (state.coinLosses[cand.r.tokenMint] || 0) > 0;
       const needsConfirm = !proven && (stoppedBefore || tune.tape === "COLD" || !elite);
       if (needsConfirm) {
@@ -1631,6 +1651,7 @@ export function createAutopilotEngine(deps) {
         if (openedThisCycle >= perCycle) break;
         if (!r || !r.tokenMint || held.has(r.tokenMint)) continue;
         if ((state.coinLosses[r.tokenMint] || 0) >= 2) continue; // don't re-ape a repeat loser
+        if ((state.coinTrades[r.tokenMint] || 0) >= 2) continue; // DIVERSIFY: cap same-coin churn
         const last = state.recentSells[r.tokenMint];
         if (last && now() - last < 45_000) continue;             // wave cooldown
         const dev = getDevWallet(r.tokenMint);
@@ -1738,6 +1759,7 @@ export function createAutopilotEngine(deps) {
     };
     state.open.push(pos);
     state.recentApeNames[normSym(sym)] = now(); // remember the NAME to block clone-swarm pile-ins
+    state.coinTrades[pos.mint] = (state.coinTrades[pos.mint] || 0) + 1; // DIVERSIFY: count session trades per mint
     record("info", `🟢 APED ${sym} ${round(sizeSol, 4)} SOL @ MC $${Math.round(entryMc)} (fs ${pos.fs})`);
   }
 
