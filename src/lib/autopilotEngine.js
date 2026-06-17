@@ -111,6 +111,11 @@ export function aggParams(state) {
   // regardless of regime base — this is what actually stops the fs 61-63 chop churn
   // that bleeds a directionless tape. (scoreBonus alone couldn't reach this.)
   if (state.tune && state.tune.tape === "COLD") minScore = Math.max(minScore, 62);
+  // FRESH-PATH CALIBRATION CAP (the "something is off" fix): live data shows the +EV freshScore
+  // band is 62-66 — 67+ bleeds. But the bumps above (low-churn +16, calibration, COLD +62) kept
+  // RAISING the bar, herding entries UP out of the winning band into the losing 67+ zone. Cap the
+  // fresh-path bar so it can't push past the sweet spot. (grind/scalp score on their own scales.)
+  if (!liquid && !grind) minScore = Math.min(minScore, 63);
   // GRIND gates on grindScore (survivor-oriented), NOT freshScore — so its bar lives on a
   // different scale. Override to a grindScore threshold (the freshScore floors above don't
   // apply to grind). Stays adaptive: the auto-tuner's scoreBonus still raises it in cold/
