@@ -1019,7 +1019,9 @@ const autopilotEngine = createAutopilotEngine({
     for (const feed of [liqf, vol, mom]) {
       for (const r of (Array.isArray(feed?.rows) ? feed.rows : [])) {
         if (!r || !r.tokenMint || seen.has(r.tokenMint)) continue;
-        if ((Number(r.liquidityUsd) || 0) < 6000) continue; // real depth only — the whole point
+        // Keep real depth but be reachable: $3k fills a tiny scalp bet cleanly and the last-hour
+        // window has these; a higher floor returned an empty feed so scalp found nothing.
+        if ((Number(r.liquidityUsd) || 0) < 3000) continue;
         seen.add(r.tokenMint);
         out.push({
           tokenMint: r.tokenMint,

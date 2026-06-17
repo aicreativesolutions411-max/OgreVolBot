@@ -491,16 +491,27 @@ $("copyLogBtn").addEventListener("click", async () => {
 
 // Download the FULL persistent running log (survives restarts) — owner only.
 $("dlLogBtn").addEventListener("click", async () => {
+  $("dlLogBtn").disabled = true;
   try {
     const r = await api("/api/web/autopilot/log?limit=2000");
-    if (!r || !r.ok) { $("dlLogBtn").textContent = (r&&r.error)||"failed"; return; }
+    if (!r || !r.ok) { $("dlLogBtn").textContent = "⤓ " + ((r&&r.error)||"failed — owner only"); return; }
     const ev = r.events || [];
     const txt = ev.map(e => new Date(e.at).toLocaleString() + "  [" + (e.level||"info") + "] " + e.msg).join("\n") || "(no events yet)";
-    const a = document.createElement("a");
-    a.href = "data:text/plain;base64," + btoa(unescape(encodeURIComponent(txt)));
-    a.download = "slimewire-autopilot-log.txt";
-    document.body.appendChild(a); a.click(); a.remove();
-  } catch (e) { $("dlLogBtn").textContent = "failed"; }
+    // Blob download (data: URLs are blocked in mobile browsers / installed PWAs — that's why the
+    // button "did nothing"). If even the blob download is blocked, open the log in a new tab to copy.
+    let ok = false;
+    try {
+      const url = URL.createObjectURL(new Blob([txt], { type: "text/plain;charset=utf-8" }));
+      const a = document.createElement("a"); a.href = url; a.download = "slimewire-autopilot-log.txt";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000); ok = true;
+    } catch (_) {}
+    if (!ok) {
+      const w = window.open("", "_blank");
+      if (w) { w.document.write("<pre style='white-space:pre-wrap;font:12px ui-monospace,monospace;padding:14px;color:#cfe;background:#06100a'>" + txt.replace(/[<>&]/g, c=>({ "<":"&lt;", ">":"&gt;", "&":"&amp;" }[c])) + "</pre>"); w.document.close(); }
+    }
+  } catch (e) { $("dlLogBtn").textContent = "⤓ failed"; }
+  finally { $("dlLogBtn").disabled = false; }
 });
 
 $("statsBtn").addEventListener("click", async () => {

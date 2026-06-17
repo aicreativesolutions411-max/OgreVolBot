@@ -113,7 +113,7 @@ export function aggParams(state) {
   // its bar lives on that scale. ~36 passes genuinely liquid, buy-led movers (real last-hour data
   // often lacks m5 momentum, so a 44 bar was too high and starved it) while still filtering thin/
   // fading ones. Stays adaptive: the auto-tuner's scoreBonus still raises it in cold tape.
-  if (scalp) minScore = 36 + ((state.tune && state.tune.scoreBonus) || 0);
+  if (scalp) minScore = 30 + ((state.tune && state.tune.scoreBonus) || 0);
 
   // ENTRY MC WINDOW. Default: tiny floor (a low-MC runner like ZUL +56% @ $1973 stays in),
   // ceiling 20k (these are fresh launches). GRIND skips the brand-new sub-$5k curve — where
@@ -128,14 +128,14 @@ export function aggParams(state) {
   // SCALP takes a FLEXIBLE MC band (not low-cap dust) — $15k..$12M — where there's real liquidity
   // to fill clean. $15k floor sits above the instant-rug/phantom dust zone but is reachable in the
   // last-hour window (a $30k floor starved it). grind stays mid; default is the fresh sub-$20k.
-  const mcFloor = scalp ? 15000 : grind ? 6000 : 1800;
+  const mcFloor = scalp ? 6000 : grind ? 6000 : 1800;
   const mcCeil = scalp ? 12000000 : grind ? 80000 : 20000;
   // ANTI-PHANTOM hard liquidity floor: a phantom +400% spike comes from a thin curve where one
   // tiny buy moves the marked cap but nothing can actually fill. Require REAL depth so those
   // un-sellable coins never pass. SCALP asks for $6k — enough to fill its tiny bets cleanly and
   // filter pure phantom dust, while still being achievable in the last-hour window (a $20k floor
   // returned an empty feed, so scalp bought nothing); grind asks for $4k.
-  const minLiqAbs = scalp ? 6000 : grind ? 4000 : 0;
+  const minLiqAbs = scalp ? 3000 : grind ? 4000 : 0;
   // GRIND waits out the first ~15s (the worst instant-rug/sniper-dump seconds — the fresh
   // feed is mostly sub-30s, so a 45s gate starved it to zero entries) and asks for slightly
   // deeper liquidity than default (cleaner fills, less drain risk) without being so strict
@@ -395,7 +395,7 @@ export function liquidScore(row) {
   // REAL depth = clean fills + slippage resistance + a sellable mark (the whole point of scalp).
   // Tiers reward the realistic last-hour range ($6-60k+) so a decent liquid coin clears the bar
   // even when momentum (m5) data is missing from the feed row.
-  if (liq >= 60000) s += 24; else if (liq >= 30000) s += 19; else if (liq >= 15000) s += 14; else if (liq >= 8000) s += 9; else if (liq >= 5000) s += 5;
+  if (liq >= 60000) s += 24; else if (liq >= 30000) s += 19; else if (liq >= 15000) s += 14; else if (liq >= 8000) s += 11; else if (liq >= 5000) s += 8; else if (liq >= 3000) s += 5;
   // Turnover (recent volume / liquidity) — proves the coin is actively trading, not a stagnant
   // pool we couldn't exit. Too little volume relative to depth = dead, skip.
   const turn = liq > 0 ? vol / liq : 0;

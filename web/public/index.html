@@ -59,7 +59,19 @@
       // PWA: register the service worker (installable shell + push) and offer "Install app".
       (() => {
         if ("serviceWorker" in navigator) {
-          window.addEventListener("load", () => { navigator.serviceWorker.register("/sw.js").catch(() => {}); });
+          // Force the newest service worker to take over and reload ONCE — otherwise a stale SW keeps
+          // serving the cached app shell for standalone pages (the "Pro just loops back to terminal"
+          // bug). controllerchange fires when the new SW claims; the guard stops a reload loop.
+          let swReloaded = false;
+          navigator.serviceWorker.addEventListener("controllerchange", () => {
+            if (swReloaded) return; swReloaded = true; window.location.reload();
+          });
+          window.addEventListener("load", () => {
+            navigator.serviceWorker.register("/sw.js").then((reg) => {
+              try { reg.update(); } catch (_) {}
+              setInterval(() => { try { reg.update(); } catch (_) {} }, 60 * 60 * 1000);
+            }).catch(() => {});
+          });
         }
         const standalone = window.matchMedia && window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
         if (standalone) return; // already installed
