@@ -1372,6 +1372,23 @@ button:disabled {
 .tabs button.tab-pro-pill:hover { filter: brightness(1.08); transform: translateY(-1px); }
 @keyframes proPulse { 0%, 100% { box-shadow: 0 0 12px rgba(255, 212, 90, 0.28); } 50% { box-shadow: 0 0 26px rgba(255, 212, 90, 0.6); } }
 
+/* LAUNCH FOCUS — a clean full-screen launch page (reached from /launch-coin). Hide all app chrome
+   so the launch tool + its video own the screen; a focus bar gives Back-to-Terminal + Wallets. */
+body.launch-focus .topbar,
+body.launch-focus .dashboard,
+body.launch-focus [data-dashboard],
+body.launch-focus .tabs,
+body.launch-focus .nav-drop-bar { display: none !important; }
+body.launch-focus main.shell { padding-top: 0 !important; }
+body.launch-focus .panel-host { max-width: 1000px; margin: 0 auto; }
+.launch-focus-bar { display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 40;
+  padding: 12px 14px; margin: 0 0 16px; background: rgba(4, 7, 10, 0.92); border-bottom: 1px solid rgba(141, 255, 90, 0.22); }
+.launch-focus-bar .lf-title { font-weight: 900; font-size: 1.05rem; margin: 0 auto; color: #eafff0; letter-spacing: 0.3px; }
+.launch-focus-bar .lf-btn { border: 1px solid rgba(141, 255, 90, 0.4); background: rgba(141, 255, 90, 0.08); color: #eafff0;
+  border-radius: 11px; padding: 9px 15px; font-weight: 800; font-size: 0.9rem; cursor: pointer; white-space: nowrap; }
+.launch-focus-bar .lf-btn:hover { background: rgba(141, 255, 90, 0.16); }
+.launch-focus-bar .lf-back { background: linear-gradient(135deg, #8dff5a, #27e06a); color: #05210f; border: 0; }
+
 .tabs button[data-active="true"],
 .mode-row button[data-active="true"] {
   background: linear-gradient(135deg, rgba(114, 255, 35, 0.94), rgba(187, 255, 99, 0.94));

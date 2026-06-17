@@ -6050,6 +6050,13 @@ function renderTabs() {
     if (!button.closest(".tabs") && !button.closest("[data-nav-drop]")) button.removeAttribute("data-active");
   });
   syncDesktopNavActiveState();
+  // LAUNCH FOCUS: a clean full-screen launch page (from /launch-coin) — hide the app chrome (nav,
+  // topbar, dashboard) and let the launch tool + its video own the screen. A focus bar gives back
+  // "Back to Terminal" + "Manage Wallets". Exits the moment the route leaves /launch-coin.
+  try {
+    document.body.classList.toggle("launch-focus",
+      window.location.pathname.includes("/launch-coin") && state.activeTab === "launchCoin");
+  } catch {}
   document.querySelectorAll(".tabs [data-tab]").forEach((button) => {
     button.dataset.active = button.dataset.tab === state.activeTab ? "true" : "false";
   });
@@ -10340,7 +10347,15 @@ function launchCoinHtml() {
       html: pumpLivePanelHtml(draft)
     }
   ];
+  const launchFocus = window.location.pathname.includes("/launch-coin");
+  const focusBar = launchFocus ? `
+    <div class="launch-focus-bar">
+      <button type="button" class="lf-btn lf-back" data-nav-route="/terminal" data-tab="terminal">← Back to Terminal</button>
+      <span class="lf-title">🚀 Launch a Coin</span>
+      <button type="button" class="lf-btn" data-nav-route="/terminal" data-tab="wallets">👛 Wallets</button>
+    </div>` : "";
   return `
+    ${focusBar}
     ${launchShareKitHtml()}
     <section class="trade-layout launch-coin-layout" data-preserve-focus>
       <article class="trade-card launch-coin-card">

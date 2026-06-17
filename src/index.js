@@ -2436,6 +2436,7 @@ function startHealthServer() {
     if (request.method === "GET" && (requestUrl.pathname === "/" || requestUrl.pathname === "/connect"
       || requestUrl.pathname === "/login" || requestUrl.pathname.startsWith("/account/login")
       || requestUrl.pathname.startsWith("/r/")
+      || requestUrl.pathname === "/launch-coin"
       || requestUrl.pathname === "/portal" || requestUrl.pathname.startsWith("/portal/")
       || requestUrl.pathname === "/terminal" || requestUrl.pathname.startsWith("/terminal/"))) {
       await serveWebPortal(requestUrl, response, request.method, request.headers["accept-encoding"]);
@@ -5469,6 +5470,7 @@ function compressedStaticAsset(target, data, stat, encoding) {
 async function serveWebPortal(requestUrl, response, method = "GET", acceptEncoding = "") {
   const relativePath = requestUrl.pathname === "/" || requestUrl.pathname === "/connect"
     || requestUrl.pathname === "/login" || requestUrl.pathname.startsWith("/account/login")
+    || requestUrl.pathname === "/launch-coin"
     || requestUrl.pathname === "/portal" || requestUrl.pathname === "/terminal"
     ? "index.html"
     : decodeURIComponent(requestUrl.pathname.replace(/^\/(?:portal|terminal)\/?/, "")) || "index.html";
