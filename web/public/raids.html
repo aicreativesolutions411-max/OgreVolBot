@@ -71,7 +71,8 @@
   .gauge .gl{display:flex; justify-content:space-between; font-size:0.72rem; color:var(--dim); font-weight:800; margin-bottom:5px;}
   .gauge .gl b{color:var(--green); font-variant-numeric:tabular-nums;}
   .gbar{height:13px; border-radius:99px; background:rgba(4,12,7,0.7); border:1px solid var(--line); overflow:hidden; position:relative;}
-  .gfill{height:100%; border-radius:99px; background:linear-gradient(90deg,#1f8f3e,var(--green2) 55%,var(--green)); box-shadow:0 0 16px rgba(141,255,90,0.55) inset; transition:width .9s cubic-bezier(.4,1.2,.5,1); position:relative; min-width:6px;}
+  .gfill{height:100%; border-radius:99px; background:linear-gradient(90deg,#1f8f3e,var(--green2) 45%,var(--green) 70%,var(--green2)); background-size:220% 100%; animation:slimeFlow 3s linear infinite; box-shadow:0 0 16px rgba(141,255,90,0.55) inset; transition:width .9s cubic-bezier(.4,1.2,.5,1); position:relative; min-width:6px;}
+  @keyframes slimeFlow{0%{background-position:0% 0;}100%{background-position:-220% 0;}}
   .gfill::after{content:""; position:absolute; right:0; top:0; bottom:0; width:14px; background:linear-gradient(90deg,transparent,rgba(223,255,206,0.85)); border-radius:99px;}
   .raid-c.full .gfill{background:linear-gradient(90deg,var(--gold2),var(--gold)); box-shadow:0 0 18px rgba(255,212,90,0.6) inset;}
   .rc-acts{display:grid; grid-template-columns:1fr auto auto; gap:8px;}

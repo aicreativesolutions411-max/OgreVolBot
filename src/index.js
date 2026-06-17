@@ -23400,9 +23400,13 @@ async function recordTelegramCall(message, mint, mcUsd) {
     const nowMs = Date.now();
     const mc = Number(mcUsd) || 0;
     const caller = message.from || {};
+    // Channel posts carry NO `from` (Telegram makes them anonymous to the channel), so fall back to
+    // the channel/group title — "called in <Channel>" beats a useless "anon".
     const callerName = caller.username
       ? `@${caller.username}`
-      : ([caller.first_name, caller.last_name].filter(Boolean).join(" ") || String(caller.id || "anon"));
+      : ([caller.first_name, caller.last_name].filter(Boolean).join(" ")
+         || (message.chat && message.chat.title ? String(message.chat.title).slice(0, 40) : null)
+         || String(caller.id || "anon"));
     let rec = store.calls[key];
     if (!rec) {
       rec = {
@@ -23930,15 +23934,17 @@ async function buildScanCallerFooter(chatId, mint, currentMc) {
     }
     const entry = Number(rec.entryMc) || 0;
     const ago = alphaAgeLabel(Math.max(0, Date.now() - Number(rec.firstAt || Date.now())));
-    // Compact, scanner-bot style: "📣 caller @ $<MC then> [<move since>] (<ago>)" + peak if big.
+    // Scanner-bot footer the user asked for: WHO first called it · the MC then · the move since
+    // (green/red %), plus the peak if it ran. e.g. "📣 First called by @x at $12k · 🟢 +340% · 2h ago".
+    const atMc = entry > 0 ? ` at ${scanFmtMoney(entry)}` : "";
     let bracket = "";
     if (entry > 0 && mc > 0) {
       const pct = Math.round((mc / entry - 1) * 100);
-      bracket = ` ${pct >= 0 ? "🟢" : "🔴"} [${pct >= 0 ? "+" : ""}${pct}%]`;
+      bracket = ` · ${pct >= 0 ? "🟢" : "🔴"} ${pct >= 0 ? "+" : ""}${pct}%`;
     }
     const peakX = entry > 0 ? (Number(rec.peakMc) || 0) / entry : 0;
     const peakStr = peakX >= 2 ? ` · peak +${Math.round((peakX - 1) * 100)}%` : "";
-    return `📣 <b>${escapeTelegramHtml(rec.callerName || "someone")}</b> @ ${scanFmtMoney(entry)}${bracket} (${ago})${peakStr}`;
+    return `📣 First called by <b>${escapeTelegramHtml(rec.callerName || "someone")}</b>${atMc}${bracket}${peakStr} · ${ago} ago`;
   } catch { return ""; }
 }
 
