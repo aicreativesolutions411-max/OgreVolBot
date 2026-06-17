@@ -138,7 +138,8 @@
       <input type="number" id="vaultMinSweep" class="hidden" value="0.05" min="0.01" max="5" step="0.01" placeholder="bank when profit clears (SOL)" />
       <label>Aggression</label>
       <select id="mode">
-        <option value="blend" selected>Blend — bank in 25% tranches as it climbs, ride the last 25% to 400% (recommended)</option>
+        <option value="scalp" selected>⚡ Scalp — LIQUID movers, fast in/out: bank ~80% at +14%, recycle. Real fills, consistent (new)</option>
+        <option value="blend">Blend — bank in 25% tranches as it climbs, ride the last 25% to 400%</option>
         <option value="grind">Grind — base-hits: safer $7k+ MC, bank ~65% at +30%, small tail to 150% (steady green)</option>
         <option value="steady">Steady — bank 80% at a doable pop, ride 20% for a 400% moon</option>
         <option value="chill">Chill — smaller, pickier</option>
@@ -608,7 +609,10 @@ async function poll() {
   // Headline = REAL free wallet SOL in live mode (the number you can actually withdraw).
   $("bigLabel").textContent = s.live ? "Wallet SOL (real)" : "Equity (paper)";
   $("equity").textContent = (s.live ? (wallet!=null?wallet.toFixed(4):"…") : (eq!=null?eq.toFixed(4):"—")) + " SOL";
-  $("pnl").innerHTML = fmtPnl(s.pnlPct);
+  // Headline PnL is REALIZED (banked) — it only moves when a trade closes, so it never flashes a
+  // phantom gain or shows green after a string of losses. Open bags ride as a separate, muted
+  // "unrealized" note so you can still see them moving without mistaking paper marks for results.
+  $("pnl").innerHTML = fmtPnl(s.pnlPct) + (s.unrealizedSol ? ` <span class="muted" style="font-size:12px">· ${s.unrealizedSol>0?"+":""}${Number(s.unrealizedSol).toFixed(3)} SOL riding</span>` : "");
   $("runState").textContent = (s.running ? (s.live?"LIVE running":"paper running") : ("stopped"+(s.stopReason?` · ${s.stopReason}`:""))) + (s.churn==="low"?" · 🎯 low-churn":"") + (s.tape&&s.tape!=="warming"?` · tape ${s.tape}${s.betMult&&s.betMult!==1?` (${s.betMult}x)`:""}`:"");
   $("walletReal").textContent = (wallet!=null?wallet.toFixed(4):"refreshing…") + " SOL";
   $("inPos").textContent = (inPos!=null?inPos.toFixed(4):"—") + " SOL";

@@ -43,7 +43,12 @@ export function aggParams(state) {
   // Slightly larger base than normal because the entry filters cut the rug tail, so
   // each (lower-variance) bet can carry a touch more size and still risk less.
   const grind = mode === "grind";
-  const baseFrac = mode === "degen" ? 0.10 : mode === "chill" ? 0.04 : grind ? 0.07 : 0.06;
+  // "scalp" = LIQUID-mover fast in/out. It trades the last-hour LIQUID feed (real depth, real
+  // fills) instead of fresh dust, takes a flexible MC band (NOT low-cap), banks a quick pop and
+  // recycles. This is the fix for "finds pairs slowly + phantom +300% marks that don't fill":
+  // a liquid coin's mark is actually sellable, so the displayed win is the real win.
+  const scalp = mode === "scalp";
+  const baseFrac = mode === "degen" ? 0.10 : mode === "chill" ? 0.04 : scalp ? 0.07 : grind ? 0.07 : 0.06;
 
   // Softer streak/regime scaling: a hot streak no longer balloons size right
   // into the next loss cluster (live data showed streak-pumped 0.11+ SOL bets
@@ -71,6 +76,9 @@ export function aggParams(state) {
   // and feed-death exits (not this %-stop), so this only avoids noise stop-outs → a
   // higher hit-rate, which is the whole point of a steady-win mode.
   if (grind) sl = 8;
+  // SCALP cuts losers fast — liquid coins move in smaller, real increments, so a tight 7%
+  // stop is a real (fillable) 7% loss, not dust noise. High hit-rate + small losses is the edge.
+  if (scalp) sl = 7;
 
   let minScore = regime === "HOT" ? 34 : regime === "COLD" ? 48 : 40;
   // degen does NOT loosen the entry bar — a lower bar just apes more rugs (the live data is
@@ -101,6 +109,10 @@ export function aggParams(state) {
   // apply to grind). Stays adaptive: the auto-tuner's scoreBonus still raises it in cold/
   // rug-heavy tape. ~50 passes solid survived coins, filters thin/dumping ones.
   if (grind) minScore = 46 + ((state.tune && state.tune.scoreBonus) || 0);
+  // SCALP gates on liquidScore (liquidity + turnover + early buy-led momentum), NOT freshScore —
+  // its bar lives on that scale. ~44 passes genuinely liquid, buy-led movers and filters thin/
+  // fading ones. Stays adaptive: the auto-tuner's scoreBonus still raises it in cold tape.
+  if (scalp) minScore = 44 + ((state.tune && state.tune.scoreBonus) || 0);
 
   // ENTRY MC WINDOW. Default: tiny floor (a low-MC runner like ZUL +56% @ $1973 stays in),
   // ceiling 20k (these are fresh launches). GRIND skips the brand-new sub-$5k curve — where
@@ -112,22 +124,30 @@ export function aggParams(state) {
   // phantom-spiked (Specs fake +400% that couldn't fill). Float the floor above the
   // instant-rug/phantom zone. Frequency drops, but that's the price of not bleeding —
   // the real higher-frequency edge is smart-money copy, not aping fresher dust.
-  const mcFloor = grind ? 6000 : 1800;
-  const mcCeil = grind ? 80000 : 20000;
-  // ANTI-PHANTOM hard liquidity floor for grind: a phantom +400% spike comes from a thin
-  // curve where one tiny buy moves the marked cap but nothing can actually fill. Require
-  // REAL depth (present + >= $4k) so those un-sellable coins never pass.
-  const minLiqAbs = grind ? 4000 : 0;
+  // SCALP takes a FLEXIBLE, higher MC band (not low-cap) — $30k..$12M — where there's real
+  // liquidity to fill clean. grind stays mid; default is the fresh sub-$20k window.
+  const mcFloor = scalp ? 30000 : grind ? 6000 : 1800;
+  const mcCeil = scalp ? 12000000 : grind ? 80000 : 20000;
+  // ANTI-PHANTOM hard liquidity floor: a phantom +400% spike comes from a thin curve where one
+  // tiny buy moves the marked cap but nothing can actually fill. Require REAL depth so those
+  // un-sellable coins never pass. SCALP demands the most ($20k) — that floor IS the whole
+  // guarantee that its displayed marks are realizable; grind asks for $4k.
+  const minLiqAbs = scalp ? 20000 : grind ? 4000 : 0;
   // GRIND waits out the first ~15s (the worst instant-rug/sniper-dump seconds — the fresh
   // feed is mostly sub-30s, so a 45s gate starved it to zero entries) and asks for slightly
   // deeper liquidity than default (cleaner fills, less drain risk) without being so strict
   // it can't find candidates. The 0.7x size cap + liquidity-pull/feed-death exits do the
   // rest of the rug-dodging.
-  const minAge = grind ? 20 : 4;
+  // SCALP takes any already-survived coin (>= 60s, past the sniper seconds) up to a day old —
+  // it hunts the liquid last-hour window, not brand-new launches.
+  const minAge = scalp ? 60 : grind ? 20 : 4;
   // GRIND also raises the age CEILING: it targets survived/climbed coins from the last-hour
   // window (often 20-60min old), which the default 20-min cap would reject outright.
-  const maxAge = grind ? 3600 : 1200;
-  const liqFrac = grind ? 0.35 : 0.3;
+  const maxAge = scalp ? 86400 : grind ? 3600 : 1200;
+  // SCALP disables the RELATIVE liquidity gate (liqFrac 0): a healthy $1M coin legitimately has
+  // liq well under mc*0.3, so the relative test would wrongly reject it. Its absolute $20k floor
+  // (minLiqAbs) does the real depth check instead.
+  const liqFrac = scalp ? 0 : grind ? 0.35 : 0.3;
 
   // BANK STYLE — three exit personalities:
   //  • "steady": lock the bulk at the first DOABLE pop (80%) + free-roll 20% to +400%,
@@ -157,6 +177,13 @@ export function aggParams(state) {
     // first-pop trigger (tp1) is set to ~30% just below.
     tp1 = regime === "HOT" ? 32 : regime === "COLD" ? 24 : 30;
     tp1Pct = 70; spikePct = 82; tp2Lvl = 70; tp2Pct = 60; tp3Lvl = 120; tp3Pct = 60; moonTarget = 150;
+  } else if (scalp) {
+    // FAST IN/OUT: bank the BULK at the first quick pop (~14%), take most of the rest at +30%,
+    // close the sliver by a capped +60% — then recycle into the next liquid mover. NO moonshot
+    // chase. The edge is a high hit-rate of small, REALIZABLE wins that compound, not lottery
+    // tickets. On liquid coins these pops actually fill, so the banked SOL matches the marked %.
+    tp1 = regime === "COLD" ? 11 : regime === "HOT" ? 16 : 14;
+    tp1Pct = 80; spikePct = 88; tp2Lvl = 30; tp2Pct = 70; tp3Lvl = 60; tp3Pct = 100; moonTarget = 60;
   }
 
   // AUTO-ADAPT — the key lesson from live: the moon-ride only PAYS in a genuinely HOT
@@ -175,11 +202,15 @@ export function aggParams(state) {
   let unprovenConvCap = 0.7, provenConvCap = 1.6;
   if (mode === "degen") { unprovenConvCap = 0.6; provenConvCap = 1.6; }
   else if (mode === "chill") { provenConvCap = 1.15; }
+  // SCALP trades LIQUID coins (real depth = far lower rug risk), so an unproven one can carry a
+  // bit more size than the dust modes (0.9x); proven caps a touch lower (1.5x) since these are
+  // quick base-hits, not moonshot rides we'd concentrate into.
+  else if (scalp) { unprovenConvCap = 0.9; provenConvCap = 1.5; }
   // degen rides the proven runners it sizes into FURTHER — a higher moon target (unless a COLD
   // tape already pulled it in via the bankHard clamp above).
   if (mode === "degen" && !bankHard) moonTarget = Math.max(moonTarget, 700);
 
-  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, mcCeil, minAge, maxAge, liqFrac, minLiqAbs, steady, blend, grind, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct, unprovenConvCap, provenConvCap };
+  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, mcCeil, minAge, maxAge, liqFrac, minLiqAbs, steady, blend, grind, scalp, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct, unprovenConvCap, provenConvCap };
 }
 
 // SELF-TUNING / market-regime brain: reads the recent runner & rug rate and sets
@@ -345,6 +376,43 @@ export function grindScore(row) {
   return s;
 }
 
+// LIQUID-MOVER score for SCALP — the fast in/out mode wants a coin with REAL depth (clean fills,
+// no phantom marks), live turnover (it's actually trading), buy-led 5m flow, and EARLY upward
+// momentum it can scalp the front of (rising but not already blown off the top). It deliberately
+// does NOT reward youth or microcaps (the opposite of freshScore). ~0..100; scalp gates on this.
+export function liquidScore(row) {
+  const liq = Number(row.liquidityUsd) || 0;
+  const mc = Number(row.marketCap) || 0;
+  const vol = Number(row.volume5m) || 0;
+  const buys = Number(row.buys5m) || 0;
+  const sells = Number(row.sells5m) || 0;
+  const m5 = Number(row.m5);   // 5-min price change %
+  const h1 = Number(row.h1);   // 1-hr price change %
+  let s = 0;
+  // REAL depth = clean fills + slippage resistance + a sellable mark (the whole point of scalp).
+  if (liq >= 80000) s += 26; else if (liq >= 45000) s += 20; else if (liq >= 25000) s += 14; else if (liq >= 15000) s += 7;
+  // Turnover (recent volume / liquidity) — proves the coin is actively trading, not a stagnant
+  // pool we couldn't exit. Too little volume relative to depth = dead, skip.
+  const turn = liq > 0 ? vol / liq : 0;
+  if (turn >= 0.5) s += 16; else if (turn >= 0.25) s += 11; else if (turn >= 0.1) s += 6;
+  // Buy-led 5m flow (up to ~+27 for heavily buy-dominant).
+  const flow = buys + sells > 0 ? buys / (buys + sells) : 0.5;
+  s += Math.max(0, flow - 0.45) * 50;
+  // EARLY upward momentum: scalp the front of a push, not the blowoff top. Sweet spot rising but
+  // < ~40% in 5m. Already-extended (+40-80%) gets a little; fading (<= -8%) is docked hard.
+  if (Number.isFinite(m5)) {
+    if (m5 >= 3 && m5 <= 40) s += 16;
+    else if (m5 > 40 && m5 <= 80) s += 6;
+    else if (m5 > 0 && m5 < 3) s += 8;
+    else if (m5 <= -8) s -= 12;
+  }
+  // Don't catch a knife mid-dump: a deeply red 1h trend is a falling coin, scalp wants stable/up.
+  if (Number.isFinite(h1) && h1 <= -25) s -= 10;
+  // Sane MC band for a small bag to move ~12% on our flow without being dust or a mega-cap.
+  if (mc >= 30000 && mc <= 5000000) s += 10; else if (mc >= 15000 && mc <= 12000000) s += 5;
+  return s;
+}
+
 // CONVICTION: how hard to bet a setup (0.5x..1.6x of base size). Trades like a
 // pro — size scales with confluence: proven dev + heavy buy flow + freshness +
 // strong score → bigger; marginal/risky → smaller. Bounded; final size still
@@ -380,14 +448,19 @@ export function convictionMult(row, rep, sm, ci, caps = {}) {
   if (vol >= 80 && (buys + sells) > 0 && (buys + sells) < 8) c -= 0.3;
   const age = Number(row.pairAgeSeconds) || 9999;
   if (age <= 60) c += 0.15;                                  // very fresh = best entries
-  const fsv = freshScore(row);
-  if (fsv >= 70) c += 0.15;                                  // top-tier setup
-  // SIZE DOWN the lowest-confidence bets: no proven dev, no smart money, only a marginal
-  // score. A rug/dump on these gaps PAST any stop (waewa rugged -60% past the 6% stop), so
-  // betting smaller is the only thing that shrinks the hit. Strong/proven setups keep full
-  // size — this just trims the weakest, highest-rug-risk entries so losers cost less.
+  // freshScore rewards <30s age / $2.5-8k MC — meaningless for SCALP's liquid, minutes-old,
+  // higher-MC coins (every one would score low and get docked). Skip the freshScore-derived
+  // size tweaks for scalp; its own liquidScore gate already vetted setup quality.
   const noEdge = !(rep && rep.runners >= 1) && !(sm && (sm.kol || sm.winners >= 1)) && !(ci && ci.trusted);
-  if (noEdge && fsv < 66) c -= 0.25;
+  if (!caps.scalp) {
+    const fsv = freshScore(row);
+    if (fsv >= 70) c += 0.15;                                // top-tier setup
+    // SIZE DOWN the lowest-confidence bets: no proven dev, no smart money, only a marginal
+    // score. A rug/dump on these gaps PAST any stop (waewa rugged -60% past the 6% stop), so
+    // betting smaller is the only thing that shrinks the hit. Strong/proven setups keep full
+    // size — this just trims the weakest, highest-rug-risk entries so losers cost less.
+    if (noEdge && fsv < 66) c -= 0.25;
+  }
   // CRITICAL: freshness/score do NOT predict instant-rugs. Only let conviction size
   // ABOVE base for a dev with a PROVEN runner history (and no rugs). Unknown/unproven
   // coins are capped at 1.0x so one instant-rug can't blow a big bet (the log showed
@@ -423,16 +496,24 @@ export function entryReject(row, P) {
   // the fast exit-side rug/stop protection for the rest. buys/sells counts are
   // unreliable on brand-new bonding-curve pairs, so use volume as the activity
   // signal and only reject on a clear heavy dump.
-  if (!Number.isFinite(age) || age < (P.minAge || 4) || age > (P.maxAge || 1200)) return "age";
-  if (!Number.isFinite(mc) || mc < (P.mcFloor || 1800) || mc > (P.mcCeil || 20000)) return "mc";
-  if (liq > 0 && liq < mc * (P.liqFrac || 0.3)) return "liquidity";
-  // GRIND: liquidity must be PRESENT and meet an absolute floor — kills phantom thin-curve
+  // NOTE: use Number.isFinite guards (not `|| default`) so a deliberate 0 (e.g. SCALP's liqFrac=0
+  // = "no relative gate") is honored instead of being coerced back to the default by `0 || x`.
+  const minAge = Number.isFinite(P.minAge) ? P.minAge : 4;
+  const maxAge = Number.isFinite(P.maxAge) ? P.maxAge : 1200;
+  const mcFloor = Number.isFinite(P.mcFloor) ? P.mcFloor : 1800;
+  const mcCeil = Number.isFinite(P.mcCeil) ? P.mcCeil : 20000;
+  const liqFrac = Number.isFinite(P.liqFrac) ? P.liqFrac : 0.3;
+  if (!Number.isFinite(age) || age < minAge || age > maxAge) return "age";
+  if (!Number.isFinite(mc) || mc < mcFloor || mc > mcCeil) return "mc";
+  if (liqFrac > 0 && liq > 0 && liq < mc * liqFrac) return "liquidity";
+  // GRIND/SCALP: liquidity must be PRESENT and meet an absolute floor — kills phantom thin-curve
   // coins (the ones that flash fake +400% but can't fill). Closes the liq===0 bypass too.
   if (P.minLiqAbs && (!(liq > 0) || liq < P.minLiqAbs)) return "liquidity";
   if (vol < 25) return "volume";
   if (buys > 0 && sells > buys * 2 + 3) return "dumping";
-  // GRIND scores survived/climbing coins (grindScore); every other mode uses freshScore.
-  const setupScore = P.grind ? grindScore(row) : freshScore(row);
+  // SCALP scores liquid movers (liquidScore); GRIND scores survivors (grindScore); the rest use
+  // freshScore. Each mode's gate lives on its own scale (see the minScore overrides in aggParams).
+  const setupScore = P.scalp ? liquidScore(row) : P.grind ? grindScore(row) : freshScore(row);
   if (setupScore < P.minScore) return "score";
   return null;
 }
@@ -611,10 +692,11 @@ function freshState(opts) {
     // Per-trade HARD ceiling — caps risk per bet so a rug can't gut the wallet. User-set value
     // wins; otherwise a budget-scaled default that's PER-MODE so each mode's identity is real:
     // degen bets bigger (6%), chill smaller (3%), everyone else 4%. Low-churn concentrates (6%).
-    maxTradeSol: opts.maxTradeSol || Math.max(0.05, budget * (lowChurn ? 0.06 : opts.mode === "degen" ? 0.06 : opts.mode === "chill" ? 0.03 : 0.04)),
+    maxTradeSol: opts.maxTradeSol || Math.max(0.05, budget * (lowChurn ? 0.06 : opts.mode === "degen" ? 0.06 : opts.mode === "chill" ? 0.03 : opts.mode === "scalp" ? 0.05 : 0.04)),
     // Fraction-of-cash cap per bet. Per-mode: degen concentrates into proven setups (16%), chill
-    // preserves capital (8%), default 12%; low-churn 28%. Calibration can only SHRINK this (×<=1).
-    sizeFracCap: (lowChurn ? 0.28 : opts.mode === "degen" ? 0.16 : opts.mode === "chill" ? 0.08 : 0.12) * calSizeMult,
+    // preserves capital (8%), scalp sizes moderate on clean-fill liquid coins (14%), default 12%;
+    // low-churn 28%. Calibration can only SHRINK this (×<=1).
+    sizeFracCap: (lowChurn ? 0.28 : opts.mode === "degen" ? 0.16 : opts.mode === "chill" ? 0.08 : opts.mode === "scalp" ? 0.14 : 0.12) * calSizeMult,
     // Entry-quality bump: low-churn takes stronger setups (no hard filter — keeps runners).
     // Calibration ADDS to this (raises the bar) when marginal-score setups have been bleeding.
     minScoreBonus: (lowChurn ? 16 : 0) + calScoreBonus,
@@ -633,7 +715,7 @@ function freshState(opts) {
     // the cap — a tight cap is exactly what keeps an aggressive style net-green over a run
     // (degen -15%, chill -12% capital-preservation, everyone else -20%). User value wins.
     lossCapFrac: Math.max(0.05, Math.min(0.5, Number(opts.lossCapFrac) > 0 ? Number(opts.lossCapFrac)
-      : (opts.mode === "degen" ? 0.15 : opts.mode === "chill" ? 0.12 : 0.20))),
+      : (opts.mode === "degen" ? 0.15 : opts.mode === "chill" ? 0.12 : opts.mode === "scalp" ? 0.12 : 0.20))),
     // Recent big-win (>=5x) records for the panel's downloadable PnL cards.
     bigWins: [],
     // Optional PROFIT VAULT: sweep realized profit above the working stake to a
@@ -694,6 +776,9 @@ function freshState(opts) {
 export function createAutopilotEngine(deps) {
   const {
     getFreshFeed,
+    // SCALP's feed: liquid last-hour movers (real depth + volume). Defaults to the fresh feed
+    // if the host didn't wire it, so scalp degrades gracefully instead of starving.
+    getLiquidFeed = null,
     getPairLite,
     buyToken,
     sellPercent,
@@ -845,30 +930,37 @@ export function createAutopilotEngine(deps) {
     }
   }
 
-  // Latest in-memory price for a position (pump tick), falling back to the last
-  // value the loop saw. Used so the displayed numbers are live on every poll,
-  // not just as fresh as the last exit-loop pass.
-  function liveMcFor(pos) {
-    const m = Number(getInstantMc(pos.mint));
-    return m > 0 ? m : pos.lastMc;
-  }
+  // (Display now reads the median-smoothed pos.lastMc directly — see status() — instead of the
+  // raw single-tick getInstantMc, which is what made the live numbers flicker. getInstantMc is
+  // still injected for any future fast-path use, but the headline/display no longer depend on it.)
 
   function status() {
     if (!state) return { running: false };
-    // HONEST DISPLAY EQUITY: value open bags at what you'd REALISTICALLY bank if you
-    // stopped right now — not the raw mark. A marked-up memecoin rarely fills at its mark
-    // (slippage + thin curves), and a single tiny buy can phantom-spike the tick. The old
-    // display used the uncapped live mark, so it read "+5%" then "adjusted" down when it
-    // reconciled. Now: full downside, but haircut unrealized gains to ~60% and hard-cap the
-    // mark at 4x, so the running % tracks reality and never looks like you're winning more
-    // than you really are. Realized SOL (bank) is always exact; this only tempers OPEN bags.
-    const workingEquity = state.bank + state.open.reduce((a, p) => {
-      const raw = p.entryMc > 0 ? liveMcFor(p) / p.entryMc : 1;
+    // ── HONEST, NON-JUMPING DISPLAY ────────────────────────────────────────────────────────
+    // The headline number is REALIZED-anchored: open bags are valued at COST (break-even), so
+    // the equity / PnL% the user sees ONLY moves when a trade actually closes and SOL lands in
+    // the bank. This is the fix for "I sold 3 losses in a row but it showed positive" and "it
+    // jumps everywhere / shows +300% for a second": a phantom mark on a thin curve can no longer
+    // inflate the headline, because unrealized marks are not counted in it at all. After three
+    // real losses the headline is red, full stop — you always know exactly where you stand.
+    //
+    // The optimistic/marked view (what the open bags are CURRENTLY worth, haircut) is still
+    // exposed SEPARATELY (markedEquity / markedPnlPct / unrealizedSol) and clearly labeled as
+    // not-yet-banked, so the UI can show "realized +5% · unrealized +12% (riding)" without ever
+    // passing the speculative number off as your actual result.
+    const deployedCost = state.open.reduce((a, p) => a + p.costSol * p.remFrac, 0);
+    // Realized equity: cash on hand + vaulted + open bags AT COST. Moves only on closed trades.
+    const realizedEquity = state.bank + (state.secured || 0) + deployedCost;
+    // Marked equity: open bags at their smoothed, haircut mark (full downside, but unrealized
+    // gains discounted to ~60% and hard-capped at 4x — and using the median-smoothed pos.lastMc,
+    // NOT the raw single-tick getInstantMc that made the per-position number flicker).
+    const markedOpenVal = state.open.reduce((a, p) => {
+      const raw = p.entryMc > 0 ? (Number(p.lastMc) || p.entryMc) / p.entryMc : 1;
       const mv = raw >= 1 ? 1 + (Math.min(raw, 4) - 1) * 0.6 : Math.max(0, raw);
       return a + p.costSol * p.remFrac * mv;
     }, 0);
-    // Total includes profit already swept to the vault (safe SOL).
-    const totalEquity = workingEquity + (state.secured || 0);
+    const markedEquity = state.bank + (state.secured || 0) + markedOpenVal;
+    const unrealizedSol = markedOpenVal - deployedCost; // unbanked paper P/L on open bags (haircut)
     return {
       running: running(),
       live: state.live,
@@ -885,9 +977,15 @@ export function createAutopilotEngine(deps) {
       lockGainsContinue: Boolean(state.lockGainsContinue),
       lockedBankedSol: round(state.lockedBankedSol || 0),
       vault: state.vault ? state.vault.destination : null,
-      equity: round(totalEquity),
+      // HEADLINE = realized-anchored (open bags at cost) — the consistent "where am I" number.
+      equity: round(realizedEquity),
       peak: round(state.peak),
-      pnlPct: round(((totalEquity / state.start) - 1) * 100, 2),
+      pnlPct: round(((realizedEquity / state.start) - 1) * 100, 2),
+      // SECONDARY = marked / unrealized, clearly separate so it's never mistaken for the result.
+      markedEquity: round(markedEquity),
+      markedPnlPct: round(((markedEquity / state.start) - 1) * 100, 2),
+      unrealizedSol: round(unrealizedSol, 4),
+      openValueSol: round(markedOpenVal, 4),
       wins: state.wins,
       losses: state.losses,
       scratches: state.scratches || 0,
@@ -898,7 +996,8 @@ export function createAutopilotEngine(deps) {
         mint: p.mint,
         costSol: round(p.costSol),
         remFrac: p.remFrac,
-        movePct: round(p.entryMc > 0 ? (liveMcFor(p) / p.entryMc - 1) * 100 : 0, 2),
+        // Smoothed per-position move (median-based pos.lastMc), not the jumpy single-tick mark.
+        movePct: round(p.entryMc > 0 ? ((Number(p.lastMc) || p.entryMc) / p.entryMc - 1) * 100 : 0, 2),
         heldS: Math.round((now() - p.openedAt) / 1000)
       })),
       tradeNo: state.tradeNo,
@@ -1321,8 +1420,13 @@ export function createAutopilotEngine(deps) {
 
   async function hunt() {
     let rows = [];
+    // SCALP hunts the LIQUID last-hour feed (real depth/volume) so its marks are sellable and it
+    // finds candidates fast; every other mode hunts the fresh-launch feed. Falls back to fresh if
+    // the liquid feed isn't wired or returns nothing.
+    const useLiquid = state.mode === "scalp" && typeof getLiquidFeed === "function";
     try {
-      rows = await getFreshFeed();
+      rows = useLiquid ? await getLiquidFeed() : await getFreshFeed();
+      if (useLiquid && (!Array.isArray(rows) || !rows.length)) rows = await getFreshFeed();
     } catch (e) {
       record("warn", `feed error: ${e && e.message}`);
       return;
@@ -1378,7 +1482,7 @@ export function createAutopilotEngine(deps) {
         const a = state.recentApeNames[ns];
         return !a || nowMs - a > 15_000;
       })
-      .map((r) => ({ r, reject: entryReject(r, P), fs: P.grind ? grindScore(r) : freshScore(r) }));
+      .map((r) => ({ r, reject: entryReject(r, P), fs: P.scalp ? liquidScore(r) : P.grind ? grindScore(r) : freshScore(r) }));
     // Reject-reason tally so a persistently-dry feed shows WHY (mc/age/liquidity/score/etc.)
     // — turns "0 passed the bar" into an actionable breakdown in the scan heartbeat.
     const rejTally = {};
@@ -1458,7 +1562,7 @@ export function createAutopilotEngine(deps) {
       const ciRec = callerIntel ? callerIntel(cand.r.tokenMint) : null;
       const ci = ciRec && ciRec.signal ? ciRec.signal : null;
       // Conviction = confluence of proven-dev rep + buy flow + freshness + score + smart money + caller intel.
-      const conv = convictionMult(cand.r, rep, sm, ci, { unprovenCap: P.unprovenConvCap, provenCap: P.provenConvCap });
+      const conv = convictionMult(cand.r, rep, sm, ci, { unprovenCap: P.unprovenConvCap, provenCap: P.provenConvCap, scalp: P.scalp });
       if (sm) record("info", `🐳 smart money on ${cand.r.symbol} — ${sm.kol ? "KOL " : ""}${sm.winners || 0} winner-wallet(s) → conv ${conv.toFixed(2)}`);
       if (ci && ci.trusted) record("info", `📣 caller intel on ${cand.r.symbol} — ${ci.reason} (+${ci.convictionDelta.toFixed(2)} conv) → conv ${conv.toFixed(2)}`);
       // ADAPTIVE QUALITY GATE (smarter picks): when the tape is risky, take ONLY the
@@ -1476,7 +1580,10 @@ export function createAutopilotEngine(deps) {
       // the strongest fresh movers are never missed. Also re-confirms a coin that already
       // stopped us this session (coinLosses>0) so we stop instantly re-aping a chopper.
       const proven = (rep && rep.runners >= 1 && rep.rugs === 0) || (sm && (sm.kol || sm.winners >= 2)) || (ci && ci.trusted);
-      const elite = cand.fs >= 72;
+      // SCALP scores on the liquidScore scale (top setups ~60-80, not 72+), and a liquid coin's
+      // real depth already removes the rug risk that confirmation guards against — so a strong
+      // scalp setup (>=58) enters instantly (fast) while only marginal ones get one confirm.
+      const elite = P.scalp ? cand.fs >= 58 : cand.fs >= 72;
       const stoppedBefore = (state.coinLosses[cand.r.tokenMint] || 0) > 0;
       const needsConfirm = !proven && (stoppedBefore || tune.tape === "COLD" || !elite);
       if (needsConfirm) {
@@ -1501,7 +1608,9 @@ export function createAutopilotEngine(deps) {
     // (e.g. higher-MC coins past the freshness gate). Works in paper AND live. The
     // main fresh scan above is completely unchanged; these are pure bonus entries,
     // and every smart-money position still rides the same rug/stop/trailing exits.
-    if (smartMoneyReady() && state.open.length < maxNow && openedThisCycle < perCycle) {
+    // SCALP opts OUT of these: the smart-money feed surfaces fresh dust (where phantom marks live),
+    // which would break scalp's promise of liquid, realizable fills. Scalp stays liquid-only.
+    if (state.mode !== "scalp" && smartMoneyReady() && state.open.length < maxNow && openedThisCycle < perCycle) {
       let smRows = [];
       try { smRows = await smartMoneyFeed(); } catch (e) { record("warn", `smart-money feed: ${e && e.message}`); }
       for (const r of (smRows || [])) {

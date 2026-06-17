@@ -997,6 +997,46 @@ const autopilotEngine = createAutopilotEngine({
       bestPickScore: r.bestPickScore || r.bestPick || 0
     }));
   },
+  // SCALP feed: LIQUID last-hour movers (real depth + traded volume → realizable marks, clean
+  // fills). Sourced from the data-driven volume/momentum sorts (which pull the under-1h window),
+  // deduped, and filtered to genuine depth (>= $20k liquidity) so phantom dust never reaches the
+  // scalp brain. The engine still applies its own liquidScore + $20k minLiqAbs gate on top.
+  getLiquidFeed: async () => {
+    let vol = null, mom = null;
+    try {
+      [vol, mom] = await Promise.all([
+        webLivePairs("autopilot", "live", { sort: "volume" }).catch(() => null),
+        webLivePairs("autopilot", "live", { sort: "momentum" }).catch(() => null)
+      ]);
+    } catch {}
+    const seen = new Set();
+    const out = [];
+    for (const feed of [vol, mom]) {
+      for (const r of (Array.isArray(feed?.rows) ? feed.rows : [])) {
+        if (!r || !r.tokenMint || seen.has(r.tokenMint)) continue;
+        if ((Number(r.liquidityUsd) || 0) < 20000) continue; // real depth only — the whole point
+        seen.add(r.tokenMint);
+        out.push({
+          tokenMint: r.tokenMint,
+          symbol: r.symbol,
+          pairAgeSeconds: r.pairAgeSeconds,
+          marketCap: r.marketCap,
+          liquidityUsd: r.liquidityUsd,
+          volume5m: r.volume5m,
+          volumeH1: r.volumeH1,
+          buys5m: r.buys5m,
+          sells5m: r.sells5m,
+          buysH1: r.buysH1,
+          sellsH1: r.sellsH1,
+          m5: r.m5 && Number.isFinite(Number(r.m5.priceChange)) ? Number(r.m5.priceChange) : (Number.isFinite(Number(r.m5)) ? Number(r.m5) : undefined),
+          h1: r.h1 && Number.isFinite(Number(r.h1.priceChange)) ? Number(r.h1.priceChange) : (Number.isFinite(Number(r.h1)) ? Number(r.h1) : undefined),
+          sniperCount: r.sniperCount || r.snipers || 0,
+          bestPickScore: r.bestPickScore || r.bestPick || 0
+        });
+      }
+    }
+    return out;
+  },
   getPairLite: async (mint) => {
     // FAST PATH for pump.fun coins: the live PumpPortal trade tick is in-memory
     // and sub-second. We subscribe each coin on open (onOpen), so this is the
@@ -3501,7 +3541,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
           return;
         }
         const minutes = Number(body.minutes) || 60;
-        const mode = ["chill", "normal", "degen", "steady", "blend", "grind"].includes(String(body.mode)) ? String(body.mode) : "normal";
+        const mode = ["chill", "normal", "degen", "steady", "blend", "grind", "scalp"].includes(String(body.mode)) ? String(body.mode) : "normal";
         const wantLive = body.live === true || body.live === "true";
         // PAPER MODE IS OWNER-ONLY. Paper runs the full strategy with no risk, so it's the
         // clearest window into how the bot works — paying users must NEVER see it. They run
@@ -8829,7 +8869,7 @@ async function handleMessage(message, userId) {
     || (bareToggle ? { argument: bareToggle[1] } : null);
   if (groupToggle) {
     if (isPrivateChat(message.chat)) {
-      await say(chatId, "/slimewire works inside groups and channels - it arms SlimeWire engine alerts there (fresh launches, TP/SL fires, KOL copies). Add me to your group, then an admin runs /slimewire on. In groups: /look <CA>, /chart <CA>, /alpha, /leaderboard. In DM you also get /trade, /positions, /pnl, /flex <CA>.");
+      await say(chatId, "/slimewire works inside groups and channels - it arms SlimeWire engine alerts there (fresh launches, TP/SL fires, KOL copies). Add me to your group, then an admin runs /slimewire on. In groups: /look <CA>, /chart <CA>, /flex <CA>, /pnl <CA>, /alpha, /leaderboard. In DM you also get /trade, /positions, and your full /pnl history.");
       return;
     }
     console.warn(`[tg-group] /slimewire "${groupToggle.argument}" from chat ${chatId} (${message.chat?.type})`);
@@ -9029,12 +9069,12 @@ async function handleMessage(message, userId) {
 
   const pnlCommand = parseCommandWithArgument(text, ["pnl"]);
   if (pnlCommand) {
-    if (!isPrivateChat(message.chat)) {
-      await say(chatId, "Open this bot in DM to view PnL.");
-      return;
-    }
     if (pnlCommand.argument) {
+      // CA form → render the card RIGHT IN THIS CHAT. Works in groups/channels so everyone sees
+      // the result, win or loss (the whole point of a flex/PnL card).
       await sendPnlCardForTokenText(chatId, userId, pnlCommand.argument);
+    } else if (!isPrivateChat(message.chat)) {
+      await say(chatId, "Open the bot in DM for your full PnL list. In a group, post a card with `/pnl <CA>`.");
     } else {
       await showPnlResults(chatId, userId);
     }
@@ -9043,12 +9083,11 @@ async function handleMessage(message, userId) {
 
   const pnlCardCommand = parseCommandWithArgument(text, ["pnlcard", "pnl_card", "card"]);
   if (pnlCardCommand) {
-    if (!isPrivateChat(message.chat)) {
-      await say(chatId, "Open this bot in DM to create a PnL card.");
-      return;
-    }
     if (pnlCardCommand.argument) {
+      // CA form posts in-chat (group-friendly).
       await sendPnlCardForTokenText(chatId, userId, pnlCardCommand.argument);
+    } else if (!isPrivateChat(message.chat)) {
+      await say(chatId, "In a group, post a card with `/pnlcard <CA>` in one message. Open the bot in DM to build one interactively.");
     } else {
       setSession(chatId, "pnl_card_token", userId);
       await say(chatId, "Paste the token mint / CA for the PnL card. You can also use `/pnlcard CA` in one message.");
@@ -9056,13 +9095,14 @@ async function handleMessage(message, userId) {
     return;
   }
 
-  // /flex [CA] — the rotating win/loss flex card for your PnL on a token (DM-only; it's your
-  // trade history). Same scene-rotating card as /pnlcard, framed as a flex.
+  // /flex [CA] — the rotating win/loss flex card for your PnL on a token. With a CA it posts the
+  // card RIGHT IN THIS CHAT, so it works in groups/channels — everyone sees the win (or the loss).
   const flexCommand = parseCommandWithArgument(text, ["flex"]);
   if (flexCommand) {
-    if (!isPrivateChat(message.chat)) { await say(chatId, "Open this bot in DM to flex your PnL card."); return; }
     if (flexCommand.argument) {
       await sendPnlCardForTokenText(chatId, userId, flexCommand.argument);
+    } else if (!isPrivateChat(message.chat)) {
+      await say(chatId, "In a group, flex with `/flex <CA>` in one message so everyone sees your card. Open the bot in DM to flex interactively.");
     } else {
       setSession(chatId, "pnl_card_token", userId);
       await say(chatId, "Paste the token mint / CA to flex. You can also use `/flex CA` in one message.");

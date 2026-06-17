@@ -5,6 +5,7 @@ import {
   sizeFor,
   freshScore,
   grindScore,
+  liquidScore,
   convictionMult,
   autoTune,
   entryReject,
@@ -760,4 +761,128 @@ test("engine: per-mode per-bet sizing (degen biggest, chill smallest)", async ()
   }
   assert.ok(cap.degen > cap.normal, "degen concentrates more per bet");
   assert.ok(cap.chill < cap.normal, "chill preserves capital with smaller bets");
+});
+
+// ── SCALP mode (liquid movers, fast in/out) ─────────────────────────────────────────────────
+
+test("liquidScore: a liquid, buy-led, early-momentum mover beats a thin, fading one", () => {
+  const strong = { liquidityUsd: 90000, marketCap: 600000, volume5m: 60000, buys5m: 40, sells5m: 12, m5: 12, h1: 30 };
+  const weak = { liquidityUsd: 9000, marketCap: 600000, volume5m: 500, buys5m: 6, sells5m: 20, m5: -15, h1: -40 };
+  assert.ok(liquidScore(strong) > liquidScore(weak) + 25, "real depth + buy flow + early momentum scores far higher");
+  // already-blown-off top (huge +5m) is worth less than a clean early push
+  const late = { ...strong, m5: 120 };
+  assert.ok(liquidScore(strong) > liquidScore(late), "an early push beats a blown-off top");
+});
+
+test("scalp: flexible higher-MC window, hard $20k liquidity floor, fast bank-and-recycle exits", () => {
+  const P = aggParams(baseState({ mode: "scalp" }));
+  assert.ok(P.scalp, "scalp flag is set");
+  assert.ok(P.mcFloor >= 30000, "scalp takes a higher MC floor (not low-cap dust)");
+  assert.ok(P.mcCeil >= 1000000, "scalp reaches into the millions (flexible MC)");
+  assert.ok(P.minLiqAbs >= 20000, "scalp enforces a hard absolute liquidity floor (anti-phantom)");
+  assert.equal(P.liqFrac, 0, "scalp disables the RELATIVE liquidity gate (abs floor only)");
+  assert.ok(P.tp1 <= 16, "scalp banks the first pop fast (~14%)");
+  assert.ok(P.tp1Pct >= 80, "scalp banks the BULK at the first pop");
+  assert.ok(P.moonTarget <= 60, "no moonshot chase — capped quick exit");
+});
+
+test("scalp: accepts a deep-liquidity $1M mover (the relative gate would reject) and blocks thin liquidity / dust", () => {
+  const P = aggParams(baseState({ mode: "scalp" }));
+  // A healthy $1M coin with $60k liquidity: liq is only 6% of MC, so the RELATIVE liqFrac gate
+  // (used by every other mode) would wrongly reject it; scalp accepts it on its absolute floor.
+  const bigLiquid = goodRow({ marketCap: 1000000, liquidityUsd: 60000, pairAgeSeconds: 600, volume5m: 40000, buys5m: 40, sells5m: 14, m5: 10, h1: 25, bestPickScore: 60 });
+  assert.equal(entryReject(bigLiquid, P), null, "scalp accepts the deep-liquidity big-cap mover");
+  // A coin INSIDE grind's MC window but below grind's RELATIVE liq threshold proves the gate
+  // differs: grind rejects it on the relative gate; scalp (relative gate off, abs floor met) takes it.
+  const relGateCoin = goodRow({ marketCap: 70000, liquidityUsd: 20000, pairAgeSeconds: 600, volume5m: 15000, buys5m: 40, sells5m: 12, m5: 10, h1: 20, bestPickScore: 60 });
+  assert.equal(entryReject(relGateCoin, aggParams(baseState({ mode: "grind" }))), "liquidity", "grind rejects it on the relative liquidity gate");
+  assert.equal(entryReject(relGateCoin, P), null, "scalp accepts it (relative gate disabled, abs floor met)");
+  // Thin liquidity (< $20k) is rejected even at a fine MC — this is the phantom-mark guard.
+  assert.equal(entryReject(goodRow({ marketCap: 500000, liquidityUsd: 8000, pairAgeSeconds: 600, volume5m: 5000, buys5m: 30, sells5m: 10 }), P), "liquidity");
+  // Low-cap dust is out of scalp's window entirely.
+  assert.equal(entryReject(goodRow({ marketCap: 8000, liquidityUsd: 25000, pairAgeSeconds: 600, volume5m: 5000 }), P), "mc");
+});
+
+test("scalp: banks the bulk fast at the first ~14% pop (high hit-rate, not a moonshot)", () => {
+  const P = aggParams(baseState({ mode: "scalp" }));
+  assert.ok(P.tp1 <= 16, "scalp's first take-profit is a quick ~14% pop");
+  const base = { entryMc: 100000, entryLiq: 60000, lastLiq: 60000, openedAt: 0, missed: 0, peakPct: 0 };
+  // +20% is comfortably past the ~14% trigger (avoids float-edge) but well below the +150% spike.
+  const tp1 = evalExit({ ...base, lastMc: 100000 * 1.2, tp1Done: false }, P, 1000);
+  assert.equal(tp1.reason, "tp1");
+  assert.ok(tp1.pct >= 80, "banks the bulk (>=80%) at the first pop");
+});
+
+test("scalp: hunts the LIQUID feed, not the fresh-dust feed", async () => {
+  let t = 0;
+  let liquidCalls = 0, freshCalls = 0;
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => { freshCalls++; return []; },
+    getLiquidFeed: async () => { liquidCalls++; return [goodRow({ marketCap: 800000, liquidityUsd: 70000, pairAgeSeconds: 400, volume5m: 50000, buys5m: 40, sells5m: 12, m5: 12, h1: 20, bestPickScore: 60 })]; },
+    getPairLite: async () => ({ marketCap: 800000, liquidityUsd: 70000 }),
+    buyToken: async () => ({ ok: true }),
+    sellPercent: async () => ({ ok: true }),
+    now: () => t,
+    persist: async () => {}
+  });
+  await engine.start({ solBudget: 1, minutes: 60, mode: "scalp", live: false });
+  for (let i = 0; i < 3; i++) { t += 2200; await engine._tick(); }
+  assert.ok(liquidCalls > 0, "scalp pulled the liquid feed");
+  assert.ok(engine._state().open.length >= 1, "scalp opened a liquid-mover position");
+  await engine.stop("test");
+});
+
+// ── Honest, non-jumping live display ────────────────────────────────────────────────────────
+
+test("status: headline PnL is realized-anchored — a phantom open mark never inflates it (the no-phantom fix)", async () => {
+  let t = 0;
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => [goodRow()],
+    getPairLite: async () => ({ marketCap: 5000, liquidityUsd: 6000 }),
+    buyToken: async () => ({ ok: true, tokenAmount: "1000" }),
+    sellPercent: async () => ({ ok: true }),
+    now: () => t,
+    persist: async () => {}
+  });
+  await engine.start({ solBudget: 1, minutes: 60, mode: "normal", live: false });
+  for (let i = 0; i < 3; i++) { t += 2200; await engine._tick(); }
+  const live = engine._state();
+  assert.ok(live.open.length >= 1, "opened a position");
+
+  // PHANTOM-SPIKE the open bag's marked price to a fantasy +300% that can't actually fill.
+  live.open[0].lastMc = live.open[0].entryMc * 4;
+  const s = engine.status();
+  // The HEADLINE (realized) must NOT move: nothing has been banked, so even a phantom +300% mark
+  // can't turn the displayed PnL positive. This is the "showed positive after losses / flashed
+  // +300% for a second" fix — the headline only changes when SOL actually lands in the bank.
+  assert.ok(Math.abs(s.pnlPct) < 0.5, `realized headline ignores the phantom mark (got ${s.pnlPct}%)`);
+  // The marked/unrealized view is exposed SEPARATELY and is allowed to reflect the (haircut) ride.
+  assert.ok(s.markedPnlPct > s.pnlPct, "marked/unrealized view is separate and shows the ride");
+  assert.ok(s.unrealizedSol > 0, "unrealized SOL surfaces the open ride without polluting the headline");
+  await engine.stop("test");
+});
+
+test("status: a realized loss turns the headline red and it stays put (consistent, not jumping)", async () => {
+  let t = 0;
+  let mc = 5000;
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => [goodRow()],
+    getPairLite: async () => ({ marketCap: mc, liquidityUsd: 6000 }),
+    buyToken: async () => ({ ok: true, tokenAmount: "1000" }),
+    sellPercent: async () => ({ ok: true }),
+    now: () => t,
+    persist: async () => {}
+  });
+  await engine.start({ solBudget: 1, minutes: 60, mode: "normal", live: false });
+  for (let i = 0; i < 3; i++) { t += 2200; await engine._tick(); }
+  assert.ok(engine._state().open.length >= 1, "opened a position");
+  // Crater past the stop so it sells at a real loss.
+  mc = 5000 * 0.9;
+  for (let i = 0; i < 3; i++) { t += 2200; await engine._tick(); }
+  const s = engine.status();
+  assert.equal(s.open.length, 0, "the loser was sold");
+  assert.ok(s.pnlPct < 0, "headline is red after a real loss");
+  // With no open bags, realized and marked agree exactly — nothing phantom can pull it back green.
+  assert.equal(s.pnlPct, s.markedPnlPct, "no open bags → realized == marked (no phantom wiggle)");
+  await engine.stop("test");
 });
