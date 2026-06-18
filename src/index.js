@@ -784,9 +784,14 @@ function walletExitMult(r) {
 // multiple, so we can bank just before the earliest-exiting smart wallet. null = no signal.
 function smartMoneyScore(mint) {
   try {
-    const trades = pumpPortalStream.getTrades(mint, { limit: 80 }) || [];
+    // Buyer set from the WORKING captures (swap-api poll → recordEarlyBuyer → earlyBuyers, plus the
+    // coin's merged obsCoins.buyers), then the PumpPortal trade buffer too (harmless when it's dead,
+    // auto-used if it ever delivers). Reading getTrades ALONE was the bug — it's empty, so this
+    // detector never saw a winner/KOL even with a full roster, and copy-trade never fired at entry.
     const buyers = new Set();
-    for (const t of trades) { if (t && t.side === "buy" && t.trader) buyers.add(String(t.trader)); }
+    const eb = earlyBuyers.get(mint); if (eb) for (const w of eb) buyers.add(String(w));
+    const oc = obsCoins.get(mint); if (oc && Array.isArray(oc.buyers)) for (const w of oc.buyers) buyers.add(String(w));
+    for (const t of (pumpPortalStream.getTrades(mint, { limit: 80 }) || [])) { if (t && t.side === "buy" && t.trader) buyers.add(String(t.trader)); }
     let winners = 0, kol = false;
     const exitMults = [];
     for (const w of buyers) {
@@ -840,23 +845,27 @@ async function smartMoneyFeed() {
     if (seen.has(mint)) continue;
     const sm = smartMoneyScore(mint);
     if (!sm || !(sm.kol || sm.winners >= 2)) continue;  // require strong smart-money read to self-enter
-    let mcSol = 0, vSol = 0, sym = null, ageSec = null;
+    // MC from the WORKING source: obsCoins.lastMc is a real USD market cap from the creation-candidate
+    // sample (sampleDevObservatory). The old path read it off the dead PumpPortal getTrades, so mcSol
+    // was always 0 and every copy candidate got dropped here — even when a winner/KOL really was in.
+    const c = obsCoins.get(mint);
+    let mcUsd = c ? Number(c.lastMc) || 0 : 0;
+    let vSol = 0, sym = null, ageSec = null;
     try {
-      const ticks = pumpPortalStream.getTrades(mint, { limit: 1 });
-      if (ticks && ticks[0]) { mcSol = Number(ticks[0].marketCapSol) || 0; vSol = Number(ticks[0].vSolInBondingCurve) || 0; }
       const ce = pumpPortalStream.getCreationEntry(mint);
       if (ce) {
-        if (!mcSol && ce.lastTrade) { mcSol = Number(ce.lastTrade.marketCapSol) || 0; vSol = Number(ce.lastTrade.vSolInBondingCurve) || vSol; }
+        if (mcUsd <= 0 && ce.lastTrade) mcUsd = (Number(ce.lastTrade.marketCapSol) || 0) * solUsd;
+        if (ce.lastTrade) vSol = Number(ce.lastTrade.vSolInBondingCurve) || 0;
         sym = ce.event?.symbol || ce.event?.name || null;
         const created = Number(ce.event?.timestamp || ce.at) || 0;
         if (created) ageSec = Math.max(0, Math.round((Date.now() - created) / 1000));
       }
     } catch {}
-    if (mcSol <= 0) continue;
+    if (mcUsd <= 0) continue;
     out.push({
       tokenMint: mint,
       symbol: sym || shortMint(mint),
-      marketCap: mcSol * solUsd,
+      marketCap: mcUsd,
       liquidityUsd: vSol > 0 ? vSol * solUsd : 0,
       pairAgeSeconds: ageSec,
       volume5m: 0, buys5m: 0, sells5m: 0, sniperCount: 0,
@@ -1102,12 +1111,47 @@ function sampleDevObservatory() {
     void saveMarketTape();
   } catch (e) { console.warn(`[dev-obs] ${e && e.message}`); }
 }
+// SWAP-API EARLY-BUYER CAPTURE — the resurrection of the smart-money flywheel.
+// The PumpPortal trade stream is DEAD for us (streamTrades:0, buyWsTrades:0), so the observatory
+// captured NO buyers for the 100s of coins the brain watches → walletObs sat at 0 → copy-trade never
+// activated. But swap-api.pump.fun DOES deliver per-trade buyer wallets server-side (verified 200;
+// the group buy bot runs on it). So poll it for the FRESHEST watched coins and feed recordEarlyBuyer.
+// No PumpPortal, no Helius, no API key — free, and it fills walletObs over the next hours of runtime.
+const obsSwapSeenTx = new Map(); // mint -> Set(tx) — dedup so a buyer isn't re-counted each poll
+let _obsSwapPolling = false;
+async function pollObsTradesSwapApi() {
+  if (_obsSwapPolling) return;
+  _obsSwapPolling = true;
+  try {
+    // Freshest watched coins first — their early-buyer window is still open and they're what the
+    // engine is actually evaluating. Bounded so we never flood the API.
+    const coins = [...obsCoins.entries()].sort((a, b) => (b[1].seen || 0) - (a[1].seen || 0)).slice(0, 60).map(([m]) => m);
+    for (let i = 0; i < coins.length; i += 8) {           // small concurrency, in chunks
+      await Promise.all(coins.slice(i, i + 8).map(async (mint) => {
+        let j = null;
+        try { j = await fetch(`https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=40`, { headers: { accept: "application/json" } }).then((r) => r.ok ? r.json() : null); } catch {}
+        const trades = (j && Array.isArray(j.trades)) ? j.trades : [];
+        if (!trades.length) return;
+        let seen = obsSwapSeenTx.get(mint); if (!seen) { seen = new Set(); obsSwapSeenTx.set(mint, seen); }
+        for (const t of trades) {
+          const sig = String(t.tx || t.slotIndexId || ""); if (!sig || seen.has(sig)) continue; seen.add(sig);
+          if (String(t.type || "").toLowerCase() === "buy") {
+            const trader = String(t.userAddress || ""); if (trader) recordEarlyBuyer(mint, { side: "buy", trader });
+          }
+        }
+        if (seen.size > 200) { const a = [...seen]; obsSwapSeenTx.set(mint, new Set(a.slice(a.length - 150))); }
+      }));
+    }
+    if (obsSwapSeenTx.size > 1500) { for (const m of [...obsSwapSeenTx.keys()]) if (!obsCoins.has(m)) obsSwapSeenTx.delete(m); }
+  } catch {} finally { _obsSwapPolling = false; }
+}
 function startDevObservatory() {
   void loadDevObservatory();
   void loadWalletObservatory();
   void loadMarketTape();
   void loadCoinBanners();
   setInterval(sampleDevObservatory, 45_000);
+  setInterval(() => { void pollObsTradesSwapApi(); }, 18_000); // resurrect the buyer flywheel via the working swap-api source
   // AUTO-KOL: load the saved roster, then harvest proven KOLs from the tracker leaderboard now and
   // every 10 min so the copy-trade roster stays fresh (cheap — the KOL scan is cached internally).
   void loadAutoKolWallets().then(() => { void refreshAutoKolWallets(); });
