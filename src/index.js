@@ -3874,9 +3874,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
     //   GET  /api/web/autopilot/wallets            -> list your loaded wallets
     //   POST /api/web/autopilot/start  {sol, minutes, mode, live, confirm, wallet}
     //   POST /api/web/autopilot/stop
+    //   GET  /api/web/autopilot/log                -> owner-only decision log
     // Live trading requires live:true AND confirm:"LIVE" AND a selected wallet
     // (never the fee wallet). Otherwise it runs paper (no SOL touched).
-    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets" || pathname === "/api/web/autopilot/sweep" || pathname === "/api/web/autopilot/sweep-now" || pathname === "/api/web/autopilot/win-card" || pathname === "/api/web/autopilot/stats" || pathname === "/api/web/autopilot/caller-intel" || pathname === "/api/web/autopilot/backup" || pathname === "/api/web/autopilot/access" || pathname === "/api/web/autopilot/grant" || pathname === "/api/web/autopilot/trial" || pathname === "/api/web/autopilot/redeem" || pathname === "/api/web/autopilot/key-login" || pathname === "/api/web/autopilot/my-key") {
+    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets" || pathname === "/api/web/autopilot/sweep" || pathname === "/api/web/autopilot/sweep-now" || pathname === "/api/web/autopilot/win-card" || pathname === "/api/web/autopilot/stats" || pathname === "/api/web/autopilot/log" || pathname === "/api/web/autopilot/caller-intel" || pathname === "/api/web/autopilot/backup" || pathname === "/api/web/autopilot/access" || pathname === "/api/web/autopilot/grant" || pathname === "/api/web/autopilot/trial" || pathname === "/api/web/autopilot/redeem" || pathname === "/api/web/autopilot/key-login" || pathname === "/api/web/autopilot/my-key") {
       const webAuth = await authenticateOptionalWebRequest(request);
       const body = request.method === "POST" ? await readJsonRequestBody(request).catch(() => ({})) : {};
       const providedKey = String(requestUrl.searchParams.get("key") || body.key || "");
