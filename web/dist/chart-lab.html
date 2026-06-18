@@ -226,10 +226,13 @@
     el.innerHTML=list.map(function(x){var amt=x.usd?('$'+Number(x.sol).toLocaleString()):((x.buy?'+':'-')+x.sol+' SOL');return '<div class="trow"><span class="dim">'+fmtAgo(vclock-x.at)+'</span><span class="pill '+(x.buy?'b':'s')+'">'+(x.buy?'BUY':'SELL')+'</span><span>'+amt+'</span><span class="dim">'+x.price+'</span></div>';}).join('');}
   function refresh(){
     var lb=bars[N-1];var e;
-    if(e=document.getElementById('px'))e.textContent=(usdMode&&realPrice)?fmtUsd(realPrice):priceLabel(lb.c);
-    if(e=document.getElementById('s_mc'))e.textContent=fmtMc(lb.c);
-    var chg=usdMode&&chg24!=null&&isFinite(chg24)?Math.round(chg24):Math.round((lb.c/bars[0].o-1)*100);
-    if(e=document.getElementById('chg')){e.textContent=(chg>=0?'+':'')+chg+'% 24h';e.className='chg '+(chg>=0?'buyc':'sellc');}
+    // Real coin whose real data hasn't arrived yet → show a neutral dash, NEVER the synthetic seed's
+    // fake numbers (that pre-load $117K/demo flash was the "ogre test chart coming through").
+    var loading=CA&&!usdMode;
+    if(e=document.getElementById('px'))e.textContent=loading?'—':((usdMode&&realPrice)?fmtUsd(realPrice):priceLabel(lb.c));
+    if(e=document.getElementById('s_mc'))e.textContent=loading?'—':fmtMc(lb.c);
+    if(!loading){var chg=usdMode&&chg24!=null&&isFinite(chg24)?Math.round(chg24):Math.round((lb.c/bars[0].o-1)*100);
+      if(e=document.getElementById('chg')){e.textContent=(chg>=0?'+':'')+chg+'% 24h';e.className='chg '+(chg>=0?'buyc':'sellc');}}
     renderTape();safeDraw();
   }
   function esc(s){return String(s||'').replace(/[<>&"]/g,'');}
@@ -243,6 +246,10 @@
     realPrice=s.priceUsd; liveTarget=s.priceUsd;
     if(s.mc>0)mcScale=s.mc/s.priceUsd;                 // anchor MC axis to the authoritative MC/price → label == top bar
     if(s.change24!=null&&isFinite(s.change24))chg24=s.change24;
+    // Paint price + MC + 24h NOW from DexScreener (1 fast call) — don't wait on the candle chain / usdMode.
+    if(e=document.getElementById('px'))e.textContent=fmtUsd(s.priceUsd);
+    if(s.mc>0&&(e=document.getElementById('s_mc')))e.textContent=fmtMcRaw(s.mc);
+    if(s.change24!=null&&isFinite(s.change24)&&(e=document.getElementById('chg'))){var _c=Math.round(s.change24);e.textContent=(_c>=0?'+':'')+_c+'% 24h';e.className='chg '+(_c>=0?'buyc':'sellc');}
     if(e=document.getElementById('s_liq'))e.textContent=fmtMcRaw(s.liq);
     if(e=document.getElementById('s_vol'))e.textContent=fmtMcRaw(s.vol24);
     if((s.buys24||s.sells24)&&(e=document.getElementById('s_bs')))e.textContent=s.buys24+' / '+s.sells24;
@@ -287,16 +294,19 @@
       var pool=tp&&tp.data&&tp.data[0];
       if(!pool||!pool.attributes||!pool.attributes.address)return null;
       var a=pool.attributes,addr=a.address,tfa=gtTf(tf);gtPool=addr; // cache for the fast live-price poll
-      return gtj(GTB+'/pools/'+addr+'/ohlcv/'+tfa[0]+'?aggregate='+tfa[1]+'&limit=150&currency=usd').then(function(oh){
+      // ohlcv + trades in PARALLEL (was sequential) — one fewer round-trip = faster first candle paint.
+      return Promise.all([
+        gtj(GTB+'/pools/'+addr+'/ohlcv/'+tfa[0]+'?aggregate='+tfa[1]+'&limit=150&currency=usd'),
+        gtj(GTB+'/pools/'+addr+'/trades?trade_volume_in_usd_greater_than=0')
+      ]).then(function(res){
+        var oh=res[0],tr=res[1];
         var list=(oh&&oh.data&&oh.data.attributes&&oh.data.attributes.ohlcv_list)||[];
         if(!list.length)return null;
         var candles=list.map(function(x){return {t:+x[0]||0,o:+x[1]||0,h:+x[2]||0,l:+x[3]||0,c:+x[4]||0,v:+x[5]||0};}).filter(function(k){return k.c>0;}).sort(function(p,q){return p.t-q.t;});
         var sym=String(a.name||'').split('/')[0].trim();
-        return gtj(GTB+'/pools/'+addr+'/trades?trade_volume_in_usd_greater_than=0').then(function(tr){
-          var trl=(tr&&tr.data)||[];
-          var trades=trl.slice(0,60).map(function(d){var x=d.attributes||{},buy=x.kind==='buy';return {t:Math.floor(Date.parse(x.block_timestamp)/1000)||0,side:buy?'buy':'sell',usd:+x.volume_in_usd||0,price:+(buy?x.price_to_in_usd:x.price_from_in_usd)||0};});
-          return {ok:true,stage:'dex',symbol:sym,name:sym,priceUsd:+a.base_token_price_usd||0,mc:+a.market_cap_usd||0,fdv:+a.fdv_usd||0,liq:+a.reserve_in_usd||0,vol24:(a.volume_usd&&+a.volume_usd.h24)||0,change24h:(a.price_change_percentage&&+a.price_change_percentage.h24)||0,candles:candles,trades:trades};
-        });
+        var trl=(tr&&tr.data)||[];
+        var trades=trl.slice(0,60).map(function(d){var x=d.attributes||{},buy=x.kind==='buy';return {t:Math.floor(Date.parse(x.block_timestamp)/1000)||0,side:buy?'buy':'sell',usd:+x.volume_in_usd||0,price:+(buy?x.price_to_in_usd:x.price_from_in_usd)||0};});
+        return {ok:true,stage:'dex',symbol:sym,name:sym,priceUsd:+a.base_token_price_usd||0,mc:+a.market_cap_usd||0,fdv:+a.fdv_usd||0,liq:+a.reserve_in_usd||0,vol24:(a.volume_usd&&+a.volume_usd.h24)||0,change24h:(a.price_change_percentage&&+a.price_change_percentage.h24)||0,candles:candles,trades:trades};
       });
     }).catch(function(){return null;});
   }
@@ -317,15 +327,17 @@
   function loadServer(){fetch('/api/chart?ca='+encodeURIComponent(CA)+'&tf='+encodeURIComponent(TF)).then(function(r){return r.json();}).then(applyData).catch(function(){});}
   function loadReal(){
     if(!CA)return;
-    Promise.all([loadDex(CA).catch(function(){return null;}),loadGT(CA,TF).catch(function(){return null;})]).then(function(r){
-      var dex=r[0],gt=r[1];
-      if(dex)applyDexStats(dex);                              // authoritative stats first (matches top bar)
-      if(gt&&gt.candles&&gt.candles.length)applyData(gt);     // GT candle shape, dex stats layered on
-      else loadServer();                                      // no GT candles (fresh pre-DEX) → Pump candles
-    }).catch(function(){loadServer();});
+    // Apply DexScreener stats the INSTANT they land (1 fast call) so the bottom info + price fill
+    // immediately — don't make them wait on GeckoTerminal's slower candle chain.
+    loadDex(CA).then(function(dex){if(dex)applyDexStats(dex);}).catch(function(){});
+    // Candle shape in parallel; fall back to the server (Pump) when GT has no pool yet (fresh pre-DEX).
+    loadGT(CA,TF).then(function(gt){if(gt&&gt.candles&&gt.candles.length)applyData(gt);else loadServer();}).catch(function(){loadServer();});
   }
   if(!CA){setInterval(function(){bars.push(mk(bars[N-1].c));bars.shift();vclock+=2;var nadd=1+(Math.random()<0.5?1:0);for(var z=0;z<nadd;z++)txns.unshift(newTx(0));if(txns.length>160)txns.length=160;liveTarget=bars[N-1].c;dispClose=bars[N-2]?bars[N-2].c:bars[N-1].c;bars[N-1].c=dispClose;refresh();kick();},1700);}
   else{
+    // Real coin: wipe the demo placeholder numbers NOW so they never flash as if real.
+    ['s_mc','s_liq','s_vol','s_bs','px'].forEach(function(id){var e=document.getElementById(id);if(e)e.textContent='—';});
+    var _ce=document.getElementById('chg');if(_ce){_ce.textContent='';_ce.className='chg';}
     // Instant seamless reload: if we drew this coin moments ago, repaint the REAL data immediately
     // from sessionStorage (no synthetic flash, no empty), then refresh live.
     try{ var cc=JSON.parse(sessionStorage.getItem('cl:'+CA)||'null'); if(cc&&cc.d&&Date.now()-cc.at<180000) applyData(cc.d); }catch(e){}
