@@ -143,7 +143,12 @@ export function aggParams(state) {
   // window (higher floors starved it); the real depth/quality vetting is liquidScore + the volume
   // gate + fast exits, not the MC floor. grind stays mid; default is the fresh sub-$20k.
   const mcFloor = liquid ? 4000 : grind ? 6000 : 1800;
-  const mcCeil = liquid ? 12000000 : grind ? 80000 : 20000;
+  // FRESH-PATH MC CEILING TIGHTENED to the proven +EV pocket. The 1517-trade live scorecard is
+  // blunt: MC 2.1-2.5k is the ONLY +EV band (+1.20), while 2.5-3.5k BLED the most of anything
+  // (−1.42 over 706 trades) and 3.5k+ lost too (−0.44). The old 20k ceiling sprayed entries all
+  // over the bleeder zone. Cap just above the winning band (2.8k, a little headroom) so the fresh
+  // engine only buys where it actually makes money. (liquid/grind keep their own wide windows.)
+  const mcCeil = liquid ? 12000000 : grind ? 80000 : 2800;
   // ANTI-PHANTOM depth floor — applied ONLY to coins that REPORT a liquidity number (see
   // entryReject). A phantom +400% spike comes from a thin curve where one tiny buy moves the marked
   // cap but nothing can fill, so a coin whose KNOWN liquidity is below this floor is rejected.
@@ -162,6 +167,11 @@ export function aggParams(state) {
   // for being "too old". grind targets survived/climbed coins; default stays fresh-launch tight.
   const minAge = liquid ? 30 : grind ? 20 : 4;
   const maxAge = liquid ? 2592000 : grind ? 3600 : 1200;
+  // FRESH-PATH AGE CARVE-OUT: the 30-120s band is the single worst age pocket (−1.29 over 509
+  // trades, a 15% win rate) — coins that launched, got sniped/pumped, and are mid-dump. <30s
+  // (+0.22) and 2-5m (+0.34) both WIN. So the fresh engine skips the 30-120s dead-zone entirely
+  // and takes the freshest entries + the survivors past 2 min. (entryReject honors skipMidAge.)
+  const skipMidAge = !liquid && !grind;
   // LIQUID disables the RELATIVE liquidity gate (liqFrac 0): a healthy $1M coin legitimately has
   // liq well under mc*0.3, so the relative test would wrongly reject it. The absolute floor
   // (minLiqAbs, known-thin only) does the real depth check instead.
@@ -228,7 +238,7 @@ export function aggParams(state) {
   // tape already pulled it in via the bankHard clamp above).
   if (mode === "degen" && !bankHard) moonTarget = Math.max(moonTarget, 700);
 
-  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, mcCeil, minAge, maxAge, liqFrac, minLiqAbs, steady, blend, grind, scalp, liquid, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct, unprovenConvCap, provenConvCap };
+  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, mcCeil, minAge, maxAge, skipMidAge, liqFrac, minLiqAbs, steady, blend, grind, scalp, liquid, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct, unprovenConvCap, provenConvCap };
 }
 
 // SELF-TUNING / market-regime brain: reads the recent runner & rug rate and sets
@@ -531,6 +541,8 @@ export function entryReject(row, P) {
   const mcCeil = Number.isFinite(P.mcCeil) ? P.mcCeil : 20000;
   const liqFrac = Number.isFinite(P.liqFrac) ? P.liqFrac : 0.3;
   if (!Number.isFinite(age) || age < minAge || age > maxAge) return "age";
+  // Skip the proven 30-120s dead-zone on the fresh path (−1.29 over 509 trades) — see aggParams.
+  if (P.skipMidAge && Number.isFinite(age) && age > 30 && age < 120) return "midage";
   if (!Number.isFinite(mc) || mc < mcFloor || mc > mcCeil) return "mc";
   if (liqFrac > 0 && liq > 0 && liq < mc * liqFrac) return "liquidity";
   // GRIND/SCALP absolute depth floor — kills coins whose KNOWN liquidity is genuinely thin (the
@@ -546,6 +558,9 @@ export function entryReject(row, P) {
   // freshScore. Each mode's gate lives on its own scale (see the minScore overrides in aggParams).
   const setupScore = P.liquid ? liquidScore(row) : P.grind ? grindScore(row) : freshScore(row);
   if (setupScore < P.minScore) return "score";
+  // FRESH-PATH SCORE CEILING — reject the 67+ bleeder zone (see aggParams maxScore). Entry becomes a
+  // BAND (~58-66), the proven +EV pocket where the runners actually live, not just a floor.
+  if (Number.isFinite(P.maxScore) && setupScore >= P.maxScore) return "overscore";
   return null;
 }
 
@@ -994,7 +1009,7 @@ export function createAutopilotEngine(deps) {
     // gains discounted to ~60% and hard-capped at 4x — and using the median-smoothed pos.lastMc,
     // NOT the raw single-tick getInstantMc that made the per-position number flicker).
     const markedOpenVal = state.open.reduce((a, p) => {
-      const raw = p.entryMc > 0 ? (Number(p.lastMc) || p.entryMc) / p.entryMc : 1;
+      const raw = p.entryMc > 0 ? (Number(p.dispMc) || Number(p.lastMc) || p.entryMc) / p.entryMc : 1;
       let mv = raw >= 1 ? 1 + (Math.min(raw, 4) - 1) * 0.6 : Math.max(0, raw);
       // HONEST: a bag we can't actually SELL (no real liquidity) must NEVER show as profit — that's
       // the "it reads coins I can't sell and makes me look up in profit" bug. Cap an unsellable
@@ -1042,8 +1057,8 @@ export function createAutopilotEngine(deps) {
         mint: p.mint,
         costSol: round(p.costSol),
         remFrac: p.remFrac,
-        // Smoothed per-position move (median-based pos.lastMc), not the jumpy single-tick mark.
-        movePct: round(p.entryMc > 0 ? ((Number(p.lastMc) || p.entryMc) / p.entryMc - 1) * 100 : 0, 2),
+        // Smoothed per-position move (median-based pos.dispMc), not the jumpy single-tick mark.
+        movePct: round(p.entryMc > 0 ? ((Number(p.dispMc) || Number(p.lastMc) || p.entryMc) / p.entryMc - 1) * 100 : 0, 2),
         heldS: Math.round((now() - p.openedAt) / 1000)
       })),
       tradeNo: state.tradeNo,
@@ -1269,7 +1284,16 @@ export function createAutopilotEngine(deps) {
           pos.anchorPending = false;
           if (now() - pos.openedAt < 6000) { pos.entryMc = mc; if (liq > 0) pos.entryLiq = liq; }
         }
-        pos.lastMc = mc;
+        pos.lastMc = mc; // RAW latest — the stop / rug / TP exits read this so they stay maximally responsive
+        // Median-smoothed mark for DISPLAY ONLY: a single thin-curve phantom tick (one tiny buy/sell
+        // that jerks the marked cap) can no longer make the shown % jump up or down — it takes a
+        // SUSTAINED move (≥3 of the last 5 reads) to move the displayed number. Exits stay on raw
+        // lastMc so a real crash still trips the stop instantly. (This is the actual "median-smoothed
+        // pos.lastMc" the display comment always promised but never had.)
+        (pos.mcSamples = pos.mcSamples || []).push(mc);
+        if (pos.mcSamples.length > 5) pos.mcSamples.shift();
+        const _sorted = pos.mcSamples.slice().sort((a, b) => a - b);
+        pos.dispMc = _sorted[Math.floor(_sorted.length / 2)];
         if (liq > 0) pos.lastLiq = liq;
         pos.missed = 0;
         const movePct = pos.entryMc > 0 ? (pos.lastMc / pos.entryMc - 1) * 100 : 0;

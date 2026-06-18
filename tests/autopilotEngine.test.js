@@ -872,8 +872,12 @@ test("status: headline PnL is realized-anchored — a phantom open mark never in
   const live = engine._state();
   assert.ok(live.open.length >= 1, "opened a position");
 
-  // PHANTOM-SPIKE the open bag's marked price to a fantasy +300% that can't actually fill.
+  // Mark the open bag at a fantasy +300%. dispMc is the median-smoothed mark the display reads (a
+  // sustained ride would surface it); set both so this stands in for the marked/unrealized "riding"
+  // view. A SINGLE-tick phantom would be filtered by the median — that stronger guard is exercised
+  // by the engine's own sample path; here we assert the headline stays put while the marked view rides.
   live.open[0].lastMc = live.open[0].entryMc * 4;
+  live.open[0].dispMc = live.open[0].entryMc * 4;
   const s = engine.status();
   // The HEADLINE (realized) must NOT move: nothing has been banked, so even a phantom +300% mark
   // can't turn the displayed PnL positive. This is the "showed positive after losses / flashed
