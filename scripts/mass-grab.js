@@ -81,6 +81,25 @@ function deriveStyle(trades) {
   };
 }
 
+// RECURSIVE RUNNER discovery: the tokens a proven wallet actually PRINTED on (last-sell/first-buy >= minMult).
+// First-buyers of THESE historical runners break past the ~338 live-list ceiling into real past winners.
+const recursiveRunners = new Set();
+function collectWinningTokens(trades, minMult = 3) {
+  const byTok = {};
+  for (const t of (trades || [])) {
+    const tk = (t.to && t.to.address && t.to.address !== SOL_MINT) ? t.to : ((t.from && t.from.address && t.from.address !== SOL_MINT) ? t.from : null);
+    if (!tk || !tk.address) continue;
+    const isBuy = Boolean(t.to && t.to.address === tk.address);
+    const raw = Number(t.time) || 0; const tsec = raw > 1e12 ? raw / 1000 : raw;
+    (byTok[tk.address] = byTok[tk.address] || []).push({ isBuy, t: tsec, px: Number(tk.priceUsd) || 0 });
+  }
+  for (const mint in byTok) {
+    const ev = byTok[mint].sort((a, b) => a.t - b.t);
+    const buy = ev.find((e) => e.isBuy), sell = [...ev].reverse().find((e) => !e.isBuy);
+    if (buy && sell && buy.px > 0 && sell.px > 0 && sell.px / buy.px >= minMult) recursiveRunners.add(mint);
+  }
+}
+
 // PHASE 2 — FIRST-BUYER ALPHA: wallets that repeatedly got into RUNNER tokens early AND made money.
 // The lifetime-PnL leaderboard (phase 1) misses these — they're the "in before it ran" wallets we most
 // want to copy. We scan first-buyers of many current runner tokens, keep only PROFITABLE early entries,
@@ -91,7 +110,11 @@ const FB_LIMIT = Number(args.fbLimit || 100);
 
 async function gatherRunnerTokens(max) {
   const mints = new Set();
-  for (const ep of ["/tokens/trending", "/tokens/volume", "/tokens/multi/graduated", "/tokens/latest"]) {
+  // WIDE net: timeframe variants + volume pagination (each page = ~100 more) so we scan first-buyers
+  // of as many runner tokens as we can — the more runners, the more repeat early-alpha surfaces.
+  const eps = ["/tokens/trending", "/tokens/trending/24h", "/tokens/multi/graduated", "/tokens/latest", "/tokens/volume/24h"];
+  for (let pg = 1; pg <= 10; pg++) eps.push(`/tokens/volume?page=${pg}`);
+  for (const ep of eps) {
     if (mints.size >= max) break;
     try {
       const d = await stJson(ep);
@@ -108,8 +131,10 @@ async function gatherRunnerTokens(max) {
 
 async function firstBuyerPhase(wallets) {
   if (FB_TOKENS <= 0) return { skipped: true };
-  const tokens = await gatherRunnerTokens(FB_TOKENS);
-  console.log(`[mass-grab] phase2: scanning first-buyers of ${tokens.length} runner tokens`);
+  const live = await gatherRunnerTokens(FB_TOKENS);
+  // RECURSIVE: union the live lists with the historical runners our leaderboard winners printed on.
+  const tokens = [...new Set([...live, ...recursiveRunners])];
+  console.log(`[mass-grab] phase2: ${tokens.length} runner tokens (${live.length} live + ${recursiveRunners.size} recursive winners' runners)`);
   const tally = new Map();                            // wallet -> { runners:Set, pnl, invested }
   let fbCalls = 0, scannedTok = 0;
   for (const tok of tokens) {
@@ -172,6 +197,7 @@ async function main() {
       let trades = [];
       try { const d = await stJson(`/wallet/${encodeURIComponent(w)}/trades?limit=${TRADES_LIMIT}`); trades = (d && d.trades) || []; }
       catch { /* keep the wallet with summary-only stats */ }
+      collectWinningTokens(trades, 3);   // RECURSIVE: this winner's ≥3x tokens → first-buyer scan pool
       const style = deriveStyle(trades);
       const N = 10; // pre-load running averages so the style is usable immediately (matches seedWinnerWallet)
       const rec = {

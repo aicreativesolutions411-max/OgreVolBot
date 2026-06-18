@@ -1987,6 +1987,9 @@ export function createAutopilotEngine(deps) {
         if (rep && rep.rugs >= 2 && rep.runners === 0) continue;  // dev rug history still vetoes
         const sm = r._smartMoney || (smartMoney ? smartMoney(r.tokenMint) : null);
         if (!sm || !(sm.kol || sm.kolProbe || sm.winners >= 1)) continue;
+        // BACKTEST GATE: if the wallets in this coin are validated copy-LOSERS (avg btMult < ~1), don't
+        // copy them — the tune proved it bleeds. Untested (edge null) still passes on the live signal.
+        if (sm.edge != null && sm.edge < 0.98) continue;
         // LIQUID modes only copy-trade into SELLABLE coins — verify real depth (the feed row may
         // not carry liquidity; confirm via getPairLite) so a copy can't be an unsellable phantom.
         if (P.liquid) {
@@ -2001,9 +2004,12 @@ export function createAutopilotEngine(deps) {
         const conv = convictionMult(r, rep, sm, ci, { unprovenCap: P.unprovenConvCap, provenCap: P.provenConvCap, scalp: P.liquid });
         const minCopyConv = sm.kolProbe ? 0.5 : 1.0;
         if (conv < minCopyConv) continue;                          // proven copies need confluence; probes stay small
-        let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * readyMult, state.maxTradeSol));
+        // EDGE-WEIGHTED SIZING: bet BIGGER when the buying wallets are validated printers (btMult>1),
+        // smaller when untested/neutral. Bounded 0.6x–1.6x so one number can't blow the size out.
+        const edgeMult = sm.edge != null ? Math.max(0.6, Math.min(1.6, sm.edge)) : 0.85;
+        let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * readyMult * edgeMult, state.maxTradeSol));
         if (!canOpen(state, size)) break;
-        record("info", `🐳 copy-trade ${r.symbol || shortMint(r.tokenMint)} @ MC $${Math.round(Number(r.marketCap) || 0)} — ${sm.kolProbe ? "KOL probe" : sm.kol ? "KOL " : ""}${sm.winners || 0} winner-wallet(s) → conv ${conv.toFixed(2)}`);
+        record("info", `🐳 copy-trade ${r.symbol || shortMint(r.tokenMint)} @ MC $${Math.round(Number(r.marketCap) || 0)} — ${sm.kolProbe ? "probe " : ""}${sm.winners || 0} winner${sm.edge != null ? ` · edge ${sm.edge}x` : ""}${sm.apeScore != null ? ` · ape ${sm.apeScore}` : ""} → conv ${conv.toFixed(2)}`);
         await openPosition(r, size, P.liquid ? liquidScore(r) : freshScore(r), dev, rep, sm, P);
         state.lastOpenAt = now();
         openedThisCycle += 1;
