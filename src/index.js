@@ -42119,8 +42119,11 @@ async function expandLivePairCandidatesForThinBucket(userId, candidates, bucket,
 const LIVE_PAIR_LAST_HOUR_SORTS = new Set(["volume", "liquidity", "buys", "momentum", "risk"]);
 
 function effectiveLivePairSourceBucket(bucket, sort) {
+  // Metric sorts (volume/liquidity/buys/momentum) source from the WIDEST recent window — its search
+  // terms ("solana volume / movers") return the genuinely high-volume pool, and the metric (not age)
+  // does the ranking. under1h was too fresh to hold high-volume coins, so those tabs collapsed to ~4.
   return bucket === "live" && LIVE_PAIR_LAST_HOUR_SORTS.has(String(sort || "").toLowerCase())
-    ? "under1h"
+    ? "under1d"
     : bucket;
 }
 
@@ -42131,6 +42134,9 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   // the last-hour window for data-driven sorts (see note above).
   const sourceBucket = effectiveLivePairSourceBucket(safeBucket, sort);
   const isLive = sourceBucket === "live";
+  // Metric sort on the Fresh feed → qualify by the metric (volume/liquidity/…), not the age slice,
+  // so the Volume / Liquidity / Gainers / Active tabs fill instead of collapsing to a handful.
+  const metricSort = safeBucket === "live" && LIVE_PAIR_LAST_HOUR_SORTS.has(sort);
   const scanState = nextSniperScanState(`web:${userId}`, `livepairs:${safeBucket}:${sort}`);
   const candidates = await fetchLivePairCandidates({
     ttlMs: isLive ? 800 : 2_000,
@@ -42152,15 +42158,15 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   const hardSafeEnrichedRows = uniqueSniperScoreRows(enrichedRows)
     .filter((row) => !hasHardBlockedLivePairRisk(row));
   const ageVerifiedRows = hardSafeEnrichedRows
-    .filter((row) => isWebLivePairCandidate(row, sourceBucket))
+    .filter((row) => isWebLivePairCandidate(row, sourceBucket, { metricSort }))
     .sort((a, b) => compareWebLivePairs(a, b, sort));
   let liveRows = ageVerifiedRows;
   if (liveRows.length < targetLimit) {
     const currentMints = new Set(liveRows.map((row) => row.tokenMint));
     const backfillRows = hardSafeEnrichedRows
       .filter((row) => !currentMints.has(row.tokenMint))
-      .filter((row) => isLivePairInBucket(row, sourceBucket))
-      .filter((row) => isWebLivePairBackfillCandidate(row, sourceBucket, { allowUnknownMarketCap: true }))
+      .filter((row) => metricSort || isLivePairInBucket(row, sourceBucket))
+      .filter((row) => isWebLivePairBackfillCandidate(row, sourceBucket, { allowUnknownMarketCap: true, metricSort }))
       .sort((a, b) => compareWebLivePairs(a, b, sort));
     liveRows = uniqueSniperScoreRows([...liveRows, ...backfillRows]).sort((a, b) => compareWebLivePairs(a, b, sort));
   }
@@ -42168,8 +42174,8 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
     const currentMints = new Set(liveRows.map((row) => row.tokenMint));
     const relaxedRows = hardSafeEnrichedRows
       .filter((row) => !currentMints.has(row.tokenMint))
-      .filter((row) => isLivePairInRelaxedBucket(row, sourceBucket))
-      .filter((row) => isWebLivePairCandidate(row, sourceBucket, { relaxedAge: true }))
+      .filter((row) => metricSort || isLivePairInRelaxedBucket(row, sourceBucket))
+      .filter((row) => isWebLivePairCandidate(row, sourceBucket, { relaxedAge: true, metricSort }))
       .sort((a, b) => compareWebLivePairs(a, b, sort));
     liveRows = uniqueSniperScoreRows([...liveRows, ...relaxedRows]).sort((a, b) => compareWebLivePairs(a, b, sort));
   }
@@ -43019,7 +43025,11 @@ function isWebLivePairCandidate(item, bucket = "live", options = {}) {
   const safeBucket = normalizeLivePairBucket(bucket);
   const ageSeconds = Number(item.pairAgeSeconds);
   const marketCap = Number(item.marketCap || 0);
-  const maxMarketCap = livePairMaxMarketCap(safeBucket);
+  // METRIC SORTS (volume/liquidity/buys/momentum) rank by the METRIC, not by an age slice — a
+  // genuinely high-volume coin is usually older than the fresh window, so age-gating it emptied
+  // those tabs. So lift the MC cap and treat age as satisfied; the metric + activity gate below
+  // still requires it be a real, tradeable pair.
+  const maxMarketCap = options.metricSort ? 25_000_000 : livePairMaxMarketCap(safeBucket);
   const marketCapOk = !marketCap || marketCap <= maxMarketCap;
   const hasFreshActivity = Number(item.volume5m || 0) > 0
     || Number(item.volumeH1 || 0) > 0
@@ -43028,10 +43038,12 @@ function isWebLivePairCandidate(item, bucket = "live", options = {}) {
     || isPumpStyleToken(item);
   const ageMinutes = livePairAgeMinutesValue(item);
   const isAgeKnown = Number.isFinite(ageMinutes);
-  const ageOk = options.relaxedAge
-    ? isLivePairInRelaxedBucket(item, safeBucket)
-    : isLivePairInBucket(item, safeBucket)
-      || (safeBucket === "live" && !isAgeKnown && (livePairLooksFreshSignal(item) || isPumpStyleToken(item)));
+  const ageOk = options.metricSort
+    ? hasFreshActivity                                  // metric sort: any recent, actively-traded pair qualifies (the sort ranks it)
+    : options.relaxedAge
+      ? isLivePairInRelaxedBucket(item, safeBucket)
+      : isLivePairInBucket(item, safeBucket)
+        || (safeBucket === "live" && !isAgeKnown && (livePairLooksFreshSignal(item) || isPumpStyleToken(item)));
   const categoryOk = safeBucket === "live"
     ? isPairVisibleForCategory(item, "live", "ALL")
     : true;
@@ -43051,7 +43063,7 @@ function isWebLivePairBackfillCandidate(item, bucket = "live", options = {}) {
   const liquidityUsd = Number(item.liquidityUsd || 0);
   const volume5m = Number(item.volume5m || 0);
   const volumeH1 = Number(item.volumeH1 || 0);
-  const maxMarketCap = livePairMaxMarketCap(safeBucket);
+  const maxMarketCap = options.metricSort ? 25_000_000 : livePairMaxMarketCap(safeBucket);
   const hasMarketCap = marketCap > 0;
   const marketCapOk = options.allowUnknownMarketCap
     ? (!hasMarketCap || marketCap <= maxMarketCap)
