@@ -20211,19 +20211,20 @@ async function fetchLivePairCandidates(options = {}) {
 // Each category fetches its OWN DexScreener search pool (+ the boosted endpoint / a bonding filter
 // where it matters), cached under its own key — instead of many categories sharing one bucket:sort
 // pool and showing identical/mostly-fresh coins. Distinct queries → distinct coins per tab.
+// ONLY discovery categories get a dedicated path — and the terms MUST be real token name/symbol
+// fragments (DexScreener /search is name-based, not concept-based: "solana volume" matches nothing,
+// "bonk"/"pump"/"meme" match coins). The defining SOURCE (boosts endpoint / pump creations) does the
+// real work; the searches add breadth. The metric tabs (volume/liquidity/gainers/active/marketcap)
+// are NOT here — they keep the shared bucket pool and differentiate by SORT (already distinct), so
+// they don't need a name-search that returns nothing.
 const LIVE_CATEGORY_QUERIES = {
-  dexTrending: ["solana trending", "solana hot pair", "solana viral", "raydium trending", "solana breakout"],
-  dexBoosted: ["solana boosted", "boosted solana", "solana boost"],
-  pumpTrending: ["pumpfun trending", "pump.fun solana", "pump trending", "new pump solana", "pumpfun hot"],
-  memeMovers: ["solana meme coin", "bonk solana", "meme solana", "dog solana", "cat solana"],
-  earlyMomentum: ["new pump solana", "pumpfun fresh", "fresh solana launch", "solana new pair"],
-  graduating: ["pumpfun graduating", "pump near migration", "pumpfun solana", "raydium pump migrate"],
-  graduated: ["raydium solana", "graduated pump", "pump migrated raydium", "meteora solana"],
-  volume: ["solana high volume", "solana volume", "solana movers", "raydium volume"],
-  gainers: ["solana gainers", "solana pump", "solana moon", "solana breakout"],
-  liquidity: ["solana deep liquidity", "raydium solana", "meteora solana", "orca solana"],
-  marketcap: ["solana gem", "solana low cap", "raydium solana"],
-  active: ["solana most active", "solana trending", "solana volume"]
+  dexTrending: ["raydium solana", "bonk solana", "pump solana"],            // + token-boosts endpoint
+  dexBoosted: ["raydium solana", "pump solana"],                            // + token-boosts endpoint (defining source)
+  pumpTrending: ["pump solana", "pumpfun", "bonk solana"],                  // + live pump creations + pump-latest
+  memeMovers: ["bonk solana", "meme solana", "dog solana", "cat solana", "pepe solana", "wif solana"],
+  earlyMomentum: ["pump solana", "pumpfun", "raydium pump"],                // + live pump creations + pump-latest
+  graduating: ["pump solana", "raydium pump", "pumpfun"],                   // + live pump creations (≥50% bonding filter)
+  graduated: ["raydium solana", "meteora solana", "orca solana"]           // + graduated filter
 };
 function livePairCategoryFilter(category) {
   // Only the discovery categories need a post-filter; the metric tabs rank the whole pool.
