@@ -986,6 +986,10 @@ export function createAutopilotEngine(deps) {
     entryHistory = async () => null,
     symbolLoserCount = () => 0,
     recordTrade = () => {},
+    // SELF-ARM: 0..1 readiness from the learning warehouse (proven wallets learned, their styles
+    // learned, KOL roster, measured EV). The bot stays LIVE + learning and only starts pulling the
+    // trigger — and scales size — as this rises. Default 1 = fully armed (no change unless wired).
+    getReadiness = () => ({ score: 1, label: "ready" }),
     exitMs = 1000,
     huntMs = 5000
   } = deps;
@@ -1163,6 +1167,11 @@ export function createAutopilotEngine(deps) {
       mode: state.mode,
       churn: state.churn,
       maxOpen: state.maxOpen,
+      // SELF-ARM: where the bot is on the "ready to trade" curve. armState: warming|probe|armed.
+      readiness: state.readiness ? Math.round((Number(state.readiness.score) || 0) * 100) : null,
+      readinessLabel: state.readiness ? state.readiness.label : null,
+      armState: state.armState || null,
+      armFloorPct: Math.round((Number.isFinite(state.armFloor) ? state.armFloor : 0.55) * 100),
       tape: state.tune ? state.tune.tape : null,
       betMult: state.tune ? state.tune.sizeMult : 1,
       wallet: state.walletPubkey,
@@ -1740,6 +1749,32 @@ export function createAutopilotEngine(deps) {
     let openedThisCycle = 0;
     let historyChecks = 0;
 
+    // ===== SELF-ARM READINESS — "it starts when it feels it has enough" =====================
+    // The bot stays LIVE and learning continuously; this decides WHEN it actually starts taking
+    // entries and HOW BIG. Below the arm floor it OBSERVES (keeps feeding the brain) and only takes
+    // an occasional tiny PROBE so it keeps sampling live; as readiness climbs it ramps size up to
+    // full. autoArm is on by default; set state.autoArm=false to trade immediately (legacy behavior).
+    const ready = (() => { try { return getReadiness() || null; } catch { return null; } })() || { score: 1, label: "ready" };
+    state.readiness = ready;
+    const armFloor = Number.isFinite(state.armFloor) ? state.armFloor : 0.55;
+    const autoArm = state.autoArm !== false;
+    const armed = !autoArm || (Number(ready.score) || 0) >= armFloor;
+    // While warming, take ONE tiny learning probe every ~2 min so the data keeps building from real fills.
+    const probeNow = autoArm && !armed && (nowMs - (state.lastProbeAt || 0) > 120_000);
+    // Size ramp: just-armed → 45% size, full confidence (score 1) → 100%. Probes use the floor size.
+    const readyMult = armed ? Math.max(0.45, Math.min(1, 0.45 + 0.55 * ((Number(ready.score) || 0) - armFloor) / Math.max(0.001, 1 - armFloor))) : 0;
+    if (autoArm && !armed && !probeNow) {
+      // Not enough learned edge yet — observe + manage exits this cycle, don't open new risk.
+      state.armState = "warming";
+      if (nowMs - (state.lastWarmLogAt || 0) > 60_000) {   // throttle: don't spam every 5s cycle
+        state.lastWarmLogAt = nowMs;
+        record("info", `🧠 Warming up — learning the winners + their style (readiness ${Math.round((Number(ready.score) || 0) * 100)}%, arms at ${Math.round(armFloor * 100)}%)`);
+      }
+      return;
+    }
+    state.armState = probeNow ? "probe" : "armed";
+    if (probeNow) state.lastProbeAt = nowMs;
+
     // SIT OUT THE CHOP (capital preservation): a COLD tape we're ALSO bleeding into is the
     // death-by-fees trap that turns a flat day red. Pause FRESH sniping for a ~4m cool-off
     // and resume when the tape warms or the timer passes — but KEEP taking smart-money copy
@@ -1870,11 +1905,14 @@ export function createAutopilotEngine(deps) {
         if (curMc < w.mc * 0.92) { delete state.watching[cand.r.tokenMint]; continue; } // momentum faded → skip
         delete state.watching[cand.r.tokenMint]; // held strong across two reads → take it
       }
-      let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv, state.maxTradeSol));
+      // Readiness ramp: scale entry size by learned confidence; a warming-stage PROBE is floor-size.
+      let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * readyMult, state.maxTradeSol));
+      if (probeNow) size = state.minTradeSol;
       if (!canOpen(state, size)) break;
       await openPosition(cand.r, size, cand.fs, dev, rep, sm, P);
       state.lastOpenAt = now();
       openedThisCycle += 1;
+      if (probeNow) break;                               // one tiny learning trade, then resume observing
       if (openedThisCycle >= perCycle) break;            // don't machine-gun the whole feed at once
     }
 
@@ -1936,7 +1974,7 @@ export function createAutopilotEngine(deps) {
         const conv = convictionMult(r, rep, sm, ci, { unprovenCap: P.unprovenConvCap, provenCap: P.provenConvCap, scalp: P.liquid });
         const minCopyConv = sm.kolProbe ? 0.5 : 1.0;
         if (conv < minCopyConv) continue;                          // proven copies need confluence; probes stay small
-        let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv, state.maxTradeSol));
+        let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * readyMult, state.maxTradeSol));
         if (!canOpen(state, size)) break;
         record("info", `🐳 copy-trade ${r.symbol || shortMint(r.tokenMint)} @ MC $${Math.round(Number(r.marketCap) || 0)} — ${sm.kolProbe ? "KOL probe" : sm.kol ? "KOL " : ""}${sm.winners || 0} winner-wallet(s) → conv ${conv.toFixed(2)}`);
         await openPosition(r, size, P.liquid ? liquidScore(r) : freshScore(r), dev, rep, sm, P);

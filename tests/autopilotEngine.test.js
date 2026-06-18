@@ -541,6 +541,45 @@ test("engine: local replay veto blocks historically bad unproven entries", async
   await engine.stop("test-done");
 });
 
+test("engine: self-arm holds entries while warming, then trades once readiness is high", async () => {
+  // LOW readiness → WARMING: stays live + learning, opens NOTHING even on a good coin.
+  let t = 0;
+  const warming = createAutopilotEngine({
+    getFreshFeed: async () => [goodRow()],
+    getPairLite: async () => ({ marketCap: 2300, liquidityUsd: 6000 }),
+    buyToken: async () => ({ ok: true, tokenAmount: "1000" }),
+    sellPercent: async () => ({ ok: true }),
+    getReadiness: () => ({ score: 0.2, label: "learning" }),
+    now: () => t,
+    persist: async () => {}
+  });
+  await warming.start({ solBudget: 1, minutes: 60, mode: "normal", live: false });
+  t += 2200; await warming._hunt();
+  let st = warming.status();
+  assert.equal(st.open.length, 0, "warming (low readiness) takes no entries");
+  assert.equal(st.armState, "warming");
+  await warming.stop("test-done");
+
+  // HIGH readiness → ARMED: takes the entry.
+  let t2 = 0;
+  const armed = createAutopilotEngine({
+    getFreshFeed: async () => [goodRow()],
+    getPairLite: async () => ({ marketCap: 2300, liquidityUsd: 6000 }),
+    buyToken: async () => ({ ok: true, tokenAmount: "1000" }),
+    sellPercent: async () => ({ ok: true }),
+    getReadiness: () => ({ score: 0.9, label: "ready" }),
+    now: () => t2,
+    persist: async () => {}
+  });
+  await armed.start({ solBudget: 1, minutes: 60, mode: "normal", live: false });
+  t2 += 2200; await armed._hunt();   // first sight → momentum-confirm watch (non-elite needs 2 reads)
+  t2 += 2200; await armed._hunt();   // held strong → opens
+  st = armed.status();
+  assert.ok(st.open.length >= 1, "armed (high readiness) takes the entry");
+  assert.equal(st.armState, "armed");
+  await armed.stop("test-done");
+});
+
 test("engine: live mode routes through buy/sell deps", async () => {
   let t = 0;
   let mc = 2300;

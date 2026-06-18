@@ -1042,6 +1042,31 @@ function smartMoneyReady() {
   for (const r of walletObs.values()) { if (isWinnerWallet(r)) winners += 1; coins += (r.coins || 0); }
   return winners >= 8 && coins >= 300;
 }
+// SELF-ARM READINESS (0..1) — does the brain have enough LEARNED EDGE to start trading? The bot
+// stays LIVE and learning 24/7; the engine only arms (and scales size up) as this climbs — the
+// "set-and-forget, it starts when it feels it has enough" controller. Built entirely from the
+// warehouse we already fill: proven-winner wallets learned, how many we've learned a STYLE for
+// (hold time / exit), the KOL roster, and the trade sample + measured EV from self-calibration.
+function autopilotReadiness() {
+  let winners = 0, styled = 0;
+  for (const r of walletObs.values()) {
+    if (isWinnerWallet(r)) { winners += 1; if ((r.exitN || 0) >= 2 || (r.holdN || 0) >= 2) styled += 1; }
+  }
+  const kols = autoKolWallets.size + KOL_WALLETS.size;
+  const cal = autopilotCalibrationCache || {};
+  const sample = Number(cal.sample) || 0;
+  const ev = Number(cal.evPerTrade) || 0;
+  const sWinners = Math.min(1, winners / 15);   // ~15 proven winners learned = full
+  const sStyled = Math.min(1, styled / 8);       // ~8 wallets whose STYLE we can copy
+  const sKols = Math.min(1, kols / 5);           // a KOL roster to copy
+  const sSample = Math.min(1, sample / 200);     // enough trade outcomes to trust calibration
+  const sEv = ev > 0 ? 1 : ev > -0.005 ? 0.5 : 0.15; // measured edge: +EV full, ~flat half, bleeding low
+  let score = 0.30 * sWinners + 0.20 * sStyled + 0.20 * sKols + 0.15 * sSample + 0.15 * sEv;
+  // A live copy roster (any tracked KOL) or a solid proven-winner roster is already enough edge to begin.
+  if (kols >= 1 || winners >= 8) score = Math.max(score, 0.6);
+  score = Math.max(0, Math.min(1, score));
+  return { score, label: score >= 0.55 ? "ready" : "learning", winners, styled, kols, sample, ev: Math.round(ev * 1e4) / 1e4 };
+}
 // Build live entry candidates from coins that tracked winners / KOLs are buying RIGHT
 // NOW — including ones past the fresh-ape freshness gate. Returns fresh-feed-shaped
 // rows (marketCap in USD, matching getPairLite) so the engine can size + open them.
@@ -1572,6 +1597,8 @@ const autopilotEngine = createAutopilotEngine({
   smartMoney: (mint) => smartMoneyScore(mint),
   smartMoneyReady: () => smartMoneyReady(),
   smartMoneyFeed: async () => smartMoneyFeed(),
+  getReadiness: () => autopilotReadiness(),   // SELF-ARM: trade only once the brain has learned enough edge
+
   callerIntel: (mint) => telegramCallerIntelForMint(mint),
   getMarketTape: () => marketTape(),
   entryHistory: async (row) => {
