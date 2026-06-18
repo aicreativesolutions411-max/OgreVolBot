@@ -1691,21 +1691,11 @@ function startDevObservatory() {
   setInterval(sampleDevObservatory, 45_000);
   setInterval(() => { void sampleKolSignalOutcomes(); }, 60_000);
   setInterval(() => { void pollObsTradesSwapApi(); }, 18_000); // resurrect the buyer flywheel via the working swap-api source
-  setInterval(() => { void pollWalletFunders(); }, 45_000);    // FUNDING GRAPH: resolve winner funders + clusters (free RPC, cached forever)
-  // ONE-TIME COLD-BRAIN SEED: if we barely know any winners yet and Solana Tracker is configured,
-  // bulk-load the proven-trader roster + their styles NOW. Idempotent — once ~400 winners are
-  // seeded + persisted to wallet-observatory.json, the loaded roster keeps winnerWallets above the
-  // floor, so this won't re-run (and burn ST quota) on later deploys. Run while on Premium, cancel after.
-  setTimeout(() => {
-    try {
-      if (!CONFIG.solanaTrackerApiKey) return;
-      const winners = [...walletObs.values()].filter(isWinnerWallet).length;
-      if (winners < 50 && !brainSeedState.running && !brainSeedState.doneAt) {
-        console.log(`[brain-seed] cold brain (${winners} winners) — running one-time Solana Tracker seed grab`);
-        void runBrainSeedGrab({ maxPages: 16 });
-      }
-    } catch {}
-  }, 25_000);
+  setInterval(() => { void pollWalletFunders(); }, 60_000);    // FUNDING GRAPH: resolve winner funders + clusters (free RPC, cached forever)
+  // SEED GRAB IS OWNER-TRIGGERED ONLY (/api/web/autopilot/seed?run=1). The earlier auto-run-on-boot
+  // crash-looped the service: the grab fired 25s after every boot, the heavy burst (ST roster +
+  // per-wallet trade pulls + funder RPC) overloaded the instance before it could persist >50
+  // winners, Render killed it, and on restart it re-fired. NEVER auto-run a heavy grab on boot.
   // AUTO-KOL: load the saved roster, then harvest proven KOLs from the tracker leaderboard now and
   // every 10 min so the copy-trade roster stays fresh (cheap — the KOL scan is cached internally).
   void loadAutoKolWallets().then(() => { void refreshAutoKolWallets(); });
