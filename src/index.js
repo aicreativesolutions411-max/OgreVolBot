@@ -1305,6 +1305,7 @@ function smartMoneyScore(mint) {
 function smartMoneyReady() {
   if (KOL_WALLETS.size > 0 || autoKolWallets.size > 0) return true;
   if (kolCopyFeedCache.rows && kolCopyFeedCache.rows.length > 0) return true; // live KOL copy candidates
+  if (winnerFollowCache.rows && winnerFollowCache.rows.length > 0) return true; // our proven winners are buying NOW
   let winners = 0, coins = 0;
   for (const r of walletObs.values()) { if (isWinnerWallet(r)) winners += 1; coins += (r.coins || 0); }
   return winners >= 8 && coins >= 300;
@@ -1355,6 +1356,18 @@ function autopilotReadiness() {
 async function smartMoneyFeed() {
   const out = [];
   const seen = new Set();
+  // TOP PRIORITY: coins our OWN proven-winner wallets are buying RIGHT NOW (winner-follow poller,
+  // Solana Tracker live trades). A proven wallet's fresh buy is the strongest copy signal we have —
+  // 2+ deduped winners (or a KOL) marks it proven, which the engine enters instantly (skips the
+  // generic red-tape comps veto). Only serve while the cache is fresh (poller alive); else skip.
+  if (Date.now() - (winnerFollowCache.at || 0) < WINNER_FOLLOW_FRESH_MS) {
+    for (const r of (winnerFollowCache.rows || [])) {
+      if (out.length >= 10) break;
+      if (!r || !r.tokenMint || seen.has(r.tokenMint)) continue;
+      seen.add(r.tokenMint);
+      out.push(r);
+    }
+  }
   // PRIMARY copy source: proven KOLs' live holdings/buys (Solana Tracker). This is the feed that
   // actually has data — the PumpPortal-trade-based path below is starved (no per-trade delivery).
   // Refresh is a bounded background poller; if the cache went stale, kick a non-blocking refresh
@@ -1479,6 +1492,26 @@ const KOL_COPY_FEED_FRESH_MS = Math.max(5 * 60 * 1000, Number(process.env.KOL_CO
 const KOL_COPY_FEED_MAX = 24;                         // bounded candidate list
 const KOL_COPY_PROBE_MAX = 8;                          // thin-sample KOLs get a small learning lane, not full sizing
 
+// ===== WINNER-FOLLOW LIVE COPY FEED (Solana Tracker Premium) =============================
+// The direct copy edge: poll our OWN proven-winner wallets' (+ KOLs') live trades, detect a
+// FRESH buy into a sellable coin, and surface that coin as a self-entry candidate. This is what
+// turns the 92 seeded winners from a static roster into a live "they're buying NOW → copy them"
+// signal — the path that was dark (zero 🐳 detections) because the observatory only ever saw the
+// early-buyers of fresh pump.fun dust, never what the leaderboard winners actually trade.
+// GENTLE TRICKLE (the crash-loop lesson): a few wallets per cycle, sequential with a small gap.
+// ST budget guard: BATCH/(INTERVAL) sets req/min — defaults ~3 per 90s ≈ 86k/month, well under the
+// 200k Premium quota with room for the KOL scan + ad-hoc. All env-tunable to dial harder if wanted.
+let winnerFollowCache = { rows: [], at: 0 };           // engine-shaped copy candidate rows
+let winnerFollowPolling = false;
+let winnerFollowCursor = 0;                            // rotation pointer through the wallet pool
+let winnerFollowPolledTotal = 0;
+const winnerBuys = new Map();                          // mint -> { clusters:Set, addrs:Set, lastAt, kol, mc } (rolling, pruned to FRESH window)
+const WINNER_FOLLOW_BATCH = Math.max(1, Number(process.env.WINNER_FOLLOW_BATCH) || 3);              // wallets polled per cycle
+const WINNER_FOLLOW_INTERVAL_MS = Math.max(20_000, Number(process.env.WINNER_FOLLOW_INTERVAL_MS) || 90_000);
+const WINNER_FOLLOW_POOL = Math.max(5, Number(process.env.WINNER_FOLLOW_POOL) || 60);               // top-N winners on rotation
+const WINNER_FOLLOW_FRESH_MS = Math.max(5 * 60 * 1000, Number(process.env.WINNER_FOLLOW_FRESH_MS) || 25 * 60 * 1000); // a buy this recent = "now"
+const WINNER_FOLLOW_MAX = 16;                          // bounded candidate list
+
 async function refreshKolCopyFeed() {
   if (!CONFIG.solanaTrackerApiKey) return;            // tracker is the source; nothing to do without it
   if (kolCopyFeedRefreshing) return;
@@ -1571,6 +1604,112 @@ async function refreshKolCopyFeed() {
     void saveKolLearning();
   } catch (e) { console.warn(`[kol-copy] ${e && e.message}`); }
   finally { kolCopyFeedRefreshing = false; }
+}
+
+// Prioritised wallet pool for the winner-follow poller: our OWN-proven winners first (we watched
+// them win), then big-PnL seeded winners, then proven auto-KOLs / listed KOLs. Capped to the top
+// WINNER_FOLLOW_POOL so the ST budget rotates over the BEST wallets, not every tracked address.
+function winnerFollowPool() {
+  const scored = [];
+  for (const [w, r] of walletObs.entries()) {
+    if (!isWinnerWallet(r)) continue;
+    let q = 0;
+    if (isOrganicWinnerWallet(r) || isLinkedWinnerWallet(r)) q += 1000;     // OUR-proven outrank borrowed stats
+    q += Math.min(400, Number(r.seedPnl) || 0);                            // bigger lifetime PnL = higher priority
+    q += Number(r.seedWin) || 0;                                           // tie-break by win%
+    scored.push({ wallet: w, isKol: isKolWallet(w), q });
+  }
+  for (const w of autoKolWallets.keys()) {
+    if (walletObs.has(w)) continue;
+    scored.push({ wallet: w, isKol: true, q: 500 + (Number(autoKolWallets.get(w)?.winRate) || 0) });
+  }
+  for (const w of KOL_WALLETS) {
+    if (walletObs.has(w) || autoKolWallets.has(w)) continue;
+    scored.push({ wallet: w, isKol: true, q: 600 });
+  }
+  scored.sort((a, b) => b.q - a.q);
+  return scored.slice(0, WINNER_FOLLOW_POOL);
+}
+
+// THE LIVE COPY EDGE. Rotate a few proven wallets per cycle, read their recent ST trades, and bank
+// any FRESH SOL→token buy into a rolling per-mint tally. A coin 2+ deduped winners (or a KOL) bought
+// recently becomes a PROVEN copy candidate — surfaced to the engine via smartMoneyFeed, entered
+// instantly (it skips the red-tape comps veto). Cluster-deduped so a wallet-farm can't fake confluence.
+async function pollWinnerTrades() {
+  if (!CONFIG.solanaTrackerApiKey || winnerFollowPolling) return;
+  winnerFollowPolling = true;
+  try {
+    const pool = winnerFollowPool();
+    if (!pool.length) return;
+    if (winnerFollowCursor >= pool.length) winnerFollowCursor = 0;
+    const batch = pool.slice(winnerFollowCursor, winnerFollowCursor + WINNER_FOLLOW_BATCH);
+    winnerFollowCursor += WINNER_FOLLOW_BATCH;
+    const now = Date.now();
+    for (const { wallet, isKol } of batch) {
+      let trades = [];
+      try {
+        const d = await solanaTrackerJson(`/wallet/${encodeURIComponent(wallet)}/trades?limit=8`, { cacheTtlMs: 20_000, timeoutMs: 8_000 });
+        trades = (d && d.trades) || [];
+      } catch { continue; }
+      for (const t of trades) {
+        // BUY = SOL in, token out → the non-SOL `to` side is the bought mint (verified ST shape).
+        const tk = (t && t.to && t.to.address && t.to.address !== SOL_MINT) ? t.to : null;
+        if (!tk || !tk.address) continue;
+        if (!(t.from && t.from.address === SOL_MINT)) continue;
+        const raw = Number(t.time) || 0; const tms = raw > 1e12 ? raw : raw * 1000;
+        if (!tms || (now - tms) > WINNER_FOLLOW_FRESH_MS) continue;
+        let g = winnerBuys.get(tk.address);
+        if (!g) { g = { clusters: new Set(), addrs: new Set(), lastAt: 0, kol: false, mc: 0 }; winnerBuys.set(tk.address, g); }
+        g.clusters.add(clusterIdFor(wallet));
+        g.addrs.add(wallet);
+        if (isKol || isKolWallet(wallet)) g.kol = true;
+        if (tms > g.lastAt) g.lastAt = tms;
+        const mc = Number(tk.marketCap) || 0; if (mc > 0) g.mc = mc;
+      }
+      await new Promise((res) => setTimeout(res, 150));   // gentle pacing — never burst the instance
+    }
+    winnerFollowPolledTotal += batch.length;
+    for (const [mint, g] of winnerBuys) { if ((now - g.lastAt) > WINNER_FOLLOW_FRESH_MS) winnerBuys.delete(mint); }
+    const cands = [...winnerBuys.entries()]
+      .sort((a, b) => (Number(b[1].kol) - Number(a[1].kol)) || (b[1].clusters.size - a[1].clusters.size) || (b[1].lastAt - a[1].lastAt))
+      .slice(0, 30);
+    if (!cands.length) { winnerFollowCache = { rows: [], at: now }; return; }
+    // FREE enrichment: DexScreener batch → live MC + liquidity (no Helius / RPC). Engine re-verifies
+    // sellable liquidity for liquid modes, so this is a fast first read.
+    const pairs = await fetchDexScreenerTokenPairsBatch(cands.map(([mint]) => mint)).catch(() => []);
+    const rows = [];
+    for (const [mint, g] of cands) {
+      const best = bestDexPairForToken(mint, (pairs || []).filter((p) => pairMatchesToken(p, mint)));
+      const mc = Number(best?.marketCap || best?.fdv) || g.mc || 0;
+      const liq = Number(best?.liquidity?.usd) || 0;
+      if (!(mc >= 2_000 && liq >= 1_000)) continue;        // real, sellable market only (no phantoms)
+      const winners = g.clusters.size;                      // cluster-deduped count
+      const proven = g.kol || winners >= 2;
+      // exitMult from the actual winners' learned style (sell into strength ahead of the dump); else
+      // a conviction-scaled default that rides a touch longer with more confluence.
+      const exits = [...g.addrs].map((w) => walletExitMult(walletObs.get(w))).filter((x) => Number.isFinite(x) && x > 1);
+      const exitMult = exits.length ? Math.min(...exits) : 1 + Math.min(2.0, 0.25 + (winners - 1) * 0.2);
+      rows.push({
+        tokenMint: mint,
+        symbol: best?.baseToken?.symbol || shortMint(mint),
+        marketCap: mc,
+        liquidityUsd: liq,
+        pairAgeSeconds: best?.pairCreatedAt ? Math.max(0, Math.round((now - Number(best.pairCreatedAt)) / 1000)) : null,
+        volume5m: Number(best?.volume?.m5 || 0),
+        buys5m: Number(best?.txns?.m5?.buys || 0),
+        sells5m: Number(best?.txns?.m5?.sells || 0),
+        sniperCount: 0,
+        _smartMoney: { kol: g.kol, kolProbe: !proven, winners, exitMult, kolName: "proven-winner", winRatePct: null, source: "winner_follow" }
+      });
+    }
+    rows.sort((a, b) => (Number(b._smartMoney.kol || b._smartMoney.winners >= 2) - Number(a._smartMoney.kol || a._smartMoney.winners >= 2)) || (b._smartMoney.winners - a._smartMoney.winners));
+    winnerFollowCache = { rows: rows.slice(0, WINNER_FOLLOW_MAX), at: now };
+    if (rows.length) {
+      const top = rows[0]; const tw = top._smartMoney.winners;
+      console.log(`[winner-follow] ${rows.length} coin(s) our winners are buying (top ${top.symbol} · ${tw} winner${tw > 1 ? "s" : ""}${(top._smartMoney.kol || tw >= 2) ? " PROVEN" : ""}) — pool ${pool.length}, ${WINNER_FOLLOW_BATCH}/cycle`);
+    }
+  } catch (e) { console.warn(`[winner-follow] ${e && e.message}`); }
+  finally { winnerFollowPolling = false; }
 }
 // Persist the market-wide tape so the bot isn't "blind" (marketTape() => null) for the
 // first ~30 min after a redeploy. On load we keep only entries inside the 30-min window;
@@ -1774,6 +1913,10 @@ function startDevObservatory() {
   // "what good KOLs are buying now." Bounded cadence; buildKolScan is internally cached.
   void refreshKolCopyFeed();
   setInterval(() => { void refreshKolCopyFeed(); }, KOL_COPY_FEED_TTL_MS);
+  // WINNER-FOLLOW: the live copy edge — rotate our proven winners, surface what they're buying NOW.
+  // Gentle trickle (a few wallets/cycle), ST-budget-guarded + env-tunable. First fire delayed 45s so
+  // the brain + roster are loaded before the first poll.
+  setTimeout(() => { void pollWinnerTrades(); setInterval(() => { void pollWinnerTrades(); }, WINNER_FOLLOW_INTERVAL_MS); }, 45_000);
 }
 // Combined dev reputation = our own trades + the market-wide observatory.
 function combinedDevRep(dev) {
@@ -4449,7 +4592,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
               runners100: trades.filter((t) => (t.peakPct || 0) >= 100).length,
               runners400: trades.filter((t) => (t.peakPct || 0) >= 400).length,
               netPnlSol: r2(trades.reduce((a, t) => a + (Number(t.pnl) || 0), 0)),
-              observatory: (() => { let s = {}; try { s = pumpPortalStream.stats() || {}; } catch {} return { devsTracked: devObs.size, coinsWatching: obsCoins.size, walletsTracked: walletObs.size, winnerWallets: [...walletObs.values()].filter(isWinnerWallet).length, earlyBuyersTracked: earlyBuyers.size, fundersResolved: walletFunderCache.size, walletClusters: new Set([...walletClusterId.values()]).size, autoKols: autoKolWallets.size, trackedKols: trackedKolWallets.size, learnedKols: [...kolSignalStats.values()].filter((r) => Number(r.signals || 0) > 0).length, kolSignalMints: kolSignalMints.size, kolCopyCandidates: (kolCopyFeedCache.rows || []).length, kolProbeCandidates: (kolCopyFeedCache.rows || []).filter((r) => r && r._smartMoney && r._smartMoney.kolProbe).length, kolCopyAgeSec: kolCopyFeedCache.at ? Math.round((Date.now() - kolCopyFeedCache.at) / 1000) : null, smartMoneyActive: smartMoneyReady(), streamConnected: Boolean(s.connected), streamLastMsgSec: Number.isFinite(s.lastMessageAgoMs) ? Math.round(s.lastMessageAgoMs / 1000) : null, streamTrades: (s.counters && s.counters.trades) || 0, streamCreations: (s.counters && s.counters.creations) || 0, tradeSubs: s.tradeSubscriptions || 0, mintsWithTrades: s.mintsWithTrades || 0, buyWsConnected: buyWsDiag.connected, buyWsSubs: buyWsSubs.size, buyWsTrades: buyWsDiag.trades, marketSample: (marketTape()?.sample) || 0 }; })(),
+              observatory: (() => { let s = {}; try { s = pumpPortalStream.stats() || {}; } catch {} return { devsTracked: devObs.size, coinsWatching: obsCoins.size, walletsTracked: walletObs.size, winnerWallets: [...walletObs.values()].filter(isWinnerWallet).length, earlyBuyersTracked: earlyBuyers.size, fundersResolved: walletFunderCache.size, walletClusters: new Set([...walletClusterId.values()]).size, autoKols: autoKolWallets.size, trackedKols: trackedKolWallets.size, learnedKols: [...kolSignalStats.values()].filter((r) => Number(r.signals || 0) > 0).length, kolSignalMints: kolSignalMints.size, kolCopyCandidates: (kolCopyFeedCache.rows || []).length, kolProbeCandidates: (kolCopyFeedCache.rows || []).filter((r) => r && r._smartMoney && r._smartMoney.kolProbe).length, kolCopyAgeSec: kolCopyFeedCache.at ? Math.round((Date.now() - kolCopyFeedCache.at) / 1000) : null, winnerFollowCandidates: (winnerFollowCache.rows || []).length, winnerFollowProven: (winnerFollowCache.rows || []).filter((r) => r && r._smartMoney && (r._smartMoney.kol || r._smartMoney.winners >= 2)).length, winnerFollowTracking: winnerBuys.size, winnerFollowPolled: winnerFollowPolledTotal, winnerFollowAgeSec: winnerFollowCache.at ? Math.round((Date.now() - winnerFollowCache.at) / 1000) : null, smartMoneyActive: smartMoneyReady(), streamConnected: Boolean(s.connected), streamLastMsgSec: Number.isFinite(s.lastMessageAgoMs) ? Math.round(s.lastMessageAgoMs / 1000) : null, streamTrades: (s.counters && s.counters.trades) || 0, streamCreations: (s.counters && s.counters.creations) || 0, tradeSubs: s.tradeSubscriptions || 0, mintsWithTrades: s.mintsWithTrades || 0, buyWsConnected: buyWsDiag.connected, buyWsSubs: buyWsSubs.size, buyWsTrades: buyWsDiag.trades, marketSample: (marketTape()?.sample) || 0 }; })(),
               marketTape: marketTape(),
               topWallets: [...walletObs.entries()].filter(([, r]) => isWinnerWallet(r)).sort((a, b) => ((b[1].peakSum || 0) + (b[1].linkedPeakSum || 0)) - ((a[1].peakSum || 0) + (a[1].linkedPeakSum || 0))).slice(0, 8).map(([w, r]) => ({ wallet: shortMint(w), kol: KOL_WALLETS.has(w), linked: isLinkedWinnerWallet(r), coins: r.coins, ran: r.ran, rugged: r.rugged, linkedCoins: r.linkedCoins || 0, linkedRan: r.linkedRan || 0, linkedRugged: r.linkedRugged || 0, linkedKolLeaders: r.linkedKolLeaders || 0, linkedWinnerLeaders: r.linkedWinnerLeaders || 0, avgPeak: r.coins ? r2(r.peakSum / r.coins) : 0, linkedAvgPeak: r.linkedCoins ? r2((r.linkedPeakSum || 0) / r.linkedCoins) : 0 })),
               byScore: bucket((t) => t.fs == null ? null : (t.fs < 57 ? "<57" : t.fs < 62 ? "57-61" : t.fs < 67 ? "62-66" : t.fs < 72 ? "67-71" : "72+")),
