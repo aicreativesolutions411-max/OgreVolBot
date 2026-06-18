@@ -1110,8 +1110,9 @@ const seedTrickle = { page: 1, idx: 0, pageData: null, done: false, seeded: 0, s
 async function pollSeedTrickle() {
   try {
     if (!CONFIG.solanaTrackerApiKey || seedTrickle.done) return;
-    if ([...walletObs.values()].filter(isWinnerWallet).length >= 150) { seedTrickle.done = true; return; }
-    if (seedTrickle.page > 8) { seedTrickle.done = true; return; }        // ~200 wallets ceiling
+    const winnersNow0 = [...walletObs.values()].filter(isWinnerWallet).length;
+    if (winnersNow0 >= 150) { if (!seedTrickle.done) console.log(`[seed-trickle] DONE — ${winnersNow0} winner wallets seeded (target reached)`); seedTrickle.done = true; return; }
+    if (seedTrickle.page > 8) { if (!seedTrickle.done) console.log(`[seed-trickle] DONE — walked 8 pages, ${winnersNow0} winners seeded`); seedTrickle.done = true; return; }   // ~200 wallets ceiling
     if (!seedTrickle.pageData) {
       try {
         const d = await solanaTrackerJson(`/top-traders/all/${seedTrickle.page}`, { cacheTtlMs: 0, timeoutMs: 9000 });
@@ -1131,7 +1132,12 @@ async function pollSeedTrickle() {
       try { if (await seedWinnerWallet(w, s)) { seedTrickle.seeded += 1; did += 1; } } catch {}
     }
     if (seedTrickle.idx >= seedTrickle.pageData.length) { seedTrickle.page += 1; seedTrickle.pageData = null; }
-    if (did > 0 && seedTrickle.seeded % 8 === 0) { rebuildWalletClusters(); await savePersistentState().catch(() => {}); }
+    if (did > 0 && seedTrickle.seeded % 8 === 0) {
+      rebuildWalletClusters();
+      await savePersistentState().catch(() => {});
+      const winnersNow = [...walletObs.values()].filter(isWinnerWallet).length;
+      console.log(`[seed-trickle] seeded ${seedTrickle.seeded} this run (scanned ${seedTrickle.scanned}, page ${seedTrickle.page}) — ${winnersNow} winner wallets, ${walletClusterId.size} in clusters`);
+    }
   } catch (e) { seedTrickle.lastErr = e && e.message; }
 }
 
