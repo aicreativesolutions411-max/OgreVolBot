@@ -926,19 +926,23 @@ function recordKolOutcome(mint, ranMult, rugged) {
   const rec = kolSignalMints.get(mint);
   if (!rec) return;
   const wallets = Object.keys(rec.wallets || {});
+  const gm = Math.max(1, Number(ranMult) || 1);
+  const failed = Boolean(rugged) || gm < 1.2;
   for (const w of wallets) {
     const s = kolSignalStats.get(w) || { signals: 0, ran: 0, rugged: 0, peakSum: 0 };
     s.signals += 1;
-    if (ranMult >= 2) s.ran += 1;
+    if (gm >= 2) s.ran += 1;
     if (rugged) s.rugged += 1;
-    s.peakSum += Math.max(1, Number(ranMult) || 1);
+    if (failed) s.failed = (Number(s.failed) || 0) + 1;
+    s.peakSum += gm;
     s.lastAt = Date.now();
     kolSignalStats.set(w, s);
     const wr = walletObs.get(w) || { coins: 0, ran: 0, rugged: 0, peakSum: 0 };
     wr.coins += 1;
-    if (ranMult >= 2) wr.ran += 1;
+    if (gm >= 2) wr.ran += 1;
     if (rugged) wr.rugged += 1;
-    wr.peakSum += Math.max(1, Number(ranMult) || 1);
+    if (failed) wr.failed = (Number(wr.failed) || 0) + 1;
+    wr.peakSum += gm;
     walletObs.set(w, wr);
   }
   kolSignalMints.delete(mint);
@@ -949,12 +953,13 @@ function kolLearningProfile(wallet, apiWin = null) {
   const signals = Number(s?.signals || 0);
   const ran = Number(s?.ran || 0);
   const rugged = Number(s?.rugged || 0);
+  const failed = Number(s?.failed || 0);
   const avgPeak = signals ? Number(s?.peakSum || 0) / signals : 0;
   const win = Number.isFinite(Number(apiWin)) ? Number(apiWin) : Number(trackedKolWallets.get(w)?.winRate ?? autoKolWallets.get(w)?.winRate);
   const apiGood = Number.isFinite(win) && win >= KOL_COPY_MIN_WINRATE;
   const learnedGood = signals >= 3 && ran >= 1 && ran >= rugged * 2 && avgPeak >= 1.35;
-  const learnedBad = signals >= 4 && rugged >= Math.max(2, ran + 2) && avgPeak < 1.35;
-  return { wallet: w, signals, ran, rugged, avgPeak, win: Number.isFinite(win) ? win : null, apiGood, learnedGood, learnedBad };
+  const learnedBad = signals >= 4 && (rugged >= Math.max(2, ran + 2) || failed >= Math.max(3, ran + 3)) && avgPeak < 1.35;
+  return { wallet: w, signals, ran, rugged, failed, avgPeak, win: Number.isFinite(win) ? win : null, apiGood, learnedGood, learnedBad };
 }
 // Smart-money read for a coin: are proven-winner wallets or tracked KOLs in its early
 // buyers right now? Also returns exitMult = the MOST CONSERVATIVE winner's typical exit
@@ -1179,8 +1184,11 @@ async function refreshKolCopyFeed() {
       const confluence = kolCount >= 2 || Number(g.rows?.[0]?.kolCount || 0) >= 2;
       const rowScore = Math.max(Number(g.bestScore) || 0, ...((g.rows || []).map((r) => Number(r.bestPickScore || r.score || 0) || 0)));
       const hasMarket = mc >= 2_000 && liq >= 1_000;
-      const provenCopy = !learnedBad && (learnedGood || apiGood || (confluence && rowScore >= 72));
-      const probeCopy = !provenCopy && !learnedBad && hasMarket && rowScore >= 65;
+      // API win-rate is useful for discovery, but it is not enough to size like an edge.
+      // Normal copy sizing needs our own learned-good record, or API-good KOL confluence
+      // on a high-score current signal. Lone API-good rows stay in the small probe lane.
+      const provenCopy = !learnedBad && (learnedGood || (apiGood && confluence && rowScore >= 72));
+      const probeCopy = !provenCopy && !learnedBad && hasMarket && (rowScore >= 68 || apiGood);
       if (!provenCopy && !probeCopy) continue;
       // EXIT-BEFORE-DUMP, conviction-scaled: more KOLs / higher win-rate → ride a touch longer before
       // banking. exitMult feeds the engine's smart-money exit (sell into strength, ahead of the crowd).

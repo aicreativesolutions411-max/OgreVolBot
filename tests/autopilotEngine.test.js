@@ -10,6 +10,7 @@ import {
   convictionMult,
   autoTune,
   entryReject,
+  executableMcReject,
   historyGateReject,
   evalExit,
   canOpen,
@@ -69,7 +70,7 @@ test("low-churn: raises entry bar, concentrates size, caps positions at 3", asyn
   const rows = Array.from({ length: 8 }, (_, i) => goodRow({ tokenMint: `Z${i}`, symbol: `Z${i}` }));
   const engine = createAutopilotEngine({
     getFreshFeed: async () => rows,
-    getPairLite: async () => ({ marketCap: 5000, liquidityUsd: 6000 }),
+    getPairLite: async () => ({ marketCap: 2300, liquidityUsd: 6000 }),
     buyToken: async () => ({ ok: true, tokenAmount: "1" }),
     sellPercent: async () => ({ ok: true }),
     now: () => t,
@@ -187,8 +188,19 @@ test("entryReject: passes a clean fresh mover", () => {
   assert.equal(entryReject(goodRow(), P), null);
 });
 
+test("executableMcReject: fresh entries must still execute inside the proven MC pocket", () => {
+  const P = aggParams(baseState({ mode: "steady" }));
+  assert.equal(executableMcReject(goodRow({ marketCap: 2300 }), P), null);
+  assert.equal(executableMcReject(goodRow({ marketCap: 1990 }), P), "entry-mc");
+  assert.equal(executableMcReject(goodRow({ marketCap: 5453 }), P), "entry-mc");
+  assert.equal(executableMcReject(goodRow({ marketCap: 5453 }), P, { kol: true }), null, "copy rows use KOL/wallet gates instead");
+});
+
 test("entryReject: fresh path rejects the live-losing 72+ blowoff score band", () => {
   const P = aggParams(baseState({ mode: "steady" }));
+  const highMid = goodRow({ bestPickScore: 30 });
+  assert.equal(entryReject(highMid, P), "overscore");
+  assert.ok(freshScore(highMid) >= P.maxScore && freshScore(highMid) < 72, "67-71 is also blocked");
   const blowoff = goodRow({ volume5m: 180, buys5m: 35, sells5m: 3, bestPickScore: 100 });
   assert.equal(entryReject(blowoff, P), "overscore");
   assert.ok(freshScore(blowoff) >= P.maxScore);
@@ -459,7 +471,7 @@ function round(n) {
 test("engine: paper session apes a good coin then takes profit", async () => {
   let t = 0;
   const clock = () => t;
-  let mc = 5000;
+  let mc = 2300;
   const feed = async () => [goodRow()];
   const pairLite = async () => ({ marketCap: mc, liquidityUsd: 6000 });
   let buys = 0;
@@ -490,7 +502,7 @@ test("engine: paper session apes a good coin then takes profit", async () => {
   assert.ok(st.open.length >= 1, "should have opened at least one position");
 
   // Ramp to a +500% runner so the ladder fires tp1 -> tp2 -> tp3 -> tp4 and closes.
-  mc = 5000 * 6;
+  mc = 2300 * 6;
   for (let i = 0; i < 5; i++) {
     t += 2200;
     await engine._tick();
@@ -507,7 +519,7 @@ test("engine: local replay veto blocks historically bad unproven entries", async
   let historyCalls = 0;
   const engine = createAutopilotEngine({
     getFreshFeed: async () => [goodRow()],
-    getPairLite: async () => ({ marketCap: 5000, liquidityUsd: 6000 }),
+    getPairLite: async () => ({ marketCap: 2300, liquidityUsd: 6000 }),
     buyToken: async () => ({ ok: true, tokenAmount: "1000" }),
     sellPercent: async () => ({ ok: true }),
     entryHistory: async () => {
@@ -530,7 +542,7 @@ test("engine: local replay veto blocks historically bad unproven entries", async
 
 test("engine: live mode routes through buy/sell deps", async () => {
   let t = 0;
-  let mc = 5000;
+  let mc = 2300;
   let buys = 0;
   let sells = 0;
   let soldPos = null;
@@ -555,7 +567,7 @@ test("engine: live mode routes through buy/sell deps", async () => {
     await engine._tick();
   }
   assert.ok(buys >= 1, "live mode calls buyToken");
-  mc = 5000 * 1.7;
+  mc = 2300 * 1.7;
   t += 2200;
   await engine._tick();
   assert.ok(sells >= 1, "live mode calls sellPercent");
@@ -595,6 +607,8 @@ test("server KOL brain tracks all API KOLs, learns outcomes, and links related w
   assert.match(serverSource, /\["hot", "fresh", "top", "consistent"\]\.map/);
   assert.match(serverSource, /recordKolSignal\(r\); \/\/ learn every KOL pattern/);
   assert.match(serverSource, /isTrackedKolWallet\(w\) \|\| isWinnerWallet\(walletObs\.get\(w\)\)/);
+  assert.match(serverSource, /s\.failed = \(Number\(s\.failed\) \|\| 0\) \+ 1/);
+  assert.match(serverSource, /learnedGood \|\| \(apiGood && confluence && rowScore >= 72\)/);
   assert.match(serverSource, /linkedKolLeaders/);
   assert.match(serverSource, /linkedWinnerLeaders/);
   assert.match(serverSource, /kolProbeCandidates/);
@@ -641,6 +655,79 @@ test("engine: KOL probe copy entries can open small and exit fast while learning
   }
 });
 
+test("engine: post-fill MC guard sells back fresh entries that leave the winning bucket", async () => {
+  let t = 0;
+  let buys = 0;
+  let sells = 0;
+  const liveMarks = [2300, 5453];
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => [goodRow({ tokenMint: "DriftMint111111111111111111111111111111111", symbol: "DRIFT", marketCap: 2300 })],
+    getPairLite: async () => ({ marketCap: liveMarks.length ? liveMarks.shift() : 5453, liquidityUsd: 5000 }),
+    buyToken: async () => { buys++; return { ok: true, tokenAmount: "1000" }; },
+    sellPercent: async (_mint, pct, pos) => { sells++; assert.equal(pct, 100); assert.equal(pos.tokenAmount, "1000"); return { ok: true, receivedSol: 0.0118 }; },
+    now: () => t,
+    persist: async () => {}
+  });
+  await engine.start({ solBudget: 1, minutes: 60, mode: "steady", live: true, walletPubkey: "W".repeat(44) });
+  try {
+    t += 6000;
+    await engine._tick();
+    assert.equal(buys, 0, "first scan only arms momentum confirmation");
+    t += 6000;
+    await engine._tick();
+    assert.equal(buys, 1, "the scan was valid and the buy fired");
+    assert.equal(sells, 1, "post-fill MC drift sold back immediately");
+    assert.equal(engine.status().open.length, 0, "out-of-band fill is not held as a normal position");
+    assert.equal(engine._state().tradeNo, 0, "guarded sell-back is not counted as a strategy trade");
+  } finally {
+    await engine.stop("test-done");
+  }
+});
+
+test("engine: same-mint winner re-entry waits for a real pullback", async () => {
+  let t = 0;
+  let buys = 0;
+  const row = goodRow({
+    tokenMint: "RebuyMint111111111111111111111111111111111",
+    symbol: "REBUY",
+    pairAgeSeconds: 600,
+    marketCap: 98000,
+    liquidityUsd: 30000,
+    volume5m: 12000,
+    buys5m: 35,
+    sells5m: 5,
+    m5: 12,
+    h1: 20
+  });
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => [],
+    getLiquidFeed: async () => [row],
+    getPairLite: async () => ({ marketCap: row.marketCap, liquidityUsd: row.liquidityUsd }),
+    buyToken: async () => { buys++; return { ok: true, tokenAmount: "1" }; },
+    sellPercent: async () => ({ ok: true }),
+    now: () => t,
+    persist: async () => {}
+  });
+  await engine.start({ solBudget: 1, minutes: 60, mode: "scalp", live: false });
+  try {
+    Object.assign(engine._state(), {
+      coinWins: { [row.tokenMint]: 1 },
+      coinLosses: {},
+      coinTrades: { [row.tokenMint]: 1 },
+      recentSells: { [row.tokenMint]: { at: -200000, mc: 100000, reason: "tp1", win: true } }
+    });
+    t += 121000;
+    await engine._tick();
+    assert.equal(engine.status().open.length, 0, "cooldown alone is not enough to rebuy a winner near the prior sell mark");
+    row.marketCap = 90000;
+    t += 121000;
+    await engine._tick();
+    assert.equal(engine.status().open.length, 1, "a real pullback can earn the winner re-entry");
+  } finally {
+    await engine.stop("test-done");
+  }
+});
+
 test("engine: live mode refuses to start without a wallet", async () => {
   const engine = createAutopilotEngine({
     getFreshFeed: async () => [],
@@ -657,7 +744,7 @@ test("engine: stop sells every open position and opens no more", async () => {
   const rows = Array.from({ length: 6 }, (_, i) => goodRow({ tokenMint: `M${i}`, symbol: `S${i}` }));
   const engine = createAutopilotEngine({
     getFreshFeed: async () => rows,
-    getPairLite: async () => ({ marketCap: 5000, liquidityUsd: 6000 }),
+    getPairLite: async () => ({ marketCap: 2300, liquidityUsd: 6000 }),
     buyToken: async () => ({ ok: true, tokenAmount: "1" }),
     sellPercent: async () => { sells++; return { ok: true }; },
     now: () => t,
@@ -769,7 +856,7 @@ test("engine: lock-gains CONTINUE mode banks the green and keeps trading", async
 
 test("engine: loss cap flattens and stops", async () => {
   let t = 0;
-  let mc = 5000;
+  let mc = 2300;
   // Many fresh mid-score rows so it deploys most of the bankroll across several positions;
   // tanking them all then drops realized equity below the cap. This test is about the
   // loss-cap backstop, not the blocked 72+ blowoff band.
@@ -890,10 +977,10 @@ test("convictionMult: honors per-mode caps (degen unproven 0.6, chill proven 1.1
   assert.ok(convictionMult(row, proven, { kol: true, winners: 3 }, null, { unprovenCap: 0.7, provenCap: 1.15 }) <= 1.15 + 1e-9, "chill never oversizes past 1.15");
 });
 
-test("engine: per-mode session loss cap (degen 15%, chill 12%, normal 20%)", async () => {
+test("engine: per-mode session loss cap protects learning modes tighter", async () => {
   let t = 0;
   const mk = () => createAutopilotEngine({ getFreshFeed: async () => [], getPairLite: async () => null, buyToken: async () => ({ ok: true }), sellPercent: async () => ({ ok: true }), now: () => t, persist: async () => {} });
-  for (const [mode, cap] of [["degen", 0.15], ["chill", 0.12], ["normal", 0.20]]) {
+  for (const [mode, cap] of [["chill", 0.06], ["steady", 0.08], ["blend", 0.08], ["grind", 0.08], ["scalp", 0.08], ["degen", 0.10], ["normal", 0.12]]) {
     const e = mk();
     await e.start({ solBudget: 1, minutes: 60, live: false, mode });
     assert.ok(Math.abs(e._state().lossCapFrac - cap) < 1e-9, `${mode} loss cap ${cap}`);
@@ -1019,7 +1106,7 @@ test("status: headline PnL is realized-anchored — a phantom open mark never in
   let t = 0;
   const engine = createAutopilotEngine({
     getFreshFeed: async () => [goodRow()],
-    getPairLite: async () => ({ marketCap: 5000, liquidityUsd: 6000 }),
+    getPairLite: async () => ({ marketCap: 2300, liquidityUsd: 6000 }),
     buyToken: async () => ({ ok: true, tokenAmount: "1000" }),
     sellPercent: async () => ({ ok: true }),
     now: () => t,
@@ -1049,7 +1136,7 @@ test("status: headline PnL is realized-anchored — a phantom open mark never in
 
 test("status: a realized loss turns the headline red and it stays put (consistent, not jumping)", async () => {
   let t = 0;
-  let mc = 5000;
+  let mc = 2300;
   const engine = createAutopilotEngine({
     getFreshFeed: async () => [goodRow()],
     getPairLite: async () => ({ marketCap: mc, liquidityUsd: 6000 }),
@@ -1062,7 +1149,7 @@ test("status: a realized loss turns the headline red and it stays put (consisten
   for (let i = 0; i < 3; i++) { t += 2200; await engine._tick(); }
   assert.ok(engine._state().open.length >= 1, "opened a position");
   // Crater past the stop so it sells at a real loss.
-  mc = 5000 * 0.9;
+  mc = 2300 * 0.9;
   for (let i = 0; i < 3; i++) { t += 2200; await engine._tick(); }
   const s = engine.status();
   assert.equal(s.open.length, 0, "the loser was sold");

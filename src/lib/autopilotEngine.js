@@ -172,9 +172,9 @@ export function aggParams(state) {
   // (+0.22) and 2-5m (+0.34) both WIN. So the fresh engine skips the 30-120s dead-zone entirely
   // and takes the freshest entries + the survivors past 2 min. (entryReject honors skipMidAge.)
   const skipMidAge = !liquid && !grind;
-  const maxScore = (!liquid && !grind) ? 72 : Infinity;
-  // FRESH-PATH SCORE CEILING: the live book keeps losing on 72+ blowoff rows even when they
-  // look strong. The best realized pocket is the middle band, not the top score band.
+  const maxScore = (!liquid && !grind) ? 67 : Infinity;
+  // FRESH-PATH SCORE CEILING: the live book keeps losing on 67+ rows even when they
+  // look strong. The best realized pocket is the middle 62-66 band, not the top score band.
   // LIQUID disables the RELATIVE liquidity gate (liqFrac 0): a healthy $1M coin legitimately has
   // liq well under mc*0.3, so the relative test would wrongly reject it. The absolute floor
   // (minLiqAbs, known-thin only) does the real depth check instead.
@@ -569,7 +569,7 @@ export function entryReject(row, P) {
   const setupScore = P.liquid ? liquidScore(row) : P.grind ? grindScore(row) : freshScore(row);
   if (setupScore < P.minScore) return "score";
   // FRESH-PATH SCORE CEILING — reject the 67+ bleeder zone (see aggParams maxScore). Entry becomes a
-  // BAND (~58-66), the proven +EV pocket where the runners actually live, not just a floor.
+  // BAND (~62-66), the proven +EV pocket where the runners actually live, not just a floor.
   if (Number.isFinite(P.maxScore) && setupScore >= P.maxScore) return "overscore";
   return null;
 }
@@ -713,6 +713,17 @@ export function canOpen(state, sizeSol) {
   return true;
 }
 
+export function executableMcReject(row, P, sm = null) {
+  if (!P || P.liquid || P.grind) return null;
+  // Smart-money/copy rows can be outside the fresh-launch pocket; they are gated
+  // by their own learned-wallet/KOL rules and fast smart exits.
+  if (sm && (sm.kol || sm.kolProbe || sm.winners >= 1)) return null;
+  const mc = Number(row?.marketCap);
+  if (!(mc > 0)) return null;
+  if (mc < P.mcFloor || mc > P.mcCeil) return "entry-mc";
+  return null;
+}
+
 export function repeatBudgetForMint(state, P, mint) {
   const key = String(mint || "");
   const wins = Number(state?.coinWins?.[key]) || 0;
@@ -724,6 +735,14 @@ export function repeatBudgetForMint(state, P, mint) {
 
 export function symbolCooldownMs(P) {
   return P && P.liquid ? 180_000 : 90_000;
+}
+
+function recentSellAt(rec) {
+  return typeof rec === "number" ? rec : Number(rec?.at || 0) || 0;
+}
+
+function recentSellMc(rec) {
+  return typeof rec === "object" && rec ? Number(rec.mc || 0) || 0 : 0;
 }
 
 // THE realizable multiple for an open bag — the ONE place the haircut lives so the internal
@@ -812,10 +831,13 @@ function freshState(opts) {
     profitLock: opts.profitLock || null,
     // Session loss cap: stop + flatten if working equity falls this far below the stake.
     // Per-mode default when the user doesn't set one: the more AGGRESSIVE the mode, the TIGHTER
-    // the cap — a tight cap is exactly what keeps an aggressive style net-green over a run
-    // (degen -15%, chill -12% capital-preservation, everyone else -20%). User value wins.
+    // the cap — tight defaults keep learning modes from bleeding a session while the model
+    // is discovering which KOL/wallet buckets are actually working. User value wins.
     lossCapFrac: Math.max(0.05, Math.min(0.5, Number(opts.lossCapFrac) > 0 ? Number(opts.lossCapFrac)
-      : (opts.mode === "degen" ? 0.15 : opts.mode === "chill" ? 0.12 : opts.mode === "scalp" ? 0.12 : 0.20))),
+      : (opts.mode === "chill" ? 0.06
+        : opts.mode === "degen" ? 0.10
+          : (opts.mode === "steady" || opts.mode === "blend" || opts.mode === "grind" || opts.mode === "scalp") ? 0.08
+            : 0.12))),
     // Recent big-win (>=5x) records for the panel's downloadable PnL cards.
     bigWins: [],
     // Optional PROFIT VAULT: sweep realized profit above the working stake to a
@@ -1473,7 +1495,7 @@ export function createAutopilotEngine(deps) {
     // gauge, and showed a scary full-size "loss" the wallet reconciliation undoes.
     // Free the slot, note it, and move on without booking it as a trade outcome.
     if (/-failed$/.test(reason || "") && !pos.countedWin && totalProceeds === 0) {
-      state.recentSells[pos.mint] = now();
+      state.recentSells[pos.mint] = { at: now(), mc: Number(pos.lastMc || pos.entryMc) || 0, reason };
       record("warn", `⚠️ ${pos.sym} entry didn't fill (${reason}) — not a trade, freeing slot`);
       return;
     }
@@ -1497,7 +1519,7 @@ export function createAutopilotEngine(deps) {
       state.coinLosses[pos.mint] = (state.coinLosses[pos.mint] || 0) + 1;
       bumpSymLoss(pos.sym);
     }
-    state.recentSells[pos.mint] = now();
+    state.recentSells[pos.mint] = { at: now(), mc: Number(pos.lastMc || pos.entryMc) || 0, reason, win };
     const pnl = net;
     // Feed the self-tuner: recent peaks + rug flags.
     state.recentPeaks.push(Math.round(pos.peakPct || 0));
@@ -1611,7 +1633,16 @@ export function createAutopilotEngine(deps) {
       .filter((r) => {
         // Wave cooldown: allow re-entry on a coin we sold, but space it out (longer for scalp).
         const last = state.recentSells[r.tokenMint];
-        return !last || nowMs - last > reentryCoolMs;
+        const lastAt = recentSellAt(last);
+        if (lastAt && nowMs - lastAt <= reentryCoolMs) return false;
+        const wins = Number(state.coinWins[r.tokenMint] || 0);
+        const losses = Number(state.coinLosses[r.tokenMint] || 0);
+        const lastMc = recentSellMc(last);
+        const curMc = Number(r.marketCap) || 0;
+        // A winner may earn a re-entry, but only on a real pullback. Otherwise the
+        // bot just buys the same pump again after cooldown and gives back the win.
+        if (wins > losses && lastMc > 0 && curMc > lastMc * 0.93) return false;
+        return true;
       })
       .filter((r) => {
         // CLONE-SWARM guard: when a NAME just lost (different mint, same name flooding
@@ -1786,7 +1817,7 @@ export function createAutopilotEngine(deps) {
       }
       let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv, state.maxTradeSol));
       if (!canOpen(state, size)) break;
-      await openPosition(cand.r, size, cand.fs, dev, rep, sm);
+      await openPosition(cand.r, size, cand.fs, dev, rep, sm, P);
       state.lastOpenAt = now();
       openedThisCycle += 1;
       if (openedThisCycle >= perCycle) break;            // don't machine-gun the whole feed at once
@@ -1824,7 +1855,13 @@ export function createAutopilotEngine(deps) {
         }
         if (symbolLoserCount(r.symbol) >= 3) continue;
         const last = state.recentSells[r.tokenMint];
-        if (last && now() - last < 45_000) continue;             // wave cooldown
+        const lastAt = recentSellAt(last);
+        if (lastAt && now() - lastAt < 45_000) continue;         // wave cooldown
+        const wins = Number(state.coinWins[r.tokenMint] || 0);
+        const losses = Number(state.coinLosses[r.tokenMint] || 0);
+        const lastMc = recentSellMc(last);
+        const curMc = Number(r.marketCap) || 0;
+        if (wins > losses && lastMc > 0 && curMc > lastMc * 0.93) continue;
         const dev = getDevWallet(r.tokenMint);
         const rep = dev ? devReputation(dev) : null;
         if (rep && rep.rugs >= 2 && rep.runners === 0) continue;  // dev rug history still vetoes
@@ -1847,7 +1884,7 @@ export function createAutopilotEngine(deps) {
         let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv, state.maxTradeSol));
         if (!canOpen(state, size)) break;
         record("info", `🐳 copy-trade ${r.symbol || shortMint(r.tokenMint)} @ MC $${Math.round(Number(r.marketCap) || 0)} — ${sm.kolProbe ? "KOL probe" : sm.kol ? "KOL " : ""}${sm.winners || 0} winner-wallet(s) → conv ${conv.toFixed(2)}`);
-        await openPosition(r, size, P.liquid ? liquidScore(r) : freshScore(r), dev, rep, sm);
+        await openPosition(r, size, P.liquid ? liquidScore(r) : freshScore(r), dev, rep, sm, P);
         state.lastOpenAt = now();
         openedThisCycle += 1;
       }
@@ -1869,7 +1906,7 @@ export function createAutopilotEngine(deps) {
     }
   }
 
-  async function openPosition(row, sizeSol, fs, dev, rep, sm) {
+  async function openPosition(row, sizeSol, fs, dev, rep, sm, P = null) {
     if (!state || state.stopped) return; // never open once stopped
     const mint = row.tokenMint;
     const sym = row.symbol || row.baseToken?.symbol || shortMint(mint);
@@ -1878,6 +1915,30 @@ export function createAutopilotEngine(deps) {
     if (entryMc <= 0) return;
     // Start the live pump trade-tick stream for this coin so prices update instantly.
     try { onOpen(mint); } catch {}
+
+    const scanMcReject = executableMcReject({ ...row, marketCap: entryMc }, P, sm);
+    if (scanMcReject) {
+      record("info", `Skipping ${sym} - executable MC $${Math.round(entryMc)} left the proven band before buy`);
+      return;
+    }
+
+    // The scan row can be stale by the time a live order is about to fire. Re-read
+    // the same mark used for exits and refuse fresh-path entries that are no longer
+    // in the proven MC pocket before spending SOL.
+    try {
+      const lite = await getPairLite(mint);
+      const liveMc = Number(lite && lite.marketCap) || 0;
+      if (liveMc > 0) {
+        const liveReject = executableMcReject({ ...row, marketCap: liveMc }, P, sm);
+        if (liveReject) {
+          record("info", `Skipping ${sym} - live MC $${Math.round(liveMc)} left the proven band before buy`);
+          return;
+        }
+        entryMc = liveMc;
+      }
+      const liveLiq = Number(lite && lite.liquidityUsd) || 0;
+      if (liveLiq > 0) entryLiq = liveLiq;
+    } catch {}
 
     let tokenAmount = null;
     if (state.live) {
@@ -1916,6 +1977,23 @@ export function createAutopilotEngine(deps) {
       const liteLiq = Number(lite && lite.liquidityUsd) || 0;
       if (liteLiq > 0) entryLiq = liteLiq;
     } catch {}
+
+    const postFillReject = executableMcReject({ ...row, marketCap: entryMc }, P, sm);
+    if (postFillReject) {
+      if (state.live) {
+        try {
+          const res = await sellPercent(mint, 100, { mint, tokenAmount });
+          if (res && res.ok === false) throw new Error("sell rejected");
+          record("warn", `Entry guard sold back ${sym} - post-fill MC $${Math.round(entryMc)} outside proven band`);
+          return;
+        } catch (e) {
+          record("warn", `Entry guard could not sell back ${sym}: ${e && e.message}; tracking position for exits`);
+        }
+      } else {
+        record("info", `Skipping ${sym} - post-fill MC $${Math.round(entryMc)} outside proven band`);
+        return;
+      }
+    }
 
     state.bank -= sizeSol;
     state.tradeNo += 1;
