@@ -16226,7 +16226,11 @@ function smartChartFrameUrl(token = {}, mode = "chart") {
     // iframe reload/flash). The chart fetches its OWN authoritative stats straight from DexScreener
     // (the same source as the top bar), so MC/liq/vol always match without anything in the URL.
     const ver = assetBuildVersion();
-    return `/chart-lab?ca=${encodeURIComponent(mint)}&embed=1${symq ? `&sym=${encodeURIComponent(symq)}` : ""}${ver ? `&v=${encodeURIComponent(ver)}` : ""}`;
+    // Pass our resolved API origin so the chart fetches candles from the BACKEND (Render), not the
+    // static host it's framed from (slimewire.org has no /api -> a relative fetch returns HTML and
+    // the chart stays on "Loading…" forever — the empty-chart bug).
+    const apiq = apiBase ? `&api=${encodeURIComponent(apiBase)}` : "";
+    return `/chart-lab?ca=${encodeURIComponent(mint)}&embed=1${symq ? `&sym=${encodeURIComponent(symq)}` : ""}${apiq}${ver ? `&v=${encodeURIComponent(ver)}` : ""}`;
   }
   const bootstrap = smartChartBootstrapForMint(mint);
   if (mode === "info" && bootstrap?.infoUrl) return bootstrap.infoUrl;

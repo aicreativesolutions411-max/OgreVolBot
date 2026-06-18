@@ -129,6 +129,13 @@
   var el=document.getElementById('chart'); if(!el||!window.LightweightCharts) return;
   var QP=new URLSearchParams(location.search),CA=(QP.get('ca')||'').trim(),EMBED=QP.get('embed')==='1',TF=QP.get('tf')||'5m';
   var SYMP=(QP.get('sym')||'').trim();
+  // API ORIGIN — THE empty-chart fix. chart-lab is served from the STATIC host (slimewire.org via
+  // Cloudflare) which has NO /api — a relative fetch('/api/chart') there returns the app-shell HTML,
+  // so r.json() threw and candles never loaded ("Loading…" forever). The backend lives on Render.
+  // Use the app's resolved base (passed as &api=) , else same-origin when already on onrender, else
+  // the known Render origin. CORS on /api/chart already allows slimewire.org.
+  var API=(function(){ var q=QP.get('api'); if(q){ try{ return decodeURIComponent(q).replace(/\/+$/,''); }catch(e){} }
+    return location.hostname.indexOf('onrender.com')>=0 ? '' : 'https://ogrevolbot.onrender.com'; })();
   if(EMBED&&document.body)document.body.classList.add('embed');
   var LWC=window.LightweightCharts;
   var mcScale=0, dexStats=null, dexPair=null, realPrice=null, chg24=null, haveCandles=false;
@@ -316,7 +323,7 @@
     try{ if(CA) sessionStorage.setItem('cl2:'+CA, JSON.stringify({at:Date.now(),tf:TF,d:{candles:cs.slice(-150),trades:(d.trades||[]).slice(0,40),mc:d.mc,priceUsd:d.priceUsd,liq:d.liq,vol24:d.vol24,change24h:d.change24h,buys24:d.buys24,sells24:d.sells24,holders:d.holders,symbol:d.symbol,name:d.name}})); }catch(e){}
     return true;
   }
-  function loadServer(){ if(!CA)return; fetch('/api/chart?ca='+encodeURIComponent(CA)+'&tf='+encodeURIComponent(TF)).then(function(r){return r.json();}).then(function(d){ if(d&&d.candles)applyChartData(d); }).catch(function(){}); }
+  function loadServer(){ if(!CA)return; fetch(API+'/api/chart?ca='+encodeURIComponent(CA)+'&tf='+encodeURIComponent(TF)).then(function(r){return r.json();}).then(function(d){ if(d&&d.candles)applyChartData(d); }).catch(function(){}); }
 
   // PRIMARY candle load = OUR server (/api/chart -> Solana Tracker + swap-api, cached). Reliable
   // and instant; no per-user external candle rate limit. loadDex() layers the exact top-bar stats + the
