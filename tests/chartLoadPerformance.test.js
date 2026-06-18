@@ -76,6 +76,9 @@ test("native chart API uses Solana Tracker primary with swap-api fallback", () =
   assert.match(body, /Array\.isArray\(st\.oclhv\)/);
   assert.match(body, /swap-api\.pump\.fun\/v1\/coins\/\$\{mint\}\/candles/);
   assert.match(body, /swap-api\.pump\.fun\/v2\/coins\/\$\{mint\}\/trades/);
+  assert.match(serverSource, /const CHART_TRADE_CACHE = new Map\(\)/);
+  assert.match(body, /CHART_TRADE_CACHE\.set\(mint, \{ at: Date\.now\(\), trades \}\)/);
+  assert.match(body, /lastTrades && Date\.now\(\) - lastTrades\.at < 2 \* 60 \* 1000/);
   assert.match(body, /source: candleSource/);
   assert.doesNotMatch(body, /gtFetch|GT_API|fetchGeckoOhlcv|resolveGeckoPoolForMint/);
 });

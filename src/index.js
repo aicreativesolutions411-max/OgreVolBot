@@ -24339,6 +24339,7 @@ async function resolveCashtagToMint(symbol) {
 // fresh-launch fallback and live tape. DexScreener supplies headline stats. Cached ~8s so many
 // viewers hit our cache, not the upstreams.
 const CHART_API_CACHE = new Map();
+const CHART_TRADE_CACHE = new Map();
 async function buildChartData(mint, tf) {
   const key = `${mint}:${tf}`;
   const hit = CHART_API_CACHE.get(key);
@@ -24425,6 +24426,16 @@ async function buildChartData(mint, tf) {
       })).filter((x) => x.t > 0);
     }
   } catch (e) { diag.tradesError = (e && e.message) || "trades-fail"; }
+  if (trades.length) {
+    CHART_TRADE_CACHE.set(mint, { at: Date.now(), trades });
+  } else {
+    const lastTrades = CHART_TRADE_CACHE.get(mint);
+    if (lastTrades && Date.now() - lastTrades.at < 2 * 60 * 1000) trades = lastTrades.trades;
+  }
+  if (CHART_TRADE_CACHE.size > 400) {
+    const old = [...CHART_TRADE_CACHE.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, 200);
+    for (const [k] of old) CHART_TRADE_CACHE.delete(k);
+  }
   try {
     const cachedRug = rugcheckFullCache.get(String(mint || "").trim());
     if (cachedRug && Date.now() - Number(cachedRug.at || 0) < 10 * 60 * 1000) {
