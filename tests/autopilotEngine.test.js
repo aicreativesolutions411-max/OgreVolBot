@@ -300,12 +300,13 @@ test("evalExit: ladder tp1 -> tp2 -> tp3 -> tp4 lets a runner ride", () => {
   assert.equal(tp4.reason, "tp4"); assert.equal(tp4.pct, 100);
 });
 
-test("evalExit: steady mode banks 80% at the first pop and rides 20% to +400%", () => {
+test("evalExit: steady mode LOCKS A WIN at the first pop (banks ~88%) and rides the tail to +400%", () => {
   const P = aggParams(baseState({ mode: "steady" }));
   const base = { entryMc: 5000, entryLiq: 6000, lastLiq: 6000, openedAt: 0, missed: 0, peakPct: 0 };
-  // bank 80% at the first doable pop
+  // bank the BULK at the first doable pop — enough that the trade is a real net win even if the
+  // tiny runner dies (0.88 * 1.25 = +10% locked), the heart of "winning steady".
   const tp1 = evalExit({ ...base, lastMc: 5000 * 1.3, tp1Done: false }, P, 1000);
-  assert.equal(tp1.reason, "tp1"); assert.equal(tp1.pct, 80);
+  assert.equal(tp1.reason, "tp1"); assert.equal(tp1.pct, 88);
   // after TP1, mid rungs do NOT fire — the 20% runner is held
   const mid = evalExit({ ...base, lastMc: 5000 * 3.5, tp1Done: true, tp2Done: false, peakPct: 250 }, P, 1000);
   assert.notEqual(mid.reason, "tp2");
@@ -392,10 +393,28 @@ test("canOpen: respects soft max and over-deployment", () => {
   assert.equal(canOpen(s, 0.05), false, "maxOpen reached");
 });
 
-test("equity: cash plus marked-to-market open positions", () => {
+test("equity: realizable — sellable bag gets the haircut", () => {
+  // A 2x-marked bag WITH real liquidity contributes its haircut value (60% of the upside),
+  // not the raw 2x mark: a thin fresh curve can't actually pay the full marked gain.
   const s = baseState({ bank: 0.5 });
-  s.open.push({ entryMc: 5000, lastMc: 10000, costSol: 0.5, remFrac: 1 });
-  assert.equal(round(equity(s)), 1.5);
+  s.open.push({ entryMc: 5000, lastMc: 10000, lastLiq: 5000, costSol: 0.5, remFrac: 1 });
+  // raw 2.0 -> 1 + (2-1)*0.6 = 1.6x ; equity = 0.5 cash + 0.5*1.6 = 1.3
+  assert.equal(round(equity(s)), 1.3);
+});
+
+test("equity: realizable — unsellable up-mark is capped at COST (no phantom equity)", () => {
+  // The phantom-mark fix: a bag marked +400% but with no real liquidity (< $1500) can't be
+  // sold, so it must NEVER inflate equity. It contributes cost, not the phantom mark.
+  const s = baseState({ bank: 0.5 });
+  s.open.push({ entryMc: 5000, lastMc: 25000, lastLiq: 200, costSol: 0.5, remFrac: 1 });
+  assert.equal(round(equity(s)), 1.0); // 0.5 cash + 0.5 cost — the +400% mark is ignored
+});
+
+test("equity: realizable — full downside still counts", () => {
+  // Losses are real and sellable — equity takes the full downside (no haircut on the way down).
+  const s = baseState({ bank: 0.5 });
+  s.open.push({ entryMc: 5000, lastMc: 2500, lastLiq: 5000, costSol: 0.5, remFrac: 1 });
+  assert.equal(round(equity(s)), 0.75); // 0.5 cash + 0.5*0.5 = 0.75
 });
 
 // ---- engine lifecycle (paper mode, mocked feed) ----

@@ -192,7 +192,13 @@ export function aggParams(state) {
   const blend = mode === "blend";
   let tp1Pct = 55, spikePct = 75, moonTarget = 500, tp2Lvl = tp2, tp2Pct = 50, tp3Lvl = 200, tp3Pct = 50;
   if (steady) {
-    tp1Pct = 80; spikePct = 85; moonTarget = 400;
+    // WIN-LOCK math (the whole point of "winning steady"): bank enough at the first DOABLE pop
+    // that the trade books a REAL net win even if the tiny runner then dies. tp1 here is the
+    // regime pop (20/25/28%); banking 88% locks 0.88×1.25 = +10% (normal), +5.6% (cold), +12.6%
+    // (hot) on the WHOLE position before the runner does anything. At the old 80% a +25% pop was
+    // exactly breakeven → it booked as a SCRATCH, not a win — which is why steady "popped" but the
+    // session never showed green. The 12% tail still free-rolls to +400% for the occasional moon.
+    tp1Pct = 88; spikePct = 90; moonTarget = 400;
   } else if (mode === "chill") {
     // CAPITAL PRESERVATION exit: lock the bulk at the first pop, free-roll a small tail to a
     // modest moon — lowest variance, matches chill's "tiny green, almost never red" thesis
@@ -689,15 +695,28 @@ export function canOpen(state, sizeSol) {
   return true;
 }
 
+// THE realizable multiple for an open bag — the ONE place the haircut lives so the internal
+// equity, the displayed marked equity, and the per-position % can never drift apart (drift is
+// exactly how phantom-mark bugs creep back). What a bag could ACTUALLY BANK if sold right now:
+//   • unrealized UPSIDE discounted to ~60% and capped at 4x — a thin fresh curve cannot really
+//     pay out a marked +400%; what fills is far less.
+//   • DOWNSIDE counts in full — that loss is real and sellable.
+//   • a bag with no real liquidity (lastLiq < $1500) is capped at COST — a phantom up-mark on a
+//     coin you literally can't sell must never read as profit anywhere.
+// Uses the median-smoothed dispMc when present (steady, no single-tick flicker), else lastMc.
+export function realizableMove(p) {
+  const raw = p.entryMc > 0 ? (Number(p.dispMc) || Number(p.lastMc) || p.entryMc) / p.entryMc : 1;
+  let mv = raw >= 1 ? 1 + (Math.min(raw, 4) - 1) * 0.6 : Math.max(0, raw);
+  if ((Number(p.lastLiq) || 0) < 1500) mv = Math.min(mv, 1);
+  return mv;
+}
+
+// REALIZABLE equity — open bags valued at realizableMove(), not the optimistic curve mark.
+// This is the single source of truth for every risk decision (loss-cap, peak ratchet, canOpen,
+// the self-tuner gain), so the bot can never "feel up +27%" on a phantom mark and then watch it
+// evaporate the moment it tries to sell. Matches the displayed marked equity in status().
 export function equity(state) {
-  const openVal = state.open.reduce((a, p) => {
-    // Cap the marked multiple at 10x: a fresh thin-curve coin can flash a phantom
-    // marketCap (e.g. +4591% from a couple of tiny buys) that ISN'T sellable. Letting
-    // that into equity flashed a fake "4200% win" and a fake session peak. Real value
-    // is bounded by what the curve can pay; 10x is past where the ladder has banked out.
-    const move = p.entryMc > 0 ? Math.min(p.lastMc / p.entryMc, 10) : 1;
-    return a + p.costSol * p.remFrac * move;
-  }, 0);
+  const openVal = state.open.reduce((a, p) => a + p.costSol * p.remFrac * realizableMove(p), 0);
   return state.bank + openVal;
 }
 
@@ -1012,18 +1031,12 @@ export function createAutopilotEngine(deps) {
     // Marked equity: open bags at their smoothed, haircut mark (full downside, but unrealized
     // gains discounted to ~60% and hard-capped at 4x — and using the median-smoothed pos.lastMc,
     // NOT the raw single-tick getInstantMc that made the per-position number flicker).
-    const markedOpenVal = state.open.reduce((a, p) => {
-      const raw = p.entryMc > 0 ? (Number(p.dispMc) || Number(p.lastMc) || p.entryMc) / p.entryMc : 1;
-      let mv = raw >= 1 ? 1 + (Math.min(raw, 4) - 1) * 0.6 : Math.max(0, raw);
-      // HONEST: a bag we can't actually SELL (no real liquidity) must NEVER show as profit — that's
-      // the "it reads coins I can't sell and makes me look up in profit" bug. Cap an unsellable
-      // bag's mark at COST (downside still counts — that's real risk), so a phantom up-mark on a
-      // thin/zero-liquidity coin can't inflate the marked/"riding" number. Real-liquidity bags keep
-      // their (haircut) upside. The realized headline is unaffected (it's always at cost).
-      const sellable = (Number(p.lastLiq) || 0) >= 1500;
-      if (!sellable) mv = Math.min(mv, 1);
-      return a + p.costSol * p.remFrac * mv;
-    }, 0);
+    // Marked equity: open bags at their realizable haircut (see realizableMove) — the SAME
+    // number the internal equity() risk machinery uses, so the displayed "riding" value and the
+    // bot's own sense of where it stands are one and the same. A bag we can't actually sell is
+    // capped at cost, so a phantom up-mark on a thin coin can't inflate it. The realized headline
+    // is unaffected (it's always at cost).
+    const markedOpenVal = state.open.reduce((a, p) => a + p.costSol * p.remFrac * realizableMove(p), 0);
     const markedEquity = state.bank + (state.secured || 0) + markedOpenVal;
     const unrealizedSol = markedOpenVal - deployedCost; // unbanked paper P/L on open bags (haircut)
     return {
@@ -1058,12 +1071,10 @@ export function createAutopilotEngine(deps) {
       streak: state.streak,
       open: state.open.map((p) => {
         // REALIZABLE move shown per position — NOT the optimistic curve mark. Same haircut as the
-        // marked equity (60% of the upside, full downside) and capped at COST when the bag isn't
-        // actually sellable (thin liquidity). This is the fix for "it shows +27% but no way am I up
-        // that": the % is now what you could BANK selling now, not the phantom thin-curve mark.
-        const raw = p.entryMc > 0 ? (Number(p.dispMc) || Number(p.lastMc) || p.entryMc) / p.entryMc : 1;
-        let mv = raw >= 1 ? 1 + (Math.min(raw, 4) - 1) * 0.6 : Math.max(0, raw);
-        if ((Number(p.lastLiq) || 0) < 1500) mv = Math.min(mv, 1);
+        // marked equity and the internal equity() (60% of the upside, full downside, capped at COST
+        // when the bag isn't actually sellable). This is the fix for "it shows +27% but no way am I
+        // up that": the % is now what you could BANK selling now, not the phantom thin-curve mark.
+        const mv = realizableMove(p);
         return { sym: p.sym, mint: p.mint, costSol: round(p.costSol), remFrac: p.remFrac, movePct: round((mv - 1) * 100, 2), heldS: Math.round((now() - p.openedAt) / 1000) };
       }),
       tradeNo: state.tradeNo,
