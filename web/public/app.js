@@ -16201,6 +16201,18 @@ function dexChartEmbedUrl(tokenOrMint, options = {}) {
   return `https://dexscreener.com/solana/${encodeURIComponent(address)}?${params.toString()}`;
 }
 
+// The deployed build id (stamped on app.js?v=… by build-web). Parsed ONCE and cached, so the
+// chart iframe URL is constant within a session (no remount flashing) but cache-busts to the
+// fresh chart-lab.html on each new deploy — the fix for "it keeps flashing the OLD chart file".
+let __slimeAssetVer = null;
+function assetBuildVersion() {
+  if (__slimeAssetVer != null) return __slimeAssetVer;
+  try {
+    const src = document.querySelector('script[src*="app.js?v="]')?.getAttribute("src") || "";
+    __slimeAssetVer = (src.match(/app\.js\?v=([\w-]+)/) || [])[1] || "";
+  } catch { __slimeAssetVer = ""; }
+  return __slimeAssetVer;
+}
 function smartChartFrameUrl(token = {}, mode = "chart") {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
   // SlimeWire NATIVE chart is the only chart now — keep users on-site (it shows the same info via our
@@ -16213,7 +16225,8 @@ function smartChartFrameUrl(token = {}, mode = "chart") {
     // STABLE src — only ca + symbol, both fixed per coin. NO live values (a changing ?mc= made the
     // iframe reload/flash). The chart fetches its OWN authoritative stats straight from DexScreener
     // (the same source as the top bar), so MC/liq/vol always match without anything in the URL.
-    return `/chart-lab?ca=${encodeURIComponent(mint)}&embed=1${symq ? `&sym=${encodeURIComponent(symq)}` : ""}`;
+    const ver = assetBuildVersion();
+    return `/chart-lab?ca=${encodeURIComponent(mint)}&embed=1${symq ? `&sym=${encodeURIComponent(symq)}` : ""}${ver ? `&v=${encodeURIComponent(ver)}` : ""}`;
   }
   const bootstrap = smartChartBootstrapForMint(mint);
   if (mode === "info" && bootstrap?.infoUrl) return bootstrap.infoUrl;

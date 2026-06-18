@@ -161,7 +161,7 @@
   try{ vol.priceScale().applyOptions({scaleMargins:{top:0.84,bottom:0}}); }catch(e){}
   // Fit the chart's drawing buffer to the (CSS-sized) container once layout settles — the create-time
   // size can be 0/default before CSS applies, leaving a blank 300x150 canvas. Re-fit on container resize.
-  function fitChart(){ var w=Math.max(160,el.clientWidth||el.parentElement.clientWidth||340), h=Math.max(200,el.clientHeight||chartH()); try{ chart.resize(w,h); }catch(e){ try{ chart.applyOptions({width:w,height:h}); }catch(e2){} } }
+  function fitChart(){ var w=Math.max(160,el.clientWidth||el.parentElement.clientWidth||340), h=Math.max(200,el.clientHeight||chartH()); try{ chart.resize(w,h); }catch(e){ try{ chart.applyOptions({width:w,height:h}); }catch(e2){} } if(typeof scheduleSkin==='function')scheduleSkin(); }
   requestAnimationFrame(function(){ fitChart(); requestAnimationFrame(fitChart); });
   setTimeout(fitChart,250); setTimeout(fitChart,900);
   try{ new ResizeObserver(fitChart).observe(el); }catch(e){ window.addEventListener('resize',fitChart); }
@@ -180,6 +180,7 @@
     forming=Object.assign({},candles[candles.length-1]);
     if(!haveCandles){ chart.timeScale().fitContent(); haveCandles=true; }   // fit once; afterwards keep the user's view
     hideLoad();
+    if(typeof scheduleSkin==='function')scheduleSkin();
   }
   // LIVE: fold the latest price into the candle for the CURRENT time bucket — exactly how a real chart
   // forms its last bar. A buy lifts the close (green), a sell drops it (red); a new bucket starts a new
@@ -191,12 +192,75 @@
     else if(b===forming.time){ forming.high=Math.max(forming.high,price); forming.low=Math.min(forming.low,price); forming.close=price; }
     else { return; } // out-of-order guard
     try{ candle.update(forming); }catch(e){}
+    if(typeof scheduleSkin==='function')scheduleSkin();
   }
   function liveTick(price){ updateForming(price,Math.floor(Date.now()/1000)); }
   function applyTradeTicks(list){
     if(!list||!list.length)return;
     list.slice().sort(function(a,b){return (a.t||0)-(b.t||0);}).forEach(function(x){ updateForming(+x.price||0,x.t||0); });
   }
+
+  // ====== HIGGS slime / blood candle skin =================================================
+  // OUR signature look, painted on TOP of the real TradingView engine: keep LWC for the live
+  // OHLCV, the price/time scales, zoom, pan and crosshair — but draw the candle BODIES as the
+  // photoreal Higgs slime (up) / blood (down) textures on a transparent canvas synced to LWC's
+  // own coordinates. Real chart underneath, our chart on the glass. LWC's plain candles stay
+  // visible until the textures finish loading, so it is NEVER blank.
+  var skin = { ready:false, slime:null, blood:null, raf:0 };
+  var ovc = document.createElement('canvas');
+  ovc.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:4';
+  if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
+  el.appendChild(ovc);
+  var octx = ovc.getContext('2d');
+  // Black-key a Higgs render (slime/blood pillars sit on pure black) to alpha so only the gel
+  // shows — keyed on max(r,g,b) so dark crimson blood stays opaque (luminance would hole it).
+  function keyTex(img){
+    var c=document.createElement('canvas'); c.width=img.naturalWidth||img.width; c.height=img.naturalHeight||img.height;
+    var x=c.getContext('2d'); x.drawImage(img,0,0);
+    try{ var d=x.getImageData(0,0,c.width,c.height),a=d.data;
+      for(var i=0;i<a.length;i+=4){ var mx=Math.max(a[i],a[i+1],a[i+2]); a[i+3]= mx<=12?0 : (mx>=46?255 : Math.round((mx-12)/34*255)); }
+      x.putImageData(d,0,0);
+    }catch(e){}
+    return c;
+  }
+  function loadTex(src){ return new Promise(function(res){ var im=new Image(); im.onload=function(){ try{res(keyTex(im));}catch(e){res(im);} }; im.onerror=function(){res(null);}; im.src=src; }); }
+  Promise.all([loadTex('/assets/slimewire/candle-slime.webp'),loadTex('/assets/slimewire/candle-blood.webp')]).then(function(t){
+    if(!t[0]||!t[1])return;                                    // textures missing -> keep LWC's own candles
+    skin.slime=t[0]; skin.blood=t[1]; skin.ready=true;
+    // Hand the candle BODIES to the overlay; keep slime/blood WICKS on the LWC series so the
+    // axes, last-price line and crosshair stay perfectly real.
+    try{ candle.applyOptions({upColor:'rgba(0,0,0,0)',downColor:'rgba(0,0,0,0)',borderVisible:false,wickUpColor:'#9dff6a',wickDownColor:'#ff8a96'}); }catch(e){}
+    sizeOv(); scheduleSkin();
+  });
+  function sizeOv(){ var w=el.clientWidth||340,h=el.clientHeight||300,dpr=Math.min(2,window.devicePixelRatio||1);
+    if(ovc.width!==Math.round(w*dpr)||ovc.height!==Math.round(h*dpr)){ ovc.width=Math.round(w*dpr); ovc.height=Math.round(h*dpr); }
+    octx.setTransform(dpr,0,0,dpr,0,0); }
+  function skinList(){ var l=bars.slice();
+    if(forming){ if(l.length&&forming.time===l[l.length-1].time) l[l.length-1]=forming; else if(!l.length||forming.time>l[l.length-1].time) l.push(forming); }
+    return l; }
+  function drawSkin(){
+    if(!skin.ready||!haveCandles)return;
+    sizeOv(); var w=el.clientWidth||340,h=el.clientHeight||300; octx.clearRect(0,0,w,h);
+    var ts=chart.timeScale(); var bs=7; try{ bs=ts.options().barSpacing||7; }catch(e){}
+    var bw=Math.max(3,Math.min(34,bs*0.74)); var list=skinList();
+    for(var i=0;i<list.length;i++){ var bar=list[i];
+      var x=ts.timeToCoordinate(bar.time); if(x==null||x<-bw||x>w+bw)continue;
+      var yO=candle.priceToCoordinate(bar.open), yC=candle.priceToCoordinate(bar.close); if(yO==null||yC==null)continue;
+      var up=bar.close>=bar.open, top=Math.min(yO,yC), bodyH=Math.max(2.5,Math.abs(yC-yO));
+      var tex=up?skin.slime:skin.blood, iw=tex.width||tex.naturalWidth, ih=tex.height||tex.naturalHeight;
+      // The Higgs pillar is a narrow column centred in black margins — crop to it so the gel
+      // fills the candle width (drawing full-frame made spray-paint-thin candles).
+      var sx=iw*0.17, sw=iw*0.66;
+      octx.save(); octx.shadowColor=up?'rgba(124,255,79,0.5)':'rgba(255,60,84,0.45)'; octx.shadowBlur=Math.min(9,bw*0.5);
+      try{ octx.drawImage(tex, sx,0,sw,ih, x-bw/2, top, bw, bodyH); }catch(e){}
+      octx.restore();
+    }
+  }
+  function scheduleSkin(){ if(skin.raf)return; skin.raf=requestAnimationFrame(function(){ skin.raf=0; try{drawSkin();}catch(e){} }); }
+  try{ chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleSkin); }catch(e){}
+  try{ new ResizeObserver(scheduleSkin).observe(el); }catch(e){}
+  setInterval(scheduleSkin, 600);                              // cheap safety net for any missed frame
+  // ========================================================================================
 
   // ---- stats (DexScreener = same source as the app top bar, so the numbers MATCH) ----
   function applyStats(s,tick){

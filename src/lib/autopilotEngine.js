@@ -192,12 +192,16 @@ export function aggParams(state) {
   let tp1Pct = 55, spikePct = 75, moonTarget = 500, tp2Lvl = tp2, tp2Pct = 50, tp3Lvl = 200, tp3Pct = 50;
   if (steady) {
     // WIN-LOCK math (the whole point of "winning steady"): bank enough at the first DOABLE pop
-    // that the trade books a REAL net win even if the tiny runner then dies. tp1 here is the
-    // regime pop (20/25/28%); banking 88% locks 0.88×1.25 = +10% (normal), +5.6% (cold), +12.6%
-    // (hot) on the WHOLE position before the runner does anything. At the old 80% a +25% pop was
-    // exactly breakeven → it booked as a SCRATCH, not a win — which is why steady "popped" but the
-    // session never showed green. The 12% tail still free-rolls to +400% for the occasional moon.
-    tp1Pct = 88; spikePct = 90; moonTarget = 400;
+    // that the trade books a REAL net win even if the tiny runner then dies. Banking 88% at a
+    // +20% pop locks 0.88×1.20 = +5.6% on the WHOLE position before the runner does anything.
+    // At the old 80% a +25% pop was exactly breakeven → it booked as a SCRATCH, not a win, which
+    // is why steady "popped" but the session never showed green.
+    // HIT-RATE: pin the first pop at a FIXED +20% (not the regime 20/25/28). Far more coins touch
+    // +20% than +28%, so steady books a small locked win on MANY more trades — higher green-session
+    // rate, which is the literal goal of "winning steady". +20% is the floor that still clears fees
+    // at an 88% bank (0.88×1.20=+5.6% > the 4% win threshold); going lower would book scratches.
+    // The 12% tail still free-rolls to +400% for the occasional moon.
+    tp1 = 20; tp1Pct = 88; spikePct = 90; moonTarget = 400;
   } else if (mode === "chill") {
     // CAPITAL PRESERVATION exit: lock the bulk at the first pop, free-roll a small tail to a
     // modest moon — lowest variance, matches chill's "tiny green, almost never red" thesis
