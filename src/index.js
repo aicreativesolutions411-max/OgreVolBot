@@ -721,6 +721,7 @@ setInterval(() => {
 // is on. Best-effort; never affects trading.
 const DEV_OBS_FILE = path.join(CONFIG.dataDir, "dev-observatory.json");
 const WALLET_OBS_FILE = path.join(CONFIG.dataDir, "wallet-observatory.json");
+const BRAIN_SEED_FLAG_FILE = path.join(CONFIG.dataDir, "brain-seed.json"); // one-time seed-attempt marker (loop-proof)
 const MARKET_TAPE_FILE = path.join(CONFIG.dataDir, "market-tape.json");
 const KOL_LEARNING_FILE = path.join(CONFIG.dataDir, "kol-learning.json");
 const devObs = new Map();    // dev -> { coins, ran, rugged, peakSum }  (peakSum = sum of max/first multiples)
@@ -1698,10 +1699,24 @@ function startDevObservatory() {
   setInterval(() => { void sampleKolSignalOutcomes(); }, 60_000);
   setInterval(() => { void pollObsTradesSwapApi(); }, 18_000); // resurrect the buyer flywheel via the working swap-api source
   setInterval(() => { void pollWalletFunders(); }, 60_000);    // FUNDING GRAPH: resolve winner funders + clusters (free RPC, cached forever)
-  // SEED GRAB IS OWNER-TRIGGERED ONLY (/api/web/autopilot/seed?run=1). The earlier auto-run-on-boot
-  // crash-looped the service: the grab fired 25s after every boot, the heavy burst (ST roster +
-  // per-wallet trade pulls + funder RPC) overloaded the instance before it could persist >50
-  // winners, Render killed it, and on restart it re-fired. NEVER auto-run a heavy grab on boot.
+  // ONE-TIME LOOP-PROOF AUTO-SEED. The earlier version crash-looped (fired 25s after every boot,
+  // overloaded the instance, re-fired on restart). This version is safe: (1) fires 2min after boot
+  // (instance settled), (2) the grab is now HARDENED (small batch, gentle pacing, persist-once),
+  // and (3) it persists an "attempted" flag BEFORE running — so even if it ever crashed, the next
+  // boot sees the flag and NEVER re-runs. Worst case = one restart, no loop. Runs while ST Premium
+  // is active; once done it won't re-run (flag + the persisted winner roster both gate it).
+  setTimeout(async () => {
+    try {
+      if (!CONFIG.solanaTrackerApiKey) return;
+      const flag = await readJson(BRAIN_SEED_FLAG_FILE).catch(() => null);
+      if (flag && flag.attemptedAt) return;                       // already attempted once — never loop
+      const winners = [...walletObs.values()].filter(isWinnerWallet).length;
+      if (winners >= 50) return;                                  // already seeded enough
+      await writeJsonFile(BRAIN_SEED_FLAG_FILE, { attemptedAt: Date.now() }).catch(() => {}); // PERSIST before running
+      console.log(`[brain-seed] one-time auto-seed starting (hardened, loop-proof; ${winners} winners now)`);
+      void runBrainSeedGrab({ maxPages: 6 });
+    } catch {}
+  }, 120_000);
   // AUTO-KOL: load the saved roster, then harvest proven KOLs from the tracker leaderboard now and
   // every 10 min so the copy-trade roster stays fresh (cheap — the KOL scan is cached internally).
   void loadAutoKolWallets().then(() => { void refreshAutoKolWallets(); });
