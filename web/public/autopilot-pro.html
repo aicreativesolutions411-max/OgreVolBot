@@ -633,25 +633,58 @@ async function shareOrSaveClip(blob){
   }catch{}
   const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),4000);
 }
+let clipRaf=null, clipAutoStop=null;
+function clipBtnState(rec){ const b=$("clipBtn"); if(!b)return; if(rec){ b.classList.add("rec"); b.textContent="⏹"; b.title="Stop & save clip"; } else { b.classList.remove("rec"); b.textContent="🎬"; b.title="Record a clip to share"; } }
+function finishClip(mime){
+  try{ clipStream&&clipStream.getTracks().forEach(t=>t.stop()); }catch{}
+  if(clipRaf){ try{ cancelAnimationFrame(clipRaf); }catch{} clipRaf=null; }
+  if(clipAutoStop){ clearTimeout(clipAutoStop); clipAutoStop=null; }
+  const blob=new Blob(clipChunks,{type:(mime||"video/webm")}); clipRec=null; clipStream=null; clipChunks=[];
+  clipBtnState(false);
+  if(blob.size>0) shareOrSaveClip(blob);
+}
+function startClipRecorder(stream,isScreen){
+  const mime=clipMime(); clipChunks=[];
+  clipRec=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);
+  clipRec.addEventListener("dataavailable",(e)=>{ if(e.data&&e.data.size>0) clipChunks.push(e.data); });
+  clipRec.addEventListener("stop",()=>finishClip(mime),{once:true});
+  if(isScreen){ stream.getVideoTracks()[0]?.addEventListener?.("ended",()=>{ try{ clipRec&&clipRec.state!=="inactive"&&clipRec.stop(); }catch{} },{once:true}); }
+  clipRec.start(800);
+  clipBtnState(true);
+  try{ blip("ok"); }catch{}
+}
+// MOBILE / no screen-capture: composite the live ogre + HUD stats onto a canvas and record THAT
+// (no screen-share prompt, works on phones) — the way the main-page rec button records its canvas.
+function startClipCanvas(){
+  const vid=$("bgVid");
+  const W=540,H=960,cv=document.createElement("canvas");cv.width=W;cv.height=H;const cx=cv.getContext("2d");
+  const cap=cv.captureStream?cv.captureStream.call(cv,30):(cv.mozCaptureStream?cv.mozCaptureStream.call(cv,30):null);
+  if(!cap||!window.MediaRecorder){ if($("startMsg"))$("startMsg").innerHTML='<span class="warn">This browser can’t record. Use your phone’s screen recorder.</span>'; return; }
+  clipStream=cap;
+  const draw=()=>{
+    cx.fillStyle="#03100a";cx.fillRect(0,0,W,H);
+    try{ if(vid&&vid.videoWidth){ const s=Math.max(W/vid.videoWidth,H/vid.videoHeight),dw=vid.videoWidth*s,dh=vid.videoHeight*s; cx.drawImage(vid,(W-dw)/2,(H-dh)/2,dw,dh); } }catch{}
+    const g=cx.createLinearGradient(0,H*0.45,0,H);g.addColorStop(0,"rgba(0,0,0,0)");g.addColorStop(1,"rgba(0,0,0,.82)");cx.fillStyle=g;cx.fillRect(0,H*0.45,W,H*0.55);
+    const pnl=(($("hudPnl")||{}).textContent||"—").trim(), eq=(($("hudEq")||{}).textContent||"").trim();
+    cx.textAlign="center";
+    cx.fillStyle=/^-/.test(pnl)?"#ff5470":"#7CFF4F";cx.font="800 66px -apple-system,system-ui,sans-serif";cx.fillText(pnl,W/2,H-176);
+    cx.fillStyle="#d8f3e2";cx.font="600 30px -apple-system,system-ui,sans-serif";cx.fillText(eq,W/2,H-128);
+    cx.fillStyle="rgba(255,255,255,.9)";cx.font="700 27px -apple-system,system-ui,sans-serif";cx.fillText("🐸 SlimeWire Autopilot",W/2,H-74);
+    cx.fillStyle="rgba(150,220,180,.72)";cx.font="500 22px -apple-system,system-ui,sans-serif";cx.fillText("slimewire.org/pro",W/2,H-40);
+    clipRaf=requestAnimationFrame(draw);
+  };
+  draw();
+  startClipRecorder(cap,false);
+  clipAutoStop=setTimeout(()=>{ try{ clipRec&&clipRec.state!=="inactive"&&clipRec.stop(); }catch{} },6000); // ~6s clip, or tap to stop sooner
+}
 async function startClip(){
-  if(!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia && window.MediaRecorder)){
-    if($("startMsg")) $("startMsg").innerHTML='<span class="warn">Clip recording needs a desktop browser (Chrome).</span>'; return;
+  // Desktop: real screen capture of the whole HUD. Mobile / unsupported: fall back to the canvas
+  // recorder above (instead of the old "needs desktop" dead-end that did nothing on phones).
+  if(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia && window.MediaRecorder){
+    try{ clipStream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:{ideal:30,max:30}},audio:true}); startClipRecorder(clipStream,true); return; }
+    catch(e){ if(e && e.name==="NotAllowedError") return; /* user cancelled the prompt */ }
   }
-  try{
-    clipStream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:{ideal:30,max:30}},audio:true});
-    const mime=clipMime(); clipChunks=[];
-    clipRec=new MediaRecorder(clipStream,mime?{mimeType:mime}:undefined);
-    clipRec.addEventListener("dataavailable",(e)=>{ if(e.data&&e.data.size>0) clipChunks.push(e.data); });
-    clipRec.addEventListener("stop",()=>{ try{ clipStream&&clipStream.getTracks().forEach(t=>t.stop()); }catch{}
-      const blob=new Blob(clipChunks,{type:(mime||"video/webm")}); clipRec=null; clipStream=null; clipChunks=[];
-      const b=$("clipBtn"); if(b){ b.classList.remove("rec"); b.textContent="🎬"; b.title="Record a clip to share"; }
-      if(blob.size>0) shareOrSaveClip(blob);
-    },{once:true});
-    clipStream.getVideoTracks()[0]?.addEventListener?.("ended",()=>{ try{ clipRec&&clipRec.state!=="inactive"&&clipRec.stop(); }catch{} },{once:true});
-    clipRec.start(1000);
-    const b=$("clipBtn"); if(b){ b.classList.add("rec"); b.textContent="⏹"; b.title="Stop & save clip"; }
-    try{ blip("ok"); }catch{}
-  }catch(e){ /* user cancelled the screen-share prompt — no-op */ }
+  startClipCanvas();
 }
 $("clipBtn").addEventListener("click",(e)=>{ e.stopPropagation();
   if(clipRec && clipRec.state!=="inactive"){ try{ clipRec.stop(); }catch{} } else { startClip(); }
