@@ -43178,6 +43178,13 @@ function webLivePairRow(row) {
     slimeScopeCategory: row.slimeScopeCategory || classifySlimeScopePair(row),
     graduated: Boolean(row.graduated || row.isGraduated || isGraduatedSlimeScopePair(row)),
     isGraduated: Boolean(row.graduated || row.isGraduated || isGraduatedSlimeScopePair(row)),
+    // Expose the candidate SOURCE + a boosted flag so the client's category filters can MATCH:
+    // the DEX-Boosted tab reads liveFeedIsBoosted (boosted/boosts/source~boost), and the trending
+    // tabs read source. These were dropped here, so boosted/trending coins were invisible to the
+    // category filters and those tabs silently fell back to "show everything" (the "not matching
+    // categories" bug). The boosted pool already enters via fetchSniperCandidates (token-boosts).
+    boosted: /boost/i.test(String(row.source || "")) || Boolean(row.boosted || row.boosts || row.boost),
+    source: row.source || row.profileSource || null,
     safetyNote: row.safetyNote || "Mint/freeze safety passed",
     liveLabel: Number.isFinite(Number(row.pairAgeSeconds)) && Number(row.pairAgeSeconds) <= 60 ? "Seconds Old" : row.pairAgeMinutes !== null && Number(row.pairAgeMinutes) <= 30 ? "Just Listed" : isPumpStyleToken(row) ? "Pump Feed" : "Live Pair"
   };
