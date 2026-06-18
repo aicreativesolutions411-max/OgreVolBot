@@ -56,6 +56,22 @@ test("paper trades are valid signal (counted)", () => {
   assert.equal(c.sample, 50, "paper outcomes count");
 });
 
+test("liveOnly calibration ignores paper trades", () => {
+  const trades = Array.from({ length: 50 }, () => trade({ paper: true, fs: 62, pnl: -0.02, win: false }));
+  const c = computeCalibration(trades, { liveOnly: true });
+  assert.equal(c.sample, 0, "paper outcomes do not tune live sessions");
+  assert.equal(c.minScoreBonus, 0);
+  assert.equal(c.sizeFracCapMult, 1);
+});
+
+test("liveOnly calibration computes from live trades only", () => {
+  const paperWinners = Array.from({ length: 60 }, () => trade({ paper: true, fs: 74, pnl: 0.05, win: true }));
+  const liveLosers = Array.from({ length: 45 }, () => trade({ paper: false, fs: 62, pnl: -0.03, win: false }));
+  const c = computeCalibration([...paperWinners, ...liveLosers], { liveOnly: true });
+  assert.equal(c.sample, 45);
+  assert.ok(c.minScoreBonus > 0 || c.sizeFracCapMult < 1, "live losses tighten live calibration");
+});
+
 test("identifies the best MC band by EV", () => {
   const lo = Array.from({ length: 20 }, () => trade({ entryMc: 3000, pnl: -0.01, win: false }));
   const mid = Array.from({ length: 20 }, () => trade({ entryMc: 8000, pnl: 0.03, win: true }));
@@ -77,6 +93,15 @@ test("computeCalibrationByMode: a mode under the min sample stays neutral", () =
   const byMode = computeCalibrationByMode(few);
   assert.equal(byMode.chill.minScoreBonus, 0);
   assert.equal(byMode.chill.sizeFracCapMult, 1);
+});
+
+test("computeCalibrationByMode: liveOnly ignores paper outcomes per mode", () => {
+  const paperLosers = Array.from({ length: 50 }, () => trade({ mode: "degen", paper: true, fs: 62, pnl: -0.03, win: false }));
+  const liveWinners = Array.from({ length: 50 }, () => trade({ mode: "degen", paper: false, fs: 74, pnl: 0.02, win: true }));
+  const byMode = computeCalibrationByMode([...paperLosers, ...liveWinners], { liveOnly: true });
+  assert.equal(byMode.degen.sample, 50);
+  assert.equal(byMode.degen.minScoreBonus, 0);
+  assert.equal(byMode.degen.sizeFracCapMult, 1);
 });
 
 test("modeScorecard: computes per-mode win-rate, EV, avg-peak, rug-rate", () => {

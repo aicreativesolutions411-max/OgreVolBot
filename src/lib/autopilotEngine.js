@@ -574,6 +574,24 @@ export function entryReject(row, P) {
   return null;
 }
 
+// Conservative local-history veto. Replay data is noisy, so it only blocks when
+// there is a meaningful sample and the matched setups were clearly bad expectancy.
+export function historyGateReject(history) {
+  if (!history || typeof history !== "object") return null;
+  const sample = Number(history.sampleSize) || 0;
+  if (sample < 12 || String(history.confidence || "").toLowerCase() === "low") return null;
+  const failRate = Number(history.failRatePercent);
+  const winRate = Number(history.winRatePercent);
+  const upside = Number(history.medianMaxUpsidePercent);
+  const drawdown = Number(history.medianMaxDrawdownPercent);
+  if (Number.isFinite(failRate) && failRate >= 78 && (!Number.isFinite(upside) || upside < 35)) return "history-fail";
+  if (Number.isFinite(winRate) && winRate <= 22 && Number.isFinite(upside) && upside < 25) return "history-ev";
+  if (Number.isFinite(drawdown) && drawdown <= -35 && (!Number.isFinite(upside) || upside < 35) && (!Number.isFinite(winRate) || winRate <= 35)) {
+    return "history-drawdown";
+  }
+  return null;
+}
+
 // Decide what to do with one open position given a fresh market read.
 // Returns { action: 'hold' | 'sell', pct, reason } where pct is fraction to sell.
 // Decide what to do with one open position. `pct` is the % of the CURRENTLY
@@ -875,6 +893,7 @@ export function createAutopilotEngine(deps) {
     smartMoneyFeed = async () => [],
     callerIntel = () => null,   // (mint) -> { signal:{convictionDelta,reason,trusted}, caller, channel } | null
     getMarketTape = () => null,
+    entryHistory = async () => null,
     symbolLoserCount = () => 0,
     recordTrade = () => {},
     exitMs = 1000,
@@ -1615,6 +1634,7 @@ export function createAutopilotEngine(deps) {
     const maxNow = Math.min(state.maxOpen, tune.maxOpenCap || state.maxOpen);
     const perCycle = Math.max(1, tune.perCycle || 1);
     let openedThisCycle = 0;
+    let historyChecks = 0;
 
     // SIT OUT THE CHOP (capital preservation): a COLD tape we're ALSO bleeding into is the
     // death-by-fees trap that turns a flat day red. Pause FRESH sniping for a ~4m cool-off
@@ -1723,6 +1743,19 @@ export function createAutopilotEngine(deps) {
       // deep coins ever cleared instant entry while transient distinct movers timed out waiting for
       // a 30s re-confirm. A lower instant bar + the per-coin diversify cap spreads trades across
       // MANY more coins. Only marginal setups (22-44) or ones we already traded/lost get one confirm.
+      if (!proven && historyChecks < 8 && typeof entryHistory === "function") {
+        historyChecks += 1;
+        let history = null;
+        try { history = await entryHistory(cand.r); } catch {}
+        const historyReject = historyGateReject(history);
+        if (historyReject) {
+          state.blocked = (state.blocked || 0) + 1;
+          rejTally[historyReject] = (rejTally[historyReject] || 0) + 1;
+          state.lastRejTally = rejTally;
+          record("info", `Skipping ${cand.r.symbol || shortMint(cand.r.tokenMint)} - local replay ${historyReject}`);
+          continue;
+        }
+      }
       const elite = P.liquid ? cand.fs >= 44 : cand.fs >= 72;
       const stoppedBefore = (state.coinLosses[cand.r.tokenMint] || 0) > 0;
       const needsConfirm = !proven && (stoppedBefore || tune.tape === "COLD" || !elite);

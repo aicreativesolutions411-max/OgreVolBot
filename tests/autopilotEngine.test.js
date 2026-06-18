@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
   aggParams,
   sizeFor,
@@ -9,6 +10,7 @@ import {
   convictionMult,
   autoTune,
   entryReject,
+  historyGateReject,
   evalExit,
   canOpen,
   equity,
@@ -199,6 +201,20 @@ test("entryReject: a $2k fresh launch with ~$2k liquidity is NOT rejected for li
   // the real-market case that was wrongly filtered: mc≈liq≈2k
   const row = goodRow({ marketCap: 2300, liquidityUsd: 2200, pairAgeSeconds: 30, volume5m: 90, buys5m: 1, sells5m: 0 });
   assert.equal(entryReject(row, P), null);
+});
+
+test("historyGateReject: vetoes only clear bad local replay samples", () => {
+  assert.equal(historyGateReject({ sampleSize: 7, confidence: "medium", failRatePercent: 100 }), null, "small samples do not block");
+  assert.equal(historyGateReject({ sampleSize: 40, confidence: "low", failRatePercent: 100 }), null, "low confidence does not block");
+  assert.equal(
+    historyGateReject({ sampleSize: 18, confidence: "medium", failRatePercent: 89, winRatePercent: 11, medianMaxUpsidePercent: 12, medianMaxDrawdownPercent: -42 }),
+    "history-fail"
+  );
+  assert.equal(
+    historyGateReject({ sampleSize: 25, confidence: "high", failRatePercent: 44, winRatePercent: 56, medianMaxUpsidePercent: 80, medianMaxDrawdownPercent: -12 }),
+    null,
+    "healthy matched history stays tradeable"
+  );
 });
 
 test("grind: enters only at safer (higher) MC and skips the sub-7k rug zone", () => {
@@ -469,11 +485,38 @@ test("engine: paper session apes a good coin then takes profit", async () => {
   await engine.stop("test-done");
 });
 
+test("engine: local replay veto blocks historically bad unproven entries", async () => {
+  let t = 0;
+  let historyCalls = 0;
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => [goodRow()],
+    getPairLite: async () => ({ marketCap: 5000, liquidityUsd: 6000 }),
+    buyToken: async () => ({ ok: true, tokenAmount: "1000" }),
+    sellPercent: async () => ({ ok: true }),
+    entryHistory: async () => {
+      historyCalls += 1;
+      return { sampleSize: 24, confidence: "medium", failRatePercent: 88, winRatePercent: 12, medianMaxUpsidePercent: 14, medianMaxDrawdownPercent: -38 };
+    },
+    now: () => t,
+    persist: async () => {}
+  });
+
+  await engine.start({ solBudget: 1, minutes: 60, mode: "normal", live: false });
+  t += 2200;
+  await engine._hunt();
+  const st = engine.status();
+  assert.equal(historyCalls, 1, "local replay was checked for the candidate");
+  assert.equal(st.open.length, 0, "bad matched history blocks the entry");
+  assert.equal(engine._state().lastRejTally["history-fail"], 1);
+  await engine.stop("test-done");
+});
+
 test("engine: live mode routes through buy/sell deps", async () => {
   let t = 0;
   let mc = 5000;
   let buys = 0;
   let sells = 0;
+  let soldPos = null;
   const engine = createAutopilotEngine({
     getFreshFeed: async () => [goodRow()],
     getPairLite: async () => ({ marketCap: mc, liquidityUsd: 6000 }),
@@ -481,8 +524,9 @@ test("engine: live mode routes through buy/sell deps", async () => {
       buys++;
       return { ok: true, tokenAmount: "1000" };
     },
-    sellPercent: async () => {
+    sellPercent: async (_mint, _pct, pos) => {
       sells++;
+      soldPos = pos;
       return { ok: true };
     },
     now: () => t,
@@ -498,7 +542,19 @@ test("engine: live mode routes through buy/sell deps", async () => {
   t += 2200;
   await engine._tick();
   assert.ok(sells >= 1, "live mode calls sellPercent");
+  assert.equal(soldPos?.tokenAmount, "1000", "live sells receive the original token amount");
   await engine.stop("test-done");
+});
+
+test("server autopilot sell adapter passes original token amount to sell helper", () => {
+  const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+  const start = serverSource.indexOf("sellPercent: async (mint, pct, pos = null)");
+  assert.ok(start >= 0, "adapter accepts the engine position object");
+  const adapter = serverSource.slice(start, start + 900);
+  assert.match(adapter, /pos\.tokenAmount/);
+  assert.match(adapter, /baseRawAmount/);
+  assert.match(adapter, /sellTokenFromWallet/);
+  assert.match(adapter, /\.\.\.\(baseRawAmount \? \{ baseRawAmount \} : \{\}\)/);
 });
 
 test("engine: live mode refuses to start without a wallet", async () => {

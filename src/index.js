@@ -535,37 +535,60 @@ async function recordAutopilotTrade(rec) {
 const AUTOPILOT_CALIBRATION_FILE = path.join(CONFIG.dataDir, "autopilot-calibration.json");
 let autopilotCalibrationCache = null;      // global bias
 let autopilotCalibrationByMode = null;     // { [mode]: bias }
+let autopilotLiveCalibrationCache = null;  // live-money bias only
+let autopilotLiveCalibrationByMode = null; // { [mode]: live-money bias }
 let autopilotCalibrationAt = 0;
 async function recomputeAutopilotCalibration() {
   try {
     const trades = await loadAutopilotTrades();
     const cal = computeAutopilotCalibration(trades);
+    const liveCal = computeAutopilotCalibration(trades, { liveOnly: true });
     autopilotCalibrationCache = cal;
+    autopilotLiveCalibrationCache = liveCal;
     autopilotCalibrationByMode = computeCalibrationByMode(trades);
+    autopilotLiveCalibrationByMode = computeCalibrationByMode(trades, { liveOnly: true });
     autopilotCalibrationAt = Date.now();
-    await writeJsonFile(AUTOPILOT_CALIBRATION_FILE, { ...cal, byMode: autopilotCalibrationByMode, savedAt: autopilotCalibrationAt });
+    await writeJsonFile(AUTOPILOT_CALIBRATION_FILE, {
+      ...cal,
+      byMode: autopilotCalibrationByMode,
+      live: liveCal,
+      liveByMode: autopilotLiveCalibrationByMode,
+      savedAt: autopilotCalibrationAt
+    });
     return cal;
   } catch { return autopilotCalibrationCache; }
 }
 // Returns the bias for a session: the MODE-specific one when that mode has a real sample,
 // otherwise the global bias (then defaults). This is what makes every mode self-correct
 // toward green on its OWN record rather than being dragged by the others.
-async function getAutopilotCalibration(mode) {
+function activeCalibration(c) {
+  return Boolean(c && (c.minScoreBonus > 0 || (c.sizeFracCapMult != null && c.sizeFracCapMult < 1)));
+}
+
+async function getAutopilotCalibration(mode, options = {}) {
+  const liveOnly = Boolean(options.live || options.liveOnly);
   if (!autopilotCalibrationCache) {
     try {
       const j = await readJson(AUTOPILOT_CALIBRATION_FILE).catch(() => null);
       if (j && (j.minScoreBonus != null || j.sizeFracCapMult != null)) {
         autopilotCalibrationCache = j;
         if (j.byMode) autopilotCalibrationByMode = j.byMode;
+        if (j.live) autopilotLiveCalibrationCache = j.live;
+        if (j.liveByMode) autopilotLiveCalibrationByMode = j.liveByMode;
       } else {
         await recomputeAutopilotCalibration();
       }
     } catch { await recomputeAutopilotCalibration().catch(() => {}); }
   }
-  const m = mode && autopilotCalibrationByMode && autopilotCalibrationByMode[mode];
+  if (liveOnly && !autopilotLiveCalibrationCache) {
+    await recomputeAutopilotCalibration().catch(() => {});
+  }
+  const byMode = liveOnly ? autopilotLiveCalibrationByMode : autopilotCalibrationByMode;
+  const base = liveOnly ? autopilotLiveCalibrationCache : autopilotCalibrationCache;
+  const m = mode && byMode && byMode[mode];
   // Use the mode bias only once it has enough sample to be non-neutral; else fall back global.
-  if (m && (m.minScoreBonus > 0 || (m.sizeFracCapMult != null && m.sizeFracCapMult < 1))) return m;
-  return autopilotCalibrationCache || { minScoreBonus: 0, sizeFracCapMult: 1 };
+  if (activeCalibration(m)) return m;
+  return base || { minScoreBonus: 0, sizeFracCapMult: 1 };
 }
 
 // --- OFF-BOX BACKUP to Cloudflare R2 (10GB free, zero egress) -------------------------------
@@ -1275,6 +1298,11 @@ const autopilotEngine = createAutopilotEngine({
   smartMoneyFeed: async () => smartMoneyFeed(),
   callerIntel: (mint) => telegramCallerIntelForMint(mint),
   getMarketTape: () => marketTape(),
+  entryHistory: async (row) => {
+    const mint = String(row?.tokenMint || "").trim();
+    if (!mint) return null;
+    return webReplayBeforeBuy(mint).catch(() => null);
+  },
   symbolLoserCount: (symbol) => autopilotSymbolLoserCount(symbol),
   recordTrade: (rec) => { void recordAutopilotTrade(rec); },
   log: (level, msg) => { console.log(`[autopilot:${level}] ${msg}`); pushAutopilotEvent(level, msg); },
@@ -1474,11 +1502,16 @@ const autopilotEngine = createAutopilotEngine({
     }
     return { ok: true, tokenAmount: res.tokenDeltaAmount, signature: res.signature };
   },
-  sellPercent: async (mint, pct) => {
+  sellPercent: async (mint, pct, pos = null) => {
     if (!autopilotWalletRecord) throw new Error("autopilot wallet not resolved");
+    let baseRawAmount = null;
+    try {
+      if (pos && pos.tokenAmount != null && BigInt(pos.tokenAmount) > 0n) baseRawAmount = String(pos.tokenAmount);
+    } catch {}
     const res = await sellTokenFromWallet(autopilotWalletRecord, mint, pct, CONFIG.autopilotSlippageBps, {
       priceExit: true,
-      priority: true
+      priority: true,
+      ...(baseRawAmount ? { baseRawAmount } : {})
     });
     // Return the REAL SOL the wallet received (gross swap out minus our platform fee),
     // so the engine books actual fills — not the marked/displayed price. Without this
@@ -3814,10 +3847,12 @@ async function handleWebApiRequest(request, response, requestUrl) {
               worstDevs: devs.filter((d) => d.rugs >= 1).sort((a, b) => b.rugs - a.rugs).slice(0, 8),
               // The self-calibration bias currently applied to new sessions (and WHY).
               calibration: await getAutopilotCalibration().catch(() => null),
+              liveCalibration: await getAutopilotCalibration(null, { live: true }).catch(() => null),
               // Per-mode scorecard — is EVERY mode a winner? {trades, winRate, ev, avgPeak, rugRate}.
               byMode: modeScorecard(trades),
               // Per-mode self-calibration bias (a bleeding mode auto-tightens on its own record).
               calibrationByMode: autopilotCalibrationByMode || null,
+              liveCalibrationByMode: autopilotLiveCalibrationByMode || null,
               // Off-box backup status (R2): configured? + last run.
               backup: { configured: r2Configured(r2Config()), last: lastBackupInfo }
             }
@@ -3957,7 +3992,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
         const lockGainsContinue = body.lockGainsContinue === true || body.lockGainsContinue === "true" || body.keepGoing === true || body.keepGoing === "true";
         // Self-calibration bias from accumulated trade history (bounded, never-looser) — the
         // MODE-specific bias when that mode has a real record, else the global one.
-        const calibration = await getAutopilotCalibration(mode).catch(() => null);
+        const calibration = await getAutopilotCalibration(mode, { live: wantLive }).catch(() => null);
         const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock, churn, vault, maxTradeSol, lossCapFrac, maxOpen, lockGainsContinue, calibration });
         // Bind the running clock to this controller. Trial users (no owner key, no
         // sub) burn metered time; owner/subscribers don't.
@@ -45169,11 +45204,6 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
-
-
-
-
-
 
 
 

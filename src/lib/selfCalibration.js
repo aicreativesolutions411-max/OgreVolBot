@@ -22,10 +22,12 @@ export const MIN_SIZE_MULT = 0.6;        // most we'll shrink the per-bet cap fr
 function num(v, d = 0) { const n = Number(v); return Number.isFinite(n) ? n : d; }
 
 // A trade "counts" for calibration once it has a real outcome (win flag + realized pnl).
-// Paper trades count too — their outcomes use real market data (a rug in paper is a real
-// rug), so they're valid signal, exactly as the engine's learning comment notes.
-function isCounted(t) {
-  return t && (t.win === true || t.win === false) && Number.isFinite(Number(t.pnl));
+// Paper trades count by default because their outcomes use real market data. Live
+// sessions pass liveOnly so real-money tuning is not diluted by paper-only outcomes.
+function isCounted(t, opts = {}) {
+  if (!(t && (t.win === true || t.win === false) && Number.isFinite(Number(t.pnl)))) return false;
+  if (opts.liveOnly && t.paper !== false) return false;
+  return true;
 }
 
 function winRate(rows) {
@@ -61,7 +63,7 @@ const mcBucket = (t) => { const mc = num(t.entryMc); if (!(mc > 0)) return null;
 // rich diagnostics (so the owner can see WHY it tightened). Neutral until MIN_SAMPLE.
 export function computeCalibration(trades, opts = {}) {
   const minSample = opts.minSample || MIN_SAMPLE;
-  const counted = (trades || []).filter(isCounted);
+  const counted = (trades || []).filter((t) => isCounted(t, opts));
   const neutral = {
     minScoreBonus: 0, sizeFracCapMult: 1,
     sample: counted.length, overallWinRate: 0, evPerTrade: 0,
