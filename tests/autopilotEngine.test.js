@@ -615,6 +615,48 @@ test("engine: live mode routes through buy/sell deps", async () => {
   await engine.stop("test-done");
 });
 
+test("live PnL basis: extra wallet SOL over the budget is NOT phantom profit", async () => {
+  let t = 0;
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => [],            // no candidates → no trades; only the wallet reconcile runs
+    getWalletSol: async () => 1.05,          // dedicated wallet holds MORE than the 1.0 budget
+    now: () => t,
+    persist: async () => {}
+  });
+  await engine.start({ solBudget: 1, minutes: 60, mode: "normal", live: true, walletPubkey: "W".repeat(44) });
+  t += 2200;
+  await engine._hunt();                      // first flat reconcile → captures basis = real wallet balance
+  const s = engine.status();
+  assert.ok(Math.abs(s.pnlPct) < 0.5, `no phantom gain before any trade (got ${s.pnlPct}%)`);
+  assert.equal(s.start, 1.05, "displayed baseline tracks the real starting balance, not the budget");
+  assert.equal(s.stakeBudget, 1, "deploy budget is still exposed separately");
+  await engine.stop("test-done");
+});
+
+test("live bank reconcile is flat-only — a held bag's cost is not double-counted", async () => {
+  let t = 0;
+  const walletSol = 1.0;                       // wallet still shows the FULL balance (buy not settled on-chain)
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => [],
+    getWalletSol: async () => walletSol,
+    sellPercent: async () => ({ ok: true }),
+    now: () => t,
+    persist: async () => {}
+  });
+  await engine.start({ solBudget: 1, minutes: 60, mode: "normal", live: true, walletPubkey: "W".repeat(44) });
+  t += 2200; await engine._hunt();             // flat reconcile → bank=1.0, basis=1.0
+  // Simulate a freshly-bought bag whose buy hasn't settled: synthetic ledger debited 0.2, but the
+  // on-chain wallet still reads the full 1.0 (settlement lag).
+  const st = engine._state();
+  st.bank = 0.8;
+  st.open.push({ mint: "M".repeat(44), sym: "LAG", costSol: 0.2, remFrac: 1, entryMc: 2300, lastMc: 2300, dispMc: 2300, entryLiq: 6000, lastLiq: 6000, openedAt: t, peakPct: 0, remainingMoonFrac: 1, realized: 0 });
+  t += 2200; await engine._hunt();             // NOT flat → must NOT clobber bank back up to walletSol(1.0)
+  const s = engine.status();
+  assert.ok(Math.abs(s.bank - 0.8) < 0.001, `bank stays on the synthetic ledger while holding (got ${s.bank})`);
+  assert.ok(s.pnlPct < 1, `held bag's cost not double-counted into the headline (got ${s.pnlPct}%)`);
+  await engine.stop("test-done");
+});
+
 test("server autopilot sell adapter passes original token amount to sell helper", () => {
   const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
   const start = serverSource.indexOf("sellPercent: async (mint, pct, pos = null)");

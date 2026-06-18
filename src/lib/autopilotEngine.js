@@ -848,6 +848,11 @@ function freshState(opts) {
     walletPubkey: opts.walletPubkey || null,
     start: opts.solBudget,
     bank: opts.solBudget,
+    // PnL BASIS — the denominator the headline % is measured against. Paper: the budget (= bank).
+    // Live: captured as the REAL wallet balance at session start (first flat reconcile), so the
+    // headline tracks actual money change instead of (fullWallet / budget − 1), which showed a
+    // phantom gain whenever the wallet held more SOL than the chosen budget. null until captured.
+    equityBasis: opts.live ? null : opts.solBudget,
     peak: opts.solBudget,
     // Total-equity peak (working + already-vaulted) for the always-on bank-the-peak
     // ratchet, so sweeping profit to the vault never looks like a giveback.
@@ -1150,6 +1155,10 @@ export function createAutopilotEngine(deps) {
     const deployedCost = state.open.reduce((a, p) => a + p.costSol * p.remFrac, 0);
     // Realized equity: cash on hand + vaulted + open bags AT COST. Moves only on closed trades.
     const realizedEquity = state.bank + (state.secured || 0) + deployedCost;
+    // PnL basis: the real starting balance (live) or the budget (paper). Measuring against this —
+    // not the budget when the live wallet held extra SOL — is what stops the phantom "+5% before
+    // any trade". Falls back to start until the first flat reconcile captures it.
+    const basis = Number(state.equityBasis) > 0 ? Number(state.equityBasis) : state.start;
     // Marked equity: open bags at their smoothed, haircut mark (full downside, but unrealized
     // gains discounted to ~60% and hard-capped at 4x — and using the median-smoothed pos.lastMc,
     // NOT the raw single-tick getInstantMc that made the per-position number flicker).
@@ -1175,7 +1184,10 @@ export function createAutopilotEngine(deps) {
       tape: state.tune ? state.tune.tape : null,
       betMult: state.tune ? state.tune.sizeMult : 1,
       wallet: state.walletPubkey,
-      start: state.start,
+      // Display baseline = the PnL basis (real starting balance live / budget paper), so "start"
+      // and pnl% are coherent. The raw deploy budget is exposed separately as stakeBudget.
+      start: round(basis),
+      stakeBudget: state.start,
       bank: round(state.bank),
       walletSol: state.walletSol == null ? null : round(state.walletSol),
       secured: round(state.secured || 0),
@@ -1185,10 +1197,10 @@ export function createAutopilotEngine(deps) {
       // HEADLINE = realized-anchored (open bags at cost) — the consistent "where am I" number.
       equity: round(realizedEquity),
       peak: round(state.peak),
-      pnlPct: round(((realizedEquity / state.start) - 1) * 100, 2),
+      pnlPct: round(((realizedEquity / basis) - 1) * 100, 2),
       // SECONDARY = marked / unrealized, clearly separate so it's never mistaken for the result.
       markedEquity: round(markedEquity),
-      markedPnlPct: round(((markedEquity / state.start) - 1) * 100, 2),
+      markedPnlPct: round(((markedEquity / basis) - 1) * 100, 2),
       unrealizedSol: round(unrealizedSol, 4),
       openValueSol: round(markedOpenVal, 4),
       wins: state.wins,
@@ -1312,7 +1324,11 @@ export function createAutopilotEngine(deps) {
     if (opts.final || opts.manual || !Number.isFinite(state.walletSol)) {
       try {
         const ws = await getWalletSol();
-        if (Number.isFinite(ws) && ws >= 0) { state.walletSol = ws; state.bank = ws; if (state.vaultFloor == null) state.vaultFloor = ws; }
+        if (Number.isFinite(ws) && ws >= 0) {
+          state.walletSol = ws;
+          if (state.vaultFloor == null) state.vaultFloor = ws;
+          if (state.open.length === 0) { state.bank = ws; if (state.equityBasis == null) state.equityBasis = ws + (state.secured || 0); }
+        }
       } catch {}
     }
     if (!Number.isFinite(state.walletSol)) return 0;
@@ -1375,9 +1391,20 @@ export function createAutopilotEngine(deps) {
           const ws = await getWalletSol();
           if (Number.isFinite(ws) && ws >= 0) {
             state.walletSol = ws;
-            state.bank = ws;
             // Capture the starting wallet balance once — the vault floor.
             if (state.vaultFloor == null) state.vaultFloor = ws;
+            // Reconcile the cash ledger to the REAL wallet ONLY when FLAT. Then ws is pure cash and
+            // can't double-count a held bag's cost (deployedCost is added on top in equity/status).
+            // While positions are open we trust the synthetic ledger (debited on buy at openPosition,
+            // credited on sell at finalize) — it's immune to on-chain settlement lag, which was
+            // inflating equity (full wallet still showed the just-spent SOL while the bag also
+            // counted). Going flat snaps bank back to truth, absorbing any fee/slippage drift.
+            if (state.open.length === 0) {
+              state.bank = ws;
+              // Lock the PnL basis to the real starting balance the first time we're flat with a
+              // known wallet — so the headline reads "money change since start", never a phantom.
+              if (state.equityBasis == null) state.equityBasis = ws + (state.secured || 0);
+            }
           }
         } catch {}
       }
