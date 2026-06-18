@@ -7,6 +7,7 @@ import {
   freshScore,
   grindScore,
   liquidScore,
+  jumpScore,
   convictionMult,
   autoTune,
   entryReject,
@@ -1017,6 +1018,39 @@ test("liquidScore: a liquid, buy-led, early-momentum mover beats a thin, fading 
   // already-blown-off top (huge +5m) is worth less than a clean early push
   const late = { ...strong, m5: 120 };
   assert.ok(liquidScore(strong) > liquidScore(late), "an early push beats a blown-off top");
+});
+
+test("jumpScore: a buy-led volume-spike breakout scores high; non-surges score 0", () => {
+  // clean jump point: huge turnover (vol > liq), heavily buy-led, clean +5m breakout, 1h-green
+  const jump = { liquidityUsd: 40000, marketCap: 500000, volume5m: 60000, buys5m: 80, sells5m: 18, m5: 18, h1: 22 };
+  assert.ok(jumpScore(jump) >= 70, "a real surge scores high");
+  // sell-led "surge" = distribution, not a jump
+  const distribution = { liquidityUsd: 40000, marketCap: 500000, volume5m: 60000, buys5m: 18, sells5m: 80, m5: 18, h1: 22 };
+  assert.equal(jumpScore(distribution), 0, "sell-led volume is distribution, not a buy jump");
+  // no volume = no jump regardless of price
+  const noVol = { liquidityUsd: 40000, marketCap: 500000, volume5m: 800, buys5m: 30, sells5m: 5, m5: 18, h1: 22 };
+  assert.equal(jumpScore(noVol), 0, "no volume spike = not a jump");
+  // too thin to exit = never a jump
+  const thin = { liquidityUsd: 1500, marketCap: 500000, volume5m: 9000, buys5m: 80, sells5m: 10, m5: 18, h1: 22 };
+  assert.equal(jumpScore(thin), 0, "unsellable depth is never chased");
+  // the surge lifts a marginal liquid row's score (jump-point bonus feeds liquidScore)
+  const surging = { liquidityUsd: 9000, marketCap: 500000, volume5m: 14000, buys5m: 70, sells5m: 15, m5: 20, h1: 18 };
+  const dull = { ...surging, volume5m: 1500, buys5m: 10, sells5m: 9, m5: 1, h1: 1 };
+  assert.ok(liquidScore(surging) > liquidScore(dull) + 10, "a surge lifts the liquid score over a dull mover");
+});
+
+test("evalExit: smart-hold cap exits a copied position around the wallet's learned hold time", () => {
+  const P = aggParams(baseState({ mode: "scalp" }));
+  const base = { entryMc: 5000, entryLiq: 6000, lastLiq: 6000, openedAt: 0, missed: 0, peakPct: 0, smartHoldMs: 60_000 };
+  // held PAST the learned hold window and not deep underwater -> bank it (copy the wallet's exit timing)
+  const out = evalExit({ ...base, lastMc: 5000 * 1.1 }, P, 70_000);
+  assert.equal(out.reason, "smart-hold"); assert.equal(out.pct, 100);
+  // still inside the window -> hold (no premature smart-hold exit)
+  const held = evalExit({ ...base, lastMc: 5000 * 1.1 }, P, 30_000);
+  assert.notEqual(held.reason, "smart-hold");
+  // deep underwater past the window -> the hard stop owns it, not smart-hold
+  const stop = evalExit({ ...base, lastMc: 5000 * 0.8 }, P, 70_000);
+  assert.notEqual(stop.reason, "smart-hold");
 });
 
 test("scalp: flexible higher-MC window, known-thin liquidity floor, fast bank-and-recycle exits", () => {

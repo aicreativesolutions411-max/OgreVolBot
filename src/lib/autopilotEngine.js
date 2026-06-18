@@ -426,6 +426,46 @@ export function grindScore(row) {
 // no phantom marks), live turnover (it's actually trading), buy-led 5m flow, and EARLY upward
 // momentum it can scalp the front of (rising but not already blown off the top). It deliberately
 // does NOT reward youth or microcaps (the opposite of freshScore). ~0..100; scalp gates on this.
+// JUMP-POINT engine — detects a tradeable MOMENTUM SURGE ("jump point") on a coin of ANY age:
+// fresh OR launched months ago and suddenly waking up. This is the second profit engine beside
+// copy-trade — get IN on the surge, get OUT fast. Returns 0 for anything that isn't a real jump
+// (early-returns), and a 0..100+ heat score for a clean one. Built only from data we already pull
+// (turnover, 5m flow, m5/h1 from DexScreener/swap-api) — no new feed, no Helius.
+//   Thesis (per market research): a jump = volume SPIKE (5m volume large vs the pool) + BUY-led
+//   flow + price breaking UP, and PERSISTENCE matters — a 1h-green move is durable, a lone 5m
+//   spike usually reverses (distribution). We score all four and demand real, sellable depth.
+export function jumpScore(row) {
+  const liq = Number(row.liquidityUsd) || 0;
+  const mc = Number(row.marketCap) || 0;
+  const vol = Number(row.volume5m) || 0;
+  const buys = Number(row.buys5m) || 0;
+  const sells = Number(row.sells5m) || 0;
+  const m5 = Number(row.m5);   // 5-min price change %
+  const h1 = Number(row.h1);   // 1-hr price change %
+  if (!(liq >= 4000) || !(mc >= 8000)) return 0;                 // never chase a surge we can't exit
+  let s = 0;
+  // 1) VOLUME SPIKE via turnover (5m volume / pool depth). A coin trading a big fraction of its
+  //    liquidity in 5 minutes is ON FIRE; below a floor it isn't a jump at all.
+  const turn = liq > 0 ? vol / liq : 0;
+  if (turn >= 1.0) s += 34; else if (turn >= 0.6) s += 26; else if (turn >= 0.35) s += 18; else if (turn >= 0.18) s += 10; else return 0;
+  // 2) BUY PRESSURE — a surge must be buyers lifting, not a sell climax / distribution.
+  const flow = (buys + sells) > 0 ? buys / (buys + sells) : 0.5;
+  if (flow >= 0.7) s += 24; else if (flow >= 0.6) s += 16; else if (flow >= 0.52) s += 8; else return 0;
+  // 3) THE JUMP itself — price breaking UP in the 5m window. Reward the clean breakout; the
+  //    blow-off top (already +140%) is too late to chase.
+  if (Number.isFinite(m5)) {
+    if (m5 >= 8 && m5 <= 60) s += 26;
+    else if (m5 >= 3 && m5 < 8) s += 14;
+    else if (m5 > 60 && m5 <= 140) s += 10;
+    else if (m5 < 0) return 0;
+  }
+  // 4) PERSISTENCE — a 1h-green move has legs; a deeply red 1h is a dead-cat bounce, skip.
+  if (Number.isFinite(h1)) { if (h1 >= 10) s += 16; else if (h1 >= 0) s += 8; else if (h1 <= -30) s -= 14; }
+  // 5) tradeable MC band — room to pop, depth to fill our exit.
+  if (mc >= 20000 && mc <= 8000000) s += 8; else if (mc <= 20000000) s += 4;
+  return Math.max(0, s);
+}
+
 export function liquidScore(row) {
   const liq = Number(row.liquidityUsd) || 0;
   const mc = Number(row.marketCap) || 0;
@@ -458,6 +498,10 @@ export function liquidScore(row) {
   if (Number.isFinite(h1) && h1 <= -25) s -= 10;
   // Sane MC band for a small bag to move ~12% on our flow without being dust or a mega-cap.
   if (mc >= 30000 && mc <= 5000000) s += 10; else if (mc >= 15000 && mc <= 12000000) s += 5;
+  // JUMP-POINT bonus: a coin mid-surge (volume spike + buy-led breakout) is exactly what the
+  // get-in/get-out engine wants — let it lift a marginal liquid row over the bar. Bounded so it
+  // sharpens, never dominates, the depth/flow base score.
+  s += Math.min(22, jumpScore(row) * 0.22);
   return s;
 }
 
@@ -652,6 +696,13 @@ export function evalExit(pos, P, nowMs) {
   // before that — get out ahead of the smart money's dump instead of riding into it.
   if (pos.smartExitPct && move >= pos.smartExitPct) {
     return { action: "sell", pct: 100, reason: "smart-exit", move };
+  }
+  // SMART-HOLD CAP (Phase 2): we're copying wallets whose learned hold time we know — get OUT
+  // around when they usually sell rather than riding past them. Once we're held past their typical
+  // window AND not deep underwater (let the hard stop handle real losers), bank it. This is the
+  // per-wallet, per-style "in-and-out" exit; only fires when a copied wallet's hold style is learned.
+  if (pos.smartHoldMs && held >= pos.smartHoldMs && move > -P.sl) {
+    return { action: "sell", pct: 100, reason: "smart-hold", move };
   }
   // FAST-SPIKE CAPTURE: a coin already +150%+ is a fast pump that fades fast and fills
   // below the marked price on a thin curve — bank the BULK now near the spike instead
@@ -2040,7 +2091,12 @@ export function createAutopilotEngine(deps) {
       //  • No smart money → null → use the normal mode ladder.
       smartExitPct: sm
         ? (sm.exitMult ? Math.max(30, Math.min(400, Math.round((sm.exitMult - 1) * 100 * 0.85))) : sm.kolProbe ? 18 : 35)
-        : null
+        : null,
+      // PHASE 2 — trade the COPIED wallets in THEIR style: if we've learned how long the proven
+      // winners on this coin typically hold, cap our hold near that (just under, ×0.9) so we're
+      // OUT around when they sell, not riding past them. Bounded 20s..6min for a scalp copy. Stays
+      // null until a wallet's hold style has accrued (Phase 1 data), so it's a graceful no-op early.
+      smartHoldMs: (sm && sm.holdMsCap > 0) ? Math.max(20_000, Math.min(360_000, Math.round(sm.holdMsCap * 0.9))) : null
     };
     state.open.push(pos);
     state.recentApeNames[normSym(sym)] = now(); // remember the NAME to block clone-swarm pile-ins

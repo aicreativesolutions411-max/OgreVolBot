@@ -186,6 +186,11 @@ function isTransientSendError(error) {
 // Capturing on every trade tick fixes it at the source; sampleDevObservatory merges these in and
 // scores them into walletObs (persisted), building the proven-winner roster the brain trades on.
 const earlyBuyers = new Map(); // mint -> string[] (first distinct buyer wallets, capture order)
+// PHASE 1 — wallet STYLE capture. Parallel to earlyBuyers (kept a plain string[] for its 15
+// consumers): records WHEN each wallet first bought a coin, keyed "mint:wallet", so recordWalletExit
+// can learn the wallet's HOLD TIME. This is the raw material for trading each wallet in its own
+// style (scalper vs rider) instead of one fixed exit for everyone. Bounded to ~12k entries.
+const earlyBuyAt = new Map(); // "mint:wallet" -> first-buy timestamp (ms)
 function recordEarlyBuyer(mint, trade) {
   try {
     if (!mint || !trade || trade.side !== "buy") return;
@@ -195,7 +200,15 @@ function recordEarlyBuyer(mint, trade) {
       if (earlyBuyers.size > 6000) { const k = earlyBuyers.keys().next().value; if (k) earlyBuyers.delete(k); } // bound memory
       arr = []; earlyBuyers.set(mint, arr);
     }
-    if (arr.length < 15 && !arr.includes(w)) arr.push(w);
+    if (arr.length < 15 && !arr.includes(w)) {
+      arr.push(w);
+      // Stamp the first-buy time for this wallet+coin so we can learn its hold style on exit.
+      const key = mint + ":" + w;
+      if (!earlyBuyAt.has(key)) {
+        if (earlyBuyAt.size > 12000) { const k = earlyBuyAt.keys().next().value; if (k) earlyBuyAt.delete(k); }
+        earlyBuyAt.set(key, Date.now());
+      }
+    }
   } catch {}
 }
 const pumpPortalStream = createPumpPortalStream({
@@ -832,6 +845,22 @@ function linkRelatedBuyerWallets(buyers = [], ranMult = 1, rugged = false) {
 function walletExitMult(r) {
   return (r && r.exitN >= 2) ? r.exitSum / r.exitN : null;
 }
+// PHASE 1 — a wallet's learned TRADING STYLE, the raw material for copying it in ITS way:
+//  • exitMult  — avg gain-multiple it sells at (when it takes profit)
+//  • avgHoldMs — how long it typically holds before selling (scalper vs rider)
+//  • avgEntryMc— the MC band it likes to buy (sub-$5k degen vs $50k+ established)
+//  • samples   — how many exits we've learned from (confidence)
+// Returns null until there's enough sample to trust. Used to set per-position hold caps +
+// exit targets when we copy this wallet, instead of one fixed ladder for everyone.
+function walletStyleProfile(r) {
+  if (!r || (r.exitN || 0) < 2) return null;
+  return {
+    exitMult: r.exitSum / r.exitN,
+    avgHoldMs: (r.holdN >= 2) ? r.holdMsSum / r.holdN : null,
+    avgEntryMc: (r.entryMcN >= 2) ? r.entryMcSum / r.entryMcN : null,
+    samples: r.exitN
+  };
+}
 function recordWalletExit(mint, wallet) {
   const w = String(wallet || "").trim();
   if (!mint || !w) return;
@@ -847,6 +876,12 @@ function recordWalletExit(mint, wallet) {
   r.exitSum = (r.exitSum || 0) + gm;
   r.exitN = (r.exitN || 0) + 1;
   if (r.exitN > 50) { r.exitSum = r.exitSum * 50 / r.exitN; r.exitN = 50; }
+  // PHASE 1 — learn this wallet's STYLE alongside its exit multiple:
+  //  • HOLD TIME: from its first-buy stamp to now (scalper vs rider).
+  //  • ENTRY MC: the coin's first-observed MC ≈ where this early buyer got in (its MC band).
+  const buyAt = earlyBuyAt.get(mint + ":" + w);
+  if (buyAt) { const hold = Date.now() - buyAt; if (hold > 0 && hold < 86_400_000) { r.holdMsSum = (r.holdMsSum || 0) + hold; r.holdN = (r.holdN || 0) + 1; if (r.holdN > 50) { r.holdMsSum = r.holdMsSum * 50 / r.holdN; r.holdN = 50; } } }
+  if (c.firstMc > 0) { r.entryMcSum = (r.entryMcSum || 0) + c.firstMc; r.entryMcN = (r.entryMcN || 0) + 1; if (r.entryMcN > 50) { r.entryMcSum = r.entryMcSum * 50 / r.entryMcN; r.entryMcN = 50; } }
   r.lastExitAt = Date.now();
   walletObs.set(w, r);
   recordKolExit(w, gm);
@@ -976,6 +1011,7 @@ function smartMoneyScore(mint) {
     for (const t of (pumpPortalStream.getTrades(mint, { limit: 80 }) || [])) { if (t && t.side === "buy" && t.trader) buyers.add(String(t.trader)); }
     let winners = 0, kol = false;
     const exitMults = [];
+    const holdCaps = [];
     for (const w of buyers) {
       if (isKolWallet(w) || kolLearningProfile(w).learnedGood) kol = true;
       const r = walletObs.get(w);
@@ -983,11 +1019,16 @@ function smartMoneyScore(mint) {
         winners += 1;
         const em = walletExitMult(r);
         if (em != null) exitMults.push(em);
+        const st = walletStyleProfile(r);            // PHASE 1→2: copy this wallet in ITS style
+        if (st && st.avgHoldMs != null) holdCaps.push(st.avgHoldMs);
       }
     }
     if (!winners && !kol) return null;
     const exitMult = exitMults.length ? Math.min(...exitMults) : null; // exit before the earliest
-    return { winners, kol, exitMult };
+    // The fastest proven holder's typical hold time → a per-position TIME cap so we get OUT around
+    // when the wallets we're copying usually do, not ride past them. null until a wallet's style is learned.
+    const holdMsCap = holdCaps.length ? Math.min(...holdCaps) : null;
+    return { winners, kol, exitMult, holdMsCap };
   } catch { return null; }
 }
 // SELF-ACTIVATION GATE: the smart-money entry path turns itself ON (no toggle) only
