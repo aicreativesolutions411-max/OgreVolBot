@@ -813,11 +813,16 @@ function walletObsBump(wallet, ranMult, rugged) {
 }
 // A wallet is a "proven winner" once it has enough sample, a real hit rate, and
 // far more runners than rugs.
+// Organically learned winner: WE watched it win — enough sample, real hit-rate, far more runners
+// than rugs. This is proof from our own observation, not a borrowed leaderboard stat.
+function isOrganicWinnerWallet(r) {
+  return Boolean(r) && r.coins >= 3 && r.ran >= 2 && r.ran >= r.rugged * 2;
+}
 function isDirectWinnerWallet(r) {
   if (!r) return false;
-  // Organically learned winner: enough sample, real hit-rate, far more runners than rugs.
-  if (r.coins >= 3 && r.ran >= 2 && r.ran >= r.rugged * 2) return true;
+  if (isOrganicWinnerWallet(r)) return true;
   // SEEDED winner (Solana Tracker top-trader grab): proven lifetime win% + sample + positive PnL.
+  // A statistical PRIOR — good enough to follow at small size, but not yet validated by our trades.
   if (r.seeded && (r.seedWin || 0) >= 55 && (r.seedTrades || 0) >= 50 && (r.seedPnl || 0) > 0) return true;
   return false;
 }
@@ -1111,8 +1116,8 @@ async function pollSeedTrickle() {
   try {
     if (!CONFIG.solanaTrackerApiKey || seedTrickle.done) return;
     const winnersNow0 = [...walletObs.values()].filter(isWinnerWallet).length;
-    if (winnersNow0 >= 150) { if (!seedTrickle.done) console.log(`[seed-trickle] DONE — ${winnersNow0} winner wallets seeded (target reached)`); seedTrickle.done = true; return; }
-    if (seedTrickle.page > 8) { if (!seedTrickle.done) console.log(`[seed-trickle] DONE — walked 8 pages, ${winnersNow0} winners seeded`); seedTrickle.done = true; return; }   // ~200 wallets ceiling
+    if (winnersNow0 >= 400) { if (!seedTrickle.done) console.log(`[seed-trickle] DONE — ${winnersNow0} winner wallets seeded (target reached)`); seedTrickle.done = true; return; }
+    if (seedTrickle.page > 40) { if (!seedTrickle.done) console.log(`[seed-trickle] DONE — walked 40 pages, ${winnersNow0} winners seeded`); seedTrickle.done = true; return; }   // deep grab while Premium is live (~1000 traders); empty page also stops
     if (!seedTrickle.pageData) {
       try {
         const d = await solanaTrackerJson(`/top-traders/all/${seedTrickle.page}`, { cacheTtlMs: 0, timeoutMs: 9000 });
@@ -1122,7 +1127,7 @@ async function pollSeedTrickle() {
       } catch (e) { seedTrickle.lastErr = e && e.message; console.log(`[seed-trickle] leaderboard fetch FAILED p${seedTrickle.page}: ${e && e.message}`); return; }
     }
     let did = 0;
-    while (seedTrickle.idx < seedTrickle.pageData.length && did < 2) {    // at most 2 wallets/cycle
+    while (seedTrickle.idx < seedTrickle.pageData.length && did < 3) {    // at most 3 wallets/cycle (still gentle — 3 awaited fetches per 30s)
       const row = seedTrickle.pageData[seedTrickle.idx++]; seedTrickle.scanned += 1;
       const w = row && row.wallet, s = row && row.summary;
       if (!w || !s) continue;
@@ -1310,9 +1315,14 @@ function smartMoneyReady() {
 // warehouse we already fill: proven-winner wallets learned, how many we've learned a STYLE for
 // (hold time / exit), the KOL roster, and the trade sample + measured EV from self-calibration.
 function autopilotReadiness() {
-  let winners = 0, styled = 0;
+  let winners = 0, styled = 0, organic = 0;
   for (const r of walletObs.values()) {
-    if (isWinnerWallet(r)) { winners += 1; if ((r.exitN || 0) >= 2 || (r.holdN || 0) >= 2) styled += 1; }
+    if (isWinnerWallet(r)) {
+      winners += 1;
+      if ((r.exitN || 0) >= 2 || (r.holdN || 0) >= 2) styled += 1;
+      // organic = WE proved it (or a linked cluster did), not a borrowed ST-leaderboard stat
+      if (isOrganicWinnerWallet(r) || isLinkedWinnerWallet(r)) organic += 1;
+    }
   }
   const kols = autoKolWallets.size + KOL_WALLETS.size;
   const cal = autopilotCalibrationCache || {};
@@ -1324,10 +1334,20 @@ function autopilotReadiness() {
   const sSample = Math.min(1, sample / 200);     // enough trade outcomes to trust calibration
   const sEv = ev > 0 ? 1 : ev > -0.005 ? 0.5 : 0.15; // measured edge: +EV full, ~flat half, bleeding low
   let score = 0.30 * sWinners + 0.20 * sStyled + 0.20 * sKols + 0.15 * sSample + 0.15 * sEv;
-  // A live copy roster (any tracked KOL) or a solid proven-winner roster is already enough edge to begin.
-  if (kols >= 1 || winners >= 8) score = Math.max(score, 0.6);
+  // VALIDATED edge — a live copy roster (KOLs) OR winners WE watched prove out — earns the confident
+  // floor that scales position size up.
+  if (kols >= 1 || organic >= 5) score = Math.max(score, 0.6);
+  // SEED-ONLY priors (ST top-trader grab, not yet validated by our own outcomes): arm, but pin to the
+  // MINIMUM size (floor == armFloor → readyMult 0.45) so learning losses stay tiny while live proof
+  // accrues. This is why the bot is NOT "instantly smart" — it bets small on borrowed stats until it
+  // has earned the right to bet big.
+  else if (winners >= 8) score = Math.max(score, 0.55);
+  // ANTI-BLEED — no prior can override our own measured loss. Once there's a real sample and the
+  // edge is negative, back the score below the arm floor so size collapses to tiny probes and the
+  // bot re-learns instead of bleeding at half size off unproven leaderboard wallets.
+  if (sample >= 25 && ev <= -0.005) score = Math.min(score, 0.5);
   score = Math.max(0, Math.min(1, score));
-  return { score, label: score >= 0.55 ? "ready" : "learning", winners, styled, kols, sample, ev: Math.round(ev * 1e4) / 1e4 };
+  return { score, label: score >= 0.55 ? "ready" : "learning", winners, styled, organic, kols, sample, ev: Math.round(ev * 1e4) / 1e4 };
 }
 // Build live entry candidates from coins that tracked winners / KOLs are buying RIGHT
 // NOW — including ones past the fresh-ape freshness gate. Returns fresh-feed-shaped
