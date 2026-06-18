@@ -20192,10 +20192,17 @@ async function fetchLivePairCandidates(options = {}) {
       : fetchDexSearchCandidatesForLiveBucket(safeBucket, options).catch(() => [])
   ]);
   const freshDexRows = dexLatest.filter((candidate) => candidate.source !== "top-boost" || safeBucket !== "live");
-  // Realtime PumpPortal creations go first: they arrive sub-second over the
-  // shared websocket, so the "live" bucket shows pairs seconds after launch.
-  const realtime = pumpPortalStream.getCreationCandidates({ limit: 150 });
-  return uniqueSniperCandidates([...realtime, ...photon, ...pumpLatest, ...dexBucketSearch, ...freshDexRows])
+  // The fresh-only sources (realtime PumpPortal creations, Photon new-pairs, pump-latest) are
+  // seconds-to-minutes old — they belong on the FRESHEST buckets. Force-adding them to the older
+  // buckets flooded EVERY tab with brand-new dust ("mainly fresh pairs show everywhere"): the
+  // volume / trending / graduated tabs source from the wider buckets and were drowned in launch
+  // coins. So feed those fresh sources only to live/under1h; the older buckets use the bucket's own
+  // search terms (solana volume/movers) + boosted/trending — i.e. genuinely non-fresh movers.
+  const freshOnly = safeBucket === "live" || safeBucket === "under1h";
+  const realtime = (safeBucket === "live") ? pumpPortalStream.getCreationCandidates({ limit: 150 }) : [];
+  const photonRows = freshOnly ? photon : [];
+  const pumpRows = freshOnly ? pumpLatest : [];
+  return uniqueSniperCandidates([...realtime, ...photonRows, ...pumpRows, ...dexBucketSearch, ...freshDexRows])
     .sort(compareLivePairCandidates);
 }
 
