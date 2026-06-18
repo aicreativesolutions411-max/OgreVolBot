@@ -142,13 +142,13 @@ export function aggParams(state) {
   // a tiny bet. The $4k floor sits just above pure phantom dust but stays reachable in the last-hour
   // window (higher floors starved it); the real depth/quality vetting is liquidScore + the volume
   // gate + fast exits, not the MC floor. grind stays mid; default is the fresh sub-$20k.
-  const mcFloor = liquid ? 4000 : grind ? 6000 : 1800;
-  // FRESH-PATH MC CEILING TIGHTENED to the proven +EV pocket. The 1517-trade live scorecard is
-  // blunt: MC 2.1-2.5k is the ONLY +EV band (+1.20), while 2.5-3.5k BLED the most of anything
-  // (−1.42 over 706 trades) and 3.5k+ lost too (−0.44). The old 20k ceiling sprayed entries all
-  // over the bleeder zone. Cap just above the winning band (2.8k, a little headroom) so the fresh
-  // engine only buys where it actually makes money. (liquid/grind keep their own wide windows.)
-  const mcCeil = liquid ? 12000000 : grind ? 80000 : 2800;
+  // FRESH-PATH MC WINDOW = the EXACT proven +EV pocket. The 1577-trade live scorecard, unchanged
+  // across runs: MC 2.1-2.5k is the ONLY +EV band (+1.17); EVERY other band bleeds — <2.1k (−0.38),
+  // 2.5-3.5k (−1.40 over 716 trades, the single biggest loser), 3.5k+ (−0.54). So clamp the fresh
+  // engine to 2100-2500 — it only buys where it actually makes money. Frequency drops hard; that's
+  // the point of "winning steady" over "trading a lot". (liquid/grind keep their own wide windows.)
+  const mcFloor = liquid ? 4000 : grind ? 6000 : 2100;
+  const mcCeil = liquid ? 12000000 : grind ? 80000 : 2500;
   // ANTI-PHANTOM depth floor — applied ONLY to coins that REPORT a liquidity number (see
   // entryReject). A phantom +400% spike comes from a thin curve where one tiny buy moves the marked
   // cap but nothing can fill, so a coin whose KNOWN liquidity is below this floor is rejected.
@@ -172,6 +172,10 @@ export function aggParams(state) {
   // (+0.22) and 2-5m (+0.34) both WIN. So the fresh engine skips the 30-120s dead-zone entirely
   // and takes the freshest entries + the survivors past 2 min. (entryReject honors skipMidAge.)
   const skipMidAge = !liquid && !grind;
+  // (Considered a freshScore CEILING at 67 — the 67+ bands bleed — but the proven +EV MC band
+  // 2.1-2.5k is +EV as a WHOLE band, so a high-score coin INSIDE that band may be fine; the tight
+  // mcCeil already rejects the high-MC 72+ bleeders. A blanket score cap risked cutting good in-band
+  // trades, so the MC window + age carve-out do the work instead. Revisit with joint-band data.)
   // LIQUID disables the RELATIVE liquidity gate (liqFrac 0): a healthy $1M coin legitimately has
   // liq well under mc*0.3, so the relative test would wrongly reject it. The absolute floor
   // (minLiqAbs, known-thin only) does the real depth check instead.
@@ -1052,15 +1056,16 @@ export function createAutopilotEngine(deps) {
       scratches: state.scratches || 0,
       blocked: state.blocked || 0,
       streak: state.streak,
-      open: state.open.map((p) => ({
-        sym: p.sym,
-        mint: p.mint,
-        costSol: round(p.costSol),
-        remFrac: p.remFrac,
-        // Smoothed per-position move (median-based pos.dispMc), not the jumpy single-tick mark.
-        movePct: round(p.entryMc > 0 ? ((Number(p.dispMc) || Number(p.lastMc) || p.entryMc) / p.entryMc - 1) * 100 : 0, 2),
-        heldS: Math.round((now() - p.openedAt) / 1000)
-      })),
+      open: state.open.map((p) => {
+        // REALIZABLE move shown per position — NOT the optimistic curve mark. Same haircut as the
+        // marked equity (60% of the upside, full downside) and capped at COST when the bag isn't
+        // actually sellable (thin liquidity). This is the fix for "it shows +27% but no way am I up
+        // that": the % is now what you could BANK selling now, not the phantom thin-curve mark.
+        const raw = p.entryMc > 0 ? (Number(p.dispMc) || Number(p.lastMc) || p.entryMc) / p.entryMc : 1;
+        let mv = raw >= 1 ? 1 + (Math.min(raw, 4) - 1) * 0.6 : Math.max(0, raw);
+        if ((Number(p.lastLiq) || 0) < 1500) mv = Math.min(mv, 1);
+        return { sym: p.sym, mint: p.mint, costSol: round(p.costSol), remFrac: p.remFrac, movePct: round((mv - 1) * 100, 2), heldS: Math.round((now() - p.openedAt) / 1000) };
+      }),
       tradeNo: state.tradeNo,
       bigWins: (state.bigWins || []).slice(-12).reverse(),
       endsInS: Math.max(0, Math.round((state.endAt - now()) / 1000)),
