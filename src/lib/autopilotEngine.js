@@ -15,6 +15,14 @@
 
 export const LAMPORTS_PER_SOL = 1_000_000_000;
 const SELL_FEE_FACTOR = 0.985; // round-trip slippage+fee haircut used for synthetic ledger
+export const TUNED_COPY_LADDER = Object.freeze({
+  key: "s10_t40_f70",
+  stopPct: 10,
+  tp1Pct: 40,
+  tp1Frac: 70,
+  trailPct: 40,
+  moonCapMult: 6
+});
 
 // Normalized coin name for clone detection. Pump.fun lets anyone mint a coin with
 // the same name, so when one pops a swarm of same-name clones floods the feed and
@@ -674,6 +682,28 @@ export function evalExit(pos, P, nowMs) {
   if (pos.missed >= 2 && held > 8_000) {
     return { action: "sell", pct: 100, reason: "feed-lost", move };
   }
+  if (pos.copyLadder) {
+    const stopPct = Number(pos.copyLadder.stopPct) || TUNED_COPY_LADDER.stopPct;
+    const tp1Pct = Number(pos.copyLadder.tp1Pct) || TUNED_COPY_LADDER.tp1Pct;
+    const tp1Frac = Number(pos.copyLadder.tp1Frac) || TUNED_COPY_LADDER.tp1Frac;
+    const trailPct = Number(pos.copyLadder.trailPct) || TUNED_COPY_LADDER.trailPct;
+    const moonCapMult = Number(pos.copyLadder.moonCapMult) || TUNED_COPY_LADDER.moonCapMult;
+    if (move <= -stopPct) {
+      return { action: "sell", pct: 100, reason: "copy-stop", move };
+    }
+    if (move >= (moonCapMult - 1) * 100) {
+      return { action: "sell", pct: 100, reason: "copy-moon", move };
+    }
+    if (!pos.copyTp1Done && !pos.tp1Done && move >= tp1Pct) {
+      return { action: "sell", pct: tp1Frac, reason: "copy-tp1", move };
+    }
+    if ((pos.copyTp1Done || pos.tp1Done) && peak >= tp1Pct) {
+      const keep = Math.max(0.2, Math.min(0.95, 1 - trailPct / 100));
+      if (move <= peak * keep) {
+        return { action: "sell", pct: 100, reason: "copy-trail", move };
+      }
+    }
+  }
   // Trailing give-back once in profit — protects the moon bag at ANY peak (a
   // position that took TP1 then fades must NOT be allowed to ride into a loss;
   // that was the gap that let a +26% TP1 coin bleed to -13%). Tighter the higher
@@ -688,7 +718,7 @@ export function evalExit(pos, P, nowMs) {
   }
   // Hard stop — ALWAYS a backstop (including the moon bag after TP1), so nothing
   // can ride past -sl unprotected.
-  if (move <= -P.sl) {
+  if (!pos.copyLadder && move <= -P.sl) {
     return { action: "sell", pct: 100, reason: "stop", move };
   }
   // SMART-MONEY EXIT: proven winner wallets are in this coin, and we've learned the gain
@@ -708,18 +738,18 @@ export function evalExit(pos, P, nowMs) {
   // below the marked price on a thin curve — bank the BULK now near the spike instead
   // of laddering into a fading price. Honest fills showed a +358%-marked runner only
   // netted ~+74% riding the slow ladder; grab it. Keep a small runner for the monster.
-  if (!pos.tp1Done && move >= 150) {
+  if (!pos.copyLadder && !pos.tp1Done && move >= 150) {
     return { action: "sell", pct: P.spikePct || 75, reason: "spike", move };
   }
   // TP1: bank the first DOABLE pop. steady mode banks 80% here (locks the realizable
   // win); default banks 55%.
-  if (!pos.tp1Done && move >= P.tp1) {
+  if (!pos.copyLadder && !pos.tp1Done && move >= P.tp1) {
     return { action: "sell", pct: P.tp1Pct || 55, reason: "tp1", move };
   }
   // Mid rungs only in the laddered styles (normal/blend) AND only when not banking
   // hard. steady / cold-tape bankHard HOLD the small runner after TP1 — no mid-rung
   // selling — so the tail can reach the moon target and a chop tape can't round-trip it.
-  if (!P.steady && !P.bankHard) {
+  if (!pos.copyLadder && !P.steady && !P.bankHard) {
     // TP2: next tranche (blend = ~33% of remainder @ +100%; normal = 50% @ P.tp2).
     if (pos.tp1Done && !pos.tp2Done && move >= (P.tp2Lvl || P.tp2)) {
       return { action: "sell", pct: P.tp2Pct || 50, reason: "tp2", move };
@@ -912,6 +942,7 @@ function freshState(opts) {
     wins: 0,
     losses: 0,
     scratches: 0,
+    sourceStats: {},
     blocked: 0,
     streak: 0,
     results: [],
@@ -1206,6 +1237,7 @@ export function createAutopilotEngine(deps) {
       wins: state.wins,
       losses: state.losses,
       scratches: state.scratches || 0,
+      sourceStats: Object.fromEntries(Object.entries(state.sourceStats || {}).map(([k, v]) => [k, { ...v, pnl: round(v.pnl || 0, 4) }])),
       blocked: state.blocked || 0,
       streak: state.streak,
       open: state.open.map((p) => {
@@ -1214,7 +1246,7 @@ export function createAutopilotEngine(deps) {
         // when the bag isn't actually sellable). This is the fix for "it shows +27% but no way am I
         // up that": the % is now what you could BANK selling now, not the phantom thin-curve mark.
         const mv = realizableMove(p);
-        return { sym: p.sym, mint: p.mint, costSol: round(p.costSol), remFrac: p.remFrac, movePct: round((mv - 1) * 100, 2), heldS: Math.round((now() - p.openedAt) / 1000) };
+        return { sym: p.sym, mint: p.mint, source: p.source || "fresh", copyTier: p.copyTier || null, costSol: round(p.costSol), remFrac: p.remFrac, movePct: round((mv - 1) * 100, 2), heldS: Math.round((now() - p.openedAt) / 1000) };
       }),
       tradeNo: state.tradeNo,
       bigWins: (state.bigWins || []).slice(-12).reverse(),
@@ -1554,6 +1586,7 @@ export function createAutopilotEngine(deps) {
     } else {
       pos.remFrac = pos.remFrac * (1 - frac);
       if (reason === "tp1") pos.tp1Done = true;
+      else if (reason === "copy-tp1") { pos.tp1Done = true; pos.copyTp1Done = true; }
       else if (reason === "tp2") pos.tp2Done = true;
       else if (reason === "tp3") pos.tp3Done = true;
       else if (reason === "spike") { pos.tp1Done = true; pos.tp2Done = true; } // bulk banked; small runner trails
@@ -1612,6 +1645,15 @@ export function createAutopilotEngine(deps) {
     }
     state.recentSells[pos.mint] = { at: now(), mc: Number(pos.lastMc || pos.entryMc) || 0, reason, win };
     const pnl = net;
+    const source = pos.source || "fresh";
+    state.sourceStats = state.sourceStats || {};
+    const ss = state.sourceStats[source] || { n: 0, wins: 0, losses: 0, scratches: 0, pnl: 0 };
+    ss.n += 1;
+    if (win) ss.wins += 1;
+    else if (realLoss) ss.losses += 1;
+    else ss.scratches += 1;
+    ss.pnl = round((ss.pnl || 0) + pnl, 6);
+    state.sourceStats[source] = ss;
     // Feed the self-tuner: recent peaks + rug flags.
     state.recentPeaks.push(Math.round(pos.peakPct || 0));
     if (state.recentPeaks.length > 30) state.recentPeaks.shift();
@@ -1636,7 +1678,8 @@ export function createAutopilotEngine(deps) {
           entryMc: Math.round(pos.entryMc), entryAge: pos.entryAge, entrySniper: pos.entrySniper,
           entryVol5m: pos.entryVol5m, entryBuys: pos.entryBuys, entrySells: pos.entrySells,
           fs: pos.fs, peakPct: Math.round(pos.peakPct || 0), pnl: round(pnl, 4),
-          win, rugged, reason, mode: state.mode, churn: state.churn, paper: !state.live, at: now()
+          win, rugged, reason, source, copyTier: pos.copyTier || null, copyEdge: pos.copyEdge ?? null,
+          mode: state.mode, churn: state.churn, paper: !state.live, at: now()
         });
       } catch {}
     }
@@ -1682,12 +1725,12 @@ export function createAutopilotEngine(deps) {
       record("warn", `feed error: ${e && e.message}`);
       return;
     }
-    if (!Array.isArray(rows) || !rows.length) {
+    if (!Array.isArray(rows)) rows = [];
+    if (!rows.length) {
       if (now() - (state.lastScanLogAt || 0) > 45_000) {
         state.lastScanLogAt = now();
         record("info", "🔍 scanning — feed quiet (0 fresh pairs right now)");
       }
-      return;
     }
     // Cache fresh prices from the feed so open positions update fast (used in manageExits).
     const t = now();
@@ -1836,10 +1879,18 @@ export function createAutopilotEngine(deps) {
     }
     if (tune.tape === "HOT") state.chopPauseUntil = 0; // tape warmed → resume immediately
     const chopPaused = Boolean(state.chopPauseUntil && nowMs < state.chopPauseUntil);
+    let smartRowsForCycle = null;
+    if (smartMoneyReady() && state.open.length < maxNow && openedThisCycle < perCycle) {
+      try { smartRowsForCycle = await smartMoneyFeed(); } catch (e) { record("warn", `smart-money feed: ${e && e.message}`); smartRowsForCycle = []; }
+    }
+    const freshCycleCap = Array.isArray(smartRowsForCycle) && smartRowsForCycle.length
+      ? Math.max(0, perCycle - 1)
+      : perCycle;
 
     for (const cand of scored) {
       if (chopPaused) break;                            // sitting out the chop — no fresh snipes
       if (state.stopped || now() >= state.endAt) break; // never open after a stop/timer
+      if (openedThisCycle >= freshCycleCap) break;       // reserve capacity for live copy rows
       if (state.open.length >= maxNow) {
         // CAPITAL ROTATION — "don't sit in a dead bag while a better winner is right there." At
         // capacity, dump the weakest DEAD-FLAT position to free a slot for a clearly-stronger setup,
@@ -1940,7 +1991,7 @@ export function createAutopilotEngine(deps) {
       state.lastOpenAt = now();
       openedThisCycle += 1;
       if (probeNow) break;                               // one tiny learning trade, then resume observing
-      if (openedThisCycle >= perCycle) break;            // don't machine-gun the whole feed at once
+      if (openedThisCycle >= freshCycleCap) break;        // don't machine-gun the whole feed at once
     }
 
     // SELF-ACTIVATING SMART-MONEY ENTRIES — no toggle. Once the wallet observatory
@@ -1956,8 +2007,11 @@ export function createAutopilotEngine(deps) {
     // these too but ONLY when the coin has REAL, sellable liquidity (verified below), so a
     // copy-trade can't drag scalp into an unsellable phantom. Non-liquid modes keep the old path.
     if (smartMoneyReady() && state.open.length < maxNow && openedThisCycle < perCycle) {
-      let smRows = [];
-      try { smRows = await smartMoneyFeed(); } catch (e) { record("warn", `smart-money feed: ${e && e.message}`); }
+      let smRows = smartRowsForCycle;
+      if (!Array.isArray(smRows)) {
+        smRows = [];
+        try { smRows = await smartMoneyFeed(); } catch (e) { record("warn", `smart-money feed: ${e && e.message}`); }
+      }
       for (const r of (smRows || [])) {
         if (state.stopped || now() >= state.endAt) break;
         if (state.open.length >= maxNow) break;
@@ -2123,6 +2177,15 @@ export function createAutopilotEngine(deps) {
 
     state.bank -= sizeSol;
     state.tradeNo += 1;
+    const source = sm ? (sm.source || "smart_money") : "fresh";
+    const copyTier = sm ? (sm.copyTier || null) : null;
+    const copyEdge = sm && sm.edge != null ? Number(sm.edge) : null;
+    const tunedCopy = Boolean(sm && source === "winner_follow" && !sm.kolProbe && (sm.copyLadder || sm.kol || (sm.winners || 0) >= 2 || (copyEdge != null && copyEdge >= 1.2)));
+    const smartExitPct = sm
+      ? (source === "winner_follow"
+        ? (sm.learnedExit && sm.exitMult ? Math.max(30, Math.min(400, Math.round((sm.exitMult - 1) * 100 * 0.85))) : null)
+        : (sm.exitMult ? Math.max(30, Math.min(400, Math.round((sm.exitMult - 1) * 100 * 0.85))) : sm.kolProbe ? 18 : 35))
+      : null;
     const pos = {
       mint,
       sym,
@@ -2144,6 +2207,10 @@ export function createAutopilotEngine(deps) {
       peakPct: 0,
       realized: 0,
       fs: round(fs, 1),
+      source,
+      copyTier,
+      copyEdge: Number.isFinite(copyEdge) ? copyEdge : null,
+      copyLadder: tunedCopy ? TUNED_COPY_LADDER : null,
       // Features captured for the learning flywheel.
       dev: dev || null,
       // This dev's historical avg peak (>=3 trades) drives the adaptive exit.
@@ -2160,9 +2227,7 @@ export function createAutopilotEngine(deps) {
       //    still bank the pop fast at a default (+35%) instead of riding into the dump. This is the
       //    "in-and-out, win steady" behavior for copy-trades — they flip fast, so we flip faster.
       //  • No smart money → null → use the normal mode ladder.
-      smartExitPct: sm
-        ? (sm.exitMult ? Math.max(30, Math.min(400, Math.round((sm.exitMult - 1) * 100 * 0.85))) : sm.kolProbe ? 18 : 35)
-        : null,
+      smartExitPct,
       // PHASE 2 — trade the COPIED wallets in THEIR style: if we've learned how long the proven
       // winners on this coin typically hold, cap our hold near that (just under, ×0.9) so we're
       // OUT around when they sell, not riding past them. Bounded 20s..6min for a scalp copy. Stays

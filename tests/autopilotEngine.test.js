@@ -14,6 +14,7 @@ import {
   executableMcReject,
   historyGateReject,
   evalExit,
+  TUNED_COPY_LADDER,
   canOpen,
   repeatBudgetForMint,
   equity,
@@ -696,6 +697,17 @@ test("server KOL brain tracks all API KOLs, learns outcomes, and links related w
   assert.match(serverSource, /kolProbeCandidates/);
 });
 
+test("server copy brain blocks backtested losers from winner and related-wallet paths", () => {
+  const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+  assert.match(serverSource, /function isBacktestedCopyLoser/);
+  assert.match(serverSource, /function copyTierForWalletRecord/);
+  assert.match(serverSource, /if \(isBacktestedCopyLoser\(r\)\) return false;/);
+  assert.match(serverSource, /if \(!r \|\| isBacktestedCopyLoser\(r\)\) return false;/);
+  assert.match(serverSource, /if \(isBacktestedCopyLoser\(r\) && !isOrganicWinnerWallet\(r\)\) continue;/);
+  assert.match(serverSource, /if \(isBacktestedCopyLoser\(r\)\) continue;/);
+  assert.match(serverSource, /copyLadder: "s10_t40_f70"/);
+});
+
 test("engine: KOL probe copy entries can open small and exit fast while learning", async () => {
   let t = 0;
   let buys = 0;
@@ -732,6 +744,68 @@ test("engine: KOL probe copy entries can open small and exit fast while learning
     assert.equal(open.sym, "KOLP");
     assert.equal(rawOpen.smartExitPct, 18, "thin-sample KOL probes bank faster than proven copies");
     assert.ok(open.costSol <= 0.04, "probe size remains small");
+  } finally {
+    await engine.stop("test-done");
+  }
+});
+
+test("engine: winner-follow copy opens from quiet fresh feed and uses tuned copy ladder", async () => {
+  let t = 0;
+  let mc = 60000;
+  const trades = [];
+  const row = goodRow({
+    tokenMint: "WinnerFollowMint111111111111111111111111111111",
+    symbol: "WFOL",
+    pairAgeSeconds: 900,
+    marketCap: mc,
+    liquidityUsd: 30000,
+    volume5m: 600,
+    buys5m: 30,
+    sells5m: 8,
+    _smartMoney: {
+      kol: true,
+      winners: 1,
+      edge: 1.3,
+      apeScore: 1.7,
+      source: "winner_follow",
+      copyTier: "B",
+      copyLadder: "s10_t40_f70"
+    }
+  });
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => [],
+    getPairLite: async () => ({ marketCap: mc, liquidityUsd: 30000 }),
+    smartMoneyReady: () => true,
+    smartMoneyFeed: async () => [row],
+    recordTrade: (rec) => trades.push(rec),
+    now: () => t,
+    persist: async () => {}
+  });
+  await engine.start({ solBudget: 1, minutes: 60, mode: "normal", live: false });
+  try {
+    t += 6000;
+    await engine._tick();
+    let raw = engine._state().open[0];
+    assert.equal(raw.sym, "WFOL");
+    assert.equal(raw.source, "winner_follow");
+    assert.equal(raw.copyTier, "B");
+    assert.deepEqual(raw.copyLadder, TUNED_COPY_LADDER);
+    assert.equal(raw.smartExitPct, null, "default winner-follow exit does not override tuned ladder");
+
+    mc = 60000 * 1.41;
+    t += 7000;
+    await engine._exit();
+    raw = engine._state().open[0];
+    assert.equal(raw.copyTp1Done, true);
+    assert.ok(Math.abs(raw.remFrac - 0.3) < 0.001, `copy TP1 should leave a 30% runner, got ${raw.remFrac}`);
+
+    mc = 60000 * 6.1;
+    t += 1000;
+    await engine._exit();
+    assert.equal(engine._state().open.length, 0);
+    assert.equal(trades[0].source, "winner_follow");
+    assert.equal(trades[0].copyTier, "B");
+    assert.ok(engine.status().sourceStats.winner_follow.pnl > 0);
   } finally {
     await engine.stop("test-done");
   }
