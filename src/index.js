@@ -24294,32 +24294,45 @@ async function buildChartData(mint, tf) {
   let stats = { symbol: "", name: "", priceUsd: 0, mc: 0, liq: 0, vol24: 0, change24h: 0 };
   let candles = [], trades = [];
   const diag = {};
-  // 1) DEX path — resolve the pool DIRECTLY via GeckoTerminal's token→pools endpoint (reliable; the
-  // DexScreener-pair shape didn't yield a usable pool address on the server). Works once migrated.
-  const tp = await gtFetch(`/networks/solana/tokens/${mint}/pools?page=1`);
-  diag.poolStatus = lastGtStatus; diag.poolCount = (tp && tp.data && tp.data.length) || 0;
-  const pool = tp && tp.data && tp.data[0];
-  if (pool && pool.attributes && pool.attributes.address) {
-    stage = "dex";
-    pairAddress = String(pool.attributes.address);
-    stats.change24h = Number(pool.attributes.price_change_percentage && pool.attributes.price_change_percentage.h24) || 0;
-    const ti = await gtFetch(`/networks/solana/tokens/${mint}`);
-    const a = (ti && ti.data && ti.data.attributes) || {};
-    stats.symbol = a.symbol || ""; stats.name = a.name || "";
-    stats.priceUsd = Number(a.price_usd) || 0;
-    stats.mc = Number(a.market_cap_usd || a.fdv_usd) || 0;
-    stats.liq = Number(a.total_reserve_in_usd) || 0;
-    stats.vol24 = Number(a.volume_usd && a.volume_usd.h24) || 0;
-    const [tfName, agg] = gtTimeframe(tf);
-    const oh = await gtFetch(`/networks/solana/pools/${pairAddress}/ohlcv/${tfName}?aggregate=${agg}&limit=150&currency=usd`);
-    const list = (oh && oh.data && oh.data.attributes && oh.data.attributes.ohlcv_list) || [];
-    candles = list.map((x) => ({ t: Number(x[0]) || 0, o: Number(x[1]) || 0, h: Number(x[2]) || 0, l: Number(x[3]) || 0, c: Number(x[4]) || 0, v: Number(x[5]) || 0 })).filter((k) => k.c > 0).sort((p, q) => p.t - q.t);
-    diag.ohlcvStatus = lastGtStatus; diag.gtCandles = candles.length;
-    const tr = await gtFetch(`/networks/solana/pools/${pairAddress}/trades?trade_volume_in_usd_greater_than=0`);
-    const trl = (tr && tr.data) || [];
-    trades = trl.slice(0, 60).map((d) => { const x = d.attributes || {}; const buy = x.kind === "buy"; return { t: Math.floor(Date.parse(x.block_timestamp) / 1000) || 0, side: buy ? "buy" : "sell", usd: Number(x.volume_in_usd) || 0, price: Number(buy ? x.price_to_in_usd : x.price_from_in_usd) || 0 }; });
+  // 1) PRIMARY candles — Solana Tracker (keyed; covers pump + graduated coins; does NOT per-IP
+  // 429 like GeckoTerminal, which rate-limits Render's shared IP instantly). The tf labels pass
+  // straight through as the `type` param (1m/5m/15m/1h are all valid). This is why the chart now
+  // loads reliably: candles come from a source we control + pay for, cached, not from each user's
+  // browser hitting a free rate-limited endpoint. Response shape: { oclhv: [{open,close,low,high,
+  // volume,time}] } with time in unix SECONDS.
+  if (CONFIG.solanaTrackerApiKey) {
+    try {
+      const st = await solanaTrackerJson(`/chart/${mint}?type=${encodeURIComponent(tf)}&currency=usd`, { cacheTtlMs: 0, timeoutMs: 6500 });
+      const list = (st && Array.isArray(st.oclhv)) ? st.oclhv : [];
+      candles = list
+        .map((k) => ({ t: Math.floor(Number(k.time) || 0), o: Number(k.open) || 0, h: Number(k.high) || 0, l: Number(k.low) || 0, c: Number(k.close) || 0, v: Number(k.volume) || 0 }))
+        .filter((k) => k.t > 0 && k.c > 0)
+        .sort((p, q) => p.t - q.t);
+      diag.stCandles = candles.length;
+      if (candles.length) stage = "dex";
+    } catch (e) { diag.stError = (e && e.message) || "st-fail"; }
   }
-  // 2) FRESH pre-DEX launch (no GeckoTerminal pool yet) → Pump bonding-curve candles (swap-api;
+  // 2) STATS — DexScreener (the SAME source as the app's top bar, so the numbers MATCH it; reliable
+  // server-side, unlike GeckoTerminal). Gives price/MC/liq/vol/24h-change + the pair address. The
+  // web chart also self-fetches these client-side, but the Telegram /chart card is server-rendered
+  // and NEEDS them here.
+  try {
+    const pairs = await fetchDexScreenerTokenPairsFallback(mint).catch(() => []);
+    const best = bestDexPairForToken(mint, pairs);
+    if (best) {
+      pairAddress = firstString(best.pairAddress, best.address) || pairAddress;
+      const base = best.baseToken || {};
+      stats.symbol = base.symbol || stats.symbol;
+      stats.name = base.name || stats.name;
+      stats.priceUsd = Number(best.priceUsd) || stats.priceUsd;
+      stats.mc = Number(best.marketCap || best.fdv) || stats.mc;
+      stats.liq = Number(best.liquidity && best.liquidity.usd) || stats.liq;
+      stats.vol24 = Number(best.volume && best.volume.h24) || stats.vol24;
+      stats.change24h = Number(best.priceChange && best.priceChange.h24) || stats.change24h;
+      if (candles.length) stage = "dex";
+    }
+  } catch (e) { diag.dexError = (e && e.message) || "dex-fail"; }
+  // 3) FRESH pre-DEX launch (Solana Tracker has nothing yet) → Pump bonding-curve candles (swap-api;
   // the old frontend-api candlesticks endpoint is dead). Stats from Pump metadata.
   if (!candles.length) {
     const pc = await fetch(`https://swap-api.pump.fun/v1/coins/${mint}/candles?interval=${tf}&limit=150`, { headers: { accept: "application/json" } }).then((r) => r.ok ? r.json() : null).catch(() => null);
@@ -24337,6 +24350,20 @@ async function buildChartData(mint, tf) {
       }
     }
   }
+  // 4) TAPE — recent trades from swap-api (free, no GT 429; the autopilot runs on this same feed).
+  // Shape: { trades: [{ timestamp(ISO), type:"buy"|"sell", priceUsd, amountUsd, ... }] }.
+  try {
+    const tr = await fetch(`https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=60`, { headers: { accept: "application/json" } }).then((r) => r.ok ? r.json() : null).catch(() => null);
+    const rows = Array.isArray(tr) ? tr : (tr && Array.isArray(tr.trades) ? tr.trades : []);
+    if (rows.length) {
+      trades = rows.slice(0, 60).map((x) => ({
+        t: Math.floor(Date.parse(x.timestamp) / 1000) || 0,
+        side: x.type === "sell" ? "sell" : "buy",
+        usd: Number(x.amountUsd) || 0,
+        price: Number(x.priceUsd) || 0
+      })).filter((x) => x.t > 0);
+    }
+  } catch (e) { diag.tradesError = (e && e.message) || "trades-fail"; }
   const data = { ok: true, mint, tf, stage, symbol: stats.symbol, name: stats.name, priceUsd: stats.priceUsd, mc: stats.mc, liq: stats.liq, vol24: stats.vol24, change24h: stats.change24h, candles, trades, at: Date.now() };
   CHART_API_CACHE.set(key, { at: Date.now(), data });
   if (CHART_API_CACHE.size > 400) { const old = [...CHART_API_CACHE.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, 200); for (const [k] of old) CHART_API_CACHE.delete(k); }

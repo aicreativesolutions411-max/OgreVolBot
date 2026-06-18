@@ -264,22 +264,26 @@
   // Fresh pre-DEX pump coins (no GT pool): our server proxies Pump candles.
   function loadServer(){ if(!CA)return; fetch('/api/chart?ca='+encodeURIComponent(CA)+'&tf='+encodeURIComponent(TF)).then(function(r){return r.json();}).then(function(d){ if(d&&d.candles)applyGT(d); }).catch(function(){}); }
 
-  function loadReal(){ if(!CA)return; loadDex(); loadGT(); }
+  // PRIMARY candle load = OUR server (/api/chart → Solana Tracker + swap-api, cached). Reliable
+  // and instant; no per-user GeckoTerminal 429. loadDex() layers the exact top-bar stats + the
+  // live forming-candle tick on top. (Browser-side GeckoTerminal polling was REMOVED — it 429'd
+  // each user within ~a minute and blanked the chart. Do not re-add loadGT to the hot path.)
+  function loadReal(){ if(!CA)return; loadDex(); loadServer(); }
 
   // ---- boot ----
   if(CA){
     // instant repaint from cache (same coin viewed recently) so it's never blank on reopen
     try{ var cc=JSON.parse(sessionStorage.getItem('cl2:'+CA)||'null'); if(cc&&cc.d&&cc.tf===TF&&Date.now()-cc.at<120000){ applyGT(cc.d); } }catch(e){}
     loadReal();
-    setInterval(loadGT,15000);   // refresh the real candle history
-    setInterval(loadDex,3500);   // fast live price → forming-candle movement + exact stats
+    setInterval(loadServer,15000);   // refresh the real candle history from OUR server (no GT 429)
+    setInterval(loadDex,3500);       // fast live price → forming-candle movement + exact stats
   } else { hideLoad(); }
 
   // TF switch — refetch the real OHLCV at the new aggregate + reset the forming bar.
   Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(b){b.addEventListener('click',function(){
     Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(x){x.classList.remove('on');}); b.classList.add('on');
     TF=b.getAttribute('data-tf')||'5m'; haveCandles=false; forming=null; var l=document.getElementById('chartload'); if(l)l.classList.remove('hidden');
-    if(CA)loadGT();
+    if(CA)loadServer();
   });});
   // keep the active TF button in sync with the URL on load
   Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(b){b.classList.toggle('on',b.getAttribute('data-tf')===TF);});
