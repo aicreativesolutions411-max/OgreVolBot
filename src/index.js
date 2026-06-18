@@ -813,7 +813,12 @@ function walletObsBump(wallet, ranMult, rugged) {
 // A wallet is a "proven winner" once it has enough sample, a real hit rate, and
 // far more runners than rugs.
 function isDirectWinnerWallet(r) {
-  return Boolean(r) && r.coins >= 3 && r.ran >= 2 && r.ran >= r.rugged * 2;
+  if (!r) return false;
+  // Organically learned winner: enough sample, real hit-rate, far more runners than rugs.
+  if (r.coins >= 3 && r.ran >= 2 && r.ran >= r.rugged * 2) return true;
+  // SEEDED winner (Solana Tracker top-trader grab): proven lifetime win% + sample + positive PnL.
+  if (r.seeded && (r.seedWin || 0) >= 55 && (r.seedTrades || 0) >= 50 && (r.seedPnl || 0) > 0) return true;
+  return false;
 }
 function isLinkedWinnerWallet(r) {
   return Boolean(r) && r.linkedCoins >= 2 && r.linkedRan >= 1 && r.linkedRan >= (r.linkedRugged || 0) * 2;
@@ -996,6 +1001,98 @@ async function pollWalletFunders() {
     for (const w of todo) { funderLookupInFlight += 1; try { await lookupWalletFunder(w); } finally { funderLookupInFlight -= 1; } }
     rebuildWalletClusters();
   } catch {}
+}
+
+// ===== ONE-TIME SEED GRAB (Solana Tracker Premium → fill the brain NOW) ==================
+// Instead of waiting days to learn organically, bulk-load the warehouse from Solana Tracker's
+// proven-winner leaderboard + each wallet's real trade history, deriving HOW they trade (hold
+// time / entry-MC band / exit multiple). Owner-triggered; throttled; persists each page so a
+// restart resumes. Run once on Premium, then downgrade — the seeded data is ours forever.
+let brainSeedState = { running: false, scanned: 0, seeded: 0, page: 0, startedAt: 0, doneAt: 0, lastError: null };
+
+// Derive a wallet's STYLE from its raw ST trades (verified shape: from/to swap sides, the non-SOL
+// side carries marketCap + priceUsd + the trade carries time). Pairs the first buy with the last
+// sell per token → median hold time, entry-MC band, exit multiple.
+function deriveWalletStyleFromTrades(trades) {
+  const byTok = {};
+  for (const t of (trades || [])) {
+    const tk = (t.to && t.to.address && t.to.address !== SOL_MINT) ? t.to
+      : ((t.from && t.from.address && t.from.address !== SOL_MINT) ? t.from : null);
+    if (!tk || !tk.address) continue;
+    const isBuy = Boolean(t.to && t.to.address === tk.address);
+    const raw = Number(t.time) || 0; const tsec = raw > 1e12 ? raw / 1000 : raw;
+    (byTok[tk.address] = byTok[tk.address] || []).push({ isBuy, t: tsec, mc: Number(tk.marketCap) || 0, px: Number(tk.priceUsd) || 0 });
+  }
+  const holds = [], entryMcs = [], exitMults = [];
+  for (const mint in byTok) {
+    const ev = byTok[mint].sort((a, b) => a.t - b.t);
+    const buy = ev.find((e) => e.isBuy);
+    const sell = [...ev].reverse().find((e) => !e.isBuy);
+    if (buy && sell && sell.t >= buy.t) {
+      holds.push(sell.t - buy.t);
+      if (buy.mc > 0) entryMcs.push(buy.mc);
+      if (buy.px > 0 && sell.px > 0) exitMults.push(sell.px / buy.px);
+    }
+  }
+  const med = (a) => a.length ? a.slice().sort((x, y) => x - y)[Math.floor(a.length / 2)] : null;
+  return { holdMs: med(holds) != null ? Math.round(med(holds) * 1000) : null, entryMc: med(entryMcs), exitMult: med(exitMults), tokens: Object.keys(byTok).length };
+}
+
+// Seed one proven-winner wallet: fetch its trades, derive style, write a winner record with the
+// style pre-loaded (N seeded high enough that walletStyleProfile + the copy exits use it now).
+async function seedWinnerWallet(wallet, summary) {
+  const w = String(wallet || "").trim(); if (!w) return false;
+  let trades = [];
+  try { const d = await solanaTrackerJson(`/wallet/${encodeURIComponent(w)}/trades?limit=60`, { cacheTtlMs: 0, timeoutMs: 8000 }); trades = (d && d.trades) || []; } catch { return false; }
+  const style = deriveWalletStyleFromTrades(trades);
+  const r = walletObs.get(w) || { coins: 0, ran: 0, rugged: 0, peakSum: 0 };
+  r.seeded = true;
+  r.seedWin = Number(summary && summary.winPercentage) || 0;
+  r.seedTrades = (Number(summary && summary.totalWins) || 0) + (Number(summary && summary.totalLosses) || 0);
+  r.seedPnl = Number(summary && summary.total) || 0;
+  const N = 10;   // pre-load the running averages so the learned style is usable immediately
+  if (style.holdMs != null) { r.holdMsSum = style.holdMs * N; r.holdN = N; }
+  if (style.entryMc != null) { r.entryMcSum = style.entryMc * N; r.entryMcN = N; }
+  if (style.exitMult != null) { r.exitSum = style.exitMult * N; r.exitN = N; }
+  walletObs.set(w, r);
+  return true;
+}
+
+// Run the grab: paginate the top-traders leaderboard (path-style /top-traders/all/{page}), keep
+// genuinely-profitable wallets (win% >= 55, >= 50 trades, positive PnL), seed each. Background +
+// throttled + checkpointed per page. maxPages capped so one run can't blow the ST quota.
+async function runBrainSeedGrab(opts = {}) {
+  if (brainSeedState.running) return brainSeedState;
+  if (!CONFIG.solanaTrackerApiKey) { brainSeedState = { ...brainSeedState, lastError: "no SOLANA_TRACKER_API_KEY" }; return brainSeedState; }
+  brainSeedState = { running: true, scanned: 0, seeded: 0, page: 0, startedAt: Date.now(), doneAt: 0, lastError: null };
+  const maxPages = Math.max(1, Math.min(40, Number(opts.maxPages) || 16));   // 16 × 25 = ~400 elite wallets
+  (async () => {
+    try {
+      for (let page = 1; page <= maxPages; page++) {
+        brainSeedState.page = page;
+        let data;
+        try { data = await solanaTrackerJson(`/top-traders/all/${page}`, { cacheTtlMs: 0, timeoutMs: 9000 }); }
+        catch (e) { brainSeedState.lastError = `leaderboard p${page}: ${e && e.message}`; break; }
+        const wallets = (data && data.wallets) || [];
+        if (!wallets.length) break;
+        for (const row of wallets) {
+          brainSeedState.scanned += 1;
+          const w = row && row.wallet, s = row && row.summary;
+          if (!w || !s) continue;
+          if ((Number(s.winPercentage) || 0) < 55) continue;
+          if (((Number(s.totalWins) || 0) + (Number(s.totalLosses) || 0)) < 50) continue;
+          if ((Number(s.total) || 0) <= 0) continue;
+          try { if (await seedWinnerWallet(w, s)) brainSeedState.seeded += 1; } catch {}
+          await new Promise((res) => setTimeout(res, 120));   // polite pacing
+        }
+        rebuildWalletClusters();
+        await savePersistentState().catch(() => {});           // checkpoint each page
+        if (data && data.hasNext === false) break;
+      }
+    } catch (e) { brainSeedState.lastError = e && e.message; }
+    finally { brainSeedState.running = false; brainSeedState.doneAt = Date.now(); rebuildWalletClusters(); await savePersistentState().catch(() => {}); }
+  })();
+  return brainSeedState;
 }
 
 function rememberTrackedKolWallet(wallet, rec = {}) {
@@ -1595,6 +1692,20 @@ function startDevObservatory() {
   setInterval(() => { void sampleKolSignalOutcomes(); }, 60_000);
   setInterval(() => { void pollObsTradesSwapApi(); }, 18_000); // resurrect the buyer flywheel via the working swap-api source
   setInterval(() => { void pollWalletFunders(); }, 45_000);    // FUNDING GRAPH: resolve winner funders + clusters (free RPC, cached forever)
+  // ONE-TIME COLD-BRAIN SEED: if we barely know any winners yet and Solana Tracker is configured,
+  // bulk-load the proven-trader roster + their styles NOW. Idempotent — once ~400 winners are
+  // seeded + persisted to wallet-observatory.json, the loaded roster keeps winnerWallets above the
+  // floor, so this won't re-run (and burn ST quota) on later deploys. Run while on Premium, cancel after.
+  setTimeout(() => {
+    try {
+      if (!CONFIG.solanaTrackerApiKey) return;
+      const winners = [...walletObs.values()].filter(isWinnerWallet).length;
+      if (winners < 50 && !brainSeedState.running && !brainSeedState.doneAt) {
+        console.log(`[brain-seed] cold brain (${winners} winners) — running one-time Solana Tracker seed grab`);
+        void runBrainSeedGrab({ maxPages: 16 });
+      }
+    } catch {}
+  }, 25_000);
   // AUTO-KOL: load the saved roster, then harvest proven KOLs from the tracker leaderboard now and
   // every 10 min so the copy-trade roster stays fresh (cheap — the KOL scan is cached internally).
   void loadAutoKolWallets().then(() => { void refreshAutoKolWallets(); });
@@ -4064,7 +4175,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     //   GET  /api/web/autopilot/log                -> owner-only decision log
     // Live trading requires live:true AND confirm:"LIVE" AND a selected wallet
     // (never the fee wallet). Otherwise it runs paper (no SOL touched).
-    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets" || pathname === "/api/web/autopilot/sweep" || pathname === "/api/web/autopilot/sweep-now" || pathname === "/api/web/autopilot/win-card" || pathname === "/api/web/autopilot/stats" || pathname === "/api/web/autopilot/log" || pathname === "/api/web/autopilot/caller-intel" || pathname === "/api/web/autopilot/backup" || pathname === "/api/web/autopilot/access" || pathname === "/api/web/autopilot/grant" || pathname === "/api/web/autopilot/trial" || pathname === "/api/web/autopilot/redeem" || pathname === "/api/web/autopilot/key-login" || pathname === "/api/web/autopilot/my-key") {
+    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets" || pathname === "/api/web/autopilot/sweep" || pathname === "/api/web/autopilot/sweep-now" || pathname === "/api/web/autopilot/win-card" || pathname === "/api/web/autopilot/stats" || pathname === "/api/web/autopilot/log" || pathname === "/api/web/autopilot/seed" || pathname === "/api/web/autopilot/caller-intel" || pathname === "/api/web/autopilot/backup" || pathname === "/api/web/autopilot/access" || pathname === "/api/web/autopilot/grant" || pathname === "/api/web/autopilot/trial" || pathname === "/api/web/autopilot/redeem" || pathname === "/api/web/autopilot/key-login" || pathname === "/api/web/autopilot/my-key") {
       const webAuth = await authenticateOptionalWebRequest(request);
       const body = request.method === "POST" ? await readJsonRequestBody(request).catch(() => ({})) : {};
       const providedKey = String(requestUrl.searchParams.get("key") || body.key || "");
@@ -4199,6 +4310,24 @@ async function handleWebApiRequest(request, response, requestUrl) {
           await loadAutopilotEvents();
           const lim = Math.max(20, Math.min(2000, Number(requestUrl.searchParams.get("limit")) || 300));
           sendWebJson(request, response, 200, { ok: true, count: autopilotEvents.length, events: autopilotEvents.slice(-lim) });
+          return;
+        }
+        if (pathname === "/api/web/autopilot/seed") {
+          // OWNER ONLY — one-time brain seed grab from Solana Tracker (Premium). ?run=1 starts it
+          // (background, throttled, resumable); otherwise just report progress. Run once, then cancel ST.
+          if (!isOwner) { sendWebJson(request, response, 403, { ok: false, error: "owner only" }); return; }
+          if (requestUrl.searchParams.get("run") === "1" && !brainSeedState.running) {
+            const maxPages = Math.max(1, Math.min(40, Number(requestUrl.searchParams.get("pages")) || 16));
+            void runBrainSeedGrab({ maxPages });
+          }
+          sendWebJson(request, response, 200, {
+            ok: true,
+            seed: brainSeedState,
+            winnersNow: [...walletObs.values()].filter(isWinnerWallet).length,
+            walletsTracked: walletObs.size,
+            fundersResolved: walletFunderCache.size,
+            clusters: new Set([...walletClusterId.values()]).size
+          });
           return;
         }
         if (pathname === "/api/web/autopilot/caller-intel") {
