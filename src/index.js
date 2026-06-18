@@ -4525,10 +4525,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const auth = await authenticateOptionalWebRequest(request);
       const bucket = requestUrl.searchParams.get("bucket") || "live";
       const sort = requestUrl.searchParams.get("sort") || "best";
+      const cat = (requestUrl.searchParams.get("cat") || "").trim(); // dedicated per-category path (no cross)
       const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
       sendWebJson(request, response, 200, {
         ok: true,
-        livePairs: await webLivePairs(auth?.userId || "guest", bucket, { sort, force })
+        livePairs: await webLivePairs(auth?.userId || "guest", bucket, { sort, cat, force })
       });
       return;
     }
@@ -20204,6 +20205,58 @@ async function fetchLivePairCandidates(options = {}) {
   const pumpRows = freshOnly ? pumpLatest : [];
   return uniqueSniperCandidates([...realtime, ...photonRows, ...pumpRows, ...dexBucketSearch, ...freshDexRows])
     .sort(compareLivePairCandidates);
+}
+
+// ===== PER-CATEGORY PATHS (so the tabs stop crossing) ========================================
+// Each category fetches its OWN DexScreener search pool (+ the boosted endpoint / a bonding filter
+// where it matters), cached under its own key — instead of many categories sharing one bucket:sort
+// pool and showing identical/mostly-fresh coins. Distinct queries → distinct coins per tab.
+const LIVE_CATEGORY_QUERIES = {
+  dexTrending: ["solana trending", "solana hot pair", "solana viral", "raydium trending", "solana breakout"],
+  dexBoosted: ["solana boosted", "boosted solana", "solana boost"],
+  pumpTrending: ["pumpfun trending", "pump.fun solana", "pump trending", "new pump solana", "pumpfun hot"],
+  memeMovers: ["solana meme coin", "bonk solana", "meme solana", "dog solana", "cat solana"],
+  earlyMomentum: ["new pump solana", "pumpfun fresh", "fresh solana launch", "solana new pair"],
+  graduating: ["pumpfun graduating", "pump near migration", "pumpfun solana", "raydium pump migrate"],
+  graduated: ["raydium solana", "graduated pump", "pump migrated raydium", "meteora solana"],
+  volume: ["solana high volume", "solana volume", "solana movers", "raydium volume"],
+  gainers: ["solana gainers", "solana pump", "solana moon", "solana breakout"],
+  liquidity: ["solana deep liquidity", "raydium solana", "meteora solana", "orca solana"],
+  marketcap: ["solana gem", "solana low cap", "raydium solana"],
+  active: ["solana most active", "solana trending", "solana volume"]
+};
+function livePairCategoryFilter(category) {
+  // Only the discovery categories need a post-filter; the metric tabs rank the whole pool.
+  if (category === "graduating") return (row) => { const p = Number(slimeScopeProgressPct(row)); return (isPumpStyleToken(row) || row.isPump) && p >= 50 && !(row.graduated || row.isGraduated); };
+  if (category === "graduated") return (row) => Boolean(row.graduated || row.isGraduated || isGraduatedSlimeScopePair(row));
+  if (category === "dexBoosted") return (row) => Boolean(row.boosted || row.boosts || /boost/i.test(String(row.source || "")));
+  if (category === "pumpTrending") return (row) => Boolean(isPumpStyleToken(row) || row.isPump || /pump/i.test(String(row.source || "")));
+  return null;
+}
+async function fetchLiveCategoryCandidates(category, options = {}) {
+  const queries = LIVE_CATEGORY_QUERIES[category] || [];
+  const ttlMs = Math.max(4_000, Number(options.ttlMs || 0), 8_000);
+  const headers = { Accept: "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" };
+  const rows = [];
+  await runWithConcurrency(queries, 3, async (query) => {
+    const cacheKey = `cat:${category}:${query}`;
+    const cached = dexSearchCandidatesCache.get(cacheKey);
+    if (!options.force && cached && Date.now() - cached.cachedAt < ttlMs) { rows.push(...cached.value); return; }
+    const data = await fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(query)}`, { headers, timeoutMs: options.timeoutMs || 3_000 }).catch(() => null);
+    const value = sniperCandidatesFromDexPairs(arrayFromApiData(data, ["pairs"]), `cat:${category}:${query}`);
+    dexSearchCandidatesCache.set(cacheKey, { cachedAt: Date.now(), value });
+    rows.push(...value);
+  });
+  // Boosted / trending tabs also pull the real DexScreener token-boosts endpoint (their defining source).
+  if (category === "dexBoosted" || category === "dexTrending") {
+    try { rows.push(...(await fetchSniperCandidates({ ...options, ttlMs }).catch(() => []))); } catch {}
+  }
+  // Pump-curve tabs add the live pump creations (fresh) + latest so there's curve material to filter.
+  if (category === "pumpTrending" || category === "earlyMomentum" || category === "graduating") {
+    try { rows.push(...pumpPortalStream.getCreationCandidates({ limit: 120 })); } catch {}
+    try { rows.push(...(await fetchPumpFunLatestCandidates({ ...options, timeoutMs: options.timeoutMs || 1_800 }).catch(() => []))); } catch {}
+  }
+  return uniqueSniperCandidates(rows).sort(compareLivePairCandidates);
 }
 
 async function fetchDexSearchCandidatesForLiveBucket(bucket, options = {}) {
@@ -41679,8 +41732,11 @@ async function webLivePairs(userId, bucket = "live", options = {}) {
 async function webLivePairsUnfiltered(userId, bucket = "live", options = {}) {
   const safeBucket = normalizeLivePairBucket(bucket);
   const sort = String(options.sort || "best").toLowerCase();
+  const cat = String(options.cat || "").trim();
   const force = Boolean(options.force);
-  const cacheKey = `${safeBucket}:${sort}`;
+  // A category gets its OWN cache key (its own path) so tabs that used to share a bucket:sort pool
+  // no longer cross. Non-category callers keep the bucket:sort key (unchanged).
+  const cacheKey = cat ? `cat:${cat}` : `${safeBucket}:${sort}`;
   const externalKey = externalCacheKey(`web:livePairs:v6:${cacheKey}`, "global");
   const cached = livePairsSharedCache.get(cacheKey) || { cachedAt: 0, value: null, promise: null };
   if (!force && CONFIG.livePairsSharedCacheMs > 0 && cached.value && Date.now() - cached.cachedAt < CONFIG.livePairsSharedCacheMs) {
@@ -41719,7 +41775,7 @@ async function webLivePairsUnfiltered(userId, bucket = "live", options = {}) {
           backgroundRefreshing: true,
           message: `${livePairBucketLabel(safeBucket)} is refreshing in the background. Showing cached rows now.`
         };
-        const backgroundPromise = buildWebLivePairs(userId, safeBucket, { sort, force: true })
+        const backgroundPromise = buildWebLivePairs(userId, safeBucket, { sort, cat, force: true })
           .then(async (nextValue) => {
             livePairsSharedCache.set(cacheKey, { cachedAt: Date.now(), value: nextValue, promise: null });
             await cacheSetJson(externalKey, displayCacheEnvelope(nextValue), Math.max(CONFIG.displayCacheStaleMs, 30_000));
@@ -41742,7 +41798,7 @@ async function webLivePairsUnfiltered(userId, bucket = "live", options = {}) {
   // serve it INSTANTLY and refresh in the background instead of awaiting a scan.
   // This is what makes pairs feel instant on every refresh after the first load.
   if (!force && CONFIG.livePairsSharedCacheMs > 0 && cached.value && (Date.now() - cached.cachedAt) < CONFIG.displayCacheStaleMs) {
-    const bg = buildWebLivePairs(userId, safeBucket, { sort, force: false })
+    const bg = buildWebLivePairs(userId, safeBucket, { sort, cat, force: false })
       .then(async (nextValue) => {
         const rows = Array.isArray(nextValue?.rows) ? nextValue.rows : [];
         const prevRows = Array.isArray(cached.value?.rows) ? cached.value.rows : [];
@@ -41763,7 +41819,7 @@ async function webLivePairsUnfiltered(userId, bucket = "live", options = {}) {
     return { ...cached.value, stale: true, cacheHit: true, cacheSource: "memory-swr", backgroundRefreshing: true };
   }
 
-  const promise = buildWebLivePairs(userId, safeBucket, { sort, force });
+  const promise = buildWebLivePairs(userId, safeBucket, { sort, cat, force });
   if (CONFIG.livePairsSharedCacheMs > 0) {
     livePairsSharedCache.set(cacheKey, { ...cached, promise });
   }
@@ -42142,9 +42198,43 @@ function effectiveLivePairSourceBucket(bucket, sort) {
     : bucket;
 }
 
+// Build one category's feed from its OWN pool (own searches + boosted/pump sources + filter), so
+// each tab shows genuinely different, category-matched coins. Age-agnostic: the category's source
+// defines relevance, not an age slice (that's what kept every tab "mostly fresh").
+async function buildWebLivePairsForCategory(userId, cat, sort, options = {}) {
+  const scanState = nextSniperScanState(`web:${userId}`, `livepairs:cat:${cat}`);
+  const candidates = await fetchLiveCategoryCandidates(cat, { ttlMs: 2_000, timeoutMs: 4_200, scanState, force: Boolean(options.force) });
+  let rows = uniqueSniperScoreRows(candidates.map(livePairCandidateToRow).filter(Boolean))
+    .filter((row) => !hasHardBlockedLivePairRisk(row));
+  const catFilter = livePairCategoryFilter(cat);
+  if (catFilter) { const f = rows.filter(catFilter); if (f.length >= 6) rows = f; } // narrow when there's material; else keep the category pool
+  const targetLimit = 60;
+  const safety = await maybeFilterWebLivePairsForSafety(rows.sort((a, b) => compareWebLivePairs(a, b, sort)), targetLimit);
+  const safeRows = decorateWebLivePairAvatars(rotateRowsForRefresh(sortLivePairs(safety.rows, sort), targetLimit, scanState.refreshCount, {}));
+  rememberSniperScanRows(`web:${userId}`, `livepairs:cat:${cat}`, safeRows);
+  void persistPostgresLivePairRows(safeRows, { reason: `live-pairs:cat:${cat}` }).catch(() => false);
+  return {
+    label: cat, bucket: "live", sort, category: `cat:${cat}`,
+    refreshCount: scanState.refreshCount, scanned: candidates.length, qualified: rows.length, count: safeRows.length,
+    rawProviderCount: candidates.length, backendReturnedCount: safeRows.length,
+    pageSize: targetLimit, maxPageSize: targetLimit, hasMore: rows.length > safeRows.length, nextCursor: null,
+    source: "backend:live-pairs:cat", providerStatus: safety.stats?.rpcSafetySkipped ? "rpc-safety-skipped" : "ok",
+    filteredOutCount: Math.max(0, rows.length - safeRows.length),
+    rows: safeRows.map(webLivePairRow), refreshedAt: new Date().toISOString(), refreshSeconds: CONFIG.livePairsRefreshSeconds,
+    message: safeRows.length ? `${cat}: ${safeRows.length} pair(s).` : `${cat}: scanning for matching pairs…`
+  };
+}
+
 async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   const safeBucket = normalizeLivePairBucket(bucket);
   const sort = String(options.sort || "best").toLowerCase();
+  // DEDICATED CATEGORY PATH: a category with its own query set is built from its OWN pool (distinct
+  // DexScreener searches + boosted/pump sources + a defining filter) so tabs no longer cross. Plain
+  // bucket:sort callers (best/fresh, the autopilot feeds) keep the original path below.
+  const cat = String(options.cat || "").trim();
+  if (cat && Array.isArray(LIVE_CATEGORY_QUERIES[cat]) && LIVE_CATEGORY_QUERIES[cat].length) {
+    return buildWebLivePairsForCategory(userId, cat, sort, options);
+  }
   // Display/cache stay on the requested tab; only the row source can shift to
   // the last-hour window for data-driven sorts (see note above).
   const sourceBucket = effectiveLivePairSourceBucket(safeBucket, sort);

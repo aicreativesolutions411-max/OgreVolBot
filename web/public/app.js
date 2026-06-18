@@ -327,6 +327,7 @@ const state = {
         : "terminal",
   terminalSubtab: "positions",
   terminalSort: "best",
+  terminalCat: (() => { try { return localStorage.getItem("cookSpotCategory") || "dexTrending"; } catch { return "dexTrending"; } })(), // dedicated category source path
   liveFeedCategory: (() => { try { return localStorage.getItem("liveFeedCategory") || "fresh"; } catch { return "fresh"; } })(),
   liveTerminalCategory: (() => { try { return localStorage.getItem("liveTerminalCategory") || "dexTrending"; } catch { return "dexTrending"; } })(),
   cookSpotCategory: (() => { try { return localStorage.getItem("cookSpotCategory") || "dexTrending"; } catch { return "dexTrending"; } })(),
@@ -3809,7 +3810,8 @@ async function loadLivePairs({ silent = false, bucket = state.livePairBucket, re
   const safeBucket = normalizeLivePairBucket(bucket);
   const isActiveBucket = safeBucket === state.livePairBucket;
   const requestSort = state.terminalSort || "best";
-  const requestKey = `${safeBucket}:${requestSort}`;
+  const requestCat = state.terminalCat || "";          // dedicated per-category source path (no cross)
+  const requestKey = `${safeBucket}:${requestSort}:${requestCat}`;
   const existingLoad = livePairsLoadInFlight.get(requestKey);
   if (existingLoad?.promise) {
     state.livePairsLoadingByBucket = { ...state.livePairsLoadingByBucket, [safeBucket]: existingLoad.requestId };
@@ -3838,7 +3840,8 @@ async function loadLivePairs({ silent = false, bucket = state.livePairBucket, re
   const loadPromise = (async () => {
     try {
       const forceQuery = force ? "&force=true" : "";
-      const livePairsUrl = `/api/web/live-pairs?bucket=${encodeURIComponent(safeBucket)}&sort=${encodeURIComponent(requestSort)}${forceQuery}`;
+      const catQuery = requestCat ? `&cat=${encodeURIComponent(requestCat)}` : "";
+      const livePairsUrl = `/api/web/live-pairs?bucket=${encodeURIComponent(safeBucket)}&sort=${encodeURIComponent(requestSort)}${catQuery}${forceQuery}`;
       const data = await Promise.race([
         api(livePairsUrl),
         new Promise((_, reject) => window.setTimeout(() => reject(new Error("Live feed refresh timed out.")), 12_000))
@@ -24102,6 +24105,7 @@ document.addEventListener("change", async (event) => {
   }
   if (target?.matches?.("[data-terminal-sort]")) {
     state.terminalSort = target.value || "best";
+    state.terminalCat = "";                              // raw sort = the shared bucket path, no category
     resetTerminalFeedVisibleLimit("live");
     resetTerminalFeedVisibleLimit("slimeScope");
     render();
@@ -24110,9 +24114,10 @@ document.addEventListener("change", async (event) => {
   if (target?.matches?.("[data-live-feed-category]")) {
     state.liveFeedCategory = target.value || "best";
     try { localStorage.setItem("liveFeedCategory", state.liveFeedCategory); } catch {}
-    // Warm the server pool with the closest backend sort so client ranking has
-    // the right pairs to work with.
+    // terminalSort = the metric used to RANK; terminalCat = the dedicated SOURCE path (so each
+    // category pulls its own pool + cache and the tabs stop crossing).
     state.terminalSort = currentLiveFeedCategory()[3] || "best";
+    state.terminalCat = currentLiveFeedCategory()[0] || "";
     resetTerminalFeedVisibleLimit("live");
     render();
     runDeferredUiTask(() => refreshLivePairBuckets({ silent: true, force: true }));
@@ -24120,9 +24125,9 @@ document.addEventListener("change", async (event) => {
   if (target?.matches?.("[data-live-terminal-category]")) {
     state.liveTerminalCategory = target.value || "dexTrending";
     try { localStorage.setItem("liveTerminalCategory", state.liveTerminalCategory); } catch {}
-    // Pull the matching backend pool so each option shows genuinely different pairs (not
-    // just a client re-rank of the same rows) — same mechanism the Live feed uses.
+    // Pull the matching backend pool so each option shows genuinely different pairs (its own path).
     state.terminalSort = currentLiveTerminalCategory()[3] || "volume";
+    state.terminalCat = currentLiveTerminalCategory()[0] || "";
     resetTerminalFeedVisibleLimit("live");
     render();
     runDeferredUiTask(() => refreshLivePairBuckets({ silent: true, force: true }));
@@ -24131,6 +24136,7 @@ document.addEventListener("change", async (event) => {
     state.cookSpotCategory = target.value || "dexTrending";
     try { localStorage.setItem("cookSpotCategory", state.cookSpotCategory); } catch {}
     state.terminalSort = currentCookSpotCategory()[3] || "volume";
+    state.terminalCat = currentCookSpotCategory()[0] || "";
     resetTerminalFeedVisibleLimit("slimeScope");
     render();
     runDeferredUiTask(() => refreshTerminalFeed("slimeScope", { force: true, reason: "cook-spot-category" }));
