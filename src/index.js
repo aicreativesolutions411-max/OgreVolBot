@@ -886,6 +886,118 @@ function recordWalletExit(mint, wallet) {
   walletObs.set(w, r);
   recordKolExit(w, gm);
 }
+
+// ===== WALLET FUNDING GRAPH (free-RPC, Bitquery-free) ====================================
+// Bitquery's "money-flow" product is just on-chain SOL transfers — readable from ANY RPC for free.
+// We reconstruct it from our existing Alchemy/Chainstack reads (rpcRead; Helius only as last
+// fallback, so no credit burn): find each proven-winner wallet's FIRST FUNDER (the wallet that
+// seeded it), cache it forever (a funding origin never changes), and group winners that share a
+// funder into a CLUSTER = likely one actor. Lets smartMoneyScore de-dupe "5 sibling wallets" down
+// to 1 real winner so a single whale running a wallet farm can't fake confluence or oversize us.
+const walletFunderCache = new Map();   // wallet -> funder address | null (null = looked up, none found)
+const walletClusterId = new Map();     // wallet -> clusterId (its funder, only for TIGHT clusters)
+let funderLookupInFlight = 0;
+
+// Pull the source of the first real (> 0.001 SOL) inbound transfer in a parsed tx = who funded it.
+function fundingSourceFromTx(tx, wallet) {
+  try {
+    const msg = tx && tx.transaction && tx.transaction.message;
+    const ins = (msg && msg.instructions) || [];
+    for (const i of ins) {
+      if (i.program === "system" && i.parsed && (i.parsed.type === "transfer" || i.parsed.type === "transferChecked")) {
+        const info = i.parsed.info || {};
+        if (info.destination === wallet && Number(info.lamports) > 1_000_000) {
+          const src = String(info.source || "");
+          if (src && src !== wallet) return src;
+        }
+      }
+    }
+    // Fallback for non-parsed transfers: the account whose balance dropped most while wallet's rose.
+    const meta = tx && tx.meta, keys = msg && msg.accountKeys;
+    if (meta && Array.isArray(keys) && Array.isArray(meta.preBalances) && Array.isArray(meta.postBalances)) {
+      const pkOf = (a) => (typeof a === "string" ? a : (a && a.pubkey) || "");
+      let wIdx = keys.findIndex((a) => pkOf(a) === wallet);
+      if (wIdx >= 0 && (meta.postBalances[wIdx] || 0) > (meta.preBalances[wIdx] || 0)) {
+        let best = -1, bestDrop = 1_000_000;
+        for (let k = 0; k < keys.length; k++) {
+          if (k === wIdx) continue;
+          const drop = (meta.preBalances[k] || 0) - (meta.postBalances[k] || 0);
+          if (drop > bestDrop) { bestDrop = drop; best = k; }
+        }
+        if (best >= 0) { const pk = pkOf(keys[best]); if (pk && pk !== wallet) return String(pk); }
+      }
+    }
+  } catch {}
+  return null;
+}
+
+// Find (and cache forever) a wallet's first funder via free RPC reads. Bounded pagination so an
+// ancient high-activity wallet can't blow up cost; fresh degen winner wallets resolve in 1-2 calls.
+async function lookupWalletFunder(wallet) {
+  const w = String(wallet || "").trim();
+  if (!w) return null;
+  if (walletFunderCache.has(w)) return walletFunderCache.get(w);
+  const obs0 = walletObs.get(w);
+  if (obs0 && obs0.funder !== undefined) { walletFunderCache.set(w, obs0.funder); return obs0.funder; }
+  let pk; try { pk = new PublicKey(w); } catch { walletFunderCache.set(w, null); return null; }
+  let found = null;
+  try {
+    let before, oldest = [];
+    for (let page = 0; page < 3; page++) {
+      const sigs = await rpcRead("funder: signatures", (c) => c.getSignaturesForAddress(pk, before ? { limit: 1000, before } : { limit: 1000 }));
+      if (!Array.isArray(sigs) || !sigs.length) break;
+      oldest = sigs;
+      if (sigs.length < 1000) break;
+      before = sigs[sigs.length - 1].signature;
+    }
+    const candidates = oldest.slice(-4).map((s) => s.signature).reverse(); // oldest-first
+    for (const sig of candidates) {
+      const tx = await rpcRead("funder: tx", (c) => c.getParsedTransaction(sig, { maxSupportedTransactionVersion: 0 }));
+      const src = fundingSourceFromTx(tx, w);
+      if (src) { found = src; break; }
+    }
+  } catch {}
+  walletFunderCache.set(w, found);
+  const r = walletObs.get(w); if (r) { r.funder = found; walletObs.set(w, r); }   // persists via wallet-observatory.json
+  return found;
+}
+
+// Rebuild clusters from learned funders: winners sharing a funder are one actor — BUT only if the
+// funder is a TIGHT root (2-3 of our winners). A high-fanout funder (>=4) is a CEX/common source
+// (independent people withdrawing), not a cluster, so those wallets stay solo. Restart-safe (reads
+// the persisted walletObs.funder). Cheap: one pass over the roster, no RPC.
+function rebuildWalletClusters() {
+  const byFunder = new Map();
+  for (const [w, r] of walletObs) {
+    if (!isWinnerWallet(r) || !r || !r.funder) continue;
+    let arr = byFunder.get(r.funder); if (!arr) { arr = []; byFunder.set(r.funder, arr); }
+    arr.push(w);
+  }
+  walletClusterId.clear();
+  for (const [f, arr] of byFunder) {
+    if (arr.length >= 2 && arr.length <= 3) for (const w of arr) walletClusterId.set(w, f); // tight cluster = one actor
+  }
+}
+// A wallet's cluster identity for de-duping (its funder if tight-clustered, else itself).
+function clusterIdFor(wallet) { return walletClusterId.get(String(wallet || "").trim()) || String(wallet || "").trim(); }
+
+// Background: lazily resolve funders for the winner roster — a few per cycle so it's light on RPC,
+// cached forever after. Rebuilds clusters each pass.
+async function pollWalletFunders() {
+  try {
+    if (funderLookupInFlight > 0) return;
+    const todo = [];
+    for (const [w, r] of walletObs) {
+      if (!isWinnerWallet(r)) continue;
+      if (walletFunderCache.has(w) || (r && r.funder !== undefined)) continue;
+      todo.push(w);
+      if (todo.length >= 4) break;   // ~4 wallets/cycle, one-time per wallet
+    }
+    for (const w of todo) { funderLookupInFlight += 1; try { await lookupWalletFunder(w); } finally { funderLookupInFlight -= 1; } }
+    rebuildWalletClusters();
+  } catch {}
+}
+
 function rememberTrackedKolWallet(wallet, rec = {}) {
   const w = String(wallet || "").trim();
   if (!w) return;
@@ -1012,10 +1124,16 @@ function smartMoneyScore(mint) {
     let winners = 0, kol = false;
     const exitMults = [];
     const holdCaps = [];
+    const seenClusters = new Set();                   // FUNDING GRAPH: count one actor once
     for (const w of buyers) {
       if (isKolWallet(w) || kolLearningProfile(w).learnedGood) kol = true;
       const r = walletObs.get(w);
       if (isWinnerWallet(r)) {
+        // De-dupe sibling wallets: if this winner shares a funder-cluster with one already counted,
+        // it's likely the SAME actor's wallet farm — don't let it fake confluence or oversize us.
+        const cid = clusterIdFor(w);
+        if (seenClusters.has(cid)) continue;
+        seenClusters.add(cid);
         winners += 1;
         const em = walletExitMult(r);
         if (em != null) exitMults.push(em);
@@ -1476,6 +1594,7 @@ function startDevObservatory() {
   setInterval(sampleDevObservatory, 45_000);
   setInterval(() => { void sampleKolSignalOutcomes(); }, 60_000);
   setInterval(() => { void pollObsTradesSwapApi(); }, 18_000); // resurrect the buyer flywheel via the working swap-api source
+  setInterval(() => { void pollWalletFunders(); }, 45_000);    // FUNDING GRAPH: resolve winner funders + clusters (free RPC, cached forever)
   // AUTO-KOL: load the saved roster, then harvest proven KOLs from the tracker leaderboard now and
   // every 10 min so the copy-trade roster stays fresh (cheap — the KOL scan is cached internally).
   void loadAutoKolWallets().then(() => { void refreshAutoKolWallets(); });
@@ -4141,7 +4260,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
               runners100: trades.filter((t) => (t.peakPct || 0) >= 100).length,
               runners400: trades.filter((t) => (t.peakPct || 0) >= 400).length,
               netPnlSol: r2(trades.reduce((a, t) => a + (Number(t.pnl) || 0), 0)),
-              observatory: (() => { let s = {}; try { s = pumpPortalStream.stats() || {}; } catch {} return { devsTracked: devObs.size, coinsWatching: obsCoins.size, walletsTracked: walletObs.size, winnerWallets: [...walletObs.values()].filter(isWinnerWallet).length, earlyBuyersTracked: earlyBuyers.size, autoKols: autoKolWallets.size, trackedKols: trackedKolWallets.size, learnedKols: [...kolSignalStats.values()].filter((r) => Number(r.signals || 0) > 0).length, kolSignalMints: kolSignalMints.size, kolCopyCandidates: (kolCopyFeedCache.rows || []).length, kolProbeCandidates: (kolCopyFeedCache.rows || []).filter((r) => r && r._smartMoney && r._smartMoney.kolProbe).length, kolCopyAgeSec: kolCopyFeedCache.at ? Math.round((Date.now() - kolCopyFeedCache.at) / 1000) : null, smartMoneyActive: smartMoneyReady(), streamConnected: Boolean(s.connected), streamLastMsgSec: Number.isFinite(s.lastMessageAgoMs) ? Math.round(s.lastMessageAgoMs / 1000) : null, streamTrades: (s.counters && s.counters.trades) || 0, streamCreations: (s.counters && s.counters.creations) || 0, tradeSubs: s.tradeSubscriptions || 0, mintsWithTrades: s.mintsWithTrades || 0, buyWsConnected: buyWsDiag.connected, buyWsSubs: buyWsSubs.size, buyWsTrades: buyWsDiag.trades, marketSample: (marketTape()?.sample) || 0 }; })(),
+              observatory: (() => { let s = {}; try { s = pumpPortalStream.stats() || {}; } catch {} return { devsTracked: devObs.size, coinsWatching: obsCoins.size, walletsTracked: walletObs.size, winnerWallets: [...walletObs.values()].filter(isWinnerWallet).length, earlyBuyersTracked: earlyBuyers.size, fundersResolved: walletFunderCache.size, walletClusters: new Set([...walletClusterId.values()]).size, autoKols: autoKolWallets.size, trackedKols: trackedKolWallets.size, learnedKols: [...kolSignalStats.values()].filter((r) => Number(r.signals || 0) > 0).length, kolSignalMints: kolSignalMints.size, kolCopyCandidates: (kolCopyFeedCache.rows || []).length, kolProbeCandidates: (kolCopyFeedCache.rows || []).filter((r) => r && r._smartMoney && r._smartMoney.kolProbe).length, kolCopyAgeSec: kolCopyFeedCache.at ? Math.round((Date.now() - kolCopyFeedCache.at) / 1000) : null, smartMoneyActive: smartMoneyReady(), streamConnected: Boolean(s.connected), streamLastMsgSec: Number.isFinite(s.lastMessageAgoMs) ? Math.round(s.lastMessageAgoMs / 1000) : null, streamTrades: (s.counters && s.counters.trades) || 0, streamCreations: (s.counters && s.counters.creations) || 0, tradeSubs: s.tradeSubscriptions || 0, mintsWithTrades: s.mintsWithTrades || 0, buyWsConnected: buyWsDiag.connected, buyWsSubs: buyWsSubs.size, buyWsTrades: buyWsDiag.trades, marketSample: (marketTape()?.sample) || 0 }; })(),
               marketTape: marketTape(),
               topWallets: [...walletObs.entries()].filter(([, r]) => isWinnerWallet(r)).sort((a, b) => ((b[1].peakSum || 0) + (b[1].linkedPeakSum || 0)) - ((a[1].peakSum || 0) + (a[1].linkedPeakSum || 0))).slice(0, 8).map(([w, r]) => ({ wallet: shortMint(w), kol: KOL_WALLETS.has(w), linked: isLinkedWinnerWallet(r), coins: r.coins, ran: r.ran, rugged: r.rugged, linkedCoins: r.linkedCoins || 0, linkedRan: r.linkedRan || 0, linkedRugged: r.linkedRugged || 0, linkedKolLeaders: r.linkedKolLeaders || 0, linkedWinnerLeaders: r.linkedWinnerLeaders || 0, avgPeak: r.coins ? r2(r.peakSum / r.coins) : 0, linkedAvgPeak: r.linkedCoins ? r2((r.linkedPeakSum || 0) / r.linkedCoins) : 0 })),
               byScore: bucket((t) => t.fs == null ? null : (t.fs < 57 ? "<57" : t.fs < 62 ? "57-61" : t.fs < 67 ? "62-66" : t.fs < 72 ? "67-71" : "72+")),
