@@ -1223,6 +1223,42 @@ async function autopilotTrendingRows() {
   return rows;
 }
 
+// ===== LIVE PRICE for the autopilot's coins via the WORKING swap-api =========================
+// The autopilot apes FRESH pump coins, but getPairLite/getInstantMc read the PumpPortal trade tick
+// (DEAD for us, streamTrades:0) and DexScreener (no pair for a pre-DEX bonding-curve coin) — so a
+// freshly-aped coin had NO live price. That single gap caused ALL THREE reported bugs: the % froze
+// then jumped on stale reads (inaccurate %), TP/stop couldn't fire (so it rode losers down → "still
+// losing"), and the resulting feed-lost sell + re-entry cooldown re-bought the same coin ("aped a
+// pair it already aped"). swap-api.pump.fun delivers real per-trade prices server-side (the buy bot
+// runs on it). MC = median recent trade price × 1B pump supply = a real, SELLABLE mark.
+const swapApiPriceCache = new Map(); // mint -> { mc, liq, px, at }
+const heldReqAt = new Map();         // mint -> last time the engine asked for this coin's price (= it still holds it)
+async function swapApiPriceFor(mint) {
+  try {
+    const j = await fetch(`https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=8`, { headers: { accept: "application/json" } }).then((r) => r.ok ? r.json() : null);
+    const trades = (j && Array.isArray(j.trades)) ? j.trades : [];
+    const pxs = trades.map((t) => Number(t.priceUsd) || 0).filter((x) => x > 0).sort((a, b) => a - b);
+    if (!pxs.length) return null;
+    const px = pxs[Math.floor(pxs.length / 2)];   // MEDIAN — one thin-curve phantom tick can't fool the mark
+    const rec = { mc: px * 1e9, liq: 0, px, at: Date.now() };
+    swapApiPriceCache.set(mint, rec);
+    return rec;
+  } catch { return null; }
+}
+let _heldPxPolling = false;
+async function pollHeldPricesSwapApi() {
+  if (_heldPxPolling) return; _heldPxPolling = true;
+  try {
+    const now = Date.now();
+    // Poll only coins the engine asked about in the last 90s (= it's still holding them). When a
+    // position sells, the engine stops calling getPairLite for it → it ages out → we stop polling.
+    const active = [...heldReqAt.entries()].filter(([, t]) => now - t < 90_000).map(([m]) => m).slice(0, 30);
+    for (let i = 0; i < active.length; i += 8) await Promise.all(active.slice(i, i + 8).map(swapApiPriceFor));
+    for (const [m, t] of [...heldReqAt.entries()]) if (now - t > 120_000) { heldReqAt.delete(m); swapApiPriceCache.delete(m); } // GC sold/dead
+  } catch {} finally { _heldPxPolling = false; }
+}
+setInterval(() => { void pollHeldPricesSwapApi(); }, 3000); // keep held coins hot so per-tick exit checks are fast cache hits
+
 const autopilotEngine = createAutopilotEngine({
   exitMs: 1000,
   huntMs: 5000,
@@ -1343,71 +1379,43 @@ const autopilotEngine = createAutopilotEngine({
     return out.slice(0, 120);
   },
   getPairLite: async (mint) => {
-    // FAST PATH for pump.fun coins: the live PumpPortal trade tick is in-memory
-    // and sub-second. We subscribe each coin on open (onOpen), so this is the
-    // instant, authoritative price for fresh bonding-curve tokens.
-    try {
-      const solUsd = Number(solUsdPriceCache?.value) || 0;
-      if (solUsd > 0) {
-        // REALIZABLE price: a single tiny buy can spike one tick's marketCapSol on a
-        // thin curve, which marked positions at fantasy gains (+178% that filled at
-        // +15%). Use the MEDIAN of the last few trades so one phantom-spike tick can't
-        // fool the exit logic — the bot marks/exits on a price that's actually sellable.
-        const ticks = pumpPortalStream.getTrades(mint, { limit: 5 }) || [];
-        let mcSol = 0;
-        let vSol = ticks[0] ? Number(ticks[0].vSolInBondingCurve) : 0;
-        const mcs = ticks.map((t) => Number(t.marketCapSol) || 0).filter((x) => x > 0).sort((a, b) => a - b);
-        if (mcs.length) mcSol = mcs[Math.floor(mcs.length / 2)]; // median
-        if (!mcSol) {
-          const ce = pumpPortalStream.getCreationEntry(mint);
-          const lt = ce && ce.lastTrade;
-          if (lt) { mcSol = Number(lt.marketCapSol) || 0; vSol = Number(lt.vSolInBondingCurve) || vSol; }
-        }
-        if (mcSol > 0) {
-          return { marketCap: mcSol * solUsd, liquidityUsd: vSol > 0 ? vSol * solUsd : 0, priceUsd: 0 };
-        }
-      }
-    } catch {}
-    // Fallbacks for graduated/indexed coins: DexScreener, then on-chain curve.
+    // PRIMARY = swap-api live price (the WORKING source — PumpPortal trades are dead). The poller
+    // keeps held coins hot, so this is almost always a fast in-memory cache hit; on a miss it fetches
+    // inline. Median trade price × 1B supply = a real sellable mark, so the % + exits are accurate.
+    heldReqAt.set(mint, Date.now()); // the engine is asking → it holds this coin → keep it hot in the poller
+    const sc = swapApiPriceCache.get(mint);
+    if (sc && Date.now() - sc.at < 4000 && sc.mc > 0) return { marketCap: sc.mc, liquidityUsd: sc.liq, priceUsd: sc.px };
+    const fresh = await swapApiPriceFor(mint);
+    if (fresh && fresh.mc > 0) return { marketCap: fresh.mc, liquidityUsd: fresh.liq, priceUsd: fresh.px };
+    // Graduated / off-curve coins (swap-api has no curve trades): DexScreener, then on-chain curve.
     try {
       const pairs = await fetchDexScreenerTokenPairsFallback(mint).catch(() => []);
       const best = bestDexPairForToken(mint, pairs);
       if (best) {
-        return {
-          marketCap: Number(best.marketCap || best.fdv) || 0,
-          liquidityUsd: Number(best.liquidity?.usd) || 0,
-          priceUsd: Number(best.priceUsd) || 0
-        };
+        const mc = Number(best.marketCap || best.fdv) || 0;
+        const out = { marketCap: mc, liquidityUsd: Number(best.liquidity?.usd) || 0, priceUsd: Number(best.priceUsd) || 0 };
+        if (mc > 0) swapApiPriceCache.set(mint, { mc, liq: out.liquidityUsd, px: out.priceUsd, at: Date.now() }); // feed getInstantMc too
+        return out;
       }
       const curve = await pumpCurvePairFallback(mint).catch(() => null);
       if (curve) {
-        return {
-          marketCap: Number(curve.marketCap || curve.fdv) || 0,
-          liquidityUsd: Number(curve.liquidity?.usd) || 0,
-          priceUsd: Number(curve.priceUsd) || 0
-        };
+        return { marketCap: Number(curve.marketCap || curve.fdv) || 0, liquidityUsd: Number(curve.liquidity?.usd) || 0, priceUsd: Number(curve.priceUsd) || 0 };
       }
     } catch {}
     return null;
   },
-  // Subscribe a freshly-aped coin to the live trade-tick stream for instant prices.
-  onOpen: (mint) => { try { pumpPortalStream.watchMint(mint); } catch {} },
+  // Register a freshly-aped coin for live-price polling (swap-api) + the legacy trade-tick stream.
+  onOpen: (mint) => { try { heldReqAt.set(mint, Date.now()); void swapApiPriceFor(mint); pumpPortalStream.watchMint(mint); } catch {} },
   // Synchronous, in-memory latest market cap (USD) from the live pump tick — used
   // so status() shows truly live prices on every poll, with zero network wait.
   getInstantMc: (mint) => {
+    // In-memory, synchronous live MC for the display — the swap-api cache the poller + getPairLite
+    // keep fresh (PumpPortal getTrades is dead, so reading it here showed a frozen/blank number).
     try {
-      const solUsd = Number(solUsdPriceCache?.value) || 0;
-      if (!solUsd) return null;
-      const t = pumpPortalStream.getTrades(mint, { limit: 1 });
-      let mcSol = t && t[0] ? Number(t[0].marketCapSol) : 0;
-      if (!mcSol) {
-        const ce = pumpPortalStream.getCreationEntry(mint);
-        if (ce && ce.lastTrade) mcSol = Number(ce.lastTrade.marketCapSol) || 0;
-      }
-      return mcSol > 0 ? mcSol * solUsd : null;
-    } catch {
-      return null;
-    }
+      const sc = swapApiPriceCache.get(mint);
+      if (sc && Date.now() - sc.at < 9000 && sc.mc > 0) return sc.mc;
+    } catch {}
+    return null;
   },
   // Real free SOL in the dedicated wallet — the true source of truth for the
   // displayed balance and for position sizing (reconciled into the engine).
