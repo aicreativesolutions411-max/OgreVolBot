@@ -172,10 +172,9 @@ export function aggParams(state) {
   // (+0.22) and 2-5m (+0.34) both WIN. So the fresh engine skips the 30-120s dead-zone entirely
   // and takes the freshest entries + the survivors past 2 min. (entryReject honors skipMidAge.)
   const skipMidAge = !liquid && !grind;
-  // (Considered a freshScore CEILING at 67 — the 67+ bands bleed — but the proven +EV MC band
-  // 2.1-2.5k is +EV as a WHOLE band, so a high-score coin INSIDE that band may be fine; the tight
-  // mcCeil already rejects the high-MC 72+ bleeders. A blanket score cap risked cutting good in-band
-  // trades, so the MC window + age carve-out do the work instead. Revisit with joint-band data.)
+  const maxScore = (!liquid && !grind) ? 72 : Infinity;
+  // FRESH-PATH SCORE CEILING: the live book keeps losing on 72+ blowoff rows even when they
+  // look strong. The best realized pocket is the middle band, not the top score band.
   // LIQUID disables the RELATIVE liquidity gate (liqFrac 0): a healthy $1M coin legitimately has
   // liq well under mc*0.3, so the relative test would wrongly reject it. The absolute floor
   // (minLiqAbs, known-thin only) does the real depth check instead.
@@ -248,7 +247,7 @@ export function aggParams(state) {
   // tape already pulled it in via the bankHard clamp above).
   if (mode === "degen" && !bankHard) moonTarget = Math.max(moonTarget, 700);
 
-  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, mcCeil, minAge, maxAge, skipMidAge, liqFrac, minLiqAbs, steady, blend, grind, scalp, liquid, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct, unprovenConvCap, provenConvCap };
+  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, maxScore, mcFloor, mcCeil, minAge, maxAge, skipMidAge, liqFrac, minLiqAbs, steady, blend, grind, scalp, liquid, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct, unprovenConvCap, provenConvCap };
 }
 
 // SELF-TUNING / market-regime brain: reads the recent runner & rug rate and sets
@@ -713,6 +712,19 @@ export function canOpen(state, sizeSol) {
   return true;
 }
 
+export function repeatBudgetForMint(state, P, mint) {
+  const key = String(mint || "");
+  const wins = Number(state?.coinWins?.[key]) || 0;
+  const losses = Number(state?.coinLosses?.[key]) || 0; // scratches count here too
+  const netWins = Math.max(0, wins - losses);
+  if (P && P.liquid) return 2 + Math.min(2, netWins);
+  return 1 + Math.min(1, netWins);
+}
+
+export function symbolCooldownMs(P) {
+  return P && P.liquid ? 180_000 : 90_000;
+}
+
 // THE realizable multiple for an open bag — the ONE place the haircut lives so the internal
 // equity, the displayed marked equity, and the per-position % can never drift apart (drift is
 // exactly how phantom-mark bugs creep back). What a bag could ACTUALLY BANK if sold right now:
@@ -917,6 +929,15 @@ export function createAutopilotEngine(deps) {
     try {
       log(level, msg, data);
     } catch {}
+  }
+
+  function bumpSymLoss(sym) {
+    const ns = normSym(sym);
+    if (!ns) return;
+    const e = state.symLosses[ns] || { count: 0, at: 0 };
+    e.count += 1;
+    e.at = now();
+    state.symLosses[ns] = e;
   }
 
   function snapshot() {
@@ -1467,17 +1488,13 @@ export function createAutopilotEngine(deps) {
     } else if (realLoss) {
       markLoss(pos);
       state.coinLosses[pos.mint] = (state.coinLosses[pos.mint] || 0) + 1; // remember repeat losers
-      const ns = normSym(pos.sym);                                          // remember losing NAMES (clone swarms)
-      if (ns) {
-        const e = state.symLosses[ns] || { count: 0, at: 0 };
-        e.count += 1; e.at = now();
-        state.symLosses[ns] = e;
-      }
+      bumpSymLoss(pos.sym);                                                  // remember losing NAMES (clone swarms)
     } else {
       // SCRATCH — near-breakeven; fees roughly cancelled it. Track it (so the bleed is
       // visible) but don't poison W/L. Repeat-scratch coins still get a cooldown.
       state.scratches = (state.scratches || 0) + 1;
       state.coinLosses[pos.mint] = (state.coinLosses[pos.mint] || 0) + 1;
+      bumpSymLoss(pos.sym);
     }
     state.recentSells[pos.mint] = now();
     const pnl = net;
@@ -1583,9 +1600,9 @@ export function createAutopilotEngine(deps) {
     // a coin that has WON for us this session earns extra re-entries — so it can buy a dip on a
     // proven winner and trade it again (the wave cooldown below makes it wait for the pullback, not
     // rebuy the top). Meh/losing coins keep the tight cap.
-    const baseMaxPerCoin = P.liquid ? 3 : 2;
-    const maxFor = (mint) => baseMaxPerCoin + ((state.coinWins[mint] || 0) > 0 ? 4 : 0);
+    const maxFor = (mint) => repeatBudgetForMint(state, P, mint);
     const reentryCoolMs = P.liquid ? 120_000 : 45_000;
+    const nameCoolMs = symbolCooldownMs(P);
     const scoredAll = rows
       .filter((r) => r && r.tokenMint && !held.has(r.tokenMint))
       .filter((r) => (state.coinLosses[r.tokenMint] || 0) < 2)  // stop re-aping a repeat loser
@@ -1607,12 +1624,12 @@ export function createAutopilotEngine(deps) {
       .filter((r) => symbolLoserCount(r.symbol) < 3) // CROSS-SESSION: skip serial-rug names (e.g. LONGDOG) that have lost us money 3+ times all-time
       .filter((r) => {
         // PILE-IN guard: clone swarms flood the feed as different mints with the SAME
-        // name and get bought 3x in seconds before any loss registers (ASTROGUY/Bob x3).
-        // Never hold two of the same name at once, and don't re-ape a name within 15s.
+        // name and get bought repeatedly before any loss registers. Never hold two of
+        // the same name at once, and don't re-ape a name immediately after a sell/open.
         const ns = normSym(r.symbol);
         if (state.open.some((p) => normSym(p.sym) === ns)) return false;
         const a = state.recentApeNames[ns];
-        return !a || nowMs - a > 15_000;
+        return !a || nowMs - a > nameCoolMs;
       })
       .map((r) => ({ r, reject: entryReject(r, P), fs: P.liquid ? liquidScore(r) : P.grind ? grindScore(r) : freshScore(r) }));
     // Reject-reason tally so a persistently-dry feed shows WHY (mc/age/liquidity/score/etc.)
@@ -1796,6 +1813,15 @@ export function createAutopilotEngine(deps) {
         if (!r || !r.tokenMint || held.has(r.tokenMint)) continue;
         if ((state.coinLosses[r.tokenMint] || 0) >= 2) continue; // don't re-ape a repeat loser
         if ((state.coinTrades[r.tokenMint] || 0) >= maxFor(r.tokenMint)) continue; // DIVERSIFY (winners earn more)
+        const ns = normSym(r.symbol);
+        if (ns) {
+          const se = state.symLosses[ns];
+          if (se && (se.count >= 2 || nowMs - (se.at || 0) <= 60_000)) continue;
+          if (state.open.some((p) => normSym(p.sym) === ns)) continue;
+          const lastNameApe = state.recentApeNames[ns];
+          if (lastNameApe && nowMs - lastNameApe <= nameCoolMs) continue;
+        }
+        if (symbolLoserCount(r.symbol) >= 3) continue;
         const last = state.recentSells[r.tokenMint];
         if (last && now() - last < 45_000) continue;             // wave cooldown
         const dev = getDevWallet(r.tokenMint);

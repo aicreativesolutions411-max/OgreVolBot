@@ -794,13 +794,54 @@ function walletObsBump(wallet, ranMult, rugged) {
 }
 // A wallet is a "proven winner" once it has enough sample, a real hit rate, and
 // far more runners than rugs.
-function isWinnerWallet(r) {
+function isDirectWinnerWallet(r) {
   return Boolean(r) && r.coins >= 3 && r.ran >= 2 && r.ran >= r.rugged * 2;
+}
+function isLinkedWinnerWallet(r) {
+  return Boolean(r) && r.linkedCoins >= 2 && r.linkedRan >= 1 && r.linkedRan >= (r.linkedRugged || 0) * 2;
+}
+function isWinnerWallet(r) {
+  return isDirectWinnerWallet(r) || isLinkedWinnerWallet(r);
+}
+function linkRelatedBuyerWallets(buyers = [], ranMult = 1, rugged = false) {
+  const unique = [...new Set((buyers || []).map((w) => String(w || "").trim()).filter(Boolean))];
+  if (unique.length < 2) return;
+  const leaders = unique.filter((w) => isKolWallet(w) || isDirectWinnerWallet(walletObs.get(w)));
+  if (!leaders.length) return;
+  for (const w of unique) {
+    if (leaders.includes(w)) continue;
+    const r = walletObs.get(w) || { coins: 0, ran: 0, rugged: 0, peakSum: 0 };
+    r.linkedCoins = (r.linkedCoins || 0) + 1;
+    if (ranMult >= 2) r.linkedRan = (r.linkedRan || 0) + 1;
+    if (rugged) r.linkedRugged = (r.linkedRugged || 0) + 1;
+    r.linkedPeakSum = (r.linkedPeakSum || 0) + ranMult;
+    r.linkedLeaders = Math.max(Number(r.linkedLeaders) || 0, leaders.length);
+    r.linkedAt = Date.now();
+    walletObs.set(w, r);
+  }
 }
 // A winner wallet's learned EXIT STYLE: the avg gain-multiple (from launch) at which
 // it tends to sell. null until we've seen it exit a couple times.
 function walletExitMult(r) {
   return (r && r.exitN >= 2) ? r.exitSum / r.exitN : null;
+}
+function recordWalletExit(mint, wallet) {
+  const w = String(wallet || "").trim();
+  if (!mint || !w) return;
+  const c = obsCoins.get(mint);
+  if (!c || !(c.firstMc > 0)) return;
+  let r = walletObs.get(w);
+  if (!r && isKolWallet(w)) r = { coins: 0, ran: 0, rugged: 0, peakSum: 0 };
+  if (!r || (!isWinnerWallet(r) && !isKolWallet(w))) return;
+  c.exitSeen = c.exitSeen || {};
+  if (c.exitSeen[w]) return;
+  c.exitSeen[w] = 1;
+  const gm = Math.max(1, (c.lastMc || c.firstMc) / c.firstMc);
+  r.exitSum = (r.exitSum || 0) + gm;
+  r.exitN = (r.exitN || 0) + 1;
+  if (r.exitN > 50) { r.exitSum = r.exitSum * 50 / r.exitN; r.exitN = 50; }
+  r.lastExitAt = Date.now();
+  walletObs.set(w, r);
 }
 // Smart-money read for a coin: are proven-winner wallets or tracked KOLs in its early
 // buyers right now? Also returns exitMult = the MOST CONSERVATIVE winner's typical exit
@@ -967,7 +1008,7 @@ let kolCopyFeedCache = { rows: [], at: 0 };
 let kolCopyFeedRefreshing = false;
 const KOL_COPY_FEED_TTL_MS = 90_000;                 // staleness window (background poller cadence)
 const KOL_COPY_FEED_MIN_WINRATE = 50;                // copy KOLs with a real, proven win-rate
-const KOL_COPY_FEED_FRESH_MS = 45 * 60 * 1000;       // KOL touched it within the last 45 min = "now"
+const KOL_COPY_FEED_FRESH_MS = Math.max(5 * 60 * 1000, Number(process.env.KOL_COPY_FEED_FRESH_MS) || 20 * 60 * 1000); // recent touch = "now"
 const KOL_COPY_FEED_MAX = 10;                         // bounded candidate list
 
 async function refreshKolCopyFeed() {
@@ -1088,18 +1129,7 @@ function sampleDevObservatory() {
           if (t.side === "buy") {
             if (c.buyers.length < 15 && !c.buyers.includes(w)) c.buyers.push(w);
           } else if (t.side === "sell" && c.firstMc > 0) {
-            const r = walletObs.get(w);
-            if (isWinnerWallet(r)) {
-              c.exitSeen = c.exitSeen || {};
-              if (!c.exitSeen[w]) {            // record each winner's exit on this coin once
-                c.exitSeen[w] = 1;
-                const gm = Math.max(1, (c.lastMc || c.firstMc) / c.firstMc); // gain-mult at their sell
-                r.exitSum = (r.exitSum || 0) + gm;
-                r.exitN = (r.exitN || 0) + 1;
-                if (r.exitN > 50) { r.exitSum = r.exitSum * 50 / r.exitN; r.exitN = 50; } // bounded rolling avg
-                walletObs.set(w, r);
-              }
-            }
+            recordWalletExit(mint, w);
           }
         }
       } catch {}
@@ -1120,6 +1150,7 @@ function sampleDevObservatory() {
         const rugged = (c.maxMc >= c.firstMc * 1.2 && c.lastMc <= c.maxMc * 0.3) || (c.firstMc > 0 && c.lastMc <= c.firstMc * 0.4);
         devObsBump(c.dev, ranMult, rugged);
         for (const w of (c.buyers || [])) walletObsBump(w, ranMult, rugged); // score early buyers
+        linkRelatedBuyerWallets(c.buyers || [], ranMult, rugged); // detect fresh wallets tied to tracked/KOL wallets
         marketRecent.push({ ranMult, rugged, at: now }); // feed the market-wide tape
         if (marketRecent.length > 600) marketRecent.splice(0, marketRecent.length - 600);
         earlyBuyers.delete(mint); // done with this coin's live buyer buffer
@@ -1158,9 +1189,10 @@ async function pollObsTradesSwapApi() {
         let seen = obsSwapSeenTx.get(mint); if (!seen) { seen = new Set(); obsSwapSeenTx.set(mint, seen); }
         for (const t of trades) {
           const sig = String(t.tx || t.slotIndexId || ""); if (!sig || seen.has(sig)) continue; seen.add(sig);
-          if (String(t.type || "").toLowerCase() === "buy") {
-            const trader = String(t.userAddress || ""); if (trader) recordEarlyBuyer(mint, { side: "buy", trader });
-          }
+          const side = String(t.type || "").toLowerCase();
+          const trader = String(t.userAddress || ""); if (!trader) continue;
+          if (side === "buy") recordEarlyBuyer(mint, { side: "buy", trader });
+          else if (side === "sell") recordWalletExit(mint, trader);
         }
         if (seen.size > 200) { const a = [...seen]; obsSwapSeenTx.set(mint, new Set(a.slice(a.length - 150))); }
       }));
@@ -3600,8 +3632,8 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
 
     if (request.method === "GET" && pathname === "/api/chart") {
-      // FREE, edge-cacheable chart data for the SlimeWire native chart: GeckoTerminal OHLCV+trades
-      // (post-DEX) + Pump bonding-curve fallback (pre-DEX) + DexScreener stats. No Helius / no RPC.
+      // FREE, edge-cacheable chart data for the SlimeWire native chart: Solana Tracker keyed
+      // OHLCV primary + swap-api Pump fallback/trades + DexScreener stats. No Helius / no RPC.
       const cmint = String(requestUrl.searchParams.get("ca") || requestUrl.searchParams.get("mint") || "").trim();
       const ctf = String(requestUrl.searchParams.get("tf") || "5m");
       if (!solanaPublicKeyLike(cmint)) { sendWebJson(request, response, 400, { ok: false, error: "invalid mint" }); return; }
@@ -3839,7 +3871,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
               netPnlSol: r2(trades.reduce((a, t) => a + (Number(t.pnl) || 0), 0)),
               observatory: (() => { let s = {}; try { s = pumpPortalStream.stats() || {}; } catch {} return { devsTracked: devObs.size, coinsWatching: obsCoins.size, walletsTracked: walletObs.size, winnerWallets: [...walletObs.values()].filter(isWinnerWallet).length, earlyBuyersTracked: earlyBuyers.size, autoKols: autoKolWallets.size, kolCopyCandidates: (kolCopyFeedCache.rows || []).length, kolCopyAgeSec: kolCopyFeedCache.at ? Math.round((Date.now() - kolCopyFeedCache.at) / 1000) : null, smartMoneyActive: smartMoneyReady(), streamConnected: Boolean(s.connected), streamLastMsgSec: Number.isFinite(s.lastMessageAgoMs) ? Math.round(s.lastMessageAgoMs / 1000) : null, streamTrades: (s.counters && s.counters.trades) || 0, streamCreations: (s.counters && s.counters.creations) || 0, tradeSubs: s.tradeSubscriptions || 0, mintsWithTrades: s.mintsWithTrades || 0, buyWsConnected: buyWsDiag.connected, buyWsSubs: buyWsSubs.size, buyWsTrades: buyWsDiag.trades, marketSample: (marketTape()?.sample) || 0 }; })(),
               marketTape: marketTape(),
-              topWallets: [...walletObs.entries()].filter(([, r]) => isWinnerWallet(r)).sort((a, b) => b[1].peakSum - a[1].peakSum).slice(0, 8).map(([w, r]) => ({ wallet: shortMint(w), kol: KOL_WALLETS.has(w), coins: r.coins, ran: r.ran, rugged: r.rugged, avgPeak: r.coins ? r2(r.peakSum / r.coins) : 0 })),
+              topWallets: [...walletObs.entries()].filter(([, r]) => isWinnerWallet(r)).sort((a, b) => ((b[1].peakSum || 0) + (b[1].linkedPeakSum || 0)) - ((a[1].peakSum || 0) + (a[1].linkedPeakSum || 0))).slice(0, 8).map(([w, r]) => ({ wallet: shortMint(w), kol: KOL_WALLETS.has(w), linked: isLinkedWinnerWallet(r), coins: r.coins, ran: r.ran, rugged: r.rugged, linkedCoins: r.linkedCoins || 0, linkedRan: r.linkedRan || 0, linkedRugged: r.linkedRugged || 0, avgPeak: r.coins ? r2(r.peakSum / r.coins) : 0, linkedAvgPeak: r.linkedCoins ? r2((r.linkedPeakSum || 0) / r.linkedCoins) : 0 })),
               byScore: bucket((t) => t.fs == null ? null : (t.fs < 57 ? "<57" : t.fs < 62 ? "57-61" : t.fs < 67 ? "62-66" : t.fs < 72 ? "67-71" : "72+")),
               byMc: bucket((t) => t.entryMc == null ? null : (t.entryMc < 2100 ? "<2.1k" : t.entryMc < 2500 ? "2.1-2.5k" : t.entryMc < 3500 ? "2.5-3.5k" : "3.5k+")),
               byAge: bucket((t) => t.entryAge == null ? null : (t.entryAge < 30 ? "<30s" : t.entryAge < 120 ? "30-120s" : t.entryAge < 300 ? "2-5m" : "5m+")),
@@ -24303,30 +24335,17 @@ async function resolveCashtagToMint(symbol) {
 }
 
 // ── SLIMEWIRE NATIVE CHART DATA (free, no Helius) ───────────────────────────────────────────
-// GeckoTerminal public API (free, no key) gives OHLCV candles + recent trades for any DEX pool;
-// DexScreener (free) resolves the pool + supplies headline stats; Pump's bonding-curve candles are
-// the pre-migration fallback. Cached ~8s so many viewers hit our cache, not the upstreams.
+// Solana Tracker keyed OHLCV is the primary candle source; swap-api Pump candles/trades are the
+// fresh-launch fallback and live tape. DexScreener supplies headline stats. Cached ~8s so many
+// viewers hit our cache, not the upstreams.
 const CHART_API_CACHE = new Map();
-const GT_API = "https://api.geckoterminal.com/api/v2";
-let lastGtStatus = 0;
-async function gtFetch(p, timeoutMs = 6000) {
-  const ctrl = new AbortController();
-  const to = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const r = await fetch(GT_API + p, { headers: { accept: "application/json", "user-agent": "Mozilla/5.0 (compatible; SlimeWire/1.0)" }, signal: ctrl.signal });
-    lastGtStatus = r.status;
-    if (!r.ok) return null;
-    return await r.json();
-  } catch { lastGtStatus = -1; return null; }
-  finally { clearTimeout(to); }
-}
-function gtTimeframe(tf) { if (tf === "1m") return ["minute", 1]; if (tf === "15m") return ["minute", 15]; if (tf === "1h") return ["hour", 1]; return ["minute", 5]; }
 async function buildChartData(mint, tf) {
   const key = `${mint}:${tf}`;
   const hit = CHART_API_CACHE.get(key);
   if (hit && Date.now() - hit.at < 8000) return hit.data;
   let stage = "pump", pairAddress = "";
-  let stats = { symbol: "", name: "", priceUsd: 0, mc: 0, liq: 0, vol24: 0, change24h: 0 };
+  let candleSource = "";
+  let stats = { symbol: "", name: "", priceUsd: 0, mc: 0, liq: 0, vol24: 0, change24h: 0, buys24: 0, sells24: 0, holders: 0 };
   let candles = [], trades = [];
   const diag = {};
   // 1) PRIMARY candles — Solana Tracker (keyed; covers pump + graduated coins; does NOT per-IP
@@ -24344,7 +24363,7 @@ async function buildChartData(mint, tf) {
         .filter((k) => k.t > 0 && k.c > 0)
         .sort((p, q) => p.t - q.t);
       diag.stCandles = candles.length;
-      if (candles.length) stage = "dex";
+      if (candles.length) { stage = "dex"; candleSource = "solana-tracker"; }
     } catch (e) { diag.stError = (e && e.message) || "st-fail"; }
   }
   // 2) STATS — DexScreener (the SAME source as the app's top bar, so the numbers MATCH it; reliable
@@ -24364,6 +24383,8 @@ async function buildChartData(mint, tf) {
       stats.liq = Number(best.liquidity && best.liquidity.usd) || stats.liq;
       stats.vol24 = Number(best.volume && best.volume.h24) || stats.vol24;
       stats.change24h = Number(best.priceChange && best.priceChange.h24) || stats.change24h;
+      stats.buys24 = Number(best.txns && best.txns.h24 && best.txns.h24.buys) || stats.buys24;
+      stats.sells24 = Number(best.txns && best.txns.h24 && best.txns.h24.sells) || stats.sells24;
       if (candles.length) stage = "dex";
     }
   } catch (e) { diag.dexError = (e && e.message) || "dex-fail"; }
@@ -24373,7 +24394,7 @@ async function buildChartData(mint, tf) {
     const pc = await fetch(`https://swap-api.pump.fun/v1/coins/${mint}/candles?interval=${tf}&limit=150`, { headers: { accept: "application/json" } }).then((r) => r.ok ? r.json() : null).catch(() => null);
     if (Array.isArray(pc) && pc.length) {
       candles = pc.map((k) => ({ t: Math.floor((Number(k.timestamp) || 0) / 1000), o: Number(k.open) || 0, h: Number(k.high) || 0, l: Number(k.low) || 0, c: Number(k.close) || 0, v: Number(k.volume) || 0 })).filter((k) => k.c > 0).sort((p, q) => p.t - q.t);
-      if (candles.length) stage = "pump";
+      if (candles.length) { stage = "pump"; candleSource = "swap-api"; }
     }
     if (!stats.symbol || !stats.mc) {
       const pm = await getPumpFunTokenMetadata(mint).catch(() => null);
@@ -24392,14 +24413,32 @@ async function buildChartData(mint, tf) {
     const rows = Array.isArray(tr) ? tr : (tr && Array.isArray(tr.trades) ? tr.trades : []);
     if (rows.length) {
       trades = rows.slice(0, 60).map((x) => ({
-        t: Math.floor(Date.parse(x.timestamp) / 1000) || 0,
-        side: x.type === "sell" ? "sell" : "buy",
-        usd: Number(x.amountUsd) || 0,
-        price: Number(x.priceUsd) || 0
+        t: (() => {
+          let ts = Number(x.timestamp ?? x.time ?? x.t) || 0;
+          if (ts > 1e12) ts = Math.floor(ts / 1000);
+          if (!(ts > 0)) ts = Math.floor(Date.parse(x.timestamp || x.time || x.createdAt || "") / 1000) || 0;
+          return ts;
+        })(),
+        side: /sell/i.test(String(x.type || x.side || x.kind || "")) ? "sell" : "buy",
+        usd: firstMeaningfulNumber(x.amountUsd, x.usd, x.volumeUsd, x.volume_usd, x.volumeInUsd, x.amount_usd) || 0,
+        price: firstMeaningfulNumber(x.priceUsd, x.price_usd, x.price, x.tokenPriceUsd) || 0
       })).filter((x) => x.t > 0);
     }
   } catch (e) { diag.tradesError = (e && e.message) || "trades-fail"; }
-  const data = { ok: true, mint, tf, stage, symbol: stats.symbol, name: stats.name, priceUsd: stats.priceUsd, mc: stats.mc, liq: stats.liq, vol24: stats.vol24, change24h: stats.change24h, candles, trades, at: Date.now() };
+  try {
+    const cachedRug = rugcheckFullCache.get(String(mint || "").trim());
+    if (cachedRug && Date.now() - Number(cachedRug.at || 0) < 10 * 60 * 1000) {
+      stats.holders = Number(cachedRug.value?.holderCount) || 0;
+    } else {
+      void fetchRugcheckFull(mint).catch(() => null);
+    }
+  } catch {}
+  const data = {
+    ok: true, mint, tf, stage, source: candleSource || (candles.length ? stage : ""),
+    symbol: stats.symbol, name: stats.name, priceUsd: stats.priceUsd, mc: stats.mc, liq: stats.liq,
+    vol24: stats.vol24, change24h: stats.change24h, buys24: stats.buys24, sells24: stats.sells24,
+    holders: stats.holders, candles, trades, at: Date.now()
+  };
   CHART_API_CACHE.set(key, { at: Date.now(), data });
   if (CHART_API_CACHE.size > 400) { const old = [...CHART_API_CACHE.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, 200); for (const [k] of old) CHART_API_CACHE.delete(k); }
   return data;
@@ -45204,10 +45243,3 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
-
-
-
-
-
-
-

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
+const chartLabSource = fs.readFileSync(new URL("../web/public/chart-lab.html", import.meta.url), "utf8");
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const packageSource = fs.readFileSync(new URL("../package.json", import.meta.url), "utf8");
 
@@ -57,6 +58,26 @@ test("chart iframe uses cached bootstrap URLs and does not wait on feed refresh"
   const smartChartBranch = refresh.slice(smartChartBranchStart, refresh.indexOf('} else if (["trade"', smartChartBranchStart));
   assert.match(smartChartBranch, /refreshWalletState/);
   assert.doesNotMatch(smartChartBranch, /refreshLivePairBuckets|loadLivePairs|loadKolScan|loadWatchlist|loadAll/);
+});
+
+test("native chart loads candles from our server first and has no browser GeckoTerminal candle path", () => {
+  assert.match(chartLabSource, /\/api\/chart\?ca=/);
+  assert.match(chartLabSource, /function loadReal\(\)\{ if\(!CA\)return; loadServer\(\); loadDex\(\); \}/);
+  assert.match(chartLabSource, /setInterval\(loadServer,15000\)/);
+  assert.match(chartLabSource, /applyStats\(d,false\)/);
+  assert.match(chartLabSource, /applyTradeTicks\(d\.trades\)/);
+  assert.match(chartLabSource, /id="s_holders"/);
+  assert.doesNotMatch(chartLabSource, /function loadGT|api\.geckoterminal\.com|GTB=|\/ohlcv\//);
+});
+
+test("native chart API uses Solana Tracker primary with swap-api fallback", () => {
+  const body = functionBody(serverSource, "buildChartData");
+  assert.match(body, /solanaTrackerJson\(`\/chart\/\$\{mint\}\?type=\$\{encodeURIComponent\(tf\)\}&currency=usd`/);
+  assert.match(body, /Array\.isArray\(st\.oclhv\)/);
+  assert.match(body, /swap-api\.pump\.fun\/v1\/coins\/\$\{mint\}\/candles/);
+  assert.match(body, /swap-api\.pump\.fun\/v2\/coins\/\$\{mint\}\/trades/);
+  assert.match(body, /source: candleSource/);
+  assert.doesNotMatch(body, /gtFetch|GT_API|fetchGeckoOhlcv|resolveGeckoPoolForMint/);
 });
 
 test("chart prefetch and debug commands are wired", () => {

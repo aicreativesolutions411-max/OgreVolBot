@@ -13,6 +13,7 @@ import {
   historyGateReject,
   evalExit,
   canOpen,
+  repeatBudgetForMint,
   equity,
   createAutopilotEngine
 } from "../src/lib/autopilotEngine.js";
@@ -43,10 +44,10 @@ function goodRow(over = {}) {
     pairAgeSeconds: 18,
     marketCap: 2300,
     liquidityUsd: 6000,
-    volume5m: 120,
+    volume5m: 60,
     buys5m: 20,
     sells5m: 8,
-    bestPickScore: 40,
+    bestPickScore: 0,
     ...over
   };
 }
@@ -65,7 +66,7 @@ test("low-churn: raises entry bar, concentrates size, caps positions at 3", asyn
 
   // engine respects maxOpen 3 in low-churn
   let t = 0;
-  const rows = Array.from({ length: 8 }, (_, i) => goodRow({ tokenMint: `Z${i}`, symbol: `Z${i}`, bestPickScore: 100 }));
+  const rows = Array.from({ length: 8 }, (_, i) => goodRow({ tokenMint: `Z${i}`, symbol: `Z${i}` }));
   const engine = createAutopilotEngine({
     getFreshFeed: async () => rows,
     getPairLite: async () => ({ marketCap: 5000, liquidityUsd: 6000 }),
@@ -186,6 +187,13 @@ test("entryReject: passes a clean fresh mover", () => {
   assert.equal(entryReject(goodRow(), P), null);
 });
 
+test("entryReject: fresh path rejects the live-losing 72+ blowoff score band", () => {
+  const P = aggParams(baseState({ mode: "steady" }));
+  const blowoff = goodRow({ volume5m: 180, buys5m: 35, sells5m: 3, bestPickScore: 100 });
+  assert.equal(entryReject(blowoff, P), "overscore");
+  assert.ok(freshScore(blowoff) >= P.maxScore);
+});
+
 test("entryReject: blocks instant-rug bait", () => {
   const P = aggParams(baseState());
   assert.equal(entryReject(goodRow({ pairAgeSeconds: 1 }), P), "age");
@@ -199,7 +207,7 @@ test("entryReject: blocks instant-rug bait", () => {
 test("entryReject: a $2k fresh launch with ~$2k liquidity is NOT rejected for liquidity", () => {
   const P = aggParams(baseState());
   // the real-market case that was wrongly filtered: mc≈liq≈2k
-  const row = goodRow({ marketCap: 2300, liquidityUsd: 2200, pairAgeSeconds: 30, volume5m: 90, buys5m: 1, sells5m: 0 });
+  const row = goodRow({ marketCap: 2300, liquidityUsd: 2200, pairAgeSeconds: 30, volume5m: 90, buys5m: 1, sells5m: 1 });
   assert.equal(entryReject(row, P), null);
 });
 
@@ -409,6 +417,15 @@ test("canOpen: respects soft max and over-deployment", () => {
   assert.equal(canOpen(s, 0.05), false, "maxOpen reached");
 });
 
+test("repeatBudgetForMint: one win earns one fresh re-entry, scratches/losses revoke it", () => {
+  const P = aggParams(baseState({ mode: "steady" }));
+  assert.equal(repeatBudgetForMint(baseState(), P, "M1"), 1);
+  assert.equal(repeatBudgetForMint(baseState({ coinWins: { M1: 1 }, coinLosses: {} }), P, "M1"), 2);
+  assert.equal(repeatBudgetForMint(baseState({ coinWins: { M1: 1 }, coinLosses: { M1: 1 } }), P, "M1"), 1);
+  const scalpP = aggParams(baseState({ mode: "scalp" }));
+  assert.equal(repeatBudgetForMint(baseState({ coinWins: { M1: 3 }, coinLosses: { M1: 1 } }), scalpP, "M1"), 4);
+});
+
 test("equity: realizable — sellable bag gets the haircut", () => {
   // A 2x-marked bag WITH real liquidity contributes its haircut value (60% of the upside),
   // not the raw 2x mark: a thin fresh curve can't actually pay the full marked gain.
@@ -557,6 +574,15 @@ test("server autopilot sell adapter passes original token amount to sell helper"
   assert.match(adapter, /\.\.\.\(baseRawAmount \? \{ baseRawAmount \} : \{\}\)/);
 });
 
+test("server observatory learns linked wallets and exits from working swap-api trades", () => {
+  const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+  assert.match(serverSource, /function linkRelatedBuyerWallets/);
+  assert.match(serverSource, /function isLinkedWinnerWallet/);
+  assert.match(serverSource, /function recordWalletExit/);
+  assert.match(serverSource, /else if \(side === "sell"\) recordWalletExit\(mint, trader\)/);
+  assert.match(serverSource, /linkRelatedBuyerWallets\(c\.buyers \|\| \[\], ranMult, rugged\)/);
+});
+
 test("engine: live mode refuses to start without a wallet", async () => {
   const engine = createAutopilotEngine({
     getFreshFeed: async () => [],
@@ -686,11 +712,10 @@ test("engine: lock-gains CONTINUE mode banks the green and keeps trading", async
 test("engine: loss cap flattens and stops", async () => {
   let t = 0;
   let mc = 5000;
-  // Many fresh rows so it deploys most of the bankroll across several positions;
-  // tanking them all then drops realized equity below the 70% cap. Use ELITE-score rows
-  // (very fresh + high provenance => fs >= 72) so they bypass momentum-confirmation and
-  // deploy immediately — this test is about the loss-cap backstop, not entry selectivity.
-  const rows = Array.from({ length: 8 }, (_, i) => goodRow({ tokenMint: `Mint${i}`, symbol: `C${i}`, pairAgeSeconds: 20, bestPickScore: 95 }));
+  // Many fresh mid-score rows so it deploys most of the bankroll across several positions;
+  // tanking them all then drops realized equity below the cap. This test is about the
+  // loss-cap backstop, not the blocked 72+ blowoff band.
+  const rows = Array.from({ length: 8 }, (_, i) => goodRow({ tokenMint: `Mint${i}`, symbol: `C${i}`, pairAgeSeconds: 20 }));
   const engine = createAutopilotEngine({
     getFreshFeed: async () => rows,
     getPairLite: async () => ({ marketCap: mc, liquidityUsd: 6000 }),
@@ -699,12 +724,12 @@ test("engine: loss cap flattens and stops", async () => {
     now: () => t,
     persist: async () => {}
   });
-  // Tighter loss cap (10%) + explicit maxTradeSol so the backstop is exercised independently
+  // Tighter loss cap (5%) + explicit maxTradeSol so the backstop is exercised independently
   // of per-trade size tuning. The unproven-coin conviction cap (0.7x) keeps total deployment
-  // conservative (~19% of bank across 5 positions), so a 20% cap would sit just out of reach;
-  // 10% definitively breaches when every position is tanked. This test verifies the loss-cap
+  // conservative, so a 20% cap would sit out of reach in this fixture; 5% definitively breaches
+  // when several positions are tanked. This test verifies the loss-cap
   // backstop FIRES, not the entry-sizing math.
-  await engine.start({ solBudget: 1, minutes: 60, mode: "degen", live: false, maxTradeSol: 0.1, lossCapFrac: 0.1 });
+  await engine.start({ solBudget: 1, minutes: 60, mode: "degen", live: false, maxTradeSol: 0.1, lossCapFrac: 0.05 });
   for (let i = 0; i < 3; i++) {
     t += 2200;
     await engine._tick();

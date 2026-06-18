@@ -16186,7 +16186,7 @@ function dexChartEmbedUrl(tokenOrMint, options = {}) {
 function smartChartFrameUrl(token = {}, mode = "chart") {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
   // SlimeWire NATIVE chart is the only chart now — keep users on-site (it shows the same info via our
-  // free /api/chart: GeckoTerminal candles once on a DEX, Pump bonding-curve candles for fresh launches).
+  // free /api/chart: Solana Tracker candles primary, swap-api Pump candles for fresh launches).
   // STABLE src — no live values in the URL (a changing ?mc= made the iframe reload/flash each
   // refresh). Symbol is stable per coin, so it's safe to pass; the chart pulls real MC (market_cap_usd,
   // not FDV) + live candles itself.
