@@ -1102,6 +1102,39 @@ async function runBrainSeedGrab(opts = {}) {
   return brainSeedState;
 }
 
+// TRICKLE SEED — the safe auto path. Seeds a couple proven-trader wallets per cycle (called every
+// 30s) so the roster fills slowly without the burst that overloaded the instance. Walks the
+// top-traders leaderboard a page at a time, skips wallets already seeded, persists periodically,
+// and stops at the target. Per-cycle load = ~1-2 ST trade fetches → trivial, never spikes health.
+const seedTrickle = { page: 1, idx: 0, pageData: null, done: false, seeded: 0, scanned: 0, lastErr: null };
+async function pollSeedTrickle() {
+  try {
+    if (!CONFIG.solanaTrackerApiKey || seedTrickle.done) return;
+    if ([...walletObs.values()].filter(isWinnerWallet).length >= 150) { seedTrickle.done = true; return; }
+    if (seedTrickle.page > 8) { seedTrickle.done = true; return; }        // ~200 wallets ceiling
+    if (!seedTrickle.pageData) {
+      try {
+        const d = await solanaTrackerJson(`/top-traders/all/${seedTrickle.page}`, { cacheTtlMs: 0, timeoutMs: 9000 });
+        seedTrickle.pageData = (d && d.wallets) || []; seedTrickle.idx = 0;
+        if (!seedTrickle.pageData.length) { seedTrickle.done = true; return; }
+      } catch (e) { seedTrickle.lastErr = e && e.message; return; }       // try again next cycle
+    }
+    let did = 0;
+    while (seedTrickle.idx < seedTrickle.pageData.length && did < 2) {    // at most 2 wallets/cycle
+      const row = seedTrickle.pageData[seedTrickle.idx++]; seedTrickle.scanned += 1;
+      const w = row && row.wallet, s = row && row.summary;
+      if (!w || !s) continue;
+      if ((walletObs.get(w) || {}).seeded) continue;                     // already seeded — skip (no re-fetch)
+      if ((Number(s.winPercentage) || 0) < 55) continue;
+      if (((Number(s.totalWins) || 0) + (Number(s.totalLosses) || 0)) < 50) continue;
+      if ((Number(s.total) || 0) <= 0) continue;
+      try { if (await seedWinnerWallet(w, s)) { seedTrickle.seeded += 1; did += 1; } } catch {}
+    }
+    if (seedTrickle.idx >= seedTrickle.pageData.length) { seedTrickle.page += 1; seedTrickle.pageData = null; }
+    if (did > 0 && seedTrickle.seeded % 8 === 0) { rebuildWalletClusters(); await savePersistentState().catch(() => {}); }
+  } catch (e) { seedTrickle.lastErr = e && e.message; }
+}
+
 function rememberTrackedKolWallet(wallet, rec = {}) {
   const w = String(wallet || "").trim();
   if (!w) return;
@@ -1699,24 +1732,13 @@ function startDevObservatory() {
   setInterval(() => { void sampleKolSignalOutcomes(); }, 60_000);
   setInterval(() => { void pollObsTradesSwapApi(); }, 18_000); // resurrect the buyer flywheel via the working swap-api source
   setInterval(() => { void pollWalletFunders(); }, 60_000);    // FUNDING GRAPH: resolve winner funders + clusters (free RPC, cached forever)
-  // ONE-TIME LOOP-PROOF AUTO-SEED. The earlier version crash-looped (fired 25s after every boot,
-  // overloaded the instance, re-fired on restart). This version is safe: (1) fires 2min after boot
-  // (instance settled), (2) the grab is now HARDENED (small batch, gentle pacing, persist-once),
-  // and (3) it persists an "attempted" flag BEFORE running — so even if it ever crashed, the next
-  // boot sees the flag and NEVER re-runs. Worst case = one restart, no loop. Runs while ST Premium
-  // is active; once done it won't re-run (flag + the persisted winner roster both gate it).
-  setTimeout(async () => {
-    try {
-      if (!CONFIG.solanaTrackerApiKey) return;
-      const flag = await readJson(BRAIN_SEED_FLAG_FILE).catch(() => null);
-      if (flag && flag.attemptedAt) return;                       // already attempted once — never loop
-      const winners = [...walletObs.values()].filter(isWinnerWallet).length;
-      if (winners >= 50) return;                                  // already seeded enough
-      await writeJsonFile(BRAIN_SEED_FLAG_FILE, { attemptedAt: Date.now() }).catch(() => {}); // PERSIST before running
-      console.log(`[brain-seed] one-time auto-seed starting (hardened, loop-proof; ${winners} winners now)`);
-      void runBrainSeedGrab({ maxPages: 6 });
-    } catch {}
-  }, 120_000);
+  // TRICKLE SEED (replaces the burst grab that twice overloaded this single instance's health
+  // check). Seeds just ~2 proven-trader wallets every 30s — tiny, sustained, never a burst — so the
+  // roster fills over ~30-40min without ever spiking CPU/memory. Self-gating (stops at 150 winners
+  // or 8 pages) and idempotent (skips already-seeded wallets), so a restart resumes harmlessly. This
+  // is the SAFE way to seed on one small box; the burst /api/web/autopilot/seed endpoint stays for
+  // manual use but trickle is what auto-runs.
+  setInterval(() => { void pollSeedTrickle(); }, 30_000);
   // AUTO-KOL: load the saved roster, then harvest proven KOLs from the tracker leaderboard now and
   // every 10 min so the copy-trade roster stays fresh (cheap — the KOL scan is cached internally).
   void loadAutoKolWallets().then(() => { void refreshAutoKolWallets(); });
