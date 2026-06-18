@@ -81,8 +81,77 @@ function deriveStyle(trades) {
   };
 }
 
+// PHASE 2 — FIRST-BUYER ALPHA: wallets that repeatedly got into RUNNER tokens early AND made money.
+// The lifetime-PnL leaderboard (phase 1) misses these — they're the "in before it ran" wallets we most
+// want to copy. We scan first-buyers of many current runner tokens, keep only PROFITABLE early entries,
+// and qualify a wallet when it shows that across >= FB_MIN_RUNNERS independent runners (repeat = skill).
+const FB_TOKENS = Number(args.fbTokens ?? 300);       // how many runner tokens to scan (0 = skip phase 2)
+const FB_MIN_RUNNERS = Number(args.fbMinRunners || 2); // appear early+profitable in >= N distinct runners
+const FB_LIMIT = Number(args.fbLimit || 100);
+
+async function gatherRunnerTokens(max) {
+  const mints = new Set();
+  for (const ep of ["/tokens/trending", "/tokens/volume", "/tokens/multi/graduated", "/tokens/latest"]) {
+    if (mints.size >= max) break;
+    try {
+      const d = await stJson(ep);
+      for (const it of (Array.isArray(d) ? d : [])) {
+        const m = (it && it.token && it.token.mint) || (it && it.mint);
+        if (m && m !== SOL_MINT) mints.add(m);
+        if (mints.size >= max) break;
+      }
+    } catch (e) { console.warn(`[mass-grab] runner list ${ep} failed: ${e.message}`); }
+    await sleep(PER_PAGE_GAP_MS);
+  }
+  return [...mints].slice(0, max);
+}
+
+async function firstBuyerPhase(wallets) {
+  if (FB_TOKENS <= 0) return { skipped: true };
+  const tokens = await gatherRunnerTokens(FB_TOKENS);
+  console.log(`[mass-grab] phase2: scanning first-buyers of ${tokens.length} runner tokens`);
+  const tally = new Map();                            // wallet -> { runners:Set, pnl, invested }
+  let fbCalls = 0, scannedTok = 0;
+  for (const tok of tokens) {
+    let buyers = [];
+    try { buyers = (await stJson(`/first-buyers/${tok}?limit=${FB_LIMIT}`)) || []; fbCalls++; } catch {}
+    for (const b of (Array.isArray(buyers) ? buyers : [])) {
+      const w = b && b.wallet; if (!w) continue;
+      const total = Number(b.total) || 0;             // realized + unrealized profit on this token
+      if (total <= 0) continue;                       // ONLY profitable early entries are alpha
+      let g = tally.get(w); if (!g) { g = { runners: new Set(), pnl: 0, invested: 0 }; tally.set(w, g); }
+      g.runners.add(tok); g.pnl += total; g.invested += Number(b.total_invested) || 0;
+    }
+    scannedTok++;
+    if (scannedTok % 50 === 0) console.log(`[mass-grab] phase2: ${scannedTok}/${tokens.length} tokens, ${tally.size} profitable early-buyers so far`);
+    await sleep(90);
+  }
+  const kept = [...tally.entries()].filter(([, g]) => g.runners.size >= FB_MIN_RUNNERS)
+    .sort((a, b) => b[1].runners.size - a[1].runners.size || b[1].pnl - a[1].pnl);
+  console.log(`[mass-grab] phase2: ${tally.size} profitable early-buyers → ${kept.length} repeat (>=${FB_MIN_RUNNERS} runners), ${fbCalls} first-buyer calls`);
+  let added = 0;
+  for (const [w, g] of kept) {
+    let trades = [];
+    try { const d = await stJson(`/wallet/${encodeURIComponent(w)}/trades?limit=${TRADES_LIMIT}`); trades = (d && d.trades) || []; } catch {}
+    const style = deriveStyle(trades);
+    const N = 10;
+    const rec = wallets[w] || { coins: 0, ran: 0, rugged: 0, peakSum: 0 };
+    rec.earlyAlpha = true;
+    rec.earlyRunners = g.runners.size;
+    rec.earlyPnl = Math.round(g.pnl);
+    rec.earlyRoi = g.invested > 0 ? Math.round((g.pnl / g.invested) * 100) : null;
+    if (!(rec.holdN > 0) && style.holdMs != null) { rec.holdMsSum = style.holdMs * N; rec.holdN = N; }
+    if (!(rec.entryMcN > 0) && style.entryMc != null) { rec.entryMcSum = style.entryMc * N; rec.entryMcN = N; }
+    if (!(rec.exitN > 0) && style.exitMult != null) { rec.exitSum = style.exitMult * N; rec.exitN = N; }
+    if (!wallets[w]) added++;
+    wallets[w] = rec;
+    await sleep(PER_WALLET_GAP_MS);
+  }
+  return { tokens: tokens.length, candidates: tally.size, kept: kept.length, added, fbCalls };
+}
+
 async function main() {
-  console.log(`[mass-grab] base=${BASE} pages<=${MAX_PAGES} tradesLimit=${TRADES_LIMIT} winMin=${WIN_MIN} tradesMin=${TRADES_MIN}`);
+  console.log(`[mass-grab] base=${BASE} pages<=${MAX_PAGES} tradesLimit=${TRADES_LIMIT} winMin=${WIN_MIN} tradesMin=${TRADES_MIN} fbTokens=${FB_TOKENS}`);
   const wallets = {};
   let scanned = 0, seeded = 0;
   for (let page = 1; page <= MAX_PAGES; page++) {
@@ -120,17 +189,21 @@ async function main() {
       await sleep(PER_WALLET_GAP_MS);
     }
     console.log(`[mass-grab] page ${page}: +${pageSeeded} winners (total ${seeded} from ${scanned} scanned, ${calls} ST calls)`);
-    if (data && data.hasNext === false) { console.log(`[mass-grab] hasNext=false — done`); break; }
+    if (data && data.hasNext === false) { console.log(`[mass-grab] hasNext=false — leaderboard done`); break; }
     await sleep(PER_PAGE_GAP_MS);
   }
+  console.log(`[mass-grab] phase1 done: ${seeded} leaderboard winners. Starting phase2 (first-buyer alpha)...`);
+  let fb = { skipped: true };
+  try { fb = await firstBuyerPhase(wallets); } catch (e) { console.warn(`[mass-grab] phase2 failed: ${e.message}`); }
+  const total = Object.keys(wallets).length;
   const out = {
-    meta: { grabbedAtMs: Date.now(), source: "solana-tracker/top-traders", pagesScanned: undefined, scanned, seeded, stCalls: calls, winMin: WIN_MIN, tradesMin: TRADES_MIN, version: 1 },
+    meta: { grabbedAtMs: Date.now(), source: "solana-tracker/top-traders+first-buyers", scanned, leaderboardWinners: seeded, firstBuyer: fb, totalWallets: total, stCalls: calls, winMin: WIN_MIN, tradesMin: TRADES_MIN, version: 2 },
     wallets
   };
   const outPath = path.resolve(process.cwd(), OUT);
   await mkdir(path.dirname(outPath), { recursive: true });
   await writeFile(outPath, JSON.stringify(out));
-  console.log(`[mass-grab] DONE — ${seeded} winner wallets, ${scanned} scanned, ${calls} ST calls → ${outPath} (${(JSON.stringify(out).length / 1024).toFixed(0)} KB)`);
+  console.log(`[mass-grab] DONE — ${total} wallets (${seeded} leaderboard + ${(fb && fb.added) || 0} early-alpha), ${scanned} scanned, ${calls} ST calls → ${outPath} (${(JSON.stringify(out).length / 1024).toFixed(0)} KB)`);
 }
 
 main().catch((e) => { console.error("[mass-grab] fatal", e); process.exit(1); });

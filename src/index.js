@@ -830,6 +830,10 @@ function isDirectWinnerWallet(r) {
   // SEEDED winner (Solana Tracker top-trader grab): proven lifetime win% + sample + positive PnL.
   // A statistical PRIOR — good enough to follow at small size, but not yet validated by our trades.
   if (r.seeded && (r.seedWin || 0) >= 55 && (r.seedTrades || 0) >= 50 && (r.seedPnl || 0) > 0) return true;
+  // EARLY-ALPHA winner (first-buyer grab): got into >=2 INDEPENDENT runner tokens early AND profitably.
+  // Repeat profitable early entry on unrelated runners is skill, not luck — the "in before it ran"
+  // wallet the lifetime board misses. Also a prior (follow at small size until our trades validate it).
+  if (r.earlyAlpha && (r.earlyRunners || 0) >= 2 && (r.earlyPnl || 0) > 0) return true;
   return false;
 }
 function isLinkedWinnerWallet(r) {
@@ -1456,8 +1460,8 @@ async function mergeBrainGrabFile() {
       if (!w || !rec) continue;
       const prev = walletObs.get(w);
       if (prev) {
-        prev.seeded = true;
-        prev.seedWin = rec.seedWin; prev.seedTrades = rec.seedTrades; prev.seedPnl = rec.seedPnl;
+        if (rec.seeded) { prev.seeded = true; prev.seedWin = rec.seedWin; prev.seedTrades = rec.seedTrades; prev.seedPnl = rec.seedPnl; }
+        if (rec.earlyAlpha) { prev.earlyAlpha = true; prev.earlyRunners = rec.earlyRunners; prev.earlyPnl = rec.earlyPnl; prev.earlyRoi = rec.earlyRoi; }
         if (!(prev.holdN > 0) && rec.holdN) { prev.holdMsSum = rec.holdMsSum; prev.holdN = rec.holdN; }
         if (!(prev.entryMcN > 0) && rec.entryMcN) { prev.entryMcSum = rec.entryMcSum; prev.entryMcN = rec.entryMcN; }
         if (!(prev.exitN > 0) && rec.exitN) { prev.exitSum = rec.exitSum; prev.exitN = rec.exitN; }
