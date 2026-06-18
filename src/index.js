@@ -1117,8 +1117,9 @@ async function pollSeedTrickle() {
       try {
         const d = await solanaTrackerJson(`/top-traders/all/${seedTrickle.page}`, { cacheTtlMs: 0, timeoutMs: 9000 });
         seedTrickle.pageData = (d && d.wallets) || []; seedTrickle.idx = 0;
-        if (!seedTrickle.pageData.length) { seedTrickle.done = true; return; }
-      } catch (e) { seedTrickle.lastErr = e && e.message; return; }       // try again next cycle
+        console.log(`[seed-trickle] page ${seedTrickle.page}: fetched ${seedTrickle.pageData.length} traders`);
+        if (!seedTrickle.pageData.length) { console.log(`[seed-trickle] leaderboard EMPTY — check Render SOLANA_TRACKER_API_KEY (Premium key); stopping`); seedTrickle.done = true; return; }
+      } catch (e) { seedTrickle.lastErr = e && e.message; console.log(`[seed-trickle] leaderboard fetch FAILED p${seedTrickle.page}: ${e && e.message}`); return; }
     }
     let did = 0;
     while (seedTrickle.idx < seedTrickle.pageData.length && did < 2) {    // at most 2 wallets/cycle
