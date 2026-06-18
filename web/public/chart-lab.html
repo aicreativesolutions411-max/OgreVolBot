@@ -32,8 +32,11 @@
   .tf:hover{border-color:#2f7a44;color:#cfeede}
   .tf.on{color:#06210f;background:linear-gradient(180deg,#b6ff7a,#5fe03a);border-color:#7CFF4F;font-weight:700;box-shadow:0 0 18px rgba(124,255,79,.5),inset 0 1px 0 rgba(255,255,255,.4)}
   .wrap{display:flex;gap:10px;align-items:stretch}
-  .chartcol{flex:1 1 380px;min-width:0}
-  canvas{display:block;width:100%;border-radius:11px}
+  .chartcol{flex:1 1 380px;min-width:0;position:relative}
+  #chart{width:100%;height:clamp(280px,56vw,460px);border-radius:11px;overflow:hidden}
+  body.embed #chart{height:clamp(300px,64vh,520px)}
+  .chartload{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:#5d8a6e;background:rgba(6,15,10,.4);border-radius:11px;pointer-events:none;transition:opacity .3s}
+  .chartload.hidden{opacity:0}
   .rail{flex:0 0 132px;display:flex;flex-direction:column;gap:7px}
   .mc{display:grid;grid-template-columns:1fr;gap:7px}
   .stat{position:relative;background:linear-gradient(180deg,rgba(18,42,28,.74),rgba(8,20,13,.74));border:1px solid #1f4a32;border-radius:12px;padding:9px 11px;box-shadow:0 8px 20px -12px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.05);backdrop-filter:blur(6px);overflow:hidden}
@@ -95,7 +98,8 @@
 
       <div class="wrap">
         <div class="chartcol">
-          <canvas id="goo" role="img" aria-label="Live chart with photoreal slime and blood candles and a market-cap price axis"></canvas>
+          <div id="chart" role="img" aria-label="Live candlestick chart with a market-cap axis"></div>
+          <div id="chartload" class="chartload">Loading $<span id="loadsym">chart</span>…</div>
         </div>
         <div class="rail">
           <div class="mc">
@@ -117,269 +121,171 @@
   </div>
 
   <a class="cta" href="/t?ca=DEMO">⚡ Quick Buy on SlimeWire</a>
-  <div class="foot">Preview with synthetic data — final pulls free GeckoTerminal candles (post-DEX) + Pump bonding-curve data (pre-DEX), edge-cached.<br/>Tell me what to tune, then I wire it to live coins.</div>
+  <div class="foot">Live candles from free GeckoTerminal (post-DEX) + Pump bonding-curve data (pre-DEX), edge-cached.</div>
+<script src="/vendor/lightweight-charts.standalone.production.js"></script>
 
 <script>
 (function(){
-  var cv=document.getElementById('goo'); if(!cv) return;
+  var el=document.getElementById('chart'); if(!el||!window.LightweightCharts) return;
   var QP=new URLSearchParams(location.search),CA=(QP.get('ca')||'').trim(),EMBED=QP.get('embed')==='1',TF=QP.get('tf')||'5m';
-  var MCP=Number(QP.get('mc'))||0,SYMP=(QP.get('sym')||'').trim();  // authoritative MC + symbol the app passes (keeps the chart's MC matching the top bar; avoids GT's FDV inflation)
-  var usdMode=false,mcScale=8400,chg24=null,realPrice=null;
+  var SYMP=(QP.get('sym')||'').trim();
   if(EMBED&&document.body)document.body.classList.add('embed');
+  var LWC=window.LightweightCharts;
+  var mcScale=0, dexStats=null, dexPair=null, gtPool=null, realPrice=null, chg24=null, haveCandles=false;
+  // ---- formatters ----
   function fmtUsd(p){p=Number(p)||0;if(p<=0)return '$0';if(p>=1)return '$'+p.toLocaleString(undefined,{maximumFractionDigits:3});if(p>=0.001)return '$'+p.toFixed(5);return '$'+p.toPrecision(3);}
   function fmtMcRaw(v){v=Number(v)||0;return v>=1e9?'$'+(v/1e9).toFixed(2)+'B':v>=1e6?'$'+(v/1e6).toFixed(2)+'M':v>=1e3?'$'+Math.round(v/1e3)+'K':'$'+Math.round(v);}
-  function priceLabel(c){return usdMode?fmtUsd(c):pxs(c);}
-  var ctx,W,H,dpr=Math.min(2,window.devicePixelRatio||1);
-  function hgt(){return Math.max(280,Math.min(460,Math.round((window.innerHeight||640)*0.52)));}
-  function size(){var w=Math.max(260,cv.parentElement.getBoundingClientRect().width);var h=hgt();cv.width=w*dpr;cv.height=h*dpr;cv.style.height=h+'px';ctx=cv.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);W=w;H=h;}
-  size();
-  // ---- real slime / blood textures (Higgs renders), black keyed out to alpha ----
-  var slimeTex=null,bloodTex=null;
-  function keyBlack(img){
-    var oc=document.createElement('canvas');oc.width=img.naturalWidth||img.width;oc.height=img.naturalHeight||img.height;
-    var o=oc.getContext('2d');o.drawImage(img,0,0);
-    try{var d=o.getImageData(0,0,oc.width,oc.height),a=d.data;
-      for(var i=0;i<a.length;i+=4){var mx=Math.max(a[i],a[i+1],a[i+2]);a[i+3]=mx<=12?0:mx>=46?255:Math.round((mx-12)/34*255);}
-      o.putImageData(d,0,0);}catch(e){}
-    return oc;
-  }
-  var si=new Image();si.crossOrigin='anonymous';si.onload=function(){slimeTex=keyBlack(si);safeDraw();};si.src='/assets/slimewire/candle-slime.webp';
-  var bi=new Image();bi.crossOrigin='anonymous';bi.onload=function(){bloodTex=keyBlack(bi);safeDraw();};bi.src='/assets/slimewire/candle-blood.webp';
-
-  var N=18,bars=[],drops=[],splats=[],price=20;
-  function mk(prev){var o=prev,drift=(Math.random()-0.45)*3.0,c=Math.max(4,o+drift);var h=Math.max(o,c)+Math.random()*1.6+0.4,l=Math.min(o,c)-Math.random()*1.6-0.4;var up=c>=o;var ss=up?0.24+Math.random()*0.18:0.62+Math.random()*0.24;var vol=Math.random()<0.18?(0.78+Math.random()*0.22):(0.16+Math.random()*0.42);return {o:o,h:h,l:l,c:c,up:up,ss:ss,vol:vol,ph:Math.random()*6.28,fl:Math.random()<0.5};}
-  for(var i=0;i<N;i++){bars.push(mk(price));price=bars[i].c;}
-  var AX=56,BX=20,TOP=14;
-  // Axis bounds: padding MUST be RELATIVE to the price range. (An old absolute +0.6 — tuned for the
-  // synthetic preview's ~4-30 prices — blew up on real tiny prices like 0.0000088: pad≈0.6 made the
-  // range ±0.6, and ×mcScale(~1e9) rendered the axis as $600M over -$5.9B. Relative pad fixes it.)
-  function bnds(){var mn=1e9,mx=-1e9;bars.forEach(function(b){mn=Math.min(mn,b.l);mx=Math.max(mx,b.h);});if(!isFinite(mn)||!isFinite(mx)||mn>mx){mn=0;mx=1;}var pad=(mx-mn)*0.12;if(!(pad>0))pad=(Math.abs(mx)||1)*0.04;return {mn:Math.max(0,mn-pad),mx:mx+pad};}
-  var cur=bnds(),t=0,lastSpawn=0,lastDraw=0;
-  var liveTarget=null,dispClose=null,gtPool=null; // live-movement: target price the last candle eases toward, the displayed close, and the cached GT pool for the fast price poll
-  function fmtMc(v){return fmtMcRaw(v*mcScale);}
-  function pxs(p){return '$0.000'+String(Math.max(1,Math.round(p*8.3))).padStart(3,'0').slice(0,3);}
-  function rrect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
-  function candle(tex,x,w,y1,y2,up,dripH,flip){
-    if(y2-y1<10){var m=(y1+y2)/2;y1=m-5;y2=m+5;}
-    var dx=x-w/2;
-    if(!tex){ctx.fillStyle=up?'#1c8a2c':'#7a0810';rrect(dx,y1,w,(y2-y1)+dripH*0.4,5);ctx.fill();return;}
-    var iw=tex.width,ih=tex.height,colX=iw*0.17,colW=iw*0.66;                 // crop to the column (drop black margins → thick full-width candle)
-    ctx.save();
-    if(flip){ctx.translate(dx+w,0);ctx.scale(-1,1);ctx.translate(-dx,0);}
-    var capH=Math.min(w*0.5,Math.max(6,(y2-y1)*0.5));
-    ctx.drawImage(tex,colX,0,colW,ih*0.16, dx,y1,w,capH);                     // glossy top
-    var mTop=y1+capH,mH=Math.max(1,y2-mTop);
-    ctx.drawImage(tex,colX,ih*0.16,colW,ih*0.50, dx,mTop,w,mH);               // body
-    ctx.drawImage(tex,0,ih*0.66,iw,ih*0.34, dx-w*0.10,y2,w*1.2,dripH);        // drips from the SAME candle material (matches the body exactly)
-    ctx.restore();
-  }
-  // Render one frame. A single rAF loop (see bottom) drives this so the chart MOVES like a live
-  // chart — the last candle EASES toward the latest real price (green up / red down) and the volume
-  // gel bobs off the clock. This is smooth motion, NOT the old flash: the flash was iframe RELOADS
-  // showing synthetic prices; here we only ever draw REAL data (clean "Loading" until it arrives),
-  // ease instead of snap, and the iframe is preserved by mint so it never remounts.
-  function frame(){
-    var tb=bnds();cur.mn=tb.mn;cur.mx=tb.mx;
-    var plotR=W-AX,plotB=H-BX,ph=plotB-TOP,step=plotR/N;
-    var yFor=function(p){return TOP+(1-(p-cur.mn)/(cur.mx-cur.mn))*ph;};
-    ctx.clearRect(0,0,W,H);
-    // Real coin (or ANY embed) still loading → clean placeholder. NEVER show synthetic fake-price
-    // candles in an embed — that demo "test chart" bleeding through on a reload / while the app
-    // resolves a token is exactly the flash the user kept seeing. Synthetic is ONLY for the
-    // standalone preview page (no embed, no ca).
-    if((CA || EMBED) && !usdMode){
-      for(var gp=0;gp<=4;gp++){var gyy=TOP+ph*gp/4;ctx.strokeStyle='rgba(255,255,255,.04)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,gyy);ctx.lineTo(W-AX,gyy);ctx.stroke();}
-      ctx.fillStyle='#5d8a6e';ctx.font='12px -apple-system,system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('Loading '+(SYMP?('$'+SYMP):'chart')+'…',(W-AX)/2,(TOP+plotB)/2);
-      return;
-    }
-    ctx.font='10px -apple-system,system-ui,sans-serif';ctx.textBaseline='middle';
-    for(var gi=0;gi<=4;gi++){var gy=TOP+ph*gi/4;ctx.strokeStyle='rgba(255,255,255,.045)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(plotR,gy);ctx.stroke();
-      var pv=cur.mx-(cur.mx-cur.mn)*gi/4;ctx.fillStyle='#5d8a6e';ctx.textAlign='left';ctx.fillText(fmtMc(pv),plotR+6,gy);}
-    ctx.textAlign='center';ctx.fillStyle='#3f6b52';
-    for(var xi=0;xi<N;xi+=4){var mm=(54+xi*2)%60;ctx.fillText((xi<6?'12':'13')+':'+String(mm).padStart(2,'0'),xi*step+step/2,plotB+11);}
-    // VOLUME — premium gel columns made of the SAME Higgs material as the candles: green slime for
-    // buy-dominant bars, blood red for sell-dominant, matching the candles. Subtle live bob = moving.
-    var volMax=0.0001;for(var vm=0;vm<N;vm++)if(bars[vm].vol>volMax)volMax=bars[vm].vol;
-    for(var vi=0;vi<N;vi++){var vb=bars[vi],vh=(vb.vol/volMax)*(ph*0.20);if(vh<3)continue;var vbuy=vb.ss<0.5,vtex=vbuy?slimeTex:bloodTex,vx=vi*step+step/2,vw=Math.max(6,step*0.56),vy=plotB-vh+Math.sin(t*0.5+vi*0.6)*1.1;
-      if(vtex){var iw=vtex.width,ih=vtex.height,cX=iw*0.2,cW=iw*0.6,cH=Math.min(vw*0.5,vh*0.5);ctx.save();ctx.globalAlpha=0.85;
-        ctx.drawImage(vtex,cX,0,cW,ih*0.16, vx-vw/2,vy,vw,cH);
-        ctx.drawImage(vtex,cX,ih*0.16,cW,ih*0.66, vx-vw/2,vy+cH,vw,Math.max(1,plotB-(vy+cH)));
-        ctx.restore();
-      }else{var vg=ctx.createLinearGradient(0,vy,0,plotB);if(vbuy){vg.addColorStop(0,'#7CFF4F');vg.addColorStop(1,'#0e3a18');}else{vg.addColorStop(0,'#ff3b4e');vg.addColorStop(1,'#3a0307');}ctx.fillStyle=vg;rrect(vx-vw/2,vy,vw,vh,3);ctx.fill();}}
-    for(var i=0;i<N;i++){
-      var b=bars[i],x=i*step+step/2,bw=Math.max(10,step*0.84),live=(i===N-1);
-      var y1=yFor(Math.max(b.o,b.c)),y2=yFor(Math.min(b.o,b.c)),yH=yFor(b.h),yL=yFor(b.l);
-      ctx.strokeStyle=b.up?'rgba(205,245,210,.4)':'rgba(245,210,212,.42)';ctx.lineWidth=1.3;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(x,yH);ctx.lineTo(x,y1);ctx.moveTo(x,y2);ctx.lineTo(x,yL);ctx.stroke();
-      var base=(Math.sin(b.ph)*0.5+0.5),heavy=b.ss>0.55;
-      var dripH=bw*(0.7+base*(heavy?1.0:0.5));
-      candle(b.up?slimeTex:bloodTex,x,bw,y1,y2,b.up,dripH,b.fl);
-    }
-    var lb=bars[N-1],ly=yFor(lb.c),up=lb.up;
-    ctx.setLineDash([4,4]);ctx.strokeStyle=up?'rgba(124,255,79,.5)':'rgba(255,66,84,.5)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,ly);ctx.lineTo(plotR,ly);ctx.stroke();ctx.setLineDash([]);
-    ctx.fillStyle=up?'#7CFF4F':'#ff4254';rrect(plotR+2,ly-9,AX-4,18,4);ctx.fill();ctx.fillStyle='#06150c';ctx.font='700 10px -apple-system,system-ui';ctx.textAlign='center';ctx.fillText(fmtMc(lb.c),plotR+2+(AX-4)/2,ly);
-  }
-  function safeDraw(){try{frame();}catch(e){}}
-  // TRANSACTION HISTORY — expandable Dexscreener-style feed (full scrollable list, not just a few)
-  var txns=[],expanded=false,vclock=0;
-  function fmtAgo(s){s=Math.max(0,s);return s<60?s+'s':s<3600?Math.floor(s/60)+'m':Math.floor(s/3600)+'h';}
-  function newTx(seedAge){var buy=Math.random()<0.56;return {buy:buy,sol:(Math.random()*5+0.1).toFixed(2),price:pxs(bars[N-1].c*(1+(Math.random()-0.5)*0.02)),at:vclock-(seedAge||0),maker:Math.random().toString(36).slice(2,6)+'…'+Math.random().toString(36).slice(2,4)};}
-  for(var ti=0;ti<44;ti++)txns.push((function(a){var b=Math.random()<0.55;return {buy:b,sol:(Math.random()*5+0.1).toFixed(2),price:pxs(bars[N-1].c*(1+(Math.random()-0.5)*0.03)),at:-a,maker:Math.random().toString(36).slice(2,6)+'…'+Math.random().toString(36).slice(2,4)};})(ti*3));
-  function renderTape(){var el=document.getElementById('tape');if(!el)return;var list=expanded?txns.slice(0,80):txns.slice(0,6);
-    el.innerHTML=list.map(function(x){var amt=x.usd?('$'+Number(x.sol).toLocaleString()):((x.buy?'+':'-')+x.sol+' SOL');return '<div class="trow"><span class="dim">'+fmtAgo(vclock-x.at)+'</span><span class="pill '+(x.buy?'b':'s')+'">'+(x.buy?'BUY':'SELL')+'</span><span>'+amt+'</span><span class="dim">'+x.price+'</span></div>';}).join('');}
-  function refresh(){
-    var lb=bars[N-1];var e;
-    // Real coin whose real data hasn't arrived yet → show a neutral dash, NEVER the synthetic seed's
-    // fake numbers (that pre-load $117K/demo flash was the "ogre test chart coming through").
-    var loading=CA&&!usdMode;
-    if(e=document.getElementById('px'))e.textContent=loading?'—':((usdMode&&realPrice)?fmtUsd(realPrice):priceLabel(lb.c));
-    if(e=document.getElementById('s_mc'))e.textContent=loading?'—':fmtMc(lb.c);
-    if(!loading){var chg=usdMode&&chg24!=null&&isFinite(chg24)?Math.round(chg24):Math.round((lb.c/bars[0].o-1)*100);
-      if(e=document.getElementById('chg')){e.textContent=(chg>=0?'+':'')+chg+'% 24h';e.className='chg '+(chg>=0?'buyc':'sellc');}}
-    renderTape();safeDraw();
-  }
+  function axisFmt(p){return mcScale>0?fmtMcRaw(p*mcScale):fmtUsd(p);}   // axis/crosshair shows MARKET CAP (price × the anchor)
   function esc(s){return String(s||'').replace(/[<>&"]/g,'');}
-  // AUTHORITATIVE STATS come from DexScreener — the SAME source the app's top bar uses — so the
-  // bottom info (MC / Liq / Vol / price / 24h) always MATCHES the top bar instead of disagreeing
-  // with GeckoTerminal's own market-cap basis. dexStats is applied on top of whatever candle shape
-  // we draw (GT candles, or Pump for fresh pre-DEX coins).
-  var dexStats=null,dexPair=null;
+  function chartH(){return Math.max(280,Math.min(470,Math.round((window.innerHeight||640)*0.52)));}
+  // TF → [GT unit, GT aggregate, seconds-per-bar]
+  var TFMAP={'1m':['minute',1,60],'5m':['minute',5,300],'15m':['minute',15,900],'1h':['hour',1,3600]};
+  function tfSec(){return (TFMAP[TF]||TFMAP['5m'])[2];}
+
+  // ---- the REAL chart (TradingView lightweight-charts) — slime-green up / blood-red down ----
+  var chart=LWC.createChart(el,{
+    width:Math.max(160,el.clientWidth||340), height:Math.max(200,el.clientHeight||chartH()),
+    layout:{background:{type:'solid',color:'transparent'},textColor:'#7fae90',fontSize:11,fontFamily:'-apple-system,BlinkMacSystemFont,system-ui,sans-serif'},
+    grid:{vertLines:{color:'rgba(124,255,79,.05)'},horzLines:{color:'rgba(124,255,79,.06)'}},
+    rightPriceScale:{borderColor:'rgba(124,255,79,.12)',scaleMargins:{top:0.07,bottom:0.26},entireTextOnly:true},
+    timeScale:{borderColor:'rgba(124,255,79,.12)',timeVisible:true,secondsVisible:false,rightOffset:4,barSpacing:7},
+    crosshair:{mode:LWC.CrosshairMode?LWC.CrosshairMode.Normal:0,vertLine:{color:'rgba(124,255,79,.35)',width:1,style:2,labelBackgroundColor:'#1c5a2e'},horzLine:{color:'rgba(124,255,79,.35)',width:1,style:2,labelBackgroundColor:'#1c5a2e'}},
+    handleScroll:true,handleScale:true
+  });
+  var candle=chart.addCandlestickSeries({
+    upColor:'#33e08a',downColor:'#ff445c',borderUpColor:'#2bd584',borderDownColor:'#ff3a54',
+    wickUpColor:'#8dff6a',wickDownColor:'#ff8a96',
+    priceFormat:{type:'custom',formatter:axisFmt,minMove:1e-9},priceLineColor:'#9dff6a',priceLineWidth:1
+  });
+  var vol=chart.addHistogramSeries({priceScaleId:'vol',priceFormat:{type:'volume'},color:'rgba(57,224,138,.35)',base:0});
+  try{ vol.priceScale().applyOptions({scaleMargins:{top:0.84,bottom:0}}); }catch(e){}
+  // Fit the chart's drawing buffer to the (CSS-sized) container once layout settles — the create-time
+  // size can be 0/default before CSS applies, leaving a blank 300x150 canvas. Re-fit on container resize.
+  function fitChart(){ var w=Math.max(160,el.clientWidth||el.parentElement.clientWidth||340), h=Math.max(200,el.clientHeight||chartH()); try{ chart.resize(w,h); }catch(e){ try{ chart.applyOptions({width:w,height:h}); }catch(e2){} } }
+  requestAnimationFrame(function(){ fitChart(); requestAnimationFrame(fitChart); });
+  setTimeout(fitChart,250); setTimeout(fitChart,900);
+  try{ new ResizeObserver(fitChart).observe(el); }catch(e){ window.addEventListener('resize',fitChart); }
+
+  var bars=[];        // [{time,open,high,low,close}]
+  var forming=null;   // the live forming candle (last bucket)
+  function hideLoad(){ var l=document.getElementById('chartload'); if(l)l.classList.add('hidden'); }
+  function showLoadSym(){ var s=document.getElementById('loadsym'); if(s)s.textContent=SYMP||(CA?(CA.slice(0,4)+'…'):'chart'); }
+  showLoadSym();
+
+  function setCandles(candles, vols){
+    if(!candles.length)return;
+    bars=candles;
+    try{ candle.setData(candles); }catch(e){ return; }
+    try{ vol.setData(vols); }catch(e){}
+    forming=Object.assign({},candles[candles.length-1]);
+    if(!haveCandles){ chart.timeScale().fitContent(); haveCandles=true; }   // fit once; afterwards keep the user's view
+    hideLoad();
+  }
+  // LIVE: fold the latest price into the candle for the CURRENT time bucket — exactly how a real chart
+  // forms its last bar. A buy lifts the close (green), a sell drops it (red); a new bucket starts a new
+  // candle. Driven by the fast DexScreener price poll, so it moves on real buys/sells.
+  function liveTick(price){
+    if(!(price>0)||!haveCandles)return;
+    var sec=tfSec(), b=Math.floor(Date.now()/1000/sec)*sec;
+    if(!forming || b>forming.time){ forming={time:b,open:price,high:price,low:price,close:price}; }
+    else if(b===forming.time){ forming.high=Math.max(forming.high,price); forming.low=Math.min(forming.low,price); forming.close=price; }
+    else { return; } // out-of-order guard
+    try{ candle.update(forming); }catch(e){}
+  }
+
+  // ---- stats (DexScreener = same source as the app top bar, so the numbers MATCH) ----
   function applyDexStats(s){
     if(!s||!(s.priceUsd>0))return; dexStats=s; var e;
-    realPrice=s.priceUsd; liveTarget=s.priceUsd;
-    if(s.mc>0)mcScale=s.mc/s.priceUsd;                 // anchor MC axis to the authoritative MC/price → label == top bar
+    realPrice=s.priceUsd;
+    if(s.mc>0)mcScale=s.mc/s.priceUsd;                                   // anchor: axis MC = price × (MC/price)
     if(s.change24!=null&&isFinite(s.change24))chg24=s.change24;
-    // Paint price + MC + 24h NOW from DexScreener (1 fast call) — don't wait on the candle chain / usdMode.
     if(e=document.getElementById('px'))e.textContent=fmtUsd(s.priceUsd);
     if(s.mc>0&&(e=document.getElementById('s_mc')))e.textContent=fmtMcRaw(s.mc);
-    if(s.change24!=null&&isFinite(s.change24)&&(e=document.getElementById('chg'))){var _c=Math.round(s.change24);e.textContent=(_c>=0?'+':'')+_c+'% 24h';e.className='chg '+(_c>=0?'buyc':'sellc');}
-    if(e=document.getElementById('s_liq'))e.textContent=fmtMcRaw(s.liq);
-    if(e=document.getElementById('s_vol'))e.textContent=fmtMcRaw(s.vol24);
+    if(s.change24!=null&&isFinite(s.change24)&&(e=document.getElementById('chg'))){var c=Math.round(s.change24);e.textContent=(c>=0?'+':'')+c+'% 24h';e.className='chg '+(c>=0?'buyc':'sellc');}
+    if(s.liq&&(e=document.getElementById('s_liq')))e.textContent=fmtMcRaw(s.liq);
+    if(s.vol24&&(e=document.getElementById('s_vol')))e.textContent=fmtMcRaw(s.vol24);
     if((s.buys24||s.sells24)&&(e=document.getElementById('s_bs')))e.textContent=s.buys24+' / '+s.sells24;
     var symShow=SYMP||s.symbol; if(symShow&&(e=document.querySelector('.tk .sym'))){var nm=(s.name&&s.name!==symShow)?(' <span style="color:#5d8a6e;font-weight:400">· '+esc(String(s.name).slice(0,22))+'</span>'):'';e.innerHTML='$'+esc(symShow)+nm;}
-    if(usdMode)tickLabels(); kick();
-  }
-  function applyData(d){
-    if(!d||!d.ok||!Array.isArray(d.candles)||d.candles.length<2)return false;
-    var cs=d.candles.slice(-N),nb=cs.map(function(k,idx){var up=k.c>=k.o;return {o:k.o,h:k.h,l:k.l,c:k.c,up:up,ss:up?0.4:0.66,vol:Math.max(0.0001,k.v),ph:(idx*1.37)%6.28,fl:idx%2===0};});
-    while(nb.length<N)nb.unshift(Object.assign({},nb[0]));
-    bars=nb;usdMode=true;
-    // Authoritative numbers: DexScreener first (matches the top bar), this feed's own only as fallback.
-    var st=dexStats||{mc:Number(d.mc)||Number(d.fdv)||0,priceUsd:Number(d.priceUsd)||0,liq:Number(d.liq)||0,vol24:Number(d.vol24)||0,change24:Number(d.change24h)};
-    chg24=(st.change24!=null&&isFinite(st.change24))?st.change24:Number(d.change24h);
-    realPrice=(st.priceUsd>0)?st.priceUsd:(Number(d.priceUsd)>0?Number(d.priceUsd):null);
-    var anchorPrice=(st.priceUsd>0)?st.priceUsd:bars[N-1].c;
-    if(st.priceUsd>0)bars[N-1].c=st.priceUsd;          // pin last close to the real price so MC label == top bar exactly
-    var realMc=st.mc||MCP||0;
-    if(realMc>0&&anchorPrice>0)mcScale=realMc/anchorPrice;
-    // Live-glide: keep the previously displayed close and let the rAF loop ease it toward the new
-    // real close (a poll update slides in smoothly instead of snapping). First load snaps to real.
-    liveTarget=bars[N-1].c;
-    if(dispClose!=null)bars[N-1].c=dispClose; else dispClose=bars[N-1].c;
-    var e;
-    var symShow=SYMP||(st.symbol||d.symbol);if(symShow&&(e=document.querySelector('.tk .sym'))){var nm0=st.name||d.name;var nm=(nm0&&nm0!==symShow)?(' <span style="color:#5d8a6e;font-weight:400">· '+esc(String(nm0).slice(0,22))+'</span>'):'';e.innerHTML='$'+esc(symShow)+nm;}
     if(CA&&(e=document.querySelector('.tk .sub')))e.textContent=CA.slice(0,4)+'…'+CA.slice(-4);
-    if(st.liq&&(e=document.getElementById('s_liq')))e.textContent=fmtMcRaw(st.liq);
-    if(st.vol24&&(e=document.getElementById('s_vol')))e.textContent=fmtMcRaw(st.vol24);
-    if(d.trades&&d.trades.length){var bc=0,sc=0;d.trades.forEach(function(x){if(x.side==='buy')bc++;else sc++;});if(!dexStats&&(e=document.getElementById('s_bs')))e.textContent=bc+' / '+sc;
-      vclock=0;txns=d.trades.map(function(x,i){return {buy:x.side==='buy',sol:Math.round(x.usd||0),price:fmtUsd(x.price),at:-(i*3),usd:true};});}
-    try{ if(CA) sessionStorage.setItem('cl:'+CA, JSON.stringify({at:Date.now(),d:{ok:1,stage:d.stage,symbol:st.symbol||d.symbol,name:st.name||d.name,priceUsd:st.priceUsd||d.priceUsd,mc:st.mc||d.mc,fdv:d.fdv,liq:st.liq||d.liq,vol24:st.vol24||d.vol24,change24h:st.change24!=null?st.change24:d.change24h,candles:(d.candles||[]).slice(-60),trades:(d.trades||[]).slice(0,30)}})); }catch(e){}
-    refresh();kick();return true;
+    liveTick(s.priceUsd);                                                // fold the live price into the forming bar → real-time movement
   }
-  // GeckoTerminal is CORS-enabled and rate-limits by IP — so we fetch it straight from the BROWSER
-  // (each user = own IP, no shared-server 429, scales free). Pump's swap-api blocks browsers (403),
-  // so fresh pre-DEX coins fall back to our server /api/chart (which proxies Pump server-side).
+
+  // ---- transaction tape ----
+  var txns=[],expanded=false;
+  function fmtAgo(t){var s=Math.max(0,Math.floor(Date.now()/1000)-t);return s<60?s+'s':s<3600?Math.floor(s/60)+'m':Math.floor(s/3600)+'h';}
+  function renderTape(){var el2=document.getElementById('tape');if(!el2)return;var list=(expanded?txns.slice(0,80):txns.slice(0,7));
+    el2.innerHTML=list.map(function(x){return '<div class="trow"><span class="dim">'+fmtAgo(x.t)+'</span><span class="pill '+(x.buy?'b':'s')+'">'+(x.buy?'BUY':'SELL')+'</span><span>$'+Number(x.usd||0).toLocaleString()+'</span><span class="dim">'+fmtUsd(x.price)+'</span></div>';}).join('');}
+
+  // ---- data: DexScreener stats (instant) + GeckoTerminal candles (the real OHLCV) ----
   var GTB='https://api.geckoterminal.com/api/v2/networks/solana';
-  function gtTf(tf){return tf==='1m'?['minute',1]:tf==='15m'?['minute',15]:tf==='1h'?['hour',1]:['minute',5];}
   function gtj(u){return fetch(u).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});}
-  function loadGT(mint,tf){
-    return gtj(GTB+'/tokens/'+mint+'/pools?page=1').then(function(tp){
-      var pool=tp&&tp.data&&tp.data[0];
-      if(!pool||!pool.attributes||!pool.attributes.address)return null;
-      var a=pool.attributes,addr=a.address,tfa=gtTf(tf);gtPool=addr; // cache for the fast live-price poll
-      // ohlcv + trades in PARALLEL (was sequential) — one fewer round-trip = faster first candle paint.
+  function loadDex(){
+    if(!CA)return Promise.resolve(null);
+    return gtj('https://api.dexscreener.com/latest/dex/tokens/'+encodeURIComponent(CA)).then(function(j){
+      var pairs=(j&&j.pairs)||[];
+      var best=pairs.filter(function(p){return p.chainId==='solana';}).sort(function(a,b){return ((b.liquidity&&b.liquidity.usd)||0)-((a.liquidity&&a.liquidity.usd)||0);})[0];
+      if(!best)return null; dexPair=best.pairAddress||null; var base=best.baseToken||{};
+      var s={priceUsd:+best.priceUsd||0,mc:+best.marketCap||+best.fdv||0,liq:(best.liquidity&&+best.liquidity.usd)||0,vol24:(best.volume&&+best.volume.h24)||0,change24:(best.priceChange&&best.priceChange.h24!=null)?+best.priceChange.h24:null,buys24:(best.txns&&best.txns.h24&&+best.txns.h24.buys)||0,sells24:(best.txns&&best.txns.h24&&+best.txns.h24.sells)||0,symbol:base.symbol||'',name:base.name||''};
+      applyDexStats(s); return s;
+    });
+  }
+  function applyGT(d){
+    if(!d||!d.candles||!d.candles.length)return false;
+    if(!(mcScale>0)&&d.mc>0&&d.priceUsd>0)mcScale=d.mc/d.priceUsd;       // fallback anchor so the axis shows MC even before DexScreener lands
+    var cs=d.candles, seen={}, candles=[], vols=[];
+    for(var i=0;i<cs.length;i++){var k=cs[i],tt=k.t;if(!tt||seen[tt])continue;seen[tt]=1;
+      candles.push({time:tt,open:k.o,high:k.h,low:k.l,close:k.c});
+      vols.push({time:tt,value:Math.max(0,k.v||0),color:(k.c>=k.o)?'rgba(57,224,138,.34)':'rgba(255,68,92,.34)'});}
+    candles.sort(function(a,b){return a.time-b.time;}); vols.sort(function(a,b){return a.time-b.time;});
+    setCandles(candles,vols);
+    if(d.trades&&d.trades.length){ txns=d.trades.map(function(x){return {buy:x.side==='buy',usd:Math.round(x.usd||0),price:+x.price||0,t:x.t||Math.floor(Date.now()/1000)};}); renderTape(); }
+    try{ if(CA) sessionStorage.setItem('cl2:'+CA, JSON.stringify({at:Date.now(),tf:TF,d:{candles:cs.slice(-150),trades:(d.trades||[]).slice(0,40),mc:d.mc,priceUsd:d.priceUsd}})); }catch(e){}
+    return true;
+  }
+  function loadGT(){
+    if(!CA)return;
+    gtj(GTB+'/tokens/'+CA+'/pools?page=1').then(function(tp){
+      var pool=tp&&tp.data&&tp.data[0]; if(!pool||!pool.attributes||!pool.attributes.address){ loadServer(); return; }
+      var a=pool.attributes,addr=a.address,tfa=TFMAP[TF]||TFMAP['5m']; gtPool=addr;
       return Promise.all([
         gtj(GTB+'/pools/'+addr+'/ohlcv/'+tfa[0]+'?aggregate='+tfa[1]+'&limit=150&currency=usd'),
         gtj(GTB+'/pools/'+addr+'/trades?trade_volume_in_usd_greater_than=0')
       ]).then(function(res){
         var oh=res[0],tr=res[1];
         var list=(oh&&oh.data&&oh.data.attributes&&oh.data.attributes.ohlcv_list)||[];
-        if(!list.length)return null;
-        var candles=list.map(function(x){return {t:+x[0]||0,o:+x[1]||0,h:+x[2]||0,l:+x[3]||0,c:+x[4]||0,v:+x[5]||0};}).filter(function(k){return k.c>0;}).sort(function(p,q){return p.t-q.t;});
-        var sym=String(a.name||'').split('/')[0].trim();
+        if(!list.length){ loadServer(); return; }
+        var candles=list.map(function(x){return {t:+x[0]||0,o:+x[1]||0,h:+x[2]||0,l:+x[3]||0,c:+x[4]||0,v:+x[5]||0};}).filter(function(k){return k.c>0;});
         var trl=(tr&&tr.data)||[];
         var trades=trl.slice(0,60).map(function(d){var x=d.attributes||{},buy=x.kind==='buy';return {t:Math.floor(Date.parse(x.block_timestamp)/1000)||0,side:buy?'buy':'sell',usd:+x.volume_in_usd||0,price:+(buy?x.price_to_in_usd:x.price_from_in_usd)||0};});
-        return {ok:true,stage:'dex',symbol:sym,name:sym,priceUsd:+a.base_token_price_usd||0,mc:+a.market_cap_usd||0,fdv:+a.fdv_usd||0,liq:+a.reserve_in_usd||0,vol24:(a.volume_usd&&+a.volume_usd.h24)||0,change24h:(a.price_change_percentage&&+a.price_change_percentage.h24)||0,candles:candles,trades:trades};
+        applyGT({candles:candles,trades:trades,mc:+a.market_cap_usd||0,priceUsd:+a.base_token_price_usd||0});
       });
-    }).catch(function(){return null;});
+    }).catch(function(){ loadServer(); });
   }
-  // DexScreener token endpoint (CORS-enabled, free, 300 req/min/IP) — the SAME data the app's top
-  // bar reads, so the chart's MC / Liq / Vol / price / 24h match it exactly. This is the authoritative
-  // STATS source; GeckoTerminal stays the candle-shape source. dexPair lets the fast poll hit one pair.
-  function loadDex(mint){
-    return gtj('https://api.dexscreener.com/latest/dex/tokens/'+encodeURIComponent(mint)).then(function(j){
-      var pairs=(j&&j.pairs)||[];
-      var best=pairs.filter(function(p){return p.chainId==='solana';}).sort(function(a,b){return ((b.liquidity&&b.liquidity.usd)||0)-((a.liquidity&&a.liquidity.usd)||0);})[0];
-      if(!best)return null; dexPair=best.pairAddress||null; var base=best.baseToken||{};
-      return {priceUsd:+best.priceUsd||0,mc:+best.marketCap||+best.fdv||0,fdv:+best.fdv||0,liq:(best.liquidity&&+best.liquidity.usd)||0,vol24:(best.volume&&+best.volume.h24)||0,change24:(best.priceChange&&best.priceChange.h24!=null)?+best.priceChange.h24:null,buys24:(best.txns&&best.txns.h24&&+best.txns.h24.buys)||0,sells24:(best.txns&&best.txns.h24&&+best.txns.h24.sells)||0,symbol:base.symbol||'',name:base.name||''};
-    });
-  }
-  // Fast authoritative poll: pull DexScreener stats → live price/MC the candle eases toward + exact
-  // bottom info. ~6s, browser IP, free. This is what makes the ticker MOVE on real buys/sells.
-  function pollDex(){ if(!CA)return; loadDex(CA).then(applyDexStats).catch(function(){}); }
-  function loadServer(){fetch('/api/chart?ca='+encodeURIComponent(CA)+'&tf='+encodeURIComponent(TF)).then(function(r){return r.json();}).then(applyData).catch(function(){});}
-  function loadReal(){
-    if(!CA)return;
-    // Apply DexScreener stats the INSTANT they land (1 fast call) so the bottom info + price fill
-    // immediately — don't make them wait on GeckoTerminal's slower candle chain.
-    loadDex(CA).then(function(dex){if(dex)applyDexStats(dex);}).catch(function(){});
-    // Candle shape in parallel; fall back to the server (Pump) when GT has no pool yet (fresh pre-DEX).
-    loadGT(CA,TF).then(function(gt){if(gt&&gt.candles&&gt.candles.length)applyData(gt);else loadServer();}).catch(function(){loadServer();});
-  }
-  if(!CA&&!EMBED){setInterval(function(){bars.push(mk(bars[N-1].c));bars.shift();vclock+=2;var nadd=1+(Math.random()<0.5?1:0);for(var z=0;z<nadd;z++)txns.unshift(newTx(0));if(txns.length>160)txns.length=160;liveTarget=bars[N-1].c;dispClose=bars[N-2]?bars[N-2].c:bars[N-1].c;bars[N-1].c=dispClose;refresh();kick();},1700);}
-  else{
-    // Real coin: wipe the demo placeholder numbers NOW so they never flash as if real.
-    ['s_mc','s_liq','s_vol','s_bs','px'].forEach(function(id){var e=document.getElementById(id);if(e)e.textContent='—';});
-    var _ce=document.getElementById('chg');if(_ce){_ce.textContent='';_ce.className='chg';}
-    // Instant seamless reload: if we drew this coin moments ago, repaint the REAL data immediately
-    // from sessionStorage (no synthetic flash, no empty), then refresh live.
-    try{ var cc=JSON.parse(sessionStorage.getItem('cl:'+CA)||'null'); if(cc&&cc.d&&Date.now()-cc.at<180000) applyData(cc.d); }catch(e){}
-    loadReal();setInterval(loadReal,15000);setInterval(pollDex,6000); // candles every 15s, authoritative price/MC every 6s
-  }
+  // Fresh pre-DEX pump coins (no GT pool): our server proxies Pump candles.
+  function loadServer(){ if(!CA)return; fetch('/api/chart?ca='+encodeURIComponent(CA)+'&tf='+encodeURIComponent(TF)).then(function(r){return r.json();}).then(function(d){ if(d&&d.candles)applyGT(d); }).catch(function(){}); }
+
+  function loadReal(){ if(!CA)return; loadDex(); loadGT(); }
+
+  // ---- boot ----
+  if(CA){
+    // instant repaint from cache (same coin viewed recently) so it's never blank on reopen
+    try{ var cc=JSON.parse(sessionStorage.getItem('cl2:'+CA)||'null'); if(cc&&cc.d&&cc.tf===TF&&Date.now()-cc.at<120000){ applyGT(cc.d); } }catch(e){}
+    loadReal();
+    setInterval(loadGT,15000);   // refresh the real candle history
+    setInterval(loadDex,3500);   // fast live price → forming-candle movement + exact stats
+  } else { hideLoad(); }
+
+  // TF switch — refetch the real OHLCV at the new aggregate + reset the forming bar.
+  Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(b){b.addEventListener('click',function(){
+    Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(x){x.classList.remove('on');}); b.classList.add('on');
+    TF=b.getAttribute('data-tf')||'5m'; haveCandles=false; forming=null; var l=document.getElementById('chartload'); if(l)l.classList.remove('hidden');
+    if(CA)loadGT();
+  });});
+  // keep the active TF button in sync with the URL on load
+  Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(b){b.classList.toggle('on',b.getAttribute('data-tf')===TF);});
+
   var _tb=document.getElementById('txtoggle');if(_tb)_tb.addEventListener('click',function(){expanded=!expanded;var tp=document.getElementById('tape');if(tp)tp.classList.toggle('expanded',expanded);_tb.textContent=expanded?'Collapse ▴':'Expand ▾';renderTape();});
-  Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(b){b.addEventListener('click',function(){Array.prototype.forEach.call(document.querySelectorAll('.tf'),function(x){x.classList.remove('on');});b.classList.add('on');TF=b.getAttribute('data-tf')||'5m';if(CA)loadReal();});});
-  window.addEventListener('resize',function(){size();safeDraw();});
-  // ---- LIVE MOVEMENT ENGINE ----------------------------------------------------------------
-  // Ease the last candle toward the latest REAL price every frame (buys push it up green, sells
-  // drag it down red), so the chart visibly moves between polls without any strobe. The MC label
-  // ticks with it (MC = price × the frozen anchor ratio, so it scales correctly).
-  function easeLive(){
-    if(liveTarget==null||!bars.length)return false;
-    var b=bars[N-1],d=liveTarget-b.c;
-    if(Math.abs(d)<=Math.abs(liveTarget||1)*1e-5){if(b.c!==liveTarget){b.c=liveTarget;dispClose=b.c;return true;}return false;}
-    b.c+=d*0.14;b.up=b.c>=b.o;b.ss=b.up?0.4:0.66;if(b.c>b.h)b.h=b.c;if(b.c<b.l)b.l=b.c;dispClose=b.c;return true;
-  }
-  var _lastLabelC=null;
-  function tickLabels(){var b=bars[N-1],e;
-    // MC + price both tick off the GLIDING close so the numbers move with the candle (a real buy
-    // pushes price up → MC up, a sell drags both down). They land exactly on the DexScreener values.
-    if(e=document.getElementById('s_mc'))e.textContent=fmtMc(b.c);
-    if(e=document.getElementById('px'))e.textContent=usdMode?fmtUsd(b.c):priceLabel(b.c);}
-  // SELF-STOPPING loop: animates (eases + bobs) while the price is moving toward a new target, then
-  // fully idles — no perpetual 60fps repaint (saves battery on mobile, lets the page settle). Each
-  // new price tick (poll) calls kick() to wake it for the next glide. This is "moves like a chart",
-  // not a strobe: it paints only when there's real motion.
-  var rafId=null,idleFrames=0;
-  function loop(){
-    t+=0.016;var moving=easeLive();
-    if(moving){idleFrames=0;}else{idleFrames++;}
-    if((usdMode||!CA)&&(moving||idleFrames<8)){if(moving&&bars[N-1].c!==_lastLabelC){tickLabels();_lastLabelC=bars[N-1].c;}safeDraw();}
-    if(idleFrames>24){rafId=null;return;}          // settled → stop the loop entirely
-    rafId=requestAnimationFrame(loop);
-  }
-  function kick(){if(rafId==null){idleFrames=0;rafId=requestAnimationFrame(loop);}}
-  // (The authoritative live price/MC poll is pollDex — DexScreener, every 6s — wired above. It feeds
-  // liveTarget + mcScale so the candle eases to the exact value the top bar shows.)
-  refresh();safeDraw();kick();
+  // (autoSize:true keeps the chart fitted to #chart on resize — no manual resize handler needed.)
 })();
 </script>
 </body>
