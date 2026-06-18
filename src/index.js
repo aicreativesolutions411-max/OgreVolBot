@@ -722,6 +722,12 @@ setInterval(() => {
 const DEV_OBS_FILE = path.join(CONFIG.dataDir, "dev-observatory.json");
 const WALLET_OBS_FILE = path.join(CONFIG.dataDir, "wallet-observatory.json");
 const BRAIN_SEED_FLAG_FILE = path.join(CONFIG.dataDir, "brain-seed.json"); // one-time seed-attempt marker (loop-proof)
+// OFFLINE MASS GRAB: a brain file produced by scripts/mass-grab.js (run OFF the box, so it can't
+// crash the instance) and committed to the REPO. Merged into walletObs once per grab on boot — a
+// light JSON read + Map merge, NO network/ST calls, so it's crash-safe. The import marker lives on
+// the PERSISTENT disk so a redeploy of the same grab doesn't re-merge.
+const BRAIN_GRAB_FILE = path.join(__dirname, "..", "seed", "brain-grab.json");
+const BRAIN_GRAB_MARKER = path.join(CONFIG.dataDir, "brain-grab-imported.json");
 const MARKET_TAPE_FILE = path.join(CONFIG.dataDir, "market-tape.json");
 const KOL_LEARNING_FILE = path.join(CONFIG.dataDir, "kol-learning.json");
 const devObs = new Map();    // dev -> { coins, ran, rugged, peakSum }  (peakSum = sum of max/first multiples)
@@ -1435,6 +1441,36 @@ async function loadWalletObservatory() {
 async function saveWalletObservatory() {
   try { await writeJsonFile(WALLET_OBS_FILE, { wallets: Object.fromEntries(walletObs), savedAt: Date.now() }); } catch {}
 }
+// Merge the committed offline mass-grab into the brain ONCE per grab. Preserves any organic learning
+// (we never clobber coins/ran/rugged or a style we already learned) — it only adds new proven-winner
+// wallets and fills missing style/summary from the grab. Idempotent across redeploys via a disk marker.
+async function mergeBrainGrabFile() {
+  try {
+    const grab = await readJson(BRAIN_GRAB_FILE).catch(() => null);
+    if (!grab || !grab.wallets) return;
+    const stamp = String(grab.meta?.grabbedAtMs || grab.meta?.version || Object.keys(grab.wallets).length);
+    const marker = await readJson(BRAIN_GRAB_MARKER).catch(() => null);
+    if (marker && String(marker.stamp) === stamp) return;   // this exact grab already merged
+    let added = 0, updated = 0;
+    for (const [w, rec] of Object.entries(grab.wallets)) {
+      if (!w || !rec) continue;
+      const prev = walletObs.get(w);
+      if (prev) {
+        prev.seeded = true;
+        prev.seedWin = rec.seedWin; prev.seedTrades = rec.seedTrades; prev.seedPnl = rec.seedPnl;
+        if (!(prev.holdN > 0) && rec.holdN) { prev.holdMsSum = rec.holdMsSum; prev.holdN = rec.holdN; }
+        if (!(prev.entryMcN > 0) && rec.entryMcN) { prev.entryMcSum = rec.entryMcSum; prev.entryMcN = rec.entryMcN; }
+        if (!(prev.exitN > 0) && rec.exitN) { prev.exitSum = rec.exitSum; prev.exitN = rec.exitN; }
+        walletObs.set(w, prev); updated += 1;
+      } else { walletObs.set(w, rec); added += 1; }
+    }
+    try { rebuildWalletClusters(); } catch {}
+    await saveWalletObservatory().catch(() => {});
+    await writeJsonFile(BRAIN_GRAB_MARKER, { stamp, importedAt: Date.now(), added, updated, fileCount: Object.keys(grab.wallets).length }).catch(() => {});
+    const winners = [...walletObs.values()].filter(isWinnerWallet).length;
+    console.log(`[brain-grab] merged offline grab (stamp ${stamp}): +${added} new, ${updated} refreshed of ${Object.keys(grab.wallets).length} — now ${winners} winner wallets, ${walletObs.size} tracked`);
+  } catch (e) { console.warn(`[brain-grab] merge failed: ${e && e.message}`); }
+}
 // AUTO-KOL: harvest proven KOL wallets (real win-rate) from our KOL tracker leaderboard so the bot
 // can copy them. Persisted so the roster survives restarts and keeps growing.
 const AUTO_KOL_FILE = path.join(CONFIG.dataDir, "auto-kol-wallets.json");
@@ -1890,7 +1926,7 @@ async function pollObsTradesSwapApi() {
 }
 function startDevObservatory() {
   void loadDevObservatory();
-  void loadWalletObservatory();
+  void loadWalletObservatory().then(() => mergeBrainGrabFile());   // fold in the committed offline mass-grab (once per grab)
   void loadMarketTape();
   void loadKolLearning();
   void loadCoinBanners();
