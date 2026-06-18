@@ -183,9 +183,11 @@
     var plotR=W-AX,plotB=H-BX,ph=plotB-TOP,step=plotR/N;
     var yFor=function(p){return TOP+(1-(p-cur.mn)/(cur.mx-cur.mn))*ph;};
     ctx.clearRect(0,0,W,H);
-    // Real coin still loading → clean placeholder (NEVER show synthetic fake-price candles, which is
-    // what flashed wrong pricing on every iframe reload). Only the real chart is ever drawn for a CA.
-    if(CA && !usdMode){
+    // Real coin (or ANY embed) still loading → clean placeholder. NEVER show synthetic fake-price
+    // candles in an embed — that demo "test chart" bleeding through on a reload / while the app
+    // resolves a token is exactly the flash the user kept seeing. Synthetic is ONLY for the
+    // standalone preview page (no embed, no ca).
+    if((CA || EMBED) && !usdMode){
       for(var gp=0;gp<=4;gp++){var gyy=TOP+ph*gp/4;ctx.strokeStyle='rgba(255,255,255,.04)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,gyy);ctx.lineTo(W-AX,gyy);ctx.stroke();}
       ctx.fillStyle='#5d8a6e';ctx.font='12px -apple-system,system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('Loading '+(SYMP?('$'+SYMP):'chart')+'…',(W-AX)/2,(TOP+plotB)/2);
       return;
@@ -333,7 +335,7 @@
     // Candle shape in parallel; fall back to the server (Pump) when GT has no pool yet (fresh pre-DEX).
     loadGT(CA,TF).then(function(gt){if(gt&&gt.candles&&gt.candles.length)applyData(gt);else loadServer();}).catch(function(){loadServer();});
   }
-  if(!CA){setInterval(function(){bars.push(mk(bars[N-1].c));bars.shift();vclock+=2;var nadd=1+(Math.random()<0.5?1:0);for(var z=0;z<nadd;z++)txns.unshift(newTx(0));if(txns.length>160)txns.length=160;liveTarget=bars[N-1].c;dispClose=bars[N-2]?bars[N-2].c:bars[N-1].c;bars[N-1].c=dispClose;refresh();kick();},1700);}
+  if(!CA&&!EMBED){setInterval(function(){bars.push(mk(bars[N-1].c));bars.shift();vclock+=2;var nadd=1+(Math.random()<0.5?1:0);for(var z=0;z<nadd;z++)txns.unshift(newTx(0));if(txns.length>160)txns.length=160;liveTarget=bars[N-1].c;dispClose=bars[N-2]?bars[N-2].c:bars[N-1].c;bars[N-1].c=dispClose;refresh();kick();},1700);}
   else{
     // Real coin: wipe the demo placeholder numbers NOW so they never flash as if real.
     ['s_mc','s_liq','s_vol','s_bs','px'].forEach(function(id){var e=document.getElementById(id);if(e)e.textContent='—';});
