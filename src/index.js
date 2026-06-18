@@ -1065,7 +1065,10 @@ async function runBrainSeedGrab(opts = {}) {
   if (brainSeedState.running) return brainSeedState;
   if (!CONFIG.solanaTrackerApiKey) { brainSeedState = { ...brainSeedState, lastError: "no SOLANA_TRACKER_API_KEY" }; return brainSeedState; }
   brainSeedState = { running: true, scanned: 0, seeded: 0, page: 0, startedAt: Date.now(), doneAt: 0, lastError: null };
-  const maxPages = Math.max(1, Math.min(40, Number(opts.maxPages) || 16));   // 16 × 25 = ~400 elite wallets
+  // HARDENED after the crash loop: small default batch, slow pacing, a breathing gap BETWEEN pages
+  // so the event loop + GC stay healthy, and persist ONCE at the very end (per-page saves were a
+  // synchronous-stringify hazard). Start small (6 pages = ~150 wallets); re-run to extend.
+  const maxPages = Math.max(1, Math.min(20, Number(opts.maxPages) || 6));
   (async () => {
     try {
       for (let page = 1; page <= maxPages; page++) {
@@ -1083,14 +1086,17 @@ async function runBrainSeedGrab(opts = {}) {
           if (((Number(s.totalWins) || 0) + (Number(s.totalLosses) || 0)) < 50) continue;
           if ((Number(s.total) || 0) <= 0) continue;
           try { if (await seedWinnerWallet(w, s)) brainSeedState.seeded += 1; } catch {}
-          await new Promise((res) => setTimeout(res, 120));   // polite pacing
+          await new Promise((res) => setTimeout(res, 250));   // gentle pacing — never burst the instance
         }
-        rebuildWalletClusters();
-        await savePersistentState().catch(() => {});           // checkpoint each page
         if (data && data.hasNext === false) break;
+        await new Promise((res) => setTimeout(res, 1500));    // let the event loop + GC breathe between pages
       }
     } catch (e) { brainSeedState.lastError = e && e.message; }
-    finally { brainSeedState.running = false; brainSeedState.doneAt = Date.now(); rebuildWalletClusters(); await savePersistentState().catch(() => {}); }
+    finally {
+      brainSeedState.running = false; brainSeedState.doneAt = Date.now();
+      try { rebuildWalletClusters(); } catch {}
+      await savePersistentState().catch(() => {});            // persist ONCE at the end (no per-page blocking)
+    }
   })();
   return brainSeedState;
 }
