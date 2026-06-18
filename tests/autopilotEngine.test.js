@@ -583,6 +583,64 @@ test("server observatory learns linked wallets and exits from working swap-api t
   assert.match(serverSource, /linkRelatedBuyerWallets\(c\.buyers \|\| \[\], ranMult, rugged\)/);
 });
 
+test("server KOL brain tracks all API KOLs, learns outcomes, and links related wallets", () => {
+  const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+  assert.match(serverSource, /const trackedKolWallets = new Map/);
+  assert.match(serverSource, /const kolSignalStats = new Map/);
+  assert.match(serverSource, /const kolSignalMints = new Map/);
+  assert.match(serverSource, /function rememberTrackedKolWallet/);
+  assert.match(serverSource, /function recordKolSignal/);
+  assert.match(serverSource, /function recordKolOutcome/);
+  assert.match(serverSource, /async function sampleKolSignalOutcomes/);
+  assert.match(serverSource, /\["hot", "fresh", "top", "consistent"\]\.map/);
+  assert.match(serverSource, /recordKolSignal\(r\); \/\/ learn every KOL pattern/);
+  assert.match(serverSource, /isTrackedKolWallet\(w\) \|\| isWinnerWallet\(walletObs\.get\(w\)\)/);
+  assert.match(serverSource, /linkedKolLeaders/);
+  assert.match(serverSource, /linkedWinnerLeaders/);
+  assert.match(serverSource, /kolProbeCandidates/);
+});
+
+test("engine: KOL probe copy entries can open small and exit fast while learning", async () => {
+  let t = 0;
+  let buys = 0;
+  let boughtLamports = 0;
+  const row = goodRow({
+    tokenMint: "KolProbeMint11111111111111111111111111111111",
+    symbol: "KOLP",
+    pairAgeSeconds: 600,
+    marketCap: 60000,
+    liquidityUsd: 25000,
+    volume5m: 120,
+    buys5m: 12,
+    sells5m: 4,
+    _smartMoney: { kolProbe: true, winners: 0, source: "kol_probe" }
+  });
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => [goodRow({ tokenMint: "RejectFresh111111111111111111111111111111111", symbol: "NOPE", marketCap: 1000000 })],
+    getPairLite: async () => ({ marketCap: row.marketCap, liquidityUsd: row.liquidityUsd }),
+    smartMoneyReady: () => true,
+    smartMoneyFeed: async () => [row],
+    buyToken: async (_mint, lamports) => { buys++; boughtLamports = lamports; return { ok: true, tokenAmount: "1" }; },
+    sellPercent: async () => ({ ok: true }),
+    now: () => t,
+    persist: async () => {}
+  });
+  await engine.start({ solBudget: 1, minutes: 60, mode: "normal", live: true, walletPubkey: "W".repeat(44) });
+  try {
+    t += 6000;
+    await engine._tick();
+    const open = engine.status().open[0];
+    const rawOpen = engine._state().open[0];
+    assert.equal(buys, 1);
+    assert.ok(boughtLamports > 0, "probe still buys when the KOL row clears probe quality");
+    assert.equal(open.sym, "KOLP");
+    assert.equal(rawOpen.smartExitPct, 18, "thin-sample KOL probes bank faster than proven copies");
+    assert.ok(open.costSol <= 0.04, "probe size remains small");
+  } finally {
+    await engine.stop("test-done");
+  }
+});
+
 test("engine: live mode refuses to start without a wallet", async () => {
   const engine = createAutopilotEngine({
     getFreshFeed: async () => [],

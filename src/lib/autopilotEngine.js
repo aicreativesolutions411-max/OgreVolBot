@@ -472,6 +472,7 @@ export function convictionMult(row, rep, sm, ci, caps = {}) {
   // Bonus signal only — boosts conviction, never gates entry. Bonded, never huge.
   if (sm) {
     if (sm.kol) c += 0.3;                                    // a tracked KOL is in early buyers
+    else if (sm.kolProbe) c += 0.05;                          // unproven KOL probe: learn small, don't size like edge
     if (sm.winners >= 2) c += 0.3;                           // multiple proven winners aping
     else if (sm.winners >= 1) c += 0.2;                      // one proven winner aping
   }
@@ -495,7 +496,7 @@ export function convictionMult(row, rep, sm, ci, caps = {}) {
   // freshScore rewards <30s age / $2.5-8k MC — meaningless for SCALP's liquid, minutes-old,
   // higher-MC coins (every one would score low and get docked). Skip the freshScore-derived
   // size tweaks for scalp; its own liquidScore gate already vetted setup quality.
-  const noEdge = !(rep && rep.runners >= 1) && !(sm && (sm.kol || sm.winners >= 1)) && !(ci && ci.trusted);
+  const noEdge = !(rep && rep.runners >= 1) && !(sm && (sm.kol || sm.kolProbe || sm.winners >= 1)) && !(ci && ci.trusted);
   if (!caps.scalp) {
     const fsv = freshScore(row);
     // NOTE: we used to size UP on fs>=70 ("top-tier"). The live scorecard killed that idea — the
@@ -1828,7 +1829,7 @@ export function createAutopilotEngine(deps) {
         const rep = dev ? devReputation(dev) : null;
         if (rep && rep.rugs >= 2 && rep.runners === 0) continue;  // dev rug history still vetoes
         const sm = r._smartMoney || (smartMoney ? smartMoney(r.tokenMint) : null);
-        if (!sm || !(sm.kol || sm.winners >= 1)) continue;
+        if (!sm || !(sm.kol || sm.kolProbe || sm.winners >= 1)) continue;
         // LIQUID modes only copy-trade into SELLABLE coins — verify real depth (the feed row may
         // not carry liquidity; confirm via getPairLite) so a copy can't be an unsellable phantom.
         if (P.liquid) {
@@ -1841,10 +1842,11 @@ export function createAutopilotEngine(deps) {
         const ciRec = callerIntel ? callerIntel(r.tokenMint) : null;
         const ci = ciRec && ciRec.signal ? ciRec.signal : null;
         const conv = convictionMult(r, rep, sm, ci, { unprovenCap: P.unprovenConvCap, provenCap: P.provenConvCap, scalp: P.liquid });
-        if (conv < 1.0) continue;                                 // must carry real smart-money confluence
+        const minCopyConv = sm.kolProbe ? 0.5 : 1.0;
+        if (conv < minCopyConv) continue;                          // proven copies need confluence; probes stay small
         let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv, state.maxTradeSol));
         if (!canOpen(state, size)) break;
-        record("info", `🐳 copy-trade ${r.symbol || shortMint(r.tokenMint)} @ MC $${Math.round(Number(r.marketCap) || 0)} — ${sm.kol ? "KOL " : ""}${sm.winners || 0} winner-wallet(s) → conv ${conv.toFixed(2)}`);
+        record("info", `🐳 copy-trade ${r.symbol || shortMint(r.tokenMint)} @ MC $${Math.round(Number(r.marketCap) || 0)} — ${sm.kolProbe ? "KOL probe" : sm.kol ? "KOL " : ""}${sm.winners || 0} winner-wallet(s) → conv ${conv.toFixed(2)}`);
         await openPosition(r, size, P.liquid ? liquidScore(r) : freshScore(r), dev, rep, sm);
         state.lastOpenAt = now();
         openedThisCycle += 1;
@@ -1955,7 +1957,7 @@ export function createAutopilotEngine(deps) {
       //    "in-and-out, win steady" behavior for copy-trades — they flip fast, so we flip faster.
       //  • No smart money → null → use the normal mode ladder.
       smartExitPct: sm
-        ? (sm.exitMult ? Math.max(30, Math.min(400, Math.round((sm.exitMult - 1) * 100 * 0.85))) : 35)
+        ? (sm.exitMult ? Math.max(30, Math.min(400, Math.round((sm.exitMult - 1) * 100 * 0.85))) : sm.kolProbe ? 18 : 35)
         : null
     };
     state.open.push(pos);
