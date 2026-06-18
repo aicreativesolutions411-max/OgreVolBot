@@ -185,7 +185,15 @@
     try{ candle.setData(candles); }catch(e){ return; }
     try{ vol.setData(vols); }catch(e){}
     forming=Object.assign({},candles[candles.length-1]);
-    if(!haveCandles){ chart.timeScale().fitContent(); haveCandles=true; }   // fit once; afterwards keep the user's view
+    if(!haveCandles){
+      // Show the LAST ~90 candles, not all 2000 — wide bars so the Higgs slime/blood gel is
+      // actually visible (2000 bars squeezed to the width made each candle sub-pixel = it just
+      // looked like a thin line chart). Full history stays in the engine; the user can scroll back.
+      var n=candles.length;
+      try{ if(n>110) chart.timeScale().setVisibleLogicalRange({from:n-90,to:n+3}); else chart.timeScale().fitContent(); }
+      catch(e){ try{ chart.timeScale().fitContent(); }catch(e2){} }
+      haveCandles=true;
+    }
     hideLoad();
     if(typeof scheduleSkin==='function')scheduleSkin();
   }
