@@ -3564,7 +3564,17 @@ async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
   const feed = terminalFeedDefinition(tabKey);
   if (!feed) return null;
   if (options.ifStale && terminalFeedHasData(tabKey) && !terminalFeedIsStale(tabKey)) return terminalFeedRuntime(tabKey);
-  if (terminalFeedRuntime(tabKey).inFlight) return terminalFeedRuntime(tabKey);
+  if (terminalFeedRuntime(tabKey).inFlight) {
+    // A refresh is already running -> normally skip. BUT if it has been "in flight" too long
+    // it HUNG (a cold-start fetch or a sub-feed with no timeout that never settled), and the
+    // old unconditional guard would then DEADLOCK the feed forever -- no pairs ever load, not
+    // even on a manual Refresh -- because markTerminalFeedDone never ran to clear inFlight.
+    // This was the "no pairs on the site" bug. Time-bound it: after 15s, treat the prior
+    // refresh as dead, clear the flag, and fall through to start a fresh one.
+    const inFlightSince = Number(terminalFeedLastRefreshStartedAt.get(tabKey) || 0);
+    if (!inFlightSince || Date.now() - inFlightSince < 15_000) return terminalFeedRuntime(tabKey);
+    state.terminalFeeds = { ...state.terminalFeeds, [tabKey]: { ...terminalFeedRuntime(tabKey), inFlight: false } };
+  }
   const userDriven = terminalRefreshIsUserDriven(options);
   const now = Date.now();
   const lastStartedAt = Number(terminalFeedLastRefreshStartedAt.get(tabKey) || 0);
@@ -3591,7 +3601,15 @@ async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
         refreshLivePairBuckets({ silent: true, force: Boolean(options.force) })
       ];
       if (!state.kolWallet) tasks.push(loadKolScan(state.kolMode, "", { silent: true }));
-      await Promise.allSettled(tasks);
+      // Bound the combined wait: a sub-feed with no internal timeout (e.g. the KOL scan on a
+      // cold server) must NEVER hang the terminal refresh — if it did, markTerminalFeedDone
+      // never runs, inFlight stays set, and the WHOLE pairs feed deadlocks (the "no pairs"
+      // bug). Cap at 13s so live-pairs (≤12s internal timeout) can finish but a stuck task
+      // can't hold the refresh open forever.
+      await Promise.race([
+        Promise.allSettled(tasks),
+        new Promise((resolve) => setTimeout(resolve, 13_000))
+      ]);
     } else if (tabKey === "live") {
       await loadLivePairs({ silent: options.silent !== false, bucket: state.livePairBucket, force: Boolean(options.force) });
     } else if (tabKey === "liveTrades") {
@@ -25099,6 +25117,22 @@ document.addEventListener("input", (event) => {
     const empty = stateFeedRowCount() === 0 && !visibleFeedHasRows();
     if (!empty && !liveFeedLooksStale()) return;
     lastKickAt = now;
+    // EMPTY-FEED SELF-HEAL: a hung boot load can leave the shared in-flight / loading / warmup
+    // guards set, which makes every subsequent load short-circuit (dedupe to a dead promise or
+    // skip as "already loading") -> the feed stays blank forever. When the feed is genuinely
+    // empty, forcibly clear those guards so the forced refresh below actually hits the network.
+    if (empty) {
+      try { livePairsLoadInFlight.clear(); } catch {}
+      try { livePairsWarmupKeys.clear(); } catch {}
+      try { state.livePairsLoadingByBucket = {}; state.livePairsLoading = false; } catch {}
+      try {
+        ["terminal", "live", "slimeScope"].forEach((t) => {
+          if (state.terminalFeeds && state.terminalFeeds[t] && state.terminalFeeds[t].inFlight) {
+            state.terminalFeeds = { ...state.terminalFeeds, [t]: { ...state.terminalFeeds[t], inFlight: false } };
+          }
+        });
+      } catch {}
+    }
     const run = () => {
       if (typeof refreshVisibleTerminalFeeds === "function") {
         return refreshVisibleTerminalFeeds({ force: empty, reason });
@@ -25116,6 +25150,8 @@ document.addEventListener("input", (event) => {
     }
   }
 
+  // Fast first kick so a blank feed on entry self-heals in a few seconds, not ~8s+.
+  window.setTimeout(() => kick("first-paint-empty-feed-watchdog"), 3_200);
   window.setInterval(() => kick("empty-feed-watchdog-interval"), TERMINAL_BACKGROUND_REFRESH_MIN_MS);
   window.addEventListener("pageshow", () => window.setTimeout(() => kick("pageshow-empty-feed-watchdog"), TERMINAL_BACKGROUND_REFRESH_MIN_MS));
   document.addEventListener("visibilitychange", () => {
