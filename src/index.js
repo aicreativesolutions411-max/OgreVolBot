@@ -2374,6 +2374,7 @@ const popSeenTx = new Map();      // mint -> Set(tx)  (swap-api dedup)
 const popCandidates = new Map();  // mint -> { at, score, mc, symbol, inflowNow }
 const popPeakInflow = new Map();  // mint -> peak recent buy-inflow (drives the momentum-fade exit)
 const popHeldMints = new Map();   // mint -> at  (open pop positions kept watched so fade can fire)
+let _popHb = 0;                   // radar heartbeat counter
 function popIngestTrade(mint, trade) {
   if (!mint || !trade) return;
   const sol = Number(trade.solAmount ?? trade.amountSol ?? trade.sol) || 0;
@@ -2443,6 +2444,15 @@ async function pollPopRadar() {
         popCandidates.set(mint, { at: now, score, mc: (prev && prev.mc) || 0, symbol: sym, inflowNow: m.inflowNow });
         if (!prev) console.log(`[autopilot:info] ⚡ POP ignition ${sym} — accel ${m.accel.toFixed(1)}x · ${m.inflowNow.toFixed(2)} SOL/8s · ${m.uniqBuyers} buyers · score ${Math.round(score)}`);
       }
+    }
+    // RADAR HEARTBEAT (~30s) — makes a quiet pop feed diagnosable: is it starved of flow data, or is
+    // the market genuinely just not popping right now? Shows watch size, how many have live trade flow,
+    // and the BEST ignition score available vs the fire threshold.
+    _popHb = (_popHb + 1) % 10;
+    if (_popHb === 0) {
+      let withFlow = 0, best = 0;
+      for (const mint of watch) { const m = popMetrics(mint, now); if (m) { withFlow++; const s = popIgnitionScore(m); if (s > best) best = s; } }
+      console.log(`[autopilot:info] 📡 Pop Radar: watching ${watch.length}, ${withFlow} with live flow, best ignition ${Math.round(best)} (fires @ ${POP_IGNITION_FIRE})`);
     }
     for (const [m, r] of popCandidates) { if (now - r.at > 20_000) popCandidates.delete(m); }   // a pop is brief
     if (popTrades.size > 80) { for (const [m, arr] of popTrades) { if (!arr.length || now - arr[arr.length - 1].at > 60_000) { popTrades.delete(m); popSeenTx.delete(m); popPeakInflow.delete(m); } } }
