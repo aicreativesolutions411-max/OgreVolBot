@@ -2386,9 +2386,29 @@ function noteCopyRugWatch(mint, creator, symbol) {
 }
 
 // Tier a creator wallet by how proven/linked it is (null = not a known operator -> skip).
+// OPERATOR RUG-BLACKLIST — the fix for the serial-rugger bleed (one wallet launching coin after coin,
+// each rugging in ~1min, and the insider machine re-buying every one off its STALE pump history). The
+// instant an operator's launch rugs on us (rug-flow tripwire arms), stop treating that wallet as an
+// insider target — adaptive: "bet the operator, but the moment they turn rugger, walk away." A single
+// rug blacklists the wallet for 6h; repeat ruggers stay out longer. This is what breaks the loop.
+const creatorRugs = new Map();   // creator -> { count, at }
+function noteCreatorRug(creator) {
+  const w = String(creator || "").trim(); if (!w) return;
+  const e = creatorRugs.get(w) || { count: 0, at: 0 };
+  e.count += 1; e.at = Date.now(); creatorRugs.set(w, e);
+  if (creatorRugs.size > 2000) { const k0 = creatorRugs.keys().next().value; creatorRugs.delete(k0); }
+}
+function isRecentRugger(creator) {
+  const e = creatorRugs.get(String(creator || "").trim());
+  if (!e || !e.count) return false;
+  const ttl = (e.count >= 2 ? 24 : 6) * 60 * 60_000;   // 1 rug -> 6h cooldown, repeat rugger -> 24h
+  return Date.now() - e.at < ttl;
+}
+
 function insiderLaunchTier(creator) {
   const w = String(creator || "").trim();
   if (!w) return null;
+  if (isRecentRugger(w)) return null;                  // walked away — this operator just rugged us
   if (isKolWallet(w)) return { tier: 3, why: "kol" };
   if (insiderRotationLink.has(w)) return { tier: 2, why: "rotation" };   // a known operator's freshly-funded alt
   const rec = walletObs.get(w);
@@ -2432,7 +2452,7 @@ function recordInsiderLaunch(entry) {
 async function insiderFeedRows() {
   const now = Date.now();
   const fresh = [...insiderLaunches.entries()]
-    .filter(([mint, r]) => !r.dumped && !insiderDevSold.has(mint) && now - r.at < 6 * 60_000)
+    .filter(([mint, r]) => !r.dumped && !insiderDevSold.has(mint) && !isRecentRugger(r.creator) && now - r.at < 6 * 60_000)
     .sort((a, b) => b[1].tier - a[1].tier || b[1].at - a[1].at)
     .slice(0, 6);
   const rows = [];
@@ -2508,7 +2528,7 @@ async function checkInsiderRug(mint, r) {
     const cre = flow.get(creator) || { bought: 0, sold: 0 };
     const altsPumping = pumpers.some(([a, e]) => a !== creator && (e.bought - e.sold) > 0.2);
     if (!rug && cre.sold >= 0.3 && !altsPumping && now - r.at >= 30_000) { rug = true; why = "creator abandoned, no alt support"; }
-    if (rug) { insiderDevSold.add(mint); r.dumped = true; console.log(`[autopilot:info] 🚨 RUG-FLOW ${r.symbol}: ${why} — tripwire armed`); return true; }
+    if (rug) { insiderDevSold.add(mint); r.dumped = true; noteCreatorRug(r.creator); console.log(`[autopilot:info] 🚨 RUG-FLOW ${r.symbol}: ${why} — tripwire armed; blacklisting operator ${String(r.creator).slice(0, 4)}.. from new buys`); return true; }
   } catch {}
   return false;
 }
