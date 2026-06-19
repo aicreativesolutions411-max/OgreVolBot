@@ -620,6 +620,11 @@ export function entryReject(row, P) {
   if (P.minLiqAbs && liq > 0 && liq < P.minLiqAbs) return "liquidity";
   if (vol < 25) return "volume";
   if (buys > 0 && sells > buys * 2 + 3) return "dumping";
+  // MOMENTUM-CONFIRMED entry for the LIQUID-mover path: only ape a coin that is actively being
+  // BOUGHT right now (buy-led last-5m flow), not one that's flat or fading. This is the fix for
+  // "we buy movers that then dump" — the 42%-stop bleed. Needs a real flow sample (>=12 trades) so
+  // thin/unknown-flow rows still pass and get judged by liquidScore; require buys to clearly lead.
+  if (P.liquid && (buys + sells) >= 12 && buys < sells * 1.15) return "fading";
   // SCALP scores liquid movers (liquidScore); GRIND scores survivors (grindScore); the rest use
   // freshScore. Each mode's gate lives on its own scale (see the minScore overrides in aggParams).
   const setupScore = P.liquid ? liquidScore(row) : P.grind ? grindScore(row) : freshScore(row);
