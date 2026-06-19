@@ -2,6 +2,20 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
+    <script>
+      /* OgreVerse lives on the bot origin (this static SPA host can't run the game server).
+         Bounce /Ogreverse straight to the live game BEFORE the SPA/service-worker boots so
+         slimewire.org/Ogreverse shows + plays the game, not the app shell. No loop: on the bot
+         origin /Ogreverse is served by the game itself (this SPA index.html is never served there). */
+      (function () {
+        try {
+          var p = location.pathname || "";
+          if (/^\/ogreverse(\/|$)/i.test(p) && !/ogrevolbot\.onrender\.com$/i.test(location.host)) {
+            location.replace("https://ogrevolbot.onrender.com" + p + (location.search || ""));
+          }
+        } catch (e) {}
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <base href="/">
     <title>SlimeWire</title>

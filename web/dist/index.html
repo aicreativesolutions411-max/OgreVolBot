@@ -2,6 +2,20 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
+    <script>
+      /* OgreVerse lives on the bot origin (this static SPA host can't run the game server).
+         Bounce /Ogreverse straight to the live game BEFORE the SPA/service-worker boots so
+         slimewire.org/Ogreverse shows + plays the game, not the app shell. No loop: on the bot
+         origin /Ogreverse is served by the game itself (this SPA index.html is never served there). */
+      (function () {
+        try {
+          var p = location.pathname || "";
+          if (/^\/ogreverse(\/|$)/i.test(p) && !/ogrevolbot\.onrender\.com$/i.test(location.host)) {
+            location.replace("https://ogrevolbot.onrender.com" + p + (location.search || ""));
+          }
+        } catch (e) {}
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <base href="/">
     <title>SlimeWire</title>
@@ -48,13 +62,13 @@
     <link rel="preload" as="image" href="/assets/slimewire/svg/icons/wallet.svg">
     <link rel="preload" as="image" href="/assets/slimewire/svg/powered-by-ogres-badge.svg">
     <link rel="stylesheet" href="/tailwind.css?v=20260616-scalp-launch-v1">
-    <link rel="stylesheet" href="/styles.css?v=20260618124437">
-    <link rel="stylesheet" href="/slimewire-final-overrides.css?v=20260618124437">
-    <link rel="stylesheet" href="/ogre-stages.css?v=20260618124437">
+    <link rel="stylesheet" href="/styles.css?v=20260619005153">
+    <link rel="stylesheet" href="/slimewire-final-overrides.css?v=20260619005153">
+    <link rel="stylesheet" href="/ogre-stages.css?v=20260619005153">
     <script defer src="/config.js"></script>
     <script defer src="/vendor/tweetnacl-fast.min.js"></script>
     <script defer src="/vendor/solana-web3.iife.min.js?v=20260605-browser-trade-v1"></script>
-    <script type="module" src="/app.js?v=20260618124437"></script>
+    <script type="module" src="/app.js?v=20260619005153"></script>
     <script>
       // PWA: register the service worker (installable shell + push) and offer "Install app".
       (() => {
