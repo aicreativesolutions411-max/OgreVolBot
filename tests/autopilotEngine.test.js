@@ -11,6 +11,7 @@ import {
   convictionMult,
   confluenceMult,
   graduationScore,
+  capitalEfficiencyScore,
   flowSurge,
   autoTune,
   entryReject,
@@ -206,6 +207,22 @@ test("confluenceMult: a lone signal sizes normally, stacked independent signals 
   assert.equal(confluenceMult(everything, dev, sm, ci, null), 1.8, "clamped at 1.8");
 });
 
+test("capitalEfficiencyScore: rewards big avg swap size, docks micro-bot wash, neutral on tiny samples", () => {
+  assert.equal(capitalEfficiencyScore({ volume5m: 50, buys5m: 1, sells5m: 1 }), 0, "<3 trades → neutral");
+  // $4k volume over 20 trades = $200 avg swap → big-ticket real buyers
+  assert.equal(capitalEfficiencyScore({ volume5m: 4000, buys5m: 15, sells5m: 5 }), 16);
+  // $60 volume over 20 trades = $3 avg swap → wash theater → docked
+  assert.equal(capitalEfficiencyScore({ volume5m: 60, buys5m: 14, sells5m: 6 }), -6);
+  // a meaningful-but-modest avg swap scores positive
+  assert.ok(capitalEfficiencyScore({ volume5m: 700, buys5m: 12, sells5m: 8 }) > 0);
+});
+
+test("freshScore: a coin with big real swaps outranks one with bot-wash micro-swaps at equal volume", () => {
+  const real = freshScore(goodRow({ volume5m: 1200, buys5m: 8, sells5m: 4 }));   // ~$100 avg swap
+  const wash = freshScore(goodRow({ volume5m: 1200, buys5m: 90, sells5m: 70 })); // ~$7.5 avg swap
+  assert.ok(real > wash, "capital efficiency lifts real demand over wash");
+});
+
 test("graduationScore: rewards mid-curve + SOL/min velocity, zero when no curve data", () => {
   assert.equal(graduationScore(goodRow()), 0, "no bonding data → no-op");
   const mid = graduationScore({ bondingPct: 0.5 });
@@ -266,7 +283,10 @@ test("executableMcReject: fresh entries execute inside the DE-OVERFIT small-laun
 
 test("entryReject: fresh path rejects the live-losing 72+ blowoff score band", () => {
   const P = aggParams(baseState({ mode: "steady" }));
-  const highMid = goodRow({ bestPickScore: 30 });
+  // A realistic in-band coin: meaningful avg swap (~$15, so capital-efficiency doesn't dock it as
+  // wash), landing in the 67-71 band that overscore blocks. (The old row was wash-profile and now
+  // correctly scores lower under capitalEfficiencyScore — so it's no longer a valid band example.)
+  const highMid = goodRow({ volume5m: 90, buys5m: 4, sells5m: 2, bestPickScore: 5 });
   assert.equal(entryReject(highMid, P), "overscore");
   assert.ok(freshScore(highMid) >= P.maxScore && freshScore(highMid) < 72, "67-71 is also blocked");
   const blowoff = goodRow({ volume5m: 180, buys5m: 35, sells5m: 3, bestPickScore: 100 });

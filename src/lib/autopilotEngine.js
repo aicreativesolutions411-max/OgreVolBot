@@ -458,6 +458,9 @@ export function freshScore(row) {
   // the curve data isn't on the row, so DexScreener-only rows score exactly as before.
   s += Math.min(20, graduationScore(row) * 0.45);
 
+  // CAPITAL EFFICIENCY — reward few-but-meaningful swaps, dock micro-bot wash (top ML predictor).
+  s += capitalEfficiencyScore(row);
+
   return s;
 }
 
@@ -574,6 +577,8 @@ export function liquidScore(row) {
   // GRADUATION / CURVE-VELOCITY bonus — for a still-bonding liquid mover, real SOL accelerating
   // toward graduation is a strong, unfakeable continuation tell. Bounded; 0 when no curve data.
   s += Math.min(16, graduationScore(row) * 0.36);
+  // CAPITAL EFFICIENCY — meaningful avg swap size beats micro-bot wash (top ML predictor).
+  s += capitalEfficiencyScore(row);
   return s;
 }
 
@@ -716,6 +721,22 @@ export function graduationScore(row) {
     else if (vel >= 0.2) s += 4;
   }
   return s;
+}
+
+// CAPITAL-EFFICIENCY — the single best graduation predictor in the live ML studies: real demand is
+// a FEW MEANINGFUL swaps, not hundreds of micro-bot trades. avg swap size = volume / trade count.
+// Big avg swap = real money walking in; sub-$15 avg across many trades = wash-trade theater (the
+// easiest metric to fake, so we DOCK it instead of rewarding raw buy/holder counts). Pure; bounded.
+export function capitalEfficiencyScore(row) {
+  const vol = Number(row.volume5m) || 0;
+  const trades = (Number(row.buys5m) || 0) + (Number(row.sells5m) || 0);
+  if (trades < 3 || vol <= 0) return 0;        // too little to judge → neutral
+  const avg = vol / trades;
+  if (avg >= 120) return 16;                    // big-ticket real buyers
+  if (avg >= 60) return 12;
+  if (avg >= 30) return 8;
+  if (avg >= 15) return 4;
+  return -6;                                    // many tiny swaps = bot wash → demote (not hard-reject)
 }
 
 // FLOW-SURGE — detect buy-flow / turnover ACCELERATING vs this coin's previous read. Returns a
@@ -1284,6 +1305,7 @@ export function createAutopilotEngine(deps) {
     getDevWallet = () => null,
     devReputation = () => null,
     smartMoney = () => null,
+    clusterRisk = () => null,   // (mint) -> { risk:0..1, reason } | null  (funding-graph rug filter)
     smartMoneyReady = () => false,
     smartMoneyFeed = async () => [],
     callerIntel = () => null,   // (mint) -> { signal:{convictionDelta,reason,trusted}, caller, channel } | null
@@ -2306,6 +2328,19 @@ export function createAutopilotEngine(deps) {
       // skipped in a red tape and never buying. The tight stop + de-risk-trail + rug-flow tripwire are
       // the protection here, not the comps veto.
       const proven = (rep && rep.runners >= 1 && rep.rugs === 0) || (sm && (sm.kol || sm.winners >= 2)) || (ci && ci.trusted) || (P.snipe && snipeRec && snipeRec.score >= P.minSnipe);
+      // FUNDING-GRAPH CLUSTER RUG FILTER (Brain 4): when a coin's early buyers concentrate in ONE
+      // funding source it's a coordinated insider net behind a "clean" chart. Extreme concentration
+      // on an UNPROVEN coin → skip (don't donate to the rug). Lesser concentration → shrink the bet.
+      // No-op when we haven't mapped enough funders (cr === null), so it never starves the feed.
+      const cr = clusterRisk ? clusterRisk(cand.r.tokenMint) : null;
+      if (cr && cr.risk >= 0.85 && !proven) {
+        state.blocked = (state.blocked || 0) + 1;
+        rejTally.cluster = (rejTally.cluster || 0) + 1;
+        state.lastRejTally = rejTally;
+        record("info", `🕸️ Avoiding ${cand.r.symbol} — insider cluster (${cr.reason})`);
+        continue;
+      }
+      const clusterMult = cr && cr.risk > 0 ? Math.max(0.5, 1 - cr.risk * 0.4) : 1;
       // SCALP scores on the liquidScore scale (top setups ~45-80). A liquid, buy-led mover's real
       // depth + scalp's tight 7% stop / fast ~14% bank already handle the risk confirmation guards
       // against — so a solid scalp setup (>=44, a clearly buy-led in-band mover) enters INSTANTLY.
@@ -2340,7 +2375,7 @@ export function createAutopilotEngine(deps) {
       // CONFLUENCE press (#1): when >=2 INDEPENDENT hard signals stack, size up above the conviction
       // cap (still clamped to maxTradeSol) — the gold setups earn the biggest bets.
       const confl = confluenceMult(cand.r, rep, sm, ci, snipeRec);
-      let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * confl * readyMult * (brake.sizeMult || 1), state.maxTradeSol));
+      let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * confl * clusterMult * readyMult * (brake.sizeMult || 1), state.maxTradeSol));
       if (probeNow) size = state.minTradeSol;
       if (!canOpen(state, size)) break;
       await openPosition(cand.r, size, cand.fs, dev, rep, sm, P);
@@ -2420,7 +2455,11 @@ export function createAutopilotEngine(deps) {
         const edgeMult = sm.edge != null ? Math.max(0.6, Math.min(1.6, sm.edge)) : 0.85;
         // CONFLUENCE press (#1): stack independent signals -> size up above the conviction cap.
         const confl = confluenceMult(r, rep, sm, ci, null);
-        let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * confl * readyMult * edgeMult * (brake.sizeMult || 1), state.maxTradeSol));
+        // CLUSTER RUG FILTER (Brain 4): proven wallets are in it so we don't veto, but shrink the bet
+        // when this coin's early buyers concentrate in one funder (the rug-flow tripwire covers exit).
+        const cr = clusterRisk ? clusterRisk(r.tokenMint) : null;
+        const clusterMult = cr && cr.risk > 0 ? Math.max(0.5, 1 - cr.risk * 0.4) : 1;
+        let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * confl * clusterMult * readyMult * edgeMult * (brake.sizeMult || 1), state.maxTradeSol));
         if (!canOpen(state, size)) break;
         record("info", `🐳 copy-trade ${r.symbol || shortMint(r.tokenMint)} @ MC $${Math.round(Number(r.marketCap) || 0)} — ${sm.kolProbe ? "probe " : ""}${sm.winners || 0} winner${sm.edge != null ? ` · edge ${sm.edge}x` : ""}${sm.apeScore != null ? ` · ape ${sm.apeScore}` : ""} → conv ${conv.toFixed(2)}`);
         await openPosition(r, size, P.liquid ? liquidScore(r) : freshScore(r), dev, rep, sm, P);

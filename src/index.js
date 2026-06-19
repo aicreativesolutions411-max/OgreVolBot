@@ -1353,6 +1353,39 @@ function smartMoneyScore(mint) {
     return { winners, kol, exitMult, holdMsCap, entryMcLo, entryMcHi };
   } catch { return null; }
 }
+
+// FUNDING-GRAPH CLUSTER RISK — the highest-signal rug tell most bots miss. A "clean" chart can hide
+// a coordinated insider net: top-10 holders look fine because the operator SPLIT supply across 20
+// fresh wallets — but those wallets share ONE funding source. We already resolve per-wallet funders
+// (walletObs.funder, free RPC trickle), so we group a coin's early buyers by funder and flag when a
+// single source backs a big share of them. Returns null when too few funders are resolved (unknown,
+// never penalize on missing data) — so it bites on coins we've had time to map, no-ops on the rest.
+// The FULL current-held-% version needs the gRPC balance stream; this is the free, data-we-have lite.
+function autopilotClusterRisk(mint) {
+  try {
+    const buyers = new Set();
+    const eb = earlyBuyers.get(mint); if (eb) for (const w of eb) buyers.add(String(w));
+    const oc = obsCoins.get(mint); if (oc && Array.isArray(oc.buyers)) for (const w of oc.buyers) buyers.add(String(w));
+    if (buyers.size < 4) return null;                       // too few early buyers to judge
+    const byFunder = new Map();
+    let resolved = 0;
+    for (const w of buyers) {
+      const r = walletObs.get(w);
+      const funder = r && r.funder ? String(r.funder) : null;
+      if (!funder) continue;                                // only weigh wallets whose funder we KNOW
+      resolved += 1;
+      byFunder.set(funder, (byFunder.get(funder) || 0) + 1);
+    }
+    if (resolved < 3) return null;                          // not enough funding edges mapped → unknown
+    let top = 0;
+    for (const n of byFunder.values()) if (n > top) top = n;
+    const frac = top / resolved;                            // share of MAPPED early buyers from one source
+    if (frac >= 0.6) return { risk: 0.9, reason: `${Math.round(frac * 100)}% of ${resolved} mapped buyers share one funder` };
+    if (frac >= 0.45) return { risk: 0.6, reason: `${Math.round(frac * 100)}% one funder` };
+    if (frac >= 0.33) return { risk: 0.35, reason: `${Math.round(frac * 100)}% one funder` };
+    return { risk: 0, reason: "diverse funders" };
+  } catch { return null; }
+}
 // SELF-ACTIVATION GATE: the smart-money entry path turns itself ON (no toggle) only
 // once the observatory has learned enough — a real roster of proven-winner wallets
 // AND a deep sample of scored coins. Until then it's pure observation. KOLs you list
@@ -2515,6 +2548,7 @@ const autopilotEngine = createAutopilotEngine({
   },
   devReputation: (dev) => combinedDevRep(dev),
   smartMoney: (mint) => smartMoneyScore(mint),
+  clusterRisk: (mint) => autopilotClusterRisk(mint),
   smartMoneyReady: () => smartMoneyReady(),
   smartMoneyFeed: async () => smartMoneyFeed(),
   // INSIDER-LAUNCH dev-dump tripwire: the engine exits 100% the instant a launch's creator sells.
