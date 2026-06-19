@@ -3577,7 +3577,10 @@ function proxyOgreverse(request, response, requestUrl) {
     (proxyRes) => { response.writeHead(proxyRes.statusCode || 502, proxyRes.headers); proxyRes.pipe(response); }   // streams SSE too
   );
   proxyReq.on("error", () => { if (!response.headersSent) { response.writeHead(502, { "content-type": "application/json" }); response.end(JSON.stringify({ ok: false, error: "ogreverse_unavailable" })); } else { try { response.end(); } catch {} } });
-  request.on("close", () => proxyReq.destroy());
+  // Tear down the upstream on CLIENT disconnect (covers long-lived SSE). Must NOT key off the
+  // REQUEST 'close' — for a bodyless GET that fires the instant the request ends, which would kill
+  // the in-flight proxy request before its response returns (→ spurious 502 on every request).
+  response.on("close", () => { try { proxyReq.destroy(); } catch {} });
   request.pipe(proxyReq);
 }
 
