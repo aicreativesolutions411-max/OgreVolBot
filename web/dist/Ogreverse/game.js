@@ -2589,7 +2589,7 @@
   function startOnlineEventStream() {
     if (!state.online.id || !state.online.token || typeof EventSource === "undefined") return;
     if (state.online.stream) state.online.stream.close();
-    const url = `/api/mmo/events?id=${encodeURIComponent(state.online.id)}&token=${encodeURIComponent(state.online.token)}`;
+    const url = apiUrl(`/api/mmo/events?id=${encodeURIComponent(state.online.id)}&token=${encodeURIComponent(state.online.token)}`);
     const stream = new EventSource(url);
     stream.addEventListener("presence", (event) => {
       try {

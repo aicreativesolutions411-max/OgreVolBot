@@ -3171,6 +3171,10 @@ canvas {
 
   .mobile-joystick-panel,
   .mobile-action-stack {
+    /* The parent .mobile-controls is pointer-events:none so the canvas behind it stays tappable.
+       Re-enable events on the actual control surfaces — WITHOUT this the joystick swallows nothing
+       and the player can't move on touch devices (only the .btn buttons had it). */
+    pointer-events: auto;
     padding: 7px;
     border: 4px solid #02050a;
     background:
