@@ -1023,6 +1023,18 @@ function rebuildWalletClusters() {
 // A wallet's cluster identity for de-duping (its funder if tight-clustered, else itself).
 function clusterIdFor(wallet) { return walletClusterId.get(String(wallet || "").trim()) || String(wallet || "").trim(); }
 
+// SHARED ALCHEMY FUNDER-LOOKUP BUDGET. Each lookup = up to 3× getSignaturesForAddress(limit 1000) +
+// getParsedTransaction — Alchemy's PRICIEST Solana reads. A hard daily cap so the funder pollers can
+// never run away with the RPC quota (the unthrottled rotation-catcher is what tripped the free-tier
+// alert). Env FUNDER_LOOKUP_DAILY_CAP (default 400/day).
+let funderDay = ""; let funderUsedToday = 0;
+const FUNDER_DAILY_CAP = Math.max(50, Number(process.env.FUNDER_LOOKUP_DAILY_CAP) || 400);
+function funderBudgetOk() {
+  const day = new Date().toISOString().slice(0, 10);
+  if (day !== funderDay) { funderDay = day; funderUsedToday = 0; }
+  return funderUsedToday < FUNDER_DAILY_CAP;
+}
+
 // Background: lazily resolve funders for the winner roster — a few per cycle so it's light on RPC,
 // cached forever after. Rebuilds clusters each pass.
 async function pollWalletFunders() {
@@ -1035,7 +1047,7 @@ async function pollWalletFunders() {
       todo.push(w);
       if (todo.length >= 4) break;   // ~4 wallets/cycle, one-time per wallet
     }
-    for (const w of todo) { funderLookupInFlight += 1; try { await lookupWalletFunder(w); } finally { funderLookupInFlight -= 1; } }
+    for (const w of todo) { if (!funderBudgetOk()) break; funderLookupInFlight += 1; funderUsedToday += 1; try { await lookupWalletFunder(w); } finally { funderLookupInFlight -= 1; } }
     rebuildWalletClusters();
   } catch {}
 }
@@ -2379,16 +2391,24 @@ function recordRecentLauncher(entry) {
 // operator is their rotation -> link it (and flag its current launch). Trickle: 3 / 30s (free RPC).
 let _launcherFunderPolling = false;
 async function pollLauncherFunders() {
-  if (_launcherFunderPolling) return;
+  if (_launcherFunderPolling || !funderBudgetOk()) return;
   _launcherFunderPolling = true;
   try {
     const now = Date.now();
+    // COST GUARD: a funder lookup is expensive (Alchemy getSignatures+getParsedTransaction), and 99%
+    // of launchers are random noise that never trace to a known operator — so DON'T resolve every
+    // launcher (that was the free-tier burn). Only spend a lookup on a launcher whose coin ALREADY
+    // drew SMART MONEY (a known winner/KOL bought it early — a cheap in-memory check); skip the rest
+    // WITHOUT marking them seen so they're re-checked cheaply until traction appears or they age out.
     const cands = [...recentLaunchers.entries()]
       .filter(([w, r]) => !launcherFunderSeen.has(w) && now - r.at < 30 * 60_000 && insiderLaunchTier(w) === null)
+      .filter(([, r]) => { const sm = smartMoneyScore(r.mint); return sm && (sm.kol || (sm.winners || 0) >= 1); })
       .sort((a, b) => b[1].at - a[1].at)
-      .slice(0, 3);
+      .slice(0, 2);
     for (const [creator, r] of cands) {
+      if (!funderBudgetOk()) break;          // hard daily Alchemy cap
       launcherFunderSeen.add(creator);
+      funderUsedToday += 1;
       let funder = null;
       try { funder = await lookupWalletFunder(creator); } catch {}
       if (funder && insiderLaunchTier(funder) !== null) {
@@ -2399,12 +2419,12 @@ async function pollLauncherFunders() {
           insiderLaunches.set(r.mint, { creator, symbol: r.symbol, tier: 2, why: "rotation", at: r.at, mc: 0, mcAt: 0, dumped: false });
         }
       }
-      await new Promise((res) => setTimeout(res, 200));
+      await new Promise((res) => setTimeout(res, 250));
     }
     if (launcherFunderSeen.size > 6000) launcherFunderSeen.clear();
   } finally { _launcherFunderPolling = false; }
 }
-setInterval(() => { void pollLauncherFunders(); }, 30_000);
+setInterval(() => { void pollLauncherFunders(); }, 60_000);
 
 // (2) FIRST-BUYER ROSTER SCALE. Scan first-buyers of recent RUNNER tokens (trending/volume); a wallet
 // that profitably first-bought >= 2 INDEPENDENT runners is an early-alpha winner. Quota-aware trickle
