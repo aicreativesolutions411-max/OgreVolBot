@@ -2369,6 +2369,21 @@ setInterval(() => { void pollSocialHeat(); }, 20_000);
 const insiderLaunches = new Map();   // mint -> { creator, symbol, tier, why, at, mc, mcAt, dumped }
 const insiderDevSold = new Set();    // mints whose creator has SOLD -> the engine's dev-dump tripwire fires
 const insiderRotationLink = new Map(); // ROTATED creator -> { operator, at } — a NEW wallet funded by a known operator (rotation-catcher)
+// PRECURSOR EXITS (Brain 5): COPY/smart-money positions the engine asked us to rug-watch. Same shape
+// as insiderLaunches ({creator, at, symbol, dumped}) so checkInsiderRug + the poller + the WSS watcher
+// treat them identically — we bail on the operator/cluster DISTRIBUTION precursor instead of racing
+// the whale's sell. Bounded + TTL'd; deduped against insiderLaunches.
+const copyRugWatch = new Map();      // mint -> { creator, at, symbol, dumped }
+function noteCopyRugWatch(mint, creator, symbol) {
+  mint = String(mint || "").trim(); creator = String(creator || "").trim();
+  if (!mint || !creator) return;
+  if (insiderLaunches.has(mint) || copyRugWatch.has(mint)) return;   // already watched
+  copyRugWatch.set(mint, { creator, at: Date.now(), symbol: symbol || mint.slice(0, 6), dumped: false });
+  if (copyRugWatch.size > 300) {                                     // prune dumped/stale
+    const now = Date.now();
+    for (const [m, r] of copyRugWatch) { if (r.dumped || now - r.at > 30 * 60_000) copyRugWatch.delete(m); }
+  }
+}
 
 // Tier a creator wallet by how proven/linked it is (null = not a known operator -> skip).
 function insiderLaunchTier(creator) {
@@ -2504,7 +2519,7 @@ async function pollInsiderRugWatch() {
   _insiderRugPolling = true;
   try {
     const now = Date.now();
-    const watch = [...insiderLaunches.entries()].filter(([m, r]) => !r.dumped && !insiderDevSold.has(m) && now - r.at < 25 * 60_000).slice(0, 6);
+    const watch = [...insiderLaunches.entries(), ...copyRugWatch.entries()].filter(([m, r]) => !r.dumped && !insiderDevSold.has(m) && now - r.at < 25 * 60_000).slice(0, 8);
     for (const [mint, r] of watch) {
       await checkInsiderRug(mint, r);
       await new Promise((res) => setTimeout(res, 150));
@@ -2532,7 +2547,7 @@ let _rugWsReqId = 1;
 function rugWatchWallets() {
   const now = Date.now();
   const set = new Set();
-  for (const [, r] of insiderLaunches.entries()) {
+  for (const [, r] of [...insiderLaunches.entries(), ...copyRugWatch.entries()]) {
     if (!r || r.dumped || now - r.at > 25 * 60_000) continue;
     if (r.creator) set.add(String(r.creator));
   }
@@ -2540,7 +2555,7 @@ function rugWatchWallets() {
 }
 function rugMintsForWallet(wallet) {
   const now = Date.now(), out = [];
-  for (const [mint, r] of insiderLaunches.entries()) {
+  for (const [mint, r] of [...insiderLaunches.entries(), ...copyRugWatch.entries()]) {
     if (r && !r.dumped && String(r.creator) === wallet && now - r.at < 25 * 60_000) out.push([mint, r]);
   }
   return out;
@@ -2729,6 +2744,7 @@ const autopilotEngine = createAutopilotEngine({
   smartMoneyFeed: async () => smartMoneyFeed(),
   // INSIDER-LAUNCH dev-dump tripwire: the engine exits 100% the instant a launch's creator sells.
   devSold: (mint) => devSoldForMint(mint),
+  noteRugWatch: (mint, creator, symbol) => noteCopyRugWatch(mint, creator, symbol),
   getReadiness: () => autopilotReadiness(),   // SELF-ARM: trade only once the brain has learned enough edge
 
   callerIntel: (mint) => telegramCallerIntelForMint(mint),

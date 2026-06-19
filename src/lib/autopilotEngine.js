@@ -1293,6 +1293,9 @@ export function createAutopilotEngine(deps) {
     // The host (index.js) watches creators of insider launches via swap-api and flips this; the
     // engine exits 100% the instant it's true. Default false = feature off when unwired.
     devSold = () => false,
+    // (mint, creator) -> register a COPY/smart-money position's coin for the same real-time rug-watch
+    // the insider launches get, so devSold() can flip on a distribution precursor. No-op when unwired.
+    noteRugWatch = () => {},
     now = () => Date.now(),
     log = () => {},
     persist = async () => {},
@@ -1821,7 +1824,7 @@ export function createAutopilotEngine(deps) {
       // flow watcher sees a MAIN PUMPER (a linked alt / top accumulator) EXIT its position, we bail
       // 100% ahead of the rug. (NOT the creator's early bait-flip — that head-fake is filtered host-
       // side.) Checked before the normal ladder so it always wins. Fast cache lookup.
-      if (pos.insider && !pos.devDumpHandled) {
+      if ((pos.insider || pos.rugWatch) && pos.devWallet && !pos.devDumpHandled) {
         let dumped = false;
         try { dumped = await devSold(pos.mint, pos.devWallet); } catch {}
         if (dumped) {
@@ -2656,6 +2659,13 @@ export function createAutopilotEngine(deps) {
         alpha: Boolean(row && row._smartMoney && row._smartMoney.earlyAlpha),
         grad: graduationScore(row) >= 20
       };
+    }
+    // PRECURSOR EXITS (Brain 5): copy/smart-money positions get the SAME real-time rug-watch insider
+    // launches get — don't race the whale's sell, bail on the operator/cluster DISTRIBUTION precursor.
+    // Register the coin's dev/operator so the host's rug-flow tripwire (devSold) can cover this mint.
+    if (!pos.insider && sm && (sm.kol || sm.kolProbe || sm.winners >= 1) && pos.devWallet) {
+      pos.rugWatch = true;
+      try { noteRugWatch(mint, pos.devWallet, sym); } catch {}
     }
     state.open.push(pos);
     state.recentApeNames[normSym(sym)] = now(); // remember the NAME to block clone-swarm pile-ins
