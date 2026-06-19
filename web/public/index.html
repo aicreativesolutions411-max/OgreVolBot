@@ -22,25 +22,21 @@
     <link rel="dns-prefetch" href="https://ogrevolbot.onrender.com">
     <link rel="icon" type="image/svg+xml" href="/assets/slimewire/svg/slimewire-mark.svg?v=logo4">
     <script>
-      // SELF-HEAL for /Ogreverse. The game is its OWN static client at /Ogreverse/. If this SPA
-      // document ever loads at an /Ogreverse URL, it means a STALE service worker wrongly served the
-      // app shell instead of letting the static game files load — that is the "intro loop" bug. Evict
-      // ALL workers and reload once: with no worker, the host serves the real game. A one-shot
-      // sessionStorage guard prevents any reload loop.
+      // /ogreverse -> real game. The game is its OWN static client at the case-sensitive path
+      // /Ogreverse/ (capital O). This static host is case-sensitive and serves THIS app shell (the
+      // intro) for any path that is not an exact file match — so /ogreverse, or any mis-cased variant,
+      // renders the intro instead of the game. This runs first, before the app boots: if the shell
+      // loads under an "ogreverse" path segment, redirect to the real /Ogreverse/ directory, which
+      // serves the game itself (a real dir) and so never falls back here again — no loop, no cache,
+      // works on a brand-new device.
       (() => {
         try {
-          const p = (window.location.pathname || "").toLowerCase();
-          if (p !== "/ogreverse" && !p.startsWith("/ogreverse/")) return;
-          if (sessionStorage.getItem("ogvSwHealed") === "1") return;
-          sessionStorage.setItem("ogvSwHealed", "1");
-          const reload = () => window.location.reload();
-          if ("serviceWorker" in navigator) {
-            navigator.serviceWorker.getRegistrations()
-              .then((regs) => Promise.all(regs.map((r) => r.unregister())))
-              .then(reload).catch(reload);
-          } else {
-            reload();
-          }
+          const path = window.location.pathname || "/";
+          if (path === "/Ogreverse" || path.indexOf("/Ogreverse/") === 0) return; // already canonical
+          const seg = path.split("/")[1] || "";
+          if (!/^ogreverse$/i.test(seg)) return;
+          const rest = path.replace(/^\/[^/]+/, "");               // keep any sub-path after the segment
+          window.location.replace("/Ogreverse" + rest + (window.location.search || "") + (window.location.hash || ""));
         } catch (_) {}
       })();
     </script>
