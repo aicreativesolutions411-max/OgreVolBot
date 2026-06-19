@@ -54,7 +54,7 @@ import {
 } from "./lib/tradeExecutionService.js";
 import { workerTickTaskFlags } from "./lib/workerTickTasks.js";
 import { createTelegramChannelBridge, escapeTelegramHtml } from "./lib/telegramChannelBridge.js";
-import { createAutopilotEngine, LAMPORTS_PER_SOL as AUTOPILOT_LAMPORTS_PER_SOL } from "./lib/autopilotEngine.js";
+import { createAutopilotEngine, LAMPORTS_PER_SOL as AUTOPILOT_LAMPORTS_PER_SOL, popIgnitionScore, POP_IGNITION_FIRE } from "./lib/autopilotEngine.js";
 import webpush from "web-push";
 import {
   createPumpLaunchError,
@@ -224,7 +224,8 @@ const pumpPortalStream = createPumpPortalStream({
     try { recordRecentLauncher(entry); } catch {}  // ROTATION-CATCHER: remember every launcher to funder-resolve
   },
   // Live smart-money capture: record early buyers the instant they trade (see recordEarlyBuyer).
-  onTrade: (mint, trade) => recordEarlyBuyer(mint, trade)
+  // ALSO feed the POP RADAR (real-time ignition detector) the live trade flow.
+  onTrade: (mint, trade) => { recordEarlyBuyer(mint, trade); try { popIngestTrade(mint, trade); } catch {} }
 });
 // --- Live Autopilot (Fresh-Ape, server-side, always-on) -------------------
 // The browser /autopilot page proved the brain on real data with paper fills.
@@ -2361,6 +2362,101 @@ async function pollSocialHeat() {
 }
 setInterval(() => { void pollSocialHeat(); }, 20_000);
 
+// ===== POP RADAR — real-time IGNITION detector (the "get in before the pop" entry engine) =========
+// Detects a coin POPPING right now from its LIVE trade flow: net SOL inflow ACCELERATING vs its own
+// recent baseline + buy-led (sellers drying) + a BURST of distinct buyers (+ smart-money bonus). Fed by
+// the free per-trade sources we already run 24/7 — the PumpPortal onTrade stream (real-time) + a focused
+// swap-api fast-poll on the freshest candidates. Surfaces igniting coins as a pre-vetted, top-priority
+// "pop" feed the 'pop' mode trades (MC-AGNOSTIC — flow leads, MC lags). The score is the pure
+// popIgnitionScore() in the engine; here we compute the live flow metrics + the momentum-fade signal.
+const popTrades = new Map();      // mint -> [{ at, side, sol, trader }]  (rolling, last ~45s)
+const popSeenTx = new Map();      // mint -> Set(tx)  (swap-api dedup)
+const popCandidates = new Map();  // mint -> { at, score, mc, symbol, inflowNow }
+const popPeakInflow = new Map();  // mint -> peak recent buy-inflow (drives the momentum-fade exit)
+const popHeldMints = new Map();   // mint -> at  (open pop positions kept watched so fade can fire)
+function popIngestTrade(mint, trade) {
+  if (!mint || !trade) return;
+  const sol = Number(trade.solAmount ?? trade.amountSol ?? trade.sol) || 0;
+  const side = String(trade.side || trade.type || "").toLowerCase() === "sell" ? "sell" : "buy";
+  const at = Number(trade.at) || Date.now();
+  let arr = popTrades.get(mint); if (!arr) { arr = []; popTrades.set(mint, arr); }
+  arr.push({ at, side, sol, trader: String(trade.trader || trade.userAddress || "") });
+  const cut = Date.now() - 45_000;
+  while (arr.length && arr[0].at < cut) arr.shift();
+  if (arr.length > 240) arr.splice(0, arr.length - 240);
+}
+function popMetrics(mint, nowMs) {
+  const arr = popTrades.get(mint); if (!arr || arr.length < 4) return null;
+  const W = 8_000;                                        // 8s "now" window vs the prior 24s baseline
+  const now0 = nowMs - W, baseStart = nowMs - 4 * W;
+  let buyNow = 0, sellNow = 0, buySolNow = 0, buySolBase = 0; const buyers = new Set();
+  for (const t of arr) {
+    if (t.at >= now0) { if (t.side === "buy") { buyNow++; buySolNow += t.sol; if (t.trader) buyers.add(t.trader); } else sellNow++; }
+    else if (t.at >= baseStart) { if (t.side === "buy") buySolBase += t.sol; }
+  }
+  let smart = false;
+  for (const w of buyers) { if (isKolWallet(w) || isWinnerWallet(walletObs.get(w))) { smart = true; break; } }
+  return { accel: buySolNow / Math.max(buySolBase / 3, 0.05), inflowNow: buySolNow, buyShare: (buyNow + sellNow) > 0 ? buyNow / (buyNow + sellNow) : 0, uniqBuyers: buyers.size, smart };
+}
+// True once the inflow that drove a pop has DECELERATED (the engine's momentum-fade exit calls this).
+function popFadingNow(mint) {
+  const peak = popPeakInflow.get(mint) || 0;
+  if (peak < 0.3) return false;                          // never really popped -> nothing to fade
+  const m = popMetrics(mint, Date.now());
+  if (!m) return true;                                   // no live trades at all = the burst is dead
+  return m.inflowNow < peak * 0.35;                      // collapsed to <35% of its peak = pop is over
+}
+let _popPolling = false;
+async function pollPopRadar() {
+  if (_popPolling) return; _popPolling = true;
+  try {
+    const now = Date.now();
+    for (const [m, at] of popHeldMints) { if (now - at > 8 * 60_000) popHeldMints.delete(m); }
+    const watch = [...new Set([...(lastFreshMints || []).slice(0, 14), ...popHeldMints.keys()])].slice(0, 22);
+    for (let i = 0; i < watch.length; i += 8) {           // swap-api fast-poll the watchlist for NEW trades
+      await Promise.all(watch.slice(i, i + 8).map(async (mint) => {
+        let j = null;
+        try { j = await fetch(`https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=40`, { headers: { accept: "application/json" } }).then((r) => r.ok ? r.json() : null); } catch {}
+        const trades = (j && Array.isArray(j.trades)) ? j.trades : [];
+        if (!trades.length) return;
+        let seen = popSeenTx.get(mint); if (!seen) { seen = new Set(); popSeenTx.set(mint, seen); }
+        for (const t of trades) {
+          const sig = String(t.tx || t.slotIndexId || ""); if (!sig || seen.has(sig)) continue; seen.add(sig);
+          popIngestTrade(mint, { at: now, side: t.type, solAmount: t.amountSol ?? t.quoteAmount, trader: t.userAddress });
+        }
+        if (seen.size > 200) { const a = [...seen]; popSeenTx.set(mint, new Set(a.slice(a.length - 150))); }
+      }));
+    }
+    for (const mint of watch) {                            // score -> ignition candidates + peak inflow
+      const m = popMetrics(mint, now); if (!m) continue;
+      if (m.inflowNow > (popPeakInflow.get(mint) || 0)) popPeakInflow.set(mint, m.inflowNow);
+      const score = popIgnitionScore(m);
+      if (score >= POP_IGNITION_FIRE) {
+        const prev = popCandidates.get(mint);
+        const sym = (pumpPortalStream.getCreationEntry(mint)?.event?.symbol) || (prev && prev.symbol) || shortMint(mint);
+        popCandidates.set(mint, { at: now, score, mc: (prev && prev.mc) || 0, symbol: sym, inflowNow: m.inflowNow });
+        if (!prev) console.log(`[autopilot:info] ⚡ POP ignition ${sym} — accel ${m.accel.toFixed(1)}x · ${m.inflowNow.toFixed(2)} SOL/8s · ${m.uniqBuyers} buyers · score ${Math.round(score)}`);
+      }
+    }
+    for (const [m, r] of popCandidates) { if (now - r.at > 20_000) popCandidates.delete(m); }   // a pop is brief
+    if (popTrades.size > 80) { for (const [m, arr] of popTrades) { if (!arr.length || now - arr[arr.length - 1].at > 60_000) { popTrades.delete(m); popSeenTx.delete(m); popPeakInflow.delete(m); } } }
+  } catch {} finally { _popPolling = false; }
+}
+setInterval(() => { void pollPopRadar(); }, 3_000);
+// The pre-vetted POP FEED the 'pop' mode trades — igniting coins, MC enriched (free pump frontend-api).
+async function popFeedRows() {
+  const now = Date.now();
+  const live = [...popCandidates.entries()].filter(([, r]) => now - r.at < 18_000).sort((a, b) => b[1].score - a[1].score).slice(0, 4);
+  const rows = [];
+  for (const [mint, r] of live) {
+    if (!r.mc) {
+      try { const j = await fetchJson(`https://frontend-api-v3.pump.fun/coins/${mint}`, { timeoutMs: 5000, headers: { "User-Agent": "Mozilla/5.0", accept: "application/json" } }).catch(() => null); r.mc = Number(j && (j.usd_market_cap || j.market_cap)) || 0; } catch {}
+    }
+    rows.push({ tokenMint: mint, symbol: r.symbol, marketCap: r.mc || 4000, liquidityUsd: 0, pairAgeSeconds: 1, volume5m: 0, buys5m: 0, sells5m: 0, source: "pop", _pop: { score: r.score, inflowNow: r.inflowNow } });
+  }
+  return rows;
+}
+
 // ---------------------------------------------------------------------------
 // INSIDER-LAUNCH MACHINE — bet the OPERATOR, not the coin. The instant a KNOWN/linked wallet (a
 // tracked KOL, a proven winner, or a funding-cluster sibling of one) DEPLOYS a coin, get in early
@@ -2912,6 +3008,10 @@ const autopilotEngine = createAutopilotEngine({
     out.sort((a, b) => (Number(b.liquidityUsd) || 0) - (Number(a.liquidityUsd) || 0));
     return out.slice(0, 120);
   },
+  // POP mode feed: real-time IGNITION candidates from PopRadar (pre-vetted, MC-agnostic).
+  getPopFeed: async () => popFeedRows(),
+  // Momentum-fade exit signal: the inflow that drove the pop has decelerated.
+  popFading: (mint) => popFadingNow(mint),
   getPairLite: async (mint) => {
     // PRIMARY = swap-api live price (the WORKING source — PumpPortal trades are dead). The poller
     // keeps held coins hot, so this is almost always a fast in-memory cache hit; on a miss it fetches
@@ -2939,7 +3039,7 @@ const autopilotEngine = createAutopilotEngine({
     return null;
   },
   // Register a freshly-aped coin for live-price polling (swap-api) + the legacy trade-tick stream.
-  onOpen: (mint) => { try { heldReqAt.set(mint, Date.now()); void swapApiPriceFor(mint); pumpPortalStream.watchMint(mint); } catch {} },
+  onOpen: (mint) => { try { heldReqAt.set(mint, Date.now()); void swapApiPriceFor(mint); pumpPortalStream.watchMint(mint); let md = null; try { md = autopilotEngine.status()?.mode; } catch {} if (md === "pop") popHeldMints.set(mint, Date.now()); } catch {} },
   // Synchronous, in-memory latest market cap (USD) from the live pump tick — used
   // so status() shows truly live prices on every poll, with zero network wait.
   getInstantMc: (mint) => {
@@ -5523,7 +5623,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
         // DEFAULT leaned LIQUID (2026-06-18): when no mode is sent, hunt the exitable last-hour movers
         // (scalp) instead of fresh dust — what the user actually wants ("movers that steady move, get
         // in and out with profit"), and the path the survival circuit-breaker + wash filter protect.
-        const mode = ["chill", "normal", "degen", "steady", "blend", "grind", "scalp", "snipeTrail", "snipeRide", "snipeBank"].includes(String(body.mode)) ? String(body.mode) : "scalp";
+        const mode = ["chill", "normal", "degen", "steady", "blend", "grind", "scalp", "snipeTrail", "snipeRide", "snipeBank", "pop"].includes(String(body.mode)) ? String(body.mode) : "scalp";
         const wantLive = body.live === true || body.live === "true";
         // PAPER MODE IS OWNER-ONLY. Paper runs the full strategy with no risk, so it's the
         // clearest window into how the bot works — paying users must NEVER see it. They run

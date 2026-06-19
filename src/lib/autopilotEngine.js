@@ -74,7 +74,12 @@ export function aggParams(state) {
   const snipeRide = mode === "snipeRide";
   const snipeBank = mode === "snipeBank";
   const snipe = snipeTrail || snipeRide || snipeBank;
-  const baseFrac = mode === "degen" ? 0.10 : mode === "chill" ? 0.04 : scalp ? 0.07 : grind ? 0.07 : snipe ? 0.07 : 0.06;
+  // "pop" = REAL-TIME IGNITION rider. PopRadar (index.js) detects a coin POPPING right now from live
+  // trade flow (net SOL inflow accelerating + buy-led + a buyer burst) and hands the engine a pre-vetted
+  // pop feed; this mode rides the ignition in fast and banks INTO the spike (momentum-fade exit). It's
+  // MC-AGNOSTIC by design — flow leads, MC lags — and keeps bets small + even (a pop reverses fast).
+  const pop = mode === "pop";
+  const baseFrac = mode === "degen" ? 0.10 : mode === "chill" ? 0.04 : scalp ? 0.07 : grind ? 0.07 : snipe ? 0.07 : pop ? 0.06 : 0.06;
 
   // Softer streak/regime scaling: a hot streak no longer balloons size right
   // into the next loss cluster (live data showed streak-pumped 0.11+ SOL bets
@@ -111,6 +116,9 @@ export function aggParams(state) {
   // on an actual rug. Kept at 10 (not 6) so normal first-tick volatility on a fresh curve doesn't
   // shake us out BEFORE the signal-driven run; tune lower if the data says cut harder.
   if (snipe) sl = 10;
+  // POP: a pop reverses fast, so a tight 10% stop cuts a fake-out quickly; the momentum-fade exit
+  // banks the winners into the spike before they round-trip. Small absolute risk per fast bet.
+  if (pop) sl = 10;
 
   let minScore = regime === "HOT" ? 34 : regime === "COLD" ? 48 : 40;
   // degen does NOT loosen the entry bar — a lower bar just apes more rugs (the live data is
@@ -156,6 +164,8 @@ export function aggParams(state) {
   // in the hunt loop), NOT freshScore — so disable the freshScore floor (0) and let the signal gate
   // select. A signal-bearing low-freshScore launch is exactly the target the razor band would miss.
   if (snipe) minScore = 0;
+  // POP gates on the live IGNITION score (the pop feed is pre-vetted by PopRadar), NOT freshScore.
+  if (pop) minScore = 0;
 
   // ENTRY MC WINDOW. Default: tiny floor (a low-MC runner like ZUL +56% @ $1973 stays in),
   // ceiling 20k (these are fresh launches). GRIND skips the brand-new sub-$5k curve — where
@@ -181,8 +191,8 @@ export function aggParams(state) {
   // so fresh is no longer the default. (liquid/grind keep their own wide windows.)
   // SNIPE = fresh, super-low-MC launches (the user's "fresh pairs super low mc"): the standout
   // SIGNAL is what selects, not the MC band, so the window is just a sane fresh range.
-  const mcFloor = liquid ? 4000 : grind ? 6000 : snipe ? 1500 : 1800;
-  const mcCeil = liquid ? 12000000 : grind ? 80000 : snipe ? 15000 : 9000;
+  const mcFloor = liquid ? 4000 : grind ? 6000 : snipe ? 1500 : pop ? 1000 : 1800;        // pop = MC-agnostic (flow leads)
+  const mcCeil = liquid ? 12000000 : grind ? 80000 : snipe ? 15000 : pop ? 1000000000 : 9000;
   // ANTI-PHANTOM depth floor — applied ONLY to coins that REPORT a liquidity number (see
   // entryReject). A phantom +400% spike comes from a thin curve where one tiny buy moves the marked
   // cap but nothing can fill, so a coin whose KNOWN liquidity is below this floor is rejected.
@@ -199,20 +209,20 @@ export function aggParams(state) {
   // is what decides. Keep only a tiny 30s floor to skip the literal launch-snipe seconds (pure rug
   // roulette, not a setup), and an effectively-unbounded ceiling (~30d) so nothing good is excluded
   // for being "too old". grind targets survived/climbed coins; default stays fresh-launch tight.
-  const minAge = liquid ? 30 : grind ? 20 : snipe ? 3 : 4;
-  const maxAge = liquid ? 2592000 : grind ? 3600 : snipe ? 600 : 1200;
+  const minAge = liquid ? 30 : grind ? 20 : snipe ? 3 : pop ? 0 : 4;                        // pop = any age (flow-driven)
+  const maxAge = liquid ? 2592000 : grind ? 3600 : snipe ? 600 : pop ? 2592000 : 1200;
   // FRESH-PATH AGE CARVE-OUT: the 30-120s band is the single worst age pocket (−1.29 over 509
   // trades, a 15% win rate) — coins that launched, got sniped/pumped, and are mid-dump. <30s
   // (+0.22) and 2-5m (+0.34) both WIN. So the fresh engine skips the 30-120s dead-zone entirely
   // and takes the freshest entries + the survivors past 2 min. (entryReject honors skipMidAge.)
-  const skipMidAge = !liquid && !grind && !snipe;
-  const maxScore = (!liquid && !grind && !snipe) ? 67 : Infinity;
+  const skipMidAge = !liquid && !grind && !snipe && !pop;
+  const maxScore = (!liquid && !grind && !snipe && !pop) ? 67 : Infinity;
   // FRESH-PATH SCORE CEILING: the live book keeps losing on 67+ rows even when they
   // look strong. The best realized pocket is the middle 62-66 band, not the top score band.
   // LIQUID disables the RELATIVE liquidity gate (liqFrac 0): a healthy $1M coin legitimately has
   // liq well under mc*0.3, so the relative test would wrongly reject it. The absolute floor
   // (minLiqAbs, known-thin only) does the real depth check instead.
-  const liqFrac = liquid ? 0 : grind ? 0.35 : 0.3;
+  const liqFrac = liquid ? 0 : grind ? 0.35 : pop ? 0 : 0.3;   // pop: pump-curve coins, no relative-liq gate
 
   // BANK STYLE — three exit personalities:
   //  • "steady": lock the bulk at the first DOABLE pop (80%) + free-roll 20% to +400%,
@@ -275,6 +285,13 @@ export function aggParams(state) {
       // free-roll a small 25% tail to 4x. Safest of the three.
       tp1 = 30; tp1Pct = 75; spikePct = 85; moonTarget = 400;
     }
+  } else if (pop) {
+    // POP RIDE: a pop fires fast and reverses fast, so bank the BULK into the spike at the first
+    // pop (~65% at +16%), take most of the rest at +40%, ride a small tail to ~+150%. The real
+    // exit control is the momentum-FADE rule (manageExits + popFading): the instant the inflow
+    // that drove the pop decelerates, it banks the remainder into strength rather than giving it back.
+    tp1 = regime === "COLD" ? 12 : regime === "HOT" ? 18 : 16;
+    tp1Pct = 65; spikePct = 82; tp2Lvl = 40; tp2Pct = 70; tp3Lvl = 90; tp3Pct = 100; moonTarget = 150;
   }
 
   // AUTO-ADAPT — the key lesson from live: the moon-ride only PAYS in a genuinely HOT
@@ -288,7 +305,7 @@ export function aggParams(state) {
   // SNIPE keeps its own ladder regardless of tape (the signal is the edge, not the tape) — don't let
   // a COLD-tape bankHard clamp crush the moonshot tail it's built to ride. Its tight stop + early
   // de-risk protect the downside; the post-de-risk tail is house money worth riding for the 4x.
-  if (bankHard && !steady && !snipe) { tp1Pct = Math.max(tp1Pct, 85); spikePct = Math.max(spikePct, 85); moonTarget = Math.min(moonTarget, 400); }
+  if (bankHard && !steady && !snipe && !pop) { tp1Pct = Math.max(tp1Pct, 85); spikePct = Math.max(spikePct, 85); moonTarget = Math.min(moonTarget, 400); }
 
   // Per-mode CONVICTION CAPS — how far ONE bet may scale. degen concentrates size into PROVEN
   // setups (proven dev / smart-money / proven caller) and caps UNPROVEN coins harder, so a weak
@@ -303,6 +320,8 @@ export function aggParams(state) {
   // SNIPE entries are SIGNAL-proven (that's the gate), so a strong-confluence snipe can size up well;
   // a lone weak signal stays modest.
   else if (snipe) { unprovenConvCap = 0.8; provenConvCap = 1.3; }   // snipes are lottery tickets — keep bets SMALL + even (moonshot math), don't size up hard on conviction
+  // POP rides a fast ignition — small even bets (it reverses fast); smart-money in the burst can size a touch.
+  else if (pop) { unprovenConvCap = 0.8; provenConvCap = 1.3; }
   // degen rides the proven runners it sizes into FURTHER — a higher moon target (unless a COLD
   // tape already pulled it in via the bankHard clamp above).
   if (mode === "degen" && !bankHard) moonTarget = Math.max(moonTarget, 700);
@@ -311,7 +330,7 @@ export function aggParams(state) {
   // this. OR-gated — any ONE real signal (a notable X, a trusted TG caller, a proven dev, or a
   // proven-winner early buyer) reaches it; faceless dust with no signal never qualifies.
   const minSnipe = 18;
-  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, maxScore, mcFloor, mcCeil, minAge, maxAge, skipMidAge, liqFrac, minLiqAbs, steady, blend, grind, scalp, liquid, snipe, snipeTrail, snipeRide, snipeBank, minSnipe, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct, unprovenConvCap, provenConvCap };
+  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, maxScore, mcFloor, mcCeil, minAge, maxAge, skipMidAge, liqFrac, minLiqAbs, steady, blend, grind, scalp, liquid, snipe, snipeTrail, snipeRide, snipeBank, pop, minSnipe, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct, unprovenConvCap, provenConvCap };
 }
 
 // SELF-TUNING / market-regime brain: reads the recent runner & rug rate and sets
@@ -778,6 +797,29 @@ export function looksLikeJunkSymbol(sym) {
   return false;
 }
 
+// POP IGNITION — score how hard a coin is "popping RIGHT NOW" from its live trade flow (computed by
+// index.js PopRadar over rolling ~3s buckets off swap-api + the PumpPortal stream). The LEADING tells
+// of a pop STARTING — get in as it ignites, not after: net SOL inflow ACCELERATING vs its own baseline,
+// buy-led (sellers drying up), a BURST of distinct buyers (a real crowd, not one wallet), real absolute
+// size, and (bonus) smart money in the burst. MC-AGNOSTIC by design — flow leads, MC lags. Pure +
+// exported. metrics: { accel, inflowNow, buyShare, uniqBuyers, smart }. ~0..100; high = igniting NOW.
+export function popIgnitionScore(m) {
+  const inflowNow = Number(m && m.inflowNow) || 0;   // SOL bought in the latest ~3s bucket
+  const accel = Number(m && m.accel) || 0;           // inflowNow / its recent baseline inflow
+  const buyShare = Number(m && m.buyShare) || 0;     // buys / (buys+sells) in the latest bucket
+  const uniq = Number(m && m.uniqBuyers) || 0;       // distinct buyers in the latest bucket
+  if (inflowNow < 0.25) return 0;                    // a dust burst is not a real pop
+  if (buyShare < 0.6) return 0;                       // sellers still in control = not igniting
+  let s = 0;
+  if (accel >= 5) s += 42; else if (accel >= 3) s += 32; else if (accel >= 2) s += 20; else if (accel >= 1.4) s += 10; else return 0;  // ACCELERATION = the core leading tell
+  if (buyShare >= 0.85) s += 22; else if (buyShare >= 0.75) s += 15; else if (buyShare >= 0.65) s += 8;  // sellers drying up
+  if (uniq >= 8) s += 18; else if (uniq >= 5) s += 12; else if (uniq >= 3) s += 6;                       // breadth = real crowd
+  if (inflowNow >= 3) s += 12; else if (inflowNow >= 1) s += 7; else if (inflowNow >= 0.5) s += 3;       // absolute size
+  if (m && m.smart) s += 12;                          // smart money in the burst = front-run signal
+  return Math.min(100, s);
+}
+export const POP_IGNITION_FIRE = 48;   // ignition score at/above which a coin is "popping" -> top-priority entry
+
 // STANDOUT-SIGNAL score for the SNIPER — the hard-to-fake "this launch sticks out" tells, OR-gated
 // (any ONE qualifies; more = higher score -> bigger conviction). Pure + exported for tests. Reads the
 // live signal objects the hunt loop already gathers (dev rep, smart-money, caller intel) plus an
@@ -807,6 +849,10 @@ export function snipeSignalScore(row, rep, sm, ci) {
 // Hard entry gates — filter instant-rug bait while keeping genuine fresh
 // movers. Returns null if the row passes, or a string reason if rejected.
 export function entryReject(row, P) {
+  // POP mode is gated by the live IGNITION score (PopRadar pre-vets the feed) — the generic
+  // age/MC/volume gates don't apply (flow leads, MC lags). The ignition is the entry signal; the
+  // tight stop + momentum-fade exit are the protection. So a pre-vetted pop row always passes here.
+  if (P && P.pop) return null;
   const age = Number(row.pairAgeSeconds);
   const mc = Number(row.marketCap);
   const liq = Number(row.liquidityUsd) || 0;
@@ -1305,6 +1351,11 @@ export function createAutopilotEngine(deps) {
     // SCALP's feed: liquid last-hour movers (real depth + volume). Defaults to the fresh feed
     // if the host didn't wire it, so scalp degrades gracefully instead of starving.
     getLiquidFeed = null,
+    // POP mode feed: real-time IGNITION candidates from PopRadar (index.js). Null = pop mode degrades
+    // to no candidates (it simply won't trade) when unwired.
+    getPopFeed = null,
+    // popFading(mint) -> true once the inflow that drove a pop has DECELERATED (momentum-fade exit).
+    popFading = () => false,
     getPairLite,
     buyToken,
     sellPercent,
@@ -1853,6 +1904,21 @@ export function createAutopilotEngine(deps) {
           continue;
         }
       }
+      // POP MOMENTUM-FADE exit: the instant the inflow that drove the pop DECELERATES (popFading),
+      // bank into the spike rather than giving it back. Only banks when we're not already at the stop
+      // (the tight stop covers the downside); a faded pop that's still green is exactly when to take it.
+      if (pos.pop && !pos.popFadeHandled && mc > 0) {
+        let fading = false; try { fading = popFading(pos.mint); } catch {}
+        if (fading) {
+          const mv = pos.entryMc > 0 ? (mc / pos.entryMc - 1) * 100 : 0;
+          if (mv > -(P.sl || 10) * 0.4) {
+            pos.popFadeHandled = true;
+            record("info", `🌊 pop-fade: ${pos.sym} inflow stalled at ${mv >= 0 ? "+" : ""}${mv.toFixed(0)}% — banking into the spike`);
+            await doSell(pos, 100, "pop-fade");
+            continue;
+          }
+        }
+      }
       const decision = evalExit(pos, P, now());
       if (decision.action === "sell") {
         await doSell(pos, decision.pct, decision.reason);
@@ -2077,8 +2143,11 @@ export function createAutopilotEngine(deps) {
     // trades those with its fast in/out exits — a trading scalp beats a waiting one. (The honest
     // realized-anchored display keeps phantom dust marks out of the headline regardless.)
     const useLiquid = state.mode === "scalp" && typeof getLiquidFeed === "function";
+    const usePop = state.mode === "pop" && typeof getPopFeed === "function";
     try {
-      rows = useLiquid ? await getLiquidFeed() : await getFreshFeed();
+      rows = usePop ? await getPopFeed() : useLiquid ? await getLiquidFeed() : await getFreshFeed();
+      // POP feed can be empty between ignitions — that's correct (no pop = no trade); don't fall back
+      // to the fresh feed (that would defeat the whole "only enter on a real pop" point).
       if (useLiquid && (!Array.isArray(rows) || !rows.length)) rows = await getFreshFeed();
     } catch (e) {
       record("warn", `feed error: ${e && e.message}`);
@@ -2156,7 +2225,7 @@ export function createAutopilotEngine(deps) {
         const a = state.recentApeNames[ns];
         return !a || nowMs - a > nameCoolMs;
       })
-      .map((r) => ({ r, reject: entryReject(r, P), fs: P.liquid ? liquidScore(r) : P.grind ? grindScore(r) : freshScore(r) }));
+      .map((r) => ({ r, reject: entryReject(r, P), fs: P.pop ? (Number(r._pop && r._pop.score) || 50) : P.liquid ? liquidScore(r) : P.grind ? grindScore(r) : freshScore(r) }));
     // Reject-reason tally so a persistently-dry feed shows WHY (mc/age/liquidity/score/etc.)
     // — turns "0 passed the bar" into an actionable breakdown in the scan heartbeat.
     const rejTally = {};
@@ -2692,6 +2761,9 @@ export function createAutopilotEngine(deps) {
       pos.rugWatch = true;
       try { noteRugWatch(mint, pos.devWallet, sym); } catch {}
     }
+    // POP RIDE: mark the position so manageExits can run the momentum-FADE exit (bank into the spike
+    // the instant the inflow that drove the pop decelerates).
+    pos.pop = Boolean(P && P.pop);
     state.open.push(pos);
     state.recentApeNames[normSym(sym)] = now(); // remember the NAME to block clone-swarm pile-ins
     state.coinTrades[pos.mint] = (state.coinTrades[pos.mint] || 0) + 1; // DIVERSIFY: count session trades per mint

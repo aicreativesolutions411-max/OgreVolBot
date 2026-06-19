@@ -89,6 +89,20 @@
     background:rgba(4,7,10,.6);color:var(--green);border:1px solid var(--line);backdrop-filter:blur(4px);line-height:1;}
   .clipb.rec{color:#ff6b6b;border-color:#5a2222;background:rgba(40,10,10,.7);animation:clipPulse 1.1s ease-in-out infinite;}
   @keyframes clipPulse{0%,100%{box-shadow:0 0 0 0 rgba(255,107,107,.5);}50%{box-shadow:0 0 0 6px rgba(255,107,107,0);}}
+  /* CLIP READY — site-styled preview + Save/Share sheet (matches .card / .b-go / .b-ghost) */
+  .clip-modal{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;padding:18px;
+    background:rgba(2,6,4,.82);backdrop-filter:blur(7px);}
+  .clip-modal.hidden{display:none;}
+  .clip-sheet{width:100%;max-width:430px;background:var(--card);backdrop-filter:blur(10px);border:1px solid var(--line);
+    border-radius:18px;padding:14px;box-shadow:0 20px 60px rgba(0,0,0,.6);position:relative;overflow:hidden;}
+  .clip-sheet::before{content:"";position:absolute;left:0;right:0;top:0;height:1px;background:linear-gradient(90deg,transparent,rgba(141,255,90,.6),transparent);}
+  .clip-head{display:flex;align-items:center;justify-content:space-between;font-weight:800;color:var(--ink);font-size:15px;margin-bottom:11px;}
+  .clip-x{width:auto;background:transparent;color:var(--dim);font-size:17px;padding:4px 9px;border-radius:9px;font-weight:700;}
+  .clip-x:hover{color:var(--ink);background:rgba(141,255,90,.08);}
+  .clip-vid{width:100%;border-radius:12px;background:#03100a;border:1px solid var(--line);display:block;max-height:54vh;}
+  .clip-actions{display:flex;gap:10px;margin-top:12px;}
+  .clip-actions button{flex:1;padding:14px;font-size:15px;}
+  .clip-hint{font-size:11px;color:var(--dim);text-align:center;margin-top:9px;min-height:14px;letter-spacing:.2px;}
 
   /* ---------------- CONTROL DECK ---------------- */
   .wrap{padding:16px;}
@@ -322,6 +336,10 @@
         <button type="button" class="modeBtn" data-mode="snipeTrail"><b>Snipe · Trail</b><span>Snipes only launches with a standout signal. De-risks half early, rides the rest for the 4x+.</span></button>
         <button type="button" class="modeBtn" data-mode="snipeRide"><b>Snipe · Ride</b><span>Same picks, lets a bigger piece ride to the moon. More upside, more give-back.</span></button>
         <button type="button" class="modeBtn" data-mode="snipeBank"><b>Snipe · Bank</b><span>Same picks, banks most at the first pop, small piece free-rolls to 4x. Safest snipe.</span></button>
+      </div>
+      <label style="margin-top:10px">⚡ Pop Radar — rides coins POPPING in real time (experimental, MC-agnostic)</label>
+      <div class="modeSel" id="popSel">
+        <button type="button" class="modeBtn" data-mode="pop"><b>Pop · Ride</b><span>Detects a coin igniting (buy-flow accelerating) and gets in early — then banks into the spike before it fades.</span></button>
       </div>
       <div class="row">
         <div><label>Max per trade (SOL)</label><input type="number" id="maxTrade" value="0.08" min="0.01" step="0.01"/></div>
@@ -629,25 +647,27 @@ $("soundBtn").addEventListener("click",(e)=>{ e.stopPropagation(); soundOn=!soun
 });
 updateSoundBtn();
 
-/* ---- CLIP FARM: record the live HUD, then save/share (same idea as the main-page rec button) ---- */
-let clipRec=null, clipChunks=[], clipStream=null;
+/* ---- CLIP FARM: record the live autopilot HUD → preview, then Save / Share (site-styled sheet) ---- */
+let clipRec=null, clipChunks=[], clipStream=null, clipBlob=null, clipUrl=null, clipName="";
 function clipMime(){ for(const t of ["video/mp4","video/webm;codecs=vp9","video/webm;codecs=vp8","video/webm"]){ try{ if(window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t; }catch{} } return ""; }
-async function shareOrSaveClip(blob){
-  const ext=(blob.type.includes("mp4")?"mp4":"webm"); const name="slimewire-autopilot."+ext;
-  try{ const file=new File([blob],name,{type:blob.type||"video/webm"});
-    if(navigator.canShare && navigator.canShare({files:[file]})){ await navigator.share({files:[file],title:"SlimeWire Autopilot",text:"My SlimeWire autopilot — slimewire.org"}); return; }
-  }catch{}
-  const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),4000);
-}
-let clipRaf=null, clipAutoStop=null;
-function clipBtnState(rec){ const b=$("clipBtn"); if(!b)return; if(rec){ b.classList.add("rec"); b.textContent="⏹"; b.title="Stop & save clip"; } else { b.classList.remove("rec"); b.textContent="🎬"; b.title="Record a clip to share"; } }
+// UNIQUE timestamp per clip so an overnight of recordings never overwrites itself.
+function clipStamp(){ const d=new Date(),p=n=>String(n).padStart(2,"0"); return d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+"-"+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds()); }
+let clipRaf=null;
+function clipBtnState(rec){ const b=$("clipBtn"); if(!b)return; if(rec){ b.classList.add("rec"); b.textContent="⏹"; b.title="Stop recording"; } else { b.classList.remove("rec"); b.textContent="🎬"; b.title="Record a clip to share"; } }
 function finishClip(mime){
   try{ clipStream&&clipStream.getTracks().forEach(t=>t.stop()); }catch{}
   if(clipRaf){ try{ cancelAnimationFrame(clipRaf); }catch{} clipRaf=null; }
-  if(clipAutoStop){ clearTimeout(clipAutoStop); clipAutoStop=null; }
-  const blob=new Blob(clipChunks,{type:(mime||"video/webm")}); clipRec=null; clipStream=null; clipChunks=[];
+  const type=mime||"video/webm";
+  clipBlob=new Blob(clipChunks,{type}); clipRec=null; clipStream=null; clipChunks=[];
   clipBtnState(false);
-  if(blob.size>0) shareOrSaveClip(blob);
+  if(!clipBlob.size){ clipBlob=null; if($("startMsg"))$("startMsg").innerHTML='<span class="warn">Nothing recorded — try again.</span>'; return; }
+  const ext=(type.includes("mp4")?"mp4":"webm");
+  clipName="slimewire-autopilot-"+clipStamp()+"."+ext;
+  if(clipUrl){ try{URL.revokeObjectURL(clipUrl);}catch{} }
+  clipUrl=URL.createObjectURL(clipBlob);
+  const v=$("clipVid"); if(v){ v.src=clipUrl; try{v.load();}catch{} }
+  if($("clipHint"))$("clipHint").textContent="";
+  $("clipModal").classList.remove("hidden");
 }
 function startClipRecorder(stream,isScreen){
   const mime=clipMime(); clipChunks=[];
@@ -681,13 +701,15 @@ function startClipCanvas(){
   };
   draw();
   startClipRecorder(cap,false);
-  clipAutoStop=setTimeout(()=>{ try{ clipRec&&clipRec.state!=="inactive"&&clipRec.stop(); }catch{} },6000); // ~6s clip, or tap to stop sooner
+  // NO auto-stop — records until the user taps ⏹ (overnight clips welcome).
 }
 async function startClip(){
-  // Desktop: real screen capture of the whole HUD. Mobile / unsupported: fall back to the canvas
-  // recorder above (instead of the old "needs desktop" dead-end that did nothing on phones).
+  // Desktop: real screen capture of the whole HUD WITH the media/system sound (audio:true captures the
+  // shared tab/screen audio, NOT the microphone — we never call getUserMedia). The user picks the
+  // surface + ticks "share audio" in the browser prompt; systemAudio hint pre-selects it where supported.
+  // Mobile / unsupported: fall back to the canvas recorder (video-only) instead of a dead-end.
   if(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia && window.MediaRecorder){
-    try{ clipStream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:{ideal:30,max:30}},audio:true}); startClipRecorder(clipStream,true); return; }
+    try{ clipStream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:{ideal:30,max:30}},audio:true,systemAudio:"include",selfBrowserSurface:"include"}); startClipRecorder(clipStream,true); return; }
     catch(e){ if(e && e.name==="NotAllowedError") return; /* user cancelled the prompt */ }
   }
   startClipCanvas();
@@ -695,6 +717,29 @@ async function startClip(){
 $("clipBtn").addEventListener("click",(e)=>{ e.stopPropagation();
   if(clipRec && clipRec.state!=="inactive"){ try{ clipRec.stop(); }catch{} } else { startClip(); }
 });
+// ---- clip sheet: Save (download, unique timestamped name) + Share (Web Share API, fallback download) ----
+function clipDownload(){
+  if(!clipBlob||!clipUrl) return;
+  const a=document.createElement("a"); a.href=clipUrl; a.download=clipName; document.body.appendChild(a); a.click(); a.remove();
+  if($("clipHint"))$("clipHint").textContent="Saved "+clipName;
+}
+async function clipShareNow(){
+  if(!clipBlob) return;
+  try{
+    const file=new File([clipBlob],clipName,{type:clipBlob.type||"video/webm"});
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({files:[file],title:"SlimeWire Autopilot",text:"My SlimeWire autopilot — slimewire.org"});
+      if($("clipHint"))$("clipHint").textContent="Shared ✓"; return;
+    }
+  }catch(e){ if(e && e.name==="AbortError") return; }
+  if($("clipHint"))$("clipHint").textContent="Sharing isn’t supported here — saved instead.";
+  clipDownload();
+}
+function closeClipModal(){ const m=$("clipModal"); if(m)m.classList.add("hidden"); const v=$("clipVid"); if(v){ try{v.pause();}catch{} } }
+$("clipSave")&&$("clipSave").addEventListener("click",clipDownload);
+$("clipShare")&&$("clipShare").addEventListener("click",clipShareNow);
+$("clipClose")&&$("clipClose").addEventListener("click",closeClipModal);
+$("clipModal")&&$("clipModal").addEventListener("click",(e)=>{ if(e.target===$("clipModal")) closeClipModal(); });
 
 // ---- subscribe view ----
 async function showSubscribe(a){
@@ -748,9 +793,9 @@ $("cashoutBtn").addEventListener("click",async()=>{const w=selWallet();if(!w){$(
 let selectedMode="scalp";
 // One mode across BOTH groups (the 3 styles + the 3 launch snipers) — clicking any button selects
 // it and clears the highlight from every other button in either group.
-const ALL_MODE_BTNS=()=>[...document.querySelectorAll("#modeSel .modeBtn, #snipeSel .modeBtn")];
+const ALL_MODE_BTNS=()=>[...document.querySelectorAll("#modeSel .modeBtn, #snipeSel .modeBtn, #popSel .modeBtn")];
 function pickMode(b){if(!b)return;selectedMode=b.dataset.mode||"scalp";ALL_MODE_BTNS().forEach(x=>x.classList.toggle("on",x===b));}
-["modeSel","snipeSel"].forEach(id=>{const el=$(id);if(el)el.addEventListener("click",(e)=>{pickMode(e.target.closest(".modeBtn"));});});
+["modeSel","snipeSel","popSel"].forEach(id=>{const el=$(id);if(el)el.addEventListener("click",(e)=>{pickMode(e.target.closest(".modeBtn"));});});
 // "Use whole balance" — grey out the manual amount; the server sizes off the full wallet (less a fee reserve).
 $("useAll").addEventListener("change",()=>{$("amt").disabled=$("useAll").checked;});
 $("startBtn").addEventListener("click",async()=>{
@@ -925,5 +970,18 @@ $("endPay").addEventListener("click",()=>{ $("endModal").classList.add("hidden")
   }
 })();
 </script>
+
+<!-- CLIP READY — preview the recorded autopilot clip, then Save or Share (matches site style) -->
+<div id="clipModal" class="clip-modal hidden">
+  <div class="clip-sheet">
+    <div class="clip-head"><span>🎬 Your clip</span><button id="clipClose" class="clip-x" title="Close">✕</button></div>
+    <video id="clipVid" class="clip-vid" controls playsinline></video>
+    <div class="clip-actions">
+      <button id="clipSave" class="b-go">💾 Save</button>
+      <button id="clipShare" class="b-ghost">📤 Share</button>
+    </div>
+    <div id="clipHint" class="clip-hint"></div>
+  </div>
+</div>
 </body>
 </html>

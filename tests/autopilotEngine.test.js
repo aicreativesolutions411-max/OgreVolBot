@@ -13,6 +13,8 @@ import {
   graduationScore,
   capitalEfficiencyScore,
   looksLikeJunkSymbol,
+  popIgnitionScore,
+  POP_IGNITION_FIRE,
   flowSurge,
   autoTune,
   entryReject,
@@ -233,6 +235,29 @@ test("looksLikeJunkSymbol: catches spam/scam/mash, passes real tickers", () => {
   for (const ok of ["BTC", "WIF", "PEPE", "DOGE", "BONK", "POPCAT", "MOODENG", "SOL", "Clutch", "DRAGON"]) {
     assert.equal(looksLikeJunkSymbol(ok), false, `should pass real: "${ok}"`);
   }
+});
+
+test("popIgnitionScore: fires on accelerating buy-led inflow with a buyer burst, not on dust/sells", () => {
+  // a real pop: 6x accel, 2 SOL inflow, 85% buy-led, 7 distinct buyers
+  const hot = popIgnitionScore({ accel: 6, inflowNow: 2, buyShare: 0.85, uniqBuyers: 7, smart: false });
+  assert.ok(hot >= POP_IGNITION_FIRE, "a real ignition clears the fire threshold");
+  // dust burst (tiny inflow) does not fire
+  assert.equal(popIgnitionScore({ accel: 9, inflowNow: 0.1, buyShare: 0.9, uniqBuyers: 9, smart: true }), 0);
+  // sellers in control does not fire
+  assert.equal(popIgnitionScore({ accel: 6, inflowNow: 2, buyShare: 0.4, uniqBuyers: 7, smart: false }), 0);
+  // no acceleration = no pop
+  assert.equal(popIgnitionScore({ accel: 1.1, inflowNow: 2, buyShare: 0.8, uniqBuyers: 6, smart: false }), 0);
+  // smart money in the burst raises it
+  assert.ok(popIgnitionScore({ accel: 4, inflowNow: 1, buyShare: 0.8, uniqBuyers: 5, smart: true }) >
+            popIgnitionScore({ accel: 4, inflowNow: 1, buyShare: 0.8, uniqBuyers: 5, smart: false }));
+});
+
+test("aggParams: pop mode is MC-agnostic, ignition-gated, tight stop", () => {
+  const p = aggParams(baseState({ mode: "pop" }));
+  assert.equal(p.pop, true);
+  assert.equal(p.minScore, 0, "gated on ignition, not freshScore");
+  assert.ok(p.mcFloor <= 1000 && p.mcCeil >= 1000000, "MC-agnostic band");
+  assert.equal(p.sl, 10, "tight stop (pops reverse fast)");
 });
 
 test("graduationScore: rewards mid-curve + SOL/min velocity, zero when no curve data", () => {
