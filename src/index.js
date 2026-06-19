@@ -17782,7 +17782,12 @@ async function tokenMarketSafetyInfo(tokenMint) {
 async function getMintSafetyInfo(tokenMint) {
   const mintKey = tokenMint instanceof PublicKey ? tokenMint : new PublicKey(tokenMint);
   const cacheKey = mintKey.toBase58();
-  const cached = getTimedCache(mintSafetyCache, cacheKey, 10 * 60 * 1000);
+  // ALCHEMY COST: mint authority / freeze authority / token program / decimals are effectively
+  // IMMUTABLE after creation (authority only goes set->renounced, which is strictly SAFER, so a
+  // stale read is conservative). Cache 6h instead of 10min so coins the bot keeps seeing across
+  // cycles (the observatory + liquid/older-coin feeds hold them for hours) aren't re-read on Alchemy
+  // every 10 minutes. Env MINT_SAFETY_TTL_MS to tune.
+  const cached = getTimedCache(mintSafetyCache, cacheKey, Math.max(60_000, Number(process.env.MINT_SAFETY_TTL_MS) || 6 * 60 * 60 * 1000));
   if (cached) return cached;
 
   const response = await rpcRead("get mint safety info", (c) => c.getParsedAccountInfo(mintKey, "confirmed"));
