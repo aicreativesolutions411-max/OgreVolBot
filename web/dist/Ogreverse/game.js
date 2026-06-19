@@ -13,9 +13,17 @@
 
   const W = canvas.width;
   const H = canvas.height;
-  const TILE = 32;
-  const VIEW_COLS = 20;
-  const VIEW_ROWS = 15;
+  const MOBILE_LAYOUT_AT_LOAD = typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia("(max-width: 920px)").matches;
+  const TILE = MOBILE_LAYOUT_AT_LOAD ? 40 : 32;
+  const VIEW_COLS = Math.floor(W / TILE);
+  const VIEW_ROWS = Math.floor(H / TILE);
+  const TILE_CENTER = Math.floor(TILE / 2);
+const STEP_ANIM_MS = MOBILE_LAYOUT_AT_LOAD ? 100 : 130;
+const STEP_INPUT_GRACE_MS = MOBILE_LAYOUT_AT_LOAD ? 12 : 10;
+const JOYSTICK_DEADZONE_RATIO = 0.18;
+const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
   const WORLD_W = 96;
   const WORLD_H = 72;
   const SAVE_KEY = "ogreverse_brainrot_emerald_save_v1";
@@ -578,8 +586,8 @@
   ];
 
   const STORY_FLOW = [
-    { id: "starter", chapter: "00", title: "First Bond", region: "Memelet Town", target: "Professor Mold Lab", x: 16, y: 61, kind: "tutorial", text: "Choose a starter and receive Capture Orbs." },
-    { id: "firstCatch", chapter: "01", title: "Orb Internship", region: "Memelet Town", target: "Orb Intern", x: 21, y: 64, kind: "quest", text: "Catch one wild creature, then report back." },
+    { id: "starter", chapter: "00", title: "First Bond", region: "Memelet Town", target: "Professor Mold Lab", x: 17, y: 59, kind: "tutorial", text: "Choose a starter and receive Capture Orbs." },
+    { id: "firstCatch", chapter: "01", title: "Orb Internship", region: "Memelet Town", target: "Orb Intern", x: 24, y: 66, kind: "quest", text: "Catch one wild creature, then report back." },
     trialFlowStep(GYMS[0], 0, "02"),
     trialFlowStep(GYMS[1], 1, "03"),
     { id: "overload1", chapter: "04", title: "Corrupted USB", region: "Slimeport Causeway", target: "Admin Doomscroll", x: 50, y: 38, kind: "villain", text: "After two sigils, intercept Team Overload near the harbor road." },
@@ -617,10 +625,10 @@
     { key: "fortree", name: "Fortree Canopy", short: "Fortree", x1: 28, y1: 31, x2: 43, y2: 38, tile: "town", theme: "canopy", labelX: 31, labelY: 31, iconX: 36, iconY: 34, icon: "canopy" },
     { key: "petalbog", name: "Petalbog", short: "Petalbog", x1: 7, y1: 37, x2: 15, y2: 44, tile: "town", theme: "goblin", labelX: 7, labelY: 37, iconX: 11, iconY: 41, icon: "bog" },
     { key: "rustburrow", name: "Rustburrow", short: "Rustburrow", x1: 9, y1: 42, x2: 24, y2: 50, tile: "town", theme: "goblin", labelX: 12, labelY: 44, iconX: 16, iconY: 46, icon: "burrow" },
-    { key: "memelet", name: "Memelet Town", short: "Memelet", x1: 12, y1: 59, x2: 25, y2: 67, tile: "town", theme: "meadow", labelX: 14, labelY: 58, iconX: 18, iconY: 63, icon: "labyard" },
+    { key: "memelet", name: "Memelet Town", short: "Memelet", x1: 9, y1: 56, x2: 29, y2: 69, tile: "town", theme: "meadow", labelX: 11, labelY: 56, iconX: 19, iconY: 63, icon: "labyard" },
     { key: "dewdrop", name: "Dewdrop Isle", short: "Dewdrop", x1: 37, y1: 63, x2: 49, y2: 70, tile: "town", theme: "island", labelX: 38, labelY: 63, iconX: 43, iconY: 67, icon: "isle" },
-    { key: "slimeport", name: "Slimeport", short: "Slimeport", x1: 48, y1: 36, x2: 57, y2: 43, tile: "town", theme: "harbor", labelX: 49, labelY: 35, iconX: 53, iconY: 40, icon: "harbor" },
-    { key: "duelplaza", name: "Prism Duel Plaza", short: "Duel Plaza", x1: 58, y1: 43, x2: 66, y2: 51, tile: "citadel", theme: "duel", labelX: 58, labelY: 43, iconX: 62, iconY: 47, icon: "arena" },
+    { key: "slimeport", name: "Slimeport", short: "Slimeport", x1: 47, y1: 35, x2: 58, y2: 44, tile: "town", theme: "harbor", labelX: 48, labelY: 35, iconX: 53, iconY: 40, icon: "harbor" },
+    { key: "duelplaza", name: "Prism Duel Plaza", short: "Duel Plaza", x1: 57, y1: 42, x2: 68, y2: 53, tile: "citadel", theme: "duel", labelX: 57, labelY: 42, iconX: 63, iconY: 48, icon: "arena" },
     { key: "mauvellite", name: "Mauvellite", short: "Mauvellite", x1: 64, y1: 9, x2: 75, y2: 18, tile: "techfloor", theme: "alien", labelX: 65, labelY: 9, iconX: 70, iconY: 13, icon: "tower" },
     { key: "mossdeep", name: "Mossdeep Array", short: "Mossdeep", x1: 76, y1: 11, x2: 85, y2: 20, tile: "techfloor", theme: "alien", labelX: 77, labelY: 11, iconX: 81, iconY: 16, icon: "array" },
     { key: "lilycove", name: "Lilycove Arcade", short: "Lilycove", x1: 63, y1: 20, x2: 75, y2: 27, tile: "techfloor", theme: "alien", labelX: 64, labelY: 20, iconX: 69, iconY: 24, icon: "arcade" },
@@ -645,7 +653,9 @@
     anim: 0,
     stepFx: null,
     battleIntro: null,
+    transitionFx: null,
     resultBanner: null,
+    levelFx: null,
     evolutionFx: null,
     captureFx: null,
     areaBanner: null,
@@ -679,7 +689,7 @@
   const PREMIUM_TILE_DIR = "assets/tiles-premium";
   const BATTLE_BG_DIR = "assets/battle-premium";
   const BATTLE_BG_VERSION = "20260617-premium-battle-v6";
-  const GAME_ASSET_VERSION = "20260618-joystick-mobile-v70";
+  const GAME_ASSET_VERSION = "20260620-mobile-battle-v87";
   const TRAINER_DIR = "assets/trainers";
   const TRAINER_ASSET_VERSION = "20260617-story-npc-v5";
   const TITLE_COVER_SRC = "assets/references/ogreverse-region-map-hires-labeled.png";
@@ -791,7 +801,11 @@
   let mobileJoystickEl = null;
   let mobileJoystickPointerId = null;
   let mobileJoystickDirection = null;
+  let mobileJoystickVector = { x: 0, y: 0, strength: 0 };
+  let mobileJoystickOrigin = null;
   let mobileJoystickLastMove = 0;
+  let mobileJoystickLastBump = 0;
+  let mobileJoystickRaf = null;
   let lastDebugCapture = 0;
   const DEBUG_CAPTURE = typeof window !== "undefined"
     && typeof window.URLSearchParams !== "undefined"
@@ -831,8 +845,28 @@
     applyDebugAutostart();
     state.online.enabled = onlineRequested();
     try { setupAccountUI(); } catch (e) { console.error("account UI", e); }
+    installDebugHooks();
     renderPanel();
     requestAnimationFrame(loop);
+  }
+
+  function installDebugHooks() {
+    if (!DEBUG_CAPTURE || typeof window === "undefined") return;
+    window.__ogvDebug = {
+      state: () => ({
+        mode: state.mode,
+        x: state.player?.x ?? null,
+        y: state.player?.y ?? null,
+        facing: state.player?.facing ?? null,
+        steps: state.player?.steps ?? null,
+        battleChoice: state.battle?.choice || null,
+        battleResult: state.battle?.result?.outcome || null,
+        battleBusy: Boolean(state.battle?.busy),
+        playerHp: state.battle ? activePlayer()?.hp ?? null : null,
+        enemyHp: state.battle ? activeEnemy()?.hp ?? null : null,
+        moveCount: state.battle ? activePlayer()?.moves?.length ?? 0 : 0,
+      }),
+    };
   }
 
   function applyDebugAutostart() {
@@ -861,8 +895,25 @@
     const debugBattle = params.get("battle");
     if (params.get("campaign")) seedDebugCampaign(params.get("campaign"));
     if (debugBattle && params.get("crew")) seedDebugCrew(params.get("crew"));
-    if (debugBattle) startDebugBattle(debugBattle, params.get("enemy"));
-    if (params.get("battleChoice") && state.battle) state.battle.choice = params.get("battleChoice");
+    const applyDebugBattle = () => {
+      if (!debugBattle) return;
+      try {
+        startDebugBattle(debugBattle, params.get("enemy"));
+        if (params.get("battleChoice") && state.battle) state.battle.choice = params.get("battleChoice");
+      } catch (error) {
+        console.error("debug battle setup failed", error);
+      }
+    };
+    if (debugBattle) {
+      applyDebugBattle();
+      window.setTimeout(() => {
+        if (state.mode !== "battle" || !state.battle) {
+          applyDebugBattle();
+          if (state.battle || params.get("fx")) clearTransientChrome();
+          dirtyPanel();
+        }
+      }, 140);
+    }
     if (!debugBattle && params.get("crew")) seedDebugCrew(params.get("crew"));
     const debugWild = params.get("wild");
     if (!debugBattle && debugWild) startDebugWild(debugWild, params.get("enemy"));
@@ -1017,7 +1068,7 @@
       state.battleIntro.started = now - 12000;
       state.battleIntro.until = now + 12000;
     }
-    const fxType = params?.get("fx");
+    const fxType = params?.get("fx") || (DEBUG_CAPTURE && params?.get("forceFx") !== "0" ? "Chaos" : null);
     if (fxType && state.battle) {
       const moveType = TYPE_CHART[fxType] ? fxType : "Chaos";
       const now = performance.now();
@@ -1041,6 +1092,10 @@
       };
       const debugFxUser = state.battle.fx.attacker === "you" ? activePlayer() : activeEnemy();
       state.battle.log.unshift(`${debugFxUser.nickname} used ${moveName}.`);
+      const holdMs = clamp(Number(params.get("fxMs")) || 120000, 1200, 240000);
+      const holdT = clamp(Number(params.get("fxT")) || (params.get("fxHold") === "windup" ? 0.34 : params.get("fxHold") === "travel" ? 0.52 : 0.74), 0.06, 0.94);
+      state.battle.fx.started = now - holdMs * holdT;
+      state.battle.fx.until = now + holdMs * (1 - holdT);
     }
     const battleChoice = params?.get("battleChoice");
     if (battleChoice && state.battle) state.battle.choice = battleChoice;
@@ -1286,6 +1341,7 @@
   function loop(time) {
     state.anim = time;
     draw();
+    updateBodyState();
     updateOnline(time);
     updatePvpClock();
     if (DEBUG_CAPTURE && time - lastDebugCapture > 900) {
@@ -1305,6 +1361,17 @@
   function dirtyPanel() {
     state.panelDirty = true;
     renderPanel();
+  }
+
+  function updateBodyState() {
+    if (typeof document === "undefined") return;
+    document.body.dataset.gameMode = state.mode || "title";
+    document.body.dataset.hasPlayer = state.player ? "1" : "0";
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const dialogueActive = state.mode === "overworld" && !!state.dialogueFx;
+    const toastActive = state.mode === "overworld" && !!state.toast && now < state.toastUntil;
+    document.body.dataset.dialogueActive = dialogueActive ? "1" : "0";
+    document.body.dataset.messageActive = dialogueActive || toastActive ? "1" : "0";
   }
 
   function toast(text, ms = 2400) {
@@ -1384,6 +1451,92 @@
       toastEl.textContent = "";
       toastEl.classList.remove("active");
     }
+  }
+
+  let audioCtx = null;
+  let audioUnlocked = false;
+  let lastSfxAt = 0;
+
+  function unlockAudio() {
+    if (audioUnlocked || typeof window === "undefined") return;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    try {
+      audioCtx ||= new Ctx();
+      if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+      audioUnlocked = true;
+    } catch {
+      audioUnlocked = false;
+    }
+  }
+
+  function playSfx(kind = "tap") {
+    unlockAudio();
+    const nowMs = performance.now();
+    if (nowMs - lastSfxAt < 28 && kind === "tap") return;
+    lastSfxAt = nowMs;
+    const patterns = {
+      tap: [[540, 0.035, "square", 0.025], [810, 0.028, "square", 0.014]],
+      back: [[260, 0.055, "triangle", 0.026], [180, 0.035, "triangle", 0.014]],
+      step: [[170, 0.026, "square", 0.016]],
+      bump: [[92, 0.055, "sawtooth", 0.026]],
+      menu: [[420, 0.035, "square", 0.018], [640, 0.04, "square", 0.018], [920, 0.045, "square", 0.014]],
+      encounter: [[116, 0.07, "sawtooth", 0.03], [220, 0.06, "square", 0.026], [440, 0.06, "square", 0.022]],
+      hit: [[150, 0.045, "sawtooth", 0.026], [94, 0.055, "square", 0.022]],
+      super: [[120, 0.05, "sawtooth", 0.034], [260, 0.055, "square", 0.028], [720, 0.06, "square", 0.02]],
+      miss: [[330, 0.035, "triangle", 0.018], [180, 0.045, "triangle", 0.016]],
+      status: [[620, 0.08, "triangle", 0.018], [930, 0.055, "sine", 0.012]],
+      capture: [[520, 0.05, "square", 0.018], [660, 0.05, "square", 0.018], [860, 0.08, "triangle", 0.018]],
+      level: [[520, 0.05, "square", 0.018], [700, 0.055, "square", 0.018], [1040, 0.09, "triangle", 0.016]],
+      evolve: [[220, 0.08, "sawtooth", 0.026], [440, 0.08, "square", 0.024], [880, 0.12, "triangle", 0.022]],
+    };
+    const notes = patterns[kind] || patterns.tap;
+    if (audioCtx) {
+      const start = audioCtx.currentTime + 0.006;
+      notes.forEach(([freq, length, type, gain], index) => {
+        const osc = audioCtx.createOscillator();
+        const amp = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, start + index * 0.042);
+        amp.gain.setValueAtTime(0.0001, start + index * 0.042);
+        amp.gain.exponentialRampToValueAtTime(gain, start + index * 0.042 + 0.008);
+        amp.gain.exponentialRampToValueAtTime(0.0001, start + index * 0.042 + length);
+        osc.connect(amp).connect(audioCtx.destination);
+        osc.start(start + index * 0.042);
+        osc.stop(start + index * 0.042 + length + 0.018);
+      });
+    }
+    pulseHaptic(kind);
+  }
+
+  function pulseHaptic(kind = "tap") {
+    if (typeof navigator === "undefined" || typeof navigator.vibrate !== "function") return;
+    const patterns = {
+      tap: 8,
+      back: 10,
+      step: 5,
+      bump: [18, 18, 20],
+      encounter: [30, 22, 45],
+      hit: 24,
+      super: [34, 18, 42],
+      miss: 12,
+      capture: [18, 30, 18],
+      level: [18, 20, 28],
+      evolve: [24, 24, 44],
+    };
+    try {
+      navigator.vibrate(patterns[kind] || patterns.tap);
+    } catch {
+      // Haptics are best-effort and unavailable on many desktop browsers.
+    }
+  }
+
+  function soundForAction(action) {
+    if (action === "quickB" || action === "closeMenu" || action === "leaveTrial" || action === "run") return "back";
+    if (action === "quickMenu" || action === "menu" || action === "battleMenu") return "menu";
+    if (action === "move" || action === "pvpMove") return "hit";
+    if (action === "starter") return "level";
+    return "tap";
   }
 
   function generateMoves() {
@@ -2162,8 +2315,8 @@
   function createNewGame() {
     return {
       name: "Kid",
-      x: 14,
-      y: 63,
+      x: 15,
+      y: 66,
       facing: "down",
       party: [],
       pc: [],
@@ -2225,6 +2378,9 @@
     state.player.quests ||= {};
     state.player.switches ||= { goblin: false, brain1: false, brain2: false, brain3: false };
     state.player.pvpRecord ||= {};
+    [...state.player.party, ...state.player.pc].forEach((creature) => {
+      if (creature && typeof creature.statusFresh !== "boolean") creature.statusFresh = false;
+    });
     const record = state.player.pvpRecord;
     record.duels = Number.isFinite(Number(record.duels)) ? Math.max(0, Number(record.duels)) : 0;
     record.wins = Number.isFinite(Number(record.wins)) ? Math.max(0, Number(record.wins)) : 0;
@@ -2954,6 +3110,7 @@
       hp: 1,
       status: null,
       statusTurns: 0,
+      statusFresh: false,
       moves: [],
       metAt: currentLocationName(),
     };
@@ -2968,10 +3125,7 @@
   function currentMovesForSpecies(speciesId, level) {
     const species = SPECIES_BY_ID[speciesId];
     const learned = species.learnset.filter((item) => item.level <= level).map((item) => item.moveId);
-    while (learned.length < 4) {
-      const fallback = species.learnset[learned.length % species.learnset.length].moveId;
-      learned.push(fallback);
-    }
+    if (!learned.length && species.learnset.length) learned.push(species.learnset[0].moveId);
     return learned.slice(-4);
   }
 
@@ -3092,7 +3246,7 @@
     carveRect(58, 34, 64, 38, "bridge");
     carveRect(76, 32, 87, 36, "bridge");
 
-    carveRect(12, 59, 25, 67, "town"); // Memelet Town
+    carveRect(9, 56, 29, 69, "town"); // Memelet Town
     carveRect(12, 9, 26, 16, "town"); // Grunkridge
     carveRect(9, 42, 24, 50, "town"); // Rustburrow / Petalbog edge
     carveRect(48, 36, 57, 43, "town"); // Slimeport
@@ -3104,7 +3258,7 @@
       carveRect(zone.x1, zone.y1, zone.x2, zone.y2, zone.tile);
     });
 
-    carvePath([[18, 59], [18, 53], [25, 53], [25, 45], [18, 45]]);
+    carvePath([[18, 57], [18, 53], [25, 53], [25, 45], [18, 45]]);
     carvePath([[25, 45], [31, 45], [31, 35], [45, 35], [49, 38]]);
     carvePath([[23, 53], [23, 38], [25, 28], [19, 18], [19, 15]]);
     carvePath([[30, 35], [35, 29], [42, 22], [48, 21], [52, 25], [52, 35]]);
@@ -3112,7 +3266,7 @@
     carvePath([[56, 41], [63, 43], [70, 49], [75, 55]]);
     carvePath([[77, 55], [82, 48], [84, 42], [88, 40]]);
     carvePath([[78, 35], [88, 35]]);
-    carvePath([[18, 64], [42, 64], [42, 67]]);
+    carvePath([[16, 66], [42, 66], [42, 67]]);
     carvePath([[54, 41], [60, 45], [62, 47], [65, 47]]);
     carvePath([[62, 47], [68, 49], [72, 55]]);
     carvePath([[62, 47], [67, 42], [77, 36]]);
@@ -3120,9 +3274,9 @@
     carveRect(60, 45, 64, 49, "path");
 
     const buildings = [
-      [16, 61, "lab"],
-      [13, 62, "pc"],
-      [22, 62, "shop"],
+      [17, 59, "lab"],
+      [11, 64, "pc"],
+      [26, 64, "shop"],
       [62, 46, "gym"],
       [18, 11, "gym"],
       [47, 24, "gym"],
@@ -3146,9 +3300,11 @@
       carveRect(x - 1, y, x + 1, y + 1, padTile);
       carveRect(x - 2, y + 2, x + 2, y + 2, padTile);
     });
-    carveRect(12, 61, 23, 64, "path");
-    carveRect(16, 59, 16, 65, "path");
-    carveRect(13, 64, 22, 64, "path");
+    carveRect(11, 61, 27, 66, "path");
+    carveRect(16, 57, 18, 68, "path");
+    carveRect(10, 66, 28, 67, "path");
+    carveRect(13, 62, 15, 65, "town");
+    carveRect(21, 62, 24, 65, "town");
     buildings.forEach(([x, y, tile]) => {
       tiles[y][x] = tile;
     });
@@ -3317,6 +3473,34 @@
         until: now + 520 + i * 18,
       });
     }
+    const grassish = tile.includes("Grass") || tile === "moss" || tile === "slime" || tile === "checker";
+    state.stepParticles.push({
+      kind: "ring",
+      x: toX + 0.5,
+      y: toY + 0.88,
+      color: waterish ? "#d4f4ff" : base,
+      dark: waterish ? "#277ca8" : "#071018",
+      size: waterish ? 18 : grassish ? 15 : 12,
+      started: now + 20,
+      until: now + 420,
+    });
+    if (grassish) {
+      for (let i = 0; i < 5; i += 1) {
+        const side = i % 2 ? 1 : -1;
+        state.stepParticles.push({
+          kind: "blade",
+          x: toX + 0.5 + side * (0.12 + i * 0.018),
+          y: toY + 0.77 + ((i % 3) - 1) * 0.035,
+          vx: side * (0.008 + i * 0.003),
+          vy: -0.012,
+          color: i % 2 ? alt : base,
+          dark: "#071018",
+          size: 7 + (i % 2) * 2,
+          started: now + i * 18,
+          until: now + 470 + i * 20,
+        });
+      }
+    }
     if (state.stepParticles.length > 80) state.stepParticles.splice(0, state.stepParticles.length - 80);
   }
 
@@ -3332,9 +3516,9 @@
 
   function makeNpcs() {
     return [
-      { id: "prof", x: 15, y: 62, sprite: "prof", dialog: ["Professor Mold: The Ogreverse is balanced by friendship, snacks, and legally distinct capture technology.", "Catch creatures, train them, collect eight sigils, and stop Team Brainrot Overload from deep-frying the type chart."] },
-      { id: "mom", x: 13, y: 64, sprite: "mom", dialog: ["Mom: I packed Potions, clean socks, and a waiver for whatever a Skibidi Sludge is.", "Come back anytime. I will pretend not to hear the battle music."] },
-      { id: "orbKid", x: 21, y: 64, sprite: "kid", quest: "firstCatch", dialog: ["Orb Intern: Catch one creature and I will promote you to Assistant Orb Gobbler. It is unpaid but shiny."] },
+      { id: "prof", x: 18, y: 61, sprite: "prof", dialog: ["Professor Mold: The Ogreverse is balanced by friendship, snacks, and legally distinct capture technology.", "Catch creatures, train them, collect eight sigils, and stop Team Brainrot Overload from deep-frying the type chart."] },
+      { id: "mom", x: 12, y: 67, sprite: "mom", dialog: ["Mom: I packed Potions, clean socks, and a waiver for whatever a Skibidi Sludge is.", "Come back anytime. I will pretend not to hear the battle music."] },
+      { id: "orbKid", x: 24, y: 66, sprite: "kid", quest: "firstCatch", dialog: ["Orb Intern: Catch one creature and I will promote you to Assistant Orb Gobbler. It is unpaid but shiny."] },
       { id: "ogrePoet", x: 18, y: 13, sprite: "ogre", dialog: ["Ogre Poet: Roses are red, boulders are dense, I wrote this on a wall because paper got tense."] },
       { id: "goblinChef", x: 13, y: 46, sprite: "goblin", quest: "caught10", dialog: ["Goblin Chef: Bring proof of ten caught creatures and I will season your bag with Ultra Orbs."] },
       { id: "alienMechanic", x: 70, y: 14, sprite: "alien", quest: "techQuest", dialog: ["Alien Mechanic: My router is haunted by vibes. Show me any Electric or Tech creature and I will pay you in good orbs."] },
@@ -3395,24 +3579,58 @@
   function onKeyDown(event) {
     const key = event.key.toLowerCase();
     keys.add(key);
+    unlockAudio();
     if (["arrowup", "arrowdown", "arrowleft", "arrowright", " ", "enter"].includes(key)) event.preventDefault();
     if (state.mode === "overworld") {
       if (["arrowup", "w"].includes(key)) tryMove(0, -1, "up");
       else if (["arrowdown", "s"].includes(key)) tryMove(0, 1, "down");
       else if (["arrowleft", "a"].includes(key)) tryMove(-1, 0, "left");
       else if (["arrowright", "d"].includes(key)) tryMove(1, 0, "right");
-      else if (["z", "enter", " "].includes(key)) interact();
-      else if (["x", "escape", "m"].includes(key)) openMenu("home");
+      else if (["z", "enter", " "].includes(key)) {
+        playSfx("tap");
+        interact();
+      } else if (["x", "escape", "m"].includes(key)) {
+        playSfx("menu");
+        openMenu("home");
+      }
     } else if (state.mode === "trial" && ["enter", " ", "z"].includes(key)) {
+      playSfx("tap");
       startTrialFromPreview();
     } else if (state.mode === "trial" && ["x", "escape", "m"].includes(key)) {
+      playSfx("back");
       closeTrialPreview();
     } else if (state.mode === "menu" && ["x", "escape", "m"].includes(key)) {
+      playSfx("back");
       closeMenu();
+    } else if (state.mode === "battle") {
+      if (["enter", " ", "z", "q"].includes(key)) {
+        playSfx("tap");
+        quickBattleConfirm();
+      } else if (["x", "escape", "m"].includes(key)) {
+        playSfx("back");
+        quickBack();
+      } else if (!state.battle?.busy && !state.battle?.result) {
+        const numberChoice = Number(key);
+        if (state.battle.choice === "fight" && numberChoice >= 1 && numberChoice <= 4) {
+          playSfx("tap");
+          handleBattleMove(numberChoice - 1);
+        } else if (["s", "f"].includes(key)) {
+          playSfx("menu");
+          setBattleChoice("fight");
+        } else if (["t", "i"].includes(key)) {
+          playSfx("menu");
+          setBattleChoice("bag");
+        } else if (["c", "p"].includes(key)) {
+          playSfx("menu");
+          setBattleChoice("party");
+        }
+      }
     } else if (state.mode === "pvp" && ["x", "escape", "m"].includes(key)) {
+      playSfx("menu");
       if (state.pvp?.view?.status === "complete") leaveOnlineBattle();
       else refreshOnlineBattleState();
     } else if (state.mode === "title" && ["enter", " "].includes(key)) {
+      playSfx(state.hasSave ? "menu" : "level");
       state.hasSave ? loadGame() : startNewGame();
     }
   }
@@ -3440,6 +3658,20 @@
     mobileControls.addEventListener("pointerleave", stopMobileMoveRepeat);
     mobileControls.addEventListener("pointercancel", stopMobileMoveRepeat);
     mobileControls.addEventListener("contextmenu", (event) => event.preventDefault());
+    canvas.addEventListener("pointerdown", onCanvasJoystickPointerDown);
+    window.addEventListener("pointermove", onMobilePointerMove);
+    window.addEventListener("pointerup", stopMobileMoveRepeat);
+    window.addEventListener("pointercancel", stopMobileMoveRepeat);
+  }
+
+  function onCanvasJoystickPointerDown(event) {
+    if (!mobileLayoutActive() || state.mode !== "overworld" || !mobileJoystickEl) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.preventDefault();
+    startMobileJoystick(event, mobileJoystickEl, {
+      x: event.clientX,
+      y: event.clientY,
+    });
   }
 
   function onMobilePointerDown(event) {
@@ -3461,8 +3693,8 @@
     stopMobileMoveRepeat();
     handleAction("touchMove", button.dataset.value);
     mobileMoveDelay = window.setTimeout(() => {
-      mobileMoveRepeat = window.setInterval(() => handleAction("touchMove", button.dataset.value), 145);
-    }, 230);
+      mobileMoveRepeat = window.setInterval(() => handleAction("touchMove", button.dataset.value), STEP_ANIM_MS);
+    }, 170);
   }
 
   function onMobilePointerMove(event) {
@@ -3471,29 +3703,39 @@
     updateMobileJoystick(event);
   }
 
-  function startMobileJoystick(event, joystick) {
+  function startMobileJoystick(event, joystick, origin = null) {
+    stopMobileMoveRepeat();
     mobileJoystickEl = joystick;
     mobileJoystickPointerId = event.pointerId;
+    mobileJoystickOrigin = origin;
     mobileClickSuppressUntil = performance.now() + 520;
-    stopMobileMoveRepeat();
     try {
-      joystick.setPointerCapture(event.pointerId);
+      (origin ? canvas : joystick).setPointerCapture(event.pointerId);
     } catch {
       // Pointer capture is best-effort across mobile browsers.
     }
     joystick.classList.add("active");
+    joystick.classList.toggle("floating", Boolean(origin));
+    document.body.dataset.joystickActive = "1";
+    mobileJoystickLastMove = 0;
+    mobileJoystickLastBump = 0;
+    if (origin) {
+      joystick.style.setProperty("--stick-left", `${Math.round(origin.x)}px`);
+      joystick.style.setProperty("--stick-top", `${Math.round(origin.y)}px`);
+    }
     updateMobileJoystick(event, true);
-    mobileMoveRepeat = window.setInterval(() => moveFromMobileJoystick(), 145);
+    mobileJoystickRaf = window.requestAnimationFrame(mobileJoystickLoop);
   }
 
   function updateMobileJoystick(event, immediate = false) {
     if (!mobileJoystickEl) return;
     const rect = mobileJoystickEl.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
+    const centerX = mobileJoystickOrigin ? mobileJoystickOrigin.x : rect.left + rect.width / 2;
+    const centerY = mobileJoystickOrigin ? mobileJoystickOrigin.y : rect.top + rect.height / 2;
     const rawX = event.clientX - centerX;
     const rawY = event.clientY - centerY;
-    const max = Math.max(18, Math.min(rect.width, rect.height) * 0.32);
+    const size = mobileJoystickOrigin ? 78 : Math.min(rect.width, rect.height);
+    const max = Math.max(18, size * 0.34);
     const distance = Math.hypot(rawX, rawY);
     const scale = distance > max ? max / distance : 1;
     const x = rawX * scale;
@@ -3501,18 +3743,31 @@
     mobileJoystickEl.style.setProperty("--stick-x", `${Math.round(x)}px`);
     mobileJoystickEl.style.setProperty("--stick-y", `${Math.round(y)}px`);
 
-    const deadzone = Math.min(rect.width, rect.height) * 0.18;
-    const nextDirection = distance < deadzone ? null : joystickDirection(rawX, rawY);
+    const deadzone = size * JOYSTICK_DEADZONE_RATIO;
+    const strength = clamp((distance - deadzone) / Math.max(1, max - deadzone), 0, 1);
+    mobileJoystickVector = {
+      x: strength ? rawX / Math.max(1, distance) : 0,
+      y: strength ? rawY / Math.max(1, distance) : 0,
+      strength,
+    };
+    mobileJoystickEl.style.setProperty("--stick-force", strength.toFixed(2));
+    const nextDirection = strength <= 0 ? null : joystickDirection(mobileJoystickVector.x, mobileJoystickVector.y);
     const changed = !sameJoystickDirection(mobileJoystickDirection, nextDirection);
     mobileJoystickDirection = nextDirection;
+    mobileJoystickEl.dataset.dir = mobileJoystickDirection?.facing || "idle";
     if ((immediate || changed) && mobileJoystickDirection) moveFromMobileJoystick(true);
   }
 
   function joystickDirection(x, y) {
-    if (Math.abs(x) > Math.abs(y)) {
+    const ax = Math.abs(x);
+    const ay = Math.abs(y);
+    if (ax > ay * JOYSTICK_AXIS_LOCK_RATIO) {
       return x > 0
         ? { dx: 1, dy: 0, facing: "right" }
         : { dx: -1, dy: 0, facing: "left" };
+    }
+    if (ay <= ax * JOYSTICK_AXIS_LOCK_RATIO && mobileJoystickDirection) {
+      return mobileJoystickDirection;
     }
     return y > 0
       ? { dx: 0, dy: 1, facing: "down" }
@@ -3525,28 +3780,68 @@
   }
 
   function moveFromMobileJoystick(force = false) {
-    if (!mobileJoystickDirection) return;
+    if (!mobileJoystickDirection || mobileJoystickVector.strength <= 0) return;
     const now = performance.now();
-    if (!force && now - mobileJoystickLastMove < 110) return;
+    if (!force && state.stepFx && now < state.stepFx.until - STEP_INPUT_GRACE_MS) return;
+    const repeatMs = clamp(STEP_ANIM_MS + 14 - mobileJoystickVector.strength * 28, 66, STEP_ANIM_MS + 18);
+    if (!force && now - mobileJoystickLastMove < repeatMs) return;
     mobileJoystickLastMove = now;
-    tryMove(mobileJoystickDirection.dx, mobileJoystickDirection.dy, mobileJoystickDirection.facing);
+    const moved = tryMove(mobileJoystickDirection.dx, mobileJoystickDirection.dy, mobileJoystickDirection.facing);
+    if (moved) {
+      mobileJoystickEl?.classList.remove("blocked");
+      mobileControlPulse("step");
+    } else if (moved === false && now - mobileJoystickLastBump > 220) {
+      mobileJoystickLastBump = now;
+      mobileJoystickEl?.classList.add("blocked");
+      mobileControlPulse("bump");
+    }
+  }
+
+  function mobileControlPulse(kind = "step") {
+    if (typeof navigator === "undefined" || typeof navigator.vibrate !== "function") return;
+    try {
+      navigator.vibrate(kind === "bump" ? 18 : 5);
+    } catch {
+      // Haptics are optional and browser-gated.
+    }
+  }
+
+  function mobileJoystickLoop() {
+    if (mobileJoystickPointerId === null) {
+      mobileJoystickRaf = null;
+      return;
+    }
+    moveFromMobileJoystick();
+    mobileJoystickRaf = window.requestAnimationFrame(mobileJoystickLoop);
   }
 
   function stopMobileMoveRepeat() {
     if (mobileMoveDelay) window.clearTimeout(mobileMoveDelay);
     if (mobileMoveRepeat) window.clearInterval(mobileMoveRepeat);
+    if (mobileJoystickRaf) window.cancelAnimationFrame(mobileJoystickRaf);
     mobileMoveDelay = null;
     mobileMoveRepeat = null;
+    mobileJoystickRaf = null;
     mobileJoystickPointerId = null;
     mobileJoystickDirection = null;
+    mobileJoystickVector = { x: 0, y: 0, strength: 0 };
+    mobileJoystickOrigin = null;
+    delete document.body.dataset.joystickActive;
     if (mobileJoystickEl) {
       mobileJoystickEl.classList.remove("active");
+      mobileJoystickEl.classList.remove("floating");
+      mobileJoystickEl.classList.remove("blocked");
       mobileJoystickEl.style.setProperty("--stick-x", "0px");
       mobileJoystickEl.style.setProperty("--stick-y", "0px");
+      mobileJoystickEl.style.setProperty("--stick-force", "0");
+      mobileJoystickEl.style.removeProperty("--stick-left");
+      mobileJoystickEl.style.removeProperty("--stick-top");
+      mobileJoystickEl.dataset.dir = "idle";
     }
   }
 
   function handleAction(action, value) {
+    if (action && !["touchMove", "move", "pvpMove"].includes(action)) playSfx(soundForAction(action));
     if (action === "new") startNewGame();
     if (action === "continue") loadGame();
     if (action === "starter") chooseStarter(value);
@@ -3561,6 +3856,7 @@
     if (action === "move") handleBattleMove(Number(value));
     if (action === "battleMenu") setBattleChoice(value);
     if (action === "useBattleItem") useBattleItem(value);
+    if (action === "finishBattle") finishBattleResult();
     if (action === "run") runFromBattle();
     if (action === "switch") switchBattleCreature(Number(value));
     if (action === "useItem") useItem(value);
@@ -3606,10 +3902,39 @@
       interact();
     } else if (state.mode === "trial") {
       startTrialFromPreview();
+    } else if (state.mode === "battle") {
+      quickBattleConfirm();
     } else if (state.mode === "pvp") {
       if (state.pvp?.view?.status === "complete") leaveOnlineBattle();
       else refreshOnlineBattleState();
     }
+  }
+
+  function quickBattleConfirm() {
+    const battle = state.battle;
+    if (!battle) return;
+    if (battle.result) {
+      finishBattleResult();
+      return;
+    }
+    if (battle.busy) return;
+    const player = activePlayer();
+    const enemySpecies = SPECIES_BY_ID[activeEnemy().id];
+    const best = bestBattleMove(player, enemySpecies);
+    if (battle.choice === "main" || battle.choice === "fight") {
+      if (best?.slot && best.slot.pp > 0 && best.score > 0) {
+        handleBattleMove(best.index);
+        return;
+      }
+      const fallbackIndex = player.moves.findIndex((slot) => slot.pp > 0);
+      if (fallbackIndex >= 0 && battle.choice === "fight") {
+        handleBattleMove(fallbackIndex);
+        return;
+      }
+      setBattleChoice("fight");
+      return;
+    }
+    setBattleChoice("main");
   }
 
   function quickBack() {
@@ -3618,7 +3943,8 @@
     } else if (state.mode === "trial") {
       closeTrialPreview();
     } else if (state.mode === "battle") {
-      if (state.battle?.choice && state.battle.choice !== "main") setBattleChoice("main");
+      if (state.battle?.result) finishBattleResult();
+      else if (state.battle?.choice && state.battle.choice !== "main") setBattleChoice("main");
       else toast("Use Bail in the battle panel to run.");
     } else if (state.mode === "pvp") {
       if (state.pvp?.view?.status === "complete") leaveOnlineBattle();
@@ -3642,24 +3968,31 @@
   }
 
   function tryMove(dx, dy, facing) {
-    if (!state.player || state.mode !== "overworld") return;
+    if (!state.player || state.mode !== "overworld") return null;
+    const now = performance.now();
+    if (state.stepFx && now < state.stepFx.until - STEP_INPUT_GRACE_MS) {
+      state.player.facing = facing;
+      return null;
+    }
     state.player.facing = facing;
     const nx = state.player.x + dx;
     const ny = state.player.y + dy;
-    if (!inWorld(nx, ny)) return;
+    if (!inWorld(nx, ny)) return false;
     if (isBlocked(nx, ny)) {
+      playSfx("bump");
       bumpTile(nx, ny);
       dirtyPanel();
-      return;
+      return false;
     }
     state.stepFx = {
       fromX: state.player.x,
       fromY: state.player.y,
       toX: nx,
       toY: ny,
-      until: performance.now() + 130,
+      until: performance.now() + STEP_ANIM_MS,
     };
     addStepParticles(state.player.x, state.player.y, nx, ny);
+    playSfx("step");
     state.player.x = nx;
     state.player.y = ny;
     state.player.steps += 1;
@@ -3670,6 +4003,7 @@
     maybeWildEncounter();
     sendOnlinePresence(true);
     dirtyPanel();
+    return true;
   }
 
   function isBlocked(x, y) {
@@ -3704,18 +4038,7 @@
     if (state.player.party.length === 0) return;
     if (state.player.repelSteps > 0) return;
     const tile = tileAt(state.player.x, state.player.y);
-    const encounterTiles = {
-      ogreGrass: "ogre",
-      rockGrass: "ogre",
-      neonGrass: "alien",
-      circuit: "alien",
-      mushGrass: "goblin",
-      cave: "goblin",
-      memeGrass: "brainrot",
-      slime: "brainrot",
-      checker: "brainrot",
-    };
-    const biome = encounterTiles[tile];
+    const biome = encounterBiomeForTile(tile);
     if (!biome) return;
     const chance = tile.includes("Grass") || tile === "circuit" || tile === "cave" ? 0.12 : 0.07;
     if (Math.random() < chance) {
@@ -3729,6 +4052,20 @@
         music: "wild",
       });
     }
+  }
+
+  function encounterBiomeForTile(tile) {
+    return {
+      ogreGrass: "ogre",
+      rockGrass: "ogre",
+      neonGrass: "alien",
+      circuit: "alien",
+      mushGrass: "goblin",
+      cave: "goblin",
+      memeGrass: "brainrot",
+      slime: "brainrot",
+      checker: "brainrot",
+    }[tile] || null;
   }
 
   function wildLevelFor(biome) {
@@ -4055,7 +4392,7 @@
   function makeEnemyParty(template) {
     const party = [];
     for (let i = 0; i < template.count; i += 1) {
-      const level = clamp(template.level + i * 2 + Math.floor(Math.random() * 2), 2, 88);
+      const level = scaledEnemyLevel(template, i);
       const species = template.aceId && i === template.count - 1 && SPECIES_BY_ID[template.aceId]
         ? SPECIES_BY_ID[template.aceId]
         : pickSpeciesForTrainer(template.theme, template.clan, level, i);
@@ -4064,6 +4401,20 @@
       markSeen(species.id);
     }
     return party;
+  }
+
+  function scaledEnemyLevel(template, index = 0) {
+    const base = clamp((template.level || 5) + index * 2 + Math.floor(Math.random() * 2), 2, 88);
+    if (!state.player?.party?.length) return base;
+    const living = state.player.party.filter(Boolean);
+    const sorted = [...living].sort((a, b) => (b.level || 1) - (a.level || 1));
+    const top = sorted.slice(0, Math.min(3, sorted.length));
+    const avg = top.reduce((sum, creature) => sum + (creature.level || 1), 0) / Math.max(1, top.length);
+    const badgePressure = Math.min(8, state.player.badges?.length || 0) * 0.75;
+    const target = avg + badgePressure + index * 0.7;
+    const bandLow = template.id?.startsWith("elite") || template.id === "champion" ? base - 2 : base - 3;
+    const bandHigh = template.id?.startsWith("elite") || template.id === "champion" ? base + 5 : base + 4;
+    return clamp(Math.round((base * 0.62) + (target * 0.38)), bandLow, bandHigh);
   }
 
   function pickSpeciesForTrainer(theme, clanKey, level, offset) {
@@ -4092,6 +4443,7 @@
       toast("Your crew is fainted. Visit a Vault station before picking fights.");
       return;
     }
+    const now = performance.now();
     state.mode = "battle";
     state.battle = {
       ...config,
@@ -4105,13 +4457,20 @@
       result: null,
       fx: null,
     };
+    state.transitionFx = {
+      kind: config.kind || "battle",
+      biome: currentBiome(),
+      started: now,
+      until: now + 620,
+    };
     state.battleIntro = {
       kind: config.kind || "battle",
       name: config.name || "Battle",
       trainerSprite: config.kind === "wild" ? null : trainerAssetKey(config.trainerSprite || config.clan || "trainer"),
-      started: performance.now(),
-      until: performance.now() + 780,
+      started: now + 180,
+      until: now + 960,
     };
+    playSfx("encounter");
     markSeen(activeEnemy().id);
     dirtyPanel();
   }
@@ -4132,6 +4491,7 @@
     state.battle.log.unshift(text);
     state.battle.log = state.battle.log.slice(0, 5);
     toast(text, 1800);
+    if (state.mode === "battle" && state.battle) dirtyPanel();
   }
 
   function setBattleChoice(choice) {
@@ -4258,6 +4618,13 @@
       started: now,
       until: now + duration,
     };
+    playSfx(result === "miss"
+      ? "miss"
+      : result === "status" || move.category === "Status"
+        ? "status"
+        : result === "super" || detail.multiplier >= 2
+          ? "super"
+          : "hit");
   }
 
   function calcDamage(attacker, defender, move, attackerStages, defenderStages) {
@@ -4276,9 +4643,11 @@
   function applyMoveEffect(move, attacker, defender, attackerStages, defenderStages, damage) {
     const effect = move.effect || {};
     const chance = effect.chance ?? 1;
-    if (effect.status && Math.random() < chance && !defender.status) {
+    const defenderAlive = !isFainted(defender);
+    if (defenderAlive && effect.status && Math.random() < chance && !defender.status) {
       defender.status = effect.status;
       defender.statusTurns = effect.status === "sleep" ? 1 + Math.floor(Math.random() * 2) : 0;
+      defender.statusFresh = true;
       const statusText = {
         burn: "burned",
         poison: "poisoned",
@@ -4289,14 +4658,14 @@
       }[effect.status] || effect.status;
       battleLog(`${defender.nickname} got ${statusText}.`);
     }
-    if (effect.confuse && Math.random() < effect.confuse && !defender.status) {
+    if (defenderAlive && effect.confuse && Math.random() < effect.confuse && !defender.status) {
       defender.status = "confuse";
       battleLog(`${defender.nickname} became confused by the bit.`);
     }
-    if (effect.flinch && Math.random() < effect.flinch && !defender.status) {
+    if (defenderAlive && effect.flinch && Math.random() < effect.flinch && !defender.status) {
       defender.status = "flinch";
     }
-    if (effect.stat && Math.random() < chance) {
+    if (effect.stat && Math.random() < chance && (effect.target === "self" || defenderAlive)) {
       const stages = effect.target === "self" ? attackerStages : defenderStages;
       stages[effect.stat] = clamp(stages[effect.stat] + effect.amount, -6, 6);
       const targetName = effect.target === "self" ? attacker.nickname : defender.nickname;
@@ -4319,7 +4688,7 @@
       attacker.hp = clamp(attacker.hp - recoil, 0, calcStats(attacker).hp);
       battleLog(`${attacker.nickname} took ${recoil} recoil.`);
     }
-    if (effect.random && Math.random() < 0.55) {
+    if (defenderAlive && effect.random && Math.random() < 0.55) {
       randomChaos(attacker, defender, attackerStages, defenderStages);
     }
   }
@@ -4349,6 +4718,10 @@
 
   function tickStatus(creature, label) {
     if (creature.status === "burn" || creature.status === "poison" || creature.status === "zap") {
+      if (creature.statusFresh) {
+        creature.statusFresh = false;
+        return;
+      }
       const maxHp = calcStats(creature).hp;
       const loss = Math.max(1, Math.floor(maxHp * (creature.status === "poison" ? 0.08 : 0.06)));
       creature.hp = clamp(creature.hp - loss, 0, maxHp);
@@ -4402,18 +4775,19 @@
   }
 
   function winBattle() {
-    const battleName = state.battle.name;
-    const onWin = state.battle.onWin;
+    const battle = state.battle;
+    const battleName = battle.name;
+    const onWin = battle.onWin;
     battleLog(`You defeated ${battleName}.`);
-    state.mode = "overworld";
-    state.battle = null;
-    state.resultBanner = {
+    battle.enemyIndex = Math.max(0, Math.min(battle.enemyIndex, battle.enemyParty.length - 1));
+    battle.busy = true;
+    battle.choice = "result";
+    battle.result = {
+      outcome: "win",
       title: "VICTORY",
       text: `Defeated ${battleName}`,
       reward: "EXP + prize thread",
       biome: currentBiome(),
-      started: performance.now(),
-      until: performance.now() + 1700,
     };
     if (typeof onWin === "function") onWin();
     updateQuestProgress();
@@ -4421,21 +4795,42 @@
   }
 
   function loseBattle() {
-    toast("You blacked out and woke up at Memelet Town. Your wallet feels emotionally lighter.");
+    const battle = state.battle;
+    toast("You blacked out. Tap Continue to regroup at Memelet Town.");
     state.player.money = Math.max(0, state.player.money - 500);
-    state.player.x = 14;
-    state.player.y = 63;
-    healParty(false);
-    state.mode = "overworld";
-    state.battle = null;
-    state.resultBanner = {
+    battle.busy = true;
+    battle.choice = "result";
+    battle.result = {
+      outcome: "loss",
       title: "BLACKOUT",
       text: "Returned to Memelet Town",
       reward: "$500 lesson",
       biome: "town",
-      started: performance.now(),
-      until: performance.now() + 1800,
     };
+    dirtyPanel();
+  }
+
+  function finishBattleResult() {
+    if (!state.battle?.result) return;
+    const result = state.battle.result;
+    if (result.outcome === "loss") {
+      state.player.x = 15;
+      state.player.y = 66;
+      state.player.facing = "down";
+      healParty(false);
+    }
+    state.resultBanner = {
+      title: result.title,
+      text: result.text,
+      reward: result.reward,
+      biome: result.biome || currentBiome(),
+      started: performance.now(),
+      until: performance.now() + 1700,
+    };
+    state.mode = "overworld";
+    state.battle = null;
+    checkAreaChange(true);
+    persistPlayerSilently();
     dirtyPanel();
   }
 
@@ -4453,6 +4848,15 @@
         creature.hp = clamp(creature.hp + (newMax - oldMax) + 8, 1, newMax);
         ensureCreatureMoves(creature);
         battleLog(`${creature.nickname} grew to level ${creature.level}.`);
+        const now = performance.now();
+        state.levelFx = {
+          name: creature.nickname,
+          level: creature.level,
+          clan: SPECIES_BY_ID[creature.id]?.clan || currentBiome(),
+          started: now,
+          until: now + 1700,
+        };
+        playSfx("level");
         tryEvolve(creature);
       }
     });
@@ -4481,6 +4885,7 @@
         started: performance.now(),
         until: performance.now() + 2600,
       };
+      playSfx("evolve");
       toast(`${oldName} evolved into ${creature.nickname}. The OgreLog applauds suspiciously.`);
       return true;
     }
@@ -4540,21 +4945,22 @@
 
   function finishCaptureAttempt(enemy, itemName, caught) {
     if (caught) {
+      playSfx("capture");
       markCaught(enemy.id);
       addCreatureToCollection(enemy);
-      state.mode = "overworld";
-      state.battle = null;
       updateQuestProgress();
-      state.resultBanner = {
+      state.battle.busy = true;
+      state.battle.choice = "result";
+      state.battle.result = {
+        outcome: "catch",
         title: "CAUGHT",
         text: enemy.nickname,
         reward: `${itemName} sealed the bit`,
         biome: state.captureFx?.biome || currentBiome(),
-        started: performance.now(),
-        until: performance.now() + 1900,
       };
       toast(`${enemy.nickname} was caught in a ${itemName}. The orb made a tiny legal sound.`);
     } else if (state.battle) {
+      playSfx("miss");
       battleLog(`${enemy.nickname} broke free and dabbed irresponsibly.`);
       const enemyMove = chooseEnemyMove(activeEnemy(), activePlayer());
       executeMove(activeEnemy(), activePlayer(), enemyMove, state.battle.enemyStages, state.battle.playerStages, "you");
@@ -4585,6 +4991,7 @@
       }
       creature.hp = Math.max(1, Math.floor(maxHp * item.amount));
       creature.status = null;
+      creature.statusFresh = false;
       state.player.bag[itemName] -= 1;
       battleLog(`${creature.nickname} revived.`);
     } else {
@@ -4600,19 +5007,23 @@
   }
 
   function attemptCatch(enemy, rate) {
+    return Math.random() < captureChanceFor(enemy, rate);
+  }
+
+  function captureChanceFor(enemy, rate) {
     const species = SPECIES_BY_ID[enemy.id];
     const maxHp = calcStats(enemy).hp;
     const hpFactor = (3 * maxHp - 2 * enemy.hp) / (3 * maxHp);
     const statusBonus = enemy.status ? 1.35 : 1;
     const badgeBonus = 1 + state.player.badges.length * 0.035;
-    const chance = clamp((species.captureRate / 255) * hpFactor * rate * statusBonus * badgeBonus, 0.03, species.legendary ? 0.28 : 0.92);
-    return Math.random() < chance;
+    return clamp((species.captureRate / 255) * hpFactor * rate * statusBonus * badgeBonus, 0.03, species.legendary ? 0.28 : 0.92);
   }
 
   function addCreatureToCollection(creature) {
     const copy = JSON.parse(JSON.stringify(creature));
     copy.status = null;
     copy.statusTurns = 0;
+    copy.statusFresh = false;
     if (state.player.party.length < 6) {
       state.player.party.push(copy);
       toast(`${copy.nickname} joined your crew.`);
@@ -4690,6 +5101,7 @@
       if (creature.hp > 0) return toast(`${creature.nickname} is already standing there dramatically.`);
       creature.hp = Math.max(1, Math.floor(maxHp * item.amount));
       creature.status = null;
+      creature.statusFresh = false;
       state.player.bag[itemName] -= 1;
       toast(`${creature.nickname} got back up and blamed lag.`);
     }
@@ -4724,6 +5136,7 @@
       creature.hp = calcStats(creature).hp;
       creature.status = null;
       creature.statusTurns = 0;
+      creature.statusFresh = false;
       ensureCreatureMoves(creature);
       creature.moves.forEach((slot) => (slot.pp = MOVES_BY_ID[slot.id].pp));
     });
@@ -5272,6 +5685,7 @@
 
   function renderOverworldPanel() {
     const player = state.player;
+    const primaryAction = primaryFieldActionInfo();
     panel.innerHTML = `
       <div class="panel-header">
         <h1>${currentLocationName()}</h1>
@@ -5283,10 +5697,12 @@
         <div><span>Log</span><strong>${Object.keys(player.dexCaught).length}/${Object.keys(player.dexSeen).length}</strong></div>
         <div><span>Weather</span><strong>${weatherName()}</strong></div>
       </div>
+      ${fieldBriefHtml()}
+      ${fieldAssistHtml()}
       ${adventureCardHtml()}
       ${onlinePanelHtml()}
       <div class="command-panel">
-        <button class="btn primary command-main" data-action="interact"><span>A</span>Talk / Inspect</button>
+        <button class="btn primary command-main" data-action="interact"><span>A</span><strong>${escapeHtml(primaryAction.label)}</strong><small>${escapeHtml(primaryAction.hint)}</small></button>
         <div class="menu-grid">
           <button class="btn menu-btn" data-action="menu" data-value="party"><span>CRW</span>Crew</button>
           <button class="btn menu-btn" data-action="menu" data-value="bag"><span>SAT</span>Satchel</button>
@@ -5294,12 +5710,165 @@
           <button class="btn menu-btn" data-action="menu" data-value="map"><span>MAP</span>Map</button>
           <button class="btn menu-btn" data-action="menu" data-value="quests"><span>QST</span>Quests</button>
           <button class="btn menu-btn" data-action="menu" data-value="pc"><span>VLT</span>Vault</button>
+          ${onlineQuickActionHtml()}
           <button class="btn menu-btn save-btn" data-action="save"><span>SAV</span>Save</button>
         </div>
       </div>
       ${partyMiniHtml()}
       ${touchControlsHtml()}
     `;
+  }
+
+  function primaryFieldActionInfo() {
+    const action = interactionPromptInfo();
+    if (!action) {
+      const step = activeStoryStep();
+      const direction = objectiveDirectionLabel(step.x - state.player.x, step.y - state.player.y);
+      return {
+        label: "Inspect",
+        hint: `${direction} toward ${step.target}. Face interactive tiles.`,
+      };
+    }
+    const label = {
+      BATTLE: "Challenge",
+      QUEST: "Quest",
+      TALK: "Talk",
+      DUEL: "Duel",
+      LAB: "Lab",
+      HEAL: "Heal",
+      SHOP: "Shop",
+      TRIAL: "Trial Den",
+      APEX: "Apex Gate",
+      SWITCH: "Switch",
+      RIFT: "Rift",
+    }[action.label] || action.label;
+    return { label, hint: interactionAssistText(action) };
+  }
+
+  function fieldBriefHtml() {
+    const step = activeStoryStep();
+    return `
+      <div class="field-brief">
+        <span>CH ${step.chapter}</span>
+        <strong>${escapeHtml(step.title)}</strong>
+        <small>${escapeHtml(step.target)} / ${destinationDistance(step)} steps</small>
+      </div>
+    `;
+  }
+
+  function fieldAssistHtml() {
+    const step = activeStoryStep();
+    const action = interactionPromptInfo();
+    const lead = state.player.party.find((creature) => creature.hp > 0) || state.player.party[0];
+    const wild = fieldWildSignal();
+    const direction = objectiveDirectionLabel(step.x - state.player.x, step.y - state.player.y);
+    const actionLabel = action
+      ? `${action.label} ahead`
+      : destinationDistance(step) <= 1
+        ? "Target here"
+        : "Roam";
+    const actionHint = action
+      ? interactionAssistText(action)
+      : `${direction} toward ${step.target}.`;
+    const leadMax = lead ? calcStats(lead).hp : 1;
+    const leadHpPct = lead ? clamp((lead.hp / Math.max(1, leadMax)) * 100, 0, 100) : 0;
+    const leadSpecies = lead ? SPECIES_BY_ID[lead.id] : null;
+    return `
+      <div class="field-assist-card" style="--assist-accent:${campaignAccent(step)};--assist-wild:${wild.accent}">
+        <div class="field-assist-head">
+          <span>${action ? "A" : "NAV"}</span>
+          <div>
+            <strong>${escapeHtml(actionLabel)}</strong>
+            <small>${escapeHtml(actionHint)}</small>
+          </div>
+        </div>
+        <div class="field-assist-grid">
+          <div><span>Direction</span><strong>${escapeHtml(direction)}</strong><small>${destinationDistance(step)} steps</small></div>
+          <div><span>Lead</span><strong>${escapeHtml(lead?.nickname || "No crew")}</strong><small>${leadSpecies ? escapeHtml(leadSpecies.elements.join("/")) : "empty"}</small><i><em style="width:${leadHpPct}%"></em></i></div>
+          <div><span>Wild Signal</span><strong>${escapeHtml(wild.title)}</strong><small>${escapeHtml(wild.subtitle)}</small></div>
+        </div>
+      </div>
+    `;
+  }
+
+  function interactionAssistText(action) {
+    if (!action) return "";
+    const frontTile = tileAt(action.x, action.y);
+    const frontNpc = NPCS.find((item) => item.x === action.x && item.y === action.y && npcVisible(item));
+    if (frontNpc?.trainer && !state.player.defeated[frontNpc.id]) return `Challenge ${frontNpc.trainer.name}.`;
+    if (frontNpc?.quest) return "Quest NPC is ready to advance the route.";
+    if (frontNpc) return "Talk for hints, rewards, or nonsense.";
+    if (frontTile === "pc") return "Heal, manage Vault storage, and reset PP.";
+    if (frontTile === "shop") return "Buy Orbs, meds, and evolution items.";
+    if (frontTile === "gym") return "Open the Trial Den preview.";
+    if (frontTile === "elite") return "Enter the Apex Gauntlet.";
+    if (frontTile === "switch") return "Toggle the local puzzle switch.";
+    if (frontTile === "rift") return "Enter the post-game rift when unlocked.";
+    return `Inspect ${action.label.toLowerCase()}.`;
+  }
+
+  function fieldWildSignal() {
+    const tile = tileAt(state.player.x, state.player.y);
+    const biome = encounterBiomeForTile(tile);
+    if (!biome) {
+      const current = currentBiome();
+      return {
+        title: "SAFE TILE",
+        subtitle: `${biomeName(current)} / no roll`,
+        accent: biomeAccent(current),
+      };
+    }
+    const level = wildLevelRangeLabel(biome);
+    const sample = wildPreviewSpecies(biome)
+      .map((species) => species.name.split(" ")[0])
+      .slice(0, 2)
+      .join(" / ");
+    return {
+      title: biomeName(biome).replace(" Dimension", "").replace(" Highlands", "").replace(" Warrens", "").replace(" Nebula", ""),
+      subtitle: `${level} / ${sample || "wild crew"}`,
+      accent: biomeAccent(biome),
+    };
+  }
+
+  function wildLevelRangeLabel(biome) {
+    if (!state.player) return "Lv ?";
+    const badgeBonus = state.player.badges.length * 5;
+    const base = { ogre: 5, goblin: 9, alien: 14, brainrot: 20 }[biome] || 5;
+    const low = clamp(base + badgeBonus, 3, state.player.champion ? 72 : 58);
+    const high = clamp(base + badgeBonus + 4, 3, state.player.champion ? 72 : 58);
+    return `Lv ${low}-${high}`;
+  }
+
+  function wildPreviewSpecies(biome) {
+    const levelBase = Number((wildLevelRangeLabel(biome).match(/\d+/) || [12])[0]);
+    const candidates = SPECIES.filter((species) => {
+      if (species.legendary) return false;
+      if (!species.habitat.includes(biome)) return false;
+      if (species.stageIndex > 0 && levelBase < (species.stageIndex === 1 ? 18 : 38)) return false;
+      return true;
+    });
+    const list = candidates.length ? candidates : SPECIES.filter((species) => species.clan === biome && species.stageIndex === 0);
+    const seed = hash(`${biome}:${state.player.x}:${state.player.y}:${state.player.badges.length}`);
+    return list
+      .slice()
+      .sort((a, b) => ((a.number * 17 + seed) % 997) - ((b.number * 17 + seed) % 997))
+      .slice(0, 3);
+  }
+
+  function objectiveDirectionLabel(dx, dy) {
+    if (Math.abs(dx) + Math.abs(dy) === 0) return "HERE";
+    const horizontal = dx > 0 ? "E" : dx < 0 ? "W" : "";
+    const vertical = dy > 0 ? "S" : dy < 0 ? "N" : "";
+    if (Math.abs(dx) > Math.abs(dy) * 1.7) return horizontal;
+    if (Math.abs(dy) > Math.abs(dx) * 1.7) return vertical;
+    return `${vertical}${horizontal}` || "HERE";
+  }
+
+  function onlineQuickActionHtml() {
+    if (!onlineRequested()) return "";
+    const online = state.online;
+    const label = online.connecting ? "Linking" : online.connected ? "Sync" : "Link";
+    return `<button class="btn menu-btn online-menu-btn" data-action="onlineReconnect"><span>ONL</span>${label}</button>`;
   }
 
   function onlinePanelHtml() {
@@ -5316,7 +5885,7 @@
       ? "You are in the main PvP hub. Stand near trainers and challenge them."
       : `Duel Plaza hub: ${plazaSteps} steps away near Slimeport.`;
     return `
-      <div class="card online-card ${online.connected ? "online" : "offline"}">
+      <div class="card online-card ${online.connected ? "online" : "offline"} ${incoming || sent ? "alerting" : ""}">
         <div class="row"><strong>Online Field</strong><span class="pill">${escapeHtml(statusLabel)}</span></div>
         <div class="online-hub-strip ${atPlaza ? "active" : ""}">
           <span>${atPlaza ? "PRISM DUEL PLAZA" : "SOCIAL HUB"}</span>
@@ -5434,19 +6003,61 @@
     const enemyStats = calcStats(enemy);
     const playerAccent = TYPE_COLORS[playerSpecies.elements[0]] || "#60d394";
     const enemyAccent = TYPE_COLORS[enemySpecies.elements[0]] || "#ff72e1";
+    if (battle.result) {
+      const result = battle.result;
+      panel.innerHTML = `
+        <div class="panel-header">
+          <h1>${escapeHtml(result.title)}</h1>
+          <span class="pill">${battle.kind}</span>
+        </div>
+        <div class="battle-result-card" style="--result-accent:${biomeAccent(result.biome || currentBiome())}">
+          <span class="boot-chip">${escapeHtml(battle.name)}</span>
+          <h2>${escapeHtml(result.text)}</h2>
+          <p class="tiny">${escapeHtml(result.reward)}</p>
+          <button class="btn primary command-main" data-action="finishBattle"><span>A</span>Continue</button>
+        </div>
+        <div class="battle-card foe-card" style="--card-accent:${enemyAccent}">
+          ${battlePanelCreatureTopHtml(enemy, enemySpecies)}
+          ${hpHtml(enemy.hp, enemyStats.hp)}
+          ${combatChipsHtml(enemy, battle.enemyStages, "foe")}
+        </div>
+        <div class="battle-card player-card" style="--card-accent:${playerAccent}">
+          ${battlePanelCreatureTopHtml(player, playerSpecies)}
+          ${hpHtml(player.hp, playerStats.hp)}
+          ${combatChipsHtml(player, battle.playerStages, "player")}
+        </div>
+        <div class="card battle-log list">
+          ${battle.log.map((line) => `<p class="tiny">${escapeHtml(line)}</p>`).join("")}
+        </div>
+      `;
+      return;
+    }
     const debugBattleChoice = DEBUG_CAPTURE && typeof window !== "undefined" && typeof window.URLSearchParams !== "undefined"
       ? new window.URLSearchParams(window.location.search).get("battleChoice")
       : "";
     const choice = debugBattleChoice || battle.choice;
+    const bestAction = bestBattleMove(player, enemySpecies);
+    const bestActionInfo = bestAction?.move ? moveMatchupInfo(bestAction.move, enemySpecies.elements) : null;
+    const bestActionDisabled = battle.busy || !bestAction?.slot || bestAction.slot.pp <= 0 || !bestAction.score;
     let controls = "";
-    if (choice === "fight") {
+    if (battle.result) {
+      const result = battle.result;
+      controls = `<div class="battle-result-card" style="--result-accent:${biomeAccent(result.biome || currentBiome())}">
+        <span class="boot-chip">${escapeHtml(result.title)}</span>
+        <h2>${escapeHtml(result.text)}</h2>
+        <p class="tiny">${escapeHtml(result.reward)}</p>
+        <button class="btn primary command-main" data-action="finishBattle"><span>A</span>Continue</button>
+      </div>`;
+    } else if (choice === "fight") {
       controls = `<div class="move-grid">${player.moves.map((slot, index) => {
         const move = MOVES_BY_ID[slot.id];
         const matchup = moveMatchupInfo(move, enemySpecies.elements);
+        const forecast = moveForecastInfo(player, enemy, playerSpecies, enemySpecies, move, battle.playerStages, battle.enemyStages);
         return `<button class="btn move-btn" style="--move-color:${TYPE_COLORS[move.type] || "#f3d35b"}" data-action="move" data-value="${index}" ${slot.pp <= 0 || battle.busy ? "disabled" : ""}>
           <span class="move-name">${move.name}</span>
           <span class="move-meta"><span style="color:${TYPE_COLORS[move.type]}">${move.type}</span> ${move.category}${move.power ? ` / ${move.power} POW` : ""}</span>
           <span class="move-effect ${matchup.className}">${matchup.label}</span>
+          <span class="move-forecast">${escapeHtml(forecast)}</span>
           <span class="move-pp">PP ${slot.pp}/${move.pp}</span>
         </button>`;
       }).join("")}</div>
@@ -5473,31 +6084,41 @@
     } else {
       const readyMoves = player.moves.filter((slot) => slot.pp > 0).length;
       const wildNote = battle.kind === "wild" ? "orbs ready" : "trainer duel";
-      controls = `<div class="battle-command-grid">
+      controls = `${bestAction?.move ? `<button class="btn primary battle-command quick-hit-command" data-action="move" data-value="${bestAction.index}" ${bestActionDisabled ? "disabled" : ""}>
+        <span>Q</span><strong>Best Hit</strong><small>${escapeHtml(bestAction.move.name)} / ${escapeHtml(bestActionInfo?.label || "READY")}</small>
+      </button>` : ""}
+      <div class="battle-command-grid">
         <button class="btn primary battle-command fight" data-action="battleMenu" data-value="fight" ${battle.busy ? "disabled" : ""}><span>S</span><strong>Strike</strong><small>${readyMoves}/4 ready</small></button>
         <button class="btn battle-command" data-action="battleMenu" data-value="bag" ${battle.busy ? "disabled" : ""}><span>T</span><strong>Satchel</strong><small>${wildNote}</small></button>
         <button class="btn battle-command" data-action="battleMenu" data-value="party" ${battle.busy ? "disabled" : ""}><span>C</span><strong>Crew</strong><small>switch line</small></button>
         <button class="btn warn battle-command" data-action="run" ${battle.busy || !battle.canRun ? "disabled" : ""}><span>B</span><strong>Bail</strong><small>${battle.canRun ? "route out" : "locked"}</small></button>
       </div>`;
     }
+    const stateStrip = battleStateStripHtml(battle, player, enemy, playerSpecies, enemySpecies, bestAction);
+    const foeCard = `<div class="battle-card foe-card" style="--card-accent:${enemyAccent}">
+      ${battlePanelCreatureTopHtml(enemy, enemySpecies)}
+      ${hpHtml(enemy.hp, enemyStats.hp)}
+      ${combatChipsHtml(enemy, battle.enemyStages, "foe")}
+    </div>`;
+    const playerCard = `<div class="battle-card player-card" style="--card-accent:${playerAccent}">
+      ${battlePanelCreatureTopHtml(player, playerSpecies)}
+      ${hpHtml(player.hp, playerStats.hp)}
+      ${combatChipsHtml(player, battle.playerStages, "player")}
+    </div>`;
+    const readout = battleReadoutHtml(player, enemy, playerSpecies, enemySpecies);
+    const controlsBlock = `<div class="battle-controls ${choice === "fight" ? "move-choice" : "main-choice"}">${controls}</div>`;
+    const logBlock = `<div class="card battle-log list">
+      ${battle.log.map((line) => `<p class="tiny">${escapeHtml(line)}</p>`).join("")}
+    </div>`;
+    const mobileOrder = mobileLayoutActive();
     panel.innerHTML = `
       <div class="panel-header">
         <h1>${battle.name}</h1>
         <span class="pill">${battle.kind}</span>
       </div>
-      <div class="battle-card foe-card" style="--card-accent:${enemyAccent}">
-        ${battlePanelCreatureTopHtml(enemy, enemySpecies)}
-        ${hpHtml(enemy.hp, enemyStats.hp)}
-      </div>
-      <div class="battle-card player-card" style="--card-accent:${playerAccent}">
-        ${battlePanelCreatureTopHtml(player, playerSpecies)}
-        ${hpHtml(player.hp, playerStats.hp)}
-      </div>
-      ${battleReadoutHtml(player, enemy, playerSpecies, enemySpecies)}
-      <div class="battle-controls">${controls}</div>
-      <div class="card battle-log list">
-        ${battle.log.map((line) => `<p class="tiny">${escapeHtml(line)}</p>`).join("")}
-      </div>
+      ${stateStrip}
+      ${mobileOrder ? `${controlsBlock}${readout}${foeCard}${playerCard}` : `${foeCard}${playerCard}${readout}${controlsBlock}`}
+      ${logBlock}
     `;
   }
 
@@ -5652,20 +6273,94 @@
     return { OGR: "Brute", ALN: "Tech", GBL: "Trick", BRT: "Chaos" }[prefix] || "Normal";
   }
 
+  function battleStateStripHtml(battle, player, enemy, playerSpecies, enemySpecies, bestAction) {
+    const playerMax = calcStats(player).hp;
+    const enemyMax = calcStats(enemy).hp;
+    const playerHpPct = clamp(player.hp / Math.max(1, playerMax), 0, 1);
+    const enemyHpPct = clamp(enemy.hp / Math.max(1, enemyMax), 0, 1);
+    const playerSpeed = stagedStat(player, "spe", battle.playerStages);
+    const enemySpeed = stagedStat(enemy, "spe", battle.enemyStages);
+    const fastSide = playerSpeed >= enemySpeed ? "You move first" : "Foe moves first";
+    const bestName = bestAction?.move?.name || "Strike";
+    const bestMeta = bestAction?.move ? moveMatchupInfo(bestAction.move, enemySpecies.elements).label : "READY";
+    const orbWindow = battle.kind === "wild" && enemyHpPct <= 0.42;
+    const danger = playerHpPct <= 0.28;
+    const locked = battle.busy || battle.choice === "result";
+    const canQuick = !locked && bestAction?.slot && bestAction.slot.pp > 0 && bestAction.score > 0;
+    const title = locked
+      ? "Turn resolving"
+      : danger
+        ? "Danger window"
+        : orbWindow
+          ? "Orb window"
+          : battle.choice === "main"
+            ? "Ready"
+            : `Choosing ${battle.choice}`;
+    const advice = locked
+      ? "Damage, PP, status, and switches are resolving."
+      : danger
+        ? "Use Satchel or Crew if the matchup looks ugly."
+        : orbWindow
+          ? "Low HP wild target. Capture Orbs have real odds now."
+          : battle.choice === "main"
+            ? `A uses ${bestName}; ${fastSide.toLowerCase()}.`
+            : "Pick deliberately, then the turn locks in.";
+    const actionAttrs = canQuick
+      ? `data-action="move" data-value="${bestAction.index}" aria-label="Use ${escapeHtml(bestName)}"`
+      : "disabled";
+    return `
+      <button class="battle-state-strip ${canQuick ? "actionable" : ""} ${locked ? "busy" : danger ? "danger" : orbWindow ? "catch" : "ready"}" style="--state-accent:${TYPE_COLORS[playerSpecies.elements[0]] || "#60d394"};--state-foe:${TYPE_COLORS[enemySpecies.elements[0]] || "#ff72e1"}" ${actionAttrs}>
+        <span class="battle-state-pill">${locked ? "TURN" : danger ? "HP" : orbWindow ? "ORB" : "A"}</span>
+        <div class="battle-state-copy">
+          <strong>${escapeHtml(title)}</strong>
+          <small>${escapeHtml(advice)}</small>
+        </div>
+        <span class="battle-state-move">${escapeHtml(bestMeta)}</span>
+      </button>
+    `;
+  }
+
+  function combatChipsHtml(creature, stages, side) {
+    const chips = [];
+    if (creature.status) {
+      chips.push(`<span class="status-chip ${safeCssToken(creature.status)}">${escapeHtml(statusLabel(creature.status))}</span>`);
+    }
+    Object.entries(stages || {})
+      .filter(([, value]) => value)
+      .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+      .slice(0, 3)
+      .forEach(([stat, value]) => {
+        const className = value > 0 ? "up" : "down";
+        const prefix = value > 0 ? "+" : "";
+        chips.push(`<span class="stage-chip ${className}">${escapeHtml(shortStatLabel(stat))} ${prefix}${value}</span>`);
+      });
+    if (!chips.length) chips.push(`<span class="status-chip clean">READY</span>`);
+    return `<div class="combat-chip-row ${escapeHtml(side || "")}">${chips.join("")}</div>`;
+  }
+
+  function shortStatLabel(stat) {
+    return {
+      atk: "ATK",
+      def: "DEF",
+      spa: "SPA",
+      spd: "SPD",
+      spe: "SPE",
+      acc: "ACC",
+    }[stat] || String(stat).toUpperCase().slice(0, 3);
+  }
+
+  function safeCssToken(value) {
+    return String(value || "").toLowerCase().replace(/[^a-z0-9_-]+/g, "");
+  }
+
   function battleReadoutHtml(player, enemy, playerSpecies, enemySpecies) {
     const battle = state.battle;
     const playerSpeed = stagedStat(player, "spe", battle.playerStages);
     const enemySpeed = stagedStat(enemy, "spe", battle.enemyStages);
     const tempo = playerSpeed >= enemySpeed ? "Your tempo" : "Foe tempo";
     const tempoClass = playerSpeed >= enemySpeed ? "good" : "warn";
-    const best = player.moves
-      .map((slot, index) => {
-        const move = MOVES_BY_ID[slot.id];
-        const mult = move.category === "Status" ? 0 : typeMultiplier(move.type, enemySpecies.elements);
-        const score = (move.power || 0) * mult * (slot.pp > 0 ? 1 : 0);
-        return { slot, move, mult, score, index };
-      })
-      .sort((a, b) => b.score - a.score || b.mult - a.mult)[0];
+    const best = bestBattleMove(player, enemySpecies);
+    const bestForecast = best?.score ? moveForecastInfo(player, enemy, playerSpecies, enemySpecies, best.move, battle.playerStages, battle.enemyStages) : "status route";
     const enemyWeak = enemySpecies.elements
       .map((type) => `${type}`)
       .join("/");
@@ -5673,6 +6368,7 @@
     const catchNote = battle.kind === "wild"
       ? hpPct < 0.35 ? "Prime orb window" : hpPct < 0.65 ? "Chip before orb" : "Soften first"
       : `${state.battle.enemyParty.length} foe line`;
+    const windowSmall = battle.kind === "wild" ? bestOrbChanceInfo(enemy) : battle.kind;
     const bestName = best?.score ? best.move.name : "Status setup";
     const bestTag = best?.score ? moveMatchupInfo(best.move, enemySpecies.elements).label : "CONTROL";
     return `
@@ -5682,12 +6378,56 @@
           <span class="${tempoClass}">${tempo}</span>
         </div>
         <div class="battle-readout-grid">
-          <div><span>Best hit</span><strong>${escapeHtml(bestName)}</strong><small>${escapeHtml(bestTag)}</small></div>
+          <div><span>Best hit</span><strong>${escapeHtml(bestName)}</strong><small>${escapeHtml(bestTag)} / ${escapeHtml(bestForecast)}</small></div>
           <div><span>Foe shell</span><strong>${escapeHtml(enemyWeak)}</strong><small>${escapeHtml(enemySpecies.role)}</small></div>
-          <div><span>Window</span><strong>${escapeHtml(catchNote)}</strong><small>${battle.kind}</small></div>
+          <div><span>Window</span><strong>${escapeHtml(catchNote)}</strong><small>${escapeHtml(windowSmall)}</small></div>
         </div>
       </div>
     `;
+  }
+
+  function moveForecastInfo(attacker, defender, attackerSpecies, defenderSpecies, move, attackerStages, defenderStages) {
+    if (!move || move.category === "Status" || !move.power) {
+      const effect = move?.effect || {};
+      if (effect.heal) return "heal setup";
+      if (effect.status) return `${statusLabel(effect.status)} chance`;
+      if (effect.stat) return `${shortStatLabel(effect.stat)} ${effect.amount > 0 ? "up" : "down"}`;
+      return "tempo play";
+    }
+    const damage = estimatedMoveDamage(attacker, defender, attackerSpecies, defenderSpecies, move, attackerStages, defenderStages);
+    const defenderMax = calcStats(defender).hp;
+    const pct = Math.round(clamp(damage / Math.max(1, defenderMax), 0, 1) * 100);
+    return `EST ${damage} HP / ${pct}%`;
+  }
+
+  function estimatedMoveDamage(attacker, defender, attackerSpecies, defenderSpecies, move, attackerStages, defenderStages) {
+    const attackKey = move.category === "Special" ? "spa" : "atk";
+    const defenseKey = move.category === "Special" ? "spd" : "def";
+    const atk = stagedStat(attacker, attackKey, attackerStages);
+    const def = Math.max(1, stagedStat(defender, defenseKey, defenderStages));
+    const stab = attackerSpecies.elements.includes(move.type) ? 1.5 : 1;
+    const multiplier = typeMultiplier(move.type, defenderSpecies.elements);
+    return Math.max(1, Math.floor(((((2 * attacker.level) / 5 + 2) * move.power * atk / def) / 50 + 2) * stab * multiplier * 0.95));
+  }
+
+  function bestOrbChanceInfo(enemy) {
+    const names = ["Rizz Orb", "Ultra Orb", "Great Orb", "Capture Orb"];
+    const name = names.find((itemName) => (state.player.bag[itemName] || 0) > 0) || "Capture Orb";
+    const item = ITEMS[name] || ITEMS["Capture Orb"];
+    const chance = captureChanceFor(enemy, item.rate);
+    return `${name} ${Math.round(chance * 100)}%`;
+  }
+
+  function bestBattleMove(creature, defenderSpecies) {
+    return creature.moves
+      .map((slot, index) => {
+        const move = MOVES_BY_ID[slot.id];
+        const mult = move.category === "Status" ? 0 : typeMultiplier(move.type, defenderSpecies.elements);
+        const stab = SPECIES_BY_ID[creature.id]?.elements.includes(move.type) ? 1.15 : 1;
+        const score = (move.power || 0) * mult * stab * (slot.pp > 0 ? 1 : 0);
+        return { slot, move, mult, score, index };
+      })
+      .sort((a, b) => b.score - a.score || b.mult - a.mult || b.move.power - a.move.power)[0];
   }
 
   function renderMenuPanel() {
@@ -6598,12 +7338,19 @@
 
   function drawMomentOverlays() {
     const now = performance.now();
+    const transitionActive = state.transitionFx && now < state.transitionFx.until;
     const battleIntroActive = state.battleIntro && now < state.battleIntro.until;
     const captureActive = state.captureFx && now < state.captureFx.until;
     const resultActive = state.resultBanner && now < state.resultBanner.until;
     const evolutionActive = state.evolutionFx && now < state.evolutionFx.until;
+    const levelActive = state.levelFx && now < state.levelFx.until;
     const dialogueActive = state.dialogueFx && now < state.dialogueFx.until && state.mode === "overworld";
-    const priorityOverlayActive = battleIntroActive || captureActive || resultActive || evolutionActive || dialogueActive;
+    const priorityOverlayActive = transitionActive || battleIntroActive || captureActive || resultActive || evolutionActive || levelActive || dialogueActive;
+    if (transitionActive) {
+      drawBattleTransitionOverlay(state.transitionFx, now);
+    } else if (state.transitionFx && now >= state.transitionFx.until) {
+      state.transitionFx = null;
+    }
     if (battleIntroActive) {
       drawBattleIntroOverlay(state.battleIntro, now);
     } else if (state.battleIntro && now >= state.battleIntro.until) {
@@ -6624,12 +7371,17 @@
     } else if (state.evolutionFx && now >= state.evolutionFx.until) {
       state.evolutionFx = null;
     }
+    if (levelActive && !evolutionActive) {
+      drawLevelUpOverlay(state.levelFx, now);
+    } else if (state.levelFx && now >= state.levelFx.until) {
+      state.levelFx = null;
+    }
     if (state.areaBanner && now < state.areaBanner.until && state.mode === "overworld" && !priorityOverlayActive) {
       drawAreaBanner(state.areaBanner, now);
     } else if (state.areaBanner && now >= state.areaBanner.until) {
       state.areaBanner = null;
     }
-    if (dialogueActive && !battleIntroActive && !captureActive && !resultActive && !evolutionActive) {
+    if (dialogueActive && !transitionActive && !battleIntroActive && !captureActive && !resultActive && !evolutionActive && !levelActive) {
       drawDialogueOverlay(state.dialogueFx, now);
     } else if (state.dialogueFx && now >= state.dialogueFx.until) {
       state.dialogueFx = null;
@@ -6819,6 +7571,72 @@
     ctx.drawImage(img, Math.round(cx - w / 2), Math.round(baseY - h), w, h);
     ctx.restore();
     return true;
+  }
+
+  function drawBattleTransitionOverlay(fx, now) {
+    const t = clamp((now - fx.started) / (fx.until - fx.started), 0, 1);
+    const sweep = Math.sin(t * Math.PI);
+    const biome = fx.biome || currentBiome();
+    const kind = fx.kind || "battle";
+    const accent = kind === "villain" ? "#ff72e1" : kind === "apex" ? "#d6b85f" : biomeAccent(biome);
+    const alt = kind === "trial" ? "#f3d35b" : biomeAccentAlt(biome);
+    drawRect(0, 0, W, H, `rgba(2,5,10,${0.18 + sweep * 0.46})`);
+    for (let i = 0; i < 12; i += 1) {
+      const y = i * 42 - 16;
+      const offset = Math.round((t * 150 + i * 53 + state.anim / 15) % 168);
+      const h = 8 + Math.floor(sweep * 15) + (i % 3 === 0 ? 6 : 0);
+      drawRect(-92 + offset, y, 172, h, i % 2 ? "rgba(96,211,148,0.72)" : "rgba(78,213,207,0.62)");
+      drawRect(92 + offset, y + h + 4, 88, 3, i % 2 ? alt : accent);
+      drawRect(286 - offset, y + 18, 210, 5, "rgba(7,16,24,0.82)");
+    }
+    const gate = Math.round(sweep * 248);
+    drawRect(0, 0, Math.max(0, 132 - gate), H, "rgba(2,5,10,0.86)");
+    drawRect(W - Math.max(0, 132 - gate), 0, Math.max(0, 132 - gate), H, "rgba(2,5,10,0.86)");
+    const barW = Math.round(104 + sweep * 348);
+    const x = Math.round((W - barW) / 2);
+    const y = 205;
+    drawRect(x - 20, y + 61, barW + 40, 10, "rgba(2,5,10,0.36)");
+    drawInsetFrame(x, y, barW, 58, "#02050a", "#17222d", accent);
+    drawRect(x + 16, y + 14, Math.max(16, barW - 32), 5, alt);
+    drawRect(x + 16, y + 39, Math.max(12, Math.floor((barW - 32) * t)), 4, accent);
+    if (barW > 270) {
+      const label = kind === "wild" ? "WILD SIGNAL LOCK"
+        : kind === "trial" ? "TRIAL DEN ONLINE"
+          : kind === "villain" ? "OVERLOAD INTERRUPTION"
+            : kind === "apex" ? "CROWN GAUNTLET"
+              : "BATTLE SYSTEM READY";
+      drawPixelText(label, x + 34, y + 33, 2, "#fff6d7", "#071018");
+    }
+    for (let i = 0; i < 24; i += 1) {
+      const px = Math.round((i * 47 + state.anim / 6) % (W + 40)) - 20;
+      const py = 72 + ((i * 29) % 326);
+      const c = i % 4 === 0 ? "#fff6d7" : i % 3 === 0 ? alt : accent;
+      drawRect(px, py, i % 5 === 0 ? 9 : 4, i % 5 === 0 ? 4 : 9, c);
+    }
+  }
+
+  function drawLevelUpOverlay(fx, now) {
+    const t = clamp((now - fx.started) / (fx.until - fx.started), 0, 1);
+    const inOut = Math.min(1, Math.min(t / 0.16, (1 - t) / 0.2));
+    const clan = fx.clan || currentBiome();
+    const accent = biomeAccent(clan);
+    const alt = biomeAccentAlt(clan);
+    const y = Math.round(78 - Math.sin(t * Math.PI) * 10 + (1 - inOut) * 18);
+    drawRect(154, y + 76, 332, 11, "rgba(2,5,10,0.36)");
+    drawInsetFrame(166, y, 308, 78, "#02050a", "#17222d", accent);
+    drawRect(184, y + 16, 92, 5, alt);
+    drawRect(286, y + 16, 142, 5, "#3a4b5b");
+    drawPixelText("LEVEL UP", 198, y + 40, 2, "#f3d35b", "#071018");
+    drawRect(338, y + 27, 94, 30, "#071018");
+    drawRect(344, y + 33, 82, 18, "#263646");
+    drawPixelText(`LV ${fx.level}`, 360, y + 45, 1, "#fff6d7", null);
+    drawPixelText(String(fx.name || "CREATURE").toUpperCase().slice(0, 20), 206, y + 64, 1, "#cde8f5", null);
+    for (let i = 0; i < 18; i += 1) {
+      const drift = t * 62 + Math.sin(state.anim / 90 + i) * 5;
+      const px = 166 + ((i * 31 + Math.floor(drift)) % 308);
+      const py = y + 7 + ((i * 17 + Math.floor(drift / 2)) % 66);
+      drawRect(px, py, i % 2 ? 7 : 4, i % 2 ? 3 : 7, i % 3 === 0 ? alt : accent);
+    }
   }
 
   function drawBattleIntroOverlay(fx, now) {
@@ -7545,16 +8363,63 @@
     let playerSx = (player.x - camX) * TILE;
     let playerSy = (player.y - camY) * TILE;
     if (state.stepFx && performance.now() < state.stepFx.until) {
-      const progress = 1 - (state.stepFx.until - performance.now()) / 130;
+      const progress = 1 - (state.stepFx.until - performance.now()) / STEP_ANIM_MS;
       playerSx += (state.stepFx.fromX - state.stepFx.toX) * TILE * (1 - progress);
       playerSy += (state.stepFx.fromY - state.stepFx.toY) * TILE * (1 - progress);
     }
     drawPlayer(playerSx, playerSy, player.facing);
     drawObjectiveGuide(camX, camY);
+    drawInteractionPrompt(camX, camY);
     drawWorldLighting();
     drawWorldScreenRim();
     drawScreenTexture("rgba(255,255,255,0.018)", 6);
     drawOverlays();
+  }
+
+  function interactionPromptInfo() {
+    if (!state.player || state.mode !== "overworld") return null;
+    const [x, y] = frontCoord();
+    if (!inWorld(x, y)) return null;
+    const npc = NPCS.find((item) => item.x === x && item.y === y && npcVisible(item));
+    if (npc) {
+      return {
+        x,
+        y,
+        label: npc.trainer && !state.player.defeated[npc.id] ? "BATTLE" : npc.quest ? "QUEST" : "TALK",
+        accent: npc.trainer ? "#f3d35b" : npc.quest ? "#60d394" : "#cde8f5",
+      };
+    }
+    const peer = onlinePeerAt(x, y);
+    if (peer) return { x, y, label: "DUEL", accent: "#4ed5cf" };
+    const tile = tileAt(x, y);
+    const label = {
+      lab: "LAB",
+      pc: "HEAL",
+      shop: "SHOP",
+      gym: "TRIAL",
+      elite: "APEX",
+      switch: "SWITCH",
+      rift: "RIFT",
+    }[tile];
+    if (!label) return null;
+    return { x, y, label, accent: tile === "rift" ? "#ff72e1" : tile === "pc" ? "#60d394" : "#f3d35b" };
+  }
+
+  function drawInteractionPrompt(camX, camY) {
+    const info = interactionPromptInfo();
+    if (!info) return;
+    const sx = (info.x - camX) * TILE;
+    const sy = (info.y - camY) * TILE;
+    if (sx < -TILE || sy < -TILE || sx > W || sy > H) return;
+    const pulse = Math.floor((Math.sin(state.anim / 170) + 1) * 2);
+    const label = `A ${info.label}`;
+    const w = 24 + label.length * 6;
+    const x = clamp(sx + TILE_CENTER - w / 2, 6, W - w - 6);
+    const y = clamp(sy - 16 - pulse, 98, H - 42);
+    drawRect(x - 2, y - 2, w + 4, 18, "#02050a");
+    drawRect(x, y, w, 14, "#17222d");
+    drawRect(x + 3, y + 3, 12, 8, info.accent);
+    drawPixelText(label, x + 20, y + 4, 1, "#fff6d7", null);
   }
 
   function drawOnlinePlayers(camX, camY) {
@@ -7954,9 +8819,30 @@
     state.stepParticles.forEach((particle) => {
       if (now < particle.started) return;
       const t = clamp((now - particle.started) / (particle.until - particle.started), 0, 1);
-      const sx = (particle.x - camX + particle.vx * t * 28) * TILE;
-      const sy = (particle.y - camY + particle.vy * t * 28) * TILE;
+      const sx = (particle.x - camX + (particle.vx || 0) * t * 28) * TILE;
+      const sy = (particle.y - camY + (particle.vy || 0) * t * 28) * TILE;
       const alpha = 1 - t;
+      if (particle.kind === "ring") {
+        const w = particle.size + t * (TILE * 0.58);
+        const h = Math.max(4, particle.size * 0.32 + t * 10);
+        ctx.save();
+        ctx.globalAlpha = 0.22 + alpha * 0.54;
+        drawRect(sx - w / 2, sy - h / 2, w, 3, particle.dark);
+        drawRect(sx - w / 2 + 3, sy - h / 2 + 1, Math.max(2, w - 6), 1, particle.color);
+        drawRect(sx - w / 2, sy + h / 2, w, 3, particle.dark);
+        drawRect(sx - w / 2 + 3, sy + h / 2 + 1, Math.max(2, w - 6), 1, particle.color);
+        drawRect(sx - w / 2, sy - h / 2, 3, h + 3, particle.dark);
+        drawRect(sx + w / 2 - 3, sy - h / 2, 3, h + 3, particle.dark);
+        ctx.restore();
+        return;
+      }
+      if (particle.kind === "blade") {
+        const lean = (particle.vx || 0) * t * TILE * 3;
+        drawRect(sx - 3, sy - 4, 6, particle.size + 3, `rgba(2,5,10,${0.34 * alpha})`);
+        drawRect(sx - 1 + lean, sy - 9 - t * 8, 3, particle.size, particle.color);
+        drawRect(sx + 1 + lean, sy - 11 - t * 6, 2, Math.max(3, particle.size - 3), "#f3d35b");
+        return;
+      }
       drawRect(sx - particle.size / 2, sy - particle.size / 2, particle.size + 2, particle.size, `rgba(2,5,10,${0.28 * alpha})`);
       drawRect(sx, sy - t * 8, particle.size, Math.max(2, particle.size - 1), particle.color);
       if (particle.size > 4) drawRect(sx + 2, sy - t * 8 + 2, particle.size - 2, 1, particle.dark);
@@ -8400,9 +9286,11 @@
     const place = placeAt(x, y);
     const theme = place ? TOWN_THEMES[place.theme] : townThemeAt(x, y) || TOWN_THEMES.meadow;
     const themeKey = place?.theme || "meadow";
+    const centerX = sx + TILE_CENTER;
+    const footY = sy + TILE + 11;
     const atlasMaxW = tile === "elite" ? 132 : tile === "gym" ? 118 : 102;
     const atlasMaxH = tile === "elite" ? 120 : tile === "gym" ? 108 : 94;
-    if (drawPremiumWorldAsset(`building_${tile}_${themeKey}`, sx + 16, sy + 43, atlasMaxW, atlasMaxH)) {
+    if (drawPremiumWorldAsset(`building_${tile}_${themeKey}`, centerX, footY, atlasMaxW, atlasMaxH)) {
       drawPremiumBuildingSign(tile, sx, sy, theme);
       return;
     }
@@ -8410,9 +9298,9 @@
     const isService = tile === "lab" || tile === "pc" || tile === "shop";
     const w = tile === "elite" ? 92 : isTrial ? 78 : 66;
     const h = tile === "elite" ? 72 : isTrial ? 62 : 52;
-    const baseX = Math.round(sx + 16 - w / 2);
-    const baseY = Math.round(sy + 34 - h);
-    drawEllipse(sx + 16, sy + 33, w * 0.88, 13, "rgba(0,0,0,0.34)");
+    const baseX = Math.round(centerX - w / 2);
+    const baseY = Math.round(sy + TILE + 2 - h);
+    drawEllipse(centerX, sy + TILE + 1, w * 0.88, 13, "rgba(0,0,0,0.34)");
 
     if (place?.theme === "alien") {
       drawAlienBuilding(tile, baseX, baseY, w, h, theme);
@@ -8436,9 +9324,10 @@
   function drawPremiumBuildingSign(tile, sx, sy, theme) {
     const sign = { lab: "LAB", pc: "+", shop: "$", gym: "TRIAL", elite: "CROWN" }[tile] || "";
     const signW = tile === "gym" ? 42 : tile === "elite" ? 48 : 28;
-    drawRect(sx + 16 - signW / 2 - 2, sy - 24, signW + 4, 14, "#071018");
-    drawRect(sx + 16 - signW / 2, sy - 22, signW, 10, theme.trim);
-    drawPixelText(sign, sx + 18 - signW / 2, sy - 20, 1, "#071018", null);
+    const centerX = sx + TILE_CENTER;
+    drawRect(centerX - signW / 2 - 2, sy - 24, signW + 4, 14, "#071018");
+    drawRect(centerX - signW / 2, sy - 22, signW, 10, theme.trim);
+    drawPixelText(sign, centerX + 2 - signW / 2, sy - 20, 1, "#071018", null);
   }
 
   function drawClassicTownBuilding(tile, x, y, w, h, theme, isService) {
@@ -9234,7 +10123,7 @@
     }
   }
 
-  function drawTrainerWorldSprite(sprite, sx, sy, bob = 0) {
+  function drawTrainerWorldSprite(sprite, sx, sy, bob = 0, leanX = 0) {
     const key = trainerAssetKey(sprite);
     const img = getTrainerAssetImage(key, "world");
     if (!img) return false;
@@ -9255,7 +10144,7 @@
     const scale = targetH / img.naturalHeight;
     const w = Math.round(img.naturalWidth * scale);
     const h = Math.round(img.naturalHeight * scale);
-    const feetX = sx + 16;
+    const feetX = sx + TILE_CENTER + leanX;
     const feetY = sy + 34 + bob;
     drawEllipse(feetX, sy + 33, Math.max(30, w * 0.76), 9, "rgba(0,0,0,0.36)");
     ctx.save();
@@ -9355,21 +10244,31 @@
   }
 
   function drawPlayer(sx, sy, facing) {
-    const bob = Math.floor(Math.sin(state.anim / 110) * 1);
-    if (drawTrainerWorldSprite("player", sx, sy, bob)) return;
+    const moving = state.stepFx && performance.now() < state.stepFx.until;
+    const stepT = moving ? clamp(1 - (state.stepFx.until - performance.now()) / STEP_ANIM_MS, 0, 1) : 0;
+    const stride = moving ? Math.sin(stepT * Math.PI) : 0;
+    const leanX = moving && facing === "right" ? 2 : moving && facing === "left" ? -2 : 0;
+    const bob = moving ? Math.round(-3 * stride + Math.sin(stepT * Math.PI * 4) * 1) : Math.floor(Math.sin(state.anim / 110) * 1);
+    if (moving) {
+      const dustY = sy + TILE - 7;
+      const trailX = sx + TILE_CENTER - leanX * 2;
+      drawRect(trailX - 13, dustY + 4, 26, 4, "rgba(2,5,10,0.24)");
+      drawRect(trailX - 9, dustY + 2, 8 + stride * 10, 2, "rgba(243,211,91,0.52)");
+    }
+    if (drawTrainerWorldSprite("player", sx, sy, bob, leanX)) return;
     drawEllipse(sx + 16, sy + 31, 24, 7, "rgba(0,0,0,0.28)");
-    drawRect(sx + 8, sy + 5 + bob, 16, 14, "#071018");
-    drawRect(sx + 9, sy + 6 + bob, 14, 12, "#f0c38a");
-    drawRect(sx + 6, sy + 16 + bob, 20, 15, "#071018");
-    drawRect(sx + 7, sy + 17 + bob, 18, 13, "#3f7fc2");
-    drawRect(sx + 7, sy + 3 + bob, 18, 8, "#071018");
-    drawRect(sx + 8, sy + 4 + bob, 16, 6, "#e54f4f");
-    drawRect(sx + 9, sy + 6 + bob, 14, 2, "#fff6d7");
+    drawRect(sx + 8 + leanX, sy + 5 + bob, 16, 14, "#071018");
+    drawRect(sx + 9 + leanX, sy + 6 + bob, 14, 12, "#f0c38a");
+    drawRect(sx + 6 + leanX, sy + 16 + bob, 20, 15, "#071018");
+    drawRect(sx + 7 + leanX, sy + 17 + bob, 18, 13, "#3f7fc2");
+    drawRect(sx + 7 + leanX, sy + 3 + bob, 18, 8, "#071018");
+    drawRect(sx + 8 + leanX, sy + 4 + bob, 16, 6, "#e54f4f");
+    drawRect(sx + 9 + leanX, sy + 6 + bob, 14, 2, "#fff6d7");
     drawRect(sx + 10, sy + 29, 5, 3, "#071018");
     drawRect(sx + 18, sy + 29, 5, 3, "#071018");
     if (facing !== "up") {
-      drawRect(sx + 12, sy + 11 + bob, 3, 3, "#071018");
-      drawRect(sx + 18, sy + 11 + bob, 3, 3, "#071018");
+      drawRect(sx + 12 + leanX, sy + 11 + bob, 3, 3, "#071018");
+      drawRect(sx + 18 + leanX, sy + 11 + bob, 3, 3, "#071018");
     }
   }
 
@@ -9383,6 +10282,10 @@
     const biome = currentBiome();
     const accent = biomeAccent(biome);
     const alt = biomeAccentAlt(biome);
+    if (cleanFieldHudActive()) {
+      drawCleanFieldHud(accent, alt);
+      return;
+    }
     drawHudPlate(8, 8, 246, 34, currentLocationName(), "", accent, alt);
     drawHudPlate(264, 8, 132, 34, `${timeOfDay()} / ${weather}`, "", alt, accent);
     drawHudPlate(406, 8, 92, 34, `Sigils ${state.player.badges.length}/8`, "", "#f3d35b", accent);
@@ -9395,6 +10298,25 @@
     drawPixelText(routeLine, 20, 69, 1, "#f3d35b", null);
     drawPixelText(objective, 20, 82, 1, "#fff6d7", null);
     drawFieldNavigator(step, accent, alt);
+  }
+
+  function cleanFieldHudActive() {
+    return MOBILE_LAYOUT_AT_LOAD && state.mode === "overworld";
+  }
+
+  function drawCleanFieldHud(accent, alt) {
+    const step = activeStoryStep();
+    const place = currentLocationName().toUpperCase().slice(0, 14);
+    const right = `CH ${step.chapter} / ${destinationDistance(step)} ST`;
+    drawRect(12, 12, 352, 7, "rgba(2,5,10,0.34)");
+    drawCompactFrame(8, 8, 356, 52, accent, alt, "rgba(16,24,32,0.9)");
+    drawRect(22, 20, 86, 4, accent);
+    drawRect(116, 20, 92, 3, "#3a4b5b");
+    drawPixelText(place, 22, 39, 2, "#fff6d7", "#071018");
+    drawRect(242, 17, 98, 31, "#02050a");
+    drawRect(249, 25, 20, 9, alt);
+    drawRect(276, 25, 48, 3, "#3a4b5b");
+    drawPixelText(right, 250, 44, 1, "#f3d35b", "#071018");
   }
 
   function drawFieldNavigator(step, accent, alt) {
@@ -9468,6 +10390,7 @@
   function drawBattle() {
     const battle = state.battle;
     if (!battle) return drawOverworld();
+    pinDebugBattleFxForCapture();
     const shake = battleShakeOffset();
     const biome = currentBiome();
     ctx.save();
@@ -9487,11 +10410,49 @@
     drawBattleFx();
     drawBattleForegroundDepth(biome);
     ctx.restore();
+    drawBattleCinematicImpact();
     drawBattleArenaChrome(biome);
     drawBattleHud(activeEnemy(), 32, 32, false);
     drawBattleHud(activePlayer(), 365, 330, true);
     drawBattleMessageBox(battle);
     drawScreenTexture("rgba(255,255,255,0.025)", 7);
+  }
+
+  function pinDebugBattleFxForCapture() {
+    if (!DEBUG_CAPTURE || !state.battle || typeof window === "undefined" || typeof window.URLSearchParams === "undefined") return;
+    const params = new window.URLSearchParams(window.location.search);
+    if (!params.has("battle") || params.get("forceFx") === "0") return;
+    const moveType = TYPE_CHART[params.get("fx")] ? params.get("fx") : "Chaos";
+    const now = performance.now();
+    const fxResult = params.get("fxResult") || "super";
+    const holdMs = clamp(Number(params.get("fxMs")) || 120000, 1200, 240000);
+    const holdT = clamp(Number(params.get("fxT")) || (params.get("fxHold") === "windup" ? 0.34 : params.get("fxHold") === "travel" ? 0.52 : 0.74), 0.06, 0.94);
+    const attacker = params.get("fxAttacker") === "foe" ? "foe" : "you";
+    const target = params.get("fxTarget") === "you" ? "you" : "foe";
+    const attackerCreature = attacker === "you" ? activePlayer() : activeEnemy();
+    const targetCreature = target === "foe" ? activeEnemy() : activePlayer();
+    state.battle.fx = {
+      attacker,
+      target,
+      attackerId: attackerCreature.id,
+      targetId: targetCreature.id,
+      attackerClan: SPECIES_BY_ID[attackerCreature.id]?.clan || null,
+      moveType,
+      category: params.get("fxCategory") || "Special",
+      moveName: params.get("move") || `${titleCase(moveType)} Showcase`,
+      result: fxResult,
+      damage: Number(params.get("damage") || (fxResult === "super" ? 128 : fxResult === "resist" ? 28 : 72)),
+      multiplier: fxResult === "super" ? 2 : fxResult === "resist" ? 0.5 : 1,
+      seed: 77,
+      started: now - holdMs * holdT,
+      until: now + holdMs * (1 - holdT),
+    };
+    if (!state.battle.debugFxPinned) {
+      const debugFxUser = state.battle.fx.attacker === "you" ? activePlayer() : activeEnemy();
+      state.battle.log.unshift(`${debugFxUser.nickname} used ${state.battle.fx.moveName}.`);
+      state.battle.log = state.battle.log.slice(0, 5);
+      state.battle.debugFxPinned = true;
+    }
   }
 
   function drawPvpBattle() {
@@ -9653,6 +10614,14 @@
       drawRect(x - 14, y - 1, 28, 2, i % 2 ? color : "#fff6d7");
     }
     ctx.restore();
+    const multiplier = Number(event.multiplier || event.effectiveness || 1);
+    drawHitFeedback({
+      target: event.defenderId === view.you.playerId ? "you" : "foe",
+      result: multiplier >= 2 ? "super" : multiplier <= 0.5 ? "resist" : "hit",
+      category: "Physical",
+      damage: Number(event.damage || event.damageDone || event.hpLoss || 0),
+      multiplier,
+    }, to, pulse, color, "#fff6d7", hashTiny(`${view.id}:${view.turn}:${event.moveId}:pvp`));
   }
 
   function drawPvpPartyPips(party, activeIndex, x, y) {
@@ -9723,6 +10692,67 @@
     drawRect(242, 14, 156, 12, "#17222d");
     drawRect(248, 17, 30, 2, accent);
     drawPixelText(label, 284, 17, 1, "#fff6d7", null);
+  }
+
+  function drawBattleCinematicImpact() {
+    const fx = state.battle?.fx;
+    if (!fx || performance.now() > fx.until) return;
+    const duration = Math.max(1, fx.until - fx.started);
+    const t = clamp((performance.now() - fx.started) / duration, 0, 1);
+    const color = TYPE_COLORS[fx.moveType] || "#f3d35b";
+    const alt = fx.moveType === "Chaos" ? "#60d394" : fx.result === "super" || fx.multiplier >= 2 ? "#fff6d7" : shade(color, 24);
+    const target = fx.target === "foe" ? { x: 486, y: 142 } : { x: 160, y: 302 };
+    const cast = fx.category === "Status" ? windowPulse(t, 0.18, 0.92) : windowPulse(t, 0.08, 0.74);
+    const impact = fx.category === "Status" || fx.result === "miss" ? 0 : windowPulse(t, 0.58, 0.92);
+    const energy = Math.max(cast * 0.38, impact);
+    if (!energy) return;
+
+    ctx.save();
+    ctx.globalAlpha = 0.055 + energy * 0.12;
+    drawRect(0, 0, W, 408, fx.result === "miss" ? "#aeb9c2" : color);
+    ctx.globalAlpha = 0.24 + energy * 0.42;
+    for (let i = 0; i < 10; i += 1) {
+      const y = 22 + i * 38 + Math.sin(state.anim / 120 + i) * 5;
+      const x = -96 + ((state.anim / 18 + i * 47) % 196);
+      drawRect(x, y, W + 124, 6 + energy * 8, "#071018");
+      drawRect(x + 18, y + 2, W + 70, 2 + energy * 3, i % 2 ? color : alt);
+    }
+    ctx.restore();
+
+    if (fx.result === "miss") {
+      ctx.save();
+      ctx.globalAlpha = 0.84;
+      drawRect(target.x - 64, target.y - 84, 128, 28, "#071018");
+      drawRect(target.x - 58, target.y - 78, 116, 16, "#3a4b5b");
+      drawPixelText("WHIFF", target.x - 26, target.y - 66, 1, "#fff6d7", null);
+      ctx.restore();
+      return;
+    }
+
+    const reticle = fx.category === "Status" ? cast : impact;
+    if (!reticle) return;
+    const w = 110 + reticle * 52;
+    const h = 72 + reticle * 32;
+    ctx.save();
+    ctx.globalAlpha = 0.66 + reticle * 0.26;
+    drawRect(target.x - w / 2, target.y - h / 2, w, 5, "#071018");
+    drawRect(target.x - w / 2 + 5, target.y - h / 2 + 1, w - 10, 2, color);
+    drawRect(target.x - w / 2, target.y + h / 2, w, 5, "#071018");
+    drawRect(target.x - w / 2 + 5, target.y + h / 2 + 1, w - 10, 2, alt);
+    drawRect(target.x - w / 2, target.y - h / 2, 5, h + 5, "#071018");
+    drawRect(target.x + w / 2 - 5, target.y - h / 2, 5, h + 5, "#071018");
+    drawRect(target.x - 9, target.y - h / 2 - 18, 18, 12, "#071018");
+    drawRect(target.x - 5, target.y - h / 2 - 14, 10, 6, alt);
+    const label = fx.category === "Status"
+      ? "STATUS SHIFT"
+      : fx.result === "super" || fx.multiplier >= 2
+        ? "HEAVY IMPACT"
+        : "CLEAN HIT";
+    const labelW = label.length * 7 + 22;
+    drawRect(target.x - labelW / 2, target.y + h / 2 + 13, labelW, 24, "#071018");
+    drawRect(target.x - labelW / 2 + 4, target.y + h / 2 + 17, labelW - 8, 14, fx.category === "Status" ? alt : color);
+    drawPixelText(label, target.x - labelW / 2 + 10, target.y + h / 2 + 27, 1, fx.category === "Status" ? "#071018" : "#fff6d7", fx.category === "Status" ? null : "#071018");
+    ctx.restore();
   }
 
   function battleShakeOffset() {
@@ -10194,7 +11224,7 @@
       return;
     }
 
-    if (impact) drawDamagePop(fx, to, impact, color);
+    if (impact) drawHitFeedback(fx, to, impact, color, alt, seed);
 
     if (fx.moveType === "Electric") {
       drawElectricCoils(from, to, color, alt, travel, seed);
@@ -10685,30 +11715,100 @@
     if (t > 0.54) drawImpactBurst(cx, cy, color, alt, (t - 0.54) / 0.46);
   }
 
-  function drawDamagePop(fx, point, t, color) {
+  function drawHitFeedback(fx, point, t, color, alt, seed = 1) {
+    if (!t || fx.result === "miss" || fx.category === "Status") return;
+    drawLandingImpactRing(point.x, point.y + 18, color, alt, t);
+    drawImpactSparks(point.x, point.y - 18, color, alt, t, seed, fx.result === "super" || fx.multiplier >= 2 ? 16 : 10);
+    drawDamagePop(fx, point, t, color, alt);
+    drawEffectivenessStamp(fx, point, t, color, alt);
+  }
+
+  function drawLandingImpactRing(cx, cy, color, alt, t) {
+    const pulse = Math.sin(t * Math.PI);
+    const w = 42 + t * 86;
+    const h = 9 + pulse * 18;
+    ctx.save();
+    ctx.globalAlpha = 0.18 + (1 - t) * 0.5;
+    drawRect(cx - w / 2, cy - h / 2, w, 4, "#071018");
+    drawRect(cx - w / 2 + 5, cy - h / 2 + 1, Math.max(2, w - 10), 2, color);
+    drawRect(cx - w / 2, cy + h / 2, w, 4, "#071018");
+    drawRect(cx - w / 2 + 5, cy + h / 2 + 1, Math.max(2, w - 10), 2, alt);
+    drawRect(cx - w / 2, cy - h / 2, 5, h + 4, "#071018");
+    drawRect(cx + w / 2 - 5, cy - h / 2, 5, h + 4, "#071018");
+    ctx.restore();
+  }
+
+  function drawImpactSparks(cx, cy, color, alt, t, seed = 1, count = 10) {
+    const burst = Math.sin(t * Math.PI);
+    ctx.save();
+    ctx.globalAlpha = 0.34 + (1 - t) * 0.58;
+    for (let i = 0; i < count; i += 1) {
+      const angle = seed * 0.01 + i * (Math.PI * 2 / count) + t * 0.7;
+      const dist = 12 + t * (34 + (i % 4) * 7);
+      const x = cx + Math.cos(angle) * dist;
+      const y = cy + Math.sin(angle) * dist * 0.62;
+      const long = 10 + burst * (i % 3 === 0 ? 18 : 10);
+      drawRect(x - long / 2, y - 4, long, 8, "#071018");
+      drawRect(x - long / 2 + 3, y - 2, Math.max(3, long - 6), 3, i % 2 ? color : alt);
+      if (i % 4 === 0) drawRect(x - 2, y - 12, 4, 19, "#fff6d7");
+    }
+    ctx.restore();
+  }
+
+  function drawEffectivenessStamp(fx, point, t, color, alt) {
+    const isSuper = fx.result === "super" || fx.multiplier >= 2;
+    const isResist = fx.result === "resist" || fx.multiplier <= 0.5;
+    if (!isSuper && !isResist) return;
+    const label = isSuper ? "CRUSHING HIT" : "GLANCED";
+    const w = isSuper ? 112 : 78;
+    const x = fx.target === "foe" ? point.x - 58 : point.x - 42;
+    const y = point.y - 112 - Math.sin(t * Math.PI) * 7;
+    ctx.save();
+    ctx.globalAlpha = 0.72 + (1 - t) * 0.24;
+    drawRect(x - 5, y - 5, w + 10, 25, "#071018");
+    drawRect(x - 2, y - 2, w + 4, 19, isSuper ? color : "#3a4b5b");
+    drawRect(x + 4, y + 3, 28, 3, isSuper ? "#fff6d7" : alt);
+    drawPixelText(label, x + 8, y + 10, 1, isSuper ? "#071018" : "#fff6d7", null);
+    ctx.restore();
+  }
+
+  function drawDamagePop(fx, point, t, color, alt = "#fff6d7") {
     if (!fx.damage) return;
     const text = `-${fx.damage}`;
-    const chipW = Math.max(58, 22 + text.length * 8);
-    const y = point.y - 76 - Math.sin(t * Math.PI) * 16;
-    const x = fx.target === "foe" ? point.x + 34 : point.x - chipW - 28;
-    drawRect(x - 8, y - 8, chipW + 16, 25, "#071018");
-    drawRect(x - 5, y - 5, chipW + 10, 19, "#293642");
-    drawRect(x - 2, y - 2, chipW - 18, 3, color);
-    drawPixelText(text, x + 4, y + 3, 1, "#fff6d7", null);
+    const chipW = Math.max(68, 30 + text.length * 9);
+    const lift = Math.sin(t * Math.PI) * 18 + t * 14;
+    const y = point.y - 76 - lift;
+    const x = fx.target === "foe" ? point.x + 32 : point.x - chipW - 30;
+    const pulse = 1 + Math.sin(t * Math.PI) * 0.08;
+    ctx.save();
+    ctx.globalAlpha = 0.8 + (1 - t) * 0.2;
+    drawRect(x - 10, y - 10, chipW + 20, 30, "#071018");
+    drawRect(x - 6, y - 6, chipW + 12, 22, "#293642");
+    drawRect(x - 3, y - 3, Math.max(16, chipW - 6), 4, color);
+    drawRect(x + chipW - 18, y + 1, 11 * pulse, 11, alt);
+    drawPixelText(text, x + 7, y + 5, 1, "#fff6d7", null);
+    ctx.restore();
     if (fx.multiplier >= 2) {
-      drawRect(x - 8, y + 20, 78, 14, "#071018");
-      drawRect(x - 5, y + 22, 72, 10, color);
-      drawPixelText("SMASH", x + 5, y + 24, 1, "#071018", null);
+      drawRect(x - 8, y + 21, 84, 15, "#071018");
+      drawRect(x - 5, y + 23, 78, 11, color);
+      drawPixelText("x2 BOOM", x + 4, y + 26, 1, "#071018", null);
     } else if (fx.multiplier <= 0.5) {
       drawRect(x - 8, y + 20, 78, 14, "#071018");
       drawRect(x - 5, y + 22, 72, 10, "#aeb9c2");
       drawPixelText("RESIST", x + 1, y + 24, 1, "#071018", null);
+    } else {
+      drawRect(x - 8, y + 21, 50, 13, "#071018");
+      drawRect(x - 5, y + 23, 44, 9, alt);
+      drawPixelText("HIT", x + 7, y + 25, 1, "#071018", null);
     }
   }
 
   function drawImpactBurst(cx, cy, color, alt, t) {
     const size = 10 + t * 34;
+    const shock = Math.sin(t * Math.PI);
+    drawRect(cx - size / 2 - shock * 8, cy - 5, size + shock * 16, 10, "#071018");
     drawRect(cx - size / 2, cy - 4, size, 8, color);
+    drawRect(cx - 5, cy - size / 2 - shock * 6, 10, size + shock * 12, "#071018");
     drawRect(cx - 4, cy - size / 2, 8, size, alt);
     drawRect(cx - size * 0.38, cy - size * 0.38, size * 0.22, size * 0.22, "#fff6d7");
     drawRect(cx + size * 0.2, cy + size * 0.2, size * 0.22, size * 0.22, "#fff6d7");
