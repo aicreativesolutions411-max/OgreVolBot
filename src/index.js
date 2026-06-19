@@ -2375,6 +2375,9 @@ const popCandidates = new Map();  // mint -> { at, score, mc, symbol, inflowNow 
 const popPeakInflow = new Map();  // mint -> peak recent buy-inflow (drives the momentum-fade exit)
 const popHeldMints = new Map();   // mint -> at  (open pop positions kept watched so fade can fire)
 let _popHb = 0;                   // radar heartbeat counter
+let _popSrcTick = 0;              // throttle the live-feed source refresh
+let popLiveMints = [];            // route-filtered MC-spread movers from the live feed (cached ~15s)
+const popUnroutable = new Set();  // mints we've confirmed are Token-2022 / un-routable (skip — "rugs that won't show on routes")
 function popIngestTrade(mint, trade) {
   if (!mint || !trade) return;
   const sol = Number(trade.solAmount ?? trade.amountSol ?? trade.sol) || 0;
@@ -2413,13 +2416,27 @@ async function pollPopRadar() {
   try {
     const now = Date.now();
     for (const [m, at] of popHeldMints) { if (now - at > 8 * 60_000) popHeldMints.delete(m); }
-    // WATCHLIST = the freshest pump.fun launches straight from the 24/7 creation stream (these are
-    // already trade-subscribed, so onTrade feeds popTrades in real time + swap-api fills the rest).
-    // This is the fix for the radar being STARVED: it used to read lastFreshMints, which only the
-    // FRESH feed populates — and pop mode never calls the fresh feed, so the watchlist was empty.
+    // WATCHLIST = a SPREAD of routable movers, not just fresh dust:
+    //  • the live feed (DexScreener pairs) volume+momentum sorts → real routable coins across the WHOLE
+    //    MC range (5k→40k+). A coin with a real Pump/Raydium/etc. pool shows here; a pool-less rug does
+    //    NOT — exactly "use routes that rugs won't show on / do like our live feed". Refreshed ~15s.
+    //  • the freshest pump.fun launches from the 24/7 creation stream (the early sub-5k pops).
+    //  • open pop positions (so the momentum-fade can keep scoring them).
+    _popSrcTick = (_popSrcTick + 1) % 5;
+    if (_popSrcTick === 0 || !popLiveMints.length) {
+      try {
+        const [vol, mom] = await Promise.all([
+          webLivePairs("autopilot", "live", { sort: "volume" }).catch(() => null),
+          webLivePairs("autopilot", "live", { sort: "momentum" }).catch(() => null)
+        ]);
+        const set = new Set();
+        for (const f of [vol, mom]) for (const r of (Array.isArray(f && f.rows) ? f.rows : [])) { if (r && r.tokenMint) set.add(r.tokenMint); }
+        popLiveMints = [...set].slice(0, 30);
+      } catch {}
+    }
     let creations = [];
-    try { creations = pumpPortalStream.getCreationCandidates({ maxAgeMs: 20 * 60_000, limit: 60 }).map((r) => r.tokenMint).filter(Boolean); } catch {}
-    const watch = [...new Set([...creations.slice(0, 24), ...(lastFreshMints || []).slice(0, 10), ...popHeldMints.keys()])].slice(0, 30);
+    try { creations = pumpPortalStream.getCreationCandidates({ maxAgeMs: 30 * 60_000, limit: 60 }).map((r) => r.tokenMint).filter(Boolean); } catch {}
+    const watch = [...new Set([...popLiveMints, ...creations.slice(0, 16), ...popHeldMints.keys()])].filter((m) => !popUnroutable.has(m)).slice(0, 34);
     for (let i = 0; i < watch.length; i += 8) {           // swap-api fast-poll the watchlist for NEW trades
       await Promise.all(watch.slice(i, i + 8).map(async (mint) => {
         let j = null;
@@ -2462,13 +2479,18 @@ setInterval(() => { void pollPopRadar(); }, 3_000);
 // The pre-vetted POP FEED the 'pop' mode trades — igniting coins, MC enriched (free pump frontend-api).
 async function popFeedRows() {
   const now = Date.now();
-  const live = [...popCandidates.entries()].filter(([, r]) => now - r.at < 18_000).sort((a, b) => b[1].score - a[1].score).slice(0, 4);
+  const live = [...popCandidates.entries()].filter(([, r]) => now - r.at < 18_000).sort((a, b) => b[1].score - a[1].score).slice(0, 6);
   const rows = [];
   for (const [mint, r] of live) {
+    if (popUnroutable.has(mint)) continue;
+    // ROUTE FILTER — skip Token-2022 / un-routable coins (the "requires a trusted pool" rugs); only
+    // surface coins buyable via a real Pump/Raydium/etc. route, like the live feed. Cached 6h = cheap.
+    try { const s = await getMintSafetyInfo(mint); if (s && s.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) { popUnroutable.add(mint); continue; } } catch {}
     if (!r.mc) {
       try { const j = await fetchJson(`https://frontend-api-v3.pump.fun/coins/${mint}`, { timeoutMs: 5000, headers: { "User-Agent": "Mozilla/5.0", accept: "application/json" } }).catch(() => null); r.mc = Number(j && (j.usd_market_cap || j.market_cap)) || 0; } catch {}
     }
     rows.push({ tokenMint: mint, symbol: r.symbol, marketCap: r.mc || 4000, liquidityUsd: 0, pairAgeSeconds: 1, volume5m: 0, buys5m: 0, sells5m: 0, source: "pop", _pop: { score: r.score, inflowNow: r.inflowNow } });
+    if (rows.length >= 4) break;
   }
   return rows;
 }

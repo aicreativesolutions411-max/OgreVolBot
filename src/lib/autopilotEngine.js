@@ -291,7 +291,10 @@ export function aggParams(state) {
     // exit control is the momentum-FADE rule (manageExits + popFading): the instant the inflow
     // that drove the pop decelerates, it banks the remainder into strength rather than giving it back.
     tp1 = regime === "COLD" ? 12 : regime === "HOT" ? 18 : 16;
-    tp1Pct = 65; spikePct = 82; tp2Lvl = 40; tp2Pct = 70; tp3Lvl = 90; tp3Pct = 100; moonTarget = 150;
+    // Bank the bulk fast (60% @ +16%, 20% @ +45%), ride the last ~20% to the MC-SCALED ceiling
+    // (pos.popMoonTarget, set at openPosition) — tp3/moon here are just a high backstop so the MC
+    // ceiling + the momentum-fade are what actually close the tail.
+    tp1Pct = 60; spikePct = 82; tp2Lvl = 45; tp2Pct = 50; tp3Lvl = 330; tp3Pct = 100; moonTarget = 330;
   }
 
   // AUTO-ADAPT — the key lesson from live: the moon-ride only PAYS in a genuinely HOT
@@ -1914,6 +1917,17 @@ export function createAutopilotEngine(deps) {
           continue;
         }
       }
+      // POP MC-SCALED TARGET: bank 100% when the move hits the entry-MC-scaled ceiling (higher MC banks
+      // a smaller multiple, lower MC rides bigger). The fast tp1 ladder already locked the bulk; this
+      // closes the riding tail at the right ceiling for its market cap.
+      if (pos.pop && pos.popMoonTarget && mc > 0) {
+        const mvT = pos.entryMc > 0 ? (mc / pos.entryMc - 1) * 100 : 0;
+        if (mvT >= pos.popMoonTarget) {
+          record("info", `🎯 pop target ${pos.sym} +${mvT.toFixed(0)}% (ceiling for $${Math.round(pos.entryMc)} MC) — banking`);
+          await doSell(pos, 100, "pop-target");
+          continue;
+        }
+      }
       // POP MOMENTUM-FADE exit: the instant the inflow that drove the pop DECELERATES (popFading),
       // bank into the spike rather than giving it back. Only banks when we're not already at the stop
       // (the tight stop covers the downside); a faded pop that's still green is exactly when to take it.
@@ -2777,8 +2791,14 @@ export function createAutopilotEngine(deps) {
       try { noteRugWatch(mint, pos.devWallet, sym); } catch {}
     }
     // POP RIDE: mark the position so manageExits can run the momentum-FADE exit (bank into the spike
-    // the instant the inflow that drove the pop decelerates).
+    // the instant the inflow that drove the pop decelerates) + the MC-SCALED tail ceiling: higher entry
+    // MC = a smaller realistic pop, so bank a smaller multiple ("50k 1x is great"); lower MC rides
+    // bigger ("10k can 2x easy"). The fast tp1 ladder banks the bulk; this caps where the tail closes.
     pos.pop = Boolean(P && P.pop);
+    if (pos.pop) {
+      const mcE = pos.entryMc || 0;
+      pos.popMoonTarget = mcE >= 40000 ? 70 : mcE >= 20000 ? 110 : mcE >= 10000 ? 160 : mcE >= 5000 ? 220 : 320;
+    }
     state.open.push(pos);
     state.recentApeNames[normSym(sym)] = now(); // remember the NAME to block clone-swarm pile-ins
     state.coinTrades[pos.mint] = (state.coinTrades[pos.mint] || 0) + 1; // DIVERSIFY: count session trades per mint
