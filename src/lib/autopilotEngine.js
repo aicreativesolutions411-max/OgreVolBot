@@ -625,6 +625,12 @@ export function entryReject(row, P) {
   // "we buy movers that then dump" — the 42%-stop bleed. Needs a real flow sample (>=12 trades) so
   // thin/unknown-flow rows still pass and get judged by liquidScore; require buys to clearly lead.
   if (P.liquid && (buys + sells) >= 12 && buys < sells * 1.15) return "fading";
+  // WASH/BUNDLE disqualifier (liquid/grind paths only — minutes-to-hours-old coins have reliable
+  // tx counts, unlike a brand-new bonding curve where counts are noisy and this would starve the
+  // feed). A real volume number from only a handful of trades is the classic wash/bundled-bait
+  // signature — the single most defensible manipulation tell (high volume + very few txns). Reject
+  // outright rather than just sizing down, since on the LIQUID path we trade ON that volume.
+  if ((P.liquid || P.grind) && vol >= 80 && (buys + sells) > 0 && (buys + sells) < 6) return "wash";
   // SCALP scores liquid movers (liquidScore); GRIND scores survivors (grindScore); the rest use
   // freshScore. Each mode's gate lives on its own scale (see the minScore overrides in aggParams).
   const setupScore = P.liquid ? liquidScore(row) : P.grind ? grindScore(row) : freshScore(row);
@@ -799,7 +805,11 @@ export function canOpen(state, sizeSol) {
   if (state.bank - sizeSol < 0) return false;
   const deployed = state.open.reduce((a, p) => a + p.costSol * p.remFrac, 0);
   const eq = equity(state);
-  if (eq > 0 && (deployed + sizeSol) / eq > 0.9) return false;
+  // CORRELATED-EXPOSURE CAP: rugs cluster (same deployer cohort / souring tape), so total at-risk
+  // capital across ALL open bags is treated as one bet and capped. New sessions default to 0.6 of
+  // equity (riskBrake); older snapshots without the field keep the prior 0.9 so behavior is unchanged.
+  const exposureCap = Number.isFinite(state.exposureCapFrac) ? state.exposureCapFrac : 0.9;
+  if (eq > 0 && (deployed + sizeSol) / eq > exposureCap) return false;
   return true;
 }
 
@@ -858,6 +868,45 @@ export function realizableMove(p) {
 export function equity(state) {
   const openVal = state.open.reduce((a, p) => a + p.costSol * p.remFrac * realizableMove(p), 0);
   return state.bank + openVal;
+}
+
+// ---------------------------------------------------------------------------
+// RISK CIRCUIT-BREAKER (survival-first). With -100% rug tails, surviving the bad runs
+// matters more than a better entry — so this is the piece that actually makes "come out
+// even or a little ahead" reachable. DOWNSIDE-ONLY by construction: it can only PAUSE new
+// entries or SHRINK size when the book is bleeding; it never loosens or sizes up. Pure +
+// exported for tests. Returns { openHalt, reason, sizeMult, exposureCapFrac }:
+//   • openHalt          — open NO new position this tick (exits keep running on the fast loop)
+//   • sizeMult          — multiply the computed bet (two-tier de-risk before a hard halt)
+//   • exposureCapFrac   — max TOTAL at-risk capital as a fraction of equity (rugs correlate, so
+//                         concurrent bets are treated as one bet and the total is capped)
+// Guards: (1) a loss-CLUSTER cooldown — N real losses in a row trip a real cool-off (longer than
+// the 90s chop nudge); (2) a ROLLING-DAILY two-tier loss stop measured vs equity at the day anchor,
+// so a long set-and-sleep run gets a FRESH daily risk budget each 24h (halve size at half the
+// budget, halt at the full budget); (3) a correlated-exposure cap (enforced by canOpen). The day
+// anchor is rolled by the engine every 24h.
+export function riskBrake(state, nowMs) {
+  const exposureCapFrac = Number.isFinite(state.exposureCapFrac) ? state.exposureCapFrac : 0.6;
+  const out = { openHalt: false, reason: null, sizeMult: 1, exposureCapFrac };
+  // (1) Loss-cluster cooldown — a burst of real losses pauses opening for a true cool-off so a
+  // correlated rug wave can't drain the wallet trade-by-trade.
+  if (state.consecHaltUntil && nowMs < state.consecHaltUntil) {
+    return { ...out, openHalt: true, reason: "loss-cluster cooldown" };
+  }
+  // (2) Rolling daily loss, two-tier — measured against equity at the day anchor.
+  const dayBase = state.dayAnchorEquity > 0 ? state.dayAnchorEquity : state.start;
+  const frac = Number.isFinite(state.dailyLossFrac) && state.dailyLossFrac > 0 ? state.dailyLossFrac : 0.10;
+  if (dayBase > 0) {
+    const dd = 1 - equity(state) / dayBase;          // fraction down on the rolling day
+    if (dd >= frac) return { ...out, openHalt: true, reason: `daily loss -${Math.round(frac * 100)}%` };
+    if (dd >= frac / 2) out.sizeMult = 0.5;          // tier 1: half the daily budget spent -> halve size
+  }
+  // (3) Pre-cluster de-risk: shrink as real losses accumulate, BEFORE the hard cluster halt, so a
+  // souring tape gets felt out with smaller bets instead of full size straight into the cluster.
+  const cl = state.consecLosses || 0;
+  if (cl >= 2) out.sizeMult = Math.min(out.sizeMult, 0.6);
+  else if (cl >= 1) out.sizeMult = Math.min(out.sizeMult, 0.8);
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -933,6 +982,20 @@ function freshState(opts) {
         : opts.mode === "degen" ? 0.10
           : (opts.mode === "steady" || opts.mode === "blend" || opts.mode === "grind" || opts.mode === "scalp") ? 0.08
             : 0.12))),
+    // RISK CIRCUIT-BREAKER tunables + state (see riskBrake). Downside-only; user values win.
+    //  • dailyLossFrac: rolling-24h loss budget — a set-and-sleep run gets a FRESH budget each day
+    //    instead of one lifetime cap; halve size at half the budget, halt opening at the full budget.
+    //  • consecLossLimit: real losses in a row that trip a cool-off (longer than the 90s chop nudge).
+    //  • exposureCapFrac: cap on TOTAL at-risk capital as a fraction of equity (rugs correlate).
+    dailyLossFrac: Math.max(0.03, Math.min(0.5, Number(opts.dailyLossFrac) > 0 ? Number(opts.dailyLossFrac) : 0.10)),
+    consecLossLimit: Math.max(2, Math.min(10, Number(opts.consecLossLimit) || 4)),
+    consecCooldownMs: Math.max(60_000, Number(opts.consecCooldownMs) || 15 * 60_000),
+    exposureCapFrac: Math.max(0.2, Math.min(1, Number(opts.exposureCapFrac) > 0 ? Number(opts.exposureCapFrac) : 0.6)),
+    consecLosses: 0,
+    consecHaltUntil: 0,
+    dayAnchorAt: opts.startedAt || 0,
+    dayAnchorEquity: opts.solBudget,
+    lastBrakeLogAt: 0,
     // Recent big-win (>=5x) records for the panel's downloadable PnL cards.
     bigWins: [],
     // Optional PROFIT VAULT: sweep realized profit above the working stake to a
@@ -1282,6 +1345,17 @@ export function createAutopilotEngine(deps) {
         return;
       }
 
+      // Roll the 24h risk-day anchor for the rolling-daily circuit-breaker (riskBrake): a long
+      // set-and-sleep run gets a FRESH daily loss budget each day instead of one lifetime cap, so a
+      // bad day pauses new entries but the next day resumes (never "stuck off" — it keeps hunting).
+      {
+        const nowMs = now();
+        if (nowMs - (state.dayAnchorAt || state.startedAt || nowMs) >= 24 * 60 * 60 * 1000) {
+          state.dayAnchorAt = nowMs;
+          state.dayAnchorEquity = equity(state);
+        }
+      }
+
       await manageExits();
       const eq = equity(state);
       if (eq > state.peak) state.peak = eq;
@@ -1605,12 +1679,22 @@ export function createAutopilotEngine(deps) {
     state.wins += 1;
     state.results.push("W");
     state.streak = state.streak >= 0 ? state.streak + 1 : 1;
+    // A win breaks the loss cluster -> clear the de-risk counter AND any active cooldown (resume).
+    state.consecLosses = 0;
+    state.consecHaltUntil = 0;
     if (state.results.length > 40) state.results.shift();
   }
   function markLoss(pos) {
     state.losses += 1;
     state.results.push("L");
     state.streak = state.streak <= 0 ? state.streak - 1 : -1;
+    // RISK BRAKE: count real losses in a row; a cluster trips a real cool-off on NEW entries
+    // (exits keep running). Longer + harder than the 90s chop nudge — this is the survival stop.
+    state.consecLosses = (state.consecLosses || 0) + 1;
+    if (state.consecLosses >= (state.consecLossLimit || 4) && (!state.consecHaltUntil || now() > state.consecHaltUntil)) {
+      state.consecHaltUntil = now() + (state.consecCooldownMs || 15 * 60_000);
+      record("warn", `🧯 ${state.consecLosses} losses in a row — pausing new entries ~${Math.round((state.consecCooldownMs || 900000) / 60000)}m (exits stay live).`);
+    }
     if (state.results.length > 40) state.results.shift();
   }
 
@@ -1884,6 +1968,21 @@ export function createAutopilotEngine(deps) {
     }
     if (tune.tape === "HOT") state.chopPauseUntil = 0; // tape warmed → resume immediately
     const chopPaused = Boolean(state.chopPauseUntil && nowMs < state.chopPauseUntil);
+
+    // RISK CIRCUIT-BREAKER: a HARD halt (loss-cluster cooldown or the rolling-daily loss stop)
+    // pauses ALL new entries this cycle — fresh AND smart-money copy — because rug risk is
+    // correlated (a souring tape/cohort hits everything). Exits keep running on the fast loop, so
+    // open bags are still managed and capital comes back; opening resumes when it cools / the day
+    // rolls. Its sizeMult (the softer two-tier de-risk) is threaded into the bet sizes below.
+    const brake = riskBrake(state, nowMs);
+    if (brake.openHalt) {
+      if (!state.lastBrakeLogAt || nowMs - state.lastBrakeLogAt > 60_000) {
+        state.lastBrakeLogAt = nowMs;
+        record("info", `🧯 Risk brake: ${brake.reason} — pausing new entries (exits stay live; resumes when it cools / the day rolls).`);
+      }
+      return;
+    }
+
     let smartRowsForCycle = null;
     if (smartMoneyReady() && state.open.length < maxNow && openedThisCycle < perCycle) {
       try { smartRowsForCycle = await smartMoneyFeed(); } catch (e) { record("warn", `smart-money feed: ${e && e.message}`); smartRowsForCycle = []; }
@@ -1989,7 +2088,7 @@ export function createAutopilotEngine(deps) {
         delete state.watching[cand.r.tokenMint]; // held strong across two reads → take it
       }
       // Readiness ramp: scale entry size by learned confidence; a warming-stage PROBE is floor-size.
-      let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * readyMult, state.maxTradeSol));
+      let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * readyMult * (brake.sizeMult || 1), state.maxTradeSol));
       if (probeNow) size = state.minTradeSol;
       if (!canOpen(state, size)) break;
       await openPosition(cand.r, size, cand.fs, dev, rep, sm, P);
@@ -2066,7 +2165,7 @@ export function createAutopilotEngine(deps) {
         // EDGE-WEIGHTED SIZING: bet BIGGER when the buying wallets are validated printers (btMult>1),
         // smaller when untested/neutral. Bounded 0.6x–1.6x so one number can't blow the size out.
         const edgeMult = sm.edge != null ? Math.max(0.6, Math.min(1.6, sm.edge)) : 0.85;
-        let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * readyMult * edgeMult, state.maxTradeSol));
+        let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * readyMult * edgeMult * (brake.sizeMult || 1), state.maxTradeSol));
         if (!canOpen(state, size)) break;
         record("info", `🐳 copy-trade ${r.symbol || shortMint(r.tokenMint)} @ MC $${Math.round(Number(r.marketCap) || 0)} — ${sm.kolProbe ? "probe " : ""}${sm.winners || 0} winner${sm.edge != null ? ` · edge ${sm.edge}x` : ""}${sm.apeScore != null ? ` · ape ${sm.apeScore}` : ""} → conv ${conv.toFixed(2)}`);
         await openPosition(r, size, P.liquid ? liquidScore(r) : freshScore(r), dev, rep, sm, P);

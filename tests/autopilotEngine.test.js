@@ -18,6 +18,7 @@ import {
   canOpen,
   repeatBudgetForMint,
   equity,
+  riskBrake,
   createAutopilotEngine
 } from "../src/lib/autopilotEngine.js";
 
@@ -1346,4 +1347,54 @@ test("status: a realized loss turns the headline red and it stays put (consisten
   // With no open bags, realized and marked agree exactly — nothing phantom can pull it back green.
   assert.equal(s.pnlPct, s.markedPnlPct, "no open bags → realized == marked (no phantom wiggle)");
   await engine.stop("test");
+});
+
+// --- RISK CIRCUIT-BREAKER (survival-first; downside-only) ---------------------------
+
+test("riskBrake: a clean book never halts and never shrinks size", () => {
+  const s = baseState({ bank: 1, dayAnchorEquity: 1, dailyLossFrac: 0.1, exposureCapFrac: 0.6 });
+  const b = riskBrake(s, 1000);
+  assert.equal(b.openHalt, false);
+  assert.equal(b.sizeMult, 1);
+  assert.equal(b.exposureCapFrac, 0.6, "passes the correlated-exposure cap through to canOpen");
+});
+
+test("riskBrake: rolling-daily two-tier — halve size at half the budget, halt at the full budget", () => {
+  // day base 1.0, dailyLossFrac 0.10 -> halve at -5%, halt at -10%
+  const tier1 = baseState({ bank: 0.93, dayAnchorEquity: 1, dailyLossFrac: 0.1 }); // -7% on the day
+  assert.equal(riskBrake(tier1, 0).sizeMult, 0.5, "past half the daily budget -> halve size");
+  assert.equal(riskBrake(tier1, 0).openHalt, false, "but not yet a hard halt");
+  const halt = baseState({ bank: 0.88, dayAnchorEquity: 1, dailyLossFrac: 0.1 }); // -12% on the day
+  assert.equal(riskBrake(halt, 0).openHalt, true, "full daily budget spent -> halt opening");
+});
+
+test("riskBrake: a loss-cluster cooldown halts opening until it expires", () => {
+  const s = baseState({ bank: 1, dayAnchorEquity: 1, dailyLossFrac: 0.1, consecHaltUntil: 5000 });
+  assert.equal(riskBrake(s, 1000).openHalt, true, "inside the cooldown -> halt");
+  assert.equal(riskBrake(s, 6000).openHalt, false, "past the cooldown -> resume");
+});
+
+test("riskBrake: accumulating losses de-risk size before the hard cluster halt", () => {
+  assert.ok(riskBrake(baseState({ bank: 1, dayAnchorEquity: 1, consecLosses: 1 }), 0).sizeMult <= 0.8);
+  assert.ok(riskBrake(baseState({ bank: 1, dayAnchorEquity: 1, consecLosses: 2 }), 0).sizeMult <= 0.6);
+});
+
+test("canOpen: correlated-exposure cap blocks over-deployment; back-compat keeps the old 0.9", () => {
+  // equity ~0.95 (bank 0.4 + a 0.55 bag), cap 0.6 -> a 0.1 bet pushes total at-risk to ~0.68 > 0.6
+  const capped = baseState({ bank: 0.4, exposureCapFrac: 0.6 });
+  capped.open.push({ entryMc: 5000, lastMc: 5000, lastLiq: 5000, costSol: 0.55, remFrac: 1 });
+  assert.equal(canOpen(capped, 0.1), false, "blocks when total at-risk would exceed exposureCapFrac");
+  // An older snapshot with no exposureCapFrac field keeps the prior 0.9 cap (unchanged behavior).
+  const legacy = baseState({ bank: 0.4 });
+  legacy.open.push({ entryMc: 5000, lastMc: 5000, lastLiq: 5000, costSol: 0.55, remFrac: 1 });
+  assert.equal(canOpen(legacy, 0.1), true, "back-compat: no field -> prior 0.9 cap allows it");
+});
+
+test("entryReject: wash/bundle bait (big volume from a handful of trades) rejected on the liquid path", () => {
+  const P = aggParams(baseState({ mode: "scalp" }));
+  const washy = goodRow({ pairAgeSeconds: 600, marketCap: 50000, liquidityUsd: 30000, volume5m: 120, buys5m: 3, sells5m: 1, m5: 10, h1: 12 });
+  assert.equal(entryReject(washy, P), "wash");
+  // A clean liquid mover with real trade breadth is NOT flagged as wash.
+  const clean = goodRow({ pairAgeSeconds: 600, marketCap: 50000, liquidityUsd: 30000, volume5m: 120, buys5m: 30, sells5m: 14, m5: 10, h1: 12 });
+  assert.notEqual(entryReject(clean, P), "wash");
 });
