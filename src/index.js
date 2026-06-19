@@ -1332,7 +1332,14 @@ function smartMoneyScore(mint) {
 // once the observatory has learned enough — a real roster of proven-winner wallets
 // AND a deep sample of scored coins. Until then it's pure observation. KOLs you list
 // in KOL_WALLETS are trusted immediately, so any KOL also flips it on.
+// COPY-TRADE KILL SWITCH (default OFF). The copy/smart-money entry path over-traded badly on LIVE
+// money — 51 entries/90min, re-aping the same coins across all MC bands, banking ~nothing — because
+// "copying proven wallets" is not a real edge here (backtest ~1.1x/29% win, survivorship-inflated,
+// most wallets unvalidated). Disabled so the engine runs ONLY the historically-+EV fresh-scan
+// low-MC pocket. Re-enable explicitly with AUTOPILOT_COPY_TRADE=1 ONLY after it proves +EV in paper.
+const COPY_TRADE_ENABLED = process.env.AUTOPILOT_COPY_TRADE === "1";
 function smartMoneyReady() {
+  if (!COPY_TRADE_ENABLED) return false;            // kill switch — no copy/smart-money entries
   if (KOL_WALLETS.size > 0 || autoKolWallets.size > 0) return true;
   if (kolCopyFeedCache.rows && kolCopyFeedCache.rows.length > 0) return true; // live KOL copy candidates
   if (winnerFollowCache.rows && winnerFollowCache.rows.length > 0) return true; // our proven winners are buying NOW
@@ -13864,7 +13871,11 @@ function isTerminalWebExitGuardStatus(status) {
 
 function isNoLiveTokenBalanceError(error) {
   const text = friendlyError(error).toLowerCase();
-  return /no live token balance|no token balance|sell amount rounded to zero/.test(text);
+  // "no record of a prior credit" = the wallet holds none of this token (rugged / never settled);
+  // "pool account not found" = the AMM pool is gone (rugged). Both are DEFINITIVE-unsellable — treat
+  // like an empty balance so TP/SL marks the position closed instead of retrying the sell ~90x (the
+  // 3-position, 216-fails-in-40min log spam). The position is already a realized loss; stop hammering.
+  return /no live token balance|no token balance|sell amount rounded to zero|no record of a prior credit|pool account not found|pool not found/.test(text);
 }
 
 function webExitGuardKey(planId, walletPublicKey, buySignature = "") {
