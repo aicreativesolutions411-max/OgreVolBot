@@ -3576,12 +3576,23 @@ function startOgreverse() {
   } catch (e) { console.error("[ogreverse] start failed", e); }
 }
 function proxyOgreverse(request, response, requestUrl) {
+  // CORS so the game CLIENT served statically off-site (slimewire.org/Ogreverse) can reach the
+  // multiplayer + account API on this backend. The API is its own auth (tokens) so a permissive
+  // origin is fine; we reflect the caller's origin.
+  const cors = {
+    "access-control-allow-origin": request.headers.origin || "*",
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "content-type",
+    "access-control-max-age": "86400",
+    "vary": "Origin",
+  };
+  if (request.method === "OPTIONS") { response.writeHead(204, cors); response.end(); return; }
   // Redirect /Ogreverse → /Ogreverse/ so the game's relative assets + API base path resolve.
-  if (requestUrl.pathname === "/Ogreverse") { response.writeHead(302, { Location: "/Ogreverse/" }); response.end(); return; }
+  if (requestUrl.pathname === "/Ogreverse") { response.writeHead(302, { ...cors, Location: "/Ogreverse/" }); response.end(); return; }
   const upstreamPath = (requestUrl.pathname.replace(/^\/Ogreverse/, "") || "/") + (requestUrl.search || "");
   const proxyReq = http.request(
     { host: "127.0.0.1", port: OGV_PORT, method: request.method, path: upstreamPath, headers: { ...request.headers, host: `127.0.0.1:${OGV_PORT}` } },
-    (proxyRes) => { response.writeHead(proxyRes.statusCode || 502, proxyRes.headers); proxyRes.pipe(response); }   // streams SSE too
+    (proxyRes) => { response.writeHead(proxyRes.statusCode || 502, { ...proxyRes.headers, ...cors }); proxyRes.pipe(response); }   // streams SSE too
   );
   proxyReq.on("error", () => { if (!response.headersSent) { response.writeHead(502, { "content-type": "application/json" }); response.end(JSON.stringify({ ok: false, error: "ogreverse_unavailable" })); } else { try { response.end(); } catch {} } });
   // Tear down the upstream on CLIENT disconnect (covers long-lived SSE). Must NOT key off the

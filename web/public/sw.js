@@ -3,7 +3,7 @@
 // /api/ responses or non-GET requests, so trading data is never served stale. Offline just
 // shows the cached shell, which then loads live data when the connection returns.
 
-const SHELL_CACHE = "slimewire-shell-v4-ogreverse";
+const SHELL_CACHE = "slimewire-shell-v5-ogreverse-static";
 // Standalone pages are their OWN documents (Pro, raid board, prelaunch, hub, launch, guide, share
 // pages). The SW must NEVER treat their navigations as the app shell — doing so served the cached
 // main-app (the "/pro shows the old intro then the main page" bug). Only the SPA's own routes are
@@ -27,13 +27,9 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;                          // never touch writes
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;           // 3rd-party (RPC, dex, etc.) -> network
-  // OgreVerse runs on the bot origin (this static SPA host can't run the game server). Redirect the
-  // navigation straight to the live game here in the SW — bypasses any cached index.html/app.js so it
-  // can never fall through to the terminal shell. Only on the static host, never on the bot origin.
-  if (req.mode === "navigate" && /^\/ogreverse(\/|$)/i.test(url.pathname) && !/ogrevolbot\.onrender\.com$/i.test(self.location.host)) {
-    event.respondWith(Response.redirect("https://ogrevolbot.onrender.com" + url.pathname + url.search, 302));
-    return;
-  }
+  // OgreVerse is served as its OWN static client under /Ogreverse/ — never the SPA shell. Always
+  // pass these straight to the network (real game files) so it can't fall through to the terminal.
+  if (/^\/ogreverse(\/|$)/i.test(url.pathname)) return;
   if (url.pathname.startsWith("/api/")) return;              // live data -> network only, NEVER cached
   // Only the SPA's own routes are shell navigations. Standalone pages (/pro, /raids, /prelaunch,
   // /hub, /launch, /manual, share pages, …) pass through so they always load their real document,

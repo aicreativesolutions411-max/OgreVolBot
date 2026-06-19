@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <base href="/Ogreverse/">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Ogreverse: Brainrot Prism</title>
+    <meta name="description" content="Ogreverse: Brainrot Prism is a public prototype retro creature-collecting RPG with original pixel art, 380 creatures, campaign play, and local MMO PvP.">
+    <meta name="theme-color" content="#071018">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta property="og:title" content="Ogreverse: Brainrot Prism">
+    <meta property="og:description" content="A Rage Cage style retro creature-collecting RPG public prototype with chaotic original creatures and local MMO PvP.">
+    <meta property="og:type" content="website">
+    <link rel="icon" type="image/png" href="assets/icons/OGR001.png?v=20260619-accounts-mmo-v71">
+    <link rel="stylesheet" href="styles.css?v=20260619-accounts-mmo-v71">
+  </head>
+  <body>
+    <main id="app" class="game-shell">
+      <section class="screen-wrap" aria-label="Game screen">
+        <canvas id="game" width="640" height="480" aria-label="Ogreverse game canvas"></canvas>
+        <div id="toast" class="toast" role="status" aria-live="polite"></div>
+        <nav id="mobile-controls" class="mobile-controls" aria-label="Mobile game controls">
+          <div class="mobile-joystick-panel" aria-label="Movement controls">
+            <div class="mobile-joystick" data-joystick role="application" aria-label="Drag joystick to move" tabindex="0">
+              <span class="stick-mark stick-mark-up">▲</span>
+              <span class="stick-mark stick-mark-left">◀</span>
+              <span class="stick-mark stick-mark-right">▶</span>
+              <span class="stick-mark stick-mark-down">▼</span>
+              <span class="mobile-stick-thumb" aria-hidden="true"></span>
+            </div>
+            <button class="btn mobile-menu-btn" data-action="quickMenu" aria-label="Open menu">MENU</button>
+          </div>
+          <div class="mobile-action-stack" aria-label="Action controls">
+            <button class="btn primary mobile-action-btn" data-action="quickA" aria-label="Confirm or interact">A</button>
+            <button class="btn mobile-action-btn" data-action="quickB" aria-label="Back or menu">B</button>
+          </div>
+        </nav>
+      </section>
+      <aside id="panel" class="panel" aria-label="Game controls and menus"></aside>
+    </main>
+    <script src="game.js?v=20260619-accounts-mmo-v71"></script>
+  </body>
+</html>
