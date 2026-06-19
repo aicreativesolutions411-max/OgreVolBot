@@ -2431,19 +2431,20 @@ async function pollPopRadar() {
       _popSrcBusy = true;
       void (async () => {
         try {
-          const [vol, mom] = await Promise.all([
-            webLivePairs("autopilot", "live", { sort: "volume" }).catch(() => null),
-            webLivePairs("autopilot", "live", { sort: "momentum" }).catch(() => null)
-          ]);
+          // WIDE age + MC: pull routable movers across the fresh→24h windows (not just early pairs) on
+          // the volume/momentum sorts — a coin that pops on day 2 counts too. All from the live feed, so
+          // every one has a real pool (honeypots/rugs without a pool don't show).
+          const combos = [["live", "volume"], ["live", "momentum"], ["under1h", "volume"], ["under3h", "volume"], ["under1d", "momentum"]];
+          const results = await Promise.all(combos.map(([b, s]) => webLivePairs("autopilot", b, { sort: s }).catch(() => null)));
           const set = new Set();
-          for (const f of [vol, mom]) for (const r of (Array.isArray(f && f.rows) ? f.rows : [])) { if (r && r.tokenMint) set.add(r.tokenMint); }
-          if (set.size) popLiveMints = [...set].slice(0, 30);
+          for (const f of results) for (const r of (Array.isArray(f && f.rows) ? f.rows : [])) { if (r && r.tokenMint) set.add(r.tokenMint); }
+          if (set.size) popLiveMints = [...set].slice(0, 40);
         } catch {} finally { _popSrcBusy = false; }
       })();
     }
     let creations = [];
     try { creations = pumpPortalStream.getCreationCandidates({ maxAgeMs: 30 * 60_000, limit: 60 }).map((r) => r.tokenMint).filter(Boolean); } catch {}
-    const watch = [...new Set([...popLiveMints, ...creations.slice(0, 12), ...popHeldMints.keys()])].filter((m) => !popUnroutable.has(m)).slice(0, 20);
+    const watch = [...new Set([...popLiveMints.slice(0, 16), ...creations.slice(0, 8), ...popHeldMints.keys()])].filter((m) => !popUnroutable.has(m)).slice(0, 24);
     for (let i = 0; i < watch.length; i += 8) {           // swap-api fast-poll the watchlist for NEW trades
       await Promise.all(watch.slice(i, i + 8).map(async (mint) => {
         let j = null;
@@ -2467,7 +2468,10 @@ async function pollPopRadar() {
         // pool — the "rugs that won't show on routes"). getMintSafetyInfo is cached 6h.
         if (!_popRouteChecked.has(mint)) {
           _popRouteChecked.add(mint);
-          try { const s = await getMintSafetyInfo(mint); if (s && s.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) popUnroutable.add(mint); } catch {}
+          // HONEYPOT + ROUTE filter: skip Token-2022 (un-routable) AND coins with a live freeze
+          // authority (can freeze your tokens so you can't sell = honeypot). Pump coins have freeze
+          // renounced (null), so this only catches the traps. Cached 6h, off the hot path.
+          try { const s = await getMintSafetyInfo(mint); if (s && (s.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58() || s.freezeAuthority)) popUnroutable.add(mint); } catch {}
           if (_popRouteChecked.size > 4000) _popRouteChecked.clear();
         }
         if (popUnroutable.has(mint)) continue;
