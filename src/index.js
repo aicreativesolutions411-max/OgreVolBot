@@ -221,6 +221,7 @@ const pumpPortalStream = createPumpPortalStream({
   onCreation: (entry) => {
     void handlePumpPortalCreationForDevWatch(entry).catch(() => {});
     try { recordInsiderLaunch(entry); } catch {}   // INSIDER-LAUNCH machine: known/linked wallet just deployed
+    try { recordRecentLauncher(entry); } catch {}  // ROTATION-CATCHER: remember every launcher to funder-resolve
   },
   // Live smart-money capture: record early buyers the instant they trade (see recordEarlyBuyer).
   onTrade: (mint, trade) => recordEarlyBuyer(mint, trade)
@@ -2217,12 +2218,14 @@ setInterval(() => { void pollSnipeXClout(); }, 15_000);
 // the dev-dump tripwire. The coin doesn't have to last; we just have to be EARLY and OUT AHEAD.
 const insiderLaunches = new Map();   // mint -> { creator, symbol, tier, why, at, mc, mcAt, dumped }
 const insiderDevSold = new Set();    // mints whose creator has SOLD -> the engine's dev-dump tripwire fires
+const insiderRotationLink = new Map(); // ROTATED creator -> { operator, at } — a NEW wallet funded by a known operator (rotation-catcher)
 
 // Tier a creator wallet by how proven/linked it is (null = not a known operator -> skip).
 function insiderLaunchTier(creator) {
   const w = String(creator || "").trim();
   if (!w) return null;
   if (isKolWallet(w)) return { tier: 3, why: "kol" };
+  if (insiderRotationLink.has(w)) return { tier: 2, why: "rotation" };   // a known operator's freshly-funded alt
   const rec = walletObs.get(w);
   const ct = copyTierForWalletRecord(rec);
   if (ct === "A" || ct === "B") return { tier: 3, why: "winner" };
@@ -2351,6 +2354,123 @@ async function pollInsiderRugWatch() {
 setInterval(() => { void pollInsiderRugWatch(); }, 6000);
 
 function devSoldForMint(mint) { return insiderDevSold.has(String(mint || "").trim()); }
+
+// ---------------------------------------------------------------------------
+// WALLET-INTELLIGENCE EXPANSION — "always have the best options + be in tune with the wallets
+// operators rotate to." Three BOUNDED, crash-safe trickles (the one-instance no-burst rule):
+//   (1) ROTATION-CATCHER  — a NEW wallet funded by a known operator IS their rotation; link it so its
+//       launches are caught as insider, now and forever (no operator escapes by switching wallets).
+//   (2) FIRST-BUYER ROSTER — scale the "caught a runner early + profited" roster toward tens of
+//       thousands from Solana Tracker Premium — the wallets worth copying + watching for launches.
+//   (3) FRESHNESS — bound + evict stale non-winners so the roster stays current as wallets rotate.
+const recentLaunchers = new Map();    // creator -> { mint, symbol, at } — every recent creation
+const launcherFunderSeen = new Set(); // creators we've funder-resolved (don't redo)
+function recordRecentLauncher(entry) {
+  try {
+    const creator = String(entry?.event?.traderPublicKey || "").trim();
+    const mint = String(entry?.mint || "").trim();
+    if (!creator || !mint) return;
+    recentLaunchers.set(creator, { mint, symbol: String(entry?.event?.symbol || "???"), at: Date.now() });
+    if (recentLaunchers.size > 500) { const k = recentLaunchers.keys().next().value; recentLaunchers.delete(k); }
+  } catch {}
+}
+
+// (1) ROTATION-CATCHER. Resolve the funder of recent UNKNOWN launchers; a launcher funded by a known
+// operator is their rotation -> link it (and flag its current launch). Trickle: 3 / 30s (free RPC).
+let _launcherFunderPolling = false;
+async function pollLauncherFunders() {
+  if (_launcherFunderPolling) return;
+  _launcherFunderPolling = true;
+  try {
+    const now = Date.now();
+    const cands = [...recentLaunchers.entries()]
+      .filter(([w, r]) => !launcherFunderSeen.has(w) && now - r.at < 30 * 60_000 && insiderLaunchTier(w) === null)
+      .sort((a, b) => b[1].at - a[1].at)
+      .slice(0, 3);
+    for (const [creator, r] of cands) {
+      launcherFunderSeen.add(creator);
+      let funder = null;
+      try { funder = await lookupWalletFunder(creator); } catch {}
+      if (funder && insiderLaunchTier(funder) !== null) {
+        insiderRotationLink.set(creator, { operator: funder, at: now });
+        if (insiderRotationLink.size > 3000) { const k = insiderRotationLink.keys().next().value; insiderRotationLink.delete(k); }
+        console.log(`[autopilot:info] 🔗 ROTATION: ${creator.slice(0, 4)}.. funded by known operator ${funder.slice(0, 4)}.. — linked, watching its launches`);
+        if (now - r.at < 6 * 60_000 && !insiderLaunches.has(r.mint)) {
+          insiderLaunches.set(r.mint, { creator, symbol: r.symbol, tier: 2, why: "rotation", at: r.at, mc: 0, mcAt: 0, dumped: false });
+        }
+      }
+      await new Promise((res) => setTimeout(res, 200));
+    }
+    if (launcherFunderSeen.size > 6000) launcherFunderSeen.clear();
+  } finally { _launcherFunderPolling = false; }
+}
+setInterval(() => { void pollLauncherFunders(); }, 30_000);
+
+// (2) FIRST-BUYER ROSTER SCALE. Scan first-buyers of recent RUNNER tokens (trending/volume); a wallet
+// that profitably first-bought >= 2 INDEPENDENT runners is an early-alpha winner. Quota-aware trickle
+// (env FIRST_BUYER_GRAB_MS, default 120s; trending/volume cached 2min) -> ~90k ST req/mo headroom.
+const fbAccum = new Map();             // wallet -> { runners:Set<mint>, pnl }
+const fbSeenTokens = new Set();        // runner tokens already scanned
+let _fbPolling = false;
+async function pollFirstBuyerGrab() {
+  if (_fbPolling || !CONFIG.solanaTrackerApiKey) return;
+  _fbPolling = true;
+  try {
+    let mints = [];
+    try {
+      const src = await Promise.all([
+        solanaTrackerJson(`/tokens/trending`, { cacheTtlMs: 120_000, timeoutMs: 8000 }).catch(() => null),
+        solanaTrackerJson(`/tokens/volume`, { cacheTtlMs: 120_000, timeoutMs: 8000 }).catch(() => null)
+      ]);
+      for (const arr of src) for (const t of (Array.isArray(arr) ? arr : [])) {
+        const m = t && (t.token?.mint || t.mint); if (m) mints.push(String(m));
+      }
+    } catch {}
+    mints = [...new Set(mints)].filter((m) => !fbSeenTokens.has(m)).slice(0, 2); // 2 fresh runners / cycle
+    let added = 0;
+    for (const mint of mints) {
+      fbSeenTokens.add(mint);
+      let buyers = [];
+      try { const d = await solanaTrackerJson(`/first-buyers/${mint}?limit=60`, { cacheTtlMs: 0, timeoutMs: 9000 }); buyers = Array.isArray(d) ? d : (d && d.buyers) || []; } catch {}
+      for (const b of buyers) {
+        const w = b && b.wallet; if (!w) continue;
+        const total = Number(b.total) || 0;        // realized+unrealized profit on this token
+        if (total <= 0) continue;                   // only PROFITABLE early entries
+        const g = fbAccum.get(w) || { runners: new Set(), pnl: 0 };
+        g.runners.add(mint); g.pnl += total; fbAccum.set(w, g);
+        if (g.runners.size >= 2 && g.pnl > 0) {     // early-alpha: caught >=2 independent runners early + green
+          const rec = walletObs.get(w) || {};
+          if (!rec.earlyAlpha) added += 1;
+          rec.earlyAlpha = true; rec.earlyRunners = g.runners.size; rec.earlyPnl = Math.round(g.pnl); rec.seenAt = Date.now();
+          walletObs.set(w, rec);
+        }
+      }
+      await new Promise((res) => setTimeout(res, 250));
+    }
+    if (added) console.log(`[autopilot:info] 🧠 first-buyer roster +${added} early-alpha wallets (tracked ${fbAccum.size})`);
+    if (fbSeenTokens.size > 4000) fbSeenTokens.clear();
+  } finally { _fbPolling = false; }
+}
+setInterval(() => { void pollFirstBuyerGrab(); }, Math.max(60_000, Number(process.env.FIRST_BUYER_GRAB_MS) || 120_000));
+
+// (3) FRESHNESS. Keep every winner/KOL; evict only STALE (>7d inactive) low-value non-winners when the
+// roster exceeds a generous cap, so it can grow into the tens of thousands without unbounded bloat.
+function pruneStaleWallets() {
+  try {
+    const CAP = 40000;
+    if (walletObs.size <= CAP) return;
+    const now = Date.now();
+    let evicted = 0;
+    for (const [w, r] of walletObs) {
+      if (walletObs.size <= CAP) break;
+      if (isWinnerWallet(r) || isTrackedKolWallet(w)) continue;
+      const seen = Number(r && (r.seenAt || r.lastAt)) || 0;
+      if (now - seen > 7 * 24 * 60 * 60_000) { walletObs.delete(w); evicted += 1; }
+    }
+    if (evicted) console.log(`[autopilot:info] 🧹 freshness: evicted ${evicted} stale non-winner wallets (roster now ${walletObs.size})`);
+  } catch {}
+}
+setInterval(() => { void pruneStaleWallets(); }, 6 * 60 * 60_000);
 
 const autopilotEngine = createAutopilotEngine({
   exitMs: 1000,
