@@ -668,6 +668,40 @@ test("engine: local replay veto blocks historically bad unproven entries", async
   await engine.stop("test-done");
 });
 
+test("engine: POP candidate is pre-vetted by the radar — buys despite a failing history veto", async () => {
+  // The live no-buy bug: AURORY ignited at score 100 and got "Skipping … local replay history-fail".
+  // POP is confirmed by the radar (real accel + buy-share + unique buyers), so it must OVERRIDE the
+  // local-replay comps veto + the momentum re-confirm — exactly like a proven snipe/copy.
+  let t = 0;
+  let historyCalls = 0;
+  const popRow = {
+    tokenMint: "PopMint11111111111111111111111111111111111111",
+    symbol: "POPPER", marketCap: 8000, liquidityUsd: 0, pairAgeSeconds: 1,
+    volume5m: 0, buys5m: 0, sells5m: 0, source: "pop", _pop: { score: 80, inflowNow: 3 }
+  };
+  const engine = createAutopilotEngine({
+    getPopFeed: async () => [popRow],
+    getPairLite: async () => ({ marketCap: 8000, liquidityUsd: 0 }),
+    buyToken: async () => ({ ok: true, tokenAmount: "1000" }),
+    sellPercent: async () => ({ ok: true }),
+    entryHistory: async () => {            // same brutal verdict that vetoes a normal-mode entry
+      historyCalls += 1;
+      return { sampleSize: 24, confidence: "medium", failRatePercent: 88, winRatePercent: 12, medianMaxUpsidePercent: 14, medianMaxDrawdownPercent: -38 };
+    },
+    now: () => t,
+    persist: async () => {}
+  });
+
+  await engine.start({ solBudget: 1, minutes: 60, mode: "pop", live: false });
+  t += 2200;
+  await engine._hunt();
+  const st = engine.status();
+  assert.equal(historyCalls, 0, "pop is pre-vetted → the local-replay gate is skipped entirely");
+  assert.equal(st.open.length, 1, "the ignited pop opens despite the failing history comps");
+  assert.equal(st.open[0].mint, popRow.tokenMint);
+  await engine.stop("test-done");
+});
+
 test("engine: self-arm holds entries while warming, then trades once readiness is high", async () => {
   // LOW readiness → WARMING: stays live + learning, opens NOTHING even on a good coin.
   let t = 0;

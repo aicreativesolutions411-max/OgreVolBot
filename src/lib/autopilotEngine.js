@@ -2289,7 +2289,9 @@ export function createAutopilotEngine(deps) {
     state.readiness = ready;
     const armFloor = Number.isFinite(state.armFloor) ? state.armFloor : 0.55;
     const autoArm = state.autoArm !== false;
-    const armed = !autoArm || (Number(ready.score) || 0) >= armFloor;
+    // POP mode acts on the LIVE radar ignition, not the slow self-learned edge — a real pop is gone in
+    // seconds, so it never sits in "warming". (Pop bets are capped tiny at 5% of bank, so this is safe.)
+    const armed = !autoArm || P.pop || (Number(ready.score) || 0) >= armFloor;
     // While warming, take ONE tiny learning probe every ~2 min so the data keeps building from real fills.
     const probeNow = autoArm && !armed && (nowMs - (state.lastProbeAt || 0) > 120_000);
     // Size ramp: just-armed → 45% size, full confidence (score 1) → 100%. Probes use the floor size.
@@ -2434,7 +2436,7 @@ export function createAutopilotEngine(deps) {
       // aren't missed. This is what makes it "best picks per situation" instead of
       // aping everything into a dumping tape.
       const minConv = tune.tape === "COLD" ? 0.95 : tune.tape === "NORMAL" ? 0.7 : 0;
-      if (conv < minConv) continue;
+      if (conv < minConv && !P.pop) continue;   // POP is pre-vetted by the live radar — generic conviction comps can't see the ignition
       // MOMENTUM CONFIRMATION: an unproven, NON-elite setup must show SUSTAINED strength —
       // still passing the bar on a 2nd scan within 30s with its MC holding (not already
       // fading) — before we ape. This kills the marginal fs 61-67 burst-churn that bleeds a
@@ -2449,7 +2451,13 @@ export function createAutopilotEngine(deps) {
       // this, live logs showed notable-X snipes ('🎯 SNIPE … signals [x]') getting 'history-fail'
       // skipped in a red tape and never buying. The tight stop + de-risk-trail + rug-flow tripwire are
       // the protection here, not the comps veto.
-      const proven = (rep && rep.runners >= 1 && rep.rugs === 0) || (sm && (sm.kol || sm.winners >= 2)) || (ci && ci.trusted) || (P.snipe && snipeRec && snipeRec.score >= P.minSnipe);
+      // POP candidates are PRE-VETTED by the live radar (real accel + buy-share + unique-buyer ignition),
+      // so — exactly like a proven snipe/copy — they OVERRIDE the local-replay comps veto (history-fail)
+      // and the 30s momentum re-confirm. Live logs proved this was the no-buy bug: AURORY ignited at
+      // score 100 and got "Skipping … local replay history-fail" because the radar's confirmation was
+      // invisible to the generic unproven-coin gauntlet. The tiny 5%-bank bet + pop-fade/MC-scaled exits
+      // are the protection here, not the comps veto (which can't see a coin that's seconds old).
+      const proven = (rep && rep.runners >= 1 && rep.rugs === 0) || (sm && (sm.kol || sm.winners >= 2)) || (ci && ci.trusted) || (P.snipe && snipeRec && snipeRec.score >= P.minSnipe) || Boolean(P && P.pop);
       // FUNDING-GRAPH CLUSTER RUG FILTER (Brain 4): when a coin's early buyers concentrate in ONE
       // funding source it's a coordinated insider net behind a "clean" chart. Extreme concentration
       // on an UNPROVEN coin → skip (don't donate to the rug). Lesser concentration → shrink the bet.
