@@ -2456,6 +2456,48 @@ function hasFreshInsiderLaunch() {
 // MAIN PUMPER — a linked/cluster alt or a top accumulator that actually drove the price — EXITS its
 // position. The creator's early bait-flip is IGNORED while alts are still accumulating. (The engine's
 // liquidity-pull + tight stop still cover a genuine instant-rug inside that window.) Trickle/crash-safe.
+// One mint's rug-flow check (reads the operator flow from swap-api, arms the tripwire on a real
+// dump). Extracted so BOTH the 6s poller AND the real-time Chainstack WSS watcher run the IDENTICAL
+// confirmed logic — the WSS path only changes LATENCY (fires it sooner), never the decision, so it
+// adds zero new false-positive surface. Returns true if it armed the tripwire.
+async function checkInsiderRug(mint, r) {
+  if (!r || r.dumped || insiderDevSold.has(mint)) return false;
+  const now = Date.now();
+  try {
+    const j = await fetch(`https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=100`, { headers: { accept: "application/json" } }).then((x) => x.ok ? x.json() : null).catch(() => null);
+    const trades = Array.isArray(j) ? j : (j && j.trades) || [];
+    if (!trades.length) return false;
+    // Per-wallet bought/sold SOL on this coin = the operator flow.
+    const flow = new Map();
+    for (const t of trades) {
+      const a = String(t.userAddress || t.user || "").trim(); if (!a) continue;
+      const sol = Number(t.amountSol || t.quoteAmount || 0) || 0;
+      const side = String(t.type || t.side || "").toLowerCase();
+      const e = flow.get(a) || { bought: 0, sold: 0 };
+      if (side === "buy") e.bought += sol; else if (side === "sell") e.sold += sol;
+      flow.set(a, e);
+    }
+    const creator = r.creator;
+    const creatorCluster = clusterIdFor(creator);
+    // The PUMPERS that drove it: the biggest real accumulators (>= 0.3 SOL bought).
+    const pumpers = [...flow.entries()].filter(([, e]) => e.bought >= 0.3).sort((x, y) => y[1].bought - x[1].bought).slice(0, 5);
+    let rug = false, why = "";
+    for (const [a, e] of pumpers) {
+      if (a === creator && now - r.at < 30_000) continue;                 // creator bait-flip window: ignore
+      const linked = a !== creator && clusterIdFor(a) === creatorCluster && creatorCluster !== a;
+      const dumpFrac = e.sold / Math.max(e.bought, 0.0001);
+      const bar = linked ? 0.4 : 0.55;                                    // linked alt dumping = lower bar (user: it matters more)
+      if (dumpFrac >= bar && e.sold >= 0.2) { rug = true; why = `${linked ? "linked alt" : "main pumper"} ${a.slice(0, 4)}.. exited ${Math.round(dumpFrac * 100)}% of its bag`; break; }
+    }
+    // Genuine creator ABANDON (NOT the head-fake): creator sold real size, NO alts still pumping, past the window.
+    const cre = flow.get(creator) || { bought: 0, sold: 0 };
+    const altsPumping = pumpers.some(([a, e]) => a !== creator && (e.bought - e.sold) > 0.2);
+    if (!rug && cre.sold >= 0.3 && !altsPumping && now - r.at >= 30_000) { rug = true; why = "creator abandoned, no alt support"; }
+    if (rug) { insiderDevSold.add(mint); r.dumped = true; console.log(`[autopilot:info] 🚨 RUG-FLOW ${r.symbol}: ${why} — tripwire armed`); return true; }
+  } catch {}
+  return false;
+}
+
 let _insiderRugPolling = false;
 async function pollInsiderRugWatch() {
   if (_insiderRugPolling) return;
@@ -2464,44 +2506,84 @@ async function pollInsiderRugWatch() {
     const now = Date.now();
     const watch = [...insiderLaunches.entries()].filter(([m, r]) => !r.dumped && !insiderDevSold.has(m) && now - r.at < 25 * 60_000).slice(0, 6);
     for (const [mint, r] of watch) {
-      try {
-        const j = await fetch(`https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=100`, { headers: { accept: "application/json" } }).then((x) => x.ok ? x.json() : null).catch(() => null);
-        const trades = Array.isArray(j) ? j : (j && j.trades) || [];
-        if (!trades.length) continue;
-        // Per-wallet bought/sold SOL on this coin = the operator flow.
-        const flow = new Map();
-        for (const t of trades) {
-          const a = String(t.userAddress || t.user || "").trim(); if (!a) continue;
-          const sol = Number(t.amountSol || t.quoteAmount || 0) || 0;
-          const side = String(t.type || t.side || "").toLowerCase();
-          const e = flow.get(a) || { bought: 0, sold: 0 };
-          if (side === "buy") e.bought += sol; else if (side === "sell") e.sold += sol;
-          flow.set(a, e);
-        }
-        const creator = r.creator;
-        const creatorCluster = clusterIdFor(creator);
-        // The PUMPERS that drove it: the biggest real accumulators (>= 0.3 SOL bought).
-        const pumpers = [...flow.entries()].filter(([, e]) => e.bought >= 0.3).sort((x, y) => y[1].bought - x[1].bought).slice(0, 5);
-        let rug = false, why = "";
-        for (const [a, e] of pumpers) {
-          if (a === creator && now - r.at < 30_000) continue;                 // creator bait-flip window: ignore
-          const linked = a !== creator && clusterIdFor(a) === creatorCluster && creatorCluster !== a;
-          const dumpFrac = e.sold / Math.max(e.bought, 0.0001);
-          const bar = linked ? 0.4 : 0.55;                                    // linked alt dumping = lower bar (user: it matters more)
-          if (dumpFrac >= bar && e.sold >= 0.2) { rug = true; why = `${linked ? "linked alt" : "main pumper"} ${a.slice(0, 4)}.. exited ${Math.round(dumpFrac * 100)}% of its bag`; break; }
-        }
-        // Genuine creator ABANDON (NOT the head-fake): creator sold real size, NO alts still pumping, past the window.
-        const cre = flow.get(creator) || { bought: 0, sold: 0 };
-        const altsPumping = pumpers.some(([a, e]) => a !== creator && (e.bought - e.sold) > 0.2);
-        if (!rug && cre.sold >= 0.3 && !altsPumping && now - r.at >= 30_000) { rug = true; why = "creator abandoned, no alt support"; }
-        if (rug) { insiderDevSold.add(mint); r.dumped = true; console.log(`[autopilot:info] 🚨 RUG-FLOW ${r.symbol}: ${why} — tripwire armed`); }
-      } catch {}
+      await checkInsiderRug(mint, r);
       await new Promise((res) => setTimeout(res, 150));
     }
     if (insiderDevSold.size > 2000) insiderDevSold.clear();
   } finally { _insiderRugPolling = false; }
 }
 setInterval(() => { void pollInsiderRugWatch(); }, 6000);
+
+// ===== REAL-TIME RUG-WATCH via Chainstack WebSocket (sub-second dev-dump detection) =============
+// Polling the operator flow every 6s means we can be up to 6s late catching a creator/linked-pumper
+// sell — on a rug, that's the whole exit. This subscribes (Solana native logsSubscribe) to each
+// active insider creator's wallet on the Chainstack WSS endpoint; the instant that wallet transacts,
+// we run the SAME checkInsiderRug confirm immediately instead of waiting for the next poll. DORMANT +
+// $0 until CHAINSTACK_WSS (or SOLANA_WSS) env is set — no endpoint, no connection, no behavior change.
+// Additive: it can only ARM the existing tripwire sooner, never alter exit logic. The 6s poller stays
+// as the backstop. Set CHAINSTACK_WSS to the wss:// node URL (keep the token secret — Render env only).
+const CHAINSTACK_WSS = process.env.CHAINSTACK_WSS || process.env.SOLANA_WSS || "";
+let _rugWs = null;
+const _rugWsReqWallet = new Map();   // jsonrpc request id -> wallet (to map the sub id back)
+const _rugWsSubWallet = new Map();   // subscription id -> wallet
+const _rugWsSubscribed = new Set();  // wallets we've already subscribed this connection
+let _rugWsReqId = 1;
+
+function rugWatchWallets() {
+  const now = Date.now();
+  const set = new Set();
+  for (const [, r] of insiderLaunches.entries()) {
+    if (!r || r.dumped || now - r.at > 25 * 60_000) continue;
+    if (r.creator) set.add(String(r.creator));
+  }
+  return [...set].slice(0, 40);                       // cap subscriptions (one stream, many subs)
+}
+function rugMintsForWallet(wallet) {
+  const now = Date.now(), out = [];
+  for (const [mint, r] of insiderLaunches.entries()) {
+    if (r && !r.dumped && String(r.creator) === wallet && now - r.at < 25 * 60_000) out.push([mint, r]);
+  }
+  return out;
+}
+function resyncRugWatchSubs() {
+  if (!_rugWs || _rugWs.readyState !== WebSocket.OPEN) return;
+  for (const w of rugWatchWallets()) {
+    if (_rugWsSubscribed.has(w)) continue;
+    _rugWsSubscribed.add(w);
+    const id = _rugWsReqId++;
+    _rugWsReqWallet.set(id, w);
+    try { _rugWs.send(JSON.stringify({ jsonrpc: "2.0", id, method: "logsSubscribe", params: [{ mentions: [w] }, { commitment: "processed" }] })); } catch {}
+  }
+}
+function startRugWatchWs() {
+  if (!CHAINSTACK_WSS) return;                        // dormant without the endpoint
+  try {
+    _rugWs = new WebSocket(CHAINSTACK_WSS);
+    _rugWs.on("open", () => {
+      _rugWsSubscribed.clear(); _rugWsSubWallet.clear(); _rugWsReqWallet.clear();
+      console.log("[autopilot:info] ⚡ Chainstack WSS rug-watch connected");
+      resyncRugWatchSubs();
+    });
+    _rugWs.on("message", (buf) => {
+      let m = null; try { m = JSON.parse(buf.toString()); } catch { return; }
+      if (m.id != null && _rugWsReqWallet.has(m.id) && m.result != null) {     // subscribe ack: map subId -> wallet
+        _rugWsSubWallet.set(m.result, _rugWsReqWallet.get(m.id)); _rugWsReqWallet.delete(m.id); return;
+      }
+      if (m.method === "logsNotification") {
+        const subId = m.params && m.params.subscription;
+        const wallet = _rugWsSubWallet.get(subId);
+        if (!wallet) return;
+        for (const [mint, r] of rugMintsForWallet(wallet)) { void checkInsiderRug(mint, r); }   // SAME confirm, fired NOW
+      }
+    });
+    _rugWs.on("close", () => { _rugWs = null; setTimeout(startRugWatchWs, 5000); });
+    _rugWs.on("error", () => { try { _rugWs && _rugWs.close(); } catch {} });
+  } catch { setTimeout(startRugWatchWs, 10000); }
+}
+if (CHAINSTACK_WSS) {
+  startRugWatchWs();
+  setInterval(() => { resyncRugWatchSubs(); }, 30_000);   // pick up newly-launched insider creators
+}
 
 function devSoldForMint(mint) { return insiderDevSold.has(String(mint || "").trim()); }
 
