@@ -1211,6 +1211,9 @@ test("aggParams: per-mode conviction caps concentrate degen into proven setups",
   assert.equal(degen.provenConvCap, 1.6);
   assert.equal(chill.provenConvCap, 1.15);
   assert.equal(normal.unprovenConvCap, 0.7);
+  // snipes are lottery tickets — keep conviction sizing modest so bets stay small + even (moonshot math)
+  const snipe = aggParams(baseState({ mode: "snipeRide" }));
+  assert.equal(snipe.provenConvCap, 1.3);
 });
 
 test("convictionMult: honors per-mode caps (degen unproven 0.6, chill proven 1.15)", () => {

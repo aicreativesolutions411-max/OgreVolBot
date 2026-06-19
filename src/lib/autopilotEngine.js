@@ -302,7 +302,7 @@ export function aggParams(state) {
   else if (scalp) { unprovenConvCap = 0.9; provenConvCap = 1.5; }
   // SNIPE entries are SIGNAL-proven (that's the gate), so a strong-confluence snipe can size up well;
   // a lone weak signal stays modest.
-  else if (snipe) { unprovenConvCap = 0.8; provenConvCap = 1.7; }
+  else if (snipe) { unprovenConvCap = 0.8; provenConvCap = 1.3; }   // snipes are lottery tickets — keep bets SMALL + even (moonshot math), don't size up hard on conviction
   // degen rides the proven runners it sizes into FURTHER — a higher moon target (unless a COLD
   // tape already pulled it in via the bankHard clamp above).
   if (mode === "degen" && !bankHard) moonTarget = Math.max(moonTarget, 700);
@@ -2379,6 +2379,9 @@ export function createAutopilotEngine(deps) {
       // cap (still clamped to maxTradeSol) — the gold setups earn the biggest bets.
       const confl = confluenceMult(cand.r, rep, sm, ci, snipeRec);
       let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * confl * clusterMult * readyMult * (brake.sizeMult || 1), state.maxTradeSol));
+      // SNIPE BET CAP — moonshot math needs MANY small EVEN bets so a rare 4x pays for the losers; no
+      // single snipe may exceed 5% of bank (live proof: one 16%-of-bank snipe ate ~80% of a session loss).
+      if (P.snipe) size = Math.max(state.minTradeSol, Math.min(size, state.bank * 0.05));
       if (probeNow) size = state.minTradeSol;
       if (!canOpen(state, size)) break;
       await openPosition(cand.r, size, cand.fs, dev, rep, sm, P);
@@ -2463,6 +2466,7 @@ export function createAutopilotEngine(deps) {
         const cr = clusterRisk ? clusterRisk(r.tokenMint) : null;
         const clusterMult = cr && cr.risk > 0 ? Math.max(0.5, 1 - cr.risk * 0.4) : 1;
         let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * confl * clusterMult * readyMult * edgeMult * (brake.sizeMult || 1), state.maxTradeSol));
+        if (P.snipe) size = Math.max(state.minTradeSol, Math.min(size, state.bank * 0.05));   // snipe bet cap (moonshot math — small even bets)
         if (!canOpen(state, size)) break;
         record("info", `🐳 copy-trade ${r.symbol || shortMint(r.tokenMint)} @ MC $${Math.round(Number(r.marketCap) || 0)} — ${sm.kolProbe ? "probe " : ""}${sm.winners || 0} winner${sm.edge != null ? ` · edge ${sm.edge}x` : ""}${sm.apeScore != null ? ` · ape ${sm.apeScore}` : ""} → conv ${conv.toFixed(2)}`);
         await openPosition(r, size, P.liquid ? liquidScore(r) : freshScore(r), dev, rep, sm, P);
