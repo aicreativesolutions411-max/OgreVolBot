@@ -1164,6 +1164,10 @@ export function createAutopilotEngine(deps) {
     getPairLite,
     buyToken,
     sellPercent,
+    // INSIDER-LAUNCH dev-dump tripwire: returns true once the creator wallet of `mint` has SOLD.
+    // The host (index.js) watches creators of insider launches via swap-api and flips this; the
+    // engine exits 100% the instant it's true. Default false = feature off when unwired.
+    devSold = () => false,
     now = () => Date.now(),
     log = () => {},
     persist = async () => {},
@@ -1676,6 +1680,20 @@ export function createAutopilotEngine(deps) {
         pos.peakPct = Math.max(pos.peakPct || 0, Math.min(movePct, 900));
       } else {
         pos.missed = (pos.missed || 0) + 1;
+      }
+      // RUG-FLOW TRIPWIRE (insider-launch machine): the coin doesn't have to last — when the host's
+      // flow watcher sees a MAIN PUMPER (a linked alt / top accumulator) EXIT its position, we bail
+      // 100% ahead of the rug. (NOT the creator's early bait-flip — that head-fake is filtered host-
+      // side.) Checked before the normal ladder so it always wins. Fast cache lookup.
+      if (pos.insider && !pos.devDumpHandled) {
+        let dumped = false;
+        try { dumped = await devSold(pos.mint, pos.devWallet); } catch {}
+        if (dumped) {
+          pos.devDumpHandled = true;
+          record("warn", `🚨 rug-flow tripwire: ${pos.sym} — a main pumper is dumping, exiting 100% ahead of the rug`);
+          await doSell(pos, 100, "rug-flow");
+          continue;
+        }
       }
       const decision = evalExit(pos, P, now());
       if (decision.action === "sell") {
@@ -2442,7 +2460,12 @@ export function createAutopilotEngine(deps) {
       // winners on this coin typically hold, cap our hold near that (just under, ×0.9) so we're
       // OUT around when they sell, not riding past them. Bounded 20s..6min for a scalp copy. Stays
       // null until a wallet's hold style has accrued (Phase 1 data), so it's a graceful no-op early.
-      smartHoldMs: (sm && sm.holdMsCap > 0) ? Math.max(20_000, Math.min(360_000, Math.round(sm.holdMsCap * 0.9))) : null
+      smartHoldMs: (sm && sm.holdMsCap > 0) ? Math.max(20_000, Math.min(360_000, Math.round(sm.holdMsCap * 0.9))) : null,
+      // INSIDER-LAUNCH machine: a KNOWN/linked wallet DEPLOYED this coin and we got in early. The
+      // coin doesn't have to last — the dev-dump tripwire (manageExits) flips us out 100% the instant
+      // the creator wallet sells, beating the rug out the door. devWallet = the creator we watch.
+      insider: Boolean(row._smartMoney && row._smartMoney.insider),
+      devWallet: (row._smartMoney && row._smartMoney.devWallet) || dev || null
     };
     state.open.push(pos);
     state.recentApeNames[normSym(sym)] = now(); // remember the NAME to block clone-swarm pile-ins

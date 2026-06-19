@@ -220,6 +220,7 @@ const pumpPortalStream = createPumpPortalStream({
   // Instant dev-watch: every pump.fun creation carries its creator wallet.
   onCreation: (entry) => {
     void handlePumpPortalCreationForDevWatch(entry).catch(() => {});
+    try { recordInsiderLaunch(entry); } catch {}   // INSIDER-LAUNCH machine: known/linked wallet just deployed
   },
   // Live smart-money capture: record early buyers the instant they trade (see recordEarlyBuyer).
   onTrade: (mint, trade) => recordEarlyBuyer(mint, trade)
@@ -1339,7 +1340,8 @@ function smartMoneyScore(mint) {
 // low-MC pocket. Re-enable explicitly with AUTOPILOT_COPY_TRADE=1 ONLY after it proves +EV in paper.
 const COPY_TRADE_ENABLED = process.env.AUTOPILOT_COPY_TRADE === "1";
 function smartMoneyReady() {
-  if (!COPY_TRADE_ENABLED) return false;            // kill switch — no copy/smart-money entries
+  if (hasFreshInsiderLaunch()) return true;         // INSIDER LAUNCHES always active (rare, high-conviction, not the firehose)
+  if (!COPY_TRADE_ENABLED) return false;            // kill switch — no GENERAL copy/smart-money entries
   if (KOL_WALLETS.size > 0 || autoKolWallets.size > 0) return true;
   if (kolCopyFeedCache.rows && kolCopyFeedCache.rows.length > 0) return true; // live KOL copy candidates
   if (winnerFollowCache.rows && winnerFollowCache.rows.length > 0) return true; // our proven winners are buying NOW
@@ -1393,6 +1395,16 @@ function autopilotReadiness() {
 async function smartMoneyFeed() {
   const out = [];
   const seen = new Set();
+  // INSIDER-LAUNCH machine — ALWAYS active (bypasses the copy kill switch: these are rare, high-
+  // conviction known-wallet LAUNCHES, not the generic copy firehose the switch guards). Highest
+  // priority — a proven/linked operator just deployed; ride it early, dev-dump tripwire bails ahead.
+  try {
+    for (const r of await insiderFeedRows()) {
+      if (!r || !r.tokenMint || seen.has(r.tokenMint)) continue;
+      seen.add(r.tokenMint); out.push(r);
+    }
+  } catch {}
+  if (!COPY_TRADE_ENABLED) return out;              // the GENERAL copy path stays off unless enabled
   // TOP PRIORITY: coins our OWN proven-winner wallets are buying RIGHT NOW (winner-follow poller,
   // Solana Tracker live trades). A proven wallet's fresh buy is the strongest copy signal we have —
   // 2+ deduped winners (or a KOL) marks it proven, which the engine enters instantly (skips the
@@ -2198,6 +2210,148 @@ async function pollSnipeXClout() {
 }
 setInterval(() => { void pollSnipeXClout(); }, 15_000);
 
+// ---------------------------------------------------------------------------
+// INSIDER-LAUNCH MACHINE — bet the OPERATOR, not the coin. The instant a KNOWN/linked wallet (a
+// tracked KOL, a proven winner, or a funding-cluster sibling of one) DEPLOYS a coin, get in early
+// and ride the launch pump (the operator's followers/bundle pile in) — then bail before the rug via
+// the dev-dump tripwire. The coin doesn't have to last; we just have to be EARLY and OUT AHEAD.
+const insiderLaunches = new Map();   // mint -> { creator, symbol, tier, why, at, mc, mcAt, dumped }
+const insiderDevSold = new Set();    // mints whose creator has SOLD -> the engine's dev-dump tripwire fires
+
+// Tier a creator wallet by how proven/linked it is (null = not a known operator -> skip).
+function insiderLaunchTier(creator) {
+  const w = String(creator || "").trim();
+  if (!w) return null;
+  if (isKolWallet(w)) return { tier: 3, why: "kol" };
+  const rec = walletObs.get(w);
+  const ct = copyTierForWalletRecord(rec);
+  if (ct === "A" || ct === "B") return { tier: 3, why: "winner" };
+  if (ct === "C" || ct === "probe") return { tier: 2, why: "linked" };
+  // ANY KNOWN WALLET WHOSE LAUNCHES REACH A DECENT MC (the user's "any wallet known to get to a
+  // decent point even before a rug"). We exit before the rug (rug-flow tripwire), so a pump-then-rug
+  // dev is a valid target as long as their launches reach a sellable peak. Sourced from our own dev
+  // observatory: rep.runners = past launches that ran; rep.avgPeak = their launches' average peak %.
+  const rep = (typeof combinedDevRep === "function") ? combinedDevRep(w) : null;
+  if (rep && (rep.runners >= 1 || (rep.trades >= 3 && rep.avgPeak >= 60))) {
+    return { tier: rep.runners >= 2 ? 3 : 2, why: "dev-pumps", avgPeak: rep.avgPeak || 0 };
+  }
+  if (ct === "blocked") return null;                       // a copy-loser with NO launch pedigree -> skip
+  const cid = clusterIdFor(w);                             // funding-cluster sibling of a known operator?
+  if (cid && cid !== w) {
+    if (isKolWallet(cid) || isWinnerWallet(walletObs.get(cid))) return { tier: 2, why: "cluster" };
+    const crep = (typeof combinedDevRep === "function") ? combinedDevRep(cid) : null;
+    if (crep && crep.runners >= 1) return { tier: 2, why: "cluster-dev" };   // sibling is a proven pump-dev
+  }
+  return null;
+}
+
+function recordInsiderLaunch(entry) {
+  try {
+    const creator = String(entry?.event?.traderPublicKey || "").trim();
+    const mint = String(entry?.mint || "").trim();
+    if (!creator || !mint || insiderLaunches.has(mint)) return;
+    const t = insiderLaunchTier(creator);
+    if (!t) return;
+    const symbol = String(entry?.event?.symbol || "???");
+    insiderLaunches.set(mint, { creator, symbol, tier: t.tier, why: t.why, at: Date.now(), mc: 0, mcAt: 0, dumped: false });
+    console.log(`[autopilot:info] 🧬 INSIDER LAUNCH $${symbol} — ${t.why} ${creator.slice(0, 4)}..${creator.slice(-4)} (tier ${t.tier})`);
+    if (insiderLaunches.size > 400) { const oldest = insiderLaunches.keys().next().value; insiderLaunches.delete(oldest); }
+  } catch {}
+}
+
+// Surface FRESH insider launches (last ~6 min — we want EARLY) as TOP-priority copy rows for the
+// engine. Enriched with live MC from the free pump frontend-api (cached 20s). Dropped once dumped.
+async function insiderFeedRows() {
+  const now = Date.now();
+  const fresh = [...insiderLaunches.entries()]
+    .filter(([mint, r]) => !r.dumped && !insiderDevSold.has(mint) && now - r.at < 6 * 60_000)
+    .sort((a, b) => b[1].tier - a[1].tier || b[1].at - a[1].at)
+    .slice(0, 6);
+  const rows = [];
+  for (const [mint, r] of fresh) {
+    if (!r.mc || now - (r.mcAt || 0) > 20_000) {
+      try {
+        const j = await fetchJson(`https://frontend-api-v3.pump.fun/coins/${mint}`, { timeoutMs: 6000, headers: { "User-Agent": "Mozilla/5.0", accept: "application/json" } }).catch(() => null);
+        r.mc = Number(j && (j.usd_market_cap || j.market_cap)) || 0; r.mcAt = now;
+      } catch {}
+    }
+    if (!(r.mc > 0)) continue;
+    // GET IN LOW — the whole edge is entering early with room to the operator's typical peak (in by
+    // ~4k -> 12k = a 3x). Past ~$8k the early-entry edge is mostly gone, so don't chase it up there.
+    if (r.mc > 8000) continue;
+    rows.push({
+      tokenMint: mint,
+      symbol: r.symbol,
+      marketCap: r.mc,
+      liquidityUsd: 0, // pump curve: unknown-liq is KEPT by the engine's known-thin-only gate
+      source: "insider",
+      _smartMoney: { insider: true, kol: r.tier >= 3, winners: r.tier, exitMult: 1.6, devWallet: r.creator, why: r.why, source: "insider_launch" }
+    });
+  }
+  return rows;
+}
+
+function hasFreshInsiderLaunch() {
+  const now = Date.now();
+  for (const r of insiderLaunches.values()) if (!r.dumped && now - r.at < 6 * 60_000) return true;
+  return false;
+}
+
+// RUG-FLOW WATCHER (the SMART tripwire). Naive "creator sold -> exit" gets HEAD-FAKED: operators who
+// know they're copy-traded flip the CREATOR wallet instantly to shake followers, then PUMP with ALTS.
+// So we read the whole operator FLOW from swap-api (per-wallet bought/sold in SOL) and only bail when a
+// MAIN PUMPER — a linked/cluster alt or a top accumulator that actually drove the price — EXITS its
+// position. The creator's early bait-flip is IGNORED while alts are still accumulating. (The engine's
+// liquidity-pull + tight stop still cover a genuine instant-rug inside that window.) Trickle/crash-safe.
+let _insiderRugPolling = false;
+async function pollInsiderRugWatch() {
+  if (_insiderRugPolling) return;
+  _insiderRugPolling = true;
+  try {
+    const now = Date.now();
+    const watch = [...insiderLaunches.entries()].filter(([m, r]) => !r.dumped && !insiderDevSold.has(m) && now - r.at < 25 * 60_000).slice(0, 6);
+    for (const [mint, r] of watch) {
+      try {
+        const j = await fetch(`https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=100`, { headers: { accept: "application/json" } }).then((x) => x.ok ? x.json() : null).catch(() => null);
+        const trades = Array.isArray(j) ? j : (j && j.trades) || [];
+        if (!trades.length) continue;
+        // Per-wallet bought/sold SOL on this coin = the operator flow.
+        const flow = new Map();
+        for (const t of trades) {
+          const a = String(t.userAddress || t.user || "").trim(); if (!a) continue;
+          const sol = Number(t.amountSol || t.quoteAmount || 0) || 0;
+          const side = String(t.type || t.side || "").toLowerCase();
+          const e = flow.get(a) || { bought: 0, sold: 0 };
+          if (side === "buy") e.bought += sol; else if (side === "sell") e.sold += sol;
+          flow.set(a, e);
+        }
+        const creator = r.creator;
+        const creatorCluster = clusterIdFor(creator);
+        // The PUMPERS that drove it: the biggest real accumulators (>= 0.3 SOL bought).
+        const pumpers = [...flow.entries()].filter(([, e]) => e.bought >= 0.3).sort((x, y) => y[1].bought - x[1].bought).slice(0, 5);
+        let rug = false, why = "";
+        for (const [a, e] of pumpers) {
+          if (a === creator && now - r.at < 30_000) continue;                 // creator bait-flip window: ignore
+          const linked = a !== creator && clusterIdFor(a) === creatorCluster && creatorCluster !== a;
+          const dumpFrac = e.sold / Math.max(e.bought, 0.0001);
+          const bar = linked ? 0.4 : 0.55;                                    // linked alt dumping = lower bar (user: it matters more)
+          if (dumpFrac >= bar && e.sold >= 0.2) { rug = true; why = `${linked ? "linked alt" : "main pumper"} ${a.slice(0, 4)}.. exited ${Math.round(dumpFrac * 100)}% of its bag`; break; }
+        }
+        // Genuine creator ABANDON (NOT the head-fake): creator sold real size, NO alts still pumping, past the window.
+        const cre = flow.get(creator) || { bought: 0, sold: 0 };
+        const altsPumping = pumpers.some(([a, e]) => a !== creator && (e.bought - e.sold) > 0.2);
+        if (!rug && cre.sold >= 0.3 && !altsPumping && now - r.at >= 30_000) { rug = true; why = "creator abandoned, no alt support"; }
+        if (rug) { insiderDevSold.add(mint); r.dumped = true; console.log(`[autopilot:info] 🚨 RUG-FLOW ${r.symbol}: ${why} — tripwire armed`); }
+      } catch {}
+      await new Promise((res) => setTimeout(res, 150));
+    }
+    if (insiderDevSold.size > 2000) insiderDevSold.clear();
+  } finally { _insiderRugPolling = false; }
+}
+setInterval(() => { void pollInsiderRugWatch(); }, 6000);
+
+function devSoldForMint(mint) { return insiderDevSold.has(String(mint || "").trim()); }
+
 const autopilotEngine = createAutopilotEngine({
   exitMs: 1000,
   huntMs: 5000,
@@ -2212,6 +2366,8 @@ const autopilotEngine = createAutopilotEngine({
   smartMoney: (mint) => smartMoneyScore(mint),
   smartMoneyReady: () => smartMoneyReady(),
   smartMoneyFeed: async () => smartMoneyFeed(),
+  // INSIDER-LAUNCH dev-dump tripwire: the engine exits 100% the instant a launch's creator sells.
+  devSold: (mint) => devSoldForMint(mint),
   getReadiness: () => autopilotReadiness(),   // SELF-ARM: trade only once the brain has learned enough edge
 
   callerIntel: (mint) => telegramCallerIntelForMint(mint),

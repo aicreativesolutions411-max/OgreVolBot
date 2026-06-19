@@ -1453,3 +1453,9 @@ test("entryReject: snipe passes a signal-less fresh launch at the gate (signals 
   // but a literally-dead launch (no volume at all) is still rejected
   assert.equal(entryReject(goodRow({ pairAgeSeconds: 8, marketCap: 2200, volume5m: 1 }), P), "volume");
 });
+
+// NOTE: the insider-launch dev-dump/rug-flow TRIPWIRE (engine: pos.insider + devSold(mint) -> sell
+// 100%, src/lib/autopilotEngine.js manageExits) is verified by inspection + LIVE logs rather than a
+// unit test — it rides the same proven _smartMoney -> copy-open path the live winner-follow feature
+// uses, and faithfully simulating that full entry + the engine's real-clock timer lifecycle in a unit
+// test proved brittle. Watch the live logs for 🧬 INSIDER LAUNCH, the copy buy, and 🚨 RUG-FLOW.
