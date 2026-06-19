@@ -1205,10 +1205,20 @@ export function createAutopilotEngine(deps) {
   const logRing = [];
   const lastFeed = new Map(); // mint -> {mc, liq, at} — fresh prices from the live feed
 
+  const _logDedup = new Map(); // msg -> last console-emit time (noise guard)
   function record(level, msg, data) {
     const entry = { at: now(), level, msg, data: data || null };
-    logRing.push(entry);
+    logRing.push(entry);                       // full history kept for the /log endpoint (never deduped)
     if (logRing.length > 400) logRing.shift();
+    // LOG NOISE GUARD: the hunt loop re-evaluates the SAME coins every ~5s, so identical info lines
+    // (SNIPE / Skipping / Avoiding ...) repeated ~12x/min and blew out the log stream. Suppress an
+    // IDENTICAL info message from the console/live feed within 45s. Warnings/errors ALWAYS emit.
+    if (level !== "warn" && level !== "error") {
+      const t = now();
+      if (t - (_logDedup.get(msg) || 0) < 45_000) return;
+      _logDedup.set(msg, t);
+      if (_logDedup.size > 2000) { for (const [k, v] of _logDedup) if (t - v > 120_000) _logDedup.delete(k); }
+    }
     try {
       log(level, msg, data);
     } catch {}

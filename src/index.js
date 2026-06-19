@@ -46393,7 +46393,12 @@ function recordRpcMetric(durationMs, error = null, label = "rpc", providerName =
 
 function logRpcMetric({ label = "rpc", durationMs = 0, error = null, providerName = CONFIG.rpcProviderName, providerHost = CONFIG.rpcUrlHost } = {}) {
   const rateLimited = Boolean(error && isRetryableRpcError(error));
-  if (!error && durationMs < 250) return;
+  // LOG NOISE: every OK RPC read was logged if it took >=250ms (i.e. nearly all of them), which
+  // buried the useful lines and rotated Render's log retention down to minutes. Log only ERRORS,
+  // rate-limits, and genuinely SLOW ok calls (>RPC_LOG_SLOW_MS, default 2.5s). Ordinary ok reads
+  // are not logged. (rpc cost/metrics are unaffected — this only controls the console line.)
+  const slowMs = Math.max(250, Number(process.env.RPC_LOG_SLOW_MS) || 2500);
+  if (!error && durationMs < slowMs) return;
   try {
     console.info(JSON.stringify({
       event: "rpc_call",
