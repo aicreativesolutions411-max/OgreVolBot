@@ -808,8 +808,8 @@ export function popIgnitionScore(m) {
   const accel = Number(m && m.accel) || 0;           // inflowNow / its recent baseline inflow
   const buyShare = Number(m && m.buyShare) || 0;     // buys / (buys+sells) in the latest bucket
   const uniq = Number(m && m.uniqBuyers) || 0;       // distinct buyers in the latest bucket
-  if (inflowNow < 0.25) return 0;                    // a dust burst is not a real pop
-  if (buyShare < 0.6) return 0;                       // sellers still in control = not igniting
+  if (inflowNow < 0.18) return 0;                    // a dust burst is not a real pop
+  if (buyShare < 0.58) return 0;                      // sellers still in control = not igniting
   let s = 0;
   if (accel >= 5) s += 42; else if (accel >= 3) s += 32; else if (accel >= 2) s += 20; else if (accel >= 1.4) s += 10; else return 0;  // ACCELERATION = the core leading tell
   if (buyShare >= 0.85) s += 22; else if (buyShare >= 0.75) s += 15; else if (buyShare >= 0.65) s += 8;  // sellers drying up
@@ -818,7 +818,7 @@ export function popIgnitionScore(m) {
   if (m && m.smart) s += 12;                          // smart money in the burst = front-run signal
   return Math.min(100, s);
 }
-export const POP_IGNITION_FIRE = 48;   // ignition score at/above which a coin is "popping" -> top-priority entry
+export const POP_IGNITION_FIRE = 42;   // ignition score at/above which a coin is "popping" -> top-priority entry
 
 // STANDOUT-SIGNAL score for the SNIPER — the hard-to-fake "this launch sticks out" tells, OR-gated
 // (any ONE qualifies; more = higher score -> bigger conviction). Pure + exported for tests. Reads the
@@ -2470,7 +2470,7 @@ export function createAutopilotEngine(deps) {
       let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * confl * clusterMult * readyMult * (brake.sizeMult || 1), state.maxTradeSol));
       // SNIPE BET CAP — moonshot math needs MANY small EVEN bets so a rare 4x pays for the losers; no
       // single snipe may exceed 5% of bank (live proof: one 16%-of-bank snipe ate ~80% of a session loss).
-      if (P.snipe) size = Math.max(state.minTradeSol, Math.min(size, state.bank * 0.05));
+      if (P.snipe || P.pop) size = Math.max(state.minTradeSol, Math.min(size, state.bank * 0.05));   // snipe/pop: small even bets
       if (probeNow) size = state.minTradeSol;
       if (!canOpen(state, size)) break;
       await openPosition(cand.r, size, cand.fs, dev, rep, sm, P);
@@ -2556,7 +2556,7 @@ export function createAutopilotEngine(deps) {
         const cr = clusterRisk ? clusterRisk(r.tokenMint) : null;
         const clusterMult = cr && cr.risk > 0 ? Math.max(0.5, 1 - cr.risk * 0.4) : 1;
         let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * confl * clusterMult * readyMult * edgeMult * (brake.sizeMult || 1), state.maxTradeSol));
-        if (P.snipe) size = Math.max(state.minTradeSol, Math.min(size, state.bank * 0.05));   // snipe bet cap (moonshot math — small even bets)
+        if (P.snipe || P.pop) size = Math.max(state.minTradeSol, Math.min(size, state.bank * 0.05));   // snipe/pop bet cap — small even bets
         if (!canOpen(state, size)) break;
         record("info", `🐳 copy-trade ${r.symbol || shortMint(r.tokenMint)} @ MC $${Math.round(Number(r.marketCap) || 0)} — ${sm.kolProbe ? "probe " : ""}${sm.winners || 0} winner${sm.edge != null ? ` · edge ${sm.edge}x` : ""}${sm.apeScore != null ? ` · ape ${sm.apeScore}` : ""} → conv ${conv.toFixed(2)}`);
         await openPosition(r, size, P.liquid ? liquidScore(r) : freshScore(r), dev, rep, sm, P);

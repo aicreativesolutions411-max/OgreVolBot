@@ -2412,7 +2412,13 @@ async function pollPopRadar() {
   try {
     const now = Date.now();
     for (const [m, at] of popHeldMints) { if (now - at > 8 * 60_000) popHeldMints.delete(m); }
-    const watch = [...new Set([...(lastFreshMints || []).slice(0, 14), ...popHeldMints.keys()])].slice(0, 22);
+    // WATCHLIST = the freshest pump.fun launches straight from the 24/7 creation stream (these are
+    // already trade-subscribed, so onTrade feeds popTrades in real time + swap-api fills the rest).
+    // This is the fix for the radar being STARVED: it used to read lastFreshMints, which only the
+    // FRESH feed populates — and pop mode never calls the fresh feed, so the watchlist was empty.
+    let creations = [];
+    try { creations = pumpPortalStream.getCreationCandidates({ maxAgeMs: 20 * 60_000, limit: 60 }).map((r) => r.tokenMint).filter(Boolean); } catch {}
+    const watch = [...new Set([...creations.slice(0, 24), ...(lastFreshMints || []).slice(0, 10), ...popHeldMints.keys()])].slice(0, 30);
     for (let i = 0; i < watch.length; i += 8) {           // swap-api fast-poll the watchlist for NEW trades
       await Promise.all(watch.slice(i, i + 8).map(async (mint) => {
         let j = null;
