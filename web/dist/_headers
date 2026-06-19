@@ -8,6 +8,14 @@
 /config.js
   Cache-Control: no-store
 
+# The service worker MUST be revalidated on every load. If it is cached, browsers stay pinned to
+# an OLD worker (which then hijacks navigations like /Ogreverse into the wrong page) until the cache
+# expires — sometimes hours. no-store guarantees the newest worker is always picked up immediately.
+/sw.js
+  Cache-Control: no-store
+/manifest.json
+  Cache-Control: no-cache
+
 # app.js / styles.css / overrides get a fresh ?v=<buildId> each deploy, so cache hard.
 /app.js
   Cache-Control: public, max-age=31536000, immutable
