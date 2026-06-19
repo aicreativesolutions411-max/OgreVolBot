@@ -797,6 +797,16 @@ export function looksLikeJunkSymbol(sym) {
   return false;
 }
 
+// A buy that fails for these reasons will fail again ALL session, so blacklist the mint and stop
+// re-attempting it (live log: a Token-2022 coin got re-tried 8x in a row — pure wasted cycles + churn).
+function isUnbuyable(msg) { return /safety|token-?2022|trusted .*pool|no .*route|unsupported|honeypot/i.test(String(msg || "")); }
+function noteUnbuyable(state, mint) {
+  if (!state || !mint) return;
+  if (!(state.unbuyable instanceof Set)) state.unbuyable = new Set();
+  state.unbuyable.add(mint);
+  if (state.unbuyable.size > 800) { const a = [...state.unbuyable]; state.unbuyable = new Set(a.slice(a.length - 600)); }
+}
+
 // POP IGNITION — score how hard a coin is "popping RIGHT NOW" from its live trade flow (computed by
 // index.js PopRadar over rolling ~3s buckets off swap-api + the PumpPortal stream). The LEADING tells
 // of a pop STARTING — get in as it ignites, not after: net SOL inflow ACCELERATING vs its own baseline,
@@ -2190,6 +2200,7 @@ export function createAutopilotEngine(deps) {
     const nameCoolMs = symbolCooldownMs(P);
     const scoredAll = rows
       .filter((r) => r && r.tokenMint && !held.has(r.tokenMint))
+      .filter((r) => !(state.unbuyable && state.unbuyable.has(r.tokenMint)))   // skip coins that already failed the buy (Token-2022 etc.)
       .filter((r) => (state.coinLosses[r.tokenMint] || 0) < 2)  // stop re-aping a repeat loser
       .filter((r) => (state.coinTrades[r.tokenMint] || 0) < maxFor(r.tokenMint)) // DIVERSIFY (winners earn more re-entries)
       .filter((r) => {
@@ -2326,7 +2337,7 @@ export function createAutopilotEngine(deps) {
     }
 
     let smartRowsForCycle = null;
-    if (smartMoneyReady() && state.open.length < maxNow && openedThisCycle < perCycle) {
+    if (smartMoneyReady() && !P.pop && state.open.length < maxNow && openedThisCycle < perCycle) {
       try { smartRowsForCycle = await smartMoneyFeed(); } catch (e) { record("warn", `smart-money feed: ${e && e.message}`); smartRowsForCycle = []; }
     }
     const freshCycleCap = Array.isArray(smartRowsForCycle) && smartRowsForCycle.length
@@ -2492,7 +2503,7 @@ export function createAutopilotEngine(deps) {
     // momentum scan. LIQUID modes used to opt out (the feed can surface fresh dust); now they take
     // these too but ONLY when the coin has REAL, sellable liquidity (verified below), so a
     // copy-trade can't drag scalp into an unsellable phantom. Non-liquid modes keep the old path.
-    if (smartMoneyReady() && state.open.length < maxNow && openedThisCycle < perCycle) {
+    if (smartMoneyReady() && !P.pop && state.open.length < maxNow && openedThisCycle < perCycle) {
       let smRows = smartRowsForCycle;
       if (!Array.isArray(smRows)) {
         smRows = [];
@@ -2503,6 +2514,7 @@ export function createAutopilotEngine(deps) {
         if (state.open.length >= maxNow) break;
         if (openedThisCycle >= perCycle) break;
         if (!r || !r.tokenMint || held.has(r.tokenMint)) continue;
+        if (state.unbuyable && state.unbuyable.has(r.tokenMint)) continue;   // already failed the buy (Token-2022 etc.)
         if ((state.coinLosses[r.tokenMint] || 0) >= 2) continue; // don't re-ape a repeat loser
         if ((state.coinTrades[r.tokenMint] || 0) >= maxFor(r.tokenMint)) continue; // DIVERSIFY (winners earn more)
         const ns = normSym(r.symbol);
@@ -2621,12 +2633,15 @@ export function createAutopilotEngine(deps) {
       try {
         const res = await buyToken(mint, lamports);
         if (!res || res.ok === false) {
-          record("warn", `buy ${sym} rejected`);
+          if (isUnbuyable((res && res.error) || "")) noteUnbuyable(state, mint);   // don't re-attempt an un-buyable coin
+          record("warn", `buy ${sym} rejected${res && res.error ? `: ${res.error}` : ""}`);
           return;
         }
         tokenAmount = res.tokenAmount || res.outputAmount || null;
       } catch (e) {
-        record("warn", `buy ${sym} failed: ${e && e.message}`);
+        const msg = (e && e.message) || "";
+        if (isUnbuyable(msg)) noteUnbuyable(state, mint);   // Token-2022 / no-trusted-pool = permanently un-buyable this session
+        record("warn", `buy ${sym} failed: ${msg}`);
         return;
       }
       // If a Stop landed while this buy was in flight, sell it straight back so
