@@ -452,6 +452,12 @@ export function freshScore(row) {
   const prov = Number(row.bestPickScore) || 0;
   s += Math.min(15, prov * 0.15);
 
+  // GRADUATION / CURVE-VELOCITY bonus — real SOL accelerating into the bonding curve toward
+  // graduation is the earliest, hardest-to-fake "this one is going" tell. Bounded so it sharpens
+  // the fresh score (lifts a real mover over the bar) without ever dominating it. No-op (0) when
+  // the curve data isn't on the row, so DexScreener-only rows score exactly as before.
+  s += Math.min(20, graduationScore(row) * 0.45);
+
   return s;
 }
 
@@ -565,6 +571,9 @@ export function liquidScore(row) {
   // get-in/get-out engine wants — let it lift a marginal liquid row over the bar. Bounded so it
   // sharpens, never dominates, the depth/flow base score.
   s += Math.min(22, jumpScore(row) * 0.22);
+  // GRADUATION / CURVE-VELOCITY bonus — for a still-bonding liquid mover, real SOL accelerating
+  // toward graduation is a strong, unfakeable continuation tell. Bounded; 0 when no curve data.
+  s += Math.min(16, graduationScore(row) * 0.36);
   return s;
 }
 
@@ -574,24 +583,43 @@ export function liquidScore(row) {
 // clamped to the per-trade ceiling by the caller.
 export function convictionMult(row, rep, sm, ci, caps = {}) {
   let c = 1.0;
+  // LEARNED signal weights (self-calibration; see computeSignalEdge). Each signal's conviction
+  // bonus is multiplied by what that signal has ACTUALLY earned in our realized trade history
+  // (bounded 0.5..1.5; 1.0 = neutral / no sample yet). This closes the loop: signals that
+  // predict winners get leaned into, ones that don't quietly fade — automatically, the longer
+  // it runs. Weights only ever scale the POSITIVE bonuses; safety penalties stay full-strength.
+  const W = caps.weights || null;
+  const wt = (k) => { const w = W && Number(W[k]); return Number.isFinite(w) ? Math.max(0.5, Math.min(1.5, w)) : 1; };
   if (rep) {
-    if (rep.runners >= 2 && rep.rugs === 0) c += 0.4;        // proven runner-dev
-    else if (rep.runners >= 1 && rep.rugs === 0) c += 0.2;   // promising
-    else if (rep.rugs >= 1 && rep.runners === 0) c -= 0.3;   // rug-leaning
+    if (rep.runners >= 2 && rep.rugs === 0) c += 0.4 * wt("dev");   // proven runner-dev
+    else if (rep.runners >= 1 && rep.rugs === 0) c += 0.2 * wt("dev"); // promising
+    else if (rep.rugs >= 1 && rep.runners === 0) c -= 0.3;   // rug-leaning (penalty: never weighted down)
   }
   // SMART MONEY: proven-winner wallets or tracked KOLs already aping this coin.
   // Bonus signal only — boosts conviction, never gates entry. Bonded, never huge.
   if (sm) {
-    if (sm.kol) c += 0.3;                                    // a tracked KOL is in early buyers
+    if (sm.kol) c += 0.3 * wt("kol");                        // a tracked KOL is in early buyers
     else if (sm.kolProbe) c += 0.05;                          // unproven KOL probe: learn small, don't size like edge
-    if (sm.winners >= 2) c += 0.3;                           // multiple proven winners aping
-    else if (sm.winners >= 1) c += 0.2;                      // one proven winner aping
+    if (sm.winners >= 2) c += 0.3 * wt("winners");           // multiple proven winners aping
+    else if (sm.winners >= 1) c += 0.2 * wt("winners");      // one proven winner aping
   }
   // CALLER INTEL: a Telegram caller / channel with a PROVEN call→2x record just called this
   // coin. Pure bonus conviction (never a veto), already bounded + sample-gated by the
   // callerSignal scorer — front-runs the crowd that follows good alpha groups. Stays 0 until
   // a caller/channel has a real resolved record, so it can't be gamed by a fresh account.
-  if (ci && ci.convictionDelta > 0) c += ci.convictionDelta;
+  if (ci && ci.convictionDelta > 0) c += ci.convictionDelta * wt("caller");
+  // ENTRY-BAND TIMING: the proven winner-wallets we're following have a HISTORICAL entry-MC band
+  // (where they've actually bought). A coin whose MC sits INSIDE that band means we're entering at
+  // their proven point — front-running them where it's worked before. Pure bonus, bounded, no veto.
+  const mc = Number(row.marketCap) || 0;
+  const bandLo = Number(sm && sm.entryMcLo) || 0;
+  const bandHi = Number(sm && sm.entryMcHi) || 0;
+  if (mc > 0 && bandLo > 0 && bandHi > bandLo && mc >= bandLo && mc <= bandHi) c += 0.15 * wt("entryBand");
+  // FLOW-SURGE: buy-flow / volume ACCELERATING vs the prior read (the hunt loop attaches the
+  // surge strength as row._flowSurge). Rising flow catches the turn AS it happens rather than
+  // after; bounded so it sharpens conviction without dominating. Helps clear the gate + sizes up.
+  const surge = Number(row._flowSurge) || 0;
+  if (surge > 0) c += Math.min(0.3, surge) * wt("flowSurge");
   const buys = Number(row.buys5m) || 0;
   const sells = Number(row.sells5m) || 0;
   const vol = Number(row.volume5m) || 0;
@@ -636,6 +664,78 @@ export function convictionMult(row, rep, sm, ci, caps = {}) {
   // score can't predict a rug, the only protection is a smaller bet on every unproven coin;
   // proven-dev / smart-money setups still size up to 1.6x where the edge is real.
   return Math.max(0.5, Math.min(proven ? provenCap : unprovenCap, c));
+}
+
+// CONFLUENCE multiplier — size UP HARD when multiple INDEPENDENT hard signals stack on the same
+// coin. convictionMult's per-signal bonuses saturate at its 1.6x proven cap, so the rare gold
+// setup (proven dev + winner wallets + trusted caller + notable-X all firing) bets identically to
+// a single lukewarm signal. That leaves the best edge on the table. Independent confirmation is
+// statistically far safer than any one signal, so this lifts the ceiling ONLY when >=2 distinct
+// signal TYPES agree — applied on TOP of convictionMult and still clamped to the per-trade ceiling
+// (maxTradeSol) by the caller, so absolute risk never exceeds the hard cap. Pure + exported.
+//   row may carry xNotable/xClout (notable-X) and _smartMoney.earlyAlpha (first-buyer roster);
+//   snipeRec (when present) carries already-resolved signal flags from snipeSignalScore.
+export function confluenceMult(row, rep, sm, ci, snipeRec) {
+  let n = 0;
+  if (rep && rep.runners >= 1 && rep.rugs === 0) n += 1;                       // proven runner-dev
+  if (sm && (sm.kol || sm.winners >= 1)) n += 1;                              // smart money in early
+  if (ci && ci.trusted) n += 1;                                              // proven caller called it
+  const xHot = (row && (row.xNotable || Number(row.xClout) >= 1)) || (snipeRec && snipeRec.signals && snipeRec.signals.x);
+  if (xHot) n += 1;                                                          // notable-X clout
+  if (row && row._smartMoney && row._smartMoney.earlyAlpha) n += 1;          // first-buyer roster alpha
+  if (n <= 1) return 1;          // a lone signal sizes normally (convictionMult already handled it)
+  if (n === 2) return 1.15;      // two independent confirmations
+  if (n === 3) return 1.45;      // strong confluence
+  return 1.8;                    // 4+ independent signals — the gold setup, press it (still capped)
+}
+
+// GRADUATION / CURVE-VELOCITY score — proximity to the pump.fun Raydium graduation threshold plus
+// the velocity of real SOL flowing into the bonding curve. This is the ONE tell a scammer can't
+// fake: real SOL is real SOL, and a coin accelerating toward graduation is the strongest "this one
+// is going" signal — it fires BEFORE price/MC visibly move, so it's the earliest possible entry.
+// Built only from the free in-memory PumpPortal trade stream (no RPC, no paid feed). Pure; returns
+// 0 when the curve data isn't on the row (graceful — a DexScreener-only row is never penalized).
+//   row.bondingPct  — 0..1 fraction of the curve filled (index.js derives it from vSolInBondingCurve)
+//   row.curveVelSol — SOL/min flowing into the curve over the recent trade window
+export function graduationScore(row) {
+  let s = 0;
+  const pct = Number(row && row.bondingPct);
+  if (Number.isFinite(pct) && pct > 0) {
+    // Sweet spot 35-85% filled = committed momentum with room left before graduation (post-grad
+    // the curve pop is already gone). Building (15-35%) earns less; nearly-graduated is small+late.
+    if (pct >= 0.35 && pct <= 0.85) s += 22;
+    else if (pct >= 0.15 && pct < 0.35) s += 12;
+    else if (pct > 0.85 && pct < 1) s += 9;
+    else if (pct >= 0.02) s += 4;
+  }
+  const vel = Number(row && row.curveVelSol);
+  if (Number.isFinite(vel) && vel > 0) {
+    if (vel >= 3) s += 24;          // ripping toward graduation
+    else if (vel >= 1.2) s += 16;
+    else if (vel >= 0.5) s += 9;
+    else if (vel >= 0.2) s += 4;
+  }
+  return s;
+}
+
+// FLOW-SURGE — detect buy-flow / turnover ACCELERATING vs this coin's previous read. Returns a
+// bounded 0..0.3 conviction bonus and updates the per-mint cache in place. A coin whose buy SHARE
+// and VOLUME are both RISING is turning up right now — we want to be early on that move, not late.
+// Pure aside from the cache it owns; needs two reads of the same mint to fire (0 on the first).
+export function flowSurge(cache, mint, row, nowMs) {
+  if (!cache || !mint) return 0;
+  const vol = Number(row.volume5m) || 0;
+  const buys = Number(row.buys5m) || 0;
+  const sells = Number(row.sells5m) || 0;
+  const flow = (buys + sells) > 0 ? buys / (buys + sells) : 0.5;
+  const prev = cache.get(mint);
+  if (cache.size > 6000) { for (const [k, v] of cache) { if (nowMs - v.at > 300_000) cache.delete(k); } }
+  cache.set(mint, { vol, flow, at: nowMs });
+  if (!prev || !(nowMs - prev.at > 0) || nowMs - prev.at > 180_000) return 0; // need a recent prior read
+  let s = 0;
+  if (flow >= 0.55 && flow > prev.flow + 0.05) s += 0.15;      // buy-share rising off a buy-led base
+  if (vol > 0 && prev.vol > 0 && vol > prev.vol * 1.4) s += 0.15; // turnover accelerating (growing interest)
+  return Math.min(0.3, s);
 }
 
 // STANDOUT-SIGNAL score for the SNIPER — the hard-to-fake "this launch sticks out" tells, OR-gated
@@ -1014,6 +1114,10 @@ function freshState(opts) {
   const cal = opts.calibration || {};
   const calScoreBonus = Math.max(0, Math.min(12, Number(cal.minScoreBonus) || 0));
   const calSizeMult = Math.max(0.5, Math.min(1, Number(cal.sizeFracCapMult) || 1));
+  // LEARNED per-signal weights (computeSignalEdge): bounded 0.5..1.5 multipliers for each signal's
+  // conviction bonus, derived from realized per-signal EV. Null/absent = neutral (treated as 1.0),
+  // so this is a pure UPGRADE that only takes effect once a real sample exists. Sizing-only.
+  const signalWeights = (cal && cal.signalWeights && typeof cal.signalWeights === "object") ? cal.signalWeights : null;
   return {
     mode: opts.mode || "normal",
     churn: lowChurn ? "low" : "normal",
@@ -1889,6 +1993,7 @@ export function createAutopilotEngine(deps) {
           entryVol5m: pos.entryVol5m, entryBuys: pos.entryBuys, entrySells: pos.entrySells,
           fs: pos.fs, peakPct: Math.round(pos.peakPct || 0), pnl: round(pnl, 4),
           win, rugged, reason, source, copyTier: pos.copyTier || null, copyEdge: pos.copyEdge ?? null,
+          signals: pos.signalFlags || null,   // which hard signals fired at entry (signal-EV learning)
           mode: state.mode, churn: state.churn, paper: !state.live, at: now()
         });
       } catch {}
@@ -2028,6 +2133,9 @@ export function createAutopilotEngine(deps) {
     const perCycle = Math.max(1, tune.perCycle || 1);
     let openedThisCycle = 0;
     let historyChecks = 0;
+    // Per-mint flow cache for FLOW-SURGE acceleration detection (ephemeral; survives across cycles
+    // on state, re-created if a restore dropped the Map type). Owned/pruned by flowSurge().
+    const flowCache = (state.flowCache instanceof Map) ? state.flowCache : (state.flowCache = new Map());
 
     // ===== SELF-ARM READINESS — "it starts when it feels it has enough" =====================
     // The bot stays LIVE and learning continuously; this decides WHEN it actually starts taking
@@ -2173,7 +2281,8 @@ export function createAutopilotEngine(deps) {
         record("info", `🎯 SNIPE ${cand.r.symbol} — signals [${Object.keys(snipeRec.signals).join(",") || "?"}] score ${Math.round(snipeRec.score)}`);
       }
       // Conviction = confluence of proven-dev rep + buy flow + freshness + score + smart money + caller intel.
-      const conv = convictionMult(cand.r, rep, sm, ci, { unprovenCap: P.unprovenConvCap, provenCap: P.provenConvCap, scalp: P.liquid });
+      cand.r._flowSurge = flowSurge(flowCache, cand.r.tokenMint, cand.r, nowMs);   // acceleration bonus (#5)
+      const conv = convictionMult(cand.r, rep, sm, ci, { unprovenCap: P.unprovenConvCap, provenCap: P.provenConvCap, scalp: P.liquid, weights: state.signalWeights });
       if (sm) record("info", `🐳 smart money on ${cand.r.symbol} — ${sm.kol ? "KOL " : ""}${sm.winners || 0} winner-wallet(s) → conv ${conv.toFixed(2)}`);
       if (ci && ci.trusted) record("info", `📣 caller intel on ${cand.r.symbol} — ${ci.reason} (+${ci.convictionDelta.toFixed(2)} conv) → conv ${conv.toFixed(2)}`);
       // ADAPTIVE QUALITY GATE (smarter picks): when the tape is risky, take ONLY the
@@ -2228,7 +2337,10 @@ export function createAutopilotEngine(deps) {
         delete state.watching[cand.r.tokenMint]; // held strong across two reads → take it
       }
       // Readiness ramp: scale entry size by learned confidence; a warming-stage PROBE is floor-size.
-      let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * readyMult * (brake.sizeMult || 1), state.maxTradeSol));
+      // CONFLUENCE press (#1): when >=2 INDEPENDENT hard signals stack, size up above the conviction
+      // cap (still clamped to maxTradeSol) — the gold setups earn the biggest bets.
+      const confl = confluenceMult(cand.r, rep, sm, ci, snipeRec);
+      let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * confl * readyMult * (brake.sizeMult || 1), state.maxTradeSol));
       if (probeNow) size = state.minTradeSol;
       if (!canOpen(state, size)) break;
       await openPosition(cand.r, size, cand.fs, dev, rep, sm, P);
@@ -2299,13 +2411,16 @@ export function createAutopilotEngine(deps) {
         }
         const ciRec = callerIntel ? callerIntel(r.tokenMint) : null;
         const ci = ciRec && ciRec.signal ? ciRec.signal : null;
-        const conv = convictionMult(r, rep, sm, ci, { unprovenCap: P.unprovenConvCap, provenCap: P.provenConvCap, scalp: P.liquid });
+        r._flowSurge = flowSurge(flowCache, r.tokenMint, r, nowMs);  // acceleration bonus (#5)
+        const conv = convictionMult(r, rep, sm, ci, { unprovenCap: P.unprovenConvCap, provenCap: P.provenConvCap, scalp: P.liquid, weights: state.signalWeights });
         const minCopyConv = sm.kolProbe ? 0.5 : 1.0;
         if (conv < minCopyConv) continue;                          // proven copies need confluence; probes stay small
         // EDGE-WEIGHTED SIZING: bet BIGGER when the buying wallets are validated printers (btMult>1),
         // smaller when untested/neutral. Bounded 0.6x–1.6x so one number can't blow the size out.
         const edgeMult = sm.edge != null ? Math.max(0.6, Math.min(1.6, sm.edge)) : 0.85;
-        let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * readyMult * edgeMult * (brake.sizeMult || 1), state.maxTradeSol));
+        // CONFLUENCE press (#1): stack independent signals -> size up above the conviction cap.
+        const confl = confluenceMult(r, rep, sm, ci, null);
+        let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * confl * readyMult * edgeMult * (brake.sizeMult || 1), state.maxTradeSol));
         if (!canOpen(state, size)) break;
         record("info", `🐳 copy-trade ${r.symbol || shortMint(r.tokenMint)} @ MC $${Math.round(Number(r.marketCap) || 0)} — ${sm.kolProbe ? "probe " : ""}${sm.winners || 0} winner${sm.edge != null ? ` · edge ${sm.edge}x` : ""}${sm.apeScore != null ? ` · ape ${sm.apeScore}` : ""} → conv ${conv.toFixed(2)}`);
         await openPosition(r, size, P.liquid ? liquidScore(r) : freshScore(r), dev, rep, sm, P);
@@ -2483,6 +2598,26 @@ export function createAutopilotEngine(deps) {
       insider: Boolean(row._smartMoney && row._smartMoney.insider),
       devWallet: (row._smartMoney && row._smartMoney.devWallet) || dev || null
     };
+    // LEARNING FLYWHEEL (#3): record WHICH hard signals fired at entry so self-calibration can
+    // measure each signal's realized EV over time and feed learned weights back into conviction
+    // sizing — leaning into the signals that actually predict winners. Pure capture; no behavior
+    // change here. caller intel is re-read (cheap map lookup) since it isn't passed into openPosition.
+    {
+      let ciSig = null;
+      try { const ciR = callerIntel ? callerIntel(mint) : null; ciSig = ciR && ciR.signal ? ciR.signal : null; } catch {}
+      const bLo = Number(sm && sm.entryMcLo) || 0, bHi = Number(sm && sm.entryMcHi) || 0;
+      pos.signalFlags = {
+        dev: Boolean(rep && rep.runners >= 1 && rep.rugs === 0),
+        kol: Boolean(sm && sm.kol),
+        winners: Boolean(sm && sm.winners >= 1),
+        caller: Boolean(ciSig && ciSig.trusted),
+        x: Boolean(row && (row.xNotable || Number(row.xClout) >= 1)),
+        entryBand: Boolean(entryMc > 0 && bLo > 0 && bHi > bLo && entryMc >= bLo && entryMc <= bHi),
+        flowSurge: Number(row && row._flowSurge) > 0,
+        alpha: Boolean(row && row._smartMoney && row._smartMoney.earlyAlpha),
+        grad: graduationScore(row) >= 20
+      };
+    }
     state.open.push(pos);
     state.recentApeNames[normSym(sym)] = now(); // remember the NAME to block clone-swarm pile-ins
     state.coinTrades[pos.mint] = (state.coinTrades[pos.mint] || 0) + 1; // DIVERSIFY: count session trades per mint

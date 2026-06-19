@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computeCalibration, computeCalibrationByMode, modeScorecard, bucketStats, MIN_SAMPLE, MAX_SCORE_BONUS, MIN_SIZE_MULT } from "../src/lib/selfCalibration.js";
+import { computeCalibration, computeCalibrationByMode, modeScorecard, bucketStats, computeSignalEdge, MIN_SAMPLE, MAX_SCORE_BONUS, MIN_SIZE_MULT, SIGNAL_WEIGHT_SPAN } from "../src/lib/selfCalibration.js";
 
 function trade(over = {}) {
   return { fs: 70, entryMc: 8000, pnl: 0.01, win: true, rugged: false, ...over };
@@ -115,4 +115,39 @@ test("modeScorecard: computes per-mode win-rate, EV, avg-peak, rug-rate", () => 
   assert.equal(sc.grind.wins, 1);
   assert.equal(sc.grind.winRate, 50);
   assert.equal(sc.degen.rugRate, 100);
+});
+
+// ===== PER-SIGNAL EDGE (offense reweighting) ================================================
+test("computeSignalEdge: neutral until the book clears MIN_SAMPLE", () => {
+  const few = Array.from({ length: MIN_SAMPLE - 1 }, () => trade({ signals: { dev: true } }));
+  const { weights, detail } = computeSignalEdge(few);
+  assert.deepEqual(weights, {}, "no learned weights on a thin book");
+  assert.deepEqual(detail, {});
+});
+
+test("computeSignalEdge: a +EV signal earns weight > 1, a -EV signal earns weight < 1 (bounded)", () => {
+  const dev = Array.from({ length: 15 }, () => trade({ pnl: 0.04, win: true, signals: { dev: true } }));
+  const x = Array.from({ length: 15 }, () => trade({ pnl: -0.04, win: false, signals: { x: true } }));
+  const filler = Array.from({ length: 15 }, () => trade({ pnl: 0, win: false, signals: {} }));
+  const { weights } = computeSignalEdge([...dev, ...x, ...filler]);
+  assert.ok(weights.dev > 1, "winning signal is leaned into");
+  assert.ok(weights.x < 1, "losing signal is faded");
+  assert.ok(weights.dev <= 1 + SIGNAL_WEIGHT_SPAN && weights.x >= 1 - SIGNAL_WEIGHT_SPAN, "weights bounded");
+});
+
+test("computeSignalEdge: a rarely-fired signal stays neutral (no weight on noise)", () => {
+  const dev = Array.from({ length: 40 }, () => trade({ pnl: 0.02, win: true, signals: { dev: true } }));
+  const rare = Array.from({ length: 5 }, () => trade({ pnl: 0.5, win: true, signals: { caller: true } }));
+  const { weights } = computeSignalEdge([...dev, ...rare]);
+  assert.equal(weights.caller, undefined, "under MIN_SIGNAL_SAMPLE → no weight even if it looks great");
+});
+
+test("computeCalibration: surfaces signalWeights + signalEdge and notes which signals lean/fade", () => {
+  const dev = Array.from({ length: 15 }, () => trade({ pnl: 0.04, win: true, signals: { dev: true } }));
+  const x = Array.from({ length: 15 }, () => trade({ pnl: -0.04, win: false, signals: { x: true } }));
+  const filler = Array.from({ length: 15 }, () => trade({ pnl: 0, win: false, signals: {} }));
+  const c = computeCalibration([...dev, ...x, ...filler]);
+  assert.ok(c.signalWeights.dev > 1, "calibration exposes the learned dev weight");
+  assert.ok(c.signalEdge.dev && c.signalEdge.dev.n === 15, "signalEdge carries the sub-sample size");
+  assert.ok(c.notes.some((n) => /leaning into signals/.test(n)), "notes explain the lean");
 });

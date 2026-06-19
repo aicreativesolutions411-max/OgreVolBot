@@ -9,6 +9,9 @@ import {
   liquidScore,
   jumpScore,
   convictionMult,
+  confluenceMult,
+  graduationScore,
+  flowSurge,
   autoTune,
   entryReject,
   executableMcReject,
@@ -185,6 +188,66 @@ test("convictionMult: bigger on a proven dev + strong flow, smaller on a rugger"
   assert.ok(hi > 1.2, "high-confluence setup sizes up");
   assert.ok(lo < 0.9, "weak setup + rugger-dev sizes down");
   assert.ok(hi <= 1.6 && lo >= 0.5, "stays within bounds");
+});
+
+// ===== OFFENSE LEVERS =======================================================================
+test("confluenceMult: a lone signal sizes normally, stacked independent signals press up (bounded)", () => {
+  const row = goodRow();
+  const dev = { runners: 1, rugs: 0 };
+  const sm = { winners: 2 };
+  const ci = { trusted: true };
+  assert.equal(confluenceMult(row, dev, null, null, null), 1, "one signal = no press");
+  assert.equal(confluenceMult(row, dev, sm, null, null), 1.15, "two signals");
+  assert.equal(confluenceMult(row, dev, sm, ci, null), 1.45, "three signals");
+  const xRow = goodRow({ xNotable: true });
+  assert.equal(confluenceMult(xRow, dev, sm, ci, null), 1.8, "4+ independent signals = max press");
+  // never above the cap even with every signal firing
+  const everything = goodRow({ xNotable: true, _smartMoney: { earlyAlpha: true } });
+  assert.equal(confluenceMult(everything, dev, sm, ci, null), 1.8, "clamped at 1.8");
+});
+
+test("graduationScore: rewards mid-curve + SOL/min velocity, zero when no curve data", () => {
+  assert.equal(graduationScore(goodRow()), 0, "no bonding data → no-op");
+  const mid = graduationScore({ bondingPct: 0.5 });
+  const ripping = graduationScore({ bondingPct: 0.5, curveVelSol: 3 });
+  assert.ok(mid > 0, "mid-curve scores");
+  assert.ok(ripping > mid, "velocity adds on top");
+  assert.ok(graduationScore({ bondingPct: 0.5 }) > graduationScore({ bondingPct: 0.1 }), "sweet spot beats too-early");
+});
+
+test("freshScore: a coin accelerating toward graduation scores higher than the same coin without curve data", () => {
+  const plain = freshScore(goodRow());
+  const grad = freshScore(goodRow({ bondingPct: 0.55, curveVelSol: 3 }));
+  assert.ok(grad > plain, "graduation/velocity lifts the fresh score");
+});
+
+test("flowSurge: zero on first read, fires on accelerating buy-flow + volume, expires after the window", () => {
+  const cache = new Map();
+  const first = flowSurge(cache, "m", { volume5m: 50, buys5m: 10, sells5m: 8 }, 1000);
+  assert.equal(first, 0, "first read has no prior → 0");
+  const surge = flowSurge(cache, "m", { volume5m: 120, buys5m: 30, sells5m: 5 }, 5000);
+  assert.ok(surge > 0, "rising flow + volume → bonus");
+  assert.ok(surge <= 0.3, "bounded");
+  // a stale prior (>3min) does not count as a surge basis
+  const stale = flowSurge(cache, "n", { volume5m: 10, buys5m: 5, sells5m: 5 }, 10_000);
+  assert.equal(stale, 0, "fresh mint, no prior → 0");
+});
+
+test("convictionMult: entry-band timing, flow-surge, and learned weights each lift conviction (bounded)", () => {
+  const provenSm = { winners: 2 };                       // proven → 1.6x cap so bonuses are visible
+  const row = goodRow({ marketCap: 5000, pairAgeSeconds: 200 });
+  // entry-band: coin MC inside the winners' historical band sizes up
+  const off = convictionMult(row, null, provenSm, null);
+  const band = convictionMult(row, null, { winners: 2, entryMcLo: 3000, entryMcHi: 8000 }, null);
+  assert.ok(band > off, "in-band entry adds conviction");
+  // flow-surge: accelerating flow sizes up
+  const surged = convictionMult(goodRow({ pairAgeSeconds: 200, _flowSurge: 0.3 }), null, provenSm, null);
+  assert.ok(surged > off, "flow-surge adds conviction");
+  // learned weights: a strong winner-weight leans in, a weak one fades
+  const leanIn = convictionMult(row, null, provenSm, null, { weights: { winners: 1.5 } });
+  const fade = convictionMult(row, null, provenSm, null, { weights: { winners: 0.5 } });
+  assert.ok(leanIn > fade, "learned signal weight scales the bonus");
+  assert.ok(leanIn <= 1.6 && surged <= 1.6 && band <= 1.6, "all stay within the proven cap");
 });
 
 test("entryReject: passes a clean fresh mover", () => {

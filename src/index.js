@@ -577,7 +577,7 @@ async function recomputeAutopilotCalibration() {
 // otherwise the global bias (then defaults). This is what makes every mode self-correct
 // toward green on its OWN record rather than being dragged by the others.
 function activeCalibration(c) {
-  return Boolean(c && (c.minScoreBonus > 0 || (c.sizeFracCapMult != null && c.sizeFracCapMult < 1)));
+  return Boolean(c && (c.minScoreBonus > 0 || (c.sizeFracCapMult != null && c.sizeFracCapMult < 1) || (c.signalWeights && Object.keys(c.signalWeights).length > 0)));
 }
 
 async function getAutopilotCalibration(mode, options = {}) {
@@ -1316,6 +1316,7 @@ function smartMoneyScore(mint) {
     let winners = 0, kol = false;
     const exitMults = [];
     const holdCaps = [];
+    const entryMcs = [];                              // ENTRY-BAND TIMING: where these winners actually buy
     const seenClusters = new Set();                   // FUNDING GRAPH: count one actor once
     for (const w of buyers) {
       const r = walletObs.get(w);
@@ -1332,6 +1333,8 @@ function smartMoneyScore(mint) {
         if (em != null) exitMults.push(em);
         const st = walletStyleProfile(r);            // PHASE 1→2: copy this wallet in ITS style
         if (st && st.avgHoldMs != null) holdCaps.push(st.avgHoldMs);
+        const avgEntry = (r && r.entryMcN > 0) ? r.entryMcSum / r.entryMcN : 0;  // this wallet's typical entry MC
+        if (avgEntry > 0) entryMcs.push(avgEntry);
       }
     }
     if (!winners && !kol) return null;
@@ -1339,7 +1342,15 @@ function smartMoneyScore(mint) {
     // The fastest proven holder's typical hold time → a per-position TIME cap so we get OUT around
     // when the wallets we're copying usually do, not ride past them. null until a wallet's style is learned.
     const holdMsCap = holdCaps.length ? Math.min(...holdCaps) : null;
-    return { winners, kol, exitMult, holdMsCap };
+    // ENTRY-BAND: the MC band these proven winners historically enter at (median ± a factor). A coin
+    // whose live MC lands INSIDE this band means we'd be buying at their proven point → conviction bonus.
+    let entryMcLo = null, entryMcHi = null;
+    if (entryMcs.length) {
+      entryMcs.sort((a, b) => a - b);
+      const med = entryMcs[Math.floor(entryMcs.length / 2)];
+      if (med > 0) { entryMcLo = Math.max(500, med * 0.5); entryMcHi = med * 2.0; }
+    }
+    return { winners, kol, exitMult, holdMsCap, entryMcLo, entryMcHi };
   } catch { return null; }
 }
 // SELF-ACTIVATION GATE: the smart-money entry path turns itself ON (no toggle) only
@@ -2568,6 +2579,27 @@ const autopilotEngine = createAutopilotEngine({
     for (const row of out) {
       const c = SNIPE_X_CLOUT.get(row.tokenMint);
       if (c && c.clout >= 1) { row.xClout = c.clout; row.xNotable = true; }
+      // GRADUATION / CURVE-VELOCITY (free, in-memory PumpPortal stream): bonding fill % from the
+      // virtual-SOL reserve + SOL/min flowing into the curve over the recent trade window. The
+      // engine's graduationScore reads these (no-op when absent — DexScreener-only rows are fine).
+      try {
+        const ce = pumpPortalStream.getCreationEntry(row.tokenMint);
+        const vSol = (ce && ce.lastTrade) ? Number(ce.lastTrade.vSolInBondingCurve) || 0 : 0;
+        // pump.fun curve: virtual SOL starts ~30 at launch and graduates ~115 (≈85 real SOL in).
+        if (vSol > 0) row.bondingPct = Math.max(0, Math.min(1, (vSol - 30) / 85));
+        const trades = pumpPortalStream.getTrades(row.tokenMint, { limit: 80 }) || [];
+        if (trades.length >= 4) {
+          let buySol = 0, minAt = Infinity, maxAt = 0;
+          for (const t of trades) {
+            if (!t) continue;
+            const at = Number(t.at) || 0;
+            if (at > 0) { if (at < minAt) minAt = at; if (at > maxAt) maxAt = at; }
+            if (t.side === "buy") buySol += Number(t.solAmount) || 0;
+          }
+          const mins = (maxAt - minAt) / 60000;
+          if (mins >= 0.1 && buySol > 0) row.curveVelSol = buySol / mins;
+        }
+      } catch {}
     }
     return out;
   },

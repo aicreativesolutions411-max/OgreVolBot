@@ -18,6 +18,11 @@
 export const MIN_SAMPLE = 40;            // need this many resolved trades before biasing
 export const MAX_SCORE_BONUS = 12;       // most we'll raise the entry bar from history
 export const MIN_SIZE_MULT = 0.6;        // most we'll shrink the per-bet cap from history
+// Per-signal reweighting (the OFFENSE flywheel): how much we lean into / fade each entry signal
+// based on its REALIZED EV. The signal flags recorded per trade (rec.signals).
+export const SIGNAL_KEYS = ["dev", "kol", "winners", "caller", "x", "entryBand", "flowSurge", "alpha", "grad"];
+export const MIN_SIGNAL_SAMPLE = 10;     // a signal needs this many fired trades before we trust its edge
+export const SIGNAL_WEIGHT_SPAN = 0.5;   // weights stay within 1 ± this (0.5..1.5)
 
 function num(v, d = 0) { const n = Number(v); return Number.isFinite(n) ? n : d; }
 
@@ -56,6 +61,32 @@ export function bucketStats(trades, keyFn) {
   return m;
 }
 
+// PER-SIGNAL EDGE — measure each entry signal's REALIZED EV vs the book baseline and map it to a
+// bounded conviction weight (1 ± SIGNAL_WEIGHT_SPAN). This is the offense flywheel: signals that
+// actually precede winners get leaned into (weight > 1), ones that don't get faded (weight < 1) —
+// automatically, the longer it runs. Returns { weights: {key:number}, detail: {key:{n,ev,winRate,weight}} }.
+// Neutral (empty) until there's a real book; each signal stays neutral until it has its own sub-sample,
+// so a rarely-fired signal can never swing sizing on noise. Pure + unit-testable.
+export function computeSignalEdge(trades, opts = {}) {
+  const counted = (trades || []).filter((t) => isCounted(t, opts) && t && t.signals && typeof t.signals === "object");
+  const weights = {}, detail = {};
+  if (counted.length < (opts.minSample || MIN_SAMPLE)) return { weights, detail };
+  const baseEv = evPerTrade(counted);
+  const minSig = opts.minSignalSample || MIN_SIGNAL_SAMPLE;
+  for (const k of SIGNAL_KEYS) {
+    const fired = counted.filter((t) => t.signals[k]);
+    if (fired.length < minSig) continue;             // too few to trust → leave neutral (caller treats missing as 1.0)
+    const ev = evPerTrade(fired);
+    // Edge vs the book baseline mapped to a bounded weight. Scale: a +0.02 SOL/trade edge ≈ full
+    // +0.5 lean; clamped both ways so noise / one fat tail can't blow the multiplier out.
+    const delta = ev - baseEv;
+    const w = 1 + Math.max(-SIGNAL_WEIGHT_SPAN, Math.min(SIGNAL_WEIGHT_SPAN, delta / 0.02));
+    weights[k] = Math.round(w * 100) / 100;
+    detail[k] = { n: fired.length, ev: Math.round(ev * 100000) / 100000, winRate: Math.round(winRate(fired) * 1000) / 1000, weight: weights[k] };
+  }
+  return { weights, detail };
+}
+
 const fsBucket = (t) => { const fs = num(t.fs); if (!(fs > 0)) return null; if (fs < 60) return "<60"; if (fs < 66) return "60-65"; if (fs < 72) return "66-71"; return "72+"; };
 const mcBucket = (t) => { const mc = num(t.entryMc); if (!(mc > 0)) return null; if (mc < 5000) return "<5k"; if (mc < 12000) return "5-12k"; if (mc < 25000) return "12-25k"; if (mc < 60000) return "25-60k"; return "60k+"; };
 
@@ -65,7 +96,7 @@ export function computeCalibration(trades, opts = {}) {
   const minSample = opts.minSample || MIN_SAMPLE;
   const counted = (trades || []).filter((t) => isCounted(t, opts));
   const neutral = {
-    minScoreBonus: 0, sizeFracCapMult: 1,
+    minScoreBonus: 0, sizeFracCapMult: 1, signalWeights: {}, signalEdge: {},
     sample: counted.length, overallWinRate: 0, evPerTrade: 0,
     byFs: {}, byMc: {}, bestMcBand: null, notes: ["insufficient sample — using defaults"]
   };
@@ -115,9 +146,19 @@ export function computeCalibration(trades, opts = {}) {
     if (b.n >= 8 && b.ev > bestEv) { bestEv = b.ev; bestMcBand = k; }
   }
   if (bestMcBand) notes.push(`best MC band by EV: ${bestMcBand} (${byMc[bestMcBand].ev} SOL/trade, n=${byMc[bestMcBand].n})`);
+
+  // 4) PER-SIGNAL REWEIGHTING (offense): learn which entry signals actually precede winners and
+  //    feed bounded weights back into conviction sizing. Lean in (>1) / fade (<1); never gates entry.
+  const signalEdge = computeSignalEdge(counted, opts).detail;
+  const signalWeights = {};
+  for (const k of Object.keys(signalEdge)) signalWeights[k] = signalEdge[k].weight;
+  const leaned = Object.entries(signalWeights).filter(([, w]) => w >= 1.1).map(([k]) => k);
+  const faded = Object.entries(signalWeights).filter(([, w]) => w <= 0.9).map(([k]) => k);
+  if (leaned.length) notes.push(`leaning into signals: ${leaned.join(", ")}`);
+  if (faded.length) notes.push(`fading signals: ${faded.join(", ")}`);
   if (!notes.length) notes.push("history healthy — no tightening applied");
 
-  return { minScoreBonus, sizeFracCapMult, sample: counted.length, overallWinRate, evPerTrade: ev, byFs, byMc, bestMcBand, notes };
+  return { minScoreBonus, sizeFracCapMult, signalWeights, signalEdge, sample: counted.length, overallWinRate, evPerTrade: ev, byFs, byMc, bestMcBand, notes };
 }
 
 // PER-MODE calibration — the "every mode a winner" enforcer. Each mode's trades are stamped
