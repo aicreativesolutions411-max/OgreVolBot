@@ -317,6 +317,12 @@
         <button type="button" class="modeBtn" data-mode="blend"><b>Balanced</b><span>Banks in steps as it climbs, lets a small piece ride. Steady, with upside.</span></button>
         <button type="button" class="modeBtn on" data-mode="scalp"><b>Quick</b><span>Liquid movers you can actually exit — fast in &amp; out. Lots of small, clean wins.</span></button>
       </div>
+      <label style="margin-top:10px">🎯 Launch Sniper — early standout launches only (experimental, tracks its own data)</label>
+      <div class="modeSel" id="snipeSel">
+        <button type="button" class="modeBtn" data-mode="snipeTrail"><b>Snipe · Trail</b><span>Snipes only launches with a standout signal. De-risks half early, rides the rest for the 4x+.</span></button>
+        <button type="button" class="modeBtn" data-mode="snipeRide"><b>Snipe · Ride</b><span>Same picks, lets a bigger piece ride to the moon. More upside, more give-back.</span></button>
+        <button type="button" class="modeBtn" data-mode="snipeBank"><b>Snipe · Bank</b><span>Same picks, banks most at the first pop, small piece free-rolls to 4x. Safest snipe.</span></button>
+      </div>
       <div class="row">
         <div><label>Max per trade (SOL)</label><input type="number" id="maxTrade" value="0.08" min="0.01" step="0.01"/></div>
         <div><label>Trades at once</label><input type="number" id="maxOpen" value="3" min="1" max="8" step="1"/></div>
@@ -740,9 +746,11 @@ $("cashoutBtn").addEventListener("click",async()=>{const w=selWallet();if(!w){$(
 // STYLE selector — pick one of three profiles. Default LEANED to Quick (liquid, exitable movers):
 // the "movers that steady move, get in and out with profit" path, protected by the survival brake.
 let selectedMode="scalp";
-$("modeSel").addEventListener("click",(e)=>{const b=e.target.closest(".modeBtn");if(!b)return;
-  selectedMode=b.dataset.mode||"scalp";
-  [...$("modeSel").querySelectorAll(".modeBtn")].forEach(x=>x.classList.toggle("on",x===b));});
+// One mode across BOTH groups (the 3 styles + the 3 launch snipers) — clicking any button selects
+// it and clears the highlight from every other button in either group.
+const ALL_MODE_BTNS=()=>[...document.querySelectorAll("#modeSel .modeBtn, #snipeSel .modeBtn")];
+function pickMode(b){if(!b)return;selectedMode=b.dataset.mode||"scalp";ALL_MODE_BTNS().forEach(x=>x.classList.toggle("on",x===b));}
+["modeSel","snipeSel"].forEach(id=>{const el=$(id);if(el)el.addEventListener("click",(e)=>{pickMode(e.target.closest(".modeBtn"));});});
 // "Use whole balance" — grey out the manual amount; the server sizes off the full wallet (less a fee reserve).
 $("useAll").addEventListener("change",()=>{$("amt").disabled=$("useAll").checked;});
 $("startBtn").addEventListener("click",async()=>{

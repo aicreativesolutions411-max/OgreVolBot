@@ -19,6 +19,7 @@ import {
   repeatBudgetForMint,
   equity,
   riskBrake,
+  snipeSignalScore,
   createAutopilotEngine
 } from "../src/lib/autopilotEngine.js";
 
@@ -1404,4 +1405,51 @@ test("entryReject: wash/bundle bait (big volume from a handful of trades) reject
   // A clean liquid mover with real trade breadth is NOT flagged as wash.
   const clean = goodRow({ pairAgeSeconds: 600, marketCap: 50000, liquidityUsd: 30000, volume5m: 120, buys5m: 30, sells5m: 14, m5: 10, h1: 12 });
   assert.notEqual(entryReject(clean, P), "wash");
+});
+
+// --- STANDOUT-SIGNAL SNIPER ---------------------------------------------------------
+
+test("snipeSignalScore: OR-gated — any ONE standout signal clears the bar, none = 0", () => {
+  const P = aggParams(baseState({ mode: "snipeTrail" }));
+  // no signal at all -> 0 -> below the snipe gate
+  assert.equal(snipeSignalScore(goodRow(), null, null, null).score, 0);
+  // a trusted TG caller alone qualifies
+  assert.ok(snipeSignalScore(goodRow(), null, null, { trusted: true, convictionDelta: 0.3 }).score >= P.minSnipe);
+  // a proven dev alone qualifies
+  assert.ok(snipeSignalScore(goodRow(), { runners: 2, rugs: 0 }, null, null).score >= P.minSnipe);
+  // a proven-winner early buyer alone qualifies
+  assert.ok(snipeSignalScore(goodRow(), null, { winners: 1 }, null).score >= P.minSnipe);
+  // a notable X account attached alone qualifies
+  assert.ok(snipeSignalScore(goodRow({ xClout: 2 }), null, null, null).score >= P.minSnipe);
+});
+
+test("snipeSignalScore: confluence scores higher than a lone signal and records which fired", () => {
+  const lone = snipeSignalScore(goodRow(), { runners: 1, rugs: 0 }, null, null);
+  const stacked = snipeSignalScore(goodRow({ xClout: 2 }), { runners: 2, rugs: 0 }, { kol: true }, { trusted: true, convictionDelta: 0.4 });
+  assert.ok(stacked.score > lone.score, "more signals -> higher conviction score");
+  assert.deepEqual(Object.keys(stacked.signals).sort(), ["caller", "dev", "kol", "x"], "records every signal that fired");
+});
+
+test("aggParams: the three snipe modes share a fresh super-low-MC window + tight stop, differ on exit", () => {
+  const trail = aggParams(baseState({ mode: "snipeTrail" }));
+  const ride = aggParams(baseState({ mode: "snipeRide" }));
+  const bank = aggParams(baseState({ mode: "snipeBank" }));
+  for (const P of [trail, ride, bank]) {
+    assert.equal(P.snipe, true, "snipe flag set");
+    assert.equal(P.mcFloor, 1500, "super-low MC floor");
+    assert.equal(P.sl, 10, "tight stop");
+    assert.equal(P.minScore, 0, "freshScore gate disabled — signals select instead");
+  }
+  // Distinct exits: trail de-risks half early + rides far; ride banks less and rides further; bank locks most.
+  assert.ok(trail.tp1Pct < bank.tp1Pct, "trail banks less at tp1 than bank-and-tail");
+  assert.ok(ride.moonTarget >= trail.moonTarget, "ride targets at least as high a moon as trail");
+  assert.ok(bank.moonTarget < trail.moonTarget, "bank-and-tail has the smallest moon target");
+});
+
+test("entryReject: snipe passes a signal-less fresh launch at the gate (signals filter in the loop) + relaxed volume", () => {
+  const P = aggParams(baseState({ mode: "snipeTrail" }));
+  // a fresh super-low-MC launch with thin early volume still passes entryReject (the loop's signal gate decides)
+  assert.equal(entryReject(goodRow({ pairAgeSeconds: 8, marketCap: 2200, volume5m: 8, liquidityUsd: 2000 }), P), null);
+  // but a literally-dead launch (no volume at all) is still rejected
+  assert.equal(entryReject(goodRow({ pairAgeSeconds: 8, marketCap: 2200, volume5m: 1 }), P), "volume");
 });

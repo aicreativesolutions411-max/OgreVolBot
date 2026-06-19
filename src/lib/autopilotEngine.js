@@ -63,7 +63,18 @@ export function aggParams(state) {
   // proven fresh recipe and differ only in how they BANK; Quick stays the experimental liquid/
   // trending wide-net. (See aggParams data note + the autopilot-engine-modes memory.)
   const liquid = scalp;
-  const baseFrac = mode === "degen" ? 0.10 : mode === "chill" ? 0.04 : scalp ? 0.07 : grind ? 0.07 : 0.06;
+  // STANDOUT-SIGNAL SNIPER (a mode FAMILY). Snipes ONLY fresh super-low-MC launches that show a
+  // hard-to-fake STANDOUT signal (a notable X account attached, a tracked TG caller called it, a
+  // proven non-rugging dev, or a proven-winner/KOL in the early buyers) — it leaves the faceless
+  // dust. The signals are OR-gated (any one qualifies; more = bigger conviction) and recorded so we
+  // learn which ones actually predict winners. Three exit variants, each its OWN labeled mode so
+  // each accrues separately-trackable data: snipeTrail (de-risk then trail the 4x tail — the
+  // moonshot math), snipeRide (let a bigger piece ride), snipeBank (bank the bulk, small moon tail).
+  const snipeTrail = mode === "snipeTrail";
+  const snipeRide = mode === "snipeRide";
+  const snipeBank = mode === "snipeBank";
+  const snipe = snipeTrail || snipeRide || snipeBank;
+  const baseFrac = mode === "degen" ? 0.10 : mode === "chill" ? 0.04 : scalp ? 0.07 : grind ? 0.07 : snipe ? 0.07 : 0.06;
 
   // Softer streak/regime scaling: a hot streak no longer balloons size right
   // into the next loss cluster (live data showed streak-pumped 0.11+ SOL bets
@@ -94,6 +105,12 @@ export function aggParams(state) {
   // SCALP cuts losers fast — liquid coins move in smaller, real increments, so a tight 7%
   // stop is a real (fillable) 7% loss, not dust noise. High hit-rate + small losses is the edge.
   if (scalp) sl = 7;
+  // SNIPE: a STRONG (tight) stop, per the user — on a super-low-MC fresh pair the absolute SOL at
+  // risk is tiny, so we cut a non-runner FAST and cheap (many small stop-outs are fine; the signal-
+  // picked winners ridden to 4x pay for them). The rug/liq-pull + feed-death exits fire even faster
+  // on an actual rug. Kept at 10 (not 6) so normal first-tick volatility on a fresh curve doesn't
+  // shake us out BEFORE the signal-driven run; tune lower if the data says cut harder.
+  if (snipe) sl = 10;
 
   let minScore = regime === "HOT" ? 34 : regime === "COLD" ? 48 : 40;
   // degen does NOT loosen the entry bar — a lower bar just apes more rugs (the live data is
@@ -135,6 +152,10 @@ export function aggParams(state) {
   // zero entries. 22 is reachable from buy-led flow + a sane MC band alone, while still docking
   // thin/fading/dumping coins. Stays adaptive: the auto-tuner's scoreBonus raises it in cold tape.
   if (liquid) minScore = 22 + ((state.tune && state.tune.scoreBonus) || 0);
+  // SNIPE gates on the live STANDOUT-SIGNAL score (notable-X / TG caller / proven-dev / proven-winner
+  // in the hunt loop), NOT freshScore — so disable the freshScore floor (0) and let the signal gate
+  // select. A signal-bearing low-freshScore launch is exactly the target the razor band would miss.
+  if (snipe) minScore = 0;
 
   // ENTRY MC WINDOW. Default: tiny floor (a low-MC runner like ZUL +56% @ $1973 stays in),
   // ceiling 20k (these are fresh launches). GRIND skips the brand-new sub-$5k curve — where
@@ -158,8 +179,10 @@ export function aggParams(state) {
   // ($1.8k-$9k). The hard liquidity/wash filters + the survival circuit-breaker (riskBrake) do the
   // real work now, not a curve-fit band — and the DEFAULT path is leaned LIQUID (exitable movers),
   // so fresh is no longer the default. (liquid/grind keep their own wide windows.)
-  const mcFloor = liquid ? 4000 : grind ? 6000 : 1800;
-  const mcCeil = liquid ? 12000000 : grind ? 80000 : 9000;
+  // SNIPE = fresh, super-low-MC launches (the user's "fresh pairs super low mc"): the standout
+  // SIGNAL is what selects, not the MC band, so the window is just a sane fresh range.
+  const mcFloor = liquid ? 4000 : grind ? 6000 : snipe ? 1500 : 1800;
+  const mcCeil = liquid ? 12000000 : grind ? 80000 : snipe ? 15000 : 9000;
   // ANTI-PHANTOM depth floor — applied ONLY to coins that REPORT a liquidity number (see
   // entryReject). A phantom +400% spike comes from a thin curve where one tiny buy moves the marked
   // cap but nothing can fill, so a coin whose KNOWN liquidity is below this floor is rejected.
@@ -176,14 +199,14 @@ export function aggParams(state) {
   // is what decides. Keep only a tiny 30s floor to skip the literal launch-snipe seconds (pure rug
   // roulette, not a setup), and an effectively-unbounded ceiling (~30d) so nothing good is excluded
   // for being "too old". grind targets survived/climbed coins; default stays fresh-launch tight.
-  const minAge = liquid ? 30 : grind ? 20 : 4;
-  const maxAge = liquid ? 2592000 : grind ? 3600 : 1200;
+  const minAge = liquid ? 30 : grind ? 20 : snipe ? 3 : 4;
+  const maxAge = liquid ? 2592000 : grind ? 3600 : snipe ? 600 : 1200;
   // FRESH-PATH AGE CARVE-OUT: the 30-120s band is the single worst age pocket (−1.29 over 509
   // trades, a 15% win rate) — coins that launched, got sniped/pumped, and are mid-dump. <30s
   // (+0.22) and 2-5m (+0.34) both WIN. So the fresh engine skips the 30-120s dead-zone entirely
   // and takes the freshest entries + the survivors past 2 min. (entryReject honors skipMidAge.)
-  const skipMidAge = !liquid && !grind;
-  const maxScore = (!liquid && !grind) ? 67 : Infinity;
+  const skipMidAge = !liquid && !grind && !snipe;
+  const maxScore = (!liquid && !grind && !snipe) ? 67 : Infinity;
   // FRESH-PATH SCORE CEILING: the live book keeps losing on 67+ rows even when they
   // look strong. The best realized pocket is the middle 62-66 band, not the top score band.
   // LIQUID disables the RELATIVE liquidity gate (liqFrac 0): a healthy $1M coin legitimately has
@@ -236,6 +259,22 @@ export function aggParams(state) {
     // tickets. On liquid coins these pops actually fill, so the banked SOL matches the marked %.
     tp1 = regime === "COLD" ? 11 : regime === "HOT" ? 16 : 14;
     tp1Pct = 80; spikePct = 88; tp2Lvl = 30; tp2Pct = 70; tp3Lvl = 60; tp3Pct = 100; moonTarget = 60;
+  } else if (snipe) {
+    // STANDOUT-SIGNAL SNIPE exits — three variants, each its OWN labeled mode so each accrues
+    // separately-trackable data. All ride the tail AFTER tp1 with the trailing give-back (no mid
+    // rungs), which is the fat-right-tail math (1-2 4x's offset many losers — don't clip the runner).
+    if (snipeTrail) {
+      // DE-RISK then TRAIL (recommended / moonshot math): sell HALF at +40% (recovers ~70% of cost —
+      // mostly house money, rug-proofed), then ride the other half on the trail to a 4x+ tail.
+      tp1 = 40; tp1Pct = 50; spikePct = 70; moonTarget = 800;
+    } else if (snipeRide) {
+      // LET IT RIDE: bank a smaller slice later (35% at +60%) and ride a bigger 65% to the moon.
+      tp1 = 60; tp1Pct = 35; spikePct = 65; moonTarget = 1000;
+    } else {
+      // BANK & TAIL (snipeBank): lock the BULK at the first +30% pop (~75% ≈ full principal back),
+      // free-roll a small 25% tail to 4x. Safest of the three.
+      tp1 = 30; tp1Pct = 75; spikePct = 85; moonTarget = 400;
+    }
   }
 
   // AUTO-ADAPT — the key lesson from live: the moon-ride only PAYS in a genuinely HOT
@@ -246,7 +285,10 @@ export function aggParams(state) {
   // keeps its ladder unless COLD; Steady always banks hard.
   const tape = (state.tune && state.tune.tape) || "warming";
   const bankHard = steady || tape === "COLD" || (blend && tape !== "HOT");
-  if (bankHard && !steady) { tp1Pct = Math.max(tp1Pct, 85); spikePct = Math.max(spikePct, 85); moonTarget = Math.min(moonTarget, 400); }
+  // SNIPE keeps its own ladder regardless of tape (the signal is the edge, not the tape) — don't let
+  // a COLD-tape bankHard clamp crush the moonshot tail it's built to ride. Its tight stop + early
+  // de-risk protect the downside; the post-de-risk tail is house money worth riding for the 4x.
+  if (bankHard && !steady && !snipe) { tp1Pct = Math.max(tp1Pct, 85); spikePct = Math.max(spikePct, 85); moonTarget = Math.min(moonTarget, 400); }
 
   // Per-mode CONVICTION CAPS — how far ONE bet may scale. degen concentrates size into PROVEN
   // setups (proven dev / smart-money / proven caller) and caps UNPROVEN coins harder, so a weak
@@ -258,11 +300,18 @@ export function aggParams(state) {
   // bit more size than the dust modes (0.9x); proven caps a touch lower (1.5x) since these are
   // quick base-hits, not moonshot rides we'd concentrate into.
   else if (scalp) { unprovenConvCap = 0.9; provenConvCap = 1.5; }
+  // SNIPE entries are SIGNAL-proven (that's the gate), so a strong-confluence snipe can size up well;
+  // a lone weak signal stays modest.
+  else if (snipe) { unprovenConvCap = 0.8; provenConvCap = 1.7; }
   // degen rides the proven runners it sizes into FURTHER — a higher moon target (unless a COLD
   // tape already pulled it in via the bankHard clamp above).
   if (mode === "degen" && !bankHard) moonTarget = Math.max(moonTarget, 700);
 
-  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, maxScore, mcFloor, mcCeil, minAge, maxAge, skipMidAge, liqFrac, minLiqAbs, steady, blend, grind, scalp, liquid, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct, unprovenConvCap, provenConvCap };
+  // SNIPE entry gate: the live standout-signal score (snipeSignalScore in the hunt loop) must clear
+  // this. OR-gated — any ONE real signal (a notable X, a trusted TG caller, a proven dev, or a
+  // proven-winner early buyer) reaches it; faceless dust with no signal never qualifies.
+  const minSnipe = 18;
+  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, maxScore, mcFloor, mcCeil, minAge, maxAge, skipMidAge, liqFrac, minLiqAbs, steady, blend, grind, scalp, liquid, snipe, snipeTrail, snipeRide, snipeBank, minSnipe, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct, unprovenConvCap, provenConvCap };
 }
 
 // SELF-TUNING / market-regime brain: reads the recent runner & rug rate and sets
@@ -589,6 +638,32 @@ export function convictionMult(row, rep, sm, ci, caps = {}) {
   return Math.max(0.5, Math.min(proven ? provenCap : unprovenCap, c));
 }
 
+// STANDOUT-SIGNAL score for the SNIPER — the hard-to-fake "this launch sticks out" tells, OR-gated
+// (any ONE qualifies; more = higher score -> bigger conviction). Pure + exported for tests. Reads the
+// live signal objects the hunt loop already gathers (dev rep, smart-money, caller intel) plus an
+// optional notable-X read attached to the row (row.xNotable / row.xClout, populated by index.js).
+// Returns { score, signals } so the caller can record WHICH signals fired -> we learn over time which
+// actually predict winners (the user's "make it all but not require all, then see what's working").
+export function snipeSignalScore(row, rep, sm, ci) {
+  let s = 0;
+  const signals = {};
+  // Notable X/Twitter account attached to the launch — the hardest-to-fake signal (a real big-name
+  // account is expensive to fake; volume/holders are cheap). row.xClout: 0 none / 1 known-sizable /
+  // 2 big-name; row.xNotable is a boolean shortcut.
+  const xClout = Number(row && row.xClout) || 0;
+  if ((row && row.xNotable) || xClout >= 1) { s += xClout >= 2 ? 40 : xClout >= 1 ? 28 : 20; signals.x = true; }
+  // A tracked TG caller/channel with a proven call->2x record called this exact mint.
+  if (ci && ci.trusted) { s += 34; signals.caller = true; }
+  else if (ci && ci.convictionDelta > 0) { s += 14; signals.callerProbe = true; }
+  // Proven dev wallet — past coins that RAN and never rugged.
+  if (rep && rep.runners >= 1 && rep.rugs === 0) { s += rep.runners >= 2 ? 30 : 22; signals.dev = true; }
+  // A proven-winner / tracked KOL wallet is already in the early buyers.
+  if (sm && sm.kol) { s += 30; signals.kol = true; }
+  else if (sm && sm.winners >= 2) { s += 28; signals.winners = true; }
+  else if (sm && sm.winners >= 1) { s += 18; signals.winner = true; }
+  return { score: s, signals };
+}
+
 // Hard entry gates — filter instant-rug bait while keeping genuine fresh
 // movers. Returns null if the row passes, or a string reason if rejected.
 export function entryReject(row, P) {
@@ -624,7 +699,10 @@ export function entryReject(row, P) {
   // it never traded. Unknown-liq rows are let through and judged by liquidScore + the volume gate
   // below; scalp's fast in/out exits + honest realized-anchored display handle the residual risk.
   if (P.minLiqAbs && liq > 0 && liq < P.minLiqAbs) return "liquidity";
-  if (vol < 25) return "volume";
+  // SNIPE buys super-early on a STANDOUT SIGNAL, before the volume necessarily shows up — so it only
+  // needs a non-dead pulse, not the fresh path's $25 floor. The standout-signal gate does the real
+  // selecting in the hunt loop; here we just skip a literally-dead launch.
+  if (vol < (P.snipe ? 5 : 25)) return "volume";
   if (buys > 0 && sells > buys * 2 + 3) return "dumping";
   // MOMENTUM-CONFIRMED entry for the LIQUID-mover path: only ape a coin that is actively being
   // BOUGHT right now (buy-led last-5m flow), not one that's flat or fading. This is the fix for
@@ -766,7 +844,7 @@ export function evalExit(pos, P, nowMs) {
   // Mid rungs only in the laddered styles (normal/blend) AND only when not banking
   // hard. steady / cold-tape bankHard HOLD the small runner after TP1 — no mid-rung
   // selling — so the tail can reach the moon target and a chop tape can't round-trip it.
-  if (!pos.copyLadder && !P.steady && !P.bankHard) {
+  if (!pos.copyLadder && !P.steady && !P.bankHard && !P.snipe) {
     // TP2: next tranche (blend = ~33% of remainder @ +100%; normal = 50% @ P.tp2).
     if (pos.tp1Done && !pos.tp2Done && move >= (P.tp2Lvl || P.tp2)) {
       return { action: "sell", pct: P.tp2Pct || 50, reason: "tp2", move };
@@ -777,7 +855,7 @@ export function evalExit(pos, P, nowMs) {
     }
   }
   // Moon target: close the runner out (+400% steady/blend/cold, +500% normal).
-  if ((pos.tp3Done || P.steady || P.bankHard) && move >= (P.moonTarget || 500)) {
+  if ((pos.tp3Done || P.steady || P.bankHard || P.snipe) && move >= (P.moonTarget || 500)) {
     return { action: "sell", pct: 100, reason: "tp4", move };
   }
   // Moon-bag TIME CAP: once the bulk is banked (tp1Done), don't let a small remnant
@@ -2053,6 +2131,19 @@ export function createAutopilotEngine(deps) {
       // crowd that follows good alpha). Pure bonus conviction; sample-gated + bounded.
       const ciRec = callerIntel ? callerIntel(cand.r.tokenMint) : null;
       const ci = ciRec && ciRec.signal ? ciRec.signal : null;
+      // STANDOUT-SIGNAL SNIPE GATE: only ape a fresh launch that shows a hard-to-fake standout signal
+      // (notable X / trusted TG caller / proven dev / proven-winner early buyer), OR-gated. Faceless
+      // dust with no signal is skipped here — this is what separates "snipe the standouts" from
+      // "ape every launch". We record which signals fired so we learn which actually predict winners.
+      let snipeRec = null;
+      if (P.snipe) {
+        snipeRec = snipeSignalScore(cand.r, rep, sm, ci);
+        if (snipeRec.score < P.minSnipe) {
+          state.blocked = (state.blocked || 0) + 1;
+          continue;
+        }
+        record("info", `🎯 SNIPE ${cand.r.symbol} — signals [${Object.keys(snipeRec.signals).join(",") || "?"}] score ${Math.round(snipeRec.score)}`);
+      }
       // Conviction = confluence of proven-dev rep + buy flow + freshness + score + smart money + caller intel.
       const conv = convictionMult(cand.r, rep, sm, ci, { unprovenCap: P.unprovenConvCap, provenCap: P.provenConvCap, scalp: P.liquid });
       if (sm) record("info", `🐳 smart money on ${cand.r.symbol} — ${sm.kol ? "KOL " : ""}${sm.winners || 0} winner-wallet(s) → conv ${conv.toFixed(2)}`);
