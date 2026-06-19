@@ -2267,6 +2267,86 @@ async function pollSnipeXClout() {
 }
 setInterval(() => { void pollSnipeXClout(); }, 15_000);
 
+// ===== SOCIAL-VELOCITY ("trending on X hard") — the cheapest real-time virality signal ===========
+// The X-clout above only asks "is the coin's OWN attached account notable?" This asks the bigger
+// question the user wants: "is this CA/ticker suddenly getting posted by LOTS of real accounts right
+// now?" — mention velocity + unique authors + follower-weighted reach + notable-account detection.
+// CHEAPEST FAST PATH (no overpay): twitterapi.io advanced-search, pay-as-you-go (~$0.15/1k tweets, no
+// monthly minimum, ~500ms). We do bot-filtering + notable detection ourselves with the FREE fxtwitter
+// roster we already have — NO paid scoring service, NO official X API. DORMANT until TWITTERAPI_KEY is
+// set: every function below no-ops and costs $0 without it, so it can't affect the live bot until you
+// opt in. Set TWITTERAPI_KEY on Render to switch it on. The heat (0/1/2) folds into row.xClout so it
+// flows straight into snipeSignalScore's X signal + confluenceMult — works for snipes AND bigger pairs.
+const TWITTERAPI_KEY = process.env.TWITTERAPI_KEY || process.env.TWITTERAPI_IO_KEY || "";
+const SOCIAL_HEAT = new Map();     // mint -> { heat, authors, topFollowers, at }
+const SOCIAL_HEAT_SEEN = new Set();
+const lastFreshSyms = new Map();   // mint -> symbol (so the poller can search the ticker)
+
+// Pure: turn a filtered mention set into a 0/1/2 heat score. Velocity = UNIQUE authors (dedup bots),
+// weighted by reach (top follower count) and whether a notable account is on it. Exported-shape logic
+// kept tiny + inspectable. >=8 distinct real authors OR a big/notable account = "trending hard" (2).
+function scoreSocialHeat({ authors, topFollowers, notable }) {
+  if (notable || authors >= 8 || topFollowers >= 100000) return 2;
+  if (authors >= 4 || topFollowers >= 25000) return 1;
+  return 0;
+}
+
+async function fetchTwitterMentions(query) {
+  if (!TWITTERAPI_KEY) return null;
+  try {
+    const url = `https://api.twitterapi.io/twitter/tweet/advanced_search?queryType=Latest&query=${encodeURIComponent(query)}`;
+    const j = await fetchJson(url, { timeoutMs: 8000, headers: { "X-API-Key": TWITTERAPI_KEY } }).catch(() => null);
+    const tweets = j && (j.tweets || j.data || j.results || (j.tweet ? [j.tweet] : null));
+    return Array.isArray(tweets) ? tweets : [];
+  } catch { return null; }
+}
+
+async function assessSocialHeat(mint, symbol) {
+  if (!TWITTERAPI_KEY) return 0;
+  const sym = String(symbol || "").replace(/^\$/, "").trim();
+  if (sym.length < 2 || sym.length > 12 || !/^[A-Za-z0-9_]+$/.test(sym)) return 0;  // skip empty/too-generic tickers
+  const cached = SOCIAL_HEAT.get(mint);
+  if (cached && Date.now() - cached.at < 8 * 60 * 1000) return cached.heat;
+  const tweets = await fetchTwitterMentions(`$${sym}`);
+  if (!Array.isArray(tweets)) return 0;
+  const authors = new Set();
+  let topF = 0, notable = false;
+  for (const t of tweets) {
+    const a = (t && (t.author || t.user)) || {};
+    const followers = Number(a.followers ?? a.followersCount ?? a.followers_count ?? 0) || 0;
+    const handle = String(a.userName || a.screen_name || a.username || "").toLowerCase();
+    if (followers < 150) continue;                                   // bot/spam filter: drop near-zero accounts
+    if (handle) authors.add(handle);
+    if (followers > topF) topF = followers;
+    if (followers >= 50000 || isNotableHandle(handle)) notable = true;
+  }
+  const heat = scoreSocialHeat({ authors: authors.size, topFollowers: topF, notable });
+  SOCIAL_HEAT.set(mint, { heat, authors: authors.size, topFollowers: topF, at: Date.now() });
+  if (heat >= 1) console.log(`[autopilot:info] 🔥 social heat ${heat} on $${sym} (${authors.size} real authors, top ${topF} followers)`);
+  return heat;
+}
+
+let _socialPolling = false;
+async function pollSocialHeat() {
+  if (!TWITTERAPI_KEY || _socialPolling) return;                     // dormant + zero-cost without the key
+  _socialPolling = true;
+  try {
+    let done = 0;
+    for (const m of (lastFreshMints || [])) {
+      if (done >= 3) break;                                          // gentle: ≤3 lookups/cycle (cost + crash-safe)
+      if (!m || SOCIAL_HEAT_SEEN.has(m)) continue;
+      const sym = lastFreshSyms.get(m);
+      if (!sym) continue;
+      SOCIAL_HEAT_SEEN.add(m);
+      try { await assessSocialHeat(m, sym); } catch {}
+      done += 1;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    if (SOCIAL_HEAT_SEEN.size > 4000) SOCIAL_HEAT_SEEN.clear();
+  } finally { _socialPolling = false; }
+}
+setInterval(() => { void pollSocialHeat(); }, 20_000);
+
 // ---------------------------------------------------------------------------
 // INSIDER-LAUNCH MACHINE — bet the OPERATOR, not the coin. The instant a KNOWN/linked wallet (a
 // tracked KOL, a proven winner, or a funding-cluster sibling of one) DEPLOYS a coin, get in early
@@ -2610,9 +2690,15 @@ const autopilotEngine = createAutopilotEngine({
     // SNIPER: remember this candidate pool (the X-clout trickle resolves these) and attach any
     // already-resolved notable-X clout so snipeSignalScore can fire the X signal.
     lastFreshMints = out.map((row) => row.tokenMint).filter(Boolean);
+    lastFreshSyms.clear();
+    for (const row of out) { if (row.tokenMint && row.symbol) lastFreshSyms.set(row.tokenMint, row.symbol); }
     for (const row of out) {
       const c = SNIPE_X_CLOUT.get(row.tokenMint);
       if (c && c.clout >= 1) { row.xClout = c.clout; row.xNotable = true; }
+      // SOCIAL VELOCITY: a coin trending on X (lots of real accounts posting it) counts as X-clout
+      // even if its own attached handle isn't notable — folds into the same X signal the brain reads.
+      const sh = SOCIAL_HEAT.get(row.tokenMint);
+      if (sh && sh.heat >= 1) { row.xClout = Math.max(Number(row.xClout) || 0, sh.heat); row.xNotable = true; row.socialHeat = sh.heat; }
       // GRADUATION / CURVE-VELOCITY (free, in-memory PumpPortal stream): bonding fill % from the
       // virtual-SOL reserve + SOL/min flowing into the curve over the recent trade window. The
       // engine's graduationScore reads these (no-op when absent — DexScreener-only rows are fine).
