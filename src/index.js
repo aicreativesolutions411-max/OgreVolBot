@@ -2378,6 +2378,7 @@ let _popHb = 0;                   // radar heartbeat counter
 let _popSrcTick = 0;              // throttle the live-feed source refresh
 let popLiveMints = [];            // route-filtered MC-spread movers from the live feed (cached ~15s)
 const popUnroutable = new Set();  // mints we've confirmed are Token-2022 / un-routable (skip — "rugs that won't show on routes")
+const _popRouteChecked = new Set();  // mints whose route/safety we've already checked (don't re-check every poll)
 function popIngestTrade(mint, trade) {
   if (!mint || !trade) return;
   const sol = Number(trade.solAmount ?? trade.amountSol ?? trade.sol) || 0;
@@ -2436,7 +2437,7 @@ async function pollPopRadar() {
     }
     let creations = [];
     try { creations = pumpPortalStream.getCreationCandidates({ maxAgeMs: 30 * 60_000, limit: 60 }).map((r) => r.tokenMint).filter(Boolean); } catch {}
-    const watch = [...new Set([...popLiveMints, ...creations.slice(0, 16), ...popHeldMints.keys()])].filter((m) => !popUnroutable.has(m)).slice(0, 34);
+    const watch = [...new Set([...popLiveMints, ...creations.slice(0, 12), ...popHeldMints.keys()])].filter((m) => !popUnroutable.has(m)).slice(0, 20);
     for (let i = 0; i < watch.length; i += 8) {           // swap-api fast-poll the watchlist for NEW trades
       await Promise.all(watch.slice(i, i + 8).map(async (mint) => {
         let j = null;
@@ -2456,6 +2457,14 @@ async function pollPopRadar() {
       if (m.inflowNow > (popPeakInflow.get(mint) || 0)) popPeakInflow.set(mint, m.inflowNow);
       const score = popIgnitionScore(m);
       if (score >= POP_IGNITION_FIRE) {
+        // ROUTE FILTER (background, once per coin): confirm it's routable (not Token-2022 / no trusted
+        // pool — the "rugs that won't show on routes"). getMintSafetyInfo is cached 6h.
+        if (!_popRouteChecked.has(mint)) {
+          _popRouteChecked.add(mint);
+          try { const s = await getMintSafetyInfo(mint); if (s && s.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) popUnroutable.add(mint); } catch {}
+          if (_popRouteChecked.size > 4000) _popRouteChecked.clear();
+        }
+        if (popUnroutable.has(mint)) continue;
         const prev = popCandidates.get(mint);
         const sym = (pumpPortalStream.getCreationEntry(mint)?.event?.symbol) || (prev && prev.symbol) || shortMint(mint);
         popCandidates.set(mint, { at: now, score, mc: (prev && prev.mc) || 0, symbol: sym, inflowNow: m.inflowNow });
@@ -2475,17 +2484,16 @@ async function pollPopRadar() {
     if (popTrades.size > 80) { for (const [m, arr] of popTrades) { if (!arr.length || now - arr[arr.length - 1].at > 60_000) { popTrades.delete(m); popSeenTx.delete(m); popPeakInflow.delete(m); } } }
   } catch {} finally { _popPolling = false; }
 }
-setInterval(() => { void pollPopRadar(); }, 3_000);
+// Start the radar AFTER boot settles (45s) — never pile a 20-coin swap-api poll + live-feed fetch onto
+// the boot storm on the single instance (the crash-loop lesson: no bursty background jobs at boot).
+setTimeout(() => { setInterval(() => { void pollPopRadar(); }, 4_000); }, 45_000);
 // The pre-vetted POP FEED the 'pop' mode trades — igniting coins, MC enriched (free pump frontend-api).
 async function popFeedRows() {
   const now = Date.now();
   const live = [...popCandidates.entries()].filter(([, r]) => now - r.at < 18_000).sort((a, b) => b[1].score - a[1].score).slice(0, 6);
   const rows = [];
   for (const [mint, r] of live) {
-    if (popUnroutable.has(mint)) continue;
-    // ROUTE FILTER — skip Token-2022 / un-routable coins (the "requires a trusted pool" rugs); only
-    // surface coins buyable via a real Pump/Raydium/etc. route, like the live feed. Cached 6h = cheap.
-    try { const s = await getMintSafetyInfo(mint); if (s && s.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) { popUnroutable.add(mint); continue; } } catch {}
+    if (popUnroutable.has(mint)) continue;   // route filter — set in the background poll, no RPC in this hot path
     if (!r.mc) {
       try { const j = await fetchJson(`https://frontend-api-v3.pump.fun/coins/${mint}`, { timeoutMs: 5000, headers: { "User-Agent": "Mozilla/5.0", accept: "application/json" } }).catch(() => null); r.mc = Number(j && (j.usd_market_cap || j.market_cap)) || 0; } catch {}
     }
