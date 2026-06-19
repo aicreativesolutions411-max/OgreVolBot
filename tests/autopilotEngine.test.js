@@ -245,8 +245,11 @@ test("popIgnitionScore: fires on accelerating buy-led inflow with a buyer burst,
   assert.equal(popIgnitionScore({ accel: 9, inflowNow: 0.1, buyShare: 0.9, uniqBuyers: 9, smart: true }), 0);
   // sellers in control does not fire
   assert.equal(popIgnitionScore({ accel: 6, inflowNow: 2, buyShare: 0.4, uniqBuyers: 7, smart: false }), 0);
-  // no acceleration = no pop
-  assert.equal(popIgnitionScore({ accel: 1.1, inflowNow: 2, buyShare: 0.8, uniqBuyers: 6, smart: false }), 0);
+  // SUSTAINED buy pressure fires WITHOUT explosive acceleration (the mid-cap continuation pop) — heavy
+  // buy-led flow + a real crowd + size clears the bar even at accel ~1.1
+  assert.ok(popIgnitionScore({ accel: 1.1, inflowNow: 2, buyShare: 0.82, uniqBuyers: 7, smart: false }) >= POP_IGNITION_FIRE);
+  // but a weak/quiet coin (modest flow, thin crowd) still does NOT fire
+  assert.ok(popIgnitionScore({ accel: 1.0, inflowNow: 0.4, buyShare: 0.62, uniqBuyers: 3, smart: false }) < POP_IGNITION_FIRE);
   // smart money in the burst raises it
   assert.ok(popIgnitionScore({ accel: 4, inflowNow: 1, buyShare: 0.8, uniqBuyers: 5, smart: true }) >
             popIgnitionScore({ accel: 4, inflowNow: 1, buyShare: 0.8, uniqBuyers: 5, smart: false }));

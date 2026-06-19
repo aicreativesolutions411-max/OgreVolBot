@@ -822,12 +822,17 @@ export function popIgnitionScore(m) {
   const buyShare = Number(m && m.buyShare) || 0;     // buys / (buys+sells) in the latest bucket
   const uniq = Number(m && m.uniqBuyers) || 0;       // distinct buyers in the latest bucket
   if (inflowNow < 0.18) return 0;                    // a dust burst is not a real pop
-  if (buyShare < 0.58) return 0;                      // sellers still in control = not igniting
+  if (buyShare < 0.6) return 0;                       // must be clearly buy-led
   let s = 0;
-  if (accel >= 5) s += 42; else if (accel >= 3) s += 32; else if (accel >= 2) s += 20; else if (accel >= 1.4) s += 10; else return 0;  // ACCELERATION = the core leading tell
-  if (buyShare >= 0.85) s += 22; else if (buyShare >= 0.75) s += 15; else if (buyShare >= 0.65) s += 8;  // sellers drying up
-  if (uniq >= 8) s += 18; else if (uniq >= 5) s += 12; else if (uniq >= 3) s += 6;                       // breadth = real crowd
-  if (inflowNow >= 3) s += 12; else if (inflowNow >= 1) s += 7; else if (inflowNow >= 0.5) s += 3;       // absolute size
+  // TWO ignition patterns, EITHER can fire (so we catch a fresh launch AND a mid-cap continuation pop):
+  //  1) ACCELERATION — the explosive 0->burst of a fresh launch (a quiet coin suddenly ripping).
+  if (accel >= 5) s += 42; else if (accel >= 3) s += 32; else if (accel >= 2) s += 22; else if (accel >= 1.3) s += 14; else if (accel >= 1.0) s += 6;
+  //  2) SUSTAINED BUY PRESSURE — a coin that's ALREADY trading (mid-cap, any age) whose baseline isn't
+  //     near-zero so its accel stays ~1, but it's getting hammered with buy-led flow + a real crowd =
+  //     a price pop in progress. This is why it "wasn't buying" mid-caps: accel alone missed them.
+  if (buyShare >= 0.88) s += 26; else if (buyShare >= 0.78) s += 18; else if (buyShare >= 0.68) s += 10; else if (buyShare >= 0.6) s += 4;
+  if (uniq >= 10) s += 22; else if (uniq >= 6) s += 15; else if (uniq >= 4) s += 9; else if (uniq >= 3) s += 4;  // breadth = real crowd
+  if (inflowNow >= 4) s += 16; else if (inflowNow >= 1.5) s += 11; else if (inflowNow >= 0.7) s += 6; else if (inflowNow >= 0.35) s += 3;  // absolute size
   if (m && m.smart) s += 12;                          // smart money in the burst = front-run signal
   return Math.min(100, s);
 }
