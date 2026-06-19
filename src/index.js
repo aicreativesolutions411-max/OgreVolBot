@@ -2282,6 +2282,19 @@ const SOCIAL_HEAT = new Map();     // mint -> { heat, authors, topFollowers, at 
 const SOCIAL_HEAT_SEEN = new Set();
 const lastFreshSyms = new Map();   // mint -> symbol (so the poller can search the ticker)
 
+// COST GUARD ("don't overpay"): hard daily cap on twitterapi.io searches (~$0.003 each). A fresh
+// day resets it; once hit, social-heat lookups no-op until tomorrow. Default 300/day (≈ $0.90/day,
+// ≈ $27/mo worst case); tune via SOCIAL_HEAT_DAILY_CAP. Only counts ACTUAL fetches (cache hits free).
+let _socialDay = "", _socialCalls = 0;
+function socialBudgetOk() {
+  const day = new Date().toISOString().slice(0, 10);
+  if (day !== _socialDay) { _socialDay = day; _socialCalls = 0; }
+  const cap = Math.max(50, Number(process.env.SOCIAL_HEAT_DAILY_CAP) || 300);
+  if (_socialCalls >= cap) return false;
+  _socialCalls += 1;
+  return true;
+}
+
 // Pure: turn a filtered mention set into a 0/1/2 heat score. Velocity = UNIQUE authors (dedup bots),
 // weighted by reach (top follower count) and whether a notable account is on it. Exported-shape logic
 // kept tiny + inspectable. >=8 distinct real authors OR a big/notable account = "trending hard" (2).
@@ -2307,6 +2320,7 @@ async function assessSocialHeat(mint, symbol) {
   if (sym.length < 2 || sym.length > 12 || !/^[A-Za-z0-9_]+$/.test(sym)) return 0;  // skip empty/too-generic tickers
   const cached = SOCIAL_HEAT.get(mint);
   if (cached && Date.now() - cached.at < 8 * 60 * 1000) return cached.heat;
+  if (!socialBudgetOk()) return 0;                                 // daily cost cap reached → no-op until tomorrow
   const tweets = await fetchTwitterMentions(`$${sym}`);
   if (!Array.isArray(tweets)) return 0;
   const authors = new Set();
