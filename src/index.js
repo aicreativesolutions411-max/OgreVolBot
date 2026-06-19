@@ -2468,10 +2468,20 @@ async function pollPopRadar() {
         // pool — the "rugs that won't show on routes"). getMintSafetyInfo is cached 6h.
         if (!_popRouteChecked.has(mint)) {
           _popRouteChecked.add(mint);
-          // HONEYPOT + ROUTE filter: skip Token-2022 (un-routable) AND coins with a live freeze
-          // authority (can freeze your tokens so you can't sell = honeypot). Pump coins have freeze
-          // renounced (null), so this only catches the traps. Cached 6h, off the hot path.
-          try { const s = await getMintSafetyInfo(mint); if (s && (s.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58() || s.freezeAuthority)) popUnroutable.add(mint); } catch {}
+          // HONEYPOT + ROUTE filter — MIRRORS the buy path (assertTokenBuyBaseSafety) so we never
+          // exclude a coin the buyer would happily trade. On-chain reality (verified 2026-06-19):
+          // ~44% of active pump coins are now Token-2022, and they're tradeable — pump.fun trades
+          // its own Token-2022 mints, and our buy path accepts them as a TRUSTED pump pool (mint
+          // ends in "pump"). So Token-2022 alone is NOT un-routable; only Token-2022 OFF a trusted
+          // pool is. The real traps are a live freeze authority (can freeze your bag = honeypot) or
+          // a live mint authority (infinite dilution) — both of which the buy path also rejects.
+          // Blanket-excluding all Token-2022 was starving pop of the biggest poppers. Cached 6h.
+          try {
+            const s = await getMintSafetyInfo(mint);
+            const isT22 = s && s.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58();
+            const trustedPool = String(mint).toLowerCase().endsWith("pump") || String(mint).toLowerCase().endsWith("bonk");
+            if (s && (s.freezeAuthority || s.mintAuthority || (isT22 && !trustedPool))) popUnroutable.add(mint);
+          } catch {}
           if (_popRouteChecked.size > 4000) _popRouteChecked.clear();
         }
         if (popUnroutable.has(mint)) continue;
