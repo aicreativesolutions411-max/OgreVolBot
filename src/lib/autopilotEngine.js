@@ -759,6 +759,25 @@ export function flowSurge(cache, mint, row, nowMs) {
   return Math.min(0.3, s);
 }
 
+// JUNK-SYMBOL filter — the live copy/snipe feeds surfaced obvious garbage (SFASFA, SFASFAFSAAAAA,
+// Fraudcoin, TEST) because spammy "winner" wallets touch everything; they just scratch out on fees +
+// waste slots. Cheap, CONSERVATIVE tells (low false-positive on real tickers like BTC/WIF/PEPE/DOGE):
+// scam/test keywords, 4+ identical chars in a row, or a short unit repeated to form the whole symbol
+// on a 6+ char name. Pure + exported. When unsure it returns false (don't block a real coin).
+export function looksLikeJunkSymbol(sym) {
+  const s = String(sym || "").trim();
+  if (!s || s.length > 24) return true;                              // empty / absurdly long = junk
+  if (/\b(test|fake|rug|scam)\b/i.test(s) || /fraud|honeypot|rugpull|ponzi/i.test(s)) return true;
+  if (/(.)\1{3,}/i.test(s)) return true;                             // AAAA / !!!! = mash/spam
+  if (s.length >= 6) {                                               // SFASFA = "SFA" x2
+    for (let u = 2; u <= Math.floor(s.length / 2); u++) {
+      const unit = s.slice(0, u);
+      if (unit.repeat(Math.ceil(s.length / u)).slice(0, s.length) === s) return true;
+    }
+  }
+  return false;
+}
+
 // STANDOUT-SIGNAL score for the SNIPER — the hard-to-fake "this launch sticks out" tells, OR-gated
 // (any ONE qualifies; more = higher score -> bigger conviction). Pure + exported for tests. Reads the
 // live signal objects the hunt loop already gathers (dev rep, smart-money, caller intel) plus an
@@ -2249,6 +2268,7 @@ export function createAutopilotEngine(deps) {
       if (chopPaused) break;                            // sitting out the chop — no fresh snipes
       if (state.stopped || now() >= state.endAt) break; // never open after a stop/timer
       if (openedThisCycle >= freshCycleCap) break;       // reserve capacity for live copy rows
+      if (looksLikeJunkSymbol(cand.r.symbol)) { state.blocked = (state.blocked || 0) + 1; continue; } // skip obvious junk/spam (SFASFA/Fraudcoin/TEST)
       if (state.open.length >= maxNow) {
         // CAPITAL ROTATION — "don't sit in a dead bag while a better winner is right there." At
         // capacity, dump the weakest DEAD-FLAT position to free a slot for a clearly-stronger setup,
@@ -2438,6 +2458,7 @@ export function createAutopilotEngine(deps) {
         if (rep && rep.rugs >= 2 && rep.runners === 0) continue;  // dev rug history still vetoes
         const sm = r._smartMoney || (smartMoney ? smartMoney(r.tokenMint) : null);
         if (!sm || !(sm.kol || sm.kolProbe || sm.winners >= 1)) continue;
+        if (looksLikeJunkSymbol(r.symbol)) continue;             // don't copy spammy "winners" into obvious junk coins
         // BACKTEST GATE: if the wallets in this coin are validated copy-LOSERS (avg btMult < ~1), don't
         // copy them — the tune proved it bleeds. Untested (edge null) still passes on the live signal.
         if (sm.edge != null && sm.edge < 0.98) continue;

@@ -12,6 +12,7 @@ import {
   confluenceMult,
   graduationScore,
   capitalEfficiencyScore,
+  looksLikeJunkSymbol,
   flowSurge,
   autoTune,
   entryReject,
@@ -221,6 +222,17 @@ test("freshScore: a coin with big real swaps outranks one with bot-wash micro-sw
   const real = freshScore(goodRow({ volume5m: 1200, buys5m: 8, sells5m: 4 }));   // ~$100 avg swap
   const wash = freshScore(goodRow({ volume5m: 1200, buys5m: 90, sells5m: 70 })); // ~$7.5 avg swap
   assert.ok(real > wash, "capital efficiency lifts real demand over wash");
+});
+
+test("looksLikeJunkSymbol: catches spam/scam/mash, passes real tickers", () => {
+  // junk the live copy feed actually surfaced
+  for (const j of ["SFASFA", "SFASFAFSAAAAA", "Fraudcoin", "TEST", "AAAA", "", "rug", "honeypot"]) {
+    assert.equal(looksLikeJunkSymbol(j), true, `should flag junk: "${j}"`);
+  }
+  // real tickers must pass (no false positives)
+  for (const ok of ["BTC", "WIF", "PEPE", "DOGE", "BONK", "POPCAT", "MOODENG", "SOL", "Clutch", "DRAGON"]) {
+    assert.equal(looksLikeJunkSymbol(ok), false, `should pass real: "${ok}"`);
+  }
 });
 
 test("graduationScore: rewards mid-curve + SOL/min velocity, zero when no curve data", () => {
