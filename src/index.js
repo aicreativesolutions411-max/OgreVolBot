@@ -2376,6 +2376,7 @@ const popPeakInflow = new Map();  // mint -> peak recent buy-inflow (drives the 
 const popHeldMints = new Map();   // mint -> at  (open pop positions kept watched so fade can fire)
 let _popHb = 0;                   // radar heartbeat counter
 let _popSrcTick = 0;              // throttle the live-feed source refresh
+let _popSrcBusy = false;          // a live-feed refresh is in flight (non-blocking)
 let popLiveMints = [];            // route-filtered MC-spread movers from the live feed (cached ~15s)
 const popUnroutable = new Set();  // mints we've confirmed are Token-2022 / un-routable (skip — "rugs that won't show on routes")
 const _popRouteChecked = new Set();  // mints whose route/safety we've already checked (don't re-check every poll)
@@ -2424,16 +2425,21 @@ async function pollPopRadar() {
     //  • the freshest pump.fun launches from the 24/7 creation stream (the early sub-5k pops).
     //  • open pop positions (so the momentum-fade can keep scoring them).
     _popSrcTick = (_popSrcTick + 1) % 5;
-    if (_popSrcTick === 0 || !popLiveMints.length) {
-      try {
-        const [vol, mom] = await Promise.all([
-          webLivePairs("autopilot", "live", { sort: "volume" }).catch(() => null),
-          webLivePairs("autopilot", "live", { sort: "momentum" }).catch(() => null)
-        ]);
-        const set = new Set();
-        for (const f of [vol, mom]) for (const r of (Array.isArray(f && f.rows) ? f.rows : [])) { if (r && r.tokenMint) set.add(r.tokenMint); }
-        popLiveMints = [...set].slice(0, 30);
-      } catch {}
+    if ((_popSrcTick === 0 || !popLiveMints.length) && !_popSrcBusy) {
+      // FIRE-AND-FORGET — never block the poll cycle on the live-feed fetch (a hang there would freeze
+      // the radar by leaving _popPolling stuck). popLiveMints just updates whenever the fetch resolves.
+      _popSrcBusy = true;
+      void (async () => {
+        try {
+          const [vol, mom] = await Promise.all([
+            webLivePairs("autopilot", "live", { sort: "volume" }).catch(() => null),
+            webLivePairs("autopilot", "live", { sort: "momentum" }).catch(() => null)
+          ]);
+          const set = new Set();
+          for (const f of [vol, mom]) for (const r of (Array.isArray(f && f.rows) ? f.rows : [])) { if (r && r.tokenMint) set.add(r.tokenMint); }
+          if (set.size) popLiveMints = [...set].slice(0, 30);
+        } catch {} finally { _popSrcBusy = false; }
+      })();
     }
     let creations = [];
     try { creations = pumpPortalStream.getCreationCandidates({ maxAgeMs: 30 * 60_000, limit: 60 }).map((r) => r.tokenMint).filter(Boolean); } catch {}
@@ -2441,7 +2447,7 @@ async function pollPopRadar() {
     for (let i = 0; i < watch.length; i += 8) {           // swap-api fast-poll the watchlist for NEW trades
       await Promise.all(watch.slice(i, i + 8).map(async (mint) => {
         let j = null;
-        try { j = await fetch(`https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=40`, { headers: { accept: "application/json" } }).then((r) => r.ok ? r.json() : null); } catch {}
+        try { j = await fetch(`https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=40`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(5000) }).then((r) => r.ok ? r.json() : null); } catch {}
         const trades = (j && Array.isArray(j.trades)) ? j.trades : [];
         if (!trades.length) return;
         let seen = popSeenTx.get(mint); if (!seen) { seen = new Set(); popSeenTx.set(mint, seen); }
