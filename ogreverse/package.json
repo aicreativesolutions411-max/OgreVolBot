@@ -1,0 +1,22 @@
+{
+  "name": "ogreverse-brainrot-prism",
+  "version": "0.1.0-public-prototype",
+  "private": true,
+  "type": "module",
+  "description": "A no-dependency browser creature-collecting RPG prototype with local MMO/PvP support.",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs",
+    "check": "node --check game.js && node --check server.mjs && node --check shared/battle-engine.mjs && node --check tools/smoke-game-data.mjs && node --check tools/smoke-mmo-api.mjs && node --check tools/launch-audit.mjs",
+    "smoke": "node tools/smoke-game-data.mjs && node tools/smoke-mmo-api.mjs",
+    "launch-audit": "node tools/launch-audit.mjs",
+    "screenshots": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/make-screenshots.ps1",
+    "prelaunch": "npm run check && npm run smoke && npm run launch-audit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "optionalDependencies": {
+    "pg": "^8.13.1"
+  }
+}

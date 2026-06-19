@@ -1,0 +1,8 @@
+.env
+node_modules/
+.chrome*/
+.codex-remote-attachments/
+screenshots/edge-profile/
+*.log
+*.tmp
+data/

@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: ogreverse-brainrot-prism
+    runtime: node
+    plan: free
+    buildCommand: npm run prelaunch
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: OGREVERSE_HOST
+        value: 0.0.0.0
+      - key: OGREVERSE_DUEL_TIMEOUT_MS
+        value: 45000
+      - key: OGREVERSE_CHALLENGE_TTL_MS
+        value: 30000
+      - key: OGREVERSE_CHALLENGE_COOLDOWN_MS
+        value: 2500

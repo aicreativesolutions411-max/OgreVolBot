@@ -1,0 +1,12 @@
+{
+    "assets":  [
+                   "battle_alien.png",
+                   "battle_brainrot.png",
+                   "battle_citadel.png",
+                   "battle_goblin.png",
+                   "battle_ogre.png",
+                   "battle_town.png"
+               ],
+    "generatedAt":  "2026-06-17T05:40:44",
+    "style":  "premium layered arena v4 alien readability polish"
+}

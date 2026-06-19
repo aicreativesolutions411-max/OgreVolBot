@@ -3537,11 +3537,58 @@ async function registerTelegramBotCommands() {
   await telegram("setMyCommands", { commands: groupCommands, scope: { type: "all_group_chats" } });
 }
 
+// ===== OGREVERSE GAME MOUNT (slimewire.org/Ogreverse) ===================================
+// The OgreVerse MMO runs as a lightweight CHILD PROCESS inside this instance; we reverse-proxy
+// /Ogreverse/* to it. It inherits DATABASE_URL so accounts + cloud saves are durable in the same
+// Postgres. Fully isolated: a game crash never touches the bot — the supervisor restarts it with
+// backoff, and the proxy only ever returns 502 for /Ogreverse paths if the child is down.
+const OGV_PORT = Number(process.env.OGREVERSE_INTERNAL_PORT || 5178);
+const OGV_DIR = path.join(__dirname, "..", "ogreverse");
+let ogvChild = null, ogvRestarts = 0, ogvStartedAt = 0;
+function startOgreverse() {
+  try {
+    if (!fsSync.existsSync(path.join(OGV_DIR, "server.mjs"))) { console.warn("[ogreverse] server.mjs not found — game mount skipped"); return; }
+    ogvStartedAt = Date.now();
+    ogvChild = spawn(process.execPath, ["server.mjs"], {
+      cwd: OGV_DIR,
+      env: { ...process.env, OGREVERSE_PORT: String(OGV_PORT), OGREVERSE_HOST: "127.0.0.1" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    ogvChild.stdout.on("data", (d) => process.stdout.write(`[ogreverse] ${d}`));
+    ogvChild.stderr.on("data", (d) => process.stderr.write(`[ogreverse] ${d}`));
+    ogvChild.on("exit", (code) => {
+      ogvChild = null;
+      const ranLong = Date.now() - ogvStartedAt > 60000;
+      ogvRestarts = ranLong ? 0 : ogvRestarts + 1;
+      if (ogvRestarts >= 12) { console.error("[ogreverse] too many restarts — leaving the game down (bot unaffected)"); return; }
+      const delay = Math.min(30000, 1000 * 2 ** ogvRestarts);
+      console.warn(`[ogreverse] child exited (code=${code}); restarting in ${delay}ms`);
+      setTimeout(startOgreverse, delay);
+    });
+    console.log(`[ogreverse] game mounted on 127.0.0.1:${OGV_PORT} → /Ogreverse`);
+  } catch (e) { console.error("[ogreverse] start failed", e); }
+}
+function proxyOgreverse(request, response, requestUrl) {
+  // Redirect /Ogreverse → /Ogreverse/ so the game's relative assets + API base path resolve.
+  if (requestUrl.pathname === "/Ogreverse") { response.writeHead(302, { Location: "/Ogreverse/" }); response.end(); return; }
+  const upstreamPath = (requestUrl.pathname.replace(/^\/Ogreverse/, "") || "/") + (requestUrl.search || "");
+  const proxyReq = http.request(
+    { host: "127.0.0.1", port: OGV_PORT, method: request.method, path: upstreamPath, headers: { ...request.headers, host: `127.0.0.1:${OGV_PORT}` } },
+    (proxyRes) => { response.writeHead(proxyRes.statusCode || 502, proxyRes.headers); proxyRes.pipe(response); }   // streams SSE too
+  );
+  proxyReq.on("error", () => { if (!response.headersSent) { response.writeHead(502, { "content-type": "application/json" }); response.end(JSON.stringify({ ok: false, error: "ogreverse_unavailable" })); } else { try { response.end(); } catch {} } });
+  request.on("close", () => proxyReq.destroy());
+  request.pipe(proxyReq);
+}
+
 function startHealthServer() {
   if (!CONFIG.port) return;
 
   const server = http.createServer(async (request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
+    if (requestUrl.pathname === "/Ogreverse" || requestUrl.pathname.startsWith("/Ogreverse/")) {
+      return proxyOgreverse(request, response, requestUrl);
+    }
 
     if (request.method === "OPTIONS" && requestUrl.pathname.startsWith("/api/")) {
       response.writeHead(204, webCorsHeaders(request));
@@ -3787,6 +3834,7 @@ function startHealthServer() {
 
   server.listen(CONFIG.port, () => {
     console.log(`Health server listening on port ${CONFIG.port}.`);
+    try { startOgreverse(); } catch (e) { console.error("[ogreverse] mount error", e); }
   });
 }
 

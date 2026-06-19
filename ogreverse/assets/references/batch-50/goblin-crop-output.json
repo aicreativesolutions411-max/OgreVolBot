@@ -1,0 +1,402 @@
+﻿[
+    {
+        "assetId":  "GBL001",
+        "sourceAssetId":  "GOB083A",
+        "name":  "Pocketrex",
+        "front":  "assets/sprites/GBL001_front.png",
+        "back":  "assets/sprites/GBL001_back.png",
+        "icon":  "assets/icons/GBL001.png"
+    },
+    {
+        "assetId":  "GBL002",
+        "sourceAssetId":  "GOB083B",
+        "name":  "Greedog",
+        "front":  "assets/sprites/GBL002_front.png",
+        "back":  "assets/sprites/GBL002_back.png",
+        "icon":  "assets/icons/GBL002.png"
+    },
+    {
+        "assetId":  "GBL003",
+        "sourceAssetId":  "GOB083C",
+        "name":  "Goblinix",
+        "front":  "assets/sprites/GBL003_front.png",
+        "back":  "assets/sprites/GBL003_back.png",
+        "icon":  "assets/icons/GBL003.png"
+    },
+    {
+        "assetId":  "GBL004",
+        "sourceAssetId":  "GOB084A",
+        "name":  "Trickmaw",
+        "front":  "assets/sprites/GBL004_front.png",
+        "back":  "assets/sprites/GBL004_back.png",
+        "icon":  "assets/icons/GBL004.png"
+    },
+    {
+        "assetId":  "GBL005",
+        "sourceAssetId":  "GOB084B",
+        "name":  "Sneakog",
+        "front":  "assets/sprites/GBL005_front.png",
+        "back":  "assets/sprites/GBL005_back.png",
+        "icon":  "assets/icons/GBL005.png"
+    },
+    {
+        "assetId":  "GBL006",
+        "sourceAssetId":  "GOB084C",
+        "name":  "Stabzar",
+        "front":  "assets/sprites/GBL006_front.png",
+        "back":  "assets/sprites/GBL006_back.png",
+        "icon":  "assets/icons/GBL006.png"
+    },
+    {
+        "assetId":  "GBL007",
+        "sourceAssetId":  "GOB085A",
+        "name":  "Greedclaw",
+        "front":  "assets/sprites/GBL007_front.png",
+        "back":  "assets/sprites/GBL007_back.png",
+        "icon":  "assets/icons/GBL007.png"
+    },
+    {
+        "assetId":  "GBL008",
+        "sourceAssetId":  "GOB085B",
+        "name":  "Gobblezar",
+        "front":  "assets/sprites/GBL008_front.png",
+        "back":  "assets/sprites/GBL008_back.png",
+        "icon":  "assets/icons/GBL008.png"
+    },
+    {
+        "assetId":  "GBL009",
+        "sourceAssetId":  "GOB086A",
+        "name":  "Stabrex",
+        "front":  "assets/sprites/GBL009_front.png",
+        "back":  "assets/sprites/GBL009_back.png",
+        "icon":  "assets/icons/GBL009.png"
+    },
+    {
+        "assetId":  "GBL010",
+        "sourceAssetId":  "GOB086B",
+        "name":  "Picklin",
+        "front":  "assets/sprites/GBL010_front.png",
+        "back":  "assets/sprites/GBL010_back.png",
+        "icon":  "assets/icons/GBL010.png"
+    },
+    {
+        "assetId":  "GBL011",
+        "sourceAssetId":  "GOB087A",
+        "name":  "Mischrex",
+        "front":  "assets/sprites/GBL011_front.png",
+        "back":  "assets/sprites/GBL011_back.png",
+        "icon":  "assets/icons/GBL011.png"
+    },
+    {
+        "assetId":  "GBL012",
+        "sourceAssetId":  "GOB087B",
+        "name":  "Sneakblast",
+        "front":  "assets/sprites/GBL012_front.png",
+        "back":  "assets/sprites/GBL012_back.png",
+        "icon":  "assets/icons/GBL012.png"
+    },
+    {
+        "assetId":  "GBL013",
+        "sourceAssetId":  "GOB088A",
+        "name":  "Gobmon",
+        "front":  "assets/sprites/GBL013_front.png",
+        "back":  "assets/sprites/GBL013_back.png",
+        "icon":  "assets/icons/GBL013.png"
+    },
+    {
+        "assetId":  "GBL014",
+        "sourceAssetId":  "GOB088B",
+        "name":  "Trickhide",
+        "front":  "assets/sprites/GBL014_front.png",
+        "back":  "assets/sprites/GBL014_back.png",
+        "icon":  "assets/icons/GBL014.png"
+    },
+    {
+        "assetId":  "GBL015",
+        "sourceAssetId":  "GOB089A",
+        "name":  "Sneakmaw",
+        "front":  "assets/sprites/GBL015_front.png",
+        "back":  "assets/sprites/GBL015_back.png",
+        "icon":  "assets/icons/GBL015.png"
+    },
+    {
+        "assetId":  "GBL016",
+        "sourceAssetId":  "GOB089B",
+        "name":  "Greedhide",
+        "front":  "assets/sprites/GBL016_front.png",
+        "back":  "assets/sprites/GBL016_back.png",
+        "icon":  "assets/icons/GBL016.png"
+    },
+    {
+        "assetId":  "GBL017",
+        "sourceAssetId":  "GOB090A",
+        "name":  "Pocketclaw",
+        "front":  "assets/sprites/GBL017_front.png",
+        "back":  "assets/sprites/GBL017_back.png",
+        "icon":  "assets/icons/GBL017.png"
+    },
+    {
+        "assetId":  "GBL018",
+        "sourceAssetId":  "GOB090B",
+        "name":  "Mischog",
+        "front":  "assets/sprites/GBL018_front.png",
+        "back":  "assets/sprites/GBL018_back.png",
+        "icon":  "assets/icons/GBL018.png"
+    },
+    {
+        "assetId":  "GBL019",
+        "sourceAssetId":  "GOB091A",
+        "name":  "Tricklin",
+        "front":  "assets/sprites/GBL019_front.png",
+        "back":  "assets/sprites/GBL019_back.png",
+        "icon":  "assets/icons/GBL019.png"
+    },
+    {
+        "assetId":  "GBL020",
+        "sourceAssetId":  "GOB091B",
+        "name":  "Gobbleon",
+        "front":  "assets/sprites/GBL020_front.png",
+        "back":  "assets/sprites/GBL020_back.png",
+        "icon":  "assets/icons/GBL020.png"
+    },
+    {
+        "assetId":  "GBL021",
+        "sourceAssetId":  "GOB092A",
+        "name":  "Greedmaw",
+        "front":  "assets/sprites/GBL021_front.png",
+        "back":  "assets/sprites/GBL021_back.png",
+        "icon":  "assets/icons/GBL021.png"
+    },
+    {
+        "assetId":  "GBL022",
+        "sourceAssetId":  "GOB092B",
+        "name":  "Stablin",
+        "front":  "assets/sprites/GBL022_front.png",
+        "back":  "assets/sprites/GBL022_back.png",
+        "icon":  "assets/icons/GBL022.png"
+    },
+    {
+        "assetId":  "GBL023",
+        "sourceAssetId":  "GOB093",
+        "name":  "Sneakzar",
+        "front":  "assets/sprites/GBL023_front.png",
+        "back":  "assets/sprites/GBL023_back.png",
+        "icon":  "assets/icons/GBL023.png"
+    },
+    {
+        "assetId":  "GBL024",
+        "sourceAssetId":  "GOB094",
+        "name":  "Trickgob",
+        "front":  "assets/sprites/GBL024_front.png",
+        "back":  "assets/sprites/GBL024_back.png",
+        "icon":  "assets/icons/GBL024.png"
+    },
+    {
+        "assetId":  "GBL025",
+        "sourceAssetId":  "GOB095",
+        "name":  "Gobbleclaw",
+        "front":  "assets/sprites/GBL025_front.png",
+        "back":  "assets/sprites/GBL025_back.png",
+        "icon":  "assets/icons/GBL025.png"
+    },
+    {
+        "assetId":  "GBL026",
+        "sourceAssetId":  "GOB096",
+        "name":  "Pocketblast",
+        "front":  "assets/sprites/GBL026_front.png",
+        "back":  "assets/sprites/GBL026_back.png",
+        "icon":  "assets/icons/GBL026.png"
+    },
+    {
+        "assetId":  "GBL027",
+        "sourceAssetId":  "GOB097",
+        "name":  "Greedogre",
+        "front":  "assets/sprites/GBL027_front.png",
+        "back":  "assets/sprites/GBL027_back.png",
+        "icon":  "assets/icons/GBL027.png"
+    },
+    {
+        "assetId":  "GBL028",
+        "sourceAssetId":  "GOB098",
+        "name":  "Mischmaw",
+        "front":  "assets/sprites/GBL028_front.png",
+        "back":  "assets/sprites/GBL028_back.png",
+        "icon":  "assets/icons/GBL028.png"
+    },
+    {
+        "assetId":  "GBL029",
+        "sourceAssetId":  "GOB099",
+        "name":  "Goblinhide",
+        "front":  "assets/sprites/GBL029_front.png",
+        "back":  "assets/sprites/GBL029_back.png",
+        "icon":  "assets/icons/GBL029.png"
+    },
+    {
+        "assetId":  "GBL030",
+        "sourceAssetId":  "GOB100",
+        "name":  "Pickrex",
+        "front":  "assets/sprites/GBL030_front.png",
+        "back":  "assets/sprites/GBL030_back.png",
+        "icon":  "assets/icons/GBL030.png"
+    },
+    {
+        "assetId":  "GBL031",
+        "sourceAssetId":  "GOB101",
+        "name":  "Stabmon",
+        "front":  "assets/sprites/GBL031_front.png",
+        "back":  "assets/sprites/GBL031_back.png",
+        "icon":  "assets/icons/GBL031.png"
+    },
+    {
+        "assetId":  "GBL032",
+        "sourceAssetId":  "GOB102",
+        "name":  "Sneaklin",
+        "front":  "assets/sprites/GBL032_front.png",
+        "back":  "assets/sprites/GBL032_back.png",
+        "icon":  "assets/icons/GBL032.png"
+    },
+    {
+        "assetId":  "GBL033",
+        "sourceAssetId":  "GOB103",
+        "name":  "Trickog",
+        "front":  "assets/sprites/GBL033_front.png",
+        "back":  "assets/sprites/GBL033_back.png",
+        "icon":  "assets/icons/GBL033.png"
+    },
+    {
+        "assetId":  "GBL034",
+        "sourceAssetId":  "GOB104",
+        "name":  "Greedblast",
+        "front":  "assets/sprites/GBL034_front.png",
+        "back":  "assets/sprites/GBL034_back.png",
+        "icon":  "assets/icons/GBL034.png"
+    },
+    {
+        "assetId":  "GBL035",
+        "sourceAssetId":  "GOB105",
+        "name":  "Gobzar",
+        "front":  "assets/sprites/GBL035_front.png",
+        "back":  "assets/sprites/GBL035_back.png",
+        "icon":  "assets/icons/GBL035.png"
+    },
+    {
+        "assetId":  "GBL036",
+        "sourceAssetId":  "GOB106",
+        "name":  "Stabhide",
+        "front":  "assets/sprites/GBL036_front.png",
+        "back":  "assets/sprites/GBL036_back.png",
+        "icon":  "assets/icons/GBL036.png"
+    },
+    {
+        "assetId":  "GBL037",
+        "sourceAssetId":  "GOB107",
+        "name":  "Pocketmaw",
+        "front":  "assets/sprites/GBL037_front.png",
+        "back":  "assets/sprites/GBL037_back.png",
+        "icon":  "assets/icons/GBL037.png"
+    },
+    {
+        "assetId":  "GBL038",
+        "sourceAssetId":  "GOB108",
+        "name":  "Mischblast",
+        "front":  "assets/sprites/GBL038_front.png",
+        "back":  "assets/sprites/GBL038_back.png",
+        "icon":  "assets/icons/GBL038.png"
+    },
+    {
+        "assetId":  "GBL039",
+        "sourceAssetId":  "GOB109",
+        "name":  "Sneakrex",
+        "front":  "assets/sprites/GBL039_front.png",
+        "back":  "assets/sprites/GBL039_back.png",
+        "icon":  "assets/icons/GBL039.png"
+    },
+    {
+        "assetId":  "GBL040",
+        "sourceAssetId":  "GOB110",
+        "name":  "Trickzar",
+        "front":  "assets/sprites/GBL040_front.png",
+        "back":  "assets/sprites/GBL040_back.png",
+        "icon":  "assets/icons/GBL040.png"
+    },
+    {
+        "assetId":  "GBL041",
+        "sourceAssetId":  "GOB111",
+        "name":  "Greedclaw",
+        "front":  "assets/sprites/GBL041_front.png",
+        "back":  "assets/sprites/GBL041_back.png",
+        "icon":  "assets/icons/GBL041.png"
+    },
+    {
+        "assetId":  "GBL042",
+        "sourceAssetId":  "GOB112",
+        "name":  "Gobblehide",
+        "front":  "assets/sprites/GBL042_front.png",
+        "back":  "assets/sprites/GBL042_back.png",
+        "icon":  "assets/icons/GBL042.png"
+    },
+    {
+        "assetId":  "GBL043",
+        "sourceAssetId":  "GOB113",
+        "name":  "Stabog",
+        "front":  "assets/sprites/GBL043_front.png",
+        "back":  "assets/sprites/GBL043_back.png",
+        "icon":  "assets/icons/GBL043.png"
+    },
+    {
+        "assetId":  "GBL044",
+        "sourceAssetId":  "GOB114",
+        "name":  "Pickmaw",
+        "front":  "assets/sprites/GBL044_front.png",
+        "back":  "assets/sprites/GBL044_back.png",
+        "icon":  "assets/icons/GBL044.png"
+    },
+    {
+        "assetId":  "GBL045",
+        "sourceAssetId":  "GOB115",
+        "name":  "Mischzar",
+        "front":  "assets/sprites/GBL045_front.png",
+        "back":  "assets/sprites/GBL045_back.png",
+        "icon":  "assets/icons/GBL045.png"
+    },
+    {
+        "assetId":  "GBL046",
+        "sourceAssetId":  "GOB116",
+        "name":  "Gobmon",
+        "front":  "assets/sprites/GBL046_front.png",
+        "back":  "assets/sprites/GBL046_back.png",
+        "icon":  "assets/icons/GBL046.png"
+    },
+    {
+        "assetId":  "GBL047",
+        "sourceAssetId":  "GOB117",
+        "name":  "Sneakhide",
+        "front":  "assets/sprites/GBL047_front.png",
+        "back":  "assets/sprites/GBL047_back.png",
+        "icon":  "assets/icons/GBL047.png"
+    },
+    {
+        "assetId":  "GBL048",
+        "sourceAssetId":  "GOB118",
+        "name":  "Trickrex",
+        "front":  "assets/sprites/GBL048_front.png",
+        "back":  "assets/sprites/GBL048_back.png",
+        "icon":  "assets/icons/GBL048.png"
+    },
+    {
+        "assetId":  "GBL049",
+        "sourceAssetId":  "GOB119",
+        "name":  "Greedmon",
+        "front":  "assets/sprites/GBL049_front.png",
+        "back":  "assets/sprites/GBL049_back.png",
+        "icon":  "assets/icons/GBL049.png"
+    },
+    {
+        "assetId":  "GBL050",
+        "sourceAssetId":  "GOB120",
+        "name":  "Gobblemaw",
+        "front":  "assets/sprites/GBL050_front.png",
+        "back":  "assets/sprites/GBL050_back.png",
+        "icon":  "assets/icons/GBL050.png"
+    }
+]
