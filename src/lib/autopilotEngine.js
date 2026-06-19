@@ -150,13 +150,16 @@ export function aggParams(state) {
   // a tiny bet. The $4k floor sits just above pure phantom dust but stays reachable in the last-hour
   // window (higher floors starved it); the real depth/quality vetting is liquidScore + the volume
   // gate + fast exits, not the MC floor. grind stays mid; default is the fresh sub-$20k.
-  // FRESH-PATH MC WINDOW = the EXACT proven +EV pocket. The 1577-trade live scorecard, unchanged
-  // across runs: MC 2.1-2.5k is the ONLY +EV band (+1.17); EVERY other band bleeds — <2.1k (−0.38),
-  // 2.5-3.5k (−1.40 over 716 trades, the single biggest loser), 3.5k+ (−0.54). So clamp the fresh
-  // engine to 2100-2500 — it only buys where it actually makes money. Frequency drops hard; that's
-  // the point of "winning steady" over "trading a lot". (liquid/grind keep their own wide windows.)
-  const mcFloor = liquid ? 4000 : grind ? 6000 : 2100;
-  const mcCeil = liquid ? 12000000 : grind ? 80000 : 2500;
+  // FRESH-PATH MC WINDOW — DE-OVERFIT (2026-06-18, user-approved). The old razor clamp to 2100-2500
+  // (a 400-wide band the engine was fit to on ~1577 trades) is the textbook overfitting signature:
+  // a thin profitable slice surrounded by losing neighbors does not survive multiple-testing
+  // correction (Bailey/López de Prado, Probability of Backtest Overfitting), and a real edge is
+  // robust to widening the band ±20%. Widened to a broad, economically-motivated small-launch range
+  // ($1.8k-$9k). The hard liquidity/wash filters + the survival circuit-breaker (riskBrake) do the
+  // real work now, not a curve-fit band — and the DEFAULT path is leaned LIQUID (exitable movers),
+  // so fresh is no longer the default. (liquid/grind keep their own wide windows.)
+  const mcFloor = liquid ? 4000 : grind ? 6000 : 1800;
+  const mcCeil = liquid ? 12000000 : grind ? 80000 : 9000;
   // ANTI-PHANTOM depth floor — applied ONLY to coins that REPORT a liquidity number (see
   // entryReject). A phantom +400% spike comes from a thin curve where one tiny buy moves the marked
   // cap but nothing can fill, so a coin whose KNOWN liquidity is below this floor is rejected.
@@ -381,9 +384,12 @@ export function freshScore(row) {
   else if (age <= 600) s += 9;
   else s += 5;
 
-  if (mc >= 2100 && mc < 2500) s += 24;     // the ONLY +EV MC pocket (+1.22 over 477)
-  else if (mc >= 1800 && mc < 2100) s += 10;
-  else if (mc <= 15000) s += 7;             // everything >2.5k is -EV (2.5-3.5k = -1.43) → low reward
+  // MC — DE-OVERFIT: a BROAD small-launch preference, not a razor 2100-2500 spike (curve-fit noise).
+  // In-band ($1.8k-$9k) coins all score the same so the band is a WIDE preference; outside it tapers
+  // (a soft nudge, never a hard gate — the clamp + liquidity/wash filters gate). Robust to widening.
+  if (mc >= 1800 && mc <= 9000) s += 24;
+  else if (mc >= 1200 && mc < 1800) s += 12;
+  else if (mc <= 30000) s += 12;
   else s += 5;
 
   if (vol >= 120) s += 16;
@@ -888,9 +894,14 @@ export function equity(state) {
 export function riskBrake(state, nowMs) {
   const exposureCapFrac = Number.isFinite(state.exposureCapFrac) ? state.exposureCapFrac : 0.6;
   const out = { openHalt: false, reason: null, sizeMult: 1, exposureCapFrac };
+  // The HARD HALTS are OPT-IN (`riskHalts`). Default OFF so a TESTING run never auto-pauses — the
+  // user wants to keep trading through losses to see whether it can pick more winners than losers
+  // (a few 4x+ offset many small losers). Turn it on for hands-off set-and-sleep banking. The gentle
+  // size de-risk + exposure cap below always apply (they shrink, never stop).
+  const haltsOn = state.riskHalts === true;
   // (1) Loss-cluster cooldown — a burst of real losses pauses opening for a true cool-off so a
   // correlated rug wave can't drain the wallet trade-by-trade.
-  if (state.consecHaltUntil && nowMs < state.consecHaltUntil) {
+  if (haltsOn && state.consecHaltUntil && nowMs < state.consecHaltUntil) {
     return { ...out, openHalt: true, reason: "loss-cluster cooldown" };
   }
   // (2) Rolling daily loss, two-tier — measured against equity at the day anchor.
@@ -898,7 +909,7 @@ export function riskBrake(state, nowMs) {
   const frac = Number.isFinite(state.dailyLossFrac) && state.dailyLossFrac > 0 ? state.dailyLossFrac : 0.10;
   if (dayBase > 0) {
     const dd = 1 - equity(state) / dayBase;          // fraction down on the rolling day
-    if (dd >= frac) return { ...out, openHalt: true, reason: `daily loss -${Math.round(frac * 100)}%` };
+    if (haltsOn && dd >= frac) return { ...out, openHalt: true, reason: `daily loss -${Math.round(frac * 100)}%` };
     if (dd >= frac / 2) out.sizeMult = 0.5;          // tier 1: half the daily budget spent -> halve size
   }
   // (3) Pre-cluster de-risk: shrink as real losses accumulate, BEFORE the hard cluster halt, so a
@@ -987,6 +998,10 @@ function freshState(opts) {
     //    instead of one lifetime cap; halve size at half the budget, halt opening at the full budget.
     //  • consecLossLimit: real losses in a row that trip a cool-off (longer than the 90s chop nudge).
     //  • exposureCapFrac: cap on TOTAL at-risk capital as a fraction of equity (rugs correlate).
+    // riskHalts OPT-IN (default OFF): the hard daily/cluster HALTS only engage when the user turns
+    // them on (set-and-sleep). OFF = testing mode: keep trading through losses, only the gentle size
+    // de-risk + exposure cap apply. The user can flip this + set dailyLossFrac from the panel.
+    riskHalts: Boolean(opts.riskHalts),
     dailyLossFrac: Math.max(0.03, Math.min(0.5, Number(opts.dailyLossFrac) > 0 ? Number(opts.dailyLossFrac) : 0.10)),
     consecLossLimit: Math.max(2, Math.min(10, Number(opts.consecLossLimit) || 4)),
     consecCooldownMs: Math.max(60_000, Number(opts.consecCooldownMs) || 15 * 60_000),
@@ -1691,7 +1706,7 @@ export function createAutopilotEngine(deps) {
     // RISK BRAKE: count real losses in a row; a cluster trips a real cool-off on NEW entries
     // (exits keep running). Longer + harder than the 90s chop nudge — this is the survival stop.
     state.consecLosses = (state.consecLosses || 0) + 1;
-    if (state.consecLosses >= (state.consecLossLimit || 4) && (!state.consecHaltUntil || now() > state.consecHaltUntil)) {
+    if (state.riskHalts && state.consecLosses >= (state.consecLossLimit || 4) && (!state.consecHaltUntil || now() > state.consecHaltUntil)) {
       state.consecHaltUntil = now() + (state.consecCooldownMs || 15 * 60_000);
       record("warn", `🧯 ${state.consecLosses} losses in a row — pausing new entries ~${Math.round((state.consecCooldownMs || 900000) / 60000)}m (exits stay live).`);
     }

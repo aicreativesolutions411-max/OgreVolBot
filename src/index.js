@@ -4821,7 +4821,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
           return;
         }
         const minutes = Number(body.minutes) || 60;
-        const mode = ["chill", "normal", "degen", "steady", "blend", "grind", "scalp"].includes(String(body.mode)) ? String(body.mode) : "normal";
+        // DEFAULT leaned LIQUID (2026-06-18): when no mode is sent, hunt the exitable last-hour movers
+        // (scalp) instead of fresh dust — what the user actually wants ("movers that steady move, get
+        // in and out with profit"), and the path the survival circuit-breaker + wash filter protect.
+        const mode = ["chill", "normal", "degen", "steady", "blend", "grind", "scalp"].includes(String(body.mode)) ? String(body.mode) : "scalp";
         const wantLive = body.live === true || body.live === "true";
         // PAPER MODE IS OWNER-ONLY. Paper runs the full strategy with no risk, so it's the
         // clearest window into how the bot works — paying users must NEVER see it. They run

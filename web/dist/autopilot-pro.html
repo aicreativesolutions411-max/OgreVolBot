@@ -313,9 +313,9 @@
       <!-- STYLE: how it trades — 3 honest, distinct profiles -->
       <label style="margin-top:4px">Style — how it trades</label>
       <div class="modeSel" id="modeSel">
-        <button type="button" class="modeBtn on" data-mode="steady"><b>Steady</b><span>Locks the bulk at the first solid pop. Smallest swings — banks green most often.</span></button>
+        <button type="button" class="modeBtn" data-mode="steady"><b>Steady</b><span>Locks the bulk at the first solid pop. Smallest swings — banks green most often.</span></button>
         <button type="button" class="modeBtn" data-mode="blend"><b>Balanced</b><span>Banks in steps as it climbs, lets a small piece ride. Steady, with upside.</span></button>
-        <button type="button" class="modeBtn" data-mode="scalp"><b>Quick</b><span>Liquid movers, fast in &amp; out. Lots of small, clean wins.</span></button>
+        <button type="button" class="modeBtn on" data-mode="scalp"><b>Quick</b><span>Liquid movers you can actually exit — fast in &amp; out. Lots of small, clean wins.</span></button>
       </div>
       <div class="row">
         <div><label>Max per trade (SOL)</label><input type="number" id="maxTrade" value="0.08" min="0.01" step="0.01"/></div>
@@ -737,10 +737,11 @@ $("cashoutBtn").addEventListener("click",async()=>{const w=selWallet();if(!w){$(
     if(r&&r.ok){$("cashoutMsg").innerHTML='<span class="ok">Sent — your SOL is on the way to '+dest.slice(0,4)+'…'+dest.slice(-4)+'.</span>';activatingUntil=0;setState("idle");loadWallets();poll();}
     else{$("cashoutMsg").innerHTML='<span class="warn">'+((r&&r.error)||"sweep failed")+'</span>';}});});
 
-// STYLE selector — pick one of three distinct trading profiles (default Steady = most consistent).
-let selectedMode="steady";
+// STYLE selector — pick one of three profiles. Default LEANED to Quick (liquid, exitable movers):
+// the "movers that steady move, get in and out with profit" path, protected by the survival brake.
+let selectedMode="scalp";
 $("modeSel").addEventListener("click",(e)=>{const b=e.target.closest(".modeBtn");if(!b)return;
-  selectedMode=b.dataset.mode||"steady";
+  selectedMode=b.dataset.mode||"scalp";
   [...$("modeSel").querySelectorAll(".modeBtn")].forEach(x=>x.classList.toggle("on",x===b));});
 // "Use whole balance" — grey out the manual amount; the server sizes off the full wallet (less a fee reserve).
 $("useAll").addEventListener("change",()=>{$("amt").disabled=$("useAll").checked;});

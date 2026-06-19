@@ -191,12 +191,13 @@ test("entryReject: passes a clean fresh mover", () => {
   assert.equal(entryReject(goodRow(), P), null);
 });
 
-test("executableMcReject: fresh entries must still execute inside the proven MC pocket", () => {
+test("executableMcReject: fresh entries execute inside the DE-OVERFIT small-launch band ($1.8k-$9k)", () => {
   const P = aggParams(baseState({ mode: "steady" }));
-  assert.equal(executableMcReject(goodRow({ marketCap: 2300 }), P), null);
-  assert.equal(executableMcReject(goodRow({ marketCap: 1990 }), P), "entry-mc");
-  assert.equal(executableMcReject(goodRow({ marketCap: 5453 }), P), "entry-mc");
-  assert.equal(executableMcReject(goodRow({ marketCap: 5453 }), P, { kol: true }), null, "copy rows use KOL/wallet gates instead");
+  assert.equal(executableMcReject(goodRow({ marketCap: 2300 }), P), null, "in-band low");
+  assert.equal(executableMcReject(goodRow({ marketCap: 7000 }), P), null, "in-band high (the old razor would have rejected this)");
+  assert.equal(executableMcReject(goodRow({ marketCap: 1500 }), P), "entry-mc", "below the floor");
+  assert.equal(executableMcReject(goodRow({ marketCap: 15000 }), P), "entry-mc", "above the ceiling");
+  assert.equal(executableMcReject(goodRow({ marketCap: 15000 }), P, { kol: true }), null, "copy rows use KOL/wallet gates instead");
 });
 
 test("entryReject: fresh path rejects the live-losing 72+ blowoff score band", () => {
@@ -816,10 +817,10 @@ test("engine: post-fill MC guard sells back fresh entries that leave the winning
   let t = 0;
   let buys = 0;
   let sells = 0;
-  const liveMarks = [2300, 5453];
+  const liveMarks = [2300, 15000]; // fill in-band ($2.3k), then drift OUT of the de-overfit band ($1.8k-$9k)
   const engine = createAutopilotEngine({
     getFreshFeed: async () => [goodRow({ tokenMint: "DriftMint111111111111111111111111111111111", symbol: "DRIFT", marketCap: 2300 })],
-    getPairLite: async () => ({ marketCap: liveMarks.length ? liveMarks.shift() : 5453, liquidityUsd: 5000 }),
+    getPairLite: async () => ({ marketCap: liveMarks.length ? liveMarks.shift() : 15000, liquidityUsd: 5000 }),
     buyToken: async () => { buys++; return { ok: true, tokenAmount: "1000" }; },
     sellPercent: async (_mint, pct, pos) => { sells++; assert.equal(pct, 100); assert.equal(pos.tokenAmount, "1000"); return { ok: true, receivedSol: 0.0118 }; },
     now: () => t,
@@ -1359,19 +1360,25 @@ test("riskBrake: a clean book never halts and never shrinks size", () => {
   assert.equal(b.exposureCapFrac, 0.6, "passes the correlated-exposure cap through to canOpen");
 });
 
-test("riskBrake: rolling-daily two-tier — halve size at half the budget, halt at the full budget", () => {
-  // day base 1.0, dailyLossFrac 0.10 -> halve at -5%, halt at -10%
-  const tier1 = baseState({ bank: 0.93, dayAnchorEquity: 1, dailyLossFrac: 0.1 }); // -7% on the day
+test("riskBrake: hard halts are OPT-IN — default OFF only sizes down, riskHalts:true halts", () => {
+  // day base 1.0, dailyLossFrac 0.10 -> halve at -5%, halt at -10% (halt only when riskHalts on)
+  const tier1 = baseState({ bank: 0.93, dayAnchorEquity: 1, dailyLossFrac: 0.1, riskHalts: true }); // -7%
   assert.equal(riskBrake(tier1, 0).sizeMult, 0.5, "past half the daily budget -> halve size");
   assert.equal(riskBrake(tier1, 0).openHalt, false, "but not yet a hard halt");
-  const halt = baseState({ bank: 0.88, dayAnchorEquity: 1, dailyLossFrac: 0.1 }); // -12% on the day
-  assert.equal(riskBrake(halt, 0).openHalt, true, "full daily budget spent -> halt opening");
+  const halt = baseState({ bank: 0.88, dayAnchorEquity: 1, dailyLossFrac: 0.1, riskHalts: true }); // -12%
+  assert.equal(riskBrake(halt, 0).openHalt, true, "halts on -> full daily budget spent halts opening");
+  // DEFAULT (riskHalts off / testing mode): the same -12% day only SIZES DOWN, never halts.
+  const testing = baseState({ bank: 0.88, dayAnchorEquity: 1, dailyLossFrac: 0.1 });
+  assert.equal(riskBrake(testing, 0).openHalt, false, "opt-in OFF -> keeps trading through losses");
+  assert.equal(riskBrake(testing, 0).sizeMult, 0.5, "but still de-risks size");
 });
 
-test("riskBrake: a loss-cluster cooldown halts opening until it expires", () => {
-  const s = baseState({ bank: 1, dayAnchorEquity: 1, dailyLossFrac: 0.1, consecHaltUntil: 5000 });
+test("riskBrake: a loss-cluster cooldown halts opening until it expires (only when riskHalts on)", () => {
+  const s = baseState({ bank: 1, dayAnchorEquity: 1, dailyLossFrac: 0.1, consecHaltUntil: 5000, riskHalts: true });
   assert.equal(riskBrake(s, 1000).openHalt, true, "inside the cooldown -> halt");
   assert.equal(riskBrake(s, 6000).openHalt, false, "past the cooldown -> resume");
+  const off = baseState({ bank: 1, dayAnchorEquity: 1, consecHaltUntil: 5000 });
+  assert.equal(riskBrake(off, 1000).openHalt, false, "opt-in OFF -> cooldown does not halt");
 });
 
 test("riskBrake: accumulating losses de-risk size before the hard cluster halt", () => {
