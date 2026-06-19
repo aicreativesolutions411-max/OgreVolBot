@@ -2108,6 +2108,96 @@ async function pollHeldPricesSwapApi() {
 }
 setInterval(() => { void pollHeldPricesSwapApi(); }, 3000); // keep held coins hot so per-tick exit checks are fast cache hits
 
+// ---------------------------------------------------------------------------
+// NOTABLE-X CLOUT for the launch sniper (the user's top-priority "X link from a big name" signal).
+// FREE, no X API: resolve a fresh launch's attached X handle from pump metadata, then score the
+// account's clout via the fxtwitter mirror (real follower count) + our own tracked-KOL/caller name
+// roster. Cached per mint (a coin's X never changes) + per handle (clout is stable). Trickle-polled
+// ONLY while a SNIPE mode is active — crash-loop-safe (≤3 mints/cycle, spaced). The engine reads the
+// attached row.xClout (0 none / 1 known-sizable / 2 big-name) in snipeSignalScore.
+const SNIPE_X_CLOUT = new Map();   // mint -> { clout, handle, at }
+const SNIPE_X_HANDLE = new Map();  // handle(lower) -> { clout, at }
+const SNIPE_X_SEEN = new Set();    // mints already attempted this run (don't re-hammer)
+let lastFreshMints = [];           // the mints the fresh feed last returned (the sniper's candidate pool)
+
+function extractXHandle(url) {
+  const m = String(url || "").match(/(?:twitter|x)\.com\/(?:#!\/)?@?([A-Za-z0-9_]{1,15})(?:[/?#]|$)/i);
+  if (!m) return null;
+  const h = m[1].toLowerCase();
+  if (["i", "intent", "home", "search", "share", "hashtag", "explore", "messages", "notifications", "communities", "compose", "status", "about"].includes(h)) return null;
+  return m[1];
+}
+
+// Is this handle one of our tracked KOLs / known callers by name? (free, curated roster check).
+function isNotableHandle(handle) {
+  const h = String(handle || "").toLowerCase().replace(/^@/, "");
+  if (!h) return false;
+  for (const rec of trackedKolWallets.values()) {
+    const n = String((rec && rec.name) || "").toLowerCase().replace(/^@/, "");
+    if (n && n === h) return true;
+  }
+  return false;
+}
+
+async function assessXClout(handle) {
+  const key = String(handle || "").toLowerCase();
+  if (!key) return 0;
+  const cached = SNIPE_X_HANDLE.get(key);
+  if (cached && Date.now() - cached.at < 6 * 60 * 60 * 1000) return cached.clout;
+  let clout = 0;
+  if (isNotableHandle(handle)) clout = 2;
+  else {
+    try {
+      const j = await fetchJson(`https://api.fxtwitter.com/${encodeURIComponent(handle)}`, { timeoutMs: 7000, headers: { "User-Agent": "SlimeWireBot/1.0" } }).catch(() => null);
+      const u = (j && (j.user || j.data || j)) || {};
+      const followers = Number(u.followers || u.followers_count || 0) || 0;
+      const verified = Boolean(u.verified || u.is_blue_verified);
+      if (followers >= 100000 || (verified && followers >= 25000)) clout = 2;
+      else if (followers >= 10000) clout = 1;
+      else clout = 0;
+    } catch { clout = 0; }
+  }
+  SNIPE_X_HANDLE.set(key, { clout, at: Date.now() });
+  return clout;
+}
+
+async function resolveTokenXClout(mint) {
+  if (!mint) return 0;
+  const cached = SNIPE_X_CLOUT.get(mint);
+  if (cached) return cached.clout;
+  let handle = null;
+  try {
+    const j = await fetchJson(`https://frontend-api-v3.pump.fun/coins/${mint}`, { timeoutMs: 7000, headers: { "User-Agent": "Mozilla/5.0", accept: "application/json" } }).catch(() => null);
+    handle = extractXHandle((j && (j.twitter || j.twitter_url)) || "");
+  } catch {}
+  const clout = handle ? await assessXClout(handle) : 0;
+  SNIPE_X_CLOUT.set(mint, { clout, handle, at: Date.now() });
+  if (clout >= 1) console.log(`[autopilot:info] ⭐ notable X (clout ${clout}) @${handle} on ${String(mint).slice(0, 6)}…`);
+  return clout;
+}
+
+let _snipeXPolling = false;
+async function pollSnipeXClout() {
+  if (_snipeXPolling) return;
+  let mode = null;
+  try { mode = autopilotEngine.status()?.mode || null; } catch {}
+  if (!mode || !/^snipe/i.test(mode)) return;          // only spend calls when actually sniping
+  _snipeXPolling = true;
+  try {
+    let done = 0;
+    for (const m of (lastFreshMints || [])) {
+      if (done >= 3) break;                              // gentle: ≤3 mints/cycle
+      if (!m || SNIPE_X_SEEN.has(m)) continue;
+      SNIPE_X_SEEN.add(m);
+      try { await resolveTokenXClout(m); } catch {}
+      done += 1;
+      await new Promise((r) => setTimeout(r, 200));      // spacing (crash-loop-safe)
+    }
+    if (SNIPE_X_SEEN.size > 4000) SNIPE_X_SEEN.clear();
+  } finally { _snipeXPolling = false; }
+}
+setInterval(() => { void pollSnipeXClout(); }, 15_000);
+
 const autopilotEngine = createAutopilotEngine({
   exitMs: 1000,
   huntMs: 5000,
@@ -2164,7 +2254,7 @@ const autopilotEngine = createAutopilotEngine({
         }
       } catch {}
     }
-    return rows.map((r) => ({
+    const out = rows.map((r) => ({
       tokenMint: r.tokenMint,
       symbol: r.symbol,
       pairAgeSeconds: r.pairAgeSeconds,
@@ -2176,6 +2266,14 @@ const autopilotEngine = createAutopilotEngine({
       sniperCount: r.sniperCount || r.snipers || 0,
       bestPickScore: r.bestPickScore || r.bestPick || 0
     }));
+    // SNIPER: remember this candidate pool (the X-clout trickle resolves these) and attach any
+    // already-resolved notable-X clout so snipeSignalScore can fire the X signal.
+    lastFreshMints = out.map((row) => row.tokenMint).filter(Boolean);
+    for (const row of out) {
+      const c = SNIPE_X_CLOUT.get(row.tokenMint);
+      if (c && c.clout >= 1) { row.xClout = c.clout; row.xNotable = true; }
+    }
+    return out;
   },
   // SCALP feed: LIQUID movers across the FULL range — from fresh small caps to mid-cap runners
   // (the 30k→150k / 50k→200k quick-win movers the user wants). It pulls the data-driven
