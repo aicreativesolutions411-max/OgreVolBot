@@ -2180,7 +2180,13 @@ export function createAutopilotEngine(deps) {
       // proven-dev history, or smart-money plays still enter instantly so real runners and
       // the strongest fresh movers are never missed. Also re-confirms a coin that already
       // stopped us this session (coinLosses>0) so we stop instantly re-aping a chopper.
-      const proven = (rep && rep.runners >= 1 && rep.rugs === 0) || (sm && (sm.kol || sm.winners >= 2)) || (ci && ci.trusted);
+      // A passing SNIPE candidate counts as PROVEN: the standout signal (notable X / trusted caller /
+      // proven dev / winner early-buyer) IS the reason to buy, so it OVERRIDES the generic red-tape
+      // comps veto (historyGateReject) + the momentum re-confirm — exactly like a proven copy. Without
+      // this, live logs showed notable-X snipes ('🎯 SNIPE … signals [x]') getting 'history-fail'
+      // skipped in a red tape and never buying. The tight stop + de-risk-trail + rug-flow tripwire are
+      // the protection here, not the comps veto.
+      const proven = (rep && rep.runners >= 1 && rep.rugs === 0) || (sm && (sm.kol || sm.winners >= 2)) || (ci && ci.trusted) || (P.snipe && snipeRec && snipeRec.score >= P.minSnipe);
       // SCALP scores on the liquidScore scale (top setups ~45-80). A liquid, buy-led mover's real
       // depth + scalp's tight 7% stop / fast ~14% bank already handle the risk confirmation guards
       // against — so a solid scalp setup (>=44, a clearly buy-led in-band mover) enters INSTANTLY.
