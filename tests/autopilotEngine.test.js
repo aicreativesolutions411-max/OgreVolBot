@@ -748,11 +748,13 @@ test("server autopilot sell adapter passes original token amount to sell helper"
   const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
   const start = serverSource.indexOf("sellPercent: async (mint, pct, pos = null)");
   assert.ok(start >= 0, "adapter accepts the engine position object");
-  const adapter = serverSource.slice(start, start + 900);
+  const adapter = serverSource.slice(start, start + 1800);   // adapter grew with escalating-slippage exit retries
   assert.match(adapter, /pos\.tokenAmount/);
   assert.match(adapter, /baseRawAmount/);
   assert.match(adapter, /sellTokenFromWallet/);
   assert.match(adapter, /\.\.\.\(baseRawAmount \? \{ baseRawAmount \} : \{\}\)/);
+  // the live-money fix: exits escalate slippage until they land instead of failing flat at 7%
+  assert.match(adapter, /levels|escalat/i);
 });
 
 test("server observatory learns linked wallets and exits from working swap-api trades", () => {

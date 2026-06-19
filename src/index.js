@@ -2994,11 +2994,32 @@ const autopilotEngine = createAutopilotEngine({
     try {
       if (pos && pos.tokenAmount != null && BigInt(pos.tokenAmount) > 0n) baseRawAmount = String(pos.tokenAmount);
     } catch {}
-    const res = await sellTokenFromWallet(autopilotWalletRecord, mint, pct, CONFIG.autopilotSlippageBps, {
-      priceExit: true,
-      priority: true,
-      ...(baseRawAmount ? { baseRawAmount } : {})
-    });
+    // ESCALATING-SLIPPAGE EXIT (live-money fix — the "caught the rug but couldn't sell" bug). A
+    // rugging/dumping memecoin craters faster than the flat 7% slippage can fill, so the sell REJECTS
+    // and the position rides to ZERO. Retry with progressively higher slippage until it actually
+    // LANDS — exiting at -40% beats failing at -7% and riding to -99%. The FIRST level that fills wins,
+    // so a normal TP/stop on a stable/rising coin still exits cheap (no over-slippage); only a real
+    // crash escalates to the 50% emergency. Each level tries BOTH routes (pump curve first, then
+    // Jupiter) inside sellTokenFromWallet. Throws only if EVERY level fails (preserves the prior
+    // throw-on-failure contract so the engine keeps the position instead of booking a phantom close).
+    const base = Math.max(1, Number(CONFIG.autopilotSlippageBps) || 700);
+    const levels = [...new Set([base, 1500, 2500, 5000].filter((s) => s >= base))];
+    let res = null, lastErr = null, usedSlip = base;
+    for (const slip of levels) {
+      try {
+        res = await sellTokenFromWallet(autopilotWalletRecord, mint, pct, slip, {
+          priceExit: true,
+          priority: true,
+          ...(baseRawAmount ? { baseRawAmount } : {})
+        });
+        if (res) { usedSlip = slip; break; }
+      } catch (e) { lastErr = e; }
+    }
+    if (!res) {
+      console.warn(`[autopilot] exit ${shortMint(mint)} FAILED at every slippage level (${levels.join("/")}bps): ${lastErr && lastErr.message}`);
+      throw lastErr || new Error("exit failed at all slippage levels");
+    }
+    if (usedSlip > base) console.log(`[autopilot] 🔻 exit ${shortMint(mint)} filled at ${(usedSlip / 100).toFixed(0)}% slippage (escalated from ${(base / 100).toFixed(0)}%) — got out ahead of the rug`);
     // Return the REAL SOL the wallet received (gross swap out minus our platform fee),
     // so the engine books actual fills — not the marked/displayed price. Without this
     // a +480%-marked moon bag that fills at +40% logged a fake +0.48 "win" while the
