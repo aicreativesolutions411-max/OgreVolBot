@@ -2456,10 +2456,18 @@ function autopilotEnrichedFields(r = {}) {
 // (a brand-new coin not yet enriched) is NOT treated as danger (the engine + pre-buy SlimeShield
 // check vet further). This is the host-side complement to the engine's pre-buy securityGate.
 function autopilotRowHasHardDanger(r = {}) {
+  // FEED-LEVEL hard gate = ONLY unambiguous rug/scam vectors. It must stay LOOSE: live diagnostics
+  // showed the old version nuking 48/50 fresh coins (out=2) → the blend/steady engine "found nothing
+  // to buy." TWO over-rejections removed (2026-06-20): (1) token2022 — a pump Token-2022 on a trusted
+  // pool IS buyable (see the pop route-filter fix bd226f5; ~44% of pump launches are Token-2022), so
+  // it's not hard danger; (2) the rugRisk>=85 / manipulationScore>=85 HEURISTICS — they score brand-
+  // new fresh dust as "risky" en masse. The REAL per-coin safety is the PRE-BUY securityGate (full
+  // SlimeShield, re-checks every candidate right before the buy) + the entry gauntlet, so the feed
+  // gate only needs to drop the clear scams here. Keep active freeze/mint authority + honeypot/
+  // blacklist/mayhem/hardblock (genuine, unfakeable rug vectors).
   const flags = (Array.isArray(r.riskFlags) ? r.riskFlags : []).map((f) => String(f).toLowerCase());
-  if (flags.some((f) => /freezeauthorityactive|mintauthorityactive|token2022|honeypot|mayhem|hardblock|blacklist/.test(f))) return true;
-  const rug = Number(r.rugRisk); if (Number.isFinite(rug) && rug >= 85) return true;            // AVOID-grade only
-  const manip = Number(r.manipulationScore); if (Number.isFinite(manip) && manip >= 85) return true;
+  if (flags.some((f) => /freezeauthorityactive|mintauthorityactive|honeypot|mayhem|hardblock|blacklist/.test(f))) return true;
+  const rug = Number(r.rugRisk); if (Number.isFinite(rug) && rug >= 97) return true;            // only the most extreme AVOID-grade
   return false;
 }
 
@@ -33354,19 +33362,35 @@ async function hydrateMarketRowFromPublicSources(mint = "", row = null, reason =
   const shouldTryPump = String(cleanMint).toLowerCase().endsWith("pump")
     || Boolean(baseRow.isPump || baseRow.pumpUrl || baseRow.pumpFunUrl || baseRow.pumpMetadataPresent);
   const shouldTryHeliusDas = heliusDasEnabled() && forceRefresh;
-  const [pairs, pumpMeta, heliusMeta] = await Promise.all([
+  // SOLANA TRACKER (paid /tokens/{mint}) — the real-data source for Dev Info + SlimeShield: deployer
+  // wallet, mint/freeze authority, top-holder concentration, LP burn, rug score. Only on a force
+  // refresh (i.e. the user OPENED Dev Info or SlimeShield for this coin), so it's on-demand, not
+  // per-feed-row. Premium quota covers the bursty opens; cached 90s per mint inside the fetcher.
+  const shouldTryStTracker = Boolean(CONFIG.solanaTrackerApiKey) && forceRefresh;
+  const [pairs, pumpMeta, heliusMeta, stReport] = await Promise.all([
     fetchDexScreenerTokenPairsBatch([cleanMint], { timeoutMs: 1_800 }).catch(() => []),
     shouldTryPump
       ? getPumpFunTokenMetadata(cleanMint, { timeoutMs: 1_400 }).catch(() => ({}))
       : Promise.resolve({}),
     shouldTryHeliusDas
       ? fetchHeliusDasTokenMetadata(cleanMint, { force: forceRefresh, timeoutMs: Math.min(2_000, CONFIG.heliusDasTimeoutMs) }).catch(() => ({}))
-      : Promise.resolve({})
+      : Promise.resolve({}),
+    shouldTryStTracker
+      ? fetchSolanaTrackerTokenReport(cleanMint).catch(() => null)
+      : Promise.resolve(null)
   ]);
   const best = bestDexPairForToken(cleanMint, pairs);
   const dex = best ? metadataFromDexPair(cleanMint, best) : {};
   const volume = dex.volume || {};
   const txns = dex.txns || {};
+  const st = stReport || {};
+  // ST-derived hard/soft flags so the existing SlimeShield authority/concentration factors + the
+  // autopilot rug-gate read real on-chain risk (renounced authority = "" from the fetcher = no flag).
+  const stRiskFlags = [];
+  if (st.mintAuthority) stRiskFlags.push("mint authority active");
+  if (st.freezeAuthority) stRiskFlags.push("freeze authority active");
+  if (st.rugged) stRiskFlags.push("rugged");
+  // (top-holder concentration is scored precisely from the real % in computeSlimeShield, not as a flag.)
   const authorityRiskFlags = Array.isArray(heliusMeta.riskFlags) ? heliusMeta.riskFlags : [];
   return {
     ...baseRow,
@@ -33380,9 +33404,9 @@ async function hydrateMarketRowFromPublicSources(mint = "", row = null, reason =
     websiteUrl: firstString(baseRow.websiteUrl, pumpMeta.websiteUrl, dex.websiteUrl, heliusMeta.websiteUrl),
     twitterUrl: firstString(baseRow.twitterUrl, baseRow.xUrl, pumpMeta.twitterUrl, dex.twitterUrl, heliusMeta.twitterUrl),
     telegramUrl: firstString(baseRow.telegramUrl, pumpMeta.telegramUrl, dex.telegramUrl, heliusMeta.telegramUrl),
-    marketCap: firstMeaningfulNumber(baseRow.marketCap, pumpMeta.marketCap, dex.marketCap),
+    marketCap: firstMeaningfulNumber(baseRow.marketCap, pumpMeta.marketCap, dex.marketCap, st.marketCap),
     fdv: firstMeaningfulNumber(baseRow.fdv, pumpMeta.fdv, pumpMeta.marketCap, dex.fdv, dex.marketCap),
-    liquidityUsd: firstMeaningfulNumber(baseRow.liquidityUsd, pumpMeta.liquidityUsd, dex.liquidityUsd),
+    liquidityUsd: firstMeaningfulNumber(baseRow.liquidityUsd, pumpMeta.liquidityUsd, dex.liquidityUsd, st.liquidityUsd),
     volume5m: firstMeaningfulNumber(baseRow.volume5m, volume.m5, volume["5m"]),
     volumeH1: firstMeaningfulNumber(baseRow.volumeH1, volume.h1, volume["1h"]),
     buys5m: firstMeaningfulNumber(baseRow.buys5m, txns.m5?.buys, txns["5m"]?.buys),
@@ -33390,14 +33414,24 @@ async function hydrateMarketRowFromPublicSources(mint = "", row = null, reason =
     decimals: firstMeaningfulNumber(baseRow.decimals, pumpMeta.decimals, heliusMeta.decimals),
     totalSupply: firstMeaningfulNumber(baseRow.totalSupply, pumpMeta.totalSupply, heliusMeta.totalSupply),
     priceUsd: firstMeaningfulNumber(baseRow.priceUsd, pumpMeta.priceUsd, dex.priceUsd, heliusMeta.priceUsd),
-    creatorWallet: firstString(baseRow.creatorWallet, baseRow.creator, pumpMeta.creatorWallet, pumpMeta.creator, heliusMeta.creatorWallet),
-    creator: firstString(baseRow.creator, baseRow.creatorWallet, pumpMeta.creator, pumpMeta.creatorWallet, heliusMeta.creator),
-    deployerWallet: firstString(baseRow.deployerWallet, baseRow.deployer, pumpMeta.deployerWallet, pumpMeta.deployer),
+    creatorWallet: firstString(baseRow.creatorWallet, baseRow.creator, pumpMeta.creatorWallet, pumpMeta.creator, heliusMeta.creatorWallet, st.creator),
+    creator: firstString(baseRow.creator, baseRow.creatorWallet, pumpMeta.creator, pumpMeta.creatorWallet, heliusMeta.creator, st.creator),
+    deployerWallet: firstString(baseRow.deployerWallet, baseRow.deployer, pumpMeta.deployerWallet, pumpMeta.deployer, st.creator),
     poolCreator: firstString(baseRow.poolCreator, baseRow.pairCreator, pumpMeta.poolCreator, pumpMeta.initialLiquidityWallet),
     metadataAuthority: firstString(baseRow.metadataAuthority, heliusMeta.metadataAuthority),
     updateAuthority: firstString(baseRow.updateAuthority, heliusMeta.updateAuthority, heliusMeta.metadataAuthority),
-    mintAuthority: firstString(baseRow.mintAuthority, heliusMeta.mintAuthority),
-    freezeAuthority: firstString(baseRow.freezeAuthority, heliusMeta.freezeAuthority),
+    mintAuthority: firstString(baseRow.mintAuthority, heliusMeta.mintAuthority, st.mintAuthority),
+    freezeAuthority: firstString(baseRow.freezeAuthority, heliusMeta.freezeAuthority, st.freezeAuthority),
+    // Solana Tracker on-chain risk/holder/LP data (real values that fill the Dev Info + SlimeShield void).
+    topHolderPercent: firstMeaningfulNumber(baseRow.topHolderPercent, st.topHolderPercent),
+    lpBurnedPercent: firstMeaningfulNumber(baseRow.lpBurnedPercent, st.lpBurnedPercent),
+    holderCount: firstMeaningfulNumber(baseRow.holderCount, st.holderCount),
+    stRugScore: Number.isFinite(st.rugScore) ? st.rugScore : (Number.isFinite(baseRow.stRugScore) ? baseRow.stRugScore : null),
+    stRugged: Boolean(baseRow.stRugged || st.rugged),
+    stRiskNotes: (Array.isArray(st.riskNotes) && st.riskNotes.length) ? st.riskNotes : (Array.isArray(baseRow.stRiskNotes) ? baseRow.stRiskNotes : []),
+    stMarket: firstString(baseRow.stMarket, st.market),
+    stOnCurve: Boolean(baseRow.stOnCurve || st.onCurve),
+    solanaTrackerLoaded: Boolean(baseRow.solanaTrackerLoaded || st.ok),
     pairAddress: firstString(baseRow.pairAddress, dex.pairAddress),
     raydiumPool: firstString(baseRow.raydiumPool, dex.raydiumPool, dex.pairAddress),
     dexId: firstString(baseRow.dexId, dex.dexId),
@@ -33408,8 +33442,9 @@ async function hydrateMarketRowFromPublicSources(mint = "", row = null, reason =
     pumpUrl: firstString(baseRow.pumpUrl, shouldTryPump ? pumpFunUrl(cleanMint) : ""),
     riskFlags: uniqueStrings([
       ...(Array.isArray(baseRow.riskFlags) ? baseRow.riskFlags : []),
-      ...authorityRiskFlags
-    ]).slice(0, 10),
+      ...authorityRiskFlags,
+      ...stRiskFlags
+    ]).slice(0, 12),
     heliusDasIndexedAt: firstString(baseRow.heliusDasIndexedAt, heliusMeta.heliusDasIndexedAt),
     heliusDasSource: heliusMeta.source || "",
     source: firstString(

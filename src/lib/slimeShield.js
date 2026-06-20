@@ -254,6 +254,47 @@ export function computeSlimeShield(row = {}, options = {}) {
     }
   }
 
+  // SOLANA TRACKER (paid /tokens/{mint}) — the real on-chain risk read the free engines miss:
+  // top-holder concentration, LP burn, and a deployer rug verdict. A loaded report is a KNOWN
+  // signal (lifts confidence out of "low"), filling the void Dev Info/SlimeShield used to show blank.
+  if (row.solanaTrackerLoaded) {
+    knownSignals.push("solanatracker");
+    if (row.stRugged === true) {
+      score -= 40;
+      factors.push(factor("st_rugged", "Solana Tracker", "risk", "Solana Tracker flags this token as rugged.", -40));
+    }
+    const topHold = firstNumber(row.topHolderPercent);
+    if (Number.isFinite(topHold) && topHold > 0) {
+      if (topHold >= 80) {
+        score -= 18;
+        factors.push(factor("st_concentration", "Holders", "risk", `Top holders control ${Math.round(topHold)}% of supply.`, -18));
+      } else if (topHold >= 60) {
+        score -= 9;
+        factors.push(factor("st_concentration_mid", "Holders", "caution", `Top holders control ${Math.round(topHold)}% of supply.`, -9));
+      } else if (topHold <= 35) {
+        score += 4;
+        factors.push(factor("st_distributed", "Holders", "positive", `Supply is fairly distributed (top holders ${Math.round(topHold)}%).`, 4));
+      }
+    }
+    // LP burn is only meaningful for a graduated/real-pool coin — a bonding-curve coin has no LP yet.
+    const lpBurn = firstNumber(row.lpBurnedPercent);
+    if (Number.isFinite(lpBurn) && !row.stOnCurve) {
+      if (lpBurn >= 90) {
+        score += 5;
+        factors.push(factor("st_lp_burned", "LP", "positive", "Liquidity is burned / locked.", 5));
+      } else if (lpBurn < 20) {
+        score -= 12;
+        factors.push(factor("st_lp_open", "LP", "risk", "Liquidity is not burned — rug-pull risk.", -12));
+      }
+    }
+    const stScore = firstNumber(row.stRugScore);
+    if (Number.isFinite(stScore) && stScore >= 7) {
+      const notes = Array.isArray(row.stRiskNotes) ? row.stRiskNotes.slice(0, 3).join(", ") : "";
+      score -= 12;
+      factors.push(factor("st_risk_score", "Solana Tracker", "risk", `High risk score${notes ? `: ${notes}` : ""}.`, -12));
+    }
+  }
+
   const finalScore = clampScore(score);
   const verdict = slimeShieldVerdictFromScore(finalScore, factors);
   const confidence = knownSignals.length >= 5 && unknownSignals.length <= 1
