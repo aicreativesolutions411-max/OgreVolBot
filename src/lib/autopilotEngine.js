@@ -136,10 +136,20 @@ export function aggParams(state) {
   // Self-tuning: the auto-tuner raises the bar in cold/rug-heavy tape and lowers
   // it when runners are frequent.
   minScore += (state.tune && state.tune.scoreBonus) || 0;
-  // UNIVERSAL runner-safe floor: no observed runner was below fs 58 and instant-rugs
-  // cluster at fs<=56. This was only enforced for low-churn before, so normal mode
-  // could ape fs 34-57 garbage whenever the regime bar dropped (HOT). Floor everyone.
-  minScore = Math.max(minScore, state.churn === "low" ? 60 : 58);
+  // STARTER BASELINE (2026-06-20, user-directed "act now, tune from there"): the old
+  // universal floor (low-churn 60 / else 58) was starving the engine — 29 min, zero
+  // entries — because most fresh-feed rows score below 58, so the band [58,67) almost
+  // never matched. That floor was written when freshScore was the ONLY rug protection;
+  // it no longer is. The dedicated rug gates now run BEFORE this score check:
+  //   • autopilotRowHasHardDanger() filters freeze/mint-authority/honeypot/blacklist at
+  //     the FEED level (index.js adapters), and
+  //   • securityGate() (SlimeShield) re-checks each candidate immediately PRE-BUY.
+  // So a lower score floor no longer means "ape rugs" — the actual rugs are caught by
+  // those gates, and the score floor's job narrows back to quality. Lowered to let the
+  // engine actually take shots; raise back toward 58/60 if live data shows the low band
+  // bleeds. (grind/scalp/snipe/pop override this below on their own score scales.)
+  // ORIGINAL (tune-back target): Math.max(minScore, state.churn === "low" ? 60 : 58).
+  minScore = Math.max(minScore, state.churn === "low" ? 50 : 46);
   // COLD / bleeding / cold-market tape: demand genuinely strong setups (fs ~66+)
   // regardless of regime base — this is what actually stops the fs 61-63 chop churn
   // that bleeds a directionless tape. (scoreBonus alone couldn't reach this.)
@@ -191,8 +201,12 @@ export function aggParams(state) {
   // so fresh is no longer the default. (liquid/grind keep their own wide windows.)
   // SNIPE = fresh, super-low-MC launches (the user's "fresh pairs super low mc"): the standout
   // SIGNAL is what selects, not the MC band, so the window is just a sane fresh range.
-  const mcFloor = liquid ? 4000 : grind ? 6000 : snipe ? 1500 : pop ? 8000 : 1800;        // pop = EXITABLE band only (sub-8k bonding dust can't be sold — CHFARA's +190% was unsellable)
-  const mcCeil = liquid ? 12000000 : grind ? 80000 : snipe ? 15000 : pop ? 250000 : 9000;     // pop: a catchable spread (8k-250k) covering the visible DexScreener movers, NOT mature $1M+ pumps
+  const mcFloor = liquid ? 4000 : grind ? 6000 : snipe ? 1500 : pop ? 8000 : 1800;        // pop = EXITABLE band only (sub-8k bonding dust can't be sold — CHFARA's +190% was unsellable). fresh floor 1800 stays: sub-1.8k is phantom dust that can't fill.
+  // STARTER BASELINE (2026-06-20): fresh ceiling widened 9000 -> 60000. A higher MC is MORE
+  // exitable, not less — capping at $9k excluded every survived/climbing small launch and was a
+  // big chunk of the "found nothing" starvation. The fill-safety floor (1800) is unchanged.
+  // ORIGINAL fresh ceil (tune-back target): 9000.
+  const mcCeil = liquid ? 12000000 : grind ? 80000 : snipe ? 15000 : pop ? 250000 : 60000;     // pop: a catchable spread (8k-250k) covering the visible DexScreener movers, NOT mature $1M+ pumps
   // ANTI-PHANTOM depth floor — applied ONLY to coins that REPORT a liquidity number (see
   // entryReject). A phantom +400% spike comes from a thin curve where one tiny buy moves the marked
   // cap but nothing can fill, so a coin whose KNOWN liquidity is below this floor is rejected.
@@ -216,7 +230,14 @@ export function aggParams(state) {
   // (+0.22) and 2-5m (+0.34) both WIN. So the fresh engine skips the 30-120s dead-zone entirely
   // and takes the freshest entries + the survivors past 2 min. (entryReject honors skipMidAge.)
   const skipMidAge = !liquid && !grind && !snipe && !pop;
-  const maxScore = (!liquid && !grind && !snipe && !pop) ? 67 : Infinity;
+  // STARTER BASELINE (2026-06-20): fresh maxScore ceiling raised 67 -> 100 (effectively off).
+  // The 67-cap was REJECTING the strongest-scoring coins — combined with the [58,67) floor it
+  // left a razor 9-point band almost nothing matched, a core "found nothing" cause. The old
+  // note (67+ "bleeds even when strong") was from a book where the score floor was the only rug
+  // gate; the dedicated rug gates now do that job, so don't throw away high-conviction rows.
+  // Re-impose a ceiling (e.g. 67) only if fresh live data shows top-band rows actually bleed.
+  // ORIGINAL fresh ceil (tune-back target): 67.
+  const maxScore = (!liquid && !grind && !snipe && !pop) ? 100 : Infinity;
   // FRESH-PATH SCORE CEILING: the live book keeps losing on 67+ rows even when they
   // look strong. The best realized pocket is the middle 62-66 band, not the top score band.
   // LIQUID disables the RELATIVE liquidity gate (liqFrac 0): a healthy $1M coin legitimately has

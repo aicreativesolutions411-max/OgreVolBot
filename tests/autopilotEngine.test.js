@@ -99,8 +99,11 @@ test("aggParams: hot regime sizes up but holds the runner-safe entry floor", () 
   const P = aggParams(s);
   assert.equal(P.regime, "HOT");
   assert.ok(P.regimeMult > 1);
-  // Hot sizes up, but never apes below fs 58 (instant-rugs cluster <=56; no runner <58).
-  assert.ok(P.minScore >= 58, "hot keeps the safe floor instead of dropping into garbage");
+  // STARTER BASELINE (2026-06-20, user-directed): the runner-safe floor was lowered from 58 to
+  // a permissive 46/50 so the engine actually takes shots — the dedicated rug gates
+  // (autopilotRowHasHardDanger feed gate + securityGate pre-buy) now do the rug protection the
+  // score floor used to. Hot still holds the floor (doesn't drop BELOW it into raw garbage).
+  assert.ok(P.minScore >= 46, "hot keeps the starter floor instead of dropping into raw garbage");
 });
 
 test("aggParams: cold regime shrinks size and demands quality but keeps buying", () => {
@@ -323,26 +326,29 @@ test("entryReject: passes a clean fresh mover", () => {
   assert.equal(entryReject(goodRow(), P), null);
 });
 
-test("executableMcReject: fresh entries execute inside the DE-OVERFIT small-launch band ($1.8k-$9k)", () => {
+test("executableMcReject: fresh entries execute inside the STARTER small-launch band ($1.8k-$60k)", () => {
+  // STARTER BASELINE (2026-06-20, user-directed): ceiling widened $9k -> $60k so survived/climbing
+  // small launches qualify (a higher MC is MORE exitable, not less). Floor stays $1.8k (sub-1.8k is
+  // phantom dust that can't fill).
   const P = aggParams(baseState({ mode: "steady" }));
   assert.equal(executableMcReject(goodRow({ marketCap: 2300 }), P), null, "in-band low");
-  assert.equal(executableMcReject(goodRow({ marketCap: 7000 }), P), null, "in-band high (the old razor would have rejected this)");
+  assert.equal(executableMcReject(goodRow({ marketCap: 15000 }), P), null, "in-band high (the old $9k razor would have rejected this)");
   assert.equal(executableMcReject(goodRow({ marketCap: 1500 }), P), "entry-mc", "below the floor");
-  assert.equal(executableMcReject(goodRow({ marketCap: 15000 }), P), "entry-mc", "above the ceiling");
-  assert.equal(executableMcReject(goodRow({ marketCap: 15000 }), P, { kol: true }), null, "copy rows use KOL/wallet gates instead");
+  assert.equal(executableMcReject(goodRow({ marketCap: 80000 }), P), "entry-mc", "above the widened ceiling");
+  assert.equal(executableMcReject(goodRow({ marketCap: 80000 }), P, { kol: true }), null, "copy rows use KOL/wallet gates instead");
 });
 
-test("entryReject: fresh path rejects the live-losing 72+ blowoff score band", () => {
+test("entryReject: STARTER baseline no longer rejects strong-scoring fresh rows (ceiling raised to 100)", () => {
+  // STARTER BASELINE (2026-06-20, user-directed): the old 67-cap REJECTED the strongest-scoring
+  // coins, which (with the [58,67) floor) left a razor 9-pt band almost nothing matched — a core
+  // "found nothing in 29 min" cause. The ceiling is raised to 100 (effectively off); the dedicated
+  // rug gates now do the protection the old score-cap was standing in for. So a strong-scoring,
+  // otherwise-clean fresh row now PASSES instead of being blocked as "overscore".
   const P = aggParams(baseState({ mode: "steady" }));
-  // A realistic in-band coin: meaningful avg swap (~$15, so capital-efficiency doesn't dock it as
-  // wash), landing in the 67-71 band that overscore blocks. (The old row was wash-profile and now
-  // correctly scores lower under capitalEfficiencyScore — so it's no longer a valid band example.)
+  assert.equal(P.maxScore, 100, "fresh ceiling is the permissive starter value");
   const highMid = goodRow({ volume5m: 90, buys5m: 4, sells5m: 2, bestPickScore: 5 });
-  assert.equal(entryReject(highMid, P), "overscore");
-  assert.ok(freshScore(highMid) >= P.maxScore && freshScore(highMid) < 72, "67-71 is also blocked");
-  const blowoff = goodRow({ volume5m: 180, buys5m: 35, sells5m: 3, bestPickScore: 100 });
-  assert.equal(entryReject(blowoff, P), "overscore");
-  assert.ok(freshScore(blowoff) >= P.maxScore);
+  assert.ok(freshScore(highMid) >= 67 && freshScore(highMid) < 100, "previously-blocked 67+ band");
+  assert.equal(entryReject(highMid, P), null, "the old 67-cap row now passes");
 });
 
 test("entryReject: blocks instant-rug bait", () => {
@@ -1054,10 +1060,10 @@ test("engine: post-fill MC guard sells back fresh entries that leave the winning
   let t = 0;
   let buys = 0;
   let sells = 0;
-  const liveMarks = [2300, 15000]; // fill in-band ($2.3k), then drift OUT of the de-overfit band ($1.8k-$9k)
+  const liveMarks = [2300, 80000]; // fill in-band ($2.3k), then drift OUT of the STARTER band ($1.8k-$60k)
   const engine = createAutopilotEngine({
     getFreshFeed: async () => [goodRow({ tokenMint: "DriftMint111111111111111111111111111111111", symbol: "DRIFT", marketCap: 2300 })],
-    getPairLite: async () => ({ marketCap: liveMarks.length ? liveMarks.shift() : 15000, liquidityUsd: 5000 }),
+    getPairLite: async () => ({ marketCap: liveMarks.length ? liveMarks.shift() : 80000, liquidityUsd: 5000 }),
     buyToken: async () => { buys++; return { ok: true, tokenAmount: "1000" }; },
     sellPercent: async (_mint, pct, pos) => { sells++; assert.equal(pct, 100); assert.equal(pos.tokenAmount, "1000"); return { ok: true, receivedSol: 0.0118 }; },
     now: () => t,
@@ -1350,7 +1356,9 @@ test("engine: sweepNow banks profit on demand and keeps the session running", as
 test("aggParams: degen no longer loosens the entry bar (the rug magnet is gone)", () => {
   const degen = aggParams(baseState({ mode: "degen" }));
   const normal = aggParams(baseState({ mode: "normal" }));
-  assert.ok(degen.minScore >= 58, "degen still respects the universal fs floor");
+  // STARTER BASELINE (2026-06-20): universal floor lowered 58 -> 46. The invariant that matters
+  // (degen does NOT get a looser bar than normal — that's what made it a rug magnet) still holds.
+  assert.ok(degen.minScore >= 46, "degen still respects the starter fs floor");
   assert.ok(degen.minScore >= normal.minScore - 1e-9, "degen is no longer looser than normal");
 });
 
@@ -1526,7 +1534,9 @@ test("only QUICK (scalp) uses the liquid/any-age hunt; Steady + Balanced hunt th
     const P = aggParams(baseState({ mode }));
     assert.ok(!P.liquid, `${mode} hunts the fresh pocket, not the liquid wide-net`);
     assert.ok(P.maxAge <= 3600, `${mode} keeps a tight fresh age window`);
-    assert.ok(P.mcCeil <= 20000, `${mode} stays in the low-MC pocket`);
+    // STARTER BASELINE (2026-06-20): fresh ceiling widened to $60k (still a small-launch pocket,
+    // not the scalp wide-net which reaches $1M+). The day-old $250k runner stays rejected.
+    assert.ok(P.mcCeil <= 60000, `${mode} stays in the small-launch pocket`);
     assert.ok(entryReject(oldRunner, P), `${mode} rejects a days-old higher-MC coin`);
   }
 });
