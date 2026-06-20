@@ -54,7 +54,7 @@ import {
 } from "./lib/tradeExecutionService.js";
 import { workerTickTaskFlags } from "./lib/workerTickTasks.js";
 import { createTelegramChannelBridge, escapeTelegramHtml } from "./lib/telegramChannelBridge.js";
-import { createAutopilotEngine, LAMPORTS_PER_SOL as AUTOPILOT_LAMPORTS_PER_SOL, popIgnitionScore, POP_IGNITION_FIRE } from "./lib/autopilotEngine.js";
+import { createAutopilotEngine, LAMPORTS_PER_SOL as AUTOPILOT_LAMPORTS_PER_SOL, popIgnitionScore, POP_IGNITION_FIRE, jumpScore } from "./lib/autopilotEngine.js";
 import webpush from "web-push";
 import {
   createPumpLaunchError,
@@ -2371,13 +2371,15 @@ setInterval(() => { void pollSocialHeat(); }, 20_000);
 // popIgnitionScore() in the engine; here we compute the live flow metrics + the momentum-fade signal.
 const popTrades = new Map();      // mint -> [{ at, side, sol, trader }]  (rolling, last ~45s)
 const popSeenTx = new Map();      // mint -> Set(tx)  (swap-api dedup)
-const popCandidates = new Map();  // mint -> { at, score, mc, symbol, inflowNow }
+const popCandidates = new Map();  // mint -> { at, score, mc, symbol, inflowNow, spike?, liq?, m5? }
+const POP_SPIKE_FIRE = 48;        // jumpScore at/above which a live-feed coin counts as "spiking NOW" (vol surge + m5 breakout + buy-led)
 const popPeakInflow = new Map();  // mint -> peak recent buy-inflow (drives the momentum-fade exit)
 const popHeldMints = new Map();   // mint -> at  (open pop positions kept watched so fade can fire)
 let _popHb = 0;                   // radar heartbeat counter
 let _popSrcTick = 0;              // throttle the live-feed source refresh
 let _popSrcBusy = false;          // a live-feed refresh is in flight (non-blocking)
 let popLiveMints = [];            // route-filtered MC-spread movers from the live feed (cached ~15s)
+let popLiveRows = [];             // SPIKE RADAR: the FULL live-feed rows (m5/vol5m/buys5m/liq/mc) — scored by jumpScore so we catch coins VISIBLY ripping on DexScreener (price+volume spike), not just on-curve SOL inflow
 const popUnroutable = new Set();  // mints we've confirmed are Token-2022 / un-routable (skip — "rugs that won't show on routes")
 const _popRouteChecked = new Set();  // mints whose route/safety we've already checked (don't re-check every poll)
 function popIngestTrade(mint, trade) {
@@ -2442,11 +2444,17 @@ async function pollPopRadar() {
           // WIDE age + MC: pull routable movers across the fresh→24h windows (not just early pairs) on
           // the volume/momentum sorts — a coin that pops on day 2 counts too. All from the live feed, so
           // every one has a real pool (honeypots/rugs without a pool don't show).
-          const combos = [["live", "volume"], ["live", "momentum"], ["under1h", "volume"], ["under3h", "volume"], ["under1d", "momentum"]];
+          const combos = [["live", "volume"], ["live", "momentum"], ["under1h", "volume"], ["under1h", "momentum"], ["under3h", "volume"], ["under1d", "momentum"]];
           const results = await Promise.all(combos.map(([b, s]) => webLivePairs("autopilot", b, { sort: s }).catch(() => null)));
           const set = new Set();
-          for (const f of results) for (const r of (Array.isArray(f && f.rows) ? f.rows : [])) { if (r && r.tokenMint) set.add(r.tokenMint); }
+          const byMint = new Map();   // KEEP the full row (m5/vol/buys/liq/mc) — the spike scorer needs it, not just the mint
+          for (const f of results) for (const r of (Array.isArray(f && f.rows) ? f.rows : [])) {
+            if (!(r && r.tokenMint)) continue;
+            set.add(r.tokenMint);
+            if (!byMint.has(r.tokenMint)) byMint.set(r.tokenMint, r);   // first (best-sorted) wins
+          }
           if (set.size) popLiveMints = [...set].slice(0, 40);
+          popLiveRows = [...byMint.values()].slice(0, 140);   // broad pool for the FREE jumpScore spike scan (no extra API calls)
         } catch {} finally { _popSrcBusy = false; }
       })();
     }
@@ -2500,6 +2508,26 @@ async function pollPopRadar() {
         if (!prev) console.log(`[autopilot:info] ⚡ POP ignition ${sym} — accel ${m.accel.toFixed(1)}x · ${m.inflowNow.toFixed(2)} SOL/8s · ${m.uniqBuyers} buyers · score ${Math.round(score)}`);
       }
     }
+    // ===== SPIKE RADAR — the fix for "it misses the coins VISIBLY ripping on DexScreener". Score the
+    // WHOLE broad live feed (the ~140 rows we ALREADY fetched) by jumpScore: a real VOLUME SURGE +
+    // PRICE BREAKOUT (m5) + buy-led flow = a coin popping NOW. This is the price/MC-spike signal the
+    // 8s-inflow radar was blind to, and it costs ZERO extra API calls (pure compute on data in hand).
+    // Live-feed coins inherently have a real pool (jumpScore needs ≥$4k liq), so they're exitable —
+    // no per-coin RPC route-check needed (the buy-failure blacklist catches any rare un-routable one).
+    let _spikeBest = 0, _spikeCount = 0;
+    for (const r of popLiveRows) {
+      const mint = r && r.tokenMint; if (!mint || popUnroutable.has(mint)) continue;
+      const mc = Number(r.marketCap) || 0;
+      if (mc < 8000 || mc > 250000) continue;            // catchable spread (jumpScore needs mc≥8k; cap mega-caps)
+      const js = jumpScore(r);
+      if (js > _spikeBest) _spikeBest = js;
+      if (js < POP_SPIKE_FIRE) continue;                 // not actually ripping right now
+      _spikeCount++;
+      const prev = popCandidates.get(mint);
+      const sym = r.symbol || (r.baseToken && r.baseToken.symbol) || (prev && prev.symbol) || shortMint(mint);
+      popCandidates.set(mint, { at: now, score: Math.max(js, (prev && prev.score) || 0), mc, symbol: sym, inflowNow: (prev && prev.inflowNow) || 0, liq: Number(r.liquidityUsd) || 0, m5: Number(r.m5) || 0, spike: true });
+      if (!prev || !prev.spike) console.log(`[autopilot:info] ⚡ POP spike ${sym} — m5 +${(Number(r.m5) || 0).toFixed(0)}% · vol/liq ${((Number(r.volume5m) || 0) / Math.max(1, Number(r.liquidityUsd) || 0)).toFixed(1)}x · $${Math.round(mc)} MC · score ${Math.round(js)}`);
+    }
     // RADAR HEARTBEAT (~30s) — makes a quiet pop feed diagnosable: is it starved of flow data, or is
     // the market genuinely just not popping right now? Shows watch size, how many have live trade flow,
     // and the BEST ignition score available vs the fire threshold.
@@ -2507,7 +2535,7 @@ async function pollPopRadar() {
     if (_popHb === 0) {
       let withFlow = 0, best = 0;
       for (const mint of watch) { const m = popMetrics(mint, now); if (m) { withFlow++; const s = popIgnitionScore(m); if (s > best) best = s; } }
-      console.log(`[autopilot:info] 📡 Pop Radar: watching ${watch.length}, ${withFlow} with live flow, best ignition ${Math.round(best)} (fires @ ${POP_IGNITION_FIRE})`);
+      console.log(`[autopilot:info] 📡 Pop Radar: ${popLiveRows.length} live movers scanned, ${_spikeCount} spiking now (best jump ${Math.round(_spikeBest)} @${POP_SPIKE_FIRE}) · ${withFlow}/${watch.length} on-curve flow (best ignition ${Math.round(best)} @${POP_IGNITION_FIRE})`);
     }
     for (const [m, r] of popCandidates) { if (now - r.at > 20_000) popCandidates.delete(m); }   // a pop is brief
     if (popTrades.size > 80) { for (const [m, arr] of popTrades) { if (!arr.length || now - arr[arr.length - 1].at > 60_000) { popTrades.delete(m); popSeenTx.delete(m); popPeakInflow.delete(m); } } }
@@ -2519,21 +2547,23 @@ setTimeout(() => { setInterval(() => { void pollPopRadar(); }, 4_000); }, 45_000
 // The pre-vetted POP FEED the 'pop' mode trades — igniting coins, MC enriched (free pump frontend-api).
 async function popFeedRows() {
   const now = Date.now();
-  const POP_MC_CEIL = 100_000;   // match aggParams pop mcCeil — don't even surface mega-cap pumps already topping
+  const POP_MC_CEIL = 250_000;   // match aggParams pop mcCeil — catch the visible movers, not mature mega-caps
   const live = [...popCandidates.entries()].filter(([, r]) => now - r.at < 18_000).sort((a, b) => b[1].score - a[1].score).slice(0, 6);
   const rows = [];
   for (const [mint, r] of live) {
     if (popUnroutable.has(mint)) continue;   // route filter — set in the background poll, no RPC in this hot path
-    // ENTRY-FRESHNESS: skip a coin already PAST its pop (inflow collapsed below the fade threshold).
-    // Entering it just buys the top and fades out after the 8s min-hold (the scratch-at-8s pattern) —
-    // "get in BEFORE the pop" means don't chase a burst that's already rolling over.
-    const pk = popPeakInflow.get(mint) || 0;
-    if (pk >= 0.3 && (Number(r.inflowNow) || 0) < pk * 0.35) continue;
+    // ENTRY-FRESHNESS (on-curve INFLOW source only): skip a coin already PAST its pop (inflow collapsed
+    // below the fade threshold). A SPIKE candidate (DexScreener m5/volume) is freshness-gated inside
+    // jumpScore itself (rejects negative m5 + already-blown-off >140% tops), so don't double-filter it.
+    if (!r.spike) {
+      const pk = popPeakInflow.get(mint) || 0;
+      if (pk >= 0.3 && (Number(r.inflowNow) || 0) < pk * 0.35) continue;
+    }
     if (!r.mc) {
       try { const j = await fetchJson(`https://frontend-api-v3.pump.fun/coins/${mint}`, { timeoutMs: 5000, headers: { "User-Agent": "Mozilla/5.0", accept: "application/json" } }).catch(() => null); r.mc = Number(j && (j.usd_market_cap || j.market_cap)) || 0; } catch {}
     }
-    if (r.mc && r.mc > POP_MC_CEIL) continue;   // mega-cap already extended — never surface it (stops the "left the proven band" reject spam + a wasted rotation into a coin that can't buy)
-    rows.push({ tokenMint: mint, symbol: r.symbol, marketCap: r.mc || 4000, liquidityUsd: 0, pairAgeSeconds: 1, volume5m: 0, buys5m: 0, sells5m: 0, source: "pop", _pop: { score: r.score, inflowNow: r.inflowNow } });
+    if (r.mc && r.mc > POP_MC_CEIL) continue;   // mega-cap already extended — never surface it
+    rows.push({ tokenMint: mint, symbol: r.symbol, marketCap: r.mc || 4000, liquidityUsd: Number(r.liq) || 0, pairAgeSeconds: 1, volume5m: 0, buys5m: 0, sells5m: 0, source: "pop", _pop: { score: r.score, inflowNow: r.inflowNow, spike: Boolean(r.spike), m5: Number(r.m5) || 0 } });
     if (rows.length >= 4) break;
   }
   return rows;
