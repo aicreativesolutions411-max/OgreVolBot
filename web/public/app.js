@@ -16839,7 +16839,11 @@ function compactUsd(value) {
 function firstStatLabel(...values) {
   for (const value of values) {
     const text = String(value ?? "").trim();
-    if (text && text !== "$0" && text.toLowerCase() !== "n/a") return text;
+    // Skip empties, "$0", and the loading-state placeholders the backend ships for brand-new
+    // coins ("checking"/"warming"/...). Without this, a "checking" label masks the REAL number
+    // sitting right behind it (e.g. volumeH1Label="checking" hid volumeLabel="$215"), so fresh
+    // cards "just said checking" even when they had data. See fresh-feed-contract.
+    if (text && text !== "$0" && !/^(n\/a|checking|warming|loading|pending|tracking)\.{0,3}$/i.test(text)) return text;
   }
   return "n/a";
 }
