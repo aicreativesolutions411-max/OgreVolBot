@@ -2558,6 +2558,19 @@ async function pollPopRadar() {
 // Start the radar AFTER boot settles (45s) — never pile a 20-coin swap-api poll + live-feed fetch onto
 // the boot storm on the single instance (the crash-loop lesson: no bursty background jobs at boot).
 setTimeout(() => { setInterval(() => { void pollPopRadar(); }, 4_000); }, 45_000);
+// ===== DISPLAY-FEED WARMER — keep the USER-FACING Pairs tabs ALWAYS hot + fresh so every category
+// shows pairs the instant a user opens it (fresh launches "by the second", High Volume, Biggest
+// Gainers, etc.), never cold/empty. This is SEPARATE from the autopilot (which uses the "ap:" cache
+// pool), so the two never cluster — but the display caches stay warm on their own cadence. The worker
+// warmer only covered best/newest; the metric tabs (volume/momentum/liquidity/buys) went cold, which
+// is why those categories were empty. Light: stale-while-revalidate serves cache instantly + refreshes
+// in the background, and per-coin RPC safety is off so each build is ~3s. userId "warmer" → the SHARED
+// display cache keys (live:newest, live:volume, …) the Pairs page reads (NOT the "ap:" autopilot pool).
+const DISPLAY_WARM_SORTS = ["newest", "best", "volume", "momentum", "liquidity", "buys"];
+function warmDisplayFeeds() {
+  for (const sort of DISPLAY_WARM_SORTS) { void webLivePairs("warmer", "live", { sort }).catch(() => {}); }
+}
+setTimeout(() => { warmDisplayFeeds(); setInterval(warmDisplayFeeds, 7_000); }, 20_000);   // start ~20s after boot, refresh every 7s (cache stale window is longer, so it never goes cold)
 // The pre-vetted POP FEED the 'pop' mode trades — igniting coins, MC enriched (free pump frontend-api).
 async function popFeedRows() {
   const now = Date.now();
