@@ -3882,6 +3882,17 @@ function loadConfig() {
   const pumpLaunchJitoBundle = parseBoolean(process.env.PUMP_LAUNCH_JITO_BUNDLE || "false");
   const pumpLaunchJitoUrl = (process.env.PUMP_LAUNCH_JITO_URL || "https://mainnet.block-engine.jito.wtf/api/v1/bundles").trim();
   const pumpLaunchJitoTipSol = Math.max(0.00001, Number.parseFloat(process.env.PUMP_LAUNCH_JITO_TIP_SOL || "0.001") || 0.001);
+  // TRADE JITO — route pump buys/sells through a Jito bundle (swap tx + a tiny tip tx) for FAST,
+  // sandwich-proof landing. Default OFF (flip TRADE_JITO_BUNDLE=true on Render after a verified live
+  // send). Tips kept LOW + per-type: a buy that misses just falls back, but an EXIT must land so it
+  // tips a touch more. Bundle is atomic + the swap tx has one signature → the RPC fallback can never
+  // double-trade. (Jupiter trades aren't bundled here — Jupiter's /execute already optimizes landing.)
+  const tradeJitoBundle = parseBoolean(process.env.TRADE_JITO_BUNDLE || "false");
+  const tradeJitoTipSol = Math.max(0.00001, Number.parseFloat(process.env.TRADE_JITO_TIP_SOL || "0.0001") || 0.0001);
+  const tradeJitoExitTipSol = Math.max(tradeJitoTipSol, Number.parseFloat(process.env.TRADE_JITO_EXIT_TIP_SOL || "0.0003") || 0.0003);
+  // Short by design: a Jito bundle lands within ~1-2s or not at all, so don't stall an exit waiting —
+  // fall back to RPC fast (a stop-loss can't afford a long wait). 6s gives it a fair shot then bails.
+  const tradeJitoConfirmMs = Math.max(3000, Number.parseInt(process.env.TRADE_JITO_CONFIRM_MS || "6000", 10) || 6000);
   const pumpLaunchMetadataProvider = normalizeMetadataProvider(process.env.METADATA_PROVIDER || process.env.PUMP_LAUNCH_METADATA_PROVIDER || "auto");
   const renderExternalHostname = String(process.env.RENDER_EXTERNAL_HOSTNAME || "").trim();
   const pumpLaunchHostedMetadataBaseUrl = (
@@ -4253,6 +4264,10 @@ function loadConfig() {
     pumpLaunchJitoBundle,
     pumpLaunchJitoUrl,
     pumpLaunchJitoTipSol,
+    tradeJitoBundle,
+    tradeJitoTipSol,
+    tradeJitoExitTipSol,
+    tradeJitoConfirmMs,
     photonNewPairsUrl: (process.env.PHOTON_NEW_PAIRS_URL || "").trim(),
     photonApiKey: process.env.PHOTON_API_KEY || "",
     livePairsRpcSafety,
@@ -14003,7 +14018,7 @@ async function buyTokenViaPumpPortal(wallet, tokenMint, swapLamports, slippageBp
         signature = tx.signature;
       } else {
         tx.sign([keypair]);
-        signature = await sendVersionedTransaction(tx, `send PumpPortal buy transaction (${pool})`);
+        signature = await sendPumpTradeTx(tx, keypair, `send PumpPortal buy transaction (${pool})`, { tipSol: CONFIG.tradeJitoTipSol });
       }
       invalidateWalletReadCache(wallet.publicKey);
       return {
@@ -14321,7 +14336,7 @@ async function sellTokenAmountFromWalletViaPumpPortal(wallet, tokenMint, sellAmo
         signature = tx.signature;
       } else {
         tx.sign([keypair]);
-        signature = await sendVersionedTransaction(tx, `send PumpPortal sell transaction (${pool})`);
+        signature = await sendPumpTradeTx(tx, keypair, `send PumpPortal sell transaction (${pool})`, { tipSol: CONFIG.tradeJitoExitTipSol });
       }
 
       invalidateWalletReadCache(wallet.publicKey);
@@ -40144,6 +40159,60 @@ async function submitJitoBundle(base64Txs, timeoutMs) {
     const reasons = (aggregate.errors || []).map((error) => error.message).join(" | ").slice(0, 500);
     throw new Error(`Jito sendBundle failed on every block engine: ${reasons}`);
   }
+}
+
+// Canonical Jito mainnet tip accounts (public list; pick one at random per bundle to avoid contention).
+const JITO_TIP_ACCOUNTS = [
+  "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5",
+  "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe",
+  "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY",
+  "ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49",
+  "DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLhNdwoR",
+  "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt",
+  "DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL",
+  "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT"
+];
+
+// JITO TRADE SEND — route a SIGNED pump trade tx through a Jito bundle (swap tx + a tiny tip tx) for
+// FAST, sandwich-proof landing; fall back to the normal RPC send on ANY Jito failure or timeout.
+// SAFE BY CONSTRUCTION: (1) the swap tx already has its single fee-payer signature, so it can execute
+// AT MOST ONCE — a fallback re-broadcast of the same bytes can never double-trade; (2) the bundle is
+// atomic, so the separate tip tx only pays if the swap lands; (3) tips are kept LOW + per-type.
+// Behaviour is IDENTICAL to before when CONFIG.tradeJitoBundle is false (the default), so shipping
+// this changes nothing live until the env flag is flipped + verified on a real send.
+async function sendPumpTradeTx(tx, keypair, label, opts = {}) {
+  if (!CONFIG.tradeJitoBundle) return sendVersionedTransaction(tx, label);
+  const tipSol = Math.max(0.00001, Number(opts.tipSol) || CONFIG.tradeJitoTipSol || 0.0001);
+  try {
+    const swapSig = bs58.encode(Buffer.from(tx.signatures[0]));
+    const tipLamports = Math.max(1000, Math.round(tipSol * 1e9));
+    const tipAccount = new PublicKey(JITO_TIP_ACCOUNTS[Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)]);
+    const { blockhash } = await rpcWithRetry("jito tip blockhash", () => connection.getLatestBlockhash("confirmed"));
+    const tipTx = new Transaction().add(SystemProgram.transfer({ fromPubkey: keypair.publicKey, toPubkey: tipAccount, lamports: tipLamports }));
+    tipTx.recentBlockhash = blockhash;
+    tipTx.feePayer = keypair.publicKey;
+    tipTx.sign(keypair);
+    const bundle = [Buffer.from(tx.serialize()).toString("base64"), tipTx.serialize().toString("base64")];
+    const bundleId = await submitJitoBundle(bundle, 8_000);
+    console.log(`[jito] ${label} — bundle ${String(bundleId).slice(0, 10)} sent (tip ${tipSol} SOL); waiting to land`);
+    const deadline = Date.now() + (Number(CONFIG.tradeJitoConfirmMs) || 12_000);
+    while (Date.now() < deadline) {
+      try {
+        const st = await connection.getSignatureStatus(swapSig);
+        const v = st && st.value;
+        if (v && (v.confirmationStatus === "confirmed" || v.confirmationStatus === "finalized")) {
+          console.log(`[jito] ${label} — LANDED via bundle (${swapSig.slice(0, 8)}…)`);
+          return swapSig;
+        }
+        if (v && v.err) break;   // tx errored on-chain — let the normal path surface it
+      } catch { /* status check hiccup — keep waiting */ }
+      await sleep(900);
+    }
+    console.warn(`[jito] ${label} — bundle didn't confirm in time; re-broadcasting the SAME signed tx via RPC (safe: one signature)`);
+  } catch (e) {
+    console.warn(`[jito] ${label} — bundle error (${e && e.message}); falling back to RPC send`);
+  }
+  return sendVersionedTransaction(tx, label);
 }
 
 // After a fallback (non-atomic) launch the first buys MUST still be instant AND
