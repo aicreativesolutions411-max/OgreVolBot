@@ -269,8 +269,8 @@ test("aggParams: pop mode is a catchable MC spread, ignition-gated, tight stop",
   const p = aggParams(baseState({ mode: "pop" }));
   assert.equal(p.pop, true);
   assert.equal(p.minScore, 0, "gated on ignition, not freshScore");
-  // A catchable spread (covers the visible DexScreener movers), NOT mature $1M+ pumps already topping.
-  assert.ok(p.mcFloor <= 1000 && p.mcCeil <= 300000 && p.mcCeil >= 50000, "catchable spread, not mega-cap tops");
+  // An EXITABLE catchable spread (~8k-250k): sub-8k bonding dust can't be sold, mega-caps already topped.
+  assert.ok(p.mcFloor >= 5000 && p.mcFloor <= 10000 && p.mcCeil <= 300000 && p.mcCeil >= 50000, "exitable spread, not dust or mega-caps");
   assert.equal(p.sl, 12, "stop with room for a real 30%+ pop to breathe");
 });
 

@@ -2372,7 +2372,7 @@ setInterval(() => { void pollSocialHeat(); }, 20_000);
 const popTrades = new Map();      // mint -> [{ at, side, sol, trader }]  (rolling, last ~45s)
 const popSeenTx = new Map();      // mint -> Set(tx)  (swap-api dedup)
 const popCandidates = new Map();  // mint -> { at, score, mc, symbol, inflowNow, spike?, liq?, m5? }
-const POP_SPIKE_FIRE = 48;        // jumpScore at/above which a live-feed coin counts as "spiking NOW" (vol surge + m5 breakout + buy-led)
+const POP_SPIKE_FIRE = 44;        // jumpScore at/above which a live-feed coin counts as "spiking NOW" (vol surge + m5 breakout + buy-led)
 const popPeakInflow = new Map();  // mint -> peak recent buy-inflow (drives the momentum-fade exit)
 const popHeldMints = new Map();   // mint -> at  (open pop positions kept watched so fade can fire)
 let _popHb = 0;                   // radar heartbeat counter
@@ -2564,7 +2564,7 @@ async function pollPopRadar() {
       const js = jumpScore(r);
       if (js > _spikeBest) _spikeBest = js;
       const m5 = Number(r.m5) || 0;                      // 5-min price change %
-      if (js < POP_SPIKE_FIRE || m5 < 4) continue;       // must be ripping NOW (jumpScore) AND price actually UP (MC increasing)
+      if (js < POP_SPIKE_FIRE || m5 < 3) continue;       // must be ripping NOW (jumpScore) AND price actually UP (MC increasing)
       _spikeCount++;
       const prev = popCandidates.get(mint);
       const sym = r.symbol || (r.baseToken && r.baseToken.symbol) || (prev && prev.symbol) || shortMint(mint);
@@ -2595,6 +2595,11 @@ async function popFeedRows() {
   const rows = [];
   for (const [mint, r] of live) {
     if (popUnroutable.has(mint)) continue;   // route filter — set in the background poll, no RPC in this hot path
+    // EXITABLE-ONLY (user's call): require VERIFIED DexScreener liquidity (≥$4k) so every entry can
+    // actually be SOLD. This drops the on-curve INFLOW candidates (sub-8k bonding dust with no verified
+    // pool — CHFARA ran +190% but was unsellable: "Pool account not found / No Jupiter route") and keeps
+    // the jumpScore SPIKE coins, which are exitable by construction (jumpScore needs ≥$4k liq).
+    if ((Number(r.liq) || 0) < 4000) continue;
     // ENTRY-FRESHNESS (on-curve INFLOW source only): skip a coin already PAST its pop (inflow collapsed
     // below the fade threshold). A SPIKE candidate (DexScreener m5/volume) is freshness-gated inside
     // jumpScore itself (rejects negative m5 + already-blown-off >140% tops), so don't double-filter it.
