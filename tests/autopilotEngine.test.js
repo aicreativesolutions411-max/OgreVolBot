@@ -703,6 +703,40 @@ test("engine: POP candidate is pre-vetted by the radar — buys despite a failin
   await engine.stop("test-done");
 });
 
+test("engine: pop-fade honors an 8s min-hold and fades vs peak-since-entry (not the lifetime peak)", async () => {
+  // The live "buys then instantly sells" bug: a coin we enter mid-run instant-faded because the fade
+  // compared to the coin's lifetime peak. Now it tracks the peak SINCE ENTRY on the position and
+  // holds at least 8s — so a collapse during the first 8s does NOT sell.
+  let t = 0;
+  let inflow = 5;            // strong inflow at entry → peak-since-entry seeds at 5
+  let feed = [{
+    tokenMint: "PopMint22222222222222222222222222222222222222",
+    symbol: "POPPER", marketCap: 9000, liquidityUsd: 5000, pairAgeSeconds: 1,
+    volume5m: 0, buys5m: 0, sells5m: 0, source: "pop", _pop: { score: 80, inflowNow: 5 }
+  }];
+  let sells = 0;
+  const engine = createAutopilotEngine({
+    getPopFeed: async () => feed,
+    getPairLite: async () => ({ marketCap: 9000, liquidityUsd: 5000 }),   // flat price → no stop/target fires
+    popInflow: () => inflow,
+    buyToken: async () => ({ ok: true, tokenAmount: "1000" }),
+    sellPercent: async () => { sells++; return { ok: true }; },
+    now: () => t,
+    persist: async () => {}
+  });
+  await engine.start({ solBudget: 1, minutes: 60, mode: "pop", live: false });
+  t += 2200; await engine._hunt();
+  assert.equal(engine.status().open.length, 1, "pop opened");
+  feed = [];                 // no further opens
+  inflow = 0.1;              // inflow COLLAPSES to well below peak(5)*0.35
+  t += 3000; await engine._tick();   // only ~3s held — inside the min-hold
+  assert.equal(engine.status().open.length, 1, "held through the 8s min-hold despite the inflow collapse");
+  assert.equal(sells, 0, "no sell within the min-hold window");
+  t += 6000; await engine._tick();   // now ~9s held — past the min-hold
+  assert.equal(engine.status().open.length, 0, "pop-fade banks once the post-entry inflow has truly collapsed");
+  await engine.stop("test-done");
+});
+
 test("engine: self-arm holds entries while warming, then trades once readiness is high", async () => {
   // LOW readiness → WARMING: stays live + learning, opens NOTHING even on a good coin.
   let t = 0;

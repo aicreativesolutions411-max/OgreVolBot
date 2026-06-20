@@ -3087,6 +3087,7 @@ const autopilotEngine = createAutopilotEngine({
   getPopFeed: async () => popFeedRows(),
   // Momentum-fade exit signal: the inflow that drove the pop has decelerated.
   popFading: (mint) => popFadingNow(mint),
+  popInflow: (mint) => { try { return popMetrics(mint, Date.now())?.inflowNow || 0; } catch { return 0; } },
   getPairLite: async (mint) => {
     // PRIMARY = swap-api live price (the WORKING source — PumpPortal trades are dead). The poller
     // keeps held coins hot, so this is almost always a fast in-memory cache hit; on a miss it fetches

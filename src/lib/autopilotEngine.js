@@ -1374,6 +1374,9 @@ export function createAutopilotEngine(deps) {
     getPopFeed = null,
     // popFading(mint) -> true once the inflow that drove a pop has DECELERATED (momentum-fade exit).
     popFading = () => false,
+    // popInflow(mint) -> the coin's CURRENT buy-inflow (SOL/8s). The engine tracks the peak SINCE
+    // ENTRY on the position itself and fades against THAT — robust, no reliance on host-side maps.
+    popInflow = () => 0,
     getPairLite,
     buyToken,
     sellPercent,
@@ -1937,8 +1940,15 @@ export function createAutopilotEngine(deps) {
       // bank into the spike rather than giving it back. Only banks when we're not already at the stop
       // (the tight stop covers the downside); a faded pop that's still green is exactly when to take it.
       if (pos.pop && !pos.popFadeHandled && mc > 0) {
-        let fading = false; try { fading = popFading(pos.mint); } catch {}
-        if (fading) {
+        // Fade against the peak inflow SINCE WE ENTERED (tracked on the position) — NOT the coin's
+        // lifetime peak, which made every mid-run entry read as "already faded" on tick 1 and
+        // instant-sell. An 8s min-hold (measured from the position's REAL open time) lets a fresh
+        // pop develop; the -10% stop still guards a crash during the window.
+        const inflow = (() => { try { return Number(popInflow(pos.mint)) || 0; } catch { return 0; } })();
+        if (inflow > (pos.popPeakInflow || 0)) pos.popPeakInflow = inflow;   // ride a still-climbing pop
+        const heldMs = now() - (pos.openedAt || now());
+        const faded = heldMs >= 8000 && (pos.popPeakInflow || 0) >= 0.3 && inflow < pos.popPeakInflow * 0.35;
+        if (faded) {
           const mv = pos.entryMc > 0 ? (mc / pos.entryMc - 1) * 100 : 0;
           if (mv > -(P.sl || 10) * 0.4) {
             pos.popFadeHandled = true;
@@ -2811,6 +2821,7 @@ export function createAutopilotEngine(deps) {
     if (pos.pop) {
       const mcE = pos.entryMc || 0;
       pos.popMoonTarget = mcE >= 40000 ? 70 : mcE >= 20000 ? 110 : mcE >= 10000 ? 160 : mcE >= 5000 ? 220 : 320;
+      pos.popPeakInflow = (() => { try { return Number(popInflow(mint)) || 0; } catch { return 0; } })();   // peak buy-inflow SINCE ENTRY (fade reference)
     }
     state.open.push(pos);
     state.recentApeNames[normSym(sym)] = now(); // remember the NAME to block clone-swarm pile-ins
