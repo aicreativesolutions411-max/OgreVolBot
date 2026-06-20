@@ -2240,7 +2240,8 @@ export function createAutopilotEngine(deps) {
     if (!rows.length) {
       if (now() - (state.lastScanLogAt || 0) > 45_000) {
         state.lastScanLogAt = now();
-        record("info", "🔍 scanning — feed quiet (0 fresh pairs right now)");
+        const fsrc = usePop ? "pop" : useLiquid ? "liquid" : "fresh";
+        record("info", `🔍 scanning — feed quiet (mode=${state.mode} feed=${fsrc}, 0 candidates right now)`);
       }
     }
     // Cache fresh prices from the feed so open positions update fast (used in manageExits).
