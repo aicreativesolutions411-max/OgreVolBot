@@ -18046,7 +18046,7 @@ function devInfoFallbackResultForMint(tokenMint = "") {
     { label: "Dex", url: row.dexUrl || dexUrl(tokenMint) },
     { label: "Solscan Wallet", url: wallet ? `https://solscan.io/account/${encodeURIComponent(wallet)}` : "" },
     { label: "KOLscan Wallet", url: wallet ? `https://kolscan.io/account/${encodeURIComponent(wallet)}` : "" },
-    { label: "Bubblemap", url: mint ? `https://app.bubblemaps.io/sol/token/${encodeURIComponent(mint)}` : "" },
+    { label: "Bubblemap", url: tokenMint ? `https://app.bubblemaps.io/sol/token/${encodeURIComponent(tokenMint)}` : "" },
     { label: "X", url: row.twitterUrl || row.xUrl },
     { label: "TG", url: row.telegramUrl },
     { label: "Website", url: row.websiteUrl }
