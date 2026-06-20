@@ -731,6 +731,12 @@ const BRAIN_SEED_FLAG_FILE = path.join(CONFIG.dataDir, "brain-seed.json"); // on
 // the PERSISTENT disk so a redeploy of the same grab doesn't re-merge.
 const BRAIN_GRAB_FILE = path.join(__dirname, "..", "seed", "brain-grab.json");
 const BRAIN_GRAB_MARKER = path.join(CONFIG.dataDir, "brain-grab-imported.json");
+// DEPLOYER WAREHOUSE — the offline deployer/dev-history grab (scripts/mass-grab.js phase 3). Boot-
+// merged ONCE into deployerWarehouse (+ devObs) so Dev Info shows a dev's real launch/rug history
+// even for operators the bot never personally watched, and it survives an ST downgrade.
+const DEPLOYER_GRAB_FILE = path.join(__dirname, "..", "seed", "deployer-grab.json");
+const DEPLOYER_GRAB_MARKER = path.join(CONFIG.dataDir, "deployer-grab-imported.json");
+const deployerWarehouse = new Map(); // deployer -> { launchesTracked, runners, rugs, avgMc, bestMc, recentLaunches[], lastSeenMs }
 const MARKET_TAPE_FILE = path.join(CONFIG.dataDir, "market-tape.json");
 const KOL_LEARNING_FILE = path.join(CONFIG.dataDir, "kol-learning.json");
 const devObs = new Map();    // dev -> { coins, ran, rugged, peakSum }  (peakSum = sum of max/first multiples)
@@ -1573,6 +1579,37 @@ async function mergeBrainGrabFile() {
     console.log(`[brain-grab] merged offline grab (stamp ${stamp}): +${added} new, ${updated} refreshed of ${Object.keys(grab.wallets).length} — now ${winners} winner wallets, ${walletObs.size} tracked`);
   } catch (e) { console.warn(`[brain-grab] merge failed: ${e && e.message}`); }
 }
+// Merge the committed offline DEPLOYER warehouse ONCE per grab (idempotent via disk marker). Pure
+// JSON read + Map fill, NO network — crash-safe like mergeBrainGrabFile. Fills two things: (1) the
+// deployerWarehouse Map (Dev Info reads it for real launch/rug history), and (2) devObs (so the
+// autopilot's combinedDevRep sizing benefits from the operator's track record) WITHOUT clobbering
+// any organically-learned devObs counts.
+async function mergeDeployerGrabFile() {
+  try {
+    const grab = await readJson(DEPLOYER_GRAB_FILE).catch(() => null);
+    if (!grab || !grab.deployers) return;
+    const stamp = String(grab.meta?.grabbedAtMs || grab.meta?.version || Object.keys(grab.deployers).length);
+    const marker = await readJson(DEPLOYER_GRAB_MARKER).catch(() => null);
+    if (marker && String(marker.stamp) === stamp) return;   // this exact grab already merged
+    let added = 0, devSeeded = 0;
+    for (const [dev, rec] of Object.entries(grab.deployers)) {
+      if (!dev || !rec) continue;
+      deployerWarehouse.set(dev, rec);
+      added += 1;
+      // Seed devObs only where we have NO organic observation yet (never clobber learned counts).
+      const prev = devObs.get(dev);
+      const launches = Number(rec.launchesTracked) || 0;
+      if (!prev && launches > 0) {
+        // peakSum approximated from runners (each runner ~3x); good enough for combinedDevRep ranking.
+        devObs.set(dev, { coins: launches, ran: Number(rec.runners) || 0, rugged: Number(rec.rugs) || 0, peakSum: (Number(rec.runners) || 0) * 3, seededFromWarehouse: true });
+        devSeeded += 1;
+      }
+    }
+    await saveDevObservatory().catch(() => {});
+    await writeJsonFile(DEPLOYER_GRAB_MARKER, { stamp, importedAt: Date.now(), added, devSeeded }).catch(() => {});
+    console.log(`[deployer-grab] merged offline warehouse (stamp ${stamp}): ${added} deployers (${devSeeded} seeded into devObs) — ${deployerWarehouse.size} tracked`);
+  } catch (e) { console.warn(`[deployer-grab] merge failed: ${e && e.message}`); }
+}
 // AUTO-KOL: harvest proven KOL wallets (real win-rate) from our KOL tracker leaderboard so the bot
 // can copy them. Persisted so the roster survives restarts and keeps growing.
 const AUTO_KOL_FILE = path.join(CONFIG.dataDir, "auto-kol-wallets.json");
@@ -2051,7 +2088,7 @@ async function pollObsTradesSwapApi() {
   } catch {} finally { _obsSwapPolling = false; }
 }
 function startDevObservatory() {
-  void loadDevObservatory();
+  void loadDevObservatory().then(() => mergeDeployerGrabFile());   // fold in the offline deployer warehouse (once per grab) AFTER organic devObs loads
   void loadWalletObservatory().then(() => mergeBrainGrabFile());   // fold in the committed offline mass-grab (once per grab)
   void loadMarketTape();
   void loadKolLearning();
@@ -2529,7 +2566,12 @@ async function pollPopRadar() {
           // (radar is on 24/7) and was competing with the Pairs page for the shared live-feed cache,
           // starving it (pairs flicker / stale categories / dev-info timeouts). Rows are NORMALIZED so
           // jumpScore reads m5/h1 as NUMBERS (raw webLivePairs stores m5 as an object {priceChange}).
-          const combos = [["live", "momentum"], ["live", "volume"], ["under1h", "momentum"], ["under1h", "volume"]];
+          // INCLUDE deeper, LIQUID buckets — not just live/under1h. jumpScore requires >=$4k liquidity
+          // to score above 0 (it won't chase a coin it can't exit), and fresh live/under1h coins are
+          // mostly sub-$4k thin curves → "best jump 0" for every mover. The under6h/graduated buckets
+          // carry the exitable DexScreener-pool movers a real spike scan needs. Still lean (6 keys, not
+          // the 12-key buildLiquidMovers) so it doesn't starve the Pairs page.
+          const combos = [["live", "momentum"], ["under1h", "volume"], ["under6h", "volume"], ["under6h", "momentum"], ["graduated", "volume"], ["graduated", "momentum"]];
           const results = await Promise.all(combos.map(([b, s]) => webLivePairs("autopilot", b, { sort: s, feed: "ap" }).catch(() => null)));
           const seen = new Set(); const rows = [];
           for (const f of results) for (const r of (Array.isArray(f && f.rows) ? f.rows : [])) {
@@ -33214,6 +33256,31 @@ async function computeDevInfoFromLocalData(mint = "", row = null, options = {}) 
   const wallet = candidate.likelyDevWallet;
   let currentPosition = localDevCurrentPositionFromRow(localRow, wallet);
   let historicalStats = localDevHistoricalStatsFromRow(localRow, wallet);
+  // DEPLOYER WAREHOUSE (offline mass-grab, boot-merged): real launch/rug history for operators the
+  // bot never personally watched — fills the "launchesTracked: 0" Dev Info void BEFORE the slow
+  // Postgres / pump.fun fallbacks. Per-launch timing (firstSell/held24h) isn't in the grab (left
+  // null); the launch COUNT + per-launch OUTCOMES (ran/bonded/rugged) are the void-fill that matters.
+  if ((!historicalStats || Number(historicalStats.launchesTracked || 0) === 0) && wallet) {
+    const wh = deployerWarehouse.get(wallet);
+    if (wh && Number(wh.launchesTracked) > 0) {
+      historicalStats = {
+        likelyDevWallet: wallet,
+        launchesTracked: Number(wh.launchesTracked) || 0,
+        runners: Number(wh.runners) || 0,
+        rugs: Number(wh.rugs) || 0,
+        medianFirstSellMinutes: null,
+        medianHoldMinutes: null,
+        soldMoreThan50Within15mPercent: null,
+        soldMoreThan50Within1hPercent: null,
+        heldPast24hPercent: null,
+        bestPriorLaunchReturnPercent: null,
+        worstPriorLaunchReturnPercent: null,
+        recentLaunches: (Array.isArray(wh.recentLaunches) ? wh.recentLaunches : []).slice(0, 6)
+          .map((l) => ({ mint: l.mint, symbol: l.symbol, outcomeLabel: l.outcomeLabel, firstSellMinutes: null })),
+        dataSource: "deployer-warehouse"
+      };
+    }
+  }
   if (!currentPosition) {
     const currentEvents = await readPostgresDevWalletEvents(wallet, cleanMint, 250);
     currentPosition = devCurrentPositionFromEvents(currentEvents, wallet, cleanMint);

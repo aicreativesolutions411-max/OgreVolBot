@@ -8,6 +8,8 @@
     "start": "node src/index.js",
     "render-start": "node src/index.js",
     "worker": "node worker.js",
+    "grab": "node scripts/mass-grab.js",
+    "grab:massive": "node scripts/mass-grab.js --pages=160 --devTokens=8000",
     "autopilot": "node scripts/autopilot.js",
     "debug:tp-sl": "node scripts/debug-tp-sl.js",
     "debug:pump-launch": "node scripts/debug-pump-launch.js",

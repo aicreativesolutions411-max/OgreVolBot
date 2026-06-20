@@ -175,8 +175,77 @@ async function firstBuyerPhase(wallets) {
   return { tokens: tokens.length, candidates: tally.size, kept: kept.length, added, fbCalls };
 }
 
+// PHASE 3 — DEPLOYER WAREHOUSE: the DURABLE Dev-Info void-fill. Scan a BIG token corpus, group by
+// DEPLOYER wallet, and record each operator's launch track record (launches / runners / rugs +
+// recent launches with outcomes). A dev's history is durable (unlike ephemeral token risk), so this
+// persists value even if ST is downgraded — the bot boot-merges it so Dev Info shows real history
+// even for devs it never personally watched. Uses the paid /tokens/{mint} report (VERIFIED shape:
+// token.creation.creator / pools[].deployer / pools[].marketCap.usd / risk.rugged / token.symbol).
+const DEV_TOKENS = Number(args.devTokens ?? 5000);   // how many tokens to map to deployers (0 = skip phase 3)
+const DEV_OUT = args.devOut || "seed/deployer-grab.json";
+const DEV_GAP_MS = Number(args.devGap || 70);
+
+async function gatherDevCorpus(max) {
+  const mints = new Set();
+  const eps = ["/tokens/trending", "/tokens/trending/24h", "/tokens/multi/graduated", "/tokens/latest"];
+  // Paginate volume + latest deep so we map MANY operators (incl. their rugs from /tokens/latest).
+  for (let pg = 1; pg <= 80; pg++) { eps.push(`/tokens/volume?page=${pg}`); eps.push(`/tokens/latest?page=${pg}`); }
+  for (const ep of eps) {
+    if (mints.size >= max) break;
+    try {
+      const d = await stJson(ep);
+      const arr = Array.isArray(d) ? d : (Array.isArray(d && d.tokens) ? d.tokens : (Array.isArray(d && d.data) ? d.data : []));
+      for (const it of arr) { const m = (it && it.token && it.token.mint) || (it && it.mint); if (m && m !== SOL_MINT) mints.add(m); if (mints.size >= max) break; }
+    } catch (e) { /* keep going — a single page failure shouldn't abort the corpus */ }
+    await sleep(PER_PAGE_GAP_MS);
+  }
+  return [...mints].slice(0, max);
+}
+
+function classifyOutcome(mc, rugged) {
+  if (rugged) return "rugged";
+  if (mc >= 100000) return "ran";
+  if (mc >= 30000) return "bonded";
+  if (mc >= 8000) return "active";
+  return "low mc";
+}
+
+async function deployerPhase() {
+  if (DEV_TOKENS <= 0) return { skipped: true };
+  const corpus = await gatherDevCorpus(DEV_TOKENS);
+  console.log(`[mass-grab] phase3: ${corpus.length} tokens → mapping deployers`);
+  const deployers = {};
+  let tokCalls = 0, mapped = 0;
+  for (const mint of corpus) {
+    let d = null;
+    try { d = await stJson(`/tokens/${encodeURIComponent(mint)}`); tokCalls++; } catch {}
+    if (!d || typeof d !== "object") { await sleep(DEV_GAP_MS); continue; }
+    const token = d.token || {};
+    const pools = Array.isArray(d.pools) ? d.pools : [];
+    const pool = pools[0] || {};
+    const dev = String((token.creation && token.creation.creator) || pool.deployer || token.creator || "").trim();
+    if (!dev) { await sleep(DEV_GAP_MS); continue; }
+    const mc = Number(pool.marketCap && pool.marketCap.usd) || Number(d.marketCapUsd) || 0;
+    const rugged = (d.risk && d.risk.rugged) === true;
+    const sym = String(token.symbol || "").slice(0, 16);
+    const outcome = classifyOutcome(mc, rugged);
+    let rec = deployers[dev];
+    if (!rec) rec = deployers[dev] = { launchesTracked: 0, runners: 0, rugs: 0, mcSum: 0, bestMc: 0, recentLaunches: [], lastSeenMs: Date.now() };
+    rec.launchesTracked += 1;
+    if (outcome === "ran" || outcome === "bonded") rec.runners += 1;
+    if (rugged) rec.rugs += 1;
+    rec.mcSum += mc; if (mc > rec.bestMc) rec.bestMc = Math.round(mc);
+    if (rec.recentLaunches.length < 8) rec.recentLaunches.push({ mint, symbol: sym, outcomeLabel: outcome, mc: Math.round(mc) });
+    mapped += 1;
+    if (mapped % 200 === 0) console.log(`[mass-grab] phase3: ${mapped}/${corpus.length} mapped, ${Object.keys(deployers).length} deployers, ${calls} ST calls`);
+    await sleep(DEV_GAP_MS);
+  }
+  for (const dev in deployers) { const r = deployers[dev]; r.avgMc = r.launchesTracked ? Math.round(r.mcSum / r.launchesTracked) : 0; delete r.mcSum; }
+  return { tokens: corpus.length, tokCalls, deployers, count: Object.keys(deployers).length };
+}
+
 async function main() {
-  console.log(`[mass-grab] base=${BASE} pages<=${MAX_PAGES} tradesLimit=${TRADES_LIMIT} winMin=${WIN_MIN} tradesMin=${TRADES_MIN} fbTokens=${FB_TOKENS}`);
+  console.log(`[mass-grab] base=${BASE} pages<=${MAX_PAGES} tradesLimit=${TRADES_LIMIT} winMin=${WIN_MIN} tradesMin=${TRADES_MIN} fbTokens=${FB_TOKENS} devTokens=${DEV_TOKENS}`);
   const wallets = {};
   let scanned = 0, seeded = 0;
   for (let page = 1; page <= MAX_PAGES; page++) {
@@ -229,7 +298,25 @@ async function main() {
   const outPath = path.resolve(process.cwd(), OUT);
   await mkdir(path.dirname(outPath), { recursive: true });
   await writeFile(outPath, JSON.stringify(out));
-  console.log(`[mass-grab] DONE — ${total} wallets (${seeded} leaderboard + ${(fb && fb.added) || 0} early-alpha), ${scanned} scanned, ${calls} ST calls → ${outPath} (${(JSON.stringify(out).length / 1024).toFixed(0)} KB)`);
+  console.log(`[mass-grab] DONE (brain) — ${total} wallets (${seeded} leaderboard + ${(fb && fb.added) || 0} early-alpha), ${scanned} scanned, ${calls} ST calls → ${outPath} (${(JSON.stringify(out).length / 1024).toFixed(0)} KB)`);
+
+  // PHASE 3 — deployer warehouse (separate seed file, separate boot-merge). Runs AFTER the brain grab
+  // so a phase-3 failure never loses the (already-written) brain file.
+  console.log(`[mass-grab] Starting phase3 (deployer warehouse)...`);
+  let dev = { skipped: true };
+  try { dev = await deployerPhase(); } catch (e) { console.warn(`[mass-grab] phase3 failed: ${e.message}`); }
+  if (dev && dev.deployers && dev.count) {
+    const devOut = {
+      meta: { grabbedAtMs: Date.now(), source: "solana-tracker/tokens-grouped-by-deployer", tokens: dev.tokens, tokCalls: dev.tokCalls, deployers: dev.count, stCalls: calls, version: 1 },
+      deployers: dev.deployers
+    };
+    const devPath = path.resolve(process.cwd(), DEV_OUT);
+    await mkdir(path.dirname(devPath), { recursive: true });
+    await writeFile(devPath, JSON.stringify(devOut));
+    console.log(`[mass-grab] DONE (deployers) — ${dev.count} deployers from ${dev.tokens} tokens (${dev.tokCalls} /tokens calls) → ${devPath} (${(JSON.stringify(devOut).length / 1024).toFixed(0)} KB)`);
+  } else {
+    console.log(`[mass-grab] phase3 produced no deployers (${dev && dev.skipped ? "skipped" : "empty"}).`);
+  }
 }
 
 main().catch((e) => { console.error("[mass-grab] fatal", e); process.exit(1); });
