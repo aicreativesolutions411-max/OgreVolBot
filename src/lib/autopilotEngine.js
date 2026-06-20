@@ -1409,6 +1409,7 @@ export function createAutopilotEngine(deps) {
     devReputation = () => null,
     smartMoney = () => null,
     clusterRisk = () => null,   // (mint) -> { risk:0..1, reason } | null  (funding-graph rug filter)
+    securityGate = async () => null,   // (row) -> { danger:true, reason } | null  (on-chain SlimeShield rug block, pre-buy)
     smartMoneyReady = () => false,
     smartMoneyFeed = async () => [],
     callerIntel = () => null,   // (mint) -> { signal:{convictionDelta,reason,trusted}, caller, channel } | null
@@ -2680,6 +2681,21 @@ export function createAutopilotEngine(deps) {
       }
       const liveLiq = Number(lite && lite.liquidityUsd) || 0;
       if (liveLiq > 0) entryLiq = liveLiq;
+    } catch {}
+
+    // PRE-BUY RUG HARD-GATE: an on-chain SlimeShield read (active mint/freeze authority, Token-2022,
+    // honeypot-style danger) — the same block the Ogre AI pick surface already runs, which the hunt
+    // loop lacked. Only ever PREVENTS a bad buy; never forces one. Fresh-ape semantics: only genuine
+    // danger blocks, so a thin-but-clean fresh launch still gets through. The cheap feed-level gate
+    // (autopilotRowHasHardDanger) already drops known rugs upstream; this is the authoritative
+    // on-chain confirmation right before SOL moves.
+    try {
+      const gate = await securityGate(row);
+      if (gate && gate.danger) {
+        noteUnbuyable(state, mint);
+        record("warn", `Blocked ${sym} - ${gate.reason || "on-chain rug danger (mint/freeze authority / honeypot)"}`);
+        return;
+      }
     } catch {}
 
     let tokenAmount = null;

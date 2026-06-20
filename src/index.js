@@ -3039,6 +3039,21 @@ const autopilotEngine = createAutopilotEngine({
   devReputation: (dev) => combinedDevRep(dev),
   smartMoney: (mint) => smartMoneyScore(mint),
   clusterRisk: (mint) => autopilotClusterRisk(mint),
+  // PRE-BUY rug hard-gate (fresh-ape semantics): the same on-chain SlimeShield danger check the Ogre
+  // AI pick surface runs — active mint/freeze authority, Token-2022, honeypot-style signals. Only
+  // genuine DANGER blocks (not a soft AVOID), so thin-but-clean fresh launches still trade. The hunt
+  // loop never had this; it's the authoritative confirmation right before SOL moves.
+  securityGate: async (row) => {
+    try {
+      const mint = String((row && row.tokenMint) || "").trim();
+      if (!mint) return null;
+      const shield = await webSlimeShield(mint).catch(() => null);
+      if (shield && slimeShieldHasHardDanger(shield)) {
+        return { danger: true, reason: `SlimeShield ${shield.verdict || "danger"} — mint/freeze authority or honeypot signal` };
+      }
+    } catch {}
+    return null;
+  },
   smartMoneyReady: () => smartMoneyReady(),
   smartMoneyFeed: async () => smartMoneyFeed(),
   // INSIDER-LAUNCH dev-dump tripwire: the engine exits 100% the instant a launch's creator sells.
