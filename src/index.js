@@ -2422,9 +2422,15 @@ function popFadingNow(mint) {
   if (!m) return true;                                   // no live trades at all = the burst is dead
   return m.inflowNow < peak * 0.35;                      // collapsed to <35% of the post-entry peak = pop is over
 }
-// The broad NORMALIZED liquid-movers pool — the scalp feed AND the pop spike scan both score it. Rows
-// carry m5/h1 as NUMBERS (raw webLivePairs stores m5 as an object {priceChange}) + real liquidityUsd,
-// which is exactly what liquidScore/jumpScore need. ~120 coins across fresh→24h buckets + trending.
+// Coerce a webLivePairs row's m5/h1 (stored as an OBJECT {priceChange} OR a number) to a plain number
+// %, which is what liquidScore/jumpScore expect. Undefined when unparseable (the scorers skip it).
+function liveRowPct(v) {
+  if (v && Number.isFinite(Number(v.priceChange))) return Number(v.priceChange);
+  return Number.isFinite(Number(v)) ? Number(v) : undefined;
+}
+// The broad NORMALIZED liquid-movers pool — the scalp feed scores it. Rows carry m5/h1 as NUMBERS
+// (raw webLivePairs stores m5 as an object {priceChange}) + real liquidityUsd, which is exactly what
+// liquidScore/jumpScore need. ~120 coins across fresh→24h buckets + trending.
 async function buildLiquidMovers() {
   const BUCKETS = ["live", "under1h", "under3h", "under1d"];
   const SORTS = ["liquidity", "volume", "momentum"];
@@ -2445,8 +2451,7 @@ async function buildLiquidMovers() {
         tokenMint: r.tokenMint, symbol: r.symbol, pairAgeSeconds: r.pairAgeSeconds,
         marketCap: r.marketCap, liquidityUsd: r.liquidityUsd, volume5m: r.volume5m, volumeH1: r.volumeH1,
         buys5m: r.buys5m, sells5m: r.sells5m, buysH1: r.buysH1, sellsH1: r.sellsH1,
-        m5: r.m5 && Number.isFinite(Number(r.m5.priceChange)) ? Number(r.m5.priceChange) : (Number.isFinite(Number(r.m5)) ? Number(r.m5) : undefined),
-        h1: r.h1 && Number.isFinite(Number(r.h1.priceChange)) ? Number(r.h1.priceChange) : (Number.isFinite(Number(r.h1)) ? Number(r.h1) : undefined),
+        m5: liveRowPct(r.m5), h1: liveRowPct(r.h1),
         sniperCount: r.sniperCount || r.snipers || 0,
         bestPickScore: r.bestPickScore || r.bestPick || 0
       });
@@ -2474,14 +2479,24 @@ async function pollPopRadar() {
       _popSrcBusy = true;
       void (async () => {
         try {
-          // Use the SAME normalized liquid-movers pool the scalp path scores — its rows have m5/h1 as
-          // NUMBERS (raw webLivePairs rows store m5 as an OBJECT {priceChange}, which made jumpScore read
-          // NaN and score every coin 0) and real liquidityUsd, so jumpScore actually works on them.
-          const movers = await buildLiquidMovers();
-          if (Array.isArray(movers) && movers.length) {
-            popLiveRows = movers.slice(0, 140);                 // broad pool for the FREE jumpScore spike scan
-            popLiveMints = movers.map((r) => r.tokenMint).filter(Boolean).slice(0, 40);
+          // LEAN focused fetch for the spike scan — ONLY the 4 keys where a CURRENT spike shows (recent
+          // buckets × momentum/volume sorts). NOT the heavy 12-key buildLiquidMovers: that runs always
+          // (radar is on 24/7) and was competing with the Pairs page for the shared live-feed cache,
+          // starving it (pairs flicker / stale categories / dev-info timeouts). Rows are NORMALIZED so
+          // jumpScore reads m5/h1 as NUMBERS (raw webLivePairs stores m5 as an object {priceChange}).
+          const combos = [["live", "momentum"], ["live", "volume"], ["under1h", "momentum"], ["under1h", "volume"]];
+          const results = await Promise.all(combos.map(([b, s]) => webLivePairs("autopilot", b, { sort: s }).catch(() => null)));
+          const seen = new Set(); const rows = [];
+          for (const f of results) for (const r of (Array.isArray(f && f.rows) ? f.rows : [])) {
+            if (!(r && r.tokenMint) || seen.has(r.tokenMint)) continue;
+            seen.add(r.tokenMint);
+            rows.push({
+              tokenMint: r.tokenMint, symbol: r.symbol, marketCap: r.marketCap, liquidityUsd: r.liquidityUsd,
+              volume5m: r.volume5m, buys5m: r.buys5m, sells5m: r.sells5m,
+              m5: liveRowPct(r.m5), h1: liveRowPct(r.h1)
+            });
           }
+          if (rows.length) { popLiveRows = rows.slice(0, 140); popLiveMints = rows.map((r) => r.tokenMint).slice(0, 40); }
         } catch {} finally { _popSrcBusy = false; }
       })();
     }
