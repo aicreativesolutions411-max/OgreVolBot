@@ -44819,6 +44819,64 @@ function livePairStatusMessage(count, stats = {}, bucket = "live") {
   return `${label}: ${count} pair(s). Auto-refreshing.`;
 }
 
+// ── Non-blocking live-pair security enrichment ────────────────────────────────────────────
+// The display feed must NEVER block on per-coin RPC safety (awaiting up to 120 Alchemy reads
+// ~3.5s each timed out the fresh bucket — that's why LIVE_PAIRS_RPC_SAFETY is off). But turning
+// it off also stripped the freeze/mint-authority + Token-2022 read that feeds the SlimeShield
+// security verdict, so fresh coins showed no security info ("we had this a day ago"). Fix: enrich
+// the TOP rows in the BACKGROUND (fire-and-forget) into the existing 6h mintSafetyCache, and MERGE
+// whatever is already cached into each build. Net: the feed returns instantly (zero added latency)
+// and within ~one refresh cycle the cards carry real authority security. See fresh-feed-contract.
+const liveSafetyInFlight = new Set();
+const LIVE_SAFETY_BG_MAX = 16;
+
+function peekMintSafety(mint) {
+  try {
+    const key = String(mint || "").trim();
+    if (!key) return null;
+    return getTimedCache(mintSafetyCache, key, Math.max(60_000, Number(process.env.MINT_SAFETY_TTL_MS) || 6 * 60 * 60 * 1000)) || null;
+  } catch { return null; }
+}
+
+function applyCachedLiveSafety(row) {
+  const safety = peekMintSafety(row && row.tokenMint);
+  if (!safety) return { ...row, safetyNote: row.safetyNote || "Trade safety runs before buy" };
+  const token2022 = safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58();
+  const flagged = Boolean(safety.freezeAuthority || safety.mintAuthority || token2022);
+  return {
+    ...row,
+    tokenProgram: safety.tokenProgram || row.tokenProgram,
+    // pairRiskFlags() derives freezeAuthorityActive / mintAuthorityActive / token2022 from these
+    // fields, and the client SlimeShield reads those flags — so authority risk now surfaces on the
+    // fresh card itself instead of sitting blank.
+    freezeAuthority: safety.freezeAuthority || row.freezeAuthority || "",
+    mintAuthority: safety.mintAuthority || row.mintAuthority || "",
+    safetyStatus: flagged ? "warning" : "passed",
+    safetyVerified: true,
+    safetyNote: flagged ? "Mint/freeze authority active - trade with care" : "Mint/freeze safety checked"
+  };
+}
+
+function scheduleLiveSafetyEnrichment(rows) {
+  if (!Array.isArray(rows) || !rows.length) return;
+  const misses = [];
+  const seen = new Set();
+  for (const row of rows) {
+    const mint = String((row && row.tokenMint) || "").trim();
+    if (!mint || seen.has(mint)) continue;
+    seen.add(mint);
+    if (peekMintSafety(mint) || liveSafetyInFlight.has(mint)) continue;
+    misses.push(mint);
+    if (misses.length >= LIVE_SAFETY_BG_MAX) break;
+  }
+  if (!misses.length) return;
+  // fire-and-forget, capped concurrency, never throws into the request path
+  void runWithConcurrency(misses, 4, async (mint) => {
+    liveSafetyInFlight.add(mint);
+    try { await getMintSafetyInfo(mint); } catch {} finally { liveSafetyInFlight.delete(mint); }
+  }).catch(() => {});
+}
+
 async function maybeFilterWebLivePairsForSafety(rows, limit = 12) {
   if (CONFIG.livePairsRpcSafety) {
     return filterWebLivePairsForSafety(rows, limit);
@@ -44828,10 +44886,9 @@ async function maybeFilterWebLivePairsForSafety(rows, limit = 12) {
     .filter((row) => !hasHardBlockedLivePairRisk(row))
     .sort(compareWebLivePairs)
     .slice(0, limit)
-    .map((row) => ({
-      ...row,
-      safetyNote: "Trade safety runs before buy"
-    }));
+    .map(applyCachedLiveSafety);
+  // Kick off background security reads for the rows users actually see; the NEXT build merges them.
+  scheduleLiveSafetyEnrichment(limited);
 
   return {
     rows: limited,

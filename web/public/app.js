@@ -306,6 +306,20 @@ function pauseIntroVideoGate({ reset = false } = {}) {
   });
 }
 
+// One-time fresh-first migration (see fresh-feed-contract — must NOT be reverted): the Live
+// Terminal used to default its Discover ranking to "dexTrending", which sorts by volume and
+// buried seconds-old launches under established/trending coins. Reset that stale default to
+// "fresh" once so the flagship feed leads with brand-new pairs. A user's deliberate non-default
+// pick is preserved (we only reset the old auto-default).
+(() => {
+  try {
+    if (localStorage.getItem("liveTerminalFreshV1")) return;
+    localStorage.setItem("liveTerminalFreshV1", "1");
+    const lt = localStorage.getItem("liveTerminalCategory");
+    if (!lt || lt === "dexTrending") localStorage.setItem("liveTerminalCategory", "fresh");
+  } catch {}
+})();
+
 const state = {
   token: getStoredToken(),
   user: null,
@@ -326,10 +340,14 @@ const state = {
         ? "kol"
         : "terminal",
   terminalSubtab: "positions",
-  terminalSort: "best",
-  terminalCat: (() => { try { return localStorage.getItem("cookSpotCategory") || "dexTrending"; } catch { return "dexTrending"; } })(), // dedicated category source path
+  // Fresh-first by default: the Live Terminal is the landing tab, so its initial fetch sort +
+  // dedicated category SOURCE path must lead with the newest launches (see fresh-feed-contract).
+  // terminalSort/terminalCat are session-only (reset every reload), so these defaults decide the
+  // first paint; navigateTo() re-derives them per active tab on switches.
+  terminalSort: "newest",
+  terminalCat: (() => { try { return localStorage.getItem("liveTerminalCategory") || "fresh"; } catch { return "fresh"; } })(), // dedicated category source path
   liveFeedCategory: (() => { try { return localStorage.getItem("liveFeedCategory") || "fresh"; } catch { return "fresh"; } })(),
-  liveTerminalCategory: (() => { try { return localStorage.getItem("liveTerminalCategory") || "dexTrending"; } catch { return "dexTrending"; } })(),
+  liveTerminalCategory: (() => { try { return localStorage.getItem("liveTerminalCategory") || "fresh"; } catch { return "fresh"; } })(),
   cookSpotCategory: (() => { try { return localStorage.getItem("cookSpotCategory") || "dexTrending"; } catch { return "dexTrending"; } })(),
   terminalLaunchFilters: {
     open: false,
@@ -858,8 +876,8 @@ const LIVE_FEED_CATEGORIES = [
 // 4th field = the BACKEND sort to fetch for this option, so each option pulls a genuinely
 // different pool (not just a client re-rank of the same rows). Mirrors LIVE_FEED_CATEGORIES.
 const COOK_SPOT_CATEGORIES = [
+  ["fresh", "Fresh Pairs", "Newest launches first", "newest"],
   ["dexTrending", "DEX Trending", "Trending across DEX pairs", "volume"],
-  ["fresh", "Fresh Pairs", "Newest DEX pairs", "newest"],
   ["dexBoosted", "DEX Boosted", "Paid DEX boosts", "volume"],
   ["pumpTrending", "Pump.fun Trending", "Hot pump-curve launches", "newest"],
   ["memeMovers", "Meme Coin Movers", "Top meme % movers", "momentum"],
@@ -1253,6 +1271,19 @@ function closeTransientInteractionLayers({ keepLogin = false } = {}) {
   syncInteractionLocks();
 }
 
+// Keep the shared live-feed sort + dedicated category source path matched to whichever feed
+// tab is active, so each tab shows ITS category's pairs and never a stale cross-tab sort
+// (the Live Terminal must stay fresh-first — see fresh-feed-contract). Raw [data-terminal-sort]
+// picks are left alone until the next tab switch.
+function syncTerminalSortCatForActiveTab() {
+  try {
+    if (state.route !== "terminal") return;
+    if (state.activeTab === "terminal") { const c = currentLiveTerminalCategory(); state.terminalSort = c[3] || "newest"; state.terminalCat = c[0] || "fresh"; }
+    else if (state.activeTab === "live") { const c = currentLiveFeedCategory(); state.terminalSort = c[3] || "newest"; state.terminalCat = c[0] || "fresh"; }
+    else if (state.activeTab === "slimeScope") { const c = currentCookSpotCategory(); state.terminalSort = c[3] || "volume"; state.terminalCat = c[0] || "dexTrending"; }
+  } catch {}
+}
+
 function navigateTo(pathname, tab = null) {
   const startedAt = perfNow();
   const nextPath = pathname || "/terminal";
@@ -1260,6 +1291,7 @@ function navigateTo(pathname, tab = null) {
   closeTransientInteractionLayers({ keepLogin: state.route === "login" });
   if (state.route === "login") state.loginModalOpen = true;
   if (state.route === "terminal") state.activeTab = tab || tabForPath(nextPath);
+  syncTerminalSortCatForActiveTab();
   if (state.route !== "intro") pauseIntroVideoGate({ reset: true });
   window.history.pushState({}, "", nextPath);
   applyChartRouteFromLocation();
@@ -1275,6 +1307,7 @@ window.addEventListener("popstate", () => {
   closeTransientInteractionLayers({ keepLogin: state.route === "login" });
   if (state.route === "login") state.loginModalOpen = true;
   state.activeTab = tabForPath();
+  syncTerminalSortCatForActiveTab();
   if (state.route !== "intro") pauseIntroVideoGate({ reset: true });
   applyChartRouteFromLocation();
   render();
