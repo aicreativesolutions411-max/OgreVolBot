@@ -6,7 +6,7 @@
 <title>SlimeWire — The Playbook</title>
 <meta name="description" content="The complete SlimeWire playbook — how to trade with one-tap presets, let your A.I. agent auto-trade, use every tool, launch a coin, build prelaunch hype, and raid on X & Telegram.">
 <meta property="og:title" content="SlimeWire — The Playbook">
-<meta property="og:image" content="https://www.slimewire.org/assets/slimewire/swamp/art/og-survivors.jpg">
+<meta property="og:image" content="https://www.slimewire.org/assets/slimewire/hero-ogre.webp">
 <link rel="icon" type="image/svg+xml" href="/assets/slimewire/svg/slimewire-mark.svg">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=Cinzel:wght@700;900&display=swap" rel="stylesheet">
 <style>
@@ -63,21 +63,44 @@
   @media(max-width:560px){ .pages{grid-template-columns:1fr;} .nav-row{grid-template-columns:1fr;gap:3px;} .toc ol{columns:1;} .cover h1{font-size:2.4rem;} .body{padding:8px 20px 40px;} }
   .ogre{float:right;width:120px;margin:0 0 10px 16px;filter:drop-shadow(0 6px 14px rgba(0,0,0,0.6));}
   .foot{background:#0a1410;border-top:2px solid var(--line2);color:var(--dim);text-align:center;padding:26px;font-size:0.84rem;} .foot b{color:var(--green2);}
+  /* ===== premium polish ===== */
+  .drip{position:absolute;top:-2px;width:52px;opacity:0.55;z-index:1;pointer-events:none;filter:drop-shadow(0 4px 10px rgba(0,0,0,0.5));}
+  .drip.l{left:7%;} .drip.r{right:7%;transform:scaleX(-1);}
+  .cta-wrap{margin-top:26px;display:flex;flex-direction:column;align-items:center;gap:8px;}
+  .cta{display:inline-flex;align-items:center;gap:15px;background:linear-gradient(135deg,#0e1d13,#0a1410);border:2px solid var(--green);border-radius:18px;padding:13px 26px 13px 14px;text-decoration:none;box-shadow:0 0 42px rgba(114,255,35,0.34),inset 0 0 26px rgba(114,255,35,0.07);transition:transform .15s ease,box-shadow .15s ease;}
+  .cta:hover{transform:translateY(-2px);box-shadow:0 0 60px rgba(114,255,35,0.55),inset 0 0 26px rgba(114,255,35,0.12);}
+  .cta .em{width:56px;height:56px;border-radius:13px;flex:0 0 auto;filter:drop-shadow(0 0 12px rgba(255,210,74,0.55));}
+  .cta .ct{text-align:left;line-height:1.25;}
+  .cta .ct b{display:block;font-size:1.14rem;color:#fff;font-weight:900;letter-spacing:0.3px;}
+  .cta .ct span{display:block;color:var(--green2);font-size:0.82rem;font-weight:800;letter-spacing:0.4px;}
+  .cta-note{color:#9fc7a8;font-size:0.8rem;}
+  .poster{width:100%;border-radius:14px;border:1px solid var(--line2);margin:16px 0 6px;box-shadow:0 12px 34px rgba(0,0,0,0.55);display:block;}
+  .emblem-row{display:flex;align-items:center;gap:16px;background:linear-gradient(135deg,rgba(255,210,74,0.09),rgba(114,255,35,0.05));border:1px solid rgba(255,210,74,0.32);border-radius:15px;padding:15px 18px;margin:16px 0 6px;}
+  .emblem-row img{width:66px;height:66px;flex:0 0 auto;border-radius:14px;filter:drop-shadow(0 0 14px rgba(255,210,74,0.45));}
+  .emblem-row .et b{color:var(--gold);font-size:1.05rem;} .emblem-row .et p{margin:3px 0 0;color:#cfe0cc;font-size:0.9rem;}
+  .sech .num.blue{background:linear-gradient(135deg,var(--blue),#2d7fd0);} .sech .num.purp{background:linear-gradient(135deg,var(--purp),#7a3fd0);} .sech .num.red{background:linear-gradient(135deg,var(--red),#d04545);}
   @media print{ html,body{background:#fff;} .page{background:var(--bg);} .sec{padding-top:24px;} .sech{break-after:avoid;} .step,.preset,.pg,.nav-row,.tip,.warn,.note{break-inside:avoid;} h3,h4{break-after:avoid;} .no-print{display:none;} .cover{padding:96px 40px;} }
 </style>
 </head>
 <body>
 <div class="page">
   <div class="cover">
-    <img class="bg" src="https://www.slimewire.org/assets/slimewire/swamp/art/survivors-hero.jpg" alt="">
+    <img class="bg" src="/assets/slimewire/hero-ogre.webp" alt="" onerror="this.style.display='none'">
+    <img class="drip l no-print" src="/assets/slimewire/drip-slime.webp" alt="" onerror="this.style.display='none'">
+    <img class="drip r no-print" src="/assets/slimewire/drip-slime.webp" alt="" onerror="this.style.display='none'">
     <div class="in">
-      <img class="logo" src="https://www.slimewire.org/assets/slimewire/svg/slimewire-mark.svg" alt="SlimeWire">
-      <div class="kick">The Playbook</div>
+      <img class="logo" src="/assets/slimewire/svg/slimewire-mark.svg" alt="SlimeWire">
+      <div class="kick">The Playbook · User Guide</div>
       <h1>SLIMEWIRE</h1>
       <h2>🐸 trade · automate · launch 🧌</h2>
       <p>Everything you need to run SlimeWire like a pro — trade with one-tap presets, let your A.I. agent buy and sell for you, use every tool, launch a coin, and rally raids on X &amp; Telegram. Built for degens. Easy for newbies.</p>
-      <a class="dl no-print" href="#" onclick="window.print();return false;">⬇️ Save this playbook as PDF</a>
-      <div class="no-print" style="margin-top:10px;color:#9fc7a8;font-size:0.82rem;">Tap above → choose <b>“Save as PDF”</b>. It always prints the latest guide.</div>
+      <div class="cta-wrap no-print">
+        <a class="cta" href="#" onclick="window.print();return false;">
+          <img class="em" src="/assets/slimewire/pro-emblem.webp" alt="" onerror="this.src='/icons/icon-192.png'">
+          <span class="ct"><b>Download the Playbook</b><span>⬇ SAVE AS PDF · ALWAYS THE LATEST</span></span>
+        </a>
+        <div class="cta-note">Opens your print dialog → choose <b>“Save as PDF”</b>.</div>
+      </div>
     </div>
   </div>
 
@@ -105,7 +128,7 @@
 
     <div class="sec" id="start">
       <div class="sech"><div class="num">1</div><h2>Get In — 30 Seconds</h2></div>
-      <img class="ogre" src="https://www.slimewire.org/assets/slimewire/png/slimewire-ogre-hero-cutout.png" alt="" onerror="this.style.display='none'">
+      <img class="ogre" src="/assets/slimewire/png/slimewire-ogre-hero-cutout.png" alt="" onerror="this.style.display='none'">
       <p class="lead">Open <b>slimewire.org</b>. Three doors:</p>
       <div class="steps">
         <div class="step"><b>Connect Wallet</b> — tap it, pick <b>Phantom</b> or <b>Solflare</b>, approve. Now you can trade with your own wallet.</div>
@@ -209,7 +232,7 @@
     </div>
 
     <div class="sec" id="tools">
-      <div class="sech"><div class="num">5</div><h2>Pro Tools (Ogre Tek)</h2></div>
+      <div class="sech"><div class="num blue">5</div><h2>Pro Tools (Ogre Tek)</h2></div>
       <p class="lead"><b>Ogre Tek</b> is the heavy machinery — bundling, sniping, the SlimeBot volume engine, and Ogre A.I. picks. Same presets apply. <b>Everything here spends real SOL — start small.</b></p>
       <h3>📦 Bundle — many wallets, one tap</h3>
       <p>Buy or sell the <b>same token across several of your wallets</b> at once — perfect for spreading a launch buy or exiting together.</p>
@@ -233,8 +256,9 @@
 
     <div class="sec" id="pro">
       <div class="sech"><div class="num gold">6</div><h2>Pro Autopilot — Your A.I. Agent</h2></div>
-      <img class="ogre" src="https://www.slimewire.org/assets/slimewire/png/slimewire-ogre-hero-cutout.png" alt="" onerror="this.style.display='none'">
+      <img class="ogre" src="/assets/slimewire/png/slimewire-ogre-hero-cutout.png" alt="" onerror="this.style.display='none'">
       <p class="lead"><b>Pro is your personal A.I. trading agent.</b> Turn it on and it does the <b>buying and selling for you</b> — scanning the market, taking entries, taking profit and cutting losers automatically, on your own wallet, around the clock.</p>
+      <div class="emblem-row"><img src="/assets/slimewire/pro-emblem.webp" alt="Pro" onerror="this.style.display='none'"><div class="et"><b>👑 Pro Autopilot</b><p>The gold pill in the nav. Your A.I. agent that trades hands-free with the hard limits you set.</p></div></div>
       <div class="steps">
         <div class="step">Tap the gold <b>👑 Pro</b> pill in the nav (or go to <span class="cmd">/pro</span>).</div>
         <div class="step">Unlock access, then connect the <b>wallet</b> you want it to trade on.</div>
@@ -271,8 +295,9 @@
     </div>
 
     <div class="sec" id="prelaunch">
-      <div class="sech"><div class="num">9</div><h2>Prelaunch Hype</h2></div>
+      <div class="sech"><div class="num purp">9</div><h2>Prelaunch Hype</h2></div>
       <p class="lead">Open <a href="https://www.slimewire.org/prelaunch" style="color:var(--green)">slimewire.org/prelaunch</a>. Build the buzz <b>before</b> a coin launches.</p>
+      <img class="poster" src="/assets/slimewire/poster-prelaunch.webp" alt="Prelaunch" onerror="this.style.display='none'">
       <ul>
         <li><b>Countdown</b> to launch + a <b>hype meter</b> that fills as the crew piles in.</li>
         <li><b>Allowlist spots</b> — supporters claim a spot so they're ready at launch.</li>
@@ -283,8 +308,9 @@
     </div>
 
     <div class="sec" id="raids">
-      <div class="sech"><div class="num">10</div><h2>Raid Board (X &amp; Telegram)</h2></div>
+      <div class="sech"><div class="num purp">10</div><h2>Raid Board (X &amp; Telegram)</h2></div>
       <p class="lead">Open <a href="https://www.slimewire.org/raids" style="color:var(--green)">slimewire.org/raids</a>. The crew raids together — a post becomes a <b>boss</b> and its <b>slime gauge</b> fills with real likes + retweets.</p>
+      <img class="poster" src="/assets/slimewire/poster-raid.webp" alt="Raid Board" onerror="this.style.display='none'">
       <ul>
         <li><b>Start a raid</b> in Telegram: <span class="cmd">/raid &lt;X post&gt; [$TICKER] [target]</span> — your post lands on the board.</li>
         <li><b>RAID NOW</b> — opens the X post so the swamp can like + retweet and fill the gauge.</li>
@@ -294,7 +320,7 @@
     </div>
 
     <div class="sec" id="tg">
-      <div class="sech"><div class="num">11</div><h2>Telegram Bot</h2></div>
+      <div class="sech"><div class="num blue">11</div><h2>Telegram Bot</h2></div>
       <p>DM the bot, or add it to your group and have an admin run <span class="cmd">/slimewire on</span> for live alerts. Commands:</p>
       <div class="nav-tbl">
         <div class="nav-row"><div class="k">/start</div><div class="v">Open the menu / link your account.</div></div>
