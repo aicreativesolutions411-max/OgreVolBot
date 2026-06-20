@@ -33424,6 +33424,10 @@ async function hydrateMarketRowFromPublicSources(mint = "", row = null, reason =
     freezeAuthority: firstString(baseRow.freezeAuthority, heliusMeta.freezeAuthority, st.freezeAuthority),
     // Solana Tracker on-chain risk/holder/LP data (real values that fill the Dev Info + SlimeShield void).
     topHolderPercent: firstMeaningfulNumber(baseRow.topHolderPercent, st.topHolderPercent),
+    snipersPercent: firstMeaningfulNumber(baseRow.snipersPercent, st.snipersPercent),
+    insidersPercent: firstMeaningfulNumber(baseRow.insidersPercent, st.insidersPercent),
+    bundlersPercent: firstMeaningfulNumber(baseRow.bundlersPercent, st.bundlersPercent),
+    devHoldPercent: firstMeaningfulNumber(baseRow.devHoldPercent, st.devHoldPercent),
     lpBurnedPercent: firstMeaningfulNumber(baseRow.lpBurnedPercent, st.lpBurnedPercent),
     holderCount: firstMeaningfulNumber(baseRow.holderCount, st.holderCount),
     stRugScore: Number.isFinite(st.rugScore) ? st.rugScore : (Number.isFinite(baseRow.stRugScore) ? baseRow.stRugScore : null),
@@ -43266,11 +43270,7 @@ async function fetchSolanaTrackerTokenReport(mint = "") {
   try {
     data = await solanaTrackerJson(`/tokens/${encodeURIComponent(clean)}`, { cacheTtlMs: 90_000, timeoutMs: 6_500 });
   } catch (e) { try { console.warn(`[st-report] ${shortMint(clean)} FETCH ERROR: ${e && e.message}`); } catch {} return null; }
-  if (!data || typeof data !== "object") { try { console.warn(`[st-report] ${shortMint(clean)} empty/non-object response`); } catch {} return null; }
-  try {
-    const _r = data.risk || {}; const _p = (Array.isArray(data.pools) ? data.pools[0] : {}) || {};
-    console.warn(`[st-report] ${shortMint(clean)} riskKeys=[${Object.keys(_r).join(",")}] top10=${JSON.stringify(_r.top10)} score=${_r.score} rugged=${_r.rugged} jup=${_r.jupiterVerified} poolKeys=[${Object.keys(_p).join(",")}] sec=${JSON.stringify(_p.security)} lpBurn=${_p.lpBurn} deployer=${shortMint(String(_p.deployer || ""))} creation=${JSON.stringify(data.token?.creation || {}).slice(0,130)}`);
-  } catch {}
+  if (!data || typeof data !== "object") return null;
   const token = data.token || {};
   const creation = token.creation || token.created || {};
   const pools = Array.isArray(data.pools) ? data.pools : [];
@@ -43286,26 +43286,33 @@ async function fetchSolanaTrackerTokenReport(mint = "") {
   };
   const mintAuthority = cleanAuthority(security.mintAuthority);
   const freezeAuthority = cleanAuthority(security.freezeAuthority);
-  // top10holders may be a fraction (0-1) or a percent (0-100) depending on plan/version — normalize to %.
-  let topHolderPercent = stNum(risk.top10holders ?? risk.top10HoldersPercentage ?? risk.topHoldersPercent);
-  if (topHolderPercent != null && topHolderPercent <= 1) topHolderPercent = topHolderPercent * 100;
+  // VERIFIED LIVE shape (2026-06-20): risk = {snipers, insiders, bundlers, top10, dev, fees, rugged,
+  // risks, score}; each concentration object is {count, totalPercentage, wallets, ...}; pool has
+  // {security:{mintAuthority,freezeAuthority}, lpBurn(%), deployer, pumpfun, curvePercentage};
+  // token.creation.creator = deployer. NOTE: risk.score is NOT a clean higher=riskier scale (a clean
+  // coin returned score=10), so it's kept for display only and never used to penalize.
+  const pctOf = (o) => stNum(o?.totalPercentage ?? o?.percentage ?? o?.total);
+  let topHolderPercent = stNum(risk.top10);                       // top-10 holder concentration (%)
+  if (topHolderPercent != null && topHolderPercent > 0 && topHolderPercent <= 1) topHolderPercent *= 100;
   const lpBurnedPercent = stNum(pool.lpBurn ?? pool.lpBurned ?? pool.burnPercentage);
   const market = String(pool.market || pool.market_id || "").toLowerCase();
-  const onCurve = /pump|bonk|moonshot|curve/.test(market) || stNum(pool.curvePercentage) != null;
+  const onCurve = Boolean(pool.pumpfun) || stNum(pool.curvePercentage) != null || /pump|bonk|moonshot|curve/.test(market);
   return {
     ok: true,
     creator: String(creation.creator || pool.deployer || token.creator || "").trim() || "",
     mintAuthority,
     freezeAuthority,
     topHolderPercent,
+    snipersPercent: pctOf(risk.snipers),       // % of supply held by snipers (first-block buyers)
+    insidersPercent: pctOf(risk.insiders),     // % held by insider/linked wallets
+    bundlersPercent: pctOf(risk.bundlers),     // % held by bundled wallets
+    devHoldPercent: pctOf(risk.dev),           // % the DEV still holds (Dev Info current-position void-fill)
     lpBurnedPercent,
     onCurve,
     market: market || "",
     rugged: risk.rugged === true,
-    rugScore: stNum(risk.score),                  // ST score: higher = riskier (0-10ish)
-    jupiterVerified: risk.jupiterVerified === true,
+    rugScore: stNum(risk.score),               // display only — NOT a higher=riskier scale (see note above)
     riskNotes: risks.map((r) => String(r?.name || r?.description || r || "")).filter(Boolean).slice(0, 6),
-    severeRiskCount: risks.filter((r) => /danger|warn|high|critical/i.test(String(r?.level || ""))).length,
     holderCount: stNum(data.holders ?? data.holderCount ?? token.holders),
     marketCap: stNum(pool.marketCap?.usd ?? data.marketCapUsd ?? token.marketCapUsd),
     liquidityUsd: stNum(pool.liquidity?.usd),

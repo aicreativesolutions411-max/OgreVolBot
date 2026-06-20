@@ -287,11 +287,28 @@ export function computeSlimeShield(row = {}, options = {}) {
         factors.push(factor("st_lp_open", "LP", "risk", "Liquidity is not burned — rug-pull risk.", -12));
       }
     }
-    const stScore = firstNumber(row.stRugScore);
-    if (Number.isFinite(stScore) && stScore >= 7) {
-      const notes = Array.isArray(row.stRiskNotes) ? row.stRiskNotes.slice(0, 3).join(", ") : "";
+    // Insider / sniper / bundle / dev concentration — the real "who controls the supply" read the
+    // free engines miss. High values mean a few coordinated wallets can dump on you. (ST's risk.score
+    // is intentionally NOT used: a clean coin returns score=10, so it isn't a higher=riskier scale.)
+    const sniped = firstNumber(row.snipersPercent);
+    if (Number.isFinite(sniped) && sniped >= 30) {
       score -= 12;
-      factors.push(factor("st_risk_score", "Solana Tracker", "risk", `High risk score${notes ? `: ${notes}` : ""}.`, -12));
+      factors.push(factor("st_snipers", "Snipers", "risk", `Snipers hold ${Math.round(sniped)}% of supply.`, -12));
+    }
+    const insiders = firstNumber(row.insidersPercent);
+    if (Number.isFinite(insiders) && insiders >= 25) {
+      score -= 12;
+      factors.push(factor("st_insiders", "Insiders", "risk", `Insider / linked wallets hold ${Math.round(insiders)}% of supply.`, -12));
+    }
+    const bundled = firstNumber(row.bundlersPercent);
+    if (Number.isFinite(bundled) && bundled >= 30) {
+      score -= 14;
+      factors.push(factor("st_bundlers", "Bundlers", "risk", `Bundled wallets hold ${Math.round(bundled)}% of supply.`, -14));
+    }
+    const devHold = firstNumber(row.devHoldPercent);
+    if (Number.isFinite(devHold) && devHold >= 15) {
+      score -= 10;
+      factors.push(factor("st_dev_hold", "Dev Holding", "caution", `Dev still holds ${Math.round(devHold)}% — dump risk.`, -10));
     }
   }
 
