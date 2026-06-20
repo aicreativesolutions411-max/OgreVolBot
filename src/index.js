@@ -43267,7 +43267,10 @@ async function fetchSolanaTrackerTokenReport(mint = "") {
     data = await solanaTrackerJson(`/tokens/${encodeURIComponent(clean)}`, { cacheTtlMs: 90_000, timeoutMs: 6_500 });
   } catch (e) { try { console.warn(`[st-report] ${shortMint(clean)} FETCH ERROR: ${e && e.message}`); } catch {} return null; }
   if (!data || typeof data !== "object") { try { console.warn(`[st-report] ${shortMint(clean)} empty/non-object response`); } catch {} return null; }
-  try { console.warn(`[st-report] ${shortMint(clean)} OK topKeys=[${Object.keys(data).slice(0,9).join(",")}] pools=${Array.isArray(data.pools)?data.pools.length:0} risk=${data.risk?Object.keys(data.risk).slice(0,6).join("|"):"none"} holders=${data.holders}`); } catch {}
+  try {
+    const _r = data.risk || {}; const _p = (Array.isArray(data.pools) ? data.pools[0] : {}) || {};
+    console.warn(`[st-report] ${shortMint(clean)} riskKeys=[${Object.keys(_r).join(",")}] top10=${JSON.stringify(_r.top10)} score=${_r.score} rugged=${_r.rugged} jup=${_r.jupiterVerified} poolKeys=[${Object.keys(_p).join(",")}] sec=${JSON.stringify(_p.security)} lpBurn=${_p.lpBurn} deployer=${shortMint(String(_p.deployer || ""))} creation=${JSON.stringify(data.token?.creation || {}).slice(0,130)}`);
+  } catch {}
   const token = data.token || {};
   const creation = token.creation || token.created || {};
   const pools = Array.isArray(data.pools) ? data.pools : [];
