@@ -2519,13 +2519,20 @@ setTimeout(() => { setInterval(() => { void pollPopRadar(); }, 4_000); }, 45_000
 // The pre-vetted POP FEED the 'pop' mode trades — igniting coins, MC enriched (free pump frontend-api).
 async function popFeedRows() {
   const now = Date.now();
+  const POP_MC_CEIL = 100_000;   // match aggParams pop mcCeil — don't even surface mega-cap pumps already topping
   const live = [...popCandidates.entries()].filter(([, r]) => now - r.at < 18_000).sort((a, b) => b[1].score - a[1].score).slice(0, 6);
   const rows = [];
   for (const [mint, r] of live) {
     if (popUnroutable.has(mint)) continue;   // route filter — set in the background poll, no RPC in this hot path
+    // ENTRY-FRESHNESS: skip a coin already PAST its pop (inflow collapsed below the fade threshold).
+    // Entering it just buys the top and fades out after the 8s min-hold (the scratch-at-8s pattern) —
+    // "get in BEFORE the pop" means don't chase a burst that's already rolling over.
+    const pk = popPeakInflow.get(mint) || 0;
+    if (pk >= 0.3 && (Number(r.inflowNow) || 0) < pk * 0.35) continue;
     if (!r.mc) {
       try { const j = await fetchJson(`https://frontend-api-v3.pump.fun/coins/${mint}`, { timeoutMs: 5000, headers: { "User-Agent": "Mozilla/5.0", accept: "application/json" } }).catch(() => null); r.mc = Number(j && (j.usd_market_cap || j.market_cap)) || 0; } catch {}
     }
+    if (r.mc && r.mc > POP_MC_CEIL) continue;   // mega-cap already extended — never surface it (stops the "left the proven band" reject spam + a wasted rotation into a coin that can't buy)
     rows.push({ tokenMint: mint, symbol: r.symbol, marketCap: r.mc || 4000, liquidityUsd: 0, pairAgeSeconds: 1, volume5m: 0, buys5m: 0, sells5m: 0, source: "pop", _pop: { score: r.score, inflowNow: r.inflowNow } });
     if (rows.length >= 4) break;
   }
