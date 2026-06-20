@@ -7687,6 +7687,24 @@ window.__slimeAvatarLoadFailed = function slimeAvatarLoadFailed(image) {
     image.src = backup;
     return;
   }
+  // Brand-new coin: the token-image proxy 404s "warming up" for the first couple seconds while it
+  // resolves the pump/Helius image, then serves it (it clears its own failure cache the moment the
+  // avatar resolves). Retry the proxy a few times so the picture appears the instant it's ready —
+  // instead of staying on the ticker-initials fallback until the next 8s feed refresh.
+  const proxy = normalizeImageUrl(image?.dataset?.proxySrc || "");
+  const tries = Number(image?.dataset?.avatarRetries || 0);
+  if (proxy && tries < 3) {
+    image.dataset.avatarRetries = String(tries + 1);
+    image.hidden = true;
+    setTimeout(() => {
+      try {
+        if (!image.isConnected) return;
+        image.hidden = false;
+        image.src = proxy + (proxy.indexOf("?") >= 0 ? "&" : "?") + "rt=" + (tries + 1);
+      } catch {}
+    }, 2600);
+    return;
+  }
   if (image) {
     image.hidden = true;
     image.removeAttribute("src");
@@ -20336,7 +20354,8 @@ function livePairAvatarHtml(row, options = {}) {
   const avatarState = explicitAvatarState || (src ? "ready" : "missing");
   if (src) {
     const backupAttr = backupSrc ? ` data-backup-src="${escapeHtml(backupSrc)}"` : "";
-    return `<div class="live-pair-avatar" data-avatar-state="${escapeHtml(avatarState)}"><img src="${escapeHtml(src)}"${backupAttr} data-avatar-src="${escapeHtml(src)}" data-avatar-key="${escapeHtml(avatarKey)}" alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="${loading}" decoding="sync" fetchpriority="${fetchPriority}" width="42" height="42" referrerpolicy="no-referrer" onload="window.__slimeRememberAvatar&&window.__slimeRememberAvatar(this.dataset.avatarKey,this.currentSrc||this.src);" onerror="window.__slimeAvatarLoadFailed&&window.__slimeAvatarLoadFailed(this);"><span>${escapeHtml(label)}</span></div>`;
+    const proxyAttr = proxyUrl ? ` data-proxy-src="${escapeHtml(proxyUrl)}"` : "";
+    return `<div class="live-pair-avatar" data-avatar-state="${escapeHtml(avatarState)}"><img src="${escapeHtml(src)}"${backupAttr}${proxyAttr} data-avatar-src="${escapeHtml(src)}" data-avatar-key="${escapeHtml(avatarKey)}" alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="${loading}" decoding="sync" fetchpriority="${fetchPriority}" width="42" height="42" referrerpolicy="no-referrer" onload="window.__slimeRememberAvatar&&window.__slimeRememberAvatar(this.dataset.avatarKey,this.currentSrc||this.src);" onerror="window.__slimeAvatarLoadFailed&&window.__slimeAvatarLoadFailed(this);"><span>${escapeHtml(label)}</span></div>`;
   }
   return `<div class="live-pair-avatar fallback" data-avatar-state="${escapeHtml(avatarState)}"><span>${escapeHtml(label)}</span></div>`;
 }
@@ -22903,7 +22922,7 @@ document.addEventListener("click", async (event) => {
     setStoredNavTekOpen(state.navTekOpen);
     if (group) group.open = state.navTekOpen;
     return;
-  }  const target = source?.closest?.("button, a, [data-preview-token], [data-token-chart], [data-token-trade], [data-quick-buy-token], [data-quick-trade-token]");
+  }  const target = source?.closest?.("button, a, [data-preview-token], [data-token-chart], [data-token-trade], [data-quick-buy-token], [data-quick-trade-token], [data-dev-info], [data-quick-bundle-token], [data-watch-token], [data-unwatch-token], [data-share-x]");
   if (!target) return;
 
   // External links (DEX / PUMP / X / Telegram / Website on the cards) "do nothing" inside an
