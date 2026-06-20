@@ -3099,16 +3099,21 @@ const autopilotEngine = createAutopilotEngine({
     // thin so it stays fresh-first when the seconds-old feed is healthy.
     if (mode === "grind" || rows.length < 6) {
       try {
-        const [u1h, vol, mom] = await Promise.all([
-          webLivePairs("autopilot", "under1h", { sort: "newest", feed: "ap" }).catch(() => null),
-          webLivePairs("autopilot", "live", { sort: "volume", feed: "ap" }).catch(() => null),
-          webLivePairs("autopilot", "live", { sort: "momentum", feed: "ap" }).catch(() => null)
+        // TWO sources, because the `ap` feed pool only ever built the `live` bucket (the autopilot
+        // only requested `live`), so requesting under1h/volume from it WITHOUT force returns 0 (cold
+        // cache). So: (1) buildLiquidMovers() — the SHARED, already-warm normalized movers pool the
+        // pop radar/scalp keep hot (fresh→24h, real m5/h1/liquidity), FREE to reuse; and (2) a
+        // FORCE-built under1h/newest in the ap pool — the reliably-populated fresh window (verified
+        // live: 26 coins while live/fresh=0). Merged + deduped behind the fresh rows. The engine's
+        // own age (<20min)/MC/score/rug/security gates still decide every entry.
+        const [movers, u1h] = await Promise.all([
+          buildLiquidMovers().catch(() => []),
+          webLivePairs("autopilot", "under1h", { sort: "newest", force: true, feed: "ap" })
+            .then((f) => (Array.isArray(f?.rows) ? f.rows : [])).catch(() => [])
         ]);
         const seen = new Set(rows.map((r) => r.tokenMint));
-        for (const extra of [u1h, vol, mom]) {
-          for (const r of (Array.isArray(extra?.rows) ? extra.rows : [])) {
-            if (r && r.tokenMint && !seen.has(r.tokenMint)) { seen.add(r.tokenMint); rows.push(r); }
-          }
+        for (const r of [...(Array.isArray(movers) ? movers : []), ...u1h]) {
+          if (r && r.tokenMint && !seen.has(r.tokenMint)) { seen.add(r.tokenMint); rows.push(r); }
         }
       } catch {}
     }
