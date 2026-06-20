@@ -3087,14 +3087,25 @@ const autopilotEngine = createAutopilotEngine({
     // Cheap: the extra views are served from the shared live-pairs cache (no force).
     let mode = null;
     try { mode = autopilotEngine.status()?.mode || null; } catch {}
-    if (mode === "grind") {
+    // STARVATION FALLBACK (2026-06-20): the `live` creation bucket's FRESH sort returns 0 whenever
+    // no BRAND-new launch landed in the last few seconds (creation stream momentarily quiet) — even
+    // though plenty of <1h fresh coins exist (verified live: live/fresh=0 while under1h/newest=26,
+    // live/volume=25). Without broadening, the engine logged "feed quiet (0 fresh pairs)" for 20+
+    // min straight and bought NOTHING despite a live market. So whenever the fresh view is THIN,
+    // merge the broader last-hour window (under1h newest + live volume/momentum), deduped, behind
+    // the fresh rows (fresh-first order preserved when fresh exists). The engine's own age/MC/score/
+    // rug gates still decide — this only refills the CANDIDATE POOL so it never starves on a quiet
+    // creation tick. GRIND always broadens (survived-coin target); the fresh path broadens only when
+    // thin so it stays fresh-first when the seconds-old feed is healthy.
+    if (mode === "grind" || rows.length < 6) {
       try {
-        const [vol, mom] = await Promise.all([
+        const [u1h, vol, mom] = await Promise.all([
+          webLivePairs("autopilot", "under1h", { sort: "newest", feed: "ap" }).catch(() => null),
           webLivePairs("autopilot", "live", { sort: "volume", feed: "ap" }).catch(() => null),
           webLivePairs("autopilot", "live", { sort: "momentum", feed: "ap" }).catch(() => null)
         ]);
         const seen = new Set(rows.map((r) => r.tokenMint));
-        for (const extra of [vol, mom]) {
+        for (const extra of [u1h, vol, mom]) {
           for (const r of (Array.isArray(extra?.rows) ? extra.rows : [])) {
             if (r && r.tokenMint && !seen.has(r.tokenMint)) { seen.add(r.tokenMint); rows.push(r); }
           }
