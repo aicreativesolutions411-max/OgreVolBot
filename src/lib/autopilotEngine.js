@@ -1235,6 +1235,10 @@ function freshState(opts) {
     mode: opts.mode || "normal",
     churn: lowChurn ? "low" : "normal",
     live: Boolean(opts.live),
+    // HARD risk halts (daily-loss + consecutive-loss auto-pause). The host defaults this ON for LIVE
+    // money (off for paper), so a bad small-live tuning run can't bleed the wallet. Without carrying
+    // it through here, freshState dropped it and the halts never engaged.
+    riskHalts: Boolean(opts.riskHalts),
     walletPubkey: opts.walletPubkey || null,
     start: opts.solBudget,
     bank: opts.solBudget,

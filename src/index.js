@@ -5865,7 +5865,13 @@ async function handleWebApiRequest(request, response, requestUrl) {
         // Self-calibration bias from accumulated trade history (bounded, never-looser) — the
         // MODE-specific bias when that mode has a real record, else the global one.
         const calibration = await getAutopilotCalibration(mode, { live: wantLive }).catch(() => null);
-        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock, churn, vault, maxTradeSol, lossCapFrac, maxOpen, lockGainsContinue, calibration });
+        // LIVE money gets the HARD risk halts ON by default — the daily-loss + consecutive-loss
+        // auto-pause — so a bad run can't bleed the wallet during small-live tuning. (Paper keeps the
+        // opt-in default; a caller can still pass riskHalts:false to disable for a deliberate test.)
+        const riskHalts = wantLive
+          ? (body.riskHalts !== false && body.riskHalts !== "false")
+          : (body.riskHalts === true || body.riskHalts === "true");
+        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock, churn, vault, maxTradeSol, lossCapFrac, maxOpen, lockGainsContinue, calibration, riskHalts });
         // Bind the running clock to this controller. Trial users (no owner key, no
         // sub) burn metered time; owner/subscribers don't.
         if (controllerUserId) {
