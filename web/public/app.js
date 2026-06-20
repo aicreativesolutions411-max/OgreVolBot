@@ -14861,7 +14861,10 @@ async function quickPresetTrade(tokenMint, presetOverride = null) {
 async function quickPresetBundle(tokenMint, presetOverride = null) {
   const preset = presetOverride || presetById("bundle", state.selectedBundlePresetId);
   if (!preset) {
-    openManualTradeForToken(tokenMint, "bundle", "No fast bundle preset selected. Review the Bundle form, then submit.");
+    // Open the Bundle form pre-filled with this token. No red error banner — tapping Bundle with
+    // no saved preset is normal; the form (or the create-a-wallet card) is self-explanatory. The
+    // old setError made it look like an "error page" on mobile.
+    openManualTradeForToken(tokenMint, "bundle");
     return;
   }
   // A bundle buy fires across multiple wallets, so confirm before launching it
@@ -14878,7 +14881,7 @@ async function quickPresetBundle(tokenMint, presetOverride = null) {
       cancelLabel: "Review First"
     });
     if (!proceed) {
-      openManualTradeForToken(tokenMint, "bundle", "Review the Bundle setup, then submit.");
+      openManualTradeForToken(tokenMint, "bundle");
       return;
     }
   }
@@ -22910,6 +22913,22 @@ document.addEventListener("click", async (event) => {
     return;
   }  const target = source?.closest?.("button, a, [data-preview-token], [data-token-chart], [data-token-trade], [data-quick-buy-token], [data-quick-trade-token]");
   if (!target) return;
+
+  // External links (DEX / PUMP / X / Telegram / Website on the cards) "do nothing" inside an
+  // INSTALLED PWA — iOS/Android standalone silently swallows <a target="_blank"> taps. Open them
+  // via window.open (a user-gesture call, so it isn't popup-blocked) so the link actually works on
+  // the phone app. Desktop/normal tabs are unaffected in practice (same new-tab result).
+  if (target.tagName === "A") {
+    const linkHref = target.getAttribute("href") || "";
+    const isExternalLink = /^https?:\/\//i.test(linkHref) && !linkHref.startsWith(window.location.origin);
+    const isStandalone = Boolean(window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator?.standalone);
+    if (isExternalLink && (target.getAttribute("target") === "_blank" || isStandalone)) {
+      event.preventDefault();
+      try { window.open(linkHref, "_blank", "noopener,noreferrer"); }
+      catch { window.location.href = linkHref; }
+      return;
+    }
+  }
 
   if (target.matches("[data-tool-section]")) {
     // Side-list / chip click on a tool page: show that section's panel, hide the rest.
