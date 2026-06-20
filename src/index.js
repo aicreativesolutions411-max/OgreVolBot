@@ -3080,6 +3080,7 @@ const autopilotEngine = createAutopilotEngine({
   getFreshFeed: async () => {
     const feed = await webLivePairs("autopilot", "live", { sort: "fresh", force: true, feed: "ap" });
     let rows = Array.isArray(feed?.rows) ? feed.rows : [];
+    const __freshN = rows.length; let __moversN = 0, __u1hN = 0;   // diag
     // GRIND targets SURVIVED/climbed coins ($5-80k, aged past the first seconds). The
     // fresh/newest view is almost all brand-new sub-$5k launches, so grind starves on it
     // (50 fresh, 0 passed). Data-driven sorts (volume/momentum) pull the broader LAST-HOUR
@@ -3111,11 +3112,12 @@ const autopilotEngine = createAutopilotEngine({
           webLivePairs("autopilot", "under1h", { sort: "newest", force: true, feed: "ap" })
             .then((f) => (Array.isArray(f?.rows) ? f.rows : [])).catch(() => [])
         ]);
+        __moversN = Array.isArray(movers) ? movers.length : 0; __u1hN = Array.isArray(u1h) ? u1h.length : 0;   // diag
         const seen = new Set(rows.map((r) => r.tokenMint));
         for (const r of [...(Array.isArray(movers) ? movers : []), ...u1h]) {
           if (r && r.tokenMint && !seen.has(r.tokenMint)) { seen.add(r.tokenMint); rows.push(r); }
         }
-      } catch {}
+      } catch (e) { try { console.warn(`[ap-fresh-dbg] broaden error: ${e && e.message}`); } catch {} }
     }
     const out = rows.filter((r) => !autopilotRowHasHardDanger(r)).map((r) => ({   // rug hard-gate
       tokenMint: r.tokenMint,
@@ -3169,6 +3171,13 @@ const autopilotEngine = createAutopilotEngine({
         }
       } catch {}
     }
+    try {
+      const __n = Date.now();
+      if (__n - (globalThis.__apFreshDbgAt || 0) > 20_000) {
+        globalThis.__apFreshDbgAt = __n;
+        console.warn(`[ap-fresh-dbg] mode=${mode} fresh=${__freshN} movers=${__moversN} u1h=${__u1hN} merged=${rows.length} out=${out.length}`);
+      }
+    } catch {}
     return out;
   },
   // SCALP feed: LIQUID movers across the FULL range — from fresh small caps to mid-cap runners
@@ -43205,6 +43214,62 @@ async function solanaTrackerJson(pathName, options = {}) {
   });
   solanaTrackerCache.set(url, { cachedAt: Date.now(), value: data });
   return data;
+}
+
+// Solana Tracker token RISK + DEPLOYER report (the paid `/tokens/{mint}` endpoint). This is the
+// data source that fills the Dev Info "void" (real deployer wallet, top-holder concentration, rug
+// score) and strengthens SlimeShield beyond the free GoPlus/Rugcheck reads. Defensive parse: ST
+// field names vary across plans/versions, so every field has fallbacks and degrades to null (never
+// throws). Cached 90s by mint (on-demand opens are bursty; Premium has the quota). Returns null if
+// no key or the call fails — callers treat null as "ST didn't answer" (unknown), not "clean".
+function stNum(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
+async function fetchSolanaTrackerTokenReport(mint = "") {
+  const clean = String(mint || "").trim();
+  if (!clean || !CONFIG.solanaTrackerApiKey) return null;
+  let data = null;
+  try {
+    data = await solanaTrackerJson(`/tokens/${encodeURIComponent(clean)}`, { cacheTtlMs: 90_000, timeoutMs: 6_500 });
+  } catch { return null; }
+  if (!data || typeof data !== "object") return null;
+  const token = data.token || {};
+  const creation = token.creation || token.created || {};
+  const pools = Array.isArray(data.pools) ? data.pools : [];
+  // Prefer the deepest pool (most liquidity) for security/LP/deployer.
+  const pool = pools.slice().sort((a, b) => (stNum(b?.liquidity?.usd) || 0) - (stNum(a?.liquidity?.usd) || 0))[0] || {};
+  const security = pool.security || data.security || {};
+  const risk = data.risk || {};
+  const risks = Array.isArray(risk.risks) ? risk.risks : [];
+  const cleanAuthority = (v) => {
+    const s = String(v == null ? "" : v).trim();
+    if (!s || /^(null|none|0|11111111111111111111111111111111)$/i.test(s)) return ""; // renounced / system program = none
+    return s;
+  };
+  const mintAuthority = cleanAuthority(security.mintAuthority);
+  const freezeAuthority = cleanAuthority(security.freezeAuthority);
+  // top10holders may be a fraction (0-1) or a percent (0-100) depending on plan/version — normalize to %.
+  let topHolderPercent = stNum(risk.top10holders ?? risk.top10HoldersPercentage ?? risk.topHoldersPercent);
+  if (topHolderPercent != null && topHolderPercent <= 1) topHolderPercent = topHolderPercent * 100;
+  const lpBurnedPercent = stNum(pool.lpBurn ?? pool.lpBurned ?? pool.burnPercentage);
+  const market = String(pool.market || pool.market_id || "").toLowerCase();
+  const onCurve = /pump|bonk|moonshot|curve/.test(market) || stNum(pool.curvePercentage) != null;
+  return {
+    ok: true,
+    creator: String(creation.creator || pool.deployer || token.creator || "").trim() || "",
+    mintAuthority,
+    freezeAuthority,
+    topHolderPercent,
+    lpBurnedPercent,
+    onCurve,
+    market: market || "",
+    rugged: risk.rugged === true,
+    rugScore: stNum(risk.score),                  // ST score: higher = riskier (0-10ish)
+    jupiterVerified: risk.jupiterVerified === true,
+    riskNotes: risks.map((r) => String(r?.name || r?.description || r || "")).filter(Boolean).slice(0, 6),
+    severeRiskCount: risks.filter((r) => /danger|warn|high|critical/i.test(String(r?.level || ""))).length,
+    holderCount: stNum(data.holders ?? data.holderCount ?? token.holders),
+    marketCap: stNum(pool.marketCap?.usd ?? data.marketCapUsd ?? token.marketCapUsd),
+    liquidityUsd: stNum(pool.liquidity?.usd),
+  };
 }
 
 function normalizeKolLeaderboard(data) {
