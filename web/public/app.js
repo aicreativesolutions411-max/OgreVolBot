@@ -18363,6 +18363,20 @@ function renderDevInfoDrawer() {
         <p class="slimeshield-muted">If a field is not cached yet, Refresh asks SlimeWire for public pair/token context and stores verified values for later sessions.</p>
         ${sourceHydration.message ? `<p class="slimeshield-muted">Source refresh: ${escapeHtml(sourceHydration.message)}${sourceHydration.eventsStored ? ` · ${escapeHtml(sourceHydration.eventsStored)} stored` : ""}</p>` : ""}
       </section>
+      ${market.solanaTrackerLoaded ? `
+      <section>
+        <h4>On-chain Holders <span class="slimeshield-muted" style="font-weight:400">· Solana Tracker</span></h4>
+        <dl class="kol-dump-metrics">
+          <div><dt>Holders</dt><dd>${escapeHtml(Number.isFinite(market.holderCount) ? Number(market.holderCount).toLocaleString() : "—")}</dd></div>
+          <div><dt>Top 10 hold</dt><dd>${escapeHtml(Number.isFinite(market.topHolderPercent) ? Math.round(market.topHolderPercent) + "%" : "—")}</dd></div>
+          <div><dt>Dev holds</dt><dd>${escapeHtml(Number.isFinite(market.devHoldPercent) ? Math.round(market.devHoldPercent) + "%" : "—")}</dd></div>
+          <div><dt>Snipers</dt><dd>${escapeHtml(Number.isFinite(market.snipersPercent) ? Math.round(market.snipersPercent) + "%" : "—")}</dd></div>
+          <div><dt>Insiders</dt><dd>${escapeHtml(Number.isFinite(market.insidersPercent) ? Math.round(market.insidersPercent) + "%" : "—")}</dd></div>
+          <div><dt>Bundled</dt><dd>${escapeHtml(Number.isFinite(market.bundlersPercent) ? Math.round(market.bundlersPercent) + "%" : "—")}</dd></div>
+          <div><dt>LP burned</dt><dd>${escapeHtml(Number.isFinite(market.lpBurnedPercent) ? Math.round(market.lpBurnedPercent) + "%" : "—")}</dd></div>
+        </dl>
+        <p class="slimeshield-muted">Live holder &amp; insider concentration from Solana Tracker — high snipers / insiders / bundled means a few wallets can dump on you.</p>
+      </section>` : ""}
       <section>
         <h4>Source Evidence</h4>
         ${devInfoReasonsHtml(sourceEvidence, "No verified public-source evidence is stored yet. Refresh Details will save Dex/Pump/Solscan-style context when the backend can verify it.")}

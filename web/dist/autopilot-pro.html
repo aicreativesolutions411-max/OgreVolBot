@@ -736,10 +736,21 @@ async function clipShareNow(){
   clipDownload();
 }
 function closeClipModal(){ const m=$("clipModal"); if(m)m.classList.add("hidden"); const v=$("clipVid"); if(v){ try{v.pause();}catch{} } }
-$("clipSave")&&$("clipSave").addEventListener("click",clipDownload);
-$("clipShare")&&$("clipShare").addEventListener("click",clipShareNow);
-$("clipClose")&&$("clipClose").addEventListener("click",closeClipModal);
-$("clipModal")&&$("clipModal").addEventListener("click",(e)=>{ if(e.target===$("clipModal")) closeClipModal(); });
+// DELEGATED — the clip modal markup (#clipModal/#clipSave/#clipShare/#clipClose) is parsed AFTER
+// this script, so the old direct $("clipSave").addEventListener calls ran against null and silently
+// attached NOTHING → Save/Share/Close were all dead and the user had to back out of the page. A
+// document-level delegate fires no matter when the modal enters the DOM.
+document.addEventListener("click",(e)=>{
+  const btn = e.target && e.target.closest ? e.target.closest("#clipSave,#clipShare,#clipClose") : null;
+  if(btn){
+    e.preventDefault();
+    if(btn.id==="clipSave") clipDownload();
+    else if(btn.id==="clipShare") clipShareNow();
+    else closeClipModal();
+    return;
+  }
+  if(e.target && e.target.id==="clipModal") closeClipModal();   // tap the backdrop to close
+});
 
 // ---- subscribe view ----
 async function showSubscribe(a){
