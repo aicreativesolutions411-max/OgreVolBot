@@ -19837,37 +19837,31 @@ function currentCookSpotCategory() {
 
 function rankCookSpotRows(rows = [], categoryId = "dexTrending") {
   const list = [...rows];
+  // SELECTIVE: a category shows ONLY coins that match it. The old code fell back to the WHOLE
+  // unfiltered pool when a filter came up short ("filtered.length ? filtered : list"), which is
+  // exactly how a fresh pair leaked into Graduated / Boosted / etc. Now a thin category shows its
+  // few real matches (or an empty state) — never mismatched coins. See fresh-feed-contract.
   switch (categoryId) {
     case "fresh":
       return list.sort(compareNewestLiveRows);
-    case "dexBoosted": {
-      const boosted = list.filter(liveFeedIsBoosted).sort((a, b) => liveFeedVolumeScore(b) - liveFeedVolumeScore(a));
-      const rest = list.filter((row) => !liveFeedIsBoosted(row)).sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
-      return [...boosted, ...rest];
-    }
-    case "pumpTrending": {
-      const pump = list.filter(cookSpotIsPump);
-      return (pump.length ? pump : list).sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
-    }
-    case "memeMovers": {
-      const meme = list.filter(cookSpotIsMeme);
-      return (meme.length ? meme : list).sort((a, b) => liveFeedChangeScore(b) - liveFeedChangeScore(a));
-    }
-    case "earlyMomentum": {
-      const young = list.filter((row) => {
-        const age = Number(row.pairAgeMinutes);
-        return !Number.isFinite(age) || age <= 180;
-      });
-      return (young.length ? young : list).sort((a, b) => liveFeedMomentumScore(b) - liveFeedMomentumScore(a));
-    }
-    case "graduating": {
-      const grad = list.filter((row) => isGraduatingSlimeScopeRow(row) || classifySlimeScopeRow(row) === "graduating");
-      return (grad.length ? grad : list).sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
-    }
-    case "graduated": {
-      const grad = list.filter((row) => isGraduatedSlimeScopeRow(row) || classifySlimeScopeRow(row) === "graduated");
-      return (grad.length ? grad : list).sort((a, b) => liveFeedVolumeScore(b) - liveFeedVolumeScore(a));
-    }
+    case "dexBoosted":
+      return list.filter(liveFeedIsBoosted).sort((a, b) => liveFeedVolumeScore(b) - liveFeedVolumeScore(a));
+    case "pumpTrending":
+      return list.filter(cookSpotIsPump).sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
+    case "memeMovers":
+      return list.filter(cookSpotIsMeme).sort((a, b) => liveFeedChangeScore(b) - liveFeedChangeScore(a));
+    case "earlyMomentum":
+      return list
+        .filter((row) => { const age = Number(row.pairAgeMinutes); return Number.isFinite(age) && age >= 0 && age <= 180; })
+        .sort((a, b) => liveFeedMomentumScore(b) - liveFeedMomentumScore(a));
+    case "graduating":
+      return list
+        .filter((row) => isGraduatingSlimeScopeRow(row) || classifySlimeScopeRow(row) === "graduating")
+        .sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
+    case "graduated":
+      return list
+        .filter((row) => isGraduatedSlimeScopeRow(row) || classifySlimeScopeRow(row) === "graduated")
+        .sort((a, b) => liveFeedVolumeScore(b) - liveFeedVolumeScore(a));
     case "dexTrending":
     default:
       return list.sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
