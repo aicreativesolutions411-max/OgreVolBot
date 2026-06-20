@@ -4021,6 +4021,22 @@ async function refreshLivePairBuckets({ silent = false, force = false, warmAll =
   }
 }
 
+// User picked a new Discover category / Cooks category / raw sort: switch the feed to THAT pool
+// immediately and reliably. The old path deferred the refetch via setTimeout (runDeferredUiTask),
+// which is throttled/flaky, and a stale-category fetch already in flight could land afterward and
+// overwrite the selection — so categories "all just showed fresh". Now we kill the bucket's in-flight
+// loads, bump its version (so any straggler result is discarded by loadLivePairs' isCurrentRequest
+// guard), then force-fetch the selected pool synchronously. See fresh-feed-contract.
+function switchLiveFeedPool(refreshFn) {
+  const bucket = normalizeLivePairBucket(state.livePairBucket);
+  for (const key of [...livePairsLoadInFlight.keys()]) {
+    if (key.startsWith(`${bucket}:`)) livePairsLoadInFlight.delete(key);
+  }
+  livePairsLoadVersionsByBucket[bucket] = (livePairsLoadVersionsByBucket[bucket] || 0) + 1;
+  render();
+  void (typeof refreshFn === "function" ? refreshFn() : refreshLivePairBuckets({ silent: true, force: true }));
+}
+
 function scheduleLivePairsAutoRefresh() {
   if (isPostTradeRefreshActive() || document.hidden || terminalDetailsDrawerOpen() || (state.activeTab !== "live" && state.activeTab !== "terminal" && state.activeTab !== "slimeScope")) {
     clearLivePairsAutoRefreshTimer();
@@ -24180,8 +24196,7 @@ document.addEventListener("change", async (event) => {
     state.terminalCat = "";                              // raw sort = the shared bucket path, no category
     resetTerminalFeedVisibleLimit("live");
     resetTerminalFeedVisibleLimit("slimeScope");
-    render();
-    runDeferredUiTask(() => refreshLivePairBuckets({ silent: true, force: true }));
+    switchLiveFeedPool();
   }
   if (target?.matches?.("[data-live-feed-category]")) {
     state.liveFeedCategory = target.value || "best";
@@ -24191,8 +24206,7 @@ document.addEventListener("change", async (event) => {
     state.terminalSort = currentLiveFeedCategory()[3] || "best";
     state.terminalCat = currentLiveFeedCategory()[0] || "";
     resetTerminalFeedVisibleLimit("live");
-    render();
-    runDeferredUiTask(() => refreshLivePairBuckets({ silent: true, force: true }));
+    switchLiveFeedPool();
   }
   if (target?.matches?.("[data-live-terminal-category]")) {
     state.liveTerminalCategory = target.value || "dexTrending";
@@ -24201,8 +24215,7 @@ document.addEventListener("change", async (event) => {
     state.terminalSort = currentLiveTerminalCategory()[3] || "volume";
     state.terminalCat = currentLiveTerminalCategory()[0] || "";
     resetTerminalFeedVisibleLimit("live");
-    render();
-    runDeferredUiTask(() => refreshLivePairBuckets({ silent: true, force: true }));
+    switchLiveFeedPool();
   }
   if (target?.matches?.("[data-cook-spot-category]")) {
     state.cookSpotCategory = target.value || "dexTrending";
@@ -24210,8 +24223,7 @@ document.addEventListener("change", async (event) => {
     state.terminalSort = currentCookSpotCategory()[3] || "volume";
     state.terminalCat = currentCookSpotCategory()[0] || "";
     resetTerminalFeedVisibleLimit("slimeScope");
-    render();
-    runDeferredUiTask(() => refreshTerminalFeed("slimeScope", { force: true, reason: "cook-spot-category" }));
+    switchLiveFeedPool(() => refreshTerminalFeed("slimeScope", { force: true, reason: "cook-spot-category" }));
   }
   if (target?.matches?.("[data-launch-coin-image]")) {
     // Show a live preview + size of the chosen coin image so a bad/wrong file is
