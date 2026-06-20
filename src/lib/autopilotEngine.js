@@ -961,6 +961,13 @@ export function entryReject(row, P) {
 
 // Conservative local-history veto. Replay data is noisy, so it only blocks when
 // there is a meaningful sample and the matched setups were clearly bad expectancy.
+// SOFTENED (2026-06-20, user-directed "take shots, I understand the risk"): live logs showed this
+// veto rejecting EVERY bar-passing fresh candidate ("Skipping … local replay history-fail") in a
+// red/choppy tape — so the engine found candidates but never bought. Thresholds raised so it only
+// vetoes GENUINELY hopeless comps (≥88% fail / near-zero upside), letting normal red-market chop
+// through. The pre-buy securityGate (full SlimeShield) + riskHalts (daily/consec loss caps) remain
+// the hard backstop, so loosening this only adds shots, never bypasses rug safety. Tune back toward
+// 78 if live session PnL shows the looser veto bleeds.
 export function historyGateReject(history) {
   if (!history || typeof history !== "object") return null;
   const sample = Number(history.sampleSize) || 0;
@@ -969,9 +976,9 @@ export function historyGateReject(history) {
   const winRate = Number(history.winRatePercent);
   const upside = Number(history.medianMaxUpsidePercent);
   const drawdown = Number(history.medianMaxDrawdownPercent);
-  if (Number.isFinite(failRate) && failRate >= 78 && (!Number.isFinite(upside) || upside < 35)) return "history-fail";
-  if (Number.isFinite(winRate) && winRate <= 22 && Number.isFinite(upside) && upside < 25) return "history-ev";
-  if (Number.isFinite(drawdown) && drawdown <= -35 && (!Number.isFinite(upside) || upside < 35) && (!Number.isFinite(winRate) || winRate <= 35)) {
+  if (Number.isFinite(failRate) && failRate >= 88 && (!Number.isFinite(upside) || upside < 25)) return "history-fail";
+  if (Number.isFinite(winRate) && winRate <= 18 && Number.isFinite(upside) && upside < 22) return "history-ev";
+  if (Number.isFinite(drawdown) && drawdown <= -45 && (!Number.isFinite(upside) || upside < 30) && (!Number.isFinite(winRate) || winRate <= 30)) {
     return "history-drawdown";
   }
   return null;
