@@ -2422,6 +2422,39 @@ function popFadingNow(mint) {
   if (!m) return true;                                   // no live trades at all = the burst is dead
   return m.inflowNow < peak * 0.35;                      // collapsed to <35% of the post-entry peak = pop is over
 }
+// The broad NORMALIZED liquid-movers pool — the scalp feed AND the pop spike scan both score it. Rows
+// carry m5/h1 as NUMBERS (raw webLivePairs stores m5 as an object {priceChange}) + real liquidityUsd,
+// which is exactly what liquidScore/jumpScore need. ~120 coins across fresh→24h buckets + trending.
+async function buildLiquidMovers() {
+  const BUCKETS = ["live", "under1h", "under3h", "under1d"];
+  const SORTS = ["liquidity", "volume", "momentum"];
+  const jobs = [];
+  for (const b of BUCKETS) for (const s of SORTS) jobs.push(webLivePairs("autopilot", b, { sort: s }).catch(() => null));
+  let feeds = [];
+  try { feeds = await Promise.all(jobs); } catch {}
+  try { const trending = await autopilotTrendingRows(); if (trending && trending.length) feeds.push({ rows: trending }); } catch {}
+  const seen = new Set();
+  const out = [];
+  for (const feed of feeds) {
+    for (const r of (Array.isArray(feed?.rows) ? feed.rows : [])) {
+      if (!r || !r.tokenMint || seen.has(r.tokenMint)) continue;
+      const lq = Number(r.liquidityUsd) || 0;
+      if (lq > 0 && lq < 1500) continue;           // drop KNOWN-thin only; keep unknown-liq (engine vets)
+      seen.add(r.tokenMint);
+      out.push({
+        tokenMint: r.tokenMint, symbol: r.symbol, pairAgeSeconds: r.pairAgeSeconds,
+        marketCap: r.marketCap, liquidityUsd: r.liquidityUsd, volume5m: r.volume5m, volumeH1: r.volumeH1,
+        buys5m: r.buys5m, sells5m: r.sells5m, buysH1: r.buysH1, sellsH1: r.sellsH1,
+        m5: r.m5 && Number.isFinite(Number(r.m5.priceChange)) ? Number(r.m5.priceChange) : (Number.isFinite(Number(r.m5)) ? Number(r.m5) : undefined),
+        h1: r.h1 && Number.isFinite(Number(r.h1.priceChange)) ? Number(r.h1.priceChange) : (Number.isFinite(Number(r.h1)) ? Number(r.h1) : undefined),
+        sniperCount: r.sniperCount || r.snipers || 0,
+        bestPickScore: r.bestPickScore || r.bestPick || 0
+      });
+    }
+  }
+  out.sort((a, b) => (Number(b.liquidityUsd) || 0) - (Number(a.liquidityUsd) || 0));
+  return out.slice(0, 120);
+}
 let _popPolling = false;
 async function pollPopRadar() {
   if (_popPolling) return; _popPolling = true;
@@ -2441,20 +2474,14 @@ async function pollPopRadar() {
       _popSrcBusy = true;
       void (async () => {
         try {
-          // WIDE age + MC: pull routable movers across the fresh→24h windows (not just early pairs) on
-          // the volume/momentum sorts — a coin that pops on day 2 counts too. All from the live feed, so
-          // every one has a real pool (honeypots/rugs without a pool don't show).
-          const combos = [["live", "volume"], ["live", "momentum"], ["under1h", "volume"], ["under1h", "momentum"], ["under3h", "volume"], ["under1d", "momentum"]];
-          const results = await Promise.all(combos.map(([b, s]) => webLivePairs("autopilot", b, { sort: s }).catch(() => null)));
-          const set = new Set();
-          const byMint = new Map();   // KEEP the full row (m5/vol/buys/liq/mc) — the spike scorer needs it, not just the mint
-          for (const f of results) for (const r of (Array.isArray(f && f.rows) ? f.rows : [])) {
-            if (!(r && r.tokenMint)) continue;
-            set.add(r.tokenMint);
-            if (!byMint.has(r.tokenMint)) byMint.set(r.tokenMint, r);   // first (best-sorted) wins
+          // Use the SAME normalized liquid-movers pool the scalp path scores — its rows have m5/h1 as
+          // NUMBERS (raw webLivePairs rows store m5 as an OBJECT {priceChange}, which made jumpScore read
+          // NaN and score every coin 0) and real liquidityUsd, so jumpScore actually works on them.
+          const movers = await buildLiquidMovers();
+          if (Array.isArray(movers) && movers.length) {
+            popLiveRows = movers.slice(0, 140);                 // broad pool for the FREE jumpScore spike scan
+            popLiveMints = movers.map((r) => r.tokenMint).filter(Boolean).slice(0, 40);
           }
-          if (set.size) popLiveMints = [...set].slice(0, 40);
-          popLiveRows = [...byMint.values()].slice(0, 140);   // broad pool for the FREE jumpScore spike scan (no extra API calls)
         } catch {} finally { _popSrcBusy = false; }
       })();
     }
@@ -2521,7 +2548,8 @@ async function pollPopRadar() {
       if (mc < 8000 || mc > 250000) continue;            // catchable spread (jumpScore needs mc≥8k; cap mega-caps)
       const js = jumpScore(r);
       if (js > _spikeBest) _spikeBest = js;
-      if (js < POP_SPIKE_FIRE) continue;                 // not actually ripping right now
+      const m5 = Number(r.m5) || 0;                      // 5-min price change %
+      if (js < POP_SPIKE_FIRE || m5 < 4) continue;       // must be ripping NOW (jumpScore) AND price actually UP (MC increasing)
       _spikeCount++;
       const prev = popCandidates.get(mint);
       const sym = r.symbol || (r.baseToken && r.baseToken.symbol) || (prev && prev.symbol) || shortMint(mint);
@@ -3070,56 +3098,8 @@ const autopilotEngine = createAutopilotEngine({
   // the minutes-to-hours-old climbers. Deduped, KNOWN-thin (<$1.5k) dropped, unknown-liq KEPT
   // (the engine's liquidScore + volume gate + fast exits vet them). The engine's wide MC band
   // (4k..12M) + liquidScore then pick whatever has quick-win momentum, low or high cap.
-  getLiquidFeed: async () => {
-    const BUCKETS = ["live", "under1h", "under3h", "under1d"]; // fresh + 1-2h + 3-6h + 24-48h climbers
-    const SORTS = ["liquidity", "volume", "momentum"];
-    const jobs = [];
-    for (const b of BUCKETS) for (const s of SORTS) {
-      jobs.push(webLivePairs("autopilot", b, { sort: s }).catch(() => null));
-    }
-    let feeds = [];
-    try { feeds = await Promise.all(jobs); } catch {}
-    // TRENDING/boosted tokens (any age — a 6-month-old coin that's "starting to move" shows up
-    // here, not in the age-windowed launch buckets). Merged in and vetted by the same gates.
-    try { const trending = await autopilotTrendingRows(); if (trending && trending.length) feeds.push({ rows: trending }); } catch {}
-    const seen = new Set();
-    const out = [];
-    for (const feed of feeds) {
-      for (const r of (Array.isArray(feed?.rows) ? feed.rows : [])) {
-        if (!r || !r.tokenMint || seen.has(r.tokenMint)) continue;
-        // Only drop KNOWN-thin coins. Many last-hour movers (esp. pump.fun bonding curves)
-        // report NO liquidity number at all (null/0) — hard-dropping those returned an EMPTY
-        // feed every cycle and scalp never bought. So keep unknown-liq rows (the engine's
-        // liquidScore + volume gate + fast in/out exits vet them) and only reject coins whose
-        // KNOWN liquidity is genuinely thin (< $1.5k). Liquidity-sort still surfaces deepest first.
-        const lq = Number(r.liquidityUsd) || 0;
-        if (lq > 0 && lq < 1500) continue;
-        seen.add(r.tokenMint);
-        out.push({
-          tokenMint: r.tokenMint,
-          symbol: r.symbol,
-          pairAgeSeconds: r.pairAgeSeconds,
-          marketCap: r.marketCap,
-          liquidityUsd: r.liquidityUsd,
-          volume5m: r.volume5m,
-          volumeH1: r.volumeH1,
-          buys5m: r.buys5m,
-          sells5m: r.sells5m,
-          buysH1: r.buysH1,
-          sellsH1: r.sellsH1,
-          m5: r.m5 && Number.isFinite(Number(r.m5.priceChange)) ? Number(r.m5.priceChange) : (Number.isFinite(Number(r.m5)) ? Number(r.m5) : undefined),
-          h1: r.h1 && Number.isFinite(Number(r.h1.priceChange)) ? Number(r.h1.priceChange) : (Number.isFinite(Number(r.h1)) ? Number(r.h1) : undefined),
-          sniperCount: r.sniperCount || r.snipers || 0,
-          bestPickScore: r.bestPickScore || r.bestPick || 0
-        });
-      }
-    }
-    // Deepest liquidity first — scalp prefers the most realizable (cleanest-fill) movers. The
-    // engine then re-scores the whole pool with liquidScore (which rewards quick-win momentum at
-    // any MC), so a wider cap just gives it more distinct shots across the low→high range.
-    out.sort((a, b) => (Number(b.liquidityUsd) || 0) - (Number(a.liquidityUsd) || 0));
-    return out.slice(0, 120);
-  },
+  // SCALP feed = the shared normalized liquid-movers pool (also scored by the pop spike radar).
+  getLiquidFeed: async () => buildLiquidMovers(),
   // POP mode feed: real-time IGNITION candidates from PopRadar (pre-vetted, MC-agnostic).
   getPopFeed: async () => popFeedRows(),
   // Momentum-fade exit signal: the inflow that drove the pop has decelerated.
