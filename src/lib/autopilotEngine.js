@@ -118,7 +118,7 @@ export function aggParams(state) {
   if (snipe) sl = 10;
   // POP: a pop reverses fast, so a tight 10% stop cuts a fake-out quickly; the momentum-fade exit
   // banks the winners into the spike before they round-trip. Small absolute risk per fast bet.
-  if (pop) sl = 10;
+  if (pop) sl = 12;   // a real 30%+ pop needs room to breathe — a too-tight stop noise-cuts the runners before they run
 
   let minScore = regime === "HOT" ? 34 : regime === "COLD" ? 48 : 40;
   // degen does NOT loosen the entry bar — a lower bar just apes more rugs (the live data is
@@ -286,15 +286,12 @@ export function aggParams(state) {
       tp1 = 30; tp1Pct = 75; spikePct = 85; moonTarget = 400;
     }
   } else if (pop) {
-    // POP RIDE: a pop fires fast and reverses fast, so bank the BULK into the spike at the first
-    // pop (~65% at +16%), take most of the rest at +40%, ride a small tail to ~+150%. The real
-    // exit control is the momentum-FADE rule (manageExits + popFading): the instant the inflow
-    // that drove the pop decelerates, it banks the remainder into strength rather than giving it back.
-    tp1 = regime === "COLD" ? 12 : regime === "HOT" ? 18 : 16;
-    // Bank the bulk fast (60% @ +16%, 20% @ +45%), ride the last ~20% to the MC-SCALED ceiling
-    // (pos.popMoonTarget, set at openPosition) — tp3/moon here are just a high backstop so the MC
-    // ceiling + the momentum-fade are what actually close the tail.
-    tp1Pct = 60; spikePct = 82; tp2Lvl = 45; tp2Pct = 50; tp3Lvl = 330; tp3Pct = 100; moonTarget = 330;
+    // POP RIDE — RIDE FOR A REAL, FEE-CLEARING MOVE, don't scratch-bank. On a pump coin the round-trip
+    // (buy slippage + sell slippage + priority fees) eats ~5-10%, so banking a +1% "win" is a NET LOSS.
+    // So the first bank waits for +30% (the floor worth taking), locking HALF there, and rides the other
+    // half toward 100-150%. The momentum-fade is no longer a +0% auto-bank — it's a TRAILING lock (banks
+    // a real move when it gives back from its peak) + a stagnation cut (exits a non-runner that fizzled).
+    tp1 = 30; tp1Pct = 50; spikePct = 50; tp2Lvl = 80; tp2Pct = 50; tp3Lvl = 150; tp3Pct = 100; moonTarget = 150;
   }
 
   // AUTO-ADAPT — the key lesson from live: the moon-ride only PAYS in a genuinely HOT
@@ -1948,32 +1945,36 @@ export function createAutopilotEngine(deps) {
           continue;
         }
       }
-      // POP MOMENTUM-FADE exit: the instant the inflow that drove the pop DECELERATES (popFading),
-      // bank into the spike rather than giving it back. Only banks when we're not already at the stop
-      // (the tight stop covers the downside); a faded pop that's still green is exactly when to take it.
+      // POP EXIT CONTROL — ride for a REAL, fee-clearing move; never scratch-bank a +1% (that's a net
+      // LOSS after ~5-10% round-trip fees). Two ways out besides the ladder (tp1 +30% / moon 100-150%)
+      // and the stop: a TRAILING LOCK (it ran a fee-clearing amount, then gives back from its peak →
+      // bank the move) and a STAGNATION CUT (the pop fizzled and never cleared fees → exit the
+      // non-runner near breakeven instead of bleeding to the stop — "good if it sees it's not going").
       if (pos.pop && !pos.popFadeHandled && mc > 0) {
-        // Fade against the peak inflow SINCE WE ENTERED (tracked on the position) — NOT the coin's
-        // lifetime peak, which made every mid-run entry read as "already faded" on tick 1 and
-        // instant-sell. An 8s min-hold (measured from the position's REAL open time) lets a fresh
-        // pop develop; the -10% stop still guards a crash during the window.
+        const mv = pos.entryMc > 0 ? (mc / pos.entryMc - 1) * 100 : 0;
+        pos.popPeakMove = Math.max(pos.popPeakMove || 0, mv);          // best gain seen since entry
         const inflow = (() => { try { return Number(popInflow(pos.mint)) || 0; } catch { return 0; } })();
-        if (inflow > (pos.popPeakInflow || 0)) pos.popPeakInflow = inflow;   // ride a still-climbing pop
-        const heldMs = now() - (pos.openedAt || now());
-        const faded = heldMs >= 8000 && (pos.popPeakInflow || 0) >= 0.3 && inflow < pos.popPeakInflow * 0.35;
-        if (faded) {
-          const mv = pos.entryMc > 0 ? (mc / pos.entryMc - 1) * 100 : 0;
-          if (mv > -(P.sl || 10) * 0.4) {
-            pos.popFadeHandled = true;
-            // A GREEN pop that's fading: bank the BULK but keep a small moon bag riding the MC-scaled
-            // target — the occasional pop runs AGAIN, and selling 100% flat misses the 2x the whole
-            // mode exists for. A flat/dead pop is cut entirely. (Live tuning: every exit was a flat
-            // 8s pop-fade with ZERO pop-target hits, so the runners never got to run.)
-            const bankPct = mv >= 5 ? 70 : 100;
-            record("info", `🌊 pop-fade: ${pos.sym} inflow stalled at ${mv >= 0 ? "+" : ""}${mv.toFixed(0)}% — banking ${bankPct}% into the spike`);
-            await doSell(pos, bankPct, "pop-fade");
-            if (bankPct >= 100) continue;        // fully closed; a green fade leaves a moon bag to ride the MC target + stop
-          }
+        if (inflow > (pos.popPeakInflow || 0)) pos.popPeakInflow = inflow;
+        const inflowDead = (pos.popPeakInflow || 0) >= 0.3 && inflow < pos.popPeakInflow * 0.35;
+        const heldS = (now() - (pos.openedAt || now())) / 1000;
+        // TRAILING LOCK: once it's run a real, fee-clearing amount (≥+15%), bank when it gives back ~a
+        // third from the peak — lock the move instead of round-tripping a winner back to flat.
+        if ((pos.popPeakMove || 0) >= 15 && mv <= (pos.popPeakMove || 0) * 0.66) {
+          pos.popFadeHandled = true;
+          record("info", `🔒 pop-lock: ${pos.sym} +${mv.toFixed(0)}% (peaked +${(pos.popPeakMove || 0).toFixed(0)}%) — banking the move`);
+          await doSell(pos, 100, "pop-fade");
+          continue;
         }
+        // STAGNATION CUT: the pop's buying has died AND it never cleared fees (peaked under +15%) after a
+        // fair look — exit the non-runner now rather than drift down to the stop. Holds at least ~18s so
+        // a slow-building pop still gets its chance to run.
+        if (inflowDead && heldS >= 18 && (pos.popPeakMove || 0) < 15) {
+          pos.popFadeHandled = true;
+          record("info", `🌫️ pop-fizzle: ${pos.sym} ${mv >= 0 ? "+" : ""}${mv.toFixed(0)}% — pop died without a real move, exiting the non-runner`);
+          await doSell(pos, 100, "pop-fade");
+          continue;
+        }
+        // else HOLD — let it run toward tp1 (+30%) / moon (100-150%); the -12% stop guards the downside.
       }
       const decision = evalExit(pos, P, now());
       if (decision.action === "sell") {
@@ -2837,7 +2838,7 @@ export function createAutopilotEngine(deps) {
     pos.pop = Boolean(P && P.pop);
     if (pos.pop) {
       const mcE = pos.entryMc || 0;
-      pos.popMoonTarget = mcE >= 40000 ? 70 : mcE >= 20000 ? 110 : mcE >= 10000 ? 160 : mcE >= 5000 ? 220 : 320;
+      pos.popMoonTarget = mcE >= 50000 ? 90 : mcE >= 25000 ? 110 : mcE >= 10000 ? 130 : 150;   // aim 100-150% (higher MC banks a touch sooner)
       pos.popPeakInflow = (() => { try { return Number(popInflow(mint)) || 0; } catch { return 0; } })();   // peak buy-inflow SINCE ENTRY (fade reference)
     }
     state.open.push(pos);
