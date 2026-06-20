@@ -192,7 +192,7 @@ export function aggParams(state) {
   // SNIPE = fresh, super-low-MC launches (the user's "fresh pairs super low mc"): the standout
   // SIGNAL is what selects, not the MC band, so the window is just a sane fresh range.
   const mcFloor = liquid ? 4000 : grind ? 6000 : snipe ? 1500 : pop ? 1000 : 1800;        // pop = MC-agnostic (flow leads)
-  const mcCeil = liquid ? 12000000 : grind ? 80000 : snipe ? 15000 : pop ? 1000000000 : 9000;
+  const mcCeil = liquid ? 12000000 : grind ? 80000 : snipe ? 15000 : pop ? 100000 : 9000;     // pop: a catchable spread (5k-100k), NOT mature $1M+ pumps already topping out
   // ANTI-PHANTOM depth floor — applied ONLY to coins that REPORT a liquidity number (see
   // entryReject). A phantom +400% spike comes from a thin curve where one tiny buy moves the marked
   // cap but nothing can fill, so a coin whose KNOWN liquidity is below this floor is rejected.

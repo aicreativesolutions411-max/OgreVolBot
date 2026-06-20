@@ -2404,20 +2404,28 @@ function popMetrics(mint, nowMs) {
   for (const w of buyers) { if (isKolWallet(w) || isWinnerWallet(walletObs.get(w))) { smart = true; break; } }
   return { accel: buySolNow / Math.max(buySolBase / 3, 0.05), inflowNow: buySolNow, buyShare: (buyNow + sellNow) > 0 ? buyNow / (buyNow + sellNow) : 0, uniqBuyers: buyers.size, smart };
 }
-// True once the inflow that drove a pop has DECELERATED (the engine's momentum-fade exit calls this).
+// True once the inflow that drove OUR ENTRY has DECELERATED (the engine's momentum-fade exit calls
+// this). CRITICAL: fade against the peak SINCE WE ENTERED, not the coin's LIFETIME peak. A coin we
+// buy mid-run (whose all-time inflow spike was minutes ago) would otherwise read as "already faded"
+// on the very first tick and we'd instant-sell every entry (live bug: Bb4j peaked 57 SOL/8s 20min
+// before we bought at ~4 → 4 < 57*0.35 → instant pop-fade). An 8s min-hold also gives a genuinely
+// fresh pop room to develop; the -10% stop still guards a real crash during that window.
+const POP_FADE_MIN_HOLD_MS = 8_000;
 function popFadingNow(mint) {
-  const peak = popPeakInflow.get(mint) || 0;
+  const h = popHeldMints.get(mint);
+  if (h && Date.now() - h.at < POP_FADE_MIN_HOLD_MS) return false;   // just entered — let it breathe
+  const peak = (h && h.peak) || popPeakInflow.get(mint) || 0;        // peak SINCE ENTRY (fallback: lifetime)
   if (peak < 0.3) return false;                          // never really popped -> nothing to fade
   const m = popMetrics(mint, Date.now());
   if (!m) return true;                                   // no live trades at all = the burst is dead
-  return m.inflowNow < peak * 0.35;                      // collapsed to <35% of its peak = pop is over
+  return m.inflowNow < peak * 0.35;                      // collapsed to <35% of the post-entry peak = pop is over
 }
 let _popPolling = false;
 async function pollPopRadar() {
   if (_popPolling) return; _popPolling = true;
   try {
     const now = Date.now();
-    for (const [m, at] of popHeldMints) { if (now - at > 8 * 60_000) popHeldMints.delete(m); }
+    for (const [m, h] of popHeldMints) { if (now - ((h && h.at) || 0) > 8 * 60_000) popHeldMints.delete(m); }
     // WATCHLIST = a SPREAD of routable movers, not just fresh dust:
     //  • the live feed (DexScreener pairs) volume+momentum sorts → real routable coins across the WHOLE
     //    MC range (5k→40k+). A coin with a real Pump/Raydium/etc. pool shows here; a pool-less rug does
@@ -2462,6 +2470,7 @@ async function pollPopRadar() {
     for (const mint of watch) {                            // score -> ignition candidates + peak inflow
       const m = popMetrics(mint, now); if (!m) continue;
       if (m.inflowNow > (popPeakInflow.get(mint) || 0)) popPeakInflow.set(mint, m.inflowNow);
+      const _h = popHeldMints.get(mint); if (_h && m.inflowNow > _h.peak) _h.peak = m.inflowNow;   // track peak SINCE entry for the held position's fade
       const score = popIgnitionScore(m);
       if (score >= POP_IGNITION_FIRE) {
         // ROUTE FILTER (background, once per coin): confirm it's routable (not Token-2022 / no trusted
@@ -3105,7 +3114,7 @@ const autopilotEngine = createAutopilotEngine({
     return null;
   },
   // Register a freshly-aped coin for live-price polling (swap-api) + the legacy trade-tick stream.
-  onOpen: (mint) => { try { heldReqAt.set(mint, Date.now()); void swapApiPriceFor(mint); pumpPortalStream.watchMint(mint); let md = null; try { md = autopilotEngine.status()?.mode; } catch {} if (md === "pop") popHeldMints.set(mint, Date.now()); } catch {} },
+  onOpen: (mint) => { try { heldReqAt.set(mint, Date.now()); void swapApiPriceFor(mint); pumpPortalStream.watchMint(mint); let md = null; try { md = autopilotEngine.status()?.mode; } catch {} if (md === "pop") popHeldMints.set(mint, { at: Date.now(), peak: (() => { try { return popMetrics(mint, Date.now())?.inflowNow || 0; } catch { return 0; } })() }); } catch {} },
   // Synchronous, in-memory latest market cap (USD) from the live pump tick — used
   // so status() shows truly live prices on every poll, with zero network wait.
   getInstantMc: (mint) => {

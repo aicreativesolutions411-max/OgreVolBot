@@ -255,11 +255,12 @@ test("popIgnitionScore: fires on accelerating buy-led inflow with a buyer burst,
             popIgnitionScore({ accel: 4, inflowNow: 1, buyShare: 0.8, uniqBuyers: 5, smart: false }));
 });
 
-test("aggParams: pop mode is MC-agnostic, ignition-gated, tight stop", () => {
+test("aggParams: pop mode is a catchable MC spread, ignition-gated, tight stop", () => {
   const p = aggParams(baseState({ mode: "pop" }));
   assert.equal(p.pop, true);
   assert.equal(p.minScore, 0, "gated on ignition, not freshScore");
-  assert.ok(p.mcFloor <= 1000 && p.mcCeil >= 1000000, "MC-agnostic band");
+  // A catchable spread (~5k-100k), NOT mature $1M+ pumps already topping (those instant-faded live).
+  assert.ok(p.mcFloor <= 1000 && p.mcCeil <= 150000 && p.mcCeil >= 50000, "catchable spread, not mega-cap tops");
   assert.equal(p.sl, 10, "tight stop (pops reverse fast)");
 });
 
