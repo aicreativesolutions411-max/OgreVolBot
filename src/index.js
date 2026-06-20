@@ -43260,12 +43260,14 @@ async function solanaTrackerJson(pathName, options = {}) {
 function stNum(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
 async function fetchSolanaTrackerTokenReport(mint = "") {
   const clean = String(mint || "").trim();
-  if (!clean || !CONFIG.solanaTrackerApiKey) return null;
+  if (!clean) return null;
+  if (!CONFIG.solanaTrackerApiKey) { try { console.warn(`[st-report] ${shortMint(clean)} — NO solanaTrackerApiKey set on this instance`); } catch {} return null; }
   let data = null;
   try {
     data = await solanaTrackerJson(`/tokens/${encodeURIComponent(clean)}`, { cacheTtlMs: 90_000, timeoutMs: 6_500 });
-  } catch { return null; }
-  if (!data || typeof data !== "object") return null;
+  } catch (e) { try { console.warn(`[st-report] ${shortMint(clean)} FETCH ERROR: ${e && e.message}`); } catch {} return null; }
+  if (!data || typeof data !== "object") { try { console.warn(`[st-report] ${shortMint(clean)} empty/non-object response`); } catch {} return null; }
+  try { console.warn(`[st-report] ${shortMint(clean)} OK topKeys=[${Object.keys(data).slice(0,9).join(",")}] pools=${Array.isArray(data.pools)?data.pools.length:0} risk=${data.risk?Object.keys(data.risk).slice(0,6).join("|"):"none"} holders=${data.holders}`); } catch {}
   const token = data.token || {};
   const creation = token.creation || token.created || {};
   const pools = Array.isArray(data.pools) ? data.pools : [];
