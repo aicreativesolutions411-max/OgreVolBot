@@ -212,8 +212,14 @@ function classifyOutcome(mc, rugged) {
 
 async function deployerPhase() {
   if (DEV_TOKENS <= 0) return { skipped: true };
-  const corpus = await gatherDevCorpus(DEV_TOKENS);
-  console.log(`[mass-grab] phase3: ${corpus.length} tokens → mapping deployers`);
+  const discovered = await gatherDevCorpus(DEV_TOKENS);
+  // DEPLOYERS-BEHIND-WINNERS: union the tokens our PROVEN WINNERS actually printed on (≥3x, collected
+  // in phase 1) into the corpus. An operator whose launches WINNERS bought is a higher-signal deployer
+  // than a random discovery-endpoint token, and it grows the corpus past the ~940 dedup ceiling. Each
+  // such deployer gets a winnerTraded count = how many of its launches a proven winner printed on.
+  const winnerTokens = new Set(recursiveRunners);
+  const corpus = [...new Set([...discovered, ...winnerTokens])];
+  console.log(`[mass-grab] phase3: ${corpus.length} tokens (${discovered.length} discovered + ${winnerTokens.size} winner-printed) → mapping deployers`);
   const deployers = {};
   let tokCalls = 0, mapped = 0;
   for (const mint of corpus) {

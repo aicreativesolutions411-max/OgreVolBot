@@ -1594,14 +1594,44 @@ async function mergeDeployerGrabFile() {
     let added = 0, devSeeded = 0;
     for (const [dev, rec] of Object.entries(grab.deployers)) {
       if (!dev || !rec) continue;
-      deployerWarehouse.set(dev, rec);
+      // ACCUMULATE the warehouse record (union recentLaunches, keep the richer counts) so re-grabs
+      // COMPOUND the warehouse instead of overwriting — "keep growing the data we didn't pull".
+      const prevW = deployerWarehouse.get(dev);
+      if (prevW) {
+        const seenMints = new Set((prevW.recentLaunches || []).map((l) => l && l.mint));
+        const mergedLaunches = [...(prevW.recentLaunches || [])];
+        for (const l of (rec.recentLaunches || [])) { if (l && l.mint && !seenMints.has(l.mint)) { seenMints.add(l.mint); mergedLaunches.push(l); } }
+        deployerWarehouse.set(dev, {
+          launchesTracked: Math.max(Number(prevW.launchesTracked) || 0, Number(rec.launchesTracked) || 0),
+          runners: Math.max(Number(prevW.runners) || 0, Number(rec.runners) || 0),
+          rugs: Math.max(Number(prevW.rugs) || 0, Number(rec.rugs) || 0),
+          winnerTraded: Math.max(Number(prevW.winnerTraded) || 0, Number(rec.winnerTraded) || 0),
+          avgMc: Number(rec.avgMc) || Number(prevW.avgMc) || 0,
+          bestMc: Math.max(Number(prevW.bestMc) || 0, Number(rec.bestMc) || 0),
+          recentLaunches: mergedLaunches.slice(0, 10),
+          lastSeenMs: Math.max(Number(prevW.lastSeenMs) || 0, Number(rec.lastSeenMs) || 0)
+        });
+      } else {
+        deployerWarehouse.set(dev, rec);
+      }
       added += 1;
-      // Seed devObs only where we have NO organic observation yet (never clobber learned counts).
+      // Seed/accumulate devObs: take the MAX of organic-vs-grab counts so live observation AND re-grabs
+      // both compound and NEVER shrink the learned record.
       const prev = devObs.get(dev);
       const launches = Number(rec.launchesTracked) || 0;
-      if (!prev && launches > 0) {
-        // peakSum approximated from runners (each runner ~3x); good enough for combinedDevRep ranking.
-        devObs.set(dev, { coins: launches, ran: Number(rec.runners) || 0, rugged: Number(rec.rugs) || 0, peakSum: (Number(rec.runners) || 0) * 3, seededFromWarehouse: true });
+      const runners = Number(rec.runners) || 0;
+      const rugs = Number(rec.rugs) || 0;
+      if (launches > 0) {
+        if (!prev) {
+          devObs.set(dev, { coins: launches, ran: runners, rugged: rugs, peakSum: runners * 3, seededFromWarehouse: true });
+        } else {
+          prev.coins = Math.max(Number(prev.coins) || 0, launches);
+          prev.ran = Math.max(Number(prev.ran) || 0, runners);
+          prev.rugged = Math.max(Number(prev.rugged) || 0, rugs);
+          if (!(Number(prev.peakSum) > 0)) prev.peakSum = runners * 3;
+          prev.seededFromWarehouse = true;
+          devObs.set(dev, prev);
+        }
         devSeeded += 1;
       }
     }
@@ -33278,6 +33308,30 @@ async function computeDevInfoFromLocalData(mint = "", row = null, options = {}) 
         recentLaunches: (Array.isArray(wh.recentLaunches) ? wh.recentLaunches : []).slice(0, 6)
           .map((l) => ({ mint: l.mint, symbol: l.symbol, outcomeLabel: l.outcomeLabel, firstSellMinutes: null })),
         dataSource: "deployer-warehouse"
+      };
+    }
+  }
+  // LIVE-GROWN fallback: combinedDevRep folds our own trades + the market-wide dev observatory (devObs),
+  // which grows 24/7 from every coin the bot watches — so a deployer the bot has SEEN LIVE (but isn't in
+  // the offline warehouse) still shows real launch/rug history. This is what makes the dev data "keep
+  // growing" with zero re-grabs: the offline seed is the floor, live observation compounds on top.
+  if ((!historicalStats || Number(historicalStats.launchesTracked || 0) === 0) && wallet) {
+    const rep = combinedDevRep(wallet);
+    if (rep && Number(rep.trades) > 0) {
+      historicalStats = {
+        likelyDevWallet: wallet,
+        launchesTracked: Number(rep.trades) || 0,
+        runners: Number(rep.runners) || 0,
+        rugs: Number(rep.rugs) || 0,
+        medianFirstSellMinutes: null,
+        medianHoldMinutes: null,
+        soldMoreThan50Within15mPercent: null,
+        soldMoreThan50Within1hPercent: null,
+        heldPast24hPercent: null,
+        bestPriorLaunchReturnPercent: Number.isFinite(rep.avgPeak) && rep.avgPeak > 0 ? rep.avgPeak : null,
+        worstPriorLaunchReturnPercent: null,
+        recentLaunches: [],
+        dataSource: "live-dev-observatory"
       };
     }
   }
