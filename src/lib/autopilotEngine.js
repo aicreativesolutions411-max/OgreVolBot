@@ -838,6 +838,18 @@ export function popIgnitionScore(m) {
 }
 export const POP_IGNITION_FIRE = 42;   // ignition score at/above which a coin is "popping" -> top-priority entry
 
+// SLIPPAGE-AWARE POP SIZING: fraction of bank to risk per pop, scaled by the coin's MC. Thin low-MC
+// curves slip HARD on exit (live: a 5%-bank bet in a $4k coin faded "+0%" but realized -22% — the sell
+// craters the curve), so bet SMALL there; a deeper higher-MC coin can absorb a full bet. This rebalances
+// the inverted asymmetry (losers bigger than winners) without touching the moon-bag upside.
+export function popBetFrac(mc) {
+  const m = Number(mc) || 0;
+  if (m < 3000) return 0.02;        // ultra-thin: tiny bet, slippage tax is brutal
+  if (m < 8000) return 0.03;
+  if (m < 25000) return 0.04;
+  return 0.05;                      // 25k-100k: deeper curve absorbs the full 5%-of-bank bet
+}
+
 // STANDOUT-SIGNAL score for the SNIPER — the hard-to-fake "this launch sticks out" tells, OR-gated
 // (any ONE qualifies; more = higher score -> bigger conviction). Pure + exported for tests. Reads the
 // live signal objects the hunt loop already gathers (dev rep, smart-money, caller intel) plus an
@@ -2523,7 +2535,7 @@ export function createAutopilotEngine(deps) {
       let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * confl * clusterMult * readyMult * (brake.sizeMult || 1), state.maxTradeSol));
       // SNIPE BET CAP — moonshot math needs MANY small EVEN bets so a rare 4x pays for the losers; no
       // single snipe may exceed 5% of bank (live proof: one 16%-of-bank snipe ate ~80% of a session loss).
-      if (P.snipe || P.pop) size = Math.max(state.minTradeSol, Math.min(size, state.bank * 0.05));   // snipe/pop: small even bets
+      if (P.snipe || P.pop) size = Math.max(state.minTradeSol, Math.min(size, state.bank * (P.pop ? popBetFrac(cand.r.marketCap) : 0.05)));   // snipe/pop: small even bets; pop scales DOWN on thin low-MC curves (slippage)
       if (probeNow) size = state.minTradeSol;
       if (!canOpen(state, size)) break;
       await openPosition(cand.r, size, cand.fs, dev, rep, sm, P);
@@ -2610,7 +2622,7 @@ export function createAutopilotEngine(deps) {
         const cr = clusterRisk ? clusterRisk(r.tokenMint) : null;
         const clusterMult = cr && cr.risk > 0 ? Math.max(0.5, 1 - cr.risk * 0.4) : 1;
         let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv * confl * clusterMult * readyMult * edgeMult * (brake.sizeMult || 1), state.maxTradeSol));
-        if (P.snipe || P.pop) size = Math.max(state.minTradeSol, Math.min(size, state.bank * 0.05));   // snipe/pop bet cap — small even bets
+        if (P.snipe || P.pop) size = Math.max(state.minTradeSol, Math.min(size, state.bank * (P.pop ? popBetFrac(r.marketCap) : 0.05)));   // snipe/pop bet cap; pop scales DOWN on thin low-MC curves (slippage)
         if (!canOpen(state, size)) break;
         record("info", `🐳 copy-trade ${r.symbol || shortMint(r.tokenMint)} @ MC $${Math.round(Number(r.marketCap) || 0)} — ${sm.kolProbe ? "probe " : ""}${sm.winners || 0} winner${sm.edge != null ? ` · edge ${sm.edge}x` : ""}${sm.apeScore != null ? ` · ape ${sm.apeScore}` : ""} → conv ${conv.toFixed(2)}`);
         await openPosition(r, size, P.liquid ? liquidScore(r) : freshScore(r), dev, rep, sm, P);

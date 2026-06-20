@@ -15,6 +15,7 @@ import {
   looksLikeJunkSymbol,
   popIgnitionScore,
   POP_IGNITION_FIRE,
+  popBetFrac,
   flowSurge,
   autoTune,
   entryReject,
@@ -253,6 +254,15 @@ test("popIgnitionScore: fires on accelerating buy-led inflow with a buyer burst,
   // smart money in the burst raises it
   assert.ok(popIgnitionScore({ accel: 4, inflowNow: 1, buyShare: 0.8, uniqBuyers: 5, smart: true }) >
             popIgnitionScore({ accel: 4, inflowNow: 1, buyShare: 0.8, uniqBuyers: 5, smart: false }));
+});
+
+test("popBetFrac: thin low-MC coins bet smaller, deeper coins take the full 5%", () => {
+  assert.ok(popBetFrac(2000) < popBetFrac(50000), "a $2k coin bets less than a $50k coin");
+  assert.equal(popBetFrac(80000), 0.05, "deep coins take the full bet");
+  assert.ok(popBetFrac(4117) <= 0.03, "a ~$4k coin (live HERO -22% slippage loser) is sized down");
+  assert.ok(popBetFrac(0) > 0 && popBetFrac(0) <= 0.05, "unknown MC stays bounded");
+  // monotonic non-decreasing in MC
+  assert.ok(popBetFrac(2999) <= popBetFrac(3000) && popBetFrac(7999) <= popBetFrac(8000));
 });
 
 test("aggParams: pop mode is a catchable MC spread, ignition-gated, tight stop", () => {
