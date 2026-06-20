@@ -1952,9 +1952,14 @@ export function createAutopilotEngine(deps) {
           const mv = pos.entryMc > 0 ? (mc / pos.entryMc - 1) * 100 : 0;
           if (mv > -(P.sl || 10) * 0.4) {
             pos.popFadeHandled = true;
-            record("info", `🌊 pop-fade: ${pos.sym} inflow stalled at ${mv >= 0 ? "+" : ""}${mv.toFixed(0)}% — banking into the spike`);
-            await doSell(pos, 100, "pop-fade");
-            continue;
+            // A GREEN pop that's fading: bank the BULK but keep a small moon bag riding the MC-scaled
+            // target — the occasional pop runs AGAIN, and selling 100% flat misses the 2x the whole
+            // mode exists for. A flat/dead pop is cut entirely. (Live tuning: every exit was a flat
+            // 8s pop-fade with ZERO pop-target hits, so the runners never got to run.)
+            const bankPct = mv >= 5 ? 70 : 100;
+            record("info", `🌊 pop-fade: ${pos.sym} inflow stalled at ${mv >= 0 ? "+" : ""}${mv.toFixed(0)}% — banking ${bankPct}% into the spike`);
+            await doSell(pos, bankPct, "pop-fade");
+            if (bankPct >= 100) continue;        // fully closed; a green fade leaves a moon bag to ride the MC target + stop
           }
         }
       }

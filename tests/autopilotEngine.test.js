@@ -737,6 +737,41 @@ test("engine: pop-fade honors an 8s min-hold and fades vs peak-since-entry (not 
   await engine.stop("test-done");
 });
 
+test("engine: a GREEN pop-fade banks the bulk but keeps a moon bag riding (not 100% flat)", async () => {
+  // Live tuning: every pop exited as a flat 8s fade with ZERO pop-target hits, so runners never ran.
+  // A pop that's GREEN when its inflow fades should bank most + keep a small bag on the MC target.
+  let t = 0;
+  let inflow = 5;
+  let mc = 9000;
+  let feed = [{
+    tokenMint: "PopMint33333333333333333333333333333333333333",
+    symbol: "RUNNER", marketCap: 9000, liquidityUsd: 5000, pairAgeSeconds: 1,
+    volume5m: 0, buys5m: 0, sells5m: 0, source: "pop", _pop: { score: 80, inflowNow: 5 }
+  }];
+  const engine = createAutopilotEngine({
+    getPopFeed: async () => feed,
+    getPairLite: async () => ({ marketCap: mc, liquidityUsd: 5000 }),
+    popInflow: () => inflow,
+    buyToken: async () => ({ ok: true, tokenAmount: "1000" }),
+    sellPercent: async () => ({ ok: true }),
+    now: () => t,
+    persist: async () => {}
+  });
+  await engine.start({ solBudget: 1, minutes: 60, mode: "pop", live: false });
+  t += 2200; await engine._hunt();
+  assert.equal(engine.status().open.length, 1, "pop opened");
+  feed = [];
+  mc = 9900;            // +10% GREEN when the inflow fades
+  inflow = 0.1;
+  t += 9000; await engine._tick();   // past the 8s min-hold, inflow collapsed, position green
+  // A 100% flat close would leave open.length 0; a green fade banks the bulk and KEEPS a moon bag.
+  const p = engine._state().open[0];
+  assert.equal(engine.status().open.length, 1, "a green fade keeps a moon bag riding (not a 100% flat close)");
+  assert.ok(p && p.popFadeHandled, "the pop-fade fired (banked the bulk, left the tail)");
+  // Contrast: a FLAT pop (no green) fully closes — covered by the min-hold test above.
+  await engine.stop("test-done");
+});
+
 test("engine: self-arm holds entries while warming, then trades once readiness is high", async () => {
   // LOW readiness → WARMING: stays live + learning, opens NOTHING even on a good coin.
   let t = 0;
