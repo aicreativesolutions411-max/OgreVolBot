@@ -79,7 +79,21 @@
   .emblem-row img{width:66px;height:66px;flex:0 0 auto;border-radius:14px;filter:drop-shadow(0 0 14px rgba(255,210,74,0.45));}
   .emblem-row .et b{color:var(--gold);font-size:1.05rem;} .emblem-row .et p{margin:3px 0 0;color:#cfe0cc;font-size:0.9rem;}
   .sech .num.blue{background:linear-gradient(135deg,var(--blue),#2d7fd0);} .sech .num.purp{background:linear-gradient(135deg,var(--purp),#7a3fd0);} .sech .num.red{background:linear-gradient(135deg,var(--red),#d04545);}
-  @media print{ html,body{background:#fff;} .page{background:var(--bg);} .sec{padding-top:24px;} .sech{break-after:avoid;} .step,.preset,.pg,.nav-row,.tip,.warn,.note{break-inside:avoid;} h3,h4{break-after:avoid;} .no-print{display:none;} .cover{padding:96px 40px;} }
+  @media print{
+    /* Print the REAL dark theme + all background art/photos (browsers strip backgrounds by default —
+       print-color-adjust:exact forces them on, so the PDF looks like the page, not a white sheet). */
+    *{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+    @page{ margin:0; }
+    html,body{ background:var(--bg) !important; }
+    .page{ background:var(--bg) !important; }
+    .sec{ padding-top:24px; }
+    .sech{ break-after:avoid; break-inside:avoid; }
+    /* Keep each topic's info on ONE page — no half-here-half-next-page splits. */
+    .step,.preset,.pg,.nav-row,.tip,.warn,.note,.emblem-row,.poster,.lead,figure,img{ break-inside:avoid; }
+    h2,h3,h4{ break-after:avoid; }
+    .no-print{ display:none !important; }
+    .cover{ padding:96px 40px; break-after:page; }
+  }
 </style>
 </head>
 <body>

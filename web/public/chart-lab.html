@@ -338,11 +338,21 @@
   // live forming-candle tick on top.
   function loadReal(){ if(!CA)return; loadServer(); loadDex(); }
 
+  // A SECONDS-OLD coin has no candles yet (no trades to bucket), so the loader used to spin forever
+  // ("ogre flashing like it can't load"). After a short wait with no candles, swap the spinner for a
+  // calm "brand-new — chart forms after first trades" note (keeps retrying; setCandles' hideLoad clears
+  // it the instant real candles land). NEVER an endless flashing loader on fresh pairs.
+  function markTooFresh(){
+    if(haveCandles)return; var l=document.getElementById('chartload'); if(!l)return;
+    l.classList.remove('hidden');
+    l.innerHTML='<div style="text-align:center;line-height:1.5;padding:0 18px">🐸 Brand-new coin — the chart forms after its<br>first few trades. Live price &amp; tape still update.</div>';
+  }
   // ---- boot ----
   if(CA){
     // instant repaint from cache (same coin viewed recently) so it's never blank on reopen
     try{ var cc=JSON.parse(sessionStorage.getItem('cl2:'+CA)||'null'); if(cc&&cc.d&&cc.tf===TF&&Date.now()-cc.at<120000){ applyChartData(cc.d); } }catch(e){}
     loadReal();
+    setTimeout(markTooFresh,7000);   // fresh pair with no candles yet → calm note, not an endless spinner
     setInterval(loadServer,15000);   // refresh the real candle history from OUR server
     setInterval(loadDex,3500);       // fast live price → forming-candle movement + exact stats
   } else { hideLoad(); }
