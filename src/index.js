@@ -3557,7 +3557,12 @@ const BRAND_FOOTER = [
   "Twitter: https://twitter.com/i/communities/1930265213917425858"
 ].join("\n");
 
+// One-tap mobile install — opens the /install landing (PWA add-to-home-screen) directly in the
+// device browser. A `url` button (not callback) so the tap leaves Telegram straight to the page.
+const APP_INSTALL_URL = `${(CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/$/, "")}/install`;
+
 const PUBLIC_MENU = [
+  [{ text: "📲 Download App", url: APP_INSTALL_URL }],
   [{ text: "How To Use", callback_data: "quick_start" }, { text: "Web App", callback_data: "web_portal" }],
   [{ text: "Terminal", callback_data: "terminal_menu" }, { text: "Market Intel", callback_data: "market_intel_menu" }],
   [{ text: "Ogre Tools", callback_data: "ogre_tools_menu" }, { text: "Portfolio", callback_data: "portfolio_menu" }],
@@ -4493,6 +4498,7 @@ async function registerTelegramBotCommands() {
   const dmCommands = [
     ...groupCommands,
     { command: "menu", description: "Main menu" },
+    { command: "app", description: "📲 Download the SlimeWire mobile app" },
     { command: "web", description: "Login code for slimewire.org" },
     { command: "wallets", description: "Your saved wallets" },
     { command: "balances", description: "Wallet balances" },
@@ -4710,6 +4716,10 @@ function startHealthServer() {
     }
     if (request.method === "GET" && ["/tg-guide", "/bot-guide", "/telegram-guide"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "tg-guide.html");
+      return;
+    }
+    if (request.method === "GET" && ["/install", "/download", "/app", "/get", "/getapp"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "install.html");
       return;
     }
     if (request.method === "GET" && ["/hub", "/home", "/explore", "/menu"].includes(requestUrl.pathname)) {
@@ -11232,6 +11242,22 @@ async function handleMessage(message, userId) {
   if (text === "/start" || text === "/menu") {
     clearSession(chatId);
     await showMenu(chatId, userId);
+    return;
+  }
+
+  if (text === "/app" || text === "/download" || text === "/install" || /^\/(app|download|install)(?:@\w+)?$/i.test(text)) {
+    await sendOrEditMessage(chatId, null, withBrandFooter([
+      "📲 <b>Get the SlimeWire app</b>",
+      "",
+      "One tap puts the full terminal on your phone home screen — live pairs, charts, one-tap trading and the autopilot. No app store, free.",
+      "",
+      "Tap below, then hit <b>Install</b> / <b>Add to Home Screen</b>.",
+    ].join("\n")), {
+      inline_keyboard: [
+        [{ text: "📲 Download App", url: APP_INSTALL_URL }],
+        [{ text: "Open Web App", url: (CONFIG.webPortalUrl || "https://www.slimewire.org") }],
+      ]
+    });
     return;
   }
 
