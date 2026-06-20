@@ -2428,6 +2428,41 @@ function liveRowPct(v) {
   if (v && Number.isFinite(Number(v.priceChange))) return Number(v.priceChange);
   return Number.isFinite(Number(v)) ? Number(v) : undefined;
 }
+// Carry the ENRICHED feed signals the autopilot needs (rug hard-gate + situational "what can run
+// now" read) instead of dropping them in the feed adapters — the root cause of the bot "buying blind"
+// on a thin score band. riskFlags carries freezeAuthorityActive/mintAuthorityActive/token2022
+// (derived by pairRiskFlags); rugRisk/manipulationScore/devInfoSummary/category/bonding power the
+// expert read. See fresh-feed-contract + autopilot rebuild.
+function autopilotEnrichedFields(r = {}) {
+  return {
+    riskFlags: Array.isArray(r.riskFlags) ? r.riskFlags : [],
+    safetyNote: r.safetyNote || "",
+    slimeScopeCategory: r.slimeScopeCategory || r.category || "",
+    rugRisk: r.rugRisk,
+    manipulationScore: r.manipulationScore,
+    devInfoSummary: r.devInfoSummary || null,
+    bondingProgressPct: Number(r.bondingProgressPct) || 0,
+    graduated: Boolean(r.graduated || r.isGraduated),
+    isPump: Boolean(r.isPump),
+    smartMoney: r.smartMoney,
+    freezeAuthority: r.freezeAuthority || "",
+    mintAuthority: r.mintAuthority || "",
+    tokenProgram: r.tokenProgram || ""
+  };
+}
+
+// CHEAP rug hard-gate (free — reads already-computed signals): drop coins with KNOWN danger before
+// the autopilot ever scores them. Fresh-ape semantics — only genuine danger blocks; unknown/"check"
+// (a brand-new coin not yet enriched) is NOT treated as danger (the engine + pre-buy SlimeShield
+// check vet further). This is the host-side complement to the engine's pre-buy securityGate.
+function autopilotRowHasHardDanger(r = {}) {
+  const flags = (Array.isArray(r.riskFlags) ? r.riskFlags : []).map((f) => String(f).toLowerCase());
+  if (flags.some((f) => /freezeauthorityactive|mintauthorityactive|token2022|honeypot|mayhem|hardblock|blacklist/.test(f))) return true;
+  const rug = Number(r.rugRisk); if (Number.isFinite(rug) && rug >= 85) return true;            // AVOID-grade only
+  const manip = Number(r.manipulationScore); if (Number.isFinite(manip) && manip >= 85) return true;
+  return false;
+}
+
 // The broad NORMALIZED liquid-movers pool — the scalp feed scores it. Rows carry m5/h1 as NUMBERS
 // (raw webLivePairs stores m5 as an object {priceChange}) + real liquidityUsd, which is exactly what
 // liquidScore/jumpScore need. ~120 coins across fresh→24h buckets + trending.
@@ -2446,6 +2481,7 @@ async function buildLiquidMovers() {
       if (!r || !r.tokenMint || seen.has(r.tokenMint)) continue;
       const lq = Number(r.liquidityUsd) || 0;
       if (lq > 0 && lq < 1500) continue;           // drop KNOWN-thin only; keep unknown-liq (engine vets)
+      if (autopilotRowHasHardDanger(r)) continue;  // rug hard-gate: drop KNOWN-dangerous before scoring
       seen.add(r.tokenMint);
       out.push({
         tokenMint: r.tokenMint, symbol: r.symbol, pairAgeSeconds: r.pairAgeSeconds,
@@ -2453,7 +2489,8 @@ async function buildLiquidMovers() {
         buys5m: r.buys5m, sells5m: r.sells5m, buysH1: r.buysH1, sellsH1: r.sellsH1,
         m5: liveRowPct(r.m5), h1: liveRowPct(r.h1),
         sniperCount: r.sniperCount || r.snipers || 0,
-        bestPickScore: r.bestPickScore || r.bestPick || 0
+        bestPickScore: r.bestPickScore || r.bestPick || 0,
+        ...autopilotEnrichedFields(r)
       });
     }
   }
@@ -2489,11 +2526,13 @@ async function pollPopRadar() {
           const seen = new Set(); const rows = [];
           for (const f of results) for (const r of (Array.isArray(f && f.rows) ? f.rows : [])) {
             if (!(r && r.tokenMint) || seen.has(r.tokenMint)) continue;
+            if (autopilotRowHasHardDanger(r)) continue;  // rug hard-gate
             seen.add(r.tokenMint);
             rows.push({
               tokenMint: r.tokenMint, symbol: r.symbol, marketCap: r.marketCap, liquidityUsd: r.liquidityUsd,
               volume5m: r.volume5m, buys5m: r.buys5m, sells5m: r.sells5m,
-              m5: liveRowPct(r.m5), h1: liveRowPct(r.h1)
+              m5: liveRowPct(r.m5), h1: liveRowPct(r.h1),
+              ...autopilotEnrichedFields(r)
             });
           }
           if (rows.length) { popLiveRows = rows.slice(0, 140); popLiveMints = rows.map((r) => r.tokenMint).slice(0, 40); }
@@ -3047,17 +3086,23 @@ const autopilotEngine = createAutopilotEngine({
         }
       } catch {}
     }
-    const out = rows.map((r) => ({
+    const out = rows.filter((r) => !autopilotRowHasHardDanger(r)).map((r) => ({   // rug hard-gate
       tokenMint: r.tokenMint,
       symbol: r.symbol,
       pairAgeSeconds: r.pairAgeSeconds,
       marketCap: r.marketCap,
       liquidityUsd: r.liquidityUsd,
       volume5m: r.volume5m,
+      volumeH1: r.volumeH1,
       buys5m: r.buys5m,
       sells5m: r.sells5m,
+      buysH1: r.buysH1,
+      sellsH1: r.sellsH1,
+      m5: liveRowPct(r.m5),
+      h1: liveRowPct(r.h1),
       sniperCount: r.sniperCount || r.snipers || 0,
-      bestPickScore: r.bestPickScore || r.bestPick || 0
+      bestPickScore: r.bestPickScore || r.bestPick || 0,
+      ...autopilotEnrichedFields(r)
     }));
     // SNIPER: remember this candidate pool (the X-clout trickle resolves these) and attach any
     // already-resolved notable-X clout so snipeSignalScore can fire the X signal.
