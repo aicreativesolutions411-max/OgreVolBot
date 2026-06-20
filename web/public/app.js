@@ -19839,32 +19839,24 @@ function currentCookSpotCategory() {
 }
 
 function rankCookSpotRows(rows = [], categoryId = "dexTrending") {
+  // FULL + ACCURATE: the BACKEND already builds a category-specific pool per cat (LIVE_CATEGORY_QUERIES
+  // + livePairCategoryFilter, narrowed to matches only when there are ≥6), and switchLiveFeedPool
+  // refetches it on every category change. So the client just SORTS by the category's metric — it must
+  // NOT re-filter. The earlier strict client filter double-narrowed and left categories showing 1-2
+  // pairs; this shows the whole category list. See fresh-feed-contract.
   const list = [...rows];
-  // SELECTIVE: a category shows ONLY coins that match it. The old code fell back to the WHOLE
-  // unfiltered pool when a filter came up short ("filtered.length ? filtered : list"), which is
-  // exactly how a fresh pair leaked into Graduated / Boosted / etc. Now a thin category shows its
-  // few real matches (or an empty state) — never mismatched coins. See fresh-feed-contract.
   switch (categoryId) {
     case "fresh":
       return list.sort(compareNewestLiveRows);
     case "dexBoosted":
-      return list.filter(liveFeedIsBoosted).sort((a, b) => liveFeedVolumeScore(b) - liveFeedVolumeScore(a));
-    case "pumpTrending":
-      return list.filter(cookSpotIsPump).sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
-    case "memeMovers":
-      return list.filter(cookSpotIsMeme).sort((a, b) => liveFeedChangeScore(b) - liveFeedChangeScore(a));
-    case "earlyMomentum":
-      return list
-        .filter((row) => { const age = Number(row.pairAgeMinutes); return Number.isFinite(age) && age >= 0 && age <= 180; })
-        .sort((a, b) => liveFeedMomentumScore(b) - liveFeedMomentumScore(a));
-    case "graduating":
-      return list
-        .filter((row) => isGraduatingSlimeScopeRow(row) || classifySlimeScopeRow(row) === "graduating")
-        .sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
     case "graduated":
-      return list
-        .filter((row) => isGraduatedSlimeScopeRow(row) || classifySlimeScopeRow(row) === "graduated")
-        .sort((a, b) => liveFeedVolumeScore(b) - liveFeedVolumeScore(a));
+      return list.sort((a, b) => liveFeedVolumeScore(b) - liveFeedVolumeScore(a));
+    case "memeMovers":
+      return list.sort((a, b) => liveFeedChangeScore(b) - liveFeedChangeScore(a));
+    case "earlyMomentum":
+      return list.sort((a, b) => liveFeedMomentumScore(b) - liveFeedMomentumScore(a));
+    case "pumpTrending":
+    case "graduating":
     case "dexTrending":
     default:
       return list.sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
