@@ -4708,6 +4708,10 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "manual.html");
       return;
     }
+    if (request.method === "GET" && ["/tg-guide", "/bot-guide", "/telegram-guide"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "tg-guide.html");
+      return;
+    }
     if (request.method === "GET" && ["/hub", "/home", "/explore", "/menu"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "hub.html");
       return;

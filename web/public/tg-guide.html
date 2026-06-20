@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SlimeWire — Telegram Bot Guide</title>
+<meta name="description" content="The complete SlimeWire Telegram bot guide — trade by DM, scan any coin with SlimeShield, run Buy Bot alerts, and rally Raid Bot, step by step.">
+<meta property="og:title" content="SlimeWire — Telegram Bot Guide">
+<meta property="og:image" content="https://www.slimewire.org/assets/slimewire/hero-ogre.webp">
+<link rel="icon" type="image/svg+xml" href="/assets/slimewire/svg/slimewire-mark.svg">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=Cinzel:wght@700;900&display=swap" rel="stylesheet">
+<style>
+  :root{ --bg:#070f0a; --panel:#0d1a12; --panel2:#0a1410; --line:rgba(120,255,90,0.14); --line2:rgba(120,255,90,0.28);
+    --tx:#e6f5e0; --dim:#90a896; --green:#72ff23; --green2:#bbff63; --gold:#ffd24a; --blue:#5ab0ff; --purp:#b06bff; --red:#ff6b6b; }
+  *{box-sizing:border-box;}
+  html,body{margin:0;background:#050a07;color:var(--tx);font-family:Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased;line-height:1.55;}
+  .page{max-width:880px;margin:0 auto;background:var(--bg);}
+  .cover{position:relative;text-align:center;padding:88px 36px 80px;overflow:hidden;border-bottom:2px solid var(--line2);}
+  .cover .bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0.45;}
+  .cover::after{content:"";position:absolute;inset:0;background:radial-gradient(circle at 50% 40%,rgba(7,15,10,0.3),rgba(5,10,7,0.92));}
+  .cover .in{position:relative;z-index:2;}
+  .cover .logo{width:96px;height:96px;filter:drop-shadow(0 0 22px rgba(114,255,35,0.6));}
+  .cover .kick{color:var(--green2);font-weight:900;letter-spacing:5px;text-transform:uppercase;font-size:0.82rem;margin-top:10px;}
+  .cover h1{font-family:Cinzel,serif;font-size:3.1rem;margin:6px 0 2px;letter-spacing:2px;text-shadow:0 0 30px rgba(114,255,35,0.5);}
+  .cover h2{font-family:Cinzel,serif;font-size:1.4rem;margin:0;color:var(--green);letter-spacing:1px;}
+  .cover p{color:#cfe6d2;max-width:560px;margin:18px auto 0;font-size:1.02rem;}
+  .body{padding:8px 40px 50px;}
+  .sec{padding:40px 0 10px;border-top:1px solid var(--line);}
+  .sec:first-child{border-top:0;}
+  .sech{display:flex;align-items:center;gap:14px;margin:0 0 14px;}
+  .sech .num{flex:0 0 auto;width:46px;height:46px;border-radius:13px;background:linear-gradient(135deg,var(--green),var(--green2));color:#06140a;font-family:Cinzel,serif;font-weight:900;font-size:1.4rem;display:flex;align-items:center;justify-content:center;box-shadow:0 0 18px rgba(114,255,35,0.35);}
+  .sech .num.gold{background:linear-gradient(135deg,var(--gold),#b9892b);} .sech .num.blue{background:linear-gradient(135deg,var(--blue),#2d7fd0);} .sech .num.purp{background:linear-gradient(135deg,var(--purp),#7a3fd0);}
+  .sech h2{font-family:Cinzel,serif;font-size:1.7rem;margin:0;color:#fff;text-shadow:0 0 16px rgba(114,255,35,0.3);}
+  h3{font-size:1.15rem;margin:22px 0 8px;color:var(--green2);}
+  h4{font-size:1rem;margin:14px 0 4px;color:#fff;}
+  p,li{font-size:0.96rem;color:#cfe0cc;} .lead{color:#aebfb0;font-size:1.04rem;}
+  b{color:#fff;}
+  ul{padding-left:20px;margin:8px 0;} li{margin:5px 0;}
+  .steps{counter-reset:s;margin:14px 0;display:grid;gap:10px;}
+  .step{position:relative;background:var(--panel);border:1px solid var(--line2);border-radius:13px;padding:14px 16px 14px 56px;}
+  .step::before{counter-increment:s;content:counter(s);position:absolute;left:14px;top:13px;width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--green),var(--green2));color:#06140a;font-weight:900;display:flex;align-items:center;justify-content:center;font-size:0.95rem;}
+  .step b{color:var(--green2);}
+  .tip,.warn,.note{border-radius:0 10px 10px 0;padding:12px 16px;margin:14px 0;font-size:0.92rem;}
+  .tip{background:rgba(114,255,35,0.08);border-left:4px solid var(--green);}
+  .warn{background:rgba(255,107,107,0.08);border-left:4px solid var(--red);}
+  .note{background:rgba(90,176,255,0.08);border-left:4px solid var(--blue);}
+  .cmd{background:rgba(114,255,35,0.12);border:1px solid var(--line);border-radius:6px;padding:1px 8px;font-family:ui-monospace,Menlo,monospace;font-size:0.86rem;color:var(--green2);white-space:nowrap;}
+  .toc{background:var(--panel);border:1px solid var(--line2);border-radius:14px;padding:20px 24px;margin:26px 0 8px;}
+  .toc h3{margin:0 0 10px;color:#fff;} .toc ol{columns:2;column-gap:30px;margin:0;padding-left:18px;} .toc li{margin:6px 0;font-weight:700;} .toc a{color:var(--green2);text-decoration:none;}
+  .nav-tbl{display:grid;gap:8px;margin:12px 0;}
+  .nav-row{display:grid;grid-template-columns:215px 1fr;gap:12px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:11px 14px;align-items:start;}
+  .nav-row .k{font-weight:900;color:var(--green2);font-family:ui-monospace,Menlo,monospace;font-size:0.9rem;} .nav-row .v{color:var(--dim);font-size:0.9rem;}
+  .cta-wrap{margin-top:24px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap;}
+  .dl{display:inline-block;background:linear-gradient(135deg,var(--green),var(--green2));color:#06140a;font-weight:900;text-decoration:none;border-radius:12px;padding:13px 26px;box-shadow:0 0 28px rgba(114,255,35,0.4);}
+  .dl.ghost{background:linear-gradient(135deg,#0e1d13,#0a1410);border:2px solid var(--green);color:#fff;box-shadow:0 0 24px rgba(114,255,35,0.18);}
+  .drip{position:absolute;top:-2px;width:52px;opacity:0.55;z-index:1;pointer-events:none;filter:drop-shadow(0 4px 10px rgba(0,0,0,0.5));}
+  .drip.l{left:7%;} .drip.r{right:7%;transform:scaleX(-1);}
+  .foot{background:#0a1410;border-top:2px solid var(--line2);color:var(--dim);text-align:center;padding:26px;font-size:0.84rem;} .foot b{color:var(--green2);} .foot a{color:var(--green2);text-decoration:none;}
+  @media(max-width:560px){ .nav-row{grid-template-columns:1fr;gap:3px;} .toc ol{columns:1;} .cover h1{font-size:2.3rem;} .body{padding:8px 20px 40px;} }
+  @media print{
+    *{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+    @page{ margin:0; }
+    html,body,.page{ background:var(--bg) !important; }
+    .sech{ break-after:avoid; break-inside:avoid; }
+    .step,.nav-row,.tip,.warn,.note,img{ break-inside:avoid; }
+    h2,h3,h4{ break-after:avoid; }
+    .no-print{ display:none !important; }
+    .cover{ break-after:page; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="cover">
+    <img class="bg" src="/assets/slimewire/hero-ogre.webp" alt="" onerror="this.style.display='none'">
+    <img class="drip l no-print" src="/assets/slimewire/drip-slime.webp" alt="" onerror="this.style.display='none'">
+    <img class="drip r no-print" src="/assets/slimewire/drip-slime.webp" alt="" onerror="this.style.display='none'">
+    <div class="in">
+      <img class="logo" src="/assets/slimewire/svg/slimewire-mark.svg" alt="SlimeWire">
+      <div class="kick">Telegram Bot · User Guide</div>
+      <h1>SLIMEWIRE BOT</h1>
+      <h2>🐸 trade · scan · raid · alert 🧌</h2>
+      <p>Everything the SlimeWire Telegram bot can do — trade right from your DMs, get a SlimeShield read on any coin, run live Buy Bot alerts in your group, and rally a Raid on X. Built for degens. Easy for newbies.</p>
+      <div class="cta-wrap no-print">
+        <a class="dl" href="https://t.me/SlimeWireBot" target="_blank" rel="noreferrer">▶ Open @SlimeWireBot</a>
+        <a class="dl ghost" href="#" onclick="window.print();return false;">⬇ Save as PDF</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="body">
+    <p class="lead" style="margin-top:24px">The same SlimeWire engine that runs <b>slimewire.org</b> lives inside Telegram too. In your DMs it's a <b>full trading terminal</b> — buy, sell, track positions, see PnL. In a group it's an <b>all-in-one community bot</b> — Scan, Buy alerts, and Raids, each toggled on or off by an admin. This guide walks every part, step by step.</p>
+
+    <div class="toc no-print">
+      <h3>Jump to</h3>
+      <ol>
+        <li><a href="#start">1 · Get Started</a></li>
+        <li><a href="#trade">2 · Trading (in DM)</a></li>
+        <li><a href="#scan">3 · Scan Bot</a></li>
+        <li><a href="#raid">4 · Raid Bot</a></li>
+        <li><a href="#buy">5 · Buy Bot</a></li>
+        <li><a href="#group">6 · Group Setup &amp; Toggles</a></li>
+      </ol>
+    </div>
+
+    <!-- 1 -->
+    <section class="sec" id="start">
+      <div class="sech"><span class="num">1</span><h2>Get Started</h2></div>
+      <p>Open <a class="cmd" href="https://t.me/SlimeWireBot" target="_blank" rel="noreferrer">@SlimeWireBot</a> in Telegram and press <b>Start</b>. That's it — no sign-up, no seed phrase.</p>
+      <div class="steps">
+        <div class="step"><b>Open the bot.</b> Tap <span class="cmd">/start</span> or <span class="cmd">/menu</span> any time to bring up the main menu with every button.</div>
+        <div class="step"><b>Get a wallet.</b> From the menu, create a SlimeWire wallet — your backup downloads instantly. Keep that backup safe; it's the only copy.</div>
+        <div class="step"><b>Fund it.</b> Send a little SOL to your new wallet address (the bot shows it under <span class="cmd">/wallets</span>). Start small.</div>
+        <div class="step"><b>Link the website (optional).</b> Send <span class="cmd">/web</span> for a one-time login code, then enter it at <b>slimewire.org</b> — same wallets, same positions, on the big screen.</div>
+      </div>
+      <div class="tip"><b>Tip:</b> Paste any Solana contract address (CA) straight into the chat and the bot instantly replies with a <b>SlimeShield</b> verdict, chart, and trade buttons — no command needed.</div>
+    </section>
+
+    <!-- 2 -->
+    <section class="sec" id="trade">
+      <div class="sech"><span class="num">2</span><h2>Trading — in your DMs</h2></div>
+      <p>Trading runs in a <b>private chat</b> with the bot (it'll say "open me in DM to trade" if you try it in a group — your wallet stays private). Here's the full command set:</p>
+      <div class="nav-tbl">
+        <div class="nav-row"><div class="k">/trade</div><div class="v">Open the buy / sell menu — pick a token, amount, and wallet, then confirm.</div></div>
+        <div class="nav-row"><div class="k">/buy</div><div class="v">Jump straight to a buy. Paste the CA when asked (or send <span class="cmd">/buy</span> with a CA), set your SOL amount, confirm.</div></div>
+        <div class="nav-row"><div class="k">/sell</div><div class="v">Sell a position — choose the coin and the % to sell (25 / 50 / 100 or custom).</div></div>
+        <div class="nav-row"><div class="k">paste a CA</div><div class="v">Drops a scan card with one-tap <b>Quick Buy</b> + chart. The fastest way in.</div></div>
+        <div class="nav-row"><div class="k">/positions</div><div class="v">Your open bags — live price, P&amp;L %, and sell buttons on each.</div></div>
+        <div class="nav-row"><div class="k">/pnl</div><div class="v">Your results + a shareable PnL card. Honest accounting (near-breakevens count as scratches, not fake wins).</div></div>
+        <div class="nav-row"><div class="k">/wallets</div><div class="v">Your saved wallets + addresses. Create, back up, or switch the active one.</div></div>
+        <div class="nav-row"><div class="k">/balances</div><div class="v">SOL + token balances across your wallets.</div></div>
+      </div>
+      <h3>How a buy works</h3>
+      <div class="steps">
+        <div class="step"><b>Pick the coin.</b> Paste a CA, or tap a coin from a scan / <span class="cmd">/alpha</span> card.</div>
+        <div class="step"><b>Set the amount.</b> Enter how much SOL to spend. Slippage and your active wallet are shown — adjust if needed.</div>
+        <div class="step"><b>Confirm.</b> The bot fires the swap and replies with the fill. The coin appears under <span class="cmd">/positions</span>.</div>
+        <div class="step"><b>Sell when ready.</b> Open <span class="cmd">/positions</span> and tap a sell %, or send <span class="cmd">/sell</span>. Exits use escalating slippage so the order actually lands on a fast-moving curve.</div>
+      </div>
+      <div class="warn"><b>Real money.</b> Every buy/sell is a live on-chain trade. The bot reads risk (SlimeShield) and shows warnings, but it never guarantees profit and won't override a clear danger signal silently. Trade amounts you can afford to lose.</div>
+    </section>
+
+    <!-- 3 -->
+    <section class="sec" id="scan">
+      <div class="sech"><span class="num blue">3</span><h2>Scan Bot — read any coin</h2></div>
+      <p>Scan Bot is your instant due-diligence. It works in your DMs <b>and</b> in any group where an admin turned it on. Drop a CA, get the truth.</p>
+      <div class="nav-tbl">
+        <div class="nav-row"><div class="k">/look &lt;CA&gt;</div><div class="v">Full <b>SlimeShield</b> read on a token — verdict (BUY / CAUTION / RISK / AVOID), liquidity, MC, age, dev/security flags, socials, chart + trade buttons.</div></div>
+        <div class="nav-row"><div class="k">paste a CA</div><div class="v">Same scan card, no command. In groups this is the Scan Bot auto-reply (admins toggle it).</div></div>
+        <div class="nav-row"><div class="k">/alpha</div><div class="v">The top scanner picks right now — the best-scoring live coins.</div></div>
+        <div class="nav-row"><div class="k">/ape</div><div class="v">One fresh low-MC shot right now, for when you just want the next degen play.</div></div>
+        <div class="nav-row"><div class="k">/kols</div><div class="v">What tracked KOL / smart-money wallets are buying this minute.</div></div>
+        <div class="nav-row"><div class="k">/receipts</div><div class="v">SlimeShield's rug-call receipts + hit rate — proof the shield actually catches them.</div></div>
+        <div class="nav-row"><div class="k">/proof</div><div class="v">The live engine track record + proof wall.</div></div>
+      </div>
+      <div class="tip"><b>Group bonus:</b> with Scan Bot on, pasting an <b>X / tweet link</b> in the group unfurls the full post (image/video + text) right in chat.</div>
+      <div class="note"><b>SlimeShield verdicts:</b> <b>BUY</b> = clean read · <b>CAUTION</b> = trade small / use protection · <b>RISK</b> = watch only · <b>AVOID</b> = genuine danger (active mint/freeze authority, honeypot signals). Brand-new coins start "checking" until the on-chain read lands.</div>
+    </section>
+
+    <!-- 4 -->
+    <section class="sec" id="raid">
+      <div class="sech"><span class="num purp">4</span><h2>Raid Bot — rally your crew on X</h2></div>
+      <p>Raid Bot turns an X post into a live, tracked engagement raid for your group: set the targets, it watches likes / reposts / replies / bookmarks and reports progress, with a public board.</p>
+      <div class="nav-tbl">
+        <div class="nav-row"><div class="k">/raid &lt;X post link&gt;</div><div class="v">Opens the raid menu — pick targets (likes, reposts, replies, bookmarks), timer, and reward, then launch.</div></div>
+        <div class="nav-row"><div class="k">/raid &lt;link&gt; $SYM 500 150 80 50</div><div class="v">Power form — skip the menu. That's 500 likes · 150 reposts · 80 replies · 50 bookmarks for $SYM.</div></div>
+      </div>
+      <div class="steps">
+        <div class="step"><b>Drop the post.</b> Send <span class="cmd">/raid</span> with your X post link in the group.</div>
+        <div class="step"><b>Set the goal.</b> Use the menu, or the power form above to set it in one line.</div>
+        <div class="step"><b>Rally.</b> The bot pins the targets and refreshes engagement, ticking each metric toward its goal.</div>
+        <div class="step"><b>Track it anywhere.</b> Every raid also shows on the board → <a class="cmd" href="https://www.slimewire.org/raids" target="_blank" rel="noreferrer">slimewire.org/raids</a></div>
+      </div>
+      <div class="note">Engagement is read for free (no paid X API key needed), so raids just work out of the box.</div>
+    </section>
+
+    <!-- 5 -->
+    <section class="sec" id="buy">
+      <div class="sech"><span class="num gold">5</span><h2>Buy Bot — live buy alerts in your group</h2></div>
+      <p>Buy Bot posts a card in your group every time someone buys your coin — the classic "green candle hype" loop, with a one-tap Quick-Buy link so newcomers can ape right back.</p>
+      <div class="steps">
+        <div class="step"><b>Turn it on.</b> In the group, an admin sends <span class="cmd">/buybot on</span> (or opens <span class="cmd">/settings</span>).</div>
+        <div class="step"><b>Lock the token.</b> Paste your coin's CA in the group — Buy Bot locks onto it and starts posting its buys. (Change it any time by setting a new token.)</div>
+        <div class="step"><b>Tune the alerts.</b> Use the commands below to hide tiny buys and set your hype emoji.</div>
+      </div>
+      <div class="nav-tbl">
+        <div class="nav-row"><div class="k">/buybot on · off</div><div class="v">Turn Buy Bot on or off for this group (admins).</div></div>
+        <div class="nav-row"><div class="k">/minbuy 0.5</div><div class="v">Only alert on buys ≥ 0.5 SOL (0 = show every buy). Cuts dust spam.</div></div>
+        <div class="nav-row"><div class="k">/setbuyemoji 🐸 0.1</div><div class="v">Set the hype emoji + how much SOL each emoji = . Here: one 🐸 per 0.1 SOL, so a 1 SOL buy shows ten 🐸.</div></div>
+      </div>
+      <div class="tip"><b>Default emoji:</b> 🟢 at one per 0.15 SOL. Pick anything that matches your coin's vibe — bigger buys = a longer emoji wall = more hype.</div>
+    </section>
+
+    <!-- 6 -->
+    <section class="sec" id="group">
+      <div class="sech"><span class="num">6</span><h2>Group Setup &amp; Toggles</h2></div>
+      <p>Add <a class="cmd" href="https://t.me/SlimeWireBot" target="_blank" rel="noreferrer">@SlimeWireBot</a> to your group, make it an <b>admin</b> (so it can post + read), then turn on the modules you want. Every module is <b>off by default</b> and only an admin can flip them.</p>
+      <div class="nav-tbl">
+        <div class="nav-row"><div class="k">/settings</div><div class="v">The control panel — see which modules are on and toggle them with buttons.</div></div>
+        <div class="nav-row"><div class="k">/scan on · off</div><div class="v">Scan Bot — auto-scan pasted CAs + unfurl X links.</div></div>
+        <div class="nav-row"><div class="k">/buybot on · off</div><div class="v">Buy Bot — live buy-alert cards (see section 5).</div></div>
+        <div class="nav-row"><div class="k">/raid on · off</div><div class="v">Raid Bot — the <span class="cmd">/raid</span> command + engagement tracking (see section 4).</div></div>
+        <div class="nav-row"><div class="k">/rose on · off</div><div class="v">Rose Manager — new-member welcome, anti-link filtering, and moderation.</div></div>
+        <div class="nav-row"><div class="k">/slimewire on · off</div><div class="v">SlimeWire engine alerts in this chat (admins) — the bot's own live signals.</div></div>
+        <div class="nav-row"><div class="k">/mywins on · off</div><div class="v">Post <b>your</b> take-profit wins in this chat — your own flex, opt-in per chat.</div></div>
+      </div>
+      <div class="warn"><b>Admins only.</b> Module toggles are admin-gated, and the bot needs admin rights in the group to post alerts and read messages. Add it as an admin first or the toggles won't take.</div>
+      <p style="margin-top:18px">That's the whole bot. Trade in your DMs, scan anything, and run your community's Buy + Raid hype from one place — the same engine behind <b>slimewire.org</b>.</p>
+    </section>
+  </div>
+
+  <div class="foot">
+    <b>SlimeWire</b> · <a href="https://t.me/SlimeWireBot" target="_blank" rel="noreferrer">@SlimeWireBot</a> · <a href="https://www.slimewire.org">slimewire.org</a> · <a href="/manual">Full site guide</a><br>
+    Not financial advice. You're responsible for your own trades, wallets, and keys. 🐸
+  </div>
+</div>
+</body>
+</html>
