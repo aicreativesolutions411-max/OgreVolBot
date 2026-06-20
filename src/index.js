@@ -2500,55 +2500,29 @@ async function pollPopRadar() {
         } catch {} finally { _popSrcBusy = false; }
       })();
     }
-    let creations = [];
-    try { creations = pumpPortalStream.getCreationCandidates({ maxAgeMs: 30 * 60_000, limit: 60 }).map((r) => r.tokenMint).filter(Boolean); } catch {}
-    const watch = [...new Set([...popLiveMints.slice(0, 16), ...creations.slice(0, 8), ...popHeldMints.keys()])].filter((m) => !popUnroutable.has(m)).slice(0, 24);
-    for (let i = 0; i < watch.length; i += 8) {           // swap-api fast-poll the watchlist for NEW trades
-      await Promise.all(watch.slice(i, i + 8).map(async (mint) => {
+    // Pop is now SPIKE-SOURCED (exitable-only). The on-curve INFLOW radar is RETIRED: its candidates
+    // were all gated out by the liquidity requirement, and its 24-coin swap-api poll + per-coin Alchemy
+    // ROUTE-CHECKS (getMintSafetyInfo) were starving the Pairs page — the live-feed safety filter hits
+    // the SAME Alchemy "get mint safety info" budget, so fresh builds timed out. We now only swap-api
+    // poll the OPEN pop positions, so the engine's momentum-fade keeps inflow data for them. Everything
+    // we ENTER comes from the FREE DexScreener spike scan below — no RPC, no 24-coin poll.
+    const held = [...popHeldMints.keys()].filter((m) => !popUnroutable.has(m)).slice(0, 8);
+    if (held.length) {
+      await Promise.all(held.map(async (mint) => {
         let j = null;
         try { j = await fetch(`https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=40`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(5000) }).then((r) => r.ok ? r.json() : null); } catch {}
         const trades = (j && Array.isArray(j.trades)) ? j.trades : [];
-        if (!trades.length) return;
-        let seen = popSeenTx.get(mint); if (!seen) { seen = new Set(); popSeenTx.set(mint, seen); }
-        for (const t of trades) {
-          const sig = String(t.tx || t.slotIndexId || ""); if (!sig || seen.has(sig)) continue; seen.add(sig);
-          popIngestTrade(mint, { at: now, side: t.type, solAmount: t.amountSol ?? t.quoteAmount, trader: t.userAddress });
+        if (trades.length) {
+          let seen = popSeenTx.get(mint); if (!seen) { seen = new Set(); popSeenTx.set(mint, seen); }
+          for (const t of trades) {
+            const sig = String(t.tx || t.slotIndexId || ""); if (!sig || seen.has(sig)) continue; seen.add(sig);
+            popIngestTrade(mint, { at: now, side: t.type, solAmount: t.amountSol ?? t.quoteAmount, trader: t.userAddress });
+          }
+          if (seen.size > 200) { const a = [...seen]; popSeenTx.set(mint, new Set(a.slice(a.length - 150))); }
         }
-        if (seen.size > 200) { const a = [...seen]; popSeenTx.set(mint, new Set(a.slice(a.length - 150))); }
+        const _m = popMetrics(mint, now);     // keep the held position's peak-inflow fresh for the engine fade
+        if (_m) { const _h = popHeldMints.get(mint); if (_h && _m.inflowNow > _h.peak) _h.peak = _m.inflowNow; if (_m.inflowNow > (popPeakInflow.get(mint) || 0)) popPeakInflow.set(mint, _m.inflowNow); }
       }));
-    }
-    for (const mint of watch) {                            // score -> ignition candidates + peak inflow
-      const m = popMetrics(mint, now); if (!m) continue;
-      if (m.inflowNow > (popPeakInflow.get(mint) || 0)) popPeakInflow.set(mint, m.inflowNow);
-      const _h = popHeldMints.get(mint); if (_h && m.inflowNow > _h.peak) _h.peak = m.inflowNow;   // track peak SINCE entry for the held position's fade
-      const score = popIgnitionScore(m);
-      if (score >= POP_IGNITION_FIRE) {
-        // ROUTE FILTER (background, once per coin): confirm it's routable (not Token-2022 / no trusted
-        // pool — the "rugs that won't show on routes"). getMintSafetyInfo is cached 6h.
-        if (!_popRouteChecked.has(mint)) {
-          _popRouteChecked.add(mint);
-          // HONEYPOT + ROUTE filter — MIRRORS the buy path (assertTokenBuyBaseSafety) so we never
-          // exclude a coin the buyer would happily trade. On-chain reality (verified 2026-06-19):
-          // ~44% of active pump coins are now Token-2022, and they're tradeable — pump.fun trades
-          // its own Token-2022 mints, and our buy path accepts them as a TRUSTED pump pool (mint
-          // ends in "pump"). So Token-2022 alone is NOT un-routable; only Token-2022 OFF a trusted
-          // pool is. The real traps are a live freeze authority (can freeze your bag = honeypot) or
-          // a live mint authority (infinite dilution) — both of which the buy path also rejects.
-          // Blanket-excluding all Token-2022 was starving pop of the biggest poppers. Cached 6h.
-          try {
-            const s = await getMintSafetyInfo(mint);
-            const isT22 = s && s.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58();
-            const trustedPool = String(mint).toLowerCase().endsWith("pump") || String(mint).toLowerCase().endsWith("bonk");
-            if (s && (s.freezeAuthority || s.mintAuthority || (isT22 && !trustedPool))) popUnroutable.add(mint);
-          } catch {}
-          if (_popRouteChecked.size > 4000) _popRouteChecked.clear();
-        }
-        if (popUnroutable.has(mint)) continue;
-        const prev = popCandidates.get(mint);
-        const sym = (pumpPortalStream.getCreationEntry(mint)?.event?.symbol) || (prev && prev.symbol) || shortMint(mint);
-        popCandidates.set(mint, { at: now, score, mc: (prev && prev.mc) || 0, symbol: sym, inflowNow: m.inflowNow });
-        if (!prev) console.log(`[autopilot:info] ⚡ POP ignition ${sym} — accel ${m.accel.toFixed(1)}x · ${m.inflowNow.toFixed(2)} SOL/8s · ${m.uniqBuyers} buyers · score ${Math.round(score)}`);
-      }
     }
     // ===== SPIKE RADAR — the fix for "it misses the coins VISIBLY ripping on DexScreener". Score the
     // WHOLE broad live feed (the ~140 rows we ALREADY fetched) by jumpScore: a real VOLUME SURGE +
@@ -2571,14 +2545,11 @@ async function pollPopRadar() {
       popCandidates.set(mint, { at: now, score: Math.max(js, (prev && prev.score) || 0), mc, symbol: sym, inflowNow: (prev && prev.inflowNow) || 0, liq: Number(r.liquidityUsd) || 0, m5: Number(r.m5) || 0, spike: true });
       if (!prev || !prev.spike) console.log(`[autopilot:info] ⚡ POP spike ${sym} — m5 +${(Number(r.m5) || 0).toFixed(0)}% · vol/liq ${((Number(r.volume5m) || 0) / Math.max(1, Number(r.liquidityUsd) || 0)).toFixed(1)}x · $${Math.round(mc)} MC · score ${Math.round(js)}`);
     }
-    // RADAR HEARTBEAT (~30s) — makes a quiet pop feed diagnosable: is it starved of flow data, or is
-    // the market genuinely just not popping right now? Shows watch size, how many have live trade flow,
-    // and the BEST ignition score available vs the fire threshold.
+    // RADAR HEARTBEAT (~30s) — makes a quiet pop feed diagnosable: how many live movers we scanned and
+    // how many are actually SPIKING (jumpScore ≥ fire) right now, vs the market just being quiet.
     _popHb = (_popHb + 1) % 10;
     if (_popHb === 0) {
-      let withFlow = 0, best = 0;
-      for (const mint of watch) { const m = popMetrics(mint, now); if (m) { withFlow++; const s = popIgnitionScore(m); if (s > best) best = s; } }
-      console.log(`[autopilot:info] 📡 Pop Radar: ${popLiveRows.length} live movers scanned, ${_spikeCount} spiking now (best jump ${Math.round(_spikeBest)} @${POP_SPIKE_FIRE}) · ${withFlow}/${watch.length} on-curve flow (best ignition ${Math.round(best)} @${POP_IGNITION_FIRE})`);
+      console.log(`[autopilot:info] 📡 Pop Radar: ${popLiveRows.length} live movers scanned, ${_spikeCount} spiking now (best jump ${Math.round(_spikeBest)} @${POP_SPIKE_FIRE}) · ${held.length} held`);
     }
     for (const [m, r] of popCandidates) { if (now - r.at > 20_000) popCandidates.delete(m); }   // a pop is brief
     if (popTrades.size > 80) { for (const [m, arr] of popTrades) { if (!arr.length || now - arr[arr.length - 1].at > 60_000) { popTrades.delete(m); popSeenTx.delete(m); popPeakInflow.delete(m); } } }
@@ -3697,7 +3668,11 @@ function loadConfig() {
   const madeOnSolKolLimit = Number.parseInt(process.env.MADE_ON_SOL_KOL_LIMIT || "20", 10);
   const madeOnSolCacheTtlMs = Number.parseInt(process.env.MADE_ON_SOL_CACHE_TTL_MS || "900000", 10);
   const kolUseSolanaTrackerFallback = parseBoolean(process.env.KOL_USE_SOLANA_TRACKER_FALLBACK || "false");
-  const livePairsRpcSafety = parseBoolean(process.env.LIVE_PAIRS_RPC_SAFETY || "true");
+  // OFF by default: the display feed must NOT block on per-coin RPC safety. It RPC-checked up to 120
+  // FRESH (uncached) coins via Alchemy getMintSafetyInfo (~3.5s each) every build, so the live/newest
+  // bucket timed out and fresh pairs never showed. Real protection is at BUY time (assertTokenBuyBaseSafety
+  // checks freeze/mint authority + Token-2022 pool). Set LIVE_PAIRS_RPC_SAFETY=true to re-enable.
+  const livePairsRpcSafety = parseBoolean(process.env.LIVE_PAIRS_RPC_SAFETY || "false");
   const livePairsRefreshSeconds = Number.parseInt(process.env.LIVE_PAIRS_REFRESH_SECONDS || "8", 10);
   const livePairsSharedCacheMs = Number.parseInt(process.env.LIVE_PAIRS_SHARED_CACHE_MS || "4000", 10);
   const livePairsImageEnrich = parseBoolean(process.env.LIVE_PAIRS_IMAGE_ENRICH || "true");
