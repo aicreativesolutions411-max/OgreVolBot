@@ -2435,7 +2435,7 @@ async function buildLiquidMovers() {
   const BUCKETS = ["live", "under1h", "under3h", "under1d"];
   const SORTS = ["liquidity", "volume", "momentum"];
   const jobs = [];
-  for (const b of BUCKETS) for (const s of SORTS) jobs.push(webLivePairs("autopilot", b, { sort: s }).catch(() => null));
+  for (const b of BUCKETS) for (const s of SORTS) jobs.push(webLivePairs("autopilot", b, { sort: s, feed: "ap" }).catch(() => null));
   let feeds = [];
   try { feeds = await Promise.all(jobs); } catch {}
   try { const trending = await autopilotTrendingRows(); if (trending && trending.length) feeds.push({ rows: trending }); } catch {}
@@ -2485,7 +2485,7 @@ async function pollPopRadar() {
           // starving it (pairs flicker / stale categories / dev-info timeouts). Rows are NORMALIZED so
           // jumpScore reads m5/h1 as NUMBERS (raw webLivePairs stores m5 as an object {priceChange}).
           const combos = [["live", "momentum"], ["live", "volume"], ["under1h", "momentum"], ["under1h", "volume"]];
-          const results = await Promise.all(combos.map(([b, s]) => webLivePairs("autopilot", b, { sort: s }).catch(() => null)));
+          const results = await Promise.all(combos.map(([b, s]) => webLivePairs("autopilot", b, { sort: s, feed: "ap" }).catch(() => null)));
           const seen = new Set(); const rows = [];
           for (const f of results) for (const r of (Array.isArray(f && f.rows) ? f.rows : [])) {
             if (!(r && r.tokenMint) || seen.has(r.tokenMint)) continue;
@@ -3011,7 +3011,7 @@ const autopilotEngine = createAutopilotEngine({
     } catch {}
   },
   getFreshFeed: async () => {
-    const feed = await webLivePairs("autopilot", "live", { sort: "fresh", force: true });
+    const feed = await webLivePairs("autopilot", "live", { sort: "fresh", force: true, feed: "ap" });
     let rows = Array.isArray(feed?.rows) ? feed.rows : [];
     // GRIND targets SURVIVED/climbed coins ($5-80k, aged past the first seconds). The
     // fresh/newest view is almost all brand-new sub-$5k launches, so grind starves on it
@@ -3023,8 +3023,8 @@ const autopilotEngine = createAutopilotEngine({
     if (mode === "grind") {
       try {
         const [vol, mom] = await Promise.all([
-          webLivePairs("autopilot", "live", { sort: "volume" }).catch(() => null),
-          webLivePairs("autopilot", "live", { sort: "momentum" }).catch(() => null)
+          webLivePairs("autopilot", "live", { sort: "volume", feed: "ap" }).catch(() => null),
+          webLivePairs("autopilot", "live", { sort: "momentum", feed: "ap" }).catch(() => null)
         ]);
         const seen = new Set(rows.map((r) => r.tokenMint));
         for (const extra of [vol, mom]) {
@@ -43625,7 +43625,12 @@ async function webLivePairsUnfiltered(userId, bucket = "live", options = {}) {
   const force = Boolean(options.force);
   // A category gets its OWN cache key (its own path) so tabs that used to share a bucket:sort pool
   // no longer cross. Non-category callers keep the bucket:sort key (unchanged).
-  const cacheKey = cat ? `cat:${cat}` : `${safeBucket}:${sort}`;
+  // FEED SEPARATION: the AUTOPILOT scanners pass feed:"ap" so they get a SEPARATE cache pool from the
+  // user-facing Pairs page — the two no longer share/thrash the same entries or trigger each other's
+  // background refreshes (the "autopilot + feeds clustering each other" problem). Each updates on its
+  // own cadence; the Pairs page cache is only ever touched by what the user is actually viewing.
+  const feedNs = String(options.feed || "").trim() ? `${String(options.feed).trim()}:` : "";
+  const cacheKey = feedNs + (cat ? `cat:${cat}` : `${safeBucket}:${sort}`);
   const externalKey = externalCacheKey(`web:livePairs:v6:${cacheKey}`, "global");
   const cached = livePairsSharedCache.get(cacheKey) || { cachedAt: 0, value: null, promise: null };
   if (!force && CONFIG.livePairsSharedCacheMs > 0 && cached.value && Date.now() - cached.cachedAt < CONFIG.livePairsSharedCacheMs) {
