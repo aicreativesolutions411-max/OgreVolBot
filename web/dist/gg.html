@@ -43,6 +43,13 @@
   nav.mainnav a{padding:7px 13px;border-radius:9px;font-size:13px;font-weight:600;color:var(--muted);white-space:nowrap;transition:.12s}
   nav.mainnav a:hover{color:var(--text);background:rgba(137,255,67,.05)}
   nav.mainnav a.active{color:var(--green);background:var(--green-dim)}
+  .navdrop{position:relative}
+  .navdrop .dropbtn{padding:7px 13px;border-radius:9px;font-size:13px;font-weight:600;color:var(--muted);white-space:nowrap}
+  .navdrop:hover .dropbtn,.navdrop:focus-within .dropbtn{color:var(--text);background:rgba(137,255,67,.05)}
+  .navdrop .dropmenu{display:none;position:absolute;top:calc(100% + 4px);left:0;min-width:200px;background:rgba(10,16,11,.99);border:1px solid var(--border);border-radius:12px;padding:6px;box-shadow:var(--glow);z-index:40}
+  .navdrop:hover .dropmenu,.navdrop:focus-within .dropmenu{display:block}
+  .navdrop .dropmenu a{display:block;padding:9px 12px;border-radius:8px;font-size:13px;color:var(--text);white-space:nowrap}
+  .navdrop .dropmenu a:hover{background:var(--green-dim);color:var(--green)}
   .topctrls{display:flex;align-items:center;gap:9px;flex:0 0 auto}
   .pastebtn,.searchbox,.walletpill,.iconbtn{height:34px;border:1px solid var(--border);border-radius:10px;background:rgba(8,13,9,.7);display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12px}
   .pastebtn{padding:0 12px}.pastebtn:hover{color:var(--text);border-color:rgba(137,255,67,.3)}
@@ -253,7 +260,17 @@
       <a data-route="trenches">Trenches</a>
       <a data-route="portfolio">Portfolio</a>
       <a data-route="wallet">Wallet</a>
-      <a href="/raids" target="_blank">Rewards</a>
+      <div class="navdrop">
+        <button class="dropbtn">Tools ▾</button>
+        <div class="dropmenu">
+          <a href="/launch" target="_blank">🚀 Launch a Coin</a>
+          <a href="/terminal" target="_blank">🔄 Swap</a>
+          <a href="/terminal" target="_blank">📦 Bundle Buy</a>
+          <a href="/terminal" target="_blank">📈 Volume Bot</a>
+          <a href="/terminal" target="_blank">👥 Copy / KOL Tracker</a>
+          <a href="/raids" target="_blank">⚔️ Raids &amp; Rewards</a>
+        </div>
+      </div>
     </nav>
     <div class="topctrls">
       <button class="pastebtn" id="pasteCa">📋 Paste CA</button>
@@ -504,6 +521,13 @@
   // ---------- trade ----------
   let tradeAmt="0.5",tradeSide="buy";
   function findRow(mint){return state.rows.find(r=>r.tokenMint===mint)||null;}
+  // Clean, instant, full-screen chart: DexScreener embed with the trades/info panels stripped
+  // (no flash, no OGRE intro, no zoomed-in chrome). Resolves token->primary pair automatically.
+  function chartIframe(mint,r){
+    const id=(r&&(r.pairAddress||r.raydiumPool))||mint;
+    const u="https://dexscreener.com/solana/"+encodeURIComponent(id)+"?embed=1&theme=dark&trades=0&info=0&chartLeftToolbar=0&chartTheme=dark&loadChartSettings=0&tabs=0&interval=15";
+    return'<iframe src="'+u+'" title="chart" loading="eager" allow="clipboard-write" style="width:100%;height:100%;border:0;display:block"></iframe>';
+  }
   async function renderTrade(){
     setActiveView("v-trade");
     const mint=state.mint;if(!mint){go("trending");return;}
@@ -511,7 +535,7 @@
     const view=$("#v-trade");
     view.innerHTML='<div class="trade"><div class="tradeMain">'+
         '<div class="thead" id="thead">'+(r?theadHtml(r):'<div class="ti"><b>'+short(mint)+'</b></div>')+'</div>'+
-        '<div class="chartwrap"><iframe src="/chart?ca='+encodeURIComponent(mint)+'&embed=1" title="chart"></iframe></div>'+
+        '<div class="chartwrap">'+chartIframe(mint,r)+'</div>'+
         '<div class="tstrip"><button class="on">Security</button><button onclick="GG.go(\'portfolio\')">My Positions</button>'+
           '<a class="chip" style="margin-left:auto;align-self:center" href="https://dexscreener.com/solana/'+encodeURIComponent(mint)+'" target="_blank">DexScreener ↗</a></div>'+
       '</div><div class="tradeSide">'+
