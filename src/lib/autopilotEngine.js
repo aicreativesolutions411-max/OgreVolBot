@@ -1707,7 +1707,17 @@ export function createAutopilotEngine(deps) {
     if (state.vault && state.vault.destination && state.live) {
       try { await doVaultSweep({ final: true }); } catch (e) { record("warn", `final vault sweep failed: ${e && e.message}`); }
     }
-    record("info", `Autopilot STOP (${reason}) — ${state.open.length === 0 ? "all positions flat" : `WARNING ${state.open.length} still open`}${state.secured ? ` · ${round(state.secured, 4)} SOL banked to safe wallet` : ""}`);
+    // HONEST FINAL NUMBER — snap the cash ledger to the REAL on-chain wallet before reporting the
+    // result. During a live session the synthetic bank can drift ABOVE the wallet (the Jito tip +
+    // priority fee per swap aren't debited from it, and an unconfirmed Jito sell books an optimistic
+    // mark-based estimate), and it only self-corrects when FULLY FLAT — which the churn rarely reaches.
+    // Without this, stop() returned status() off the drifted ledger, so the headline read e.g. +7%
+    // while the wallet had actually bled from 0.9 → 0.7. Reconcile here so the final equity/PnL is
+    // exactly the SOL in the wallet (+ whatever was swept to the safe wallet, tracked in secured).
+    if (state.live && state.open.length === 0) {
+      try { const ws = await getWalletSol(); if (Number.isFinite(ws) && ws >= 0) { state.walletSol = ws; state.bank = ws; } } catch {}
+    }
+    record("info", `Autopilot STOP (${reason}) — ${state.open.length === 0 ? "all positions flat" : `WARNING ${state.open.length} still open`}${state.secured ? ` · ${round(state.secured, 4)} SOL banked to safe wallet` : ""} · realized bank ${round(state.bank, 4)} SOL`);
     await savePoint();
     return status();
   }
@@ -2001,6 +2011,16 @@ export function createAutopilotEngine(deps) {
               // Lock the PnL basis to the real starting balance the first time we're flat with a
               // known wallet — so the headline reads "money change since start", never a phantom.
               if (state.equityBasis == null) state.equityBasis = ws + (state.secured || 0);
+            } else if (now() - (state.lastTradeAt || 0) > 30_000) {
+              // SETTLED-BUT-OPEN reconcile: no buy/sell for 30s → every swap has landed on-chain, so
+              // ws is now PURE SOL cash (tokens aren't counted in the SOL balance) and deployedCost
+              // (open bags at cost) is added on top in equity()/status(). Snapping bank to ws here
+              // absorbs the fee/tip/slippage + estimated-proceeds drift CONTINUOUSLY, not only when
+              // fully flat (which the churn rarely reaches) — so the headline can't sit green while the
+              // wallet has quietly bled down. The 20s quiet guard avoids the settlement-lag double-count
+              // (a just-spent buy still showing in ws while its bag also counts) the flat-only rule was
+              // protecting against.
+              state.bank = ws;
             }
           }
         } catch {}
@@ -2189,6 +2209,7 @@ export function createAutopilotEngine(deps) {
       proceeds = estProceeds;
     }
     state.bank += proceeds;
+    state.lastTradeAt = now();   // a sell just fired — defer the settled-but-open reconcile until it lands
     pos.realized = (pos.realized || 0) + proceeds;
 
     // Count a WIN only when booked proceeds clear the entry cost by a real, FEE-CLEARING
@@ -2944,6 +2965,7 @@ export function createAutopilotEngine(deps) {
     }
 
     state.bank -= sizeSol;
+    state.lastTradeAt = now();   // mark a swap just fired — the settled-but-open wallet reconcile waits 30s past this
     state.tradeNo += 1;
     const source = sm ? (sm.source || "smart_money") : "fresh";
     const copyTier = sm ? (sm.copyTier || null) : null;

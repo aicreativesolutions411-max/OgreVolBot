@@ -978,6 +978,61 @@ test("live bank reconcile is flat-only — a held bag's cost is not double-count
   await engine.stop("test-done");
 });
 
+test("stop reconciles the headline to the REAL wallet — the '+7% while the wallet bled to 0.7' fix", async () => {
+  let t = 0;
+  let wallet = 0.9;                              // session starts at 0.9 SOL
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => [],
+    getWalletSol: async () => wallet,
+    sellPercent: async () => ({ ok: true }),
+    now: () => t,
+    persist: async () => {}
+  });
+  await engine.start({ solBudget: 0.9, minutes: 60, mode: "normal", live: true, walletPubkey: "W".repeat(44) });
+  t += 2200; await engine._hunt();              // first flat reconcile → basis = 0.9, bank = 0.9
+  assert.equal(engine.status().start, 0.9, "basis captured at the real 0.9 start");
+  // Simulate a LOSING session whose synthetic ledger DRIFTED above the wallet — the Jito tip + priority
+  // fee per swap aren't debited from it and unconfirmed sells booked optimistic estimates, inflating
+  // bank to 0.963 (a fake +7%) while the wallet actually bled to 0.7.
+  const st = engine._state();
+  st.bank = 0.963;
+  wallet = 0.7;
+  assert.ok(engine.status().pnlPct > 5, "pre-stop headline is still on the drifted ledger (the reported bug)");
+  // Stop must snap the ledger to the REAL wallet — the final number is the truth, a real ~-22%.
+  const s = await engine.stop("manual");
+  assert.ok(Math.abs(s.bank - 0.7) < 0.001, `stop snaps bank to the real wallet (got ${s.bank})`);
+  assert.ok(s.pnlPct < -15, `final headline shows the REAL loss, not +7% (got ${s.pnlPct}%)`);
+});
+
+test("settled-but-open reconcile: after 30s quiet, bank snaps to the real wallet even while holding a bag", async () => {
+  let t = 0;
+  let wallet = 1.0;
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => [],
+    getWalletSol: async () => wallet,
+    sellPercent: async () => ({ ok: true }),
+    now: () => t,
+    persist: async () => {}
+  });
+  await engine.start({ solBudget: 1, minutes: 60, mode: "normal", live: true, walletPubkey: "W".repeat(44) });
+  t += 2200; await engine._hunt();              // flat reconcile → bank=1.0, basis=1.0
+  // Hold a bag; the synthetic ledger drifted to 0.95 (fee/estimate drift) while the wallet's real cash
+  // is 0.6 (0.4 is in the bag). lastTradeAt is set "now"; swaps settle within 30s.
+  const st = engine._state();
+  st.bank = 0.95;
+  st.lastTradeAt = t;
+  st.open.push({ mint: "M".repeat(44), sym: "HOLD", costSol: 0.4, remFrac: 1, entryMc: 2300, lastMc: 2300, dispMc: 2300, entryLiq: 6000, lastLiq: 6000, openedAt: t, peakPct: 0, remainingMoonFrac: 1, realized: 0 });
+  wallet = 0.6;                                  // real cash (the other 0.4 sits in the bag)
+  // Within 30s of the trade → keeps the synthetic ledger (the settlement-lag guard: a just-spent buy
+  // may still show in ws), so it must NOT clobber bank.
+  t += 10_000; await engine._hunt();
+  assert.ok(Math.abs(engine._state().bank - 0.95) < 0.001, "within 30s: keeps the synthetic ledger (settlement-lag guard)");
+  // Past 30s quiet → every swap has landed, ws is pure cash → bank snaps to it (bag added at cost on top).
+  t += 25_000; await engine._hunt();
+  assert.ok(Math.abs(engine._state().bank - 0.6) < 0.001, `after 30s quiet: bank snaps to real wallet cash (got ${engine._state().bank})`);
+  await engine.stop("test-done");
+});
+
 test("server autopilot sell adapter passes original token amount to sell helper", () => {
   const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
   const start = serverSource.indexOf("sellPercent: async (mint, pct, pos = null)");
