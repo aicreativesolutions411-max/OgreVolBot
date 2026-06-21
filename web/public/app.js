@@ -5699,6 +5699,7 @@ function render(options = {}) {
   renderKolDumpDetailsDrawer();
   renderReplayBeforeBuyDrawer();
   renderRadarDrawer();
+  renderWatchlistEditDrawer();
   renderReturnSummary();
   if (state.route === "terminal" && state.user && !state.returnSummaryFetched) {
     state.returnSummaryFetched = true;
@@ -18366,6 +18367,79 @@ function renderRadarDrawer() {
   setDrawerHtmlIfChanged(root, drawerHtml, ".radar-drawer");
 }
 
+// ============ BETTER WATCHLISTS — per-token notes + tags (tags = named lists) ============
+function watchlistRowMetaHtml(row) {
+  const tags = Array.isArray(row.tags) ? row.tags.slice(0, 6) : [];
+  const note = String(row.note || "").trim();
+  if (!tags.length && !note) return "";
+  return `<div class="wl-meta">
+    ${tags.length ? `<div class="wl-tags">${tags.map((tag) => `<span class="wl-tag">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
+    ${note ? `<small class="wl-note" title="${escapeHtml(note)}">📝 ${escapeHtml(note.slice(0, 90))}${note.length > 90 ? "…" : ""}</small>` : ""}
+  </div>`;
+}
+function watchlistRowForMint(mint) {
+  return (state.watchlist?.rows || []).find((row) => String(row.tokenMint) === String(mint)) || null;
+}
+function openWatchlistEdit(tokenMint = "", symbol = "") {
+  const row = watchlistRowForMint(tokenMint) || {};
+  state.watchlistEdit = {
+    open: true,
+    tokenMint: String(tokenMint || "").trim(),
+    symbol: String(symbol || row.symbol || "").trim(),
+    note: String(row.note || ""),
+    tags: (Array.isArray(row.tags) ? row.tags : []).join(", "),
+    status: ""
+  };
+  renderWatchlistEditDrawer();
+}
+function closeWatchlistEdit() { state.watchlistEdit = { open: false }; renderWatchlistEditDrawer(); }
+async function submitWatchlistMeta() {
+  const root = document.querySelector("[data-watchlist-edit-root]");
+  const edit = state.watchlistEdit || {};
+  if (!root || !edit.tokenMint) return;
+  const note = root.querySelector("[data-wl-note]")?.value || "";
+  const tags = (root.querySelector("[data-wl-tags]")?.value || "").split(",").map((tag) => tag.trim()).filter(Boolean);
+  try {
+    state.watchlistEdit = { ...edit, status: "Saving…" }; renderWatchlistEditDrawer();
+    const data = await api("/api/web/watchlist", { method: "POST", body: JSON.stringify({ action: "meta", tokenMint: edit.tokenMint, note, tags }) });
+    state.watchlist = data.watchlist || state.watchlist;
+    state.watchlistEdit = { open: false };
+    renderWatchlistEditDrawer();
+    render();
+  } catch (error) {
+    state.watchlistEdit = { ...edit, status: error.message || "Could not save." };
+    renderWatchlistEditDrawer();
+  }
+}
+function renderWatchlistEditDrawer() {
+  let root = document.querySelector("[data-watchlist-edit-root]");
+  if (!root) { root = document.createElement("div"); root.dataset.watchlistEditRoot = "true"; document.body.appendChild(root); }
+  const edit = state.watchlistEdit || {};
+  if (!edit.open) { if (root.__lastWlEdit !== "") { root.innerHTML = ""; root.__lastWlEdit = ""; } return; }
+  const html = `
+    <div class="slimeshield-drawer-backdrop" data-watchlist-edit-close></div>
+    <aside class="slimeshield-drawer radar-drawer" role="dialog" aria-modal="true" aria-label="Edit watchlist note and tags">
+      <header>
+        <div><span>📝 Note &amp; Tags</span><h3>${escapeHtml(edit.symbol || shortAddress(edit.tokenMint))}</h3></div>
+        <button type="button" aria-label="Close" data-watchlist-edit-close>Close</button>
+      </header>
+      <section>
+        <h4>Note</h4>
+        <textarea data-wl-note class="wl-edit-note" rows="3" maxlength="280" placeholder="e.g. waiting for a dip under 30k, dev looks solid">${escapeHtml(edit.note || "")}</textarea>
+        <h4>Tags <span class="slimeshield-muted" style="font-weight:400">· comma-separated, double as lists</span></h4>
+        <input data-wl-tags class="wl-edit-tags" type="text" maxlength="160" placeholder="Holding, Watching, High risk" value="${escapeHtml(edit.tags || "")}" />
+        <p class="slimeshield-muted">Filter your watchlist by any tag — they work like named lists.</p>
+        <div class="slimeshield-drawer-actions">
+          <button type="button" class="primary" data-watchlist-meta-save>Save</button>
+        </div>
+        ${edit.status ? `<small class="slimeshield-status">${escapeHtml(edit.status)}</small>` : ""}
+      </section>
+    </aside>`;
+  if (root.__lastWlEdit === html) return;
+  root.__lastWlEdit = html;
+  root.innerHTML = html;
+}
+
 function scheduleVisibleDevInfoPrefetch(reason = "render") {
   if (!featureEnabled("devInfoEnabled", true) || devInfoPrefetchTimer) return;
   if (state.route !== "terminal") return;
@@ -20230,17 +20304,29 @@ function watchlistHtml() {
     return `${createWalletSection()}${emptyState("Create or log in to save a watchlist", "You can browse scanners as a guest. Tap Watch after creating an account to save coins here.")}`;
   }
   const allRows = state.watchlist?.rows || [];
-  const rows = terminalFeedRowsWindow("watchlist", allRows);
+  const activeTag = state.watchlistTagFilter || "";
+  const allTags = [...new Set(allRows.flatMap((row) => (Array.isArray(row.tags) ? row.tags : [])))].slice(0, 20);
+  const tagMatch = activeTag && !allTags.some((tag) => tag.toLowerCase() === activeTag.toLowerCase()) ? "" : activeTag;
+  const filteredAll = tagMatch
+    ? allRows.filter((row) => Array.isArray(row.tags) && row.tags.some((tag) => String(tag).toLowerCase() === tagMatch.toLowerCase()))
+    : allRows;
+  const rows = terminalFeedRowsWindow("watchlist", filteredAll);
+  const tagFilterBar = allTags.length ? `
+        <div class="watchlist-tag-filter">
+          <button type="button" data-watchlist-tag="" data-active="${!tagMatch}">All ${allRows.length}</button>
+          ${allTags.map((tag) => `<button type="button" data-watchlist-tag="${escapeHtml(tag)}" data-active="${tagMatch.toLowerCase() === tag.toLowerCase()}">${escapeHtml(tag)}</button>`).join("")}
+        </div>` : "";
   return `
     <section class="terminal-layout watchlist-terminal">
       <main class="terminal-main">
         <div class="terminal-title-row">
           <div>
             <h3>Watchlist</h3>
-            <p>Saved coins refresh while this tab is open. Use Trade for the chart page or Quick Buy for fast preset/custom buys.</p>
+            <p>Saved coins refresh while this tab is open. Tag coins (Holding, Watching…) — tags work like named lists you can filter by.</p>
           </div>
-          <span>${rows.length}/${allRows.length} watched</span>
+          <span>${rows.length}/${filteredAll.length} watched</span>
         </div>
+        ${tagFilterBar}
         <div class="section-actions terminal-actions">
           <button class="primary" data-refresh-watchlist>${state.watchlistLoading ? "Refreshing..." : "Refresh Watchlist"}</button>
           <button data-tab="live">Cooks</button>
@@ -20327,6 +20413,7 @@ function tokenSignalRowHtml(row, index, options = {}) {
           </div>
           ${pairRiskBadgesHtml(row)}
           ${whyMovingHtml(row)}
+          ${options.context === "watchlist" ? watchlistRowMetaHtml(row) : ""}
         </div>
       </div>
       <div class="signal-cell" data-cell="Age"><span>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "age unknown")}</span><small>${escapeHtml(row.scalpSetup || row.momentum || `#${index + 1}`)}</small></div>
@@ -20341,6 +20428,7 @@ function tokenSignalRowHtml(row, index, options = {}) {
         ${primaryAction === "snipe" ? `<button type="button" class="primary" data-sniper-buy="${escapeHtml(row.tokenMint)}" title="Snipe buy">${escapeHtml(actionLabel)}</button>` : `<button type="button" class="primary" data-token-trade="${escapeHtml(row.tokenMint)}" data-token-trade-source="${escapeHtml(options.context || "signal-row")}" title="Open chart + buy/sell panel">Trade</button><button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="${escapeHtml(options.context || "signal-row")}" title="Quick buy with preset or custom SOL">${escapeHtml(quickBuyButtonLabel())}</button>`}
         <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}" title="Bundle buy across wallets">Bundle</button>
         ${isKolContext ? kolDumpSignalButtonHtml(row) : ""}
+        ${options.context === "watchlist" ? `<button type="button" data-watchlist-edit="${escapeHtml(row.tokenMint)}" data-watchlist-symbol="${escapeHtml(row.symbol || "")}" title="Edit note &amp; tags">✎</button>` : ""}
         ${watchButton}
         ${devInfoPillHtml(row)}
       </div>
@@ -23920,6 +24008,10 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (target.matches("[data-return-dismiss]")) { event.preventDefault(); void dismissReturnSummary(); return; }
+  if (target.matches("[data-watchlist-tag]")) { event.preventDefault(); state.watchlistTagFilter = target.dataset.watchlistTag || ""; render(); return; }
+  if (target.matches("[data-watchlist-edit]")) { event.preventDefault(); openWatchlistEdit(target.dataset.watchlistEdit || "", target.dataset.watchlistSymbol || ""); return; }
+  if (target.matches("[data-watchlist-edit-close]")) { event.preventDefault(); closeWatchlistEdit(); return; }
+  if (target.matches("[data-watchlist-meta-save]")) { event.preventDefault(); void submitWatchlistMeta(); return; }
   if (target.matches("[data-radar-open]")) {
     event.preventDefault();
     openRadarDrawer(target.dataset.radarOpen || "", target.dataset.radarSymbol || "");

@@ -35679,15 +35679,29 @@ async function updateWebWatchlist(userId, body = {}) {
   const key = String(userId);
   const { profile: existing } = ensureWebProfileDefaults(store, userId);
   const current = Array.isArray(existing.watchedTokens) ? existing.watchedTokens : [];
-  let next = current.filter((item) => item.tokenMint !== tokenMint);
+  const prev = current.find((item) => item.tokenMint === tokenMint) || {};
 
+  // "meta" edits note/tags IN PLACE (no reorder), so editing doesn't bump the row to the top.
+  if (action === "meta") {
+    const note = String(body.note ?? prev.note ?? "").slice(0, 280);
+    const tags = body.tags === undefined ? (Array.isArray(prev.tags) ? prev.tags : []) : normalizeWatchTags(body.tags);
+    const merged = current.map((item) => (item.tokenMint === tokenMint ? { ...item, note, tags } : item));
+    store.profiles[key] = { ...existing, watchedTokens: merged, updatedAt: new Date().toISOString() };
+    await writeWebAuthStore(store);
+    await audit("web_watchlist_meta", { userId, tokenMint, tagCount: tags.length });
+    return { watchlist: await webWatchlistRows(userId) };
+  }
+
+  let next = current.filter((item) => item.tokenMint !== tokenMint);
   if (action !== "remove") {
     next.unshift({
       tokenMint,
-      symbol: String(body.symbol || "").trim().slice(0, 24),
-      name: String(body.name || "").trim().slice(0, 80),
-      imageUrl: String(body.imageUrl || "").trim().slice(0, 500),
-      addedAt: new Date().toISOString()
+      symbol: String(body.symbol || prev.symbol || "").trim().slice(0, 24),
+      name: String(body.name || prev.name || "").trim().slice(0, 80),
+      imageUrl: String(body.imageUrl || prev.imageUrl || "").trim().slice(0, 500),
+      note: String(body.note ?? prev.note ?? "").slice(0, 280),
+      tags: body.tags === undefined ? (Array.isArray(prev.tags) ? prev.tags : []) : normalizeWatchTags(body.tags),
+      addedAt: prev.addedAt || new Date().toISOString()
     });
     next = next.slice(0, 100);
   }
@@ -35731,8 +35745,26 @@ function webTokenWatchRow(tokenMint, metadata = {}, saved = {}) {
   return {
     ...row,
     addedAt: saved.addedAt || "",
+    note: String(saved.note || ""),
+    tags: Array.isArray(saved.tags) ? saved.tags.slice(0, 8) : [],
     watched: true
   };
+}
+
+// Watchlist tags double as lightweight "named lists" — a token can sit in several at once.
+function normalizeWatchTags(input) {
+  const arr = Array.isArray(input) ? input : String(input || "").split(",");
+  const seen = new Set();
+  const out = [];
+  for (const raw of arr) {
+    const tag = String(raw || "").trim().replace(/[^\w \-]/g, "").slice(0, 24);
+    const key = tag.toLowerCase();
+    if (!tag || seen.has(key)) continue;
+    seen.add(key);
+    out.push(tag);
+    if (out.length >= 8) break;
+  }
+  return out;
 }
 
 async function webSlimewireTraders() {
