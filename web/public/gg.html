@@ -6,6 +6,7 @@
 <title>SlimeWire Terminal — Your Edge in Memecoin Trading</title>
 <meta name="description" content="SlimeWire Terminal — a fast Solana memecoin terminal. Discover fresh launches, trenches, trending pairs, and trade in one click.">
 <link rel="icon" type="image/png" href="/assets/slimewire/png/slimewire-mark.png?v=logo4">
+<script src="/config.js"></script>
 <style>
   :root{
     --bg:#050705;
@@ -333,6 +334,10 @@
   function toast(msg,err){ const t=$("#toast"); t.textContent=msg; t.className="toast show"+(err?" err":""); clearTimeout(t._t); t._t=setTimeout(()=>t.className="toast",3200); }
   function copy(text){ navigator.clipboard?.writeText(text).then(()=>toast("Copied "+short(text))).catch(()=>{}); }
   async function getJson(url,opts){ const r=await fetch(url,opts); let d=null; try{d=await r.json();}catch(e){} return {ok:r.ok,status:r.status,d}; }
+  // The API is served from the bot origin (ogrevolbot.onrender.com), not the static host.
+  // The main SPA routes through OGRE_PORTAL_CONFIG.apiBase the same way; mirror it here.
+  const API_BASE = (window.OGRE_PORTAL_CONFIG && window.OGRE_PORTAL_CONFIG.apiBase) || "https://ogrevolbot.onrender.com";
+  function api(path,opts){ return getJson(API_BASE+path, Object.assign({credentials:"include"}, opts||{})); }
 
   // ---------- state ----------
   const state = { route:"trending", mint:null, trendTab:"best", volTf:"h1", rows:[], pollT:null };
@@ -353,7 +358,7 @@
   async function fetchPairs(p){
     const q=new URLSearchParams({bucket:p.bucket||"live",sort:p.sort||"best"});
     if(p.cat) q.set("cat",p.cat);
-    const {ok,d}=await getJson("/api/web/live-pairs?"+q.toString());
+    const {ok,d}=await api("/api/web/live-pairs?"+q.toString());
     if(!ok||!d||!d.ok) return [];
     return (d.livePairs&&d.livePairs.rows)||[];
   }
@@ -560,7 +565,7 @@
     paintSide();
   }
   async function loadSecurity(mint){
-    const {ok,d}=await getJson("/api/web/slimeshield?mint="+encodeURIComponent(mint));
+    const {ok,d}=await api("/api/web/slimeshield?mint="+encodeURIComponent(mint));
     if(state.route!=="trade"||state.mint!==mint) return;
     const box=$("#secbox"); if(!box) return;
     const s=(d&&d.slimeshield)||null;
@@ -587,19 +592,19 @@
   async function execBuy(mint,amount){
     const a=Number(amount); if(!isFinite(a)||a<=0){ toast("Enter a SOL amount.",true); return; }
     const big=$("#bigbuy"); if(big){big.disabled=true;big.textContent="Submitting…";}
-    const {ok,status,d}=await getJson("/api/web/trade/buy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tokenMint:mint,walletIndex:0,amountSol:String(a),slippageBps:"400",tradeAttemptId:attemptId()})});
+    const {ok,status,d}=await api("/api/web/trade/buy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tokenMint:mint,walletIndex:0,amountSol:String(a),slippageBps:"400",tradeAttemptId:attemptId()})});
     if(big){big.disabled=false;big.textContent="Buy";}
     handleTradeResult(ok,status,d,"Buy");
   }
   async function execSell(mint,percent){
     const p=Number(String(percent).replace("%","")); if(!isFinite(p)||p<=0){ toast("Enter a sell %.",true); return; }
     const big=$("#bigbuy"); if(big){big.disabled=true;big.textContent="Submitting…";}
-    const {ok,status,d}=await getJson("/api/web/trade/sell",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tokenMint:mint,walletIndex:0,sellPercent:String(p),slippageBps:"400",tradeAttemptId:attemptId()})});
+    const {ok,status,d}=await api("/api/web/trade/sell",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tokenMint:mint,walletIndex:0,sellPercent:String(p),slippageBps:"400",tradeAttemptId:attemptId()})});
     if(big){big.disabled=false;}
     handleTradeResult(ok,status,d,"Sell");
   }
   async function quickBuy(mint){ // one-click from a list, default size
-    const {ok,status,d}=await getJson("/api/web/trade/buy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tokenMint:mint,walletIndex:0,amountSol:"0.1",slippageBps:"400",tradeAttemptId:attemptId()})});
+    const {ok,status,d}=await api("/api/web/trade/buy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tokenMint:mint,walletIndex:0,amountSol:"0.1",slippageBps:"400",tradeAttemptId:attemptId()})});
     handleTradeResult(ok,status,d,"Quick buy 0.1◎");
   }
   function handleTradeResult(ok,status,d,label){
@@ -612,7 +617,7 @@
   async function renderPortfolio(){
     setActiveView("v-portfolio"); subbarPortfolio();
     const view=$("#v-portfolio"); view.innerHTML='<div class="loading"><span class="spin"></span></div>';
-    const {ok,status,d}=await getJson("/api/web/positions?fast=true");
+    const {ok,status,d}=await api("/api/web/positions?fast=true");
     if(state.route!=="portfolio") return;
     if(status===401||status===403||!ok||!d||!d.ok){
       view.innerHTML='<div class="empty"><div class="big">👛</div><div><b>Connect on the full app to see your positions</b><br><span class="mut">Your wallets, balances and live PnL live in the SlimeWire app. Sign in there and your positions show here.</span></div><a class="cta" href="/terminal" target="_blank">Open Full App ↗</a></div>';
@@ -637,8 +642,12 @@
   async function loadSol(){
     try{
       const r=await fetch("https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112");
-      const d=await r.json(); const pr=d&&d.pairs&&d.pairs.find(p=>p.priceUsd);
-      if(pr&&pr.priceUsd){ const px="◎ SOL $"+Number(pr.priceUsd).toFixed(2); $("#solPx").textContent=px; }
+      const d=await r.json();
+      // Pick the deepest USD-quoted WSOL pair so the price is the real SOL/USD, not a junk pair.
+      const cands=(d&&d.pairs||[]).filter(p=>p.priceUsd&&/^(USDC|USDT)$/i.test(p.quoteToken&&p.quoteToken.symbol||"")&&/^So111/i.test(p.baseToken&&p.baseToken.address||""));
+      cands.sort((a,b)=>Number(b.liquidity&&b.liquidity.usd||0)-Number(a.liquidity&&a.liquidity.usd||0));
+      const pr=cands[0]||(d&&d.pairs||[]).sort((a,b)=>Number(b.liquidity&&b.liquidity.usd||0)-Number(a.liquidity&&a.liquidity.usd||0))[0];
+      if(pr&&pr.priceUsd){ $("#solPx").textContent="◎ SOL $"+Number(pr.priceUsd).toFixed(2); }
     }catch(e){}
   }
 
