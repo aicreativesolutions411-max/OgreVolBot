@@ -14310,6 +14310,26 @@ function openQuickBuy(tokenRef = {}, options = {}) {
     void quickPresetTrade(mint, { ...preset, walletIndex: presetWallet, walletIndexes: [presetWallet] });
     return;
   }
+  // No preset, but the user set the quick-buy amount in the bar above the pairs.
+  // "Set the price once, then click = buy" - fire instantly with no modal.
+  if (!options.forceModal) {
+    const barAmount = normalizedQuickBuyAmount(state.quickBuyAmountOverride);
+    const connectedBar = connectedBrowserWallet();
+    const barWallet = connectedBar?.publicKey
+      ? "connected"
+      : (state.wallets[0]?.index ? String(state.wallets[0].index) : "");
+    if (barAmount && Number(barAmount) > 0 && barWallet) {
+      void executeQuickBuyAmount({
+        tokenMint: mint,
+        walletIndex: barWallet,
+        amountSol: barAmount,
+        slippageBps: "400",
+        source: options.source || "quick-buy-bar",
+        ...presetExitDefaults()
+      }).catch((error) => setError(error.message));
+      return;
+    }
+  }
   const connected = connectedBrowserWallet();
   state.quickBuyModal = {
     open: true,
@@ -14892,24 +14912,9 @@ async function quickPresetBundle(tokenMint, presetOverride = null) {
     openManualTradeForToken(tokenMint, "bundle");
     return;
   }
-  // A bundle buy fires across multiple wallets, so confirm before launching it
-  // from a pair row - or send them to the Bundle page to review first.
-  if (!presetOverride) {
-    const walletCount = (preset.walletIndexes || []).length || (preset.walletGroup ? "group" : "saved");
-    const proceed = await slimeConfirm({
-      title: "Bundle Buy",
-      lines: [
-        `Bundle buy ${shortAddress(tokenMint)} with preset "${preset.name || "Fast Bundle"}" across ${walletCount} wallet(s)?`,
-        "Cancel opens the Bundle page to review first."
-      ],
-      confirmLabel: "Buy Now",
-      cancelLabel: "Review First"
-    });
-    if (!proceed) {
-      openManualTradeForToken(tokenMint, "bundle");
-      return;
-    }
-  }
+  // Preset already saved = one click = buy. Fill the bundle out once (the no-preset
+  // path above opens the form); after that, tapping Bundle on a pair fires instantly
+  // across the saved wallets. No confirm menu - the user asked for fast and smooth.
   try {
     state.bundleToken = tokenMint;
     setError("Bundle preset queued. Checking wallets...");

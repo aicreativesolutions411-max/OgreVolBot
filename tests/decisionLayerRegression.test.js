@@ -211,12 +211,16 @@ test("Dev Info row pill, drawer, and endpoints are cache-first", () => {
   assert.match(functionBody("renderDevInfoDrawer"), /Dev Dump History/);
   // Empty sections now collapse into the "still building" line by design (2026-06-11).
   assert.match(functionBody("renderDevInfoDrawer"), /Still building/);
-  assert.match(functionBody("renderDevInfoDrawer"), /Token \/ Source Context/);
+  // Dossier redesign (task #88) replaced the single "Token / Source Context" heading
+  // with a tabbed drill-down — the token/source context now lives under "Security & Source".
+  assert.match(functionBody("renderDevInfoDrawer"), /Security &amp; Source/);
   assert.match(functionBody("renderDevInfoDrawer"), /marketContext/);
   assert.match(functionBody("renderDevInfoDrawer"), /Source Evidence/);
   assert.match(functionBody("renderDevInfoDrawer"), /sourceEvidence/);
-  assert.match(functionBody("renderDevInfoDrawer"), /Solscan Token/);
-  assert.match(functionBody("renderDevInfoDrawer"), /KOLscan Wallet/);
+  // Reference links were relabeled to clean labels ("Solscan", "KOLscan") in the redesign —
+  // assert the destination URLs so the check survives label churn.
+  assert.match(functionBody("renderDevInfoDrawer"), /solscan\.io\/token/);
+  assert.match(functionBody("renderDevInfoDrawer"), /kolscan\.io\/account/);
   assert.match(functionBody("scheduleVisibleDevInfoPrefetch"), /setTimeout/);
   assert.match(functionBody("ogreAgentContext"), /likelyDevWalletShort/);
   assert.match(functionBody("postgresPool", serverSource), /pgModule\?\.Pool \|\| pgModule\?\.default\?\.Pool/);

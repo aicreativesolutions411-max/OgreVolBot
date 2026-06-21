@@ -3798,11 +3798,10 @@ const BRAND_FOOTER = [
 const APP_INSTALL_URL = `${(CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/$/, "")}/install`;
 
 const PUBLIC_MENU = [
-  [{ text: "📲 Download App", url: APP_INSTALL_URL }],
-  [{ text: "How To Use", callback_data: "quick_start" }, { text: "Web App", callback_data: "web_portal" }],
-  [{ text: "Terminal", callback_data: "terminal_menu" }, { text: "Market Intel", callback_data: "market_intel_menu" }],
-  [{ text: "Ogre Tools", callback_data: "ogre_tools_menu" }, { text: "Portfolio", callback_data: "portfolio_menu" }],
-  [{ text: "Trade Now", callback_data: "trade_menu" }, { text: "Ogre A.I.", callback_data: "ogre_ai_menu" }]
+  [{ text: "📲 Get the App", url: APP_INSTALL_URL }],
+  [{ text: "💸 Trade", callback_data: "trade_menu" }, { text: "💰 Portfolio", callback_data: "portfolio_menu" }],
+  [{ text: "🔎 Scans & Signals", callback_data: "market_intel_menu" }, { text: "🌐 Web App", callback_data: "web_portal" }],
+  [{ text: "🔗 Links & More", callback_data: "links_menu" }, { text: "❓ How To Use", callback_data: "quick_start" }]
 ];
 
 const ADMIN_MENU = [
@@ -3854,6 +3853,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "market_intel_menu",
   "ogre_tools_menu",
   "portfolio_menu",
+  "links_menu",
   "quick_start",
   "main_menu",
   "backup_menu",
@@ -11016,6 +11016,9 @@ async function handleCallback(query, userId) {
       break;
     case "portfolio_menu":
       await showTelegramPortfolioMenu(chatId, messageId);
+      break;
+    case "links_menu":
+      await showTelegramLinksMenu(chatId, messageId);
       break;
     case "main_menu":
       await showMenu(chatId, userId, messageId);
@@ -19468,16 +19471,15 @@ async function showTelegramMarketIntelMenu(chatId, messageId = null) {
 
 async function showTelegramOgreToolsMenu(chatId, messageId = null) {
   await sendOrEditMessage(chatId, messageId, withBrandFooter([
-    "Ogre Tools",
+    "🛠️ Power Tools",
     "",
-    "Automation and power tools: Ogre A.I., bundle workflows, timed volume plans, launch watches, and sniper modes."
+    "Bundle workflows, timed volume plans, launch watches, and sniper modes."
   ].join("\n")), {
     inline_keyboard: [
       [{ text: "🚀 Launch a Coin", callback_data: "launch_build_menu" }],
-      [{ text: "Ogre A.I.", callback_data: "ogre_ai_menu" }, { text: "Auto Bundle", callback_data: "auto_bundle" }],
-      [{ text: "Bundle", callback_data: "bundle_menu" }, { text: "Volume Plans", callback_data: "timed_trade_plans" }],
+      [{ text: "Auto Bundle", callback_data: "auto_bundle" }, { text: "Bundle", callback_data: "bundle_menu" }],
+      [{ text: "Volume Plans", callback_data: "timed_trade_plans" }, { text: "Sniper Modes", callback_data: "sniper_modes" }],
       [{ text: "Launch Snipe", callback_data: "sniper_manual_launch" }, { text: "Active Watches", callback_data: "manual_launch_watches" }],
-      [{ text: "Sniper Modes", callback_data: "sniper_modes" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
     ]
   });
@@ -19697,6 +19699,26 @@ async function showTelegramPortfolioMenu(chatId, messageId = null) {
   });
 }
 
+async function showTelegramLinksMenu(chatId, messageId = null) {
+  const site = (CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/$/, "");
+  await sendOrEditMessage(chatId, messageId, withBrandFooter([
+    "🔗 Links & More",
+    "",
+    "The bot is for fast trading. For live charts, pairs, the autopilot, raids, and the full terminal, jump to the app or the site."
+  ].join("\n")), {
+    inline_keyboard: [
+      [{ text: "📲 Get the App", url: APP_INSTALL_URL }],
+      [{ text: "🌐 Open Web App", callback_data: "web_portal" }],
+      [{ text: "📈 Live Charts & Pairs", url: `${site}/terminal` }],
+      [{ text: "🤖 Autopilot", url: `${site}/terminal` }, { text: "🚀 Pump Launch", url: `${site}/launch` }],
+      [{ text: "⚔️ Raids", url: `${site}/raids` }, { text: "🏅 Proof Wall", url: `${site}/proof` }],
+      [{ text: "🛠️ Power Tools", callback_data: "ogre_tools_menu" }],
+      [{ text: "💬 Community", url: "https://t.me/ogrecoinonsol" }, { text: "𝕏 Twitter", url: "https://twitter.com/i/communities/1930265213917425858" }],
+      [{ text: "Main Menu", callback_data: "main_menu" }]
+    ]
+  });
+}
+
 async function showWalletMenu(chatId, messageId = null) {
   await sendOrEditMessage(chatId, messageId, withBrandFooter("Wallet tools:"), {
     inline_keyboard: [
@@ -19715,13 +19737,20 @@ async function showWalletMenu(chatId, messageId = null) {
 }
 
 async function showTradeMenu(chatId, messageId = null) {
-  await sendOrEditMessage(chatId, messageId, withBrandFooter("Single-wallet trade tools:\n\nPick one wallet first, then use quick buttons like 0.10 SOL, 0.50 SOL, 1 SOL, 25%, 50%, and 100%."), {
+  await sendOrEditMessage(chatId, messageId, withBrandFooter([
+    "💸 Trade",
+    "",
+    "Everything you trade from the bot, in one place. Pick a wallet, then buy or sell, run a bundle, copy a KOL, launch a coin, or build volume.",
+    "",
+    "Want live charts, pairs, and the autopilot? Tap 🌐 Web App on the main menu — the full terminal lives on the site."
+  ].join("\n")), {
     inline_keyboard: [
-      [{ text: "Buy", callback_data: "trade_buy" }, { text: "Sell", callback_data: "trade_sell" }],
-      [{ text: "Auto Sell", callback_data: "trade_auto_sell" }],
-      [{ text: "Sell All Tokens", callback_data: "sell_all_tokens" }],
-      [{ text: "DCA Buy", callback_data: "trade_dca_buy" }, { text: "DCA Sell", callback_data: "trade_dca_sell" }],
-      [{ text: "Positions", callback_data: "positions_overview" }, { text: "Wallets", callback_data: "list_wallets" }],
+      [{ text: "🟢 Buy", callback_data: "trade_buy" }, { text: "🔴 Sell", callback_data: "trade_sell" }],
+      [{ text: "📦 Bundle Buy", callback_data: "bundle_menu" }, { text: "👥 Copy Trade", callback_data: "kol_tracker_menu" }],
+      [{ text: "🚀 Launch from Pump", callback_data: "launch_build_menu" }, { text: "📈 Volume", callback_data: "timed_trade_plans" }],
+      [{ text: "🔁 DCA Buy", callback_data: "trade_dca_buy" }, { text: "🔁 DCA Sell", callback_data: "trade_dca_sell" }],
+      [{ text: "⏱️ Auto Sell", callback_data: "trade_auto_sell" }, { text: "🧹 Sell All", callback_data: "sell_all_tokens" }],
+      [{ text: "📊 Positions", callback_data: "positions_overview" }, { text: "👛 Wallets", callback_data: "list_wallets" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
     ]
   });
