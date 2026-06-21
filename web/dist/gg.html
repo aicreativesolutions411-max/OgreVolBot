@@ -147,6 +147,25 @@
   .wsel .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
   .wsel .dot.off{background:var(--muted2);box-shadow:none}
   .wsel b{font-family:var(--mono);font-size:12px}.wsel .ar{margin-left:auto;color:var(--muted)}
+  .psel{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+  .psel label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .psel select{flex:1;background:rgba(6,10,7,.7);border:1px solid var(--border);border-radius:9px;color:var(--text);padding:8px 10px;font-size:12px;font-family:var(--sans);outline:none}
+  .psel .mng{width:30px;height:30px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);border-radius:9px;color:var(--green);font-size:16px}
+  .psel .mng:hover{background:var(--green-dim)}
+  details.fold{border:1px solid var(--border);border-radius:14px;background:var(--panel2);margin-bottom:0}
+  details.fold>summary{list-style:none;cursor:pointer;padding:15px 16px;display:flex;align-items:center;gap:9px;font-size:14px;font-weight:700}
+  details.fold>summary::-webkit-details-marker{display:none}
+  details.fold>summary .chev{margin-left:auto;color:var(--muted);transition:.15s}
+  details.fold[open]>summary .chev{transform:rotate(180deg)}
+  details.fold>summary .sub{font-weight:400;color:var(--muted);font-size:11px}
+  details.fold .foldbody{padding:0 16px 16px}
+  .field{display:flex;flex-direction:column;gap:5px;margin-bottom:10px}
+  .field label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+  .field input,.field select{background:rgba(6,10,7,.7);border:1px solid var(--border);border-radius:9px;color:var(--text);padding:9px 11px;font-size:13px;font-family:var(--sans);outline:none}
+  .field.row2{flex-direction:row;gap:8px}.field.row2>div{flex:1;display:flex;flex-direction:column;gap:5px}
+  .preChip{display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid var(--border2);border-radius:11px;background:var(--row);margin-bottom:7px}
+  .preChip .info b{font-size:13px}.preChip .info span{font-size:11px;color:var(--muted);font-family:var(--mono)}
+  .preChip .x{margin-left:auto;color:var(--muted2)}.preChip .x:hover{color:var(--red)}
   .bsrow{display:flex;gap:8px;margin-bottom:13px}
   .bsrow button{flex:1;padding:10px;border-radius:10px;font-weight:800;font-size:14px;border:1px solid var(--border);color:var(--muted)}
   .bsrow button.buy.on{background:linear-gradient(180deg,var(--green2),var(--green));color:#06140a;border-color:transparent}
@@ -332,7 +351,8 @@
   const API_BASE=(window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||"https://ogrevolbot.onrender.com";
   const TOKEN_KEY="ogreWebToken"; // shared with the main SlimeWire app (same origin)
   const state={route:"trending",mint:null,trendTab:"best",volTf:"h1",rows:[],pollT:null,
-    token:localStorage.getItem(TOKEN_KEY)||"",user:null,wallets:[],activeWallet:null};
+    token:localStorage.getItem(TOKEN_KEY)||"",user:null,wallets:[],activeWallet:null,
+    presets:{trade:[],bundle:[]},activeTradePreset:localStorage.getItem("ggTradePreset")||""};
   // No credentials:include — the API returns ACAO:* which forbids credentialed CORS. Auth is the Bearer header.
   function api(path,opts){
     opts=opts||{};const headers=Object.assign({},opts.headers||{});
@@ -386,6 +406,53 @@
       return true;
     }
     toast((d&&d.error)||"Wallet creation failed",true);return false;
+  }
+  async function exportKeys(){
+    if(!state.token){toast("No account yet.",true);return;}
+    const {ok,d}=await jpost("/api/web/wallets/export",{});
+    const dl=d&&d.backup&&d.backup.downloads;
+    if(ok&&d&&d.ok&&dl){
+      if(dl.encryptedBackup)downloadText(dl.encryptedBackup.filename,dl.encryptedBackup.text);
+      if(dl.recoveryKeys)downloadText(dl.recoveryKeys.filename,dl.recoveryKeys.text);
+      toast("Backup + keys downloaded — store them safe.");
+    }else toast((d&&d.error)||"Export failed",true);
+  }
+  async function loadPresets(){
+    if(!state.token)return;
+    const {ok,d}=await api("/api/web/presets");
+    if(ok&&d&&d.ok&&d.presets){state.presets={trade:d.presets.trade||[],bundle:d.presets.bundle||[]};}
+  }
+  async function savePreset(type,preset){
+    const {ok,d}=await jpost("/api/web/presets",{type,action:"save",preset});
+    if(ok&&d&&d.ok&&d.presets){state.presets={trade:d.presets.trade||[],bundle:d.presets.bundle||[]};return true;}
+    toast((d&&d.error)||"Could not save preset",true);return false;
+  }
+  async function deletePreset(type,id){
+    const {ok,d}=await jpost("/api/web/presets",{type,action:"delete",preset:{id}});
+    if(ok&&d&&d.ok&&d.presets){state.presets={trade:d.presets.trade||[],bundle:d.presets.bundle||[]};return true;}
+    return false;
+  }
+  function activeTradePresetObj(){return (state.presets.trade||[]).find(p=>p.id===state.activeTradePreset)||null;}
+  function setActiveTradePreset(id){state.activeTradePreset=id||"";if(id)localStorage.setItem("ggTradePreset",id);else localStorage.removeItem("ggTradePreset");}
+  async function sweepSol(destination,walletIndexes){
+    const {ok,d}=await jpost("/api/web/wallets/sweep-sol",{destination,walletIndexes});
+    if(ok&&d&&d.ok&&d.sweep){toast(d.sweep.summary||"Swept SOL");refreshWallets();return true;}
+    toast((d&&d.error)||"Sweep failed",true);return false;
+  }
+  async function sweepTokens(destination,walletIndexes){
+    const {ok,d}=await jpost("/api/web/wallets/sweep-tokens",{destination,walletIndexes});
+    if(ok&&d&&d.ok&&d.sweep){toast(d.sweep.summary||"Swept tokens");refreshWallets();return true;}
+    toast((d&&d.error)||"Token sweep failed",true);return false;
+  }
+  async function distributeFresh(count,amountSol,sourceWalletIndex){
+    const {ok,d}=await jpost("/api/web/wallets/distribute",{count,amountSol,sourceWalletIndex,label:"Fresh"});
+    if(ok&&d&&d.ok){
+      const dl=d.downloads||{};
+      if(dl.encryptedBackup)downloadText(dl.encryptedBackup.filename,dl.encryptedBackup.text);
+      if(dl.recoveryKeys)downloadText(dl.recoveryKeys.filename,dl.recoveryKeys.text);
+      toast(d.summary||("Funded "+count+" fresh wallets"));await refreshWallets();return true;
+    }
+    toast((d&&d.error)||"Distribute failed",true);return false;
   }
 
   // ---------- modal ----------
@@ -542,6 +609,7 @@
         '<div class="pnlbar"><div><span>Invested</span><b>—</b></div><div><span>Remaining</span><b>—</b></div><div><span>PNL</span><b class="mut">—</b></div></div>'+
         '<div class="sidepad">'+
           '<div class="wsel" id="wsel" onclick="GG.go(\'wallet\')"><span class="dot off"></span><b id="wselTxt">No wallet — tap to set up</b><span class="ar">⇄</span></div>'+
+          '<div class="psel" id="psel"></div>'+
           '<div class="bsrow"><button class="buy on" id="sideBuy">Buy</button><button class="sell" id="sideSell">Sell</button></div>'+
           '<div class="amtin"><input id="amt" value="'+tradeAmt+'" inputmode="decimal"><span id="amtUnit">SOL</span></div>'+
           '<div class="chips" id="chips"></div>'+
@@ -549,7 +617,8 @@
           '<div class="perf" id="perf"></div>'+
           '<div class="secbox" id="secbox"><h4>🛡 Token Data &amp; Security</h4><div class="loading" style="padding:14px"><span class="spin"></span></div></div>'+
         '</div></div></div>';
-    wireTradePanel(mint,r);updateWselLine();
+    wireTradePanel(mint,r);updateWselLine();paintPresetSel();
+    if(state.token&&!(state.presets.trade||[]).length){loadPresets().then(()=>{if(state.route==="trade")paintPresetSel();});}
     if(!r){const rows=await fetchPairs(tabById("best"));r=rows.find(x=>x.tokenMint===mint)||null;if(r&&state.route==="trade"){$("#thead").innerHTML=theadHtml(r);fillPerf(r);}}
     else fillPerf(r);
     loadSecurity(mint);
@@ -564,6 +633,14 @@
     const w=activeWalletObj();
     if(w){line.textContent=(w.label||"Wallet")+" · ◎ "+Number(w.sol||0).toFixed(3);if(dot)dot.className="dot";}
     else{line.textContent=state.token?"Create a wallet to trade":"Set up a wallet to trade";if(dot)dot.className="dot off";}
+  }
+  function paintPresetSel(){
+    const ps=$("#psel");if(!ps)return;
+    const list=state.presets.trade||[];
+    const opts=['<option value="">Manual — no auto-exit</option>'].concat(list.map(p=>'<option value="'+esc(p.id)+'"'+(p.id===state.activeTradePreset?" selected":"")+'>'+esc(p.name||"Preset")+(p.takeProfitPct?" · TP "+esc(p.takeProfitPct)+"%":"")+(p.stopLossPct?" · SL "+esc(p.stopLossPct)+"%":"")+'</option>')).join("");
+    ps.innerHTML='<label>Preset</label><select id="presetSel">'+opts+'</select><a class="mng" onclick="GG.go(\'wallet\')" title="Manage presets">＋</a>';
+    const sel=$("#presetSel");
+    sel.onchange=()=>{setActiveTradePreset(sel.value);const p=activeTradePresetObj();if(p&&p.amountSol&&tradeSide==="buy"){const amt=$("#amt");if(amt){amt.value=String(p.amountSol);tradeAmt=amt.value;}}toast(sel.value?"Preset on — TP/SL arm on buy":"Manual buys");};
   }
   function wireTradePanel(mint,r){
     const chipsBuy=["0.1","0.2","0.5","1"],chipsSell=["25%","50%","75%","100%"];
@@ -613,7 +690,12 @@
     const a=Number(amount);if(!isFinite(a)||a<=0){toast("Enter a SOL amount.",true);return;}
     if(!(await ensureTradeReady()))return;
     const big=$("#bigbuy");if(big){big.disabled=true;big.textContent="Submitting…";}
-    const {ok,status,d}=await jpost("/api/web/trade/buy",{tokenMint:mint,walletIndex:state.activeWallet,amountSol:String(a),slippageBps:"400",tradeAttemptId:attemptId()});
+    const p=activeTradePresetObj();
+    const body={tokenMint:mint,walletIndex:state.activeWallet,amountSol:String(a),slippageBps:(p&&p.slippageBps)||"400",tradeAttemptId:attemptId()};
+    if(p&&(p.takeProfitPct||p.stopLossPct||(p.sellDelay&&p.sellDelay!=="off"))){
+      body.autoExit=true;body.takeProfitPct=p.takeProfitPct||"";body.stopLossPct=p.stopLossPct||"";body.sellDelay=p.sellDelay||"off";body.sellPercent=p.sellPercent||"100";
+    }
+    const {ok,status,d}=await jpost("/api/web/trade/buy",body);
     if(big){big.disabled=false;big.textContent="Buy";}
     handleTradeResult(ok,status,d,"Buy");
   }
@@ -659,10 +741,13 @@
   }
 
   // ---------- wallet ----------
+  function presetChipHtml(p,type){
+    return'<div class="preChip"><div class="info"><b>'+esc(p.name||"Preset")+'</b><span>'+esc(p.amountSol||"?")+'◎'+(p.takeProfitPct?" · TP "+esc(p.takeProfitPct)+"%":"")+(p.stopLossPct?" · SL "+esc(p.stopLossPct)+"%":"")+" · slip "+esc(p.slippageBps||"400")+'</span></div><button class="x" data-del="'+type+":"+esc(p.id)+'" title="Delete">✕</button></div>';
+  }
   async function renderWallet(){
     setActiveView("v-wallet");subbarWallet();
     const view=$("#v-wallet");view.innerHTML='<div class="loading"><span class="spin"></span></div>';
-    if(state.token)await refreshWallets();
+    if(state.token){await refreshWallets();await loadPresets();}
     if(state.route!=="wallet")return;
     const wrap=el("div","wgrid");
     if(!state.token){
@@ -677,18 +762,61 @@
           (sel?'':'<button class="wbtn ghost" style="margin-left:10px" onclick="GG.pickWallet('+w.index+')">Use</button>')+'</div>';
       }).join("");
       const w=activeWalletObj();
+      const tradePre=(state.presets.trade||[]).map(p=>presetChipHtml(p,"trade")).join("")||'<p class="mut" style="font-size:12px">No single-buy presets yet.</p>';
+      const bundlePre=(state.presets.bundle||[]).map(p=>presetChipHtml(p,"bundle")).join("")||'<p class="mut" style="font-size:12px">No bundle presets yet.</p>';
       wrap.innerHTML='<div class="wbox"><h3>Your wallets</h3><p class="sub">Pick the wallet you trade with. Fund it by sending SOL to its address.</p>'+
         (list||'<p class="mut">No wallets yet.</p>')+
         '<div style="display:flex;gap:9px;margin-top:6px"><button class="wbtn" id="mkWallet">+ New wallet</button><button class="wbtn ghost" id="refWallet">Refresh balances</button></div></div>'+
         (w?'<div class="wbox"><h3>Deposit SOL</h3><p class="sub">Send SOL to your active wallet to start trading. Solana network only.</p>'+
           '<div class="walletrow"><div class="ico">⬇</div><div class="info"><b>'+esc(w.label||"Wallet")+'</b><div class="addr">'+esc(w.publicKey)+'</div></div></div>'+
           '<div style="display:flex;gap:9px;margin-top:6px"><button class="wbtn" id="copyDep">Copy deposit address</button></div>'+
-          '<p class="wnote" style="margin-top:12px">Tip: keep a little SOL for fees. Once funds land, hit Refresh and your balance updates here and on every Buy button.</p></div>':'');
+          '<p class="wnote" style="margin-top:12px">Tip: keep a little SOL for fees. Once funds land, hit Refresh and your balance updates here and on every Buy button.</p></div>':'')+
+        // ---- Presets fold ----
+        '<details class="fold"><summary>🎚️ Presets<span class="sub">single-buy &amp; bundle · auto TP/SL</span><span class="chev">▾</span></summary><div class="foldbody">'+
+          '<p class="wnote" style="margin:0 0 12px">Set a preset once. On the trade panel, pick it and every Buy arms your take-profit / stop-loss automatically.</p>'+
+          '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:7px">Single-buy presets</div>'+tradePre+
+          '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 7px">Bundle presets</div>'+bundlePre+
+          '<div style="border-top:1px solid var(--border2);margin-top:14px;padding-top:14px">'+
+            '<div class="field row2"><div><label>Name</label><input id="pName" placeholder="Scalp" maxlength="24"></div><div><label>Amount (SOL)</label><input id="pAmt" inputmode="decimal" placeholder="0.5"></div></div>'+
+            '<div class="field row2"><div><label>Take profit %</label><input id="pTp" inputmode="decimal" placeholder="50"></div><div><label>Stop loss %</label><input id="pSl" inputmode="decimal" placeholder="20"></div></div>'+
+            '<div class="field row2"><div><label>Slippage (bps)</label><input id="pSlip" inputmode="numeric" placeholder="400"></div><div><label>Type</label><select id="pKind"><option value="trade">Single buy</option><option value="bundle">Bundle (all wallets)</option></select></div></div>'+
+            '<button class="wbtn" id="savePre">Save preset</button>'+
+          '</div></div></details>'+
+        // ---- Power tools fold ----
+        '<details class="fold"><summary>🛠️ Power Tools<span class="sub">keys · sweep · multi-wallet</span><span class="chev">▾</span></summary><div class="foldbody">'+
+          '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:7px">Backup</div>'+
+          '<button class="wbtn ghost" id="expKeys">⬇ Download backup &amp; recovery keys</button>'+
+          '<p class="wnote" style="margin:8px 0 0">Re-download your encrypted backup + private keys anytime. Keep them somewhere safe — they are the only way to recover your funds.</p>'+
+          '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 7px">Sweep (consolidate)</div>'+
+          '<div class="field"><label>Destination address</label><input id="swDest" placeholder="Paste a Solana address"></div>'+
+          '<div style="display:flex;gap:9px"><button class="wbtn ghost" id="swSol">Sweep all SOL →</button><button class="wbtn ghost" id="swTok">Sweep all tokens →</button></div>'+
+          '<p class="wnote" style="margin:8px 0 0">Pulls SOL / tokens from all your wallets into the destination address.</p>'+
+          '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 7px">Fund multiple wallets</div>'+
+          '<div class="field row2"><div><label>How many</label><input id="dCount" inputmode="numeric" placeholder="5"></div><div><label>SOL each</label><input id="dAmt" inputmode="decimal" placeholder="0.05"></div></div>'+
+          '<button class="wbtn" id="distBtn">Create + fund fresh wallets</button>'+
+          '<p class="wnote" style="margin:8px 0 0">Spins up new wallets and funds each from your active wallet — great for bundles. Backup downloads automatically.</p>'+
+        '</div></details>';
     }
     view.innerHTML="";view.appendChild(wrap);
     const mk=$("#mkWallet");if(mk)mk.onclick=async()=>{mk.disabled=true;mk.textContent="Creating…";await createWallet();if(state.route==="wallet")renderWallet();};
     const rf=$("#refWallet");if(rf)rf.onclick=async()=>{rf.disabled=true;rf.textContent="…";await refreshWallets();renderWallet();};
     const cd=$("#copyDep");if(cd)cd.onclick=()=>{const w=activeWalletObj();if(w)copy(w.publicKey);};
+    const sp=$("#savePre");if(sp)sp.onclick=async()=>{
+      const name=$("#pName").value.trim(),amt=$("#pAmt").value.trim();
+      if(!name){toast("Name your preset.",true);return;}
+      if(!amt||Number(amt)<=0){toast("Set a SOL amount.",true);return;}
+      const kind=$("#pKind").value;
+      const preset={name,amountSol:amt,takeProfitPct:$("#pTp").value.trim(),stopLossPct:$("#pSl").value.trim(),slippageBps:$("#pSlip").value.trim()||"400",sellPercent:"100",sellDelay:"off"};
+      if(kind==="bundle")preset.walletIndexes=state.wallets.map(w=>String(w.index));else preset.walletIndex=String(state.activeWallet||"1");
+      sp.disabled=true;sp.textContent="Saving…";
+      const okk=await savePreset(kind,preset);sp.disabled=false;sp.textContent="Save preset";
+      if(okk){toast("Preset saved");renderWallet();}
+    };
+    view.querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{const[type,id]=b.dataset.del.split(":");if(await deletePreset(type,id)){toast("Preset removed");renderWallet();}});
+    const ek=$("#expKeys");if(ek)ek.onclick=async()=>{ek.disabled=true;await exportKeys();ek.disabled=false;};
+    const ss=$("#swSol");if(ss)ss.onclick=async()=>{const dest=$("#swDest").value.trim();if(!dest){toast("Paste a destination address.",true);return;}ss.disabled=true;ss.textContent="Sweeping…";await sweepSol(dest,state.wallets.map(w=>w.index));ss.disabled=false;ss.textContent="Sweep all SOL →";renderWallet();};
+    const st=$("#swTok");if(st)st.onclick=async()=>{const dest=$("#swDest").value.trim();if(!dest){toast("Paste a destination address.",true);return;}st.disabled=true;st.textContent="Sweeping…";await sweepTokens(dest,state.wallets.map(w=>w.index));st.disabled=false;st.textContent="Sweep all tokens →";};
+    const db=$("#distBtn");if(db)db.onclick=async()=>{const c=parseInt($("#dCount").value,10),a=$("#dAmt").value.trim();if(!(c>0)){toast("How many wallets?",true);return;}if(!a||Number(a)<=0){toast("SOL per wallet?",true);return;}db.disabled=true;db.textContent="Funding…";await distributeFresh(c,a,state.activeWallet||1);db.disabled=false;db.textContent="Create + fund fresh wallets";renderWallet();};
   }
   function pickWallet(i){state.activeWallet=i;updateWalletPill();renderWallet();toast("Active wallet set");}
 
@@ -716,7 +844,7 @@
   // ---------- expose + boot ----------
   window.GG={open:(m)=>go("trade",m),go,quickBuy,copy,closeModal,pickWallet};
   render();updateWalletPill();loadSol();setInterval(loadSol,60000);
-  if(state.token)refreshWallets();
+  if(state.token){refreshWallets();loadPresets();}
 })();
 </script>
 </body>
