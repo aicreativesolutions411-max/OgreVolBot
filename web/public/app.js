@@ -5698,6 +5698,12 @@ function render(options = {}) {
   renderSlimeShieldDetailsDrawer();
   renderKolDumpDetailsDrawer();
   renderReplayBeforeBuyDrawer();
+  renderRadarDrawer();
+  renderReturnSummary();
+  if (state.route === "terminal" && state.user && !state.returnSummaryFetched) {
+    state.returnSummaryFetched = true;
+    void loadReturnSummary();
+  }
   updateClipFarmControl();
   renderOgreAgent();
   scheduleVisibleDevInfoPrefetch("render");
@@ -18195,6 +18201,45 @@ function closeDevInfoDetails() {
   resumeLivePairsAfterDetailsClose();
 }
 
+// ============ RETURN DASHBOARD — "since your last visit" greeting banner ============
+function returnEventIcon(kind) { return kind === "radar" ? "📡" : kind === "move" ? "📈" : "•"; }
+async function loadReturnSummary() {
+  try {
+    const data = await api("/api/web/return-summary");
+    state.returnSummary = { loaded: true, events: Array.isArray(data.events) ? data.events : [] };
+  } catch {
+    state.returnSummary = { loaded: true, events: [] };
+  }
+  renderReturnSummary();
+}
+async function dismissReturnSummary() {
+  state.returnSummaryDismissed = true;
+  renderReturnSummary();
+  try { await api("/api/web/return-summary", { method: "POST", body: JSON.stringify({ action: "seen" }) }); } catch { /* best-effort */ }
+}
+function renderReturnSummary() {
+  let root = document.querySelector("[data-return-summary-root]");
+  if (!root) { root = document.createElement("div"); root.dataset.returnSummaryRoot = "true"; document.body.appendChild(root); }
+  const summary = state.returnSummary;
+  const events = summary && Array.isArray(summary.events) ? summary.events : [];
+  const show = Boolean(summary && summary.loaded && events.length && !state.returnSummaryDismissed && state.route === "terminal");
+  if (!show) { if (root.__lastReturn !== "") { root.innerHTML = ""; root.__lastReturn = ""; } return; }
+  const items = events.slice(0, 6).map((event) => `
+    <li><button type="button" class="return-summary-item" data-token-chart="${escapeHtml(event.tokenMint || "")}" data-token-chart-source="return-summary"><span>${returnEventIcon(event.kind)}</span> ${escapeHtml(event.title || "Update")}</button></li>`).join("");
+  const html = `
+    <div class="return-summary-card" role="status">
+      <div class="return-summary-head">
+        <strong>📋 Since your last visit</strong>
+        <button type="button" data-return-dismiss aria-label="Dismiss">×</button>
+      </div>
+      <ul>${items}</ul>
+      ${events.length > 6 ? `<small>+${events.length - 6} more</small>` : ""}
+    </div>`;
+  if (root.__lastReturn === html) return;
+  root.__lastReturn = html;
+  root.innerHTML = html;
+}
+
 // ===================== MY RADAR — personalized alerts UI =====================
 function radarRuleIcon(type) {
   return type === "tp" ? "🎯" : type === "sl" ? "🛑" : type === "mc_above" ? "📈" : type === "mc_below" ? "📉" : "📡";
@@ -23874,6 +23919,7 @@ document.addEventListener("click", async (event) => {
     openDevInfoDetails(target.dataset.devInfo || "");
     return;
   }
+  if (target.matches("[data-return-dismiss]")) { event.preventDefault(); void dismissReturnSummary(); return; }
   if (target.matches("[data-radar-open]")) {
     event.preventDefault();
     openRadarDrawer(target.dataset.radarOpen || "", target.dataset.radarSymbol || "");

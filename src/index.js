@@ -7124,6 +7124,17 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/return-summary") {
+      sendWebJson(request, response, 200, { ok: true, ...(await returnSummaryForUser(auth.userId)) });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/return-summary") {
+      await markReturnSeen(auth.userId);
+      sendWebJson(request, response, 200, { ok: true });
+      return;
+    }
+
     if (request.method === "GET" && pathname === "/api/web/radar") {
       sendWebJson(request, response, 200, { ok: true, rules: await radarRulesForUser(auth.userId) });
       return;
@@ -28591,6 +28602,7 @@ async function checkWatchlistMoveAlerts() {
               tag: `watch-${row.tokenMint}`,
               url: `/terminal/chart?token=${row.tokenMint}&source=watch-alert`
             });
+            pushUserActivity(store, userId, { kind: "move", title: `${row.symbol || shortMint(row.tokenMint)} moved ${movePct > 0 ? "+" : ""}${movePct.toFixed(0)}%`, tokenMint: row.tokenMint });
             userSnap[row.tokenMint] = { priceUsd: priceNow, alertAt: now };
             continue;
           }
@@ -28743,12 +28755,40 @@ async function checkRadarRules() {
             ].join("\n")).catch(() => {});
           }
         }
+        pushUserActivity(store, userId, { kind: "radar", title: hit.title, body: hit.why, tokenMint: rule.tokenMint });
         userSnap[fireKey] = { alertAt: now };
       }
       store.snapshots[userId] = userSnap;
     }
     await writeJsonFile(watchAlertsPath(), store);
   });
+}
+
+// ===================== RETURN DASHBOARD — "since your last visit" =====================
+// The alert timers already DETECT per-user events; we just persist them to a per-user
+// activity log (in the watch-alerts store, written every cycle anyway) so the terminal can
+// greet a returning user with what changed. Aggregates Radar fires + watchlist big-moves.
+function pushUserActivity(store, userId, event) {
+  if (!store.activity || typeof store.activity !== "object") store.activity = {};
+  const list = Array.isArray(store.activity[userId]) ? store.activity[userId] : [];
+  list.unshift({ at: Date.now(), ...event });
+  store.activity[userId] = list.slice(0, 40);
+}
+
+async function returnSummaryForUser(userId) {
+  const profile = await webProfileForUser(userId).catch(() => ({}));
+  const since = Number(profile.lastReturnSeenAt) || 0;
+  const store = await readWatchAlerts().catch(() => ({ activity: {} }));
+  const all = Array.isArray(store.activity && store.activity[String(userId)]) ? store.activity[String(userId)] : [];
+  const events = all.filter((event) => Number(event.at) > since).slice(0, 20);
+  return { events, since, now: Date.now() };
+}
+
+async function markReturnSeen(userId) {
+  const store = await readWebAuthStore();
+  const { profile } = ensureWebProfileDefaults(store, userId);
+  store.profiles[String(userId)] = { ...profile, lastReturnSeenAt: Date.now(), updatedAt: new Date().toISOString() };
+  await writeWebAuthStore(store);
 }
 
 // --- Pre-launch hype pages: a creator schedules a launch and gets a shareable
