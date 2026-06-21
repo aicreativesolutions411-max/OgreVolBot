@@ -679,6 +679,14 @@ export function apexEdge(row = {}) {
   if (row.smartMoney) edge += 12;
   // SOCIAL / X clout.
   if (row.xNotable || Number(row.xClout) >= 1) edge += 5;
+  // CONFIRMED LIVE MOMENTUM premium — a coin VISIBLY popping NOW (a high jumpScore = real turnover +
+  // m5 breakout + buy-led in a tradeable band) is PROVEN demand, the highest-conviction read on the
+  // board: an "easy-to-spot winner" the Pop Radar already flagged. A brand-new microcap that merely
+  // scores high on youth is an unproven lottery ticket. Without this nudge, fresh-launch youth
+  // out-ranked confirmed spikes and apex bought dust while the real movers went by. Bounded so only a
+  // genuine live surge fires it; pairs with the pop-feed activity passthrough that lets the scorer
+  // SEE the spike in the first place.
+  if (jump >= 44) edge += Math.min(22, (jump - 36) * 0.7);
   return edge;
 }
 

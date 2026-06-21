@@ -509,6 +509,25 @@ test("apex: unified edge ranks setups head-to-head; wide entry window; type rout
   assert.equal(entryReject(popRow, P), null, "apex admits a live pop");
 });
 
+test("apex: a CONFIRMED live pop out-ranks fresh-launch youth — buys the easy winner, not the dust", () => {
+  // A real but marginal spike off the live feed (BL4x class): $28k MC, 0.5x turnover, +5% m5, buy-led.
+  // This row carries the activity the pop-feed now passes through (volume5m/m5/flow) — before the fix
+  // the feed handed apex a stripped shell (volume5m:0) so the scorer read it blind and it lost.
+  const confirmedPop = { tokenMint: "x", symbol: "POP", liquidityUsd: 28000, marketCap: 28000, volume5m: 14000, buys5m: 30, sells5m: 20, m5: 5, h1: 4, pairAgeSeconds: 2400 };
+  // Brand-new sub-$10k launches scoring high on pure youth — the fresh dust apex was spraying + rotating.
+  const freshDust = { tokenMint: "y", symbol: "NEW", marketCap: 3000, liquidityUsd: 3000, volume5m: 200, buys5m: 45, sells5m: 6, pairAgeSeconds: 10 };
+  const freshHot = { tokenMint: "h", symbol: "HOT", marketCap: 6000, liquidityUsd: 5000, volume5m: 1200, buys5m: 80, sells5m: 10, pairAgeSeconds: 30 };
+  assert.ok(jumpScore(confirmedPop) >= 44, "the pop is a real confirmed spike");
+  assert.ok(apexEdge(confirmedPop) > apexEdge(freshHot), "a confirmed pop out-ranks even a hot fresh launch");
+  assert.ok(apexEdge(confirmedPop) > apexEdge(freshDust) + 25, "and decisively out-ranks fresh dust");
+  // The confirmed-momentum premium really fires (edge sits above the raw read).
+  assert.ok(apexEdge(confirmedPop) > jumpScore(confirmedPop) + 15, "confirmed momentum gets a premium on top of raw heat");
+  // No false premium for a coin that ISN'T popping — fresh youth is not handed momentum it didn't earn.
+  assert.equal(jumpScore(freshDust), 0, "fresh dust has no live spike");
+  // And it routes to the fast in/out playbook (pop banks fast, doesn't round-trip on the fresh ladder).
+  assert.equal(apexType(confirmedPop), "pop", "a confirmed pop routes to pop→bank-fast, not the fresh ladder");
+});
+
 test("apex Stage 2: deep-vet re-ranks finalists on holders/dev/rug data", () => {
   const base = 70;
   // A confirmed rug is killed outright (never buy).

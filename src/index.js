@@ -2785,6 +2785,12 @@ async function popFeedRows() {
   const now = Date.now();
   const POP_MC_CEIL = 250_000;   // match aggParams pop mcCeil — catch the visible movers, not mature mega-caps
   const live = [...popCandidates.entries()].filter(([, r]) => now - r.at < 18_000).sort((a, b) => b[1].score - a[1].score).slice(0, 6);
+  // The radar DETECTS a spike off the fully-enriched popLiveRows (real volume5m/m5/flow), but the feed
+  // row used to hand apex/pop a STRIPPED shell (volume5m:0, no row-level m5) — so the scorer re-read it
+  // BLIND (liquidScore ~17, jumpScore 0) and the confirmed winner lost to fresh dust every tick, and
+  // apexType mis-routed it to the fresh ladder (round-trip) instead of pop→bank-fast. Carry the real
+  // enriched activity through so the scorer sees what the radar saw.
+  const liveByMint = new Map((Array.isArray(popLiveRows) ? popLiveRows : []).map((x) => [x.tokenMint, x]));
   const rows = [];
   for (const [mint, r] of live) {
     if (popUnroutable.has(mint)) continue;   // route filter — set in the background poll, no RPC in this hot path
@@ -2804,7 +2810,18 @@ async function popFeedRows() {
       try { const j = await fetchJson(`https://frontend-api-v3.pump.fun/coins/${mint}`, { timeoutMs: 5000, headers: { "User-Agent": "Mozilla/5.0", accept: "application/json" } }).catch(() => null); r.mc = Number(j && (j.usd_market_cap || j.market_cap)) || 0; } catch {}
     }
     if (r.mc && r.mc > POP_MC_CEIL) continue;   // mega-cap already extended — never surface it
-    rows.push({ tokenMint: mint, symbol: r.symbol, marketCap: r.mc || 4000, liquidityUsd: Number(r.liq) || 0, pairAgeSeconds: 1, volume5m: 0, buys5m: 0, sells5m: 0, source: "pop", _pop: { score: r.score, inflowNow: r.inflowNow, spike: Boolean(r.spike), m5: Number(r.m5) || 0 } });
+    const lr = liveByMint.get(mint) || {};
+    rows.push({
+      tokenMint: mint, symbol: r.symbol,
+      marketCap: r.mc || Number(lr.marketCap) || 4000,
+      liquidityUsd: Number(r.liq) || Number(lr.liquidityUsd) || 0,
+      pairAgeSeconds: Number(lr.pairAgeSeconds) || 1,
+      volume5m: Number(lr.volume5m) || 0, volumeH1: Number(lr.volumeH1) || 0,
+      buys5m: Number(lr.buys5m) || 0, sells5m: Number(lr.sells5m) || 0,
+      buysH1: Number(lr.buysH1) || 0, sellsH1: Number(lr.sellsH1) || 0,
+      m5: Number(lr.m5 ?? r.m5) || 0, h1: Number(lr.h1) || 0,
+      source: "pop", _pop: { score: r.score, inflowNow: r.inflowNow, spike: Boolean(r.spike), m5: Number(r.m5) || 0 }
+    });
     if (rows.length >= 4) break;
   }
   return rows;
