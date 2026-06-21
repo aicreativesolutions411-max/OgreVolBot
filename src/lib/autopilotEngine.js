@@ -224,12 +224,22 @@ export function aggParams(state) {
   // roulette, not a setup), and an effectively-unbounded ceiling (~30d) so nothing good is excluded
   // for being "too old". grind targets survived/climbed coins; default stays fresh-launch tight.
   const minAge = liquid ? 30 : grind ? 20 : snipe ? 3 : pop ? 0 : 4;                        // pop = any age (flow-driven)
-  const maxAge = liquid ? 2592000 : grind ? 3600 : snipe ? 600 : pop ? 2592000 : 1200;
+  // FRESH maxAge widened 1200 -> 21600 for the default/normal hunt (USER-DIRECTED 2026-06-21:
+  // "shouldn't care about age"). A coin can still have plenty of room to pop hours after launch, so
+  // don't exclude survivors for being "too old" — the setup (score + liquidity) and the MC-aware
+  // adaptive exit decide, not a clock. STEADY + BLEND keep their disciplined ~1h fresh pocket (a
+  // deliberate conservative profile, enshrined in tests); widen those too only if the owner asks.
+  const maxAge = liquid ? 2592000 : grind ? 3600 : snipe ? 600 : pop ? 2592000 : (mode === "steady" || mode === "blend") ? 3600 : 21600;
   // FRESH-PATH AGE CARVE-OUT: the 30-120s band is the single worst age pocket (−1.29 over 509
   // trades, a 15% win rate) — coins that launched, got sniped/pumped, and are mid-dump. <30s
   // (+0.22) and 2-5m (+0.34) both WIN. So the fresh engine skips the 30-120s dead-zone entirely
   // and takes the freshest entries + the survivors past 2 min. (entryReject honors skipMidAge.)
-  const skipMidAge = !liquid && !grind && !snipe && !pop;
+  // USER-DIRECTED (2026-06-21): stop using age as a hard reject — "we shouldn't care about age".
+  // The old skip refused the 30-120s pocket (a documented -1.29/-trade edge over 509 trades), but the
+  // owner wants more shots and the new MC-aware adaptive exit + trailing give-back now manage those
+  // coins instead of refusing them at the door. Flip back to `!liquid && !grind && !snipe && !pop` if
+  // live data shows the mid-age pocket bleeding again.
+  const skipMidAge = false;
   // STARTER BASELINE (2026-06-20): fresh maxScore ceiling raised 67 -> 100 (effectively off).
   // The 67-cap was REJECTING the strongest-scoring coins — combined with the [58,67) floor it
   // left a razor 9-point band almost nothing matched, a core "found nothing" cause. The old
@@ -995,6 +1005,18 @@ export function evalExit(pos, P, nowMs) {
   const peak = Math.max(pos.peakPct || 0, move);
   const held = nowMs - pos.openedAt;
 
+  // SETUP-AWARE PROFIT TAKES (user-directed 2026-06-21): "adjust profit takes understanding the MC and
+  // setup potential". A HIGHER-MC entry has less room left to multiply, so once we open the door to
+  // bigger caps (entry window now reaches ~$40k+) those bank SOONER — moon target ×0.8 above $25k,
+  // ×0.6 above $40k, and the fast-spike bulk-bank trigger drops with it. Low/normal-MC entries keep the
+  // proven full ladder (roomMult 1.0) — riding a thin sub-$25k curve to a higher moon rarely FILLS, so
+  // we don't extend it. Bounded, and it ONLY moves the moon + fast-spike runner levels — rug, hard stop,
+  // trailing give-back and TP1 banking are untouched, so the downside and first-pop lock are unchanged.
+  const _emc = Number(pos.entryMc) || 0;
+  const roomMult = _emc > 40000 ? 0.6 : _emc > 25000 ? 0.8 : 1.0;
+  const moonTarget = Math.round((P.moonTarget || 500) * roomMult);
+  const spikeLvl = Math.max(80, Math.round(150 * roomMult));
+
   // ADAPTIVE dev-style take: if this dev's coins historically top around X%, bank
   // the whole position as it nears ~60% of that level — don't hold a +200%-style
   // dev's coin hoping for +500. Scales per dev: avg 200 -> take ~120; avg 800 ->
@@ -1074,7 +1096,7 @@ export function evalExit(pos, P, nowMs) {
   // below the marked price on a thin curve — bank the BULK now near the spike instead
   // of laddering into a fading price. Honest fills showed a +358%-marked runner only
   // netted ~+74% riding the slow ladder; grab it. Keep a small runner for the monster.
-  if (!pos.copyLadder && !pos.tp1Done && move >= 150) {
+  if (!pos.copyLadder && !pos.tp1Done && move >= spikeLvl) {
     return { action: "sell", pct: P.spikePct || 75, reason: "spike", move };
   }
   // TP1: bank the first DOABLE pop. steady mode banks 80% here (locks the realizable
@@ -1096,7 +1118,7 @@ export function evalExit(pos, P, nowMs) {
     }
   }
   // Moon target: close the runner out (+400% steady/blend/cold, +500% normal).
-  if ((pos.tp3Done || P.steady || P.bankHard || P.snipe) && move >= (P.moonTarget || 500)) {
+  if ((pos.tp3Done || P.steady || P.bankHard || P.snipe) && move >= moonTarget) {
     return { action: "sell", pct: 100, reason: "tp4", move };
   }
   // Moon-bag TIME CAP: once the bulk is banked (tp1Done), don't let a small remnant

@@ -481,6 +481,19 @@ test("evalExit: ladder tp1 -> tp2 -> tp3 -> tp4 lets a runner ride", () => {
   assert.equal(tp4.reason, "tp4"); assert.equal(tp4.pct, 100);
 });
 
+test("evalExit: MC-aware profit takes — a high-MC entry banks SOONER (less room to pop)", () => {
+  const P = aggParams(baseState());
+  const ride = { entryLiq: 9000, lastLiq: 9000, openedAt: 0, missed: 0, peakPct: 0, tp1Done: true, tp2Done: true, tp3Done: true };
+  // A low-MC ($5k) entry keeps the full ladder: +500% closes (base moonTarget), but a +400% runner is NOT
+  // yet closed — it still rides toward the moon.
+  const lowAt400 = evalExit({ ...ride, entryMc: 5000, lastMc: 5000 * 5, peakPct: 400 }, P, 1000);
+  assert.notEqual(lowAt400.reason, "tp4", "low-MC entry still rides at +400% (full ladder)");
+  // A high-MC ($50k) entry has less room, so the moon target scales down (×0.6 ≈ +300%) — the SAME +400%
+  // runner is closed here. Banking sooner on the bigger cap is the whole point.
+  const highAt400 = evalExit({ ...ride, entryMc: 50000, lastMc: 50000 * 5, peakPct: 400 }, P, 1000);
+  assert.equal(highAt400.reason, "tp4", "high-MC entry banks the runner sooner"); assert.equal(highAt400.pct, 100);
+});
+
 test("evalExit: steady mode LOCKS A WIN at the first pop (banks ~88%) and rides the tail to +400%", () => {
   const P = aggParams(baseState({ mode: "steady" }));
   const base = { entryMc: 5000, entryLiq: 6000, lastLiq: 6000, openedAt: 0, missed: 0, peakPct: 0 };

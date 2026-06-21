@@ -40171,7 +40171,7 @@ const JITO_TIP_ACCOUNTS = [
   "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe",
   "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY",
   "ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49",
-  "DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLhNdwoR",
+  "DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh",
   "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt",
   "DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL",
   "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT"
@@ -40184,8 +40184,16 @@ const JITO_TIP_ACCOUNTS = [
 // atomic, so the separate tip tx only pays if the swap lands; (3) tips are kept LOW + per-type.
 // Behaviour is IDENTICAL to before when CONFIG.tradeJitoBundle is false (the default), so shipping
 // this changes nothing live until the env flag is flipped + verified on a real send.
+let lastJitoBundleSubmitMs = 0;
+const JITO_MIN_SUBMIT_GAP_MS = 1200; // free public tier ~1 req/sec/engine per IP; stay under it to dodge the escalating ban
 async function sendPumpTradeTx(tx, keypair, label, opts = {}) {
   if (!CONFIG.tradeJitoBundle) return sendVersionedTransaction(tx, label);
+  // Jito's free block engines rate-limit to ~1 bundle/sec per engine per IP, and hammering them earns an
+  // escalating back-off (observed live: "Retry after 120000ms"). The autopilot fires sells in bursts, so if
+  // a bundle went out <1.2s ago, skip Jito for THIS tx and take the safe, instant RPC path — never stall a sell.
+  const nowMs = Date.now();
+  if (nowMs - lastJitoBundleSubmitMs < JITO_MIN_SUBMIT_GAP_MS) return sendVersionedTransaction(tx, label);
+  lastJitoBundleSubmitMs = nowMs;
   const tipSol = Math.max(0.00001, Number(opts.tipSol) || CONFIG.tradeJitoTipSol || 0.0001);
   try {
     const swapSig = bs58.encode(Buffer.from(tx.signatures[0]));
