@@ -4998,7 +4998,9 @@ function startHealthServer() {
       return;
     }
     if (request.method === "GET" && ["/gg", "/terminal-pro", "/pro-terminal", "/gg.html"].includes(requestUrl.pathname)) {
-      await serveStaticHtmlPage(response, "gg.html");
+      // No-store during the active build-out so testers always get the latest /gg (its chart/
+      // tools/wallet code changes constantly). Switch back to a normal cache once it stabilizes.
+      await serveStaticHtmlPage(response, "gg.html", "no-store, max-age=0");
       return;
     }
 
@@ -29151,12 +29153,12 @@ async function serveAutopilotAdminPage(requestUrl, request, response) {
   response.end(html);
 }
 
-async function serveStaticHtmlPage(response, fileName) {
+async function serveStaticHtmlPage(response, fileName, cacheControl = "public, max-age=60, stale-while-revalidate=600") {
   try {
     const html = await fs.readFile(path.join(WEB_STATIC_DIR, fileName), "utf8");
     response.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "public, max-age=60, stale-while-revalidate=600"
+      "Cache-Control": cacheControl
     });
     response.end(html);
   } catch {
