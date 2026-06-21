@@ -45,10 +45,10 @@
   nav.mainnav a.active{color:var(--green);background:var(--green-dim)}
   .navdrop{position:relative}
   .navdrop .dropbtn{padding:7px 13px;border-radius:9px;font-size:13px;font-weight:600;color:var(--muted);white-space:nowrap}
-  .navdrop:hover .dropbtn,.navdrop:focus-within .dropbtn{color:var(--text);background:rgba(137,255,67,.05)}
-  .navdrop .dropmenu{display:none;position:absolute;top:calc(100% + 4px);left:0;min-width:200px;background:rgba(10,16,11,.99);border:1px solid var(--border);border-radius:12px;padding:6px;box-shadow:var(--glow);z-index:40}
-  .navdrop:hover .dropmenu,.navdrop:focus-within .dropmenu{display:block}
-  .navdrop .dropmenu a{display:block;padding:9px 12px;border-radius:8px;font-size:13px;color:var(--text);white-space:nowrap}
+  .navdrop .dropbtn:hover,.navdrop.open .dropbtn{color:var(--text);background:rgba(137,255,67,.05)}
+  .navdrop .dropmenu{display:none;position:absolute;top:100%;left:0;min-width:210px;background:rgba(10,16,11,.99);border:1px solid var(--border);border-radius:12px;padding:6px;box-shadow:var(--glow);z-index:50}
+  .navdrop.open .dropmenu{display:block}
+  .navdrop .dropmenu a{display:block;padding:10px 12px;border-radius:8px;font-size:13px;color:var(--text);white-space:nowrap}
   .navdrop .dropmenu a:hover{background:var(--green-dim);color:var(--green)}
   .topctrls{display:flex;align-items:center;gap:9px;flex:0 0 auto}
   .pastebtn,.searchbox,.walletpill,.iconbtn{height:34px;border:1px solid var(--border);border-radius:10px;background:rgba(8,13,9,.7);display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12px}
@@ -874,6 +874,11 @@
   document.querySelectorAll("#botnav button[data-route]").forEach(b=>b.onclick=()=>go(b.dataset.route));
   document.querySelectorAll("#botnav button[data-tools]").forEach(b=>b.onclick=()=>openToolsSheet());
   $("#walletPill").onclick=()=>go("wallet");
+  // Tools dropdown = click-toggle (hover dropdowns drop on the gap + don't work on touch).
+  (function(){const drop=document.querySelector(".navdrop"),db=drop&&drop.querySelector(".dropbtn");
+    if(db){db.onclick=e=>{e.stopPropagation();drop.classList.toggle("open");};
+      drop.querySelectorAll(".dropmenu a").forEach(a=>a.addEventListener("click",()=>drop.classList.remove("open")));
+      document.addEventListener("click",()=>drop.classList.remove("open"));}})();
 
   // ---------- expose + boot ----------
   window.GG={open:(m)=>go("trade",m),go,quickBuy,copy,closeModal,pickWallet,
