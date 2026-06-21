@@ -442,6 +442,32 @@ test("grind: banks the bulk at +30% and caps the ride at +150% (base-hits, not m
   assert.equal(cap.reason, "tp4"); assert.equal(cap.pct, 100);
 });
 
+test("apex router: a liquid mover banks the bulk early at +18% then trails the small runner (steady wins)", () => {
+  const P = aggParams(baseState({ mode: "apex" }));
+  const base = { entryMc: 60000, entryLiq: 40000, lastLiq: 40000, openedAt: 0, missed: 0, peakPct: 0, bankEarly: true };
+  // past +18% → bank the BULK at the high-hit-rate take (steady wins, not a round-trip on the slow ladder)
+  const e = evalExit({ ...base, lastMc: 60000 * 1.20, tp1Done: false }, P, 1000);
+  assert.equal(e.reason, "bank-early");
+  assert.ok(e.pct >= 80, "banks the bulk (~82%) once past +18%");
+  // the small runner trails: after the bulk bank, a give-back from a modest peak (10-25% gap the
+  // general trail misses) closes it so it can't fade back to scratch.
+  const trail = evalExit({ ...base, lastMc: 60000 * 1.05, tp1Done: true, peakPct: 15 }, P, 2000);
+  assert.equal(trail.reason, "bank-early-trail");
+  assert.equal(trail.pct, 100);
+  // a FRESH apex trade (no bankEarly) does NOT bank at +18% — it keeps room to run from a low base.
+  const fresh = evalExit({ ...base, bankEarly: false, lastMc: 60000 * 1.18, tp1Done: false }, P, 1000);
+  assert.notEqual(fresh.reason, "bank-early");
+});
+
+test("apexType routes the playbook: pop / liquid / fresh are distinguished", () => {
+  // a live pop (real turnover + breakout) → pop playbook (fast bank/fade)
+  assert.equal(apexType({ liquidityUsd: 30000, marketCap: 120000, volume5m: 24000, buys5m: 60, sells5m: 12, m5: 20, h1: 30, pairAgeSeconds: 1800 }), "pop");
+  // a deeper, older mover with no live spike → liquid playbook (bank early)
+  assert.equal(apexType({ liquidityUsd: 40000, marketCap: 200000, volume5m: 1000, buys5m: 10, sells5m: 10, pairAgeSeconds: 6000 }), "liquid");
+  // a brand-new launch → fresh playbook (room to run)
+  assert.equal(apexType({ liquidityUsd: 2500, marketCap: 2500, volume5m: 120, buys5m: 30, sells5m: 8, pairAgeSeconds: 20 }), "fresh");
+});
+
 test("evalExit: a proven-dev moon bag rides longer before the time-cap, still bounded", () => {
   const P = aggParams(baseState());
   // +50% move, bulk already banked (tp1Done), liquidity intact, modest peak — the only

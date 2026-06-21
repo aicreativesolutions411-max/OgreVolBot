@@ -1218,6 +1218,17 @@ export function evalExit(pos, P, nowMs) {
   if (pos.smartHoldMs && held >= pos.smartHoldMs && move > -P.sl) {
     return { action: "sell", pct: 100, reason: "smart-hold", move };
   }
+  // APEX LIQUID — bank-early for STEADY WINS. An established mover (real depth/turnover) makes
+  // smaller, more reliable % moves than a fresh lottery, so bank the BULK at a high-hit-rate +18%
+  // and trail the small remainder. Higher hit-rate + smoother equity curve = "win steady" instead of
+  // riding a modest mover back to scratch on the slow ladder. Fresh launches don't get this (they
+  // need room to run from $2k); copy/pop use their own playbooks.
+  if (pos.bankEarly && !pos.copyLadder && !pos.tp1Done && move >= 18) {
+    return { action: "sell", pct: 82, reason: "bank-early", move };
+  }
+  if (pos.bankEarly && pos.tp1Done && peak >= 10 && move <= peak * 0.7) {
+    return { action: "sell", pct: 100, reason: "bank-early-trail", move };   // protect the small runner's gains
+  }
   // FAST-SPIKE CAPTURE: a coin already +150%+ is a fast pump that fades fast and fills
   // below the marked price on a thin curve — bank the BULK now near the spike instead
   // of laddering into a fading price. Honest fills showed a +358%-marked runner only
@@ -2268,6 +2279,7 @@ export function createAutopilotEngine(deps) {
       else if (reason === "tp2") pos.tp2Done = true;
       else if (reason === "tp3") pos.tp3Done = true;
       else if (reason === "spike") { pos.tp1Done = true; pos.tp2Done = true; } // bulk banked; small runner trails
+      else if (reason === "bank-early") { pos.tp1Done = true; pos.tp2Done = true; } // apex liquid bulk banked; runner trails
       record("info", `🟡 ${pos.sym} ${reason.toUpperCase()} sold ${pct}% @ ${round(move, 1)}% (moon bag rides)`);
     }
   }
@@ -2342,6 +2354,17 @@ export function createAutopilotEngine(deps) {
     else ss.scratches += 1;
     ss.pnl = round((ss.pnl || 0) + pnl, 6);
     state.sourceStats[source] = ss;
+    // APEX SUBTYPE SCORECARD — track pop/copy/liquid/fresh SEPARATELY (keyed apex:<kind> in the same
+    // sourceStats map so status() already exposes it). "apex lost" is too blurry to tune; this shows
+    // which playbook actually wins vs bleeds so we calibrate from data, not guesses.
+    if (pos.apexKind) {
+      const ak = `apex:${pos.apexKind}`;
+      const as = state.sourceStats[ak] || { n: 0, wins: 0, losses: 0, scratches: 0, pnl: 0 };
+      as.n += 1;
+      if (win) as.wins += 1; else if (realLoss) as.losses += 1; else as.scratches += 1;
+      as.pnl = round((as.pnl || 0) + pnl, 6);
+      state.sourceStats[ak] = as;
+    }
     // Feed the self-tuner: recent peaks + rug flags.
     state.recentPeaks.push(Math.round(pos.peakPct || 0));
     if (state.recentPeaks.length > 30) state.recentPeaks.shift();
@@ -2542,9 +2565,27 @@ export function createAutopilotEngine(deps) {
         const finalists = scored.slice(0, 6);
         const deep = await enrichFinalists(finalists.map((x) => x.r.tokenMint)) || {};
         let adjusted = false;
+        const vetoed = new Set();
         for (const x of finalists) {
           const d = deep[x.r.tokenMint];
-          if (d) { x.deep = d; x.fs = apexDeepEdge(x.fs, d); adjusted = true; }
+          if (!d) continue;
+          x.deep = d;
+          adjusted = true;
+          // HARD VETO toxic concentration — at EXTREME levels these aren't a score penalty, they're a
+          // near-certain dump-on-us (a few wallets hold enough to rug the price). Drop the candidate
+          // entirely instead of just down-ranking it, so it can never be bought even as the top row.
+          if (d.rugged
+            || Number(d.snipersPct) >= 35 || Number(d.insidersPct) >= 30 || Number(d.bundlersPct) >= 35
+            || Number(d.top10Pct) >= 80 || Number(d.devHoldPct) >= 25 || Number(d.devRugs) >= 2) {
+            x.reject = "toxic";
+            vetoed.add(x.r.tokenMint);
+          } else {
+            x.fs = apexDeepEdge(x.fs, d);   // clean enough → adjust the edge with the deep data
+          }
+        }
+        if (vetoed.size) {
+          for (let i = scored.length - 1; i >= 0; i--) if (vetoed.has(scored[i].r.tokenMint)) scored.splice(i, 1);
+          rejTally.toxic = (rejTally.toxic || 0) + vetoed.size;
         }
         if (adjusted) scored.sort((a, b) => b.fs - a.fs);   // re-rank with the deep-vetted edges
       } catch (e) { try { record("warn", `apex deep-vet skipped: ${e && e.message}`); } catch {} }
@@ -2798,6 +2839,9 @@ export function createAutopilotEngine(deps) {
       // SNIPE BET CAP — moonshot math needs MANY small EVEN bets so a rare 4x pays for the losers; no
       // single snipe may exceed 5% of bank (live proof: one 16%-of-bank snipe ate ~80% of a session loss).
       if (P.snipe || P.pop) size = Math.max(state.minTradeSol, Math.min(size, state.bank * (P.pop ? popBetFrac(cand.r.marketCap) : 0.05)));   // snipe/pop: small even bets; pop scales DOWN on thin low-MC curves (slippage)
+      // APEX POP — a pop caught in apex is high-velocity and reverses fast, so size it like a pop
+      // (small, slippage-aware via popBetFrac) instead of a full apex bet. Routed to the pop exit too.
+      else if (P.apex && apexType(cand.r) === "pop") size = Math.max(state.minTradeSol, Math.min(size, state.bank * popBetFrac(cand.r.marketCap)));
       if (probeNow) size = state.minTradeSol;
       if (!canOpen(state, size)) break;
       // Rolling 60s open throttle — hard-stop the churn that bled fees (don't machine-gun new bags).
@@ -3116,12 +3160,24 @@ export function createAutopilotEngine(deps) {
     // the instant the inflow that drove the pop decelerates) + the MC-SCALED tail ceiling: higher entry
     // MC = a smaller realistic pop, so bank a smaller multiple ("50k 1x is great"); lower MC rides
     // bigger ("10k can 2x easy"). The fast tp1 ladder banks the bulk; this caps where the tail closes.
-    pos.pop = Boolean(P && P.pop);
+    // APEX ROUTER — apexType() WAS dead code: every apex trade opened identically (pos.pop only when
+    // the whole mode is pop), so a genuine pop caught in apex rode the slow ladder and round-tripped.
+    // Now classify each apex entry and give it the RIGHT playbook: a pop gets the fast pop-bank/fade
+    // exit + pop sizing; a liquid mover banks early for a high hit-rate (steady wins); a copy setup
+    // already routes via smartExit/copyLadder; a fresh launch keeps the room-to-run ladder. apexKind
+    // is also logged per-trade so each subtype's W/L is measured separately.
+    const apexKind = (P && P.apex) ? apexType(row) : null;
+    pos.apexKind = apexKind;
+    pos.pop = Boolean(P && P.pop) || apexKind === "pop";
     if (pos.pop) {
       const mcE = pos.entryMc || 0;
       pos.popMoonTarget = mcE >= 50000 ? 90 : mcE >= 25000 ? 110 : mcE >= 10000 ? 130 : 150;   // aim 100-150% (higher MC banks a touch sooner)
       pos.popPeakInflow = (() => { try { return Number(popInflow(mint)) || 0; } catch { return 0; } })();   // peak buy-inflow SINCE ENTRY (fade reference)
     }
+    // APEX LIQUID — an established mover (real depth/turnover, not a fresh lottery) makes smaller, more
+    // reliable % moves. Bank the bulk at a high-hit-rate level and trail the rest = steady wins. Fresh
+    // launches deliberately DON'T get this (they need room to run from $2k); copy rides its own ladder.
+    if (apexKind === "liquid" && !pos.copyLadder) pos.bankEarly = true;
     state.open.push(pos);
     state.recentApeNames[normSym(sym)] = now(); // remember the NAME to block clone-swarm pile-ins
     state.coinTrades[pos.mint] = (state.coinTrades[pos.mint] || 0) + 1; // DIVERSIFY: count session trades per mint
