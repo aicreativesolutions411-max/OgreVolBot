@@ -2533,7 +2533,16 @@ function autopilotRowHasHardDanger(r = {}) {
   // gate only needs to drop the clear scams here. Keep active freeze/mint authority + honeypot/
   // blacklist/mayhem/hardblock (genuine, unfakeable rug vectors).
   const flags = (Array.isArray(r.riskFlags) ? r.riskFlags : []).map((f) => String(f).toLowerCase());
-  if (flags.some((f) => /freezeauthorityactive|mintauthorityactive|honeypot|mayhem|hardblock|blacklist/.test(f))) return true;
+  // NOTE (2026-06-21): freezeAuthorityActive / mintAuthorityActive are DROPPED from this feed gate.
+  // They were a SYSTEMATIC FALSE POSITIVE on Token-2022 pump coins — verified on-chain that 50/50
+  // flagged fresh coins had freezeAuthority=null, yet the derived flag stamped them, collapsing the
+  // candidate pool to out=1 of 50 ("feed quiet, bought nothing"). The flag comes from a provider
+  // jsonParsed mis-read upstream; the AUTHORITATIVE freeze/mint check now runs at BUY time in
+  // assertTokenBuyBaseSafety, which decodes the authority from the RAW mint bytes (provider-independent,
+  // correct for SPL + Token-2022). So a real freeze/mint authority is still BLOCKED before any SOL is
+  // spent — this gate just stops pre-rejecting safe coins on a broken flag. Keep the genuine,
+  // unfakeable scam vectors below.
+  if (flags.some((f) => /honeypot|mayhem|hardblock|blacklist/.test(f))) return true;
   const rug = Number(r.rugRisk); if (Number.isFinite(rug) && rug >= 97) return true;            // only the most extreme AVOID-grade
   return false;
 }
