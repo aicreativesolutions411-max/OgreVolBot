@@ -689,6 +689,27 @@ export function apexType(row = {}) {
   return "fresh";                                  // a fresh launch → ride ladder
 }
 
+// APEX STAGE 2 — adjust a finalist's edge with the DEEP data (Solana Tracker holders/insiders/snipers/
+// bundlers + dev reputation + LP burn), pulled for ONLY the top few finalists so cost stays bounded.
+// This is the "give the bot the full info before it decides" layer: concentration risk (a few wallets
+// can dump on us) and a rugger dev push the edge DOWN; a clean cap table + a proven dev + burned LP
+// push it UP; a confirmed rug is killed outright. Returns the adjusted edge.
+export function apexDeepEdge(edge, d = {}) {
+  if (!d) return edge;
+  if (d.rugged) return -1000;                                         // confirmed rug — never buy
+  let e = edge;
+  const over = (v, base, k, cap) => (Number.isFinite(v) ? Math.min(cap, Math.max(0, (v - base) * k)) : 0);
+  e -= over(d.snipersPct, 12, 1.2, 30);                              // sniper (first-block) concentration
+  e -= over(d.insidersPct, 8, 1.6, 26);                             // insider / linked-wallet concentration
+  e -= over(d.bundlersPct, 12, 1.0, 20);                            // bundled-wallet concentration
+  e -= over(d.top10Pct, 35, 0.6, 20);                              // top-10 holders too heavy
+  e -= over(d.devHoldPct, 8, 1.5, 22);                            // dev still sitting on a big dumpable bag
+  if (Number.isFinite(d.lpBurnedPct) && d.lpBurnedPct >= 50) e += 6;  // LP burned → can't pull the rug
+  if ((d.devRugs || 0) >= 1) e -= Math.min(50, d.devRugs * 22);      // serial rugger — heavy penalty
+  else if ((d.devRunners || 0) >= 1) e += (d.devRunners >= 2 ? 16 : 10);  // proven runner dev, zero rugs
+  return e;
+}
+
 // CONVICTION: how hard to bet a setup (0.5x..1.6x of base size). Trades like a
 // pro — size scales with confluence: proven dev + heavy buy flow + freshness +
 // strong score → bigger; marginal/risky → smaller. Bounded; final size still
@@ -1507,6 +1528,11 @@ export function createAutopilotEngine(deps) {
     // (mint, creator) -> register a COPY/smart-money position's coin for the same real-time rug-watch
     // the insider launches get, so devSold() can flip on a distribution precursor. No-op when unwired.
     noteRugWatch = () => {},
+    // APEX STAGE 2: (mints[]) -> { mint: { top10Pct, snipersPct, insidersPct, bundlersPct, devHoldPct,
+    // lpBurnedPct, rugged, devRunners, devRugs } }. Deep-vet data (Solana Tracker + dev rep) for ONLY
+    // the top finalists. The host fills it (fetchSolanaTrackerTokenReport + combinedDevRep). Unwired =
+    // no-op (apex falls back to the Stage-1 edge ranking — safe).
+    enrichFinalists = null,
     now = () => Date.now(),
     log = () => {},
     persist = async () => {},
@@ -2425,6 +2451,23 @@ export function createAutopilotEngine(deps) {
     const scored = scoredAll
       .filter((x) => !x.reject)
       .sort((a, b) => b.fs - a.fs);
+
+    // APEX STAGE 2 — deep-vet the TOP finalists, then RE-RANK. The cheap edge above scans everything;
+    // now pull the real holder/insider/sniper/dev/shield data for ONLY the top few it surfaced and let
+    // that decide the final winner. Bounded cost (≤6 deep pulls, not 50) so it never times out; if the
+    // enrichment is unwired or errors, we keep the Stage-1 ranking (safe — never blocks the trade).
+    if (P.apex && typeof enrichFinalists === "function" && scored.length) {
+      try {
+        const finalists = scored.slice(0, 6);
+        const deep = await enrichFinalists(finalists.map((x) => x.r.tokenMint)) || {};
+        let adjusted = false;
+        for (const x of finalists) {
+          const d = deep[x.r.tokenMint];
+          if (d) { x.deep = d; x.fs = apexDeepEdge(x.fs, d); adjusted = true; }
+        }
+        if (adjusted) scored.sort((a, b) => b.fs - a.fs);   // re-rank with the deep-vetted edges
+      } catch (e) { try { record("warn", `apex deep-vet skipped: ${e && e.message}`); } catch {} }
+    }
 
     // THROTTLE (built-in anti-churn): space out entries and cap how many ride at
     // once based on tape. Cold tape -> ~1 entry / 15s, max 2 open; normal -> 1 / 5s;

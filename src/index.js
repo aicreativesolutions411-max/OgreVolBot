@@ -3280,6 +3280,30 @@ const autopilotEngine = createAutopilotEngine({
   getLiquidFeed: async () => buildLiquidMovers(),
   // POP mode feed: real-time IGNITION candidates from PopRadar (pre-vetted, MC-agnostic).
   getPopFeed: async () => popFeedRows(),
+  // APEX STAGE 2 — deep-vet ONLY the top finalists (≤6) the cheap scan surfaced: Solana Tracker
+  // holder/insider/sniper/bundler/dev-hold/LP-burn + our deployer-warehouse dev reputation. ST is
+  // cached 90s so repeated finalists are nearly free. Returns a {mint: deep} map for apexDeepEdge.
+  enrichFinalists: async (mints) => {
+    const out = {};
+    const list = [...new Set((Array.isArray(mints) ? mints : []).filter(Boolean))].slice(0, 6);
+    await Promise.all(list.map(async (mint) => {
+      try {
+        const st = await fetchSolanaTrackerTokenReport(mint).catch(() => null);
+        if (!st || !st.ok) return;
+        let devRunners = 0, devRugs = 0;
+        if (st.creator) {
+          const rep = combinedDevRep(st.creator);
+          if (rep) { devRunners = Number(rep.runners) || 0; devRugs = Number(rep.rugs) || 0; }
+        }
+        out[mint] = {
+          top10Pct: st.topHolderPercent, snipersPct: st.snipersPercent, insidersPct: st.insidersPercent,
+          bundlersPct: st.bundlersPercent, devHoldPct: st.devHoldPercent, lpBurnedPct: st.lpBurnedPercent,
+          rugged: st.rugged, devRunners, devRugs
+        };
+      } catch { /* leave this finalist on its Stage-1 edge */ }
+    }));
+    return out;
+  },
   // Momentum-fade exit signal: the inflow that drove the pop has decelerated.
   popFading: (mint) => popFadingNow(mint),
   popInflow: (mint) => { try { return popMetrics(mint, Date.now())?.inflowNow || 0; } catch { return 0; } },

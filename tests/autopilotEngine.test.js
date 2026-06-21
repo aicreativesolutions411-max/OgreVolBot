@@ -10,6 +10,7 @@ import {
   jumpScore,
   apexEdge,
   apexType,
+  apexDeepEdge,
   convictionMult,
   confluenceMult,
   graduationScore,
@@ -506,6 +507,23 @@ test("apex: unified edge ranks setups head-to-head; wide entry window; type rout
   // A clean fresh mover passes the apex gate (gates on apexEdge, not a narrow per-mode window).
   assert.equal(entryReject(freshRow, P), null, "apex admits a strong fresh mover");
   assert.equal(entryReject(popRow, P), null, "apex admits a live pop");
+});
+
+test("apex Stage 2: deep-vet re-ranks finalists on holders/dev/rug data", () => {
+  const base = 70;
+  // A confirmed rug is killed outright (never buy).
+  assert.ok(apexDeepEdge(base, { rugged: true }) < 0, "a rugged coin is killed");
+  // Heavy insider/sniper/bundler concentration drops the edge.
+  const concentrated = apexDeepEdge(base, { insidersPct: 40, snipersPct: 35, bundlersPct: 30, top10Pct: 70 });
+  assert.ok(concentrated < base - 30, "stacked concentration tanks the edge");
+  // A clean cap table with a PROVEN dev (runners, no rugs) + burned LP lifts it above a marginal coin.
+  const clean = apexDeepEdge(base, { insidersPct: 3, snipersPct: 4, bundlersPct: 2, top10Pct: 20, devRunners: 2, devRugs: 0, lpBurnedPct: 100 });
+  assert.ok(clean > base, "a clean coin with a proven dev + burned LP gets a boost");
+  assert.ok(clean > concentrated, "clean ranks above concentrated after the deep vet");
+  // A serial rugger dev is penalized hard even on a momentum-strong coin.
+  assert.ok(apexDeepEdge(base, { devRugs: 2 }) < base - 30, "serial rugger dev is penalized");
+  // No deep data → edge unchanged (Stage-1 ranking preserved; never blocks the trade).
+  assert.equal(apexDeepEdge(base, null), base, "no deep data keeps the Stage-1 edge");
 });
 
 test("evalExit: MC-aware profit takes — a high-MC entry banks SOONER (less room to pop)", () => {
