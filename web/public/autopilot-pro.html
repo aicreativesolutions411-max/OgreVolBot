@@ -324,8 +324,13 @@
         <input type="checkbox" id="useAll" style="width:18px;height:18px;accent-color:#8dff5a"/>
         <span>💰 Use my whole wallet balance — it sizes itself (keeps a little SOL back for fees)</span>
       </label>
+      <!-- APEX: the unified scan-everything brain (flagship) -->
+      <label style="margin-top:4px">🦾 Apex — the smart all-in-one <span style="color:#8dff5a">(NEW)</span></label>
+      <div class="modeSel" id="apexSel">
+        <button type="button" class="modeBtn" data-mode="apex"><b>🦾 Apex Hunter</b><span>Scans EVERYTHING at once — fresh launches, live pops, liquid movers &amp; smart-money — scores them head-to-head and takes the single best winner each time. Not feed-siloed, not just copy.</span></button>
+      </div>
       <!-- STYLE: how it trades — 3 honest, distinct profiles -->
-      <label style="margin-top:4px">Style — how it trades</label>
+      <label style="margin-top:10px">Style — how it trades</label>
       <div class="modeSel" id="modeSel">
         <button type="button" class="modeBtn" data-mode="steady"><b>Steady</b><span>Locks the bulk at the first solid pop. Smallest swings — banks green most often.</span></button>
         <button type="button" class="modeBtn" data-mode="blend"><b>Balanced</b><span>Banks in steps as it climbs, lets a small piece ride. Steady, with upside.</span></button>
@@ -804,9 +809,9 @@ $("cashoutBtn").addEventListener("click",async()=>{const w=selWallet();if(!w){$(
 let selectedMode="scalp";
 // One mode across BOTH groups (the 3 styles + the 3 launch snipers) — clicking any button selects
 // it and clears the highlight from every other button in either group.
-const ALL_MODE_BTNS=()=>[...document.querySelectorAll("#modeSel .modeBtn, #snipeSel .modeBtn, #popSel .modeBtn")];
+const ALL_MODE_BTNS=()=>[...document.querySelectorAll("#apexSel .modeBtn, #modeSel .modeBtn, #snipeSel .modeBtn, #popSel .modeBtn")];
 function pickMode(b){if(!b)return;selectedMode=b.dataset.mode||"scalp";ALL_MODE_BTNS().forEach(x=>x.classList.toggle("on",x===b));}
-["modeSel","snipeSel","popSel"].forEach(id=>{const el=$(id);if(el)el.addEventListener("click",(e)=>{pickMode(e.target.closest(".modeBtn"));});});
+["apexSel","modeSel","snipeSel","popSel"].forEach(id=>{const el=$(id);if(el)el.addEventListener("click",(e)=>{pickMode(e.target.closest(".modeBtn"));});});
 // "Use whole balance" — grey out the manual amount; the server sizes off the full wallet (less a fee reserve).
 $("useAll").addEventListener("change",()=>{$("amt").disabled=$("useAll").checked;});
 $("startBtn").addEventListener("click",async()=>{

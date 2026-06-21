@@ -8,6 +8,8 @@ import {
   grindScore,
   liquidScore,
   jumpScore,
+  apexEdge,
+  apexType,
   convictionMult,
   confluenceMult,
   graduationScore,
@@ -479,6 +481,31 @@ test("evalExit: ladder tp1 -> tp2 -> tp3 -> tp4 lets a runner ride", () => {
   // +500% closes the runner
   const tp4 = evalExit({ ...base, lastMc: 5000 * 6, tp1Done: true, tp2Done: true, tp3Done: true, peakPct: 500 }, P, 1000);
   assert.equal(tp4.reason, "tp4"); assert.equal(tp4.pct, 100);
+});
+
+test("apex: unified edge ranks setups head-to-head; wide entry window; type routing", () => {
+  // A live POP (turnover spike + buy-led breakout + depth) scores high on the unified edge.
+  const popRow = { tokenMint: "p", symbol: "POP", liquidityUsd: 30000, marketCap: 120000, volume5m: 24000, buys5m: 60, sells5m: 12, m5: 20, h1: 30, pairAgeSeconds: 1800 };
+  // A strong FRESH launch (seconds old, buy-led, in the $2k pocket).
+  const freshRow = { tokenMint: "f", symbol: "NEW", marketCap: 2200, liquidityUsd: 2200, volume5m: 140, buys5m: 40, sells5m: 8, pairAgeSeconds: 12 };
+  // A dead coin — no momentum, no flow.
+  const deadRow = { tokenMint: "d", symbol: "DEAD", marketCap: 4000, liquidityUsd: 500, volume5m: 5, buys5m: 1, sells5m: 1, pairAgeSeconds: 4000 };
+  assert.ok(apexEdge(popRow) >= 60, "a real pop scores a high unified edge");
+  assert.ok(apexEdge(freshRow) >= 50, "a strong fresh launch scores a solid edge");
+  assert.ok(apexEdge(deadRow) < apexEdge(freshRow), "a dead coin ranks below a real setup");
+  // Confluence + smart-money stack the edge (a fresh launch a winner is ALSO buying).
+  assert.ok(apexEdge({ ...freshRow, smartMoney: "KOL" }) > apexEdge(freshRow), "smart-money stacks the edge");
+  // Type routing for the right playbook.
+  assert.equal(apexType(popRow), "pop", "a popping coin routes to the fast in/out playbook");
+  assert.equal(apexType({ ...freshRow, smartMoney: "KOL" }), "copy", "a smart-money coin routes to the copy ladder");
+  // Apex params: ONE wide window across all sources (any age, fresh-dust floor → mid-cap ceiling).
+  const P = aggParams(baseState({ mode: "apex" }));
+  assert.equal(P.apex, true);
+  assert.ok(P.mcFloor <= 1800 && P.mcCeil >= 1000000, "apex spans fresh dust → liquid mid-caps");
+  assert.ok(P.maxAge >= 86400, "apex is age-agnostic (a pop/mover can be any age)");
+  // A clean fresh mover passes the apex gate (gates on apexEdge, not a narrow per-mode window).
+  assert.equal(entryReject(freshRow, P), null, "apex admits a strong fresh mover");
+  assert.equal(entryReject(popRow, P), null, "apex admits a live pop");
 });
 
 test("evalExit: MC-aware profit takes — a high-MC entry banks SOONER (less room to pop)", () => {

@@ -79,6 +79,11 @@ export function aggParams(state) {
   // pop feed; this mode rides the ignition in fast and banks INTO the spike (momentum-fade exit). It's
   // MC-AGNOSTIC by design — flow leads, MC lags — and keeps bets small + even (a pop reverses fast).
   const pop = mode === "pop";
+  // APEX = the unified opportunity scanner. It hunts ALL feeds at once and gates on apexEdge (its own
+  // 0..100+ scale), with a WIDE entry window (any age, fresh-dust floor → mid-cap ceiling) so the edge
+  // + rug gate + the Stage-2 deep vet do the selecting, not a narrow per-mode window. Params overridden
+  // at the return below; the exit uses the balanced default ladder (banks the first pop, rides the rest).
+  const apex = mode === "apex";
   const baseFrac = mode === "degen" ? 0.10 : mode === "chill" ? 0.04 : scalp ? 0.07 : grind ? 0.07 : snipe ? 0.07 : pop ? 0.06 : 0.06;
 
   // Softer streak/regime scaling: a hot streak no longer balloons size right
@@ -361,7 +366,25 @@ export function aggParams(state) {
   // this. OR-gated — any ONE real signal (a notable X, a trusted TG caller, a proven dev, or a
   // proven-winner early buyer) reaches it; faceless dust with no signal never qualifies.
   const minSnipe = 18;
-  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, maxScore, mcFloor, mcCeil, minAge, maxAge, skipMidAge, liqFrac, minLiqAbs, steady, blend, grind, scalp, liquid, snipe, snipeTrail, snipeRide, snipeBank, pop, minSnipe, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct, unprovenConvCap, provenConvCap };
+  const out = { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, maxScore, mcFloor, mcCeil, minAge, maxAge, skipMidAge, liqFrac, minLiqAbs, steady, blend, grind, scalp, liquid, snipe, snipeTrail, snipeRide, snipeBank, pop, minSnipe, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct, unprovenConvCap, provenConvCap };
+  if (apex) {
+    // APEX overrides: wide hunter window + gate on the apexEdge scale. Entry stays permissive on
+    // purpose (the edge ranks, the rug gate + Stage-2 deep vet protect). Exit ladder = the balanced
+    // default already in `out` (banks the first real pop, rides the rest with the MC-adaptive moon).
+    return {
+      ...out,
+      apex: true,
+      minAge: 4,
+      maxAge: 2_592_000,           // any age — a pop or mover can be seconds or days old
+      mcFloor: 1800,               // include fresh dust…
+      mcCeil: 12_000_000,          // …up through liquid mid-caps
+      liqFrac: 0,
+      minLiqAbs: 0,
+      maxScore: Infinity,
+      minScore: 44 + ((state.tune && state.tune.scoreBonus) || 0)  // gates on apexEdge, adaptive in cold/rug tape
+    };
+  }
+  return out;
 }
 
 // SELF-TUNING / market-regime brain: reads the recent runner & rug rate and sets
@@ -630,6 +653,40 @@ export function liquidScore(row) {
   // CAPITAL EFFICIENCY — meaningful avg swap size beats micro-bot wash (top ML predictor).
   s += capitalEfficiencyScore(row);
   return s;
+}
+
+// ===== APEX — the unified "scan everything, pick the winner" brain =====
+// Scores a candidate through EVERY lens and takes the strongest read + a confluence bonus, so a
+// fresh launch, a live pop, a liquid mover, and a smart-money copy all compete on ONE 0..100+ edge
+// scale. apex mode merges all feeds each tick, sorts by this, and takes the single highest-edge
+// winner — "decide what's most likely to win as it scans over all the options", not feed-siloed.
+export function apexEdge(row = {}) {
+  const fresh = freshScore(row);     // fresh-launch quality (age/MC/flow/grad/cap-eff)
+  const liquid = liquidScore(row);   // liquid-mover depth/turnover/momentum (incl. a jumpScore bonus)
+  const grind = grindScore(row);     // survived-climber base-hit quality
+  const jump = jumpScore(row);       // RAW pop/ignition heat (0 unless it's actually popping)
+  // Base edge = whichever setup this coin genuinely IS (its strongest single read).
+  let edge = Math.max(fresh, liquid, grind, jump);
+  // CONFLUENCE — a coin strong through MULTIPLE lenses is higher-conviction (e.g. a fresh launch
+  // that's ALSO popping with a winner buying). Bounded.
+  const strong = [fresh, liquid, grind, jump].filter((x) => x >= 45).length;
+  if (strong >= 2) edge += Math.min(16, 8 * (strong - 1));
+  // SMART-MONEY / COPY — a tracked winner already in the buyers is a top predictor.
+  if (row.smartMoney) edge += 12;
+  // SOCIAL / X clout.
+  if (row.xNotable || Number(row.xClout) >= 1) edge += 5;
+  return edge;
+}
+
+// Classify the winning candidate so the trade uses the right playbook (logged; pop banks fast,
+// copy uses its ladder, a fresh/liquid runner rides the MC-adaptive ladder).
+export function apexType(row = {}) {
+  if (jumpScore(row) >= 50) return "pop";          // it's POPPING right now → fast in/out
+  if (row.smartMoney) return "copy";               // a winner is in → copy ladder (already on the row)
+  const liq = Number(row.liquidityUsd) || 0;
+  const age = Number(row.pairAgeSeconds) || 0;
+  if (liq >= 8000 && age >= 300) return "liquid";  // a deeper, older mover → scalp-style
+  return "fresh";                                  // a fresh launch → ride ladder
 }
 
 // CONVICTION: how hard to bet a setup (0.5x..1.6x of base size). Trades like a
@@ -961,7 +1018,7 @@ export function entryReject(row, P) {
   if ((P.liquid || P.grind) && vol >= 80 && (buys + sells) > 0 && (buys + sells) < 6) return "wash";
   // SCALP scores liquid movers (liquidScore); GRIND scores survivors (grindScore); the rest use
   // freshScore. Each mode's gate lives on its own scale (see the minScore overrides in aggParams).
-  const setupScore = P.liquid ? liquidScore(row) : P.grind ? grindScore(row) : freshScore(row);
+  const setupScore = P.apex ? apexEdge(row) : P.liquid ? liquidScore(row) : P.grind ? grindScore(row) : freshScore(row);
   if (setupScore < P.minScore) return "score";
   // FRESH-PATH SCORE CEILING — reject the 67+ bleeder zone (see aggParams maxScore). Entry becomes a
   // BAND (~62-66), the proven +EV pocket where the runners actually live, not just a floor.
@@ -2254,13 +2311,33 @@ export function createAutopilotEngine(deps) {
     // window is often thin, so rather than sit idle forever it FALLS BACK to the fresh feed and
     // trades those with its fast in/out exits — a trading scalp beats a waiting one. (The honest
     // realized-anchored display keeps phantom dust marks out of the headline regardless.)
-    const useLiquid = state.mode === "scalp" && typeof getLiquidFeed === "function";
-    const usePop = state.mode === "pop" && typeof getPopFeed === "function";
+    const useApex = state.mode === "apex";
+    const useLiquid = !useApex && state.mode === "scalp" && typeof getLiquidFeed === "function";
+    const usePop = !useApex && state.mode === "pop" && typeof getPopFeed === "function";
     try {
-      rows = usePop ? await getPopFeed() : useLiquid ? await getLiquidFeed() : await getFreshFeed();
-      // POP feed can be empty between ignitions — that's correct (no pop = no trade); don't fall back
-      // to the fresh feed (that would defeat the whole "only enter on a real pop" point).
-      if (useLiquid && (!Array.isArray(rows) || !rows.length)) rows = await getFreshFeed();
+      if (useApex) {
+        // APEX: scan EVERY source at once — fresh launches + live pops + liquid movers (copy/smart-money
+        // rows ride inside the fresh feed). Merge by mint, preserving the richest signals (a coin that's
+        // both fresh AND popping keeps its _pop ignition + smartMoney flag), so apexEdge can rank them all
+        // head-to-head and the engine takes the single best winner each tick.
+        const [fr, pp, lq] = await Promise.all([
+          getFreshFeed().catch(() => []),
+          typeof getPopFeed === "function" ? getPopFeed().catch(() => []) : Promise.resolve([]),
+          typeof getLiquidFeed === "function" ? getLiquidFeed().catch(() => []) : Promise.resolve([])
+        ]);
+        const byMint = new Map();
+        for (const r of [...(Array.isArray(fr) ? fr : []), ...(Array.isArray(lq) ? lq : []), ...(Array.isArray(pp) ? pp : [])]) {
+          if (!r || !r.tokenMint) continue;
+          const ex = byMint.get(r.tokenMint);
+          byMint.set(r.tokenMint, ex ? { ...ex, ...r, _pop: r._pop || ex._pop, smartMoney: r.smartMoney || ex.smartMoney } : r);
+        }
+        rows = [...byMint.values()];
+      } else {
+        rows = usePop ? await getPopFeed() : useLiquid ? await getLiquidFeed() : await getFreshFeed();
+        // POP feed can be empty between ignitions — that's correct (no pop = no trade); don't fall back
+        // to the fresh feed (that would defeat the whole "only enter on a real pop" point).
+        if (useLiquid && (!Array.isArray(rows) || !rows.length)) rows = await getFreshFeed();
+      }
     } catch (e) {
       record("warn", `feed error: ${e && e.message}`);
       return;
@@ -2269,7 +2346,7 @@ export function createAutopilotEngine(deps) {
     if (!rows.length) {
       if (now() - (state.lastScanLogAt || 0) > 45_000) {
         state.lastScanLogAt = now();
-        const fsrc = usePop ? "pop" : useLiquid ? "liquid" : "fresh";
+        const fsrc = useApex ? "apex(all)" : usePop ? "pop" : useLiquid ? "liquid" : "fresh";
         record("info", `🔍 scanning — feed quiet (mode=${state.mode} feed=${fsrc}, 0 candidates right now)`);
       }
     }
@@ -2339,7 +2416,7 @@ export function createAutopilotEngine(deps) {
         const a = state.recentApeNames[ns];
         return !a || nowMs - a > nameCoolMs;
       })
-      .map((r) => ({ r, reject: entryReject(r, P), fs: P.pop ? (Number(r._pop && r._pop.score) || 50) : P.liquid ? liquidScore(r) : P.grind ? grindScore(r) : freshScore(r) }));
+      .map((r) => ({ r, reject: entryReject(r, P), fs: P.apex ? apexEdge(r) : P.pop ? (Number(r._pop && r._pop.score) || 50) : P.liquid ? liquidScore(r) : P.grind ? grindScore(r) : freshScore(r) }));
     // Reject-reason tally so a persistently-dry feed shows WHY (mc/age/liquidity/score/etc.)
     // — turns "0 passed the bar" into an actionable breakdown in the scan heartbeat.
     const rejTally = {};
