@@ -84,7 +84,14 @@ export function aggParams(state) {
   // + rug gate + the Stage-2 deep vet do the selecting, not a narrow per-mode window. Params overridden
   // at the return below; the exit uses the balanced default ladder (banks the first pop, rides the rest).
   const apex = mode === "apex";
-  const baseFrac = mode === "degen" ? 0.10 : mode === "chill" ? 0.04 : scalp ? 0.07 : grind ? 0.07 : snipe ? 0.07 : pop ? 0.06 : 0.06;
+  // SWING = the LATENCY-ROBUST established-coin strategy. The fresh/pop game is unwinnable for us
+  // (we're seconds-to-minutes late vs sub-second bots — see the strategy verdict): being late is
+  // FATAL on a coin that pumps+dies in 15 min. SWING sidesteps that entirely by trading coins that
+  // have ALREADY SURVIVED — real liquidity, established MC, persistent demand — and HOLDING for a real
+  // move over hours, where being a couple minutes late doesn't matter. Diversified across many small
+  // positions; banks base-hits + rides a runner; wide stop that won't get wicked but caps a true dump.
+  const swing = mode === "swing";
+  const baseFrac = mode === "degen" ? 0.10 : mode === "chill" ? 0.04 : scalp ? 0.07 : grind ? 0.07 : snipe ? 0.07 : pop ? 0.06 : swing ? 0.05 : 0.06;
 
   // Softer streak/regime scaling: a hot streak no longer balloons size right
   // into the next loss cluster (live data showed streak-pumped 0.11+ SOL bets
@@ -384,7 +391,78 @@ export function aggParams(state) {
       minScore: 44 + ((state.tune && state.tune.scoreBonus) || 0)  // gates on apexEdge, adaptive in cold/rug tape
     };
   }
+  if (swing) {
+    // SWING overrides: ESTABLISHED universe + LONGER holds + WIDE stop. Gates on swingScore (its own
+    // safety/quality scale). This is the deliberate "win steady, hold longer, don't chase 200% launches"
+    // profile — latency-robust because we hold for hours, so being minutes late is irrelevant.
+    return {
+      ...out,
+      swing: true,
+      minAge: 900,                 // 15min+ — past the launch-snipe / instant-rug window (survived)
+      maxAge: 2_592_000,           // any age — a durable mover can run for days
+      mcFloor: 35000,              // established, not dust…
+      mcCeil: 2_000_000,           // …with room to run, not a dead mega-cap
+      minLiqAbs: 12000,            // REAL depth = rug resistance + clean fills (the "won't tank to our stop" thesis)
+      liqFrac: 0,                  // absolute depth floor does the work; the relative gate wrongly rejects deep coins
+      // LONGER HOLDS, WIDER STOP: an established coin dips 15-20% and recovers, so a wide 22% stop holds
+      // through noise but still cuts a true breakdown. Bank a base-hit half at a reachable +22%, ride the
+      // rest with the trailing give-back. Steady wins with a runner — not a moonshot, not a scratch.
+      sl: 22,
+      tp1: 22, tp1Pct: 60, spikePct: 70, tp2Lvl: 70, tp2Pct: 50, tp3Lvl: 160, tp3Pct: 50,
+      moonTarget: 300,
+      bankHard: false,             // SWING rides its runner — don't let a cold-tape clamp force an early bank
+      maxScore: Infinity,
+      minScore: 50 + ((state.tune && state.tune.scoreBonus) || 0)   // gates on swingScore; adaptive in cold/rug tape
+    };
+  }
   return out;
+}
+
+// SWING SCORE — the safety+quality scorer for the established-coin strategy. Scores how SAFE (won't
+// rug/tank to our stop) AND likely-to-keep-climbing a survived coin is, from data we already pull.
+// Rewards DEPTH (rug resistance + clean fills), an established MC band (room to run, not dead dust or a
+// stale mega-cap), PERSISTENT buy-led demand over the HOUR (real, not one wash candle), a HEALTHY
+// uptrend that ISN'T a blow-off top (buy the trend/dip, not the vertical spike we'd be late to), and
+// AGE (it survived the rug window). The Stage-2 deep vet (LP burn / holder dispersion / clean dev)
+// filters further. 0..100+. Returns 0 for anything that isn't genuinely established.
+export function swingScore(row = {}) {
+  const liq = Number(row.liquidityUsd) || 0;
+  const mc = Number(row.marketCap) || 0;
+  const volH1 = Number(row.volumeH1) || 0;
+  const buysH1 = Number(row.buysH1) || 0;
+  const sellsH1 = Number(row.sellsH1) || 0;
+  const m5 = Number(row.m5);
+  const h1 = Number(row.h1);
+  const age = Number(row.pairAgeSeconds) || 0;
+  // GATE — established only. Thin / brand-new / dust can never be "safe to hold".
+  if (!(liq >= 12000) || !(mc >= 35000) || age < 900) return 0;
+  let s = 0;
+  // 1) DEPTH = rug resistance + clean fills (the core "won't tank to our stop" thesis).
+  if (liq >= 200000) s += 26; else if (liq >= 100000) s += 22; else if (liq >= 50000) s += 18; else if (liq >= 25000) s += 13; else s += 8;
+  // 2) MC band: $40k-1M is the sweet spot (room to 2-3x, deep enough to fill); up to $2M still fine.
+  if (mc >= 60000 && mc <= 1000000) s += 18; else if (mc <= 2000000) s += 11;
+  // 3) PERSISTENT demand — real H1 turnover (sustained trading, not a single wash candle).
+  const turnH1 = liq > 0 ? volH1 / liq : 0;
+  if (turnH1 >= 1.5) s += 16; else if (turnH1 >= 0.7) s += 12; else if (turnH1 >= 0.3) s += 7; else if (turnH1 >= 0.1) s += 3;
+  // 4) BUY-LED over the HOUR (demand, not distribution) — H1 flow is steadier than 5m.
+  const flowH1 = (buysH1 + sellsH1) > 0 ? buysH1 / (buysH1 + sellsH1) : 0.5;
+  s += Math.max(0, flowH1 - 0.48) * 60;                            // up to ~+31 for heavily buy-led
+  // 5) HEALTHY TREND, not a blow-off top: reward a steady climb, dock an already-vertical move (we'd
+  //    be late to the top and it mean-reverts), dock a breakdown. Prefer a calm/dip entry on m5.
+  if (Number.isFinite(h1)) {
+    if (h1 >= 8 && h1 <= 80) s += 14;
+    else if (h1 > 0 && h1 < 8) s += 8;
+    else if (h1 > 80 && h1 <= 200) s += 4;
+    else if (h1 < -25) s -= 12;
+  }
+  if (Number.isFinite(m5)) {
+    if (m5 >= -8 && m5 <= 12) s += 8;                              // calm / small-dip entry = the sweet spot
+    else if (m5 > 12 && m5 <= 40) s += 3;
+    else if (m5 > 60) s -= 6;                                      // don't chase a vertical 5m spike
+  }
+  // 6) AGE / survival — older proved it isn't an instant rug.
+  if (age >= 21600) s += 8; else if (age >= 7200) s += 6; else if (age >= 3600) s += 4; else s += 2;
+  return Math.max(0, s);
 }
 
 // SELF-TUNING / market-regime brain: reads the recent runner & rug rate and sets
@@ -1087,7 +1165,7 @@ export function entryReject(row, P) {
   }
   // SCALP scores liquid movers (liquidScore); GRIND scores survivors (grindScore); the rest use
   // freshScore. Each mode's gate lives on its own scale (see the minScore overrides in aggParams).
-  const setupScore = P.apex ? apexEdge(row) : P.liquid ? liquidScore(row) : P.grind ? grindScore(row) : freshScore(row);
+  const setupScore = P.apex ? apexEdge(row) : P.swing ? swingScore(row) : P.liquid ? liquidScore(row) : P.grind ? grindScore(row) : freshScore(row);
   if (setupScore < P.minScore) return "score";
   // FRESH-PATH SCORE CEILING — reject the 67+ bleeder zone (see aggParams maxScore). Entry becomes a
   // BAND (~62-66), the proven +EV pocket where the runners actually live, not just a floor.
@@ -2430,7 +2508,9 @@ export function createAutopilotEngine(deps) {
     // trades those with its fast in/out exits — a trading scalp beats a waiting one. (The honest
     // realized-anchored display keeps phantom dust marks out of the headline regardless.)
     const useApex = state.mode === "apex";
-    const useLiquid = !useApex && state.mode === "scalp" && typeof getLiquidFeed === "function";
+    // SWING hunts the LIQUID feed (established movers with real depth) — the same exitable pool scalp
+    // uses, but swingScore + the wide MC/age/liq gates select the SURVIVED, holdable coins from it.
+    const useLiquid = !useApex && (state.mode === "scalp" || state.mode === "swing") && typeof getLiquidFeed === "function";
     const usePop = !useApex && state.mode === "pop" && typeof getPopFeed === "function";
     try {
       if (useApex) {
@@ -2453,8 +2533,11 @@ export function createAutopilotEngine(deps) {
       } else {
         rows = usePop ? await getPopFeed() : useLiquid ? await getLiquidFeed() : await getFreshFeed();
         // POP feed can be empty between ignitions — that's correct (no pop = no trade); don't fall back
-        // to the fresh feed (that would defeat the whole "only enter on a real pop" point).
-        if (useLiquid && (!Array.isArray(rows) || !rows.length)) rows = await getFreshFeed();
+        // to the fresh feed (that would defeat the whole "only enter on a real pop" point). SWING also
+        // must NOT fall back to fresh dust — an empty liquid feed means "nothing established worth
+        // holding right now", which is the correct behavior (sit out, don't ape a launch). Only scalp
+        // falls back to fresh (it's a fast in/out that can trade fresh movers in a pinch).
+        if (useLiquid && state.mode === "scalp" && (!Array.isArray(rows) || !rows.length)) rows = await getFreshFeed();
       }
     } catch (e) {
       record("warn", `feed error: ${e && e.message}`);
@@ -2546,7 +2629,7 @@ export function createAutopilotEngine(deps) {
         const a = state.recentApeNames[ns];
         return !a || nowMs - a > nameCoolMs;
       })
-      .map((r) => ({ r, reject: entryReject(r, P), fs: P.apex ? apexEdge(r) : P.pop ? (Number(r._pop && r._pop.score) || 50) : P.liquid ? liquidScore(r) : P.grind ? grindScore(r) : freshScore(r) }));
+      .map((r) => ({ r, reject: entryReject(r, P), fs: P.apex ? apexEdge(r) : P.swing ? swingScore(r) : P.pop ? (Number(r._pop && r._pop.score) || 50) : P.liquid ? liquidScore(r) : P.grind ? grindScore(r) : freshScore(r) }));
     // Reject-reason tally so a persistently-dry feed shows WHY (mc/age/liquidity/score/etc.)
     // — turns "0 passed the bar" into an actionable breakdown in the scan heartbeat.
     const rejTally = {};
@@ -2560,7 +2643,7 @@ export function createAutopilotEngine(deps) {
     // now pull the real holder/insider/sniper/dev/shield data for ONLY the top few it surfaced and let
     // that decide the final winner. Bounded cost (≤6 deep pulls, not 50) so it never times out; if the
     // enrichment is unwired or errors, we keep the Stage-1 ranking (safe — never blocks the trade).
-    if (P.apex && typeof enrichFinalists === "function" && scored.length) {
+    if ((P.apex || P.swing) && typeof enrichFinalists === "function" && scored.length) {
       try {
         const finalists = scored.slice(0, 6);
         const deep = await enrichFinalists(finalists.map((x) => x.r.tokenMint)) || {};
@@ -2603,7 +2686,7 @@ export function createAutopilotEngine(deps) {
     // PER-MINUTE OPEN CAP — a backstop against the fee-bleed spray (logs showed 9 buys in 80s). pop/scalp
     // trade fast by design, so they get headroom; apex/fresh get the tight churn cap. The dust filter
     // already kills most of the spray; this just hard-stops a runaway minute on quality too.
-    const openPerMinCap = P.pop ? 14 : P.liquid ? 10 : 6;
+    const openPerMinCap = P.pop ? 14 : (P.liquid || P.swing) ? 10 : 6;   // swing diversifies across many established coins
     let openedThisCycle = 0;
     let historyChecks = 0;
     // Per-mint flow cache for FLOW-SURGE acceleration detection (ephemeral; survives across cycles

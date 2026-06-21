@@ -11,6 +11,7 @@ import {
   apexEdge,
   apexType,
   apexDeepEdge,
+  swingScore,
   convictionMult,
   confluenceMult,
   graduationScore,
@@ -466,6 +467,33 @@ test("apexType routes the playbook: pop / liquid / fresh are distinguished", () 
   assert.equal(apexType({ liquidityUsd: 40000, marketCap: 200000, volume5m: 1000, buys5m: 10, sells5m: 10, pairAgeSeconds: 6000 }), "liquid");
   // a brand-new launch → fresh playbook (room to run)
   assert.equal(apexType({ liquidityUsd: 2500, marketCap: 2500, volume5m: 120, buys5m: 30, sells5m: 8, pairAgeSeconds: 20 }), "fresh");
+});
+
+test("swing mode: established-coin universe + longer holds + wide stop (the latency-robust strategy)", () => {
+  const P = aggParams(baseState({ mode: "swing" }));
+  assert.equal(P.swing, true);
+  // ESTABLISHED universe — not fresh dust, not a dead mega-cap, real depth, survived the rug window.
+  assert.ok(P.mcFloor >= 35000 && P.mcCeil <= 2000000, "swing targets the established $35k-$2M band");
+  assert.ok(P.minLiqAbs >= 12000, "swing demands real liquidity depth (rug resistance + clean fills)");
+  assert.ok(P.minAge >= 900, "swing only takes coins that survived 15min+ (past the instant-rug window)");
+  assert.ok(P.maxAge >= 86400, "swing is age-agnostic upward — a durable mover can run for days");
+  // LONGER holds + WIDE stop — won't get wicked out of a normal dip, banks a base-hit, rides a runner.
+  assert.ok(P.sl >= 20, "swing uses a WIDE stop (established coins dip and recover)");
+  assert.ok(P.tp1 <= 25 && P.tp1Pct >= 55, "swing banks a base-hit majority at a reachable first pop");
+  assert.equal(P.bankHard, false, "swing rides its runner — no cold-tape early-bank clamp");
+});
+
+test("swingScore: admits safe established movers, rejects dust / thin / blow-off tops", () => {
+  // an established coin: $180k MC, $90k liq, hour-old, buy-led, healthy +22% uptrend → high score
+  const good = { liquidityUsd: 90000, marketCap: 180000, volumeH1: 120000, buysH1: 600, sellsH1: 380, m5: 3, h1: 22, pairAgeSeconds: 9000 };
+  assert.ok(swingScore(good) >= 60, "a safe established mover scores high");
+  // brand-new $2k dust — disqualified outright (too thin, too young to be safe to hold)
+  assert.equal(swingScore({ liquidityUsd: 2048, marketCap: 2048, volumeH1: 300, buysH1: 20, sellsH1: 10, m5: 40, h1: 0, pairAgeSeconds: 30 }), 0, "fresh dust is never 'safe to hold'");
+  // thin midcap (only $6k liq) — disqualified (no depth = no rug resistance / clean fills)
+  assert.equal(swingScore({ liquidityUsd: 6000, marketCap: 120000, volumeH1: 2000, buysH1: 40, sellsH1: 35, m5: 5, h1: 10, pairAgeSeconds: 8000 }), 0, "thin liquidity is disqualified");
+  // a blow-off top breaking down (sell-led, h1 -30%) scores far below the safe mover
+  const top = { liquidityUsd: 120000, marketCap: 300000, volumeH1: 200000, buysH1: 300, sellsH1: 520, m5: 75, h1: -30, pairAgeSeconds: 12000 };
+  assert.ok(swingScore(top) < swingScore(good) - 20, "a breaking-down blow-off top scores well below a healthy mover");
 });
 
 test("evalExit: a proven-dev moon bag rides longer before the time-cap, still bounded", () => {
