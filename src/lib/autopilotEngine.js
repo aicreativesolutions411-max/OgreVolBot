@@ -398,11 +398,14 @@ export function aggParams(state) {
     return {
       ...out,
       swing: true,
-      minAge: 900,                 // 15min+ — past the launch-snipe / instant-rug window (survived)
+      minAge: 600,                 // 10min+ — past the launch-snipe / instant-rug window (survived). Loosened
+                                   // from 900: live feed had only ~1-3 active established candidates at 15min+,
+                                   // starving the mode; 10min still excludes the rug-roulette launch window.
       maxAge: 2_592_000,           // any age — a durable mover can run for days
-      mcFloor: 35000,              // established, not dust…
+      mcFloor: 25000,              // established, not dust (loosened 35k→25k for more real candidates)…
       mcCeil: 2_000_000,           // …with room to run, not a dead mega-cap
-      minLiqAbs: 12000,            // REAL depth = rug resistance + clean fills (the "won't tank to our stop" thesis)
+      minLiqAbs: 8000,             // REAL depth = rug resistance + clean fills (loosened 12k→8k; swingScore's
+                                   // depth tiers + the activity/flow requirement still reject thin + dead coins)
       liqFrac: 0,                  // absolute depth floor does the work; the relative gate wrongly rejects deep coins
       // LONGER HOLDS, WIDER STOP: an established coin dips 15-20% and recovers, so a wide 22% stop holds
       // through noise but still cuts a true breakdown. Bank a base-hit half at a reachable +22%, ride the
@@ -412,7 +415,7 @@ export function aggParams(state) {
       moonTarget: 300,
       bankHard: false,             // SWING rides its runner — don't let a cold-tape clamp force an early bank
       maxScore: Infinity,
-      minScore: 50 + ((state.tune && state.tune.scoreBonus) || 0)   // gates on swingScore; adaptive in cold/rug tape
+      minScore: 44 + ((state.tune && state.tune.scoreBonus) || 0)   // gates on swingScore (loosened 50→44 for a tradeable rate); adaptive in cold/rug tape
     };
   }
   return out;
@@ -434,8 +437,10 @@ export function swingScore(row = {}) {
   const m5 = Number(row.m5);
   const h1 = Number(row.h1);
   const age = Number(row.pairAgeSeconds) || 0;
-  // GATE — established only. Thin / brand-new / dust can never be "safe to hold".
-  if (!(liq >= 12000) || !(mc >= 35000) || age < 900) return 0;
+  // GATE — established only. Thin / brand-new / dust can never be "safe to hold". Age only rejects when
+  // KNOWN-young (unknown age + real depth/MC is still established); depth+MC do the main exclusion.
+  if (!(liq >= 8000) || !(mc >= 25000)) return 0;
+  if (Number.isFinite(age) && age > 0 && age < 600) return 0;
   let s = 0;
   // 1) DEPTH = rug resistance + clean fills (the core "won't tank to our stop" thesis).
   if (liq >= 200000) s += 26; else if (liq >= 100000) s += 22; else if (liq >= 50000) s += 18; else if (liq >= 25000) s += 13; else s += 8;

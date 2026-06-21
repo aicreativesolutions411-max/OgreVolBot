@@ -473,9 +473,9 @@ test("swing mode: established-coin universe + longer holds + wide stop (the late
   const P = aggParams(baseState({ mode: "swing" }));
   assert.equal(P.swing, true);
   // ESTABLISHED universe — not fresh dust, not a dead mega-cap, real depth, survived the rug window.
-  assert.ok(P.mcFloor >= 35000 && P.mcCeil <= 2000000, "swing targets the established $35k-$2M band");
-  assert.ok(P.minLiqAbs >= 12000, "swing demands real liquidity depth (rug resistance + clean fills)");
-  assert.ok(P.minAge >= 900, "swing only takes coins that survived 15min+ (past the instant-rug window)");
+  assert.ok(P.mcFloor >= 25000 && P.mcCeil <= 2000000, "swing targets the established $25k-$2M band");
+  assert.ok(P.minLiqAbs >= 8000, "swing demands real liquidity depth (rug resistance + clean fills)");
+  assert.ok(P.minAge >= 600, "swing only takes coins that survived 10min+ (past the instant-rug window)");
   assert.ok(P.maxAge >= 86400, "swing is age-agnostic upward — a durable mover can run for days");
   // LONGER holds + WIDE stop — won't get wicked out of a normal dip, banks a base-hit, rides a runner.
   assert.ok(P.sl >= 20, "swing uses a WIDE stop (established coins dip and recover)");
