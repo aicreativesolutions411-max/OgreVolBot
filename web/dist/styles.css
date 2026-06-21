@@ -937,6 +937,29 @@ select:focus {
 .signal-badge-fresh { background: rgba(64, 220, 255, 0.14); color: #76e3ff; border-color: rgba(64, 220, 255, 0.4); }
 .signal-badge-active { background: rgba(160, 130, 255, 0.16); color: #c0acff; border-color: rgba(160, 130, 255, 0.42); }
 
+/* "Why It's Moving" — a quiet, honest one-liner under a feed row, built from the row's real signals. */
+.signal-why { margin-top: 4px; }
+.signal-why small {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--green-2, #9bdb6a);
+  opacity: 0.92;
+}
+.signal-why-tag {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(114, 255, 35, 0.12);
+  border: 1px solid rgba(114, 255, 35, 0.3);
+  color: var(--green-2, #9bdb6a);
+}
+
 /* Connected-wallet "unlock automation" / session-wallet call-to-action */
 .session-wallet-cta {
   margin: 10px 0;

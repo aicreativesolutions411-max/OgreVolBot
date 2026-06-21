@@ -3894,9 +3894,11 @@ function loadConfig() {
   // exits tip more since they MUST land. Raise via env in congestion, lower if they always land.
   const tradeJitoTipSol = Math.max(0.00001, Number.parseFloat(process.env.TRADE_JITO_TIP_SOL || "0.0005") || 0.0005);
   const tradeJitoExitTipSol = Math.max(tradeJitoTipSol, Number.parseFloat(process.env.TRADE_JITO_EXIT_TIP_SOL || "0.001") || 0.001);
-  // Short by design: a Jito bundle lands within ~1-2s or not at all, so don't stall an exit waiting —
-  // fall back to RPC fast (a stop-loss can't afford a long wait). 6s gives it a fair shot then bails.
-  const tradeJitoConfirmMs = Math.max(3000, Number.parseInt(process.env.TRADE_JITO_CONFIRM_MS || "6000", 10) || 6000);
+  // Short by design: a Jito bundle that wins the auction lands in the first ~1-2 slots (<2s) or not at
+  // all, so don't stall an exit waiting on one that lost. Live data (2026-06-21): at low tips bundles
+  // get ACCEPTED but rarely WIN, so they almost always fall back — keep the wait short so a stop-loss
+  // isn't taxed 6s for nothing. 2.5s still catches a genuine fast landing.
+  const tradeJitoConfirmMs = Math.max(1500, Number.parseInt(process.env.TRADE_JITO_CONFIRM_MS || "2500", 10) || 2500);
   const pumpLaunchMetadataProvider = normalizeMetadataProvider(process.env.METADATA_PROVIDER || process.env.PUMP_LAUNCH_METADATA_PROVIDER || "auto");
   const renderExternalHostname = String(process.env.RENDER_EXTERNAL_HOSTNAME || "").trim();
   const pumpLaunchHostedMetadataBaseUrl = (

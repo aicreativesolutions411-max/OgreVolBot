@@ -11,33 +11,33 @@
     <meta property="og:title" content="Ogreverse: Brainrot Prism">
     <meta property="og:description" content="A Rage Cage style retro creature-collecting RPG public prototype with chaotic original creatures and local MMO PvP.">
     <meta property="og:type" content="website">
-    <link rel="icon" type="image/png" href="assets/icons/OGR001.png?v=20260620-mobile-battle-v87">
-    <link rel="stylesheet" href="styles.css?v=20260620-mobile-battle-v87">
+    <link rel="icon" type="image/png" href="assets/icons/OGR001.png?v=20260620-playability-v94">
+    <link rel="stylesheet" href="styles.css?v=20260620-playability-v94">
   </head>
   <body>
     <main id="app" class="game-shell">
       <section class="screen-wrap" aria-label="Game screen">
         <canvas id="game" width="640" height="480" aria-label="Ogreverse game canvas"></canvas>
         <div id="toast" class="toast" role="status" aria-live="polite"></div>
-        <nav id="mobile-controls" class="mobile-controls" aria-label="Mobile game controls">
-          <div class="mobile-joystick-panel" aria-label="Movement controls">
-            <div class="mobile-joystick" data-joystick role="application" aria-label="Drag joystick to move" tabindex="0">
-              <span class="stick-mark stick-mark-up">^</span>
-              <span class="stick-mark stick-mark-left">&lt;</span>
-              <span class="stick-mark stick-mark-right">&gt;</span>
-              <span class="stick-mark stick-mark-down">v</span>
-              <span class="mobile-stick-thumb" aria-hidden="true"></span>
-            </div>
-            <button class="btn mobile-menu-btn" data-action="quickMenu" aria-label="Open menu">MENU</button>
-          </div>
-          <div class="mobile-action-stack" aria-label="Action controls">
-            <button class="btn primary mobile-action-btn" data-action="quickA" aria-label="Confirm or interact">A</button>
-            <button class="btn mobile-action-btn" data-action="quickB" aria-label="Back or menu">B</button>
-          </div>
-        </nav>
       </section>
+      <nav id="mobile-controls" class="mobile-controls" aria-label="Mobile game controls">
+        <div class="mobile-joystick-panel" aria-label="Movement controls">
+          <div class="mobile-joystick" data-joystick role="application" aria-label="Drag joystick to move" tabindex="0">
+            <span class="stick-mark stick-mark-up">^</span>
+            <span class="stick-mark stick-mark-left">&lt;</span>
+            <span class="stick-mark stick-mark-right">&gt;</span>
+            <span class="stick-mark stick-mark-down">v</span>
+            <span class="mobile-stick-thumb" aria-hidden="true"></span>
+          </div>
+          <button class="btn mobile-menu-btn" data-action="quickMenu" aria-label="Open menu"><strong>MENU</strong></button>
+        </div>
+        <div class="mobile-action-stack" aria-label="Action controls">
+          <button class="btn primary mobile-action-btn mobile-action-a" data-action="quickA" aria-label="Confirm or interact"><strong>A</strong><small>Action</small></button>
+          <button class="btn mobile-action-btn mobile-action-b" data-action="quickB" aria-label="Back or menu"><strong>B</strong><small>Back</small></button>
+        </div>
+      </nav>
       <aside id="panel" class="panel" aria-label="Game controls and menus"></aside>
     </main>
-    <script src="game.js?v=20260620-mobile-battle-v87"></script>
+    <script src="game.js?v=20260620-playability-v94"></script>
   </body>
 </html>

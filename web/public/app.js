@@ -19853,6 +19853,31 @@ function liveFeedRowBadgeHtml(row = {}) {
   return badge ? `<span class="signal-badge signal-badge-${badge.cls}">${escapeHtml(badge.text)}</span>` : "";
 }
 
+// "Why It's Moving" — a short, plain-English line built ONLY from the row's real signals (no
+// fabricated figures). Returns [] for a quiet row so we never add noise. Picks the strongest 2-3
+// reasons in priority order. Reused by the feed subtitle and the Token Dossier's Activity tab.
+function whyMovingParts(row = {}) {
+  const parts = [];
+  if (liveFeedIsBoosted(row)) parts.push("⚡ boosted");
+  const changes = [["5m", liveFeedNum(row.m5)], ["1h", liveFeedNum(row.h1)], ["24h", liveFeedNum(row.h24)]];
+  changes.sort((a, b) => b[1] - a[1]);
+  if (changes[0][1] >= 12) parts.push(`▲${Math.round(changes[0][1])}% ${changes[0][0]}`);
+  const txns = liveFeedTxnCount(row);
+  const bp = liveFeedBuyPressure(row);
+  if (txns >= 12 && bp >= 0.62) parts.push(`${Math.round(bp * 100)}% buys`);
+  if (row.smartMoney) parts.push("smart money in");
+  const vol = livePairVolumeH1(row) || livePairVolumeM15(row);
+  if (vol >= 2000 && parts.length < 3) parts.push(`${compactUsd(vol)} vol`);
+  if (txns >= 30 && parts.length < 3) parts.push(`${txns} trades`);
+  if (Number(row.sniperCount || 0) === 0 && changes[0][1] >= 12 && parts.length < 3) parts.push("no snipers");
+  return parts.slice(0, 3);
+}
+function whyMovingHtml(row = {}) {
+  const parts = whyMovingParts(row);
+  if (!parts.length) return "";
+  return `<div class="signal-why" title="Why it's moving"><small><span class="signal-why-tag">Why</span> ${escapeHtml(parts.join(" · "))}</small></div>`;
+}
+
 // Cook Spot (Slime Scope) discovery ranking — biased toward DEX/boosted/pump pairs.
 function cookSpotIsPump(row = {}) {
   if (row.isPump || row.pump || row.pumpFun || row.pumpUrl) return true;
@@ -20108,6 +20133,7 @@ function tokenSignalRowHtml(row, index, options = {}) {
             ${Number(row.sniperCount || 0) > 0 ? `<span class="sniper-pill" title="Sniper count">SCOPE ${escapeHtml(row.sniperCount)}</span>` : ""}
           </div>
           ${pairRiskBadgesHtml(row)}
+          ${whyMovingHtml(row)}
         </div>
       </div>
       <div class="signal-cell" data-cell="Age"><span>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "age unknown")}</span><small>${escapeHtml(row.scalpSetup || row.momentum || `#${index + 1}`)}</small></div>

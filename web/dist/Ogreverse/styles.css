@@ -2125,10 +2125,17 @@ canvas {
     3px 3px 0 rgba(0, 0, 0, 0.32);
 }
 
-.quick-hit-command {
+.quick-battle-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.quick-hit-command,
+.quick-orb-command {
   width: 100%;
   min-height: 58px;
-  margin-bottom: 8px;
   grid-template-columns: 38px minmax(0, 1fr);
   background:
     linear-gradient(90deg, rgba(255, 255, 255, 0.08) 0 9px, transparent 9px),
@@ -2141,19 +2148,39 @@ canvas {
     3px 3px 0 rgba(0, 0, 0, 0.32);
 }
 
-.quick-hit-command span {
+.quick-hit-command span,
+.quick-orb-command span {
   background: #60d394;
 }
 
-.quick-hit-command strong {
+.quick-orb-command {
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.08) 0 9px, transparent 9px),
+    linear-gradient(90deg, rgba(243, 211, 91, 0.2), rgba(78, 213, 207, 0.1)),
+    #6b5a21;
+  box-shadow:
+    inset 0 0 0 2px #f3d35b,
+    inset 0 4px 0 rgba(255, 255, 255, 0.14),
+    inset 0 -8px rgba(0, 0, 0, 0.25),
+    3px 3px 0 rgba(0, 0, 0, 0.32);
+}
+
+.quick-orb-command span {
+  background: #f3d35b;
+}
+
+.quick-hit-command strong,
+.quick-orb-command strong {
   color: #fff6d7;
 }
 
-.quick-hit-command small {
+.quick-hit-command small,
+.quick-orb-command small {
   color: #fff6d7;
 }
 
-.quick-hit-command:disabled {
+.quick-hit-command:disabled,
+.quick-orb-command:disabled {
   opacity: 0.62;
 }
 
@@ -2793,7 +2820,7 @@ canvas {
   width: 86px;
   height: 90px;
   background:
-    url("assets/sprites/OGR003_front.png?v=20260620-mobile-battle-v87") center 0 / 82px 82px no-repeat,
+    url("assets/sprites/OGR003_front.png?v=20260620-playability-v94") center 0 / 82px 82px no-repeat,
     linear-gradient(#f3d35b 0 0) 22px 68px / 42px 5px no-repeat,
     linear-gradient(#de7a3b 0 0) 15px 73px / 56px 7px no-repeat,
     linear-gradient(#60d394 0 0) 19px 80px / 48px 4px no-repeat,
@@ -3356,6 +3383,49 @@ canvas {
   color: #cde8f5;
 }
 
+.mobile-action-btn strong,
+.mobile-action-btn small,
+.mobile-menu-btn strong {
+  display: block;
+  line-height: 1;
+}
+
+.mobile-action-btn strong {
+  font-size: 1.02rem;
+}
+
+.mobile-action-btn small {
+  margin-top: 3px;
+  color: #fff6d7;
+  font-size: 0.5rem;
+}
+
+.mobile-controls[data-primary="search"] .mobile-action-a {
+  color: #071018;
+  background:
+    linear-gradient(90deg, rgba(255,255,255,0.18) 0 8px, transparent 8px),
+    linear-gradient(180deg, rgba(255,246,215,0.28), transparent 45%),
+    #f3d35b;
+}
+
+.mobile-controls[data-primary="search"] .mobile-action-a small {
+  color: #071018;
+}
+
+.mobile-controls[data-primary="battle"] .mobile-action-a {
+  background:
+    linear-gradient(90deg, rgba(255,255,255,0.12) 0 8px, transparent 8px),
+    linear-gradient(180deg, rgba(255,246,215,0.16), transparent 45%),
+    #b55339;
+}
+
+.mobile-controls[data-primary="continue"] .mobile-action-a {
+  background:
+    linear-gradient(90deg, rgba(255,255,255,0.12) 0 8px, transparent 8px),
+    linear-gradient(180deg, rgba(255,246,215,0.16), transparent 45%),
+    #346fd1;
+}
+
 /* v60 premium visual pass: shared Rage Cage handheld chrome */
 .screen-wrap,
 .panel {
@@ -3657,6 +3727,12 @@ canvas {
     display: grid;
   }
 
+  body[data-game-mode="battle"] .mobile-controls,
+  body[data-game-mode="trial"] .mobile-controls,
+  body[data-game-mode="pvp"] .mobile-controls {
+    display: grid;
+  }
+
   body[data-message-active="1"] .mobile-controls {
     opacity: 0;
     transform: translateX(-50%) translateY(8px);
@@ -3685,6 +3761,15 @@ canvas {
 
   .mobile-controls .btn {
     pointer-events: auto;
+  }
+
+  body:not([data-game-mode="overworld"]) .mobile-controls {
+    grid-template-columns: 92px;
+    justify-content: end;
+  }
+
+  body:not([data-game-mode="overworld"]) .mobile-joystick-panel {
+    display: none;
   }
 
   .mobile-menu-btn,
@@ -3916,15 +4001,19 @@ canvas {
     max-height: 180px;
   }
 
+  .panel {
+    padding-bottom: calc(136px + env(safe-area-inset-bottom));
+  }
+
   .mobile-controls {
     left: 0;
-    right: auto;
+    right: 0;
     bottom: 0;
-    grid-template-columns: 0;
+    grid-template-columns: 1fr;
     justify-content: start;
     gap: 0;
-    width: 0;
-    height: 0;
+    width: 100%;
+    height: 100%;
     overflow: visible;
     transform: none;
   }
@@ -3943,7 +4032,28 @@ canvas {
   }
 
   .mobile-action-stack {
-    display: none;
+    display: grid;
+    position: fixed;
+    left: calc(min(100vw, 390px) - 86px);
+    right: auto;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    z-index: 160;
+    grid-template-columns: 1fr;
+    grid-template-rows: 58px 44px;
+    gap: 5px;
+    width: 76px;
+    align-items: end;
+    padding: 5px;
+    border: 4px solid #02050a;
+    background:
+      linear-gradient(90deg, rgba(96, 211, 148, 0.1) 0 8px, transparent 8px),
+      repeating-linear-gradient(0deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 6px),
+      rgba(7, 16, 24, 0.88);
+    box-shadow:
+      inset 0 0 0 2px #4a5d6b,
+      inset 0 5px rgba(255,255,255,0.08),
+      0 7px 18px rgba(0,0,0,0.42);
+    pointer-events: auto;
   }
 
   .mobile-joystick {
@@ -3976,15 +4086,67 @@ canvas {
 
   .mobile-menu-btn,
   .mobile-action-btn {
-    display: none;
+    display: grid;
   }
 
   .mobile-action-btn {
-    font-size: 0.68rem;
+    min-height: 44px;
+    padding: 6px 4px;
+    font-size: 0.62rem;
+    width: 100%;
+  }
+
+  .mobile-action-a {
+    min-height: 58px;
+    background:
+      linear-gradient(90deg, rgba(255,255,255,0.1) 0 8px, transparent 8px),
+      linear-gradient(180deg, rgba(255,246,215,0.12), transparent 45%),
+      #1f7b60;
+  }
+
+  .mobile-action-a strong {
+    font-size: 1.18rem;
+  }
+
+  .mobile-action-btn small {
+    max-width: 58px;
+    margin-top: 2px;
+    font-size: 0.43rem;
+    line-height: 1.05;
+    white-space: normal;
+    word-break: keep-all;
+  }
+
+  body[data-game-mode="battle"] .mobile-action-stack,
+  body[data-game-mode="pvp"] .mobile-action-stack,
+  body[data-game-mode="battle"] .mobile-action-b,
+  body[data-game-mode="pvp"] .mobile-action-b {
+    display: none;
+  }
+
+  .mobile-menu-btn {
+    position: fixed;
+    left: max(6px, env(safe-area-inset-left));
+    bottom: max(8px, env(safe-area-inset-bottom));
+    z-index: 160;
+    min-width: 70px;
+    min-height: 44px;
+    padding: 7px 8px;
+    border-width: 4px;
+    background:
+      linear-gradient(90deg, rgba(243,211,91,0.1) 0 8px, transparent 8px),
+      repeating-linear-gradient(0deg, rgba(255,255,255,0.032) 0 1px, transparent 1px 6px),
+      rgba(15, 24, 32, 0.88);
+    box-shadow:
+      inset 0 0 0 2px #4a5d6b,
+      inset 0 5px rgba(255,255,255,0.08),
+      0 7px 18px rgba(0,0,0,0.38);
+    pointer-events: auto;
   }
 
   body[data-message-active="1"] .mobile-controls {
-    transform: translateY(8px);
+    opacity: 1;
+    transform: none;
   }
 }
 
