@@ -10506,6 +10506,48 @@ textarea,
   min-height: 34px !important;
 }
 
+/* TOKEN DOSSIER tabs — turn the wall of sections into clean, clickable panes. */
+.dossier-tabs {
+  display: flex !important;
+  gap: 6px !important;
+  flex-wrap: wrap !important;
+  position: sticky !important;
+  top: -16px !important;
+  z-index: 2 !important;
+  padding: 8px 0 6px !important;
+  margin: -4px 0 2px !important;
+  background: linear-gradient(180deg, rgba(4, 22, 6, 0.98), rgba(4, 22, 6, 0.92)) !important;
+}
+.dossier-tabs button {
+  flex: 1 1 auto !important;
+  min-height: 32px !important;
+  padding: 5px 10px !important;
+  border-radius: 10px !important;
+  font-size: 12px !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.02em !important;
+  cursor: pointer !important;
+  color: #bde6a3 !important;
+  background: rgba(57, 255, 20, 0.06) !important;
+  border: 1px solid rgba(57, 255, 20, 0.22) !important;
+  transition: background 0.12s ease, color 0.12s ease !important;
+}
+.dossier-tabs button[data-active="true"] {
+  color: #061206 !important;
+  background: linear-gradient(180deg, #8bf24a, #5fd421) !important;
+  border-color: rgba(57, 255, 20, 0.6) !important;
+  box-shadow: 0 2px 10px rgba(57, 255, 20, 0.22) !important;
+}
+.dossier-drawer[data-active-pane="overview"] [data-pane]:not([data-pane~="overview"]),
+.dossier-drawer[data-active-pane="holders"] [data-pane]:not([data-pane~="holders"]),
+.dossier-drawer[data-active-pane="history"] [data-pane]:not([data-pane~="history"]),
+.dossier-drawer[data-active-pane="signals"] [data-pane]:not([data-pane~="signals"]),
+.dossier-drawer[data-active-pane="verdict"] [data-pane]:not([data-pane~="verdict"]),
+.dossier-drawer[data-active-pane="risks"] [data-pane]:not([data-pane~="risks"]),
+.dossier-drawer[data-active-pane="details"] [data-pane]:not([data-pane~="details"]) {
+  display: none !important;
+}
+
 .slimeshield-drawer-summary {
   border: 1px solid rgba(255, 255, 255, 0.09) !important;
   border-radius: 8px !important;

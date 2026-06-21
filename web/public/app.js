@@ -18314,9 +18314,21 @@ function renderDevInfoDrawer() {
   ].filter((link, index, links) => /^https?:\/\//i.test(String(link.url || ""))
     && links.findIndex((candidate) => String(candidate.url || "") === String(link.url || "")) === index).slice(0, 8);
   const recentLaunches = Array.isArray(history.recentLaunches) ? history.recentLaunches.slice(0, 5) : [];
+  // DOSSIER TABS — only show a tab when it actually has content, so the drawer is clean, not a wall.
+  const devInfoHasHolders = Boolean(market.solanaTrackerLoaded);
+  const devInfoHasHistory = Boolean(current) || Number(history.launchesTracked) > 0 || recentLaunches.length > 0;
+  const devInfoHasSignals = sourceEvidence.length > 0
+    || (Array.isArray(result.riskReasons) && result.riskReasons.length > 0)
+    || (Array.isArray(result.positiveReasons) && result.positiveReasons.length > 0)
+    || Boolean(linked.linkedWalletCount) || (Array.isArray(linked.notes) && linked.notes.length > 0);
+  const devInfoTabs = [["overview", "Overview"]];
+  if (devInfoHasHolders) devInfoTabs.push(["holders", "Holders"]);
+  if (devInfoHasHistory) devInfoTabs.push(["history", "History"]);
+  if (devInfoHasSignals) devInfoTabs.push(["signals", "Signals"]);
+  const devInfoActivePane = devInfoTabs.some(([id]) => id === state.devInfoTab) ? state.devInfoTab : "overview";
   const drawerHtml = `
     <div class="slimeshield-drawer-backdrop" data-dev-info-close></div>
-    <aside class="dev-info-drawer" role="dialog" aria-modal="true" aria-label="Dev Info details">
+    <aside class="dev-info-drawer dossier-drawer" data-active-pane="${escapeHtml(devInfoActivePane)}" role="dialog" aria-modal="true" aria-label="Dev Info details">
       <header>
         <div>
           <span>Dev Info</span>
@@ -18324,12 +18336,15 @@ function renderDevInfoDrawer() {
         </div>
         <button type="button" aria-label="Close Dev Info" data-dev-info-close>Close</button>
       </header>
-      <section class="dev-info-summary dev-info-${escapeHtml(status)}">
+      ${devInfoTabs.length > 1 ? `<div class="dossier-tabs" role="tablist" aria-label="Dev Info sections">
+        ${devInfoTabs.map(([id, label]) => `<button type="button" role="tab" data-dev-info-tab="${id}" data-active="${devInfoActivePane === id}">${escapeHtml(label)}</button>`).join("")}
+      </div>` : ""}
+      <section class="dev-info-summary dev-info-${escapeHtml(status)}" data-pane="overview">
         <strong>${escapeHtml(row.symbol || row.shortMint || shortAddress(mint))}</strong>
         <p>${escapeHtml(result.summary || summary.summary || "Not enough dev-wallet history yet.")}</p>
         <small>${loading ? "Updating..." : `Last updated ${escapeHtml(formatDate(result.updatedAt || summary.updatedAt))}`}</small>
       </section>
-      <section>
+      <section data-pane="overview">
         <h4>Likely Dev Wallet</h4>
         <dl class="kol-dump-metrics">
           <div><dt>Wallet</dt><dd>${escapeHtml(devInfoWalletLabel(wallet))}</dd></div>
@@ -18348,7 +18363,7 @@ function renderDevInfoDrawer() {
           </div>
         ` : ""}
       </section>
-      <section>
+      <section data-pane="overview">
         <h4>Token / Source Context</h4>
         <dl class="kol-dump-metrics">
           <div><dt>Market cap</dt><dd>${escapeHtml(intelNumberLabel(marketCap, compactUsd))}</dd></div>
@@ -18364,7 +18379,7 @@ function renderDevInfoDrawer() {
         ${sourceHydration.message ? `<p class="slimeshield-muted">Source refresh: ${escapeHtml(sourceHydration.message)}${sourceHydration.eventsStored ? ` · ${escapeHtml(sourceHydration.eventsStored)} stored` : ""}</p>` : ""}
       </section>
       ${market.solanaTrackerLoaded ? `
-      <section>
+      <section data-pane="holders">
         <h4>On-chain Holders <span class="slimeshield-muted" style="font-weight:400">· Solana Tracker</span></h4>
         <dl class="kol-dump-metrics">
           <div><dt>Holders</dt><dd>${escapeHtml(Number.isFinite(market.holderCount) ? Number(market.holderCount).toLocaleString() : "—")}</dd></div>
@@ -18377,12 +18392,12 @@ function renderDevInfoDrawer() {
         </dl>
         <p class="slimeshield-muted">Live holder &amp; insider concentration from Solana Tracker — high snipers / insiders / bundled means a few wallets can dump on you.</p>
       </section>` : ""}
-      <section>
+      <section data-pane="signals">
         <h4>Source Evidence</h4>
         ${devInfoReasonsHtml(sourceEvidence, "No verified public-source evidence is stored yet. Refresh Details will save Dex/Pump/Solscan-style context when the backend can verify it.")}
       </section>
       ${current ? `
-      <section>
+      <section data-pane="history">
         <h4>Current Token Position</h4>
           <dl class="kol-dump-metrics">
             <div><dt>Started</dt><dd>${escapeHtml(devInfoMetric(current.initialSupplyPercent, "%"))}</dd></div>
@@ -18394,7 +18409,7 @@ function renderDevInfoDrawer() {
           </dl>
       </section>` : ""}
       ${Number(history.launchesTracked) > 0 || recentLaunches.length ? `
-      <section>
+      <section data-pane="history">
         <h4>Dev Dump History</h4>
         <dl class="kol-dump-metrics">
           <div><dt>Past launches</dt><dd>${escapeHtml(history.launchesTracked ?? 0)}</dd></div>
@@ -18409,17 +18424,17 @@ function renderDevInfoDrawer() {
         ` : ""}
       </section>` : ""}
       ${Array.isArray(result.riskReasons) && result.riskReasons.length ? `
-      <section>
+      <section data-pane="signals">
         <h4>Risk Signals</h4>
         ${devInfoReasonsHtml(result.riskReasons, "")}
       </section>` : ""}
       ${Array.isArray(result.positiveReasons) && result.positiveReasons.length ? `
-      <section>
+      <section data-pane="signals">
         <h4>Positive Signals</h4>
         ${devInfoReasonsHtml(result.positiveReasons, "")}
       </section>` : ""}
       ${linked.linkedWalletCount || (Array.isArray(linked.notes) && linked.notes.length) ? `
-      <section>
+      <section data-pane="signals">
         <h4>Linked Wallet Clues</h4>
         <p class="slimeshield-muted">${escapeHtml(linked.linkedWalletCount ? `${linked.linkedWalletCount} linked wallet clue(s) cached.` : "")}</p>
         ${devInfoReasonsHtml(linked.notes, "")}
@@ -18435,7 +18450,7 @@ function renderDevInfoDrawer() {
           ? `<p class="slimeshield-muted dev-info-building">📡 Still building: ${escapeHtml(building.join(", "))}. SlimeWire fills these in as it watches this wallet trade - Refresh pulls fresh source data now.</p>`
           : "";
       })()}
-      <section class="slimeshield-action-note">
+      <section class="slimeshield-action-note" data-pane="overview">
         <h4>Suggested Action</h4>
         <p>${escapeHtml(result.suggestedAction || "Check SlimeShield and liquidity before buying.")}</p>
       </section>
@@ -18650,9 +18665,11 @@ function renderSlimeShieldDetailsDrawer() {
     ...(Array.isArray(row.scoreWarnings) ? row.scoreWarnings : []),
     ...(Array.isArray(row.bestPickWarnings) ? row.bestPickWarnings : [])
   ].filter(Boolean).slice(0, 4);
+  const slimeShieldTabs = [["verdict", "Verdict"], ["risks", "Risk & Signals"]];
+  const slimeShieldActivePane = slimeShieldTabs.some(([id]) => id === state.slimeShieldTab) ? state.slimeShieldTab : "verdict";
   const drawerHtml = `
     <div class="slimeshield-drawer-backdrop" data-slimeshield-close></div>
-    <aside class="slimeshield-drawer" role="dialog" aria-modal="true" aria-label="SlimeShield details">
+    <aside class="slimeshield-drawer dossier-drawer" data-active-pane="${escapeHtml(slimeShieldActivePane)}" role="dialog" aria-modal="true" aria-label="SlimeShield details">
       <header>
         <div>
           <span>SlimeShield</span>
@@ -18660,7 +18677,10 @@ function renderSlimeShieldDetailsDrawer() {
         </div>
         <button type="button" aria-label="Close SlimeShield details" data-slimeshield-close>Close</button>
       </header>
-      <section class="slimeshield-drawer-summary slimeshield-${escapeHtml(slimeShieldVerdictClass(verdict))}">
+      <div class="dossier-tabs" role="tablist" aria-label="SlimeShield sections">
+        ${slimeShieldTabs.map(([id, label]) => `<button type="button" role="tab" data-slimeshield-tab="${id}" data-active="${slimeShieldActivePane === id}">${escapeHtml(label)}</button>`).join("")}
+      </div>
+      <section class="slimeshield-drawer-summary slimeshield-${escapeHtml(slimeShieldVerdictClass(verdict))}" data-pane="verdict">
         <strong>${escapeHtml(row.symbol || row.shortMint || shortAddress(mint))}</strong>
         <p>${escapeHtml(result.summary || "SlimeShield is warming up. Trade carefully.")}</p>
         <div>
@@ -18669,7 +18689,7 @@ function renderSlimeShieldDetailsDrawer() {
           <span>${loading ? "Updating..." : `Updated ${escapeHtml(formatDate(result.updatedAt))}`}</span>
         </div>
       </section>
-      <section>
+      <section data-pane="verdict">
         <h4>Coin / Dev Info</h4>
         <dl class="kol-dump-metrics">
           <div><dt>CA</dt><dd>${escapeHtml(shortAddress(mint))}</dd></div>
@@ -18690,15 +18710,15 @@ function renderSlimeShieldDetailsDrawer() {
         ${sourceHydration.message ? `<p class="slimeshield-muted">Source refresh: ${escapeHtml(sourceHydration.message)}</p>` : ""}
         ${sourceEvidence.length ? `<ul class="slimeshield-factor-list">${sourceEvidence.map((item) => `<li><span>${escapeHtml(item)}</span></li>`).join("")}</ul>` : ""}
       </section>
-      <section>
+      <section data-pane="risks">
         <h4>Top Risk Reasons</h4>
         ${slimeShieldFactorListHtml(riskFactors, "risk", "No major cached risk reason yet. Missing data lowers confidence.")}
       </section>
-      <section>
+      <section data-pane="risks">
         <h4>Positive Signals</h4>
         ${slimeShieldFactorListHtml(riskFactors, "positive", "No positive signal is strong enough to highlight yet.")}
       </section>
-      <section class="slimeshield-action-note">
+      <section class="slimeshield-action-note" data-pane="verdict">
         <h4>Suggested Action</h4>
         <p>${escapeHtml(slimeShieldSuggestedActionLabel(result.suggestedAction))}</p>
         <small>Protected Buy preset suggestion: ${escapeHtml(slimeShieldPresetLabel(result.protectedBuyPreset))}</small>
@@ -23027,6 +23047,18 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  if (target.matches("[data-slimeshield-tab]")) {
+    event.preventDefault();
+    const tab = target.dataset.slimeshieldTab || "verdict";
+    state.slimeShieldTab = tab;
+    const drawer = target.closest(".dossier-drawer");
+    if (drawer) {
+      drawer.setAttribute("data-active-pane", tab);
+      drawer.querySelectorAll("[data-slimeshield-tab]").forEach((b) => { b.dataset.active = b.dataset.slimeshieldTab === tab ? "true" : "false"; });
+    }
+    return;
+  }
+
   if (target.matches("[data-slimeshield-details]")) {
     event.preventDefault();
     // Opened from inside the Dev Info drawer: close it first so the shield drawer
@@ -23712,6 +23744,17 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
     openDevInfoDetails(target.dataset.devInfo || "");
+    return;
+  }
+  if (target.matches("[data-dev-info-tab]")) {
+    event.preventDefault();
+    const tab = target.dataset.devInfoTab || "overview";
+    state.devInfoTab = tab;
+    const drawer = target.closest(".dossier-drawer");
+    if (drawer) {
+      drawer.setAttribute("data-active-pane", tab);
+      drawer.querySelectorAll("[data-dev-info-tab]").forEach((b) => { b.dataset.active = b.dataset.devInfoTab === tab ? "true" : "false"; });
+    }
     return;
   }
   if (target.matches("[data-dev-info-close]")) {
