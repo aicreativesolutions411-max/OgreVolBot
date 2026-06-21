@@ -1502,6 +1502,20 @@ test("jumpScore: a buy-led volume-spike breakout scores high; non-surges score 0
   assert.ok(liquidScore(surging) > liquidScore(dull) + 10, "a surge lifts the liquid score over a dull mover");
 });
 
+test("jumpScore: a real mid-cap breakout at 0.10-0.18 turnover now fires the spike bar (the 'best jump 0' fix)", () => {
+  // Verified-live class (Cambria): $33k liq doing ~$3.7k/5m = 0.11 turnover, m5 +10%, buy-led, 1h-green.
+  // The old 0.18 floor zeroed this out — so the spike radar saw "best jump 0" forever. It must now fire.
+  const midBreakout = { liquidityUsd: 33000, marketCap: 173000, volume5m: 3700, buys5m: 50, sells5m: 34, m5: 10.5, h1: 6.5 };
+  assert.ok(jumpScore(midBreakout) >= 44, "a 0.11-turnover buy-led +10% breakout clears the spike-fire bar (44)");
+  // but a 0.11-turnover move that is SELL-led (distribution) still scores 0 — the floor drop didn't
+  // weaken the buy-pressure gate that keeps dumps out.
+  const midDump = { ...midBreakout, buys5m: 20, sells5m: 64 };
+  assert.equal(jumpScore(midDump), 0, "sell-led mid-cap is distribution, not a jump");
+  // and a truly dead pool (0.04 turnover) is still not a jump.
+  const dead = { ...midBreakout, volume5m: 1300 };
+  assert.equal(jumpScore(dead), 0, "0.04-turnover dead pool is never a jump");
+});
+
 test("evalExit: smart-hold cap exits a copied position around the wallet's learned hold time", () => {
   const P = aggParams(baseState({ mode: "scalp" }));
   const base = { entryMc: 5000, entryLiq: 6000, lastLiq: 6000, openedAt: 0, missed: 0, peakPct: 0, smartHoldMs: 60_000 };

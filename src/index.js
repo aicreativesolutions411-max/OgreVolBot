@@ -2547,9 +2547,80 @@ function autopilotRowHasHardDanger(r = {}) {
   return false;
 }
 
+// ===== LIVE-ACTIVITY ENRICHMENT — the FIX for "Pop Radar best jump 0" / "only losing, no spikes".
+// The mover pool is built from DexScreener /search, whose rows almost NEVER carry the 5-minute
+// micro-window (volume5m, txns.m5, priceChange.m5) the spike detector (jumpScore) and entry scorer
+// need — verified live: only ~5/50 rows had any 5m data, so ~90% scored 0 and the bot traded blind,
+// aping stale near-mega-caps that instantly rug-scratched. DexScreener's BATCH token endpoint
+// (/tokens/v1/solana/{addrs}, 30/call) DOES return the populated 5m/h1 window (verified: the same
+// coins that showed v5=0 there came back m5 +10%, real vol+txns here). So before scoring, overlay
+// REAL current activity onto the in-band candidates: now jumpScore can SEE a coin ripping NOW, and
+// liquidScore/entry decisions run on live turnover/flow instead of zeros. Cached 12s per mint so the
+// 4s pop poll + every-hunt liquid feed reuse one fetch (cheap: ~2 batch calls / 20s, well under the
+// free-tier budget). Mutates rows in place (and returns them).
+const _dexActCache = new Map();   // mint -> { at, v5, vH1, b5, s5, bH1, sH1, m5, h1, mc, liq }
+function applyDexActivity(r, act) {
+  // Only overlay when the batch endpoint actually HAS activity — never zero out a row that already
+  // carried real data (the 5/50 that did). DexScreener pc.* are plain percent numbers (what jumpScore
+  // reads via Number(row.m5)); vol/txns are the m5/h1 windows liquidScore/jumpScore turnover needs.
+  if (act.v5 > 0) r.volume5m = act.v5;
+  if (act.b5 + act.s5 > 0) { r.buys5m = act.b5; r.sells5m = act.s5; }
+  if (act.vH1 > 0) r.volumeH1 = act.vH1;
+  if (act.bH1 + act.sH1 > 0) { r.buysH1 = act.bH1; r.sellsH1 = act.sH1; }
+  if (Number.isFinite(act.m5)) r.m5 = act.m5;
+  if (Number.isFinite(act.h1)) r.h1 = act.h1;
+  if (act.mc > 0 && !(Number(r.marketCap) > 0)) r.marketCap = act.mc;
+  if (act.liq > 0 && !(Number(r.liquidityUsd) > 0)) r.liquidityUsd = act.liq;
+  return r;
+}
+async function enrichRowsWithDexActivity(rows, { limit = 60, mcMin = 6000, mcMax = 400000 } = {}) {
+  if (!Array.isArray(rows) || !rows.length) return rows;
+  const now = Date.now();
+  const need = [];
+  for (const r of rows) {
+    if (!r || !r.tokenMint) continue;
+    const mc = Number(r.marketCap) || 0;
+    // Tradeable pop band OR unknown MC (fresh climbers often have MC but no activity). Skip mega-caps.
+    if (!(mc === 0 || (mc >= mcMin && mc <= mcMax))) continue;
+    const cached = _dexActCache.get(r.tokenMint);
+    if (cached && now - cached.at < 12_000) { applyDexActivity(r, cached); continue; }   // reuse fresh
+    const hasAct = (Number(r.volume5m) || 0) > 0 || (Number(r.buys5m) || 0) + (Number(r.sells5m) || 0) > 0;
+    if (!hasAct || mc === 0) need.push(r.tokenMint);   // only fetch the BLIND ones
+  }
+  const mints = [...new Set(need)].slice(0, limit);
+  if (!mints.length) return rows;
+  const batches = [];
+  for (let i = 0; i < mints.length; i += 30) batches.push(mints.slice(i, i + 30));
+  const results = await Promise.all(batches.map((b) => fetchDexScreenerTokenPairsBatch(b).catch(() => [])));
+  const pairs = results.flat();
+  const byMint = new Map();
+  for (const m of mints) {
+    const p = bestDexPairForToken(m, pairs);
+    if (!p) continue;
+    const vol = p.volume || {}, tx = p.txns || {}, pc = p.priceChange || {};
+    const m5tx = tx.m5 || {}, h1tx = tx.h1 || {};
+    const act = {
+      at: now,
+      v5: Number(vol.m5) || 0, vH1: Number(vol.h1) || 0,
+      b5: Number(m5tx.buys) || 0, s5: Number(m5tx.sells) || 0,
+      bH1: Number(h1tx.buys) || 0, sH1: Number(h1tx.sells) || 0,
+      m5: Number.isFinite(Number(pc.m5)) ? Number(pc.m5) : undefined,
+      h1: Number.isFinite(Number(pc.h1)) ? Number(pc.h1) : undefined,
+      mc: Number(p.marketCap || p.fdv) || 0,
+      liq: Number(p.liquidity && p.liquidity.usd) || 0
+    };
+    _dexActCache.set(m, act);
+    byMint.set(m, act);
+  }
+  for (const r of rows) { const act = byMint.get(r.tokenMint); if (act) applyDexActivity(r, act); }
+  if (_dexActCache.size > 800) { for (const [k, v] of _dexActCache) { if (now - v.at > 60_000) _dexActCache.delete(k); } }
+  return rows;
+}
+
 // The broad NORMALIZED liquid-movers pool — the scalp feed scores it. Rows carry m5/h1 as NUMBERS
 // (raw webLivePairs stores m5 as an object {priceChange}) + real liquidityUsd, which is exactly what
-// liquidScore/jumpScore need. ~120 coins across fresh→24h buckets + trending.
+// liquidScore/jumpScore need. ~120 coins across fresh→24h buckets + trending. The in-band rows are
+// then DexScreener-activity enriched so entry scoring runs on REAL live turnover/flow, not zeros.
 async function buildLiquidMovers() {
   const BUCKETS = ["live", "under1h", "under3h", "under1d"];
   const SORTS = ["liquidity", "volume", "momentum"];
@@ -2579,7 +2650,12 @@ async function buildLiquidMovers() {
     }
   }
   out.sort((a, b) => (Number(b.liquidityUsd) || 0) - (Number(a.liquidityUsd) || 0));
-  return out.slice(0, 120);
+  const top = out.slice(0, 120);
+  // Overlay REAL live 5m/h1 activity onto the BLIND in-band rows so liquidScore/jumpScore/entry
+  // decisions run on actual turnover/flow — the feed's /search rows mostly carry zeros for the
+  // micro-window, which made the bot ape near-blind mega-caps that instantly rug-scratched.
+  try { await enrichRowsWithDexActivity(top, { limit: 50 }); } catch {}
+  return top;
 }
 let _popPolling = false;
 async function pollPopRadar() {
@@ -2624,7 +2700,12 @@ async function pollPopRadar() {
               ...autopilotEnrichedFields(r)
             });
           }
-          if (rows.length) { popLiveRows = rows.slice(0, 140); popLiveMints = rows.map((r) => r.tokenMint).slice(0, 40); }
+          // Overlay REAL live 5m/h1 activity onto the in-band candidates — the spike radar's whole
+          // job is jumpScore (vol surge + m5 breakout + buy-led), but the /search feed rows almost
+          // never carry the 5m window, so it saw "best jump 0" forever. Now it can SEE spikes NOW.
+          const enriched = rows.slice(0, 140);
+          try { await enrichRowsWithDexActivity(enriched, { limit: 50, mcMax: 300000 }); } catch {}
+          if (enriched.length) { popLiveRows = enriched; popLiveMints = enriched.map((r) => r.tokenMint).slice(0, 40); }
         } catch {} finally { _popSrcBusy = false; }
       })();
     }

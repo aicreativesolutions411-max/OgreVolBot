@@ -592,7 +592,11 @@ export function jumpScore(row) {
   // 1) VOLUME SPIKE via turnover (5m volume / pool depth). A coin trading a big fraction of its
   //    liquidity in 5 minutes is ON FIRE; below a floor it isn't a jump at all.
   const turn = liq > 0 ? vol / liq : 0;
-  if (turn >= 1.0) s += 34; else if (turn >= 0.6) s += 26; else if (turn >= 0.35) s += 18; else if (turn >= 0.18) s += 10; else return 0;
+  // 0.10 floor (was 0.18): a verified live mid-cap breakout (e.g. $30k-liq coin doing ~$3k/5m =
+  // 0.11 turnover, m5 +10%, buy-led) is a REAL jump the old floor zeroed out — the buy-pressure,
+  // m5-breakout and persistence gates below still demand it actually be ripping, so the lower floor
+  // catches the move without letting dead pools through.
+  if (turn >= 1.0) s += 34; else if (turn >= 0.6) s += 26; else if (turn >= 0.35) s += 18; else if (turn >= 0.18) s += 10; else if (turn >= 0.10) s += 6; else return 0;
   // 2) BUY PRESSURE — a surge must be buyers lifting, not a sell climax / distribution.
   const flow = (buys + sells) > 0 ? buys / (buys + sells) : 0.5;
   if (flow >= 0.7) s += 24; else if (flow >= 0.6) s += 16; else if (flow >= 0.52) s += 8; else return 0;
