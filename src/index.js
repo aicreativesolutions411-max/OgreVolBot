@@ -4997,6 +4997,10 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "chart-lab.html");
       return;
     }
+    if (request.method === "GET" && ["/gg", "/terminal-pro", "/pro-terminal", "/gg.html"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "gg.html");
+      return;
+    }
 
     if (request.method === "GET" && /^[/](call|u|g|hype)([/]|$)/.test(requestUrl.pathname)) {
       await serveProofSharePage(requestUrl, request, response);
