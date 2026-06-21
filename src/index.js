@@ -18541,20 +18541,25 @@ async function getMintSafetyInfo(tokenMint) {
   const cached = getTimedCache(mintSafetyCache, cacheKey, Math.max(60_000, Number(process.env.MINT_SAFETY_TTL_MS) || 6 * 60 * 60 * 1000));
   if (cached) return cached;
 
-  const response = await rpcRead("get mint safety info", (c) => c.getParsedAccountInfo(mintKey, "confirmed"));
-  const account = response.value;
-  if (!account?.owner) {
+  // Decode mint/freeze authority from the RAW mint bytes ourselves — NOT the provider's jsonParsed.
+  // Alchemy's jsonParsed FALSE-POSITIVES freeze/mint authority on Token-2022 mints (verified live
+  // 2026-06-21: 5/5 flagged pump coins had freezeAuthority=null on-chain yet got stamped
+  // freezeAuthorityActive), which starved the autopilot (out=1 of 50 fresh) AND would block every
+  // Token-2022 buy at assertTokenBuyBaseSafety. The base SPL Mint layout (first 82 bytes) is IDENTICAL
+  // for SPL Token and Token-2022 — extensions append AFTER — so a byte decode is deterministic +
+  // provider-independent. COption tag (u32 LE): 0 = None, 1 = Some(pubkey 32B). Authorities are
+  // immutable-or-renounced after creation, so this stays cache-safe.
+  const account = await rpcRead("get mint safety info", (c) => c.getAccountInfo(mintKey, "confirmed"));
+  if (!account?.owner || !Buffer.isBuffer(account.data) || account.data.length < 82) {
     throw new Error(`Could not read mint account ${cacheKey}.`);
   }
-  const tokenProgram = account.owner.toBase58();
   const data = account.data;
-  const info = data && typeof data === "object" && "parsed" in data ? data.parsed?.info || {} : {};
   const safety = {
-    tokenProgram,
-    mintAuthority: info.mintAuthority || null,
-    freezeAuthority: info.freezeAuthority || null,
-    supply: info.supply || null,
-    decimals: Number.isInteger(info.decimals) ? info.decimals : null
+    tokenProgram: account.owner.toBase58(),
+    mintAuthority: data.readUInt32LE(0) === 1 ? new PublicKey(data.subarray(4, 36)).toBase58() : null,
+    freezeAuthority: data.readUInt32LE(46) === 1 ? new PublicKey(data.subarray(50, 82)).toBase58() : null,
+    supply: data.readBigUInt64LE(36).toString(),
+    decimals: data.readUInt8(44)
   };
 
   setTimedCache(mintSafetyCache, cacheKey, safety);
