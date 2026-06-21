@@ -18256,10 +18256,14 @@ function radarRuleText(rule) {
 }
 
 function openRadarDrawer(tokenMint = "", symbol = "") {
-  state.radarDrawer = { open: true, tokenMint: String(tokenMint || "").trim(), symbol: String(symbol || "").trim() };
+  state.radarDrawer = { open: true, tokenMint: String(tokenMint || "").trim(), symbol: String(symbol || "").trim(), scope: "token" };
   state.radarStatus = "";
   renderRadarDrawer();
   void loadRadarRules();
+  // Pull the watchlist (tags) so the "A list" scope can offer the user's named lists.
+  if (!state.watchlist?.rows?.length) {
+    api("/api/web/watchlist").then((data) => { if (data?.watchlist) { state.watchlist = data.watchlist; renderRadarDrawer(); } }).catch(() => {});
+  }
 }
 function closeRadarDrawer() {
   state.radarDrawer = { open: false, tokenMint: "", symbol: "" };
@@ -18277,21 +18281,28 @@ async function loadRadarRules() {
 async function submitRadarRule() {
   const root = document.querySelector("[data-radar-drawer-root]");
   const d = state.radarDrawer || {};
-  if (!root || !d.tokenMint) return;
-  const type = root.querySelector("[data-radar-type]")?.value || "tp";
+  if (!root) return;
+  const scope = d.scope || (d.tokenMint ? "token" : "tag");
+  const type = root.querySelector("[data-radar-type]")?.value || (scope === "tag" ? "mc_above" : "tp");
   const value = Number(root.querySelector("[data-radar-value]")?.value || 0);
   if (!(value > 0)) { state.radarStatus = "Enter a number greater than 0."; renderRadarDrawer(); return; }
   const channels = {
     push: root.querySelector("[data-radar-ch-push]")?.checked !== false,
     telegram: Boolean(root.querySelector("[data-radar-ch-tg]")?.checked)
   };
+  let rule;
+  if (scope === "tag") {
+    const tag = root.querySelector("[data-radar-tag]")?.value || "";
+    if (!tag) { state.radarStatus = "Pick a list (tag) first — tag coins in your Watchlist."; renderRadarDrawer(); return; }
+    rule = { tag, type, value, channels };
+  } else {
+    if (!d.tokenMint) return;
+    rule = { tokenMint: d.tokenMint, symbol: d.symbol, type, value, channels };
+  }
   try {
     state.radarStatus = "Setting alert…"; renderRadarDrawer();
     await ensureWebAccount(null, "Opening your SlimeWire profile for Radar…");
-    const data = await api("/api/web/radar", {
-      method: "POST",
-      body: JSON.stringify({ action: "add", rule: { tokenMint: d.tokenMint, symbol: d.symbol, type, value, channels } })
-    });
+    const data = await api("/api/web/radar", { method: "POST", body: JSON.stringify({ action: "add", rule }) });
     state.radarRules = Array.isArray(data.rules) ? data.rules : state.radarRules;
     state.radarStatus = "✅ Alert set — SlimeWire is watching it for you.";
   } catch (error) {
@@ -18315,25 +18326,33 @@ function renderRadarDrawer() {
   if (!d.open) { root.innerHTML = ""; root.__lastDrawerHtml = ""; return; }
   const rules = Array.isArray(state.radarRules) ? state.radarRules : [];
   const sym = d.symbol || (d.tokenMint ? shortAddress(d.tokenMint) : "");
-  const addForm = d.tokenMint ? `
-    <section data-radar-add>
-      <h4>New alert${sym ? ` · ${escapeHtml(sym)}` : ""}</h4>
-      <div class="radar-form">
-        <select data-radar-type aria-label="Alert type">
-          <option value="tp">🎯 Take-profit (+%)</option>
-          <option value="sl">🛑 Stop-loss (−%)</option>
+  const allTags = [...new Set((state.watchlist?.rows || []).flatMap((row) => (Array.isArray(row.tags) ? row.tags : [])))].slice(0, 24);
+  const scope = d.scope || (d.tokenMint ? "token" : "tag");
+  const typeOptionsTag = `
           <option value="mc_above">📈 Market cap above ($)</option>
           <option value="mc_below">📉 Market cap below ($)</option>
-          <option value="dump">🩸 Dump / rug alert (down % in 1h)</option>
-        </select>
-        <input data-radar-value type="number" min="0" step="any" inputmode="decimal" placeholder="e.g. 50 or 40000" aria-label="Alert value" />
+          <option value="dump">🩸 Dump / rug alert (down % in 1h)</option>`;
+  const typeOptionsToken = `
+          <option value="tp">🎯 Take-profit (+%)</option>
+          <option value="sl">🛑 Stop-loss (−%)</option>${typeOptionsTag}`;
+  const addForm = (d.tokenMint || allTags.length) ? `
+    <section data-radar-add>
+      <h4>New alert</h4>
+      <div class="radar-scope">
+        ${d.tokenMint ? `<button type="button" data-radar-scope="token" data-active="${scope === "token"}">${escapeHtml(sym || "This coin")}</button>` : ""}
+        <button type="button" data-radar-scope="tag" data-active="${scope === "tag"}" ${allTags.length ? "" : "disabled title=\"Tag coins in your Watchlist first\""}>📋 A list</button>
+      </div>
+      <div class="radar-form">
+        ${scope === "tag" ? `<select data-radar-tag aria-label="List (tag)">${allTags.length ? allTags.map((tag) => `<option value="${escapeHtml(tag)}">${escapeHtml(tag)}</option>`).join("") : `<option value="">No tags yet</option>`}</select>` : ""}
+        <select data-radar-type aria-label="Alert type">${scope === "tag" ? typeOptionsTag : typeOptionsToken}</select>
+        <input data-radar-value type="number" min="0" step="any" inputmode="decimal" placeholder="${scope === "tag" ? "e.g. 40000 or 25" : "e.g. 50 or 40000"}" aria-label="Alert value" />
         <button type="button" class="primary" data-radar-submit>Set alert</button>
       </div>
       <div class="radar-channels">
         <label><input type="checkbox" data-radar-ch-push checked /> 🔔 Push</label>
         <label><input type="checkbox" data-radar-ch-tg /> ✈️ Telegram</label>
       </div>
-      <p class="slimeshield-muted">% alerts use the price right now as the baseline. SlimeWire checks every few minutes and pings you with the reason.</p>
+      <p class="slimeshield-muted">${scope === "tag" ? "A list alert watches every coin you tagged this — market-cap &amp; dump conditions (no per-coin baseline needed)." : "% alerts use the price right now as the baseline. SlimeWire checks every few minutes and pings you with the reason."}</p>
     </section>` : "";
   const list = rules.length ? `
     <ul class="radar-rule-list">
@@ -18341,7 +18360,7 @@ function renderRadarDrawer() {
         <li class="radar-rule ${rule.enabled === false ? "is-off" : ""}">
           <span class="radar-rule-icon">${radarRuleIcon(rule.type)}</span>
           <div class="radar-rule-body">
-            <strong>${escapeHtml(rule.symbol || shortAddress(rule.tokenMint))}</strong>
+            <strong>${rule.scope === "tag" ? `📋 ${escapeHtml(rule.tag || rule.symbol || "list")}` : escapeHtml(rule.symbol || shortAddress(rule.tokenMint))}</strong>
             <small>${escapeHtml(radarRuleText(rule))}</small>
           </div>
           <button type="button" class="radar-rule-toggle" data-radar-toggle="${escapeHtml(rule.id)}" title="${rule.enabled === false ? "Enable" : "Pause"}">${rule.enabled === false ? "Off" : "On"}</button>
@@ -24020,6 +24039,7 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (target.matches("[data-radar-close]")) { closeRadarDrawer(); return; }
+  if (target.matches("[data-radar-scope]")) { event.preventDefault(); state.radarDrawer = { ...(state.radarDrawer || {}), scope: target.dataset.radarScope || "token" }; renderRadarDrawer(); return; }
   if (target.matches("[data-radar-submit]")) { event.preventDefault(); void submitRadarRule(); return; }
   if (target.matches("[data-radar-toggle]")) { event.preventDefault(); void radarRuleAction("toggle", target.dataset.radarToggle || ""); return; }
   if (target.matches("[data-radar-remove]")) { event.preventDefault(); void radarRuleAction("remove", target.dataset.radarRemove || ""); return; }

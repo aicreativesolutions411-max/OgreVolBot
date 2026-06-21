@@ -10549,12 +10549,21 @@ textarea,
 }
 
 /* MY RADAR — set-and-forget personal alerts. */
+.radar-scope { display: flex !important; gap: 6px !important; margin: 2px 0 8px !important; }
+.radar-scope button {
+  flex: 1 1 auto !important; min-height: 32px !important; padding: 5px 10px !important; border-radius: 10px !important;
+  font-size: 12px !important; font-weight: 800 !important; cursor: pointer !important;
+  color: #bde6a3 !important; background: rgba(57, 255, 20, 0.06) !important; border: 1px solid rgba(57, 255, 20, 0.22) !important;
+}
+.radar-scope button[data-active="true"] { color: #061206 !important; background: linear-gradient(180deg, #8bf24a, #5fd421) !important; border-color: rgba(57, 255, 20, 0.6) !important; }
+.radar-scope button:disabled { opacity: 0.45 !important; cursor: not-allowed !important; }
 .radar-form {
   display: flex !important;
   flex-wrap: wrap !important;
   gap: 8px !important;
   margin: 4px 0 8px !important;
 }
+.radar-form select[data-radar-tag] { flex: 1 1 100% !important; }
 .radar-form select,
 .radar-form input {
   flex: 1 1 130px !important;

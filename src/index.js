@@ -28631,25 +28631,31 @@ function radarUsd(n) {
   return `$${Math.round(n)}`;
 }
 
+const RADAR_TAG_RULE_TYPES = ["mc_above", "mc_below", "dump"]; // tag-scoped = basis-free conditions only
 function normalizeRadarRule(input = {}) {
-  const tokenMint = String(input.tokenMint || "").trim();
-  if (!tokenMint) return null;
   const type = String(input.type || "").trim().toLowerCase();
   if (!RADAR_RULE_TYPES.includes(type)) return null;
   const value = Number(input.value) || 0;
   if (!(value > 0)) return null;
   const channels = input.channels || {};
-  return {
+  const base = {
     id: `r_${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`,
-    tokenMint,
-    symbol: String(input.symbol || "").trim().slice(0, 24),
     type,
     value,
-    basisPrice: Number(input.basisPrice) || 0,
     channels: { push: channels.push !== false, telegram: Boolean(channels.telegram) },
     enabled: true,
     createdAt: new Date().toISOString()
   };
+  // TAG-SCOPED (per-list) rule: applies to every watched coin carrying this tag. Basis-free only.
+  const tag = String(input.tag || "").trim().replace(/[^\w \-]/g, "").slice(0, 24);
+  if (tag) {
+    if (!RADAR_TAG_RULE_TYPES.includes(type)) return null;
+    return { ...base, scope: "tag", tag, tokenMint: "", symbol: tag, basisPrice: 0 };
+  }
+  // TOKEN-SCOPED rule (the default).
+  const tokenMint = String(input.tokenMint || "").trim();
+  if (!tokenMint) return null;
+  return { ...base, scope: "token", tokenMint, symbol: String(input.symbol || "").trim().slice(0, 24), basisPrice: Number(input.basisPrice) || 0 };
 }
 
 async function radarRulesForUser(userId) {
@@ -28678,13 +28684,16 @@ async function updateRadarRules(userId, body = {}) {
   } else {
     const rule = normalizeRadarRule(body.rule || body);
     if (rule) {
-      // For TP/SL we need a basis price; fetch it now if the client didn't supply one.
-      if ((rule.type === "tp" || rule.type === "sl") && !(rule.basisPrice > 0)) {
+      // Token-scoped TP/SL need a basis price; fetch it now if the client didn't supply one.
+      // (Tag-scoped rules are basis-free.)
+      if (rule.scope !== "tag" && (rule.type === "tp" || rule.type === "sl") && !(rule.basisPrice > 0)) {
         const pairs = await fetchDexScreenerTokenPairsBatch([rule.tokenMint]).catch(() => []);
         const best = bestDexPairForToken(rule.tokenMint, pairs.filter((pair) => pairMatchesToken(pair, rule.tokenMint)));
         rule.basisPrice = Number(best?.priceUsd) || 0;
       }
-      rules = rules.filter((existingRule) => !(existingRule.tokenMint === rule.tokenMint && existingRule.type === rule.type));
+      rules = rules.filter((existingRule) => (rule.scope === "tag"
+        ? !(existingRule.tag === rule.tag && existingRule.type === rule.type)
+        : !(existingRule.tokenMint === rule.tokenMint && existingRule.type === rule.type)));
       rules.unshift(rule);
       rules = rules.slice(0, 60);
     }
@@ -28732,15 +28741,32 @@ async function checkRadarRules() {
     const store = await readWatchAlerts();
     const now = Date.now();
     for (const userId of radarUsers) {
-      const rules = (authStore.profiles[userId].radarRules || []).filter((rule) => rule && rule.enabled).slice(0, 60);
-      const mints = [...new Set(rules.map((rule) => rule.tokenMint).filter(Boolean))];
+      const profile = authStore.profiles[userId];
+      const rules = (profile.radarRules || []).filter((rule) => rule && rule.enabled).slice(0, 60);
+      const watched = Array.isArray(profile.watchedTokens) ? profile.watchedTokens : [];
+      // Expand each rule into the concrete tokens it watches. A TAG-scoped rule fans out to every
+      // watched coin carrying that tag (each gets its own dedupe key); a TOKEN rule maps to itself.
+      const evalRules = [];
+      for (const rule of rules) {
+        if (rule.scope === "tag" && rule.tag) {
+          const tagLc = String(rule.tag).toLowerCase();
+          for (const w of watched) {
+            if (!w || !w.tokenMint || !Array.isArray(w.tags)) continue;
+            if (!w.tags.some((t) => String(t).toLowerCase() === tagLc)) continue;
+            evalRules.push({ ...rule, tokenMint: w.tokenMint, symbol: w.symbol || rule.tag, _fireKey: `radar:${rule.id}:${w.tokenMint}` });
+          }
+        } else if (rule.tokenMint) {
+          evalRules.push({ ...rule, _fireKey: `radar:${rule.id}` });
+        }
+      }
+      const mints = [...new Set(evalRules.map((rule) => rule.tokenMint).filter(Boolean))];
       if (!mints.length) continue;
       const pairs = await fetchDexScreenerTokenPairsBatch(mints).catch(() => []);
       const userSnap = store.snapshots[userId] || {};
-      for (const rule of rules) {
+      for (const rule of evalRules) {
         const best = bestDexPairForToken(rule.tokenMint, pairs.filter((pair) => pairMatchesToken(pair, rule.tokenMint)));
         if (!best) continue;
-        const fireKey = `radar:${rule.id}`;
+        const fireKey = rule._fireKey;
         if (now - (Number(userSnap[fireKey]?.alertAt) || 0) < RADAR_DEDUPE_MS) continue;
         const hit = evaluateRadarRule(rule, best);
         if (!hit) continue;
