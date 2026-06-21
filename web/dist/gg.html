@@ -337,7 +337,10 @@
   // The API is served from the bot origin (ogrevolbot.onrender.com), not the static host.
   // The main SPA routes through OGRE_PORTAL_CONFIG.apiBase the same way; mirror it here.
   const API_BASE = (window.OGRE_PORTAL_CONFIG && window.OGRE_PORTAL_CONFIG.apiBase) || "https://ogrevolbot.onrender.com";
-  function api(path,opts){ return getJson(API_BASE+path, Object.assign({credentials:"include"}, opts||{})); }
+  // NOTE: the API responds with Access-Control-Allow-Origin:* for these routes, which is
+  // incompatible with credentialed CORS — so no credentials:"include" (it makes fetch throw).
+  // Public reads (live-pairs/slimeshield) work as guest; authed routes 401 -> sign-in prompt.
+  function api(path,opts){ return getJson(API_BASE+path, opts||{}); }
 
   // ---------- state ----------
   const state = { route:"trending", mint:null, trendTab:"best", volTf:"h1", rows:[], pollT:null };
