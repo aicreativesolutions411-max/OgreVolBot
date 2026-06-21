@@ -18243,7 +18243,7 @@ function renderReturnSummary() {
 
 // ===================== MY RADAR — personalized alerts UI =====================
 function radarRuleIcon(type) {
-  return type === "tp" ? "🎯" : type === "sl" ? "🛑" : type === "mc_above" ? "📈" : type === "mc_below" ? "📉" : "📡";
+  return type === "tp" ? "🎯" : type === "sl" ? "🛑" : type === "mc_above" ? "📈" : type === "mc_below" ? "📉" : type === "dump" ? "🩸" : "📡";
 }
 function radarRuleText(rule) {
   const v = Number(rule.value) || 0;
@@ -18251,6 +18251,7 @@ function radarRuleText(rule) {
   if (rule.type === "sl") return `Stop-loss · −${Math.round(v)}%`;
   if (rule.type === "mc_above") return `Market cap crosses above ${compactUsd(v)}`;
   if (rule.type === "mc_below") return `Market cap falls below ${compactUsd(v)}`;
+  if (rule.type === "dump") return `Dump alert · down ${Math.round(v)}% in 1h`;
   return String(rule.type || "");
 }
 
@@ -18323,6 +18324,7 @@ function renderRadarDrawer() {
           <option value="sl">🛑 Stop-loss (−%)</option>
           <option value="mc_above">📈 Market cap above ($)</option>
           <option value="mc_below">📉 Market cap below ($)</option>
+          <option value="dump">🩸 Dump / rug alert (down % in 1h)</option>
         </select>
         <input data-radar-value type="number" min="0" step="any" inputmode="decimal" placeholder="e.g. 50 or 40000" aria-label="Alert value" />
         <button type="button" class="primary" data-radar-submit>Set alert</button>

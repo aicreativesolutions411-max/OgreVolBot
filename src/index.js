@@ -28620,7 +28620,7 @@ async function checkWatchlistMoveAlerts() {
 // watches for them, delivering via web push + Telegram with a plain-English WHY. Rules
 // live on the user's profile (web-auth.json); fire-dedupe lives in the watch-alerts
 // snapshot store (written every cycle anyway). Safe-by-default: no rules => nothing fires.
-const RADAR_RULE_TYPES = ["tp", "sl", "mc_above", "mc_below"];
+const RADAR_RULE_TYPES = ["tp", "sl", "mc_above", "mc_below", "dump"];
 const RADAR_DEDUPE_MS = 6 * 60 * 60 * 1000;
 
 function radarUsd(n) {
@@ -28712,6 +28712,9 @@ function evaluateRadarRule(rule, best) {
     return { title: `📈 ${sym} crossed ${radarUsd(rule.value)} MC`, why: `Market cap is now ${radarUsd(mc)}.` };
   } else if (rule.type === "mc_below" && mc > 0 && mc <= rule.value) {
     return { title: `📉 ${sym} fell below ${radarUsd(rule.value)} MC`, why: `Market cap is now ${radarUsd(mc)}.` };
+  } else if (rule.type === "dump") {
+    const h1 = Number(best?.priceChange?.h1);
+    if (Number.isFinite(h1) && h1 <= -rule.value) return { title: `🩸 ${sym} dumping ${Math.abs(h1).toFixed(0)}% (1h)`, why: `Down ${Math.abs(h1).toFixed(0)}% in the last hour — possible rug/dump. Tap to check.` };
   }
   return null;
 }
