@@ -18566,19 +18566,20 @@ function renderDevInfoDrawer() {
   const mintAuthority = market.mintAuthority || row.mintAuthority || "";
   const freezeAuthority = market.freezeAuthority || row.freezeAuthority || "";
   const authorityLoaded = Boolean(market.heliusDasIndexedAt || market.heliusDasSource || row.heliusDasSource || metadataAuthority || mintAuthority || freezeAuthority);
+  // CURATED, de-duped reference links — clean labels, no twins (the old list pulled externalLinks too
+  // and rendered "Dex"/"Pair" twice). Cap at 6 so the row stays tidy.
   const referenceLinks = [
-    ...(Array.isArray(result.externalLinks) ? result.externalLinks : []),
-    ...(Array.isArray(summary.externalLinks) ? summary.externalLinks : []),
-    { label: "Solscan Token", url: mint ? `https://solscan.io/token/${encodeURIComponent(mint)}` : "" },
+    { label: "Solscan", url: mint ? `https://solscan.io/token/${encodeURIComponent(mint)}` : "" },
     { label: "Dex", url: row.dexUrl || dexUrl(mint) },
-    { label: "Solscan Wallet", url: wallet ? `https://solscan.io/account/${encodeURIComponent(wallet)}` : "" },
-    { label: "KOLscan Wallet", url: wallet ? `https://kolscan.io/account/${encodeURIComponent(wallet)}` : "" },
     { label: "Bubblemap", url: mint ? `https://app.bubblemaps.io/sol/token/${encodeURIComponent(mint)}` : "" },
+    { label: "Dev wallet", url: wallet ? `https://solscan.io/account/${encodeURIComponent(wallet)}` : "" },
+    { label: "KOLscan", url: wallet ? `https://kolscan.io/account/${encodeURIComponent(wallet)}` : "" },
     { label: "X", url: row.twitterUrl || row.xUrl },
     { label: "TG", url: row.telegramUrl },
-    { label: "Website", url: row.websiteUrl }
-  ].filter((link, index, links) => /^https?:\/\//i.test(String(link.url || ""))
-    && links.findIndex((candidate) => String(candidate.url || "") === String(link.url || "")) === index).slice(0, 8);
+    { label: "Web", url: row.websiteUrl }
+  ].filter((link) => /^https?:\/\//i.test(String(link.url || "")))
+    .filter((link, i, arr) => arr.findIndex((c) => c.label.toLowerCase() === link.label.toLowerCase() || String(c.url) === String(link.url)) === i)
+    .slice(0, 6);
   const recentLaunches = Array.isArray(history.recentLaunches) ? history.recentLaunches.slice(0, 5) : [];
   // DOSSIER TABS — only show a tab when it actually has content, so the drawer is clean, not a wall.
   const devInfoHasHolders = Boolean(market.solanaTrackerLoaded);
@@ -18620,8 +18621,7 @@ function renderDevInfoDrawer() {
         </dl>
         <div class="slimeshield-drawer-actions">
           ${wallet ? `<button type="button" data-copy="${escapeHtml(wallet)}">Copy Wallet</button>` : ""}
-          <button type="button" data-copy="${escapeHtml(mint)}">Copy CA</button>
-          ${wallet && state.user ? `<button type="button" data-dev-watch="${escapeHtml(wallet)}">${state.devWatch?.[wallet] ? "✅ Watching this dev" : "👀 Watch this dev"}</button>` : ""}
+          ${wallet && state.user ? `<button type="button" data-dev-watch="${escapeHtml(wallet)}">${state.devWatch?.[wallet] ? "✅ Watching dev" : "👀 Watch dev"}</button>` : ""}
         </div>
         ${referenceLinks.length ? `
           <div class="slimeshield-drawer-actions dev-info-reference-links">
@@ -18630,18 +18630,14 @@ function renderDevInfoDrawer() {
         ` : ""}
       </section>
       <section data-pane="overview">
-        <h4>Token / Source Context</h4>
+        <h4>Security &amp; Source</h4>
         <dl class="kol-dump-metrics">
-          <div><dt>Market cap</dt><dd>${escapeHtml(intelNumberLabel(marketCap, compactUsd))}</dd></div>
-          <div><dt>Liquidity</dt><dd>${escapeHtml(intelNumberLabel(liquidity, compactUsd))}</dd></div>
-          <div><dt>5m volume</dt><dd>${escapeHtml(intelNumberLabel(volume5m, compactUsd))}</dd></div>
-          <div><dt>1h volume</dt><dd>${escapeHtml(intelNumberLabel(volumeH1, compactUsd))}</dd></div>
           <div><dt>Pair age</dt><dd>${escapeHtml(Number.isFinite(pairAgeMinutes) ? devInfoMinutes(pairAgeMinutes) : "Not cached yet")}</dd></div>
-          <div><dt>Metadata auth</dt><dd>${escapeHtml(metadataAuthority ? shortAddress(metadataAuthority) : (authorityLoaded ? "none cached" : "Not indexed yet"))}</dd></div>
-          <div><dt>Mint / freeze</dt><dd>${escapeHtml(`${mintAuthority ? shortAddress(mintAuthority) : (authorityLoaded ? "none" : "not indexed")} / ${freezeAuthority ? shortAddress(freezeAuthority) : (authorityLoaded ? "none" : "not indexed")}`)}</dd></div>
+          <div><dt>Mint auth</dt><dd>${escapeHtml(mintAuthority ? shortAddress(mintAuthority) : (authorityLoaded ? "✓ none" : "checking…"))}</dd></div>
+          <div><dt>Freeze auth</dt><dd>${escapeHtml(freezeAuthority ? shortAddress(freezeAuthority) : (authorityLoaded ? "✓ none" : "checking…"))}</dd></div>
           <div><dt>Source</dt><dd>${escapeHtml(market.source || result.cacheSource || result.dataSource || "cache/local")}</dd></div>
         </dl>
-        <p class="slimeshield-muted">If a field is not cached yet, Refresh asks SlimeWire for public pair/token context and stores verified values for later sessions.</p>
+        <p class="slimeshield-muted">Market cap, liquidity &amp; volume are on the chart — this panel focuses on who's behind the coin. "✓ none" means that authority is renounced (safer).</p>
         ${sourceHydration.message ? `<p class="slimeshield-muted">Source refresh: ${escapeHtml(sourceHydration.message)}${sourceHydration.eventsStored ? ` · ${escapeHtml(sourceHydration.eventsStored)} stored` : ""}</p>` : ""}
       </section>
       ${market.solanaTrackerLoaded ? `
