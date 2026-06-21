@@ -129,6 +129,17 @@
   var el=document.getElementById('chart'); if(!el||!window.LightweightCharts) return;
   var QP=new URLSearchParams(location.search),CA=(QP.get('ca')||'').trim(),EMBED=QP.get('embed')==='1',TF=QP.get('tf')||'5m';
   var SYMP=(QP.get('sym')||'').trim();
+  // INSTANT HEADER — kill the "$OGRE flash". The demo coin ($OGRE · Swamp Ogre) is hardcoded in the
+  // markup and used to show until the live stats fetch finished (seconds), so when a real coin is
+  // embedded from a pair you watched the WRONG coin load. Paint the requested coin's symbol + CA
+  // IMMEDIATELY (price/change fill in live); standalone /chart-lab with no ca keeps the demo.
+  if(CA){ try{
+    var _h=document.querySelector('.hdr .sym'); if(_h)_h.textContent='$'+(SYMP||(CA.slice(0,4)+'…'));
+    var _hs=document.querySelector('.hdr .sub'); if(_hs)_hs.textContent=CA.slice(0,4)+'…'+CA.slice(-4);
+    var _ha=document.querySelector('.hdr .av'); if(_ha)_ha.textContent=(SYMP||CA).slice(0,2).toUpperCase();
+    var _hp=document.getElementById('px'); if(_hp)_hp.textContent='—';
+    var _hc=document.getElementById('chg'); if(_hc)_hc.textContent='';
+  }catch(e){} }
   // API ORIGIN — THE empty-chart fix. chart-lab is served from the STATIC host (slimewire.org via
   // Cloudflare) which has NO /api — a relative fetch('/api/chart') there returns the app-shell HTML,
   // so r.json() threw and candles never loaded ("Loading…" forever). The backend lives on Render.
