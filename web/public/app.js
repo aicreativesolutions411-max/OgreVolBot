@@ -18195,6 +18195,132 @@ function closeDevInfoDetails() {
   resumeLivePairsAfterDetailsClose();
 }
 
+// ===================== MY RADAR — personalized alerts UI =====================
+function radarRuleIcon(type) {
+  return type === "tp" ? "🎯" : type === "sl" ? "🛑" : type === "mc_above" ? "📈" : type === "mc_below" ? "📉" : "📡";
+}
+function radarRuleText(rule) {
+  const v = Number(rule.value) || 0;
+  if (rule.type === "tp") return `Take-profit · +${Math.round(v)}%`;
+  if (rule.type === "sl") return `Stop-loss · −${Math.round(v)}%`;
+  if (rule.type === "mc_above") return `Market cap crosses above ${compactUsd(v)}`;
+  if (rule.type === "mc_below") return `Market cap falls below ${compactUsd(v)}`;
+  return String(rule.type || "");
+}
+
+function openRadarDrawer(tokenMint = "", symbol = "") {
+  state.radarDrawer = { open: true, tokenMint: String(tokenMint || "").trim(), symbol: String(symbol || "").trim() };
+  state.radarStatus = "";
+  renderRadarDrawer();
+  void loadRadarRules();
+}
+function closeRadarDrawer() {
+  state.radarDrawer = { open: false, tokenMint: "", symbol: "" };
+  renderRadarDrawer();
+}
+async function loadRadarRules() {
+  try {
+    const data = await api("/api/web/radar");
+    state.radarRules = Array.isArray(data.rules) ? data.rules : [];
+  } catch (error) {
+    state.radarStatus = error.message || "Could not load Radar.";
+  }
+  renderRadarDrawer();
+}
+async function submitRadarRule() {
+  const root = document.querySelector("[data-radar-drawer-root]");
+  const d = state.radarDrawer || {};
+  if (!root || !d.tokenMint) return;
+  const type = root.querySelector("[data-radar-type]")?.value || "tp";
+  const value = Number(root.querySelector("[data-radar-value]")?.value || 0);
+  if (!(value > 0)) { state.radarStatus = "Enter a number greater than 0."; renderRadarDrawer(); return; }
+  const channels = {
+    push: root.querySelector("[data-radar-ch-push]")?.checked !== false,
+    telegram: Boolean(root.querySelector("[data-radar-ch-tg]")?.checked)
+  };
+  try {
+    state.radarStatus = "Setting alert…"; renderRadarDrawer();
+    await ensureWebAccount(null, "Opening your SlimeWire profile for Radar…");
+    const data = await api("/api/web/radar", {
+      method: "POST",
+      body: JSON.stringify({ action: "add", rule: { tokenMint: d.tokenMint, symbol: d.symbol, type, value, channels } })
+    });
+    state.radarRules = Array.isArray(data.rules) ? data.rules : state.radarRules;
+    state.radarStatus = "✅ Alert set — SlimeWire is watching it for you.";
+  } catch (error) {
+    state.radarStatus = error.message || "Could not set the alert.";
+  }
+  renderRadarDrawer();
+}
+async function radarRuleAction(action, id) {
+  try {
+    const data = await api("/api/web/radar", { method: "POST", body: JSON.stringify({ action, id }) });
+    state.radarRules = Array.isArray(data.rules) ? data.rules : state.radarRules;
+  } catch (error) {
+    state.radarStatus = error.message || "Could not update the alert.";
+  }
+  renderRadarDrawer();
+}
+function renderRadarDrawer() {
+  let root = document.querySelector("[data-radar-drawer-root]");
+  if (!root) { root = document.createElement("div"); root.dataset.radarDrawerRoot = "true"; document.body.appendChild(root); }
+  const d = state.radarDrawer || {};
+  if (!d.open) { root.innerHTML = ""; root.__lastDrawerHtml = ""; return; }
+  const rules = Array.isArray(state.radarRules) ? state.radarRules : [];
+  const sym = d.symbol || (d.tokenMint ? shortAddress(d.tokenMint) : "");
+  const addForm = d.tokenMint ? `
+    <section data-radar-add>
+      <h4>New alert${sym ? ` · ${escapeHtml(sym)}` : ""}</h4>
+      <div class="radar-form">
+        <select data-radar-type aria-label="Alert type">
+          <option value="tp">🎯 Take-profit (+%)</option>
+          <option value="sl">🛑 Stop-loss (−%)</option>
+          <option value="mc_above">📈 Market cap above ($)</option>
+          <option value="mc_below">📉 Market cap below ($)</option>
+        </select>
+        <input data-radar-value type="number" min="0" step="any" inputmode="decimal" placeholder="e.g. 50 or 40000" aria-label="Alert value" />
+        <button type="button" class="primary" data-radar-submit>Set alert</button>
+      </div>
+      <div class="radar-channels">
+        <label><input type="checkbox" data-radar-ch-push checked /> 🔔 Push</label>
+        <label><input type="checkbox" data-radar-ch-tg /> ✈️ Telegram</label>
+      </div>
+      <p class="slimeshield-muted">% alerts use the price right now as the baseline. SlimeWire checks every few minutes and pings you with the reason.</p>
+    </section>` : "";
+  const list = rules.length ? `
+    <ul class="radar-rule-list">
+      ${rules.map((rule) => `
+        <li class="radar-rule ${rule.enabled === false ? "is-off" : ""}">
+          <span class="radar-rule-icon">${radarRuleIcon(rule.type)}</span>
+          <div class="radar-rule-body">
+            <strong>${escapeHtml(rule.symbol || shortAddress(rule.tokenMint))}</strong>
+            <small>${escapeHtml(radarRuleText(rule))}</small>
+          </div>
+          <button type="button" class="radar-rule-toggle" data-radar-toggle="${escapeHtml(rule.id)}" title="${rule.enabled === false ? "Enable" : "Pause"}">${rule.enabled === false ? "Off" : "On"}</button>
+          <button type="button" class="radar-rule-remove" data-radar-remove="${escapeHtml(rule.id)}" title="Remove alert" aria-label="Remove alert">×</button>
+        </li>`).join("")}
+    </ul>` : `<p class="slimeshield-muted">No alerts yet. Set one above and SlimeWire watches the market for you — pinging the site, your browser, and Telegram with the reason it fired.</p>`;
+  const drawerHtml = `
+    <div class="slimeshield-drawer-backdrop" data-radar-close></div>
+    <aside class="slimeshield-drawer radar-drawer" role="dialog" aria-modal="true" aria-label="My Radar">
+      <header>
+        <div>
+          <span>📡 My Radar</span>
+          <h3>Set it once. SlimeWire watches.</h3>
+        </div>
+        <button type="button" aria-label="Close Radar" data-radar-close>Close</button>
+      </header>
+      ${addForm}
+      <section>
+        <h4>Your alerts${rules.length ? ` · ${rules.length}` : ""}</h4>
+        ${list}
+      </section>
+      ${state.radarStatus ? `<small class="slimeshield-status">${escapeHtml(state.radarStatus)}</small>` : ""}
+      <p class="slimeshield-safety-copy">Radar is informational, not financial advice. Alerts can lag the market by a few minutes.</p>
+    </aside>`;
+  setDrawerHtmlIfChanged(root, drawerHtml, ".radar-drawer");
+}
+
 function scheduleVisibleDevInfoPrefetch(reason = "render") {
   if (!featureEnabled("devInfoEnabled", true) || devInfoPrefetchTimer) return;
   if (state.route !== "terminal") return;
@@ -18457,6 +18583,7 @@ function renderDevInfoDrawer() {
       <div class="slimeshield-drawer-actions">
         <button type="button" data-watch-token="${escapeHtml(mint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(livePairImageUrl(row) || "")}">${isTokenWatched(mint) ? "Saved" : "Add Watch"}</button>
         <button type="button" data-slimeshield-details="${escapeHtml(mint)}">Open SlimeShield</button>
+        <button type="button" data-radar-open="${escapeHtml(mint)}" data-radar-symbol="${escapeHtml(row.symbol || "")}">📡 Radar</button>
         ${featureEnabled("protectedBuyEnabled", true) ? `<button type="button" class="primary" data-protected-buy-open="${escapeHtml(mint)}" data-protected-buy-source="dev-info-drawer">Protected Buy</button>` : ""}
         <button type="button" data-dev-info-refresh="${escapeHtml(mint)}" ${loading ? "disabled" : ""}>${loading ? "Updating..." : "Refresh"}</button>
       </div>
@@ -18727,6 +18854,7 @@ function renderSlimeShieldDetailsDrawer() {
       <div class="slimeshield-drawer-actions">
         ${featureEnabled("protectedBuyEnabled", true) ? `<button type="button" class="primary" data-protected-buy-open="${escapeHtml(mint)}" data-protected-buy-preset="${escapeHtml(result.protectedBuyPreset || protectedBuyPresetForVerdict(verdict))}" data-protected-buy-source="slimeshield-drawer">Protected Buy</button>` : ""}
         <button type="button" data-slimeshield-refresh="${escapeHtml(mint)}" ${loading ? "disabled" : ""}>${loading ? "Updating..." : "Refresh Details"}</button>
+        <button type="button" data-radar-open="${escapeHtml(mint)}" data-radar-symbol="${escapeHtml(row.symbol || "")}">📡 Radar</button>
         <button type="button" data-token-trade="${escapeHtml(mint)}" data-token-trade-source="slimeshield-drawer">Open Trade</button>
       </div>
       <p class="slimeshield-safety-copy">SlimeShield is a trading-risk helper, not financial advice. Always review wallet prompts before signing. SlimeWire never needs your seed phrase.</p>
@@ -23746,6 +23874,15 @@ document.addEventListener("click", async (event) => {
     openDevInfoDetails(target.dataset.devInfo || "");
     return;
   }
+  if (target.matches("[data-radar-open]")) {
+    event.preventDefault();
+    openRadarDrawer(target.dataset.radarOpen || "", target.dataset.radarSymbol || "");
+    return;
+  }
+  if (target.matches("[data-radar-close]")) { closeRadarDrawer(); return; }
+  if (target.matches("[data-radar-submit]")) { event.preventDefault(); void submitRadarRule(); return; }
+  if (target.matches("[data-radar-toggle]")) { event.preventDefault(); void radarRuleAction("toggle", target.dataset.radarToggle || ""); return; }
+  if (target.matches("[data-radar-remove]")) { event.preventDefault(); void radarRuleAction("remove", target.dataset.radarRemove || ""); return; }
   if (target.matches("[data-dev-info-tab]")) {
     event.preventDefault();
     const tab = target.dataset.devInfoTab || "overview";

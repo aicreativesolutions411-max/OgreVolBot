@@ -10548,6 +10548,73 @@ textarea,
   display: none !important;
 }
 
+/* MY RADAR — set-and-forget personal alerts. */
+.radar-form {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+  margin: 4px 0 8px !important;
+}
+.radar-form select,
+.radar-form input {
+  flex: 1 1 130px !important;
+  min-height: 38px !important;
+  padding: 6px 10px !important;
+  border-radius: 10px !important;
+  background: rgba(2, 14, 4, 0.85) !important;
+  border: 1px solid rgba(57, 255, 20, 0.28) !important;
+  color: #f4ffe9 !important;
+  font-size: 13px !important;
+}
+.radar-form button[data-radar-submit] { flex: 1 1 100% !important; min-height: 40px !important; }
+.radar-channels {
+  display: flex !important;
+  gap: 16px !important;
+  margin: 2px 0 4px !important;
+  font-size: 13px !important;
+  color: #cde7b6 !important;
+}
+.radar-channels label { display: inline-flex !important; align-items: center !important; gap: 6px !important; cursor: pointer !important; }
+.radar-rule-list { list-style: none !important; margin: 6px 0 0 !important; padding: 0 !important; display: flex !important; flex-direction: column !important; gap: 6px !important; }
+.radar-rule {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  padding: 8px 10px !important;
+  border-radius: 12px !important;
+  background: rgba(57, 255, 20, 0.05) !important;
+  border: 1px solid rgba(57, 255, 20, 0.16) !important;
+}
+.radar-rule.is-off { opacity: 0.5 !important; }
+.radar-rule-icon { font-size: 18px !important; }
+.radar-rule-body { flex: 1 1 auto !important; min-width: 0 !important; display: flex !important; flex-direction: column !important; }
+.radar-rule-body strong { font-size: 13px !important; color: #f4ffe9 !important; }
+.radar-rule-body small { font-size: 11px !important; color: #a9d98c !important; }
+.radar-rule-toggle {
+  min-height: 28px !important;
+  padding: 3px 12px !important;
+  border-radius: 999px !important;
+  font-size: 11px !important;
+  font-weight: 800 !important;
+  background: rgba(57, 255, 20, 0.12) !important;
+  border: 1px solid rgba(57, 255, 20, 0.32) !important;
+  color: #bfe9a3 !important;
+  cursor: pointer !important;
+}
+.radar-rule.is-off .radar-rule-toggle { background: rgba(255, 255, 255, 0.05) !important; color: #9aa6a0 !important; border-color: rgba(255, 255, 255, 0.14) !important; }
+.radar-rule-remove {
+  min-height: 28px !important;
+  width: 28px !important;
+  padding: 0 !important;
+  border-radius: 999px !important;
+  font-size: 16px !important;
+  line-height: 1 !important;
+  background: rgba(255, 92, 48, 0.12) !important;
+  border: 1px solid rgba(255, 92, 48, 0.32) !important;
+  color: #ff9b7a !important;
+  cursor: pointer !important;
+}
+
 .slimeshield-drawer-summary {
   border: 1px solid rgba(255, 255, 255, 0.09) !important;
   border-radius: 8px !important;

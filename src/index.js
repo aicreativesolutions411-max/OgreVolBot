@@ -7124,6 +7124,18 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/radar") {
+      sendWebJson(request, response, 200, { ok: true, rules: await radarRulesForUser(auth.userId) });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/radar") {
+      const body = await readJsonRequestBody(request);
+      const result = await updateRadarRules(auth.userId, body);
+      sendWebJson(request, response, 200, { ok: true, rules: result.rules });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/watchlist") {
       const body = await readJsonRequestBody(request);
       const result = await updateWebWatchlist(auth.userId, body);
@@ -28591,6 +28603,154 @@ async function checkWatchlistMoveAlerts() {
   });
 }
 
+// ===================== MY RADAR — personalized per-user alerts =====================
+// Users set rules once ("alert me when $X hits +50% / crosses $40k MC") and SlimeWire
+// watches for them, delivering via web push + Telegram with a plain-English WHY. Rules
+// live on the user's profile (web-auth.json); fire-dedupe lives in the watch-alerts
+// snapshot store (written every cycle anyway). Safe-by-default: no rules => nothing fires.
+const RADAR_RULE_TYPES = ["tp", "sl", "mc_above", "mc_below"];
+const RADAR_DEDUPE_MS = 6 * 60 * 60 * 1000;
+
+function radarUsd(n) {
+  n = Number(n) || 0;
+  if (n >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
+  if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1e3) return `$${Math.round(n / 1e3)}K`;
+  return `$${Math.round(n)}`;
+}
+
+function normalizeRadarRule(input = {}) {
+  const tokenMint = String(input.tokenMint || "").trim();
+  if (!tokenMint) return null;
+  const type = String(input.type || "").trim().toLowerCase();
+  if (!RADAR_RULE_TYPES.includes(type)) return null;
+  const value = Number(input.value) || 0;
+  if (!(value > 0)) return null;
+  const channels = input.channels || {};
+  return {
+    id: `r_${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`,
+    tokenMint,
+    symbol: String(input.symbol || "").trim().slice(0, 24),
+    type,
+    value,
+    basisPrice: Number(input.basisPrice) || 0,
+    channels: { push: channels.push !== false, telegram: Boolean(channels.telegram) },
+    enabled: true,
+    createdAt: new Date().toISOString()
+  };
+}
+
+async function radarRulesForUser(userId) {
+  try {
+    const profile = await webProfileForUser(userId);
+    return Array.isArray(profile.radarRules) ? profile.radarRules : [];
+  } catch {
+    return [];
+  }
+}
+
+async function updateRadarRules(userId, body = {}) {
+  const action = String(body.action || "add").trim().toLowerCase();
+  const store = await readWebAuthStore();
+  const key = String(userId);
+  const { profile: existing } = ensureWebProfileDefaults(store, userId);
+  let rules = Array.isArray(existing.radarRules) ? existing.radarRules : [];
+  if (action === "clear") {
+    rules = [];
+  } else if (action === "remove") {
+    const id = String(body.id || "");
+    rules = rules.filter((rule) => rule.id !== id);
+  } else if (action === "toggle") {
+    const id = String(body.id || "");
+    rules = rules.map((rule) => (rule.id === id ? { ...rule, enabled: !rule.enabled } : rule));
+  } else {
+    const rule = normalizeRadarRule(body.rule || body);
+    if (rule) {
+      // For TP/SL we need a basis price; fetch it now if the client didn't supply one.
+      if ((rule.type === "tp" || rule.type === "sl") && !(rule.basisPrice > 0)) {
+        const pairs = await fetchDexScreenerTokenPairsBatch([rule.tokenMint]).catch(() => []);
+        const best = bestDexPairForToken(rule.tokenMint, pairs.filter((pair) => pairMatchesToken(pair, rule.tokenMint)));
+        rule.basisPrice = Number(best?.priceUsd) || 0;
+      }
+      rules = rules.filter((existingRule) => !(existingRule.tokenMint === rule.tokenMint && existingRule.type === rule.type));
+      rules.unshift(rule);
+      rules = rules.slice(0, 60);
+    }
+  }
+  const profile = { ...existing, radarRules: rules, updatedAt: new Date().toISOString() };
+  store.profiles[key] = profile;
+  await writeWebAuthStore(store);
+  await audit("web_radar_update", { userId, action, count: rules.length });
+  return { rules };
+}
+
+// Evaluate one rule against the token's fresh market read. Returns { title, why } when it
+// should fire, else null. Every message names WHY it fired (the user's explicit ask).
+function evaluateRadarRule(rule, best) {
+  const price = Number(best?.priceUsd) || 0;
+  const mc = Number(best?.marketCap) || Number(best?.fdv) || 0;
+  const sym = rule.symbol || shortMint(rule.tokenMint);
+  if (rule.type === "tp" && rule.basisPrice > 0 && price > 0) {
+    const pct = ((price - rule.basisPrice) / rule.basisPrice) * 100;
+    if (pct >= rule.value) return { title: `🎯 ${sym} hit +${Math.round(rule.value)}% take-profit`, why: `Up ${pct.toFixed(0)}% since you set the alert — tap to bank it.` };
+  } else if (rule.type === "sl" && rule.basisPrice > 0 && price > 0) {
+    const pct = ((price - rule.basisPrice) / rule.basisPrice) * 100;
+    if (pct <= -rule.value) return { title: `🛑 ${sym} hit -${Math.round(rule.value)}% stop-loss`, why: `Down ${Math.abs(pct).toFixed(0)}% since you set the alert — tap to check it.` };
+  } else if (rule.type === "mc_above" && mc > 0 && mc >= rule.value) {
+    return { title: `📈 ${sym} crossed ${radarUsd(rule.value)} MC`, why: `Market cap is now ${radarUsd(mc)}.` };
+  } else if (rule.type === "mc_below" && mc > 0 && mc <= rule.value) {
+    return { title: `📉 ${sym} fell below ${radarUsd(rule.value)} MC`, why: `Market cap is now ${radarUsd(mc)}.` };
+  }
+  return null;
+}
+
+async function checkRadarRules() {
+  const authStore = await readWebAuthStore().catch(() => null);
+  if (!authStore || !authStore.profiles) return;
+  const radarUsers = Object.keys(authStore.profiles).filter((uid) => {
+    const rr = authStore.profiles[uid] && authStore.profiles[uid].radarRules;
+    return Array.isArray(rr) && rr.some((rule) => rule && rule.enabled);
+  }).slice(0, 80);
+  if (!radarUsers.length) return;
+  const tgLinks = await readTelegramLinks().catch(() => ({ links: {} }));
+  await withFileLock(watchAlertsPath(), async () => {
+    const store = await readWatchAlerts();
+    const now = Date.now();
+    for (const userId of radarUsers) {
+      const rules = (authStore.profiles[userId].radarRules || []).filter((rule) => rule && rule.enabled).slice(0, 60);
+      const mints = [...new Set(rules.map((rule) => rule.tokenMint).filter(Boolean))];
+      if (!mints.length) continue;
+      const pairs = await fetchDexScreenerTokenPairsBatch(mints).catch(() => []);
+      const userSnap = store.snapshots[userId] || {};
+      for (const rule of rules) {
+        const best = bestDexPairForToken(rule.tokenMint, pairs.filter((pair) => pairMatchesToken(pair, rule.tokenMint)));
+        if (!best) continue;
+        const fireKey = `radar:${rule.id}`;
+        if (now - (Number(userSnap[fireKey]?.alertAt) || 0) < RADAR_DEDUPE_MS) continue;
+        const hit = evaluateRadarRule(rule, best);
+        if (!hit) continue;
+        const channels = rule.channels || { push: true };
+        if (channels.push !== false && webPushEnabled) {
+          void sendWebPushToUser(userId, { title: hit.title, body: hit.why, tag: `radar-${rule.id}`, url: `/t?ca=${rule.tokenMint}` }).catch(() => {});
+        }
+        if (channels.telegram) {
+          const tgUserId = tgLinks.links?.[userId];
+          if (tgUserId) {
+            void sayHtml(tgUserId, [
+              `📡 <b>Radar:</b> ${escapeTelegramHtml(hit.title)}`,
+              escapeTelegramHtml(hit.why),
+              `<a href="https://www.slimewire.org/t?ca=${rule.tokenMint}">Open on SlimeWire</a>`
+            ].join("\n")).catch(() => {});
+          }
+        }
+        userSnap[fireKey] = { alertAt: now };
+      }
+      store.snapshots[userId] = userSnap;
+    }
+    await writeJsonFile(watchAlertsPath(), store);
+  });
+}
+
 // --- Pre-launch hype pages: a creator schedules a launch and gets a shareable
 // countdown page; degens tap "notify me" (TG deep link, no login needed); when the
 // creator's Pump Launch completes, every subscriber gets the launch-room link.
@@ -29242,6 +29402,7 @@ if (CONFIG.serviceRole === "web") {
     if (Date.now() % (10 * 60 * 1000) < 5 * 60 * 1000) {
       checkWatchlistMoveAlerts().catch((error) => console.warn(`[watch-alerts] failed: ${error.message}`));
       checkWatchedDevs().catch((error) => console.warn(`[dev-watch] failed: ${error.message}`));
+      checkRadarRules().catch((error) => console.warn(`[radar] failed: ${error.message}`));
     }
   }, 5 * 60 * 1000);
   shieldReceiptTimer.unref?.();
