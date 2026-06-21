@@ -1064,17 +1064,23 @@ export function entryReject(row, P) {
     // confluence. Liquid movers (mc≥9k, real turnover) and confirmed pops aren't dust and skip this.
     const isDust = mc < 9000 && age < 600;
     if (isDust) {
-      // The confirmation must be ACTIVITY/backing-based, NOT youth — freshScore and grindScore both
-      // fire on a brand-new microcap (a 12s $2k launch scores grind ~59), so a fresh+grind "confluence"
-      // is trivially true for dust and would defeat the whole filter. The real "this is more than a
-      // lottery ticket" tells are: a tracked winner buying, real social heat, genuine curve velocity /
-      // graduation flow (buyers piling into the bonding curve), a confirmed live pop, or real depth +
-      // turnover (a high liquidScore — which a $2k thin curve can never reach).
+      // STAY ACTIVE ON MOVERS, skip only the flat corpses. The confirmation must be ACTIVITY-based,
+      // NOT youth (freshScore AND grindScore both fire on a 12s newborn, so a fresh+grind "confluence"
+      // is trivially true for dust). But there are ALWAYS coins genuinely moving — admit anything with
+      // real life so apex keeps trading: price climbing + buy-led, real buy-dominant turnover, buyers
+      // piling into the curve (curve velocity / graduation), a live pop, real depth, a tracked winner,
+      // or social heat. ONLY a launch with no momentum AND no flow AND no backing is rejected as dust.
+      const m5 = Number(row.m5);
+      const turn = liq > 0 ? vol / liq : 0;
+      const movingNow =
+        (Number.isFinite(m5) && m5 >= 5 && buys >= sells) ||      // price up in 5m + buy-led = popping now
+        (turn >= 0.25 && buys > sells * 1.3);                     // real buy-dominant turnover = active demand
       const confirmed = Boolean(
         row.smartMoney ||
         row.xNotable || Number(row.xClout) >= 1 || Number(row.socialHeat) >= 1 ||
-        graduationScore(row) >= 30 || Number(row.curveVelSol) >= 1.5 ||
-        jumpScore(row) >= 44 || liquidScore(row) >= 50
+        graduationScore(row) >= 22 || Number(row.curveVelSol) >= 0.8 ||
+        jumpScore(row) >= 38 || liquidScore(row) >= 42 ||
+        movingNow
       );
       if (!confirmed) return "unconfirmed";
     }
@@ -2556,7 +2562,7 @@ export function createAutopilotEngine(deps) {
     // PER-MINUTE OPEN CAP — a backstop against the fee-bleed spray (logs showed 9 buys in 80s). pop/scalp
     // trade fast by design, so they get headroom; apex/fresh get the tight churn cap. The dust filter
     // already kills most of the spray; this just hard-stops a runaway minute on quality too.
-    const openPerMinCap = P.pop ? 12 : P.liquid ? 8 : 4;
+    const openPerMinCap = P.pop ? 14 : P.liquid ? 10 : 6;
     let openedThisCycle = 0;
     let historyChecks = 0;
     // Per-mint flow cache for FLOW-SURGE acceleration detection (ephemeral; survives across cycles
