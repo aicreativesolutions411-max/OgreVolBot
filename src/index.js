@@ -3888,8 +3888,12 @@ function loadConfig() {
   // tips a touch more. Bundle is atomic + the swap tx has one signature → the RPC fallback can never
   // double-trade. (Jupiter trades aren't bundled here — Jupiter's /execute already optimizes landing.)
   const tradeJitoBundle = parseBoolean(process.env.TRADE_JITO_BUNDLE || "false");
-  const tradeJitoTipSol = Math.max(0.00001, Number.parseFloat(process.env.TRADE_JITO_TIP_SOL || "0.0001") || 0.0001);
-  const tradeJitoExitTipSol = Math.max(tradeJitoTipSol, Number.parseFloat(process.env.TRADE_JITO_EXIT_TIP_SOL || "0.0003") || 0.0003);
+  // Tips tuned to the LOWEST that reliably LANDS (live test: 0.0001/0.0003 was too low — Jito
+  // accepted the bundle but never included it, so every trade fell back to RPC = Jito "on" but
+  // doing nothing). These are still tiny (sub-$0.20/trade) but competitive enough to get included;
+  // exits tip more since they MUST land. Raise via env in congestion, lower if they always land.
+  const tradeJitoTipSol = Math.max(0.00001, Number.parseFloat(process.env.TRADE_JITO_TIP_SOL || "0.0005") || 0.0005);
+  const tradeJitoExitTipSol = Math.max(tradeJitoTipSol, Number.parseFloat(process.env.TRADE_JITO_EXIT_TIP_SOL || "0.001") || 0.001);
   // Short by design: a Jito bundle lands within ~1-2s or not at all, so don't stall an exit waiting —
   // fall back to RPC fast (a stop-loss can't afford a long wait). 6s gives it a fair shot then bails.
   const tradeJitoConfirmMs = Math.max(3000, Number.parseInt(process.env.TRADE_JITO_CONFIRM_MS || "6000", 10) || 6000);
