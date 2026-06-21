@@ -2896,7 +2896,10 @@ export function createAutopilotEngine(deps) {
       // deep coins ever cleared instant entry while transient distinct movers timed out waiting for
       // a 30s re-confirm. A lower instant bar + the per-coin diversify cap spreads trades across
       // MANY more coins. Only marginal setups (22-44) or ones we already traded/lost get one confirm.
-      if (!proven && historyChecks < 8 && typeof entryHistory === "function") {
+      // SWING skips the local-replay comps veto: that history is built from FRESH-coin trades, so an
+      // established mover has no relevant comp and wrongly trips "history-fail" (live: 4 swing picks at
+      // fs 94 all got vetoed here → zero buys). Swing's own swingScore + the Stage-2 deep-vet select.
+      if (!proven && !P.swing && historyChecks < 8 && typeof entryHistory === "function") {
         historyChecks += 1;
         let history = null;
         try { history = await entryHistory(cand.r); } catch {}
