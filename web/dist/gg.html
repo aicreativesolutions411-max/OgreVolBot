@@ -308,7 +308,7 @@
   function avImg(r,cls){const u=av(r);const ph="/assets/slimewire/png/slimewire-mark.png?v=logo4";return'<img class="'+cls+'" loading="lazy" src="'+esc(u||ph)+'" onerror="this.src=\''+ph+'\'">';}
   function toast(msg,err){const t=$("#toast");t.textContent=msg;t.className="toast show"+(err?" err":"");clearTimeout(t._t);t._t=setTimeout(()=>t.className="toast",3400);}
   function copy(text){navigator.clipboard?.writeText(text).then(()=>toast("Copied "+short(text))).catch(()=>{});}
-  async function getJson(url,opts){const r=await fetch(url,opts);let d=null;try{d=await r.json();}catch(e){}return{ok:r.ok,status:r.status,d};}
+  async function getJson(url,opts){try{const r=await fetch(url,opts);let d=null;try{d=await r.json();}catch(e){}return{ok:r.ok,status:r.status,d};}catch(e){return{ok:false,status:0,d:null};}}
   function downloadText(filename,text){try{const b=new Blob([text],{type:"text/plain"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download=filename||"backup.txt";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),3000);}catch(e){}}
 
   // ---------- API + auth ----------
@@ -320,7 +320,9 @@
   function api(path,opts){
     opts=opts||{};const headers=Object.assign({},opts.headers||{});
     if(state.token)headers.Authorization="Bearer "+state.token;
-    return getJson(API_BASE+path,Object.assign({},opts,{headers}));
+    const o=Object.assign({},opts,{headers});
+    try{if(!o.signal&&typeof AbortSignal!=="undefined"&&AbortSignal.timeout)o.signal=AbortSignal.timeout(20000);}catch(e){}
+    return getJson(API_BASE+path,o);
   }
   function jpost(path,body){return api(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})});}
   function setToken(t){state.token=t||"";if(t)localStorage.setItem(TOKEN_KEY,t);else localStorage.removeItem(TOKEN_KEY);}
@@ -357,8 +359,13 @@
       const dl=d.downloads||{};
       if(dl.encryptedBackup)downloadText(dl.encryptedBackup.filename,dl.encryptedBackup.text);
       if(dl.recoveryKeys)downloadText(dl.recoveryKeys.filename,dl.recoveryKeys.text);
-      await refreshWallets();
+      // Seed the wallet list from the create response so the UI is INSTANT — the
+      // balances endpoint does a chain-RPC lookup that can take seconds; don't block on it.
+      state.wallets=(d.wallets||[]).map(w=>({index:w.index,label:w.label,publicKey:w.publicKey,shortPublicKey:w.shortPublicKey,sol:0,tokens:[]}));
+      state.activeWallet=state.wallets[0]?state.wallets[0].index:null;
+      updateWalletPill();
       backupModal(d.wallets[0]);
+      refreshWallets(); // non-blocking: fills in real balances when chain responds
       return true;
     }
     toast((d&&d.error)||"Wallet creation failed",true);return false;
