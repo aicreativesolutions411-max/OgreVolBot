@@ -234,6 +234,10 @@
   .modal .box{width:100%;max-width:460px;background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:20px;box-shadow:var(--glow);max-height:88vh;overflow:auto}
   .modal h3{margin:0 0 6px;font-size:17px}
   .modal .x{position:absolute;top:14px;right:16px;font-size:18px;color:var(--muted)}
+  .toolsheet{display:flex;flex-direction:column;gap:7px}
+  .toolsheet a{display:flex;align-items:center;gap:12px;padding:14px;border:1px solid var(--border);border-radius:12px;background:var(--row);font-size:14px;font-weight:600}
+  .toolsheet a span{font-size:19px}
+  .toolsheet a:hover{border-color:rgba(137,255,67,.34);color:var(--green)}
 
   /* mobile bottom nav */
   .botnav{display:none}
@@ -314,6 +318,7 @@
     <button data-route="trenches"><span class="i">🪖</span>Trenches</button>
     <button data-route="portfolio"><span class="i">📊</span>Portfolio</button>
     <button data-route="wallet"><span class="i">👛</span>Wallet</button>
+    <button data-tools><span class="i">🛠️</span>Tools</button>
   </nav>
 
   <footer class="statusbar">
@@ -454,10 +459,37 @@
     }
     toast((d&&d.error)||"Distribute failed",true);return false;
   }
+  async function removeWallet(idx){
+    const {ok,d}=await jpost("/api/web/wallets/remove",{walletIndexes:[idx]});
+    if(ok&&d&&d.ok){if(state.activeWallet===idx)state.activeWallet=null;await refreshWallets();toast("Wallet removed");return true;}
+    toast((d&&d.error)||"Could not remove wallet",true);return false;
+  }
 
   // ---------- modal ----------
   function openModal(html){const m=$("#modal");$("#modalBox").innerHTML='<button class="x" onclick="GG.closeModal()">✕</button>'+html;m.classList.add("on");}
   function closeModal(){$("#modal").classList.remove("on");}
+  const TOOLS=[
+    {ic:"🚀",label:"Launch a Coin",url:"/launch"},
+    {ic:"🔄",label:"Swap",url:"/terminal"},
+    {ic:"📦",label:"Bundle Buy",url:"/terminal"},
+    {ic:"📈",label:"Volume Bot",url:"/terminal"},
+    {ic:"👥",label:"Copy / KOL Tracker",url:"/terminal"},
+    {ic:"⚔️",label:"Raids & Rewards",url:"/raids"},
+  ];
+  function openToolsSheet(){
+    openModal('<h3>🛠️ Tools</h3><p class="sub mut" style="margin:0 0 12px">More SlimeWire tools. Native versions are landing in /gg soon.</p>'+
+      '<div class="toolsheet">'+TOOLS.map(t=>'<a href="'+esc(t.url)+'" target="_blank"><span>'+t.ic+'</span>'+esc(t.label)+'</a>').join("")+'</div>');
+  }
+  function removeWalletModal(w){
+    openModal('<h3>🗑 Remove wallet</h3>'+
+      '<p class="sub mut">Remove <b>'+esc(w.label||"this wallet")+'</b> ('+esc(short(w.publicKey))+') from this account. This cannot be undone.</p>'+
+      '<p class="danger">⚠ Any SOL or tokens still in it become unrecoverable unless you saved your keys or swept it first.</p>'+
+      '<label style="display:flex;align-items:center;gap:9px;margin:14px 0;font-size:13px;cursor:pointer"><input type="checkbox" id="rmAck"> I\'ve backed up or swept this wallet.</label>'+
+      '<div style="display:flex;gap:9px"><button class="wbtn ghost" style="flex:1" onclick="GG.closeModal()">Cancel</button><button class="wbtn" id="rmGo" style="flex:1;background:linear-gradient(180deg,#ff8b8b,#ff5d5d);color:#1a0606" disabled>Remove wallet</button></div>');
+    const ack=$("#rmAck"),go=$("#rmGo");
+    if(ack)ack.onchange=()=>{go.disabled=!ack.checked;};
+    if(go)go.onclick=async()=>{go.disabled=true;go.textContent="Removing…";const okk=await removeWallet(w.index);closeModal();if(okk&&state.route==="wallet")renderWallet();};
+  }
   function backupModal(w){
     openModal('<h3>🔐 Wallet created — save your keys</h3>'+
       '<p class="sub mut">This wallet is yours. We just downloaded your encrypted backup <b>and</b> your recovery keys. Keep them safe — anyone with the keys controls the funds, and nobody can recover them for you.</p>'+
@@ -759,7 +791,8 @@
         return'<div class="walletrow'+(sel?" sel":"")+'"><div class="ico">👛</div><div class="info"><b>'+esc(w.label||"Wallet")+(sel?" · active":"")+'</b>'+
           '<div class="addr">'+esc(short(w.publicKey))+'<button onclick="GG.copy(\''+esc(w.publicKey)+'\')" title="Copy address">⧉</button></div></div>'+
           '<div class="bal"><b>◎ '+Number(w.sol||0).toFixed(3)+'</b><span>balance</span></div>'+
-          (sel?'':'<button class="wbtn ghost" style="margin-left:10px" onclick="GG.pickWallet('+w.index+')">Use</button>')+'</div>';
+          (sel?'':'<button class="wbtn ghost" style="margin-left:10px" onclick="GG.pickWallet('+w.index+')">Use</button>')+
+          '<button class="wbtn ghost" style="margin-left:8px;padding:9px 11px" onclick="GG.removeWalletPrompt('+w.index+')" title="Remove wallet">🗑</button></div>';
       }).join("");
       const w=activeWalletObj();
       const tradePre=(state.presets.trade||[]).map(p=>presetChipHtml(p,"trade")).join("")||'<p class="mut" style="font-size:12px">No single-buy presets yet.</p>';
@@ -839,10 +872,12 @@
   document.addEventListener("keydown",e=>{if(e.key==="/"&&document.activeElement.tagName!=="INPUT"){e.preventDefault();$("#search").focus();}});
   document.querySelectorAll("#nav a[data-route]").forEach(a=>a.onclick=e=>{e.preventDefault();go(a.dataset.route);});
   document.querySelectorAll("#botnav button[data-route]").forEach(b=>b.onclick=()=>go(b.dataset.route));
+  document.querySelectorAll("#botnav button[data-tools]").forEach(b=>b.onclick=()=>openToolsSheet());
   $("#walletPill").onclick=()=>go("wallet");
 
   // ---------- expose + boot ----------
-  window.GG={open:(m)=>go("trade",m),go,quickBuy,copy,closeModal,pickWallet};
+  window.GG={open:(m)=>go("trade",m),go,quickBuy,copy,closeModal,pickWallet,
+    removeWalletPrompt:(i)=>{const w=state.wallets.find(x=>x.index===i);if(w)removeWalletModal(w);}};
   render();updateWalletPill();loadSol();setInterval(loadSol,60000);
   if(state.token){refreshWallets();loadPresets();}
 })();
