@@ -504,9 +504,28 @@ test("apex: unified edge ranks setups head-to-head; wide entry window; type rout
   assert.equal(P.apex, true);
   assert.ok(P.mcFloor <= 1800 && P.mcCeil >= 1000000, "apex spans fresh dust → liquid mid-caps");
   assert.ok(P.maxAge >= 86400, "apex is age-agnostic (a pop/mover can be any age)");
-  // A clean fresh mover passes the apex gate (gates on apexEdge, not a narrow per-mode window).
-  assert.equal(entryReject(freshRow, P), null, "apex admits a strong fresh mover");
+  // A fresh launch with a CONFIRMING signal (real curve velocity = buyers piling into the curve)
+  // passes the apex gate...
+  assert.equal(entryReject({ ...freshRow, curveVelSol: 3 }, P), null, "apex admits a CONFIRMED fresh mover");
+  // ...but a pure-youth sub-$9k launch with NO confirmation is rejected as dust (the fee-bleed fix:
+  // apex was spraying dozens of ~$2k newborns/min on youth alone).
+  assert.equal(entryReject(freshRow, P), "unconfirmed", "apex rejects unconfirmed fresh dust");
   assert.equal(entryReject(popRow, P), null, "apex admits a live pop");
+});
+
+test("apex dust filter: a ~$2k newborn needs a CONFIRMING signal, not just youth (the fee-bleed fix)", () => {
+  const P = aggParams(baseState({ mode: "apex" }));
+  // The exact thing the logs showed apex spraying: a brand-new ~$2k launch with a little launch
+  // volume but NO backing — no smart money, no social, no real curve velocity. Pure lottery dust.
+  const dust = { tokenMint: "d", symbol: "NEWB", marketCap: 2048, liquidityUsd: 2048, volume5m: 120, buys5m: 30, sells5m: 10, pairAgeSeconds: 20 };
+  assert.equal(entryReject(dust, P), "unconfirmed", "unconfirmed fresh dust is rejected");
+  // Each confirming signal individually rescues it (real backing/demand, not just newness):
+  assert.equal(entryReject({ ...dust, smartMoney: "KOL" }, P), null, "a tracked winner buying confirms it");
+  assert.equal(entryReject({ ...dust, curveVelSol: 2 }, P), null, "strong curve velocity confirms it");
+  assert.equal(entryReject({ ...dust, xNotable: true }, P), null, "real social heat confirms it");
+  // A liquid mover (mc ≥ $9k with real turnover) is NOT dust — it sails through untouched.
+  const mover = { tokenMint: "m", symbol: "MOV", marketCap: 60000, liquidityUsd: 40000, volume5m: 9000, buys5m: 70, sells5m: 30, m5: 9, h1: 8, pairAgeSeconds: 3000 };
+  assert.equal(entryReject(mover, P), null, "a real liquid mover is never treated as dust");
 });
 
 test("apex: a CONFIRMED live pop out-ranks fresh-launch youth — buys the easy winner, not the dust", () => {

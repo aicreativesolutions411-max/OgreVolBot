@@ -1049,6 +1049,36 @@ export function entryReject(row, P) {
   // signature — the single most defensible manipulation tell (high volume + very few txns). Reject
   // outright rather than just sizing down, since on the LIQUID path we trade ON that volume.
   if ((P.liquid || P.grind) && vol >= 80 && (buys + sells) > 0 && (buys + sells) < 6) return "wash";
+  // APEX DUST FILTER — the fix for the fee-bleed churn (it was aping dozens of ~$2k newborns/min on
+  // YOUTH alone; freshScore hands a brand-new microcap fs 72-99 just for being new, so every launch
+  // cleared the bar). A FRESH-DUST candidate — young + low-MC + NO real live trading — must have a
+  // CONFIRMING reason to risk round-trip fees: a tracked winner buying (smartMoney), real social heat,
+  // strong curve velocity / graduation flow, multi-lens confluence, OR a confirmed live pop (jumpScore).
+  // Pure youth is a lottery ticket. Confirmed pops + liquid movers carry real volume/turnover, so they
+  // aren't "dust" by this test and sail through. This is what turns apex from a sprayer into a sniper.
+  if (P.apex) {
+    // Dust = a YOUNG, sub-$9k launch (mc + age are both guaranteed finite here — earlier gates
+    // rejected non-finite). A little launch volume doesn't make it not-dust; demand does. So require
+    // a confirming reason: a tracked winner buying, real social heat, strong curve velocity /
+    // graduation flow (genuine buyers piling into the curve), a confirmed live pop, or multi-lens
+    // confluence. Liquid movers (mc≥9k, real turnover) and confirmed pops aren't dust and skip this.
+    const isDust = mc < 9000 && age < 600;
+    if (isDust) {
+      // The confirmation must be ACTIVITY/backing-based, NOT youth — freshScore and grindScore both
+      // fire on a brand-new microcap (a 12s $2k launch scores grind ~59), so a fresh+grind "confluence"
+      // is trivially true for dust and would defeat the whole filter. The real "this is more than a
+      // lottery ticket" tells are: a tracked winner buying, real social heat, genuine curve velocity /
+      // graduation flow (buyers piling into the bonding curve), a confirmed live pop, or real depth +
+      // turnover (a high liquidScore — which a $2k thin curve can never reach).
+      const confirmed = Boolean(
+        row.smartMoney ||
+        row.xNotable || Number(row.xClout) >= 1 || Number(row.socialHeat) >= 1 ||
+        graduationScore(row) >= 30 || Number(row.curveVelSol) >= 1.5 ||
+        jumpScore(row) >= 44 || liquidScore(row) >= 50
+      );
+      if (!confirmed) return "unconfirmed";
+    }
+  }
   // SCALP scores liquid movers (liquidScore); GRIND scores survivors (grindScore); the rest use
   // freshScore. Each mode's gate lives on its own scale (see the minScore overrides in aggParams).
   const setupScore = P.apex ? apexEdge(row) : P.liquid ? liquidScore(row) : P.grind ? grindScore(row) : freshScore(row);
@@ -2436,6 +2466,10 @@ export function createAutopilotEngine(deps) {
     // rebuy the top). Meh/losing coins keep the tight cap.
     const maxFor = (mint) => repeatBudgetForMint(state, P, mint);
     const reentryCoolMs = P.liquid ? 120_000 : 45_000;
+    // SCRATCH/LOSS PENALTY BOX — after a coin exits as a scratch or loss, don't keep dragging us back
+    // into it (the "it puts me in the same few coins to scratch/lose over and over" churn). Block
+    // re-entry for this window UNLESS it's clearly WINNING right now. Rebuy a winner, not a loser.
+    const scratchPenaltyMs = 10 * 60_000;
     const nameCoolMs = symbolCooldownMs(P);
     const scoredAll = rows
       .filter((r) => r && r.tokenMint && !held.has(r.tokenMint))
@@ -2454,6 +2488,14 @@ export function createAutopilotEngine(deps) {
         // A winner may earn a re-entry, but only on a real pullback. Otherwise the
         // bot just buys the same pump again after cooldown and gives back the win.
         if (wins > losses && lastMc > 0 && curMc > lastMc * 0.93) return false;
+        // SCRATCH/LOSS PENALTY — if this coin's LAST exit was a scratch or loss (win === false) and
+        // it's still in the penalty box, the ONLY reason to go back in is that it's WINNING RIGHT NOW
+        // (a confirmed live pop / strong momentum). Otherwise skip it — don't repeat a loser. This is
+        // the direct fix for "it keeps putting me in the same coins to scratch or lose".
+        if (last && last.win === false && lastAt && nowMs - lastAt < scratchPenaltyMs) {
+          const rippingNow = jumpScore(r) >= 50 || (P.apex && apexEdge(r) >= 85);
+          if (!rippingNow) return false;
+        }
         return true;
       })
       .filter((r) => {
@@ -2511,6 +2553,10 @@ export function createAutopilotEngine(deps) {
     if (gap > 0 && nowMs - (state.lastOpenAt || 0) < gap) return;
     const maxNow = Math.min(state.maxOpen, tune.maxOpenCap || state.maxOpen);
     const perCycle = Math.max(1, tune.perCycle || 1);
+    // PER-MINUTE OPEN CAP — a backstop against the fee-bleed spray (logs showed 9 buys in 80s). pop/scalp
+    // trade fast by design, so they get headroom; apex/fresh get the tight churn cap. The dust filter
+    // already kills most of the spray; this just hard-stops a runaway minute on quality too.
+    const openPerMinCap = P.pop ? 12 : P.liquid ? 8 : 4;
     let openedThisCycle = 0;
     let historyChecks = 0;
     // Per-mint flow cache for FLOW-SURGE acceleration detection (ephemeral; survives across cycles
@@ -2748,8 +2794,12 @@ export function createAutopilotEngine(deps) {
       if (P.snipe || P.pop) size = Math.max(state.minTradeSol, Math.min(size, state.bank * (P.pop ? popBetFrac(cand.r.marketCap) : 0.05)));   // snipe/pop: small even bets; pop scales DOWN on thin low-MC curves (slippage)
       if (probeNow) size = state.minTradeSol;
       if (!canOpen(state, size)) break;
+      // Rolling 60s open throttle — hard-stop the churn that bled fees (don't machine-gun new bags).
+      state.recentOpens = (state.recentOpens || []).filter((ts) => nowMs - ts < 60_000);
+      if (state.recentOpens.length >= openPerMinCap) break;
       await openPosition(cand.r, size, cand.fs, dev, rep, sm, P);
       state.lastOpenAt = now();
+      (state.recentOpens || (state.recentOpens = [])).push(nowMs);
       openedThisCycle += 1;
       if (probeNow) break;                               // one tiny learning trade, then resume observing
       if (openedThisCycle >= freshCycleCap) break;        // don't machine-gun the whole feed at once
