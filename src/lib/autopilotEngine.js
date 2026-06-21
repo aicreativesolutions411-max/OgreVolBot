@@ -2776,7 +2776,7 @@ export function createAutopilotEngine(deps) {
     }
 
     let smartRowsForCycle = null;
-    if (smartMoneyReady() && !P.pop && state.open.length < maxNow && openedThisCycle < perCycle) {
+    if (smartMoneyReady() && !P.pop && !P.swing && state.open.length < maxNow && openedThisCycle < perCycle) {
       try { smartRowsForCycle = await smartMoneyFeed(); } catch (e) { record("warn", `smart-money feed: ${e && e.message}`); smartRowsForCycle = []; }
     }
     const freshCycleCap = Array.isArray(smartRowsForCycle) && smartRowsForCycle.length
@@ -2955,7 +2955,7 @@ export function createAutopilotEngine(deps) {
     // momentum scan. LIQUID modes used to opt out (the feed can surface fresh dust); now they take
     // these too but ONLY when the coin has REAL, sellable liquidity (verified below), so a
     // copy-trade can't drag scalp into an unsellable phantom. Non-liquid modes keep the old path.
-    if (smartMoneyReady() && !P.pop && state.open.length < maxNow && openedThisCycle < perCycle) {
+    if (smartMoneyReady() && !P.pop && !P.swing && state.open.length < maxNow && openedThisCycle < perCycle) {
       let smRows = smartRowsForCycle;
       if (!Array.isArray(smRows)) {
         smRows = [];
