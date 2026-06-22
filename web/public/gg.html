@@ -704,18 +704,23 @@
     }catch(e){}
     try{const {d}=await api("/api/web/token-trades?pool="+encodeURIComponent(pool));return (d&&d.trades)||[];}catch(e){return [];}
   }
+  // Pre-DEX pump.fun coins have NO GeckoTerminal pool, so their swaps come off our PumpPortal tape.
+  async function fetchPumpTrades(mint){try{const {d}=await api("/api/web/pump-trades?mint="+encodeURIComponent(mint));return (d&&d.trades)||[];}catch(e){return [];}}
   async function loadTxPane(mint,r,retried){
     const pane=$('[data-pane="tx"]');if(!pane)return;
     const pool=(r&&(r.pairAddress||r.raydiumPool))||"";
-    if(!pool){pane.innerHTML='<div class="panemsg"><div style="font-size:30px">📡</div><div>Live transactions appear once this token has a DEX pool.<br>Brand-new launches show trades here within minutes.</div></div>';return;}
     if(!retried)pane.innerHTML='<div class="loading" style="padding:24px"><span class="spin"></span></div>';
-    const tr=await fetchPoolTrades(pool);
+    // Graduated/migrated coins → GeckoTerminal pool swaps; bonding-curve coins (no pool) → pump tape.
+    const tr=pool?await fetchPoolTrades(pool):await fetchPumpTrades(mint);
     if(state.route!=="trade"||state.mint!==mint||state.tradeTab!=="tx")return;
     if(!tr.length){
-      if(!retried){setTimeout(()=>{if(state.route==="trade"&&state.mint===mint&&state.tradeTab==="tx")loadTxPane(mint,r,true);},1400);return;}
-      pane.innerHTML='<div class="panemsg"><div style="font-size:30px">🫧</div><div>No recent swaps yet — check back in a moment.</div></div>';return;}
-    pane.innerHTML='<table class="txtbl"><thead><tr><th>Time</th><th>Type</th><th>USD</th><th>Price</th><th>Maker</th></tr></thead><tbody>'+
-      tr.map(t=>{const cls=t.kind==="sell"?"s":"b";return '<tr><td>'+esc(txAgo(t.ts))+'</td><td class="'+cls+'">'+(t.kind==="sell"?"SELL":"BUY")+'</td><td>'+fmtUsd(t.usd)+'</td><td>'+(t.price?("$"+fmtPrice(t.price)):"—")+'</td><td><a href="https://solscan.io/tx/'+encodeURIComponent(t.tx)+'" target="_blank" rel="noopener">'+esc(short(t.maker))+' ↗</a></td></tr>';}).join("")+'</tbody></table>';
+      if(!retried){setTimeout(()=>{if(state.route==="trade"&&state.mint===mint&&state.tradeTab==="tx")loadTxPane(mint,r,true);},1500);return;}
+      pane.innerHTML='<div class="panemsg"><div style="font-size:30px">🫧</div><div>'+(pool?'No recent swaps yet — check back in a moment.':'Waiting for the first on-curve trades…<br>Live pump.fun buys/sells stream in here.')+'</div></div>';return;}
+    pane.innerHTML='<table class="txtbl"><thead><tr><th>Time</th><th>Type</th><th>'+(pool?'USD':'Size')+'</th><th>Price</th><th>Maker</th></tr></thead><tbody>'+
+      tr.map(t=>{const cls=t.kind==="sell"?"s":"b";
+        const amt=t.usd?fmtUsd(t.usd):(t.sol?("◎"+Number(t.sol).toFixed(3)):"—");
+        const href=t.tx?("https://solscan.io/tx/"+encodeURIComponent(t.tx)):("https://solscan.io/account/"+encodeURIComponent(t.maker));
+        return '<tr><td>'+esc(txAgo(t.ts))+'</td><td class="'+cls+'">'+(t.kind==="sell"?"SELL":"BUY")+'</td><td>'+amt+'</td><td>'+(t.price?("$"+fmtPrice(t.price)):"—")+'</td><td><a href="'+href+'" target="_blank" rel="noopener">'+esc(short(t.maker))+' ↗</a></td></tr>';}).join("")+'</tbody></table>';
   }
   async function loadPosPane(mint){
     const pane=$('[data-pane="pos"]');if(!pane)return;

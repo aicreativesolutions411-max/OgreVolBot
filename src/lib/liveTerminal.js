@@ -277,15 +277,20 @@ export function slimeScopeProgressPct(row = {}) {
     row.completion,
     row.completePct
   );
-  if (direct > 0) {
-    return Math.max(0, Math.min(100, direct <= 1 ? direct * 100 : direct));
-  }
-
   const marketCap = firstPositiveNumber(row.marketCap, row.fdv);
   const isPump = Boolean(row.isPump) || /pump/.test(textBlob(row)) || String(row.tokenMint || "").toLowerCase().endsWith("pump");
-  if (isPump && marketCap > 0) {
-    return Math.max(0, Math.min(99, (marketCap / 69_000) * 100));
+  // Pump.fun graduates near a ~$69k market cap, so MC/69k is a reliable, user-visible proxy for how
+  // far up the bonding curve a coin is. The PumpPortal vSOL-reserve % can be a garbage constant for
+  // fresh coins (e.g. brand-new $2k launches reporting 90%+), which made the Graduating tab show dust
+  // instead of coins actually about to bond. So for pump coins we trust market cap when the reported
+  // curve % wildly disagrees with it.
+  const mcPct = (isPump && marketCap > 0) ? Math.max(0, Math.min(99, (marketCap / 69_000) * 100)) : null;
+  if (direct > 0) {
+    const d = Math.max(0, Math.min(100, direct <= 1 ? direct * 100 : direct));
+    if (mcPct != null && Math.abs(d - mcPct) > 25) return mcPct;
+    return d;
   }
+  if (mcPct != null) return mcPct;
   return 0;
 }
 

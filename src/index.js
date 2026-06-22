@@ -6733,6 +6733,31 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    // Bonding-curve transactions for pump.fun coins that have NO DEX pool yet (so GeckoTerminal has
+    // nothing). Served live from our PumpPortal websocket tape: we subscribe to the mint and return
+    // its recent buys/sells. First hit may be empty (just subscribed) — the tab retries.
+    if (request.method === "GET" && pathname === "/api/web/pump-trades") {
+      const mint = String(requestUrl.searchParams.get("mint") || "").trim();
+      let trades = [];
+      if (mint) {
+        try { pumpPortalStream.watchMint(mint); } catch {}
+        const solUsd = Number(solUsdPriceCache?.value) || 0;
+        try {
+          trades = (pumpPortalStream.getTrades(mint, { limit: 60 }) || []).map((t) => ({
+            ts: t.at ? new Date(t.at).toISOString() : null,
+            kind: t.side === "sell" ? "sell" : "buy",
+            usd: solUsd ? (Number(t.solAmount) || 0) * solUsd : 0,
+            sol: Number(t.solAmount) || 0,
+            price: solUsd && Number(t.priceSol) ? Number(t.priceSol) * solUsd : 0,
+            maker: String(t.trader || "").trim(),
+            tx: ""
+          })).filter((t) => t.maker);
+        } catch {}
+      }
+      sendWebJson(request, response, 200, { ok: true, mint, trades });
+      return;
+    }
+
     // Read-only buy pre-warm: when the UI sees buy intent (token selected/hovered),
     // it pings this so the mint + market safety lookups are cached before the actual
     // buy runs assertTokenBuySafety, shaving the ~1.8s DexScreener fetch off the click.
@@ -22641,7 +22666,9 @@ const GTVOLUME_EXCLUDE_MINTS = new Set([
 ]);
 function livePairCategoryFilter(category) {
   // Only the discovery categories need a post-filter; the metric tabs rank the whole pool.
-  if (category === "graduating") return (row) => { const p = Number(slimeScopeProgressPct(row)); return (isPumpStyleToken(row) || row.isPump) && p >= 20 && !(row.graduated || row.isGraduated); };
+  // Graduating = pump coins HIGH on the bonding curve (about to bond, ~$35k+ MC), not fresh dust.
+  // p is MC-anchored now (see slimeScopeProgressPct), so this is a real "about to graduate" gate.
+  if (category === "graduating") return (row) => { const p = Number(slimeScopeProgressPct(row)); return (isPumpStyleToken(row) || row.isPump) && p >= 50 && p < 100 && !(row.graduated || row.isGraduated); };
   if (category === "graduated" || category === "gtMigrated") return (row) => Boolean(row.graduated || row.isGraduated || isGraduatedSlimeScopePair(row));
   // Surging = genuine gainers only (positive 5m OR 1h). Soft-applied (kept only when ≥6 match), so a
   // flat market never empties the tab.
@@ -22711,8 +22738,12 @@ async function fetchLiveCategoryCandidates(category, options = {}) {
     } catch {}
   }
   // Pump-curve tabs add the live pump creations (fresh) + latest so there's curve material to filter.
+  // Graduating wants coins NEAR bonding (high on the curve), which were created a while ago and have
+  // since climbed — so it scans the whole 1h creation buffer (with each coin's LATEST market cap),
+  // not just the freshest 120, or near-bond coins fall off the bottom and the tab fills with dust.
   if (category === "pumpTrending" || category === "earlyMomentum" || category === "graduating") {
-    try { rows.push(...pumpPortalStream.getCreationCandidates({ limit: 120 })); } catch {}
+    const creationLimit = category === "graduating" ? 600 : 120;
+    try { rows.push(...pumpPortalStream.getCreationCandidates({ limit: creationLimit })); } catch {}
     try { rows.push(...(await fetchPumpFunLatestCandidates({ ...options, timeoutMs: options.timeoutMs || 1_800 }).catch(() => []))); } catch {}
   }
   return uniqueSniperCandidates(rows).sort(compareLivePairCandidates);
@@ -45170,10 +45201,17 @@ async function buildWebLivePairsForCategory(userId, cat, sort, options = {}) {
   let rows = uniqueSniperScoreRows(candidates.map(livePairCandidateToRow).filter(Boolean))
     .filter((row) => !hasHardBlockedLivePairRisk(row));
   const catFilter = livePairCategoryFilter(cat);
-  if (catFilter) { const f = rows.filter(catFilter); if (f.length >= 6) rows = f; } // narrow when there's material; else keep the category pool
+  // Graduating is a precision tab ("about to bond") — ALWAYS apply its filter, even if it leaves few
+  // rows. Showing 3 coins genuinely near graduation beats 30 fresh dust coins. Other cats keep the
+  // soft "narrow only when there's material" behaviour.
+  if (catFilter) { const f = rows.filter(catFilter); if (cat === "graduating" || f.length >= 6) rows = f; }
   const targetLimit = 60;
   const safety = await maybeFilterWebLivePairsForSafety(rows.sort((a, b) => compareWebLivePairs(a, b, sort)), targetLimit);
-  const safeRows = decorateWebLivePairAvatars(rotateRowsForRefresh(sortLivePairs(safety.rows, sort), targetLimit, scanState.refreshCount, {}));
+  // Graduating sorts by curve progress DESC (closest to bonding first) and does NOT rotate — the
+  // ordering is the whole point. Everything else keeps the sorted+rotated display.
+  const safeRows = cat === "graduating"
+    ? decorateWebLivePairAvatars(safety.rows.slice().sort((a, b) => Number(slimeScopeProgressPct(b)) - Number(slimeScopeProgressPct(a))).slice(0, targetLimit))
+    : decorateWebLivePairAvatars(rotateRowsForRefresh(sortLivePairs(safety.rows, sort), targetLimit, scanState.refreshCount, {}));
   rememberSniperScanRows(`web:${userId}`, `livepairs:cat:${cat}`, safeRows);
   void persistPostgresLivePairRows(safeRows, { reason: `live-pairs:cat:${cat}` }).catch(() => false);
   return {
