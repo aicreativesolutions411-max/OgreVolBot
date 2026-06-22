@@ -1180,25 +1180,60 @@
       b.disabled=false;b.textContent="Run Bundle";toast("Bundle done — "+res.okc+" ok"+(res.fail?", "+res.fail+" failed":"")+(res.spent?" · ◎"+res.spent.toFixed(3)+" in":""));refreshWallets();
     };
   }
+  // Advanced volume bot: funds N fresh wallets from one source, runs randomized buy/sell across them
+  // for a timer, then auto-sweeps (sells tokens, returns SOL to the funder). Optional leave-a-sliver
+  // so each wallet stays a holder. Client-orchestrated — runs while this tab is open; Stop ends it
+  // early and still sweeps back. Reuses the runStagger engine + distribute/sweep-sol endpoints.
+  function parseRange(s,dmin,dmax){const m=String(s||"").split(/[-,\s]+/).map(Number).filter(x=>isFinite(x)&&x>=0);if(m.length>=2)return [Math.min(m[0],m[1]),Math.max(m[0],m[1])];if(m.length===1)return [m[0],m[0]];return [dmin,dmax];}
   async function renderVolume(){
-    setActiveView("v-volume");subbarTool("📈 Volume");if(state.token)await refreshWallets();if(state.route!=="volume")return;
-    $("#v-volume").innerHTML='<div class="wgrid"><div class="wbox"><h3>📈 Volume</h3><p class="sub">Loop trades across your wallets to build volume — <b>randomized sizes</b>, <b>jittered delays</b>, and a buy/sell mix so the tape looks organic. Runs while this tab is open.</p>'+
+    setActiveView("v-volume");subbarTool("📈 Volume Bot");if(state.token)await refreshWallets();if(state.route!=="volume")return;
+    $("#v-volume").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>📈 Volume Bot</h3><p class="sub">Funds fresh wallets from one source, runs <b>randomized buys + sells</b> across them to build volume, then <b>sweeps everything back</b> to your funder when the timer ends or you Stop. Runs while this tab is open.</p>'+
       '<div class="field"><label>Token contract (CA)</label><input id="vlCa" placeholder="Paste token mint"></div>'+
-      '<div class="field row2"><div><label>Pattern</label><select id="vlMode"><option value="mix">Buy + sell mix</option><option value="buy">Buys only</option></select></div><div><label>Loops</label><input id="vlLoops" inputmode="numeric" value="3"></div></div>'+
-      '<div class="field row2"><div><label>Min SOL / buy</label><input id="vlMin" inputmode="decimal" value="0.03"></div><div><label>Max SOL / buy</label><input id="vlMax" inputmode="decimal" value="0.08"></div></div>'+
-      '<div class="field row2"><div><label>Delay min (s)</label><input id="vlDmin" inputmode="numeric" value="3"></div><div><label>Delay max (s)</label><input id="vlDmax" inputmode="numeric" value="8"></div></div>'+
-      '<div class="field row2"><div><label>Slippage (bps)</label><input id="vlSlip" inputmode="numeric" value="500"></div><div></div></div>'+
-      '<div class="field"><label>Wallets</label>'+walletPickHtml()+'</div>'+
-      staggerControls("vlGo","vlStop","Start Volume")+'</div></div>';
-    $("#vlStop").onclick=()=>{staggerAbort=true;toast("Stopping after the current order…");};
-    $("#vlGo").onclick=async()=>{
-      if(staggerRunning){toast("Already running — hit Stop first.",true);return;}
-      const ca=$("#vlCa").value.trim();if(!ca){toast("Paste a token CA.",true);return;}
-      if(!(await ensureTradeReady()))return;const idxs=selectedWalletIdxs();if(!idxs.length){toast("Pick at least one wallet.",true);return;}
-      const b=$("#vlGo");b.disabled=true;b.textContent="Running…";$("#stgLog").innerHTML="";
-      const res=await runStagger({tokenMint:ca,wallets:idxs,rounds:Math.max(1,Math.min(50,Number($("#vlLoops").value.trim()||"3"))),mode:$("#vlMode").value,amtMin:$("#vlMin").value,amtMax:$("#vlMax").value,delayMin:$("#vlDmin").value,delayMax:$("#vlDmax").value,sellBias:0.45,sellMin:40,sellMax:90,slip:Number($("#vlSlip").value.trim()||"500")},$("#stgLog"));
-      b.disabled=false;b.textContent="Start Volume";toast("Volume run done — "+res.okc+" trades"+(res.fail?", "+res.fail+" failed":""));refreshWallets();
-    };
+      '<div class="field row2"><div><label>Fund from wallet</label>'+walletSelectHtml("vlSrc")+'</div><div><label>Trading wallets (1–20)</label><input id="vlN" inputmode="numeric" value="4"></div></div>'+
+      '<div class="field row2"><div><label>SOL to fund each</label><input id="vlFund" inputmode="decimal" value="0.05"></div><div><label>Run timer (min)</label><input id="vlMin" inputmode="numeric" value="10"></div></div>'+
+      '<div class="field row2"><div><label>Buy size SOL (min-max)</label><input id="vlBuy" value="0.01-0.03"></div><div><label>Delay s (min-max)</label><input id="vlDelay" value="3-8"></div></div>'+
+      '<label style="display:flex;align-items:center;gap:9px;font-size:12px;cursor:pointer;margin-bottom:12px"><input type="checkbox" id="vlLeave"> Leave a little token in each wallet (pads holder count)</label>'+
+      '<div class="bsrow"><button class="bigbuy" id="vlGo" style="flex:2">▶ Start volume</button><button class="wbtn ghost" id="vlStop" style="flex:1">Stop &amp; sweep</button></div>'+
+      '<div id="vlOut" style="margin-top:12px;max-height:300px;overflow:auto"></div></div></div>';
+    $("#vlStop").onclick=()=>{if(!staggerRunning){toast("Nothing running.",true);return;}staggerAbort=true;toast("Stopping — selling + sweeping SOL back…");};
+    $("#vlGo").onclick=()=>startVolumeBot();
+  }
+  async function startVolumeBot(){
+    if(staggerRunning){toast("Already running — hit Stop first.",true);return;}
+    const ca=$("#vlCa").value.trim();if(!ca){toast("Paste a token CA.",true);return;}
+    if(!(await ensureTradeReady()))return;
+    const srcSel=$("#vlSrc");const src=Number((srcSel&&srcSel.value)||state.activeWallet);
+    const n=Math.max(1,Math.min(20,Number($("#vlN").value.trim()||"4")));
+    const fund=Number($("#vlFund").value.trim()||"0.05");if(!(fund>0)){toast("How much SOL per wallet?",true);return;}
+    const mins=Math.max(1,Number($("#vlMin").value.trim()||"10"));
+    const [bMin,bMax]=parseRange($("#vlBuy").value,0.01,0.03);
+    const [dMin,dMax]=parseRange($("#vlDelay").value,3,8);
+    const leave=$("#vlLeave").checked;
+    const out=$("#vlOut");out.innerHTML="";const log=(h,c)=>staggerLog(out,'<div style="font-size:12px;padding:5px 0'+(c?";color:"+c:"")+'">'+h+'</div>');
+    const go=$("#vlGo");go.disabled=true;go.textContent="Funding…";staggerRunning=true;staggerAbort=false;
+    try{
+      log("Creating + funding "+n+" wallet(s) with ◎"+fund.toFixed(3)+" each from wallet #"+src+"…");
+      const {ok,d}=await jpost("/api/web/wallets/distribute",{count:n,amountSol:String(fund),sourceWalletIndex:src,label:"Vol"});
+      if(!ok||!d||!d.ok||!(d.wallets&&d.wallets.length)){throw new Error((d&&d.error)||"Could not create/fund wallets");}
+      await refreshWallets();
+      const newPks=d.wallets.map(w=>w.publicKey);
+      const idxs=state.wallets.filter(w=>newPks.includes(w.publicKey)).map(w=>w.index);
+      if(!idxs.length)throw new Error("Funded wallets not found after refresh");
+      log("Funded "+idxs.length+" wallet(s) ✓ — running buys + sells for "+mins+" min","var(--green)");go.textContent="Running…";
+      const deadline=Date.now()+mins*60000;
+      while(Date.now()<deadline&&!staggerAbort){
+        staggerRunning=true;
+        await runStagger({tokenMint:ca,wallets:idxs,rounds:1,mode:"mix",amtMin:bMin,amtMax:bMax,delayMin:dMin,delayMax:dMax,sellBias:0.45,sellMin:(leave?60:80),sellMax:(leave?88:100),slip:600},out);
+      }
+      // Wrap-up: sell remaining tokens (leave a sliver if asked), then return SOL to the funder.
+      staggerAbort=false;
+      log("Wrapping up — selling tokens"+(leave?" (leaving a sliver)":"")+" + sweeping SOL back to wallet #"+src+"…");
+      await runStagger({tokenMint:ca,wallets:idxs,rounds:1,mode:"sell",amtMin:0,amtMax:0,delayMin:0,delayMax:1,sellBias:1,sellMin:(leave?92:100),sellMax:(leave?96:100),slip:900},out);
+      const srcPk=(state.wallets.find(w=>w.index===src)||{}).publicKey;
+      if(srcPk){const sw=await jpost("/api/web/wallets/sweep-sol",{destination:srcPk,walletIndexes:idxs});log((sw.d&&sw.d.sweep&&sw.d.sweep.summary)||"Swept SOL back to funder","var(--green)");}
+      toast("Volume run complete — funds back in wallet #"+src);refreshWallets();
+    }catch(e){log("Error: "+esc(String(e.message||e)),"var(--red)");toast(String(e.message||"Volume bot failed"),true);}
+    staggerRunning=false;go.disabled=false;go.textContent="▶ Start volume";
   }
   function walletSelectHtml(id){const ws=state.wallets||[];if(!ws.length)return '<select id="'+id+'"><option value="">create a wallet first</option></select>';return '<select id="'+id+'">'+ws.map(w=>'<option value="'+w.index+'"'+(w.index===state.activeWallet?" selected":"")+'>'+esc(w.label||("Wallet "+w.index))+'</option>').join("")+'</select>';}
   // Native pump.fun launch panel — all the old fields, new style, no hype tab. We build the token on
@@ -1257,24 +1292,45 @@
     $("#cpGo").onclick=async()=>{const w=$("#cpWallet").value.trim();if(!w){toast("Paste a wallet to copy.",true);return;}if(!(await ensureTradeReady()))return;const b=$("#cpGo");b.disabled=true;b.textContent="Starting…";const {ok,status,d}=await jpost("/api/web/kol/copy-wallet",{copyWallet:w,walletIndexes:[state.activeWallet],amountSol:$("#cpAmt").value.trim()||"0.1",slippageBps:Number($("#cpSlip").value.trim()||"500"),takeProfitPct:$("#cpTp").value.trim()||"25",stopLossPct:$("#cpSl").value.trim()||"8",sellDelay:"off",loopCount:"1"});b.disabled=false;b.textContent="Start copying";if(status===401){setToken("");go("wallet");return;}if(ok&&d&&d.ok){toast("Now copying "+short(w)+" — buys mirror to your wallet");}else toast((d&&d.error)||"Could not start copy",true);};
     loadKol();
   }
+  function kolSecLabel(t){return '<div class="mut" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin:14px 0 8px">'+t+'</div>';}
   async function loadKol(){
     const mode=state.kolMode||"hot";
     const {d}=await api("/api/web/kol/scan?mode="+mode);
     if(state.route!=="copy")return;
-    const sc=(d&&d.scan)||{};const rows=sc.rows||[];
+    const sc=(d&&d.scan)||{};const rows=sc.rows||[];const kols=sc.kols||[];
     const h=$("#kolH"),dd=$("#kolD");if(h)h.textContent="🔥 "+(sc.label||"KOL Buys");if(dd)dd.textContent=sc.description||"";
     const list=$("#kolList");if(!list)return;
-    if(!rows.length){list.innerHTML='<p class="mut" style="font-size:12px">No KOL signals on this tab right now — try Hot / Top / Fresh.</p>';return;}
-    list.innerHTML=rows.map(r=>{
-      const chg=pctNum(r.h1!=null?r.h1:r.m5);const ccls=chg==null?"mut":(chg>=0?"up":"down");const ct=chg==null?"":((chg>=0?"+":"")+chg.toFixed(1)+"%");
-      return '<div class="walletrow" style="cursor:pointer" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+
-        '<div class="ico">'+(r.imageUrl?'<img src="'+esc(r.imageUrl)+'" style="width:100%;height:100%;border-radius:11px;object-fit:cover" onerror="this.replaceWith(document.createTextNode(\'🪙\'))">':'🪙')+'</div>'+
-        '<div class="info" style="min-width:0"><b>'+esc(r.symbol||short(r.tokenMint))+' <span class="mut" style="font-weight:500">'+ct+'</span></b><div class="addr mut">'+esc(r.kolName||r.signalType||"")+' · '+esc(r.marketCapLabel||"")+' MC</div></div>'+
-        '<div class="bal"><b>'+esc(r.valueLabel||r.volumeLabel||"")+'</b><span>'+esc(r.signalType||"KOL buy")+'</span></div>'+
-        '<button class="buybtn sm" style="margin-left:10px" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button>'+
-        (r.kolWallet?'<button class="wbtn ghost" style="margin-left:8px;padding:9px 12px" onclick="event.stopPropagation();GG.copyWallet(\''+esc(r.kolWallet)+'\')">Copy</button>':'')+
-      '</div>';
-    }).join("");
+    let html="";
+    // Known KOL WALLETS (Top / Consistent / Fresh modes fill scan.kols). Each is a tracked KOL with
+    // win-rate / ROI / trade stats and a one-tap Copy that loads it into the Copy-any-wallet box.
+    if(kols.length){
+      html+=kolSecLabel("Known KOL wallets");
+      html+=kols.map(k=>{
+        const xurl=k.xUrl||k.twitter||"";const x=xurl?'<a href="'+esc(xurl)+'" target="_blank" onclick="event.stopPropagation()" style="color:var(--muted);margin-left:6px">𝕏</a>':'';
+        const win=(k.winRateLabel&&k.winRateLabel!=="n/a")?"win "+esc(k.winRateLabel):"";
+        const sub=[win,(k.trades?esc(k.trades)+" trades":""),((k.realizedLabel&&k.realizedLabel!=="n/a")?esc(k.realizedLabel):"")].filter(Boolean).join(" · ");
+        const roi=(k.roiLabel&&k.roiLabel!=="n/a")?esc(k.roiLabel):(k.volumeLabel?esc(k.volumeLabel):"");
+        return '<div class="walletrow"><div class="ico">'+(k.avatar?'<img src="'+esc(k.avatar)+'" style="width:100%;height:100%;border-radius:11px;object-fit:cover" onerror="this.replaceWith(document.createTextNode(\'👤\'))">':'👤')+'</div>'+
+          '<div class="info" style="min-width:0"><b>'+esc(k.name||k.shortWallet||"KOL")+x+'</b><div class="addr mut">'+(sub||esc(k.shortWallet||""))+'</div></div>'+
+          '<div class="bal"><b>'+roi+'</b><span>'+((k.roiLabel&&k.roiLabel!=="n/a")?"ROI":"vol")+'</span></div>'+
+          '<button class="wbtn ghost" style="margin-left:10px;padding:9px 12px" onclick="GG.copyWallet(\''+esc(k.wallet)+'\')">Copy</button></div>';
+      }).join("");
+    }
+    // Coins KOLs are buying (Hot / Fresh modes fill scan.rows).
+    if(rows.length){
+      html+=kolSecLabel("Coins KOLs are buying");
+      html+=rows.map(r=>{
+        const chg=pctNum(r.h1!=null?r.h1:r.m5);const ct=chg==null?"":((chg>=0?"+":"")+chg.toFixed(1)+"%");
+        return '<div class="walletrow" style="cursor:pointer" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+
+          '<div class="ico">'+(r.imageUrl?'<img src="'+esc(r.imageUrl)+'" style="width:100%;height:100%;border-radius:11px;object-fit:cover" onerror="this.replaceWith(document.createTextNode(\'🪙\'))">':'🪙')+'</div>'+
+          '<div class="info" style="min-width:0"><b>'+esc(r.symbol||short(r.tokenMint))+' <span class="mut" style="font-weight:500">'+ct+'</span></b><div class="addr mut">'+esc(r.kolName||r.signalType||"")+' · '+esc(r.marketCapLabel||"")+' MC</div></div>'+
+          '<div class="bal"><b>'+esc(r.valueLabel||r.volumeLabel||"")+'</b><span>'+esc(r.signalType||"KOL buy")+'</span></div>'+
+          '<button class="buybtn sm" style="margin-left:10px" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button>'+
+          (r.kolWallet?'<button class="wbtn ghost" style="margin-left:8px;padding:9px 12px" onclick="event.stopPropagation();GG.copyWallet(\''+esc(r.kolWallet)+'\')">Copy</button>':'')+
+        '</div>';
+      }).join("");
+    }
+    list.innerHTML=html||'<p class="mut" style="font-size:12px">No KOL signals on this tab right now — try Hot / Top / Consistent / Fresh.</p>';
   }
 
   // ---------- sol price ----------
