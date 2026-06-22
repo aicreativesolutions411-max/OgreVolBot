@@ -349,7 +349,7 @@
     <section class="view" id="v-volume"></section>
     <section class="view" id="v-copy"></section>
     <section class="view" id="v-launch"></section>
-    <section class="view" id="v-rewards"></section>
+    <section class="view" id="v-sniper"></section>
   </main>
 
   <nav class="botnav" id="botnav">
@@ -363,7 +363,6 @@
   <footer class="statusbar">
     <span class="s live"><span class="dot"></span>Live</span>
     <a href="/radar" target="_blank">Radar</a>
-    <a href="/raids" target="_blank">Raids</a>
     <a href="/launch" target="_blank">Launch</a>
     <a href="/manual" target="_blank">Guide</a>
     <div class="right"><span class="px" id="solPx">◎ SOL —</span><span>Powered by SlimeWire</span></div>
@@ -528,8 +527,8 @@
     {ic:"📦",label:"Bundle Buy",route:"bundle"},
     {ic:"📈",label:"Volume Bot",route:"volume"},
     {ic:"👥",label:"Copy / KOL Tracker",route:"copy"},
+    {ic:"🎯",label:"Launch Sniper",route:"sniper"},
     {ic:"🚀",label:"Launch a Coin",route:"launch"},
-    {ic:"⚔️",label:"Raids & Rewards",route:"rewards"},
   ];
   function toolLinkHtml(t,onclick){return t.route?'<a href="#'+t.route+'"'+(onclick?' onclick="'+onclick+'"':'')+'><span>'+t.ic+'</span>'+esc(t.label)+'</a>':'<a href="'+esc(t.url)+'" target="_blank"><span>'+t.ic+'</span>'+esc(t.label)+'</a>';}
   function openToolsSheet(){
@@ -593,19 +592,9 @@
     else if(route==="volume")renderVolume();
     else if(route==="copy")renderCopy();
     else if(route==="launch")renderLaunch();
-    else if(route==="rewards")renderEmbed("rewards");
+    else if(route==="sniper")renderSniper();
     else renderTrending();
   }
-  // Keep Launch / Raids INSIDE /gg (our own pages, with their video + features) instead of
-  // navigating off to the standalone page — so the terminal never depends on the old site.
-  function renderEmbed(key){
-    const map={launch:{view:"v-launch",url:"/launch",title:"🚀 Launch a Coin"},rewards:{view:"v-rewards",url:"/raids",title:"⚔️ Raids & Rewards"}};
-    const cfg=map[key];if(!cfg){go("trending");return;}
-    setActiveView(cfg.view);subbarTool(cfg.title);
-    const v=$("#"+cfg.view);
-    if(!v.querySelector("iframe"))v.innerHTML='<iframe src="'+cfg.url+'" title="'+esc(cfg.title)+'" loading="eager" style="width:100%;height:100%;border:0;display:block;background:var(--bg)"></iframe>';
-  }
-
   // ---------- subbars ----------
   function subbarTrending(){
     const sb=$("#subbar");sb.innerHTML="";
@@ -713,11 +702,21 @@
   }
 
   // ---------- trenches ----------
+  // Social links (only the ones a row actually has) + a copy-CA button — shared by trenches cards and the
+  // sniper feed so every row can be vetted + copied in one tap.
+  function socialIconsHtml(r){
+    let s="";
+    if(r.twitterUrl)s+='<a href="'+esc(r.twitterUrl)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">𝕏</a>';
+    if(r.telegramUrl)s+='<a href="'+esc(r.telegramUrl)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">✈</a>';
+    if(r.websiteUrl)s+='<a href="'+esc(r.websiteUrl)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">🌐</a>';
+    s+='<a onclick="event.stopPropagation();GG.copy(\''+esc(r.tokenMint)+'\')" title="Copy CA">⧉</a>';
+    return '<span class="ic">'+s+'</span>';
+  }
   function cardHtml(r){
     return'<div class="card" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+avImg(r,"av")+
       '<div class="body"><div class="top"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><span class="nm">'+esc(r.name||"")+'</span><span class="age">'+esc(ageLabel(r))+'</span></div>'+
       '<div class="stats"><span><i>MC</i>'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</span><span><i>LIQ</i>'+esc(r.liquidityLabel||fmtUsd(r.liquidityUsd))+'</span><span><i>V</i>'+esc(volLabel(r))+'</span></div>'+
-      '<div class="row2">'+riskChips(r)+'<button class="buybtn sm" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button></div></div></div>';
+      '<div class="row2">'+riskChips(r)+socialIconsHtml(r)+'<button class="buybtn sm" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button></div></div></div>';
   }
   const TRENCH_COLS=[
     {key:"new",label:"New",pulse:true,params:{bucket:"live",sort:"fresh"}},
@@ -732,8 +731,75 @@
       const rows=await fetchPairs(c.params);if(state.route!=="trenches")return;
       const list=$("#list-"+c.key),cnt=$("#cnt-"+c.key);if(cnt)cnt.textContent=rows.length;
       if(list)list.innerHTML=rows.length?rows.map(cardHtml).join(""):'<div class="msg" style="font-size:12px">Nothing here yet.</div>';
+      // backfill socials (X/TG/web) from DexScreener over the user's IP, then repaint this column
+      enrichSocials(rows).then(()=>{const l=$("#list-"+c.key);if(state.route==="trenches"&&l&&rows.length)l.innerHTML=rows.map(cardHtml).join("");});
     }));
     state.pollT=setTimeout(()=>{if(state.route==="trenches")renderTrenches();},7000);
+  }
+
+  // ---------- launch sniper ----------
+  // Fast fresh-launch feed (the pump creation stream, seconds old) with a ticker watcher: ARM it with a
+  // ticker/name + your buy preset, and the instant a matching coin lands it auto-buys (once, then disarms).
+  // Tap ⚡ on any row to ape it now. Polls ~1.6s so you're not late.
+  let sniperPollT=null;
+  function sniperRowHtml(r){
+    return '<div class="walletrow" style="cursor:pointer" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+
+      '<div class="ico">'+avImg(r,"")+'</div>'+
+      '<div class="info" style="min-width:0"><b>'+esc(r.symbol||short(r.tokenMint))+' <span class="mut" style="font-weight:500">'+esc(ageLabel(r))+'</span></b>'+
+      '<div class="addr mut" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'+esc((r.name||"").slice(0,22))+socialIconsHtml(r)+'</div></div>'+
+      '<div class="bal"><b>'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</b><span>MC</span></div>'+
+      '<button class="buybtn sm" style="margin-left:10px" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button></div>';
+  }
+  function sniperSetStatus(){
+    const s=$("#snStatus");if(!s)return;const a=state.sniperArm;
+    if(a&&a.on){s.style.display="block";s.innerHTML='🎯 <b>ARMED</b> — watching for <b>'+esc(a.ticker)+'</b>. Auto-buys ◎'+esc(String(a.amt))+' the instant it launches.';}
+    else s.style.display="none";
+  }
+  async function pollSniper(){
+    if(sniperPollT){clearTimeout(sniperPollT);sniperPollT=null;}
+    const rows=await fetchPairs({bucket:"live",sort:"fresh"});
+    if(state.route!=="sniper")return;
+    const feed=$("#snFeed"),cnt=$("#snCount");
+    if(cnt)cnt.textContent=rows.length?("· "+rows.length+" live"):"";
+    if(feed)feed.innerHTML=rows.length?rows.slice(0,40).map(sniperRowHtml).join(""):'<div class="msg" style="font-size:12px">Waiting for fresh launches…</div>';
+    enrichSocials(rows).then(()=>{const f=$("#snFeed");if(state.route==="sniper"&&f&&rows.length)f.innerHTML=rows.slice(0,40).map(sniperRowHtml).join("");});
+    // armed auto-snipe — buy the first NEW coin whose symbol/name matches, then disarm (one shot)
+    const a=state.sniperArm;
+    if(a&&a.on&&a.ticker){
+      state.sniped=state.sniped||new Set();
+      const hit=rows.find(r=>r.tokenMint&&!state.sniped.has(r.tokenMint)&&(((r.symbol||"").toLowerCase().includes(a.ticker))||((r.name||"").toLowerCase().includes(a.ticker))));
+      if(hit){
+        state.sniped.add(hit.tokenMint);state.sniperArm={on:false};
+        const ab=$("#snArm");if(ab)ab.textContent="🎯 Arm sniper";
+        const st=$("#snStatus");if(st){st.style.display="block";st.innerHTML='🎯 <b>SNIPED '+esc(hit.symbol||short(hit.tokenMint))+'</b> — firing your buy…';}
+        await execQuickBuy(hit.tokenMint,{amt:a.amt,slip:a.slip,tp:a.tp,sl:a.sl});
+      }
+    }
+    sniperPollT=setTimeout(()=>{if(state.route==="sniper")pollSniper();},1600);
+  }
+  async function renderSniper(){
+    setActiveView("v-sniper");subbarTool("🎯 Launch Sniper");if(state.token)await refreshWallets();if(state.route!=="sniper")return;
+    const q=state.quickBuy||{amt:0.1,slip:"",tp:"",sl:""};const arm=state.sniperArm||{on:false,ticker:""};
+    $("#v-sniper").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>🎯 Launch Sniper</h3><p class="sub">Catch brand-new pump launches the second they drop. Type a ticker/name and <b>Arm</b> — it auto-buys with your preset the instant it lands. Or tap ⚡ on any row to ape it now.</p>'+
+      '<div class="field row2"><div><label>Watch ticker / name</label><input id="snTick" placeholder="e.g. WIF" value="'+esc(arm.ticker||"")+'"></div><div><label>Buy amount (SOL)</label><input id="snAmt" inputmode="decimal" value="'+esc(String(q.amt||"0.1"))+'"></div></div>'+
+      '<div class="field row2"><div><label>Take profit %</label><input id="snTp" inputmode="numeric" placeholder="off" value="'+esc(q.tp||"")+'"></div><div><label>Stop loss %</label><input id="snSl" inputmode="numeric" placeholder="off" value="'+esc(q.sl||"")+'"></div></div>'+
+      '<div class="field row2"><div><label>Slippage (bps)</label><input id="snSlip" inputmode="numeric" value="'+esc(q.slip||"700")+'"></div><div style="display:flex;align-items:flex-end"><button class="bigbuy" id="snArm" style="width:100%">'+(arm.on?"🛑 Disarm":"🎯 Arm sniper")+'</button></div></div>'+
+      '<div id="snStatus" class="lcnote" style="display:none"></div>'+
+      '<div style="display:flex;align-items:center;gap:8px;margin:16px 0 8px"><span class="pulse"></span><b style="font-size:13px">Fresh launches</b><span class="mut" id="snCount" style="font-size:12px"></span></div>'+
+      '<div id="snFeed"><div class="loading"><span class="spin"></span></div></div></div></div>';
+    $("#snArm").onclick=async()=>{
+      const cur=state.sniperArm||{};
+      if(cur.on){state.sniperArm={on:false};$("#snArm").textContent="🎯 Arm sniper";sniperSetStatus();toast("Sniper disarmed");return;}
+      if(!(await ensureTradeReady()))return;
+      const tick=$("#snTick").value.trim();if(!tick){toast("Type a ticker or name to watch.",true);return;}
+      const amt=Number($("#snAmt").value.trim()||"0.1");if(!isFinite(amt)||amt<=0){toast("Enter a SOL amount.",true);return;}
+      const slip=$("#snSlip").value.trim()||"700",tp=$("#snTp").value.trim(),sl=$("#snSl").value.trim();
+      state.sniperArm={on:true,ticker:tick.toLowerCase(),amt,slip,tp,sl};
+      setQuickBuy({amt,slip,tp,sl,presetId:(state.quickBuy&&state.quickBuy.presetId)||""});
+      $("#snArm").textContent="🛑 Disarm";sniperSetStatus();toast("🎯 Armed — watching for "+tick);
+    };
+    sniperSetStatus();
+    pollSniper();
   }
 
   // ---------- trade ----------
