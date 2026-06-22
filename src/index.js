@@ -22377,6 +22377,18 @@ async function pumpCurvePairFallback(tokenMint, options = {}) {
   };
 }
 
+// pump.fun stores creator-entered socials (usually full URLs, occasionally a bare @handle or domain).
+// Normalize to a clickable absolute URL so the terminal's social icons always render a working link.
+function normalizeSocialLink(value, kind) {
+  let s = String(value || "").trim();
+  if (!s) return "";
+  if (/^https?:\/\//i.test(s)) return s;
+  s = s.replace(/^@/, "");
+  if (kind === "twitter") return `https://x.com/${s.replace(/^(?:www\.)?(?:x|twitter)\.com\//i, "")}`;
+  if (kind === "telegram") return `https://t.me/${s.replace(/^(?:www\.)?t\.me\//i, "")}`;
+  return /\./.test(s) ? `https://${s}` : "";
+}
+
 async function getPumpFunTokenMetadata(tokenMint, options = {}) {
   const mint = String(tokenMint || "").trim();
   if (!mint) return {};
@@ -22459,6 +22471,11 @@ async function getPumpFunTokenMetadata(tokenMint, options = {}) {
     imageUrl: firstString(coin?.image_uri, coin?.imageUri, coin?.imageUrl, coin?.image_url, coin?.image, coin?.metadata?.image, coin?.metadata?.imageUrl, coin?.logoURI, coin?.logo),
     imageUri: firstString(coin?.image_uri, coin?.imageUri, coin?.imageUrl, coin?.image_url, coin?.image, coin?.metadata?.image, coin?.metadata?.imageUrl, coin?.logoURI, coin?.logo),
     metadataUri: firstString(coin?.metadata_uri, coin?.metadataUri, coin?.uri, coin?.metadata?.uri),
+    // Creator-entered socials. pump.fun has these the instant a coin launches — long before
+    // DexScreener lists it — so this is what fills the social icons on the freshest Trenches rows.
+    twitterUrl: normalizeSocialLink(firstString(coin?.twitter, coin?.twitterUrl, coin?.twitter_url, coin?.x, coin?.metadata?.twitter, coin?.metadata?.x), "twitter"),
+    telegramUrl: normalizeSocialLink(firstString(coin?.telegram, coin?.telegramUrl, coin?.telegram_url, coin?.metadata?.telegram), "telegram"),
+    websiteUrl: normalizeSocialLink(firstString(coin?.website, coin?.websiteUrl, coin?.website_url, coin?.metadata?.website, coin?.metadata?.external_url), "website"),
     creatorWallet: firstString(coin?.creator, coin?.creatorWallet, coin?.creator_wallet, coin?.creatorPublicKey, coin?.creator_public_key, coin?.deployer, coin?.deployerWallet, coin?.launchWallet),
     creator: firstString(coin?.creator, coin?.creatorWallet, coin?.creator_wallet, coin?.creatorPublicKey, coin?.creator_public_key),
     deployerWallet: firstString(coin?.deployerWallet, coin?.deployer_wallet, coin?.deployer),
@@ -46387,6 +46404,11 @@ async function enrichWebLivePairsForImages(rows) {
     if (pumpLike && (!imageUrl || !marketCap || !liquidityUsd || !volumeH1 || !volumeM15 || !bondingProgressPct || !graduated)) {
       pumpMeta = await getPumpFunTokenMetadata(row.tokenMint, { timeoutMs: 1_800 }).catch(() => ({}));
       imageUrl = firstString(pumpMeta.imageUrl, pumpMeta.imageUri, imageUrl);
+      // Socials straight from pump.fun — fills the Trenches social icons on seconds-old coins
+      // that DexScreener hasn't indexed yet (these flow into nextRow's twitter/telegram/website).
+      websiteUrl = firstString(websiteUrl, pumpMeta.websiteUrl);
+      twitterUrl = firstString(twitterUrl, pumpMeta.twitterUrl);
+      telegramUrl = firstString(telegramUrl, pumpMeta.telegramUrl);
       symbol = symbol && symbol !== shortMint(row.tokenMint) ? symbol : firstString(pumpMeta.symbol, symbol);
       name = name && name !== "Fresh Launch" ? name : firstString(pumpMeta.name, name);
       marketCap = Number(marketCap) > 0 ? marketCap : firstMeaningfulNumber(pumpMeta.marketCap, marketCap) || 0;

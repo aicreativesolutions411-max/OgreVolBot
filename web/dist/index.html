@@ -67,6 +67,7 @@
   .walletpill .dot.off{background:var(--muted2);box-shadow:none}
   .walletpill b{color:var(--text);font-weight:700;font-family:var(--mono);font-size:12px}
   .iconbtn{width:34px;justify-content:center;font-size:15px}.iconbtn:hover{color:var(--text);border-color:rgba(137,255,67,.3)}
+  .watchbtn{color:#ffd54a}.watchbtn:hover{color:#ffd54a;border-color:rgba(255,213,74,.45)}.watchbtn.on{color:#ffd54a;border-color:rgba(255,213,74,.55);background:rgba(255,213,74,.1)}
 
   /* sub bar */
   .subbar{display:flex;align-items:center;gap:16px;flex:0 0 auto;height:46px;padding:0 16px;background:rgba(7,11,7,.6);border-bottom:1px solid var(--border2);overflow-x:auto}
@@ -334,6 +335,7 @@
     <div class="topctrls">
       <button class="pastebtn" id="pasteCa">📋 Paste CA</button>
       <label class="searchbox"><span>🔍</span><input id="search" placeholder="Search name or CA…"><kbd>/</kbd></label>
+      <button class="iconbtn watchbtn" id="watchBtn" title="Watchlist — your saved coins">★</button>
       <div class="walletpill" id="walletPill" title="Wallet"><span class="dot off"></span><b id="solBal">Connect</b></div>
       <a class="iconbtn" href="/manual" target="_blank" title="Help">?</a>
     </div>
@@ -587,7 +589,7 @@
     {id:"vol",label:"Top Volume",bucket:"live",sort:"volume",cat:"gtVolume"},
     {id:"grad",label:"Graduating",bucket:"live",sort:"best",cat:"graduating"},
     {id:"migr",label:"Migrated",bucket:"live",sort:"best",cat:"gtMigrated"},
-    {id:"watch",label:"★ Saved"},
+    {id:"watch",label:"★ Watchlist"},
   ];
   function tabById(id){return TREND_TABS.find(t=>t.id===id)||TREND_TABS[0];}
   async function fetchPairs(p){
@@ -611,6 +613,7 @@
     const {route,arg}=parseHash();state.route=route;
     if(state.pollT){clearTimeout(state.pollT);state.pollT=null;}
     setNav(route);
+    const wb=$("#watchBtn");if(wb)wb.classList.toggle("on",route==="trending"&&state.trendTab==="watch");
     if(route==="trenches")renderTrenches();
     else if(route==="trade"){state.mint=arg;renderTrade();}
     else if(route==="portfolio")renderPortfolio();
@@ -1797,6 +1800,8 @@
   document.querySelectorAll("#botnav button[data-route]").forEach(b=>b.onclick=()=>go(b.dataset.route));
   document.querySelectorAll("#botnav button[data-tools]").forEach(b=>b.onclick=()=>openToolsSheet());
   $("#walletPill").onclick=()=>go("wallet");
+  // ★ Watchlist — top-bar shortcut straight to your saved coins (also the ★ Watchlist tab on Trending).
+  $("#watchBtn").onclick=()=>{state.trendTab="watch";go("trending");render();};
   // Tools dropdown = click-toggle (hover dropdowns drop on the gap + don't work on touch).
   (function(){const drop=document.querySelector(".navdrop"),db=drop&&drop.querySelector(".dropbtn"),menu=$("#toolsMenu");
     if(menu)menu.innerHTML=TOOLS.map(t=>toolLinkHtml(t)).join("");
