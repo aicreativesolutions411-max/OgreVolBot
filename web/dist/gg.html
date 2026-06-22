@@ -1565,13 +1565,22 @@
   function kolSecLabel(t){return '<div class="mut" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin:14px 0 8px">'+t+'</div>';}
   // Pull a clean @handle out of a (sometimes double-prefixed) twitter/x URL, then fall back to
   // unavatar.io for a profile pic when the KOL row has no avatar of its own.
-  function kolHandle(k){let u=String((k&&(k.twitter||k.xUrl))||"").trim().replace(/^@/,"");const segs=u.split("/").filter(Boolean);const last=segs[segs.length-1]||"";return /^[A-Za-z0-9_]{1,30}$/.test(last)?last:"";}
-  function kolAvatarSrc(k){if(k&&k.avatar)return k.avatar;const h=kolHandle(k);return h?"https://unavatar.io/twitter/"+h:"";}
-  function kolAvatarImg(k){const s=kolAvatarSrc(k);return s?'<img src="'+esc(s)+'" style="width:100%;height:100%;border-radius:11px;object-fit:cover" onerror="this.replaceWith(document.createTextNode(\'👤\'))">':'👤';}
+  // Pull a clean @handle out of a raw handle OR a full x/twitter URL.
+  function cleanHandle(s){let u=String(s||"").trim().replace(/^@/,"");if(u.indexOf("/")>=0){const segs=u.split(/[\/?#]/).filter(Boolean);u=segs[segs.length-1]||"";}return /^[A-Za-z0-9_]{2,30}$/.test(u)?u:"";}
+  // Avatar source, matching the old site: explicit avatar → twitter/x/username handle → the NAME as a
+  // handle (most KOLs' display name IS their @handle). unavatar.io returns a generated fallback when the
+  // handle has no X account, so a pfp always renders.
+  function kolHandle(k){return cleanHandle((k&&(k.twitter||k.xUrl||k.x||k.username))||"")||cleanHandle((k&&(k.name||k.kolName))||"");}
+  function kolAvatarSrc(k){if(k&&k.avatar&&/^https?:/.test(k.avatar))return k.avatar;const h=kolHandle(k);return h?"https://unavatar.io/twitter/"+encodeURIComponent(h):"";}
+  function kolInitials(k){const t=String((k&&(k.twitter||k.name||k.shortWallet||k.wallet))||"KO").replace(/^@+/,"").replace(/^https?:\/\/(?:x|twitter)\.com\//i,"");return esc((t.slice(0,2)||"KO").toUpperCase());}
+  function kolAvatarImg(k){const s=kolAvatarSrc(k);const ini=kolInitials(k);return s?'<img src="'+esc(s)+'" referrerpolicy="no-referrer" loading="eager" decoding="async" style="width:100%;height:100%;border-radius:11px;object-fit:cover" onerror="this.replaceWith(document.createTextNode(\''+ini+'\'))">':ini;}
   async function openKolProfile(wallet,name){
     openModal('<h3>👤 '+esc(name||short(wallet))+'</h3><div id="kpBody"><div class="loading" style="padding:24px"><span class="spin"></span></div></div>');
-    const {d}=await api("/api/web/kol/scan?wallet="+encodeURIComponent(wallet));
-    const sc=(d&&d.scan)||{};const k=(sc.kols&&sc.kols[0])||{};const rows=sc.rows||[];const handle=kolHandle(k);
+    // Start from the KOL we ALREADY have on the list (stats + pfp), so the profile is populated instantly
+    // and stays useful even if the live wallet re-scan is rate-limited (MadeOnSol 200/day) and returns empty.
+    const cached=(state._kols||[]).find(x=>String(x.wallet)===String(wallet))||{name};
+    const {d}=await api("/api/web/kol/scan?wallet="+encodeURIComponent(wallet)).catch(()=>({}));
+    const sc=(d&&d.scan)||{};const k=Object.assign({},cached,(sc.kols&&sc.kols[0])||{});const rows=sc.rows||[];const handle=kolHandle(k);
     const body=$("#kpBody");if(!body)return;
     const links=[];
     if(handle||k.twitter||k.xUrl)links.push('<a class="chip" href="'+(handle?"https://x.com/"+handle:esc(k.twitter||k.xUrl))+'" target="_blank" rel="noopener">𝕏 '+(handle?"@"+esc(handle):"Twitter")+'</a>');
@@ -1590,7 +1599,7 @@
     const mode=state.kolMode||"hot";
     const {d}=await api("/api/web/kol/scan?mode="+mode);
     if(state.route!=="copy")return;
-    const sc=(d&&d.scan)||{};const rows=sc.rows||[];const kols=sc.kols||[];
+    const sc=(d&&d.scan)||{};const rows=sc.rows||[];const kols=sc.kols||[];state._kols=kols; // cache for the profile modal
     const h=$("#kolH"),dd=$("#kolD");if(h)h.textContent="🔥 "+(sc.label||"KOL Buys");if(dd)dd.textContent=sc.description||"";
     const list=$("#kolList");if(!list)return;
     let html="";
