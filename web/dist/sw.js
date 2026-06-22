@@ -3,7 +3,7 @@
 // /api/ responses or non-GET requests, so trading data is never served stale. Offline just
 // shows the cached shell, which then loads live data when the connection returns.
 
-const SHELL_CACHE = "slimewire-shell-v7-gg-fresh";
+const SHELL_CACHE = "slimewire-shell-v8-gg-root";
 // Standalone pages are their OWN documents (Pro, raid board, prelaunch, hub, launch, guide, share
 // pages). The SW must NEVER treat their navigations as the app shell — doing so served the cached
 // main-app (the "/pro shows the old intro then the main page" bug). Only the SPA's own routes are

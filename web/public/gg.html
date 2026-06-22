@@ -417,9 +417,11 @@
   function jpost(path,body){return api(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})});}
   function setToken(t){state.token=t||"";if(t)localStorage.setItem(TOKEN_KEY,t);else localStorage.removeItem(TOKEN_KEY);}
 
+  // Referral capture: a /r/CODE link redirects here as /?ref=CODE — remember it and attribute on signup.
+  function refCode(){try{const u=new URL(location.href);const r=(u.searchParams.get("ref")||"").replace(/[^A-Za-z0-9_$.-]/g,"").slice(0,32);if(r)localStorage.setItem("ggRef",r);return r||localStorage.getItem("ggRef")||"";}catch(e){return localStorage.getItem("ggRef")||"";}}
   async function ensureAccount(){
     if(state.token)return true;
-    const {ok,d}=await jpost("/api/web/signup",{});
+    const {ok,d}=await jpost("/api/web/signup",{ref:refCode()});
     if(ok&&d&&d.ok&&d.token){setToken(d.token);state.user=d.user||null;return true;}
     return false;
   }

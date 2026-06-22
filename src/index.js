@@ -2124,32 +2124,26 @@ function startDevObservatory() {
   void loadMarketTape();
   void loadKolLearning();
   void loadCoinBanners();
+  // INSTANT LAUNCH SNIPER: keep the active-ticker set warm so onCreation can fire a watched snipe the
+  // instant a matching coin streams in (create/cancel also refresh it). FREE — always on, sniper needs it.
+  void refreshSnipeWatchTickers();
+  setInterval(() => { void refreshSnipeWatchTickers(); }, 15_000);
+  // EVERYTHING BELOW feeds the autopilot brain and burns Solana-Tracker credits + RPC. Gated OFF while
+  // the autopilot is stopped (the user's call — it never won enough to justify the spend). Flip
+  // AUTOPILOT_ENABLED=true on Render to resume the flywheel.
+  if (!CONFIG.autopilotEnabled) {
+    console.log("Autopilot brain feeders idle (AUTOPILOT_ENABLED=false) — winner-follow / copy-feed / seed-trickle / observatory pollers OFF to save ST credits + RPC.");
+    return;
+  }
   setInterval(sampleDevObservatory, 45_000);
   setInterval(() => { void sampleKolSignalOutcomes(); }, 60_000);
   setInterval(() => { void pollObsTradesSwapApi(); }, 18_000); // resurrect the buyer flywheel via the working swap-api source
   setInterval(() => { void pollWalletFunders(); }, 60_000);    // FUNDING GRAPH: resolve winner funders + clusters (free RPC, cached forever)
-  // TRICKLE SEED (replaces the burst grab that twice overloaded this single instance's health
-  // check). Seeds just ~2 proven-trader wallets every 30s — tiny, sustained, never a burst — so the
-  // roster fills over ~30-40min without ever spiking CPU/memory. Self-gating (stops at 150 winners
-  // or 8 pages) and idempotent (skips already-seeded wallets), so a restart resumes harmlessly. This
-  // is the SAFE way to seed on one small box; the burst /api/web/autopilot/seed endpoint stays for
-  // manual use but trickle is what auto-runs.
   setInterval(() => { void pollSeedTrickle(); }, 30_000);
-  // AUTO-KOL: load the saved roster, then harvest proven KOLs from the tracker leaderboard now and
-  // every 10 min so the copy-trade roster stays fresh (cheap — the KOL scan is cached internally).
   void loadAutoKolWallets().then(() => { void refreshAutoKolWallets(); });
   setInterval(() => { void refreshAutoKolWallets(); }, 10 * 60 * 1000);
-  // INSTANT LAUNCH SNIPER: keep the active-ticker set warm so onCreation can fire a watched snipe the
-  // instant a matching coin streams in (create/cancel also refresh it immediately).
-  void refreshSnipeWatchTickers();
-  setInterval(() => { void refreshSnipeWatchTickers(); }, 15_000);
-  // COPY-TRADE FEED: keep the proven-KOL copy candidates fresh so the autopilot can actually act on
-  // "what good KOLs are buying now." Bounded cadence; buildKolScan is internally cached.
   void refreshKolCopyFeed();
   setInterval(() => { void refreshKolCopyFeed(); }, KOL_COPY_FEED_TTL_MS);
-  // WINNER-FOLLOW: the live copy edge — rotate our proven winners, surface what they're buying NOW.
-  // Gentle trickle (a few wallets/cycle), ST-budget-guarded + env-tunable. First fire delayed 45s so
-  // the brain + roster are loaded before the first poll.
   setTimeout(() => { void pollWinnerTrades(); setInterval(() => { void pollWinnerTrades(); }, WINNER_FOLLOW_INTERVAL_MS); }, 45_000);
 }
 // Combined dev reputation = our own trades + the market-wide observatory.
@@ -3905,12 +3899,20 @@ async function main() {
   } else {
     console.log("Web internal DCA interval runner disabled; Render worker tick owns DCA checks.");
   }
-  startOgreAutopilotRunner();
-  startDevObservatory();
+  if (CONFIG.autopilotEnabled) {
+    startOgreAutopilotRunner();
+  } else {
+    console.log("Autopilot STOPPED (AUTOPILOT_ENABLED=false) — Ogre A.I. tick off, no auto-trading.");
+  }
+  startDevObservatory(); // brain/dev-rep one-time loads + the Launch Sniper warmer always run; its credit-burning pollers are gated inside on CONFIG.autopilotEnabled
   startGroupBuyBot();
   startSubscriptionWatcher();
   startTrialUsageWatcher();
-  void startLiveAutopilotResume();
+  if (CONFIG.autopilotEnabled) {
+    void startLiveAutopilotResume();
+  } else {
+    console.log("Autopilot Fresh-Ape resume skipped (AUTOPILOT_ENABLED=false) — no live session re-attached.");
+  }
   if (CONFIG.pumpPortalWsEnabled) {
     pumpPortalStream.start();
     // Warm the SOL/USD cache so realtime creations get USD market caps immediately.
@@ -4016,6 +4018,12 @@ function loadConfig() {
   // before relying on it). When on, create + dev buy + first wallet buys land in one
   // block via a Jito bundle so nothing snipes between launch and the first buys.
   const pumpLaunchJitoBundle = parseBoolean(process.env.PUMP_LAUNCH_JITO_BUNDLE || "false");
+  // Autopilot is STOPPED by default (owner paused it 2026-06-22 — never won enough to justify the
+  // ST credits + RPC its always-on brain feeders burned). When false: the Fresh-Ape session won't
+  // resume, the Ogre A.I. tick won't run, and the winner-follow/copy-feed/seed/observatory pollers
+  // stay idle. The live creation stream + the user's Launch Sniper are UNAFFECTED (free WS). Flip
+  // AUTOPILOT_ENABLED=true on Render to bring it all back.
+  const autopilotEnabled = parseBoolean(process.env.AUTOPILOT_ENABLED || "false");
   const pumpLaunchJitoUrl = (process.env.PUMP_LAUNCH_JITO_URL || "https://mainnet.block-engine.jito.wtf/api/v1/bundles").trim();
   const pumpLaunchJitoTipSol = Math.max(0.00001, Number.parseFloat(process.env.PUMP_LAUNCH_JITO_TIP_SOL || "0.001") || 0.001);
   // TRADE JITO — route pump buys/sells through a Jito bundle (swap tx + a tiny tip tx) for FAST,
@@ -4404,6 +4412,7 @@ function loadConfig() {
     pumpLaunchPriorityFeeSol,
     pumpLaunchRequiredBufferSol,
     pumpLaunchJitoBundle,
+    autopilotEnabled,
     pumpLaunchJitoUrl,
     pumpLaunchJitoTipSol,
     tradeJitoBundle,
@@ -4888,13 +4897,30 @@ function startHealthServer() {
       return;
     }
 
+    // The OLD terminal — archived for visual reference ONLY (data APIs neutralized: no pairs, no credits).
+    if (request.method === "GET" && (requestUrl.pathname === "/old" || requestUrl.pathname.startsWith("/old/"))) {
+      await serveOldReference(response);
+      return;
+    }
+    // Referral links keep working: capture the code and land on the new main site (gg signup reads ?ref=).
+    if (request.method === "GET" && requestUrl.pathname.startsWith("/r/")) {
+      const code = encodeURIComponent(requestUrl.pathname.slice(3).split("/")[0].slice(0, 32));
+      response.writeHead(302, { Location: code ? `/?ref=${code}` : "/", "Cache-Control": "no-store" });
+      response.end();
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/launch-coin") {
+      response.writeHead(302, { Location: "/#launch", "Cache-Control": "no-store" });
+      response.end();
+      return;
+    }
+    // /gg IS the main site now — served at root + all the former old-app entry points. The new terminal
+    // is fully self-contained (auto account, own wallet/connect flow), so nothing here needs the old app.
     if (request.method === "GET" && (requestUrl.pathname === "/" || requestUrl.pathname === "/connect"
       || requestUrl.pathname === "/login" || requestUrl.pathname.startsWith("/account/login")
-      || requestUrl.pathname.startsWith("/r/")
-      || requestUrl.pathname === "/launch-coin"
       || requestUrl.pathname === "/portal" || requestUrl.pathname.startsWith("/portal/")
       || requestUrl.pathname === "/terminal" || requestUrl.pathname.startsWith("/terminal/"))) {
-      await serveWebPortal(requestUrl, response, request.method, request.headers["accept-encoding"]);
+      await serveStaticHtmlPage(response, "gg.html", "no-store, max-age=0");
       return;
     }
 
@@ -29481,6 +29507,32 @@ async function serveStaticHtmlPage(response, fileName, cacheControl = "public, m
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": cacheControl
     });
+    response.end(html);
+  } catch {
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Not found");
+  }
+}
+
+// /old = the ARCHIVED original terminal, kept ONLY for visual reference. We serve the old index.html
+// but inject a guard (before app.js) that neutralizes every DATA call — fetch + XHR to any /api or
+// market/data host return empty — so it renders the old UI shell with ZERO pairs loaded and ZERO API
+// credits spent. Its assets (app.js/css/images) still load via the absolute /paths (base href="/").
+async function serveOldReference(response) {
+  try {
+    let html = await fs.readFile(path.join(WEB_STATIC_DIR, "index.html"), "utf8");
+    const guard = '<script>(function(){'
+      + 'var DATA=/\\/api\\/|ogrevolbot\\.onrender|dexscreener|geckoterminal|pumpportal|solanatracker|kolscan|birdeye|helius|alchemy|quiknode|rpcpool|jup\\.ag|jupiter|block-engine|unavatar|weserv/i;'
+      + 'function empty(){return Promise.resolve(new Response(\'{"ok":false,"referenceOnly":true,"rows":[],"livePairs":{"rows":[]},"positions":[],"balances":[]}\',{status:200,headers:{"Content-Type":"application/json"}}));}'
+      + 'var of=window.fetch;if(of)window.fetch=function(u){try{var s=(typeof u==="string")?u:(u&&u.url)||"";if(DATA.test(s))return empty();}catch(e){}return of.apply(this,arguments);};'
+      + 'try{var ox=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){this.__blk=DATA.test(String(u||""));return ox.apply(this,arguments);};'
+      + 'var os=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.send=function(){if(this.__blk){try{this.abort();}catch(e){}return;}return os.apply(this,arguments);};}catch(e){}'
+      + 'try{window.WebSocket=function(){return {close:function(){},send:function(){},addEventListener:function(){},removeEventListener:function(){}};};}catch(e){}'
+      + 'window.addEventListener("DOMContentLoaded",function(){try{var b=document.createElement("div");b.textContent="📦 Reference snapshot of the old terminal — live data is off (no APIs/credits). The live app is at slimewire.org.";'
+      + 'b.style.cssText="position:fixed;left:0;right:0;top:0;z-index:99999;background:#1c2a16;color:#bdf08a;font:600 12px/1.4 system-ui,sans-serif;padding:7px 12px;text-align:center;border-bottom:1px solid #2c4022";document.body.appendChild(b);document.body.style.paddingTop="30px";}catch(e){}});'
+      + '})();</script>';
+    html = html.replace(/<head([^>]*)>/i, (m) => m + guard);
+    response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store, max-age=0" });
     response.end(html);
   } catch {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
