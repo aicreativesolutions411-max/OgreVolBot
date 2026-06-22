@@ -192,7 +192,8 @@
   .swtok[disabled]{opacity:.8;cursor:default}
   .swapflip{display:flex;justify-content:center;height:0;position:relative;z-index:2}
   .swapflip button{transform:translateY(-50%);width:38px;height:38px;border-radius:11px;background:var(--panel);border:2px solid var(--bg);color:var(--green);font-size:17px;cursor:pointer}
-  .field.row2{flex-direction:row;gap:8px}.field.row2>div{flex:1;display:flex;flex-direction:column;gap:5px}
+  .field.row2{flex-direction:row;gap:8px}.field.row2>div{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
+  .field.row2 input,.field.row2 select{min-width:0;width:100%}
   .preChip{display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid var(--border2);border-radius:11px;background:var(--row);margin-bottom:7px}
   .preChip .info b{font-size:13px}.preChip .info span{font-size:11px;color:var(--muted);font-family:var(--mono)}
   .preChip .x{margin-left:auto;color:var(--muted2)}.preChip .x:hover{color:var(--red)}
@@ -243,7 +244,8 @@
   .wbox h3{margin:0 0 4px;font-size:15px}
   .wbox p.sub{margin:0 0 13px;color:var(--muted);font-size:12px}
   .walletrow{display:flex;align-items:center;gap:12px;padding:13px;border:1px solid var(--border2);border-radius:12px;background:var(--row);margin-bottom:9px}
-  .walletrow .ico{width:38px;height:38px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:18px;background:var(--green-dim);border:1px solid var(--border)}
+  .walletrow .ico{width:38px;height:38px;flex:0 0 auto;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:18px;background:var(--green-dim);border:1px solid var(--border);overflow:hidden}
+  .walletrow .ico img{width:100%;height:100%;object-fit:cover;display:block}
   .walletrow .info{flex:1;min-width:0}
   .walletrow .info b{font-size:13px}
   .walletrow .info .addr{font-family:var(--mono);font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;margin-top:3px}
@@ -328,8 +330,14 @@
     .wgrid{padding:12px}
   }
   @media(max-width:520px){
-    .tbl td,.tbl th{padding:9px 10px}
-    .pair{min-width:130px}.pair .nm b{max-width:104px}.pair .nm .sub{display:none}
+    /* Tighten the trending row so the ⚡ Buy button stays IN frame (it was overflowing ~30px off the
+       right on a 375px phone). Smaller cell padding + avatar + buy button; desktop is untouched. */
+    .tbl td,.tbl th{padding:8px 7px}
+    .tbl td:last-child,.tbl th:last-child{padding-left:3px;padding-right:5px}
+    .pair{min-width:104px;gap:7px}.pair .nm b{max-width:84px}.pair .nm .sub{display:none}
+    .pair .av{width:28px;height:28px;border-radius:8px}
+    .tbl .buybtn.sm{padding:6px 9px;font-size:11px;gap:4px}
+    .tbl .star{font-size:14px}
     .subbar h1{display:none}
     /* Phones render everything a HAIR smaller so nothing sits a touch too wide / scrolls sideways.
        zoom (not transform) keeps the fixed bottom nav pinned correctly. overflow-x guard is a belt. */
@@ -550,10 +558,13 @@
     toast((d&&(d.error||d.message))||"Could not save referral",true);return false;
   }
   // ---------- watchlist (★ saved coins) ----------
+  // The API returns {watchlist:{rows,count}} (NOT a bare array). Pull out the rows so state.watchRows
+  // is ALWAYS an array — otherwise .map/.unshift on the object throws and the next star wipes the list.
+  function wlRows(wl){return (wl&&Array.isArray(wl.rows))?wl.rows:(Array.isArray(wl)?wl:[]);}
   async function loadWatch(){
     if(!state.token)return;
     const {ok,d}=await api("/api/web/watchlist");
-    if(ok&&d&&d.ok){state.watchRows=d.watchlist||[];state.watch=new Set(state.watchRows.map(w=>w.tokenMint));}
+    if(ok&&d&&d.ok){state.watchRows=wlRows(d.watchlist);state.watch=new Set(state.watchRows.map(w=>w.tokenMint));}
   }
   async function toggleStar(r){
     if(!(await ensureAccount()))return;
@@ -565,7 +576,7 @@
     const body={tokenMint:mint,action:on?"remove":"add"};
     if(!on&&typeof r==="object"){body.symbol=r.symbol||"";body.name=r.name||"";body.imageUrl=av(r)||"";}
     const {ok,d}=await jpost("/api/web/watchlist",body);
-    if(ok&&d&&d.ok){state.watchRows=d.watchlist||state.watchRows;state.watch=new Set(state.watchRows.map(w=>w.tokenMint));}
+    if(ok&&d&&d.ok){state.watchRows=wlRows(d.watchlist);state.watch=new Set(state.watchRows.map(w=>w.tokenMint));}
     toast(on?"Removed from Watchlist":"★ Saved to Watchlist");
     if(state.route==="trending"&&state.trendTab==="watch")renderTrending();
   }
@@ -1838,7 +1849,8 @@
   document.querySelectorAll("#botnav button[data-tools]").forEach(b=>b.onclick=()=>openToolsSheet());
   $("#walletPill").onclick=()=>go("wallet");
   // ★ Watchlist — top-bar shortcut straight to your saved coins (also the ★ Watchlist tab on Trending).
-  $("#watchBtn").onclick=()=>{state.trendTab="watch";go("trending");render();};
+  // Single render whether or not the hash changes, + a toast so the tap always gives clear feedback.
+  $("#watchBtn").onclick=()=>{state.trendTab="watch";if(location.hash==="#trending"){render();}else{location.hash="#trending";}try{toast("★ Your Watchlist");}catch(e){}};
   // Tools dropdown = click-toggle (hover dropdowns drop on the gap + don't work on touch).
   (function(){const drop=document.querySelector(".navdrop"),db=drop&&drop.querySelector(".dropbtn"),menu=$("#toolsMenu");
     if(menu)menu.innerHTML=TOOLS.map(t=>toolLinkHtml(t)).join("");
