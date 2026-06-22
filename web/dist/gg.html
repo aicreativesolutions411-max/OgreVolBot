@@ -238,6 +238,12 @@
   .devlivebox input{flex:1;min-width:0;background:rgba(6,10,7,.7);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:7px 9px;font-size:12px;outline:none}
   .livecard{display:flex;align-items:center;gap:9px;margin:10px 12px 0;padding:12px 14px;border:1px solid rgba(255,107,107,.4);border-radius:12px;background:rgba(255,107,107,.08);text-decoration:none;flex:0 0 auto}
   .livecard b{color:#ff8b8b;font-size:13px}.livecard .mut{margin-left:auto;font-size:11px;color:var(--muted)}
+  .chathead{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--border);flex:0 0 auto;background:rgba(7,11,7,.5)}
+  .chathead b{font-size:13px;color:var(--text)}
+  .chiplink{font-size:11px;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:4px 9px;text-decoration:none;background:rgba(8,13,9,.6);cursor:pointer;white-space:nowrap}
+  .chiplink:hover{color:var(--text);border-color:rgba(137,255,67,.3)}
+  .chiplink.on{color:#ff8b8b;border-color:rgba(255,107,107,.5);background:rgba(255,107,107,.08)}
+  .chathead #recClip{margin-left:auto}
   .txtbl{width:100%;border-collapse:collapse;font-size:12px}
   .txtbl th{position:sticky;top:0;background:#0a0f0a;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:right;padding:8px 14px;border-bottom:1px solid var(--border);z-index:1}
   .txtbl th:first-child{text-align:left}
@@ -942,12 +948,32 @@
     const {ok,d}=await jpost("/api/web/chat",{mint,text});
     if(ok&&d&&d.ok)renderChatLog(d.messages||[]);else{toast((d&&(d.error||d.message))||"Couldn't send",true);inp.value=text;}
   }
+  // Free screen recorder (no infra) — capture the site/chart and save a clip, like the old record tab.
+  let _rec=null,_recChunks=[];
+  async function recordClip(btn){
+    if(_rec&&_rec.state==="recording"){_rec.stop();return;}
+    if(!(navigator.mediaDevices&&navigator.mediaDevices.getDisplayMedia&&window.MediaRecorder)){toast("Screen recording needs desktop Chrome/Edge — on phone use your screen recorder.",true);return;}
+    let stream;try{stream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:30},audio:true});}catch(e){return;}
+    const mime=["video/mp4","video/webm;codecs=vp9,opus","video/webm"].find(t=>{try{return MediaRecorder.isTypeSupported(t);}catch(e){return false;}})||"";
+    _recChunks=[];_rec=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);
+    _rec.ondataavailable=(e)=>{if(e.data&&e.data.size)_recChunks.push(e.data);};
+    _rec.onstop=()=>{stream.getTracks().forEach(t=>t.stop());const ext=mime.indexOf("mp4")>-1?"mp4":"webm";const blob=new Blob(_recChunks,{type:mime||"video/webm"});const url=URL.createObjectURL(blob);const a=el("a");a.href=url;a.download="slimewire-clip-"+Date.now()+"."+ext;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);_rec=null;if(btn){btn.textContent="🎬 Record";btn.classList.remove("on");}toast("Clip saved ⬇");};
+    (stream.getVideoTracks()[0]||{}).addEventListener&&stream.getVideoTracks()[0].addEventListener("ended",()=>{if(_rec&&_rec.state==="recording")_rec.stop();});
+    _rec.start();if(btn){btn.textContent="⏹ Stop & save";btn.classList.add("on");}toast("🎬 Recording — pick a window/screen to capture");
+  }
   async function loadChatLive(mint){
     if(chatPollT){clearTimeout(chatPollT);chatPollT=null;}
     const pane=$('[data-pane="chat"]');if(!pane||!mint)return;
     if(!pane.querySelector(".chatwrap")){
-      pane.innerHTML='<div class="chatwrap"><div id="liveArea"></div><div id="devLive"></div><div class="chatlog" id="chatLog"><div class="loading" style="padding:20px"><span class="spin"></span></div></div>'+
-        '<div class="chatbar"><input id="chatMsg" maxlength="280" placeholder="Message $coin chat…"><button class="buybtn sm" id="chatSend">Send</button></div></div>';
+      const sym=(curTradeRow()&&curTradeRow().symbol)||short(mint);
+      pane.innerHTML='<div class="chatwrap">'+
+        '<div class="chathead"><b>💬 '+esc(sym)+' chat</b><span class="mut" style="font-size:10.5px">live on SlimeWire</span>'+
+          '<button class="chiplink" id="recClip" title="Record a clip of your screen">🎬 Record</button>'+
+          '<a class="chiplink" href="https://pump.fun/coin/'+esc(mint)+'" target="_blank" rel="noopener" title="See the pump.fun chat">pump chat ↗</a></div>'+
+        '<div id="liveArea"></div><div id="devLive"></div>'+
+        '<div class="chatlog" id="chatLog"><div class="loading" style="padding:20px"><span class="spin"></span></div></div>'+
+        '<div class="chatbar"><input id="chatMsg" maxlength="280" placeholder="Message '+esc(sym)+' chat…"><button class="buybtn sm" id="chatSend">Send</button></div></div>';
+      const rc=$("#recClip");if(rc)rc.onclick=(e)=>recordClip(e.currentTarget);
       $("#chatSend").onclick=()=>sendChat(mint);
       $("#chatMsg").onkeydown=(e)=>{if(e.key==="Enter")sendChat(mint);};
     }
