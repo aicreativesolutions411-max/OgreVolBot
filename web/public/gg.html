@@ -853,7 +853,9 @@
   // The plain call is instant but ST is often not loaded yet (holderCount null) — so we paint what we
   // have immediately, then force-hydrate ST in the background and repaint the holder cells. The forced
   // result is cached server-side, so the NEXT click on the same coin is instantly full.
-  function secHoldersReady(s){const mc=s&&s.marketContext;return !!(mc&&(mc.solanaTrackerLoaded||mc.holderCount!=null||mc.topHolderPercent!=null));}
+  // ST not loaded yet returns holderCount:0 (a zero, not null) — treat that as NOT ready so the
+  // background force still runs. Only solanaTrackerLoaded or a POSITIVE holder count counts as ready.
+  function secHoldersReady(s){const mc=s&&s.marketContext;return !!(mc&&(mc.solanaTrackerLoaded===true||Number(mc.holderCount)>0));}
   function paintSec(mint,s,loading){
     if(state.route!=="trade"||state.mint!==mint)return;
     const box=$("#secbox");if(!box)return;
@@ -1198,9 +1200,46 @@
       b.disabled=false;b.textContent="Start Volume";toast("Volume run done — "+res.okc+" trades"+(res.fail?", "+res.fail+" failed":""));refreshWallets();
     };
   }
+  function subbarToolKol(){
+    const sb=$("#subbar");sb.innerHTML="";
+    const back=el("button","chip");back.textContent="← Back";back.onclick=()=>go("trending");sb.appendChild(back);
+    const h=el("h1");h.style.fontSize="15px";h.textContent="Copy / KOLs";sb.appendChild(h);
+    const tabs=el("div","tabs");
+    [["hot","Hot"],["top","Top"],["consistent","Consistent"],["fresh","Fresh"]].forEach(([id,lab])=>{const b=el("button");b.textContent=lab;b.className=id===(state.kolMode||"hot")?"on":"";b.onclick=()=>{state.kolMode=id;renderCopy();};tabs.appendChild(b);});
+    sb.appendChild(tabs);
+  }
   async function renderCopy(){
-    setActiveView("v-copy");subbarTool("👥 Copy Trade");
-    $("#v-copy").innerHTML='<div class="empty"><div class="big">👥</div><div><b>Copy / KOL tracking is coming to /gg</b><br><span class="mut">Track top wallets and copy their buys — building this in natively next so it never sends you to the old site.</span></div><a class="cta" href="#trending">Back to Trending</a></div>';
+    setActiveView("v-copy");subbarToolKol();
+    const view=$("#v-copy");
+    view.innerHTML='<div class="wgrid">'+
+      '<div class="wbox"><h3>🎯 Copy any wallet</h3><p class="sub">Auto-buy whatever a wallet buys — from your wallet, your size, with auto-exit.</p>'+
+        '<div class="field"><label>Wallet to copy</label><input id="cpWallet" placeholder="Paste any Solana wallet address"></div>'+
+        '<div class="field row2"><div><label>Buy size (SOL)</label><input id="cpAmt" inputmode="decimal" value="0.1"></div><div><label>Slippage (bps)</label><input id="cpSlip" inputmode="numeric" value="500"></div></div>'+
+        '<div class="field row2"><div><label>Take profit %</label><input id="cpTp" inputmode="numeric" value="25"></div><div><label>Stop loss %</label><input id="cpSl" inputmode="numeric" value="8"></div></div>'+
+        '<button class="wbtn" id="cpGo">Start copying</button></div>'+
+      '<div class="wbox" style="grid-column:1/-1"><h3 id="kolH">🔥 KOL Buys</h3><p class="sub" id="kolD">What known KOL wallets are buying right now.</p><div id="kolList"><div class="loading" style="padding:18px"><span class="spin"></span></div></div></div>'+
+    '</div>';
+    $("#cpGo").onclick=async()=>{const w=$("#cpWallet").value.trim();if(!w){toast("Paste a wallet to copy.",true);return;}if(!(await ensureTradeReady()))return;const b=$("#cpGo");b.disabled=true;b.textContent="Starting…";const {ok,status,d}=await jpost("/api/web/kol/copy-wallet",{copyWallet:w,walletIndexes:[state.activeWallet],amountSol:$("#cpAmt").value.trim()||"0.1",slippageBps:Number($("#cpSlip").value.trim()||"500"),takeProfitPct:$("#cpTp").value.trim()||"25",stopLossPct:$("#cpSl").value.trim()||"8",sellDelay:"off",loopCount:"1"});b.disabled=false;b.textContent="Start copying";if(status===401){setToken("");go("wallet");return;}if(ok&&d&&d.ok){toast("Now copying "+short(w)+" — buys mirror to your wallet");}else toast((d&&d.error)||"Could not start copy",true);};
+    loadKol();
+  }
+  async function loadKol(){
+    const mode=state.kolMode||"hot";
+    const {d}=await api("/api/web/kol/scan?mode="+mode);
+    if(state.route!=="copy")return;
+    const sc=(d&&d.scan)||{};const rows=sc.rows||[];
+    const h=$("#kolH"),dd=$("#kolD");if(h)h.textContent="🔥 "+(sc.label||"KOL Buys");if(dd)dd.textContent=sc.description||"";
+    const list=$("#kolList");if(!list)return;
+    if(!rows.length){list.innerHTML='<p class="mut" style="font-size:12px">No KOL signals on this tab right now — try Hot / Top / Fresh.</p>';return;}
+    list.innerHTML=rows.map(r=>{
+      const chg=pctNum(r.h1!=null?r.h1:r.m5);const ccls=chg==null?"mut":(chg>=0?"up":"down");const ct=chg==null?"":((chg>=0?"+":"")+chg.toFixed(1)+"%");
+      return '<div class="walletrow" style="cursor:pointer" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+
+        '<div class="ico">'+(r.imageUrl?'<img src="'+esc(r.imageUrl)+'" style="width:100%;height:100%;border-radius:11px;object-fit:cover" onerror="this.replaceWith(document.createTextNode(\'🪙\'))">':'🪙')+'</div>'+
+        '<div class="info" style="min-width:0"><b>'+esc(r.symbol||short(r.tokenMint))+' <span class="mut" style="font-weight:500">'+ct+'</span></b><div class="addr mut">'+esc(r.kolName||r.signalType||"")+' · '+esc(r.marketCapLabel||"")+' MC</div></div>'+
+        '<div class="bal"><b>'+esc(r.valueLabel||r.volumeLabel||"")+'</b><span>'+esc(r.signalType||"KOL buy")+'</span></div>'+
+        '<button class="buybtn sm" style="margin-left:10px" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button>'+
+        (r.kolWallet?'<button class="wbtn ghost" style="margin-left:8px;padding:9px 12px" onclick="event.stopPropagation();GG.copyWallet(\''+esc(r.kolWallet)+'\')">Copy</button>':'')+
+      '</div>';
+    }).join("");
   }
 
   // ---------- sol price ----------
@@ -1234,6 +1273,7 @@
 
   // ---------- expose + boot ----------
   window.GG={open:(m)=>go("trade",m),openSell:(m)=>{state.pendingSell=m;go("trade",m);},go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,
+    copyWallet:(w)=>{const i=$("#cpWallet");if(i){i.value=w;i.scrollIntoView({behavior:"smooth",block:"center"});i.focus();toast("Wallet loaded — set your size, then Start copying");}},
     removeWalletPrompt:(i)=>{const w=state.wallets.find(x=>x.index===i);if(w)removeWalletModal(w);}};
   render();updateWalletPill();loadSol();setInterval(loadSol,60000);
   if(state.token){refreshWallets();loadPresets();}
