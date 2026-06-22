@@ -71,6 +71,7 @@
   .walletpill b{color:var(--text);font-weight:700;font-family:var(--mono);font-size:12px}
   .iconbtn{width:34px;justify-content:center;font-size:15px}.iconbtn:hover{color:var(--text);border-color:rgba(137,255,67,.3)}
   .watchbtn{color:#ffd54a}.watchbtn:hover{color:#ffd54a;border-color:rgba(255,213,74,.45)}.watchbtn.on{color:#ffd54a;border-color:rgba(255,213,74,.55);background:rgba(255,213,74,.1)}
+  .clipbtn.on{color:#ff6b6b;border-color:rgba(255,107,107,.55);background:rgba(255,107,107,.12)}
   .guidebar{display:flex;align-items:center;gap:13px;text-decoration:none;border:1px solid rgba(137,255,67,.28);border-radius:14px;padding:13px 16px;margin-bottom:14px;background:linear-gradient(135deg,rgba(137,255,67,.1),rgba(137,255,67,.03));transition:border-color .15s,background .15s}
   .guidebar:hover{border-color:rgba(137,255,67,.55);background:linear-gradient(135deg,rgba(137,255,67,.16),rgba(137,255,67,.05))}
   .guidebar .gi{font-size:22px;flex:0 0 auto;filter:drop-shadow(0 0 8px rgba(137,255,67,.5))}
@@ -320,6 +321,7 @@
        the ★ watchlist button against the wallet pill and pushed the "?" help icon off-screen). */
     .pastebtn .pblbl{display:none}
     .pastebtn{padding:0 10px}
+    .clipbtn{display:none}
     .topctrls{gap:6px}
     .topbar{gap:8px;padding:0 10px}
     .subbar{height:42px}
@@ -387,6 +389,7 @@
       <label class="searchbox"><span>🔍</span><input id="search" placeholder="Search name or CA…"><kbd>/</kbd></label>
       <button class="iconbtn watchbtn" id="watchBtn" title="Watchlist — your saved coins">★</button>
       <div class="walletpill" id="walletPill" title="Wallet"><span class="dot off"></span><b id="solBal">Connect</b></div>
+      <button class="iconbtn clipbtn" id="clipFarmBtn" data-icon="1" title="Clip farm — record a clip of your screen">🎬</button>
       <a class="iconbtn" href="/manual" target="_blank" title="Help">?</a>
     </div>
   </header>
@@ -957,9 +960,10 @@
     const mime=["video/mp4","video/webm;codecs=vp9,opus","video/webm"].find(t=>{try{return MediaRecorder.isTypeSupported(t);}catch(e){return false;}})||"";
     _recChunks=[];_rec=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);
     _rec.ondataavailable=(e)=>{if(e.data&&e.data.size)_recChunks.push(e.data);};
-    _rec.onstop=()=>{stream.getTracks().forEach(t=>t.stop());const ext=mime.indexOf("mp4")>-1?"mp4":"webm";const blob=new Blob(_recChunks,{type:mime||"video/webm"});const url=URL.createObjectURL(blob);const a=el("a");a.href=url;a.download="slimewire-clip-"+Date.now()+"."+ext;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);_rec=null;if(btn){btn.textContent="🎬 Record";btn.classList.remove("on");}toast("Clip saved ⬇");};
+    const ico=btn&&btn.dataset&&btn.dataset.icon;
+    _rec.onstop=()=>{stream.getTracks().forEach(t=>t.stop());const ext=mime.indexOf("mp4")>-1?"mp4":"webm";const blob=new Blob(_recChunks,{type:mime||"video/webm"});const url=URL.createObjectURL(blob);const a=el("a");a.href=url;a.download="slimewire-clip-"+Date.now()+"."+ext;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);_rec=null;if(btn){btn.textContent=ico?"🎬":"🎬 Record";btn.classList.remove("on");}toast("Clip saved ⬇");};
     (stream.getVideoTracks()[0]||{}).addEventListener&&stream.getVideoTracks()[0].addEventListener("ended",()=>{if(_rec&&_rec.state==="recording")_rec.stop();});
-    _rec.start();if(btn){btn.textContent="⏹ Stop & save";btn.classList.add("on");}toast("🎬 Recording — pick a window/screen to capture");
+    _rec.start();if(btn){btn.textContent=ico?"⏹":"⏹ Stop & save";btn.classList.add("on");}toast("🎬 Recording — pick a window/screen to capture");
   }
   async function loadChatLive(mint){
     if(chatPollT){clearTimeout(chatPollT);chatPollT=null;}
@@ -1937,6 +1941,8 @@
   // ★ Watchlist — top-bar shortcut straight to your saved coins (also the ★ Watchlist tab on Trending).
   // Single render whether or not the hash changes, + a toast so the tap always gives clear feedback.
   $("#watchBtn").onclick=()=>{state.trendTab="watch";if(location.hash==="#trending"){render();}else{location.hash="#trending";}try{toast("★ Your Watchlist");}catch(e){}};
+  // 🎬 Clip farm — record a screen clip from anywhere (desktop; phones use the OS recorder).
+  (function(){const cb=$("#clipFarmBtn");if(cb)cb.onclick=(e)=>recordClip(e.currentTarget);})();
   // Tools dropdown = click-toggle (hover dropdowns drop on the gap + don't work on touch).
   (function(){const drop=document.querySelector(".navdrop"),db=drop&&drop.querySelector(".dropbtn"),menu=$("#toolsMenu");
     if(menu)menu.innerHTML=TOOLS.map(t=>toolLinkHtml(t)).join("");
