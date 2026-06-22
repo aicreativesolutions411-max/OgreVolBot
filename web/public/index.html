@@ -68,6 +68,13 @@
   .walletpill b{color:var(--text);font-weight:700;font-family:var(--mono);font-size:12px}
   .iconbtn{width:34px;justify-content:center;font-size:15px}.iconbtn:hover{color:var(--text);border-color:rgba(137,255,67,.3)}
   .watchbtn{color:#ffd54a}.watchbtn:hover{color:#ffd54a;border-color:rgba(255,213,74,.45)}.watchbtn.on{color:#ffd54a;border-color:rgba(255,213,74,.55);background:rgba(255,213,74,.1)}
+  .guidebar{display:flex;align-items:center;gap:13px;text-decoration:none;border:1px solid rgba(137,255,67,.28);border-radius:14px;padding:13px 16px;margin-bottom:14px;background:linear-gradient(135deg,rgba(137,255,67,.1),rgba(137,255,67,.03));transition:border-color .15s,background .15s}
+  .guidebar:hover{border-color:rgba(137,255,67,.55);background:linear-gradient(135deg,rgba(137,255,67,.16),rgba(137,255,67,.05))}
+  .guidebar .gi{font-size:22px;flex:0 0 auto;filter:drop-shadow(0 0 8px rgba(137,255,67,.5))}
+  .guidebar .gt{display:flex;flex-direction:column;gap:2px;min-width:0}
+  .guidebar .gt b{color:var(--text);font-size:13.5px}
+  .guidebar .gt .sub{color:var(--muted);font-size:11.5px}
+  .guidebar .garrow{margin-left:auto;flex:0 0 auto;color:var(--green);font-weight:800;font-size:17px}
 
   /* sub bar */
   .subbar{display:flex;align-items:center;gap:16px;flex:0 0 auto;height:46px;padding:0 16px;background:rgba(7,11,7,.6);border-bottom:1px solid var(--border2);overflow-x:auto}
@@ -1292,8 +1299,10 @@
     if(state.route!=="wallet")return;
     const view=$("#v-wallet");if(!view)return;
     const wrap=el("div","wgrid");
+    // New users land here on connect — surface the guide first thing, clean and one tap.
+    const guideBar='<a class="guidebar" href="/manual" target="_blank" rel="noopener"><span class="gi">📖</span><span class="gt"><b>New here? Read the 2-min guide</b><span class="sub">Find coins, fund a wallet, buy in one tap — all of SlimeWire explained.</span></span><span class="garrow">→</span></a>';
     if(!state.token){
-      wrap.innerHTML='<div class="wbox"><h3>👛 Set up your trading wallet</h3><p class="sub">No sign-up, no email needed. Either create a fresh SlimeWire wallet, or connect Phantom/Solflare and move some SOL into one — then trade right here.</p>'+
+      wrap.innerHTML=guideBar+'<div class="wbox"><h3>👛 Set up your trading wallet</h3><p class="sub">No sign-up, no email needed. Either create a fresh SlimeWire wallet, or connect Phantom/Solflare and move some SOL into one — then trade right here.</p>'+
         '<div style="display:flex;flex-direction:column;gap:9px"><button class="wbtn" id="connectFundBtn">🔗 Connect &amp; fund (Phantom / Solflare)</button><button class="wbtn ghost" id="mkWallet">Create an empty wallet</button></div>'+
         '<p class="wnote" style="margin-top:12px">Your keys are yours. We hand you an encrypted backup and recovery file the moment it\'s created — save them.</p></div>';
     }else{
@@ -1308,7 +1317,7 @@
       const w=activeWalletObj();
       const tradePre=(state.presets.trade||[]).map(p=>presetChipHtml(p,"trade")).join("")||'<p class="mut" style="font-size:12px">No Quick Buy presets yet.</p>';
       const bundlePre=(state.presets.bundle||[]).map(p=>presetChipHtml(p,"bundle")).join("")||'<p class="mut" style="font-size:12px">No Bundle presets yet.</p>';
-      wrap.innerHTML='<div class="wbox"><h3>Your wallets</h3><p class="sub">Pick the wallet you trade with. Fund it by sending SOL to its address.</p>'+
+      wrap.innerHTML=guideBar+'<div class="wbox"><h3>Your wallets</h3><p class="sub">Pick the wallet you trade with. Fund it by sending SOL to its address.</p>'+
         (list||'<p class="mut">No wallets yet.</p>')+
         '<div style="display:flex;gap:9px;margin-top:6px;flex-wrap:wrap"><button class="wbtn" id="connectFundBtn" style="flex:1;min-width:160px">🔗 Connect &amp; fund</button><button class="wbtn ghost" id="mkWallet">+ New wallet</button><button class="wbtn ghost" id="refWallet">↻ Refresh</button></div></div>'+
         (w?'<div class="wbox"><h3>Deposit SOL</h3><p class="sub">Send SOL to your active wallet to start trading. Solana network only.</p>'+
