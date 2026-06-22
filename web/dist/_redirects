@@ -1,0 +1,15 @@
+# SlimeWire routing (Cloudflare Pages / any _redirects-aware proxy).
+# gg is THE site now and IS index.html, so "/" already serves it. These map the old-app entry
+# aliases onto the new app, archive the old terminal at /old (static, APIs off), and keep referral
+# links working. NOTE: no /api/* rule here on purpose — the existing API proxy is left untouched.
+/old            /old.html              200
+/old/*          /old.html              200
+/r/*            /?ref=:splat           302
+/launch-coin    /#launch               302
+/terminal       /index.html            200
+/terminal/*     /index.html            200
+/portal         /index.html            200
+/portal/*       /index.html            200
+/connect        /index.html            200
+/login          /index.html            200
+/account/login  /index.html            200

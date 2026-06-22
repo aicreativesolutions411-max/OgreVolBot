@@ -29519,25 +29519,9 @@ async function serveStaticHtmlPage(response, fileName, cacheControl = "public, m
 // market/data host return empty — so it renders the old UI shell with ZERO pairs loaded and ZERO API
 // credits spent. Its assets (app.js/css/images) still load via the absolute /paths (base href="/").
 async function serveOldReference(response) {
-  try {
-    let html = await fs.readFile(path.join(WEB_STATIC_DIR, "index.html"), "utf8");
-    const guard = '<script>(function(){'
-      + 'var DATA=/\\/api\\/|ogrevolbot\\.onrender|dexscreener|geckoterminal|pumpportal|solanatracker|kolscan|birdeye|helius|alchemy|quiknode|rpcpool|jup\\.ag|jupiter|block-engine|unavatar|weserv/i;'
-      + 'function empty(){return Promise.resolve(new Response(\'{"ok":false,"referenceOnly":true,"rows":[],"livePairs":{"rows":[]},"positions":[],"balances":[]}\',{status:200,headers:{"Content-Type":"application/json"}}));}'
-      + 'var of=window.fetch;if(of)window.fetch=function(u){try{var s=(typeof u==="string")?u:(u&&u.url)||"";if(DATA.test(s))return empty();}catch(e){}return of.apply(this,arguments);};'
-      + 'try{var ox=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){this.__blk=DATA.test(String(u||""));return ox.apply(this,arguments);};'
-      + 'var os=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.send=function(){if(this.__blk){try{this.abort();}catch(e){}return;}return os.apply(this,arguments);};}catch(e){}'
-      + 'try{window.WebSocket=function(){return {close:function(){},send:function(){},addEventListener:function(){},removeEventListener:function(){}};};}catch(e){}'
-      + 'window.addEventListener("DOMContentLoaded",function(){try{var b=document.createElement("div");b.textContent="📦 Reference snapshot of the old terminal — live data is off (no APIs/credits). The live app is at slimewire.org.";'
-      + 'b.style.cssText="position:fixed;left:0;right:0;top:0;z-index:99999;background:#1c2a16;color:#bdf08a;font:600 12px/1.4 system-ui,sans-serif;padding:7px 12px;text-align:center;border-bottom:1px solid #2c4022";document.body.appendChild(b);document.body.style.paddingTop="30px";}catch(e){}});'
-      + '})();</script>';
-    html = html.replace(/<head([^>]*)>/i, (m) => m + guard);
-    response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store, max-age=0" });
-    response.end(html);
-  } catch {
-    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-    response.end("Not found");
-  }
+  // old.html is the FROZEN old terminal with the data-API guard baked in (built from the original
+  // index.html). index.html itself is now the new gg app, so we serve old.html for /old.
+  await serveStaticHtmlPage(response, "old.html", "no-store, max-age=0");
 }
 
 async function serveTokenSharePage(requestUrl, response) {
