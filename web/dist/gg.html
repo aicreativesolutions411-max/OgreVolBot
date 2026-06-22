@@ -399,7 +399,7 @@
       <label class="searchbox"><span>🔍</span><input id="search" placeholder="Search name or CA…"><kbd>/</kbd></label>
       <button class="iconbtn watchbtn" id="watchBtn" title="Watchlist — your saved coins">★</button>
       <div class="walletpill" id="walletPill" title="Wallet"><span class="dot off"></span><b id="solBal">Connect</b></div>
-      <button class="iconbtn clipbtn" id="clipFarmBtn" data-icon="1" title="Clip farm — record a clip of your screen">🎬</button>
+      <button class="iconbtn clipbtn" id="clipFarmBtn" data-icon="1" title="Clip farm — record a shareable SlimeWire clip (works on phone too)">🎬</button>
       <a class="iconbtn" href="/manual" target="_blank" title="Help">?</a>
     </div>
   </header>
@@ -992,19 +992,87 @@
     const {ok,d}=await jpost("/api/web/chat",{mint,text});
     if(ok&&d&&d.ok)renderChatLog(d.messages||[]);else{toast((d&&(d.error||d.message))||"Couldn't send",true);inp.value=text;}
   }
-  // Free screen recorder (no infra) — capture the site/chart and save a clip, like the old record tab.
-  let _rec=null,_recChunks=[];
+  // Free in-site clip recorder — works on PHONE without the OS screen recorder (like the old site):
+  // desktop captures the screen; phone renders a branded portrait clip of the live picks to a canvas
+  // and records it via captureStream. Result opens a Save / Share / 𝕏 / TG / Cancel sheet.
+  let _rec=null,_recChunks=[],_recCanvasTimer=null,_recStopTimer=null,_recClip=null;
+  function recCanScreen(){return !!(navigator.mediaDevices&&navigator.mediaDevices.getDisplayMedia&&window.MediaRecorder);}
+  function recIsPhone(){return (window.matchMedia&&window.matchMedia("(max-width:820px)").matches)||/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent||"");}
+  function recMime(){return ["video/mp4;codecs=avc1.42E01E,mp4a.40.2","video/mp4","video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"].find(t=>{try{return MediaRecorder.isTypeSupported(t);}catch(e){return false;}})||"";}
+  function recExt(m){return /image\/png/i.test(m||"")?"png":/mp4/i.test(m||"")?"mp4":"webm";}
+  function recSetBtn(btn,on){if(!btn)return;const ic=btn.dataset&&btn.dataset.icon;btn.textContent=on?(ic?"⏹":"⏹ Stop"):(ic?"🎬":"🎬 Record");btn.classList.toggle("on",on);}
+  function recCleanup(){if(_recCanvasTimer){clearInterval(_recCanvasTimer);_recCanvasTimer=null;}if(_recStopTimer){clearTimeout(_recStopTimer);_recStopTimer=null;}try{_rec&&_rec._stream&&_rec._stream.getTracks().forEach(t=>t.stop());}catch(e){}}
+  function recRows(){const rows=(state.rows&&state.rows.length?state.rows:[]).filter(r=>r&&r.tokenMint).slice(0,4);return rows.length?rows:[{symbol:"SlimeWire",name:"Live Terminal",marketCapLabel:"live",liquidityLabel:"live",volumeH1Label:"live"}];}
+  function recDrawFrame(cv,rows,progress){
+    const ctx=cv.getContext&&cv.getContext("2d");if(!ctx)return;
+    const W=720,H=1280,scale=Math.max(1,Math.min(2,window.devicePixelRatio||1));
+    if(cv.width!==W*scale){cv.width=W*scale;cv.height=H*scale;}
+    ctx.setTransform(scale,0,0,scale,0,0);
+    ctx.fillStyle="#020803";ctx.fillRect(0,0,W,H);
+    const g=ctx.createRadialGradient(W*0.2,H*0.12,20,W*0.2,H*0.12,460);g.addColorStop(0,"rgba(118,255,45,0.33)");g.addColorStop(1,"rgba(118,255,45,0)");ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+    ctx.strokeStyle="rgba(118,255,45,0.38)";ctx.lineWidth=2;ctx.strokeRect(24,24,W-48,H-48);
+    ctx.fillStyle="#baff4d";ctx.font="900 34px Arial,sans-serif";ctx.fillText("SlimeWire REC",48,88);
+    ctx.fillStyle="#f4fff0";ctx.font="800 54px Arial,sans-serif";ctx.fillText("Fresh Live Picks",48,154);
+    ctx.fillStyle="rgba(226,255,215,.78)";ctx.font="700 22px Arial,sans-serif";ctx.fillText("slimewire.org · "+new Date().toLocaleTimeString([],{hour:"numeric",minute:"2-digit"}),48,196);
+    const bw=W-96;ctx.fillStyle="rgba(118,255,45,.12)";ctx.fillRect(48,226,bw,12);ctx.fillStyle="#78ff2d";ctx.fillRect(48,226,Math.max(24,bw*Math.max(0,Math.min(1,progress||0))),12);
+    rows.forEach((r,i)=>{
+      const y=292+i*188;
+      const sym=String(r.symbol||short(r.tokenMint||"")||"Token").slice(0,18);
+      const nm=String(r.name||"fresh pair").slice(0,34);
+      const mc=String(r.marketCapLabel||"live").slice(0,10),liq=String(r.liquidityLabel||"live").slice(0,10),vol=String(r.volumeH1Label||r.volumeLabel||"live").slice(0,10),age=String(ageLabel(r)||"live").slice(0,10);
+      ctx.fillStyle="rgba(4,24,8,.92)";ctx.strokeStyle="rgba(118,255,45,.34)";ctx.lineWidth=2;ctx.beginPath();
+      if(ctx.roundRect)ctx.roundRect(48,y,W-96,156,18);else ctx.rect(48,y,W-96,156);ctx.fill();ctx.stroke();
+      ctx.fillStyle="#f4fff0";ctx.font="900 32px Arial,sans-serif";ctx.fillText(sym,76,y+48);
+      ctx.fillStyle="rgba(226,255,215,.72)";ctx.font="700 18px Arial,sans-serif";ctx.fillText(nm,76,y+78);
+      [["MC",mc],["LIQ",liq],["VOL",vol],["AGE",age]].forEach((p,j)=>{const x=76+j*150;ctx.fillStyle="#aaff8f";ctx.font="800 15px Arial,sans-serif";ctx.fillText(p[0],x,y+114);ctx.fillStyle="#fff";ctx.font="900 22px Arial,sans-serif";ctx.fillText(String(p[1]),x,y+142);});
+    });
+    ctx.fillStyle="#78ff2d";ctx.font="900 24px Arial,sans-serif";ctx.fillText("slimewire.org",48,H-44);
+  }
+  function recShowResult(blob,mime){
+    if(_recClip&&_recClip.url){try{URL.revokeObjectURL(_recClip.url);}catch(e){}}
+    const url=URL.createObjectURL(blob),ext=recExt(mime),isImg=/image/i.test(mime||""),name="slimewire-clip-"+Date.now()+"."+ext;
+    _recClip={url:url,blob:blob,mime:mime,name:name};
+    const tw="https://twitter.com/intent/tweet?text="+encodeURIComponent("Farming clips on SlimeWire 🐸 https://slimewire.org");
+    const tg="https://t.me/share/url?url="+encodeURIComponent("https://slimewire.org")+"&text="+encodeURIComponent("Farming clips on SlimeWire 🐸");
+    const preview=isImg?'<img src="'+url+'" style="width:100%;border-radius:12px;border:1px solid var(--border2)">':'<video src="'+url+'" autoplay loop muted playsinline controls style="width:100%;max-height:48vh;border-radius:12px;border:1px solid var(--border2);background:#000"></video>';
+    openModal('<h3>🎬 Your clip</h3>'+preview+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">'+
+        '<button class="wbtn" id="clipSave" style="flex:1 1 110px">⬇ Save</button>'+
+        '<button class="wbtn ghost" id="clipShare" style="flex:1 1 110px">📤 Share</button>'+
+        '<a class="wbtn ghost" href="'+tw+'" target="_blank" rel="noopener" style="flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;min-width:46px">𝕏</a>'+
+        '<a class="wbtn ghost" href="'+tg+'" target="_blank" rel="noopener" style="flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;min-width:46px">TG</a>'+
+        '<button class="wbtn ghost" onclick="GG.closeModal()" style="flex:0 0 auto">Cancel</button>'+
+      '</div>'+
+      '<p class="mut" style="font-size:11px;margin:10px 0 0">Save the clip, then attach it to your 𝕏 / Telegram post.</p>');
+    const sv=$("#clipSave");if(sv)sv.onclick=()=>{const a=el("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();toast("Clip saved ⬇");};
+    const sh=$("#clipShare");if(sh)sh.onclick=async()=>{try{const f=new File([blob],name,{type:mime||"video/webm"});if(navigator.canShare&&navigator.canShare({files:[f]})&&navigator.share){await navigator.share({title:"SlimeWire clip",text:"Farming clips on SlimeWire",files:[f]});return;}}catch(e){if(e&&e.name==="AbortError")return;}toast("Use Save, then attach to 𝕏 / Telegram",true);};
+  }
+  function recFinish(btn,mime){const m=mime||"video/webm";const blob=new Blob(_recChunks,{type:m});_rec=null;recSetBtn(btn,false);recCleanup();if(blob.size)recShowResult(blob,blob.type||m);else toast("No clip captured",true);}
+  function recStartCanvas(btn){
+    const cv=el("canvas"),rows=recRows(),cap=cv.captureStream||cv.mozCaptureStream;
+    if(!cap||!window.MediaRecorder){recDrawFrame(cv,rows,1);if(cv.toBlob)cv.toBlob(b=>{b?recShowResult(b,"image/png"):toast("Couldn't make a clip here",true);},"image/png",0.92);else toast("Recording isn't supported in this browser",true);return;}
+    const stream=cap.call(cv,12),mime=recMime();_recChunks=[];
+    _rec=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);_rec._stream=stream;
+    const start=Date.now();recDrawFrame(cv,rows,0);
+    _recCanvasTimer=setInterval(()=>recDrawFrame(cv,rows,(Date.now()-start)/4200),1000/12);
+    _rec.ondataavailable=(e)=>{if(e.data&&e.data.size)_recChunks.push(e.data);};
+    _rec.onstop=()=>recFinish(btn,mime);
+    _rec.start(400);recSetBtn(btn,true);toast("🎬 Recording your live picks…");
+    _recStopTimer=setTimeout(()=>{if(_rec&&_rec.state==="recording")_rec.stop();},4300);
+  }
+  async function recStartScreen(btn){
+    let stream;try{stream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:30},audio:true});}catch(e){recSetBtn(btn,false);return;}
+    const mime=recMime();_recChunks=[];_rec=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);_rec._stream=stream;
+    _rec.ondataavailable=(e)=>{if(e.data&&e.data.size)_recChunks.push(e.data);};
+    _rec.onstop=()=>recFinish(btn,mime);
+    const vt=stream.getVideoTracks()[0];if(vt&&vt.addEventListener)vt.addEventListener("ended",()=>{if(_rec&&_rec.state==="recording")_rec.stop();});
+    _rec.start();recSetBtn(btn,true);toast("🎬 Recording — pick a window/screen, tap again to stop");
+  }
   async function recordClip(btn){
     if(_rec&&_rec.state==="recording"){_rec.stop();return;}
-    if(!(navigator.mediaDevices&&navigator.mediaDevices.getDisplayMedia&&window.MediaRecorder)){toast("Screen recording needs desktop Chrome/Edge — on phone use your screen recorder.",true);return;}
-    let stream;try{stream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:30},audio:true});}catch(e){return;}
-    const mime=["video/mp4","video/webm;codecs=vp9,opus","video/webm"].find(t=>{try{return MediaRecorder.isTypeSupported(t);}catch(e){return false;}})||"";
-    _recChunks=[];_rec=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);
-    _rec.ondataavailable=(e)=>{if(e.data&&e.data.size)_recChunks.push(e.data);};
-    const ico=btn&&btn.dataset&&btn.dataset.icon;
-    _rec.onstop=()=>{stream.getTracks().forEach(t=>t.stop());const ext=mime.indexOf("mp4")>-1?"mp4":"webm";const blob=new Blob(_recChunks,{type:mime||"video/webm"});const url=URL.createObjectURL(blob);const a=el("a");a.href=url;a.download="slimewire-clip-"+Date.now()+"."+ext;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);_rec=null;if(btn){btn.textContent=ico?"🎬":"🎬 Record";btn.classList.remove("on");}toast("Clip saved ⬇");};
-    (stream.getVideoTracks()[0]||{}).addEventListener&&stream.getVideoTracks()[0].addEventListener("ended",()=>{if(_rec&&_rec.state==="recording")_rec.stop();});
-    _rec.start();if(btn){btn.textContent=ico?"⏹":"⏹ Stop & save";btn.classList.add("on");}toast("🎬 Recording — pick a window/screen to capture");
+    // Phone (or no screen-capture API): branded live-picks clip — no OS screen recorder needed. Desktop: real screen capture.
+    if(!recIsPhone()&&recCanScreen())return recStartScreen(btn);
+    return recStartCanvas(btn);
   }
   async function loadChatLive(mint){
     if(chatPollT){clearTimeout(chatPollT);chatPollT=null;}
@@ -1013,7 +1081,7 @@
       const sym=(curTradeRow()&&curTradeRow().symbol)||short(mint);
       pane.innerHTML='<div class="chatwrap">'+
         '<div class="chathead"><b>💬 '+esc(sym)+' chat</b><span class="mut" style="font-size:10.5px">live on SlimeWire</span>'+
-          '<button class="chiplink" id="recClip" title="Record a clip of your screen">🎬 Record</button>'+
+          '<button class="chiplink" id="recClip" title="Record a shareable SlimeWire clip (works on phone too)">🎬 Record</button>'+
           '<a class="chiplink" href="https://pump.fun/coin/'+esc(mint)+'" target="_blank" rel="noopener" title="See the pump.fun chat">pump chat ↗</a></div>'+
         '<div id="liveArea"></div><div id="devLive"></div>'+
         '<div class="chatlog" id="chatLog"><div class="loading" style="padding:20px"><span class="spin"></span></div></div>'+
@@ -1277,7 +1345,7 @@
   // result is cached server-side, so the NEXT click on the same coin is instantly full.
   // ST not loaded yet returns holderCount:0 (a zero, not null) — treat that as NOT ready so the
   // background force still runs. Only solanaTrackerLoaded or a POSITIVE holder count counts as ready.
-  function secHoldersReady(s){const mc=s&&s.marketContext;return !!(mc&&(mc.solanaTrackerLoaded===true||Number(mc.holderCount)>0));}
+  function secHoldersReady(s){const mc=s&&s.marketContext;return !!(mc&&(mc.solanaTrackerLoaded===true||mc.onchainHoldersLoaded===true||Number(mc.holderCount)>0||Number(mc.topHolderPercent)>0));}
   function paintSec(mint,s,loading){
     if(state.route!=="trade"||state.mint!==mint)return;
     const box=$("#secbox");if(!box)return;
@@ -1295,6 +1363,7 @@
       '<div class="secgrid">'+
       '<div class="cell"><b>'+(holders==null?(loading?'<span class="spin sm"></span>':'—'):Math.round(holders))+'</b><span>Holders</span></div>'+
       cell(n(mc.topHolderPercent),'%','Top holder')+
+      cell(n(mc.top10Percent),'%','Top 10')+
       cell(devHoldFallback,'%','Dev holds')+
       cell(n(mc.snipersPercent),'%','Snipers')+
       cell(n(mc.insidersPercent),'%','Insiders')+

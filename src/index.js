@@ -86,6 +86,7 @@ import {
 import { createTokenMetadataResolver } from "./lib/tokenMetadataResolver.js";
 import { createPumpPortalStream } from "./lib/pumpPortalStream.js";
 import { computeSlimeShield, slimeShieldHasHardDanger } from "./lib/slimeShield.js";
+import { computeOnchainDistribution } from "./lib/onchainHolders.js";
 import * as callerIntel from "./lib/callerIntel.js";
 import { computeCalibration as computeAutopilotCalibration, computeCalibrationByMode, modeScorecard } from "./lib/selfCalibration.js";
 import { r2PutObject, r2Configured } from "./lib/r2.js";
@@ -34386,15 +34387,19 @@ function devInfoMarketContextFromRow(row = {}, mint = "") {
     metadataAuthority: firstString(row.metadataAuthority, row.updateAuthority),
     mintAuthority: firstString(row.mintAuthority),
     freezeAuthority: firstString(row.freezeAuthority),
-    // Solana Tracker on-chain holder/concentration data (real numbers that fill the Dev Info void).
+    // On-chain holder/concentration data — filled FREE from our RPC (computeOnchainDistribution),
+    // with Solana Tracker as an optional fallback if a key is still set.
     holderCount: firstMeaningfulNumber(row.holderCount),
     topHolderPercent: firstMeaningfulNumber(row.topHolderPercent),
+    top10Percent: firstMeaningfulNumber(row.top10Percent),
     snipersPercent: firstMeaningfulNumber(row.snipersPercent),
     insidersPercent: firstMeaningfulNumber(row.insidersPercent),
     bundlersPercent: firstMeaningfulNumber(row.bundlersPercent),
     devHoldPercent: firstMeaningfulNumber(row.devHoldPercent),
     lpBurnedPercent: firstMeaningfulNumber(row.lpBurnedPercent),
+    poolPercent: firstMeaningfulNumber(row.poolPercent),
     solanaTrackerLoaded: Boolean(row.solanaTrackerLoaded),
+    onchainHoldersLoaded: Boolean(row.onchainHoldersLoaded),
     heliusDasIndexedAt: firstString(row.heliusDasIndexedAt),
     pairCreatedAt: Number.isFinite(pairCreatedAt) ? pairCreatedAt : null,
     pairAgeMinutes: Number.isFinite(pairAgeMinutes) ? pairAgeMinutes : null,
@@ -34465,7 +34470,7 @@ async function hydrateMarketRowFromPublicSources(mint = "", row = null, reason =
   if (st.rugged) stRiskFlags.push("rugged");
   // (top-holder concentration is scored precisely from the real % in computeSlimeShield, not as a flag.)
   const authorityRiskFlags = Array.isArray(heliusMeta.riskFlags) ? heliusMeta.riskFlags : [];
-  return {
+  const hydrated = {
     ...baseRow,
     tokenMint: cleanMint,
     mint: cleanMint,
@@ -34529,6 +34534,30 @@ async function hydrateMarketRowFromPublicSources(mint = "", row = null, reason =
       pumpMeta.creatorWallet || pumpMeta.creator ? `pump-dex-hydration:${reason}` : `dexscreener-hydration:${reason}`
     )
   };
+  // FREE on-chain holder/concentration read — the no-cost replacement for Solana Tracker. On-demand
+  // only (the user opened Dev Info / SlimeShield => forceRefresh), reads straight off our own RPC
+  // (getTokenLargestAccounts + supply, pools/curve/burn excluded), and is PRIMARY over any ST values
+  // so the dossier + verdict stay fully populated with NO Solana Tracker subscription.
+  if (forceRefresh) {
+    try {
+      const dist = await computeOnchainDistribution({
+        mint: cleanMint,
+        creatorWallet: hydrated.creatorWallet || hydrated.creator || hydrated.deployerWallet || "",
+        rpcRead,
+        withHolderCount: String(process.env.ONCHAIN_HOLDER_COUNT_ENABLED || "false").toLowerCase() === "true"
+      });
+      if (dist && dist.onchainLoaded) {
+        if (Number.isFinite(dist.topHolderPercent)) hydrated.topHolderPercent = dist.topHolderPercent;
+        if (Number.isFinite(dist.top10Percent)) hydrated.top10Percent = dist.top10Percent;
+        if (Number.isFinite(dist.devHoldPercent)) hydrated.devHoldPercent = dist.devHoldPercent;
+        if (Number.isFinite(dist.poolPercent)) hydrated.poolPercent = dist.poolPercent;
+        if (Number.isFinite(dist.burnedPercent)) hydrated.tokenBurnedPercent = dist.burnedPercent;
+        if (Number.isFinite(dist.holderCount)) hydrated.holderCount = firstMeaningfulNumber(dist.holderCount, hydrated.holderCount);
+        hydrated.onchainHoldersLoaded = true;
+      }
+    } catch { /* ST/UI still render without it */ }
+  }
+  return hydrated;
 }
 
 async function queueDevInfoHydration(mint = "", row = null, reason = "request") {

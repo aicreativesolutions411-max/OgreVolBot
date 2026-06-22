@@ -254,16 +254,19 @@ export function computeSlimeShield(row = {}, options = {}) {
     }
   }
 
-  // SOLANA TRACKER (paid /tokens/{mint}) — the real on-chain risk read the free engines miss:
-  // top-holder concentration, LP burn, and a deployer rug verdict. A loaded report is a KNOWN
-  // signal (lifts confidence out of "low"), filling the void Dev Info/SlimeShield used to show blank.
-  if (row.solanaTrackerLoaded) {
-    knownSignals.push("solanatracker");
+  // On-chain risk read the free security engines miss: top-holder concentration, LP burn, dev/insider
+  // holdings. Now sourced FREE from our own RPC (row.onchainHoldersLoaded) — Solana Tracker
+  // (row.solanaTrackerLoaded) stays as an optional fallback. Either one is a KNOWN signal that lifts
+  // confidence out of "low" and fills the void Dev Info/SlimeShield used to show blank.
+  if (row.solanaTrackerLoaded || row.onchainHoldersLoaded) {
+    knownSignals.push(row.onchainHoldersLoaded ? "onchainHolders" : "solanatracker");
     if (row.stRugged === true) {
       score -= 40;
       factors.push(factor("st_rugged", "Solana Tracker", "risk", "Solana Tracker flags this token as rugged.", -40));
     }
-    const topHold = firstNumber(row.topHolderPercent);
+    // Prefer the aggregate top-10 concentration (what "top holders control X%" means); fall back to
+    // the single-largest value when only that is available (e.g. an ST-only row).
+    const topHold = firstNumber(row.top10Percent, row.topHolderPercent);
     if (Number.isFinite(topHold) && topHold > 0) {
       if (topHold >= 80) {
         score -= 18;
