@@ -591,7 +591,7 @@
     [["5m","5M"],["h1","1H"],["h24","24H"]].forEach(([k,lab])=>{const b=el("button");b.textContent=lab;b.className=k===state.volTf?"on":"";b.onclick=()=>{state.volTf=k;render();};tfs.appendChild(b);});
     sb.appendChild(tfs);
     const q=state.quickBuy;const qb=el("button","chip qbpill");qb.style.cssText="margin-left:auto";
-    qb.innerHTML=q&&Number(q.amt)>0?('⚡ '+Number(q.amt).toFixed(3).replace(/0+$/,"").replace(/\.$/,"")+'◎'+(q.presetId?' +TP/SL':'')):'⚡ Set 1-click buy';
+    qb.innerHTML=q&&Number(q.amt)>0?('⚡ '+Number(q.amt).toFixed(3).replace(/0+$/,"").replace(/\.$/,"")+'◎'+((q.tp||q.sl||q.presetId)?' +exits':'')):'⚡ Set 1-click buy';
     qb.title="Your 1-click ⚡ Buy amount — tap to change";qb.onclick=()=>openQuickBuyModal(null);sb.appendChild(qb);
   }
   function subbarTrenches(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Trenches";sb.appendChild(h);const n=el("div","mut");n.style.cssText="margin-left:10px;font-size:11px";n.textContent="Fresh → about to migrate → graduated. Live SlimeWire feed.";sb.appendChild(n);}
@@ -925,34 +925,38 @@
   // 1-click buy contract: once you've set a quick-buy amount (+ optional TP/SL preset), the ⚡ Buy on
   // any pair fires instantly with it — no menu. The FIRST time (nothing set) it opens the quick-buy
   // sheet to pick the amount/preset, then buys. Stored in localStorage so it persists.
-  function setQuickBuy(amt,presetId){state.quickBuy={amt:Number(amt),presetId:presetId||""};localStorage.setItem("ggQuickBuy",JSON.stringify(state.quickBuy));if(state.route==="trending")subbarTrending();}
+  function setQuickBuy(o){state.quickBuy=Object.assign({amt:0.1,presetId:"",tp:"",sl:"",slip:""},o);localStorage.setItem("ggQuickBuy",JSON.stringify(state.quickBuy));if(state.route==="trending")subbarTrending();}
   function clearQuickBuy(){state.quickBuy=null;localStorage.removeItem("ggQuickBuy");if(state.route==="trending")subbarTrending();}
-  async function execQuickBuy(mint,amt,presetId){
-    const p=(state.presets.trade||[]).find(x=>x.id===presetId)||null;
-    const body={tokenMint:mint,walletIndex:state.activeWallet,amountSol:String(amt),slippageBps:(p&&p.slippageBps)||"500",tradeAttemptId:attemptId()};
-    if(p&&(p.takeProfitPct||p.stopLossPct||(p.sellDelay&&p.sellDelay!=="off"))){body.autoExit=true;body.takeProfitPct=p.takeProfitPct||"";body.stopLossPct=p.stopLossPct||"";body.sellDelay=p.sellDelay||"off";body.sellPercent=p.sellPercent||"100";}
-    toast("Buying ◎"+Number(amt).toFixed(3)+"…");
+  async function execQuickBuy(mint,q){
+    q=q||state.quickBuy||{};
+    // Your OWN take-profit / stop-loss win; otherwise fall back to a saved preset's exits.
+    const p=q.presetId?((state.presets.trade||[]).find(x=>x.id===q.presetId)||null):null;
+    const tp=q.tp||(p&&p.takeProfitPct)||"",sl=q.sl||(p&&p.stopLossPct)||"";
+    const body={tokenMint:mint,walletIndex:state.activeWallet,amountSol:String(q.amt),slippageBps:String(q.slip||(p&&p.slippageBps)||"500"),tradeAttemptId:attemptId()};
+    if(tp||sl||(p&&p.sellDelay&&p.sellDelay!=="off")){body.autoExit=true;body.takeProfitPct=tp;body.stopLossPct=sl;body.sellDelay=(p&&p.sellDelay)||"off";body.sellPercent=(p&&p.sellPercent)||"100";}
+    toast("Buying ◎"+Number(q.amt).toFixed(3)+"…");
     const {ok,status,d}=await jpost("/api/web/trade/buy",body);
-    handleTradeResult(ok,status,d,"Buy ◎"+Number(amt).toFixed(3));
+    handleTradeResult(ok,status,d,"Buy ◎"+Number(q.amt).toFixed(3));
   }
   async function quickBuy(mint){
     if(!(await ensureTradeReady()))return;
     const q=state.quickBuy;
-    if(q&&Number(q.amt)>0)return execQuickBuy(mint,q.amt,q.presetId);
+    if(q&&Number(q.amt)>0)return execQuickBuy(mint,q);
     openQuickBuyModal(mint);
   }
   function openQuickBuyModal(mint){
-    const presets=state.presets.trade||[];const cur=state.quickBuy||{amt:0.1,presetId:""};
+    const presets=state.presets.trade||[];const cur=state.quickBuy||{amt:0.1,presetId:"",tp:"",sl:"",slip:""};
     const chips=["0.1","0.25","0.5","1"].map(v=>'<button data-v="'+v+'">'+v+'◎</button>').join("");
-    const popts=['<option value="">Manual — no auto-exit</option>'].concat(presets.map(p=>'<option value="'+esc(p.id)+'"'+(p.id===cur.presetId?" selected":"")+'>'+esc(p.name||"Preset")+(p.takeProfitPct?" · TP "+esc(p.takeProfitPct)+"%":"")+(p.stopLossPct?" · SL "+esc(p.stopLossPct)+"%":"")+'</option>')).join("");
+    const popts=['<option value="">My own TP/SL below</option>'].concat(presets.map(p=>'<option value="'+esc(p.id)+'"'+(p.id===cur.presetId?" selected":"")+'>'+esc(p.name||"Preset")+(p.takeProfitPct?" · TP "+esc(p.takeProfitPct)+"%":"")+(p.stopLossPct?" · SL "+esc(p.stopLossPct)+"%":"")+'</option>')).join("");
     openModal('<h3>⚡ Quick Buy'+(mint?' · '+esc(short(mint)):'')+'</h3>'+
-      '<p class="sub" style="font-size:12px">Pick your 1-click amount'+(presets.length?' and an optional auto-exit preset':'')+'. After this, ⚡ Buy on any pair fires instantly with these settings.</p>'+
+      '<p class="sub" style="font-size:12px">Set your own 1-click amount + take-profit / stop-loss. After this, ⚡ Buy on any pair fires instantly with these settings.</p>'+
       '<div class="field"><label>Amount (SOL)</label><div class="chips" id="qbChips">'+chips+'</div><input id="qbAmt" inputmode="decimal" value="'+esc(String(cur.amt||"0.1"))+'" style="margin-top:8px"></div>'+
-      '<div class="field"><label>Auto-exit preset</label><select id="qbPreset">'+popts+'</select>'+(presets.length?'':'<span class="mut" style="font-size:11px">No presets yet — add TP/SL presets in Wallet ▸ Presets.</span>')+'</div>'+
+      '<div class="field row2"><div><label>Take profit %</label><input id="qbTp" inputmode="numeric" placeholder="off" value="'+esc(cur.tp||"")+'"></div><div><label>Stop loss %</label><input id="qbSl" inputmode="numeric" placeholder="off" value="'+esc(cur.sl||"")+'"></div></div>'+
+      '<div class="field row2"><div><label>Slippage (bps)</label><input id="qbSlip" inputmode="numeric" placeholder="500" value="'+esc(cur.slip||"")+'"></div><div><label>or use a saved preset</label><select id="qbPreset">'+popts+'</select></div></div>'+
       '<div class="bsrow"><button class="bigbuy" id="qbGo" style="flex:2">'+(mint?'Save & Buy':'Save 1-click')+'</button>'+(state.quickBuy?'<button class="wbtn ghost" id="qbClear" style="flex:1">Reset</button>':'')+'</div>');
     const amtIn=$("#qbAmt");
     $("#qbChips").querySelectorAll("button").forEach(b=>b.onclick=()=>{amtIn.value=b.dataset.v;});
-    $("#qbGo").onclick=async()=>{const amt=Number(amtIn.value);if(!isFinite(amt)||amt<=0){toast("Enter a SOL amount.",true);return;}const pid=$("#qbPreset").value;setQuickBuy(amt,pid);closeModal();toast("⚡ 1-click set: ◎"+amt.toFixed(3)+(pid?" + preset":""));if(mint){if(await ensureTradeReady())execQuickBuy(mint,amt,pid);}};
+    $("#qbGo").onclick=async()=>{const amt=Number(amtIn.value);if(!isFinite(amt)||amt<=0){toast("Enter a SOL amount.",true);return;}const o={amt,presetId:$("#qbPreset").value,tp:$("#qbTp").value.trim(),sl:$("#qbSl").value.trim(),slip:$("#qbSlip").value.trim()};setQuickBuy(o);closeModal();toast("⚡ 1-click set: ◎"+amt.toFixed(3)+(o.tp?" · TP "+o.tp+"%":"")+(o.sl?" · SL "+o.sl+"%":""));if(mint){if(await ensureTradeReady())execQuickBuy(mint,o);}};
     const clr=$("#qbClear");if(clr)clr.onclick=()=>{clearQuickBuy();closeModal();toast("1-click buy reset");};
   }
   function handleTradeResult(ok,status,d,label){
@@ -1148,7 +1152,7 @@
         let side=o.mode==="mix"?(Math.random()<o.sellBias?"sell":"buy"):o.mode;
         let res,label;
         if(side==="sell"){const pct=Math.round(rnd(o.sellMin,o.sellMax));label="🔴 SELL "+pct+"%";res=await jpost("/api/web/trade/sell",{tokenMint:o.tokenMint,walletIndex:idx,percent:String(pct),slippageBps:String(o.slip),tradeAttemptId:attemptId()});}
-        else{const amt=rnd(o.amtMin,o.amtMax);label="🟢 BUY ◎"+amt.toFixed(3);res=await jpost("/api/web/trade/buy",{tokenMint:o.tokenMint,walletIndex:idx,amountSol:amt.toFixed(4),slippageBps:String(o.slip),tradeAttemptId:attemptId()});if(res&&res.ok&&res.d&&res.d.ok)spent+=amt;}
+        else{const amt=rnd(o.amtMin,o.amtMax);label="🟢 BUY ◎"+amt.toFixed(3);const body={tokenMint:o.tokenMint,walletIndex:idx,amountSol:amt.toFixed(4),slippageBps:String(o.slip),tradeAttemptId:attemptId()};if(o.tp||o.sl){body.autoExit=true;body.takeProfitPct=o.tp||"";body.stopLossPct=o.sl||"";body.sellDelay="off";body.sellPercent="100";}res=await jpost("/api/web/trade/buy",body);if(res&&res.ok&&res.d&&res.d.ok)spent+=amt;}
         const good=res&&res.ok&&res.d&&res.d.ok;if(good)okc++;else fail++;
         if(res&&res.status===401){staggerAbort=true;staggerLog(logEl,'<div style="color:var(--red);font-size:12px;padding:4px 0">Session expired — set up your wallet again.</div>');break;}
         staggerLog(logEl,'<div style="font-size:12px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05)"><b style="color:'+(good?"var(--green)":"var(--red)")+'">'+label+'</b> · '+esc((w&&w.label)||("#"+idx))+(o.rounds>1?' · loop '+(r+1):'')+' · '+(good?"✓":esc(String((res&&res.d&&res.d.error)||"failed").slice(0,38)))+'</div>');
@@ -1167,6 +1171,7 @@
       '<div class="field"><label>Pattern</label><select id="bnMode"><option value="buy">Buys only (varied + staggered)</option><option value="mix">Buy + sell mix (organic volume)</option></select></div>'+
       '<div class="field row2"><div><label>Min SOL / wallet</label><input id="bnMin" inputmode="decimal" value="0.05"></div><div><label>Max SOL / wallet</label><input id="bnMax" inputmode="decimal" value="0.15"></div></div>'+
       '<div class="field row2"><div><label>Stagger min (s)</label><input id="bnDmin" inputmode="numeric" value="1"></div><div><label>Stagger max (s)</label><input id="bnDmax" inputmode="numeric" value="4"></div></div>'+
+      '<div class="field row2"><div><label>Take profit % (optional)</label><input id="bnTp" inputmode="numeric" placeholder="off"></div><div><label>Stop loss % (optional)</label><input id="bnSl" inputmode="numeric" placeholder="off"></div></div>'+
       '<div class="field row2"><div><label>Slippage (bps)</label><input id="bnSlip" inputmode="numeric" value="500"></div><div></div></div>'+
       '<div class="field"><label>Wallets</label>'+walletPickHtml()+'</div>'+
       staggerControls("bnGo","bnStop","Run Bundle")+'</div></div>';
@@ -1176,64 +1181,71 @@
       const ca=$("#bnCa").value.trim();if(!ca){toast("Paste a token CA.",true);return;}
       if(!(await ensureTradeReady()))return;const idxs=selectedWalletIdxs();if(!idxs.length){toast("Pick at least one wallet.",true);return;}
       const b=$("#bnGo");b.disabled=true;b.textContent="Running…";$("#stgLog").innerHTML="";
-      const res=await runStagger({tokenMint:ca,wallets:idxs,rounds:1,mode:$("#bnMode").value,amtMin:$("#bnMin").value,amtMax:$("#bnMax").value,delayMin:$("#bnDmin").value,delayMax:$("#bnDmax").value,sellBias:0.5,sellMin:50,sellMax:100,slip:Number($("#bnSlip").value.trim()||"500")},$("#stgLog"));
+      const res=await runStagger({tokenMint:ca,wallets:idxs,rounds:1,mode:$("#bnMode").value,amtMin:$("#bnMin").value,amtMax:$("#bnMax").value,delayMin:$("#bnDmin").value,delayMax:$("#bnDmax").value,sellBias:0.5,sellMin:50,sellMax:100,tp:$("#bnTp").value.trim(),sl:$("#bnSl").value.trim(),slip:Number($("#bnSlip").value.trim()||"500")},$("#stgLog"));
       b.disabled=false;b.textContent="Run Bundle";toast("Bundle done — "+res.okc+" ok"+(res.fail?", "+res.fail+" failed":"")+(res.spent?" · ◎"+res.spent.toFixed(3)+" in":""));refreshWallets();
     };
   }
-  // Advanced volume bot: funds N fresh wallets from one source, runs randomized buy/sell across them
-  // for a timer, then auto-sweeps (sells tokens, returns SOL to the funder). Optional leave-a-sliver
-  // so each wallet stays a holder. Client-orchestrated — runs while this tab is open; Stop ends it
-  // early and still sweeps back. Reuses the runStagger engine + distribute/sweep-sol endpoints.
-  function parseRange(s,dmin,dmax){const m=String(s||"").split(/[-,\s]+/).map(Number).filter(x=>isFinite(x)&&x>=0);if(m.length>=2)return [Math.min(m[0],m[1]),Math.max(m[0],m[1])];if(m.length===1)return [m[0],m[0]];return [dmin,dmax];}
+  // Volume bot — drives the SERVER-SIDE SlimeBot engine (/api/web/volume-bot). Rolling "ghost
+  // wallets": each round spawns a FRESH throwaway wallet, funds it from your source, buys then a
+  // DIFFERENT wallet sells (organic, never buy→sell same wallet), sweeps SOL back, and discards the
+  // wallet — nothing to clean up, no fixed wallet count. Runs in the BACKGROUND on the server, so it
+  // keeps going after you close the tab; we just poll status. Speed=delay, Chart shape=staggerPattern.
+  let volBotPollT=null;
+  function clearVolPoll(){if(volBotPollT){clearInterval(volBotPollT);volBotPollT=null;}}
   async function renderVolume(){
-    setActiveView("v-volume");subbarTool("📈 Volume Bot");if(state.token)await refreshWallets();if(state.route!=="volume")return;
-    $("#v-volume").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>📈 Volume Bot</h3><p class="sub">Funds fresh wallets from one source, runs <b>randomized buys + sells</b> across them to build volume, then <b>sweeps everything back</b> to your funder when the timer ends or you Stop. Runs while this tab is open.</p>'+
+    setActiveView("v-volume");subbarTool("📈 Volume Bot");clearVolPoll();if(state.token)await refreshWallets();if(state.route!=="volume")return;
+    $("#v-volume").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>📈 Volume Bot</h3><p class="sub">Runs in the <b>background</b> on fresh <b>ghost wallets</b> — funds from one source, buys then sells from <b>different</b> wallets for an organic tape, sweeps SOL back and discards each wallet. Nothing to clean up, no wallet cap. Set it and walk away.</p>'+
       '<div class="field"><label>Token contract (CA)</label><input id="vlCa" placeholder="Paste token mint"></div>'+
-      '<div class="field row2"><div><label>Fund from wallet</label>'+walletSelectHtml("vlSrc")+'</div><div><label>Trading wallets (1–20)</label><input id="vlN" inputmode="numeric" value="4"></div></div>'+
-      '<div class="field row2"><div><label>SOL to fund each</label><input id="vlFund" inputmode="decimal" value="0.05"></div><div><label>Run timer (min)</label><input id="vlMin" inputmode="numeric" value="10"></div></div>'+
-      '<div class="field row2"><div><label>Buy size SOL (min-max)</label><input id="vlBuy" value="0.01-0.03"></div><div><label>Delay s (min-max)</label><input id="vlDelay" value="3-8"></div></div>'+
-      '<label style="display:flex;align-items:center;gap:9px;font-size:12px;cursor:pointer;margin-bottom:12px"><input type="checkbox" id="vlLeave"> Leave a little token in each wallet (pads holder count)</label>'+
-      '<div class="bsrow"><button class="bigbuy" id="vlGo" style="flex:2">▶ Start volume</button><button class="wbtn ghost" id="vlStop" style="flex:1">Stop &amp; sweep</button></div>'+
-      '<div id="vlOut" style="margin-top:12px;max-height:300px;overflow:auto"></div></div></div>';
-    $("#vlStop").onclick=()=>{if(!staggerRunning){toast("Nothing running.",true);return;}staggerAbort=true;toast("Stopping — selling + sweeping SOL back…");};
+      '<div class="field row2"><div><label>Fund from wallet</label>'+walletSelectHtml("vlSrc")+'</div><div><label>Buy size / trade (SOL)</label><input id="vlBuy" inputmode="decimal" value="0.02"></div></div>'+
+      '<div class="field row2"><div><label>Speed</label><select id="vlSpeed"><option value="low">Low — calm</option><option value="med" selected>Medium</option><option value="high">High — fast</option></select></div><div><label>Chart shape</label><select id="vlShape"><option value="steady">Steady</option><option value="waves">Waves</option><option value="organic" selected>Organic</option><option value="uptrend">Uptrend</option></select></div></div>'+
+      '<div class="field row2"><div><label>Rounds (Stop anytime)</label><input id="vlRounds" inputmode="numeric" value="50"></div><div><label>Slippage (bps)</label><input id="vlSlip" inputmode="numeric" value="600"></div></div>'+
+      '<label style="display:flex;align-items:center;gap:9px;font-size:12px;cursor:pointer;margin-bottom:12px"><input type="checkbox" id="vlLeave" checked> Leave a sliver of token in each wallet (pads holder count)</label>'+
+      '<div class="bsrow"><button class="bigbuy" id="vlGo" style="flex:2">▶ Start volume bot</button><button class="wbtn ghost" id="vlStop" style="flex:1">Stop &amp; sweep</button></div>'+
+      '<div id="vlStatus" style="margin-top:14px"></div></div></div>';
     $("#vlGo").onclick=()=>startVolumeBot();
+    $("#vlStop").onclick=()=>stopVolumeBot();
+    pollVolumeBot();
   }
   async function startVolumeBot(){
-    if(staggerRunning){toast("Already running — hit Stop first.",true);return;}
     const ca=$("#vlCa").value.trim();if(!ca){toast("Paste a token CA.",true);return;}
     if(!(await ensureTradeReady()))return;
-    const srcSel=$("#vlSrc");const src=Number((srcSel&&srcSel.value)||state.activeWallet);
-    const n=Math.max(1,Math.min(20,Number($("#vlN").value.trim()||"4")));
-    const fund=Number($("#vlFund").value.trim()||"0.05");if(!(fund>0)){toast("How much SOL per wallet?",true);return;}
-    const mins=Math.max(1,Number($("#vlMin").value.trim()||"10"));
-    const [bMin,bMax]=parseRange($("#vlBuy").value,0.01,0.03);
-    const [dMin,dMax]=parseRange($("#vlDelay").value,3,8);
-    const leave=$("#vlLeave").checked;
-    const out=$("#vlOut");out.innerHTML="";const log=(h,c)=>staggerLog(out,'<div style="font-size:12px;padding:5px 0'+(c?";color:"+c:"")+'">'+h+'</div>');
-    const go=$("#vlGo");go.disabled=true;go.textContent="Funding…";staggerRunning=true;staggerAbort=false;
-    try{
-      log("Creating + funding "+n+" wallet(s) with ◎"+fund.toFixed(3)+" each from wallet #"+src+"…");
-      const {ok,d}=await jpost("/api/web/wallets/distribute",{count:n,amountSol:String(fund),sourceWalletIndex:src,label:"Vol"});
-      if(!ok||!d||!d.ok||!(d.wallets&&d.wallets.length)){throw new Error((d&&d.error)||"Could not create/fund wallets");}
-      await refreshWallets();
-      const newPks=d.wallets.map(w=>w.publicKey);
-      const idxs=state.wallets.filter(w=>newPks.includes(w.publicKey)).map(w=>w.index);
-      if(!idxs.length)throw new Error("Funded wallets not found after refresh");
-      log("Funded "+idxs.length+" wallet(s) ✓ — running buys + sells for "+mins+" min","var(--green)");go.textContent="Running…";
-      const deadline=Date.now()+mins*60000;
-      while(Date.now()<deadline&&!staggerAbort){
-        staggerRunning=true;
-        await runStagger({tokenMint:ca,wallets:idxs,rounds:1,mode:"mix",amtMin:bMin,amtMax:bMax,delayMin:dMin,delayMax:dMax,sellBias:0.45,sellMin:(leave?60:80),sellMax:(leave?88:100),slip:600},out);
-      }
-      // Wrap-up: sell remaining tokens (leave a sliver if asked), then return SOL to the funder.
-      staggerAbort=false;
-      log("Wrapping up — selling tokens"+(leave?" (leaving a sliver)":"")+" + sweeping SOL back to wallet #"+src+"…");
-      await runStagger({tokenMint:ca,wallets:idxs,rounds:1,mode:"sell",amtMin:0,amtMax:0,delayMin:0,delayMax:1,sellBias:1,sellMin:(leave?92:100),sellMax:(leave?96:100),slip:900},out);
-      const srcPk=(state.wallets.find(w=>w.index===src)||{}).publicKey;
-      if(srcPk){const sw=await jpost("/api/web/wallets/sweep-sol",{destination:srcPk,walletIndexes:idxs});log((sw.d&&sw.d.sweep&&sw.d.sweep.summary)||"Swept SOL back to funder","var(--green)");}
-      toast("Volume run complete — funds back in wallet #"+src);refreshWallets();
-    }catch(e){log("Error: "+esc(String(e.message||e)),"var(--red)");toast(String(e.message||"Volume bot failed"),true);}
-    staggerRunning=false;go.disabled=false;go.textContent="▶ Start volume";
+    const speed=$("#vlSpeed").value,shape=$("#vlShape").value;
+    const delaySecs=speed==="high"?3:(speed==="low"?20:8);
+    const staggerPattern=shape==="uptrend"?"ladder":shape;
+    const buyBias=shape==="uptrend"?75:55;
+    const src=Number(($("#vlSrc")||{}).value||state.activeWallet);
+    const go=$("#vlGo");go.disabled=true;go.textContent="Starting…";
+    const {ok,status,d}=await jpost("/api/web/volume-bot/start",{tokenMint:ca,sourceWalletIndex:src,buyAmountSol:String(Number($("#vlBuy").value.trim()||"0.02")),sellPercent:"100",buyBias:String(buyBias),delaySecs:String(delaySecs),slippageBps:Number($("#vlSlip").value.trim()||"600"),rollingWallets:true,offsetSell:true,keepDust:$("#vlLeave").checked,sweepBack:true,staggerPattern:staggerPattern,maxRounds:String(Math.max(1,Math.min(250,Number($("#vlRounds").value.trim()||"50"))))});
+    go.disabled=false;go.textContent="▶ Start volume bot";
+    if(status===401){setToken("");go("wallet");return;}
+    if(ok&&d&&d.ok){toast("Volume bot started — running in the background");pollVolumeBot();}
+    else toast((d&&(d.error||d.message))||"Could not start volume bot",true);
+  }
+  async function stopVolumeBot(){
+    const {d}=await api("/api/web/volume-bot");const bots=(d&&d.bots)||[];
+    const run=bots.find(b=>b.status!=="completed"&&b.stage!=="done"&&b.stage!=="stopped");
+    if(!run){toast("No running volume bot.",true);return;}
+    const r=await jpost("/api/web/volume-bot/stop",{planId:run.id});
+    if(r.ok&&r.d&&r.d.ok){toast("Stopping — selling + sweeping SOL back to source");pollVolumeBot();}else toast((r.d&&r.d.error)||"Could not stop",true);
+  }
+  function volBotStatusHtml(bots){
+    if(!bots.length)return '<p class="mut" style="font-size:12px">No volume bot running. Start one above — it keeps going in the background.</p>';
+    return bots.slice(0,3).map(b=>{
+      const running=b.status!=="completed"&&b.stage!=="done"&&b.stage!=="stopped";const st=b.stats||{};
+      const logs=(b.log||[]).slice(-14).reverse().map(l=>'<div style="padding:2px 0;color:var(--muted)">'+esc(typeof l==="string"?l:(l.message||l.text||JSON.stringify(l)))+'</div>').join("");
+      return '<div class="wbox" style="margin:0 0 10px"><div style="display:flex;align-items:center;gap:9px"><b>'+esc(b.shortMint||short(b.tokenMint))+'</b><span class="chip '+(running?"g":"")+'">'+esc(running?(b.stage||"running"):"done")+'</span><span class="mut" style="font-size:11px;margin-left:auto">round '+esc(b.currentCycle||0)+'/'+esc(b.cycles||0)+'</span></div>'+
+        '<div class="mut" style="font-size:11px;margin-top:5px">buys '+esc(st.buys||0)+' · sells '+esc(st.sells||0)+' · vol ◎'+esc(Number(st.volumeSol||0).toFixed(3))+(st.sweptSol?' · swept ◎'+esc(Number(st.sweptSol).toFixed(3)):'')+'</div>'+
+        (logs?'<div style="margin-top:8px;max-height:160px;overflow:auto;font-size:11px;font-family:var(--mono)">'+logs+'</div>':'')+'</div>';
+    }).join("");
+  }
+  function pollVolumeBot(){
+    clearVolPoll();
+    const tick=async()=>{
+      if(state.route!=="volume"){clearVolPoll();return;}
+      const {d}=await api("/api/web/volume-bot");const box=$("#vlStatus");if(!box||state.route!=="volume")return;
+      box.innerHTML=volBotStatusHtml((d&&d.bots)||[]);
+    };
+    tick();volBotPollT=setInterval(tick,4000);
   }
   function walletSelectHtml(id){const ws=state.wallets||[];if(!ws.length)return '<select id="'+id+'"><option value="">create a wallet first</option></select>';return '<select id="'+id+'">'+ws.map(w=>'<option value="'+w.index+'"'+(w.index===state.activeWallet?" selected":"")+'>'+esc(w.label||("Wallet "+w.index))+'</option>').join("")+'</select>';}
   // Native pump.fun launch panel — all the old fields, new style, no hype tab. We build the token on
@@ -1293,6 +1305,29 @@
     loadKol();
   }
   function kolSecLabel(t){return '<div class="mut" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin:14px 0 8px">'+t+'</div>';}
+  // Pull a clean @handle out of a (sometimes double-prefixed) twitter/x URL, then fall back to
+  // unavatar.io for a profile pic when the KOL row has no avatar of its own.
+  function kolHandle(k){let u=String((k&&(k.twitter||k.xUrl))||"").trim().replace(/^@/,"");const segs=u.split("/").filter(Boolean);const last=segs[segs.length-1]||"";return /^[A-Za-z0-9_]{1,30}$/.test(last)?last:"";}
+  function kolAvatarSrc(k){if(k&&k.avatar)return k.avatar;const h=kolHandle(k);return h?"https://unavatar.io/twitter/"+h:"";}
+  function kolAvatarImg(k){const s=kolAvatarSrc(k);return s?'<img src="'+esc(s)+'" style="width:100%;height:100%;border-radius:11px;object-fit:cover" onerror="this.replaceWith(document.createTextNode(\'👤\'))">':'👤';}
+  async function openKolProfile(wallet,name){
+    openModal('<h3>👤 '+esc(name||short(wallet))+'</h3><div id="kpBody"><div class="loading" style="padding:24px"><span class="spin"></span></div></div>');
+    const {d}=await api("/api/web/kol/scan?wallet="+encodeURIComponent(wallet));
+    const sc=(d&&d.scan)||{};const k=(sc.kols&&sc.kols[0])||{};const rows=sc.rows||[];const handle=kolHandle(k);
+    const body=$("#kpBody");if(!body)return;
+    const links=[];
+    if(handle||k.twitter||k.xUrl)links.push('<a class="chip" href="'+(handle?"https://x.com/"+handle:esc(k.twitter||k.xUrl))+'" target="_blank" rel="noopener">𝕏 '+(handle?"@"+esc(handle):"Twitter")+'</a>');
+    links.push('<a class="chip" href="https://solscan.io/account/'+encodeURIComponent(wallet)+'" target="_blank" rel="noopener">Solscan ↗</a>');
+    links.push('<a class="chip" href="https://kolscan.io/account/'+encodeURIComponent(wallet)+'" target="_blank" rel="noopener">KOLScan ↗</a>');
+    body.innerHTML='<div style="display:flex;gap:12px;align-items:center;margin:4px 0 12px"><div class="ico" style="width:52px;height:52px;flex:0 0 auto;font-size:24px">'+kolAvatarImg(k)+'</div>'+
+      '<div style="flex:1;min-width:0"><div class="secgrid" style="grid-template-columns:repeat(3,1fr);margin:0"><div class="cell"><b>'+esc(k.winRateLabel&&k.winRateLabel!=="n/a"?k.winRateLabel:"—")+'</b><span>win rate</span></div><div class="cell"><b>'+esc(k.roiLabel&&k.roiLabel!=="n/a"?k.roiLabel:"—")+'</b><span>ROI</span></div><div class="cell"><b>'+esc(k.realizedLabel&&k.realizedLabel!=="n/a"?k.realizedLabel:(k.trades?k.trades+" tr":"—"))+'</b><span>realized</span></div></div></div></div>'+
+      '<div style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:12px">'+links.join("")+'</div>'+
+      '<button class="wbtn" style="margin-bottom:14px" onclick="GG.closeModal();GG.copyWallet(\''+esc(wallet)+'\')">Copy this wallet\'s buys →</button>'+
+      kolSecLabel("Recent positions ("+rows.length+")")+
+      (rows.length?rows.slice(0,15).map(r=>{const chg=pctNum(r.h1!=null?r.h1:r.m5);const ct=chg==null?"":((chg>=0?"+":"")+chg.toFixed(1)+"%");
+        return '<div class="walletrow" style="cursor:pointer" onclick="GG.closeModal();GG.open(\''+esc(r.tokenMint)+'\')"><div class="ico">'+(r.imageUrl?'<img src="'+esc(r.imageUrl)+'" style="width:100%;height:100%;border-radius:11px;object-fit:cover" onerror="this.replaceWith(document.createTextNode(\'🪙\'))">':'🪙')+'</div><div class="info" style="min-width:0"><b>'+esc(r.symbol||short(r.tokenMint))+' <span class="mut" style="font-weight:500">'+ct+'</span></b><div class="addr mut">'+esc(r.marketCapLabel||"")+' MC</div></div><div class="bal"><b>'+esc(r.valueLabel||r.volumeLabel||"")+'</b></div></div>';
+      }).join(""):'<p class="mut" style="font-size:12px">No recent positions cached for this wallet.</p>');
+  }
   async function loadKol(){
     const mode=state.kolMode||"hot";
     const {d}=await api("/api/web/kol/scan?mode="+mode);
@@ -1306,14 +1341,14 @@
     if(kols.length){
       html+=kolSecLabel("Known KOL wallets");
       html+=kols.map(k=>{
-        const xurl=k.xUrl||k.twitter||"";const x=xurl?'<a href="'+esc(xurl)+'" target="_blank" onclick="event.stopPropagation()" style="color:var(--muted);margin-left:6px">𝕏</a>':'';
         const win=(k.winRateLabel&&k.winRateLabel!=="n/a")?"win "+esc(k.winRateLabel):"";
         const sub=[win,(k.trades?esc(k.trades)+" trades":""),((k.realizedLabel&&k.realizedLabel!=="n/a")?esc(k.realizedLabel):"")].filter(Boolean).join(" · ");
-        const roi=(k.roiLabel&&k.roiLabel!=="n/a")?esc(k.roiLabel):(k.volumeLabel?esc(k.volumeLabel):"");
-        return '<div class="walletrow"><div class="ico">'+(k.avatar?'<img src="'+esc(k.avatar)+'" style="width:100%;height:100%;border-radius:11px;object-fit:cover" onerror="this.replaceWith(document.createTextNode(\'👤\'))">':'👤')+'</div>'+
-          '<div class="info" style="min-width:0"><b>'+esc(k.name||k.shortWallet||"KOL")+x+'</b><div class="addr mut">'+(sub||esc(k.shortWallet||""))+'</div></div>'+
-          '<div class="bal"><b>'+roi+'</b><span>'+((k.roiLabel&&k.roiLabel!=="n/a")?"ROI":"vol")+'</span></div>'+
-          '<button class="wbtn ghost" style="margin-left:10px;padding:9px 12px" onclick="GG.copyWallet(\''+esc(k.wallet)+'\')">Copy</button></div>';
+        const hasRoi=(k.roiLabel&&k.roiLabel!=="n/a");const roi=hasRoi?esc(k.roiLabel):(k.realizedLabel&&k.realizedLabel!=="n/a"?esc(k.realizedLabel):(k.volumeLabel?esc(k.volumeLabel):"—"));
+        const nm=String((k.name||k.shortWallet||"KOL")).replace(/'/g,"");
+        return '<div class="walletrow" style="cursor:pointer" onclick="GG.kolProfile(\''+esc(k.wallet)+'\',\''+esc(nm)+'\')"><div class="ico">'+kolAvatarImg(k)+'</div>'+
+          '<div class="info" style="min-width:0"><b>'+esc(k.name||k.shortWallet||"KOL")+'</b><div class="addr mut">'+(sub||esc(k.shortWallet||""))+'</div></div>'+
+          '<div class="bal"><b class="'+(hasRoi&&/-/.test(String(k.roiLabel))?"down":"up")+'">'+roi+'</b><span>'+(hasRoi?"ROI":"realized")+'</span></div>'+
+          '<button class="wbtn ghost" style="margin-left:10px;padding:9px 12px" onclick="event.stopPropagation();GG.copyWallet(\''+esc(k.wallet)+'\')">Copy</button></div>';
       }).join("");
     }
     // Coins KOLs are buying (Hot / Fresh modes fill scan.rows).
@@ -1365,6 +1400,7 @@
   // ---------- expose + boot ----------
   window.GG={open:(m)=>go("trade",m),openSell:(m)=>{state.pendingSell=m;go("trade",m);},go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,
     copyWallet:(w)=>{const i=$("#cpWallet");if(i){i.value=w;i.scrollIntoView({behavior:"smooth",block:"center"});i.focus();toast("Wallet loaded — set your size, then Start copying");}},
+    kolProfile:openKolProfile,
     removeWalletPrompt:(i)=>{const w=state.wallets.find(x=>x.index===i);if(w)removeWalletModal(w);}};
   render();updateWalletPill();loadSol();setInterval(loadSol,60000);
   if(state.token){refreshWallets();loadPresets();}
