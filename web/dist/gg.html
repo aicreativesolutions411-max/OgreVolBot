@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta http-equiv="Cache-Control" content="no-store, max-age=0">
 <title>SlimeWire Terminal — Your Edge in Memecoin Trading</title>
+<link rel="preconnect" href="https://www.geckoterminal.com" crossorigin>
+<link rel="dns-prefetch" href="https://www.geckoterminal.com">
+<link rel="preconnect" href="https://dexscreener.com" crossorigin>
+<link rel="preconnect" href="https://ogrevolbot.onrender.com" crossorigin>
 <meta name="description" content="SlimeWire Terminal — a fast Solana memecoin terminal. Discover fresh launches, trenches, trending pairs, create a wallet, and trade in one click.">
 <link rel="icon" type="image/png" href="/assets/slimewire/png/slimewire-mark.png?v=logo4">
 <script src="/config.js"></script>
@@ -316,6 +320,8 @@
     <section class="view" id="v-bundle"></section>
     <section class="view" id="v-volume"></section>
     <section class="view" id="v-copy"></section>
+    <section class="view" id="v-launch"></section>
+    <section class="view" id="v-rewards"></section>
   </main>
 
   <nav class="botnav" id="botnav">
@@ -488,8 +494,8 @@
     {ic:"📦",label:"Bundle Buy",route:"bundle"},
     {ic:"📈",label:"Volume Bot",route:"volume"},
     {ic:"👥",label:"Copy / KOL Tracker",route:"copy"},
-    {ic:"🚀",label:"Launch a Coin",url:"/launch"},
-    {ic:"⚔️",label:"Raids & Rewards",url:"/raids"},
+    {ic:"🚀",label:"Launch a Coin",route:"launch"},
+    {ic:"⚔️",label:"Raids & Rewards",route:"rewards"},
   ];
   function toolLinkHtml(t,onclick){return t.route?'<a href="#'+t.route+'"'+(onclick?' onclick="'+onclick+'"':'')+'><span>'+t.ic+'</span>'+esc(t.label)+'</a>':'<a href="'+esc(t.url)+'" target="_blank"><span>'+t.ic+'</span>'+esc(t.label)+'</a>';}
   function openToolsSheet(){
@@ -552,7 +558,18 @@
     else if(route==="bundle")renderBundle();
     else if(route==="volume")renderVolume();
     else if(route==="copy")renderCopy();
+    else if(route==="launch")renderEmbed("launch");
+    else if(route==="rewards")renderEmbed("rewards");
     else renderTrending();
+  }
+  // Keep Launch / Raids INSIDE /gg (our own pages, with their video + features) instead of
+  // navigating off to the standalone page — so the terminal never depends on the old site.
+  function renderEmbed(key){
+    const map={launch:{view:"v-launch",url:"/launch",title:"🚀 Launch a Coin"},rewards:{view:"v-rewards",url:"/raids",title:"⚔️ Raids & Rewards"}};
+    const cfg=map[key];if(!cfg){go("trending");return;}
+    setActiveView(cfg.view);subbarTool(cfg.title);
+    const v=$("#"+cfg.view);
+    if(!v.querySelector("iframe"))v.innerHTML='<iframe src="'+cfg.url+'" title="'+esc(cfg.title)+'" loading="eager" style="width:100%;height:100%;border:0;display:block;background:var(--bg)"></iframe>';
   }
 
   // ---------- subbars ----------
@@ -642,12 +659,16 @@
   // ---------- trade ----------
   let tradeAmt="0.5",tradeSide="buy";
   function findRow(mint){return state.rows.find(r=>r.tokenMint===mint)||null;}
-  // Clean, instant, full-screen chart: DexScreener embed with the trades/info panels stripped
-  // (no flash, no OGRE intro, no zoomed-in chrome). Resolves token->primary pair automatically.
+  // Chart + live transactions in one. Prefer GeckoTerminal (it indexes PumpSwap/Raydium pools that
+  // DexScreener leaves stuck on "Loading pair…", and shows the live swaps table right under the chart
+  // — solving both "chart won't load" and "no transactions"). Needs the POOL address (we get it from
+  // the feed row). Fresh tokens with no pool fall back to DexScreener by mint.
   function chartIframe(mint,r){
-    const id=(r&&(r.pairAddress||r.raydiumPool))||mint;
-    const u="https://dexscreener.com/solana/"+encodeURIComponent(id)+"?embed=1&theme=dark&trades=0&info=0&chartLeftToolbar=0&chartTheme=dark&loadChartSettings=0&tabs=0&interval=15";
-    return'<iframe src="'+u+'" title="chart" loading="eager" allow="clipboard-write" style="width:100%;height:100%;border:0;display:block"></iframe>';
+    const pool=(r&&(r.pairAddress||r.raydiumPool))||"";
+    const u=pool
+      ? "https://www.geckoterminal.com/solana/pools/"+encodeURIComponent(pool)+"?embed=1&info=0&swaps=1&grayscale=0&light_chart=0&chart_type=price&resolution=15m"
+      : "https://dexscreener.com/solana/"+encodeURIComponent(mint)+"?embed=1&theme=dark&trades=1&info=0&chartLeftToolbar=0&interval=15";
+    return'<iframe src="'+u+'" title="chart" loading="eager" allow="clipboard-write" style="width:100%;height:100%;border:0;display:block;background:#060906"></iframe>';
   }
   async function renderTrade(){
     setActiveView("v-trade");
@@ -658,9 +679,9 @@
     view.innerHTML='<div class="trade"><div class="tradeMain">'+
         '<div class="thead" id="thead">'+(r?theadHtml(r):'<div class="ti"><b>'+short(mint)+'</b></div>')+'</div>'+
         '<div class="chartwrap">'+chartIframe(mint,r)+'</div>'+
-        '<details class="txfold" id="txFold"><summary>📜 Transactions<span class="chev">▾</span>'+
-          '<a class="chip" style="margin-left:auto" href="https://dexscreener.com/solana/'+encodeURIComponent(mint)+'" target="_blank" onclick="event.stopPropagation()">DexScreener ↗</a></summary>'+
-          '<div class="txbody"><iframe data-txsrc="https://dexscreener.com/solana/'+encodeURIComponent(mint)+'?embed=1&theme=dark&info=1&trades=1" title="transactions"></iframe></div></details>'+
+        '<div class="tstrip"><span style="font-size:11px;color:var(--muted)">📜 Live chart &amp; transactions</span>'+
+          '<a class="chip" style="margin-left:auto" href="https://solscan.io/token/'+encodeURIComponent(mint)+'" target="_blank">Solscan ↗</a>'+
+          '<a class="chip" href="https://dexscreener.com/solana/'+encodeURIComponent(mint)+'" target="_blank">DexScreener ↗</a></div>'+
       '</div><div class="tradeSide">'+
         '<div class="pnlbar"><div><span>Invested</span><b>—</b></div><div><span>Remaining</span><b>—</b></div><div><span>PNL</span><b class="mut">—</b></div></div>'+
         '<div class="sidepad">'+
@@ -676,7 +697,7 @@
     wireTradePanel(mint,r);updateWselLine();paintPresetSel();
     const txF=$("#txFold");if(txF)txF.addEventListener("toggle",()=>{if(txF.open){const f=txF.querySelector("iframe");if(f&&!f.src&&f.dataset.txsrc)f.src=f.dataset.txsrc;}});
     if(state.token&&!(state.presets.trade||[]).length){loadPresets().then(()=>{if(state.route==="trade")paintPresetSel();});}
-    if(!r){const rows=await fetchPairs(tabById("best"));r=rows.find(x=>x.tokenMint===mint)||null;if(r&&state.route==="trade"){$("#thead").innerHTML=theadHtml(r);fillPerf(r);}}
+    if(!r){const rows=await fetchPairs(tabById("best"));r=rows.find(x=>x.tokenMint===mint)||null;if(r&&state.route==="trade"){$("#thead").innerHTML=theadHtml(r);fillPerf(r);const cw=$(".chartwrap");if(cw&&(r.pairAddress||r.raydiumPool))cw.innerHTML=chartIframe(mint,r);}}
     else fillPerf(r);
     loadSecurity(mint);
   }
