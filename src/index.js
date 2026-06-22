@@ -8176,7 +8176,13 @@ function tokenAvatarRecord(mint, fields = {}) {
     state,
     updatedAt,
     failedAt: fields.failedAt || (state === "failed" || state === "missing" ? updatedAt : ""),
-    failureReason: String(fields.failureReason || "").slice(0, 160)
+    failureReason: String(fields.failureReason || "").slice(0, 160),
+    // Socials ride along on the avatar record — the lookup already fetches pump/dex/helius/gecko
+    // metadata for the image, so we capture X/Telegram/Website in the same pass (free) and merge
+    // them onto fresh feed rows. This is what fills the Trenches social icons on seconds-old coins.
+    twitterUrl: String(fields.twitterUrl || "").slice(0, 200),
+    telegramUrl: String(fields.telegramUrl || "").slice(0, 200),
+    websiteUrl: String(fields.websiteUrl || "").slice(0, 200)
   };
 }
 
@@ -8258,9 +8264,16 @@ function tokenAvatarFromRow(row = {}) {
 
   const cached = tokenAvatarMemoryRecord(mint);
   if (cached) {
+    // Merge any socials the avatar lookup captured (only where the row doesn't already have them).
+    const soc = {
+      twitterUrl: firstString(row.twitterUrl, cached.twitterUrl),
+      telegramUrl: firstString(row.telegramUrl, cached.telegramUrl),
+      websiteUrl: firstString(row.websiteUrl, cached.websiteUrl)
+    };
     if (cached.state === "ready" && cached.avatarUrl) {
       return {
         ...row,
+        ...soc,
         tokenMint: row.tokenMint || mint,
         avatarUrl: cached.avatarUrl,
         avatarState: "ready",
@@ -8269,6 +8282,7 @@ function tokenAvatarFromRow(row = {}) {
     }
     return {
       ...row,
+      ...soc,
       tokenMint: row.tokenMint || mint,
       avatarUrl: null,
       avatarState: cached.state || "missing",
@@ -8364,19 +8378,32 @@ async function resolveTokenAvatarRecord(mint = "", row = {}) {
     ? (firstString(pumpMeta.imageUrl, pumpMeta.imageUri) ? "pump"
       : firstString(heliusMeta.imageUrl, heliusMeta.imageUri) ? "helius" : "dex")
     : "";
+  // Harvest socials from the same metadata we just fetched (pump has them the instant a coin launches).
+  const socials = {
+    twitterUrl: firstString(pumpMeta.twitterUrl, dexMeta.twitterUrl, heliusMeta.twitterUrl),
+    telegramUrl: firstString(pumpMeta.telegramUrl, dexMeta.telegramUrl, heliusMeta.telegramUrl),
+    websiteUrl: firstString(pumpMeta.websiteUrl, dexMeta.websiteUrl, heliusMeta.websiteUrl)
+  };
 
-  if (!avatarUrl) {
+  if (!avatarUrl || !socials.twitterUrl) {
     const geckoMeta = await getGeckoTerminalTokenMetadata(mint, { timeoutMs: 1_200 }).catch(() => ({}));
-    avatarUrl = normalizeTokenAvatarUrl(firstString(geckoMeta.imageUrl, geckoMeta.imageUri));
-    source = avatarUrl ? "geckoterminal" : "";
+    if (!avatarUrl) {
+      avatarUrl = normalizeTokenAvatarUrl(firstString(geckoMeta.imageUrl, geckoMeta.imageUri));
+      source = avatarUrl ? "geckoterminal" : "";
+    }
+    socials.twitterUrl = firstString(socials.twitterUrl, geckoMeta.twitterUrl);
+    socials.telegramUrl = firstString(socials.telegramUrl, geckoMeta.telegramUrl);
+    socials.websiteUrl = firstString(socials.websiteUrl, geckoMeta.websiteUrl);
   }
 
-  if (avatarUrl) return tokenAvatarRecord(mint, { avatarUrl, source, state: "ready" });
+  if (avatarUrl) return tokenAvatarRecord(mint, { avatarUrl, source, state: "ready", ...socials });
+  // Even with no image, keep any socials we found so the row still gets its X/TG/Website icons.
   return tokenAvatarRecord(mint, {
     avatarUrl: "",
     source: "lookup",
     state: "missing",
-    failureReason: "No cached Pump, Dex, or Gecko avatar URL"
+    failureReason: "No cached Pump, Dex, or Gecko avatar URL",
+    ...socials
   });
 }
 
