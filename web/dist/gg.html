@@ -240,6 +240,7 @@
 
   .loading,.msg{padding:40px;text-align:center;color:var(--muted)}
   .spin{display:inline-block;width:22px;height:22px;border:2px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:sp .7s linear infinite}
+  .spin.sm{width:12px;height:12px;border-width:2px}
   @keyframes sp{to{transform:rotate(360deg)}}
 
   .toast{position:fixed;left:50%;bottom:46px;transform:translateX(-50%);z-index:80;background:rgba(10,16,11,.98);border:1px solid var(--border);border-radius:11px;padding:12px 18px;font-size:13px;box-shadow:var(--glow);max-width:440px;opacity:0;transition:.2s;pointer-events:none}
@@ -635,7 +636,25 @@
     const shown=shownRows();
     if(!rows.length)view.innerHTML='<div class="msg">No pairs in this view right now — try another tab.</div>';
     else view.innerHTML='<table class="tbl"><thead><tr><th class="l">Pair</th><th>Market Cap</th><th class="hideMb">Liquidity</th><th>Volume</th><th class="hideMb">Txns</th><th class="hideMb">Token Info</th><th></th></tr></thead><tbody>'+(shown.length?shown.map(rowHtml).join(""):'<tr><td colspan="7" class="msg">No match in this list.</td></tr>')+'</tbody></table>';
+    void enrichSocials(rows);
     state.pollT=setTimeout(()=>{if(state.route==="trending")renderTrending();},7000);
+  }
+  // Most pump rows arrive without socials (GeckoTerminal doesn't carry them). Pull X/Telegram/Website
+  // for the visible mints from DexScreener (one batch call, CORS-OK) and slot the icons in next to the
+  // copy button — only links that actually exist. Cheap, fire-and-forget, repaints once if it found any.
+  async function enrichSocials(rows){
+    try{
+      const need=(rows||[]).filter(r=>r&&r.tokenMint&&!(r.twitterUrl||r.telegramUrl||r.websiteUrl)).slice(0,30);
+      if(!need.length)return;
+      const j=await fetch("https://api.dexscreener.com/latest/dex/tokens/"+need.map(r=>r.tokenMint).join(",")).then(x=>x.ok?x.json():null);
+      const pairs=(j&&j.pairs)||[];const by={};
+      for(const p of pairs){const m=p&&p.baseToken&&p.baseToken.address;if(!m||by[m])continue;const info=p.info||{};const o={};
+        for(const s of (info.socials||[])){const t=String(s.type||s.platform||"").toLowerCase();if((t==="twitter"||t==="x")&&!o.tw)o.tw=s.url;if(t==="telegram"&&!o.tg)o.tg=s.url;}
+        if(info.websites&&info.websites[0]&&info.websites[0].url)o.web=info.websites[0].url;by[m]=o;}
+      let changed=false;
+      for(const r of rows){const o=by[r.tokenMint];if(!o)continue;if(o.tw&&!r.twitterUrl){r.twitterUrl=o.tw;changed=true;}if(o.tg&&!r.telegramUrl){r.telegramUrl=o.tg;changed=true;}if(o.web&&!r.websiteUrl){r.websiteUrl=o.web;changed=true;}}
+      if(changed&&state.route==="trending"&&state.rows===rows)applyTrendingFilter();
+    }catch(e){}
   }
 
   // ---------- trenches ----------
@@ -826,22 +845,46 @@
     big.onclick=()=>{tradeSide==="buy"?execBuy(mint,amt.value):execSell(mint,amt.value);};
     paint();
   }
-  async function loadSecurity(mint){
-    const {ok,d}=await api("/api/web/slimeshield?mint="+encodeURIComponent(mint));
+  // Holder/dev/sniper/insider data lives in slimeshield.marketContext and comes from Solana Tracker.
+  // The plain call is instant but ST is often not loaded yet (holderCount null) — so we paint what we
+  // have immediately, then force-hydrate ST in the background and repaint the holder cells. The forced
+  // result is cached server-side, so the NEXT click on the same coin is instantly full.
+  function secHoldersReady(s){const mc=s&&s.marketContext;return !!(mc&&(mc.solanaTrackerLoaded||mc.holderCount!=null||mc.topHolderPercent!=null));}
+  function paintSec(mint,s,loading){
     if(state.route!=="trade"||state.mint!==mint)return;
-    const box=$("#secbox");if(!box)return;const s=(d&&d.slimeshield)||null;
+    const box=$("#secbox");if(!box)return;
     if(!s){box.innerHTML='<h4>🛡 Token Data &amp; Security</h4><div class="mut" style="font-size:12px">No security data yet.</div>';return;}
-    const dev=s.devInfoSummary||{};const top=Number(s.topHolderPct??dev.topHolderPct);const devHold=Number(s.devHoldingPct??dev.devHoldingValue);
-    const verdict=s.verdict||"";const vcls=/safe|🟢/i.test(verdict)?"chip g":/danger|🔴/i.test(verdict)?"chip r":"chip y";
+    const mc=s.marketContext||{};const dev=s.devInfoSummary||{};
+    const n=v=>{const x=Number(v);return isFinite(x)?x:null;};
+    const verdict=s.verdict||"";const score=n(s.score);
+    const vcls=/safe|🟢/i.test(verdict)?"chip g":/avoid|danger|rug|🔴/i.test(verdict)?"chip r":"chip y";
+    const mintAuth=String(mc.mintAuthority||"").trim(),freeze=String(mc.freezeAuthority||"").trim();
+    const cell=(v,suf,lab)=>{const sh=(loading&&v==null)?'<span class="spin sm"></span>':(v==null?'—':Math.round(v)+(suf||''));return '<div class="cell"><b>'+sh+'</b><span>'+lab+'</span></div>';};
+    const holders=n(mc.holderCount);
+    const devHold=n(mc.devHoldPercent);const devHoldFallback=devHold==null?n(dev.devHoldingValue):devHold;
     box.innerHTML='<h4>🛡 Token Data &amp; Security</h4>'+
-      (verdict?'<span class="verdict '+vcls+'">'+esc(verdict)+(isFinite(Number(s.riskScore))?' · risk '+Math.round(s.riskScore):'')+'</span>':'')+
+      (verdict?'<span class="verdict '+vcls+'">'+esc(verdict)+(score!=null?' · '+score+'/100':'')+'</span>':'')+
       '<div class="secgrid">'+
-      '<div class="cell"><b>'+(isFinite(top)?Math.round(top)+"%":"—")+'</b><span>Top holder</span></div>'+
-      '<div class="cell"><b>'+(isFinite(devHold)?Math.round(devHold)+"%":"—")+'</b><span>Dev holds</span></div>'+
-      '<div class="cell"><b>'+(s.hasActiveMintAuthority?"⚠":"✓")+'</b><span>Mint auth</span></div>'+
-      '<div class="cell"><b>'+(s.hasActiveFreezeAuthority?"⚠":"✓")+'</b><span>Freeze auth</span></div>'+
-      '<div class="cell"><b>'+(isFinite(Number(s.smartMoneyScore))?Math.round(s.smartMoneyScore):"—")+'</b><span>Smart $</span></div>'+
-      '<div class="cell"><b>'+(isFinite(Number(s.dexEarlyBuyersCount))?s.dexEarlyBuyersCount:"—")+'</b><span>Early buys</span></div></div>';
+      '<div class="cell"><b>'+(holders==null?(loading?'<span class="spin sm"></span>':'—'):Math.round(holders))+'</b><span>Holders</span></div>'+
+      cell(n(mc.topHolderPercent),'%','Top holder')+
+      cell(devHoldFallback,'%','Dev holds')+
+      cell(n(mc.snipersPercent),'%','Snipers')+
+      cell(n(mc.insidersPercent),'%','Insiders')+
+      cell(n(mc.lpBurnedPercent),'%','LP burned')+
+      '<div class="cell"><b>'+(mintAuth?'⚠':'✓')+'</b><span>Mint auth</span></div>'+
+      '<div class="cell"><b>'+(freeze?'⚠':'✓')+'</b><span>Freeze auth</span></div></div>';
+  }
+  async function loadSecurity(mint){
+    const {d}=await api("/api/web/slimeshield?mint="+encodeURIComponent(mint));
+    if(state.route!=="trade"||state.mint!==mint)return;
+    let s=(d&&d.slimeshield)||null;
+    const ready=secHoldersReady(s);
+    paintSec(mint,s,!ready&&!!s);
+    if(!ready){
+      const r=await api("/api/web/slimeshield?mint="+encodeURIComponent(mint)+"&force=true");
+      if(state.route!=="trade"||state.mint!==mint)return;
+      paintSec(mint,(r.d&&r.d.slimeshield)||s,false);
+    }
   }
 
   // ---------- trade execution ----------
