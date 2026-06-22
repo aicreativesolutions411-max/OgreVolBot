@@ -7,6 +7,9 @@
 <title>SlimeWire Terminal — Your Edge in Memecoin Trading</title>
 <link rel="preconnect" href="https://www.geckoterminal.com" crossorigin>
 <link rel="dns-prefetch" href="https://www.geckoterminal.com">
+<link rel="preconnect" href="https://api.geckoterminal.com" crossorigin>
+<link rel="preconnect" href="https://images.weserv.nl" crossorigin>
+<link rel="preconnect" href="https://api.dexscreener.com" crossorigin>
 <link rel="preconnect" href="https://dexscreener.com" crossorigin>
 <link rel="preconnect" href="https://ogrevolbot.onrender.com" crossorigin>
 <meta name="description" content="SlimeWire Terminal — a fast Solana memecoin terminal. Discover fresh launches, trenches, trending pairs, create a wallet, and trade in one click.">
@@ -75,6 +78,8 @@
   .guidebar .gt b{color:var(--text);font-size:13.5px}
   .guidebar .gt .sub{color:var(--muted);font-size:11.5px}
   .guidebar .garrow{margin-left:auto;flex:0 0 auto;color:var(--green);font-weight:800;font-size:17px}
+  .tradefab{display:none;position:fixed;right:14px;bottom:calc(var(--botnav,0px) + 16px);z-index:55;align-items:center;gap:7px;height:42px;padding:0 17px;border:none;border-radius:999px;background:linear-gradient(180deg,#a6ff5e,var(--green));color:#06140a;font-weight:900;font-size:13px;letter-spacing:.2px;box-shadow:0 6px 20px rgba(0,0,0,.55),0 0 0 1px rgba(137,255,67,.4);cursor:pointer}
+  .tradefab:active{transform:scale(.96)}
 
   /* sub bar */
   .subbar{display:flex;align-items:center;gap:16px;flex:0 0 auto;height:46px;padding:0 16px;background:rgba(7,11,7,.6);border-bottom:1px solid var(--border2);overflow-x:auto}
@@ -291,7 +296,12 @@
     :root{--botnav:58px}
     nav.mainnav{display:none}
     .searchbox{display:none}
-    .topbar{gap:10px;padding:0 12px}
+    /* Slim the header so it never overflows a phone (was 434px on a 375px screen, which crowded
+       the ★ watchlist button against the wallet pill and pushed the "?" help icon off-screen). */
+    .pastebtn .pblbl{display:none}
+    .pastebtn{padding:0 10px}
+    .topctrls{gap:6px}
+    .topbar{gap:8px;padding:0 10px}
     .subbar{height:42px}
     main{padding-bottom:var(--botnav)}
     .trade{grid-template-columns:1fr;display:flex;flex-direction:column}
@@ -299,6 +309,12 @@
     .chartwrap{height:44vh;flex:0 0 auto}
     .txpane,.pospane{height:48vh;flex:0 0 auto}
     .tradeSide{border-top:1px solid var(--border);flex:1 1 auto}
+    /* Chart ⇄ Buy focus: the flip button (bottom-right) trades vertical space between the chart and
+       the buy panel so neither is cramped. data-focus="chart" = big chart; "buy" = big buy panel. */
+    .trade[data-focus="chart"] .chartwrap{height:58vh}
+    .trade[data-focus="buy"] .chartwrap{height:20vh}
+    .trade[data-focus="buy"] .txpane,.trade[data-focus="buy"] .pospane{height:24vh}
+    .tradefab{display:flex}
     .thead .st{gap:14px}.thead .st div:nth-child(3){display:none}
     .board{grid-template-columns:1fr;overflow:auto;height:auto;min-height:100%}
     .col{border-right:none;border-bottom:1px solid var(--border)}
@@ -340,7 +356,7 @@
       </div>
     </nav>
     <div class="topctrls">
-      <button class="pastebtn" id="pasteCa">📋 Paste CA</button>
+      <button class="pastebtn" id="pasteCa">📋<span class="pblbl"> Paste CA</span></button>
       <label class="searchbox"><span>🔍</span><input id="search" placeholder="Search name or CA…"><kbd>/</kbd></label>
       <button class="iconbtn watchbtn" id="watchBtn" title="Watchlist — your saved coins">★</button>
       <div class="walletpill" id="walletPill" title="Wallet"><span class="dot off"></span><b id="solBal">Connect</b></div>
@@ -619,6 +635,7 @@
   function render(){
     const {route,arg}=parseHash();state.route=route;
     if(state.pollT){clearTimeout(state.pollT);state.pollT=null;}
+    if(state.txPollT){clearTimeout(state.txPollT);state.txPollT=null;}
     setNav(route);
     const wb=$("#watchBtn");if(wb)wb.classList.toggle("on",route==="trending"&&state.trendTab==="watch");
     if(route==="trenches")renderTrenches();
@@ -870,6 +887,7 @@
   function curTradeRow(){return (state.tradeRow&&state.tradeRow.tokenMint===state.mint)?state.tradeRow:findRow(state.mint);}
   function setCtab(which){
     state.tradeTab=which;
+    if(which!=="tx"&&state.txPollT){clearTimeout(state.txPollT);state.txPollT=null;}
     const c=$("#ctab");if(c)c.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.ct===which));
     ["chart","tx","pos"].forEach(p=>{const pane=$('[data-pane="'+p+'"]');if(pane)pane.style.display=(p===which)?"":"none";});
     if(which==="tx")loadTxPane(state.mint,curTradeRow());
@@ -894,21 +912,29 @@
   }
   // Pre-DEX pump.fun coins have NO GeckoTerminal pool, so their swaps come off our PumpPortal tape.
   async function fetchPumpTrades(mint){try{const {d}=await api("/api/web/pump-trades?mint="+encodeURIComponent(mint));return (d&&d.trades)||[];}catch(e){return [];}}
-  async function loadTxPane(mint,r,retried){
+  // LIVE transactions: loads on tab open, then silently refreshes every 4s while the Transactions tab
+  // is open (clears itself on tab/route change). silent refreshes don't flash the spinner.
+  async function loadTxPane(mint,r,opts){
+    opts=opts||{};
     const pane=$('[data-pane="tx"]');if(!pane)return;
+    if(state.txPollT){clearTimeout(state.txPollT);state.txPollT=null;}
     const pool=(r&&(r.pairAddress||r.raydiumPool))||"";
-    if(!retried)pane.innerHTML='<div class="loading" style="padding:24px"><span class="spin"></span></div>';
+    const haveTable=!!pane.querySelector("table");
+    if(!opts.retry&&!opts.silent&&!haveTable)pane.innerHTML='<div class="loading" style="padding:24px"><span class="spin"></span></div>';
     // Graduated/migrated coins → GeckoTerminal pool swaps; bonding-curve coins (no pool) → pump tape.
     const tr=pool?await fetchPoolTrades(pool):await fetchPumpTrades(mint);
     if(state.route!=="trade"||state.mint!==mint||state.tradeTab!=="tx")return;
+    const again=(ms)=>{state.txPollT=setTimeout(()=>{if(state.route==="trade"&&state.mint===mint&&state.tradeTab==="tx")loadTxPane(mint,r,{silent:true});},ms);};
     if(!tr.length){
-      if(!retried){setTimeout(()=>{if(state.route==="trade"&&state.mint===mint&&state.tradeTab==="tx")loadTxPane(mint,r,true);},1500);return;}
-      pane.innerHTML='<div class="panemsg"><div style="font-size:30px">🫧</div><div>'+(pool?'No recent swaps yet — check back in a moment.':'Waiting for the first on-curve trades…<br>Live pump.fun buys/sells stream in here.')+'</div></div>';return;}
+      if(!opts.retry&&!haveTable){state.txPollT=setTimeout(()=>{if(state.route==="trade"&&state.mint===mint&&state.tradeTab==="tx")loadTxPane(mint,r,{retry:true});},1500);return;}
+      if(!haveTable)pane.innerHTML='<div class="panemsg"><div style="font-size:30px">🫧</div><div>'+(pool?'No recent swaps yet — check back in a moment.':'Waiting for the first on-curve trades…<br>Live pump.fun buys/sells stream in here.')+'</div></div>';
+      again(4000);return;}
     pane.innerHTML='<table class="txtbl"><thead><tr><th>Time</th><th>Type</th><th>'+(pool?'USD':'Size')+'</th><th>Price</th><th>Maker</th></tr></thead><tbody>'+
       tr.map(t=>{const cls=t.kind==="sell"?"s":"b";
         const amt=t.usd?fmtUsd(t.usd):(t.sol?("◎"+Number(t.sol).toFixed(3)):"—");
         const href=t.tx?("https://solscan.io/tx/"+encodeURIComponent(t.tx)):("https://solscan.io/account/"+encodeURIComponent(t.maker));
         return '<tr><td>'+esc(txAgo(t.ts))+'</td><td class="'+cls+'">'+(t.kind==="sell"?"SELL":"BUY")+'</td><td>'+amt+'</td><td>'+(t.price?("$"+fmtPrice(t.price)):"—")+'</td><td><a href="'+href+'" target="_blank" rel="noopener">'+esc(short(t.maker))+' ↗</a></td></tr>';}).join("")+'</tbody></table>';
+    again(4000);
   }
   async function loadPosPane(mint){
     const pane=$('[data-pane="pos"]');if(!pane)return;
@@ -933,7 +959,7 @@
     state.tradeTab="chart";
     let r=findRow(mint);state.tradeRow=r;subbarTrade(r);
     const view=$("#v-trade");
-    view.innerHTML='<div class="trade"><div class="tradeMain">'+
+    view.innerHTML='<div class="trade" data-focus="chart"><div class="tradeMain">'+
         '<div class="thead" id="thead">'+(r?theadHtml(r):'<div class="ti"><b>'+short(mint)+'</b></div>')+'</div>'+
         '<div class="tstrip" id="ctab">'+
           '<button data-ct="chart" class="on">Chart</button>'+
@@ -960,7 +986,9 @@
           '<button class="bigbuy" id="bigbuy">Buy</button>'+
           '<div class="perf" id="perf"></div>'+
           '<div class="secbox" id="secbox"><h4>🛡 Token Data &amp; Security</h4><div class="loading" style="padding:14px"><span class="spin"></span></div></div>'+
-        '</div></div></div>';
+        '</div></div>'+
+        '<button class="tradefab" id="tradeFab" onclick="GG.flipTrade()" aria-label="Flip between bigger chart and bigger buy panel">💰 Buy</button>'+
+      '</div>';
     wireTradePanel(mint,r);updateWselLine();paintPresetSel();wireCtab();
     const mb=$("#ctMoreBtn");if(mb)mb.onclick=(e)=>{e.stopPropagation();mb.parentNode.classList.toggle("open");};
     if(state.token&&!(state.presets.trade||[]).length){loadPresets().then(()=>{if(state.route==="trade")paintPresetSel();});}
@@ -1822,6 +1850,7 @@
 
   // ---------- expose + boot ----------
   window.GG={open:(m)=>go("trade",m),openSell:(m)=>{state.pendingSell=m;go("trade",m);},go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,
+    flipTrade:()=>{const t=document.querySelector('#v-trade .trade');if(!t)return;const next=t.getAttribute('data-focus')==='buy'?'chart':'buy';t.setAttribute('data-focus',next);const fab=document.getElementById('tradeFab');if(fab)fab.innerHTML=next==='buy'?'📈 Chart':'💰 Buy';const side=t.querySelector('.tradeSide'),v=document.getElementById('v-trade');if(next==='buy'&&side)side.scrollIntoView({behavior:'smooth',block:'start'});else if(v)v.scrollTo({top:0,behavior:'smooth'});},
     copyWallet:(w)=>{const i=$("#cpWallet");if(i){i.value=w;i.scrollIntoView({behavior:"smooth",block:"center"});i.focus();toast("Wallet loaded — set your size, then Start copying");}},
     kolProfile:openKolProfile,
     launchChat:(m)=>{state.launchedMint=m;state.launchTab="chat";state._launchKept=true;if(state.route==="launch")renderLaunch();else go("launch");},
