@@ -22550,28 +22550,31 @@ async function fetchGeckoPoolTrades(pool, options = {}) {
   const key = String(pool || "").trim();
   if (!key) return [];
   const cached = _geckoTradesCache.get(key);
-  if (!options.force && cached && Date.now() - cached.at < (options.ttlMs || 5_000)) return cached.trades;
-  try {
-    const data = await fetchJson(
-      `https://api.geckoterminal.com/api/v2/networks/solana/pools/${encodeURIComponent(key)}/trades?trade_volume_in_usd_greater_than=0`,
-      { headers: { Accept: "application/json" }, timeoutMs: options.timeoutMs || 3_000 }
-    ).catch(() => null);
-    const rows = arrayFromApiData(data, ["data"]);
-    const trades = rows.slice(0, 60).map((t) => {
-      const a = t?.attributes || {};
-      const kind = /sell/i.test(String(a.kind || "")) ? "sell" : "buy";
-      return {
-        ts: a.block_timestamp || null,
-        kind,
-        usd: Number(a.volume_in_usd) || 0,
-        price: Number(a.price_to_in_usd || a.price_from_in_usd) || 0,
-        maker: String(a.tx_from_address || "").trim(),
-        tx: String(a.tx_hash || "").trim()
-      };
-    }).filter((t) => t.tx);
-    if (trades.length) _geckoTradesCache.set(key, { at: Date.now(), trades });
-    return trades.length ? trades : (cached?.trades || []);
-  } catch { return cached?.trades || []; }
+  if (!options.force && cached && Date.now() - cached.at < (options.ttlMs || 12_000)) return cached.trades;
+  const url = `https://api.geckoterminal.com/api/v2/networks/solana/pools/${encodeURIComponent(key)}/trades?trade_volume_in_usd_greater_than=0`;
+  // GeckoTerminal free tier occasionally 429s the FIRST (uncached) hit from Render's busy IP — a
+  // single quick retry clears it, after which the 12s cache serves everyone.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const data = await fetchJson(url, { headers: { Accept: "application/json" }, timeoutMs: options.timeoutMs || 3_500 });
+      const rows = arrayFromApiData(data);
+      const trades = rows.slice(0, 60).map((t) => {
+        const a = t?.attributes || {};
+        const kind = /sell/i.test(String(a.kind || "")) ? "sell" : "buy";
+        return {
+          ts: a.block_timestamp || null,
+          kind,
+          usd: Number(a.volume_in_usd) || 0,
+          price: Number(a.price_to_in_usd || a.price_from_in_usd) || 0,
+          maker: String(a.tx_from_address || "").trim(),
+          tx: String(a.tx_hash || "").trim()
+        };
+      }).filter((t) => t.tx);
+      if (trades.length) { _geckoTradesCache.set(key, { at: Date.now(), trades }); return trades; }
+    } catch {}
+    if (attempt === 0) await new Promise((r) => setTimeout(r, 350));
+  }
+  return cached?.trades || [];
 }
 async function fetchLivePairCandidates(options = {}) {
   const ttlMs = Number.isFinite(Number(options.ttlMs)) ? Number(options.ttlMs) : 500;

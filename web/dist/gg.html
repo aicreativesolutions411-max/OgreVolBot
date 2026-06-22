@@ -688,15 +688,17 @@
     else if(which==="pos")loadPosPane(state.mint);
   }
   function wireCtab(){const c=$("#ctab");if(!c)return;c.querySelectorAll("button").forEach(b=>b.onclick=()=>setCtab(b.dataset.ct));setCtab("chart");}
-  async function loadTxPane(mint,r){
+  async function loadTxPane(mint,r,retried){
     const pane=$('[data-pane="tx"]');if(!pane)return;
     const pool=(r&&(r.pairAddress||r.raydiumPool))||"";
     if(!pool){pane.innerHTML='<div class="panemsg"><div style="font-size:30px">📡</div><div>Live transactions appear once this token has a DEX pool.<br>Brand-new launches show trades here within minutes.</div></div>';return;}
-    pane.innerHTML='<div class="loading" style="padding:24px"><span class="spin"></span></div>';
+    if(!retried)pane.innerHTML='<div class="loading" style="padding:24px"><span class="spin"></span></div>';
     const {ok,d}=await api("/api/web/token-trades?pool="+encodeURIComponent(pool));
     if(state.route!=="trade"||state.mint!==mint||state.tradeTab!=="tx")return;
     const tr=(d&&d.trades)||[];
-    if(!ok||!tr.length){pane.innerHTML='<div class="panemsg"><div style="font-size:30px">🫧</div><div>No recent swaps yet — check back in a moment.</div></div>';return;}
+    if(!ok||!tr.length){
+      if(!retried){setTimeout(()=>{if(state.route==="trade"&&state.mint===mint&&state.tradeTab==="tx")loadTxPane(mint,r,true);},1400);return;}
+      pane.innerHTML='<div class="panemsg"><div style="font-size:30px">🫧</div><div>No recent swaps yet — check back in a moment.</div></div>';return;}
     pane.innerHTML='<table class="txtbl"><thead><tr><th>Time</th><th>Type</th><th>USD</th><th>Price</th><th>Maker</th></tr></thead><tbody>'+
       tr.map(t=>{const cls=t.kind==="sell"?"s":"b";return '<tr><td>'+esc(txAgo(t.ts))+'</td><td class="'+cls+'">'+(t.kind==="sell"?"SELL":"BUY")+'</td><td>'+fmtUsd(t.usd)+'</td><td>'+(t.price?("$"+fmtPrice(t.price)):"—")+'</td><td><a href="https://solscan.io/tx/'+encodeURIComponent(t.tx)+'" target="_blank" rel="noopener">'+esc(short(t.maker))+' ↗</a></td></tr>';}).join("")+'</tbody></table>';
   }
