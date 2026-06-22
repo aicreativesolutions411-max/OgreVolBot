@@ -688,15 +688,26 @@
     else if(which==="pos")loadPosPane(state.mint);
   }
   function wireCtab(){const c=$("#ctab");if(!c)return;c.querySelectorAll("button").forEach(b=>b.onclick=()=>setCtab(b.dataset.ct));setCtab("chart");}
+  // Live swaps fetched CLIENT-SIDE straight from GeckoTerminal (CORS-enabled). This uses the user's
+  // own IP, dodging the rate-limit that throttles our shared Render IP — far more reliable than a
+  // server proxy. Falls back to our /api/web/token-trades proxy only if the direct call is blocked.
+  async function fetchPoolTrades(pool){
+    const map=t=>{const a=(t&&t.attributes)||{};return {ts:a.block_timestamp,kind:/sell/i.test(String(a.kind||""))?"sell":"buy",usd:Number(a.volume_in_usd)||0,price:Number(a.price_to_in_usd||a.price_from_in_usd)||0,maker:String(a.tx_from_address||"").trim(),tx:String(a.tx_hash||"").trim()};};
+    try{
+      const j=await fetch("https://api.geckoterminal.com/api/v2/networks/solana/pools/"+encodeURIComponent(pool)+"/trades?trade_volume_in_usd_greater_than=0",{headers:{Accept:"application/json"}}).then(x=>x.ok?x.json():null);
+      const tr=((j&&j.data)||[]).slice(0,60).map(map).filter(t=>t.tx);
+      if(tr.length)return tr;
+    }catch(e){}
+    try{const {d}=await api("/api/web/token-trades?pool="+encodeURIComponent(pool));return (d&&d.trades)||[];}catch(e){return [];}
+  }
   async function loadTxPane(mint,r,retried){
     const pane=$('[data-pane="tx"]');if(!pane)return;
     const pool=(r&&(r.pairAddress||r.raydiumPool))||"";
     if(!pool){pane.innerHTML='<div class="panemsg"><div style="font-size:30px">📡</div><div>Live transactions appear once this token has a DEX pool.<br>Brand-new launches show trades here within minutes.</div></div>';return;}
     if(!retried)pane.innerHTML='<div class="loading" style="padding:24px"><span class="spin"></span></div>';
-    const {ok,d}=await api("/api/web/token-trades?pool="+encodeURIComponent(pool));
+    const tr=await fetchPoolTrades(pool);
     if(state.route!=="trade"||state.mint!==mint||state.tradeTab!=="tx")return;
-    const tr=(d&&d.trades)||[];
-    if(!ok||!tr.length){
+    if(!tr.length){
       if(!retried){setTimeout(()=>{if(state.route==="trade"&&state.mint===mint&&state.tradeTab==="tx")loadTxPane(mint,r,true);},1400);return;}
       pane.innerHTML='<div class="panemsg"><div style="font-size:30px">🫧</div><div>No recent swaps yet — check back in a moment.</div></div>';return;}
     pane.innerHTML='<table class="txtbl"><thead><tr><th>Time</th><th>Type</th><th>USD</th><th>Price</th><th>Maker</th></tr></thead><tbody>'+
