@@ -109,6 +109,9 @@
   .chip.y{color:var(--yellow);border-color:rgba(255,229,109,.3);background:rgba(255,229,109,.1)}
   .buybtn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:10px;font-weight:800;font-size:13px;color:#06140a;background:linear-gradient(180deg,var(--green2),var(--green));box-shadow:0 2px 12px rgba(114,255,35,.25);transition:.12s}
   .buybtn:hover{filter:brightness(1.08);transform:translateY(-1px)}.buybtn.sm{padding:7px 13px;font-size:12px}
+  .star{background:none;border:0;color:var(--muted);font-size:16px;line-height:1;cursor:pointer;padding:2px 4px;transition:.12s}
+  .star:hover{color:var(--gold,#ffd24a);transform:scale(1.15)}.star.on{color:var(--gold,#ffd24a)}
+  .card .top .star{margin-left:auto}
 
   /* trenches board */
   .board{display:grid;grid-template-columns:repeat(3,1fr);gap:0;height:100%}
@@ -401,6 +404,7 @@
   const state={route:"trending",mint:null,trendTab:"best",volTf:"h1",rows:[],pollT:null,
     token:localStorage.getItem(TOKEN_KEY)||"",user:null,wallets:[],activeWallet:null,
     presets:{trade:[],bundle:[]},activeTradePreset:localStorage.getItem("ggTradePreset")||"",searchTerm:"",pendingSell:null,portfolioTab:"positions",
+    watch:new Set(),watchRows:[],
     quickBuy:(function(){try{return JSON.parse(localStorage.getItem("ggQuickBuy")||"null");}catch(e){return null;}})()};
   // No credentials:include — the API returns ACAO:* which forbids credentialed CORS. Auth is the Bearer header.
   function api(path,opts){
@@ -518,6 +522,27 @@
     if(ok&&d&&d.ok){if(d.user)state.user=d.user;return true;}
     toast((d&&(d.error||d.message))||"Could not save referral",true);return false;
   }
+  // ---------- watchlist (★ saved coins) ----------
+  async function loadWatch(){
+    if(!state.token)return;
+    const {ok,d}=await api("/api/web/watchlist");
+    if(ok&&d&&d.ok){state.watchRows=d.watchlist||[];state.watch=new Set(state.watchRows.map(w=>w.tokenMint));}
+  }
+  async function toggleStar(r){
+    if(!(await ensureAccount()))return;
+    const mint=typeof r==="string"?r:r.tokenMint;const on=state.watch.has(mint);
+    // optimistic
+    if(on){state.watch.delete(mint);state.watchRows=state.watchRows.filter(w=>w.tokenMint!==mint);}
+    else {state.watch.add(mint);const o=(typeof r==="object")?r:{tokenMint:mint};state.watchRows.unshift({tokenMint:mint,symbol:o.symbol||"",name:o.name||"",imageUrl:av(o)||""});}
+    document.querySelectorAll('[data-star="'+mint+'"]').forEach(b=>{b.textContent=state.watch.has(mint)?"★":"☆";b.classList.toggle("on",state.watch.has(mint));});
+    const body={tokenMint:mint,action:on?"remove":"add"};
+    if(!on&&typeof r==="object"){body.symbol=r.symbol||"";body.name=r.name||"";body.imageUrl=av(r)||"";}
+    const {ok,d}=await jpost("/api/web/watchlist",body);
+    if(ok&&d&&d.ok){state.watchRows=d.watchlist||state.watchRows;state.watch=new Set(state.watchRows.map(w=>w.tokenMint));}
+    toast(on?"Removed from Watchlist":"★ Saved to Watchlist");
+    if(state.route==="trending"&&state.trendTab==="watch")renderTrending();
+  }
+  function starBtn(r){const on=state.watch.has(r.tokenMint);return '<button class="star'+(on?" on":"")+'" data-star="'+esc(r.tokenMint)+'" title="Watchlist" onclick="event.stopPropagation();GG.star(\''+esc(r.tokenMint)+'\')">'+(on?"★":"☆")+'</button>';}
 
   // ---------- modal ----------
   function openModal(html){const m=$("#modal");$("#modalBox").innerHTML='<button class="x" onclick="GG.closeModal()">✕</button>'+html;m.classList.add("on");}
@@ -560,6 +585,7 @@
     {id:"vol",label:"Top Volume",bucket:"live",sort:"volume",cat:"gtVolume"},
     {id:"grad",label:"Graduating",bucket:"live",sort:"best",cat:"graduating"},
     {id:"migr",label:"Migrated",bucket:"live",sort:"best",cat:"gtMigrated"},
+    {id:"watch",label:"★ Saved"},
   ];
   function tabById(id){return TREND_TABS.find(t=>t.id===id)||TREND_TABS[0];}
   async function fetchPairs(p){
@@ -610,7 +636,7 @@
     qb.title="Your 1-click ⚡ Buy amount — tap to change";qb.onclick=()=>openQuickBuyModal(null);sb.appendChild(qb);
   }
   function subbarTrenches(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Trenches";sb.appendChild(h);const n=el("div","mut");n.style.cssText="margin-left:10px;font-size:11px";n.textContent="Fresh → about to migrate → graduated. Live SlimeWire feed.";sb.appendChild(n);}
-  function subbarPortfolio(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Portfolio";sb.appendChild(h);const tabs=el("div","tabs");[["positions","Positions"],["cards","PnL Cards"]].forEach(([id,lab])=>{const b=el("button");b.textContent=lab;b.className=id===state.portfolioTab?"on":"";b.onclick=()=>{state.portfolioTab=id;renderPortfolio();};tabs.appendChild(b);});sb.appendChild(tabs);}
+  function subbarPortfolio(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Portfolio";sb.appendChild(h);const tabs=el("div","tabs");[["positions","Positions"],["cards","History & PnL"]].forEach(([id,lab])=>{const b=el("button");b.textContent=lab;b.className=id===state.portfolioTab?"on":"";b.onclick=()=>{state.portfolioTab=id;renderPortfolio();};tabs.appendChild(b);});sb.appendChild(tabs);}
   function subbarWallet(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Wallet";sb.appendChild(h);}
   function subbarTrade(r){const sb=$("#subbar");sb.innerHTML="";const back=el("button","chip");back.textContent="← Back";back.onclick=()=>go("trending");sb.appendChild(back);const h=el("h1");h.style.fontSize="15px";h.textContent=r?(r.symbol||short(state.mint)):short(state.mint);sb.appendChild(h);}
 
@@ -650,7 +676,7 @@
       '<td>'+esc(volLabel(r))+'</td>'+
       '<td class="hideMb"><span class="txns"><span class="b">'+(r.buys5m??r.buysH1??0)+'</span> / <span class="s">'+(r.sells5m??r.sellsH1??0)+'</span></span></td>'+
       '<td class="hideMb"><div class="tkinfo">'+riskChips(r)+'</div></td>'+
-      '<td><button class="buybtn sm" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button></td></tr>';
+      '<td><div style="display:flex;gap:6px;align-items:center;justify-content:flex-end">'+starBtn(r)+'<button class="buybtn sm" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button></div></td></tr>';
   }
   function shownRows(){const term=(state.searchTerm||"").toLowerCase().trim();return term?state.rows.filter(r=>((r.symbol||"")+" "+(r.name||"")).toLowerCase().includes(term)):state.rows;}
   function applyTrendingFilter(){const tb=document.querySelector("#v-trending tbody");if(!tb)return;const rows=shownRows();tb.innerHTML=rows.length?rows.map(rowHtml).join(""):'<tr><td colspan="7" class="msg">No match in this list.</td></tr>';}
@@ -658,13 +684,17 @@
     setActiveView("v-trending");subbarTrending();
     const view=$("#v-trending");
     if(!view.querySelector("table"))view.innerHTML='<div class="loading"><span class="spin"></span></div>';
-    const rows=await fetchPairs(tabById(state.trendTab));
+    const isWatch=state.trendTab==="watch";
+    let rows;
+    if(isWatch){await loadWatch();rows=state.watchRows||[];}
+    else rows=await fetchPairs(tabById(state.trendTab));
     if(state.route!=="trending")return;state.rows=rows;
     const shown=shownRows();
-    if(!rows.length)view.innerHTML='<div class="msg">No pairs in this view right now — try another tab.</div>';
+    if(!rows.length)view.innerHTML='<div class="msg">'+(isWatch?"No saved coins yet — tap ☆ on any coin to add it here.":"No pairs in this view right now — try another tab.")+'</div>';
     else view.innerHTML='<table class="tbl"><thead><tr><th class="l">Pair</th><th>Market Cap</th><th class="hideMb">Liquidity</th><th>Volume</th><th class="hideMb">Txns</th><th class="hideMb">Token Info</th><th></th></tr></thead><tbody>'+(shown.length?shown.map(rowHtml).join(""):'<tr><td colspan="7" class="msg">No match in this list.</td></tr>')+'</tbody></table>';
     void enrichSocials(rows);
-    state.pollT=setTimeout(()=>{if(state.route==="trending")renderTrending();},7000);
+    // Watchlist is static-ish — refresh it lazily (30s); live feeds stay snappy at 7s.
+    state.pollT=setTimeout(()=>{if(state.route==="trending")renderTrending();},isWatch?30000:7000);
   }
   // Most pump rows arrive without socials (GeckoTerminal doesn't carry them). Pull X/Telegram/Website
   // for the visible mints from DexScreener (one batch call, CORS-OK) and slot the icons in next to the
@@ -714,7 +744,7 @@
   }
   function cardHtml(r){
     return'<div class="card" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+avImg(r,"av")+
-      '<div class="body"><div class="top"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><span class="nm">'+esc(r.name||"")+'</span><span class="age">'+esc(ageLabel(r))+'</span></div>'+
+      '<div class="body"><div class="top"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><span class="nm">'+esc(r.name||"")+'</span><span class="age">'+esc(ageLabel(r))+'</span>'+starBtn(r)+'</div>'+
       '<div class="stats"><span><i>MC</i>'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</span><span><i>LIQ</i>'+esc(r.liquidityLabel||fmtUsd(r.liquidityUsd))+'</span><span><i>V</i>'+esc(volLabel(r))+'</span></div>'+
       '<div class="row2">'+riskChips(r)+socialIconsHtml(r)+'<button class="buybtn sm" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button></div></div></div>';
   }
@@ -1155,8 +1185,8 @@
         '<div class="info"><b>'+esc(tk.symbol||short(tk.tokenMint))+'</b><div class="addr mut">'+esc(tk.holdTime||tk.name||"")+'</div></div>'+
         '<div class="bal"><b class="'+cls+'">'+(isFinite(r)?(r>=0?"+":"")+r.toFixed(3)+"◎":"—")+'</b><span>realized</span></div>'+
         '<button class="wbtn ghost" style="margin-left:10px;padding:9px 12px" onclick="GG.pnlCard(\''+esc(tk.tokenMint)+'\',\''+esc(tk.symbol||"")+'\')">🏆 Card</button></div>';
-    }).join(""):'<p class="mut" style="font-size:12px">No closed trades yet — your PnL cards appear here once you take some profit.</p>';
-    view.innerHTML='<div class="wgrid">'+totals+'<div class="wbox"><h3>Your tokens</h3><p class="sub">Tap <b>Card</b> to build a shareable SlimeWire PnL card you can save and post.</p>'+list+'</div></div>';
+    }).join(""):'<p class="mut" style="font-size:12px">No closed trades yet — your trade history &amp; PnL cards appear here once you take some profit.</p>';
+    view.innerHTML='<div class="wgrid">'+totals+'<div class="wbox"><h3>📜 Trade history</h3><p class="sub">Every coin you\'ve closed, with realized PnL. Tap <b>🏆 Card</b> to build a shareable SlimeWire PnL card you can save &amp; post on X.</p>'+list+'</div></div>';
   }
   async function openPnlCard(mint,sym){
     toast("Building your PnL card…");
@@ -1305,13 +1335,19 @@
           '<button class="wbtn" id="distBtn">Create + fund fresh wallets</button>'+
           '<p class="wnote" style="margin:8px 0 0">Spins up new wallets and funds each from your active wallet — great for bundles. Backup downloads automatically.</p>'+
         '</div></details>'+
-        // ---- Referrals fold ----
-        (function(){const u=state.user||{};return '<details class="fold"><summary>🎁 Referrals<span class="sub">your code · payout wallet</span><span class="chev">▾</span></summary><div class="foldbody">'+
+        // ---- Profile & Alerts fold (account: alerts + X + referral) ----
+        (function(){const u=state.user||{};const alertsOn=(typeof Notification!=="undefined"&&Notification.permission==="granted");const xh=String(u.xHandle||u.x||"").replace(/^@/,"");
+          return '<details class="fold"><summary>🔔 Profile &amp; Alerts<span class="sub">notifications · X · referral</span><span class="chev">▾</span></summary><div class="foldbody">'+
+          '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:7px">Alerts</div>'+
+          (alertsOn?'<p class="wnote" style="margin:0 0 6px;color:var(--green2)">🔔 Alerts are ON — you\'ll get a push when your sniper fires &amp; on key events.</p>':'<button class="wbtn" id="enAlerts">🔔 Enable push alerts</button><p class="wnote" style="margin:8px 0 0">Get pinged the instant your sniper fires — even with the app closed.</p>')+
+          '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 7px">Your X handle</div>'+
+          '<div class="field"><div style="display:flex;gap:8px"><input id="xHandle" value="'+esc(xh)+'" placeholder="@yourhandle" maxlength="30" style="flex:1"><button class="wbtn ghost" id="saveX" style="flex:0 0 auto">Save</button></div></div>'+
+          '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 7px">Referral</div>'+
           '<p class="wnote" style="margin:0 0 12px">Share your link, set a custom code, and choose where your referral earnings get paid.</p>'+
-          '<div class="field"><label>Your referral link</label><div class="walletrow" style="margin:0"><div class="info" style="min-width:0"><div class="addr">'+esc(u.referralLink||"create a wallet first")+(u.referralLink?'<button onclick="GG.copy(\''+esc(u.referralLink)+'\')" title="Copy link">⧉</button>':'')+'</div></div></div></div>'+
+          '<div class="field"><label>Your referral link</label><div class="walletrow" style="margin:0"><div class="info" style="min-width:0"><div class="addr">'+esc(u.referralLink||"create a wallet first")+(u.referralLink?'<button onclick="GG.copy(\''+esc(u.referralLink)+'\')" title="Copy link">⧉</button>':'')+'</div></div>'+(u.referralLink?'<button class="wbtn ghost" style="margin-left:10px;padding:9px 12px" onclick="GG.shareRef(\''+esc(u.referralLink)+'\')">Share on 𝕏</button>':'')+'</div></div>'+
           '<div class="field" style="margin-top:12px"><label>Custom referral code</label><input id="refCode" value="'+esc(u.referralCode||"")+'" placeholder="YOURCODE" maxlength="32"></div>'+
           '<button class="wbtn" id="saveRefCode">Save code</button>'+
-          '<div class="field" style="margin-top:16px"><label>Referral payout wallet</label><input id="refWallet" value="'+esc(u.referralPayoutWallet||"")+'" placeholder="Solana address to receive earnings"></div>'+
+          '<div class="field" style="margin-top:16px"><label>Referral payout wallet</label><input id="refWallet2" value="'+esc(u.referralPayoutWallet||"")+'" placeholder="Solana address to receive earnings"></div>'+
           '<button class="wbtn ghost" id="saveRefWallet">Save payout wallet</button>'+
         '</div></details>';})();
     }
@@ -1337,7 +1373,9 @@
     const st=$("#swTok");if(st)st.onclick=async()=>{const dest=$("#swDest").value.trim();if(!dest){toast("Paste a destination address.",true);return;}st.disabled=true;st.textContent="Sweeping…";await sweepTokens(dest,state.wallets.map(w=>w.index));st.disabled=false;st.textContent="Sweep all tokens →";};
     const db=$("#distBtn");if(db)db.onclick=async()=>{const c=parseInt($("#dCount").value,10),a=$("#dAmt").value.trim();if(!(c>0)){toast("How many wallets?",true);return;}if(!a||Number(a)<=0){toast("SOL per wallet?",true);return;}db.disabled=true;db.textContent="Funding…";await distributeFresh(c,a,state.activeWallet||1);db.disabled=false;db.textContent="Create + fund fresh wallets";renderWallet();};
     const src=$("#saveRefCode");if(src)src.onclick=async()=>{const code=$("#refCode").value.trim();if(!code){toast("Enter a code.",true);return;}src.disabled=true;src.textContent="Saving…";const okk=await saveReferral({code});src.disabled=false;src.textContent="Save code";if(okk){toast("Referral code saved");renderWallet();}};
-    const srw=$("#saveRefWallet");if(srw)srw.onclick=async()=>{const w=$("#refWallet").value.trim();srw.disabled=true;srw.textContent="Saving…";const okk=await saveReferral(w?{wallet:w}:{clearPayout:true});srw.disabled=false;srw.textContent="Save payout wallet";if(okk){toast("Payout wallet saved");renderWallet();}};
+    const srw=$("#saveRefWallet");if(srw)srw.onclick=async()=>{const w=$("#refWallet2").value.trim();srw.disabled=true;srw.textContent="Saving…";const okk=await saveReferral(w?{wallet:w}:{clearPayout:true});srw.disabled=false;srw.textContent="Save payout wallet";if(okk){toast("Payout wallet saved");renderWallet();}};
+    const enA=$("#enAlerts");if(enA)enA.onclick=()=>GG.enableAlerts();
+    const sx=$("#saveX");if(sx)sx.onclick=async()=>{const h=$("#xHandle").value.trim().replace(/^@/,"");sx.disabled=true;sx.textContent="…";const {ok,d}=await jpost("/api/web/profile/x",{x:h,handle:h});sx.disabled=false;sx.textContent="Save";if(ok&&d&&d.ok){if(d.user)state.user=d.user;toast("X handle saved");}else toast((d&&(d.error||d.message))||"Could not save",true);};
   }
   function pickWallet(i){state.activeWallet=i;updateWalletPill();renderWallet();toast("Active wallet set");}
 
@@ -1771,11 +1809,14 @@
     copyWallet:(w)=>{const i=$("#cpWallet");if(i){i.value=w;i.scrollIntoView({behavior:"smooth",block:"center"});i.focus();toast("Wallet loaded — set your size, then Start copying");}},
     kolProfile:openKolProfile,
     launchChat:(m)=>{state.launchedMint=m;state.launchTab="chat";state._launchKept=true;if(state.route==="launch")renderLaunch();else go("launch");},
+    star:(m)=>{const r=(state.rows||[]).find(x=>x.tokenMint===m)||(state.watchRows||[]).find(x=>x.tokenMint===m)||{tokenMint:m};toggleStar(r);},
+    enableAlerts:async()=>{const ok=await ensurePushSubscribed();toast(ok?"🔔 Alerts on — you'll get pinged":"Couldn't enable alerts (check browser permission)",!ok);if(state.route==="wallet")renderWallet();},
+    shareRef:(link)=>{const t="I'm trading Solana memecoins on SlimeWire — fast terminal, 1-tap snipes, KOL copy. Join with my link:";window.open("https://x.com/intent/tweet?text="+encodeURIComponent(t)+"&url="+encodeURIComponent(link),"_blank","noopener");},
     // Coin-image fallback: if the fast proxy thumbnail fails, try the raw URL once, then the logo.
     avFallback:(img)=>{const ph="/assets/slimewire/png/slimewire-mark.png?v=logo4";const raw=img.getAttribute("data-raw")||"";if(raw&&!img.dataset.fb&&img.src.indexOf("weserv")>-1){img.dataset.fb="1";img.src=raw;}else{img.onerror=null;img.src=ph;}},
     removeWalletPrompt:(i)=>{const w=state.wallets.find(x=>x.index===i);if(w)removeWalletModal(w);}};
   render();updateWalletPill();loadSol();setInterval(loadSol,60000);
-  if(state.token){refreshWallets();loadPresets();}
+  if(state.token){refreshWallets();loadPresets();loadWatch();loadMe();}
 })();
 </script>
 </body>
