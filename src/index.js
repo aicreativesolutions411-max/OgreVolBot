@@ -43156,6 +43156,81 @@ async function webCreateKolCopyWallet(userId, body = {}) {
   };
 }
 
+// FREE KOL leaderboard from kolscan.io — no API key, no rate cap. kolscan SSRs its KOL PnL board into
+// streamed Next.js RSC chunks (self.__next_f.push([1,"…"])); we concatenate every chunk's JSON-unescaped
+// string, then bracket-match the `initLeaderboard` array → ~150 KOLs with name, wallet, X handle, SOL
+// profit and win/loss. This gives ROI + win-rate + pfps (via the X handle) for free, so the Copy tab is
+// never starved by MadeOnSol's 200/day cap and we lean far less on paid Solana Tracker for KOL data.
+const kolscanLeaderboardCache = { at: 0, rows: [] };
+const KOLSCAN_TTL_MS = 10 * 60 * 1000;
+function extractKolscanLeaderboard(html) {
+  const NEEDLE = 'push([1,"';
+  let clean = "", from = 0;
+  while (true) {
+    const open = html.indexOf(NEEDLE, from);
+    if (open < 0) break;
+    const strStart = open + "push([1,".length;
+    let inStr = false, esc = false, strEnd = -1;
+    for (let j = strStart; j < html.length; j++) {
+      const c = html[j];
+      if (!inStr) { if (c === '"') inStr = true; continue; }
+      if (esc) { esc = false; continue; }
+      if (c === "\\") { esc = true; continue; }
+      if (c === '"') { strEnd = j + 1; break; }
+    }
+    if (strEnd < 0) break;
+    try { clean += JSON.parse(html.slice(strStart, strEnd)); } catch {}
+    from = strEnd;
+  }
+  const a = clean.indexOf('"initLeaderboard"');
+  if (a < 0) return [];
+  const lb = clean.indexOf("[", a);
+  if (lb < 0) return [];
+  let depth = 0, s2 = false, e2 = false, end = -1;
+  for (let j = lb; j < clean.length; j++) {
+    const c = clean[j];
+    if (s2) { if (e2) e2 = false; else if (c === "\\") e2 = true; else if (c === '"') s2 = false; continue; }
+    if (c === '"') s2 = true;
+    else if (c === "[") depth++;
+    else if (c === "]") { depth--; if (depth === 0) { end = j + 1; break; } }
+  }
+  if (end < 0) return [];
+  try { return JSON.parse(clean.slice(lb, end)); } catch { return []; }
+}
+async function fetchKolscanLeaderboard() {
+  if (kolscanLeaderboardCache.rows.length && Date.now() - kolscanLeaderboardCache.at < KOLSCAN_TTL_MS) {
+    return kolscanLeaderboardCache.rows;
+  }
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 9000);
+    const res = await fetch("https://kolscan.io/leaderboard", {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; SlimeWire/1.0)", Accept: "text/html" },
+      signal: ctrl.signal
+    }).catch(() => null);
+    clearTimeout(timer);
+    if (!res || !res.ok) return kolscanLeaderboardCache.rows;
+    const arr = extractKolscanLeaderboard(await res.text());
+    const rows = arr.map((e) => {
+      const wins = Number(e.wins || 0), losses = Number(e.losses || 0), trades = wins + losses;
+      const profit = Number(e.profit || 0);
+      return webKolSummaryRow({
+        wallet: e.wallet_address,
+        name: e.name || (e.twitter ? stripAt(twitterHandleFromUrl(e.twitter)) : ""),
+        twitter: e.twitter,
+        telegram: e.telegram,
+        avatar: firstString(e.pfp, e.avatar),
+        realizedSol: profit,
+        roiLabel: `${profit >= 0 ? "+" : ""}${profit.toFixed(profit >= 100 ? 0 : 1)} SOL`,
+        winRatePct: trades ? Math.round(1000 * wins / trades) / 10 : null,
+        trades,
+        source: "kolscan"
+      });
+    }).filter((k) => k.wallet);
+    if (rows.length) { kolscanLeaderboardCache.at = Date.now(); kolscanLeaderboardCache.rows = rows; }
+    return kolscanLeaderboardCache.rows;
+  } catch { return kolscanLeaderboardCache.rows; }
+}
 async function buildKolScan(userId, mode = "hot", wallet = "") {
   const safeMode = normalizeKolMode(mode);
   const customWallet = String(wallet || "").trim();
@@ -43239,6 +43314,18 @@ async function buildKolScan(userId, mode = "hot", wallet = "") {
     }
 
     if (!base.configured) {
+      // No paid KOL key set — fall back to the FREE kolscan.io leaderboard (ROI + win-rate + pfps). This
+      // is what lets the Copy tab work fully even if Solana Tracker / MadeOnSol are dropped.
+      const free = await fetchKolscanLeaderboard().catch(() => []);
+      const freeKols = rotateRowsForRefresh(uniqueKolSummaries(free), 12, scanState.refreshCount, { stickyCount: 2 });
+      if (freeKols.length) {
+        return {
+          ...base, configured: true, source: "kolscan", kolFallback: "kolscan_free",
+          kolCount: freeKols.length, kols: freeKols, rows: [], refreshCount: scanState.refreshCount,
+          notes: [`kolscan: ${free.length} KOLs (free)`],
+          message: `KOL leaderboard via kolscan.io — ${freeKols.length} traders by realized SOL.`
+        };
+      }
       return {
         ...base,
         message: "Live KOL lists are not connected yet. Use Scan Wallet to inspect a public wallet, or try again later."
@@ -43259,13 +43346,21 @@ async function buildKolScan(userId, mode = "hot", wallet = "") {
     ]).sort(compareKolSignals), 72);
     const sortedPool = diversifyKolSignals((await hydrateKolSignalMetadata(signalCandidates)).sort(compareKolSignals), 48);
     const sorted = rotateRowsForRefresh(sortedPool, 36, scanState.refreshCount, { stickyCount: 2 });
+    // kolscan.io (FREE) leads the roster — it carries ROI (SOL profit) + win-rate + X handle (→ pfp) for
+    // ~150 KOLs, so the list is rich and populated even when MadeOnSol is rate-limited. Sorted by mode.
+    const kolscanKols = customWallet ? [] : await fetchKolscanLeaderboard().catch(() => []);
+    const kolscanSorted = safeMode === "consistent"
+      ? [...kolscanKols].filter((k) => Number(k.trades) >= 6).sort((a, b) => Number(b.winRatePct || 0) - Number(a.winRatePct || 0))
+      : kolscanKols; // already profit-desc from the leaderboard
     const kolPool = uniqueKolSummaries([
+      ...kolscanSorted,
       ...(madePart.kols || []),
       ...(solanaPart.kols || [])
     ]);
     const stickyKols = safeMode === "top" ? 4 : safeMode === "consistent" ? 3 : 2;
     let kols = rotateRowsForRefresh(kolPool, 12, scanState.refreshCount, { stickyCount: stickyKols });
     const notes = [madePart.error ? `MadeOnSol: ${madePart.error}` : "", solanaPart.error ? `Solana Tracker: ${solanaPart.error}` : ""].filter(Boolean);
+    if (kolscanKols.length) notes.push(`kolscan: ${kolscanKols.length} KOLs (free)`);
 
     // Live KOL sources can go dark mid-day (e.g. MadeOnSol's 200/day BASIC rate limit). When the
     // live pool comes back empty, fall back to the persisted KOL roster from earlier successful
