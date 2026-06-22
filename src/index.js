@@ -6724,6 +6724,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    // Native live transactions for the /gg trade view's Transactions tab. Proxies GeckoTerminal
+    // pool trades (FREE, no key) so the browser never hits CORS and we render our own branded table.
+    if (request.method === "GET" && pathname === "/api/web/token-trades") {
+      const pool = String(requestUrl.searchParams.get("pool") || "").trim();
+      const trades = pool ? await fetchGeckoPoolTrades(pool, { ttlMs: 5_000 }).catch(() => []) : [];
+      sendWebJson(request, response, 200, { ok: true, pool, trades });
+      return;
+    }
+
     // Read-only buy pre-warm: when the UI sees buy intent (token selected/hovered),
     // it pings this so the mint + market safety lookups are cached before the actual
     // buy runs assertTokenBuySafety, shaving the ~1.8s DexScreener fetch off the click.
@@ -22453,63 +22462,116 @@ async function fetchPumpSnipeCandidates(options = {}) {
   return uniqueSniperCandidates([...pumpLatest, ...search, ...latestFirst, ...topBoostBackup]);
 }
 
-// GeckoTerminal trending pools — a FREE (no-key) independent source of genuinely-trending,
-// established Solana pools. Fixes the "Trending/Surging/Top Volume/Migrated re-rank the same
-// fresh pump pool and look thin" problem: New stays fresh (these are older so they sink under
-// the fresh-sort), while the metric/best/graduated tabs finally get real movers + volume.
-let _geckoTrendingCache = { at: 0, rows: [] };
-async function fetchGeckoTrendingCandidates(options = {}) {
+// GeckoTerminal pools — a FREE (no-key) independent source of genuinely-trending, established
+// Solana pools across MULTIPLE endpoints. Fixes the "Trending/Surging/Top Volume/Migrated re-rank
+// the same ~20-row pool and look identical" problem: each tab now draws a DISTINCT pool —
+//   trending → /trending_pools           (the curated trending list)
+//   volume   → /pools?sort=h24_volume…   (the biggest-volume pools, a different membership)
+//   new      → /new_pools                (the freshest on-DEX pools → recently migrated)
+// We fetch 2 pages each for depth (~40 rows) and cache per-kind. The same v2 pool shape parses for
+// all three. New stays fresh from pump creations; these older pools sink under the fresh-sort there.
+function geckoPoolsToCandidates(data, sourceTag) {
+  const pools = arrayFromApiData(data, ["data"]);
+  if (!pools.length) return [];
+  const tokenMap = new Map();
+  for (const inc of (Array.isArray(data?.included) ? data.included : [])) {
+    if (inc?.type === "token" && inc.id) tokenMap.set(inc.id, inc.attributes || {});
+  }
+  return pools.map((pool) => {
+    const a = pool?.attributes || {};
+    const baseId = pool?.relationships?.base_token?.data?.id || "";
+    const mint = String(baseId).replace(/^solana_/, "");
+    if (!mint || mint === SOL_MINT) return null;
+    const tok = tokenMap.get(baseId) || {};
+    const dexId = pool?.relationships?.dex?.data?.id || "";
+    const pc = a.price_change_percentage || {};
+    const vol = a.volume_usd || {};
+    const tx = a.transactions || {};
+    const grad = /raydium|meteora|orca|pumpswap|fluxbeam/i.test(dexId); // on a DEX = migrated/graduated
+    return {
+      tokenMint: mint,
+      source: sourceTag,
+      profile: {
+        symbol: tok.symbol || String(a.name || "").split(" / ")[0] || "",
+        name: tok.name || "",
+        icon: tok.image_url || "",
+        imageUrl: tok.image_url || "",
+        dexId, dexName: dexId,
+        pairAddress: a.address || "",
+        pairUrl: "",
+        raydiumPool: /raydium|meteora|orca|pumpswap|fluxbeam/i.test(dexId) ? (a.address || "") : "",
+        graduated: grad,
+        pairCreatedAt: a.pool_created_at || null,
+        marketCap: firstNumber(a.market_cap_usd, a.fdv_usd),
+        fdv: a.fdv_usd || null,
+        liquidityUsd: Number(a.reserve_in_usd) || null,
+        liquidity: { usd: Number(a.reserve_in_usd) || null },
+        volume: { m5: Number(vol.m5) || 0, h1: Number(vol.h1) || 0, h6: Number(vol.h6) || 0, h24: Number(vol.h24) || 0 },
+        txns: { m5: { buys: tx.m5?.buys || 0, sells: tx.m5?.sells || 0 }, h1: { buys: tx.h1?.buys || 0, sells: tx.h1?.sells || 0 }, h24: { buys: tx.h24?.buys || 0, sells: tx.h24?.sells || 0 } },
+        priceChange: { m5: Number(pc.m5) || 0, h1: Number(pc.h1) || 0, h6: Number(pc.h6) || 0, h24: Number(pc.h24) || 0 }
+      }
+    };
+  }).filter(Boolean);
+}
+const GECKO_POOL_ENDPOINTS = {
+  trending: (page) => `https://api.geckoterminal.com/api/v2/networks/solana/trending_pools?include=base_token&page=${page}`,
+  volume: (page) => `https://api.geckoterminal.com/api/v2/networks/solana/pools?include=base_token&sort=h24_volume_usd_desc&page=${page}`,
+  new: (page) => `https://api.geckoterminal.com/api/v2/networks/solana/new_pools?include=base_token&page=${page}`
+};
+const _geckoPoolCache = new Map(); // kind -> { at, rows }
+async function fetchGeckoPools(kind, options = {}) {
+  const builder = GECKO_POOL_ENDPOINTS[kind];
+  if (!builder) return [];
   const ttl = Math.max(6_000, Number(options.ttlMs || 0));
-  if (!options.force && _geckoTrendingCache.rows.length && Date.now() - _geckoTrendingCache.at < ttl) return _geckoTrendingCache.rows;
+  const cached = _geckoPoolCache.get(kind);
+  if (!options.force && cached && cached.rows.length && Date.now() - cached.at < ttl) return cached.rows;
+  const pages = Math.max(1, Math.min(3, Number(options.pages || 2)));
+  try {
+    const pageData = await Promise.all(
+      Array.from({ length: pages }, (_, i) =>
+        fetchJson(builder(i + 1), { headers: { Accept: "application/json" }, timeoutMs: options.timeoutMs || 2_500 }).catch(() => null)
+      )
+    );
+    const rows = [];
+    for (const d of pageData) rows.push(...geckoPoolsToCandidates(d, `gecko-${kind}`));
+    const deduped = uniqueSniperCandidates(rows);
+    if (deduped.length) _geckoPoolCache.set(kind, { at: Date.now(), rows: deduped });
+    return deduped.length ? deduped : (cached?.rows || []);
+  } catch { return cached?.rows || []; }
+}
+// Back-compat shim: the fresh-feed merge + dexTrending category still call the trending fetcher.
+async function fetchGeckoTrendingCandidates(options = {}) {
+  return fetchGeckoPools("trending", { ...options, pages: options.pages || 2 });
+}
+// Live swaps for one pool — powers the /gg "Transactions" tab natively (no iframe, no CORS). FREE,
+// no key. Shaped to the minimum the table needs; cached briefly so tab-flipping doesn't hammer it.
+const _geckoTradesCache = new Map(); // pool -> { at, trades }
+async function fetchGeckoPoolTrades(pool, options = {}) {
+  const key = String(pool || "").trim();
+  if (!key) return [];
+  const cached = _geckoTradesCache.get(key);
+  if (!options.force && cached && Date.now() - cached.at < (options.ttlMs || 5_000)) return cached.trades;
   try {
     const data = await fetchJson(
-      "https://api.geckoterminal.com/api/v2/networks/solana/trending_pools?include=base_token&page=1",
-      { headers: { Accept: "application/json" }, timeoutMs: options.timeoutMs || 2_500 }
+      `https://api.geckoterminal.com/api/v2/networks/solana/pools/${encodeURIComponent(key)}/trades?trade_volume_in_usd_greater_than=0`,
+      { headers: { Accept: "application/json" }, timeoutMs: options.timeoutMs || 3_000 }
     ).catch(() => null);
-    const pools = arrayFromApiData(data, ["data"]);
-    if (!pools.length) return _geckoTrendingCache.rows || [];
-    const tokenMap = new Map();
-    for (const inc of (Array.isArray(data?.included) ? data.included : [])) {
-      if (inc?.type === "token" && inc.id) tokenMap.set(inc.id, inc.attributes || {});
-    }
-    const rows = pools.map((pool) => {
-      const a = pool?.attributes || {};
-      const baseId = pool?.relationships?.base_token?.data?.id || "";
-      const mint = String(baseId).replace(/^solana_/, "");
-      if (!mint || mint === SOL_MINT) return null;
-      const tok = tokenMap.get(baseId) || {};
-      const dexId = pool?.relationships?.dex?.data?.id || "";
-      const pc = a.price_change_percentage || {};
-      const vol = a.volume_usd || {};
-      const tx = a.transactions || {};
-      const grad = /raydium|meteora|orca|pumpswap/i.test(dexId); // on a DEX = migrated/graduated
+    const rows = arrayFromApiData(data, ["data"]);
+    const trades = rows.slice(0, 60).map((t) => {
+      const a = t?.attributes || {};
+      const kind = /sell/i.test(String(a.kind || "")) ? "sell" : "buy";
       return {
-        tokenMint: mint,
-        source: "gecko-trending",
-        profile: {
-          symbol: tok.symbol || String(a.name || "").split(" / ")[0] || "",
-          name: tok.name || "",
-          icon: tok.image_url || "",
-          imageUrl: tok.image_url || "",
-          dexId, dexName: dexId,
-          pairAddress: a.address || "",
-          pairUrl: "",
-          raydiumPool: /raydium|meteora|orca/i.test(dexId) ? (a.address || "") : "",
-          graduated: grad,
-          pairCreatedAt: a.pool_created_at || null,
-          marketCap: firstNumber(a.market_cap_usd, a.fdv_usd),
-          fdv: a.fdv_usd || null,
-          liquidityUsd: Number(a.reserve_in_usd) || null,
-          liquidity: { usd: Number(a.reserve_in_usd) || null },
-          volume: { m5: Number(vol.m5) || 0, h1: Number(vol.h1) || 0, h6: Number(vol.h6) || 0, h24: Number(vol.h24) || 0 },
-          txns: { m5: { buys: tx.m5?.buys || 0, sells: tx.m5?.sells || 0 }, h1: { buys: tx.h1?.buys || 0, sells: tx.h1?.sells || 0 }, h24: { buys: tx.h24?.buys || 0, sells: tx.h24?.sells || 0 } },
-          priceChange: { m5: Number(pc.m5) || 0, h1: Number(pc.h1) || 0, h6: Number(pc.h6) || 0, h24: Number(pc.h24) || 0 }
-        }
+        ts: a.block_timestamp || null,
+        kind,
+        usd: Number(a.volume_in_usd) || 0,
+        price: Number(a.price_to_in_usd || a.price_from_in_usd) || 0,
+        maker: String(a.tx_from_address || "").trim(),
+        tx: String(a.tx_hash || "").trim()
       };
-    }).filter(Boolean);
-    if (rows.length) _geckoTrendingCache = { at: Date.now(), rows };
-    return rows;
-  } catch { return _geckoTrendingCache.rows || []; }
+    }).filter((t) => t.tx);
+    if (trades.length) _geckoTradesCache.set(key, { at: Date.now(), trades });
+    return trades.length ? trades : (cached?.trades || []);
+  } catch { return cached?.trades || []; }
 }
 async function fetchLivePairCandidates(options = {}) {
   const ttlMs = Number.isFinite(Number(options.ttlMs)) ? Number(options.ttlMs) : 500;
@@ -22549,7 +22611,7 @@ async function fetchLivePairCandidates(options = {}) {
 // are NOT here — they keep the shared bucket pool and differentiate by SORT (already distinct), so
 // they don't need a name-search that returns nothing.
 const LIVE_CATEGORY_QUERIES = {
-  dexTrending: ["raydium solana", "bonk solana", "pump solana"],            // + token-boosts endpoint
+  dexTrending: ["raydium solana", "bonk solana", "pump solana"],            // + GeckoTerminal trending_pools + token-boosts
   dexBoosted: ["raydium solana", "pump solana"],                            // + token-boosts endpoint (defining source)
   pumpTrending: ["pump solana", "pumpfun", "bonk solana"],                  // + live pump creations + pump-latest
   memeMovers: ["bonk solana", "meme solana", "dog solana", "cat solana", "pepe solana", "wif solana"],
@@ -22557,10 +22619,17 @@ const LIVE_CATEGORY_QUERIES = {
   graduating: ["pump solana", "raydium pump", "pumpfun"],                   // + live pump creations (≥50% bonding filter)
   graduated: ["raydium solana", "meteora solana", "orca solana"]           // + graduated filter
 };
+// GeckoTerminal-backed tabs draw a DISTINCT pool per tab (different endpoint), not a re-rank of one
+// list — so Trending vs Surging vs Top-Volume vs Migrated finally look genuinely different. These
+// take the dedicated category path even though they have no DexScreener name-search of their own.
+const GECKO_BACKED_CATEGORIES = new Set(["dexTrending", "gtVolume", "gtSurging", "gtMigrated", "graduated"]);
 function livePairCategoryFilter(category) {
   // Only the discovery categories need a post-filter; the metric tabs rank the whole pool.
   if (category === "graduating") return (row) => { const p = Number(slimeScopeProgressPct(row)); return (isPumpStyleToken(row) || row.isPump) && p >= 20 && !(row.graduated || row.isGraduated); };
-  if (category === "graduated") return (row) => Boolean(row.graduated || row.isGraduated || isGraduatedSlimeScopePair(row));
+  if (category === "graduated" || category === "gtMigrated") return (row) => Boolean(row.graduated || row.isGraduated || isGraduatedSlimeScopePair(row));
+  // Surging = genuine gainers only (positive 5m OR 1h). Soft-applied (kept only when ≥6 match), so a
+  // flat market never empties the tab.
+  if (category === "gtSurging") return (row) => { const m5 = liveRowPct(row.m5); const h1 = liveRowPct(row.h1); return (Number.isFinite(m5) && m5 > 0) || (Number.isFinite(h1) && h1 > 0); };
   if (category === "dexBoosted") return (row) => Boolean(row.boosted || row.boosts || /boost/i.test(String(row.source || "")));
   if (category === "pumpTrending") return (row) => Boolean(isPumpStyleToken(row) || row.isPump || /pump/i.test(String(row.source || "")));
   return null;
@@ -22583,13 +22652,34 @@ async function fetchLiveCategoryCandidates(category, options = {}) {
   if (category === "dexBoosted" || category === "dexTrending") {
     try { rows.push(...(await fetchSniperCandidates({ ...options, ttlMs }).catch(() => []))); } catch {}
   }
-  // GeckoTerminal trending_pools (FREE, no key) is the defining source for the genuinely-trending /
-  // established tabs — a full page of real movers, regardless of age (the bucket path's age cap is
-  // what starved these). dexTrending powers /gg Trending/Surging/Top-Volume (one pool, sorted per tab).
-  if (category === "dexTrending" || category === "graduated") {
+  // GeckoTerminal (FREE, no key) is the defining source for the established/mover tabs — full pages
+  // of real movers regardless of age (the bucket path's age cap is what starved these). Each tab
+  // draws a DISTINCT endpoint so Trending / Surging / Top-Volume / Migrated stop re-ranking one list:
+  if (category === "dexTrending") {
+    // Trending → the curated trending_pools list (2 pages, ~40).
+    try { rows.push(...(await fetchGeckoPools("trending", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => []))); } catch {}
+  } else if (category === "gtVolume") {
+    // Top Volume → the biggest 24h-volume pools (a different membership, volume-sorted downstream).
+    try { rows.push(...(await fetchGeckoPools("volume", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => []))); } catch {}
+  } else if (category === "gtSurging") {
+    // Surging → blend fresh-on-DEX + high-volume + trending, then momentum-sort + positive-mover
+    // filter downstream → "what's pumping right now", distinct from the curated Trending list.
     try {
-      const gecko = await fetchGeckoTrendingCandidates({ ttlMs, timeoutMs: 2_500 }).catch(() => []);
-      rows.push(...(category === "graduated" ? gecko.filter((r) => r.profile?.graduated) : gecko));
+      const [nw, vol, tr] = await Promise.all([
+        fetchGeckoPools("new", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => []),
+        fetchGeckoPools("volume", { ttlMs, timeoutMs: 2_500, pages: 1 }).catch(() => []),
+        fetchGeckoPools("trending", { ttlMs, timeoutMs: 2_500, pages: 1 }).catch(() => [])
+      ]);
+      rows.push(...nw, ...vol, ...tr);
+    } catch {}
+  } else if (category === "gtMigrated" || category === "graduated") {
+    // Migrated → the freshest pools that are already on a real DEX (raydium/pumpswap/…) = just
+    // graduated off the pump curve. Backfill with graduated trending pools so the tab stays full.
+    try {
+      const nw = await fetchGeckoPools("new", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => []);
+      rows.push(...nw.filter((r) => r.profile?.graduated));
+      const tr = await fetchGeckoPools("trending", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => []);
+      rows.push(...tr.filter((r) => r.profile?.graduated));
     } catch {}
   }
   // Pump-curve tabs add the live pump creations (fresh) + latest so there's curve material to filter.
@@ -45077,7 +45167,7 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   // DexScreener searches + boosted/pump sources + a defining filter) so tabs no longer cross. Plain
   // bucket:sort callers (best/fresh, the autopilot feeds) keep the original path below.
   const cat = String(options.cat || "").trim();
-  if (cat && Array.isArray(LIVE_CATEGORY_QUERIES[cat]) && LIVE_CATEGORY_QUERIES[cat].length) {
+  if (cat && ((Array.isArray(LIVE_CATEGORY_QUERIES[cat]) && LIVE_CATEGORY_QUERIES[cat].length) || GECKO_BACKED_CATEGORIES.has(cat))) {
     return buildWebLivePairsForCategory(userId, cat, sort, options);
   }
   // Display/cache stay on the requested tab; only the row source can shift to

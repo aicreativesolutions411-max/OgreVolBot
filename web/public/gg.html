@@ -194,13 +194,18 @@
   .tstrip{display:flex;align-items:center;gap:2px;padding:0 16px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);flex:0 0 auto;height:40px;background:rgba(7,11,7,.6)}
   .tstrip button{padding:9px 12px;font-size:12px;font-weight:600;color:var(--muted);border-bottom:2px solid transparent}
   .tstrip button.on{color:var(--green);border-bottom-color:var(--green)}
-  .txfold{flex:0 0 auto;border-top:1px solid var(--border);background:rgba(7,11,7,.7)}
-  .txfold>summary{list-style:none;cursor:pointer;height:42px;display:flex;align-items:center;gap:9px;padding:0 16px;font-size:13px;font-weight:700}
-  .txfold>summary::-webkit-details-marker{display:none}
-  .txfold>summary .chev{transition:.15s;color:var(--muted)}
-  .txfold[open]>summary .chev{transform:rotate(180deg)}
-  .txfold .txbody{height:300px;border-top:1px solid var(--border);background:#060906}
-  .txfold .txbody iframe{width:100%;height:100%;border:0;display:block}
+  .chartskel{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#060906;z-index:1}
+  .txpane,.pospane{flex:1 1 auto;min-height:0;overflow:auto;background:#060906}
+  .txtbl{width:100%;border-collapse:collapse;font-size:12px}
+  .txtbl th{position:sticky;top:0;background:#0a0f0a;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:right;padding:8px 14px;border-bottom:1px solid var(--border);z-index:1}
+  .txtbl th:first-child{text-align:left}
+  .txtbl td{padding:7px 14px;text-align:right;border-bottom:1px solid rgba(255,255,255,.045);font-family:var(--mono);white-space:nowrap}
+  .txtbl td:first-child{text-align:left}
+  .txtbl tr:hover td{background:rgba(255,255,255,.02)}
+  .txtbl .b{color:var(--green);font-weight:700}.txtbl .s{color:var(--red);font-weight:700}
+  .txtbl a{color:var(--muted)}.txtbl a:hover{color:var(--green)}
+  .panemsg{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;height:100%;color:var(--muted);font-size:13px;text-align:center;padding:24px}
+  .poscard{padding:14px 16px}
 
   /* wallet + portfolio */
   .pcard{margin:14px 16px 0;border:1px solid var(--border);border-radius:14px;overflow:hidden}
@@ -263,6 +268,7 @@
     .trade{grid-template-columns:1fr;display:flex;flex-direction:column}
     .tradeMain{border-right:none;flex:0 0 auto}
     .chartwrap{height:44vh;flex:0 0 auto}
+    .txpane,.pospane{height:48vh;flex:0 0 auto}
     .tradeSide{border-top:1px solid var(--border);flex:1 1 auto}
     .thead .st{gap:14px}.thead .st div:nth-child(3){display:none}
     .board{grid-template-columns:1fr;overflow:auto;height:auto;min-height:100%}
@@ -523,10 +529,10 @@
   const TREND_TABS=[
     {id:"best",label:"Trending",bucket:"live",sort:"best",cat:"dexTrending"},
     {id:"fresh",label:"New",bucket:"live",sort:"fresh"},
-    {id:"surge",label:"Surging",bucket:"live",sort:"momentum",cat:"dexTrending"},
-    {id:"vol",label:"Top Volume",bucket:"live",sort:"volume",cat:"dexTrending"},
+    {id:"surge",label:"Surging",bucket:"live",sort:"momentum",cat:"gtSurging"},
+    {id:"vol",label:"Top Volume",bucket:"live",sort:"volume",cat:"gtVolume"},
     {id:"grad",label:"Graduating",bucket:"live",sort:"best",cat:"graduating"},
-    {id:"migr",label:"Migrated",bucket:"graduated",sort:"best",cat:"graduated"},
+    {id:"migr",label:"Migrated",bucket:"live",sort:"best",cat:"gtMigrated"},
   ];
   function tabById(id){return TREND_TABS.find(t=>t.id===id)||TREND_TABS[0];}
   async function fetchPairs(p){
@@ -659,29 +665,75 @@
   // ---------- trade ----------
   let tradeAmt="0.5",tradeSide="buy";
   function findRow(mint){return state.rows.find(r=>r.tokenMint===mint)||null;}
-  // Chart + live transactions in one. Prefer GeckoTerminal (it indexes PumpSwap/Raydium pools that
-  // DexScreener leaves stuck on "Loading pair…", and shows the live swaps table right under the chart
-  // — solving both "chart won't load" and "no transactions"). Needs the POOL address (we get it from
-  // the feed row). Fresh tokens with no pool fall back to DexScreener by mint.
+  // Chart pane — GeckoTerminal (it indexes PumpSwap/Raydium pools DexScreener leaves stuck on
+  // "Loading pair…"). Chart-ONLY now (swaps=0) since Transactions is its own tab — lighter embed =
+  // faster paint. A skeleton spinner sits behind the iframe and is removed on load (instant feel).
+  // Needs the POOL address (from the feed row); fresh tokens with no pool fall back to DexScreener.
   function chartIframe(mint,r){
     const pool=(r&&(r.pairAddress||r.raydiumPool))||"";
     const u=pool
-      ? "https://www.geckoterminal.com/solana/pools/"+encodeURIComponent(pool)+"?embed=1&info=0&swaps=1&grayscale=0&light_chart=0&chart_type=price&resolution=15m"
-      : "https://dexscreener.com/solana/"+encodeURIComponent(mint)+"?embed=1&theme=dark&trades=1&info=0&chartLeftToolbar=0&interval=15";
-    return'<iframe src="'+u+'" title="chart" loading="eager" allow="clipboard-write" style="width:100%;height:100%;border:0;display:block;background:#060906"></iframe>';
+      ? "https://www.geckoterminal.com/solana/pools/"+encodeURIComponent(pool)+"?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&chart_type=price&resolution=15m"
+      : "https://dexscreener.com/solana/"+encodeURIComponent(mint)+"?embed=1&theme=dark&trades=0&info=0&chartLeftToolbar=0&interval=15";
+    return'<div class="chartskel"><span class="spin"></span></div>'+
+      '<iframe src="'+u+'" title="chart" loading="eager" allow="clipboard-write" onload="var s=this.parentNode.querySelector(\'.chartskel\');if(s)s.remove()" style="position:relative;z-index:2;width:100%;height:100%;border:0;display:block;background:#060906"></iframe>';
+  }
+  function txAgo(ts){if(!ts)return"—";const s=Math.max(0,(Date.now()-new Date(ts).getTime())/1000);if(s<60)return Math.floor(s)+"s";if(s<3600)return Math.floor(s/60)+"m";if(s<86400)return Math.floor(s/3600)+"h";return Math.floor(s/86400)+"d";}
+  function fmtPrice(n){n=Number(n);if(!isFinite(n)||n<=0)return"—";if(n>=1)return n.toFixed(3);if(n>=0.001)return n.toFixed(5);return n.toExponential(2);}
+  function curTradeRow(){return (state.tradeRow&&state.tradeRow.tokenMint===state.mint)?state.tradeRow:findRow(state.mint);}
+  function setCtab(which){
+    state.tradeTab=which;
+    const c=$("#ctab");if(c)c.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.ct===which));
+    ["chart","tx","pos"].forEach(p=>{const pane=$('[data-pane="'+p+'"]');if(pane)pane.style.display=(p===which)?"":"none";});
+    if(which==="tx")loadTxPane(state.mint,curTradeRow());
+    else if(which==="pos")loadPosPane(state.mint);
+  }
+  function wireCtab(){const c=$("#ctab");if(!c)return;c.querySelectorAll("button").forEach(b=>b.onclick=()=>setCtab(b.dataset.ct));setCtab("chart");}
+  async function loadTxPane(mint,r){
+    const pane=$('[data-pane="tx"]');if(!pane)return;
+    const pool=(r&&(r.pairAddress||r.raydiumPool))||"";
+    if(!pool){pane.innerHTML='<div class="panemsg"><div style="font-size:30px">📡</div><div>Live transactions appear once this token has a DEX pool.<br>Brand-new launches show trades here within minutes.</div></div>';return;}
+    pane.innerHTML='<div class="loading" style="padding:24px"><span class="spin"></span></div>';
+    const {ok,d}=await api("/api/web/token-trades?pool="+encodeURIComponent(pool));
+    if(state.route!=="trade"||state.mint!==mint||state.tradeTab!=="tx")return;
+    const tr=(d&&d.trades)||[];
+    if(!ok||!tr.length){pane.innerHTML='<div class="panemsg"><div style="font-size:30px">🫧</div><div>No recent swaps yet — check back in a moment.</div></div>';return;}
+    pane.innerHTML='<table class="txtbl"><thead><tr><th>Time</th><th>Type</th><th>USD</th><th>Price</th><th>Maker</th></tr></thead><tbody>'+
+      tr.map(t=>{const cls=t.kind==="sell"?"s":"b";return '<tr><td>'+esc(txAgo(t.ts))+'</td><td class="'+cls+'">'+(t.kind==="sell"?"SELL":"BUY")+'</td><td>'+fmtUsd(t.usd)+'</td><td>'+(t.price?("$"+fmtPrice(t.price)):"—")+'</td><td><a href="https://solscan.io/tx/'+encodeURIComponent(t.tx)+'" target="_blank" rel="noopener">'+esc(short(t.maker))+' ↗</a></td></tr>';}).join("")+'</tbody></table>';
+  }
+  async function loadPosPane(mint){
+    const pane=$('[data-pane="pos"]');if(!pane)return;
+    if(!state.token){pane.innerHTML='<div class="panemsg"><div style="font-size:30px">👛</div><div>Set up a wallet to track your position here.</div><div class="cta" onclick="GG.go(\'wallet\')">Set up a wallet</div></div>';return;}
+    pane.innerHTML='<div class="loading" style="padding:24px"><span class="spin"></span></div>';
+    const {ok,d}=await api("/api/web/positions?fast=true");
+    if(state.route!=="trade"||state.mint!==mint||state.tradeTab!=="pos")return;
+    const mine=((d&&d.positions)||[]).filter(p=>p.tokenMint===mint);
+    if(!ok||!mine.length){pane.innerHTML='<div class="panemsg"><div style="font-size:30px">🫧</div><div>No position in this token yet.<br>Buy on the right and it shows up here.</div></div>';return;}
+    pane.innerHTML='<div class="poscard">'+mine.map(p=>{const pnl=Number(p.openPnlSol),pct=p.openPnlPercent,cls=isFinite(pnl)?(pnl>=0?"up":"down"):"mut";
+      return '<div class="wbox" style="margin:0 0 12px"><h3 style="margin-bottom:8px">'+esc(p.symbol||short(mint))+'</h3><div class="secgrid">'+
+        '<div class="cell"><b>'+(isFinite(Number(p.spentSol))?"◎"+Number(p.spentSol).toFixed(3):"—")+'</b><span>cost</span></div>'+
+        '<div class="cell"><b>'+(p.estimatedValueSol!=null?"◎"+Number(p.estimatedValueSol).toFixed(3):"—")+'</b><span>value</span></div>'+
+        '<div class="cell"><b class="'+cls+'">'+(isFinite(pnl)?(pnl>=0?"+":"")+pnl.toFixed(3)+"◎":"—")+(pct!=null?" ("+pct+"%)":"")+'</b><span>pnl</span></div></div>'+
+        '<button class="wbtn" style="margin-top:10px;background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606" onclick="GG.openSell(\''+esc(mint)+'\')">Sell '+esc(p.symbol||"")+'</button></div>';
+    }).join("")+'</div>';
   }
   async function renderTrade(){
     setActiveView("v-trade");
     const mint=state.mint;if(!mint){go("trending");return;}
     if(state.pendingSell===mint){tradeSide="sell";state.pendingSell=null;}
-    let r=findRow(mint);subbarTrade(r);
+    state.tradeTab="chart";
+    let r=findRow(mint);state.tradeRow=r;subbarTrade(r);
     const view=$("#v-trade");
     view.innerHTML='<div class="trade"><div class="tradeMain">'+
         '<div class="thead" id="thead">'+(r?theadHtml(r):'<div class="ti"><b>'+short(mint)+'</b></div>')+'</div>'+
-        '<div class="chartwrap">'+chartIframe(mint,r)+'</div>'+
-        '<div class="tstrip"><span style="font-size:11px;color:var(--muted)">📜 Live chart &amp; transactions</span>'+
-          '<a class="chip" style="margin-left:auto" href="https://solscan.io/token/'+encodeURIComponent(mint)+'" target="_blank">Solscan ↗</a>'+
-          '<a class="chip" href="https://dexscreener.com/solana/'+encodeURIComponent(mint)+'" target="_blank">DexScreener ↗</a></div>'+
+        '<div class="tstrip" id="ctab">'+
+          '<button data-ct="chart" class="on">Chart</button>'+
+          '<button data-ct="tx">Transactions</button>'+
+          '<button data-ct="pos">Positions</button>'+
+          '<a class="chip" style="margin-left:auto" href="https://solscan.io/token/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener">Solscan ↗</a>'+
+          '<a class="chip" href="https://dexscreener.com/solana/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener">DexScreener ↗</a></div>'+
+        '<div class="chartwrap" data-pane="chart">'+chartIframe(mint,r)+'</div>'+
+        '<div class="txpane" data-pane="tx" style="display:none"></div>'+
+        '<div class="pospane" data-pane="pos" style="display:none"></div>'+
       '</div><div class="tradeSide">'+
         '<div class="pnlbar"><div><span>Invested</span><b>—</b></div><div><span>Remaining</span><b>—</b></div><div><span>PNL</span><b class="mut">—</b></div></div>'+
         '<div class="sidepad">'+
@@ -694,10 +746,9 @@
           '<div class="perf" id="perf"></div>'+
           '<div class="secbox" id="secbox"><h4>🛡 Token Data &amp; Security</h4><div class="loading" style="padding:14px"><span class="spin"></span></div></div>'+
         '</div></div></div>';
-    wireTradePanel(mint,r);updateWselLine();paintPresetSel();
-    const txF=$("#txFold");if(txF)txF.addEventListener("toggle",()=>{if(txF.open){const f=txF.querySelector("iframe");if(f&&!f.src&&f.dataset.txsrc)f.src=f.dataset.txsrc;}});
+    wireTradePanel(mint,r);updateWselLine();paintPresetSel();wireCtab();
     if(state.token&&!(state.presets.trade||[]).length){loadPresets().then(()=>{if(state.route==="trade")paintPresetSel();});}
-    if(!r){const rows=await fetchPairs(tabById("best"));r=rows.find(x=>x.tokenMint===mint)||null;if(r&&state.route==="trade"){$("#thead").innerHTML=theadHtml(r);fillPerf(r);const cw=$(".chartwrap");if(cw&&(r.pairAddress||r.raydiumPool))cw.innerHTML=chartIframe(mint,r);}}
+    if(!r){const rows=await fetchPairs(tabById("best"));r=rows.find(x=>x.tokenMint===mint)||null;if(r&&state.route==="trade"){state.tradeRow=r;$("#thead").innerHTML=theadHtml(r);fillPerf(r);if(r.pairAddress||r.raydiumPool){if(state.tradeTab==="chart"){const cw=$('[data-pane="chart"]');if(cw)cw.innerHTML=chartIframe(mint,r);}else if(state.tradeTab==="tx")loadTxPane(mint,r);}}}
     else fillPerf(r);
     loadSecurity(mint);
   }
