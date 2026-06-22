@@ -1488,11 +1488,11 @@
       '<div data-lpanel="dev"'+show("dev")+'>'+
         '<div class="field row2"><div><label>Dev buy (SOL)</label><input id="lcDevBuy" inputmode="decimal" placeholder="0 = none"></div><div><label>Dev wallet (creator)</label>'+walletSelectHtml("lcDevWallet")+'</div></div>'+
         '<label class="lcheck"><input type="checkbox" id="lcBundle" checked> <span><b>Bundle the dev buy with the launch</b> (anti-snipe) — your dev buy lands in the same block as the mint, so snipers can\'t front-run your first buy.</span></label>'+
+        '<label class="lcheck"><input type="checkbox" id="lcFeeMax" checked> <span><b>Send max creator fees to my dev wallet</b> — you collect 100% of the creator fees this coin earns, paid straight to the dev wallet above. (Uncheck for none.)</span></label>'+
         '<label class="lcheck"><input type="checkbox" id="lcBundleWallets"> <span><b>Also bundle-buy from my other wallets</b> at launch — first-block buys across your funded wallets so the early supply is yours, not snipers\'.</span></label>'+
-        '<div class="field" id="lcBundleAmtWrap" style="display:none"><label>Bundle buy per wallet (SOL)</label><input id="lcBundleAmt" inputmode="decimal" placeholder="0.05"></div>'+
-        '<div class="field row2"><div><label>Creator fee</label><select id="lcFee"><option value="1000" selected>Max — 100% to dev wallet</option><option value="0">None</option><option value="custom">Custom %</option></select></div><div><label>Slippage (bps)</label><input id="lcSlip" inputmode="numeric" value="300"></div></div>'+
-        '<div class="field" id="lcFeeCustomWrap" style="display:none"><label>Custom creator fee %</label><input id="lcFeeCustom" inputmode="decimal" placeholder="e.g. 2"></div>'+
-        '<div class="lcnote">💰 <b>Creator fees → your dev wallet.</b> The coin is created &amp; signed by the dev wallet you pick above, so <b>every creator fee it earns is paid straight back to that wallet</b> — you keep 100% (max by default).</div>'+
+        '<div class="field row2" id="lcBundleAmtWrap" style="display:none"><div><label>Bundle wallets</label><input id="lcBundleCount" inputmode="numeric" placeholder="all"></div><div><label>Buy per wallet (SOL)</label><input id="lcBundleAmt" inputmode="decimal" placeholder="0.05"></div></div>'+
+        '<div class="lcnote" id="lcBundleNote" style="display:none">📦 These are first-block <b>entry</b> buys. <b>Take-profit / stop-loss</b> (laddered), exact wallet selection &amp; saved bundle <b>presets</b> live in the <b>📦 Bundle tool</b> — set them there after launch (presets are saved under <b>Wallet → Presets</b>).</div>'+
+        '<div class="field"><label>Slippage (bps)</label><input id="lcSlip" inputmode="numeric" value="300"></div>'+
       '</div>'+
       '<div data-lpanel="chat"'+show("chat")+'>'+
         '<div class="field"><label>Coin address (CA)</label><input id="lcChatCa" placeholder="Paste a coin CA, or launch one first" value="'+esc(mint)+'"></div>'+
@@ -1504,8 +1504,7 @@
     const readImg=(f,key,prevId,big)=>{if(!f)return;if(f.size>460000){toast("Image too big — keep it under ~450KB.",true);return;}const rd=new FileReader();rd.onload=()=>{state[key]={dataUrl:String(rd.result),name:f.name,type:f.type};state._launchKept=true;const p=$("#"+prevId);if(p)p.innerHTML='<img src="'+state[key].dataUrl+'" style="height:'+(big?"40":"64")+'px;'+(big?"":"width:64px;")+'border-radius:10px;object-fit:cover;border:1px solid var(--border)">';};rd.readAsDataURL(f);};
     $("#lcImg").onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchImg","lcImgPrev",false);
     const lb=$("#lcBanner");if(lb)lb.onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchBanner","lcBannerPrev",true);
-    const bw=$("#lcBundleWallets");if(bw)bw.onchange=()=>{const w=$("#lcBundleAmtWrap");if(w)w.style.display=bw.checked?"":"none";};
-    const fee=$("#lcFee");if(fee)fee.onchange=()=>{const w=$("#lcFeeCustomWrap");if(w)w.style.display=fee.value==="custom"?"":"none";};
+    const bw=$("#lcBundleWallets");if(bw)bw.onchange=()=>{const on=bw.checked;["lcBundleAmtWrap","lcBundleNote"].forEach(id=>{const e=$("#"+id);if(e)e.style.display=on?"":"none";});};
     lcWireChat();
     $("#lcGo").onclick=async()=>{
       const name=$("#lcName").value.trim(),sym=$("#lcSym").value.trim();
@@ -1517,8 +1516,8 @@
       // fee to MAX (1000), matching the proven old launch flow (empty used to mean 0 = creator earns nothing).
       const dw=$("#lcDevWallet");const devIdx=String(dw&&dw.value?dw.value:state.activeWallet);
       const devW=(state.wallets||[]).find(w=>String(w.index)===devIdx);
-      const feeSel=($("#lcFee")&&$("#lcFee").value)||"1000";
-      const creatorFeeBps=feeSel==="custom"?String(Math.max(0,Math.min(1000,Math.round(Number(($("#lcFeeCustom")&&$("#lcFeeCustom").value.trim())||"0")*100)))):String(feeSel);
+      // Creator fee is now a simple toggle: checked = MAX (1000 bps) to the dev wallet, unchecked = none.
+      const creatorFeeBps=($("#lcFeeMax")&&$("#lcFeeMax").checked)?"1000":"0";
       const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),slippageBps:($("#lcSlip")&&$("#lcSlip").value.trim())||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg",feeMode:"dev",devWalletIndex:devIdx,creatorFeeBps};
       if(devW&&devW.publicKey)body.creatorFeeRecipient=devW.publicKey;
       if(state.launchImg){body.imageDataUrl=state.launchImg.dataUrl;body.imageName=state.launchImg.name;body.imageType=state.launchImg.type;}
@@ -1528,7 +1527,9 @@
       // OTHER funded wallets, landed atomically with the create when the Jito bundle env is enabled.
       const bAmt=Number(($("#lcBundleAmt")&&$("#lcBundleAmt").value.trim())||"0");
       if($("#lcBundleWallets")&&$("#lcBundleWallets").checked&&bAmt>0){
-        const others=(state.wallets||[]).map(w=>w.index).filter(i=>String(i)!==devIdx);
+        let others=(state.wallets||[]).map(w=>w.index).filter(i=>String(i)!==devIdx);
+        const cnt=parseInt(($("#lcBundleCount")&&$("#lcBundleCount").value.trim())||"",10); // blank = all
+        if(Number.isFinite(cnt)&&cnt>0)others=others.slice(0,cnt);
         if(others.length){body.action="bundle";body.bundleBuy={walletIndexes:others,amountSol:String(bAmt),slippageBps:body.slippageBps};}
         else toast("Add more wallets (Wallet tab) to bundle-buy from — launching without it.",true);
       }
