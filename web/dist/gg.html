@@ -1246,11 +1246,12 @@
   function clearVolPoll(){if(volBotPollT){clearInterval(volBotPollT);volBotPollT=null;}}
   async function renderVolume(){
     setActiveView("v-volume");subbarTool("📈 Volume Bot");clearVolPoll();if(state.token)await refreshWallets();if(state.route!=="volume")return;
-    $("#v-volume").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>📈 Volume Bot</h3><p class="sub">Runs in the <b>background</b> on fresh <b>ghost wallets</b> — funds from one source, buys then sells from <b>different</b> wallets for an organic tape, sweeps SOL back and discards each wallet. Nothing to clean up, no wallet cap. Set it and walk away.</p>'+
+    $("#v-volume").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>📈 Volume Bot</h3><p class="sub">Runs in the <b>background</b> on a rolling pool of fresh <b>ghost wallets</b> — buys on one wallet, sells a <b>partial random amount</b> from a <b>different older</b> wallet, sells the rest a few trades later, then sweeps SOL back and discards it. Varied sizes, organic tape, nothing to clean up, no wallet cap.</p>'+
       '<div class="field"><label>Token contract (CA)</label><input id="vlCa" placeholder="Paste token mint"></div>'+
-      '<div class="field row2"><div><label>Fund from wallet</label>'+walletSelectHtml("vlSrc")+'</div><div><label>Buy size / trade (SOL)</label><input id="vlBuy" inputmode="decimal" value="0.02"></div></div>'+
+      '<div class="field row2"><div><label>Fund from wallet</label>'+walletSelectHtml("vlSrc")+'</div><div><label>Open wallets (pool)</label><input id="vlPool" inputmode="numeric" value="3"></div></div>'+
+      '<div class="field row2"><div><label>Min buy (SOL)</label><input id="vlBuyMin" inputmode="decimal" value="0.012"></div><div><label>Max buy (SOL)</label><input id="vlBuyMax" inputmode="decimal" value="0.03"></div></div>'+
       '<div class="field row2"><div><label>Speed</label><select id="vlSpeed"><option value="low">Low — calm</option><option value="med" selected>Medium</option><option value="high">High — fast</option></select></div><div><label>Chart shape</label><select id="vlShape"><option value="steady">Steady</option><option value="waves">Waves</option><option value="organic" selected>Organic</option><option value="uptrend">Uptrend</option></select></div></div>'+
-      '<div class="field row2"><div><label>Rounds (Stop anytime)</label><input id="vlRounds" inputmode="numeric" value="50"></div><div><label>Slippage (bps)</label><input id="vlSlip" inputmode="numeric" value="600"></div></div>'+
+      '<div class="field row2"><div><label>Total buys (Stop anytime)</label><input id="vlRounds" inputmode="numeric" value="50"></div><div><label>Slippage (bps)</label><input id="vlSlip" inputmode="numeric" value="600"></div></div>'+
       '<label style="display:flex;align-items:center;gap:9px;font-size:12px;cursor:pointer;margin-bottom:12px"><input type="checkbox" id="vlLeave" checked> Leave a sliver of token in each wallet (pads holder count)</label>'+
       '<div class="bsrow"><button class="bigbuy" id="vlGo" style="flex:2">▶ Start volume bot</button><button class="wbtn ghost" id="vlStop" style="flex:1">Stop &amp; sweep</button></div>'+
       '<div id="vlStatus" style="margin-top:14px"></div></div></div>';
@@ -1266,8 +1267,9 @@
     const staggerPattern=shape==="uptrend"?"ladder":shape;
     const buyBias=shape==="uptrend"?75:55;
     const src=Number(($("#vlSrc")||{}).value||state.activeWallet);
+    const bMin=Number($("#vlBuyMin").value.trim()||"0.012"),bMax=Number($("#vlBuyMax").value.trim()||"0.03");
     const go=$("#vlGo");go.disabled=true;go.textContent="Starting…";
-    const {ok,status,d}=await jpost("/api/web/volume-bot/start",{tokenMint:ca,sourceWalletIndex:src,buyAmountSol:String(Number($("#vlBuy").value.trim()||"0.02")),sellPercent:"100",buyBias:String(buyBias),delaySecs:String(delaySecs),slippageBps:Number($("#vlSlip").value.trim()||"600"),rollingWallets:true,offsetSell:true,keepDust:$("#vlLeave").checked,sweepBack:true,staggerPattern:staggerPattern,maxRounds:String(Math.max(1,Math.min(250,Number($("#vlRounds").value.trim()||"50"))))});
+    const {ok,status,d}=await jpost("/api/web/volume-bot/start",{tokenMint:ca,sourceWalletIndex:src,buyAmountSol:String(((bMin+bMax)/2)||0.02),minBuyAmountSol:String(bMin),maxBuyAmountSol:String(bMax),poolSize:String(Math.max(2,Math.min(6,Number($("#vlPool").value.trim()||"3")))),sellPercent:"100",buyBias:String(buyBias),delaySecs:String(delaySecs),slippageBps:Number($("#vlSlip").value.trim()||"600"),rollingWallets:true,offsetSell:true,keepDust:$("#vlLeave").checked,sweepBack:true,staggerPattern:staggerPattern,maxRounds:String(Math.max(1,Math.min(250,Number($("#vlRounds").value.trim()||"50"))))});
     go.disabled=false;go.textContent="▶ Start volume bot";
     if(status===401){setToken("");go("wallet");return;}
     if(ok&&d&&d.ok){toast("Volume bot started — running in the background");pollVolumeBot();}

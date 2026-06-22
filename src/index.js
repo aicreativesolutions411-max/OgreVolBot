@@ -38342,6 +38342,12 @@ async function webStartVolumeBot(userId, body = {}) {
   const staggerPattern = ["steady", "waves", "organic", "ladder"].includes(String(body.staggerPattern || "").toLowerCase())
     ? String(body.staggerPattern).toLowerCase()
     : "steady";
+  // Rolling ghost-POOL options: buys are a random size in [min,max] (falls back to ±40% of
+  // buyAmountSol), and a small pool of recent ghost wallets stays open so a DIFFERENT/older wallet
+  // sells partial amounts over a few ticks. poolSize caps how many open at once.
+  const minBuyAmountSol = Math.min(VOLUME_BOT_LIMITS.maxBuyAmountSol, Math.max(0, parsePositiveNumber(String(body.minBuyAmountSol || "")) || 0));
+  const maxBuyAmountSol = Math.min(VOLUME_BOT_LIMITS.maxBuyAmountSol, Math.max(minBuyAmountSol, parsePositiveNumber(String(body.maxBuyAmountSol || "")) || 0));
+  const poolSize = clamp(Number.parseInt(body.poolSize || "3", 10) || 3, 2, 6);
 
   if (buyAmountSol > VOLUME_BOT_LIMITS.maxBuyAmountSol) {
     throw volumeBotError(`Buy amount per trade is capped at ${VOLUME_BOT_LIMITS.maxBuyAmountSol} SOL.`);
@@ -38357,8 +38363,9 @@ async function webStartVolumeBot(userId, body = {}) {
   // funds it from the source, buys a randomized size, sells, then sweeps back
   // to the source and discards the wallet. Runs until Stop or maxRounds. ---
   if (rollingWallets) {
+    const effMaxBuy = maxBuyAmountSol > 0 ? maxBuyAmountSol : buyAmountSol;
     const sourceBalance = await getSolBalanceCached(decryptWallet(sourceRecord).publicKey, { force: true }).catch(() => 0);
-    const perRoundSol = buyAmountSol * 1.4 + VOLUME_BOT_LIMITS.roundFeeBufferSol;
+    const perRoundSol = effMaxBuy * 1.1 + VOLUME_BOT_LIMITS.roundFeeBufferSol;
     if (sourceBalance > 0 && lamportsToSol(sourceBalance) < perRoundSol) {
       throw volumeBotError(`Source wallet needs about ${perRoundSol.toFixed(3)} SOL to run a round; it has ${lamportsToSol(sourceBalance)} SOL.`);
     }
@@ -38372,17 +38379,18 @@ async function webStartVolumeBot(userId, body = {}) {
       tokenMint,
       createdAt: nowIso,
       updatedAt: nowIso,
-      config: { rollingWallets: true, maxRounds, buyAmountSol, sellPercent, buyBias, delaySecs, slippageBps, sweepBack, keepDust, offsetSell, staggerPattern, goalVolumeSol: Math.max(0, Number(body.goalVolumeSol) || 0), autoPauseLiquidity: body.autoPauseLiquidity !== false && body.autoPauseLiquidity !== "false", minLiquidityUsd: Math.max(0, Number(body.minLiquidityUsd) || 0) },
+      config: { rollingWallets: true, maxRounds, buyAmountSol, minBuyAmountSol, maxBuyAmountSol, poolSize, sellPercent, buyBias, delaySecs, slippageBps, sweepBack, keepDust, offsetSell, staggerPattern, goalVolumeSol: Math.max(0, Number(body.goalVolumeSol) || 0), autoPauseLiquidity: body.autoPauseLiquidity !== false && body.autoPauseLiquidity !== "false", minLiquidityUsd: Math.max(0, Number(body.minLiquidityUsd) || 0) },
       sourcePublicKey: sourceRecord.publicKey,
       tradingPublicKeys: [],
       botStage: "running",
       rollStage: "spawn",
       activeWalletPublicKey: null,
+      pool: [],
       roundsDone: 0,
       currentRoundBuySol: 0,
       nextActionAt: new Date(now + delaySecs * 1000).toISOString(),
       stats: { buys: 0, sells: 0, errors: 0, rounds: 0, fundedSol: 0 },
-      log: [{ at: nowIso, message: `Rolling SlimeBot armed: fresh wallet each round, ~${buyAmountSol} SOL randomized buys, up to ${maxRounds} round(s).` }]
+      log: [{ at: nowIso, message: `Rolling SlimeBot armed: ghost pool (≤${poolSize}), buys ${minBuyAmountSol > 0 ? minBuyAmountSol + "–" + effMaxBuy : "~" + buyAmountSol} SOL, partial sells from older wallets, up to ${maxRounds} buy(s).` }]
     };
     planStore.plans.push(plan);
     await writeTradePlans(planStore);
@@ -38679,6 +38687,43 @@ async function processVolumeBotPlan(plan, walletStore, persist) {
 // Rolling mode: one sub-step per due tick. spawn -> buy -> sell -> sweep,
 // each round using a brand-new wallet that is funded from the source, traded,
 // swept back, and discarded. Never reuses a wallet.
+// Random buy size in [min,max] SOL; falls back to ±40% of the single target. Capped by the limit.
+function volumeBotRandomBuyInRange(minSol, maxSol, fallbackSol) {
+  let lo = Number(minSol) || 0, hi = Number(maxSol) || 0;
+  if (!(lo > 0) || !(hi > 0)) return volumeBotRandomBuySol(fallbackSol);
+  if (hi < lo) { const t = lo; lo = hi; hi = t; }
+  const size = lo + Math.random() * (hi - lo);
+  return Math.min(VOLUME_BOT_LIMITS.maxBuyAmountSol, Math.max(0.001, Number(size.toFixed(6))));
+}
+
+// Sell everything left in a ghost wallet, sweep its SOL back to the source, and discard it.
+async function rollingCloseWallet(plan, publicKey, byPk, slippageBps, noBalance) {
+  const record = byPk(publicKey);
+  if (!record) return;
+  const cfg = plan.config || {};
+  try {
+    await sellTokenFromWallet(record, plan.tokenMint, volumeBotSellPercent(cfg, 100), slippageBps, { userId: plan.userId });
+  } catch (error) {
+    if (!noBalance(error)) volumeBotLogPush(plan, `Close-sell skipped ${shortMint(publicKey)}: ${friendlyError(error)}`);
+  }
+  let drained = false;
+  if (cfg.sweepBack !== false && plan.sourcePublicKey) {
+    try {
+      await drainSolFromWallet(decryptWallet(record), new PublicKey(plan.sourcePublicKey));
+      invalidateWalletReadCache(record.publicKey);
+      drained = true;
+    } catch (error) {
+      volumeBotLogPush(plan, `SOL sweep skipped ${shortMint(publicKey)}: ${friendlyError(error)}`);
+    }
+  }
+  if (!cfg.keepDust && (drained || cfg.sweepBack === false)) await pruneVolumeWallet(publicKey).catch(() => {});
+}
+
+// Rolling GHOST POOL: keeps a handful of fresh throwaway wallets open at once. Each tick it either
+// BUYS (spawn a new wallet, fund it a random size in [min,max], buy) or SELLS a partial random %
+// from the OLDEST open wallet — selling the remainder a couple of ticks later, then sweeping its SOL
+// back and discarding it. So buys and sells are always DIFFERENT wallets, sizes vary, and positions
+// clear over several transactions = an organic tape with nothing to clean up afterwards.
 async function runRollingVolumeBotStep(plan, { slippageBps, noBalance }) {
   const cfg = plan.config || {};
   const store = await readWalletStore();
@@ -38690,28 +38735,43 @@ async function runRollingVolumeBotStep(plan, { slippageBps, noBalance }) {
     plan.botStage = "done";
     return;
   }
-
-  // Graceful stop / final sweep: clear the active wallet then finish.
-  if (plan.botStage === "sweeping") {
-    await rollingExitActiveWallet(plan, byPk, slippageBps, noBalance);
+  // Init / heal the pool, and migrate any in-flight old-format wallet into it on first run.
+  plan.pool = Array.isArray(plan.pool) ? plan.pool.filter((e) => e && byPk(e.publicKey)) : [];
+  if (plan.activeWalletPublicKey && byPk(plan.activeWalletPublicKey) && !plan.pool.some((e) => e.publicKey === plan.activeWalletPublicKey)) {
+    plan.pool.push({ publicKey: plan.activeWalletPublicKey, buySol: Number(plan.currentRoundBuySol || 0), sells: 0 });
     plan.activeWalletPublicKey = null;
-    plan.botStage = "done";
+  }
+  plan.stats = plan.stats || {};
+
+  // Graceful stop / completion: liquidate the whole pool one wallet per tick, then finish.
+  if (plan.botStage === "sweeping") {
+    const entry = plan.pool[0];
+    if (!entry) { plan.botStage = "done"; volumeBotLogPush(plan, "Pool cleared and swept back to source. Done."); return; }
+    await rollingCloseWallet(plan, entry.publicKey, byPk, slippageBps, noBalance);
+    plan.stats.sells = Number(plan.stats.sells || 0) + 1;
+    plan.pool.shift();
     return;
   }
 
-  const stage = plan.rollStage || "spawn";
+  const poolTarget = clamp(Number(cfg.poolSize || 3) || 3, 2, 6);
+  const buyBias = clamp(Number(cfg.buyBias || 55) || 55, 5, 95);
+  const roundsDone = Number(plan.roundsDone || 0);
+  const maxRounds = Number(cfg.maxRounds || 50);
+  const canBuy = roundsDone < maxRounds;
 
-  if (stage === "spawn") {
-    if (Number(plan.roundsDone || 0) >= Number(cfg.maxRounds || 1)) {
-      plan.botStage = "done";
-      volumeBotLogPush(plan, "All rounds complete.");
-      return;
-    }
-    const buySol = volumeBotRandomBuySol(cfg.buyAmountSol);
+  // Decide buy vs sell: must buy if nothing is open; keep the pool filling early; else weight by bias.
+  let doBuy;
+  if (!plan.pool.length) doBuy = canBuy;
+  else if (!canBuy) doBuy = false;
+  else if (plan.pool.length < poolTarget) doBuy = Math.random() < 0.75;
+  else doBuy = (Math.random() * 100) < buyBias;
+
+  if (doBuy) {
+    const buySol = volumeBotRandomBuyInRange(cfg.minBuyAmountSol, cfg.maxBuyAmountSol, cfg.buyAmountSol);
     const fundSol = Number((buySol + VOLUME_BOT_LIMITS.roundFeeBufferSol).toFixed(6));
     let record;
     try {
-      record = await createEphemeralVolumeWallet(plan.userId, `SlimeBot R${Number(plan.roundsDone || 0) + 1}`, plan.sourcePublicKey);
+      record = await createEphemeralVolumeWallet(plan.userId, `SlimeBot ${roundsDone + 1}`, plan.sourcePublicKey);
     } catch (error) {
       plan.stats.errors = Number(plan.stats.errors || 0) + 1;
       volumeBotLogPush(plan, `Spawn failed: ${friendlyError(error)}`);
@@ -38719,64 +38779,43 @@ async function runRollingVolumeBotStep(plan, { slippageBps, noBalance }) {
     }
     try {
       await volumeBotTransferSol(sourceRecord, record.publicKey, solToLamports(fundSol));
-      plan.activeWalletPublicKey = record.publicKey;
-      plan.currentRoundBuySol = buySol;
+      await buyTokenForPlan(record, plan.tokenMint, solToLamports(buySol), slippageBps, { userId: plan.userId });
+      plan.pool.push({ publicKey: record.publicKey, buySol, sells: 0 });
+      plan.roundsDone = roundsDone + 1;
+      plan.stats.buys = Number(plan.stats.buys || 0) + 1;
+      plan.stats.rounds = plan.roundsDone;
       plan.stats.fundedSol = Number((Number(plan.stats.fundedSol || 0) + fundSol).toFixed(6));
-      plan.rollStage = "buy";
-      volumeBotLogPush(plan, `Round ${Number(plan.roundsDone || 0) + 1}: funded fresh wallet ${shortMint(record.publicKey)} with ${fundSol} SOL.`);
+      volumeBotLogPush(plan, `Round ${plan.roundsDone}: ${shortMint(record.publicKey)} bought ${buySol.toFixed(4)} SOL.`);
     } catch (error) {
       plan.stats.errors = Number(plan.stats.errors || 0) + 1;
       await pruneVolumeWallet(record.publicKey).catch(() => {});
-      volumeBotLogPush(plan, `Funding failed ${shortMint(record.publicKey)}: ${friendlyError(error)}`);
-    }
-    return;
-  }
-
-  if (stage === "buy") {
-    const record = byPk(plan.activeWalletPublicKey);
-    if (!record) { plan.rollStage = "spawn"; plan.activeWalletPublicKey = null; return; }
-    try {
-      await buyTokenForPlan(record, plan.tokenMint, solToLamports(Number(plan.currentRoundBuySol || cfg.buyAmountSol)), slippageBps, { userId: plan.userId });
-      plan.stats.buys = Number(plan.stats.buys || 0) + 1;
-      volumeBotLogPush(plan, `Buy ${Number(plan.currentRoundBuySol || 0).toFixed(4)} SOL from ${shortMint(record.publicKey)}.`);
-    } catch (error) {
-      plan.stats.errors = Number(plan.stats.errors || 0) + 1;
       volumeBotLogPush(plan, `Buy failed ${shortMint(record.publicKey)}: ${friendlyError(error)}`);
     }
-    plan.rollStage = "sell";
+    if (plan.roundsDone >= maxRounds) { plan.botStage = "sweeping"; volumeBotLogPush(plan, "Buy quota reached — winding the pool down."); }
     return;
   }
 
-  if (stage === "sell") {
-    const record = byPk(plan.activeWalletPublicKey);
-    if (record) {
-      try {
-        await sellTokenFromWallet(record, plan.tokenMint, volumeBotSellPercent(cfg, Number(cfg.sellPercent || 100)), slippageBps, { userId: plan.userId });
-        plan.stats.sells = Number(plan.stats.sells || 0) + 1;
-        volumeBotLogPush(plan, `Sell ${volumeBotSellPercent(cfg, Number(cfg.sellPercent || 100))}% from ${shortMint(record.publicKey)}.`);
-      } catch (error) {
-        if (!noBalance(error)) {
-          plan.stats.errors = Number(plan.stats.errors || 0) + 1;
-          volumeBotLogPush(plan, `Sell failed ${shortMint(record.publicKey)}: ${friendlyError(error)}`);
-        }
-      }
-    }
-    plan.rollStage = "sweep";
-    return;
-  }
-
-  // stage === "sweep"
-  await rollingExitActiveWallet(plan, byPk, slippageBps, noBalance);
-  plan.activeWalletPublicKey = null;
-  plan.currentRoundBuySol = 0;
-  plan.roundsDone = Number(plan.roundsDone || 0) + 1;
-  plan.stats.rounds = Number(plan.stats.rounds || 0) + 1;
-  plan.rollStage = "spawn";
-  if (Number(plan.roundsDone) >= Number(cfg.maxRounds || 1)) {
-    plan.botStage = "done";
-    volumeBotLogPush(plan, "All rounds complete.");
+  // SELL: oldest open wallet sells a partial random %, then closes out after a couple of goes.
+  const entry = plan.pool[0];
+  const record = entry && byPk(entry.publicKey);
+  if (!record) { if (entry) plan.pool.shift(); return; }
+  entry.sells = Number(entry.sells || 0) + 1;
+  const finish = entry.sells >= 2 || Math.random() < 0.35;
+  if (finish) {
+    await rollingCloseWallet(plan, entry.publicKey, byPk, slippageBps, noBalance);
+    plan.stats.sells = Number(plan.stats.sells || 0) + 1;
+    plan.pool.shift();
+    volumeBotLogPush(plan, `${shortMint(entry.publicKey)} sold out + swept back, discarded.`);
   } else {
-    volumeBotLogPush(plan, `Round ${plan.roundsDone} complete.`);
+    const pct = Math.round(40 + Math.random() * 40);
+    try {
+      await sellTokenFromWallet(record, plan.tokenMint, volumeBotSellPercent(cfg, pct), slippageBps, { userId: plan.userId });
+      plan.stats.sells = Number(plan.stats.sells || 0) + 1;
+      volumeBotLogPush(plan, `${shortMint(record.publicKey)} sold ${volumeBotSellPercent(cfg, pct)}% (partial).`);
+    } catch (error) {
+      if (noBalance(error)) { await rollingCloseWallet(plan, entry.publicKey, byPk, slippageBps, noBalance); plan.pool.shift(); }
+      else { plan.stats.errors = Number(plan.stats.errors || 0) + 1; volumeBotLogPush(plan, `Sell failed ${shortMint(record.publicKey)}: ${friendlyError(error)}`); }
+    }
   }
 }
 
