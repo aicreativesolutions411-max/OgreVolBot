@@ -1052,24 +1052,76 @@
     $("#swGo").onclick=async()=>{const ca=$("#swCa").value.trim(),amt=$("#swAmt").value.trim(),slip=$("#swSlip").value.trim()||"400";if(!ca){toast("Paste a token CA.",true);return;}if(!(await ensureTradeReady()))return;const b=$("#swGo");b.disabled=true;b.textContent="Submitting…";let res;if(side==="buy")res=await jpost("/api/web/trade/buy",{tokenMint:ca,walletIndex:state.activeWallet,amountSol:String(amt||"0.1"),slippageBps:slip,tradeAttemptId:attemptId()});else res=await jpost("/api/web/trade/sell",{tokenMint:ca,walletIndex:state.activeWallet,percent:String(amt||"100"),slippageBps:slip,tradeAttemptId:attemptId()});b.disabled=false;b.textContent=side==="buy"?"Buy":"Sell";handleTradeResult(res.ok,res.status,res.d,side==="buy"?"Buy":"Sell");};
     paint();
   }
+  // ---------- staggered multi-wallet engine (shared by Bundle + Volume) ----------
+  // Runs orders one wallet at a time with RANDOMIZED amounts and RANDOMIZED gaps so it never looks
+  // like an obvious same-size, same-instant bundle. Orchestrated client-side over the per-wallet
+  // buy/sell endpoints, so it has full control (and stops the moment you hit Stop / leave the tab).
+  let staggerRunning=false,staggerAbort=false;
+  function rnd(a,b){a=Number(a);b=Number(b);if(!isFinite(a))a=0;if(!isFinite(b)||b<a)b=a;return a+Math.random()*(b-a);}
+  function shuffle(a){a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));const t=a[i];a[i]=a[j];a[j]=t;}return a;}
+  function sleepMs(ms){return new Promise(r=>setTimeout(r,ms));}
+  function staggerLog(el,html){if(el)el.insertAdjacentHTML("afterbegin",html);}
+  async function runStagger(o,logEl){
+    staggerRunning=true;staggerAbort=false;
+    let okc=0,fail=0,spent=0;
+    for(let r=0;r<o.rounds&&!staggerAbort;r++){
+      const order=shuffle(o.wallets);
+      for(let k=0;k<order.length&&!staggerAbort;k++){
+        const idx=order[k];const w=state.wallets.find(x=>x.index===idx);
+        let side=o.mode==="mix"?(Math.random()<o.sellBias?"sell":"buy"):o.mode;
+        let res,label;
+        if(side==="sell"){const pct=Math.round(rnd(o.sellMin,o.sellMax));label="🔴 SELL "+pct+"%";res=await jpost("/api/web/trade/sell",{tokenMint:o.tokenMint,walletIndex:idx,percent:String(pct),slippageBps:String(o.slip),tradeAttemptId:attemptId()});}
+        else{const amt=rnd(o.amtMin,o.amtMax);label="🟢 BUY ◎"+amt.toFixed(3);res=await jpost("/api/web/trade/buy",{tokenMint:o.tokenMint,walletIndex:idx,amountSol:amt.toFixed(4),slippageBps:String(o.slip),tradeAttemptId:attemptId()});if(res&&res.ok&&res.d&&res.d.ok)spent+=amt;}
+        const good=res&&res.ok&&res.d&&res.d.ok;if(good)okc++;else fail++;
+        if(res&&res.status===401){staggerAbort=true;staggerLog(logEl,'<div style="color:var(--red);font-size:12px;padding:4px 0">Session expired — set up your wallet again.</div>');break;}
+        staggerLog(logEl,'<div style="font-size:12px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05)"><b style="color:'+(good?"var(--green)":"var(--red)")+'">'+label+'</b> · '+esc((w&&w.label)||("#"+idx))+(o.rounds>1?' · loop '+(r+1):'')+' · '+(good?"✓":esc(String((res&&res.d&&res.d.error)||"failed").slice(0,38)))+'</div>');
+        const last=(r===o.rounds-1&&k===order.length-1);
+        if(!staggerAbort&&!last)await sleepMs(Math.round(rnd(o.delayMin,o.delayMax)*1000));
+      }
+    }
+    staggerRunning=false;
+    return {okc,fail,spent};
+  }
+  function staggerControls(goId,stopId,goLabel){return '<div class="bsrow"><button class="bigbuy" id="'+goId+'" style="flex:2">'+goLabel+'</button><button class="wbtn ghost" id="'+stopId+'" style="flex:1">Stop</button></div><div id="stgLog" style="margin-top:12px;max-height:260px;overflow:auto"></div>';}
   async function renderBundle(){
-    setActiveView("v-bundle");subbarTool("📦 Bundle Buy");if(state.token)await refreshWallets();if(state.route!=="bundle")return;
-    $("#v-bundle").innerHTML='<div class="wgrid"><div class="wbox"><h3>📦 Bundle Buy</h3><p class="sub">Buy one token across several of your wallets in one shot.</p>'+
+    setActiveView("v-bundle");subbarTool("📦 Bundle");if(state.token)await refreshWallets();if(state.route!=="bundle")return;
+    $("#v-bundle").innerHTML='<div class="wgrid"><div class="wbox"><h3>📦 Bundle</h3><p class="sub">Hit one token across your wallets — but with <b>randomized sizes</b> and <b>staggered timing</b> so it doesn\'t read as a bundle. Optional buy/sell mix for organic flow.</p>'+
       '<div class="field"><label>Token contract (CA)</label><input id="bnCa" placeholder="Paste token mint"></div>'+
-      '<div class="field row2"><div><label>SOL per wallet</label><input id="bnAmt" inputmode="decimal" placeholder="0.1"></div><div><label>Slippage (bps)</label><input id="bnSlip" inputmode="numeric" placeholder="400"></div></div>'+
+      '<div class="field"><label>Pattern</label><select id="bnMode"><option value="buy">Buys only (varied + staggered)</option><option value="mix">Buy + sell mix (organic volume)</option></select></div>'+
+      '<div class="field row2"><div><label>Min SOL / wallet</label><input id="bnMin" inputmode="decimal" value="0.05"></div><div><label>Max SOL / wallet</label><input id="bnMax" inputmode="decimal" value="0.15"></div></div>'+
+      '<div class="field row2"><div><label>Stagger min (s)</label><input id="bnDmin" inputmode="numeric" value="1"></div><div><label>Stagger max (s)</label><input id="bnDmax" inputmode="numeric" value="4"></div></div>'+
+      '<div class="field row2"><div><label>Slippage (bps)</label><input id="bnSlip" inputmode="numeric" value="500"></div><div></div></div>'+
       '<div class="field"><label>Wallets</label>'+walletPickHtml()+'</div>'+
-      '<button class="bigbuy" id="bnGo">Bundle Buy</button></div></div>';
-    $("#bnGo").onclick=async()=>{const ca=$("#bnCa").value.trim(),amt=$("#bnAmt").value.trim()||"0.1",slip=$("#bnSlip").value.trim()||"400";if(!ca){toast("Paste a token CA.",true);return;}if(!(await ensureTradeReady()))return;const idxs=selectedWalletIdxs();if(!idxs.length){toast("Pick at least one wallet.",true);return;}const b=$("#bnGo");b.disabled=true;b.textContent="Bundling…";const {ok,status,d}=await jpost("/api/web/bundle/buy",{tokenMint:ca,walletIndexes:idxs,amountSol:String(amt),percent:"100",slippageBps:Number(slip),tradeAttemptId:attemptId()});b.disabled=false;b.textContent="Bundle Buy";if(status===401){setToken("");go("wallet");return;}if(ok&&d&&d.ok&&d.bundle){toast(d.bundle.summary||"Bundle sent");refreshWallets();}else toast((d&&d.error)||"Bundle failed",true);};
+      staggerControls("bnGo","bnStop","Run Bundle")+'</div></div>';
+    $("#bnStop").onclick=()=>{staggerAbort=true;toast("Stopping after the current order…");};
+    $("#bnGo").onclick=async()=>{
+      if(staggerRunning){toast("Already running — hit Stop first.",true);return;}
+      const ca=$("#bnCa").value.trim();if(!ca){toast("Paste a token CA.",true);return;}
+      if(!(await ensureTradeReady()))return;const idxs=selectedWalletIdxs();if(!idxs.length){toast("Pick at least one wallet.",true);return;}
+      const b=$("#bnGo");b.disabled=true;b.textContent="Running…";$("#stgLog").innerHTML="";
+      const res=await runStagger({tokenMint:ca,wallets:idxs,rounds:1,mode:$("#bnMode").value,amtMin:$("#bnMin").value,amtMax:$("#bnMax").value,delayMin:$("#bnDmin").value,delayMax:$("#bnDmax").value,sellBias:0.5,sellMin:50,sellMax:100,slip:Number($("#bnSlip").value.trim()||"500")},$("#stgLog"));
+      b.disabled=false;b.textContent="Run Bundle";toast("Bundle done — "+res.okc+" ok"+(res.fail?", "+res.fail+" failed":"")+(res.spent?" · ◎"+res.spent.toFixed(3)+" in":""));refreshWallets();
+    };
   }
   async function renderVolume(){
-    setActiveView("v-volume");subbarTool("📈 Volume Bot");if(state.token)await refreshWallets();if(state.route!=="volume")return;
-    $("#v-volume").innerHTML='<div class="wgrid"><div class="wbox"><h3>📈 Volume Bot</h3><p class="sub">Loop buys + timed sells across wallets to build volume.</p>'+
+    setActiveView("v-volume");subbarTool("📈 Volume");if(state.token)await refreshWallets();if(state.route!=="volume")return;
+    $("#v-volume").innerHTML='<div class="wgrid"><div class="wbox"><h3>📈 Volume</h3><p class="sub">Loop trades across your wallets to build volume — <b>randomized sizes</b>, <b>jittered delays</b>, and a buy/sell mix so the tape looks organic. Runs while this tab is open.</p>'+
       '<div class="field"><label>Token contract (CA)</label><input id="vlCa" placeholder="Paste token mint"></div>'+
-      '<div class="field row2"><div><label>SOL per buy</label><input id="vlAmt" inputmode="decimal" placeholder="0.05"></div><div><label>Loops</label><input id="vlLoops" inputmode="numeric" placeholder="3"></div></div>'+
-      '<div class="field row2"><div><label>Loop delay (s)</label><input id="vlDelay" inputmode="numeric" placeholder="5"></div><div><label>Slippage (bps)</label><input id="vlSlip" inputmode="numeric" placeholder="400"></div></div>'+
+      '<div class="field row2"><div><label>Pattern</label><select id="vlMode"><option value="mix">Buy + sell mix</option><option value="buy">Buys only</option></select></div><div><label>Loops</label><input id="vlLoops" inputmode="numeric" value="3"></div></div>'+
+      '<div class="field row2"><div><label>Min SOL / buy</label><input id="vlMin" inputmode="decimal" value="0.03"></div><div><label>Max SOL / buy</label><input id="vlMax" inputmode="decimal" value="0.08"></div></div>'+
+      '<div class="field row2"><div><label>Delay min (s)</label><input id="vlDmin" inputmode="numeric" value="3"></div><div><label>Delay max (s)</label><input id="vlDmax" inputmode="numeric" value="8"></div></div>'+
+      '<div class="field row2"><div><label>Slippage (bps)</label><input id="vlSlip" inputmode="numeric" value="500"></div><div></div></div>'+
       '<div class="field"><label>Wallets</label>'+walletPickHtml()+'</div>'+
-      '<button class="bigbuy" id="vlGo">Start Volume</button></div></div>';
-    $("#vlGo").onclick=async()=>{const ca=$("#vlCa").value.trim();if(!ca){toast("Paste a token CA.",true);return;}if(!(await ensureTradeReady()))return;const idxs=selectedWalletIdxs();if(!idxs.length){toast("Pick at least one wallet.",true);return;}const b=$("#vlGo");b.disabled=true;b.textContent="Starting…";const {ok,status,d}=await jpost("/api/web/volume/plan",{tokenMint:ca,walletIndexes:idxs,amountSol:String($("#vlAmt").value.trim()||"0.05"),loopCount:String($("#vlLoops").value.trim()||"3"),loopDelay:String($("#vlDelay").value.trim()||"5"),slippageBps:Number($("#vlSlip").value.trim()||"400"),sellDelay:"5",sellPercent:"100"});b.disabled=false;b.textContent="Start Volume";if(status===401){setToken("");go("wallet");return;}if(ok&&d&&d.ok){toast((d.plan&&d.plan.summary)||"Volume plan started");refreshWallets();}else toast((d&&d.error)||"Volume failed",true);};
+      staggerControls("vlGo","vlStop","Start Volume")+'</div></div>';
+    $("#vlStop").onclick=()=>{staggerAbort=true;toast("Stopping after the current order…");};
+    $("#vlGo").onclick=async()=>{
+      if(staggerRunning){toast("Already running — hit Stop first.",true);return;}
+      const ca=$("#vlCa").value.trim();if(!ca){toast("Paste a token CA.",true);return;}
+      if(!(await ensureTradeReady()))return;const idxs=selectedWalletIdxs();if(!idxs.length){toast("Pick at least one wallet.",true);return;}
+      const b=$("#vlGo");b.disabled=true;b.textContent="Running…";$("#stgLog").innerHTML="";
+      const res=await runStagger({tokenMint:ca,wallets:idxs,rounds:Math.max(1,Math.min(50,Number($("#vlLoops").value.trim()||"3"))),mode:$("#vlMode").value,amtMin:$("#vlMin").value,amtMax:$("#vlMax").value,delayMin:$("#vlDmin").value,delayMax:$("#vlDmax").value,sellBias:0.45,sellMin:40,sellMax:90,slip:Number($("#vlSlip").value.trim()||"500")},$("#stgLog"));
+      b.disabled=false;b.textContent="Start Volume";toast("Volume run done — "+res.okc+" trades"+(res.fail?", "+res.fail+" failed":""));refreshWallets();
+    };
   }
   async function renderCopy(){
     setActiveView("v-copy");subbarTool("👥 Copy Trade");
