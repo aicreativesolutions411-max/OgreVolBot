@@ -4,6 +4,8 @@
 # links working. NOTE: no /api/* rule here on purpose — the existing API proxy is left untouched.
 /old            /old.html              200
 /old/*          /old.html              200
+/legacy         /old.html              200
+/old-archive    /old.html              200
 /r/*            /?ref=:splat           302
 /launch-coin    /#launch               302
 /terminal       /index.html            200

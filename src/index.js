@@ -4898,7 +4898,10 @@ function startHealthServer() {
     }
 
     // The OLD terminal — archived for visual reference ONLY (data APIs neutralized: no pairs, no credits).
-    if (request.method === "GET" && (requestUrl.pathname === "/old" || requestUrl.pathname.startsWith("/old/"))) {
+    // /legacy + /old-archive are aliases because a Cloudflare edge rule 308-loops "/old" on www (the
+    // origin serves /old fine; www needs that CF rule removed). /legacy proxies through cleanly today.
+    if (request.method === "GET" && (requestUrl.pathname === "/old" || requestUrl.pathname.startsWith("/old/")
+      || requestUrl.pathname === "/legacy" || requestUrl.pathname === "/old-archive")) {
       await serveOldReference(response);
       return;
     }
