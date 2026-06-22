@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Cache-Control" content="no-store, max-age=0">
 <title>SlimeWire Terminal — Your Edge in Memecoin Trading</title>
 <meta name="description" content="SlimeWire Terminal — a fast Solana memecoin terminal. Discover fresh launches, trenches, trending pairs, create a wallet, and trade in one click.">
 <link rel="icon" type="image/png" href="/assets/slimewire/png/slimewire-mark.png?v=logo4">
@@ -189,6 +190,13 @@
   .tstrip{display:flex;align-items:center;gap:2px;padding:0 16px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);flex:0 0 auto;height:40px;background:rgba(7,11,7,.6)}
   .tstrip button{padding:9px 12px;font-size:12px;font-weight:600;color:var(--muted);border-bottom:2px solid transparent}
   .tstrip button.on{color:var(--green);border-bottom-color:var(--green)}
+  .txfold{flex:0 0 auto;border-top:1px solid var(--border);background:rgba(7,11,7,.7)}
+  .txfold>summary{list-style:none;cursor:pointer;height:42px;display:flex;align-items:center;gap:9px;padding:0 16px;font-size:13px;font-weight:700}
+  .txfold>summary::-webkit-details-marker{display:none}
+  .txfold>summary .chev{transition:.15s;color:var(--muted)}
+  .txfold[open]>summary .chev{transform:rotate(180deg)}
+  .txfold .txbody{height:300px;border-top:1px solid var(--border);background:#060906}
+  .txfold .txbody iframe{width:100%;height:100%;border:0;display:block}
 
   /* wallet + portfolio */
   .pcard{margin:14px 16px 0;border:1px solid var(--border);border-radius:14px;overflow:hidden}
@@ -285,14 +293,7 @@
       <a data-route="wallet">Wallet</a>
       <div class="navdrop">
         <button class="dropbtn">Tools ▾</button>
-        <div class="dropmenu">
-          <a href="/launch" target="_blank">🚀 Launch a Coin</a>
-          <a href="/terminal" target="_blank">🔄 Swap</a>
-          <a href="/terminal" target="_blank">📦 Bundle Buy</a>
-          <a href="/terminal" target="_blank">📈 Volume Bot</a>
-          <a href="/terminal" target="_blank">👥 Copy / KOL Tracker</a>
-          <a href="/raids" target="_blank">⚔️ Raids &amp; Rewards</a>
-        </div>
+        <div class="dropmenu" id="toolsMenu"></div>
       </div>
     </nav>
     <div class="topctrls">
@@ -311,6 +312,10 @@
     <section class="view" id="v-trade"></section>
     <section class="view" id="v-portfolio"></section>
     <section class="view" id="v-wallet"></section>
+    <section class="view" id="v-swap"></section>
+    <section class="view" id="v-bundle"></section>
+    <section class="view" id="v-volume"></section>
+    <section class="view" id="v-copy"></section>
   </main>
 
   <nav class="botnav" id="botnav">
@@ -357,7 +362,7 @@
   const TOKEN_KEY="ogreWebToken"; // shared with the main SlimeWire app (same origin)
   const state={route:"trending",mint:null,trendTab:"best",volTf:"h1",rows:[],pollT:null,
     token:localStorage.getItem(TOKEN_KEY)||"",user:null,wallets:[],activeWallet:null,
-    presets:{trade:[],bundle:[]},activeTradePreset:localStorage.getItem("ggTradePreset")||""};
+    presets:{trade:[],bundle:[]},activeTradePreset:localStorage.getItem("ggTradePreset")||"",searchTerm:"",pendingSell:null,portfolioTab:"positions"};
   // No credentials:include — the API returns ACAO:* which forbids credentialed CORS. Auth is the Bearer header.
   function api(path,opts){
     opts=opts||{};const headers=Object.assign({},opts.headers||{});
@@ -464,21 +469,31 @@
     if(ok&&d&&d.ok){if(state.activeWallet===idx)state.activeWallet=null;await refreshWallets();toast("Wallet removed");return true;}
     toast((d&&d.error)||"Could not remove wallet",true);return false;
   }
+  async function loadMe(){
+    if(!state.token)return;
+    const {ok,d}=await api("/api/web/me");
+    if(ok&&d&&d.ok&&d.user)state.user=d.user;
+  }
+  async function saveReferral(body){
+    const {ok,d}=await jpost("/api/web/profile/referral",body);
+    if(ok&&d&&d.ok){if(d.user)state.user=d.user;return true;}
+    toast((d&&(d.error||d.message))||"Could not save referral",true);return false;
+  }
 
   // ---------- modal ----------
   function openModal(html){const m=$("#modal");$("#modalBox").innerHTML='<button class="x" onclick="GG.closeModal()">✕</button>'+html;m.classList.add("on");}
   function closeModal(){$("#modal").classList.remove("on");}
   const TOOLS=[
+    {ic:"🔄",label:"Swap",route:"swap"},
+    {ic:"📦",label:"Bundle Buy",route:"bundle"},
+    {ic:"📈",label:"Volume Bot",route:"volume"},
+    {ic:"👥",label:"Copy / KOL Tracker",route:"copy"},
     {ic:"🚀",label:"Launch a Coin",url:"/launch"},
-    {ic:"🔄",label:"Swap",url:"/terminal"},
-    {ic:"📦",label:"Bundle Buy",url:"/terminal"},
-    {ic:"📈",label:"Volume Bot",url:"/terminal"},
-    {ic:"👥",label:"Copy / KOL Tracker",url:"/terminal"},
     {ic:"⚔️",label:"Raids & Rewards",url:"/raids"},
   ];
+  function toolLinkHtml(t,onclick){return t.route?'<a href="#'+t.route+'"'+(onclick?' onclick="'+onclick+'"':'')+'><span>'+t.ic+'</span>'+esc(t.label)+'</a>':'<a href="'+esc(t.url)+'" target="_blank"><span>'+t.ic+'</span>'+esc(t.label)+'</a>';}
   function openToolsSheet(){
-    openModal('<h3>🛠️ Tools</h3><p class="sub mut" style="margin:0 0 12px">More SlimeWire tools. Native versions are landing in /gg soon.</p>'+
-      '<div class="toolsheet">'+TOOLS.map(t=>'<a href="'+esc(t.url)+'" target="_blank"><span>'+t.ic+'</span>'+esc(t.label)+'</a>').join("")+'</div>');
+    openModal('<h3>🛠️ Tools</h3><div class="toolsheet">'+TOOLS.map(t=>toolLinkHtml(t,"GG.closeModal()")).join("")+'</div>');
   }
   function removeWalletModal(w){
     openModal('<h3>🗑 Remove wallet</h3>'+
@@ -533,6 +548,10 @@
     else if(route==="trade"){state.mint=arg;renderTrade();}
     else if(route==="portfolio")renderPortfolio();
     else if(route==="wallet")renderWallet();
+    else if(route==="swap")renderSwap();
+    else if(route==="bundle")renderBundle();
+    else if(route==="volume")renderVolume();
+    else if(route==="copy")renderCopy();
     else renderTrending();
   }
 
@@ -548,7 +567,7 @@
     sb.appendChild(tfs);
   }
   function subbarTrenches(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Trenches";sb.appendChild(h);const n=el("div","mut");n.style.cssText="margin-left:10px;font-size:11px";n.textContent="Fresh → about to migrate → graduated. Live SlimeWire feed.";sb.appendChild(n);}
-  function subbarPortfolio(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Portfolio";sb.appendChild(h);}
+  function subbarPortfolio(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Portfolio";sb.appendChild(h);const tabs=el("div","tabs");[["positions","Positions"],["cards","PnL Cards"]].forEach(([id,lab])=>{const b=el("button");b.textContent=lab;b.className=id===state.portfolioTab?"on":"";b.onclick=()=>{state.portfolioTab=id;renderPortfolio();};tabs.appendChild(b);});sb.appendChild(tabs);}
   function subbarWallet(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Wallet";sb.appendChild(h);}
   function subbarTrade(r){const sb=$("#subbar");sb.innerHTML="";const back=el("button","chip");back.textContent="← Back";back.onclick=()=>go("trending");sb.appendChild(back);const h=el("h1");h.style.fontSize="15px";h.textContent=r?(r.symbol||short(state.mint)):short(state.mint);sb.appendChild(h);}
 
@@ -582,14 +601,17 @@
       '<td class="hideMb"><div class="tkinfo">'+riskChips(r)+'</div></td>'+
       '<td><button class="buybtn sm" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button></td></tr>';
   }
+  function shownRows(){const term=(state.searchTerm||"").toLowerCase().trim();return term?state.rows.filter(r=>((r.symbol||"")+" "+(r.name||"")).toLowerCase().includes(term)):state.rows;}
+  function applyTrendingFilter(){const tb=document.querySelector("#v-trending tbody");if(!tb)return;const rows=shownRows();tb.innerHTML=rows.length?rows.map(rowHtml).join(""):'<tr><td colspan="7" class="msg">No match in this list.</td></tr>';}
   async function renderTrending(){
     setActiveView("v-trending");subbarTrending();
     const view=$("#v-trending");
     if(!view.querySelector("table"))view.innerHTML='<div class="loading"><span class="spin"></span></div>';
     const rows=await fetchPairs(tabById(state.trendTab));
     if(state.route!=="trending")return;state.rows=rows;
+    const shown=shownRows();
     if(!rows.length)view.innerHTML='<div class="msg">No pairs in this view right now — try another tab.</div>';
-    else view.innerHTML='<table class="tbl"><thead><tr><th class="l">Pair</th><th>Market Cap</th><th class="hideMb">Liquidity</th><th>Volume</th><th class="hideMb">Txns</th><th class="hideMb">Token Info</th><th></th></tr></thead><tbody>'+rows.map(rowHtml).join("")+'</tbody></table>';
+    else view.innerHTML='<table class="tbl"><thead><tr><th class="l">Pair</th><th>Market Cap</th><th class="hideMb">Liquidity</th><th>Volume</th><th class="hideMb">Txns</th><th class="hideMb">Token Info</th><th></th></tr></thead><tbody>'+(shown.length?shown.map(rowHtml).join(""):'<tr><td colspan="7" class="msg">No match in this list.</td></tr>')+'</tbody></table>';
     state.pollT=setTimeout(()=>{if(state.route==="trending")renderTrending();},7000);
   }
 
@@ -630,13 +652,15 @@
   async function renderTrade(){
     setActiveView("v-trade");
     const mint=state.mint;if(!mint){go("trending");return;}
+    if(state.pendingSell===mint){tradeSide="sell";state.pendingSell=null;}
     let r=findRow(mint);subbarTrade(r);
     const view=$("#v-trade");
     view.innerHTML='<div class="trade"><div class="tradeMain">'+
         '<div class="thead" id="thead">'+(r?theadHtml(r):'<div class="ti"><b>'+short(mint)+'</b></div>')+'</div>'+
         '<div class="chartwrap">'+chartIframe(mint,r)+'</div>'+
-        '<div class="tstrip"><button class="on">Security</button><button onclick="GG.go(\'portfolio\')">My Positions</button>'+
-          '<a class="chip" style="margin-left:auto;align-self:center" href="https://dexscreener.com/solana/'+encodeURIComponent(mint)+'" target="_blank">DexScreener ↗</a></div>'+
+        '<details class="txfold" id="txFold"><summary>📜 Transactions<span class="chev">▾</span>'+
+          '<a class="chip" style="margin-left:auto" href="https://dexscreener.com/solana/'+encodeURIComponent(mint)+'" target="_blank" onclick="event.stopPropagation()">DexScreener ↗</a></summary>'+
+          '<div class="txbody"><iframe data-txsrc="https://dexscreener.com/solana/'+encodeURIComponent(mint)+'?embed=1&theme=dark&info=1&trades=1" title="transactions"></iframe></div></details>'+
       '</div><div class="tradeSide">'+
         '<div class="pnlbar"><div><span>Invested</span><b>—</b></div><div><span>Remaining</span><b>—</b></div><div><span>PNL</span><b class="mut">—</b></div></div>'+
         '<div class="sidepad">'+
@@ -650,6 +674,7 @@
           '<div class="secbox" id="secbox"><h4>🛡 Token Data &amp; Security</h4><div class="loading" style="padding:14px"><span class="spin"></span></div></div>'+
         '</div></div></div>';
     wireTradePanel(mint,r);updateWselLine();paintPresetSel();
+    const txF=$("#txFold");if(txF)txF.addEventListener("toggle",()=>{if(txF.open){const f=txF.querySelector("iframe");if(f&&!f.src&&f.dataset.txsrc)f.src=f.dataset.txsrc;}});
     if(state.token&&!(state.presets.trade||[]).length){loadPresets().then(()=>{if(state.route==="trade")paintPresetSel();});}
     if(!r){const rows=await fetchPairs(tabById("best"));r=rows.find(x=>x.tokenMint===mint)||null;if(r&&state.route==="trade"){$("#thead").innerHTML=theadHtml(r);fillPerf(r);}}
     else fillPerf(r);
@@ -755,6 +780,7 @@
     setActiveView("v-portfolio");subbarPortfolio();
     const view=$("#v-portfolio");view.innerHTML='<div class="loading"><span class="spin"></span></div>';
     if(!state.token){view.innerHTML='<div class="empty"><div class="big">📊</div><div><b>No account yet</b><br><span class="mut">Set up a wallet to start tracking your positions and PnL here.</span></div><div class="cta" onclick="GG.go(\'wallet\')">Set up a wallet</div></div>';return;}
+    if(state.portfolioTab==="cards"){return renderPnlCards(view);}
     const {ok,status,d}=await api("/api/web/positions?fast=true");
     if(state.route!=="portfolio")return;
     if(status===401){setToken("");renderPortfolio();return;}
@@ -768,8 +794,40 @@
           '<td>'+(p.estimatedValueSol!=null?"◎ "+Number(p.estimatedValueSol).toFixed(3):"—")+'</td>'+
           '<td class="'+cls+'">'+(isFinite(pnl)?(pnl>=0?"+":"")+pnl.toFixed(3)+"◎":"—")+(pct!=null?'<span class="chg '+cls+'">'+pct+'%</span>':'')+'</td>'+
           '<td class="hideMb mut">'+esc(p.uiAmount||"")+'</td>'+
-          '<td><button class="buybtn sm" onclick="event.stopPropagation();GG.open(\''+esc(p.tokenMint)+'\')">Trade</button></td></tr>';
+          '<td><button class="buybtn sm" style="background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606" onclick="event.stopPropagation();GG.openSell(\''+esc(p.tokenMint)+'\')">Sell</button></td></tr>';
       }).join("")+'</tbody></table></div>';
+  }
+  async function renderPnlCards(view){
+    const {ok,status,d}=await api("/api/web/pnl");
+    if(state.route!=="portfolio"||state.portfolioTab!=="cards")return;
+    if(status===401){setToken("");renderPortfolio();return;}
+    const pnl=(d&&d.pnl)||null;
+    if(!ok||!pnl){view.innerHTML='<div class="empty"><div class="big">⚠</div><div><b>Could not load PnL</b><br><span class="mut">'+esc((d&&d.error)||"Try again in a moment.")+'</span></div></div>';return;}
+    const t=pnl.totals||{},toks=pnl.tokens||[];
+    const rz=Number(t.realizedSol),rzc=isFinite(rz)?(rz>=0?"up":"down"):"mut";
+    const totals='<div class="wbox"><h3>Realized PnL</h3><div class="secgrid">'+
+      '<div class="cell"><b class="'+rzc+'">'+(isFinite(rz)?(rz>=0?"+":"")+rz.toFixed(3)+"◎":"—")+'</b><span>realized</span></div>'+
+      '<div class="cell"><b>'+(t.tradeCount||0)+'</b><span>trades</span></div>'+
+      '<div class="cell"><b>'+(t.buys||0)+' / '+(t.sells||0)+'</b><span>buys / sells</span></div></div></div>';
+    const list=toks.length?toks.map(tk=>{const r=Number(tk.realizedSol),cls=isFinite(r)?(r>=0?"up":"down"):"mut";
+      return '<div class="walletrow"><div class="ico">'+(tk.imageUrl?'<img src="'+esc(tk.imageUrl)+'" style="width:100%;height:100%;border-radius:11px;object-fit:cover">':'🪙')+'</div>'+
+        '<div class="info"><b>'+esc(tk.symbol||short(tk.tokenMint))+'</b><div class="addr mut">'+esc(tk.holdTime||tk.name||"")+'</div></div>'+
+        '<div class="bal"><b class="'+cls+'">'+(isFinite(r)?(r>=0?"+":"")+r.toFixed(3)+"◎":"—")+'</b><span>realized</span></div>'+
+        '<button class="wbtn ghost" style="margin-left:10px;padding:9px 12px" onclick="GG.pnlCard(\''+esc(tk.tokenMint)+'\',\''+esc(tk.symbol||"")+'\')">🏆 Card</button></div>';
+    }).join(""):'<p class="mut" style="font-size:12px">No closed trades yet — your PnL cards appear here once you take some profit.</p>';
+    view.innerHTML='<div class="wgrid">'+totals+'<div class="wbox"><h3>Your tokens</h3><p class="sub">Tap <b>Card</b> to build a shareable SlimeWire PnL card you can save and post.</p>'+list+'</div></div>';
+  }
+  async function openPnlCard(mint,sym){
+    toast("Building your PnL card…");
+    try{
+      const r=await fetch(API_BASE+"/api/web/pnl/card?tokenMint="+encodeURIComponent(mint),{headers:state.token?{Authorization:"Bearer "+state.token}:{}});
+      if(!r.ok){toast(r.status===401?"Sign in to build cards":"No card for this token yet",true);return;}
+      const url=URL.createObjectURL(await r.blob());
+      openModal('<h3>🏆 PnL Card — '+esc(sym||short(mint))+'</h3>'+
+        '<img src="'+url+'" style="width:100%;border-radius:12px;border:1px solid var(--border);margin:4px 0 12px">'+
+        '<div style="display:flex;gap:9px"><a class="wbtn" style="flex:1;text-align:center;text-decoration:none" href="'+url+'" download="slimewire-pnl-'+esc((sym||"card").replace(/[^a-z0-9]/gi,""))+'.png">Save card</a>'+
+        '<button class="wbtn ghost" style="flex:1" onclick="GG.copy(\''+esc(location.origin)+'/gg#trade/'+esc(mint)+'\')">Copy link</button></div>');
+    }catch(e){toast("Could not build card",true);}
   }
 
   // ---------- wallet ----------
@@ -779,7 +837,7 @@
   async function renderWallet(){
     setActiveView("v-wallet");subbarWallet();
     const view=$("#v-wallet");view.innerHTML='<div class="loading"><span class="spin"></span></div>';
-    if(state.token){await refreshWallets();await loadPresets();}
+    if(state.token){await refreshWallets();await loadPresets();await loadMe();}
     if(state.route!=="wallet")return;
     const wrap=el("div","wgrid");
     if(!state.token){
@@ -828,7 +886,16 @@
           '<div class="field row2"><div><label>How many</label><input id="dCount" inputmode="numeric" placeholder="5"></div><div><label>SOL each</label><input id="dAmt" inputmode="decimal" placeholder="0.05"></div></div>'+
           '<button class="wbtn" id="distBtn">Create + fund fresh wallets</button>'+
           '<p class="wnote" style="margin:8px 0 0">Spins up new wallets and funds each from your active wallet — great for bundles. Backup downloads automatically.</p>'+
-        '</div></details>';
+        '</div></details>'+
+        // ---- Referrals fold ----
+        (function(){const u=state.user||{};return '<details class="fold"><summary>🎁 Referrals<span class="sub">your code · payout wallet</span><span class="chev">▾</span></summary><div class="foldbody">'+
+          '<p class="wnote" style="margin:0 0 12px">Share your link, set a custom code, and choose where your referral earnings get paid.</p>'+
+          '<div class="field"><label>Your referral link</label><div class="walletrow" style="margin:0"><div class="info" style="min-width:0"><div class="addr">'+esc(u.referralLink||"create a wallet first")+(u.referralLink?'<button onclick="GG.copy(\''+esc(u.referralLink)+'\')" title="Copy link">⧉</button>':'')+'</div></div></div></div>'+
+          '<div class="field" style="margin-top:12px"><label>Custom referral code</label><input id="refCode" value="'+esc(u.referralCode||"")+'" placeholder="YOURCODE" maxlength="32"></div>'+
+          '<button class="wbtn" id="saveRefCode">Save code</button>'+
+          '<div class="field" style="margin-top:16px"><label>Referral payout wallet</label><input id="refWallet" value="'+esc(u.referralPayoutWallet||"")+'" placeholder="Solana address to receive earnings"></div>'+
+          '<button class="wbtn ghost" id="saveRefWallet">Save payout wallet</button>'+
+        '</div></details>';})();
     }
     view.innerHTML="";view.appendChild(wrap);
     const mk=$("#mkWallet");if(mk)mk.onclick=async()=>{mk.disabled=true;mk.textContent="Creating…";await createWallet();if(state.route==="wallet")renderWallet();};
@@ -850,8 +917,55 @@
     const ss=$("#swSol");if(ss)ss.onclick=async()=>{const dest=$("#swDest").value.trim();if(!dest){toast("Paste a destination address.",true);return;}ss.disabled=true;ss.textContent="Sweeping…";await sweepSol(dest,state.wallets.map(w=>w.index));ss.disabled=false;ss.textContent="Sweep all SOL →";renderWallet();};
     const st=$("#swTok");if(st)st.onclick=async()=>{const dest=$("#swDest").value.trim();if(!dest){toast("Paste a destination address.",true);return;}st.disabled=true;st.textContent="Sweeping…";await sweepTokens(dest,state.wallets.map(w=>w.index));st.disabled=false;st.textContent="Sweep all tokens →";};
     const db=$("#distBtn");if(db)db.onclick=async()=>{const c=parseInt($("#dCount").value,10),a=$("#dAmt").value.trim();if(!(c>0)){toast("How many wallets?",true);return;}if(!a||Number(a)<=0){toast("SOL per wallet?",true);return;}db.disabled=true;db.textContent="Funding…";await distributeFresh(c,a,state.activeWallet||1);db.disabled=false;db.textContent="Create + fund fresh wallets";renderWallet();};
+    const src=$("#saveRefCode");if(src)src.onclick=async()=>{const code=$("#refCode").value.trim();if(!code){toast("Enter a code.",true);return;}src.disabled=true;src.textContent="Saving…";const okk=await saveReferral({code});src.disabled=false;src.textContent="Save code";if(okk){toast("Referral code saved");renderWallet();}};
+    const srw=$("#saveRefWallet");if(srw)srw.onclick=async()=>{const w=$("#refWallet").value.trim();srw.disabled=true;srw.textContent="Saving…";const okk=await saveReferral(w?{wallet:w}:{clearPayout:true});srw.disabled=false;srw.textContent="Save payout wallet";if(okk){toast("Payout wallet saved");renderWallet();}};
   }
   function pickWallet(i){state.activeWallet=i;updateWalletPill();renderWallet();toast("Active wallet set");}
+
+  // ---------- tools: native swap / bundle / volume / copy ----------
+  function subbarTool(title){const sb=$("#subbar");sb.innerHTML="";const back=el("button","chip");back.textContent="← Back";back.onclick=()=>go("trending");sb.appendChild(back);const h=el("h1");h.style.fontSize="16px";h.textContent=title;sb.appendChild(h);}
+  function walletPickHtml(){
+    if(!state.wallets.length)return '<p class="mut" style="font-size:12px">No wallets yet — create one in the Wallet tab.</p>';
+    return '<div style="display:flex;flex-direction:column;gap:7px">'+state.wallets.map(w=>'<label style="display:flex;align-items:center;gap:9px;font-size:12px;cursor:pointer"><input type="checkbox" class="wchk" value="'+w.index+'" checked> '+esc(w.label||"Wallet")+' · '+esc(short(w.publicKey))+' · ◎'+Number(w.sol||0).toFixed(3)+'</label>').join("")+'</div>';
+  }
+  function selectedWalletIdxs(){return [...document.querySelectorAll(".wchk:checked")].map(c=>Number(c.value));}
+  function activeWalletNote(){const w=activeWalletObj();return '<p class="wnote" style="margin-top:10px">Active wallet: <b>'+(w?esc(w.label||"Wallet")+" · ◎"+Number(w.sol||0).toFixed(3):"none — set one up in Wallet")+'</b></p>';}
+  async function renderSwap(){
+    setActiveView("v-swap");subbarTool("🔄 Swap");if(state.token)await refreshWallets();if(state.route!=="swap")return;
+    $("#v-swap").innerHTML='<div class="wgrid"><div class="wbox"><h3>🔄 Swap</h3><p class="sub">Buy a token with SOL or sell it back — from your active wallet.</p>'+
+      '<div class="bsrow"><button class="buy on" id="swBuy">Buy SOL→token</button><button class="sell" id="swSell">Sell token→SOL</button></div>'+
+      '<div class="field"><label>Token contract (CA)</label><input id="swCa" placeholder="Paste token mint"></div>'+
+      '<div class="field row2"><div><label id="swAmtLbl">Amount (SOL)</label><input id="swAmt" inputmode="decimal" placeholder="0.5"></div><div><label>Slippage (bps)</label><input id="swSlip" inputmode="numeric" placeholder="400"></div></div>'+
+      '<button class="bigbuy" id="swGo">Buy</button>'+activeWalletNote()+'</div></div>';
+    let side="buy";
+    const paint=()=>{$("#swBuy").classList.toggle("on",side==="buy");$("#swSell").classList.toggle("on",side==="sell");$("#swGo").classList.toggle("sell",side==="sell");$("#swGo").textContent=side==="buy"?"Buy":"Sell";$("#swAmtLbl").textContent=side==="buy"?"Amount (SOL)":"Sell %";$("#swAmt").placeholder=side==="buy"?"0.5":"100";};
+    $("#swBuy").onclick=()=>{side="buy";paint();};$("#swSell").onclick=()=>{side="sell";paint();};
+    $("#swGo").onclick=async()=>{const ca=$("#swCa").value.trim(),amt=$("#swAmt").value.trim(),slip=$("#swSlip").value.trim()||"400";if(!ca){toast("Paste a token CA.",true);return;}if(!(await ensureTradeReady()))return;const b=$("#swGo");b.disabled=true;b.textContent="Submitting…";let res;if(side==="buy")res=await jpost("/api/web/trade/buy",{tokenMint:ca,walletIndex:state.activeWallet,amountSol:String(amt||"0.1"),slippageBps:slip,tradeAttemptId:attemptId()});else res=await jpost("/api/web/trade/sell",{tokenMint:ca,walletIndex:state.activeWallet,percent:String(amt||"100"),slippageBps:slip,tradeAttemptId:attemptId()});b.disabled=false;b.textContent=side==="buy"?"Buy":"Sell";handleTradeResult(res.ok,res.status,res.d,side==="buy"?"Buy":"Sell");};
+    paint();
+  }
+  async function renderBundle(){
+    setActiveView("v-bundle");subbarTool("📦 Bundle Buy");if(state.token)await refreshWallets();if(state.route!=="bundle")return;
+    $("#v-bundle").innerHTML='<div class="wgrid"><div class="wbox"><h3>📦 Bundle Buy</h3><p class="sub">Buy one token across several of your wallets in one shot.</p>'+
+      '<div class="field"><label>Token contract (CA)</label><input id="bnCa" placeholder="Paste token mint"></div>'+
+      '<div class="field row2"><div><label>SOL per wallet</label><input id="bnAmt" inputmode="decimal" placeholder="0.1"></div><div><label>Slippage (bps)</label><input id="bnSlip" inputmode="numeric" placeholder="400"></div></div>'+
+      '<div class="field"><label>Wallets</label>'+walletPickHtml()+'</div>'+
+      '<button class="bigbuy" id="bnGo">Bundle Buy</button></div></div>';
+    $("#bnGo").onclick=async()=>{const ca=$("#bnCa").value.trim(),amt=$("#bnAmt").value.trim()||"0.1",slip=$("#bnSlip").value.trim()||"400";if(!ca){toast("Paste a token CA.",true);return;}if(!(await ensureTradeReady()))return;const idxs=selectedWalletIdxs();if(!idxs.length){toast("Pick at least one wallet.",true);return;}const b=$("#bnGo");b.disabled=true;b.textContent="Bundling…";const {ok,status,d}=await jpost("/api/web/bundle/buy",{tokenMint:ca,walletIndexes:idxs,amountSol:String(amt),percent:"100",slippageBps:Number(slip),tradeAttemptId:attemptId()});b.disabled=false;b.textContent="Bundle Buy";if(status===401){setToken("");go("wallet");return;}if(ok&&d&&d.ok&&d.bundle){toast(d.bundle.summary||"Bundle sent");refreshWallets();}else toast((d&&d.error)||"Bundle failed",true);};
+  }
+  async function renderVolume(){
+    setActiveView("v-volume");subbarTool("📈 Volume Bot");if(state.token)await refreshWallets();if(state.route!=="volume")return;
+    $("#v-volume").innerHTML='<div class="wgrid"><div class="wbox"><h3>📈 Volume Bot</h3><p class="sub">Loop buys + timed sells across wallets to build volume.</p>'+
+      '<div class="field"><label>Token contract (CA)</label><input id="vlCa" placeholder="Paste token mint"></div>'+
+      '<div class="field row2"><div><label>SOL per buy</label><input id="vlAmt" inputmode="decimal" placeholder="0.05"></div><div><label>Loops</label><input id="vlLoops" inputmode="numeric" placeholder="3"></div></div>'+
+      '<div class="field row2"><div><label>Loop delay (s)</label><input id="vlDelay" inputmode="numeric" placeholder="5"></div><div><label>Slippage (bps)</label><input id="vlSlip" inputmode="numeric" placeholder="400"></div></div>'+
+      '<div class="field"><label>Wallets</label>'+walletPickHtml()+'</div>'+
+      '<button class="bigbuy" id="vlGo">Start Volume</button></div></div>';
+    $("#vlGo").onclick=async()=>{const ca=$("#vlCa").value.trim();if(!ca){toast("Paste a token CA.",true);return;}if(!(await ensureTradeReady()))return;const idxs=selectedWalletIdxs();if(!idxs.length){toast("Pick at least one wallet.",true);return;}const b=$("#vlGo");b.disabled=true;b.textContent="Starting…";const {ok,status,d}=await jpost("/api/web/volume/plan",{tokenMint:ca,walletIndexes:idxs,amountSol:String($("#vlAmt").value.trim()||"0.05"),loopCount:String($("#vlLoops").value.trim()||"3"),loopDelay:String($("#vlDelay").value.trim()||"5"),slippageBps:Number($("#vlSlip").value.trim()||"400"),sellDelay:"5",sellPercent:"100"});b.disabled=false;b.textContent="Start Volume";if(status===401){setToken("");go("wallet");return;}if(ok&&d&&d.ok){toast((d.plan&&d.plan.summary)||"Volume plan started");refreshWallets();}else toast((d&&d.error)||"Volume failed",true);};
+  }
+  async function renderCopy(){
+    setActiveView("v-copy");subbarTool("👥 Copy Trade");
+    $("#v-copy").innerHTML='<div class="empty"><div class="big">👥</div><div><b>Copy / KOL tracking is coming to /gg</b><br><span class="mut">Track top wallets and copy their buys — building this in natively next so it never sends you to the old site.</span></div><a class="cta" href="#trending">Back to Trending</a></div>';
+  }
 
   // ---------- sol price ----------
   async function loadSol(){
@@ -868,20 +982,22 @@
   // ---------- paste / search / nav ----------
   function tryOpenCa(text){const m=String(text||"").trim().match(/[1-9A-HJ-NP-Za-km-z]{32,44}/);if(m){go("trade",m[0]);return true;}return false;}
   $("#pasteCa").onclick=async()=>{try{const t=await navigator.clipboard.readText();if(!tryOpenCa(t))toast("No contract address on clipboard",true);}catch(e){toast("Paste a CA in the search box",true);}};
-  $("#search").addEventListener("keydown",e=>{if(e.key==="Enter"){if(!tryOpenCa(e.target.value))toast("Paste a Solana contract address",true);e.target.value="";}});
+  $("#search").addEventListener("input",e=>{const v=e.target.value.trim();state.searchTerm=v;if(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v))return;if(state.route!=="trending")go("trending");else applyTrendingFilter();});
+  $("#search").addEventListener("keydown",e=>{if(e.key==="Enter"){if(tryOpenCa(e.target.value)){e.target.value="";state.searchTerm="";applyTrendingFilter&&applyTrendingFilter();}}});
   document.addEventListener("keydown",e=>{if(e.key==="/"&&document.activeElement.tagName!=="INPUT"){e.preventDefault();$("#search").focus();}});
   document.querySelectorAll("#nav a[data-route]").forEach(a=>a.onclick=e=>{e.preventDefault();go(a.dataset.route);});
   document.querySelectorAll("#botnav button[data-route]").forEach(b=>b.onclick=()=>go(b.dataset.route));
   document.querySelectorAll("#botnav button[data-tools]").forEach(b=>b.onclick=()=>openToolsSheet());
   $("#walletPill").onclick=()=>go("wallet");
   // Tools dropdown = click-toggle (hover dropdowns drop on the gap + don't work on touch).
-  (function(){const drop=document.querySelector(".navdrop"),db=drop&&drop.querySelector(".dropbtn");
+  (function(){const drop=document.querySelector(".navdrop"),db=drop&&drop.querySelector(".dropbtn"),menu=$("#toolsMenu");
+    if(menu)menu.innerHTML=TOOLS.map(t=>toolLinkHtml(t)).join("");
     if(db){db.onclick=e=>{e.stopPropagation();drop.classList.toggle("open");};
       drop.querySelectorAll(".dropmenu a").forEach(a=>a.addEventListener("click",()=>drop.classList.remove("open")));
       document.addEventListener("click",()=>drop.classList.remove("open"));}})();
 
   // ---------- expose + boot ----------
-  window.GG={open:(m)=>go("trade",m),go,quickBuy,copy,closeModal,pickWallet,
+  window.GG={open:(m)=>go("trade",m),openSell:(m)=>{state.pendingSell=m;go("trade",m);},go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,
     removeWalletPrompt:(i)=>{const w=state.wallets.find(x=>x.index===i);if(w)removeWalletModal(w);}};
   render();updateWalletPill();loadSol();setInterval(loadSol,60000);
   if(state.token){refreshWallets();loadPresets();}

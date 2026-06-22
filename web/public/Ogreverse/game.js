@@ -20,10 +20,10 @@
   const VIEW_COLS = Math.floor(W / TILE);
   const VIEW_ROWS = Math.floor(H / TILE);
   const TILE_CENTER = Math.floor(TILE / 2);
-const STEP_ANIM_MS = MOBILE_LAYOUT_AT_LOAD ? 100 : 130;
-const STEP_INPUT_GRACE_MS = MOBILE_LAYOUT_AT_LOAD ? 12 : 10;
-const JOYSTICK_DEADZONE_RATIO = 0.18;
-const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
+  const STEP_ANIM_MS = MOBILE_LAYOUT_AT_LOAD ? 250 : 145;
+  const STEP_INPUT_GRACE_MS = MOBILE_LAYOUT_AT_LOAD ? 30 : 14;
+  const JOYSTICK_DEADZONE_RATIO = 0.3;
+  const JOYSTICK_AXIS_LOCK_RATIO = 1.45;
   const WORLD_W = 96;
   const WORLD_H = 72;
   const SAVE_KEY = "ogreverse_brainrot_emerald_save_v1";
@@ -689,7 +689,7 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
   const PREMIUM_TILE_DIR = "assets/tiles-premium";
   const BATTLE_BG_DIR = "assets/battle-premium";
   const BATTLE_BG_VERSION = "20260617-premium-battle-v6";
-  const GAME_ASSET_VERSION = "20260620-mobile-battle-v87";
+  const GAME_ASSET_VERSION = "20260620-playability-v94";
   const TRAINER_DIR = "assets/trainers";
   const TRAINER_ASSET_VERSION = "20260617-story-npc-v5";
   const TITLE_COVER_SRC = "assets/references/ogreverse-region-map-hires-labeled.png";
@@ -857,6 +857,8 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
         mode: state.mode,
         x: state.player?.x ?? null,
         y: state.player?.y ?? null,
+        tile: state.player ? tileAt(state.player.x, state.player.y) : null,
+        frontTile: state.player ? tileAt(...frontCoord()) : null,
         facing: state.player?.facing ?? null,
         steps: state.player?.steps ?? null,
         battleChoice: state.battle?.choice || null,
@@ -892,6 +894,7 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
     state.mode = "starter";
     state.battle = null;
     chooseStarter(starterId);
+    applyDebugPosition(params);
     const debugBattle = params.get("battle");
     if (params.get("campaign")) seedDebugCampaign(params.get("campaign"));
     if (debugBattle && params.get("crew")) seedDebugCrew(params.get("crew"));
@@ -960,6 +963,18 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
         dirtyPanel();
       }
     }
+  }
+
+  function applyDebugPosition(params) {
+    if (!DEBUG_CAPTURE || !state.player || !params) return;
+    const x = Number(params.get("x"));
+    const y = Number(params.get("y"));
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      state.player.x = clamp(Math.round(x), 1, WORLD_W - 2);
+      state.player.y = clamp(Math.round(y), 1, WORLD_H - 2);
+    }
+    const facing = params.get("facing");
+    if (["up", "down", "left", "right"].includes(facing)) state.player.facing = facing;
   }
 
   function startOutcomeDemo(kind) {
@@ -3588,7 +3603,7 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
       else if (["arrowright", "d"].includes(key)) tryMove(1, 0, "right");
       else if (["z", "enter", " "].includes(key)) {
         playSfx("tap");
-        interact();
+        quickConfirm();
       } else if (["x", "escape", "m"].includes(key)) {
         playSfx("menu");
         openMenu("home");
@@ -3783,7 +3798,7 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
     if (!mobileJoystickDirection || mobileJoystickVector.strength <= 0) return;
     const now = performance.now();
     if (!force && state.stepFx && now < state.stepFx.until - STEP_INPUT_GRACE_MS) return;
-    const repeatMs = clamp(STEP_ANIM_MS + 14 - mobileJoystickVector.strength * 28, 66, STEP_ANIM_MS + 18);
+    const repeatMs = clamp(STEP_ANIM_MS + 46 - mobileJoystickVector.strength * 22, STEP_ANIM_MS - 10, STEP_ANIM_MS + 54);
     if (!force && now - mobileJoystickLastMove < repeatMs) return;
     mobileJoystickLastMove = now;
     const moved = tryMove(mobileJoystickDirection.dx, mobileJoystickDirection.dy, mobileJoystickDirection.facing);
@@ -3868,6 +3883,7 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
     if (action === "buy") buyItem(value);
     if (action === "heal") healParty(true);
     if (action === "interact") interact();
+    if (action === "searchWild") searchWildBattle();
     if (action === "onlineReconnect") resetOnlineConnection();
     if (action === "onlineChallenge") {
       const peer = state.online.peers.find((item) => item.id === value);
@@ -3899,7 +3915,9 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
     if (state.mode === "title") {
       state.hasSave ? loadGame() : startNewGame();
     } else if (state.mode === "overworld") {
-      interact();
+      const action = interactionPromptInfo();
+      if (!action && fieldSearchTarget()) searchWildBattle();
+      else interact();
     } else if (state.mode === "trial") {
       startTrialFromPreview();
     } else if (state.mode === "battle") {
@@ -3921,6 +3939,13 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
     const player = activePlayer();
     const enemySpecies = SPECIES_BY_ID[activeEnemy().id];
     const best = bestBattleMove(player, enemySpecies);
+    if (battle.choice === "main") {
+      const quickOrb = battleQuickOrbName();
+      if (quickOrb) {
+        useBattleItem(quickOrb);
+        return;
+      }
+    }
     if (battle.choice === "main" || battle.choice === "fight") {
       if (best?.slot && best.slot.pp > 0 && best.score > 0) {
         handleBattleMove(best.index);
@@ -3965,6 +3990,76 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
     else if (state.mode === "battle") setBattleChoice("main");
     else if (state.mode === "pvp") refreshOnlineBattleState();
     else if (state.mode === "title") quickConfirm();
+  }
+
+  function updateMobileControlsText() {
+    if (!mobileControls) return;
+    const a = mobileControls.querySelector(".mobile-action-a");
+    const aText = a?.querySelector("small");
+    const b = mobileControls.querySelector(".mobile-action-b");
+    const bText = b?.querySelector("small");
+    const menu = mobileControls.querySelector(".mobile-menu-btn strong");
+    let aLabel = "Action";
+    let bLabel = "Back";
+    let menuLabel = "Menu";
+    let primaryMode = "default";
+    if (state.mode === "overworld" && state.player) {
+      const primary = primaryFieldActionInfo();
+      aLabel = primary.action === "searchWild"
+        ? "Search"
+        : primary.label === "Inspect"
+          ? "Inspect"
+          : primary.label;
+      bLabel = "Menu";
+      primaryMode = primary.action === "searchWild" ? "search" : "field";
+    } else if (state.mode === "battle" && state.battle) {
+      if (state.battle.result) {
+        aLabel = "Continue";
+        bLabel = "Field";
+        primaryMode = "continue";
+      } else if (state.battle.busy) {
+        aLabel = "Wait";
+        bLabel = "Back";
+        primaryMode = "busy";
+      } else if (state.battle.choice === "main") {
+        const quickOrb = battleQuickOrbName();
+        aLabel = quickOrb ? "Throw Orb" : "Best Hit";
+        bLabel = "Back";
+        primaryMode = quickOrb ? "catch" : "battle";
+      } else if (state.battle.choice === "fight") {
+        aLabel = "Best Move";
+        bLabel = "Back";
+        primaryMode = "battle";
+      } else {
+        aLabel = "Select";
+        bLabel = "Back";
+        primaryMode = "battle";
+      }
+      menuLabel = "Fight";
+    } else if (state.mode === "trial") {
+      aLabel = "Start";
+      bLabel = "Leave";
+      primaryMode = "trial";
+    } else if (state.mode === "menu") {
+      aLabel = "Select";
+      bLabel = "Close";
+      menuLabel = "Close";
+      primaryMode = "menu";
+    } else if (state.mode === "starter") {
+      aLabel = "Choose";
+      bLabel = "Back";
+      primaryMode = "starter";
+    } else if (state.mode === "title") {
+      aLabel = state.hasSave ? "Continue" : "New";
+      bLabel = "Back";
+      primaryMode = "title";
+    }
+    if (aText) aText.textContent = aLabel;
+    if (bText) bText.textContent = bLabel;
+    if (menu) menu.textContent = menuLabel;
+    if (a) a.setAttribute("aria-label", `A ${aLabel}`);
+    if (b) b.setAttribute("aria-label", `B ${bLabel}`);
+    mobileControls.dataset.primary = primaryMode;
   }
 
   function tryMove(dx, dy, facing) {
@@ -4040,18 +4135,55 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
     const tile = tileAt(state.player.x, state.player.y);
     const biome = encounterBiomeForTile(tile);
     if (!biome) return;
-    const chance = tile.includes("Grass") || tile === "circuit" || tile === "cave" ? 0.12 : 0.07;
+    const chance = tile.includes("Grass") || tile === "circuit" || tile === "cave" ? 0.07 : 0.04;
     if (Math.random() < chance) {
-      const level = wildLevelFor(biome);
-      const enemy = pickWildCreature(biome, level);
-      startBattle({
-        kind: "wild",
-        name: `Wild ${enemy.nickname}`,
-        enemyParty: [enemy],
-        canRun: true,
-        music: "wild",
-      });
+      startWildBattle(biome, "random");
     }
+  }
+
+  function fieldSearchTarget() {
+    if (!state.player || state.mode !== "overworld") return null;
+    const currentTile = tileAt(state.player.x, state.player.y);
+    const currentBiome = encounterBiomeForTile(currentTile);
+    if (currentBiome) return { biome: currentBiome, tile: currentTile, mode: "current" };
+    const [fx, fy] = frontCoord();
+    if (!inWorld(fx, fy)) return null;
+    const action = interactionPromptInfo();
+    if (action) return null;
+    const frontTile = tileAt(fx, fy);
+    const frontBiome = encounterBiomeForTile(frontTile);
+    if (!frontBiome || isBlocked(fx, fy)) return null;
+    return { biome: frontBiome, tile: frontTile, mode: "front", x: fx, y: fy };
+  }
+
+  function searchWildBattle() {
+    if (!state.player || state.mode !== "overworld") return;
+    const target = fieldSearchTarget();
+    if (!target) {
+      toast("No wild signal here. Step into tall grass, cave floor, slime, circuit, or meme tiles.");
+      return;
+    }
+    showFocusPulse(target.x ?? state.player.x, target.y ?? state.player.y, biomeAccent(target.biome));
+    startWildBattle(target.biome, "search");
+  }
+
+  function startWildBattle(biome, source = "random") {
+    if (!state.player?.party?.length) {
+      toast("Choose a starter before picking a fight.");
+      return;
+    }
+    const level = wildLevelFor(biome);
+    const enemy = pickWildCreature(biome, level);
+    startBattle({
+      kind: "wild",
+      name: `Wild ${enemy.nickname}`,
+      line: source === "search"
+        ? `You searched the ${biomeName(biome)} signal. ${enemy.nickname} jumped out.`
+        : `Wild ${enemy.nickname} jumped out.`,
+      enemyParty: [enemy],
+      canRun: true,
+      music: "wild",
+    });
   }
 
   function encounterBiomeForTile(tile) {
@@ -4587,6 +4719,14 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
       return;
     }
     let damage = calcDamage(attacker, defender, move, attackerStages, defenderStages);
+    if (
+      state.battle?.kind === "wild"
+      && state.player.badges.length === 0
+      && attacker === activeEnemy()
+      && defender === activePlayer()
+    ) {
+      damage = Math.min(damage, Math.max(1, Math.floor(calcStats(defender).hp * 0.42)));
+    }
     defender.hp = clamp(defender.hp - damage, 0, calcStats(defender).hp);
     const multiplier = typeMultiplier(move.type, SPECIES_BY_ID[defender.id].elements);
     const vibe = multiplier >= 2 ? " It was super effective." : multiplier <= 0.5 ? " It was not very effective." : "";
@@ -4902,7 +5042,10 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
       const scoreB = mb.power * typeMultiplier(mb.type, SPECIES_BY_ID[player.id].elements);
       return scoreB - scoreA;
     });
-    return Math.random() < 0.65 ? slots[0] : slots[Math.floor(Math.random() * slots.length)];
+    const smartChance = state.battle?.kind === "wild"
+      ? state.player.badges.length === 0 ? 0.28 : 0.5
+      : 0.65;
+    return Math.random() < smartChance ? slots[0] : slots[Math.floor(Math.random() * slots.length)];
   }
 
   function useBattleItem(itemName) {
@@ -5280,6 +5423,7 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
       document.body.dataset.gameMode = state.mode || "title";
       document.body.dataset.hasPlayer = state.player ? "1" : "0";
     }
+    updateMobileControlsText();
     if (!state.panelDirty) return;
     state.panelDirty = false;
     if (state.mode === "title") return renderTitlePanel();
@@ -5702,7 +5846,7 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
       ${adventureCardHtml()}
       ${onlinePanelHtml()}
       <div class="command-panel">
-        <button class="btn primary command-main" data-action="interact"><span>A</span><strong>${escapeHtml(primaryAction.label)}</strong><small>${escapeHtml(primaryAction.hint)}</small></button>
+        <button class="btn primary command-main" data-action="${escapeHtml(primaryAction.action)}"><span>A</span><strong>${escapeHtml(primaryAction.label)}</strong><small>${escapeHtml(primaryAction.hint)}</small></button>
         <div class="menu-grid">
           <button class="btn menu-btn" data-action="menu" data-value="party"><span>CRW</span>Crew</button>
           <button class="btn menu-btn" data-action="menu" data-value="bag"><span>SAT</span>Satchel</button>
@@ -5722,9 +5866,22 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
   function primaryFieldActionInfo() {
     const action = interactionPromptInfo();
     if (!action) {
+      const search = fieldSearchTarget();
+      if (search) {
+        const sample = wildPreviewSpecies(search.biome)
+          .map((species) => species.name.split(" ")[0])
+          .slice(0, 2)
+          .join(" / ");
+        return {
+          action: "searchWild",
+          label: "Search Wild",
+          hint: `${biomeName(search.biome)} ${wildLevelRangeLabel(search.biome)}${sample ? ` / ${sample}` : ""}`,
+        };
+      }
       const step = activeStoryStep();
       const direction = objectiveDirectionLabel(step.x - state.player.x, step.y - state.player.y);
       return {
+        action: "interact",
         label: "Inspect",
         hint: `${direction} toward ${step.target}. Face interactive tiles.`,
       };
@@ -5742,7 +5899,7 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
       SWITCH: "Switch",
       RIFT: "Rift",
     }[action.label] || action.label;
-    return { label, hint: interactionAssistText(action) };
+    return { action: "interact", label, hint: interactionAssistText(action) };
   }
 
   function fieldBriefHtml() {
@@ -5759,16 +5916,21 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
   function fieldAssistHtml() {
     const step = activeStoryStep();
     const action = interactionPromptInfo();
+    const search = !action ? fieldSearchTarget() : null;
     const lead = state.player.party.find((creature) => creature.hp > 0) || state.player.party[0];
     const wild = fieldWildSignal();
     const direction = objectiveDirectionLabel(step.x - state.player.x, step.y - state.player.y);
     const actionLabel = action
       ? `${action.label} ahead`
+      : search
+        ? "A searches wild"
       : destinationDistance(step) <= 1
         ? "Target here"
         : "Roam";
     const actionHint = action
       ? interactionAssistText(action)
+      : search
+        ? `${biomeName(search.biome)} signal is live. Tap A to battle.`
       : `${direction} toward ${step.target}.`;
     const leadMax = lead ? calcStats(lead).hp : 1;
     const leadHpPct = lead ? clamp((lead.hp / Math.max(1, leadMax)) * 100, 0, 100) : 0;
@@ -5808,6 +5970,19 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
   }
 
   function fieldWildSignal() {
+    const search = fieldSearchTarget();
+    if (search) {
+      const level = wildLevelRangeLabel(search.biome);
+      const sample = wildPreviewSpecies(search.biome)
+        .map((species) => species.name.split(" ")[0])
+        .slice(0, 2)
+        .join(" / ");
+      return {
+        title: search.mode === "front" ? "WILD AHEAD" : "A SEARCH",
+        subtitle: `${level} / ${sample || "wild crew"}`,
+        accent: biomeAccent(search.biome),
+      };
+    }
     const tile = tileAt(state.player.x, state.player.y);
     const biome = encounterBiomeForTile(tile);
     if (!biome) {
@@ -6084,9 +6259,16 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
     } else {
       const readyMoves = player.moves.filter((slot) => slot.pp > 0).length;
       const wildNote = battle.kind === "wild" ? "orbs ready" : "trainer duel";
-      controls = `${bestAction?.move ? `<button class="btn primary battle-command quick-hit-command" data-action="move" data-value="${bestAction.index}" ${bestActionDisabled ? "disabled" : ""}>
-        <span>Q</span><strong>Best Hit</strong><small>${escapeHtml(bestAction.move.name)} / ${escapeHtml(bestActionInfo?.label || "READY")}</small>
-      </button>` : ""}
+      const quickOrb = battle.kind === "wild" ? bestBattleOrbName() : null;
+      const quickOrbDisabled = battle.busy || !quickOrb;
+      controls = `<div class="quick-battle-row">
+        ${bestAction?.move ? `<button class="btn primary battle-command quick-hit-command" data-action="move" data-value="${bestAction.index}" ${bestActionDisabled ? "disabled" : ""}>
+          <span>Q</span><strong>Best Hit</strong><small>${escapeHtml(bestAction.move.name)} / ${escapeHtml(bestActionInfo?.label || "READY")}</small>
+        </button>` : ""}
+        ${battle.kind === "wild" ? `<button class="btn primary battle-command quick-orb-command" data-action="useBattleItem" data-value="${escapeHtml(quickOrb || "")}" ${quickOrbDisabled ? "disabled" : ""}>
+          <span>O</span><strong>${quickOrb ? "Throw Orb" : "No Orbs"}</strong><small>${quickOrb ? escapeHtml(orbChanceLabel(enemy, quickOrb)) : "shop or quest restock"}</small>
+        </button>` : ""}
+      </div>
       <div class="battle-command-grid">
         <button class="btn primary battle-command fight" data-action="battleMenu" data-value="fight" ${battle.busy ? "disabled" : ""}><span>S</span><strong>Strike</strong><small>${readyMoves}/4 ready</small></button>
         <button class="btn battle-command" data-action="battleMenu" data-value="bag" ${battle.busy ? "disabled" : ""}><span>T</span><strong>Satchel</strong><small>${wildNote}</small></button>
@@ -6282,11 +6464,16 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
     const enemySpeed = stagedStat(enemy, "spe", battle.enemyStages);
     const fastSide = playerSpeed >= enemySpeed ? "You move first" : "Foe moves first";
     const bestName = bestAction?.move?.name || "Strike";
-    const bestMeta = bestAction?.move ? moveMatchupInfo(bestAction.move, enemySpecies.elements).label : "READY";
     const orbWindow = battle.kind === "wild" && enemyHpPct <= 0.42;
+    const quickOrb = orbWindow ? bestBattleOrbName() : null;
+    const quickOrbMeta = quickOrb ? orbChanceLabel(enemy, quickOrb) : "NO ORB";
+    const bestMeta = quickOrb
+      ? quickOrbMeta
+      : bestAction?.move ? moveMatchupInfo(bestAction.move, enemySpecies.elements).label : "READY";
     const danger = playerHpPct <= 0.28;
     const locked = battle.busy || battle.choice === "result";
     const canQuick = !locked && bestAction?.slot && bestAction.slot.pp > 0 && bestAction.score > 0;
+    const canQuickOrb = !locked && Boolean(quickOrb);
     const title = locked
       ? "Turn resolving"
       : danger
@@ -6302,10 +6489,12 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
         ? "Use Satchel or Crew if the matchup looks ugly."
         : orbWindow
           ? "Low HP wild target. Capture Orbs have real odds now."
-          : battle.choice === "main"
-            ? `A uses ${bestName}; ${fastSide.toLowerCase()}.`
-            : "Pick deliberately, then the turn locks in.";
-    const actionAttrs = canQuick
+      : battle.choice === "main"
+        ? `A uses ${bestName}; ${fastSide.toLowerCase()}.`
+        : "Pick deliberately, then the turn locks in.";
+    const actionAttrs = canQuickOrb
+      ? `data-action="useBattleItem" data-value="${escapeHtml(quickOrb)}" aria-label="Throw ${escapeHtml(quickOrb)}"`
+      : canQuick
       ? `data-action="move" data-value="${bestAction.index}" aria-label="Use ${escapeHtml(bestName)}"`
       : "disabled";
     return `
@@ -6411,11 +6600,27 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
   }
 
   function bestOrbChanceInfo(enemy) {
+    const name = bestBattleOrbName() || "Capture Orb";
+    return orbChanceLabel(enemy, name);
+  }
+
+  function bestBattleOrbName() {
+    if (!state.player?.bag) return null;
     const names = ["Rizz Orb", "Ultra Orb", "Great Orb", "Capture Orb"];
-    const name = names.find((itemName) => (state.player.bag[itemName] || 0) > 0) || "Capture Orb";
-    const item = ITEMS[name] || ITEMS["Capture Orb"];
+    return names.find((itemName) => (state.player.bag[itemName] || 0) > 0) || null;
+  }
+
+  function battleQuickOrbName(enemy = state.battle ? activeEnemy() : null) {
+    if (!state.battle || state.battle.kind !== "wild" || state.battle.busy || state.battle.result || !enemy) return null;
+    const hpPct = enemy.hp / Math.max(1, calcStats(enemy).hp);
+    const orbName = bestBattleOrbName();
+    return orbName && hpPct <= 0.42 ? orbName : null;
+  }
+
+  function orbChanceLabel(enemy, itemName) {
+    const item = ITEMS[itemName] || ITEMS["Capture Orb"];
     const chance = captureChanceFor(enemy, item.rate);
-    return `${name} ${Math.round(chance * 100)}%`;
+    return `${itemName} ${Math.round(chance * 100)}%`;
   }
 
   function bestBattleMove(creature, defenderSpecies) {
@@ -10306,6 +10511,7 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
 
   function drawCleanFieldHud(accent, alt) {
     const step = activeStoryStep();
+    const primary = primaryFieldActionInfo();
     const place = currentLocationName().toUpperCase().slice(0, 14);
     const right = `CH ${step.chapter} / ${destinationDistance(step)} ST`;
     drawRect(12, 12, 352, 7, "rgba(2,5,10,0.34)");
@@ -10317,6 +10523,12 @@ const JOYSTICK_AXIS_LOCK_RATIO = 1.22;
     drawRect(249, 25, 20, 9, alt);
     drawRect(276, 25, 48, 3, "#3a4b5b");
     drawPixelText(right, 250, 44, 1, "#f3d35b", "#071018");
+    drawCompactFrame(374, 8, 254, 52, primary.action === "searchWild" ? "#f3d35b" : "#60d394", alt, "rgba(16,24,32,0.9)");
+    drawRect(388, 20, 30, 22, "#02050a");
+    drawRect(393, 25, 20, 12, primary.action === "searchWild" ? "#f3d35b" : "#60d394");
+    drawPixelText("A", 400, 35, 1, "#071018", null);
+    drawPixelText(String(primary.label).toUpperCase().slice(0, 18), 430, 30, 1, "#fff6d7", "#071018");
+    drawPixelText(String(primary.hint).toUpperCase().slice(0, 31), 430, 44, 1, "#cde8f5", "#071018");
   }
 
   function drawFieldNavigator(step, accent, alt) {
