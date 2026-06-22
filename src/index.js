@@ -22713,28 +22713,27 @@ async function fetchLiveCategoryCandidates(category, options = {}) {
     // Trending → the curated trending_pools list (2 pages, ~40).
     try { rows.push(...(await fetchGeckoPools("trending", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => []))); } catch {}
   } else if (category === "gtVolume") {
-    // Top Volume → highest-volume MEMECOINS. The global /pools?sort=volume endpoint is mostly
-    // stablecoin/bluechip pairs (USDT/USDC/SOL) — wrong for this terminal AND flaky from Render's
-    // IP — so we draw the proven memecoin pool (trending + new, both reliably cached) and let the
-    // volume SORT rank it. The volume endpoint is a best-effort bonus; stablecoins are filtered out.
+    // Top Volume → biggest-volume MEMECOINS. LEAD with the volume endpoint (its own membership) + new,
+    // and deliberately DON'T pull trending here (the cross-category de-dup drops trending coins anyway —
+    // pulling them would just waste the pool). 3 volume pages gives enough depth to stay distinct from
+    // Trending/Surging after de-dup. Stablecoins are filtered out downstream; volume SORT ranks it.
     try {
-      const [tr, nw, vol] = await Promise.all([
-        fetchGeckoPools("trending", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => []),
-        fetchGeckoPools("new", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => []),
-        fetchGeckoPools("volume", { ttlMs, timeoutMs: 3_500, pages: 2 }).catch(() => [])
+      const [vol, nw] = await Promise.all([
+        fetchGeckoPools("volume", { ttlMs, timeoutMs: 3_500, pages: 3 }).catch(() => []),
+        fetchGeckoPools("new", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => [])
       ]);
-      rows.push(...tr, ...nw, ...vol);
+      rows.push(...vol, ...nw);
     } catch {}
   } else if (category === "gtSurging") {
-    // Surging → blend fresh-on-DEX + high-volume + trending, then momentum-sort + positive-mover
-    // filter downstream → "what's pumping right now", distinct from the curated Trending list.
+    // Surging → "what's pumping RIGHT NOW". LEAD with fresh-on-DEX pools (3 pages) so it surfaces young
+    // movers, momentum-sorted + positive-only downstream — a genuinely different membership from the
+    // volume-ranked Top-Volume tab and the curated Trending tab.
     try {
-      const [nw, vol, tr] = await Promise.all([
-        fetchGeckoPools("new", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => []),
-        fetchGeckoPools("volume", { ttlMs, timeoutMs: 2_500, pages: 1 }).catch(() => []),
-        fetchGeckoPools("trending", { ttlMs, timeoutMs: 2_500, pages: 1 }).catch(() => [])
+      const [nw, vol] = await Promise.all([
+        fetchGeckoPools("new", { ttlMs, timeoutMs: 2_500, pages: 3 }).catch(() => []),
+        fetchGeckoPools("volume", { ttlMs, timeoutMs: 2_500, pages: 1 }).catch(() => [])
       ]);
-      rows.push(...nw, ...vol, ...tr);
+      rows.push(...nw, ...vol);
     } catch {}
   } else if (category === "gtMigrated" || category === "graduated") {
     // Migrated → the freshest pools that are already on a real DEX (raydium/pumpswap/…) = just
