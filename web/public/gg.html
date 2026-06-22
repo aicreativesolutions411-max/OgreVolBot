@@ -765,8 +765,23 @@
         '</div></div></div>';
     wireTradePanel(mint,r);updateWselLine();paintPresetSel();wireCtab();
     if(state.token&&!(state.presets.trade||[]).length){loadPresets().then(()=>{if(state.route==="trade")paintPresetSel();});}
-    if(!r){const rows=await fetchPairs(tabById("best"));r=rows.find(x=>x.tokenMint===mint)||null;if(r&&state.route==="trade"){state.tradeRow=r;$("#thead").innerHTML=theadHtml(r);fillPerf(r);if(r.pairAddress||r.raydiumPool){if(state.tradeTab==="chart"){const cw=$('[data-pane="chart"]');if(cw)cw.innerHTML=chartIframe(mint,r);}else if(state.tradeTab==="tx")loadTxPane(mint,r);}}}
+    if(!r){const rows=await fetchPairs(tabById("best"));r=rows.find(x=>x.tokenMint===mint)||null;if(r&&state.route==="trade"){state.tradeRow=r;$("#thead").innerHTML=theadHtml(r);fillPerf(r);}}
     else fillPerf(r);
+    // Cold deep-link / shared trade link: the row isn't in the feed yet, so chartIframe fell back to
+    // DexScreener (which can't index PumpSwap pools → stuck on "Loading pair…"). Resolve the pool from
+    // GeckoTerminal (CORS-OK) and upgrade the chart + Transactions so direct links work like clicks.
+    if(state.route==="trade"&&state.mint===mint&&!(r&&(r.pairAddress||r.raydiumPool))){
+      try{
+        const j=await fetch("https://api.geckoterminal.com/api/v2/networks/solana/tokens/"+encodeURIComponent(mint)+"/pools?page=1",{headers:{Accept:"application/json"}}).then(x=>x.ok?x.json():null);
+        const pool=j&&j.data&&j.data[0]&&j.data[0].attributes&&j.data[0].attributes.address;
+        if(pool)r=Object.assign({tokenMint:mint},r||{},{pairAddress:pool});
+      }catch(e){}
+    }
+    if(state.route==="trade"&&state.mint===mint&&r&&(r.pairAddress||r.raydiumPool)){
+      state.tradeRow=r;
+      if(state.tradeTab==="chart"){const cw=$('[data-pane="chart"]');if(cw&&!cw.querySelector("iframe[src*='geckoterminal']"))cw.innerHTML=chartIframe(mint,r);}
+      else if(state.tradeTab==="tx")loadTxPane(mint,r);
+    }
     loadSecurity(mint);
   }
   function theadHtml(r){
