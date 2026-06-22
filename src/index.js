@@ -45267,6 +45267,26 @@ function effectiveLivePairSourceBucket(bucket, sort) {
 // Build one category's feed from its OWN pool (own searches + boosted/pump sources + filter), so
 // each tab shows genuinely different, category-matched coins. Age-agnostic: the category's source
 // defines relevance, not an age slice (that's what kept every tab "mostly fresh").
+// Cross-category de-dup. Trending / Surging / Top-Volume all draw from overlapping GeckoTerminal pools,
+// which made them show the SAME coins (Top-Volume was ~100% identical to Trending). Each built feed
+// records the mints it displayed (short TTL); a downstream category then drops coins already claimed by a
+// higher-priority category, so each tab surfaces DIFFERENT coins that still match its own meaning.
+// Priority: Trending > Surging > Top-Volume.
+const CATEGORY_MINT_MEMORY = new Map();
+const CATEGORY_DEDUP_TTL_MS = 60_000;
+const CATEGORY_DEDUP_UPSTREAM = { gtSurging: ["dexTrending"], gtVolume: ["dexTrending", "gtSurging"] };
+function recordCategoryMints(cat, rows) {
+  if (!cat) return;
+  CATEGORY_MINT_MEMORY.set(cat, { at: Date.now(), mints: new Set((rows || []).map((r) => String(r.tokenMint || r.mint || "")).filter(Boolean)) });
+}
+function excludedMintsForCategory(cat) {
+  const ex = new Set();
+  for (const up of (CATEGORY_DEDUP_UPSTREAM[cat] || [])) {
+    const e = CATEGORY_MINT_MEMORY.get(up);
+    if (e && Date.now() - e.at < CATEGORY_DEDUP_TTL_MS) for (const m of e.mints) ex.add(m);
+  }
+  return ex;
+}
 async function buildWebLivePairsForCategory(userId, cat, sort, options = {}) {
   const scanState = nextSniperScanState(`web:${userId}`, `livepairs:cat:${cat}`);
   const candidates = await fetchLiveCategoryCandidates(cat, { ttlMs: 2_000, timeoutMs: 4_200, scanState, force: Boolean(options.force) });
@@ -45288,6 +45308,13 @@ async function buildWebLivePairsForCategory(userId, cat, sort, options = {}) {
     }
     if (cat === "graduating" || f.length >= 6) rows = f;
   }
+  // Drop coins already shown by a higher-priority category so Surging / Top-Volume don't mirror Trending.
+  // Keep a floor of rows so a tab never empties just because its coins overlapped upstream.
+  const exclude = excludedMintsForCategory(cat);
+  if (exclude.size && (cat === "gtSurging" || cat === "gtVolume")) {
+    const deduped = rows.filter((row) => !exclude.has(String(row.tokenMint || row.mint || "")));
+    if (deduped.length >= 10) rows = deduped;
+  }
   const targetLimit = 60;
   const safety = await maybeFilterWebLivePairsForSafety(rows.sort((a, b) => compareWebLivePairs(a, b, sort)), targetLimit);
   // Graduating sorts by curve progress DESC (closest to bonding first) and does NOT rotate — the
@@ -45296,6 +45323,7 @@ async function buildWebLivePairsForCategory(userId, cat, sort, options = {}) {
     ? decorateWebLivePairAvatars(safety.rows.slice().sort((a, b) => Number(slimeScopeProgressPct(b)) - Number(slimeScopeProgressPct(a))).slice(0, targetLimit))
     : decorateWebLivePairAvatars(rotateRowsForRefresh(sortLivePairs(safety.rows, sort), targetLimit, scanState.refreshCount, {}));
   rememberSniperScanRows(`web:${userId}`, `livepairs:cat:${cat}`, safeRows);
+  recordCategoryMints(cat, safeRows);
   void persistPostgresLivePairRows(safeRows, { reason: `live-pairs:cat:${cat}` }).catch(() => false);
   return {
     label: cat, bucket: "live", sort, category: `cat:${cat}`,

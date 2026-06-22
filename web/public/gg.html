@@ -626,7 +626,15 @@
   function subbarTrade(r){const sb=$("#subbar");sb.innerHTML="";const back=el("button","chip");back.textContent="← Back";back.onclick=()=>go("trending");sb.appendChild(back);const h=el("h1");h.style.fontSize="15px";h.textContent=r?(r.symbol||short(state.mint)):short(state.mint);sb.appendChild(h);}
 
   // ---------- trending ----------
-  function volLabel(r){const k=state.volTf==="5m"?"volume5mLabel":state.volTf==="h24"?"volumeH24Label":"volumeH1Label";return r[k]||r.volumeLabel||"—";}
+  function volLabel(r){
+    const ok=(v)=>v&&v!=="checking"&&v!=="n/a"&&v!=="—";
+    const k=state.volTf==="5m"?"volume5mLabel":state.volTf==="h24"?"volumeH24Label":"volumeH1Label";
+    if(ok(r[k]))return r[k];
+    const lbl=[r.volumeH1Label,r.volumeH24Label,r.volume5mLabel,r.volumeLabel].find(ok);
+    if(lbl)return lbl;
+    const n=Number(r.volumeH24||r.volumeH1||r.volume5m||0);
+    return n>0?fmtUsd(n):"—"; // brand-new coins genuinely have no volume yet — "—", never a fake "checking"
+  }
   function riskChips(r){
     let out="";const score=Number(r.score||r.bestPickScore);
     if(isFinite(score)&&score>0){const cls=score>=70?"g":score>=45?"y":"r";out+='<span class="chip '+cls+'">'+Math.round(score)+'</span>';}
@@ -672,17 +680,34 @@
   // Most pump rows arrive without socials (GeckoTerminal doesn't carry them). Pull X/Telegram/Website
   // for the visible mints from DexScreener (one batch call, CORS-OK) and slot the icons in next to the
   // copy button — only links that actually exist. Cheap, fire-and-forget, repaints once if it found any.
+  // Pull socials AND live stats (volume / liquidity / MC / 5m move) for the visible mints from DexScreener
+  // in ONE batch call — over the USER's IP (not Render's rate-limited one), so brand-new "New"-tab coins
+  // get a REAL volume number the instant DexScreener indexes them instead of sitting on "checking". The
+  // tab re-polls every 7s, so volume fills in within a cycle as the coin starts trading.
   async function enrichSocials(rows){
     try{
-      const need=(rows||[]).filter(r=>r&&r.tokenMint&&!(r.twitterUrl||r.telegramUrl||r.websiteUrl)).slice(0,30);
+      const need=(rows||[]).filter(r=>r&&r.tokenMint&&(!(r.twitterUrl||r.telegramUrl||r.websiteUrl)||!(Number(r.volumeH24||r.volumeH1||r.volume5m)>0))).slice(0,30);
       if(!need.length)return;
       const j=await fetch("https://api.dexscreener.com/latest/dex/tokens/"+need.map(r=>r.tokenMint).join(",")).then(x=>x.ok?x.json():null);
       const pairs=(j&&j.pairs)||[];const by={};
-      for(const p of pairs){const m=p&&p.baseToken&&p.baseToken.address;if(!m||by[m])continue;const info=p.info||{};const o={};
+      for(const p of pairs){const m=p&&p.baseToken&&p.baseToken.address;if(!m)continue;
+        const liq=Number((p.liquidity&&p.liquidity.usd)||0);
+        if(by[m]&&Number(by[m]._liq||0)>=liq)continue; // keep the deepest pool per mint
+        const info=p.info||{};const v=p.volume||{};const pc=p.priceChange||{};const o={_liq:liq};
         for(const s of (info.socials||[])){const t=String(s.type||s.platform||"").toLowerCase();if((t==="twitter"||t==="x")&&!o.tw)o.tw=s.url;if(t==="telegram"&&!o.tg)o.tg=s.url;}
-        if(info.websites&&info.websites[0]&&info.websites[0].url)o.web=info.websites[0].url;by[m]=o;}
+        if(info.websites&&info.websites[0]&&info.websites[0].url)o.web=info.websites[0].url;
+        o.v24=Number(v.h24||0);o.v1=Number(v.h1||0);o.v5=Number(v.m5||0);o.liq=liq;o.mc=Number(p.marketCap||p.fdv||0);o.m5=Number(pc.m5??pc.h1??0);
+        by[m]=o;}
       let changed=false;
-      for(const r of rows){const o=by[r.tokenMint];if(!o)continue;if(o.tw&&!r.twitterUrl){r.twitterUrl=o.tw;changed=true;}if(o.tg&&!r.telegramUrl){r.telegramUrl=o.tg;changed=true;}if(o.web&&!r.websiteUrl){r.websiteUrl=o.web;changed=true;}}
+      for(const r of rows){const o=by[r.tokenMint];if(!o)continue;
+        if(o.tw&&!r.twitterUrl){r.twitterUrl=o.tw;changed=true;}if(o.tg&&!r.telegramUrl){r.telegramUrl=o.tg;changed=true;}if(o.web&&!r.websiteUrl){r.websiteUrl=o.web;changed=true;}
+        if(o.v24>0&&!(Number(r.volumeH24)>0)){r.volumeH24=o.v24;r.volumeH24Label=fmtUsd(o.v24);changed=true;}
+        if(o.v1>0&&!(Number(r.volumeH1)>0)){r.volumeH1=o.v1;r.volumeH1Label=fmtUsd(o.v1);changed=true;}
+        if(o.v5>0&&!(Number(r.volume5m)>0)){r.volume5m=o.v5;r.volume5mLabel=fmtUsd(o.v5);changed=true;}
+        const bestV=o.v1||o.v24||o.v5;if(bestV>0&&(!r.volumeLabel||r.volumeLabel==="checking")){r.volumeLabel=fmtUsd(bestV);changed=true;}
+        if(o.liq>0&&!(Number(r.liquidityUsd)>0)){r.liquidityUsd=o.liq;r.liquidityLabel=fmtUsd(o.liq);changed=true;}
+        if(o.mc>0&&!(Number(r.marketCap)>0)){r.marketCap=o.mc;r.marketCapLabel=fmtUsd(o.mc);changed=true;}
+        if(o.m5&&!(Number(r.m5))){r.m5=o.m5;changed=true;}}
       if(changed&&state.route==="trending"&&state.rows===rows)applyTrendingFilter();
     }catch(e){}
   }
