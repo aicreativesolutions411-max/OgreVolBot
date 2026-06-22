@@ -17668,6 +17668,13 @@ async function processLaunchWatchPlan(plan, walletStore, knownMatch = null) {
     await recordTradeEvents(tradeEvents);
     plan.status = "watching";
     plan.results = appendLimited([...(plan.results || []), ...results]);
+    // Ping the web user (push reaches them with the app closed — the point of a server-side snipe).
+    void sendWebPushToUser(plan.userId, {
+      title: `🎯 Sniped $${match.symbol || plan.launchTicker}`,
+      body: `Bought ${plan.amountSol} SOL the instant it launched. TP/SL armed — check Portfolio.`,
+      tag: `snipe-${match.tokenMint}`,
+      url: "/gg#portfolio"
+    }).catch(() => {});
     return {
       changed: true,
       message: [
