@@ -375,7 +375,8 @@
   const TOKEN_KEY="ogreWebToken"; // shared with the main SlimeWire app (same origin)
   const state={route:"trending",mint:null,trendTab:"best",volTf:"h1",rows:[],pollT:null,
     token:localStorage.getItem(TOKEN_KEY)||"",user:null,wallets:[],activeWallet:null,
-    presets:{trade:[],bundle:[]},activeTradePreset:localStorage.getItem("ggTradePreset")||"",searchTerm:"",pendingSell:null,portfolioTab:"positions"};
+    presets:{trade:[],bundle:[]},activeTradePreset:localStorage.getItem("ggTradePreset")||"",searchTerm:"",pendingSell:null,portfolioTab:"positions",
+    quickBuy:(function(){try{return JSON.parse(localStorage.getItem("ggQuickBuy")||"null");}catch(e){return null;}})()};
   // No credentials:include — the API returns ACAO:* which forbids credentialed CORS. Auth is the Bearer header.
   function api(path,opts){
     opts=opts||{};const headers=Object.assign({},opts.headers||{});
@@ -589,6 +590,9 @@
     const tfs=el("div","tfs");
     [["5m","5M"],["h1","1H"],["h24","24H"]].forEach(([k,lab])=>{const b=el("button");b.textContent=lab;b.className=k===state.volTf?"on":"";b.onclick=()=>{state.volTf=k;render();};tfs.appendChild(b);});
     sb.appendChild(tfs);
+    const q=state.quickBuy;const qb=el("button","chip qbpill");qb.style.cssText="margin-left:auto";
+    qb.innerHTML=q&&Number(q.amt)>0?('⚡ '+Number(q.amt).toFixed(3).replace(/0+$/,"").replace(/\.$/,"")+'◎'+(q.presetId?' +TP/SL':'')):'⚡ Set 1-click buy';
+    qb.title="Your 1-click ⚡ Buy amount — tap to change";qb.onclick=()=>openQuickBuyModal(null);sb.appendChild(qb);
   }
   function subbarTrenches(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Trenches";sb.appendChild(h);const n=el("div","mut");n.style.cssText="margin-left:10px;font-size:11px";n.textContent="Fresh → about to migrate → graduated. Live SlimeWire feed.";sb.appendChild(n);}
   function subbarPortfolio(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Portfolio";sb.appendChild(h);const tabs=el("div","tabs");[["positions","Positions"],["cards","PnL Cards"]].forEach(([id,lab])=>{const b=el("button");b.textContent=lab;b.className=id===state.portfolioTab?"on":"";b.onclick=()=>{state.portfolioTab=id;renderPortfolio();};tabs.appendChild(b);});sb.appendChild(tabs);}
@@ -916,10 +920,38 @@
     if(big){big.disabled=false;}
     handleTradeResult(ok,status,d,"Sell");
   }
+  // 1-click buy contract: once you've set a quick-buy amount (+ optional TP/SL preset), the ⚡ Buy on
+  // any pair fires instantly with it — no menu. The FIRST time (nothing set) it opens the quick-buy
+  // sheet to pick the amount/preset, then buys. Stored in localStorage so it persists.
+  function setQuickBuy(amt,presetId){state.quickBuy={amt:Number(amt),presetId:presetId||""};localStorage.setItem("ggQuickBuy",JSON.stringify(state.quickBuy));if(state.route==="trending")subbarTrending();}
+  function clearQuickBuy(){state.quickBuy=null;localStorage.removeItem("ggQuickBuy");if(state.route==="trending")subbarTrending();}
+  async function execQuickBuy(mint,amt,presetId){
+    const p=(state.presets.trade||[]).find(x=>x.id===presetId)||null;
+    const body={tokenMint:mint,walletIndex:state.activeWallet,amountSol:String(amt),slippageBps:(p&&p.slippageBps)||"500",tradeAttemptId:attemptId()};
+    if(p&&(p.takeProfitPct||p.stopLossPct||(p.sellDelay&&p.sellDelay!=="off"))){body.autoExit=true;body.takeProfitPct=p.takeProfitPct||"";body.stopLossPct=p.stopLossPct||"";body.sellDelay=p.sellDelay||"off";body.sellPercent=p.sellPercent||"100";}
+    toast("Buying ◎"+Number(amt).toFixed(3)+"…");
+    const {ok,status,d}=await jpost("/api/web/trade/buy",body);
+    handleTradeResult(ok,status,d,"Buy ◎"+Number(amt).toFixed(3));
+  }
   async function quickBuy(mint){
     if(!(await ensureTradeReady()))return;
-    const {ok,status,d}=await jpost("/api/web/trade/buy",{tokenMint:mint,walletIndex:state.activeWallet,amountSol:"0.1",slippageBps:"400",tradeAttemptId:attemptId()});
-    handleTradeResult(ok,status,d,"Quick buy 0.1◎");
+    const q=state.quickBuy;
+    if(q&&Number(q.amt)>0)return execQuickBuy(mint,q.amt,q.presetId);
+    openQuickBuyModal(mint);
+  }
+  function openQuickBuyModal(mint){
+    const presets=state.presets.trade||[];const cur=state.quickBuy||{amt:0.1,presetId:""};
+    const chips=["0.1","0.25","0.5","1"].map(v=>'<button data-v="'+v+'">'+v+'◎</button>').join("");
+    const popts=['<option value="">Manual — no auto-exit</option>'].concat(presets.map(p=>'<option value="'+esc(p.id)+'"'+(p.id===cur.presetId?" selected":"")+'>'+esc(p.name||"Preset")+(p.takeProfitPct?" · TP "+esc(p.takeProfitPct)+"%":"")+(p.stopLossPct?" · SL "+esc(p.stopLossPct)+"%":"")+'</option>')).join("");
+    openModal('<h3>⚡ Quick Buy'+(mint?' · '+esc(short(mint)):'')+'</h3>'+
+      '<p class="sub" style="font-size:12px">Pick your 1-click amount'+(presets.length?' and an optional auto-exit preset':'')+'. After this, ⚡ Buy on any pair fires instantly with these settings.</p>'+
+      '<div class="field"><label>Amount (SOL)</label><div class="chips" id="qbChips">'+chips+'</div><input id="qbAmt" inputmode="decimal" value="'+esc(String(cur.amt||"0.1"))+'" style="margin-top:8px"></div>'+
+      '<div class="field"><label>Auto-exit preset</label><select id="qbPreset">'+popts+'</select>'+(presets.length?'':'<span class="mut" style="font-size:11px">No presets yet — add TP/SL presets in Wallet ▸ Presets.</span>')+'</div>'+
+      '<div class="bsrow"><button class="bigbuy" id="qbGo" style="flex:2">'+(mint?'Save & Buy':'Save 1-click')+'</button>'+(state.quickBuy?'<button class="wbtn ghost" id="qbClear" style="flex:1">Reset</button>':'')+'</div>');
+    const amtIn=$("#qbAmt");
+    $("#qbChips").querySelectorAll("button").forEach(b=>b.onclick=()=>{amtIn.value=b.dataset.v;});
+    $("#qbGo").onclick=async()=>{const amt=Number(amtIn.value);if(!isFinite(amt)||amt<=0){toast("Enter a SOL amount.",true);return;}const pid=$("#qbPreset").value;setQuickBuy(amt,pid);closeModal();toast("⚡ 1-click set: ◎"+amt.toFixed(3)+(pid?" + preset":""));if(mint){if(await ensureTradeReady())execQuickBuy(mint,amt,pid);}};
+    const clr=$("#qbClear");if(clr)clr.onclick=()=>{clearQuickBuy();closeModal();toast("1-click buy reset");};
   }
   function handleTradeResult(ok,status,d,label){
     if(status===401||status===403){setToken("");toast("Session expired — set up your wallet again.",true);go("wallet");return;}
