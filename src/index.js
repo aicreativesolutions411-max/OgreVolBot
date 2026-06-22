@@ -8399,6 +8399,19 @@ async function resolveTokenAvatarRecord(mint = "", row = {}) {
     socials.websiteUrl = firstString(socials.websiteUrl, geckoMeta.websiteUrl);
   }
 
+  // Last resort, but the MOST reliable for fresh pump coins: read the off-chain metadata JSON
+  // (json_uri from Helius DAS / pump) straight from IPFS — pump's own API is IP-blocked on Render,
+  // but the JSON gateway isn't, and it carries twitter/telegram/website. Only when still empty.
+  if (!socials.twitterUrl && !socials.telegramUrl && !socials.websiteUrl) {
+    const metadataUri = firstString(heliusMeta.metadataUri, pumpMeta.metadataUri, dexMeta.metadataUri);
+    if (metadataUri) {
+      const off = await fetchOffchainTokenSocials(metadataUri, mint);
+      socials.twitterUrl = firstString(socials.twitterUrl, off.twitterUrl);
+      socials.telegramUrl = firstString(socials.telegramUrl, off.telegramUrl);
+      socials.websiteUrl = firstString(socials.websiteUrl, off.websiteUrl);
+    }
+  }
+
   if (avatarUrl) return tokenAvatarRecord(mint, { avatarUrl, source, state: "ready", ...socials });
   // Even with no image, keep any socials we found so the row still gets its X/TG/Website icons.
   return tokenAvatarRecord(mint, {
@@ -22417,6 +22430,43 @@ function normalizeSocialLink(value, kind) {
   if (kind === "twitter") return `https://x.com/${s.replace(/^(?:www\.)?(?:x|twitter)\.com\//i, "")}`;
   if (kind === "telegram") return `https://t.me/${s.replace(/^(?:www\.)?t\.me\//i, "")}`;
   return /\./.test(s) ? `https://${s}` : "";
+}
+
+// The DEFINITIVE socials source for fresh pump coins: their off-chain metadata JSON (the token's
+// json_uri / metadata uri). pump.fun's own API blocks Render's datacenter IP, but the metadata JSON
+// lives on IPFS/Arweave and is fetchable from anywhere — and it holds twitter/telegram/website at the
+// top level. We only hit this when nothing else gave us socials. Cached 30min per mint (one fetch each).
+const offchainSocialsCache = new Map();
+async function fetchOffchainTokenSocials(metadataUri = "", cacheKey = "") {
+  const uri = String(metadataUri || "").trim();
+  if (!uri) return {};
+  const key = String(cacheKey || uri);
+  const cached = offchainSocialsCache.get(key);
+  if (cached && Date.now() - cached.at < 30 * 60 * 1000) return cached.socials;
+  let socials = {};
+  try {
+    let fetched = null;
+    for (const candidate of metadataUriGatewayCandidates(uri)) {
+      try { fetched = await fetchTextWithBackoff(candidate, { timeoutMs: 2_500, retries: 0 }); break; }
+      catch { /* try the next gateway */ }
+    }
+    if (fetched && fetched.text) {
+      const meta = JSON.parse(fetched.text);
+      if (meta && typeof meta === "object" && !Array.isArray(meta)) {
+        socials = {
+          twitterUrl: normalizeSocialLink(firstString(meta.twitter, meta.x, meta.twitter_url, meta.twitterUrl), "twitter"),
+          telegramUrl: normalizeSocialLink(firstString(meta.telegram, meta.telegram_url, meta.telegramUrl), "telegram"),
+          websiteUrl: normalizeSocialLink(firstString(meta.website, meta.website_url, meta.websiteUrl, meta.external_url), "website")
+        };
+      }
+    }
+  } catch { socials = {}; }
+  offchainSocialsCache.set(key, { at: Date.now(), socials });
+  if (offchainSocialsCache.size > 1000) {
+    const oldest = [...offchainSocialsCache.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, 300);
+    for (const [k] of oldest) offchainSocialsCache.delete(k);
+  }
+  return socials;
 }
 
 async function getPumpFunTokenMetadata(tokenMint, options = {}) {
