@@ -1306,19 +1306,23 @@
   // pump.fun via /api/web/launch/coin; image is read to a base64 data URL client-side.
   async function renderLaunch(){
     setActiveView("v-launch");subbarTool("🚀 Launch a Coin");if(state.token)await refreshWallets();if(state.route!=="launch")return;
-    state.launchImg=null;
+    state.launchImg=null;state.launchBanner=null;
     $("#v-launch").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>🚀 Launch a Coin</h3><p class="sub">Mint a pump.fun coin straight from SlimeWire — image, socials, optional dev buy. Then trade it instantly.</p>'+
       '<div class="field row2"><div><label>Name</label><input id="lcName" maxlength="64" placeholder="My Coin"></div><div><label>Ticker</label><input id="lcSym" maxlength="12" placeholder="MYC"></div></div>'+
       '<div class="field"><label>Description</label><textarea id="lcDesc" maxlength="800" rows="2" placeholder="What\'s the meme?"></textarea></div>'+
-      '<div class="field"><label>Image</label><input id="lcImg" type="file" accept="image/*"><div id="lcImgPrev" class="mut" style="font-size:11px;margin-top:6px">PNG / JPG / WEBP / GIF, up to ~450KB.</div></div>'+
+      '<div class="field"><label>Image (icon)</label><input id="lcImg" type="file" accept="image/*"><div id="lcImgPrev" class="mut" style="font-size:11px;margin-top:6px">PNG / JPG / WEBP / GIF, up to ~450KB.</div></div>'+
+      '<div class="field"><label>Banner (optional, wide 3:1)</label><input id="lcBanner" type="file" accept="image/*"><div id="lcBannerPrev" class="mut" style="font-size:11px;margin-top:6px">Cover image shown on the pump.fun page.</div></div>'+
       '<div class="field row2"><div><label>Website</label><input id="lcWeb" placeholder="https://"></div><div><label>X / Twitter</label><input id="lcX" placeholder="@handle or link"></div></div>'+
       '<div class="field"><label>Telegram</label><input id="lcTg" placeholder="https://t.me/…"></div>'+
       '<details class="fold" style="margin-bottom:12px"><summary>Dev buy &amp; advanced <span class="chev">▾</span></summary><div class="foldbody">'+
         '<div class="field row2"><div><label>Dev buy (SOL)</label><input id="lcDevBuy" inputmode="decimal" placeholder="0 = none"></div><div><label>Dev wallet</label>'+walletSelectHtml("lcDevWallet")+'</div></div>'+
+        '<label style="display:flex;align-items:center;gap:9px;font-size:12px;cursor:pointer;margin-bottom:10px"><input type="checkbox" id="lcBundle" checked> Bundle the dev buy with the launch (anti-snipe — your buy lands in the same block, so snipers can\'t front-run it)</label>'+
         '<div class="field row2"><div><label>Creator fee %</label><input id="lcFee" inputmode="numeric" placeholder="100"></div><div><label>Slippage (bps)</label><input id="lcSlip" inputmode="numeric" value="300"></div></div>'+
       '</div></details>'+
       '<button class="bigbuy" id="lcGo">🚀 Launch token</button><div id="lcOut" style="margin-top:12px"></div></div></div>';
-    $("#lcImg").onchange=(e)=>{const f=e.target.files&&e.target.files[0];if(!f)return;if(f.size>460000){toast("Image too big — keep it under ~450KB.",true);e.target.value="";return;}const rd=new FileReader();rd.onload=()=>{state.launchImg={dataUrl:String(rd.result),name:f.name,type:f.type};$("#lcImgPrev").innerHTML='<img src="'+state.launchImg.dataUrl+'" style="width:64px;height:64px;border-radius:10px;object-fit:cover;border:1px solid var(--border)">';};rd.readAsDataURL(f);};
+    const readImg=(f,key,prevId,big)=>{if(!f)return;if(f.size>460000){toast("Image too big — keep it under ~450KB.",true);return;}const rd=new FileReader();rd.onload=()=>{state[key]={dataUrl:String(rd.result),name:f.name,type:f.type};const p=$("#"+prevId);if(p)p.innerHTML='<img src="'+state[key].dataUrl+'" style="height:'+(big?"40":"64")+'px;'+(big?"":"width:64px;")+'border-radius:10px;object-fit:cover;border:1px solid var(--border)">';};rd.readAsDataURL(f);};
+    $("#lcImg").onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchImg","lcImgPrev",false);
+    const lb=$("#lcBanner");if(lb)lb.onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchBanner","lcBannerPrev",true);
     $("#lcGo").onclick=async()=>{
       const name=$("#lcName").value.trim(),sym=$("#lcSym").value.trim();
       if(!name||!sym){toast("Name and ticker are required.",true);return;}
@@ -1327,7 +1331,8 @@
       const feePct=Number($("#lcFee").value.trim()||"100");
       const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),creatorFeeBps:String(Math.max(0,Math.min(1000,Math.round(feePct*10)))),slippageBps:$("#lcSlip").value.trim()||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg"};
       if(state.launchImg){body.imageDataUrl=state.launchImg.dataUrl;body.imageName=state.launchImg.name;body.imageType=state.launchImg.type;}
-      const dev=Number($("#lcDevBuy").value.trim()||"0");if(dev>0){body.devBuyEnabled=true;body.devBuySol=String(dev);const dw=$("#lcDevWallet");body.devWalletIndex=String(dw&&dw.value?dw.value:state.activeWallet);}
+      if(state.launchBanner){body.bannerDataUrl=state.launchBanner.dataUrl;body.bannerName=state.launchBanner.name;body.bannerType=state.launchBanner.type;}
+      const dev=Number($("#lcDevBuy").value.trim()||"0");if(dev>0){body.devBuyEnabled=true;body.devBuySol=String(dev);const dw=$("#lcDevWallet");body.devWalletIndex=String(dw&&dw.value?dw.value:state.activeWallet);body.bundleDevBuy=!!($("#lcBundle")&&$("#lcBundle").checked);body.antiSnipe=body.bundleDevBuy;}
       const {ok,status,d}=await jpost("/api/web/launch/coin",body);
       b.disabled=false;b.textContent="🚀 Launch token";
       if(status===401){setToken("");go("wallet");return;}
