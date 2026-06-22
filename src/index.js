@@ -22666,9 +22666,14 @@ const GTVOLUME_EXCLUDE_MINTS = new Set([
 ]);
 function livePairCategoryFilter(category) {
   // Only the discovery categories need a post-filter; the metric tabs rank the whole pool.
-  // Graduating = pump coins HIGH on the bonding curve (about to bond, ~$35k+ MC), not fresh dust.
-  // p is MC-anchored now (see slimeScopeProgressPct), so this is a real "about to graduate" gate.
-  if (category === "graduating") return (row) => { const p = Number(slimeScopeProgressPct(row)); return (isPumpStyleToken(row) || row.isPump) && p >= 50 && p < 100 && !(row.graduated || row.isGraduated); };
+  // Graduating = pump coins HIGH on the bonding curve and ABOUT TO BOND — roughly $35k–$72k MC, not
+  // yet graduated. p is MC-anchored now (see slimeScopeProgressPct). The MC ceiling matters because
+  // progress caps at 99: without it, already-bonded $200k+ coins read "99%" and wrongly show here.
+  if (category === "graduating") return (row) => {
+    const p = Number(slimeScopeProgressPct(row));
+    const mc = Number(firstMeaningfulNumber(row.marketCap, row.fdv)) || 0;
+    return (isPumpStyleToken(row) || row.isPump) && p >= 50 && mc > 0 && mc < 72_000 && !(row.graduated || row.isGraduated);
+  };
   if (category === "graduated" || category === "gtMigrated") return (row) => Boolean(row.graduated || row.isGraduated || isGraduatedSlimeScopePair(row));
   // Surging = genuine gainers only (positive 5m OR 1h). Soft-applied (kept only when ≥6 match), so a
   // flat market never empties the tab.
