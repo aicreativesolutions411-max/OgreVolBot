@@ -119,6 +119,7 @@
   .tkinfo{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;max-width:230px}
   .chip{font-size:10px;font-weight:700;padding:3px 7px;border-radius:7px;border:1px solid var(--border);color:var(--muted);font-family:var(--mono)}
   .chip.g{color:var(--green);border-color:rgba(114,255,35,.3);background:var(--green-dim)}
+  .cachip{cursor:pointer;transition:.12s}.cachip:hover{color:var(--green);border-color:rgba(114,255,35,.4);background:var(--green-dim)}.cachip .cc{opacity:.7;margin-left:2px}
   .chip.r{color:var(--red);border-color:rgba(255,93,93,.3);background:var(--red-dim)}
   .chip.y{color:var(--yellow);border-color:rgba(255,229,109,.3);background:rgba(255,229,109,.1)}
   .buybtn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:10px;font-weight:800;font-size:13px;color:#06140a;background:linear-gradient(180deg,var(--green2),var(--green));box-shadow:0 2px 12px rgba(114,255,35,.25);transition:.12s}
@@ -248,6 +249,7 @@
   .cmsg .modacts{margin-left:8px;display:inline-flex;gap:6px}
   .cmsg .modacts a{cursor:pointer;font-size:12px;opacity:.65}.cmsg .modacts a:hover{opacity:1}
   .loungewrap{display:flex;flex-direction:column}
+  .lqvbar{display:flex;align-items:center;justify-content:space-between;gap:8px}
   .txtbl{width:100%;border-collapse:collapse;font-size:12px}
   .txtbl th{position:sticky;top:0;background:#0a0f0a;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:right;padding:8px 14px;border-bottom:1px solid var(--border);z-index:1}
   .txtbl th:first-child{text-align:left}
@@ -324,7 +326,6 @@
        the ★ watchlist button against the wallet pill and pushed the "?" help icon off-screen). */
     .pastebtn .pblbl{display:none}
     .pastebtn{padding:0 10px}
-    .clipbtn{display:none}
     .topctrls{gap:6px}
     .topbar{gap:8px;padding:0 10px}
     .subbar{height:42px}
@@ -362,6 +363,12 @@
     .pair .av{width:28px;height:28px;border-radius:8px}
     .tbl .buybtn.sm{padding:6px 9px;font-size:11px;gap:4px}
     .tbl .star{font-size:14px}
+    /* Keep the 🎬 record button IN frame next to "?" on phones: trim the wordmark + icon row a hair
+       so the brand, wallet pill, record and help icons all fit a 375px screen without overflow. */
+    .brand b{font-size:13px;letter-spacing:.08em}.brand small{display:none}
+    .topctrls{gap:5px}
+    .iconbtn{width:32px;font-size:14px}
+    .walletpill{padding:0 9px}.walletpill b{font-size:11px}
     .subbar h1{display:none}
     /* Phones render everything a HAIR smaller so nothing sits a touch too wide / scrolls sideways.
        zoom (not transform) keeps the fixed bottom nav pinned correctly. overflow-x guard is a belt. */
@@ -653,12 +660,30 @@
     {id:"watch",label:"★ Watchlist"},
   ];
   function tabById(id){return TREND_TABS.find(t=>t.id===id)||TREND_TABS[0];}
+  // Last-good cache per feed query. A poll that times out / errors (Render cold start, rate-limit,
+  // network blip) used to return [] → the renderer wiped the table → the page "went blank randomly".
+  // Now a failed (or momentarily-empty) fetch serves the previously-loaded rows so feeds never blank.
+  const _pairCache=new Map(); // key -> {rows, ts}
+  let lastPairsOk=true;       // read by renderTrending to tell "no data yet" from "feed empty"
   async function fetchPairs(p){
     const q=new URLSearchParams({bucket:p.bucket||"live",sort:p.sort||"best"});
     if(p.cat)q.set("cat",p.cat);
-    const {ok,d}=await api("/api/web/live-pairs?"+q.toString());
-    if(!ok||!d||!d.ok)return[];
-    return(d.livePairs&&d.livePairs.rows)||[];
+    const key=q.toString();
+    const {ok,d}=await api("/api/web/live-pairs?"+key);
+    if(ok&&d&&d.ok){
+      lastPairsOk=true;
+      const rows=(d.livePairs&&d.livePairs.rows)||[];
+      const prev=_pairCache.get(key);
+      // A successful response that momentarily returns 0 rows (warmer not ready / backend blip)
+      // shouldn't wipe a populated feed — hold the last good rows for up to 30s, then accept empty.
+      if(!rows.length&&prev&&prev.rows.length&&(Date.now()-prev.ts)<30000)return prev.rows;
+      _pairCache.set(key,{rows,ts:Date.now()});
+      return rows;
+    }
+    // Transient failure/timeout — serve the last good rows for this feed (never blank).
+    lastPairsOk=false;
+    const cached=_pairCache.get(key);
+    return cached?cached.rows:[];
   }
 
   // ---------- router ----------
@@ -676,6 +701,7 @@
     if(state.txPollT){clearTimeout(state.txPollT);state.txPollT=null;}
     if(chatPollT){clearTimeout(chatPollT);chatPollT=null;}
     if(loungePollT){clearTimeout(loungePollT);loungePollT=null;}
+    if(route!=="lounge"&&window._jitsi){try{window._jitsi.dispose();}catch(e){}window._jitsi=null;}
     setNav(route);
     const wb=$("#watchBtn");if(wb)wb.classList.toggle("on",route==="trending"&&state.trendTab==="watch");
     if(route==="trenches")renderTrenches();
@@ -708,7 +734,8 @@
   function subbarTrenches(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Trenches";sb.appendChild(h);const n=el("div","mut");n.style.cssText="margin-left:10px;font-size:11px";n.textContent="Fresh → about to migrate → graduated. Live SlimeWire feed.";sb.appendChild(n);}
   function subbarPortfolio(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Portfolio";sb.appendChild(h);const tabs=el("div","tabs");[["positions","Positions"],["cards","History & PnL"]].forEach(([id,lab])=>{const b=el("button");b.textContent=lab;b.className=id===state.portfolioTab?"on":"";b.onclick=()=>{state.portfolioTab=id;renderPortfolio();};tabs.appendChild(b);});sb.appendChild(tabs);}
   function subbarWallet(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Wallet";sb.appendChild(h);}
-  function subbarTrade(r){const sb=$("#subbar");sb.innerHTML="";const back=el("button","chip");back.textContent="← Back";back.onclick=()=>go("trending");sb.appendChild(back);const h=el("h1");h.style.fontSize="15px";h.textContent=r?(r.symbol||short(state.mint)):short(state.mint);sb.appendChild(h);}
+  function subbarTrade(r){const sb=$("#subbar");sb.innerHTML="";const back=el("button","chip");back.textContent="← Back";back.onclick=()=>go("trending");sb.appendChild(back);const h=el("h1");h.style.fontSize="15px";h.textContent=r?(r.symbol||short(state.mint)):short(state.mint);sb.appendChild(h);
+    const mint=state.mint;if(mint){const ca=el("button","chip cachip");ca.title="Click to copy contract address";ca.innerHTML=esc(short(mint))+' <span class="cc">⧉</span>';ca.onclick=()=>copy(mint);sb.appendChild(ca);}}
 
   // ---------- trending ----------
   function volLabel(r){
@@ -758,13 +785,20 @@
     let rows;
     if(isWatch){await loadWatch();rows=state.watchRows||[];}
     else rows=await fetchPairs(tabById(state.trendTab));
-    if(state.route!=="trending")return;state.rows=rows;
+    if(state.route!=="trending")return;
+    // A failed live fetch with no cached rows yet = "still connecting", NOT "feed empty" — don't blank
+    // an already-populated table on a transient failure, and show an honest reconnecting note instead.
+    const feedDown=!isWatch&&!lastPairsOk;
+    if(feedDown&&!rows.length&&state.rows&&state.rows.length){
+      state.pollT=setTimeout(()=>{if(state.route==="trending")renderTrending();},3000);return;
+    }
+    state.rows=rows;
     const shown=shownRows();
-    if(!rows.length)view.innerHTML='<div class="msg">'+(isWatch?"No saved coins yet — tap ☆ on any coin to add it here.":"No pairs in this view right now — try another tab.")+'</div>';
+    if(!rows.length)view.innerHTML='<div class="msg">'+(feedDown?'Reconnecting to the live feed… <span class="spin"></span>':(isWatch?"No saved coins yet — tap ☆ on any coin to add it here.":"No pairs in this view right now — try another tab."))+'</div>';
     else view.innerHTML='<table class="tbl"><thead><tr><th class="l">Pair</th><th>Market Cap</th><th class="hideMb">Liquidity</th><th>Volume</th><th class="hideMb">Txns</th><th class="hideMb">Token Info</th><th></th></tr></thead><tbody>'+(shown.length?shown.map(rowHtml).join(""):'<tr><td colspan="7" class="msg">No match in this list.</td></tr>')+'</tbody></table>';
     void enrichSocials(rows);
-    // Watchlist is static-ish — refresh it lazily (30s); live feeds stay snappy at 7s.
-    state.pollT=setTimeout(()=>{if(state.route==="trending")renderTrending();},isWatch?30000:7000);
+    // Watchlist is static-ish — refresh it lazily (30s); live feeds stay snappy at 7s; retry fast when down.
+    state.pollT=setTimeout(()=>{if(state.route==="trending")renderTrending();},feedDown?3000:(isWatch?30000:7000));
   }
   // Most pump rows arrive without socials (GeckoTerminal doesn't carry them). Pull X/Telegram/Website
   // for the visible mints from DexScreener (one batch call, CORS-OK) and slot the icons in next to the
@@ -1054,14 +1088,32 @@
     const {ok,d}=await jpost("/api/web/lounge",{text:t});
     if(ok&&d&&d.ok)renderLoungeLog(d.messages||[]);else{toast((d&&(d.error||d.message))||"Couldn't send",true);inp.value=t;}
   }
+  function restoreLoungeVoiceBtn(){
+    const v=$("#lqVoice");if(!v)return;
+    v.innerHTML='<button class="wbtn" id="lqJoinVoice">🎙️ Join voice lounge</button><span class="mut" style="font-size:11px;margin-left:8px">free live audio/video + screen-share</span>';
+    const b=$("#lqJoinVoice");if(b)b.onclick=()=>joinLoungeVoice();
+  }
+  // Smooth teardown: dispose the Jitsi iframe BEFORE it can render its own "you left the
+  // meeting" page (the messy "showed site and code" the user saw). restore=true puts our own
+  // clean "Join voice lounge" button back.
+  function disposeLoungeVoice(restore){
+    if(window._jitsi){try{window._jitsi.dispose();}catch(e){}window._jitsi=null;}
+    if(restore)restoreLoungeVoiceBtn();
+  }
   function joinLoungeVoice(){
     const v=$("#lqVoice");if(!v)return;
-    v.innerHTML='<div id="jitsiBox" style="height:56vh;border:1px solid var(--border2);border-radius:12px;overflow:hidden;background:#000"></div>';
+    v.innerHTML='<div class="lqvbar"><span class="mut" style="font-size:11px">🎙️ Live voice — leave anytime</span><button class="wbtn ghost" id="lqLeaveVoice" style="padding:5px 12px;font-size:12px">✕ Leave voice</button></div>'+
+      '<div id="jitsiBox" style="height:54vh;border:1px solid var(--border2);border-radius:12px;overflow:hidden;background:#000;margin-top:8px"></div>';
+    const lb=$("#lqLeaveVoice");if(lb)lb.onclick=()=>disposeLoungeVoice(true);
     const name=(state.user&&(state.user.xHandle||state.user.username))||("ogre-"+String(state.token||"x").slice(-4));
     const start=()=>{try{
-      if(window._jitsi&&window._jitsi.dispose){try{window._jitsi.dispose();}catch(e){}}
-      window._jitsi=new window.JitsiMeetExternalAPI("meet.jit.si",{roomName:state.loungeVoiceRoom||"SlimeWireLoungeMain",parentNode:$("#jitsiBox"),width:"100%",height:"100%",userInfo:{displayName:name},configOverwrite:{startWithAudioMuted:true,startWithVideoMuted:true,prejoinPageEnabled:false,disableDeepLinking:true},interfaceConfigOverwrite:{MOBILE_APP_PROMO:false,SHOW_JITSI_WATERMARK:false}});
-    }catch(e){toast("Couldn't start voice — try again",true);}};
+      disposeLoungeVoice(false);
+      const jitsi=new window.JitsiMeetExternalAPI("meet.jit.si",{roomName:state.loungeVoiceRoom||"SlimeWireLoungeMain",parentNode:$("#jitsiBox"),width:"100%",height:"100%",userInfo:{displayName:name},configOverwrite:{startWithAudioMuted:true,startWithVideoMuted:true,prejoinPageEnabled:false,disableDeepLinking:true},interfaceConfigOverwrite:{MOBILE_APP_PROMO:false,SHOW_JITSI_WATERMARK:false}});
+      window._jitsi=jitsi;
+      // Hang-up inside Jitsi → tear the iframe down on OUR side before the post-call page shows.
+      jitsi.addEventListener("readyToClose",()=>disposeLoungeVoice(true));
+      jitsi.addEventListener("videoConferenceLeft",()=>disposeLoungeVoice(true));
+    }catch(e){toast("Couldn't start voice — try again",true);disposeLoungeVoice(true);}};
     if(window.JitsiMeetExternalAPI)start();
     else{const s=el("script");s.src="https://meet.jit.si/external_api.js";s.async=true;s.onload=start;s.onerror=()=>{v.innerHTML='<button class="wbtn" id="lqJoinVoice">🎙️ Join voice lounge</button> <span class="mut" style="font-size:11px">voice failed to load — retry</span>';const b=$("#lqJoinVoice");if(b)b.onclick=()=>joinLoungeVoice();};document.head.appendChild(s);}
   }
