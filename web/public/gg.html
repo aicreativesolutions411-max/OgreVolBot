@@ -167,6 +167,15 @@
   .field{display:flex;flex-direction:column;gap:5px;margin-bottom:10px}
   .field label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
   .field input,.field select,.field textarea{background:rgba(6,10,7,.7);border:1px solid var(--border);border-radius:9px;color:var(--text);padding:9px 11px;font-size:13px;font-family:var(--sans);outline:none;resize:vertical}
+  .swapbox{background:var(--panel2);border:1px solid var(--border);border-radius:13px;padding:12px 14px}
+  .swapbox .swlab{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .swrow{display:flex;align-items:center;gap:10px;margin-top:4px}
+  .swrow input,.swrecv{flex:1;min-width:0;background:transparent;border:0;color:var(--text);font-size:22px;font-family:var(--mono);outline:none;padding:2px 0}
+  .swhint{font-size:11px;color:var(--muted)}
+  .swtok{background:var(--panel);border:1px solid var(--border);border-radius:999px;padding:8px 14px;font-weight:700;color:var(--text);white-space:nowrap;cursor:pointer;flex:0 0 auto}
+  .swtok[disabled]{opacity:.8;cursor:default}
+  .swapflip{display:flex;justify-content:center;height:0;position:relative;z-index:2}
+  .swapflip button{transform:translateY(-50%);width:38px;height:38px;border-radius:11px;background:var(--panel);border:2px solid var(--bg);color:var(--green);font-size:17px;cursor:pointer}
   .field.row2{flex-direction:row;gap:8px}.field.row2>div{flex:1;display:flex;flex-direction:column;gap:5px}
   .preChip{display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid var(--border2);border-radius:11px;background:var(--row);margin-bottom:7px}
   .preChip .info b{font-size:13px}.preChip .info span{font-size:11px;color:var(--muted);font-family:var(--mono)}
@@ -1120,18 +1129,48 @@
   }
   function selectedWalletIdxs(){return [...document.querySelectorAll(".wchk:checked")].map(c=>Number(c.value));}
   function activeWalletNote(){const w=activeWalletObj();return '<p class="wnote" style="margin-top:10px">Active wallet: <b>'+(w?esc(w.label||"Wallet")+" · ◎"+Number(w.sol||0).toFixed(3):"none — set one up in Wallet")+'</b></p>';}
+  // One-panel swap (like the old site): a You-pay / You-receive stack with a flip button between them
+  // that swaps buy↔sell (SOL↔token). Token side picks from popular pairs or a custom CA. Tap flip
+  // again to swap back. SOL↔token only — buy spends SOL, sell takes a % of the token you hold.
+  const SWAP_POPULAR=[{s:"USDC",m:"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"},{s:"USDT",m:"Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"},{s:"JUP",m:"JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"},{s:"RAY",m:"4k3Dyjzvzp8eCTuFJYgmGnN95VhWPuTsf1KfzYEU7K1k"},{s:"BONK",m:"DezXAZ8z7PnrnRJjz3uq8NgV8Q9ddCzB9Ckr7JpPvvR"},{s:"WIF",m:"EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLQBkRzUPzWf"}];
+  let swapDir="buy",swapTok=null;
   async function renderSwap(){
     setActiveView("v-swap");subbarTool("🔄 Swap");if(state.token)await refreshWallets();if(state.route!=="swap")return;
-    $("#v-swap").innerHTML='<div class="wgrid"><div class="wbox"><h3>🔄 Swap</h3><p class="sub">Buy a token with SOL or sell it back — from your active wallet.</p>'+
-      '<div class="bsrow"><button class="buy on" id="swBuy">Buy SOL→token</button><button class="sell" id="swSell">Sell token→SOL</button></div>'+
-      '<div class="field"><label>Token contract (CA)</label><input id="swCa" placeholder="Paste token mint"></div>'+
-      '<div class="field row2"><div><label id="swAmtLbl">Amount (SOL)</label><input id="swAmt" inputmode="decimal" placeholder="0.5"></div><div><label>Slippage (bps)</label><input id="swSlip" inputmode="numeric" placeholder="400"></div></div>'+
-      '<button class="bigbuy" id="swGo">Buy</button>'+activeWalletNote()+'</div></div>';
-    let side="buy";
-    const paint=()=>{$("#swBuy").classList.toggle("on",side==="buy");$("#swSell").classList.toggle("on",side==="sell");$("#swGo").classList.toggle("sell",side==="sell");$("#swGo").textContent=side==="buy"?"Buy":"Sell";$("#swAmtLbl").textContent=side==="buy"?"Amount (SOL)":"Sell %";$("#swAmt").placeholder=side==="buy"?"0.5":"100";};
-    $("#swBuy").onclick=()=>{side="buy";paint();};$("#swSell").onclick=()=>{side="sell";paint();};
-    $("#swGo").onclick=async()=>{const ca=$("#swCa").value.trim(),amt=$("#swAmt").value.trim(),slip=$("#swSlip").value.trim()||"400";if(!ca){toast("Paste a token CA.",true);return;}if(!(await ensureTradeReady()))return;const b=$("#swGo");b.disabled=true;b.textContent="Submitting…";let res;if(side==="buy")res=await jpost("/api/web/trade/buy",{tokenMint:ca,walletIndex:state.activeWallet,amountSol:String(amt||"0.1"),slippageBps:slip,tradeAttemptId:attemptId()});else res=await jpost("/api/web/trade/sell",{tokenMint:ca,walletIndex:state.activeWallet,percent:String(amt||"100"),slippageBps:slip,tradeAttemptId:attemptId()});b.disabled=false;b.textContent=side==="buy"?"Buy":"Sell";handleTradeResult(res.ok,res.status,res.d,side==="buy"?"Buy":"Sell");};
-    paint();
+    paintSwap();
+  }
+  function swapTokLabel(){return swapTok?esc(swapTok.symbol||short(swapTok.mint)):"Select token";}
+  function paintSwap(){
+    const v=$("#v-swap");if(!v)return;
+    const payIsTok=swapDir==="sell";const tl=swapTokLabel();
+    const payChip=payIsTok?('<button class="swtok pick" id="swTok">'+tl+' ▾</button>'):'<button class="swtok" disabled>SOL</button>';
+    const recvChip=payIsTok?'<button class="swtok" disabled>SOL</button>':('<button class="swtok pick" id="swTok">'+tl+' ▾</button>');
+    v.innerHTML='<div class="wgrid"><div class="wbox" style="max-width:460px;margin:0 auto;width:100%"><h3>🔄 Swap</h3>'+
+      '<div class="swapbox"><span class="swlab">You pay</span><div class="swrow"><input id="swAmt" inputmode="decimal" placeholder="'+(payIsTok?"100":"0.5")+'">'+payChip+'</div>'+(payIsTok?'<span class="swhint">% of your holdings</span>':'<span class="swhint">SOL</span>')+'</div>'+
+      '<div class="swapflip"><button id="swFlip" title="Flip buy / sell">⇅</button></div>'+
+      '<div class="swapbox"><span class="swlab">You receive</span><div class="swrow"><span class="swrecv mut">'+(payIsTok?"SOL":tl)+'</span>'+recvChip+'</div></div>'+
+      '<div class="field" style="margin-top:14px"><label>Slippage (bps)</label><input id="swSlip" inputmode="numeric" value="500"></div>'+
+      '<button class="bigbuy'+(swapDir==="sell"?" sell":"")+'" id="swGo">'+(swapDir==="buy"?"Buy ":"Sell ")+(swapTok?esc(swapTok.symbol||""):"")+'</button>'+activeWalletNote()+'</div></div>';
+    $("#swFlip").onclick=()=>{swapDir=swapDir==="buy"?"sell":"buy";paintSwap();};
+    const tb=$("#swTok");if(tb)tb.onclick=()=>openSwapTokenPicker();
+    $("#swGo").onclick=()=>execSwap();
+  }
+  function openSwapTokenPicker(){
+    openModal('<h3>🪙 Choose token</h3>'+
+      '<div class="field"><label>Custom contract (CA)</label><div style="display:flex;gap:8px"><input id="swCa" placeholder="Paste any token mint" style="flex:1"><button class="wbtn" id="swCaGo" style="width:auto;padding:0 16px">Use</button></div></div>'+
+      '<div class="mut" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin:12px 0 8px">Popular</div><div style="display:flex;flex-wrap:wrap;gap:8px">'+SWAP_POPULAR.map(p=>'<button class="chip pop" data-m="'+esc(p.m)+'" data-s="'+esc(p.s)+'" style="cursor:pointer">'+esc(p.s)+'</button>').join("")+'</div>');
+    $("#swCaGo").onclick=()=>{const ca=$("#swCa").value.trim();if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(ca)){toast("Paste a valid mint.",true);return;}swapTok={mint:ca,symbol:short(ca)};closeModal();paintSwap();};
+    document.querySelectorAll("#modalBox .chip.pop").forEach(b=>b.onclick=()=>{swapTok={mint:b.dataset.m,symbol:b.dataset.s};closeModal();paintSwap();});
+  }
+  async function execSwap(){
+    if(!swapTok){toast("Pick a token first.",true);return;}
+    const amt=$("#swAmt").value.trim();if(!amt){toast(swapDir==="buy"?"Enter a SOL amount.":"Enter a sell %.",true);return;}
+    if(!(await ensureTradeReady()))return;
+    const slip=$("#swSlip").value.trim()||"500";const b=$("#swGo");b.disabled=true;b.textContent="Submitting…";
+    let res;
+    if(swapDir==="buy")res=await jpost("/api/web/trade/buy",{tokenMint:swapTok.mint,walletIndex:state.activeWallet,amountSol:String(amt),slippageBps:slip,tradeAttemptId:attemptId()});
+    else res=await jpost("/api/web/trade/sell",{tokenMint:swapTok.mint,walletIndex:state.activeWallet,percent:String(amt),slippageBps:slip,tradeAttemptId:attemptId()});
+    b.disabled=false;b.textContent=(swapDir==="buy"?"Buy ":"Sell ")+(swapTok.symbol||"");
+    handleTradeResult(res.ok,res.status,res.d,swapDir==="buy"?"Buy":"Sell");
   }
   // ---------- staggered multi-wallet engine (shared by Bundle + Volume) ----------
   // Runs orders one wallet at a time with RANDOMIZED amounts and RANDOMIZED gaps so it never looks
