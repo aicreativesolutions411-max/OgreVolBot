@@ -245,6 +245,9 @@
   .chiplink:hover{color:var(--text);border-color:rgba(137,255,67,.3)}
   .chiplink.on{color:#ff8b8b;border-color:rgba(255,107,107,.5);background:rgba(255,107,107,.08)}
   .chathead #recClip{margin-left:auto}
+  .cmsg .modacts{margin-left:8px;display:inline-flex;gap:6px}
+  .cmsg .modacts a{cursor:pointer;font-size:12px;opacity:.65}.cmsg .modacts a:hover{opacity:1}
+  .loungewrap{display:flex;flex-direction:column}
   .txtbl{width:100%;border-collapse:collapse;font-size:12px}
   .txtbl th{position:sticky;top:0;background:#0a0f0a;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:right;padding:8px 14px;border-bottom:1px solid var(--border);z-index:1}
   .txtbl th:first-child{text-align:left}
@@ -408,6 +411,7 @@
     <section class="view" id="v-copy"></section>
     <section class="view" id="v-launch"></section>
     <section class="view" id="v-sniper"></section>
+    <section class="view" id="v-lounge"></section>
   </main>
 
   <nav class="botnav" id="botnav">
@@ -608,6 +612,7 @@
   function openModal(html){const m=$("#modal");$("#modalBox").innerHTML='<button class="x" onclick="GG.closeModal()">✕</button>'+html;m.classList.add("on");}
   function closeModal(){$("#modal").classList.remove("on");}
   const TOOLS=[
+    {ic:"💬",label:"Lounge — community chat & voice",route:"lounge"},
     {ic:"🔄",label:"Swap",route:"swap"},
     {ic:"📦",label:"Bundle Buy",route:"bundle"},
     {ic:"📈",label:"Volume Bot",route:"volume"},
@@ -670,6 +675,7 @@
     if(state.pollT){clearTimeout(state.pollT);state.pollT=null;}
     if(state.txPollT){clearTimeout(state.txPollT);state.txPollT=null;}
     if(chatPollT){clearTimeout(chatPollT);chatPollT=null;}
+    if(loungePollT){clearTimeout(loungePollT);loungePollT=null;}
     setNav(route);
     const wb=$("#watchBtn");if(wb)wb.classList.toggle("on",route==="trending"&&state.trendTab==="watch");
     if(route==="trenches")renderTrenches();
@@ -682,6 +688,7 @@
     else if(route==="copy")renderCopy();
     else if(route==="launch")renderLaunch();
     else if(route==="sniper")renderSniper();
+    else if(route==="lounge")renderLounge();
     else renderTrending();
   }
   // ---------- subbars ----------
@@ -995,6 +1002,68 @@
     }
     renderChatLog((ch.d&&ch.d.messages)||[]);
     chatPollT=setTimeout(()=>{if(state.route==="trade"&&state.mint===mint&&state.tradeTab==="chat")loadChatLive(mint);},4000);
+  }
+  // ---------- site-wide Lounge (community text chat + free Jitsi voice room) ----------
+  let loungePollT=null;
+  function renderLounge(){
+    setActiveView("v-lounge");subbarTool("💬 Lounge");
+    const v=$("#v-lounge");
+    if(!v.querySelector(".loungewrap")){
+      v.innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>💬 SlimeWire Lounge</h3><p class="sub">The whole community in one room — talk plays, share what you\'re aping, hang out. Chat is open to everyone; drop into the voice room to talk live + screen-share.</p>'+
+        '<div class="loungewrap">'+
+          '<div id="lqVoice"><button class="wbtn" id="lqJoinVoice">🎙️ Join voice lounge</button><span class="mut" style="font-size:11px;margin-left:8px">free live audio/video + screen-share</span></div>'+
+          '<div id="lqClaim"></div>'+
+          '<div class="chatlog" id="lqLog" style="height:46vh;border:1px solid var(--border);border-radius:12px 12px 0 0;border-bottom:none;margin-top:12px;background:#060906"><div class="loading" style="padding:20px"><span class="spin"></span></div></div>'+
+          '<div class="chatbar" id="lqBar" style="border:1px solid var(--border);border-radius:0 0 12px 12px"><input id="lqMsg" maxlength="280" placeholder="Message the Lounge…"><button class="buybtn sm" id="lqSend">Send</button></div>'+
+        '</div></div></div>';
+      $("#lqSend").onclick=sendLounge;
+      $("#lqMsg").onkeydown=(e)=>{if(e.key==="Enter")sendLounge();};
+      $("#lqJoinVoice").onclick=()=>joinLoungeVoice();
+    }
+    loadLounge();
+  }
+  async function loadLounge(){
+    if(loungePollT){clearTimeout(loungePollT);loungePollT=null;}
+    const {d}=await api("/api/web/lounge").catch(()=>({}));
+    if(state.route!=="lounge")return;
+    state.loungeRole=(d&&d.role)||"guest";state.loungeMods=(d&&d.mods)||[];state.loungeVoiceRoom=(d&&d.voiceRoom)||"SlimeWireLoungeMain";
+    renderLoungeLog((d&&d.messages)||[]);renderLoungeClaim(d||{});
+    loungePollT=setTimeout(()=>{if(state.route==="lounge")loadLounge();},4000);
+  }
+  function renderLoungeLog(msgs){
+    const log=$("#lqLog");if(!log)return;
+    const atBottom=log.scrollHeight-log.scrollTop-log.clientHeight<60;
+    const canMod=state.loungeRole==="owner"||state.loungeRole==="mod",isOwner=state.loungeRole==="owner";
+    log.innerHTML=(msgs&&msgs.length)?msgs.map(m=>'<div class="cmsg"><b>'+esc(m.name||"anon")+'</b><span class="ct">'+esc(txAgo(m.ts))+'</span>'+
+      (canMod?'<span class="modacts"><a onclick="GG.lounge(\'delete\',\''+esc(m.id)+'\')" title="Delete">🗑</a><a onclick="GG.lounge(\'ban\',\''+esc(m.uid)+'\')" title="Ban user">🚫</a>'+(isOwner?'<a onclick="GG.lounge(\'addmod\',\''+esc(m.uid)+'\')" title="Make moderator">🛡️</a>':'')+'</span>':'')+
+      '<div>'+esc(m.text)+'</div></div>').join(""):'<div class="msg" style="font-size:12px;padding:18px">Be the first to say something 👋</div>';
+    if(atBottom)log.scrollTop=log.scrollHeight;
+  }
+  function renderLoungeClaim(d){
+    const c=$("#lqClaim");if(!c)return;
+    if(state.loungeRole==="owner"){c.innerHTML='<div class="mut" style="font-size:11px;margin-top:8px">🛡️ You own the Lounge — on any message: 🗑 delete · 🚫 ban · 🛡️ make-mod. Mods: '+(state.loungeMods.length||0)+'</div>';return;}
+    if(state.loungeRole==="mod"){c.innerHTML='<div class="mut" style="font-size:11px;margin-top:8px">🛡️ You\'re a Lounge mod — 🗑 delete · 🚫 ban on any message.</div>';return;}
+    if(state.loungeRole==="banned"){c.innerHTML='<div class="mut" style="font-size:11px;margin-top:8px;color:var(--red)">You\'re banned from posting in the Lounge.</div>';return;}
+    if(!d.ownerClaimed){c.innerHTML='<div style="margin-top:8px;display:flex;gap:6px"><input id="lqKey" placeholder="Owner key — claim Lounge moderation" style="flex:1;min-width:0;background:rgba(6,10,7,.7);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:7px 9px;font-size:12px"><button class="wbtn ghost" id="lqClaimBtn" style="padding:7px 12px">Claim</button></div>';const cb=$("#lqClaimBtn");if(cb)cb.onclick=async()=>{const k=($("#lqKey").value||"").trim();if(!k){toast("Paste your owner key",true);return;}const {ok,d}=await jpost("/api/web/lounge/mod",{action:"claim",key:k});if(ok&&d&&d.ok){toast("🛡️ You own the Lounge");loadLounge();}else toast((d&&(d.error||d.message))||"Wrong key",true);};return;}
+    c.innerHTML="";
+  }
+  async function sendLounge(){
+    const inp=$("#lqMsg");if(!inp)return;const t=inp.value.trim();if(!t)return;
+    if(!(await ensureAccount())){toast("Set up a wallet to chat",true);return;}
+    inp.value="";
+    const {ok,d}=await jpost("/api/web/lounge",{text:t});
+    if(ok&&d&&d.ok)renderLoungeLog(d.messages||[]);else{toast((d&&(d.error||d.message))||"Couldn't send",true);inp.value=t;}
+  }
+  function joinLoungeVoice(){
+    const v=$("#lqVoice");if(!v)return;
+    v.innerHTML='<div id="jitsiBox" style="height:56vh;border:1px solid var(--border2);border-radius:12px;overflow:hidden;background:#000"></div>';
+    const name=(state.user&&(state.user.xHandle||state.user.username))||("ogre-"+String(state.token||"x").slice(-4));
+    const start=()=>{try{
+      if(window._jitsi&&window._jitsi.dispose){try{window._jitsi.dispose();}catch(e){}}
+      window._jitsi=new window.JitsiMeetExternalAPI("meet.jit.si",{roomName:state.loungeVoiceRoom||"SlimeWireLoungeMain",parentNode:$("#jitsiBox"),width:"100%",height:"100%",userInfo:{displayName:name},configOverwrite:{startWithAudioMuted:true,startWithVideoMuted:true,prejoinPageEnabled:false,disableDeepLinking:true},interfaceConfigOverwrite:{MOBILE_APP_PROMO:false,SHOW_JITSI_WATERMARK:false}});
+    }catch(e){toast("Couldn't start voice — try again",true);}};
+    if(window.JitsiMeetExternalAPI)start();
+    else{const s=el("script");s.src="https://meet.jit.si/external_api.js";s.async=true;s.onload=start;s.onerror=()=>{v.innerHTML='<button class="wbtn" id="lqJoinVoice">🎙️ Join voice lounge</button> <span class="mut" style="font-size:11px">voice failed to load — retry</span>';const b=$("#lqJoinVoice");if(b)b.onclick=()=>joinLoungeVoice();};document.head.appendChild(s);}
   }
   // Live swaps fetched CLIENT-SIDE straight from GeckoTerminal (CORS-enabled). This uses the user's
   // own IP, dodging the rate-limit that throttles our shared Render IP — far more reliable than a
@@ -1959,6 +2028,7 @@
     kolProfile:openKolProfile,
     launchChat:(m)=>{state.launchedMint=m;state.launchTab="chat";state._launchKept=true;if(state.route==="launch")renderLaunch();else go("launch");},
     openChat:(m)=>{state._openTradeTab="chat";go("trade",m);},
+    lounge:async(action,arg)=>{const body={action};if(action==="delete")body.id=arg;else body.uid=arg;const {ok,d}=await jpost("/api/web/lounge/mod",body);if(ok&&d&&d.ok){toast(action==="ban"?"User banned":action==="addmod"?"Moderator added":action==="delete"?"Message deleted":"Done");if(d.messages)renderLoungeLog(d.messages);if(d.mods)state.loungeMods=d.mods;}else toast((d&&(d.error||d.message))||"Action failed",true);},
     star:(m)=>{const r=(state.rows||[]).find(x=>x.tokenMint===m)||(state.watchRows||[]).find(x=>x.tokenMint===m)||{tokenMint:m};toggleStar(r);},
     enableAlerts:async()=>{const ok=await ensurePushSubscribed();toast(ok?"🔔 Alerts on — you'll get pinged":"Couldn't enable alerts (check browser permission)",!ok);if(state.route==="wallet")renderWallet();},
     shareRef:(link)=>{const t="I'm trading Solana memecoins on SlimeWire — fast terminal, 1-tap snipes, KOL copy. Join with my link:";window.open("https://x.com/intent/tweet?text="+encodeURIComponent(t)+"&url="+encodeURIComponent(link),"_blank","noopener");},

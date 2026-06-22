@@ -6949,6 +6949,12 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, { ok: true, live: st.live, isDev: st.isDev });
       return;
     }
+    // Site-wide Lounge (read = anyone; role tells the client which mod controls to show).
+    if (request.method === "GET" && pathname === "/api/web/lounge") {
+      const lqAuth = await authenticateOptionalWebRequest(request);
+      sendWebJson(request, response, 200, { ok: true, ...(await loungeState(lqAuth?.userId || "guest")) });
+      return;
+    }
 
     const auth = await authenticateWebRequest(request);
     if (request.method === "GET" && [
@@ -7399,6 +7405,24 @@ async function handleWebApiRequest(request, response, requestUrl) {
       try {
         const live = await setCoinLive(auth.userId, body.mint, body.url, Boolean(body.clear));
         sendWebJson(request, response, 200, { ok: true, live });
+      } catch (error) { sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) }); }
+      return;
+    }
+    // Post to the site-wide Lounge (any logged-in user, unless banned).
+    if (request.method === "POST" && pathname === "/api/web/lounge") {
+      const body = await readJsonRequestBody(request);
+      try {
+        const messages = await postLounge(auth.userId, body.text);
+        sendWebJson(request, response, 200, { ok: true, messages });
+      } catch (error) { sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) }); }
+      return;
+    }
+    // Lounge moderation — claim ownership / delete / ban / appoint mods.
+    if (request.method === "POST" && pathname === "/api/web/lounge/mod") {
+      const body = await readJsonRequestBody(request);
+      try {
+        const result = await loungeMod(auth.userId, body.action, body);
+        sendWebJson(request, response, 200, { ok: true, ...result });
       } catch (error) { sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) }); }
       return;
     }
@@ -36590,6 +36614,76 @@ async function setCoinLive(userId, mint, rawUrl, clear) {
     await writeJsonFile(coinLivePath(), s);
   });
   return live;
+}
+
+// ============================ SITE-WIDE LOUNGE (community chat + voice) ============================
+// A single global room for the whole site — text chat anyone can post in + a shared Jitsi voice room.
+// Moderation: an OWNER (claims once with the AUTOPILOT_OWNER_KEY secret) + mods the owner appoints can
+// delete messages and ban users; owner-only can add/remove mods.
+function loungePath() { return path.join(CONFIG.dataDir, "lounge.json"); }
+const LOUNGE_VOICE_ROOM = "SlimeWireLoungeMain";
+async function readLounge() {
+  const s = await readJson(loungePath()).catch(() => ({}));
+  if (!Array.isArray(s.messages)) s.messages = [];
+  if (!Array.isArray(s.mods)) s.mods = [];
+  if (!Array.isArray(s.banned)) s.banned = [];
+  s.owner = String(s.owner || "");
+  return s;
+}
+function loungeRole(store, userId) {
+  const u = String(userId || "");
+  if (!u || u === "guest") return "guest";
+  if (store.banned.includes(u)) return "banned";
+  if (store.owner && store.owner === u) return "owner";
+  if (store.mods.includes(u)) return "mod";
+  return "user";
+}
+async function loungeState(userId) {
+  const s = await readLounge();
+  return { messages: s.messages.slice(-150), role: loungeRole(s, userId), ownerClaimed: Boolean(s.owner), mods: s.mods, voiceRoom: LOUNGE_VOICE_ROOM };
+}
+async function postLounge(userId, text) {
+  const body = String(text || "").replace(/\s+/g, " ").trim().slice(0, 300);
+  if (!body) { const e = new Error("Type a message first."); e.statusCode = 400; throw e; }
+  const profile = await webProfileForUser(userId).catch(() => ({}));
+  const name = chatDisplayName(profile, userId);
+  let messages = [];
+  await withFileLock(loungePath(), async () => {
+    const s = await readLounge();
+    if (s.banned.includes(String(userId))) { const e = new Error("You're banned from the Lounge."); e.statusCode = 403; throw e; }
+    const last = [...s.messages].reverse().find((m) => m.uid === String(userId));
+    if (last && Date.now() - Number(last.ts || 0) < 1200) { messages = s.messages.slice(-150); return; }
+    s.messages.push({ id: crypto.randomBytes(6).toString("hex"), uid: String(userId), name, text: body, ts: Date.now() });
+    s.messages = s.messages.slice(-400);
+    await writeJsonFile(loungePath(), s);
+    messages = s.messages.slice(-150);
+  });
+  return messages;
+}
+async function loungeMod(userId, action, payload = {}) {
+  const act = String(action || "").toLowerCase();
+  let result = null;
+  await withFileLock(loungePath(), async () => {
+    const s = await readLounge();
+    if (act === "claim") {
+      if (s.owner) { const e = new Error("The Lounge already has an owner."); e.statusCode = 403; throw e; }
+      if (!CONFIG.autopilotOwnerKey || String(payload.key || "") !== CONFIG.autopilotOwnerKey) { const e = new Error("Wrong owner key."); e.statusCode = 403; throw e; }
+      s.owner = String(userId);
+    } else {
+      const role = loungeRole(s, userId);
+      if (role !== "owner" && role !== "mod") { const e = new Error("Moderators only."); e.statusCode = 403; throw e; }
+      const u = String(payload.uid || "");
+      if (act === "delete") { s.messages = s.messages.filter((m) => m.id !== String(payload.id || "")); }
+      else if (act === "ban") { if (u && u !== s.owner && !s.mods.includes(u)) { if (!s.banned.includes(u)) s.banned.push(u); s.messages = s.messages.filter((m) => m.uid !== u); } }
+      else if (act === "unban") { s.banned = s.banned.filter((x) => x !== u); }
+      else if (act === "addmod") { if (role !== "owner") { const e = new Error("Owner only."); e.statusCode = 403; throw e; } if (u && !s.mods.includes(u) && u !== s.owner) s.mods.push(u); }
+      else if (act === "removemod") { if (role !== "owner") { const e = new Error("Owner only."); e.statusCode = 403; throw e; } s.mods = s.mods.filter((x) => x !== u); }
+      else { const e = new Error("Unknown action."); e.statusCode = 400; throw e; }
+    }
+    await writeJsonFile(loungePath(), s);
+    result = { role: loungeRole(s, userId), messages: s.messages.slice(-150), mods: s.mods };
+  });
+  return result;
 }
 
 async function webSlimewireTraders() {
