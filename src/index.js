@@ -22670,9 +22670,13 @@ function livePairCategoryFilter(category) {
   // yet graduated. p is MC-anchored now (see slimeScopeProgressPct). The MC ceiling matters because
   // progress caps at 99: without it, already-bonded $200k+ coins read "99%" and wrongly show here.
   if (category === "graduating") return (row) => {
-    const p = Number(slimeScopeProgressPct(row));
+    // The user wants Graduating to be the $18k–$27k CLIMBING band — coins mid-curve, working their way
+    // up to graduation, not the thin near-bond ($35k+) sliver (which barely populated). This band is
+    // also naturally distinct from the Gecko-backed DEX tabs (established/higher MC), so it stops
+    // sharing coins with Trending/Surging/Top-Volume. NOTE: do NOT gate on slimeScopeProgressPct>=50
+    // here — at $18–27k the curve progress is only ~26–39%, so a p>=50 gate would exclude the whole band.
     const mc = Number(firstMeaningfulNumber(row.marketCap, row.fdv)) || 0;
-    return (isPumpStyleToken(row) || row.isPump) && p >= 50 && mc > 0 && mc < 72_000 && !(row.graduated || row.isGraduated);
+    return (isPumpStyleToken(row) || row.isPump) && mc >= 18_000 && mc <= 27_000 && !(row.graduated || row.isGraduated);
   };
   if (category === "graduated" || category === "gtMigrated") return (row) => Boolean(row.graduated || row.isGraduated || isGraduatedSlimeScopePair(row));
   // Surging = genuine gainers only (positive 5m OR 1h). Soft-applied (kept only when ≥6 match), so a
@@ -43256,13 +43260,29 @@ async function buildKolScan(userId, mode = "hot", wallet = "") {
       ...(solanaPart.kols || [])
     ]);
     const stickyKols = safeMode === "top" ? 4 : safeMode === "consistent" ? 3 : 2;
-    const kols = rotateRowsForRefresh(kolPool, 12, scanState.refreshCount, { stickyCount: stickyKols });
+    let kols = rotateRowsForRefresh(kolPool, 12, scanState.refreshCount, { stickyCount: stickyKols });
     const notes = [madePart.error ? `MadeOnSol: ${madePart.error}` : "", solanaPart.error ? `Solana Tracker: ${solanaPart.error}` : ""].filter(Boolean);
+
+    // Live KOL sources can go dark mid-day (e.g. MadeOnSol's 200/day BASIC rate limit). When the
+    // live pool comes back empty, fall back to the persisted KOL roster from earlier successful
+    // scans (Postgres + external cache) so the "Known KOL wallets" list is NEVER empty — rotated by
+    // refresh count so it still feels alive. This is what the user means by "a solid list that rotates".
+    let kolFallback = "";
+    if (!kols.length) {
+      const stored = await storedKolProfiles().catch(() => []);
+      const summaries = uniqueKolSummaries((stored || []).map(webKolSummaryRow).filter((k) => k.wallet && (k.name || k.twitter)));
+      if (summaries.length) {
+        kols = rotateRowsForRefresh(summaries, 12, scanState.refreshCount, { stickyCount: stickyKols });
+        kolFallback = "cached_roster";
+        if (madePart.error) notes.push("Showing cached KOL roster while the live feed cools down.");
+      }
+    }
 
     return {
       ...base,
       kolCount: kols.length,
       kols,
+      kolFallback,
       rows: sorted,
       madeOnSolRows: madePart.rows?.length || 0,
       solanaTrackerRows: solanaPart.rows?.length || 0,
@@ -45256,7 +45276,18 @@ async function buildWebLivePairsForCategory(userId, cat, sort, options = {}) {
   // Graduating is a precision tab ("about to bond") — ALWAYS apply its filter, even if it leaves few
   // rows. Showing 3 coins genuinely near graduation beats 30 fresh dust coins. Other cats keep the
   // soft "narrow only when there's material" behaviour.
-  if (catFilter) { const f = rows.filter(catFilter); if (cat === "graduating" || f.length >= 6) rows = f; }
+  if (catFilter) {
+    let f = rows.filter(catFilter);
+    // Graduating targets the $18k–$27k sweet spot. If that exact band is thin in this refresh, widen to
+    // $14k–$34k so the tab still populates with climbing coins instead of showing 2 rows.
+    if (cat === "graduating" && f.length < 5) {
+      f = rows.filter((row) => {
+        const mc = Number(firstMeaningfulNumber(row.marketCap, row.fdv)) || 0;
+        return (isPumpStyleToken(row) || row.isPump) && mc >= 14_000 && mc <= 34_000 && !(row.graduated || row.isGraduated);
+      });
+    }
+    if (cat === "graduating" || f.length >= 6) rows = f;
+  }
   const targetLimit = 60;
   const safety = await maybeFilterWebLivePairsForSafety(rows.sort((a, b) => compareWebLivePairs(a, b, sort)), targetLimit);
   // Graduating sorts by curve progress DESC (closest to bonding first) and does NOT rotate — the

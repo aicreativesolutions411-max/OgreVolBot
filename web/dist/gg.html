@@ -269,6 +269,10 @@
   .toolsheet a{display:flex;align-items:center;gap:12px;padding:14px;border:1px solid var(--border);border-radius:12px;background:var(--row);font-size:14px;font-weight:600}
   .toolsheet a span{font-size:19px}
   .toolsheet a:hover{border-color:rgba(137,255,67,.34);color:var(--green)}
+  /* launch tabs */
+  .lcheck{display:flex;align-items:flex-start;gap:9px;font-size:12px;cursor:pointer;margin:2px 0 12px;color:var(--muted);line-height:1.4}
+  .lcheck input{margin-top:2px;flex:0 0 auto}.lcheck b{color:var(--text)}
+  .lcnote{background:rgba(114,255,35,.07);border:1px solid var(--border2);border-radius:10px;padding:10px 12px;font-size:12px;color:var(--text);line-height:1.45}
 
   /* mobile bottom nav */
   .botnav{display:none}
@@ -300,6 +304,10 @@
     .tbl td,.tbl th{padding:9px 10px}
     .pair{min-width:130px}.pair .nm b{max-width:104px}.pair .nm .sub{display:none}
     .subbar h1{display:none}
+    /* Phones render everything a HAIR smaller so nothing sits a touch too wide / scrolls sideways.
+       zoom (not transform) keeps the fixed bottom nav pinned correctly. overflow-x guard is a belt. */
+    #app{zoom:.95}
+    html,body{overflow-x:hidden}
   }
 </style>
 </head>
@@ -377,7 +385,12 @@
   function pctHtml(v){const p=pctNum(v);if(p==null)return'<span class="chg mut">—</span>';const cls=p>=0?"up":"down";return'<span class="chg '+cls+'">'+(p>=0?"+":"")+p.toFixed(1)+'%</span>';}
   function ageLabel(r){if(r.pairAgeLabel)return r.pairAgeLabel;let s=Number(r.pairAgeSeconds);if(!isFinite(s)&&isFinite(Number(r.pairAgeMinutes)))s=Number(r.pairAgeMinutes)*60;if(!isFinite(s))return"";if(s<60)return Math.round(s)+"s";if(s<3600)return Math.round(s/60)+"m";if(s<86400)return Math.round(s/3600)+"h";return Math.round(s/86400)+"d";}
   function av(r){return r.imageUrl||r.avatarUrl||"";}
-  function avImg(r,cls){const u=av(r);const ph="/assets/slimewire/png/slimewire-mark.png?v=logo4";return'<img class="'+cls+'" loading="lazy" src="'+esc(u||ph)+'" onerror="this.src=\''+ph+'\'">';}
+  // Coin PFPs must show INSTANTLY. Raw pump/ipfs/arweave image URLs are slow (gateway round-trips that
+  // often stall the feed), so route them through images.weserv.nl — free, CORS-OK, edge-cached, resized
+  // to a tiny webp thumbnail. Our own assets + data URLs pass straight through. Load eagerly (not lazy)
+  // so the visible rows paint their picture immediately instead of waiting to scroll into view.
+  function coinImgSrc(u,sz){u=String(u||"");if(!u||u.startsWith("data:")||u.charAt(0)==="/"||u.indexOf("slimewire")>-1)return u;const s=sz||64;return"https://images.weserv.nl/?url="+encodeURIComponent(u.replace(/^https?:\/\//,""))+"&w="+s+"&h="+s+"&fit=cover&output=webp&q=80";}
+  function avImg(r,cls){const raw=av(r);const ph="/assets/slimewire/png/slimewire-mark.png?v=logo4";const u=coinImgSrc(raw)||raw||ph;return'<img class="'+cls+'" loading="eager" decoding="async" src="'+esc(u)+'" data-raw="'+esc(raw||"")+'" onerror="GG.avFallback(this)">';}
   function toast(msg,err){const t=$("#toast");t.textContent=msg;t.className="toast show"+(err?" err":"");clearTimeout(t._t);t._t=setTimeout(()=>t.className="toast",3400);}
   function copy(text){navigator.clipboard?.writeText(text).then(()=>toast("Copied "+short(text))).catch(()=>{});}
   async function getJson(url,opts){try{const r=await fetch(url,opts);let d=null;try{d=await r.json();}catch(e){}return{ok:r.ok,status:r.status,d};}catch(e){return{ok:false,status:0,d:null};}}
@@ -1396,42 +1409,95 @@
   }
   function walletSelectHtml(id){const ws=state.wallets||[];if(!ws.length)return '<select id="'+id+'"><option value="">create a wallet first</option></select>';return '<select id="'+id+'">'+ws.map(w=>'<option value="'+w.index+'"'+(w.index===state.activeWallet?" selected":"")+'>'+esc(w.label||("Wallet "+w.index))+'</option>').join("")+'</select>';}
   // Native pump.fun launch panel — all the old fields, new style, no hype tab. We build the token on
-  // pump.fun via /api/web/launch/coin; image is read to a base64 data URL client-side.
+  // pump.fun via /api/web/launch/coin; image is read to a base64 data URL client-side. The endpoint is
+  // ASYNC (returns a launchAttemptId, then we poll /api/web/launch/progress for the real mint). Laid out
+  // in TABS — Coin / Dev Buy & Bundle / Chat & Live — so the anti-snipe bundle and pump chat each have
+  // their own home instead of hiding in a fold.
+  function lcChatForMint(mint){
+    const pf="https://pump.fun/coin/"+encodeURIComponent(mint);
+    const room="/t?ca="+encodeURIComponent(mint);
+    return '<div style="display:flex;gap:9px;flex-wrap:wrap;margin:6px 0 10px">'+
+      '<a class="wbtn" style="flex:1;min-width:150px;text-align:center" href="'+pf+'" target="_blank" rel="noopener">💬 Open Pump Chat</a>'+
+      '<a class="wbtn" style="flex:1;min-width:150px;text-align:center" href="'+pf+'" target="_blank" rel="noopener">🔴 Go Live on Pump</a>'+
+    '</div>'+
+    '<p class="mut" style="font-size:11px;margin:0 0 10px">Pump chat &amp; livestream open on pump.fun (they don\'t allow embedding). Your coin\'s SlimeWire room — chart, trades &amp; call board — loads right here:</p>'+
+    '<div style="position:relative;border-radius:12px;overflow:hidden;border:1px solid var(--border2);height:440px"><iframe src="'+esc(room)+'" title="room" loading="eager" style="width:100%;height:100%;border:0;display:block;background:var(--bg)"></iframe></div>';
+  }
+  function lcWireChat(){const i=$("#lcChatCa");if(!i)return;const refresh=()=>{const m=i.value.trim();const b=$("#lcChatBody");if(b)b.innerHTML=m?lcChatForMint(m):'<p class="mut" style="font-size:12px">Paste a coin CA above to load its chat &amp; live room.</p>';};i.onchange=refresh;i.onkeydown=(e)=>{if(e.key==="Enter")refresh();};}
+  async function pollLaunchProgress(aid,btn){
+    const out=$("#lcOut");let tries=0;
+    const tick=async()=>{
+      tries++;
+      const {d}=await api("/api/web/launch/progress?launchAttemptId="+encodeURIComponent(aid)).catch(()=>({}));
+      const pr=(d&&d.progress)||{};
+      if(pr.status==="COMPLETE"){
+        const mint=(pr.launch&&(pr.launch.tokenMint||pr.launch.mint))||"";
+        if(btn){btn.disabled=false;btn.textContent="🚀 Launch token";}
+        state.launchedMint=mint;
+        if(out)out.innerHTML='<div class="wbox" style="margin:0"><b style="color:var(--green)">✓ Launched!</b>'+(mint?'<div class="addr mut" style="margin-top:6px;word-break:break-all">'+esc(mint)+' <button onclick="GG.copy(\''+esc(mint)+'\')">⧉</button></div><div style="display:flex;gap:9px;margin-top:10px;flex-wrap:wrap"><button class="wbtn" onclick="GG.open(\''+esc(mint)+'\')">Open &amp; trade</button><button class="wbtn ghost" onclick="GG.launchChat(\''+esc(mint)+'\')">💬 Chat &amp; Live</button></div>':'')+'</div>';
+        toast("Token launched!");refreshWallets();return;
+      }
+      if(pr.status==="FAILED"){if(btn){btn.disabled=false;btn.textContent="🚀 Launch token";}if(out)out.innerHTML='<div class="mut" style="color:var(--red);font-size:12px">Launch failed: '+esc(pr.failureReason||"unknown error")+'</div>';return;}
+      if(out)out.innerHTML='<div class="mut" style="font-size:12px"><span class="spin"></span> '+esc(pr.stageText||"Launching… minting on pump.fun")+'</div>';
+      if(tries>70){if(btn){btn.disabled=false;btn.textContent="🚀 Launch token";}if(out)out.innerHTML='<div class="mut" style="font-size:12px">Still working — check your Positions in a moment.</div>';return;}
+      setTimeout(tick,2500);
+    };
+    tick();
+  }
   async function renderLaunch(){
     setActiveView("v-launch");subbarTool("🚀 Launch a Coin");if(state.token)await refreshWallets();if(state.route!=="launch")return;
-    state.launchImg=null;state.launchBanner=null;
-    $("#v-launch").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>🚀 Launch a Coin</h3><p class="sub">Mint a pump.fun coin straight from SlimeWire — image, socials, optional dev buy. Then trade it instantly.</p>'+
-      '<div class="field row2"><div><label>Name</label><input id="lcName" maxlength="64" placeholder="My Coin"></div><div><label>Ticker</label><input id="lcSym" maxlength="12" placeholder="MYC"></div></div>'+
-      '<div class="field"><label>Description</label><textarea id="lcDesc" maxlength="800" rows="2" placeholder="What\'s the meme?"></textarea></div>'+
-      '<div class="field"><label>Image (icon)</label><input id="lcImg" type="file" accept="image/*"><div id="lcImgPrev" class="mut" style="font-size:11px;margin-top:6px">PNG / JPG / WEBP / GIF, up to ~450KB.</div></div>'+
-      '<div class="field"><label>Banner (optional, wide 3:1)</label><input id="lcBanner" type="file" accept="image/*"><div id="lcBannerPrev" class="mut" style="font-size:11px;margin-top:6px">Cover image shown on the pump.fun page.</div></div>'+
-      '<div class="field row2"><div><label>Website</label><input id="lcWeb" placeholder="https://"></div><div><label>X / Twitter</label><input id="lcX" placeholder="@handle or link"></div></div>'+
-      '<div class="field"><label>Telegram</label><input id="lcTg" placeholder="https://t.me/…"></div>'+
-      '<details class="fold" style="margin-bottom:12px"><summary>Dev buy &amp; advanced <span class="chev">▾</span></summary><div class="foldbody">'+
-        '<div class="field row2"><div><label>Dev buy (SOL)</label><input id="lcDevBuy" inputmode="decimal" placeholder="0 = none"></div><div><label>Dev wallet</label>'+walletSelectHtml("lcDevWallet")+'</div></div>'+
-        '<label style="display:flex;align-items:center;gap:9px;font-size:12px;cursor:pointer;margin-bottom:10px"><input type="checkbox" id="lcBundle" checked> Bundle the dev buy with the launch (anti-snipe — your buy lands in the same block, so snipers can\'t front-run it)</label>'+
-        '<div class="field row2"><div><label>Creator fee %</label><input id="lcFee" inputmode="numeric" placeholder="100"></div><div><label>Slippage (bps)</label><input id="lcSlip" inputmode="numeric" value="300"></div></div>'+
-      '</div></details>'+
-      '<button class="bigbuy" id="lcGo">🚀 Launch token</button><div id="lcOut" style="margin-top:12px"></div></div></div>';
-    const readImg=(f,key,prevId,big)=>{if(!f)return;if(f.size>460000){toast("Image too big — keep it under ~450KB.",true);return;}const rd=new FileReader();rd.onload=()=>{state[key]={dataUrl:String(rd.result),name:f.name,type:f.type};const p=$("#"+prevId);if(p)p.innerHTML='<img src="'+state[key].dataUrl+'" style="height:'+(big?"40":"64")+'px;'+(big?"":"width:64px;")+'border-radius:10px;object-fit:cover;border:1px solid var(--border)">';};rd.readAsDataURL(f);};
+    if(!state._launchKept){state.launchImg=null;state.launchBanner=null;}
+    const tab=state.launchTab||"coin";const mint=state.launchedMint||"";
+    const tb=(id,lab)=>'<button data-ltab="'+id+'" class="'+(tab===id?"on":"")+'">'+lab+'</button>';
+    const show=(id)=>tab===id?"":' style="display:none"';
+    $("#v-launch").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>🚀 Launch a Coin</h3><p class="sub">Mint a pump.fun coin straight from SlimeWire — then trade, bundle &amp; chat without leaving.</p>'+
+      '<div class="tabs" style="margin:4px 0 14px;gap:6px;flex-wrap:wrap">'+tb("coin","🪙 Coin")+tb("dev","🛡️ Dev Buy &amp; Bundle")+tb("chat","💬 Chat &amp; Live")+'</div>'+
+      '<div data-lpanel="coin"'+show("coin")+'>'+
+        '<div class="field row2"><div><label>Name</label><input id="lcName" maxlength="64" placeholder="My Coin"></div><div><label>Ticker</label><input id="lcSym" maxlength="12" placeholder="MYC"></div></div>'+
+        '<div class="field"><label>Description</label><textarea id="lcDesc" maxlength="800" rows="2" placeholder="What\'s the meme?"></textarea></div>'+
+        '<div class="field"><label>Image (icon)</label><input id="lcImg" type="file" accept="image/*"><div id="lcImgPrev" class="mut" style="font-size:11px;margin-top:6px">PNG / JPG / WEBP / GIF, up to ~450KB.</div></div>'+
+        '<div class="field"><label>Banner (optional, wide 3:1)</label><input id="lcBanner" type="file" accept="image/*"><div id="lcBannerPrev" class="mut" style="font-size:11px;margin-top:6px">Cover image shown on the pump.fun page.</div></div>'+
+        '<div class="field row2"><div><label>Website</label><input id="lcWeb" placeholder="https://"></div><div><label>X / Twitter</label><input id="lcX" placeholder="@handle or link"></div></div>'+
+        '<div class="field"><label>Telegram</label><input id="lcTg" placeholder="https://t.me/…"></div>'+
+      '</div>'+
+      '<div data-lpanel="dev"'+show("dev")+'>'+
+        '<div class="field row2"><div><label>Dev buy (SOL)</label><input id="lcDevBuy" inputmode="decimal" placeholder="0 = none"></div><div><label>Dev wallet (creator)</label>'+walletSelectHtml("lcDevWallet")+'</div></div>'+
+        '<label class="lcheck"><input type="checkbox" id="lcBundle" checked> <span><b>Bundle the dev buy with the launch</b> (anti-snipe) — your dev buy lands in the same block as the mint, so snipers can\'t front-run your first buy.</span></label>'+
+        '<div class="field row2"><div><label>Creator fee %</label><input id="lcFee" inputmode="numeric" placeholder="auto"></div><div><label>Slippage (bps)</label><input id="lcSlip" inputmode="numeric" value="300"></div></div>'+
+        '<div class="lcnote">💰 <b>Creator fees → your dev wallet.</b> The coin is created &amp; signed by the dev wallet you pick above, so <b>every creator fee it earns is paid straight back to that wallet</b> — you keep 100%.</div>'+
+      '</div>'+
+      '<div data-lpanel="chat"'+show("chat")+'>'+
+        '<div class="field"><label>Coin address (CA)</label><input id="lcChatCa" placeholder="Paste a coin CA, or launch one first" value="'+esc(mint)+'"></div>'+
+        '<div id="lcChatBody">'+(mint?lcChatForMint(mint):'<p class="mut" style="font-size:12px">💬 Chat &amp; live light up once you launch a coin (or paste any coin CA above). They open on pump.fun in one tap, and the coin\'s live SlimeWire room loads right here.</p>')+'</div>'+
+      '</div>'+
+      '<button class="bigbuy" id="lcGo" style="margin-top:16px">🚀 Launch token</button><div id="lcOut" style="margin-top:12px"></div></div></div>';
+    // Tab switching toggles panel visibility WITHOUT re-rendering, so typed fields + uploaded images survive.
+    document.querySelectorAll("#v-launch [data-ltab]").forEach(b=>b.onclick=()=>{state.launchTab=b.dataset.ltab;document.querySelectorAll("#v-launch [data-ltab]").forEach(x=>x.classList.toggle("on",x===b));document.querySelectorAll("#v-launch [data-lpanel]").forEach(p=>p.style.display=(p.dataset.lpanel===b.dataset.ltab?"":"none"));if(b.dataset.ltab==="chat")lcWireChat();});
+    const readImg=(f,key,prevId,big)=>{if(!f)return;if(f.size>460000){toast("Image too big — keep it under ~450KB.",true);return;}const rd=new FileReader();rd.onload=()=>{state[key]={dataUrl:String(rd.result),name:f.name,type:f.type};state._launchKept=true;const p=$("#"+prevId);if(p)p.innerHTML='<img src="'+state[key].dataUrl+'" style="height:'+(big?"40":"64")+'px;'+(big?"":"width:64px;")+'border-radius:10px;object-fit:cover;border:1px solid var(--border)">';};rd.readAsDataURL(f);};
     $("#lcImg").onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchImg","lcImgPrev",false);
     const lb=$("#lcBanner");if(lb)lb.onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchBanner","lcBannerPrev",true);
+    lcWireChat();
     $("#lcGo").onclick=async()=>{
       const name=$("#lcName").value.trim(),sym=$("#lcSym").value.trim();
-      if(!name||!sym){toast("Name and ticker are required.",true);return;}
+      if(!name||!sym){toast("Name and ticker are required (Coin tab).",true);state.launchTab="coin";renderLaunch();return;}
       if(!(await ensureTradeReady()))return;
       const b=$("#lcGo");b.disabled=true;b.textContent="Launching…";
-      const feePct=Number($("#lcFee").value.trim()||"100");
-      const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),creatorFeeBps:String(Math.max(0,Math.min(1000,Math.round(feePct*10)))),slippageBps:$("#lcSlip").value.trim()||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg"};
+      // Creator fees on pump.fun accrue to the wallet that SIGNS the mint — so we always send the chosen
+      // dev wallet as the creator + feeMode:dev, guaranteeing 100% of fees route back to it.
+      const dw=$("#lcDevWallet");const devIdx=String(dw&&dw.value?dw.value:state.activeWallet);
+      const devW=(state.wallets||[]).find(w=>String(w.index)===devIdx);
+      const feePct=$("#lcFee")?Number($("#lcFee").value.trim()||"0"):0;
+      const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),slippageBps:($("#lcSlip")&&$("#lcSlip").value.trim())||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg",feeMode:"dev",devWalletIndex:devIdx};
+      if(feePct>0)body.creatorFeeBps=String(Math.max(0,Math.min(1000,Math.round(feePct*10))));
+      if(devW&&devW.publicKey)body.creatorFeeRecipient=devW.publicKey;
       if(state.launchImg){body.imageDataUrl=state.launchImg.dataUrl;body.imageName=state.launchImg.name;body.imageType=state.launchImg.type;}
       if(state.launchBanner){body.bannerDataUrl=state.launchBanner.dataUrl;body.bannerName=state.launchBanner.name;body.bannerType=state.launchBanner.type;}
-      const dev=Number($("#lcDevBuy").value.trim()||"0");if(dev>0){body.devBuyEnabled=true;body.devBuySol=String(dev);const dw=$("#lcDevWallet");body.devWalletIndex=String(dw&&dw.value?dw.value:state.activeWallet);body.bundleDevBuy=!!($("#lcBundle")&&$("#lcBundle").checked);body.antiSnipe=body.bundleDevBuy;}
+      const dev=Number(($("#lcDevBuy")&&$("#lcDevBuy").value.trim())||"0");if(dev>0){body.devBuyEnabled=true;body.devBuySol=String(dev);body.bundleDevBuy=!!($("#lcBundle")&&$("#lcBundle").checked);body.antiSnipe=body.bundleDevBuy;}
       const {ok,status,d}=await jpost("/api/web/launch/coin",body);
-      b.disabled=false;b.textContent="🚀 Launch token";
       if(status===401){setToken("");go("wallet");return;}
-      const mint=(d&&(d.tokenMint||(d.launch&&d.launch.tokenMint)))||"";
-      if(ok&&d&&d.ok){$("#lcOut").innerHTML='<div class="wbox" style="margin:0"><b style="color:var(--green)">✓ Launched!</b>'+(mint?'<div class="addr mut" style="margin-top:6px;word-break:break-all">'+esc(mint)+' <button onclick="GG.copy(\''+esc(mint)+'\')">⧉</button></div><button class="wbtn" style="margin-top:10px" onclick="GG.open(\''+esc(mint)+'\')">Open &amp; trade</button>':'')+'</div>';toast("Token launched!");refreshWallets();}
-      else toast((d&&(d.error||d.message))||"Launch failed",true);
+      const aid=(d&&d.launch&&d.launch.launchAttemptId)||body.launchAttemptId;
+      if(ok&&d&&(d.ok||d.launch)){state._launchKept=true;pollLaunchProgress(aid,b);}
+      else{b.disabled=false;b.textContent="🚀 Launch token";toast((d&&(d.error||d.message))||"Launch failed",true);}
     };
   }
   function subbarToolKol(){
@@ -1555,6 +1621,9 @@
   window.GG={open:(m)=>go("trade",m),openSell:(m)=>{state.pendingSell=m;go("trade",m);},go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,
     copyWallet:(w)=>{const i=$("#cpWallet");if(i){i.value=w;i.scrollIntoView({behavior:"smooth",block:"center"});i.focus();toast("Wallet loaded — set your size, then Start copying");}},
     kolProfile:openKolProfile,
+    launchChat:(m)=>{state.launchedMint=m;state.launchTab="chat";state._launchKept=true;if(state.route==="launch")renderLaunch();else go("launch");},
+    // Coin-image fallback: if the fast proxy thumbnail fails, try the raw URL once, then the logo.
+    avFallback:(img)=>{const ph="/assets/slimewire/png/slimewire-mark.png?v=logo4";const raw=img.getAttribute("data-raw")||"";if(raw&&!img.dataset.fb&&img.src.indexOf("weserv")>-1){img.dataset.fb="1";img.src=raw;}else{img.onerror=null;img.src=ph;}},
     removeWalletPrompt:(i)=>{const w=state.wallets.find(x=>x.index===i);if(w)removeWalletModal(w);}};
   render();updateWalletPill();loadSol();setInterval(loadSol,60000);
   if(state.token){refreshWallets();loadPresets();}
