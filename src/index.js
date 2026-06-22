@@ -4898,11 +4898,13 @@ function startHealthServer() {
     }
 
     // The OLD terminal — archived for visual reference ONLY (data APIs neutralized: no pairs, no credits).
-    // /reference + /archive are aliases because a Cloudflare edge rule 308-loops "/old" (and any path
-    // containing "old"/"legacy") on www; the origin serves /old fine but www needs that CF rule removed.
-    // /reference and /archive pass through Cloudflare cleanly today, so they're the www-reachable paths.
+    // A Cloudflare edge Redirect Rule 308-loops an EXACT list of paths -> "/old" (verified: /old, /legacy,
+    // /old-archive, /reference, /archive are all caught; /oldterminal, /classic, /snapshot pass through).
+    // So www can't reach /old or /reference, but /classic IS clean at the edge -> that's the public URL.
+    // /old + /reference + /archive stay routed here: they work on the origin and will start working on www
+    // the moment the owner removes that one CF rule. /classic is the one to share today.
     if (request.method === "GET" && (requestUrl.pathname === "/old" || requestUrl.pathname.startsWith("/old/")
-      || requestUrl.pathname === "/reference" || requestUrl.pathname === "/archive")) {
+      || requestUrl.pathname === "/classic" || requestUrl.pathname === "/reference" || requestUrl.pathname === "/archive")) {
       await serveOldReference(response);
       return;
     }

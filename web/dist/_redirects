@@ -2,6 +2,7 @@
 # gg is THE site now and IS index.html, so "/" already serves it. These map the old-app entry
 # aliases onto the new app, archive the old terminal at /old (static, APIs off), and keep referral
 # links working. NOTE: no /api/* rule here on purpose — the existing API proxy is left untouched.
+/classic        /old.html              200
 /old            /old.html              200
 /old/*          /old.html              200
 /reference      /old.html              200
