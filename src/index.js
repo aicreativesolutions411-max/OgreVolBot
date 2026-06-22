@@ -38769,6 +38769,14 @@ async function runRollingVolumeBotStep(plan, { slippageBps, noBalance }) {
   if (doBuy) {
     const buySol = volumeBotRandomBuyInRange(cfg.minBuyAmountSol, cfg.maxBuyAmountSol, cfg.buyAmountSol);
     const fundSol = Number((buySol + VOLUME_BOT_LIMITS.roundFeeBufferSol).toFixed(6));
+    // Run until the source SOL runs out: when it can't fund another buy, stop spawning and wind the
+    // pool down (no fixed wallet count / round cap — the user's SOL is the only limit).
+    const srcBal = await getSolBalanceCached(decryptWallet(sourceRecord).publicKey, { force: true }).catch(() => 0);
+    if (lamportsToSol(srcBal) < fundSol + 0.003) {
+      if (plan.pool.length) { plan.botStage = "sweeping"; volumeBotLogPush(plan, "Source SOL spent — winding the pool down."); }
+      else { plan.botStage = "done"; volumeBotLogPush(plan, "Source SOL spent. Done."); }
+      return;
+    }
     let record;
     try {
       record = await createEphemeralVolumeWallet(plan.userId, `SlimeBot ${roundsDone + 1}`, plan.sourcePublicKey);
