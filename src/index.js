@@ -22713,27 +22713,32 @@ async function fetchLiveCategoryCandidates(category, options = {}) {
     // Trending → the curated trending_pools list (2 pages, ~40).
     try { rows.push(...(await fetchGeckoPools("trending", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => []))); } catch {}
   } else if (category === "gtVolume") {
-    // Top Volume → biggest-volume MEMECOINS. LEAD with the volume endpoint (its own membership) + new,
-    // and deliberately DON'T pull trending here (the cross-category de-dup drops trending coins anyway —
-    // pulling them would just waste the pool). 3 volume pages gives enough depth to stay distinct from
-    // Trending/Surging after de-dup. Stablecoins are filtered out downstream; volume SORT ranks it.
+    // Top Volume → highest-volume MEMECOINS. The global /pools?sort=volume endpoint is mostly
+    // stablecoin/bluechip pairs (USDT/USDC/SOL) AND flaky from Render's IP, so we draw the proven
+    // memecoin pool (trending + new, reliably cached) and let the volume SORT rank it; the volume
+    // endpoint is a best-effort bonus. (Distinctness comes from the cross-category de-dup downstream,
+    // NOT from dropping trending here — dropping it emptied the tab when the volume endpoint returned
+    // stablecoins only.) Stablecoins are filtered out.
     try {
-      const [vol, nw] = await Promise.all([
-        fetchGeckoPools("volume", { ttlMs, timeoutMs: 3_500, pages: 3 }).catch(() => []),
-        fetchGeckoPools("new", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => [])
+      const [tr, nw, vol] = await Promise.all([
+        fetchGeckoPools("trending", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => []),
+        fetchGeckoPools("new", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => []),
+        fetchGeckoPools("volume", { ttlMs, timeoutMs: 3_500, pages: 2 }).catch(() => [])
       ]);
-      rows.push(...vol, ...nw);
+      rows.push(...tr, ...nw, ...vol);
     } catch {}
   } else if (category === "gtSurging") {
-    // Surging → "what's pumping RIGHT NOW". LEAD with fresh-on-DEX pools (3 pages) so it surfaces young
-    // movers, momentum-sorted + positive-only downstream — a genuinely different membership from the
-    // volume-ranked Top-Volume tab and the curated Trending tab.
+    // Surging → "what's pumping right now": blend fresh-on-DEX + high-volume + trending (all carry the
+    // momentum data the positive-mover filter needs — leading with brand-new pools alone emptied it),
+    // then momentum-sort + positive-only downstream. The cross-category de-dup drops trending coins so
+    // it still reads distinct from the Trending tab.
     try {
-      const [nw, vol] = await Promise.all([
-        fetchGeckoPools("new", { ttlMs, timeoutMs: 2_500, pages: 3 }).catch(() => []),
-        fetchGeckoPools("volume", { ttlMs, timeoutMs: 2_500, pages: 1 }).catch(() => [])
+      const [nw, vol, tr] = await Promise.all([
+        fetchGeckoPools("new", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => []),
+        fetchGeckoPools("volume", { ttlMs, timeoutMs: 2_500, pages: 1 }).catch(() => []),
+        fetchGeckoPools("trending", { ttlMs, timeoutMs: 2_500, pages: 1 }).catch(() => [])
       ]);
-      rows.push(...nw, ...vol);
+      rows.push(...nw, ...vol, ...tr);
     } catch {}
   } else if (category === "gtMigrated" || category === "graduated") {
     // Migrated → the freshest pools that are already on a real DEX (raydium/pumpswap/…) = just
@@ -45312,7 +45317,9 @@ async function buildWebLivePairsForCategory(userId, cat, sort, options = {}) {
   const exclude = excludedMintsForCategory(cat);
   if (exclude.size && (cat === "gtSurging" || cat === "gtVolume")) {
     const deduped = rows.filter((row) => !exclude.has(String(row.tokenMint || row.mint || "")));
-    if (deduped.length >= 10) rows = deduped;
+    // Keep a small floor so a tab never empties just from overlap — but low enough that Top-Volume can
+    // shed the coins Surging already showed and still display a genuinely-distinct (if shorter) set.
+    if (deduped.length >= 6) rows = deduped;
   }
   const targetLimit = 60;
   const safety = await maybeFilterWebLivePairsForSafety(rows.sort((a, b) => compareWebLivePairs(a, b, sort)), targetLimit);
