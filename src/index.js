@@ -222,6 +222,7 @@ const pumpPortalStream = createPumpPortalStream({
     void handlePumpPortalCreationForDevWatch(entry).catch(() => {});
     try { recordInsiderLaunch(entry); } catch {}   // INSIDER-LAUNCH machine: known/linked wallet just deployed
     try { recordRecentLauncher(entry); } catch {}  // ROTATION-CATCHER: remember every launcher to funder-resolve
+    try { maybeInstantLaunchSnipe(entry); } catch {} // USER SNIPER: ticker match → buy the instant it lands
   },
   // Live smart-money capture: record early buyers the instant they trade (see recordEarlyBuyer).
   // ALSO feed the POP RADAR (real-time ignition detector) the live trade flow.
@@ -2138,6 +2139,10 @@ function startDevObservatory() {
   // every 10 min so the copy-trade roster stays fresh (cheap — the KOL scan is cached internally).
   void loadAutoKolWallets().then(() => { void refreshAutoKolWallets(); });
   setInterval(() => { void refreshAutoKolWallets(); }, 10 * 60 * 1000);
+  // INSTANT LAUNCH SNIPER: keep the active-ticker set warm so onCreation can fire a watched snipe the
+  // instant a matching coin streams in (create/cancel also refresh it immediately).
+  void refreshSnipeWatchTickers();
+  setInterval(() => { void refreshSnipeWatchTickers(); }, 15_000);
   // COPY-TRADE FEED: keep the proven-KOL copy candidates fresh so the autopilot can actually act on
   // "what good KOLs are buying now." Bounded cadence; buildKolScan is internally cached.
   void refreshKolCopyFeed();
@@ -17589,14 +17594,18 @@ async function processCopyWalletWatchPlan(plan, walletStore) {
   return { changed: true, message: null };
 }
 
-async function processLaunchWatchPlan(plan, walletStore) {
-  const lastScanAt = Date.parse(plan.lastScanAt || "");
-  if (Number.isFinite(lastScanAt) && Date.now() - lastScanAt < CONFIG.manualLaunchScanIntervalMs) {
-    return { changed: false, message: null };
+async function processLaunchWatchPlan(plan, walletStore, knownMatch = null) {
+  // knownMatch = an already-resolved {tokenMint,symbol,name} from the INSTANT onCreation hook. When present
+  // we skip the scan throttle AND the candidate lookup entirely — we snipe the exact coin the moment it
+  // streams in (sub-second), instead of waiting for the next poll.
+  if (!knownMatch) {
+    const lastScanAt = Date.parse(plan.lastScanAt || "");
+    if (Number.isFinite(lastScanAt) && Date.now() - lastScanAt < CONFIG.manualLaunchScanIntervalMs) {
+      return { changed: false, message: null };
+    }
+    plan.lastScanAt = new Date().toISOString();
   }
-
-  plan.lastScanAt = new Date().toISOString();
-  const match = await findManualLaunchCandidate(plan.launchTicker);
+  const match = knownMatch || await findManualLaunchCandidate(plan.launchTicker);
   if (!match) {
     return { changed: true, message: null };
   }
@@ -17682,6 +17691,81 @@ async function processLaunchWatchPlan(plan, walletStore) {
       ...results
     ].join("\n")
   };
+}
+
+// ===== INSTANT LAUNCH SNIPER (server-side, real-time) =====================================
+// The /gg Launch Sniper arms a server-side launch_watch plan. Instead of waiting for the next poll, this
+// hook fires off the live pump CREATION stream the instant a matching ticker lands — sub-second, on the
+// proven processLaunchWatchPlan + buyTokenForPlan path. A cheap in-memory ticker set keeps onCreation hot
+// without reading trade plans on every single creation (there are many per second).
+let snipeWatchTickers = new Set();
+let snipeWatchTickersAt = 0;
+const snipeInFlight = new Set();
+async function refreshSnipeWatchTickers() {
+  try {
+    const store = await readTradePlans();
+    const next = new Set();
+    for (const p of store.plans || []) {
+      if (p.status === "launch_watch" && p.manualLaunch && p.launchTicker && !p.tokenMint) {
+        next.add(cleanTickerForCompare(p.launchTicker));
+      }
+    }
+    snipeWatchTickers = next;
+    snipeWatchTickersAt = Date.now();
+  } catch { /* keep the old set on read failure */ }
+}
+function maybeInstantLaunchSnipe(entry) {
+  if (!snipeWatchTickers.size) return;
+  const sym = cleanTickerForCompare(entry && (entry.symbol || entry.ticker) || "");
+  const nm = cleanTickerForCompare(entry && entry.name || "");
+  if (!sym && !nm) return;
+  let hit = false;
+  for (const t of snipeWatchTickers) {
+    if (!t) continue;
+    if (sym === t || (sym && sym.includes(t)) || (t && t.includes(sym) && sym) || (nm && nm.includes(t))) { hit = true; break; }
+  }
+  if (!hit) return;
+  void instantLaunchWatchSnipe(entry).catch((error) => console.warn(`[snipe] instant fire failed: ${error && error.message}`));
+}
+async function instantLaunchWatchSnipe(entry) {
+  const mint = entry && (entry.tokenMint || entry.mint || entry.ca);
+  if (!mint) return;
+  const sym = cleanTickerForCompare(entry && (entry.symbol || entry.ticker) || "");
+  const nm = cleanTickerForCompare(entry && entry.name || "");
+  const store = await readTradePlans();
+  const walletStore = await readWalletStore();
+  let dirty = false;
+  for (const plan of store.plans || []) {
+    if (plan.status !== "launch_watch" || !plan.manualLaunch || !plan.launchTicker || plan.tokenMint) continue;
+    const t = cleanTickerForCompare(plan.launchTicker);
+    const match = sym === t || (sym && sym.includes(t)) || (t && sym && t.includes(sym)) || (nm && nm.includes(t));
+    if (!match) continue;
+    if (snipeInFlight.has(plan.id)) continue; // don't double-fire while a buy is mid-flight
+    snipeInFlight.add(plan.id);
+    try {
+      const result = await processLaunchWatchPlan(plan, walletStore, {
+        tokenMint: mint,
+        symbol: entry.symbol || entry.ticker || "",
+        name: entry.name || "",
+        pairCreatedAt: Date.now()
+      });
+      if (result && result.changed) {
+        dirty = true;
+        if (plan.status === "watching") plan.results = appendLimited([...(plan.results || []), "⚡ Instant snipe — bought the moment it launched."]);
+        if (result.message) { void notifyLaunchSnipeResult(plan, result.message).catch(() => {}); }
+      }
+    } finally {
+      snipeInFlight.delete(plan.id);
+    }
+  }
+  if (dirty) {
+    await writeTradePlans(store);
+    void refreshSnipeWatchTickers();
+  }
+}
+async function notifyLaunchSnipeResult(plan, message) {
+  // Best-effort: the bot user gets a TG ping if they have a chat linked; the web user polls /launch/watches.
+  try { if (plan.chatId) await sendOrEditMessage(plan.chatId, null, message); } catch {}
 }
 
 async function restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReason) {
@@ -41758,6 +41842,7 @@ async function webCreateLaunchWatch(userId, body = {}) {
     walletStopLossTargets,
     slippageBps
   });
+  void refreshSnipeWatchTickers(); // arm the real-time onCreation sniper instantly
   setTimeout(() => void processTradePlans().catch((error) => {
     console.error("Web manual launch immediate scan failed:", error.message);
   }), 250);
@@ -41788,6 +41873,7 @@ async function webCancelLaunchWatch(userId, planId) {
   plan.canceledAt = new Date().toISOString();
   plan.results = appendLimited([...(plan.results || []), "Canceled from web panel."]);
   await writeTradePlans(store);
+  void refreshSnipeWatchTickers(); // drop it from the real-time sniper set
   await audit("web_cancel_manual_launch_snipe", { userId, planId: plan.id, ticker: plan.launchTicker });
   return webLaunchWatchRow(plan);
 }

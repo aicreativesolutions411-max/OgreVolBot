@@ -750,10 +750,16 @@
       '<div class="bal"><b>'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</b><span>MC</span></div>'+
       '<button class="buybtn sm" style="margin-left:10px" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button></div>';
   }
-  function sniperSetStatus(){
-    const s=$("#snStatus");if(!s)return;const a=state.sniperArm;
-    if(a&&a.on){s.style.display="block";s.innerHTML='🎯 <b>ARMED</b> — watching for <b>'+esc(a.ticker)+'</b>. Auto-buys ◎'+esc(String(a.amt))+' the instant it launches.';}
-    else s.style.display="none";
+  // Reflect the SERVER-SIDE launch watch (instant onCreation snipe — survives closing the tab).
+  async function refreshSniperStatus(){
+    const {d}=await api("/api/web/launch/watches").catch(()=>({}));
+    const watches=(d&&d.watches)||[];
+    const armed=watches.find(w=>w.status==="launch_watch");
+    const fired=watches.find(w=>w.status==="watching"&&w.tokenMint);
+    const st=$("#snStatus"),ab=$("#snArm");if(!st)return;
+    if(armed){state.sniperWatch={id:armed.id,ticker:armed.ticker};if(ab)ab.textContent="🛑 Disarm";st.style.display="block";st.innerHTML='🎯 <b>ARMED on the server</b> — watching for <b>$'+esc(String(armed.ticker||"").toUpperCase())+'</b>. Fires the instant it launches (even if you close the app).';}
+    else if(fired){state.sniperWatch=null;if(ab)ab.textContent="🎯 Arm sniper";st.style.display="block";st.innerHTML='🎯 <b>SNIPED $'+esc(String(fired.ticker||"").toUpperCase())+'</b> — bought '+esc(fired.shortMint||"")+'. <a onclick="GG.open(\''+esc(fired.tokenMint)+'\')" style="color:var(--green);cursor:pointer">Open ↗</a> · check Portfolio.';}
+    else {state.sniperWatch=null;if(ab)ab.textContent="🎯 Arm sniper";st.style.display="none";}
   }
   async function pollSniper(){
     if(sniperPollT){clearTimeout(sniperPollT);sniperPollT=null;}
@@ -763,42 +769,41 @@
     if(cnt)cnt.textContent=rows.length?("· "+rows.length+" live"):"";
     if(feed)feed.innerHTML=rows.length?rows.slice(0,40).map(sniperRowHtml).join(""):'<div class="msg" style="font-size:12px">Waiting for fresh launches…</div>';
     enrichSocials(rows).then(()=>{const f=$("#snFeed");if(state.route==="sniper"&&f&&rows.length)f.innerHTML=rows.slice(0,40).map(sniperRowHtml).join("");});
-    // armed auto-snipe — buy the first NEW coin whose symbol/name matches, then disarm (one shot)
-    const a=state.sniperArm;
-    if(a&&a.on&&a.ticker){
-      state.sniped=state.sniped||new Set();
-      const hit=rows.find(r=>r.tokenMint&&!state.sniped.has(r.tokenMint)&&(((r.symbol||"").toLowerCase().includes(a.ticker))||((r.name||"").toLowerCase().includes(a.ticker))));
-      if(hit){
-        state.sniped.add(hit.tokenMint);state.sniperArm={on:false};
-        const ab=$("#snArm");if(ab)ab.textContent="🎯 Arm sniper";
-        const st=$("#snStatus");if(st){st.style.display="block";st.innerHTML='🎯 <b>SNIPED '+esc(hit.symbol||short(hit.tokenMint))+'</b> — firing your buy…';}
-        await execQuickBuy(hit.tokenMint,{amt:a.amt,slip:a.slip,tp:a.tp,sl:a.sl});
-      }
-    }
+    if(state.token)refreshSniperStatus();
     sniperPollT=setTimeout(()=>{if(state.route==="sniper")pollSniper();},1600);
   }
   async function renderSniper(){
     setActiveView("v-sniper");subbarTool("🎯 Launch Sniper");if(state.token)await refreshWallets();if(state.route!=="sniper")return;
-    const q=state.quickBuy||{amt:0.1,slip:"",tp:"",sl:""};const arm=state.sniperArm||{on:false,ticker:""};
-    $("#v-sniper").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>🎯 Launch Sniper</h3><p class="sub">Catch brand-new pump launches the second they drop. Type a ticker/name and <b>Arm</b> — it auto-buys with your preset the instant it lands. Or tap ⚡ on any row to ape it now.</p>'+
-      '<div class="field row2"><div><label>Watch ticker / name</label><input id="snTick" placeholder="e.g. WIF" value="'+esc(arm.ticker||"")+'"></div><div><label>Buy amount (SOL)</label><input id="snAmt" inputmode="decimal" value="'+esc(String(q.amt||"0.1"))+'"></div></div>'+
+    const q=state.quickBuy||{amt:0.1,slip:"",tp:"",sl:""};
+    $("#v-sniper").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>🎯 Launch Sniper</h3><p class="sub">Type a ticker/name and <b>Arm</b> — it runs <b>on our server</b> and buys with your preset the <b>instant</b> a matching coin launches (sub-second off the live creation stream — even if you close the app). Or tap ⚡ on any row to ape one now.</p>'+
+      '<div class="field row2"><div><label>Watch ticker / name</label><input id="snTick" placeholder="e.g. WIF"></div><div><label>Buy amount (SOL)</label><input id="snAmt" inputmode="decimal" value="'+esc(String(q.amt||"0.1"))+'"></div></div>'+
       '<div class="field row2"><div><label>Take profit %</label><input id="snTp" inputmode="numeric" placeholder="off" value="'+esc(q.tp||"")+'"></div><div><label>Stop loss %</label><input id="snSl" inputmode="numeric" placeholder="off" value="'+esc(q.sl||"")+'"></div></div>'+
-      '<div class="field row2"><div><label>Slippage (bps)</label><input id="snSlip" inputmode="numeric" value="'+esc(q.slip||"700")+'"></div><div style="display:flex;align-items:flex-end"><button class="bigbuy" id="snArm" style="width:100%">'+(arm.on?"🛑 Disarm":"🎯 Arm sniper")+'</button></div></div>'+
+      '<div class="field row2"><div><label>Slippage (bps)</label><input id="snSlip" inputmode="numeric" value="'+esc(q.slip||"700")+'"></div><div style="display:flex;align-items:flex-end"><button class="bigbuy" id="snArm" style="width:100%">🎯 Arm sniper</button></div></div>'+
       '<div id="snStatus" class="lcnote" style="display:none"></div>'+
       '<div style="display:flex;align-items:center;gap:8px;margin:16px 0 8px"><span class="pulse"></span><b style="font-size:13px">Fresh launches</b><span class="mut" id="snCount" style="font-size:12px"></span></div>'+
       '<div id="snFeed"><div class="loading"><span class="spin"></span></div></div></div></div>';
     $("#snArm").onclick=async()=>{
-      const cur=state.sniperArm||{};
-      if(cur.on){state.sniperArm={on:false};$("#snArm").textContent="🎯 Arm sniper";sniperSetStatus();toast("Sniper disarmed");return;}
+      const ab=$("#snArm");
+      if(state.sniperWatch&&state.sniperWatch.id){
+        ab.disabled=true;const r=await jpost("/api/web/launch/cancel",{planId:state.sniperWatch.id});ab.disabled=false;
+        if(r.ok){state.sniperWatch=null;toast("Sniper disarmed");refreshSniperStatus();}else toast((r.d&&r.d.error)||"Could not disarm",true);
+        return;
+      }
       if(!(await ensureTradeReady()))return;
       const tick=$("#snTick").value.trim();if(!tick){toast("Type a ticker or name to watch.",true);return;}
       const amt=Number($("#snAmt").value.trim()||"0.1");if(!isFinite(amt)||amt<=0){toast("Enter a SOL amount.",true);return;}
       const slip=$("#snSlip").value.trim()||"700",tp=$("#snTp").value.trim(),sl=$("#snSl").value.trim();
-      state.sniperArm={on:true,ticker:tick.toLowerCase(),amt,slip,tp,sl};
       setQuickBuy({amt,slip,tp,sl,presetId:(state.quickBuy&&state.quickBuy.presetId)||""});
-      $("#snArm").textContent="🛑 Disarm";sniperSetStatus();toast("🎯 Armed — watching for "+tick);
+      ab.disabled=true;ab.textContent="Arming…";
+      const body={ticker:tick,amountSol:String(amt),slippageBps:slip,walletIndexes:[state.activeWallet]};
+      if(tp)body.takeProfitPct=tp; if(sl)body.stopLossPct=sl;
+      const {ok,status,d}=await jpost("/api/web/launch/watch",body);
+      ab.disabled=false;ab.textContent="🎯 Arm sniper";
+      if(status===401){setToken("");go("wallet");return;}
+      if(ok&&d&&d.watch){state.sniperWatch={id:d.watch.id,ticker:d.watch.ticker};toast("🎯 Armed on server — watching for "+tick);refreshSniperStatus();}
+      else toast((d&&(d.error||d.message))||"Could not arm sniper",true);
     };
-    sniperSetStatus();
+    refreshSniperStatus();
     pollSniper();
   }
 
