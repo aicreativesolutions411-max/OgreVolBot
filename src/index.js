@@ -22623,6 +22623,19 @@ const LIVE_CATEGORY_QUERIES = {
 // list — so Trending vs Surging vs Top-Volume vs Migrated finally look genuinely different. These
 // take the dedicated category path even though they have no DexScreener name-search of their own.
 const GECKO_BACKED_CATEGORIES = new Set(["dexTrending", "gtVolume", "gtSurging", "gtMigrated", "graduated"]);
+// Stablecoins / LSTs / wrapped bluechips dominate raw 24h volume but are not what a memecoin Top
+// Volume tab should show — keep them out so the tab reads as the highest-volume MEMECOINS.
+const GTVOLUME_EXCLUDE_MINTS = new Set([
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
+  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", // USDT
+  "So11111111111111111111111111111111111111112",  // wSOL
+  "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",   // mSOL
+  "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn",  // JitoSOL
+  "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1",   // bSOL
+  "7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj",  // stSOL
+  "cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij",   // cbBTC
+  "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"    // JUP
+]);
 function livePairCategoryFilter(category) {
   // Only the discovery categories need a post-filter; the metric tabs rank the whole pool.
   if (category === "graduating") return (row) => { const p = Number(slimeScopeProgressPct(row)); return (isPumpStyleToken(row) || row.isPump) && p >= 20 && !(row.graduated || row.isGraduated); };
@@ -22630,6 +22643,8 @@ function livePairCategoryFilter(category) {
   // Surging = genuine gainers only (positive 5m OR 1h). Soft-applied (kept only when ≥6 match), so a
   // flat market never empties the tab.
   if (category === "gtSurging") return (row) => { const m5 = liveRowPct(row.m5); const h1 = liveRowPct(row.h1); return (Number.isFinite(m5) && m5 > 0) || (Number.isFinite(h1) && h1 > 0); };
+  // Top Volume = highest-volume memecoins → drop stablecoins/LSTs/bluechips.
+  if (category === "gtVolume") return (row) => !GTVOLUME_EXCLUDE_MINTS.has(String(row.tokenMint || ""));
   if (category === "dexBoosted") return (row) => Boolean(row.boosted || row.boosts || /boost/i.test(String(row.source || "")));
   if (category === "pumpTrending") return (row) => Boolean(isPumpStyleToken(row) || row.isPump || /pump/i.test(String(row.source || "")));
   return null;
@@ -22659,8 +22674,18 @@ async function fetchLiveCategoryCandidates(category, options = {}) {
     // Trending → the curated trending_pools list (2 pages, ~40).
     try { rows.push(...(await fetchGeckoPools("trending", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => []))); } catch {}
   } else if (category === "gtVolume") {
-    // Top Volume → the biggest 24h-volume pools (a different membership, volume-sorted downstream).
-    try { rows.push(...(await fetchGeckoPools("volume", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => []))); } catch {}
+    // Top Volume → highest-volume MEMECOINS. The global /pools?sort=volume endpoint is mostly
+    // stablecoin/bluechip pairs (USDT/USDC/SOL) — wrong for this terminal AND flaky from Render's
+    // IP — so we draw the proven memecoin pool (trending + new, both reliably cached) and let the
+    // volume SORT rank it. The volume endpoint is a best-effort bonus; stablecoins are filtered out.
+    try {
+      const [tr, nw, vol] = await Promise.all([
+        fetchGeckoPools("trending", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => []),
+        fetchGeckoPools("new", { ttlMs, timeoutMs: 2_500, pages: 2 }).catch(() => []),
+        fetchGeckoPools("volume", { ttlMs, timeoutMs: 3_500, pages: 2 }).catch(() => [])
+      ]);
+      rows.push(...tr, ...nw, ...vol);
+    } catch {}
   } else if (category === "gtSurging") {
     // Surging → blend fresh-on-DEX + high-volume + trending, then momentum-sort + positive-mover
     // filter downstream → "what's pumping right now", distinct from the curated Trending list.
