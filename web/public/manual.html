@@ -25,7 +25,10 @@
   .cover h1{font-family:Cinzel,serif;font-size:3.2rem;margin:8px 0 4px;letter-spacing:2px;text-shadow:0 0 32px rgba(134,242,74,0.5);}
   .cover h2{font-family:Inter,sans-serif;font-size:1.18rem;font-weight:700;margin:0;color:var(--green);letter-spacing:0.5px;}
   .cover p{color:#cfe6d2;max-width:560px;margin:20px auto 0;font-size:1.02rem;}
-  .cover .url{display:inline-block;margin-top:24px;background:linear-gradient(135deg,var(--green),var(--green2));color:#06140a;font-weight:900;text-decoration:none;border-radius:12px;padding:12px 30px;font-size:1.05rem;letter-spacing:0.5px;box-shadow:0 0 30px rgba(134,242,74,0.4);}
+  .cover .cta-wrap{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;align-items:center;margin-top:24px;}
+  .cover .url{display:inline-block;background:linear-gradient(135deg,var(--green),var(--green2));color:#06140a;font-weight:900;text-decoration:none;border-radius:12px;padding:12px 30px;font-size:1.05rem;letter-spacing:0.5px;box-shadow:0 0 30px rgba(134,242,74,0.4);}
+  .cover .save{display:inline-block;background:transparent;border:1.5px solid var(--line2);color:var(--green2);font-weight:800;text-decoration:none;border-radius:12px;padding:11px 22px;font-size:0.95rem;transition:border-color .15s,background .15s;}
+  .cover .save:hover{border-color:var(--green);background:rgba(134,242,74,0.08);}
   .pillrow{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:22px;}
   .pillrow span{background:rgba(134,242,74,0.10);border:1px solid var(--line2);color:var(--green2);border-radius:99px;padding:5px 13px;font-size:0.8rem;font-weight:800;}
   /* ===== body ===== */
@@ -92,7 +95,10 @@
       <h1>SLIMEWIRE</h1>
       <h2>Find it · Buy it · Bank it — all in one fast terminal</h2>
       <p>A clean, professional Solana memecoin terminal. Scan live pairs, read a coin in seconds, and buy or sell with one tap. Every tool is built right in — Swap, Bundle, Volume, Copy-Trade and Launch. This guide walks a brand-new user through all of it.</p>
-      <a class="url" href="https://www.slimewire.org/gg">slimewire.org/gg</a>
+      <div class="cta-wrap">
+        <a class="url" href="https://www.slimewire.org/gg">slimewire.org/gg</a>
+        <a class="save no-print" href="#" onclick="window.print();return false;">⬇ Save as PDF</a>
+      </div>
       <div class="pillrow">
         <span>⚡ 1-Tap Buy</span><span>📊 Live Chart</span><span>🔁 Swap</span><span>📦 Bundle</span><span>🤖 Volume</span><span>👥 Copy</span><span>🚀 Launch</span>
       </div>
