@@ -515,12 +515,12 @@
 
   // ---------- feed ----------
   const TREND_TABS=[
-    {id:"best",label:"Trending",bucket:"live",sort:"best"},
+    {id:"best",label:"Trending",bucket:"live",sort:"best",cat:"dexTrending"},
     {id:"fresh",label:"New",bucket:"live",sort:"fresh"},
-    {id:"surge",label:"Surging",bucket:"live",sort:"momentum"},
-    {id:"vol",label:"Top Volume",bucket:"live",sort:"volume"},
+    {id:"surge",label:"Surging",bucket:"live",sort:"momentum",cat:"dexTrending"},
+    {id:"vol",label:"Top Volume",bucket:"live",sort:"volume",cat:"dexTrending"},
     {id:"grad",label:"Graduating",bucket:"live",sort:"best",cat:"graduating"},
-    {id:"migr",label:"Migrated",bucket:"graduated",sort:"best"},
+    {id:"migr",label:"Migrated",bucket:"graduated",sort:"best",cat:"graduated"},
   ];
   function tabById(id){return TREND_TABS.find(t=>t.id===id)||TREND_TABS[0];}
   async function fetchPairs(p){
@@ -625,7 +625,7 @@
   const TRENCH_COLS=[
     {key:"new",label:"New",pulse:true,params:{bucket:"live",sort:"fresh"}},
     {key:"soon",label:"Soon",pulse:false,params:{bucket:"live",sort:"best",cat:"graduating"}},
-    {key:"migr",label:"Migrated",pulse:false,params:{bucket:"graduated",sort:"best"}},
+    {key:"migr",label:"Migrated",pulse:false,params:{bucket:"graduated",sort:"best",cat:"graduated"}},
   ];
   async function renderTrenches(){
     setActiveView("v-trenches");subbarTrenches();

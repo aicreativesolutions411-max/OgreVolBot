@@ -22482,7 +22482,7 @@ async function fetchGeckoTrendingCandidates(options = {}) {
       const pc = a.price_change_percentage || {};
       const vol = a.volume_usd || {};
       const tx = a.transactions || {};
-      const grad = /raydium|meteora|orca|pumpswap/i.test(dexId) && mint.toLowerCase().endsWith("pump");
+      const grad = /raydium|meteora|orca|pumpswap/i.test(dexId); // on a DEX = migrated/graduated
       return {
         tokenMint: mint,
         source: "gecko-trending",
@@ -22582,6 +22582,15 @@ async function fetchLiveCategoryCandidates(category, options = {}) {
   // Boosted / trending tabs also pull the real DexScreener token-boosts endpoint (their defining source).
   if (category === "dexBoosted" || category === "dexTrending") {
     try { rows.push(...(await fetchSniperCandidates({ ...options, ttlMs }).catch(() => []))); } catch {}
+  }
+  // GeckoTerminal trending_pools (FREE, no key) is the defining source for the genuinely-trending /
+  // established tabs — a full page of real movers, regardless of age (the bucket path's age cap is
+  // what starved these). dexTrending powers /gg Trending/Surging/Top-Volume (one pool, sorted per tab).
+  if (category === "dexTrending" || category === "graduated") {
+    try {
+      const gecko = await fetchGeckoTrendingCandidates({ ttlMs, timeoutMs: 2_500 }).catch(() => []);
+      rows.push(...(category === "graduated" ? gecko.filter((r) => r.profile?.graduated) : gecko));
+    } catch {}
   }
   // Pump-curve tabs add the live pump creations (fresh) + latest so there's curve material to filter.
   if (category === "pumpTrending" || category === "earlyMomentum" || category === "graduating") {
