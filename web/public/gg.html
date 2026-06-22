@@ -1641,25 +1641,36 @@
   function kolInitials(k){const t=String((k&&(k.twitter||k.name||k.shortWallet||k.wallet))||"KO").replace(/^@+/,"").replace(/^https?:\/\/(?:x|twitter)\.com\//i,"");return esc((t.slice(0,2)||"KO").toUpperCase());}
   function kolAvatarImg(k){const s=kolAvatarSrc(k);const ini=kolInitials(k);return s?'<img src="'+esc(s)+'" referrerpolicy="no-referrer" loading="eager" decoding="async" style="width:100%;height:100%;border-radius:11px;object-fit:cover" onerror="this.replaceWith(document.createTextNode(\''+ini+'\'))">':ini;}
   async function openKolProfile(wallet,name){
-    openModal('<h3>👤 '+esc(name||short(wallet))+'</h3><div id="kpBody"><div class="loading" style="padding:24px"><span class="spin"></span></div></div>');
-    // Start from the KOL we ALREADY have on the list (stats + pfp), so the profile is populated instantly
-    // and stays useful even if the live wallet re-scan is rate-limited (MadeOnSol 200/day) and returns empty.
-    const cached=(state._kols||[]).find(x=>String(x.wallet)===String(wallet))||{name};
+    // Render INSTANTLY from the KOL we already have on the list (kolscan ROI + win-rate + pfp), then load
+    // recent positions in the BACKGROUND — the modal never waits on the slow/rate-limited wallet scan, and
+    // the cached kolscan stats are NEVER clobbered by a sparse live result.
+    const cached=(state._kols||[]).find(x=>String(x.wallet)===String(wallet))||{name,wallet};
+    const v=(lbl)=>(lbl&&lbl!=="n/a")?esc(lbl):"—";
+    const paint=(k,rows,loadingPos)=>{
+      const body=$("#kpBody");if(!body)return;
+      const handle=kolHandle(k);
+      const links=[];
+      if(handle||k.twitter||k.xUrl)links.push('<a class="chip" href="'+(handle?"https://x.com/"+handle:esc(k.twitter||k.xUrl))+'" target="_blank" rel="noopener">𝕏 '+(handle?"@"+esc(handle):"Twitter")+'</a>');
+      links.push('<a class="chip" href="https://solscan.io/account/'+encodeURIComponent(wallet)+'" target="_blank" rel="noopener">Solscan ↗</a>');
+      links.push('<a class="chip" href="https://kolscan.io/account/'+encodeURIComponent(wallet)+'" target="_blank" rel="noopener">KOLScan ↗</a>');
+      const realized=(k.realizedLabel&&k.realizedLabel!=="n/a")?esc(k.realizedLabel):(k.trades?esc(k.trades)+" tr":"—");
+      const posHtml=loadingPos
+        ? '<div class="loading" style="padding:14px"><span class="spin"></span></div>'
+        : (rows.length?rows.slice(0,15).map(r=>{const chg=pctNum(r.h1!=null?r.h1:r.m5);const ct=chg==null?"":((chg>=0?"+":"")+chg.toFixed(1)+"%");
+            return '<div class="walletrow" style="cursor:pointer" onclick="GG.closeModal();GG.open(\''+esc(r.tokenMint)+'\')"><div class="ico">'+(r.imageUrl?'<img src="'+esc(r.imageUrl)+'" style="width:100%;height:100%;border-radius:11px;object-fit:cover" onerror="this.replaceWith(document.createTextNode(\'🪙\'))">':'🪙')+'</div><div class="info" style="min-width:0"><b>'+esc(r.symbol||short(r.tokenMint))+' <span class="mut" style="font-weight:500">'+ct+'</span></b><div class="addr mut">'+esc(r.marketCapLabel||"")+' MC</div></div><div class="bal"><b>'+esc(r.valueLabel||r.volumeLabel||"")+'</b></div></div>';
+          }).join(""):'<p class="mut" style="font-size:12px">No recent positions cached for this wallet.</p>');
+      body.innerHTML='<div style="display:flex;gap:12px;align-items:center;margin:4px 0 12px"><div class="ico" style="width:52px;height:52px;flex:0 0 auto;font-size:24px">'+kolAvatarImg(k)+'</div>'+
+        '<div style="flex:1;min-width:0"><div class="secgrid" style="grid-template-columns:repeat(3,1fr);margin:0"><div class="cell"><b class="up">'+v(k.roiLabel)+'</b><span>ROI</span></div><div class="cell"><b>'+v(k.winRateLabel)+'</b><span>win rate</span></div><div class="cell"><b>'+realized+'</b><span>realized</span></div></div></div></div>'+
+        '<div style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:12px">'+links.join("")+'</div>'+
+        '<button class="wbtn" style="margin-bottom:14px" onclick="GG.closeModal();GG.copyWallet(\''+esc(wallet)+'\')">Copy this wallet\'s buys →</button>'+
+        kolSecLabel("Recent positions"+(loadingPos?"":" ("+rows.length+")"))+posHtml;
+    };
+    openModal('<h3>👤 '+esc(cached.name||name||short(wallet))+'</h3><div id="kpBody"></div>');
+    paint(cached,[],true); // instant: cached stats + spinner for positions
     const {d}=await api("/api/web/kol/scan?wallet="+encodeURIComponent(wallet)).catch(()=>({}));
-    const sc=(d&&d.scan)||{};const k=Object.assign({},cached,(sc.kols&&sc.kols[0])||{});const rows=sc.rows||[];const handle=kolHandle(k);
-    const body=$("#kpBody");if(!body)return;
-    const links=[];
-    if(handle||k.twitter||k.xUrl)links.push('<a class="chip" href="'+(handle?"https://x.com/"+handle:esc(k.twitter||k.xUrl))+'" target="_blank" rel="noopener">𝕏 '+(handle?"@"+esc(handle):"Twitter")+'</a>');
-    links.push('<a class="chip" href="https://solscan.io/account/'+encodeURIComponent(wallet)+'" target="_blank" rel="noopener">Solscan ↗</a>');
-    links.push('<a class="chip" href="https://kolscan.io/account/'+encodeURIComponent(wallet)+'" target="_blank" rel="noopener">KOLScan ↗</a>');
-    body.innerHTML='<div style="display:flex;gap:12px;align-items:center;margin:4px 0 12px"><div class="ico" style="width:52px;height:52px;flex:0 0 auto;font-size:24px">'+kolAvatarImg(k)+'</div>'+
-      '<div style="flex:1;min-width:0"><div class="secgrid" style="grid-template-columns:repeat(3,1fr);margin:0"><div class="cell"><b>'+esc(k.winRateLabel&&k.winRateLabel!=="n/a"?k.winRateLabel:"—")+'</b><span>win rate</span></div><div class="cell"><b>'+esc(k.roiLabel&&k.roiLabel!=="n/a"?k.roiLabel:"—")+'</b><span>ROI</span></div><div class="cell"><b>'+esc(k.realizedLabel&&k.realizedLabel!=="n/a"?k.realizedLabel:(k.trades?k.trades+" tr":"—"))+'</b><span>realized</span></div></div></div></div>'+
-      '<div style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:12px">'+links.join("")+'</div>'+
-      '<button class="wbtn" style="margin-bottom:14px" onclick="GG.closeModal();GG.copyWallet(\''+esc(wallet)+'\')">Copy this wallet\'s buys →</button>'+
-      kolSecLabel("Recent positions ("+rows.length+")")+
-      (rows.length?rows.slice(0,15).map(r=>{const chg=pctNum(r.h1!=null?r.h1:r.m5);const ct=chg==null?"":((chg>=0?"+":"")+chg.toFixed(1)+"%");
-        return '<div class="walletrow" style="cursor:pointer" onclick="GG.closeModal();GG.open(\''+esc(r.tokenMint)+'\')"><div class="ico">'+(r.imageUrl?'<img src="'+esc(r.imageUrl)+'" style="width:100%;height:100%;border-radius:11px;object-fit:cover" onerror="this.replaceWith(document.createTextNode(\'🪙\'))">':'🪙')+'</div><div class="info" style="min-width:0"><b>'+esc(r.symbol||short(r.tokenMint))+' <span class="mut" style="font-weight:500">'+ct+'</span></b><div class="addr mut">'+esc(r.marketCapLabel||"")+' MC</div></div><div class="bal"><b>'+esc(r.valueLabel||r.volumeLabel||"")+'</b></div></div>';
-      }).join(""):'<p class="mut" style="font-size:12px">No recent positions cached for this wallet.</p>');
+    if(!$("#kpBody"))return; // modal closed / changed
+    const sc=(d&&d.scan)||{};const live=(sc.kols&&sc.kols[0])||{};const rows=sc.rows||[];
+    paint(Object.assign({},live,cached),rows,false); // cached (kolscan ROI/win/pfp) WINS; live adds positions
   }
   async function loadKol(){
     const mode=state.kolMode||"hot";
