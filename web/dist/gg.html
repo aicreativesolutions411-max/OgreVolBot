@@ -1052,8 +1052,8 @@
           '<button class="wbtn ghost" style="margin-left:8px;padding:9px 11px" onclick="GG.removeWalletPrompt('+w.index+')" title="Remove wallet">🗑</button></div>';
       }).join("");
       const w=activeWalletObj();
-      const tradePre=(state.presets.trade||[]).map(p=>presetChipHtml(p,"trade")).join("")||'<p class="mut" style="font-size:12px">No single-buy presets yet.</p>';
-      const bundlePre=(state.presets.bundle||[]).map(p=>presetChipHtml(p,"bundle")).join("")||'<p class="mut" style="font-size:12px">No bundle presets yet.</p>';
+      const tradePre=(state.presets.trade||[]).map(p=>presetChipHtml(p,"trade")).join("")||'<p class="mut" style="font-size:12px">No Quick Buy presets yet.</p>';
+      const bundlePre=(state.presets.bundle||[]).map(p=>presetChipHtml(p,"bundle")).join("")||'<p class="mut" style="font-size:12px">No Bundle presets yet.</p>';
       wrap.innerHTML='<div class="wbox"><h3>Your wallets</h3><p class="sub">Pick the wallet you trade with. Fund it by sending SOL to its address.</p>'+
         (list||'<p class="mut">No wallets yet.</p>')+
         '<div style="display:flex;gap:9px;margin-top:6px"><button class="wbtn" id="mkWallet">+ New wallet</button><button class="wbtn ghost" id="refWallet">Refresh balances</button></div></div>'+
@@ -1062,14 +1062,14 @@
           '<div style="display:flex;gap:9px;margin-top:6px"><button class="wbtn" id="copyDep">Copy deposit address</button></div>'+
           '<p class="wnote" style="margin-top:12px">Tip: keep a little SOL for fees. Once funds land, hit Refresh and your balance updates here and on every Buy button.</p></div>':'')+
         // ---- Presets fold ----
-        '<details class="fold"><summary>🎚️ Presets<span class="sub">single-buy &amp; bundle · auto TP/SL</span><span class="chev">▾</span></summary><div class="foldbody">'+
-          '<p class="wnote" style="margin:0 0 12px">Set a preset once. On the trade panel, pick it and every Buy arms your take-profit / stop-loss automatically.</p>'+
-          '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:7px">Single-buy presets</div>'+tradePre+
-          '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 7px">Bundle presets</div>'+bundlePre+
-          '<div style="border-top:1px solid var(--border2);margin-top:14px;padding-top:14px">'+
+        '<details class="fold"><summary>🎚️ Presets<span class="sub">Quick Buy &amp; Bundle · auto TP/SL</span><span class="chev">▾</span></summary><div class="foldbody">'+
+          '<p class="wnote" style="margin:0 0 12px">Set a preset once, then pick it in Quick Buy or Bundle and every Buy arms your take-profit / stop-loss automatically. Tap ✕ to remove one.</p>'+
+          '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:7px">⚡ Quick Buy presets</div>'+tradePre+
+          '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 7px">📦 Bundle presets</div>'+bundlePre+
+          '<div style="border-top:1px solid var(--border2);margin-top:14px;padding-top:14px"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:9px">+ Add a preset</div>'+
             '<div class="field row2"><div><label>Name</label><input id="pName" placeholder="Scalp" maxlength="24"></div><div><label>Amount (SOL)</label><input id="pAmt" inputmode="decimal" placeholder="0.5"></div></div>'+
             '<div class="field row2"><div><label>Take profit %</label><input id="pTp" inputmode="decimal" placeholder="50"></div><div><label>Stop loss %</label><input id="pSl" inputmode="decimal" placeholder="20"></div></div>'+
-            '<div class="field row2"><div><label>Slippage (bps)</label><input id="pSlip" inputmode="numeric" placeholder="400"></div><div><label>Type</label><select id="pKind"><option value="trade">Single buy</option><option value="bundle">Bundle (all wallets)</option></select></div></div>'+
+            '<div class="field row2"><div><label>Slippage (bps)</label><input id="pSlip" inputmode="numeric" placeholder="400"></div><div><label>For</label><select id="pKind"><option value="trade">⚡ Quick Buy</option><option value="bundle">📦 Bundle</option></select></div></div>'+
             '<button class="wbtn" id="savePre">Save preset</button>'+
           '</div></div></details>'+
         // ---- Power tools fold ----
@@ -1191,7 +1191,14 @@
         let side=o.mode==="mix"?(Math.random()<o.sellBias?"sell":"buy"):o.mode;
         let res,label;
         if(side==="sell"){const pct=Math.round(rnd(o.sellMin,o.sellMax));label="🔴 SELL "+pct+"%";res=await jpost("/api/web/trade/sell",{tokenMint:o.tokenMint,walletIndex:idx,percent:String(pct),slippageBps:String(o.slip),tradeAttemptId:attemptId()});}
-        else{const amt=rnd(o.amtMin,o.amtMax);label="🟢 BUY ◎"+amt.toFixed(3);const body={tokenMint:o.tokenMint,walletIndex:idx,amountSol:amt.toFixed(4),slippageBps:String(o.slip),tradeAttemptId:attemptId()};if(o.tp||o.sl){body.autoExit=true;body.takeProfitPct=o.tp||"";body.stopLossPct=o.sl||"";body.sellDelay="off";body.sellPercent="100";}res=await jpost("/api/web/trade/buy",body);if(res&&res.ok&&res.d&&res.d.ok)spent+=amt;}
+        else{const amt=rnd(o.amtMin,o.amtMax);label="🟢 BUY ◎"+amt.toFixed(3);
+          // Laddered take-profit: spread each wallet's TP from o.tp up to o.tpTop across the batch so
+          // they don't all sell at one price ("not 1 clip all sell"). Off (o.tpTop unset) = same TP all.
+          let tp=o.tp;
+          if(o.tpTop&&o.tp){const lo=Number(o.tp),hi=Number(o.tpTop);if(isFinite(lo)&&isFinite(hi)&&hi>lo)tp=String(Math.round((lo+(hi-lo)*(order.length>1?k/(order.length-1):0))*10)/10);}
+          const body={tokenMint:o.tokenMint,walletIndex:idx,amountSol:amt.toFixed(4),slippageBps:String(o.slip),tradeAttemptId:attemptId()};
+          if(tp||o.sl){body.autoExit=true;body.takeProfitPct=tp||"";body.stopLossPct=o.sl||"";body.sellDelay="off";body.sellPercent="100";if(o.tpTop)label+=" · TP "+tp+"%";}
+          res=await jpost("/api/web/trade/buy",body);if(res&&res.ok&&res.d&&res.d.ok)spent+=amt;}
         const good=res&&res.ok&&res.d&&res.d.ok;if(good)okc++;else fail++;
         if(res&&res.status===401){staggerAbort=true;staggerLog(logEl,'<div style="color:var(--red);font-size:12px;padding:4px 0">Session expired — set up your wallet again.</div>');break;}
         staggerLog(logEl,'<div style="font-size:12px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05)"><b style="color:'+(good?"var(--green)":"var(--red)")+'">'+label+'</b> · '+esc((w&&w.label)||("#"+idx))+(o.rounds>1?' · loop '+(r+1):'')+' · '+(good?"✓":esc(String((res&&res.d&&res.d.error)||"failed").slice(0,38)))+'</div>');
@@ -1204,23 +1211,29 @@
   }
   function staggerControls(goId,stopId,goLabel){return '<div class="bsrow"><button class="bigbuy" id="'+goId+'" style="flex:2">'+goLabel+'</button><button class="wbtn ghost" id="'+stopId+'" style="flex:1">Stop</button></div><div id="stgLog" style="margin-top:12px;max-height:260px;overflow:auto"></div>';}
   async function renderBundle(){
-    setActiveView("v-bundle");subbarTool("📦 Bundle");if(state.token)await refreshWallets();if(state.route!=="bundle")return;
-    $("#v-bundle").innerHTML='<div class="wgrid"><div class="wbox"><h3>📦 Bundle</h3><p class="sub">Hit one token across your wallets — but with <b>randomized sizes</b> and <b>staggered timing</b> so it doesn\'t read as a bundle. Optional buy/sell mix for organic flow.</p>'+
+    setActiveView("v-bundle");subbarTool("📦 Bundle");if(state.token){await refreshWallets();await loadPresets();}if(state.route!=="bundle")return;
+    const bopts='<option value="">My own TP/SL below</option>'+(state.presets.bundle||[]).map(p=>'<option value="'+esc(p.id)+'">'+esc(p.name||"Preset")+(p.takeProfitPct?" · TP "+esc(p.takeProfitPct)+"%":"")+(p.stopLossPct?" · SL "+esc(p.stopLossPct)+"%":"")+'</option>').join("");
+    $("#v-bundle").innerHTML='<div class="wgrid"><div class="wbox"><h3>📦 Bundle</h3><p class="sub">Hit one token across your wallets with <b>randomized sizes</b> + <b>staggered timing</b> so it doesn\'t read as a bundle. Arm take-profit / stop-loss — laddered so the wallets don\'t all sell at one price.</p>'+
       '<div class="field"><label>Token contract (CA)</label><input id="bnCa" placeholder="Paste token mint"></div>'+
       '<div class="field"><label>Pattern</label><select id="bnMode"><option value="buy">Buys only (varied + staggered)</option><option value="mix">Buy + sell mix (organic volume)</option></select></div>'+
       '<div class="field row2"><div><label>Min SOL / wallet</label><input id="bnMin" inputmode="decimal" value="0.05"></div><div><label>Max SOL / wallet</label><input id="bnMax" inputmode="decimal" value="0.15"></div></div>'+
       '<div class="field row2"><div><label>Stagger min (s)</label><input id="bnDmin" inputmode="numeric" value="1"></div><div><label>Stagger max (s)</label><input id="bnDmax" inputmode="numeric" value="4"></div></div>'+
-      '<div class="field row2"><div><label>Take profit % (optional)</label><input id="bnTp" inputmode="numeric" placeholder="off"></div><div><label>Stop loss % (optional)</label><input id="bnSl" inputmode="numeric" placeholder="off"></div></div>'+
+      '<div class="field"><label>Exit preset (TP/SL)</label><select id="bnPreset">'+bopts+'</select></div>'+
+      '<div class="field row2"><div><label>Take profit %</label><input id="bnTp" inputmode="numeric" placeholder="off"></div><div><label>Stop loss %</label><input id="bnSl" inputmode="numeric" placeholder="off"></div></div>'+
+      '<label style="display:flex;align-items:center;gap:9px;font-size:12px;cursor:pointer;margin-bottom:10px"><input type="checkbox" id="bnLadder"> Ladder profit-taking across wallets (sell at different % targets, not all at once)</label>'+
+      '<div class="field" id="bnLadderWrap" style="display:none"><label>…spread take-profit up to %</label><input id="bnTpTop" inputmode="numeric" placeholder="e.g. 120"></div>'+
       '<div class="field row2"><div><label>Slippage (bps)</label><input id="bnSlip" inputmode="numeric" value="500"></div><div></div></div>'+
       '<div class="field"><label>Wallets</label>'+walletPickHtml()+'</div>'+
-      staggerControls("bnGo","bnStop","Run Bundle")+'</div></div>';
-    $("#bnStop").onclick=()=>{staggerAbort=true;toast("Stopping after the current order…");};
+      '<button class="bigbuy" id="bnGo">Run Bundle</button><div id="stgLog" style="margin-top:12px;max-height:260px;overflow:auto"></div></div></div>';
+    $("#bnPreset").onchange=()=>{const p=(state.presets.bundle||[]).find(x=>x.id===$("#bnPreset").value);if(p){$("#bnTp").value=p.takeProfitPct||"";$("#bnSl").value=p.stopLossPct||"";if(p.slippageBps)$("#bnSlip").value=p.slippageBps;}};
+    $("#bnLadder").onchange=()=>{$("#bnLadderWrap").style.display=$("#bnLadder").checked?"":"none";};
     $("#bnGo").onclick=async()=>{
-      if(staggerRunning){toast("Already running — hit Stop first.",true);return;}
+      if(staggerRunning){toast("A bundle/volume run is already going.",true);return;}
       const ca=$("#bnCa").value.trim();if(!ca){toast("Paste a token CA.",true);return;}
       if(!(await ensureTradeReady()))return;const idxs=selectedWalletIdxs();if(!idxs.length){toast("Pick at least one wallet.",true);return;}
       const b=$("#bnGo");b.disabled=true;b.textContent="Running…";$("#stgLog").innerHTML="";
-      const res=await runStagger({tokenMint:ca,wallets:idxs,rounds:1,mode:$("#bnMode").value,amtMin:$("#bnMin").value,amtMax:$("#bnMax").value,delayMin:$("#bnDmin").value,delayMax:$("#bnDmax").value,sellBias:0.5,sellMin:50,sellMax:100,tp:$("#bnTp").value.trim(),sl:$("#bnSl").value.trim(),slip:Number($("#bnSlip").value.trim()||"500")},$("#stgLog"));
+      const ladder=$("#bnLadder").checked;
+      const res=await runStagger({tokenMint:ca,wallets:idxs,rounds:1,mode:$("#bnMode").value,amtMin:$("#bnMin").value,amtMax:$("#bnMax").value,delayMin:$("#bnDmin").value,delayMax:$("#bnDmax").value,sellBias:0.5,sellMin:50,sellMax:100,tp:$("#bnTp").value.trim(),tpTop:(ladder?$("#bnTpTop").value.trim():""),sl:$("#bnSl").value.trim(),slip:Number($("#bnSlip").value.trim()||"500")},$("#stgLog"));
       b.disabled=false;b.textContent="Run Bundle";toast("Bundle done — "+res.okc+" ok"+(res.fail?", "+res.fail+" failed":"")+(res.spent?" · ◎"+res.spent.toFixed(3)+" in":""));refreshWallets();
     };
   }
