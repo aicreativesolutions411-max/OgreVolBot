@@ -1030,6 +1030,74 @@
   }
 
   // ---------- wallet ----------
+  // ---------- connect Phantom/Solflare → fund a fresh web wallet (session-wallet flow) ----------
+  // We move SOL from the user's own wallet into a freshly-minted, auto-backed-up SlimeWire wallet
+  // they trade from (one-click speed, self-custody). The transfer tx is built server-side; the user
+  // approves it in their wallet; the server broadcasts + confirms it.
+  function b64ToBytes(b64){const bin=atob(b64);const a=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)a[i]=bin.charCodeAt(i);return a;}
+  function bytesToB64(bytes){const a=bytes instanceof Uint8Array?bytes:new Uint8Array(bytes);let bin="";for(let i=0;i<a.length;i++)bin+=String.fromCharCode(a[i]);return btoa(bin);}
+  let _web3P=null;
+  function loadWeb3(){if(_web3P)return _web3P;_web3P=new Promise((res,rej)=>{if(window.solanaWeb3)return res(window.solanaWeb3);const s=document.createElement("script");s.src="https://unpkg.com/@solana/web3.js@1.95.8/lib/index.iife.min.js";s.onload=()=>window.solanaWeb3?res(window.solanaWeb3):rej(new Error("Solana library failed to load"));s.onerror=()=>rej(new Error("Could not load the Solana library"));document.head.appendChild(s);});return _web3P;}
+  function solProvider(kind){
+    if(kind==="phantom"){const p=(window.phantom&&window.phantom.solana)||(window.solana&&window.solana.isPhantom?window.solana:null);return (p&&p.isPhantom)?p:null;}
+    if(kind==="solflare"){return (window.solflare&&(window.solflare.isSolflare||typeof window.solflare.connect==="function"))?window.solflare:null;}
+    return null;
+  }
+  function openConnectModal(){
+    const ph=solProvider("phantom"),sf=solProvider("solflare");
+    openModal('<h3>🔗 Connect &amp; fund</h3>'+
+      '<p class="sub" style="font-size:12px">Connect Phantom or Solflare, then move some SOL into a fresh SlimeWire trading wallet (auto-backed-up). You trade from the web wallet — instant, one-click, your keys.</p>'+
+      '<div style="display:flex;flex-direction:column;gap:9px">'+
+        '<button class="wbtn'+(ph?'':' ghost')+'" id="cwPhantom">'+(ph?'👻 Connect Phantom':'👻 Get Phantom')+'</button>'+
+        '<button class="wbtn'+(sf?'':' ghost')+'" id="cwSolflare">'+(sf?'🔆 Connect Solflare':'🔆 Get Solflare')+'</button>'+
+      '</div>');
+    $("#cwPhantom").onclick=()=>{solProvider("phantom")?connectAndFund("phantom"):window.open("https://phantom.app/download","_blank");};
+    $("#cwSolflare").onclick=()=>{solProvider("solflare")?connectAndFund("solflare"):window.open("https://solflare.com/download","_blank");};
+  }
+  async function connectAndFund(kind){
+    const provider=solProvider(kind);if(!provider){toast("Wallet not detected.",true);return;}
+    try{
+      const resp=await provider.connect();
+      const pk=(resp&&resp.publicKey&&resp.publicKey.toString())||(provider.publicKey&&provider.publicKey.toString());
+      if(!pk)throw new Error("Could not read your wallet address.");
+      if(!(await ensureAccount())){toast("Could not start your account.",true);return;}
+      await jpost("/api/web/profile/connected-wallet",{publicKey:pk,provider:kind});
+      closeModal();openFundModal(kind,pk);
+    }catch(e){toast(e&&e.message?e.message:"Connect cancelled",true);}
+  }
+  function openFundModal(kind,pk){
+    openModal('<h3>💰 Fund your trading wallet</h3>'+
+      '<p class="sub" style="font-size:12px">Connected '+esc(kind)+' · '+esc(short(pk))+'. Pick how much SOL to move into a fresh SlimeWire wallet — you\'ll approve the transfer in your wallet, and we auto-save your backup.</p>'+
+      '<div class="field"><label>Amount (SOL)</label><div class="chips" id="fundChips">'+["0.1","0.25","0.5","1"].map(v=>'<button data-v="'+v+'">'+v+'◎</button>').join("")+'</div><input id="fundAmt" inputmode="decimal" value="0.1" style="margin-top:8px"></div>'+
+      '<button class="bigbuy" id="fundGo">Create &amp; fund wallet</button><div id="fundOut" style="margin-top:10px"></div>');
+    $("#fundChips").querySelectorAll("button").forEach(b=>b.onclick=()=>{$("#fundAmt").value=b.dataset.v;});
+    $("#fundGo").onclick=()=>doFund(kind);
+  }
+  async function doFund(kind){
+    const amt=Number($("#fundAmt").value);if(!isFinite(amt)||amt<=0){toast("Enter a SOL amount.",true);return;}
+    const provider=solProvider(kind);if(!provider){toast("Wallet not connected.",true);return;}
+    const go=$("#fundGo");go.disabled=true;go.textContent="Creating wallet…";const out=$("#fundOut");
+    try{
+      const r=await jpost("/api/web/session-wallet/create",{amountSol:String(amt)});
+      if(!(r.ok&&r.d&&r.d.ok&&r.d.order&&r.d.order.transaction))throw new Error((r.d&&(r.d.error||r.d.message))||"Could not create the wallet.");
+      const order=r.d.order,dl=r.d.downloads||{};
+      if(dl.encryptedBackup)downloadText(dl.encryptedBackup.filename,dl.encryptedBackup.text);
+      if(dl.recoveryKeys)downloadText(dl.recoveryKeys.filename,dl.recoveryKeys.text);
+      go.textContent="Approve in wallet…";out.innerHTML='<span class="mut" style="font-size:12px">Approve the '+amt.toFixed(3)+' SOL transfer in '+esc(kind)+'…</span>';
+      const web3=await loadWeb3();
+      const tx=web3.Transaction.from(b64ToBytes(order.transaction));
+      const signed=await provider.signTransaction(tx);
+      const signedB64=bytesToB64(signed.serialize());
+      go.textContent="Funding…";out.innerHTML='<span class="mut" style="font-size:12px">Confirming on-chain…</span>';
+      const ex=await jpost("/api/web/session-wallet/execute",{sessionWalletAttemptId:order.sessionWalletAttemptId,signedTransaction:signedB64});
+      if(!(ex.ok&&ex.d&&ex.d.ok))throw new Error((ex.d&&(ex.d.error||ex.d.message))||"Funding didn't confirm — check your wallet.");
+      closeModal();toast("Funded! Your trading wallet is ready ✓");
+      await refreshWallets();
+      const w=(state.wallets||[]).find(x=>x.index===order.walletIndex)||(state.wallets||[])[state.wallets.length-1];
+      if(w){state.activeWallet=w.index;updateWalletPill();}
+      if(state.route==="wallet")renderWallet();
+    }catch(e){out.innerHTML='<span style="color:var(--red);font-size:12px">'+esc(e&&e.message?e.message:"Funding failed")+'</span>';go.disabled=false;go.textContent="Create & fund wallet";}
+  }
   function presetChipHtml(p,type){
     return'<div class="preChip"><div class="info"><b>'+esc(p.name||"Preset")+'</b><span>'+esc(p.amountSol||"?")+'◎'+(p.takeProfitPct?" · TP "+esc(p.takeProfitPct)+"%":"")+(p.stopLossPct?" · SL "+esc(p.stopLossPct)+"%":"")+" · slip "+esc(p.slippageBps||"400")+'</span></div><button class="x" data-del="'+type+":"+esc(p.id)+'" title="Delete">✕</button></div>';
   }
@@ -1040,8 +1108,9 @@
     if(state.route!=="wallet")return;
     const wrap=el("div","wgrid");
     if(!state.token){
-      wrap.innerHTML='<div class="wbox"><h3>👛 Set up your trading wallet</h3><p class="sub">No sign-up, no email needed. Create a SlimeWire wallet right here, fund it with SOL, and trade — all on this page.</p>'+
-        '<button class="wbtn" id="mkWallet">Create my wallet</button><p class="wnote" style="margin-top:12px">Your keys are yours. We hand you an encrypted backup and recovery file the moment it\'s created — save them.</p></div>';
+      wrap.innerHTML='<div class="wbox"><h3>👛 Set up your trading wallet</h3><p class="sub">No sign-up, no email needed. Either create a fresh SlimeWire wallet, or connect Phantom/Solflare and move some SOL into one — then trade right here.</p>'+
+        '<div style="display:flex;flex-direction:column;gap:9px"><button class="wbtn" id="connectFundBtn">🔗 Connect &amp; fund (Phantom / Solflare)</button><button class="wbtn ghost" id="mkWallet">Create an empty wallet</button></div>'+
+        '<p class="wnote" style="margin-top:12px">Your keys are yours. We hand you an encrypted backup and recovery file the moment it\'s created — save them.</p></div>';
     }else{
       const list=state.wallets.map(w=>{
         const sel=w.index===state.activeWallet;
@@ -1056,7 +1125,7 @@
       const bundlePre=(state.presets.bundle||[]).map(p=>presetChipHtml(p,"bundle")).join("")||'<p class="mut" style="font-size:12px">No Bundle presets yet.</p>';
       wrap.innerHTML='<div class="wbox"><h3>Your wallets</h3><p class="sub">Pick the wallet you trade with. Fund it by sending SOL to its address.</p>'+
         (list||'<p class="mut">No wallets yet.</p>')+
-        '<div style="display:flex;gap:9px;margin-top:6px"><button class="wbtn" id="mkWallet">+ New wallet</button><button class="wbtn ghost" id="refWallet">Refresh balances</button></div></div>'+
+        '<div style="display:flex;gap:9px;margin-top:6px;flex-wrap:wrap"><button class="wbtn" id="connectFundBtn" style="flex:1;min-width:160px">🔗 Connect &amp; fund</button><button class="wbtn ghost" id="mkWallet">+ New wallet</button><button class="wbtn ghost" id="refWallet">↻ Refresh</button></div></div>'+
         (w?'<div class="wbox"><h3>Deposit SOL</h3><p class="sub">Send SOL to your active wallet to start trading. Solana network only.</p>'+
           '<div class="walletrow"><div class="ico">⬇</div><div class="info"><b>'+esc(w.label||"Wallet")+'</b><div class="addr">'+esc(w.publicKey)+'</div></div></div>'+
           '<div style="display:flex;gap:9px;margin-top:6px"><button class="wbtn" id="copyDep">Copy deposit address</button></div>'+
@@ -1097,6 +1166,7 @@
         '</div></details>';})();
     }
     view.innerHTML="";view.appendChild(wrap);
+    const cf=$("#connectFundBtn");if(cf)cf.onclick=()=>openConnectModal();
     const mk=$("#mkWallet");if(mk)mk.onclick=async()=>{mk.disabled=true;mk.textContent="Creating…";await createWallet();if(state.route==="wallet")renderWallet();};
     const rf=$("#refWallet");if(rf)rf.onclick=async()=>{rf.disabled=true;rf.textContent="…";await refreshWallets();renderWallet();};
     const cd=$("#copyDep");if(cd)cd.onclick=()=>{const w=activeWalletObj();if(w)copy(w.publicKey);};
