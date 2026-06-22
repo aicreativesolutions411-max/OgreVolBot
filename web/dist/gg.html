@@ -226,6 +226,18 @@
   .ctmenu a:hover{background:rgba(255,255,255,.05)}
   .chartskel{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#060906;z-index:1}
   .txpane,.pospane{flex:1 1 auto;min-height:0;overflow:auto;background:#060906}
+  .chatpane{flex:1 1 auto;min-height:0;background:#060906;display:flex;flex-direction:column;overflow:hidden}
+  .chatwrap{display:flex;flex-direction:column;height:100%;min-height:0;width:100%}
+  .chatlog{flex:1 1 auto;min-height:0;overflow:auto;padding:11px 13px;display:flex;flex-direction:column;gap:10px}
+  .cmsg{font-size:13px;line-height:1.35}.cmsg b{color:var(--green2);font-size:12px}.cmsg .ct{color:var(--muted);font-size:10px;margin-left:6px}.cmsg>div{color:var(--text);word-break:break-word;margin-top:1px}
+  .chatbar{display:flex;gap:7px;padding:9px 10px;border-top:1px solid var(--border);flex:0 0 auto}
+  .chatbar input{flex:1;min-width:0;background:rgba(6,10,7,.7);border:1px solid var(--border);border-radius:9px;color:var(--text);padding:9px 11px;font-size:13px;outline:none}
+  .liveframe{position:relative;width:100%;aspect-ratio:16/9;background:#000;border-bottom:1px solid var(--border);flex:0 0 auto}
+  .liveframe iframe{position:absolute;inset:0;width:100%;height:100%;border:0;display:block}
+  .devlivebox{background:var(--panel2);border:1px solid var(--border2);border-radius:11px;padding:10px 11px;margin:10px 12px 0;flex:0 0 auto}
+  .devlivebox input{flex:1;min-width:0;background:rgba(6,10,7,.7);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:7px 9px;font-size:12px;outline:none}
+  .livecard{display:flex;align-items:center;gap:9px;margin:10px 12px 0;padding:12px 14px;border:1px solid rgba(255,107,107,.4);border-radius:12px;background:rgba(255,107,107,.08);text-decoration:none;flex:0 0 auto}
+  .livecard b{color:#ff8b8b;font-size:13px}.livecard .mut{margin-left:auto;font-size:11px;color:var(--muted)}
   .txtbl{width:100%;border-collapse:collapse;font-size:12px}
   .txtbl th{position:sticky;top:0;background:#0a0f0a;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:right;padding:8px 14px;border-bottom:1px solid var(--border);z-index:1}
   .txtbl th:first-child{text-align:left}
@@ -310,6 +322,7 @@
     .tradeMain{border-right:none;flex:0 0 auto}
     .chartwrap{height:44vh;flex:0 0 auto}
     .txpane,.pospane{height:48vh;flex:0 0 auto}
+    .chatpane{height:64vh;flex:0 0 auto}
     .tradeSide{border-top:1px solid var(--border);flex:1 1 auto}
     /* Chart ⇄ Buy focus: the flip button (bottom-right) trades vertical space between the chart and
        the buy panel so neither is cramped. data-focus="chart" = big chart; "buy" = big buy panel. */
@@ -647,6 +660,7 @@
     const {route,arg}=parseHash();state.route=route;
     if(state.pollT){clearTimeout(state.pollT);state.pollT=null;}
     if(state.txPollT){clearTimeout(state.txPollT);state.txPollT=null;}
+    if(chatPollT){clearTimeout(chatPollT);chatPollT=null;}
     setNav(route);
     const wb=$("#watchBtn");if(wb)wb.classList.toggle("on",route==="trending"&&state.trendTab==="watch");
     if(route==="trenches")renderTrenches();
@@ -899,12 +913,59 @@
   function setCtab(which){
     state.tradeTab=which;
     if(which!=="tx"&&state.txPollT){clearTimeout(state.txPollT);state.txPollT=null;}
+    if(which!=="chat"&&chatPollT){clearTimeout(chatPollT);chatPollT=null;}
     const c=$("#ctab");if(c)c.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.ct===which));
-    ["chart","tx","pos"].forEach(p=>{const pane=$('[data-pane="'+p+'"]');if(pane)pane.style.display=(p===which)?"":"none";});
+    ["chart","tx","pos","chat"].forEach(p=>{const pane=$('[data-pane="'+p+'"]');if(pane)pane.style.display=(p===which)?"":"none";});
     if(which==="tx")loadTxPane(state.mint,curTradeRow());
     else if(which==="pos")loadPosPane(state.mint);
+    else if(which==="chat")loadChatLive(state.mint);
   }
-  function wireCtab(){const c=$("#ctab");if(!c)return;c.querySelectorAll("button").forEach(b=>b.onclick=()=>setCtab(b.dataset.ct));setCtab("chart");}
+  function wireCtab(){const c=$("#ctab");if(!c)return;c.querySelectorAll("button").forEach(b=>b.onclick=()=>setCtab(b.dataset.ct));setCtab(state.tradeTab||"chart");}
+  // ---------- on-site chat + dev live (keeps traders here instead of bouncing to pump) ----------
+  let chatPollT=null;
+  function liveEmbedHtml(live){
+    if(!live)return"";
+    if(live.embedUrl)return'<div class="liveframe"><iframe src="'+esc(live.embedUrl)+'" title="live" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>';
+    const label=live.kind==="x"?"𝕏 Space / Live":live.kind==="pump"?"🔴 Pump Live":"🔴 Live now";
+    return'<a class="livecard" href="'+esc(live.url)+'" target="_blank" rel="noopener"><span class="pulse"></span><b>'+label+'</b><span class="mut">tap to watch '+esc(live.url.replace(/^https?:\/\//,"").slice(0,34))+' ↗</span></a>';
+  }
+  function renderChatLog(msgs){
+    const log=$("#chatLog");if(!log)return;
+    const atBottom=log.scrollHeight-log.scrollTop-log.clientHeight<50;
+    log.innerHTML=(msgs&&msgs.length)?msgs.map(m=>'<div class="cmsg"><b>'+esc(m.name||"anon")+'</b><span class="ct">'+esc(txAgo(m.ts))+'</span><div>'+esc(m.text)+'</div></div>').join(""):'<div class="msg" style="font-size:12px;padding:18px">No messages yet — say gm 🐸</div>';
+    if(atBottom)log.scrollTop=log.scrollHeight;
+  }
+  async function sendChat(mint){
+    const inp=$("#chatMsg");if(!inp)return;const text=inp.value.trim();if(!text)return;
+    if(!(await ensureAccount())){toast("Set up a wallet to chat",true);return;}
+    inp.value="";
+    const {ok,d}=await jpost("/api/web/chat",{mint,text});
+    if(ok&&d&&d.ok)renderChatLog(d.messages||[]);else{toast((d&&(d.error||d.message))||"Couldn't send",true);inp.value=text;}
+  }
+  async function loadChatLive(mint){
+    if(chatPollT){clearTimeout(chatPollT);chatPollT=null;}
+    const pane=$('[data-pane="chat"]');if(!pane||!mint)return;
+    if(!pane.querySelector(".chatwrap")){
+      pane.innerHTML='<div class="chatwrap"><div id="liveArea"></div><div id="devLive"></div><div class="chatlog" id="chatLog"><div class="loading" style="padding:20px"><span class="spin"></span></div></div>'+
+        '<div class="chatbar"><input id="chatMsg" maxlength="280" placeholder="Message $coin chat…"><button class="buybtn sm" id="chatSend">Send</button></div></div>';
+      $("#chatSend").onclick=()=>sendChat(mint);
+      $("#chatMsg").onkeydown=(e)=>{if(e.key==="Enter")sendChat(mint);};
+    }
+    const [lv,ch]=await Promise.all([api("/api/web/live?mint="+encodeURIComponent(mint)).catch(()=>({})),api("/api/web/chat?mint="+encodeURIComponent(mint)).catch(()=>({}))]);
+    if(state.route!=="trade"||state.mint!==mint||state.tradeTab!=="chat")return;
+    const live=(lv.d&&lv.d.live)||null,isDev=Boolean(lv.d&&lv.d.isDev);
+    const la=$("#liveArea");if(la)la.innerHTML=liveEmbedHtml(live);
+    const dl=$("#devLive");
+    if(dl){
+      if(isDev){
+        dl.innerHTML='<div class="devlivebox"><b style="font-size:12px">🔴 You\'re the dev — go live</b><div style="display:flex;gap:6px;margin-top:7px"><input id="liveUrl" placeholder="YouTube / Twitch / X / Pump live link" value="'+esc((live&&live.url)||"")+'"><button class="buybtn sm" id="liveSet">'+(live?"Update":"Go live")+'</button>'+(live?'<button class="wbtn ghost" id="liveStop" style="padding:7px 10px">Stop</button>':'')+'</div><div class="mut" style="font-size:10.5px;margin-top:5px">YouTube &amp; Twitch play right here; X / Pump open in a tab.</div></div>';
+        $("#liveSet").onclick=async()=>{const u=($("#liveUrl").value||"").trim();if(!u){toast("Paste a live link",true);return;}const {ok,d}=await jpost("/api/web/live",{mint,url:u});if(ok&&d&&d.ok){toast("🔴 You're live!");loadChatLive(mint);}else toast((d&&(d.error||d.message))||"Couldn't go live",true);};
+        const ls=$("#liveStop");if(ls)ls.onclick=async()=>{const {ok,d}=await jpost("/api/web/live",{mint,clear:true});if(ok&&d&&d.ok){toast("Live ended");loadChatLive(mint);}else toast((d&&d.error)||"Couldn't stop",true);};
+      }else dl.innerHTML="";
+    }
+    renderChatLog((ch.d&&ch.d.messages)||[]);
+    chatPollT=setTimeout(()=>{if(state.route==="trade"&&state.mint===mint&&state.tradeTab==="chat")loadChatLive(mint);},4000);
+  }
   // Live swaps fetched CLIENT-SIDE straight from GeckoTerminal (CORS-enabled). This uses the user's
   // own IP, dodging the rate-limit that throttles our shared Render IP — far more reliable than a
   // server proxy. Falls back to our /api/web/token-trades proxy only if the direct call is blocked.
@@ -967,7 +1028,7 @@
     setActiveView("v-trade");
     const mint=state.mint;if(!mint){go("trending");return;}
     if(state.pendingSell===mint){tradeSide="sell";state.pendingSell=null;}
-    state.tradeTab="chart";
+    state.tradeTab=state._openTradeTab||"chart";state._openTradeTab=null;
     let r=findRow(mint);state.tradeRow=r;subbarTrade(r);
     const view=$("#v-trade");
     view.innerHTML='<div class="trade" data-focus="chart"><div class="tradeMain">'+
@@ -976,9 +1037,8 @@
           '<button data-ct="chart" class="on">Chart</button>'+
           '<button data-ct="tx">Transactions</button>'+
           '<button data-ct="pos">Positions</button>'+
-          '<div class="ctmore" style="margin-left:auto;position:relative"><button class="chip" id="ctMoreBtn">••• More</button><div class="ctmenu" id="ctMore">'+
-            '<a href="https://pump.fun/coin/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener">💬 Pump.fun chat</a>'+
-            '<a href="https://pump.fun/coin/'+encodeURIComponent(mint)+'?tab=stream" target="_blank" rel="noopener">🔴 Live stream</a>'+
+          '<button data-ct="chat">💬 Chat &amp; Live</button>'+
+          '<div class="ctmore" style="margin-left:auto;position:relative"><button class="chip" id="ctMoreBtn">•••</button><div class="ctmenu" id="ctMore">'+
             '<a href="https://pump.fun/coin/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener">🚀 pump.fun</a>'+
             '<a href="https://solscan.io/token/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener">🔎 Solscan</a>'+
             '<a href="https://dexscreener.com/solana/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener">📊 DexScreener</a>'+
@@ -986,6 +1046,7 @@
         '<div class="chartwrap" data-pane="chart">'+chartIframe(mint,r)+'</div>'+
         '<div class="txpane" data-pane="tx" style="display:none"></div>'+
         '<div class="pospane" data-pane="pos" style="display:none"></div>'+
+        '<div class="chatpane" data-pane="chat" style="display:none"></div>'+
       '</div><div class="tradeSide">'+
         '<div class="pnlbar"><div><span>Invested</span><b>—</b></div><div><span>Remaining</span><b>—</b></div><div><span>PNL</span><b class="mut">—</b></div></div>'+
         '<div class="sidepad">'+
@@ -1619,14 +1680,13 @@
   // in TABS — Coin / Dev Buy & Bundle / Chat & Live — so the anti-snipe bundle and pump chat each have
   // their own home instead of hiding in a fold.
   function lcChatForMint(mint){
-    const pf="https://pump.fun/coin/"+encodeURIComponent(mint);
-    const room="/t?ca="+encodeURIComponent(mint);
+    const r=findRow(mint)||{tokenMint:mint};
     return '<div style="display:flex;gap:9px;flex-wrap:wrap;margin:6px 0 10px">'+
-      '<a class="wbtn" style="flex:1;min-width:150px;text-align:center" href="'+pf+'" target="_blank" rel="noopener">💬 Open Pump Chat</a>'+
-      '<a class="wbtn" style="flex:1;min-width:150px;text-align:center" href="'+pf+'" target="_blank" rel="noopener">🔴 Go Live on Pump</a>'+
+      '<button class="wbtn" style="flex:1;min-width:150px" onclick="GG.openChat(\''+esc(mint)+'\')">💬 Open Chat &amp; Live</button>'+
+      '<button class="wbtn ghost" style="flex:1;min-width:150px" onclick="GG.open(\''+esc(mint)+'\')">📈 Open &amp; trade</button>'+
     '</div>'+
-    '<p class="mut" style="font-size:11px;margin:0 0 10px">Pump chat &amp; livestream open on pump.fun (they don\'t allow embedding). Your coin\'s SlimeWire room — chart, trades &amp; call board — loads right here:</p>'+
-    '<div style="position:relative;border-radius:12px;overflow:hidden;border:1px solid var(--border2);height:440px"><iframe src="'+esc(room)+'" title="room" loading="eager" style="width:100%;height:100%;border:0;display:block;background:var(--bg)"></iframe></div>';
+    '<p class="mut" style="font-size:11px;margin:0 0 10px">On-site <b>chat</b> (open to everyone) and your <b>dev livestream</b> live right on the coin page — both keep traders on SlimeWire. Going live is gated to your dev wallet. Live chart:</p>'+
+    '<div class="chartwrap" style="position:relative;height:360px;border-radius:12px;overflow:hidden;border:1px solid var(--border2)">'+chartIframe(mint,r)+'</div>';
   }
   function lcWireChat(){const i=$("#lcChatCa");if(!i)return;const refresh=()=>{const m=i.value.trim();const b=$("#lcChatBody");if(b)b.innerHTML=m?lcChatForMint(m):'<p class="mut" style="font-size:12px">Paste a coin CA above to load its chat &amp; live room.</p>';};i.onchange=refresh;i.onkeydown=(e)=>{if(e.key==="Enter")refresh();};}
   async function pollLaunchProgress(aid,btn){
@@ -1866,6 +1926,7 @@
     copyWallet:(w)=>{const i=$("#cpWallet");if(i){i.value=w;i.scrollIntoView({behavior:"smooth",block:"center"});i.focus();toast("Wallet loaded — set your size, then Start copying");}},
     kolProfile:openKolProfile,
     launchChat:(m)=>{state.launchedMint=m;state.launchTab="chat";state._launchKept=true;if(state.route==="launch")renderLaunch();else go("launch");},
+    openChat:(m)=>{state._openTradeTab="chat";go("trade",m);},
     star:(m)=>{const r=(state.rows||[]).find(x=>x.tokenMint===m)||(state.watchRows||[]).find(x=>x.tokenMint===m)||{tokenMint:m};toggleStar(r);},
     enableAlerts:async()=>{const ok=await ensurePushSubscribed();toast(ok?"🔔 Alerts on — you'll get pinged":"Couldn't enable alerts (check browser permission)",!ok);if(state.route==="wallet")renderWallet();},
     shareRef:(link)=>{const t="I'm trading Solana memecoins on SlimeWire — fast terminal, 1-tap snipes, KOL copy. Join with my link:";window.open("https://x.com/intent/tweet?text="+encodeURIComponent(t)+"&url="+encodeURIComponent(link),"_blank","noopener");},

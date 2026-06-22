@@ -227,6 +227,7 @@ const pumpPortalStream = createPumpPortalStream({
     try { recordInsiderLaunch(entry); } catch {}   // INSIDER-LAUNCH machine: known/linked wallet just deployed
     try { recordRecentLauncher(entry); } catch {}  // ROTATION-CATCHER: remember every launcher to funder-resolve
     try { maybeInstantLaunchSnipe(entry); } catch {} // USER SNIPER: ticker match → buy the instant it lands
+    try { recordCoinCreator(entry.mint, entry.event?.traderPublicKey); } catch {} // DEV-LIVE gate: signer = creator wallet
   },
   // Live smart-money capture: record early buyers the instant they trade (see recordEarlyBuyer).
   // ALSO feed the POP RADAR (real-time ignition detector) the live trade flow.
@@ -6936,6 +6937,19 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    // On-site coin chat (read = anyone) so viewers see the room before they sign in.
+    if (request.method === "GET" && pathname === "/api/web/chat") {
+      sendWebJson(request, response, 200, { ok: true, messages: await coinChatMessages(requestUrl.searchParams.get("mint") || "") });
+      return;
+    }
+    // Dev live embed (read = anyone; isDev flag tells the client to show the dev controls).
+    if (request.method === "GET" && pathname === "/api/web/live") {
+      const liveAuth = await authenticateOptionalWebRequest(request);
+      const st = await coinLiveState(requestUrl.searchParams.get("mint") || "", liveAuth?.userId || "guest");
+      sendWebJson(request, response, 200, { ok: true, live: st.live, isDev: st.isDev });
+      return;
+    }
+
     const auth = await authenticateWebRequest(request);
     if (request.method === "GET" && [
       "/api/web/me",
@@ -7367,6 +7381,25 @@ async function handleWebApiRequest(request, response, requestUrl) {
         watchlist: result.watchlist,
         user: await webUserSummary(auth.userId)
       });
+      return;
+    }
+
+    // Post to a coin's chat (any logged-in user). 280 chars, gentle per-user rate limit.
+    if (request.method === "POST" && pathname === "/api/web/chat") {
+      const body = await readJsonRequestBody(request);
+      try {
+        const messages = await postCoinChat(auth.userId, body.mint, body.text);
+        sendWebJson(request, response, 200, { ok: true, messages });
+      } catch (error) { sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) }); }
+      return;
+    }
+    // Set/clear a coin's live embed — gated to the coin's dev (creator) wallet.
+    if (request.method === "POST" && pathname === "/api/web/live") {
+      const body = await readJsonRequestBody(request);
+      try {
+        const live = await setCoinLive(auth.userId, body.mint, body.url, Boolean(body.clear));
+        sendWebJson(request, response, 200, { ok: true, live });
+      } catch (error) { sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) }); }
       return;
     }
 
@@ -36429,6 +36462,134 @@ function normalizeWatchTags(input) {
     if (out.length >= 8) break;
   }
   return out;
+}
+
+// ============================ ON-SITE CHAT + DEV LIVE ============================
+// Native per-coin chat (any logged-in user) + a dev-wallet-gated live embed, so traders stay on
+// SlimeWire instead of bouncing to pump.fun. The "dev wallet" is the coin's CREATOR — captured from
+// the pump creation stream (event.traderPublicKey is the signer who launched it). pump.fun's API is
+// IP-blocked on Render so we can't ask them; the creation tape is our reliable source.
+function coinChatPath() { return path.join(CONFIG.dataDir, "coin-chat.json"); }
+function coinLivePath() { return path.join(CONFIG.dataDir, "coin-live.json"); }
+function coinCreatorsPath() { return path.join(CONFIG.dataDir, "coin-creators.json"); }
+function roomMint(mint) { const m = String(mint || "").trim(); return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(m) ? m : ""; }
+
+let coinCreatorCache = null;
+let coinCreatorWriteTimer = null;
+async function loadCoinCreators() {
+  if (coinCreatorCache) return coinCreatorCache;
+  const store = await readJson(coinCreatorsPath()).catch(() => ({}));
+  coinCreatorCache = (store && typeof store.byMint === "object" && store.byMint) ? store.byMint : {};
+  return coinCreatorCache;
+}
+function recordCoinCreator(mint, wallet) {
+  const m = roomMint(mint); const w = String(wallet || "").trim();
+  if (!m || !solanaPublicKeyLike(w) || !coinCreatorCache) { if (!coinCreatorCache) { void loadCoinCreators().then(() => recordCoinCreator(mint, wallet)); } return; }
+  if (coinCreatorCache[m]) return;
+  coinCreatorCache[m] = w;
+  if (coinCreatorWriteTimer) return;
+  coinCreatorWriteTimer = setTimeout(() => {
+    coinCreatorWriteTimer = null;
+    const keys = Object.keys(coinCreatorCache);
+    const trimmed = keys.length > 8000 ? Object.fromEntries(keys.slice(-6000).map((k) => [k, coinCreatorCache[k]])) : coinCreatorCache;
+    coinCreatorCache = trimmed;
+    void writeJsonFile(coinCreatorsPath(), { byMint: trimmed }).catch(() => {});
+  }, 4000);
+}
+async function coinCreatorWallet(mint) {
+  const m = roomMint(mint); if (!m) return "";
+  const map = await loadCoinCreators();
+  if (map[m]) return map[m];
+  // Fallback for coins we didn't see created live: pump (often blocked on Render) then helius authority.
+  const pump = await getPumpFunTokenMetadata(m, { timeoutMs: 2500 }).catch(() => ({}));
+  const fromPump = firstString(pump.creatorWallet, pump.creator, pump.deployerWallet);
+  if (solanaPublicKeyLike(fromPump)) { recordCoinCreator(m, fromPump); return fromPump; }
+  return "";
+}
+async function userControlsWallet(userId, wallet) {
+  const w = String(wallet || "").trim(); if (!w || !userId || userId === "guest") return false;
+  const rows = await webWalletRows(userId).catch(() => []);
+  if (rows.some((r) => r.publicKey === w)) return true;
+  const profile = await webProfileForUser(userId).catch(() => ({}));
+  return profile?.connectedWallet?.publicKey === w;
+}
+function chatDisplayName(profile, userId) {
+  const h = String(profile?.xHandle || profile?.username || "").replace(/^@/, "").trim();
+  if (h) return h.slice(0, 24);
+  const w = profile?.connectedWallet?.publicKey || "";
+  if (w) return shortMint(w);
+  return "ogre-" + String(userId || "anon").replace(/[^a-zA-Z0-9]/g, "").slice(-4);
+}
+async function readCoinChat() { const s = await readJson(coinChatPath()).catch(() => ({})); if (!s.rooms || typeof s.rooms !== "object") s.rooms = {}; return s; }
+async function coinChatMessages(mint) {
+  const key = roomMint(mint); if (!key) return [];
+  const s = await readCoinChat();
+  return Array.isArray(s.rooms[key]) ? s.rooms[key].slice(-120) : [];
+}
+async function postCoinChat(userId, mint, text) {
+  const key = roomMint(mint);
+  if (!key) { const e = new Error("Invalid coin address."); e.statusCode = 400; throw e; }
+  const body = String(text || "").replace(/[ -]/g, "").replace(/\s+/g, " ").trim().slice(0, 280);
+  if (!body) { const e = new Error("Type a message first."); e.statusCode = 400; throw e; }
+  const profile = await webProfileForUser(userId).catch(() => ({}));
+  const name = chatDisplayName(profile, userId);
+  let messages = [];
+  await withFileLock(coinChatPath(), async () => {
+    const s = await readCoinChat();
+    const arr = Array.isArray(s.rooms[key]) ? s.rooms[key] : [];
+    const last = [...arr].reverse().find((m) => m.uid === String(userId));
+    if (last && Date.now() - Number(last.ts || 0) < 1200) { messages = arr.slice(-120); return; } // gentle anti-spam
+    arr.push({ id: crypto.randomBytes(6).toString("hex"), uid: String(userId), name, text: body, ts: Date.now() });
+    s.rooms[key] = arr.slice(-200);
+    await writeJsonFile(coinChatPath(), s);
+    messages = s.rooms[key].slice(-120);
+  });
+  return messages;
+}
+// Turn a creator-pasted live URL into something embeddable. YouTube/Twitch embed natively; X/Pump
+// can't be iframed so they get a "watch live" card (kind set, embedUrl empty).
+function normalizeLiveEmbed(rawUrl) {
+  const url = String(rawUrl || "").trim();
+  if (!url || !/^https?:\/\//i.test(url)) return null;
+  let m;
+  m = url.match(/(?:youtube\.com\/(?:watch\?v=|live\/|embed\/|shorts\/)|youtu\.be\/)([\w-]{6,})/i);
+  if (m) return { kind: "youtube", embedUrl: `https://www.youtube.com/embed/${m[1]}?autoplay=1&rel=0`, url };
+  m = url.match(/twitch\.tv\/([A-Za-z0-9_]{2,40})(?:[/?#]|$)/i);
+  if (m && !/\/videos\//i.test(url)) return { kind: "twitch", embedUrl: `https://player.twitch.tv/?channel=${m[1]}&parent=slimewire.org&parent=www.slimewire.org&autoplay=true&muted=false`, url };
+  if (/(?:twitter\.com|x\.com)\//i.test(url)) return { kind: "x", embedUrl: "", url };
+  if (/pump\.fun\//i.test(url)) return { kind: "pump", embedUrl: "", url };
+  return { kind: "link", embedUrl: "", url };
+}
+async function readCoinLive() { const s = await readJson(coinLivePath()).catch(() => ({})); if (!s.rooms || typeof s.rooms !== "object") s.rooms = {}; return s; }
+async function coinLiveState(mint, userId) {
+  const key = roomMint(mint); if (!key) return { live: null, isDev: false };
+  const s = await readCoinLive();
+  let isDev = false;
+  if (userId && userId !== "guest") {
+    const creator = await coinCreatorWallet(key);
+    isDev = creator ? await userControlsWallet(userId, creator) : false;
+  }
+  return { live: s.rooms[key] || null, isDev };
+}
+async function setCoinLive(userId, mint, rawUrl, clear) {
+  const key = roomMint(mint);
+  if (!key) { const e = new Error("Invalid coin address."); e.statusCode = 400; throw e; }
+  const creator = await coinCreatorWallet(key);
+  if (!creator) { const e = new Error("Couldn't verify this coin's dev wallet (only coins launched/seen on SlimeWire can go live)."); e.statusCode = 403; throw e; }
+  if (!(await userControlsWallet(userId, creator))) { const e = new Error("Only the coin's dev wallet can go live."); e.statusCode = 403; throw e; }
+  let live = null;
+  let norm = null;
+  if (!clear) {
+    norm = normalizeLiveEmbed(rawUrl);
+    if (!norm) { const e = new Error("Paste a valid YouTube, Twitch, X, or Pump live link."); e.statusCode = 400; throw e; }
+  }
+  await withFileLock(coinLivePath(), async () => {
+    const s = await readCoinLive();
+    if (clear) { delete s.rooms[key]; }
+    else { s.rooms[key] = { ...norm, setByWallet: creator, at: Date.now() }; live = s.rooms[key]; }
+    await writeJsonFile(coinLivePath(), s);
+  });
+  return live;
 }
 
 async function webSlimewireTraders() {
