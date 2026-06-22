@@ -203,6 +203,10 @@
   .tstrip{display:flex;align-items:center;gap:2px;padding:0 16px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);flex:0 0 auto;height:40px;background:rgba(7,11,7,.6)}
   .tstrip button{padding:9px 12px;font-size:12px;font-weight:600;color:var(--muted);border-bottom:2px solid transparent}
   .tstrip button.on{color:var(--green);border-bottom-color:var(--green)}
+  .ctmenu{display:none;position:absolute;right:0;top:30px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:6px;min-width:170px;z-index:30;box-shadow:0 10px 28px rgba(0,0,0,.55)}
+  .ctmore.open .ctmenu{display:block}
+  .ctmenu a{display:block;padding:8px 11px;font-size:12px;color:var(--text);border-radius:7px;text-decoration:none}
+  .ctmenu a:hover{background:rgba(255,255,255,.05)}
   .chartskel{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#060906;z-index:1}
   .txpane,.pospane{flex:1 1 auto;min-height:0;overflow:auto;background:#060906}
   .txtbl{width:100%;border-collapse:collapse;font-size:12px}
@@ -783,8 +787,13 @@
           '<button data-ct="chart" class="on">Chart</button>'+
           '<button data-ct="tx">Transactions</button>'+
           '<button data-ct="pos">Positions</button>'+
-          '<a class="chip" style="margin-left:auto" href="https://solscan.io/token/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener">Solscan ↗</a>'+
-          '<a class="chip" href="https://dexscreener.com/solana/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener">DexScreener ↗</a></div>'+
+          '<div class="ctmore" style="margin-left:auto;position:relative"><button class="chip" id="ctMoreBtn">••• More</button><div class="ctmenu" id="ctMore">'+
+            '<a href="https://pump.fun/coin/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener">💬 Pump.fun chat</a>'+
+            '<a href="https://pump.fun/coin/'+encodeURIComponent(mint)+'?tab=stream" target="_blank" rel="noopener">🔴 Live stream</a>'+
+            '<a href="https://pump.fun/coin/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener">🚀 pump.fun</a>'+
+            '<a href="https://solscan.io/token/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener">🔎 Solscan</a>'+
+            '<a href="https://dexscreener.com/solana/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener">📊 DexScreener</a>'+
+          '</div></div></div>'+
         '<div class="chartwrap" data-pane="chart">'+chartIframe(mint,r)+'</div>'+
         '<div class="txpane" data-pane="tx" style="display:none"></div>'+
         '<div class="pospane" data-pane="pos" style="display:none"></div>'+
@@ -801,6 +810,7 @@
           '<div class="secbox" id="secbox"><h4>🛡 Token Data &amp; Security</h4><div class="loading" style="padding:14px"><span class="spin"></span></div></div>'+
         '</div></div></div>';
     wireTradePanel(mint,r);updateWselLine();paintPresetSel();wireCtab();
+    const mb=$("#ctMoreBtn");if(mb)mb.onclick=(e)=>{e.stopPropagation();mb.parentNode.classList.toggle("open");};
     if(state.token&&!(state.presets.trade||[]).length){loadPresets().then(()=>{if(state.route==="trade")paintPresetSel();});}
     if(!r){const rows=await fetchPairs(tabById("best"));r=rows.find(x=>x.tokenMint===mint)||null;if(r&&state.route==="trade"){state.tradeRow=r;$("#thead").innerHTML=theadHtml(r);fillPerf(r);}}
     else fillPerf(r);
@@ -977,14 +987,19 @@
   // ---------- portfolio ----------
   async function renderPortfolio(){
     setActiveView("v-portfolio");subbarPortfolio();
-    const view=$("#v-portfolio");view.innerHTML='<div class="loading"><span class="spin"></span></div>';
+    const view=$("#v-portfolio");
     if(!state.token){view.innerHTML='<div class="empty"><div class="big">📊</div><div><b>No account yet</b><br><span class="mut">Set up a wallet to start tracking your positions and PnL here.</span></div><div class="cta" onclick="GG.go(\'wallet\')">Set up a wallet</div></div>';return;}
     if(state.portfolioTab==="cards"){return renderPnlCards(view);}
+    // Instant: show the last-known positions immediately, refresh in the background, repaint.
+    if(state.posCache)paintPositions(view,state.posCache);else view.innerHTML='<div class="loading"><span class="spin"></span></div>';
     const {ok,status,d}=await api("/api/web/positions?fast=true");
-    if(state.route!=="portfolio")return;
+    if(state.route!=="portfolio"||state.portfolioTab!=="positions")return;
     if(status===401){setToken("");renderPortfolio();return;}
-    if(!ok||!d||!d.ok){view.innerHTML='<div class="empty"><div class="big">⚠</div><div><b>Could not load positions</b><br><span class="mut">'+esc((d&&d.error)||"Try again in a moment.")+'</span></div></div>';return;}
-    const pos=d.positions||[];
+    if(!ok||!d||!d.ok){if(!state.posCache)view.innerHTML='<div class="empty"><div class="big">⚠</div><div><b>Could not load positions</b><br><span class="mut">'+esc((d&&d.error)||"Try again in a moment.")+'</span></div></div>';return;}
+    state.posCache=d.positions||[];paintPositions(view,state.posCache);
+  }
+  function paintPositions(view,pos){
+    if(state.route!=="portfolio"||state.portfolioTab!=="positions")return;
     if(!pos.length){view.innerHTML='<div class="empty"><div class="big">🫧</div><div><b>No open positions</b><br><span class="mut">Buy something from Trending or Trenches and it shows up here.</span></div><div class="cta" onclick="GG.go(\'trending\')">Find a play</div></div>';return;}
     view.innerHTML='<div class="pcard"><table class="tbl"><thead><tr><th class="l">Asset</th><th>Cost</th><th>Value</th><th>PNL</th><th class="hideMb">Amount</th><th></th></tr></thead><tbody>'+
       pos.map(p=>{const pnl=Number(p.openPnlSol),pct=p.openPnlPercent,cls=isFinite(pnl)?(pnl>=0?"up":"down"):"mut";
@@ -1103,9 +1118,17 @@
   }
   async function renderWallet(){
     setActiveView("v-wallet");subbarWallet();
-    const view=$("#v-wallet");view.innerHTML='<div class="loading"><span class="spin"></span></div>';
-    if(state.token){await refreshWallets();await loadPresets();await loadMe();}
+    const view=$("#v-wallet");
+    // Instant: paint from whatever we already have, then refresh balances/presets in the background
+    // and repaint when they land — no waiting on chain RPC just to show the page.
+    if(state.token&&!state.wallets.length&&!state._walletsLoaded)view.innerHTML='<div class="loading"><span class="spin"></span></div>';
+    else paintWallet();
+    if(state.token)Promise.all([refreshWallets(),loadPresets(),loadMe()]).then(()=>{state._walletsLoaded=true;if(state.route==="wallet")paintWallet();}).catch(()=>{});
+    else paintWallet();
+  }
+  function paintWallet(){
     if(state.route!=="wallet")return;
+    const view=$("#v-wallet");if(!view)return;
     const wrap=el("div","wgrid");
     if(!state.token){
       wrap.innerHTML='<div class="wbox"><h3>👛 Set up your trading wallet</h3><p class="sub">No sign-up, no email needed. Either create a fresh SlimeWire wallet, or connect Phantom/Solflare and move some SOL into one — then trade right here.</p>'+
@@ -1525,6 +1548,8 @@
     if(db){db.onclick=e=>{e.stopPropagation();drop.classList.toggle("open");};
       drop.querySelectorAll(".dropmenu a").forEach(a=>a.addEventListener("click",()=>drop.classList.remove("open")));
       document.addEventListener("click",()=>drop.classList.remove("open"));}})();
+  // Close the trade-view ••• More dropdown on any outside click.
+  document.addEventListener("click",(e)=>{if(!e.target.closest(".ctmore"))document.querySelectorAll(".ctmore.open").forEach(x=>x.classList.remove("open"));});
 
   // ---------- expose + boot ----------
   window.GG={open:(m)=>go("trade",m),openSell:(m)=>{state.pendingSell=m;go("trade",m);},go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,
