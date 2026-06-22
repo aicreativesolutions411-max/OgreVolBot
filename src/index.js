@@ -8360,7 +8360,10 @@ async function resolveTokenAvatarRecord(mint = "", row = {}) {
   }
 
   const [pumpMeta, dexMeta, heliusMeta] = await Promise.all([
-    getPumpFunTokenMetadata(mint, { timeoutMs: 1_500, cacheTtlMs: 30 * 60 * 1000 }).catch(() => ({})),
+    // 3.5s (not 1.5s): pump.fun is reachable from Render but SLOW on the shared IP — at 1.5s it
+    // timed out, so the image fell back to Helius and the SOCIALS (only pump has them this early)
+    // never landed. This call is background + cached 30min per mint, so the extra wait is one-time.
+    getPumpFunTokenMetadata(mint, { timeoutMs: 3_500, cacheTtlMs: 30 * 60 * 1000 }).catch(() => ({})),
     getDexTokenMetadata(mint, { timeoutMs: 1_500 }).catch(() => ({})),
     // Helius DAS reads on-chain metadata -> reliable image (Helius CDN) even for
     // brand-new coins that aren't on DexScreener yet. This is the key fallback.
