@@ -22453,16 +22453,75 @@ async function fetchPumpSnipeCandidates(options = {}) {
   return uniqueSniperCandidates([...pumpLatest, ...search, ...latestFirst, ...topBoostBackup]);
 }
 
+// GeckoTerminal trending pools — a FREE (no-key) independent source of genuinely-trending,
+// established Solana pools. Fixes the "Trending/Surging/Top Volume/Migrated re-rank the same
+// fresh pump pool and look thin" problem: New stays fresh (these are older so they sink under
+// the fresh-sort), while the metric/best/graduated tabs finally get real movers + volume.
+let _geckoTrendingCache = { at: 0, rows: [] };
+async function fetchGeckoTrendingCandidates(options = {}) {
+  const ttl = Math.max(6_000, Number(options.ttlMs || 0));
+  if (!options.force && _geckoTrendingCache.rows.length && Date.now() - _geckoTrendingCache.at < ttl) return _geckoTrendingCache.rows;
+  try {
+    const data = await fetchJson(
+      "https://api.geckoterminal.com/api/v2/networks/solana/trending_pools?include=base_token&page=1",
+      { headers: { Accept: "application/json" }, timeoutMs: options.timeoutMs || 2_500 }
+    ).catch(() => null);
+    const pools = arrayFromApiData(data, ["data"]);
+    if (!pools.length) return _geckoTrendingCache.rows || [];
+    const tokenMap = new Map();
+    for (const inc of (Array.isArray(data?.included) ? data.included : [])) {
+      if (inc?.type === "token" && inc.id) tokenMap.set(inc.id, inc.attributes || {});
+    }
+    const rows = pools.map((pool) => {
+      const a = pool?.attributes || {};
+      const baseId = pool?.relationships?.base_token?.data?.id || "";
+      const mint = String(baseId).replace(/^solana_/, "");
+      if (!mint || mint === SOL_MINT) return null;
+      const tok = tokenMap.get(baseId) || {};
+      const dexId = pool?.relationships?.dex?.data?.id || "";
+      const pc = a.price_change_percentage || {};
+      const vol = a.volume_usd || {};
+      const tx = a.transactions || {};
+      const grad = /raydium|meteora|orca|pumpswap/i.test(dexId) && mint.toLowerCase().endsWith("pump");
+      return {
+        tokenMint: mint,
+        source: "gecko-trending",
+        profile: {
+          symbol: tok.symbol || String(a.name || "").split(" / ")[0] || "",
+          name: tok.name || "",
+          icon: tok.image_url || "",
+          imageUrl: tok.image_url || "",
+          dexId, dexName: dexId,
+          pairAddress: a.address || "",
+          pairUrl: "",
+          raydiumPool: /raydium|meteora|orca/i.test(dexId) ? (a.address || "") : "",
+          graduated: grad,
+          pairCreatedAt: a.pool_created_at || null,
+          marketCap: firstNumber(a.market_cap_usd, a.fdv_usd),
+          fdv: a.fdv_usd || null,
+          liquidityUsd: Number(a.reserve_in_usd) || null,
+          liquidity: { usd: Number(a.reserve_in_usd) || null },
+          volume: { m5: Number(vol.m5) || 0, h1: Number(vol.h1) || 0, h6: Number(vol.h6) || 0, h24: Number(vol.h24) || 0 },
+          txns: { m5: { buys: tx.m5?.buys || 0, sells: tx.m5?.sells || 0 }, h1: { buys: tx.h1?.buys || 0, sells: tx.h1?.sells || 0 }, h24: { buys: tx.h24?.buys || 0, sells: tx.h24?.sells || 0 } },
+          priceChange: { m5: Number(pc.m5) || 0, h1: Number(pc.h1) || 0, h6: Number(pc.h6) || 0, h24: Number(pc.h24) || 0 }
+        }
+      };
+    }).filter(Boolean);
+    if (rows.length) _geckoTrendingCache = { at: Date.now(), rows };
+    return rows;
+  } catch { return _geckoTrendingCache.rows || []; }
+}
 async function fetchLivePairCandidates(options = {}) {
   const ttlMs = Number.isFinite(Number(options.ttlMs)) ? Number(options.ttlMs) : 500;
   const safeBucket = normalizeLivePairBucket(options.bucket);
-  const [photon, pumpLatest, dexLatest, dexBucketSearch] = await Promise.all([
+  const [photon, pumpLatest, dexLatest, dexBucketSearch, geckoTrending] = await Promise.all([
     fetchPhotonNewPairCandidates({ ...options, ttlMs }).catch(() => []),
     fetchPumpFunLatestCandidates({ ...options, timeoutMs: options.timeoutMs || 1_800 }).catch(() => []),
     fetchSniperCandidates({ ...options, ttlMs, timeoutMs: options.timeoutMs || 1_800 }).catch(() => []),
     safeBucket === "live"
       ? Promise.resolve([])
-      : fetchDexSearchCandidatesForLiveBucket(safeBucket, options).catch(() => [])
+      : fetchDexSearchCandidatesForLiveBucket(safeBucket, options).catch(() => []),
+    fetchGeckoTrendingCandidates({ ttlMs, timeoutMs: 2_500 }).catch(() => [])
   ]);
   const freshDexRows = dexLatest.filter((candidate) => candidate.source !== "top-boost" || safeBucket !== "live");
   // The fresh-only sources (realtime PumpPortal creations, Photon new-pairs, pump-latest) are
@@ -22475,7 +22534,7 @@ async function fetchLivePairCandidates(options = {}) {
   const realtime = (safeBucket === "live") ? pumpPortalStream.getCreationCandidates({ limit: 150 }) : [];
   const photonRows = freshOnly ? photon : [];
   const pumpRows = freshOnly ? pumpLatest : [];
-  return uniqueSniperCandidates([...realtime, ...photonRows, ...pumpRows, ...dexBucketSearch, ...freshDexRows])
+  return uniqueSniperCandidates([...realtime, ...photonRows, ...pumpRows, ...geckoTrending, ...dexBucketSearch, ...freshDexRows])
     .sort(compareLivePairCandidates);
 }
 
@@ -22500,7 +22559,7 @@ const LIVE_CATEGORY_QUERIES = {
 };
 function livePairCategoryFilter(category) {
   // Only the discovery categories need a post-filter; the metric tabs rank the whole pool.
-  if (category === "graduating") return (row) => { const p = Number(slimeScopeProgressPct(row)); return (isPumpStyleToken(row) || row.isPump) && p >= 50 && !(row.graduated || row.isGraduated); };
+  if (category === "graduating") return (row) => { const p = Number(slimeScopeProgressPct(row)); return (isPumpStyleToken(row) || row.isPump) && p >= 20 && !(row.graduated || row.isGraduated); };
   if (category === "graduated") return (row) => Boolean(row.graduated || row.isGraduated || isGraduatedSlimeScopePair(row));
   if (category === "dexBoosted") return (row) => Boolean(row.boosted || row.boosts || /boost/i.test(String(row.source || "")));
   if (category === "pumpTrending") return (row) => Boolean(isPumpStyleToken(row) || row.isPump || /pump/i.test(String(row.source || "")));
