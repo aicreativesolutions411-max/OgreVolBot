@@ -216,6 +216,10 @@ const pumpPortalStream = createPumpPortalStream({
   // Wider trade coverage = more early-buyer data captured per cycle (the brain's raw material).
   maxTradeSubs: 150,
   getSolUsd: () => (Number.isFinite(solUsdPriceCache?.value) && solUsdPriceCache.value > 0 ? solUsdPriceCache.value : null),
+  // Resolve a fresh coin's socials from its metadata JSON (the creation event's `uri`). pump.fun's
+  // API is IP-blocked on Render, but the metadata JSON on IPFS is not — this is how Trenches "New"
+  // rows get their X/Telegram/Website icons seconds after launch. Cached 30min/mint.
+  resolveCreationSocials: (mint, uri) => fetchOffchainTokenSocials(uri, mint),
   log: (message) => console.log(`[pumpportal-ws] ${message}`),
   // Instant dev-watch: every pump.fun creation carries its creator wallet.
   onCreation: (entry) => {

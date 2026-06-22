@@ -312,6 +312,14 @@ export function createPumpPortalStream(options = {}) {
       if (rows.length >= limit) break;
       const event = entry.event;
       const latest = entry.lastTrade;
+      // Resolve this coin's socials once from its metadata JSON (creation `uri`), then cache on the
+      // entry so every future candidate carries X/Telegram/Website. Fire-and-forget; fills next poll.
+      if (!entry.socials && event.uri && typeof config.resolveCreationSocials === "function") {
+        entry.socialsPending = entry.socialsPending || Promise.resolve(config.resolveCreationSocials(entry.mint, String(event.uri)))
+          .then((soc) => { entry.socials = soc || {}; })
+          .catch(() => { entry.socials = {}; });
+      }
+      const socials = entry.socials || {};
       const marketCapSol = Number(latest?.marketCapSol) || Number(event.marketCapSol) || null;
       const vSol = Number(latest?.vSolInBondingCurve) || Number(event.vSolInBondingCurve) || null;
       const stats5m = tradeStatsForMint(entry.mint);
@@ -335,6 +343,9 @@ export function createPumpPortalStream(options = {}) {
           name: String(event.name || ""),
           description: "",
           metadataUri: String(event.uri || ""),
+          twitterUrl: socials.twitterUrl || "",
+          telegramUrl: socials.telegramUrl || "",
+          websiteUrl: socials.websiteUrl || "",
           pairCreatedAt: entry.at,
           marketCap: marketCapSol && solUsd ? marketCapSol * solUsd : null,
           marketCapSol,
