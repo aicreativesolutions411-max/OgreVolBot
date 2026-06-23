@@ -46313,36 +46313,51 @@ async function buildPumpFrontendCategory(userId, cat, sort, options = {}) {
 // real volume + buy pressure + momentum + KOL signal + low-cap fit − rug penalty). Best grade first.
 async function buildSlimePicksCategory(userId, sort, options = {}) {
   const force = Boolean(options.force);
-  const cats = ["earlyMomentum", "graduating", "pumpTrending", "memeMovers"];
-  const pools = await Promise.all(cats.map((c) =>
+  // The sub-$30k universe is two kinds of coin, and we need BOTH or the list is empty:
+  //  (1) coins already trading on a DEX (carry real volume/liquidity) — the "steady" ones; and
+  //  (2) pump BONDING climbers (have MC + curve progress but no DEX volume yet) — most sub-$30k coins.
+  // Verified live: of ~99 search hits ~45 are sub-$30k but only ~4 have real DEX liquidity, so a
+  // liquidity-only gate (the first cut) returned ZERO. So: gate the DEX set on real traction, take the
+  // bonding set on curve progress, merge, and rank ALL of them by the winner model (liquid+volume coins
+  // naturally score to the top; dead dust is dropped).
+  const cats = ["earlyMomentum", "pumpTrending", "memeMovers"];
+  const dexPools = await Promise.all(cats.map((c) =>
     fetchLiveCategoryCandidates(c, { ttlMs: 6_000, timeoutMs: 4_000, force }).catch(() => [])));
-  const flat = pools.flat();
-  const seen = new Set();
-  let rows = flat.map(livePairCandidateToRow).filter(Boolean)
-    .filter((row) => { const m = String(row.tokenMint || ""); if (!m || seen.has(m)) return false; seen.add(m); return true; })
-    .filter((row) => !hasHardBlockedLivePairRisk(row));
-  // Sub-$30k entries with a REAL (non-dust) market — a steady pick has buyers + liquidity, not a ghost.
-  rows = rows.filter((row) => {
+  const dexRows = dexPools.flat().map(livePairCandidateToRow).filter(Boolean).filter((row) => {
     const mc = Number(firstMeaningfulNumber(row.marketCap, row.fdv)) || 0;
     const liq = Number(row.liquidityUsd) || 0;
     const vol = Number(firstMeaningfulNumber(row.volumeH24, row.volumeH1, row.volume5m)) || 0;
-    return mc >= 2_000 && mc <= 30_000 && (liq >= 1_500 || vol >= 800);
+    return mc >= 2_000 && mc <= 30_000 && (liq >= 800 || vol >= 300); // real traders, not a ghost
   });
+  // pump bonding climbers: paginate the recent-trade on-curve list, keep sub-$30k coins ≥30% bonded.
+  let pumpRows = [];
+  if (pumpFrontendEnabled()) {
+    try {
+      const pages = await Promise.all([0, 50, 100].map((off) =>
+        fetchPumpFrontend(`/coins?offset=${off}&limit=50&sort=last_trade_timestamp&order=DESC&includeNsfw=false&complete=false`, { force })));
+      const cands = pages.flat().map((c) => pumpFrontendToCandidate(c, "slimePicks")).filter(Boolean)
+        .filter((c) => { const mc = Number(c.metadata.marketCap) || 0, p = Number(c.bondingCurveProgress) || 0; return mc >= 2_000 && mc <= 30_000 && p >= 30 && p < 100; });
+      pumpRows = cands.map((c) => { const r = livePairCandidateToRow(c); if (r) { r.bondingCurveProgress = Number(c.bondingCurveProgress); r.bondingProgressPct = Number(c.bondingCurveProgress); } return r; }).filter(Boolean);
+    } catch {}
+  }
+  const seen = new Set();
+  let rows = dexRows.concat(pumpRows)
+    .filter((row) => { const m = String(row.tokenMint || ""); if (!m || seen.has(m)) return false; seen.add(m); return true; })
+    .filter((row) => !hasHardBlockedLivePairRisk(row));
   for (const row of rows) {
     const s = computeBestPickScore(row);
     row.bestPickScore = s.score; row.bestPickLabel = s.label; row.bestPickInputs = s.inputs; row.bestPickWarnings = s.warnings;
     row.slimeScopeCategory = "slime-pick";
   }
-  rows = rows.filter((row) => Number(row.bestPickScore) >= 50)
-    .sort((a, b) => Number(b.bestPickScore) - Number(a.bestPickScore));
+  rows = rows.sort((a, b) => Number(b.bestPickScore) - Number(a.bestPickScore));
   const targetLimit = 40;
   const safeRows = decorateWebLivePairAvatars(rows.slice(0, targetLimit));
   recordCategoryMints("slimePicks", safeRows);
   void persistPostgresLivePairRows(safeRows, { reason: "live-pairs:slime-picks" }).catch(() => false);
   return {
     label: "slimePicks", bucket: "live", sort, category: "cat:slimePicks", refreshCount: 0,
-    scanned: flat.length, qualified: rows.length, count: safeRows.length,
-    rawProviderCount: flat.length, backendReturnedCount: safeRows.length,
+    scanned: dexRows.length + pumpRows.length, qualified: rows.length, count: safeRows.length,
+    rawProviderCount: dexPools.flat().length + pumpRows.length, backendReturnedCount: safeRows.length,
     pageSize: targetLimit, maxPageSize: targetLimit, hasMore: rows.length > safeRows.length, nextCursor: null,
     source: "slime-picks", providerStatus: "ok", filteredOutCount: Math.max(0, rows.length - safeRows.length),
     rows: safeRows.map(webLivePairRow), refreshedAt: new Date().toISOString(), refreshSeconds: CONFIG.livePairsRefreshSeconds,
