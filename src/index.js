@@ -43422,6 +43422,7 @@ let topWalletList = { at: 0, wallets: [] };
 let topWalletPollAt = 0;
 let topWalletPollCursor = 0;
 let topWalletPollInFlight = null;
+let topWalletDebug = { wallets: 0, sigsNew: 0, txTried: 0, txNull: 0, buys: 0, at: 0 };
 
 async function refreshTopWalletList() {
   if (topWalletList.wallets.length && Date.now() - topWalletList.at < TOP_WALLET_LIST_TTL_MS) return topWalletList.wallets;
@@ -43469,10 +43470,12 @@ async function pollTopWalletBuys() {
     const start = all.length ? (topWalletPollCursor % all.length) : 0;
     topWalletPollCursor = (topWalletPollCursor + 4) % Math.max(1, all.length);
     const wallets = all.length ? all.slice(start).concat(all.slice(0, start)) : all;
+    const dbg = { wallets: 0, sigsNew: 0, txTried: 0, txNull: 0, buys: 0 };
     for (const w of wallets) {
       if (txBudget <= 0) break;
       let sigs;
       try { sigs = await rpcRead("top-wallet sigs", (c) => c.getSignaturesForAddress(new PublicKey(w.wallet), { limit: 8 })); } catch { continue; }
+      dbg.wallets += 1;
       let seen = topWalletSeenSigs.get(w.wallet); if (!seen) { seen = new Set(); topWalletSeenSigs.set(w.wallet, seen); }
       for (const s of (sigs || [])) {
         const sig = s?.signature; if (!sig || seen.has(sig)) continue;
@@ -43481,17 +43484,18 @@ async function pollTopWalletBuys() {
         const when = (Number(s?.blockTime) || 0) * 1000;
         if (when && now - when > TOP_WALLET_WINDOW_MS) continue;
         if (txBudget <= 0) break;
-        txBudget -= 1;
-        let tx; try { tx = await rpcRead("top-wallet tx", (c) => c.getParsedTransaction(sig, { maxSupportedTransactionVersion: 0 })); } catch { continue; }
-        const meta = tx?.meta; if (!meta) continue;
+        txBudget -= 1; dbg.sigsNew += 1; dbg.txTried += 1;
+        let tx; try { tx = await rpcRead("top-wallet tx", (c) => c.getParsedTransaction(sig, { maxSupportedTransactionVersion: 0 })); } catch { tx = null; }
+        const meta = tx?.meta; if (!meta) { dbg.txNull += 1; continue; }
         const pre = tokenBalanceMapForWallet(meta.preTokenBalances || [], w.wallet);
         const post = tokenBalanceMapForWallet(meta.postTokenBalances || [], w.wallet);
         let mint = null, best = 0;
         for (const [m, amt] of post) { if (TOP_WALLET_STABLES.has(m)) continue; const d = amt - (pre.get(m) || 0); if (d > best) { best = d; mint = m; } }
-        if (mint && best > 0) rememberTopWalletBuy(w.wallet, w, mint, when || now);
+        if (mint && best > 0) { rememberTopWalletBuy(w.wallet, w, mint, when || now); dbg.buys += 1; }
       }
       if (seen.size > 40) topWalletSeenSigs.set(w.wallet, new Set([...seen].slice(-30)));
     }
+    topWalletDebug = { ...dbg, at: now };
     for (const [mint, g] of topWalletBuys) {
       for (const [bw, b] of g.buyers) if (now - b.at > TOP_WALLET_WINDOW_MS) g.buyers.delete(bw);
       if (!g.buyers.size) topWalletBuys.delete(mint);
@@ -43518,7 +43522,7 @@ async function topWalletsFeed(options = {}) {
     r.marketCap = Number(firstMeaningfulNumber(m.marketCap, m.fdv)) || null;
     r.dexUrl = dexScreenerUrl(r.tokenMint);
   }
-  return { rows, walletCount: topWalletList.wallets.length, source: CONFIG.solanaTrackerApiKey ? "st+rpc" : "rpc", updatedAt: new Date().toISOString() };
+  return { rows, walletCount: topWalletList.wallets.length, source: CONFIG.solanaTrackerApiKey ? "st+rpc" : "rpc", debug: topWalletDebug, updatedAt: new Date().toISOString() };
 }
 
 async function webKolScan(userId, mode = "hot", wallet = "") {
