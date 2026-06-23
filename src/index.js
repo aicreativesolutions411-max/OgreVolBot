@@ -46105,8 +46105,9 @@ async function buildPumpFrontendCategory(userId, cat, sort, options = {}) {
   const coins = await fetchPumpFrontend(path, { force });
   let cands = coins.map((c) => pumpFrontendToCandidate(c, cat)).filter(Boolean);
   if (cat === "graduating") {
-    // Climbing the curve: not migrated, 45-99% bonded — closest to graduating first.
-    cands = cands.filter((c) => { const p = Number(c.bondingCurveProgress) || 0; return !c.graduated && p >= 45 && p < 100; })
+    // Climbing the curve: not migrated, 45-99% bonded, AND MC under ~$100k (a real bonding coin graduates
+    // near ~$69k — anything showing $200k+/complete=false is a pumpswap-migrated coin, not "about to bond").
+    cands = cands.filter((c) => { const p = Number(c.bondingCurveProgress) || 0, mc = Number(c.metadata.marketCap) || 0; return !c.graduated && p >= 45 && p < 100 && mc > 0 && mc <= 100000; })
       .sort((a, b) => Number(b.bondingCurveProgress) - Number(a.bondingCurveProgress));
   } else {
     cands = cands.filter((c) => c.graduated && (Number(c.metadata.marketCap) || 0) >= 15000);
