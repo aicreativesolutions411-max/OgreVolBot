@@ -43414,12 +43414,13 @@ function flattenParsedInstructions(tx) {
 const TOP_WALLET_WINDOW_MS = 45 * 60 * 1000;
 const TOP_WALLET_LIST_TTL_MS = 10 * 60 * 1000;
 const TOP_WALLET_POLL_TTL_MS = 40 * 1000;
-const TOP_WALLET_MAX_TX_PER_POLL = 26;
+const TOP_WALLET_MAX_TX_PER_POLL = 40;
 const TOP_WALLET_STABLES = new Set([SOL_MINT, "So11111111111111111111111111111111111111112", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"]);
 const topWalletBuys = new Map();        // mint -> { lastAt, buyers: Map(wallet -> { name, roi, pfp, at }) }
 const topWalletSeenSigs = new Map();    // wallet -> Set(sig) (bounded)
 let topWalletList = { at: 0, wallets: [] };
 let topWalletPollAt = 0;
+let topWalletPollCursor = 0;
 let topWalletPollInFlight = null;
 
 async function refreshTopWalletList() {
@@ -43455,13 +43456,18 @@ function rememberTopWalletBuy(wallet, info, mint, when) {
 async function pollTopWalletBuys() {
   if (topWalletPollInFlight) return topWalletPollInFlight;
   topWalletPollInFlight = (async () => {
-    const wallets = await refreshTopWalletList();
+    const all = await refreshTopWalletList();
     let txBudget = TOP_WALLET_MAX_TX_PER_POLL;
     const now = Date.now();
+    // Round-robin the start wallet each poll so all wallets get covered over a few passes instead of the
+    // budget always burning on the first few (rotation = full coverage within ~1-2 panel polls).
+    const start = all.length ? (topWalletPollCursor % all.length) : 0;
+    topWalletPollCursor = (topWalletPollCursor + 4) % Math.max(1, all.length);
+    const wallets = all.length ? all.slice(start).concat(all.slice(0, start)) : all;
     for (const w of wallets) {
       if (txBudget <= 0) break;
       let sigs;
-      try { sigs = await rpcRead("top-wallet sigs", (c) => c.getSignaturesForAddress(new PublicKey(w.wallet), { limit: 6 })); } catch { continue; }
+      try { sigs = await rpcRead("top-wallet sigs", (c) => c.getSignaturesForAddress(new PublicKey(w.wallet), { limit: 8 })); } catch { continue; }
       let seen = topWalletSeenSigs.get(w.wallet); if (!seen) { seen = new Set(); topWalletSeenSigs.set(w.wallet, seen); }
       for (const s of (sigs || [])) {
         const sig = s?.signature; if (!sig || seen.has(sig)) continue;
