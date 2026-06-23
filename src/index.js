@@ -22497,70 +22497,6 @@ async function getGeckoTerminalTokenMetadata(tokenMint, options = {}) {
   return value;
 }
 
-// Batch volume/liquidity/price/MC from GeckoTerminal's multi-token endpoint (up to 30 mints/call, FREE,
-// reliable from Render — it already powers the Surging/Volume tabs). Used to fill VOLUME on the
-// pump-frontend tabs (Trending/Migrated), whose source list carries no volume field. Cached 30s/mint so
-// this adds only a couple of Gecko calls per refresh; on any failure it returns what it has (the client
-// DexScreener enrichment still tops it up over the user's IP, so the feed never depends on this).
-const geckoMultiCache = new Map();
-async function geckoMultiTokenStats(mints, { ttlMs = 30_000, force = false } = {}) {
-  const out = new Map();
-  const need = [];
-  for (const m of (Array.isArray(mints) ? mints : [])) {
-    const key = String(m || "").trim();
-    if (!key || !solanaPublicKeyLike(key)) continue;
-    const cached = geckoMultiCache.get(key);
-    if (!force && cached && Date.now() - cached.at < ttlMs) out.set(key, cached);
-    else if (!need.includes(key)) need.push(key);
-  }
-  const headers = { Accept: "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" };
-  for (let i = 0; i < need.length && i < 60; i += 30) {
-    const chunk = need.slice(i, i + 30);
-    try {
-      const data = await fetchJson(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/multi/${chunk.join(",")}`, { headers, timeoutMs: 2_500 });
-      for (const d of arrayFromApiData(data)) {
-        const a = d?.attributes || {};
-        const mint = String(a.address || "").trim();
-        if (!mint) continue;
-        const vol = typeof a.volume_usd === "object" && a.volume_usd ? a.volume_usd : {};
-        const rec = {
-          at: Date.now(),
-          vol24: Number(vol.h24) || 0,
-          volH6: Number(vol.h6) || 0,
-          volH1: Number(vol.h1) || 0,
-          liq: Number(a.total_reserve_in_usd) || 0,
-          mc: firstMeaningfulNumber(a.market_cap_usd, a.fdv_usd) || 0,
-          price: Number(a.price_usd) || 0,
-          img: firstString(a.image_url)
-        };
-        geckoMultiCache.set(mint, rec);
-        out.set(mint, rec);
-      }
-    } catch {
-      // Gecko throttled/blip — skip; the client enrichment fills volume over the user's IP regardless.
-    }
-  }
-  return out;
-}
-
-// Fill volume / liquidity / MC / pfp on feed rows that arrived without them (pump-frontend lists carry
-// no volume). Mutates rows in place; only sets fields that are currently empty so live values win.
-async function enrichRowsWithGeckoVolume(rows, options = {}) {
-  const targets = (Array.isArray(rows) ? rows : []).filter((r) => r && r.tokenMint).slice(0, 60);
-  if (!targets.length) return rows;
-  const stats = await geckoMultiTokenStats(targets.map((r) => r.tokenMint), options);
-  if (!stats.size) return rows;
-  for (const r of targets) {
-    const g = stats.get(String(r.tokenMint));
-    if (!g) continue;
-    if (g.vol24 > 0 && !(Number(r.volumeH24) > 0)) r.volumeH24 = g.vol24;
-    if (g.volH1 > 0 && !(Number(r.volumeH1) > 0)) r.volumeH1 = g.volH1;
-    if (g.liq > 0 && !(Number(r.liquidityUsd) > 0)) r.liquidityUsd = g.liq;
-    if (g.mc > 0 && !(Number(r.marketCap) > 0)) r.marketCap = g.mc;
-    if (g.img && !(r.imageUrl || r.avatarUrl)) r.imageUrl = g.img;
-  }
-  return rows;
-}
 
 // Pump.fun creator launches: the dev's own history straight from the source. Cached
 // 10 minutes; this is what fills Dev Info for the pump tokens that dominate the feeds.
@@ -46359,12 +46295,8 @@ async function buildPumpFrontendCategory(userId, cat, sort, options = {}) {
     .filter((row) => !hasHardBlockedLivePairRisk(row));
   if (cat === "graduating") rows.sort((a, b) => Number(b.bondingCurveProgress || 0) - Number(a.bondingCurveProgress || 0));
   const targetLimit = 60;
-  // pump's list carries no volume — fill it (and liquidity/MC) server-side from GeckoTerminal so the
-  // graduated tabs (Trending/Migrated/Graduated) ship WITH volume instead of "—". Bonding "graduating"
-  // coins aren't on a DEX, so skip them (Gecko has nothing; the curve is the signal there).
-  if (cat === "dexTrending" || cat === "graduated") {
-    try { await enrichRowsWithGeckoVolume(rows.slice(0, targetLimit), { force: Boolean(options.force) }); } catch {}
-  }
+  // Volume on the pump tabs is filled CLIENT-SIDE (DexScreener over the user's IP) — Render's shared IP
+  // is rate-limited by Gecko's token endpoint too, so server-side filling here just fails silently.
   const safeRows = decorateWebLivePairAvatars(rows.slice(0, targetLimit));
   recordCategoryMints(cat, safeRows);
   void persistPostgresLivePairRows(safeRows, { reason: `live-pairs:pump-frontend:${cat}` }).catch(() => false);
