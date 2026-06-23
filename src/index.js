@@ -46095,12 +46095,14 @@ function pumpFrontendToCandidate(coin, cat) {
 async function buildPumpFrontendCategory(userId, cat, sort, options = {}) {
   const force = Boolean(options.force);
   const coins = cat === "graduating"
-    ? await fetchPumpFrontend("/coins?offset=0&limit=150&sort=market_cap&order=DESC&includeNsfw=false&complete=false", { force })
+    ? await fetchPumpFrontend("/coins?offset=0&limit=200&sort=last_trade_timestamp&order=DESC&includeNsfw=false&complete=false", { force })
     : await fetchPumpFrontend("/coins?offset=0&limit=100&sort=market_cap&order=DESC&includeNsfw=false&complete=true", { force });
   let cands = coins.map((c) => pumpFrontendToCandidate(c, cat)).filter(Boolean);
   if (cat === "graduating") {
-    // About-to-graduate: climbing the curve, real MC band — excludes $7M pumpswap-migrated anomalies + dust.
-    cands = cands.filter((c) => { const real = Number(c.bondingCurveProgress) || 0, mc = Number(c.metadata.marketCap) || 0; return !c.graduated && real >= 45 && mc >= 8000 && mc <= 250000; })
+    // About-to-graduate: actively trading AND 55-99% up the curve — NOT the 100%/pumpswap-migrated
+    // anomalies (graduated) and not brand-new dust. Sorted closest-to-bonding first. Sorting the source
+    // by last_trade (not market_cap) surfaces the climbing coins instead of $millions migrated ones.
+    cands = cands.filter((c) => { const real = Number(c.bondingCurveProgress) || 0; return !c.graduated && real >= 55 && real < 100; })
       .sort((a, b) => Number(b.bondingCurveProgress) - Number(a.bondingCurveProgress));
   } else {
     cands = cands.filter((c) => c.graduated && (Number(c.metadata.marketCap) || 0) >= 15000)
