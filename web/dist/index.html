@@ -1380,7 +1380,16 @@
   function paintTradePnl(p){
     const inv=$("#pnlInv"),rem=$("#pnlRem"),val=$("#pnlVal");if(!inv||!rem||!val)return;
     if(!p){inv.textContent="—";rem.textContent="—";val.textContent="—";val.className="mut";return;}
-    const spent=Number(p.spentSol),value=Number(p.estimatedValueSol),pnl=Number(p.openPnlSol),pct=p.openPnlPercent;
+    const spent=Number(p.spentSol);
+    let value=Number(p.estimatedValueSol),pnl=Number(p.openPnlSol),pct=p.openPnlPercent;
+    // INSTANT mark-to-market: when we have the chart's LIVE price for this coin + the raw holdings, value
+    // the bag off the live price (refreshes ~6s with the chart) instead of the slower backend snapshot —
+    // so the PnL bar tracks MC in real time ("MC 9k, wallet shows 6k" lag fix).
+    const mk=state.markPrice;const held=Number(p.uiAmountNum)||0;
+    if(mk&&mk.mint===p.tokenMint&&Number(mk.priceSol)>0&&held>0){
+      value=held*Number(mk.priceSol);
+      if(isFinite(spent)){pnl=value-spent;pct=spent>0?((pnl/spent)*100).toFixed(2):null;}
+    }
     inv.textContent=isFinite(spent)?"◎"+spent.toFixed(3):"—";
     rem.textContent=isFinite(value)?"◎"+value.toFixed(3):"—";
     if(isFinite(pnl)){val.textContent=(pnl>=0?"+":"")+pnl.toFixed(3)+"◎"+(pct!=null?" ("+pct+"%)":"");val.className=pnl>=0?"up":"down";}
@@ -1393,12 +1402,14 @@
     const {ok,d}=await api("/api/web/positions").catch(()=>({}));
     if(state.route!=="trade"||state.mint!==mint)return;
     const p=(ok&&d&&Array.isArray(d.positions))?d.positions.find(x=>x.tokenMint===mint):null;
+    state.lastTradePos=p||null;  // cached so the 6s live-price tick can re-mark it without a backend round-trip
     paintTradePnl(p||null);
     pnlPollT=setTimeout(()=>{if(state.route==="trade"&&state.mint===mint)loadTradePnl(mint);},12000);
   }
   async function renderTrade(){
     setActiveView("v-trade");
     const mint=state.mint;if(!mint){go("trending");return;}
+    state.markPrice=null;state.lastTradePos=null;  // clear stale live-mark when opening a different coin
     if(state.pendingSell===mint){tradeSide="sell";state.pendingSell=null;}
     state.tradeTab=state._openTradeTab||"chart";state._openTradeTab=null;
     let r=findRow(mint);state.tradeRow=r;subbarTrade(r);
@@ -1489,6 +1500,15 @@
         if(info.websites&&info.websites[0]&&info.websites[0].url&&!r.websiteUrl)r.websiteUrl=info.websites[0].url;
         const img=info.imageUrl||info.image||(best.baseToken&&best.baseToken.imageUrl)||"";if(img&&!r.imageUrl)r.imageUrl=img;  // always fill the coin pfp
         state.tradeRow=r;const th=$("#thead");if(th)th.innerHTML=theadHtml(r);fillPerf(r);
+        // Capture the LIVE price (SOL per token) so the PnL bar can mark-to-market instantly. Use the
+        // SOL-quoted native price when the pair quotes in SOL; else convert USD via a live SOL/USD we
+        // keep from any SOL-quoted pair we see.
+        const qsym=String((best.quoteToken&&best.quoteToken.symbol)||"").toUpperCase();
+        const pn=Number(best.priceNative)||0,pu=Number(best.priceUsd)||0,quoteIsSol=(qsym==="SOL"||qsym==="WSOL");
+        if(quoteIsSol&&pn>0&&pu>0)state.solUsd=pu/pn;
+        let priceSol=0;
+        if(quoteIsSol&&pn>0)priceSol=pn; else if(pu>0&&Number(state.solUsd)>0)priceSol=pu/Number(state.solUsd);
+        if(priceSol>0){state.markPrice={mint:mint,priceSol:priceSol};if(state.lastTradePos&&state.lastTradePos.tokenMint===mint)paintTradePnl(state.lastTradePos);}
       }
     }catch(e){}
     statPollT=setTimeout(()=>{if(state.route==="trade"&&state.mint===mint)loadTradeStats(mint);},6000);

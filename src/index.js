@@ -43139,6 +43139,7 @@ async function webPositionRows(userId, options = {}) {
       metadataMissing: Boolean(metadata.metadataMissing),
       dexUrl: dexScreenerUrl(position.tokenMint),
       uiAmount: formatTokenAmount(position.uiAmount),
+      uiAmountNum: Number(position.uiAmount) || 0,   // raw token count so the client can mark-to-market live
       walletCount: position.walletCount,
       buys: position.buys,
       sells: position.sells,
