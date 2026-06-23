@@ -800,7 +800,17 @@
       '<td class="hideMb"><div class="tkinfo">'+riskChips(r)+'</div></td>'+
       '<td><div style="display:flex;gap:6px;align-items:center;justify-content:flex-end">'+starBtn(r)+'<button class="buybtn sm" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button></div></td></tr>';
   }
-  function shownRows(){const term=(state.searchTerm||"").toLowerCase().trim();return term?state.rows.filter(r=>((r.symbol||"")+" "+(r.name||"")).toLowerCase().includes(term)):state.rows;}
+  function shownRows(){
+    let rows=state.rows||[];
+    // Established tabs (Trending/Surging/Volume/Graduating/Migrated) should NEVER show a totally
+    // dataless row — no MC, no liquidity, no volume — those are the "half empty" rows from feed sources
+    // that didn't carry stats. Client enrichment fills DexScreener-listed coins within a cycle, so real
+    // coins reappear; only genuinely unlisted dust stays hidden. New/Watchlist keep everything.
+    const tab=tabById(state.trendTab);
+    if(tab&&tab.id!=="fresh"&&tab.id!=="watch")rows=rows.filter(r=>Number(r.marketCap)>0||Number(r.liquidityUsd)>0||Number(r.volumeH24||r.volumeH1||r.volume5m)>0);
+    const term=(state.searchTerm||"").toLowerCase().trim();
+    return term?rows.filter(r=>((r.symbol||"")+" "+(r.name||"")).toLowerCase().includes(term)):rows;
+  }
   function applyTrendingFilter(){const tb=document.querySelector("#v-trending tbody");if(!tb)return;const rows=shownRows();tb.innerHTML=rows.length?rows.map(rowHtml).join(""):'<tr><td colspan="7" class="msg">No match in this list.</td></tr>';}
   async function renderTrending(){
     setActiveView("v-trending");subbarTrending();
@@ -832,13 +842,15 @@
   // in ONE batch call — over the USER's IP (not Render's rate-limited one), so brand-new "New"-tab coins
   // get a REAL volume number the instant DexScreener indexes them instead of sitting on "checking". The
   // tab re-polls every 7s, so volume fills in within a cycle as the coin starts trading.
-  async function enrichSocials(rows){
+  // ONE DexScreener batch (up to 30 mints) over the USER's IP (never Render's rate-limited one).
+  // Returns mint -> live {mc, liq, volumes, 5m move, socials, image} from the deepest pool. This is the
+  // canonical free source that actually carries MC/volume/liquidity/pfp — the established-coin tabs are
+  // built from feeds that often DON'T, which is why half the rows looked empty.
+  async function dexTokensBatch(mints){
+    const list=Array.from(new Set((mints||[]).filter(Boolean))).slice(0,30);
+    if(!list.length)return {};
     try{
-      // Refresh EVERY visible row each cycle (not just rows missing data) so MC / volume / liquidity
-      // keep ticking live from DexScreener instead of freezing at the first backend snapshot.
-      const need=(rows||[]).filter(r=>r&&r.tokenMint).slice(0,30);
-      if(!need.length)return;
-      const j=await fetch("https://api.dexscreener.com/latest/dex/tokens/"+need.map(r=>r.tokenMint).join(",")).then(x=>x.ok?x.json():null);
+      const j=await fetch("https://api.dexscreener.com/latest/dex/tokens/"+list.join(",")).then(x=>x.ok?x.json():null);
       const pairs=(j&&j.pairs)||[];const by={};
       for(const p of pairs){const m=p&&p.baseToken&&p.baseToken.address;if(!m)continue;
         const liq=Number((p.liquidity&&p.liquidity.usd)||0);
@@ -846,21 +858,36 @@
         const info=p.info||{};const v=p.volume||{};const pc=p.priceChange||{};const o={_liq:liq};
         for(const s of (info.socials||[])){const t=String(s.type||s.platform||"").toLowerCase();if((t==="twitter"||t==="x")&&!o.tw)o.tw=s.url;if(t==="telegram"&&!o.tg)o.tg=s.url;}
         if(info.websites&&info.websites[0]&&info.websites[0].url)o.web=info.websites[0].url;
+        o.img=info.imageUrl||info.image||(p.baseToken&&p.baseToken.imageUrl)||"";
         o.v24=Number(v.h24||0);o.v1=Number(v.h1||0);o.v5=Number(v.m5||0);o.liq=liq;o.mc=Number(p.marketCap||p.fdv||0);o.m5=Number(pc.m5??pc.h1);
         by[m]=o;}
+      return by;
+    }catch(e){return {};}
+  }
+  function applyDexInfoToRow(r,o){
+    if(!o)return false;let changed=false;
+    if(o.tw&&!r.twitterUrl){r.twitterUrl=o.tw;changed=true;}if(o.tg&&!r.telegramUrl){r.telegramUrl=o.tg;changed=true;}if(o.web&&!r.websiteUrl){r.websiteUrl=o.web;changed=true;}
+    if(o.img&&!r.imageUrl){r.imageUrl=o.img;changed=true;}        // fill the token pfp when the feed didn't carry one
+    if(o.v24>0){r.volumeH24=o.v24;r.volumeH24Label=fmtUsd(o.v24);changed=true;}
+    if(o.v1>0){r.volumeH1=o.v1;r.volumeH1Label=fmtUsd(o.v1);changed=true;}
+    if(o.v5>0){r.volume5m=o.v5;r.volume5mLabel=fmtUsd(o.v5);changed=true;}
+    const bestV=o.v1||o.v24||o.v5;if(bestV>0){r.volumeLabel=fmtUsd(bestV);changed=true;}
+    if(o.liq>0){r.liquidityUsd=o.liq;r.liquidityLabel=fmtUsd(o.liq);changed=true;}
+    if(o.mc>0){r.marketCap=o.mc;r.marketCapLabel=fmtUsd(o.mc);changed=true;}
+    if(Number.isFinite(o.m5)){r.m5=o.m5;changed=true;}
+    return changed;
+  }
+  async function enrichSocials(rows){
+    try{
+      // Refresh EVERY visible row each cycle (not just rows missing data) so MC / volume / liquidity /
+      // pfp keep ticking live from DexScreener instead of freezing at the first backend snapshot. Cover
+      // up to 60 rows across two batches so deeper rows in a tab fill in too (DexScreener caps 30/call).
+      const need=(rows||[]).filter(r=>r&&r.tokenMint).slice(0,60);
+      if(!need.length)return;
+      const maps=await Promise.all([dexTokensBatch(need.slice(0,30).map(r=>r.tokenMint)),dexTokensBatch(need.slice(30,60).map(r=>r.tokenMint))]);
+      const by=Object.assign({},maps[0],maps[1]);
       let changed=false;
-      for(const r of rows){const o=by[r.tokenMint];if(!o)continue;
-        if(o.tw&&!r.twitterUrl){r.twitterUrl=o.tw;changed=true;}if(o.tg&&!r.telegramUrl){r.telegramUrl=o.tg;changed=true;}if(o.web&&!r.websiteUrl){r.websiteUrl=o.web;changed=true;}
-        // ALWAYS take the fresh DexScreener value (live over the user's IP) so MC / vol / liquidity /
-        // 5m move keep updating every cycle — DexScreener-listed coins only; brand-new coins with no
-        // pool yet (no match here) keep the backend's pump value.
-        if(o.v24>0){r.volumeH24=o.v24;r.volumeH24Label=fmtUsd(o.v24);changed=true;}
-        if(o.v1>0){r.volumeH1=o.v1;r.volumeH1Label=fmtUsd(o.v1);changed=true;}
-        if(o.v5>0){r.volume5m=o.v5;r.volume5mLabel=fmtUsd(o.v5);changed=true;}
-        const bestV=o.v1||o.v24||o.v5;if(bestV>0){r.volumeLabel=fmtUsd(bestV);changed=true;}
-        if(o.liq>0){r.liquidityUsd=o.liq;r.liquidityLabel=fmtUsd(o.liq);changed=true;}
-        if(o.mc>0){r.marketCap=o.mc;r.marketCapLabel=fmtUsd(o.mc);changed=true;}
-        if(Number.isFinite(o.m5)){r.m5=o.m5;changed=true;}}
+      for(const r of rows){if(applyDexInfoToRow(r,by[r.tokenMint]))changed=true;}
       if(changed&&state.route==="trending"&&state.rows===rows)applyTrendingFilter();
     }catch(e){}
   }
@@ -1413,6 +1440,7 @@
         if(Number.isFinite(Number(pc.h6)))r.h6=Number(pc.h6);if(Number.isFinite(Number(pc.h24)))r.h24=Number(pc.h24);
         for(const s of (info.socials||[])){const t=String(s.type||s.platform||"").toLowerCase();if((t==="twitter"||t==="x")&&!r.twitterUrl)r.twitterUrl=s.url;if(t==="telegram"&&!r.telegramUrl)r.telegramUrl=s.url;}
         if(info.websites&&info.websites[0]&&info.websites[0].url&&!r.websiteUrl)r.websiteUrl=info.websites[0].url;
+        const img=info.imageUrl||info.image||(best.baseToken&&best.baseToken.imageUrl)||"";if(img&&!r.imageUrl)r.imageUrl=img;  // always fill the coin pfp
         state.tradeRow=r;const th=$("#thead");if(th)th.innerHTML=theadHtml(r);fillPerf(r);
       }
     }catch(e){}
@@ -1663,6 +1691,19 @@
           '<td class="hideMb mut">'+esc(p.uiAmount||"")+'</td>'+
           '<td><button class="buybtn sm" style="background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606" onclick="event.stopPropagation();GG.sellPos(\''+esc(p.tokenMint)+'\',\''+esc(p.symbol||"")+'\')">Sell</button></td></tr>';
       }).join("")+'</tbody></table></div>';
+    void enrichPositionImages(pos);
+  }
+  // Some held coins arrive without a logo from the backend metadata — fill the pfp from DexScreener
+  // (over the user's IP) so the positions list always shows the token's picture, then repaint once.
+  async function enrichPositionImages(pos){
+    try{
+      const need=(pos||[]).filter(p=>p&&p.tokenMint&&!p.imageUrl).slice(0,30);
+      if(!need.length)return;
+      const by=await dexTokensBatch(need.map(p=>p.tokenMint));
+      let changed=false;
+      for(const p of pos){const o=by[p.tokenMint];if(o&&o.img&&!p.imageUrl){p.imageUrl=o.img;changed=true;}}
+      if(changed&&state.route==="portfolio"&&state.portfolioTab==="positions")paintPositions($("#v-portfolio"),pos);
+    }catch(e){}
   }
   async function renderPnlCards(view){
     const {ok,status,d}=await api("/api/web/pnl");
