@@ -46269,9 +46269,14 @@ async function buildPumpFrontendCategory(userId, cat, sort, options = {}) {
   }
   let cands = coins.map((c) => pumpFrontendToCandidate(c, cat)).filter(Boolean);
   if (cat === "graduating") {
-    // Climbing the curve: not migrated, 45-99% bonded, AND MC under ~$100k (a real bonding coin graduates
-    // near ~$69k — anything showing $200k+/complete=false is a pumpswap-migrated coin, not "about to bond").
-    cands = cands.filter((c) => { const p = Number(c.bondingCurveProgress) || 0, mc = Number(c.metadata.marketCap) || 0; return !c.graduated && p >= 45 && p < 100 && mc > 0 && mc <= 100000; })
+    // Climbing the curve: not migrated, on-curve, MC under ~$120k (a real bonding coin graduates near
+    // ~$69k — $200k+/complete=false is a pumpswap-migrated coin, not "about to bond"). Graduation is
+    // bursty, so the strict "about to bond" band (45-99%) can drop to 2-3 coins at quiet moments —
+    // widen to climbers (30%+) when the strict set is thin so the tab stays populated, always SORTED
+    // closest-to-graduation first (the truly-about-to-bond coins stay on top).
+    const inBand = (c, floor) => { const p = Number(c.bondingCurveProgress) || 0, mc = Number(c.metadata.marketCap) || 0; return !c.graduated && p >= floor && p < 100 && mc > 0 && mc <= 120000; };
+    const strict = cands.filter((c) => inBand(c, 45));
+    cands = (strict.length >= 8 ? strict : cands.filter((c) => inBand(c, 30)))
       .sort((a, b) => Number(b.bondingCurveProgress) - Number(a.bondingCurveProgress));
   } else {
     // FRESH MOVERS: cap Trending/Surging to skip the $5M+ bluechips so these tabs show active, rotating,
