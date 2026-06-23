@@ -1155,11 +1155,12 @@
     const stream=cap.call(cv,12),mime=recMime();_recChunks=[];
     _rec=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);_rec._stream=stream;
     const start=Date.now();recDrawFrame(cv,rows,0);
-    _recCanvasTimer=setInterval(()=>recDrawFrame(cv,rows,(Date.now()-start)/4200),1000/12);
+    _recCanvasTimer=setInterval(()=>recDrawFrame(cv,rows,(Date.now()-start)/15000),1000/12);
     _rec.ondataavailable=(e)=>{if(e.data&&e.data.size)_recChunks.push(e.data);};
     _rec.onstop=()=>recFinish(btn,mime);
-    _rec.start(400);recSetBtn(btn,true);toast("🎬 Recording your live picks…");
-    _recStopTimer=setTimeout(()=>{if(_rec&&_rec.state==="recording")_rec.stop();},4300);
+    _rec.start(400);recSetBtn(btn,true);toast("🎬 Recording — tap ⏹ to stop");
+    // Record until the user taps ⏹ (recSetBtn shows Stop), with a 15s safety cap.
+    _recStopTimer=setTimeout(()=>{if(_rec&&_rec.state==="recording")_rec.stop();},15000);
   }
   // Records the REAL screen/tab (the actual site). Returns "started" on success, "cancelled" if the
   // user dismissed the share picker, or "unsupported" if the browser has no usable screen-capture API.
@@ -1200,7 +1201,9 @@
       const r=await recStartScreen(btn);
       if(r==="started"||r==="cancelled")return; // recording, or the user dismissed the share picker
     }
-    recOfferFallback(btn);
+    // No screen-capture API (iOS Safari / most phones): DON'T show an instructions wall — just record a
+    // SlimeWire highlight clip right now. It records, you tap ⏹ to stop, then get Save / Share / Cancel.
+    recStartCanvas(btn);
   }
   async function loadChatLive(mint){
     if(chatPollT){clearTimeout(chatPollT);chatPollT=null;}

@@ -372,7 +372,9 @@ export function computeBestPickScore(row = {}, now = Date.now()) {
   if (!marketCap) warnings.push("market cap unknown");
 
   const hardRisk = riskFlags.filter((flag) => /dump|sell pressure|freeze|mint|honeypot|blocked/i.test(String(flag))).length;
-  const riskPenalty = hardRisk * 12 + Number(row.rugRisk || 0) * 0.12 + Number(row.exitRisk || 0) * 0.08;
+  // NOTE: rugRisk/exitRisk can be a non-numeric sentinel like "check" — Number("check") is NaN, which
+  // would poison the whole score to NaN (serialized as null, breaking ranking). Coerce with `|| 0`.
+  const riskPenalty = hardRisk * 12 + (Number(row.rugRisk) || 0) * 0.12 + (Number(row.exitRisk) || 0) * 0.08;
   const score = Math.max(1, Math.min(100, Math.round(24 + freshness + liquidity + volume + pressure + momentum + kol + marketCapFit - riskPenalty)));
 
   return {
