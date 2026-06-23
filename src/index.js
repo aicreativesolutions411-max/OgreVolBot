@@ -43488,21 +43488,38 @@ function foldStWinnerBuysIntoTopWallets() {
       folded += 1;
     }
   }
-  // 2) kolCopyFeedCache — coins tracked KOLs are positioned in RIGHT NOW (KOL scans, refreshed ~90s,
-  //    NOT limited to the 25m trade window) → the reliable "smart money is in this" signal. Aggregated
-  //    (no per-wallet addr), so fold one ST buyer per coin keyed by the coin (dedupes across polls).
-  for (const row of ((kolCopyFeedCache && kolCopyFeedCache.rows) || [])) {
-    const mint = row && row.tokenMint; if (!mint || mint === SOL_MINT) continue;
-    const sm = row._smartMoney || {};
-    rememberTopWalletBuy("kol:" + mint, {
-      name: firstString(sm.kolName, "Smart money"),
-      roi: Number(firstMeaningfulNumber(sm.winRatePct)) || null,
-      pfp: "",
-      src: "st"
-    }, mint, now);
-    folded += 1;
-  }
   return folded;
+}
+
+// The RICH "what the top wallets are buying RIGHT NOW" signal: the live ST KOL scan surfaces coins with
+// a CLUSTER of KOLs in them (e.g. 17 KOLs on one coin) — exactly the panel's purpose. The autopilot
+// copy-feed gates most of this out (it's tuned for safe ENTRIES, not display), so we read the raw scan
+// here, TTL-cached so the panel never triggers more than one ST call per ~45s.
+let topWalletKolScanCache = { at: 0, rows: [] };
+async function stKolClusterRows() {
+  if (!CONFIG.solanaTrackerApiKey) return [];
+  if (Date.now() - topWalletKolScanCache.at < 45_000) return topWalletKolScanCache.rows;
+  try {
+    const scan = await buildKolScan("autopilot", "hot", "").catch(() => null);
+    const rows = ((scan && scan.rows) || [])
+      .filter((r) => r && r.tokenMint && r.tokenMint !== SOL_MINT && Number(r.kolCount) >= 2)   // a real KOL cluster
+      .map((r) => ({
+        tokenMint: r.tokenMint,
+        symbol: r.symbol || shortMint(r.tokenMint),
+        name: r.name || "",
+        imageUrl: firstString(r.imageUrl, r.avatar),
+        avatar: firstString(r.avatar, r.imageUrl),
+        kolCount: Number(r.kolCount) || 0,
+        marketCap: Number(firstMeaningfulNumber(r.marketCap, r.fdv)) || null,
+        marketCapLabel: r.marketCapLabel || "",
+        lastAt: Number(r.lastTradeAt) || Date.now(),
+        score: Number(r.score) || 0
+      }))
+      .sort((a, b) => b.kolCount - a.kolCount)
+      .slice(0, 24);
+    topWalletKolScanCache = { at: Date.now(), rows };
+  } catch {}
+  return topWalletKolScanCache.rows;
 }
 
 async function pollTopWalletBuys() {
@@ -43552,22 +43569,42 @@ async function topWalletsFeed(options = {}) {
   if (Boolean(options.force) || Date.now() - topWalletPollAt > TOP_WALLET_POLL_TTL_MS) {
     await Promise.race([pollTopWalletBuys(), new Promise((r) => setTimeout(r, 4_500))]); // bounded first-paint
   }
-  const stFolded = foldStWinnerBuysIntoTopWallets();   // PRIMARY: free fold of ST winner buys (no-op if ST off)
-  const rows = [...topWalletBuys.entries()].map(([mint, g]) => {
+  const stFolded = foldStWinnerBuysIntoTopWallets();   // free fold of ST winner buys (real wallets); no-op if ST off
+  // Base rows = the on-chain wallet-watcher buys (+ folded ST winner wallets), keyed by mint.
+  const byMint = new Map();
+  for (const [mint, g] of topWalletBuys) {
     const buyers = [...g.buyers.values()].sort((a, b) => b.at - a.at);
-    const stBuyers = buyers.filter((b) => b.src === "st").length;
-    return { tokenMint: mint, buyerCount: buyers.length, stBuyers, lastBuyAt: g.lastAt, buyers: buyers.slice(0, 6).map((b) => ({ name: b.name, roi: b.roi, pfp: b.pfp, src: b.src || "rpc" })) };
-  }).sort((a, b) => (b.stBuyers - a.stBuyers) || (b.buyerCount - a.buyerCount) || (b.lastBuyAt - a.lastBuyAt)).slice(0, 24);
-  const metaMap = await tokenMetadataMapForMints(rows.map((r) => r.tokenMint), { timeoutMs: 1_200, pumpTimeoutMs: 800 }).catch(() => new Map());
-  for (const r of rows) {
-    const m = metaMap.get(r.tokenMint) || {};
-    r.symbol = m.symbol || shortMint(r.tokenMint);
-    r.name = m.name || "";
-    r.imageUrl = m.imageUrl || m.imageUri || "";
-    r.marketCap = Number(firstMeaningfulNumber(m.marketCap, m.fdv)) || null;
-    r.dexUrl = dexScreenerUrl(r.tokenMint);
+    byMint.set(mint, { tokenMint: mint, buyerCount: buyers.length, stBuyers: buyers.filter((b) => b.src === "st").length, lastBuyAt: g.lastAt, buyers: buyers.slice(0, 6).map((b) => ({ name: b.name, roi: b.roi, pfp: b.pfp, src: b.src || "rpc" })), _km: null });
   }
-  const stActive = Boolean(CONFIG.solanaTrackerApiKey) && (winnerBuys?.size > 0 || stFolded > 0);
+  // Merge in the live ST KOL clusters (the rich "N KOLs are buying this NOW" signal). buyerCount reflects
+  // the KOL cluster size so a 17-KOL coin reads 🐳17; carries its own symbol/MC/image so it needs no extra lookup.
+  const kolClusters = await stKolClusterRows();
+  for (const k of kolClusters) {
+    let r = byMint.get(k.tokenMint);
+    if (!r) { r = { tokenMint: k.tokenMint, buyerCount: 0, stBuyers: 0, lastBuyAt: k.lastAt || Date.now(), buyers: [], _km: k }; byMint.set(k.tokenMint, r); }
+    r._km = k;
+    r.buyerCount = Math.max(r.buyerCount || 0, k.kolCount || 0);
+    r.stBuyers = Math.max(r.stBuyers || 0, k.kolCount || 0);
+    if (!r.buyers.some((b) => b.src === "st")) r.buyers.unshift({ name: (k.kolCount ? k.kolCount + " KOLs" : "Smart money"), roi: null, pfp: k.avatar || "", src: "st" });
+  }
+  const rows = [...byMint.values()]
+    .sort((a, b) => (b.stBuyers - a.stBuyers) || (b.buyerCount - a.buyerCount) || (b.lastBuyAt - a.lastBuyAt))
+    .slice(0, 24);
+  // Only the rows WITHOUT KOL-scan metadata (rpc-only mints) need a metadata lookup.
+  const needMeta = rows.filter((r) => !r._km).map((r) => r.tokenMint);
+  const metaMap = needMeta.length ? await tokenMetadataMapForMints(needMeta, { timeoutMs: 1_200, pumpTimeoutMs: 800 }).catch(() => new Map()) : new Map();
+  for (const r of rows) {
+    const km = r._km; const m = metaMap.get(r.tokenMint) || {};
+    r.symbol = (km && km.symbol) || m.symbol || shortMint(r.tokenMint);
+    r.name = (km && km.name) || m.name || "";
+    r.imageUrl = (km && km.imageUrl) || m.imageUrl || m.imageUri || "";
+    r.marketCap = Number(firstMeaningfulNumber(km && km.marketCap, m.marketCap, m.fdv)) || null;
+    if (km && km.marketCapLabel) r.marketCapLabel = km.marketCapLabel;
+    r.dexUrl = dexScreenerUrl(r.tokenMint);
+    delete r._km;
+  }
+  const stRows = rows.filter((r) => r.stBuyers > 0).length;
+  const stActive = Boolean(CONFIG.solanaTrackerApiKey) && (stRows > 0 || stFolded > 0);
   return { rows, walletCount: topWalletList.wallets.length, source: stActive ? "st+rpc" : (CONFIG.solanaTrackerApiKey ? "st(idle)+rpc" : "rpc"), updatedAt: new Date().toISOString() };
 }
 
