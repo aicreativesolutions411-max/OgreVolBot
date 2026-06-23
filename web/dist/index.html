@@ -166,6 +166,7 @@
   .twinfo{flex:1 1 auto;min-width:0}
   .twtop{display:flex;align-items:center;gap:7px}.twtop b{font-size:13px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px}
   .twct{margin-left:auto;font-size:11px;color:var(--green2);font-weight:800;flex:0 0 auto}
+  .twsm{font-size:9px;font-weight:900;letter-spacing:.04em;color:#0a1207;background:linear-gradient(180deg,#9be35a,#5fbf2e);border-radius:5px;padding:2px 5px;flex:0 0 auto;text-transform:uppercase}
   .twbuyers{display:flex;align-items:center;gap:4px;margin-top:3px}
   .twpfp{width:16px;height:16px;border-radius:50%;object-fit:cover;border:1px solid var(--border);flex:0 0 auto}
   .twpfp.ph{font-size:11px;border:none}
@@ -1016,8 +1017,9 @@
     const buyers=(r.buyers||[]).slice(0,3);
     const pfps=buyers.map(b=>b.pfp?'<img class="twpfp" loading="lazy" src="'+esc(coinImgSrc(b.pfp,32)||b.pfp)+'" onerror="this.style.display=\'none\'">':'<span class="twpfp ph">🐳</span>').join("");
     const names=buyers.map(b=>esc(b.name||"wallet")).join(", ")||"top wallet";
+    const sm=Number(r.stBuyers)>0?'<span class="twsm" title="Solana Tracker proven-winner buy">smart $</span>':"";
     return '<div class="twrow" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+avImg(r,"twav")+
-      '<div class="twinfo"><div class="twtop"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><span class="twct" title="distinct top wallets buying">🐳 '+(r.buyerCount||1)+'</span></div>'+
+      '<div class="twinfo"><div class="twtop"><b>'+esc(r.symbol||short(r.tokenMint))+'</b>'+sm+'<span class="twct" title="distinct top wallets buying">🐳 '+(r.buyerCount||1)+'</span></div>'+
       '<div class="twbuyers">'+pfps+'<span class="twnames">'+names+'</span></div></div>'+
       '<button class="buybtn sm" title="Quick buy" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡</button></div>';
   }
