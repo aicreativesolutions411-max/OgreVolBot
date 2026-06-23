@@ -1072,19 +1072,46 @@
     _rec.start(400);recSetBtn(btn,true);toast("🎬 Recording your live picks…");
     _recStopTimer=setTimeout(()=>{if(_rec&&_rec.state==="recording")_rec.stop();},4300);
   }
+  // Records the REAL screen/tab (the actual site). Returns "started" on success, "cancelled" if the
+  // user dismissed the share picker, or "unsupported" if the browser has no usable screen-capture API.
   async function recStartScreen(btn){
-    let stream;try{stream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:30},audio:true});}catch(e){recSetBtn(btn,false);return;}
+    let stream;
+    try{stream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:30},audio:true});}
+    catch(e){recSetBtn(btn,false);return (e&&e.name==="NotAllowedError")?"cancelled":"unsupported";}
     const mime=recMime();_recChunks=[];_rec=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);_rec._stream=stream;
     _rec.ondataavailable=(e)=>{if(e.data&&e.data.size)_recChunks.push(e.data);};
     _rec.onstop=()=>recFinish(btn,mime);
     const vt=stream.getVideoTracks()[0];if(vt&&vt.addEventListener)vt.addEventListener("ended",()=>{if(_rec&&_rec.state==="recording")_rec.stop();});
-    _rec.start();recSetBtn(btn,true);toast("🎬 Recording — pick a window/screen, tap again to stop");
+    _rec.start();recSetBtn(btn,true);toast("🎬 Recording the site — tap again to stop");
+    return "started";
+  }
+  // Honest fallback when the browser can't screen-record (iOS Safari has no screen-capture API):
+  // show how to use the phone's built-in recorder, and offer the highlight clip as a clearly-labelled
+  // CHOICE — never silently hand back a generic clip in place of a real screen recording.
+  function recOfferFallback(btn){
+    recSetBtn(btn,false);
+    const ios=/iPhone|iPad|iPod/i.test(navigator.userAgent||"")||(/Macintosh/i.test(navigator.userAgent||"")&&navigator.maxTouchPoints>1);
+    openModal('<h3>🎬 Record the screen</h3>'+
+      '<p class="mut" style="font-size:12.5px;line-height:1.55;margin:0 0 12px">This browser can\'t capture the screen itself'+(ios?" — iPhones only allow screen recording from Control Center":"")+'. To record the actual site:</p>'+
+      '<div style="font-size:12.5px;line-height:1.65;background:rgba(6,10,7,.6);border:1px solid var(--border);border-radius:10px;padding:11px 13px">'+
+        (ios
+          ? '1. Open <b>Control Center</b> (swipe down from the top-right corner).<br>2. Tap <b>⏺ Screen Recording</b> <span class="mut">(add it in Settings › Control Center if it\'s missing)</span>.<br>3. Come back to SlimeWire — it records everything you do.<br>4. Stop from the red status bar; the video saves to Photos.'
+          : '1. Start your phone\'s <b>Screen Recorder</b> (in quick settings).<br>2. Use SlimeWire.<br>3. Stop it — the video saves to your gallery.')+
+      '</div>'+
+      '<button class="wbtn" id="recHighlight" style="width:100%;margin-top:12px">🎞️ Or make a SlimeWire highlight clip</button>'+
+      '<p class="mut" style="font-size:11px;margin:8px 0 0">The highlight clip is an auto-made card of the live picks — not a screen recording.</p>');
+    const h=$("#recHighlight");if(h)h.onclick=()=>{closeModal();recStartCanvas(btn);};
   }
   async function recordClip(btn){
     if(_rec&&_rec.state==="recording"){_rec.stop();return;}
-    // Phone (or no screen-capture API): branded live-picks clip — no OS screen recorder needed. Desktop: real screen capture.
-    if(!recIsPhone()&&recCanScreen())return recStartScreen(btn);
-    return recStartCanvas(btn);
+    // Always try to record the REAL screen/tab first — desktop AND Android Chrome support getDisplayMedia,
+    // so it captures the actual site. Only when there's no screen-capture API (iOS Safari) do we offer the
+    // honest fallback, instead of silently giving back a generic clip.
+    if(recCanScreen()){
+      const r=await recStartScreen(btn);
+      if(r==="started"||r==="cancelled")return; // recording, or the user dismissed the share picker
+    }
+    recOfferFallback(btn);
   }
   async function loadChatLive(mint){
     if(chatPollT){clearTimeout(chatPollT);chatPollT=null;}
@@ -1243,7 +1270,7 @@
     const pane=$('[data-pane="pos"]');if(!pane)return;
     if(!state.token){pane.innerHTML='<div class="panemsg"><div style="font-size:30px">👛</div><div>Set up a wallet to track your position here.</div><div class="cta" onclick="GG.go(\'wallet\')">Set up a wallet</div></div>';return;}
     pane.innerHTML='<div class="loading" style="padding:24px"><span class="spin"></span></div>';
-    const {ok,d}=await api("/api/web/positions?fast=true");
+    const {ok,d}=await api("/api/web/positions");
     if(state.route!=="trade"||state.mint!==mint||state.tradeTab!=="pos")return;
     const mine=((d&&d.positions)||[]).filter(p=>p.tokenMint===mint);
     if(!ok||!mine.length){pane.innerHTML='<div class="panemsg"><div style="font-size:30px">🫧</div><div>No position in this token yet.<br>Buy on the right and it shows up here.</div></div>';return;}
@@ -1253,7 +1280,7 @@
         '<div class="cell"><b>'+(p.estimatedValueSol!=null?"◎"+Number(p.estimatedValueSol).toFixed(3):"—")+'</b><span>value</span></div>'+
         '<div class="cell"><b>'+(isFinite(Number(p.spentSol))?"◎"+Number(p.spentSol).toFixed(3):"—")+'</b><span>cost</span></div>'+
         '<div class="cell"><b class="'+cls+'">'+(isFinite(pnl)?(pnl>=0?"+":"")+pnl.toFixed(3)+"◎":"—")+(pct!=null?" ("+pct+"%)":"")+'</b><span>pnl</span></div></div>'+
-        '<button class="wbtn" style="margin-top:10px;background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606" onclick="GG.openSell(\''+esc(mint)+'\')">Sell '+esc(p.symbol||"")+'</button></div>';
+        '<button class="wbtn" style="margin-top:10px;background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606" onclick="GG.sellPos(\''+esc(mint)+'\',\''+esc(p.symbol||"")+'\')">Sell '+esc(p.symbol||"")+'</button></div>';
     }).join("")+'</div>';
   }
   // The trade-side PnL bar (Invested / Remaining / PNL) is ALWAYS visible — including while you watch
@@ -1271,7 +1298,7 @@
   async function loadTradePnl(mint){
     if(pnlPollT){clearTimeout(pnlPollT);pnlPollT=null;}
     if(!state.token||!mint){paintTradePnl(null);return;}
-    const {ok,d}=await api("/api/web/positions?fast=true").catch(()=>({}));
+    const {ok,d}=await api("/api/web/positions").catch(()=>({}));
     if(state.route!=="trade"||state.mint!==mint)return;
     const p=(ok&&d&&Array.isArray(d.positions))?d.positions.find(x=>x.tokenMint===mint):null;
     paintTradePnl(p||null);
@@ -1464,6 +1491,13 @@
     if(big){big.disabled=false;}
     handleTradeResult(ok,status,d,"Sell");
   }
+  // Sell straight from a position — a fast %-picker that EXECUTES on tap (no detour to the chart).
+  function quickSellModal(mint,sym){
+    const nm=sym||short(mint);
+    openModal('<h3>Sell '+esc(nm)+'</h3><p class="mut" style="font-size:12px;margin:0 0 12px">Tap an amount to sell it instantly.</p>'+
+      '<div id="qsChips" style="display:flex;gap:8px;flex-wrap:wrap">'+["25","50","75","100"].map(v=>'<button class="wbtn ghost" data-v="'+v+'" style="flex:1 1 64px;font-weight:800">'+v+'%</button>').join("")+'</div>');
+    document.querySelectorAll("#qsChips button").forEach(b=>b.onclick=async()=>{const pc=b.dataset.v;closeModal();toast("Selling "+pc+"% of "+nm+"…");if(await ensureTradeReady())execSell(mint,pc);});
+  }
   // 1-click buy contract: once you've set a quick-buy amount (+ optional TP/SL preset), the ⚡ Buy on
   // any pair fires instantly with it — no menu. The FIRST time (nothing set) it opens the quick-buy
   // sheet to pick the amount/preset, then buys. Stored in localStorage so it persists.
@@ -1510,7 +1544,7 @@
   // chain settles (~2.6s) — so you never sit wondering whether it went through.
   async function refreshPositionsCache(){
     if(!state.token)return;
-    const {ok,d}=await api("/api/web/positions?fast=true").catch(()=>({}));
+    const {ok,d}=await api("/api/web/positions").catch(()=>({}));
     if(ok&&d&&d.ok){state.posCache=d.positions||[];try{localStorage.setItem("ggPosCache",JSON.stringify(state.posCache));}catch(e){}if(state.route==="portfolio"&&state.portfolioTab==="positions")paintPositions($("#v-portfolio"),state.posCache);}
   }
   function afterTradeRefresh(){
@@ -1529,7 +1563,7 @@
     if(state.portfolioTab==="cards"){return renderPnlCards(view);}
     // Instant: show the last-known positions immediately, refresh in the background, repaint.
     if(state.posCache)paintPositions(view,state.posCache);else view.innerHTML='<div class="loading"><span class="spin"></span></div>';
-    const {ok,status,d}=await api("/api/web/positions?fast=true");
+    const {ok,status,d}=await api("/api/web/positions");
     if(state.route!=="portfolio"||state.portfolioTab!=="positions")return;
     if(status===401){setToken("");renderPortfolio();return;}
     if(!ok||!d||!d.ok){if(!state.posCache)view.innerHTML='<div class="empty"><div class="big">⚠</div><div><b>Could not load positions</b><br><span class="mut">'+esc((d&&d.error)||"Try again in a moment.")+'</span></div></div>';return;}
@@ -1548,7 +1582,7 @@
           '<td>'+(p.estimatedValueSol!=null?"◎ "+Number(p.estimatedValueSol).toFixed(3):"—")+'</td>'+
           '<td class="'+cls+'">'+(isFinite(pnl)?(pnl>=0?"+":"")+pnl.toFixed(3)+"◎":"—")+(pct!=null?'<span class="chg '+cls+'">'+pct+'%</span>':'')+'</td>'+
           '<td class="hideMb mut">'+esc(p.uiAmount||"")+'</td>'+
-          '<td><button class="buybtn sm" style="background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606" onclick="event.stopPropagation();GG.openSell(\''+esc(p.tokenMint)+'\')">Sell</button></td></tr>';
+          '<td><button class="buybtn sm" style="background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606" onclick="event.stopPropagation();GG.sellPos(\''+esc(p.tokenMint)+'\',\''+esc(p.symbol||"")+'\')">Sell</button></td></tr>';
       }).join("")+'</tbody></table></div>';
   }
   async function renderPnlCards(view){
@@ -2194,7 +2228,7 @@
   document.addEventListener("click",(e)=>{if(!e.target.closest(".ctmore"))document.querySelectorAll(".ctmore.open").forEach(x=>x.classList.remove("open"));});
 
   // ---------- expose + boot ----------
-  window.GG={open:(m)=>go("trade",m),openSell:(m)=>{state.pendingSell=m;go("trade",m);},go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,
+  window.GG={open:(m)=>go("trade",m),openSell:(m)=>{state.pendingSell=m;go("trade",m);},sellPos:(m,s)=>quickSellModal(m,s),go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,
     flipTrade:()=>{const t=document.querySelector('#v-trade .trade');if(!t)return;const next=t.getAttribute('data-focus')==='buy'?'chart':'buy';t.setAttribute('data-focus',next);const fab=document.getElementById('tradeFab');if(fab)fab.innerHTML=next==='buy'?'📈 Chart':'💰 Buy';const side=t.querySelector('.tradeSide'),v=document.getElementById('v-trade');if(next==='buy'&&side)side.scrollIntoView({behavior:'smooth',block:'start'});else if(v)v.scrollTo({top:0,behavior:'smooth'});},
     copyWallet:(w)=>{const i=$("#cpWallet");if(i){i.value=w;i.scrollIntoView({behavior:"smooth",block:"center"});i.focus();toast("Wallet loaded — set your size, then Start copying");}},
     kolProfile:openKolProfile,

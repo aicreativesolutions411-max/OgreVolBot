@@ -45910,7 +45910,82 @@ function excludedMintsForCategory(cat) {
   }
   return ex;
 }
+// ---- Moralis pump.fun lists (free key) — the SAME bonding/graduated lists pump.fun shows, reachable
+// from our server (pump's own list API is IP-blocked here). Powers Graduating (bonding curve, "about to
+// graduate") + Graduated EXACTLY. No-ops cleanly without MORALIS_API_KEY → GeckoTerminal fallback. ----
+const MORALIS_PUMP_BASE = "https://solana-gateway.moralis.io/token/mainnet/exchange/pumpfun";
+const moralisPumpCache = new Map(); // endpoint -> { at, coins }
+function moralisEnabled() { return Boolean(String(process.env.MORALIS_API_KEY || "").trim()); }
+async function fetchMoralisPumpList(endpoint, { limit = 100, ttlMs = 8000, force = false } = {}) {
+  if (!moralisEnabled()) return [];
+  const cacheKey = `${endpoint}:${limit}`;
+  const cached = moralisPumpCache.get(cacheKey);
+  if (!force && cached && Date.now() - cached.at < ttlMs) return cached.coins;
+  try {
+    const data = await fetchJson(`${MORALIS_PUMP_BASE}/${endpoint}?limit=${limit}`, {
+      headers: { accept: "application/json", "X-API-Key": String(process.env.MORALIS_API_KEY || "").trim() },
+      timeoutMs: 5000
+    });
+    const coins = Array.isArray(data) ? data : (Array.isArray(data?.result) ? data.result : []);
+    if (coins.length) moralisPumpCache.set(cacheKey, { at: Date.now(), coins });
+    return coins.length ? coins : (cached ? cached.coins : []);
+  } catch { return cached ? cached.coins : []; }
+}
+function moralisCoinToCandidate(coin, category) {
+  const mint = String(coin.tokenAddress || coin.mint || "").trim();
+  if (!mint || !solanaPublicKeyLike(mint)) return null;
+  const graduated = category !== "graduating" || Boolean(coin.graduatedAt);
+  const createdMs = coin.graduatedAt ? Date.parse(coin.graduatedAt) : (coin.createdAt ? Date.parse(coin.createdAt) : null);
+  const fdv = Number(coin.fullyDilutedValuation) || 0;
+  return {
+    tokenMint: mint, mint, source: `moralis-pump:${category}`, isPump: true,
+    graduated, isGraduated: graduated,
+    bondingCurveProgress: Number(coin.bondingCurveProgress),
+    createdAt: Number.isFinite(createdMs) ? createdMs : null,
+    metadata: {
+      tokenMint: mint, symbol: coin.symbol || "", name: coin.name || "", imageUrl: coin.logo || "",
+      priceUsd: Number(coin.priceUsd) || 0, marketCap: fdv, fdv,
+      liquidityUsd: Number(coin.liquidity) || 0, graduated, isPump: true,
+      bondingCurveProgress: Number(coin.bondingCurveProgress),
+      pairCreatedAt: Number.isFinite(createdMs) ? createdMs : null,
+      createdTimestamp: Number.isFinite(createdMs) ? createdMs : null
+    }
+  };
+}
+async function buildMoralisPumpCategory(userId, cat, sort, options = {}) {
+  const endpoint = cat === "graduating" ? "bonding" : "graduated";
+  const coins = await fetchMoralisPumpList(endpoint, { limit: 100, force: Boolean(options.force) });
+  let cands = coins.map((c) => moralisCoinToCandidate(c, cat)).filter(Boolean);
+  if (cat === "graduating") {
+    // "About to graduate": still climbing the curve, not yet bonded — closest first.
+    cands = cands.filter((c) => { const p = Number(c.bondingCurveProgress); return Number.isFinite(p) && p >= 45 && p < 100; })
+      .sort((a, b) => Number(b.bondingCurveProgress) - Number(a.bondingCurveProgress));
+  }
+  let rows = cands.map((c) => { const r = livePairCandidateToRow(c); if (r) { r.bondingCurveProgress = Number(c.bondingCurveProgress); r.graduated = c.graduated; r.isGraduated = c.graduated; } return r; }).filter(Boolean);
+  rows = uniqueSniperScoreRows(rows).filter((row) => !hasHardBlockedLivePairRisk(row));
+  if (cat === "graduating") rows.sort((a, b) => Number(b.bondingCurveProgress || 0) - Number(a.bondingCurveProgress || 0));
+  const targetLimit = 60;
+  const safeRows = decorateWebLivePairAvatars(rows.slice(0, targetLimit));
+  recordCategoryMints(cat, safeRows);
+  void persistPostgresLivePairRows(safeRows, { reason: `live-pairs:moralis:${cat}` }).catch(() => false);
+  return {
+    label: cat, bucket: "live", sort, category: `cat:${cat}`, refreshCount: 0,
+    scanned: coins.length, qualified: rows.length, count: safeRows.length,
+    rawProviderCount: coins.length, backendReturnedCount: safeRows.length,
+    pageSize: targetLimit, maxPageSize: targetLimit, hasMore: rows.length > safeRows.length, nextCursor: null,
+    source: "moralis-pump", providerStatus: "ok", filteredOutCount: Math.max(0, rows.length - safeRows.length),
+    rows: safeRows.map(webLivePairRow), refreshedAt: new Date().toISOString(), refreshSeconds: CONFIG.livePairsRefreshSeconds,
+    message: safeRows.length ? `${cat}: ${safeRows.length} pump pair(s).` : `${cat}: scanning…`
+  };
+}
+
 async function buildWebLivePairsForCategory(userId, cat, sort, options = {}) {
+  // Graduating + Graduated come straight from pump.fun's own lists via Moralis (exact match) when the
+  // free key is set; if Moralis is down/empty we fall through to the GeckoTerminal source below.
+  if (moralisEnabled() && (cat === "graduating" || cat === "graduated" || cat === "gtMigrated")) {
+    const built = await buildMoralisPumpCategory(userId, cat === "gtMigrated" ? "graduated" : cat, sort, options).catch(() => null);
+    if (built && Array.isArray(built.rows) && built.rows.length >= 3) { built.category = `cat:${cat}`; built.label = cat; return built; }
+  }
   const scanState = nextSniperScanState(`web:${userId}`, `livepairs:cat:${cat}`);
   const candidates = await fetchLiveCategoryCandidates(cat, { ttlMs: 2_000, timeoutMs: 4_200, scanState, force: Boolean(options.force) });
   let rows = uniqueSniperScoreRows(candidates.map(livePairCandidateToRow).filter(Boolean))
