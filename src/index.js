@@ -46094,25 +46094,18 @@ function pumpFrontendToCandidate(coin, cat) {
 }
 async function buildPumpFrontendCategory(userId, cat, sort, options = {}) {
   const force = Boolean(options.force);
-  const coins = cat === "graduating"
-    ? await fetchPumpFrontend("/coins?offset=0&limit=200&sort=last_trade_timestamp&order=DESC&includeNsfw=false&complete=false", { force })
+  // Surging = pump's movers (sort=volume); Trending = pump's top by market cap. Both graduated coins.
+  const coins = cat === "gtSurging"
+    ? await fetchPumpFrontend("/coins?offset=0&limit=100&sort=volume&order=DESC&includeNsfw=false&complete=true", { force })
     : await fetchPumpFrontend("/coins?offset=0&limit=100&sort=market_cap&order=DESC&includeNsfw=false&complete=true", { force });
-  let cands = coins.map((c) => pumpFrontendToCandidate(c, cat)).filter(Boolean);
-  if (cat === "graduating") {
-    // About-to-graduate: actively trading AND 55-99% up the curve — NOT the 100%/pumpswap-migrated
-    // anomalies (graduated) and not brand-new dust. Sorted closest-to-bonding first. Sorting the source
-    // by last_trade (not market_cap) surfaces the climbing coins instead of $millions migrated ones.
-    cands = cands.filter((c) => { const real = Number(c.bondingCurveProgress) || 0; return !c.graduated && real >= 55 && real < 100; })
-      .sort((a, b) => Number(b.bondingCurveProgress) - Number(a.bondingCurveProgress));
-  } else {
-    cands = cands.filter((c) => c.graduated && (Number(c.metadata.marketCap) || 0) >= 15000)
-      .sort((a, b) => Number(b.metadata.marketCap) - Number(a.metadata.marketCap));
-  }
+  let cands = coins.map((c) => pumpFrontendToCandidate(c, cat)).filter(Boolean)
+    .filter((c) => c.graduated && (Number(c.metadata.marketCap) || 0) >= 15000);
+  // Surging keeps pump's volume order; Trending ranks by market cap.
+  if (cat === "dexTrending") cands.sort((a, b) => Number(b.metadata.marketCap) - Number(a.metadata.marketCap));
   const seen = new Set();
-  let rows = cands.map((c) => { const r = livePairCandidateToRow(c); if (r) { r.bondingCurveProgress = Number(c.bondingCurveProgress); r.graduated = c.graduated; r.isGraduated = c.graduated; } return r; }).filter(Boolean)
+  let rows = cands.map((c) => { const r = livePairCandidateToRow(c); if (r) { r.graduated = true; r.isGraduated = true; } return r; }).filter(Boolean)
     .filter((r) => { const m = String(r.tokenMint || ""); if (!m || seen.has(m)) return false; seen.add(m); return true; })
     .filter((row) => !hasHardBlockedLivePairRisk(row));
-  if (cat === "graduating") rows.sort((a, b) => Number(b.bondingCurveProgress || 0) - Number(a.bondingCurveProgress || 0));
   const targetLimit = 60;
   const safeRows = decorateWebLivePairAvatars(rows.slice(0, targetLimit));
   recordCategoryMints(cat, safeRows);
@@ -46132,7 +46125,7 @@ async function buildWebLivePairsForCategory(userId, cat, sort, options = {}) {
   // PRIMARY: pump.fun's own frontend-api (via the CF Worker) for Trending + Graduating — the exact coins
   // pump shows. Then Moralis (bonding/graduated lists + trending momentum). Then GeckoTerminal. Each
   // step falls through if the source is unset/down/thin, so a tab never empties.
-  if (pumpFrontendEnabled() && (cat === "graduating" || cat === "dexTrending")) {
+  if (pumpFrontendEnabled() && (cat === "dexTrending" || cat === "gtSurging")) {
     const built = await buildPumpFrontendCategory(userId, cat, sort, options).catch(() => null);
     if (built && Array.isArray(built.rows) && built.rows.length >= 5) { built.category = `cat:${cat}`; built.label = cat; return built; }
   }
