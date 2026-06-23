@@ -15101,6 +15101,45 @@ async function runTpSlMonitorStep(label, work, onTimeout = null) {
   return result;
 }
 
+// Entry friction: a buy fills ABOVE the mid and a same-instant sell quote comes back BELOW it
+// (spread + buy fee + sell fee + price impact). So the very first move% reading after a buy is
+// already deeply negative even though the coin's PRICE has not moved a tick. TP/SL must measure
+// the price move SINCE ENTRY, not this round-trip cost - otherwise a fresh buy gets stopped out
+// the instant it fills (the "it sold and the price never moved" bug). We snapshot the first stable
+// reading as the entry baseline and shift every later reading by it, so a position starts at ~0%
+// and TP/SL only fire on genuine movement after entry. The baseline is clamped: friction is a
+// bounded negative, never a credit (so take-profit can't be gamed) and never so deep it would mask
+// a real early dump (so a true rug still trips the stop).
+function frictionAdjustedExitEstimate(holder, estimate) {
+  if (!holder || !estimate) return estimate;
+  // Two baselines: the round-trip move (Jupiter sell-quote vs SOL spent) carries BOTH buy and sell
+  // friction, the market move (mid price vs entry) only the buy side - so each is snapshotted and
+  // shifted by its OWN first reading, or the round-trip candidate (checked first) would still trip.
+  // Clamp to a bounded negative: friction is never a credit, and capped so a genuine early dump
+  // can't be fully masked by a single deep first reading.
+  if (!Number.isFinite(Number(holder.entryBaselineMovePct)) && Number.isFinite(Number(estimate.movePct))) {
+    holder.entryBaselineMovePct = clamp(Number(estimate.movePct), -45, 0);
+    holder.entryBaselineAt = holder.entryBaselineAt || new Date().toISOString();
+  }
+  if (!Number.isFinite(Number(holder.entryBaselineMarketMovePct)) && Number.isFinite(Number(estimate.marketMovePct))) {
+    holder.entryBaselineMarketMovePct = clamp(Number(estimate.marketMovePct), -45, 0);
+    holder.entryBaselineAt = holder.entryBaselineAt || new Date().toISOString();
+  }
+  const moveBase = Number(holder.entryBaselineMovePct) || 0;
+  const marketBase = Number(holder.entryBaselineMarketMovePct) || 0;
+  if (!moveBase && !marketBase) return estimate;
+  const shiftBy = (value, base) => (Number.isFinite(Number(value)) ? Number(value) - base : value);
+  return {
+    ...estimate,
+    movePct: shiftBy(estimate.movePct, moveBase),
+    grossMovePct: shiftBy(estimate.grossMovePct, moveBase),
+    netMovePct: shiftBy(estimate.netMovePct, moveBase),
+    marketMovePct: shiftBy(estimate.marketMovePct, marketBase),
+    marketGrossMovePct: shiftBy(estimate.marketGrossMovePct, marketBase),
+    entryBaselineMovePct: moveBase
+  };
+}
+
 function evaluatePlanWalletPriceExit(plan, planWallet, estimate, {
   takeProfitPct = 0,
   stopLossPct = 0,
@@ -15919,15 +15958,18 @@ async function processWebPortfolioExits(options = {}) {
         estimate = await estimatePlanWalletMove(plan, wallet, settings.sellPercent || 100, {
           priority: true
         });
+        // Measure the move from the entry-friction baseline (price move since entry), not the
+        // buy+sell round-trip cost that reads negative the instant the buy fills.
+        const adj = frictionAdjustedExitEstimate(memory, estimate);
         const checkedAt = new Date().toISOString();
         const stopLossPct = walletStopLossPct(plan, planWallet);
         const takeProfitPct = walletTakeProfitPct(plan, planWallet);
-        const evaluation = evaluatePlanWalletPriceExit(plan, planWallet, estimate, {
+        const evaluation = evaluatePlanWalletPriceExit(plan, planWallet, adj, {
           takeProfitPct,
           stopLossPct
         });
         const decision = evaluation.decision;
-        const triggerMovePct = Number.isFinite(Number(evaluation.triggerMovePct)) ? Number(evaluation.triggerMovePct) : estimate.movePct;
+        const triggerMovePct = Number.isFinite(Number(evaluation.triggerMovePct)) ? Number(evaluation.triggerMovePct) : adj.movePct;
         const trigger = applyPriceExitTrigger(plan, planWallet, decision, triggerMovePct);
         webPortfolioExitState.set(key, {
           userId: entry.userId,
@@ -15935,14 +15977,16 @@ async function processWebPortfolioExits(options = {}) {
           walletLabel: entry.walletLabel,
           tokenMint: entry.tokenMint,
           lastCheckedAt: checkedAt,
-          lastMovePct: estimate.movePct,
-          lastMarketMovePct: estimate.marketMovePct ?? null,
+          lastMovePct: adj.movePct,
+          lastMarketMovePct: adj.marketMovePct ?? null,
           lastMarketPriceSource: estimate.marketSource || null,
           lastTriggerMovePct: trigger ? triggerMovePct : null,
           lastEstimatedOut: estimate.estimatedOut?.toString?.() || "",
           lastMarketEstimatedOut: estimate.marketEstimatedOut || "",
           lastBasisLamports: estimate.basis?.toString?.() || "",
           lastSource: estimate.source || "",
+          entryBaselineMovePct: Number.isFinite(Number(memory.entryBaselineMovePct)) ? Number(memory.entryBaselineMovePct) : null,
+          entryBaselineAt: memory.entryBaselineAt || null,
           estimateFailures: 0,
           lastError: estimate.quoteError ? `Quote fallback: ${estimate.quoteError}` : null,
           updatedAt: checkedAt
@@ -16266,7 +16310,11 @@ function webExitGuardPlanWallet(guard) {
     lastError: guard.lastError || null,
     retryAfterAt: guard.retryAfterAt || null,
     nextRetryAt: guard.nextRetryAt || guard.retryAfterAt || null,
-    lastSellAttemptAt: guard.lastSellAttemptAt || null
+    lastSellAttemptAt: guard.lastSellAttemptAt || null,
+    entryBaselineMovePct: Number.isFinite(Number(guard.entryBaselineMovePct)) ? Number(guard.entryBaselineMovePct) : null,
+    entryBaselineMarketMovePct: Number.isFinite(Number(guard.entryBaselineMarketMovePct)) ? Number(guard.entryBaselineMarketMovePct) : null,
+    entryBaselineAt: guard.entryBaselineAt || null,
+    peakMovePct: Number.isFinite(Number(guard.peakMovePct)) ? Number(guard.peakMovePct) : 0
   };
 }
 
@@ -16326,7 +16374,11 @@ function copyWebExitGuardFieldsFromPlanWallet(guard, planWallet) {
     "lastEmergencyExitReason",
     "lastError",
     "estimateFailures",
-    "lastPriceEstimateError"
+    "lastPriceEstimateError",
+    "entryBaselineMovePct",
+    "entryBaselineMarketMovePct",
+    "entryBaselineAt",
+    "peakMovePct"
   ]) {
     if (planWallet[key] !== undefined) guard[key] = planWallet[key];
   }
@@ -16699,17 +16751,20 @@ async function processWebExitGuard(guard, walletStore, options = {}) {
       const estimate = await estimatePlanWalletMove(plan, wallet, estimateSellPercent, {
         priority: true
       });
+      // Shift the move% by the entry-friction baseline so TP/SL fire on the coin's PRICE move
+      // since entry, not on the buy+sell round-trip cost that reads negative the instant it fills.
+      const adj = frictionAdjustedExitEstimate(planWallet, estimate);
       planWallet.lastCheckedAt = new Date().toISOString();
-      planWallet.lastMovePct = estimate.movePct;
-      if (Number.isFinite(Number(estimate.movePct))) planWallet.peakMovePct = Math.max(Number(planWallet.peakMovePct || 0), Number(estimate.movePct));
-      planWallet.lastGrossMovePct = estimate.grossMovePct ?? estimate.movePct;
-      planWallet.lastNetMovePct = estimate.netMovePct ?? estimate.movePct;
+      planWallet.lastMovePct = adj.movePct;
+      if (Number.isFinite(Number(adj.movePct))) planWallet.peakMovePct = Math.max(Number(planWallet.peakMovePct || 0), Number(adj.movePct));
+      planWallet.lastGrossMovePct = adj.grossMovePct ?? adj.movePct;
+      planWallet.lastNetMovePct = adj.netMovePct ?? adj.movePct;
       planWallet.lastEstimateSource = estimate.source || "jupiter";
       planWallet.lastEstimatedNetOut = estimate.estimatedNetOut?.toString?.() || null;
       planWallet.lastEstimatedOut = estimate.estimatedOut?.toString?.() || null;
       planWallet.lastBasisLamports = estimate.basis?.toString?.() || null;
       planWallet.lastMonitorSlippageBps = estimate.monitorSlippageBps || CONFIG.stopLossMonitorSlippageBps;
-      planWallet.lastMarketMovePct = estimate.marketMovePct ?? null;
+      planWallet.lastMarketMovePct = adj.marketMovePct ?? null;
       planWallet.lastMarketPriceSource = estimate.marketSource || null;
       planWallet.lastTriggerMovePct = null;
       planWallet.lastError = estimate.quoteError ? `Jupiter quote fallback: ${estimate.quoteError}` : null;
@@ -16723,15 +16778,15 @@ async function processWebExitGuard(guard, walletStore, options = {}) {
       planWallet.lastStopLossPct = stopLossPct || null;
       planWallet.lastTakeProfitPct = takeProfitPct || null;
       planWallet.lastStopLossTriggerPct = stopLossTriggerPct || null;
-      planWallet.lastShouldTriggerStopLoss = stopLossTriggerPct > 0 && estimate.movePct <= -stopLossTriggerPct;
-      planWallet.lastShouldTriggerTakeProfit = Number.isFinite(Number(takeProfitPct)) && Number(takeProfitPct) > 0 && estimate.movePct >= Number(takeProfitPct);
-      const evaluation = evaluatePlanWalletPriceExit(plan, planWallet, estimate, {
+      planWallet.lastShouldTriggerStopLoss = stopLossTriggerPct > 0 && adj.movePct <= -stopLossTriggerPct;
+      planWallet.lastShouldTriggerTakeProfit = Number.isFinite(Number(takeProfitPct)) && Number(takeProfitPct) > 0 && adj.movePct >= Number(takeProfitPct);
+      const evaluation = evaluatePlanWalletPriceExit(plan, planWallet, adj, {
         takeProfitPct,
         stopLossPct,
         status: guard.status
       });
       const decision = evaluation.decision;
-      const triggerMovePct = Number.isFinite(Number(evaluation.triggerMovePct)) ? Number(evaluation.triggerMovePct) : estimate.movePct;
+      const triggerMovePct = Number.isFinite(Number(evaluation.triggerMovePct)) ? Number(evaluation.triggerMovePct) : adj.movePct;
       planWallet.lastTriggerPriceSource = evaluation.priceSource || estimate.source || "jupiter";
       planWallet.lastShouldTriggerStopLoss = stopLossTriggerPct > 0 && triggerMovePct <= -stopLossTriggerPct;
       planWallet.lastShouldTriggerTakeProfit = Number.isFinite(Number(takeProfitPct)) && Number(takeProfitPct) > 0 && triggerMovePct >= Number(takeProfitPct);
@@ -17269,17 +17324,20 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
       const estimate = await estimatePlanWalletMove(plan, wallet, estimateSellPercent, {
         priority: true
       });
+      // Shift the move% by the entry-friction baseline so TP/SL fire on the coin's PRICE move
+      // since entry, not the buy+sell round-trip cost that reads negative the instant it fills.
+      const adj = frictionAdjustedExitEstimate(planWallet, estimate);
       planWallet.lastCheckedAt = new Date().toISOString();
-      planWallet.lastMovePct = estimate.movePct;
-      if (Number.isFinite(Number(estimate.movePct))) planWallet.peakMovePct = Math.max(Number(planWallet.peakMovePct || 0), Number(estimate.movePct));
-      planWallet.lastGrossMovePct = estimate.grossMovePct ?? estimate.movePct;
-      planWallet.lastNetMovePct = estimate.netMovePct ?? estimate.movePct;
+      planWallet.lastMovePct = adj.movePct;
+      if (Number.isFinite(Number(adj.movePct))) planWallet.peakMovePct = Math.max(Number(planWallet.peakMovePct || 0), Number(adj.movePct));
+      planWallet.lastGrossMovePct = adj.grossMovePct ?? adj.movePct;
+      planWallet.lastNetMovePct = adj.netMovePct ?? adj.movePct;
       planWallet.lastEstimateSource = estimate.source || "jupiter";
       planWallet.lastEstimatedNetOut = estimate.estimatedNetOut?.toString?.() || null;
       planWallet.lastEstimatedOut = estimate.estimatedOut?.toString?.() || null;
       planWallet.lastBasisLamports = estimate.basis?.toString?.() || null;
       planWallet.lastMonitorSlippageBps = estimate.monitorSlippageBps || CONFIG.stopLossMonitorSlippageBps;
-      planWallet.lastMarketMovePct = estimate.marketMovePct ?? null;
+      planWallet.lastMarketMovePct = adj.marketMovePct ?? null;
       planWallet.lastMarketPriceSource = estimate.marketSource || null;
       planWallet.lastTriggerMovePct = null;
       planWallet.lastError = estimate.quoteError ? `Jupiter quote fallback: ${estimate.quoteError}` : null;
@@ -17293,15 +17351,15 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
       planWallet.lastStopLossPct = stopLossPct || null;
       planWallet.lastTakeProfitPct = takeProfitPct || null;
       planWallet.lastStopLossTriggerPct = stopLossTriggerPct || null;
-      planWallet.lastShouldTriggerStopLoss = stopLossTriggerPct > 0 && estimate.movePct <= -stopLossTriggerPct;
-      planWallet.lastShouldTriggerTakeProfit = Number.isFinite(Number(takeProfitPct)) && Number(takeProfitPct) > 0 && estimate.movePct >= Number(takeProfitPct);
-      const evaluation = evaluatePlanWalletPriceExit(plan, planWallet, estimate, {
+      planWallet.lastShouldTriggerStopLoss = stopLossTriggerPct > 0 && adj.movePct <= -stopLossTriggerPct;
+      planWallet.lastShouldTriggerTakeProfit = Number.isFinite(Number(takeProfitPct)) && Number(takeProfitPct) > 0 && adj.movePct >= Number(takeProfitPct);
+      const evaluation = evaluatePlanWalletPriceExit(plan, planWallet, adj, {
         takeProfitPct,
         stopLossPct
       });
       const decision = evaluation.decision;
 
-      const triggerMovePct = Number.isFinite(Number(evaluation.triggerMovePct)) ? Number(evaluation.triggerMovePct) : estimate.movePct;
+      const triggerMovePct = Number.isFinite(Number(evaluation.triggerMovePct)) ? Number(evaluation.triggerMovePct) : adj.movePct;
       planWallet.lastTriggerPriceSource = evaluation.priceSource || estimate.source || "jupiter";
       planWallet.lastShouldTriggerStopLoss = stopLossTriggerPct > 0 && triggerMovePct <= -stopLossTriggerPct;
       planWallet.lastShouldTriggerTakeProfit = Number.isFinite(Number(takeProfitPct)) && Number(takeProfitPct) > 0 && triggerMovePct >= Number(takeProfitPct);
@@ -20444,7 +20502,10 @@ async function buildPositionsOverview(userId, options = {}) {
     .sort((a, b) => Number((b.spent - b.received) - (a.spent - a.received)));
 
   if (!options.fast && !options.skipValueEstimates) {
-    await runWithConcurrency(rows.slice(0, 5), Math.min(2, CONFIG.balanceConcurrency), async (position) => {
+    // Value the top holdings live so the PnL the user sees is real. Per-position results are
+    // cached (keyed by mint + balance), so the 10-12s poll loop reuses them and only re-prices
+    // on a cold cache or when holdings change. 10 covers the coin being viewed + a real book.
+    await runWithConcurrency(rows.slice(0, 10), Math.min(3, Math.max(2, CONFIG.balanceConcurrency)), async (position) => {
       try {
         position.estimatedValueLamports = await estimatePositionValue(position);
       } catch (error) {
@@ -20747,32 +20808,72 @@ async function estimatePositionValueFromMarket(position, quoteError = null) {
   const rawAmount = accounts.reduce((total, account) => total + positiveBigIntOrZero(account.rawAmount), 0n);
   if (rawAmount <= 0n) throw quoteError || new Error("No token balance");
 
-  let priceSol = null;
+  // Pull pump metadata once. It tells us whether the coin has GRADUATED, and for coins still
+  // on the bonding curve it carries the LIVE reserves (an accurate price the DEX may not list yet).
+  let metadata = null;
   try {
-    const metadata = await getPumpFunTokenMetadata(position.tokenMint, { timeoutMs: 1_200 });
-    priceSol = pumpFunPriceSol(metadata, decimals);
-    if (!Number.isFinite(priceSol) || priceSol <= 0) {
-      const priceUsd = pumpFunPriceUsd(metadata, decimals);
-      if (Number.isFinite(priceUsd) && priceUsd > 0) {
-        // SOL/USD from the coin payload itself when possible (usd_market_cap /
-        // market_cap-in-SOL) - getSolUsdPrice rides DexScreener, which rate-limits
-        // the shared Render IP and left fresh launches "Price unavailable".
-        const usdMc = Number(metadata.usdMarketCap) || 0;
-        const solMc = Number(metadata.marketCapSol) || 0;
-        const solUsd = (usdMc > 0 && solMc > 0 && solMc < usdMc)
-          ? usdMc / solMc
-          : await getSolUsdPrice({ timeoutMs: 1_200 }).catch(() => null);
-        if (Number.isFinite(solUsd) && solUsd > 0) priceSol = priceUsd / solUsd;
-      }
-    }
+    metadata = await getPumpFunTokenMetadata(position.tokenMint, { timeoutMs: 1_200 });
   } catch {
-    priceSol = null;
+    metadata = null;
   }
+  const graduated = Boolean(metadata?.graduated || metadata?.isGraduated);
 
-  if (!Number.isFinite(priceSol) || priceSol <= 0) {
+  // The live DEX price (DexScreener). The source of truth for any coin trading on a real pool:
+  // every graduated coin, and most established on-curve coins DexScreener has indexed.
+  const dexPriceSol = async () => {
     const pairs = await fetchDexScreenerTokenPairsBatch([position.tokenMint], { timeoutMs: 1_400 }).catch(() => []);
     const pricedPair = await bestDexPairWithSolPrice(position.tokenMint, pairs);
-    priceSol = pricedPair?.priceSol ?? null;
+    const value = pricedPair?.priceSol;
+    return Number.isFinite(value) && value > 0 ? value : null;
+  };
+
+  // GeckoTerminal price — a second free, key-less live price (USD from the deepest pool) that
+  // survives when DexScreener rate-limits the shared Render IP. Converted USD -> SOL.
+  const geckoPriceSol = async () => {
+    const gecko = await getGeckoTerminalTokenMetadata(position.tokenMint, { timeoutMs: 1_400 }).catch(() => null);
+    const priceUsd = Number(gecko?.priceUsd) || 0;
+    if (!(priceUsd > 0)) return null;
+    const solUsd = await getSolUsdPrice({ timeoutMs: 1_200 }).catch(() => null);
+    return Number.isFinite(solUsd) && solUsd > 0 ? priceUsd / solUsd : null;
+  };
+
+  // The pump bonding-curve price. ACCURATE while the coin is still on the curve (pump updates the
+  // reserves live as people trade); FROZEN at the ~$69k graduation snapshot the moment it bonds, so
+  // it badly misprices a graduated coin that has since moved on Raydium/PumpSwap. Never trust it
+  // for graduated coins (that was the "I'm up but it shows rugged" bug) - DEX/Gecko first there.
+  const pumpPriceSol = async () => {
+    if (!metadata) return null;
+    let value = pumpFunPriceSol(metadata, decimals);
+    if (Number.isFinite(value) && value > 0) return value;
+    const priceUsd = pumpFunPriceUsd(metadata, decimals);
+    if (Number.isFinite(priceUsd) && priceUsd > 0) {
+      // SOL/USD from the coin payload itself when possible (usd_market_cap / market_cap-in-SOL).
+      const usdMc = Number(metadata.usdMarketCap) || 0;
+      const solMc = Number(metadata.marketCapSol) || 0;
+      const solUsd = (usdMc > 0 && solMc > 0 && solMc < usdMc)
+        ? usdMc / solMc
+        : await getSolUsdPrice({ timeoutMs: 1_200 }).catch(() => null);
+      if (Number.isFinite(solUsd) && solUsd > 0) return priceUsd / solUsd;
+    }
+    return null;
+  };
+
+  // Graduated coins: ONLY the live DEX/Gecko price - never the frozen pump reserves price (that
+  // was the "I'm up but it shows rugged" bug). If both live sources are momentarily down we'd
+  // rather throw and show "—" (and retry next poll / let the Jupiter-quote fallback try) than
+  // paint a known-wrong loss. On-curve coins: pump reserves first (live + always available there),
+  // DEX/Gecko as the fallback.
+  const order = graduated
+    ? [dexPriceSol, geckoPriceSol]
+    : [pumpPriceSol, dexPriceSol, geckoPriceSol];
+  let priceSol = null;
+  for (const resolvePrice of order) {
+    try {
+      priceSol = await resolvePrice();
+    } catch {
+      priceSol = null;
+    }
+    if (Number.isFinite(priceSol) && priceSol > 0) break;
   }
 
   if (!Number.isFinite(priceSol) || priceSol <= 0) throw quoteError || new Error("Market value unavailable");
@@ -38066,6 +38167,32 @@ async function webBrowserTradeExecute(userId, body = {}) {
   }
 }
 
+// Scan the user's managed wallets for the one holding the most of a given token. Used as a
+// sell fallback: the web "active wallet" often isn't the wallet that bought the coin, and selling
+// from a wallet with a zero balance is what surfaced "sell server error" to the user.
+async function findManagedWalletHoldingToken(store, userId, tokenMint, skipPublicKey = "") {
+  const wallets = walletsForOwner(store, userId).filter((wallet) => wallet.publicKey !== skipPublicKey);
+  if (!wallets.length) return null;
+  const mintKey = new PublicKey(tokenMint);
+  let best = null;
+  let bestRaw = 0n;
+  await runWithConcurrency(wallets, Math.min(4, Math.max(2, CONFIG.balanceConcurrency)), async (wallet) => {
+    try {
+      const keypair = decryptWallet(wallet);
+      const token = await getReliableTokenBalanceForMint(keypair.publicKey, mintKey, { throwOnError: false }).catch(() => null);
+      const raw = token ? positiveBigIntOrZero(token.rawAmount) : 0n;
+      if (raw > bestRaw) { bestRaw = raw; best = wallet; }
+    } catch {
+      // skip unreadable wallet
+    }
+  });
+  return bestRaw > 0n ? best : null;
+}
+
+function isNoTokenBalanceError(error) {
+  return /no token balance|token account.*not found|no .*balance/i.test(String(error?.message || ""));
+}
+
 async function webTradeSell(userId, body = {}, options = {}) {
   return runManualSellCriticalAttempt(userId, body, options, (attempt) => webTradeSellCore(userId, body, options, attempt));
 }
@@ -38073,13 +38200,33 @@ async function webTradeSell(userId, body = {}, options = {}) {
 async function webTradeSellCore(userId, body = {}, options = {}, attempt = {}) {
   const backendStartedAt = Date.now();
   const store = await readWalletStore();
-  const wallet = getWebServerTradeWalletAt(store, parseWebWalletIndex(body.walletIndex), userId, "manual sell");
+  let wallet = getWebServerTradeWalletAt(store, parseWebWalletIndex(body.walletIndex), userId, "manual sell");
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
   const percent = parsePercent(String(body.percent || "100"));
   const slippageBps = parseWebSlippage(body.slippageBps);
   const validationMs = Date.now() - backendStartedAt;
   const submitStartedAt = Date.now();
-  const result = await sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, { userId });
+  let result;
+  try {
+    result = await sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, { userId });
+  } catch (error) {
+    // The active wallet doesn't hold this coin (the common cause of "sell server error"):
+    // find the managed wallet that actually does and sell from there. If none hold it, the
+    // coin is in a connected browser wallet and must be sold from that wallet directly.
+    if (isNoTokenBalanceError(error)) {
+      const holder = await findManagedWalletHoldingToken(store, userId, tokenMint, wallet.publicKey);
+      if (holder) {
+        wallet = holder;
+        result = await sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, { userId });
+      } else {
+        const friendly = new Error("None of your SlimeWire wallets hold this coin to sell. If you bought it with a connected browser wallet (Phantom/Solflare), sell it from that wallet.");
+        friendly.statusCode = 400;
+        throw friendly;
+      }
+    } else {
+      throw error;
+    }
+  }
   const submitMs = Date.now() - submitStartedAt;
   const outputLamports = BigInt(result.outputLamports || 0);
   const feeLamports = BigInt(result.feeLamports || 0);
