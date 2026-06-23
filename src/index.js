@@ -24435,6 +24435,11 @@ function isPumpStyleToken(item) {
 }
 
 function isPumpMayhemToken(item) {
+  // Explicit boolean / enum flags some pump payloads carry (in case the mode isn't in any text field).
+  if (item?.mayhem === true || item?.isMayhem === true || item?.pumpMayhem === true) return true;
+  const modeFields = [item?.mode, item?.pumpMode, item?.curveType, item?.curve_type, item?.bondingCurveType, item?.coinMode, item?.launchMode]
+    .filter(Boolean).map((v) => String(v).toLowerCase());
+  if (modeFields.some((v) => v.includes("mayhem"))) return true;
   const labels = [
     item?.tokenMint,
     item?.symbol,

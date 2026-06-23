@@ -173,9 +173,14 @@
   .chartwrap{flex:1 1 auto;min-height:0;position:relative;background:#060906}
   .chartwrap iframe{width:100%;height:100%;border:0;display:block}
   .tradeSide{display:flex;flex-direction:column;overflow:auto;background:var(--panel)}
-  .pnlbar{display:flex;justify-content:space-between;padding:13px 16px;border-bottom:1px solid var(--border)}
+  .pnlbar{display:flex;justify-content:space-between;align-items:center;padding:13px 16px;border-bottom:1px solid var(--border)}
   .pnlbar div{text-align:center}.pnlbar span{display:block;font-size:10px;color:var(--muted);text-transform:uppercase}
   .pnlbar b{font-size:13px;font-family:var(--mono)}
+  .posref{flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;padding:6px 10px;border-radius:9px;border:1px solid var(--border);background:rgba(137,255,67,.05);color:var(--green);font-size:12px;font-weight:700;cursor:pointer}
+  .posref:hover{border-color:rgba(137,255,67,.4);background:rgba(137,255,67,.1)}
+  .posref.refreshing{opacity:.6;pointer-events:none;animation:posspin .8s linear infinite}
+  @keyframes posspin{to{transform:rotate(360deg)}}
+  .poshead{display:flex;align-items:center;justify-content:space-between;padding:10px 14px}
   .sidepad{padding:14px 16px}
   .wsel{display:flex;align-items:center;gap:8px;padding:9px 12px;border:1px solid var(--border);border-radius:10px;margin-bottom:12px;background:rgba(6,10,7,.6);cursor:pointer}
   .wsel .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
@@ -1341,7 +1346,7 @@
         '<div class="pospane" data-pane="pos" style="display:none"></div>'+
         '<div class="chatpane" data-pane="chat" style="display:none"></div>'+
       '</div><div class="tradeSide">'+
-        '<div class="pnlbar" id="pnlbar"><div><span>Invested</span><b id="pnlInv">—</b></div><div><span>Remaining</span><b id="pnlRem">—</b></div><div><span>PNL</span><b class="mut" id="pnlVal">—</b></div></div>'+
+        '<div class="pnlbar" id="pnlbar"><div><span>Invested</span><b id="pnlInv">—</b></div><div><span>Remaining</span><b id="pnlRem">—</b></div><div><span>PNL</span><b class="mut" id="pnlVal">—</b></div><button class="posref" title="Refresh balance &amp; position" onclick="GG.refreshPos()">↻</button></div>'+
         '<div class="sidepad">'+
           '<div class="wsel" id="wsel" onclick="GG.go(\'wallet\')"><span class="dot off"></span><b id="wselTxt">No wallet — tap to set up</b><span class="ar">⇄</span></div>'+
           '<div class="psel" id="psel"></div>'+
@@ -1516,9 +1521,13 @@
       return true;
     }catch(e){return false;}
   }
+  // Tiny phone haptic on a trade tap — makes buys/sells feel instant even while the chain settles.
+  function hap(ms){try{if(navigator.vibrate)navigator.vibrate(ms||12);}catch(e){}}
+  function resetBigBtn(){const big=$("#bigbuy");if(!big)return;big.disabled=false;const sym=(state.tradeRow&&(state.tradeRow.symbol||""))||"";big.textContent=(tradeSide==="buy"?"Buy ":"Sell ")+sym;}
   async function execBuy(mint,amount){
     const a=Number(amount);if(!isFinite(a)||a<=0){toast("Enter a SOL amount.",true);return;}
     if(!(await ensureTradeReady()))return;
+    hap();toast("Buying ◎"+a.toFixed(3)+"…");
     const big=$("#bigbuy");if(big){big.disabled=true;big.textContent="Submitting…";}
     const p=activeTradePresetObj();
     const body={tokenMint:mint,walletIndex:state.activeWallet,amountSol:String(a),slippageBps:(p&&p.slippageBps)||"400",tradeAttemptId:attemptId()};
@@ -1526,7 +1535,7 @@
       body.autoExit=true;body.takeProfitPct=p.takeProfitPct||"";body.stopLossPct=p.stopLossPct||"";body.sellDelay=p.sellDelay||"off";body.sellPercent=p.sellPercent||"100";
     }
     const {ok,status,d}=await jpost("/api/web/trade/buy",body);
-    if(big){big.disabled=false;big.textContent="Buy";}
+    resetBigBtn();
     handleTradeResult(ok,status,d,"Buy");
   }
   async function execSell(mint,percent){
@@ -1535,9 +1544,10 @@
     // Selling from a position list can run with no wallet selected — default to the first wallet so the
     // server doesn't 500 on a null walletIndex.
     if((state.activeWallet==null||!state.wallets.some(w=>w.index===state.activeWallet))&&state.wallets.length)state.activeWallet=state.wallets[0].index;
+    hap();toast("Selling "+p+"%…");
     const big=$("#bigbuy");if(big){big.disabled=true;big.textContent="Submitting…";}
     const {ok,status,d}=await jpost("/api/web/trade/sell",{tokenMint:mint,walletIndex:state.activeWallet,percent:String(p),slippageBps:"400",tradeAttemptId:attemptId()});
-    if(big){big.disabled=false;}
+    resetBigBtn();
     handleTradeResult(ok,status,d,"Sell");
   }
   // Sell straight from a position — a fast %-picker that EXECUTES on tap (no detour to the chart).
@@ -1601,6 +1611,26 @@
     if(state.route==="trade"&&state.mint)loadTradePnl(state.mint);
     setTimeout(()=>{if(!state.token)return;refreshWallets();refreshPositionsCache();if(state.route==="trade"&&state.mint)loadTradePnl(state.mint);},2600);
   }
+  // Manual "↻" refresh on the positions/PnL views — forces a fresh (cache-bypassing) balance +
+  // position-value pull so the user can re-check holdings/PnL on demand instead of waiting on the poll.
+  async function refreshPositionsNow(){
+    if(!state.token){toast("Set up a wallet first.",true);return;}
+    const btns=document.querySelectorAll(".posref");btns.forEach(b=>b.classList.add("refreshing"));
+    try{
+      const tasks=[refreshWallets()];
+      tasks.push((async()=>{
+        const {ok,d}=await api("/api/web/positions?force=true").catch(()=>({}));
+        if(ok&&d&&d.ok){
+          state.posCache=d.positions||[];try{localStorage.setItem("ggPosCache",JSON.stringify(state.posCache));}catch(e){}
+          if(state.route==="portfolio"&&state.portfolioTab==="positions")paintPositions($("#v-portfolio"),state.posCache);
+          if(state.route==="trade"&&state.mint){const p=(d.positions||[]).find(x=>x.tokenMint===state.mint);paintTradePnl(p||null);if(state.tradeTab==="pos")loadPosPane(state.mint);}
+        }
+      })());
+      await Promise.all(tasks);
+      toast("Positions refreshed");
+    }catch(e){toast("Refresh failed — try again",true);}
+    btns.forEach(b=>b.classList.remove("refreshing"));
+  }
 
   // ---------- portfolio ----------
   let portfolioPollT=null;
@@ -1624,7 +1654,7 @@
   function paintPositions(view,pos){
     if(state.route!=="portfolio"||state.portfolioTab!=="positions")return;
     if(!pos.length){view.innerHTML='<div class="empty"><div class="big">🫧</div><div><b>No open positions</b><br><span class="mut">Buy something from Trending or Trenches and it shows up here.</span></div><div class="cta" onclick="GG.go(\'trending\')">Find a play</div></div>';return;}
-    view.innerHTML='<div class="pcard"><table class="tbl"><thead><tr><th class="l">Asset</th><th>Cost</th><th>Value</th><th>PNL</th><th class="hideMb">Amount</th><th></th></tr></thead><tbody>'+
+    view.innerHTML='<div class="poshead"><b style="font-size:13px">Open positions</b><button class="posref" title="Refresh holdings &amp; PnL" onclick="GG.refreshPos()">↻ Refresh</button></div><div class="pcard"><table class="tbl"><thead><tr><th class="l">Asset</th><th>Cost</th><th>Value</th><th>PNL</th><th class="hideMb">Amount</th><th></th></tr></thead><tbody>'+
       pos.map(p=>{const pnl=Number(p.openPnlSol),pct=p.openPnlPercent,cls=isFinite(pnl)?(pnl>=0?"up":"down"):"mut";
         return'<tr onclick="GG.open(\''+esc(p.tokenMint)+'\')"><td class="l">'+pairCellHtml({tokenMint:p.tokenMint,symbol:p.symbol,name:p.name,imageUrl:p.imageUrl})+'</td>'+
           '<td>'+(isFinite(Number(p.spentSol))?"◎ "+Number(p.spentSol).toFixed(3):"—")+'</td>'+
@@ -2296,7 +2326,8 @@
     shareRef:(link)=>{const t="I'm trading Solana memecoins on SlimeWire — fast terminal, 1-tap snipes, KOL copy. Join with my link:";window.open("https://x.com/intent/tweet?text="+encodeURIComponent(t)+"&url="+encodeURIComponent(link),"_blank","noopener");},
     // Coin-image fallback: if the fast proxy thumbnail fails, try the raw URL once, then the logo.
     avFallback:(img)=>{const ph="/assets/slimewire/png/slimewire-mark.png?v=logo4";const raw=img.getAttribute("data-raw")||"";if(raw&&!img.dataset.fb&&img.src.indexOf("weserv")>-1){img.dataset.fb="1";img.src=raw;}else{img.onerror=null;img.src=ph;}},
-    removeWalletPrompt:(i)=>{const w=state.wallets.find(x=>x.index===i);if(w)removeWalletModal(w);}};
+    removeWalletPrompt:(i)=>{const w=state.wallets.find(x=>x.index===i);if(w)removeWalletModal(w);},
+    refreshPos:refreshPositionsNow};
   // Register the service worker on load so the NEW terminal is an installable PWA (manifest + SW =
   // "Install app" / "Add to Home Screen"). Push opt-in re-registers the same scope later; harmless.
   if("serviceWorker" in navigator){try{navigator.serviceWorker.register("/sw.js").catch(()=>{});}catch(e){}}
