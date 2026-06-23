@@ -45979,12 +45979,87 @@ async function buildMoralisPumpCategory(userId, cat, sort, options = {}) {
   };
 }
 
+// Moralis Solana trending — a rich momentum list (marketCap, volume, price-change, holders, buy/sell
+// txns) that's pump-heavy and reachable on the same free key. Powers Trending (as-is) + Surging
+// (re-sorted by 1h momentum). Falls back to GeckoTerminal if Moralis is down/empty.
+let moralisTrendingCache = { at: 0, coins: [] };
+async function fetchMoralisTrendingCoins({ force = false, ttlMs = 8000 } = {}) {
+  if (!moralisEnabled()) return [];
+  if (!force && moralisTrendingCache.coins.length && Date.now() - moralisTrendingCache.at < ttlMs) return moralisTrendingCache.coins;
+  try {
+    const data = await fetchJson("https://deep-index.moralis.io/api/v2.2/tokens/trending?chain=solana&limit=100", {
+      headers: { accept: "application/json", "X-API-Key": String(process.env.MORALIS_API_KEY || "").trim() },
+      timeoutMs: 5000
+    });
+    const coins = Array.isArray(data) ? data : (Array.isArray(data?.result) ? data.result : (Array.isArray(data?.tokens) ? data.tokens : []));
+    if (coins.length) moralisTrendingCache = { at: Date.now(), coins };
+    return coins.length ? coins : moralisTrendingCache.coins;
+  } catch { return moralisTrendingCache.coins; }
+}
+function moralisTrendingToCandidate(coin) {
+  const mint = String(coin.tokenAddress || "").trim();
+  if (!mint || !solanaPublicKeyLike(mint)) return null;
+  const pc = coin.pricePercentChange || {}, vol = coin.totalVolume || {}, bt = coin.buyTransactions || {}, st = coin.sellTransactions || {};
+  const createdMs = Number(coin.createdAt) ? Number(coin.createdAt) * 1000 : null;
+  const isPump = mint.toLowerCase().endsWith("pump");
+  return {
+    tokenMint: mint, mint, source: "moralis-trending", isPump, graduated: true, isGraduated: true,
+    createdAt: createdMs,
+    metadata: {
+      tokenMint: mint, symbol: coin.symbol || "", name: coin.name || "", imageUrl: coin.logo || "",
+      priceUsd: Number(coin.usdPrice) || 0, marketCap: Number(coin.marketCap) || 0, fdv: Number(coin.marketCap) || 0,
+      liquidityUsd: Number(coin.liquidityUsd) || 0, holderCount: Number(coin.holders) || 0, graduated: true, isPump,
+      volume: { m5: 0, h1: Number(vol["1h"]) || 0, h24: Number(vol["24h"]) || 0 },
+      priceChange: { m5: 0, h1: Number(pc["1h"]) || 0, h24: Number(pc["24h"]) || 0 },
+      txns: { h1: { buys: Number(bt["1h"]) || 0, sells: Number(st["1h"]) || 0 } },
+      pairCreatedAt: createdMs, createdTimestamp: createdMs
+    }
+  };
+}
+async function buildMoralisTrendingCategory(userId, cat, sort, options = {}) {
+  const coins = await fetchMoralisTrendingCoins({ force: Boolean(options.force) });
+  // Sort the CANDIDATES (they carry the momentum data we set) before converting to rows, so the order
+  // survives; then convert + dedup preserving that order.
+  let cands = coins.map(moralisTrendingToCandidate).filter(Boolean);
+  if (cat === "gtSurging") {
+    // Surging = biggest movers right now: positive 1h move, ranked by 1h price change.
+    cands = cands.filter((c) => Number(c.metadata.priceChange.h1) > 0)
+      .sort((a, b) => Number(b.metadata.priceChange.h1) - Number(a.metadata.priceChange.h1));
+  } else {
+    // Trending = ranked by 24h volume (the Moralis list is already trend-ranked; volume keeps it stable).
+    cands.sort((a, b) => Number(b.metadata.volume.h24) - Number(a.metadata.volume.h24));
+  }
+  const seen = new Set();
+  let rows = cands.map(livePairCandidateToRow).filter(Boolean)
+    .filter((r) => { const m = String(r.tokenMint || ""); if (!m || seen.has(m)) return false; seen.add(m); return true; })
+    .filter((row) => !hasHardBlockedLivePairRisk(row));
+  const targetLimit = 60;
+  const safeRows = decorateWebLivePairAvatars(rows.slice(0, targetLimit));
+  recordCategoryMints(cat, safeRows);
+  void persistPostgresLivePairRows(safeRows, { reason: `live-pairs:moralis-trending:${cat}` }).catch(() => false);
+  return {
+    label: cat, bucket: "live", sort, category: `cat:${cat}`, refreshCount: 0,
+    scanned: coins.length, qualified: rows.length, count: safeRows.length,
+    rawProviderCount: coins.length, backendReturnedCount: safeRows.length,
+    pageSize: targetLimit, maxPageSize: targetLimit, hasMore: rows.length > safeRows.length, nextCursor: null,
+    source: "moralis-trending", providerStatus: "ok", filteredOutCount: Math.max(0, rows.length - safeRows.length),
+    rows: safeRows.map(webLivePairRow), refreshedAt: new Date().toISOString(), refreshSeconds: CONFIG.livePairsRefreshSeconds,
+    message: safeRows.length ? `${cat}: ${safeRows.length} pump mover(s).` : `${cat}: scanning…`
+  };
+}
+
 async function buildWebLivePairsForCategory(userId, cat, sort, options = {}) {
   // Graduating + Graduated come straight from pump.fun's own lists via Moralis (exact match) when the
-  // free key is set; if Moralis is down/empty we fall through to the GeckoTerminal source below.
-  if (moralisEnabled() && (cat === "graduating" || cat === "graduated" || cat === "gtMigrated")) {
-    const built = await buildMoralisPumpCategory(userId, cat === "gtMigrated" ? "graduated" : cat, sort, options).catch(() => null);
-    if (built && Array.isArray(built.rows) && built.rows.length >= 3) { built.category = `cat:${cat}`; built.label = cat; return built; }
+  // free key is set; Surging + Trending come from Moralis's pump-heavy Solana trending list. Either
+  // way, if Moralis is down/empty we fall through to the GeckoTerminal source below.
+  if (moralisEnabled()) {
+    if (cat === "graduating" || cat === "graduated" || cat === "gtMigrated") {
+      const built = await buildMoralisPumpCategory(userId, cat === "gtMigrated" ? "graduated" : cat, sort, options).catch(() => null);
+      if (built && Array.isArray(built.rows) && built.rows.length >= 3) { built.category = `cat:${cat}`; built.label = cat; return built; }
+    } else if (cat === "dexTrending" || cat === "gtSurging") {
+      const built = await buildMoralisTrendingCategory(userId, cat, sort, options).catch(() => null);
+      if (built && Array.isArray(built.rows) && built.rows.length >= 5) { built.category = `cat:${cat}`; built.label = cat; return built; }
+    }
   }
   const scanState = nextSniperScanState(`web:${userId}`, `livepairs:cat:${cat}`);
   const candidates = await fetchLiveCategoryCandidates(cat, { ttlMs: 2_000, timeoutMs: 4_200, scanState, force: Boolean(options.force) });
