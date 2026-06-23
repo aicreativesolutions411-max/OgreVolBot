@@ -46094,18 +46094,30 @@ function pumpFrontendToCandidate(coin, cat) {
 }
 async function buildPumpFrontendCategory(userId, cat, sort, options = {}) {
   const force = Boolean(options.force);
-  // Surging = pump's movers (sort=volume); Trending = pump's top by market cap. Both graduated coins.
-  const coins = cat === "gtSurging"
-    ? await fetchPumpFrontend("/coins?offset=0&limit=100&sort=volume&order=DESC&includeNsfw=false&complete=true", { force })
-    : await fetchPumpFrontend("/coins?offset=0&limit=100&sort=market_cap&order=DESC&includeNsfw=false&complete=true", { force });
-  let cands = coins.map((c) => pumpFrontendToCandidate(c, cat)).filter(Boolean)
-    .filter((c) => c.graduated && (Number(c.metadata.marketCap) || 0) >= 15000);
-  // Surging keeps pump's volume order; Trending ranks by market cap.
-  if (cat === "dexTrending") cands.sort((a, b) => Number(b.metadata.marketCap) - Number(a.metadata.marketCap));
+  // Map each tab to the pump.fun list that defines it:
+  //  Surging  = movers (sort=volume), Trending = top market cap, Graduated = recently completed
+  //  (newest complete coins), Graduating = on the curve, climbing (complete=false, 45-99% bonded).
+  let path;
+  if (cat === "gtSurging") path = "/coins?offset=0&limit=100&sort=volume&order=DESC&includeNsfw=false&complete=true";
+  else if (cat === "graduating") path = "/coins?offset=0&limit=300&sort=market_cap&order=DESC&includeNsfw=false&complete=false";
+  else if (cat === "graduated" || cat === "gtMigrated") path = "/coins?offset=0&limit=100&sort=created_timestamp&order=DESC&includeNsfw=false&complete=true";
+  else path = "/coins?offset=0&limit=100&sort=market_cap&order=DESC&includeNsfw=false&complete=true";
+  const coins = await fetchPumpFrontend(path, { force });
+  let cands = coins.map((c) => pumpFrontendToCandidate(c, cat)).filter(Boolean);
+  if (cat === "graduating") {
+    // Climbing the curve: not migrated, 45-99% bonded — closest to graduating first.
+    cands = cands.filter((c) => { const p = Number(c.bondingCurveProgress) || 0; return !c.graduated && p >= 45 && p < 100; })
+      .sort((a, b) => Number(b.bondingCurveProgress) - Number(a.bondingCurveProgress));
+  } else {
+    cands = cands.filter((c) => c.graduated && (Number(c.metadata.marketCap) || 0) >= 15000);
+    if (cat === "dexTrending") cands.sort((a, b) => Number(b.metadata.marketCap) - Number(a.metadata.marketCap));
+    // gtSurging keeps pump's volume order; graduated keeps created (recency) order.
+  }
   const seen = new Set();
-  let rows = cands.map((c) => { const r = livePairCandidateToRow(c); if (r) { r.graduated = true; r.isGraduated = true; } return r; }).filter(Boolean)
+  let rows = cands.map((c) => { const r = livePairCandidateToRow(c); if (r) { r.bondingCurveProgress = Number(c.bondingCurveProgress); r.graduated = c.graduated; r.isGraduated = c.graduated; } return r; }).filter(Boolean)
     .filter((r) => { const m = String(r.tokenMint || ""); if (!m || seen.has(m)) return false; seen.add(m); return true; })
     .filter((row) => !hasHardBlockedLivePairRisk(row));
+  if (cat === "graduating") rows.sort((a, b) => Number(b.bondingCurveProgress || 0) - Number(a.bondingCurveProgress || 0));
   const targetLimit = 60;
   const safeRows = decorateWebLivePairAvatars(rows.slice(0, targetLimit));
   recordCategoryMints(cat, safeRows);
@@ -46125,9 +46137,11 @@ async function buildWebLivePairsForCategory(userId, cat, sort, options = {}) {
   // PRIMARY: pump.fun's own frontend-api (via the CF Worker) for Trending + Graduating — the exact coins
   // pump shows. Then Moralis (bonding/graduated lists + trending momentum). Then GeckoTerminal. Each
   // step falls through if the source is unset/down/thin, so a tab never empties.
-  if (pumpFrontendEnabled() && (cat === "dexTrending" || cat === "gtSurging")) {
-    const built = await buildPumpFrontendCategory(userId, cat, sort, options).catch(() => null);
-    if (built && Array.isArray(built.rows) && built.rows.length >= 5) { built.category = `cat:${cat}`; built.label = cat; return built; }
+  if (pumpFrontendEnabled() && (cat === "dexTrending" || cat === "gtSurging" || cat === "graduating" || cat === "graduated" || cat === "gtMigrated")) {
+    const built = await buildPumpFrontendCategory(userId, cat === "gtMigrated" ? "graduated" : cat, sort, options).catch(() => null);
+    // The graduating list is naturally short (few coins are genuinely near bonding), so accept a lower floor there.
+    const minRows = cat === "graduating" ? 2 : 5;
+    if (built && Array.isArray(built.rows) && built.rows.length >= minRows) { built.category = `cat:${cat}`; built.label = cat; return built; }
   }
   if (moralisEnabled()) {
     if (cat === "graduating" || cat === "graduated" || cat === "gtMigrated") {
