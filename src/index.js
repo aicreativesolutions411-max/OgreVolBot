@@ -43091,7 +43091,11 @@ async function webPnlCard(userId, tokenMintText) {
 
   const row = rows[0];
   const metadata = await getDexTokenMetadata(row.tokenMint);
-  const png = await renderPnlCard(row, metadata);
+  // Use the SAME Higgs win/loss flex card as the TG /flex (photoreal slime art — green for wins,
+  // blood-red for losses); fall back to the classic gradient card only if the slime renderer throws.
+  let png = null;
+  try { png = await renderSlimeCard(slimeDataFromPnlRow(row, metadata)); } catch {}
+  if (!png) png = await renderPnlCard(row, metadata);
   return {
     png,
     filename: `pnl-card-${sanitizeFilenamePart(metadata.symbol || row.tokenMint)}.png`

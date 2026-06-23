@@ -3,7 +3,7 @@
   "name": "SlimeWire",
   "short_name": "SlimeWire",
   "description": "Solana memecoin trading, wallets, live pairs, sniper tools, and autopilot — one swamp terminal.",
-  "start_url": "/terminal",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],

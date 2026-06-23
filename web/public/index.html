@@ -14,6 +14,14 @@
 <link rel="preconnect" href="https://ogrevolbot.onrender.com" crossorigin>
 <meta name="description" content="SlimeWire Terminal — a fast Solana memecoin terminal. Discover fresh launches, trenches, trending pairs, create a wallet, and trade in one click.">
 <link rel="icon" type="image/png" href="/assets/slimewire/png/slimewire-mark.png?v=logo4">
+<!-- Installable PWA: the NEW terminal IS the app (manifest start_url="/"). -->
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#0a140c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SlimeWire">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
 <script src="/config.js"></script>
 <style>
   :root{
@@ -471,6 +479,8 @@
     token:localStorage.getItem(TOKEN_KEY)||"",user:null,wallets:[],activeWallet:null,
     presets:{trade:[],bundle:[]},activeTradePreset:localStorage.getItem("ggTradePreset")||"",searchTerm:"",pendingSell:null,portfolioTab:"positions",
     watch:new Set(),watchRows:[],
+    // Seed positions from the last session so the Portfolio paints INSTANTLY on load, then refreshes.
+    posCache:(function(){try{return JSON.parse(localStorage.getItem("ggPosCache")||"null");}catch(e){return null;}})(),
     quickBuy:(function(){try{return JSON.parse(localStorage.getItem("ggQuickBuy")||"null");}catch(e){return null;}})()};
   // No credentials:include — the API returns ACAO:* which forbids credentialed CORS. Auth is the Bearer header.
   function api(path,opts){
@@ -700,6 +710,8 @@
     if(state.pollT){clearTimeout(state.pollT);state.pollT=null;}
     if(state.txPollT){clearTimeout(state.txPollT);state.txPollT=null;}
     if(chatPollT){clearTimeout(chatPollT);chatPollT=null;}
+    if(pnlPollT){clearTimeout(pnlPollT);pnlPollT=null;}
+    if(portfolioPollT){clearTimeout(portfolioPollT);portfolioPollT=null;}
     if(loungePollT){clearTimeout(loungePollT);loungePollT=null;}
     if(route!=="lounge"&&window._jitsi){try{window._jitsi.dispose();}catch(e){}window._jitsi=null;}
     setNav(route);
@@ -1237,11 +1249,33 @@
     if(!ok||!mine.length){pane.innerHTML='<div class="panemsg"><div style="font-size:30px">🫧</div><div>No position in this token yet.<br>Buy on the right and it shows up here.</div></div>';return;}
     pane.innerHTML='<div class="poscard">'+mine.map(p=>{const pnl=Number(p.openPnlSol),pct=p.openPnlPercent,cls=isFinite(pnl)?(pnl>=0?"up":"down"):"mut";
       return '<div class="wbox" style="margin:0 0 12px"><h3 style="margin-bottom:8px">'+esc(p.symbol||short(mint))+'</h3><div class="secgrid">'+
-        '<div class="cell"><b>'+(isFinite(Number(p.spentSol))?"◎"+Number(p.spentSol).toFixed(3):"—")+'</b><span>cost</span></div>'+
+        '<div class="cell"><b>'+(p.uiAmount?esc(String(p.uiAmount)):"—")+'</b><span>holdings</span></div>'+
         '<div class="cell"><b>'+(p.estimatedValueSol!=null?"◎"+Number(p.estimatedValueSol).toFixed(3):"—")+'</b><span>value</span></div>'+
+        '<div class="cell"><b>'+(isFinite(Number(p.spentSol))?"◎"+Number(p.spentSol).toFixed(3):"—")+'</b><span>cost</span></div>'+
         '<div class="cell"><b class="'+cls+'">'+(isFinite(pnl)?(pnl>=0?"+":"")+pnl.toFixed(3)+"◎":"—")+(pct!=null?" ("+pct+"%)":"")+'</b><span>pnl</span></div></div>'+
         '<button class="wbtn" style="margin-top:10px;background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606" onclick="GG.openSell(\''+esc(mint)+'\')">Sell '+esc(p.symbol||"")+'</button></div>';
     }).join("")+'</div>';
+  }
+  // The trade-side PnL bar (Invested / Remaining / PNL) is ALWAYS visible — including while you watch
+  // the chart — so it fills from your live position in this coin, not just the Positions tab.
+  function paintTradePnl(p){
+    const inv=$("#pnlInv"),rem=$("#pnlRem"),val=$("#pnlVal");if(!inv||!rem||!val)return;
+    if(!p){inv.textContent="—";rem.textContent="—";val.textContent="—";val.className="mut";return;}
+    const spent=Number(p.spentSol),value=Number(p.estimatedValueSol),pnl=Number(p.openPnlSol),pct=p.openPnlPercent;
+    inv.textContent=isFinite(spent)?"◎"+spent.toFixed(3):"—";
+    rem.textContent=isFinite(value)?"◎"+value.toFixed(3):"—";
+    if(isFinite(pnl)){val.textContent=(pnl>=0?"+":"")+pnl.toFixed(3)+"◎"+(pct!=null?" ("+pct+"%)":"");val.className=pnl>=0?"up":"down";}
+    else{val.textContent="—";val.className="mut";}
+  }
+  let pnlPollT=null;
+  async function loadTradePnl(mint){
+    if(pnlPollT){clearTimeout(pnlPollT);pnlPollT=null;}
+    if(!state.token||!mint){paintTradePnl(null);return;}
+    const {ok,d}=await api("/api/web/positions?fast=true").catch(()=>({}));
+    if(state.route!=="trade"||state.mint!==mint)return;
+    const p=(ok&&d&&Array.isArray(d.positions))?d.positions.find(x=>x.tokenMint===mint):null;
+    paintTradePnl(p||null);
+    pnlPollT=setTimeout(()=>{if(state.route==="trade"&&state.mint===mint)loadTradePnl(mint);},12000);
   }
   async function renderTrade(){
     setActiveView("v-trade");
@@ -1267,7 +1301,7 @@
         '<div class="pospane" data-pane="pos" style="display:none"></div>'+
         '<div class="chatpane" data-pane="chat" style="display:none"></div>'+
       '</div><div class="tradeSide">'+
-        '<div class="pnlbar"><div><span>Invested</span><b>—</b></div><div><span>Remaining</span><b>—</b></div><div><span>PNL</span><b class="mut">—</b></div></div>'+
+        '<div class="pnlbar" id="pnlbar"><div><span>Invested</span><b id="pnlInv">—</b></div><div><span>Remaining</span><b id="pnlRem">—</b></div><div><span>PNL</span><b class="mut" id="pnlVal">—</b></div></div>'+
         '<div class="sidepad">'+
           '<div class="wsel" id="wsel" onclick="GG.go(\'wallet\')"><span class="dot off"></span><b id="wselTxt">No wallet — tap to set up</b><span class="ar">⇄</span></div>'+
           '<div class="psel" id="psel"></div>'+
@@ -1280,7 +1314,7 @@
         '</div></div>'+
         '<button class="tradefab" id="tradeFab" onclick="GG.flipTrade()" aria-label="Flip between bigger chart and bigger buy panel">💰 Buy</button>'+
       '</div>';
-    wireTradePanel(mint,r);updateWselLine();paintPresetSel();wireCtab();
+    wireTradePanel(mint,r);updateWselLine();paintPresetSel();wireCtab();loadTradePnl(mint);
     const mb=$("#ctMoreBtn");if(mb)mb.onclick=(e)=>{e.stopPropagation();mb.parentNode.classList.toggle("open");};
     if(state.token&&!(state.presets.trade||[]).length){loadPresets().then(()=>{if(state.route==="trade")paintPresetSel();});}
     if(!r){const rows=await fetchPairs(tabById("best"));r=rows.find(x=>x.tokenMint===mint)||null;if(r&&state.route==="trade"){state.tradeRow=r;$("#thead").innerHTML=theadHtml(r);fillPerf(r);}}
@@ -1469,13 +1503,27 @@
   }
   function handleTradeResult(ok,status,d,label){
     if(status===401||status===403){setToken("");toast("Session expired — set up your wallet again.",true);go("wallet");return;}
-    if(ok&&d&&d.ok&&d.trade){toast(label+" submitted — "+(d.trade.message||"done"));refreshWallets();return;}
+    if(ok&&d&&d.ok&&d.trade){toast(label+" submitted — "+(d.trade.message||"done"));afterTradeRefresh();return;}
     toast((d&&(d.error||d.message))||label+" failed",true);
+  }
+  // After a buy/sell, refresh balance + position bar + holdings RIGHT AWAY, then once more after the
+  // chain settles (~2.6s) — so you never sit wondering whether it went through.
+  async function refreshPositionsCache(){
+    if(!state.token)return;
+    const {ok,d}=await api("/api/web/positions?fast=true").catch(()=>({}));
+    if(ok&&d&&d.ok){state.posCache=d.positions||[];try{localStorage.setItem("ggPosCache",JSON.stringify(state.posCache));}catch(e){}if(state.route==="portfolio"&&state.portfolioTab==="positions")paintPositions($("#v-portfolio"),state.posCache);}
+  }
+  function afterTradeRefresh(){
+    refreshWallets();refreshPositionsCache();
+    if(state.route==="trade"&&state.mint)loadTradePnl(state.mint);
+    setTimeout(()=>{if(!state.token)return;refreshWallets();refreshPositionsCache();if(state.route==="trade"&&state.mint)loadTradePnl(state.mint);},2600);
   }
 
   // ---------- portfolio ----------
+  let portfolioPollT=null;
   async function renderPortfolio(){
     setActiveView("v-portfolio");subbarPortfolio();
+    if(portfolioPollT){clearTimeout(portfolioPollT);portfolioPollT=null;}
     const view=$("#v-portfolio");
     if(!state.token){view.innerHTML='<div class="empty"><div class="big">📊</div><div><b>No account yet</b><br><span class="mut">Set up a wallet to start tracking your positions and PnL here.</span></div><div class="cta" onclick="GG.go(\'wallet\')">Set up a wallet</div></div>';return;}
     if(state.portfolioTab==="cards"){return renderPnlCards(view);}
@@ -1486,6 +1534,9 @@
     if(status===401){setToken("");renderPortfolio();return;}
     if(!ok||!d||!d.ok){if(!state.posCache)view.innerHTML='<div class="empty"><div class="big">⚠</div><div><b>Could not load positions</b><br><span class="mut">'+esc((d&&d.error)||"Try again in a moment.")+'</span></div></div>';return;}
     state.posCache=d.positions||[];paintPositions(view,state.posCache);
+    try{localStorage.setItem("ggPosCache",JSON.stringify(state.posCache));}catch(e){}
+    // Keep open positions + values/PnL live while you watch — refresh every 10s when the tab is visible.
+    portfolioPollT=setTimeout(()=>{if(state.route==="portfolio"&&state.portfolioTab==="positions"&&!document.hidden)renderPortfolio();},10000);
   }
   function paintPositions(view,pos){
     if(state.route!=="portfolio"||state.portfolioTab!=="positions")return;
@@ -2156,8 +2207,21 @@
     // Coin-image fallback: if the fast proxy thumbnail fails, try the raw URL once, then the logo.
     avFallback:(img)=>{const ph="/assets/slimewire/png/slimewire-mark.png?v=logo4";const raw=img.getAttribute("data-raw")||"";if(raw&&!img.dataset.fb&&img.src.indexOf("weserv")>-1){img.dataset.fb="1";img.src=raw;}else{img.onerror=null;img.src=ph;}},
     removeWalletPrompt:(i)=>{const w=state.wallets.find(x=>x.index===i);if(w)removeWalletModal(w);}};
+  // Register the service worker on load so the NEW terminal is an installable PWA (manifest + SW =
+  // "Install app" / "Add to Home Screen"). Push opt-in re-registers the same scope later; harmless.
+  if("serviceWorker" in navigator){try{navigator.serviceWorker.register("/sw.js").catch(()=>{});}catch(e){}}
   render();updateWalletPill();loadSol();setInterval(loadSol,60000);
   if(state.token){refreshWallets();loadPresets();loadWatch();loadMe();}
+  // Keep the wallet balance fresh while you use the app — poll every 12s when the tab is visible
+  // (the balances endpoint is server-cached, so this stays cheap), and pause when backgrounded.
+  setInterval(()=>{if(state.token&&!document.hidden)refreshWallets();},12000);
+  // Return to the tab → refresh balance + whatever you're looking at INSTANTLY, so nothing looks stale.
+  document.addEventListener("visibilitychange",()=>{if(document.hidden)return;
+    if(state.token)refreshWallets();
+    if(state.route==="portfolio"&&state.portfolioTab==="positions")renderPortfolio();
+    else if(state.route==="trade"&&state.mint)loadTradePnl(state.mint);
+    else if(state.route==="trending"){if(state.pollT){clearTimeout(state.pollT);state.pollT=null;}renderTrending();}
+  });
 })();
 </script>
 </body>
