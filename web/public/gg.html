@@ -163,7 +163,10 @@
   .tradeMain{display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--border)}
   .thead{display:flex;align-items:center;gap:14px;padding:12px 16px;border-bottom:1px solid var(--border);flex:0 0 auto}
   .thead .av{width:44px;height:44px;border-radius:12px;object-fit:cover;border:1px solid var(--border)}
+  .thead .ti{display:flex;flex-direction:column;gap:3px;min-width:0}
   .thead .ti b{font-size:17px;font-weight:800}.thead .ti .sub{font-size:11px;color:var(--muted)}
+  .thead .chartsoc{font-size:15px;gap:10px;margin-top:1px}
+  .thead .chartsoc a{color:var(--muted2);transition:color .12s}.thead .chartsoc a:hover{color:var(--green)}
   .thead .st{display:flex;gap:22px;margin-left:auto;text-align:right}
   .thead .st div span{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
   .thead .st div b{font-size:14px;font-family:var(--mono)}
@@ -288,6 +291,10 @@
   .wbtn.ghost{background:none;color:var(--green);border:1px solid var(--border)}
   .wbtn:disabled{opacity:.6}
   .wnote{font-size:12px;color:var(--muted);line-height:1.5}
+  .socbox{text-align:center}
+  .socrow{display:flex;gap:9px;flex-wrap:wrap;margin-top:12px}
+  .socbtn{flex:1;min-width:120px;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:11px 14px;border-radius:11px;font-weight:700;font-size:13px;color:var(--green);border:1px solid var(--border);background:rgba(137,255,67,.04);transition:.12s}
+  .socbtn:hover{border-color:rgba(137,255,67,.45);background:rgba(137,255,67,.1)}
   .danger{color:var(--yellow);font-size:12px;line-height:1.5}
 
   .empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;height:60%;color:var(--muted);text-align:center;padding:24px}
@@ -709,6 +716,7 @@
     const {route,arg}=parseHash();state.route=route;
     if(state.pollT){clearTimeout(state.pollT);state.pollT=null;}
     if(state.txPollT){clearTimeout(state.txPollT);state.txPollT=null;}
+    if(statPollT){clearTimeout(statPollT);statPollT=null;}
     if(chatPollT){clearTimeout(chatPollT);chatPollT=null;}
     if(pnlPollT){clearTimeout(pnlPollT);pnlPollT=null;}
     if(portfolioPollT){clearTimeout(portfolioPollT);portfolioPollT=null;}
@@ -821,7 +829,9 @@
   // tab re-polls every 7s, so volume fills in within a cycle as the coin starts trading.
   async function enrichSocials(rows){
     try{
-      const need=(rows||[]).filter(r=>r&&r.tokenMint&&(!(r.twitterUrl||r.telegramUrl||r.websiteUrl)||!(Number(r.volumeH24||r.volumeH1||r.volume5m)>0))).slice(0,30);
+      // Refresh EVERY visible row each cycle (not just rows missing data) so MC / volume / liquidity
+      // keep ticking live from DexScreener instead of freezing at the first backend snapshot.
+      const need=(rows||[]).filter(r=>r&&r.tokenMint).slice(0,30);
       if(!need.length)return;
       const j=await fetch("https://api.dexscreener.com/latest/dex/tokens/"+need.map(r=>r.tokenMint).join(",")).then(x=>x.ok?x.json():null);
       const pairs=(j&&j.pairs)||[];const by={};
@@ -831,18 +841,21 @@
         const info=p.info||{};const v=p.volume||{};const pc=p.priceChange||{};const o={_liq:liq};
         for(const s of (info.socials||[])){const t=String(s.type||s.platform||"").toLowerCase();if((t==="twitter"||t==="x")&&!o.tw)o.tw=s.url;if(t==="telegram"&&!o.tg)o.tg=s.url;}
         if(info.websites&&info.websites[0]&&info.websites[0].url)o.web=info.websites[0].url;
-        o.v24=Number(v.h24||0);o.v1=Number(v.h1||0);o.v5=Number(v.m5||0);o.liq=liq;o.mc=Number(p.marketCap||p.fdv||0);o.m5=Number(pc.m5??pc.h1??0);
+        o.v24=Number(v.h24||0);o.v1=Number(v.h1||0);o.v5=Number(v.m5||0);o.liq=liq;o.mc=Number(p.marketCap||p.fdv||0);o.m5=Number(pc.m5??pc.h1);
         by[m]=o;}
       let changed=false;
       for(const r of rows){const o=by[r.tokenMint];if(!o)continue;
         if(o.tw&&!r.twitterUrl){r.twitterUrl=o.tw;changed=true;}if(o.tg&&!r.telegramUrl){r.telegramUrl=o.tg;changed=true;}if(o.web&&!r.websiteUrl){r.websiteUrl=o.web;changed=true;}
-        if(o.v24>0&&!(Number(r.volumeH24)>0)){r.volumeH24=o.v24;r.volumeH24Label=fmtUsd(o.v24);changed=true;}
-        if(o.v1>0&&!(Number(r.volumeH1)>0)){r.volumeH1=o.v1;r.volumeH1Label=fmtUsd(o.v1);changed=true;}
-        if(o.v5>0&&!(Number(r.volume5m)>0)){r.volume5m=o.v5;r.volume5mLabel=fmtUsd(o.v5);changed=true;}
-        const bestV=o.v1||o.v24||o.v5;if(bestV>0&&(!r.volumeLabel||r.volumeLabel==="checking")){r.volumeLabel=fmtUsd(bestV);changed=true;}
-        if(o.liq>0&&!(Number(r.liquidityUsd)>0)){r.liquidityUsd=o.liq;r.liquidityLabel=fmtUsd(o.liq);changed=true;}
-        if(o.mc>0&&!(Number(r.marketCap)>0)){r.marketCap=o.mc;r.marketCapLabel=fmtUsd(o.mc);changed=true;}
-        if(o.m5&&!(Number(r.m5))){r.m5=o.m5;changed=true;}}
+        // ALWAYS take the fresh DexScreener value (live over the user's IP) so MC / vol / liquidity /
+        // 5m move keep updating every cycle — DexScreener-listed coins only; brand-new coins with no
+        // pool yet (no match here) keep the backend's pump value.
+        if(o.v24>0){r.volumeH24=o.v24;r.volumeH24Label=fmtUsd(o.v24);changed=true;}
+        if(o.v1>0){r.volumeH1=o.v1;r.volumeH1Label=fmtUsd(o.v1);changed=true;}
+        if(o.v5>0){r.volume5m=o.v5;r.volume5mLabel=fmtUsd(o.v5);changed=true;}
+        const bestV=o.v1||o.v24||o.v5;if(bestV>0){r.volumeLabel=fmtUsd(bestV);changed=true;}
+        if(o.liq>0){r.liquidityUsd=o.liq;r.liquidityLabel=fmtUsd(o.liq);changed=true;}
+        if(o.mc>0){r.marketCap=o.mc;r.marketCapLabel=fmtUsd(o.mc);changed=true;}
+        if(Number.isFinite(o.m5)){r.m5=o.m5;changed=true;}}
       if(changed&&state.route==="trending"&&state.rows===rows)applyTrendingFilter();
     }catch(e){}
   }
@@ -1341,7 +1354,7 @@
         '</div></div>'+
         '<button class="tradefab" id="tradeFab" onclick="GG.flipTrade()" aria-label="Flip between bigger chart and bigger buy panel">💰 Buy</button>'+
       '</div>';
-    wireTradePanel(mint,r);updateWselLine();paintPresetSel();wireCtab();loadTradePnl(mint);
+    wireTradePanel(mint,r);updateWselLine();paintPresetSel();wireCtab();loadTradePnl(mint);loadTradeStats(mint);
     const mb=$("#ctMoreBtn");if(mb)mb.onclick=(e)=>{e.stopPropagation();mb.parentNode.classList.toggle("open");};
     if(state.token&&!(state.presets.trade||[]).length){loadPresets().then(()=>{if(state.route==="trade")paintPresetSel();});}
     if(!r){const rows=await fetchPairs(tabById("best"));r=rows.find(x=>x.tokenMint===mint)||null;if(r&&state.route==="trade"){state.tradeRow=r;$("#thead").innerHTML=theadHtml(r);fillPerf(r);}}
@@ -1364,8 +1377,41 @@
     loadSecurity(mint);
   }
   function theadHtml(r){
-    return avImg(r,"av")+'<div class="ti"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><div class="sub">'+esc(r.name||"")+' · '+esc(ageLabel(r))+'</div></div>'+
+    const soc=[];
+    if(r.twitterUrl)soc.push('<a href="'+esc(r.twitterUrl)+'" target="_blank" rel="noopener" title="X / Twitter">𝕏</a>');
+    if(r.telegramUrl)soc.push('<a href="'+esc(r.telegramUrl)+'" target="_blank" rel="noopener" title="Telegram">✈</a>');
+    if(r.websiteUrl)soc.push('<a href="'+esc(r.websiteUrl)+'" target="_blank" rel="noopener" title="Website">🌐</a>');
+    soc.push('<a href="https://pump.fun/coin/'+encodeURIComponent(r.tokenMint||"")+'" target="_blank" rel="noopener" title="pump.fun">🚀</a>');
+    soc.push('<a href="https://dexscreener.com/solana/'+encodeURIComponent(r.tokenMint||"")+'" target="_blank" rel="noopener" title="DexScreener">📊</a>');
+    const socHtml='<span class="ic chartsoc">'+soc.join("")+'</span>';
+    return avImg(r,"av")+'<div class="ti"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><div class="sub">'+esc(r.name||"")+' · '+esc(ageLabel(r))+'</div>'+socHtml+'</div>'+
       '<div class="st"><div><span>Price MC</span><b>'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</b></div><div><span>Liquidity</span><b>'+esc(r.liquidityLabel||fmtUsd(r.liquidityUsd))+'</b></div><div><span>Vol 1h</span><b>'+esc(r.volumeH1Label||r.volumeLabel||"—")+'</b></div></div>';
+  }
+  // Keep the chart header's MC / liquidity / volume / % moving LIVE while you watch the chart. The row
+  // snapshot from the feed is a point-in-time value; this re-pulls DexScreener (over the user's IP, every
+  // ~6s) for the open coin and repaints the header + perf row, also backfilling its socials.
+  let statPollT=null;
+  async function loadTradeStats(mint){
+    if(statPollT){clearTimeout(statPollT);statPollT=null;}
+    if(state.route!=="trade"||state.mint!==mint)return;
+    try{
+      const j=await fetch("https://api.dexscreener.com/latest/dex/tokens/"+encodeURIComponent(mint)).then(x=>x.ok?x.json():null);
+      const pairs=(j&&j.pairs)||[];let best=null,bestLiq=-1;
+      for(const p of pairs){if(!p||!p.baseToken||p.baseToken.address!==mint)continue;const liq=Number((p.liquidity&&p.liquidity.usd)||0);if(liq>bestLiq){bestLiq=liq;best=p;}}
+      if(best&&state.route==="trade"&&state.mint===mint){
+        const r=state.tradeRow||{tokenMint:mint};const v=best.volume||{},pc=best.priceChange||{},info=best.info||{};
+        const mc=Number(best.marketCap||best.fdv||0);if(mc>0){r.marketCap=mc;r.marketCapLabel=fmtUsd(mc);}
+        const liq=Number((best.liquidity&&best.liquidity.usd)||0);if(liq>0){r.liquidityUsd=liq;r.liquidityLabel=fmtUsd(liq);}
+        if(Number(v.h1)>0){r.volumeH1=Number(v.h1);r.volumeH1Label=fmtUsd(Number(v.h1));}
+        if(Number(v.h24)>0){r.volumeH24=Number(v.h24);r.volumeH24Label=fmtUsd(Number(v.h24));}
+        if(Number.isFinite(Number(pc.m5)))r.m5=Number(pc.m5);if(Number.isFinite(Number(pc.h1)))r.h1=Number(pc.h1);
+        if(Number.isFinite(Number(pc.h6)))r.h6=Number(pc.h6);if(Number.isFinite(Number(pc.h24)))r.h24=Number(pc.h24);
+        for(const s of (info.socials||[])){const t=String(s.type||s.platform||"").toLowerCase();if((t==="twitter"||t==="x")&&!r.twitterUrl)r.twitterUrl=s.url;if(t==="telegram"&&!r.telegramUrl)r.telegramUrl=s.url;}
+        if(info.websites&&info.websites[0]&&info.websites[0].url&&!r.websiteUrl)r.websiteUrl=info.websites[0].url;
+        state.tradeRow=r;const th=$("#thead");if(th)th.innerHTML=theadHtml(r);fillPerf(r);
+      }
+    }catch(e){}
+    statPollT=setTimeout(()=>{if(state.route==="trade"&&state.mint===mint)loadTradeStats(mint);},6000);
   }
   function fillPerf(r){const p=$("#perf");if(!p)return;[["5M",r.m5],["1H",r.h1],["6H",r.h6],["24H",r.h24]].forEach;p.innerHTML=[["5M",r.m5],["1H",r.h1],["6H",r.h6],["24H",r.h24]].map(([lab,v])=>{const n=pctNum(v);const cls=n==null?"mut":(n>=0?"up":"down");const t=n==null?"—":(n>=0?"+":"")+n.toFixed(1)+"%";return'<div><span>'+lab+'</span><b class="'+cls+'">'+t+'</b></div>';}).join("");}
   function updateWselLine(){
@@ -1773,6 +1819,13 @@
           '<button class="wbtn ghost" id="saveRefWallet">Save payout wallet</button>'+
         '</div></details>';})();
     }
+    // Community social links — present on the wallet page for both signed-out and signed-in states.
+    wrap.innerHTML+='<div class="wbox socbox"><h3>🐸 Join the SlimeWire community</h3><p class="sub">News, alpha drops and support — straight from the swamp.</p>'+
+      '<div class="socrow">'+
+        '<a class="socbtn" href="https://x.com/i/communities/1930265213917425858" target="_blank" rel="noopener">𝕏 X Community</a>'+
+        '<a class="socbtn" href="https://t.me/SlimeWireBot" target="_blank" rel="noopener">✈ Telegram</a>'+
+        '<a class="socbtn" href="https://www.slimewire.org" target="_blank" rel="noopener">🌐 Website</a>'+
+      '</div></div>';
     view.innerHTML="";view.appendChild(wrap);
     const cf=$("#connectFundBtn");if(cf)cf.onclick=()=>openConnectModal();
     const mk=$("#mkWallet");if(mk)mk.onclick=async()=>{mk.disabled=true;mk.textContent="Creating…";await createWallet();if(state.route==="wallet")renderWallet();};
