@@ -6767,6 +6767,13 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    // Top Wallets — what the best wallets are buying now (public; browse without login like the feeds).
+    if (request.method === "GET" && pathname === "/api/web/top-wallets") {
+      const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
+      sendWebJson(request, response, 200, { ok: true, ...await topWalletsFeed({ force }) });
+      return;
+    }
+
     // Native live transactions for the /gg trade view's Transactions tab. Proxies GeckoTerminal
     // pool trades (FREE, no key) so the browser never hits CORS and we render our own branded table.
     if (request.method === "GET" && pathname === "/api/web/token-trades") {
@@ -7924,12 +7931,6 @@ async function handleWebApiRequest(request, response, requestUrl) {
         ok: true,
         livePairs: await webLivePairs(auth.userId, bucket, { sort, force })
       });
-      return;
-    }
-
-    if (request.method === "GET" && pathname === "/api/web/top-wallets") {
-      const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
-      sendWebJson(request, response, 200, { ok: true, ...await topWalletsFeed({ force }) });
       return;
     }
 
