@@ -46315,57 +46315,96 @@ async function buildPumpFrontendCategory(userId, cat, sort, options = {}) {
 // Gecko candidate sources (which carry real MC / volume / liquidity), filtered to a genuine non-dust
 // sub-$30k market, then ranked by our full winner model (computeBestPickScore: freshness + liquidity +
 // real volume + buy pressure + momentum + KOL signal + low-cap fit − rug penalty). Best grade first.
+// "Steady" rug/dump gate for Slime Picks — drops the trash so the list is winners, not gambles.
+// Uses the signals already on each row (no extra calls): liquidity depth + liq/MC ratio (thin liq under
+// a real cap = exit-scam shape), buy/sell pressure (no sell cascades), momentum (not crashing), and
+// rug/manipulation scores. DEX-listed coins must have real, non-trap liquidity; bonding coins qualify
+// only when they're strong climbers (well past halfway to graduation) with genuine buy flow.
+function slimePickIsSteady(row) {
+  if (hasHardBlockedLivePairRisk(row)) return false;
+  const mc = Number(firstMeaningfulNumber(row.marketCap, row.fdv)) || 0;
+  const liq = Number(row.liquidityUsd) || 0;
+  const vol = Number(firstMeaningfulNumber(row.volumeH24, row.volumeH1, row.volume5m)) || 0;
+  const buys = Number(firstMeaningfulNumber(row.buysH1, row.buys5m, row.txns?.h1?.buys, row.txns?.buys)) || 0;
+  const sells = Number(firstMeaningfulNumber(row.sellsH1, row.sells5m, row.txns?.h1?.sells, row.txns?.sells)) || 0;
+  const h1 = Number(row.h1), m5 = Number(row.m5);
+  const bonding = Number(firstMeaningfulNumber(row.bondingProgressPct, row.bondingCurveProgress)) || 0;
+  const rug = Number(row.rugRisk), manip = Number(row.manipulationScore);
+  if (Number.isFinite(rug) && rug >= 75) return false;
+  if (Number.isFinite(manip) && manip >= 80) return false;
+  if (Number.isFinite(h1) && h1 <= -55) return false;                          // already crashing
+  if (Number.isFinite(m5) && m5 <= -38) return false;
+  if (buys + sells >= 10 && buys / (buys + sells) < 0.32) return false;        // sell cascade = dump
+  if (liq > 0) {                                                               // DEX-listed
+    if (liq < 2_500) return false;                                            // sub-$2.5k liq = rug trap
+    if (mc > 0 && liq / mc < 0.035) return false;                            // thin liq vs cap = manipulable
+    return vol > 0 || buys >= 3;                                             // some real trading
+  }
+  return bonding >= 60 && buys >= 4 && (!Number.isFinite(h1) || h1 > -40);     // strong bonding climber only
+}
+
 async function buildSlimePicksCategory(userId, sort, options = {}) {
   const force = Boolean(options.force);
-  // The sub-$30k universe is two kinds of coin, and we need BOTH or the list is empty:
-  //  (1) coins already trading on a DEX (carry real volume/liquidity) — the "steady" ones; and
-  //  (2) pump BONDING climbers (have MC + curve progress but no DEX volume yet) — most sub-$30k coins.
-  // Verified live: of ~99 search hits ~45 are sub-$30k but only ~4 have real DEX liquidity, so a
-  // liquidity-only gate (the first cut) returned ZERO. So: gate the DEX set on real traction, take the
-  // bonding set on curve progress, merge, and rank ALL of them by the winner model (liquid+volume coins
-  // naturally score to the top; dead dust is dropped).
+  // Pool: DEX-traded sub-$30k coins (carry liquidity/volume/buys/momentum — the real "steady" signal)
+  // + strong pump bonding climbers. Then the STEADY GATE drops rugs/dumps/thin-liq traps, the winner
+  // model scores the survivors, and coins our tracked top wallets are buying get a conviction boost.
   const cats = ["earlyMomentum", "pumpTrending", "memeMovers"];
   const dexPools = await Promise.all(cats.map((c) =>
     fetchLiveCategoryCandidates(c, { ttlMs: 6_000, timeoutMs: 4_000, force }).catch(() => [])));
   const dexRows = dexPools.flat().map(livePairCandidateToRow).filter(Boolean).filter((row) => {
     const mc = Number(firstMeaningfulNumber(row.marketCap, row.fdv)) || 0;
-    const liq = Number(row.liquidityUsd) || 0;
-    const vol = Number(firstMeaningfulNumber(row.volumeH24, row.volumeH1, row.volume5m)) || 0;
-    return mc >= 2_000 && mc <= 30_000 && (liq >= 800 || vol >= 300); // real traders, not a ghost
+    return mc >= 2_000 && mc <= 30_000;
   });
-  // pump bonding climbers: paginate the recent-trade on-curve list, keep sub-$30k coins ≥30% bonded.
   let pumpRows = [];
   if (pumpFrontendEnabled()) {
     try {
       const pages = await Promise.all([0, 50, 100].map((off) =>
         fetchPumpFrontend(`/coins?offset=${off}&limit=50&sort=last_trade_timestamp&order=DESC&includeNsfw=false&complete=false`, { force })));
       const cands = pages.flat().map((c) => pumpFrontendToCandidate(c, "slimePicks")).filter(Boolean)
-        .filter((c) => { const mc = Number(c.metadata.marketCap) || 0, p = Number(c.bondingCurveProgress) || 0; return mc >= 2_000 && mc <= 30_000 && p >= 30 && p < 100; });
+        .filter((c) => { const mc = Number(c.metadata.marketCap) || 0, p = Number(c.bondingCurveProgress) || 0; return mc >= 2_000 && mc <= 30_000 && p >= 60 && p < 100; });
       pumpRows = cands.map((c) => { const r = livePairCandidateToRow(c); if (r) { r.bondingCurveProgress = Number(c.bondingCurveProgress); r.bondingProgressPct = Number(c.bondingCurveProgress); } return r; }).filter(Boolean);
     } catch {}
   }
   const seen = new Set();
+  const scanned = dexRows.length + pumpRows.length;
   let rows = dexRows.concat(pumpRows)
     .filter((row) => { const m = String(row.tokenMint || ""); if (!m || seen.has(m)) return false; seen.add(m); return true; })
-    .filter((row) => !hasHardBlockedLivePairRisk(row));
+    .filter(slimePickIsSteady);
   for (const row of rows) {
     const s = computeBestPickScore(row);
-    row.bestPickScore = s.score; row.bestPickLabel = s.label; row.bestPickInputs = s.inputs; row.bestPickWarnings = s.warnings;
-    row.slimeScopeCategory = "slime-pick";
+    let score = s.score;
+    // Conviction boost: a coin our tracked winner wallets are buying RIGHT NOW is a far stronger pick.
+    let topWalletBuy = false;
+    try {
+      if (winnerBuys && winnerBuys.has(row.tokenMint)) { topWalletBuy = true; }
+      else { const sm = smartMoneyScore(row.tokenMint); if (sm && (sm.kol || Number(sm.winners) >= 1)) topWalletBuy = true; }
+    } catch {}
+    if (topWalletBuy) score = Math.min(100, score + 10);
+    row.bestPickScore = score; row.bestPickLabel = s.label; row.bestPickInputs = s.inputs; row.bestPickWarnings = s.warnings;
+    row.topWalletBuy = topWalletBuy; row.slimeScopeCategory = "slime-pick";
   }
   rows = rows.sort((a, b) => Number(b.bestPickScore) - Number(a.bestPickScore));
   const targetLimit = 40;
-  const safeRows = decorateWebLivePairAvatars(rows.slice(0, targetLimit));
+  const top = rows.slice(0, targetLimit);
+  const meta = new Map(top.map((r) => [String(r.tokenMint), { sc: r.bestPickScore, lbl: r.bestPickLabel, tw: r.topWalletBuy }]));
+  const safeRows = decorateWebLivePairAvatars(top);
   recordCategoryMints("slimePicks", safeRows);
   void persistPostgresLivePairRows(safeRows, { reason: "live-pairs:slime-picks" }).catch(() => false);
+  // webLivePairRow rebuilds rows; re-attach our score + the top-wallet flag so the UI can rank + badge.
+  const outRows = safeRows.map((r) => {
+    const w = webLivePairRow(r);
+    const m = meta.get(String(r.tokenMint || w.tokenMint));
+    if (m) { w.bestPickScore = m.sc; w.bestPickLabel = m.lbl; if (m.tw) w.topWalletBuy = true; }
+    return w;
+  });
   return {
     label: "slimePicks", bucket: "live", sort, category: "cat:slimePicks", refreshCount: 0,
-    scanned: dexRows.length + pumpRows.length, qualified: rows.length, count: safeRows.length,
-    rawProviderCount: dexPools.flat().length + pumpRows.length, backendReturnedCount: safeRows.length,
-    pageSize: targetLimit, maxPageSize: targetLimit, hasMore: rows.length > safeRows.length, nextCursor: null,
-    source: "slime-picks", providerStatus: "ok", filteredOutCount: Math.max(0, rows.length - safeRows.length),
-    rows: safeRows.map(webLivePairRow), refreshedAt: new Date().toISOString(), refreshSeconds: CONFIG.livePairsRefreshSeconds,
-    message: safeRows.length ? `Slime Picks: ${safeRows.length} steady sub-$30k pick(s).` : "Slime Picks: scanning for steady sub-$30k winners…"
+    scanned, qualified: rows.length, count: outRows.length,
+    rawProviderCount: dexPools.flat().length + pumpRows.length, backendReturnedCount: outRows.length,
+    pageSize: targetLimit, maxPageSize: targetLimit, hasMore: rows.length > outRows.length, nextCursor: null,
+    source: "slime-picks", providerStatus: "ok", filteredOutCount: Math.max(0, scanned - rows.length),
+    rows: outRows, refreshedAt: new Date().toISOString(), refreshSeconds: CONFIG.livePairsRefreshSeconds,
+    message: outRows.length ? `Slime Picks: ${outRows.length} steady sub-$30k pick(s).` : "Slime Picks: holding — nothing clears the rug filter right now."
   };
 }
 
