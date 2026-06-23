@@ -43411,7 +43411,7 @@ function flattenParsedInstructions(tx) {
 // tx, and record the non-stable token the wallet RECEIVED (a buy). Rolling ~45m window. LAZY — it only
 // polls when the panel is actually viewed, and is RPC-bounded per pass, so it stays cheap. Resilient:
 // if ST turns off, the RPC watcher keeps the panel alive; when ST is on, its buys fold in on top.
-const TOP_WALLET_WINDOW_MS = 45 * 60 * 1000;
+const TOP_WALLET_WINDOW_MS = 3 * 60 * 60 * 1000;   // "current" = last few hours (top wallets don't trade every minute)
 const TOP_WALLET_LIST_TTL_MS = 10 * 60 * 1000;
 const TOP_WALLET_POLL_TTL_MS = 40 * 1000;
 const TOP_WALLET_MAX_TX_PER_POLL = 40;
@@ -43426,13 +43426,18 @@ let topWalletPollInFlight = null;
 async function refreshTopWalletList() {
   if (topWalletList.wallets.length && Date.now() - topWalletList.at < TOP_WALLET_LIST_TTL_MS) return topWalletList.wallets;
   const wallets = [];
+  // "hot" = the ACTIVELY-trading top KOLs (they have fresh buys to find); "top" = all-time ROI leaders
+  // (great wallets, but may be idle right now). Pull hot first, then top-up from top, for a live roster.
   try {
-    const scan = await buildKolScan(null, "top", "").catch(() => null);
-    for (const k of (scan?.kols || [])) {
-      const w = String(k.wallet || k.address || "").trim();
-      if (!w || !solanaPublicKeyLike(w) || wallets.some((x) => x.wallet === w)) continue;
-      wallets.push({ wallet: w, name: firstString(k.name, k.handle, k.twitter, shortMint(w)), roi: Number(firstMeaningfulNumber(k.roi, k.roiSol, k.pnlSol)) || null, winRate: Number(firstMeaningfulNumber(k.winRatePct, k.winRate)) || null, pfp: firstString(k.pfp, k.avatar, k.image, k.imageUrl) });
-      if (wallets.length >= 25) break;
+    for (const mode of ["hot", "top"]) {
+      if (wallets.length >= 22) break;
+      const scan = await buildKolScan(null, mode, "").catch(() => null);
+      for (const k of (scan?.kols || [])) {
+        const w = String(k.wallet || k.address || "").trim();
+        if (!w || !solanaPublicKeyLike(w) || wallets.some((x) => x.wallet === w)) continue;
+        wallets.push({ wallet: w, name: firstString(k.name, k.handle, k.twitter, shortMint(w)), roi: Number(firstMeaningfulNumber(k.roi, k.roiSol, k.pnlSol)) || null, winRate: Number(firstMeaningfulNumber(k.winRatePct, k.winRate)) || null, pfp: firstString(k.pfp, k.avatar, k.image, k.imageUrl) });
+        if (wallets.length >= 22) break;
+      }
     }
   } catch {}
   if (wallets.length < 12) {
