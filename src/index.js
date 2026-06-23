@@ -46099,7 +46099,7 @@ async function buildPumpFrontendCategory(userId, cat, sort, options = {}) {
   //  (newest complete coins), Graduating = on the curve, climbing (complete=false, 45-99% bonded).
   let path;
   if (cat === "gtSurging") path = "/coins?offset=0&limit=100&sort=volume&order=DESC&includeNsfw=false&complete=true";
-  else if (cat === "graduating") path = "/coins?offset=0&limit=500&sort=last_trade_timestamp&order=DESC&includeNsfw=false&complete=false";
+  else if (cat === "graduating") path = "/coins?offset=0&limit=200&sort=last_trade_timestamp&order=DESC&includeNsfw=false&complete=false";
   else if (cat === "graduated" || cat === "gtMigrated") path = "/coins?offset=0&limit=100&sort=created_timestamp&order=DESC&includeNsfw=false&complete=true";
   else path = "/coins?offset=0&limit=100&sort=market_cap&order=DESC&includeNsfw=false&complete=true";
   const coins = await fetchPumpFrontend(path, { force });
@@ -46110,7 +46110,9 @@ async function buildPumpFrontendCategory(userId, cat, sort, options = {}) {
     cands = cands.filter((c) => { const p = Number(c.bondingCurveProgress) || 0, mc = Number(c.metadata.marketCap) || 0; return !c.graduated && p >= 45 && p < 100 && mc > 0 && mc <= 100000; })
       .sort((a, b) => Number(b.bondingCurveProgress) - Number(a.bondingCurveProgress));
   } else {
-    cands = cands.filter((c) => c.graduated && (Number(c.metadata.marketCap) || 0) >= 15000);
+    // Graduated = recent small/mid graduations (cap $3M) so it's DISTINCT from Trending's $10M+ bluechips.
+    const maxMc = cat === "graduated" ? 3_000_000 : Infinity;
+    cands = cands.filter((c) => { const mc = Number(c.metadata.marketCap) || 0; return c.graduated && mc >= 15000 && mc <= maxMc; });
     if (cat === "dexTrending") cands.sort((a, b) => Number(b.metadata.marketCap) - Number(a.metadata.marketCap));
     // gtSurging keeps pump's volume order; graduated keeps created (recency) order.
   }
