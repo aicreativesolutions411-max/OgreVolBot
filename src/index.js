@@ -46054,10 +46054,86 @@ async function buildMoralisTrendingCategory(userId, cat, sort, options = {}) {
   };
 }
 
+// pump.fun's OWN frontend-api lists via the Cloudflare Worker proxy (PUMP_PROXY_URL) — the EXACT coins
+// pump.fun shows, with real usd_market_cap + bonding-curve reserves. Powers Trending (top graduated by
+// real MC) + Graduating (climbing the curve). Falls through to Moralis/Gecko if the proxy is unset/down.
+const pumpFrontendCache = new Map(); // path -> { at, coins }
+function pumpProxyUrl() { return String(process.env.PUMP_PROXY_URL || "").trim().replace(/\/+$/, ""); }
+function pumpFrontendEnabled() { return Boolean(pumpProxyUrl()); }
+async function fetchPumpFrontend(path, { force = false, ttlMs = 8000 } = {}) {
+  const base = pumpProxyUrl(); if (!base) return [];
+  const cached = pumpFrontendCache.get(path);
+  if (!force && cached && Date.now() - cached.at < ttlMs) return cached.coins;
+  try {
+    const target = `https://frontend-api-v3.pump.fun${path}`;
+    const data = await fetchJson(`${base}/?u=${encodeURIComponent(target)}`, { headers: { accept: "application/json" }, timeoutMs: 6000 });
+    const coins = Array.isArray(data) ? data : (Array.isArray(data?.coins) ? data.coins : []);
+    if (coins.length) pumpFrontendCache.set(path, { at: Date.now(), coins });
+    return coins.length ? coins : (cached ? cached.coins : []);
+  } catch { return cached ? cached.coins : []; }
+}
+function pumpFrontendToCandidate(coin, cat) {
+  const mint = String(coin.mint || "").trim();
+  if (!mint || !solanaPublicKeyLike(mint)) return null;
+  const graduated = Boolean(coin.complete || coin.raydium_pool || coin.pool_address);
+  const realSol = Number(coin.real_sol_reserves) || 0;
+  const bondingPct = graduated ? 100 : Math.max(0, Math.min(100, (realSol / 1e9 / 85) * 100));
+  const createdMs = Number(coin.created_timestamp) || null;
+  const mc = Number(coin.usd_market_cap) || 0;
+  return {
+    tokenMint: mint, mint, source: `pump-frontend:${cat}`, isPump: true,
+    graduated, isGraduated: graduated, bondingCurveProgress: bondingPct, createdAt: createdMs,
+    metadata: {
+      tokenMint: mint, symbol: String(coin.symbol || "").trim(), name: String(coin.name || "").trim(),
+      imageUrl: coin.image_uri || "", twitterUrl: coin.twitter || "", websiteUrl: coin.website || "",
+      marketCap: mc, fdv: mc, priceUsd: 0, liquidityUsd: 0, graduated, isPump: true,
+      bondingCurveProgress: bondingPct, creatorWallet: coin.creator || "",
+      pairCreatedAt: createdMs, createdTimestamp: createdMs
+    }
+  };
+}
+async function buildPumpFrontendCategory(userId, cat, sort, options = {}) {
+  const force = Boolean(options.force);
+  const coins = cat === "graduating"
+    ? await fetchPumpFrontend("/coins?offset=0&limit=150&sort=market_cap&order=DESC&includeNsfw=false&complete=false", { force })
+    : await fetchPumpFrontend("/coins?offset=0&limit=100&sort=market_cap&order=DESC&includeNsfw=false&complete=true", { force });
+  let cands = coins.map((c) => pumpFrontendToCandidate(c, cat)).filter(Boolean);
+  if (cat === "graduating") {
+    // About-to-graduate: climbing the curve, real MC band — excludes $7M pumpswap-migrated anomalies + dust.
+    cands = cands.filter((c) => { const real = Number(c.bondingCurveProgress) || 0, mc = Number(c.metadata.marketCap) || 0; return !c.graduated && real >= 45 && mc >= 8000 && mc <= 250000; })
+      .sort((a, b) => Number(b.bondingCurveProgress) - Number(a.bondingCurveProgress));
+  } else {
+    cands = cands.filter((c) => c.graduated && (Number(c.metadata.marketCap) || 0) >= 15000)
+      .sort((a, b) => Number(b.metadata.marketCap) - Number(a.metadata.marketCap));
+  }
+  const seen = new Set();
+  let rows = cands.map((c) => { const r = livePairCandidateToRow(c); if (r) { r.bondingCurveProgress = Number(c.bondingCurveProgress); r.graduated = c.graduated; r.isGraduated = c.graduated; } return r; }).filter(Boolean)
+    .filter((r) => { const m = String(r.tokenMint || ""); if (!m || seen.has(m)) return false; seen.add(m); return true; })
+    .filter((row) => !hasHardBlockedLivePairRisk(row));
+  if (cat === "graduating") rows.sort((a, b) => Number(b.bondingCurveProgress || 0) - Number(a.bondingCurveProgress || 0));
+  const targetLimit = 60;
+  const safeRows = decorateWebLivePairAvatars(rows.slice(0, targetLimit));
+  recordCategoryMints(cat, safeRows);
+  void persistPostgresLivePairRows(safeRows, { reason: `live-pairs:pump-frontend:${cat}` }).catch(() => false);
+  return {
+    label: cat, bucket: "live", sort, category: `cat:${cat}`, refreshCount: 0,
+    scanned: coins.length, qualified: rows.length, count: safeRows.length,
+    rawProviderCount: coins.length, backendReturnedCount: safeRows.length,
+    pageSize: targetLimit, maxPageSize: targetLimit, hasMore: rows.length > safeRows.length, nextCursor: null,
+    source: "pump-frontend", providerStatus: "ok", filteredOutCount: Math.max(0, rows.length - safeRows.length),
+    rows: safeRows.map(webLivePairRow), refreshedAt: new Date().toISOString(), refreshSeconds: CONFIG.livePairsRefreshSeconds,
+    message: safeRows.length ? `${cat}: ${safeRows.length} pump pair(s).` : `${cat}: scanning…`
+  };
+}
+
 async function buildWebLivePairsForCategory(userId, cat, sort, options = {}) {
-  // Graduating + Graduated come straight from pump.fun's own lists via Moralis (exact match) when the
-  // free key is set; Surging + Trending come from Moralis's pump-heavy Solana trending list. Either
-  // way, if Moralis is down/empty we fall through to the GeckoTerminal source below.
+  // PRIMARY: pump.fun's own frontend-api (via the CF Worker) for Trending + Graduating — the exact coins
+  // pump shows. Then Moralis (bonding/graduated lists + trending momentum). Then GeckoTerminal. Each
+  // step falls through if the source is unset/down/thin, so a tab never empties.
+  if (pumpFrontendEnabled() && (cat === "graduating" || cat === "dexTrending")) {
+    const built = await buildPumpFrontendCategory(userId, cat, sort, options).catch(() => null);
+    if (built && Array.isArray(built.rows) && built.rows.length >= 5) { built.category = `cat:${cat}`; built.label = cat; return built; }
+  }
   if (moralisEnabled()) {
     if (cat === "graduating" || cat === "graduated" || cat === "gtMigrated") {
       const built = await buildMoralisPumpCategory(userId, cat === "gtMigrated" ? "graduated" : cat, sort, options).catch(() => null);
