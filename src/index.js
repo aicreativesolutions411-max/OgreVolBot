@@ -46099,7 +46099,7 @@ async function buildPumpFrontendCategory(userId, cat, sort, options = {}) {
   //  (newest complete coins), Graduating = on the curve, climbing (complete=false, 45-99% bonded).
   let path;
   if (cat === "gtSurging") path = "/coins?offset=0&limit=100&sort=volume&order=DESC&includeNsfw=false&complete=true";
-  else if (cat === "graduating") path = "/coins?offset=0&limit=300&sort=market_cap&order=DESC&includeNsfw=false&complete=false";
+  else if (cat === "graduating") path = "/coins?offset=0&limit=500&sort=last_trade_timestamp&order=DESC&includeNsfw=false&complete=false";
   else if (cat === "graduated" || cat === "gtMigrated") path = "/coins?offset=0&limit=100&sort=created_timestamp&order=DESC&includeNsfw=false&complete=true";
   else path = "/coins?offset=0&limit=100&sort=market_cap&order=DESC&includeNsfw=false&complete=true";
   const coins = await fetchPumpFrontend(path, { force });
