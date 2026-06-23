@@ -167,6 +167,7 @@
   .twtop{display:flex;align-items:center;gap:7px}.twtop b{font-size:13px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px}
   .twct{margin-left:auto;font-size:11px;color:var(--green2);font-weight:800;flex:0 0 auto}
   .twsm{font-size:9px;font-weight:900;letter-spacing:.04em;color:#0a1207;background:linear-gradient(180deg,#9be35a,#5fbf2e);border-radius:5px;padding:2px 5px;flex:0 0 auto;text-transform:uppercase}
+  .twmc{font-size:10.5px;font-weight:700;color:var(--muted2);font-family:var(--mono);flex:0 0 auto}
   .twbuyers{display:flex;align-items:center;gap:4px;margin-top:3px}
   .twpfp{width:16px;height:16px;border-radius:50%;object-fit:cover;border:1px solid var(--border);flex:0 0 auto}
   .twpfp.ph{font-size:11px;border:none}
@@ -816,24 +817,91 @@
     if(r.graduated)out+='<span class="chip">DEX</span>';
     return out||'<span class="chip">—</span>';
   }
-  function pairCellHtml(r){
+  function pairMetaInner(r){
     const links=[];
     if(r.twitterUrl)links.push('<a href="'+esc(r.twitterUrl)+'" target="_blank" onclick="event.stopPropagation()">𝕏</a>');
     if(r.telegramUrl)links.push('<a href="'+esc(r.telegramUrl)+'" target="_blank" onclick="event.stopPropagation()">✈</a>');
     if(r.websiteUrl)links.push('<a href="'+esc(r.websiteUrl)+'" target="_blank" onclick="event.stopPropagation()">🌐</a>');
-    return'<div class="pair">'+avImg(r,"av")+'<div class="nm"><div class="t"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><span class="sub">'+esc(r.name||"")+'</span></div>'+
-      '<div class="meta"><span class="age">'+esc(ageLabel(r))+'</span>'+(links.length?'<span class="ic">'+links.join("")+'</span>':'')+
-      '<span class="ic"><a onclick="event.stopPropagation();GG.copy(\''+esc(r.tokenMint)+'\')" title="Copy CA">⧉</a></span></div></div></div>';
+    return'<span class="age">'+esc(ageLabel(r))+'</span>'+(links.length?'<span class="ic">'+links.join("")+'</span>':'')+
+      '<span class="ic"><a onclick="event.stopPropagation();GG.copy(\''+esc(r.tokenMint)+'\')" title="Copy CA">⧉</a></span>';
   }
+  function pairCellHtml(r){
+    return'<div class="pair">'+avImg(r,"av")+'<div class="nm"><div class="t"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><span class="sub">'+esc(r.name||"")+'</span></div>'+
+      '<div class="meta">'+pairMetaInner(r)+'</div></div></div>';
+  }
+  // Mutable cell HTML — single source of truth for build + in-place patch (no full-table teardown).
+  function mcCellInner(r){return'<span class="mc">'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</span>'+pctHtml(r.m5);}
+  function txnsCellInner(r){return'<span class="txns"><span class="b">'+(r.buys5m??r.buysH1??0)+'</span> / <span class="s">'+(r.sells5m??r.sellsH1??0)+'</span></span>';}
   function rowHtml(r){
-    return'<tr onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+
-      '<td class="l">'+pairCellHtml(r)+'</td>'+
-      '<td><span class="mc">'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</span>'+pctHtml(r.m5)+'</td>'+
-      '<td class="hideMb">'+esc(r.liquidityLabel||fmtUsd(r.liquidityUsd))+'</td>'+
-      '<td>'+esc(volLabel(r))+'</td>'+
-      '<td class="hideMb"><span class="txns"><span class="b">'+(r.buys5m??r.buysH1??0)+'</span> / <span class="s">'+(r.sells5m??r.sellsH1??0)+'</span></span></td>'+
-      '<td class="hideMb"><div class="tkinfo">'+riskChips(r)+'</div></td>'+
+    return'<tr data-mint="'+esc(r.tokenMint)+'" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+
+      '<td class="l c-pair">'+pairCellHtml(r)+'</td>'+
+      '<td class="c-mc">'+mcCellInner(r)+'</td>'+
+      '<td class="hideMb c-liq">'+esc(r.liquidityLabel||fmtUsd(r.liquidityUsd))+'</td>'+
+      '<td class="c-vol">'+esc(volLabel(r))+'</td>'+
+      '<td class="hideMb c-tx">'+txnsCellInner(r)+'</td>'+
+      '<td class="hideMb c-info"><div class="tkinfo">'+riskChips(r)+'</div></td>'+
       '<td><div style="display:flex;gap:6px;align-items:center;justify-content:flex-end">'+starBtn(r)+'<button class="buybtn sm" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button></div></td></tr>';
+  }
+  // In-place patch: update an existing <tr>'s mutable cells (price/liq/vol/txns/chips/socials) WITHOUT
+  // touching its <img> — so the row never flickers and scroll/hover are preserved. Only writes a cell
+  // when its content actually changed (cheap text diff), so steady rows do zero DOM work.
+  function updateTrendingRow(tr,r){
+    const set=(sel,html)=>{const e=tr.querySelector(sel);if(e&&e.innerHTML!==html)e.innerHTML=html;};
+    set(".c-mc",mcCellInner(r));
+    set(".c-liq",esc(r.liquidityLabel||fmtUsd(r.liquidityUsd)));
+    set(".c-vol",esc(volLabel(r)));
+    set(".c-tx",txnsCellInner(r));
+    set(".c-info",'<div class="tkinfo">'+riskChips(r)+'</div>');
+    set(".c-pair .meta",pairMetaInner(r));
+    // pfp arrived late (feed had none, DexScreener filled it) → swap the placeholder src in, no full reload
+    const img=tr.querySelector(".c-pair img.av");
+    if(img&&r.imageUrl&&img.getAttribute("data-raw")!==r.imageUrl&&/slimewire-mark/.test(img.getAttribute("src")||"")){
+      img.src=coinImgSrc(r.imageUrl)||r.imageUrl;img.setAttribute("data-raw",r.imageUrl);
+    }
+  }
+  // Reconcile the table body to `rows` IN PLACE, keyed by mint: reuse+patch existing rows, insert new,
+  // remove gone, reorder by appending in target order. Returns false if there's no table to patch yet
+  // (caller then does the one-time full build). This is what kills the "laggy / flickering feed".
+  function syncTrendingTable(rows){
+    const view=$("#v-trending");if(!view)return false;
+    const tbody=view.querySelector("table tbody");if(!tbody)return false;
+    const existing=new Map();
+    for(const tr of Array.from(tbody.children)){const m=tr.getAttribute&&tr.getAttribute("data-mint");if(m)existing.set(m,tr);}
+    if(!existing.size)return false; // empty/msg state — let caller rebuild
+    const tpl=document.createElement("tbody");let prev=null;
+    for(const r of rows){
+      let tr=existing.get(r.tokenMint);
+      if(tr){updateTrendingRow(tr,r);existing.delete(r.tokenMint);}
+      else{tpl.innerHTML=rowHtml(r);tr=tpl.firstChild;}
+      if(prev){if(prev.nextSibling!==tr)tbody.insertBefore(tr,prev.nextSibling);}
+      else if(tbody.firstChild!==tr)tbody.insertBefore(tr,tbody.firstChild);
+      prev=tr;
+    }
+    for(const tr of existing.values())tr.remove();
+    return true;
+  }
+  // Generic in-place reconcile for CARD lists (trenches columns, slime picks, sniper feed). Keyed by
+  // data-mint; a card is only rebuilt when its data signature changes (so an unchanged card never has
+  // its <img> reloaded → no flicker), and cards reorder/insert/remove in place. Pass a sig that captures
+  // the visible mutable fields. Returns false when the container isn't card-keyed yet (do a full build).
+  function cardSig(r,i){return [i,r.marketCapLabel,r.liquidityLabel,volLabel(r),r.m5,r.score||r.bestPickScore,r.bestPickLabel,r.rugRisk,r.topWalletBuy?1:0,r.twitterUrl?1:0,r.telegramUrl?1:0,r.websiteUrl?1:0,r.imageUrl?1:0,r.buys5m,r.sells5m,r.marketCapLabel?0:ageLabel(r)].join("|");}
+  function syncCards(container,rows,buildFn,sigFn){
+    if(!container)return false;
+    const existing=new Map();
+    for(const el of Array.from(container.children)){const m=el.getAttribute&&el.getAttribute("data-mint");if(m)existing.set(m,el);}
+    if(!existing.size)return false;                                  // loading/msg state → caller full-builds
+    const sg=sigFn||cardSig;const tpl=document.createElement("div");let prev=null;
+    rows.forEach((r,i)=>{
+      const sig=sg(r,i);let el=existing.get(r.tokenMint);
+      if(el){if(el.getAttribute("data-sig")!==sig){tpl.innerHTML=buildFn(r,i);const nn=tpl.firstChild;el.replaceWith(nn);el=nn;}existing.delete(r.tokenMint);}
+      else{tpl.innerHTML=buildFn(r,i);el=tpl.firstChild;}
+      if(el&&el.setAttribute)el.setAttribute("data-sig",sig);
+      if(prev){if(prev.nextSibling!==el)container.insertBefore(el,prev.nextSibling);}
+      else if(container.firstChild!==el)container.insertBefore(el,container.firstChild);
+      prev=el;
+    });
+    for(const el of existing.values())el.remove();
+    return true;
   }
   function shownRows(){
     let rows=state.rows||[];
@@ -846,7 +914,9 @@
     const term=(state.searchTerm||"").toLowerCase().trim();
     return term?rows.filter(r=>((r.symbol||"")+" "+(r.name||"")).toLowerCase().includes(term)):rows;
   }
-  function applyTrendingFilter(){const tb=document.querySelector("#v-trending tbody");if(!tb)return;const rows=shownRows();tb.innerHTML=rows.length?rows.map(rowHtml).join(""):'<tr><td colspan="7" class="msg">No match in this list.</td></tr>';}
+  function applyTrendingFilter(){const tb=document.querySelector("#v-trending tbody");if(!tb)return;const rows=shownRows();
+    if(rows.length&&syncTrendingTable(rows))return;                 // patch in place (no flicker)
+    tb.innerHTML=rows.length?rows.map(rowHtml).join(""):'<tr><td colspan="7" class="msg">No match in this list.</td></tr>';}
   async function renderTrending(){
     setActiveView("v-trending");subbarTrending();
     const view=$("#v-trending");
@@ -865,6 +935,7 @@
     state.rows=rows;
     const shown=shownRows();
     if(!rows.length)view.innerHTML='<div class="msg">'+(feedDown?'Reconnecting to the live feed… <span class="spin"></span>':(isWatch?"No saved coins yet — tap ☆ on any coin to add it here.":"No pairs in this view right now — try another tab."))+'</div>';
+    else if(shown.length&&syncTrendingTable(shown)){}              // same table already up → patch rows in place (no teardown/flicker)
     else view.innerHTML='<table class="tbl"><thead><tr><th class="l">Pair</th><th>Market Cap</th><th class="hideMb">Liquidity</th><th>Volume</th><th class="hideMb">Txns</th><th class="hideMb">Token Info</th><th></th></tr></thead><tbody>'+(shown.length?shown.map(rowHtml).join(""):'<tr><td colspan="7" class="msg">No match in this list.</td></tr>')+'</tbody></table>';
     void enrichSocials(rows);
     // Watchlist is static-ish — refresh it lazily (30s); live feeds stay snappy at 7s; retry fast when down.
@@ -939,7 +1010,7 @@
     return '<span class="ic">'+s+'</span>';
   }
   function cardHtml(r){
-    return'<div class="card" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+avImg(r,"av")+
+    return'<div class="card" data-mint="'+esc(r.tokenMint)+'" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+avImg(r,"av")+
       '<div class="body"><div class="top"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><span class="nm">'+esc(r.name||"")+'</span><span class="age">'+esc(ageLabel(r))+'</span>'+starBtn(r)+'</div>'+
       '<div class="stats"><span><i>MC</i>'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</span><span><i>LIQ</i>'+esc(r.liquidityLabel||fmtUsd(r.liquidityUsd))+'</span><span><i>V</i>'+esc(volLabel(r))+'</span></div>'+
       '<div class="row2">'+riskChips(r)+socialIconsHtml(r)+'<button class="buybtn sm" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button></div></div></div>';
@@ -962,9 +1033,9 @@
     await Promise.all(TRENCH_COLS.map(async c=>{
       const rows=await fetchPairs(c.params);if(state.route!=="trenches"||state.trenchTab!=="board")return;
       const list=$("#list-"+c.key),cnt=$("#cnt-"+c.key);if(cnt)cnt.textContent=rows.length;
-      if(list)list.innerHTML=rows.length?rows.map(cardHtml).join(""):'<div class="msg" style="font-size:12px">Nothing here yet.</div>';
-      // backfill socials (X/TG/web) from DexScreener over the user's IP, then repaint this column
-      enrichSocials(rows).then(()=>{const l=$("#list-"+c.key);if(state.route==="trenches"&&state.trenchTab==="board"&&l&&rows.length)l.innerHTML=rows.map(cardHtml).join("");});
+      if(list&&!(rows.length&&syncCards(list,rows,cardHtml)))list.innerHTML=rows.length?rows.map(cardHtml).join(""):'<div class="msg" style="font-size:12px">Nothing here yet.</div>';
+      // backfill socials (X/TG/web) from DexScreener over the user's IP, then patch this column in place
+      enrichSocials(rows).then(()=>{const l=$("#list-"+c.key);if(state.route==="trenches"&&state.trenchTab==="board"&&l&&rows.length&&!syncCards(l,rows,cardHtml))l.innerHTML=rows.map(cardHtml).join("");});
     }));
     if(state.route==="trenches"&&state.trenchTab==="board")state.pollT=setTimeout(()=>{if(state.route==="trenches")renderTrenches();},7000);
   }
@@ -982,9 +1053,9 @@
     const pw=$("#pickWrap");
     if(pw){
       if(!rows.length)pw.innerHTML='<div class="msg" style="padding:24px">'+(lastPairsOk?"No steady sub-$30k picks clear the rug filter right now — check back in a moment.":"Loading… <span class=\"spin\"></span>")+'</div>';
-      else pw.innerHTML=rows.map((r,i)=>slimePickCard(r,i)).join("");
+      else if(!syncCards(pw,rows,slimePickCard))pw.innerHTML=rows.map((r,i)=>slimePickCard(r,i)).join("");
     }
-    enrichSocials(rows).then(()=>{if(state.route==="trenches"&&state.trenchTab==="picks"&&rows.length){const p=$("#pickWrap");if(p)p.innerHTML=rows.map((r,i)=>slimePickCard(r,i)).join("");}});
+    enrichSocials(rows).then(()=>{if(state.route==="trenches"&&state.trenchTab==="picks"&&rows.length){const p=$("#pickWrap");if(p&&!syncCards(p,rows,slimePickCard))p.innerHTML=rows.map((r,i)=>slimePickCard(r,i)).join("");}});
     if(fresh)loadTopWallets();
     state.pollT=setTimeout(()=>{if(state.route==="trenches"&&state.trenchTab==="picks")renderSlimePicks(wrap);},12000);
   }
@@ -994,7 +1065,7 @@
     const gcls=score>=65?"g":score>=50?"y":"r";
     const badge=score?'<span class="chip '+gcls+'" title="SlimeWire pick score">'+(grade&&grade.length<=2?grade+" · ":"")+score+'</span>':'';
     const tw=r.topWalletBuy?'<span class="chip g" title="A tracked top wallet is buying this">🐳</span>':'';
-    return'<div class="card pick" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+
+    return'<div class="card pick" data-mint="'+esc(r.tokenMint)+'" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+
       '<div class="prank">#'+(i+1)+'</div>'+avImg(r,"av")+
       '<div class="body"><div class="top"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><span class="nm">'+esc(r.name||"")+'</span><span class="age">'+esc(ageLabel(r))+'</span>'+tw+badge+starBtn(r)+'</div>'+
       '<div class="stats"><span><i>MC</i>'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</span><span><i>LIQ</i>'+esc(r.liquidityLabel||fmtUsd(r.liquidityUsd))+'</span><span><i>VOL</i>'+esc(volLabel(r))+'</span></div>'+
@@ -1018,8 +1089,9 @@
     const pfps=buyers.map(b=>b.pfp?'<img class="twpfp" loading="lazy" src="'+esc(coinImgSrc(b.pfp,32)||b.pfp)+'" onerror="this.style.display=\'none\'">':'<span class="twpfp ph">🐳</span>').join("");
     const names=buyers.map(b=>esc(b.name||"wallet")).join(", ")||"top wallet";
     const sm=Number(r.stBuyers)>0?'<span class="twsm" title="Solana Tracker proven-winner buy">smart $</span>':"";
+    const mc=(r.marketCap>0)?'<span class="twmc" title="market cap">'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</span>':'';
     return '<div class="twrow" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+avImg(r,"twav")+
-      '<div class="twinfo"><div class="twtop"><b>'+esc(r.symbol||short(r.tokenMint))+'</b>'+sm+'<span class="twct" title="distinct top wallets buying">🐳 '+(r.buyerCount||1)+'</span></div>'+
+      '<div class="twinfo"><div class="twtop"><b>'+esc(r.symbol||short(r.tokenMint))+'</b>'+mc+sm+'<span class="twct" title="distinct top wallets buying">🐳 '+(r.buyerCount||1)+'</span></div>'+
       '<div class="twbuyers">'+pfps+'<span class="twnames">'+names+'</span></div></div>'+
       '<button class="buybtn sm" title="Quick buy" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡</button></div>';
   }
@@ -1030,7 +1102,7 @@
   // Tap ⚡ on any row to ape it now. Polls ~1.6s so you're not late.
   let sniperPollT=null;
   function sniperRowHtml(r){
-    return '<div class="walletrow" style="cursor:pointer" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+
+    return '<div class="walletrow" data-mint="'+esc(r.tokenMint)+'" style="cursor:pointer" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+
       '<div class="ico">'+avImg(r,"")+'</div>'+
       '<div class="info" style="min-width:0"><b>'+esc(r.symbol||short(r.tokenMint))+' <span class="mut" style="font-weight:500">'+esc(ageLabel(r))+'</span></b>'+
       '<div class="addr mut" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'+esc((r.name||"").slice(0,22))+socialIconsHtml(r)+'</div></div>'+
@@ -1054,8 +1126,9 @@
     if(state.route!=="sniper")return;
     const feed=$("#snFeed"),cnt=$("#snCount");
     if(cnt)cnt.textContent=rows.length?("· "+rows.length+" live"):"";
-    if(feed)feed.innerHTML=rows.length?rows.slice(0,40).map(sniperRowHtml).join(""):'<div class="msg" style="font-size:12px">Waiting for fresh launches…</div>';
-    enrichSocials(rows).then(()=>{const f=$("#snFeed");if(state.route==="sniper"&&f&&rows.length)f.innerHTML=rows.slice(0,40).map(sniperRowHtml).join("");});
+    const top=rows.slice(0,40);
+    if(feed&&!(top.length&&syncCards(feed,top,sniperRowHtml)))feed.innerHTML=top.length?top.map(sniperRowHtml).join(""):'<div class="msg" style="font-size:12px">Waiting for fresh launches…</div>';
+    enrichSocials(rows).then(()=>{const f=$("#snFeed");if(state.route==="sniper"&&f&&top.length&&!syncCards(f,top,sniperRowHtml))f.innerHTML=top.map(sniperRowHtml).join("");});
     if(state.token)refreshSniperStatus();
     sniperPollT=setTimeout(()=>{if(state.route==="sniper")pollSniper();},1600);
   }
@@ -1526,8 +1599,10 @@
     soc.push('<a href="https://pump.fun/coin/'+encodeURIComponent(r.tokenMint||"")+'" target="_blank" rel="noopener" title="pump.fun">🚀</a>');
     soc.push('<a href="https://dexscreener.com/solana/'+encodeURIComponent(r.tokenMint||"")+'" target="_blank" rel="noopener" title="DexScreener">📊</a>');
     const socHtml='<span class="ic chartsoc">'+soc.join("")+'</span>';
+    // Order: MC, Volume, Liquidity — so Volume sits right next to MC (the two a trader reads first). The
+    // mobile rule hides the 3rd cell (Liquidity) on small screens, keeping MC + Vol always visible.
     return avImg(r,"av")+'<div class="ti"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><div class="sub">'+esc(r.name||"")+' · '+esc(ageLabel(r))+'</div>'+socHtml+'</div>'+
-      '<div class="st"><div><span>Price MC</span><b>'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</b></div><div><span>Liquidity</span><b>'+esc(r.liquidityLabel||fmtUsd(r.liquidityUsd))+'</b></div><div><span>Vol 1h</span><b>'+esc(r.volumeH1Label||r.volumeLabel||"—")+'</b></div></div>';
+      '<div class="st"><div><span>MC</span><b>'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</b></div><div><span>Vol 1h</span><b>'+esc(r.volumeH1Label||r.volumeLabel||"—")+'</b></div><div><span>Liquidity</span><b>'+esc(r.liquidityLabel||fmtUsd(r.liquidityUsd))+'</b></div></div>';
   }
   // Keep the chart header's MC / liquidity / volume / % moving LIVE while you watch the chart. The row
   // snapshot from the feed is a point-in-time value; this re-pulls DexScreener (over the user's IP, every
