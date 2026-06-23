@@ -45957,9 +45957,15 @@ async function buildMoralisPumpCategory(userId, cat, sort, options = {}) {
   const coins = await fetchMoralisPumpList(endpoint, { limit: 100, force: Boolean(options.force) });
   let cands = coins.map((c) => moralisCoinToCandidate(c, cat)).filter(Boolean);
   if (cat === "graduating") {
-    // "About to graduate": still climbing the curve, not yet bonded — closest first.
-    cands = cands.filter((c) => { const p = Number(c.bondingCurveProgress); return Number.isFinite(p) && p >= 45 && p < 100; })
-      .sort((a, b) => Number(b.bondingCurveProgress) - Number(a.bondingCurveProgress));
+    // "About to graduate": high on the curve AND still alive — drop the dust that hit ~100% then died
+    // (real near-graduation coins have liquidity/MC; $100-MC ghosts don't). Closest-to-bonding first.
+    cands = cands.filter((c) => {
+      const p = Number(c.bondingCurveProgress), fdv = Number(c.metadata.marketCap) || 0, liq = Number(c.metadata.liquidityUsd) || 0;
+      return Number.isFinite(p) && p >= 80 && fdv >= 2000 && liq >= 1500;
+    }).sort((a, b) => Number(b.bondingCurveProgress) - Number(a.bondingCurveProgress));
+  } else {
+    // Graduated — drop coins that already dumped to dust so the tab shows real graduations (freshest first).
+    cands = cands.filter((c) => (Number(c.metadata.marketCap) || 0) >= 5000);
   }
   let rows = cands.map((c) => { const r = livePairCandidateToRow(c); if (r) { r.bondingCurveProgress = Number(c.bondingCurveProgress); r.graduated = c.graduated; r.isGraduated = c.graduated; } return r; }).filter(Boolean);
   rows = uniqueSniperScoreRows(rows).filter((row) => !hasHardBlockedLivePairRisk(row));

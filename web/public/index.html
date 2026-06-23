@@ -1486,6 +1486,9 @@
   async function execSell(mint,percent){
     const p=Number(String(percent).replace("%",""));if(!isFinite(p)||p<=0){toast("Enter a sell %.",true);return;}
     if(!(await ensureTradeReady()))return;
+    // Selling from a position list can run with no wallet selected — default to the first wallet so the
+    // server doesn't 500 on a null walletIndex.
+    if((state.activeWallet==null||!state.wallets.some(w=>w.index===state.activeWallet))&&state.wallets.length)state.activeWallet=state.wallets[0].index;
     const big=$("#bigbuy");if(big){big.disabled=true;big.textContent="Submitting…";}
     const {ok,status,d}=await jpost("/api/web/trade/sell",{tokenMint:mint,walletIndex:state.activeWallet,percent:String(p),slippageBps:"400",tradeAttemptId:attemptId()});
     if(big){big.disabled=false;}
@@ -1538,7 +1541,7 @@
   function handleTradeResult(ok,status,d,label){
     if(status===401||status===403){setToken("");toast("Session expired — set up your wallet again.",true);go("wallet");return;}
     if(ok&&d&&d.ok&&d.trade){toast(label+" submitted — "+(d.trade.message||"done"));afterTradeRefresh();return;}
-    toast((d&&(d.error||d.message))||label+" failed",true);
+    toast((d&&(d.error||d.message))||(label+" failed"+(status?" ("+status+")":" (no response)")),true);
   }
   // After a buy/sell, refresh balance + position bar + holdings RIGHT AWAY, then once more after the
   // chain settles (~2.6s) — so you never sit wondering whether it went through.
