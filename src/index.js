@@ -46251,10 +46251,22 @@ async function buildPumpFrontendCategory(userId, cat, sort, options = {}) {
   //  (newest complete coins), Graduating = on the curve, climbing (complete=false, 45-99% bonded).
   let path;
   if (cat === "gtSurging") path = "/coins?offset=0&limit=100&sort=volume&order=DESC&includeNsfw=false&complete=true";
-  else if (cat === "graduating") path = "/coins?offset=0&limit=200&sort=last_trade_timestamp&order=DESC&includeNsfw=false&complete=false";
+  else if (cat === "graduating") path = "/coins?offset=0&limit=50&sort=last_trade_timestamp&order=DESC&includeNsfw=false&complete=false";
   else if (cat === "graduated" || cat === "gtMigrated") path = "/coins?offset=0&limit=100&sort=created_timestamp&order=DESC&includeNsfw=false&complete=true";
-  else path = "/coins?offset=0&limit=100&sort=market_cap&order=DESC&includeNsfw=false&complete=true";
-  const coins = await fetchPumpFrontend(path, { force });
+  else path = "/coins?offset=0&limit=100&sort=last_trade_timestamp&order=DESC&includeNsfw=false&complete=true";
+  let coins;
+  if (cat === "graduating") {
+    // pump caps a SINGLE list call at ~70 coins, and the recent-trade window is mostly fresh sub-45%
+    // launches — so one call yields only ~2 coins that are genuinely 45-99% bonded (the "Graduating
+    // blank" bug). PAGINATE the recent-trade list (4 pages → ~200 coins) and union: verified live this
+    // surfaces ~16 real about-to-graduate climbers instead of 2.
+    const pages = await Promise.all([0, 50, 100, 150].map((off) =>
+      fetchPumpFrontend(`/coins?offset=${off}&limit=50&sort=last_trade_timestamp&order=DESC&includeNsfw=false&complete=false`, { force })));
+    const seenMint = new Set();
+    coins = pages.flat().filter((c) => { const m = String(c?.mint || ""); if (!m || seenMint.has(m)) return false; seenMint.add(m); return true; });
+  } else {
+    coins = await fetchPumpFrontend(path, { force });
+  }
   let cands = coins.map((c) => pumpFrontendToCandidate(c, cat)).filter(Boolean);
   if (cat === "graduating") {
     // Climbing the curve: not migrated, 45-99% bonded, AND MC under ~$100k (a real bonding coin graduates
@@ -46262,11 +46274,13 @@ async function buildPumpFrontendCategory(userId, cat, sort, options = {}) {
     cands = cands.filter((c) => { const p = Number(c.bondingCurveProgress) || 0, mc = Number(c.metadata.marketCap) || 0; return !c.graduated && p >= 45 && p < 100 && mc > 0 && mc <= 100000; })
       .sort((a, b) => Number(b.bondingCurveProgress) - Number(a.bondingCurveProgress));
   } else {
-    // Graduated = recent small/mid graduations (cap $3M) so it's DISTINCT from Trending's $10M+ bluechips.
-    const maxMc = cat === "graduated" ? 3_000_000 : Infinity;
+    // FRESH MOVERS: cap Trending/Surging to skip the $5M+ bluechips so these tabs show active, rotating,
+    // real coins instead of the same static mega-caps. Graduated stays a $3M-cap "recent graduations" cut.
+    const maxMc = cat === "graduated" ? 3_000_000 : (cat === "dexTrending" || cat === "gtSurging") ? 5_000_000 : Infinity;
     cands = cands.filter((c) => { const mc = Number(c.metadata.marketCap) || 0; return c.graduated && mc >= 15000 && mc <= maxMc; });
-    if (cat === "dexTrending") cands.sort((a, b) => Number(b.metadata.marketCap) - Number(a.metadata.marketCap));
-    // gtSurging keeps pump's volume order; graduated keeps created (recency) order.
+    // NO market_cap re-sort on Trending — that's what pinned the same mega-caps on top. Keep pump's order:
+    // dexTrending = recency (sort=last_trade_timestamp, rotates as coins trade), gtSurging = volume,
+    // graduated = created (recency).
   }
   const seen = new Set();
   let rows = cands.map((c) => { const r = livePairCandidateToRow(c); if (r) { r.bondingCurveProgress = Number(c.bondingCurveProgress); r.graduated = c.graduated; r.isGraduated = c.graduated; } return r; }).filter(Boolean)
