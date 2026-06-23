@@ -147,13 +147,31 @@
   .collist{flex:1 1 auto;overflow:auto;padding:6px}
   .card{display:flex;gap:11px;padding:11px;border-radius:12px;border:1px solid var(--border2);background:var(--row);margin-bottom:7px;cursor:pointer;transition:.12s}
   .card:hover{background:var(--row-hover);border-color:var(--border)}
-  /* Slime Picks: full-width responsive card grid that overrides the 3-col board layout */
-  #boardWrap[data-mode="picks"]{display:block;overflow:auto;height:auto;min-height:100%}
+  /* Slime Picks: scored card grid + a Top Wallets side panel, overriding the 3-col board layout */
+  #boardWrap[data-mode="picks"]{display:block;overflow:hidden;height:100%}
+  .picklayout{display:flex;height:100%;min-height:0}
+  .pickcol{flex:1 1 auto;min-width:0;overflow:auto;height:100%}
   .pickintro{padding:12px 14px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--border2);line-height:1.5}
   .pickintro b{color:var(--green2)}
-  .pickwrap{padding:12px;display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+  .pickwrap{padding:12px;display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
   .card.pick{position:relative;margin-bottom:0}
   .card.pick .prank{position:absolute;top:7px;right:10px;font-size:10px;font-weight:800;color:var(--muted2);font-family:var(--mono)}
+  /* Top Wallets panel */
+  .twpanel{flex:0 0 300px;display:flex;flex-direction:column;min-height:0;border-left:1px solid var(--border);background:rgba(7,11,7,.5)}
+  .twhead{padding:12px 14px;font-size:13px;font-weight:800;color:var(--green2);border-bottom:1px solid var(--border2);flex:0 0 auto}
+  .twlist{flex:1 1 auto;overflow:auto;padding:8px}
+  .twrow{display:flex;align-items:center;gap:9px;padding:9px;border-radius:11px;border:1px solid var(--border2);background:var(--row);margin-bottom:7px;cursor:pointer;transition:.12s}
+  .twrow:hover{background:var(--row-hover);border-color:var(--border)}
+  .twrow .twav{width:34px;height:34px;border-radius:9px;object-fit:cover;background:#0f160f;border:1px solid var(--border);flex:0 0 auto}
+  .twinfo{flex:1 1 auto;min-width:0}
+  .twtop{display:flex;align-items:center;gap:7px}.twtop b{font-size:13px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px}
+  .twct{margin-left:auto;font-size:11px;color:var(--green2);font-weight:800;flex:0 0 auto}
+  .twbuyers{display:flex;align-items:center;gap:4px;margin-top:3px}
+  .twpfp{width:16px;height:16px;border-radius:50%;object-fit:cover;border:1px solid var(--border);flex:0 0 auto}
+  .twpfp.ph{font-size:11px;border:none}
+  .twnames{font-size:10.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .twempty{padding:18px;font-size:12px;color:var(--muted);text-align:center;line-height:1.6}
+  @media(max-width:820px){.picklayout{flex-direction:column;height:auto;min-height:100%}#boardWrap[data-mode="picks"]{overflow:auto}.pickcol{overflow:visible;height:auto}.twpanel{flex:0 0 auto;border-left:none;border-top:1px solid var(--border)}.twlist{max-height:46vh}}
   .card .av{width:46px;height:46px;border-radius:12px;object-fit:cover;background:#0f160f;border:1px solid var(--border);flex:0 0 auto}
   .card .body{flex:1 1 auto;min-width:0}
   .card .top{display:flex;align-items:baseline;gap:7px}
@@ -729,6 +747,7 @@
     if(state.pollT){clearTimeout(state.pollT);state.pollT=null;}
     if(state.txPollT){clearTimeout(state.txPollT);state.txPollT=null;}
     if(statPollT){clearTimeout(statPollT);statPollT=null;}
+    if(twPollT){clearTimeout(twPollT);twPollT=null;}
     if(chatPollT){clearTimeout(chatPollT);chatPollT=null;}
     if(pnlPollT){clearTimeout(pnlPollT);pnlPollT=null;}
     if(portfolioPollT){clearTimeout(portfolioPollT);portfolioPollT=null;}
@@ -952,12 +971,20 @@
   // candidate scored by our winner model, best grade first). Full-width card grid, refreshes every 12s.
   async function renderSlimePicks(wrap){
     wrap.dataset.mode="picks";
-    if(!wrap.querySelector(".pickwrap"))wrap.innerHTML='<div class="loading" style="padding:30px"><span class="spin"></span></div>';
+    const fresh=!wrap.querySelector(".picklayout");
+    if(fresh)wrap.innerHTML='<div class="picklayout"><div class="pickcol">'+
+        '<div class="pickintro">🟢 <b>Slime Picks</b> — best entries under $30k, scored by SlimeWire (liquidity · real volume · buy pressure · low rug). Not financial advice.</div>'+
+        '<div class="pickwrap" id="pickWrap"><div class="loading" style="padding:30px"><span class="spin"></span></div></div></div>'+
+      '<aside class="twpanel"><div class="twhead">🐳 Top Wallets buying</div><div class="twlist" id="twList"><div class="loading" style="padding:18px"><span class="spin"></span></div></div></aside></div>';
     const rows=await fetchPairs({bucket:"live",sort:"best",cat:"slimePicks"});
     if(state.route!=="trenches"||state.trenchTab!=="picks")return;
-    if(!rows.length){wrap.innerHTML='<div class="msg" style="padding:30px">'+(lastPairsOk?"No steady sub-$30k picks clear the bar right now — check back in a moment.":"Loading Slime Picks… <span class=\"spin\"></span>")+'</div>';}
-    else{wrap.innerHTML='<div class="pickintro">🟢 <b>Slime Picks</b> — best entries under $30k, scored by SlimeWire (liquidity · real volume · buy pressure · momentum · low rug). Not financial advice.</div><div class="pickwrap">'+rows.map((r,i)=>slimePickCard(r,i)).join("")+'</div>';}
-    enrichSocials(rows).then(()=>{if(state.route==="trenches"&&state.trenchTab==="picks"&&rows.length){const pw=wrap.querySelector(".pickwrap");if(pw)pw.innerHTML=rows.map((r,i)=>slimePickCard(r,i)).join("");}});
+    const pw=$("#pickWrap");
+    if(pw){
+      if(!rows.length)pw.innerHTML='<div class="msg" style="padding:24px">'+(lastPairsOk?"No steady sub-$30k picks clear the rug filter right now — check back in a moment.":"Loading… <span class=\"spin\"></span>")+'</div>';
+      else pw.innerHTML=rows.map((r,i)=>slimePickCard(r,i)).join("");
+    }
+    enrichSocials(rows).then(()=>{if(state.route==="trenches"&&state.trenchTab==="picks"&&rows.length){const p=$("#pickWrap");if(p)p.innerHTML=rows.map((r,i)=>slimePickCard(r,i)).join("");}});
+    if(fresh)loadTopWallets();
     state.pollT=setTimeout(()=>{if(state.route==="trenches"&&state.trenchTab==="picks")renderSlimePicks(wrap);},12000);
   }
   function slimePickCard(r,i){
@@ -965,11 +992,34 @@
     const grade=r.bestPickLabel||(score>=80?"A":score>=65?"B":score>=50?"C":"");
     const gcls=score>=65?"g":score>=50?"y":"r";
     const badge=score?'<span class="chip '+gcls+'" title="SlimeWire pick score">'+(grade&&grade.length<=2?grade+" · ":"")+score+'</span>':'';
+    const tw=r.topWalletBuy?'<span class="chip g" title="A tracked top wallet is buying this">🐳</span>':'';
     return'<div class="card pick" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+
       '<div class="prank">#'+(i+1)+'</div>'+avImg(r,"av")+
-      '<div class="body"><div class="top"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><span class="nm">'+esc(r.name||"")+'</span><span class="age">'+esc(ageLabel(r))+'</span>'+badge+starBtn(r)+'</div>'+
+      '<div class="body"><div class="top"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><span class="nm">'+esc(r.name||"")+'</span><span class="age">'+esc(ageLabel(r))+'</span>'+tw+badge+starBtn(r)+'</div>'+
       '<div class="stats"><span><i>MC</i>'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</span><span><i>LIQ</i>'+esc(r.liquidityLabel||fmtUsd(r.liquidityUsd))+'</span><span><i>VOL</i>'+esc(volLabel(r))+'</span></div>'+
       '<div class="row2">'+riskChips(r)+socialIconsHtml(r)+'<button class="buybtn sm" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button></div></div></div>';
+  }
+  // Top Wallets panel — the coins our tracked top wallets are buying right now (backend /api/web/top-wallets:
+  // ST live buys when on, free RPC wallet-watch as backup). Polls every ~15s so it rotates as buys land.
+  let twPollT=null;
+  async function loadTopWallets(){
+    if(twPollT){clearTimeout(twPollT);twPollT=null;}
+    const list=$("#twList");if(!list)return;
+    const {ok,d}=await api("/api/web/top-wallets").catch(()=>({}));
+    if(state.route!=="trenches"||state.trenchTab!=="picks")return;
+    const rows=(ok&&d&&d.rows)||[];
+    if(!rows.length)list.innerHTML='<div class="twempty">👀 Watching the top wallets…<br><span class="mut">their fresh buys land here as they happen.</span></div>';
+    else list.innerHTML=rows.map(topWalletRow).join("");
+    twPollT=setTimeout(()=>{if(state.route==="trenches"&&state.trenchTab==="picks")loadTopWallets();},15000);
+  }
+  function topWalletRow(r){
+    const buyers=(r.buyers||[]).slice(0,3);
+    const pfps=buyers.map(b=>b.pfp?'<img class="twpfp" loading="lazy" src="'+esc(coinImgSrc(b.pfp,32)||b.pfp)+'" onerror="this.style.display=\'none\'">':'<span class="twpfp ph">🐳</span>').join("");
+    const names=buyers.map(b=>esc(b.name||"wallet")).join(", ")||"top wallet";
+    return '<div class="twrow" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+avImg(r,"twav")+
+      '<div class="twinfo"><div class="twtop"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><span class="twct" title="distinct top wallets buying">🐳 '+(r.buyerCount||1)+'</span></div>'+
+      '<div class="twbuyers">'+pfps+'<span class="twnames">'+names+'</span></div></div>'+
+      '<button class="buybtn sm" title="Quick buy" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡</button></div>';
   }
 
   // ---------- launch sniper ----------
