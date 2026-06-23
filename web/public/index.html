@@ -147,6 +147,13 @@
   .collist{flex:1 1 auto;overflow:auto;padding:6px}
   .card{display:flex;gap:11px;padding:11px;border-radius:12px;border:1px solid var(--border2);background:var(--row);margin-bottom:7px;cursor:pointer;transition:.12s}
   .card:hover{background:var(--row-hover);border-color:var(--border)}
+  /* Slime Picks: full-width responsive card grid that overrides the 3-col board layout */
+  #boardWrap[data-mode="picks"]{display:block;overflow:auto;height:auto;min-height:100%}
+  .pickintro{padding:12px 14px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--border2);line-height:1.5}
+  .pickintro b{color:var(--green2)}
+  .pickwrap{padding:12px;display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+  .card.pick{position:relative;margin-bottom:0}
+  .card.pick .prank{position:absolute;top:7px;right:10px;font-size:10px;font-weight:800;color:var(--muted2);font-family:var(--mono)}
   .card .av{width:46px;height:46px;border-radius:12px;object-fit:cover;background:#0f160f;border:1px solid var(--border);flex:0 0 auto}
   .card .body{flex:1 1 auto;min-width:0}
   .card .top{display:flex;align-items:baseline;gap:7px}
@@ -487,7 +494,7 @@
   // ---------- API + auth ----------
   const API_BASE=(window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||"https://ogrevolbot.onrender.com";
   const TOKEN_KEY="ogreWebToken"; // shared with the main SlimeWire app (same origin)
-  const state={route:"trending",mint:null,trendTab:"best",volTf:"h1",rows:[],pollT:null,
+  const state={route:"trending",mint:null,trendTab:"best",trenchTab:"board",volTf:"h1",rows:[],pollT:null,
     token:localStorage.getItem(TOKEN_KEY)||"",user:null,wallets:[],activeWallet:null,
     presets:{trade:[],bundle:[]},activeTradePreset:localStorage.getItem("ggTradePreset")||"",searchTerm:"",pendingSell:null,portfolioTab:"positions",
     watch:new Set(),watchRows:[],
@@ -756,7 +763,15 @@
     qb.innerHTML=q&&Number(q.amt)>0?('⚡ '+Number(q.amt).toFixed(3).replace(/0+$/,"").replace(/\.$/,"")+'◎'+((q.tp||q.sl||q.presetId)?' +exits':'')):'⚡ Set 1-click buy';
     qb.title="Your 1-click ⚡ Buy amount — tap to change";qb.onclick=()=>openQuickBuyModal(null);sb.appendChild(qb);
   }
-  function subbarTrenches(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Trenches";sb.appendChild(h);const n=el("div","mut");n.style.cssText="margin-left:10px;font-size:11px";n.textContent="Fresh → about to migrate → graduated. Live SlimeWire feed.";sb.appendChild(n);}
+  function subbarTrenches(){
+    const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Trenches";sb.appendChild(h);
+    const tabs=el("div","tabs");
+    [["board","Board"],["picks","🟢 Slime Picks"]].forEach(([id,lab])=>{const b=el("button");b.textContent=lab;b.className=id===state.trenchTab?"on":"";b.onclick=()=>{state.trenchTab=id;render();};tabs.appendChild(b);});
+    sb.appendChild(tabs);
+    const n=el("div","mut");n.style.cssText="margin-left:auto;font-size:11px";
+    n.textContent=state.trenchTab==="picks"?"Best steady winners under $30k — scored by SlimeWire.":"Fresh → about to migrate → graduated.";
+    sb.appendChild(n);
+  }
   function subbarPortfolio(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Portfolio";sb.appendChild(h);const tabs=el("div","tabs");[["positions","Positions"],["cards","History & PnL"]].forEach(([id,lab])=>{const b=el("button");b.textContent=lab;b.className=id===state.portfolioTab?"on":"";b.onclick=()=>{state.portfolioTab=id;renderPortfolio();};tabs.appendChild(b);});sb.appendChild(tabs);}
   function subbarWallet(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Wallet";sb.appendChild(h);}
   function subbarTrade(r){const sb=$("#subbar");sb.innerHTML="";const back=el("button","chip");back.textContent="← Back";back.onclick=()=>go("trending");sb.appendChild(back);const h=el("h1");h.style.fontSize="15px";h.textContent=r?(r.symbol||short(state.mint)):short(state.mint);sb.appendChild(h);
@@ -916,16 +931,45 @@
   ];
   async function renderTrenches(){
     setActiveView("v-trenches");subbarTrenches();
+    if(state.pollT){clearTimeout(state.pollT);state.pollT=null;}
     const wrap=$("#boardWrap");
-    if(!wrap.children.length)wrap.innerHTML=TRENCH_COLS.map(c=>'<div class="col"><div class="colhead">'+(c.pulse?'<span class="pulse"></span>':'')+'<b>'+c.label+'</b><span class="cnt" id="cnt-'+c.key+'">…</span></div><div class="collist" id="list-'+c.key+'"><div class="loading"><span class="spin"></span></div></div></div>').join("");
+    if(state.trenchTab==="picks")return renderSlimePicks(wrap);
+    // Board mode — rebuild the 3-column layout if we're arriving fresh or switching back from Picks.
+    if(wrap.dataset.mode!=="board"||!wrap.children.length){
+      wrap.dataset.mode="board";
+      wrap.innerHTML=TRENCH_COLS.map(c=>'<div class="col"><div class="colhead">'+(c.pulse?'<span class="pulse"></span>':'')+'<b>'+c.label+'</b><span class="cnt" id="cnt-'+c.key+'">…</span></div><div class="collist" id="list-'+c.key+'"><div class="loading"><span class="spin"></span></div></div></div>').join("");
+    }
     await Promise.all(TRENCH_COLS.map(async c=>{
-      const rows=await fetchPairs(c.params);if(state.route!=="trenches")return;
+      const rows=await fetchPairs(c.params);if(state.route!=="trenches"||state.trenchTab!=="board")return;
       const list=$("#list-"+c.key),cnt=$("#cnt-"+c.key);if(cnt)cnt.textContent=rows.length;
       if(list)list.innerHTML=rows.length?rows.map(cardHtml).join(""):'<div class="msg" style="font-size:12px">Nothing here yet.</div>';
       // backfill socials (X/TG/web) from DexScreener over the user's IP, then repaint this column
-      enrichSocials(rows).then(()=>{const l=$("#list-"+c.key);if(state.route==="trenches"&&l&&rows.length)l.innerHTML=rows.map(cardHtml).join("");});
+      enrichSocials(rows).then(()=>{const l=$("#list-"+c.key);if(state.route==="trenches"&&state.trenchTab==="board"&&l&&rows.length)l.innerHTML=rows.map(cardHtml).join("");});
     }));
-    state.pollT=setTimeout(()=>{if(state.route==="trenches")renderTrenches();},7000);
+    if(state.route==="trenches"&&state.trenchTab==="board")state.pollT=setTimeout(()=>{if(state.route==="trenches")renderTrenches();},7000);
+  }
+  // SLIME PICKS — the curated "steady winners under $30k" list (backend cat=slimePicks: every sub-$30k
+  // candidate scored by our winner model, best grade first). Full-width card grid, refreshes every 12s.
+  async function renderSlimePicks(wrap){
+    wrap.dataset.mode="picks";
+    if(!wrap.querySelector(".pickwrap"))wrap.innerHTML='<div class="loading" style="padding:30px"><span class="spin"></span></div>';
+    const rows=await fetchPairs({bucket:"live",sort:"best",cat:"slimePicks"});
+    if(state.route!=="trenches"||state.trenchTab!=="picks")return;
+    if(!rows.length){wrap.innerHTML='<div class="msg" style="padding:30px">'+(lastPairsOk?"No steady sub-$30k picks clear the bar right now — check back in a moment.":"Loading Slime Picks… <span class=\"spin\"></span>")+'</div>';}
+    else{wrap.innerHTML='<div class="pickintro">🟢 <b>Slime Picks</b> — best entries under $30k, scored by SlimeWire (liquidity · real volume · buy pressure · momentum · low rug). Not financial advice.</div><div class="pickwrap">'+rows.map((r,i)=>slimePickCard(r,i)).join("")+'</div>';}
+    enrichSocials(rows).then(()=>{if(state.route==="trenches"&&state.trenchTab==="picks"&&rows.length){const pw=wrap.querySelector(".pickwrap");if(pw)pw.innerHTML=rows.map((r,i)=>slimePickCard(r,i)).join("");}});
+    state.pollT=setTimeout(()=>{if(state.route==="trenches"&&state.trenchTab==="picks")renderSlimePicks(wrap);},12000);
+  }
+  function slimePickCard(r,i){
+    const score=Math.round(Number(r.bestPickScore||r.score)||0);
+    const grade=r.bestPickLabel||(score>=80?"A":score>=65?"B":score>=50?"C":"");
+    const gcls=score>=65?"g":score>=50?"y":"r";
+    const badge=score?'<span class="chip '+gcls+'" title="SlimeWire pick score">'+(grade&&grade.length<=2?grade+" · ":"")+score+'</span>':'';
+    return'<div class="card pick" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+
+      '<div class="prank">#'+(i+1)+'</div>'+avImg(r,"av")+
+      '<div class="body"><div class="top"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><span class="nm">'+esc(r.name||"")+'</span><span class="age">'+esc(ageLabel(r))+'</span>'+badge+starBtn(r)+'</div>'+
+      '<div class="stats"><span><i>MC</i>'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</span><span><i>LIQ</i>'+esc(r.liquidityLabel||fmtUsd(r.liquidityUsd))+'</span><span><i>VOL</i>'+esc(volLabel(r))+'</span></div>'+
+      '<div class="row2">'+riskChips(r)+socialIconsHtml(r)+'<button class="buybtn sm" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button></div></div></div>';
   }
 
   // ---------- launch sniper ----------

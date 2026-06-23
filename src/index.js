@@ -46307,7 +46307,51 @@ async function buildPumpFrontendCategory(userId, cat, sort, options = {}) {
   };
 }
 
+// SLIME PICKS — the best sub-$30k entries, the "steady winners" list. Pulled from the DexScreener +
+// Gecko candidate sources (which carry real MC / volume / liquidity), filtered to a genuine non-dust
+// sub-$30k market, then ranked by our full winner model (computeBestPickScore: freshness + liquidity +
+// real volume + buy pressure + momentum + KOL signal + low-cap fit − rug penalty). Best grade first.
+async function buildSlimePicksCategory(userId, sort, options = {}) {
+  const force = Boolean(options.force);
+  const cats = ["earlyMomentum", "graduating", "pumpTrending", "memeMovers"];
+  const pools = await Promise.all(cats.map((c) =>
+    fetchLiveCategoryCandidates(c, { ttlMs: 6_000, timeoutMs: 4_000, force }).catch(() => [])));
+  const flat = pools.flat();
+  const seen = new Set();
+  let rows = flat.map(livePairCandidateToRow).filter(Boolean)
+    .filter((row) => { const m = String(row.tokenMint || ""); if (!m || seen.has(m)) return false; seen.add(m); return true; })
+    .filter((row) => !hasHardBlockedLivePairRisk(row));
+  // Sub-$30k entries with a REAL (non-dust) market — a steady pick has buyers + liquidity, not a ghost.
+  rows = rows.filter((row) => {
+    const mc = Number(firstMeaningfulNumber(row.marketCap, row.fdv)) || 0;
+    const liq = Number(row.liquidityUsd) || 0;
+    const vol = Number(firstMeaningfulNumber(row.volumeH24, row.volumeH1, row.volume5m)) || 0;
+    return mc >= 2_000 && mc <= 30_000 && (liq >= 1_500 || vol >= 800);
+  });
+  for (const row of rows) {
+    const s = computeBestPickScore(row);
+    row.bestPickScore = s.score; row.bestPickLabel = s.label; row.bestPickInputs = s.inputs; row.bestPickWarnings = s.warnings;
+    row.slimeScopeCategory = "slime-pick";
+  }
+  rows = rows.filter((row) => Number(row.bestPickScore) >= 50)
+    .sort((a, b) => Number(b.bestPickScore) - Number(a.bestPickScore));
+  const targetLimit = 40;
+  const safeRows = decorateWebLivePairAvatars(rows.slice(0, targetLimit));
+  recordCategoryMints("slimePicks", safeRows);
+  void persistPostgresLivePairRows(safeRows, { reason: "live-pairs:slime-picks" }).catch(() => false);
+  return {
+    label: "slimePicks", bucket: "live", sort, category: "cat:slimePicks", refreshCount: 0,
+    scanned: flat.length, qualified: rows.length, count: safeRows.length,
+    rawProviderCount: flat.length, backendReturnedCount: safeRows.length,
+    pageSize: targetLimit, maxPageSize: targetLimit, hasMore: rows.length > safeRows.length, nextCursor: null,
+    source: "slime-picks", providerStatus: "ok", filteredOutCount: Math.max(0, rows.length - safeRows.length),
+    rows: safeRows.map(webLivePairRow), refreshedAt: new Date().toISOString(), refreshSeconds: CONFIG.livePairsRefreshSeconds,
+    message: safeRows.length ? `Slime Picks: ${safeRows.length} steady sub-$30k pick(s).` : "Slime Picks: scanning for steady sub-$30k winners…"
+  };
+}
+
 async function buildWebLivePairsForCategory(userId, cat, sort, options = {}) {
+  if (cat === "slimePicks") return buildSlimePicksCategory(userId, sort, options);
   // PRIMARY: pump.fun's own frontend-api (via the CF Worker) for Trending + Graduating — the exact coins
   // pump shows. Then Moralis (bonding/graduated lists + trending momentum). Then GeckoTerminal. Each
   // step falls through if the source is unset/down/thin, so a tab never empties.
@@ -46384,7 +46428,7 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   // DexScreener searches + boosted/pump sources + a defining filter) so tabs no longer cross. Plain
   // bucket:sort callers (best/fresh, the autopilot feeds) keep the original path below.
   const cat = String(options.cat || "").trim();
-  if (cat && ((Array.isArray(LIVE_CATEGORY_QUERIES[cat]) && LIVE_CATEGORY_QUERIES[cat].length) || GECKO_BACKED_CATEGORIES.has(cat))) {
+  if (cat && (cat === "slimePicks" || (Array.isArray(LIVE_CATEGORY_QUERIES[cat]) && LIVE_CATEGORY_QUERIES[cat].length) || GECKO_BACKED_CATEGORIES.has(cat))) {
     return buildWebLivePairsForCategory(userId, cat, sort, options);
   }
   // Display/cache stay on the requested tab; only the row source can shift to
