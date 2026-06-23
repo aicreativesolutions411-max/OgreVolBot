@@ -43469,23 +43469,38 @@ function rememberTopWalletBuy(wallet, info, mint, when) {
 // deduped by wallet. So when ST is on it leads (more, fresher elite buyers); when it's off this no-ops
 // and the RPC backup carries the panel.
 function foldStWinnerBuysIntoTopWallets() {
-  if (!CONFIG.solanaTrackerApiKey || !winnerBuys || !winnerBuys.size) return 0;
+  if (!CONFIG.solanaTrackerApiKey) return 0;
   const roster = new Map((topWalletList.wallets || []).map((w) => [w.wallet, w]));
+  const now = Date.now();
   let folded = 0;
-  for (const [mint, g] of winnerBuys) {
+  // 1) winnerBuys — proven-winner SOL→token buys in the last ~25m, each with the REAL buyer wallet(s).
+  for (const [mint, g] of (winnerBuys || new Map())) {
     if (!mint || mint === SOL_MINT) continue;
-    const when = Number(g.lastAt) || Date.now();
+    const when = Number(g.lastAt) || now;
     for (const addr of (g.addrs || [])) {
       const r = roster.get(addr) || trackedKolWallets.get(addr) || {};
-      const info = {
+      rememberTopWalletBuy(addr, {
         name: firstString(r.name, shortMint(addr)),
         roi: Number(firstMeaningfulNumber(r.roi, r.roiSol, r.winRate)) || null,
         pfp: firstString(r.pfp, r.avatar, r.image),
         src: "st"
-      };
-      rememberTopWalletBuy(addr, info, mint, when);
+      }, mint, when);
       folded += 1;
     }
+  }
+  // 2) kolCopyFeedCache — coins tracked KOLs are positioned in RIGHT NOW (KOL scans, refreshed ~90s,
+  //    NOT limited to the 25m trade window) → the reliable "smart money is in this" signal. Aggregated
+  //    (no per-wallet addr), so fold one ST buyer per coin keyed by the coin (dedupes across polls).
+  for (const row of ((kolCopyFeedCache && kolCopyFeedCache.rows) || [])) {
+    const mint = row && row.tokenMint; if (!mint || mint === SOL_MINT) continue;
+    const sm = row._smartMoney || {};
+    rememberTopWalletBuy("kol:" + mint, {
+      name: firstString(sm.kolName, "Smart money"),
+      roi: Number(firstMeaningfulNumber(sm.winRatePct)) || null,
+      pfp: "",
+      src: "st"
+    }, mint, now);
+    folded += 1;
   }
   return folded;
 }
