@@ -1205,8 +1205,9 @@
     const names=buyers.map(b=>esc(b.name||"wallet")).join(", ")||"top wallet";
     const sm=Number(r.stBuyers)>0?'<span class="twsm" title="Solana Tracker proven-winner buy">smart $</span>':"";
     const mc=(r.marketCap>0)?'<span class="twmc" title="market cap">'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</span>':'';
+    const age=ageLabel(r);const ag=age?'<span class="twmc" title="coin age — how long it\'s been live">⏱ '+esc(age)+'</span>':'';
     return '<div class="twrow" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+avImg(r,"twav")+
-      '<div class="twinfo"><div class="twtop"><b>'+esc(r.symbol||short(r.tokenMint))+'</b>'+mc+sm+'<span class="twct" title="distinct top wallets buying">🐳 '+(r.buyerCount||1)+'</span></div>'+
+      '<div class="twinfo"><div class="twtop"><b>'+esc(r.symbol||short(r.tokenMint))+'</b>'+mc+ag+sm+'<span class="twct" title="distinct top wallets buying">🐳 '+(r.buyerCount||1)+'</span></div>'+
       '<div class="twbuyers">'+pfps+'<span class="twnames">'+names+'</span></div></div>'+
       '<button class="buybtn sm" title="Quick buy" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡</button></div>';
   }

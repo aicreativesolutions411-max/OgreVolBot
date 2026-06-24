@@ -43512,6 +43512,9 @@ async function stKolClusterRows() {
         kolCount: Number(r.kolCount) || 0,
         marketCap: Number(firstMeaningfulNumber(r.marketCap, r.fdv)) || null,
         marketCapLabel: r.marketCapLabel || "",
+        pairAgeSeconds: Number(r.pairAgeSeconds) || null,   // coin age so the panel can show new-vs-old
+        pairAgeLabel: r.pairAgeLabel || "",
+        pairCreatedAt: Number(r.pairCreatedAt) || null,
         lastAt: Number(r.lastTradeAt) || Date.now(),
         score: Number(r.score) || 0
       }))
@@ -43600,6 +43603,11 @@ async function topWalletsFeed(options = {}) {
     r.imageUrl = (km && km.imageUrl) || m.imageUrl || m.imageUri || "";
     r.marketCap = Number(firstMeaningfulNumber(km && km.marketCap, m.marketCap, m.fdv)) || null;
     if (km && km.marketCapLabel) r.marketCapLabel = km.marketCapLabel;
+    // Coin age so the panel shows new-vs-old (KOL-cluster rows carry it; fall back to any createdAt in meta).
+    r.pairAgeSeconds = Number(firstMeaningfulNumber(km && km.pairAgeSeconds, m.pairAgeSeconds)) || null;
+    r.pairAgeLabel = (km && km.pairAgeLabel) || m.pairAgeLabel || "";
+    const createdAtMs = Number(firstMeaningfulNumber(km && km.pairCreatedAt, m.pairCreatedAt, m.createdAt)) || null;
+    if (!r.pairAgeSeconds && createdAtMs > 0) r.pairAgeSeconds = Math.max(0, Math.round((Date.now() - createdAtMs) / 1000));
     r.dexUrl = dexScreenerUrl(r.tokenMint);
     delete r._km;
   }
