@@ -2078,16 +2078,40 @@
     if(kind==="solflare"){return (window.solflare&&(window.solflare.isSolflare||typeof window.solflare.connect==="function"))?window.solflare:null;}
     return null;
   }
+  // MOBILE CONNECT — works in BOTH environments:
+  //  • Inside Phantom/Solflare's in-app browser → the provider is injected → connect directly (below).
+  //  • In a plain mobile browser (Safari/Chrome, no injected provider) → "Open in <wallet>" uses the
+  //    wallet's universal BROWSE deep-link to reopen THIS page inside the wallet's in-app browser, where
+  //    the injected connect then works. This is the reliable path (no fragile encrypted-callback handshake).
+  function isMobileUA(){return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent||"")||(/Macintosh/i.test(navigator.userAgent||"")&&navigator.maxTouchPoints>1);}
+  function appBrowseUrl(){try{const u=new URL(location.href);u.hash="";return u.toString();}catch(e){return location.href;}}
+  function walletBrowseDeepLink(kind){
+    const appUrl=encodeURIComponent(appBrowseUrl());const ref=encodeURIComponent(location.origin);
+    if(kind==="phantom")return "https://phantom.app/ul/browse/"+appUrl+"?ref="+ref;
+    if(kind==="solflare")return "https://solflare.com/ul/v1/browse/"+appUrl+"?ref="+ref;
+    return "";
+  }
+  function openInWallet(kind){const link=walletBrowseDeepLink(kind);if(!link)return;toast("Opening "+(kind==="phantom"?"Phantom":"Solflare")+"… connect there, you'll land right back here.");location.href=link;}
   function openConnectModal(){
-    const ph=solProvider("phantom"),sf=solProvider("solflare");
+    const ph=solProvider("phantom"),sf=solProvider("solflare"),mob=isMobileUA();
+    // Per wallet: injected → Connect; mobile + not injected → Open in app; desktop + not injected → Get.
+    const btn=(kind,emoji,label)=>{
+      const have=solProvider(kind);
+      if(have)return '<button class="wbtn" id="cw_'+kind+'">'+emoji+' Connect '+label+'</button>';
+      if(mob)return '<button class="wbtn" id="cwopen_'+kind+'">'+emoji+' Open in '+label+' app</button>';
+      return '<button class="wbtn ghost" id="cwget_'+kind+'">'+emoji+' Get '+label+'</button>';
+    };
     openModal('<h3>🔗 Connect &amp; fund</h3>'+
-      '<p class="sub" style="font-size:12px">Connect Phantom or Solflare, then move some SOL into a fresh SlimeWire trading wallet (auto-backed-up). You trade from the web wallet — instant, one-click, your keys.</p>'+
-      '<div style="display:flex;flex-direction:column;gap:9px">'+
-        '<button class="wbtn'+(ph?'':' ghost')+'" id="cwPhantom">'+(ph?'👻 Connect Phantom':'👻 Get Phantom')+'</button>'+
-        '<button class="wbtn'+(sf?'':' ghost')+'" id="cwSolflare">'+(sf?'🔆 Connect Solflare':'🔆 Get Solflare')+'</button>'+
-      '</div>');
-    $("#cwPhantom").onclick=()=>{solProvider("phantom")?connectAndFund("phantom"):window.open("https://phantom.app/download","_blank");};
-    $("#cwSolflare").onclick=()=>{solProvider("solflare")?connectAndFund("solflare"):window.open("https://solflare.com/download","_blank");};
+      '<p class="sub" style="font-size:12px">'+((mob&&!ph&&!sf)
+        ?'Tap to open SlimeWire inside your wallet app, then hit Connect — your keys never leave your wallet.'
+        :'Connect Phantom or Solflare, then move some SOL into a fresh SlimeWire trading wallet (auto-backed-up). You trade from the web wallet — instant, one-click, your keys.')+'</p>'+
+      '<div style="display:flex;flex-direction:column;gap:9px">'+btn("phantom","👻","Phantom")+btn("solflare","🔆","Solflare")+'</div>'+
+      ((mob&&!ph&&!sf)?'<p class="wnote" style="margin-top:10px">Already inside a wallet browser? Pull down to refresh, then Connect appears.</p>':''));
+    const bind=(id,fn)=>{const b=$("#"+id);if(b)b.onclick=fn;};
+    bind("cw_phantom",()=>connectAndFund("phantom"));bind("cw_solflare",()=>connectAndFund("solflare"));
+    bind("cwopen_phantom",()=>openInWallet("phantom"));bind("cwopen_solflare",()=>openInWallet("solflare"));
+    bind("cwget_phantom",()=>window.open("https://phantom.app/download","_blank"));
+    bind("cwget_solflare",()=>window.open("https://solflare.com/download","_blank"));
   }
   async function connectAndFund(kind){
     const provider=solProvider(kind);if(!provider){toast("Wallet not detected.",true);return;}
