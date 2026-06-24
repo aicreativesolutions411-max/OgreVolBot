@@ -645,6 +645,28 @@
     if(ok&&d&&d.ok&&d.sweep){toast(d.sweep.summary||"Swept tokens");refreshWallets();return true;}
     toast((d&&d.error)||"Token sweep failed",true);return false;
   }
+  // ---------- fund recovery / exits ----------
+  async function sellAllTokens(dest){
+    const {ok,d}=await jpost("/api/web/wallets/sell-all-tokens",dest?{destination:dest}:{});
+    if(ok&&d&&d.ok){toast((d.sweep&&(d.sweep.summary||d.sweep.message))||"Sold all tokens to SOL");await refreshWallets();return true;}
+    toast((d&&(d.message||d.error))||"Sell-all failed",true);return false;
+  }
+  async function sendSolTo(idx,dest,amt){
+    const {ok,d}=await jpost("/api/web/wallets/send-sol",{walletIndex:idx,destination:dest,amountSol:String(amt)});
+    if(ok&&d&&d.ok){toast((d.sweep&&(d.sweep.summary||d.sweep.message))||("Sent ◎"+Number(amt).toFixed(3)));await refreshWallets();return true;}
+    toast((d&&(d.message||d.error))||"Send failed",true);return false;
+  }
+  async function returnToConnected(){
+    const {ok,d}=await jpost("/api/web/wallets/return-to-connected",{});
+    if(ok&&d&&d.ok){toast((d.summary||d.message)||"Returning everything to your connected wallet");await refreshWallets();return true;}
+    toast((d&&(d.message||d.error))||"Return failed",true);return false;
+  }
+  async function armExits(mint,tp,sl){
+    await ensureAutomation();   // arming server-side TP/SL needs the automation permission on your wallet
+    const {ok,d}=await jpost("/api/web/positions/arm-exits",{tokenMint:mint,takeProfitPct:String(tp||""),stopLossPct:String(sl||""),sellPercent:"100",sellDelay:"off"});
+    if(ok&&d&&d.ok){toast("🎯 TP/SL armed — it auto-sells at your targets");return true;}
+    toast((d&&(d.message||d.error))||"Couldn't arm TP/SL",true);return false;
+  }
   async function distributeFresh(count,amountSol,sourceWalletIndex){
     const {ok,d}=await jpost("/api/web/wallets/distribute",{count,amountSol,sourceWalletIndex,label:"Fresh"});
     if(ok&&d&&d.ok){
@@ -1613,7 +1635,7 @@
         '<div class="cell"><b>'+(p.estimatedValueSol!=null?"◎"+Number(p.estimatedValueSol).toFixed(3):"—")+'</b><span>value</span></div>'+
         '<div class="cell"><b>'+(isFinite(Number(p.spentSol))?"◎"+Number(p.spentSol).toFixed(3):"—")+'</b><span>cost</span></div>'+
         '<div class="cell"><b class="'+cls+'">'+(isFinite(pnl)?(pnl>=0?"+":"")+pnl.toFixed(3)+"◎":"—")+(pct!=null?" ("+pct+"%)":"")+'</b><span>pnl</span></div></div>'+
-        '<button class="wbtn" style="margin-top:10px;background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606" onclick="GG.sellPos(\''+esc(mint)+'\',\''+esc(p.symbol||"")+'\')">Sell '+esc(p.symbol||"")+'</button></div>';
+        '<div style="display:flex;gap:8px;margin-top:10px"><button class="wbtn" style="flex:1;background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606" onclick="GG.sellPos(\''+esc(mint)+'\',\''+esc(p.symbol||"")+'\')">Sell '+esc(p.symbol||"")+'</button><button class="wbtn ghost" style="flex:0 0 auto" title="Auto-sell at a target / floor" onclick="GG.armPos(\''+esc(mint)+'\',\''+esc(p.symbol||"")+'\')">🎯 TP/SL</button></div></div>';
     }).join("")+'</div>';
   }
   // The trade-side PnL bar (Invested / Remaining / PNL) is ALWAYS visible — including while you watch
@@ -1914,6 +1936,17 @@
       '<div id="qsChips" style="display:flex;gap:8px;flex-wrap:wrap">'+["25","50","75","100"].map(v=>'<button class="wbtn ghost" data-v="'+v+'" style="flex:1 1 64px;font-weight:800">'+v+'%</button>').join("")+'</div>');
     document.querySelectorAll("#qsChips button").forEach(b=>b.onclick=async()=>{const pc=b.dataset.v;closeModal();toast("Selling "+pc+"% of "+nm+"…");if(await ensureTradeReady())execSell(mint,pc);});
   }
+  // Arm a server-side take-profit / stop-loss on a bag you ALREADY hold — auto-sells at your targets
+  // even with the app closed (uses /api/web/positions/arm-exits).
+  function armExitsModal(mint,sym){
+    const nm=sym||short(mint);
+    openModal('<h3>🎯 Auto-sell '+esc(nm)+'</h3>'+
+      '<p class="sub mut" style="font-size:12px">Set a take-profit and/or stop-loss on this bag — it sells itself when hit, even if the app is closed.</p>'+
+      '<div class="field row2"><div><label>Take profit %</label><input id="aeTp" inputmode="decimal" value="40"></div><div><label>Stop loss %</label><input id="aeSl" inputmode="decimal" value="8"></div></div>'+
+      '<div id="aeMsg" class="wnote" style="margin:2px 0 12px"></div>'+
+      '<div style="display:flex;gap:9px"><button class="wbtn ghost" style="flex:1" onclick="GG.closeModal()">Cancel</button><button class="wbtn" id="aeGo" style="flex:1">🎯 Arm auto-sell</button></div>');
+    const go=$("#aeGo");if(go)go.onclick=async()=>{const tp=$("#aeTp").value.trim(),sl=$("#aeSl").value.trim();if(!tp&&!sl){$("#aeMsg").textContent="Set a take-profit and/or stop-loss first.";return;}go.disabled=true;go.textContent="Arming…";const okk=await armExits(mint,tp,sl);go.disabled=false;go.textContent="🎯 Arm auto-sell";if(okk)closeModal();};
+  }
   // 1-click buy contract: once you've set a quick-buy amount (+ optional TP/SL preset), the ⚡ Buy on
   // any pair fires instantly with it — no menu. The FIRST time (nothing set) it opens the quick-buy
   // sheet to pick the amount/preset, then buys. Stored in localStorage so it persists.
@@ -2034,7 +2067,7 @@
           '<td>'+(p.estimatedValueSol!=null?"◎ "+Number(p.estimatedValueSol).toFixed(3):"—")+'</td>'+
           '<td class="'+cls+'">'+(isFinite(pnl)?(pnl>=0?"+":"")+pnl.toFixed(3)+"◎":"—")+(pct!=null?'<span class="chg '+cls+'">'+pct+'%</span>':'')+'</td>'+
           '<td class="hideMb mut">'+esc(p.uiAmount||"")+'</td>'+
-          '<td><button class="buybtn sm" style="background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606" onclick="event.stopPropagation();GG.sellPos(\''+esc(p.tokenMint)+'\',\''+esc(p.symbol||"")+'\')">Sell</button></td></tr>';
+          '<td><div style="display:flex;gap:6px;justify-content:flex-end"><button class="buybtn sm" title="Auto-sell at a target / floor" onclick="event.stopPropagation();GG.armPos(\''+esc(p.tokenMint)+'\',\''+esc(p.symbol||"")+'\')">🎯</button><button class="buybtn sm" style="background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606" onclick="event.stopPropagation();GG.sellPos(\''+esc(p.tokenMint)+'\',\''+esc(p.symbol||"")+'\')">Sell</button></div></td></tr>';
       }).join("")+'</tbody></table></div>';
     void enrichPositionImages(pos);
   }
@@ -2246,6 +2279,12 @@
           '<div class="field"><label>Destination address</label><input id="swDest" placeholder="Paste a Solana address"></div>'+
           '<div style="display:flex;gap:9px"><button class="wbtn ghost" id="swSol">Sweep all SOL →</button><button class="wbtn ghost" id="swTok">Sweep all tokens →</button></div>'+
           '<p class="wnote" style="margin:8px 0 0">Pulls SOL / tokens from all your wallets into the destination address.</p>'+
+          // ---- Recover & exit funds ----
+          '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 7px">💸 Recover &amp; exit funds</div>'+
+          '<div style="display:flex;gap:9px;flex-wrap:wrap"><button class="wbtn ghost" id="sellAllBtn" style="flex:1;min-width:150px">💰 Sell ALL tokens → SOL</button>'+(state.user&&state.user.connectedWallet?'<button class="wbtn ghost" id="retConnBtn" style="flex:1;min-width:150px">↩ Return all to connected</button>':'')+'</div>'+
+          '<div class="field" style="margin-top:10px"><label>Send SOL to any address</label><div style="display:flex;gap:8px"><input id="sndDest" placeholder="Solana address" style="flex:1;min-width:0"><input id="sndAmt" inputmode="decimal" placeholder="0.1" style="width:84px;flex:0 0 auto"></div></div>'+
+          '<button class="wbtn ghost" id="sendSolBtn">Send SOL →</button>'+
+          '<p class="wnote" style="margin:8px 0 0">Sell every token across your wallets back to SOL, send SOL to any address, or pull everything back to the Phantom/Solflare you connected. Exits use forgiving slippage so thin coins still sell.</p>'+
           '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 7px">Fund multiple wallets</div>'+
           '<div class="field row2"><div><label>How many</label><input id="dCount" inputmode="numeric" placeholder="5"></div><div><label>SOL each</label><input id="dAmt" inputmode="decimal" placeholder="0.05"></div></div>'+
           '<button class="wbtn" id="distBtn">Create + fund fresh wallets</button>'+
@@ -2315,6 +2354,12 @@
     const ss=$("#swSol");if(ss)ss.onclick=async()=>{const dest=$("#swDest").value.trim();if(!dest){toast("Paste a destination address.",true);return;}ss.disabled=true;ss.textContent="Sweeping…";await sweepSol(dest,state.wallets.map(w=>w.index));ss.disabled=false;ss.textContent="Sweep all SOL →";renderWallet();};
     const st=$("#swTok");if(st)st.onclick=async()=>{const dest=$("#swDest").value.trim();if(!dest){toast("Paste a destination address.",true);return;}st.disabled=true;st.textContent="Sweeping…";await sweepTokens(dest,state.wallets.map(w=>w.index));st.disabled=false;st.textContent="Sweep all tokens →";};
     const db=$("#distBtn");if(db)db.onclick=async()=>{const c=parseInt($("#dCount").value,10),a=$("#dAmt").value.trim();if(!(c>0)){toast("How many wallets?",true);return;}if(!a||Number(a)<=0){toast("SOL per wallet?",true);return;}db.disabled=true;db.textContent="Funding…";await distributeFresh(c,a,state.activeWallet||1);db.disabled=false;db.textContent="Create + fund fresh wallets";renderWallet();};
+    // ---- fund recovery ----
+    // 2-tap confirm on the bulk "sell everything" actions (no modal): first tap arms, second executes.
+    const confirmTap=(btn,label,fn)=>{if(!btn)return;let armed=false,t=null;btn.onclick=async()=>{if(!armed){armed=true;const o=btn.textContent;btn.textContent="Tap again to confirm";btn.style.borderColor="var(--red)";t=setTimeout(()=>{armed=false;btn.textContent=o;btn.style.borderColor="";},3500);return;}clearTimeout(t);armed=false;btn.style.borderColor="";btn.disabled=true;btn.textContent=label+"…";await fn();btn.disabled=false;renderWallet();};};
+    confirmTap($("#sellAllBtn"),"Selling all",async()=>{await sellAllTokens("");});
+    confirmTap($("#retConnBtn"),"Returning",returnToConnected);
+    const snd=$("#sendSolBtn");if(snd)snd.onclick=async()=>{const dest=$("#sndDest").value.trim(),amt=Number($("#sndAmt").value);if(!dest){toast("Paste a destination address.",true);return;}if(!isFinite(amt)||amt<=0){toast("Enter a SOL amount.",true);return;}snd.disabled=true;snd.textContent="Sending…";await sendSolTo(state.activeWallet||1,dest,amt);snd.disabled=false;snd.textContent="Send SOL →";renderWallet();};
     const src=$("#saveRefCode");if(src)src.onclick=async()=>{const code=$("#refCode").value.trim();if(!code){toast("Enter a code.",true);return;}src.disabled=true;src.textContent="Saving…";const okk=await saveReferral({code});src.disabled=false;src.textContent="Save code";if(okk){toast("Referral code saved");renderWallet();}};
     const srw=$("#saveRefWallet");if(srw)srw.onclick=async()=>{const w=$("#refWallet2").value.trim();srw.disabled=true;srw.textContent="Saving…";const okk=await saveReferral(w?{wallet:w}:{clearPayout:true});srw.disabled=false;srw.textContent="Save payout wallet";if(okk){toast("Payout wallet saved");renderWallet();}};
     const enA=$("#enAlerts");if(enA)enA.onclick=()=>GG.enableAlerts();
@@ -2753,7 +2798,7 @@
   document.addEventListener("click",(e)=>{if(!e.target.closest(".ctmore"))document.querySelectorAll(".ctmore.open").forEach(x=>x.classList.remove("open"));});
 
   // ---------- expose + boot ----------
-  window.GG={open:(m)=>go("trade",m),openSell:(m)=>{state.pendingSell=m;go("trade",m);},sellPos:(m,s)=>quickSellModal(m,s),go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,
+  window.GG={open:(m)=>go("trade",m),openSell:(m)=>{state.pendingSell=m;go("trade",m);},sellPos:(m,s)=>quickSellModal(m,s),armPos:(m,s)=>armExitsModal(m,s),go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,
     flipTrade:()=>{const t=document.querySelector('#v-trade .trade');if(!t)return;const next=t.getAttribute('data-focus')==='buy'?'chart':'buy';t.setAttribute('data-focus',next);const fab=document.getElementById('tradeFab');if(fab)fab.innerHTML=next==='buy'?'📈 Chart':'💰 Buy';const side=t.querySelector('.tradeSide'),v=document.getElementById('v-trade');if(next==='buy'&&side)side.scrollIntoView({behavior:'smooth',block:'start'});else if(v)v.scrollTo({top:0,behavior:'smooth'});},
     copyWallet:(w)=>{const i=$("#cpWallet");if(i){i.value=w;i.scrollIntoView({behavior:"smooth",block:"center"});i.focus();toast("Wallet loaded — set your size, then Start copying");}},
     kolProfile:openKolProfile,
