@@ -634,7 +634,20 @@
     return false;
   }
   function activeTradePresetObj(){return (state.presets.trade||[]).find(p=>p.id===state.activeTradePreset)||null;}
-  function setActiveTradePreset(id){state.activeTradePreset=id||"";if(id)localStorage.setItem("ggTradePreset",id);else localStorage.removeItem("ggTradePreset");}
+  function setActiveTradePreset(id){
+    state.activeTradePreset=id||"";
+    if(id){
+      localStorage.setItem("ggTradePreset",id);
+      // Switching the active preset MUST also drive the ⚡ one-click buy (state.quickBuy) — otherwise it
+      // keeps firing the OLD amount + TP/SL ("switched to .2 but it still buys .1"). Sync them here.
+      const p=(state.presets.trade||[]).find(x=>x.id===id);
+      if(p)setQuickBuy({amt:Number(p.amountSol)||(state.quickBuy&&state.quickBuy.amt)||0.1,presetId:id,tp:p.takeProfitPct||"",sl:p.stopLossPct||"",slip:p.slippageBps||""});
+    }else{
+      localStorage.removeItem("ggTradePreset");
+      // "Manual — no auto-exit": keep the amount but drop TP/SL so one-click buys are plain.
+      if(state.quickBuy)setQuickBuy({amt:(state.quickBuy.amt)||0.1,presetId:"",tp:"",sl:"",slip:state.quickBuy.slip||""});
+    }
+  }
   async function sweepSol(destination,walletIndexes){
     const {ok,d}=await jpost("/api/web/wallets/sweep-sol",{destination,walletIndexes});
     if(ok&&d&&d.ok&&d.sweep){toast(d.sweep.summary||"Swept SOL");refreshWallets();return true;}
