@@ -1894,7 +1894,9 @@
     if((state.activeWallet==null||!state.wallets.some(w=>w.index===state.activeWallet))&&state.wallets.length)state.activeWallet=state.wallets[0].index;
     hap();toast("Selling "+p+"%…");
     const big=$("#bigbuy");if(big){big.disabled=true;big.textContent="Submitting…";}
-    const {ok,status,d}=await postTrade("/api/web/trade/sell",{tokenMint:mint,walletIndex:state.activeWallet,percent:String(p),slippageBps:"400",tradeAttemptId:attemptId()});
+    // Exits use a forgiving slippage (12%) — when you're getting OUT of a thin memecoin, filling matters
+    // more than a tight price; a tight 4% was a common cause of failed sells on low-liquidity coins.
+    const {ok,status,d}=await postTrade("/api/web/trade/sell",{tokenMint:mint,walletIndex:state.activeWallet,percent:String(p),slippageBps:"1200",tradeAttemptId:attemptId()});
     resetBigBtn();
     handleTradeResult(ok,status,d,"Sell");
   }
@@ -1959,7 +1961,9 @@
     // A 403 is a permission/limit error: show the server's actual message, never "session expired".
     if(status===401){toast("Couldn't authorize — open Wallet and reconnect (Log in or Restore).",true);go("wallet");return;}
     if(ok&&d&&d.ok&&d.trade){toast(label+" submitted — "+(d.trade.message||"done"));afterTradeRefresh();return;}
-    toast((d&&(d.error||d.message))||(label+" failed"+(status?" ("+status+")":" (no response)")),true);
+    // Show the REAL reason (d.message) — not the generic code (d.error="request_error"). This is why
+    // every failure read "request error" instead of the actual cause (no route, low SOL, etc.).
+    toast((d&&(d.message||d.error))||(label+" failed"+(status?" ("+status+")":" (no response)")),true);
   }
   // After a buy/sell, refresh balance + position bar + holdings RIGHT AWAY, then once more after the
   // chain settles (~2.6s) — so you never sit wondering whether it went through.
