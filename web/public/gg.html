@@ -522,12 +522,25 @@
     posCache:(function(){try{return JSON.parse(localStorage.getItem("ggPosCache")||"null");}catch(e){return null;}})(),
     quickBuy:(function(){try{return JSON.parse(localStorage.getItem("ggQuickBuy")||"null");}catch(e){return null;}})()};
   // No credentials:include — the API returns ACAO:* which forbids credentialed CORS. Auth is the Bearer header.
-  function api(path,opts){
-    opts=opts||{};const headers=Object.assign({},opts.headers||{});
-    if(state.token)headers.Authorization="Bearer "+state.token;
-    const o=Object.assign({},opts,{headers});
-    try{if(!o.signal&&typeof AbortSignal!=="undefined"&&AbortSignal.timeout)o.signal=AbortSignal.timeout(20000);}catch(e){}
-    return getJson(API_BASE+path,o);
+  async function api(path,opts){
+    opts=opts||{};
+    const attempt=()=>{
+      const headers=Object.assign({},opts.headers||{});
+      if(state.token)headers.Authorization="Bearer "+state.token;
+      const o=Object.assign({},opts,{headers});
+      try{if(!opts.signal&&typeof AbortSignal!=="undefined"&&AbortSignal.timeout)o.signal=AbortSignal.timeout(20000);}catch(e){}
+      return getJson(API_BASE+path,o);
+    };
+    let r=await attempt();
+    // A lone 401 right after signup/connect is almost always transient — the session the backend just
+    // minted hasn't propagated to the read that this request raced, or a brief auth-store lock. Retry
+    // ONCE with the SAME token before any caller wipes the session ("session expired"). A 401 means the
+    // request did NOT execute, so retrying is always safe — even for POSTs/trades.
+    if(r&&(r.status===401||r.status===403)&&state.token&&!opts._noRetry){
+      await new Promise(res=>setTimeout(res,600));
+      r=await attempt();
+    }
+    return r;
   }
   function jpost(path,body){return api(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})});}
   function setToken(t){state.token=t||"";if(t)localStorage.setItem(TOKEN_KEY,t);else localStorage.removeItem(TOKEN_KEY);}
@@ -535,7 +548,15 @@
   // Referral capture: a /r/CODE link redirects here as /?ref=CODE — remember it and attribute on signup.
   function refCode(){try{const u=new URL(location.href);const r=(u.searchParams.get("ref")||"").replace(/[^A-Za-z0-9_$.-]/g,"").slice(0,32);if(r)localStorage.setItem("ggRef",r);return r||localStorage.getItem("ggRef")||"";}catch(e){return localStorage.getItem("ggRef")||"";}}
   async function ensureAccount(){
-    if(state.token)return true;
+    // Trusting a stale token here is what produced "session expired right after connecting": a dead token
+    // from a prior session/reset 401s every call. Before connect/create/restore proceed, VERIFY the token
+    // is alive (the api() retry covers a transient 401); only a confirmed-dead token gets replaced with a
+    // fresh account. A network blip (status 0) keeps the token — the real calls will retry.
+    if(state.token){
+      const {status}=await api("/api/web/me");
+      if(status!==401)return true;
+      setToken("");
+    }
     const {ok,d}=await jpost("/api/web/signup",{ref:refCode()});
     if(ok&&d&&d.ok&&d.token){setToken(d.token);state.user=d.user||null;return true;}
     return false;
