@@ -553,6 +553,10 @@
     // is alive (the api() retry covers a transient 401); only a confirmed-dead token gets replaced with a
     // fresh account. A network blip (status 0) keeps the token — the real calls will retry.
     if(state.token){
+      // CRITICAL: never replace a token while we hold wallets — doing so orphans them (the "buy after
+      // restore says reconnect" bug). Only a confirmed-dead token on an account with NOTHING to lose
+      // gets swapped for a fresh one.
+      if((state.wallets||[]).length)return true;
       const {status}=await api("/api/web/me");
       if(status!==401)return true;
       setToken("");
@@ -1825,10 +1829,20 @@
 
   // ---------- trade execution ----------
   function attemptId(){return"gg-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);}
+  // The backend defaults every quick-buy to autoExit (TP/SL), which needs the "TP/SL Automation"
+  // permission on your managed wallet — without it the buy 403s and looked like "session expired /
+  // reconnect". It's YOUR wallet + YOUR take-profit, so enable it once per session (idempotent; just
+  // refreshes the TTL). This is what unblocks one-tap buys.
+  async function ensureAutomation(){
+    if(state._autoArmed||!state.token)return;
+    state._autoArmed=true;                                  // optimistic so we never spam it
+    try{const {ok}=await jpost("/api/web/profile/automation",{action:"enable"});if(!ok)state._autoArmed=false;}catch(e){state._autoArmed=false;}
+  }
   async function ensureTradeReady(){
     if(!(await ensureAccount())){toast("Could not start your account.",true);return false;}
     if(!state.wallets.length)await refreshWallets();
     if(!state.wallets.length){toast("Create a wallet first (Wallet tab).",true);go("wallet");return false;}
+    await ensureAutomation();                               // arm TP/SL automation so the buy doesn't 403
     return true;
   }
   // Opt the user into web push so server-side events (e.g. a sniper firing while the app is closed) reach
@@ -1861,7 +1875,7 @@
     if(p&&(p.takeProfitPct||p.stopLossPct||(p.sellDelay&&p.sellDelay!=="off"))){
       body.autoExit=true;body.takeProfitPct=p.takeProfitPct||"";body.stopLossPct=p.stopLossPct||"";body.sellDelay=p.sellDelay||"off";body.sellPercent=p.sellPercent||"100";
     }
-    const {ok,status,d}=await jpost("/api/web/trade/buy",body);
+    const {ok,status,d}=await postTrade("/api/web/trade/buy",body);
     resetBigBtn();
     handleTradeResult(ok,status,d,"Buy");
   }
@@ -1873,7 +1887,7 @@
     if((state.activeWallet==null||!state.wallets.some(w=>w.index===state.activeWallet))&&state.wallets.length)state.activeWallet=state.wallets[0].index;
     hap();toast("Selling "+p+"%…");
     const big=$("#bigbuy");if(big){big.disabled=true;big.textContent="Submitting…";}
-    const {ok,status,d}=await jpost("/api/web/trade/sell",{tokenMint:mint,walletIndex:state.activeWallet,percent:String(p),slippageBps:"400",tradeAttemptId:attemptId()});
+    const {ok,status,d}=await postTrade("/api/web/trade/sell",{tokenMint:mint,walletIndex:state.activeWallet,percent:String(p),slippageBps:"400",tradeAttemptId:attemptId()});
     resetBigBtn();
     handleTradeResult(ok,status,d,"Sell");
   }
@@ -1897,7 +1911,7 @@
     const body={tokenMint:mint,walletIndex:state.activeWallet,amountSol:String(q.amt),slippageBps:String(q.slip||(p&&p.slippageBps)||"500"),tradeAttemptId:attemptId()};
     if(tp||sl||(p&&p.sellDelay&&p.sellDelay!=="off")){body.autoExit=true;body.takeProfitPct=tp;body.stopLossPct=sl;body.sellDelay=(p&&p.sellDelay)||"off";body.sellPercent=(p&&p.sellPercent)||"100";}
     toast("Buying ◎"+Number(q.amt).toFixed(3)+"…");
-    const {ok,status,d}=await jpost("/api/web/trade/buy",body);
+    const {ok,status,d}=await postTrade("/api/web/trade/buy",body);
     handleTradeResult(ok,status,d,"Buy ◎"+Number(q.amt).toFixed(3));
   }
   async function quickBuy(mint){
@@ -1921,8 +1935,21 @@
     $("#qbGo").onclick=async()=>{const amt=Number(amtIn.value);if(!isFinite(amt)||amt<=0){toast("Enter a SOL amount.",true);return;}const o={amt,presetId:$("#qbPreset").value,tp:$("#qbTp").value.trim(),sl:$("#qbSl").value.trim(),slip:$("#qbSlip").value.trim()};setQuickBuy(o);closeModal();toast("⚡ 1-click set: ◎"+amt.toFixed(3)+(o.tp?" · TP "+o.tp+"%":"")+(o.sl?" · SL "+o.sl+"%":""));if(mint){if(await ensureTradeReady())execQuickBuy(mint,o);}};
     const clr=$("#qbClear");if(clr)clr.onclick=()=>{clearQuickBuy();closeModal();toast("1-click buy reset");};
   }
+  // Submit a trade; if the backend 403s for the TP/SL automation permission (every quick-buy defaults to
+  // auto-exit), enable it and retry ONCE — so a fresh/restored wallet's first buy just works.
+  async function postTrade(path,body){
+    let r=await jpost(path,body);
+    if(r&&r.status===403&&/automation|permission|tp\/sl/i.test(String((r.d&&(r.d.message||r.d.error))||""))){
+      state._autoArmed=false;await ensureAutomation();
+      r=await jpost(path,body);
+    }
+    return r;
+  }
   function handleTradeResult(ok,status,d,label){
-    if(status===401||status===403){setToken("");toast("Session expired — set up your wallet again.",true);go("wallet");return;}
+    // ONLY 401 is a real session problem — and even then do NOT wipe the token (that orphaned a just-
+    // restored wallet → "buy says reconnect"); route to Wallet where a dead token downgrades cleanly.
+    // A 403 is a permission/limit error: show the server's actual message, never "session expired".
+    if(status===401){toast("Couldn't authorize — open Wallet and reconnect (Log in or Restore).",true);go("wallet");return;}
     if(ok&&d&&d.ok&&d.trade){toast(label+" submitted — "+(d.trade.message||"done"));afterTradeRefresh();return;}
     toast((d&&(d.error||d.message))||(label+" failed"+(status?" ("+status+")":" (no response)")),true);
   }
