@@ -1620,9 +1620,16 @@
     // the bag off the live price (refreshes ~6s with the chart) instead of the slower backend snapshot —
     // so the PnL bar tracks MC in real time ("MC 9k, wallet shows 6k" lag fix).
     const mk=state.markPrice;const held=Number(p.uiAmountNum)||0;
-    if(mk&&mk.mint===p.tokenMint&&Number(mk.priceSol)>0&&held>0){
+    const haveLiveMark=mk&&mk.mint===p.tokenMint&&Number(mk.priceSol)>0&&held>0;
+    if(haveLiveMark){
       value=held*Number(mk.priceSol);
       if(isFinite(spent)){pnl=value-spent;pct=spent>0?((pnl/spent)*100).toFixed(2):null;}
+    }
+    // Guard: right after a buy the backend can briefly report a deep-negative round-trip value before the
+    // live chart price lands. Don't flash a scary false % — wait one beat for the live mark to confirm.
+    // Only kicks in for the suspicious case (no live price yet AND ≤ -60%); normal values show instantly.
+    if(!haveLiveMark&&isFinite(Number(pnl))&&spent>0&&(Number(pnl)/spent)<=-0.6){
+      inv.textContent=isFinite(spent)?"◎"+spent.toFixed(3):"—";rem.textContent="syncing…";val.textContent="syncing price…";val.className="mut";return;
     }
     inv.textContent=isFinite(spent)?"◎"+spent.toFixed(3):"—";
     rem.textContent=isFinite(value)?"◎"+value.toFixed(3):"—";
