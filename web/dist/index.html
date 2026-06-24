@@ -1874,7 +1874,7 @@
     const body={tokenMint:mint,walletIndex:state.activeWallet,amountSol:String(a),slippageBps:(p&&p.slippageBps)||"400",tradeAttemptId:attemptId()};
     if(p&&(p.takeProfitPct||p.stopLossPct||(p.sellDelay&&p.sellDelay!=="off"))){
       body.autoExit=true;body.takeProfitPct=p.takeProfitPct||"";body.stopLossPct=p.stopLossPct||"";body.sellDelay=p.sellDelay||"off";body.sellPercent=p.sellPercent||"100";
-    }
+    }else body.disableAutoExit=true;   // plain buy = HOLD; the backend otherwise force-arms a default TP/SL that fires instantly on a fresh-buy quote
     const {ok,status,d}=await postTrade("/api/web/trade/buy",body);
     resetBigBtn();
     handleTradeResult(ok,status,d,"Buy");
@@ -1910,6 +1910,7 @@
     const tp=q.tp||(p&&p.takeProfitPct)||"",sl=q.sl||(p&&p.stopLossPct)||"";
     const body={tokenMint:mint,walletIndex:state.activeWallet,amountSol:String(q.amt),slippageBps:String(q.slip||(p&&p.slippageBps)||"500"),tradeAttemptId:attemptId()};
     if(tp||sl||(p&&p.sellDelay&&p.sellDelay!=="off")){body.autoExit=true;body.takeProfitPct=tp;body.stopLossPct=sl;body.sellDelay=(p&&p.sellDelay)||"off";body.sellPercent=(p&&p.sellPercent)||"100";}
+    else body.disableAutoExit=true;    // no TP/SL set → HOLD (don't let the backend force a default auto-exit)
     toast("Buying ◎"+Number(q.amt).toFixed(3)+"…");
     const {ok,status,d}=await postTrade("/api/web/trade/buy",body);
     handleTradeResult(ok,status,d,"Buy ◎"+Number(q.amt).toFixed(3));
@@ -2331,7 +2332,7 @@
     if(!(await ensureTradeReady()))return;
     const slip=$("#swSlip").value.trim()||"500";const b=$("#swGo");b.disabled=true;b.textContent="Submitting…";
     let res;
-    if(swapDir==="buy")res=await jpost("/api/web/trade/buy",{tokenMint:swapTok.mint,walletIndex:state.activeWallet,amountSol:String(amt),slippageBps:slip,tradeAttemptId:attemptId()});
+    if(swapDir==="buy")res=await jpost("/api/web/trade/buy",{tokenMint:swapTok.mint,walletIndex:state.activeWallet,amountSol:String(amt),slippageBps:slip,disableAutoExit:true,tradeAttemptId:attemptId()});
     else res=await jpost("/api/web/trade/sell",{tokenMint:swapTok.mint,walletIndex:state.activeWallet,percent:String(amt),slippageBps:slip,tradeAttemptId:attemptId()});
     b.disabled=false;b.textContent=(swapDir==="buy"?"Buy ":"Sell ")+(swapTok.symbol||"");
     handleTradeResult(res.ok,res.status,res.d,swapDir==="buy"?"Buy":"Sell");
@@ -2362,6 +2363,7 @@
           if(o.tpTop&&o.tp){const lo=Number(o.tp),hi=Number(o.tpTop);if(isFinite(lo)&&isFinite(hi)&&hi>lo)tp=String(Math.round((lo+(hi-lo)*(order.length>1?k/(order.length-1):0))*10)/10);}
           const body={tokenMint:o.tokenMint,walletIndex:idx,amountSol:amt.toFixed(4),slippageBps:String(o.slip),tradeAttemptId:attemptId()};
           if(tp||o.sl){body.autoExit=true;body.takeProfitPct=tp||"";body.stopLossPct=o.sl||"";body.sellDelay="off";body.sellPercent="100";if(o.tpTop)label+=" · TP "+tp+"%";}
+          else body.disableAutoExit=true;
           res=await jpost("/api/web/trade/buy",body);if(res&&res.ok&&res.d&&res.d.ok)spent+=amt;}
         const good=res&&res.ok&&res.d&&res.d.ok;if(good)okc++;else fail++;
         if(res&&res.status===401){staggerAbort=true;staggerLog(logEl,'<div style="color:var(--red);font-size:12px;padding:4px 0">Session expired — set up your wallet again.</div>');break;}
