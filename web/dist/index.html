@@ -760,6 +760,48 @@
       if(go){go.disabled=false;go.textContent="Restore wallet";}
     }
   }
+  // ---------- account login / recovery ----------
+  // The new site's accounts were anonymous (token-only), so clearing the browser = lost wallet. These
+  // wire the backend's existing username+password login: set credentials once (while signed in) and you
+  // can log BACK INTO THE SAME ACCOUNT on any device — no more "session expired = start over".
+  function loginModal(){
+    openModal('<h3>🔓 Log in</h3>'+
+      '<p class="sub mut">Log back into your account with the username &amp; password you set — your wallets come right back. (No login yet? Use <b>Restore from backup</b> or create one.)</p>'+
+      '<div class="field"><label>Username</label><input id="liUser" autocomplete="username" placeholder="yourname" maxlength="24" autocapitalize="off" spellcheck="false"></div>'+
+      '<div class="field"><label>Password</label><input id="liPass" type="password" autocomplete="current-password" placeholder="••••••••"></div>'+
+      '<div id="liMsg" class="wnote" style="margin:2px 0 12px"></div>'+
+      '<div style="display:flex;gap:9px"><button class="wbtn ghost" style="flex:1" onclick="GG.closeModal()">Cancel</button><button class="wbtn" id="liGo" style="flex:1">Log in</button></div>');
+    const go=$("#liGo"),msg=$("#liMsg");
+    const submit=async()=>{
+      const u=($("#liUser").value||"").trim(),p=$("#liPass").value||"";
+      if(!u||!p){msg.textContent="Enter your username and password.";return;}
+      go.disabled=true;go.textContent="Logging in…";
+      const {ok,d}=await jpost("/api/web/password-login",{username:u,password:p});
+      if(ok&&d&&d.ok&&d.token){setToken(d.token);state.user=d.user||null;closeModal();await Promise.all([refreshWallets(),loadMe(),loadPresets()]);updateWalletPill();toast("✓ Logged in");if(state.route==="wallet")renderWallet();}
+      else{msg.textContent=(d&&(d.error||d.message))||"Login failed — check your username and password.";go.disabled=false;go.textContent="Log in";}
+    };
+    if(go)go.onclick=submit;
+    const pass=$("#liPass");if(pass)pass.onkeydown=(e)=>{if(e.key==="Enter")submit();};
+  }
+  function setLoginModal(){
+    const u=state.user||{};const has=!!u.hasPasswordLogin;
+    openModal('<h3>'+(has?"🔐 Update login":"🔐 Secure your account")+'</h3>'+
+      '<p class="sub mut">Set a username + password so you can log back in on any device. Without it, clearing your browser loses access to this account — only your backup file can recover it.</p>'+
+      '<div class="field"><label>Username</label><input id="scUser" autocomplete="username" value="'+esc(u.username||"")+'" placeholder="yourname" maxlength="24" autocapitalize="off" spellcheck="false"></div>'+
+      '<div class="field"><label>Password (8+ characters)</label><input id="scPass" type="password" autocomplete="new-password" placeholder="••••••••"></div>'+
+      '<div id="scMsg" class="wnote" style="margin:2px 0 12px"></div>'+
+      '<div style="display:flex;gap:9px"><button class="wbtn ghost" style="flex:1" onclick="GG.closeModal()">Cancel</button><button class="wbtn" id="scGo" style="flex:1">Save login</button></div>');
+    const go=$("#scGo"),msg=$("#scMsg");
+    if(go)go.onclick=async()=>{
+      const un=($("#scUser").value||"").trim(),pw=$("#scPass").value||"";
+      if(!/^[a-z0-9][a-z0-9_.-]{2,23}$/i.test(un)){msg.textContent="Username must be 3-24 characters (letters, numbers, dot, dash, underscore).";return;}
+      if(pw.length<8){msg.textContent="Password must be at least 8 characters.";return;}
+      go.disabled=true;go.textContent="Saving…";
+      const {ok,d}=await jpost("/api/web/profile/credentials",{username:un,password:pw});
+      if(ok&&d&&d.ok){state.user=d.user||state.user;closeModal();toast("✓ Login saved — you can sign in on any device now");if(state.route==="wallet")renderWallet();}
+      else{msg.textContent=(d&&(d.error||d.message))||"Couldn't save that login.";go.disabled=false;go.textContent="Save login";}
+    };
+  }
 
   // ---------- feed ----------
   const TREND_TABS=[
@@ -2085,8 +2127,9 @@
     const guideBar='<a class="guidebar" href="/manual" target="_blank" rel="noopener"><span class="gi">📖</span><span class="gt"><b>New here? Read the 2-min guide</b><span class="sub">Find coins, fund a wallet, buy in one tap — all of SlimeWire explained.</span></span><span class="garrow">→</span></a>';
     if(!state.token){
       wrap.innerHTML=guideBar+'<div class="wbox"><h3>👛 Set up your trading wallet</h3><p class="sub">No sign-up, no email needed. Either create a fresh SlimeWire wallet, or connect Phantom/Solflare and move some SOL into one — then trade right here.</p>'+
-        '<div style="display:flex;flex-direction:column;gap:9px"><button class="wbtn" id="connectFundBtn">🔗 Connect &amp; fund (Phantom / Solflare)</button><button class="wbtn ghost" id="mkWallet">Create an empty wallet</button><button class="wbtn ghost" id="restoreBtn">🔑 Restore from backup</button></div>'+
-        '<p class="wnote" style="margin-top:12px">Already made a wallet here? Tap <b>Restore from backup</b> and load your saved backup or recovery-keys file. Your keys are yours — we hand you an encrypted backup the moment a wallet is created, so save it.</p></div>';
+        '<div style="display:flex;flex-direction:column;gap:9px"><button class="wbtn" id="connectFundBtn">🔗 Connect &amp; fund (Phantom / Solflare)</button><button class="wbtn ghost" id="mkWallet">Create an empty wallet</button>'+
+          '<div style="display:flex;gap:9px"><button class="wbtn ghost" id="loginBtn" style="flex:1">🔓 Log in</button><button class="wbtn ghost" id="restoreBtn" style="flex:1">🔑 Restore backup</button></div></div>'+
+        '<p class="wnote" style="margin-top:12px">Been here before? <b>Log in</b> with the username + password you set, or <b>Restore</b> from your saved backup file. Your keys are yours — we hand you an encrypted backup the moment a wallet is created, so save it.</p></div>';
     }else{
       const list=state.wallets.map(w=>{
         const sel=w.index===state.activeWallet;
@@ -2133,8 +2176,13 @@
         '</div></details>'+
         // ---- Profile & Alerts fold (account: alerts + X + referral) ----
         (function(){const u=state.user||{};const alertsOn=(typeof Notification!=="undefined"&&Notification.permission==="granted");const xh=String(u.xHandle||u.x||"").replace(/^@/,"");
-          return '<details class="fold"><summary>🔔 Profile &amp; Alerts<span class="sub">notifications · X · referral</span><span class="chev">▾</span></summary><div class="foldbody">'+
-          '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:7px">Alerts</div>'+
+          return '<details class="fold"'+(u.hasPasswordLogin?'':' open')+'><summary>🔐 Profile &amp; Login<span class="sub">login · notifications · X · referral</span><span class="chev">▾</span></summary><div class="foldbody">'+
+          // ---- Login & recovery (so a cleared browser never = lost wallet) ----
+          '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:7px">Login &amp; recovery</div>'+
+          (u.hasPasswordLogin
+            ? '<p class="wnote" style="margin:0 0 8px;color:var(--green2)">✓ Login set'+(u.username?' — <b>'+esc(u.username)+'</b>':'')+'. You can sign in on any device.</p><button class="wbtn ghost" id="setLoginBtn">Update username / password</button>'
+            : '<p class="wnote" style="margin:0 0 8px;color:#ffcf6b">⚠ No login yet — if this browser clears, only your backup file can recover this account. Set a username + password to log in anywhere.</p><button class="wbtn" id="setLoginBtn">🔐 Secure my account (set login)</button>')+
+          '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 7px">Alerts</div>'+
           (alertsOn?'<p class="wnote" style="margin:0 0 6px;color:var(--green2)">🔔 Alerts are ON — you\'ll get a push when your sniper fires &amp; on key events.</p>':'<button class="wbtn" id="enAlerts">🔔 Enable push alerts</button><p class="wnote" style="margin:8px 0 0">Get pinged the instant your sniper fires — even with the app closed.</p>')+
           '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 7px">Your X handle</div>'+
           '<div class="field"><div style="display:flex;gap:8px"><input id="xHandle" value="'+esc(xh)+'" placeholder="@yourhandle" maxlength="30" style="flex:1"><button class="wbtn ghost" id="saveX" style="flex:0 0 auto">Save</button></div></div>'+
@@ -2159,6 +2207,8 @@
     const mk=$("#mkWallet");if(mk)mk.onclick=async()=>{mk.disabled=true;mk.textContent="Creating…";await createWallet();if(state.route==="wallet")renderWallet();};
     const rs=$("#restoreBtn");if(rs)rs.onclick=()=>restoreModal();
     const rs2=$("#restoreBtn2");if(rs2)rs2.onclick=()=>restoreModal();
+    const lg=$("#loginBtn");if(lg)lg.onclick=()=>loginModal();
+    const sl=$("#setLoginBtn");if(sl)sl.onclick=()=>setLoginModal();
     const rf=$("#refWallet");if(rf)rf.onclick=async()=>{rf.disabled=true;rf.textContent="…";await refreshWallets();renderWallet();};
     const cd=$("#copyDep");if(cd)cd.onclick=()=>{const w=activeWalletObj();if(w)copy(w.publicKey);};
     const sp=$("#savePre");if(sp)sp.onclick=async()=>{
