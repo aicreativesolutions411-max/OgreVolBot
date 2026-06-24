@@ -46766,12 +46766,13 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   const stickyCount = sort === "best" && sourceBucket !== "live"
     ? Math.min(1, Math.max(0, Math.floor(targetLimit / 12)))
     : 0;
-  const safeRows = decorateWebLivePairAvatars(rotateRowsForRefresh(
-    sortLivePairs(rowsForSort, sort),
-    targetLimit,
-    scanState.refreshCount,
-    { stickyCount }
-  ));
+  // The Fresh / New feed must stay STRICTLY newest-first — rotating it for "refresh variety" is what
+  // scrambled seconds-old launches into a mix. Sort by age and serve it straight; rotate the other tabs.
+  const sortedForOutput = sortLivePairs(rowsForSort, sort);
+  const isFreshSort = (sort === "fresh" || sort === "newest");
+  const safeRows = decorateWebLivePairAvatars(isFreshSort
+    ? sortedForOutput.slice(0, targetLimit)
+    : rotateRowsForRefresh(sortedForOutput, targetLimit, scanState.refreshCount, { stickyCount }));
   rememberSniperScanRows(`web:${userId}`, `livepairs:${safeBucket}`, safeRows);
   void persistPostgresLivePairRows(safeRows, { reason: `live-pairs:${safeBucket}` }).catch(() => false);
 

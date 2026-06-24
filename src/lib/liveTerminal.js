@@ -399,8 +399,17 @@ export function sortLivePairs(rows = [], sort = "best", now = Date.now()) {
   const value = String(sort || "best").toLowerCase();
   const numeric = (row, key) => Number(row?.[key] || 0);
 
-  if (value === "newest") {
-    return copied.sort((a, b) => (normalizePairTimestamp(b.pairCreatedAt, now) || 0) - (normalizePairTimestamp(a.pairCreatedAt, now) || 0));
+  // FRESH / NEWEST = strict newest-first. "fresh" had NO case here, so the New tab silently fell through
+  // to the best-pick-score sort below — that's why seconds-old launches were buried in a mix. Order by the
+  // best age signal (pairAgeSeconds when present, else now − pairCreatedAt), ascending = freshest on top.
+  if (value === "newest" || value === "fresh") {
+    const ageSec = (row) => {
+      const a = Number(row?.pairAgeSeconds);
+      if (Number.isFinite(a) && a >= 0) return a;
+      const ts = normalizePairTimestamp(row?.pairCreatedAt, now);
+      return ts ? Math.max(0, (now - ts) / 1000) : Number.MAX_SAFE_INTEGER;
+    };
+    return copied.sort((a, b) => ageSec(a) - ageSec(b));
   }
   if (value === "volume") return copied.sort((a, b) => numeric(b, "volumeH1") - numeric(a, "volumeH1") || numeric(b, "volume5m") - numeric(a, "volume5m"));
   if (value === "liquidity") return copied.sort((a, b) => numeric(b, "liquidityUsd") - numeric(a, "liquidityUsd"));
