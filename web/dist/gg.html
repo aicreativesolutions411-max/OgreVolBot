@@ -697,6 +697,48 @@
       '<p class="danger">⚠ Save both downloaded files now. Without them, a lost device means lost funds.</p>'+
       '<div style="display:flex;gap:9px;margin-top:14px"><button class="wbtn" style="flex:1" onclick="GG.copy(\''+esc(w.publicKey)+'\')">Copy deposit address</button><button class="wbtn ghost" onclick="GG.closeModal()">Done</button></div>');
   }
+  // Restore a previously-created wallet on a new device / after a cleared session. Accounts here are
+  // anonymous (the session token IS the only login), so a returning user has to bring their wallet back
+  // from the backup/recovery file they saved — this is the missing "load my backup" path. Accepts the
+  // encrypted-backup file, the recovery-keys file, OR a raw private key (file picker or paste — both
+  // work on mobile). Tries the encrypted-backup restore first, then falls back to private-key import.
+  function restoreModal(){
+    openModal('<h3>🔑 Restore your wallet</h3>'+
+      '<p class="sub mut">Made a wallet here before? Bring it back. Pick your saved <b>backup</b> or <b>recovery-keys</b> file, or paste a private key — it loads straight into your wallet list.</p>'+
+      '<label class="wbtn ghost" style="display:flex;align-items:center;justify-content:center;cursor:pointer;margin-bottom:10px">📂 Choose backup file<input id="rsFile" type="file" accept=".txt,.json,application/json,text/plain" style="display:none"></label>'+
+      '<div class="field"><label>…or paste backup text / private key</label><textarea id="rsText" rows="4" placeholder="Paste your backup file contents, or a private key" style="width:100%;resize:vertical;font-family:var(--mono);font-size:12px"></textarea></div>'+
+      '<div id="rsMsg" class="wnote" style="margin:2px 0 12px">Your keys never leave with anyone — they load into your own wallet on this account.</div>'+
+      '<div style="display:flex;gap:9px"><button class="wbtn ghost" style="flex:1" onclick="GG.closeModal()">Cancel</button><button class="wbtn" id="rsGo" style="flex:1">Restore wallet</button></div>');
+    const file=$("#rsFile"),ta=$("#rsText"),go=$("#rsGo"),msg=$("#rsMsg");
+    if(file)file.onchange=()=>{const f=file.files&&file.files[0];if(!f)return;const rd=new FileReader();rd.onload=()=>{if(ta)ta.value=String(rd.result||"").trim();if(msg)msg.textContent="Loaded "+f.name+" — tap Restore wallet.";};rd.onerror=()=>{if(msg)msg.textContent="Couldn't read that file — try pasting the text instead.";};rd.readAsText(f);};
+    if(go)go.onclick=()=>restoreWalletFlow(ta?ta.value:"",go,msg);
+  }
+  async function restoreWalletFlow(text,go,msg){
+    text=String(text||"").trim();
+    const setMsg=(t)=>{if(msg)msg.textContent=t;};
+    if(!text){setMsg("Choose your backup file or paste your key first.");return;}
+    if(go){go.disabled=true;go.textContent="Restoring…";}
+    if(!(await ensureAccount())){setMsg("Couldn't start your account — check your connection and try again.");if(go){go.disabled=false;go.textContent="Restore wallet";}return;}
+    const before=(state.wallets||[]).length;
+    // encrypted-backup restore first; if it restores nothing, fall back to raw private-key import.
+    let err="";
+    let r=await jpost("/api/web/wallets/restore",{backupText:text});
+    let restored=(r.ok&&r.d&&r.d.ok&&r.d.restore&&Number(r.d.restore.restoredCount))||0;
+    if(!restored){
+      if(r.d&&r.d.error)err=r.d.error;
+      const im=await jpost("/api/web/wallets/import",{secret:text,label:"Restored wallet"});
+      if(im.ok&&im.d&&im.d.ok&&im.d.imported&&Number(im.d.imported.importedCount)>0)restored=Number(im.d.imported.importedCount);
+      else if(im.d&&im.d.error)err=im.d.error;
+    }
+    await refreshWallets();
+    if(restored>0||(state.wallets||[]).length>before){
+      closeModal();updateWalletPill();toast("✓ Wallet restored");
+      if(state.route==="wallet")renderWallet();
+    }else{
+      setMsg(err||"Couldn't read that backup. Paste the FULL contents of your backup or recovery-keys file, or a single private key.");
+      if(go){go.disabled=false;go.textContent="Restore wallet";}
+    }
+  }
 
   // ---------- feed ----------
   const TREND_TABS=[
@@ -2022,8 +2064,8 @@
     const guideBar='<a class="guidebar" href="/manual" target="_blank" rel="noopener"><span class="gi">📖</span><span class="gt"><b>New here? Read the 2-min guide</b><span class="sub">Find coins, fund a wallet, buy in one tap — all of SlimeWire explained.</span></span><span class="garrow">→</span></a>';
     if(!state.token){
       wrap.innerHTML=guideBar+'<div class="wbox"><h3>👛 Set up your trading wallet</h3><p class="sub">No sign-up, no email needed. Either create a fresh SlimeWire wallet, or connect Phantom/Solflare and move some SOL into one — then trade right here.</p>'+
-        '<div style="display:flex;flex-direction:column;gap:9px"><button class="wbtn" id="connectFundBtn">🔗 Connect &amp; fund (Phantom / Solflare)</button><button class="wbtn ghost" id="mkWallet">Create an empty wallet</button></div>'+
-        '<p class="wnote" style="margin-top:12px">Your keys are yours. We hand you an encrypted backup and recovery file the moment it\'s created — save them.</p></div>';
+        '<div style="display:flex;flex-direction:column;gap:9px"><button class="wbtn" id="connectFundBtn">🔗 Connect &amp; fund (Phantom / Solflare)</button><button class="wbtn ghost" id="mkWallet">Create an empty wallet</button><button class="wbtn ghost" id="restoreBtn">🔑 Restore from backup</button></div>'+
+        '<p class="wnote" style="margin-top:12px">Already made a wallet here? Tap <b>Restore from backup</b> and load your saved backup or recovery-keys file. Your keys are yours — we hand you an encrypted backup the moment a wallet is created, so save it.</p></div>';
     }else{
       const list=state.wallets.map(w=>{
         const sel=w.index===state.activeWallet;
@@ -2057,8 +2099,8 @@
         // ---- Power tools fold ----
         '<details class="fold"><summary>🛠️ Power Tools<span class="sub">keys · sweep · multi-wallet</span><span class="chev">▾</span></summary><div class="foldbody">'+
           '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:7px">Backup</div>'+
-          '<button class="wbtn ghost" id="expKeys">⬇ Download backup &amp; recovery keys</button>'+
-          '<p class="wnote" style="margin:8px 0 0">Re-download your encrypted backup + private keys anytime. Keep them somewhere safe — they are the only way to recover your funds.</p>'+
+          '<div style="display:flex;gap:9px;flex-wrap:wrap"><button class="wbtn ghost" id="expKeys" style="flex:1;min-width:170px">⬇ Download backup &amp; keys</button><button class="wbtn ghost" id="restoreBtn2" style="flex:1;min-width:170px">🔑 Restore / import a wallet</button></div>'+
+          '<p class="wnote" style="margin:8px 0 0">Re-download your encrypted backup + private keys anytime, or pull another wallet in from a backup / private key. Keep your keys somewhere safe — they are the only way to recover your funds.</p>'+
           '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 7px">Sweep (consolidate)</div>'+
           '<div class="field"><label>Destination address</label><input id="swDest" placeholder="Paste a Solana address"></div>'+
           '<div style="display:flex;gap:9px"><button class="wbtn ghost" id="swSol">Sweep all SOL →</button><button class="wbtn ghost" id="swTok">Sweep all tokens →</button></div>'+
@@ -2094,6 +2136,8 @@
     view.innerHTML="";view.appendChild(wrap);
     const cf=$("#connectFundBtn");if(cf)cf.onclick=()=>openConnectModal();
     const mk=$("#mkWallet");if(mk)mk.onclick=async()=>{mk.disabled=true;mk.textContent="Creating…";await createWallet();if(state.route==="wallet")renderWallet();};
+    const rs=$("#restoreBtn");if(rs)rs.onclick=()=>restoreModal();
+    const rs2=$("#restoreBtn2");if(rs2)rs2.onclick=()=>restoreModal();
     const rf=$("#refWallet");if(rf)rf.onclick=async()=>{rf.disabled=true;rf.textContent="…";await refreshWallets();renderWallet();};
     const cd=$("#copyDep");if(cd)cd.onclick=()=>{const w=activeWalletObj();if(w)copy(w.publicKey);};
     const sp=$("#savePre");if(sp)sp.onclick=async()=>{
