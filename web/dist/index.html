@@ -241,7 +241,13 @@
   .field.row2 input,.field.row2 select{min-width:0;width:100%}
   .preChip{display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid var(--border2);border-radius:11px;background:var(--row);margin-bottom:7px}
   .preChip .info b{font-size:13px}.preChip .info span{font-size:11px;color:var(--muted);font-family:var(--mono)}
-  .preChip .x{margin-left:auto;color:var(--muted2)}.preChip .x:hover{color:var(--red)}
+  .preChip .x{color:var(--muted2)}.preChip .x:hover{color:var(--red)}
+  .preChip.on{border-color:var(--green);background:rgba(120,220,90,.07)}
+  .preact{font-size:9px;font-weight:900;color:var(--green2);letter-spacing:.05em;margin-left:6px}
+  .preChip .preacts{margin-left:auto;display:flex;align-items:center;gap:6px;flex:0 0 auto}
+  .prebtn{font-size:11px;font-weight:800;padding:6px 11px;border-radius:8px;border:1px solid var(--border);background:var(--row-hover);color:var(--text);cursor:pointer}
+  .prebtn:hover{border-color:var(--green)}
+  .prebtn.on{background:linear-gradient(180deg,#9be35a,#5fbf2e);color:#0a1207;border-color:transparent}
   .bsrow{display:flex;gap:8px;margin-bottom:13px}
   .bsrow button{flex:1;padding:10px;border-radius:10px;font-weight:800;font-size:14px;border:1px solid var(--border);color:var(--muted)}
   .bsrow button.buy.on{background:linear-gradient(180deg,var(--green2),var(--green));color:#06140a;border-color:transparent}
@@ -2170,7 +2176,14 @@
     }catch(e){out.innerHTML='<span style="color:var(--red);font-size:12px">'+esc(e&&e.message?e.message:"Funding failed")+'</span>';go.disabled=false;go.textContent="Create & fund wallet";}
   }
   function presetChipHtml(p,type){
-    return'<div class="preChip"><div class="info"><b>'+esc(p.name||"Preset")+'</b><span>'+esc(p.amountSol||"?")+'◎'+(p.takeProfitPct?" · TP "+esc(p.takeProfitPct)+"%":"")+(p.stopLossPct?" · SL "+esc(p.stopLossPct)+"%":"")+" · slip "+esc(p.slippageBps||"400")+'</span></div><button class="x" data-del="'+type+":"+esc(p.id)+'" title="Delete">✕</button></div>';
+    const active=(type==="trade"&&p.id===state.activeTradePreset);
+    const det=esc(p.amountSol||"?")+'◎'+(p.takeProfitPct?" · TP "+esc(p.takeProfitPct)+"%":"")+(p.stopLossPct?" · SL "+esc(p.stopLossPct)+"%":"")+" · slip "+esc(p.slippageBps||"400");
+    return'<div class="preChip'+(active?' on':'')+'"><div class="info" style="min-width:0;flex:1"><b>'+esc(p.name||"Preset")+(active?' <span class="preact">✓ ACTIVE</span>':'')+'</b><span>'+det+'</span></div>'+
+      '<div class="preacts">'+
+        (type==="trade"?'<button class="prebtn'+(active?' on':'')+'" data-use="'+esc(p.id)+'" title="Use this preset for your buys">'+(active?"✓":"Use")+'</button>':'')+
+        '<button class="prebtn" data-edit="'+type+":"+esc(p.id)+'" title="Edit">✎</button>'+
+        '<button class="x" data-del="'+type+":"+esc(p.id)+'" title="Delete">✕</button>'+
+      '</div></div>';
   }
   async function renderWallet(){
     setActiveView("v-wallet");subbarWallet();
@@ -2214,10 +2227,10 @@
           '<p class="wnote" style="margin-top:12px">Tip: keep a little SOL for fees. Once funds land, hit Refresh and your balance updates here and on every Buy button.</p></div>':'')+
         // ---- Presets fold ----
         '<details class="fold"><summary>🎚️ Presets<span class="sub">Quick Buy &amp; Bundle · auto TP/SL</span><span class="chev">▾</span></summary><div class="foldbody">'+
-          '<p class="wnote" style="margin:0 0 12px">Set a preset once, then pick it in Quick Buy or Bundle and every Buy arms your take-profit / stop-loss automatically. Tap ✕ to remove one.</p>'+
+          '<p class="wnote" style="margin:0 0 12px">Tap <b>Use</b> to make a Quick Buy preset active (it arms TP/SL on every buy — the active one shows ✓). <b>✎</b> edit · <b>✕</b> remove. You can also switch presets from the dropdown on any coin\'s trade screen.</p>'+
           '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:7px">⚡ Quick Buy presets</div>'+tradePre+
           '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 7px">📦 Bundle presets</div>'+bundlePre+
-          '<div style="border-top:1px solid var(--border2);margin-top:14px;padding-top:14px"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:9px">+ Add a preset</div>'+
+          '<div style="border-top:1px solid var(--border2);margin-top:14px;padding-top:14px"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:9px">+ Add / edit a preset</div>'+
             '<div class="field row2"><div><label>Name</label><input id="pName" placeholder="Scalp" maxlength="24"></div><div><label>Amount (SOL)</label><input id="pAmt" inputmode="decimal" placeholder="0.5"></div></div>'+
             '<div class="field row2"><div><label>Take profit %</label><input id="pTp" inputmode="decimal" placeholder="50"></div><div><label>Stop loss %</label><input id="pSl" inputmode="decimal" placeholder="20"></div></div>'+
             '<div class="field row2"><div><label>Slippage (bps)</label><input id="pSlip" inputmode="numeric" placeholder="400"></div><div><label>For</label><select id="pKind"><option value="trade">⚡ Quick Buy</option><option value="bundle">📦 Bundle</option></select></div></div>'+
@@ -2274,18 +2287,29 @@
     const sl=$("#setLoginBtn");if(sl)sl.onclick=()=>setLoginModal();
     const rf=$("#refWallet");if(rf)rf.onclick=async()=>{rf.disabled=true;rf.textContent="…";await refreshWallets();renderWallet();};
     const cd=$("#copyDep");if(cd)cd.onclick=()=>{const w=activeWalletObj();if(w)copy(w.publicKey);};
-    const sp=$("#savePre");if(sp)sp.onclick=async()=>{
+    const sp=$("#savePre");if(sp){if(state._editPreset)sp.textContent="Update preset";sp.onclick=async()=>{
       const name=$("#pName").value.trim(),amt=$("#pAmt").value.trim();
       if(!name){toast("Name your preset.",true);return;}
       if(!amt||Number(amt)<=0){toast("Set a SOL amount.",true);return;}
       const kind=$("#pKind").value;
       const preset={name,amountSol:amt,takeProfitPct:$("#pTp").value.trim(),stopLossPct:$("#pSl").value.trim(),slippageBps:$("#pSlip").value.trim()||"400",sellPercent:"100",sellDelay:"off"};
+      // Editing an existing preset of the SAME kind → pass its id so the backend updates it in place
+      // (keeps the id, so an active selection stays valid) instead of creating a duplicate.
+      if(state._editPreset&&state._editPreset.type===kind)preset.id=state._editPreset.id;
       if(kind==="bundle")preset.walletIndexes=state.wallets.map(w=>String(w.index));else preset.walletIndex=String(state.activeWallet||"1");
       sp.disabled=true;sp.textContent="Saving…";
       const okk=await savePreset(kind,preset);sp.disabled=false;sp.textContent="Save preset";
-      if(okk){toast("Preset saved");renderWallet();}
-    };
-    view.querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{const[type,id]=b.dataset.del.split(":");if(await deletePreset(type,id)){toast("Preset removed");renderWallet();}});
+      if(okk){toast(state._editPreset?"Preset updated":"Preset saved");state._editPreset=null;renderWallet();}
+    };}
+    view.querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{const[type,id]=b.dataset.del.split(":");if(await deletePreset(type,id)){if(state.activeTradePreset===id)setActiveTradePreset("");toast("Preset removed");renderWallet();}});
+    // Switch the ACTIVE Quick Buy preset (the one that arms TP/SL on your buys).
+    view.querySelectorAll("[data-use]").forEach(b=>b.onclick=()=>{setActiveTradePreset(b.dataset.use);toast("✓ Preset active — arms on your next buy");renderWallet();});
+    // Edit: load the preset into the form below, then Save updates it in place.
+    view.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>{const[type,id]=b.dataset.edit.split(":");const p=(state.presets[type]||[]).find(x=>x.id===id);if(!p)return;
+      state._editPreset={type,id};
+      const set=(sel,v)=>{const e=$(sel);if(e)e.value=v;};
+      set("#pName",p.name||"");set("#pAmt",p.amountSol||"");set("#pTp",p.takeProfitPct||"");set("#pSl",p.stopLossPct||"");set("#pSlip",p.slippageBps||"");set("#pKind",type);
+      const s=$("#savePre");if(s)s.textContent="Update preset";const n=$("#pName");if(n){n.scrollIntoView({behavior:"smooth",block:"center"});n.focus();}toast("Editing "+(p.name||"preset")+" — change values, then Update");});
     const ek=$("#expKeys");if(ek)ek.onclick=async()=>{ek.disabled=true;await exportKeys();ek.disabled=false;};
     const ss=$("#swSol");if(ss)ss.onclick=async()=>{const dest=$("#swDest").value.trim();if(!dest){toast("Paste a destination address.",true);return;}ss.disabled=true;ss.textContent="Sweeping…";await sweepSol(dest,state.wallets.map(w=>w.index));ss.disabled=false;ss.textContent="Sweep all SOL →";renderWallet();};
     const st=$("#swTok");if(st)st.onclick=async()=>{const dest=$("#swDest").value.trim();if(!dest){toast("Paste a destination address.",true);return;}st.disabled=true;st.textContent="Sweeping…";await sweepTokens(dest,state.wallets.map(w=>w.index));st.disabled=false;st.textContent="Sweep all tokens →";};
