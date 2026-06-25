@@ -68,6 +68,7 @@ import {
   selectPumpLaunchWallet,
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
+import { createVanityPool, assertValidVanitySuffix } from "./lib/vanityMint.js";
 import {
   assertPinataAuthWorks,
   assertPinataConfigured,
@@ -244,6 +245,36 @@ const pumpPortalStream = createPumpPortalStream({
 const AUTOPILOT_STATE_FILE = path.join(CONFIG.dataDir, "autopilot-session.json");
 const AUTOPILOT_SUBS_FILE = path.join(CONFIG.dataDir, "autopilot-subs.json");
 let autopilotWalletRecord = null;
+
+// VANITY MINT POOL — pre-ground keypairs whose address ends with CONFIG.launchVanitySuffix (e.g.
+// "SL1ME"), loaded once at boot. generateLaunchMintKeypair() pops one synchronously per launch; an
+// empty pool (or vanity disabled) falls back to a random mint so a paid launch never hangs.
+const VANITY_MINT_POOL_FILE = path.join(CONFIG.dataDir, "vanity-mint-pool.json");
+let vanityMintPool = null;
+if (CONFIG.launchVanityEnabled) {
+  try {
+    assertValidVanitySuffix(CONFIG.launchVanitySuffix);
+    vanityMintPool = createVanityPool({
+      file: VANITY_MINT_POOL_FILE,
+      suffix: CONFIG.launchVanitySuffix,
+      caseInsensitive: CONFIG.launchVanityCaseInsensitive,
+      log: (event, detail) => console.warn(`[vanity] ${event}${detail ? ": " + detail : ""}`)
+    });
+    console.log(`[vanity] enabled · suffix="${CONFIG.launchVanitySuffix}" · pool ${vanityMintPool.size()} key(s) at ${VANITY_MINT_POOL_FILE}`);
+  } catch (e) {
+    console.warn(`[vanity] disabled — invalid suffix "${CONFIG.launchVanitySuffix}": ${e.message}`);
+    vanityMintPool = null;
+  }
+}
+// Synchronous mint-keypair source for the launch service (all rails). Vanity when the pool has keys.
+function generateLaunchMintKeypair() {
+  if (vanityMintPool) {
+    const kp = vanityMintPool.popKeypair();
+    if (kp) return kp;
+    console.warn(`[vanity] pool EMPTY — launching with a random mint (refill: node scripts/grind-vanity.mjs ${CONFIG.launchVanitySuffix})`);
+  }
+  return Keypair.generate();
+}
 
 // --- Subscription access (pay SOL to receive wallet -> 30 days) ----------------
 async function readAutopilotSubs() {
@@ -4417,6 +4448,17 @@ function loadConfig() {
     pumpLaunchPumpFunIpfsUrl,
     pumpLaunchPriorityFeeSol,
     pumpLaunchRequiredBufferSol,
+    // VANITY MINT: make launched coins' addresses end with a suffix (e.g. "SL1ME"). We supply our own
+    // pre-ground mint keypair on create (works on the pump/bonk rails + the Meteora SDK rail). Keep
+    // OFF until a pool is ground (scripts/grind-vanity.mjs) — when on with an empty pool it just falls
+    // back to a random mint so a paid launch never hangs.
+    launchVanityEnabled: parseBoolean(process.env.LAUNCH_VANITY_ENABLED || "false"),
+    launchVanitySuffix: (process.env.LAUNCH_VANITY_SUFFIX || "SL1ME").trim(),
+    launchVanityCaseInsensitive: parseBoolean(process.env.LAUNCH_VANITY_CASE_INSENSITIVE || "false"),
+    // Meteora DBC rail (our own bonding curve, dev wallet = fee claimer). Dark until a real launch
+    // certifies fee routing. METEORA_DBC_CONFIG_KEY = the on-chain config pubkey defining curve+fees.
+    meteoraLaunchEnabled: parseBoolean(process.env.METEORA_LAUNCH_ENABLED || "false"),
+    meteoraDbcConfigKey: (process.env.METEORA_DBC_CONFIG_KEY || "").trim(),
     pumpLaunchJitoBundle,
     autopilotEnabled,
     pumpLaunchJitoUrl,
@@ -42002,6 +42044,52 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
   };
 }
 
+// LAUNCH RAILS — where a coin lives. "pump" + "bonk" both ride our proven PumpPortal create path
+// (only the pool word differs; vanity mint + dev-as-creator fees carry over). "meteora" routes to the
+// Meteora DBC SDK path (own curve, dev = fee claimer) — gated dark until the real-money fee test.
+const LAUNCH_RAILS = new Set(["pump", "bonk", "meteora"]);
+function normalizeLaunchRail(value) {
+  const v = String(value || "").trim().toLowerCase();
+  if (v === "slimewire" || v === "launchlab" || v === "raydium") return "bonk"; // friendly aliases
+  if (v === "meteora-dbc" || v === "dbc") return "meteora";
+  return LAUNCH_RAILS.has(v) ? v : "pump";
+}
+// PumpPortal create accepts only these pools (verified): pump, bonk. Anything else → pump.
+function railToPumpPortalPool(rail) {
+  return normalizeLaunchRail(rail) === "bonk" ? "bonk" : "pump";
+}
+
+// Meteora DBC rail entry point — DARK until METEORA_LAUNCH_ENABLED=true and a real launch has proven
+// dev-fee routing. The SDK path (createConfig/createPool with the dev wallet as fee claimer, our
+// SL1ME vanity baseMint, explicit fee-claim) lands here next. Until then this fails loudly rather
+// than silently launching on pump — so a creator who picked "SlimeWire curve" is never misrouted.
+async function webLaunchMeteoraDbc(userId, body, basePayload) {
+  if (!CONFIG.meteoraLaunchEnabled) {
+    throw createPumpLaunchError(
+      "The SlimeWire (Meteora) curve is in test mode — not live yet. Launch on the Pump or Bonk rail for now; the Meteora rail goes live once a real test confirms dev fees land in your wallet.",
+      "METEORA_RAIL_NOT_ENABLED",
+      501,
+      { stage: PUMP_LAUNCH_STAGE.CONFIG }
+    );
+  }
+  if (!CONFIG.meteoraDbcConfigKey) {
+    throw createPumpLaunchError(
+      "Meteora rail is enabled but METEORA_DBC_CONFIG_KEY (the on-chain config that routes fees to the dev wallet) is not set.",
+      "METEORA_CONFIG_MISSING",
+      500,
+      { stage: PUMP_LAUNCH_STAGE.CONFIG }
+    );
+  }
+  // TODO(meteora): build + sign the DBC createPool tx via @meteora-ag/dynamic-bonding-curve-sdk using
+  // generateLaunchMintKeypair() (vanity baseMint) + the dev wallet as creator/fee-claimer, then send.
+  throw createPumpLaunchError(
+    "Meteora launch path is not implemented yet.",
+    "METEORA_RAIL_NOT_IMPLEMENTED",
+    501,
+    { stage: PUMP_LAUNCH_STAGE.CONFIG }
+  );
+}
+
 async function webLaunchPumpPortalLocal(userId, body, basePayload) {
   const store = await readWalletStore();
   const selectedDevWalletId = firstString(
@@ -42093,7 +42181,7 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
       url: CONFIG.pumpLaunchApiUrl
     }),
     sendTransaction: (tx) => sendVersionedTransaction(tx, "send pump launch transaction"),
-    generateMintKeypair: () => Keypair.generate(),
+    generateMintKeypair: generateLaunchMintKeypair,
     encryptMintSecret: (keypair) => encryptSecret(Buffer.from(keypair.secretKey)),
     saveAttempt: upsertPumpLaunchAttempt,
     recordTradeEvent: async (event) => recordTradeEvents([event]),
@@ -42112,7 +42200,7 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
       timeoutMs,
       priorityFeeSol: CONFIG.pumpLaunchPriorityFeeSol,
       requiredBufferSol: CONFIG.pumpLaunchRequiredBufferSol,
-      pool: "pump"
+      pool: railToPumpPortalPool(basePayload?.rail)
     }
   });
   if (String(launchResult?.status || "").toUpperCase() === "COMPLETE" && launchResult.tokenMint) {
@@ -42261,8 +42349,20 @@ async function webLaunchPumpCoin(userId, body = {}) {
     },
     slippageBps: cleanLaunchNumber(body.slippageBps, 300, 1, 5000),
     clientRequestId: launchAttemptId,
+    rail: normalizeLaunchRail(body.rail || body.pool || body.launchpad),
     source: "slimewire_web"
   };
+
+  // Meteora DBC rail: our own bonding curve with the dev wallet as fee claimer. Separate SDK path,
+  // gated dark until certified by a real launch — never silently falls through to a pump launch.
+  if (basePayload.rail === "meteora") {
+    const result = await webLaunchMeteoraDbc(userId, body, basePayload).catch(async (error) => {
+      error.launchAttemptId = error.launchAttemptId || launchAttemptId;
+      await recordPumpLaunchEarlyFailure({ launchAttemptId, userId, body, name, symbol, error });
+      throw error;
+    });
+    return { ...result, launchAttemptId };
+  }
 
   if (isPumpPortalLocalLaunch()) {
     try {
@@ -42276,7 +42376,8 @@ async function webLaunchPumpCoin(userId, body = {}) {
       // Flag-gated atomic anti-snipe path. When PUMP_LAUNCH_JITO_BUNDLE is OFF (default)
       // this is never reached, so normal launches are unchanged. When ON, the create +
       // dev buy + first-block wallet buys land together in one all-or-none Jito bundle.
-      const useJito = CONFIG.pumpLaunchJitoBundle && (Number(basePayload.devBuy?.amountSol) > 0 || Number(body.bundleBuy?.amountSol) > 0);
+      // Jito anti-snipe is pump-only for now; the bonk rail uses the clean local path.
+      const useJito = basePayload.rail === "pump" && CONFIG.pumpLaunchJitoBundle && (Number(basePayload.devBuy?.amountSol) > 0 || Number(body.bundleBuy?.amountSol) > 0);
       const result = useJito
         ? await webLaunchPumpJitoBundle(userId, body, basePayload)
         : await webLaunchPumpPortalLocal(userId, body, basePayload);

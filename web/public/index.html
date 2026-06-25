@@ -132,6 +132,11 @@
   .chip.y{color:var(--yellow);border-color:rgba(255,229,109,.3);background:rgba(255,229,109,.1)}
   .chip.edge{color:#120c02;border-color:rgba(255,200,60,.55);background:linear-gradient(180deg,#ffd75a,#ffb52e);box-shadow:0 1px 9px rgba(255,190,50,.3)}
   .chip.edge2{color:var(--green);border-color:rgba(114,255,35,.45);background:var(--green-dim)}
+  .railsel{display:flex;gap:8px;flex-wrap:wrap}
+  .railsel button{flex:1;min-width:120px;display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:10px 12px;border-radius:11px;border:1px solid var(--border);background:var(--card2,rgba(255,255,255,.03));color:var(--text);font-weight:800;font-size:13px;cursor:pointer;transition:.12s;text-align:left}
+  .railsel button span{font-weight:600;font-size:10px;color:var(--muted)}
+  .railsel button:hover{border-color:rgba(114,255,35,.4)}
+  .railsel button.on{border-color:var(--green);background:var(--green-dim);box-shadow:0 0 0 1px var(--green) inset}
   .buybtn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:10px;font-weight:800;font-size:13px;color:#06140a;background:linear-gradient(180deg,var(--green2),var(--green));box-shadow:0 2px 12px rgba(114,255,35,.25);transition:.12s}
   .buybtn:hover{filter:brightness(1.08);transform:translateY(-1px)}.buybtn.sm{padding:7px 13px;font-size:12px}
   .star{background:none;border:0;color:var(--muted);font-size:16px;line-height:1;cursor:pointer;padding:2px 4px;transition:.12s}
@@ -2620,12 +2625,17 @@
   async function renderLaunch(){
     setActiveView("v-launch");subbarTool("🚀 Launch a Coin");if(state.token)await refreshWallets();if(state.route!=="launch")return;
     if(!state._launchKept){state.launchImg=null;state.launchBanner=null;}
-    const tab=state.launchTab||"coin";const mint=state.launchedMint||"";
+    const tab=state.launchTab||"coin";const mint=state.launchedMint||"";const rail=state.launchRail||"pump";
     const tb=(id,lab)=>'<button data-ltab="'+id+'" class="'+(tab===id?"on":"")+'">'+lab+'</button>';
     const show=(id)=>tab===id?"":' style="display:none"';
     $("#v-launch").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>🚀 Launch a Coin</h3><p class="sub">Mint a pump.fun coin straight from SlimeWire — then trade, bundle &amp; chat without leaving.</p>'+
       '<div class="tabs" style="margin:4px 0 14px;gap:6px;flex-wrap:wrap">'+tb("coin","🪙 Coin")+tb("dev","🛡️ Dev Buy &amp; Bundle")+tb("chat","💬 Chat &amp; Live")+'</div>'+
       '<div data-lpanel="coin"'+show("coin")+'>'+
+        '<div class="field"><label>Where it lives</label><div class="railsel" id="lcRails">'+
+          '<button type="button" data-rail="pump"'+(rail==="pump"?' class="on"':'')+'>💊 pump.fun<span>max reach · shows on pump</span></button>'+
+          '<button type="button" data-rail="bonk"'+(rail==="bonk"?' class="on"':'')+'>🐸 SlimeWire<span>our rail · LaunchLab · keeps fees</span></button>'+
+          '<button type="button" data-rail="meteora"'+(rail==="meteora"?' class="on"':'')+'>🌊 Meteora<span>own curve · test mode</span></button>'+
+        '</div><div class="mut" style="font-size:11px;margin-top:6px">Your dev wallet stays the creator, so creator fees route to you — and coins mint with a <b>…SL1ME</b> address once the vanity pool is loaded.</div></div>'+
         '<div class="field row2"><div><label>Name</label><input id="lcName" maxlength="64" placeholder="My Coin"></div><div><label>Ticker</label><input id="lcSym" maxlength="12" placeholder="MYC"></div></div>'+
         '<div class="field"><label>Description</label><textarea id="lcDesc" maxlength="800" rows="2" placeholder="What\'s the meme?"></textarea></div>'+
         '<div class="field"><label>Image (icon)</label><input id="lcImg" type="file" accept="image/*"><div id="lcImgPrev" class="mut" style="font-size:11px;margin-top:6px">PNG / JPG / WEBP / GIF, up to ~450KB.</div></div>'+
@@ -2649,6 +2659,8 @@
       '<button class="bigbuy" id="lcGo" style="margin-top:16px">🚀 Launch token</button><div id="lcOut" style="margin-top:12px"></div></div></div>';
     // Tab switching toggles panel visibility WITHOUT re-rendering, so typed fields + uploaded images survive.
     document.querySelectorAll("#v-launch [data-ltab]").forEach(b=>b.onclick=()=>{state.launchTab=b.dataset.ltab;document.querySelectorAll("#v-launch [data-ltab]").forEach(x=>x.classList.toggle("on",x===b));document.querySelectorAll("#v-launch [data-lpanel]").forEach(p=>p.style.display=(p.dataset.lpanel===b.dataset.ltab?"":"none"));if(b.dataset.ltab==="chat")lcWireChat();});
+    // Rail picker (no re-render — keeps typed fields/images). meteora is dark; the backend returns a clear "test mode" message.
+    document.querySelectorAll("#lcRails [data-rail]").forEach(b=>b.onclick=()=>{state.launchRail=b.dataset.rail;document.querySelectorAll("#lcRails [data-rail]").forEach(x=>x.classList.toggle("on",x===b));});
     const readImg=(f,key,prevId,big)=>{if(!f)return;if(f.size>460000){toast("Image too big — keep it under ~450KB.",true);return;}const rd=new FileReader();rd.onload=()=>{state[key]={dataUrl:String(rd.result),name:f.name,type:f.type};state._launchKept=true;const p=$("#"+prevId);if(p)p.innerHTML='<img src="'+state[key].dataUrl+'" style="height:'+(big?"40":"64")+'px;'+(big?"":"width:64px;")+'border-radius:10px;object-fit:cover;border:1px solid var(--border)">';};rd.readAsDataURL(f);};
     $("#lcImg").onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchImg","lcImgPrev",false);
     const lb=$("#lcBanner");if(lb)lb.onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchBanner","lcBannerPrev",true);
@@ -2666,7 +2678,7 @@
       const devW=(state.wallets||[]).find(w=>String(w.index)===devIdx);
       // Creator fee is now a simple toggle: checked = MAX (1000 bps) to the dev wallet, unchecked = none.
       const creatorFeeBps=($("#lcFeeMax")&&$("#lcFeeMax").checked)?"1000":"0";
-      const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),slippageBps:($("#lcSlip")&&$("#lcSlip").value.trim())||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg",feeMode:"dev",devWalletIndex:devIdx,creatorFeeBps};
+      const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),slippageBps:($("#lcSlip")&&$("#lcSlip").value.trim())||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg",feeMode:"dev",devWalletIndex:devIdx,creatorFeeBps,rail:state.launchRail||"pump"};
       if(devW&&devW.publicKey)body.creatorFeeRecipient=devW.publicKey;
       if(state.launchImg){body.imageDataUrl=state.launchImg.dataUrl;body.imageName=state.launchImg.name;body.imageType=state.launchImg.type;}
       if(state.launchBanner){body.bannerDataUrl=state.launchBanner.dataUrl;body.bannerName=state.launchBanner.name;body.bannerType=state.launchBanner.type;}
