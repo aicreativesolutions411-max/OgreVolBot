@@ -319,7 +319,7 @@ async function getSubDepositWallet(userId) {
   return w;
 }
 async function checkSubscriptionPayments() {
-  if (!CONFIG.subReceiveWallet || !(CONFIG.subPriceSol > 0)) return;
+  if (!CONFIG.subEnabled || !(CONFIG.subPriceSol > 0)) return;
   let receive;
   try { receive = new PublicKey(CONFIG.subReceiveWallet); } catch { return; }
   const store = await readWalletStore();
@@ -341,7 +341,7 @@ async function checkSubscriptionPayments() {
   }
 }
 function startSubscriptionWatcher() {
-  if (!CONFIG.subReceiveWallet) return;
+  if (!CONFIG.subEnabled) return;
   setInterval(() => { void checkSubscriptionPayments(); }, 60_000);
 }
 
@@ -4593,7 +4593,12 @@ function loadConfig() {
     autopilotOwnerKey: String(process.env.AUTOPILOT_OWNER_KEY || "").trim(),
     // SUBSCRIPTIONS: users pay this much SOL to the receive wallet for 30 days.
     subPriceSol: Number.parseFloat(process.env.SUB_PRICE_SOL || "0.5"),
-    subReceiveWallet: String(process.env.SUB_RECEIVE_WALLET || "").trim(),
+    // ALL site revenue lands in ONE wallet: subscription / Pro payments sweep to the SAME wallet trade
+    // fees go to (feeWallet) unless an explicit SUB_RECEIVE_WALLET overrides it.
+    subReceiveWallet: String(process.env.SUB_RECEIVE_WALLET || "").trim() || feeWallet,
+    // Enablement is kept SEPARATE from the destination so defaulting the wallet never flips the paywall
+    // on: subs stay off unless SUB_RECEIVE_WALLET was set (legacy behavior) or SUB_ENABLED=true.
+    subEnabled: parseBoolean(process.env.SUB_ENABLED || "false") || Boolean(String(process.env.SUB_RECEIVE_WALLET || "").trim()),
     subDays: Number.parseInt(process.env.SUB_DAYS || "30", 10),
     // TEMP ACCESS: owner can mint codes granting this many minutes of *active*
     // (running) autopilot time. When the budget is used up, the engine auto-stops
@@ -5891,7 +5896,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
         // Issue the user's unique pay-to address only when they ask (body.deposit),
         // so we don't mint a wallet for every casual visitor.
         let depositAddress = null;
-        if (controllerUserId && !isOwner && body.deposit && CONFIG.subReceiveWallet) {
+        if (controllerUserId && !isOwner && body.deposit && CONFIG.subEnabled) {
           try { depositAddress = (await getSubDepositWallet(controllerUserId)).publicKey; } catch {}
         }
         let trial = null;
@@ -5909,7 +5914,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
           ok: true, owner: isOwner, subscribed: hasSub, expiresAt,
           trial,
           priceSol: CONFIG.subPriceSol, days: CONFIG.subDays,
-          subEnabled: Boolean(CONFIG.subReceiveWallet),
+          subEnabled: CONFIG.subEnabled,
           depositAddress,
           loggedIn: Boolean(controllerUserId)
         });
@@ -5953,7 +5958,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
         if (!controllerUserId) {
           sendWebJson(request, response, 403, { ok: false, error: "Log in first." });
         } else {
-          sendWebJson(request, response, 402, { ok: false, error: "subscription_required", priceSol: CONFIG.subPriceSol, days: CONFIG.subDays, receiveWallet: CONFIG.subReceiveWallet || null });
+          sendWebJson(request, response, 402, { ok: false, error: "subscription_required", priceSol: CONFIG.subPriceSol, days: CONFIG.subDays, receiveWallet: String(process.env.SUB_RECEIVE_WALLET || "").trim() || null });
         }
         return;
       }
