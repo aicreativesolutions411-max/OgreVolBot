@@ -7868,11 +7868,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
       let body = {};
       try {
         body = await readJsonRequestBody(request, 16_384);
-        if (!CONFIG.autopilotOwnerKey || String(body.key || "") !== CONFIG.autopilotOwnerKey) {
-          sendWebJson(request, response, 403, { ok: false, error: "Owner key required to set up the SlimeWire curve." });
-          return;
-        }
-        if (getMeteoraConfigKey() && !body.force) {
+        // No owner key needed — any logged-in user can do the ONE-TIME setup (their wallet pays the
+        // small rent). Once a config exists it's LOCKED (returns already) so it can't be overwritten.
+        if (getMeteoraConfigKey()) {
           sendWebJson(request, response, 200, { ok: true, already: true, configKey: getMeteoraConfigKey(), enabled: meteoraRailEnabled() });
           return;
         }

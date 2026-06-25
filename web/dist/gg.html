@@ -2632,16 +2632,16 @@
     const {ok,d}=await api("/api/web/launch/meteora-config").catch(()=>({}));
     if(!(ok&&d)){el.innerHTML='<span class="mut" style="font-size:11px">Meteora status unavailable.</span>';return;}
     if(d.configured){el.innerHTML='<div class="feebox" style="margin:0">🌊 <b>SlimeWire curve is LIVE.</b> Coins here launch on our own bonding curve — each coin\'s fees go to whoever launched it.</div>';return;}
-    el.innerHTML='<div class="feebox" style="margin:0">🌊 <b>SlimeWire curve isn\'t set up yet.</b> A one-time owner setup creates the on-chain curve (small SOL network fee). After that, anyone can launch on it.<br><button class="buybtn sm" id="lcMetSetupBtn" style="margin-top:8px">⚙️ Set up SlimeWire curve</button> <span class="mut" id="lcMetMsg" style="font-size:11px"></span></div>';
+    el.innerHTML='<div class="feebox" style="margin:0">🌊 <b>SlimeWire curve isn\'t set up yet.</b> One-time setup creates the on-chain curve (small SOL network fee from your wallet). After that, anyone can launch on it.<br><button class="buybtn sm" id="lcMetSetupBtn" style="margin-top:8px">⚙️ Set up SlimeWire curve</button> <span class="mut" id="lcMetMsg" style="font-size:11px"></span></div>';
     const btn=$("#lcMetSetupBtn");if(btn)btn.onclick=()=>setupMeteoraCurve();
   }
   async function setupMeteoraCurve(){
-    const key=prompt("Owner key — one-time, to create the SlimeWire curve on-chain:");
-    if(!key)return;
+    if(!confirm("Create the SlimeWire curve on-chain now?\n\nOne-time setup — your wallet pays a small SOL network fee. After this, anyone can launch on the SlimeWire rail and each coin's fees go to whoever launched it."))return;
+    if(!(await ensureTradeReady()))return;
     const btn=$("#lcMetSetupBtn"),msg=$("#lcMetMsg");
     if(btn){btn.disabled=true;btn.textContent="Setting up…";}if(msg)msg.textContent="creating on-chain curve (~1 min)…";
     const dw=$("#lcDevWallet");const devIdx=String(dw&&dw.value?dw.value:state.activeWallet);
-    const {ok,status,d}=await jpost("/api/web/launch/meteora-config",{key,devWalletIndex:devIdx});
+    const {ok,status,d}=await jpost("/api/web/launch/meteora-config",{devWalletIndex:devIdx});
     if(ok&&d&&d.ok&&(d.configKey||d.already)){toast("🌊 SlimeWire curve is live!");refreshMeteoraSetup();}
     else{if(btn){btn.disabled=false;btn.textContent="⚙️ Set up SlimeWire curve";}toast((d&&(d.error||d.detail))||("Setup failed ("+status+")"),true);}
   }
