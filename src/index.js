@@ -43668,6 +43668,9 @@ async function topWalletsFeed(options = {}) {
     r.pairAgeLabel = (km && km.pairAgeLabel) || m.pairAgeLabel || "";
     const createdAtMs = Number(firstMeaningfulNumber(km && km.pairCreatedAt, m.pairCreatedAt, m.createdAt)) || null;
     if (!r.pairAgeSeconds && createdAtMs > 0) r.pairAgeSeconds = Math.max(0, Math.round((Date.now() - createdAtMs) / 1000));
+    // A KOL cluster is buying this NOW — an age over ~120d is a bad createdAt from the scan, not a real
+    // 2-year-old coin. Drop it to unknown so the card shows a clean "—" instead of a garbage "734d".
+    if (r.pairAgeSeconds != null && r.pairAgeSeconds > 120 * 86400) { r.pairAgeSeconds = null; r.pairAgeLabel = ""; }
     r.dexUrl = dexScreenerUrl(r.tokenMint);
     delete r._km; delete r._wf;
   }
