@@ -899,7 +899,6 @@
     if(state.pollT){clearTimeout(state.pollT);state.pollT=null;}
     if(state.txPollT){clearTimeout(state.txPollT);state.txPollT=null;}
     if(statPollT){clearTimeout(statPollT);statPollT=null;}
-    if(twPollT){clearTimeout(twPollT);twPollT=null;}
     if(chatPollT){clearTimeout(chatPollT);chatPollT=null;}
     if(pnlPollT){clearTimeout(pnlPollT);pnlPollT=null;}
     if(portfolioPollT){clearTimeout(portfolioPollT);portfolioPollT=null;}
@@ -937,10 +936,10 @@
   function subbarTrenches(){
     const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Trenches";sb.appendChild(h);
     const tabs=el("div","tabs");
-    [["board","Board"],["picks","🟢 Slime Picks"]].forEach(([id,lab])=>{const b=el("button");b.textContent=lab;b.className=id===state.trenchTab?"on":"";b.onclick=()=>{state.trenchTab=id;render();};tabs.appendChild(b);});
+    [["board","Board"],["picks","🐳 Top Wallets"]].forEach(([id,lab])=>{const b=el("button");b.textContent=lab;b.className=id===state.trenchTab?"on":"";b.onclick=()=>{state.trenchTab=id;render();};tabs.appendChild(b);});
     sb.appendChild(tabs);
     const n=el("div","mut");n.style.cssText="margin-left:auto;font-size:11px";
-    n.textContent=state.trenchTab==="picks"?"Best steady winners under $30k — scored by SlimeWire.":"Fresh → about to migrate → graduated.";
+    n.textContent=state.trenchTab==="picks"?"What the top wallets &amp; KOLs are buying — newest first.":"Fresh → about to migrate → graduated.";
     sb.appendChild(n);
   }
   function subbarPortfolio(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Portfolio";sb.appendChild(h);const tabs=el("div","tabs");[["positions","Positions"],["cards","History & PnL"]].forEach(([id,lab])=>{const b=el("button");b.textContent=lab;b.className=id===state.portfolioTab?"on":"";b.onclick=()=>{state.portfolioTab=id;renderPortfolio();};tabs.appendChild(b);});sb.appendChild(tabs);}
@@ -1034,7 +1033,7 @@
   // data-mint; a card is only rebuilt when its data signature changes (so an unchanged card never has
   // its <img> reloaded → no flicker), and cards reorder/insert/remove in place. Pass a sig that captures
   // the visible mutable fields. Returns false when the container isn't card-keyed yet (do a full build).
-  function cardSig(r,i){return [i,r.marketCapLabel,r.liquidityLabel,volLabel(r),r.m5,r.score||r.bestPickScore,r.bestPickLabel,r.rugRisk,r.topWalletBuy?1:0,r.twitterUrl?1:0,r.telegramUrl?1:0,r.websiteUrl?1:0,r.imageUrl?1:0,r.buys5m,r.sells5m,r.marketCapLabel?0:ageLabel(r)].join("|");}
+  function cardSig(r,i){return [i,r.marketCapLabel,r.liquidityLabel,volLabel(r),r.m5,r.score||r.bestPickScore,r.bestPickLabel,r.rugRisk,r.topWalletBuy?1:0,r.buyerCount,r.stBuyers,ageLabel(r),r.twitterUrl?1:0,r.telegramUrl?1:0,r.websiteUrl?1:0,r.imageUrl?1:0,r.buys5m,r.sells5m].join("|");}
   function syncCards(container,rows,buildFn,sigFn){
     if(!container)return false;
     const existing=new Map();
@@ -1191,60 +1190,36 @@
   }
   // SLIME PICKS — the curated "steady winners under $30k" list (backend cat=slimePicks: every sub-$30k
   // candidate scored by our winner model, best grade first). Full-width card grid, refreshes every 12s.
+  // TOP WALLET PICKS — the whole "picks" tab is now the coins the top wallets & KOLs are buying right now
+  // (backend /api/web/top-wallets: ST live buys when on, free RPC wallet-watch as backup), NEWEST FIRST.
+  // Single full-width list, steady in-place refresh (syncCards, ~15s), client-enriched socials + stats.
   async function renderSlimePicks(wrap){
     wrap.dataset.mode="picks";
-    const fresh=!wrap.querySelector(".picklayout");
-    if(fresh)wrap.innerHTML='<div class="picklayout"><div class="pickcol">'+
-        '<div class="pickintro">🟢 <b>Slime Picks</b> — best entries under $30k, scored by SlimeWire (liquidity · real volume · buy pressure · low rug). Not financial advice.</div>'+
-        '<div class="pickwrap" id="pickWrap"><div class="loading" style="padding:30px"><span class="spin"></span></div></div></div>'+
-      '<aside class="twpanel"><div class="twhead">🐳 Top Wallets buying</div><div class="twlist" id="twList"><div class="loading" style="padding:18px"><span class="spin"></span></div></div></aside></div>';
-    const rows=await fetchPairs({bucket:"live",sort:"best",cat:"slimePicks"});
-    if(state.route!=="trenches"||state.trenchTab!=="picks")return;
-    const pw=$("#pickWrap");
-    if(pw){
-      if(!rows.length)pw.innerHTML='<div class="msg" style="padding:24px">'+(lastPairsOk?"No steady sub-$30k picks clear the rug filter right now — check back in a moment.":"Loading… <span class=\"spin\"></span>")+'</div>';
-      else if(!syncCards(pw,rows,slimePickCard))pw.innerHTML=rows.map((r,i)=>slimePickCard(r,i)).join("");
-    }
-    enrichSocials(rows).then(()=>{if(state.route==="trenches"&&state.trenchTab==="picks"&&rows.length){const p=$("#pickWrap");if(p&&!syncCards(p,rows,slimePickCard))p.innerHTML=rows.map((r,i)=>slimePickCard(r,i)).join("");}});
-    if(fresh)loadTopWallets();
-    state.pollT=setTimeout(()=>{if(state.route==="trenches"&&state.trenchTab==="picks")renderSlimePicks(wrap);},12000);
-  }
-  function slimePickCard(r,i){
-    const score=Math.round(Number(r.bestPickScore||r.score)||0);
-    const grade=r.bestPickLabel||(score>=80?"A":score>=65?"B":score>=50?"C":"");
-    const gcls=score>=65?"g":score>=50?"y":"r";
-    const badge=score?'<span class="chip '+gcls+'" title="SlimeWire pick score">'+(grade&&grade.length<=2?grade+" · ":"")+score+'</span>':'';
-    const tw=r.topWalletBuy?'<span class="chip g" title="A tracked top wallet is buying this">🐳</span>':'';
-    return'<div class="card pick" data-mint="'+esc(r.tokenMint)+'" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+
-      '<div class="prank">#'+(i+1)+'</div>'+avImg(r,"av")+
-      '<div class="body"><div class="top"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><span class="nm">'+esc(r.name||"")+'</span><span class="age">'+esc(ageLabel(r))+'</span>'+tw+badge+starBtn(r)+'</div>'+
-      '<div class="stats"><span><i>MC</i>'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</span><span><i>LIQ</i>'+esc(r.liquidityLabel||fmtUsd(r.liquidityUsd))+'</span><span><i>VOL</i>'+esc(volLabel(r))+'</span></div>'+
-      '<div class="row2">'+riskChips(r)+socialIconsHtml(r)+'<button class="buybtn sm" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button></div></div></div>';
-  }
-  // Top Wallets panel — the coins our tracked top wallets are buying right now (backend /api/web/top-wallets:
-  // ST live buys when on, free RPC wallet-watch as backup). Polls every ~15s so it rotates as buys land.
-  let twPollT=null;
-  async function loadTopWallets(){
-    if(twPollT){clearTimeout(twPollT);twPollT=null;}
-    const list=$("#twList");if(!list)return;
+    const fresh=!wrap.querySelector(".pickwrap");
+    if(fresh)wrap.innerHTML='<div class="picklayout"><div class="pickcol" style="width:100%;border:none">'+
+        '<div class="pickintro">🐳 <b>Top Wallet Picks</b> — what the tracked top wallets &amp; KOLs are buying right now, newest first. Not financial advice.</div>'+
+        '<div class="pickwrap" id="pickWrap"><div class="loading" style="padding:30px"><span class="spin"></span></div></div></div></div>';
     const {ok,d}=await api("/api/web/top-wallets").catch(()=>({}));
     if(state.route!=="trenches"||state.trenchTab!=="picks")return;
     const rows=(ok&&d&&d.rows)||[];
-    if(!rows.length)list.innerHTML='<div class="twempty">👀 Watching the top wallets…<br><span class="mut">their fresh buys land here as they happen.</span></div>';
-    else list.innerHTML=rows.map(topWalletRow).join("");
-    twPollT=setTimeout(()=>{if(state.route==="trenches"&&state.trenchTab==="picks")loadTopWallets();},15000);
+    const pw=$("#pickWrap");
+    if(pw){
+      if(!rows.length)pw.innerHTML='<div class="msg" style="padding:24px">👀 Watching the top wallets… their fresh buys land here as they happen.</div>';
+      else if(!syncCards(pw,rows,topPickCard))pw.innerHTML=rows.map((r,i)=>topPickCard(r,i)).join("");
+    }
+    // Backfill socials + live MC/liq/vol over the user's IP (DexScreener), then patch in place.
+    enrichSocials(rows).then(()=>{if(state.route==="trenches"&&state.trenchTab==="picks"&&rows.length){const p=$("#pickWrap");if(p&&!syncCards(p,rows,topPickCard))p.innerHTML=rows.map((r,i)=>topPickCard(r,i)).join("");}});
+    state.pollT=setTimeout(()=>{if(state.route==="trenches"&&state.trenchTab==="picks")renderSlimePicks(wrap);},15000);
   }
-  function topWalletRow(r){
-    const buyers=(r.buyers||[]).slice(0,3);
-    const pfps=buyers.map(b=>b.pfp?'<img class="twpfp" loading="lazy" src="'+esc(coinImgSrc(b.pfp,32)||b.pfp)+'" onerror="this.style.display=\'none\'">':'<span class="twpfp ph">🐳</span>').join("");
-    const names=buyers.map(b=>esc(b.name||"wallet")).join(", ")||"top wallet";
-    const sm=Number(r.stBuyers)>0?'<span class="twsm" title="Solana Tracker proven-winner buy">smart $</span>':"";
-    const mc=(r.marketCap>0)?'<span class="twmc" title="market cap">'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</span>':'';
-    const age=ageLabel(r);const ag=age?'<span class="twmc" title="coin age — how long it\'s been live">⏱ '+esc(age)+'</span>':'';
-    return '<div class="twrow" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+avImg(r,"twav")+
-      '<div class="twinfo"><div class="twtop"><b>'+esc(r.symbol||short(r.tokenMint))+'</b>'+mc+ag+sm+'<span class="twct" title="distinct top wallets buying">🐳 '+(r.buyerCount||1)+'</span></div>'+
-      '<div class="twbuyers">'+pfps+'<span class="twnames">'+names+'</span></div></div>'+
-      '<button class="buybtn sm" title="Quick buy" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡</button></div>';
+  function topPickCard(r,i){
+    const sm=Number(r.stBuyers)>0?'<span class="chip g" title="Solana Tracker proven-winner buy">smart $</span>':"";
+    const who=(r.buyers||[]).slice(0,3).map(b=>esc(b.name||"wallet")).filter(Boolean).join(", ");
+    return'<div class="card pick" data-mint="'+esc(r.tokenMint)+'" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+
+      '<div class="prank">#'+(i+1)+'</div>'+avImg(r,"av")+
+      '<div class="body"><div class="top"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><span class="nm">'+esc(r.name||"")+'</span><span class="age">'+esc(ageLabel(r))+'</span><span class="chip g" title="distinct top wallets buying">🐳 '+(r.buyerCount||1)+'</span>'+sm+starBtn(r)+'</div>'+
+      '<div class="stats"><span><i>MC</i>'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</span><span><i>LIQ</i>'+esc(r.liquidityLabel||fmtUsd(r.liquidityUsd))+'</span><span><i>VOL</i>'+esc(volLabel(r))+'</span></div>'+
+      (who?'<div class="mut" style="font-size:10.5px;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">👛 '+who+'</div>':'')+
+      '<div class="row2">'+socialIconsHtml(r)+'<button class="buybtn sm" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button></div></div></div>';
   }
 
   // ---------- launch sniper ----------

@@ -43590,9 +43590,10 @@ async function topWalletsFeed(options = {}) {
     r.stBuyers = Math.max(r.stBuyers || 0, k.kolCount || 0);
     if (!r.buyers.some((b) => b.src === "st")) r.buyers.unshift({ name: (k.kolCount ? k.kolCount + " KOLs" : "Smart money"), roi: null, pfp: k.avatar || "", src: "st" });
   }
+  // Pre-rank wider by smart-money strength so we have enough to re-sort by age after enrichment.
   const rows = [...byMint.values()]
     .sort((a, b) => (b.stBuyers - a.stBuyers) || (b.buyerCount - a.buyerCount) || (b.lastBuyAt - a.lastBuyAt))
-    .slice(0, 24);
+    .slice(0, 40);
   // Only the rows WITHOUT KOL-scan metadata (rpc-only mints) need a metadata lookup.
   const needMeta = rows.filter((r) => !r._km).map((r) => r.tokenMint);
   const metaMap = needMeta.length ? await tokenMetadataMapForMints(needMeta, { timeoutMs: 1_200, pumpTimeoutMs: 800 }).catch(() => new Map()) : new Map();
@@ -43611,9 +43612,16 @@ async function topWalletsFeed(options = {}) {
     r.dexUrl = dexScreenerUrl(r.tokenMint);
     delete r._km;
   }
-  const stRows = rows.filter((r) => r.stBuyers > 0).length;
+  // NEWEST-FIRST: now that age is enriched, lead with the freshest coins (rows without a known age sink),
+  // tiebreak by smart-money strength. This is the "sort by newest" the Top Wallet Picks list wants.
+  const outRows = rows.sort((a, b) => {
+    const av = Number.isFinite(Number(a.pairAgeSeconds)) ? Number(a.pairAgeSeconds) : Number.MAX_SAFE_INTEGER;
+    const bv = Number.isFinite(Number(b.pairAgeSeconds)) ? Number(b.pairAgeSeconds) : Number.MAX_SAFE_INTEGER;
+    return (av - bv) || (b.stBuyers - a.stBuyers) || (b.buyerCount - a.buyerCount);
+  }).slice(0, 24);
+  const stRows = outRows.filter((r) => r.stBuyers > 0).length;
   const stActive = Boolean(CONFIG.solanaTrackerApiKey) && (stRows > 0 || stFolded > 0);
-  return { rows, walletCount: topWalletList.wallets.length, source: stActive ? "st+rpc" : (CONFIG.solanaTrackerApiKey ? "st(idle)+rpc" : "rpc"), updatedAt: new Date().toISOString() };
+  return { rows: outRows, walletCount: topWalletList.wallets.length, source: stActive ? "st+rpc" : (CONFIG.solanaTrackerApiKey ? "st(idle)+rpc" : "rpc"), updatedAt: new Date().toISOString() };
 }
 
 async function webKolScan(userId, mode = "hot", wallet = "") {
