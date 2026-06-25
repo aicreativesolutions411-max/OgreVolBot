@@ -2625,17 +2625,25 @@
     tick();
   }
   // SlimeWire (Meteora) curve status + one-time owner setup, shown under the rail picker when Meteora is picked.
+  function meteoraCustomCurveHtml(){
+    return '<label class="lcheck" style="margin-top:8px"><input type="checkbox" id="lcCustomCurve"> <span><b>Custom curve for this coin</b> — give THIS coin its own starting + graduation market cap (creates its own curve; a bit more SOL). Otherwise it uses the shared SlimeWire curve.</span></label>'+
+      '<div class="field row2" id="lcCustomCurveFields" style="display:none"><div><label style="font-size:11px">Starting MC ($)</label><input id="lcCustomInit" inputmode="numeric" value="5000"></div><div><label style="font-size:11px">Graduates at ($)</label><input id="lcCustomMig" inputmode="numeric" value="69000"></div></div>';
+  }
   async function refreshMeteoraSetup(){
     const el=$("#lcMeteoraSetup");if(!el)return;
     if((state.launchRail||"pump")!=="meteora"){el.innerHTML="";return;}
     el.innerHTML='<span class="mut" style="font-size:11px">Checking SlimeWire curve…</span>';
     const {ok,d}=await api("/api/web/launch/meteora-config").catch(()=>({}));
-    if(!(ok&&d)){el.innerHTML='<span class="mut" style="font-size:11px">Meteora status unavailable.</span>';return;}
-    if(d.configured){el.innerHTML='<div class="feebox" style="margin:0">🌊 <b>SlimeWire curve is LIVE.</b> Coins here launch on our own bonding curve — each coin\'s fees go to whoever launched it.</div>';return;}
-    el.innerHTML='<div class="feebox" style="margin:0">🌊 <b>SlimeWire curve isn\'t set up yet.</b> You set the curve <b>once</b> for ALL SlimeWire launches, then anyone can use it (small one-time SOL fee from your wallet).'+
+    if(state.launchRail!=="meteora")return;
+    let html;
+    if(!(ok&&d))html='<span class="mut" style="font-size:11px">Meteora status unavailable.</span>';
+    else if(d.configured)html='<div class="feebox" style="margin:0">🌊 <b>SlimeWire curve is LIVE.</b> Coins here launch on our own bonding curve — each coin\'s fees go to whoever launched it.</div>';
+    else html='<div class="feebox" style="margin:0">🌊 <b>SlimeWire curve isn\'t set up yet.</b> Set the shared curve <b>once</b> for all SlimeWire launches (small one-time SOL fee), or use a custom curve per coin below.'+
       '<div class="field row2" style="margin-top:8px"><div><label style="font-size:11px">Starting market cap ($)</label><input id="lcMetInitMc" inputmode="numeric" value="5000"></div><div><label style="font-size:11px">Graduates at ($)</label><input id="lcMetMigMc" inputmode="numeric" value="69000"></div></div>'+
       '<button class="buybtn sm" id="lcMetSetupBtn" style="margin-top:8px">⚙️ Create SlimeWire curve</button> <span class="mut" id="lcMetMsg" style="font-size:11px"></span></div>';
+    el.innerHTML=html+meteoraCustomCurveHtml();
     const btn=$("#lcMetSetupBtn");if(btn)btn.onclick=()=>setupMeteoraCurve();
+    const cc=$("#lcCustomCurve");if(cc)cc.onchange=()=>{const f=$("#lcCustomCurveFields");if(f)f.style.display=cc.checked?"":"none";};
   }
   async function setupMeteoraCurve(){
     if(!confirm("Create the SlimeWire curve on-chain now?\n\nOne-time setup — your wallet pays a small SOL network fee. After this, anyone can launch on the SlimeWire rail and each coin's fees go to whoever launched it."))return;
@@ -2714,6 +2722,8 @@
       const creatorFeeBps=($("#lcFeeMax")&&$("#lcFeeMax").checked)?"1000":"0";
       const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),slippageBps:($("#lcSlip")&&$("#lcSlip").value.trim())||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg",feeMode:"dev",devWalletIndex:devIdx,creatorFeeBps,rail:state.launchRail||"pump"};
       if(devW&&devW.publicKey)body.creatorFeeRecipient=devW.publicKey;
+      // Per-coin custom curve (Meteora rail): this coin gets its own start/graduation MC.
+      if(state.launchRail==="meteora"&&$("#lcCustomCurve")&&$("#lcCustomCurve").checked){body.customCurve=true;body.customInitialMcap=String(($("#lcCustomInit")&&$("#lcCustomInit").value)||"5000");body.customMigrationMcap=String(($("#lcCustomMig")&&$("#lcCustomMig").value)||"69000");}
       if(state.launchImg){body.imageDataUrl=state.launchImg.dataUrl;body.imageName=state.launchImg.name;body.imageType=state.launchImg.type;}
       if(state.launchBanner){body.bannerDataUrl=state.launchBanner.dataUrl;body.bannerName=state.launchBanner.name;body.bannerType=state.launchBanner.type;}
       const dev=Number(($("#lcDevBuy")&&$("#lcDevBuy").value.trim())||"0");if(dev>0){body.devBuyEnabled=true;body.devBuySol=String(dev);body.bundleDevBuy=!!($("#lcBundle")&&$("#lcBundle").checked);body.antiSnipe=body.bundleDevBuy;}

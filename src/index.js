@@ -42152,24 +42152,26 @@ function railToPumpPortalPool(rail) {
 // SL1ME vanity baseMint, explicit fee-claim) lands here next. Until then this fails loudly rather
 // than silently launching on pump — so a creator who picked "SlimeWire curve" is never misrouted.
 async function webLaunchMeteoraDbc(userId, body, basePayload) {
-  if (!meteoraRailEnabled()) {
-    throw createPumpLaunchError(
-      "The SlimeWire (Meteora) curve isn't set up yet. An owner needs to tap “Set up SlimeWire curve” once (creates the on-chain config). Use the Pump or Bonk rail meanwhile.",
-      "METEORA_RAIL_NOT_ENABLED",
-      501,
-      { stage: PUMP_LAUNCH_STAGE.CONFIG }
-    );
-  }
+  // PER-COIN curve: when the launcher set a custom start/graduation MC for THIS coin, we create a fresh
+  // config + pool just for it (doesn't need the shared curve). Otherwise we launch on the shared config.
+  const customCurve = basePayload.customCurve || null;
   // Lazy-load the heavy Meteora SDK only when the rail is actually used (keeps it off boot + hot path).
-  const { buildMeteoraCreatePoolTransaction, isValidPublicKey: isValidSolanaPublicKey } = await import("./lib/meteoraLaunchService.js");
-  const meteoraConfigKey = getMeteoraConfigKey();
-  if (!meteoraConfigKey || !isValidSolanaPublicKey(meteoraConfigKey)) {
-    throw createPumpLaunchError(
-      "Meteora rail is on but its on-chain config key is missing or invalid. Re-run “Set up SlimeWire curve”.",
-      "METEORA_CONFIG_MISSING",
-      500,
-      { stage: PUMP_LAUNCH_STAGE.CONFIG }
-    );
+  const { buildMeteoraCreatePoolTransaction, buildMeteoraConfigAndPoolTransactions, isValidPublicKey: isValidSolanaPublicKey } = await import("./lib/meteoraLaunchService.js");
+  let meteoraConfigKey = "";
+  if (!customCurve) {
+    if (!meteoraRailEnabled()) {
+      throw createPumpLaunchError(
+        "The SlimeWire (Meteora) curve isn't set up yet. Tap “Set up SlimeWire curve” once (or use a custom curve for this coin). Pump or Bonk work meanwhile.",
+        "METEORA_RAIL_NOT_ENABLED", 501, { stage: PUMP_LAUNCH_STAGE.CONFIG }
+      );
+    }
+    meteoraConfigKey = getMeteoraConfigKey();
+    if (!meteoraConfigKey || !isValidSolanaPublicKey(meteoraConfigKey)) {
+      throw createPumpLaunchError(
+        "Meteora rail is on but its on-chain config key is missing or invalid. Re-run “Set up SlimeWire curve”.",
+        "METEORA_CONFIG_MISSING", 500, { stage: PUMP_LAUNCH_STAGE.CONFIG }
+      );
+    }
   }
   const attemptId = basePayload.clientRequestId;
   // 1) Load + decrypt the chosen dev wallet — it is the pool CREATOR, so DBC creator fees accrue to it.
@@ -42178,6 +42180,7 @@ async function webLaunchMeteoraDbc(userId, body, basePayload) {
   const walletSelection = selectPumpLaunchWallet(store, userId, selectedDevWalletId);
   const creatorWallet = walletSelection.wallet;
   const creatorKeypair = decryptWallet(creatorWallet);
+  const creatorPk = creatorKeypair.publicKey.toBase58();
 
   // 2) Metadata → IPFS (same pipeline as pump), 3) vanity SL1ME base mint (random fallback if pool empty).
   const metadata = await uploadPumpLaunchMetadata(basePayload);
@@ -42186,30 +42189,47 @@ async function webLaunchMeteoraDbc(userId, body, basePayload) {
   const devBuySol = Math.max(0, Number(basePayload?.devBuy?.amountSol || 0));
 
   await upsertPumpLaunchAttempt({
-    id: attemptId, userId, selectedDevWalletId, devWalletPublicKey: creatorKeypair.publicKey.toBase58(),
+    id: attemptId, userId, selectedDevWalletId, devWalletPublicKey: creatorPk,
     tokenName: basePayload.name, symbol: basePayload.symbol, mintPublicKey: tokenMint, rail: "meteora",
     metadataUri: metadata.uri, status: PUMP_LAUNCH_STATUS.BUILDING_TX, stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL,
     encryptedMintSecret: encryptSecret(Buffer.from(mintKeypair.secretKey)), mintSecretStored: true,
     updatedAt: new Date().toISOString()
   });
 
-  // 4) Build the DBC create-pool tx on the existing config (dev = creator/fee-claimer) via the SDK.
-  const tx = await buildMeteoraCreatePoolTransaction({
-    connection,
-    configKey: meteoraConfigKey,
-    creatorPublicKey: creatorKeypair.publicKey.toBase58(),
-    baseMintPublicKey: tokenMint,
-    name: basePayload.name, symbol: basePayload.symbol, uri: metadata.uri,
-    devBuySol, minimumAmountOut: 0
-  });
-
-  // 5) Sign (creator + base mint) and send the legacy Transaction the SDK returns.
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-  tx.feePayer = creatorKeypair.publicKey;
-  tx.recentBlockhash = blockhash;
-  tx.sign(creatorKeypair, mintKeypair);
-  const signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 3 });
-  await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
+  // 4+5) Build, sign and send. Custom curve = create a fresh config then its pool (two txs); shared
+  // curve = one create-pool tx on the existing config.
+  let signature;
+  if (customCurve) {
+    const configKeypair = Keypair.generate();
+    const { createConfigTx, createPoolWithFirstBuyTx } = await buildMeteoraConfigAndPoolTransactions({
+      connection, configPublicKey: configKeypair.publicKey.toBase58(),
+      feeClaimer: creatorPk, payer: creatorPk, baseMint: tokenMint,
+      name: basePayload.name, symbol: basePayload.symbol, uri: metadata.uri,
+      devBuySol, minimumAmountOut: 0,
+      initialMarketCap: customCurve.initialMarketCap, migrationMarketCap: customCurve.migrationMarketCap
+    });
+    const bh1 = await connection.getLatestBlockhash("confirmed");
+    createConfigTx.feePayer = creatorKeypair.publicKey; createConfigTx.recentBlockhash = bh1.blockhash;
+    createConfigTx.sign(creatorKeypair, configKeypair);
+    const cfgSig = await connection.sendRawTransaction(createConfigTx.serialize(), { skipPreflight: false, maxRetries: 3 });
+    await connection.confirmTransaction({ signature: cfgSig, blockhash: bh1.blockhash, lastValidBlockHeight: bh1.lastValidBlockHeight }, "confirmed");
+    const bh2 = await connection.getLatestBlockhash("confirmed");
+    createPoolWithFirstBuyTx.feePayer = creatorKeypair.publicKey; createPoolWithFirstBuyTx.recentBlockhash = bh2.blockhash;
+    createPoolWithFirstBuyTx.sign(creatorKeypair, mintKeypair);
+    signature = await connection.sendRawTransaction(createPoolWithFirstBuyTx.serialize(), { skipPreflight: false, maxRetries: 3 });
+    await connection.confirmTransaction({ signature, blockhash: bh2.blockhash, lastValidBlockHeight: bh2.lastValidBlockHeight }, "confirmed");
+  } else {
+    const tx = await buildMeteoraCreatePoolTransaction({
+      connection, configKey: meteoraConfigKey, creatorPublicKey: creatorPk, baseMintPublicKey: tokenMint,
+      name: basePayload.name, symbol: basePayload.symbol, uri: metadata.uri, devBuySol, minimumAmountOut: 0
+    });
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+    tx.feePayer = creatorKeypair.publicKey;
+    tx.recentBlockhash = blockhash;
+    tx.sign(creatorKeypair, mintKeypair);
+    signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 3 });
+    await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
+  }
 
   await upsertPumpLaunchAttempt({ id: attemptId, status: PUMP_LAUNCH_STATUS.COMPLETE, txSignature: signature, tokenMint, updatedAt: new Date().toISOString() });
   try {
@@ -42486,6 +42506,10 @@ async function webLaunchPumpCoin(userId, body = {}) {
     slippageBps: cleanLaunchNumber(body.slippageBps, 300, 1, 5000),
     clientRequestId: launchAttemptId,
     rail: normalizeLaunchRail(body.rail || body.pool || body.launchpad),
+    // PER-COIN custom curve (Meteora rail only): this coin gets its own fresh config + start/grad MC.
+    customCurve: (normalizeLaunchRail(body.rail || body.pool || body.launchpad) === "meteora" && body.customCurve)
+      ? { initialMarketCap: cleanLaunchNumber(body.customInitialMcap, 5000, 500, 5_000_000), migrationMarketCap: cleanLaunchNumber(body.customMigrationMcap, 69000, 1000, 50_000_000) }
+      : null,
     source: "slimewire_web"
   };
 

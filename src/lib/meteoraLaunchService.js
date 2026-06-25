@@ -25,20 +25,14 @@ import BN from "bn.js";
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 
-// Build the one-time DBC config-creation transaction. The config defines the curve + fee split for
-// every coin launched on the SlimeWire/Meteora rail. creatorTradingFeePercentage:100 → each coin's
-// fees go to its own launcher (the per-pool creator); feeClaimer is a zero-share partner placeholder.
-// Caller passes a fresh `configKeypair`; sign with [payerKeypair, configKeypair] then send.
-export async function buildMeteoraCreateConfigTransaction({
-  connection, commitment = "confirmed", configPublicKey, feeClaimer, payer,
-  initialMarketCap = 5000, migrationMarketCap = 69000
-}) {
-  if (!isValidPublicKey(configPublicKey)) throw new Error("Config public key invalid.");
-  if (!isValidPublicKey(feeClaimer)) throw new Error("Fee claimer (dev wallet) public key invalid.");
-  if (!isValidPublicKey(payer)) throw new Error("Payer public key invalid.");
-  const configParameters = buildCurveWithMarketCap({
-    initialMarketCap: Number(initialMarketCap) || 5000,
-    migrationMarketCap: Number(migrationMarketCap) || 69000,
+// Shared SlimeWire curve shape (used by the one-time shared config AND the per-coin config). Only the
+// market-cap knobs vary. creatorTradingFeePercentage:100 → each coin's fees go to its own launcher.
+export function slimeWireCurveParameters(initialMarketCap = 5000, migrationMarketCap = 69000) {
+  const init = Math.max(500, Number(initialMarketCap) || 5000);
+  const mig = Math.max(init * 1.5, Number(migrationMarketCap) || 69000);
+  return buildCurveWithMarketCap({
+    initialMarketCap: init,
+    migrationMarketCap: mig,
     activationType: ActivationType.Timestamp,
     token: {
       tokenType: TokenType.SPLToken,
@@ -72,6 +66,19 @@ export async function buildMeteoraCreateConfigTransaction({
     },
     lockedVesting: { totalLockedVestingAmount: 0, numberOfVestingPeriod: 0, cliffUnlockAmount: 0, totalVestingDuration: 0, cliffDurationFromMigrationTime: 0 }
   });
+}
+
+// Build the one-time DBC config-creation transaction. The config defines the curve + fee split for
+// every coin launched on the SlimeWire/Meteora rail. Caller passes a fresh `configKeypair`; sign with
+// [payerKeypair, configKeypair] then send.
+export async function buildMeteoraCreateConfigTransaction({
+  connection, commitment = "confirmed", configPublicKey, feeClaimer, payer,
+  initialMarketCap = 5000, migrationMarketCap = 69000
+}) {
+  if (!isValidPublicKey(configPublicKey)) throw new Error("Config public key invalid.");
+  if (!isValidPublicKey(feeClaimer)) throw new Error("Fee claimer (dev wallet) public key invalid.");
+  if (!isValidPublicKey(payer)) throw new Error("Payer public key invalid.");
+  const configParameters = slimeWireCurveParameters(initialMarketCap, migrationMarketCap);
   const partner = new PartnerService(connection, commitment);
   return partner.createConfig({
     config: new PublicKey(configPublicKey),
@@ -81,6 +88,42 @@ export async function buildMeteoraCreateConfigTransaction({
     payer: new PublicKey(payer),
     ...configParameters
   });
+}
+
+// PER-COIN curve: create a FRESH config (with this coin's own start/graduation MC) AND its pool in one
+// flow. Returns { createConfigTx, createPoolWithFirstBuyTx } — sign createConfigTx with
+// [payer, configKeypair], the pool tx with [payer, baseMintKeypair], and send config → pool in order.
+// Costs more SOL per launch (a config rent each time) — that's the trade for per-coin starting liquidity.
+export async function buildMeteoraConfigAndPoolTransactions({
+  connection, commitment = "confirmed", configPublicKey, feeClaimer, payer, baseMint,
+  name, symbol, uri, devBuySol = 0, minimumAmountOut = 0, initialMarketCap = 5000, migrationMarketCap = 69000
+}) {
+  if (!isValidPublicKey(configPublicKey)) throw new Error("Config public key invalid.");
+  if (!isValidPublicKey(feeClaimer)) throw new Error("Fee claimer public key invalid.");
+  if (!isValidPublicKey(payer)) throw new Error("Payer public key invalid.");
+  if (!isValidPublicKey(baseMint)) throw new Error("Base mint public key invalid.");
+  const creator = new PublicKey(payer);
+  const configParameters = slimeWireCurveParameters(initialMarketCap, migrationMarketCap);
+  const params = {
+    config: new PublicKey(configPublicKey),
+    feeClaimer: new PublicKey(feeClaimer),
+    leftoverReceiver: new PublicKey(feeClaimer),
+    quoteMint: new PublicKey(SOL_MINT),
+    payer: creator,
+    ...configParameters,
+    preCreatePoolParam: { name: String(name || ""), symbol: String(symbol || ""), uri: String(uri || ""), poolCreator: creator, baseMint: new PublicKey(baseMint) }
+  };
+  const buyLamports = Math.max(0, Math.round(Number(devBuySol || 0) * LAMPORTS_PER_SOL));
+  if (buyLamports > 0) {
+    params.firstBuyParam = {
+      buyer: creator,
+      buyAmount: new BN(String(buyLamports)),
+      minimumAmountOut: new BN(String(Math.max(0, Math.round(Number(minimumAmountOut || 0))))),
+      referralTokenAccount: null
+    };
+  }
+  const client = DynamicBondingCurveClient.create(connection, commitment);
+  return client.partner.createConfigAndPoolWithFirstBuy(params);
 }
 
 export function isValidPublicKey(value) {
