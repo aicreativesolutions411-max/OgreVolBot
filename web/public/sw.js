@@ -3,7 +3,7 @@
 // /api/ responses or non-GET requests, so trading data is never served stale. Offline just
 // shows the cached shell, which then loads live data when the connection returns.
 
-const SHELL_CACHE = "slimewire-shell-v38-meteora-open";
+const SHELL_CACHE = "slimewire-shell-v39-dev-fees";
 // Standalone pages are their OWN documents (Pro, raid board, prelaunch, hub, launch, guide, share
 // pages). The SW must NEVER treat their navigations as the app shell — doing so served the cached
 // main-app (the "/pro shows the old intro then the main page" bug). Only the SPA's own routes are

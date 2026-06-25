@@ -2655,9 +2655,9 @@
       '<div class="tabs" style="margin:4px 0 14px;gap:6px;flex-wrap:wrap">'+tb("coin","🪙 Coin")+tb("dev","🛡️ Dev Buy &amp; Bundle")+tb("chat","💬 Chat &amp; Live")+'</div>'+
       '<div data-lpanel="coin"'+show("coin")+'>'+
         '<div class="field"><label>Where it lives</label><div class="railsel" id="lcRails">'+
-          '<button type="button" data-rail="pump"'+(rail==="pump"?' class="on"':'')+'>💊 pump.fun<span>Biggest crowd</span></button>'+
-          '<button type="button" data-rail="bonk"'+(rail==="bonk"?' class="on"':'')+'>🐸 SlimeWire<span>Launch with us</span></button>'+
-          '<button type="button" data-rail="meteora"'+(rail==="meteora"?' class="on"':'')+'>🌊 Meteora<span>Our own pool · soon</span></button>'+
+          '<button type="button" data-rail="pump"'+(rail==="pump"?' class="on"':'')+'>💊 pump.fun<span>Biggest crowd · you earn</span></button>'+
+          '<button type="button" data-rail="bonk"'+(rail==="bonk"?' class="on"':'')+'>🐸 SlimeWire<span>Your rail · you earn</span></button>'+
+          '<button type="button" data-rail="meteora"'+(rail==="meteora"?' class="on"':'')+'>🌊 Meteora<span>Your curve · keep 100%</span></button>'+
         '</div><div class="mut" style="font-size:11px;margin-top:6px">No matter which you pick, <b>you own the coin</b> and its fees come back to your wallet.</div>'+
         '<div id="lcMeteoraSetup" style="margin-top:8px"></div></div>'+
         '<div class="field row2"><div><label>Name</label><input id="lcName" maxlength="64" placeholder="My Coin"></div><div><label>Ticker</label><input id="lcSym" maxlength="12" placeholder="MYC"></div></div>'+
@@ -2670,7 +2670,7 @@
       '<div data-lpanel="dev"'+show("dev")+'>'+
         '<div class="feebox">💰 <b>Fees &amp; ownership — the simple version</b>'+
           '<div class="ln">• <b>You own it.</b> Your wallet is the coin\'s creator (the admin).</div>'+
-          '<div class="ln">• <b>Fees come to you.</b> Every trade pays a small fee, and your share lands in your dev wallet.</div>'+
+          '<div class="ln">• <b>You earn on every rail.</b> pump.fun, SlimeWire &amp; Meteora all pay the coin\'s trading fees to your wallet — and on the SlimeWire curve you keep <b>100%</b> of the creator fees.</div>'+
           '<div class="ln">• <b>Cheap to launch.</b> Just a tiny Solana network fee, plus your optional dev buy below.</div>'+
         '</div>'+
         '<div class="field row2"><div><label>First buy (SOL)</label><input id="lcDevBuy" inputmode="decimal" placeholder="0 = skip"></div><div><label>Your wallet (you\'re the creator)</label>'+walletSelectHtml("lcDevWallet")+'</div></div>'+
