@@ -623,6 +623,19 @@
     const {ok,d}=await api("/api/web/presets");
     if(ok&&d&&d.ok&&d.presets){state.presets={trade:d.presets.trade||[],bundle:d.presets.bundle||[]};}
   }
+  // Read the ladder stage inputs (#pL1p/#pL1s …) into [{pct,sellPercent}], ascending. sell% 0 = backend
+  // fills it evenly. ladderLabel renders a preset's ladder compactly ("+50% → +100% → +200%").
+  function readPresetLadder(){
+    const out=[];
+    for(const n of [1,2,3]){
+      const pe=$("#pL"+n+"p"),se=$("#pL"+n+"s");
+      const p=Number((pe&&pe.value||"").trim());let s=Number((se&&se.value||"").trim());
+      if(!isFinite(p)||p<=0)continue;if(!isFinite(s)||s<=0)s=0;
+      out.push({pct:p,sellPercent:s});
+    }
+    return out.sort((a,b)=>a.pct-b.pct);
+  }
+  function ladderLabel(lad){return (lad||[]).map(x=>"+"+x.pct+"%"+(x.sellPercent?"("+x.sellPercent+"%)":"")).join(" → ");}
   async function savePreset(type,preset){
     const {ok,d}=await jpost("/api/web/presets",{type,action:"save",preset});
     if(ok&&d&&d.ok&&d.presets){state.presets={trade:d.presets.trade||[],bundle:d.presets.bundle||[]};return true;}
@@ -641,7 +654,7 @@
       // Switching the active preset MUST also drive the ⚡ one-click buy (state.quickBuy) — otherwise it
       // keeps firing the OLD amount + TP/SL ("switched to .2 but it still buys .1"). Sync them here.
       const p=(state.presets.trade||[]).find(x=>x.id===id);
-      if(p)setQuickBuy({amt:Number(p.amountSol)||(state.quickBuy&&state.quickBuy.amt)||0.1,presetId:id,tp:p.takeProfitPct||"",sl:p.stopLossPct||"",slip:p.slippageBps||""});
+      if(p)setQuickBuy({amt:Number(p.amountSol)||(state.quickBuy&&state.quickBuy.amt)||0.1,presetId:id,tp:p.takeProfitPct||"",sl:p.stopLossPct||"",slip:p.slippageBps||"",ladder:Array.isArray(p.takeProfitLadder)?p.takeProfitLadder:[]});
     }else{
       localStorage.removeItem("ggTradePreset");
       // "Manual — no auto-exit": keep the amount but drop TP/SL so one-click buys are plain.
@@ -1895,8 +1908,10 @@
     hap();toast("Buying ◎"+a.toFixed(3)+"…");
     const big=$("#bigbuy");if(big){big.disabled=true;big.textContent="Submitting…";}
     const p=activeTradePresetObj();
+    const lad=p&&Array.isArray(p.takeProfitLadder)&&p.takeProfitLadder.length?p.takeProfitLadder:null;
     const body={tokenMint:mint,walletIndex:state.activeWallet,amountSol:String(a),slippageBps:(p&&p.slippageBps)||"400",tradeAttemptId:attemptId()};
-    if(p&&(p.takeProfitPct||p.stopLossPct||(p.sellDelay&&p.sellDelay!=="off"))){
+    if(lad){body.autoExit=true;body.takeProfitLadder=lad;body.stopLossPct=p.stopLossPct||"";body.sellDelay=p.sellDelay||"off";}
+    else if(p&&(p.takeProfitPct||p.stopLossPct||(p.sellDelay&&p.sellDelay!=="off"))){
       body.autoExit=true;body.takeProfitPct=p.takeProfitPct||"";body.stopLossPct=p.stopLossPct||"";body.sellDelay=p.sellDelay||"off";body.sellPercent=p.sellPercent||"100";
     }else body.disableAutoExit=true;   // plain buy = HOLD; the backend otherwise force-arms a default TP/SL that fires instantly on a fresh-buy quote
     const {ok,status,d}=await postTrade("/api/web/trade/buy",body);
@@ -1945,8 +1960,10 @@
     // Your OWN take-profit / stop-loss win; otherwise fall back to a saved preset's exits.
     const p=q.presetId?((state.presets.trade||[]).find(x=>x.id===q.presetId)||null):null;
     const tp=q.tp||(p&&p.takeProfitPct)||"",sl=q.sl||(p&&p.stopLossPct)||"";
+    const lad=(Array.isArray(q.ladder)&&q.ladder.length)?q.ladder:((p&&Array.isArray(p.takeProfitLadder)&&p.takeProfitLadder.length)?p.takeProfitLadder:null);
     const body={tokenMint:mint,walletIndex:state.activeWallet,amountSol:String(q.amt),slippageBps:String(q.slip||(p&&p.slippageBps)||"500"),tradeAttemptId:attemptId()};
-    if(tp||sl||(p&&p.sellDelay&&p.sellDelay!=="off")){body.autoExit=true;body.takeProfitPct=tp;body.stopLossPct=sl;body.sellDelay=(p&&p.sellDelay)||"off";body.sellPercent=(p&&p.sellPercent)||"100";}
+    if(lad){body.autoExit=true;body.takeProfitLadder=lad;body.stopLossPct=sl;body.sellDelay=(p&&p.sellDelay)||"off";}
+    else if(tp||sl||(p&&p.sellDelay&&p.sellDelay!=="off")){body.autoExit=true;body.takeProfitPct=tp;body.stopLossPct=sl;body.sellDelay=(p&&p.sellDelay)||"off";body.sellPercent=(p&&p.sellPercent)||"100";}
     else body.disableAutoExit=true;    // no TP/SL set → HOLD (don't let the backend force a default auto-exit)
     toast("Buying ◎"+Number(q.amt).toFixed(3)+"…");
     const {ok,status,d}=await postTrade("/api/web/trade/buy",body);
@@ -2199,7 +2216,8 @@
   }
   function presetChipHtml(p,type){
     const active=(type==="trade"&&p.id===state.activeTradePreset);
-    const det=esc(p.amountSol||"?")+'◎'+(p.takeProfitPct?" · TP "+esc(p.takeProfitPct)+"%":"")+(p.stopLossPct?" · SL "+esc(p.stopLossPct)+"%":"")+" · slip "+esc(p.slippageBps||"400");
+    const lad=Array.isArray(p.takeProfitLadder)&&p.takeProfitLadder.length?p.takeProfitLadder:null;
+    const det=esc(p.amountSol||"?")+'◎'+(lad?" · 📶 "+esc(ladderLabel(lad)):(p.takeProfitPct?" · TP "+esc(p.takeProfitPct)+"%":""))+(p.stopLossPct?" · SL "+esc(p.stopLossPct)+"%":"")+" · slip "+esc(p.slippageBps||"400");
     return'<div class="preChip'+(active?' on':'')+'"><div class="info" style="min-width:0;flex:1"><b>'+esc(p.name||"Preset")+(active?' <span class="preact">✓ ACTIVE</span>':'')+'</b><span>'+det+'</span></div>'+
       '<div class="preacts">'+
         (type==="trade"?'<button class="prebtn'+(active?' on':'')+'" data-use="'+esc(p.id)+'" title="Use this preset for your buys">'+(active?"✓":"Use")+'</button>':'')+
@@ -2255,6 +2273,12 @@
           '<div style="border-top:1px solid var(--border2);margin-top:14px;padding-top:14px"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:9px">+ Add / edit a preset</div>'+
             '<div class="field row2"><div><label>Name</label><input id="pName" placeholder="Scalp" maxlength="24"></div><div><label>Amount (SOL)</label><input id="pAmt" inputmode="decimal" placeholder="0.5"></div></div>'+
             '<div class="field row2"><div><label>Take profit %</label><input id="pTp" inputmode="decimal" placeholder="50"></div><div><label>Stop loss %</label><input id="pSl" inputmode="decimal" placeholder="20"></div></div>'+
+            // ---- Laddered take-profits (sell in stages) ----
+            '<label style="display:flex;align-items:center;gap:9px;margin:6px 0 2px;font-size:12.5px;cursor:pointer"><input type="checkbox" id="pLadder"> 📶 Ladder take-profits — sell in up to 3 stages</label>'+
+            '<div id="pLadderRows" style="display:none;border-left:2px solid var(--green);padding-left:10px;margin:4px 0 2px">'+
+              '<p class="wnote" style="margin:0 0 7px">Each stage sells part of the bag at a higher target — bank early, let the rest ride. (Stop loss above still applies; the single Take-profit is ignored when ladder is on.)</p>'+
+              [1,2,3].map(n=>'<div class="field row2" style="margin-bottom:7px"><div><label>Stage '+n+' — gain %</label><input id="pL'+n+'p" inputmode="decimal" placeholder="'+(n===1?"50":n===2?"100":"200")+'"></div><div><label>sell % of bag</label><input id="pL'+n+'s" inputmode="numeric" placeholder="'+(n===1?"50":n===2?"30":"20")+'"></div></div>').join("")+
+            '</div>'+
             '<div class="field row2"><div><label>Slippage (bps)</label><input id="pSlip" inputmode="numeric" placeholder="400"></div><div><label>For</label><select id="pKind"><option value="trade">⚡ Quick Buy</option><option value="bundle">📦 Bundle</option></select></div></div>'+
             '<button class="wbtn" id="savePre">Save preset</button>'+
           '</div></div></details>'+
@@ -2321,6 +2345,9 @@
       if(!amt||Number(amt)<=0){toast("Set a SOL amount.",true);return;}
       const kind=$("#pKind").value;
       const preset={name,amountSol:amt,takeProfitPct:$("#pTp").value.trim(),stopLossPct:$("#pSl").value.trim(),slippageBps:$("#pSlip").value.trim()||"400",sellPercent:"100",sellDelay:"off"};
+      // Laddered take-profits: when the box is on, collect up to 3 (gain%, sell%) stages.
+      const lad=readPresetLadder();
+      if($("#pLadder")&&$("#pLadder").checked){if(lad.length<1){toast("Set at least one ladder stage (gain %).",true);sp.disabled=false;sp.textContent="Save preset";return;}preset.takeProfitLadder=lad;}else preset.takeProfitLadder=[];
       // Editing an existing preset of the SAME kind → pass its id so the backend updates it in place
       // (keeps the id, so an active selection stays valid) instead of creating a duplicate.
       if(state._editPreset&&state._editPreset.type===kind)preset.id=state._editPreset.id;
@@ -2329,6 +2356,8 @@
       const okk=await savePreset(kind,preset);sp.disabled=false;sp.textContent="Save preset";
       if(okk){toast(state._editPreset?"Preset updated":"Preset saved");state._editPreset=null;renderWallet();}
     };}
+    // Ladder checkbox: show/hide the stage inputs.
+    const plc=$("#pLadder");if(plc)plc.onchange=()=>{const rows=$("#pLadderRows");if(rows)rows.style.display=plc.checked?"block":"none";};
     view.querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{const[type,id]=b.dataset.del.split(":");if(await deletePreset(type,id)){if(state.activeTradePreset===id)setActiveTradePreset("");toast("Preset removed");renderWallet();}});
     // Switch the ACTIVE Quick Buy preset (the one that arms TP/SL on your buys).
     view.querySelectorAll("[data-use]").forEach(b=>b.onclick=()=>{setActiveTradePreset(b.dataset.use);toast("✓ Preset active — arms on your next buy");renderWallet();});
@@ -2337,6 +2366,10 @@
       state._editPreset={type,id};
       const set=(sel,v)=>{const e=$(sel);if(e)e.value=v;};
       set("#pName",p.name||"");set("#pAmt",p.amountSol||"");set("#pTp",p.takeProfitPct||"");set("#pSl",p.stopLossPct||"");set("#pSlip",p.slippageBps||"");set("#pKind",type);
+      // restore the ladder stages + checkbox
+      const lad=Array.isArray(p.takeProfitLadder)?p.takeProfitLadder:[];const cb=$("#pLadder"),rows=$("#pLadderRows");
+      if(cb)cb.checked=lad.length>0;if(rows)rows.style.display=lad.length?"block":"none";
+      for(const i of [1,2,3]){set("#pL"+i+"p",lad[i-1]?String(lad[i-1].pct||""):"");set("#pL"+i+"s",lad[i-1]?String(lad[i-1].sellPercent||""):"");}
       const s=$("#savePre");if(s)s.textContent="Update preset";const n=$("#pName");if(n){n.scrollIntoView({behavior:"smooth",block:"center"});n.focus();}toast("Editing "+(p.name||"preset")+" — change values, then Update");});
     const ek=$("#expKeys");if(ek)ek.onclick=async()=>{ek.disabled=true;await exportKeys();ek.disabled=false;};
     const ss=$("#swSol");if(ss)ss.onclick=async()=>{const dest=$("#swDest").value.trim();if(!dest){toast("Paste a destination address.",true);return;}ss.disabled=true;ss.textContent="Sweeping…";await sweepSol(dest,state.wallets.map(w=>w.index));ss.disabled=false;ss.textContent="Sweep all SOL →";renderWallet();};

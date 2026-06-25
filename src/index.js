@@ -36496,6 +36496,7 @@ function normalizeWebPreset(type, raw = {}, options = {}) {
   const slippageBps = String(raw.slippageBps || "400").trim();
   parseWebSlippage(slippageBps);
 
+  const takeProfitLadder = normalizeWebTakeProfitLadder(raw.takeProfitLadder);   // staged take-profits (sell in rungs)
   const preset = {
     id,
     name,
@@ -36506,6 +36507,7 @@ function normalizeWebPreset(type, raw = {}, options = {}) {
     sellDelay,
     sellPercent,
     slippageBps,
+    takeProfitLadder,
     updatedAt: new Date().toISOString()
   };
   if (type === "trade") {
@@ -37776,14 +37778,39 @@ function webBackupDownloadsForWallets(userId, wallets, groupLabel, note) {
   };
 }
 
+// Normalize a laddered take-profit from a web body: array of {pct, sellPercent} (or bare pct numbers).
+// Sorted ascending, sell percentages filled to sum ~100, capped at 8 rungs. [] when none/invalid.
+function normalizeWebTakeProfitLadder(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const item of raw) {
+    const pct = Number.parseFloat(item && typeof item === "object" ? (item.pct ?? item.takeProfitPct) : item);
+    let sellPercent = Number.parseFloat(item && typeof item === "object" ? (item.sellPercent ?? item.sell) : NaN);
+    if (!Number.isFinite(pct) || pct <= 0) continue;
+    if (!Number.isFinite(sellPercent) || sellPercent <= 0) sellPercent = 0;
+    out.push({ pct: Math.round(pct * 100) / 100, sellPercent: Math.min(100, Math.round(sellPercent)) });
+  }
+  if (!out.length) return [];
+  out.sort((a, b) => a.pct - b.pct);
+  const missing = out.filter((x) => !x.sellPercent);
+  if (missing.length) {
+    const used = out.reduce((s, x) => s + (x.sellPercent || 0), 0);
+    const each = Math.max(1, Math.floor(Math.max(0, 100 - used) / missing.length));
+    missing.forEach((x, i) => { x.sellPercent = (i === missing.length - 1) ? Math.max(1, 100 - used - each * (missing.length - 1)) : each; });
+  }
+  return out.slice(0, 8);
+}
+
 function webAutoExitRequested(body = {}) {
   if (webAutoExitExplicitlyDisabled(body)) return false;
   if (cleanLaunchBoolean(body.autoExit)) return true;
+  if (normalizeWebTakeProfitLadder(body.takeProfitLadder).length) return true;
 
   const hasExitFields = body.takeProfitPct !== undefined
     || body.stopLossPct !== undefined
     || body.sellDelay !== undefined
-    || body.sellDelaySeconds !== undefined;
+    || body.sellDelaySeconds !== undefined
+    || (Array.isArray(body.takeProfitLadder) && body.takeProfitLadder.length > 0);
   if (!hasExitFields) return false;
 
   const takeProfitPct = parseTakeProfitPercent(String(body.takeProfitPct || "0"));
@@ -38305,13 +38332,15 @@ async function webTradeSellCore(userId, body = {}, options = {}, attempt = {}) {
 }
 
 async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyResult, body = {}, slippageBps = CONFIG.defaultSlippageBps, automationPermission = null) {
-  const takeProfitPct = parseTakeProfitPercent(String(body.takeProfitPct || "0"));
+  const ladder = normalizeWebTakeProfitLadder(body.takeProfitLadder);
+  // Ladder: the first rung is the "armed" TP; the engine sells each rung's sellPercent as its pct is hit.
+  const takeProfitPct = ladder.length ? ladder[0].pct : parseTakeProfitPercent(String(body.takeProfitPct || "0"));
   const stopLossPct = parseOptionalTriggerPercent(String(body.stopLossPct || "0"));
   const sellDelaySeconds = parseOptionalSellDelaySeconds(firstString(body.sellDelay, body.sellDelaySeconds, "off"));
-  const sellPercent = parsePercent(String(body.sellPercent || "100"));
+  const sellPercent = ladder.length ? (ladder[0].sellPercent || 100) : parsePercent(String(body.sellPercent || "100"));
   const triggerSellPercent = sellPercent;
 
-  if (!takeProfitPct && !stopLossPct && sellDelaySeconds <= 0) {
+  if (!takeProfitPct && !stopLossPct && sellDelaySeconds <= 0 && !ladder.length) {
     return null;
   }
   const permission = automationPermission || await requireWebAutomationPermission(userId, "quick-buy auto exits");
@@ -38367,9 +38396,9 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     loopDelaySeconds: 0,
     takeProfitPct,
     stopLossPct,
-    takeProfitMode: "single",
+    takeProfitMode: ladder.length ? "ladder" : "single",
     stopLossMode: "single",
-    takeProfitLadder: [],
+    takeProfitLadder: ladder,
     autoBundle: false,
     slippageBps,
     createdAt: new Date().toISOString(),
