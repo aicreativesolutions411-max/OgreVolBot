@@ -137,6 +137,8 @@
   .railsel button span{font-weight:600;font-size:10px;color:var(--muted)}
   .railsel button:hover{border-color:rgba(114,255,35,.4)}
   .railsel button.on{border-color:var(--green);background:var(--green-dim);box-shadow:0 0 0 1px var(--green) inset}
+  .feebox{background:var(--green-dim);border:1px solid rgba(114,255,35,.25);border-radius:11px;padding:12px 14px;font-size:12.5px;line-height:1.5;margin-bottom:14px}
+  .feebox .ln{margin-top:5px;color:var(--text)}
   .buybtn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:10px;font-weight:800;font-size:13px;color:#06140a;background:linear-gradient(180deg,var(--green2),var(--green));box-shadow:0 2px 12px rgba(114,255,35,.25);transition:.12s}
   .buybtn:hover{filter:brightness(1.08);transform:translateY(-1px)}.buybtn.sm{padding:7px 13px;font-size:12px}
   .star{background:none;border:0;color:var(--muted);font-size:16px;line-height:1;cursor:pointer;padding:2px 4px;transition:.12s}
@@ -2628,14 +2630,14 @@
     const tab=state.launchTab||"coin";const mint=state.launchedMint||"";const rail=state.launchRail||"pump";
     const tb=(id,lab)=>'<button data-ltab="'+id+'" class="'+(tab===id?"on":"")+'">'+lab+'</button>';
     const show=(id)=>tab===id?"":' style="display:none"';
-    $("#v-launch").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>🚀 Launch a Coin</h3><p class="sub">Mint a pump.fun coin straight from SlimeWire — then trade, bundle &amp; chat without leaving.</p>'+
+    $("#v-launch").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>🚀 Launch a Coin</h3><p class="sub">Make your own coin in under a minute — then trade, chat &amp; grow it right here. You stay the owner, and the fees it earns come back to you.</p>'+
       '<div class="tabs" style="margin:4px 0 14px;gap:6px;flex-wrap:wrap">'+tb("coin","🪙 Coin")+tb("dev","🛡️ Dev Buy &amp; Bundle")+tb("chat","💬 Chat &amp; Live")+'</div>'+
       '<div data-lpanel="coin"'+show("coin")+'>'+
         '<div class="field"><label>Where it lives</label><div class="railsel" id="lcRails">'+
-          '<button type="button" data-rail="pump"'+(rail==="pump"?' class="on"':'')+'>💊 pump.fun<span>max reach · shows on pump</span></button>'+
-          '<button type="button" data-rail="bonk"'+(rail==="bonk"?' class="on"':'')+'>🐸 SlimeWire<span>our rail · LaunchLab · keeps fees</span></button>'+
-          '<button type="button" data-rail="meteora"'+(rail==="meteora"?' class="on"':'')+'>🌊 Meteora<span>own curve · test mode</span></button>'+
-        '</div><div class="mut" style="font-size:11px;margin-top:6px">Your dev wallet stays the creator, so creator fees route to you — and coins mint with a <b>…SL1ME</b> address once the vanity pool is loaded.</div></div>'+
+          '<button type="button" data-rail="pump"'+(rail==="pump"?' class="on"':'')+'>💊 pump.fun<span>Biggest crowd</span></button>'+
+          '<button type="button" data-rail="bonk"'+(rail==="bonk"?' class="on"':'')+'>🐸 SlimeWire<span>Launch with us</span></button>'+
+          '<button type="button" data-rail="meteora"'+(rail==="meteora"?' class="on"':'')+'>🌊 Meteora<span>Our own pool · soon</span></button>'+
+        '</div><div class="mut" style="font-size:11px;margin-top:6px">No matter which you pick, <b>you own the coin</b> and its fees come back to your wallet.</div></div>'+
         '<div class="field row2"><div><label>Name</label><input id="lcName" maxlength="64" placeholder="My Coin"></div><div><label>Ticker</label><input id="lcSym" maxlength="12" placeholder="MYC"></div></div>'+
         '<div class="field"><label>Description</label><textarea id="lcDesc" maxlength="800" rows="2" placeholder="What\'s the meme?"></textarea></div>'+
         '<div class="field"><label>Image (icon)</label><input id="lcImg" type="file" accept="image/*"><div id="lcImgPrev" class="mut" style="font-size:11px;margin-top:6px">PNG / JPG / WEBP / GIF, up to ~450KB.</div></div>'+
@@ -2644,9 +2646,14 @@
         '<div class="field"><label>Telegram</label><input id="lcTg" placeholder="https://t.me/…"></div>'+
       '</div>'+
       '<div data-lpanel="dev"'+show("dev")+'>'+
-        '<div class="field row2"><div><label>Dev buy (SOL)</label><input id="lcDevBuy" inputmode="decimal" placeholder="0 = none"></div><div><label>Dev wallet (creator)</label>'+walletSelectHtml("lcDevWallet")+'</div></div>'+
-        '<label class="lcheck"><input type="checkbox" id="lcBundle" checked> <span><b>Bundle the dev buy with the launch</b> (anti-snipe) — your dev buy lands in the same block as the mint, so snipers can\'t front-run your first buy.</span></label>'+
-        '<label class="lcheck"><input type="checkbox" id="lcFeeMax" checked> <span><b>Send max creator fees to my dev wallet</b> — you collect 100% of the creator fees this coin earns, paid straight to the dev wallet above. (Uncheck for none.)</span></label>'+
+        '<div class="feebox">💰 <b>Fees &amp; ownership — the simple version</b>'+
+          '<div class="ln">• <b>You own it.</b> Your wallet is the coin\'s creator (the admin).</div>'+
+          '<div class="ln">• <b>Fees come to you.</b> Every trade pays a small fee, and your share lands in your dev wallet.</div>'+
+          '<div class="ln">• <b>Cheap to launch.</b> Just a tiny Solana network fee, plus your optional dev buy below.</div>'+
+        '</div>'+
+        '<div class="field row2"><div><label>First buy (SOL)</label><input id="lcDevBuy" inputmode="decimal" placeholder="0 = skip"></div><div><label>Your wallet (you\'re the creator)</label>'+walletSelectHtml("lcDevWallet")+'</div></div>'+
+        '<label class="lcheck"><input type="checkbox" id="lcBundle" checked> <span><b>Buy at the exact launch moment</b> (anti-snipe) — your first buy lands together with the coin, so bots can\'t jump in ahead of you.</span></label>'+
+        '<label class="lcheck"><input type="checkbox" id="lcFeeMax" checked> <span><b>Send all creator fees to my wallet</b> — you keep 100% of the fees this coin earns, paid straight to your wallet. (Uncheck for none.)</span></label>'+
         '<label class="lcheck"><input type="checkbox" id="lcBundleWallets"> <span><b>Also bundle-buy from my other wallets</b> at launch — first-block buys across your funded wallets so the early supply is yours, not snipers\'.</span></label>'+
         '<div class="field row2" id="lcBundleAmtWrap" style="display:none"><div><label>Bundle wallets</label><input id="lcBundleCount" inputmode="numeric" placeholder="all"></div><div><label>Buy per wallet (SOL)</label><input id="lcBundleAmt" inputmode="decimal" placeholder="0.05"></div></div>'+
         '<div class="lcnote" id="lcBundleNote" style="display:none">📦 These are first-block <b>entry</b> buys. <b>Take-profit / stop-loss</b> (laddered), exact wallet selection &amp; saved bundle <b>presets</b> live in the <b>📦 Bundle tool</b> — set them there after launch (presets are saved under <b>Wallet → Presets</b>).</div>'+
