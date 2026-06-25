@@ -278,6 +278,29 @@ function generateLaunchMintKeypair() {
   return Keypair.generate();
 }
 
+// Persisted Meteora DBC config (created ONE-TIME in-app by the owner). Lets the Meteora rail work with
+// NO Render env editing: the rail uses METEORA_DBC_CONFIG_KEY if set, else this persisted config key,
+// and auto-enables once a config exists. Survives restarts (lives on the /var/data disk).
+const METEORA_CONFIG_FILE = path.join(CONFIG.dataDir, "meteora-config.json");
+let meteoraConfigState = null;
+try {
+  const j = JSON.parse(fsSync.readFileSync(METEORA_CONFIG_FILE, "utf8"));
+  if (j && j.configKey) meteoraConfigState = j;
+} catch {}
+function getMeteoraConfigKey() {
+  return CONFIG.meteoraDbcConfigKey || (meteoraConfigState && meteoraConfigState.configKey) || "";
+}
+function meteoraRailEnabled() {
+  return Boolean(CONFIG.meteoraLaunchEnabled || (meteoraConfigState && meteoraConfigState.configKey));
+}
+function saveMeteoraConfigState(state) {
+  meteoraConfigState = state;
+  try {
+    fsSync.mkdirSync(path.dirname(METEORA_CONFIG_FILE), { recursive: true });
+    fsSync.writeFileSync(METEORA_CONFIG_FILE, JSON.stringify(state));
+  } catch (e) { console.warn(`[meteora] persist config failed: ${e && e.message}`); }
+}
+
 // --- Subscription access (pay SOL to receive wallet -> 30 days) ----------------
 async function readAutopilotSubs() {
   try {
@@ -7829,6 +7852,66 @@ async function handleWebApiRequest(request, response, requestUrl) {
       } catch (error) {
         const status = Number(error.statusCode || error.status || 500);
         sendWebJson(request, response, status >= 400 && status < 600 ? status : 500, pumpLaunchWebErrorPayload(error, body));
+      }
+      return;
+    }
+
+    // SlimeWire (Meteora) curve setup — owner one-tap. Creates the ONE on-chain DBC config (per-coin
+    // fees → each launcher) using the owner's managed wallet, persists it, and auto-enables the rail.
+    // No Render env editing. Simulate-guarded so a malformed config tx never spends SOL.
+    if (request.method === "GET" && pathname === "/api/web/launch/meteora-config") {
+      const key = getMeteoraConfigKey();
+      sendWebJson(request, response, 200, { ok: true, configured: Boolean(key), configKey: key || null, enabled: meteoraRailEnabled() });
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/launch/meteora-config") {
+      let body = {};
+      try {
+        body = await readJsonRequestBody(request, 16_384);
+        if (!CONFIG.autopilotOwnerKey || String(body.key || "") !== CONFIG.autopilotOwnerKey) {
+          sendWebJson(request, response, 403, { ok: false, error: "Owner key required to set up the SlimeWire curve." });
+          return;
+        }
+        if (getMeteoraConfigKey() && !body.force) {
+          sendWebJson(request, response, 200, { ok: true, already: true, configKey: getMeteoraConfigKey(), enabled: meteoraRailEnabled() });
+          return;
+        }
+        const store = await readWalletStore();
+        const selectedDevWalletId = firstString(body.devWalletIndex, body.devWalletPublicKey, body.walletIndex);
+        const walletSelection = selectPumpLaunchWallet(store, auth.userId, selectedDevWalletId);
+        const payerKeypair = decryptWallet(walletSelection.wallet);
+        const { buildMeteoraCreateConfigTransaction, isValidPublicKey } = await import("./lib/meteoraLaunchService.js");
+        const configKeypair = Keypair.generate();
+        const feeClaimer = (body.feeClaimer && isValidPublicKey(body.feeClaimer)) ? String(body.feeClaimer) : payerKeypair.publicKey.toBase58();
+        const tx = await buildMeteoraCreateConfigTransaction({
+          connection,
+          configPublicKey: configKeypair.publicKey.toBase58(),
+          feeClaimer,
+          payer: payerKeypair.publicKey.toBase58(),
+          initialMarketCap: Number(body.initialMarketCap) || 5000,
+          migrationMarketCap: Number(body.migrationMarketCap) || 69000
+        });
+        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+        tx.feePayer = payerKeypair.publicKey;
+        tx.recentBlockhash = blockhash;
+        tx.sign(payerKeypair, configKeypair);
+        const sim = await connection.simulateTransaction(tx).catch((e) => ({ value: { err: String(e && e.message || e), logs: [] } }));
+        if (sim.value && sim.value.err) {
+          sendWebJson(request, response, 400, { ok: false, error: "Curve config simulation failed — nothing was created (no SOL spent).", detail: String(sim.value.err).slice(0, 300), logs: (sim.value.logs || []).slice(-8) });
+          return;
+        }
+        if (body.dryRun) {
+          sendWebJson(request, response, 200, { ok: true, dryRun: true, wouldCreateConfigKey: configKeypair.publicKey.toBase58(), feeClaimer, simOk: true });
+          return;
+        }
+        const signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 3 });
+        await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
+        saveMeteoraConfigState({ configKey: configKeypair.publicKey.toBase58(), feeClaimer, txSignature: signature, createdBy: auth.userId, createdAt: new Date().toISOString() });
+        console.log(`[meteora] config created ${configKeypair.publicKey.toBase58()} (tx ${signature}) — SlimeWire curve LIVE`);
+        sendWebJson(request, response, 200, { ok: true, configKey: configKeypair.publicKey.toBase58(), signature, enabled: true });
+      } catch (error) {
+        const status = Number(error.statusCode || error.status || 500);
+        sendWebJson(request, response, status >= 400 && status < 600 ? status : 500, { ok: false, error: (error && error.message) || "Meteora curve setup failed." });
       }
       return;
     }
@@ -42071,9 +42154,9 @@ function railToPumpPortalPool(rail) {
 // SL1ME vanity baseMint, explicit fee-claim) lands here next. Until then this fails loudly rather
 // than silently launching on pump — so a creator who picked "SlimeWire curve" is never misrouted.
 async function webLaunchMeteoraDbc(userId, body, basePayload) {
-  if (!CONFIG.meteoraLaunchEnabled) {
+  if (!meteoraRailEnabled()) {
     throw createPumpLaunchError(
-      "The SlimeWire (Meteora) curve is in test mode — not live yet. Launch on the Pump or Bonk rail for now; the Meteora rail goes live once a real test confirms dev fees land in your wallet.",
+      "The SlimeWire (Meteora) curve isn't set up yet. An owner needs to tap “Set up SlimeWire curve” once (creates the on-chain config). Use the Pump or Bonk rail meanwhile.",
       "METEORA_RAIL_NOT_ENABLED",
       501,
       { stage: PUMP_LAUNCH_STAGE.CONFIG }
@@ -42081,9 +42164,10 @@ async function webLaunchMeteoraDbc(userId, body, basePayload) {
   }
   // Lazy-load the heavy Meteora SDK only when the rail is actually used (keeps it off boot + hot path).
   const { buildMeteoraCreatePoolTransaction, isValidPublicKey: isValidSolanaPublicKey } = await import("./lib/meteoraLaunchService.js");
-  if (!CONFIG.meteoraDbcConfigKey || !isValidSolanaPublicKey(CONFIG.meteoraDbcConfigKey)) {
+  const meteoraConfigKey = getMeteoraConfigKey();
+  if (!meteoraConfigKey || !isValidSolanaPublicKey(meteoraConfigKey)) {
     throw createPumpLaunchError(
-      "Meteora rail is enabled but METEORA_DBC_CONFIG_KEY (the on-chain config that routes fees to the dev wallet) is missing or invalid.",
+      "Meteora rail is on but its on-chain config key is missing or invalid. Re-run “Set up SlimeWire curve”.",
       "METEORA_CONFIG_MISSING",
       500,
       { stage: PUMP_LAUNCH_STAGE.CONFIG }
@@ -42114,7 +42198,7 @@ async function webLaunchMeteoraDbc(userId, body, basePayload) {
   // 4) Build the DBC create-pool tx on the existing config (dev = creator/fee-claimer) via the SDK.
   const tx = await buildMeteoraCreatePoolTransaction({
     connection,
-    configKey: CONFIG.meteoraDbcConfigKey,
+    configKey: meteoraConfigKey,
     creatorPublicKey: creatorKeypair.publicKey.toBase58(),
     baseMintPublicKey: tokenMint,
     name: basePayload.name, symbol: basePayload.symbol, uri: metadata.uri,

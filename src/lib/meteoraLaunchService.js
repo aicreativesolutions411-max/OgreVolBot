@@ -14,11 +14,74 @@
 //     minimumAmountOut:BN, referralTokenAccount:null } }) -> Transaction
 //   client.creator.claimCreatorTradingFee({ creator, payer, pool, maxBaseAmount:BN, maxQuoteAmount:BN }) -> Transaction
 
-import { DynamicBondingCurveClient } from "@meteora-ag/dynamic-bonding-curve-sdk";
+import {
+  DynamicBondingCurveClient, PartnerService, buildCurveWithMarketCap,
+  TokenType, TokenDecimal, TokenAuthorityOption, CollectFeeMode,
+  MigrationOption, MigrationFeeOption, ActivationType, BaseFeeMode
+} from "@meteora-ag/dynamic-bonding-curve-sdk";
 import { PublicKey } from "@solana/web3.js";
 import BN from "bn.js";
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
+const SOL_MINT = "So11111111111111111111111111111111111111112";
+
+// Build the one-time DBC config-creation transaction. The config defines the curve + fee split for
+// every coin launched on the SlimeWire/Meteora rail. creatorTradingFeePercentage:100 → each coin's
+// fees go to its own launcher (the per-pool creator); feeClaimer is a zero-share partner placeholder.
+// Caller passes a fresh `configKeypair`; sign with [payerKeypair, configKeypair] then send.
+export async function buildMeteoraCreateConfigTransaction({
+  connection, commitment = "confirmed", configPublicKey, feeClaimer, payer,
+  initialMarketCap = 5000, migrationMarketCap = 69000
+}) {
+  if (!isValidPublicKey(configPublicKey)) throw new Error("Config public key invalid.");
+  if (!isValidPublicKey(feeClaimer)) throw new Error("Fee claimer (dev wallet) public key invalid.");
+  if (!isValidPublicKey(payer)) throw new Error("Payer public key invalid.");
+  const configParameters = buildCurveWithMarketCap({
+    initialMarketCap: Number(initialMarketCap) || 5000,
+    migrationMarketCap: Number(migrationMarketCap) || 69000,
+    activationType: ActivationType.Timestamp,
+    token: {
+      tokenType: TokenType.SPLToken,
+      tokenBaseDecimal: TokenDecimal.SIX,
+      tokenQuoteDecimal: TokenDecimal.NINE,
+      tokenAuthorityOption: TokenAuthorityOption.Immutable,
+      totalTokenSupply: 1_000_000_000,
+      leftover: 0
+    },
+    fee: {
+      baseFeeParams: {
+        baseFeeMode: BaseFeeMode.FeeSchedulerLinear,
+        feeSchedulerParam: { startingFeeBps: 100, endingFeeBps: 100, numberOfPeriod: 0, totalDuration: 0 }
+      },
+      dynamicFeeEnabled: false,
+      collectFeeMode: CollectFeeMode.QuoteToken,
+      creatorTradingFeePercentage: 100,          // 100% of fees to the per-coin creator (its launcher)
+      poolCreationFee: 0,
+      enableFirstSwapWithMinFee: false
+    },
+    migration: {
+      migrationOption: MigrationOption.MET_DAMM_V2,
+      migrationFeeOption: MigrationFeeOption.FixedBps25,
+      migrationFee: { feePercentage: 0, creatorFeePercentage: 0 }
+    },
+    liquidityDistribution: {
+      partnerPermanentLockedLiquidityPercentage: 0,
+      partnerLiquidityPercentage: 0,
+      creatorPermanentLockedLiquidityPercentage: 0,
+      creatorLiquidityPercentage: 100
+    },
+    lockedVesting: { totalLockedVestingAmount: 0, numberOfVestingPeriod: 0, cliffUnlockAmount: 0, totalVestingDuration: 0, cliffDurationFromMigrationTime: 0 }
+  });
+  const partner = new PartnerService(connection, commitment);
+  return partner.createConfig({
+    config: new PublicKey(configPublicKey),
+    feeClaimer: new PublicKey(feeClaimer),
+    leftoverReceiver: new PublicKey(feeClaimer),
+    quoteMint: new PublicKey(SOL_MINT),
+    payer: new PublicKey(payer),
+    ...configParameters
+  });
+}
 
 export function isValidPublicKey(value) {
   try { new PublicKey(String(value || "")); return true; } catch { return false; }

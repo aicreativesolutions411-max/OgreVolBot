@@ -2624,6 +2624,27 @@
     };
     tick();
   }
+  // SlimeWire (Meteora) curve status + one-time owner setup, shown under the rail picker when Meteora is picked.
+  async function refreshMeteoraSetup(){
+    const el=$("#lcMeteoraSetup");if(!el)return;
+    if((state.launchRail||"pump")!=="meteora"){el.innerHTML="";return;}
+    el.innerHTML='<span class="mut" style="font-size:11px">Checking SlimeWire curve…</span>';
+    const {ok,d}=await api("/api/web/launch/meteora-config").catch(()=>({}));
+    if(!(ok&&d)){el.innerHTML='<span class="mut" style="font-size:11px">Meteora status unavailable.</span>';return;}
+    if(d.configured){el.innerHTML='<div class="feebox" style="margin:0">🌊 <b>SlimeWire curve is LIVE.</b> Coins here launch on our own bonding curve — each coin\'s fees go to whoever launched it.</div>';return;}
+    el.innerHTML='<div class="feebox" style="margin:0">🌊 <b>SlimeWire curve isn\'t set up yet.</b> A one-time owner setup creates the on-chain curve (small SOL network fee). After that, anyone can launch on it.<br><button class="buybtn sm" id="lcMetSetupBtn" style="margin-top:8px">⚙️ Set up SlimeWire curve</button> <span class="mut" id="lcMetMsg" style="font-size:11px"></span></div>';
+    const btn=$("#lcMetSetupBtn");if(btn)btn.onclick=()=>setupMeteoraCurve();
+  }
+  async function setupMeteoraCurve(){
+    const key=prompt("Owner key — one-time, to create the SlimeWire curve on-chain:");
+    if(!key)return;
+    const btn=$("#lcMetSetupBtn"),msg=$("#lcMetMsg");
+    if(btn){btn.disabled=true;btn.textContent="Setting up…";}if(msg)msg.textContent="creating on-chain curve (~1 min)…";
+    const dw=$("#lcDevWallet");const devIdx=String(dw&&dw.value?dw.value:state.activeWallet);
+    const {ok,status,d}=await jpost("/api/web/launch/meteora-config",{key,devWalletIndex:devIdx});
+    if(ok&&d&&d.ok&&(d.configKey||d.already)){toast("🌊 SlimeWire curve is live!");refreshMeteoraSetup();}
+    else{if(btn){btn.disabled=false;btn.textContent="⚙️ Set up SlimeWire curve";}toast((d&&(d.error||d.detail))||("Setup failed ("+status+")"),true);}
+  }
   async function renderLaunch(){
     setActiveView("v-launch");subbarTool("🚀 Launch a Coin");if(state.token)await refreshWallets();if(state.route!=="launch")return;
     if(!state._launchKept){state.launchImg=null;state.launchBanner=null;}
@@ -2637,7 +2658,8 @@
           '<button type="button" data-rail="pump"'+(rail==="pump"?' class="on"':'')+'>💊 pump.fun<span>Biggest crowd</span></button>'+
           '<button type="button" data-rail="bonk"'+(rail==="bonk"?' class="on"':'')+'>🐸 SlimeWire<span>Launch with us</span></button>'+
           '<button type="button" data-rail="meteora"'+(rail==="meteora"?' class="on"':'')+'>🌊 Meteora<span>Our own pool · soon</span></button>'+
-        '</div><div class="mut" style="font-size:11px;margin-top:6px">No matter which you pick, <b>you own the coin</b> and its fees come back to your wallet.</div></div>'+
+        '</div><div class="mut" style="font-size:11px;margin-top:6px">No matter which you pick, <b>you own the coin</b> and its fees come back to your wallet.</div>'+
+        '<div id="lcMeteoraSetup" style="margin-top:8px"></div></div>'+
         '<div class="field row2"><div><label>Name</label><input id="lcName" maxlength="64" placeholder="My Coin"></div><div><label>Ticker</label><input id="lcSym" maxlength="12" placeholder="MYC"></div></div>'+
         '<div class="field"><label>Description</label><textarea id="lcDesc" maxlength="800" rows="2" placeholder="What\'s the meme?"></textarea></div>'+
         '<div class="field"><label>Image (icon)</label><input id="lcImg" type="file" accept="image/*"><div id="lcImgPrev" class="mut" style="font-size:11px;margin-top:6px">PNG / JPG / WEBP / GIF, up to ~450KB.</div></div>'+
@@ -2667,7 +2689,8 @@
     // Tab switching toggles panel visibility WITHOUT re-rendering, so typed fields + uploaded images survive.
     document.querySelectorAll("#v-launch [data-ltab]").forEach(b=>b.onclick=()=>{state.launchTab=b.dataset.ltab;document.querySelectorAll("#v-launch [data-ltab]").forEach(x=>x.classList.toggle("on",x===b));document.querySelectorAll("#v-launch [data-lpanel]").forEach(p=>p.style.display=(p.dataset.lpanel===b.dataset.ltab?"":"none"));if(b.dataset.ltab==="chat")lcWireChat();});
     // Rail picker (no re-render — keeps typed fields/images). meteora is dark; the backend returns a clear "test mode" message.
-    document.querySelectorAll("#lcRails [data-rail]").forEach(b=>b.onclick=()=>{state.launchRail=b.dataset.rail;document.querySelectorAll("#lcRails [data-rail]").forEach(x=>x.classList.toggle("on",x===b));});
+    document.querySelectorAll("#lcRails [data-rail]").forEach(b=>b.onclick=()=>{state.launchRail=b.dataset.rail;document.querySelectorAll("#lcRails [data-rail]").forEach(x=>x.classList.toggle("on",x===b));refreshMeteoraSetup();});
+    refreshMeteoraSetup();
     const readImg=(f,key,prevId,big)=>{if(!f)return;if(f.size>460000){toast("Image too big — keep it under ~450KB.",true);return;}const rd=new FileReader();rd.onload=()=>{state[key]={dataUrl:String(rd.result),name:f.name,type:f.type};state._launchKept=true;const p=$("#"+prevId);if(p)p.innerHTML='<img src="'+state[key].dataUrl+'" style="height:'+(big?"40":"64")+'px;'+(big?"":"width:64px;")+'border-radius:10px;object-fit:cover;border:1px solid var(--border)">';};rd.readAsDataURL(f);};
     $("#lcImg").onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchImg","lcImgPrev",false);
     const lb=$("#lcBanner");if(lb)lb.onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchBanner","lcBannerPrev",true);
