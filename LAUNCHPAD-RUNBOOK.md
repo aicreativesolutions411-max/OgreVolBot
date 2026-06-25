@@ -9,7 +9,7 @@ This is the operator checklist to take each from "built" to "live + proven".
 | 🐸 **SlimeWire (bonk / Raydium LaunchLab)** | **Live** (rides the proven PumpPortal path) | one tiny real test launch to confirm |
 | 🌊 **Meteora DBC** (own curve) | Built, **dark** | a DBC config + flip 2 env vars + one tiny real test launch |
 
-Dev fees: on pump + bonk the coin's **creator = the signing dev wallet**, so creator fees route to it automatically. On Meteora, the **config's fee claimer = the dev wallet** (set in Step B).
+**Fees go to whoever launches each coin — not one global wallet.** On every rail the coin's **creator = the exact wallet that launched it** (the per-launch wallet you pick in the launch form), and that's where its trading fees go. On pump/bonk the creator is the signing wallet. On Meteora the per-pool creator is the launching wallet and the config gives it **100% of the creator fee share** — the config's `feeClaimer` is a zero-share placeholder, so no single wallet skims everyone's launches.
 
 ---
 

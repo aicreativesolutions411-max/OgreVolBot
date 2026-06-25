@@ -31,7 +31,10 @@ const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] 
 
 const SEND = has("--send");
 const RPC = val("--rpc", process.env.READ_RPC_URL || process.env.RPC_URL || "https://api.mainnet-beta.solana.com");
-const FEE_CLAIMER = (process.env.METEORA_FEE_CLAIMER || val("--fee-claimer", "")).trim();   // your DEV wallet
+// NOTE: per-coin fees do NOT go here. Each launch's fees go to the wallet that launched THAT coin
+// (the per-pool creator), because the config sets creatorTradingFeePercentage = 100. This feeClaimer
+// is the config-level "partner" placeholder and earns 0% — defaults to the config creator's own wallet.
+const FEE_CLAIMER = (process.env.METEORA_FEE_CLAIMER || val("--fee-claimer", "")).trim();
 const INITIAL_MC = Number(val("--initial-mcap", process.env.METEORA_INITIAL_MCAP || "5000"));
 const MIGRATION_MC = Number(val("--migration-mcap", process.env.METEORA_MIGRATION_MCAP || "69000"));
 
@@ -44,9 +47,10 @@ function loadPayer() {
 }
 
 (async () => {
-  if (!FEE_CLAIMER) throw new Error("Set METEORA_FEE_CLAIMER=<your dev wallet pubkey> — that's where trading fees route.");
-  const feeClaimer = new PublicKey(FEE_CLAIMER);
   const payer = loadPayer();
+  // Per-coin fees route to each coin's own launcher (creator share = 100%). feeClaimer is just the
+  // zero-share partner placeholder — default it to the config creator so no single wallet is special.
+  const feeClaimer = FEE_CLAIMER ? new PublicKey(FEE_CLAIMER) : payer.publicKey;
   const connection = new Connection(RPC, "confirmed");
   const configKeypair = Keypair.generate();   // its pubkey is your METEORA_DBC_CONFIG_KEY
 
@@ -71,7 +75,7 @@ function loadPayer() {
       },
       dynamicFeeEnabled: false,
       collectFeeMode: CollectFeeMode.QuoteToken,       // collect in SOL → dev fees accrue in SOL
-      creatorTradingFeePercentage: 100,                // dev keeps 100% of the creator fee share
+      creatorTradingFeePercentage: 100,                // 100% to the per-coin CREATOR = whoever launched that coin
       poolCreationFee: 0,
       enableFirstSwapWithMinFee: false
     },
@@ -92,8 +96,8 @@ function loadPayer() {
   const partner = new PartnerService(connection, "confirmed");
   const tx = await partner.createConfig({
     config: configKeypair.publicKey,
-    feeClaimer,                          // ← dev wallet earns the trading fees
-    leftoverReceiver: feeClaimer,        // ← leftover base tokens also to the dev wallet
+    feeClaimer,                          // zero-share partner placeholder (creator% = 100 below)
+    leftoverReceiver: feeClaimer,        // post-migration leftover base tokens
     quoteMint: new PublicKey(SOL_MINT),
     payer: payer.publicKey,
     ...configParameters
@@ -105,7 +109,7 @@ function loadPayer() {
   tx.sign(payer, configKeypair);
 
   console.log(`RPC: ${RPC}`);
-  console.log(`fee claimer (dev wallet): ${feeClaimer.toBase58()}`);
+  console.log(`per-coin fees → each coin's own launcher (creator share 100%). partner placeholder: ${feeClaimer.toBase58()} (0%)`);
   console.log(`initial MC: $${INITIAL_MC} → migration MC: $${MIGRATION_MC} (graduates to DAMM v2)`);
   console.log(`NEW config pubkey → set METEORA_DBC_CONFIG_KEY=${configKeypair.publicKey.toBase58()}`);
 
