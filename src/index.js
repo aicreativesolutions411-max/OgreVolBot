@@ -43619,6 +43619,28 @@ async function topWalletsFeed(options = {}) {
     r.stBuyers = Math.max(r.stBuyers || 0, k.kolCount || 0);
     if (!r.buyers.some((b) => b.src === "st")) r.buyers.unshift({ name: (k.kolCount ? k.kolCount + " KOLs" : "Smart money"), roi: null, pfp: k.avatar || "", src: "st" });
   }
+  // ===== WINNER PICKS: fold the brain's EDGE-VALIDATED copy candidates =====================
+  // winnerFollowCache holds the SAME proven winners, but scored — backtest-validated copy-edge
+  // (btMult), composite apeScore, and copyTier A/B/C. Reading it here is FREE (the poller maintains
+  // it) and turns the panel from "wallets are in this" into "the brain has VALIDATED an edge copying
+  // these wallets HERE." Carries its own symbol/MC/age (DexScreener-fresh), so we tag the row and let
+  // those fields win over a generic metadata lookup. No-op when ST is off (cache stays empty).
+  for (const wf of (winnerFollowCache.rows || [])) {
+    const mint = wf && wf.tokenMint; if (!mint || mint === SOL_MINT) continue;
+    const sm = wf._smartMoney || {};
+    let r = byMint.get(mint);
+    if (!r) { r = { tokenMint: mint, buyerCount: 0, stBuyers: 0, lastBuyAt: Number(wf.lastAt) || Date.now(), buyers: [], _km: null }; byMint.set(mint, r); }
+    r._wf = wf;                                                          // carries fresh symbol/mc/age
+    r.edge = (sm.edge != null && Number.isFinite(Number(sm.edge))) ? Number(sm.edge) : null;
+    r.apeScore = Number(sm.apeScore) || 0;
+    r.copyTier = sm.copyTier || (sm.kol ? "C" : "probe");
+    r.winners = Number(sm.winners) || 0;
+    r.proven = Boolean(sm.kol) || r.winners >= 2 || (r.edge != null && r.edge >= 1.2);
+    const wc = Math.max(r.winners, 1);
+    r.buyerCount = Math.max(r.buyerCount || 0, wc);
+    r.stBuyers = Math.max(r.stBuyers || 0, wc);
+    if (!r.buyers.some((b) => b.src === "st")) r.buyers.unshift({ name: (r.winners ? r.winners + " winner" + (r.winners > 1 ? "s" : "") : "Proven winner"), roi: null, pfp: "", src: "st" });
+  }
   // Pre-rank wider by smart-money strength so we have enough to re-sort by age after enrichment.
   const rows = [...byMint.values()]
     .sort((a, b) => (b.stBuyers - a.stBuyers) || (b.buyerCount - a.buyerCount) || (b.lastBuyAt - a.lastBuyAt))
@@ -43627,30 +43649,43 @@ async function topWalletsFeed(options = {}) {
   const needMeta = rows.filter((r) => !r._km).map((r) => r.tokenMint);
   const metaMap = needMeta.length ? await tokenMetadataMapForMints(needMeta, { timeoutMs: 1_200, pumpTimeoutMs: 800 }).catch(() => new Map()) : new Map();
   for (const r of rows) {
-    const km = r._km; const m = metaMap.get(r.tokenMint) || {};
-    r.symbol = (km && km.symbol) || m.symbol || shortMint(r.tokenMint);
+    const km = r._km; const wf = r._wf; const m = metaMap.get(r.tokenMint) || {};
+    r.symbol = (km && km.symbol) || (wf && wf.symbol) || m.symbol || shortMint(r.tokenMint);
     r.name = (km && km.name) || m.name || "";
     r.imageUrl = (km && km.imageUrl) || m.imageUrl || m.imageUri || "";
-    r.marketCap = Number(firstMeaningfulNumber(km && km.marketCap, m.marketCap, m.fdv)) || null;
+    // winner-follow rows carry DexScreener-fresh MC/liq/age — prefer those, then KOL-scan, then meta.
+    r.marketCap = Number(firstMeaningfulNumber(km && km.marketCap, wf && wf.marketCap, m.marketCap, m.fdv)) || null;
     if (km && km.marketCapLabel) r.marketCapLabel = km.marketCapLabel;
-    // Coin age so the panel shows new-vs-old (KOL-cluster rows carry it; fall back to any createdAt in meta).
-    r.pairAgeSeconds = Number(firstMeaningfulNumber(km && km.pairAgeSeconds, m.pairAgeSeconds)) || null;
+    if (wf && Number(wf.liquidityUsd) > 0) r.liquidityUsd = Number(wf.liquidityUsd);
+    // Coin age so the panel shows new-vs-old (KOL-cluster / winner rows carry it; else any createdAt in meta).
+    r.pairAgeSeconds = Number(firstMeaningfulNumber(km && km.pairAgeSeconds, wf && wf.pairAgeSeconds, m.pairAgeSeconds)) || null;
     r.pairAgeLabel = (km && km.pairAgeLabel) || m.pairAgeLabel || "";
     const createdAtMs = Number(firstMeaningfulNumber(km && km.pairCreatedAt, m.pairCreatedAt, m.createdAt)) || null;
     if (!r.pairAgeSeconds && createdAtMs > 0) r.pairAgeSeconds = Math.max(0, Math.round((Date.now() - createdAtMs) / 1000));
     r.dexUrl = dexScreenerUrl(r.tokenMint);
-    delete r._km;
+    delete r._km; delete r._wf;
   }
-  // NEWEST-FIRST: now that age is enriched, lead with the freshest coins (rows without a known age sink),
-  // tiebreak by smart-money strength. This is the "sort by newest" the Top Wallet Picks list wants.
+  // WINNER PICKS RANKING: lead with the brain's EDGE-VALIDATED coins (tier A backtest-printer > B
+  // validated > C/proven confluence), best apeScore first within the validated band. Everything the
+  // brain hasn't validated falls back to NEWEST-FIRST (the "sort by newest" the list wants), tiebroken
+  // by smart-money strength. So when the brain has real edge it leads; when it's sparse the list still
+  // reads as a fresh top-wallet feed — no empty list, no fake badges.
+  const edgeRank = (r) => r.copyTier === "A" ? 3 : r.copyTier === "B" ? 2 : (r.proven || r.copyTier === "C") ? 1 : 0;
+  const ageOf = (r) => { const v = Number(r.pairAgeSeconds); return Number.isFinite(v) && v >= 0 ? v : Number.MAX_SAFE_INTEGER; };
   const outRows = rows.sort((a, b) => {
-    const av = Number.isFinite(Number(a.pairAgeSeconds)) ? Number(a.pairAgeSeconds) : Number.MAX_SAFE_INTEGER;
-    const bv = Number.isFinite(Number(b.pairAgeSeconds)) ? Number(b.pairAgeSeconds) : Number.MAX_SAFE_INTEGER;
-    return (av - bv) || (b.stBuyers - a.stBuyers) || (b.buyerCount - a.buyerCount);
+    const er = edgeRank(b) - edgeRank(a);
+    if (er) return er;
+    if (edgeRank(a) > 0) {                                              // both validated → best opportunity first
+      const as = (Number(b.apeScore) || 0) - (Number(a.apeScore) || 0);
+      if (as) return as;
+    }
+    return (ageOf(a) - ageOf(b)) || (b.stBuyers - a.stBuyers) || (b.buyerCount - a.buyerCount);
   }).slice(0, 24);
   const stRows = outRows.filter((r) => r.stBuyers > 0).length;
   const stActive = Boolean(CONFIG.solanaTrackerApiKey) && (stRows > 0 || stFolded > 0);
-  return { rows: outRows, walletCount: topWalletList.wallets.length, source: stActive ? "st+rpc" : (CONFIG.solanaTrackerApiKey ? "st(idle)+rpc" : "rpc"), updatedAt: new Date().toISOString() };
+  const edgeCount = outRows.filter((r) => edgeRank(r) >= 2).length;     // tier A/B — backtest-validated copy edge
+  const provenCount = outRows.filter((r) => edgeRank(r) >= 1).length;   // proven (incl. KOL / 2+ winner confluence)
+  return { rows: outRows, walletCount: topWalletList.wallets.length, edgeCount, provenCount, source: stActive ? "st+rpc" : (CONFIG.solanaTrackerApiKey ? "st(idle)+rpc" : "rpc"), updatedAt: new Date().toISOString() };
 }
 
 async function webKolScan(userId, mode = "hot", wallet = "") {

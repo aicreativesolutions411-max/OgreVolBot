@@ -130,6 +130,8 @@
   .cachip{cursor:pointer;transition:.12s}.cachip:hover{color:var(--green);border-color:rgba(114,255,35,.4);background:var(--green-dim)}.cachip .cc{opacity:.7;margin-left:2px}
   .chip.r{color:var(--red);border-color:rgba(255,93,93,.3);background:var(--red-dim)}
   .chip.y{color:var(--yellow);border-color:rgba(255,229,109,.3);background:rgba(255,229,109,.1)}
+  .chip.edge{color:#120c02;border-color:rgba(255,200,60,.55);background:linear-gradient(180deg,#ffd75a,#ffb52e);box-shadow:0 1px 9px rgba(255,190,50,.3)}
+  .chip.edge2{color:var(--green);border-color:rgba(114,255,35,.45);background:var(--green-dim)}
   .buybtn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:10px;font-weight:800;font-size:13px;color:#06140a;background:linear-gradient(180deg,var(--green2),var(--green));box-shadow:0 2px 12px rgba(114,255,35,.25);transition:.12s}
   .buybtn:hover{filter:brightness(1.08);transform:translateY(-1px)}.buybtn.sm{padding:7px 13px;font-size:12px}
   .star{background:none;border:0;color:var(--muted);font-size:16px;line-height:1;cursor:pointer;padding:2px 4px;transition:.12s}
@@ -1046,7 +1048,7 @@
   // data-mint; a card is only rebuilt when its data signature changes (so an unchanged card never has
   // its <img> reloaded → no flicker), and cards reorder/insert/remove in place. Pass a sig that captures
   // the visible mutable fields. Returns false when the container isn't card-keyed yet (do a full build).
-  function cardSig(r,i){return [i,r.marketCapLabel,r.liquidityLabel,volLabel(r),r.m5,r.score||r.bestPickScore,r.bestPickLabel,r.rugRisk,r.topWalletBuy?1:0,r.buyerCount,r.stBuyers,ageLabel(r),r.twitterUrl?1:0,r.telegramUrl?1:0,r.websiteUrl?1:0,r.imageUrl?1:0,r.buys5m,r.sells5m].join("|");}
+  function cardSig(r,i){return [i,r.marketCapLabel,r.liquidityLabel,volLabel(r),r.m5,r.score||r.bestPickScore,r.bestPickLabel,r.rugRisk,r.topWalletBuy?1:0,r.buyerCount,r.stBuyers,ageLabel(r),r.twitterUrl?1:0,r.telegramUrl?1:0,r.websiteUrl?1:0,r.imageUrl?1:0,r.buys5m,r.sells5m,r.copyTier,r.edge].join("|");}
   function syncCards(container,rows,buildFn,sigFn){
     if(!container)return false;
     const existing=new Map();
@@ -1210,7 +1212,7 @@
     wrap.dataset.mode="picks";
     const fresh=!wrap.querySelector(".pickwrap");
     if(fresh)wrap.innerHTML='<div class="picklayout"><div class="pickcol" style="width:100%;border:none">'+
-        '<div class="pickintro">🐳 <b>Top Wallet Picks</b> — what the tracked top wallets &amp; KOLs are buying right now, newest first. Not financial advice.</div>'+
+        '<div class="pickintro">🐳 <b>Top Wallet Picks</b> — coins the tracked top wallets &amp; KOLs are buying now. <b>🅰/🅱</b> = the brain has backtest-validated a copy edge on the wallets in that coin (those lead); the rest are newest-first. Not financial advice.</div>'+
         '<div class="pickwrap" id="pickWrap"><div class="loading" style="padding:30px"><span class="spin"></span></div></div></div></div>';
     const {ok,d}=await api("/api/web/top-wallets").catch(()=>({}));
     if(state.route!=="trenches"||state.trenchTab!=="picks")return;
@@ -1224,12 +1226,22 @@
     enrichSocials(rows).then(()=>{if(state.route==="trenches"&&state.trenchTab==="picks"&&rows.length){const p=$("#pickWrap");if(p&&!syncCards(p,rows,topPickCard))p.innerHTML=rows.map((r,i)=>topPickCard(r,i)).join("");}});
     state.pollT=setTimeout(()=>{if(state.route==="trenches"&&state.trenchTab==="picks")renderSlimePicks(wrap);},15000);
   }
+  // EDGE BADGE — the brain's backtest validation of copying the wallets in THIS coin. 🅰 = top-tier
+  // printer (copy-multiple ≥1.5×), 🅱 = validated (≥1.2×), ✓ proven = KOL / 2+ winner confluence
+  // (not yet backtest-graded). Absent when the brain has nothing validated on the coin (no fake edge).
+  function edgeBadge(r){
+    const edge=Number(r.edge),lbl=edge>=1?' '+edge.toFixed(1)+'×':'';
+    if(r.copyTier==="A")return'<span class="chip edge" title="Top-tier backtest-validated copy edge — the wallets here print '+(edge>=1?edge.toFixed(2)+'× on replay':'on replay')+'">🅰'+lbl+'</span>';
+    if(r.copyTier==="B")return'<span class="chip edge2" title="Backtest-validated copy edge'+(edge>=1?' ('+edge.toFixed(2)+'× on replay)':'')+'">🅱'+lbl+'</span>';
+    if(r.proven||r.copyTier==="C")return'<span class="chip g" title="Proven winners / KOL confluence buying here">✓ proven</span>';
+    return"";
+  }
   function topPickCard(r,i){
     const sm=Number(r.stBuyers)>0?'<span class="chip g" title="Solana Tracker proven-winner buy">smart $</span>':"";
     const who=(r.buyers||[]).slice(0,3).map(b=>esc(b.name||"wallet")).filter(Boolean).join(", ");
     return'<div class="card pick" data-mint="'+esc(r.tokenMint)+'" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+
       '<div class="prank">#'+(i+1)+'</div>'+avImg(r,"av")+
-      '<div class="body"><div class="top"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><span class="nm">'+esc(r.name||"")+'</span><span class="age">'+esc(ageLabel(r))+'</span><span class="chip g" title="distinct top wallets buying">🐳 '+(r.buyerCount||1)+'</span>'+sm+starBtn(r)+'</div>'+
+      '<div class="body"><div class="top"><b>'+esc(r.symbol||short(r.tokenMint))+'</b><span class="nm">'+esc(r.name||"")+'</span><span class="age">'+esc(ageLabel(r))+'</span>'+edgeBadge(r)+'<span class="chip g" title="distinct top wallets buying">🐳 '+(r.buyerCount||1)+'</span>'+sm+starBtn(r)+'</div>'+
       '<div class="stats"><span><i>MC</i>'+esc(r.marketCapLabel||fmtUsd(r.marketCap))+'</span><span><i>LIQ</i>'+esc(r.liquidityLabel||fmtUsd(r.liquidityUsd))+'</span><span><i>VOL</i>'+esc(volLabel(r))+'</span></div>'+
       (who?'<div class="mut" style="font-size:10.5px;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">👛 '+who+'</div>':'')+
       '<div class="row2">'+socialIconsHtml(r)+'<button class="buybtn sm" onclick="event.stopPropagation();GG.quickBuy(\''+esc(r.tokenMint)+'\')">⚡ Buy</button></div></div></div>';
