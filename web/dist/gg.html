@@ -1212,7 +1212,7 @@
     wrap.dataset.mode="picks";
     const fresh=!wrap.querySelector(".pickwrap");
     if(fresh)wrap.innerHTML='<div class="picklayout"><div class="pickcol" style="width:100%;border:none">'+
-        '<div class="pickintro">🐳 <b>Top Wallet Picks</b> — coins the tracked top wallets &amp; KOLs are buying now. <b>🅰/🅱</b> = the brain has backtest-validated a copy edge on the wallets in that coin (those lead); the rest are newest-first. Not financial advice.</div>'+
+        '<div class="pickintro">🐳 <b>Top Wallet Picks</b> — coins the tracked top wallets &amp; KOLs are buying now, strongest signal first. <b>🅰/🅱</b> = the brain backtest-validated a copy edge on the wallets here; <b>✓</b> = multi-KOL smart-money confluence; the rest are newest-first. Not financial advice.</div>'+
         '<div class="pickwrap" id="pickWrap"><div class="loading" style="padding:30px"><span class="spin"></span></div></div></div></div>';
     const {ok,d}=await api("/api/web/top-wallets").catch(()=>({}));
     if(state.route!=="trenches"||state.trenchTab!=="picks")return;

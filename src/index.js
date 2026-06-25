@@ -43608,6 +43608,9 @@ async function topWalletsFeed(options = {}) {
     const buyers = [...g.buyers.values()].sort((a, b) => b.at - a.at);
     byMint.set(mint, { tokenMint: mint, buyerCount: buyers.length, stBuyers: buyers.filter((b) => b.src === "st").length, lastBuyAt: g.lastAt, buyers: buyers.slice(0, 6).map((b) => ({ name: b.name, roi: b.roi, pfp: b.pfp, src: b.src || "rpc" })), _km: null });
   }
+  // Tier precedence (higher wins) so a real backtest grade is never downgraded by a confluence tag.
+  const TIER_RANK = { probe: 0, C: 1, B: 2, A: 3 };
+  const upgradeTier = (r, t) => { if ((TIER_RANK[t] ?? 0) > (TIER_RANK[r.copyTier] ?? 0)) r.copyTier = t; };
   // Merge in the live ST KOL clusters (the rich "N KOLs are buying this NOW" signal). buyerCount reflects
   // the KOL cluster size so a 17-KOL coin reads 🐳17; carries its own symbol/MC/image so it needs no extra lookup.
   const kolClusters = await stKolClusterRows();
@@ -43617,6 +43620,9 @@ async function topWalletsFeed(options = {}) {
     r._km = k;
     r.buyerCount = Math.max(r.buyerCount || 0, k.kolCount || 0);
     r.stBuyers = Math.max(r.stBuyers || 0, k.kolCount || 0);
+    // PROVEN CONFLUENCE: 4+ independent KOLs in one coin is real smart-money agreement — tier C (proven),
+    // not backtest-graded (that's the 🅰/🅱 band the winner-follow poller fills). Strongest clusters lead.
+    if ((k.kolCount || 0) >= 4) { r.proven = true; upgradeTier(r, "C"); }
     if (!r.buyers.some((b) => b.src === "st")) r.buyers.unshift({ name: (k.kolCount ? k.kolCount + " KOLs" : "Smart money"), roi: null, pfp: k.avatar || "", src: "st" });
   }
   // ===== WINNER PICKS: fold the brain's EDGE-VALIDATED copy candidates =====================
@@ -43633,9 +43639,9 @@ async function topWalletsFeed(options = {}) {
     r._wf = wf;                                                          // carries fresh symbol/mc/age
     r.edge = (sm.edge != null && Number.isFinite(Number(sm.edge))) ? Number(sm.edge) : null;
     r.apeScore = Number(sm.apeScore) || 0;
-    r.copyTier = sm.copyTier || (sm.kol ? "C" : "probe");
+    upgradeTier(r, sm.copyTier || (sm.kol ? "C" : "probe"));             // upgrade-only — never downgrade a confluence C
     r.winners = Number(sm.winners) || 0;
-    r.proven = Boolean(sm.kol) || r.winners >= 2 || (r.edge != null && r.edge >= 1.2);
+    r.proven = Boolean(r.proven) || Boolean(sm.kol) || r.winners >= 2 || (r.edge != null && r.edge >= 1.2);
     const wc = Math.max(r.winners, 1);
     r.buyerCount = Math.max(r.buyerCount || 0, wc);
     r.stBuyers = Math.max(r.stBuyers || 0, wc);
@@ -43672,12 +43678,14 @@ async function topWalletsFeed(options = {}) {
   // reads as a fresh top-wallet feed — no empty list, no fake badges.
   const edgeRank = (r) => r.copyTier === "A" ? 3 : r.copyTier === "B" ? 2 : (r.proven || r.copyTier === "C") ? 1 : 0;
   const ageOf = (r) => { const v = Number(r.pairAgeSeconds); return Number.isFinite(v) && v >= 0 ? v : Number.MAX_SAFE_INTEGER; };
+  // pick strength inside the validated band: backtest apeScore when graded, else raw confluence count.
+  const pickStrength = (r) => (Number(r.apeScore) || 0) || (Number(r.buyerCount) || 0);
   const outRows = rows.sort((a, b) => {
     const er = edgeRank(b) - edgeRank(a);
     if (er) return er;
-    if (edgeRank(a) > 0) {                                              // both validated → best opportunity first
-      const as = (Number(b.apeScore) || 0) - (Number(a.apeScore) || 0);
-      if (as) return as;
+    if (edgeRank(a) > 0) {                                              // both validated → strongest pick first
+      const ps = pickStrength(b) - pickStrength(a);
+      if (ps) return ps;
     }
     return (ageOf(a) - ageOf(b)) || (b.stBuyers - a.stBuyers) || (b.buyerCount - a.buyerCount);
   }).slice(0, 24);
