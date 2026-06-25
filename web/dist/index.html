@@ -2632,7 +2632,9 @@
     const {ok,d}=await api("/api/web/launch/meteora-config").catch(()=>({}));
     if(!(ok&&d)){el.innerHTML='<span class="mut" style="font-size:11px">Meteora status unavailable.</span>';return;}
     if(d.configured){el.innerHTML='<div class="feebox" style="margin:0">🌊 <b>SlimeWire curve is LIVE.</b> Coins here launch on our own bonding curve — each coin\'s fees go to whoever launched it.</div>';return;}
-    el.innerHTML='<div class="feebox" style="margin:0">🌊 <b>SlimeWire curve isn\'t set up yet.</b> One-time setup creates the on-chain curve (small SOL network fee from your wallet). After that, anyone can launch on it.<br><button class="buybtn sm" id="lcMetSetupBtn" style="margin-top:8px">⚙️ Set up SlimeWire curve</button> <span class="mut" id="lcMetMsg" style="font-size:11px"></span></div>';
+    el.innerHTML='<div class="feebox" style="margin:0">🌊 <b>SlimeWire curve isn\'t set up yet.</b> You set the curve <b>once</b> for ALL SlimeWire launches, then anyone can use it (small one-time SOL fee from your wallet).'+
+      '<div class="field row2" style="margin-top:8px"><div><label style="font-size:11px">Starting market cap ($)</label><input id="lcMetInitMc" inputmode="numeric" value="5000"></div><div><label style="font-size:11px">Graduates at ($)</label><input id="lcMetMigMc" inputmode="numeric" value="69000"></div></div>'+
+      '<button class="buybtn sm" id="lcMetSetupBtn" style="margin-top:8px">⚙️ Create SlimeWire curve</button> <span class="mut" id="lcMetMsg" style="font-size:11px"></span></div>';
     const btn=$("#lcMetSetupBtn");if(btn)btn.onclick=()=>setupMeteoraCurve();
   }
   async function setupMeteoraCurve(){
@@ -2641,7 +2643,9 @@
     const btn=$("#lcMetSetupBtn"),msg=$("#lcMetMsg");
     if(btn){btn.disabled=true;btn.textContent="Setting up…";}if(msg)msg.textContent="creating on-chain curve (~1 min)…";
     const dw=$("#lcDevWallet");const devIdx=String(dw&&dw.value?dw.value:state.activeWallet);
-    const {ok,status,d}=await jpost("/api/web/launch/meteora-config",{devWalletIndex:devIdx});
+    const initMc=Math.max(500,Number(($("#lcMetInitMc")&&$("#lcMetInitMc").value)||5000)||5000);
+    const migMc=Math.max(initMc*1.5,Number(($("#lcMetMigMc")&&$("#lcMetMigMc").value)||69000)||69000);
+    const {ok,status,d}=await jpost("/api/web/launch/meteora-config",{devWalletIndex:devIdx,initialMarketCap:initMc,migrationMarketCap:migMc});
     if(ok&&d&&d.ok&&(d.configKey||d.already)){toast("🌊 SlimeWire curve is live!");refreshMeteoraSetup();}
     else{if(btn){btn.disabled=false;btn.textContent="⚙️ Set up SlimeWire curve";}toast((d&&(d.error||d.detail))||("Setup failed ("+status+")"),true);}
   }
