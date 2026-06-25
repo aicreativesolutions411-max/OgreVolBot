@@ -42285,7 +42285,10 @@ function launchProviderErrorDetail(error) {
 
 async function webLaunchPumpCoin(userId, body = {}) {
   const launchAttemptId = firstString(body.launchAttemptId, body.clientRequestId) || crypto.randomUUID();
-  if (!CONFIG.pumpLaunchEnabled || !CONFIG.pumpLaunchApiUrl) {
+  // The Meteora rail is INDEPENDENT of PumpPortal (its own SDK path + flags), so the pump-enabled gate
+  // must not block it. pump + bonk both ride PumpPortal, so they still require the pump flags below.
+  const requestedRail = normalizeLaunchRail(body.rail || body.pool || body.launchpad);
+  if (requestedRail !== "meteora" && (!CONFIG.pumpLaunchEnabled || !CONFIG.pumpLaunchApiUrl)) {
     const error = createPumpLaunchError(
       "Direct Pump launch is not enabled yet. Set PUMP_LAUNCH_ENABLED=true and PUMP_LAUNCH_API_URL=https://pumpportal.fun/api/trade-local on Render.",
       "PUMP_LAUNCH_NOT_ENABLED",
