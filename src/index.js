@@ -69,6 +69,8 @@ import {
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix } from "./lib/vanityMint.js";
+// NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
+// so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
 import {
   assertPinataAuthWorks,
   assertPinataConfigured,
@@ -42072,22 +42074,66 @@ async function webLaunchMeteoraDbc(userId, body, basePayload) {
       { stage: PUMP_LAUNCH_STAGE.CONFIG }
     );
   }
-  if (!CONFIG.meteoraDbcConfigKey) {
+  // Lazy-load the heavy Meteora SDK only when the rail is actually used (keeps it off boot + hot path).
+  const { buildMeteoraCreatePoolTransaction, isValidPublicKey: isValidSolanaPublicKey } = await import("./lib/meteoraLaunchService.js");
+  if (!CONFIG.meteoraDbcConfigKey || !isValidSolanaPublicKey(CONFIG.meteoraDbcConfigKey)) {
     throw createPumpLaunchError(
-      "Meteora rail is enabled but METEORA_DBC_CONFIG_KEY (the on-chain config that routes fees to the dev wallet) is not set.",
+      "Meteora rail is enabled but METEORA_DBC_CONFIG_KEY (the on-chain config that routes fees to the dev wallet) is missing or invalid.",
       "METEORA_CONFIG_MISSING",
       500,
       { stage: PUMP_LAUNCH_STAGE.CONFIG }
     );
   }
-  // TODO(meteora): build + sign the DBC createPool tx via @meteora-ag/dynamic-bonding-curve-sdk using
-  // generateLaunchMintKeypair() (vanity baseMint) + the dev wallet as creator/fee-claimer, then send.
-  throw createPumpLaunchError(
-    "Meteora launch path is not implemented yet.",
-    "METEORA_RAIL_NOT_IMPLEMENTED",
-    501,
-    { stage: PUMP_LAUNCH_STAGE.CONFIG }
-  );
+  const attemptId = basePayload.clientRequestId;
+  // 1) Load + decrypt the chosen dev wallet — it is the pool CREATOR, so DBC creator fees accrue to it.
+  const store = await readWalletStore();
+  const selectedDevWalletId = firstString(basePayload.devBuy?.walletIndex, body.selectedDevWalletId, body.devWalletPublicKey);
+  const walletSelection = selectPumpLaunchWallet(store, userId, selectedDevWalletId);
+  const creatorWallet = walletSelection.wallet;
+  const creatorKeypair = decryptWallet(creatorWallet);
+
+  // 2) Metadata → IPFS (same pipeline as pump), 3) vanity SL1ME base mint (random fallback if pool empty).
+  const metadata = await uploadPumpLaunchMetadata(basePayload);
+  const mintKeypair = generateLaunchMintKeypair();
+  const tokenMint = mintKeypair.publicKey.toBase58();
+  const devBuySol = Math.max(0, Number(basePayload?.devBuy?.amountSol || 0));
+
+  await upsertPumpLaunchAttempt({
+    id: attemptId, userId, selectedDevWalletId, devWalletPublicKey: creatorKeypair.publicKey.toBase58(),
+    tokenName: basePayload.name, symbol: basePayload.symbol, mintPublicKey: tokenMint, rail: "meteora",
+    metadataUri: metadata.uri, status: PUMP_LAUNCH_STATUS.BUILDING_TX, stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL,
+    encryptedMintSecret: encryptSecret(Buffer.from(mintKeypair.secretKey)), mintSecretStored: true,
+    updatedAt: new Date().toISOString()
+  });
+
+  // 4) Build the DBC create-pool tx on the existing config (dev = creator/fee-claimer) via the SDK.
+  const tx = await buildMeteoraCreatePoolTransaction({
+    connection,
+    configKey: CONFIG.meteoraDbcConfigKey,
+    creatorPublicKey: creatorKeypair.publicKey.toBase58(),
+    baseMintPublicKey: tokenMint,
+    name: basePayload.name, symbol: basePayload.symbol, uri: metadata.uri,
+    devBuySol, minimumAmountOut: 0
+  });
+
+  // 5) Sign (creator + base mint) and send the legacy Transaction the SDK returns.
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+  tx.feePayer = creatorKeypair.publicKey;
+  tx.recentBlockhash = blockhash;
+  tx.sign(creatorKeypair, mintKeypair);
+  const signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 3 });
+  await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
+
+  await upsertPumpLaunchAttempt({ id: attemptId, status: PUMP_LAUNCH_STATUS.COMPLETE, txSignature: signature, tokenMint, updatedAt: new Date().toISOString() });
+  try {
+    const sym = escapeTelegramHtml(basePayload.symbol || basePayload.name || "???");
+    announceLaunchCard("launch", tokenMint, { name: basePayload.name, symbol: basePayload.symbol, description: basePayload.description, imageDataUrl: basePayload.imageDataUrl, x: basePayload.twitter, telegram: basePayload.telegram, website: basePayload.website }, buildLaunchAnnounceCaption(sym, tokenMint), launchAnnounceKb(tokenMint));
+  } catch (e) { console.warn(`[meteora-launch] announce failed: ${e && e.message}`); }
+  return {
+    status: PUMP_LAUNCH_STATUS.COMPLETE, tokenMint, signature, requestId: attemptId,
+    provider: "meteora-dbc", metadataUri: metadata.uri, dexUrl: dexScreenerUrl(tokenMint),
+    message: `SlimeWire (Meteora) launch returned ${shortMint(tokenMint)}.`
+  };
 }
 
 async function webLaunchPumpPortalLocal(userId, body, basePayload) {
