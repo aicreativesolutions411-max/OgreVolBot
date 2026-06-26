@@ -6686,6 +6686,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const store = await readPresales().catch(() => ({ presales: [] }));
       const now = Date.now();
       const presales = (store.presales || [])
+        // ESCROW presales are creator-only (managed via /api/web/presale/escrow) — never list them on the
+        // public non-custodial board, so no random user can fund the gated/unproven custody flow.
+        .filter((p) => !p.escrow)
         .map((p) => ({ ...p, backers: undefined, refs: undefined, backerCount: Array.isArray(p.backers) ? p.backers.length : 0, topRefs: Object.entries(p.refs || {}).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([tag, n]) => ({ tag, n })), live: Date.parse(p.deadline || "") > now }))
         .sort((a, b) => (b.live - a.live) || (Number(b.interest) || 0) - (Number(a.interest) || 0))
         .slice(0, 60);
@@ -38903,6 +38906,60 @@ function isNoTokenBalanceError(error) {
   return /no token balance|token account.*not found|no .*balance/i.test(String(error?.message || ""));
 }
 
+// A wallet that HOLDS the token but has ~no SOL can't pay the sell's network fee — the chain rejects it
+// at simulation ("Attempt to debit an account but found no record of a prior credit" / insufficient
+// lamports). Detect that case so we can top the wallet up and retry instead of surfacing a raw RPC error.
+function isInsufficientFeeError(error) {
+  return /debit an account but found no record of a prior credit|insufficient lamports|insufficient funds for (?:fee|rent)|attempt to debit an account/i.test(String(error?.message || ""));
+}
+
+// Move a sliver of SOL into `wallet` from the user's most-funded OTHER wallet so it can cover a sell's
+// network fee ("gasless" sell). Best-effort; only called AFTER a sell already failed for lack of fee SOL.
+async function topUpSellFees(store, userId, wallet) {
+  const FEE_TARGET = 5_000_000; // ~0.005 SOL — covers a couple of priority-fee'd transactions
+  const kp = decryptWallet(wallet);
+  const bal = Number(await getSolBalanceCached(kp.publicKey, { force: true }).catch(() => 0));
+  if (bal >= FEE_TARGET) return false; // already has enough — the failure was something else
+  const need = FEE_TARGET - bal;
+  const candidates = [];
+  for (const s of walletsForOwner(store, userId)) {
+    if (s.publicKey === wallet.publicKey || !s.secret) continue;
+    const sbal = Number(await getSolBalanceCached(new PublicKey(s.publicKey), { force: true }).catch(() => 0));
+    if (sbal > need + CONFIG.buyReserveLamports + 30_000) candidates.push({ s, sbal });
+  }
+  candidates.sort((a, b) => b.sbal - a.sbal); // fund from the most-funded sibling
+  for (const { s } of candidates) {
+    try {
+      const skp = decryptWallet(s);
+      const tx = new Transaction();
+      tx.add(SystemProgram.transfer({ fromPubkey: skp.publicKey, toPubkey: kp.publicKey, lamports: need }));
+      await sendLegacyTransaction(tx, [skp]);
+      invalidateWalletReadCache(s.publicKey);
+      invalidateWalletReadCache(wallet.publicKey);
+      await audit("sell_fee_topup", { userId, to: wallet.publicKey, from: s.publicKey, lamports: String(need) });
+      return true;
+    } catch { /* try the next funded sibling */ }
+  }
+  return false;
+}
+
+// Sell, and if it fails purely because the holding wallet can't afford the network fee, top it up from a
+// sibling wallet and retry ONCE. Any non-fee error (incl. no-token-balance) propagates unchanged.
+async function sellWithFeeRetry(store, userId, wallet, tokenMint, percent, slippageBps) {
+  try {
+    return await sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, { userId });
+  } catch (error) {
+    if (!isInsufficientFeeError(error)) throw error;
+    const funded = await topUpSellFees(store, userId, wallet).catch(() => false);
+    if (!funded) {
+      const e = new Error("This wallet holds the coin but has no SOL for the network fee, and no other wallet has SOL to cover it. Send a little SOL (~0.01) to this wallet, then sell.");
+      e.statusCode = 400;
+      throw e;
+    }
+    return await sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, { userId });
+  }
+}
+
 async function webTradeSell(userId, body = {}, options = {}) {
   return runManualSellCriticalAttempt(userId, body, options, (attempt) => webTradeSellCore(userId, body, options, attempt));
 }
@@ -38918,7 +38975,7 @@ async function webTradeSellCore(userId, body = {}, options = {}, attempt = {}) {
   const submitStartedAt = Date.now();
   let result;
   try {
-    result = await sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, { userId });
+    result = await sellWithFeeRetry(store, userId, wallet, tokenMint, percent, slippageBps);
   } catch (error) {
     // The active wallet doesn't hold this coin (the common cause of "sell server error"):
     // find the managed wallet that actually does and sell from there. If none hold it, the
@@ -38927,7 +38984,7 @@ async function webTradeSellCore(userId, body = {}, options = {}, attempt = {}) {
       const holder = await findManagedWalletHoldingToken(store, userId, tokenMint, wallet.publicKey);
       if (holder) {
         wallet = holder;
-        result = await sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, { userId });
+        result = await sellWithFeeRetry(store, userId, wallet, tokenMint, percent, slippageBps);
       } else {
         const friendly = new Error("None of your SlimeWire wallets hold this coin to sell. If you bought it with a connected browser wallet (Phantom/Solflare), sell it from that wallet.");
         friendly.statusCode = 400;

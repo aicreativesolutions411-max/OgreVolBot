@@ -145,6 +145,22 @@ test("promoter fee-split: stored on the coin + idempotent split-send reusing the
   assert.match(serverSource, /pathname === "\/api\/web\/launch\/split-creator-fees"/);
 });
 
+test("sell auto-funds the fee from a sibling wallet when the holder has no SOL", () => {
+  // The fee-less-sell sim error is detected + the sell retried after a top-up.
+  assert.match(functionBody(serverSource, "isInsufficientFeeError"), /debit an account but found no record of a prior credit/);
+  assert.match(serverSource, /async function topUpSellFees\(/);
+  assert.match(functionBody(serverSource, "topUpSellFees"), /SystemProgram\.transfer/);
+  assert.match(functionBody(serverSource, "topUpSellFees"), /sell_fee_topup/);
+  // webTradeSellCore routes BOTH its attempts through the fee-retry wrapper.
+  const body = functionBody(serverSource, "webTradeSellCore");
+  assert.match(body, /sellWithFeeRetry\(store, userId, wallet, tokenMint, percent, slippageBps\)/);
+  assert.doesNotMatch(body, /await sellTokenFromWallet\(/); // the raw call moved into sellWithFeeRetry
+});
+
+test("escrow presales never appear on the public non-custodial board", () => {
+  assert.match(serverSource, /ESCROW presales are creator-only[\s\S]*?\.filter\(\(p\) => !p\.escrow\)/);
+});
+
 test("presale escrow is fully GATED behind PRESALE_ESCROW_ENABLED (custody stays off)", () => {
   assert.match(serverSource, /function presaleEscrowEnabled\(\)/);
   // Every mutating escrow fn asserts the flag first (501 in test mode).
