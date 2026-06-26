@@ -58,11 +58,14 @@ export function slimeWireCurveParameters(initialMarketCap = 5000, migrationMarke
       migrationFeeOption: MigrationFeeOption.FixedBps25,
       migrationFee: { feePercentage: 0, creatorFeePercentage: 0 }
     },
+    // Meteora requires >=10% of the migrated LP locked at day 1 (anti-rug). Lock 100% permanently —
+    // the trustworthy, pump-style default (LP can't be pulled = rug-proof). The creator still earns
+    // 100% of TRADING fees (creatorTradingFeePercentage above); locked LP and fees are separate.
     liquidityDistribution: {
       partnerPermanentLockedLiquidityPercentage: 0,
       partnerLiquidityPercentage: 0,
-      creatorPermanentLockedLiquidityPercentage: 0,
-      creatorLiquidityPercentage: 100
+      creatorPermanentLockedLiquidityPercentage: 100,
+      creatorLiquidityPercentage: 0
     },
     lockedVesting: { totalLockedVestingAmount: 0, numberOfVestingPeriod: 0, cliffUnlockAmount: 0, totalVestingDuration: 0, cliffDurationFromMigrationTime: 0 }
   });
