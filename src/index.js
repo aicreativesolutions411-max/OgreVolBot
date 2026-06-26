@@ -42191,7 +42191,13 @@ async function webLaunchMeteoraDbc(userId, body, basePayload) {
   await upsertPumpLaunchAttempt({
     id: attemptId, userId, selectedDevWalletId, devWalletPublicKey: creatorPk,
     tokenName: basePayload.name, symbol: basePayload.symbol, mintPublicKey: tokenMint, rail: "meteora",
-    metadataUri: metadata.uri, status: PUMP_LAUNCH_STATUS.BUILDING_TX, stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL,
+    metadataUri: metadata.uri,
+    // Store the image + metadata JSON so the SlimeWire coin page/feed shows the image INSTANTLY (same
+    // as pump) instead of waiting for DexScreener to index the brand-new coin.
+    imageUri: metadata.imageUri || metadata.imageUrl || "",
+    imageContentType: metadata.imageContentType || "",
+    metadataJson: metadata.metadata || null,
+    status: PUMP_LAUNCH_STATUS.BUILDING_TX, stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL,
     encryptedMintSecret: encryptSecret(Buffer.from(mintKeypair.secretKey)), mintSecretStored: true,
     updatedAt: new Date().toISOString()
   });
