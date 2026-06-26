@@ -583,7 +583,9 @@
   async function refreshWallets(){
     if(!state.token)return;
     const {ok,status,d}=await api("/api/web/balances");
-    if(status===401){setToken("");state.wallets=[];state.user=null;updateWalletPill();return;}
+    // Never wipe the session while we hold wallets — a transient 401 read otherwise orphaned them
+    // ("buy after restore says reconnect"). Only downgrade a session that has nothing to lose.
+    if(status===401){if(!(state.wallets||[]).length){setToken("");state.user=null;updateWalletPill();}return;}
     if(ok&&d&&d.ok){
       state.wallets=d.balances||[];
       if(state.wallets.length&&(state.activeWallet==null||!state.wallets.some(w=>w.index===state.activeWallet)))state.activeWallet=state.wallets[0].index;
@@ -673,12 +675,12 @@
   async function sweepSol(destination,walletIndexes){
     const {ok,d}=await jpost("/api/web/wallets/sweep-sol",{destination,walletIndexes});
     if(ok&&d&&d.ok&&d.sweep){toast(d.sweep.summary||"Swept SOL");refreshWallets();return true;}
-    toast((d&&d.error)||"Sweep failed",true);return false;
+    toast((d&&(d.message||d.error))||"Sweep failed",true);return false;
   }
   async function sweepTokens(destination,walletIndexes){
     const {ok,d}=await jpost("/api/web/wallets/sweep-tokens",{destination,walletIndexes});
     if(ok&&d&&d.ok&&d.sweep){toast(d.sweep.summary||"Swept tokens");refreshWallets();return true;}
-    toast((d&&d.error)||"Token sweep failed",true);return false;
+    toast((d&&(d.message||d.error))||"Token sweep failed",true);return false;
   }
   // ---------- fund recovery / exits ----------
   async function sellAllTokens(dest){
@@ -687,7 +689,9 @@
     toast((d&&(d.message||d.error))||"Sell-all failed",true);return false;
   }
   async function sendSolTo(idx,dest,amt){
-    const {ok,d}=await jpost("/api/web/wallets/send-sol",{walletIndex:idx,destination:dest,amountSol:String(amt)});
+    // tradeAttemptId makes a fixed-amount transfer idempotent server-side — a network retry of THIS call
+    // (jpost re-POSTs the same body on 403) replays the result instead of sending the SOL twice.
+    const {ok,d}=await jpost("/api/web/wallets/send-sol",{walletIndex:idx,destination:dest,amountSol:String(amt),tradeAttemptId:attemptId()});
     if(ok&&d&&d.ok){toast((d.sweep&&(d.sweep.summary||d.sweep.message))||("Sent ◎"+Number(amt).toFixed(3)));await refreshWallets();return true;}
     toast((d&&(d.message||d.error))||"Send failed",true);return false;
   }
@@ -1318,7 +1322,7 @@
       if(tp)body.takeProfitPct=tp; if(sl)body.stopLossPct=sl;
       const {ok,status,d}=await jpost("/api/web/launch/watch",body);
       ab.disabled=false;ab.textContent="🎯 Arm sniper";
-      if(status===401){setToken("");go("wallet");return;}
+      if(status===401){toast("Couldn't authorize — open Wallet and reconnect.",true);go("wallet");return;}
       if(ok&&d&&d.watch){state.sniperWatch={id:d.watch.id,ticker:d.watch.ticker};toast("🎯 Armed on server — watching for "+tick);refreshSniperStatus();}
       else toast((d&&(d.error||d.message))||"Could not arm sniper",true);
     };
@@ -2089,7 +2093,7 @@
     if(state.posCache)paintPositions(view,state.posCache);else view.innerHTML='<div class="loading"><span class="spin"></span></div>';
     const {ok,status,d}=await api("/api/web/positions");
     if(state.route!=="portfolio"||state.portfolioTab!=="positions")return;
-    if(status===401){setToken("");renderPortfolio();return;}
+    if(status===401){return;}   // transient read 401 — keep cache + session, don't wipe the token
     if(!ok||!d||!d.ok){if(!state.posCache)view.innerHTML='<div class="empty"><div class="big">⚠</div><div><b>Could not load positions</b><br><span class="mut">'+esc((d&&d.error)||"Try again in a moment.")+'</span></div></div>';return;}
     state.posCache=d.positions||[];paintPositions(view,state.posCache);
     try{localStorage.setItem("ggPosCache",JSON.stringify(state.posCache));}catch(e){}
@@ -2125,7 +2129,7 @@
   async function renderPnlCards(view){
     const {ok,status,d}=await api("/api/web/pnl");
     if(state.route!=="portfolio"||state.portfolioTab!=="cards")return;
-    if(status===401){setToken("");renderPortfolio();return;}
+    if(status===401){return;}   // transient read 401 — keep cache + session, don't wipe the token
     const pnl=(d&&d.pnl)||null;
     if(!ok||!pnl){view.innerHTML='<div class="empty"><div class="big">⚠</div><div><b>Could not load PnL</b><br><span class="mut">'+esc((d&&d.error)||"Try again in a moment.")+'</span></div></div>';return;}
     const t=pnl.totals||{},toks=pnl.tokens||[];
@@ -2574,10 +2578,12 @@
     const buyBias=shape==="uptrend"?75:55;
     const src=Number(($("#vlSrc")||{}).value||state.activeWallet);
     const bMin=Number($("#vlBuyMin").value.trim()||"0.012"),bMax=Number($("#vlBuyMax").value.trim()||"0.03");
-    const go=$("#vlGo");go.disabled=true;go.textContent="Starting…";
-    const {ok,status,d}=await jpost("/api/web/volume-bot/start",{tokenMint:ca,sourceWalletIndex:src,buyAmountSol:String(((bMin+bMax)/2)||0.02),minBuyAmountSol:String(bMin),maxBuyAmountSol:String(bMax),poolSize:"3",sellPercent:"100",buyBias:String(buyBias),delaySecs:String(delaySecs),slippageBps:Number($("#vlSlip").value.trim()||"600"),rollingWallets:true,offsetSell:true,keepDust:$("#vlLeave").checked,sweepBack:true,staggerPattern:staggerPattern,maxRounds:"250"});
-    go.disabled=false;go.textContent="▶ Start volume bot";
-    if(status===401){setToken("");go("wallet");return;}
+    const goBtn=$("#vlGo");goBtn.disabled=true;goBtn.textContent="Starting…";
+    const {ok,status,d}=await jpost("/api/web/volume-bot/start",{tokenMint:ca,sourceWalletIndex:src,buyAmountSol:String(((bMin+bMax)/2)||0.02),minBuyAmountSol:String(bMin),maxBuyAmountSol:String(bMax),poolSize:"3",sellPercent:"100",buyBias:String(buyBias),delaySecs:String(delaySecs),slippageBps:Number($("#vlSlip").value.trim()||"600"),rollingWallets:true,offsetSell:true,keepDust:$("#vlLeave").checked,sweepBack:true,staggerPattern:staggerPattern,maxRounds:"250",tradeAttemptId:attemptId()});
+    goBtn.disabled=false;goBtn.textContent="▶ Start volume bot";
+    // Don't wipe the token on a transient 401 (orphan-on-restore) — route to Wallet. (`go` here was the
+    // BUTTON var, so the old `go("wallet")` even threw instead of navigating.)
+    if(status===401){toast("Couldn't authorize — open Wallet and reconnect.",true);go("wallet");return;}
     if(ok&&d&&d.ok){toast("Volume bot started — running in the background");pollVolumeBot();}
     else toast((d&&(d.error||d.message))||"Could not start volume bot",true);
   }
@@ -2768,7 +2774,9 @@
         else toast("Add more wallets (Wallet tab) to bundle-buy from — launching without it.",true);
       }
       const {ok,status,d}=await jpost("/api/web/launch/coin",body);
-      if(status===401){setToken("");go("wallet");return;}
+      // Re-enable the button + route to Wallet WITHOUT wiping the token (the old wipe orphaned a just-
+      // restored wallet, and returning left the button stuck on "Launching…" forever).
+      if(status===401){b.disabled=false;b.textContent="🚀 Launch token";toast("Couldn't authorize — open Wallet and reconnect.",true);go("wallet");return;}
       const aid=(d&&d.launch&&d.launch.launchAttemptId)||body.launchAttemptId;
       if(ok&&d&&(d.ok||d.launch)){state._launchKept=true;pollLaunchProgress(aid,b);}
       else{b.disabled=false;b.textContent="🚀 Launch token";toast((d&&(d.error||d.message))||"Launch failed",true);}

@@ -55,21 +55,67 @@ test("server sell dedup honors the web terminal's tradeAttemptId", () => {
   assert.match(body, /LockService\.withLock/);
 });
 
-test("buy path is idempotent: webTradeBuy wraps webTradeBuyCore behind a per-attempt lock", () => {
-  // The real buy logic moved into a *Core fn; the public fn is now the idempotency wrapper.
+test("buy path is idempotent: webTradeBuy wraps webTradeBuyCore via runIdempotentMoneyOp", () => {
+  // The real buy logic moved into a *Core fn; the public fn delegates to the shared idempotency wrapper.
   assert.match(serverSource, /async function webTradeBuyCore\(userId, body = \{\}\) \{/);
   const wrapper = functionBody(serverSource, "webTradeBuy");
-  assert.match(wrapper, /normalizeManualSellAttemptId\(firstString\(body\.tradeAttemptId, body\.clientRequestId\)\)/);
-  // No id → behaves exactly as before (runs core directly): back-compat is mandatory on the money path.
-  assert.match(wrapper, /if \(!attemptId\) return webTradeBuyCore\(userId, body\)/);
-  // Cached-result replay for repeats + a lock so two concurrent requests can't both spend.
-  assert.match(wrapper, /web-buy-result:/);
-  assert.match(wrapper, /web-buy:/);
-  assert.match(wrapper, /LockService\.withLock/);
-  assert.match(wrapper, /cacheSetJson\(resultKey, \{ result \}, 120_000\)/);
+  assert.match(wrapper, /runIdempotentMoneyOp\("web-buy", userId/);
+  assert.match(wrapper, /firstString\(body\.tradeAttemptId, body\.clientRequestId\)/);
   assert.match(wrapper, /webTradeBuyCore\(userId, body\)/);
   // The actual swap still happens exactly once, in the core fn.
   assert.match(functionBody(serverSource, "webTradeBuyCore"), /buyTokenForPlan\(/);
+});
+
+test("runIdempotentMoneyOp replays the same attempt and serializes concurrent ones", () => {
+  const body = functionBody(serverSource, "runIdempotentMoneyOp");
+  // No id → runs the task directly (back-compat for callers that don't stamp one).
+  assert.match(body, /if \(!id\) return task\(\)/);
+  // Cached-result replay for repeats + a lock so two concurrent requests can't both spend.
+  assert.match(body, /idemResultGet\(resultKey\)/);
+  assert.match(body, /LockService\.withLock/);
+  assert.match(body, /idemResultSet\(resultKey, \{ result \}/);
+  // Durable-fallback cache so idempotency survives a brief Redis outage in-process.
+  assert.match(functionBody(serverSource, "idemResultGet"), /cacheGetJson\(key\)[\s\S]*idemResultStore\.get\(key\)/);
+});
+
+test("the other money endpoints (send-sol, volume-bot, distribute) are idempotency-wrapped", () => {
+  assert.match(functionBody(serverSource, "webSendSolMany"), /runIdempotentMoneyOp\("web-send-sol", userId/);
+  assert.match(serverSource, /async function webSendSolManyCore\(/);
+  assert.match(functionBody(serverSource, "webStartVolumeBot"), /runIdempotentMoneyOp\("web-volume-start", userId/);
+  assert.match(serverSource, /async function webStartVolumeBotCore\(/);
+  // Dup-plan guard: never fund a 2nd bot for a coin already running.
+  assert.match(functionBody(serverSource, "webStartVolumeBotCore"), /A volume bot is already running for this coin/);
+  assert.match(functionBody(serverSource, "webDistributeToFreshWallets"), /runIdempotentMoneyOp\("web-distribute", userId/);
+});
+
+test("wallet/trade-plan/web-auth stores are mutated under a per-file lock", () => {
+  assert.match(serverSource, /async function mutateWalletStore\(fn\)/);
+  assert.match(serverSource, /async function mutateTradePlans\(fn\)/);
+  assert.match(serverSource, /async function mutateWebAuthStore\(fn\)/);
+  // The wallet creators/importers/taggers go through it (lost-update = lost funds).
+  assert.match(functionBody(serverSource, "createWebWalletSet"), /mutateWalletStore\(/);
+  assert.match(functionBody(serverSource, "importWebWallet"), /mutateWalletStore\(/);
+  assert.match(functionBody(serverSource, "getSubDepositWallet"), /mutateWalletStore\(/);
+  // audit log is capped + locked (was unbounded O(n) write per money op).
+  assert.match(functionBody(serverSource, "audit"), /withFileLock\(auditPath\(\)/);
+  assert.match(functionBody(serverSource, "audit"), /slice\(-2000\)/);
+});
+
+test("subscription grant is idempotent + re-entrancy-guarded (no stacked free time)", () => {
+  const body = functionBody(serverSource, "checkSubscriptionPayments");
+  assert.match(body, /if \(subWatcherRunning\) return/);
+  assert.match(body, /subDepositGrantLedger/);
+  assert.match(body, /balLamports - grantedFor >= thresholdLamports/);
+});
+
+test("Meteora dark-rail gate covers the custom-curve branch too", () => {
+  const body = functionBody(serverSource, "webLaunchMeteoraDbc");
+  // The enablement throw must come BEFORE the customCurve branch (not be nested inside !customCurve).
+  const gateIdx = body.indexOf("METEORA_RAIL_NOT_ENABLED");
+  const customIdx = body.indexOf("if (customCurve) {");
+  assert.ok(gateIdx > -1 && customIdx > -1 && gateIdx < customIdx, "rail gate must precede the custom-curve send path");
+  // On-chain confirmation errors are now surfaced, not silently ignored.
+  assert.match(body, /METEORA_CONFIG_TX_FAILED|METEORA_POOL_TX_FAILED/);
 });
 
 for (const [label, source] of [["gg.html", ggSource], ["index.html", indexSource]]) {

@@ -76,7 +76,9 @@ test("backend manual sell uses critical attempt idempotency without changing sel
   assert.match(serverSource, /async function runManualSellCriticalAttempt/);
   assert.match(serverSource, /manual-sell:/);
   assert.match(serverSource, /LockService\.withLock/);
-  assert.match(serverSource, /cacheSetJson\(resultKey, \{ result \}, 120_000\)/);
+  assert.match(serverSource, /idemResultSet\(resultKey, \{ result \}, 120_000\)/);
+  // Only a REAL submission is cached for replay — an all-failed bundle sell must not be cached as SUBMITTED.
+  assert.match(serverSource, /if \(manualSellResultSubmitted\(result\)\) \{\s*await idemResultSet/);
   assert.match(functionBody(serverSource, "webBundleSellCore"), /sellTokenFromWallet\(wallet, tokenMint, percent, slippageBps, \{ userId \}\)/);
   assert.match(functionBody(serverSource, "webTradeSellCore"), /sellTokenFromWallet\(wallet, tokenMint, percent, slippageBps, \{ userId \}\)/);
 });

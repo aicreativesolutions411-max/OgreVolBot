@@ -315,52 +315,79 @@ async function autopilotSubActive(userId) {
   return Number.isFinite(exp) && exp > Date.now();
 }
 async function grantAutopilotSub(userId, days = CONFIG.subDays) {
-  const store = await readAutopilotSubs();
-  const cur = Date.parse(store.subs[userId]?.expiresAt || "");
-  const base = Number.isFinite(cur) && cur > Date.now() ? cur : Date.now();
-  const expiresAt = new Date(base + days * 24 * 60 * 60 * 1000).toISOString();
-  store.subs[userId] = { ...(store.subs[userId] || {}), expiresAt, grantedAt: new Date().toISOString() };
-  await writeJsonFile(AUTOPILOT_SUBS_FILE, store);
+  // Lock the subs-file read-modify-write so a concurrent grant/trial write can't clobber it.
+  const granted = await withFileLock(AUTOPILOT_SUBS_FILE, async () => {
+    const store = await readAutopilotSubs();
+    const cur = Date.parse(store.subs[userId]?.expiresAt || "");
+    const base = Number.isFinite(cur) && cur > Date.now() ? cur : Date.now();
+    const expiresAt = new Date(base + days * 24 * 60 * 60 * 1000).toISOString();
+    store.subs[userId] = { ...(store.subs[userId] || {}), expiresAt, grantedAt: new Date().toISOString() };
+    await writeJsonFile(AUTOPILOT_SUBS_FILE, store);
+    return store.subs[userId];
+  });
   // Make sure a savable access key exists the moment they're paid up.
   try { await autopilotAccessKeyFor(userId); } catch {}
-  return store.subs[userId];
+  return granted;
 }
 // Each subscriber gets a unique deposit address (a managed wallet) so payments
 // attribute cleanly. Paying the monthly price there auto-unlocks 30 days and the
 // SOL is swept to the owner's receive wallet.
 const SUB_DEPOSIT_OWNER = "__sub_deposits__";
 async function getSubDepositWallet(userId) {
-  const store = await readWalletStore();
   const label = `subdep:${userId}`;
-  let w = store.wallets.find((x) => String(x.ownerId) === SUB_DEPOSIT_OWNER && x.label === label);
-  if (!w) {
-    const kp = Keypair.generate();
-    w = walletRecord(label, kp, SUB_DEPOSIT_OWNER);
-    store.wallets.push(w);
-    await writeWalletStore(store);
-  }
-  return w;
+  const existing = (await readWalletStore()).wallets.find((x) => String(x.ownerId) === SUB_DEPOSIT_OWNER && x.label === label);
+  if (existing) return existing;
+  // Create under the wallet-store lock with a re-check, so two concurrent first-time callers can't each
+  // push a deposit wallet (one of which would then be dropped by the lost-update race).
+  return mutateWalletStore((store) => {
+    let w = store.wallets.find((x) => String(x.ownerId) === SUB_DEPOSIT_OWNER && x.label === label);
+    if (!w) {
+      const kp = Keypair.generate();
+      w = walletRecord(label, kp, SUB_DEPOSIT_OWNER);
+      store.wallets.push(w);
+    }
+    return w;
+  });
 }
+let subWatcherRunning = false;
+// deposit pubkey -> lamports we've already GRANTED access for. A failed/lagging sweep leaves the balance
+// sitting above threshold; without this it re-triggered a grant every tick and stacked free 30-day
+// extensions. Cleared once a sweep clears the wallet, so a genuine NEW deposit can grant again.
+const subDepositGrantLedger = new Map();
 async function checkSubscriptionPayments() {
   if (!CONFIG.subEnabled || !(CONFIG.subPriceSol > 0)) return;
-  let receive;
-  try { receive = new PublicKey(CONFIG.subReceiveWallet); } catch { return; }
-  const store = await readWalletStore();
-  const deposits = store.wallets.filter((x) => String(x.ownerId) === SUB_DEPOSIT_OWNER);
-  for (const w of deposits) {
-    try {
-      const bal = Number(await getSolBalanceCached(new PublicKey(w.publicKey), { force: true })) / 1_000_000_000;
-      if (bal >= CONFIG.subPriceSol * 0.98) {
-        const userId = w.label.replace(/^subdep:/, "");
-        await grantAutopilotSub(userId, CONFIG.subDays);
-        try {
-          const kp = decryptWallet(w);
-          await drainSolFromWallet(kp, receive);
-          invalidateWalletReadCache(w.publicKey);
-        } catch (e) { console.warn(`[subs] sweep failed for ${userId}: ${e && e.message}`); }
-        console.log(`[subs] payment ${bal} SOL -> unlocked ${userId} for ${CONFIG.subDays}d + swept to receive wallet`);
-      }
-    } catch {}
+  if (subWatcherRunning) return;   // re-entrancy guard: a slow tick must not overlap the next 60s tick
+  subWatcherRunning = true;
+  try {
+    let receive;
+    try { receive = new PublicKey(CONFIG.subReceiveWallet); } catch { return; }
+    const store = await readWalletStore();
+    const deposits = store.wallets.filter((x) => String(x.ownerId) === SUB_DEPOSIT_OWNER);
+    const thresholdLamports = Math.round(CONFIG.subPriceSol * 0.98 * 1_000_000_000);
+    for (const w of deposits) {
+      try {
+        const balLamports = Number(await getSolBalanceCached(new PublicKey(w.publicKey), { force: true }));
+        if (balLamports >= thresholdLamports) {
+          const userId = w.label.replace(/^subdep:/, "");
+          // Grant once per payment: only when the balance is at least one FULL price above what we've
+          // already credited (a stuck/dust balance can't re-trigger; a real second deposit still does).
+          const grantedFor = subDepositGrantLedger.get(w.publicKey) || 0;
+          if (balLamports - grantedFor >= thresholdLamports) {
+            await grantAutopilotSub(userId, CONFIG.subDays);
+            subDepositGrantLedger.set(w.publicKey, balLamports);
+            console.log(`[subs] payment ${(balLamports / 1e9).toFixed(4)} SOL -> unlocked ${userId} for ${CONFIG.subDays}d`);
+          }
+          try {
+            const kp = decryptWallet(w);
+            await drainSolFromWallet(kp, receive);
+            invalidateWalletReadCache(w.publicKey);
+            subDepositGrantLedger.delete(w.publicKey);   // swept clean → a fresh deposit can grant again
+          } catch (e) { console.warn(`[subs] sweep failed for ${userId}: ${e && e.message}`); }
+        }
+      } catch {}
+    }
+  } finally {
+    subWatcherRunning = false;
   }
 }
 function startSubscriptionWatcher() {
@@ -7814,25 +7841,31 @@ async function handleWebApiRequest(request, response, requestUrl) {
         body = await readJsonRequestBody(request, bodyLimit);
         const launchAttemptId = String(body.launchAttemptId || "").slice(0, 80) || crypto.randomUUID();
         body.launchAttemptId = launchAttemptId;
-        // Idempotency: a retried/duplicated POST with the same attempt id must
-        // NEVER start a second pipeline (second coin, double buys). Point the
-        // caller at the already-running attempt instead.
-        const existing = pumpLaunchLiveProgress.get(launchAttemptId);
-        const ledgerExisting = existing ? null : await readPumpLaunchAttempts()
-          .then((store) => (store.attempts || []).find((item) => (item.id === launchAttemptId || item.launchAttemptId === launchAttemptId)))
-          .catch(() => null);
-        if ((existing && String(existing.userId || "") === String(auth.userId))
-          || (ledgerExisting && String(ledgerExisting.userId || "") === String(auth.userId))) {
+        // Idempotency: a retried/duplicated POST with the same attempt id must NEVER start a second
+        // pipeline (second coin, double buys). The check-and-claim runs under a per-attempt lock so two
+        // truly-concurrent POSTs can't BOTH pass the dup-check before either claims the slot (TOCTOU).
+        const launchClaim = await withFileLock(`launch-start:${launchAttemptId}`, async () => {
+          const existing = pumpLaunchLiveProgress.get(launchAttemptId);
+          const ledgerExisting = existing ? null : await readPumpLaunchAttempts()
+            .then((store) => (store.attempts || []).find((item) => (item.id === launchAttemptId || item.launchAttemptId === launchAttemptId)))
+            .catch(() => null);
+          if ((existing && String(existing.userId || "") === String(auth.userId))
+            || (ledgerExisting && String(ledgerExisting.userId || "") === String(auth.userId))) {
+            return { duplicate: true };
+          }
+          setLaunchProgress(launchAttemptId, {
+            status: "RUNNING", stage: "starting", stageText: "Validating launch sheet",
+            userId: String(auth.userId), startedAt: Date.now()
+          });
+          return { duplicate: false };
+        });
+        if (launchClaim.duplicate) {
           sendWebJson(request, response, 200, {
             ok: true,
             launch: { status: "RUNNING", async: true, launchAttemptId, duplicate: true }
           });
           return;
         }
-        setLaunchProgress(launchAttemptId, {
-          status: "RUNNING", stage: "starting", stageText: "Validating launch sheet",
-          userId: String(auth.userId), startedAt: Date.now()
-        });
         void webLaunchPumpCoin(auth.userId, body)
           .then((result) => {
             setLaunchProgress(launchAttemptId, { status: "COMPLETE", stageText: "Launch complete", result, tokenMint: result?.tokenMint || "" });
@@ -26598,6 +26631,20 @@ async function writeWalletStore(store) {
   await writeJsonFile(walletPath(), store);
 }
 
+// Atomic read-modify-write of the wallet store. The encrypted secret lives ONLY in this file, so a lost
+// update (two concurrent creators each reading then writing → one set of new records dropped) can strand
+// an already-funded wallet = unrecoverable SOL. withFileLock serializes the whole read→mutate→write so
+// concurrent creates/imports/tags can't clobber each other. fn mutates `store` in place; return value is
+// passed back to the caller. NEVER call another wallet-store mutator inside fn (same-file lock = deadlock).
+async function mutateWalletStore(fn) {
+  return withFileLock(walletPath(), async () => {
+    const store = await readWalletStore();
+    const result = await fn(store);
+    await writeWalletStore(store);
+    return result;
+  });
+}
+
 async function readJson(filePath) {
   const fallback = defaultJsonForPath(filePath);
   let text = "";
@@ -26715,14 +26762,19 @@ function cloneJson(value) {
 }
 
 async function audit(action, details) {
-  const auditLog = await readJson(auditPath());
-  if (!Array.isArray(auditLog.entries)) auditLog.entries = [];
-  auditLog.entries.push({
-    timestamp: new Date().toISOString(),
-    action,
-    details
+  // Cap + lock: this is appended on EVERY money op. Unbounded growth meant an O(n) read+stringify+write
+  // per call (write amplification that worsens forever) and concurrent appends could drop entries.
+  await withFileLock(auditPath(), async () => {
+    const auditLog = await readJson(auditPath());
+    if (!Array.isArray(auditLog.entries)) auditLog.entries = [];
+    auditLog.entries.push({
+      timestamp: new Date().toISOString(),
+      action,
+      details
+    });
+    if (auditLog.entries.length > 2000) auditLog.entries = auditLog.entries.slice(-2000);
+    await writeJsonFile(auditPath(), auditLog);
   });
-  await writeJsonFile(auditPath(), auditLog);
 }
 
 async function readState() {
@@ -30680,6 +30732,17 @@ async function writeTradePlans(store) {
   await writeJsonFile(tradePlansPath(), store);
 }
 
+// Atomic read-modify-write of the trade-plans store — keeps a user stop/start/arm from clobbering a
+// concurrent worker tick (and vice-versa). fn mutates `store` in place; its return value is passed back.
+async function mutateTradePlans(fn) {
+  return withFileLock(tradePlansPath(), async () => {
+    const store = await readTradePlans();
+    const result = await fn(store);
+    await writeTradePlans(store);
+    return result;
+  });
+}
+
 // --- Ogre A.I. autopilot (guarded auto-buy) -----------------------------
 // Hard, conservative limits. The autopilot only ever spends inside these.
 const OGRE_AUTOPILOT_LIMITS = {
@@ -31944,6 +32007,18 @@ async function writeWebAuthStore(store) {
   await writeJsonFile(webAuthPath(), store);
 }
 
+// Atomic read-modify-write of the web-auth store (profiles/sessions/referral config/trade orders). ~30
+// callers each rewrite the WHOLE store after reading it, so concurrent writes for different users clobber
+// each other's slice (lost referral payout config, sessions, order records). fn mutates `store` in place.
+async function mutateWebAuthStore(fn) {
+  return withFileLock(webAuthPath(), async () => {
+    const store = await readWebAuthStore();
+    const result = await fn(store);
+    await writeWebAuthStore(store);
+    return result;
+  });
+}
+
 function defaultWebPresets() {
   return {
     trade: [
@@ -32778,9 +32853,11 @@ async function runManualSellCriticalAttempt(userId, body = {}, options = {}, tas
   }
 
   const resultKey = externalCacheKey(`manual-sell-result:${manualSellAttemptId}`, userId);
-  const cached = await cacheGetJson(resultKey).catch(() => null);
+  const cached = await idemResultGet(resultKey);
   if (cached?.result) {
-    const result = { ...cached.result, duplicate: true, status: "SUBMITTED" };
+    // Preserve the cached status — we only ever cache a REAL submission (see below), so a replay should
+    // surface that, never blindly stamp "SUBMITTED" over a result that didn't actually sell.
+    const result = { ...cached.result, duplicate: true, status: cached.result.status || "SUBMITTED" };
     await recordManualSellTimingEvent({
       action: "manual-sell-backend-duplicate-result",
       manualSellAttemptId,
@@ -32796,14 +32873,19 @@ async function runManualSellCriticalAttempt(userId, body = {}, options = {}, tas
   const lockWaitStarted = Date.now();
   const lockName = `manual-sell:${manualSellUserHash(userId)}:${manualSellAttemptId}`;
   return LockService.withLock(lockName, 90_000, async () => {
-    const duplicate = await cacheGetJson(resultKey).catch(() => null);
-    if (duplicate?.result) return { ...duplicate.result, duplicate: true, status: "SUBMITTED" };
+    const duplicate = await idemResultGet(resultKey);
+    if (duplicate?.result) return { ...duplicate.result, duplicate: true, status: duplicate.result.status || "SUBMITTED" };
     const result = await task({
       manualSellAttemptId,
       queueWaitMs: Date.now() - lockWaitStarted,
       duplicate: false
     });
-    await cacheSetJson(resultKey, { result }, 120_000).catch(() => false);
+    // Cache ONLY a real submission. An all-failed bundle sell (status FAILED, 0 successes, no signature)
+    // must NOT be cached — otherwise a retry replays it as "SUBMITTED" and tells the user they sold when
+    // nothing did. Skipping the cache lets the retry actually re-attempt the sell.
+    if (manualSellResultSubmitted(result)) {
+      await idemResultSet(resultKey, { result }, 120_000);
+    }
     return result;
   }, async () => {
     const skipped = {
@@ -32826,6 +32908,70 @@ async function runManualSellCriticalAttempt(userId, body = {}, options = {}, tas
       status: "dedupe-active"
     }, request).catch(() => {});
     return skipped;
+  });
+}
+
+// A manual/bundle sell result counts as a real submission only if SOMETHING actually sold — a signature,
+// a positive success count, or at least one per-wallet result that's ok. (A single-wallet sell only ever
+// returns on success, so it always has a signature.) Used to decide what's safe to cache for replay.
+function manualSellResultSubmitted(result) {
+  if (!result || typeof result !== "object") return false;
+  if (result.signature) return true;
+  if (Number(result.successCount) > 0) return true;
+  if (Array.isArray(result.results) && result.results.some((r) => r && r.ok)) return true;
+  return false;
+}
+
+// In-process fallback for the KV result-cache so money idempotency survives a brief Redis outage WITHIN
+// a process (Render is single-instance). KV stays the source of truth; this only fills the gap when a KV
+// read/write no-ops. Bounded + TTL'd so it can't grow without limit.
+const idemResultStore = new Map();
+function idemResultPrune() {
+  if (idemResultStore.size < 600) return;
+  const now = Date.now();
+  for (const [k, v] of idemResultStore) if (!v || v.exp <= now) idemResultStore.delete(k);
+  while (idemResultStore.size > 1000) {
+    const oldest = idemResultStore.keys().next().value;
+    if (oldest === undefined) break;
+    idemResultStore.delete(oldest);
+  }
+}
+async function idemResultGet(key) {
+  const kv = await cacheGetJson(key).catch(() => null);
+  if (kv) return kv;
+  const m = idemResultStore.get(key);
+  if (m && m.exp > Date.now()) return m.val;
+  if (m) idemResultStore.delete(key);
+  return null;
+}
+async function idemResultSet(key, val, ttlMs) {
+  idemResultStore.set(key, { val, exp: Date.now() + ttlMs });
+  idemResultPrune();
+  await cacheSetJson(key, val, ttlMs).catch(() => false);
+}
+
+// Generic idempotency wrapper for mutating MONEY operations (buys, SOL transfers, volume-bot starts). A
+// retry/double-submit carrying the SAME attemptId replays the original result instead of acting twice;
+// two truly-concurrent requests are serialized by a lock (the loser gets a 409). No id → runs the task
+// directly (back-compat for callers that don't stamp one). Mirrors the proven manual-sell dedup.
+async function runIdempotentMoneyOp(namespace, userId, attemptId, task, options = {}) {
+  const id = normalizeManualSellAttemptId(attemptId);
+  if (!id) return task();
+  const resultKey = externalCacheKey(`${namespace}-result:${id}`, userId);
+  const cached = await idemResultGet(resultKey);
+  if (cached?.result) return { ...cached.result, duplicate: true };
+  const lockName = `${namespace}:${manualSellUserHash(userId)}:${id}`;
+  return LockService.withLock(lockName, options.lockMs || 90_000, async () => {
+    const dup = await idemResultGet(resultKey);
+    if (dup?.result) return { ...dup.result, duplicate: true };
+    const result = await task();
+    await idemResultSet(resultKey, { result }, options.ttlMs || 120_000);
+    return result;
+  }, () => {
+    const error = new Error(options.busyMessage || "This request is already submitting — SlimeWire won't send a duplicate.");
+    error.statusCode = 409;
+    error.duplicate = true;
+    throw error;
   });
 }
 
@@ -35591,26 +35737,38 @@ function rememberCacheLockEvent(event) {
   while (cacheLockRecent.length > 30) cacheLockRecent.shift();
 }
 
+function acquireMemoryCacheLock(lockKey, lockName, ttlMs, provider) {
+  const token = crypto.randomUUID();
+  const expiresAt = Date.now() + Math.max(1_000, Number(ttlMs) || 15_000);
+  const current = cacheLockMemory.get(lockKey);
+  if (current && current.expiresAt > Date.now()) {
+    kvCacheStats.locksSkipped += 1;
+    rememberCacheLockEvent({ lockName, action: "skip-memory-active", provider, ttlMs });
+    return null;
+  }
+  cacheLockMemory.set(lockKey, { token, expiresAt, lockName });
+  kvCacheStats.locksAcquired += 1;
+  kvCacheStats.lastLockAt = new Date().toISOString();
+  rememberCacheLockEvent({ lockName, action: "acquire-memory", provider, ttlMs });
+  return { lockKey, lockName, token, provider: "memory", expiresAt };
+}
+
 async function acquireCacheLock(lockName, ttlMs = 15_000) {
   const provider = kvProviderName();
-  const token = crypto.randomUUID();
   const lockKey = externalCacheKey(`lock:${lockName}`, "global");
-  const expiresAt = Date.now() + Math.max(1_000, Number(ttlMs) || 15_000);
-  if (provider === "memory") {
-    const current = cacheLockMemory.get(lockKey);
-    if (current && current.expiresAt > Date.now()) {
-      kvCacheStats.locksSkipped += 1;
-      rememberCacheLockEvent({ lockName, action: "skip-memory-active", provider, ttlMs });
-      return null;
-    }
-    cacheLockMemory.set(lockKey, { token, expiresAt, lockName });
-    kvCacheStats.locksAcquired += 1;
-    kvCacheStats.lastLockAt = new Date().toISOString();
-    rememberCacheLockEvent({ lockName, action: "acquire-memory", provider, ttlMs });
-    return { lockKey, lockName, token, provider, expiresAt };
+  // Memory provider OR the KV backend is circuit-broken → use the in-process lock. On a single instance
+  // this keeps money dedup correct during a Redis blip: without it a down backend made cacheSetRaw return
+  // false, which `withCacheLock` reads as "held" and (for buys) throws a 409 — falsely rejecting a legit
+  // FIRST request as a duplicate. The memory lock still blocks genuinely-concurrent dups in-process.
+  if (provider === "memory" || kvCircuitOpenUntil > Date.now()) {
+    return acquireMemoryCacheLock(lockKey, lockName, ttlMs, provider);
   }
+  const token = crypto.randomUUID();
+  const expiresAt = Date.now() + Math.max(1_000, Number(ttlMs) || 15_000);
   const acquired = await cacheSetRaw(lockKey, token, ttlMs, { nx: true });
   if (!acquired) {
+    // The backend may have just failed (circuit opened mid-call) — don't treat that as "lock held".
+    if (kvCircuitOpenUntil > Date.now()) return acquireMemoryCacheLock(lockKey, lockName, ttlMs, provider);
     kvCacheStats.locksSkipped += 1;
     rememberCacheLockEvent({ lockName, action: "skip-active", provider, ttlMs });
     return null;
@@ -37312,17 +37470,18 @@ async function createWebWalletSet(userId, body = {}) {
     throw error;
   }
 
-  const store = await readWalletStore();
   const createdRecords = [];
-  for (let index = 1; index <= count; index += 1) {
-    const keypair = Keypair.generate();
-    const walletLabel = count === 1 ? label : `${label} ${index}`;
-    const record = walletRecord(walletLabel, keypair, userId);
-    store.wallets.push(record);
-    createdRecords.push(record);
-  }
+  // Append the new records under the wallet-store lock so a concurrent create/import can't drop them.
+  await mutateWalletStore((store) => {
+    for (let index = 1; index <= count; index += 1) {
+      const keypair = Keypair.generate();
+      const walletLabel = count === 1 ? label : `${label} ${index}`;
+      const record = walletRecord(walletLabel, keypair, userId);
+      store.wallets.push(record);
+      createdRecords.push(record);
+    }
+  });
 
-  await writeWalletStore(store);
   await audit("web_create_wallet_set", {
     userId,
     label,
@@ -37369,7 +37528,15 @@ async function createWebWalletSet(userId, body = {}) {
 // Create N fresh managed wallets and fund each from a source wallet in one
 // step (compose the tested wallet-create + send-sol-many paths). Lets a
 // trader move off their known wallet so copy-traders can't follow it.
+// Idempotency wrapper — creates AND funds N wallets, so a retry must not do it twice.
 async function webDistributeToFreshWallets(userId, body = {}) {
+  return runIdempotentMoneyOp("web-distribute", userId,
+    firstString(body.tradeAttemptId, body.distributeAttemptId, body.clientRequestId),
+    () => webDistributeToFreshWalletsCore(userId, body),
+    { busyMessage: "Distribution is already running — SlimeWire won't fund a second set of wallets." });
+}
+
+async function webDistributeToFreshWalletsCore(userId, body = {}) {
   const count = Number.parseInt(body.count || "0", 10);
   if (!Number.isInteger(count) || count < 1 || count > 20) {
     const error = new Error("Wallet count must be from 1 to 20.");
@@ -37424,42 +37591,38 @@ function pruneSessionWalletOrders(orders = []) {
 }
 
 async function saveSessionWalletOrder(order) {
-  const store = await readWebAuthStore();
-  store.sessionWalletOrders = pruneSessionWalletOrders(store.sessionWalletOrders);
-  const index = store.sessionWalletOrders.findIndex((item) => item.sessionWalletAttemptId === order.sessionWalletAttemptId);
-  if (index >= 0) store.sessionWalletOrders[index] = { ...store.sessionWalletOrders[index], ...order };
-  else store.sessionWalletOrders.push(order);
-  await writeWebAuthStore(store);
+  await mutateWebAuthStore((store) => {
+    store.sessionWalletOrders = pruneSessionWalletOrders(store.sessionWalletOrders);
+    const index = store.sessionWalletOrders.findIndex((item) => item.sessionWalletAttemptId === order.sessionWalletAttemptId);
+    if (index >= 0) store.sessionWalletOrders[index] = { ...store.sessionWalletOrders[index], ...order };
+    else store.sessionWalletOrders.push(order);
+  });
 }
 
 async function takePendingSessionWalletOrder(userId, sessionWalletAttemptId) {
-  const store = await readWebAuthStore();
-  store.sessionWalletOrders = pruneSessionWalletOrders(store.sessionWalletOrders);
-  const order = store.sessionWalletOrders.find((item) => (
-    item.sessionWalletAttemptId === sessionWalletAttemptId
-    && String(item.userId || "") === String(userId || "")
-  ));
-  if (!order) {
-    const error = new Error("Session wallet funding approval expired. Start a new session wallet.");
-    error.statusCode = 404;
+  // Atomic pending→submitting flip (see takePendingBrowserTradeOrder for the why).
+  const outcome = await mutateWebAuthStore((store) => {
+    store.sessionWalletOrders = pruneSessionWalletOrders(store.sessionWalletOrders);
+    const order = store.sessionWalletOrders.find((item) => (
+      item.sessionWalletAttemptId === sessionWalletAttemptId
+      && String(item.userId || "") === String(userId || "")
+    ));
+    if (!order) return { error: { message: "Session wallet funding approval expired. Start a new session wallet.", status: 404 } };
+    if (order.status !== "pending") return { error: { message: "This session wallet funding approval was already submitted.", status: 409 } };
+    if (Date.parse(order.expiresAt || "") <= Date.now()) {
+      order.status = "expired";
+      return { error: { message: "Session wallet funding approval expired. Start a new session wallet.", status: 410 } };
+    }
+    order.status = "submitting";
+    order.submittingAt = new Date().toISOString();
+    return { order };
+  });
+  if (outcome.error) {
+    const error = new Error(outcome.error.message);
+    error.statusCode = outcome.error.status;
     throw error;
   }
-  if (order.status !== "pending") {
-    const error = new Error("This session wallet funding approval was already submitted.");
-    error.statusCode = 409;
-    throw error;
-  }
-  if (Date.parse(order.expiresAt || "") <= Date.now()) {
-    order.status = "expired";
-    await writeWebAuthStore(store);
-    const error = new Error("Session wallet funding approval expired. Start a new session wallet.");
-    error.statusCode = 410;
-    throw error;
-  }
-  order.status = "submitting";
-  order.submittingAt = new Date().toISOString();
-  await writeWebAuthStore(store);
-  return order;
+  return outcome.order;
 }
 
 async function completePendingSessionWalletOrder(order, patch = {}) {
@@ -37782,46 +37945,48 @@ async function importWebWallet(userId, body = {}) {
     throw error;
   }
 
-  const store = await readWalletStore();
-  const existing = new Map(walletsForOwner(store, userId).map((wallet) => [wallet.publicKey, wallet]));
   const candidates = webImportSecretCandidates(secret);
   const importedRecords = [];
   const skippedExisting = [];
   const errors = [];
 
-  for (const [index, candidate] of candidates.entries()) {
-    let keypair;
-    try {
-      keypair = keypairFromSecret(candidate);
-    } catch (error) {
-      errors.push(`Key ${index + 1}: ${friendlyError(error)}`);
-      continue;
+  // Read→append→write under the wallet-store lock: the `existing` set must reflect the SAME store we
+  // write, and a concurrent create/import mustn't drop these records. Throwing inside skips the write.
+  await mutateWalletStore((store) => {
+    const existing = new Map(walletsForOwner(store, userId).map((wallet) => [wallet.publicKey, wallet]));
+    for (const [index, candidate] of candidates.entries()) {
+      let keypair;
+      try {
+        keypair = keypairFromSecret(candidate);
+      } catch (error) {
+        errors.push(`Key ${index + 1}: ${friendlyError(error)}`);
+        continue;
+      }
+
+      const publicKey = keypair.publicKey.toBase58();
+      if (existing.has(publicKey)) {
+        skippedExisting.push(`${existing.get(publicKey).label}: ${publicKey}`);
+        continue;
+      }
+
+      const recordLabel = candidates.length === 1 ? label : cleanLabel(`${label} ${importedRecords.length + 1}`);
+      const record = walletRecord(recordLabel, keypair, userId);
+      store.wallets.push(record);
+      existing.set(publicKey, record);
+      importedRecords.push(record);
     }
 
-    const publicKey = keypair.publicKey.toBase58();
-    if (existing.has(publicKey)) {
-      skippedExisting.push(`${existing.get(publicKey).label}: ${publicKey}`);
-      continue;
+    if (importedRecords.length === 0) {
+      const detail = [
+        skippedExisting.length ? `${skippedExisting.length} already imported` : "",
+        errors.length ? errors.slice(0, 3).join(" ") : ""
+      ].filter(Boolean).join(". ");
+      const error = new Error(detail ? `No new wallets were imported. ${detail}` : "No valid wallet private keys were found.");
+      error.statusCode = skippedExisting.length && !errors.length ? 409 : 400;
+      throw error;
     }
+  });
 
-    const recordLabel = candidates.length === 1 ? label : cleanLabel(`${label} ${importedRecords.length + 1}`);
-    const record = walletRecord(recordLabel, keypair, userId);
-    store.wallets.push(record);
-    existing.set(publicKey, record);
-    importedRecords.push(record);
-  }
-
-  if (importedRecords.length === 0) {
-    const detail = [
-      skippedExisting.length ? `${skippedExisting.length} already imported` : "",
-      errors.length ? errors.slice(0, 3).join(" ") : ""
-    ].filter(Boolean).join(". ");
-    const error = new Error(detail ? `No new wallets were imported. ${detail}` : "No valid wallet private keys were found.");
-    error.statusCode = skippedExisting.length && !errors.length ? 409 : 400;
-    throw error;
-  }
-
-  await writeWalletStore(store);
   await audit("web_import_wallet", {
     userId,
     label,
@@ -38038,27 +38203,9 @@ function webQuickBuyAutoExitBody(body = {}) {
 // buy. Mirrors the proven sell dedup (runManualSellCriticalAttempt): cached-result replay for repeats,
 // a short lock so two truly-concurrent requests can't both spend. Back-compat: no id → runs core as-is.
 async function webTradeBuy(userId, body = {}) {
-  const attemptId = normalizeManualSellAttemptId(firstString(body.tradeAttemptId, body.clientRequestId));
-  if (!attemptId) return webTradeBuyCore(userId, body);
-
-  const resultKey = externalCacheKey(`web-buy-result:${attemptId}`, userId);
-  const cached = await cacheGetJson(resultKey).catch(() => null);
-  if (cached?.result) return { ...cached.result, duplicate: true };
-
-  const lockName = `web-buy:${manualSellUserHash(userId)}:${attemptId}`;
-  return LockService.withLock(lockName, 90_000, async () => {
-    const duplicate = await cacheGetJson(resultKey).catch(() => null);
-    if (duplicate?.result) return { ...duplicate.result, duplicate: true };
-    const result = await webTradeBuyCore(userId, body);
-    await cacheSetJson(resultKey, { result }, 120_000).catch(() => false);
-    return result;
-  }, () => {
-    // A buy for this exact attempt is already in flight — never send a second real order.
-    const error = new Error("This buy is already submitting — SlimeWire won't send a duplicate order.");
-    error.statusCode = 409;
-    error.duplicate = true;
-    throw error;
-  });
+  return runIdempotentMoneyOp("web-buy", userId, firstString(body.tradeAttemptId, body.clientRequestId),
+    () => webTradeBuyCore(userId, body),
+    { busyMessage: "This buy is already submitting — SlimeWire won't send a duplicate order." });
 }
 
 async function webTradeBuyCore(userId, body = {}) {
@@ -38187,42 +38334,40 @@ function pruneBrowserTradeOrders(orders = []) {
 }
 
 async function saveBrowserTradeOrder(order) {
-  const store = await readWebAuthStore();
-  store.browserTradeOrders = pruneBrowserTradeOrders(store.browserTradeOrders);
-  const index = store.browserTradeOrders.findIndex((item) => item.browserTradeAttemptId === order.browserTradeAttemptId);
-  if (index >= 0) store.browserTradeOrders[index] = { ...store.browserTradeOrders[index], ...order };
-  else store.browserTradeOrders.push(order);
-  await writeWebAuthStore(store);
+  await mutateWebAuthStore((store) => {
+    store.browserTradeOrders = pruneBrowserTradeOrders(store.browserTradeOrders);
+    const index = store.browserTradeOrders.findIndex((item) => item.browserTradeAttemptId === order.browserTradeAttemptId);
+    if (index >= 0) store.browserTradeOrders[index] = { ...store.browserTradeOrders[index], ...order };
+    else store.browserTradeOrders.push(order);
+  });
 }
 
 async function takePendingBrowserTradeOrder(userId, browserTradeAttemptId) {
-  const store = await readWebAuthStore();
-  store.browserTradeOrders = pruneBrowserTradeOrders(store.browserTradeOrders);
-  const order = store.browserTradeOrders.find((item) => (
-    item.browserTradeAttemptId === browserTradeAttemptId
-    && String(item.userId || "") === String(userId || "")
-  ));
-  if (!order) {
-    const error = new Error("Browser wallet trade approval expired. Build the trade again.");
-    error.statusCode = 404;
+  // Flip pending→submitting atomically under the store lock so two concurrent executes can't both see
+  // "pending" and both submit. Errors are returned (not thrown) so the store write still persists the
+  // expired-status update; the throw happens after the lock is released.
+  const outcome = await mutateWebAuthStore((store) => {
+    store.browserTradeOrders = pruneBrowserTradeOrders(store.browserTradeOrders);
+    const order = store.browserTradeOrders.find((item) => (
+      item.browserTradeAttemptId === browserTradeAttemptId
+      && String(item.userId || "") === String(userId || "")
+    ));
+    if (!order) return { error: { message: "Browser wallet trade approval expired. Build the trade again.", status: 404 } };
+    if (order.status !== "pending") return { error: { message: "This browser wallet trade was already submitted.", status: 409 } };
+    if (Date.parse(order.expiresAt || "") <= Date.now()) {
+      order.status = "expired";
+      return { error: { message: "Browser wallet trade approval expired. Build the trade again.", status: 410 } };
+    }
+    order.status = "submitting";
+    order.submittingAt = new Date().toISOString();
+    return { order };
+  });
+  if (outcome.error) {
+    const error = new Error(outcome.error.message);
+    error.statusCode = outcome.error.status;
     throw error;
   }
-  if (order.status !== "pending") {
-    const error = new Error("This browser wallet trade was already submitted.");
-    error.statusCode = 409;
-    throw error;
-  }
-  if (Date.parse(order.expiresAt || "") <= Date.now()) {
-    order.status = "expired";
-    await writeWebAuthStore(store);
-    const error = new Error("Browser wallet trade approval expired. Build the trade again.");
-    error.statusCode = 410;
-    throw error;
-  }
-  order.status = "submitting";
-  order.submittingAt = new Date().toISOString();
-  await writeWebAuthStore(store);
-  return order;
+  return outcome.order;
 }
 
 async function completePendingBrowserTradeOrder(order, patch = {}) {
@@ -39139,23 +39284,21 @@ async function createEphemeralVolumeWallet(userId, label, volumeSource = "") {
 async function tagVolumeBotWallets(userId, publicKeys = [], volumeSource = "") {
   const keys = new Set((publicKeys || []).filter(Boolean));
   if (!keys.size) return;
-  const store = await readWalletStore();
-  let changed = false;
-  for (const wallet of store.wallets) {
-    if (wallet.ownerId === userId && keys.has(wallet.publicKey)) {
-      if (!wallet.volumeBot) { wallet.volumeBot = true; changed = true; }
-      if (volumeSource && wallet.volumeSource !== String(volumeSource)) { wallet.volumeSource = String(volumeSource); changed = true; }
+  await mutateWalletStore((store) => {
+    for (const wallet of store.wallets) {
+      if (wallet.ownerId === userId && keys.has(wallet.publicKey)) {
+        if (!wallet.volumeBot) wallet.volumeBot = true;
+        if (volumeSource && wallet.volumeSource !== String(volumeSource)) wallet.volumeSource = String(volumeSource);
+      }
     }
-  }
-  if (changed) await writeWalletStore(store);
+  });
 }
 
 async function pruneVolumeWallet(publicKey) {
   if (!publicKey) return;
-  const store = await readWalletStore();
-  const before = store.wallets.length;
-  store.wallets = store.wallets.filter((wallet) => !(wallet.publicKey === publicKey && wallet.ephemeral));
-  if (store.wallets.length !== before) await writeWalletStore(store);
+  await mutateWalletStore((store) => {
+    store.wallets = store.wallets.filter((wallet) => !(wallet.publicKey === publicKey && wallet.ephemeral));
+  });
 }
 
 async function volumeBotTransferSol(sourceRecord, destinationPublicKey, lamports) {
@@ -39253,8 +39396,25 @@ async function volumeBotTokenLiquidityUsd(mint) {
   } catch { return null; }
 }
 
+// Idempotency wrapper — a retry/double-submit must NOT spin up (and fund) a SECOND bot. Same attemptId
+// replays the original row; the dup-plan guard inside the core blocks a distinct second submission too.
 async function webStartVolumeBot(userId, body = {}) {
+  return runIdempotentMoneyOp("web-volume-start", userId,
+    firstString(body.tradeAttemptId, body.volumeBotAttemptId, body.clientRequestId),
+    () => webStartVolumeBotCore(userId, body),
+    { busyMessage: "This volume bot is already starting — SlimeWire won't fund it twice." });
+}
+
+async function webStartVolumeBotCore(userId, body = {}) {
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
+  // Dup-plan guard: never fund a SECOND bot for a coin that already has one running (catches the case the
+  // attemptId replay can't — two genuinely distinct submissions). Stop the existing one first.
+  const runningPlans = await readTradePlans();
+  if ((runningPlans.plans || []).some((p) => p.source === "web_volume_bot"
+    && String(p.userId) === String(userId) && p.tokenMint === tokenMint
+    && p.status === "volume_bot" && p.botStage !== "done" && p.botStage !== "stopped")) {
+    throw volumeBotError("A volume bot is already running for this coin. Stop it before starting another.");
+  }
   const walletCount = clamp(Number.parseInt(body.walletCount || "0", 10) || 0, 1, VOLUME_BOT_LIMITS.maxWallets);
   const autoCreate = Boolean(body.autoCreateWallets);
   const cycles = clamp(Number.parseInt(body.cycles || "0", 10) || 0, 1, VOLUME_BOT_LIMITS.maxCycles);
@@ -39286,7 +39446,6 @@ async function webStartVolumeBot(userId, body = {}) {
 
   const store = await readWalletStore();
   const sourceRecord = getWalletAt(store, sourceIndex, userId);
-  const planStore = await readTradePlans();
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
 
@@ -39323,8 +39482,7 @@ async function webStartVolumeBot(userId, body = {}) {
       stats: { buys: 0, sells: 0, errors: 0, rounds: 0, fundedSol: 0 },
       log: [{ at: nowIso, message: `Rolling SlimeBot armed: ghost pool (≤${poolSize}), buys ${minBuyAmountSol > 0 ? minBuyAmountSol + "–" + effMaxBuy : "~" + buyAmountSol} SOL, partial sells from older wallets, up to ${maxRounds} buy(s).` }]
     };
-    planStore.plans.push(plan);
-    await writeTradePlans(planStore);
+    await mutateTradePlans((s) => { s.plans.push(plan); });
     await audit("web_volume_bot_start", { userId, planId: plan.id, tokenMint, rollingWallets: true, maxRounds, buyAmountSol, sweepBack });
     return webVolumeBotRow(plan);
   }
@@ -39387,8 +39545,7 @@ async function webStartVolumeBot(userId, body = {}) {
     stats: { buys: 0, sells: 0, errors: 0, fundedSol: Number((fundPerWalletSol * tradingPublicKeys.length).toFixed(6)) },
     log: [{ at: nowIso, message: `Funded ${tradingPublicKeys.length} wallet(s) with ${fundPerWalletSol} SOL each${fundResult?.signature ? ` (${fundResult.signature})` : ""}.` }]
   };
-  planStore.plans.push(plan);
-  await writeTradePlans(planStore);
+  await mutateTradePlans((s) => { s.plans.push(plan); });
   await audit("web_volume_bot_start", {
     userId,
     planId: plan.id,
@@ -39405,25 +39562,27 @@ async function webStartVolumeBot(userId, body = {}) {
 
 async function webStopVolumeBot(userId, body = {}) {
   const planId = String(body.planId || body.id || "").trim();
-  const planStore = await readTradePlans();
-  const plan = planStore.plans.find((entry) => entry.id === planId
-    && String(entry.userId) === String(userId)
-    && entry.source === "web_volume_bot");
-  if (!plan) throw volumeBotError("SlimeBot not found.");
-  if (plan.status === "completed" || plan.botStage === "done") return webVolumeBotRow(plan);
-  const sweepBack = plan.config?.sweepBack !== false;
-  plan.botStage = sweepBack ? "sweeping" : "done";
-  plan.sweepCursor = 0;
-  plan.nextActionAt = new Date().toISOString();
-  plan.updatedAt = new Date().toISOString();
-  volumeBotLogPush(plan, sweepBack ? "Stop requested. Sweeping funds back to source." : "Stop requested.");
-  if (plan.botStage === "done") {
-    plan.status = "completed";
-    plan.completedAt = new Date().toISOString();
-  }
-  await writeTradePlans(planStore);
-  await audit("web_volume_bot_stop", { userId, planId: plan.id });
-  return webVolumeBotRow(plan);
+  // Atomic find→mutate→write so a user stop can't be clobbered by a concurrent worker tick (and vice-versa).
+  const row = await mutateTradePlans((planStore) => {
+    const plan = planStore.plans.find((entry) => entry.id === planId
+      && String(entry.userId) === String(userId)
+      && entry.source === "web_volume_bot");
+    if (!plan) throw volumeBotError("SlimeBot not found.");
+    if (plan.status === "completed" || plan.botStage === "done") return { plan, skip: true };
+    const sweepBack = plan.config?.sweepBack !== false;
+    plan.botStage = sweepBack ? "sweeping" : "done";
+    plan.sweepCursor = 0;
+    plan.nextActionAt = new Date().toISOString();
+    plan.updatedAt = new Date().toISOString();
+    volumeBotLogPush(plan, sweepBack ? "Stop requested. Sweeping funds back to source." : "Stop requested.");
+    if (plan.botStage === "done") {
+      plan.status = "completed";
+      plan.completedAt = new Date().toISOString();
+    }
+    return { plan, skip: false };
+  });
+  if (!row.skip) await audit("web_volume_bot_stop", { userId, planId: row.plan.id });
+  return webVolumeBotRow(row.plan);
 }
 
 async function webVolumeBotRows(userId) {
@@ -42243,14 +42402,17 @@ async function webLaunchMeteoraDbc(userId, body, basePayload) {
   const customCurve = basePayload.customCurve || null;
   // Lazy-load the heavy Meteora SDK only when the rail is actually used (keeps it off boot + hot path).
   const { buildMeteoraCreatePoolTransaction, buildMeteoraConfigAndPoolTransactions, isValidPublicKey: isValidSolanaPublicKey } = await import("./lib/meteoraLaunchService.js");
+  // The Meteora rail must be explicitly enabled before it can spend real SOL. This now gates the
+  // custom-curve branch TOO — it builds + signs + sends real mainnet config+pool txs and previously
+  // skipped this check, so any logged-in user could trigger the unverified rail with the flag off.
+  if (!meteoraRailEnabled()) {
+    throw createPumpLaunchError(
+      "The SlimeWire (Meteora) curve isn't set up yet. Tap “Set up SlimeWire curve” once. Pump or Bonk work meanwhile.",
+      "METEORA_RAIL_NOT_ENABLED", 501, { stage: PUMP_LAUNCH_STAGE.CONFIG }
+    );
+  }
   let meteoraConfigKey = "";
   if (!customCurve) {
-    if (!meteoraRailEnabled()) {
-      throw createPumpLaunchError(
-        "The SlimeWire (Meteora) curve isn't set up yet. Tap “Set up SlimeWire curve” once (or use a custom curve for this coin). Pump or Bonk work meanwhile.",
-        "METEORA_RAIL_NOT_ENABLED", 501, { stage: PUMP_LAUNCH_STAGE.CONFIG }
-      );
-    }
     meteoraConfigKey = getMeteoraConfigKey();
     if (!meteoraConfigKey || !isValidSolanaPublicKey(meteoraConfigKey)) {
       throw createPumpLaunchError(
@@ -42304,12 +42466,20 @@ async function webLaunchMeteoraDbc(userId, body, basePayload) {
     createConfigTx.feePayer = creatorKeypair.publicKey; createConfigTx.recentBlockhash = bh1.blockhash;
     createConfigTx.sign(creatorKeypair, configKeypair);
     const cfgSig = await connection.sendRawTransaction(createConfigTx.serialize(), { skipPreflight: false, maxRetries: 3 });
-    await connection.confirmTransaction({ signature: cfgSig, blockhash: bh1.blockhash, lastValidBlockHeight: bh1.lastValidBlockHeight }, "confirmed");
+    const cfgConf = await connection.confirmTransaction({ signature: cfgSig, blockhash: bh1.blockhash, lastValidBlockHeight: bh1.lastValidBlockHeight }, "confirmed");
+    // Abort if the config confirmed WITH an error — otherwise we'd send the pool tx onto a broken config
+    // (and the creator would have paid config-account rent for nothing).
+    if (cfgConf?.value?.err) {
+      throw createPumpLaunchError(`Meteora config transaction failed on-chain: ${JSON.stringify(cfgConf.value.err)}`, "METEORA_CONFIG_TX_FAILED", 502, { stage: PUMP_LAUNCH_STAGE.CONFIG });
+    }
     const bh2 = await connection.getLatestBlockhash("confirmed");
     createPoolWithFirstBuyTx.feePayer = creatorKeypair.publicKey; createPoolWithFirstBuyTx.recentBlockhash = bh2.blockhash;
     createPoolWithFirstBuyTx.sign(creatorKeypair, mintKeypair);
     signature = await connection.sendRawTransaction(createPoolWithFirstBuyTx.serialize(), { skipPreflight: false, maxRetries: 3 });
-    await connection.confirmTransaction({ signature, blockhash: bh2.blockhash, lastValidBlockHeight: bh2.lastValidBlockHeight }, "confirmed");
+    const poolConf = await connection.confirmTransaction({ signature, blockhash: bh2.blockhash, lastValidBlockHeight: bh2.lastValidBlockHeight }, "confirmed");
+    if (poolConf?.value?.err) {
+      throw createPumpLaunchError(`Meteora pool transaction failed on-chain: ${JSON.stringify(poolConf.value.err)}`, "METEORA_POOL_TX_FAILED", 502, { stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL });
+    }
   } else {
     const tx = await buildMeteoraCreatePoolTransaction({
       connection, configKey: meteoraConfigKey, creatorPublicKey: creatorPk, baseMintPublicKey: tokenMint,
@@ -42320,7 +42490,10 @@ async function webLaunchMeteoraDbc(userId, body, basePayload) {
     tx.recentBlockhash = blockhash;
     tx.sign(creatorKeypair, mintKeypair);
     signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 3 });
-    await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
+    const poolConf = await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
+    if (poolConf?.value?.err) {
+      throw createPumpLaunchError(`Meteora pool transaction failed on-chain: ${JSON.stringify(poolConf.value.err)}`, "METEORA_POOL_TX_FAILED", 502, { stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL });
+    }
   }
 
   await upsertPumpLaunchAttempt({ id: attemptId, status: PUMP_LAUNCH_STATUS.COMPLETE, txSignature: signature, tokenMint, updatedAt: new Date().toISOString() });
@@ -43299,7 +43472,17 @@ async function webSweepBackgroundWallets(userId, body = {}) {
   };
 }
 
+// Idempotency wrapper — a retry/double-submit carrying the same attemptId must NOT send the SOL twice.
+// This is a FIXED-amount transfer (unlike a sweep, which self-limits), so without this a network retry
+// or double-click was a clean double-spend to the destination.
 async function webSendSolMany(userId, body = {}) {
+  return runIdempotentMoneyOp("web-send-sol", userId,
+    firstString(body.tradeAttemptId, body.sendAttemptId, body.clientRequestId),
+    () => webSendSolManyCore(userId, body),
+    { busyMessage: "This transfer is already submitting — SlimeWire won't send it twice." });
+}
+
+async function webSendSolManyCore(userId, body = {}) {
   const store = await readWalletStore();
   const walletIndex = parseWebWalletIndex(body.fromWalletIndex || body.walletIndex);
   const wallet = {
