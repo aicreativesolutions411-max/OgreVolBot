@@ -32767,7 +32767,11 @@ async function recordManualSellTimingEvent(event = {}, request = {}) {
 }
 
 async function runManualSellCriticalAttempt(userId, body = {}, options = {}, task) {
-  const manualSellAttemptId = normalizeManualSellAttemptId(firstString(body.manualSellAttemptId, body.clientRequestId));
+  // The web terminal sends the dedup key as `tradeAttemptId` (execSell), the bundle/critical paths send
+  // `manualSellAttemptId`/`clientRequestId`. Honor ALL of them so a web sell actually engages the lock
+  // below — otherwise a double-tap fired two real sells (the id was present but read under a name we
+  // ignored, so this short-circuited with no lock).
+  const manualSellAttemptId = normalizeManualSellAttemptId(firstString(body.manualSellAttemptId, body.tradeAttemptId, body.clientRequestId));
   const request = options.request || {};
   if (!manualSellAttemptId) {
     return task({ manualSellAttemptId: "", queueWaitMs: 0, duplicate: false });
@@ -38029,7 +38033,35 @@ function webQuickBuyAutoExitBody(body = {}) {
   };
 }
 
+// Idempotency wrapper for web buys. The terminal stamps every buy with `tradeAttemptId`; without this a
+// network retry, the postTrade 403-retry, or a multi-tab/multi-device resend each fired a SECOND real
+// buy. Mirrors the proven sell dedup (runManualSellCriticalAttempt): cached-result replay for repeats,
+// a short lock so two truly-concurrent requests can't both spend. Back-compat: no id → runs core as-is.
 async function webTradeBuy(userId, body = {}) {
+  const attemptId = normalizeManualSellAttemptId(firstString(body.tradeAttemptId, body.clientRequestId));
+  if (!attemptId) return webTradeBuyCore(userId, body);
+
+  const resultKey = externalCacheKey(`web-buy-result:${attemptId}`, userId);
+  const cached = await cacheGetJson(resultKey).catch(() => null);
+  if (cached?.result) return { ...cached.result, duplicate: true };
+
+  const lockName = `web-buy:${manualSellUserHash(userId)}:${attemptId}`;
+  return LockService.withLock(lockName, 90_000, async () => {
+    const duplicate = await cacheGetJson(resultKey).catch(() => null);
+    if (duplicate?.result) return { ...duplicate.result, duplicate: true };
+    const result = await webTradeBuyCore(userId, body);
+    await cacheSetJson(resultKey, { result }, 120_000).catch(() => false);
+    return result;
+  }, () => {
+    // A buy for this exact attempt is already in flight — never send a second real order.
+    const error = new Error("This buy is already submitting — SlimeWire won't send a duplicate order.");
+    error.statusCode = 409;
+    error.duplicate = true;
+    throw error;
+  });
+}
+
+async function webTradeBuyCore(userId, body = {}) {
   const store = await readWalletStore();
   const wallet = getWebServerTradeWalletAt(store, parseWebWalletIndex(body.walletIndex), userId, "quick buy");
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();

@@ -164,7 +164,7 @@ test("server-side trade selectors only allow funded live session wallets", () =>
   assert.match(functionBody(serverSource, "assertServerTradeWalletReady"), /sessionStatus !== "funded"/);
   assert.match(functionBody(serverSource, "assertServerTradeWalletReady"), /sessionExpiresAt/);
   assert.match(functionBody(serverSource, "getWebServerTradeWalletAt"), /assertServerTradeWalletReady/);
-  assert.match(functionBody(serverSource, "webTradeBuy"), /getWebServerTradeWalletAt/);
+  assert.match(functionBody(serverSource, "webTradeBuyCore"), /getWebServerTradeWalletAt/);
   assert.match(functionBody(serverSource, "webTradeSellCore"), /getWebServerTradeWalletAt/);
   assert.match(functionBody(serverSource, "webSelectedWallets"), /assertServerTradeWalletReady/);
 });

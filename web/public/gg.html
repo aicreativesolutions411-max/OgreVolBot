@@ -1921,21 +1921,29 @@
   // Tiny phone haptic on a trade tap — makes buys/sells feel instant even while the chain settles.
   function hap(ms){try{if(navigator.vibrate)navigator.vibrate(ms||12);}catch(e){}}
   function resetBigBtn(){const big=$("#bigbuy");if(!big)return;big.disabled=false;const sym=(state.tradeRow&&(state.tradeRow.symbol||""))||"";big.textContent=(tradeSide==="buy"?"Buy ":"Sell ")+sym;}
+  // In-flight guard — STOPS double-submits at the source. Each user tap mints a fresh tradeAttemptId, so
+  // the server dedup (which keys on that id) can't catch two separate rapid taps — only this can. Keyed by
+  // side+mint so it blocks a second buy/sell of the SAME coin while one is live, but never blocks aping a
+  // different coin. Cleared in finally so a failed trade frees the lock for an immediate retry.
+  function tradeLock(side,mint){const k=side+":"+(mint||"");if(!state._tradeInflight)state._tradeInflight={};if(state._tradeInflight[k])return false;state._tradeInflight[k]=Date.now();return true;}
+  function tradeUnlock(side,mint){if(state._tradeInflight)delete state._tradeInflight[side+":"+(mint||"")];}
   async function execBuy(mint,amount){
     const a=Number(amount);if(!isFinite(a)||a<=0){toast("Enter a SOL amount.",true);return;}
     if(!(await ensureTradeReady()))return;
+    if(!tradeLock("buy",mint)){toast("That buy is already going through — hang tight.");return;}
     hap();toast("Buying ◎"+a.toFixed(3)+"…");
     const big=$("#bigbuy");if(big){big.disabled=true;big.textContent="Submitting…";}
-    const p=activeTradePresetObj();
-    const lad=p&&Array.isArray(p.takeProfitLadder)&&p.takeProfitLadder.length?p.takeProfitLadder:null;
-    const body={tokenMint:mint,walletIndex:state.activeWallet,amountSol:String(a),slippageBps:(p&&p.slippageBps)||"400",tradeAttemptId:attemptId()};
-    if(lad){body.autoExit=true;body.takeProfitLadder=lad;body.stopLossPct=p.stopLossPct||"";body.sellDelay=p.sellDelay||"off";}
-    else if(p&&(p.takeProfitPct||p.stopLossPct||(p.sellDelay&&p.sellDelay!=="off"))){
-      body.autoExit=true;body.takeProfitPct=p.takeProfitPct||"";body.stopLossPct=p.stopLossPct||"";body.sellDelay=p.sellDelay||"off";body.sellPercent=p.sellPercent||"100";
-    }else body.disableAutoExit=true;   // plain buy = HOLD; the backend otherwise force-arms a default TP/SL that fires instantly on a fresh-buy quote
-    const {ok,status,d}=await postTrade("/api/web/trade/buy",body);
-    resetBigBtn();
-    handleTradeResult(ok,status,d,"Buy");
+    try{
+      const p=activeTradePresetObj();
+      const lad=p&&Array.isArray(p.takeProfitLadder)&&p.takeProfitLadder.length?p.takeProfitLadder:null;
+      const body={tokenMint:mint,walletIndex:state.activeWallet,amountSol:String(a),slippageBps:(p&&p.slippageBps)||"400",tradeAttemptId:attemptId()};
+      if(lad){body.autoExit=true;body.takeProfitLadder=lad;body.stopLossPct=p.stopLossPct||"";body.sellDelay=p.sellDelay||"off";}
+      else if(p&&(p.takeProfitPct||p.stopLossPct||(p.sellDelay&&p.sellDelay!=="off"))){
+        body.autoExit=true;body.takeProfitPct=p.takeProfitPct||"";body.stopLossPct=p.stopLossPct||"";body.sellDelay=p.sellDelay||"off";body.sellPercent=p.sellPercent||"100";
+      }else body.disableAutoExit=true;   // plain buy = HOLD; the backend otherwise force-arms a default TP/SL that fires instantly on a fresh-buy quote
+      const {ok,status,d}=await postTrade("/api/web/trade/buy",body);
+      handleTradeResult(ok,status,d,"Buy");
+    }finally{resetBigBtn();tradeUnlock("buy",mint);}
   }
   async function execSell(mint,percent){
     const p=Number(String(percent).replace("%",""));if(!isFinite(p)||p<=0){toast("Enter a sell %.",true);return;}
@@ -1943,13 +1951,15 @@
     // Selling from a position list can run with no wallet selected — default to the first wallet so the
     // server doesn't 500 on a null walletIndex.
     if((state.activeWallet==null||!state.wallets.some(w=>w.index===state.activeWallet))&&state.wallets.length)state.activeWallet=state.wallets[0].index;
+    if(!tradeLock("sell",mint)){toast("That sell is already going through — hang tight.");return;}
     hap();toast("Selling "+p+"%…");
     const big=$("#bigbuy");if(big){big.disabled=true;big.textContent="Submitting…";}
-    // Exits use a forgiving slippage (12%) — when you're getting OUT of a thin memecoin, filling matters
-    // more than a tight price; a tight 4% was a common cause of failed sells on low-liquidity coins.
-    const {ok,status,d}=await postTrade("/api/web/trade/sell",{tokenMint:mint,walletIndex:state.activeWallet,percent:String(p),slippageBps:"1200",tradeAttemptId:attemptId()});
-    resetBigBtn();
-    handleTradeResult(ok,status,d,"Sell");
+    try{
+      // Exits use a forgiving slippage (12%) — when you're getting OUT of a thin memecoin, filling matters
+      // more than a tight price; a tight 4% was a common cause of failed sells on low-liquidity coins.
+      const {ok,status,d}=await postTrade("/api/web/trade/sell",{tokenMint:mint,walletIndex:state.activeWallet,percent:String(p),slippageBps:"1200",tradeAttemptId:attemptId()});
+      handleTradeResult(ok,status,d,"Sell");
+    }finally{resetBigBtn();tradeUnlock("sell",mint);}
   }
   // Sell straight from a position — a fast %-picker that EXECUTES on tap (no detour to the chart).
   function quickSellModal(mint,sym){
@@ -1976,17 +1986,22 @@
   function clearQuickBuy(){state.quickBuy=null;localStorage.removeItem("ggQuickBuy");if(state.route==="trending")subbarTrending();}
   async function execQuickBuy(mint,q){
     q=q||state.quickBuy||{};
-    // Your OWN take-profit / stop-loss win; otherwise fall back to a saved preset's exits.
-    const p=q.presetId?((state.presets.trade||[]).find(x=>x.id===q.presetId)||null):null;
-    const tp=q.tp||(p&&p.takeProfitPct)||"",sl=q.sl||(p&&p.stopLossPct)||"";
-    const lad=(Array.isArray(q.ladder)&&q.ladder.length)?q.ladder:((p&&Array.isArray(p.takeProfitLadder)&&p.takeProfitLadder.length)?p.takeProfitLadder:null);
-    const body={tokenMint:mint,walletIndex:state.activeWallet,amountSol:String(q.amt),slippageBps:String(q.slip||(p&&p.slippageBps)||"500"),tradeAttemptId:attemptId()};
-    if(lad){body.autoExit=true;body.takeProfitLadder=lad;body.stopLossPct=sl;body.sellDelay=(p&&p.sellDelay)||"off";}
-    else if(tp||sl||(p&&p.sellDelay&&p.sellDelay!=="off")){body.autoExit=true;body.takeProfitPct=tp;body.stopLossPct=sl;body.sellDelay=(p&&p.sellDelay)||"off";body.sellPercent=(p&&p.sellPercent)||"100";}
-    else body.disableAutoExit=true;    // no TP/SL set → HOLD (don't let the backend force a default auto-exit)
-    toast("Buying ◎"+Number(q.amt).toFixed(3)+"…");
-    const {ok,status,d}=await postTrade("/api/web/trade/buy",body);
-    handleTradeResult(ok,status,d,"Buy ◎"+Number(q.amt).toFixed(3));
+    // ⚡ 1-click has NO button to disable, so without this guard a fast double-tap fired two real buys
+    // (each tap mints its own tradeAttemptId, so the server dedup can't pair them). Lock side+mint.
+    if(!tradeLock("buy",mint)){toast("That buy is already going through — hang tight.");return;}
+    try{
+      // Your OWN take-profit / stop-loss win; otherwise fall back to a saved preset's exits.
+      const p=q.presetId?((state.presets.trade||[]).find(x=>x.id===q.presetId)||null):null;
+      const tp=q.tp||(p&&p.takeProfitPct)||"",sl=q.sl||(p&&p.stopLossPct)||"";
+      const lad=(Array.isArray(q.ladder)&&q.ladder.length)?q.ladder:((p&&Array.isArray(p.takeProfitLadder)&&p.takeProfitLadder.length)?p.takeProfitLadder:null);
+      const body={tokenMint:mint,walletIndex:state.activeWallet,amountSol:String(q.amt),slippageBps:String(q.slip||(p&&p.slippageBps)||"500"),tradeAttemptId:attemptId()};
+      if(lad){body.autoExit=true;body.takeProfitLadder=lad;body.stopLossPct=sl;body.sellDelay=(p&&p.sellDelay)||"off";}
+      else if(tp||sl||(p&&p.sellDelay&&p.sellDelay!=="off")){body.autoExit=true;body.takeProfitPct=tp;body.stopLossPct=sl;body.sellDelay=(p&&p.sellDelay)||"off";body.sellPercent=(p&&p.sellPercent)||"100";}
+      else body.disableAutoExit=true;    // no TP/SL set → HOLD (don't let the backend force a default auto-exit)
+      toast("Buying ◎"+Number(q.amt).toFixed(3)+"…");
+      const {ok,status,d}=await postTrade("/api/web/trade/buy",body);
+      handleTradeResult(ok,status,d,"Buy ◎"+Number(q.amt).toFixed(3));
+    }finally{tradeUnlock("buy",mint);}
   }
   async function quickBuy(mint){
     if(!(await ensureTradeReady()))return;
