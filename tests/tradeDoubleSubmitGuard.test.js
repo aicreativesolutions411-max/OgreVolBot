@@ -127,6 +127,36 @@ test("Meteora dark-rail gate covers the custom-curve branch too", () => {
   assert.match(body, /METEORA_CONFIG_TX_FAILED|METEORA_POOL_TX_FAILED/);
 });
 
+test("vanity pool auto-enables from a pool file + has an owner-gated load endpoint", () => {
+  assert.match(serverSource, /function ensureVanityPool\(\)/);
+  // Enable when the env flag is on OR a pool file already has keys (no env edit needed once loaded).
+  assert.match(functionBody(serverSource, "ensureVanityPool"), /!CONFIG\.launchVanityEnabled && vanityPoolFileKeyCount\(\) === 0/);
+  assert.match(serverSource, /async function webLoadVanityPool\(/);
+  // Load route is OWNER-KEY gated (it accepts secret mint keypairs).
+  assert.match(serverSource, /pathname === "\/api\/web\/launch\/vanity-pool"/);
+  assert.match(serverSource, /Owner key required to load the vanity pool/);
+});
+
+test("promoter fee-split: stored on the coin + idempotent split-send reusing the proven math", () => {
+  // creatorFeeSplit normalized onto the launch payload via the proven referral-split helper.
+  assert.match(serverSource, /creatorFeeSplit: normalizeReferralPayoutSplit\(body\.creatorFeeSplit\)/);
+  assert.match(functionBody(serverSource, "webSplitCreatorFees"), /runIdempotentMoneyOp\("web-split-fees", userId/);
+  assert.match(functionBody(serverSource, "webSplitCreatorFeesCore"), /splitReferralLamports\(/);
+  assert.match(serverSource, /pathname === "\/api\/web\/launch\/split-creator-fees"/);
+});
+
+test("presale escrow is fully GATED behind PRESALE_ESCROW_ENABLED (custody stays off)", () => {
+  assert.match(serverSource, /function presaleEscrowEnabled\(\)/);
+  // Every mutating escrow fn asserts the flag first (501 in test mode).
+  assert.match(functionBody(serverSource, "webCreatePresaleEscrow"), /assertPresaleEscrowEnabled\(\)/);
+  assert.match(functionBody(serverSource, "webRefundPresaleEscrow"), /assertPresaleEscrowEnabled\(\)/);
+  assert.match(functionBody(serverSource, "webFinalizePresaleEscrow"), /assertPresaleEscrowEnabled\(\)/);
+  assert.match(functionBody(serverSource, "assertPresaleEscrowEnabled"), /statusCode = 501/);
+  // Finalize + refund are idempotent (no double buy/distribute/refund).
+  assert.match(functionBody(serverSource, "webFinalizePresaleEscrow"), /runIdempotentMoneyOp\("presale-finalize"/);
+  assert.match(functionBody(serverSource, "webRefundPresaleEscrow"), /runIdempotentMoneyOp\("presale-refund"/);
+});
+
 for (const [label, source] of [["gg.html", ggSource], ["index.html", indexSource]]) {
   test(`client in-flight guard blocks double-taps on every submit path (${label})`, () => {
     assert.match(source, /function tradeLock\(side,mint\)\{/);

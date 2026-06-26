@@ -1986,6 +1986,17 @@
   // 1-click buy contract: once you've set a quick-buy amount (+ optional TP/SL preset), the ⚡ Buy on
   // any pair fires instantly with it — no menu. The FIRST time (nothing set) it opens the quick-buy
   // sheet to pick the amount/preset, then buys. Stored in localStorage so it persists.
+  // Pay promoters: split a SOL amount from the creator wallet across the launch form's promoter wallets
+  // (by %). Reads the #lcPm* rows + #lcDevWallet, posts to the idempotent split-creator-fees endpoint.
+  function payPromotersModal(){
+    const rows=[0,1,2,3].map(i=>({wallet:(($("#lcPmW"+i)||{}).value||"").trim(),pct:Number((($("#lcPmP"+i)||{}).value||"").trim())})).filter(r=>r.wallet&&r.pct>0);
+    const dw=$("#lcDevWallet");const wi=String(dw&&dw.value?dw.value:state.activeWallet);
+    openModal('<h3>💸 Pay promoters</h3><p class="sub mut" style="font-size:12px">Split a SOL amount from your creator wallet across your promoter wallets (by %). Use this after you’ve claimed/received creator fees.</p>'+
+      (rows.length?'<div class="wnote" style="margin:0 0 10px">'+rows.map(r=>esc(short(r.wallet))+' · '+r.pct+'%').join(' • ')+'</div>':'<div class="wnote" style="margin:0 0 10px">Set promoter wallets + % in the launch form first.</div>')+
+      '<div class="field"><label>Amount to split (SOL)</label><input id="ppAmt" inputmode="decimal" placeholder="0.5"></div>'+
+      '<div style="display:flex;gap:9px"><button class="wbtn ghost" style="flex:1" onclick="GG.closeModal()">Cancel</button><button class="wbtn" id="ppGo" style="flex:1">Send split</button></div>');
+    const go=$("#ppGo");if(go)go.onclick=async()=>{const amt=Number(($("#ppAmt")||{}).value);if(!rows.length){toast("Set promoter wallets + % first.",true);return;}if(!isFinite(amt)||amt<=0){toast("Enter a SOL amount.",true);return;}if(!(await ensureTradeReady()))return;go.disabled=true;go.textContent="Sending…";const {ok,d}=await jpost("/api/web/launch/split-creator-fees",{walletIndex:wi,amountSol:String(amt),splits:rows,tradeAttemptId:attemptId()});go.disabled=false;go.textContent="Send split";if(ok&&d&&d.ok){toast("Sent to "+((d.payout&&d.payout.recipients&&d.payout.recipients.length)||rows.length)+" promoter(s).");closeModal();}else toast((d&&(d.message||d.error))||"Split failed",true);};
+  }
   function setQuickBuy(o){state.quickBuy=Object.assign({amt:0.1,presetId:"",tp:"",sl:"",slip:""},o);localStorage.setItem("ggQuickBuy",JSON.stringify(state.quickBuy));if(state.route==="trending")subbarTrending();}
   function clearQuickBuy(){state.quickBuy=null;localStorage.removeItem("ggQuickBuy");if(state.route==="trending")subbarTrending();}
   async function execQuickBuy(mint,q){
@@ -2714,6 +2725,8 @@
         '<div class="lcnote" style="display:block;font-size:11px">💧 <b>Your first buy IS the starting liquidity.</b> It puts real SOL into the curve so the coin isn\'t empty at launch — and you (or anyone) can add more any time by buying. On a bonding curve, buying = adding liquidity.</div>'+
         '<label class="lcheck"><input type="checkbox" id="lcBundle" checked> <span><b>Buy at the exact launch moment</b> (anti-snipe) — your first buy lands together with the coin, so bots can\'t jump in ahead of you.</span></label>'+
         '<label class="lcheck"><input type="checkbox" id="lcFeeMax" checked> <span><b>Send all creator fees to my wallet</b> — you keep 100% of the fees this coin earns, paid straight to your wallet. (Uncheck for none.)</span></label>'+
+        '<label class="lcheck"><input type="checkbox" id="lcPromo"> <span><b>Share earnings with promoters</b> — set up to 4 wallets + a % each. Stored on the coin; you pay them their cut with one tap from <b>“Pay promoters”</b> whenever you’ve claimed creator fees.</span></label>'+
+        '<div id="lcPromoRows" style="display:none">'+[0,1,2,3].map(i=>'<div class="field row2" style="margin-bottom:6px"><div><label>Promoter wallet '+(i+1)+'</label><input id="lcPmW'+i+'" placeholder="Solana address'+(i?" (optional)":"")+'"></div><div><label>%</label><input id="lcPmP'+i+'" inputmode="numeric" placeholder="0"></div></div>').join("")+'<button class="wbtn ghost" type="button" id="lcPayPromo" style="display:none;width:100%;margin-top:2px">💸 Pay promoters now</button></div>'+
         '<label class="lcheck"><input type="checkbox" id="lcBundleWallets"> <span><b>Also bundle-buy from my other wallets</b> at launch — first-block buys across your funded wallets so the early supply is yours, not snipers\'.</span></label>'+
         '<div class="field row2" id="lcBundleAmtWrap" style="display:none"><div><label>Bundle wallets</label><input id="lcBundleCount" inputmode="numeric" placeholder="all"></div><div><label>Buy per wallet (SOL)</label><input id="lcBundleAmt" inputmode="decimal" placeholder="0.05"></div></div>'+
         '<div class="lcnote" id="lcBundleNote" style="display:none">📦 These are first-block <b>entry</b> buys. <b>Take-profit / stop-loss</b> (laddered), exact wallet selection &amp; saved bundle <b>presets</b> live in the <b>📦 Bundle tool</b> — set them there after launch (presets are saved under <b>Wallet → Presets</b>).</div>'+
@@ -2743,6 +2756,8 @@
     $("#lcImg").onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchImg","lcImgPrev",false);
     const lb=$("#lcBanner");if(lb)lb.onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchBanner","lcBannerPrev",true);
     const bw=$("#lcBundleWallets");if(bw)bw.onchange=()=>{const on=bw.checked;["lcBundleAmtWrap","lcBundleNote"].forEach(id=>{const e=$("#"+id);if(e)e.style.display=on?"":"none";});};
+    const pm=$("#lcPromo");if(pm)pm.onchange=()=>{const e=$("#lcPromoRows"),pp=$("#lcPayPromo");if(e)e.style.display=pm.checked?"":"none";if(pp)pp.style.display=pm.checked?"":"none";};
+    const pp=$("#lcPayPromo");if(pp)pp.onclick=()=>payPromotersModal();
     lcWireChat();
     $("#lcGo").onclick=async()=>{
       const name=$("#lcName").value.trim(),sym=$("#lcSym").value.trim();
@@ -2758,6 +2773,8 @@
       const creatorFeeBps=($("#lcFeeMax")&&$("#lcFeeMax").checked)?"1000":"0";
       const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),slippageBps:($("#lcSlip")&&$("#lcSlip").value.trim())||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg",feeMode:"dev",devWalletIndex:devIdx,creatorFeeBps,rail:state.launchRail||"pump"};
       if(devW&&devW.publicKey)body.creatorFeeRecipient=devW.publicKey;
+      // Promoter fee-split (up to 4 wallets + %) stored on the coin; paid out via "Pay promoters".
+      if($("#lcPromo")&&$("#lcPromo").checked){const sp=[0,1,2,3].map(i=>({wallet:(($("#lcPmW"+i)||{}).value||"").trim(),pct:Number((($("#lcPmP"+i)||{}).value||"").trim())})).filter(r=>r.wallet&&r.pct>0);if(sp.length)body.creatorFeeSplit=sp;}
       // Per-coin custom curve (Meteora rail): this coin gets its own start/graduation MC.
       if(state.launchRail==="meteora"&&$("#lcCustomCurve")&&$("#lcCustomCurve").checked){body.customCurve=true;body.customInitialMcap=String(($("#lcCustomInit")&&$("#lcCustomInit").value)||"5000");body.customMigrationMcap=String(($("#lcCustomMig")&&$("#lcCustomMig").value)||"69000");}
       if(state.launchImg){body.imageDataUrl=state.launchImg.dataUrl;body.imageName=state.launchImg.name;body.imageType=state.launchImg.type;}

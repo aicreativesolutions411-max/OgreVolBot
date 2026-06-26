@@ -68,7 +68,7 @@ import {
   selectPumpLaunchWallet,
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
-import { createVanityPool, assertValidVanitySuffix } from "./lib/vanityMint.js";
+import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
 import {
@@ -253,7 +253,16 @@ let autopilotWalletRecord = null;
 // empty pool (or vanity disabled) falls back to a random mint so a paid launch never hangs.
 const VANITY_MINT_POOL_FILE = path.join(CONFIG.dataDir, "vanity-mint-pool.json");
 let vanityMintPool = null;
-if (CONFIG.launchVanityEnabled) {
+function vanityPoolFileKeyCount() {
+  try { return readVanityPoolFile(VANITY_MINT_POOL_FILE).filter((e) => e && e.publicKey && e.secretKey).length; }
+  catch { return 0; }
+}
+// Auto-enable vanity when explicitly turned on OR a pool file with keys already exists — Meteora-style,
+// so the owner can load a pool (via /api/web/launch/vanity-pool) and it goes live with NO env edit.
+// Returns the (lazily created) pool object, or null if there's nothing to enable.
+function ensureVanityPool() {
+  if (vanityMintPool) return vanityMintPool;
+  if (!CONFIG.launchVanityEnabled && vanityPoolFileKeyCount() === 0) return null;
   try {
     assertValidVanitySuffix(CONFIG.launchVanitySuffix);
     vanityMintPool = createVanityPool({
@@ -267,15 +276,50 @@ if (CONFIG.launchVanityEnabled) {
     console.warn(`[vanity] disabled — invalid suffix "${CONFIG.launchVanitySuffix}": ${e.message}`);
     vanityMintPool = null;
   }
+  return vanityMintPool;
 }
+ensureVanityPool();
 // Synchronous mint-keypair source for the launch service (all rails). Vanity when the pool has keys.
 function generateLaunchMintKeypair() {
-  if (vanityMintPool) {
-    const kp = vanityMintPool.popKeypair();
+  const pool = vanityMintPool || ensureVanityPool();
+  if (pool) {
+    const kp = pool.popKeypair();
     if (kp) return kp;
     console.warn(`[vanity] pool EMPTY — launching with a random mint (refill: node scripts/grind-vanity.mjs ${CONFIG.launchVanitySuffix})`);
   }
   return Keypair.generate();
+}
+// Owner-gated: merge submitted …SUFFIX mint keypairs into the pool file + reload the live pool. Accepts
+// pool entries {publicKey, secretKey(base58)}, {secretKey:[64 ints]}, or raw [64 ints]. Keys are SECRET
+// (they sign the token-create), so this never lives in the repo — the owner loads them through here.
+async function webLoadVanityPool(body = {}) {
+  const suffix = CONFIG.launchVanitySuffix;
+  assertValidVanitySuffix(suffix);
+  const caseInsensitive = CONFIG.launchVanityCaseInsensitive;
+  const raw = Array.isArray(body.keys) ? body.keys : (Array.isArray(body) ? body : []);
+  const accepted = [];
+  for (const item of raw) {
+    let kp = null;
+    try {
+      if (Array.isArray(item)) kp = Keypair.fromSecretKey(Uint8Array.from(item));
+      else if (item && Array.isArray(item.secretKey)) kp = Keypair.fromSecretKey(Uint8Array.from(item.secretKey));
+      else if (item && typeof item.secretKey === "string") kp = poolEntryToKeypair(item);
+    } catch { kp = null; }
+    if (!kp) continue;
+    if (!matchesVanity(kp.publicKey.toBase58(), suffix, { caseInsensitive })) continue;
+    accepted.push(keypairToPoolEntry(kp));
+  }
+  if (!accepted.length) return { ok: false, error: `No valid …${suffix} mint keypairs found in the upload.` };
+  const existing = readVanityPoolFile(VANITY_MINT_POOL_FILE).filter((e) => e && e.publicKey && e.secretKey);
+  const seen = new Set(existing.map((e) => e.publicKey));
+  const merged = existing.concat(accepted.filter((e) => !seen.has(e.publicKey)));
+  writeVanityPoolFile(VANITY_MINT_POOL_FILE, { suffix, keys: merged });
+  vanityMintPool = null;
+  ensureVanityPool();
+  return { ok: true, suffix, added: merged.length - existing.length, total: merged.length };
+}
+function vanityPoolStatus() {
+  return { enabled: Boolean(vanityMintPool || ensureVanityPool()), suffix: CONFIG.launchVanitySuffix, count: vanityPoolFileKeyCount() };
 }
 
 // Persisted Meteora DBC config (created ONE-TIME in-app by the owner). Lets the Meteora rail work with
@@ -7892,6 +7936,48 @@ async function handleWebApiRequest(request, response, requestUrl) {
     // SlimeWire (Meteora) curve setup — owner one-tap. Creates the ONE on-chain DBC config (per-coin
     // fees → each launcher) using the owner's managed wallet, persists it, and auto-enables the rail.
     // No Render env editing. Simulate-guarded so a malformed config tx never spends SOL.
+    if (request.method === "POST" && pathname === "/api/web/launch/split-creator-fees") {
+      const body = await readJsonRequestBody(request);
+      const result = await webSplitCreatorFees(auth.userId, body);
+      sendWebJson(request, response, 200, { ok: true, payout: result });
+      return;
+    }
+    // Presale "buy + send at launch" ESCROW — GATED (501 until PRESALE_ESCROW_ENABLED=true). Creator-only.
+    if (request.method === "POST" && pathname === "/api/web/presale/escrow/create") {
+      const result = await webCreatePresaleEscrow(auth.userId, await readJsonRequestBody(request, 8_000));
+      sendWebJson(request, response, 200, result);
+      return;
+    }
+    if (request.method === "GET" && pathname === "/api/web/presale/escrow") {
+      const result = await webPresaleEscrowStatus(auth.userId, requestUrl.searchParams.get("id") || "");
+      sendWebJson(request, response, 200, result);
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/presale/escrow/refund") {
+      const result = await webRefundPresaleEscrow(auth.userId, await readJsonRequestBody(request));
+      sendWebJson(request, response, 200, result);
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/presale/escrow/finalize") {
+      const result = await webFinalizePresaleEscrow(auth.userId, await readJsonRequestBody(request));
+      sendWebJson(request, response, 200, result);
+      return;
+    }
+    if (request.method === "GET" && pathname === "/api/web/launch/vanity-status") {
+      sendWebJson(request, response, 200, { ok: true, ...vanityPoolStatus() });
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/launch/vanity-pool") {
+      // Owner-key gated — this loads SECRET mint keypairs, so only the owner may seed the pool.
+      const body = await readJsonRequestBody(request, 512_000);
+      if (!CONFIG.autopilotOwnerKey || String(body.key || "") !== CONFIG.autopilotOwnerKey) {
+        sendWebJson(request, response, 403, { ok: false, error: "Owner key required to load the vanity pool." });
+        return;
+      }
+      const result = await webLoadVanityPool(body);
+      sendWebJson(request, response, result.ok ? 200 : 400, result);
+      return;
+    }
     if (request.method === "GET" && pathname === "/api/web/launch/meteora-config") {
       const key = getMeteoraConfigKey();
       sendWebJson(request, response, 200, { ok: true, configured: Boolean(key), configKey: key || null, enabled: meteoraRailEnabled() });
@@ -31600,6 +31686,198 @@ async function bumpPresaleInterest(body = {}) {
   await writeJsonFile(presalesPath(), store);
   return { ok: true, interest: p.interest, backerCount: p.backers.length };
 }
+
+// --- PRESALE "buy + send at launch" ESCROW (GATED: PRESALE_ESCROW_ENABLED, default false) ------------
+// Unlike the non-custodial board above, an ESCROW presale CUSTODIES contributor SOL in a SlimeWire-
+// managed wallet until the creator finalizes: the escrow buys the token with the pooled SOL and sends
+// each contributor their PRO-RATA token share — or refunds everyone if it's called off. This is real
+// money custody + a token fan-out, so it stays OFF (every mutating call 501s) until the owner has
+// dust-tested it end to end and flips PRESALE_ESCROW_ENABLED=true. Prod presales stay non-custodial.
+const PRESALE_ESCROW_OWNER = "__presale_escrow__";
+const PRESALE_ESCROW_MAX_CONTRIBUTORS = 20;
+function presaleEscrowEnabled() { return parseBoolean(process.env.PRESALE_ESCROW_ENABLED || "false"); }
+function assertPresaleEscrowEnabled() {
+  if (!presaleEscrowEnabled()) {
+    const e = new Error("Presale escrow is in TEST MODE — not live yet. Owner: dust-test it, then set PRESALE_ESCROW_ENABLED=true.");
+    e.statusCode = 501; throw e;
+  }
+}
+// The managed escrow wallet for a presale (we hold the key; contributors send SOL here).
+async function getPresaleEscrowWallet(presaleId) {
+  const label = `psesc:${String(presaleId).replace(/[^A-Za-z0-9]/g, "").slice(0, 24)}`;
+  const existing = (await readWalletStore()).wallets.find((x) => String(x.ownerId) === PRESALE_ESCROW_OWNER && x.label === label);
+  if (existing) return existing;
+  return mutateWalletStore((store) => {
+    let w = store.wallets.find((x) => String(x.ownerId) === PRESALE_ESCROW_OWNER && x.label === label);
+    if (!w) { const kp = Keypair.generate(); w = walletRecord(label, kp, PRESALE_ESCROW_OWNER); store.wallets.push(w); }
+    return w;
+  });
+}
+// Contribution ledger from the chain: sender -> total lamports sent INTO the escrow wallet. Bounded.
+async function presaleEscrowLedger(escrowPubkey) {
+  const key = new PublicKey(escrowPubkey);
+  const sigs = await rpcRead("presale escrow sigs", (c) => c.getSignaturesForAddress(key, { limit: 200 }), {}).catch(() => null);
+  const byWallet = new Map();
+  for (const s of (Array.isArray(sigs) ? sigs : []).slice(0, 120)) {
+    const tx = await rpcRead("presale escrow tx", (c) => c.getParsedTransaction(s.signature, { maxSupportedTransactionVersion: 0 }), {}).catch(() => null);
+    const instrs = tx?.transaction?.message?.instructions || [];
+    for (const ix of instrs) {
+      const info = ix?.parsed?.info;
+      if (ix?.program === "system" && ix?.parsed?.type === "transfer" && info?.destination === escrowPubkey) {
+        const from = String(info.source || "");
+        const lamports = Number(info.lamports || 0);
+        if (from && from !== escrowPubkey && lamports > 0) byWallet.set(from, (byWallet.get(from) || 0) + lamports);
+      }
+    }
+  }
+  return [...byWallet.entries()].map(([wallet, lamports]) => ({ wallet, lamports })).sort((a, b) => b.lamports - a.lamports);
+}
+function findEscrowPresale(store, id) {
+  return (store.presales || []).find((x) => x.id === id && x.escrow);
+}
+async function webCreatePresaleEscrow(userId, body = {}) {
+  assertPresaleEscrowEnabled();
+  const name = String(body.name || "").replace(/[^A-Za-z0-9 _$.-]/g, "").slice(0, 32).trim();
+  const symbol = String(body.symbol || "").replace(/[^A-Za-z0-9_$]/g, "").toUpperCase().slice(0, 12);
+  if (!name || !symbol) { const e = new Error("name + ticker required"); e.statusCode = 400; throw e; }
+  const target = Math.max(0.1, Math.min(100000, Number(body.target) || 10));
+  const days = Math.max(1, Math.min(30, Math.round(Number(body.days) || 3)));
+  const store = await readWalletStore();
+  const dev = getWalletAt(store, parseWebWalletIndex(firstString(body.devWalletIndex, body.walletIndex)), userId);
+  const now = Date.now();
+  const id = "pse" + now.toString(36) + Math.random().toString(36).slice(2, 6);
+  const escrow = await getPresaleEscrowWallet(id);
+  const psStore = await readPresales();
+  psStore.presales.push({
+    id, name, symbol, target, escrow: true,
+    by: String(body.by || "anon").replace(/[^A-Za-z0-9_$. -]/g, "").slice(0, 16) || "anon",
+    blurb: String(body.blurb || "").replace(/[^\x20-\x7E]/g, "").slice(0, 400),
+    x: String(body.x || "").slice(0, 120), tg: String(body.tg || "").slice(0, 120), web: String(body.web || "").slice(0, 120),
+    wallet: escrow.publicKey, escrowWallet: escrow.publicKey, creatorUserId: String(userId), devPublicKey: dev.publicKey,
+    raisedSol: 0, contributors: 0, interest: 1, backers: [],
+    at: new Date(now).toISOString(), deadline: new Date(now + days * 86400000).toISOString(), status: "open"
+  });
+  psStore.presales = psStore.presales.slice(-120);
+  await writeJsonFile(presalesPath(), psStore);
+  return { ok: true, id, escrowWallet: escrow.publicKey, note: "Contributors send SOL to escrowWallet. Finalize buys + distributes pro-rata; refund returns it." };
+}
+async function webPresaleEscrowStatus(userId, id) {
+  assertPresaleEscrowEnabled();
+  const store = await readPresales();
+  const p = findEscrowPresale(store, String(id || ""));
+  if (!p) { const e = new Error("escrow presale not found"); e.statusCode = 404; throw e; }
+  const escrow = p.escrowWallet || p.wallet;
+  const bal = await rpcRead("presale escrow balance", (c) => c.getBalance(new PublicKey(escrow), "confirmed"), {}).catch(() => 0);
+  const ledger = await presaleEscrowLedger(escrow);
+  return {
+    ok: true, id, escrowWallet: escrow, balanceSol: lamportsToSol(Number(bal) || 0), targetSol: p.target,
+    contributors: ledger.length, ledger: ledger.map((l) => ({ wallet: l.wallet, sol: lamportsToSol(l.lamports) })),
+    status: p.status || "open", deadline: p.deadline, isCreator: String(p.creatorUserId || "") === String(userId)
+  };
+}
+function loadEscrowForCreator(psStore, wStore, id, userId) {
+  const p = findEscrowPresale(psStore, id);
+  if (!p) { const e = new Error("escrow presale not found"); e.statusCode = 404; throw e; }
+  if (String(p.creatorUserId || "") !== String(userId)) { const e = new Error("Only the presale creator can do that."); e.statusCode = 403; throw e; }
+  const escrowRec = wStore.wallets.find((w) => w.publicKey === (p.escrowWallet || p.wallet) && String(w.ownerId) === PRESALE_ESCROW_OWNER);
+  if (!escrowRec) { const e = new Error("escrow wallet missing"); e.statusCode = 500; throw e; }
+  return { p, escrowRec };
+}
+async function webRefundPresaleEscrow(userId, body = {}) {
+  assertPresaleEscrowEnabled();
+  return runIdempotentMoneyOp("presale-refund", userId, firstString(body.tradeAttemptId, body.clientRequestId),
+    () => webRefundPresaleEscrowCore(userId, body), { busyMessage: "Refund is already running — SlimeWire won't double-refund." });
+}
+async function webRefundPresaleEscrowCore(userId, body = {}) {
+  const id = String(body.id || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 24);
+  const psStore = await readPresales();
+  const wStore = await readWalletStore();
+  const { p, escrowRec } = loadEscrowForCreator(psStore, wStore, id, userId);
+  const keypair = decryptWallet(escrowRec);
+  const ledger = (await presaleEscrowLedger(escrowRec.publicKey)).slice(0, PRESALE_ESCROW_MAX_CONTRIBUTORS);
+  if (!ledger.length) { const e = new Error("No contributions to refund."); e.statusCode = 400; throw e; }
+  const bal = Number(await rpcRead("escrow balance", (c) => c.getBalance(keypair.publicKey, "confirmed"), {}).catch(() => 0));
+  const feeReserve = 5000 * (ledger.length + 1);
+  const distributable = bal - feeReserve;
+  if (distributable <= 0) { const e = new Error("Escrow balance too low to refund after the network fee."); e.statusCode = 400; throw e; }
+  // Refund pro-rata to actual contributions (escrow may be slightly under sum-of-contributions after fees).
+  const parts = splitReferralLamports(BigInt(distributable), ledger.map((c) => ({ wallet: c.wallet, pct: c.lamports }))).filter((x) => x.lamports > 0n);
+  const tx = new Transaction();
+  for (const part of parts) tx.add(SystemProgram.transfer({ fromPubkey: keypair.publicKey, toPubkey: new PublicKey(part.wallet), lamports: Number(part.lamports) }));
+  const signature = await sendLegacyTransaction(tx, [keypair]);
+  invalidateWalletReadCache(escrowRec.publicKey);
+  p.status = "refunded"; p.refundedAt = new Date().toISOString();
+  await writeJsonFile(presalesPath(), psStore);
+  await audit("presale_escrow_refund", { userId, id, contributors: parts.length, signature });
+  return { ok: true, action: "refund", refunded: parts.length, signature };
+}
+async function webFinalizePresaleEscrow(userId, body = {}) {
+  assertPresaleEscrowEnabled();
+  return runIdempotentMoneyOp("presale-finalize", userId, firstString(body.tradeAttemptId, body.clientRequestId),
+    () => webFinalizePresaleEscrowCore(userId, body), { lockMs: 180_000, busyMessage: "Finalize is already running — SlimeWire won't buy/distribute twice." });
+}
+async function webFinalizePresaleEscrowCore(userId, body = {}) {
+  const id = String(body.id || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 24);
+  const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
+  const slippageBps = parseWebSlippage(body.slippageBps);
+  const psStore = await readPresales();
+  const wStore = await readWalletStore();
+  const { p, escrowRec } = loadEscrowForCreator(psStore, wStore, id, userId);
+  if (p.status === "finalized") { const e = new Error("This presale was already finalized."); e.statusCode = 409; throw e; }
+  const ledger = (await presaleEscrowLedger(escrowRec.publicKey)).slice(0, PRESALE_ESCROW_MAX_CONTRIBUTORS);
+  if (!ledger.length) { const e = new Error("No contributions to finalize."); e.statusCode = 400; throw e; }
+  const totalContrib = ledger.reduce((a, c) => a + c.lamports, 0);
+  const bal = Number(await rpcRead("escrow balance", (c) => c.getBalance(escrowRec.publicKey, "confirmed"), {}).catch(() => 0));
+  // Reserve buy fees + per-contributor ATA rent (~0.00204 SOL each) + transfer fees, so the buy can't
+  // strand the distribution with no SOL for token-account rent.
+  const reserve = CONFIG.buyReserveLamports + 2_100_000 * ledger.length + 5000 * (ledger.length + 2);
+  const buyLamports = bal - reserve;
+  if (buyLamports <= 0) { const e = new Error(`Escrow needs more SOL: has ${lamportsToSol(bal)}, needs ~${lamportsToSol(reserve)} reserved for buy + ${ledger.length} payouts.`); e.statusCode = 400; throw e; }
+  // 1) Escrow buys the token with the pooled SOL.
+  const buyResult = await buyTokenForPlan(escrowRec, tokenMint, buyLamports, slippageBps, { trackTokenDelta: true, userId });
+  // 2) Read the escrow's real token account for the bought mint (ATA + program + decimals + raw amount).
+  const escrowKp = decryptWallet(escrowRec);
+  const lookup = await getOwnedTokenAccountsWithWarningsCached(escrowKp.publicKey, { force: true });
+  const acct = (lookup.accounts || []).find((a) => a.mint === tokenMint && a.rawAmount > 0n);
+  if (!acct) { const e = new Error("Buy succeeded but no tokens landed in escrow to distribute — refund instead."); e.statusCode = 500; throw e; }
+  const mint = new PublicKey(tokenMint);
+  const decimals = Number.isInteger(acct.decimals) ? acct.decimals : await getMintDecimals(mint);
+  const tokenProgramId = new PublicKey(acct.tokenProgramId || TOKEN_PROGRAM_ID);
+  const sourceAta = new PublicKey(acct.pubkey);
+  const totalTokens = BigInt(acct.rawAmount);
+  // 3) Distribute PRO-RATA to each contributor (one tx each; bounded ≤20). Last gets the remainder.
+  const payouts = [];
+  let assigned = 0n;
+  const distrib = [];
+  for (let i = 0; i < ledger.length; i += 1) {
+    const share = i === ledger.length - 1
+      ? (totalTokens - assigned)
+      : (totalTokens * BigInt(ledger[i].lamports)) / BigInt(totalContrib);
+    assigned += share;
+    distrib.push({ wallet: ledger[i].wallet, rawAmount: share });
+  }
+  for (const d of distrib) {
+    if (d.rawAmount <= 0n) { payouts.push({ wallet: d.wallet, ok: false, message: "share rounded to zero" }); continue; }
+    try {
+      const dest = new PublicKey(d.wallet);
+      const destAta = getAssociatedTokenAddress(mint, dest, tokenProgramId);
+      const tx = new Transaction();
+      const destInfo = await rpcWithRetry("check contributor token account", () => connection.getAccountInfo(destAta, "confirmed"));
+      if (!destInfo) tx.add(createAssociatedTokenAccountInstruction(escrowKp.publicKey, destAta, dest, mint, tokenProgramId));
+      tx.add(createTransferCheckedInstruction(sourceAta, mint, destAta, escrowKp.publicKey, d.rawAmount, decimals, [], tokenProgramId));
+      const sig = await sendLegacyTransaction(tx, [escrowKp]);
+      payouts.push({ wallet: d.wallet, ok: true, tokens: rawTokenAmountToUi(d.rawAmount, decimals), signature: sig });
+    } catch (error) {
+      payouts.push({ wallet: d.wallet, ok: false, message: friendlyError(error) });
+    }
+  }
+  invalidateWalletReadCache(escrowRec.publicKey);
+  const okCount = payouts.filter((x) => x.ok).length;
+  p.status = "finalized"; p.finalizedAt = new Date().toISOString(); p.tokenMint = tokenMint; p.buySignature = buyResult.signature;
+  await writeJsonFile(presalesPath(), psStore);
+  await audit("presale_escrow_finalize", { userId, id, tokenMint, buyLamports: String(buyLamports), distributed: okCount, contributors: ledger.length, buySignature: buyResult.signature });
+  return { ok: true, action: "finalize", tokenMint, buySignature: buyResult.signature, distributed: okCount, contributors: ledger.length, payouts };
+}
 // NON-CUSTODIAL on-chain tracking: for each ACTIVE presale that set a deposit wallet, read the
 // wallet's SOL balance (= raised) and its transfer count (= contributors / how many sent) straight
 // from the chain. Throttled + fire-and-forget from the GET so the board stays live without us ever
@@ -42802,6 +43080,9 @@ async function webLaunchPumpCoin(userId, body = {}) {
       buybackWallet,
       burnCreatorFees
     },
+    // Up to 4 promoter wallets + % to share the creator's earnings with. Stored on the coin (display +
+    // pre-fill); paid out by the creator-driven /api/web/launch/split-creator-fees action.
+    creatorFeeSplit: normalizeReferralPayoutSplit(body.creatorFeeSplit) || [],
     devBuy: {
       enabled: devBuyEnabled,
       amountSol: cleanLaunchNumber(body.devBuySol, 0, 0, 1000),
@@ -43502,6 +43783,46 @@ async function webSweepBackgroundWallets(userId, body = {}) {
     sweptSol: Number(sweptSol.toFixed(6)),
     rows,
     summary: `Swept ${volumeWallets.length} background wallet(s) and returned ${sweptSol.toFixed(4)} SOL.${cleared ? ` Cleared ${cleared} empty wallet(s).` : ""}`
+  };
+}
+
+// Promoter fee-split payout: send `amountSol` from the creator's managed wallet, divided by % across up
+// to 4 promoter wallets (exact split, last wallet absorbs rounding — reuses the proven referral math).
+// Rail-agnostic: the creator splits whatever creator earnings they've received. Idempotent.
+async function webSplitCreatorFees(userId, body = {}) {
+  return runIdempotentMoneyOp("web-split-fees", userId,
+    firstString(body.tradeAttemptId, body.clientRequestId),
+    () => webSplitCreatorFeesCore(userId, body),
+    { busyMessage: "This payout is already submitting — SlimeWire won't send it twice." });
+}
+
+async function webSplitCreatorFeesCore(userId, body = {}) {
+  const store = await readWalletStore();
+  const walletIndex = parseWebWalletIndex(body.fromWalletIndex || body.walletIndex);
+  const wallet = { ...getWalletAt(store, walletIndex, userId), webIndex: walletIndex };
+  const keypair = decryptWallet(wallet);
+  const split = normalizeReferralPayoutSplit(body.splits || body.creatorFeeSplit);
+  if (!split || !split.length) { const e = new Error("Add at least one promoter wallet with a percentage."); e.statusCode = 400; throw e; }
+  const amountLamports = solToLamports(parsePositiveNumber(String(body.amountSol || "")));
+  if (amountLamports <= 0) { const e = new Error("Enter a SOL amount greater than zero."); e.statusCode = 400; throw e; }
+  const parts = splitReferralLamports(BigInt(amountLamports), split).filter((p) => p.lamports > 0n);
+  if (!parts.length) { const e = new Error("The split rounded to zero — raise the amount."); e.statusCode = 400; throw e; }
+  const tx = new Transaction();
+  for (const part of parts) {
+    const dest = new PublicKey(part.wallet);
+    if (keypair.publicKey.equals(dest)) { const e = new Error("A promoter wallet matches the source wallet."); e.statusCode = 400; throw e; }
+    await assertDestinationCanReceiveSol(dest, Number(part.lamports));
+    tx.add(SystemProgram.transfer({ fromPubkey: keypair.publicKey, toPubkey: dest, lamports: Number(part.lamports) }));
+  }
+  const signature = await sendLegacyTransaction(tx, [keypair]);
+  invalidateWalletReadCache(wallet.publicKey);
+  parts.forEach((p) => invalidateWalletReadCache(p.wallet));
+  await audit("web_split_creator_fees", { userId, walletIndex, amountSol: lamportsToSol(amountLamports), recipients: parts.length, tokenMint: String(body.tokenMint || ""), signature });
+  return {
+    action: "split-creator-fees",
+    amountSol: lamportsToSol(amountLamports),
+    recipients: parts.map((p) => ({ wallet: p.wallet, sol: lamportsToSol(Number(p.lamports)) })),
+    signature
   };
 }
 
