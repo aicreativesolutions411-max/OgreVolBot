@@ -2685,7 +2685,8 @@
           '<div class="ln">• <b>You earn on every rail.</b> pump.fun, SlimeWire &amp; Meteora all pay the coin\'s trading fees to your wallet — and on the SlimeWire curve you keep <b>100%</b> of the creator fees.</div>'+
           '<div class="ln">• <b>Cheap to launch.</b> Just a tiny Solana network fee, plus your optional dev buy below.</div>'+
         '</div>'+
-        '<div class="field row2"><div><label>First buy (SOL)</label><input id="lcDevBuy" inputmode="decimal" placeholder="0 = skip"></div><div><label>Your wallet (you\'re the creator)</label>'+walletSelectHtml("lcDevWallet")+'</div></div>'+
+        '<div class="field row2"><div><label>First buy / seed liquidity (SOL)</label><input id="lcDevBuy" inputmode="decimal" placeholder="0 = skip"></div><div><label>Your wallet (you\'re the creator)</label>'+walletSelectHtml("lcDevWallet")+'</div></div>'+
+        '<div class="lcnote" style="display:block;font-size:11px">💧 <b>Your first buy IS the starting liquidity.</b> It puts real SOL into the curve so the coin isn\'t empty at launch — and you (or anyone) can add more any time by buying. On a bonding curve, buying = adding liquidity.</div>'+
         '<label class="lcheck"><input type="checkbox" id="lcBundle" checked> <span><b>Buy at the exact launch moment</b> (anti-snipe) — your first buy lands together with the coin, so bots can\'t jump in ahead of you.</span></label>'+
         '<label class="lcheck"><input type="checkbox" id="lcFeeMax" checked> <span><b>Send all creator fees to my wallet</b> — you keep 100% of the fees this coin earns, paid straight to your wallet. (Uncheck for none.)</span></label>'+
         '<label class="lcheck"><input type="checkbox" id="lcBundleWallets"> <span><b>Also bundle-buy from my other wallets</b> at launch — first-block buys across your funded wallets so the early supply is yours, not snipers\'.</span></label>'+
