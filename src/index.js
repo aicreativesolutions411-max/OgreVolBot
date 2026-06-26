@@ -19283,11 +19283,17 @@ async function collectSolFee(signer, feeLamports, options = {}) {
       lamports: ownerLamports
     }));
   }
-  if (targets.referralWallet && referralLamports > 0) {
+  // One transfer per referral payout wallet (1 normally, up to 4 when a split is configured).
+  const referralSplits = Array.isArray(targets.referralSplits) && targets.referralSplits.length
+    ? targets.referralSplits
+    : (targets.referralWallet && referralLamports > 0 ? [{ wallet: targets.referralWallet, lamports: BigInt(Math.round(referralLamports)) }] : []);
+  for (const part of referralSplits) {
+    const lp = Number(part.lamports);
+    if (!(lp > 0)) continue;
     tx.add(SystemProgram.transfer({
       fromPubkey: signer.publicKey,
-      toPubkey: new PublicKey(targets.referralWallet),
-      lamports: referralLamports
+      toPubkey: new PublicKey(part.wallet),
+      lamports: lp
     }));
   }
   if (!tx.instructions.length) return null;
@@ -19309,24 +19315,65 @@ async function collectSolFee(signer, feeLamports, options = {}) {
   return signature;
 }
 
+// Up to 4 payout wallets each with a weight (%). Returns null when there's no valid split (so callers
+// fall back to the single referralPayoutWallet — byte-identical to the old behavior).
+function normalizeReferralPayoutSplit(raw) {
+  if (!Array.isArray(raw)) return null;
+  const out = [];
+  const seen = new Set();
+  for (const item of raw.slice(0, 4)) {
+    const wallet = String(item?.wallet || item?.publicKey || "").trim();
+    const pct = Number(item?.pct ?? item?.percent ?? 0);
+    if (!wallet || !(pct > 0) || seen.has(wallet)) continue;
+    try { new PublicKey(wallet); } catch { continue; }
+    seen.add(wallet);
+    out.push({ wallet, pct });
+  }
+  return out.length ? out : null;
+}
+// Split `referralLamports` (BigInt) across the wallets by weight; the LAST wallet absorbs the rounding
+// remainder so the parts always sum EXACTLY to referralLamports (no dust gained or lost).
+function splitReferralLamports(referralLamports, split) {
+  const total = BigInt(referralLamports);
+  const weightSum = split.reduce((a, s) => a + Number(s.pct), 0);
+  if (!(weightSum > 0)) return [{ wallet: split[0].wallet, lamports: total }];
+  const parts = [];
+  let assigned = 0n;
+  for (let i = 0; i < split.length; i += 1) {
+    const lamports = i === split.length - 1
+      ? (total - assigned)
+      : (total * BigInt(Math.round(Number(split[i].pct) * 1e6))) / BigInt(Math.round(weightSum * 1e6));
+    parts.push({ wallet: split[i].wallet, lamports });
+    assigned += lamports;
+  }
+  return parts;
+}
+
 async function referralFeeTargets(userId, feeLamports) {
   const total = BigInt(feeLamports);
-  const fallback = { ownerLamports: total, referralLamports: 0n, referralWallet: "", referrerUserId: "" };
+  const fallback = { ownerLamports: total, referralLamports: 0n, referralWallet: "", referralSplits: [], referrerUserId: "" };
   if (!userId || CONFIG.bundleFeeBps <= 0 || CONFIG.referralFeeBps <= 0) return fallback;
 
   try {
     const store = await readWebAuthStore();
     const profile = store.profiles[String(userId)] || {};
     const referrer = profile.referredByUserId ? store.profiles[String(profile.referredByUserId)] : null;
-    const referralWallet = referrer?.referralPayoutWallet || "";
-    if (!referralWallet || referralWallet === CONFIG.feeWallet) return fallback;
-    new PublicKey(referralWallet);
+    // Up to 4 split wallets if configured; else the single payout wallet (identical to before).
+    const split = normalizeReferralPayoutSplit(referrer?.referralPayoutSplit)
+      || (referrer?.referralPayoutWallet ? [{ wallet: referrer.referralPayoutWallet, pct: 100 }] : null);
+    if (!split) return fallback;
+    const validSplit = split.filter((s) => s.wallet && s.wallet !== CONFIG.feeWallet);
+    if (!validSplit.length) return fallback;
+    for (const s of validSplit) new PublicKey(s.wallet); // any invalid → throws → caught → fallback
     const referralLamports = (total * BigInt(CONFIG.referralFeeBps)) / BigInt(CONFIG.bundleFeeBps);
     if (referralLamports <= 0n || referralLamports >= total) return fallback;
+    const referralSplits = splitReferralLamports(referralLamports, validSplit).filter((p) => p.lamports > 0n);
+    if (!referralSplits.length) return fallback;
     return {
       ownerLamports: total - referralLamports,
       referralLamports,
-      referralWallet,
+      referralSplits,
+      referralWallet: referralSplits[0].wallet,
       referrerUserId: String(profile.referredByUserId || "")
     };
   } catch {
@@ -35887,6 +35934,7 @@ async function webUserSummary(userId) {
     referralCode: profile.referralCode || "",
     referralLink: profile.referralCode ? webReferralLink(profile.referralCode) : "",
     referralPayoutWallet: profile.referralPayoutWallet || "",
+    referralPayoutSplit: Array.isArray(profile.referralPayoutSplit) ? profile.referralPayoutSplit : [],
     referralStats: normalizeReferralStats(profile.referralStats),
     referredByCode: profile.referredByCode || "",
     showOnTraderBoard: Boolean(profile.showOnTraderBoard),
@@ -36509,10 +36557,16 @@ async function updateWebReferralProfile(userId, body = {}) {
       throw error;
     }
   }
+  // Up to 4 payout wallets each with a % (the fee split). Empty/clear = single referralPayoutWallet.
+  let referralPayoutSplit = Array.isArray(existing.referralPayoutSplit) ? existing.referralPayoutSplit : [];
+  if (body.referralPayoutSplit !== undefined || body.clearSplit) {
+    referralPayoutSplit = body.clearSplit ? [] : (normalizeReferralPayoutSplit(body.referralPayoutSplit) || []);
+  }
   const profile = {
     ...existing,
     referralCode,
     referralPayoutWallet,
+    referralPayoutSplit,
     showOnTraderBoard: parseBoolean(String(body.showOnTraderBoard ?? existing.showOnTraderBoard ?? "false")),
     traderBoardWalletMode,
     traderBoardWalletIndexes,

@@ -2340,6 +2340,9 @@
           '<button class="wbtn" id="saveRefCode">Save code</button>'+
           '<div class="field" style="margin-top:16px"><label>Referral payout wallet</label><input id="refWallet2" value="'+esc(u.referralPayoutWallet||"")+'" placeholder="Solana address to receive earnings"></div>'+
           '<button class="wbtn ghost" id="saveRefWallet">Save payout wallet</button>'+
+          '<div class="field" style="margin-top:16px"><label>Split earnings — up to 4 wallets (%)</label><div class="wnote" style="margin:0 0 8px">Optional. Pay your referral earnings to up to 4 wallets by percent. Leave blank to use the single wallet above.</div>'+
+            [0,1,2,3].map(function(i){var s=(u.referralPayoutSplit||[])[i]||{};return '<div class="field row2" style="margin-bottom:6px"><div><input id="rsW'+i+'" value="'+esc(s.wallet||"")+'" placeholder="Wallet '+(i+1)+' address"></div><div><input id="rsP'+i+'" inputmode="numeric" value="'+esc(s.pct||"")+'" placeholder="%"></div></div>';}).join("")+
+          '</div><button class="wbtn ghost" id="saveRefSplit">Save split</button>'+
         '</div></details>';})();
     }
     // Community social links — present on the wallet page for both signed-out and signed-in states.
@@ -2402,6 +2405,7 @@
     const snd=$("#sendSolBtn");if(snd)snd.onclick=async()=>{const dest=$("#sndDest").value.trim(),amt=Number($("#sndAmt").value);if(!dest){toast("Paste a destination address.",true);return;}if(!isFinite(amt)||amt<=0){toast("Enter a SOL amount.",true);return;}snd.disabled=true;snd.textContent="Sending…";await sendSolTo(state.activeWallet||1,dest,amt);snd.disabled=false;snd.textContent="Send SOL →";renderWallet();};
     const src=$("#saveRefCode");if(src)src.onclick=async()=>{const code=$("#refCode").value.trim();if(!code){toast("Enter a code.",true);return;}src.disabled=true;src.textContent="Saving…";const okk=await saveReferral({code});src.disabled=false;src.textContent="Save code";if(okk){toast("Referral code saved");renderWallet();}};
     const srw=$("#saveRefWallet");if(srw)srw.onclick=async()=>{const w=$("#refWallet2").value.trim();srw.disabled=true;srw.textContent="Saving…";const okk=await saveReferral(w?{wallet:w}:{clearPayout:true});srw.disabled=false;srw.textContent="Save payout wallet";if(okk){toast("Payout wallet saved");renderWallet();}};
+    const srs=$("#saveRefSplit");if(srs)srs.onclick=async()=>{const split=[];for(let i=0;i<4;i++){const w=($("#rsW"+i)&&$("#rsW"+i).value.trim())||"";const p=Number(($("#rsP"+i)&&$("#rsP"+i).value.trim())||0);if(w&&p>0)split.push({wallet:w,pct:p});}srs.disabled=true;srs.textContent="Saving…";const okk=await saveReferral(split.length?{referralPayoutSplit:split}:{clearSplit:true});srs.disabled=false;srs.textContent="Save split";if(okk){toast(split.length?("Split saved — "+split.length+" wallet"+(split.length>1?"s":"")):"Split cleared");renderWallet();}};
     const enA=$("#enAlerts");if(enA)enA.onclick=()=>GG.enableAlerts();
     const sx=$("#saveX");if(sx)sx.onclick=async()=>{const h=$("#xHandle").value.trim().replace(/^@/,"");sx.disabled=true;sx.textContent="…";const {ok,d}=await jpost("/api/web/profile/x",{x:h,handle:h});sx.disabled=false;sx.textContent="Save";if(ok&&d&&d.ok){if(d.user)state.user=d.user;toast("X handle saved");}else toast((d&&(d.error||d.message))||"Could not save",true);};
   }
