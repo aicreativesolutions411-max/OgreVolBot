@@ -2674,8 +2674,8 @@
         '<div id="lcMeteoraSetup" style="margin-top:8px"></div></div>'+
         '<div class="field row2"><div><label>Name</label><input id="lcName" maxlength="64" placeholder="My Coin"></div><div><label>Ticker</label><input id="lcSym" maxlength="12" placeholder="MYC"></div></div>'+
         '<div class="field"><label>Description</label><textarea id="lcDesc" maxlength="800" rows="2" placeholder="What\'s the meme?"></textarea></div>'+
-        '<div class="field"><label>Image (icon)</label><input id="lcImg" type="file" accept="image/*"><div id="lcImgPrev" class="mut" style="font-size:11px;margin-top:6px">PNG / JPG / WEBP / GIF, up to ~450KB.</div></div>'+
-        '<div class="field"><label>Banner (optional, wide 3:1)</label><input id="lcBanner" type="file" accept="image/*"><div id="lcBannerPrev" class="mut" style="font-size:11px;margin-top:6px">Cover image shown on the pump.fun page.</div></div>'+
+        '<div class="field"><label>Image (icon)</label><input id="lcImg" type="file" accept="image/*"><div id="lcImgPrev" class="mut" style="font-size:11px;margin-top:6px">PNG / JPG / WEBP / GIF / HEIC — big phone photos auto-compress.</div></div>'+
+        '<div class="field"><label>Banner (optional, wide 3:1)</label><input id="lcBanner" type="file" accept="image/*"><div id="lcBannerPrev" class="mut" style="font-size:11px;margin-top:6px">Wide cover for the coin page (optional). Auto-compresses.</div></div>'+
         '<div class="field row2"><div><label>Website</label><input id="lcWeb" placeholder="https://"></div><div><label>X / Twitter</label><input id="lcX" placeholder="@handle or link"></div></div>'+
         '<div class="field"><label>Telegram</label><input id="lcTg" placeholder="https://t.me/…"></div>'+
       '</div>'+
@@ -2703,7 +2703,17 @@
     // Rail picker (no re-render — keeps typed fields/images). meteora is dark; the backend returns a clear "test mode" message.
     document.querySelectorAll("#lcRails [data-rail]").forEach(b=>b.onclick=()=>{state.launchRail=b.dataset.rail;document.querySelectorAll("#lcRails [data-rail]").forEach(x=>x.classList.toggle("on",x===b));refreshMeteoraSetup();});
     refreshMeteoraSetup();
-    const readImg=(f,key,prevId,big)=>{if(!f)return;if(f.size>460000){toast("Image too big — keep it under ~450KB.",true);return;}const rd=new FileReader();rd.onload=()=>{state[key]={dataUrl:String(rd.result),name:f.name,type:f.type};state._launchKept=true;const p=$("#"+prevId);if(p)p.innerHTML='<img src="'+state[key].dataUrl+'" style="height:'+(big?"40":"64")+'px;'+(big?"":"width:64px;")+'border-radius:10px;object-fit:cover;border:1px solid var(--border)">';};rd.readAsDataURL(f);};
+    // Auto-compress big photos client-side (like pump) instead of rejecting them: draw to a canvas,
+    // scale down, re-encode as JPEG dropping quality until it's small enough. Falls back to the raw
+    // file if the browser can't render it to canvas (e.g. some HEIC) — the backend compresses too.
+    const compressLaunchImage=(file,maxDim,quality)=>new Promise((resolve)=>{const url=URL.createObjectURL(file);const img=new Image();img.onload=()=>{let w=img.naturalWidth||img.width,h=img.naturalHeight||img.height;const scale=Math.min(1,maxDim/Math.max(w,h||1));w=Math.max(1,Math.round(w*scale));h=Math.max(1,Math.round(h*scale));const c=document.createElement("canvas");c.width=w;c.height=h;const ctx=c.getContext("2d");ctx.fillStyle="#0b0f0a";ctx.fillRect(0,0,w,h);ctx.drawImage(img,0,0,w,h);URL.revokeObjectURL(url);let q=quality,out=c.toDataURL("image/jpeg",q);while(out.length>520000&&q>0.4){q-=0.1;out=c.toDataURL("image/jpeg",q);}resolve(out);};img.onerror=()=>{URL.revokeObjectURL(url);resolve(null);};img.src=url;});
+    const readImg=async(f,key,prevId,big)=>{if(!f)return;if(!/^image\//.test(f.type||"")&&!/\.(png|jpe?g|webp|gif|heic|heif|avif)$/i.test(f.name||"")){toast("Pick an image file.",true);return;}
+      let dataUrl,name=f.name||"image",type=f.type||"image/jpeg";
+      if(f.size>400000){const cz=await compressLaunchImage(f,big?1280:512,0.85);if(cz){dataUrl=cz;name=name.replace(/\.[^.]+$/,"")+".jpg";type="image/jpeg";}}
+      if(!dataUrl){dataUrl=await new Promise(r=>{const rd=new FileReader();rd.onload=()=>r(String(rd.result));rd.onerror=()=>r(null);rd.readAsDataURL(f);});}
+      if(!dataUrl){toast("Couldn't read that image — try another.",true);return;}
+      state[key]={dataUrl,name,type};state._launchKept=true;
+      const p=$("#"+prevId);if(p)p.innerHTML='<img src="'+dataUrl+'" style="height:'+(big?"40":"64")+'px;'+(big?"":"width:64px;")+'border-radius:10px;object-fit:cover;border:1px solid var(--border)">';};
     $("#lcImg").onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchImg","lcImgPrev",false);
     const lb=$("#lcBanner");if(lb)lb.onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchBanner","lcBannerPrev",true);
     const bw=$("#lcBundleWallets");if(bw)bw.onchange=()=>{const on=bw.checked;["lcBundleAmtWrap","lcBundleNote"].forEach(id=>{const e=$("#"+id);if(e)e.style.display=on?"":"none";});};

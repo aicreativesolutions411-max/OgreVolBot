@@ -42236,6 +42236,14 @@ async function webLaunchMeteoraDbc(userId, body, basePayload) {
     const sym = escapeTelegramHtml(basePayload.symbol || basePayload.name || "???");
     announceLaunchCard("launch", tokenMint, { name: basePayload.name, symbol: basePayload.symbol, description: basePayload.description, imageDataUrl: basePayload.imageDataUrl, x: basePayload.twitter, telegram: basePayload.telegram, website: basePayload.website }, buildLaunchAnnounceCaption(sym, tokenMint), launchAnnounceKb(tokenMint));
   } catch (e) { console.warn(`[meteora-launch] announce failed: ${e && e.message}`); }
+  // Persist the banner so the SlimeWire coin page renders the wide cover (same as the pump path).
+  if (basePayload.bannerDataUrl) {
+    try {
+      const banner = await launchBannerBufferForUpload(basePayload);
+      const bannerUri = banner ? await pinBannerToPumpFunIpfs(banner) : "";
+      if (bannerUri) recordCoinBanner(tokenMint, { bannerUri, symbol: basePayload.symbol, name: basePayload.name });
+    } catch (e) { console.warn(`[meteora-launch] banner record failed: ${e && e.message}`); }
+  }
   return {
     status: PUMP_LAUNCH_STATUS.COMPLETE, tokenMint, signature, requestId: attemptId,
     provider: "meteora-dbc", metadataUri: metadata.uri, dexUrl: dexScreenerUrl(tokenMint),
