@@ -108,6 +108,15 @@ test("subscription grant is idempotent + re-entrancy-guarded (no stacked free ti
   assert.match(body, /balLamports - grantedFor >= thresholdLamports/);
 });
 
+test("sweeps run bounded-concurrent (not serial N+1) + referral writes are locked", () => {
+  assert.match(functionBody(serverSource, "webSweepSol"), /runWithConcurrency\(wallets,/);
+  assert.match(functionBody(serverSource, "webSweepTokens"), /runWithConcurrency\(wallets,/);
+  // Referral payout stats RMW (runs on the fee path) is locked + records every split wallet, not just #1.
+  assert.match(functionBody(serverSource, "recordReferralFeePayout"), /mutateWebAuthStore\(/);
+  assert.match(functionBody(serverSource, "recordReferralFeePayout"), /wallets\[w\] = \{ lamports:/);
+  assert.match(functionBody(serverSource, "updateWebReferralProfile"), /mutateWebAuthStore\(/);
+});
+
 test("Meteora dark-rail gate covers the custom-curve branch too", () => {
   const body = functionBody(serverSource, "webLaunchMeteoraDbc");
   // The enablement throw must come BEFORE the customCurve branch (not be nested inside !customCurve).

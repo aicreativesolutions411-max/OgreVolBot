@@ -14858,6 +14858,11 @@ async function sellTokenAmountFromWalletViaPumpPortal(wallet, tokenMint, sellAmo
       const afterSol = await rpcWithRetry("read SOL after PumpPortal sell", () => connection.getBalance(keypair.publicKey, "confirmed"), CONFIG.rpcRetries, {
         priority
       }).catch(() => null);
+      // NOTE: this is the wallet's NET SOL increase — already minus the network fee, priority fee, and
+      // Jito exit tip (they reduce afterSol). We use it as the proceeds figure; it's a slight UNDER-count
+      // of the true swap output (so the platform fee on it is conservative and the user's shown proceeds
+      // never overstate). Parsing the exact token→SOL transfer from the confirmed tx would be more precise
+      // but isn't worth touching the live sell path for an accounting nuance with no principal risk.
       const grossOutLamports = Number.isFinite(beforeSol) && Number.isFinite(afterSol)
         ? Math.max(0, Number(afterSol) - Number(beforeSol))
         : 0;
@@ -19338,7 +19343,8 @@ async function collectSolFee(signer, feeLamports, options = {}) {
       referrerUserId: targets.referrerUserId,
       referralWallet: targets.referralWallet,
       lamports: referralLamports,
-      signature
+      signature,
+      splits: targets.referralSplits
     }).catch((error) => audit("referral_fee_record_failed", {
       userId: options.userId,
       referrerUserId: targets.referrerUserId,
@@ -19435,48 +19441,71 @@ function normalizeReferralStats(stats = {}) {
     };
   }).sort((a, b) => Number(b.lamports) - Number(a.lamports));
 
+  // Per-payout-wallet earnings breakdown (present once a split has paid out) — so a referrer with up to
+  // 4 split wallets sees what each one earned, not just the first.
+  const walletsObj = stats.wallets && typeof stats.wallets === "object" ? stats.wallets : {};
+  const wallets = Object.entries(walletsObj).map(([wallet, row]) => {
+    const lamports = String(row?.lamports || "0");
+    return { wallet, lamports, sol: referralSolString(lamports) };
+  }).sort((a, b) => Number(b.lamports) - Number(a.lamports));
+
   return {
     totalLamports,
     totalSol: referralSolString(totalLamports),
     payoutCount: Number(stats.payoutCount || 0),
     referralWallet: stats.referralWallet || "",
+    wallets,
     lastSignature: stats.lastSignature || "",
     lastPaidAt: stats.lastPaidAt || "",
     referrals
   };
 }
 
-async function recordReferralFeePayout({ userId, referrerUserId, referralWallet, lamports, signature }) {
+async function recordReferralFeePayout({ userId, referrerUserId, referralWallet, lamports, signature, splits = [] }) {
   if (!referrerUserId || !lamports) return;
   const payoutLamports = BigInt(lamports);
   if (payoutLamports <= 0n) return;
 
-  const store = await readWebAuthStore();
   const key = String(referrerUserId);
-  const profile = store.profiles[key] || {};
-  const currentStats = profile.referralStats && typeof profile.referralStats === "object" ? profile.referralStats : {};
-  const currentTotal = BigInt(currentStats.totalLamports || "0");
-  const referrals = currentStats.referrals && typeof currentStats.referrals === "object" ? { ...currentStats.referrals } : {};
-  const childKey = String(userId || "unknown");
-  const child = referrals[childKey] || {};
-  referrals[childKey] = {
-    lamports: String(BigInt(child.lamports || "0") + payoutLamports),
-    payoutCount: Number(child.payoutCount || 0) + 1,
-    lastSignature: signature || "",
-    lastPaidAt: new Date().toISOString()
-  };
+  // Atomic RMW under the web-auth lock — this runs on the trade fee path, so a concurrent profile write
+  // (or another referral payout) must not clobber the running stats.
+  await mutateWebAuthStore((store) => {
+    const profile = store.profiles[key] || {};
+    const currentStats = profile.referralStats && typeof profile.referralStats === "object" ? profile.referralStats : {};
+    const currentTotal = BigInt(currentStats.totalLamports || "0");
+    const referrals = currentStats.referrals && typeof currentStats.referrals === "object" ? { ...currentStats.referrals } : {};
+    const childKey = String(userId || "unknown");
+    const child = referrals[childKey] || {};
+    referrals[childKey] = {
+      lamports: String(BigInt(child.lamports || "0") + payoutLamports),
+      payoutCount: Number(child.payoutCount || 0) + 1,
+      lastSignature: signature || "",
+      lastPaidAt: new Date().toISOString()
+    };
+    // Per-wallet running totals so the stats reflect ALL payout wallets when a split is configured (the
+    // on-chain pay already went to each; this fixes "records only the first wallet"). Back-compat: a
+    // single payout wallet just accumulates under its own key.
+    const wallets = currentStats.wallets && typeof currentStats.wallets === "object" ? { ...currentStats.wallets } : {};
+    const parts = (Array.isArray(splits) && splits.length) ? splits : (referralWallet ? [{ wallet: referralWallet, lamports: payoutLamports }] : []);
+    for (const part of parts) {
+      const w = String(part.wallet || "");
+      const add = BigInt(part.lamports || 0);
+      if (!w || add <= 0n) continue;
+      wallets[w] = { lamports: String(BigInt((wallets[w] && wallets[w].lamports) || "0") + add) };
+    }
 
-  profile.referralStats = {
-    totalLamports: String(currentTotal + payoutLamports),
-    payoutCount: Number(currentStats.payoutCount || 0) + 1,
-    referralWallet,
-    lastSignature: signature || "",
-    lastPaidAt: new Date().toISOString(),
-    referrals
-  };
-  profile.updatedAt = new Date().toISOString();
-  store.profiles[key] = profile;
-  await writeWebAuthStore(store);
+    profile.referralStats = {
+      totalLamports: String(currentTotal + payoutLamports),
+      payoutCount: Number(currentStats.payoutCount || 0) + 1,
+      referralWallet,
+      wallets,
+      lastSignature: signature || "",
+      lastPaidAt: new Date().toISOString(),
+      referrals
+    };
+    profile.updatedAt = new Date().toISOString();
+    store.profiles[key] = profile;
+  });
   await audit("referral_fee_recorded", {
     userId,
     referrerUserId,
@@ -36672,7 +36701,9 @@ async function updateWebProfileXHandle(userId, body = {}) {
 }
 
 async function updateWebReferralProfile(userId, body = {}) {
-  const store = await readWebAuthStore();
+  // Atomic RMW — referral payout config (a money setting) and the referral-code uniqueness check must be
+  // consistent with the store we write, and not clobbered by a concurrent profile write.
+  return mutateWebAuthStore(async (store) => {
   const key = String(userId);
   const now = new Date().toISOString();
   const { profile: existing } = ensureWebProfileDefaults(store, userId);
@@ -36736,7 +36767,6 @@ async function updateWebReferralProfile(userId, body = {}) {
     updatedAt: now
   };
   store.profiles[key] = profile;
-  await writeWebAuthStore(store);
   await audit("web_referral_profile_update", {
     userId,
     referralCodeChanged: referralCode !== existing.referralCode,
@@ -36746,6 +36776,7 @@ async function updateWebReferralProfile(userId, body = {}) {
     traderBoardWalletCount: traderBoardWalletPublicKeys.length
   });
   return { profile };
+  });
 }
 
 async function webPresetRows(userId) {
@@ -43164,25 +43195,27 @@ async function webSweepSol(userId, body = {}) {
   const store = await readWalletStore();
   const destination = parseWebDestination(body.destination || body.destinationWallet);
   const wallets = selectedWebSweepWallets(store, userId, body);
-  const rows = [];
 
-  for (const wallet of wallets) {
+  // Drain wallets CONCURRENTLY (bounded) instead of one-at-a-time — sweeping a big group was a slow
+  // serial N+1 of (force balance + blockhash + fee probe + send + confirm) per wallet. Mirrors
+  // webSellAllTokens. runWithConcurrency preserves order in its returned array.
+  const rows = await runWithConcurrency(wallets, Math.max(1, Math.min(CONFIG.balanceConcurrency || 3, wallets.length)), async (wallet) => {
     try {
       const keypair = decryptWallet(wallet);
       const result = await drainSolFromWallet(keypair, destination);
       invalidateWalletReadCache(wallet.publicKey);
-      rows.push(solTransferResultRow(wallet, result));
+      return solTransferResultRow(wallet, result);
     } catch (error) {
-      rows.push({
+      return {
         ...webWalletRef(wallet),
         ok: false,
         signature: null,
         sentSol: "0",
         feeSol: "0",
         message: friendlyError(error)
-      });
+      };
     }
-  }
+  });
 
   invalidateWalletReadCache(destination.toBase58());
   await audit("web_sweep_sol", { userId, destination: destination.toBase58(), walletCount: wallets.length, successCount: rows.filter((row) => row.ok).length });
@@ -43199,9 +43232,10 @@ async function webSweepTokens(userId, body = {}) {
   const destination = parseWebDestination(body.destination || body.destinationWallet);
   const tokenMint = parseOptionalWebMint(body.tokenMint || body.mint);
   const wallets = selectedWebSweepWallets(store, userId, body);
-  const rows = [];
 
-  for (const wallet of wallets) {
+  // Parallelize across wallets (bounded); the per-account transfers inside a wallet stay serial (same
+  // signer → avoid blockhash/nonce contention). Was a fully-serial N+1 across the whole group.
+  const rows = await runWithConcurrency(wallets, Math.max(1, Math.min(CONFIG.balanceConcurrency || 3, wallets.length)), async (wallet) => {
     const walletRow = {
       ...webWalletRef(wallet),
       ok: false,
@@ -43216,8 +43250,7 @@ async function webSweepTokens(userId, body = {}) {
 
       if (!accounts.length) {
         walletRow.message = tokenMint ? "No balance for that token." : "No sweepable tokens.";
-        rows.push(walletRow);
-        continue;
+        return walletRow;
       }
 
       for (const account of accounts) {
@@ -43256,12 +43289,12 @@ async function webSweepTokens(userId, body = {}) {
       walletRow.ok = walletRow.transfers.length > 0;
       walletRow.message = `Transferred ${walletRow.transfers.length} token account(s).`;
       invalidateWalletReadCache(wallet.publicKey);
-      rows.push(walletRow);
+      return walletRow;
     } catch (error) {
       walletRow.message = friendlyError(error);
-      rows.push(walletRow);
+      return walletRow;
     }
-  }
+  });
 
   invalidateWalletReadCache(destination.toBase58());
   await audit("web_sweep_tokens", { userId, destination: destination.toBase58(), tokenMint: tokenMint || "all", walletCount: wallets.length, successCount: rows.filter((row) => row.ok).length });
