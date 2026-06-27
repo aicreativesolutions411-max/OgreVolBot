@@ -1997,6 +1997,73 @@
       '<div style="display:flex;gap:9px"><button class="wbtn ghost" style="flex:1" onclick="GG.closeModal()">Cancel</button><button class="wbtn" id="ppGo" style="flex:1">Send split</button></div>');
     const go=$("#ppGo");if(go)go.onclick=async()=>{const amt=Number(($("#ppAmt")||{}).value);if(!rows.length){toast("Set promoter wallets + % first.",true);return;}if(!isFinite(amt)||amt<=0){toast("Enter a SOL amount.",true);return;}if(!(await ensureTradeReady()))return;go.disabled=true;go.textContent="Sending…";const {ok,d}=await jpost("/api/web/launch/split-creator-fees",{walletIndex:wi,amountSol:String(amt),splits:rows,tradeAttemptId:attemptId()});go.disabled=false;go.textContent="Send split";if(ok&&d&&d.ok){toast("Sent to "+((d.payout&&d.payout.recipients&&d.payout.recipients.length)||rows.length)+" promoter(s).");closeModal();}else toast((d&&(d.message||d.error))||"Split failed",true);};
   }
+  // ---------- Presale escrow ("buy + send at launch") ----------
+  // Contributors send SOL to one managed escrow wallet; FINALIZE = the escrow buys the coin + sends each
+  // contributor their pro-rata share; REFUND = send it all back. Created ids are kept in localStorage so
+  // the creator can manage them (there's no public list — escrow presales are creator-only).
+  function escrowIds(){try{return JSON.parse(localStorage.getItem("ggEscrowIds")||"[]");}catch(e){return [];}}
+  function escrowSaveId(id){const a=escrowIds();if(!a.includes(id)){a.unshift(id);localStorage.setItem("ggEscrowIds",JSON.stringify(a.slice(0,30)));}}
+  function escrowModal(){renderEscrow("create");}
+  function renderEscrow(tab){
+    const ids=escrowIds();
+    openModal('<h3>🤝 Presale escrow — buy + send at launch</h3>'+
+      '<p class="sub mut" style="font-size:12px">Contributors send SOL to one escrow wallet. <b>Finalize</b> buys the coin with the pool and sends everyone their pro-rata share; <b>Refund</b> sends it all back. Dust-test the refund first.</p>'+
+      '<div class="tabs" style="margin-bottom:10px"><button class="'+(tab==="manage"?"":"on")+'" onclick="GG.renderEscrow(\'create\')">Create</button><button class="'+(tab==="manage"?"on":"")+'" onclick="GG.renderEscrow(\'manage\')">Manage'+(ids.length?" ("+ids.length+")":"")+'</button></div>'+
+      '<div id="escBody"></div>');
+    const body=$("#escBody");
+    if(tab==="manage"){
+      if(!ids.length){body.innerHTML='<p class="mut" style="font-size:12px">No escrow presales yet — make one in the Create tab.</p>';return;}
+      body.innerHTML=ids.map(id=>'<div class="escrow-row" data-eid="'+esc(id)+'" style="border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px"><div class="mut" style="font-size:10px">'+esc(id)+'</div><div class="escStat"><span class="mut" style="font-size:11px">Loading…</span></div></div>').join("");
+      ids.forEach(id=>escrowLoadStatus(id));
+      return;
+    }
+    body.innerHTML='<div class="field row2"><div><label>Name</label><input id="escName" placeholder="My Coin"></div><div><label>Ticker</label><input id="escSym" placeholder="MYC"></div></div>'+
+      '<div class="field row2"><div><label>Target (SOL)</label><input id="escTarget" inputmode="decimal" value="10"></div><div><label>Days open</label><input id="escDays" inputmode="numeric" value="3"></div></div>'+
+      '<div class="field"><label>Your dev wallet (creator)</label>'+walletSelectHtml("escDevWallet")+'</div>'+
+      '<button class="wbtn" id="escCreateGo" style="width:100%">Create escrow presale</button>';
+    $("#escCreateGo").onclick=escrowCreate;
+  }
+  async function escrowCreate(){
+    const name=(($("#escName")||{}).value||"").trim(),sym=(($("#escSym")||{}).value||"").trim();
+    if(!name||!sym){toast("Name + ticker required.",true);return;}
+    if(!(await ensureTradeReady()))return;
+    const dw=$("#escDevWallet");const wi=String(dw&&dw.value?dw.value:state.activeWallet);
+    const b=$("#escCreateGo");b.disabled=true;b.textContent="Creating…";
+    const {ok,d}=await jpost("/api/web/presale/escrow/create",{name,symbol:sym,target:($("#escTarget")||{}).value||"10",days:($("#escDays")||{}).value||"3",devWalletIndex:wi});
+    b.disabled=false;b.textContent="Create escrow presale";
+    if(ok&&d&&d.ok){escrowSaveId(d.id);toast("Escrow presale created.");renderEscrow("manage");}
+    else toast((d&&(d.message||d.error))||"Could not create.",true);
+  }
+  async function escrowLoadStatus(id){
+    const row=document.querySelector('.escrow-row[data-eid="'+(window.CSS&&CSS.escape?CSS.escape(id):id)+'"] .escStat');if(!row)return;
+    const {ok,d}=await api("/api/web/presale/escrow?id="+encodeURIComponent(id));
+    if(!ok||!d||!d.ok){row.innerHTML='<span class="mut" style="font-size:11px">'+esc((d&&(d.message||d.error))||"unavailable")+'</span>';return;}
+    const led=(d.ledger||[]).map(l=>esc(short(l.wallet))+' · ◎'+l.sol).join('<br>')||'<span class="mut">no contributions yet</span>';
+    row.innerHTML='<div style="font-size:12px"><b>◎'+esc(String(d.balanceSol))+'</b> raised · '+(d.contributors||0)+' contributor(s) · <span class="mut">'+esc(d.status||"open")+'</span></div>'+
+      '<div class="wnote" style="margin:6px 0;font-size:11px">Send SOL here: <b style="word-break:break-all">'+esc(d.escrowWallet)+'</b> <button class="wbtn ghost" style="padding:1px 7px;font-size:11px" onclick="GG.copy(\''+esc(d.escrowWallet)+'\')">copy</button></div>'+
+      '<div style="font-size:11px;margin-bottom:6px">'+led+'</div>'+
+      '<div class="field" style="margin-bottom:6px"><label>Coin CA to buy at finalize</label><input class="escFinMint" placeholder="token mint / CA"></div>'+
+      '<div style="display:flex;gap:8px"><button class="wbtn" style="flex:1" onclick="GG.escrowFinalize(\''+esc(id)+'\')">Finalize</button><button class="wbtn ghost" style="flex:1" onclick="GG.escrowRefund(\''+esc(id)+'\')">Refund all</button></div>';
+  }
+  async function escrowFinalize(id){
+    const row=document.querySelector('.escrow-row[data-eid="'+(window.CSS&&CSS.escape?CSS.escape(id):id)+'"]');
+    const mint=(((row&&row.querySelector(".escFinMint"))||{}).value||"").trim();
+    if(!mint){toast("Paste the coin CA to buy at finalize.",true);return;}
+    if(!confirm("Finalize: the escrow BUYS this coin with the pooled SOL and sends every contributor their share. This can't be undone. Continue?"))return;
+    if(!(await ensureTradeReady()))return;
+    toast("Finalizing — buying + distributing…");
+    const {ok,d}=await jpost("/api/web/presale/escrow/finalize",{id,tokenMint:mint,tradeAttemptId:attemptId()});
+    if(ok&&d&&d.ok){toast("Finalized — sent to "+(d.distributed||0)+"/"+(d.contributors||0)+" contributor(s).");escrowLoadStatus(id);}
+    else toast((d&&(d.message||d.error))||"Finalize failed",true);
+  }
+  async function escrowRefund(id){
+    if(!confirm("Refund ALL contributors their SOL from the escrow wallet? Continue?"))return;
+    if(!(await ensureTradeReady()))return;
+    toast("Refunding…");
+    const {ok,d}=await jpost("/api/web/presale/escrow/refund",{id,tradeAttemptId:attemptId()});
+    if(ok&&d&&d.ok){toast("Refunded "+(d.refunded||0)+" contributor(s).");escrowLoadStatus(id);}
+    else toast((d&&(d.message||d.error))||"Refund failed",true);
+  }
   function setQuickBuy(o){state.quickBuy=Object.assign({amt:0.1,presetId:"",tp:"",sl:"",slip:""},o);localStorage.setItem("ggQuickBuy",JSON.stringify(state.quickBuy));if(state.route==="trending")subbarTrending();}
   function clearQuickBuy(){state.quickBuy=null;localStorage.removeItem("ggQuickBuy");if(state.route==="trending")subbarTrending();}
   async function execQuickBuy(mint,q){
@@ -2700,6 +2767,7 @@
     const tb=(id,lab)=>'<button data-ltab="'+id+'" class="'+(tab===id?"on":"")+'">'+lab+'</button>';
     const show=(id)=>tab===id?"":' style="display:none"';
     $("#v-launch").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>🚀 Launch a Coin</h3><p class="sub">Make your own coin in under a minute — then trade, chat &amp; grow it right here. You stay the owner, and the fees it earns come back to you.</p>'+
+      '<button class="wbtn ghost" type="button" style="margin-bottom:10px" onclick="GG.escrowModal()">🤝 Presale escrow — buy + send at launch</button>'+
       '<div class="tabs" style="margin:4px 0 14px;gap:6px;flex-wrap:wrap">'+tb("coin","🪙 Coin")+tb("dev","🛡️ Dev Buy &amp; Bundle")+tb("chat","💬 Chat &amp; Live")+'</div>'+
       '<div data-lpanel="coin"'+show("coin")+'>'+
         '<div class="field"><label>Where it lives</label><div class="railsel" id="lcRails">'+
@@ -2943,6 +3011,7 @@
 
   // ---------- expose + boot ----------
   window.GG={open:(m)=>go("trade",m),openSell:(m)=>{state.pendingSell=m;go("trade",m);},sellPos:(m,s)=>quickSellModal(m,s),armPos:(m,s)=>armExitsModal(m,s),go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,
+    escrowModal,renderEscrow,escrowFinalize,escrowRefund,
     flipTrade:()=>{const t=document.querySelector('#v-trade .trade');if(!t)return;const next=t.getAttribute('data-focus')==='buy'?'chart':'buy';t.setAttribute('data-focus',next);const fab=document.getElementById('tradeFab');if(fab)fab.innerHTML=next==='buy'?'📈 Chart':'💰 Buy';const side=t.querySelector('.tradeSide'),v=document.getElementById('v-trade');if(next==='buy'&&side)side.scrollIntoView({behavior:'smooth',block:'start'});else if(v)v.scrollTo({top:0,behavior:'smooth'});},
     copyWallet:(w)=>{const i=$("#cpWallet");if(i){i.value=w;i.scrollIntoView({behavior:"smooth",block:"center"});i.focus();toast("Wallet loaded — set your size, then Start copying");}},
     kolProfile:openKolProfile,

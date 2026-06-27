@@ -174,6 +174,14 @@ test("presale escrow is fully GATED behind PRESALE_ESCROW_ENABLED (custody stays
 });
 
 for (const [label, source] of [["gg.html", ggSource], ["index.html", indexSource]]) {
+  test(`presale escrow UI is wired to the gated escrow endpoints (${label})`, () => {
+    assert.match(source, /onclick="GG\.escrowModal\(\)"/);          // entry point on the Launch page
+    assert.match(source, /escrowModal,renderEscrow,escrowFinalize,escrowRefund,/); // exposed on GG
+    assert.match(source, /\/api\/web\/presale\/escrow\/create/);
+    assert.match(source, /\/api\/web\/presale\/escrow\/finalize/);
+    assert.match(source, /\/api\/web\/presale\/escrow\/refund/);
+    assert.match(source, /\/api\/web\/presale\/escrow\?id=/);
+  });
   test(`client in-flight guard blocks double-taps on every submit path (${label})`, () => {
     assert.match(source, /function tradeLock\(side,mint\)\{/);
     assert.match(source, /function tradeUnlock\(side,mint\)\{/);
