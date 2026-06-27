@@ -31421,9 +31421,29 @@ async function writeDcaPlans(store) {
   await writeJsonFile(dcaPlansPath(), store);
 }
 
+// Identity of an on-chain trade event. Two records with the same key are the SAME trade recorded twice
+// (e.g. a sell logged by both the manual path and an auto-exit reconciliation) — counting both doubled
+// `received` and made positions read "up double". Keyed compositely so a multi-coin bundle tx (one
+// signature, several events) is preserved; only an EXACT re-record collapses. No signature → never dedupe.
+function tradeEventDedupeKey(trade) {
+  const sig = String(trade?.signature || "");
+  if (!sig) return null;
+  return `${sig}:${trade.type || ""}:${trade.tokenMint || ""}:${trade.walletPublicKey || ""}`;
+}
+
 async function readTradeHistory() {
   const store = await readJson(tradeHistoryPath());
   if (!Array.isArray(store.trades)) store.trades = [];
+  // Collapse duplicate recordings of the same trade on read — fixes every view (positions, PnL cards)
+  // immediately, and persists the cleaned set the next time history is written.
+  const seen = new Set();
+  store.trades = store.trades.filter((trade) => {
+    const key = tradeEventDedupeKey(trade);
+    if (!key) return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   return store;
 }
 
@@ -32272,13 +32292,19 @@ async function recordTradeEvents(events) {
       ? normalizeTradeHistoryAmount(event.tokenAmount)
       : event.tokenAmount
   }));
-  const store = await readTradeHistory();
-  store.trades.push(...sanitizedEvents.map((event) => ({
-    id: crypto.randomUUID(),
-    timestamp: new Date().toISOString(),
-    ...event
-  })));
-  await writeJsonFile(tradeHistoryPath(), store);
+  // Lock the read-modify-write (was racy → lost/duplicated trades) and skip any event whose on-chain
+  // trade is already recorded, so `received`/`spent` can't be double-counted.
+  await withFileLock(tradeHistoryPath(), async () => {
+    const store = await readTradeHistory();
+    const seen = new Set(store.trades.map(tradeEventDedupeKey).filter(Boolean));
+    for (const event of sanitizedEvents) {
+      const key = tradeEventDedupeKey(event);
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      store.trades.push({ id: crypto.randomUUID(), timestamp: new Date().toISOString(), ...event });
+    }
+    await writeJsonFile(tradeHistoryPath(), store);
+  });
 
   const hasWebBuyNeedingGuard = events.some((event) => (
     event?.type === "buy"

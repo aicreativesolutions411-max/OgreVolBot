@@ -145,6 +145,18 @@ test("promoter fee-split: stored on the coin + idempotent split-send reusing the
   assert.match(serverSource, /pathname === "\/api\/web\/launch\/split-creator-fees"/);
 });
 
+test("trade history dedupes by on-chain signature (fixes positions 'up double')", () => {
+  // A trade recorded twice doubled `received` → portfolio PnL read ~2x. Dedup at the single read path
+  // (heals every view + existing data); recordTradeEvents locks the RMW + skips a duplicate.
+  assert.match(serverSource, /function tradeEventDedupeKey\(trade\)/);
+  // Composite key so a multi-coin bundle tx (one signature, many events) is preserved.
+  assert.match(functionBody(serverSource, "tradeEventDedupeKey"), /\$\{sig\}:\$\{trade\.type \|\| ""\}:\$\{trade\.tokenMint \|\| ""\}:\$\{trade\.walletPublicKey \|\| ""\}/);
+  assert.match(functionBody(serverSource, "readTradeHistory"), /store\.trades = store\.trades\.filter[\s\S]*tradeEventDedupeKey/);
+  const rec = functionBody(serverSource, "recordTradeEvents");
+  assert.match(rec, /withFileLock\(tradeHistoryPath\(\)/);
+  assert.match(rec, /if \(key && seen\.has\(key\)\) continue/);
+});
+
 test("sell auto-funds the fee from a sibling wallet when the holder has no SOL", () => {
   // The fee-less-sell sim error is detected + the sell retried after a top-up.
   assert.match(functionBody(serverSource, "isInsufficientFeeError"), /debit an account but found no record of a prior credit/);
