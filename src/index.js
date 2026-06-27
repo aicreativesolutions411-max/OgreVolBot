@@ -21199,16 +21199,17 @@ async function estimatePositionValueFromMarket(position, quoteError = null) {
   // paint a known-wrong loss. On-curve coins: pump reserves first (live + always available there),
   // DEX/Gecko as the fallback.
   const order = graduated
-    ? [dexPriceSol, geckoPriceSol]
-    : [pumpPriceSol, dexPriceSol, geckoPriceSol];
+    ? [["dex", dexPriceSol], ["gecko", geckoPriceSol]]
+    : [["pump", pumpPriceSol], ["dex", dexPriceSol], ["gecko", geckoPriceSol]];
   let priceSol = null;
-  for (const resolvePrice of order) {
+  let priceSrc = "";
+  for (const [name, resolvePrice] of order) {
     try {
       priceSol = await resolvePrice();
     } catch {
       priceSol = null;
     }
-    if (Number.isFinite(priceSol) && priceSol > 0) break;
+    if (Number.isFinite(priceSol) && priceSol > 0) { priceSrc = name; break; }
   }
 
   if (!Number.isFinite(priceSol) || priceSol <= 0) throw quoteError || new Error("Market value unavailable");
@@ -21216,6 +21217,13 @@ async function estimatePositionValueFromMarket(position, quoteError = null) {
   const estimatedOutNumber = tokenUnits * priceSol * LAMPORTS_PER_SOL;
   if (!Number.isFinite(estimatedOutNumber) || estimatedOutNumber <= 0) {
     throw quoteError || new Error("Market value unavailable");
+  }
+  // DIAGNOSTIC (temporary): pin down "positions show me up but I'm flat" — logs the exact price source,
+  // price, decimals, holdings, computed value vs cost basis. Remove once the over-valuation is fixed.
+  if (process.env.POSITION_VALUE_DEBUG !== "false") {
+    try {
+      console.log(`[posval] mint=${position.tokenMint} grad=${graduated} src=${priceSrc} priceSol=${priceSol} dec=${decimals} units=${tokenUnits} valSol=${(estimatedOutNumber / LAMPORTS_PER_SOL).toFixed(6)} spentSol=${position.spent != null ? lamportsBigToSol(position.spent) : "?"}`);
+    } catch {}
   }
   return BigInt(Math.max(0, Math.floor(estimatedOutNumber)));
 }
