@@ -32344,10 +32344,10 @@ async function webClaimCreatorFeesCore(userId, body = {}) {
   // prior credit". So: proactively move a sliver of SOL in from a funded sibling first, and retry once
   // if the send still trips the fee error. Claims go via plain RPC (no Jito tip) — a claim needs no MEV
   // protection, and the tip would just demand more SOL up front.
-  const FEE_FLOOR = 2_000_000; // 0.002 SOL — covers a priority-fee'd claim
+  const FEE_FLOOR = 1_500_000; // 0.0015 SOL — plenty for a plain-RPC priority-fee'd claim (no Jito tip)
   let toppedUp = false;
   const startBal = Number(await getSolBalanceCached(keypair.publicKey, { force: true }).catch(() => 0));
-  if (startBal < FEE_FLOOR) toppedUp = await topUpSellFees(store, userId, wallet).catch(() => false);
+  if (startBal < FEE_FLOOR) toppedUp = await topUpSellFees(store, userId, wallet, FEE_FLOOR).catch(() => false);
 
   // Build → sign → send one claim attempt. `before` is captured AFTER any top-up so the reported
   // claimedSol reflects only fees collected (minus this tx's fee), not the sibling top-up.
@@ -39062,8 +39062,8 @@ function isInsufficientFeeError(error) {
 
 // Move a sliver of SOL into `wallet` from the user's most-funded OTHER wallet so it can cover a sell's
 // network fee ("gasless" sell). Best-effort; only called AFTER a sell already failed for lack of fee SOL.
-async function topUpSellFees(store, userId, wallet) {
-  const FEE_TARGET = 5_000_000; // ~0.005 SOL — covers a couple of priority-fee'd transactions
+async function topUpSellFees(store, userId, wallet, targetLamports = 5_000_000) {
+  const FEE_TARGET = Math.max(500_000, Math.round(targetLamports)); // default ~0.005 SOL — a couple of priority-fee'd txs
   const kp = decryptWallet(wallet);
   const bal = Number(await getSolBalanceCached(kp.publicKey, { force: true }).catch(() => 0));
   if (bal >= FEE_TARGET) return false; // already has enough — the failure was something else

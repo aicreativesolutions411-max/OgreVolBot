@@ -2021,7 +2021,13 @@
     if(!(await ensureTradeReady()))return;
     toast("Claiming fees…");
     const {ok,d}=await jpost("/api/web/launch/claim-fees",{walletIndex:String(walletIndex),rail:rail||"pump",mint:mint||"",tradeAttemptId:attemptId()});
-    if(ok&&d&&d.ok){toast("Claimed ◎"+(d.claimedSol||"0")+" to your wallet 🎉");refreshWallets();}
+    if(ok&&d&&d.ok){
+      const got=Number(d.claimedSol||0);
+      if(got>0.000001){toast("Claimed ◎"+got.toFixed(6).replace(/0+$/,'').replace(/\.$/,'')+" to your wallet 🎉");}
+      // Honest: claiming an empty coin still pays a tiny network fee. Don't pretend SOL came in.
+      else{toast("Nothing was waiting on this wallet — the claim only cost a tiny network fee. Pump fees build up only while your coin is actively traded.",true);}
+      refreshWallets();
+    }
     else toast((d&&(d.message||d.error))||"Nothing to claim right now.",true);
   }
   // Pay promoters: split a SOL amount from the creator wallet across the launch form's promoter wallets
