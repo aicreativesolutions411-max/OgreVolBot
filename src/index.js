@@ -32335,24 +32335,62 @@ async function webClaimCreatorFeesCore(userId, body = {}) {
   const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
   const keypair = decryptWallet(wallet);
   const rail = String(body.rail || "pump").toLowerCase();
-  const before = Number(await getSolBalanceCached(keypair.publicKey, { force: true }).catch(() => 0));
   const payload = { publicKey: keypair.publicKey.toBase58(), action: "collectCreatorFee", priorityFee: CONFIG.pumpLaunchPriorityFeeSol || 0.000005 };
   if (rail === "meteora") { payload.pool = "meteora-dbc"; if (body.mint) payload.mint = parsePublicKey(String(body.mint)).toBase58(); }
   else if (body.mint) { payload.pool = "pump"; payload.mint = parsePublicKey(String(body.mint)).toBase58(); }
-  let signature;
-  try {
+
+  // Creator wallets are almost always swept to ~0 after launch, so the claim tx has no SOL to pay its
+  // OWN network fee — it fails simulation with "Attempt to debit an account but found no record of a
+  // prior credit". So: proactively move a sliver of SOL in from a funded sibling first, and retry once
+  // if the send still trips the fee error. Claims go via plain RPC (no Jito tip) — a claim needs no MEV
+  // protection, and the tip would just demand more SOL up front.
+  const FEE_FLOOR = 2_000_000; // 0.002 SOL — covers a priority-fee'd claim
+  let toppedUp = false;
+  const startBal = Number(await getSolBalanceCached(keypair.publicKey, { force: true }).catch(() => 0));
+  if (startBal < FEE_FLOOR) toppedUp = await topUpSellFees(store, userId, wallet).catch(() => false);
+
+  // Build → sign → send one claim attempt. `before` is captured AFTER any top-up so the reported
+  // claimedSol reflects only fees collected (minus this tx's fee), not the sibling top-up.
+  const doClaim = async () => {
     const tx = await requestPumpPortalLocalTransaction(payload, 20_000, { url: CONFIG.pumpPortalTradeLocalUrl });
+    invalidateWalletReadCache(wallet.publicKey);
+    const before = Number(await getSolBalanceCached(keypair.publicKey, { force: true }).catch(() => 0));
+    let signature;
     if (tx?.signature) signature = tx.signature;
-    else { tx.sign([keypair]); signature = await sendPumpTradeTx(tx, keypair, "collect creator fees", {}); }
+    else { tx.sign([keypair]); signature = await sendVersionedTransaction(tx, "collect creator fees"); }
+    return { signature, before };
+  };
+
+  let result;
+  try {
+    result = await doClaim();
   } catch (error) {
-    const e = new Error(`Nothing to claim right now (or pump rejected the claim): ${friendlyError(error)}`);
-    e.statusCode = 400; throw e;
+    if (isInsufficientFeeError(error)) {
+      if (!toppedUp) toppedUp = await topUpSellFees(store, userId, wallet).catch(() => false);
+      if (!toppedUp) {
+        const e = new Error("This creator wallet has no SOL to pay the claim's network fee, and no other wallet has SOL to cover it. Send a little SOL (~0.01) to this wallet, then claim.");
+        e.statusCode = 400; throw e;
+      }
+      invalidateWalletReadCache(wallet.publicKey);
+      try { result = await doClaim(); }
+      catch (retryError) {
+        const e = new Error(isInsufficientFeeError(retryError)
+          ? "Funded the wallet but the claim still couldn't pay its fee — try again in a moment."
+          : `Nothing to claim right now (or pump rejected the claim): ${friendlyError(retryError)}`);
+        e.statusCode = 400; throw e;
+      }
+    } else {
+      const e = new Error(`Nothing to claim right now (or pump rejected the claim): ${friendlyError(error)}`);
+      e.statusCode = 400; throw e;
+    }
   }
+
+  const { signature, before } = result;
   invalidateWalletReadCache(wallet.publicKey);
   const after = Number(await getSolBalanceCached(keypair.publicKey, { force: true }).catch(() => before));
   const claimedSol = lamportsToSol(Math.max(0, after - before));
-  await audit("web_claim_creator_fees", { userId, wallet: wallet.publicKey, rail, mint: body.mint || "", signature, claimedSol });
-  return { ok: true, signature, claimedSol, wallet: wallet.publicKey, rail };
+  await audit("web_claim_creator_fees", { userId, wallet: wallet.publicKey, rail, mint: body.mint || "", signature, claimedSol, toppedUp });
+  return { ok: true, signature, claimedSol, wallet: wallet.publicKey, rail, funded: toppedUp };
 }
 
 async function recordTradeEvents(events) {

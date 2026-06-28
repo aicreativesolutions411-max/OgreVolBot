@@ -153,6 +153,12 @@ test("creator-fee claim: list launches + in-app claim via PumpPortal collectCrea
   assert.match(claim, /requestPumpPortalLocalTransaction/);
   assert.match(claim, /meteora-dbc/);                       // meteora claim path
   assert.match(claim, /after - before/);                    // reports the SOL that actually landed
+  // Empty creator wallets can't pay the claim's own fee -> top up from a sibling + retry, send via
+  // plain RPC (no Jito tip so it needs less SOL up front).
+  assert.match(claim, /topUpSellFees/);
+  assert.match(claim, /isInsufficientFeeError/);
+  assert.match(claim, /sendVersionedTransaction/);
+  assert.doesNotMatch(claim, /sendPumpTradeTx/);            // must NOT use the Jito-tipped trade path
   assert.match(serverSource, /pathname === "\/api\/web\/launch\/claim-fees"/);
   assert.match(functionBody(serverSource, "webClaimCreatorFees"), /runIdempotentMoneyOp\("web-claim-fees"/);
   for (const src of [ggSource, indexSource]) {
