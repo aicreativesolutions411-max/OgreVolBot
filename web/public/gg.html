@@ -2642,10 +2642,41 @@
       '<div class="field"><label>Slippage (bps)</label><input id="vlSlip" inputmode="numeric" value="600"></div>'+
       '<label style="display:flex;align-items:center;gap:9px;font-size:12px;cursor:pointer;margin-bottom:12px"><input type="checkbox" id="vlLeave" checked> Leave a sliver of token in each wallet (pads holder count)</label>'+
       '<div class="bsrow"><button class="bigbuy" id="vlGo" style="flex:2">▶ Start volume bot</button><button class="wbtn ghost" id="vlStop" style="flex:1">Stop &amp; sweep</button></div>'+
-      '<div id="vlStatus" style="margin-top:14px"></div></div></div>';
+      '<div id="vlStatus" style="margin-top:14px"></div></div>'+
+      '<div class="wbox" style="grid-column:1/-1"><h3>⚡ Auto round-trip</h3><p class="sub">Check the wallets, hit go — it auto-buys a few of the most <b>liquid</b> coins on each and sells right back (tiny random amounts, only fees lost), then sweeps all the SOL back to your first checked wallet. No CA to pick.</p>'+
+        '<div id="artWallets" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">'+((state.wallets||[]).length?(state.wallets||[]).map(w=>'<label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer"><input type="checkbox" class="artWchk" value="'+w.index+'"> '+esc(w.label)+' · <span class="mut">'+esc(short(w.publicKey))+'</span></label>').join(''):'<span class="mut" style="font-size:12px">No wallets yet — make some in the Wallet tab.</span>')+'</div>'+
+        '<div class="field row2"><div><label>Flips per wallet</label><input id="artN" inputmode="numeric" value="3"></div><div><label>Max per buy (SOL)</label><input id="artMax" inputmode="decimal" value="0.05"></div></div>'+
+        '<button class="bigbuy" id="artGo" style="width:100%">⚡ Run flips + sweep back</button>'+
+        '<div id="artStatus" style="margin-top:12px"></div></div></div>';
     $("#vlGo").onclick=()=>startVolumeBot();
     $("#vlStop").onclick=()=>stopVolumeBot();
+    {const ag=$("#artGo");if(ag)ag.onclick=()=>runAutoRoundTrip();}
     pollVolumeBot();
+  }
+  // Auto round-trip: check wallets → server auto-flips liquid coins on each + sweeps SOL back. Polls status.
+  async function runAutoRoundTrip(){
+    const idx=[...document.querySelectorAll(".artWchk:checked")].map(c=>c.value);
+    if(!idx.length){toast("Check at least one wallet to run on.",true);return;}
+    if(!(await ensureTradeReady()))return;
+    const gb=$("#artGo");if(gb){gb.disabled=true;gb.textContent="Starting…";}
+    const {ok,status,d}=await jpost("/api/web/auto-roundtrip/start",{walletIndexes:idx,tradesPerWallet:(($("#artN")||{}).value)||"3",maxSol:(($("#artMax")||{}).value)||"0.05"});
+    if(gb){gb.disabled=false;gb.textContent="⚡ Run flips + sweep back";}
+    if(status===401){toast("Couldn't authorize — open Wallet and reconnect.",true);go("wallet");return;}
+    if(ok&&d&&d.ok&&d.runId){toast("Running flips on "+d.wallets+" wallet(s)…");pollAutoRoundTrip(d.runId);}
+    else toast((d&&(d.message||d.error))||"Couldn't start (it may be in test mode).",true);
+  }
+  function pollAutoRoundTrip(runId){
+    const box=$("#artStatus");if(!box)return;let t=null;
+    const tick=async()=>{
+      if(state.route!=="volume"){if(t)clearTimeout(t);return;}
+      const {ok,d}=await api("/api/web/auto-roundtrip/status?runId="+encodeURIComponent(runId)).catch(()=>({}));
+      if(ok&&d&&d.ok){
+        box.innerHTML='<div class="wnote" style="font-size:12px"><b>'+esc(d.status||"")+'</b> · '+(d.done||0)+'/'+(d.total||0)+' flips<br>'+((d.log||[]).slice(-8).map(l=>esc(l.m||"")).join('<br>')||'')+'</div>';
+        if(d.status==="done"||d.status==="error"){if(t)clearTimeout(t);refreshWallets();return;}
+      }
+      t=setTimeout(tick,3000);
+    };
+    tick();
   }
   async function startVolumeBot(){
     const ca=$("#vlCa").value.trim();if(!ca){toast("Paste a token CA.",true);return;}

@@ -145,6 +145,25 @@ test("promoter fee-split: stored on the coin + idempotent split-send reusing the
   assert.match(serverSource, /pathname === "\/api\/web\/launch\/split-creator-fees"/);
 });
 
+test("auto round-trip is gated + bounded + sweeps back (flip bot)", () => {
+  assert.match(serverSource, /function autoRoundTripEnabled\(\)/);
+  assert.match(functionBody(serverSource, "webStartAutoRoundTrip"), /AUTO_ROUNDTRIP_ENABLED|autoRoundTripEnabled\(\)/);
+  assert.match(functionBody(serverSource, "webStartAutoRoundTrip"), /statusCode = 501/);
+  // Hard cap: every buy is always < 0.1 SOL.
+  assert.match(functionBody(serverSource, "webStartAutoRoundTrip"), /0\.099/);
+  const run = functionBody(serverSource, "runAutoRoundTrip");
+  assert.match(run, /buildLiquidMovers\(\)/);            // picks liquid coins (minimal round-trip loss)
+  assert.match(run, /Number\(c\.liquidityUsd\) > 15000/);
+  assert.match(run, /sellTokenFromWallet\(wallet, coin\.tokenMint, 100/); // sells right back
+  assert.match(run, /drainSolFromWallet/);              // sweeps SOL back at the end
+  assert.match(serverSource, /pathname === "\/api\/web\/auto-roundtrip\/start"/);
+  // UI wired in both HTML mirrors.
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /\/api\/web\/auto-roundtrip\/start/);
+    assert.match(src, /id="artGo"/);
+  }
+});
+
 test("trade history dedupes by on-chain signature (fixes positions 'up double')", () => {
   // A trade recorded twice doubled `received` → portfolio PnL read ~2x. Dedup at the single read path
   // (heals every view + existing data); recordTradeEvents locks the RMW + skips a duplicate.

@@ -7817,6 +7817,17 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    // Auto round-trip ("flip") — GATED (501 until AUTO_ROUNDTRIP_ENABLED=true). Fire async + poll status.
+    if (request.method === "POST" && pathname === "/api/web/auto-roundtrip/start") {
+      const result = await webStartAutoRoundTrip(auth.userId, await readJsonRequestBody(request));
+      sendWebJson(request, response, 200, result);
+      return;
+    }
+    if (request.method === "GET" && pathname === "/api/web/auto-roundtrip/status") {
+      sendWebJson(request, response, 200, autoRoundTripStatus(auth.userId, requestUrl.searchParams.get("runId") || ""));
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/volume-bot/stop") {
       const body = await readJsonRequestBody(request);
       const result = await webStopVolumeBot(auth.userId, body);
@@ -39983,6 +39994,87 @@ async function webStopVolumeBot(userId, body = {}) {
   });
   if (!row.skip) await audit("web_volume_bot_stop", { userId, planId: row.plan.id });
   return webVolumeBotRow(row.plan);
+}
+
+// --- AUTO ROUND-TRIP ("flip" bot) — GATED behind AUTO_ROUNDTRIP_ENABLED (default false) ----------------
+// Pick the wallets, hit go: for each, it auto-buys a few of the MOST-LIQUID coins and sells each right
+// back, tiny random amounts (<0.1 SOL) so the round-trip only loses fees — then sweeps the SOL back to
+// the first selected wallet. Liquid coins = the buy+immediate-sell returns ~all the SOL; the final
+// sell-all guarantees a wallet is never left holding a bag. Real money → OFF until the owner dust-tests.
+const autoRoundTripRuns = new Map(); // runId -> { status, userId, log[], startedAt, done, total }
+function autoRoundTripEnabled() { return parseBoolean(process.env.AUTO_ROUNDTRIP_ENABLED || "false"); }
+function autoRoundTripStatus(userId, runId) {
+  const run = autoRoundTripRuns.get(String(runId || ""));
+  if (!run || String(run.userId) !== String(userId)) return { ok: false, error: "run not found" };
+  return { ok: true, status: run.status, log: run.log.slice(-40), done: run.done, total: run.total };
+}
+async function webStartAutoRoundTrip(userId, body = {}) {
+  if (!autoRoundTripEnabled()) {
+    const e = new Error("Auto round-trip is in TEST MODE — owner: dust-test it, then set AUTO_ROUNDTRIP_ENABLED=true.");
+    e.statusCode = 501; throw e;
+  }
+  const store = await readWalletStore();
+  const rawIdx = Array.isArray(body.walletIndexes) ? body.walletIndexes
+    : String(body.walletIndexes || "").split(/[,\s]+/);
+  const indexes = uniqueStrings(rawIdx.map((v) => String(v || "").replace(/[^\d]/g, "")).filter(Boolean)).slice(0, 12);
+  const wallets = indexes.map((i) => { try { return { ...getWalletAt(store, parseWebWalletIndex(i), userId), webIndex: Number(i) }; } catch { return null; } }).filter(Boolean);
+  if (!wallets.length) { const e = new Error("Select at least one wallet to run on."); e.statusCode = 400; throw e; }
+  const tradesPerWallet = clamp(Number.parseInt(body.tradesPerWallet || "3", 10) || 3, 1, 4);
+  const maxSol = clamp(Number(body.maxSol) || 0.05, 0.005, 0.099);   // hard cap: always < 0.1 SOL per buy
+  const minSol = clamp(Number(body.minSol) || 0.02, 0.005, maxSol);
+  const runId = "art" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  autoRoundTripRuns.set(runId, { status: "running", userId: String(userId), log: [], startedAt: Date.now(), done: 0, total: wallets.length * tradesPerWallet });
+  void runAutoRoundTrip(runId, userId, wallets, tradesPerWallet, minSol, maxSol).catch((e) => {
+    const run = autoRoundTripRuns.get(runId); if (run) { run.status = "error"; run.log.push({ at: Date.now(), m: "Run failed: " + friendlyError(e) }); }
+  });
+  return { ok: true, runId, status: "running", wallets: wallets.length, tradesPerWallet };
+}
+async function runAutoRoundTrip(runId, userId, wallets, tradesPerWallet, minSol, maxSol) {
+  const run = autoRoundTripRuns.get(runId);
+  const log = (m) => { if (run) { run.log.push({ at: Date.now(), m }); if (run.log.length > 200) run.log = run.log.slice(-200); } };
+  // Candidate coins = MOST LIQUID first, so a tiny buy+immediate-sell barely moves the price (minimal loss).
+  const candidates = (await buildLiquidMovers().catch(() => []))
+    .filter((c) => c && c.tokenMint && Number(c.liquidityUsd) > 15000)
+    .slice(0, 40);
+  if (candidates.length < 3) { run.status = "error"; log("Not enough liquid coins to trade safely right now — try again shortly."); return; }
+  log(`Starting: ${wallets.length} wallet(s) × ${tradesPerWallet} flips on liquid coins.`);
+  let pick = Math.floor(Math.random() * candidates.length);
+  for (const wallet of wallets) {
+    const tradedMints = [];
+    for (let t = 0; t < tradesPerWallet; t += 1) {
+      let bal = 0;
+      try { bal = Number(await getSolBalanceCached(decryptWallet(wallet).publicKey, { force: true })); } catch { bal = 0; }
+      const headroom = lamportsToSol(Math.max(0, bal - CONFIG.buyReserveLamports - 15_000_000)); // keep reserve + ~0.015 for fees
+      if (headroom < minSol) { log(`${wallet.label}: low SOL (${lamportsToSol(bal)}◎) — skipping its remaining flips.`); break; }
+      const amount = Math.min(headroom, minSol + Math.random() * (maxSol - minSol));
+      const coin = candidates[pick % candidates.length]; pick += 1;
+      const sym = coin.symbol || shortMint(coin.tokenMint);
+      try {
+        await buyTokenForPlan(wallet, coin.tokenMint, solToLamports(amount), 500, { userId });
+        tradedMints.push(coin.tokenMint);
+        await sellTokenFromWallet(wallet, coin.tokenMint, 100, 1500, { userId }); // sell it all right back
+        log(`${wallet.label}: flipped ${sym} ◎${amount.toFixed(3)} ✓`);
+      } catch (error) {
+        log(`${wallet.label}: ${sym} skipped — ${friendlyError(error)}`);
+      }
+      if (run) run.done += 1;
+    }
+    // Safety net: clear any bag a failed sell left behind, so the wallet ends in SOL only.
+    for (const mint of uniqueStrings(tradedMints)) {
+      try {
+        const tok = await getReliableTokenBalanceForMint(decryptWallet(wallet).publicKey, new PublicKey(mint), { throwOnError: false }).catch(() => null);
+        if (tok && tok.rawAmount > 0n) { await sellTokenFromWallet(wallet, mint, 100, 1800, { userId }); log(`${wallet.label}: cleared leftover ${shortMint(mint)}.`); }
+      } catch { /* best-effort cleanup */ }
+    }
+  }
+  // Sweep all selected wallets' SOL back to the first one.
+  const dest = new PublicKey(wallets[0].publicKey);
+  let swept = 0;
+  for (const wallet of wallets.slice(1)) {
+    try { const r = await drainSolFromWallet(decryptWallet(wallet), dest); if (r?.signature) { swept += 1; invalidateWalletReadCache(wallet.publicKey); } } catch { /* skip */ }
+  }
+  invalidateWalletReadCache(wallets[0].publicKey);
+  if (run) { run.status = "done"; log(`Done — swept ${swept} wallet(s) back to ${wallets[0].label}.`); }
 }
 
 async function webVolumeBotRows(userId) {
