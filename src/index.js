@@ -7956,6 +7956,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, { ok: true, payout: result });
       return;
     }
+    if (request.method === "GET" && pathname === "/api/web/launches") {
+      sendWebJson(request, response, 200, { ok: true, coins: await webLaunchedCoins(auth.userId) });
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/launch/claim-fees") {
+      const result = await webClaimCreatorFees(auth.userId, await readJsonRequestBody(request));
+      sendWebJson(request, response, 200, result);
+      return;
+    }
     // Presale "buy + send at launch" ESCROW — GATED (501 until PRESALE_ESCROW_ENABLED=true). Creator-only.
     if (request.method === "POST" && pathname === "/api/web/presale/escrow/create") {
       const result = await webCreatePresaleEscrow(auth.userId, await readJsonRequestBody(request, 8_000));
@@ -32289,6 +32298,61 @@ async function upsertPumpLaunchAttempt(update = {}) {
     store.attempts.push(next);
   }
   await writePumpLaunchAttempts(store);
+}
+
+// The coins THIS user launched (the "My launches & fees" tracker). De-duped by mint, newest first, with
+// each coin's creator wallet mapped back to the user's wallet index so the client can claim by index.
+async function webLaunchedCoins(userId) {
+  const store = await readPumpLaunchAttempts();
+  const seen = new Set();
+  const rows = [];
+  for (const a of (store.attempts || []).slice().reverse()) {
+    if (String(a.userId || "") !== String(userId)) continue;
+    const mint = firstString(a.mintPublicKey, a.tokenMint, a.mint);
+    if (!mint || seen.has(mint)) continue;
+    seen.add(mint);
+    rows.push({
+      mint, symbol: a.symbol || "", name: a.tokenName || a.name || "",
+      rail: a.rail || "pump", devWallet: a.devWalletPublicKey || "", status: a.status || "",
+      txSignature: a.txSignature || "", imageUri: a.imageUri || (a.metadataJson && a.metadataJson.image) || "",
+      createdAt: a.createdAt || a.updatedAt || ""
+    });
+  }
+  const walletStore = await readWalletStore();
+  const idxByKey = new Map(walletsForOwner(walletStore, userId).map((w, i) => [w.publicKey, i + 1]));
+  return rows.slice(0, 60).map((r) => ({ ...r, devWalletIndex: idxByKey.get(r.devWallet) || null, devWalletShort: r.devWallet ? shortMint(r.devWallet) : "" }));
+}
+
+// Claim accrued CREATOR fees to the creator wallet via PumpPortal's collectCreatorFee — no pump.fun trip.
+// pump: claims ALL that wallet's accrued pump fees at once (mint omitted). meteora: per-coin (mint + pool).
+async function webClaimCreatorFees(userId, body = {}) {
+  return runIdempotentMoneyOp("web-claim-fees", userId, firstString(body.tradeAttemptId, body.clientRequestId),
+    () => webClaimCreatorFeesCore(userId, body),
+    { busyMessage: "A fee claim is already in flight for this wallet — give it a moment." });
+}
+async function webClaimCreatorFeesCore(userId, body = {}) {
+  const store = await readWalletStore();
+  const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
+  const keypair = decryptWallet(wallet);
+  const rail = String(body.rail || "pump").toLowerCase();
+  const before = Number(await getSolBalanceCached(keypair.publicKey, { force: true }).catch(() => 0));
+  const payload = { publicKey: keypair.publicKey.toBase58(), action: "collectCreatorFee", priorityFee: CONFIG.pumpLaunchPriorityFeeSol || 0.000005 };
+  if (rail === "meteora") { payload.pool = "meteora-dbc"; if (body.mint) payload.mint = parsePublicKey(String(body.mint)).toBase58(); }
+  else if (body.mint) { payload.pool = "pump"; payload.mint = parsePublicKey(String(body.mint)).toBase58(); }
+  let signature;
+  try {
+    const tx = await requestPumpPortalLocalTransaction(payload, 20_000, { url: CONFIG.pumpPortalTradeLocalUrl });
+    if (tx?.signature) signature = tx.signature;
+    else { tx.sign([keypair]); signature = await sendPumpTradeTx(tx, keypair, "collect creator fees", {}); }
+  } catch (error) {
+    const e = new Error(`Nothing to claim right now (or pump rejected the claim): ${friendlyError(error)}`);
+    e.statusCode = 400; throw e;
+  }
+  invalidateWalletReadCache(wallet.publicKey);
+  const after = Number(await getSolBalanceCached(keypair.publicKey, { force: true }).catch(() => before));
+  const claimedSol = lamportsToSol(Math.max(0, after - before));
+  await audit("web_claim_creator_fees", { userId, wallet: wallet.publicKey, rail, mint: body.mint || "", signature, claimedSol });
+  return { ok: true, signature, claimedSol, wallet: wallet.publicKey, rail };
 }
 
 async function recordTradeEvents(events) {

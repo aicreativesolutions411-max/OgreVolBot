@@ -145,6 +145,22 @@ test("promoter fee-split: stored on the coin + idempotent split-send reusing the
   assert.match(serverSource, /pathname === "\/api\/web\/launch\/split-creator-fees"/);
 });
 
+test("creator-fee claim: list launches + in-app claim via PumpPortal collectCreatorFee", () => {
+  assert.match(serverSource, /async function webLaunchedCoins\(userId\)/);
+  assert.match(serverSource, /pathname === "\/api\/web\/launches"/);
+  const claim = functionBody(serverSource, "webClaimCreatorFeesCore");
+  assert.match(claim, /action: "collectCreatorFee"/);
+  assert.match(claim, /requestPumpPortalLocalTransaction/);
+  assert.match(claim, /meteora-dbc/);                       // meteora claim path
+  assert.match(claim, /after - before/);                    // reports the SOL that actually landed
+  assert.match(serverSource, /pathname === "\/api\/web\/launch\/claim-fees"/);
+  assert.match(functionBody(serverSource, "webClaimCreatorFees"), /runIdempotentMoneyOp\("web-claim-fees"/);
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /GG\.launchesModal\(\)/);
+    assert.match(src, /\/api\/web\/launch\/claim-fees/);
+  }
+});
+
 test("auto round-trip is gated + bounded + sweeps back (flip bot)", () => {
   assert.match(serverSource, /function autoRoundTripEnabled\(\)/);
   assert.match(functionBody(serverSource, "webStartAutoRoundTrip"), /AUTO_ROUNDTRIP_ENABLED|autoRoundTripEnabled\(\)/);

@@ -1986,6 +1986,30 @@
   // 1-click buy contract: once you've set a quick-buy amount (+ optional TP/SL preset), the ⚡ Buy on
   // any pair fires instantly with it — no menu. The FIRST time (nothing set) it opens the quick-buy
   // sheet to pick the amount/preset, then buys. Stored in localStorage so it persists.
+  // My launches & fees — list the coins you launched + claim creator fees in-app (no pump.fun trip).
+  async function launchesModal(){
+    openModal('<h3>💰 My launches &amp; fees</h3><p class="sub mut" style="font-size:12px">Every coin you launched. Claim its creator fees straight to your wallet — no pump.fun trip. <b>pump</b> claims a wallet\'s coins all at once; <b>Meteora</b> claims per coin.</p><div id="lchBody"><div class="loading"><span class="spin"></span></div></div>');
+    const {ok,d}=await api("/api/web/launches").catch(()=>({}));
+    const body=$("#lchBody");if(!body)return;
+    const coins=(ok&&d&&d.coins)||[];
+    if(!coins.length){body.innerHTML='<p class="mut" style="font-size:12px">No launches yet — launch a coin first.</p>';return;}
+    const byWallet={};coins.forEach(c=>{const k=c.devWallet||"?";(byWallet[k]=byWallet[k]||[]).push(c);});
+    body.innerHTML=Object.entries(byWallet).map(([w,list])=>{
+      const wi=list[0].devWalletIndex,sw=list[0].devWalletShort||short(w);
+      const hasPump=list.some(c=>c.rail!=="meteora");
+      return '<div style="border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px">'+
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px"><b style="font-size:12px">Wallet '+esc(sw)+'</b>'+(hasPump&&wi?'<button class="wbtn" style="padding:4px 10px;font-size:12px" onclick="GG.claimFees('+wi+',\'pump\',\'\')">💰 Claim pump fees</button>':(wi?'':'<span class="mut" style="font-size:10px">imported wallet</span>'))+'</div>'+
+        list.map(c=>'<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-top:4px"><span>'+esc(c.symbol||short(c.mint))+'</span><span class="mut" style="font-size:10px">'+esc(c.rail)+'</span>'+(c.rail==='meteora'&&wi?'<button class="wbtn ghost" style="margin-left:auto;padding:2px 8px;font-size:11px" onclick="GG.claimFees('+wi+',\'meteora\',\''+esc(c.mint)+'\')">Claim</button>':'')+'</div>').join('')+
+      '</div>';
+    }).join('');
+  }
+  async function claimFees(walletIndex,rail,mint){
+    if(!(await ensureTradeReady()))return;
+    toast("Claiming fees…");
+    const {ok,d}=await jpost("/api/web/launch/claim-fees",{walletIndex:String(walletIndex),rail:rail||"pump",mint:mint||"",tradeAttemptId:attemptId()});
+    if(ok&&d&&d.ok){toast("Claimed ◎"+(d.claimedSol||"0")+" to your wallet 🎉");refreshWallets();}
+    else toast((d&&(d.message||d.error))||"Nothing to claim right now.",true);
+  }
   // Pay promoters: split a SOL amount from the creator wallet across the launch form's promoter wallets
   // (by %). Reads the #lcPm* rows + #lcDevWallet, posts to the idempotent split-creator-fees endpoint.
   function payPromotersModal(){
@@ -2798,7 +2822,7 @@
     const tb=(id,lab)=>'<button data-ltab="'+id+'" class="'+(tab===id?"on":"")+'">'+lab+'</button>';
     const show=(id)=>tab===id?"":' style="display:none"';
     $("#v-launch").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>🚀 Launch a Coin</h3><p class="sub">Make your own coin in under a minute — then trade, chat &amp; grow it right here. You stay the owner, and the fees it earns come back to you.</p>'+
-      '<button class="wbtn ghost" type="button" style="margin-bottom:10px" onclick="GG.escrowModal()">🤝 Presale escrow — buy + send at launch</button>'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><button class="wbtn ghost" type="button" onclick="GG.launchesModal()">💰 My launches &amp; fees</button><button class="wbtn ghost" type="button" onclick="GG.escrowModal()">🤝 Presale escrow — buy + send at launch</button></div>'+
       '<div class="tabs" style="margin:4px 0 14px;gap:6px;flex-wrap:wrap">'+tb("coin","🪙 Coin")+tb("dev","🛡️ Dev Buy &amp; Bundle")+tb("chat","💬 Chat &amp; Live")+'</div>'+
       '<div data-lpanel="coin"'+show("coin")+'>'+
         '<div class="field"><label>Where it lives</label><div class="railsel" id="lcRails">'+
@@ -3042,7 +3066,7 @@
 
   // ---------- expose + boot ----------
   window.GG={open:(m)=>go("trade",m),openSell:(m)=>{state.pendingSell=m;go("trade",m);},sellPos:(m,s)=>quickSellModal(m,s),armPos:(m,s)=>armExitsModal(m,s),go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,
-    escrowModal,renderEscrow,escrowFinalize,escrowRefund,
+    escrowModal,renderEscrow,escrowFinalize,escrowRefund,launchesModal,claimFees,
     flipTrade:()=>{const t=document.querySelector('#v-trade .trade');if(!t)return;const next=t.getAttribute('data-focus')==='buy'?'chart':'buy';t.setAttribute('data-focus',next);const fab=document.getElementById('tradeFab');if(fab)fab.innerHTML=next==='buy'?'📈 Chart':'💰 Buy';const side=t.querySelector('.tradeSide'),v=document.getElementById('v-trade');if(next==='buy'&&side)side.scrollIntoView({behavior:'smooth',block:'start'});else if(v)v.scrollTo({top:0,behavior:'smooth'});},
     copyWallet:(w)=>{const i=$("#cpWallet");if(i){i.value=w;i.scrollIntoView({behavior:"smooth",block:"center"});i.focus();toast("Wallet loaded — set your size, then Start copying");}},
     kolProfile:openKolProfile,
