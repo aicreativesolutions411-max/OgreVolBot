@@ -1986,22 +1986,36 @@
   // 1-click buy contract: once you've set a quick-buy amount (+ optional TP/SL preset), the ⚡ Buy on
   // any pair fires instantly with it — no menu. The FIRST time (nothing set) it opens the quick-buy
   // sheet to pick the amount/preset, then buys. Stored in localStorage so it persists.
-  // My launches & fees — list the coins you launched + claim creator fees in-app (no pump.fun trip).
+  // My launches & fees — claim creator fees in-app (no pump.fun trip). pump's claim grabs EVERY fee a
+  // wallet has earned across ALL its coins at once (no mint needed), even coins launched directly on
+  // pump.fun outside this site — so we list every one of your wallets with a claim button, not just
+  // coins we have a launch record for. The record list below is a bonus (per-coin Meteora claims live there).
   async function launchesModal(){
-    openModal('<h3>💰 My launches &amp; fees</h3><p class="sub mut" style="font-size:12px">Every coin you launched. Claim its creator fees straight to your wallet — no pump.fun trip. <b>pump</b> claims a wallet\'s coins all at once; <b>Meteora</b> claims per coin.</p><div id="lchBody"><div class="loading"><span class="spin"></span></div></div>');
-    const {ok,d}=await api("/api/web/launches").catch(()=>({}));
+    openModal('<h3>💰 Creator fees &amp; launches</h3><p class="sub mut" style="font-size:12px">Pump fees <b>accrue but aren\'t auto-sent</b> — you claim them. This claims every fee a wallet earned across <b>all</b> its pump coins (even ones launched on pump.fun directly), straight to that wallet. No pump.fun trip.</p><div id="lchBody"><div class="loading"><span class="spin"></span></div></div>');
+    if(!state.wallets.length)await refreshWallets();
     const body=$("#lchBody");if(!body)return;
+    const wallets=state.wallets||[];
+    let html='';
+    if(!wallets.length){body.innerHTML='<p class="mut" style="font-size:12px">No wallets yet — create or import one in the Wallet tab, then claim its pump fees here.</p>';return;}
+    html+='<div style="font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;margin:2px 0 6px">Claim pump fees — by wallet</div>';
+    html+=wallets.map(w=>'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;border:1px solid var(--border);border-radius:10px;padding:9px 11px;margin-bottom:7px">'+
+      '<div style="min-width:0"><b style="font-size:12px">'+esc(w.label||("Wallet "+w.index))+'</b> <span class="mut" style="font-size:10px">'+esc(w.shortPublicKey||short(w.publicKey||""))+'</span></div>'+
+      '<button class="wbtn" style="padding:5px 12px;font-size:12px;white-space:nowrap" onclick="GG.claimFees('+w.index+',\'pump\',\'\')">💰 Claim pump fees</button>'+
+    '</div>').join('');
+    html+='<p class="mut" style="font-size:10px;margin:2px 2px 10px">Tip: claim from the exact wallet you launched the coin with. Fees only exist if the coin actually traded. If there\'s nothing yet, it\'ll say so — no harm in trying.</p>';
+    // Bonus: coins we have a launch record for (mainly so Meteora coins get a per-coin claim button).
+    const {ok,d}=await api("/api/web/launches").catch(()=>({}));
     const coins=(ok&&d&&d.coins)||[];
-    if(!coins.length){body.innerHTML='<p class="mut" style="font-size:12px">No launches yet — launch a coin first.</p>';return;}
-    const byWallet={};coins.forEach(c=>{const k=c.devWallet||"?";(byWallet[k]=byWallet[k]||[]).push(c);});
-    body.innerHTML=Object.entries(byWallet).map(([w,list])=>{
-      const wi=list[0].devWalletIndex,sw=list[0].devWalletShort||short(w);
-      const hasPump=list.some(c=>c.rail!=="meteora");
-      return '<div style="border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px">'+
-        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px"><b style="font-size:12px">Wallet '+esc(sw)+'</b>'+(hasPump&&wi?'<button class="wbtn" style="padding:4px 10px;font-size:12px" onclick="GG.claimFees('+wi+',\'pump\',\'\')">💰 Claim pump fees</button>':(wi?'':'<span class="mut" style="font-size:10px">imported wallet</span>'))+'</div>'+
-        list.map(c=>'<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-top:4px"><span>'+esc(c.symbol||short(c.mint))+'</span><span class="mut" style="font-size:10px">'+esc(c.rail)+'</span>'+(c.rail==='meteora'&&wi?'<button class="wbtn ghost" style="margin-left:auto;padding:2px 8px;font-size:11px" onclick="GG.claimFees('+wi+',\'meteora\',\''+esc(c.mint)+'\')">Claim</button>':'')+'</div>').join('')+
-      '</div>';
-    }).join('');
+    const met=coins.filter(c=>c.rail==='meteora'&&c.devWalletIndex);
+    if(met.length){
+      html+='<div style="font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;margin:8px 0 6px">Meteora coins — claim per coin</div>';
+      html+=met.map(c=>'<div style="display:flex;align-items:center;gap:8px;font-size:12px;border:1px solid var(--border);border-radius:10px;padding:8px 11px;margin-bottom:6px"><span>'+esc(c.symbol||short(c.mint))+'</span><span class="mut" style="font-size:10px">'+esc(c.devWalletShort||"")+'</span><button class="wbtn ghost" style="margin-left:auto;padding:3px 10px;font-size:11px" onclick="GG.claimFees('+c.devWalletIndex+',\'meteora\',\''+esc(c.mint)+'\')">Claim</button></div>').join('');
+    }
+    if(coins.length){
+      const pumpCoins=coins.filter(c=>c.rail!=='meteora');
+      if(pumpCoins.length)html+='<p class="mut" style="font-size:10px;margin:8px 2px 0">Launched through SlimeWire: '+pumpCoins.map(c=>esc(c.symbol||short(c.mint))).join(', ')+' — claim these via their wallet above.</p>';
+    }
+    body.innerHTML=html;
   }
   async function claimFees(walletIndex,rail,mint){
     if(!(await ensureTradeReady()))return;
