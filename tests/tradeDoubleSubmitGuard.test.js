@@ -167,6 +167,22 @@ test("creator-fee claim: list launches + in-app claim via PumpPortal collectCrea
   }
 });
 
+test("launch form survives navigation + warns on no dev buy", () => {
+  for (const src of [ggSource, indexSource]) {
+    // Whole-form snapshot/restore so leaving the Launch page and coming back keeps text + images.
+    assert.match(src, /function lcSnapshot\(\)/);
+    assert.match(src, /function lcRestore\(\)/);
+    assert.match(src, /state\.launchForm/);
+    assert.match(src, /lroot\.oninput\s*=\s*lcSnapshot/);
+    assert.match(src, /lcRestore\(\)/);
+    // Image previews are re-shown from persisted state after the rebuild.
+    assert.match(src, /state\.launchImg&&\$\("#lcImgPrev"\)/);
+    // "No dev buy set" confirmation before launching with an empty first buy.
+    assert.match(src, /function confirmModal\(/);
+    assert.match(src, /No dev buy set/);
+  }
+});
+
 test("wallet sweep drains regardless of session-funding (no 'fund your session' gate)", () => {
   // Sweeping out a wallet's own SOL/tokens needs only the signing key, NOT a funded session wallet —
   // otherwise one unfunded/expired session wallet aborts the whole "sweep all".

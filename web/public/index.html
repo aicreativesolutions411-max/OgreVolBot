@@ -2835,9 +2835,20 @@
     if(ok&&d&&d.ok&&(d.configKey||d.already)){toast("🌊 SlimeWire curve is live!");refreshMeteoraSetup();}
     else{if(btn){btn.disabled=false;btn.textContent="⚙️ Set up SlimeWire curve";}toast((d&&(d.error||d.detail))||("Setup failed ("+status+")"),true);}
   }
+  // Promise-based yes/no modal (used for the "no dev buy" heads-up). Resolves true = primary action.
+  function confirmModal(html,yesLabel,noLabel){return new Promise((res)=>{openModal(html+'<div style="display:flex;gap:9px;margin-top:14px"><button class="wbtn ghost" id="cfNo" style="flex:1">'+esc(noLabel||"Cancel")+'</button><button class="wbtn" id="cfYes" style="flex:1">'+esc(yesLabel||"Continue")+'</button></div>');const y=$("#cfYes"),n=$("#cfNo");let done=false;const fin=(v)=>{if(done)return;done=true;closeModal();res(v);};if(y)y.onclick=()=>fin(true);if(n)n.onclick=()=>fin(false);});}
+  // Persist the WHOLE launch form across navigations (go to Wallet / dev wallet and back) so nothing
+  // typed or uploaded disappears. Snapshot on every edit; restore right after each render. Images live
+  // in state.launchImg/Banner (file inputs can't be re-populated for security, so we re-show the preview).
+  function lcSnapshot(){const root=$("#v-launch");if(!root)return;const f=state.launchForm||(state.launchForm={});root.querySelectorAll("input,textarea,select").forEach(el=>{if(!el.id||el.type==="file"||el.id==="lcChatCa")return;f[el.id]=(el.type==="checkbox")?el.checked:el.value;});}
+  function lcRestore(){const root=$("#v-launch");if(!root)return;const f=state.launchForm;if(f){root.querySelectorAll("input,textarea,select").forEach(el=>{if(!el.id||el.type==="file"||el.id==="lcChatCa"||!(el.id in f))return;if(el.type==="checkbox")el.checked=!!f[el.id];else if(f[el.id]!=null&&f[el.id]!=="")el.value=f[el.id];});}
+    if(state.launchImg&&$("#lcImgPrev"))$("#lcImgPrev").innerHTML='<img src="'+state.launchImg.dataUrl+'" style="height:64px;width:64px;border-radius:10px;object-fit:cover;border:1px solid var(--border)">';
+    if(state.launchBanner&&$("#lcBannerPrev"))$("#lcBannerPrev").innerHTML='<img src="'+state.launchBanner.dataUrl+'" style="height:40px;border-radius:10px;object-fit:cover;border:1px solid var(--border)">';
+    // Re-apply the show/hide that depends on restored checkbox state (promoter rows, bundle amount).
+    const pm=$("#lcPromo");if(pm){const e=$("#lcPromoRows"),pp=$("#lcPayPromo");if(e)e.style.display=pm.checked?"":"none";if(pp)pp.style.display=pm.checked?"":"none";}
+    const bw=$("#lcBundleWallets");if(bw){const on=bw.checked;["lcBundleAmtWrap","lcBundleNote"].forEach(id=>{const e=$("#"+id);if(e)e.style.display=on?"":"none";});}}
   async function renderLaunch(){
     setActiveView("v-launch");subbarTool("🚀 Launch a Coin");if(state.token)await refreshWallets();if(state.route!=="launch")return;
-    if(!state._launchKept){state.launchImg=null;state.launchBanner=null;}
     const tab=state.launchTab||"coin";const mint=state.launchedMint||"";const rail=state.launchRail||"pump";
     const tb=(id,lab)=>'<button data-ltab="'+id+'" class="'+(tab===id?"on":"")+'">'+lab+'</button>';
     const show=(id)=>tab===id?"":' style="display:none"';
@@ -2902,9 +2913,20 @@
     const pm=$("#lcPromo");if(pm)pm.onchange=()=>{const e=$("#lcPromoRows"),pp=$("#lcPayPromo");if(e)e.style.display=pm.checked?"":"none";if(pp)pp.style.display=pm.checked?"":"none";};
     const pp=$("#lcPayPromo");if(pp)pp.onclick=()=>payPromotersModal();
     lcWireChat();
+    // Persist every edit so navigating away (Wallet/dev wallet) and back keeps text + images. One
+    // delegated handler on the container survives innerHTML swaps and never double-binds (property, not addEventListener).
+    const lroot=$("#v-launch");if(lroot){lroot.oninput=lcSnapshot;lroot.onchange=lcSnapshot;}
+    lcRestore();   // re-fill fields + image previews from state right after the rebuild
     $("#lcGo").onclick=async()=>{
       const name=$("#lcName").value.trim(),sym=$("#lcSym").value.trim();
       if(!name||!sym){toast("Name and ticker are required (Coin tab).",true);state.launchTab="coin";renderLaunch();return;}
+      // No first buy set? Confirm — launching with no dev buy means empty starting liquidity + no early
+      // position for you. Offer to set one (jump to the Dev tab + focus) or continue without.
+      const devRaw=($("#lcDevBuy")&&$("#lcDevBuy").value.trim())||"";
+      if(!(Number(devRaw||"0")>0)){
+        const cont=await confirmModal('<h3>No dev buy set</h3><p class="sub mut" style="font-size:13px;line-height:1.5">You haven\'t set a <b>first buy</b>, so this coin launches with <b>no starting buy from you</b> — it opens with empty liquidity and you hold none of the early supply. A small first buy becomes the starting liquidity and gives you an early position. Set one, or launch without?</p>','Continue without dev buy','Set a dev buy');
+        if(!cont){state.launchTab="dev";document.querySelectorAll("#v-launch [data-ltab]").forEach(x=>x.classList.toggle("on",x.dataset.ltab==="dev"));document.querySelectorAll("#v-launch [data-lpanel]").forEach(p=>p.style.display=(p.dataset.lpanel==="dev"?"":"none"));const dfld=$("#lcDevBuy");if(dfld){dfld.focus();dfld.scrollIntoView({block:"center",behavior:"smooth"});}return;}
+      }
       if(!(await ensureTradeReady()))return;
       const b=$("#lcGo");b.disabled=true;b.textContent="Launching…";
       // Creator fees on pump.fun accrue to the wallet that SIGNS the mint — so we always send the chosen
