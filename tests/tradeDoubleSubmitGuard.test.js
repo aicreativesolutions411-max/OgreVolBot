@@ -167,6 +167,20 @@ test("creator-fee claim: list launches + in-app claim via PumpPortal collectCrea
   }
 });
 
+test("wallet sweep drains regardless of session-funding (no 'fund your session' gate)", () => {
+  // Sweeping out a wallet's own SOL/tokens needs only the signing key, NOT a funded session wallet —
+  // otherwise one unfunded/expired session wallet aborts the whole "sweep all".
+  const sweepSel = functionBody(serverSource, "selectedWebSweepWallets");
+  assert.match(sweepSel, /requireTradeReady:\s*false/);
+  // webSelectedWallets honours the opt-out by using the lighter signable-only check.
+  const sel = functionBody(serverSource, "webSelectedWallets");
+  assert.match(sel, /requireTradeReady/);
+  assert.match(sel, /assertServerSignableWallet/);
+  // The signable check must NOT look at sessionStatus/sessionWallet (that's the trade-ready gate).
+  const signable = functionBody(serverSource, "assertServerSignableWallet");
+  assert.doesNotMatch(signable, /sessionStatus|sessionWallet/);
+});
+
 test("auto round-trip is gated + bounded + sweeps back (flip bot)", () => {
   assert.match(serverSource, /function autoRoundTripEnabled\(\)/);
   assert.match(functionBody(serverSource, "webStartAutoRoundTrip"), /AUTO_ROUNDTRIP_ENABLED|autoRoundTripEnabled\(\)/);

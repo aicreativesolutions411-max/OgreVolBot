@@ -37920,6 +37920,16 @@ function getWebServerTradeWalletAt(store, oneBasedIndex, userId, context = "trad
   return assertServerTradeWalletReady(getWalletAt(store, oneBasedIndex, userId), context);
 }
 
+// Sweeping/draining a wallet's OWN SOL or tokens out to an external address needs nothing but the
+// signing key — NOT a "funded session". So sweeps use this lighter check instead of the trade-ready
+// gate, otherwise one half-finished or expired session wallet in the set aborts the entire "sweep all".
+function assertServerSignableWallet(wallet, context = "sweeping") {
+  if (!wallet?.secret) {
+    throw new Error(`${wallet?.label || "This wallet"} is not a server-signable SlimeWire wallet — can't ${context} it.`);
+  }
+  return wallet;
+}
+
 async function createWebWalletSet(userId, body = {}) {
   const label = cleanLabel(String(body.label || "Ogre Web"));
   const count = Number.parseInt(body.count || "1", 10);
@@ -43660,7 +43670,7 @@ function webLaunchWatchRow(plan) {
   };
 }
 
-function webSelectedWallets(store, userId, walletIndexes, walletGroup = "") {
+function webSelectedWallets(store, userId, walletIndexes, walletGroup = "", options = {}) {
   const ownerWallets = walletsForOwner(store, userId);
   const group = String(walletGroup || "").trim().toLowerCase();
   const indexes = group
@@ -43681,14 +43691,33 @@ function webSelectedWallets(store, userId, walletIndexes, walletGroup = "") {
   if (uniqueIndexes.length === 0) {
     throw new Error(group ? `No wallets found for group "${walletGroup}".` : "Choose at least one wallet.");
   }
-  if (uniqueIndexes.length > 20) {
-    throw new Error("Choose 20 wallets or fewer.");
+  // Trading paths cap at 20 (tx-load + risk). Sweeps (draining out) are low-risk, so allow far more so
+  // "sweep ALL wallets" never trips a cap when the user runs a big volume-bot fleet.
+  const maxWallets = options.maxWallets || 20;
+  if (uniqueIndexes.length > maxWallets) {
+    throw new Error(`Choose ${maxWallets} wallets or fewer.`);
   }
 
-  return uniqueIndexes.map((index) => ({
-    ...assertServerTradeWalletReady(getWalletAt(store, index, userId), "server trading"),
-    webIndex: index
-  }));
+  // Sweep mode (requireTradeReady === false): only needs a signing key — NOT a funded session — and a
+  // single un-signable wallet (e.g. a connected-wallet reference) is skipped, never aborts the whole run.
+  const requireTradeReady = options.requireTradeReady !== false;
+  const rows = [];
+  for (const index of uniqueIndexes) {
+    const wallet = getWalletAt(store, index, userId);
+    try {
+      const ready = requireTradeReady
+        ? assertServerTradeWalletReady(wallet, "server trading")
+        : assertServerSignableWallet(wallet);
+      rows.push({ ...ready, webIndex: index });
+    } catch (error) {
+      if (requireTradeReady) throw error;          // trading: a bad wallet is a hard error
+      // sweep: skip wallets we can't sign for; the rest still sweep
+    }
+  }
+  if (rows.length === 0) {
+    throw new Error(requireTradeReady ? "Choose at least one wallet." : "None of the selected wallets can be swept (no signable SlimeWire wallet).");
+  }
+  return rows;
 }
 
 function webWalletRef(wallet) {
@@ -43738,11 +43767,15 @@ function splitWebDestinationList(value) {
 }
 
 function selectedWebSweepWallets(store, userId, body = {}) {
+  // Draining a wallet's OWN funds out needs only the signing key — NOT a funded session. Pass
+  // requireTradeReady:false so an unfunded/expired session wallet in the set can't abort "sweep all",
+  // and lift the cap so a big wallet fleet sweeps in one go.
   return webSelectedWallets(
     store,
     userId,
     body.walletIndexes || body.wallets || "all",
-    body.walletGroup || body.group || ""
+    body.walletGroup || body.group || "",
+    { requireTradeReady: false, maxWallets: 60 }
   );
 }
 
