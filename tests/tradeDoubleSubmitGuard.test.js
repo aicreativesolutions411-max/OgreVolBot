@@ -167,6 +167,32 @@ test("creator-fee claim: list launches + in-app claim via PumpPortal collectCrea
   }
 });
 
+test("Robinhood Chain rail: derived EVM wallet + self-deployed ERC-20 (gas-estimated first, idempotent)", () => {
+  // Server: routes + idempotent launch that records into the launches tracker.
+  assert.match(serverSource, /pathname === "\/api\/web\/rh\/wallet"/);
+  assert.match(serverSource, /pathname === "\/api\/web\/launch\/rh-coin"/);
+  assert.match(functionBody(serverSource, "webLaunchRhCoin"), /runIdempotentMoneyOp\("web-rh-launch"/);
+  const core = functionBody(serverSource, "webLaunchRhCoinCore");
+  assert.match(core, /rhDeployToken/);
+  assert.match(core, /rail: "robinhood"/);
+  assert.match(core, /upsertPumpLaunchAttempt/);
+  // Chain lib: deterministic EVM key from the wallet's existing seed; estimate gas BEFORE sending so a
+  // broken/underfunded deploy costs nothing; fixed-supply no-owner ERC-20 artifact is committed.
+  const rhLib = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
+  assert.match(rhLib, /slimewire-evm-v1/);
+  assert.match(rhLib, /estimateGas/);
+  assert.match(rhLib, /4663/);
+  const artifact = JSON.parse(fs.readFileSync(new URL("../src/lib/rh-erc20.json", import.meta.url), "utf8"));
+  assert.ok(artifact.bytecode.startsWith("0x") && artifact.bytecode.length > 1000, "compiled ERC-20 bytecode is vendored");
+  assert.ok(artifact.abi.some((e) => e.type === "constructor"), "artifact has constructor ABI");
+  // UI: 4th rail + deploy branch in both mirrors.
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /data-rail="robinhood"/);
+    assert.match(src, /\/api\/web\/launch\/rh-coin/);
+    assert.match(src, /function refreshRhSetup/);
+  }
+});
+
 test("launch form survives navigation + warns on no dev buy", () => {
   for (const src of [ggSource, indexSource]) {
     // Whole-form snapshot/restore so leaving the Launch page and coming back keeps text + images.

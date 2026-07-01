@@ -69,6 +69,7 @@ import {
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
+import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhExplorerAddress, rhExplorerToken } from "./lib/robinhoodChain.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
 import {
@@ -4157,6 +4158,9 @@ function loadConfig() {
   // stay idle. The live creation stream + the user's Launch Sniper are UNAFFECTED (free WS). Flip
   // AUTOPILOT_ENABLED=true on Render to bring it all back.
   const autopilotEnabled = parseBoolean(process.env.AUTOPILOT_ENABLED || "false");
+  // Robinhood Chain (EVM, chain id 4663) RPC for the robinhood launch rail. Public RPC by default;
+  // point RH_CHAIN_RPC_URL at an Alchemy endpoint if the public one ever rate-limits.
+  const rhChainRpcUrl = (process.env.RH_CHAIN_RPC_URL || RH_DEFAULT_RPC).trim();
   const pumpLaunchJitoUrl = (process.env.PUMP_LAUNCH_JITO_URL || "https://mainnet.block-engine.jito.wtf/api/v1/bundles").trim();
   const pumpLaunchJitoTipSol = Math.max(0.00001, Number.parseFloat(process.env.PUMP_LAUNCH_JITO_TIP_SOL || "0.001") || 0.001);
   // TRADE JITO — route pump buys/sells through a Jito bundle (swap tx + a tiny tip tx) for FAST,
@@ -4557,6 +4561,7 @@ function loadConfig() {
     meteoraDbcConfigKey: (process.env.METEORA_DBC_CONFIG_KEY || "").trim(),
     pumpLaunchJitoBundle,
     autopilotEnabled,
+    rhChainRpcUrl,
     pumpLaunchJitoUrl,
     pumpLaunchJitoTipSol,
     tradeJitoBundle,
@@ -7962,6 +7967,17 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
     if (request.method === "POST" && pathname === "/api/web/launch/claim-fees") {
       const result = await webClaimCreatorFees(auth.userId, await readJsonRequestBody(request));
+      sendWebJson(request, response, 200, result);
+      return;
+    }
+    // Robinhood Chain (EVM) rail: each wallet's derived EVM address + ETH balance, and the deploy itself.
+    if (request.method === "GET" && pathname === "/api/web/rh/wallet") {
+      const result = await webRhWallet(auth.userId, requestUrl.searchParams.get("walletIndex"));
+      sendWebJson(request, response, 200, result);
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/launch/rh-coin") {
+      const result = await webLaunchRhCoin(auth.userId, await readJsonRequestBody(request));
       sendWebJson(request, response, 200, result);
       return;
     }
@@ -32391,6 +32407,55 @@ async function webClaimCreatorFeesCore(userId, body = {}) {
   const claimedSol = lamportsToSol(Math.max(0, after - before));
   await audit("web_claim_creator_fees", { userId, wallet: wallet.publicKey, rail, mint: body.mint || "", signature, claimedSol, toppedUp });
   return { ok: true, signature, claimedSol, wallet: wallet.publicKey, rail, funded: toppedUp };
+}
+
+// ---------- Robinhood Chain (EVM) launch rail ----------
+// No launchpad exists on Robinhood Chain, so WE deploy the token: a fixed-supply, no-owner ERC-20
+// (src/lib/robinhoodChain.js). Each SlimeWire wallet gets a deterministic EVM address derived from its
+// existing key — the user bridges a little ETH to it, then launches. Gas is estimated BEFORE sending,
+// so a broken or underfunded launch costs nothing.
+async function webRhWallet(userId, walletIndex) {
+  const store = await readWalletStore();
+  const wallet = getWalletAt(store, parseWebWalletIndex(walletIndex), userId);
+  const keypair = decryptWallet(wallet);
+  const address = evmAddressFromSolana(keypair.secretKey);
+  const bal = await rhEthBalance(address, CONFIG.rhChainRpcUrl).catch(() => ({ eth: "0", wei: "0" }));
+  return { ok: true, chainId: RH_CHAIN_ID, address, eth: bal.eth, explorer: rhExplorerAddress(address), wallet: wallet.publicKey };
+}
+
+async function webLaunchRhCoin(userId, body = {}) {
+  return runIdempotentMoneyOp("web-rh-launch", userId, firstString(body.launchAttemptId, body.tradeAttemptId, body.clientRequestId),
+    () => webLaunchRhCoinCore(userId, body),
+    { busyMessage: "A Robinhood Chain launch is already in flight — give it a moment." });
+}
+
+async function webLaunchRhCoinCore(userId, body = {}) {
+  const store = await readWalletStore();
+  const wallet = getWalletAt(store, parseWebWalletIndex(body.devWalletIndex || body.walletIndex), userId);
+  const keypair = decryptWallet(wallet);
+  const result = await rhDeployToken({
+    solanaSecretKey: keypair.secretKey,
+    name: body.name,
+    symbol: body.symbol,
+    supplyTokens: body.supplyTokens || 1_000_000_000,
+    rpcUrl: CONFIG.rhChainRpcUrl
+  });
+  const attemptId = firstString(body.launchAttemptId, body.tradeAttemptId) || crypto.randomUUID();
+  await upsertPumpLaunchAttempt({
+    id: attemptId,
+    userId,
+    rail: "robinhood",
+    status: "confirmed",
+    mintPublicKey: result.tokenAddress,
+    tokenName: String(body.name || "").trim(),
+    symbol: String(body.symbol || "").trim(),
+    devWalletPublicKey: wallet.publicKey,
+    rhDeployer: result.deployer,
+    txSignature: result.txHash,
+    createdAt: new Date().toISOString()
+  });
+  await audit("web_rh_launch", { userId, wallet: wallet.publicKey, token: result.tokenAddress, tx: result.txHash, supply: result.supplyTokens, gasEth: result.gasCostEth });
+  return { ok: true, ...result, chainId: RH_CHAIN_ID, explorerToken: rhExplorerToken(result.tokenAddress) };
 }
 
 async function recordTradeEvents(events) {

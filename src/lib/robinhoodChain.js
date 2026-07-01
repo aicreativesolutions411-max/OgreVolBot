@@ -1,0 +1,124 @@
+// Robinhood Chain (EVM) launch rail. Robinhood Chain is an Arbitrum-Orbit L2 (chain id 4663, gas = ETH)
+// with NO pump.fun-style launchpad — so unlike the Solana rails (PumpPortal/Meteora), we deploy the
+// token contract OURSELVES: a minimal fixed-supply ERC-20 (src/lib/rh-erc20.json, compiled from
+// contracts/SlimeTokenRH.sol — no owner/mint/pause/blacklist, so the contract itself can't rug).
+//
+// Wallets: every SlimeWire wallet already holds an ed25519 keypair. We derive a deterministic
+// secp256k1 (EVM) private key from the same 32-byte seed — same wallet always maps to the same
+// Robinhood address, nothing new is stored, and imported wallets work too. The user funds that
+// address with bridged ETH; deploys estimate gas FIRST so a broken/underfunded launch costs nothing.
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { ethers } from "ethers";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const artifact = JSON.parse(fs.readFileSync(path.join(here, "rh-erc20.json"), "utf8"));
+
+export const RH_CHAIN_ID = 4663;
+export const RH_DEFAULT_RPC = "https://rpc.mainnet.chain.robinhood.com";
+export const RH_EXPLORER = "https://robinhoodchain.blockscout.com";
+
+let cachedProvider = null;
+let cachedProviderUrl = "";
+
+export function rhProvider(rpcUrl = RH_DEFAULT_RPC) {
+  if (!cachedProvider || cachedProviderUrl !== rpcUrl) {
+    // staticNetwork: skip the chainId round-trip on every call (the chain id is fixed).
+    cachedProvider = new ethers.JsonRpcProvider(rpcUrl, RH_CHAIN_ID, { staticNetwork: true });
+    cachedProviderUrl = rpcUrl;
+  }
+  return cachedProvider;
+}
+
+// Deterministic EVM key from a Solana keypair's 32-byte seed. keccak(domain-tag || seed) is uniform
+// over 2^256; re-hash in the astronomically unlikely case it falls outside the secp256k1 key range.
+export function deriveEvmPrivateKey(solanaSecretKey) {
+  const seed = Buffer.from(solanaSecretKey).subarray(0, 32);
+  let candidate = ethers.keccak256(ethers.concat([ethers.toUtf8Bytes("slimewire-evm-v1"), seed]));
+  for (let i = 0; i < 10; i += 1) {
+    try {
+      new ethers.SigningKey(candidate); // throws if out of range / zero
+      return candidate;
+    } catch {
+      candidate = ethers.keccak256(candidate);
+    }
+  }
+  throw new Error("Could not derive an EVM key from this wallet.");
+}
+
+export function evmWalletFromSolana(solanaSecretKey, rpcUrl) {
+  return new ethers.Wallet(deriveEvmPrivateKey(solanaSecretKey), rhProvider(rpcUrl));
+}
+
+export function evmAddressFromSolana(solanaSecretKey) {
+  return new ethers.Wallet(deriveEvmPrivateKey(solanaSecretKey)).address;
+}
+
+export async function rhEthBalance(address, rpcUrl) {
+  const wei = await rhProvider(rpcUrl).getBalance(address);
+  return { wei: wei.toString(), eth: ethers.formatEther(wei) };
+}
+
+export function rhExplorerAddress(address) { return `${RH_EXPLORER}/address/${address}`; }
+export function rhExplorerToken(address) { return `${RH_EXPLORER}/token/${address}`; }
+export function rhExplorerTx(hash) { return `${RH_EXPLORER}/tx/${hash}`; }
+
+// Deploy the fixed-supply ERC-20. supplyTokens is whole tokens (18 decimals added here).
+// Order of operations is the safety story: build tx -> estimateGas (reverts surface HERE, costing
+// nothing) -> check the wallet can afford gas -> send -> wait for the receipt.
+export async function rhDeployToken({ solanaSecretKey, name, symbol, supplyTokens, rpcUrl, confirmTimeoutMs = 120_000 }) {
+  const cleanName = String(name || "").trim();
+  const cleanSymbol = String(symbol || "").trim();
+  if (!cleanName || cleanName.length > 64) throw new Error("Token name is required (max 64 chars).");
+  if (!cleanSymbol || cleanSymbol.length > 12) throw new Error("Ticker is required (max 12 chars).");
+  const supply = BigInt(Math.round(Number(supplyTokens) || 0));
+  if (supply <= 0n || supply > 1_000_000_000_000_000n) throw new Error("Supply must be between 1 and 1,000,000,000,000,000 tokens.");
+
+  const wallet = evmWalletFromSolana(solanaSecretKey, rpcUrl);
+  const factory = new ethers.ContractFactory(artifact.abi, artifact.bytecode, wallet);
+  const supplyWei = supply * 10n ** 18n;
+
+  const deployTx = await factory.getDeployTransaction(cleanName, cleanSymbol, supplyWei, wallet.address);
+  let gas;
+  try {
+    gas = await wallet.estimateGas(deployTx);
+  } catch (error) {
+    const msg = String(error?.shortMessage || error?.message || error);
+    if (/insufficient funds/i.test(msg)) {
+      const bal = await rhEthBalance(wallet.address, rpcUrl).catch(() => ({ eth: "0" }));
+      const err = new Error(`Your Robinhood Chain wallet ${wallet.address} has ${bal.eth} ETH — not enough for the deploy gas. Bridge a little ETH to it (0.0005+ is plenty), then launch.`);
+      err.statusCode = 400;
+      throw err;
+    }
+    throw new Error(`Deploy simulation failed (nothing was spent): ${msg.slice(0, 300)}`);
+  }
+
+  const feeData = await wallet.provider.getFeeData();
+  const gasPrice = feeData.maxFeePerGas || feeData.gasPrice || 0n;
+  const estCostWei = gas * gasPrice;
+  const balanceWei = BigInt((await rhEthBalance(wallet.address, rpcUrl)).wei);
+  if (balanceWei < estCostWei) {
+    const err = new Error(`Deploy needs ~${ethers.formatEther(estCostWei)} ETH in gas but ${wallet.address} only has ${ethers.formatEther(balanceWei)} ETH. Bridge a little more ETH, then launch.`);
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const contract = await factory.deploy(cleanName, cleanSymbol, supplyWei, wallet.address, { gasLimit: (gas * 12n) / 10n });
+  const deploymentTx = contract.deploymentTransaction();
+  const receipt = await deploymentTx.wait(1, confirmTimeoutMs);
+  const tokenAddress = await contract.getAddress();
+  return {
+    tokenAddress,
+    txHash: deploymentTx.hash,
+    deployer: wallet.address,
+    blockNumber: receipt?.blockNumber ?? null,
+    gasUsed: receipt?.gasUsed?.toString() || "",
+    gasCostEth: receipt ? ethers.formatEther((receipt.gasUsed || 0n) * (receipt.gasPrice || gasPrice)) : "",
+    supplyTokens: supply.toString(),
+    explorerToken: rhExplorerToken(tokenAddress),
+    explorerTx: rhExplorerTx(deploymentTx.hash)
+  };
+}
+
+export const rhArtifactInfo = { solcVersion: artifact.solcVersion, bytecodeBytes: (artifact.bytecode.length - 2) / 2 };
