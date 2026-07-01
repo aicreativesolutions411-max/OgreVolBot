@@ -69,7 +69,7 @@ import {
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
-import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhExplorerAddress, rhExplorerToken } from "./lib/robinhoodChain.js";
+import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus } from "./lib/robinhoodChain.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
 import {
@@ -126,6 +126,7 @@ import {
   SystemProgram,
   Transaction,
   TransactionInstruction,
+  TransactionMessage,
   VersionedTransaction
 } from "@solana/web3.js";
 
@@ -7114,6 +7115,24 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, { ok: true, ...(await loungeState(lqAuth?.userId || "guest")) });
       return;
     }
+    // Robinhood Chain coin feed (public, like /api/web/pairs) + the launched-coin PFPs (img tags can't
+    // send a Bearer token, and the images are public by nature — they're the coin's face).
+    if (request.method === "GET" && pathname === "/api/web/rh/pairs") {
+      sendWebJson(request, response, 200, { ok: true, rows: await webRhPairs(requestUrl.searchParams.get("category") || "trending") });
+      return;
+    }
+    if (request.method === "GET" && pathname.startsWith("/api/web/rh/token-image/")) {
+      const address = pathname.slice("/api/web/rh/token-image/".length);
+      try {
+        const image = await fs.readFile(rhTokenImagePath(address));
+        response.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=86400" });
+        response.end(image);
+      } catch {
+        response.writeHead(404, { "Content-Type": "application/json" });
+        response.end('{"ok":false,"error":"no image"}');
+      }
+      return;
+    }
 
     const auth = await authenticateWebRequest(request);
     if (request.method === "GET" && [
@@ -7977,7 +7996,13 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
     if (request.method === "POST" && pathname === "/api/web/launch/rh-coin") {
-      const result = await webLaunchRhCoin(auth.userId, await readJsonRequestBody(request));
+      // Same body ceiling as the pump launch route — the payload carries the coin image dataURL.
+      const result = await webLaunchRhCoin(auth.userId, await readJsonRequestBody(request, 12_000_000));
+      sendWebJson(request, response, 200, result);
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/rh/fund-with-sol") {
+      const result = await webRhFundWithSol(auth.userId, await readJsonRequestBody(request));
       sendWebJson(request, response, 200, result);
       return;
     }
@@ -32419,8 +32444,149 @@ async function webRhWallet(userId, walletIndex) {
   const wallet = getWalletAt(store, parseWebWalletIndex(walletIndex), userId);
   const keypair = decryptWallet(wallet);
   const address = evmAddressFromSolana(keypair.secretKey);
-  const bal = await rhEthBalance(address, CONFIG.rhChainRpcUrl).catch(() => ({ eth: "0", wei: "0" }));
-  return { ok: true, chainId: RH_CHAIN_ID, address, eth: bal.eth, explorer: rhExplorerAddress(address), wallet: wallet.publicKey };
+  const [bal, tokens] = await Promise.all([
+    rhEthBalance(address, CONFIG.rhChainRpcUrl).catch(() => ({ eth: "0", wei: "0" })),
+    rhAddressTokens(address)
+  ]);
+  return { ok: true, chainId: RH_CHAIN_ID, address, eth: bal.eth, tokens, explorer: rhExplorerAddress(address), wallet: wallet.publicKey };
+}
+
+// ---------- Robinhood Chain coin feed (Trenches "🪶 Robinhood" tab) ----------
+// No DexScreener/Gecko coverage for chain 4663 yet — the feed comes from the chain's own Blockscout:
+// trending = 24h volume desc (then mcap/holders), new = creation time desc (lazily resolved + cached,
+// creation never changes). Coins launched THROUGH SlimeWire are enriched from our own metadata
+// registry (image/socials/description captured at launch) — EVM tokens have no native PFP standard,
+// so the site plays the address->logo registry role that wallets/DEXes play on other chains.
+let rhFeedCache = { at: 0, tokens: [] };
+async function rhFeedTokens() {
+  if (Date.now() - rhFeedCache.at < 45_000 && rhFeedCache.tokens.length) return rhFeedCache.tokens;
+  const items = await rhListTokens(3);
+  const tokens = items.map((t) => ({
+    address: t.address_hash || t.address || "",
+    name: t.name || "",
+    symbol: t.symbol || "",
+    decimals: Number(t.decimals || 18),
+    iconUrl: t.icon_url || "",
+    holders: Number(t.holders_count || 0),
+    priceUsd: Number(t.exchange_rate || 0) || null,
+    marketCapUsd: Number(t.circulating_market_cap || 0) || null,
+    volume24hUsd: Number(t.volume_24h || 0) || null,
+    reputation: t.reputation || ""
+  })).filter((t) => t.address && t.symbol);
+  rhFeedCache = { at: Date.now(), tokens };
+  return tokens;
+}
+
+async function rhLaunchMetaByAddress() {
+  const store = await readPumpLaunchAttempts().catch(() => ({ attempts: [] }));
+  const map = new Map();
+  for (const a of store.attempts || []) {
+    if (String(a.rail || "") !== "robinhood") continue;
+    const addr = String(a.mintPublicKey || "").toLowerCase();
+    if (!addr) continue;
+    map.set(addr, {
+      description: a.description || "",
+      website: a.website || "",
+      x: a.x || "",
+      telegram: a.telegram || "",
+      hasImage: Boolean(a.rhImageFile),
+      slimewire: true
+    });
+  }
+  return map;
+}
+
+async function webRhPairs(category = "trending") {
+  const cat = String(category || "trending").toLowerCase();
+  const [tokens, meta] = await Promise.all([rhFeedTokens(), rhLaunchMetaByAddress()]);
+  let rows = tokens.map((t) => {
+    const m = meta.get(t.address.toLowerCase());
+    return {
+      ...t,
+      ...(m ? { slimewire: true, description: m.description, website: m.website, x: m.x, telegram: m.telegram } : {}),
+      imageUrl: (m && m.hasImage) ? `/api/web/rh/token-image/${t.address}` : (t.iconUrl || ""),
+      explorer: rhExplorerToken(t.address)
+    };
+  });
+  if (cat === "new") {
+    // Resolve creation times for the youngest-looking slice only (bounded work per request; cached forever).
+    const slice = rows.slice(0, 60);
+    await Promise.all(slice.map(async (r) => { r.createdAt = await rhTokenCreationTime(r.address); }));
+    rows = slice.filter((r) => r.createdAt).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  } else {
+    rows.sort((a, b) => (b.volume24hUsd || 0) - (a.volume24hUsd || 0) || (b.marketCapUsd || 0) - (a.marketCapUsd || 0) || b.holders - a.holders);
+  }
+  return rows.slice(0, 50);
+}
+
+// Public per-token image for coins launched through the site (img tags can't send a Bearer token).
+function rhTokenImagePath(address) {
+  return path.join(CONFIG.dataDir, "rh-token-images", `${String(address).toLowerCase().replace(/[^0-9a-fx]/g, "")}.jpg`);
+}
+async function saveRhTokenImage(address, imageDataUrl) {
+  const match = /^data:image\/[a-z+.-]+;base64,(.+)$/i.exec(String(imageDataUrl || ""));
+  if (!match) return false;
+  const raw = Buffer.from(match[1], "base64");
+  if (!raw.length || raw.length > 3_000_000) return false;
+  const file = rhTokenImagePath(address);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  // Normalize to a small JPEG so the feed loads fast no matter what was uploaded.
+  const image = await sharp(raw).resize(256, 256, { fit: "cover" }).jpeg({ quality: 82 }).toBuffer();
+  await fs.writeFile(file, image);
+  return true;
+}
+
+// SOL -> ETH on Robinhood Chain via Relay (live-verified route): one Solana tx signed by the user's
+// wallet; Relay's solver delivers ETH to the wallet's derived EVM address. This is how a Solana-native
+// user funds launch gas without leaving the site.
+async function webRhFundWithSol(userId, body = {}) {
+  return runIdempotentMoneyOp("web-rh-fund", userId, firstString(body.tradeAttemptId, body.clientRequestId),
+    () => webRhFundWithSolCore(userId, body),
+    { busyMessage: "A funding swap is already in flight for this wallet — give it a moment." });
+}
+async function webRhFundWithSolCore(userId, body = {}) {
+  const store = await readWalletStore();
+  const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
+  const keypair = decryptWallet(wallet);
+  const amountSol = Number(body.amountSol || 0);
+  if (!Number.isFinite(amountSol) || amountSol < 0.005 || amountSol > 5) {
+    const e = new Error("Enter an amount between 0.005 and 5 SOL.");
+    e.statusCode = 400; throw e;
+  }
+  const evmAddress = evmAddressFromSolana(keypair.secretKey);
+  const lamports = Math.round(amountSol * LAMPORTS_PER_SOL);
+  const quote = await relayQuoteSolToRhEth({ solanaAddress: keypair.publicKey.toBase58(), evmRecipient: evmAddress, lamports });
+
+  // Build the v0 tx from Relay's instructions + lookup tables, sign with the user's wallet, send.
+  const instructions = quote.instructions.map((ins) => new TransactionInstruction({
+    programId: new PublicKey(ins.programId),
+    keys: (ins.keys || []).map((k) => ({ pubkey: new PublicKey(k.pubkey), isSigner: Boolean(k.isSigner), isWritable: Boolean(k.isWritable) })),
+    data: Buffer.from(String(ins.data || ""), "hex")
+  }));
+  const lookups = [];
+  for (const alt of quote.lookupTables) {
+    const table = await rpcWithRetry("get relay lookup table", () => connection.getAddressLookupTable(new PublicKey(alt)));
+    if (table?.value) lookups.push(table.value);
+  }
+  const { blockhash } = await rpcWithRetry("get relay blockhash", () => connection.getLatestBlockhash("confirmed"));
+  const message = new TransactionMessage({ payerKey: keypair.publicKey, recentBlockhash: blockhash, instructions }).compileToV0Message(lookups);
+  const tx = new VersionedTransaction(message);
+  tx.sign([keypair]);
+  const signature = await sendVersionedTransaction(tx, "relay SOL -> Robinhood ETH");
+  invalidateWalletReadCache(wallet.publicKey);
+
+  // Give Relay a short window to report delivery; funding usually lands in seconds but we never block long.
+  let relayStatus = "pending";
+  for (let i = 0; i < 6; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    const st = await relayCheckStatus(quote.checkEndpoint).catch(() => null);
+    if (st && typeof st.status === "string") relayStatus = st.status;
+    if (relayStatus === "success") break;
+    if (relayStatus === "failure" || relayStatus === "refund") break;
+  }
+  const bal = await rhEthBalance(evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ eth: "0" }));
+  await audit("web_rh_fund_sol", { userId, wallet: wallet.publicKey, evmAddress, amountSol, signature, requestId: quote.requestId, relayStatus, outEthQuoted: quote.outEth, ethBalance: bal.eth });
+  return { ok: true, signature, relayStatus, requestId: quote.requestId, evmAddress, quotedEth: quote.outEth, ethBalance: bal.eth, impactPercent: quote.impactPercent };
 }
 
 async function webLaunchRhCoin(userId, body = {}) {
@@ -32441,6 +32607,10 @@ async function webLaunchRhCoinCore(userId, body = {}) {
     rpcUrl: CONFIG.rhChainRpcUrl
   });
   const attemptId = firstString(body.launchAttemptId, body.tradeAttemptId) || crypto.randomUUID();
+  // Metadata registry: EVM tokens have no native image/socials, so we store what the launch form
+  // collected keyed by token address — the RH feed + coin rows read it back (like wallets/DEXes keep
+  // their own address->logo registries on other chains).
+  const hasImage = await saveRhTokenImage(result.tokenAddress, body.imageDataUrl).catch(() => false);
   await upsertPumpLaunchAttempt({
     id: attemptId,
     userId,
@@ -32449,6 +32619,11 @@ async function webLaunchRhCoinCore(userId, body = {}) {
     mintPublicKey: result.tokenAddress,
     tokenName: String(body.name || "").trim(),
     symbol: String(body.symbol || "").trim(),
+    description: String(body.description || "").trim().slice(0, 800),
+    website: String(body.website || "").trim().slice(0, 200),
+    x: String(body.x || "").trim().slice(0, 200),
+    telegram: String(body.telegram || "").trim().slice(0, 200),
+    rhImageFile: hasImage,
     devWalletPublicKey: wallet.publicKey,
     rhDeployer: result.deployer,
     txSignature: result.txHash,

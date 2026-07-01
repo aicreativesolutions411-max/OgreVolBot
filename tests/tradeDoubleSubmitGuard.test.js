@@ -193,6 +193,48 @@ test("Robinhood Chain rail: derived EVM wallet + self-deployed ERC-20 (gas-estim
   }
 });
 
+test("site function scan: every GG.* used has an export; every client API path has a server route", () => {
+  for (const src of [ggSource, indexSource]) {
+    const used = new Set([...src.matchAll(/GG\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1]));
+    const start = src.indexOf("window.GG={");
+    assert.ok(start > 0, "window.GG export block exists");
+    let depth = 0, end = start;
+    for (let i = src.indexOf("{", start); i < src.length; i += 1) {
+      if (src[i] === "{") depth += 1;
+      else if (src[i] === "}") { depth -= 1; if (depth === 0) { end = i + 1; break; } }
+    }
+    const block = src.slice(start, end);
+    const exported = new Set([...block.matchAll(/(?:^|[,{\s])([A-Za-z_$][\w$]*)\s*(?=[:,}])/g)].map((m) => m[1]));
+    const missing = [...used].filter((n) => !exported.has(n));
+    assert.deepEqual(missing, [], `GG functions used in markup but not exported: ${missing.join(", ")}`);
+    const paths = new Set([...src.matchAll(/["'](\/api\/web\/[a-z0-9\-\/]+)["'?]/gi)].map((m) => m[1]));
+    const prefixes = [...serverSource.matchAll(/pathname\.startsWith\("([^"]+)"\)/g)].map((m) => m[1]);
+    const dead = [...paths].filter((p) => !serverSource.includes(`pathname === "${p}"`) && !prefixes.some((x) => p.startsWith(x)));
+    assert.deepEqual(dead, [], `client calls API paths with no server route: ${dead.join(", ")}`);
+  }
+});
+
+test("Robinhood Chain: coin feed + wallet holdings + SOL->ETH funding (Relay)", () => {
+  // Server: public feed + image registry; auth-gated funding swap, idempotent.
+  assert.match(serverSource, /pathname === "\/api\/web\/rh\/pairs"/);
+  assert.match(serverSource, /pathname\.startsWith\("\/api\/web\/rh\/token-image\/"\)/);
+  assert.match(serverSource, /pathname === "\/api\/web\/rh\/fund-with-sol"/);
+  assert.match(functionBody(serverSource, "webRhFundWithSol"), /runIdempotentMoneyOp\("web-rh-fund"/);
+  const fund = functionBody(serverSource, "webRhFundWithSolCore");
+  assert.match(fund, /relayQuoteSolToRhEth/);
+  assert.match(fund, /TransactionMessage/);            // builds + signs the Relay Solana tx
+  assert.match(functionBody(serverSource, "webRhPairs"), /rhFeedTokens/);
+  assert.match(functionBody(serverSource, "webLaunchRhCoinCore"), /saveRhTokenImage/); // PFP registry
+  // Client: Trenches tab + wallet fold + funding button in both mirrors.
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /\["rh","🪶 Robinhood"\]/);
+    assert.match(src, /function renderRhBoard/);
+    assert.match(src, /\/api\/web\/rh\/pairs\?category=/);
+    assert.match(src, /function loadRhWalletPanel/);
+    assert.match(src, /\/api\/web\/rh\/fund-with-sol/);
+  }
+});
+
 test("launch form survives navigation + warns on no dev buy", () => {
   for (const src of [ggSource, indexSource]) {
     // Whole-form snapshot/restore so leaving the Launch page and coming back keeps text + images.

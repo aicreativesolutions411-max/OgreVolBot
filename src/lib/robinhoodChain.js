@@ -122,3 +122,114 @@ export async function rhDeployToken({ solanaSecretKey, name, symbol, supplyToken
 }
 
 export const rhArtifactInfo = { solcVersion: artifact.solcVersion, bytecodeBytes: (artifact.bytecode.length - 2) / 2 };
+
+// ---------- Blockscout (the chain's own explorer) — free, always-current chain data ----------
+// No DexScreener/Gecko coverage for chain 4663 yet, so the coin feed comes straight from Blockscout:
+// token list (name/symbol/holders/volume/mcap/icon) + per-token creation time (cached forever — it
+// never changes) for the "New" ordering.
+const BLOCKSCOUT = "https://robinhoodchain.blockscout.com/api/v2";
+const creationTimeCache = new Map(); // tokenAddress -> ISO timestamp ("" = lookup failed, retryable)
+
+async function bsJson(pathname, timeoutMs = 12_000) {
+  const response = await fetch(`${BLOCKSCOUT}${pathname}`, {
+    headers: { accept: "application/json" },
+    signal: AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined
+  });
+  if (!response.ok) throw new Error(`Blockscout ${pathname} -> HTTP ${response.status}`);
+  return response.json();
+}
+
+// All ERC-20s on the chain (paginated; the chain is young so a few pages covers it).
+export async function rhListTokens(maxPages = 3) {
+  const items = [];
+  let params = "?type=ERC-20";
+  for (let page = 0; page < maxPages; page += 1) {
+    const data = await bsJson(`/tokens${params}`);
+    items.push(...(data.items || []));
+    const next = data.next_page_params;
+    if (!next) break;
+    params = `?type=ERC-20&${new URLSearchParams(next).toString()}`;
+  }
+  return items;
+}
+
+export async function rhTokenCreationTime(tokenAddress) {
+  const cached = creationTimeCache.get(tokenAddress);
+  if (cached) return cached;
+  try {
+    const info = await bsJson(`/addresses/${tokenAddress}`);
+    const txHash = info.creation_transaction_hash || info.creation_tx_hash;
+    if (!txHash) return "";
+    const tx = await bsJson(`/transactions/${txHash}`);
+    const ts = tx.timestamp || "";
+    if (ts) creationTimeCache.set(tokenAddress, ts);
+    return ts;
+  } catch {
+    return "";
+  }
+}
+
+// ERC-20 balances a wallet holds on Robinhood Chain (Blockscout indexes them — no per-token RPC scan).
+export async function rhAddressTokens(address) {
+  try {
+    const rows = await bsJson(`/addresses/${address}/token-balances`);
+    return (Array.isArray(rows) ? rows : []).filter((r) => r?.token?.type === "ERC-20").map((r) => ({
+      address: r.token.address_hash || r.token.address || "",
+      name: r.token.name || "",
+      symbol: r.token.symbol || "",
+      decimals: Number(r.token.decimals || 18),
+      iconUrl: r.token.icon_url || "",
+      raw: r.value || "0",
+      uiAmount: Number(ethers.formatUnits(BigInt(r.value || "0"), Number(r.token.decimals || 18)))
+    }));
+  } catch {
+    return []; // brand-new address Blockscout hasn't seen yet -> no holdings
+  }
+}
+
+// ---------- Relay (relay.link) — SOL -> ETH-on-Robinhood-Chain in one signed Solana tx ----------
+// Relay supports both Solana (chain 792703809) and Robinhood Chain (4663): quote returns Solana
+// instructions we sign with the user's existing wallet; Relay's solver delivers ETH to the wallet's
+// derived EVM address on 4663. Live-verified 2026-06-29 (0.1 SOL -> 0.004675 ETH, ~-2.6% impact).
+export const RELAY_SOLANA_CHAIN_ID = 792703809;
+const RELAY_API = "https://api.relay.link";
+
+export async function relayQuoteSolToRhEth({ solanaAddress, evmRecipient, lamports }) {
+  const response = await fetch(`${RELAY_API}/quote`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user: solanaAddress,
+      recipient: evmRecipient,
+      originChainId: RELAY_SOLANA_CHAIN_ID,
+      destinationChainId: RH_CHAIN_ID,
+      originCurrency: "11111111111111111111111111111111",
+      destinationCurrency: "0x0000000000000000000000000000000000000000",
+      amount: String(lamports),
+      tradeType: "EXACT_INPUT"
+    }),
+    signal: AbortSignal.timeout ? AbortSignal.timeout(20_000) : undefined
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.message) {
+    throw new Error(`Relay quote failed: ${String(data.message || `HTTP ${response.status}`).slice(0, 240)}`);
+  }
+  const item = data.steps?.[0]?.items?.[0];
+  if (!item?.data?.instructions?.length) throw new Error("Relay quote returned no Solana transaction to sign.");
+  return {
+    instructions: item.data.instructions,
+    lookupTables: item.data.addressLookupTableAddresses || [],
+    checkEndpoint: item.check?.endpoint || "",
+    requestId: data.steps?.[0]?.requestId || "",
+    outEth: data.details?.currencyOut?.amountFormatted || "",
+    impactPercent: data.details?.totalImpact?.percent || ""
+  };
+}
+
+export async function relayCheckStatus(checkEndpoint) {
+  if (!checkEndpoint) return { status: "unknown" };
+  const response = await fetch(`${RELAY_API}${checkEndpoint}`, {
+    signal: AbortSignal.timeout ? AbortSignal.timeout(10_000) : undefined
+  });
+  return response.json().catch(() => ({ status: "unknown" }));
+}
