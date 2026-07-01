@@ -233,3 +233,86 @@ export async function relayCheckStatus(checkEndpoint) {
   });
   return response.json().catch(() => ({ status: "unknown" }));
 }
+
+// Same-chain swap ON Robinhood Chain (buy: ETH -> token, sell: token -> ETH). Relay routes through the
+// chain's live pools; sells come back as TWO sequential txs (ERC-20 approve, then swap) — live-verified
+// both directions (0.001 ETH -> 6201 CAPTAIN; 5000 CAPTAIN -> 0.000786 ETH, ~-1.5% impact).
+export async function relayQuoteRhSwap({ address, fromCurrency, toCurrency, amountRaw }) {
+  const response = await fetch(`${RELAY_API}/quote`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user: address,
+      recipient: address,
+      originChainId: RH_CHAIN_ID,
+      destinationChainId: RH_CHAIN_ID,
+      originCurrency: fromCurrency,
+      destinationCurrency: toCurrency,
+      amount: String(amountRaw),
+      tradeType: "EXACT_INPUT"
+    }),
+    signal: AbortSignal.timeout ? AbortSignal.timeout(20_000) : undefined
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.message) {
+    const raw = String(data.message || `HTTP ${response.status}`);
+    throw new Error(/no routes found/i.test(raw)
+      ? "No trading route for this coin right now — its pool may be too new or too thin. Try again soon."
+      : `Swap quote failed: ${raw.slice(0, 200)}`);
+  }
+  const txs = [];
+  for (const step of data.steps || []) {
+    for (const item of step.items || []) {
+      const tx = item.data || {};
+      if (tx.to && tx.data !== undefined) txs.push({ stepId: step.id || "", to: tx.to, data: tx.data, value: tx.value || "0" });
+    }
+  }
+  if (!txs.length) throw new Error("Swap quote returned no transactions.");
+  return {
+    txs,
+    outFormatted: data.details?.currencyOut?.amountFormatted || "",
+    outSymbol: data.details?.currencyOut?.currency?.symbol || "",
+    impactPercent: data.details?.totalImpact?.percent || ""
+  };
+}
+
+// Execute Relay's EVM txs in order (approve then swap for sells). Gas is estimated per tx BEFORE
+// sending, so an underfunded/broken swap costs nothing; each tx waits for its receipt so the approve
+// is mined before the swap that depends on it.
+export async function rhExecuteEvmSteps(solanaSecretKey, txs, rpcUrl, confirmTimeoutMs = 90_000) {
+  const wallet = evmWalletFromSolana(solanaSecretKey, rpcUrl);
+  const hashes = [];
+  for (const tx of txs) {
+    const request = { to: tx.to, data: tx.data, value: BigInt(tx.value || "0") };
+    try {
+      await wallet.estimateGas(request);
+    } catch (error) {
+      const msg = String(error?.shortMessage || error?.message || "");
+      if (/insufficient funds/i.test(msg)) {
+        const bal = await rhEthBalance(wallet.address, rpcUrl).catch(() => ({ eth: "0" }));
+        const e = new Error(`Not enough ETH for gas on ${wallet.address} (has ${bal.eth} ETH). Fund it (Wallet → 🪶 Robinhood Chain), then trade.`);
+        e.statusCode = 400;
+        throw e;
+      }
+      const e = new Error(`Swap simulation failed (nothing was spent): ${msg.slice(0, 240)}`);
+      e.statusCode = 400;
+      throw e;
+    }
+    const sent = await wallet.sendTransaction(request);
+    await sent.wait(1, confirmTimeoutMs);
+    hashes.push(sent.hash);
+  }
+  return { hashes, address: wallet.address };
+}
+
+// ERC-20 balance straight from the chain (fresher than Blockscout's indexer for just-traded wallets).
+const ERC20_MINI_ABI = [
+  "function balanceOf(address) view returns (uint256)",
+  "function decimals() view returns (uint8)",
+  "function symbol() view returns (string)"
+];
+export async function rhErc20Balance(tokenAddress, ownerAddress, rpcUrl) {
+  const contract = new ethers.Contract(tokenAddress, ERC20_MINI_ABI, rhProvider(rpcUrl));
+  const [raw, decimals] = await Promise.all([contract.balanceOf(ownerAddress), contract.decimals()]);
+  return { raw: raw.toString(), decimals: Number(decimals), uiAmount: Number(ethers.formatUnits(raw, decimals)) };
+}

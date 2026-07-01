@@ -69,7 +69,7 @@ import {
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
-import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus } from "./lib/robinhoodChain.js";
+import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance } from "./lib/robinhoodChain.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
 import {
@@ -8003,6 +8003,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
     if (request.method === "POST" && pathname === "/api/web/rh/fund-with-sol") {
       const result = await webRhFundWithSol(auth.userId, await readJsonRequestBody(request));
+      sendWebJson(request, response, 200, result);
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/rh/trade") {
+      const result = await webRhTrade(auth.userId, await readJsonRequestBody(request));
       sendWebJson(request, response, 200, result);
       return;
     }
@@ -32536,6 +32541,68 @@ async function saveRhTokenImage(address, imageDataUrl) {
   return true;
 }
 
+// Trade a Robinhood Chain coin from the active wallet's derived EVM account — buy (ETH -> token) or
+// sell (token -> ETH, % of balance), routed through the chain's live pools via Relay. Sells execute
+// approve + swap sequentially; every tx is gas-estimated BEFORE sending so failures cost nothing.
+async function webRhTrade(userId, body = {}) {
+  return runIdempotentMoneyOp("web-rh-trade", userId, firstString(body.tradeAttemptId, body.clientRequestId),
+    () => webRhTradeCore(userId, body),
+    { busyMessage: "A Robinhood Chain trade is already in flight for this wallet — give it a moment." });
+}
+async function webRhTradeCore(userId, body = {}) {
+  const store = await readWalletStore();
+  const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
+  const keypair = decryptWallet(wallet);
+  const evmAddress = evmAddressFromSolana(keypair.secretKey);
+  const tokenAddress = String(body.tokenAddress || "").trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(tokenAddress)) {
+    const e = new Error("Invalid token address.");
+    e.statusCode = 400; throw e;
+  }
+  const side = String(body.side || "").toLowerCase();
+  const ETH = "0x0000000000000000000000000000000000000000";
+  let fromCurrency, toCurrency, amountRaw;
+  if (side === "buy") {
+    const amountEth = Number(body.amountEth || 0);
+    if (!Number.isFinite(amountEth) || amountEth < 0.00001 || amountEth > 2) {
+      const e = new Error("Enter an ETH amount between 0.00001 and 2.");
+      e.statusCode = 400; throw e;
+    }
+    fromCurrency = ETH; toCurrency = tokenAddress;
+    amountRaw = BigInt(Math.round(amountEth * 1e9)) * 10n ** 9n; // ETH -> wei without float overflow
+  } else if (side === "sell") {
+    const percent = Math.min(100, Math.max(1, Number(body.percent || 100)));
+    const bal = await rhErc20Balance(tokenAddress, evmAddress, CONFIG.rhChainRpcUrl);
+    amountRaw = (BigInt(bal.raw) * BigInt(Math.round(percent))) / 100n;
+    if (amountRaw <= 0n) {
+      const e = new Error("This wallet holds none of that coin on Robinhood Chain.");
+      e.statusCode = 400; throw e;
+    }
+    fromCurrency = tokenAddress; toCurrency = ETH;
+  } else {
+    const e = new Error("side must be buy or sell.");
+    e.statusCode = 400; throw e;
+  }
+  const quote = await relayQuoteRhSwap({ address: evmAddress, fromCurrency, toCurrency, amountRaw });
+  const { hashes } = await rhExecuteEvmSteps(keypair.secretKey, quote.txs, CONFIG.rhChainRpcUrl);
+  const [ethBal, tokenBal] = await Promise.all([
+    rhEthBalance(evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ eth: "0" })),
+    rhErc20Balance(tokenAddress, evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ uiAmount: 0 }))
+  ]);
+  await audit("web_rh_trade", { userId, wallet: wallet.publicKey, evmAddress, side, tokenAddress, txHashes: hashes, out: quote.outFormatted, impact: quote.impactPercent });
+  return {
+    ok: true,
+    side,
+    txHashes: hashes,
+    explorerTx: `https://robinhoodchain.blockscout.com/tx/${hashes[hashes.length - 1]}`,
+    outFormatted: quote.outFormatted,
+    outSymbol: quote.outSymbol,
+    impactPercent: quote.impactPercent,
+    ethBalance: ethBal.eth,
+    tokenBalance: tokenBal.uiAmount
+  };
+}
+
 // SOL -> ETH on Robinhood Chain via Relay (live-verified route): one Solana tx signed by the user's
 // wallet; Relay's solver delivers ETH to the wallet's derived EVM address. This is how a Solana-native
 // user funds launch gas without leaving the site.
@@ -32555,13 +32622,21 @@ async function webRhFundWithSolCore(userId, body = {}) {
   }
   const evmAddress = evmAddressFromSolana(keypair.secretKey);
   const lamports = Math.round(amountSol * LAMPORTS_PER_SOL);
+  // Fail BEFORE quoting/signing if the wallet can't cover swap + fees — clearest possible error.
+  const solBal = Number(await getSolBalanceCached(keypair.publicKey, { force: true }).catch(() => 0));
+  if (solBal < lamports + 2_500_000) {
+    const e = new Error(`This wallet has ${lamportsToSol(solBal)} SOL — not enough to swap ${amountSol} SOL (needs ~0.0025 extra for fees). Lower the amount or top up.`);
+    e.statusCode = 400; throw e;
+  }
   const quote = await relayQuoteSolToRhEth({ solanaAddress: keypair.publicKey.toBase58(), evmRecipient: evmAddress, lamports });
 
   // Build the v0 tx from Relay's instructions + lookup tables, sign with the user's wallet, send.
+  // (Instruction data arrives as plain hex; strip a 0x prefix defensively — Buffer.from silently
+  // truncates on invalid chars, which would corrupt the tx.)
   const instructions = quote.instructions.map((ins) => new TransactionInstruction({
     programId: new PublicKey(ins.programId),
     keys: (ins.keys || []).map((k) => ({ pubkey: new PublicKey(k.pubkey), isSigner: Boolean(k.isSigner), isWritable: Boolean(k.isWritable) })),
-    data: Buffer.from(String(ins.data || ""), "hex")
+    data: Buffer.from(String(ins.data || "").replace(/^0x/i, ""), "hex")
   }));
   const lookups = [];
   for (const alt of quote.lookupTables) {

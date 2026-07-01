@@ -235,6 +235,34 @@ test("Robinhood Chain: coin feed + wallet holdings + SOL->ETH funding (Relay)", 
   }
 });
 
+test("Robinhood coins are tradeable in-app (Relay swap, gas-estimated, idempotent) + funded from Swap", () => {
+  // Server: buy/sell endpoint routed through Relay same-chain swaps; sells execute approve+swap in order.
+  assert.match(serverSource, /pathname === "\/api\/web\/rh\/trade"/);
+  assert.match(functionBody(serverSource, "webRhTrade"), /runIdempotentMoneyOp\("web-rh-trade"/);
+  const trade = functionBody(serverSource, "webRhTradeCore");
+  assert.match(trade, /relayQuoteRhSwap/);
+  assert.match(trade, /rhExecuteEvmSteps/);
+  assert.match(trade, /rhErc20Balance/);                     // sell sizes off the real on-chain balance
+  const rhLib = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
+  assert.match(rhLib, /rhExecuteEvmSteps/);
+  assert.match(rhLib, /estimateGas\(request\)/);             // every swap tx simulated before sending
+  // Funding hardening: balance pre-check before quoting + defensive hex prefix strip.
+  const fund = functionBody(serverSource, "webRhFundWithSolCore");
+  assert.match(fund, /solBal < lamports/);
+  assert.match(fund, /replace\(\/\^0x\/i, ""\)/);
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /function rhTradeModal/);
+    assert.match(src, /\/api\/web\/rh\/trade/);
+    assert.match(src, /GG\.rhBuy/);
+    assert.match(src, /GG\.rhSell/);
+    assert.match(src, /Get Robinhood Chain ETH/);            // Swap page section
+    assert.match(src, /rhWalSel/);                           // per-wallet ETH accounts in the fold
+    // Confident launch copy — no "first"/"no launchpad exists" framing.
+    assert.doesNotMatch(src, /no launchpad exists (on it|here)/i);
+    assert.doesNotMatch(src, /one of the first devs|You'd be one of the first/i);
+  }
+});
+
 test("launch form survives navigation + warns on no dev buy", () => {
   for (const src of [ggSource, indexSource]) {
     // Whole-form snapshot/restore so leaving the Launch page and coming back keeps text + images.
