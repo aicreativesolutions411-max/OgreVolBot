@@ -296,6 +296,24 @@ test("RH board acts like the Solana boards: live MC/liq data, chart, quick-buy, 
   }
 });
 
+test("RH rows: quick-buy stays in frame on mobile + fresh coins always get MC (implied-price fallback)", () => {
+  for (const src of [ggSource, indexSource]) {
+    // Mobile layout contract: name truncates (flex:1;min-width:0), right-side chips fixed, row overflow
+    // hidden, and the phone media query tightens .rhrow + hides the $price chip.
+    assert.match(src, /flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap/);
+    assert.match(src, /\.rhrow\{padding:8px 6px!important/);
+    assert.match(src, /\.rhrow \.hideMb\{display:none\}/);
+    assert.match(src, /no pool yet/);                          // honest empty-state on rows
+  }
+  // Server: pool-implied price fallback (tiny quote x on-chain supply) fills MC for unindexed coins.
+  assert.match(serverSource, /scheduleRhPriceFill/);
+  assert.match(functionBody(serverSource, "webRhPairs"), /rhPriceCache/);
+  assert.match(functionBody(serverSource, "webRhPairs"), /totalSupplyUi/);
+  const rhLib = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
+  assert.match(rhLib, /rhImpliedPriceUsd/);
+  assert.match(rhLib, /rhEthUsd/);
+});
+
 test("launch form survives navigation + warns on no dev buy", () => {
   for (const src of [ggSource, indexSource]) {
     // Whole-form snapshot/restore so leaving the Launch page and coming back keeps text + images.

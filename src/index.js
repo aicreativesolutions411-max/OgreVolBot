@@ -69,7 +69,7 @@ import {
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
-import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol } from "./lib/robinhoodChain.js";
+import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhImpliedPriceUsd } from "./lib/robinhoodChain.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
 import {
@@ -32469,20 +32469,53 @@ let rhFeedCache = { at: 0, tokens: [] };
 async function rhFeedTokens() {
   if (Date.now() - rhFeedCache.at < 45_000 && rhFeedCache.tokens.length) return rhFeedCache.tokens;
   const items = await rhListTokens(3);
-  const tokens = items.map((t) => ({
-    address: t.address_hash || t.address || "",
-    name: t.name || "",
-    symbol: t.symbol || "",
-    decimals: Number(t.decimals || 18),
-    iconUrl: t.icon_url || "",
-    holders: Number(t.holders_count || 0),
-    priceUsd: Number(t.exchange_rate || 0) || null,
-    marketCapUsd: Number(t.circulating_market_cap || 0) || null,
-    volume24hUsd: Number(t.volume_24h || 0) || null,
-    reputation: t.reputation || ""
-  })).filter((t) => t.address && t.symbol);
+  const tokens = items.map((t) => {
+    const decimals = Number(t.decimals || 18);
+    let totalSupplyUi = 0;
+    try { totalSupplyUi = Number(BigInt(t.total_supply || "0") / 10n ** BigInt(Math.max(0, decimals - 6))) / 1e6; } catch { /* odd supply strings */ }
+    return {
+      address: t.address_hash || t.address || "",
+      name: t.name || "",
+      symbol: t.symbol || "",
+      decimals,
+      totalSupplyUi,
+      iconUrl: t.icon_url || "",
+      holders: Number(t.holders_count || 0),
+      priceUsd: Number(t.exchange_rate || 0) || null,
+      marketCapUsd: Number(t.circulating_market_cap || 0) || null,
+      volume24hUsd: Number(t.volume_24h || 0) || null,
+      reputation: t.reputation || ""
+    };
+  }).filter((t) => t.address && t.symbol);
   rhFeedCache = { at: Date.now(), tokens };
   return tokens;
+}
+
+// Pool-implied price fallback for coins DexScreener/Blockscout can't price yet ("fresh coins with no
+// MC"). Prices resolve in the BACKGROUND (single-flight, small batches) so feed requests stay fast —
+// the board polls every 30s and picks the values up next cycle. noPool coins are remembered too, so
+// the UI can say "no pool yet" instead of showing an empty row.
+const rhPriceCache = new Map(); // addrLc -> { at, priceUsd | noPool }
+let rhPriceFillBusy = false;
+function scheduleRhPriceFill(rows) {
+  if (rhPriceFillBusy) return;
+  const missing = rows.filter((r) => {
+    const c = rhPriceCache.get(r.address.toLowerCase());
+    return !r.priceUsd && (!c || Date.now() - c.at > 90_000);
+  }).slice(0, 12);
+  if (!missing.length) return;
+  rhPriceFillBusy = true;
+  setTimeout(async () => {
+    try {
+      const probe = rhFeeEvmWallet(CONFIG.appSecret, CONFIG.rhChainRpcUrl).address;
+      for (const r of missing) {
+        const res = await rhImpliedPriceUsd(r.address, probe).catch(() => null);
+        if (res) rhPriceCache.set(r.address.toLowerCase(), { at: Date.now(), ...(res.noPool ? { noPool: true } : { priceUsd: res.priceUsd }) });
+      }
+    } finally {
+      rhPriceFillBusy = false;
+    }
+  }, 50);
 }
 
 async function rhLaunchMetaByAddress() {
@@ -32524,7 +32557,20 @@ async function webRhPairs(category = "trending") {
   } else {
     rows.sort((a, b) => (b.volume24hUsd || 0) - (a.volume24hUsd || 0) || (b.marketCapUsd || 0) - (a.marketCapUsd || 0) || b.holders - a.holders);
   }
-  return rows.slice(0, 50);
+  rows = rows.slice(0, 50);
+  // Fill fresh coins from the implied-price cache (pool quote x on-chain supply) so no row sits empty,
+  // and mark true no-pool coins so the UI can say so. Missing ones resolve in the background.
+  for (const r of rows) {
+    const cached = rhPriceCache.get(r.address.toLowerCase());
+    if (!cached) continue;
+    if (cached.noPool && !r.priceUsd) r.noPool = true;
+    if (cached.priceUsd && !r.priceUsd) {
+      r.priceUsd = cached.priceUsd;
+      if (!r.marketCapUsd && r.totalSupplyUi > 0) r.marketCapUsd = cached.priceUsd * r.totalSupplyUi;
+    }
+  }
+  scheduleRhPriceFill(rows);
+  return rows;
 }
 
 // Public per-token image for coins launched through the site (img tags can't send a Bearer token).

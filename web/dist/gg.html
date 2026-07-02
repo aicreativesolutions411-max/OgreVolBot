@@ -419,6 +419,11 @@
   @media(max-width:520px){
     /* Tighten the trending row so the ⚡ Buy button stays IN frame (it was overflowing ~30px off the
        right on a 375px phone). Smaller cell padding + avatar + buy button; desktop is untouched. */
+    /* Robinhood board rows: drop the $price chip on phones (MC line carries it) + tighten padding so
+       the ⚡ quick-buy always sits inside the frame. */
+    .rhrow{padding:8px 6px!important;gap:6px!important}
+    .rhrow .hideMb{display:none}
+    .rhrow .buybtn.sm{padding:6px 9px;font-size:12px}
     .tbl td,.tbl th{padding:8px 7px}
     .tbl td:last-child,.tbl th:last-child{padding-left:3px;padding-right:5px}
     .pair{min-width:104px;gap:7px}.pair .nm b{max-width:84px}.pair .nm .sub{display:none}
@@ -1267,13 +1272,15 @@
     const ago=(iso)=>{const s=(Date.now()-Date.parse(iso||0))/1000;return !isFinite(s)?"":s<90?Math.round(s)+"s":s<5400?Math.round(s/60)+"m":s<129600?Math.round(s/3600)+"h":Math.round(s/86400)+"d";};
     const row=(r,isNew)=>{
       const stats=[r.marketCapUsd?('MC '+fmtUsd(r.marketCapUsd)):'',r.liquidityUsd?('Liq '+fmtUsd(r.liquidityUsd)):'',r.volume24hUsd?('Vol '+fmtUsd(r.volume24hUsd)):'',(r.holders?r.holders+' holders':'')].filter(Boolean).join(' · ');
-      return '<div class="rhrow" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer" onclick="GG.rhTrade(\''+esc(r.address)+'\')">'+
-      (r.imageUrl?'<img src="'+esc(r.imageUrl)+'" style="width:26px;height:26px;border-radius:50%;object-fit:cover" onerror="this.style.display=\'none\'">':'<span style="font-size:18px">🪙</span>')+
-      '<div style="min-width:0;flex:1"><div style="display:flex;gap:6px;align-items:center"><b style="font-size:12px">'+esc(r.symbol||"?")+'</b>'+(isNew?'<span class="mut" style="font-size:9px">'+ago(r.createdAt)+'</span>':'')+'<span class="mut" style="font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.name||"")+'</span>'+(r.slimewire?'<span title="Launched on SlimeWire" style="font-size:9px;background:var(--accent,#6dc36d);color:#08130a;border-radius:6px;padding:1px 5px;font-weight:700">SW</span>':'')+'</div>'+
-      '<div class="mut" style="font-size:10px">'+(stats||(isNew?'brand new — no trades yet':'—'))+'</div></div>'+
-      (Number.isFinite(r.m5)&&r.m5!==0?'<span class="chg '+(r.m5>=0?'up':'down')+'" style="font-size:10px">'+(r.m5>=0?'+':'')+r.m5+'%</span>':'')+
-      (r.priceUsd?'<b style="font-size:11px">$'+esc(r.priceUsd>=1?r.priceUsd.toFixed(2):r.priceUsd.toPrecision(3))+'</b>':'')+
-      '<button class="buybtn sm" title="Quick buy '+esc(rhQuickEth())+' ETH" onclick="event.stopPropagation();GG.rhQuick(\''+esc(r.address)+'\')">⚡</button>'+
+      // Layout contract (mobile): middle column min-width:0 + name flex:1 min-width:0 ellipsis + stats
+      // nowrap-ellipsis, right-side chips flex:0 0 auto — the ⚡ can NEVER be pushed out of frame.
+      return '<div class="rhrow" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;overflow:hidden" onclick="GG.rhTrade(\''+esc(r.address)+'\')">'+
+      (r.imageUrl?'<img src="'+esc(r.imageUrl)+'" style="width:26px;height:26px;border-radius:50%;object-fit:cover;flex:0 0 auto" onerror="this.style.display=\'none\'">':'<span style="font-size:18px;flex:0 0 auto">🪙</span>')+
+      '<div style="min-width:0;flex:1;overflow:hidden"><div style="display:flex;gap:6px;align-items:center;min-width:0"><b style="font-size:12px;flex:0 0 auto">'+esc(r.symbol||"?")+'</b>'+(isNew?'<span class="mut" style="font-size:9px;flex:0 0 auto">'+ago(r.createdAt)+'</span>':'')+'<span class="mut" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.name||"")+'</span>'+(r.slimewire?'<span title="Launched on SlimeWire" style="font-size:9px;background:var(--accent,#6dc36d);color:#08130a;border-radius:6px;padding:1px 5px;font-weight:700;flex:0 0 auto">SW</span>':'')+'</div>'+
+      '<div class="mut" style="font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(stats||(r.noPool?'no pool yet — tradable once liquidity opens':(isNew?'brand new — no trades yet':'—')))+'</div></div>'+
+      (Number.isFinite(r.m5)&&r.m5!==0?'<span class="chg '+(r.m5>=0?'up':'down')+'" style="font-size:10px;flex:0 0 auto;white-space:nowrap">'+(r.m5>=0?'+':'')+r.m5+'%</span>':'')+
+      (r.priceUsd?'<b class="hideMb" style="font-size:11px;flex:0 0 auto;white-space:nowrap">$'+esc(r.priceUsd>=1?r.priceUsd.toFixed(2):r.priceUsd.toPrecision(3))+'</b>':'')+
+      '<button class="buybtn sm" style="flex:0 0 auto" title="Quick buy '+esc(rhQuickEth())+' ETH" onclick="event.stopPropagation();GG.rhQuick(\''+esc(r.address)+'\')">⚡</button>'+
     '</div>';};
     const [t,n]=await Promise.all([
       api("/api/web/rh/pairs?category=trending").catch(()=>({})),

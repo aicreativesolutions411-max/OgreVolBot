@@ -153,6 +153,35 @@ export async function rhListTokens(maxPages = 3) {
   return items;
 }
 
+// ETH/USD from the chain's own explorer stats (cached — it only needs to be roughly right for MC).
+let ethUsdCache = { at: 0, price: 0 };
+export async function rhEthUsd() {
+  if (Date.now() - ethUsdCache.at < 300_000 && ethUsdCache.price > 0) return ethUsdCache.price;
+  const stats = await bsJson("/stats");
+  const price = Number(stats.coin_price || 0);
+  if (price > 0) ethUsdCache = { at: Date.now(), price };
+  return price;
+}
+
+// Pool-implied token price for coins DexScreener hasn't indexed yet: quote a tiny ETH buy through
+// the chain's live pools and derive $/token. Returns null when the coin has NO pool ("no routes").
+export async function rhImpliedPriceUsd(tokenAddress, probeAddress) {
+  const probeEth = 0.0005;
+  const [ethUsd, quote] = await Promise.all([
+    rhEthUsd(),
+    relayQuoteRhSwap({
+      address: probeAddress,
+      fromCurrency: "0x0000000000000000000000000000000000000000",
+      toCurrency: tokenAddress,
+      amountRaw: (ethers.parseEther(String(probeEth))).toString()
+    }).catch((error) => (/no trading route/i.test(String(error?.message)) ? { noPool: true } : null))
+  ]);
+  if (!quote || quote.noPool) return quote && quote.noPool ? { noPool: true } : null;
+  const out = Number(quote.outFormatted || 0);
+  if (!(out > 0) || !(ethUsd > 0)) return null;
+  return { priceUsd: (probeEth * ethUsd) / out };
+}
+
 export async function rhTokenCreationTime(tokenAddress) {
   const cached = creationTimeCache.get(tokenAddress);
   if (cached) return cached;
