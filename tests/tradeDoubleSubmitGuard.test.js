@@ -471,10 +471,12 @@ test("RH drain audit: flags coins that took your tokens with no sale (received >
     assert.match(src, /function rhDrainedRowsHtml/);
     assert.match(src, /Rugged bags/);
   }
-  // Bottom tools bar sticks on every page except the chart/trade view (where it would cramp the chart).
+  // Bottom tools bar is ALWAYS visible on mobile, on EVERY page (mobile has no top nav, so hiding it on
+  // the coin/chart view stranded the user with no way to switch tabs). display:flex!important + NO
+  // chartmode hide rule = it can never be hidden by a stray state.
   for (const src of [ggSource, indexSource]) {
-    assert.match(src, /classList\.toggle\("chartmode"/);
-    assert.match(src, /body\.chartmode \.botnav\{display:none\}/);
+    assert.match(src, /\.botnav\{display:flex!important/);
+    assert.doesNotMatch(src, /body\.chartmode \.botnav\{display:none\}/);
   }
 });
 

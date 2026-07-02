@@ -423,10 +423,9 @@
     .board[data-mode="rh"] .col.rhcol-on{display:flex}
     .board[data-mode="rh"] .col .colhead{display:none}
     .tbl td.hideMb,.tbl th.hideMb{display:none}
-    .botnav{display:flex;position:fixed;left:0;right:0;bottom:0;height:var(--botnav);z-index:60;background:rgba(7,11,8,.98);border-top:1px solid var(--border);padding-bottom:env(safe-area-inset-bottom)}
-    /* Chart/trade view: hide the bottom bar + reclaim its space so the chart isn't cramped. */
-    body.chartmode .botnav{display:none}
-    body.chartmode main{padding-bottom:0}
+    /* Bottom tools bar: ALWAYS visible on mobile, on EVERY page (incl. the coin/chart view — mobile has no
+       top nav, so hiding it here stranded you with no way to switch tabs). Content scrolls above it. */
+    .botnav{display:flex!important;position:fixed;left:0;right:0;bottom:0;height:var(--botnav);z-index:60;background:rgba(7,11,8,.98);border-top:1px solid var(--border);padding-bottom:env(safe-area-inset-bottom)}
     .botnav button{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--muted);font-size:10px;font-weight:700}
     .botnav button .i{font-size:18px;line-height:1}
     .botnav button.on{color:var(--green)}
@@ -1011,8 +1010,6 @@
   function setNav(route){
     document.querySelectorAll("#nav a[data-route]").forEach(a=>a.classList.toggle("active",a.dataset.route===route));
     document.querySelectorAll("#botnav button[data-route]").forEach(b=>b.classList.toggle("on",b.dataset.route===route));
-    // Bottom tools bar sticks on EVERY page except the chart/trade view, where it would cramp the chart.
-    document.body.classList.toggle("chartmode",route==="trade"||route==="rhtrade");
   }
   function render(){
     const {route,arg}=parseHash();state.route=route;
