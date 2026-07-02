@@ -263,6 +263,24 @@ test("Robinhood coins are tradeable in-app (Relay swap, gas-estimated, idempoten
   }
 });
 
+test("RH trading fees: same bps as Solana, skimmed in ETH, auto-converted to SOL at FEE_WALLET", () => {
+  const trade = functionBody(serverSource, "webRhTradeCore");
+  assert.match(trade, /CONFIG\.bundleFeeBps/);               // SAME fee rate as Solana trades
+  assert.match(trade, /amountRaw -= feeWei/);                // buys: fee off the ETH going in
+  assert.match(trade, /rhTransferEth/);                      // skim to the platform RH fee account
+  assert.match(trade, /rhFeeEvmWallet/);
+  assert.match(trade, /web_rh_fee_skim_failed/);             // failed skim logs, never breaks the trade
+  assert.match(trade, /scheduleRhFeeSweep\(\)/);
+  const sweep = functionBody(serverSource, "scheduleRhFeeSweep");
+  assert.match(sweep, /rhSweepFeesToSol/);
+  assert.match(sweep, /CONFIG\.feeWallet/);                  // SOL lands in the SAME fee wallet
+  assert.match(sweep, /600_000/);                            // debounced
+  const rhLib = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
+  assert.match(rhLib, /slimewire-rh-fee-v1/);                // fee key derived from APP_SECRET
+  assert.match(rhLib, /RELAY_SOLANA_CHAIN_ID/);
+  assert.match(functionBody(rhLib, "rhSweepFeesToSol"), /gasReserveEth/); // never strands the fee account
+});
+
 test("launch form survives navigation + warns on no dev buy", () => {
   for (const src of [ggSource, indexSource]) {
     // Whole-form snapshot/restore so leaving the Launch page and coming back keeps text + images.

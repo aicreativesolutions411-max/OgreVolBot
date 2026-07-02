@@ -69,7 +69,7 @@ import {
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
-import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance } from "./lib/robinhoodChain.js";
+import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol } from "./lib/robinhoodChain.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
 import {
@@ -4162,6 +4162,8 @@ function loadConfig() {
   // Robinhood Chain (EVM, chain id 4663) RPC for the robinhood launch rail. Public RPC by default;
   // point RH_CHAIN_RPC_URL at an Alchemy endpoint if the public one ever rate-limits.
   const rhChainRpcUrl = (process.env.RH_CHAIN_RPC_URL || RH_DEFAULT_RPC).trim();
+  // RH trading fees accrue in ETH and auto-convert to SOL at FEE_WALLET once the pot clears this.
+  const rhFeeSweepMinEth = Math.max(0.0005, Number.parseFloat(process.env.RH_FEE_SWEEP_MIN_ETH || "0.002") || 0.002);
   const pumpLaunchJitoUrl = (process.env.PUMP_LAUNCH_JITO_URL || "https://mainnet.block-engine.jito.wtf/api/v1/bundles").trim();
   const pumpLaunchJitoTipSol = Math.max(0.00001, Number.parseFloat(process.env.PUMP_LAUNCH_JITO_TIP_SOL || "0.001") || 0.001);
   // TRADE JITO — route pump buys/sells through a Jito bundle (swap tx + a tiny tip tx) for FAST,
@@ -4563,6 +4565,7 @@ function loadConfig() {
     pumpLaunchJitoBundle,
     autopilotEnabled,
     rhChainRpcUrl,
+    rhFeeSweepMinEth,
     pumpLaunchJitoUrl,
     pumpLaunchJitoTipSol,
     tradeJitoBundle,
@@ -32583,13 +32586,36 @@ async function webRhTradeCore(userId, body = {}) {
     const e = new Error("side must be buy or sell.");
     e.statusCode = 400; throw e;
   }
+  // Platform fee — SAME bps as Solana trades. Buys: fee comes off the ETH going in (user pays the
+  // entered amount total, like Solana buys). Sells: fee comes off the ETH proceeds.
+  const feeBps = BigInt(Math.max(0, CONFIG.bundleFeeBps || 0));
+  let feeWei = 0n;
+  if (side === "buy" && feeBps > 0n) {
+    feeWei = (amountRaw * feeBps) / 10_000n;
+    amountRaw -= feeWei; // swap the remainder
+  }
   const quote = await relayQuoteRhSwap({ address: evmAddress, fromCurrency, toCurrency, amountRaw });
   const { hashes } = await rhExecuteEvmSteps(keypair.secretKey, quote.txs, CONFIG.rhChainRpcUrl);
+  if (side === "sell" && feeBps > 0n) {
+    const outEth = Number(quote.outFormatted || 0);
+    if (outEth > 0) feeWei = (BigInt(Math.round(outEth * 1e9)) * 10n ** 9n * feeBps) / 10_000n;
+  }
+  // Skim the fee to the platform's RH fee account (converted to SOL at the fee wallet by the sweep).
+  // Best-effort: the user's trade is already done — a failed skim logs, never throws.
+  let feeTxHash = "";
+  if (feeWei > 0n) {
+    try {
+      feeTxHash = await rhTransferEth(keypair.secretKey, rhFeeEvmWallet(CONFIG.appSecret, CONFIG.rhChainRpcUrl).address, feeWei, CONFIG.rhChainRpcUrl);
+    } catch (error) {
+      await audit("web_rh_fee_skim_failed", { userId, side, tokenAddress, feeWei: feeWei.toString(), error: friendlyError(error) }).catch(() => {});
+    }
+  }
+  scheduleRhFeeSweep(); // fire-and-forget: converts the pot to SOL at the fee wallet when big enough
   const [ethBal, tokenBal] = await Promise.all([
     rhEthBalance(evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ eth: "0" })),
     rhErc20Balance(tokenAddress, evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ uiAmount: 0 }))
   ]);
-  await audit("web_rh_trade", { userId, wallet: wallet.publicKey, evmAddress, side, tokenAddress, txHashes: hashes, out: quote.outFormatted, impact: quote.impactPercent });
+  await audit("web_rh_trade", { userId, wallet: wallet.publicKey, evmAddress, side, tokenAddress, txHashes: hashes, out: quote.outFormatted, impact: quote.impactPercent, feeWei: feeWei.toString(), feeTxHash });
   return {
     ok: true,
     side,
@@ -32598,9 +32624,31 @@ async function webRhTradeCore(userId, body = {}) {
     outFormatted: quote.outFormatted,
     outSymbol: quote.outSymbol,
     impactPercent: quote.impactPercent,
+    feeEth: feeWei > 0n ? lamportsToSol(Number(feeWei / 10n ** 9n)) : "0", // wei -> gwei -> formatted like SOL (both 9dp)
     ethBalance: ethBal.eth,
     tokenBalance: tokenBal.uiAmount
   };
+}
+
+// Debounced fee sweep: at most one attempt per 10 min, only when the pot clears the threshold. The
+// SOL lands at CONFIG.feeWallet — same pile as every Solana trading fee.
+let rhFeeSweepBusy = false;
+let rhFeeSweepLastMs = 0;
+function scheduleRhFeeSweep() {
+  if (rhFeeSweepBusy || Date.now() - rhFeeSweepLastMs < 600_000) return;
+  rhFeeSweepBusy = true;
+  setTimeout(async () => {
+    try {
+      const result = await rhSweepFeesToSol({ appSecret: CONFIG.appSecret, solFeeWallet: CONFIG.feeWallet, rpcUrl: CONFIG.rhChainRpcUrl, minEth: CONFIG.rhFeeSweepMinEth });
+      rhFeeSweepLastMs = Date.now();
+      if (result.swept) await audit("web_rh_fee_sweep", { sentEth: result.sentEth, outSol: result.outSol, hashes: result.hashes, to: CONFIG.feeWallet });
+    } catch (error) {
+      rhFeeSweepLastMs = Date.now(); // failed attempts also wait out the debounce (no hot-looping)
+      console.warn(`[rh-fees] sweep failed: ${friendlyError(error)}`);
+    } finally {
+      rhFeeSweepBusy = false;
+    }
+  }, 2_000);
 }
 
 // SOL -> ETH on Robinhood Chain via Relay (live-verified route): one Solana tx signed by the user's

@@ -1307,7 +1307,7 @@
       '<div style="display:flex;gap:8px;margin-bottom:12px"><input id="rhTmAmt" inputmode="decimal" placeholder="custom ETH" style="flex:1;min-width:0"><button class="wbtn" id="rhTmBuy" style="flex:0 0 auto">⚡ Buy</button></div>'+
       '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Sell (% of bag)</div>'+
       '<div style="display:flex;gap:6px">'+[25,50,100].map(p=>'<button class="wbtn ghost" style="flex:1;padding:7px 4px;font-size:12px" onclick="GG.rhSell(\''+esc(address)+'\','+p+')">'+p+'%</button>').join("")+'</div>'+
-      '<p class="wnote" style="margin:10px 0 0">Trades run from your active wallet\'s Robinhood account (gas in ETH — top up under Wallet → 🪶). One tap = real trade, no confirm.</p>');
+      '<p class="wnote" style="margin:10px 0 0">Trades run from your active wallet\'s Robinhood account (gas in ETH — top up under Wallet → 🪶). One tap = real trade, no confirm. Standard SlimeWire trade fee applies, same as Solana.</p>');
     const cb=$("#rhTmBuy");if(cb)cb.onclick=()=>{const a=($("#rhTmAmt")||{}).value;if(!(Number(a)>0)){toast("Enter an ETH amount.",true);return;}rhTrade(address,"buy",{amountEth:String(a)});};
     rhTmRefreshBal(address);
   }

@@ -305,6 +305,83 @@ export async function rhExecuteEvmSteps(solanaSecretKey, txs, rpcUrl, confirmTim
   return { hashes, address: wallet.address };
 }
 
+// ---------- Platform fee on Robinhood Chain -> converted to SOL ----------
+// RH trades pay the SAME bps fee as Solana trades, skimmed in ETH to a platform fee account whose key
+// is derived from APP_SECRET (no new secret to store; don't rotate APP_SECRET — known constraint).
+// When the pot is big enough, it swaps itself cross-chain to SOL delivered to the Solana FEE_WALLET
+// (Relay 4663 -> Solana, live-verified: 0.002 ETH -> 0.041 SOL direct to the fee wallet).
+export function rhFeeEvmWallet(appSecret, rpcUrl) {
+  let candidate = ethers.keccak256(ethers.concat([ethers.toUtf8Bytes("slimewire-rh-fee-v1"), ethers.toUtf8Bytes(String(appSecret || ""))]));
+  for (let i = 0; i < 10; i += 1) {
+    try {
+      new ethers.SigningKey(candidate);
+      return new ethers.Wallet(candidate, rhProvider(rpcUrl));
+    } catch {
+      candidate = ethers.keccak256(candidate);
+    }
+  }
+  throw new Error("Could not derive the RH fee account.");
+}
+
+// Plain ETH transfer from a user's derived account (used for the per-trade fee skim). Non-critical
+// callers wrap this in try/catch — a failed skim must never break the user's trade.
+export async function rhTransferEth(solanaSecretKey, toAddress, wei, rpcUrl) {
+  const wallet = evmWalletFromSolana(solanaSecretKey, rpcUrl);
+  const sent = await wallet.sendTransaction({ to: toAddress, value: BigInt(wei) });
+  await sent.wait(1, 60_000);
+  return sent.hash;
+}
+
+// Convert the accrued ETH fee pot -> SOL at the Solana fee wallet. Leaves a gas reserve behind.
+export async function rhSweepFeesToSol({ appSecret, solFeeWallet, rpcUrl, minEth = 0.002, gasReserveEth = 0.0003 }) {
+  const feeWallet = rhFeeEvmWallet(appSecret, rpcUrl);
+  const balanceWei = BigInt((await rhEthBalance(feeWallet.address, rpcUrl)).wei);
+  const minWei = ethers.parseEther(String(minEth));
+  const reserveWei = ethers.parseEther(String(gasReserveEth));
+  if (balanceWei < minWei + reserveWei) {
+    return { swept: false, reason: "below threshold", balanceEth: ethers.formatEther(balanceWei), feeAddress: feeWallet.address };
+  }
+  const sendWei = balanceWei - reserveWei;
+  const response = await fetch(`${RELAY_API}/quote`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user: feeWallet.address,
+      recipient: solFeeWallet,
+      originChainId: RH_CHAIN_ID,
+      destinationChainId: RELAY_SOLANA_CHAIN_ID,
+      originCurrency: "0x0000000000000000000000000000000000000000",
+      destinationCurrency: "11111111111111111111111111111111",
+      amount: sendWei.toString(),
+      tradeType: "EXACT_INPUT"
+    }),
+    signal: AbortSignal.timeout ? AbortSignal.timeout(20_000) : undefined
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.message) throw new Error(`Fee sweep quote failed: ${String(data.message || response.status).slice(0, 200)}`);
+  const txs = [];
+  for (const step of data.steps || []) {
+    for (const item of step.items || []) {
+      const tx = item.data || {};
+      if (tx.to && tx.data !== undefined) txs.push({ to: tx.to, data: tx.data, value: tx.value || "0" });
+    }
+  }
+  if (!txs.length) throw new Error("Fee sweep quote returned no transaction.");
+  const hashes = [];
+  for (const tx of txs) {
+    const sent = await feeWallet.sendTransaction({ to: tx.to, data: tx.data, value: BigInt(tx.value || "0") });
+    await sent.wait(1, 90_000);
+    hashes.push(sent.hash);
+  }
+  return {
+    swept: true,
+    hashes,
+    sentEth: ethers.formatEther(sendWei),
+    outSol: data.details?.currencyOut?.amountFormatted || "",
+    feeAddress: feeWallet.address
+  };
+}
+
 // ERC-20 balance straight from the chain (fresher than Blockscout's indexer for just-traded wallets).
 const ERC20_MINI_ABI = [
   "function balanceOf(address) view returns (uint256)",
