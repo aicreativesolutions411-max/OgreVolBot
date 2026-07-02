@@ -32575,10 +32575,12 @@ let rhUniverseBusy = false;
 function scheduleRhUniverse() {
   if (rhUniverseBusy || Date.now() - rhUniverseCache.at < 240_000) return;
   rhUniverseBusy = true;
+  // Delay the ~45-call sweep so it never competes with the feed's own fast-path fetch on a cold start
+  // (firing both at once rate-limited Blockscout and briefly emptied the board right after a deploy).
   setTimeout(async () => {
     try { const items = await rhListTokens(45); if (items.length) rhUniverseCache = { at: Date.now(), items }; }
     finally { rhUniverseBusy = false; }
-  }, 20);
+  }, 5_000);
 }
 
 // The whole drain operation's token addresses, refreshed in the background (~15 min). Feed excludes these
@@ -32588,10 +32590,11 @@ let rhScamBusy = false;
 function scheduleRhScamSet() {
   if (rhScamBusy || Date.now() - rhScamCache.at < 900_000) return;
   rhScamBusy = true;
+  // Staggered after the universe sweep so the two big background jobs don't saturate Blockscout together.
   setTimeout(async () => {
     try { const r = await rhScamTokenSet(); if (r && r.tokens) rhScamCache = { at: Date.now(), set: new Set(r.tokens.map((a) => a.toLowerCase())) }; }
     finally { rhScamBusy = false; }
-  }, 20);
+  }, 12_000);
 }
 
 let rhFeedCache = { at: 0, tokens: [] };
