@@ -1339,11 +1339,12 @@
     // Fill MC / liquidity / volume / price / pfp / socials from DexScreener (indexes Robinhood Chain) —
     // over the USER's IP, same live-enrichment concept as the Solana boards. Registry PFP wins for SW coins.
     rhEnrichRows(sr.concat(tr,nr)).then((changed)=>{if(changed&&state.route==="trenches"&&state.trenchTab==="rh")paint();});
-    const chk=$("#rhSaferChk");if(chk)chk.onchange=()=>{localStorage.setItem("ggRhSaferOnly",chk.checked?"1":"");rhScanBoard(sr.concat(tr,nr));};
+    const chk=$("#rhSaferChk");if(chk)chk.onchange=()=>{localStorage.setItem("ggRhSaferOnly",chk.checked?"1":"0");rhScanBoard(sr.concat(tr,nr));};
     rhScanBoard(sr.concat(tr,nr));
     state.pollT=setTimeout(()=>{if(state.route==="trenches"&&state.trenchTab==="rh")renderRhBoard(wrap);},30000);
   }
-  function rhSaferOnly(){return localStorage.getItem("ggRhSaferOnly")==="1";}
+  // Default ON — this chain is scam-heavy, so hide ⚠️/⛔ coins unless the user explicitly opts to see all.
+  function rhSaferOnly(){return localStorage.getItem("ggRhSaferOnly")!=="0";}
   // Per-row safety badge + "Safer only" filter. Scans each visible coin (cached 5min server + here) and
   // marks 🛡️ ok / ⚠️ risky / ⛔ can't-sell. Safer-only hides ⚠️/⛔. THIS is what catches HOODCAT-class
   // coins (their custom-transfer-code trips ⚠️) — renounce alone wouldn't, since HOODCAT was renounced.

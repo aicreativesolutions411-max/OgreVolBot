@@ -153,6 +153,38 @@ export async function rhListTokens(maxPages = 3) {
   return items;
 }
 
+// The shared "rug-as-a-service" drain controller (see rhHoneypotCheck). Exported so the feed can build a
+// bulk scam-token exclusion set from it without a per-coin scan.
+export const RH_DRAIN_CONTROLLER = "0x2D7aA179B485D25FE89f8E1B26b9f3CC2668f615";
+
+// Enumerate the whole drain operation cheaply: the controller's callers ARE the scam operators, and each
+// operator's contract-creation txs (to === null, created_contract set) ARE their rug tokens. Returns the
+// operator wallets + the full set of token addresses they deployed — a definitive block-list for the feed.
+export async function rhScamTokenSet({ controller = RH_DRAIN_CONTROLLER, operatorPages = 8, deployPages = 3 } = {}) {
+  const operators = new Set();
+  let params = "";
+  for (let p = 0; p < operatorPages; p += 1) {
+    const d = await bsJson(`/addresses/${controller}/transactions${params}`).catch(() => ({}));
+    for (const t of (d.items || [])) { const f = ((t.from || {}).hash || "").toLowerCase(); if (f) operators.add(f); }
+    if (!d.next_page_params) break;
+    params = `?${new URLSearchParams(d.next_page_params).toString()}`;
+  }
+  const tokens = new Set();
+  for (const op of operators) {
+    let pr = "";
+    for (let p = 0; p < deployPages; p += 1) {
+      const d = await bsJson(`/addresses/${op}/transactions${pr}`).catch(() => ({}));
+      for (const t of (d.items || [])) {
+        const created = ((t.created_contract || {}).hash || "").toLowerCase();
+        if (created) tokens.add(created);
+      }
+      if (!d.next_page_params) break;
+      pr = `?${new URLSearchParams(d.next_page_params).toString()}`;
+    }
+  }
+  return { operators: [...operators], tokens: [...tokens] };
+}
+
 // FRESHNESS source: Blockscout's /tokens is sorted by holders, so brand-new coins (1-5 holders) sit at
 // the very bottom and never surface. The GLOBAL token-transfers feed is time-ordered, so a coin's first
 // buys appear here the moment it launches — this is how we catch launches the holder-list misses. The

@@ -69,7 +69,7 @@ import {
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
-import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
+import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
 import {
@@ -32561,22 +32561,52 @@ async function webRhActivity(userId) {
 // creation never changes). Coins launched THROUGH SlimeWire are enriched from our own metadata
 // registry (image/socials/description captured at launch) — EVM tokens have no native PFP standard,
 // so the site plays the address->logo registry role that wallets/DEXes play on other chains.
-// Infra / non-memecoin tokens that should never appear on the board (bridged blue-chips, stablecoins,
-// wrapped ETH, Uniswap LP-position NFTs). Symbol-matched, case-insensitive.
+// Infra / non-memecoin symbols to hide (stablecoins, wrapped ETH, LP-position NFTs). The official
+// Robinhood tokenized STOCKS are hidden separately by their cdn.robinhood.com / coingecko icon — this
+// board is memecoins only. Symbol-matched, case-insensitive.
 const RH_FEED_HIDE = new Set(["weth", "usdg", "pusdg", "arcusdg", "usde", "susde", "uni-v3-pos", "wsteth", "usdc", "usdt", "dai"]);
+const rhIsStockOrBluechip = (iconUrl) => /robinhood\.com|coingecko/i.test(String(iconUrl || ""));
+
+// FULL token universe, refreshed in the background (Blockscout has 1400+ ERC-20s — pulling only a few
+// pages made the board "light"). Paginate everything once, cache ~4 min, serve stale while refreshing so
+// requests never block on the ~40-call sweep. Cold start falls back to the fast rhListTokens path.
+let rhUniverseCache = { at: 0, items: [] };
+let rhUniverseBusy = false;
+function scheduleRhUniverse() {
+  if (rhUniverseBusy || Date.now() - rhUniverseCache.at < 240_000) return;
+  rhUniverseBusy = true;
+  setTimeout(async () => {
+    try { const items = await rhListTokens(45); if (items.length) rhUniverseCache = { at: Date.now(), items }; }
+    finally { rhUniverseBusy = false; }
+  }, 20);
+}
+
+// The whole drain operation's token addresses, refreshed in the background (~15 min). Feed excludes these
+// outright — a definitive scam-group filter that doesn't need a per-coin scan.
+let rhScamCache = { at: 0, set: new Set() };
+let rhScamBusy = false;
+function scheduleRhScamSet() {
+  if (rhScamBusy || Date.now() - rhScamCache.at < 900_000) return;
+  rhScamBusy = true;
+  setTimeout(async () => {
+    try { const r = await rhScamTokenSet(); if (r && r.tokens) rhScamCache = { at: Date.now(), set: new Set(r.tokens.map((a) => a.toLowerCase())) }; }
+    finally { rhScamBusy = false; }
+  }, 20);
+}
+
 let rhFeedCache = { at: 0, tokens: [] };
 async function rhFeedTokens() {
+  scheduleRhUniverse(); scheduleRhScamSet();                // keep the big caches warm
   if (Date.now() - rhFeedCache.at < 45_000 && rhFeedCache.tokens.length) return rhFeedCache.tokens;
-  // TWO sources merged: /tokens (top by holders — for Trending) + the global transfers feed (time-ordered
-  // — catches brand-new launches the holder list buries at the bottom). Dedupe by address.
-  const [byHolders, byActivity] = await Promise.all([
-    rhListTokens(5).catch(() => []),
-    rhRecentActiveTokens(3).catch(() => []),
-  ]);
+  // Base = full universe once warm (else the fast top-by-holders path), PLUS the time-ordered transfers
+  // feed for brand-new launches. Dedupe by address.
+  const base = rhUniverseCache.items.length ? rhUniverseCache.items : await rhListTokens(5).catch(() => []);
+  const byActivity = await rhRecentActiveTokens(3).catch(() => []);
+  const scam = rhScamCache.set;
   const merged = new Map();
-  for (const t of [...byHolders, ...byActivity]) {
+  for (const t of [...base, ...byActivity]) {
     const addr = String(t.address_hash || t.address || "").toLowerCase();
-    if (!addr) continue;
+    if (!addr || scam.has(addr)) continue;                  // drop the scam operation's coins outright
     if (!merged.has(addr)) merged.set(addr, t); else if (t.lastActiveAt) merged.get(addr).lastActiveAt = t.lastActiveAt;
   }
   const tokens = [...merged.values()].map((t) => {
@@ -32597,7 +32627,7 @@ async function rhFeedTokens() {
       reputation: t.reputation || "",
       lastActiveAt: t.lastActiveAt || ""
     };
-  }).filter((t) => t.address && t.symbol && !RH_FEED_HIDE.has(t.symbol.toLowerCase()));
+  }).filter((t) => t.address && t.symbol && !RH_FEED_HIDE.has(t.symbol.toLowerCase()) && !rhIsStockOrBluechip(t.iconUrl));
   rhFeedCache = { at: Date.now(), tokens };
   return tokens;
 }

@@ -472,9 +472,16 @@ test("RH feed: full coverage (holders + activity sources) + Safe tab of proven-s
   assert.match(rhLib, /export async function rhRecentActiveTokens/);
   assert.match(functionBody(rhLib, "rhRecentActiveTokens"), /token-transfers/);
   // Backend merges both sources + a server-side safety cache + a "safe" category that shows only ok/verified.
-  assert.match(functionBody(serverSource, "rhFeedTokens"), /rhListTokens/);
   assert.match(functionBody(serverSource, "rhFeedTokens"), /rhRecentActiveTokens/);
   assert.match(serverSource, /scheduleRhSafetyFill/);
+  // Full coverage: pull the WHOLE universe in the background (not a few pages), + hide stocks (icon) +
+  // exclude the scam operation's tokens outright. This board is memecoins only.
+  assert.match(rhLib, /export async function rhScamTokenSet/);
+  assert.match(serverSource, /scheduleRhUniverse/);
+  assert.match(serverSource, /rhListTokens\(45\)/);
+  assert.match(serverSource, /rhIsStockOrBluechip/);
+  assert.match(serverSource, /robinhood\\.com\|coingecko/);
+  assert.match(functionBody(serverSource, "rhFeedTokens"), /scam\.has\(addr\)/);
   assert.match(functionBody(serverSource, "webRhPairs"), /cat === "safe"/);
   assert.match(functionBody(serverSource, "webRhPairs"), /r\.safety === "ok" \|\| r\.safety === "verified"/);
   // UI: a Safe column that requests category=safe.
