@@ -8004,6 +8004,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, result);
       return;
     }
+    if (request.method === "GET" && pathname === "/api/web/rh/activity") {
+      sendWebJson(request, response, 200, await webRhActivity(auth.userId));
+      return;
+    }
     if (request.method === "POST" && pathname === "/api/web/rh/fund-with-sol") {
       const result = await webRhFundWithSol(auth.userId, await readJsonRequestBody(request));
       sendWebJson(request, response, 200, result);
@@ -32500,6 +32504,34 @@ async function webRhWallet(userId, walletIndex) {
     rhAddressTokens(address)
   ]);
   return { ok: true, chainId: RH_CHAIN_ID, address, eth: bal.eth, tokens, explorer: rhExplorerAddress(address), wallet: wallet.publicKey };
+}
+
+// Plain-English Robinhood activity trail for this user — every buy / sell / auto-sell / SOL-funding,
+// newest first, with the ETH that moved and a Blockscout link. This is the "where did my money go"
+// answer: an auto-sell puts ETH BACK in the same wallet, and this shows the exact tx + amount.
+async function webRhActivity(userId) {
+  const auditLog = await readJson(auditPath()).catch(() => ({ entries: [] }));
+  const txUrl = (h) => (h ? `https://robinhoodchain.blockscout.com/tx/${h}` : "");
+  const rows = [];
+  for (const e of (auditLog.entries || [])) {
+    const d = e.details || {};
+    if (String(d.userId || "") !== String(userId)) continue;
+    if (e.action === "web_rh_trade") {
+      const h = Array.isArray(d.txHashes) ? d.txHashes[d.txHashes.length - 1] : "";
+      rows.push({ at: e.timestamp, kind: d.side === "buy" ? "buy" : "sell", tokenAddress: d.tokenAddress || "", out: d.out || "", tx: h, url: txUrl(h) });
+    } else if (e.action === "web_rh_guard_fired") {
+      rows.push({ at: e.timestamp, kind: "auto-sell", trigger: d.trigger || "", tokenAddress: d.tokenAddress || "", movePct: d.movePct || "", tx: (d.tx || [])[ (d.tx || []).length - 1] || "", url: txUrl((d.tx || [])[(d.tx || []).length - 1]) });
+    } else if (e.action === "web_rh_fund_sol") {
+      rows.push({ at: e.timestamp, kind: "fund", amountSol: d.amountSol || "", quotedEth: d.outEthQuoted || d.quotedEth || "", tx: d.signature || "", url: d.signature ? `https://solscan.io/tx/${d.signature}` : "" });
+    } else if (e.action === "web_rh_launch") {
+      rows.push({ at: e.timestamp, kind: "launch", tokenAddress: d.token || "", tx: d.tx || "", url: txUrl(d.tx) });
+    }
+  }
+  // Enrich sells/auto-sells with the coin symbol from the feed cache (best-effort, no extra chain calls).
+  const symByAddr = new Map(rhFeedCache.tokens.map((t) => [t.address.toLowerCase(), t.symbol]));
+  for (const r of rows) if (r.tokenAddress) r.symbol = symByAddr.get(r.tokenAddress.toLowerCase()) || "";
+  rows.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  return { ok: true, activity: rows.slice(0, 40) };
 }
 
 // ---------- Robinhood Chain coin feed (Trenches "🪶 Robinhood" tab) ----------

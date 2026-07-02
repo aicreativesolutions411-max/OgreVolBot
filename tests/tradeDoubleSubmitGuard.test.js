@@ -396,6 +396,21 @@ test("unified tools: paste either chain's CA + auto round-trip moved to Wallet f
   }
 });
 
+test("RH wallet: plain ETH balance panel + activity trail (where did the money go)", () => {
+  assert.match(serverSource, /pathname === "\/api\/web\/rh\/activity"/);
+  const act = functionBody(serverSource, "webRhActivity");
+  assert.match(act, /web_rh_trade/);
+  assert.match(act, /web_rh_guard_fired/);              // auto-sells surface here
+  assert.match(act, /blockscout\.com\/tx\//);            // each row links its on-chain tx
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /Your Robinhood ETH \(spendable balance\)/);
+    assert.match(src, /lands right back here/);           // explains where auto-sell proceeds go
+    assert.match(src, /function loadRhActivity/);
+    assert.match(src, /Auto-sold /);
+    assert.match(src, /\/api\/web\/rh\/activity/);
+  }
+});
+
 test("launch form survives navigation + warns on no dev buy", () => {
   for (const src of [ggSource, indexSource]) {
     // Whole-form snapshot/restore so leaving the Launch page and coming back keeps text + images.

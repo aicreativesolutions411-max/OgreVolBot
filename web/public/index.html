@@ -702,16 +702,34 @@
     if(!(ok&&d&&d.ok)){body.innerHTML='<p class="mut" style="font-size:12px">Couldn\'t load your Robinhood Chain wallet — try again in a moment.</p>';return;}
     const eth=Number(d.eth||0);
     const toks=(d.tokens||[]);
-    body.innerHTML='<p class="wnote" style="margin:0 0 10px">Every SlimeWire wallet has a matching <b>Robinhood Chain</b> address (same key, ETH side) — create more wallets above and each gets its own. Send ETH or Robinhood coins to it, or fund it straight from your SOL below.</p>'+
-      '<div class="field"><label>Wallet</label>'+walletSelectHtml("rhWalSel")+'</div>'+
-      '<div class="field"><label>Its Robinhood address — receive here</label><div style="display:flex;gap:8px;align-items:center"><input readonly value="'+esc(d.address)+'" style="flex:1;min-width:0;font-size:11px" onclick="this.select()"><button class="wbtn ghost" type="button" style="padding:6px 10px" onclick="GG.copy(\''+esc(d.address)+'\')">⧉</button></div></div>'+
-      '<div class="ln" style="font-size:12px;margin:4px 0 10px">ETH balance: <b>'+eth.toFixed(6)+' ETH</b> <span class="mut">(pays for buys, sells &amp; launches there)</span> · <a href="'+esc(d.explorer)+'" target="_blank" rel="noopener">explorer</a>'+(eth>0.00005?'':' · <span class="mut">fund below — 0.0005 covers plenty</span>')+'</div>'+
-      (toks.length?'<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Coins on Robinhood Chain</div>'+toks.map(t=>'<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:5px">'+(t.iconUrl?'<img src="'+esc(t.iconUrl)+'" style="width:18px;height:18px;border-radius:50%">':'🪙')+'<b>'+esc(t.symbol||"?")+'</b><span class="mut">'+esc(t.name||"")+'</span><span style="margin-left:auto">'+esc(Number(t.uiAmount||0).toLocaleString())+'</span></div>').join(""):'<p class="mut" style="font-size:11px;margin:0 0 8px">No coins here yet — launch one (Launch → 🪶 Robinhood) or buy one from the 🪶 Robinhood tab in Trenches.</p>')+
+    body.innerHTML='<div class="field"><label>Wallet</label>'+walletSelectHtml("rhWalSel")+'</div>'+
+      // Big, plain "this is your money" header — ETH is your balance/buying power here, not a fee.
+      '<div style="background:var(--card2,#0f150f);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px">'+
+        '<div class="mut" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px">Your Robinhood ETH (spendable balance)</div>'+
+        '<div style="font-size:22px;font-weight:800;margin:2px 0">'+eth.toFixed(6)+' <span style="font-size:13px;color:var(--muted)">ETH</span> <span id="rhEthUsd" class="mut" style="font-size:12px"></span></div>'+
+        '<div class="mut" style="font-size:10px">This is real ETH in your wallet — what buys, sells &amp; launches spend. When a coin sells (or auto-sells), the ETH lands right back here.</div>'+
+      '</div>'+
+      '<div class="field"><label>Your Robinhood address — receive here</label><div style="display:flex;gap:8px;align-items:center"><input readonly value="'+esc(d.address)+'" style="flex:1;min-width:0;font-size:11px" onclick="this.select()"><button class="wbtn ghost" type="button" style="padding:6px 10px" onclick="GG.copy(\''+esc(d.address)+'\')">⧉</button> <a class="wbtn ghost" style="padding:6px 10px" href="'+esc(d.explorer)+'" target="_blank" rel="noopener">↗</a></div></div>'+
+      (toks.length?'<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Coins you hold here</div><div id="rhHoldings">'+toks.map(t=>'<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:5px" data-addr="'+esc(t.address)+'">'+(t.iconUrl?'<img src="'+esc(t.iconUrl)+'" style="width:18px;height:18px;border-radius:50%">':'🪙')+'<b>'+esc(t.symbol||"?")+'</b><span class="mut">'+esc(Number(t.uiAmount||0).toLocaleString())+'</span><span class="mut rhHoldVal" style="margin-left:auto">—</span></div>').join("")+'</div>':'<p class="mut" style="font-size:11px;margin:0 0 8px">No coins held here right now. If one just auto-sold, that\'s expected — the ETH from it is in your balance above, and the sale shows in the activity list below.</p>')+
       '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:12px 0 6px">Fund with SOL (swap → Robinhood ETH)</div>'+
       '<div style="display:flex;gap:8px"><input id="rhFundAmt" inputmode="decimal" placeholder="0.05" style="width:90px;flex:0 0 auto"><button class="wbtn" id="rhFundBtn" style="flex:1">⚡ Swap SOL → Robinhood ETH</button></div>'+
-      '<p class="wnote" style="margin:8px 0 0">Swaps SOL from this wallet into ETH on Robinhood Chain (cross-chain via Relay, usually lands in seconds). 0.05 SOL covers hundreds of launches.</p>';
+      '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 6px">Recent Robinhood activity</div><div id="rhActivity"><div class="loading"><span class="spin"></span></div></div>';
     const fb=$("#rhFundBtn");if(fb)fb.onclick=()=>rhFundWithSol(idx);
     const ws=$("#rhWalSel");if(ws){ws.value=idx;ws.onchange=()=>{state._rhWalIdx=ws.value;loadRhWalletPanel();};}
+    // Live USD on the ETH balance + each holding (DexScreener over the user's IP; best-effort).
+    if(toks.length)dexTokensBatch(toks.map(t=>t.address)).then(by=>{const byLc={};Object.keys(by||{}).forEach(k=>byLc[k.toLowerCase()]=by[k]);document.querySelectorAll("#rhHoldings [data-addr]").forEach(row=>{const o=byLc[String(row.dataset.addr).toLowerCase()];const t=toks.find(x=>String(x.address).toLowerCase()===String(row.dataset.addr).toLowerCase());const v=o&&o.price>0&&t?o.price*Number(t.uiAmount||0):0;const el=row.querySelector(".rhHoldVal");if(el&&v>0)el.textContent=fmtUsd(v);});});
+    loadRhActivity();
+  }
+  async function loadRhActivity(){
+    const el=$("#rhActivity");if(!el)return;
+    const {ok,d}=await api("/api/web/rh/activity").catch(()=>({}));
+    if(!$("#rhActivity"))return;
+    const rows=(ok&&d&&d.activity)||[];
+    if(!rows.length){el.innerHTML='<p class="mut" style="font-size:11px">No Robinhood trades yet. Buys, sells and auto-sells (TP/SL) will show here with the exact ETH that moved + a link to the on-chain tx.</p>';return;}
+    const ago=(iso)=>{const s=(Date.now()-Date.parse(iso||0))/1000;return !isFinite(s)?"":s<90?Math.round(s)+"s":s<5400?Math.round(s/60)+"m":s<129600?Math.round(s/3600)+"h":Math.round(s/86400)+"d";};
+    const label=(r)=>r.kind==="buy"?'🟢 Bought '+esc(r.symbol||"coin"):r.kind==="sell"?'🔴 Sold '+esc(r.symbol||"coin"):r.kind==="auto-sell"?'🎯 Auto-sold '+esc(r.symbol||"coin")+' <span class="mut">('+esc(r.trigger||"exit")+(r.movePct?' '+esc(r.movePct)+'%':'')+')</span>':r.kind==="fund"?'⚡ Funded with SOL':r.kind==="launch"?'🚀 Launched':esc(r.kind);
+    const detail=(r)=>r.kind==="fund"?(r.amountSol?r.amountSol+' SOL → ~'+(r.quotedEth||"?")+' ETH':''):(r.out?'→ '+Number(r.out).toLocaleString(undefined,{maximumFractionDigits:6})+(r.kind==="buy"?' tokens':' ETH'):'');
+    el.innerHTML=rows.map(r=>'<div style="display:flex;align-items:center;gap:8px;font-size:11px;border-bottom:1px solid var(--border);padding:6px 2px"><span style="flex:1;min-width:0">'+label(r)+' <span class="mut">'+detail(r)+'</span></span><span class="mut">'+ago(r.at)+'</span>'+(r.url?' <a href="'+esc(r.url)+'" target="_blank" rel="noopener">tx↗</a>':'')+'</div>').join("");
   }
   async function rhFundWithSol(idx){
     const amt=Number((($("#rhFundAmt")||{}).value||"").trim());
