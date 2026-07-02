@@ -153,6 +153,65 @@ export async function rhListTokens(maxPages = 3) {
   return items;
 }
 
+// ---------- Pre-buy safety scan (honeypot guard) ----------
+// No checker is perfect — a token whose owner rugs holders LATER (like a rebase/clawback) can't be
+// caught before you buy; that's true of every honeypot detector. What this DOES catch, with a REAL
+// on-chain execution sim (not an off-chain quote): (1) can't-sell honeypots — simulate a transfer from
+// a real holder; if it reverts, the token blocks moving/selling → BLOCK. (2) custom transfer code —
+// tokens that run extra logic on every transfer (fees/rebase/clawback) burn far more gas; flag them.
+// (3) concentration — one wallet holding most of supply can dump on you. Verdict: block | warn | ok.
+const SIMPLE_TRANSFER_GAS = 40_000; // a plain ERC-20 transfer; well above this = extra hooks on transfer
+const safetyCache = new Map(); // addrLc -> { at, result }
+
+export async function rhHoneypotCheck(tokenAddress, rpcUrl) {
+  const key = String(tokenAddress).toLowerCase();
+  const cached = safetyCache.get(key);
+  if (cached && Date.now() - cached.at < 300_000) return cached.result;
+  const reasons = [];
+  let sellable = null; let transferGas = null; let holders = null; let topPct = null;
+
+  // A real holder + total supply from Blockscout (for the transfer sim + concentration).
+  let holderAddr = ""; let holderRaw = "0";
+  try {
+    const hs = await bsJson(`/tokens/${tokenAddress}/holders`);
+    const first = (hs.items || [])[0];
+    if (first) { holderAddr = (first.address || {}).hash || ""; holderRaw = String(first.value || "0"); }
+    const tk = await bsJson(`/tokens/${tokenAddress}`).catch(() => ({}));
+    holders = Number(tk.holders_count || 0) || null;
+    if (tk.total_supply && holderRaw !== "0") {
+      const sup = Number(BigInt(tk.total_supply)); const top = Number(BigInt(holderRaw));
+      if (sup > 0) topPct = Math.round((top / sup) * 100);
+    }
+  } catch { /* Blockscout hiccup — sim still runs if we have a holder */ }
+
+  // Real execution sim: can a holder actually move the token? transfer(0x…dead, 1 unit) via eth_call +
+  // estimateGas from that holder. Revert on either = the token blocks transfers → un-sellable honeypot.
+  if (holderAddr) {
+    const provider = rhProvider(rpcUrl);
+    const iface = new ethers.Interface(["function transfer(address,uint256) returns (bool)"]);
+    const data = iface.encodeFunctionData("transfer", ["0x000000000000000000000000000000000000dEaD", 1n]);
+    try {
+      await provider.call({ from: holderAddr, to: tokenAddress, data });
+      const gas = await provider.estimateGas({ from: holderAddr, to: tokenAddress, data });
+      transferGas = Number(gas);
+      sellable = true;
+      if (transferGas > SIMPLE_TRANSFER_GAS + 12_000) reasons.push("runs custom code on every transfer (fees / rebase / balance clawback possible)");
+    } catch {
+      sellable = false;
+      reasons.push("a holder can't even transfer this token — sells are blocked (honeypot)");
+    }
+  }
+  if (topPct != null && topPct >= 60) reasons.push(`one wallet holds ~${topPct}% of supply — it can dump on you`);
+  if (holders != null && holders < 15) reasons.push(`only ${holders} holders — brand-new / untested`);
+
+  let verdict = "ok";
+  if (sellable === false) verdict = "block";
+  else if (reasons.length) verdict = "warn";
+  const result = { ok: true, verdict, sellable, transferGas, holders, topPct, reasons };
+  safetyCache.set(key, { at: Date.now(), result });
+  return result;
+}
+
 // ETH/USD from the chain's own explorer stats (cached — it only needs to be roughly right for MC).
 let ethUsdCache = { at: 0, price: 0 };
 export async function rhEthUsd() {

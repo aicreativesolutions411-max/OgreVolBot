@@ -1399,6 +1399,7 @@
           (r.telegram?'<a href="'+esc(r.telegram)+'" target="_blank" rel="noopener">Telegram</a>':'')+
           (r.website?'<a href="'+esc(r.website)+'" target="_blank" rel="noopener">Website</a>':'')+
           '<a href="'+esc(r.explorer||("https://robinhoodchain.blockscout.com/token/"+address))+'" target="_blank" rel="noopener">Blockscout</a></div>'+
+        '<div id="rhSafety" class="mut" style="font-size:11px;margin-bottom:8px">🛡 Scanning coin for honeypot / sell traps…</div>'+
         '<div id="rhTmBal" class="mut" style="font-size:11px;margin-bottom:10px">Checking your wallet…</div>'+
         '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Buy (ETH)</span><button class="chip" style="font-size:10px;padding:2px 8px" onclick="GG.rhPresetModal()">⚙ presets</button></div>'+
         '<div style="display:flex;gap:6px;margin-bottom:8px">'+rhPresets().map(a=>'<button class="wbtn ghost" style="flex:1;padding:9px 4px;font-size:13px" onclick="GG.rhBuy(\''+esc(address)+'\',\''+esc(a)+'\')">'+esc(a)+'</button>').join("")+'</div>'+
@@ -1421,6 +1422,17 @@
       const c=$("#rhTvChart");if(c&&r.pairAddress&&!c.querySelector("iframe"))c.innerHTML='<iframe src="https://dexscreener.com/robinhood/'+esc(r.pairAddress)+'?embed=1&theme=dark&trades=0&info=0&interval=5" style="width:100%;height:46vh;border:0;display:block"></iframe>';
     });
     rhTmRefreshBal(address);
+    loadRhSafety(address);
+  }
+  async function loadRhSafety(address){
+    const el=$("#rhSafety");if(!el)return;
+    const {d}=await api("/api/web/rh/safety?token="+encodeURIComponent(address)).catch(()=>({}));
+    const e2=$("#rhSafety");if(!e2)return;
+    if(!d||d.verdict==="unknown"){e2.innerHTML='🛡 <span class="mut">Couldn\'t scan this coin right now — trade carefully.</span>';return;}
+    const bits=[];if(d.holders!=null)bits.push(d.holders+' holders');if(d.topPct!=null)bits.push('top wallet '+d.topPct+'%');
+    if(d.verdict==="ok")e2.innerHTML='🛡 <span class="up">Sell-check passed</span> <span class="mut">— a holder can sell it'+(bits.length?' · '+esc(bits.join(' · ')):'')+'. No check is 100% — an owner can still rug later.</span>';
+    else if(d.verdict==="warn")e2.innerHTML='⚠️ <span class="down">Risky</span> <span class="mut">— '+esc((d.reasons||[]).join('; '))+'</span>';
+    else e2.innerHTML='⛔ <span class="down">Do not buy</span> <span class="mut">— '+esc((d.reasons||[]).join('; '))+'</span>';
   }
   // ---------- RH power tools (same features as the Solana side) ----------
   function rhWalletChecks(id){
@@ -1545,6 +1557,16 @@
   }
   async function rhTrade(address,side,opts){
     if(!(await ensureTradeReady()))return;
+    // Pre-buy honeypot guard — a real on-chain sell-sim runs server-side too, but check here first so we
+    // can BLOCK un-sellable coins and WARN on risky ones (custom transfer code / concentration) before spending.
+    if(side==="buy"){
+      const {d:sf}=await api("/api/web/rh/safety?token="+encodeURIComponent(address)).catch(()=>({}));
+      if(sf&&sf.verdict==="block"){toast("⛔ Blocked to protect you — "+((sf.reasons&&sf.reasons[0])||"this coin can't be sold (honeypot)"),true);return;}
+      if(sf&&sf.verdict==="warn"){
+        const cont=await confirmModal('<h3>⚠️ Risky coin — heads up</h3><p class="sub mut" style="font-size:13px">Our safety scan flagged this coin:</p><ul style="font-size:12px;color:var(--muted);margin:0 0 8px 16px;line-height:1.5">'+(sf.reasons||[]).map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul><p class="sub mut" style="font-size:12px">This is the kind of coin that can shrink your balance or trap you later. Buy anyway?</p>','Buy anyway','Cancel');
+        if(!cont)return;
+      }
+    }
     hap();toast(side==="buy"?"⚡ Buying…":"Selling…");
     const body={walletIndex:String(state.activeWallet||1),side,tokenAddress:address,tradeAttemptId:attemptId(),...(opts||{})};
     const {ok,d}=await jpost("/api/web/rh/trade",body);

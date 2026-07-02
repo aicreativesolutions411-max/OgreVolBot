@@ -412,6 +412,24 @@ test("RH wallet: plain ETH balance panel + activity trail (where did the money g
   }
 });
 
+test("RH honeypot guard: real sell-sim blocks un-sellable coins + warns on risky ones before buying", () => {
+  const rhLib = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
+  const check = functionBody(rhLib, "rhHoneypotCheck");
+  assert.match(check, /transfer/);                       // real transfer sim from a holder
+  assert.match(check, /estimateGas/);                    // + gas (catches custom transfer code)
+  assert.match(check, /verdict = "block"/);
+  assert.match(check, /sellable = false/);               // revert -> can't sell -> block
+  // Server hard-blocks a "block" verdict on buys (fail-open only if the scan itself errors).
+  assert.match(functionBody(serverSource, "webRhTradeCore"), /rhHoneypotCheck/);
+  assert.match(functionBody(serverSource, "webRhTradeCore"), /verdict === "block"/);
+  assert.match(serverSource, /pathname === "\/api\/web\/rh\/safety"/);
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /function loadRhSafety/);
+    assert.match(src, /verdict==="block"\)\{toast\("⛔ Blocked/);
+    assert.match(src, /Scanning coin for honeypot/);
+  }
+});
+
 test("launch form survives navigation + warns on no dev buy", () => {
   for (const src of [ggSource, indexSource]) {
     // Whole-form snapshot/restore so leaving the Launch page and coming back keeps text + images.

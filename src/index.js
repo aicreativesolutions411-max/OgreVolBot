@@ -69,7 +69,7 @@ import {
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
-import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhImpliedPriceUsd } from "./lib/robinhoodChain.js";
+import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhImpliedPriceUsd, rhHoneypotCheck } from "./lib/robinhoodChain.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
 import {
@@ -7122,6 +7122,13 @@ async function handleWebApiRequest(request, response, requestUrl) {
     // send a Bearer token, and the images are public by nature — they're the coin's face).
     if (request.method === "GET" && pathname === "/api/web/rh/pairs") {
       sendWebJson(request, response, 200, { ok: true, rows: await webRhPairs(requestUrl.searchParams.get("category") || "trending") });
+      return;
+    }
+    // Pre-buy honeypot/safety scan (public — read-only chain analysis, no wallet needed).
+    if (request.method === "GET" && pathname === "/api/web/rh/safety") {
+      const tok = String(requestUrl.searchParams.get("token") || "").trim();
+      if (!/^0x[0-9a-fA-F]{40}$/.test(tok)) { sendWebJson(request, response, 400, { ok: false, error: "Invalid token address." }); return; }
+      sendWebJson(request, response, 200, await rhHoneypotCheck(tok, CONFIG.rhChainRpcUrl).catch(() => ({ ok: true, verdict: "unknown", reasons: ["couldn't scan right now"] })));
       return;
     }
     if (request.method === "GET" && pathname.startsWith("/api/web/rh/token-image/")) {
@@ -32714,6 +32721,13 @@ async function webRhTradeCore(userId, body = {}) {
     const amountEth = Number(body.amountEth || 0);
     if (!Number.isFinite(amountEth) || amountEth < 0.00001 || amountEth > 2) {
       const e = new Error("Enter an ETH amount between 0.00001 and 2.");
+      e.statusCode = 400; throw e;
+    }
+    // Honeypot guard: NEVER let a buy through on a coin a real holder can't even transfer (can't-sell
+    // trap). Fail-open only if the check itself errors — but a definite "can't sell" is a hard stop.
+    const safety = await rhHoneypotCheck(tokenAddress, CONFIG.rhChainRpcUrl).catch(() => null);
+    if (safety && safety.verdict === "block") {
+      const e = new Error(`Blocked to protect you: ${safety.reasons[0] || "this coin can't be sold (honeypot)"}.`);
       e.statusCode = 400; throw e;
     }
     fromCurrency = ETH; toCurrency = tokenAddress;
