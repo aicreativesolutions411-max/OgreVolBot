@@ -2793,6 +2793,7 @@
         // ---- Robinhood Chain fold: the active wallet's derived EVM address (receive), ETH gas, token
         // holdings, and the one-tap SOL -> Robinhood-ETH funding swap (Relay).
         '<details class="fold" id="rhFold"><summary>🪶 Robinhood Chain<span class="sub">ETH balance · coins · fund with SOL</span><span class="chev">▾</span></summary><div class="foldbody" id="rhFoldBody"><div class="loading"><span class="spin"></span></div></div></details>'+
+        autoRoundTripFoldHtml()+
         // ---- Power tools fold ----
         '<details class="fold"><summary>🛠️ Power Tools<span class="sub">keys · sweep · multi-wallet</span><span class="chev">▾</span></summary><div class="foldbody">'+
           '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:7px">Backup</div>'+
@@ -2887,6 +2888,7 @@
       const s=$("#savePre");if(s)s.textContent="Update preset";const n=$("#pName");if(n){n.scrollIntoView({behavior:"smooth",block:"center"});n.focus();}toast("Editing "+(p.name||"preset")+" — change values, then Update");});
     const ek=$("#expKeys");if(ek)ek.onclick=async()=>{ek.disabled=true;await exportKeys();ek.disabled=false;};
     const rhF=$("#rhFold");if(rhF)rhF.ontoggle=()=>{if(rhF.open)loadRhWalletPanel();};   // lazy: only hit the chain when opened
+    const artG=$("#artGo");if(artG)artG.onclick=()=>runAutoRoundTrip();   // auto round-trip now lives in this Wallet fold
     const ss=$("#swSol");if(ss)ss.onclick=async()=>{const dest=$("#swDest").value.trim();if(!dest){toast("Paste a destination address.",true);return;}ss.disabled=true;ss.textContent="Sweeping…";await sweepSol(dest,state.wallets.map(w=>w.index));ss.disabled=false;ss.textContent="Sweep all SOL →";renderWallet();};
     const st=$("#swTok");if(st)st.onclick=async()=>{const dest=$("#swDest").value.trim();if(!dest){toast("Paste a destination address.",true);return;}st.disabled=true;st.textContent="Sweeping…";await sweepTokens(dest,state.wallets.map(w=>w.index));st.disabled=false;st.textContent="Sweep all tokens →";};
     const db=$("#distBtn");if(db)db.onclick=async()=>{const c=parseInt($("#dCount").value,10),a=$("#dAmt").value.trim();if(!(c>0)){toast("How many wallets?",true);return;}if(!a||Number(a)<=0){toast("SOL per wallet?",true);return;}db.disabled=true;db.textContent="Funding…";await distributeFresh(c,a,state.activeWallet||1);db.disabled=false;db.textContent="Create + fund fresh wallets";renderWallet();};
@@ -3012,11 +3014,14 @@
     return {okc,fail,spent};
   }
   function staggerControls(goId,stopId,goLabel){return '<div class="bsrow"><button class="bigbuy" id="'+goId+'" style="flex:2">'+goLabel+'</button><button class="wbtn ghost" id="'+stopId+'" style="flex:1">Stop</button></div><div id="stgLog" style="margin-top:12px;max-height:260px;overflow:auto"></div>';}
+  // One CA field, either chain: 0x… = Robinhood (EVM), base58 = Solana. Every tool detects and routes,
+  // so there's one set of tools for both — paste a Robinhood or Solana CA and it just works.
+  function detectChain(ca){const s=String(ca||"").trim();if(/^0x[0-9a-fA-F]{40}$/.test(s))return "robinhood";if(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s))return "solana";return "";}
   async function renderBundle(){
     setActiveView("v-bundle");subbarTool("📦 Bundle");if(state.token){await refreshWallets();await loadPresets();}if(state.route!=="bundle")return;
     const bopts='<option value="">My own TP/SL below</option>'+(state.presets.bundle||[]).map(p=>'<option value="'+esc(p.id)+'">'+esc(p.name||"Preset")+(p.takeProfitPct?" · TP "+esc(p.takeProfitPct)+"%":"")+(p.stopLossPct?" · SL "+esc(p.stopLossPct)+"%":"")+'</option>').join("");
     $("#v-bundle").innerHTML='<div class="wgrid"><div class="wbox"><h3>📦 Bundle</h3><p class="sub">Hit one token across your wallets with <b>randomized sizes</b> + <b>staggered timing</b> so it doesn\'t read as a bundle. Arm take-profit / stop-loss — laddered so the wallets don\'t all sell at one price.</p>'+
-      '<div class="field"><label>Token contract (CA)</label><input id="bnCa" placeholder="Paste token mint"></div>'+
+      '<div class="field"><label>Token contract (CA)</label><input id="bnCa" placeholder="Paste a Solana or Robinhood (0x…) CA"><span class="swhint" style="margin-top:5px;display:block">Solana or Robinhood — a 0x… address opens the Robinhood bundle automatically.</span></div>'+
       '<div class="field"><label>Pattern</label><select id="bnMode"><option value="buy">Buys only (varied + staggered)</option><option value="mix">Buy + sell mix (organic volume)</option></select></div>'+
       '<div class="field row2"><div><label>Min SOL / wallet</label><input id="bnMin" inputmode="decimal" value="0.05"></div><div><label>Max SOL / wallet</label><input id="bnMax" inputmode="decimal" value="0.15"></div></div>'+
       '<div class="field row2"><div><label>Stagger min (s)</label><input id="bnDmin" inputmode="numeric" value="1"></div><div><label>Stagger max (s)</label><input id="bnDmax" inputmode="numeric" value="4"></div></div>'+
@@ -3032,6 +3037,7 @@
     $("#bnGo").onclick=async()=>{
       if(staggerRunning){toast("A bundle/volume run is already going.",true);return;}
       const ca=$("#bnCa").value.trim();if(!ca){toast("Paste a token CA.",true);return;}
+      if(detectChain(ca)==="robinhood"){rhBundleModal(ca);return;}   // Robinhood coin → RH bundle (ETH, per-wallet)
       if(!(await ensureTradeReady()))return;const idxs=selectedWalletIdxs();if(!idxs.length){toast("Pick at least one wallet.",true);return;}
       const b=$("#bnGo");b.disabled=true;b.textContent="Running…";$("#stgLog").innerHTML="";
       const ladder=$("#bnLadder").checked;
@@ -3049,23 +3055,27 @@
   async function renderVolume(){
     setActiveView("v-volume");subbarTool("📈 Volume Bot");clearVolPoll();if(state.token)await refreshWallets();if(state.route!=="volume")return;
     $("#v-volume").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>📈 Volume Bot</h3><p class="sub">Runs in the <b>background</b> on a rolling pool of fresh <b>ghost wallets</b> — buys on one wallet, sells a <b>partial random amount</b> from a <b>different older</b> wallet, sells the rest a few trades later, then sweeps SOL back and discards it. Varied sizes, organic tape, nothing to clean up, no wallet cap.</p>'+
-      '<div class="field"><label>Token contract (CA)</label><input id="vlCa" placeholder="Paste token mint"></div>'+
+      '<div class="field"><label>Token contract (CA)</label><input id="vlCa" placeholder="Paste a Solana or Robinhood (0x…) CA"><span class="swhint" style="margin-top:5px;display:block">Solana or Robinhood — a 0x… address opens the Robinhood volume bot automatically.</span></div>'+
       '<div class="field"><label>Fund from wallet</label>'+walletSelectHtml("vlSrc")+'<span class="swhint" style="margin-top:5px;display:block">It spawns unlimited ghost wallets in the background and runs until this wallet\'s SOL is spent (or you Stop). Fund it with however much you want it to push.</span></div>'+
       '<div class="field row2"><div><label>Min buy (SOL)</label><input id="vlBuyMin" inputmode="decimal" value="0.012"></div><div><label>Max buy (SOL)</label><input id="vlBuyMax" inputmode="decimal" value="0.03"></div></div>'+
       '<div class="field row2"><div><label>Speed</label><select id="vlSpeed"><option value="low">Low — calm</option><option value="med" selected>Medium</option><option value="high">High — fast</option></select></div><div><label>Chart shape</label><select id="vlShape"><option value="steady">Steady</option><option value="waves">Waves</option><option value="organic" selected>Organic</option><option value="uptrend">Uptrend</option></select></div></div>'+
       '<div class="field"><label>Slippage (bps)</label><input id="vlSlip" inputmode="numeric" value="600"></div>'+
       '<label style="display:flex;align-items:center;gap:9px;font-size:12px;cursor:pointer;margin-bottom:12px"><input type="checkbox" id="vlLeave" checked> Leave a sliver of token in each wallet (pads holder count)</label>'+
       '<div class="bsrow"><button class="bigbuy" id="vlGo" style="flex:2">▶ Start volume bot</button><button class="wbtn ghost" id="vlStop" style="flex:1">Stop &amp; sweep</button></div>'+
-      '<div id="vlStatus" style="margin-top:14px"></div></div>'+
-      '<div class="wbox" style="grid-column:1/-1"><h3>⚡ Auto round-trip</h3><p class="sub">Check the wallets, hit go — it auto-buys a few of the most <b>liquid</b> coins on each and sells right back (tiny random amounts, only fees lost), then sweeps all the SOL back to your first checked wallet. No CA to pick.</p>'+
-        '<div id="artWallets" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">'+((state.wallets||[]).length?(state.wallets||[]).map(w=>'<label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer"><input type="checkbox" class="artWchk" value="'+w.index+'"> '+esc(w.label)+' · <span class="mut">'+esc(short(w.publicKey))+'</span></label>').join(''):'<span class="mut" style="font-size:12px">No wallets yet — make some in the Wallet tab.</span>')+'</div>'+
-        '<div class="field row2"><div><label>Flips per wallet</label><input id="artN" inputmode="numeric" value="3"></div><div><label>Max per buy (SOL)</label><input id="artMax" inputmode="decimal" value="0.05"></div></div>'+
-        '<button class="bigbuy" id="artGo" style="width:100%">⚡ Run flips + sweep back</button>'+
-        '<div id="artStatus" style="margin-top:12px"></div></div></div>';
+      '<div id="vlStatus" style="margin-top:14px"></div></div></div>';
     $("#vlGo").onclick=()=>startVolumeBot();
     $("#vlStop").onclick=()=>stopVolumeBot();
-    {const ag=$("#artGo");if(ag)ag.onclick=()=>runAutoRoundTrip();}
     pollVolumeBot();
+  }
+  // Auto round-trip UI (Solana) — lives in a Wallet fold now, not the Volume page. Same #art* ids so
+  // runAutoRoundTrip/pollAutoRoundTrip work unchanged.
+  function autoRoundTripFoldHtml(){
+    return '<details class="fold"><summary>⚡ Auto round-trip<span class="sub">flip liquid coins + sweep back</span><span class="chev">▾</span></summary><div class="foldbody">'+
+      '<p class="wnote" style="margin:0 0 10px">Check the wallets, hit go — it auto-buys a few of the most <b>liquid</b> Solana coins on each and sells right back (tiny random amounts, only fees lost), then sweeps the SOL to your first checked wallet. No CA to pick.</p>'+
+      '<div id="artWallets" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">'+((state.wallets||[]).length?(state.wallets||[]).map(w=>'<label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer"><input type="checkbox" class="artWchk" value="'+w.index+'"> '+esc(w.label)+' · <span class="mut">'+esc(short(w.publicKey))+'</span></label>').join(''):'<span class="mut" style="font-size:12px">No wallets yet.</span>')+'</div>'+
+      '<div class="field row2"><div><label>Flips per wallet</label><input id="artN" inputmode="numeric" value="3"></div><div><label>Max per buy (SOL)</label><input id="artMax" inputmode="decimal" value="0.05"></div></div>'+
+      '<button class="wbtn" id="artGo" style="width:100%">⚡ Run flips + sweep back</button>'+
+      '<div id="artStatus" style="margin-top:12px"></div></div></details>';
   }
   // Auto round-trip: check wallets → server auto-flips liquid coins on each + sweeps SOL back. Polls status.
   async function runAutoRoundTrip(){
@@ -3094,6 +3104,7 @@
   }
   async function startVolumeBot(){
     const ca=$("#vlCa").value.trim();if(!ca){toast("Paste a token CA.",true);return;}
+    if(detectChain(ca)==="robinhood"){rhVolumeModal(ca);return;}   // Robinhood coin → RH volume bot (per-wallet ETH)
     if(!(await ensureTradeReady()))return;
     const speed=$("#vlSpeed").value,shape=$("#vlShape").value;
     const delaySecs=speed==="high"?3:(speed==="low"?20:8);

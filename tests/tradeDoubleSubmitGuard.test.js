@@ -381,6 +381,21 @@ test("RH: auto-bundle-when-pool-opens + coin age everywhere + 75% sells", () => 
   }
 });
 
+test("unified tools: paste either chain's CA + auto round-trip moved to Wallet fold", () => {
+  for (const src of [ggSource, indexSource]) {
+    // One detector; Bundle + Volume route a 0x… CA into the Robinhood tools automatically.
+    assert.match(src, /function detectChain/);
+    assert.match(src, /detectChain\(ca\)==="robinhood"\)\{rhBundleModal\(ca\);return;\}/);
+    assert.match(src, /detectChain\(ca\)==="robinhood"\)\{rhVolumeModal\(ca\);return;\}/);
+    assert.match(src, /Paste a Solana or Robinhood \(0x…\) CA/);
+    // Auto round-trip is now a Wallet fold, not a Volume-page box.
+    assert.match(src, /function autoRoundTripFoldHtml/);
+    assert.match(src, /⚡ Auto round-trip<span class="sub">flip liquid coins/);
+    // The old Volume-page auto round-trip box is gone.
+    assert.doesNotMatch(src, /wbox[^>]*><h3>⚡ Auto round-trip/);
+  }
+});
+
 test("launch form survives navigation + warns on no dev buy", () => {
   for (const src of [ggSource, indexSource]) {
     // Whole-form snapshot/restore so leaving the Launch page and coming back keeps text + images.
