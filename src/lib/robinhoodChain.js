@@ -213,9 +213,11 @@ export async function rhRecentActiveTokens(maxPages = 2) {
 // is the honest, reliable detector for "I saw my coins then they vanished": it measures the RESULT.
 export async function rhWalletTokenAudit(evmAddress, rpcUrl) {
   const provider = rhProvider(rpcUrl);
+  const me = evmAddress.toLowerCase();
   const erc = new ethers.Contract("0x0000000000000000000000000000000000000000", ["function balanceOf(address) view returns (uint256)"], provider);
-  // Sum received/sent per token from the wallet's ERC-20 transfer log (few pages is plenty for a user).
-  const perToken = new Map(); // addrLc -> { symbol, decimals, recv, sent }
+  // Sum received/sent per token; keep the OUTGOING tx hashes so we can tell a real sale (you signed it)
+  // from a drain (someone else moved your tokens via a backdoor/allowance — the MAXI class).
+  const perToken = new Map(); // addrLc -> { address, symbol, decimals, recv, sent, outTx:[{hash,value}] }
   let path = `/addresses/${evmAddress}/token-transfers?type=ERC-20`, pages = 0;
   while (path && pages < 4) {
     const data = await bsJson(path).catch(() => ({}));
@@ -225,8 +227,8 @@ export async function rhWalletTokenAudit(evmAddress, rpcUrl) {
       const dec = Number((t.total || {}).decimals || tk.decimals || 18);
       const v = BigInt((t.total || {}).value || "0");
       const to = ((t.to || {}).hash || "").toLowerCase();
-      const row = perToken.get(addr) || { address: tk.address_hash || tk.address, symbol: tk.symbol || "", decimals: dec, recv: 0n, sent: 0n };
-      if (to === evmAddress.toLowerCase()) row.recv += v; else row.sent += v;
+      const row = perToken.get(addr) || { address: tk.address_hash || tk.address, symbol: tk.symbol || "", decimals: dec, recv: 0n, sent: 0n, outTx: [] };
+      if (to === me) row.recv += v; else { row.sent += v; const h = t.transaction_hash || t.tx_hash; if (h) row.outTx.push({ hash: h, value: v }); }
       perToken.set(addr, row);
     }
     const n = data.next_page_params;
@@ -235,16 +237,30 @@ export async function rhWalletTokenAudit(evmAddress, rpcUrl) {
   }
   const out = [];
   for (const [addr, row] of perToken) {
-    const netRecv = row.recv - row.sent; // tokens that should be sitting in the wallet if it never sold
-    if (netRecv <= 0n) continue;
+    if (row.recv <= 0n) continue;
     let bal = 0n;
     try { bal = await erc.attach(addr).balanceOf(evmAddress); } catch { continue; }
-    const recvUi = Number(netRecv) / 10 ** row.decimals;
+    const recvUi = Number(row.recv) / 10 ** row.decimals;      // GROSS received (what you bought in)
     const heldUi = Number(bal) / 10 ** row.decimals;
     const heldPct = recvUi > 0 ? heldUi / recvUi : 1;
-    // Drained = you never sold it away (sent≈0) yet you hold far less than you received.
-    const neverSold = row.sent === 0n;
-    out.push({ address: row.address, symbol: row.symbol, received: recvUi, held: heldUi, heldPct: Math.round(heldPct * 1000) / 1000, drained: neverSold && heldPct < 0.7, lostPct: Math.round((1 - heldPct) * 100) });
+    if (heldPct >= 0.7) continue;                               // you still hold most of it — nothing to flag
+    // You hold far less than you bought. Was it a real SALE (you signed the send) or a DRAIN (a bot moved
+    // it)? Check who signed the outgoing transfers — any outflow NOT signed by you = seized.
+    let seizedValue = 0n;
+    for (const o of row.outTx.slice(0, 5)) {
+      try {
+        const tx = await bsJson(`/transactions/${o.hash}`).catch(() => ({}));
+        const signer = ((tx.from || {}).hash || "").toLowerCase();
+        if (signer && signer !== me) seizedValue += o.value;   // someone else moved your tokens = theft
+      } catch { /* skip */ }
+    }
+    // What you ACTUALLY authorized to leave (your own signed sends). Anything missing beyond that —
+    // whether seized in a visible transfer (MAXI) or vanished with no transfer at all (BRODIE's invisible
+    // rebase) — is a drain. A genuine sale you signed leaves expected≈0 and is never flagged.
+    const authorizedOut = row.sent - seizedValue;
+    const expected = row.recv - authorizedOut;                 // what should still be in your wallet
+    const drained = expected > 0n && bal * 10n < expected * 7n; // you hold <70% of what you never sold
+    out.push({ address: row.address, symbol: row.symbol, received: recvUi, held: heldUi, heldPct: Math.round(heldPct * 1000) / 1000, drained, seized: seizedValue > 0n, lostPct: Math.round((1 - heldPct) * 100) });
   }
   return { ok: true, tokens: out };
 }
@@ -387,23 +403,27 @@ export async function rhHoneypotCheck(tokenAddress, rpcUrl) {
     }
   } catch { /* Blockscout hiccup — fall through to reconciliation */ }
 
-  // (2b) BUYER RECONCILIATION — sample RECENT BUYERS (wallets that got tokens FROM the pool/top holder),
-  // NOT the top holders. In a selective drainer the top holders are the scammer's own untouched wallets,
-  // so sampling them shows "clean" (false ok). Real buyers are the victims. Compare each buyer's tokens
-  // RECEIVED vs HELD now: systematic loss with no sale = the coin drains buyers → BLOCK.
-  if (!backdoor && sellable !== false) {
+  // (2b) BUYER RECONCILIATION — sample RECENT BUYERS (from the pool's transfers, since the per-token
+  // transfer endpoint is empty for these tokens) and check what they RECEIVED vs HOLD now. If the MAJORITY
+  // of recent buyers sit near zero without a real exit, the coin drains buyers → BLOCK. NOTE: this can only
+  // catch BROAD drainers. SELECTIVE drainers (MAXI — empties only some buyers) and relayed trades (a
+  // relayer signs, so tx-signer can't distinguish a sell from a seizure) defeat pre-buy detection here;
+  // the POST-buy drain alert (rhWalletTokenAudit) is the honest backstop for those.
+  if (!backdoorProven && sellable !== false) {
     let buyers = [];
     try {
-      const poolHash = ((holderList.find((h) => h.address && h.address.is_contract) || {}).address || {}).hash || "";
-      const tr = await bsJson(`/tokens/${tokenAddress}/transfers?type=ERC-20`).catch(() => ({}));
-      const seen = new Set();
-      for (const t of (tr.items || [])) {
-        const from = ((t.from || {}).hash || "").toLowerCase();
-        const to = ((t.to || {}).hash || "").toLowerCase();
-        if (poolHash && from !== poolHash.toLowerCase()) continue;     // buys come FROM the pool
-        if (!to || to === poolHash.toLowerCase() || /^0x0+$/.test(to)) continue;
-        if (!seen.has(to)) { seen.add(to); buyers.push(to); }
-        if (buyers.length >= 5) break;
+      const poolHash = (((holderList.find((h) => h.address && h.address.is_contract) || {}).address || {}).hash || "").toLowerCase();
+      if (poolHash) {
+        const pt = await bsJson(`/addresses/${poolHash}/token-transfers?type=ERC-20`).catch(() => ({}));
+        const seen = new Set();
+        for (const t of (pt.items || [])) {
+          if (((t.token || {}).address_hash || (t.token || {}).address || "").toLowerCase() !== tokenAddress.toLowerCase()) continue;
+          if (((t.from || {}).hash || "").toLowerCase() !== poolHash) continue;   // pool -> buyer = a buy
+          const to = ((t.to || {}).hash || "").toLowerCase();
+          if (!to || /^0x0+$/.test(to) || to === poolHash) continue;
+          if (!seen.has(to)) { seen.add(to); buyers.push(to); }
+          if (buyers.length >= 6) break;
+        }
       }
     } catch { /* skip */ }
     let checked = 0, drained = 0;
@@ -415,19 +435,18 @@ export async function rhHoneypotCheck(tokenAddress, rpcUrl) {
         ]);
         let recv = 0n, sent = 0n;
         for (const t of (tr.items || [])) {
-          const ta = ((t.token || {}).address_hash || (t.token || {}).address || "").toLowerCase();
-          if (ta !== tokenAddress.toLowerCase()) continue;
+          if (((t.token || {}).address_hash || (t.token || {}).address || "").toLowerCase() !== tokenAddress.toLowerCase()) continue;
           const v = BigInt((t.total || {}).value || "0");
           if (((t.to || {}).hash || "").toLowerCase() === addr.toLowerCase()) recv += v; else sent += v;
         }
         if (recv <= 0n || held == null) continue;
         checked += 1;
-        // Drained = never sold it out yet holds <65% of what came in.
-        if (sent === 0n && BigInt(held) * 100n < recv * 65n) drained += 1;
+        // Drained = never sold it out (sent≈0) yet holds far less than received (invisible balance cut).
+        if (sent === 0n && BigInt(held) * 100n < recv * 35n) drained += 1;
       } catch { /* skip this buyer */ }
     }
-    if (checked >= 2 && drained >= Math.ceil(checked / 2)) {
-      reasons.unshift("recent buyers are LOSING tokens with no sale — this coin drains buyers (rug/clawback)");
+    if (checked >= 3 && drained >= Math.ceil(checked * 2 / 3)) {
+      reasons.unshift("recent buyers are LOSING tokens with no sale — this coin drains buyers (rug)");
     }
   }
 

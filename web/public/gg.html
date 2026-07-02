@@ -424,6 +424,9 @@
     .board[data-mode="rh"] .col .colhead{display:none}
     .tbl td.hideMb,.tbl th.hideMb{display:none}
     .botnav{display:flex;position:fixed;left:0;right:0;bottom:0;height:var(--botnav);z-index:60;background:rgba(7,11,8,.98);border-top:1px solid var(--border);padding-bottom:env(safe-area-inset-bottom)}
+    /* Chart/trade view: hide the bottom bar + reclaim its space so the chart isn't cramped. */
+    body.chartmode .botnav{display:none}
+    body.chartmode main{padding-bottom:0}
     .botnav button{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--muted);font-size:10px;font-weight:700}
     .botnav button .i{font-size:18px;line-height:1}
     .botnav button.on{color:var(--green)}
@@ -1008,6 +1011,8 @@
   function setNav(route){
     document.querySelectorAll("#nav a[data-route]").forEach(a=>a.classList.toggle("active",a.dataset.route===route));
     document.querySelectorAll("#botnav button[data-route]").forEach(b=>b.classList.toggle("on",b.dataset.route===route));
+    // Bottom tools bar sticks on EVERY page except the chart/trade view, where it would cramp the chart.
+    document.body.classList.toggle("chartmode",route==="trade"||route==="rhtrade");
   }
   function render(){
     const {route,arg}=parseHash();state.route=route;
@@ -2679,12 +2684,26 @@
   // 🪶 Robinhood Chain bags — the RH side of Positions: what the active wallet holds over there, live
   // USD value from DexScreener, and the SAME sell controls as Solana positions. Selling lives HERE
   // (and in the coin modal once you hold) — never offered on coins you don't own.
+  // A drained bag holds ~0, so it never shows in the held-bags table — which reads as "my position
+  // vanished." Surface it explicitly: fetch the drain audit and list any coin that took your tokens as a
+  // clear "rugged" row, so you always know WHERE a bought coin went instead of it silently disappearing.
+  function rhDrainedRowsHtml(audit){
+    const bad=((audit&&audit.tokens)||[]).filter(t=>t.drained);
+    if(!bad.length)return "";
+    return '<div class="poshead" style="margin-top:14px"><b style="font-size:13px;color:var(--red,#ff6b6b)">🚩 Rugged bags</b><span class="mut" style="font-size:10px">coins that drained your tokens — not in your balance</span></div>'+
+      '<div class="pcard">'+bad.map(t=>'<div style="display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--border)"><span style="flex:0 0 auto">🚩</span><div style="flex:1;min-width:0"><b style="font-size:12px">'+esc(t.symbol||short(t.address))+'</b><div class="mut" style="font-size:10px">bought '+Number(t.received).toLocaleString()+' · hold '+Number(t.held).toLocaleString()+' · lost '+t.lostPct+'% with no sale</div></div><a class="mut" style="font-size:11px;flex:0 0 auto" href="https://robinhoodchain.blockscout.com/token/'+esc(t.address)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">tx↗</a></div>').join("")+'</div>';
+  }
   async function loadRhPositions(){
     const wrap=$("#rhPosWrap");if(!wrap)return;
-    const {ok,d}=await api("/api/web/rh/wallet?walletIndex="+encodeURIComponent(String(state.activeWallet||1))).catch(()=>({}));
+    const idx=String(state.activeWallet||1);
+    const [walRes,audRes]=await Promise.all([
+      api("/api/web/rh/wallet?walletIndex="+encodeURIComponent(idx)).catch(()=>({})),
+      api("/api/web/rh/holdings-audit?walletIndex="+encodeURIComponent(idx)).catch(()=>({}))
+    ]);
+    const {ok,d}=walRes; const drainedHtml=rhDrainedRowsHtml(audRes&&audRes.d);
     const w=$("#rhPosWrap");if(!w)return;
     const toks=((ok&&d&&d.ok&&d.tokens)||[]).filter(t=>Number(t.uiAmount||0)>0);
-    if(!toks.length){w.innerHTML="";return;}
+    if(!toks.length){w.innerHTML=drainedHtml;return;}   // still show rugged bags even with no live holdings
     // Seed the modal cache so tapping a bag opens with name/symbol/pfp even if it never hit the board.
     state.rhRows=state.rhRows||{};
     toks.forEach(t=>{const k=String(t.address).toLowerCase();if(!state.rhRows[k])state.rhRows[k]={address:t.address,symbol:t.symbol,name:t.name,imageUrl:t.iconUrl||""};});
@@ -2700,7 +2719,7 @@
           '<td class="mut">'+Number(t.uiAmount||0).toLocaleString(undefined,{maximumFractionDigits:2})+'</td>'+
           '<td>'+(val!=null?fmtUsd(val):"—")+'</td>'+
           '<td><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap"><button class="buybtn sm" title="Auto-sell at a target / floor" onclick="event.stopPropagation();GG.rhGuardModal(\''+esc(t.address)+'\')">🎯</button>'+[25,50,75,100].map(p=>'<button class="buybtn sm"'+(p===100?' style="background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606"':'')+' onclick="event.stopPropagation();GG.rhSellPos(\''+esc(t.address)+'\','+p+')">'+(p===100?'All':p+'%')+'</button>').join("")+'</div></td></tr>';
-      }).join("")+'</tbody></table></div>';
+      }).join("")+'</tbody></table></div>'+drainedHtml;
   }
   // Some held coins arrive without a logo from the backend metadata — fill the pfp from DexScreener
   // (over the user's IP) so the positions list always shows the token's picture, then repaint once.

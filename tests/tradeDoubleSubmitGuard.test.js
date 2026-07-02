@@ -456,13 +456,25 @@ test("RH drain audit: flags coins that took your tokens with no sale (received >
   const rhLib = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
   const audit = functionBody(rhLib, "rhWalletTokenAudit");
   assert.match(audit, /balanceOf/);
-  assert.match(audit, /neverSold/);                     // drained only if you didn't sell it away
-  assert.match(audit, /drained:/);
+  // Catches BOTH drain vectors: a VISIBLE seizure (a tx you didn't sign — MAXI) and an INVISIBLE balance
+  // cut (no transfer — BRODIE). A real sale you signed leaves expected≈0 and is never flagged.
+  assert.match(audit, /authorizedOut/);
+  assert.match(audit, /seizedValue/);
+  assert.match(audit, /const drained =/);
   assert.match(serverSource, /pathname === "\/api\/web\/rh\/holdings-audit"/);
   for (const src of [ggSource, indexSource]) {
     assert.match(src, /function loadRhDrainAudit/);
     assert.match(src, /rug \/ clawback/);
     assert.match(src, /\/api\/web\/rh\/holdings-audit/);
+    // A drained bag reads 0 in the balance table — Positions surfaces it as a "rugged" row so a bought
+    // coin never silently vanishes ("why isn't it in positions?").
+    assert.match(src, /function rhDrainedRowsHtml/);
+    assert.match(src, /Rugged bags/);
+  }
+  // Bottom tools bar sticks on every page except the chart/trade view (where it would cramp the chart).
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /classList\.toggle\("chartmode"/);
+    assert.match(src, /body\.chartmode \.botnav\{display:none\}/);
   }
 });
 
