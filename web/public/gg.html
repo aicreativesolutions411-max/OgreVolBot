@@ -1057,10 +1057,10 @@
   function subbarTrenches(){
     const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Trenches";sb.appendChild(h);
     const tabs=el("div","tabs");
-    [["board","Board"],["picks","🐳 Top Wallets"],["rh","🪶 Robinhood"]].forEach(([id,lab])=>{const b=el("button");b.textContent=lab;b.className=id===state.trenchTab?"on":"";b.onclick=()=>{state.trenchTab=id;render();};tabs.appendChild(b);});
+    [["board","Board"],["picks","🐳 Top Wallets"],["rh","🪶 Robinhood"],["slimehood","🐸 SlimeHood"]].forEach(([id,lab])=>{const b=el("button");b.textContent=lab;b.className=id===state.trenchTab?"on":"";b.onclick=()=>{state.trenchTab=id;render();};tabs.appendChild(b);});
     sb.appendChild(tabs);
     const n=el("div","mut");n.style.cssText="margin-left:auto;font-size:11px";
-    n.textContent=state.trenchTab==="picks"?"What the top wallets &amp; KOLs are buying — newest first.":state.trenchTab==="rh"?"Coins on Robinhood's brand-new chain — straight from the chain itself.":"Fresh → about to migrate → graduated.";
+    n.textContent=state.trenchTab==="picks"?"What the top wallets &amp; KOLs are buying — newest first.":state.trenchTab==="rh"?"Coins on Robinhood's brand-new chain — straight from the chain itself.":state.trenchTab==="slimehood"?"Coins launched through SlimeWire on Robinhood Chain — ✅ our no-rug contract.":"Fresh → about to migrate → graduated.";
     sb.appendChild(n);
   }
   function subbarPortfolio(){const sb=$("#subbar");sb.innerHTML="";const h=el("h1");h.textContent="Portfolio";sb.appendChild(h);const tabs=el("div","tabs");[["positions","Positions"],["cards","History & PnL"]].forEach(([id,lab])=>{const b=el("button");b.textContent=lab;b.className=id===state.portfolioTab?"on":"";b.onclick=()=>{state.portfolioTab=id;renderPortfolio();};tabs.appendChild(b);});sb.appendChild(tabs);}
@@ -1297,6 +1297,7 @@
     const wrap=$("#boardWrap");
     if(state.trenchTab==="picks")return renderSlimePicks(wrap);
     if(state.trenchTab==="rh")return renderRhBoard(wrap);
+    if(state.trenchTab==="slimehood")return renderSlimeHood(wrap);
     // Board mode — rebuild the 3-column layout if we're arriving fresh or switching back from Picks.
     if(wrap.dataset.mode!=="board"||!wrap.children.length){
       wrap.dataset.mode="board";
@@ -1381,6 +1382,29 @@
     const chk=$("#rhSaferChk");if(chk)chk.onchange=()=>{localStorage.setItem("ggRhSaferOnly",chk.checked?"1":"0");rhScanBoard(sr.concat(tr,nr));};
     rhScanBoard(sr.concat(tr,nr));
     state.pollT=setTimeout(()=>{if(state.route==="trenches"&&state.trenchTab==="rh")renderRhBoard(wrap);},30000);
+  }
+  // 🐸 SlimeHood — every coin launched THROUGH SlimeWire on Robinhood Chain (from our launch store, so a
+  // brand-new one shows instantly). These run our verified no-rug contract → ✅, and are the ONLY RH coins
+  // we can guarantee. Same one-tap trade as everything else.
+  async function renderSlimeHood(wrap){
+    wrap.dataset.mode="slimehood";wrap.style.display="block";
+    wrap.innerHTML='<div style="padding:12px 14px;max-width:760px;margin:0 auto"><div class="feebox" style="margin:0 0 12px">🐸 <b>SlimeHood</b> — coins launched through SlimeWire on <b>Robinhood Chain</b>. Every one runs our fixed-supply, no-owner contract, so it\'s <b>✅ Verified safe</b> — the only RH coins that literally cannot rug. <button class="wbtn" style="margin-top:8px" onclick="GG.launchRh()">🚀 Launch yours on Robinhood</button></div><div id="shList"><div class="loading"><span class="spin"></span></div></div></div>';
+    const {ok,d}=await api("/api/web/rh/pairs?category=slimewire").catch(()=>({}));
+    if(state.route!=="trenches"||state.trenchTab!=="slimehood")return;
+    const rows=(ok&&d&&d.rows)||[];
+    state.rhRows=state.rhRows||{};rows.forEach(r=>{state.rhRows[r.address.toLowerCase()]=r;});
+    const ago=(iso)=>{const s=(Date.now()-Date.parse(iso||0))/1000;return !isFinite(s)?"":s<90?Math.round(s)+"s":s<5400?Math.round(s/60)+"m":s<129600?Math.round(s/3600)+"h":Math.round(s/86400)+"d";};
+    const list=$("#shList");if(!list)return;
+    if(!rows.length){list.innerHTML='<div class="msg" style="font-size:12px;padding:8px 2px">No SlimeWire launches on Robinhood yet — be the first. Your coin lands here the moment it deploys, ✅ Verified.</div>';return;}
+    const row=(r)=>{const stats=[r.marketCapUsd?('MC '+fmtUsd(r.marketCapUsd)):'',r.holders?(r.holders+' holders'):'',r.creatorFeeBps?('you earn '+(r.creatorFeeBps/100)+'%'):''].filter(Boolean).join(' · ')||'just launched — no pool yet';
+      const soc=[];if(r.x)soc.push('<a href="'+esc(r.x)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="X">𝕏</a>');if(r.telegram)soc.push('<a href="'+esc(r.telegram)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Telegram">✈</a>');if(r.website)soc.push('<a href="'+esc(r.website)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Website">🌐</a>');soc.push('<a onclick="event.stopPropagation();GG.copy(\''+esc(r.address)+'\')" title="Copy contract address">⧉</a>');
+      return '<div class="rhrow" style="display:flex;align-items:center;gap:8px;padding:9px 10px;border-bottom:1px solid var(--border);cursor:pointer;overflow:hidden" onclick="GG.rhTrade(\''+esc(r.address)+'\')">'+rhAvatar(r,30)+
+        '<div style="min-width:0;flex:1;overflow:hidden"><div style="display:flex;gap:6px;align-items:center;min-width:0"><b style="font-size:12.5px;flex:0 0 auto">'+esc(r.symbol||"?")+'</b>'+(r.createdAt?'<span class="mut" style="font-size:9px;flex:0 0 auto">⏱'+ago(r.createdAt)+'</span>':'')+'<span class="mut" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.name||"")+'</span><span title="Verified — our no-rug contract" style="font-size:11px;flex:0 0 auto">✅</span></div>'+
+        '<div style="display:flex;gap:8px;align-items:center;min-width:0;margin-top:2px"><span class="mut" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(stats)+'</span><span class="rhsoc" style="display:inline-flex;gap:9px;flex:0 0 auto">'+soc.join("")+'</span></div></div>'+
+        '<button class="buybtn sm" style="flex:0 0 auto" onclick="event.stopPropagation();GG.rhQuick(\''+esc(r.address)+'\')">⚡</button></div>';};
+    list.innerHTML='<div class="pcard" style="padding:0">'+rows.map(row).join("")+'</div>';
+    rhEnrichRows(rows).then((changed)=>{if(changed&&state.route==="trenches"&&state.trenchTab==="slimehood"){const l=$("#shList");if(l)l.innerHTML='<div class="pcard" style="padding:0">'+rows.map(row).join("")+'</div>';}});
+    state.pollT=setTimeout(()=>{if(state.route==="trenches"&&state.trenchTab==="slimehood")renderSlimeHood(wrap);},30000);
   }
   // Default ON — this chain is scam-heavy, so hide ⚠️/⛔ coins unless the user explicitly opts to see all.
   function rhSaferOnly(){return localStorage.getItem("ggRhSaferOnly")!=="0";}
@@ -3345,8 +3369,22 @@
   // the token contract ourselves (fixed supply, no owner functions = contract can't rug). Each wallet
   // has a derived Robinhood address; this panel shows it + its ETH so the user can fund before launching.
   async function refreshRhSetup(){
+    const isRh=(state.launchRail||"pump")==="robinhood";
+    // The "Dev Buy & Bundle" tab is built for Solana (SOL dev-buy). On Robinhood it's ETH and works
+    // differently — swap the SOL fields for a clear ETH explainer so nothing says SOL under Robinhood.
+    const devRh=$("#lcDevRhNote"),devSol=$("#lcDevSol");
+    if(devRh&&devSol){
+      if(isRh){devSol.style.display="none";devRh.style.display="";
+        devRh.innerHTML='<div class="feebox">🪶 <b>On Robinhood, dev-buy &amp; bundle are in ETH — and work differently</b>'+
+          '<div class="ln">• <b>You already own 100%.</b> The whole token supply mints to your wallet at launch — no dev-buy needed to hold it.</div>'+
+          '<div class="ln">• <b>No pool at the launch instant</b>, so there\'s nothing to buy the moment it deploys (that\'s why there\'s no SOL dev-buy here).</div>'+
+          '<div class="ln">• <b>Bundle = 📦 Auto-bundle (ETH).</b> After you launch, the coin\'s page shows <b>“Auto-bundle when it gets a pool”</b> — your chosen wallets buy in <b>ETH</b> the moment liquidity opens. Fund those wallets with ETH first.</div>'+
+          '<div class="ln">• <b>Creator fees:</b> tick <b>“💰 Earn creator fees”</b> on the 🪙 Coin tab — you earn <b>1% of every SlimeWire trade</b>, paid in ETH to your wallet.</div>'+
+        '</div>';}
+      else{devRh.style.display="none";devSol.style.display="";}
+    }
     const el=$("#lcRhSetup");if(!el)return;
-    if((state.launchRail||"pump")!=="robinhood"){el.innerHTML="";return;}
+    if(!isRh){el.innerHTML="";return;}
     const dw=$("#lcDevWallet");const devIdx=String(dw&&dw.value?dw.value:state.activeWallet);
     el.innerHTML='<span class="mut" style="font-size:11px">Loading your Robinhood Chain wallet…</span>';
     const {ok,d}=await api("/api/web/rh/wallet?walletIndex="+encodeURIComponent(devIdx)).catch(()=>({}));
@@ -3409,6 +3447,8 @@
         '<div class="field"><label>Telegram</label><input id="lcTg" placeholder="https://t.me/…"></div>'+
       '</div>'+
       '<div data-lpanel="dev"'+show("dev")+'>'+
+        '<div id="lcDevRhNote" style="display:none"></div>'+
+        '<div id="lcDevSol">'+
         '<div class="feebox">💰 <b>Fees &amp; ownership — the simple version</b>'+
           '<div class="ln">• <b>You own it.</b> Your wallet is the coin\'s creator (the admin).</div>'+
           '<div class="ln">• <b>You earn on every rail.</b> pump.fun, SlimeWire &amp; Meteora all pay the coin\'s trading fees to your wallet — and on the SlimeWire curve you keep <b>100%</b> of the creator fees.</div>'+
@@ -3424,6 +3464,7 @@
         '<div class="field row2" id="lcBundleAmtWrap" style="display:none"><div><label>Bundle wallets</label><input id="lcBundleCount" inputmode="numeric" placeholder="all"></div><div><label>Buy per wallet (SOL)</label><input id="lcBundleAmt" inputmode="decimal" placeholder="0.05"></div></div>'+
         '<div class="lcnote" id="lcBundleNote" style="display:none">📦 These are first-block <b>entry</b> buys. <b>Take-profit / stop-loss</b> (laddered), exact wallet selection &amp; saved bundle <b>presets</b> live in the <b>📦 Bundle tool</b> — set them there after launch (presets are saved under <b>Wallet → Presets</b>).</div>'+
         '<div class="field"><label>Slippage (bps)</label><input id="lcSlip" inputmode="numeric" value="300"></div>'+
+        '</div>'+
       '</div>'+
       '<div data-lpanel="chat"'+show("chat")+'>'+
         '<div class="field"><label>Coin address (CA)</label><input id="lcChatCa" placeholder="Paste a coin CA, or launch one first" value="'+esc(mint)+'"></div>'+

@@ -506,6 +506,15 @@ test("RH feed: full coverage (holders + activity sources) + Safe tab of proven-s
     assert.match(src, /class="rhsoc"/);    // copy + socials strip on rows
     assert.match(src, /Copy contract address/);
   }
+  // SlimeHood tab: a board of coins launched THROUGH SlimeWire on Robinhood (from the launch store).
+  assert.match(functionBody(serverSource, "webRhPairs"), /cat === "slimewire"/);
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /function renderSlimeHood/);
+    assert.match(src, /category=slimewire/);
+    assert.match(src, /SlimeHood/);
+    // Robinhood dev/bundle tab is ETH-aware (no SOL fields under the Robinhood rail).
+    assert.match(src, /lcDevRhNote/);
+  }
 });
 
 test("RH board: per-coin safety badge + 'Safer only' filter + renounce signal", () => {

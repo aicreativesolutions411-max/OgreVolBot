@@ -32729,6 +32729,34 @@ async function rhLaunchMetaByAddress() {
 
 async function webRhPairs(category = "trending") {
   const cat = String(category || "trending").toLowerCase();
+  // SLIMEHOOD — coins launched THROUGH SlimeWire on Robinhood Chain (from our launch store, so even a
+  // brand-new one with zero holders shows immediately). These run our verified no-rug contract → ✅.
+  if (cat === "slimewire") {
+    const store = await readPumpLaunchAttempts().catch(() => ({ attempts: [] }));
+    const seen = new Set(); let rows = [];
+    for (const a of (store.attempts || [])) {
+      if (String(a.rail || "") !== "robinhood") continue;
+      const addr = String(a.mintPublicKey || ""); if (!addr || seen.has(addr.toLowerCase())) continue;
+      seen.add(addr.toLowerCase());
+      rows.push({
+        address: addr, name: a.tokenName || "", symbol: a.symbol || "", createdAt: a.createdAt || "",
+        holders: null, marketCapUsd: null, volume24hUsd: null, priceUsd: null, totalSupplyUi: 0,
+        slimewire: true, description: a.description || "", website: a.website || "", x: a.x || "", telegram: a.telegram || "",
+        imageUrl: a.rhImageFile ? `/api/web/rh/token-image/${addr}` : "",
+        creatorFeeBps: Number(a.rhCreatorFeeBps || 0), explorer: rhExplorerToken(addr),
+      });
+    }
+    rows.sort((x, y) => Date.parse(y.createdAt || 0) - Date.parse(x.createdAt || 0));
+    const feed = await rhFeedTokens().catch(() => []);
+    const byAddr = new Map(feed.map((t) => [t.address.toLowerCase(), t]));
+    for (const r of rows) {
+      const t = byAddr.get(r.address.toLowerCase());
+      if (t) { r.holders = t.holders; r.marketCapUsd = t.marketCapUsd; r.volume24hUsd = t.volume24hUsd; r.priceUsd = t.priceUsd; r.totalSupplyUi = t.totalSupplyUi; }
+      const s = rhSafetyFeedCache.get(r.address.toLowerCase()); if (s) r.safety = s.verdict;
+    }
+    scheduleRhSafetyFill(rows);
+    return rows.slice(0, 60);
+  }
   const [tokens, meta] = await Promise.all([rhFeedTokens(), rhLaunchMetaByAddress()]);
   let rows = tokens.map((t) => {
     const m = meta.get(t.address.toLowerCase());
