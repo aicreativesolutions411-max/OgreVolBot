@@ -141,6 +141,17 @@ const OGRE_AI_SAFETY_SCAN_BUDGET_MS = 1_700;
 const OGRE_AI_SOURCE_SOFT_TIMEOUT_MS = 1_500;
 
 const CONFIG = loadConfig();
+
+// SAFETY NET: this is a live money service — a stray rejection from a background feed sweep (e.g. a
+// Blockscout hiccup during the RH universe/scam scans) must NEVER crash it. Node's default is to exit on
+// an unhandled rejection; here we log and keep running. Trading paths still handle their own errors.
+process.on("unhandledRejection", (reason) => {
+  try { console.error("[unhandledRejection]", (reason && (reason.stack || reason.message)) || reason); } catch { /* noop */ }
+});
+process.on("uncaughtException", (err) => {
+  try { console.error("[uncaughtException]", (err && (err.stack || err.message)) || err); } catch { /* noop */ }
+});
+
 // Public channel alerts (ship dark: TG_CHANNEL_ALERTS_ENABLED=false by default).
 // Callers must never pass user ids or wallet addresses - channel posts are anonymous.
 const tgChannel = createTelegramChannelBridge({
@@ -32583,6 +32594,7 @@ function scheduleRhUniverse() {
   // (firing both at once rate-limited Blockscout and briefly emptied the board right after a deploy).
   setTimeout(async () => {
     try { const items = await rhListTokens(45); if (items.length) rhUniverseCache = { at: Date.now(), items }; }
+    catch { /* Blockscout hiccup — keep the stale cache, never throw (would crash the process) */ }
     finally { rhUniverseBusy = false; }
   }, 5_000);
 }
@@ -32597,6 +32609,7 @@ function scheduleRhScamSet() {
   // Staggered after the universe sweep so the two big background jobs don't saturate Blockscout together.
   setTimeout(async () => {
     try { const r = await rhScamTokenSet(); if (r && r.tokens) rhScamCache = { at: Date.now(), set: new Set(r.tokens.map((a) => a.toLowerCase())) }; }
+    catch { /* Blockscout hiccup — keep the stale set, never throw */ }
     finally { rhScamBusy = false; }
   }, 12_000);
 }
@@ -32659,7 +32672,7 @@ function scheduleRhSafetyFill(rows, want = 12) {
         const s = await rhHoneypotCheck(r.address).catch(() => null);
         if (s) rhSafetyFeedCache.set(r.address.toLowerCase(), { verdict: s.verdict, at: Date.now() });
       }
-    } finally { rhSafetyFillBusy = false; }
+    } catch { /* never throw from a background timer */ } finally { rhSafetyFillBusy = false; }
   }, 50);
 }
 
