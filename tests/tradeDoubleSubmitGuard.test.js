@@ -281,6 +281,21 @@ test("RH trading fees: same bps as Solana, skimmed in ETH, auto-converted to SOL
   assert.match(functionBody(rhLib, "rhSweepFeesToSol"), /gasReserveEth/); // never strands the fee account
 });
 
+test("RH board acts like the Solana boards: live MC/liq data, chart, quick-buy, hold-gated sell, positions", () => {
+  for (const src of [ggSource, indexSource]) {
+    // DexScreener enrichment (indexes Robinhood Chain) fills MC/liq/vol/price/pfp/socials on RH rows.
+    assert.match(src, /function rhEnrichRows/);
+    assert.match(src, /o\.pair/);                                    // pair address captured -> chart
+    assert.match(src, /dexscreener\.com\/robinhood\//);              // chart embed in the trade modal
+    assert.match(src, /GG\.rhQuick\(/);                              // ⚡ quick-buy on rows
+    assert.match(src, /rhTmSellSec/);                                // sell section exists...
+    assert.match(src, /display:none"><div style="font-size:11px[^"]*">Sell/); // ...hidden until holding
+    assert.match(src, /Robinhood Chain bags/);                       // RH positions section in Portfolio
+    assert.match(src, /GG\.rhSellPos/);
+    assert.match(src, /function loadRhPositions/);
+  }
+});
+
 test("launch form survives navigation + warns on no dev buy", () => {
   for (const src of [ggSource, indexSource]) {
     // Whole-form snapshot/restore so leaving the Launch page and coming back keeps text + images.
