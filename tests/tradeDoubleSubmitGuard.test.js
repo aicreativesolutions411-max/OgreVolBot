@@ -476,6 +476,28 @@ test("RH verified-safe tier: exact-bytecode match to our no-rug contract = the o
   }
 });
 
+test("RH creator fee: pump-style venue-side, opt-in, paid to creator, NOT baked into the token", () => {
+  // Launch stores the opt-in + recipient (the deployer wallet); it is NOT put in the token contract.
+  const launch = functionBody(serverSource, "webLaunchRhCoinCore");
+  assert.match(launch, /creatorFeeEnabled/);
+  assert.match(launch, /rhCreatorFeeRecipient: creatorFeeEnabled \? result\.deployer/);
+  assert.match(launch, /rhCreatorFeeBps: creatorFeeEnabled \? CONFIG\.rhCreatorFeeBps/);
+  // Trade pays the creator their % in ETH at the venue (best-effort), separate from the platform fee.
+  const trade = functionBody(serverSource, "webRhTradeCore");
+  assert.match(trade, /creatorFeeBps/);
+  assert.match(trade, /rhTransferEth\(keypair\.secretKey, cRecipient/);
+  // The token contract itself carries NO fee logic (keeps ✅ Verified): _transfer moves the FULL value,
+  // no deduction/skim in the transfer path.
+  const sol = fs.readFileSync(new URL("../contracts/SlimeTokenRH.sol", import.meta.url), "utf8");
+  assert.match(sol, /balanceOf\[to\] \+= value;/);          // recipient gets the full amount, untaxed
+  assert.doesNotMatch(sol, /feeBps|_fee|taxRate|reflectionRate/);
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /lcRhCreatorFee/);
+    assert.match(src, /Earn creator fees/);
+    assert.match(src, /creatorFeeEnabled:/);
+  }
+});
+
 test("launch form survives navigation + warns on no dev buy", () => {
   for (const src of [ggSource, indexSource]) {
     // Whole-form snapshot/restore so leaving the Launch page and coming back keeps text + images.

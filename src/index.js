@@ -4164,6 +4164,10 @@ function loadConfig() {
   const rhChainRpcUrl = (process.env.RH_CHAIN_RPC_URL || RH_DEFAULT_RPC).trim();
   // RH trading fees accrue in ETH and auto-convert to SOL at FEE_WALLET once the pot clears this.
   const rhFeeSweepMinEth = Math.max(0.0005, Number.parseFloat(process.env.RH_FEE_SWEEP_MIN_ETH || "0.002") || 0.002);
+  // RH creator fee: a launcher can opt in (checkbox) to earn this % of every trade of their coin THAT
+  // GOES THROUGH SLIMEWIRE — collected at the venue (like pump.fun's fee), paid to their wallet, and
+  // NEVER baked into the token (so the coin stays ✅ Verified-safe). 100 bps = 1%, matching pump's fee.
+  const rhCreatorFeeBps = Math.max(0, Math.min(300, Number.parseInt(process.env.RH_CREATOR_FEE_BPS || "100", 10) || 100));
   const pumpLaunchJitoUrl = (process.env.PUMP_LAUNCH_JITO_URL || "https://mainnet.block-engine.jito.wtf/api/v1/bundles").trim();
   const pumpLaunchJitoTipSol = Math.max(0.00001, Number.parseFloat(process.env.PUMP_LAUNCH_JITO_TIP_SOL || "0.001") || 0.001);
   // TRADE JITO — route pump buys/sells through a Jito bundle (swap tx + a tiny tip tx) for FAST,
@@ -4566,6 +4570,7 @@ function loadConfig() {
     autopilotEnabled,
     rhChainRpcUrl,
     rhFeeSweepMinEth,
+    rhCreatorFeeBps,
     pumpLaunchJitoUrl,
     pumpLaunchJitoTipSol,
     tradeJitoBundle,
@@ -32642,6 +32647,8 @@ async function rhLaunchMetaByAddress() {
       x: a.x || "",
       telegram: a.telegram || "",
       hasImage: Boolean(a.rhImageFile),
+      creatorFeeBps: Number(a.rhCreatorFeeBps || 0),
+      creatorFeeRecipient: a.rhCreatorFeeRecipient || "",
       slimewire: true
     });
   }
@@ -32779,11 +32786,27 @@ async function webRhTradeCore(userId, body = {}) {
     }
   }
   scheduleRhFeeSweep(); // fire-and-forget: converts the pot to SOL at the fee wallet when big enough
+  // Creator fee (pump-style, venue-side): if this coin's launcher opted in, pay them their % of this
+  // trade in ETH — straight to their wallet, on top of the platform fee. Best-effort, never blocks.
+  let creatorFeeTxHash = "";
+  try {
+    const meta = (await rhLaunchMetaByAddress().catch(() => new Map())).get(tokenAddress.toLowerCase());
+    const cBps = BigInt(Math.max(0, (meta && meta.creatorFeeBps) || 0));
+    const cRecipient = meta && meta.creatorFeeRecipient;
+    if (cBps > 0n && /^0x[0-9a-fA-F]{40}$/.test(String(cRecipient || "")) && String(cRecipient).toLowerCase() !== evmAddress.toLowerCase()) {
+      let cWei = 0n;
+      if (side === "buy") cWei = (feeBps > 0n ? (amountRaw + feeWei) : amountRaw) * cBps / 10_000n; // % of gross ETH in
+      else { const outEth = Number(quote.outFormatted || 0); if (outEth > 0) cWei = (BigInt(Math.round(outEth * 1e9)) * 10n ** 9n * cBps) / 10_000n; }
+      if (cWei > 0n) creatorFeeTxHash = await rhTransferEth(keypair.secretKey, cRecipient, cWei, CONFIG.rhChainRpcUrl);
+    }
+  } catch (error) {
+    await audit("web_rh_creator_fee_failed", { userId, tokenAddress, error: friendlyError(error) }).catch(() => {});
+  }
   const [ethBal, tokenBal] = await Promise.all([
     rhEthBalance(evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ eth: "0" })),
     rhErc20Balance(tokenAddress, evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ uiAmount: 0 }))
   ]);
-  await audit("web_rh_trade", { userId, wallet: wallet.publicKey, evmAddress, side, tokenAddress, txHashes: hashes, out: quote.outFormatted, impact: quote.impactPercent, feeWei: feeWei.toString(), feeTxHash });
+  await audit("web_rh_trade", { userId, wallet: wallet.publicKey, evmAddress, side, tokenAddress, txHashes: hashes, out: quote.outFormatted, impact: quote.impactPercent, feeWei: feeWei.toString(), feeTxHash, creatorFeeTxHash });
   return {
     ok: true,
     side,
@@ -33162,6 +33185,10 @@ async function webLaunchRhCoinCore(userId, body = {}) {
   // collected keyed by token address — the RH feed + coin rows read it back (like wallets/DEXes keep
   // their own address->logo registries on other chains).
   const hasImage = await saveRhTokenImage(result.tokenAddress, body.imageDataUrl).catch(() => false);
+  // Creator-fee opt-in (pump-style, venue-side): if checked, the creator earns rhCreatorFeeBps of every
+  // trade of this coin THROUGH SLIMEWIRE, paid in ETH to the dev wallet's EVM address. Stored on the coin,
+  // NOT baked into the token — so the coin stays ✅ Verified. Recipient = deployer (the dev wallet).
+  const creatorFeeEnabled = parseBoolean(body.creatorFeeEnabled);
   await upsertPumpLaunchAttempt({
     id: attemptId,
     userId,
@@ -33177,11 +33204,13 @@ async function webLaunchRhCoinCore(userId, body = {}) {
     rhImageFile: hasImage,
     devWalletPublicKey: wallet.publicKey,
     rhDeployer: result.deployer,
+    rhCreatorFeeBps: creatorFeeEnabled ? CONFIG.rhCreatorFeeBps : 0,
+    rhCreatorFeeRecipient: creatorFeeEnabled ? result.deployer : "",
     txSignature: result.txHash,
     createdAt: new Date().toISOString()
   });
-  await audit("web_rh_launch", { userId, wallet: wallet.publicKey, token: result.tokenAddress, tx: result.txHash, supply: result.supplyTokens, gasEth: result.gasCostEth });
-  return { ok: true, ...result, chainId: RH_CHAIN_ID, explorerToken: rhExplorerToken(result.tokenAddress) };
+  await audit("web_rh_launch", { userId, wallet: wallet.publicKey, token: result.tokenAddress, tx: result.txHash, supply: result.supplyTokens, gasEth: result.gasCostEth, creatorFeeBps: creatorFeeEnabled ? CONFIG.rhCreatorFeeBps : 0 });
+  return { ok: true, ...result, chainId: RH_CHAIN_ID, explorerToken: rhExplorerToken(result.tokenAddress), creatorFeeBps: creatorFeeEnabled ? CONFIG.rhCreatorFeeBps : 0 };
 }
 
 async function recordTradeEvents(events) {

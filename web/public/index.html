@@ -3297,6 +3297,8 @@
       '<div class="ln" style="margin-top:6px">Your Robinhood address (from your dev wallet): <b style="word-break:break-all">'+esc(d.address)+'</b> <button class="wbtn ghost" type="button" style="padding:2px 8px;font-size:11px" onclick="navigator.clipboard.writeText(\''+esc(d.address)+'\').then(()=>GG.toast(\'Address copied\'))">Copy</button></div>'+
       '<div class="ln">ETH balance: <b>'+eth.toFixed(6)+' ETH</b> '+(eth>0.00005?'✅ enough for a deploy (~$0.05)':'⚠️ <b>fund it first</b> — bridge a little ETH (0.0005 is plenty) to the address above via the <a href="https://portal.arbitrum.io/?orbitChain=robinhood" target="_blank" rel="noopener">Arbitrum bridge</a>')+' · <a href="'+esc(d.explorer)+'" target="_blank" rel="noopener">explorer</a></div>'+
       '<div class="field" style="margin-top:8px"><label style="font-size:11px">Total supply (tokens, all to your wallet)</label><input id="lcRhSupply" inputmode="numeric" value="1000000000"></div>'+
+      '<label class="lcheck" style="display:flex;align-items:flex-start;gap:8px;font-size:11px;cursor:pointer;margin-top:4px"><input type="checkbox" id="lcRhCreatorFee"> <span>💰 <b>Earn creator fees — 1% of every trade</b> (same as pump.fun), paid in ETH to your wallet on trades through SlimeWire. It\'s taken by the site at trade time — <b>never</b> baked into the token, so your coin stays <b>✅ Verified safe</b>.</span></label>'+
+      '<div class="ln mut" style="font-size:10px;margin-top:6px">No dev-buy at launch on Robinhood: the coin has no trading pool the instant it deploys, so there\'s nothing to buy yet. Use <b>📦 Auto-bundle when it gets a pool</b> (shows after you launch) to buy the moment liquidity opens — that\'s the dev-buy for this chain.</div>'+
       '<div class="ln mut" style="font-size:10px">Your image, description &amp; socials show on SlimeWire\'s <b>🪶 Robinhood board</b> (Trenches tab) — on-chain the coin is name + ticker on <a href="https://robinhoodchain.blockscout.com" target="_blank" rel="noopener">Blockscout</a> (EVM chains have no native PFP standard). Trading pools (Uniswap) come next once its addresses publish.</div></div>';
   }
   async function setupMeteoraCurve(){
@@ -3408,6 +3410,7 @@
         // Image + socials go into OUR metadata registry (EVM has no native token-image standard) so the
         // coin shows its PFP/links on the 🪶 Robinhood board like pump coins do.
         const rhBody={name,symbol:sym,supplyTokens:supply,devWalletIndex:devIdx,launchAttemptId:attemptId(),
+          creatorFeeEnabled:!!($("#lcRhCreatorFee")&&$("#lcRhCreatorFee").checked),
           description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim()};
         if(state.launchImg)rhBody.imageDataUrl=state.launchImg.dataUrl;
         const {ok,d}=await jpost("/api/web/launch/rh-coin",rhBody);
