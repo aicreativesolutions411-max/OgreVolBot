@@ -283,7 +283,7 @@ export async function rhHoneypotCheck(tokenAddress, rpcUrl) {
     const creator = String(meta.creator_address_hash || "").toLowerCase();
     if (creator) {
       const ctx = await bsJson(`/addresses/${creator}/transactions`).catch(() => ({}));
-      const DEAD = /^0x0+$/, victims = new Set(); let burnSeize = false;
+      const DEAD = /^0x0+$/, cand = [];
       for (const t of (ctx.items || [])) {
         if (((t.to || {}).hash || "").toLowerCase() !== tokenAddress.toLowerCase()) continue;
         if (String(t.status || "ok").toLowerCase() === "error") continue;      // reverted calls don't count
@@ -292,11 +292,24 @@ export async function rhHoneypotCheck(tokenAddress, rpcUrl) {
         const fromParam = "0x" + inp.slice(34, 74);                    // wallet whose tokens are moved
         const toParam = "0x" + inp.slice(98, 138);                     // where they're sent
         if (fromParam === creator || DEAD.test(fromParam)) continue;   // creator moving its OWN tokens = fine
-        victims.add(fromParam);                                        // creator moved a THIRD PARTY's tokens
-        if (DEAD.test(toParam)) burnSeize = true;                      // ...and BURNED them = pure drain
+        cand.push({ from: fromParam, burn: DEAD.test(toParam) });
       }
-      // Unambiguous drain: burned holders' tokens, or seized from ≥2 distinct wallets. A single move to a
-      // live wallet is ambiguous (could be team consolidation) → warn, don't hard-block.
+      // CRUCIAL distinction: only a seizure from a REAL WALLET (EOA) is a drain. Every legit launchpad on
+      // this chain has the deployer transferFrom tokens OUT of a factory/pool CONTRACT to seed liquidity —
+      // that's infrastructure, not theft. So we getCode() each `from`: has code → contract → skip; empty →
+      // a human holder was drained. This is what separates real coins (ROBIN/JOHN/CAPTAIN) from rugs.
+      const provider = rhProvider(rpcUrl);
+      const uniq = [...new Set(cand.map((c) => c.from))];
+      const codes = {};
+      await Promise.all(uniq.map(async (f) => { try { codes[f] = (await provider.getCode(f)) || "0x"; } catch { codes[f] = "0x"; } }));
+      const victims = new Set(); let burnSeize = false;
+      for (const c of cand) {
+        if ((codes[c.from] || "0x").length > 2) continue;              // from is a CONTRACT → launchpad infra, skip
+        victims.add(c.from);                                           // from is a real wallet → a holder was seized
+        if (c.burn) burnSeize = true;                                  // ...and burned = pure drain
+      }
+      // Unambiguous drain: burned a holder's tokens, or seized from ≥2 distinct wallets. A single move to a
+      // live wallet is ambiguous (could be a team consolidation) → warn, don't hard-block.
       backdoorProven = burnSeize || victims.size >= 2;
       backdoor = victims.size >= 1;
       if (backdoorProven) reasons.unshift("the deployer SEIZES holders' tokens without approval — proven backdoor drain (rug)");

@@ -489,14 +489,6 @@
     <section class="view" id="v-lounge"></section>
   </main>
 
-  <nav class="botnav" id="botnav">
-    <button data-route="trending"><span class="i">📈</span>Trending</button>
-    <button data-route="trenches"><span class="i">🪖</span>Trenches</button>
-    <button data-route="portfolio"><span class="i">📊</span>Portfolio</button>
-    <button data-route="wallet"><span class="i">👛</span>Wallet</button>
-    <button data-tools><span class="i">🛠️</span>Tools</button>
-  </nav>
-
   <footer class="statusbar">
     <span class="s live"><span class="dot"></span>Live</span>
     <a href="/radar" target="_blank">Radar</a>
@@ -505,6 +497,17 @@
     <div class="right"><span class="px" id="solPx">◎ SOL —</span><span>Powered by SlimeWire</span></div>
   </footer>
 </div>
+
+<!-- Bottom nav lives OUTSIDE #app on purpose: #app gets zoom:.95 on phones, and a `zoom`ed ancestor
+     breaks position:fixed pinning (the bar scrolled away with content, so you had to scroll to the very
+     bottom to reach Tools). Kept here it pins to the viewport and stays on screen while the rest scrolls. -->
+<nav class="botnav" id="botnav">
+  <button data-route="trending"><span class="i">📈</span>Trending</button>
+  <button data-route="trenches"><span class="i">🪖</span>Trenches</button>
+  <button data-route="portfolio"><span class="i">📊</span>Portfolio</button>
+  <button data-route="wallet"><span class="i">👛</span>Wallet</button>
+  <button data-tools><span class="i">🛠️</span>Tools</button>
+</nav>
 
 <div class="modal" id="modal"><div class="box" style="position:relative" id="modalBox"></div></div>
 <div class="toast" id="toast"></div>

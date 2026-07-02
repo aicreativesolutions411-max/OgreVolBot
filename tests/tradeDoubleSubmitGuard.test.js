@@ -422,6 +422,10 @@ test("RH honeypot guard: sell-sim + holder-reconciliation block real scams (NOT 
   assert.match(check, /0x23b872dd/);
   assert.match(check, /backdoorProven/);
   assert.match(check, /SEIZES holders/);
+  // Only a seizure from a REAL WALLET (EOA) counts — a transferFrom out of a factory/pool CONTRACT is
+  // legit launchpad liquidity seeding, not theft. getCode() separates real coins from rugs; guard it.
+  assert.match(check, /getCode/);
+  assert.match(check, /launchpad infra/);
   // Buyer reconciliation samples RECENT BUYERS (from the pool), not top holders — top holders are the
   // scammer's own untouched wallets in a selective drain, so sampling them gives a false "ok".
   assert.match(check, /drains buyers/);
