@@ -271,17 +271,65 @@ export async function rhHoneypotCheck(tokenAddress, rpcUrl) {
     }
   }
 
-  // (2) HOLDER RECONCILIATION: sample real holders and compare what they RECEIVED (sum of Transfer
-  // events) to what they HOLD now. If holders systematically hold far less than they received without
-  // selling, the token silently drains balances (reflection-down / clawback) → BLOCK. This is the real
-  // "is it safe" signal, far better than gas — it measures the outcome, not the method.
-  if (sellable !== false) {
-    const sample = holderList.filter((h) => h.address && !h.address.is_contract).slice(0, 4);
+  // (2a) DEPLOYER BACKDOOR — the decisive signal. A legit renounced token: transferFrom is only ever
+  // called by DEXes/routers pulling tokens someone APPROVED (a sell/swap). A backdoor drainer: the
+  // token's own deployer calls transferFrom to SEIZE tokens from holders who never approved them
+  // (HOODCAT did exactly this — renounced ownership on-chain, then drained buyers one-by-one 10s after
+  // they bought). We catch it by reading the creator's own txs to the token and decoding transferFrom
+  // whose `from` is a third party. This is unforgeable — it's the theft itself, on-chain.
+  let backdoor = false, backdoorProven = false;
+  try {
+    const meta = await bsJson(`/addresses/${tokenAddress}`).catch(() => ({}));
+    const creator = String(meta.creator_address_hash || "").toLowerCase();
+    if (creator) {
+      const ctx = await bsJson(`/addresses/${creator}/transactions`).catch(() => ({}));
+      const DEAD = /^0x0+$/, victims = new Set(); let burnSeize = false;
+      for (const t of (ctx.items || [])) {
+        if (((t.to || {}).hash || "").toLowerCase() !== tokenAddress.toLowerCase()) continue;
+        if (String(t.status || "ok").toLowerCase() === "error") continue;      // reverted calls don't count
+        const inp = String(t.raw_input || t.input || "").toLowerCase();
+        if (inp.slice(0, 10) !== "0x23b872dd") continue;               // transferFrom(from,to,amount)
+        const fromParam = "0x" + inp.slice(34, 74);                    // wallet whose tokens are moved
+        const toParam = "0x" + inp.slice(98, 138);                     // where they're sent
+        if (fromParam === creator || DEAD.test(fromParam)) continue;   // creator moving its OWN tokens = fine
+        victims.add(fromParam);                                        // creator moved a THIRD PARTY's tokens
+        if (DEAD.test(toParam)) burnSeize = true;                      // ...and BURNED them = pure drain
+      }
+      // Unambiguous drain: burned holders' tokens, or seized from ≥2 distinct wallets. A single move to a
+      // live wallet is ambiguous (could be team consolidation) → warn, don't hard-block.
+      backdoorProven = burnSeize || victims.size >= 2;
+      backdoor = victims.size >= 1;
+      if (backdoorProven) reasons.unshift("the deployer SEIZES holders' tokens without approval — proven backdoor drain (rug)");
+      else if (backdoor) reasons.unshift("the deployer has moved a holder's tokens via a backdoor — treat as unsafe");
+    }
+  } catch { /* Blockscout hiccup — fall through to reconciliation */ }
+
+  // (2b) BUYER RECONCILIATION — sample RECENT BUYERS (wallets that got tokens FROM the pool/top holder),
+  // NOT the top holders. In a selective drainer the top holders are the scammer's own untouched wallets,
+  // so sampling them shows "clean" (false ok). Real buyers are the victims. Compare each buyer's tokens
+  // RECEIVED vs HELD now: systematic loss with no sale = the coin drains buyers → BLOCK.
+  if (!backdoor && sellable !== false) {
+    let buyers = [];
+    try {
+      const poolHash = ((holderList.find((h) => h.address && h.address.is_contract) || {}).address || {}).hash || "";
+      const tr = await bsJson(`/tokens/${tokenAddress}/transfers?type=ERC-20`).catch(() => ({}));
+      const seen = new Set();
+      for (const t of (tr.items || [])) {
+        const from = ((t.from || {}).hash || "").toLowerCase();
+        const to = ((t.to || {}).hash || "").toLowerCase();
+        if (poolHash && from !== poolHash.toLowerCase()) continue;     // buys come FROM the pool
+        if (!to || to === poolHash.toLowerCase() || /^0x0+$/.test(to)) continue;
+        if (!seen.has(to)) { seen.add(to); buyers.push(to); }
+        if (buyers.length >= 5) break;
+      }
+    } catch { /* skip */ }
     let checked = 0, drained = 0;
-    for (const h of sample) {
-      const addr = (h.address || {}).hash; if (!addr) continue;
+    for (const addr of buyers) {
       try {
-        const tr = await bsJson(`/addresses/${addr}/token-transfers?type=ERC-20`);
+        const [tr, held] = await Promise.all([
+          bsJson(`/addresses/${addr}/token-transfers?type=ERC-20`),
+          rhErc20Balance(tokenAddress, addr).catch(() => null),
+        ]);
         let recv = 0n, sent = 0n;
         for (const t of (tr.items || [])) {
           const ta = ((t.token || {}).address_hash || (t.token || {}).address || "").toLowerCase();
@@ -289,27 +337,28 @@ export async function rhHoneypotCheck(tokenAddress, rpcUrl) {
           const v = BigInt((t.total || {}).value || "0");
           if (((t.to || {}).hash || "").toLowerCase() === addr.toLowerCase()) recv += v; else sent += v;
         }
-        if (recv <= 0n) continue;
+        if (recv <= 0n || held == null) continue;
         checked += 1;
-        const held = BigInt(h.value || "0");
         // Drained = never sold it out yet holds <65% of what came in.
-        if (sent === 0n && held * 100n < recv * 65n) drained += 1;
-      } catch { /* skip this holder */ }
+        if (sent === 0n && BigInt(held) * 100n < recv * 65n) drained += 1;
+      } catch { /* skip this buyer */ }
     }
     if (checked >= 2 && drained >= Math.ceil(checked / 2)) {
-      sellable = sellable === null ? true : sellable;
-      reasons.unshift("holders are LOSING tokens with no sale — this coin drains balances (rug/clawback)");
+      reasons.unshift("recent buyers are LOSING tokens with no sale — this coin drains buyers (rug/clawback)");
     }
   }
 
   // (3) Extreme concentration ONLY — a single real wallet holding almost everything can dump on you.
   if (topPct != null && topPct >= 85) reasons.push(`one wallet holds ~${topPct}% of supply — it can dump on you`);
 
+  // BLOCK = proven un-sellable (honeypot), proven backdoor drain, or observed buyer-drain. WARN = a single
+  // ambiguous backdoor move or heavy concentration. OK = passed everything.
   let verdict = "ok";
-  const drainReason = reasons.some((r) => r.includes("drains balances") || r.includes("sells are blocked"));
-  if (sellable === false || drainReason) verdict = "block";
+  const blockReason = sellable === false || backdoorProven
+    || reasons.some((r) => r.includes("drains buyers") || r.includes("drains balances") || r.includes("sells are blocked"));
+  if (blockReason) verdict = "block";
   else if (reasons.length) verdict = "warn";
-  const result = { ok: true, verdict, sellable, transferGas, holders, topPct, ownerRenounced, reasons };
+  const result = { ok: true, verdict, sellable, transferGas, holders, topPct, ownerRenounced, backdoor, reasons };
   safetyCache.set(key, { at: Date.now(), result });
   return result;
 }

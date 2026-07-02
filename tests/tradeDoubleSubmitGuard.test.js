@@ -417,9 +417,14 @@ test("RH honeypot guard: sell-sim + holder-reconciliation block real scams (NOT 
   const check = functionBody(rhLib, "rhHoneypotCheck");
   assert.match(check, /transfer/);                       // real transfer sim from a holder
   assert.match(check, /sellable = false/);               // revert -> can't sell -> block
-  // Holder reconciliation: compare what holders RECEIVED to what they HOLD. Systematic loss = drainer.
-  assert.match(check, /recv/);
-  assert.match(check, /drains balances/);
+  // Deployer BACKDOOR: creator calling transferFrom (0x23b872dd) to SEIZE a third party's tokens — the
+  // exact HOODCAT drain (renounced on-chain, still drained buyers). Proven (burn or >=2 victims) = block.
+  assert.match(check, /0x23b872dd/);
+  assert.match(check, /backdoorProven/);
+  assert.match(check, /SEIZES holders/);
+  // Buyer reconciliation samples RECENT BUYERS (from the pool), not top holders — top holders are the
+  // scammer's own untouched wallets in a selective drain, so sampling them gives a false "ok".
+  assert.match(check, /drains buyers/);
   // Gas is NOT a risk signal — every token on this chain is a ~79k-gas proxy, so a gas threshold flagged
   // everything (incl. legit RH stock tokens). Guard against re-introducing a transfer-gas warn.
   assert.doesNotMatch(check, /SIMPLE_TRANSFER_GAS \+ \d/);
