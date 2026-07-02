@@ -314,7 +314,11 @@ export async function rhExecuteEvmSteps(solanaSecretKey, txs, rpcUrl, confirmTim
   for (const tx of txs) {
     const request = { to: tx.to, data: tx.data, value: BigInt(tx.value || "0") };
     try {
-      await wallet.estimateGas(request);
+      // Buffer the gas 1.6x over the estimate. Tax / rebase / anti-bot tokens run extra code on
+      // transfer, so the router's estimate can fall short and the swap fails "out of gas" (a real user
+      // hit this on a scam token — first buy reverted OOG). Over-provisioning is refunded, so it's free.
+      const est = await wallet.estimateGas(request);
+      request.gasLimit = (est * 16n) / 10n;
     } catch (error) {
       const msg = String(error?.shortMessage || error?.message || "");
       if (/insufficient funds/i.test(msg)) {

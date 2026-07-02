@@ -245,7 +245,8 @@ test("Robinhood coins are tradeable in-app (Relay swap, gas-estimated, idempoten
   assert.match(trade, /rhErc20Balance/);                     // sell sizes off the real on-chain balance
   const rhLib = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
   assert.match(rhLib, /rhExecuteEvmSteps/);
-  assert.match(rhLib, /estimateGas\(request\)/);             // every swap tx simulated before sending
+  assert.match(rhLib, /const est = await wallet\.estimateGas\(request\)/); // every swap tx simulated before sending
+  assert.match(rhLib, /request\.gasLimit = \(est \* 16n\) \/ 10n/);        // + gas buffer so tax tokens don't OOG
   // Funding hardening: balance pre-check before quoting + defensive hex prefix strip.
   const fund = functionBody(serverSource, "webRhFundWithSolCore");
   assert.match(fund, /solBal < lamports/);
