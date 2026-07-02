@@ -319,6 +319,22 @@ test("RH rows: quick-buy stays in frame on mobile + fresh coins always get MC (i
   assert.match(rhLib, /rhEthUsd/);
 });
 
+test("RH coin click -> full chart+buy SCREEN (Solana-style), editable ⚡ presets, ETH labeled as balance", () => {
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /id="v-rhtrade"/);                       // dedicated view exists
+    assert.match(src, /route==="rhtrade"/);                    // routed
+    assert.match(src, /function renderRhTrade/);
+    assert.match(src, /function rhTradeModal\(address\)\{go\("rhtrade",address\);\}/); // clicks navigate, not modal
+    assert.match(src, /height:46vh/);                          // big chart pane
+    assert.match(src, /function rhPresets/);                   // editable quick-buy presets
+    assert.match(src, /function rhPresetModal/);
+    assert.match(src, /ggRhPresets/);
+    assert.match(src, /GG\.rhPresetModal/);
+    assert.doesNotMatch(src, /ETH<\/b> gas/);                  // balance is ETH, not "gas"
+    assert.doesNotMatch(src, /Gas balance:/);
+  }
+});
+
 test("launch form survives navigation + warns on no dev buy", () => {
   for (const src of [ggSource, indexSource]) {
     // Whole-form snapshot/restore so leaving the Launch page and coming back keeps text + images.
