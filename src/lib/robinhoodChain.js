@@ -210,7 +210,20 @@ export async function rhHoneypotCheck(tokenAddress, rpcUrl) {
   const cached = safetyCache.get(key);
   if (cached && Date.now() - cached.at < 300_000) return cached.result;
   const reasons = [];
-  let sellable = null; let transferGas = null; let holders = null; let topPct = null;
+  let sellable = null; let transferGas = null; let holders = null; let topPct = null; let ownerRenounced = null;
+
+  // Ownership: owner()==0x0 means the owner can't call onlyOwner rug functions (mint/pause/blacklist)
+  // anymore. A GOOD signal — but NOT a guarantee (a renounced coin still drained a user via non-owner
+  // transfer logic), so we surface it, never rely on it alone.
+  try {
+    const provider = rhProvider(rpcUrl);
+    const iface = new ethers.Interface(["function owner() view returns (address)"]);
+    const raw = await provider.call({ to: tokenAddress, data: iface.encodeFunctionData("owner", []) });
+    if (raw && raw !== "0x") {
+      const owner = ethers.getAddress("0x" + raw.slice(-40));
+      ownerRenounced = owner === "0x0000000000000000000000000000000000000000";
+    }
+  } catch { /* no owner() — leave null */ }
 
   // A real holder + total supply from Blockscout (for the transfer sim + concentration).
   let holderAddr = ""; let holderRaw = "0";
@@ -249,7 +262,7 @@ export async function rhHoneypotCheck(tokenAddress, rpcUrl) {
   let verdict = "ok";
   if (sellable === false) verdict = "block";
   else if (reasons.length) verdict = "warn";
-  const result = { ok: true, verdict, sellable, transferGas, holders, topPct, reasons };
+  const result = { ok: true, verdict, sellable, transferGas, holders, topPct, ownerRenounced, reasons };
   safetyCache.set(key, { at: Date.now(), result });
   return result;
 }

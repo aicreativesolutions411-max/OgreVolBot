@@ -1298,19 +1298,22 @@
       wrap.dataset.mode="rh";
       wrap.innerHTML='<div class="col"><div class="colhead"><span class="pulse"></span><b>Trending</b><span class="cnt" id="cnt-rht">…</span></div><div class="collist" id="list-rht"><div class="loading"><span class="spin"></span></div></div></div>'+
         '<div class="col"><div class="colhead"><b>New</b><span class="cnt" id="cnt-rhn">…</span></div><div class="collist" id="list-rhn"><div class="loading"><span class="spin"></span></div></div></div>'+
-        '<div class="col"><div class="colhead"><b>🪶 Launch here</b></div><div class="collist" style="padding:12px"><p class="mut" style="font-size:12px;line-height:1.6">Launch your own coin on <b>Robinhood Chain</b> in under a minute — real on-chain token, whole supply to your wallet, and it shows up on this board with its PFP &amp; socials the moment it\'s live.</p><button class="wbtn" onclick="GG.launchRh()">🚀 Launch a Robinhood coin</button><p class="mut" style="font-size:11px;margin-top:10px">Tap any coin on this board to buy or sell it right here — same one-tap trading as your Solana coins.</p></div></div>';
+        '<div class="col"><div class="colhead"><b>🪶 Launch here</b></div><div class="collist" style="padding:12px"><p class="mut" style="font-size:12px;line-height:1.6">Launch your own coin on <b>Robinhood Chain</b> in under a minute — real on-chain token, whole supply to your wallet, and it shows up on this board with its PFP &amp; socials the moment it\'s live.</p><button class="wbtn" onclick="GG.launchRh()">🚀 Launch a Robinhood coin</button><p class="mut" style="font-size:11px;margin-top:10px">Tap any coin on this board to buy or sell it right here — same one-tap trading as your Solana coins.</p>'+
+        '<label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-top:12px;border-top:1px solid var(--border);padding-top:10px"><input type="checkbox" id="rhSaferChk"'+(rhSaferOnly()?" checked":"")+'> 🔒 <b>Safer only</b> — hide coins our scan flags</label>'+
+        '<p class="mut" style="font-size:10px;margin:5px 0 0">Badges: 🛡️ passed sell-check · ⚠️ risky (custom transfer code / concentrated) · ⛔ can\'t sell. Honest note: no scan is 100% — a renounced coin still rugged one wallet — so keep size small.</p></div></div>';
     }
     const ago=(iso)=>{const s=(Date.now()-Date.parse(iso||0))/1000;return !isFinite(s)?"":s<90?Math.round(s)+"s":s<5400?Math.round(s/60)+"m":s<129600?Math.round(s/3600)+"h":Math.round(s/86400)+"d";};
     const row=(r,isNew)=>{
       const stats=[r.marketCapUsd?('MC '+fmtUsd(r.marketCapUsd)):'',r.liquidityUsd?('Liq '+fmtUsd(r.liquidityUsd)):'',r.volume24hUsd?('Vol '+fmtUsd(r.volume24hUsd)):'',(r.holders?r.holders+' holders':'')].filter(Boolean).join(' · ');
       // Layout contract (mobile): middle column min-width:0 + name flex:1 min-width:0 ellipsis + stats
       // nowrap-ellipsis, right-side chips flex:0 0 auto — the ⚡ can NEVER be pushed out of frame.
-      return '<div class="rhrow" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;overflow:hidden" onclick="GG.rhTrade(\''+esc(r.address)+'\')">'+
+      return '<div class="rhrow" data-rowaddr="'+esc(r.address)+'" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;overflow:hidden" onclick="GG.rhTrade(\''+esc(r.address)+'\')">'+
       rhAvatar(r,26)+
       '<div style="min-width:0;flex:1;overflow:hidden"><div style="display:flex;gap:6px;align-items:center;min-width:0"><b style="font-size:12px;flex:0 0 auto">'+esc(r.symbol||"?")+'</b>'+(r.createdAt?'<span class="mut" style="font-size:9px;flex:0 0 auto" title="Coin age">⏱'+ago(r.createdAt)+'</span>':'')+'<span class="mut" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.name||"")+'</span>'+(r.slimewire?'<span title="Launched on SlimeWire" style="font-size:9px;background:var(--accent,#6dc36d);color:#08130a;border-radius:6px;padding:1px 5px;font-weight:700;flex:0 0 auto">SW</span>':'')+'</div>'+
       '<div class="mut" style="font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(stats||(r.noPool?'no pool yet — tradable once liquidity opens':(isNew?'brand new — no trades yet':'—')))+'</div></div>'+
       (Number.isFinite(r.m5)&&r.m5!==0?'<span class="chg '+(r.m5>=0?'up':'down')+'" style="font-size:10px;flex:0 0 auto;white-space:nowrap">'+(r.m5>=0?'+':'')+r.m5+'%</span>':'')+
       (r.priceUsd?'<b class="hideMb" style="font-size:11px;flex:0 0 auto;white-space:nowrap">$'+esc(r.priceUsd>=1?r.priceUsd.toFixed(2):r.priceUsd.toPrecision(3))+'</b>':'')+
+      '<span class="rhsafe" data-safe="'+esc(r.address)+'" style="flex:0 0 auto;font-size:12px" title="Safety scan">🛡️</span>'+
       '<button class="buybtn sm" style="flex:0 0 auto" title="Quick buy '+esc(rhQuickEth())+' ETH" onclick="event.stopPropagation();GG.rhQuick(\''+esc(r.address)+'\')">⚡</button>'+
     '</div>';};
     const [t,n]=await Promise.all([
@@ -1330,7 +1333,29 @@
     // Fill MC / liquidity / volume / price / pfp / socials from DexScreener (indexes Robinhood Chain) —
     // over the USER's IP, same live-enrichment concept as the Solana boards. Registry PFP wins for SW coins.
     rhEnrichRows(tr.concat(nr)).then((changed)=>{if(changed&&state.route==="trenches"&&state.trenchTab==="rh")paint();});
+    const chk=$("#rhSaferChk");if(chk)chk.onchange=()=>{localStorage.setItem("ggRhSaferOnly",chk.checked?"1":"");rhScanBoard(tr.concat(nr));};
+    rhScanBoard(tr.concat(nr));
     state.pollT=setTimeout(()=>{if(state.route==="trenches"&&state.trenchTab==="rh")renderRhBoard(wrap);},30000);
+  }
+  function rhSaferOnly(){return localStorage.getItem("ggRhSaferOnly")==="1";}
+  // Per-row safety badge + "Safer only" filter. Scans each visible coin (cached 5min server + here) and
+  // marks 🛡️ ok / ⚠️ risky / ⛔ can't-sell. Safer-only hides ⚠️/⛔. THIS is what catches HOODCAT-class
+  // coins (their custom-transfer-code trips ⚠️) — renounce alone wouldn't, since HOODCAT was renounced.
+  async function rhScanBoard(rows){
+    state.rhSafety=state.rhSafety||{};
+    const safer=rhSaferOnly();
+    const uniq=[...new Map((rows||[]).map(r=>[String(r.address).toLowerCase(),r.address])).values()].slice(0,26);
+    for(const addr of uniq){
+      const k=addr.toLowerCase();
+      let v=state.rhSafety[k];
+      if(!v){const {d}=await api("/api/web/rh/safety?token="+encodeURIComponent(addr)).catch(()=>({}));v=d||{verdict:"unknown"};state.rhSafety[k]=v;}
+      const em=v.verdict==="block"?"⛔":v.verdict==="warn"?"⚠️":v.verdict==="ok"?"🛡️":"·";
+      const tip=(v.reasons&&v.reasons.length?v.reasons.join("; "):"sell-check passed")+(v.ownerRenounced===false?" · owner not renounced":v.ownerRenounced===true?" · ownership renounced":"");
+      document.querySelectorAll('.rhsafe[data-safe="'+addr+'"]').forEach(b=>{b.textContent=em;b.title=tip;});
+      if(safer){document.querySelectorAll('.rhrow[data-rowaddr="'+addr+'"]').forEach(row=>{row.style.display=(v.verdict==="warn"||v.verdict==="block")?"none":"";});}
+      else{document.querySelectorAll('.rhrow[data-rowaddr="'+addr+'"]').forEach(row=>{row.style.display="";});}
+      if(state.route!=="trenches"||state.trenchTab!=="rh")return;
+    }
   }
   function rhQuickEth(){const v=Number(localStorage.getItem("ggRhQuick")||"0.005");return isFinite(v)&&v>0?String(v):"0.005";}
   // Coin avatar with a deterministic letter-tile fallback — a row should never look half-rendered just

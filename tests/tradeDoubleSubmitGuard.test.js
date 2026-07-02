@@ -444,6 +444,19 @@ test("RH drain audit: flags coins that took your tokens with no sale (received >
   }
 });
 
+test("RH board: per-coin safety badge + 'Safer only' filter + renounce signal", () => {
+  const rhLib = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
+  assert.match(functionBody(rhLib, "rhHoneypotCheck"), /ownerRenounced/);   // renounce read + returned
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /function rhScanBoard/);
+    assert.match(src, /function rhSaferOnly/);
+    assert.match(src, /rhSaferChk/);
+    assert.match(src, /class="rhsafe"/);                                    // per-row badge
+    // Safer-only hides risky+block rows (the signal that actually catches HOODCAT-class).
+    assert.match(src, /verdict==="warn"\|\|v\.verdict==="block"\)\?"none"/);
+  }
+});
+
 test("launch form survives navigation + warns on no dev buy", () => {
   for (const src of [ggSource, indexSource]) {
     // Whole-form snapshot/restore so leaving the Launch page and coming back keeps text + images.
