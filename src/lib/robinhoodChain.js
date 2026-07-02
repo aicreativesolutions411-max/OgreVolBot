@@ -212,6 +212,19 @@ export async function rhHoneypotCheck(tokenAddress, rpcUrl) {
   const reasons = [];
   let sellable = null; let transferGas = null; let holders = null; let topPct = null; let ownerRenounced = null;
 
+  // VERIFIED-SAFE tier: if the coin's on-chain runtime bytecode EXACTLY matches our SlimeTokenRH
+  // (fixed supply, no owner, no mint, no fees, no reflection), it is provably unruggable — there is no
+  // code path that can alter balances or block sells. This is the ONLY "100% safe" category; nothing
+  // heuristic can match it. All SlimeWire-launched RH coins deploy this exact contract.
+  try {
+    const code = (await rhProvider(rpcUrl).getCode(tokenAddress)).toLowerCase();
+    if (code && code.length > 2 && code === String(artifact.deployedBytecode || "").toLowerCase()) {
+      const result = { ok: true, verdict: "verified", sellable: true, verifiedSafe: true, ownerRenounced: true, holders: null, topPct: null, transferGas: null, reasons: ["SlimeWire fixed-supply contract — no owner, no mint, no fees, no reflection: it cannot rug"] };
+      safetyCache.set(key, { at: Date.now(), result });
+      return result;
+    }
+  } catch { /* fall through to heuristic scan */ }
+
   // Ownership: owner()==0x0 means the owner can't call onlyOwner rug functions (mint/pause/blacklist)
   // anymore. A GOOD signal — but NOT a guarantee (a renounced coin still drained a user via non-owner
   // transfer logic), so we surface it, never rely on it alone.

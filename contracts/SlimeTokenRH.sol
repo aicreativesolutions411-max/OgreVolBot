@@ -9,7 +9,11 @@ contract SlimeTokenRH {
     string public name;
     string public symbol;
     uint8 public constant decimals = 18;
-    uint256 public immutable totalSupply;
+    // NOT immutable on purpose: an immutable would be baked into each deploy's runtime bytecode, so
+    // coins with different supplies wouldn't byte-match. As plain storage, EVERY SlimeWire coin has
+    // identical runtime code — which lets the safety scan cryptographically verify "this is our
+    // no-rug contract" by exact bytecode match.
+    uint256 public totalSupply;
 
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;

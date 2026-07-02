@@ -457,6 +457,25 @@ test("RH board: per-coin safety badge + 'Safer only' filter + renounce signal", 
   }
 });
 
+test("RH verified-safe tier: exact-bytecode match to our no-rug contract = the only 100% guarantee", () => {
+  const rhLib = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
+  const check = functionBody(rhLib, "rhHoneypotCheck");
+  assert.match(check, /getCode\(tokenAddress\)/);
+  assert.match(check, /deployedBytecode/);
+  assert.match(check, /verdict: "verified"/);
+  assert.match(check, /verifiedSafe: true/);
+  // Contract must NOT use immutable supply (else per-deploy bytecode differs and match breaks).
+  const sol = fs.readFileSync(new URL("../contracts/SlimeTokenRH.sol", import.meta.url), "utf8");
+  assert.doesNotMatch(sol, /immutable totalSupply/);
+  // Artifact carries the runtime bytecode for the match.
+  const artifact = JSON.parse(fs.readFileSync(new URL("../src/lib/rh-erc20.json", import.meta.url), "utf8"));
+  assert.ok(artifact.deployedBytecode && artifact.deployedBytecode.startsWith("0x") && artifact.deployedBytecode.length > 1000);
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /verdict==="verified"\?"✅"/);
+    assert.match(src, /Verified safe/);
+  }
+});
+
 test("launch form survives navigation + warns on no dev buy", () => {
   for (const src of [ggSource, indexSource]) {
     // Whole-form snapshot/restore so leaving the Launch page and coming back keeps text + images.

@@ -16,7 +16,7 @@ const input = {
   sources: { "SlimeTokenRH.sol": { content: source } },
   settings: {
     optimizer: { enabled: true, runs: 200 },
-    outputSelection: { "*": { "*": ["abi", "evm.bytecode.object"] } }
+    outputSelection: { "*": { "*": ["abi", "evm.bytecode.object", "evm.deployedBytecode.object"] } }
   }
 };
 
@@ -31,7 +31,8 @@ const artifact = {
   contractName: "SlimeTokenRH",
   solcVersion: solc.version(),
   abi: contract.abi,
-  bytecode: "0x" + contract.evm.bytecode.object
+  bytecode: "0x" + contract.evm.bytecode.object,
+  deployedBytecode: "0x" + contract.evm.deployedBytecode.object
 };
 fs.writeFileSync(outPath, JSON.stringify(artifact, null, 2));
 console.log(`Wrote ${outPath} (bytecode ${artifact.bytecode.length / 2 - 1} bytes, ${artifact.solcVersion})`);
