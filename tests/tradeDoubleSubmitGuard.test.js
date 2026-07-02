@@ -422,8 +422,15 @@ test("RH honeypot guard: sell-sim + holder-reconciliation block real scams (NOT 
   assert.match(check, /0x23b872dd/);
   assert.match(check, /backdoorProven/);
   assert.match(check, /SEIZES holders/);
-  // Only a seizure from a REAL WALLET (EOA) counts — a transferFrom out of a factory/pool CONTRACT is
-  // legit launchpad liquidity seeding, not theft. getCode() separates real coins from rugs; guard it.
+  // DRAIN-SERVICE: the big one. A shared controller contract 16+ operators funnel tokens through — it
+  // empties a buyer's balanceOf seconds after they buy with NO Transfer event (HOODCAT + BRODIE both used
+  // it). We block any token whose deployer touches the known controller or calls the drain selector.
+  assert.match(check, /DRAIN_CONTROLLERS/);
+  assert.match(check, /0x2d7aa179b485d25fe89f8e1b26b9f3cc2668f615/);
+  assert.match(check, /drainService/);
+  assert.match(check, /balance-drain service/);
+  // Only a seizure from a REAL WALLET (EOA) counts as a transferFrom drain — a transferFrom out of a
+  // factory/pool CONTRACT is legit launchpad liquidity seeding. getCode() separates them; guard it.
   assert.match(check, /getCode/);
   assert.match(check, /launchpad infra/);
   // Buyer reconciliation samples RECENT BUYERS (from the pool), not top holders — top holders are the

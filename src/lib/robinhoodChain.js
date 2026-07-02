@@ -271,33 +271,48 @@ export async function rhHoneypotCheck(tokenAddress, rpcUrl) {
     }
   }
 
-  // (2a) DEPLOYER BACKDOOR — the decisive signal. A legit renounced token: transferFrom is only ever
-  // called by DEXes/routers pulling tokens someone APPROVED (a sell/swap). A backdoor drainer: the
-  // token's own deployer calls transferFrom to SEIZE tokens from holders who never approved them
-  // (HOODCAT did exactly this — renounced ownership on-chain, then drained buyers one-by-one 10s after
-  // they bought). We catch it by reading the creator's own txs to the token and decoding transferFrom
-  // whose `from` is a third party. This is unforgeable — it's the theft itself, on-chain.
-  let backdoor = false, backdoorProven = false;
+  // (2a) DEPLOYER DRAIN DETECTION — the decisive signal. Two mechanisms seen on this chain, both caught
+  // by reading the token creator's OWN transaction history:
+  //   • DRAIN-SERVICE (the big one): a "rug-as-a-service" — one shared controller contract that 16+ scam
+  //     operators funnel their tokens through. Seconds after you buy, the deployer calls the controller
+  //     (selector 0x73ed6b13) with your address and your balanceOf is silently emptied — NO Transfer
+  //     event, so explorers & transfer-based checks never see it. HOODCAT and BRODIE were the same op.
+  //   • transferFrom BACKDOOR: the deployer calls transferFrom to physically SEIZE tokens from a holder
+  //     who never approved them (visible, but still a rug). HOODCAT also did this.
+  // Any deployer that touches the drain service, or seizes from a real wallet, is a rug → BLOCK.
+  const DRAIN_CONTROLLERS = new Set(["0x2d7aa179b485d25fe89f8e1b26b9f3cc2668f615"]); // shared balance-drain service
+  const DRAIN_SELECTOR = "0x73ed6b13";                                               // the drain call
+  let backdoor = false, backdoorProven = false, drainService = false;
   try {
     const meta = await bsJson(`/addresses/${tokenAddress}`).catch(() => ({}));
     const creator = String(meta.creator_address_hash || "").toLowerCase();
     if (creator) {
-      const ctx = await bsJson(`/addresses/${creator}/transactions`).catch(() => ({}));
+      // Scan several pages of the creator's history — an active operator has many txs and a drain call
+      // can be buried past page 1. Newest-first, so a few pages reliably covers recent drains.
+      let ctxItems = [], np = null, pg = 0;
+      do {
+        const q = np ? "?" + new URLSearchParams(np).toString() : "";
+        const d = await bsJson(`/addresses/${creator}/transactions${q}`).catch(() => ({}));
+        ctxItems.push(...(d.items || []));
+        np = d.next_page_params; pg += 1;
+      } while (np && pg < 4);
+      const ctx = { items: ctxItems };
       const DEAD = /^0x0+$/, cand = [];
       for (const t of (ctx.items || [])) {
-        if (((t.to || {}).hash || "").toLowerCase() !== tokenAddress.toLowerCase()) continue;
         if (String(t.status || "ok").toLowerCase() === "error") continue;      // reverted calls don't count
+        const to = ((t.to || {}).hash || "").toLowerCase();
         const inp = String(t.raw_input || t.input || "").toLowerCase();
-        if (inp.slice(0, 10) !== "0x23b872dd") continue;               // transferFrom(from,to,amount)
+        // Drain-service: creator calls the known controller, or invokes the drain selector on ANY contract.
+        if (DRAIN_CONTROLLERS.has(to) || inp.slice(0, 10) === DRAIN_SELECTOR) drainService = true;
+        // transferFrom backdoor (only calls ONTO the token itself count here)
+        if (to !== tokenAddress.toLowerCase() || inp.slice(0, 10) !== "0x23b872dd") continue;
         const fromParam = "0x" + inp.slice(34, 74);                    // wallet whose tokens are moved
         const toParam = "0x" + inp.slice(98, 138);                     // where they're sent
         if (fromParam === creator || DEAD.test(fromParam)) continue;   // creator moving its OWN tokens = fine
         cand.push({ from: fromParam, burn: DEAD.test(toParam) });
       }
-      // CRUCIAL distinction: only a seizure from a REAL WALLET (EOA) is a drain. Every legit launchpad on
-      // this chain has the deployer transferFrom tokens OUT of a factory/pool CONTRACT to seed liquidity —
-      // that's infrastructure, not theft. So we getCode() each `from`: has code → contract → skip; empty →
-      // a human holder was drained. This is what separates real coins (ROBIN/JOHN/CAPTAIN) from rugs.
+      // For the transferFrom path only: a seizure from a REAL WALLET (EOA) is a drain, but a transferFrom
+      // OUT of a factory/pool CONTRACT is just launchpad liquidity seeding — not theft. getCode() separates them.
       const provider = rhProvider(rpcUrl);
       const uniq = [...new Set(cand.map((c) => c.from))];
       const codes = {};
@@ -308,11 +323,12 @@ export async function rhHoneypotCheck(tokenAddress, rpcUrl) {
         victims.add(c.from);                                           // from is a real wallet → a holder was seized
         if (c.burn) burnSeize = true;                                  // ...and burned = pure drain
       }
-      // Unambiguous drain: burned a holder's tokens, or seized from ≥2 distinct wallets. A single move to a
-      // live wallet is ambiguous (could be a team consolidation) → warn, don't hard-block.
-      backdoorProven = burnSeize || victims.size >= 2;
+      // Unambiguous drain: uses the drain service, burned a holder's tokens, or seized from ≥2 distinct
+      // wallets. A single transferFrom to a live wallet is ambiguous (could be a team consolidation) → warn.
+      backdoorProven = drainService || burnSeize || victims.size >= 2;
       backdoor = victims.size >= 1;
-      if (backdoorProven) reasons.unshift("the deployer SEIZES holders' tokens without approval — proven backdoor drain (rug)");
+      if (drainService) reasons.unshift("this coin's deployer uses a known balance-drain service — buyers get silently emptied seconds after buying (rug)");
+      else if (backdoorProven) reasons.unshift("the deployer SEIZES holders' tokens without approval — proven backdoor drain (rug)");
       else if (backdoor) reasons.unshift("the deployer has moved a holder's tokens via a backdoor — treat as unsafe");
     }
   } catch { /* Blockscout hiccup — fall through to reconciliation */ }
