@@ -69,7 +69,7 @@ import {
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
-import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhImpliedPriceUsd, rhHoneypotCheck } from "./lib/robinhoodChain.js";
+import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
 import {
@@ -8013,6 +8013,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
     if (request.method === "GET" && pathname === "/api/web/rh/activity") {
       sendWebJson(request, response, 200, await webRhActivity(auth.userId));
+      return;
+    }
+    // Drain audit: for the wallet's derived EVM address, flag any coin that reduced the balance with no
+    // sale (received >> held). Directly surfaces "I had the coins then they vanished" rug/clawbacks.
+    if (request.method === "GET" && pathname === "/api/web/rh/holdings-audit") {
+      const store = await readWalletStore();
+      const wallet = getWalletAt(store, parseWebWalletIndex(requestUrl.searchParams.get("walletIndex")), auth.userId);
+      const evmAddress = evmAddressFromSolana(decryptWallet(wallet).secretKey);
+      sendWebJson(request, response, 200, await rhWalletTokenAudit(evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ ok: true, tokens: [] })));
       return;
     }
     if (request.method === "POST" && pathname === "/api/web/rh/fund-with-sol") {

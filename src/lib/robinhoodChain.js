@@ -153,6 +153,48 @@ export async function rhListTokens(maxPages = 3) {
   return items;
 }
 
+// Per-wallet DRAIN audit: for every token this wallet has received, compare net-received (sum of
+// Transfer events) to the actual on-chain balanceOf. If a coin's contract silently reduced the balance
+// with NO sale (held << received and the wallet never sold), that's a rug/clawback — flag it red. This
+// is the honest, reliable detector for "I saw my coins then they vanished": it measures the RESULT.
+export async function rhWalletTokenAudit(evmAddress, rpcUrl) {
+  const provider = rhProvider(rpcUrl);
+  const erc = new ethers.Contract("0x0000000000000000000000000000000000000000", ["function balanceOf(address) view returns (uint256)"], provider);
+  // Sum received/sent per token from the wallet's ERC-20 transfer log (few pages is plenty for a user).
+  const perToken = new Map(); // addrLc -> { symbol, decimals, recv, sent }
+  let path = `/addresses/${evmAddress}/token-transfers?type=ERC-20`, pages = 0;
+  while (path && pages < 4) {
+    const data = await bsJson(path).catch(() => ({}));
+    for (const t of (data.items || [])) {
+      const tk = t.token || {}; const addr = (tk.address_hash || tk.address || "").toLowerCase();
+      if (!addr) continue;
+      const dec = Number((t.total || {}).decimals || tk.decimals || 18);
+      const v = BigInt((t.total || {}).value || "0");
+      const to = ((t.to || {}).hash || "").toLowerCase();
+      const row = perToken.get(addr) || { address: tk.address_hash || tk.address, symbol: tk.symbol || "", decimals: dec, recv: 0n, sent: 0n };
+      if (to === evmAddress.toLowerCase()) row.recv += v; else row.sent += v;
+      perToken.set(addr, row);
+    }
+    const n = data.next_page_params;
+    path = n ? `/addresses/${evmAddress}/token-transfers?type=ERC-20&${new URLSearchParams(n)}` : null;
+    pages++;
+  }
+  const out = [];
+  for (const [addr, row] of perToken) {
+    const netRecv = row.recv - row.sent; // tokens that should be sitting in the wallet if it never sold
+    if (netRecv <= 0n) continue;
+    let bal = 0n;
+    try { bal = await erc.attach(addr).balanceOf(evmAddress); } catch { continue; }
+    const recvUi = Number(netRecv) / 10 ** row.decimals;
+    const heldUi = Number(bal) / 10 ** row.decimals;
+    const heldPct = recvUi > 0 ? heldUi / recvUi : 1;
+    // Drained = you never sold it away (sent≈0) yet you hold far less than you received.
+    const neverSold = row.sent === 0n;
+    out.push({ address: row.address, symbol: row.symbol, received: recvUi, held: heldUi, heldPct: Math.round(heldPct * 1000) / 1000, drained: neverSold && heldPct < 0.7, lostPct: Math.round((1 - heldPct) * 100) });
+  }
+  return { ok: true, tokens: out };
+}
+
 // ---------- Pre-buy safety scan (honeypot guard) ----------
 // No checker is perfect — a token whose owner rugs holders LATER (like a rebase/clawback) can't be
 // caught before you buy; that's true of every honeypot detector. What this DOES catch, with a REAL

@@ -430,6 +430,20 @@ test("RH honeypot guard: real sell-sim blocks un-sellable coins + warns on risky
   }
 });
 
+test("RH drain audit: flags coins that took your tokens with no sale (received >> held)", () => {
+  const rhLib = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
+  const audit = functionBody(rhLib, "rhWalletTokenAudit");
+  assert.match(audit, /balanceOf/);
+  assert.match(audit, /neverSold/);                     // drained only if you didn't sell it away
+  assert.match(audit, /drained:/);
+  assert.match(serverSource, /pathname === "\/api\/web\/rh\/holdings-audit"/);
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /function loadRhDrainAudit/);
+    assert.match(src, /rug \/ clawback/);
+    assert.match(src, /\/api\/web\/rh\/holdings-audit/);
+  }
+});
+
 test("launch form survives navigation + warns on no dev buy", () => {
   for (const src of [ggSource, indexSource]) {
     // Whole-form snapshot/restore so leaving the Launch page and coming back keeps text + images.
