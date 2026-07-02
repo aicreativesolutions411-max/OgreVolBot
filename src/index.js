@@ -8014,6 +8014,35 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, result);
       return;
     }
+    // RH power tools: TP/SL guards, bundle buys, volume bot (same features as the Solana side).
+    if (request.method === "POST" && pathname === "/api/web/rh/guards") {
+      sendWebJson(request, response, 200, await webRhArmGuard(auth.userId, await readJsonRequestBody(request)));
+      return;
+    }
+    if (request.method === "GET" && pathname === "/api/web/rh/guards") {
+      sendWebJson(request, response, 200, await webRhGuards(auth.userId));
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/rh/guards/cancel") {
+      sendWebJson(request, response, 200, await webRhCancelGuard(auth.userId, await readJsonRequestBody(request)));
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/rh/bundle") {
+      sendWebJson(request, response, 200, await webRhBundle(auth.userId, await readJsonRequestBody(request)));
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/rh/volume/start") {
+      sendWebJson(request, response, 200, await webRhVolumeStart(auth.userId, await readJsonRequestBody(request)));
+      return;
+    }
+    if (request.method === "GET" && pathname === "/api/web/rh/volume/status") {
+      sendWebJson(request, response, 200, webRhVolumeStatus(auth.userId));
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/rh/volume/stop") {
+      sendWebJson(request, response, 200, webRhVolumeStop(auth.userId));
+      return;
+    }
     // Presale "buy + send at launch" ESCROW — GATED (501 until PRESALE_ESCROW_ENABLED=true). Creator-only.
     if (request.method === "POST" && pathname === "/api/web/presale/escrow/create") {
       const result = await webCreatePresaleEscrow(auth.userId, await readJsonRequestBody(request, 8_000));
@@ -11144,6 +11173,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(sniperSettingsPath(), { users: {} });
   await writeJsonIfMissing(tradeHistoryPath(), { trades: [] });
   await writeJsonIfMissing(pumpLaunchAttemptsPath(), { attempts: [] });
+  await writeJsonIfMissing(rhGuardsPath(), { guards: [] });
   await writeJsonIfMissing(webAuthPath(), { codes: [], sessions: [] });
   await writeJsonIfMissing(lockInEventsPath(), { events: [] });
   await writeJsonIfMissing(terminalFeedEventsPath(), { events: [] });
@@ -32695,6 +32725,206 @@ function scheduleRhFeeSweep() {
       rhFeeSweepBusy = false;
     }
   }, 2_000);
+}
+
+// ---------- Robinhood Chain power tools: TP/SL guards, bundle buys, volume bot ----------
+// Same features the Solana side has, on RH coins. All trades route through webRhTradeCore (Relay
+// swaps, gas-estimated, fee-skimmed), so every tool inherits the same safety + fee behavior.
+
+// TP/SL guards: armed positions persisted to disk; a ticker checks pool-implied prices (Relay quote —
+// Render's IP is rate-limited on DexScreener, and implied prices work even for unindexed coins) and
+// fires the sell through the normal trade path when a target/floor is hit.
+function rhGuardsPath() { return path.join(CONFIG.dataDir, "rh-exit-guards.json"); }
+async function readRhGuards() {
+  const store = await readJson(rhGuardsPath()).catch(() => null);
+  return store && Array.isArray(store.guards) ? store : { guards: [] };
+}
+async function writeRhGuards(store) { await writeJsonFile(rhGuardsPath(), store); }
+
+async function webRhArmGuard(userId, body = {}) {
+  const store = await readWalletStore();
+  const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
+  const tokenAddress = String(body.tokenAddress || "").trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(tokenAddress)) { const e = new Error("Invalid token address."); e.statusCode = 400; throw e; }
+  const tpPct = Number(body.takeProfitPct || 0);
+  const slPct = Number(body.stopLossPct || 0);
+  const sellPercent = Math.min(100, Math.max(1, Number(body.sellPercent || 100)));
+  if (!(tpPct > 0) && !(slPct > 0)) { const e = new Error("Set a take-profit %, a stop-loss %, or both."); e.statusCode = 400; throw e; }
+  let entryPriceUsd = Number(body.entryPriceUsd || 0);
+  if (!(entryPriceUsd > 0)) {
+    const implied = await rhImpliedPriceUsd(tokenAddress, rhFeeEvmWallet(CONFIG.appSecret, CONFIG.rhChainRpcUrl).address).catch(() => null);
+    entryPriceUsd = implied && implied.priceUsd > 0 ? implied.priceUsd : 0;
+  }
+  if (!(entryPriceUsd > 0)) { const e = new Error("Couldn't read a live price for this coin — try again in a moment."); e.statusCode = 400; throw e; }
+  const guard = {
+    id: crypto.randomUUID(),
+    userId,
+    walletIndex: parseWebWalletIndex(body.walletIndex),
+    walletPublicKey: wallet.publicKey,
+    tokenAddress,
+    symbol: String(body.symbol || "").slice(0, 16),
+    entryPriceUsd,
+    takeProfitPct: tpPct > 0 ? tpPct : null,
+    stopLossPct: slPct > 0 ? slPct : null,
+    sellPercent,
+    status: "active",
+    failCount: 0,
+    createdAt: new Date().toISOString()
+  };
+  const gs = await readRhGuards();
+  // One active guard per (user, wallet, token) — arming again replaces the old one.
+  gs.guards = gs.guards.filter((g) => !(g.status === "active" && g.userId === userId && g.walletIndex === guard.walletIndex && g.tokenAddress.toLowerCase() === tokenAddress.toLowerCase()));
+  gs.guards.push(guard);
+  gs.guards = gs.guards.slice(-300);
+  await writeRhGuards(gs);
+  await audit("web_rh_guard_arm", { userId, tokenAddress, tpPct, slPct, sellPercent, entryPriceUsd });
+  return { ok: true, guard };
+}
+
+async function webRhGuards(userId) {
+  const gs = await readRhGuards();
+  return { ok: true, guards: gs.guards.filter((g) => g.userId === userId).slice(-50).reverse() };
+}
+
+async function webRhCancelGuard(userId, body = {}) {
+  const gs = await readRhGuards();
+  const guard = gs.guards.find((g) => g.id === String(body.id || "") && g.userId === userId);
+  if (!guard) { const e = new Error("Guard not found."); e.statusCode = 404; throw e; }
+  guard.status = "cancelled";
+  await writeRhGuards(gs);
+  return { ok: true };
+}
+
+let rhGuardTickBusy = false;
+async function rhGuardTick() {
+  if (rhGuardTickBusy) return;
+  rhGuardTickBusy = true;
+  try {
+    const gs = await readRhGuards();
+    const active = gs.guards.filter((g) => g.status === "active");
+    if (!active.length) return;
+    const probe = rhFeeEvmWallet(CONFIG.appSecret, CONFIG.rhChainRpcUrl).address;
+    const priceByToken = new Map();
+    let changed = false;
+    for (const guard of active) {
+      const key = guard.tokenAddress.toLowerCase();
+      if (!priceByToken.has(key)) priceByToken.set(key, await rhImpliedPriceUsd(guard.tokenAddress, probe).catch(() => null));
+      const res = priceByToken.get(key);
+      const price = res && res.priceUsd > 0 ? res.priceUsd : 0;
+      if (!(price > 0)) continue;
+      const movePct = ((price - guard.entryPriceUsd) / guard.entryPriceUsd) * 100;
+      const hitTp = guard.takeProfitPct != null && movePct >= guard.takeProfitPct;
+      const hitSl = guard.stopLossPct != null && movePct <= -guard.stopLossPct;
+      if (!hitTp && !hitSl) continue;
+      try {
+        const result = await webRhTradeCore(guard.userId, {
+          walletIndex: String(guard.walletIndex),
+          side: "sell",
+          tokenAddress: guard.tokenAddress,
+          percent: guard.sellPercent
+        });
+        guard.status = "triggered";
+        guard.triggeredAt = new Date().toISOString();
+        guard.trigger = hitTp ? "take-profit" : "stop-loss";
+        guard.triggerPriceUsd = price;
+        guard.txHashes = result.txHashes;
+        changed = true;
+        await audit("web_rh_guard_fired", { userId: guard.userId, tokenAddress: guard.tokenAddress, trigger: guard.trigger, movePct: movePct.toFixed(1), tx: result.txHashes });
+      } catch (error) {
+        guard.failCount = (guard.failCount || 0) + 1;
+        guard.lastError = friendlyError(error).slice(0, 200);
+        if (guard.failCount >= 3) guard.status = "failed";   // e.g. bag already sold manually
+        changed = true;
+      }
+    }
+    if (changed) await writeRhGuards(gs);
+  } catch (error) {
+    console.warn(`[rh-guards] tick failed: ${friendlyError(error)}`);
+  } finally {
+    rhGuardTickBusy = false;
+  }
+}
+if (parseBoolean(process.env.RH_GUARDS_ENABLED || "true")) setInterval(rhGuardTick, 45_000);
+
+// Bundle buy: hit one RH coin from several wallets with randomized sizes + gaps (each wallet's derived
+// EVM account pays for its own buy — fund them first).
+async function webRhBundle(userId, body = {}) {
+  return runIdempotentMoneyOp("web-rh-bundle", userId, firstString(body.tradeAttemptId, body.clientRequestId),
+    () => webRhBundleCore(userId, body),
+    { busyMessage: "A Robinhood bundle is already in flight — give it a moment." });
+}
+async function webRhBundleCore(userId, body = {}) {
+  const tokenAddress = String(body.tokenAddress || "").trim();
+  const indexes = (Array.isArray(body.walletIndexes) ? body.walletIndexes : []).map((v) => Number.parseInt(v, 10)).filter((n) => Number.isInteger(n) && n >= 1);
+  if (!indexes.length || indexes.length > 20) { const e = new Error("Pick 1-20 wallets."); e.statusCode = 400; throw e; }
+  const minEth = Number(body.minEth || 0), maxEth = Number(body.maxEth || 0);
+  if (!(minEth > 0) || !(maxEth >= minEth) || maxEth > 0.5) { const e = new Error("Buy range must be 0 < min ≤ max ≤ 0.5 ETH."); e.statusCode = 400; throw e; }
+  const rows = [];
+  for (const idx of indexes) {
+    const amountEth = (minEth + Math.random() * (maxEth - minEth)).toFixed(6);
+    try {
+      const r = await webRhTradeCore(userId, { walletIndex: String(idx), side: "buy", tokenAddress, amountEth });
+      rows.push({ walletIndex: idx, ok: true, amountEth, out: r.outFormatted, tx: r.txHashes[r.txHashes.length - 1] });
+    } catch (error) {
+      rows.push({ walletIndex: idx, ok: false, amountEth, error: friendlyError(error).slice(0, 160) });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400 + Math.random() * 1_800)); // human-ish gaps
+  }
+  await audit("web_rh_bundle", { userId, tokenAddress, wallets: indexes.length, okCount: rows.filter((r) => r.ok).length });
+  return { ok: true, rows, summary: `${rows.filter((r) => r.ok).length}/${rows.length} wallets bought.` };
+}
+
+// Volume bot: rounds of buy -> sell-back per wallet on one RH coin, randomized sizes + gaps. Runs in
+// the background (job map + status endpoint) exactly like the Solana auto round-trip.
+const rhVolumeJobs = new Map(); // userId -> job
+async function webRhVolumeStart(userId, body = {}) {
+  const existing = rhVolumeJobs.get(userId);
+  if (existing && existing.status === "running") { const e = new Error("Your Robinhood volume bot is already running — stop it first."); e.statusCode = 409; throw e; }
+  const tokenAddress = String(body.tokenAddress || "").trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(tokenAddress)) { const e = new Error("Invalid token address."); e.statusCode = 400; throw e; }
+  const indexes = (Array.isArray(body.walletIndexes) ? body.walletIndexes : []).map((v) => Number.parseInt(v, 10)).filter((n) => Number.isInteger(n) && n >= 1).slice(0, 10);
+  if (!indexes.length) { const e = new Error("Pick at least one wallet."); e.statusCode = 400; throw e; }
+  const rounds = Math.min(10, Math.max(1, Number.parseInt(body.rounds || "3", 10) || 3));
+  const minEth = Number(body.minEth || 0), maxEth = Number(body.maxEth || 0);
+  if (!(minEth > 0) || !(maxEth >= minEth) || maxEth > 0.2) { const e = new Error("Trade size must be 0 < min ≤ max ≤ 0.2 ETH."); e.statusCode = 400; throw e; }
+  const job = { status: "running", tokenAddress, rounds, done: 0, trades: [], stop: false, startedAt: new Date().toISOString() };
+  rhVolumeJobs.set(userId, job);
+  (async () => {
+    try {
+      for (let round = 0; round < rounds && !job.stop; round += 1) {
+        for (const idx of indexes) {
+          if (job.stop) break;
+          const amountEth = (minEth + Math.random() * (maxEth - minEth)).toFixed(6);
+          try {
+            await webRhTradeCore(userId, { walletIndex: String(idx), side: "buy", tokenAddress, amountEth });
+            await new Promise((resolve) => setTimeout(resolve, 1_500 + Math.random() * 4_000));
+            const sold = await webRhTradeCore(userId, { walletIndex: String(idx), side: "sell", tokenAddress, percent: 100 });
+            job.trades.push({ walletIndex: idx, round: round + 1, ok: true, amountEth, backEth: sold.outFormatted });
+          } catch (error) {
+            job.trades.push({ walletIndex: idx, round: round + 1, ok: false, error: friendlyError(error).slice(0, 160) });
+          }
+          await new Promise((resolve) => setTimeout(resolve, 800 + Math.random() * 3_000));
+        }
+        job.done = round + 1;
+      }
+      job.status = job.stop ? "stopped" : "done";
+    } catch (error) {
+      job.status = "failed";
+      job.error = friendlyError(error).slice(0, 200);
+    }
+    await audit("web_rh_volume", { userId, tokenAddress, rounds: job.done, trades: job.trades.length, ok: job.trades.filter((t) => t.ok).length }).catch(() => {});
+  })();
+  return { ok: true, started: true, rounds, wallets: indexes.length };
+}
+function webRhVolumeStatus(userId) {
+  const job = rhVolumeJobs.get(userId);
+  if (!job) return { ok: true, status: "idle" };
+  return { ok: true, status: job.status, done: job.done, rounds: job.rounds, trades: job.trades.slice(-20), error: job.error || "" };
+}
+function webRhVolumeStop(userId) {
+  const job = rhVolumeJobs.get(userId);
+  if (job && job.status === "running") job.stop = true;
+  return { ok: true };
 }
 
 // SOL -> ETH on Robinhood Chain via Relay (live-verified route): one Solana tx signed by the user's

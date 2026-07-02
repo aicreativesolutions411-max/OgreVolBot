@@ -335,6 +335,31 @@ test("RH coin click -> full chart+buy SCREEN (Solana-style), editable ⚡ preset
   }
 });
 
+test("RH power tools: TP/SL guards + bundle + volume bot, all through the safe trade core", () => {
+  // Guards: persisted, price-checked via pool-implied quotes, fired through webRhTradeCore, fail-capped.
+  assert.match(serverSource, /pathname === "\/api\/web\/rh\/guards"/);
+  assert.match(serverSource, /pathname === "\/api\/web\/rh\/guards\/cancel"/);
+  const tick = functionBody(serverSource, "rhGuardTick");
+  assert.match(tick, /rhImpliedPriceUsd/);
+  assert.match(tick, /webRhTradeCore/);
+  assert.match(tick, /failCount.*>= 3/s);
+  assert.match(serverSource, /setInterval\(rhGuardTick/);
+  // Bundle + volume both route every trade through webRhTradeCore (fees + gas-estimation inherited).
+  assert.match(serverSource, /pathname === "\/api\/web\/rh\/bundle"/);
+  assert.match(functionBody(serverSource, "webRhBundle"), /runIdempotentMoneyOp\("web-rh-bundle"/);
+  assert.match(functionBody(serverSource, "webRhBundleCore"), /webRhTradeCore/);
+  assert.match(serverSource, /pathname === "\/api\/web\/rh\/volume\/start"/);
+  assert.match(functionBody(serverSource, "webRhVolumeStart"), /webRhTradeCore/);
+  assert.match(serverSource, /pathname === "\/api\/web\/rh\/volume\/stop"/);
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /function rhGuardModal/);
+    assert.match(src, /function rhBundleModal/);
+    assert.match(src, /function rhVolumeModal/);
+    assert.match(src, /🛠 Robinhood tools/);
+    assert.match(src, /GG\.rhGuardModal/);
+  }
+});
+
 test("launch form survives navigation + warns on no dev buy", () => {
   for (const src of [ggSource, indexSource]) {
     // Whole-form snapshot/restore so leaving the Launch page and coming back keeps text + images.

@@ -1386,6 +1386,12 @@
         '<div style="display:flex;gap:8px;margin-bottom:4px"><input id="rhTmAmt" inputmode="decimal" placeholder="custom ETH" style="flex:1;min-width:0"><button class="wbtn" id="rhTmBuy" style="flex:0 0 auto">⚡ Buy</button></div>'+
         '<div id="rhTmSellSec" style="display:none"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:10px 0 6px">Sell (% of your bag)</div>'+
         '<div style="display:flex;gap:6px">'+[25,50,100].map(p=>'<button class="wbtn ghost" style="flex:1;padding:9px 4px;font-size:13px" onclick="GG.rhSell(\''+esc(address)+'\','+p+')">'+p+'%</button>').join("")+'</div></div>'+
+        '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:12px 0 6px">🛠 Robinhood tools</div>'+
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">'+
+          '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhGuardModal(\''+esc(address)+'\')">🎯 TP / SL</button>'+
+          '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhBundleModal(\''+esc(address)+'\')">📦 Bundle buy</button>'+
+          '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhVolumeModal(\''+esc(address)+'\')">🔁 Volume bot</button>'+
+        '</div>'+
         '<p class="wnote" style="margin:10px 0 14px">Trades run from your active wallet\'s Robinhood account, paid in its ETH. One tap = real trade, no confirm. Standard SlimeWire trade fee applies, same as Solana.</p>'+
       '</div></div>';
     const cb=$("#rhTmBuy");if(cb)cb.onclick=()=>{const a=($("#rhTmAmt")||{}).value;if(!(Number(a)>0)){toast("Enter an ETH amount.",true);return;}rhTrade(address,"buy",{amountEth:String(a)});};
@@ -1396,6 +1402,87 @@
       const c=$("#rhTvChart");if(c&&r.pairAddress&&!c.querySelector("iframe"))c.innerHTML='<iframe src="https://dexscreener.com/robinhood/'+esc(r.pairAddress)+'?embed=1&theme=dark&trades=0&info=0&interval=5" style="width:100%;height:46vh;border:0;display:block"></iframe>';
     });
     rhTmRefreshBal(address);
+  }
+  // ---------- RH power tools (same features as the Solana side) ----------
+  function rhWalletChecks(id){
+    if(!(state.wallets||[]).length)return '<p class="mut" style="font-size:11px">Create wallets in the Wallet tab first.</p>';
+    return '<div style="max-height:150px;overflow:auto;border:1px solid var(--border);border-radius:10px;padding:8px;margin-bottom:10px">'+state.wallets.map(w=>'<label style="display:flex;gap:8px;align-items:center;font-size:12px;margin:3px 0"><input type="checkbox" class="'+id+'" value="'+w.index+'"'+(w.index===state.activeWallet?' checked':'')+'> '+esc(w.label||("Wallet "+w.index))+' <span class="mut" style="font-size:10px">'+esc(w.shortPublicKey||"")+'</span></label>').join("")+'</div><p class="wnote" style="margin:0 0 10px">Each wallet trades from its own Robinhood ETH — fund them under Wallet → 🪶 or Swap.</p>';
+  }
+  function rhChecked(id){return Array.from(document.querySelectorAll("."+id+":checked")).map(x=>x.value);}
+  // 🎯 TP/SL — armed server-side: the site watches the pool price and sells for you when it hits.
+  async function rhGuardModal(address){
+    const r=(state.rhRows||{})[String(address).toLowerCase()]||{address};
+    openModal('<h3>🎯 TP / SL — '+esc(r.symbol||short(address))+'</h3><p class="sub mut" style="font-size:12px">Set it and walk away — the site watches the price and sells automatically from your active wallet. Entry = current price.</p>'+
+      '<div class="field row2"><div><label>Take-profit % (up)</label><input id="rhGTp" inputmode="decimal" placeholder="50"></div><div><label>Stop-loss % (down)</label><input id="rhGSl" inputmode="decimal" placeholder="20"></div></div>'+
+      '<div class="field"><label>Sell % of bag when hit</label><input id="rhGPct" inputmode="numeric" value="100"></div>'+
+      '<button class="wbtn" id="rhGArm" style="width:100%">🎯 Arm</button>'+
+      '<div id="rhGList" style="margin-top:12px"><div class="loading"><span class="spin"></span></div></div>');
+    const arm=$("#rhGArm");if(arm)arm.onclick=async()=>{
+      const tp=($("#rhGTp")||{}).value,sl=($("#rhGSl")||{}).value,pct=($("#rhGPct")||{}).value||"100";
+      if(!(Number(tp)>0)&&!(Number(sl)>0)){toast("Set a take-profit %, stop-loss %, or both.",true);return;}
+      if(!(await ensureTradeReady()))return;
+      arm.disabled=true;arm.textContent="Arming…";
+      const {ok,d}=await jpost("/api/web/rh/guards",{walletIndex:String(state.activeWallet||1),tokenAddress:address,symbol:r.symbol||"",takeProfitPct:tp,stopLossPct:sl,sellPercent:pct,entryPriceUsd:r.priceUsd||0});
+      arm.disabled=false;arm.textContent="🎯 Arm";
+      if(ok&&d&&d.ok){toast("🎯 Armed — the site is watching this coin for you");rhGuardList(address);}
+      else toast((d&&(d.message||d.error))||"Couldn't arm",true);
+    };
+    rhGuardList(address);
+  }
+  async function rhGuardList(address){
+    const {ok,d}=await api("/api/web/rh/guards").catch(()=>({}));
+    const el=$("#rhGList");if(!el)return;
+    const rows=((ok&&d&&d.guards)||[]).filter(g=>!address||String(g.tokenAddress).toLowerCase()===String(address).toLowerCase());
+    if(!rows.length){el.innerHTML='<p class="mut" style="font-size:11px">No guards on this coin yet.</p>';return;}
+    el.innerHTML=rows.slice(0,8).map(g=>'<div style="display:flex;align-items:center;gap:8px;font-size:11px;border:1px solid var(--border);border-radius:8px;padding:6px 9px;margin-bottom:5px"><b>'+esc(g.symbol||short(g.tokenAddress))+'</b><span class="mut">'+(g.takeProfitPct?'TP +'+g.takeProfitPct+'%':'')+(g.stopLossPct?' SL -'+g.stopLossPct+'%':'')+' · sell '+g.sellPercent+'%</span><span style="margin-left:auto" class="'+(g.status==="active"?"up":"mut")+'">'+esc(g.status)+(g.trigger?' ('+esc(g.trigger)+')':'')+'</span>'+(g.status==="active"?'<button class="wbtn ghost" style="padding:2px 8px;font-size:10px" onclick="GG.rhGuardCancel(\''+esc(g.id)+'\',\''+esc(address)+'\')">✕</button>':'')+'</div>').join("");
+  }
+  async function rhGuardCancel(id,address){
+    const {ok,d}=await jpost("/api/web/rh/guards/cancel",{id});
+    if(ok&&d&&d.ok){toast("Guard cancelled");rhGuardList(address);}else toast("Couldn't cancel",true);
+  }
+  // 📦 Bundle buy — hit this coin from several wallets with randomized sizes + human-ish gaps.
+  function rhBundleModal(address){
+    const r=(state.rhRows||{})[String(address).toLowerCase()]||{address};
+    openModal('<h3>📦 Bundle buy — '+esc(r.symbol||short(address))+'</h3><p class="sub mut" style="font-size:12px">Buys from every checked wallet with a random size in your range, spaced out so it doesn\'t look like one robot.</p>'+
+      rhWalletChecks("rhBw")+
+      '<div class="field row2"><div><label>Min buy (ETH)</label><input id="rhBMin" inputmode="decimal" placeholder="0.002"></div><div><label>Max buy (ETH)</label><input id="rhBMax" inputmode="decimal" placeholder="0.01"></div></div>'+
+      '<button class="wbtn" id="rhBGo" style="width:100%">📦 Fire bundle</button><div id="rhBOut" style="margin-top:10px"></div>');
+    const go=$("#rhBGo");if(go)go.onclick=async()=>{
+      const idxs=rhChecked("rhBw");if(!idxs.length){toast("Check at least one wallet.",true);return;}
+      const min=($("#rhBMin")||{}).value,max=($("#rhBMax")||{}).value;
+      if(!(Number(min)>0)||!(Number(max)>=Number(min))){toast("Set a valid min/max ETH range.",true);return;}
+      if(!(await ensureTradeReady()))return;
+      go.disabled=true;go.textContent="Buying across wallets…";
+      const {ok,d}=await jpost("/api/web/rh/bundle",{tokenAddress:address,walletIndexes:idxs,minEth:min,maxEth:max,tradeAttemptId:attemptId()});
+      go.disabled=false;go.textContent="📦 Fire bundle";
+      if(ok&&d&&d.ok){toast(d.summary||"Bundle done");const o=$("#rhBOut");if(o)o.innerHTML=(d.rows||[]).map(x=>'<div style="font-size:11px" class="'+(x.ok?"up":"down")+'">Wallet '+x.walletIndex+': '+(x.ok?(x.amountEth+' ETH → '+Number(x.out||0).toLocaleString()):esc(x.error||"failed"))+'</div>').join("");}
+      else toast((d&&(d.message||d.error))||"Bundle failed",true);
+    };
+  }
+  // 🔁 Volume bot — rounds of buy -> sell-back per wallet, randomized. Background job + live status.
+  let rhVolPollT=null;
+  function rhVolumeModal(address){
+    const r=(state.rhRows||{})[String(address).toLowerCase()]||{address};
+    openModal('<h3>🔁 Volume bot — '+esc(r.symbol||short(address))+'</h3><p class="sub mut" style="font-size:12px">Each round: every checked wallet buys a random amount, then sells right back. Costs only fees + impact.</p>'+
+      rhWalletChecks("rhVw")+
+      '<div class="field row2"><div><label>Rounds</label><input id="rhVR" inputmode="numeric" value="3"></div><div><label>Min / Max (ETH)</label><div style="display:flex;gap:6px"><input id="rhVMin" inputmode="decimal" placeholder="0.002" style="flex:1;min-width:0"><input id="rhVMax" inputmode="decimal" placeholder="0.01" style="flex:1;min-width:0"></div></div></div>'+
+      '<div style="display:flex;gap:8px"><button class="wbtn" id="rhVGo" style="flex:1">🔁 Start</button><button class="wbtn ghost" id="rhVStop" style="flex:0 0 auto">Stop</button></div>'+
+      '<div id="rhVOut" class="mut" style="font-size:11px;margin-top:10px"></div>');
+    const paint=(s)=>{const o=$("#rhVOut");if(!o)return;if(!s||s.status==="idle"){o.textContent="Not running.";return;}o.innerHTML='<b>'+esc(s.status)+'</b> · round '+s.done+'/'+s.rounds+(s.error?' · '+esc(s.error):'')+'<br>'+(s.trades||[]).slice(-6).map(t=>'<span class="'+(t.ok?"up":"down")+'">W'+t.walletIndex+' r'+t.round+' '+(t.ok?(t.amountEth+'→'+(t.backEth?Number(t.backEth).toFixed(5):'?')+' ETH'):esc(t.error||'fail'))+'</span>').join("<br>");};
+    const poll=async()=>{const {ok,d}=await api("/api/web/rh/volume/status").catch(()=>({}));if(ok&&d)paint(d);if(d&&d.status==="running"&&$("#rhVOut")){clearTimeout(rhVolPollT);rhVolPollT=setTimeout(poll,4000);}};
+    const go=$("#rhVGo");if(go)go.onclick=async()=>{
+      const idxs=rhChecked("rhVw");if(!idxs.length){toast("Check at least one wallet.",true);return;}
+      const min=($("#rhVMin")||{}).value,max=($("#rhVMax")||{}).value,rounds=($("#rhVR")||{}).value||"3";
+      if(!(Number(min)>0)||!(Number(max)>=Number(min))){toast("Set a valid min/max ETH range.",true);return;}
+      if(!(await ensureTradeReady()))return;
+      go.disabled=true;go.textContent="Starting…";
+      const {ok,d}=await jpost("/api/web/rh/volume/start",{tokenAddress:address,walletIndexes:idxs,rounds,minEth:min,maxEth:max});
+      go.disabled=false;go.textContent="🔁 Start";
+      if(ok&&d&&d.ok){toast("🔁 Volume bot running");poll();}
+      else toast((d&&(d.message||d.error))||"Couldn't start",true);
+    };
+    const st=$("#rhVStop");if(st)st.onclick=async()=>{await jpost("/api/web/rh/volume/stop",{});toast("Stopping after the current trade…");poll();};
+    poll();
   }
   async function rhTmRefreshBal(address){
     const {ok,d}=await api("/api/web/rh/wallet?walletIndex="+encodeURIComponent(String(state.activeWallet||1))).catch(()=>({}));
@@ -2462,7 +2549,7 @@
         return '<tr onclick="GG.rhTrade(\''+esc(t.address)+'\')"><td class="l"><div style="display:flex;align-items:center;gap:8px">'+rhAvatar({imageUrl:img,symbol:t.symbol},22)+'<div><b style="font-size:12px">'+esc(t.symbol||"?")+'</b><div class="mut" style="font-size:10px">'+esc(t.name||"")+'</div></div></div></td>'+
           '<td class="mut">'+Number(t.uiAmount||0).toLocaleString(undefined,{maximumFractionDigits:2})+'</td>'+
           '<td>'+(val!=null?fmtUsd(val):"—")+'</td>'+
-          '<td><div style="display:flex;gap:6px;justify-content:flex-end">'+[25,50,100].map(p=>'<button class="buybtn sm"'+(p===100?' style="background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606"':'')+' onclick="event.stopPropagation();GG.rhSellPos(\''+esc(t.address)+'\','+p+')">'+(p===100?'All':p+'%')+'</button>').join("")+'</div></td></tr>';
+          '<td><div style="display:flex;gap:6px;justify-content:flex-end"><button class="buybtn sm" title="Auto-sell at a target / floor" onclick="event.stopPropagation();GG.rhGuardModal(\''+esc(t.address)+'\')">🎯</button>'+[25,50,100].map(p=>'<button class="buybtn sm"'+(p===100?' style="background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606"':'')+' onclick="event.stopPropagation();GG.rhSellPos(\''+esc(t.address)+'\','+p+')">'+(p===100?'All':p+'%')+'</button>').join("")+'</div></td></tr>';
       }).join("")+'</tbody></table></div>';
   }
   // Some held coins arrive without a logo from the backend metadata — fill the pfp from DexScreener
@@ -3407,6 +3494,7 @@
     launchRh:()=>{state.launchRail="robinhood";state.launchTab="coin";go("launch");},
     rhTrade:(a)=>rhTradeModal(a),rhBuy:(a,amt)=>rhTrade(a,"buy",{amountEth:amt}),rhSell:(a,p)=>rhTrade(a,"sell",{percent:p}),rhQuick:(a)=>rhTrade(a,"buy",{amountEth:rhQuickEth()}),
     rhSellPos:async(a,p)=>{await rhTrade(a,"sell",{percent:p});loadRhPositions();},rhAvTile:(s,z,r)=>rhAvTileHtml(s,z,r),rhPresetModal:()=>rhPresetModal(),
+    rhGuardModal:(a)=>rhGuardModal(a),rhGuardCancel:(id,a)=>rhGuardCancel(id,a),rhBundleModal:(a)=>rhBundleModal(a),rhVolumeModal:(a)=>rhVolumeModal(a),
     flipTrade:()=>{const t=document.querySelector('#v-trade .trade');if(!t)return;const next=t.getAttribute('data-focus')==='buy'?'chart':'buy';t.setAttribute('data-focus',next);const fab=document.getElementById('tradeFab');if(fab)fab.innerHTML=next==='buy'?'📈 Chart':'💰 Buy';const side=t.querySelector('.tradeSide'),v=document.getElementById('v-trade');if(next==='buy'&&side)side.scrollIntoView({behavior:'smooth',block:'start'});else if(v)v.scrollTo({top:0,behavior:'smooth'});},
     copyWallet:(w)=>{const i=$("#cpWallet");if(i){i.value=w;i.scrollIntoView({behavior:"smooth",block:"center"});i.focus();toast("Wallet loaded — set your size, then Start copying");}},
     kolProfile:openKolProfile,
