@@ -1514,6 +1514,7 @@
         '<div style="display:flex;gap:6px">'+[25,50,75,100].map(p=>'<button class="wbtn ghost" style="flex:1;padding:9px 4px;font-size:13px" onclick="GG.rhSell(\''+esc(address)+'\','+p+')">'+p+'%</button>').join("")+'</div></div>'+
         '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:12px 0 6px">🛠 Robinhood tools</div>'+
         '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">'+
+          '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhAddLiquidity(\''+esc(address)+'\')">💧 Add liquidity</button>'+
           '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhGuardModal(\''+esc(address)+'\')">🎯 TP / SL</button>'+
           '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhBundleModal(\''+esc(address)+'\')">📦 Bundle buy</button>'+
           '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhVolumeModal(\''+esc(address)+'\')">🔁 Volume bot</button>'+
@@ -1595,6 +1596,33 @@
       go.disabled=false;go.textContent="📦 Fire bundle";
       if(ok&&d&&d.ok){toast(d.summary||"Bundle done");const o=$("#rhBOut");if(o)o.innerHTML=(d.rows||[]).map(x=>'<div style="font-size:11px" class="'+(x.ok?"up":"down")+'">Wallet '+x.walletIndex+': '+(x.ok?(x.amountEth+' ETH → '+Number(x.out||0).toLocaleString()):esc(x.error||"failed"))+'</div>').join("");}
       else toast((d&&(d.message||d.error))||"Bundle failed",true);
+    };
+  }
+  // 💧 Make it buyable — create + seed the coin's Uniswap V3 pool with ETH + tokens. Until this exists
+  // there's NO market, so nobody (incl. you) can buy. The ETH:token ratio you choose sets the starting
+  // price. Full-range liquidity. This is the "open trading" step for a Robinhood launch.
+  function rhAddLiquidityModal(address,walletIdx){
+    const r=(state.rhRows||{})[String(address).toLowerCase()]||{address};
+    const idx=String(walletIdx||state.activeWallet||1);
+    openModal('<h3>💧 Make '+esc(r.symbol||short(address))+' buyable</h3>'+
+      '<p class="sub mut" style="font-size:12px;line-height:1.5">Create its trading pool so anyone can buy. You put in a little <b>ETH</b> + some of <b>your tokens</b> as the starting liquidity — the ratio sets the opening price. Do a <b>small</b> amount first to test; you can always add more by buying.</p>'+
+      '<div class="field"><label>Your wallet (must hold the tokens + ETH)</label>'+walletSelectHtml("rhLpWal")+'</div>'+
+      '<div class="field row2"><div><label>ETH to add</label><input id="rhLpEth" inputmode="decimal" placeholder="0.01"></div><div><label>Tokens to add</label><input id="rhLpTok" inputmode="numeric" placeholder="e.g. 100000000"></div></div>'+
+      '<div class="lcnote" style="display:block;font-size:11px">💡 Example: 0.01 ETH + 100,000,000 tokens → opening price ≈ 0.01 ETH per 100M. Bigger liquidity = smoother buys &amp; less price swing. Tokens must already be in this wallet (they are — the whole supply landed there at launch).</div>'+
+      '<button class="wbtn" id="rhLpGo" style="width:100%;margin-top:6px">💧 Create pool &amp; open trading</button>'+
+      '<div id="rhLpOut" style="margin-top:10px"></div>');
+    const ws=$("#rhLpWal");if(ws)ws.value=idx;
+    $("#rhLpGo").onclick=async()=>{
+      const eth=($("#rhLpEth").value||"").trim(),tok=($("#rhLpTok").value||"").trim();
+      if(!(Number(eth)>0)||!(Number(tok)>0)){toast("Enter both an ETH amount and a token amount.",true);return;}
+      if(!(await ensureTradeReady()))return;
+      const wIdx=String(($("#rhLpWal")&&$("#rhLpWal").value)||idx);
+      const btn=$("#rhLpGo");btn.disabled=true;btn.textContent="Creating pool (~1 min)…";
+      const {ok,d}=await jpost("/api/web/rh/create-pool",{tokenAddress:address,walletIndex:wIdx,ethAmount:eth,tokenAmount:tok,poolAttemptId:attemptId()});
+      btn.disabled=false;btn.textContent="💧 Create pool & open trading";
+      const out=$("#rhLpOut");
+      if(ok&&d&&d.ok){if(out)out.innerHTML='<div class="feebox" style="margin:0">✅ <b>Pool created — '+esc(r.symbol||"your coin")+' is now buyable!</b><div class="ln">Seeded '+esc(d.ethSeeded)+' ETH + '+esc(Number(d.tokenSeeded||tok).toLocaleString())+' tokens'+(d.pool?' · pool '+esc(short(d.pool)):'')+'</div><div class="ln"><a href="'+esc(d.explorerTx||"#")+'" target="_blank" rel="noopener">tx ↗</a></div></div>';toast("💧 Trading is open!");setTimeout(()=>{closeModal();rhTrade(address);},1800);}
+      else{if(out)out.innerHTML='<div class="mut" style="font-size:12px;color:var(--red,#ff6b6b)">'+esc((d&&(d.message||d.error))||"Pool creation failed — nothing was spent.")+'</div>';}
     };
   }
   // 📦 Auto-bundle when a pool opens — the closest thing to "bundle at launch" while RH coins launch
@@ -3522,8 +3550,8 @@
             '<div class="ln">Token: <b style="word-break:break-all">'+esc(d.tokenAddress)+'</b></div>'+
             '<div class="ln">Supply '+esc(Number(d.supplyTokens||supply).toLocaleString())+' — all in your wallet · gas paid '+esc(d.gasCostEth||"~0")+' ETH</div>'+
             '<div class="ln"><a href="'+esc(d.explorerToken||"#")+'" target="_blank" rel="noopener">View token on Blockscout</a> · <a href="'+esc(d.explorerTx||"#")+'" target="_blank" rel="noopener">deploy tx</a></div>'+
-            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="wbtn" type="button" onclick="GG.rhAutoBundleModal(\''+esc(d.tokenAddress)+'\')">📦 Auto-bundle when it gets a pool</button><button class="wbtn ghost" type="button" onclick="GG.rhTrade(\''+esc(d.tokenAddress)+'\')">Open coin →</button></div>'+
-            '<div class="ln mut" style="font-size:10px;margin-top:6px">Robinhood coins launch without a trading pool yet — arm a bundle and your wallets buy the instant a pool opens.</div></div>';
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="wbtn" type="button" onclick="GG.rhAddLiquidity(\''+esc(d.tokenAddress)+'\',\''+esc(devIdx)+'\')">💧 Make it buyable — add liquidity</button><button class="wbtn ghost" type="button" onclick="GG.rhAutoBundleModal(\''+esc(d.tokenAddress)+'\')">📦 Auto-bundle</button><button class="wbtn ghost" type="button" onclick="GG.rhTrade(\''+esc(d.tokenAddress)+'\')">Open coin →</button></div>'+
+            '<div class="ln mut" style="font-size:10px;margin-top:6px">Your coin has <b>no trading pool yet</b> — nobody (including you) can buy it until one exists. Tap <b>💧 Make it buyable</b> to create its pool with a little ETH + some of your tokens; that <b>opens trading</b> and sets the starting price.</div></div>';
           toast("🪶 Deployed on Robinhood Chain!");
         } else toast((d&&(d.message||d.error))||"Robinhood Chain launch failed",true);
         return;
@@ -3721,7 +3749,7 @@
     rhTrade:(a)=>rhTradeModal(a),rhBuy:(a,amt)=>rhTrade(a,"buy",{amountEth:amt}),rhSell:(a,p)=>rhTrade(a,"sell",{percent:p}),rhQuick:(a)=>rhTrade(a,"buy",{amountEth:rhQuickEth()}),
     rhSellPos:async(a,p)=>{await rhTrade(a,"sell",{percent:p});loadRhPositions();},rhAvTile:(s,z,r)=>rhAvTileHtml(s,z,r),rhPresetModal:()=>rhPresetModal(),
     rhGuardModal:(a)=>rhGuardModal(a),rhGuardCancel:(id,a)=>rhGuardCancel(id,a),rhBundleModal:(a)=>rhBundleModal(a),rhVolumeModal:(a)=>rhVolumeModal(a),
-    rhAutoBundleModal:(a)=>rhAutoBundleModal(a),rhAutoBundleCancel:(id,a)=>rhAutoBundleCancel(id,a),
+    rhAutoBundleModal:(a)=>rhAutoBundleModal(a),rhAutoBundleCancel:(id,a)=>rhAutoBundleCancel(id,a),rhAddLiquidity:(a,w)=>rhAddLiquidityModal(a,w),
     flipTrade:()=>{const t=document.querySelector('#v-trade .trade');if(!t)return;const next=t.getAttribute('data-focus')==='buy'?'chart':'buy';t.setAttribute('data-focus',next);const fab=document.getElementById('tradeFab');if(fab)fab.innerHTML=next==='buy'?'📈 Chart':'💰 Buy';const side=t.querySelector('.tradeSide'),v=document.getElementById('v-trade');if(next==='buy'&&side)side.scrollIntoView({behavior:'smooth',block:'start'});else if(v)v.scrollTo({top:0,behavior:'smooth'});},
     copyWallet:(w)=>{const i=$("#cpWallet");if(i){i.value=w;i.scrollIntoView({behavior:"smooth",block:"center"});i.focus();toast("Wallet loaded — set your size, then Start copying");}},
     kolProfile:openKolProfile,

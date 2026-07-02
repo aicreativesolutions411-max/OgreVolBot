@@ -123,6 +123,80 @@ export async function rhDeployToken({ solanaSecretKey, name, symbol, supplyToken
 
 export const rhArtifactInfo = { solcVersion: artifact.solcVersion, bytecodeBytes: (artifact.bytecode.length - 2) / 2 };
 
+// Uniswap V3 is the DEX on Robinhood Chain. To make a freshly-launched coin BUYABLE we create a
+// TOKEN/WETH pool (1% fee) and seed it with the creator's ETH + tokens. Addresses read off-chain.
+export const RH_UNIV3 = {
+  positionManager: "0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3",
+  weth: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+  fee: 10000, tickSpacing: 200,
+};
+function rhBigintSqrt(v) { if (v < 0n) throw new Error("neg"); if (v < 2n) return v; let x0 = v, x1 = (v >> 1n) + 1n; while (x1 < x0) { x0 = x1; x1 = (x1 + v / x1) >> 1n; } return x0; }
+
+// Create + seed a Uniswap V3 pool so the coin can be bought right away. Initial price = the ETH:token
+// ratio you provide. Full-range position. Gas-estimated BEFORE sending — a bad setup reverts in
+// simulation and costs nothing. Returns the tx hash + the pool once mined.
+export async function rhCreatePoolAndSeed({ solanaSecretKey, tokenAddress, ethAmount, tokenAmount, rpcUrl, confirmTimeoutMs = 150_000 }) {
+  const wallet = evmWalletFromSolana(solanaSecretKey, rpcUrl);
+  const PM = RH_UNIV3.positionManager, WETH = RH_UNIV3.weth, FEE = RH_UNIV3.fee, TS = RH_UNIV3.tickSpacing;
+  const ethWei = ethers.parseEther(String(ethAmount || "0"));
+  const tokWei = ethers.parseUnits(String(tokenAmount || "0"), 18);
+  if (ethWei <= 0n || tokWei <= 0n) throw new Error("Enter both an ETH amount and a token amount to seed the pool.");
+
+  const token = ethers.getAddress(String(tokenAddress));
+  const tokenIsToken0 = token.toLowerCase() < WETH.toLowerCase();
+  const token0 = tokenIsToken0 ? token : WETH;
+  const token1 = tokenIsToken0 ? WETH : token;
+  const amount0 = tokenIsToken0 ? tokWei : ethWei;
+  const amount1 = tokenIsToken0 ? ethWei : tokWei;
+  const sqrtPriceX96 = rhBigintSqrt((amount1 << 192n) / amount0);   // sqrt(price)·2^96
+  const tickUpper = Math.floor(887272 / TS) * TS, tickLower = -tickUpper; // full range, spacing-aligned
+
+  const pmIface = new ethers.Interface([
+    "function createAndInitializePoolIfNecessary(address token0, address token1, uint24 fee, uint160 sqrtPriceX96) payable returns (address pool)",
+    "function mint((address token0,address token1,uint24 fee,int24 tickLower,int24 tickUpper,uint256 amount0Desired,uint256 amount1Desired,uint256 amount0Min,uint256 amount1Min,address recipient,uint256 deadline)) payable returns (uint256 tokenId,uint128 liquidity,uint256 amount0,uint256 amount1)",
+    "function refundETH() payable",
+    "function multicall(bytes[] data) payable returns (bytes[] results)",
+  ]);
+  const erc = new ethers.Contract(token, ["function approve(address,uint256) returns (bool)", "function allowance(address,address) view returns (uint256)"], wallet);
+
+  // 1) Approve the position manager to pull exactly the seed tokens (if not already).
+  const allowance = await erc.allowance(wallet.address, PM).catch(() => 0n);
+  if (allowance < tokWei) { const a = await erc.approve(PM, tokWei); await a.wait(1, confirmTimeoutMs); }
+
+  // 2) create+init pool + mint the full-range position + refund leftover ETH, in ONE multicall. The ETH we
+  //    send is wrapped to WETH by the periphery for the WETH side of the position.
+  const deadline = Math.floor(Date.now() / 1000) + 1800;
+  const mintParams = { token0, token1, fee: FEE, tickLower, tickUpper, amount0Desired: amount0, amount1Desired: amount1, amount0Min: 0n, amount1Min: 0n, recipient: wallet.address, deadline };
+  const calls = [
+    pmIface.encodeFunctionData("createAndInitializePoolIfNecessary", [token0, token1, FEE, sqrtPriceX96]),
+    pmIface.encodeFunctionData("mint", [mintParams]),
+    pmIface.encodeFunctionData("refundETH", []),
+  ];
+  const data = pmIface.encodeFunctionData("multicall", [calls]);
+  const txReq = { to: PM, data, value: ethWei };
+  let gas;
+  try { gas = await wallet.estimateGas(txReq); }
+  catch (e) {
+    const msg = String(e?.shortMessage || e?.message || e);
+    if (/insufficient funds/i.test(msg)) throw Object.assign(new Error(`Not enough ETH — you need the ${ethAmount} ETH to seed + a little gas. Bridge more, then try again.`), { statusCode: 400 });
+    throw new Error(`Pool seed simulation failed (nothing was spent): ${msg.slice(0, 300)}`);
+  }
+  const tx = await wallet.sendTransaction({ ...txReq, gasLimit: (gas * 13n) / 10n });
+  const receipt = await tx.wait(1, confirmTimeoutMs);
+  // Resolve the pool address from the factory.
+  let pool = "";
+  try {
+    const fac = new ethers.Contract("0x1f7d7550b1b028f7571e69a784071f0205fd2efa", ["function getPool(address,address,uint24) view returns (address)"], wallet.provider);
+    pool = await fac.getPool(token0, token1, FEE);
+  } catch { /* best effort */ }
+  return {
+    ok: true, txHash: tx.hash, pool, tokenAddress: token, deployer: wallet.address,
+    ethSeeded: ethers.formatEther(ethWei), tokenSeeded: String(tokenAmount),
+    gasCostEth: receipt ? ethers.formatEther((receipt.gasUsed || 0n) * (receipt.gasPrice || 0n)) : "",
+    explorerTx: rhExplorerTx(tx.hash),
+  };
+}
+
 // ---------- Blockscout (the chain's own explorer) — free, always-current chain data ----------
 // No DexScreener/Gecko coverage for chain 4663 yet, so the coin feed comes straight from Blockscout:
 // token list (name/symbol/holders/volume/mcap/icon) + per-token creation time (cached forever — it

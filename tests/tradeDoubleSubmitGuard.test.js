@@ -515,6 +515,18 @@ test("RH feed: full coverage (holders + activity sources) + Safe tab of proven-s
     // Robinhood dev/bundle tab is ETH-aware (no SOL fields under the Robinhood rail).
     assert.match(src, /lcDevRhNote/);
   }
+  // "Make it buyable" — create + seed a Uniswap V3 pool so a launched coin can be bought. Gas-estimated
+  // first (a bad setup reverts in simulation, costs nothing).
+  assert.match(rhLib, /export async function rhCreatePoolAndSeed/);
+  assert.match(functionBody(rhLib, "rhCreatePoolAndSeed"), /createAndInitializePoolIfNecessary/);
+  assert.match(functionBody(rhLib, "rhCreatePoolAndSeed"), /estimateGas/);
+  assert.match(serverSource, /pathname === "\/api\/web\/rh\/create-pool"/);
+  assert.match(serverSource, /rhCreatePoolAndSeed/);
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /function rhAddLiquidityModal/);
+    assert.match(src, /\/api\/web\/rh\/create-pool/);
+    assert.match(src, /Make it buyable/);
+  }
 });
 
 test("RH board: per-coin safety badge + 'Safer only' filter + renounce signal", () => {

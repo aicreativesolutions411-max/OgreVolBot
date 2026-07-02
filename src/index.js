@@ -69,7 +69,7 @@ import {
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
-import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
+import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
 import {
@@ -8014,6 +8014,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
       // Same body ceiling as the pump launch route — the payload carries the coin image dataURL.
       const result = await webLaunchRhCoin(auth.userId, await readJsonRequestBody(request, 12_000_000));
       sendWebJson(request, response, 200, result);
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/rh/create-pool") {
+      sendWebJson(request, response, 200, await webRhCreatePool(auth.userId, await readJsonRequestBody(request)));
       return;
     }
     if (request.method === "GET" && pathname === "/api/web/rh/activity") {
@@ -33324,6 +33328,28 @@ async function webLaunchRhCoinCore(userId, body = {}) {
   });
   await audit("web_rh_launch", { userId, wallet: wallet.publicKey, token: result.tokenAddress, tx: result.txHash, supply: result.supplyTokens, gasEth: result.gasCostEth, creatorFeeBps: creatorFeeEnabled ? CONFIG.rhCreatorFeeBps : 0 });
   return { ok: true, ...result, chainId: RH_CHAIN_ID, explorerToken: rhExplorerToken(result.tokenAddress), creatorFeeBps: creatorFeeEnabled ? CONFIG.rhCreatorFeeBps : 0 };
+}
+
+// Make a launched coin BUYABLE: create + seed its Uniswap V3 pool with the creator's ETH + tokens. This
+// is the "add liquidity" step — until a pool exists there's nothing to buy against. Idempotency-guarded;
+// the user's derived RH wallet signs (same model as launch/buy). Every tx is gas-estimated first.
+async function webRhCreatePool(userId, body = {}) {
+  return runIdempotentMoneyOp("web-rh-create-pool", userId, firstString(body.poolAttemptId, body.clientRequestId),
+    async () => {
+      const store = await readWalletStore();
+      const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
+      const keypair = decryptWallet(wallet);
+      const res = await rhCreatePoolAndSeed({
+        solanaSecretKey: keypair.secretKey,
+        tokenAddress: String(body.tokenAddress || ""),
+        ethAmount: body.ethAmount,
+        tokenAmount: body.tokenAmount,
+        rpcUrl: CONFIG.rhChainRpcUrl,
+      });
+      await audit("web_rh_create_pool", { userId, wallet: wallet.publicKey, token: res.tokenAddress, pool: res.pool, tx: res.txHash, ethSeeded: res.ethSeeded, tokenSeeded: res.tokenSeeded });
+      return { ...res, chainId: RH_CHAIN_ID };
+    },
+    { busyMessage: "A pool seed for this coin is already in flight — give it a moment." });
 }
 
 async function recordTradeEvents(events) {
