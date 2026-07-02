@@ -1275,7 +1275,7 @@
       // Layout contract (mobile): middle column min-width:0 + name flex:1 min-width:0 ellipsis + stats
       // nowrap-ellipsis, right-side chips flex:0 0 auto — the ⚡ can NEVER be pushed out of frame.
       return '<div class="rhrow" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;overflow:hidden" onclick="GG.rhTrade(\''+esc(r.address)+'\')">'+
-      (r.imageUrl?'<img src="'+esc(r.imageUrl)+'" style="width:26px;height:26px;border-radius:50%;object-fit:cover;flex:0 0 auto" onerror="this.style.display=\'none\'">':'<span style="font-size:18px;flex:0 0 auto">🪙</span>')+
+      rhAvatar(r,26)+
       '<div style="min-width:0;flex:1;overflow:hidden"><div style="display:flex;gap:6px;align-items:center;min-width:0"><b style="font-size:12px;flex:0 0 auto">'+esc(r.symbol||"?")+'</b>'+(isNew?'<span class="mut" style="font-size:9px;flex:0 0 auto">'+ago(r.createdAt)+'</span>':'')+'<span class="mut" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.name||"")+'</span>'+(r.slimewire?'<span title="Launched on SlimeWire" style="font-size:9px;background:var(--accent,#6dc36d);color:#08130a;border-radius:6px;padding:1px 5px;font-weight:700;flex:0 0 auto">SW</span>':'')+'</div>'+
       '<div class="mut" style="font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(stats||(r.noPool?'no pool yet — tradable once liquidity opens':(isNew?'brand new — no trades yet':'—')))+'</div></div>'+
       (Number.isFinite(r.m5)&&r.m5!==0?'<span class="chg '+(r.m5>=0?'up':'down')+'" style="font-size:10px;flex:0 0 auto;white-space:nowrap">'+(r.m5>=0?'+':'')+r.m5+'%</span>':'')+
@@ -1302,9 +1302,26 @@
     state.pollT=setTimeout(()=>{if(state.route==="trenches"&&state.trenchTab==="rh")renderRhBoard(wrap);},30000);
   }
   function rhQuickEth(){const v=Number(localStorage.getItem("ggRhQuick")||"0.005");return isFinite(v)&&v>0?String(v):"0.005";}
+  // Coin avatar with a deterministic letter-tile fallback — a row should never look half-rendered just
+  // because a brand-new coin has no image indexed anywhere yet (same polish as the Solana pair cells).
+  function rhAvatar(r,size,radius){
+    size=size||26;radius=radius==null?"50%":radius;
+    if(r&&r.imageUrl)return '<img src="'+esc(r.imageUrl)+'" style="width:'+size+'px;height:'+size+'px;border-radius:'+radius+';object-fit:cover;flex:0 0 auto" onerror="this.outerHTML=GG.rhAvTile(\''+esc((r.symbol||"?").slice(0,2))+'\','+size+',\''+radius+'\')">';
+    return rhAvTileHtml((r&&r.symbol)||"?",size,radius);
+  }
+  function rhAvTileHtml(sym,size,radius){
+    const s=String(sym||"?").slice(0,2).toUpperCase();
+    let h=0;for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))%360;
+    return '<span style="width:'+size+'px;height:'+size+'px;border-radius:'+radius+';flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;font-size:'+Math.round(size*0.38)+'px;font-weight:800;color:#08130a;background:hsl('+h+',55%,62%)">'+esc(s)+'</span>';
+  }
   async function rhEnrichRows(rows){
     try{
-      const by=await dexTokensBatch(rows.map(r=>r.address));
+      // DexScreener caps 30 addresses per call and the board holds ~100 rows — chunk through ALL of
+      // them in parallel so every coin gets its data, not just the first 30.
+      const addrs=Array.from(new Set(rows.map(r=>r.address).filter(Boolean)));
+      const chunks=[];for(let i=0;i<addrs.length&&i<120;i+=30)chunks.push(addrs.slice(i,i+30));
+      const results=await Promise.all(chunks.map(c=>dexTokensBatch(c)));
+      const by=Object.assign({},...results);
       const byLc={};Object.keys(by).forEach(k=>{byLc[k.toLowerCase()]=by[k];});   // EVM addr case differs by source
       let changed=false;
       for(const r of rows){
@@ -1323,7 +1340,7 @@
     const r=(state.rhRows||{})[String(address).toLowerCase()]||{address};
     const st=(v)=>v==null?"—":fmtUsd(Number(v));
     openModal('<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">'+
-      (r.imageUrl?'<img src="'+esc(r.imageUrl)+'" style="width:44px;height:44px;border-radius:12px;object-fit:cover">':'<span style="font-size:30px">🪙</span>')+
+      rhAvatar(r,44,"12px")+
       '<div style="min-width:0"><h3 style="margin:0">'+esc(r.symbol||"?")+(r.slimewire?' <span style="font-size:9px;background:var(--accent,#6dc36d);color:#08130a;border-radius:6px;padding:1px 5px;font-weight:700;vertical-align:middle">SW</span>':'')+'</h3><div class="mut" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.name||"")+' · Robinhood Chain</div></div></div>'+
       '<div id="rhTmChart" style="margin-bottom:8px"></div>'+
       '<div id="rhTmStats" style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px;margin-bottom:8px">'+
@@ -2414,7 +2431,7 @@
         const o=byLc[String(t.address).toLowerCase()]||{};
         const val=o.price>0?o.price*Number(t.uiAmount||0):null;
         const img=o.img||t.iconUrl||"";
-        return '<tr onclick="GG.rhTrade(\''+esc(t.address)+'\')"><td class="l"><div style="display:flex;align-items:center;gap:8px">'+(img?'<img src="'+esc(img)+'" style="width:22px;height:22px;border-radius:50%;object-fit:cover">':'🪙')+'<div><b style="font-size:12px">'+esc(t.symbol||"?")+'</b><div class="mut" style="font-size:10px">'+esc(t.name||"")+'</div></div></div></td>'+
+        return '<tr onclick="GG.rhTrade(\''+esc(t.address)+'\')"><td class="l"><div style="display:flex;align-items:center;gap:8px">'+rhAvatar({imageUrl:img,symbol:t.symbol},22)+'<div><b style="font-size:12px">'+esc(t.symbol||"?")+'</b><div class="mut" style="font-size:10px">'+esc(t.name||"")+'</div></div></div></td>'+
           '<td class="mut">'+Number(t.uiAmount||0).toLocaleString(undefined,{maximumFractionDigits:2})+'</td>'+
           '<td>'+(val!=null?fmtUsd(val):"—")+'</td>'+
           '<td><div style="display:flex;gap:6px;justify-content:flex-end">'+[25,50,100].map(p=>'<button class="buybtn sm"'+(p===100?' style="background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606"':'')+' onclick="event.stopPropagation();GG.rhSellPos(\''+esc(t.address)+'\','+p+')">'+(p===100?'All':p+'%')+'</button>').join("")+'</div></td></tr>';
@@ -3361,7 +3378,7 @@
     escrowModal,renderEscrow,escrowFinalize,escrowRefund,launchesModal,claimFees,toast,
     launchRh:()=>{state.launchRail="robinhood";state.launchTab="coin";go("launch");},
     rhTrade:(a)=>rhTradeModal(a),rhBuy:(a,amt)=>rhTrade(a,"buy",{amountEth:amt}),rhSell:(a,p)=>rhTrade(a,"sell",{percent:p}),rhQuick:(a)=>rhTrade(a,"buy",{amountEth:rhQuickEth()}),
-    rhSellPos:async(a,p)=>{await rhTrade(a,"sell",{percent:p});loadRhPositions();},
+    rhSellPos:async(a,p)=>{await rhTrade(a,"sell",{percent:p});loadRhPositions();},rhAvTile:(s,z,r)=>rhAvTileHtml(s,z,r),
     flipTrade:()=>{const t=document.querySelector('#v-trade .trade');if(!t)return;const next=t.getAttribute('data-focus')==='buy'?'chart':'buy';t.setAttribute('data-focus',next);const fab=document.getElementById('tradeFab');if(fab)fab.innerHTML=next==='buy'?'📈 Chart':'💰 Buy';const side=t.querySelector('.tradeSide'),v=document.getElementById('v-trade');if(next==='buy'&&side)side.scrollIntoView({behavior:'smooth',block:'start'});else if(v)v.scrollTo({top:0,behavior:'smooth'});},
     copyWallet:(w)=>{const i=$("#cpWallet");if(i){i.value=w;i.scrollIntoView({behavior:"smooth",block:"center"});i.focus();toast("Wallet loaded — set your size, then Start copying");}},
     kolProfile:openKolProfile,

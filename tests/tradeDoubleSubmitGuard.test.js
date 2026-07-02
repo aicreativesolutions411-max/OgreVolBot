@@ -304,6 +304,11 @@ test("RH rows: quick-buy stays in frame on mobile + fresh coins always get MC (i
     assert.match(src, /\.rhrow\{padding:8px 6px!important/);
     assert.match(src, /\.rhrow \.hideMb\{display:none\}/);
     assert.match(src, /no pool yet/);                          // honest empty-state on rows
+    // Full-coverage enrichment: DexScreener caps 30 addrs/call — the board must CHUNK through all rows.
+    assert.match(src, /chunks\.push\(addrs\.slice\(i,i\+30\)\)/);
+    // Letter-tile avatar fallback: no RH coin ever renders without a "pfp".
+    assert.match(src, /function rhAvTileHtml/);
+    assert.match(src, /rhAvatar\(r,26\)/);
   }
   // Server: pool-implied price fallback (tiny quote x on-chain supply) fills MC for unindexed coins.
   assert.match(serverSource, /scheduleRhPriceFill/);
