@@ -1300,7 +1300,7 @@
         '<div class="col"><div class="colhead"><b>New</b><span class="cnt" id="cnt-rhn">…</span></div><div class="collist" id="list-rhn"><div class="loading"><span class="spin"></span></div></div></div>'+
         '<div class="col"><div class="colhead"><b>🪶 Launch here</b></div><div class="collist" style="padding:12px"><p class="mut" style="font-size:12px;line-height:1.6">Launch your own coin on <b>Robinhood Chain</b> in under a minute — real on-chain token, whole supply to your wallet, and it shows up on this board with its PFP &amp; socials the moment it\'s live.</p><button class="wbtn" onclick="GG.launchRh()">🚀 Launch a Robinhood coin</button><p class="mut" style="font-size:11px;margin-top:10px">Tap any coin on this board to buy or sell it right here — same one-tap trading as your Solana coins.</p>'+
         '<label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-top:12px;border-top:1px solid var(--border);padding-top:10px"><input type="checkbox" id="rhSaferChk"'+(rhSaferOnly()?" checked":"")+'> 🔒 <b>Safer only</b> — hide coins our scan flags</label>'+
-        '<p class="mut" style="font-size:10px;margin:5px 0 0">Badges: ✅ <b>verified safe</b> (runs our fixed-supply no-rug contract — the ONLY 100%-guaranteed tier) · 🛡️ passed sell-check · ⚠️ risky (custom transfer code / reflection) · ⛔ can\'t sell. "Safer only" hides ⚠️/⛔. Honest note: renounce is NOT enough (the coin that rugged a user was renounced) — only ✅ is guaranteed; keep third-party size small.</p></div></div>';
+        '<p class="mut" style="font-size:10px;margin:5px 0 0">Badges: ✅ <b>verified safe</b> (runs our fixed-supply no-rug contract — the ONLY 100%-guaranteed tier) · 🛡️ <b>passed checks</b> (a real holder CAN sell it &amp; holders keep their tokens) · ⚠️ one wallet holds most of supply · ⛔ can\'t sell OR drains holder balances. "Safer only" hides ⚠️/⛔. Honest note: renounce is NOT enough (the coin that rugged a user was renounced) — only ✅ is guaranteed; keep third-party size small.</p></div></div>';
     }
     const ago=(iso)=>{const s=(Date.now()-Date.parse(iso||0))/1000;return !isFinite(s)?"":s<90?Math.round(s)+"s":s<5400?Math.round(s/60)+"m":s<129600?Math.round(s/3600)+"h":Math.round(s/86400)+"d";};
     const row=(r,isNew)=>{
@@ -1350,7 +1350,7 @@
       let v=state.rhSafety[k];
       if(!v){const {d}=await api("/api/web/rh/safety?token="+encodeURIComponent(addr)).catch(()=>({}));v=d||{verdict:"unknown"};state.rhSafety[k]=v;}
       const em=v.verdict==="block"?"⛔":v.verdict==="warn"?"⚠️":v.verdict==="verified"?"✅":v.verdict==="ok"?"🛡️":"·";
-      const tip=(v.reasons&&v.reasons.length?v.reasons.join("; "):"sell-check passed")+(v.ownerRenounced===false?" · owner not renounced":v.ownerRenounced===true?" · ownership renounced":"");
+      const tip=(v.reasons&&v.reasons.length?v.reasons.join("; "):v.verdict==="verified"?"verified safe — runs our fixed-supply no-rug contract":"checks passed — sellable & holders keep their tokens")+(v.ownerRenounced===false?" · owner not renounced":v.ownerRenounced===true?" · ownership renounced":"");
       document.querySelectorAll('.rhsafe[data-safe="'+addr+'"]').forEach(b=>{b.textContent=em;b.title=tip;});
       if(safer){document.querySelectorAll('.rhrow[data-rowaddr="'+addr+'"]').forEach(row=>{row.style.display=(v.verdict==="warn"||v.verdict==="block")?"none":"";});}
       else{document.querySelectorAll('.rhrow[data-rowaddr="'+addr+'"]').forEach(row=>{row.style.display="";});}
@@ -1467,7 +1467,7 @@
     if(!d||d.verdict==="unknown"){e2.innerHTML='🛡 <span class="mut">Couldn\'t scan this coin right now — trade carefully.</span>';return;}
     const bits=[];if(d.holders!=null)bits.push(d.holders+' holders');if(d.topPct!=null)bits.push('top wallet '+d.topPct+'%');
     if(d.verdict==="verified")e2.innerHTML='✅ <span class="up"><b>Verified safe</b></span> <span class="mut">— runs SlimeWire\'s fixed-supply contract: no owner, no mint, no fees, no reflection. It <b>cannot</b> rug. This is the only 100%-safe tier.</span>';
-    else if(d.verdict==="ok")e2.innerHTML='🛡 <span class="up">Sell-check passed</span> <span class="mut">— a holder can sell it'+(bits.length?' · '+esc(bits.join(' · ')):'')+(d.ownerRenounced?' · renounced':'')+'. Not 100% — only ✅ Verified coins are guaranteed.</span>';
+    else if(d.verdict==="ok")e2.innerHTML='🛡 <span class="up">Checks passed</span> <span class="mut">— a holder can sell it &amp; holders keep their tokens'+(bits.length?' · '+esc(bits.join(' · ')):'')+(d.ownerRenounced?' · renounced':'')+'. Not 100% — only ✅ Verified coins are guaranteed.</span>';
     else if(d.verdict==="warn")e2.innerHTML='⚠️ <span class="down">Risky</span> <span class="mut">— '+esc((d.reasons||[]).join('; '))+'</span>';
     else e2.innerHTML='⛔ <span class="down">Do not buy</span> <span class="mut">— '+esc((d.reasons||[]).join('; '))+'</span>';
   }
@@ -1595,7 +1595,7 @@
   async function rhTrade(address,side,opts){
     if(!(await ensureTradeReady()))return;
     // Pre-buy honeypot guard — a real on-chain sell-sim runs server-side too, but check here first so we
-    // can BLOCK un-sellable coins and WARN on risky ones (custom transfer code / concentration) before spending.
+    // can BLOCK un-sellable coins + balance-drainers and WARN on heavy concentration before spending.
     if(side==="buy"){
       const {d:sf}=await api("/api/web/rh/safety?token="+encodeURIComponent(address)).catch(()=>({}));
       if(sf&&sf.verdict==="block"){toast("⛔ Blocked to protect you — "+((sf.reasons&&sf.reasons[0])||"this coin can't be sold (honeypot)"),true);return;}

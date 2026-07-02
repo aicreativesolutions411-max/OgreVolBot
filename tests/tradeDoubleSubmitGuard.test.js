@@ -412,13 +412,19 @@ test("RH wallet: plain ETH balance panel + activity trail (where did the money g
   }
 });
 
-test("RH honeypot guard: real sell-sim blocks un-sellable coins + warns on risky ones before buying", () => {
+test("RH honeypot guard: sell-sim + holder-reconciliation block real scams (NOT a gas heuristic)", () => {
   const rhLib = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
   const check = functionBody(rhLib, "rhHoneypotCheck");
   assert.match(check, /transfer/);                       // real transfer sim from a holder
-  assert.match(check, /estimateGas/);                    // + gas (catches custom transfer code)
-  assert.match(check, /verdict = "block"/);
   assert.match(check, /sellable = false/);               // revert -> can't sell -> block
+  // Holder reconciliation: compare what holders RECEIVED to what they HOLD. Systematic loss = drainer.
+  assert.match(check, /recv/);
+  assert.match(check, /drains balances/);
+  // Gas is NOT a risk signal — every token on this chain is a ~79k-gas proxy, so a gas threshold flagged
+  // everything (incl. legit RH stock tokens). Guard against re-introducing a transfer-gas warn.
+  assert.doesNotMatch(check, /SIMPLE_TRANSFER_GAS \+ \d/);
+  assert.doesNotMatch(check, /runs custom code on every transfer/);
+  assert.match(check, /verdict = "block"/);
   // Server hard-blocks a "block" verdict on buys (fail-open only if the scan itself errors).
   assert.match(functionBody(serverSource, "webRhTradeCore"), /rhHoneypotCheck/);
   assert.match(functionBody(serverSource, "webRhTradeCore"), /verdict === "block"/);

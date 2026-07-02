@@ -238,42 +238,76 @@ export async function rhHoneypotCheck(tokenAddress, rpcUrl) {
     }
   } catch { /* no owner() — leave null */ }
 
-  // A real holder + total supply from Blockscout (for the transfer sim + concentration).
-  let holderAddr = ""; let holderRaw = "0";
+  // Holders + total supply. NOTE: gas is NOT used as a risk signal — EVERY token on this chain (incl.
+  // Robinhood's own legit stock tokens) is a proxy that burns ~79k per transfer, so a gas threshold
+  // flagged everything. We judge by what actually matters: can you sell, and do holders keep their bag.
+  let holderList = [];
   try {
     const hs = await bsJson(`/tokens/${tokenAddress}/holders`);
-    const first = (hs.items || [])[0];
-    if (first) { holderAddr = (first.address || {}).hash || ""; holderRaw = String(first.value || "0"); }
+    holderList = hs.items || [];
     const tk = await bsJson(`/tokens/${tokenAddress}`).catch(() => ({}));
     holders = Number(tk.holders_count || 0) || null;
-    if (tk.total_supply && holderRaw !== "0") {
-      const sup = Number(BigInt(tk.total_supply)); const top = Number(BigInt(holderRaw));
-      if (sup > 0) topPct = Math.round((top / sup) * 100);
+    // Concentration by the top NON-CONTRACT holder (the #1 is usually the LP pair / treasury — exclude it).
+    const topWallet = holderList.find((h) => h.address && !h.address.is_contract);
+    if (tk.total_supply && topWallet && Number(BigInt(tk.total_supply)) > 0) {
+      topPct = Math.round((Number(BigInt(topWallet.value || "0")) / Number(BigInt(tk.total_supply))) * 100);
     }
   } catch { /* Blockscout hiccup — sim still runs if we have a holder */ }
+  const holderAddr = ((holderList[0] || {}).address || {}).hash || "";
 
-  // Real execution sim: can a holder actually move the token? transfer(0x…dead, 1 unit) via eth_call +
-  // estimateGas from that holder. Revert on either = the token blocks transfers → un-sellable honeypot.
+  // (1) SELL-SIM: can a real holder actually move the token? transfer(dead,1) via eth_call. Revert =
+  // the token blocks transfers → un-sellable honeypot → BLOCK. This is the strongest, cleanest signal.
   if (holderAddr) {
     const provider = rhProvider(rpcUrl);
     const iface = new ethers.Interface(["function transfer(address,uint256) returns (bool)"]);
     const data = iface.encodeFunctionData("transfer", ["0x000000000000000000000000000000000000dEaD", 1n]);
     try {
       await provider.call({ from: holderAddr, to: tokenAddress, data });
-      const gas = await provider.estimateGas({ from: holderAddr, to: tokenAddress, data });
-      transferGas = Number(gas);
+      transferGas = Number(await provider.estimateGas({ from: holderAddr, to: tokenAddress, data }).catch(() => 0));
       sellable = true;
-      if (transferGas > SIMPLE_TRANSFER_GAS + 12_000) reasons.push("runs custom code on every transfer (fees / rebase / balance clawback possible)");
     } catch {
       sellable = false;
-      reasons.push("a holder can't even transfer this token — sells are blocked (honeypot)");
+      reasons.push("a real holder can't even transfer this token — sells are blocked (honeypot)");
     }
   }
-  if (topPct != null && topPct >= 60) reasons.push(`one wallet holds ~${topPct}% of supply — it can dump on you`);
-  if (holders != null && holders < 15) reasons.push(`only ${holders} holders — brand-new / untested`);
+
+  // (2) HOLDER RECONCILIATION: sample real holders and compare what they RECEIVED (sum of Transfer
+  // events) to what they HOLD now. If holders systematically hold far less than they received without
+  // selling, the token silently drains balances (reflection-down / clawback) → BLOCK. This is the real
+  // "is it safe" signal, far better than gas — it measures the outcome, not the method.
+  if (sellable !== false) {
+    const sample = holderList.filter((h) => h.address && !h.address.is_contract).slice(0, 4);
+    let checked = 0, drained = 0;
+    for (const h of sample) {
+      const addr = (h.address || {}).hash; if (!addr) continue;
+      try {
+        const tr = await bsJson(`/addresses/${addr}/token-transfers?type=ERC-20`);
+        let recv = 0n, sent = 0n;
+        for (const t of (tr.items || [])) {
+          const ta = ((t.token || {}).address_hash || (t.token || {}).address || "").toLowerCase();
+          if (ta !== tokenAddress.toLowerCase()) continue;
+          const v = BigInt((t.total || {}).value || "0");
+          if (((t.to || {}).hash || "").toLowerCase() === addr.toLowerCase()) recv += v; else sent += v;
+        }
+        if (recv <= 0n) continue;
+        checked += 1;
+        const held = BigInt(h.value || "0");
+        // Drained = never sold it out yet holds <65% of what came in.
+        if (sent === 0n && held * 100n < recv * 65n) drained += 1;
+      } catch { /* skip this holder */ }
+    }
+    if (checked >= 2 && drained >= Math.ceil(checked / 2)) {
+      sellable = sellable === null ? true : sellable;
+      reasons.unshift("holders are LOSING tokens with no sale — this coin drains balances (rug/clawback)");
+    }
+  }
+
+  // (3) Extreme concentration ONLY — a single real wallet holding almost everything can dump on you.
+  if (topPct != null && topPct >= 85) reasons.push(`one wallet holds ~${topPct}% of supply — it can dump on you`);
 
   let verdict = "ok";
-  if (sellable === false) verdict = "block";
+  const drainReason = reasons.some((r) => r.includes("drains balances") || r.includes("sells are blocked"));
+  if (sellable === false || drainReason) verdict = "block";
   else if (reasons.length) verdict = "warn";
   const result = { ok: true, verdict, sellable, transferGas, holders, topPct, ownerRenounced, reasons };
   safetyCache.set(key, { at: Date.now(), result });
