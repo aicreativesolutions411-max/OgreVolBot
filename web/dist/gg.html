@@ -154,6 +154,11 @@
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
   .colhead .cnt{margin-left:auto;font-size:11px;color:var(--muted);font-family:var(--mono)}
   .collist{flex:1 1 auto;overflow:auto;padding:6px}
+  /* RH board carries a 4th column (Safe) — widen the grid so it never wraps to a 2nd row on desktop. */
+  .board[data-mode="rh"]{grid-template-columns:repeat(4,1fr)}
+  .rhtabs{display:none}
+  .rhsoc a{color:var(--muted);text-decoration:none;font-size:11px;line-height:1;cursor:pointer}
+  .rhsoc a:hover{color:var(--green)}
   .card{display:flex;gap:11px;padding:11px;border-radius:12px;border:1px solid var(--border2);background:var(--row);margin-bottom:7px;cursor:pointer;transition:.12s}
   .card:hover{background:var(--row-hover);border-color:var(--border)}
   /* Slime Picks: scored card grid + a Top Wallets side panel, overriding the 3-col board layout */
@@ -408,6 +413,15 @@
     .board{grid-template-columns:1fr;overflow:auto;height:auto;min-height:100%}
     .col{border-right:none;border-bottom:1px solid var(--border)}
     .collist{overflow:visible}
+    /* RH board on phones: don't stack 4 tall columns (that's the "takes 2x space" mess). Show a segmented
+       Safe/Trending/New switcher and ONE clean list at a time. */
+    .board[data-mode="rh"]{display:block;grid-template-columns:1fr}
+    .board[data-mode="rh"] .rhtabs{display:flex;gap:6px;padding:8px 8px 10px;position:sticky;top:0;z-index:6;background:var(--bg)}
+    .board[data-mode="rh"] .rhtabs button{flex:1;padding:9px 4px;border-radius:10px;border:1px solid var(--border);background:var(--row);color:var(--muted);font-weight:800;font-size:12px;cursor:pointer}
+    .board[data-mode="rh"] .rhtabs button.on{border-color:var(--green);color:var(--green);background:var(--green-dim)}
+    .board[data-mode="rh"] .col{display:none;border-bottom:none}
+    .board[data-mode="rh"] .col.rhcol-on{display:flex}
+    .board[data-mode="rh"] .col .colhead{display:none}
     .tbl td.hideMb,.tbl th.hideMb{display:none}
     .botnav{display:flex;position:fixed;left:0;right:0;bottom:0;height:var(--botnav);z-index:60;background:rgba(7,11,8,.98);border-top:1px solid var(--border);padding-bottom:env(safe-area-inset-bottom)}
     .botnav button{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--muted);font-size:10px;font-weight:700}
@@ -1299,26 +1313,46 @@
   async function renderRhBoard(wrap){
     if(wrap.dataset.mode!=="rh"||!wrap.children.length){
       wrap.dataset.mode="rh";
-      wrap.innerHTML='<div class="col"><div class="colhead"><span class="pulse" style="background:var(--green)"></span><b>🛡 Safe</b><span class="cnt" id="cnt-rhs">…</span></div><div class="collist" id="list-rhs"><div class="loading"><span class="spin"></span></div></div></div>'+
-        '<div class="col"><div class="colhead"><span class="pulse"></span><b>Trending</b><span class="cnt" id="cnt-rht">…</span></div><div class="collist" id="list-rht"><div class="loading"><span class="spin"></span></div></div></div>'+
-        '<div class="col"><div class="colhead"><b>New</b><span class="cnt" id="cnt-rhn">…</span></div><div class="collist" id="list-rhn"><div class="loading"><span class="spin"></span></div></div></div>'+
-        '<div class="col"><div class="colhead"><b>🪶 Launch here</b></div><div class="collist" style="padding:12px"><p class="mut" style="font-size:12px;line-height:1.6">Launch your own coin on <b>Robinhood Chain</b> in under a minute — real on-chain token, whole supply to your wallet, and it shows up on this board with its PFP &amp; socials the moment it\'s live.</p><button class="wbtn" onclick="GG.launchRh()">🚀 Launch a Robinhood coin</button><p class="mut" style="font-size:11px;margin-top:10px">Tap any coin on this board to buy or sell it right here — same one-tap trading as your Solana coins.</p>'+
+      wrap.innerHTML='<div class="rhtabs">'+
+          '<button data-rhtab="safe">🛡 Safe</button>'+
+          '<button data-rhtab="trending" class="on">🔥 Trending</button>'+
+          '<button data-rhtab="new">✨ New</button>'+
+          '<button data-rhtab="launch">🪶 Launch</button>'+
+        '</div>'+
+        '<div class="col" data-rhcol="safe"><div class="colhead"><span class="pulse" style="background:var(--green)"></span><b>🛡 Safe</b><span class="cnt" id="cnt-rhs">…</span></div><div class="collist" id="list-rhs"><div class="loading"><span class="spin"></span></div></div></div>'+
+        '<div class="col rhcol-on" data-rhcol="trending"><div class="colhead"><span class="pulse"></span><b>Trending</b><span class="cnt" id="cnt-rht">…</span></div><div class="collist" id="list-rht"><div class="loading"><span class="spin"></span></div></div></div>'+
+        '<div class="col" data-rhcol="new"><div class="colhead"><b>New</b><span class="cnt" id="cnt-rhn">…</span></div><div class="collist" id="list-rhn"><div class="loading"><span class="spin"></span></div></div></div>'+
+        '<div class="col" data-rhcol="launch"><div class="colhead"><b>🪶 Launch here</b></div><div class="collist" style="padding:12px"><p class="mut" style="font-size:12px;line-height:1.6">Launch your own coin on <b>Robinhood Chain</b> in under a minute — real on-chain token, whole supply to your wallet, and it shows up on this board with its PFP &amp; socials the moment it\'s live.</p><button class="wbtn" onclick="GG.launchRh()">🚀 Launch a Robinhood coin</button><p class="mut" style="font-size:11px;margin-top:10px">Tap any coin on this board to buy or sell it right here — same one-tap trading as your Solana coins.</p>'+
         '<label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-top:12px;border-top:1px solid var(--border);padding-top:10px"><input type="checkbox" id="rhSaferChk"'+(rhSaferOnly()?" checked":"")+'> 🔒 <b>Safer only</b> — hide coins our scan flags</label>'+
         '<p class="mut" style="font-size:10px;margin:5px 0 0">Badges: ✅ <b>verified safe</b> (runs our fixed-supply no-rug contract — the ONLY 100%-guaranteed tier) · 🛡️ <b>no drain detected</b> (sellable, no backdoor seen yet) · ⚠️ heavy concentration OR a single backdoor move · ⛔ can\'t sell, OR the deployer uses a known <b>balance-drain service</b> / can seize holder tokens (rug). "Safer only" hides ⚠️/⛔. Honest note: this chain is currently flooded by ONE rug operation — 16+ deployers funnel coins through a shared drain contract that silently empties buyers seconds after they buy (no Transfer event, invisible on explorers). We now block every coin tied to it. But a brand-new coin that hasn\'t drained anyone YET can still turn — only ✅ Verified is a hard guarantee.</p></div></div>';
+      // Mobile segmented switcher: one clean list at a time (Safe/Trending/New/Launch) instead of 4 stacked columns.
+      wrap.querySelectorAll('.rhtabs button[data-rhtab]').forEach(btn=>btn.onclick=()=>{
+        const t=btn.dataset.rhtab;
+        wrap.querySelectorAll('.rhtabs button').forEach(x=>x.classList.toggle('on',x===btn));
+        wrap.querySelectorAll('.col[data-rhcol]').forEach(c=>c.classList.toggle('rhcol-on',c.dataset.rhcol===t));
+      });
     }
     const ago=(iso)=>{const s=(Date.now()-Date.parse(iso||0))/1000;return !isFinite(s)?"":s<90?Math.round(s)+"s":s<5400?Math.round(s/60)+"m":s<129600?Math.round(s/3600)+"h":Math.round(s/86400)+"d";};
     const row=(r,isNew)=>{
-      const stats=[r.marketCapUsd?('MC '+fmtUsd(r.marketCapUsd)):'',r.liquidityUsd?('Liq '+fmtUsd(r.liquidityUsd)):'',r.volume24hUsd?('Vol '+fmtUsd(r.volume24hUsd)):'',(r.holders?r.holders+' holders':'')].filter(Boolean).join(' · ');
-      // Layout contract (mobile): middle column min-width:0 + name flex:1 min-width:0 ellipsis + stats
-      // nowrap-ellipsis, right-side chips flex:0 0 auto — the ⚡ can NEVER be pushed out of frame.
-      return '<div class="rhrow" data-rowaddr="'+esc(r.address)+'" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;overflow:hidden" onclick="GG.rhTrade(\''+esc(r.address)+'\')">'+
-      rhAvatar(r,26)+
-      '<div style="min-width:0;flex:1;overflow:hidden"><div style="display:flex;gap:6px;align-items:center;min-width:0"><b style="font-size:12px;flex:0 0 auto">'+esc(r.symbol||"?")+'</b>'+(r.createdAt?'<span class="mut" style="font-size:9px;flex:0 0 auto" title="Coin age">⏱'+ago(r.createdAt)+'</span>':'')+'<span class="mut" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.name||"")+'</span>'+(r.slimewire?'<span title="Launched on SlimeWire" style="font-size:9px;background:var(--accent,#6dc36d);color:#08130a;border-radius:6px;padding:1px 5px;font-weight:700;flex:0 0 auto">SW</span>':'')+'</div>'+
-      '<div class="mut" style="font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(stats||(r.noPool?'no pool yet — tradable once liquidity opens':(isNew?'brand new — no trades yet':'—')))+'</div></div>'+
+      const ca=r.address;
+      // Info line ALWAYS has content: holders come from the chain (never blank), MC/vol fill from enrichment.
+      const stats=[r.marketCapUsd?('MC '+fmtUsd(r.marketCapUsd)):'',r.volume24hUsd?('Vol '+fmtUsd(r.volume24hUsd)):'',(r.holders?r.holders+' holders':'')].filter(Boolean).join(' · ')||(r.noPool?'no pool yet — tradable at open':(isNew?'brand new — no trades yet':'…'));
+      // Copy + socials strip (parity with the Solana rows), on the info line where there's room.
+      const soc=[];
+      if(r.x)soc.push('<a href="'+esc(r.x)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="X">𝕏</a>');
+      if(r.telegram)soc.push('<a href="'+esc(r.telegram)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Telegram">✈</a>');
+      if(r.website)soc.push('<a href="'+esc(r.website)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Website">🌐</a>');
+      soc.push('<a onclick="event.stopPropagation();GG.copy(\''+esc(ca)+'\')" title="Copy contract address">⧉</a>');
+      // Right side is exactly 3 flex:0 0 auto chips (change · safety · buy) so the ⚡ is ALWAYS in frame.
+      return '<div class="rhrow" data-rowaddr="'+esc(ca)+'" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;overflow:hidden" onclick="GG.rhTrade(\''+esc(ca)+'\')">'+
+      rhAvatar(r,30)+
+      '<div style="min-width:0;flex:1;overflow:hidden">'+
+        '<div style="display:flex;gap:6px;align-items:center;min-width:0"><b style="font-size:12.5px;flex:0 0 auto">'+esc(r.symbol||"?")+'</b>'+(r.createdAt?'<span class="mut" style="font-size:9px;flex:0 0 auto" title="Coin age">⏱'+ago(r.createdAt)+'</span>':'')+'<span class="mut" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.name||"")+'</span>'+(r.slimewire?'<span title="Launched on SlimeWire" style="font-size:9px;background:var(--accent,#6dc36d);color:#08130a;border-radius:6px;padding:1px 5px;font-weight:700;flex:0 0 auto">SW</span>':'')+'</div>'+
+        '<div style="display:flex;gap:8px;align-items:center;min-width:0;margin-top:2px"><span class="mut" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(stats)+'</span><span class="rhsoc" style="display:inline-flex;gap:9px;flex:0 0 auto">'+soc.join("")+'</span></div>'+
+      '</div>'+
       (Number.isFinite(r.m5)&&r.m5!==0?'<span class="chg '+(r.m5>=0?'up':'down')+'" style="font-size:10px;flex:0 0 auto;white-space:nowrap">'+(r.m5>=0?'+':'')+r.m5+'%</span>':'')+
-      (r.priceUsd?'<b class="hideMb" style="font-size:11px;flex:0 0 auto;white-space:nowrap">$'+esc(r.priceUsd>=1?r.priceUsd.toFixed(2):r.priceUsd.toPrecision(3))+'</b>':'')+
-      '<span class="rhsafe" data-safe="'+esc(r.address)+'" style="flex:0 0 auto;font-size:12px" title="Safety scan">'+(r.safety==="verified"?"✅":r.safety==="block"?"⛔":r.safety==="warn"?"⚠️":r.safety==="ok"?"🛡️":"🛡️")+'</span>'+
-      '<button class="buybtn sm" style="flex:0 0 auto" title="Quick buy '+esc(rhQuickEth())+' ETH" onclick="event.stopPropagation();GG.rhQuick(\''+esc(r.address)+'\')">⚡</button>'+
+      '<span class="rhsafe" data-safe="'+esc(ca)+'" style="flex:0 0 auto;font-size:13px" title="Safety scan">'+(r.safety==="verified"?"✅":r.safety==="block"?"⛔":r.safety==="warn"?"⚠️":r.safety==="ok"?"🛡️":"🛡️")+'</span>'+
+      '<button class="buybtn sm" style="flex:0 0 auto" title="Quick buy '+esc(rhQuickEth())+' ETH" onclick="event.stopPropagation();GG.rhQuick(\''+esc(ca)+'\')">⚡</button>'+
     '</div>';};
     const [s,t,n]=await Promise.all([
       api("/api/web/rh/pairs?category=safe").catch(()=>({})),

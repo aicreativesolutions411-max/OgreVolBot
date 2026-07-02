@@ -309,7 +309,7 @@ test("RH rows: quick-buy stays in frame on mobile + fresh coins always get MC (i
     assert.match(src, /chunks\.push\(addrs\.slice\(i,i\+30\)\)/);
     // Letter-tile avatar fallback: no RH coin ever renders without a "pfp".
     assert.match(src, /function rhAvTileHtml/);
-    assert.match(src, /rhAvatar\(r,26\)/);
+    assert.match(src, /rhAvatar\(r,30\)/);
   }
   // Server: pool-implied price fallback (tiny quote x on-chain supply) fills MC for unindexed coins.
   assert.match(serverSource, /scheduleRhPriceFill/);
@@ -484,10 +484,15 @@ test("RH feed: full coverage (holders + activity sources) + Safe tab of proven-s
   assert.match(functionBody(serverSource, "rhFeedTokens"), /scam\.has\(addr\)/);
   assert.match(functionBody(serverSource, "webRhPairs"), /cat === "safe"/);
   assert.match(functionBody(serverSource, "webRhPairs"), /r\.safety === "ok" \|\| r\.safety === "verified"/);
-  // UI: a Safe column that requests category=safe.
+  // UI: a Safe column that requests category=safe, a mobile tab switcher (one clean list, not 4 stacked
+  // columns), and copy + socials on each row (parity with the Solana rows).
   for (const src of [ggSource, indexSource]) {
     assert.match(src, /category=safe/);
     assert.match(src, /list-rhs/);
+    assert.match(src, /data-rhtab/);       // mobile segmented switcher
+    assert.match(src, /rhcol-on/);
+    assert.match(src, /class="rhsoc"/);    // copy + socials strip on rows
+    assert.match(src, /Copy contract address/);
   }
 });
 
