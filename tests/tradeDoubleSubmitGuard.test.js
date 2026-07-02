@@ -360,6 +360,27 @@ test("RH power tools: TP/SL guards + bundle + volume bot, all through the safe t
   }
 });
 
+test("RH: auto-bundle-when-pool-opens + coin age everywhere + 75% sells", () => {
+  // Server: arm store + watcher folded into the guard tick (fires webRhBundleCore on pool detection).
+  assert.match(serverSource, /pathname === "\/api\/web\/rh\/auto-bundle"/);
+  const abTick = functionBody(serverSource, "rhAutoBundleTick");
+  assert.match(abTick, /rhImpliedPriceUsd/);
+  assert.match(abTick, /webRhBundleCore/);
+  assert.match(abTick, /noPool/);                              // keep waiting until a pool exists
+  assert.match(abTick, /status = "firing"/);                  // persist before firing (no double-fire)
+  assert.match(functionBody(serverSource, "rhGuardTick"), /rhAutoBundleTick/); // shares the interval
+  // Age on Trending + chart (creation-time cache filled in background).
+  assert.match(serverSource, /scheduleRhCreatedFill/);
+  assert.match(functionBody(serverSource, "webRhPairs"), /rhCreatedCache/);
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /function rhAutoBundleModal/);
+    assert.match(src, /Auto-bundle when it gets a pool/);
+    assert.match(src, /\[25,50,75,100\]/);                     // 75% sell added
+    assert.match(src, /Age <b>/);                              // age in the coin-screen stats
+    assert.match(src, /⏱/);                                    // age chip on rows
+  }
+});
+
 test("launch form survives navigation + warns on no dev buy", () => {
   for (const src of [ggSource, indexSource]) {
     // Whole-form snapshot/restore so leaving the Launch page and coming back keeps text + images.

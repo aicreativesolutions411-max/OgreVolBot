@@ -8031,6 +8031,18 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, await webRhBundle(auth.userId, await readJsonRequestBody(request)));
       return;
     }
+    if (request.method === "POST" && pathname === "/api/web/rh/auto-bundle") {
+      sendWebJson(request, response, 200, await webRhArmAutoBundle(auth.userId, await readJsonRequestBody(request)));
+      return;
+    }
+    if (request.method === "GET" && pathname === "/api/web/rh/auto-bundle") {
+      sendWebJson(request, response, 200, await webRhAutoBundles(auth.userId));
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/rh/auto-bundle/cancel") {
+      sendWebJson(request, response, 200, await webRhCancelAutoBundle(auth.userId, await readJsonRequestBody(request)));
+      return;
+    }
     if (request.method === "POST" && pathname === "/api/web/rh/volume/start") {
       sendWebJson(request, response, 200, await webRhVolumeStart(auth.userId, await readJsonRequestBody(request)));
       return;
@@ -11174,6 +11186,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(tradeHistoryPath(), { trades: [] });
   await writeJsonIfMissing(pumpLaunchAttemptsPath(), { attempts: [] });
   await writeJsonIfMissing(rhGuardsPath(), { guards: [] });
+  await writeJsonIfMissing(rhAutoBundlesPath(), { bundles: [] });
   await writeJsonIfMissing(webAuthPath(), { codes: [], sessions: [] });
   await writeJsonIfMissing(lockInEventsPath(), { events: [] });
   await writeJsonIfMissing(terminalFeedEventsPath(), { events: [] });
@@ -32548,6 +32561,26 @@ function scheduleRhPriceFill(rows) {
   }, 50);
 }
 
+// Creation-time cache so Trending rows + the coin chart show age (New already resolves it inline).
+const rhCreatedCache = new Map(); // addrLc -> ISO
+let rhCreatedFillBusy = false;
+function scheduleRhCreatedFill(rows) {
+  if (rhCreatedFillBusy) return;
+  const missing = rows.filter((r) => !r.createdAt && !rhCreatedCache.has(r.address.toLowerCase())).slice(0, 15);
+  if (!missing.length) return;
+  rhCreatedFillBusy = true;
+  setTimeout(async () => {
+    try {
+      for (const r of missing) {
+        const ts = await rhTokenCreationTime(r.address).catch(() => "");
+        if (ts) rhCreatedCache.set(r.address.toLowerCase(), ts);
+      }
+    } finally {
+      rhCreatedFillBusy = false;
+    }
+  }, 50);
+}
+
 async function rhLaunchMetaByAddress() {
   const store = await readPumpLaunchAttempts().catch(() => ({ attempts: [] }));
   const map = new Map();
@@ -32588,6 +32621,10 @@ async function webRhPairs(category = "trending") {
     rows.sort((a, b) => (b.volume24hUsd || 0) - (a.volume24hUsd || 0) || (b.marketCapUsd || 0) - (a.marketCapUsd || 0) || b.holders - a.holders);
   }
   rows = rows.slice(0, 50);
+  // Attach coin age from the creation-time cache (so Trending rows + the chart show age too, like New);
+  // creation never changes, so once resolved it's permanent. Missing ones fill in the background.
+  for (const r of rows) { if (!r.createdAt) { const c = rhCreatedCache.get(r.address.toLowerCase()); if (c) r.createdAt = c; } }
+  scheduleRhCreatedFill(rows);
   // Fill fresh coins from the implied-price cache (pool quote x on-chain supply) so no row sits empty,
   // and mark true no-pool coins so the UI can say so. Missing ones resolve in the background.
   for (const r of rows) {
@@ -32795,15 +32832,75 @@ async function webRhCancelGuard(userId, body = {}) {
   return { ok: true };
 }
 
+// Auto-bundle-when-pool-opens: the honest version of "bundle at launch" for RH. A brand-new coin has
+// no pool to buy from, so we ARM a bundle; the guard ticker watches for a tradeable pool and fires the
+// bundle the instant one appears (24h window). Persisted next to the guards.
+function rhAutoBundlesPath() { return path.join(CONFIG.dataDir, "rh-auto-bundles.json"); }
+async function readRhAutoBundles() {
+  const store = await readJson(rhAutoBundlesPath()).catch(() => null);
+  return store && Array.isArray(store.bundles) ? store : { bundles: [] };
+}
+async function writeRhAutoBundles(store) { await writeJsonFile(rhAutoBundlesPath(), store); }
+async function webRhArmAutoBundle(userId, body = {}) {
+  const tokenAddress = String(body.tokenAddress || "").trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(tokenAddress)) { const e = new Error("Invalid token address."); e.statusCode = 400; throw e; }
+  const indexes = (Array.isArray(body.walletIndexes) ? body.walletIndexes : []).map((v) => Number.parseInt(v, 10)).filter((n) => Number.isInteger(n) && n >= 1);
+  if (!indexes.length || indexes.length > 20) { const e = new Error("Pick 1-20 wallets."); e.statusCode = 400; throw e; }
+  const minEth = Number(body.minEth || 0), maxEth = Number(body.maxEth || 0);
+  if (!(minEth > 0) || !(maxEth >= minEth) || maxEth > 0.5) { const e = new Error("Buy range must be 0 < min ≤ max ≤ 0.5 ETH."); e.statusCode = 400; throw e; }
+  const store = await readRhAutoBundles();
+  store.bundles = store.bundles.filter((b) => !(b.status === "armed" && b.userId === userId && b.tokenAddress.toLowerCase() === tokenAddress.toLowerCase()));
+  const bundle = { id: crypto.randomUUID(), userId, tokenAddress, walletIndexes: indexes, minEth, maxEth, symbol: String(body.symbol || "").slice(0, 16), status: "armed", createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 86_400_000).toISOString() };
+  store.bundles.push(bundle);
+  store.bundles = store.bundles.slice(-200);
+  await writeRhAutoBundles(store);
+  await audit("web_rh_autobundle_arm", { userId, tokenAddress, wallets: indexes.length });
+  return { ok: true, bundle };
+}
+async function webRhAutoBundles(userId) {
+  const store = await readRhAutoBundles();
+  return { ok: true, bundles: store.bundles.filter((b) => b.userId === userId).slice(-30).reverse() };
+}
+async function webRhCancelAutoBundle(userId, body = {}) {
+  const store = await readRhAutoBundles();
+  const b = store.bundles.find((x) => x.id === String(body.id || "") && x.userId === userId);
+  if (!b) { const e = new Error("Not found."); e.statusCode = 404; throw e; }
+  b.status = "cancelled";
+  await writeRhAutoBundles(store);
+  return { ok: true };
+}
+async function rhAutoBundleTick(probe) {
+  const store = await readRhAutoBundles();
+  const armed = store.bundles.filter((b) => b.status === "armed");
+  if (!armed.length) return;
+  let changed = false;
+  for (const b of armed) {
+    if (Date.parse(b.expiresAt) < Date.now()) { b.status = "expired"; changed = true; continue; }
+    const res = await rhImpliedPriceUsd(b.tokenAddress, probe).catch(() => null);
+    if (!res || res.noPool || !(res.priceUsd > 0)) continue; // no pool yet — keep waiting
+    b.status = "firing"; changed = true;
+    await writeRhAutoBundles(store); // persist BEFORE the slow bundle so a restart can't double-fire
+    try {
+      const result = await webRhBundleCore(b.userId, { tokenAddress: b.tokenAddress, walletIndexes: b.walletIndexes, minEth: b.minEth, maxEth: b.maxEth });
+      b.status = "fired"; b.firedAt = new Date().toISOString(); b.result = result.summary;
+      await audit("web_rh_autobundle_fired", { userId: b.userId, tokenAddress: b.tokenAddress, summary: result.summary });
+    } catch (error) {
+      b.status = "failed"; b.lastError = friendlyError(error).slice(0, 200);
+    }
+  }
+  if (changed) await writeRhAutoBundles(store);
+}
+
 let rhGuardTickBusy = false;
 async function rhGuardTick() {
   if (rhGuardTickBusy) return;
   rhGuardTickBusy = true;
   try {
+    const probe = rhFeeEvmWallet(CONFIG.appSecret, CONFIG.rhChainRpcUrl).address;
+    await rhAutoBundleTick(probe).catch((e) => console.warn(`[rh-autobundle] ${friendlyError(e)}`));
     const gs = await readRhGuards();
     const active = gs.guards.filter((g) => g.status === "active");
     if (!active.length) return;
-    const probe = rhFeeEvmWallet(CONFIG.appSecret, CONFIG.rhChainRpcUrl).address;
     const priceByToken = new Map();
     let changed = false;
     for (const guard of active) {

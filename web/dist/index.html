@@ -1278,7 +1278,7 @@
       // nowrap-ellipsis, right-side chips flex:0 0 auto — the ⚡ can NEVER be pushed out of frame.
       return '<div class="rhrow" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;overflow:hidden" onclick="GG.rhTrade(\''+esc(r.address)+'\')">'+
       rhAvatar(r,26)+
-      '<div style="min-width:0;flex:1;overflow:hidden"><div style="display:flex;gap:6px;align-items:center;min-width:0"><b style="font-size:12px;flex:0 0 auto">'+esc(r.symbol||"?")+'</b>'+(isNew?'<span class="mut" style="font-size:9px;flex:0 0 auto">'+ago(r.createdAt)+'</span>':'')+'<span class="mut" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.name||"")+'</span>'+(r.slimewire?'<span title="Launched on SlimeWire" style="font-size:9px;background:var(--accent,#6dc36d);color:#08130a;border-radius:6px;padding:1px 5px;font-weight:700;flex:0 0 auto">SW</span>':'')+'</div>'+
+      '<div style="min-width:0;flex:1;overflow:hidden"><div style="display:flex;gap:6px;align-items:center;min-width:0"><b style="font-size:12px;flex:0 0 auto">'+esc(r.symbol||"?")+'</b>'+(r.createdAt?'<span class="mut" style="font-size:9px;flex:0 0 auto" title="Coin age">⏱'+ago(r.createdAt)+'</span>':'')+'<span class="mut" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.name||"")+'</span>'+(r.slimewire?'<span title="Launched on SlimeWire" style="font-size:9px;background:var(--accent,#6dc36d);color:#08130a;border-radius:6px;padding:1px 5px;font-weight:700;flex:0 0 auto">SW</span>':'')+'</div>'+
       '<div class="mut" style="font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(stats||(r.noPool?'no pool yet — tradable once liquidity opens':(isNew?'brand new — no trades yet':'—')))+'</div></div>'+
       (Number.isFinite(r.m5)&&r.m5!==0?'<span class="chg '+(r.m5>=0?'up':'down')+'" style="font-size:10px;flex:0 0 auto;white-space:nowrap">'+(r.m5>=0?'+':'')+r.m5+'%</span>':'')+
       (r.priceUsd?'<b class="hideMb" style="font-size:11px;flex:0 0 auto;white-space:nowrap">$'+esc(r.priceUsd>=1?r.priceUsd.toFixed(2):r.priceUsd.toPrecision(3))+'</b>':'')+
@@ -1367,7 +1367,8 @@
     const ca=el("button","chip cachip");ca.title="Click to copy contract address";ca.innerHTML=esc(short(address))+' <span class="cc">⧉</span>';ca.onclick=()=>copy(address);sb.appendChild(ca);
     const pill=el("button","chip qbpill");pill.style.cssText="margin-left:auto";pill.textContent="⚡ "+rhQuickEth()+" ETH presets";pill.title="Set your Robinhood quick-buy amounts";pill.onclick=()=>rhPresetModal();sb.appendChild(pill);
     const st=(v)=>v==null?"—":fmtUsd(Number(v));
-    const statsHtml=()=>'<span>Price <b>'+(r.priceUsd?('$'+(r.priceUsd>=1?r.priceUsd.toFixed(2):r.priceUsd.toPrecision(3))):"—")+'</b></span><span>MC <b>'+st(r.marketCapUsd)+'</b></span><span>Liq <b>'+st(r.liquidityUsd)+'</b></span><span>Vol 24h <b>'+st(r.volume24hUsd)+'</b></span><span>Holders <b>'+(r.holders||0)+'</b></span>';
+    const rhAge=(iso)=>{const s=(Date.now()-Date.parse(iso||0))/1000;return !isFinite(s)||s<0?"":s<5400?Math.round(s/60)+"m":s<129600?Math.round(s/3600)+"h":Math.round(s/86400)+"d";};
+    const statsHtml=()=>'<span>Price <b>'+(r.priceUsd?('$'+(r.priceUsd>=1?r.priceUsd.toFixed(2):r.priceUsd.toPrecision(3))):"—")+'</b></span><span>MC <b>'+st(r.marketCapUsd)+'</b></span><span>Liq <b>'+st(r.liquidityUsd)+'</b></span><span>Vol 24h <b>'+st(r.volume24hUsd)+'</b></span><span>Holders <b>'+(r.holders||0)+'</b></span>'+(r.createdAt?'<span>Age <b>'+rhAge(r.createdAt)+'</b></span>':'');
     $("#v-rhtrade").innerHTML='<div style="display:flex;flex-direction:column;height:100%;overflow:auto">'+
       '<div id="rhTvChart" style="flex:0 0 auto;background:#0a0f0b">'+(r.pairAddress?'<iframe src="https://dexscreener.com/robinhood/'+esc(r.pairAddress)+'?embed=1&theme=dark&trades=0&info=0&interval=5" style="width:100%;height:46vh;border:0;display:block"></iframe>':'<div class="msg" style="padding:30px;font-size:12px">Chart appears once this coin\'s pool is indexed (usually minutes after first trades).</div>')+'</div>'+
       '<div style="padding:12px 14px;max-width:720px;width:100%;margin:0 auto">'+
@@ -1385,7 +1386,7 @@
         '<div style="display:flex;gap:6px;margin-bottom:8px">'+rhPresets().map(a=>'<button class="wbtn ghost" style="flex:1;padding:9px 4px;font-size:13px" onclick="GG.rhBuy(\''+esc(address)+'\',\''+esc(a)+'\')">'+esc(a)+'</button>').join("")+'</div>'+
         '<div style="display:flex;gap:8px;margin-bottom:4px"><input id="rhTmAmt" inputmode="decimal" placeholder="custom ETH" style="flex:1;min-width:0"><button class="wbtn" id="rhTmBuy" style="flex:0 0 auto">⚡ Buy</button></div>'+
         '<div id="rhTmSellSec" style="display:none"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:10px 0 6px">Sell (% of your bag)</div>'+
-        '<div style="display:flex;gap:6px">'+[25,50,100].map(p=>'<button class="wbtn ghost" style="flex:1;padding:9px 4px;font-size:13px" onclick="GG.rhSell(\''+esc(address)+'\','+p+')">'+p+'%</button>').join("")+'</div></div>'+
+        '<div style="display:flex;gap:6px">'+[25,50,75,100].map(p=>'<button class="wbtn ghost" style="flex:1;padding:9px 4px;font-size:13px" onclick="GG.rhSell(\''+esc(address)+'\','+p+')">'+p+'%</button>').join("")+'</div></div>'+
         '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:12px 0 6px">🛠 Robinhood tools</div>'+
         '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">'+
           '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhGuardModal(\''+esc(address)+'\')">🎯 TP / SL</button>'+
@@ -1459,6 +1460,37 @@
       else toast((d&&(d.message||d.error))||"Bundle failed",true);
     };
   }
+  // 📦 Auto-bundle when a pool opens — the closest thing to "bundle at launch" while RH coins launch
+  // pool-less. Arms server-side; the site watches for a tradeable pool and fires the bundle the instant
+  // one appears (24h window).
+  function rhAutoBundleModal(address){
+    const r=(state.rhRows||{})[String(address).toLowerCase()]||{address};
+    openModal('<h3>📦 Auto-bundle at pool open — '+esc(r.symbol||short(address))+'</h3><p class="sub mut" style="font-size:12px">Robinhood coins launch without a pool. Arm this and your checked wallets buy automatically the moment a trading pool opens (within 24h), each a random size in your range.</p>'+
+      rhWalletChecks("rhAb")+
+      '<div class="field row2"><div><label>Min buy (ETH)</label><input id="rhAbMin" inputmode="decimal" placeholder="0.002"></div><div><label>Max buy (ETH)</label><input id="rhAbMax" inputmode="decimal" placeholder="0.01"></div></div>'+
+      '<button class="wbtn" id="rhAbGo" style="width:100%">📦 Arm auto-bundle</button>'+
+      '<div id="rhAbList" style="margin-top:12px"></div>');
+    const go=$("#rhAbGo");if(go)go.onclick=async()=>{
+      const idxs=rhChecked("rhAb");if(!idxs.length){toast("Check at least one wallet.",true);return;}
+      const min=($("#rhAbMin")||{}).value,max=($("#rhAbMax")||{}).value;
+      if(!(Number(min)>0)||!(Number(max)>=Number(min))){toast("Set a valid min/max ETH range.",true);return;}
+      if(!(await ensureTradeReady()))return;
+      go.disabled=true;go.textContent="Arming…";
+      const {ok,d}=await jpost("/api/web/rh/auto-bundle",{tokenAddress:address,symbol:r.symbol||"",walletIndexes:idxs,minEth:min,maxEth:max});
+      go.disabled=false;go.textContent="📦 Arm auto-bundle";
+      if(ok&&d&&d.ok){toast("📦 Armed — buys fire when a pool opens (make sure those wallets hold ETH)");rhAutoBundleList(address);}
+      else toast((d&&(d.message||d.error))||"Couldn't arm",true);
+    };
+    rhAutoBundleList(address);
+  }
+  async function rhAutoBundleList(address){
+    const {ok,d}=await api("/api/web/rh/auto-bundle").catch(()=>({}));
+    const el=$("#rhAbList");if(!el)return;
+    const rows=((ok&&d&&d.bundles)||[]).filter(b=>!address||String(b.tokenAddress).toLowerCase()===String(address).toLowerCase());
+    if(!rows.length){el.innerHTML="";return;}
+    el.innerHTML='<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Armed / recent</div>'+rows.slice(0,6).map(b=>'<div style="display:flex;align-items:center;gap:8px;font-size:11px;border:1px solid var(--border);border-radius:8px;padding:6px 9px;margin-bottom:5px"><b>'+esc(b.symbol||short(b.tokenAddress))+'</b><span class="mut">'+b.walletIndexes.length+' wallets · '+b.minEth+'-'+b.maxEth+' ETH</span><span style="margin-left:auto" class="'+(b.status==="fired"?"up":b.status==="armed"?"":"mut")+'">'+esc(b.status)+'</span>'+(b.status==="armed"?'<button class="wbtn ghost" style="padding:2px 8px;font-size:10px" onclick="GG.rhAutoBundleCancel(\''+esc(b.id)+'\',\''+esc(address)+'\')">✕</button>':'')+'</div>').join("");
+  }
+  async function rhAutoBundleCancel(id,address){const {ok,d}=await jpost("/api/web/rh/auto-bundle/cancel",{id});if(ok&&d&&d.ok){toast("Auto-bundle cancelled");rhAutoBundleList(address);}else toast("Couldn't cancel",true);}
   // 🔁 Volume bot — rounds of buy -> sell-back per wallet, randomized. Background job + live status.
   let rhVolPollT=null;
   function rhVolumeModal(address){
@@ -2541,7 +2573,7 @@
     const by=await dexTokensBatch(toks.map(t=>t.address)).catch(()=>({}));
     const byLc={};Object.keys(by||{}).forEach(k=>{byLc[k.toLowerCase()]=by[k];});
     if(!$("#rhPosWrap"))return;
-    w.innerHTML='<div class="poshead" style="margin-top:14px"><b style="font-size:13px">🪶 Robinhood Chain bags</b><span class="mut" style="font-size:10px">wallet '+esc(String(state.activeWallet||1))+' · '+Number(d.eth||0).toFixed(5)+' ETH</span></div><div class="pcard"><table class="tbl"><thead><tr><th class="l">Asset</th><th>Amount</th><th>Value</th><th></th></tr></thead><tbody>'+
+    w.innerHTML='<div class="poshead" style="margin-top:14px"><b style="font-size:13px">🪶 Robinhood Chain bags</b><span class="mut" style="font-size:10px">wallet '+esc(String(state.activeWallet||1))+' · '+Number(d.eth||0).toFixed(5)+' ETH</span><button class="posref" style="margin-left:auto" title="Edit quick-buy presets" onclick="GG.rhPresetModal()">⚙ Presets</button></div><div class="pcard"><table class="tbl"><thead><tr><th class="l">Asset</th><th>Amount</th><th>Value</th><th></th></tr></thead><tbody>'+
       toks.map(t=>{
         const o=byLc[String(t.address).toLowerCase()]||{};
         const val=o.price>0?o.price*Number(t.uiAmount||0):null;
@@ -2549,7 +2581,7 @@
         return '<tr onclick="GG.rhTrade(\''+esc(t.address)+'\')"><td class="l"><div style="display:flex;align-items:center;gap:8px">'+rhAvatar({imageUrl:img,symbol:t.symbol},22)+'<div><b style="font-size:12px">'+esc(t.symbol||"?")+'</b><div class="mut" style="font-size:10px">'+esc(t.name||"")+'</div></div></div></td>'+
           '<td class="mut">'+Number(t.uiAmount||0).toLocaleString(undefined,{maximumFractionDigits:2})+'</td>'+
           '<td>'+(val!=null?fmtUsd(val):"—")+'</td>'+
-          '<td><div style="display:flex;gap:6px;justify-content:flex-end"><button class="buybtn sm" title="Auto-sell at a target / floor" onclick="event.stopPropagation();GG.rhGuardModal(\''+esc(t.address)+'\')">🎯</button>'+[25,50,100].map(p=>'<button class="buybtn sm"'+(p===100?' style="background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606"':'')+' onclick="event.stopPropagation();GG.rhSellPos(\''+esc(t.address)+'\','+p+')">'+(p===100?'All':p+'%')+'</button>').join("")+'</div></td></tr>';
+          '<td><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap"><button class="buybtn sm" title="Auto-sell at a target / floor" onclick="event.stopPropagation();GG.rhGuardModal(\''+esc(t.address)+'\')">🎯</button>'+[25,50,75,100].map(p=>'<button class="buybtn sm"'+(p===100?' style="background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606"':'')+' onclick="event.stopPropagation();GG.rhSellPos(\''+esc(t.address)+'\','+p+')">'+(p===100?'All':p+'%')+'</button>').join("")+'</div></td></tr>';
       }).join("")+'</tbody></table></div>';
   }
   // Some held coins arrive without a logo from the backend metadata — fill the pfp from DexScreener
@@ -3297,7 +3329,9 @@
           $("#lcOut").innerHTML='<div class="feebox">🪶 <b>'+esc(name)+' ('+esc(sym)+') is LIVE on Robinhood Chain!</b>'+
             '<div class="ln">Token: <b style="word-break:break-all">'+esc(d.tokenAddress)+'</b></div>'+
             '<div class="ln">Supply '+esc(Number(d.supplyTokens||supply).toLocaleString())+' — all in your wallet · gas paid '+esc(d.gasCostEth||"~0")+' ETH</div>'+
-            '<div class="ln"><a href="'+esc(d.explorerToken||"#")+'" target="_blank" rel="noopener">View token on Blockscout</a> · <a href="'+esc(d.explorerTx||"#")+'" target="_blank" rel="noopener">deploy tx</a></div></div>';
+            '<div class="ln"><a href="'+esc(d.explorerToken||"#")+'" target="_blank" rel="noopener">View token on Blockscout</a> · <a href="'+esc(d.explorerTx||"#")+'" target="_blank" rel="noopener">deploy tx</a></div>'+
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="wbtn" type="button" onclick="GG.rhAutoBundleModal(\''+esc(d.tokenAddress)+'\')">📦 Auto-bundle when it gets a pool</button><button class="wbtn ghost" type="button" onclick="GG.rhTrade(\''+esc(d.tokenAddress)+'\')">Open coin →</button></div>'+
+            '<div class="ln mut" style="font-size:10px;margin-top:6px">Robinhood coins launch without a trading pool yet — arm a bundle and your wallets buy the instant a pool opens.</div></div>';
           toast("🪶 Deployed on Robinhood Chain!");
         } else toast((d&&(d.message||d.error))||"Robinhood Chain launch failed",true);
         return;
@@ -3495,6 +3529,7 @@
     rhTrade:(a)=>rhTradeModal(a),rhBuy:(a,amt)=>rhTrade(a,"buy",{amountEth:amt}),rhSell:(a,p)=>rhTrade(a,"sell",{percent:p}),rhQuick:(a)=>rhTrade(a,"buy",{amountEth:rhQuickEth()}),
     rhSellPos:async(a,p)=>{await rhTrade(a,"sell",{percent:p});loadRhPositions();},rhAvTile:(s,z,r)=>rhAvTileHtml(s,z,r),rhPresetModal:()=>rhPresetModal(),
     rhGuardModal:(a)=>rhGuardModal(a),rhGuardCancel:(id,a)=>rhGuardCancel(id,a),rhBundleModal:(a)=>rhBundleModal(a),rhVolumeModal:(a)=>rhVolumeModal(a),
+    rhAutoBundleModal:(a)=>rhAutoBundleModal(a),rhAutoBundleCancel:(id,a)=>rhAutoBundleCancel(id,a),
     flipTrade:()=>{const t=document.querySelector('#v-trade .trade');if(!t)return;const next=t.getAttribute('data-focus')==='buy'?'chart':'buy';t.setAttribute('data-focus',next);const fab=document.getElementById('tradeFab');if(fab)fab.innerHTML=next==='buy'?'📈 Chart':'💰 Buy';const side=t.querySelector('.tradeSide'),v=document.getElementById('v-trade');if(next==='buy'&&side)side.scrollIntoView({behavior:'smooth',block:'start'});else if(v)v.scrollTo({top:0,behavior:'smooth'});},
     copyWallet:(w)=>{const i=$("#cpWallet");if(i){i.value=w;i.scrollIntoView({behavior:"smooth",block:"center"});i.focus();toast("Wallet loaded — set your size, then Start copying");}},
     kolProfile:openKolProfile,
