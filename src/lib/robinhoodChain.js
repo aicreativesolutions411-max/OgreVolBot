@@ -153,6 +153,28 @@ export async function rhListTokens(maxPages = 3) {
   return items;
 }
 
+// FRESHNESS source: Blockscout's /tokens is sorted by holders, so brand-new coins (1-5 holders) sit at
+// the very bottom and never surface. The GLOBAL token-transfers feed is time-ordered, so a coin's first
+// buys appear here the moment it launches — this is how we catch launches the holder-list misses. The
+// embedded `token` object carries full metadata (holders/supply/volume/icon), so no extra call per token.
+export async function rhRecentActiveTokens(maxPages = 2) {
+  const seen = new Map(); // addrLc -> token item (first/most-recent wins)
+  let params = "?type=ERC-20";
+  for (let page = 0; page < maxPages; page += 1) {
+    const data = await bsJson(`/token-transfers${params}`).catch(() => ({}));
+    for (const t of (data.items || [])) {
+      const tk = t.token || {};
+      const addr = String(tk.address_hash || tk.address || "").toLowerCase();
+      if (!addr || (tk.type && tk.type !== "ERC-20")) continue;
+      if (!seen.has(addr)) seen.set(addr, { ...tk, address_hash: tk.address_hash || tk.address, lastActiveAt: t.timestamp });
+    }
+    const next = data.next_page_params;
+    if (!next) break;
+    params = `?type=ERC-20&${new URLSearchParams(next).toString()}`;
+  }
+  return [...seen.values()];
+}
+
 // Per-wallet DRAIN audit: for every token this wallet has received, compare net-received (sum of
 // Transfer events) to the actual on-chain balanceOf. If a coin's contract silently reduced the balance
 // with NO sale (held << received and the wallet never sold), that's a rug/clawback — flag it red. This

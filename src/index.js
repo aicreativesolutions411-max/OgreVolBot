@@ -69,7 +69,7 @@ import {
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
-import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
+import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
 import {
@@ -32561,11 +32561,25 @@ async function webRhActivity(userId) {
 // creation never changes). Coins launched THROUGH SlimeWire are enriched from our own metadata
 // registry (image/socials/description captured at launch) — EVM tokens have no native PFP standard,
 // so the site plays the address->logo registry role that wallets/DEXes play on other chains.
+// Infra / non-memecoin tokens that should never appear on the board (bridged blue-chips, stablecoins,
+// wrapped ETH, Uniswap LP-position NFTs). Symbol-matched, case-insensitive.
+const RH_FEED_HIDE = new Set(["weth", "usdg", "pusdg", "arcusdg", "usde", "susde", "uni-v3-pos", "wsteth", "usdc", "usdt", "dai"]);
 let rhFeedCache = { at: 0, tokens: [] };
 async function rhFeedTokens() {
   if (Date.now() - rhFeedCache.at < 45_000 && rhFeedCache.tokens.length) return rhFeedCache.tokens;
-  const items = await rhListTokens(3);
-  const tokens = items.map((t) => {
+  // TWO sources merged: /tokens (top by holders — for Trending) + the global transfers feed (time-ordered
+  // — catches brand-new launches the holder list buries at the bottom). Dedupe by address.
+  const [byHolders, byActivity] = await Promise.all([
+    rhListTokens(5).catch(() => []),
+    rhRecentActiveTokens(3).catch(() => []),
+  ]);
+  const merged = new Map();
+  for (const t of [...byHolders, ...byActivity]) {
+    const addr = String(t.address_hash || t.address || "").toLowerCase();
+    if (!addr) continue;
+    if (!merged.has(addr)) merged.set(addr, t); else if (t.lastActiveAt) merged.get(addr).lastActiveAt = t.lastActiveAt;
+  }
+  const tokens = [...merged.values()].map((t) => {
     const decimals = Number(t.decimals || 18);
     let totalSupplyUi = 0;
     try { totalSupplyUi = Number(BigInt(t.total_supply || "0") / 10n ** BigInt(Math.max(0, decimals - 6))) / 1e6; } catch { /* odd supply strings */ }
@@ -32580,11 +32594,36 @@ async function rhFeedTokens() {
       priceUsd: Number(t.exchange_rate || 0) || null,
       marketCapUsd: Number(t.circulating_market_cap || 0) || null,
       volume24hUsd: Number(t.volume_24h || 0) || null,
-      reputation: t.reputation || ""
+      reputation: t.reputation || "",
+      lastActiveAt: t.lastActiveAt || ""
     };
-  }).filter((t) => t.address && t.symbol);
+  }).filter((t) => t.address && t.symbol && !RH_FEED_HIDE.has(t.symbol.toLowerCase()));
   rhFeedCache = { at: Date.now(), tokens };
   return tokens;
+}
+
+// Server-side SAFETY verdict cache for the feed — so every row can carry a 🛡/✅/⚠️/⛔ badge and the
+// "Safe" tab can filter to proven-safe coins. rhHoneypotCheck is expensive (several calls each), so we
+// fill in the BACKGROUND in small batches and serve from cache; the board polls every 30s and picks up
+// verdicts as they resolve. 10-min TTL (drain-service membership doesn't change minute-to-minute).
+const rhSafetyFeedCache = new Map(); // addrLc -> { verdict, at }
+let rhSafetyFillBusy = false;
+function scheduleRhSafetyFill(rows, want = 12) {
+  if (rhSafetyFillBusy) return;
+  const missing = rows.filter((r) => {
+    const c = rhSafetyFeedCache.get(r.address.toLowerCase());
+    return !c || Date.now() - c.at > 600_000;
+  }).slice(0, want);
+  if (!missing.length) return;
+  rhSafetyFillBusy = true;
+  setTimeout(async () => {
+    try {
+      for (const r of missing) {
+        const s = await rhHoneypotCheck(r.address).catch(() => null);
+        if (s) rhSafetyFeedCache.set(r.address.toLowerCase(), { verdict: s.verdict, at: Date.now() });
+      }
+    } finally { rhSafetyFillBusy = false; }
+  }, 50);
 }
 
 // Pool-implied price fallback for coins DexScreener/Blockscout can't price yet ("fresh coins with no
@@ -32667,7 +32706,19 @@ async function webRhPairs(category = "trending") {
       explorer: rhExplorerToken(t.address)
     };
   });
-  if (cat === "new") {
+  // Attach the cached server-side safety verdict to EVERY row (all tabs show the 🛡/✅/⚠️/⛔ badge).
+  for (const r of rows) { const s = rhSafetyFeedCache.get(r.address.toLowerCase()); if (s) r.safety = s.verdict; }
+  if (cat === "safe") {
+    // SAFE tab: only coins our scanner has confirmed clean (ok/verified) — everything tied to the drain
+    // service or otherwise flagged is excluded. Rank by real activity. Scan broadly in the background so
+    // the safe set keeps filling in; until a coin is scanned it's withheld (conservative — never show an
+    // unvetted coin as "safe"). This is the curated list for "what's actually safe to buy right now."
+    scheduleRhSafetyFill(rows, 24);
+    rows = rows
+      .filter((r) => r.safety === "ok" || r.safety === "verified")
+      .sort((a, b) => (b.safety === "verified" ? 1 : 0) - (a.safety === "verified" ? 1 : 0)
+        || (b.volume24hUsd || 0) - (a.volume24hUsd || 0) || (b.marketCapUsd || 0) - (a.marketCapUsd || 0) || b.holders - a.holders);
+  } else if (cat === "new") {
     // Resolve creation times for the youngest-looking slice only (bounded work per request; cached forever).
     const slice = rows.slice(0, 60);
     await Promise.all(slice.map(async (r) => { r.createdAt = await rhTokenCreationTime(r.address); }));
@@ -32676,6 +32727,7 @@ async function webRhPairs(category = "trending") {
     rows.sort((a, b) => (b.volume24hUsd || 0) - (a.volume24hUsd || 0) || (b.marketCapUsd || 0) - (a.marketCapUsd || 0) || b.holders - a.holders);
   }
   rows = rows.slice(0, 50);
+  scheduleRhSafetyFill(rows);
   // Attach coin age from the creation-time cache (so Trending rows + the chart show age too, like New);
   // creation never changes, so once resolved it's permanent. Missing ones fill in the background.
   for (const r of rows) { if (!r.createdAt) { const c = rhCreatedCache.get(r.address.toLowerCase()); if (c) r.createdAt = c; } }

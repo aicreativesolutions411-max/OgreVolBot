@@ -466,6 +466,24 @@ test("RH drain audit: flags coins that took your tokens with no sale (received >
   }
 });
 
+test("RH feed: full coverage (holders + activity sources) + Safe tab of proven-safe pairs", () => {
+  const rhLib = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
+  // Freshness/coverage: the global time-ordered transfers feed catches launches the holder-sorted list buries.
+  assert.match(rhLib, /export async function rhRecentActiveTokens/);
+  assert.match(functionBody(rhLib, "rhRecentActiveTokens"), /token-transfers/);
+  // Backend merges both sources + a server-side safety cache + a "safe" category that shows only ok/verified.
+  assert.match(functionBody(serverSource, "rhFeedTokens"), /rhListTokens/);
+  assert.match(functionBody(serverSource, "rhFeedTokens"), /rhRecentActiveTokens/);
+  assert.match(serverSource, /scheduleRhSafetyFill/);
+  assert.match(functionBody(serverSource, "webRhPairs"), /cat === "safe"/);
+  assert.match(functionBody(serverSource, "webRhPairs"), /r\.safety === "ok" \|\| r\.safety === "verified"/);
+  // UI: a Safe column that requests category=safe.
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /category=safe/);
+    assert.match(src, /list-rhs/);
+  }
+});
+
 test("RH board: per-coin safety badge + 'Safer only' filter + renounce signal", () => {
   const rhLib = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
   assert.match(functionBody(rhLib, "rhHoneypotCheck"), /ownerRenounced/);   // renounce read + returned
