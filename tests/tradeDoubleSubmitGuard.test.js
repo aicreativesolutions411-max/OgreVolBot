@@ -738,3 +738,44 @@ test("Raid bot (Raidar parity): per-metric progress bars + views + Refresh butto
   assert.match(serverSource, /async function handleRaidRefreshCallback\(/);
   assert.match(serverSource, /startsWith\("rr:"\)/);            // routed in the dispatcher
 });
+
+// ---- TG bot polish: buy links, no aggregate card, strict scan, raid typed input ----
+test("buy card Chart/Buy open the NEW terminal (not old chart-lab / /t)", () => {
+  // groupBuyMarkup is an arrow const, so slice its region directly.
+  const i = serverSource.indexOf("const groupBuyMarkup =");
+  assert.notEqual(i, -1, "groupBuyMarkup missing");
+  const mk = serverSource.slice(i, i + 600);
+  assert.match(mk, /slimewireTokenLinks\(mint\)/);
+  assert.match(mk, /url: links\.site\b/);       // Chart -> new terminal
+  assert.match(mk, /url: links\.siteBuy\b/);    // Buy   -> new terminal (buy view)
+  assert.doesNotMatch(mk, /chart-lab\?ca=/);    // old chart-page URL gone
+  assert.doesNotMatch(mk, /url: groupBuyQuickBuyUrl/); // old /t redirect gone
+});
+
+test("buy bot posts only real per-buy cards — no 'Buys rolling in' aggregate", () => {
+  const body = functionBody(serverSource, "postGroupBuy");
+  assert.match(body, /if \(!perBuy\) \{ groupBuyLastAlertAt\.set/); // early-return skips aggregate
+  assert.doesNotMatch(serverSource, /Buys rolling in/);            // the card text is gone entirely
+});
+
+test("scan only fires on a real mint (32-byte decode) — no sentence false-positives", () => {
+  assert.match(serverSource, /function isLikelySolMint\(/);
+  assert.match(functionBody(serverSource, "isLikelySolMint"), /toBytes\(\)\.length === 32/);
+  assert.match(serverSource, /isLikelySolMint\(caTok\)/);   // group trigger
+  assert.match(serverSource, /isLikelySolMint\(caTokDm\)/); // DM trigger
+  // The old space-stripping exec (which concatenated a sentence into a fake CA) is gone.
+  assert.ok(!serverSource.includes('.exec(text.replace(/\\s+/g, ""))'), "space-strip CA match must be removed");
+});
+
+test("raid setup: click a metric -> type the number; duration in minutes", () => {
+  assert.match(serverSource, /async function applyRaidTypedInput\(/);
+  assert.match(serverSource, /const raidInputPending = new Map\(\)/);
+  // Callback prompts for input instead of laddering through fixed values.
+  const cb = functionBody(serverSource, "handleRaidSetupCallback");
+  assert.match(cb, /force_reply: true/);
+  assert.match(cb, /raidInputPending\.set\(/);
+  assert.doesNotMatch(serverSource, /raidLadderNext/);   // ladder removed
+  // Duration is minutes now.
+  assert.match(serverSource, /durationMin/);
+  assert.match(functionBody(serverSource, "raidSetupCard"), /Duration: \$\{Number\(d\.durationMin\)/);
+});

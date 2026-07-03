@@ -12002,13 +12002,20 @@ async function handleMessage(message, userId) {
 
   if (!text) return;
 
+  // Raid setup: if this admin just tapped a goal button, their next message is the
+  // number for that field — capture it before anything else reads the text.
+  if (await applyRaidTypedInput(message, userId).catch(() => false)) return;
+
   // Groups: remember the chat (for opt-in alerts) and serve the group command set.
   if (!isPrivateChat(message.chat)) {
     registerTelegramGroup(message.chat);
     // Bare CA pasted in a group = automatic shield read. Someone drops a
     // contract, SlimeWire answers with the verdict + chart + trade links -
     // the most natural funnel there is. Cooldown inside the handler stops spam.
-    const bareCa = /^\$?([A-HJ-NP-Za-km-z1-9]{32,48})$/.exec(text.replace(/\s+/g, ""));
+    // ONLY a message that is JUST a real mint (decodes to 32 bytes) triggers it —
+    // normal chatter never does (a sentence has spaces / isn't a valid key).
+    const caTok = text.trim().replace(/^\$/, "");
+    const bareCa = isLikelySolMint(caTok) ? [caTok, caTok] : null;
     if (bareCa) {
       const gbEntry = await getGroupBotEntry(chatId).catch(() => null);
       // BUY BOT auto-CA: the first CA pasted becomes the group's tracked token (when Buy Bot is on).
@@ -12028,9 +12035,9 @@ async function handleMessage(message, userId) {
   // the "I pasted a CA and nothing came up" fix). Gated on !session so it never hijacks a flow that's
   // waiting for a CA (e.g. the /pnlcard "paste the mint" prompt).
   if (isPrivateChat(message.chat) && !session) {
-    const bareCaDm = /^\$?([A-HJ-NP-Za-km-z1-9]{32,48})$/.exec(text.replace(/\s+/g, ""));
-    if (bareCaDm) {
-      await handleTelegramLookCommand(chatId, message, bareCaDm[1]);
+    const caTokDm = text.trim().replace(/^\$/, "");
+    if (isLikelySolMint(caTokDm)) {
+      await handleTelegramLookCommand(chatId, message, caTokDm);
       return;
     }
   }
@@ -28003,6 +28010,16 @@ function parseTokenAth(raw, supply) {
   } catch { return null; }
 }
 
+// STRICT check that a string is an actual Solana mint: base58, 32-44 chars, and
+// it must DECODE to exactly 32 bytes. This is what stops a normal sentence from
+// masquerading as a "CA" — a run of letters the right length that isn't a real
+// key won't decode to 32 bytes, so the scanner ignores plain chatter.
+function isLikelySolMint(s) {
+  const t = String(s || "").trim();
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t)) return false;
+  try { return new PublicKey(t).toBytes().length === 32; } catch { return false; }
+}
+
 // Resolve a cashtag ("$OGRE") to its token mint so a ticker posts the SAME scan card as a CA.
 // DexScreener symbol search → the highest-liquidity Solana pair whose base symbol matches.
 const cashtagMintCache = new Map();
@@ -28806,7 +28823,7 @@ async function handleTelegramRaidCommand(chatId, message, argument) {
   const nums = (rest.match(/\d{1,7}/g) || []).map(Number).filter((n) => n > 0);
   // No goals typed → open the interactive tap-to-set menu (the "fill out + submit" flow).
   if (!nums.length) {
-    const d = { tid, url, symbol, by, targets: { likes: 100, rts: 25, replies: 10, bookmarks: 10 }, durationH: 2, at: Date.now() };
+    const d = { tid, url, symbol, by, targets: { likes: 100, rts: 25, replies: 10, bookmarks: 10 }, durationMin: 120, at: Date.now() };
     const card = raidSetupCard(d);
     const sent = await sendGroupAlertMedia(chatId, null, card.text, card.markup);
     if (sent && sent.result && sent.result.message_id) raidDrafts.set(raidDraftKey(chatId, sent.result.message_id), d);
@@ -28820,7 +28837,7 @@ async function handleTelegramRaidCommand(chatId, message, argument) {
     : nums.length === 3 ? { likes: nums[0], rts: nums[1], replies: nums[2], bookmarks: Math.max(1, Math.ceil(nums[0] / 10)) }
     : nums.length === 2 ? { likes: nums[0], rts: nums[1], replies: Math.max(1, Math.ceil(nums[0] / 8)), bookmarks: Math.max(1, Math.ceil(nums[0] / 10)) }
     : { likes: nums[0], rts: Math.max(1, Math.ceil(nums[0] / 4)), replies: Math.max(1, Math.ceil(nums[0] / 8)), bookmarks: Math.max(1, Math.ceil(nums[0] / 10)) };
-  await startRaidFromDraft(chatId, { tid, url, symbol, by, targets, durationH: 2 });
+  await startRaidFromDraft(chatId, { tid, url, symbol, by, targets, durationMin: 120 });
 }
 
 // Channels: only /look, /alpha, /slimewire - posts have no from user, admin implied.
@@ -29194,9 +29211,12 @@ const groupBuyHolders = new Map();     // mint -> Set(trader) so the buy card ca
 // Buttons under a buy card: Chart · Buy · Vote (the reference's clickable row), then a socials row
 // (TG / X / Web) built from the coin's real metadata when present.
 const groupBuyMarkup = (mint, socials = {}) => {
+  // Chart + Buy point at the NEW terminal (the ?token= deep-link opens the coin's
+  // chart+buy view), matching the scan card — not the old chart-lab / /t layout.
+  const links = slimewireTokenLinks(mint);
   const row1 = [
-    { text: "📊 Chart", url: `https://slimewire.org/chart-lab?ca=${encodeURIComponent(mint)}` },
-    { text: "💲 Buy", url: groupBuyQuickBuyUrl(mint) },
+    { text: "📊 Chart", url: links.site },
+    { text: "💲 Buy", url: links.siteBuy },
     { text: "👍 Vote", url: `https://dexscreener.com/solana/${mint}` }
   ];
   const row2 = [];
@@ -29256,6 +29276,9 @@ async function postGroupBuy(mint, { solAmount = 0, usdAmount = 0, tokens = 0, pr
   const targets = Object.entries(store.groups || {}).filter(([, e]) => groupBotFeatureOn(e, "buybot") && e.token === mint);
   if (!targets.length) { groupBuyLastAlertAt.set(mint, Date.now()); return; }
   const perBuy = solAmount > 0;
+  // Only ever post a REAL per-buy card. No aggregate "buys rolling in" noise
+  // (the DexScreener count-delta fallback lands here with solAmount 0 → skip it).
+  if (!perBuy) { groupBuyLastAlertAt.set(mint, Date.now()); return; }
   // Full scan (cached 30s) → bonding %, real MC, socials, DEX-paid, image — the @MajorBuyBot card.
   const scan = await getGroupBuyScan(mint).catch(() => null);
   const meta = scan?.meta || null, bonding = scan?.bonding || null, dexPaid = scan?.dexPaid;
@@ -29315,13 +29338,6 @@ async function postGroupBuy(mint, { solAmount = 0, usdAmount = 0, tokens = 0, pr
         priceUsd > 0 ? `🏷 Price <b>${fmtPx(priceUsd)}</b>${ch != null && isFinite(ch) ? ` · ${ch >= 0 ? "🟢 +" : "🔴 "}${Math.round(ch)}% 24h` : ""}` : "",
         (mc > 0 || liq > 0) ? `〽️ MC <b>${fmtUsd0(mc)}</b>${liq > 0 ? ` · Liq ${fmtUsd0(liq)}` : ""}${vol24 > 0 ? ` · Vol ${fmtUsd0(vol24)}` : ""}` : "",
         holderLine,
-        dexPaid === true ? "🐸 <b>DEX PAID</b>" : ""
-      ].filter(Boolean);
-    } else {
-      lines = [
-        `🟢 <b>Buys rolling in — $${escapeTelegramHtml(symClean)}</b>`,
-        onCurve ? `🔥 <b>${Math.round(bondPct)}%</b> bonding  <code>${buyBondingBar(bondPct)}</code>` : "",
-        (mc > 0 || liq > 0) ? `〽️ MC <b>${fmtUsd0(mc)}</b>${liq > 0 ? ` · Liq ${fmtUsd0(liq)}` : ""}` : "",
         dexPaid === true ? "🐸 <b>DEX PAID</b>" : ""
       ].filter(Boolean);
     }
@@ -32830,9 +32846,17 @@ async function handleRaidRefreshCallback(query, userId) {
   return true;
 }
 // ---- Interactive /raid setup: tap-to-set goals + duration, then Start (no typing needed) -------
-const raidDrafts = new Map(); // `${chatId}:${messageId}` -> draft {tid,url,symbol,by,targets,durationH,at}
-const RAID_LADDERS = { likes: [0, 25, 50, 100, 250, 500, 1000], rts: [0, 10, 25, 50, 100, 250, 500], replies: [0, 5, 10, 25, 50, 100, 200], bookmarks: [0, 5, 10, 25, 50, 100], dur: [1, 2, 4, 6, 12, 24] };
-function raidLadderNext(arr, cur) { const i = arr.indexOf(Number(cur)); return arr[(i + 1) % arr.length]; }
+const raidDrafts = new Map(); // `${chatId}:${messageId}` -> draft {tid,url,symbol,by,targets,durationMin,at}
+// Pending typed-input: after a metric button is tapped, we wait for that admin's
+// next message (a number) in that chat. key = `${chatId}:${userId}`.
+const raidInputPending = new Map();
+const RAID_FIELD_META = {
+  likes: { label: "❤️ Likes", eg: 25 },
+  rts: { label: "🔁 Retweets", eg: 25 },
+  replies: { label: "💬 Replies", eg: 10 },
+  bm: { label: "🔖 Bookmarks", eg: 10 },
+  dur: { label: "🕐 Duration (minutes)", eg: 60 },
+};
 function raidDraftKey(chatId, msgId) { return String(chatId) + ":" + String(msgId); }
 function raidSetupCard(d) {
   const sym = d.symbol ? "$" + escapeTelegramHtml(d.symbol) + " " : "";
@@ -32840,24 +32864,49 @@ function raidSetupCard(d) {
   return {
     text: [
       `⚔️ <b>Set up the ${sym}raid</b>`,
-      "Tap each goal to set it, pick a duration, then 🚀 Start.",
+      "Tap a goal, then reply with the number you want (e.g. <b>25</b>). Duration is in <b>minutes</b>. Then 🚀 Start.",
       "",
       `👉 <a href="${escapeTelegramHtml(d.url)}">The post you're raiding</a>`
     ].join("\n"),
     markup: { inline_keyboard: [
       [{ text: `❤️ Likes: ${v(d.targets.likes)}`, callback_data: "rd:c:likes" }, { text: `🔁 RT: ${v(d.targets.rts)}`, callback_data: "rd:c:rts" }],
       [{ text: `💬 Replies: ${v(d.targets.replies)}`, callback_data: "rd:c:replies" }, { text: `🔖 Bookmarks: ${v(d.targets.bookmarks)}`, callback_data: "rd:c:bm" }],
-      [{ text: `🕐 Duration: ${d.durationH}h`, callback_data: "rd:c:dur" }],
+      [{ text: `🕐 Duration: ${Number(d.durationMin) || 120}m`, callback_data: "rd:c:dur" }],
       [{ text: "🚀 Start Raid", callback_data: "rd:go" }, { text: "✖ Cancel", callback_data: "rd:x" }]
     ] }
   };
+}
+// Apply a typed number to a raid draft field, re-render the setup card. Returns
+// true when it consumed the message (an admin was mid-entry for a field).
+async function applyRaidTypedInput(message, userId) {
+  const chatId = message?.chat?.id;
+  const pkey = String(chatId) + ":" + String(userId);
+  const pend = raidInputPending.get(pkey);
+  if (!pend) return false;
+  if (Date.now() - pend.at > 120000) { raidInputPending.delete(pkey); return false; } // expired
+  const text = String(message.text || "").trim();
+  if (!/^\d{1,7}$/.test(text)) { raidInputPending.delete(pkey); return false; } // not a number → release, don't trap chat
+  raidInputPending.delete(pkey);
+  const n = Math.max(0, Math.min(1_000_000, parseInt(text, 10)));
+  const d = raidDrafts.get(pend.draftKey);
+  if (!d) { await say(chatId, "That raid setup expired — run /raid <link> again.").catch(() => {}); return true; }
+  if (pend.field === "dur") d.durationMin = Math.max(1, n || 120);
+  else if (pend.field === "bm") d.targets.bookmarks = n;
+  else d.targets[pend.field] = n;
+  raidDrafts.set(pend.draftKey, d);
+  // Tidy: remove the prompt + the number the admin typed so the card stays clean.
+  if (pend.promptMsgId) { try { await telegram("deleteMessage", { chat_id: chatId, message_id: pend.promptMsgId }); } catch {} }
+  try { await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch {}
+  const card = raidSetupCard(d);
+  try { await telegram("editMessageText", { chat_id: chatId, message_id: pend.setupMsgId, text: card.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: card.markup }); } catch {}
+  return true;
 }
 // Launch a configured raid: record it, post the live card, register the auto-updating message ref.
 async function startRaidFromDraft(chatId, d) {
   const res = await submitRaidPost({ url: d.url, by: d.by, symbol: d.symbol, targets: d.targets });
   if (!res.ok) { await say(chatId, "Couldn't start that raid — send a valid X post link."); return; }
   const ge = await getGroupBotEntry(chatId).catch(() => null);
-  const startedAt = Date.now(), durationMs = Math.max(1, Number(d.durationH) || 2) * 3600_000;
+  const startedAt = Date.now(), durationMs = Math.max(1, Number(d.durationMin) || 120) * 60_000;
   const card = buildRaidProgressCard({ tid: res.tid, symbol: res.symbol || d.symbol, targets: d.targets, likes: res.likes, rts: res.rts, replies: res.replies, bookmarks: res.bookmarks || 0, url: res.url || d.url, startedAt, durationMs });
   const media = (ge && ge.customMedia && ge.customMedia.value) ? ge.customMedia : null;
   const sent = await sendGroupAlertMedia(chatId, media, card.text, card.markup);
@@ -32883,15 +32932,20 @@ async function handleRaidSetupCallback(query, userId) {
     return true;
   }
   if (data.startsWith("rd:c:")) {
-    const m = data.slice(5);
-    if (m === "dur") d.durationH = raidLadderNext(RAID_LADDERS.dur, d.durationH);
-    else if (m === "likes") d.targets.likes = raidLadderNext(RAID_LADDERS.likes, d.targets.likes);
-    else if (m === "rts") d.targets.rts = raidLadderNext(RAID_LADDERS.rts, d.targets.rts);
-    else if (m === "replies") d.targets.replies = raidLadderNext(RAID_LADDERS.replies, d.targets.replies);
-    else if (m === "bm") d.targets.bookmarks = raidLadderNext(RAID_LADDERS.bookmarks, d.targets.bookmarks);
-    raidDrafts.set(key, d);
-    const card = raidSetupCard(d);
-    try { await telegram("editMessageText", { chat_id: chatId, message_id: msgId, text: card.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: card.markup }); } catch {}
+    const field = data.slice(5);
+    const meta = RAID_FIELD_META[field];
+    if (!meta) return true;
+    // Prompt the admin to TYPE the number for this field (captured by applyRaidTypedInput).
+    const prompt = await telegram("sendMessage", {
+      chat_id: chatId,
+      text: `✏️ Reply with the number for ${meta.label} (e.g. <b>${meta.eg}</b>).${field === "dur" ? "" : " Send <b>0</b> to clear it."}`,
+      parse_mode: "HTML",
+      reply_markup: { force_reply: true, selective: true },
+    }).catch(() => null);
+    raidInputPending.set(String(chatId) + ":" + String(userId), {
+      draftKey: key, field, setupMsgId: msgId, promptMsgId: prompt?.result?.message_id, at: Date.now(),
+    });
+    try { await telegram("answerCallbackQuery", { callback_query_id: query.id, text: `Type the ${meta.label} number` }); } catch {}
     return true;
   }
   return true;
