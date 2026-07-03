@@ -12051,6 +12051,9 @@ async function handleMessage(message, userId) {
   // Groups: remember the chat (for opt-in alerts) and serve the group command set.
   if (!isPrivateChat(message.chat)) {
     registerTelegramGroup(message.chat);
+    // Combot-style karma: a "thanks / +rep" reply silently awards the replied-to member +1 rep.
+    // Fire-and-forget + cheap keyword gate inside, so it never slows the message path.
+    void maybeAwardKarma(message).catch(() => {});
     // Bare CA pasted in a group = automatic shield read. Someone drops a
     // contract, SlimeWire answers with the verdict + chart + trade links -
     // the most natural funnel there is. Cooldown inside the handler stops spam.
@@ -12543,6 +12546,16 @@ async function handleMessage(message, userId) {
   // /wins (aka /hof) — public hall of fame: the biggest tracked calls that hit 2x+.
   if (parseCommandWithArgument(text, ["halloffame", "hof", "wins"])) {
     await handleTelegramLeaderboardCommand(chatId);
+    return;
+  }
+  // /stats — Combot-style group analytics (calls, hit-rate, top callers, karma leaders).
+  if (parseCommandWithArgument(text, ["stats", "groupstats", "activity"])) {
+    await handleGroupStatsCommand(chatId);
+    return;
+  }
+  // /rep (/karma) — a member's reputation in this group (reply to check someone else's).
+  if (parseCommandWithArgument(text, ["rep", "karma"])) {
+    await handleGroupRepCommand(chatId, message);
     return;
   }
 
@@ -28285,6 +28298,7 @@ function slimeScanKeyboard(mint) {
 function scanMenuKeyboard(mint) {
   const links = slimewireTokenLinks(mint);
   return { inline_keyboard: [
+    [{ text: "🧠 AI Read", callback_data: `scan:ai:${mint}` }, { text: "💸 Track Funds", callback_data: `scan:funds:${mint}` }],
     [{ text: "📈 Charts", callback_data: `scan:cat:chart:${mint}` }, { text: "🔒 Security", callback_data: `scan:cat:sec:${mint}` }],
     [{ text: "🔗 Socials", callback_data: `scan:cat:social:${mint}` }, { text: "🛠 Trade Tools", callback_data: `scan:cat:trade:${mint}` }],
     [{ text: "⚡ Quick Buy", url: links.siteBuy }, { text: "⬅ Back", callback_data: `scan:back:${mint}` }]
@@ -28326,6 +28340,10 @@ async function handleScanCallback(query, chatId, messageId) {
   try {
     if (action === "menu") {
       await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: scanMenuKeyboard(mint) });
+    } else if (action === "ai") {
+      await handleScanAiRead(chatId, mint);           // 🧠 one-tap AI verdict (new message; leaves the card intact)
+    } else if (action === "funds") {
+      await handleScanTrackFunds(chatId, mint);        // 💸 follow-the-money read
     } else if (action === "back") {
       await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: slimeScanKeyboard(mint) });
     } else if (action === "cat") {
@@ -28348,6 +28366,133 @@ async function handleScanCallback(query, chatId, messageId) {
   } catch {
     // editing can fail if the message is unchanged/too old — ignore
   }
+}
+
+// 🧠 AI READ (Block_AIBot-style one-tap verdict) — synthesizes the signals we ALREADY compute
+// (SlimeShield safety, on-chain holder concentration, dev-sold, authorities, live momentum) into an
+// honest plain-English verdict + a 0-100 conviction grade. Rules-based (no paid LLM) so it never lies
+// about what it knows. On-demand from the scan menu → zero idle cost.
+async function handleScanAiRead(chatId, mint) {
+  if (tgCommandOnCooldown(chatId, `airead:${mint}`, 4000)) return;
+  let scan = null; try { scan = await gatherSlimeScan(mint); } catch {}
+  if (!scan || !(scan.meta || scan.bonding || scan.shield)) {
+    await say(chatId, "🧠 Couldn't pull enough data for an AI read right now — try again in a moment.");
+    return;
+  }
+  const { meta, rug, shield, bonding } = scan;
+  const sym = meta?.symbol || bonding?.symbol || shortMint(mint);
+  const score = Number(shield?.score);
+  const top10 = Number(rug?.top10Pct);
+  const holders = Number(rug?.holderCount);
+  const liq = Number(meta?.liquidityUsd || bonding?.liquidityUsd || 0);
+  const ch1 = Number(meta?.priceChange?.h1);
+  const buys1 = Number(meta?.txns?.h1?.buys || 0), sells1 = Number(meta?.txns?.h1?.sells || 0);
+  const devSold = rug?.devSold, mintAuth = rug?.mintAuthority, freezeAuth = rug?.freezeAuthority;
+
+  const pros = [], flags = [], cons = [];
+  if (Number.isFinite(score)) {
+    if (score >= 75) pros.push(`SlimeShield ${score}/100 — clears our safety bar`);
+    else if (score >= 50) flags.push(`SlimeShield ${score}/100 — middling, size small`);
+    else cons.push(`SlimeShield ${score}/100 — fails our safety bar`);
+  }
+  if (mintAuth) cons.push("mint authority still ACTIVE — supply can be inflated");
+  if (freezeAuth) cons.push("freeze authority still ACTIVE — tokens can be frozen");
+  if (devSold === true) cons.push("dev already SOLD — no skin in the game");
+  else if (devSold === false) pros.push("dev has NOT sold");
+  if (Number.isFinite(top10)) {
+    if (top10 >= 60) cons.push(`top-10 hold ${Math.round(top10)}% — dangerously concentrated`);
+    else if (top10 >= 35) flags.push(`top-10 hold ${Math.round(top10)}% — watch for a dump`);
+    else pros.push(`top-10 hold only ${Math.round(top10)}% — well distributed`);
+  }
+  if (Number.isFinite(holders) && holders > 0) {
+    if (holders < 60) flags.push(`${holders} holders — still very thin/early`);
+    else if (holders > 400) pros.push(`${holders} holders — real distribution`);
+  }
+  if (liq > 0) {
+    if (liq < 8000) cons.push(`liquidity ${formatUsdCompact(liq)} — thin, high slippage`);
+    else if (liq > 30000) pros.push(`liquidity ${formatUsdCompact(liq)} — healthy`);
+  }
+  const flow = buys1 + sells1 > 0 ? buys1 / (buys1 + sells1) : null;
+  if (Number.isFinite(ch1)) {
+    if (ch1 > 20) pros.push(`+${Math.round(ch1)}% last hour — live momentum`);
+    else if (ch1 < -20) cons.push(`${Math.round(ch1)}% last hour — fading`);
+  }
+  if (flow != null) {
+    if (flow >= 0.62) pros.push(`buy pressure — ${Math.round(flow * 100)}% of 1h flow is buys`);
+    else if (flow <= 0.4) flags.push(`sell pressure — only ${Math.round(flow * 100)}% of 1h flow is buys`);
+  }
+  for (const f of (shield?.factors || []).slice(0, 2)) {
+    const label = String(f?.label || f || "").slice(0, 80);
+    if (label) flags.push(label);
+  }
+
+  let grade = Number.isFinite(score) ? score : 50;
+  grade -= (mintAuth ? 20 : 0) + (freezeAuth ? 20 : 0) + (devSold === true ? 12 : 0);
+  if (Number.isFinite(top10)) grade -= top10 >= 60 ? 22 : top10 >= 35 ? 8 : -6;
+  if (liq > 0 && liq < 8000) grade -= 10;
+  if (Number.isFinite(ch1)) grade += Math.max(-8, Math.min(8, ch1 / 6));
+  grade = Math.max(0, Math.min(100, Math.round(grade)));
+  const verdict = grade >= 68 ? "🟢 Looks clean" : grade >= 45 ? "🟡 Mixed — trade small" : "🔴 High risk";
+  const oneLiner = grade >= 68
+    ? "Structure + momentum line up. Size sensibly and set a stop."
+    : grade >= 45
+      ? "Some green, some red. Only a small, tight-stop position makes sense."
+      : "Too many red flags to size into. If you ape, treat it as a lotto ticket.";
+  const bullets = (arr, icon) => arr.slice(0, 4).map((t) => `${icon} ${escapeTelegramHtml(t)}`).join("\n");
+  const body = [
+    `🧠 <b>SlimeWire AI Read — $${escapeTelegramHtml(sym)}</b>`,
+    `${verdict} · <b>${grade}/100</b> conviction`,
+    pros.length ? "\n" + bullets(pros, "✅") : "",
+    flags.length ? bullets(flags, "⚠️") : "",
+    cons.length ? bullets(cons, "⛔") : "",
+    `\n<i>${oneLiner}</i>`,
+    `<i>Synthesized from SlimeShield + on-chain holders + live flow. Not financial advice.</i>`
+  ].filter((x) => x !== "").join("\n");
+  await sayHtml(chatId, body, slimeScanKeyboard(mint));
+}
+
+// 💸 TRACK THE FUNDS (TrackTheFundsBot-style) — a follow-the-money read on who controls the supply:
+// top-holder concentration, holder count, sniper/insider share, dev-sold, and live mint/freeze
+// authorities. Reuses the RugCheck + SlimeShield data already pulled by the scan (no extra RPC cost).
+async function handleScanTrackFunds(chatId, mint) {
+  if (tgCommandOnCooldown(chatId, `funds:${mint}`, 4000)) return;
+  let scan = null; try { scan = await gatherSlimeScan(mint); } catch {}
+  if (!scan || !(scan.rug || scan.shield)) {
+    await say(chatId, "💸 Couldn't trace the funds right now — try again in a moment.");
+    return;
+  }
+  const { meta, rug, bonding } = scan;
+  const sym = meta?.symbol || bonding?.symbol || shortMint(mint);
+  const light = (b, onYes) => (b === true ? (onYes ? "🟢" : "🔴") : b === false ? (onYes ? "🔴" : "🟢") : "⚪");
+  const top10 = Number(rug?.top10Pct);
+  const holders = Number(rug?.holderCount);
+  const th = Array.isArray(rug?.topHolders) ? rug.topHolders.map((p) => Number(p) || 0).filter((p) => p > 0).slice(0, 5) : [];
+  const snipers = Number(rug?.snipersPercent ?? rug?.snipers);
+  const insiders = Number(rug?.insidersPercent ?? rug?.insiders);
+  const devSold = rug?.devSold, mintAuth = rug?.mintAuthority, freezeAuth = rug?.freezeAuthority;
+
+  const controllable = (Number.isFinite(top10) && top10 >= 55) || (Number.isFinite(insiders) && insiders >= 15) || mintAuth || freezeAuth;
+  const head = controllable
+    ? "🔴 Supply is concentrated / controllable — a whale or the dev can move the price"
+    : (Number.isFinite(top10) && top10 <= 30 ? "🟢 Supply looks well-spread" : "🟡 Mixed — read the holders below");
+  const rows = [
+    `💸 <b>Track the Funds — $${escapeTelegramHtml(sym)}</b>`,
+    head,
+    "",
+    Number.isFinite(top10) ? `• Top-10 hold <b>${Math.round(top10)}%</b>${th.length ? ` <i>(${th.map((p) => p.toFixed(1) + "%").join(" · ")})</i>` : ""}` : null,
+    Number.isFinite(holders) && holders > 0 ? `• Holders: <b>${holders}</b>` : null,
+    Number.isFinite(snipers) && snipers > 0 ? `• Snipers hold <b>${Math.round(snipers)}%</b> <i>(first-block buyers)</i>` : null,
+    Number.isFinite(insiders) && insiders > 0 ? `• Insiders / linked wallets hold <b>${Math.round(insiders)}%</b>` : null,
+    `• Dev sold: ${light(devSold, false)} <b>${devSold === true ? "Yes — exited" : devSold === false ? "No — still holding" : "unknown"}</b>`,
+    `• Mint authority: ${mintAuth ? "🔴 ACTIVE — can print new supply" : "🟢 revoked"}`,
+    `• Freeze authority: ${freezeAuth ? "🔴 ACTIVE — can freeze your wallet" : "🟢 revoked"}`,
+    "",
+    `<i>Follow-the-money read from RugCheck + SlimeShield on-chain data. Concentrated supply or live authorities = the dev can dump or rug. Not financial advice.</i>`
+  ].filter(Boolean);
+  await sayHtml(chatId, rows.join("\n"), { inline_keyboard: [
+    [{ text: "🫧 Bubblemaps", url: `https://app.bubblemaps.io/sol/token/${mint}` }, { text: "🔬 RugCheck", url: `https://rugcheck.xyz/tokens/${mint}` }],
+    [{ text: "🧠 AI Read", callback_data: `scan:ai:${mint}` }, { text: "⚡ Buy on SlimeWire", url: slimewireTokenLinks(mint).siteBuy }]
+  ] });
 }
 
 // Caller footer for the scan card: who FIRST called this CA in this channel, when, and how
@@ -28982,6 +29127,96 @@ async function handleTelegramCallerLeaderboardCommand(chatId, win = "1w") {
   if (tgCommandOnCooldown(chatId, "callerlb", TG_ALPHA_COOLDOWN_MS)) return;
   const view = await buildCallerLeaderboardView(win);
   await sayHtml(chatId, view.text, view.markup);
+}
+
+// ---- Group karma + /stats (Combot-style reputation + analytics) ----
+// Karma: reply "thanks / +rep / ty" to a member's message → they get +1 rep. Deliberately OFF the hot
+// path: a cheap keyword regex runs on group text, and the store is only touched when a real thank-you
+// reply lands. Rate-limited per giver→receiver→day so it can't be farmed. /stats reuses the caller-intel
+// warehouse for group analytics (coins called, hit-rate, top callers) — no new per-message counter.
+function groupKarmaPath() { return path.join(CONFIG.dataDir, "group-karma.json"); }
+let groupKarmaCache = null, groupKarmaFlushTimer = null;
+async function readGroupKarma() {
+  if (groupKarmaCache) return groupKarmaCache;
+  let s = null; try { s = await readJson(groupKarmaPath()); } catch { s = null; }
+  if (!s || typeof s !== "object") s = {};
+  if (!s.groups || typeof s.groups !== "object") s.groups = {};
+  if (!s.grants || typeof s.grants !== "object") s.grants = {};   // "giver:receiver:chat" -> day stamp (anti-farm)
+  groupKarmaCache = s; return s;
+}
+function scheduleGroupKarmaFlush() {
+  if (groupKarmaFlushTimer) return;
+  groupKarmaFlushTimer = setTimeout(() => {
+    groupKarmaFlushTimer = null;
+    void (async () => { try { if (groupKarmaCache) await writeJsonFile(groupKarmaPath(), groupKarmaCache); } catch {} })();
+  }, 5000);
+  if (groupKarmaFlushTimer.unref) groupKarmaFlushTimer.unref();
+}
+const KARMA_THANKS_RE = /(\bthanks\b|\bthank you\b|\bthx\b|\bty\b|\btysm\b|\+rep\b|\+1\b|🙏|\bgoat\b|\bhelpful\b|\blegend\b)/i;
+async function maybeAwardKarma(message) {
+  try {
+    const chat = message?.chat;
+    if (!chat || isPrivateChat(chat)) return false;
+    const text = String(message.text || message.caption || "");
+    if (text.length > 200 || !KARMA_THANKS_RE.test(text)) return false;   // cheap gate first
+    const target = message.reply_to_message?.from;
+    const giver = message.from;
+    if (!target || !giver || target.is_bot || target.id === giver.id) return false;
+    const store = await readGroupKarma();
+    const chatId = String(chat.id);
+    const day = Math.floor(Date.now() / 86400000);
+    const gk = `${giver.id}:${target.id}:${chatId}`;
+    if (store.grants[gk] === day) return false;                            // already thanked them today
+    store.grants[gk] = day;
+    const g = store.groups[chatId] || (store.groups[chatId] = {});
+    const rec = g[String(target.id)] || (g[String(target.id)] = { rep: 0, name: "" });
+    rec.rep += 1;
+    rec.name = target.username ? `@${target.username}` : ([target.first_name, target.last_name].filter(Boolean).join(" ").slice(0, 32) || String(target.id));
+    scheduleGroupKarmaFlush();
+    return true;   // silent — surfaced via /rep and /stats, no chat spam
+  } catch { return false; }
+}
+async function handleGroupRepCommand(chatId, message) {
+  const store = await readGroupKarma();
+  const g = store.groups[String(chatId)] || {};
+  const target = message.reply_to_message?.from || message.from || {};
+  const rec = g[String(target.id)];
+  const name = target.username ? `@${target.username}` : (target.first_name || "You");
+  const rep = rec ? rec.rep : 0;
+  await sayHtml(chatId, `✨ <b>${escapeTelegramHtml(name)}</b> has <b>${rep}</b> rep in this group.${rep === 0 ? " Earn rep when members reply <i>thanks / +rep</i> to your messages." : ""}`);
+}
+async function handleGroupStatsCommand(chatId) {
+  if (tgCommandOnCooldown(chatId, "groupstats", 8000)) return;
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  let calls = [], resolved = 0, wins = 0, topCallers = [];
+  try {
+    const store = await readTelegramCalls();
+    calls = Object.values(store.calls || {}).filter((c) => String(c.chatId) === String(chatId) && Number(c.firstAt) >= weekAgo);
+    resolved = calls.filter((c) => c.status === "resolved").length;
+    wins = calls.filter((c) => c.outcome === "won").length;
+    topCallers = (callerIntel.buildLeaderboards(calls, { minResolved: 1 }).callers || []).slice(0, 3);
+  } catch {}
+  let karma = [];
+  try {
+    const ks = await readGroupKarma();
+    karma = Object.values(ks.groups[String(chatId)] || {}).filter((r) => r.rep > 0).sort((a, b) => b.rep - a.rep).slice(0, 3);
+  } catch {}
+  const medal = (i) => ["🥇", "🥈", "🥉"][i] || `${i + 1}.`;
+  const lines = [
+    `📊 <b>Group Stats · last 7 days</b>`,
+    `• <b>${calls.length}</b> coins called · <b>${wins}</b> hit 2x+ <i>(${resolved} resolved)</i>`
+  ];
+  if (topCallers.length) {
+    lines.push("", `🏆 <b>Top callers</b>`);
+    topCallers.forEach((c, i) => lines.push(`${medal(i)} ${escapeTelegramHtml(String(c.name).slice(0, 20))} — ${Math.round((c.smoothedHitRate || 0) * 100)}% hit · avg ${c.avgPeakX}x`));
+  }
+  if (karma.length) {
+    lines.push("", `✨ <b>Most helpful (rep)</b>`);
+    karma.forEach((r, i) => lines.push(`${medal(i)} ${escapeTelegramHtml(String(r.name).slice(0, 20))} — ${r.rep}`));
+  }
+  if (!topCallers.length && !karma.length) lines.push("", "<i>Drop $tickers/CAs and thank helpful members — stats fill in as the group gets active.</i>");
+  lines.push("", `<i>Full board: /leaderboard · your rep: /rep</i>`);
+  await sayHtml(chatId, lines.join("\n"), { inline_keyboard: [[{ text: "🏆 Top callers", callback_data: "clb:1w" }]] });
 }
 
 async function handleTelegramProofCommand(chatId) {

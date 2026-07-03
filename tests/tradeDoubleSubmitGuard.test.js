@@ -1013,3 +1013,41 @@ test("flex brag that names a coin answers with the rotating slime PnL card (Scan
   assert.match(serverSource, /groupBotFeatureOn\(gbEntry, "scan"\)\) && !tgCommandOnCooldown\(chatId, "flexcard"/);
   assert.match(serverSource, /sendCallFlexImageCard\(chatId, flexMint, message\)/);
 });
+
+// ---- Competitor "takes": AI Read (Block AI) + Track the Funds (TrackTheFunds) + karma/stats (Combot) ----
+test("scan menu exposes 🧠 AI Read + 💸 Track Funds, routed on-demand (zero idle cost)", () => {
+  const menu = functionBody(serverSource, "scanMenuKeyboard");
+  assert.match(menu, /callback_data: `scan:ai:\$\{mint\}`/);
+  assert.match(menu, /callback_data: `scan:funds:\$\{mint\}`/);
+  // dispatched only when the button is tapped
+  assert.match(serverSource, /action === "ai"\) \{\s*\n\s*await handleScanAiRead\(chatId, mint\)/);
+  assert.match(serverSource, /action === "funds"\) \{\s*\n\s*await handleScanTrackFunds\(chatId, mint\)/);
+});
+test("AI Read is honest rules-synthesis over signals we already compute (no fake LLM)", () => {
+  const ai = functionBody(serverSource, "handleScanAiRead");
+  assert.match(ai, /await gatherSlimeScan\(mint\)/);         // reuses the one scan fetch
+  assert.match(ai, /shield\?\.score/);
+  assert.match(ai, /rug\?\.top10Pct/);
+  assert.match(ai, /conviction/);                            // 0-100 grade
+  assert.match(ai, /Not financial advice/);                 // honest framing
+  assert.doesNotMatch(ai, /buyToken|sellToken|sendTransaction/); // read-only
+});
+test("Track the Funds is a read-only follow-the-money report reusing scan data", () => {
+  const tf = functionBody(serverSource, "handleScanTrackFunds");
+  assert.match(tf, /await gatherSlimeScan\(mint\)/);
+  assert.match(tf, /top10Pct|topHolders/);
+  assert.match(tf, /mintAuthority/);
+  assert.match(tf, /devSold/);
+  assert.doesNotMatch(tf, /buyToken|sellToken|sendTransaction/);
+});
+test("group karma stays off the hot path (cheap regex gate) + /stats reuses caller-intel", () => {
+  const k = functionBody(serverSource, "maybeAwardKarma");
+  assert.match(k, /KARMA_THANKS_RE\.test\(text\)/);          // keyword gate BEFORE touching the store
+  assert.match(k, /target\.is_bot \|\| target\.id === giver\.id/); // no self/bot farming
+  assert.match(k, /store\.grants\[gk\] === day/);            // per-day anti-farm
+  assert.match(serverSource, /void maybeAwardKarma\(message\)\.catch/); // fire-and-forget in the group path
+  const stats = functionBody(serverSource, "handleGroupStatsCommand");
+  assert.match(stats, /callerIntel\.buildLeaderboards\(calls/); // no new per-message counter
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["stats", "groupstats", "activity"\]\)/);
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["rep", "karma"\]\)/);
+});
