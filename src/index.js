@@ -32782,15 +32782,14 @@ function buildRaidProgressCard(p) {
   const elapsed = startedAt ? Date.now() - startedAt : 0;
   const timedOut = Boolean(startedAt && durationMs && elapsed >= durationMs);
   let allHit = hasTargets, pctSum = 0;
+  // Plain, uncluttered rows — no colour squares, no progress bar. Just the goal
+  // and how many are left, e.g. "❤️ Likes  1 / 5  ·  4 to go".
   const rows = (hasTargets ? active : defs).map((d) => {
     if (d.tgt > 0) {
-      const ratio = d.cur / d.tgt;
-      const pct = Math.min(999, Math.round(ratio * 100));
       const hit = d.cur >= d.tgt; if (!hit) allHit = false;
-      pctSum += Math.min(1, ratio);
-      const sq = hit ? "🟩" : (d.cur > 0 ? "🟨" : "🟥");
-      const to = hit ? "✅" : `${(d.tgt - d.cur).toLocaleString()} to go`;
-      return `${sq} ${d.emoji} <b>${d.label}</b>  <code>${raidBar(pct)}</code>\n     ${d.cur.toLocaleString()} / ${d.tgt.toLocaleString()} · ${pct >= 100 ? "💯" : pct + "%"} · ${to}`;
+      pctSum += Math.min(1, d.cur / d.tgt);
+      const to = hit ? "✅ done" : `${(d.tgt - d.cur).toLocaleString()} to go`;
+      return `${d.emoji} <b>${d.label}</b>  ${d.cur.toLocaleString()} / ${d.tgt.toLocaleString()}  ·  ${to}`;
     }
     return `${d.emoji} <b>${d.label}</b> ${d.cur.toLocaleString()}`;
   });
@@ -32800,7 +32799,7 @@ function buildRaidProgressCard(p) {
     ? `🔥🔥 <b>${sym}RAID SMASHED!</b> 🔥🔥`
     : timedOut
       ? "⚠️ <b>Raid Ended — Time limit reached!</b>"
-      : `⚔️ <b>${sym}RAID is LIVE</b>${hasTargets ? `  ·  <b>${overall}%</b>  <code>${raidBar(overall)}</code>` : ""}`;
+      : `⚔️ <b>${sym}RAID is LIVE</b>${hasTargets ? `  ·  <b>${overall}%</b>` : ""}`;
   const durLine = (startedAt && durationMs)
     ? (done ? `🕐 Duration: ${raidDurStr(durationMs)}` : `⏳ Ends in <b>${raidDurStr(Math.max(0, durationMs - elapsed))}</b>`)
     : "";
@@ -32935,17 +32934,19 @@ async function handleRaidSetupCallback(query, userId) {
     const field = data.slice(5);
     const meta = RAID_FIELD_META[field];
     if (!meta) return true;
-    // Prompt the admin to TYPE the number for this field (captured by applyRaidTypedInput).
-    const prompt = await telegram("sendMessage", {
-      chat_id: chatId,
-      text: `✏️ Reply with the number for ${meta.label} (e.g. <b>${meta.eg}</b>).${field === "dur" ? "" : " Send <b>0</b> to clear it."}`,
-      parse_mode: "HTML",
-      reply_markup: { force_reply: true, selective: true },
-    }).catch(() => null);
+    // Ask via a POPUP (answerCallbackQuery show_alert) — NO chat message, so the
+    // setup never floods the group. The admin's next number is captured + deleted
+    // by applyRaidTypedInput. promptMsgId stays null (nothing to clean up).
     raidInputPending.set(String(chatId) + ":" + String(userId), {
-      draftKey: key, field, setupMsgId: msgId, promptMsgId: prompt?.result?.message_id, at: Date.now(),
+      draftKey: key, field, setupMsgId: msgId, promptMsgId: null, at: Date.now(),
     });
-    try { await telegram("answerCallbackQuery", { callback_query_id: query.id, text: `Type the ${meta.label} number` }); } catch {}
+    try {
+      await telegram("answerCallbackQuery", {
+        callback_query_id: query.id,
+        show_alert: true,
+        text: `Reply with the number for ${meta.label.replace(/<[^>]+>/g, "")} (e.g. ${meta.eg})${field === "dur" ? "" : ". Send 0 to clear"}.`,
+      });
+    } catch {}
     return true;
   }
   return true;

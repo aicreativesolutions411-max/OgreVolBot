@@ -729,10 +729,11 @@ test("Buy bot (SpyDefi parity): whale-tier badge + new-holder flag + volume", ()
   assert.match(buy, /Vol \$\{?|· Vol /);                         // volume shown on the MC line
 });
 
-test("Raid bot (Raidar parity): per-metric progress bars + views + Refresh button", () => {
-  assert.match(serverSource, /function raidBar\(/);              // ▰▰▱ progress bar
+test("Raid bot: clean card (no colour squares / bars) + goal-to-go + views + Refresh", () => {
   const card = functionBody(serverSource, "buildRaidProgressCard");
-  assert.match(card, /raidBar\(/);                              // bars rendered per metric + overall
+  assert.match(card, /to go/);                                  // "X to go" per metric
+  assert.doesNotMatch(card, /raidBar\(/);                       // progress bar removed
+  assert.doesNotMatch(card, /🟩|🟨|🟥/);                        // colour squares removed
   assert.match(card, /views/);                                  // 👀 views line
   assert.match(card, /callback_data:\s*"rr:"/);                // Refresh button
   assert.match(serverSource, /async function handleRaidRefreshCallback\(/);
@@ -770,11 +771,13 @@ test("scan only fires on a real mint (32-byte decode) — no sentence false-posi
 test("raid setup: click a metric -> type the number; duration in minutes", () => {
   assert.match(serverSource, /async function applyRaidTypedInput\(/);
   assert.match(serverSource, /const raidInputPending = new Map\(\)/);
-  // Callback prompts for input instead of laddering through fixed values.
+  // Callback asks via a POPUP (no chat message -> no flood), not a ladder.
   const cb = functionBody(serverSource, "handleRaidSetupCallback");
-  assert.match(cb, /force_reply: true/);
+  assert.match(cb, /show_alert: true/);
   assert.match(cb, /raidInputPending\.set\(/);
   assert.doesNotMatch(serverSource, /raidLadderNext/);   // ladder removed
+  // The admin's typed number is deleted so it doesn't flood the chat.
+  assert.match(functionBody(serverSource, "applyRaidTypedInput"), /deleteMessage.*message\.message_id/);
   // Duration is minutes now.
   assert.match(serverSource, /durationMin/);
   assert.match(functionBody(serverSource, "raidSetupCard"), /Duration: \$\{Number\(d\.durationMin\)/);
