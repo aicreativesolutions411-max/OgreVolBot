@@ -11,6 +11,7 @@
     "demo": "ts-node src/demo.ts"
   },
   "dependencies": {
+    "@solana/web3.js": "^1.95.3",
     "bs58": "^5.0.0",
     "better-sqlite3": "^11.3.0"
   },

@@ -60,9 +60,9 @@ export function validateSlippageBps(raw: unknown, maxBps: number): Result<number
 
 export type ParsedCommand =
   | { name: "quote" | "simulate"; inMint: string; outMint: string; amount: string; slippage?: string }
-  | { name: "status" | "help" };
+  | { name: "status" | "help" | "wallets" };
 
-const KNOWN = new Set(["/quote", "/simulate", "/status", "/help"]);
+const KNOWN = new Set(["/quote", "/simulate", "/status", "/help", "/wallets"]);
 
 // Whitelist parser. Unknown commands are rejected (never "best-effort" matched).
 // Rejects control chars and over-long payloads before doing anything else.
@@ -75,6 +75,7 @@ export function parseCommand(raw: unknown): Result<ParsedCommand> {
   if (!KNOWN.has(head)) return bad("unknown command");
   if (head === "/status") return ok({ name: "status" });
   if (head === "/help") return ok({ name: "help" });
+  if (head === "/wallets") return ok({ name: "wallets" });
   // /quote|/simulate <inMint> <outMint> <amount> [slippageBps]
   if (parts.length < 4) return bad(`usage: ${head} <inMint> <outMint> <amount> [slippageBps]`);
   return ok({

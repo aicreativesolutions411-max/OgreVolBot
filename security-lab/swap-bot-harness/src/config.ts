@@ -31,6 +31,8 @@ export interface HarnessConfig {
   maxSlippageBps: number; // hard ceiling — commands above this are rejected
   maxAmountUi: number; // hard per-command amount ceiling (lab safety)
   dbPath: string;
+  walletCount: number; // how many devnet trial wallets to manage
+  walletDir: string; // where throwaway DEVNET keypairs are persisted
 }
 
 function envBool(env: NodeJS.ProcessEnv, name: string, def: boolean): boolean {
@@ -68,6 +70,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): HarnessConfig 
     maxSlippageBps: clampInt(env.MAX_SLIPPAGE_BPS, 100, 0, 500), // default 1%, ceiling 5%
     maxAmountUi: clampFloat(env.MAX_AMOUNT_UI, 5, 0, 1000), // lab per-command amount ceiling
     dbPath: env.DB_PATH || "./swap-bot-lab.sqlite",
+    walletCount: clampInt(env.WALLET_COUNT, 3, 1, 20),
+    walletDir: env.WALLET_DIR || "./devnet-wallets",
   };
 }
 
@@ -98,6 +102,18 @@ export function assertNoMainnet(cfg: HarnessConfig): void {
  */
 export function broadcastFlagsAllow(cfg: HarnessConfig): boolean {
   return cfg.dryRun === false && cfg.cluster === "devnet" && cfg.allowDevnetSend === true;
+}
+
+/**
+ * Belt-and-suspenders chain-identity gate. The REAL devnet executor calls this
+ * on every send: even if flags say "devnet", the chain must PROVE it's devnet by
+ * its genesis hash, and a mainnet host in the RPC URL is refused outright. This
+ * is a cryptographic gate, not a flag — reaching mainnet requires editing source.
+ */
+export function assertGenesisIsDevnet(genesis: string, rpcUrl = ""): void {
+  if (genesis === MAINNET_GENESIS) throw new Error("refusing: chain is MAINNET (genesis match) — aborting");
+  if (genesis !== DEVNET_GENESIS) throw new Error(`refusing: chain genesis ${genesis} is not devnet — aborting`);
+  if (/mainnet|api\.mainnet-beta\.solana\.com/i.test(rpcUrl)) throw new Error("refusing: RPC URL looks like mainnet — aborting");
 }
 
 /** Human-readable one-liner describing the current safety posture. */

@@ -10,6 +10,7 @@ import { getQuote, buildSwapPlan, Quote } from "./jupiter";
 import { ChainConn, executeOrSimulate } from "./solana";
 import { parseCommand, validateAmount, validateMint, validateSlippageBps } from "./validation";
 import { log } from "./logger";
+import { WalletBook, RealExecutor } from "./types";
 
 export interface TgUpdate {
   update_id: number;
@@ -24,7 +25,9 @@ export interface Deps {
   cfg: HarnessConfig;
   store: LabStore;
   limiter: RateLimiter;
-  conn?: ChainConn; // required for /simulate; omitted keeps the harness offline
+  conn?: ChainConn; // mock/simulate path for /simulate when no real executor is wired
+  walletBook?: WalletBook; // multi-wallet trial: sources map to devnet wallets
+  executeReal?: RealExecutor; // real DEVNET signing/broadcast (genesis-gated); never mainnet
   fetchImpl?: typeof fetch;
 }
 
@@ -45,7 +48,8 @@ export interface HandleResult {
 const HELP =
   "Lab swap-bot (test mode). Commands:\n" +
   "/quote <inMint> <outMint> <amount> [slippageBps] — read-only quote\n" +
-  "/simulate <inMint> <outMint> <amount> [slippageBps] — quote + simulate (no broadcast)\n" +
+  "/simulate <inMint> <outMint> <amount> [slippageBps] — quote + simulate (devnet only)\n" +
+  "/wallets — list your devnet trial wallets (your source maps to one)\n" +
   "/status — show safety posture\n/help — this message";
 
 function fmtQuote(q: Quote): string {
@@ -99,6 +103,12 @@ export async function handleUpdate(
 
   if (cmd.name === "status") return { code: "ok", reply: modeSummary(cfg) };
   if (cmd.name === "help") return { code: "ok", reply: HELP };
+  if (cmd.name === "wallets") {
+    if (!deps.walletBook) return { code: "ok", reply: "No trial wallets configured." };
+    const mine = deps.walletBook.pickForSource(chatId);
+    const lines = deps.walletBook.list().map((w) => `${w.index === mine.index ? "➡️" : "  "} ${w.label}: ${w.publicKey}`);
+    return { code: "ok", reply: `Devnet trial wallets (yours ➡️):\n${lines.join("\n")}` };
+  }
   // Narrow to the swap-arg variant (also a belt-and-suspenders unknown-command guard).
   if (cmd.name !== "quote" && cmd.name !== "simulate") {
     return { code: "bad_command", reply: "⚠️ unknown command" };
@@ -134,19 +144,37 @@ export async function handleUpdate(
     return { code: "ok", reply: fmtQuote(quote) };
   }
 
-  // /simulate — needs a chain connection; never broadcasts unless the armed
-  // devnet gates + genesis check pass (see solana.ts).
-  if (!deps.conn) {
-    store.audit(chatId, "no_conn", "", now);
-    return { code: "no_conn", reply: "⚠️ Simulation needs an RPC connection (not configured)." };
-  }
+  // /simulate — route through the REAL devnet executor when one is wired (the
+  // multi-wallet trial), otherwise the web3-free mock simulator. Neither can ever
+  // reach mainnet: the real executor is genesis-gated to devnet (see chain.ts).
+  const wallet = deps.walletBook?.pickForSource(chatId);
   try {
+    if (deps.executeReal) {
+      const out = await deps.executeReal({
+        chatId,
+        inputMint: inMint.value,
+        outputMint: outMint.value,
+        uiAmount: amount.value,
+        slippageBps: slip.value,
+      });
+      store.audit(chatId, out.broadcast ? "devnet-broadcast" : "devnet-simulate", `${out.walletLabel || wallet?.label || "?"}`, now);
+      return {
+        code: "ok",
+        reply:
+          `${fmtQuote(quote)}\n\n🧪 wallet=${out.walletLabel || wallet?.label || "?"} · ${out.note}\n` +
+          `broadcast=${out.broadcast}` + (out.signature ? ` sig=${out.signature}` : ""),
+      };
+    }
+    if (!deps.conn) {
+      store.audit(chatId, "no_conn", "", now);
+      return { code: "no_conn", reply: "⚠️ Simulation needs an RPC connection or a real executor (not configured)." };
+    }
     const result = await executeOrSimulate(cfg, buildSwapPlan(quote), deps.conn);
     store.audit(chatId, result.broadcast ? "simulate+devnet-send" : "simulate", `${inMint.value}->${outMint.value}`, now);
     return {
       code: "ok",
       reply:
-        `${fmtQuote(quote)}\n\n🧪 ${result.note}\n` +
+        `${fmtQuote(quote)}\n\n🧪 ${wallet ? `wallet=${wallet.label} · ` : ""}${result.note}\n` +
         `simErr=${JSON.stringify(result.err)} broadcast=${result.broadcast}` +
         (result.signature ? ` sig=${result.signature}` : ""),
     };
