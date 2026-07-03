@@ -1102,3 +1102,24 @@ test("scan Security fills from our own RPC when RugCheck returns null (no more n
   // RugCheck marks its authority read as definitive so its null == revoked
   assert.match(functionBody(serverSource, "fetchRugcheckFull"), /authoritiesKnown: true/);
 });
+
+// ---- Alpha Radar: "is a big network behind this coin?" (long-term-runner oriented, read-only) ----
+test("computeNetworkBacking reuses the observatory's winner/operator/cluster signals", () => {
+  const fn = functionBody(serverSource, "computeNetworkBacking");
+  assert.match(fn, /smartMoneyScore\(mint\)/);          // proven-winner wallets + KOL
+  assert.match(fn, /autopilotClusterRisk\(mint\)/);      // coordinated co-funding
+  assert.match(fn, /insiderLaunches\.get\(mint\)/);       // known operator
+  assert.match(fn, /backed = winners >= 2 \|\| kol \|\| operator/);
+  assert.match(fn, /score/);
+});
+test("Alpha Radar scan tool: network read + runner shape, edits in place, honest when untracked", () => {
+  const fn = functionBody(serverSource, "handleScanAlphaRadar");
+  assert.match(fn, /computeNetworkBacking\(mint\)/);
+  assert.match(fn, /runner/i);                            // long-term-runner shape, not fast pop
+  assert.match(fn, /Not tracked yet/);                    // honest when observatory hasn't seen it
+  assert.match(fn, /if \(messageId\) await editScanView\(chatId, messageId, isPhoto/); // in-place, no spam
+  assert.doesNotMatch(fn, /buyToken|sellToken|sendTransaction/); // read-only
+  // wired into the scan menu + dispatcher
+  assert.match(serverSource, /callback_data: `scan:alpha:\$\{mint\}`/);
+  assert.match(serverSource, /action === "alpha"\) \{\s*\n\s*await handleScanAlphaRadar/);
+});

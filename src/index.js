@@ -28374,6 +28374,7 @@ function slimeScanKeyboard(mint) {
 function scanMenuKeyboard(mint) {
   const links = slimewireTokenLinks(mint);
   return { inline_keyboard: [
+    [{ text: "🕵️ Alpha Radar — big network behind it?", callback_data: `scan:alpha:${mint}` }],
     [{ text: "🧠 AI Read", callback_data: `scan:ai:${mint}` }, { text: "💸 Track Funds", callback_data: `scan:funds:${mint}` }],
     [{ text: "📈 Charts", callback_data: `scan:cat:chart:${mint}` }, { text: "🔒 Security", callback_data: `scan:cat:sec:${mint}` }],
     [{ text: "🔗 Socials", callback_data: `scan:cat:social:${mint}` }, { text: "🛠 Trade Tools", callback_data: `scan:cat:trade:${mint}` }],
@@ -28420,6 +28421,8 @@ async function handleScanCallback(query, chatId, messageId) {
       await handleScanAiRead(chatId, mint, messageId, isPhoto);      // 🧠 AI verdict — edits THIS card in place
     } else if (action === "funds") {
       await handleScanTrackFunds(chatId, mint, messageId, isPhoto);   // 💸 follow-the-money — edits in place
+    } else if (action === "alpha") {
+      await handleScanAlphaRadar(chatId, mint, messageId, isPhoto);   // 🕵️ network-backed long-term-runner read
     } else if (action === "back") {
       await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: slimeScanKeyboard(mint) });
     } else if (action === "cat") {
@@ -28458,6 +28461,41 @@ async function editScanView(chatId, messageId, isPhoto, body, keyboard) {
     if (isPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: messageId, caption: capped, parse_mode: "HTML", reply_markup: keyboard });
     else await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: capped, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: keyboard });
   } catch { /* unchanged/too-old edits are fine to ignore */ }
+}
+
+// 🕵️ ALPHA RADAR — "is a big network behind this coin?" Reuses the observatory's OWN reads:
+//  • smartMoneyScore(mint) → how many PROVEN-WINNER wallets bought early + whether a KOL did,
+//  • autopilotClusterRisk(mint) → how coordinated the early buyers are (share of one funder = a network),
+//  • insiderLaunches / insiderLaunchTier → whether the launcher traces to a KNOWN OPERATOR,
+//  • earlyBuyers breadth.
+// This is the shared core for the scan tool AND the proactive alerts. It's oriented to LONG-TERM
+// runners (network-backed coins that grind up over days), not fast pops. Read-only, no execution.
+function computeNetworkBacking(mint) {
+  try {
+    const sm = smartMoneyScore(mint) || null;
+    const cluster = autopilotClusterRisk(mint) || null;      // { risk 0..0.9, reason }
+    const insider = insiderLaunches.get(mint) || null;        // known-operator launch record
+    const winners = sm ? Number(sm.winners) || 0 : 0;
+    const kol = Boolean(sm && sm.kol);
+    const operator = Boolean(insider);
+    const opTier = insider ? Number(insider.tier) || 1 : 0;
+    const coordinated = cluster ? Number(cluster.risk) || 0 : 0;
+    let earlyCount = 0;
+    try {
+      const eb = earlyBuyers.get(mint); if (eb) earlyCount = eb.size;
+      const oc = obsCoins.get(mint); if (oc && Array.isArray(oc.buyers)) earlyCount = Math.max(earlyCount, oc.buyers.length);
+    } catch {}
+    const tracked = Boolean(sm || cluster || insider || earlyCount > 0);
+    const backed = winners >= 2 || kol || operator;
+    let score = 0;
+    score += Math.min(45, winners * 18);                       // proven winners in = strongest tell
+    if (kol) score += 20;
+    if (operator) score += 20 + Math.min(15, opTier * 5);
+    score += Math.round(coordinated * 25);                     // coordinated funding = an actual network
+    score += Math.min(10, earlyCount);
+    score = Math.max(0, Math.min(100, score));
+    return { mint, tracked, backed, score, winners, kol, operator, opTier, coordinated, clusterReason: cluster?.reason || null, earlyCount, why: insider?.why || null };
+  } catch { return { mint, tracked: false, backed: false, score: 0, winners: 0, kol: false, operator: false, opTier: 0, coordinated: 0, clusterReason: null, earlyCount: 0, why: null }; }
 }
 
 // 🧠 AI READ (Block_AIBot-style one-tap verdict) — synthesizes the signals we ALREADY compute
@@ -28595,6 +28633,63 @@ async function handleScanTrackFunds(chatId, mint, messageId = null, isPhoto = fa
   ] };
   if (messageId) await editScanView(chatId, messageId, isPhoto, rows.join("\n"), kb);
   else await sayHtml(chatId, rows.join("\n"), kb);
+}
+
+// 🕵️ ALPHA RADAR (scan tool) — "is a big network behind this, and does it have long-term-runner shape?"
+// Reads computeNetworkBacking (proven-winner wallets / known operator / coordinated funding) + the coin's
+// SUSTAINED-STRENGTH shape from DexScreener (age, 6h/24h trend, liquidity). Honest when the observatory
+// hasn't seen the coin (old / not in the live stream) — the network read needs early-buyer capture.
+async function handleScanAlphaRadar(chatId, mint, messageId = null, isPhoto = false) {
+  if (tgCommandOnCooldown(chatId, `alpha:${mint}`, 4000)) return;
+  let scan = null; try { scan = await gatherSlimeScan(mint); } catch {}
+  const meta = scan?.meta || null, bonding = scan?.bonding || null;
+  const sym = meta?.symbol || bonding?.symbol || shortMint(mint);
+  const net = computeNetworkBacking(mint);
+  const mc = Number(meta?.marketCap || meta?.fdv || bonding?.marketCap || 0);
+  const liq = Number(meta?.liquidityUsd || bonding?.liquidityUsd || 0);
+  const ch6 = Number(meta?.priceChange?.h6), ch24 = Number(meta?.priceChange?.h24), ch1 = Number(meta?.priceChange?.h1);
+  const ageMs = Number(meta?.pairCreatedAt || bonding?.createdAt || bonding?.pairCreatedAt || 0) ? Date.now() - Number(meta?.pairCreatedAt || bonding?.createdAt || bonding?.pairCreatedAt) : 0;
+  const ageH = ageMs > 0 ? ageMs / 3600000 : 0;
+
+  // NETWORK verdict
+  const netLines = [];
+  if (net.winners > 0) netLines.push(`✅ <b>${net.winners}</b> proven-winner wallet${net.winners > 1 ? "s" : ""} bought early`);
+  if (net.kol) netLines.push(`✅ a tracked <b>KOL</b> is in`);
+  if (net.operator) netLines.push(`✅ launcher traces to a <b>known operator</b>${net.why ? ` <i>(${escapeTelegramHtml(net.why)})</i>` : ""}`);
+  if (net.coordinated >= 0.33) netLines.push(`🕸 coordinated funding — ${escapeTelegramHtml(net.clusterReason || "shared funder cluster")}`);
+  if (net.earlyCount > 0 && !netLines.length) netLines.push(`• ${net.earlyCount} early buyers captured — no proven network yet`);
+
+  // RUNNER shape: reward a coin that's climbing + holding over HOURS with healthy liq (a grinder, not a spent pop)
+  const runnerBits = [];
+  let runnerScore = 0;
+  if (Number.isFinite(ch6)) { if (ch6 > 15) { runnerScore += 25; runnerBits.push(`📈 +${Math.round(ch6)}% over 6h — sustained climb`); } else if (ch6 < -20) { runnerScore -= 20; runnerBits.push(`📉 ${Math.round(ch6)}% 6h — rolling over`); } }
+  if (Number.isFinite(ch24) && ch24 > 30) { runnerScore += 15; runnerBits.push(`📈 +${Math.round(ch24)}% 24h`); }
+  if (liq >= 25000) { runnerScore += 15; runnerBits.push(`💧 liquidity ${formatUsdCompact(liq)} — can hold a multi-day run`); }
+  else if (liq > 0 && liq < 8000) { runnerScore -= 10; runnerBits.push(`💧 thin liquidity ${formatUsdCompact(liq)} — fragile`); }
+  if (ageH >= 2 && ageH <= 240 && net.backed) { runnerScore += 15; runnerBits.push(`⏳ ${ageH < 24 ? Math.round(ageH) + "h" : Math.round(ageH / 24) + "d"} old + still network-backed — early on the curve`); }
+  if (Number.isFinite(ch1) && ch1 > 60) { runnerScore -= 10; runnerBits.push(`⚡ +${Math.round(ch1)}% in 1h — may be a spent pop, not a slow runner`); }
+
+  const combined = Math.round(net.score * 0.6 + Math.max(0, Math.min(100, 50 + runnerScore)) * 0.4);
+  let verdict, tone;
+  if (!net.tracked) { verdict = "⚪ Not tracked yet"; tone = "The network observatory hasn't captured this coin's early buyers — it's likely too old or wasn't in the live launch stream. Network read works best on coins in their first hours. On-chain concentration is on the 💸 Track Funds tab."; }
+  else if (net.backed && combined >= 62) { verdict = "🟢 Network-backed runner setup"; tone = "A real network is behind this and it has long-term-runner shape. The kind you can hold for days — size in, set a wide stop, let it grind."; }
+  else if (net.backed) { verdict = "🟡 Network-backed, shape not confirmed"; tone = "Smart wallets are in, but the runner shape (sustained climb + liquidity) isn't there yet. Watchlist it — it may be early."; }
+  else { verdict = "🔴 No proven network"; tone = "No proven-winner / operator cluster detected behind this one. Could still run on hype, but it's not the network-backed setup you're hunting."; }
+
+  const body = [
+    `🕵️ <b>Alpha Radar — $${escapeTelegramHtml(sym)}</b>`,
+    `${verdict}${net.tracked ? ` · <b>${combined}/100</b>` : ""}`,
+    netLines.length ? "\n<b>Network</b>\n" + netLines.join("\n") : "",
+    runnerBits.length ? "\n<b>Runner shape</b>\n" + runnerBits.join("\n") : "",
+    `\n<i>${tone}</i>`,
+    `<i>Catches network-backed coins that grind up over days (not fast Xs). Read-only signal — not financial advice.</i>`
+  ].filter((x) => x !== "").join("\n");
+  const kb = { inline_keyboard: [
+    [{ text: "💸 Track Funds", callback_data: `scan:funds:${mint}` }, { text: "🧠 AI Read", callback_data: `scan:ai:${mint}` }],
+    [{ text: "⚡ Buy on SlimeWire", url: slimewireTokenLinks(mint).siteBuy }, { text: "⬅ Back to card", callback_data: `scan:card:${mint}` }]
+  ] };
+  if (messageId) await editScanView(chatId, messageId, isPhoto, body, kb);
+  else await sayHtml(chatId, body, kb);
 }
 
 // Caller footer for the scan card: who FIRST called this CA in this channel, when, and how
