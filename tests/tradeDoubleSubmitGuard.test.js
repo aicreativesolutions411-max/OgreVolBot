@@ -1085,3 +1085,20 @@ test("flex detector ignores a bare tweet link so the X-post preview still fires"
   // message falls through to the tweet handler. Lock that the gate needs a real brag signal.
   assert.match(det, /if \(!gain\) return null/);
 });
+
+// ---- Scan card Security block never blank: free on-chain fill when RugCheck is down/unindexed ----
+test("scan Security fills from our own RPC when RugCheck returns null (no more n/a wall)", () => {
+  const enrich = functionBody(serverSource, "enrichScanSecurityOnchain");
+  assert.match(enrich, /getParsedAccountInfo/);                 // mint/freeze authority = ground truth
+  assert.match(enrich, /computeOnchainDistribution\(/);          // concentration + holders + dev
+  assert.match(enrich, /out\[k\] == null/);                      // only fills gaps, never overwrites RugCheck
+  assert.match(enrich, /authoritiesKnown = true/);
+  // wired into the one scan fetch everything reuses (card, AI Read, Track Funds, refresh, flex)
+  assert.match(serverSource, /enrichScanSecurityOnchain\(mint, rug, bonding\)/);
+  // card shows n/a (not a false "revoked") when authority state was never actually read
+  const card = functionBody(serverSource, "formatSlimeScanCard");
+  assert.match(card, /const authKnown = Boolean\(rug && rug\.authoritiesKnown\)/);
+  assert.match(card, /authKnown \? \(rug\.mintAuthority \? "🔴 active" : "🟢 none"\)/);
+  // RugCheck marks its authority read as definitive so its null == revoked
+  assert.match(functionBody(serverSource, "fetchRugcheckFull"), /authoritiesKnown: true/);
+});

@@ -27593,7 +27593,7 @@ async function fetchRugcheckFull(mint) {
   try {
     const data = await fetchJson(`https://api.rugcheck.xyz/v1/tokens/${encodeURIComponent(key)}/report`, {
       headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
-      timeoutMs: 3500
+      timeoutMs: 6000
     });
     if (data && typeof data === "object") {
       const holders = Array.isArray(data.topHolders) ? data.topHolders : [];
@@ -27615,6 +27615,7 @@ async function fetchRugcheckFull(mint) {
         holderCount,
         mintAuthority: (data.mintAuthority || data.token?.mintAuthority) ? String(data.mintAuthority || data.token?.mintAuthority) : null,
         freezeAuthority: (data.freezeAuthority || data.token?.freezeAuthority) ? String(data.freezeAuthority || data.token?.freezeAuthority) : null,
+        authoritiesKnown: true,   // RugCheck report loaded → its null authority = definitely revoked (not "unknown")
         devSold,
         risks: Array.isArray(data.risks) ? data.risks.slice(0, 4).map((r) => ({ name: String(r?.name || "").slice(0, 60) })).filter((r) => r.name) : []
       };
@@ -28276,6 +28277,53 @@ async function buildChartData(mint, tf) {
   return data;
 }
 
+// Fill the scan card's Security block from our OWN RPC (free) when RugCheck is rate-limited, slow, or
+// hasn't indexed a brand-new coin — the "everything shows n/a" fix. Authorities are decoded straight
+// off the mint account (ground truth), concentration + holder count from getTokenLargestAccounts. Only
+// fills what RugCheck left empty, and never invents an authority state it couldn't read. Cached 5 min
+// so repeated taps (scan → AI Read → Track Funds → refresh) don't re-hit the RPC.
+const scanSecurityCache = new Map();
+async function enrichScanSecurityOnchain(mint, rug, bonding) {
+  const out = (rug && typeof rug === "object") ? { ...rug } : {};
+  const complete = (r) => r && r.top10Pct != null && r.holderCount != null && r.authoritiesKnown && r.devSold != null;
+  if (complete(out)) return out;                        // RugCheck already gave us everything
+  const cached = scanSecurityCache.get(mint);
+  if (cached && Date.now() - cached.at < 5 * 60 * 1000) {
+    // merge cached on-chain fills into whatever RugCheck returned this time
+    for (const k of ["top10Pct", "topHolders", "holderCount", "devSold", "mintAuthority", "freezeAuthority", "authoritiesKnown"]) {
+      if (out[k] == null && cached.value[k] != null) out[k] = cached.value[k];
+    }
+    return out;
+  }
+  const filled = {};
+  try {
+    // Authorities — a single mint-account read; on-chain is ground truth (more reliable than RugCheck).
+    const info = await rpcRead("scan: mint authorities", (c) => c.getParsedAccountInfo(new PublicKey(mint))).catch(() => null);
+    const p = info?.value?.data?.parsed?.info;
+    if (p) {
+      filled.mintAuthority = p.mintAuthority ? String(p.mintAuthority) : null;
+      filled.freezeAuthority = p.freezeAuthority ? String(p.freezeAuthority) : null;
+      filled.authoritiesKnown = true;
+    }
+  } catch {}
+  if (out.top10Pct == null || out.holderCount == null || out.devSold == null) {
+    try {
+      const creator = String(bonding?.creator || bonding?.creatorWallet || bonding?.dev || bonding?.deployer || "").trim();
+      const dist = await computeOnchainDistribution({ mint, creatorWallet: creator, rpcRead, withHolderCount: out.holderCount == null });
+      if (dist && dist.onchainLoaded) {
+        if (Number.isFinite(dist.top10Percent)) filled.top10Pct = dist.top10Percent;
+        if (Number.isFinite(dist.topHolderPercent)) filled.topHolders = [dist.topHolderPercent];
+        if (Number.isFinite(dist.holderCount)) filled.holderCount = dist.holderCount;
+        if (creator && Number.isFinite(dist.devHoldPercent)) filled.devSold = dist.devHoldPercent <= 0.5;
+      }
+    } catch {}
+  }
+  if (Object.keys(filled).length) scanSecurityCache.set(mint, { at: Date.now(), value: filled });
+  if (scanSecurityCache.size > 300) scanSecurityCache.delete(scanSecurityCache.keys().next().value);
+  for (const k of Object.keys(filled)) if (out[k] == null) out[k] = filled[k];
+  return Object.keys(out).length ? out : null;
+}
+
 async function gatherSlimeScan(mint) {
   // Pump coins read Pump metadata FIRST (priority), Dex fills the gaps it doesn't have
   // (volume, 1H txns, price-change). Fetch everything in parallel so the card always has the
@@ -28297,7 +28345,9 @@ async function gatherSlimeScan(mint) {
   let bonding = pumpMeta;
   if (!bonding && (!meta || !meta.marketCap)) bonding = await getPumpFunTokenMetadata(mint).catch(() => null);
   const ath = parseTokenAth(athRaw, supply);
-  return { best, meta, rug, shield, bonding, dexPaid, supply, ath };
+  // Free on-chain fill so the Security block is never blank when RugCheck is rate-limited / unindexed.
+  const rugFilled = await enrichScanSecurityOnchain(mint, rug, bonding).catch(() => rug);
+  return { best, meta, rug: rugFilled, shield, bonding, dexPaid, supply, ath };
 }
 
 // Compact bottom row: just Menu + Quick Buy + Refresh (3 small buttons, not bulky).
@@ -28800,8 +28850,11 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
   const th = rug?.topHolders?.length ? rug.topHolders.map((p) => (Number(p) || 0).toFixed(1)).join("|") : "n/a";
   const devSold = rug ? `${light(rug.devSold, false)} ${rug.devSold === true ? "Yes" : rug.devSold === false ? "No" : "n/a"}` : "⚪ n/a";
   const dexPaidStr = `${light(dexPaid, true)} ${dexPaid === true ? "Paid" : dexPaid === false ? "Unpaid" : "n/a"}`;
-  const mintAuth = rug ? (rug.mintAuthority ? "🔴 active" : "🟢 none") : "⚪ n/a";
-  const freezeAuth = rug ? (rug.freezeAuthority ? "🔴 active" : "🟢 none") : "⚪ n/a";
+  // Authorities: only render 🟢 none (revoked) when we DEFINITELY read the state (RugCheck report or an
+  // on-chain mint decode). If neither resolved, show n/a rather than a false "revoked".
+  const authKnown = Boolean(rug && rug.authoritiesKnown);
+  const mintAuth = authKnown ? (rug.mintAuthority ? "🔴 active" : "🟢 none") : (rug && rug.mintAuthority ? "🔴 active" : "⚪ n/a");
+  const freezeAuth = authKnown ? (rug.freezeAuthority ? "🔴 active" : "🟢 none") : (rug && rug.freezeAuthority ? "🔴 active" : "⚪ n/a");
 
   const lines = [
     `💊 <b>${esc(name)} ($${esc(sym)})</b>`,
