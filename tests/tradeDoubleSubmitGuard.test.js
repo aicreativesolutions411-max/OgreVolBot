@@ -727,6 +727,10 @@ test("Buy bot (SpyDefi parity): whale-tier badge + new-holder flag + volume", ()
   assert.match(buy, /New holder!/);                              // first-seen buyer flag
   assert.match(buy, /groupBuyHolders/);                          // per-token seen-buyer set
   assert.match(buy, /Vol \$\{?|· Vol /);                         // volume shown on the MC line
+  // Bonded coins show "✅ Bonded" — detection uses pump metadata's own graduated
+  // flag (+bondPct>=100), not just meta.graduated (false for PumpSwap graduations).
+  assert.match(buy, /✅ <b>Bonded<\/b>/);
+  assert.match(buy, /bonding\?\.graduated \|\| bonding\?\.isGraduated \|\| \(bondPct != null && bondPct >= 100\)/);
 });
 
 test("Raid bot: clean card (no colour squares / bars) + goal-to-go + views + Refresh", () => {

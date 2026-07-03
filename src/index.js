@@ -29285,7 +29285,14 @@ async function postGroupBuy(mint, { solAmount = 0, usdAmount = 0, tokens = 0, pr
   const symClean = (String(sym || meta?.symbol || bonding?.symbol || "").replace(/[<>&]/g, "")) || shortMint(mint);
   const defImg = firstString(meta?.imageUrl, bonding?.imageUrl, bonding?.imageUri) || (await resolveGroupTokenImage(mint).catch(() => ""));
   const bondPct = bonding ? firstMeaningfulNumber(bonding.bondingProgressPct) : null;
-  const onCurve = bondPct != null && !meta?.graduated;
+  // BONDED detection must not rely on meta.graduated alone: that's only true for
+  // Raydium/Meteora/Orca pools, but pump coins now graduate to PumpSwap (meta.graduated
+  // false there). The pump metadata's own graduated/isGraduated flag + a full (>=100%)
+  // curve are the reliable signals, so a bonded coin always shows "✅ Bonded".
+  const bonded = Boolean(
+    meta?.graduated || bonding?.graduated || bonding?.isGraduated || (bondPct != null && bondPct >= 100)
+  );
+  const onCurve = !bonded && bondPct != null && bondPct > 0 && bondPct < 100;
   const mc = (onCurve ? firstMeaningfulNumber(bonding?.marketCap, meta?.marketCap ?? meta?.fdv) : firstMeaningfulNumber(meta?.marketCap ?? meta?.fdv, bonding?.marketCap)) || mcUsd || 0;
   const liq = firstMeaningfulNumber(meta?.liquidityUsd, bonding?.liquidityUsd) || liqUsd || 0;
   const ch = (change24 != null && isFinite(change24)) ? change24 : (meta?.priceChange?.h24 ?? null);
@@ -29330,7 +29337,9 @@ async function postGroupBuy(mint, { solAmount = 0, usdAmount = 0, tokens = 0, pr
         "",
         emoji.repeat(count),
         "",
-        onCurve ? `🔥 <b>${Math.round(bondPct)}%</b> bonding  <code>${buyBondingBar(bondPct)}</code>` : "",
+        onCurve
+          ? `🔥 <b>${Math.round(bondPct)}%</b> bonding  <code>${buyBondingBar(bondPct)}</code>`
+          : bonded ? "✅ <b>Bonded</b> · graduated" : "",
         `📋 <b>${solAmount.toFixed(4)} SOL</b>${usdAmount > 0 ? ` (${fmtUsd0(usdAmount)})` : ""}`,
         tokens > 0
           ? `🪙 Got <b>${fmtTok(tokens)}</b> $${escapeTelegramHtml(symClean)}${txLink ? ` · <a href="${txLink}">Tx</a>` : ""}`
