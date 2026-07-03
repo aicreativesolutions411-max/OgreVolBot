@@ -28304,17 +28304,13 @@ async function gatherSlimeScan(mint) {
 // Menu opens user-friendly submenus; Quick Buy deep-links the CA prefilled to the site.
 function slimeScanKeyboard(mint) {
   const links = slimewireTokenLinks(mint);
-  // Maestro-style point-of-sale: instant-buy amount buttons lead (each lands in the app's
-  // 1-click buy preloaded), then custom Buy + Chart, then Menu/Refresh. Every CA posted in a
-  // group becomes a one-tap funnel to a fee-earning buy in the terminal.
+  // ONE clean Buy button. The old 0.5/1/5/custom amount buttons all just opened the site's 1-click
+  // buy (Telegram URL buttons can't execute a swap in-chat — wallet actions are DM/site-only for
+  // safety), so four near-identical redirects were clutter. The site's quick-buy lets you pick the
+  // amount there. Buy → Chart on top, then the Menu / Refresh controls.
   return { inline_keyboard: [
     [
-      { text: "⚡ Buy 0.5", url: slimewireBuyUrl(mint, 0.5) },
-      { text: "⚡ Buy 1", url: slimewireBuyUrl(mint, 1) },
-      { text: "⚡ Buy 5", url: slimewireBuyUrl(mint, 5) }
-    ],
-    [
-      { text: "💰 Buy custom", url: links.siteBuy },
+      { text: "⚡ Buy on SlimeWire", url: links.siteBuy },
       { text: "📈 Chart", url: links.site }
     ],
     [

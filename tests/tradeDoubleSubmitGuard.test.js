@@ -912,16 +912,16 @@ test("OCR image scan: cloud-offloaded, concurrency-capped, gated, delete-only", 
   assert.doesNotMatch(functionBody(serverSource, "shieldOcrScanImage"), /buyToken|sellToken|sendTransaction/);
 });
 
-// ---- Maestro-style POS buy card: in-group amount buttons → preloaded 1-click buy ----
-test("scan card is a point-of-sale: instant-buy amount buttons deep-link with &amount=", () => {
-  assert.match(serverSource, /function slimewireBuyUrl\(/);
-  assert.match(functionBody(serverSource, "slimewireBuyUrl"), /buy=1/);
-  assert.match(functionBody(serverSource, "slimewireBuyUrl"), /&amount=/);
+// ---- Scan card buy row: ONE clean Buy button (the 0.5/1/5/custom amount buttons all just opened
+// the site, so they were consolidated). The &amount= deep-link helper still exists for the web preload.
+test("scan card has a single Buy button, not four near-identical amount redirects", () => {
   const kb = functionBody(serverSource, "slimeScanKeyboard");
-  assert.match(kb, /slimewireBuyUrl\(mint, 0\.5\)/);
-  assert.match(kb, /slimewireBuyUrl\(mint, 1\)/);
-  assert.match(kb, /slimewireBuyUrl\(mint, 5\)/);
-  assert.match(kb, /⚡ Buy 1/);
+  assert.match(kb, /text: "⚡ Buy on SlimeWire", url: links\.siteBuy/);
+  assert.match(kb, /text: "📈 Chart"/);
+  assert.doesNotMatch(kb, /slimewireBuyUrl/);         // no per-amount buttons in the keyboard anymore
+  assert.doesNotMatch(kb, /⚡ Buy 0\.5/);
+  // the amount deep-link capability itself is retained (web 1-click reads ?buy=1&amount=)
+  assert.match(functionBody(serverSource, "slimewireBuyUrl"), /&amount=/);
 });
 for (const [label, source] of [["gg.html", ggSource], ["index.html", indexSource]]) {
   test(`POS deep-link opens the 1-click buy preloaded with the amount (${label})`, () => {
