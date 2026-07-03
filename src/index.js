@@ -41692,8 +41692,16 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
   const sellDelaySeconds = parseOptionalSellDelaySeconds(firstString(body.sellDelay, body.sellDelaySeconds, "off"));
   const sellPercent = ladder.length ? (ladder[0].sellPercent || 100) : parsePercent(String(body.sellPercent || "100"));
   const triggerSellPercent = sellPercent;
+  // Cornix-style advanced exits (all opt-in; the engine already runs these):
+  //  - trailing stop: lock gains when a winner pulls back from its peak (only arms once in profit,
+  //    so it can never cause a loss-sell). If activation isn't given, arm once up the trail distance.
+  //  - break-even after TP1: after the first ladder tranche fills, tighten the stop to ~entry.
+  const trailingStopPct = Math.max(0, Math.min(95, Number(body.trailingStopPct) || 0));
+  const trailingActivatePct = trailingStopPct > 0 ? Math.max(Number(body.trailingActivatePct) || 0, trailingStopPct) : 0;
+  const breakEvenAfterTp1 = cleanLaunchBoolean(body.breakEvenAfterTp1);
+  const breakEvenStopPct = Math.max(0, Math.min(20, Number(body.breakEvenStopPct) || 2));
 
-  if (!takeProfitPct && !stopLossPct && sellDelaySeconds <= 0 && !ladder.length) {
+  if (!takeProfitPct && !stopLossPct && sellDelaySeconds <= 0 && !ladder.length && !(trailingStopPct > 0)) {
     return null;
   }
   const permission = automationPermission || await requireWebAutomationPermission(userId, "quick-buy auto exits");
@@ -41752,6 +41760,10 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     takeProfitMode: ladder.length ? "ladder" : "single",
     stopLossMode: "single",
     takeProfitLadder: ladder,
+    trailingStopPct,
+    trailingActivatePct,
+    breakEvenAfterTp1,
+    breakEvenStopPct,
     autoBundle: false,
     slippageBps,
     createdAt: new Date().toISOString(),

@@ -951,3 +951,30 @@ test("wallet tracker: cheap-poll + Helius-parse-on-activity, alert funnels to PO
   assert.match(serverSource, /callback_data: "wt:home"/);     // menu button under Scans & Signals
   assert.match(serverSource, /void pollTrackedWallets\(\)/);  // interval started
 });
+
+// ---- Cornix-style advanced exits: trailing stop + break-even-after-TP1 (engine already runs them) ----
+test("web quick-buy plumbs trailing stop + break-even into the plan (arms only in profit)", () => {
+  const fn = functionBody(serverSource, "webCreateSingleTradeAutoExitPlan");
+  // parsed from the buy body, clamped, opt-in
+  assert.match(fn, /trailingStopPct = Math\.max\(0, Math\.min\(95, Number\(body\.trailingStopPct\) \|\| 0\)\)/);
+  // activation defaults to >= trail distance so a trailing stop can NEVER fire at a loss
+  assert.match(fn, /trailingActivatePct = trailingStopPct > 0 \? Math\.max\(Number\(body\.trailingActivatePct\) \|\| 0, trailingStopPct\) : 0/);
+  assert.match(fn, /breakEvenAfterTp1 = cleanLaunchBoolean\(body\.breakEvenAfterTp1\)/);
+  // trailing alone is enough to arm a plan (not gated behind TP/SL)
+  assert.match(fn, /!\(trailingStopPct > 0\)/);
+  // all four land on the plan object the engine reads
+  assert.match(fn, /trailingStopPct,\s*\n\s*trailingActivatePct,\s*\n\s*breakEvenAfterTp1,\s*\n\s*breakEvenStopPct,/);
+});
+for (const [label, source] of [["gg.html", ggSource], ["index.html", indexSource]]) {
+  test(`quick-buy modal exposes advanced exit strategy + sends it (${label})`, () => {
+    assert.match(source, /qbTrail/);       // trailing stop % input
+    assert.match(source, /qbTrailAct/);    // activation % input
+    assert.match(source, /qbBe/);          // break-even-after-TP1 toggle
+    // execQuickBuy forwards them to the buy body
+    assert.match(source, /body\.trailingStopPct=String\(trail\)/);
+    assert.match(source, /body\.trailingActivatePct=String\(trailAct\)/);
+    assert.match(source, /body\.breakEvenAfterTp1=true/);
+    // trailing alone still arms auto-exit (not dropped to HOLD)
+    assert.match(source, /tp\|\|sl\|\|Number\(trail\)>0/);
+  });
+}

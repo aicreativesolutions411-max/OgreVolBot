@@ -2612,11 +2612,15 @@
       // Your OWN take-profit / stop-loss win; otherwise fall back to a saved preset's exits.
       const p=q.presetId?((state.presets.trade||[]).find(x=>x.id===q.presetId)||null):null;
       const tp=q.tp||(p&&p.takeProfitPct)||"",sl=q.sl||(p&&p.stopLossPct)||"";
+      const trail=q.trail||(p&&p.trailingStopPct)||"",trailAct=q.trailAct||(p&&p.trailingActivatePct)||"",be=!!(q.be||(p&&p.breakEvenAfterTp1));
       const lad=(Array.isArray(q.ladder)&&q.ladder.length)?q.ladder:((p&&Array.isArray(p.takeProfitLadder)&&p.takeProfitLadder.length)?p.takeProfitLadder:null);
       const body={tokenMint:mint,walletIndex:state.activeWallet,amountSol:String(q.amt),slippageBps:String(q.slip||(p&&p.slippageBps)||"500"),tradeAttemptId:attemptId()};
       if(lad){body.autoExit=true;body.takeProfitLadder=lad;body.stopLossPct=sl;body.sellDelay=(p&&p.sellDelay)||"off";}
-      else if(tp||sl||(p&&p.sellDelay&&p.sellDelay!=="off")){body.autoExit=true;body.takeProfitPct=tp;body.stopLossPct=sl;body.sellDelay=(p&&p.sellDelay)||"off";body.sellPercent=(p&&p.sellPercent)||"100";}
-      else body.disableAutoExit=true;    // no TP/SL set → HOLD (don't let the backend force a default auto-exit)
+      else if(tp||sl||Number(trail)>0||(p&&p.sellDelay&&p.sellDelay!=="off")){body.autoExit=true;body.takeProfitPct=tp;body.stopLossPct=sl;body.sellDelay=(p&&p.sellDelay)||"off";body.sellPercent=(p&&p.sellPercent)||"100";}
+      else body.disableAutoExit=true;    // no TP/SL/trail set → HOLD (don't let the backend force a default auto-exit)
+      // 🎯 Cornix-style advanced exits (engine runs them; arm only in profit so they never loss-sell)
+      if(Number(trail)>0){body.trailingStopPct=String(trail);if(Number(trailAct)>0)body.trailingActivatePct=String(trailAct);}
+      if(be)body.breakEvenAfterTp1=true;
       toast("Buying ◎"+Number(q.amt).toFixed(3)+"…");
       const {ok,status,d}=await postTrade("/api/web/trade/buy",body);
       handleTradeResult(ok,status,d,"Buy ◎"+Number(q.amt).toFixed(3));
@@ -2639,10 +2643,15 @@
       '<div class="field"><label>Amount (SOL)</label><div class="chips" id="qbChips">'+chips+'</div><input id="qbAmt" inputmode="decimal" value="'+esc(amt0)+'" style="margin-top:8px"></div>'+
       '<div class="field row2"><div><label>Take profit %</label><input id="qbTp" inputmode="numeric" placeholder="off" value="'+esc(cur.tp||"")+'"></div><div><label>Stop loss %</label><input id="qbSl" inputmode="numeric" placeholder="off" value="'+esc(cur.sl||"")+'"></div></div>'+
       '<div class="field row2"><div><label>Slippage (bps)</label><input id="qbSlip" inputmode="numeric" placeholder="500" value="'+esc(cur.slip||"")+'"></div><div><label>or use a saved preset</label><select id="qbPreset">'+popts+'</select></div></div>'+
+      '<details class="field"'+((cur.trail||cur.be)?' open':'')+' style="margin-top:2px"><summary style="cursor:pointer;font-size:12.5px;color:var(--muted);user-select:none">🎯 Advanced exit strategy (optional)</summary>'+
+        '<div class="row2" style="margin-top:8px"><div><label>Trailing stop %</label><input id="qbTrail" inputmode="numeric" placeholder="off" value="'+esc(cur.trail||"")+'"></div><div><label>Arm after +%</label><input id="qbTrailAct" inputmode="numeric" placeholder="auto" value="'+esc(cur.trailAct||"")+'"></div></div>'+
+        '<label style="display:flex;align-items:center;gap:8px;margin-top:9px;font-size:12.5px"><input type="checkbox" id="qbBe"'+(cur.be?' checked':'')+' style="width:auto;flex:0 0 auto">Move stop to break-even after TP1</label>'+
+        '<p class="sub" style="margin-top:6px">Trailing stop locks gains once a winner pulls back from its peak — it only arms in profit, so it never triggers a loss-sell.</p>'+
+      '</details>'+
       '<div class="bsrow"><button class="bigbuy" id="qbGo" style="flex:2">'+(mint?'Save & Buy':'Save 1-click')+'</button>'+(state.quickBuy?'<button class="wbtn ghost" id="qbClear" style="flex:1">Reset</button>':'')+'</div>');
     const amtIn=$("#qbAmt");
     $("#qbChips").querySelectorAll("button").forEach(b=>b.onclick=()=>{amtIn.value=b.dataset.v;});
-    $("#qbGo").onclick=async()=>{const amt=Number(amtIn.value);if(!isFinite(amt)||amt<=0){toast("Enter a SOL amount.",true);return;}const o={amt,presetId:$("#qbPreset").value,tp:$("#qbTp").value.trim(),sl:$("#qbSl").value.trim(),slip:$("#qbSlip").value.trim()};setQuickBuy(o);closeModal();toast("⚡ 1-click set: ◎"+amt.toFixed(3)+(o.tp?" · TP "+o.tp+"%":"")+(o.sl?" · SL "+o.sl+"%":""));if(mint){if(await ensureTradeReady())execQuickBuy(mint,o);}};
+    $("#qbGo").onclick=async()=>{const amt=Number(amtIn.value);if(!isFinite(amt)||amt<=0){toast("Enter a SOL amount.",true);return;}const o={amt,presetId:$("#qbPreset").value,tp:$("#qbTp").value.trim(),sl:$("#qbSl").value.trim(),slip:$("#qbSlip").value.trim(),trail:($("#qbTrail")?$("#qbTrail").value.trim():""),trailAct:($("#qbTrailAct")?$("#qbTrailAct").value.trim():""),be:!!($("#qbBe")&&$("#qbBe").checked)};setQuickBuy(o);closeModal();toast("⚡ 1-click set: ◎"+amt.toFixed(3)+(o.tp?" · TP "+o.tp+"%":"")+(o.sl?" · SL "+o.sl+"%":"")+(Number(o.trail)>0?" · trail "+o.trail+"%":""));if(mint){if(await ensureTradeReady())execQuickBuy(mint,o);}};
     const clr=$("#qbClear");if(clr)clr.onclick=()=>{clearQuickBuy();closeModal();toast("1-click buy reset");};
   }
   // Submit a trade; if the backend 403s for the TP/SL automation permission (every quick-buy defaults to
