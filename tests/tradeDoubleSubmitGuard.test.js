@@ -880,3 +880,19 @@ test("phase-2 menu: Referral tile + whales/web-verify toggles routed", () => {
   assert.match(cb, /gb:ref:start/);
   assert.match(cb, /gb:ref:stop/);
 });
+
+// ---- Shared scammer database: CAS (cas.chat) + SlimeWire cross-group ban list ----
+test("known-scammer gate: CAS + cross-group ban list, wired into join + messages + /ban", () => {
+  assert.match(serverSource, /async function casBanned\(/);
+  assert.match(functionBody(serverSource, "casBanned"), /api\.cas\.chat\/check/);
+  assert.match(serverSource, /async function addShieldBan\(/);
+  assert.match(serverSource, /async function isSlimeWireBanned\(/);
+  assert.match(serverSource, /async function shieldIsKnownScammer\(/);
+  assert.match(functionBody(serverSource, "roseDefaults"), /knownScammers: false/);
+  const rose = functionBody(serverSource, "handleGroupRose");
+  assert.match(rose, /cfg\.knownScammers && await shieldIsKnownScammer/);
+  // /ban feeds the shared list so it protects every group.
+  assert.match(rose, /void addShieldBan\(tId, chatId\)/);
+  // menu toggle wired
+  assert.match(serverSource, /GB_TOGGLE_FIELDS = new Set\(\[[^\]]*"knownScammers"/);
+});

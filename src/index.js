@@ -29134,7 +29134,7 @@ function groupBotModuleView(module, entry) {
       "Moderation + Heimdall-style protection + entry verification. Green ✅ = on. (All need Rose on.)",
       "",
       "<b>Moderation:</b> captcha, anti-links, clean joins, antiflood, welcome/rules.",
-      "<b>Shield:</b> auto-delete scam/phishing, remove ghost accounts, block impersonators, auto-whitelist regulars.",
+      "<b>Shield:</b> auto-delete scam/phishing, ban known scammers (CAS + our network), remove ghost accounts, block impersonators, auto-whitelist regulars.",
       "<b>Verify to chat:</b> 🌐 web (human check) · 🐋 whales (must hold your token). New members stay muted until they pass.",
       "",
       "More via commands — <b>/help</b> (warns, notes, filters, mute/ban, purge…)."
@@ -29142,8 +29142,9 @@ function groupBotModuleView(module, entry) {
     markup: { inline_keyboard: [
       [toggleBtn("rose", "Rose")],
       [tog("captcha", "Captcha"), tog("antilinks", "Anti-links")],
-      [tog("cleanService", "Clean joins"), tog("deleteScam", "Delete scam")],
+      [tog("deleteScam", "Delete scam"), tog("knownScammers", "Ban known scammers")],
       [tog("deleteDeletedAccounts", "Del ghost accts"), tog("antiImpersonator", "Anti-impersonate")],
+      [tog("cleanService", "Clean joins")],
       [{ text: `🌐 Web verify: ${wv.on ? "ON" : "off"}`, callback_data: "gb:wv:web" }, { text: `🐋 Whales: ${wc.on ? "ON" : "off"}`, callback_data: "gb:wv:whales" }],
       [{ text: `⚖️ Min hold: ${wc.minHold || 0}`, callback_data: "gb:in:whalesmin" }, { text: `🌊 Antiflood: ${cfg.antiflood || "off"}`, callback_data: "gb:in:antiflood" }],
       [{ text: `✅ Whitelist: ${cfg.autoWhitelist || "off"}`, callback_data: "gb:in:autowhitelist" }, { text: "👋 Welcome", callback_data: "gb:in:welcome" }],
@@ -29233,6 +29234,7 @@ function groupBotHelpText() {
     "• <code>/deletescam on</code> — auto-delete scam / phishing / wallet-drainer messages",
     "• <code>/deletedaccounts on</code> — remove \"Deleted Account\" ghosts",
     "• <code>/antiimpersonator on</code> — block users mimicking an admin's name",
+    "• <code>/knownscammers on</code> — auto-ban users on the CAS list or the SlimeWire cross-group ban list (a /ban here protects every SlimeWire group)",
     "• <code>/autowhitelist 10</code> — trust a member after N clean messages (0 = off)",
     "",
     "🔓 <b>Verify to chat</b> (in the Rose &amp; Shield menu) — new members stay muted until they pass a web check:",
@@ -29390,7 +29392,7 @@ async function handleGroupBotCommand(message, userId) {
   return true;
 }
 // Route group-bot CALLBACKS (toggle buttons). Returns true if handled.
-const GB_TOGGLE_FIELDS = new Set(["captcha", "antilinks", "cleanService", "deleteScam", "deleteDeletedAccounts", "antiImpersonator"]);
+const GB_TOGGLE_FIELDS = new Set(["captcha", "antilinks", "cleanService", "deleteScam", "deleteDeletedAccounts", "antiImpersonator", "knownScammers"]);
 async function handleGroupBotCallback(query, userId) {
   const data = String(query?.data || "");
   if (!data.startsWith("gb:")) return false;
@@ -29748,6 +29750,7 @@ function roseDefaults() {
     deleteScam: false,            // auto-delete scam / phishing / wallet-drainer messages (non-admins)
     deleteDeletedAccounts: false, // remove "Deleted Account" ghosts when they post or join
     antiImpersonator: false,      // restrict non-admins whose name/username mimics an admin
+    knownScammers: false,         // auto-remove users on CAS (cas.chat) or the SlimeWire cross-group ban list
     autoWhitelist: 0 };           // exempt a user from spam checks after N clean messages (0 = off)
 }
 // Known crypto-scam / phishing / wallet-drainer patterns. High-confidence only —
@@ -30019,6 +30022,38 @@ async function handleReferralCommand(message, userId) {
   await sayHtml(chatId, cfg.on ? `🎟️ Referral contest is <b>ON</b>.${cfg.prize ? ` Prize: ${escapeTelegramHtml(cfg.prize)}.` : ""} /refboard for standings.` : "Referral contest is off. Start one with <code>/referral start [prize]</code>.");
   return true;
 }
+// SHARED SCAMMER DATABASE: the open CAS list (cas.chat) + SlimeWire's own cross-group
+// ban list (a ban in any group running this bot protects every other group).
+function shieldBansPath() { return path.join(CONFIG.dataDir, "shield-bans.json"); }
+let shieldBansCache = null;
+async function readShieldBans() {
+  if (shieldBansCache) return shieldBansCache;
+  try { const j = await readJson(shieldBansPath()).catch(() => null); shieldBansCache = (j && j.ids) ? j : { ids: {} }; }
+  catch { shieldBansCache = { ids: {} }; }
+  return shieldBansCache;
+}
+async function addShieldBan(userId, fromChat) {
+  try {
+    const s = await readShieldBans(); const k = String(userId); if (!k || s.ids[k]) return;
+    s.ids[k] = { at: Date.now(), from: String(fromChat || "") };
+    const keys = Object.keys(s.ids);
+    if (keys.length > 20000) { const drop = keys.map((kk) => [kk, s.ids[kk].at]).sort((a, b) => a[1] - b[1]).slice(0, keys.length - 16000); for (const [kk] of drop) delete s.ids[kk]; }
+    shieldBansCache = s; await writeJsonFile(shieldBansPath(), s);
+  } catch {}
+}
+async function isSlimeWireBanned(userId) { return Boolean((await readShieldBans()).ids[String(userId)]); }
+// CAS (Combot Anti-Spam) — free open ban list. Cached per user (1h).
+const casCache = new Map();
+async function casBanned(userId) {
+  const k = String(userId); const c = casCache.get(k);
+  if (c && Date.now() - c.at < 3600_000) return c.banned;
+  let banned = false;
+  try { const r = await fetch(`https://api.cas.chat/check?user_id=${encodeURIComponent(k)}`, { headers: { accept: "application/json" } }); if (r.ok) { const j = await r.json(); banned = Boolean(j && j.ok); } } catch {}
+  if (casCache.size > 10000) { const first = casCache.keys().next().value; casCache.delete(first); }
+  casCache.set(k, { banned, at: Date.now() });
+  return banned;
+}
+async function shieldIsKnownScammer(userId) { if (await isSlimeWireBanned(userId)) return true; return await casBanned(userId); }
 // When a verified user is banned, remember their device fingerprint so a ban-evading
 // alt that verifies with the same device is blocked at the portal.
 async function shieldRecordBannedFp(chatId, userId) {
@@ -30080,6 +30115,12 @@ async function handleGroupRose(message, userId) {
         await say(chatId, `🥸 Removed a join that mimics an admin's name.`).catch(() => {});
         continue;
       }
+      // Known scammer (CAS or SlimeWire cross-group ban list) → remove on entry.
+      if (cfg.knownScammers && await shieldIsKnownScammer(m.id).catch(() => false)) {
+        try { await telegram("banChatMember", { chat_id: chatId, user_id: m.id }); } catch {}
+        await say(chatId, `🛡️ Blocked a join flagged as a known scammer.`).catch(() => {});
+        continue;
+      }
       // Web verification (human/fingerprint and/or whales holdings) supersedes captcha.
       if (groupNeedsWebVerify(entry)) { await postWebVerifyGate(chatId, m, entry).catch(() => {}); continue; }
       if (cfg.captcha) {
@@ -30126,6 +30167,13 @@ async function handleGroupRose(message, userId) {
       try { await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch {}
       return true;
     }
+    // Known scammer (CAS + SlimeWire cross-group ban list) → ban + delete.
+    if (cfg.knownScammers && await shieldIsKnownScammer(userId).catch(() => false)) {
+      try { await telegram("banChatMember", { chat_id: chatId, user_id: userId }); } catch {}
+      try { await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch {}
+      await say(chatId, "🛡️ Removed a known scammer.").catch(() => {});
+      return true;
+    }
     // Admin-impersonator → mute + delete (admins can /unmute if it's a false hit).
     if (cfg.antiImpersonator && await shieldIsImpersonator(chatId, message.from).catch(() => false)) {
       try { await telegram("restrictChatMember", { chat_id: chatId, user_id: userId, permissions: ROSE_MUTE_PERMS }); } catch {}
@@ -30168,7 +30216,7 @@ async function handleGroupRose(message, userId) {
     return true;
   }
 
-  const cmd = text.match(/^\/(rules|setrules|welcome|setwelcome|goodbye|setgoodbye|antilinks|captcha|cleanservice|deletescam|deletedaccounts|antiimpersonator|autowhitelist|warn|warnings|clearwarns|resetwarns|setwarnlimit|setwarnmode|mute|tmute|unmute|kick|ban|tban|unban|antiflood|save|get|notes|clear|delnote|filter|filters|stop|delfilter|report|admins|purge|del|pin|unpin)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
+  const cmd = text.match(/^\/(rules|setrules|welcome|setwelcome|goodbye|setgoodbye|antilinks|captcha|cleanservice|deletescam|deletedaccounts|antiimpersonator|knownscammers|autowhitelist|warn|warnings|clearwarns|resetwarns|setwarnlimit|setwarnmode|mute|tmute|unmute|kick|ban|tban|unban|antiflood|save|get|notes|clear|delnote|filter|filters|stop|delfilter|report|admins|purge|del|pin|unpin)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
   // Non-command: #note fetch + auto-filters (everyone).
   if (!cmd) {
     const noteHash = text.match(/^#([A-Za-z0-9_]{1,32})$/);
@@ -30214,6 +30262,7 @@ async function handleGroupRose(message, userId) {
   if (name === "deletescam") { const on = /^on$/i.test(arg); await setGroupRose(chatId, { deleteScam: on }); await say(chatId, `🛡️ Delete scam/phishing ${on ? "ON" : "OFF"}.`); return true; }
   if (name === "deletedaccounts") { const on = /^on$/i.test(arg); await setGroupRose(chatId, { deleteDeletedAccounts: on }); await say(chatId, `👻 Remove deleted accounts ${on ? "ON" : "OFF"}.`); return true; }
   if (name === "antiimpersonator") { const on = /^on$/i.test(arg); await setGroupRose(chatId, { antiImpersonator: on }); await say(chatId, `🥸 Anti-impersonator ${on ? "ON" : "OFF"}.`); return true; }
+  if (name === "knownscammers") { const on = /^on$/i.test(arg); await setGroupRose(chatId, { knownScammers: on }); await say(chatId, `🛡️ Ban known scammers ${on ? "ON — checks CAS + the SlimeWire cross-group ban list." : "OFF"}.`); return true; }
   if (name === "autowhitelist") { const n = Math.max(0, Math.min(100, parseInt(words[0], 10) || 0)); await setGroupRose(chatId, { autoWhitelist: n }); await say(chatId, n ? `✅ Auto-whitelist after ${n} clean messages.` : "✅ Auto-whitelist OFF."); return true; }
   if (name === "setwarnlimit") { const n = Math.max(1, Math.min(20, parseInt(words[0], 10) || 3)); await setGroupRose(chatId, { warnLimit: n }); await say(chatId, `Warn limit set to ${n}.`); return true; }
   if (name === "setwarnmode") { const mode = /^(mute|kick|ban)$/i.test(words[0] || "") ? words[0].toLowerCase() : "mute"; await setGroupRose(chatId, { warnMode: mode }); await say(chatId, `On hitting the warn limit: ${mode}.`); return true; }
@@ -30262,7 +30311,7 @@ async function handleGroupRose(message, userId) {
     else if (name === "tmute") { if (!durMs) { await say(chatId, "Usage: reply + /tmute 30m (or 2h / 1d)."); return true; } await telegram("restrictChatMember", { chat_id: chatId, user_id: tId, permissions: ROSE_MUTE_PERMS, until_date: Math.floor((Date.now() + durMs) / 1000) }); await say(chatId, `🔇 Muted ${tName} for ${roseHumanDuration(durMs)}.`); }
     else if (name === "unmute") { await telegram("restrictChatMember", { chat_id: chatId, user_id: tId, permissions: ROSE_UNMUTE_PERMS }); await say(chatId, `🔊 Unmuted ${tName}.`); }
     else if (name === "kick") { await telegram("banChatMember", { chat_id: chatId, user_id: tId }); await telegram("unbanChatMember", { chat_id: chatId, user_id: tId }).catch(() => {}); await say(chatId, `👢 Kicked ${tName}.`); }
-    else if (name === "ban") { await telegram("banChatMember", { chat_id: chatId, user_id: tId }); void shieldRecordBannedFp(chatId, tId); await say(chatId, `🔨 Banned ${tName}.`); }
+    else if (name === "ban") { await telegram("banChatMember", { chat_id: chatId, user_id: tId }); void shieldRecordBannedFp(chatId, tId); void addShieldBan(tId, chatId); await say(chatId, `🔨 Banned ${tName}.`); }
     else if (name === "tban") { if (!durMs) { await say(chatId, "Usage: reply + /tban 1d (or 2h / 1w)."); return true; } await telegram("banChatMember", { chat_id: chatId, user_id: tId, until_date: Math.floor((Date.now() + durMs) / 1000) }); await say(chatId, `🔨 Banned ${tName} for ${roseHumanDuration(durMs)}.`); }
     else if (name === "unban") { await telegram("unbanChatMember", { chat_id: chatId, user_id: tId, only_if_banned: true }); await say(chatId, `Unbanned ${tName}.`); }
   } catch (e) {
