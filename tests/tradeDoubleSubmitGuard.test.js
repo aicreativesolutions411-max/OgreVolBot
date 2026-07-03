@@ -838,9 +838,9 @@ test("verify portal: signed token + holdings check + submit route (read-only, no
   assert.match(sub, /walletTokenUiBalance/);                  // holdings gate
   assert.match(sub, /restrictChatMember.*ROSE_UNMUTE_PERMS/); // unmute on success
   assert.doesNotMatch(sub, /sendTransaction|signTransaction|buyToken|sellToken/); // never moves funds
-  // routes
+  // routes: page (outer handler) + public submit (inside handleWebApiRequest, no session)
   assert.match(serverSource, /requestUrl\.pathname === "\/verify"/);
-  assert.match(serverSource, /requestUrl\.pathname === "\/api\/tg\/verify\/submit"/);
+  assert.match(serverSource, /pathname === "\/api\/tg\/verify\/submit"/);
   // page posts to the endpoint + signs a message (not a tx)
   assert.match(verifyHtml, /\/api\/tg\/verify\/submit/);
   assert.match(verifyHtml, /signMessage/);

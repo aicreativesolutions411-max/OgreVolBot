@@ -5153,15 +5153,10 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "prelaunch.html");
       return;
     }
-    // Group verification portal (Whales mode + human/fingerprint). Opened from the TG bot's link.
+    // Group verification portal page (Whales mode + human/fingerprint). Opened from the TG bot's
+    // link. The POST /api/tg/verify/submit route lives inside handleWebApiRequest (public, no session).
     if (request.method === "GET" && requestUrl.pathname === "/verify") {
       await serveStaticHtmlPage(response, "verify.html", "no-store, max-age=0");
-      return;
-    }
-    if (request.method === "POST" && requestUrl.pathname === "/api/tg/verify/submit") {
-      const body = await readJsonRequestBody(request, 8_000).catch(() => ({}));
-      const result = await handleTgVerifySubmit(body).catch((e) => ({ ok: false, error: String((e && e.message) || "verify failed") }));
-      sendWebJson(request, response, result.ok ? 200 : 400, result);
       return;
     }
     if (request.method === "GET" && ["/receipts", "/receipt", "/swamp-card"].includes(requestUrl.pathname)) {
@@ -6741,6 +6736,14 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "POST" && pathname === "/api/web/presales") {
       const body = await readJsonRequestBody(request, 4_000);
       const result = await submitPresale(body);
+      sendWebJson(request, response, result.ok ? 200 : 400, result);
+      return;
+    }
+    // Group verification portal submit — PUBLIC (the Telegram member has no web session).
+    // Auth is the HMAC-signed token in the body; the handler only reads chain balances + unmutes.
+    if (request.method === "POST" && pathname === "/api/tg/verify/submit") {
+      const body = await readJsonRequestBody(request, 8_000).catch(() => ({}));
+      const result = await handleTgVerifySubmit(body).catch((e) => ({ ok: false, error: String((e && e.message) || "verify failed") }));
       sendWebJson(request, response, result.ok ? 200 : 400, result);
       return;
     }
