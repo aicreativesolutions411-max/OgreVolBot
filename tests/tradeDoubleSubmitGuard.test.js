@@ -1051,3 +1051,23 @@ test("group karma stays off the hot path (cheap regex gate) + /stats reuses call
   assert.match(serverSource, /parseCommandWithArgument\(text, \["stats", "groupstats", "activity"\]\)/);
   assert.match(serverSource, /parseCommandWithArgument\(text, \["rep", "karma"\]\)/);
 });
+
+// ---- X-post preview resilience: independent mirror fallback (fxtwitter IP-block → still shows media) ----
+test("postXPost pulls tweet media from multiple mirrors before the bare-link fallback", () => {
+  const fetchTweet = functionBody(serverSource, "fetchTweetData");
+  assert.match(fetchTweet, /api\.fxtwitter\.com/);
+  assert.match(fetchTweet, /api\.fixupx\.com/);
+  assert.match(fetchTweet, /api\.vxtwitter\.com/);       // INDEPENDENT infra fallback
+  assert.match(fetchTweet, /media_extended/);             // vxtwitter shape adapter
+  const post = functionBody(serverSource, "postXPost");
+  assert.match(post, /await fetchTweetData\(t\)/);
+  assert.match(post, /sendTelegramVideo/);
+  assert.match(post, /sendPhoto/);
+});
+// The new flex detector must NOT swallow a plain pasted tweet link (that belongs to the X-post preview).
+test("flex detector ignores a bare tweet link so the X-post preview still fires", () => {
+  const det = functionBody(serverSource, "detectFlexBragMint");
+  // it requires a gain-brag keyword; a plain URL has none, so detectFlexBragMint returns null and the
+  // message falls through to the tweet handler. Lock that the gate needs a real brag signal.
+  assert.match(det, /if \(!gain\) return null/);
+});

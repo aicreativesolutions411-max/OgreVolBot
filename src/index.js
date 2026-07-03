@@ -27929,26 +27929,56 @@ function parseTweetUrl(url) {
 // API and send the actual media (sendVideo/sendPhoto) + text + a "See full post on X" button —
 // instead of relying on Telegram to unfurl an x.com link (Twitter blocks Telegram's crawler, so
 // that never shows media). Falls back to the fxtwitter link preview if the API is unreachable.
+// Pull a tweet's author/text/media from the free mirrors, normalized to one shape. We try the
+// fxtwitter family FIRST (richest data), then fall back to vxtwitter which runs on INDEPENDENT
+// infra — so when fxtwitter rate-limits or IP-blocks our server (the "X posts stopped showing
+// media in chat" symptom), the media still comes through instead of a bare link.
+async function fetchTweetData(t) {
+  const headers = { "User-Agent": "SlimeWireBot/1.0" };
+  // 1) fxtwitter / fixupx — same rich API shape ({ tweet: { author, text, media:{videos,photos} } }).
+  for (const host of ["api.fxtwitter.com", "api.fixupx.com"]) {
+    const j = await fetchJson(`https://${host}/${t.user}/status/${t.id}`, { timeoutMs: 7000, headers }).catch(() => null);
+    const tw = j && j.tweet;
+    if (tw) {
+      return {
+        author: tw.author?.name ? `${tw.author.name} (@${tw.author.screen_name || t.user})` : `@${t.user}`,
+        text: String(tw.text || ""),
+        video: (tw.media?.videos || [])[0]?.url || null,
+        photo: (tw.media?.photos || [])[0]?.url || null
+      };
+    }
+  }
+  // 2) vxtwitter — independent infra, different shape ({ user_name, text, media_extended:[{type,url}] }).
+  const v = await fetchJson(`https://api.vxtwitter.com/${t.user}/status/${t.id}`, { timeoutMs: 7000, headers }).catch(() => null);
+  if (v && (v.text != null || v.user_screen_name)) {
+    const media = Array.isArray(v.media_extended) ? v.media_extended : [];
+    const vid = media.find((m) => m && (m.type === "video" || m.type === "gif"));
+    const img = media.find((m) => m && m.type === "image");
+    return {
+      author: v.user_name ? `${v.user_name} (@${v.user_screen_name || t.user})` : `@${t.user}`,
+      text: String(v.text || ""),
+      video: vid?.url || null,
+      photo: img?.url || null
+    };
+  }
+  return null;
+}
 async function postXPost(chatId, tweetUrl, prefix = "") {
   const t = parseTweetUrl(tweetUrl);
   if (!t) return false;
   const button = { inline_keyboard: [[{ text: "See full post on X →", url: t.original }]] };
   try {
-    const j = await fetchJson(`https://api.fxtwitter.com/${t.user}/status/${t.id}`, { timeoutMs: 7000, headers: { "User-Agent": "SlimeWireBot/1.0" } }).catch(() => null);
-    const tw = j && j.tweet;
-    if (tw) {
-      const author = tw.author?.name ? `${tw.author.name} (@${tw.author.screen_name || t.user})` : `@${t.user}`;
-      const cap = `${prefix ? escapeTelegramHtml(prefix) + "\n\n" : ""}𝕏 <b>${escapeTelegramHtml(author)}</b>\n${escapeTelegramHtml(String(tw.text || "").slice(0, 700))}`.slice(0, 1024);
-      const video = (tw.media?.videos || [])[0];
-      const photo = (tw.media?.photos || [])[0];
-      if (video?.url) { await sendTelegramVideo(chatId, { url: video.url }, cap, button, "HTML"); return true; }
-      if (photo?.url) { await telegram("sendPhoto", { chat_id: chatId, photo: photo.url, caption: cap, parse_mode: "HTML", reply_markup: button }); return true; }
+    const data = await fetchTweetData(t);
+    if (data) {
+      const cap = `${prefix ? escapeTelegramHtml(prefix) + "\n\n" : ""}𝕏 <b>${escapeTelegramHtml(data.author)}</b>\n${escapeTelegramHtml(data.text.slice(0, 700))}`.slice(0, 1024);
+      if (data.video) { await sendTelegramVideo(chatId, { url: data.video }, cap, button, "HTML"); return true; }
+      if (data.photo) { await telegram("sendPhoto", { chat_id: chatId, photo: data.photo, caption: cap, parse_mode: "HTML", reply_markup: button }); return true; }
       // text-only tweet
       await telegram("sendMessage", { chat_id: chatId, text: cap, parse_mode: "HTML", reply_markup: button, disable_web_page_preview: true });
       return true;
     }
   } catch {}
-  // Fallback: the fxtwitter link with preview enabled.
+  // Last-resort fallback: the fxtwitter link with preview ENABLED so Telegram unfurls its OG media.
   await telegram("sendMessage", {
     chat_id: chatId, text: `${prefix ? escapeTelegramHtml(prefix) + "\n" : ""}<a href="${t.embed}">𝕏 post →</a>`,
     parse_mode: "HTML", disable_web_page_preview: false, reply_markup: button
