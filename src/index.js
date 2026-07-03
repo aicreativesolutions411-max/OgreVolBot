@@ -3962,6 +3962,9 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "delete_wallets",
   "wallet_menu",
   "trade_menu",
+  "live_mainnet_test",
+  "live_test_buy",
+  "live_test_sell",
   "sniper_menu",
   "sniper_auto_menu",
   "sniper_scan",
@@ -4948,6 +4951,7 @@ async function registerTelegramBotCommands() {
     { command: "wallets", description: "Your saved wallets" },
     { command: "balances", description: "Wallet balances" },
     { command: "trade", description: "Buy / sell menu" },
+    { command: "livetest", description: "Real mainnet test buy/sell flow" },
     { command: "positions", description: "Open positions" },
     { command: "pnl", description: "PnL results + shareable card" }
   ];
@@ -11633,6 +11637,27 @@ async function handleCallback(query, userId) {
     case "trade_menu":
       await showTradeMenu(chatId, messageId);
       break;
+    case "live_mainnet_test":
+      await showLiveMainnetTestMenu(chatId, messageId);
+      break;
+    case "live_test_buy":
+      sessions.set(chatId, { step: "trade_buy_wallet", userId, data: { tradeMode: "single", liveMainnetTest: true } });
+      await say(chatId, await walletPrompt(userId, [
+        "Live Mainnet Test Buy",
+        "",
+        "This uses a managed SlimeWire wallet and executes a real mainnet swap after final Confirm.",
+        "Choose one wallet to buy from. Send the wallet number."
+      ].join("\n")));
+      break;
+    case "live_test_sell":
+      sessions.set(chatId, { step: "trade_sell_wallet", userId, data: { tradeMode: "single", liveMainnetTest: true } });
+      await say(chatId, await walletPrompt(userId, [
+        "Live Mainnet Test Sell",
+        "",
+        "This uses a managed SlimeWire wallet and executes a real mainnet sell after final Confirm.",
+        "Choose one wallet to sell from. Send the wallet number."
+      ].join("\n")));
+      break;
     case "sniper_menu":
       await showSniperMenu(chatId, userId, messageId);
       break;
@@ -12231,6 +12256,16 @@ async function handleMessage(message, userId) {
       return;
     }
     await showTradeMenu(chatId);
+    return;
+  }
+
+  if (text === "/livetest" || text === "/mainnettest") {
+    if (!isPrivateChat(message.chat)) {
+      await say(chatId, "Open this bot in DM to run a live mainnet test trade.");
+      return;
+    }
+    clearSession(chatId);
+    await showLiveMainnetTestMenu(chatId);
     return;
   }
 
@@ -13956,6 +13991,8 @@ async function batchBuyFlow(chatId, session) {
   const results = [];
   const tradeEvents = [];
   const isSingleTrade = session.data.tradeMode === "single";
+  const isLiveMainnetTest = Boolean(session.data.liveMainnetTest);
+  const tradeSource = isLiveMainnetTest ? "live_mainnet_test" : (isSingleTrade ? "single_trade" : "bundle");
 
   await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     try {
@@ -14004,7 +14041,7 @@ async function batchBuyFlow(chatId, session) {
       tradeEvents.push({
         userId: session.userId,
         type: "buy",
-        source: isSingleTrade ? "single_trade" : "bundle",
+        source: tradeSource,
         tokenMint: session.data.tokenMint,
         walletLabel: wallet.label,
         walletPublicKey: wallet.publicKey,
@@ -14018,7 +14055,7 @@ async function batchBuyFlow(chatId, session) {
   });
 
   await recordTradeEvents(tradeEvents);
-  await audit(isSingleTrade ? "single_buy_token" : "batch_buy_token", {
+  await audit(isLiveMainnetTest ? "live_mainnet_test_buy" : (isSingleTrade ? "single_buy_token" : "batch_buy_token"), {
     chatId,
     userId: session.userId,
     tokenMint: session.data.tokenMint,
@@ -14032,7 +14069,7 @@ async function batchBuyFlow(chatId, session) {
   });
 
   clearSession(chatId);
-  await sendTradeResult(chatId, withBrandFooter(`${isSingleTrade ? "Buy complete" : "Batch buy complete"}:\n\n${results.join("\n")}`), isSingleTrade);
+  await sendTradeResult(chatId, withBrandFooter(`${isLiveMainnetTest ? "Live mainnet test buy complete" : (isSingleTrade ? "Buy complete" : "Batch buy complete")}:\n\n${results.join("\n")}`), isSingleTrade);
   if (!isSingleTrade) {
     await showMenu(chatId, session.userId);
   }
@@ -14044,6 +14081,8 @@ async function batchSellFlow(chatId, session) {
   const results = [];
   const tradeEvents = [];
   const isSingleTrade = session.data.tradeMode === "single";
+  const isLiveMainnetTest = Boolean(session.data.liveMainnetTest);
+  const tradeSource = isLiveMainnetTest ? "live_mainnet_test" : (isSingleTrade ? "single_trade" : "bundle");
 
   await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     try {
@@ -14088,7 +14127,7 @@ async function batchSellFlow(chatId, session) {
       tradeEvents.push({
         userId: session.userId,
         type: "sell",
-        source: isSingleTrade ? "single_trade" : "bundle",
+        source: tradeSource,
         tokenMint: session.data.tokenMint,
         walletLabel: wallet.label,
         walletPublicKey: wallet.publicKey,
@@ -14103,7 +14142,7 @@ async function batchSellFlow(chatId, session) {
 
   await recordTradeEvents(tradeEvents);
   const pnl = await pnlSummaryText(session.userId, session.data.tokenMint, { limit: 8 });
-  await audit(isSingleTrade ? "single_sell_token" : "batch_sell_token", {
+  await audit(isLiveMainnetTest ? "live_mainnet_test_sell" : (isSingleTrade ? "single_sell_token" : "batch_sell_token"), {
     chatId,
     userId: session.userId,
     tokenMint: session.data.tokenMint,
@@ -14116,7 +14155,7 @@ async function batchSellFlow(chatId, session) {
   });
 
   clearSession(chatId);
-  await sendTradeResult(chatId, withBrandFooter(`${isSingleTrade ? "Sell complete" : "Batch sell complete"}:\n\n${results.join("\n")}\n\n${pnl}`), isSingleTrade);
+  await sendTradeResult(chatId, withBrandFooter(`${isLiveMainnetTest ? "Live mainnet test sell complete" : (isSingleTrade ? "Sell complete" : "Batch sell complete")}:\n\n${results.join("\n")}\n\n${pnl}`), isSingleTrade);
   if (isSingleTrade && tradeEvents.length > 0) {
     await sendPnlCard(chatId, session.userId, session.data.tokenMint, { quietNoData: true });
   }
@@ -20567,12 +20606,29 @@ async function showTradeMenu(chatId, messageId = null) {
   ].join("\n")), {
     inline_keyboard: [
       [{ text: "🟢 Buy", callback_data: "trade_buy" }, { text: "🔴 Sell", callback_data: "trade_sell" }],
+      [{ text: "⚡ Live Mainnet Test", callback_data: "live_mainnet_test" }],
       [{ text: "📦 Bundle Buy", callback_data: "bundle_menu" }, { text: "👥 Copy Trade", callback_data: "kol_tracker_menu" }],
       [{ text: "🚀 Launch from Pump", callback_data: "launch_build_menu" }, { text: "📈 Volume", callback_data: "timed_trade_plans" }],
       [{ text: "🔁 DCA Buy", callback_data: "trade_dca_buy" }, { text: "🔁 DCA Sell", callback_data: "trade_dca_sell" }],
       [{ text: "⏱️ Auto Sell", callback_data: "trade_auto_sell" }, { text: "🧹 Sell All", callback_data: "sell_all_tokens" }],
       [{ text: "📊 Positions", callback_data: "positions_overview" }, { text: "👛 Wallets", callback_data: "list_wallets" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
+    ]
+  });
+}
+
+async function showLiveMainnetTestMenu(chatId, messageId = null) {
+  await sendOrEditMessage(chatId, messageId, withBrandFooter([
+    "Live Mainnet Test",
+    "",
+    "This is not the devnet trial harness. It uses the same managed-wallet mainnet buy/sell path as the live bot.",
+    "",
+    "Flow: pick wallet → paste CA → choose amount/percent → choose slippage → Confirm.",
+    "Every run still requires final Confirm before a transaction is sent."
+  ].join("\n")), {
+    inline_keyboard: [
+      [{ text: "Test Buy", callback_data: "live_test_buy" }, { text: "Test Sell", callback_data: "live_test_sell" }],
+      [{ text: "Trade Menu", callback_data: "trade_menu" }, { text: "Main Menu", callback_data: "main_menu" }]
     ]
   });
 }
@@ -51543,25 +51599,27 @@ function buySlippagePromptText(data) {
 }
 
 function formatBuyConfirm(data) {
-  const heading = data.tradeMode === "single" ? "Confirm buy:" : "Confirm bundle buy:";
+  const heading = data.liveMainnetTest ? "Confirm LIVE MAINNET test buy:" : (data.tradeMode === "single" ? "Confirm buy:" : "Confirm bundle buy:");
   const walletLabel = data.tradeMode === "single" && data.walletLabel ? `Wallet: ${data.walletLabel}` : `Wallets: ${data.walletIndexes.join(", ")}`;
 
   if (data.amountMode === "max") {
     return [
       heading,
+      data.liveMainnetTest ? "Mode: real mainnet swap from your managed wallet" : "",
       `Token mint: ${data.tokenMint}`,
       walletLabel,
       `Spend: MAX, keeping ${CONFIG.buyReserveSol} SOL reserve`,
       `Fee: ${formatFeeRate()}`,
       `Slippage: ${data.slippageBps} bps`,
       "Safety: blocks active mint/freeze authority. Sell route is checked when an exit triggers."
-    ].join("\n");
+    ].filter(Boolean).join("\n");
   }
 
   const amountLamports = solToLamports(data.amountSol);
   const feeLamports = calculateFeeLamports(amountLamports);
   return [
     heading,
+    data.liveMainnetTest ? "Mode: real mainnet swap from your managed wallet" : "",
     `Token mint: ${data.tokenMint}`,
     walletLabel,
     `${data.tradeMode === "single" ? "Spend" : "Spend per wallet"}: ${lamportsToSol(amountLamports)} SOL`,
@@ -51635,11 +51693,12 @@ function formatPriceExitRecap(planWallet, sell, triggerReason, loopCount) {
 }
 
 function formatSellConfirm(data) {
-  const heading = data.tradeMode === "single" ? "Confirm sell:" : "Confirm bundle sell:";
+  const heading = data.liveMainnetTest ? "Confirm LIVE MAINNET test sell:" : (data.tradeMode === "single" ? "Confirm sell:" : "Confirm bundle sell:");
   const walletLabel = data.tradeMode === "single" && data.walletLabel ? `Wallet: ${data.walletLabel}` : `Wallets: ${data.walletIndexes.join(", ")}`;
 
   return [
     heading,
+    data.liveMainnetTest ? "Mode: real mainnet sell from your managed wallet" : "",
     `Token mint: ${data.tokenMint}`,
     walletLabel,
     `${data.tradeMode === "single" ? "Percent" : "Percent per wallet"}: ${data.percent}%`,
