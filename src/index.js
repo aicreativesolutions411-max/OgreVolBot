@@ -12005,6 +12005,8 @@ async function handleMessage(message, userId) {
   // Raid setup: if this admin just tapped a goal button, their next message is the
   // number for that field — capture it before anything else reads the text.
   if (await applyRaidTypedInput(message, userId).catch(() => false)) return;
+  // Settings menu: capture a typed value for a setting the admin just tapped.
+  if (await applyGbInput(message, userId).catch(() => false)) return;
 
   // Groups: remember the chat (for opt-in alerts) and serve the group command set.
   if (!isPrivateChat(message.chat)) {
@@ -29018,20 +29020,140 @@ async function isGroupBotAdmin(chatId, userId, message = null) {
   groupBotAdminCache.set(key, { ok, at: Date.now() });
   return ok;
 }
+// ── Multi-level settings menu: HOME (pick a bot) → per-module sub-menu ──────────
+// HOME menu = the main "which bot do you want to edit?" screen.
 function groupBotMenuMarkup(entry) {
   const e = entry || defaultGroupBotEntry();
-  const btn = (f) => ({ text: `${f.emoji} ${f.label}: ${groupBotFeatureOn(e, f.key) ? "ON ✅" : "off"}`, callback_data: `gb:t:${f.key}` });
+  const dot = (k) => (groupBotFeatureOn(e, k) ? "🟢" : "⚪");
   return { inline_keyboard: [
-    [btn(GROUP_BOT_FEATURES[0]), btn(GROUP_BOT_FEATURES[1])],
-    [btn(GROUP_BOT_FEATURES[2]), btn(GROUP_BOT_FEATURES[3])],
+    [{ text: `${dot("buybot")} Buy Bot`, callback_data: "gb:m:buy" }, { text: `${dot("raid")} Raid Bot`, callback_data: "gb:m:raid" }],
+    [{ text: `${dot("rose")} Rose & Shield`, callback_data: "gb:m:rose" }, { text: `${dot("scan")} Scan Bot`, callback_data: "gb:m:scan" }],
     [{ text: "✓ Done", callback_data: "gb:close" }]
   ] };
 }
 function groupBotMenuText(entry) {
-  const lines = ["🤖 <b>SlimeWire — all-in-one</b>", "One bot for your group. Tap to turn each part on/off (admins only):", ""];
-  for (const f of GROUP_BOT_FEATURES) lines.push(`${f.emoji} <b>${f.label}</b> — ${escapeTelegramHtml(f.desc)}`);
-  lines.push("", "Everything starts <b>off</b> so nothing floods. Tap a button to flip it, or use commands — type <b>/help</b> for the full list. Re-open anytime with /settings.");
-  return lines.join("\n");
+  const e = entry || defaultGroupBotEntry();
+  const st = (k) => (groupBotFeatureOn(e, k) ? "ON" : "off");
+  return [
+    "🤖 <b>SlimeWire — bot settings</b>",
+    "Tap a part to open its menu. 🟢 = on, ⚪ = off. Everything's off until you turn it on, so nothing floods.",
+    "",
+    `🟢 <b>Buy Bot</b> — ${st("buybot")} · posts every buy of your coin`,
+    `⚔️ <b>Raid Bot</b> — ${st("raid")} · live X-raid cards`,
+    `🛡️ <b>Rose & Shield</b> — ${st("rose")} · moderation + anti-scam protection`,
+    `🔍 <b>Scan Bot</b> — ${st("scan")} · CA / $ticker → scan card`,
+    "",
+    "Prefer typing? <b>/help</b> lists every command. Re-open this anytime with <b>/settings</b>."
+  ].join("\n");
+}
+// A per-module sub-menu: the module's on/off + all its clickable settings.
+function gbBackRow() { return [{ text: "⬅️ Back", callback_data: "gb:home" }, { text: "✓ Done", callback_data: "gb:close" }]; }
+function groupBotModuleView(module, entry) {
+  const e = entry || defaultGroupBotEntry();
+  const on = groupBotFeatureOn(e, { buy: "buybot", raid: "raid", rose: "rose", scan: "scan" }[module]);
+  const toggleBtn = (feat, label) => ({ text: `${on ? "🟢 " + label + " is ON — tap to turn off" : "⚪ " + label + " is off — tap to turn on"}`, callback_data: `gb:t:${feat}` });
+  if (module === "buy") {
+    return {
+      text: ["🟢 <b>Buy Bot</b>", "Posts every buy of your coin (whale tier, new-holder, MC/Liq/Vol, DEX-paid, Quick-Buy). Tap to customize:"].join("\n"),
+      markup: { inline_keyboard: [
+        [toggleBtn("buybot", "Buy Bot")],
+        [{ text: "🖼️ Buy image / video", callback_data: "gb:media:buy" }, { text: "😀 Buy emoji", callback_data: "gb:in:buyemoji" }],
+        [{ text: "💬 Custom message", callback_data: "gb:in:message" }, { text: `🎯 Min buy: ${Number(e.minBuySol) || 0}`, callback_data: "gb:in:minbuy" }],
+        [{ text: `🪙 Coin: ${e.token ? shortMint(e.token) : "not set"}`, callback_data: "gb:in:track" }],
+        gbBackRow()
+      ] }
+    };
+  }
+  if (module === "raid") {
+    return {
+      text: ["⚔️ <b>Raid Bot</b>", "Start a raid with <code>/raid &lt;X post link&gt;</code> → tap the goals → 🚀. Set custom art below (separate from the Buy Bot's):"].join("\n"),
+      markup: { inline_keyboard: [
+        [toggleBtn("raid", "Raid Bot")],
+        [{ text: "🖼️ Raid image / video", callback_data: "gb:media:raid" }],
+        gbBackRow()
+      ] }
+    };
+  }
+  if (module === "scan") {
+    return {
+      text: ["🔍 <b>Scan Bot</b>", "When on, a pasted <b>CA</b> or a <b>$ticker</b> posts an instant SlimeShield scan card with a Quick-Buy link. Nothing else triggers it."].join("\n"),
+      markup: { inline_keyboard: [[toggleBtn("scan", "Scan Bot")], gbBackRow()] }
+    };
+  }
+  // rose + shield
+  const cfg = roseConfig(e);
+  const tog = (field, label) => ({ text: `${cfg[field] ? "✅" : "▫️"} ${label}`, callback_data: `gb:tog:${field}` });
+  return {
+    text: [
+      "🛡️ <b>Rose &amp; Shield</b>",
+      "Group moderation + Heimdall-style protection. Green ✅ = on. (All need Rose on.)",
+      "",
+      "<b>Moderation:</b> captcha, anti-links, clean joins, antiflood, welcome/rules.",
+      "<b>Shield:</b> auto-delete scam/phishing, remove deleted-account ghosts, block admin impersonators, auto-whitelist trusted regulars.",
+      "",
+      "More via commands — <b>/help</b> (warns, notes, filters, mute/ban, purge…)."
+    ].join("\n"),
+    markup: { inline_keyboard: [
+      [toggleBtn("rose", "Rose")],
+      [tog("captcha", "Captcha"), tog("antilinks", "Anti-links")],
+      [tog("cleanService", "Clean joins"), tog("deleteScam", "Delete scam")],
+      [tog("deleteDeletedAccounts", "Del ghost accts"), tog("antiImpersonator", "Anti-impersonate")],
+      [{ text: `🌊 Antiflood: ${cfg.antiflood || "off"}`, callback_data: "gb:in:antiflood" }, { text: `✅ Whitelist: ${cfg.autoWhitelist || "off"}`, callback_data: "gb:in:autowhitelist" }],
+      [{ text: "👋 Welcome", callback_data: "gb:in:welcome" }, { text: "📜 Rules", callback_data: "gb:in:rules" }],
+      gbBackRow()
+    ] }
+  };
+}
+async function groupBotRenderModule(chatId, module, messageId) {
+  const e = (await getGroupBotEntry(chatId)) || defaultGroupBotEntry();
+  const v = groupBotModuleView(module, e);
+  await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: v.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: v.markup }).catch(() => {});
+}
+// Typed-input capture for menu settings that need a value (emoji, message, minbuy,
+// track, welcome, rules, antiflood, whitelist). key = `${chatId}:${userId}`.
+const gbInputPending = new Map();
+const GB_INPUT_PROMPT = {
+  buyemoji: "Send the emoji + optional SOL-per-emoji, e.g.  🐸 0.1",
+  message: "Send the custom header line for buy/raid posts (or 'off' to clear)",
+  minbuy: "Send the minimum buy in SOL to show (0 = show all)",
+  track: "Send the coin's contract address (CA) to track",
+  welcome: "Send the welcome text — fillings {mention} {first} {count} {chatname} (or 'off')",
+  rules: "Send the group rules text (or 'off')",
+  antiflood: "Send N — mute after N messages / 10s (0 = off)",
+  autowhitelist: "Send N — trust a user after N clean messages (0 = off)",
+};
+const GB_INPUT_MODULE = { buyemoji: "buy", message: "buy", minbuy: "buy", track: "buy", welcome: "rose", rules: "rose", antiflood: "rose", autowhitelist: "rose" };
+// Apply a typed value to the pending menu field, then re-render that sub-menu. Returns
+// true when it consumed the message (an admin was mid-entry).
+async function applyGbInput(message, userId) {
+  const chatId = message?.chat?.id;
+  const pkey = String(chatId) + ":" + String(userId);
+  const pend = gbInputPending.get(pkey);
+  if (!pend) return false;
+  if (Date.now() - pend.at > 180000) { gbInputPending.delete(pkey); return false; }
+  const raw = String(message.text || "").trim();
+  if (!raw) return false;                       // wait for text; don't trap non-text
+  gbInputPending.delete(pkey);
+  if (/^\/cancel$/i.test(raw)) return true;
+  const off = /^off$/i.test(raw);
+  const store = await readGroupBot(); const k = String(chatId); const e = store.groups[k] || defaultGroupBotEntry();
+  const setRose = (patch) => { e.rose = { ...roseDefaults(), ...(e.rose || {}), ...patch }; };
+  switch (pend.field) {
+    case "buyemoji": { const p = raw.split(/\s+/); e.buyEmoji = p[0].slice(0, 8); if (p[1] && Number(p[1]) > 0) e.buyEmojiStep = Math.max(0.01, Math.min(10, Number(p[1]))); break; }
+    case "message": e.customText = off ? "" : raw.slice(0, 160); break;
+    case "minbuy": e.minBuySol = Math.max(0, Number(raw) || 0); break;
+    case "track": if (solanaPublicKeyLike(raw)) { e.token = raw; e.features = e.features || {}; e.features.buybot = true; } break;
+    case "welcome": setRose({ welcome: off ? null : raw.slice(0, 3500) }); break;
+    case "rules": setRose({ rules: off ? null : raw.slice(0, 3500) }); break;
+    case "antiflood": setRose({ antiflood: Math.max(0, Math.min(50, parseInt(raw, 10) || 0)) }); break;
+    case "autowhitelist": setRose({ autoWhitelist: Math.max(0, Math.min(100, parseInt(raw, 10) || 0)) }); break;
+    default: break;
+  }
+  store.groups[k] = e; await writeGroupBot(store);
+  try { await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch {}
+  if (pend.field === "track") { try { await buyWsSync(); } catch {} }
+  await groupBotRenderModule(chatId, pend.module || GB_INPUT_MODULE[pend.field] || "buy", pend.setupMsgId).catch(() => {});
+  return true;
 }
 // Clean command guide — what each module does + the exact command to use it.
 function groupBotHelpText() {
@@ -29039,8 +29161,8 @@ function groupBotHelpText() {
     "🤖 <b>SlimeWire bot — quick guide</b>",
     "",
     "<b>⚙️ Admin setup</b>",
-    "• <code>/settings</code> — open the on/off panel",
-    "• <code>/buybot on</code> · <code>/raid on</code> · <code>/scan on</code> · <code>/rose on</code> — turn a part on (or <code>off</code>)",
+    "• <code>/settings</code> — open the menu: tap a bot → its sub-menu of toggles + options (all clickable, no typing needed)",
+    "• <code>/buybot on</code> · <code>/raid on</code> · <code>/scan on</code> · <code>/rose on</code> — or just flip them in the menu",
     "",
     "🟢 <b>Buy Bot</b> — posts every buy with a <b>whale-tier badge</b> (🦐🐟🐬🐋🔱), 🌟 new-holder flag, bonding %, MC·Liq·Vol, DEX-paid + Quick-Buy",
     "• <code>/track &lt;CA&gt;</code> — set the coin to watch (or just paste a CA once)",
@@ -29050,9 +29172,16 @@ function groupBotHelpText() {
     "⚔️ <b>Raid Bot</b> — <code>/raid &lt;X post link&gt;</code> → <b>setup menu</b> (tap likes/RT/reply/bookmark goals + duration, then 🚀 Start). Live card with <b>per-goal progress bars</b> (▰▰▱), overall %, 👀 views, countdown, a 🔄 Refresh button, and <b>RAID SMASHED</b> 🔥 / <b>Raid Ended</b>.",
     "🔍 <b>Scan Bot</b> — paste any CA → instant scan card with Quick-Buy",
     "",
-    "🎨 <b>Customize the look</b> (buy + raid posts)",
-    "• <code>/setmedia</code> — reply to a photo/video, or <code>/setmedia &lt;image-url&gt;</code> (default = the coin's own image from Dex, Pump fallback; <code>/setmedia off</code> to reset)",
+    "🎨 <b>Customize the look</b>",
+    "• <code>/setmedia</code> — buy art: reply to a photo/video, or <code>/setmedia &lt;url&gt;</code> (default = coin image; <code>off</code> to reset)",
+    "• <code>/setraidmedia</code> — separate art for raid posts (same usage)",
     "• <code>/setmessage &lt;text&gt;</code> — a custom header line (<code>off</code> to clear)",
+    "",
+    "🛡️ <b>Shield</b> (part of Rose — turn Rose on first)",
+    "• <code>/deletescam on</code> — auto-delete scam / phishing / wallet-drainer messages",
+    "• <code>/deletedaccounts on</code> — remove \"Deleted Account\" ghosts",
+    "• <code>/antiimpersonator on</code> — block users mimicking an admin's name",
+    "• <code>/autowhitelist 10</code> — trust a member after N clean messages (0 = off)",
     "",
     "🛡️ <b>Rose Manager</b> — full group moderation",
     "• <b>Verify:</b> <code>/captcha on</code> (mute new members until they tap ✅), <code>/cleanservice on</code>",
@@ -29091,6 +29220,25 @@ async function handleGroupBotCommand(message, userId) {
   const text = String(message.text || message.caption || "").trim();
   // /help — clean command guide (anyone can read it).
   if (/^\/help(?:@\w+)?\b/i.test(text)) { await sayHtml(chat.id, groupBotHelpText()); return true; }
+  // /setraidmedia — custom picture/video for RAID posts only (separate from the buy art). Admin only.
+  const srm = text.match(/^\/setraidmedia(?:@\w+)?(?:\s+(\S+))?\b/i);
+  if (srm) {
+    const chatId = chat.id;
+    if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only group admins can set the raid media."); return true; }
+    const reply = message.reply_to_message;
+    let media; let handled = true;
+    if (reply && reply.photo && reply.photo.length) media = { type: "photo", value: reply.photo[reply.photo.length - 1].file_id };
+    else if (reply && reply.video) media = { type: "video", value: reply.video.file_id };
+    else if (reply && reply.animation) media = { type: "video", value: reply.animation.file_id };
+    else if (srm[1] && /^https?:\/\//i.test(srm[1])) media = { type: /\.(mp4|mov|webm)$/i.test(srm[1]) ? "video" : "photo", value: srm[1] };
+    else if (srm[1] && srm[1].toLowerCase() === "off") media = null;
+    else { handled = false; await say(chatId, "Custom RAID art: reply to a photo/video with /setraidmedia, or /setraidmedia <url>. /setraidmedia off falls back to the buy art / coin image."); }
+    if (handled) {
+      const store = await readGroupBot(); const k = String(chatId); const e = store.groups[k] || defaultGroupBotEntry(); e.raidMedia = media; store.groups[k] = e; await writeGroupBot(store);
+      await say(chatId, media ? `⚔️ Custom ${media.type} set for raid posts.` : "⚔️ Raid art cleared — falls back to the buy art / coin image.");
+    }
+    return true;
+  }
   // /setmedia — custom picture/video for this group's buy + raid posts (reply to a photo/video, paste
   // an image/video URL, or 'off' to use the coin's own metadata image). Admin only.
   const sm = text.match(/^\/setmedia(?:@\w+)?(?:\s+(\S+))?\b/i);
@@ -29184,22 +29332,51 @@ async function handleGroupBotCommand(message, userId) {
   return true;
 }
 // Route group-bot CALLBACKS (toggle buttons). Returns true if handled.
+const GB_TOGGLE_FIELDS = new Set(["captcha", "antilinks", "cleanService", "deleteScam", "deleteDeletedAccounts", "antiImpersonator"]);
 async function handleGroupBotCallback(query, userId) {
   const data = String(query?.data || "");
   if (!data.startsWith("gb:")) return false;
   const chatId = query.message?.chat?.id;
   const messageId = query.message?.message_id;
+  const ack = (text) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(text ? { text } : {}) }).catch(() => {});
   if (data === "gb:close") {
     await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } }).catch(() => {});
+    await ack(); return true;
+  }
+  // Everything below changes settings → admins only.
+  if (!(await isGroupBotAdmin(chatId, userId, query.message))) { await ack("Admins only 🛡️"); return true; }
+
+  if (data === "gb:home") { await groupBotPostSetup(chatId, await getGroupBotEntry(chatId), messageId); await ack(); return true; }
+  const mm = data.match(/^gb:m:(buy|raid|rose|scan)$/);
+  if (mm) { await groupBotRenderModule(chatId, mm[1], messageId); await ack(); return true; }
+  const tm = data.match(/^gb:t:(buybot|raid|rose|scan)$/);
+  if (tm) {
+    const cur = await getGroupBotEntry(chatId);
+    await setGroupBotFeature(chatId, tm[1], !groupBotFeatureOn(cur, tm[1]));
+    await groupBotRenderModule(chatId, { buybot: "buy", raid: "raid", rose: "rose", scan: "scan" }[tm[1]], messageId);
+    await ack(); return true;
+  }
+  const gt = data.match(/^gb:tog:(\w+)$/);
+  if (gt && GB_TOGGLE_FIELDS.has(gt[1])) {
+    const cfg = roseConfig(await getGroupBotEntry(chatId));
+    await setGroupRose(chatId, { [gt[1]]: !cfg[gt[1]] });
+    await groupBotRenderModule(chatId, "rose", messageId);
+    await ack(); return true;
+  }
+  const gi = data.match(/^gb:in:(\w+)$/);
+  if (gi && GB_INPUT_PROMPT[gi[1]]) {
+    gbInputPending.set(String(chatId) + ":" + String(userId), { field: gi[1], module: GB_INPUT_MODULE[gi[1]] || "buy", setupMsgId: messageId, at: Date.now() });
+    await telegram("answerCallbackQuery", { callback_query_id: query.id, show_alert: true, text: GB_INPUT_PROMPT[gi[1]] }).catch(() => {});
     return true;
   }
-  const tm = data.match(/^gb:t:(buybot|raid|rose|scan)$/);
-  if (!tm) return true;
-  if (!(await isGroupBotAdmin(chatId, userId, query.message))) { await say(chatId, "Only group admins can change the bot's settings."); return true; }
-  const cur = await getGroupBotEntry(chatId);
-  const e = await setGroupBotFeature(chatId, tm[1], !groupBotFeatureOn(cur, tm[1]));
-  await groupBotPostSetup(chatId, e, messageId);
-  return true;
+  const gm = data.match(/^gb:media:(buy|raid)$/);
+  if (gm) {
+    const cmd = gm[1] === "raid" ? "/setraidmedia" : "/setmedia";
+    await telegram("answerCallbackQuery", { callback_query_id: query.id, show_alert: true,
+      text: `Reply to a photo or video with ${cmd} (or ${cmd} <image-url>). ${cmd} off = use the coin's own image.` }).catch(() => {});
+    return true;
+  }
+  await ack(); return true;
 }
 
 // BUY BOT detection — free DexScreener polling (NO Helius, no credits — the buybot's free path).
@@ -29492,8 +29669,19 @@ function startGroupBuyBot() {
 // gated on the `rose` flag (off by default), admin-gated. Reply-based moderation targets.
 function roseDefaults() {
   return { welcome: null, goodbye: null, rules: null, antilinks: false, captcha: false, cleanService: false,
-    warns: {}, warnLimit: 3, warnMode: "mute", antiflood: 0, notes: {}, filters: {} };
+    warns: {}, warnLimit: 3, warnMode: "mute", antiflood: 0, notes: {}, filters: {},
+    // 🛡️ Shield (Heimdall-style protection — sub-options of Rose, each off by default):
+    deleteScam: false,            // auto-delete scam / phishing / wallet-drainer messages (non-admins)
+    deleteDeletedAccounts: false, // remove "Deleted Account" ghosts when they post or join
+    antiImpersonator: false,      // restrict non-admins whose name/username mimics an admin
+    autoWhitelist: 0 };           // exempt a user from spam checks after N clean messages (0 = off)
 }
+// Known crypto-scam / phishing / wallet-drainer patterns. High-confidence only —
+// Shield deletes on these, so keep it tight to avoid nuking legit chat.
+const SHIELD_SCAM_RE = /\b(?:seed\s?phrase|private\s?key|connect\s+(?:your\s+)?wallet|validate\s+(?:your\s+)?wallet|claim\s+(?:your\s+)?(?:airdrop|reward|tokens?)|free\s+(?:mint|airdrop|nft)\b.*(?:http|t\.me|\.com|\.xyz|\.app))/i;
+const SHIELD_DRAINER_DOMAIN_RE = /\b(?:[a-z0-9-]+\.)?(?:claim|airdrop|reward|wallet-?connect|verify-?wallet|gift|bonus)-?[a-z0-9-]*\.(?:xyz|app|click|top|live|site|online|pro|vip|gift|shop|store|io|co|net)\b/i;
+// Whitelisted-after-N-clean-messages counter. key = `${chatId}:${userId}` -> count.
+const shieldCleanCount = new Map();
 async function setGroupRose(chatId, patch) {
   const store = await readGroupBot();
   const k = String(chatId);
@@ -29553,6 +29741,39 @@ async function roseAdminMentions(chatId) {
     return list.map((a) => `<a href="tg://user?id=${a.user.id}">${escapeTelegramHtml(a.user.first_name || "admin")}</a>`).join(" ");
   } catch { return ""; }
 }
+// 🛡️ Shield: a Telegram "Deleted Account" ghost has no name/username at all.
+function isDeletedTgAccount(user) {
+  return Boolean(user) && !user.is_bot && !user.first_name && !user.last_name && !user.username;
+}
+// Cached admin identity (names + usernames + ids) for impersonator detection.
+const roseAdminIdentityCache = new Map();
+async function roseAdminIdentity(chatId) {
+  const key = String(chatId);
+  const c = roseAdminIdentityCache.get(key);
+  if (c && Date.now() - c.at < 120000) return c;
+  const out = { at: Date.now(), names: new Set(), unames: new Set(), ids: new Set() };
+  try {
+    const admins = await telegram("getChatAdministrators", { chat_id: chatId });
+    for (const a of (admins?.result || admins || [])) {
+      if (!a?.user) continue;
+      out.ids.add(String(a.user.id));
+      if (a.user.first_name) out.names.add(String(a.user.first_name).trim().toLowerCase());
+      if (a.user.username) out.unames.add(String(a.user.username).toLowerCase());
+    }
+  } catch {}
+  roseAdminIdentityCache.set(key, out);
+  return out;
+}
+// A non-admin who copies an admin's EXACT display name or username (different id) is
+// almost certainly an impersonator/fake-admin scammer. High-confidence only.
+async function shieldIsImpersonator(chatId, user) {
+  if (!user || user.is_bot) return false;
+  const id = await roseAdminIdentity(chatId);
+  if (id.ids.has(String(user.id))) return false; // a real admin isn't impersonating
+  const fn = String(user.first_name || "").trim().toLowerCase();
+  const un = String(user.username || "").toLowerCase();
+  return Boolean((fn && id.names.has(fn)) || (un && id.unames.has(un)));
+}
 // Route the "I'm human" captcha button (cap:v:<userId>). Returns true when handled.
 async function handleRoseCaptchaCallback(query, clickerId) {
   const data = String(query?.data || "");
@@ -29592,6 +29813,18 @@ async function handleGroupRose(message, userId) {
     const humans = message.new_chat_members.filter((m) => m && !m.is_bot);
     if (cfg.captcha || cfg.cleanService) { try { await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch {} }
     for (const m of humans.slice(0, 8)) {
+      // 🛡️ Shield: drop ghost (deleted) accounts + admin-impersonators on entry.
+      if (cfg.deleteDeletedAccounts && isDeletedTgAccount(m)) {
+        try { await telegram("banChatMember", { chat_id: chatId, user_id: m.id }); } catch {}
+        try { await telegram("unbanChatMember", { chat_id: chatId, user_id: m.id, only_if_banned: true }); } catch {}
+        continue;
+      }
+      if (cfg.antiImpersonator && await shieldIsImpersonator(chatId, m).catch(() => false)) {
+        try { await telegram("banChatMember", { chat_id: chatId, user_id: m.id }); } catch {}
+        try { await telegram("unbanChatMember", { chat_id: chatId, user_id: m.id, only_if_banned: true }); } catch {}
+        await say(chatId, `🥸 Removed a join that mimics an admin's name.`).catch(() => {});
+        continue;
+      }
       if (cfg.captcha) {
         try { await telegram("restrictChatMember", { chat_id: chatId, user_id: m.id, permissions: ROSE_MUTE_PERMS }); } catch {}
         const mk = { inline_keyboard: [[{ text: "✅ I'm human — tap to verify", callback_data: "cap:v:" + m.id }]] };
@@ -29625,8 +29858,39 @@ async function handleGroupRose(message, userId) {
   const hasContent = Boolean(message.text || message.caption || message.photo || message.sticker || message.animation || message.video || message.document);
   const isAdmin = await isGroupBotAdmin(chatId, userId, message);
 
-  // Antiflood: rolling per-user rate window (admins exempt). Trips → 10-min mute.
-  if (cfg.antiflood > 0 && !isAdmin && hasContent) {
+  // 🛡️ SHIELD — protection layer (each sub-option off by default, admins exempt).
+  const wlKey = String(chatId) + ":" + String(userId);
+  const whitelisted = !isAdmin && cfg.autoWhitelist > 0 && (shieldCleanCount.get(wlKey) || 0) >= cfg.autoWhitelist;
+  if (!isAdmin) {
+    // Ghost/deleted accounts that post → remove them.
+    if (cfg.deleteDeletedAccounts && isDeletedTgAccount(message.from)) {
+      try { await telegram("banChatMember", { chat_id: chatId, user_id: userId }); } catch {}
+      try { await telegram("unbanChatMember", { chat_id: chatId, user_id: userId, only_if_banned: true }); } catch {}
+      try { await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch {}
+      return true;
+    }
+    // Admin-impersonator → mute + delete (admins can /unmute if it's a false hit).
+    if (cfg.antiImpersonator && await shieldIsImpersonator(chatId, message.from).catch(() => false)) {
+      try { await telegram("restrictChatMember", { chat_id: chatId, user_id: userId, permissions: ROSE_MUTE_PERMS }); } catch {}
+      try { await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch {}
+      await say(chatId, `🥸 Muted a possible admin impersonator (${escapeTelegramHtml(message.from?.first_name || "user")}). Admins: reply /unmute if legit.`).catch(() => {});
+      return true;
+    }
+    // Scam / phishing / wallet-drainer message → delete (skipped for whitelisted regulars).
+    if (!whitelisted && cfg.deleteScam && text && (SHIELD_SCAM_RE.test(text) || SHIELD_DRAINER_DOMAIN_RE.test(text))) {
+      try { await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch {}
+      await say(chatId, "🛡️ Removed a suspected scam / phishing message.").catch(() => {});
+      return true;
+    }
+    // Count clean messages toward auto-whitelist.
+    if (cfg.autoWhitelist > 0 && hasContent && !whitelisted) {
+      shieldCleanCount.set(wlKey, (shieldCleanCount.get(wlKey) || 0) + 1);
+      if (shieldCleanCount.size > 20000) { const first = shieldCleanCount.keys().next().value; shieldCleanCount.delete(first); }
+    }
+  }
+
+  // Antiflood: rolling per-user rate window (admins + whitelisted exempt). Trips → 10-min mute.
+  if (cfg.antiflood > 0 && !isAdmin && !whitelisted && hasContent) {
     const fk = String(chatId) + ":" + String(userId), now = Date.now();
     const st = roseFloodState.get(fk) || { count: 0, start: now };
     if (now - st.start > 10000) { st.count = 0; st.start = now; }
@@ -29640,14 +29904,14 @@ async function handleGroupRose(message, userId) {
     }
   }
 
-  // Anti-links: delete links from non-admins (when on).
-  if (cfg.antilinks && text && !isAdmin && ROSE_LINK_RE.test(text)) {
+  // Anti-links: delete links from non-admins (when on; whitelisted regulars exempt).
+  if (cfg.antilinks && text && !isAdmin && !whitelisted && ROSE_LINK_RE.test(text)) {
     await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }).catch(() => {});
     await say(chatId, "🛡️ Links aren't allowed here. (admins only)").catch(() => {});
     return true;
   }
 
-  const cmd = text.match(/^\/(rules|setrules|welcome|setwelcome|goodbye|setgoodbye|antilinks|captcha|cleanservice|warn|warnings|clearwarns|resetwarns|setwarnlimit|setwarnmode|mute|tmute|unmute|kick|ban|tban|unban|antiflood|save|get|notes|clear|delnote|filter|filters|stop|delfilter|report|admins|purge|del|pin|unpin)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
+  const cmd = text.match(/^\/(rules|setrules|welcome|setwelcome|goodbye|setgoodbye|antilinks|captcha|cleanservice|deletescam|deletedaccounts|antiimpersonator|autowhitelist|warn|warnings|clearwarns|resetwarns|setwarnlimit|setwarnmode|mute|tmute|unmute|kick|ban|tban|unban|antiflood|save|get|notes|clear|delnote|filter|filters|stop|delfilter|report|admins|purge|del|pin|unpin)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
   // Non-command: #note fetch + auto-filters (everyone).
   if (!cmd) {
     const noteHash = text.match(/^#([A-Za-z0-9_]{1,32})$/);
@@ -29689,6 +29953,11 @@ async function handleGroupRose(message, userId) {
   if (name === "captcha") { const on = /^on$/i.test(arg); await setGroupRose(chatId, { captcha: on }); await say(chatId, `🤖 Captcha ${on ? "ON — new members must verify to chat." : "OFF."}`); return true; }
   if (name === "cleanservice") { const on = /^on$/i.test(arg); await setGroupRose(chatId, { cleanService: on }); await say(chatId, `🧹 Clean service messages ${on ? "ON" : "OFF"}.`); return true; }
   if (name === "antiflood") { const n = Math.max(0, Math.min(50, parseInt(words[0], 10) || 0)); await setGroupRose(chatId, { antiflood: n }); await say(chatId, n ? `🌊 Antiflood ON — ${n} msgs / 10s → 10-min mute.` : "🌊 Antiflood OFF."); return true; }
+  // 🛡️ Shield sub-options.
+  if (name === "deletescam") { const on = /^on$/i.test(arg); await setGroupRose(chatId, { deleteScam: on }); await say(chatId, `🛡️ Delete scam/phishing ${on ? "ON" : "OFF"}.`); return true; }
+  if (name === "deletedaccounts") { const on = /^on$/i.test(arg); await setGroupRose(chatId, { deleteDeletedAccounts: on }); await say(chatId, `👻 Remove deleted accounts ${on ? "ON" : "OFF"}.`); return true; }
+  if (name === "antiimpersonator") { const on = /^on$/i.test(arg); await setGroupRose(chatId, { antiImpersonator: on }); await say(chatId, `🥸 Anti-impersonator ${on ? "ON" : "OFF"}.`); return true; }
+  if (name === "autowhitelist") { const n = Math.max(0, Math.min(100, parseInt(words[0], 10) || 0)); await setGroupRose(chatId, { autoWhitelist: n }); await say(chatId, n ? `✅ Auto-whitelist after ${n} clean messages.` : "✅ Auto-whitelist OFF."); return true; }
   if (name === "setwarnlimit") { const n = Math.max(1, Math.min(20, parseInt(words[0], 10) || 3)); await setGroupRose(chatId, { warnLimit: n }); await say(chatId, `Warn limit set to ${n}.`); return true; }
   if (name === "setwarnmode") { const mode = /^(mute|kick|ban)$/i.test(words[0] || "") ? words[0].toLowerCase() : "mute"; await setGroupRose(chatId, { warnMode: mode }); await say(chatId, `On hitting the warn limit: ${mode}.`); return true; }
   if (name === "resetwarns") { await setGroupRose(chatId, { warns: {} }); await say(chatId, "All warnings cleared."); return true; }
@@ -32916,7 +33185,9 @@ async function startRaidFromDraft(chatId, d) {
   const ge = await getGroupBotEntry(chatId).catch(() => null);
   const startedAt = Date.now(), durationMs = Math.max(1, Number(d.durationMin) || 120) * 60_000;
   const card = buildRaidProgressCard({ tid: res.tid, symbol: res.symbol || d.symbol, targets: d.targets, likes: res.likes, rts: res.rts, replies: res.replies, bookmarks: res.bookmarks || 0, url: res.url || d.url, startedAt, durationMs });
-  const media = (ge && ge.customMedia && ge.customMedia.value) ? ge.customMedia : null;
+  // Raid uses its OWN art (raidMedia) if set, else falls back to the buy art (customMedia).
+  const media = (ge && ge.raidMedia && ge.raidMedia.value) ? ge.raidMedia
+    : (ge && ge.customMedia && ge.customMedia.value) ? ge.customMedia : null;
   const sent = await sendGroupAlertMedia(chatId, media, card.text, card.markup);
   if (sent && sent.result && sent.result.message_id) {
     await attachRaidTgCard(res.tid, { url: res.url || d.url, symbol: res.symbol || d.symbol, targets: d.targets, startedAt, durationMs, ref: { chatId, messageId: sent.result.message_id, hasMedia: sent.hasMedia }, eng: { likes: res.likes, rts: res.rts, replies: res.replies, bookmarks: res.bookmarks || 0 } });

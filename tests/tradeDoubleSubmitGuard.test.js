@@ -786,3 +786,40 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
   assert.match(serverSource, /durationMin/);
   assert.match(functionBody(serverSource, "raidSetupCard"), /Duration: \$\{Number\(d\.durationMin\)/);
 });
+
+// ---- Settings hub (multi-level menu) + Shield (in Rose) + separate raid media ----
+test("settings menu is multi-level: home -> per-bot sub-menus, clickable toggles + typed inputs", () => {
+  assert.match(serverSource, /function groupBotModuleView\(/);
+  assert.match(serverSource, /async function groupBotRenderModule\(/);
+  const cb = functionBody(serverSource, "handleGroupBotCallback");
+  assert.match(cb, /gb:m:\(buy\|raid\|rose\|scan\)/);   // open a module sub-menu
+  assert.match(cb, /gb:tog:/);                          // flip a rose/shield boolean
+  assert.match(cb, /gb:in:/);                           // typed-input settings
+  assert.match(cb, /gb:media:\(buy\|raid\)/);           // media hint
+  assert.match(serverSource, /async function applyGbInput\(/);
+  assert.match(serverSource, /if \(await applyGbInput\(message, userId\)/); // wired into the router
+});
+
+test("Shield folds into Rose: scam/ghost/impersonator/auto-whitelist (all off by default)", () => {
+  const d = functionBody(serverSource, "roseDefaults");
+  assert.match(d, /deleteScam: false/);
+  assert.match(d, /deleteDeletedAccounts: false/);
+  assert.match(d, /antiImpersonator: false/);
+  assert.match(d, /autoWhitelist: 0/);
+  assert.match(serverSource, /function isDeletedTgAccount\(/);
+  assert.match(serverSource, /async function shieldIsImpersonator\(/);
+  const rose = functionBody(serverSource, "handleGroupRose");
+  assert.match(rose, /cfg\.deleteScam/);
+  assert.match(rose, /cfg\.deleteDeletedAccounts/);
+  assert.match(rose, /cfg\.antiImpersonator/);
+  assert.match(rose, /whitelisted/);
+  // High-confidence scam patterns exist (delete only, non-admin).
+  assert.match(serverSource, /const SHIELD_SCAM_RE =/);
+});
+
+test("raid has its OWN media, separate from buy art", () => {
+  assert.match(serverSource, /\/setraidmedia/);
+  assert.match(serverSource, /e\.raidMedia = media/);
+  // startRaidFromDraft prefers raidMedia, falls back to customMedia.
+  assert.match(functionBody(serverSource, "startRaidFromDraft"), /ge\.raidMedia[\s\S]*ge\.customMedia/);
+});
