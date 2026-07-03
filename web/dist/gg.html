@@ -2628,13 +2628,15 @@
     if(q&&Number(q.amt)>0)return execQuickBuy(mint,q);
     openQuickBuyModal(mint);
   }
-  function openQuickBuyModal(mint){
+  function openQuickBuyModal(mint,presetAmt){
     const presets=state.presets.trade||[];const cur=state.quickBuy||{amt:0.1,presetId:"",tp:"",sl:"",slip:""};
-    const chips=["0.1","0.25","0.5","1"].map(v=>'<button data-v="'+v+'">'+v+'◎</button>').join("");
+    // A Telegram "Buy X" deep-link preloads the amount; otherwise use the saved 1-click amount.
+    const amt0=(presetAmt&&Number(presetAmt)>0)?String(presetAmt):String(cur.amt||"0.1");
+    const chips=["0.1","0.25","0.5","1","5"].map(v=>'<button data-v="'+v+'">'+v+'◎</button>').join("");
     const popts=['<option value="">My own TP/SL below</option>'].concat(presets.map(p=>'<option value="'+esc(p.id)+'"'+(p.id===cur.presetId?" selected":"")+'>'+esc(p.name||"Preset")+(p.takeProfitPct?" · TP "+esc(p.takeProfitPct)+"%":"")+(p.stopLossPct?" · SL "+esc(p.stopLossPct)+"%":"")+'</option>')).join("");
     openModal('<h3>⚡ Quick Buy'+(mint?' · '+esc(short(mint)):'')+'</h3>'+
       '<p class="sub" style="font-size:12px">Set your own 1-click amount + take-profit / stop-loss. After this, ⚡ Buy on any pair fires instantly with these settings.</p>'+
-      '<div class="field"><label>Amount (SOL)</label><div class="chips" id="qbChips">'+chips+'</div><input id="qbAmt" inputmode="decimal" value="'+esc(String(cur.amt||"0.1"))+'" style="margin-top:8px"></div>'+
+      '<div class="field"><label>Amount (SOL)</label><div class="chips" id="qbChips">'+chips+'</div><input id="qbAmt" inputmode="decimal" value="'+esc(amt0)+'" style="margin-top:8px"></div>'+
       '<div class="field row2"><div><label>Take profit %</label><input id="qbTp" inputmode="numeric" placeholder="off" value="'+esc(cur.tp||"")+'"></div><div><label>Stop loss %</label><input id="qbSl" inputmode="numeric" placeholder="off" value="'+esc(cur.sl||"")+'"></div></div>'+
       '<div class="field row2"><div><label>Slippage (bps)</label><input id="qbSlip" inputmode="numeric" placeholder="500" value="'+esc(cur.slip||"")+'"></div><div><label>or use a saved preset</label><select id="qbPreset">'+popts+'</select></div></div>'+
       '<div class="bsrow"><button class="bigbuy" id="qbGo" style="flex:2">'+(mint?'Save & Buy':'Save 1-click')+'</button>'+(state.quickBuy?'<button class="wbtn ghost" id="qbClear" style="flex:1">Reset</button>':'')+'</div>');
@@ -3770,11 +3772,17 @@
   // Deep-link from the Telegram scan/buy links (?token= / ?ca=) → open THAT coin's chart + buy view
   // directly (this is what "Buy Now" on the scan card lands on). EVM (0x…) → Robinhood trade, base58 → Solana.
   try{const u=new URL(location.href);const dl=(u.searchParams.get("token")||u.searchParams.get("ca")||"").trim();
+    const wantBuy=u.searchParams.get("buy")==="1";const amt=parseFloat(u.searchParams.get("amount")||"");
     if(dl&&!location.hash.startsWith("#trade")&&!location.hash.startsWith("#rhtrade")){
       const isEvm=/^0x[0-9a-fA-F]{40}$/.test(dl),isSol=/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(dl);
       if(isEvm)location.hash="#rhtrade/"+dl;else if(isSol)location.hash="#trade/"+dl;
+      // Telegram POS "Buy X" buttons → land on the coin + pop the 1-click buy preloaded (the user
+      // still taps confirm; fee is taken in-app on the buy). Solana only for now.
+      if(wantBuy&&isSol)window.__pendingBuyLink={mint:dl,amount:(isFinite(amt)&&amt>0)?amt:0};
     }}catch(e){}
   render();updateWalletPill();loadSol();setInterval(loadSol,60000);
+  if(window.__pendingBuyLink){const pb=window.__pendingBuyLink;window.__pendingBuyLink=null;
+    setTimeout(async()=>{try{if(await ensureTradeReady())openQuickBuyModal(pb.mint,pb.amount||undefined);}catch(e){}},450);}
   if(state.token){refreshWallets();loadPresets();loadWatch();loadMe();}
   // Keep the wallet balance fresh while you use the app — poll every 12s when the tab is visible
   // (the balances endpoint is server-cached, so this stays cheap), and pause when backgrounded.

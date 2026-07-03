@@ -911,3 +911,24 @@ test("OCR image scan: cloud-offloaded, concurrency-capped, gated, delete-only", 
   // never touches trading — pure delete/say
   assert.doesNotMatch(functionBody(serverSource, "shieldOcrScanImage"), /buyToken|sellToken|sendTransaction/);
 });
+
+// ---- Maestro-style POS buy card: in-group amount buttons → preloaded 1-click buy ----
+test("scan card is a point-of-sale: instant-buy amount buttons deep-link with &amount=", () => {
+  assert.match(serverSource, /function slimewireBuyUrl\(/);
+  assert.match(functionBody(serverSource, "slimewireBuyUrl"), /buy=1/);
+  assert.match(functionBody(serverSource, "slimewireBuyUrl"), /&amount=/);
+  const kb = functionBody(serverSource, "slimeScanKeyboard");
+  assert.match(kb, /slimewireBuyUrl\(mint, 0\.5\)/);
+  assert.match(kb, /slimewireBuyUrl\(mint, 1\)/);
+  assert.match(kb, /slimewireBuyUrl\(mint, 5\)/);
+  assert.match(kb, /⚡ Buy 1/);
+});
+for (const [label, source] of [["gg.html", ggSource], ["index.html", indexSource]]) {
+  test(`POS deep-link opens the 1-click buy preloaded with the amount (${label})`, () => {
+    assert.match(source, /searchParams\.get\("buy"\)==="1"/);
+    assert.match(source, /searchParams\.get\("amount"\)/);
+    assert.match(source, /__pendingBuyLink/);
+    assert.match(source, /openQuickBuyModal\(pb\.mint,pb\.amount\|\|undefined\)/);
+    assert.match(source, /function openQuickBuyModal\(mint,presetAmt\)/); // accepts a preset amount
+  });
+}

@@ -27844,6 +27844,13 @@ function tgCommandOnCooldown(chatId, kind, intervalMs) {
   return false;
 }
 
+// Maestro-style instant-buy deep link: lands on the coin in the terminal and pops the
+// 1-click buy preloaded with the amount (fee is taken in-app on confirm — the trade is
+// the user's own tap, we don't execute it). No amount → opens the custom buy.
+function slimewireBuyUrl(tokenMint, amt) {
+  const base = `https://www.slimewire.org/terminal/chart?token=${encodeURIComponent(tokenMint)}&source=telegram&buy=1`;
+  return amt ? `${base}&amount=${encodeURIComponent(amt)}` : base;
+}
 function slimewireTokenLinks(tokenMint) {
   return {
     site: `https://www.slimewire.org/terminal/chart?token=${encodeURIComponent(tokenMint)}&source=telegram`,
@@ -28220,13 +28227,24 @@ async function gatherSlimeScan(mint) {
 // Menu opens user-friendly submenus; Quick Buy deep-links the CA prefilled to the site.
 function slimeScanKeyboard(mint) {
   const links = slimewireTokenLinks(mint);
-  // Clean, primary-action-first row — Quick Buy (the funnel) leads; Menu opens the full link
-  // sets; Refresh re-pulls the read + caller line. All other links live in the card text now.
-  return { inline_keyboard: [[
-    { text: "⚡ Quick Buy", url: links.siteBuy },
-    { text: "📊 Menu", callback_data: `scan:menu:${mint}` },
-    { text: "🔄 Refresh", callback_data: `scan:refresh:${mint}` }
-  ]] };
+  // Maestro-style point-of-sale: instant-buy amount buttons lead (each lands in the app's
+  // 1-click buy preloaded), then custom Buy + Chart, then Menu/Refresh. Every CA posted in a
+  // group becomes a one-tap funnel to a fee-earning buy in the terminal.
+  return { inline_keyboard: [
+    [
+      { text: "⚡ Buy 0.5", url: slimewireBuyUrl(mint, 0.5) },
+      { text: "⚡ Buy 1", url: slimewireBuyUrl(mint, 1) },
+      { text: "⚡ Buy 5", url: slimewireBuyUrl(mint, 5) }
+    ],
+    [
+      { text: "💰 Buy custom", url: links.siteBuy },
+      { text: "📈 Chart", url: links.site }
+    ],
+    [
+      { text: "📊 Menu", callback_data: `scan:menu:${mint}` },
+      { text: "🔄 Refresh", callback_data: `scan:refresh:${mint}` }
+    ]
+  ] };
 }
 
 // Submenu: tidy categories. Each opens a small list of links (all loaded with the CA).
