@@ -28413,12 +28413,25 @@ function scanCategoryKeyboard(mint, cat) {
 }
 
 // Callback dispatch for scan cards: menu / submenu / back / refresh.
+// The exact card text is stashed per message when you step INTO a sub-view, so ⬅ Back restores it
+// INSTANTLY (no re-fetch). Before this, Back re-ran the whole scan (DexScreener+RugCheck+RPC), which
+// felt dead and often failed — "takes a lot of tries if it even works".
+const scanCardStash = new Map();   // messageId -> { text, at }
 async function handleScanCallback(query, chatId, messageId) {
   const parts = String(query.data || "").split(":"); // scan : action : [cat] : mint
   const action = parts[1];
   const mint = parts[parts.length - 1];
   if (!solanaPublicKeyLike(mint) || !messageId) return;
   const isPhoto = Boolean(query.message?.photo);
+  // Entering a sub-view FROM the card → stash the card's current text so Back can restore it instantly.
+  // (A sub-view starts with 🧠/💸/🕵️; don't overwrite the stash when hopping sub-view → sub-view.)
+  if (action === "ai" || action === "funds" || action === "alpha") {
+    const cur = String(query.message?.caption || query.message?.text || "");
+    if (cur && !/^\s*(🧠|💸|🕵️)/.test(cur)) {
+      scanCardStash.set(String(messageId), { text: cur, at: Date.now() });
+      if (scanCardStash.size > 400) scanCardStash.delete(scanCardStash.keys().next().value);
+    }
+  }
   try {
     if (action === "menu") {
       await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: scanMenuKeyboard(mint) });
@@ -28433,8 +28446,14 @@ async function handleScanCallback(query, chatId, messageId) {
     } else if (action === "cat") {
       await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: scanCategoryKeyboard(mint, parts[2]) });
     } else if (action === "card") {
-      // ⬅ Back from an AI Read / Track Funds view → rebuild the scan card in the SAME message (no cooldown).
-      await rebuildScanCardInPlace(chatId, messageId, mint, isPhoto);
+      // ⬅ Back to card — restore the stashed card text INSTANTLY (no re-fetch); rebuild only if missing.
+      const stash = scanCardStash.get(String(messageId));
+      if (stash && stash.text && Date.now() - stash.at < 10 * 60 * 1000) {
+        if (isPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: messageId, caption: stash.text.slice(0, 1024), parse_mode: "HTML", reply_markup: slimeScanKeyboard(mint) });
+        else await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: stash.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: slimeScanKeyboard(mint) });
+      } else {
+        await rebuildScanCardInPlace(chatId, messageId, mint, isPhoto);
+      }
     } else if (action === "refresh") {
       if (tgCommandOnCooldown(chatId, `scanrefresh:${mint}`, 4000)) return;
       await rebuildScanCardInPlace(chatId, messageId, mint, isPhoto);
@@ -28453,6 +28472,7 @@ async function rebuildScanCardInPlace(chatId, messageId, mint, isPhoto) {
   let text = null;
   if (scan && (scan.meta || scan.bonding || scan.shield)) { try { text = formatSlimeScanCard({ mint, ...scan, callerLine }); } catch {} }
   if (!text) return false;
+  scanCardStash.set(String(messageId), { text, at: Date.now() });   // keep Back instant after a refresh too
   if (isPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: messageId, caption: text.slice(0, 1024), parse_mode: "HTML", reply_markup: slimeScanKeyboard(mint) });
   else await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: slimeScanKeyboard(mint) });
   return true;
@@ -28823,12 +28843,14 @@ async function handleAlphaRadarCommand(chatId, message, argument, userId) {
   const on = arg === "on";
   if (dm) {
     await setAlphaRadarDmSub(userId, on);
-    await sayHtml(chatId, on ? "🕵️ <b>Alpha Radar ON</b> — I'll DM you when a network-backed runner confirms." : "Alpha Radar DM alerts off.");
+    await sayHtml(chatId, on ? "🕵️ <b>Alpha Radar ON</b> — I'll DM you when a coin a big network is backing confirms a sustained climb (the hold-for-days runners). Fewer, higher-quality pings." : "Alpha Radar DM alerts off.");
   } else {
     const isAdmin = (await roseAdminIdentity(chatId).catch(() => null))?.ids?.has(String(userId));
     if (!isAdmin) { await say(chatId, "Only group admins can toggle Alpha Radar."); return; }
     await setGroupBotFeature(chatId, "alphaRadar", on);
-    await sayHtml(chatId, on ? "🕵️ <b>Alpha Radar ON</b> for this group — I'll post when a network-backed runner confirms a sustained climb." : "Alpha Radar off for this group.");
+    await sayHtml(chatId, on
+      ? "🕵️ <b>Alpha Radar ON</b> for this group.\n\nThis <b>replaces</b> the frequent short-term \"SlimeWire plays\" with rarer, higher-quality <b>network-backed long-term-runner</b> alerts — coins proven-winner wallets / known operators are accumulating that confirm a sustained climb. Quality over cadence: you'll hear less, but about the clear runners, not fast pops or rugs."
+      : "Alpha Radar off for this group — the regular SlimeWire plays resume (if alerts are on).");
   }
 }
 
@@ -31915,8 +31937,14 @@ async function runAlphaDropTick() {
 
   // Key by time bucket so the cadence holds even when the same top pick repeats.
   const dropKey = `drop-${Math.floor(now / TG_ALPHA_DROP_INTERVAL_MS)}`;
+  // Groups that opted into 🕵️ Alpha Radar have chosen QUALITY over cadence: they get the rarer
+  // network-backed long-term-runner alerts (pollAlphaRadar) INSTEAD of these frequent short-term
+  // plays (which skew toward rugs + fast pops). Skip them here so the two don't double up.
+  let alphaRadarGroups = new Set();
+  try { const gb = await readGroupBot(); for (const [cid, e] of Object.entries(gb.groups || {})) if (groupBotFeatureOn(e, "alphaRadar")) alphaRadarGroups.add(String(cid)); } catch {}
   const recipients = [];
   for (const [chatId] of dueGroups) {
+    if (alphaRadarGroups.has(String(chatId))) continue;   // Alpha Radar on → network-backed runners only
     groupBridgeFor(chatId).announce("alpha-drop", dropKey, text);
     recipients.push(chatId);
   }

@@ -1147,3 +1147,17 @@ test("/alpharadar toggles per-group (admin) + DM opt-in", () => {
   // targets = opted-in groups (feature toggle) + DM subscribers
   assert.match(functionBody(serverSource, "alphaRadarTargets"), /groupBotFeatureOn\(e, "alphaRadar"\)/);
 });
+
+// ---- Scan Back reliability + Alpha Radar replaces the short-term plays for opted-in groups ----
+test("Back to card restores stashed text instantly (no slow re-fetch that felt broken)", () => {
+  const cb = functionBody(serverSource, "handleScanCallback");
+  assert.match(cb, /scanCardStash\.set\(String\(messageId\)/);        // stash the card on the way into a sub-view
+  assert.match(cb, /const stash = scanCardStash\.get\(String\(messageId\)\)/); // restore on Back
+  assert.match(cb, /stash && stash\.text && Date\.now\(\) - stash\.at < 10 \* 60 \* 1000/);
+  // rebuild only when there's no fresh stash
+  assert.match(cb, /else \{\s*\n\s*await rebuildScanCardInPlace/);
+});
+test("groups on Alpha Radar get network-backed runners INSTEAD of the short-term SlimeWire plays", () => {
+  assert.match(serverSource, /if \(groupBotFeatureOn\(e, "alphaRadar"\)\) alphaRadarGroups\.add\(String\(cid\)\)/);
+  assert.match(serverSource, /if \(alphaRadarGroups\.has\(String\(chatId\)\)\) continue;/); // skip the alpha-drop for them
+});
