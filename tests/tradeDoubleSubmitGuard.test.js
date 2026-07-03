@@ -896,3 +896,18 @@ test("known-scammer gate: CAS + cross-group ban list, wired into join + messages
   // menu toggle wired
   assert.match(serverSource, /GB_TOGGLE_FIELDS = new Set\(\[[^\]]*"knownScammers"/);
 });
+
+// ---- OCR image-spam scan (cloud-offloaded so trading is never blocked) ----
+test("OCR image scan: cloud-offloaded, concurrency-capped, gated, delete-only", () => {
+  assert.match(serverSource, /async function ocrExtractText\(/);
+  assert.match(functionBody(serverSource, "ocrExtractText"), /api\.ocr\.space\/parse\/image/); // offloaded, not local
+  assert.match(functionBody(serverSource, "ocrExtractText"), /AbortController/);               // timeout
+  assert.match(serverSource, /async function shieldOcrScanImage\(/);
+  assert.match(serverSource, /SHIELD_OCR = \{ inflight: 0, max: 3 \}/);                        // concurrency cap
+  assert.match(functionBody(serverSource, "shieldOcrScanImage"), /SHIELD_OCR\.inflight/);
+  assert.match(functionBody(serverSource, "roseDefaults"), /ocrScan: false/);
+  const rose = functionBody(serverSource, "handleGroupRose");
+  assert.match(rose, /cfg\.ocrScan && Array\.isArray\(message\.photo\)/);
+  // never touches trading — pure delete/say
+  assert.doesNotMatch(functionBody(serverSource, "shieldOcrScanImage"), /buyToken|sellToken|sendTransaction/);
+});

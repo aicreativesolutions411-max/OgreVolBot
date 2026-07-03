@@ -29144,7 +29144,7 @@ function groupBotModuleView(module, entry) {
       [tog("captcha", "Captcha"), tog("antilinks", "Anti-links")],
       [tog("deleteScam", "Delete scam"), tog("knownScammers", "Ban known scammers")],
       [tog("deleteDeletedAccounts", "Del ghost accts"), tog("antiImpersonator", "Anti-impersonate")],
-      [tog("cleanService", "Clean joins")],
+      [tog("cleanService", "Clean joins"), tog("ocrScan", "Scan images")],
       [{ text: `🌐 Web verify: ${wv.on ? "ON" : "off"}`, callback_data: "gb:wv:web" }, { text: `🐋 Whales: ${wc.on ? "ON" : "off"}`, callback_data: "gb:wv:whales" }],
       [{ text: `⚖️ Min hold: ${wc.minHold || 0}`, callback_data: "gb:in:whalesmin" }, { text: `🌊 Antiflood: ${cfg.antiflood || "off"}`, callback_data: "gb:in:antiflood" }],
       [{ text: `✅ Whitelist: ${cfg.autoWhitelist || "off"}`, callback_data: "gb:in:autowhitelist" }, { text: "👋 Welcome", callback_data: "gb:in:welcome" }],
@@ -29235,6 +29235,7 @@ function groupBotHelpText() {
     "• <code>/deletedaccounts on</code> — remove \"Deleted Account\" ghosts",
     "• <code>/antiimpersonator on</code> — block users mimicking an admin's name",
     "• <code>/knownscammers on</code> — auto-ban users on the CAS list or the SlimeWire cross-group ban list (a /ban here protects every SlimeWire group)",
+    "• <code>/ocrscan on</code> — read text inside posted images (cloud OCR) + delete pics with hidden scam text (set OCR_SPACE_API_KEY for reliability)",
     "• <code>/autowhitelist 10</code> — trust a member after N clean messages (0 = off)",
     "",
     "🔓 <b>Verify to chat</b> (in the Rose &amp; Shield menu) — new members stay muted until they pass a web check:",
@@ -29392,7 +29393,7 @@ async function handleGroupBotCommand(message, userId) {
   return true;
 }
 // Route group-bot CALLBACKS (toggle buttons). Returns true if handled.
-const GB_TOGGLE_FIELDS = new Set(["captcha", "antilinks", "cleanService", "deleteScam", "deleteDeletedAccounts", "antiImpersonator", "knownScammers"]);
+const GB_TOGGLE_FIELDS = new Set(["captcha", "antilinks", "cleanService", "deleteScam", "deleteDeletedAccounts", "antiImpersonator", "knownScammers", "ocrScan"]);
 async function handleGroupBotCallback(query, userId) {
   const data = String(query?.data || "");
   if (!data.startsWith("gb:")) return false;
@@ -29751,6 +29752,7 @@ function roseDefaults() {
     deleteDeletedAccounts: false, // remove "Deleted Account" ghosts when they post or join
     antiImpersonator: false,      // restrict non-admins whose name/username mimics an admin
     knownScammers: false,         // auto-remove users on CAS (cas.chat) or the SlimeWire cross-group ban list
+    ocrScan: false,               // read text inside images (cloud OCR) + delete images with hidden scam text
     autoWhitelist: 0 };           // exempt a user from spam checks after N clean messages (0 = off)
 }
 // Known crypto-scam / phishing / wallet-drainer patterns. High-confidence only —
@@ -30054,6 +30056,44 @@ async function casBanned(userId) {
   return banned;
 }
 async function shieldIsKnownScammer(userId) { if (await isSlimeWireBanned(userId)) return true; return await casBanned(userId); }
+// OCR image-spam scan — OFFLOADED to a cloud OCR service (OCR.space) so the bot's
+// event loop never does heavy OCR work (it just makes an async HTTP call, like every
+// feed/quote it already fetches — the trading engine is never blocked). Concurrency-
+// capped + per-group throttled so a flood of images can't pile up or burn the quota.
+const SHIELD_OCR = { inflight: 0, max: 3 };
+const ocrThrottle = new Map(); // chatId -> { count, start }
+async function ocrExtractText(fileId) {
+  const key = String(process.env.OCR_SPACE_API_KEY || "helloworld"); // set a free key on Render for reliability
+  let dataUrl = "";
+  try { const f = await fetchTelegramFileDataUrl(fileId); if (f.size > 1024 * 1024) return ""; dataUrl = f.dataUrl; } catch { return ""; }
+  const form = new URLSearchParams();
+  form.set("base64Image", dataUrl); form.set("language", "eng"); form.set("OCREngine", "2"); form.set("scale", "true"); form.set("isOverlayRequired", "false");
+  const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 6000);
+  try {
+    const r = await fetch("https://api.ocr.space/parse/image", { method: "POST", headers: { apikey: key, "content-type": "application/x-www-form-urlencoded" }, body: form.toString(), signal: ctrl.signal });
+    if (!r.ok) return "";
+    const j = await r.json();
+    return (j?.ParsedResults || []).map((p) => p.ParsedText || "").join(" ").slice(0, 4000);
+  } catch { return ""; } finally { clearTimeout(to); }
+}
+// Scan a photo message for scam text hidden in the image; delete if it matches.
+async function shieldOcrScanImage(chatId, message) {
+  const photo = Array.isArray(message.photo) && message.photo.length ? message.photo[message.photo.length - 1] : null;
+  if (!photo) return false;
+  const now = Date.now(); const t = ocrThrottle.get(String(chatId)) || { count: 0, start: now };
+  if (now - t.start > 60000) { t.count = 0; t.start = now; }
+  if (t.count >= 20 || SHIELD_OCR.inflight >= SHIELD_OCR.max) { ocrThrottle.set(String(chatId), t); return false; } // throttled / busy → skip
+  t.count += 1; ocrThrottle.set(String(chatId), t); SHIELD_OCR.inflight += 1;
+  try {
+    const text = await ocrExtractText(photo.file_id);
+    if (text && (SHIELD_SCAM_RE.test(text) || SHIELD_DRAINER_DOMAIN_RE.test(text))) {
+      try { await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch {}
+      await say(chatId, "🛡️ Removed an image with hidden scam text.").catch(() => {});
+      return true;
+    }
+  } catch {} finally { SHIELD_OCR.inflight -= 1; }
+  return false;
+}
 // When a verified user is banned, remember their device fingerprint so a ban-evading
 // alt that verifies with the same device is blocked at the portal.
 async function shieldRecordBannedFp(chatId, userId) {
@@ -30187,6 +30227,10 @@ async function handleGroupRose(message, userId) {
       await say(chatId, "🛡️ Removed a suspected scam / phishing message.").catch(() => {});
       return true;
     }
+    // Image scam text (cloud OCR, offloaded so trading is never blocked) → delete.
+    if (!whitelisted && cfg.ocrScan && Array.isArray(message.photo) && message.photo.length) {
+      if (await shieldOcrScanImage(chatId, message).catch(() => false)) return true;
+    }
     // Count clean messages toward auto-whitelist.
     if (cfg.autoWhitelist > 0 && hasContent && !whitelisted) {
       shieldCleanCount.set(wlKey, (shieldCleanCount.get(wlKey) || 0) + 1);
@@ -30216,7 +30260,7 @@ async function handleGroupRose(message, userId) {
     return true;
   }
 
-  const cmd = text.match(/^\/(rules|setrules|welcome|setwelcome|goodbye|setgoodbye|antilinks|captcha|cleanservice|deletescam|deletedaccounts|antiimpersonator|knownscammers|autowhitelist|warn|warnings|clearwarns|resetwarns|setwarnlimit|setwarnmode|mute|tmute|unmute|kick|ban|tban|unban|antiflood|save|get|notes|clear|delnote|filter|filters|stop|delfilter|report|admins|purge|del|pin|unpin)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
+  const cmd = text.match(/^\/(rules|setrules|welcome|setwelcome|goodbye|setgoodbye|antilinks|captcha|cleanservice|deletescam|deletedaccounts|antiimpersonator|knownscammers|ocrscan|autowhitelist|warn|warnings|clearwarns|resetwarns|setwarnlimit|setwarnmode|mute|tmute|unmute|kick|ban|tban|unban|antiflood|save|get|notes|clear|delnote|filter|filters|stop|delfilter|report|admins|purge|del|pin|unpin)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
   // Non-command: #note fetch + auto-filters (everyone).
   if (!cmd) {
     const noteHash = text.match(/^#([A-Za-z0-9_]{1,32})$/);
@@ -30263,6 +30307,7 @@ async function handleGroupRose(message, userId) {
   if (name === "deletedaccounts") { const on = /^on$/i.test(arg); await setGroupRose(chatId, { deleteDeletedAccounts: on }); await say(chatId, `👻 Remove deleted accounts ${on ? "ON" : "OFF"}.`); return true; }
   if (name === "antiimpersonator") { const on = /^on$/i.test(arg); await setGroupRose(chatId, { antiImpersonator: on }); await say(chatId, `🥸 Anti-impersonator ${on ? "ON" : "OFF"}.`); return true; }
   if (name === "knownscammers") { const on = /^on$/i.test(arg); await setGroupRose(chatId, { knownScammers: on }); await say(chatId, `🛡️ Ban known scammers ${on ? "ON — checks CAS + the SlimeWire cross-group ban list." : "OFF"}.`); return true; }
+  if (name === "ocrscan") { const on = /^on$/i.test(arg); await setGroupRose(chatId, { ocrScan: on }); await say(chatId, `🖼️ Image scam-scan ${on ? "ON — reads text inside images and removes hidden scam pics." : "OFF"}.`); return true; }
   if (name === "autowhitelist") { const n = Math.max(0, Math.min(100, parseInt(words[0], 10) || 0)); await setGroupRose(chatId, { autoWhitelist: n }); await say(chatId, n ? `✅ Auto-whitelist after ${n} clean messages.` : "✅ Auto-whitelist OFF."); return true; }
   if (name === "setwarnlimit") { const n = Math.max(1, Math.min(20, parseInt(words[0], 10) || 3)); await setGroupRose(chatId, { warnLimit: n }); await say(chatId, `Warn limit set to ${n}.`); return true; }
   if (name === "setwarnmode") { const mode = /^(mute|kick|ban)$/i.test(words[0] || "") ? words[0].toLowerCase() : "mute"; await setGroupRose(chatId, { warnMode: mode }); await say(chatId, `On hitting the warn limit: ${mode}.`); return true; }
