@@ -3965,6 +3965,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "live_mainnet_test",
   "live_test_buy",
   "live_test_sell",
+  "fresh_test_wallet",
   "sniper_menu",
   "sniper_auto_menu",
   "sniper_scan",
@@ -4952,6 +4953,7 @@ async function registerTelegramBotCommands() {
     { command: "balances", description: "Wallet balances" },
     { command: "trade", description: "Buy / sell menu" },
     { command: "livetest", description: "Real mainnet test buy/sell flow" },
+    { command: "freshtest", description: "Create + fund a fresh test wallet" },
     { command: "positions", description: "Open positions" },
     { command: "pnl", description: "PnL results + shareable card" }
   ];
@@ -11638,7 +11640,7 @@ async function handleCallback(query, userId) {
       await showTradeMenu(chatId, messageId);
       break;
     case "live_mainnet_test":
-      await showLiveMainnetTestMenu(chatId, messageId);
+      await showLiveMainnetTestMenu(chatId, messageId, userId);
       break;
     case "live_test_buy":
       sessions.set(chatId, { step: "trade_buy_wallet", userId, data: { tradeMode: "single", liveMainnetTest: true } });
@@ -11657,6 +11659,22 @@ async function handleCallback(query, userId) {
         "This uses a managed SlimeWire wallet and executes a real mainnet sell after final Confirm.",
         "Choose one wallet to sell from. Send the wallet number."
       ].join("\n")));
+      break;
+    case "fresh_test_wallet":
+      if (!isAdmin(userId)) {
+        await say(chatId, "Fresh Test Wallet is an admin-only security test tool.");
+        break;
+      }
+      sessions.set(chatId, { step: "fresh_test_count", userId, data: { autoSource: true } });
+      await sendFreshTestCountPrompt(chatId, [
+        "Fresh Test Wallet",
+        "",
+        "Admin security test: the bot auto-selects one managed wallet with enough SOL, creates fresh managed wallet(s), backs them up, splits SOL across them, and starts the live test buy flow from those wallets.",
+        "",
+        "These transfers remain visible on-chain. Use this to test Bubble Maps detection, not to hide source links.",
+        "",
+        "Choose how many fresh wallets to create."
+      ].join("\n"));
       break;
     case "sniper_menu":
       await showSniperMenu(chatId, userId, messageId);
@@ -12265,7 +12283,56 @@ async function handleMessage(message, userId) {
       return;
     }
     clearSession(chatId);
-    await showLiveMainnetTestMenu(chatId);
+    await showLiveMainnetTestMenu(chatId, null, userId);
+    return;
+  }
+
+  const freshTestCommand = parseCommandWithArgument(text, ["freshtest", "freshwallet"]);
+  if (freshTestCommand) {
+    if (!isPrivateChat(message.chat)) {
+      await say(chatId, "Open this bot in DM to create and fund a fresh test wallet.");
+      return;
+    }
+    if (!isAdmin(userId)) {
+      await say(chatId, "Fresh Test Wallet is an admin-only security test tool.");
+      return;
+    }
+    clearSession(chatId);
+    const data = { autoSource: true, ...parseFreshTestCommandArgs(freshTestCommand.argument) };
+    if (freshTestCommand.argument) {
+      if (data.amountSol && data.walletCount) {
+        sessions.set(chatId, { step: "fresh_test_confirm", userId, data });
+        await sendConfirmPrompt(chatId, formatFreshTestWalletConfirm(data));
+      } else if (data.amountSol) {
+        sessions.set(chatId, { step: "fresh_test_count", userId, data });
+        await sendFreshTestCountPrompt(chatId, [
+          `Total SOL to split: ${data.amountSol}`,
+          "",
+          "Choose how many fresh wallets to create."
+        ].join("\n"));
+      } else if (data.walletCount) {
+        sessions.set(chatId, { step: "fresh_test_amount", userId, data });
+        await sendFreshTestAmountPrompt(chatId, [
+          `Fresh wallets: ${data.walletCount}`,
+          "",
+          "Choose total SOL to split across the fresh wallets."
+        ].join("\n"));
+      } else {
+        sessions.set(chatId, { step: "fresh_test_count", userId, data });
+        await sendFreshTestCountPrompt(chatId, "Choose how many fresh wallets to create.");
+      }
+    } else {
+      sessions.set(chatId, { step: "fresh_test_count", userId, data });
+      await sendFreshTestCountPrompt(chatId, [
+        "Fresh Test Wallet",
+        "",
+        "Send SOL to any managed wallet first. I will auto-select a managed wallet with enough SOL, create fresh managed wallet(s), back them up, split SOL across them, then start the live test buy flow from those wallets.",
+        "",
+        "Direct funding links remain visible on-chain for the Bubble Maps test.",
+        "",
+        "Choose how many fresh wallets to create."
+      ].join("\n"));
+    }
     return;
   }
 
@@ -12573,6 +12640,51 @@ async function continueFlow(chatId, text, session) {
         break;
       case "fund_confirm":
         await confirmOrCancel(chatId, text, () => fundWalletsFlow(chatId, session));
+        break;
+      case "fresh_test_source": {
+        const wallet = await setSingleWalletSelection(session, text);
+        session.data.sourceIndex = session.data.walletIndex;
+        session.data.sourceLabel = wallet.label;
+        session.data.sourcePublicKey = wallet.publicKey;
+        delete session.data.walletIndex;
+        delete session.data.walletIndexes;
+        delete session.data.walletSelector;
+        delete session.data.walletLabel;
+        delete session.data.walletPublicKey;
+        session.step = "fresh_test_count";
+        await sendFreshTestCountPrompt(chatId, [
+          `Source wallet: ${wallet.label}`,
+          wallet.publicKey,
+          "",
+          "Choose how many brand-new managed test wallets to create.",
+          "Use a small total amount first. This is a real mainnet transfer."
+        ].join("\n"));
+        break;
+      }
+      case "fresh_test_count":
+        session.data.walletCount = parseFreshTestWalletCount(text);
+        if (session.data.amountSol) {
+          session.step = "fresh_test_confirm";
+          await sendConfirmPrompt(chatId, formatFreshTestWalletConfirm(session.data));
+          break;
+        }
+        session.step = "fresh_test_amount";
+        await sendFreshTestAmountPrompt(chatId, [
+          `Fresh wallets: ${session.data.walletCount}`,
+          "",
+          "Choose total SOL to split across the fresh wallets.",
+          "Example: 1 SOL across 5 wallets sends about 0.2 SOL to each wallet.",
+          "",
+          "These are real mainnet transfers."
+        ].join("\n"));
+        break;
+      case "fresh_test_amount":
+        session.data.amountSol = parsePositiveNumber(text);
+        session.step = "fresh_test_confirm";
+        await sendConfirmPrompt(chatId, formatFreshTestWalletConfirm(session.data));
+        break;
+      case "fresh_test_confirm":
+        await confirmOrCancel(chatId, text, () => freshTestWalletFlow(chatId, session));
         break;
       case "sniper_wallets":
         session.data.walletIndexes = await parseWalletSelectionOrGroup(text, session.userId);
@@ -13983,6 +14095,162 @@ async function fundWalletsFlow(chatId, session) {
   clearSession(chatId);
   await say(chatId, `Funding complete:\n\n${results.join("\n")}`);
   await showMenu(chatId, session.userId);
+}
+
+async function findFreshTestSourceWallet(userId, amountLamports, transferCount = 1) {
+  const store = await readWalletStore();
+  const wallets = walletsForOwner(store, userId);
+  const minimumLamports = amountLamports + Math.max(10_000, transferCount * 10_000);
+  const candidates = [];
+
+  for (const [index, wallet] of wallets.entries()) {
+    try {
+      const balance = await getSolBalanceCached(new PublicKey(wallet.publicKey), { force: true });
+      if (balance >= minimumLamports) {
+        candidates.push({ index: index + 1, wallet, balance });
+      }
+    } catch {
+      // Skip unreadable wallets; the selected source must prove balance on-chain.
+    }
+  }
+
+  candidates.sort((a, b) => b.balance - a.balance);
+  const picked = candidates[0];
+  if (!picked) {
+    throw new Error(`No managed wallet has enough SOL. Fund one managed wallet with at least ${lamportsToSol(minimumLamports)} SOL, then run /freshtest again.`);
+  }
+  return picked;
+}
+
+async function freshTestWalletFlow(chatId, session) {
+  const userId = session.userId;
+  const walletCount = parseFreshTestWalletCount(session.data.walletCount || 1);
+  const totalLamports = solToLamports(session.data.amountSol);
+  if (!Number.isFinite(totalLamports) || totalLamports <= 0) {
+    throw new Error("Fresh wallet funding amount must be greater than zero.");
+  }
+  const baseLamports = Math.floor(totalLamports / walletCount);
+  if (baseLamports <= 0) {
+    throw new Error("Fresh wallet funding amount is too small for that many wallets.");
+  }
+  const remainderLamports = totalLamports - (baseLamports * walletCount);
+  const splitLamports = Array.from({ length: walletCount }, (_, index) => baseLamports + (index < remainderLamports ? 1 : 0));
+
+  const pickedSource = session.data.sourceIndex
+    ? null
+    : await findFreshTestSourceWallet(userId, totalLamports, walletCount);
+  const sourceIndex = session.data.sourceIndex || pickedSource.index;
+  const sourcePublicKey = pickedSource?.wallet?.publicKey || session.data.sourcePublicKey || "";
+
+  const created = await mutateWalletStore((store) => {
+    const sourceWallet = getWalletAt(store, sourceIndex, userId);
+    if (sourcePublicKey && sourceWallet.publicKey !== sourcePublicKey) {
+      throw new Error("Selected source wallet changed while creating the fresh wallet. Run /freshtest again.");
+    }
+    const createdAt = new Date().toISOString();
+    const stamp = compactTimestamp(createdAt);
+    const freshWallets = [];
+    for (let index = 1; index <= walletCount; index += 1) {
+      const keypair = Keypair.generate();
+      const label = cleanLabel(`Fresh Test ${stamp} ${index}`);
+      const record = walletRecord(label, keypair, userId);
+      store.wallets.push(record);
+      freshWallets.push(record);
+    }
+    const ownerWallets = walletsForOwner(store, userId);
+    const fresh = freshWallets.map((wallet) => ({
+      index: ownerWallets.findIndex((ownerWallet) => ownerWallet.publicKey === wallet.publicKey) + 1,
+      wallet
+    }));
+    return {
+      createdAt,
+      fresh,
+      sourceWallet: { ...sourceWallet }
+    };
+  });
+
+  const createdWalletRecords = created.fresh.map((item) => item.wallet);
+  await sendAutomaticWalletBackup(chatId, userId, "Automatic backup after fresh test wallet creation.", "fresh-test-wallets", createdWalletRecords);
+
+  const sourceKeypair = decryptWallet(created.sourceWallet);
+  const latestBlockhash = await rpcWithRetry("get fresh test blockhash", () => connection.getLatestBlockhash("confirmed"));
+  const tx = new Transaction({
+    recentBlockhash: latestBlockhash.blockhash,
+    feePayer: sourceKeypair.publicKey
+  });
+  created.fresh.forEach((item, index) => {
+    tx.add(SystemProgram.transfer({
+      fromPubkey: sourceKeypair.publicKey,
+      toPubkey: new PublicKey(item.wallet.publicKey),
+      lamports: splitLamports[index]
+    }));
+  });
+  const feeLamports = await estimateLegacyTransactionFee(tx);
+  const balance = await getSolBalanceCached(sourceKeypair.publicKey, { force: true });
+  if (balance < totalLamports + feeLamports) {
+    throw new Error(`Source wallet has ${lamportsToSol(balance)} SOL; needs ${lamportsToSol(totalLamports + feeLamports)} SOL including network fee.`);
+  }
+
+  const signature = await sendLegacyTransaction(tx, [sourceKeypair], { latestBlockhash });
+  invalidateWalletReadCache(created.sourceWallet.publicKey);
+  for (const item of created.fresh) {
+    invalidateWalletReadCache(item.wallet.publicKey);
+  }
+
+  await audit("fresh_test_wallet_funded", {
+    chatId,
+    userId,
+    sourceWallet: publicWallet(created.sourceWallet),
+    freshWallets: created.fresh.map((item, index) => ({
+      index: item.index,
+      wallet: publicWallet(item.wallet),
+      amountLamports: String(splitLamports[index]),
+      amountSol: lamportsToSol(splitLamports[index])
+    })),
+    walletCount,
+    amountSol: session.data.amountSol,
+    totalLamports: String(totalLamports),
+    feeLamports: String(feeLamports),
+    signature
+  });
+
+  const walletIndexes = created.fresh.map((item) => item.index);
+  const walletLabel = walletCount === 1
+    ? created.fresh[0].wallet.label
+    : `${walletCount} fresh test wallets`;
+
+  sessions.set(chatId, {
+    step: "trade_buy_token",
+    userId,
+    data: {
+      tradeMode: "single",
+      liveMainnetTest: true,
+      freshTestWallet: true,
+      walletIndex: walletIndexes[0],
+      walletIndexes,
+      walletSelector: walletLabel,
+      walletLabel,
+      walletPublicKey: created.fresh[0].wallet.publicKey,
+      walletPublicKeys: created.fresh.map((item) => item.wallet.publicKey)
+    }
+  });
+
+  const createdLines = created.fresh.map((item, index) => [
+    `${item.index}. ${item.wallet.label}`,
+    item.wallet.publicKey,
+    `Funded: ${lamportsToSol(splitLamports[index])} SOL`
+  ].join("\n"));
+
+  await say(chatId, withBrandFooter([
+    `${walletCount} fresh test wallet(s) funded.`,
+    "",
+    createdLines.join("\n\n"),
+    "",
+    `Total funded: ${lamportsToSol(totalLamports)} SOL`,
+    `Transfer tx: ${signature}`,
+    "",
+    "Next: paste the fresh token CA to run a live mainnet test buy from the fresh wallet set."
+  ].join("\n")));
 }
 
 async function batchBuyFlow(chatId, session) {
@@ -20617,17 +20885,20 @@ async function showTradeMenu(chatId, messageId = null) {
   });
 }
 
-async function showLiveMainnetTestMenu(chatId, messageId = null) {
+async function showLiveMainnetTestMenu(chatId, messageId = null, userId = null) {
+  const adminRows = isAdmin(userId) ? [[{ text: "Fresh Test Wallet", callback_data: "fresh_test_wallet" }]] : [];
   await sendOrEditMessage(chatId, messageId, withBrandFooter([
     "Live Mainnet Test",
     "",
     "This is not the devnet trial harness. It uses the same managed-wallet mainnet buy/sell path as the live bot.",
     "",
     "Flow: pick wallet → paste CA → choose amount/percent → choose slippage → Confirm.",
-    "Every run still requires final Confirm before a transaction is sent."
-  ].join("\n")), {
+    "Every run still requires final Confirm before a transaction is sent.",
+    isAdmin(userId) ? "Admin: Fresh Test Wallet auto-selects a funded managed wallet, creates fresh managed wallet(s), funds them, then starts the buy flow." : ""
+  ].filter(Boolean).join("\n")), {
     inline_keyboard: [
       [{ text: "Test Buy", callback_data: "live_test_buy" }, { text: "Test Sell", callback_data: "live_test_sell" }],
+      ...adminRows,
       [{ text: "Trade Menu", callback_data: "trade_menu" }, { text: "Main Menu", callback_data: "main_menu" }]
     ]
   });
@@ -26595,6 +26866,23 @@ async function sendQuickAmountPrompt(chatId, text, options = {}) {
       lastRow
     ]
   }, { fresh: options.fresh === true });
+}
+
+async function sendFreshTestCountPrompt(chatId, text) {
+  await sendQuickChoicePrompt(chatId, text, [
+    [{ text: "1 Wallet", value: "1" }, { text: "2 Wallets", value: "2" }],
+    [{ text: "3 Wallets", value: "3" }, { text: "5 Wallets", value: "5" }],
+    [{ text: "10 Wallets", value: "10" }]
+  ], { fresh: true });
+}
+
+async function sendFreshTestAmountPrompt(chatId, text) {
+  await sendFlowPrompt(chatId, text, {
+    inline_keyboard: [
+      [{ text: "0.10 SOL", callback_data: "quick:0.10" }, { text: "0.50 SOL", callback_data: "quick:0.50" }, { text: "1 SOL", callback_data: "quick:1" }],
+      [{ text: "0.05 SOL", callback_data: "quick:0.05" }, { text: "Custom", callback_data: "quick:custom" }]
+    ]
+  }, { fresh: true });
 }
 
 async function sendQuickPercentPrompt(chatId, text, options = {}) {
@@ -51070,10 +51358,40 @@ function parseCommandWithArgument(text, names) {
   return { command, argument: String(match[2] || "").trim() };
 }
 
+function parseFreshTestCommandArgs(argument) {
+  const text = String(argument || "").trim();
+  if (!text) return {};
+
+  const data = {};
+  const amountMatch = text.match(/(?:^|\s)(?:amount|sol|total)\s*[:=]\s*([0-9]*\.?[0-9]+)/i);
+  const countMatch = text.match(/(?:^|\s)(?:wallets?|count|split)\s*[:=]\s*(\d+)/i);
+  if (amountMatch) data.amountSol = parsePositiveNumber(amountMatch[1]);
+  if (countMatch) data.walletCount = parseFreshTestWalletCount(countMatch[1]);
+
+  const unkeyedText = text
+    .replace(/(?:^|\s)(?:amount|sol|total)\s*[:=]\s*[0-9]*\.?[0-9]+/ig, " ")
+    .replace(/(?:^|\s)(?:wallets?|count|split)\s*[:=]\s*\d+/ig, " ");
+  if (!data.amountSol || !data.walletCount) {
+    const numbers = unkeyedText.match(/[0-9]*\.?[0-9]+/g) || [];
+    if (!data.amountSol && numbers[0]) data.amountSol = parsePositiveNumber(numbers[0]);
+    if (!data.walletCount && numbers[1]) data.walletCount = parseFreshTestWalletCount(numbers[1]);
+  }
+
+  return data;
+}
+
 function parsePositiveNumber(text) {
   const value = Number.parseFloat(text);
   if (!Number.isFinite(value) || value <= 0) {
     throw new Error("Amount must be greater than zero.");
+  }
+  return value;
+}
+
+function parseFreshTestWalletCount(text) {
+  const value = Number.parseInt(String(text || "").trim(), 10);
+  if (!Number.isInteger(value) || value < 1 || value > 10) {
+    throw new Error("Fresh test wallet count must be from 1 to 10.");
   }
   return value;
 }
@@ -51570,6 +51888,25 @@ function formatFundConfirm(data) {
     `Source wallet: ${data.sourceIndex}`,
     `Target wallets: ${data.targetIndexes.join(", ")}`,
     `Amount per wallet: ${data.amountSol} SOL`
+  ].join("\n");
+}
+
+function formatFreshTestWalletConfirm(data) {
+  const walletCount = parseFreshTestWalletCount(data.walletCount || 1);
+  const totalLamports = solToLamports(data.amountSol);
+  const perWalletLamports = Math.floor(totalLamports / walletCount);
+  return [
+    "Confirm Fresh Test Wallet:",
+    "",
+    data.sourceIndex
+      ? `Source wallet: ${data.sourceLabel || data.sourceIndex}`
+      : "Source wallet: auto-select first managed wallet with enough SOL",
+    `Create: ${walletCount} new managed wallet(s)`,
+    `Transfer total: ${data.amountSol} SOL`,
+    `Approx per wallet: ${lamportsToSol(perWalletLamports)} SOL`,
+    "After transfer: start Live Mainnet Test Buy with the fresh wallet set selected.",
+    "",
+    "This is a real mainnet transfer. Funding links remain visible on-chain; this tool is for controlled internal Bubble Maps/security testing, not public use."
   ].join("\n");
 }
 
