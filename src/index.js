@@ -28371,38 +28371,54 @@ async function handleScanCallback(query, chatId, messageId) {
     if (action === "menu") {
       await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: scanMenuKeyboard(mint) });
     } else if (action === "ai") {
-      await handleScanAiRead(chatId, mint);           // 🧠 one-tap AI verdict (new message; leaves the card intact)
+      await handleScanAiRead(chatId, mint, messageId, isPhoto);      // 🧠 AI verdict — edits THIS card in place
     } else if (action === "funds") {
-      await handleScanTrackFunds(chatId, mint);        // 💸 follow-the-money read
+      await handleScanTrackFunds(chatId, mint, messageId, isPhoto);   // 💸 follow-the-money — edits in place
     } else if (action === "back") {
       await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: slimeScanKeyboard(mint) });
     } else if (action === "cat") {
       await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: scanCategoryKeyboard(mint, parts[2]) });
+    } else if (action === "card") {
+      // ⬅ Back from an AI Read / Track Funds view → rebuild the scan card in the SAME message (no cooldown).
+      await rebuildScanCardInPlace(chatId, messageId, mint, isPhoto);
     } else if (action === "refresh") {
       if (tgCommandOnCooldown(chatId, `scanrefresh:${mint}`, 4000)) return;
-      let scan = null; try { scan = await gatherSlimeScan(mint); } catch {}
-      const curMc = Number(scan?.meta?.marketCap || scan?.meta?.fdv || scan?.bonding?.marketCap || 0);
-      // Refresh re-pulls the live read AND updates the caller footer (X/% since the call).
-      const callerLine = await buildScanCallerFooter(chatId, mint, curMc).catch(() => "");
-      let text = null;
-      if (scan && (scan.meta || scan.bonding || scan.shield)) { try { text = formatSlimeScanCard({ mint, ...scan, callerLine }); } catch {} }
-      if (!text) return;
-      if (isPhoto) {
-        await telegram("editMessageCaption", { chat_id: chatId, message_id: messageId, caption: text, parse_mode: "HTML", reply_markup: slimeScanKeyboard(mint) });
-      } else {
-        await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: slimeScanKeyboard(mint) });
-      }
+      await rebuildScanCardInPlace(chatId, messageId, mint, isPhoto);
     }
   } catch {
     // editing can fail if the message is unchanged/too old — ignore
   }
 }
 
+// Rebuild the scan card in place (edits the existing message — photo caption or text). Shared by
+// 🔄 Refresh and the ⬅ Back button on the AI Read / Track Funds views so everything stays one message.
+async function rebuildScanCardInPlace(chatId, messageId, mint, isPhoto) {
+  let scan = null; try { scan = await gatherSlimeScan(mint); } catch {}
+  const curMc = Number(scan?.meta?.marketCap || scan?.meta?.fdv || scan?.bonding?.marketCap || 0);
+  const callerLine = await buildScanCallerFooter(chatId, mint, curMc).catch(() => "");
+  let text = null;
+  if (scan && (scan.meta || scan.bonding || scan.shield)) { try { text = formatSlimeScanCard({ mint, ...scan, callerLine }); } catch {} }
+  if (!text) return false;
+  if (isPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: messageId, caption: text.slice(0, 1024), parse_mode: "HTML", reply_markup: slimeScanKeyboard(mint) });
+  else await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: slimeScanKeyboard(mint) });
+  return true;
+}
+
+// Swap the current scan message to a sub-view (AI Read / Track Funds) IN PLACE — caption when the card
+// is a photo, text otherwise — so tapping the buttons never spams new messages into the chat.
+async function editScanView(chatId, messageId, isPhoto, body, keyboard) {
+  const capped = body.length > 1024 ? body.slice(0, 1015) + "…" : body;
+  try {
+    if (isPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: messageId, caption: capped, parse_mode: "HTML", reply_markup: keyboard });
+    else await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: capped, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: keyboard });
+  } catch { /* unchanged/too-old edits are fine to ignore */ }
+}
+
 // 🧠 AI READ (Block_AIBot-style one-tap verdict) — synthesizes the signals we ALREADY compute
 // (SlimeShield safety, on-chain holder concentration, dev-sold, authorities, live momentum) into an
 // honest plain-English verdict + a 0-100 conviction grade. Rules-based (no paid LLM) so it never lies
 // about what it knows. On-demand from the scan menu → zero idle cost.
-async function handleScanAiRead(chatId, mint) {
+async function handleScanAiRead(chatId, mint, messageId = null, isPhoto = false) {
   if (tgCommandOnCooldown(chatId, `airead:${mint}`, 4000)) return;
   let scan = null; try { scan = await gatherSlimeScan(mint); } catch {}
   if (!scan || !(scan.meta || scan.bonding || scan.shield)) {
@@ -28468,7 +28484,7 @@ async function handleScanAiRead(chatId, mint) {
     : grade >= 45
       ? "Some green, some red. Only a small, tight-stop position makes sense."
       : "Too many red flags to size into. If you ape, treat it as a lotto ticket.";
-  const bullets = (arr, icon) => arr.slice(0, 4).map((t) => `${icon} ${escapeTelegramHtml(t)}`).join("\n");
+  const bullets = (arr, icon) => arr.slice(0, 3).map((t) => `${icon} ${escapeTelegramHtml(t)}`).join("\n");
   const body = [
     `🧠 <b>SlimeWire AI Read — $${escapeTelegramHtml(sym)}</b>`,
     `${verdict} · <b>${grade}/100</b> conviction`,
@@ -28478,13 +28494,19 @@ async function handleScanAiRead(chatId, mint) {
     `\n<i>${oneLiner}</i>`,
     `<i>Synthesized from SlimeShield + on-chain holders + live flow. Not financial advice.</i>`
   ].filter((x) => x !== "").join("\n");
-  await sayHtml(chatId, body, slimeScanKeyboard(mint));
+  // Edit the scan card IN PLACE (one thread, no chat spam) with cross-nav to Track Funds + Back to card.
+  const kb = { inline_keyboard: [
+    [{ text: "💸 Track Funds", callback_data: `scan:funds:${mint}` }, { text: "🔄 Refresh", callback_data: `scan:ai:${mint}` }],
+    [{ text: "⚡ Buy on SlimeWire", url: slimewireTokenLinks(mint).siteBuy }, { text: "⬅ Back to card", callback_data: `scan:card:${mint}` }]
+  ] };
+  if (messageId) await editScanView(chatId, messageId, isPhoto, body, kb);
+  else await sayHtml(chatId, body, kb);
 }
 
 // 💸 TRACK THE FUNDS (TrackTheFundsBot-style) — a follow-the-money read on who controls the supply:
 // top-holder concentration, holder count, sniper/insider share, dev-sold, and live mint/freeze
 // authorities. Reuses the RugCheck + SlimeShield data already pulled by the scan (no extra RPC cost).
-async function handleScanTrackFunds(chatId, mint) {
+async function handleScanTrackFunds(chatId, mint, messageId = null, isPhoto = false) {
   if (tgCommandOnCooldown(chatId, `funds:${mint}`, 4000)) return;
   let scan = null; try { scan = await gatherSlimeScan(mint); } catch {}
   if (!scan || !(scan.rug || scan.shield)) {
@@ -28519,10 +28541,14 @@ async function handleScanTrackFunds(chatId, mint) {
     "",
     `<i>Follow-the-money read from RugCheck + SlimeShield on-chain data. Concentrated supply or live authorities = the dev can dump or rug. Not financial advice.</i>`
   ].filter(Boolean);
-  await sayHtml(chatId, rows.join("\n"), { inline_keyboard: [
+  // Edit the scan card IN PLACE (one thread, no chat spam) with cross-nav to AI Read + Back to card.
+  const kb = { inline_keyboard: [
     [{ text: "🫧 Bubblemaps", url: `https://app.bubblemaps.io/sol/token/${mint}` }, { text: "🔬 RugCheck", url: `https://rugcheck.xyz/tokens/${mint}` }],
-    [{ text: "🧠 AI Read", callback_data: `scan:ai:${mint}` }, { text: "⚡ Buy on SlimeWire", url: slimewireTokenLinks(mint).siteBuy }]
-  ] });
+    [{ text: "🧠 AI Read", callback_data: `scan:ai:${mint}` }, { text: "⬅ Back to card", callback_data: `scan:card:${mint}` }],
+    [{ text: "⚡ Buy on SlimeWire", url: slimewireTokenLinks(mint).siteBuy }]
+  ] };
+  if (messageId) await editScanView(chatId, messageId, isPhoto, rows.join("\n"), kb);
+  else await sayHtml(chatId, rows.join("\n"), kb);
 }
 
 // Caller footer for the scan card: who FIRST called this CA in this channel, when, and how

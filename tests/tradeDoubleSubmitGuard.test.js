@@ -1019,9 +1019,23 @@ test("scan menu exposes 🧠 AI Read + 💸 Track Funds, routed on-demand (zero 
   const menu = functionBody(serverSource, "scanMenuKeyboard");
   assert.match(menu, /callback_data: `scan:ai:\$\{mint\}`/);
   assert.match(menu, /callback_data: `scan:funds:\$\{mint\}`/);
-  // dispatched only when the button is tapped
-  assert.match(serverSource, /action === "ai"\) \{\s*\n\s*await handleScanAiRead\(chatId, mint\)/);
-  assert.match(serverSource, /action === "funds"\) \{\s*\n\s*await handleScanTrackFunds\(chatId, mint\)/);
+  // dispatched only when the button is tapped, editing THIS message (no chat spam)
+  assert.match(serverSource, /action === "ai"\) \{\s*\n\s*await handleScanAiRead\(chatId, mint, messageId, isPhoto\)/);
+  assert.match(serverSource, /action === "funds"\) \{\s*\n\s*await handleScanTrackFunds\(chatId, mint, messageId, isPhoto\)/);
+});
+test("AI Read + Track Funds edit the scan card IN PLACE (one thread) with Back-to-card nav", () => {
+  // shared in-place editor swaps caption (photo) or text — never posts a new message when messageId is present
+  const edit = functionBody(serverSource, "editScanView");
+  assert.match(edit, /editMessageCaption/);
+  assert.match(edit, /editMessageText/);
+  for (const fn of ["handleScanAiRead", "handleScanTrackFunds"]) {
+    const body = functionBody(serverSource, fn);
+    assert.match(body, /if \(messageId\) await editScanView\(chatId, messageId, isPhoto/, `${fn} edits in place`);
+    assert.match(body, /callback_data: `scan:card:\$\{mint\}`/, `${fn} has Back to card`);
+  }
+  // Back button rebuilds the card in the same message, cooldown-free
+  assert.match(serverSource, /action === "card"\)/);
+  assert.match(serverSource, /async function rebuildScanCardInPlace\(/);
 });
 test("AI Read is honest rules-synthesis over signals we already compute (no fake LLM)", () => {
   const ai = functionBody(serverSource, "handleScanAiRead");
