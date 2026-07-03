@@ -11521,6 +11521,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("rr:")) {
     if (await handleRaidRefreshCallback(query, userId).catch(() => false)) return;
   }
+  // Wallet Tracker menu (wt:*) — Cielo-style smart-money alerts.
+  if (String(query.data || "").startsWith("wt:")) {
+    if (await handleWalletTrackerCallback(query, userId).catch(() => false)) return;
+  }
 
   if (ADMIN_ACTIONS.has(query.data) && !isAdmin(userId)) {
     await say(chatId, "Only bot admins can use that control.");
@@ -12031,6 +12035,10 @@ async function handleMessage(message, userId) {
   if (await applyRaidTypedInput(message, userId).catch(() => false)) return;
   // Settings menu: capture a typed value for a setting the admin just tapped.
   if (await applyGbInput(message, userId).catch(() => false)) return;
+  // Wallet Tracker: capture a wallet address / min-USD the user is entering.
+  if (await applyWtInput(message, userId).catch(() => false)) return;
+  // Wallet Tracker commands (/track, /untrack, /tracked) — DM only.
+  if (await handleWalletTrackerCommand(message, userId).catch(() => false)) return;
 
   // Groups: remember the chat (for opt-in alerts) and serve the group command set.
   if (!isPrivateChat(message.chat)) {
@@ -20624,6 +20632,7 @@ async function showTelegramMarketIntelMenu(chatId, messageId = null) {
     inline_keyboard: [
       [{ text: "OgreSniper", callback_data: "sniper_menu" }, { text: "Scan Early Plays", callback_data: "sniper_scan" }],
       [{ text: "KOL Tracker", callback_data: "kol_tracker_menu" }, { text: "Fresh KOL Activity", callback_data: "kol_scan_fresh" }],
+      [{ text: "👛 Track Wallets", callback_data: "wt:home" }],
       [{ text: "AutoSnipe", callback_data: "sniper_auto" }, { text: "PumpSnipe", callback_data: "sniper_pumpsnipe" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
     ]
@@ -29758,6 +29767,192 @@ function startGroupBuyBot() {
   setInterval(() => { void pollGroupBuyTrades(); }, 12_000); // TRUE per-buy via Pump swap-api (primary)
   setInterval(() => { void pollGroupBuyBots(); }, 25_000); // DexScreener aggregate (secondary fallback)
   setInterval(() => { void refreshRaidTgCards(); }, 50_000); // Raidar-style: edit live raid cards as likes/RTs/replies climb (free, fxtwitter)
+  setInterval(() => { void pollTrackedWallets(); }, 30_000); // Cielo-style smart-money wallet alerts
+}
+
+// ============================================================================
+// WALLET TRACKER — Cielo-style smart-money alerts (per-USER, DM). Add a wallet →
+// get pinged when it buys/sells, with a ⚡ Buy card that funnels to our terminal.
+// Credit-conscious: cheap getSignaturesForAddress detects activity; Helius parses
+// only when a wallet actually traded (so we don't burn credits polling idle wallets).
+// Read-only monitoring — never moves funds.
+// ============================================================================
+const WT_FREE_CAP = 15;
+function walletTrackerPath() { return path.join(CONFIG.dataDir, "wallet-tracker.json"); }
+let walletTrackerCache = null;
+async function readWalletTracker() {
+  if (walletTrackerCache) return walletTrackerCache;
+  try { const j = await readJson(walletTrackerPath()).catch(() => null); walletTrackerCache = (j && j.users) ? j : { users: {} }; }
+  catch { walletTrackerCache = { users: {} }; }
+  return walletTrackerCache;
+}
+async function writeWalletTracker(store) { walletTrackerCache = store; try { await writeJsonFile(walletTrackerPath(), store); } catch {} }
+async function wtUserWallets(userId) { return ((await readWalletTracker()).users[String(userId)] || {}).wallets || {}; }
+async function wtAdd(userId, addr, label) {
+  const store = await readWalletTracker(); const k = String(userId);
+  const u = store.users[k] || (store.users[k] = { wallets: {} }); u.wallets = u.wallets || {};
+  if (Object.keys(u.wallets).length >= WT_FREE_CAP && !u.wallets[addr]) return { ok: false, error: `You're tracking the max of ${WT_FREE_CAP} wallets. Remove one first.` };
+  u.wallets[addr] = { label: String(label || "").slice(0, 24) || null, side: "both", minUsd: 0, addedAt: Date.now(), ...(u.wallets[addr] || {}) };
+  if (label) u.wallets[addr].label = String(label).slice(0, 24);
+  await writeWalletTracker(store); return { ok: true };
+}
+async function wtRemove(userId, addr) { const store = await readWalletTracker(); const u = store.users[String(userId)]; if (u?.wallets?.[addr]) { delete u.wallets[addr]; await writeWalletTracker(store); return true; } return false; }
+async function wtSetWallet(userId, addr, patch) { const store = await readWalletTracker(); const u = store.users[String(userId)]; if (u?.wallets?.[addr]) { u.wallets[addr] = { ...u.wallets[addr], ...patch }; await writeWalletTracker(store); } }
+
+// Parse a Helius enhanced tx into a simple swap (needs a native SOL leg — covers the
+// vast majority of memecoin buys/sells; token→token swaps are skipped).
+function parseHeliusSwap(tx) {
+  const SOL = "So11111111111111111111111111111111111111112";
+  const sw = tx && tx.events && tx.events.swap; if (!sw) return null;
+  const tOut = (sw.tokenOutputs || []).find((t) => t.mint && t.mint !== SOL);
+  const tIn = (sw.tokenInputs || []).find((t) => t.mint && t.mint !== SOL);
+  const solIn = Number((sw.nativeInput && sw.nativeInput.amount) || 0) / 1e9;
+  const solOut = Number((sw.nativeOutput && sw.nativeOutput.amount) || 0) / 1e9;
+  if (tOut && solIn > 0) return { side: "buy", mint: tOut.mint, solAmount: solIn };
+  if (tIn && solOut > 0) return { side: "sell", mint: tIn.mint, solAmount: solOut };
+  return null;
+}
+// Send a wallet-move alert to the tracking user's DM — mini card + POS ⚡ Buy row.
+async function sendWalletAlert(userId, ev) {
+  const pairs = await fetchDexScreenerTokenPairsBatch([ev.mint]).catch(() => []);
+  const p = bestDexPairForToken(ev.mint, pairs);
+  const sym = (p && p.baseToken && p.baseToken.symbol) || shortMint(ev.mint);
+  const mc = Number((p && (p.marketCap || p.fdv)) || 0), liq = Number((p && p.liquidity && p.liquidity.usd) || 0);
+  const usd = ev.solAmount * (Number(solUsdPriceCache?.value) || 0);
+  const sideStr = ev.side === "buy" ? "🟢 <b>bought</b>" : "🔴 <b>sold</b>";
+  const lines = [
+    `👛 <b>${escapeTelegramHtml(ev.label || shortMint(ev.wallet))}</b> ${sideStr} <b>${ev.solAmount.toFixed(3)} SOL</b>${usd > 0 ? ` ($${Math.round(usd).toLocaleString()})` : ""} of <b>$${escapeTelegramHtml(sym)}</b>`,
+    (mc > 0 || liq > 0) ? `〽️ MC $${Math.round(mc).toLocaleString()}${liq > 0 ? ` · Liq $${Math.round(liq).toLocaleString()}` : ""}` : "",
+    `<code>${escapeTelegramHtml(ev.mint)}</code>`
+  ].filter(Boolean);
+  await telegram("sendMessage", { chat_id: userId, text: lines.join("\n"), parse_mode: "HTML", disable_web_page_preview: true, reply_markup: slimeScanKeyboard(ev.mint) }).catch(() => {});
+}
+const wtSeenSig = new Map(); // addr -> Set(sig)
+let _wtPolling = false;
+async function pollTrackedWallets() {
+  if (_wtPolling) return; _wtPolling = true;
+  try {
+    const store = await readWalletTracker();
+    const map = new Map(); // addr -> [userIds]
+    for (const [uid, u] of Object.entries(store.users || {})) for (const addr of Object.keys(u.wallets || {})) { if (!map.has(addr)) map.set(addr, []); map.get(addr).push(uid); }
+    for (const addr of [...map.keys()].slice(0, 150)) {
+      let sigs = [];
+      try { const r = await rpcRead("wallet-track sigs", (c) => c.getSignaturesForAddress(new PublicKey(addr), { limit: 8 })); sigs = (r || []).map((s) => s.signature).filter(Boolean); } catch { continue; }
+      const seen = wtSeenSig.get(addr) || new Set(); const firstPoll = !wtSeenSig.has(addr);
+      const fresh = sigs.filter((s) => !seen.has(s));
+      for (const s of sigs) seen.add(s);
+      if (seen.size > 300) { const a = [...seen]; wtSeenSig.set(addr, new Set(a.slice(a.length - 200))); } else wtSeenSig.set(addr, seen);
+      if (firstPoll || !fresh.length || !CONFIG.heliusApiKey) continue;
+      let parsed = null;
+      try { parsed = await fetch(`https://api.helius.xyz/v0/transactions?api-key=${CONFIG.heliusApiKey}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ transactions: fresh.slice(0, 10) }) }).then((r) => r.ok ? r.json() : null); } catch {}
+      if (!Array.isArray(parsed)) continue;
+      for (const tx of parsed) {
+        const sw = parseHeliusSwap(tx); if (!sw || !sw.mint) continue;
+        const usd = sw.solAmount * (Number(solUsdPriceCache?.value) || 0);
+        for (const uid of map.get(addr) || []) {
+          const w = store.users[uid]?.wallets?.[addr]; if (!w) continue;
+          if (w.side === "buy" && sw.side !== "buy") continue;
+          if (Number(w.minUsd) > 0 && usd < Number(w.minUsd)) continue;
+          await sendWalletAlert(uid, { wallet: addr, label: w.label, side: sw.side, mint: sw.mint, solAmount: sw.solAmount }).catch(() => {});
+        }
+      }
+    }
+  } catch {} finally { _wtPolling = false; }
+}
+
+// --- Wallet Tracker menus (wt:*) + commands + typed input ---
+const wtInputPending = new Map(); // userId -> { kind, addr, setupMsgId, at }
+async function wtHomeView(userId) {
+  const wallets = await wtUserWallets(userId);
+  const entries = Object.entries(wallets);
+  const rows = entries.slice(0, 15).map(([addr, w]) => [{ text: `👛 ${w.label || shortMint(addr)}`, callback_data: "wt:w:" + addr }]);
+  rows.push([{ text: "➕ Add wallet", callback_data: "wt:add" }]);
+  rows.push([{ text: "🏠 Main Menu", callback_data: "main_menu" }]);
+  const text = [
+    "👛 <b>Wallet Tracker</b>",
+    "Get a DM the moment a wallet you follow buys or sells — with a ⚡ one-tap Buy.",
+    "",
+    entries.length ? `Tracking <b>${entries.length}</b>/${WT_FREE_CAP} wallets:` : "You're not tracking any wallets yet.",
+    ...entries.slice(0, 15).map(([addr, w]) => `• <b>${escapeTelegramHtml(w.label || shortMint(addr))}</b> — ${w.side === "buy" ? "buys" : "buys+sells"}${Number(w.minUsd) > 0 ? ` ≥ $${w.minUsd}` : ""}`)
+  ].join("\n");
+  return { text, markup: { inline_keyboard: rows } };
+}
+async function wtWalletView(userId, addr) {
+  const w = (await wtUserWallets(userId))[addr];
+  if (!w) return null;
+  return {
+    text: [`👛 <b>${escapeTelegramHtml(w.label || shortMint(addr))}</b>`, `<code>${escapeTelegramHtml(addr)}</code>`, "", `Alerts on: <b>${w.side === "buy" ? "buys only" : "buys + sells"}</b>`, `Min size: <b>${Number(w.minUsd) > 0 ? "$" + w.minUsd : "any"}</b>`].join("\n"),
+    markup: { inline_keyboard: [
+      [{ text: w.side === "buy" ? "🔔 Buys only ✅" : "🔔 Buys + Sells ✅", callback_data: "wt:side:" + addr }],
+      [{ text: `💵 Min $${Number(w.minUsd) || 0}`, callback_data: "wt:min:" + addr }, { text: "🗑 Remove", callback_data: "wt:del:" + addr }],
+      [{ text: "⬅️ Back", callback_data: "wt:home" }]
+    ] }
+  };
+}
+async function wtRender(userId, messageId, view) {
+  if (messageId) await telegram("editMessageText", { chat_id: userId, message_id: messageId, text: view.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: view.markup }).catch(() => {});
+  else await sayHtml(userId, view.text, view.markup);
+}
+async function handleWalletTrackerCallback(query, userId) {
+  const data = String(query?.data || "");
+  if (!data.startsWith("wt:")) return false;
+  const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  const ack = (t) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: true } : {}) }).catch(() => {});
+  if (data === "wt:home") { await wtRender(chatId, messageId, await wtHomeView(userId)); await ack(); return true; }
+  if (data === "wt:add") {
+    const n = Object.keys(await wtUserWallets(userId)).length;
+    if (n >= WT_FREE_CAP) { await ack(`Max ${WT_FREE_CAP} wallets — remove one first.`); return true; }
+    wtInputPending.set(String(userId), { kind: "add", setupMsgId: messageId, at: Date.now() });
+    await ack("Send the wallet address (and an optional label), e.g.  <addr> Whale #1");
+    return true;
+  }
+  const mw = data.match(/^wt:w:([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+  if (mw) { const v = await wtWalletView(userId, mw[1]); if (v) await wtRender(chatId, messageId, v); else await ack("That wallet isn't tracked anymore."); await ack(); return true; }
+  const ms = data.match(/^wt:side:([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+  if (ms) { const w = (await wtUserWallets(userId))[ms[1]]; if (w) { await wtSetWallet(userId, ms[1], { side: w.side === "buy" ? "both" : "buy" }); const v = await wtWalletView(userId, ms[1]); if (v) await wtRender(chatId, messageId, v); } await ack(); return true; }
+  const mm = data.match(/^wt:min:([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+  if (mm) { wtInputPending.set(String(userId), { kind: "min", addr: mm[1], setupMsgId: messageId, at: Date.now() }); await ack("Send the minimum trade size in USD to alert on (0 = any size)."); return true; }
+  const md = data.match(/^wt:del:([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+  if (md) { await wtRemove(userId, md[1]); await wtRender(chatId, messageId, await wtHomeView(userId)); await ack("Removed"); return true; }
+  await ack(); return true;
+}
+async function applyWtInput(message, userId) {
+  const chatId = message?.chat?.id;
+  if (!isPrivateChat(message?.chat)) return false;
+  const pend = wtInputPending.get(String(userId));
+  if (!pend) return false;
+  if (Date.now() - pend.at > 180000) { wtInputPending.delete(String(userId)); return false; }
+  const raw = String(message.text || "").trim();
+  if (!raw) return false;
+  wtInputPending.delete(String(userId));
+  if (/^\/cancel$/i.test(raw)) return true;
+  if (pend.kind === "add") {
+    const parts = raw.split(/\s+/); const addr = parts[0]; const label = parts.slice(1).join(" ");
+    if (!solanaPublicKeyLike(addr)) { await say(chatId, "That's not a valid Solana wallet address. Try /track again."); return true; }
+    const r = await wtAdd(userId, addr, label);
+    if (!r.ok) { await say(chatId, r.error); return true; }
+    await sayHtml(chatId, `✅ Tracking <b>${escapeTelegramHtml(label || shortMint(addr))}</b> — you'll get a DM when it trades.`);
+    await wtRender(chatId, null, await wtHomeView(userId));
+  } else if (pend.kind === "min" && pend.addr) {
+    await wtSetWallet(userId, pend.addr, { minUsd: Math.max(0, Number(raw) || 0) });
+    const v = await wtWalletView(userId, pend.addr); if (v) await wtRender(chatId, null, v);
+  }
+  return true;
+}
+// /track [addr [label]] · /untrack <addr> · /tracked — DM commands.
+async function handleWalletTrackerCommand(message, userId) {
+  const chat = message?.chat; if (!chat || !isPrivateChat(chat)) return false;
+  const text = String(message.text || "").trim();
+  const mTrack = text.match(/^\/track(?:@\w+)?(?:\s+([1-9A-HJ-NP-Za-km-z]{32,44})(?:\s+([\s\S]{1,24}))?)?\s*$/i);
+  const mUn = text.match(/^\/untrack(?:@\w+)?(?:\s+([1-9A-HJ-NP-Za-km-z]{32,44}))?\s*$/i);
+  const mList = /^\/(tracked|wallets)(?:@\w+)?\s*$/i.test(text);
+  if (!mTrack && !mUn && !mList) return false;
+  const chatId = chat.id;
+  if (mList) { await wtRender(chatId, null, await wtHomeView(userId)); return true; }
+  if (mUn) { if (mUn[1] && await wtRemove(userId, mUn[1])) await say(chatId, "Removed from your tracker."); else await say(chatId, "Usage: /untrack <wallet>"); return true; }
+  if (mTrack[1]) { const r = await wtAdd(userId, mTrack[1], mTrack[2] || ""); if (!r.ok) { await say(chatId, r.error); return true; } await sayHtml(chatId, `✅ Tracking <b>${escapeTelegramHtml((mTrack[2] || shortMint(mTrack[1])).trim())}</b> — you'll get a DM when it trades.`); await wtRender(chatId, null, await wtHomeView(userId)); return true; }
+  await wtRender(chatId, null, await wtHomeView(userId)); // /track with no arg → open the menu
+  return true;
 }
 
 // ROSE MANAGER — group moderation (welcome, rules, anti-links, warn/mute/kick/ban). Per-group,

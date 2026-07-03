@@ -932,3 +932,22 @@ for (const [label, source] of [["gg.html", ggSource], ["index.html", indexSource
     assert.match(source, /function openQuickBuyModal\(mint,presetAmt\)/); // accepts a preset amount
   });
 }
+
+// ---- Cielo-style wallet tracker: smart-money alerts → POS buy card (read-only) ----
+test("wallet tracker: cheap-poll + Helius-parse-on-activity, alert funnels to POS buy, menus wired", () => {
+  assert.match(serverSource, /async function pollTrackedWallets\(/);
+  const poll = functionBody(serverSource, "pollTrackedWallets");
+  assert.match(poll, /getSignaturesForAddress/);              // cheap activity detection
+  assert.match(poll, /api\.helius\.xyz\/v0\/transactions/);   // parse only fresh sigs
+  assert.match(poll, /firstPoll \|\| !fresh\.length/);         // baseline + only-on-activity
+  assert.match(functionBody(serverSource, "sendWalletAlert"), /slimeScanKeyboard\(ev\.mint\)/); // POS buy funnel
+  assert.doesNotMatch(functionBody(serverSource, "sendWalletAlert"), /buyToken|sellToken|sendTransaction/); // read-only
+  // per-user store + cap + menus + commands + typed input all present
+  assert.match(serverSource, /const WT_FREE_CAP = 15/);
+  assert.match(serverSource, /async function handleWalletTrackerCallback\(/);
+  assert.match(serverSource, /async function handleWalletTrackerCommand\(/);
+  assert.match(serverSource, /async function applyWtInput\(/);
+  assert.match(serverSource, /startsWith\("wt:"\)/);          // routed in the dispatcher
+  assert.match(serverSource, /callback_data: "wt:home"/);     // menu button under Scans & Signals
+  assert.match(serverSource, /void pollTrackedWallets\(\)/);  // interval started
+});
