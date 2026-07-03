@@ -2717,7 +2717,7 @@
   }
   function paintPositions(view,pos){
     if(state.route!=="portfolio"||state.portfolioTab!=="positions")return;
-    if(!pos.length){view.innerHTML='<div class="empty"><div class="big">🫧</div><div><b>No open positions</b><br><span class="mut">Buy something from Trending or Trenches and it shows up here.</span></div><div class="cta" onclick="GG.go(\'trending\')">Find a play</div></div>'+'<div id="rhPosWrap"></div>';void loadRhPositions();return;}
+    if(!pos.length){view.innerHTML='<div class="empty"><div class="big">🫧</div><div><b>No open positions</b><br><span class="mut">Buy something from Trending or Trenches and it shows up here.</span></div><div class="cta" onclick="GG.go(\'trending\')">Find a play</div></div>'+'<div id="rhPosWrap">'+(state.rhPosHtml||"")+'</div>';void loadRhPositions();return;}
     view.innerHTML='<div class="poshead"><b style="font-size:13px">Open positions</b><button class="posref" title="Refresh holdings &amp; PnL" onclick="GG.refreshPos()">↻ Refresh</button></div><div class="pcard"><table class="tbl"><thead><tr><th class="l">Asset</th><th>Cost</th><th>Value</th><th>PNL</th><th class="hideMb">Amount</th><th></th></tr></thead><tbody>'+
       pos.map(p=>{const pnl=Number(p.openPnlSol),pct=p.openPnlPercent,cls=isFinite(pnl)?(pnl>=0?"up":"down"):"mut";
         return'<tr onclick="GG.open(\''+esc(p.tokenMint)+'\')"><td class="l">'+pairCellHtml({tokenMint:p.tokenMint,symbol:p.symbol,name:p.name,imageUrl:p.imageUrl})+'</td>'+
@@ -2726,7 +2726,7 @@
           '<td class="'+cls+'">'+(isFinite(pnl)?(pnl>=0?"+":"")+pnl.toFixed(3)+"◎":"—")+(pct!=null?'<span class="chg '+cls+'">'+pct+'%</span>':'')+'</td>'+
           '<td class="hideMb mut">'+esc(p.uiAmount||"")+'</td>'+
           '<td><div style="display:flex;gap:6px;justify-content:flex-end"><button class="buybtn sm" title="Auto-sell at a target / floor" onclick="event.stopPropagation();GG.armPos(\''+esc(p.tokenMint)+'\',\''+esc(p.symbol||"")+'\')">🎯</button><button class="buybtn sm" style="background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606" onclick="event.stopPropagation();GG.sellPos(\''+esc(p.tokenMint)+'\',\''+esc(p.symbol||"")+'\')">Sell</button></div></td></tr>';
-      }).join("")+'</tbody></table></div>'+'<div id="rhPosWrap"></div>';
+      }).join("")+'</tbody></table></div>'+'<div id="rhPosWrap">'+(state.rhPosHtml||"")+'</div>';
     void enrichPositionImages(pos);
     void loadRhPositions();
   }
@@ -2742,24 +2742,26 @@
     return '<div class="poshead" style="margin-top:14px"><b style="font-size:13px;color:var(--red,#ff6b6b)">🚩 Rugged bags</b><span class="mut" style="font-size:10px">coins that drained your tokens — not in your balance</span></div>'+
       '<div class="pcard">'+bad.map(t=>'<div style="display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--border)"><span style="flex:0 0 auto">🚩</span><div style="flex:1;min-width:0"><b style="font-size:12px">'+esc(t.symbol||short(t.address))+'</b><div class="mut" style="font-size:10px">bought '+Number(t.received).toLocaleString()+' · hold '+Number(t.held).toLocaleString()+' · lost '+t.lostPct+'% with no sale</div></div><a class="mut" style="font-size:11px;flex:0 0 auto" href="https://robinhoodchain.blockscout.com/token/'+esc(t.address)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">tx↗</a></div>').join("")+'</div>';
   }
+  // Build the RH positions HTML and apply it ONLY when it changed. paintPositions re-seeds #rhPosWrap with
+  // the last-known html (state.rhPosHtml) so the section never blanks between polls — that blank-then-refill
+  // is what made positions "show and disappear" every 10s. RPC hiccups no longer wipe the list either.
   async function loadRhPositions(){
-    const wrap=$("#rhPosWrap");if(!wrap)return;
+    if(!$("#rhPosWrap"))return;
     const idx=String(state.activeWallet||1);
     const [walRes,audRes]=await Promise.all([
       api("/api/web/rh/wallet?walletIndex="+encodeURIComponent(idx)).catch(()=>({})),
       api("/api/web/rh/holdings-audit?walletIndex="+encodeURIComponent(idx)).catch(()=>({}))
     ]);
     const {ok,d}=walRes; const drainedHtml=rhDrainedRowsHtml(audRes&&audRes.d);
-    const w=$("#rhPosWrap");if(!w)return;
-    const toks=((ok&&d&&d.ok&&d.tokens)||[]).filter(t=>Number(t.uiAmount||0)>0);
-    if(!toks.length){w.innerHTML=drainedHtml;return;}   // still show rugged bags even with no live holdings
-    // Seed the modal cache so tapping a bag opens with name/symbol/pfp even if it never hit the board.
+    // A failed wallet read (RPC hiccup) must NOT clear the list — keep the last good render.
+    if(!(ok&&d&&d.ok)){ if(drainedHtml && !state.rhPosHtml) applyRhPos(drainedHtml); return; }
+    const toks=(d.tokens||[]).filter(t=>Number(t.uiAmount||0)>0);
+    if(!toks.length){applyRhPos(drainedHtml);return;}   // still show rugged bags even with no live holdings
     state.rhRows=state.rhRows||{};
     toks.forEach(t=>{const k=String(t.address).toLowerCase();if(!state.rhRows[k])state.rhRows[k]={address:t.address,symbol:t.symbol,name:t.name,imageUrl:t.iconUrl||""};});
     const by=await dexTokensBatch(toks.map(t=>t.address)).catch(()=>({}));
     const byLc={};Object.keys(by||{}).forEach(k=>{byLc[k.toLowerCase()]=by[k];});
-    if(!$("#rhPosWrap"))return;
-    w.innerHTML='<div class="poshead" style="margin-top:14px"><b style="font-size:13px">🪶 Robinhood Chain bags</b><span class="mut" style="font-size:10px">wallet '+esc(String(state.activeWallet||1))+' · '+Number(d.eth||0).toFixed(5)+' ETH</span><button class="posref" style="margin-left:auto" title="Edit quick-buy presets" onclick="GG.rhPresetModal()">⚙ Presets</button></div><div class="pcard"><table class="tbl"><thead><tr><th class="l">Asset</th><th>Amount</th><th>Value</th><th></th></tr></thead><tbody>'+
+    const html='<div class="poshead" style="margin-top:14px"><b style="font-size:13px">🪶 Robinhood Chain bags</b><span class="mut" style="font-size:10px">wallet '+esc(String(state.activeWallet||1))+' · '+Number(d.eth||0).toFixed(5)+' ETH</span><button class="posref" style="margin-left:auto" title="Edit quick-buy presets" onclick="GG.rhPresetModal()">⚙ Presets</button></div><div class="pcard"><table class="tbl"><thead><tr><th class="l">Asset</th><th>Amount</th><th>Value</th><th></th></tr></thead><tbody>'+
       toks.map(t=>{
         const o=byLc[String(t.address).toLowerCase()]||{};
         const val=o.price>0?o.price*Number(t.uiAmount||0):null;
@@ -2769,7 +2771,9 @@
           '<td>'+(val!=null?fmtUsd(val):"—")+'</td>'+
           '<td><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap"><button class="buybtn sm" title="Auto-sell at a target / floor" onclick="event.stopPropagation();GG.rhGuardModal(\''+esc(t.address)+'\')">🎯</button>'+[25,50,75,100].map(p=>'<button class="buybtn sm"'+(p===100?' style="background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606"':'')+' onclick="event.stopPropagation();GG.rhSellPos(\''+esc(t.address)+'\','+p+')">'+(p===100?'All':p+'%')+'</button>').join("")+'</div></td></tr>';
       }).join("")+'</tbody></table></div>'+drainedHtml;
+    applyRhPos(html);
   }
+  function applyRhPos(html){state.rhPosHtml=html;const w=$("#rhPosWrap");if(w&&w.innerHTML!==html)w.innerHTML=html;}
   // Some held coins arrive without a logo from the backend metadata — fill the pfp from DexScreener
   // (over the user's IP) so the positions list always shows the token's picture, then repaint once.
   async function enrichPositionImages(pos){
