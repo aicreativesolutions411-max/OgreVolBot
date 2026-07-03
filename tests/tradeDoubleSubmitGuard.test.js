@@ -978,3 +978,38 @@ for (const [label, source] of [["gg.html", ggSource], ["index.html", indexSource
     assert.match(source, /tp\|\|sl\|\|Number\(trail\)>0/);
   });
 }
+
+// ---- /leaderboard: top-10 best CALLERS with today/1w/1m/6m window buttons ----
+test("/leaderboard ranks callers by window; /wins keeps the coin hall of fame", () => {
+  // command split: leaderboard/callers -> caller board; halloffame/hof/wins -> coin wins
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["leaderboard", "lb", "callers", "topcallers"\]\)/);
+  assert.match(serverSource, /handleTelegramCallerLeaderboardCommand\(chatId\)/);
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["halloffame", "hof", "wins"\]\)/);
+  // four windows, driven off the caller-intel warehouse filtered by firstAt
+  const view = functionBody(serverSource, "buildCallerLeaderboardView");
+  assert.match(view, /callerIntel\.buildLeaderboards\(scoped, \{ minResolved/);
+  assert.match(view, /Number\(c\.firstAt\) >= cutoff/);
+  for (const k of ["today", "1w", "1m", "6m"]) assert.ok(serverSource.includes(`key: "${k}"`), `window ${k}`);
+  // window buttons routed in the callback dispatcher, editing in place
+  assert.match(serverSource, /query\.data\?\.startsWith\("clb:"\)/);
+  assert.match(serverSource, /callback_data: `clb:\$\{w\.key\}`/);
+});
+
+// ---- Scan bot: PnL/flex brags → rotating SlimeWire image PnL card ----
+test("flex brag that names a coin answers with the rotating slime PnL card (Scan-gated, throttled)", () => {
+  // detector is tight: needs a gain-brag AND a coin ref
+  const det = functionBody(serverSource, "detectFlexBragMint");
+  assert.match(det, /pnl\|profit/);
+  assert.match(det, /isLikelySolMint\(clean\)/);       // CA wins
+  assert.match(det, /return \{ ticker: tag\[1\] \}/);   // else first $ticker
+  // renders the real rotating card (renderSlimeCard = 15 per-mint backgrounds) in receipt mode
+  const card = functionBody(serverSource, "sendCallFlexImageCard");
+  assert.match(card, /renderSlimeCard\(\{/);
+  assert.match(card, /receipt: true/);
+  assert.match(card, /sendPhoto\(chatId,/);
+  assert.match(card, /postCallFlexCard\(chatId, mint, message\)/); // honest text fallback
+  // wired into the group handler, rides the Scan toggle, rate-limited
+  assert.match(serverSource, /const flex = detectFlexBragMint\(text\)/);
+  assert.match(serverSource, /groupBotFeatureOn\(gbEntry, "scan"\)\) && !tgCommandOnCooldown\(chatId, "flexcard"/);
+  assert.match(serverSource, /sendCallFlexImageCard\(chatId, flexMint, message\)/);
+});

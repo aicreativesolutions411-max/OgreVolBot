@@ -11560,6 +11560,14 @@ async function handleCallback(query, userId) {
     return;
   }
 
+  // /leaderboard time-window buttons (clb:today|1w|1m|6m) — re-filter the caller board in place.
+  if (query.data?.startsWith("clb:") && messageId) {
+    const win = String(query.data).split(":")[1] || "1w";
+    const view = await buildCallerLeaderboardView(win);
+    await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: view.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: view.markup }).catch(() => {});
+    return;
+  }
+
   // /chart timeframe buttons — chartx:<coingeckoId>:<symbol>:<tf>
   if (query.data?.startsWith("chartx:") && messageId) {
     const parts = String(query.data).split(":");
@@ -12064,6 +12072,18 @@ async function handleMessage(message, userId) {
       }
       return;
     }
+    // SCAN BOT — PnL FLEX CARDS: a win-brag that names a coin ("+340% on $OGRE", "5x on <CA>") gets
+    // answered with OUR rotating SlimeWire slime PnL card instead of a rival's screenshot. Rides with
+    // the Scan toggle, rate-limited so it never floods, and only fires on a real gain-brag.
+    const flex = detectFlexBragMint(text);
+    if (flex) {
+      const gbEntry = await getGroupBotEntry(chatId).catch(() => null);
+      if ((!gbEntry || groupBotFeatureOn(gbEntry, "scan")) && !tgCommandOnCooldown(chatId, "flexcard", 20000)) {
+        let flexMint = flex.mint || null;
+        if (!flexMint && flex.ticker) flexMint = await resolveCashtagToMint(flex.ticker).catch(() => null);
+        if (flexMint) { await sendCallFlexImageCard(chatId, flexMint, message).catch(() => {}); return; }
+      }
+    }
   }
   // DM: a bare CA pasted with NO pending prompt → the same automatic scan card groups get (this is
   // the "I pasted a CA and nothing came up" fix). Gated on !session so it never hijacks a flow that's
@@ -12515,8 +12535,13 @@ async function handleMessage(message, userId) {
     return;
   }
 
-  // /leaderboard — public hall of fame: the biggest tracked calls that hit 2x+.
-  if (parseCommandWithArgument(text, ["leaderboard", "lb", "halloffame", "hof"]) || text === "/wins") {
+  // /leaderboard — top-10 best CALLERS with today/1w/1m/6m window buttons.
+  if (parseCommandWithArgument(text, ["leaderboard", "lb", "callers", "topcallers"])) {
+    await handleTelegramCallerLeaderboardCommand(chatId);
+    return;
+  }
+  // /wins (aka /hof) — public hall of fame: the biggest tracked calls that hit 2x+.
+  if (parseCommandWithArgument(text, ["halloffame", "hof", "wins"])) {
     await handleTelegramLeaderboardCommand(chatId);
     return;
   }
@@ -28451,6 +28476,79 @@ async function postCallFlexCard(chatId, mint, message) {
   } catch { return false; }
 }
 
+// SCAN BOT — PnL FLEX CARDS. When someone in a group brags a win that names a coin ("+340% on
+// $OGRE 🚀", "just did 5x on <CA>"), reply with OUR rotating SlimeWire slime-card (the same
+// 15-background design the app + site rotate through) showing that coin's CALL performance — so a
+// competitor's screenshot never owns the moment in your chat. Renders in receipt mode (no personal
+// round-trip P&L needed — it's the call's move from first-seen MC). Falls back to the text card.
+async function sendCallFlexImageCard(chatId, mint, message) {
+  try {
+    let curMc = 0, sym = "", name = "", imageUrl = "";
+    try {
+      const scan = await gatherSlimeScan(mint);
+      curMc = Number(scan?.meta?.marketCap || scan?.meta?.fdv || scan?.bonding?.marketCap || 0);
+      sym = scan?.meta?.symbol || scan?.bonding?.symbol || "";
+      name = scan?.meta?.name || scan?.bonding?.name || "";
+      imageUrl = scan?.meta?.imageUrl || scan?.meta?.avatarUrl || "";
+    } catch {}
+    // Find or seed the call (entry MC) so the % is honest — measured from first-seen, not a made-up base.
+    let rec = null, bestPeak = 0;
+    const store = await readTelegramCalls();
+    for (const k in (store.calls || {})) {
+      const r = store.calls[k];
+      if (!r || r.mint !== mint) continue;
+      if (Number(r.peakMc) > bestPeak) bestPeak = Number(r.peakMc) || 0;
+      if (!rec || (Number(r.firstAt) || 0) < (Number(rec.firstAt) || 0)) rec = r;
+    }
+    if (!rec && message) rec = await recordTelegramCall(message, mint, curMc).catch(() => null);
+    const entry = rec ? Number(rec.entryMc) || 0 : 0;
+    const live = curMc > 0 ? curMc : (rec ? Number(rec.lastMc) || 0 : 0);
+    if (rec && live > 0) { rec.lastMc = live; if (live > (rec.peakMc || 0)) rec.peakMc = live; bestPeak = Math.max(bestPeak, live); scheduleTelegramCallsFlush(); }
+    // Need a real entry + move to render a meaningful flex; otherwise fall back to the honest text card.
+    if (!(entry > 0 && live > 0)) return await postCallFlexCard(chatId, mint, message);
+    const gainPct = Math.round((live / entry - 1) * 100);
+    const x = live / entry;
+    const win = gainPct >= 0;
+    const fresh = (Date.now() - Number(rec.firstAt || Date.now())) < 90_000;
+    const ago = alphaAgeLabel(Math.max(0, Date.now() - Number(rec.firstAt || Date.now())));
+    const png = await renderSlimeCard({
+      mint, symbol: sym || shortMint(mint), name: name || "SlimeWire", imageUrl,
+      loss: !win, receipt: true,
+      headline: win ? `${Math.round(x * 10) / 10}X` : `-${Math.abs(gainPct)}%`,
+      lines: [
+        win ? `Called +${gainPct}%` : `Down ${gainPct}%`,
+        entry > 0 ? `Entry ${formatUsdCompact(entry)} -> ${formatUsdCompact(live)}` : "",
+        fresh ? "First spotted here" : `Called by ${String(rec.callerName || "someone").slice(0, 20)} · ${ago} ago`
+      ]
+    }).catch(() => null);
+    if (!png) return await postCallFlexCard(chatId, mint, message);
+    const cap = `${win ? "🟢" : "🔴"} <b>$${escapeTelegramHtml(sym || shortMint(mint))} — the call</b> ${win ? `<b>+${gainPct}%</b>` : `${gainPct}%`}\n⚡ <a href="https://www.slimewire.org/t?ca=${mint}">Trade it on SlimeWire</a>`;
+    await sendPhoto(chatId, `flex-${sanitizeFilenamePart(sym || mint)}.png`, png, cap, slimeScanKeyboard(mint), "HTML");
+    return true;
+  } catch { try { return await postCallFlexCard(chatId, mint, message); } catch { return false; } }
+}
+
+// Detect a "PnL flex / brag" that names a coin, so the scan bot can answer with a SlimeWire card.
+// Returns { mint } (a pasted CA wins), { ticker } (first $cashtag), or null. Deliberately tight so it
+// only fires on a real win-brag — a numeric gain (+NN% / NNx) OR profit words — that also names a coin.
+function detectFlexBragMint(raw) {
+  const text = String(raw || "").trim();
+  if (text.length < 4 || text.length > 400) return null;
+  if (text.startsWith("/")) return null;
+  const gain = /(?:^|[\s(+])\+?\d{2,}\s?%/.test(text)                       // +250% or 250%
+    || /(?:^|[\s(x])\d{1,3}(?:\.\d+)?\s?x\b/i.test(text)                     // 5x, 12.5x
+    || /\b(pnl|profit|profits|gains?|printed|bagged|banger|moon(?:ed|ing|shot)?|ath)\b/i.test(text);
+  if (!gain) return null;
+  // A pasted contract address anywhere beats a ticker (exact + unambiguous).
+  for (const tok of text.split(/[\s,]+/)) {
+    const clean = tok.replace(/^\$/, "").replace(/[.,!?)]+$/, "");
+    if (isLikelySolMint(clean)) return { mint: clean };
+  }
+  const tag = /\$([A-Za-z][A-Za-z0-9._]{1,19})\b/.exec(text);
+  if (tag) return { ticker: tag[1] };
+  return null;
+}
+
 function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, supply, callerLine, ath }) {
   const esc = escapeTelegramHtml;
   const links = slimewireTokenLinks(mint);
@@ -28831,6 +28929,59 @@ async function handleTelegramLeaderboardCommand(chatId) {
     `\n<a href="https://www.slimewire.org/proof">full proof wall →</a>`
   ].join("\n");
   await sayHtml(chatId, text);
+}
+
+// ---- /leaderboard: top-10 best CALLERS, filterable by time window (today / 1w / 1m / 6m) ----
+// Ranks the humans/channels dropping $tickers + CAs in groups, scored by the caller-intel warehouse
+// (win-rate × size on their RESOLVED calls). The window buttons re-filter the same board in place.
+// Thin windows need fewer resolved calls to rank so "Today" isn't perpetually empty.
+const CALLER_LB_WINDOWS = [
+  { key: "today", label: "Today", ms: 24 * 60 * 60 * 1000, minResolved: 1 },
+  { key: "1w", label: "1 Week", ms: 7 * 24 * 60 * 60 * 1000, minResolved: 2 },
+  { key: "1m", label: "1 Month", ms: 30 * 24 * 60 * 60 * 1000, minResolved: 3 },
+  { key: "6m", label: "6 Months", ms: 180 * 24 * 60 * 60 * 1000, minResolved: 3 }
+];
+function callerLeaderboardKeyboard(activeKey) {
+  return {
+    inline_keyboard: [
+      CALLER_LB_WINDOWS.map((w) => ({ text: (w.key === activeKey ? "✅ " : "") + w.label, callback_data: `clb:${w.key}` })),
+      [{ text: "🧾 Full proof wall", url: "https://www.slimewire.org/proof" }]
+    ]
+  };
+}
+async function buildCallerLeaderboardView(win) {
+  const w = CALLER_LB_WINDOWS.find((x) => x.key === win) || CALLER_LB_WINDOWS[1];
+  let callers = [];
+  try {
+    const store = await readTelegramCalls();
+    const cutoff = Date.now() - w.ms;
+    const scoped = Object.values(store.calls || {}).filter((c) => Number(c.firstAt) >= cutoff);
+    const boards = callerIntel.buildLeaderboards(scoped, { minResolved: w.minResolved });
+    callers = (boards.callers || []).slice(0, 10);
+  } catch {}
+  const medal = (i) => (i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `<b>${i + 1}.</b>`);
+  const header = `🏆 <b>Top Callers · ${w.label}</b>`;
+  if (!callers.length) {
+    return {
+      text: [header, "", "No caller has enough <b>resolved</b> calls in this window yet. Try a longer window — or keep dropping <code>$tickers</code> and contract addresses in your groups; the swamp scores every call.", "", "<i>A call resolves once it 2x's (win) or fades out — then it counts here.</i>"].join("\n"),
+      markup: callerLeaderboardKeyboard(w.key)
+    };
+  }
+  const lines = callers.map((c, i) => {
+    const hit = Math.round((c.smoothedHitRate || 0) * 100);
+    const name = escapeTelegramHtml(String(c.name || "anon").slice(0, 22));
+    const best = Number(c.bestPeakX) >= 2 ? ` · best <b>${c.bestPeakX}x</b>` : "";
+    return `${medal(i)} <b>${name}</b> — ${hit}% hit · ${c.wins}W/${c.losses}L · avg <b>${c.avgPeakX}x</b>${best}`;
+  });
+  return {
+    text: [header, ...lines, "", `<i>Ranked by win-rate × size on ${w.label.toLowerCase()}'s resolved calls. Drop a $ticker or CA in chat — the swamp tracks who's really printing.</i>`].join("\n"),
+    markup: callerLeaderboardKeyboard(w.key)
+  };
+}
+async function handleTelegramCallerLeaderboardCommand(chatId, win = "1w") {
+  if (tgCommandOnCooldown(chatId, "callerlb", TG_ALPHA_COOLDOWN_MS)) return;
+  const view = await buildCallerLeaderboardView(win);
+  await sayHtml(chatId, view.text, view.markup);
 }
 
 async function handleTelegramProofCommand(chatId) {
