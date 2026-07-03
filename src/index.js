@@ -27663,9 +27663,13 @@ async function resolveCashtagToMint(symbol) {
   try {
     const d = await fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { timeoutMs: 6000 }).catch(() => null);
     const pairs = Array.isArray(d?.pairs) ? d.pairs : [];
-    const sol = pairs.filter((p) => String(p.chainId) === "solana");
-    const exact = sol.filter((p) => String(p.baseToken?.symbol || "").toLowerCase() === key);
-    const pick = (exact.length ? exact : sol).sort((a, b) => (Number(b.liquidity?.usd) || 0) - (Number(a.liquidity?.usd) || 0))[0];
+    // EXACT ticker match ONLY. The old code fell back to "any Solana pair" from the search, so casual
+    // chatter like "$lol"/"$gm" resolved to a random unrelated token and posted a fake card. Never do that.
+    const exact = pairs.filter((p) => String(p.chainId) === "solana" && String(p.baseToken?.symbol || "").toLowerCase() === key);
+    // Require REAL liquidity so we don't surface a dust/scam token that merely happens to share the ticker.
+    const pick = exact
+      .filter((p) => (Number(p.liquidity?.usd) || 0) >= 2000)
+      .sort((a, b) => (Number(b.liquidity?.usd) || 0) - (Number(a.liquidity?.usd) || 0))[0];
     const mint = pick?.baseToken?.address || null;
     cashtagMintCache.set(key, { at: Date.now(), mint });
     return mint;
