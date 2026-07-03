@@ -4926,7 +4926,8 @@ async function setupWebhook() {
     secret_token: CONFIG.webhookSecret,
     // channel_post: channels never emit "message", so /look + /alpha + /slimewire in
     // channels need it. my_chat_member: fires when the bot is added, for the welcome.
-    allowed_updates: ["message", "callback_query", "channel_post", "my_chat_member"],
+    // chat_member: referral contests attribute a join to the inviter's unique invite link.
+    allowed_updates: ["message", "callback_query", "channel_post", "my_chat_member", "chat_member"],
     drop_pending_updates: false
   });
   await registerTelegramBotCommands().catch((error) => console.warn(`[tg] setMyCommands failed: ${error.message}`));
@@ -5150,6 +5151,17 @@ function startHealthServer() {
     }
     if (request.method === "GET" && ["/prelaunch", "/pre-launch", "/hype"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "prelaunch.html");
+      return;
+    }
+    // Group verification portal (Whales mode + human/fingerprint). Opened from the TG bot's link.
+    if (request.method === "GET" && requestUrl.pathname === "/verify") {
+      await serveStaticHtmlPage(response, "verify.html", "no-store, max-age=0");
+      return;
+    }
+    if (request.method === "POST" && requestUrl.pathname === "/api/tg/verify/submit") {
+      const body = await readJsonRequestBody(request, 8_000).catch(() => ({}));
+      const result = await handleTgVerifySubmit(body).catch((e) => ({ ok: false, error: String((e && e.message) || "verify failed") }));
+      sendWebJson(request, response, result.ok ? 200 : 400, result);
       return;
     }
     if (request.method === "GET" && ["/receipts", "/receipt", "/swamp-card"].includes(requestUrl.pathname)) {
@@ -11432,7 +11444,7 @@ async function sendLoop() {
       const result = await telegram("getUpdates", {
         offset,
         timeout: 30,
-        allowed_updates: ["message", "callback_query"]
+        allowed_updates: ["message", "callback_query", "my_chat_member", "chat_member"]
       });
 
       for (const update of result) {
@@ -11451,6 +11463,13 @@ async function handleUpdate(update) {
   if (update.my_chat_member) {
     await handleBotChatMembershipUpdate(update.my_chat_member).catch((error) => {
       console.warn(`[tg] my_chat_member failed: ${error.message}`);
+    });
+    return;
+  }
+  // A member's status changed — used to attribute referral joins to the inviter's link.
+  if (update.chat_member) {
+    await handleChatMemberUpdate(update.chat_member).catch((error) => {
+      console.warn(`[tg] chat_member failed: ${error && error.message}`);
     });
     return;
   }
@@ -11972,6 +11991,8 @@ async function handleMessage(message, userId) {
   // All-in-one group bot: /settings + module toggles (/buybot|raid|rose|scan on|off). Group-only,
   // admin-gated; returns false (no-op) for DMs and non-matching text, so existing flows are untouched.
   if (await handleGroupBotCommand(message, userId).catch(() => false)) return;
+  // Referral contest commands (/referral, /reflink, /refboard).
+  if (await handleReferralCommand(message, userId).catch(() => false)) return;
   // Rose Manager (when on): new-member welcome, anti-links, and moderation commands. Runs before
   // the text-required gate below so it can welcome joiners (which carry no text). No-op when off.
   if (await handleGroupRose(message, userId).catch(() => false)) return;
@@ -29025,9 +29046,11 @@ async function isGroupBotAdmin(chatId, userId, message = null) {
 function groupBotMenuMarkup(entry) {
   const e = entry || defaultGroupBotEntry();
   const dot = (k) => (groupBotFeatureOn(e, k) ? "🟢" : "⚪");
+  const refOn = referralConfig(e).on ? "🟢" : "⚪";
   return { inline_keyboard: [
     [{ text: `${dot("buybot")} Buy Bot`, callback_data: "gb:m:buy" }, { text: `${dot("raid")} Raid Bot`, callback_data: "gb:m:raid" }],
     [{ text: `${dot("rose")} Rose & Shield`, callback_data: "gb:m:rose" }, { text: `${dot("scan")} Scan Bot`, callback_data: "gb:m:scan" }],
+    [{ text: `${refOn} 🎟️ Referral Contest`, callback_data: "gb:m:ref" }],
     [{ text: "✓ Done", callback_data: "gb:close" }]
   ] };
 }
@@ -29080,16 +29103,36 @@ function groupBotModuleView(module, entry) {
       markup: { inline_keyboard: [[toggleBtn("scan", "Scan Bot")], gbBackRow()] }
     };
   }
-  // rose + shield
+  if (module === "ref") {
+    const rc = referralConfig(e);
+    const top = Object.entries(rc.counts || {}).sort((a, b) => b[1] - a[1])[0];
+    return {
+      text: [
+        "🎟️ <b>Referral Contest</b>",
+        rc.on ? `Status: <b>LIVE</b>${rc.prize ? ` · 🏆 ${escapeTelegramHtml(rc.prize)}` : ""}` : "Status: <b>off</b>",
+        top ? `Leader: <b>${top[1]}</b> referrals` : "No referrals yet.",
+        "",
+        "Members grab a unique invite link with <code>/reflink</code>; every real join via it counts for them. <code>/refboard</code> shows standings.",
+      ].join("\n"),
+      markup: { inline_keyboard: [
+        [{ text: rc.on ? "⏹️ Stop contest" : "▶️ Start contest", callback_data: rc.on ? "gb:ref:stop" : "gb:ref:start" }],
+        [{ text: "🏆 Set prize", callback_data: "gb:in:refprize" }, { text: "📊 Leaderboard", callback_data: "gb:ref:board" }],
+        gbBackRow()
+      ] }
+    };
+  }
+  // rose + shield + entry verification (whales / web)
   const cfg = roseConfig(e);
+  const wc = whalesConfig(e), wv = webverifyConfig(e);
   const tog = (field, label) => ({ text: `${cfg[field] ? "✅" : "▫️"} ${label}`, callback_data: `gb:tog:${field}` });
   return {
     text: [
       "🛡️ <b>Rose &amp; Shield</b>",
-      "Group moderation + Heimdall-style protection. Green ✅ = on. (All need Rose on.)",
+      "Moderation + Heimdall-style protection + entry verification. Green ✅ = on. (All need Rose on.)",
       "",
       "<b>Moderation:</b> captcha, anti-links, clean joins, antiflood, welcome/rules.",
-      "<b>Shield:</b> auto-delete scam/phishing, remove deleted-account ghosts, block admin impersonators, auto-whitelist trusted regulars.",
+      "<b>Shield:</b> auto-delete scam/phishing, remove ghost accounts, block impersonators, auto-whitelist regulars.",
+      "<b>Verify to chat:</b> 🌐 web (human check) · 🐋 whales (must hold your token). New members stay muted until they pass.",
       "",
       "More via commands — <b>/help</b> (warns, notes, filters, mute/ban, purge…)."
     ].join("\n"),
@@ -29098,8 +29141,10 @@ function groupBotModuleView(module, entry) {
       [tog("captcha", "Captcha"), tog("antilinks", "Anti-links")],
       [tog("cleanService", "Clean joins"), tog("deleteScam", "Delete scam")],
       [tog("deleteDeletedAccounts", "Del ghost accts"), tog("antiImpersonator", "Anti-impersonate")],
-      [{ text: `🌊 Antiflood: ${cfg.antiflood || "off"}`, callback_data: "gb:in:antiflood" }, { text: `✅ Whitelist: ${cfg.autoWhitelist || "off"}`, callback_data: "gb:in:autowhitelist" }],
-      [{ text: "👋 Welcome", callback_data: "gb:in:welcome" }, { text: "📜 Rules", callback_data: "gb:in:rules" }],
+      [{ text: `🌐 Web verify: ${wv.on ? "ON" : "off"}`, callback_data: "gb:wv:web" }, { text: `🐋 Whales: ${wc.on ? "ON" : "off"}`, callback_data: "gb:wv:whales" }],
+      [{ text: `⚖️ Min hold: ${wc.minHold || 0}`, callback_data: "gb:in:whalesmin" }, { text: `🌊 Antiflood: ${cfg.antiflood || "off"}`, callback_data: "gb:in:antiflood" }],
+      [{ text: `✅ Whitelist: ${cfg.autoWhitelist || "off"}`, callback_data: "gb:in:autowhitelist" }, { text: "👋 Welcome", callback_data: "gb:in:welcome" }],
+      [{ text: "📜 Rules", callback_data: "gb:in:rules" }],
       gbBackRow()
     ] }
   };
@@ -29121,8 +29166,10 @@ const GB_INPUT_PROMPT = {
   rules: "Send the group rules text (or 'off')",
   antiflood: "Send N — mute after N messages / 10s (0 = off)",
   autowhitelist: "Send N — trust a user after N clean messages (0 = off)",
+  whalesmin: "Send the min token amount a member must hold to chat (e.g. 100000)",
+  refprize: "Send the contest prize text (shown on the leaderboard, or 'off')",
 };
-const GB_INPUT_MODULE = { buyemoji: "buy", message: "buy", minbuy: "buy", track: "buy", welcome: "rose", rules: "rose", antiflood: "rose", autowhitelist: "rose" };
+const GB_INPUT_MODULE = { buyemoji: "buy", message: "buy", minbuy: "buy", track: "buy", welcome: "rose", rules: "rose", antiflood: "rose", autowhitelist: "rose", whalesmin: "rose", refprize: "ref" };
 // Apply a typed value to the pending menu field, then re-render that sub-menu. Returns
 // true when it consumed the message (an admin was mid-entry).
 async function applyGbInput(message, userId) {
@@ -29147,6 +29194,8 @@ async function applyGbInput(message, userId) {
     case "rules": setRose({ rules: off ? null : raw.slice(0, 3500) }); break;
     case "antiflood": setRose({ antiflood: Math.max(0, Math.min(50, parseInt(raw, 10) || 0)) }); break;
     case "autowhitelist": setRose({ autoWhitelist: Math.max(0, Math.min(100, parseInt(raw, 10) || 0)) }); break;
+    case "whalesmin": e.whales = { ...whalesConfig(e), minHold: Math.max(0, Number(raw) || 0), mint: whalesConfig(e).mint || e.token || null }; break;
+    case "refprize": e.referral = { ...referralConfig(e), prize: off ? "" : raw.slice(0, 100) }; break;
     default: break;
   }
   store.groups[k] = e; await writeGroupBot(store);
@@ -29182,6 +29231,12 @@ function groupBotHelpText() {
     "• <code>/deletedaccounts on</code> — remove \"Deleted Account\" ghosts",
     "• <code>/antiimpersonator on</code> — block users mimicking an admin's name",
     "• <code>/autowhitelist 10</code> — trust a member after N clean messages (0 = off)",
+    "",
+    "🔓 <b>Verify to chat</b> (in the Rose &amp; Shield menu) — new members stay muted until they pass a web check:",
+    "• <b>🌐 Web verify</b> — a quick human check (flags ban-evading alts by device)",
+    "• <b>🐋 Whales mode</b> — must hold ≥ a set amount of your token (connect wallet + sign; read-only, never moves funds)",
+    "",
+    "🎟️ <b>Referral Contest</b> — <code>/referral start [prize]</code> · <code>/referral stop</code> · members grab <code>/reflink</code> and share it · <code>/refboard</code> for the leaderboard",
     "",
     "🛡️ <b>Rose Manager</b> — full group moderation",
     "• <b>Verify:</b> <code>/captcha on</code> (mute new members until they tap ✅), <code>/cleanservice on</code>",
@@ -29347,8 +29402,24 @@ async function handleGroupBotCallback(query, userId) {
   if (!(await isGroupBotAdmin(chatId, userId, query.message))) { await ack("Admins only 🛡️"); return true; }
 
   if (data === "gb:home") { await groupBotPostSetup(chatId, await getGroupBotEntry(chatId), messageId); await ack(); return true; }
-  const mm = data.match(/^gb:m:(buy|raid|rose|scan)$/);
+  const mm = data.match(/^gb:m:(buy|raid|rose|scan|ref)$/);
   if (mm) { await groupBotRenderModule(chatId, mm[1], messageId); await ack(); return true; }
+  // Entry verification toggles (whales / web) — not rose fields, so handled separately.
+  if (data === "gb:wv:web") {
+    const e = await getGroupBotEntry(chatId);
+    await setGroupSub(chatId, "webverify", { on: !webverifyConfig(e).on });
+    await groupBotRenderModule(chatId, "rose", messageId); await ack(); return true;
+  }
+  if (data === "gb:wv:whales") {
+    const e = await getGroupBotEntry(chatId); const wc = whalesConfig(e);
+    if (!wc.on && !e?.token) { await ack("Set a tracked coin first (Buy Bot → Coin)"); return true; }
+    await setGroupSub(chatId, "whales", { on: !wc.on, mint: wc.mint || e.token || null, minHold: wc.minHold || 1 });
+    await groupBotRenderModule(chatId, "rose", messageId); await ack(wc.on ? undefined : "Whales mode ON — set the min hold next"); return true;
+  }
+  // Referral contest controls.
+  if (data === "gb:ref:start") { await setGroupSub(chatId, "referral", { on: true, startedAt: Date.now(), counts: {}, links: {}, credited: {} }); await groupBotRenderModule(chatId, "ref", messageId); await sayHtml(chatId, "🎟️ <b>Referral contest is LIVE!</b> Everyone: grab your link with <b>/reflink</b> and invite people. Standings: <b>/refboard</b>.").catch(() => {}); await ack("Contest started"); return true; }
+  if (data === "gb:ref:stop") { const cfg = referralConfig(await getGroupBotEntry(chatId)); const win = Object.entries(cfg.counts || {}).sort((a, b) => b[1] - a[1])[0]; await setGroupSub(chatId, "referral", { on: false }); await groupBotRenderModule(chatId, "ref", messageId); await sayHtml(chatId, win ? `🏁 <b>Referral contest ended!</b> 🥇 <a href="tg://user?id=${win[0]}">top inviter</a> — <b>${win[1]}</b> referrals.${cfg.prize ? ` 🏆 ${escapeTelegramHtml(cfg.prize)}` : ""}` : "🏁 Referral contest ended — no referrals recorded.").catch(() => {}); await ack("Contest ended"); return true; }
+  if (data === "gb:ref:board") { await sayHtml(chatId, referralBoardText(referralConfig(await getGroupBotEntry(chatId)))).catch(() => {}); await ack(); return true; }
   const tm = data.match(/^gb:t:(buybot|raid|rose|scan)$/);
   if (tm) {
     const cur = await getGroupBotEntry(chatId);
@@ -29774,6 +29845,187 @@ async function shieldIsImpersonator(chatId, user) {
   const un = String(user.username || "").toLowerCase();
   return Boolean((fn && id.names.has(fn)) || (un && id.unames.has(un)));
 }
+// ============================================================================
+// VERIFY / WHALES / REFERRAL — Heimdall-style entry gating + growth (per-group).
+// All read-only on-chain (holdings check only) — never moves funds.
+// ============================================================================
+function whalesConfig(e) { return { on: false, mint: null, minHold: 0, symbol: "", ...((e && e.whales) || {}) }; }
+function webverifyConfig(e) { return { on: false, ...((e && e.webverify) || {}) }; }
+function referralConfig(e) { return { on: false, startedAt: 0, prize: "", counts: {}, links: {}, credited: {}, ...((e && e.referral) || {}) }; }
+async function setGroupSub(chatId, field, patch) {
+  const cfgFn = { whales: whalesConfig, webverify: webverifyConfig, referral: referralConfig }[field];
+  const store = await readGroupBot(); const k = String(chatId); const e = store.groups[k] || defaultGroupBotEntry();
+  e[field] = { ...cfgFn(e), ...patch }; store.groups[k] = e; await writeGroupBot(store); return e[field];
+}
+function groupNeedsWebVerify(e) { return webverifyConfig(e).on || whalesConfig(e).on; }
+function groupVerifyKinds(e) { const k = []; if (webverifyConfig(e).on) k.push("human"); if (whalesConfig(e).on) k.push("whales"); return k; }
+
+// Signed verify token (HMAC-SHA256 over the payload with APP_SECRET). No secrets leave the server.
+function verifySecret() { return String(process.env.APP_SECRET || "slimewire-dev-secret"); }
+function b64url(buf) { return Buffer.from(buf).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
+function b64urlDecode(s) { return Buffer.from(String(s || "").replace(/-/g, "+").replace(/_/g, "/"), "base64"); }
+function signVerifyToken(payload) {
+  const body = b64url(JSON.stringify(payload));
+  return body + "." + b64url(crypto.createHmac("sha256", verifySecret()).update(body).digest());
+}
+function readVerifyToken(token) {
+  const [body, mac] = String(token || "").split(".");
+  if (!body || !mac) return null;
+  const expect = b64url(crypto.createHmac("sha256", verifySecret()).update(body).digest());
+  if (mac !== expect) return null;
+  try { const p = JSON.parse(b64urlDecode(body).toString("utf8")); if (p.exp && Date.now() > p.exp) return null; return p; } catch { return null; }
+}
+// Read-only holdings: a wallet's UI balance of a specific SPL mint.
+async function walletTokenUiBalance(owner, mint) {
+  try {
+    const ownerKey = new PublicKey(owner), mintKey = new PublicKey(mint);
+    const res = await connection.getParsedTokenAccountsByOwner(ownerKey, { mint: mintKey }, "confirmed").catch(() => null);
+    let total = 0;
+    for (const a of (res?.value || [])) total += Number(a.account?.data?.parsed?.info?.tokenAmount?.uiAmount) || 0;
+    return total;
+  } catch { return 0; }
+}
+// Pending web-verify prompts so we can tidy them on success. key = `${chatId}:${userId}`.
+const webVerifyPending = new Map();
+function verifyPageUrl(token) { return `https://www.slimewire.org/verify?t=${encodeURIComponent(token)}`; }
+// Mute a new member + post the "Verify to chat" web button. Supersedes captcha.
+async function postWebVerifyGate(chatId, member, entry) {
+  const kinds = groupVerifyKinds(entry);
+  if (!kinds.length) return;
+  try { await telegram("restrictChatMember", { chat_id: chatId, user_id: member.id, permissions: ROSE_MUTE_PERMS }); } catch {}
+  const w = whalesConfig(entry);
+  const token = signVerifyToken({ chatId: String(chatId), userId: String(member.id), kinds, mint: w.mint || null, minHold: w.minHold || 0, symbol: w.symbol || "", nonce: crypto.randomBytes(12).toString("hex"), exp: Date.now() + 30 * 60 * 1000 });
+  const need = kinds.includes("whales") ? `hold ${w.minHold} $${escapeTelegramHtml(w.symbol || "token")}` : "verify you're human";
+  const sent = await telegram("sendMessage", { chat_id: chatId, parse_mode: "HTML",
+    reply_markup: { inline_keyboard: [[{ text: "🔓 Verify to chat", url: verifyPageUrl(token) }]] },
+    text: `🛡️ <a href="tg://user?id=${member.id}">${escapeTelegramHtml(member.first_name || "friend")}</a>, tap <b>Verify to chat</b> to ${need}. You're muted until you do.` }).catch(() => null);
+  const key = String(chatId) + ":" + String(member.id);
+  if (webVerifyPending.size > 1000) { const first = webVerifyPending.keys().next().value; webVerifyPending.delete(first); }
+  webVerifyPending.set(key, { promptMsgId: sent?.result?.message_id, at: Date.now() });
+}
+// Web page POST → verify a member (human/fingerprint and/or holdings) + unmute them.
+async function handleTgVerifySubmit(body = {}) {
+  const p = readVerifyToken(body.token);
+  if (!p || !p.chatId || !p.userId) return { ok: false, error: "This verification link expired — re-join to get a fresh one." };
+  const chatId = p.chatId, userId = p.userId;
+  const entry = await getGroupBotEntry(chatId).catch(() => null);
+  const kinds = Array.isArray(p.kinds) ? p.kinds : [];
+  const rec = { at: Date.now() };
+  if (kinds.includes("human")) {
+    const fp = String(body.fingerprint || "").slice(0, 128);
+    if (!fp) return { ok: false, error: "Couldn't read a device signature — enable JavaScript and retry." };
+    if (((entry && entry.bannedFps) || []).includes(fp)) return { ok: false, error: "This device is linked to a removed account." };
+    rec.fpHash = fp;
+  }
+  if (kinds.includes("whales")) {
+    const wallet = String(body.wallet || ""), sig = String(body.signature || "");
+    if (!wallet || !sig || !solanaPublicKeyLike(wallet)) return { ok: false, error: "Connect a Solana wallet and sign to prove ownership." };
+    const msg = `SlimeWire verification\nnonce: ${p.nonce}`;
+    let okSig = false;
+    try { okSig = nacl.sign.detached.verify(new TextEncoder().encode(msg), Buffer.from(sig, "base64"), bs58.decode(wallet)); } catch {}
+    if (!okSig) return { ok: false, error: "Signature didn't verify — try connecting again." };
+    if (!p.mint) return { ok: false, error: "This group hasn't set a token yet." };
+    const bal = await walletTokenUiBalance(wallet, p.mint);
+    if (bal < Number(p.minHold || 0)) return { ok: false, error: `You hold ${bal} $${p.symbol || "token"} — need ${p.minHold} to chat here.` };
+    rec.wallet = wallet; rec.balance = bal;
+  }
+  // Passed → record + unmute + tidy the prompt + welcome.
+  try {
+    const store = await readGroupBot(); const k = String(chatId); const e = store.groups[k] || defaultGroupBotEntry();
+    e.verified = e.verified || {}; e.verified[userId] = rec; store.groups[k] = e; await writeGroupBot(store);
+  } catch {}
+  try { await telegram("restrictChatMember", { chat_id: chatId, user_id: Number(userId), permissions: ROSE_UNMUTE_PERMS }); } catch {}
+  const pend = webVerifyPending.get(String(chatId) + ":" + String(userId));
+  if (pend?.promptMsgId) { try { await telegram("deleteMessage", { chat_id: chatId, message_id: pend.promptMsgId }); } catch {} }
+  webVerifyPending.delete(String(chatId) + ":" + String(userId));
+  const cfg = roseConfig(entry);
+  const tmpl = cfg.welcome || "👋 Welcome {mention}! You're verified — enjoy the swamp. ⚡ slimewire.org";
+  await sayHtml(chatId, roseFill(tmpl, { id: userId }, entry && entry.title ? { title: entry.title } : {}, null)).catch(() => {});
+  return { ok: true };
+}
+
+// --- Referral contests -------------------------------------------------------
+function referralInviteName(userId) { return "ref-" + String(userId); }
+async function referralGetOrCreateLink(chatId, userId) {
+  const entry = await getGroupBotEntry(chatId).catch(() => null);
+  const cfg = referralConfig(entry);
+  if (cfg.links[String(userId)]?.link) return cfg.links[String(userId)].link;
+  const res = await telegram("createChatInviteLink", { chat_id: chatId, name: referralInviteName(userId) }).catch(() => null);
+  const link = res?.result?.invite_link || res?.invite_link;
+  if (!link) return null;
+  await setGroupSub(chatId, "referral", { links: { ...cfg.links, [String(userId)]: { link, at: Date.now() } } });
+  return link;
+}
+// A member joined — credit the inviter whose named invite link they used.
+async function handleChatMemberUpdate(cm) {
+  const chatId = cm?.chat?.id; if (!chatId) return;
+  const newStatus = cm?.new_chat_member?.status || "", oldStatus = cm?.old_chat_member?.status || "";
+  if (newStatus !== "member" || ["member", "administrator", "creator", "restricted"].includes(oldStatus)) return; // only true new joins
+  const entry = await getGroupBotEntry(chatId).catch(() => null);
+  const cfg = referralConfig(entry);
+  if (!cfg.on) return;
+  const name = String(cm?.invite_link?.name || "");
+  const m = name.match(/^ref-(\d+)$/); if (!m) return;
+  const inviterId = m[1], joinerId = String(cm?.new_chat_member?.user?.id || "");
+  if (!joinerId || joinerId === inviterId) return;
+  if (cfg.credited[joinerId]) return; // count each joiner once
+  const counts = { ...cfg.counts, [inviterId]: (cfg.counts[inviterId] || 0) + 1 };
+  await setGroupSub(chatId, "referral", { counts, credited: { ...cfg.credited, [joinerId]: inviterId } });
+}
+function referralBoardText(cfg) {
+  const rows = Object.entries(cfg.counts || {}).sort((a, b) => b[1] - a[1]).slice(0, 15);
+  if (!rows.length) return "🎟️ <b>Referral leaderboard</b>\nNo referrals yet — grab your link with /reflink and share it!";
+  const lines = rows.map(([id, n], i) => `${["🥇", "🥈", "🥉"][i] || (i + 1) + "."} <a href="tg://user?id=${id}">inviter ${escapeTelegramHtml(id.slice(-4))}</a> — <b>${n}</b>`);
+  return `🎟️ <b>Referral leaderboard</b>${cfg.prize ? ` · 🏆 ${escapeTelegramHtml(cfg.prize)}` : ""}\n\n${lines.join("\n")}`;
+}
+// /referral start|stop|status (admin) + /reflink + /refboard (anyone). Returns true if handled.
+async function handleReferralCommand(message, userId) {
+  const chat = message?.chat; if (!chat || isPrivateChat(chat)) return false;
+  const chatId = chat.id;
+  const text = String(message.text || "").trim();
+  const mBoard = /^\/refboard(?:@\w+)?\b/i.test(text);
+  const mLink = /^\/reflink(?:@\w+)?\b/i.test(text);
+  const mRef = text.match(/^\/referral(?:@\w+)?(?:\s+(start|stop|status)(?:\s+([\s\S]+))?)?\s*$/i);
+  if (!mBoard && !mLink && !mRef) return false;
+  const entry = await getGroupBotEntry(chatId).catch(() => null);
+  const cfg = referralConfig(entry);
+  if (mBoard) { await sayHtml(chatId, referralBoardText(cfg)); return true; }
+  if (mLink) {
+    if (!cfg.on) { await say(chatId, "No referral contest is running. An admin can start one with /referral start."); return true; }
+    const link = await referralGetOrCreateLink(chatId, userId).catch(() => null);
+    if (!link) { await say(chatId, "Couldn't make your link — make sure I'm an admin with 'Invite users via link'."); return true; }
+    await sayHtml(chatId, `🎟️ <b>Your referral link</b>\n${escapeTelegramHtml(link)}\n\nShare it — every new member who joins with it counts for you. See standings with /refboard.`);
+    return true;
+  }
+  // /referral … (admin only)
+  const sub = (mRef[1] || "status").toLowerCase();
+  if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only admins can manage the referral contest."); return true; }
+  if (sub === "start") {
+    const prize = (mRef[2] || "").trim().slice(0, 100);
+    await setGroupSub(chatId, "referral", { on: true, startedAt: Date.now(), prize, counts: {}, links: {}, credited: {} });
+    await sayHtml(chatId, `🎟️ <b>Referral contest is LIVE!</b>${prize ? `\n🏆 Prize: ${escapeTelegramHtml(prize)}` : ""}\n\nEveryone: get your link with <b>/reflink</b> and invite people. Standings: <b>/refboard</b>.`);
+    return true;
+  }
+  if (sub === "stop") {
+    const rows = Object.entries(cfg.counts || {}).sort((a, b) => b[1] - a[1]);
+    await setGroupSub(chatId, "referral", { on: false });
+    const win = rows[0];
+    await sayHtml(chatId, win ? `🏁 <b>Referral contest ended!</b>\n🥇 Winner: <a href="tg://user?id=${win[0]}">top inviter</a> with <b>${win[1]}</b> referrals.${cfg.prize ? `\n🏆 ${escapeTelegramHtml(cfg.prize)}` : ""}` : "🏁 Referral contest ended — no referrals were recorded.");
+    return true;
+  }
+  await sayHtml(chatId, cfg.on ? `🎟️ Referral contest is <b>ON</b>.${cfg.prize ? ` Prize: ${escapeTelegramHtml(cfg.prize)}.` : ""} /refboard for standings.` : "Referral contest is off. Start one with <code>/referral start [prize]</code>.");
+  return true;
+}
+// When a verified user is banned, remember their device fingerprint so a ban-evading
+// alt that verifies with the same device is blocked at the portal.
+async function shieldRecordBannedFp(chatId, userId) {
+  try {
+    const store = await readGroupBot(); const k = String(chatId); const e = store.groups[k]; if (!e) return;
+    const fp = e.verified?.[String(userId)]?.fpHash; if (!fp) return;
+    e.bannedFps = Array.isArray(e.bannedFps) ? e.bannedFps : [];
+    if (!e.bannedFps.includes(fp)) { e.bannedFps.push(fp); if (e.bannedFps.length > 500) e.bannedFps = e.bannedFps.slice(-400); store.groups[k] = e; await writeGroupBot(store); }
+  } catch {}
+}
 // Route the "I'm human" captcha button (cap:v:<userId>). Returns true when handled.
 async function handleRoseCaptchaCallback(query, clickerId) {
   const data = String(query?.data || "");
@@ -29825,6 +30077,8 @@ async function handleGroupRose(message, userId) {
         await say(chatId, `🥸 Removed a join that mimics an admin's name.`).catch(() => {});
         continue;
       }
+      // Web verification (human/fingerprint and/or whales holdings) supersedes captcha.
+      if (groupNeedsWebVerify(entry)) { await postWebVerifyGate(chatId, m, entry).catch(() => {}); continue; }
       if (cfg.captcha) {
         try { await telegram("restrictChatMember", { chat_id: chatId, user_id: m.id, permissions: ROSE_MUTE_PERMS }); } catch {}
         const mk = { inline_keyboard: [[{ text: "✅ I'm human — tap to verify", callback_data: "cap:v:" + m.id }]] };
@@ -30005,7 +30259,7 @@ async function handleGroupRose(message, userId) {
     else if (name === "tmute") { if (!durMs) { await say(chatId, "Usage: reply + /tmute 30m (or 2h / 1d)."); return true; } await telegram("restrictChatMember", { chat_id: chatId, user_id: tId, permissions: ROSE_MUTE_PERMS, until_date: Math.floor((Date.now() + durMs) / 1000) }); await say(chatId, `🔇 Muted ${tName} for ${roseHumanDuration(durMs)}.`); }
     else if (name === "unmute") { await telegram("restrictChatMember", { chat_id: chatId, user_id: tId, permissions: ROSE_UNMUTE_PERMS }); await say(chatId, `🔊 Unmuted ${tName}.`); }
     else if (name === "kick") { await telegram("banChatMember", { chat_id: chatId, user_id: tId }); await telegram("unbanChatMember", { chat_id: chatId, user_id: tId }).catch(() => {}); await say(chatId, `👢 Kicked ${tName}.`); }
-    else if (name === "ban") { await telegram("banChatMember", { chat_id: chatId, user_id: tId }); await say(chatId, `🔨 Banned ${tName}.`); }
+    else if (name === "ban") { await telegram("banChatMember", { chat_id: chatId, user_id: tId }); void shieldRecordBannedFp(chatId, tId); await say(chatId, `🔨 Banned ${tName}.`); }
     else if (name === "tban") { if (!durMs) { await say(chatId, "Usage: reply + /tban 1d (or 2h / 1w)."); return true; } await telegram("banChatMember", { chat_id: chatId, user_id: tId, until_date: Math.floor((Date.now() + durMs) / 1000) }); await say(chatId, `🔨 Banned ${tName} for ${roseHumanDuration(durMs)}.`); }
     else if (name === "unban") { await telegram("unbanChatMember", { chat_id: chatId, user_id: tId, only_if_banned: true }); await say(chatId, `Unbanned ${tName}.`); }
   } catch (e) {

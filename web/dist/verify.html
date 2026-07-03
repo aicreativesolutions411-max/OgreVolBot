@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta http-equiv="Cache-Control" content="no-store">
+<title>SlimeWire — Verify to Chat</title>
+<link rel="icon" type="image/png" href="/assets/slimewire/png/slimewire-mark.png?v=logo4">
+<style>
+  :root{ --bg:#050705; --panel:#0a0f0b; --green:#72ff23; --green2:#bbff63; --red:#ff5d5d;
+    --text:#eafff0; --muted:#86a181; --border:rgba(137,255,67,.18); --mono:ui-monospace,Menlo,Consolas,monospace; }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:radial-gradient(900px 500px at 80% -10%,rgba(114,255,35,.08),transparent 60%),var(--bg);
+    color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    display:flex;align-items:center;justify-content:center;padding:20px;min-height:100dvh}
+  .card{width:100%;max-width:420px;background:linear-gradient(180deg,#0c130d,#080b08);
+    border:1px solid var(--border);border-radius:18px;padding:26px 22px;box-shadow:0 0 40px rgba(114,255,35,.1)}
+  .brand{display:flex;align-items:center;gap:10px;margin-bottom:18px}
+  .brand img{width:30px;height:30px;border-radius:8px;filter:drop-shadow(0 0 8px rgba(114,255,35,.5))}
+  .brand b{font-size:15px;letter-spacing:.14em;color:var(--green);font-weight:800}
+  h1{font-size:19px;margin:0 0 6px}
+  p{color:var(--muted);font-size:13.5px;line-height:1.5;margin:0 0 16px}
+  .step{border:1px solid var(--border);border-radius:12px;padding:14px;margin:12px 0;background:rgba(137,255,67,.03)}
+  .step h3{margin:0 0 4px;font-size:14px;display:flex;align-items:center;gap:8px}
+  .step .s{color:var(--muted);font-size:12.5px}
+  .ok{color:var(--green2)} .bad{color:var(--red)}
+  button{width:100%;margin-top:10px;height:46px;border:none;border-radius:11px;font-weight:800;font-size:14px;
+    background:linear-gradient(180deg,#a6ff5e,var(--green));color:#06140a;cursor:pointer}
+  button:disabled{opacity:.5;cursor:default}
+  button.sec{background:transparent;color:var(--text);border:1px solid var(--border)}
+  .msg{margin-top:14px;font-size:13.5px;text-align:center;min-height:20px}
+  .done{text-align:center;padding:14px 0}
+  .done .big{font-size:42px}
+  .mut{color:var(--muted);font-size:12px;text-align:center;margin-top:16px}
+  code{font-family:var(--mono);color:var(--green2)}
+</style>
+</head>
+<body>
+<div class="card" id="card">
+  <div class="brand"><img src="/assets/slimewire/png/slimewire-mark.png?v=logo4" alt=""><b>SLIMEWIRE</b></div>
+  <div id="body"><p>Loading…</p></div>
+  <div class="mut">Read-only verification. SlimeWire never moves your funds or asks for your seed phrase.</div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const params = new URL(location.href).searchParams;
+const token = params.get("t") || "";
+function decodeToken(t){ try{ const b=t.split(".")[0]; return JSON.parse(atob(b.replace(/-/g,"+").replace(/_/g,"/"))); }catch{ return null; } }
+const payload = decodeToken(token);
+const state = { human:false, humanNeeded:false, whalesNeeded:false, wallet:null, signature:null, fingerprint:null };
+
+async function fingerprint(){
+  try{
+    const c=document.createElement("canvas"); const ctx=c.getContext("2d");
+    ctx.textBaseline="top"; ctx.font="14px Arial"; ctx.fillStyle="#0f0"; ctx.fillText("SlimeWire\u{1F438}",2,2);
+    const canvasData=c.toDataURL();
+    const parts=[navigator.userAgent,navigator.language,(navigator.languages||[]).join(","),
+      Intl.DateTimeFormat().resolvedOptions().timeZone, screen.width+"x"+screen.height+"x"+screen.colorDepth,
+      navigator.hardwareConcurrency||0, navigator.platform||"", canvasData].join("|");
+    const buf=await crypto.subtle.digest("SHA-256", new TextEncoder().encode(parts));
+    return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("").slice(0,32);
+  }catch{ return "fp-"+Math.abs((navigator.userAgent||"").split("").reduce((a,c)=>a*31+c.charCodeAt(0)|0,7)).toString(16); }
+}
+async function connectAndSign(nonce){
+  const p = window.solana || window.solflare;
+  if(!p) throw new Error("No Solana wallet found — open this link inside Phantom or Solflare.");
+  await p.connect();
+  const wallet = p.publicKey.toString();
+  const msg = "SlimeWire verification\nnonce: " + nonce;
+  const res = await p.signMessage(new TextEncoder().encode(msg), "utf8");
+  const sigBytes = res.signature || res;
+  let bin=""; for(const b of new Uint8Array(sigBytes)) bin+=String.fromCharCode(b);
+  return { wallet, signature: btoa(bin) };
+}
+function render(){
+  const kinds = (payload && payload.kinds) || [];
+  state.humanNeeded = kinds.includes("human");
+  state.whalesNeeded = kinds.includes("whales");
+  let html = "<h1>Verify to chat</h1><p>Finish the step(s) below to unlock chatting in the group.</p>";
+  if(state.humanNeeded){
+    html += `<div class="step"><h3>🌐 Human check ${state.human?'<span class="ok">✓</span>':''}</h3>
+      <div class="s">Confirm you're a real person.</div>
+      <button id="btnHuman" ${state.human?'disabled':''}>${state.human?'Verified':"I'm human"}</button></div>`;
+  }
+  if(state.whalesNeeded){
+    const min = payload.minHold||0, sym = payload.symbol||"token";
+    html += `<div class="step"><h3>🐋 Holder check ${state.wallet?'<span class="ok">✓</span>':''}</h3>
+      <div class="s">Hold at least <code>${min}</code> $${sym}. Connect your wallet and sign (read-only — no transaction).</div>
+      <button id="btnWallet" ${state.wallet?'disabled':''}>${state.wallet?('Connected '+state.wallet.slice(0,4)+'…'+state.wallet.slice(-4)):'Connect wallet & sign'}</button></div>`;
+  }
+  const ready = (!state.humanNeeded || state.human) && (!state.whalesNeeded || (state.wallet && state.signature));
+  html += `<button id="btnSubmit" ${ready?'':'disabled'}>🔓 Complete verification</button><div class="msg" id="msg"></div>`;
+  $("body").innerHTML = html;
+  if($("btnHuman")) $("btnHuman").onclick = async ()=>{ $("btnHuman").disabled=true; state.fingerprint=await fingerprint(); state.human=true; render(); };
+  if($("btnWallet")) $("btnWallet").onclick = async ()=>{
+    try{ $("btnWallet").disabled=true; const r=await connectAndSign(payload.nonce); state.wallet=r.wallet; state.signature=r.signature; render(); }
+    catch(e){ $("msg").innerHTML='<span class="bad">'+(e.message||"Wallet error")+'</span>'; state.wallet=null; render(); }
+  };
+  if($("btnSubmit")) $("btnSubmit").onclick = submit;
+}
+async function submit(){
+  const btn=$("btnSubmit"); btn.disabled=true; $("msg").textContent="Verifying…";
+  if(state.humanNeeded && !state.fingerprint) state.fingerprint = await fingerprint();
+  try{
+    const r = await fetch("/api/tg/verify/submit", { method:"POST", headers:{"content-type":"application/json"},
+      body: JSON.stringify({ token, fingerprint: state.fingerprint||"", wallet: state.wallet||"", signature: state.signature||"" }) });
+    const j = await r.json();
+    if(j.ok){ $("body").innerHTML = '<div class="done"><div class="big">✅</div><h1>You\'re verified!</h1><p>Head back to the group — you can chat now.</p></div>'; }
+    else { $("msg").innerHTML='<span class="bad">'+(j.error||"Verification failed")+'</span>'; btn.disabled=false; }
+  }catch(e){ $("msg").innerHTML='<span class="bad">Network error — try again.</span>'; btn.disabled=false; }
+}
+if(!token || !payload){ $("body").innerHTML='<h1>Invalid link</h1><p>This verification link is missing or expired. Re-join the group to get a fresh one.</p>'; }
+else render();
+</script>
+</body>
+</html>

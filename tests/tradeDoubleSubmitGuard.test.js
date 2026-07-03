@@ -792,7 +792,7 @@ test("settings menu is multi-level: home -> per-bot sub-menus, clickable toggles
   assert.match(serverSource, /function groupBotModuleView\(/);
   assert.match(serverSource, /async function groupBotRenderModule\(/);
   const cb = functionBody(serverSource, "handleGroupBotCallback");
-  assert.match(cb, /gb:m:\(buy\|raid\|rose\|scan\)/);   // open a module sub-menu
+  assert.match(cb, /gb:m:\(buy\|raid\|rose\|scan/);   // open a module sub-menu
   assert.match(cb, /gb:tog:/);                          // flip a rose/shield boolean
   assert.match(cb, /gb:in:/);                           // typed-input settings
   assert.match(cb, /gb:media:\(buy\|raid\)/);           // media hint
@@ -822,4 +822,61 @@ test("raid has its OWN media, separate from buy art", () => {
   assert.match(serverSource, /e\.raidMedia = media/);
   // startRaidFromDraft prefers raidMedia, falls back to customMedia.
   assert.match(functionBody(serverSource, "startRaidFromDraft"), /ge\.raidMedia[\s\S]*ge\.customMedia/);
+});
+
+// ---- Whales mode + Web verification portal + Referral contests (phase 2) ----
+const verifyHtml = fs.readFileSync(new URL("../web/public/verify.html", import.meta.url), "utf8");
+
+test("verify portal: signed token + holdings check + submit route (read-only, no fund movement)", () => {
+  assert.match(serverSource, /function signVerifyToken\(/);
+  assert.match(serverSource, /function readVerifyToken\(/);
+  assert.match(functionBody(serverSource, "signVerifyToken"), /createHmac\("sha256", verifySecret\(\)\)/);
+  assert.match(serverSource, /async function walletTokenUiBalance\(/);
+  assert.match(serverSource, /async function handleTgVerifySubmit\(/);
+  const sub = functionBody(serverSource, "handleTgVerifySubmit");
+  assert.match(sub, /nacl\.sign\.detached\.verify/);          // wallet ownership proof
+  assert.match(sub, /walletTokenUiBalance/);                  // holdings gate
+  assert.match(sub, /restrictChatMember.*ROSE_UNMUTE_PERMS/); // unmute on success
+  assert.doesNotMatch(sub, /sendTransaction|signTransaction|buyToken|sellToken/); // never moves funds
+  // routes
+  assert.match(serverSource, /requestUrl\.pathname === "\/verify"/);
+  assert.match(serverSource, /requestUrl\.pathname === "\/api\/tg\/verify\/submit"/);
+  // page posts to the endpoint + signs a message (not a tx)
+  assert.match(verifyHtml, /\/api\/tg\/verify\/submit/);
+  assert.match(verifyHtml, /signMessage/);
+  assert.doesNotMatch(verifyHtml, /signTransaction|sendTransaction/);
+});
+
+test("whales / web verify gate new members (mute until verified)", () => {
+  assert.match(serverSource, /function whalesConfig\(/);
+  assert.match(serverSource, /function webverifyConfig\(/);
+  assert.match(serverSource, /function groupNeedsWebVerify\(/);
+  assert.match(serverSource, /async function postWebVerifyGate\(/);
+  assert.match(functionBody(serverSource, "postWebVerifyGate"), /restrictChatMember.*ROSE_MUTE_PERMS/);
+  // gate is wired into the join loop
+  assert.match(functionBody(serverSource, "handleGroupRose"), /groupNeedsWebVerify\(entry\)/);
+  // banned-fingerprint alt block
+  assert.match(functionBody(serverSource, "handleTgVerifySubmit"), /bannedFps/);
+  assert.match(serverSource, /async function shieldRecordBannedFp\(/);
+});
+
+test("referral contests: unique invite links + join attribution + leaderboard", () => {
+  assert.match(serverSource, /async function handleReferralCommand\(/);
+  assert.match(serverSource, /async function handleChatMemberUpdate\(/);
+  assert.match(serverSource, /createChatInviteLink/);
+  assert.match(functionBody(serverSource, "handleChatMemberUpdate"), /\^ref-\d\+\$|ref-/); // parse ref-<id> link name
+  // chat_member updates enabled (both webhook + polling) + dispatched
+  assert.match(serverSource, /allowed_updates:.*"chat_member"/);
+  assert.match(serverSource, /if \(update\.chat_member\)/);
+  // commands wired
+  assert.match(serverSource, /handleReferralCommand\(message, userId\)/);
+});
+
+test("phase-2 menu: Referral tile + whales/web-verify toggles routed", () => {
+  const cb = functionBody(serverSource, "handleGroupBotCallback");
+  assert.match(cb, /gb:m:\(buy\|raid\|rose\|scan\|ref\)/);
+  assert.match(cb, /gb:wv:web/);
+  assert.match(cb, /gb:wv:whales/);
+  assert.match(cb, /gb:ref:start/);
+  assert.match(cb, /gb:ref:stop/);
 });
