@@ -1123,3 +1123,27 @@ test("Alpha Radar scan tool: network read + runner shape, edits in place, honest
   assert.match(serverSource, /callback_data: `scan:alpha:\$\{mint\}`/);
   assert.match(serverSource, /action === "alpha"\) \{\s*\n\s*await handleScanAlphaRadar/);
 });
+
+// ---- Proactive Alpha Radar: long-horizon alerts on network-backed runners (opt-in, read-only) ----
+test("Alpha Radar poller watches network-backed coins, alerts only on a held multi-hour climb", () => {
+  const poll = functionBody(serverSource, "pollAlphaRadar");
+  assert.match(poll, /if \(!targets\.any\) \{ alphaRadarWatch\.clear\(\); return; \}/); // no listeners → don't burn APIs
+  assert.match(poll, /computeNetworkBacking\(mint\)/);
+  assert.match(poll, /net\.backed && net\.score >= 45/);            // only watch actual network-backed coins
+  assert.match(poll, /ageMin >= 45 && nearPeak && net\.backed/);     // long-horizon + holding + still backed
+  assert.match(poll, /w\.stages\.has\(stage\)/);                     // staged de-dupe (+40% / 2x / 5x)
+  const bc = functionBody(serverSource, "alphaRadarBroadcast");
+  assert.match(bc, /targets\.groups/);
+  assert.match(bc, /targets\.dms/);
+  assert.doesNotMatch(bc, /buyToken|sellToken|sendTransaction/);     // ALERT only, never trades
+  assert.match(serverSource, /setInterval\(\(\) => \{ void pollAlphaRadar\(\); \}, 60_000\)/);
+});
+test("/alpharadar toggles per-group (admin) + DM opt-in", () => {
+  const cmd = functionBody(serverSource, "handleAlphaRadarCommand");
+  assert.match(cmd, /setAlphaRadarDmSub\(userId, on\)/);            // DM subscription
+  assert.match(cmd, /roseAdminIdentity\(chatId\)/);                  // group admin gate
+  assert.match(cmd, /setGroupBotFeature\(chatId, "alphaRadar", on\)/);
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["alpharadar", "alpha_radar", "alphascan"\]\)/);
+  // targets = opted-in groups (feature toggle) + DM subscribers
+  assert.match(functionBody(serverSource, "alphaRadarTargets"), /groupBotFeatureOn\(e, "alphaRadar"\)/);
+});

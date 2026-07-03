@@ -12558,6 +12558,11 @@ async function handleMessage(message, userId) {
     await handleGroupRepCommand(chatId, message);
     return;
   }
+  // /alpharadar on|off — network-backed long-term-runner alerts (group admin toggle, or DM opt-in).
+  {
+    const ar = parseCommandWithArgument(text, ["alpharadar", "alpha_radar", "alphascan"]);
+    if (ar) { await handleAlphaRadarCommand(chatId, message, ar.argument, userId); return; }
+  }
 
   if (text === "/withdraw" || text === "/sweep") {
     if (!isPrivateChat(message.chat)) {
@@ -28692,6 +28697,141 @@ async function handleScanAlphaRadar(chatId, mint, messageId = null, isPhoto = fa
   else await sayHtml(chatId, body, kb);
 }
 
+// ---- PROACTIVE ALPHA RADAR — watch network-backed coins over a LONG horizon and ping when one
+// confirms a sustained climb ("it's becoming obvious"). Opt-in: groups toggle with /alpharadar on
+// (admin), users DM /alpharadar on. Autopilot stays off — this only ALERTS, never trades. ----
+const alphaRadarWatch = new Map();     // mint -> { firstAt, firstMc, peakMc, lastMc, lastAt, sym, stages:Set }
+const ALPHA_WATCH_MAX = 60;
+function alphaRadarSubsPath() { return path.join(CONFIG.dataDir, "alpha-radar-subs.json"); }
+let alphaRadarSubsCache = null;
+async function readAlphaRadarSubs() {
+  if (alphaRadarSubsCache) return alphaRadarSubsCache;
+  let s = null; try { s = await readJson(alphaRadarSubsPath()); } catch { s = null; }
+  if (!s || typeof s !== "object") s = {};
+  if (!Array.isArray(s.dm)) s.dm = [];
+  alphaRadarSubsCache = s; return s;
+}
+async function setAlphaRadarDmSub(userId, on) {
+  const s = await readAlphaRadarSubs();
+  const set = new Set((s.dm || []).map(String));
+  if (on) set.add(String(userId)); else set.delete(String(userId));
+  s.dm = [...set];
+  try { await writeJsonFile(alphaRadarSubsPath(), s); } catch {}
+  return on;
+}
+// All chats that will receive an alert: opted-in groups (per-group alphaRadar toggle) + DM subs.
+async function alphaRadarTargets() {
+  const groups = [], dms = [];
+  try { const store = await readGroupBot(); for (const [chatId, e] of Object.entries(store.groups || {})) if (groupBotFeatureOn(e, "alphaRadar")) groups.push(chatId); } catch {}
+  try { const subs = await readAlphaRadarSubs(); for (const uid of (subs.dm || [])) dms.push(String(uid)); } catch {}
+  return { groups, dms, any: groups.length + dms.length > 0 };
+}
+async function alphaRadarFetchMc(mint) {
+  try {
+    const j = await fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeoutMs: 6000 }).catch(() => null);
+    const p = ((j && j.pairs) || []).slice().sort((a, b) => Number(b.liquidity?.usd || 0) - Number(a.liquidity?.usd || 0))[0];
+    if (p) return { mc: Number(p.marketCap || p.fdv) || 0, sym: p.baseToken?.symbol || "", liq: Number(p.liquidity?.usd || 0) };
+  } catch {}
+  try {
+    const j = await fetchJson(`https://frontend-api-v3.pump.fun/coins/${mint}`, { timeoutMs: 6000, headers: { "User-Agent": "Mozilla/5.0", accept: "application/json" } }).catch(() => null);
+    if (j) return { mc: Number(j.usd_market_cap || j.market_cap) || 0, sym: j.symbol || "", liq: 0 };
+  } catch {}
+  return null;
+}
+let _alphaRadarPolling = false;
+async function pollAlphaRadar() {
+  if (_alphaRadarPolling) return;
+  _alphaRadarPolling = true;
+  try {
+    const targets = await alphaRadarTargets();
+    if (!targets.any) { alphaRadarWatch.clear(); return; }   // nobody listening → don't burn the free APIs
+    const now = Date.now();
+    // 1) Add newly-tracked, network-backed coins to the watchlist (from the observatory).
+    const seen = new Set();
+    try { for (const m of insiderLaunches.keys()) seen.add(m); } catch {}
+    try { for (const m of obsCoins.keys()) seen.add(m); } catch {}
+    try { for (const m of earlyBuyers.keys()) seen.add(m); } catch {}
+    for (const mint of seen) {
+      if (alphaRadarWatch.has(mint) || alphaRadarWatch.size >= ALPHA_WATCH_MAX) continue;
+      const net = computeNetworkBacking(mint);
+      if (net.backed && net.score >= 45) alphaRadarWatch.set(mint, { firstAt: now, firstMc: 0, peakMc: 0, lastMc: 0, lastAt: 0, sym: "", stages: new Set() });
+    }
+    // 2) Poll a small rotating batch for live MC + evaluate the long-horizon runner confirmation.
+    const batch = [...alphaRadarWatch.keys()].slice(0, 6);
+    for (const mint of batch) {
+      const w = alphaRadarWatch.get(mint); if (!w) continue;
+      if (now - w.firstAt > 48 * 3600_000) { alphaRadarWatch.delete(mint); continue; }   // give a runner up to 2 days
+      const live = await alphaRadarFetchMc(mint);
+      if (live && live.mc > 0) {
+        if (!w.firstMc) w.firstMc = live.mc;
+        if (live.mc > w.peakMc) w.peakMc = live.mc;
+        w.lastMc = live.mc; w.lastAt = now; if (live.sym) w.sym = live.sym;
+        const ageMin = (now - w.firstAt) / 60000;
+        const gain = w.firstMc > 0 ? live.mc / w.firstMc : 1;
+        const nearPeak = w.peakMc > 0 ? live.mc >= w.peakMc * 0.8 : false;   // holding near highs, not dumped
+        const net = computeNetworkBacking(mint);
+        // Long-horizon: needs to be ≥45min in, a real multi-hour move, still holding, network still present.
+        const stage = gain >= 5 ? "5x" : gain >= 2 ? "2x" : gain >= 1.4 ? "+40%" : null;
+        if (stage && !w.stages.has(stage) && ageMin >= 45 && nearPeak && net.backed) {
+          w.stages.add(stage);
+          await alphaRadarBroadcast(mint, w, live, net, stage, targets);
+        }
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    // rotate the polled batch to the back (Map keeps insertion order) so coverage cycles
+    for (const mint of batch) { const w = alphaRadarWatch.get(mint); if (w) { alphaRadarWatch.delete(mint); alphaRadarWatch.set(mint, w); } }
+  } catch (e) { console.warn(`[alpha-radar] ${e && e.message}`); }
+  finally { _alphaRadarPolling = false; }
+}
+async function alphaRadarBroadcast(mint, w, live, net, stage, targets) {
+  const sym = w.sym || shortMint(mint);
+  const gainPct = w.firstMc > 0 ? Math.round((live.mc / w.firstMc - 1) * 100) : 0;
+  const ageH = (Date.now() - w.firstAt) / 3600000;
+  const bits = [];
+  if (net.winners > 0) bits.push(`${net.winners} proven-winner wallet${net.winners > 1 ? "s" : ""}`);
+  if (net.kol) bits.push("a tracked KOL");
+  if (net.operator) bits.push("a known operator");
+  if (net.coordinated >= 0.33) bits.push("coordinated funding");
+  const text = [
+    `🕵️ <b>Alpha Radar — $${escapeTelegramHtml(sym)} is running</b>`,
+    `📈 <b>+${gainPct}%</b> since flagged (<b>${stage}</b>) · now ${scanFmtMoney(live.mc)} · ${ageH < 24 ? Math.round(ageH) + "h" : Math.round(ageH / 24) + "d"} in`,
+    bits.length ? `🕸 Network behind it: ${bits.join(" · ")}` : "",
+    `<i>Network-backed and holding near highs — a runner, not a spent pop. Hold-for-days setup.</i>`,
+    `⚡ <a href="https://www.slimewire.org/t?ca=${mint}">Trade $${escapeTelegramHtml(sym)} on SlimeWire</a>`
+  ].filter(Boolean).join("\n");
+  const kb = slimeScanKeyboard(mint);
+  for (const chatId of targets.groups) await sayHtml(chatId, text, kb).catch(() => {});
+  for (const uid of targets.dms) await sayHtml(uid, text, kb).catch(() => {});
+  console.log(`[alpha-radar] alert ${sym} ${stage} +${gainPct}% → ${targets.groups.length}g/${targets.dms.length}dm`);
+}
+async function handleAlphaRadarCommand(chatId, message, argument, userId) {
+  const arg = String(argument || "").trim().toLowerCase();
+  const dm = isPrivateChat(message.chat);
+  if (arg !== "on" && arg !== "off") {
+    let status = "";
+    if (dm) { const s = await readAlphaRadarSubs(); status = new Set((s.dm || []).map(String)).has(String(userId)) ? "ON" : "OFF"; }
+    else { const e = (await readGroupBot()).groups[String(chatId)]; status = groupBotFeatureOn(e, "alphaRadar") ? "ON" : "OFF"; }
+    await sayHtml(chatId, [
+      `🕵️ <b>Alpha Radar</b> — currently <b>${status}</b> here.`,
+      dm ? "DM alerts: <code>/alpharadar on</code> · <code>/alpharadar off</code>" : "Admins: <code>/alpharadar on</code> · <code>/alpharadar off</code>",
+      "",
+      "<i>Pings you when a coin a big network is backing (proven winners / known operator / coordinated funding) confirms a sustained climb — the hold-for-days runners, not fast pops.</i>"
+    ].join("\n"));
+    return;
+  }
+  const on = arg === "on";
+  if (dm) {
+    await setAlphaRadarDmSub(userId, on);
+    await sayHtml(chatId, on ? "🕵️ <b>Alpha Radar ON</b> — I'll DM you when a network-backed runner confirms." : "Alpha Radar DM alerts off.");
+  } else {
+    const isAdmin = (await roseAdminIdentity(chatId).catch(() => null))?.ids?.has(String(userId));
+    if (!isAdmin) { await say(chatId, "Only group admins can toggle Alpha Radar."); return; }
+    await setGroupBotFeature(chatId, "alphaRadar", on);
+    await sayHtml(chatId, on ? "🕵️ <b>Alpha Radar ON</b> for this group — I'll post when a network-backed runner confirms a sustained climb." : "Alpha Radar off for this group.");
+  }
+}
+
 // Caller footer for the scan card: who FIRST called this CA in this channel, when, and how
 // it's done since the call (live X / %, plus peak). Also refreshes the call's last/peak MC so
 // the caller-intel warehouse stays current on every look/refresh. Channel-only (no record in
@@ -30354,6 +30494,7 @@ function startGroupBuyBot() {
   setInterval(() => { void pollGroupBuyBots(); }, 25_000); // DexScreener aggregate (secondary fallback)
   setInterval(() => { void refreshRaidTgCards(); }, 50_000); // Raidar-style: edit live raid cards as likes/RTs/replies climb (free, fxtwitter)
   setInterval(() => { void pollTrackedWallets(); }, 30_000); // Cielo-style smart-money wallet alerts
+  setInterval(() => { void pollAlphaRadar(); }, 60_000);     // network-backed long-term-runner alerts (opt-in)
 }
 
 // ============================================================================
