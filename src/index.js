@@ -11485,6 +11485,14 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("rd:")) {
     if (await handleRaidSetupCallback(query, userId).catch(() => false)) return;
   }
+  // Rose captcha "I'm human" button (cap:*) — verifies a muted new member.
+  if (String(query.data || "").startsWith("cap:")) {
+    if (await handleRoseCaptchaCallback(query, userId).catch(() => false)) return;
+  }
+  // Raid refresh button (rr:*) — force an engagement re-pull now.
+  if (String(query.data || "").startsWith("rr:")) {
+    if (await handleRaidRefreshCallback(query, userId).catch(() => false)) return;
+  }
 
   if (ADMIN_ACTIONS.has(query.data) && !isAdmin(userId)) {
     await say(chatId, "Only bot admins can use that control.");
@@ -28598,7 +28606,7 @@ const GROUP_BOT_FILE = path.join(CONFIG.dataDir, "group-bot.json");
 const GROUP_BOT_FEATURES = [
   { key: "buybot", label: "Buy Bot", emoji: "🟢", desc: "auto-grabs the CA + posts EVERY buy (set a floor with /minbuy) with a Quick-Buy link to the coin on SlimeWire" },
   { key: "raid", label: "Raid Bot", emoji: "⚔️", desc: "X-raid posts with live progress + a SlimeWire link" },
-  { key: "rose", label: "Rose Manager", emoji: "🛡️", desc: "welcome, rules, anti-links, warn / mute / kick / ban (reply to a user)" },
+  { key: "rose", label: "Rose Manager", emoji: "🛡️", desc: "captcha verify, welcome/goodbye + fillings, rules, notes, filters, anti-links, antiflood, warn / mute / tmute / kick / ban, report / purge / pin" },
   { key: "scan", label: "Scan Bot", emoji: "🔍", desc: "paste a CA → instant SlimeShield scan card" }
 ];
 let groupBotCache = null;
@@ -28673,18 +28681,28 @@ function groupBotHelpText() {
     "• <code>/settings</code> — open the on/off panel",
     "• <code>/buybot on</code> · <code>/raid on</code> · <code>/scan on</code> · <code>/rose on</code> — turn a part on (or <code>off</code>)",
     "",
-    "🟢 <b>Buy Bot</b> — posts every buy of your coin (price, MC, bonding %, DEX-paid, links)",
+    "🟢 <b>Buy Bot</b> — posts every buy with a <b>whale-tier badge</b> (🦐🐟🐬🐋🔱), 🌟 new-holder flag, bonding %, MC·Liq·Vol, DEX-paid + Quick-Buy",
     "• <code>/track &lt;CA&gt;</code> — set the coin to watch (or just paste a CA once)",
     "• <code>/minbuy &lt;SOL&gt;</code> — only show buys ≥ that size (0 = show all)",
     "• <code>/setbuyemoji 🐸 0.1</code> — pick the emoji + how many show per buy (one per 0.1 SOL here)",
     "",
-    "⚔️ <b>Raid Bot</b> — <code>/raid &lt;X post link&gt;</code> → opens a <b>setup menu</b> (tap to set likes/RT/reply/bookmark goals + a duration, then 🚀 Start). The card then updates itself live (🟥→🟨→🟩 per goal), shows <b>RAID SMASHED</b> 🔥 or <b>Raid Ended</b> on the timer. Set your own image/video with <code>/setmedia</code>.",
+    "⚔️ <b>Raid Bot</b> — <code>/raid &lt;X post link&gt;</code> → <b>setup menu</b> (tap likes/RT/reply/bookmark goals + duration, then 🚀 Start). Live card with <b>per-goal progress bars</b> (▰▰▱), overall %, 👀 views, countdown, a 🔄 Refresh button, and <b>RAID SMASHED</b> 🔥 / <b>Raid Ended</b>.",
     "🔍 <b>Scan Bot</b> — paste any CA → instant scan card with Quick-Buy",
     "",
     "🎨 <b>Customize the look</b> (buy + raid posts)",
     "• <code>/setmedia</code> — reply to a photo/video, or <code>/setmedia &lt;image-url&gt;</code> (default = the coin's own image from Dex, Pump fallback; <code>/setmedia off</code> to reset)",
     "• <code>/setmessage &lt;text&gt;</code> — a custom header line (<code>off</code> to clear)",
-    "🛡️ <b>Rose</b> — <code>/rules</code> <code>/setrules</code> <code>/welcome</code> <code>/antilinks</code> · reply to a user + <code>/warn</code> <code>/mute</code> <code>/kick</code> <code>/ban</code>",
+    "",
+    "🛡️ <b>Rose Manager</b> — full group moderation",
+    "• <b>Verify:</b> <code>/captcha on</code> (mute new members until they tap ✅), <code>/cleanservice on</code>",
+    "• <b>Welcome:</b> <code>/setwelcome</code> / <code>/setgoodbye</code> — fillings <code>{mention} {first} {username} {count} {chatname}</code>",
+    "• <b>Rules:</b> <code>/setrules</code> · read with <code>/rules</code>",
+    "• <b>Warns:</b> reply + <code>/warn</code>, <code>/setwarnlimit 3</code>, <code>/setwarnmode mute|kick|ban</code>, <code>/warnings</code>, <code>/resetwarns</code>",
+    "• <b>Mod:</b> reply + <code>/mute</code> <code>/tmute 30m</code> <code>/unmute</code> <code>/kick</code> <code>/ban</code> <code>/tban 1d</code> <code>/unban</code>",
+    "• <b>Notes:</b> <code>/save name text</code> → fetch with <code>#name</code> · <code>/notes</code> <code>/clear name</code>",
+    "• <b>Filters:</b> <code>/filter word reply</code> (auto-reply) · <code>/filters</code> <code>/stop word</code>",
+    "• <b>Anti-spam:</b> <code>/antilinks on</code>, <code>/antiflood 7</code>",
+    "• <b>Tools:</b> <code>/report</code> (ping admins), reply + <code>/purge</code> <code>/del</code> <code>/pin</code> <code>/unpin</code>",
     "",
     "Everything's off until an admin turns it on. Trade any coin at <a href=\"https://www.slimewire.org\">slimewire.org</a> ⚡"
   ].join("\n");
@@ -28828,6 +28846,7 @@ async function handleGroupBotCallback(query, userId) {
 // buys roll in, with a Quick-Buy button straight to the coin on SlimeWire + a slimewire.org link.
 function groupBuyQuickBuyUrl(mint) { return `https://slimewire.org/t?ca=${encodeURIComponent(mint)}`; }
 const groupBuyLastAlertAt = new Map(); // mint -> ts (shared so the socket + the poll fallback never double-alert)
+const groupBuyHolders = new Map();     // mint -> Set(trader) so the buy card can flag "🌟 New holder" vs "➕ added" (SpyDefi-style)
 // Buttons under a buy card: Chart · Buy · Vote (the reference's clickable row), then a socials row
 // (TG / X / Web) built from the coin's real metadata when present.
 const groupBuyMarkup = (mint, socials = {}) => {
@@ -28915,13 +28934,31 @@ async function postGroupBuy(mint, { solAmount = 0, usdAmount = 0, tokens = 0, pr
     if (perBuy && min > 0 && solAmount < min) continue; // admin min-buy filter (per-buy only)
     let lines;
     if (perBuy) {
-      // @MajorBuyBot-style card: NEW header, attribution, customizable emoji bar (one per N SOL),
-      // bonding gauge, spent/got(+Tx)/price(+24h)/MC, buyer(+wallet link), DEX-paid badge.
+      // SpyDefi-style card: NEW header + WHALE-TIER badge, attribution, customizable emoji bar
+      // (one per N SOL), bonding gauge, spent/got(+Tx)/price(+24h)/MC·Liq·Vol, buyer + NEW-HOLDER
+      // flag (+wallet link), DEX-paid badge.
       const emoji = (e.buyEmoji && String(e.buyEmoji).slice(0, 8)) || "🟢";
       const step = Number(e.buyEmojiStep) > 0 ? Number(e.buyEmojiStep) : 0.15; // SOL per emoji (admin /setbuyemoji)
       const count = Math.max(3, Math.min(32, Math.round(solAmount / step) || 3));
+      // Whale tier by USD size (fall back to SOL×live price). Bigger buy → bigger badge.
+      const usdSize = usdAmount > 0 ? usdAmount : (solAmount * (Number(solUsdPriceCache?.value) || 0));
+      const tier = usdSize <= 0 ? null
+        : usdSize >= 1000 ? { e: "🔱", t: "MEGA BUY" }
+        : usdSize >= 500 ? { e: "🐋", t: "WHALE" }
+        : usdSize >= 200 ? { e: "🐬", t: "DOLPHIN" }
+        : usdSize >= 50 ? { e: "🐟", t: "FISH" }
+        : { e: "🦐", t: "SHRIMP" };
+      // New-holder detection: first time we've seen this wallet buy this coin → 🌟 New holder.
+      let holderLine = "";
+      if (trader) {
+        const set = groupBuyHolders.get(mint) || new Set();
+        const isNew = !set.has(trader);
+        set.add(trader);
+        if (set.size > 6000) { const arr = [...set]; groupBuyHolders.set(mint, new Set(arr.slice(arr.length - 4000))); } else groupBuyHolders.set(mint, set);
+        holderLine = `👤 ${isNew ? "🌟 <b>New holder!</b> " : "➕ Added more · "}<a href="${walLink}">${escapeTelegramHtml(trader.slice(0, 4))}…${escapeTelegramHtml(trader.slice(-4))}</a>`;
+      }
       lines = [
-        `🆕 | <b>$${escapeTelegramHtml(symClean)} Buy!</b>`,
+        `🆕 | <b>$${escapeTelegramHtml(symClean)} Buy!</b>${tier ? `  ${tier.e} <b>${tier.t}</b>` : ""}`,
         `<i>by ${escapeTelegramHtml(botAt)}</i>`,
         "",
         emoji.repeat(count),
@@ -28932,8 +28969,8 @@ async function postGroupBuy(mint, { solAmount = 0, usdAmount = 0, tokens = 0, pr
           ? `🪙 Got <b>${fmtTok(tokens)}</b> $${escapeTelegramHtml(symClean)}${txLink ? ` · <a href="${txLink}">Tx</a>` : ""}`
           : (txLink ? `🧾 <a href="${txLink}">View Tx</a>` : ""),
         priceUsd > 0 ? `🏷 Price <b>${fmtPx(priceUsd)}</b>${ch != null && isFinite(ch) ? ` · ${ch >= 0 ? "🟢 +" : "🔴 "}${Math.round(ch)}% 24h` : ""}` : "",
-        (mc > 0 || liq > 0) ? `〽️ MC <b>${fmtUsd0(mc)}</b>${liq > 0 ? ` · Liq ${fmtUsd0(liq)}` : ""}` : "",
-        trader ? `👤 <a href="${walLink}">${escapeTelegramHtml(trader.slice(0, 4))}…${escapeTelegramHtml(trader.slice(-4))}</a>` : "",
+        (mc > 0 || liq > 0) ? `〽️ MC <b>${fmtUsd0(mc)}</b>${liq > 0 ? ` · Liq ${fmtUsd0(liq)}` : ""}${vol24 > 0 ? ` · Vol ${fmtUsd0(vol24)}` : ""}` : "",
+        holderLine,
         dexPaid === true ? "🐸 <b>DEX PAID</b>" : ""
       ].filter(Boolean);
     } else {
@@ -29084,18 +29121,95 @@ function startGroupBuyBot() {
 
 // ROSE MANAGER — group moderation (welcome, rules, anti-links, warn/mute/kick/ban). Per-group,
 // gated on the `rose` flag (off by default), admin-gated. Reply-based moderation targets.
+function roseDefaults() {
+  return { welcome: null, goodbye: null, rules: null, antilinks: false, captcha: false, cleanService: false,
+    warns: {}, warnLimit: 3, warnMode: "mute", antiflood: 0, notes: {}, filters: {} };
+}
 async function setGroupRose(chatId, patch) {
   const store = await readGroupBot();
   const k = String(chatId);
   const e = store.groups[k] || defaultGroupBotEntry();
-  e.rose = { welcome: null, rules: null, antilinks: false, warns: {}, ...(e.rose || {}), ...patch };
+  e.rose = { ...roseDefaults(), ...(e.rose || {}), ...patch };
   store.groups[k] = e;
   await writeGroupBot(store);
   return e.rose;
 }
-function roseConfig(entry) { return (entry && entry.rose) || { welcome: null, rules: null, antilinks: false, warns: {} }; }
+function roseConfig(entry) { return { ...roseDefaults(), ...((entry && entry.rose) || {}) }; }
 const ROSE_LINK_RE = /(https?:\/\/|t\.me\/|@[A-Za-z0-9_]{4,}|[a-z0-9-]+\.(?:com|org|io|xyz|fun|net|gg|app|co|me)\b)/i;
-// Returns true if it fully handled the message (welcome posted / link removed / mod command run).
+// Full mute / restore permission sets (newer Bot API needs the granular flags, not just can_send_messages).
+const ROSE_MUTE_PERMS = { can_send_messages: false, can_send_audios: false, can_send_documents: false, can_send_photos: false, can_send_videos: false, can_send_video_notes: false, can_send_voice_notes: false, can_send_polls: false, can_send_other_messages: false, can_add_web_page_previews: false, can_change_info: false, can_invite_users: false, can_pin_messages: false };
+const ROSE_UNMUTE_PERMS = { can_send_messages: true, can_send_audios: true, can_send_documents: true, can_send_photos: true, can_send_videos: true, can_send_video_notes: true, can_send_voice_notes: true, can_send_polls: true, can_send_other_messages: true, can_add_web_page_previews: true, can_invite_users: true };
+// Parse "30m", "2h", "1d", "90s", "1w" → ms (0 = invalid / permanent).
+function roseParseDuration(s) {
+  const m = String(s || "").trim().match(/^(\d+)\s*([smhdw])$/i);
+  if (!m) return 0;
+  const mult = { s: 1e3, m: 60e3, h: 3600e3, d: 86400e3, w: 604800e3 }[m[2].toLowerCase()] || 0;
+  return Number(m[1]) * mult;
+}
+function roseHumanDuration(ms) {
+  ms = Math.max(0, Number(ms) || 0);
+  const d = Math.floor(ms / 86400e3), h = Math.floor((ms % 86400e3) / 3600e3), m = Math.floor((ms % 3600e3) / 60e3);
+  if (d) return d + "d" + (h ? " " + h + "h" : "");
+  if (h) return h + "h" + (m ? " " + m + "m" : "");
+  return (Math.max(1, m || Math.round(ms / 60e3))) + "m";
+}
+// MissRose-style welcome/goodbye fillings. Escape the template first (admin text may contain <,&),
+// then inject {mention} as a raw tg:// anchor and the rest as escaped values.
+function roseFill(tmpl, user = {}, chat = {}, count = null) {
+  const first = user.first_name || "", last = user.last_name || "";
+  const full = (first + " " + last).trim() || first || "friend";
+  const uname = user.username ? "@" + user.username : full;
+  const mention = `<a href="tg://user?id=${user.id}">${escapeTelegramHtml(first || uname || "friend")}</a>`;
+  let out = escapeTelegramHtml(String(tmpl || ""));
+  out = out
+    .replace(/\{mention\}/gi, mention)
+    .replace(/\{first\}/gi, escapeTelegramHtml(first))
+    .replace(/\{last\}/gi, escapeTelegramHtml(last))
+    .replace(/\{(fullname|name)\}/gi, escapeTelegramHtml(full))
+    .replace(/\{username\}/gi, escapeTelegramHtml(uname))
+    .replace(/\{id\}/gi, String(user.id || ""))
+    .replace(/\{(chatname|title)\}/gi, escapeTelegramHtml(chat.title || "the group"))
+    .replace(/\{count\}/gi, count != null ? String(count) : "");
+  return out;
+}
+// Captcha: users pending human-verification (muted on join). key = `${chatId}:${userId}`.
+const roseCaptchaPending = new Map();
+// Antiflood: rolling per-user message-rate window. key = `${chatId}:${userId}`.
+const roseFloodState = new Map();
+// Ping the group's admins (for /report). Returns an HTML mention string, capped.
+async function roseAdminMentions(chatId) {
+  try {
+    const admins = await telegram("getChatAdministrators", { chat_id: chatId });
+    const list = (admins?.result || admins || []).filter((a) => a && a.user && !a.user.is_bot).slice(0, 12);
+    return list.map((a) => `<a href="tg://user?id=${a.user.id}">${escapeTelegramHtml(a.user.first_name || "admin")}</a>`).join(" ");
+  } catch { return ""; }
+}
+// Route the "I'm human" captcha button (cap:v:<userId>). Returns true when handled.
+async function handleRoseCaptchaCallback(query, clickerId) {
+  const data = String(query?.data || "");
+  if (!data.startsWith("cap:v:")) return false;
+  const chatId = query.message?.chat?.id, msgId = query.message?.message_id;
+  const wantId = data.slice(6);
+  if (String(clickerId) !== String(wantId)) {
+    try { await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "This button isn't for you 🐸", show_alert: true }); } catch {}
+    return true;
+  }
+  const key = String(chatId) + ":" + String(wantId);
+  const pend = roseCaptchaPending.get(key);
+  if (pend && pend.timer) { try { clearTimeout(pend.timer); } catch {} }
+  roseCaptchaPending.delete(key);
+  try { await telegram("restrictChatMember", { chat_id: chatId, user_id: Number(wantId), permissions: ROSE_UNMUTE_PERMS }); } catch {}
+  try { await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "✅ Verified — welcome!" }); } catch {}
+  try { await telegram("deleteMessage", { chat_id: chatId, message_id: msgId }); } catch {}
+  const entry = await getGroupBotEntry(chatId).catch(() => null);
+  const cfg = roseConfig(entry);
+  const tmpl = cfg.welcome || "👋 Welcome {mention}! Read /rules and enjoy the swamp. ⚡ slimewire.org";
+  const chat = query.message?.chat || {};
+  await sayHtml(chatId, roseFill(tmpl, pend?.user || query.from || {}, chat, chat.members_count)).catch(() => {});
+  return true;
+}
+// Returns true if it fully handled the message (welcome/captcha posted, link removed, mod command
+// run, filter/note fired, flood muted). Full @MissRose_bot-parity moderation on the `rose` flag.
 async function handleGroupRose(message, userId) {
   const chat = message?.chat;
   if (!chat || isPrivateChat(chat)) return false;
@@ -29104,54 +29218,157 @@ async function handleGroupRose(message, userId) {
   if (!groupBotFeatureOn(entry, "rose")) return false; // module off → do nothing
   const cfg = roseConfig(entry);
 
-  // New members → welcome.
+  // New members → CAPTCHA (mute + verify button) or welcome (with fillings).
   if (Array.isArray(message.new_chat_members) && message.new_chat_members.length) {
-    const names = message.new_chat_members.map((m) => escapeTelegramHtml(m.first_name || m.username || "friend")).join(", ");
-    const tmpl = cfg.welcome || "👋 Welcome {name}! Read /rules and enjoy the swamp. ⚡ slimewire.org";
-    await sayHtml(chatId, tmpl.replace(/\{name\}/g, names)).catch(() => {});
+    const humans = message.new_chat_members.filter((m) => m && !m.is_bot);
+    if (cfg.captcha || cfg.cleanService) { try { await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch {} }
+    for (const m of humans.slice(0, 8)) {
+      if (cfg.captcha) {
+        try { await telegram("restrictChatMember", { chat_id: chatId, user_id: m.id, permissions: ROSE_MUTE_PERMS }); } catch {}
+        const mk = { inline_keyboard: [[{ text: "✅ I'm human — tap to verify", callback_data: "cap:v:" + m.id }]] };
+        const sent = await telegram("sendMessage", { chat_id: chatId, parse_mode: "HTML", reply_markup: mk,
+          text: `🛡️ <a href="tg://user?id=${m.id}">${escapeTelegramHtml(m.first_name || "friend")}</a>, tap below within 2 min to verify you're human and unlock the chat.` }).catch(() => null);
+        const key = String(chatId) + ":" + String(m.id);
+        const timer = setTimeout(() => { (async () => {
+          if (!roseCaptchaPending.has(key)) return;
+          roseCaptchaPending.delete(key);
+          try { await telegram("banChatMember", { chat_id: chatId, user_id: m.id }); } catch {}
+          try { await telegram("unbanChatMember", { chat_id: chatId, user_id: m.id, only_if_banned: true }); } catch {}
+          if (sent?.result?.message_id) { try { await telegram("deleteMessage", { chat_id: chatId, message_id: sent.result.message_id }); } catch {} }
+        })().catch(() => {}); }, 120000);
+        if (roseCaptchaPending.size > 500) { const first = roseCaptchaPending.keys().next().value; roseCaptchaPending.delete(first); }
+        roseCaptchaPending.set(key, { at: Date.now(), user: m, timer, promptMsgId: sent?.result?.message_id });
+      } else {
+        const tmpl = cfg.welcome || "👋 Welcome {mention}! Read /rules and enjoy the swamp. ⚡ slimewire.org";
+        await sayHtml(chatId, roseFill(tmpl, m, chat, chat.members_count)).catch(() => {});
+      }
+    }
     return true;
+  }
+  // Member left → goodbye (with fillings).
+  if (message.left_chat_member) {
+    if (cfg.cleanService) { try { await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch {} }
+    if (cfg.goodbye) await sayHtml(chatId, roseFill(cfg.goodbye, message.left_chat_member, chat, chat.members_count)).catch(() => {});
+    return cfg.cleanService || Boolean(cfg.goodbye);
   }
 
   const text = String(message.text || message.caption || "").trim();
+  const hasContent = Boolean(message.text || message.caption || message.photo || message.sticker || message.animation || message.video || message.document);
   const isAdmin = await isGroupBotAdmin(chatId, userId, message);
 
-  // Anti-links: delete links from non-admins (when on), and soft-warn.
+  // Antiflood: rolling per-user rate window (admins exempt). Trips → 10-min mute.
+  if (cfg.antiflood > 0 && !isAdmin && hasContent) {
+    const fk = String(chatId) + ":" + String(userId), now = Date.now();
+    const st = roseFloodState.get(fk) || { count: 0, start: now };
+    if (now - st.start > 10000) { st.count = 0; st.start = now; }
+    st.count += 1; roseFloodState.set(fk, st);
+    if (st.count >= cfg.antiflood) {
+      roseFloodState.delete(fk);
+      try { await telegram("restrictChatMember", { chat_id: chatId, user_id: userId, permissions: ROSE_MUTE_PERMS, until_date: Math.floor((now + 600000) / 1000) }); } catch {}
+      try { await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch {}
+      await say(chatId, `🌊 ${escapeTelegramHtml(message.from?.first_name || "User")} muted 10m — flooding (${cfg.antiflood}+ msgs).`).catch(() => {});
+      return true;
+    }
+  }
+
+  // Anti-links: delete links from non-admins (when on).
   if (cfg.antilinks && text && !isAdmin && ROSE_LINK_RE.test(text)) {
     await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }).catch(() => {});
     await say(chatId, "🛡️ Links aren't allowed here. (admins only)").catch(() => {});
     return true;
   }
 
-  // Moderation commands (admins only). Most act on the replied-to user.
-  const cmd = text.match(/^\/(rules|setrules|welcome|setwelcome|antilinks|warn|warnings|clearwarns|mute|unmute|kick|ban|unban)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
-  if (!cmd) return false;
+  const cmd = text.match(/^\/(rules|setrules|welcome|setwelcome|goodbye|setgoodbye|antilinks|captcha|cleanservice|warn|warnings|clearwarns|resetwarns|setwarnlimit|setwarnmode|mute|tmute|unmute|kick|ban|tban|unban|antiflood|save|get|notes|clear|delnote|filter|filters|stop|delfilter|report|admins|purge|del|pin|unpin)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
+  // Non-command: #note fetch + auto-filters (everyone).
+  if (!cmd) {
+    const noteHash = text.match(/^#([A-Za-z0-9_]{1,32})$/);
+    if (noteHash && cfg.notes[noteHash[1].toLowerCase()]) { await sayHtml(chatId, escapeTelegramHtml(cfg.notes[noteHash[1].toLowerCase()])); return true; }
+    const trigs = Object.keys(cfg.filters || {});
+    if (text && trigs.length) {
+      const low = text.toLowerCase();
+      for (const trig of trigs) {
+        const re = new RegExp("(^|\\W)" + trig.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(\\W|$)", "i");
+        if (re.test(low)) { await sayHtml(chatId, escapeTelegramHtml(cfg.filters[trig])); return true; }
+      }
+    }
+    return false;
+  }
   const name = cmd[1].toLowerCase();
   const arg = (cmd[2] || "").trim();
-  // Public reads: /rules and /welcome are open to everyone.
+  const words = arg ? arg.split(/\s+/) : [];
+
+  // Public reads (everyone): rules, welcome, get, notes list, report/admins.
   if (name === "rules") { await sayHtml(chatId, cfg.rules ? escapeTelegramHtml(cfg.rules) : "No rules set. An admin can set them with /setrules <text>."); return true; }
-  if (name === "welcome" && !arg) { await sayHtml(chatId, cfg.welcome ? escapeTelegramHtml(cfg.welcome) : "Default welcome is on. Admins: /setwelcome <text> (use {name})."); return true; }
+  if (name === "welcome" && !arg) { await sayHtml(chatId, cfg.welcome ? escapeTelegramHtml(cfg.welcome) : "Default welcome is on. Admins: /setwelcome <text> — fillings: {mention} {first} {username} {count} {chatname}."); return true; }
+  if (name === "get" && words[0]) { const v = cfg.notes[words[0].toLowerCase()]; await sayHtml(chatId, v ? escapeTelegramHtml(v) : `No note "${escapeTelegramHtml(words[0])}".`); return true; }
+  if (name === "notes") { const ks = Object.keys(cfg.notes || {}); await sayHtml(chatId, ks.length ? "📝 <b>Notes:</b> " + ks.map((k) => "#" + escapeTelegramHtml(k)).join(", ") : "No notes saved. Admins: /save <name> <text> (or reply)."); return true; }
+  if (name === "report" || name === "admins") {
+    const mentions = await roseAdminMentions(chatId);
+    const who = message.reply_to_message?.from ? ` — re: ${escapeTelegramHtml(message.reply_to_message.from.first_name || "a message")}` : "";
+    await sayHtml(chatId, `🚨 <b>Reported to admins.</b>${who} ${mentions}`.trim());
+    return true;
+  }
+
   if (!isAdmin) { await say(chatId, "Only group admins can use moderation commands."); return true; }
+
+  // Config setters (admins).
   if (name === "setrules") { await setGroupRose(chatId, { rules: arg || null }); await say(chatId, arg ? "Rules updated." : "Rules cleared."); return true; }
-  if (name === "setwelcome") { await setGroupRose(chatId, { welcome: arg || null }); await say(chatId, arg ? "Welcome message updated." : "Welcome reset to default."); return true; }
+  if (name === "setwelcome") { const t = arg || (message.reply_to_message ? String(message.reply_to_message.text || message.reply_to_message.caption || "") : ""); await setGroupRose(chatId, { welcome: t || null }); await say(chatId, t ? "Welcome updated. (fillings: {mention} {first} {username} {count} {chatname})" : "Welcome reset to default."); return true; }
+  if (name === "goodbye" && !arg) { await sayHtml(chatId, cfg.goodbye ? escapeTelegramHtml(cfg.goodbye) : "No goodbye set. Admins: /setgoodbye <text>."); return true; }
+  if (name === "setgoodbye" || name === "goodbye") { const t = arg || (message.reply_to_message ? String(message.reply_to_message.text || message.reply_to_message.caption || "") : ""); await setGroupRose(chatId, { goodbye: t || null }); await say(chatId, t ? "Goodbye message updated." : "Goodbye cleared."); return true; }
   if (name === "antilinks") { const on = /^on$/i.test(arg); await setGroupRose(chatId, { antilinks: on }); await say(chatId, `🛡️ Anti-links ${on ? "ON" : "OFF"}.`); return true; }
-  // Reply-based actions.
-  const target = message.reply_to_message?.from;
-  const needsTarget = ["warn", "mute", "unmute", "kick", "ban", "unban"].includes(name);
-  if (needsTarget && !target) { await say(chatId, `Reply to the person's message with /${name}.`); return true; }
+  if (name === "captcha") { const on = /^on$/i.test(arg); await setGroupRose(chatId, { captcha: on }); await say(chatId, `🤖 Captcha ${on ? "ON — new members must verify to chat." : "OFF."}`); return true; }
+  if (name === "cleanservice") { const on = /^on$/i.test(arg); await setGroupRose(chatId, { cleanService: on }); await say(chatId, `🧹 Clean service messages ${on ? "ON" : "OFF"}.`); return true; }
+  if (name === "antiflood") { const n = Math.max(0, Math.min(50, parseInt(words[0], 10) || 0)); await setGroupRose(chatId, { antiflood: n }); await say(chatId, n ? `🌊 Antiflood ON — ${n} msgs / 10s → 10-min mute.` : "🌊 Antiflood OFF."); return true; }
+  if (name === "setwarnlimit") { const n = Math.max(1, Math.min(20, parseInt(words[0], 10) || 3)); await setGroupRose(chatId, { warnLimit: n }); await say(chatId, `Warn limit set to ${n}.`); return true; }
+  if (name === "setwarnmode") { const mode = /^(mute|kick|ban)$/i.test(words[0] || "") ? words[0].toLowerCase() : "mute"; await setGroupRose(chatId, { warnMode: mode }); await say(chatId, `On hitting the warn limit: ${mode}.`); return true; }
+  if (name === "resetwarns") { await setGroupRose(chatId, { warns: {} }); await say(chatId, "All warnings cleared."); return true; }
+
+  // Notes / filters (admins write).
+  if (name === "save") { const nm = (words[0] || "").toLowerCase(); const body = arg.slice((words[0] || "").length).trim() || (message.reply_to_message ? String(message.reply_to_message.text || message.reply_to_message.caption || "") : ""); if (!nm || !body) { await say(chatId, "Usage: /save <name> <text>  (or reply to a message with /save <name>)"); return true; } const notes = { ...(cfg.notes || {}) }; notes[nm] = body.slice(0, 3500); await setGroupRose(chatId, { notes }); await say(chatId, `📝 Saved note #${nm}. Fetch with #${nm} or /get ${nm}.`); return true; }
+  if (name === "clear" || name === "delnote") { const nm = (words[0] || "").toLowerCase(); const notes = { ...(cfg.notes || {}) }; if (notes[nm]) { delete notes[nm]; await setGroupRose(chatId, { notes }); await say(chatId, `Deleted note #${nm}.`); } else await say(chatId, `No note "${escapeTelegramHtml(nm)}".`); return true; }
+  if (name === "filter") { const trig = (words[0] || "").toLowerCase(); const reply = arg.slice((words[0] || "").length).trim() || (message.reply_to_message ? String(message.reply_to_message.text || message.reply_to_message.caption || "") : ""); if (!trig || !reply) { await say(chatId, "Usage: /filter <word> <reply>  (or reply to a message with /filter <word>)"); return true; } const filters = { ...(cfg.filters || {}) }; filters[trig] = reply.slice(0, 3500); await setGroupRose(chatId, { filters }); await say(chatId, `🔁 Filter set: "${escapeTelegramHtml(trig)}" → auto-reply.`); return true; }
+  if (name === "filters") { const ks = Object.keys(cfg.filters || {}); await sayHtml(chatId, ks.length ? "🔁 <b>Filters:</b> " + ks.map((k) => escapeTelegramHtml(k)).join(", ") : "No filters. Admins: /filter <word> <reply>."); return true; }
+  if (name === "stop" || name === "delfilter") { const trig = (words[0] || "").toLowerCase(); const filters = { ...(cfg.filters || {}) }; if (filters[trig]) { delete filters[trig]; await setGroupRose(chatId, { filters }); await say(chatId, `Removed filter "${escapeTelegramHtml(trig)}".`); } else await say(chatId, `No filter "${escapeTelegramHtml(trig)}".`); return true; }
+
+  // Purge / pin (act on the replied message, no target user needed).
+  if (name === "purge") {
+    const from = message.reply_to_message?.message_id;
+    if (!from) { await say(chatId, "Reply to the message you want to purge from, then /purge."); return true; }
+    let n = 0; for (let id = from; id <= message.message_id && n < 200; id++) { try { await telegram("deleteMessage", { chat_id: chatId, message_id: id }); n += 1; } catch {} }
+    return true;
+  }
+  if (name === "del") { const t = message.reply_to_message?.message_id; if (t) { try { await telegram("deleteMessage", { chat_id: chatId, message_id: t }); } catch {} try { await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch {} } else await say(chatId, "Reply to a message with /del."); return true; }
+  if (name === "pin") { const t = message.reply_to_message?.message_id; if (t) { await telegram("pinChatMessage", { chat_id: chatId, message_id: t, disable_notification: !/loud|notify/i.test(arg) }).catch(() => {}); } else await say(chatId, "Reply to a message with /pin."); return true; }
+  if (name === "unpin") { await telegram("unpinChatMessage", { chat_id: chatId, ...(message.reply_to_message ? { message_id: message.reply_to_message.message_id } : {}) }).catch(() => {}); await say(chatId, "📌 Unpinned."); return true; }
+
+  // Reply / id-based user actions.
+  const target = message.reply_to_message?.from || (/^\d{5,}$/.test(words[0] || "") ? { id: Number(words[0]) } : null);
+  const needsTarget = ["warn", "mute", "tmute", "unmute", "kick", "ban", "tban", "unban", "warnings", "clearwarns"].includes(name);
+  if (needsTarget && !target) { await say(chatId, `Reply to the person's message with /${name} (or /${name} <user_id>).`); return true; }
   const tId = target?.id;
   const tName = target ? escapeTelegramHtml(target.first_name || target.username || String(tId)) : "";
+  const durArg = words.find((w) => /^\d+[smhdw]$/i.test(w));
+  const durMs = roseParseDuration(durArg);
   try {
     if (name === "warn") {
       const warns = { ...(cfg.warns || {}) }; warns[tId] = (warns[tId] || 0) + 1;
-      await setGroupRose(chatId, { warns });
-      if (warns[tId] >= 3) { await telegram("restrictChatMember", { chat_id: chatId, user_id: tId, permissions: { can_send_messages: false } }).catch(() => {}); await say(chatId, `${tName} hit 3 warnings — muted.`); }
-      else await say(chatId, `⚠️ Warned ${tName} (${warns[tId]}/3).`);
-    } else if (name === "warnings") { await say(chatId, `${tName}: ${(cfg.warns || {})[tId] || 0}/3 warnings.`); }
+      const limit = Number(cfg.warnLimit) || 3;
+      if (warns[tId] >= limit) {
+        delete warns[tId]; await setGroupRose(chatId, { warns });
+        const mode = cfg.warnMode || "mute";
+        if (mode === "ban") { await telegram("banChatMember", { chat_id: chatId, user_id: tId }); await say(chatId, `🔨 ${tName} hit ${limit} warnings — banned.`); }
+        else if (mode === "kick") { await telegram("banChatMember", { chat_id: chatId, user_id: tId }); await telegram("unbanChatMember", { chat_id: chatId, user_id: tId }).catch(() => {}); await say(chatId, `👢 ${tName} hit ${limit} warnings — kicked.`); }
+        else { await telegram("restrictChatMember", { chat_id: chatId, user_id: tId, permissions: ROSE_MUTE_PERMS }); await say(chatId, `🔇 ${tName} hit ${limit} warnings — muted.`); }
+      } else { await setGroupRose(chatId, { warns }); await say(chatId, `⚠️ Warned ${tName} (${warns[tId]}/${limit}).`); }
+    } else if (name === "warnings") { await say(chatId, `${tName}: ${(cfg.warns || {})[tId] || 0}/${Number(cfg.warnLimit) || 3} warnings.`); }
     else if (name === "clearwarns") { const warns = { ...(cfg.warns || {}) }; delete warns[tId]; await setGroupRose(chatId, { warns }); await say(chatId, `Cleared warnings for ${tName}.`); }
-    else if (name === "mute") { await telegram("restrictChatMember", { chat_id: chatId, user_id: tId, permissions: { can_send_messages: false } }); await say(chatId, `🔇 Muted ${tName}.`); }
-    else if (name === "unmute") { await telegram("restrictChatMember", { chat_id: chatId, user_id: tId, permissions: { can_send_messages: true, can_send_media_messages: true, can_send_other_messages: true, can_add_web_page_previews: true } }); await say(chatId, `🔊 Unmuted ${tName}.`); }
+    else if (name === "mute") { await telegram("restrictChatMember", { chat_id: chatId, user_id: tId, permissions: ROSE_MUTE_PERMS }); await say(chatId, `🔇 Muted ${tName}.`); }
+    else if (name === "tmute") { if (!durMs) { await say(chatId, "Usage: reply + /tmute 30m (or 2h / 1d)."); return true; } await telegram("restrictChatMember", { chat_id: chatId, user_id: tId, permissions: ROSE_MUTE_PERMS, until_date: Math.floor((Date.now() + durMs) / 1000) }); await say(chatId, `🔇 Muted ${tName} for ${roseHumanDuration(durMs)}.`); }
+    else if (name === "unmute") { await telegram("restrictChatMember", { chat_id: chatId, user_id: tId, permissions: ROSE_UNMUTE_PERMS }); await say(chatId, `🔊 Unmuted ${tName}.`); }
     else if (name === "kick") { await telegram("banChatMember", { chat_id: chatId, user_id: tId }); await telegram("unbanChatMember", { chat_id: chatId, user_id: tId }).catch(() => {}); await say(chatId, `👢 Kicked ${tName}.`); }
     else if (name === "ban") { await telegram("banChatMember", { chat_id: chatId, user_id: tId }); await say(chatId, `🔨 Banned ${tName}.`); }
+    else if (name === "tban") { if (!durMs) { await say(chatId, "Usage: reply + /tban 1d (or 2h / 1w)."); return true; } await telegram("banChatMember", { chat_id: chatId, user_id: tId, until_date: Math.floor((Date.now() + durMs) / 1000) }); await say(chatId, `🔨 Banned ${tName} for ${roseHumanDuration(durMs)}.`); }
     else if (name === "unban") { await telegram("unbanChatMember", { chat_id: chatId, user_id: tId, only_if_banned: true }); await say(chatId, `Unbanned ${tName}.`); }
   } catch (e) {
     await say(chatId, "Couldn't do that — make sure I'm an admin with ban/restrict rights.").catch(() => {});
@@ -32188,14 +32405,16 @@ async function submitRaidPost(body = {}) {
 // raid-tg.json (separate from the leaderboard's raid-posts.json so the board refresh never clobbers
 // the live message refs).
 function raidDurStr(ms) { ms = Math.max(0, Number(ms) || 0); const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000); return h > 0 ? (h + "h" + (m > 0 ? " " + m + "m" : "")) : (m + "m"); }
+function raidBar(pct) { const seg = 10; const f = Math.max(0, Math.min(seg, Math.round((Number(pct) || 0) / 100 * seg))); return "▰".repeat(f) + "▱".repeat(seg - f); }
+function raidCompact(n) { n = Number(n) || 0; return n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(n); }
 function buildRaidProgressCard(p) {
   const sym = p.symbol ? "$" + String(p.symbol).replace(/[^A-Za-z0-9_]/g, "").slice(0, 12) + " " : "";
   const t = p.targets || {};
   const defs = [
-    { label: "Likes", cur: Number(p.likes) || 0, tgt: Number(t.likes) || 0 },
-    { label: "Retweets", cur: Number(p.rts) || 0, tgt: Number(t.rts) || 0 },
-    { label: "Replies", cur: Number(p.replies) || 0, tgt: Number(t.replies) || 0 },
-    { label: "Bookmarks", cur: Number(p.bookmarks) || 0, tgt: Number(t.bookmarks) || 0 }
+    { emoji: "❤️", label: "Likes", cur: Number(p.likes) || 0, tgt: Number(t.likes) || 0 },
+    { emoji: "🔁", label: "Retweets", cur: Number(p.rts) || 0, tgt: Number(t.rts) || 0 },
+    { emoji: "💬", label: "Replies", cur: Number(p.replies) || 0, tgt: Number(t.replies) || 0 },
+    { emoji: "🔖", label: "Bookmarks", cur: Number(p.bookmarks) || 0, tgt: Number(t.bookmarks) || 0 }
   ];
   const active = defs.filter((d) => d.tgt > 0);
   const hasTargets = active.length > 0;
@@ -32205,13 +32424,15 @@ function buildRaidProgressCard(p) {
   let allHit = hasTargets, pctSum = 0;
   const rows = (hasTargets ? active : defs).map((d) => {
     if (d.tgt > 0) {
-      const pct = Math.min(999, Math.round(d.cur / d.tgt * 100));
+      const ratio = d.cur / d.tgt;
+      const pct = Math.min(999, Math.round(ratio * 100));
       const hit = d.cur >= d.tgt; if (!hit) allHit = false;
-      pctSum += Math.min(1, d.cur / d.tgt);
+      pctSum += Math.min(1, ratio);
       const sq = hit ? "🟩" : (d.cur > 0 ? "🟨" : "🟥");
-      return `${sq} <b>${d.label}</b> ${d.cur.toLocaleString()} | ${d.tgt.toLocaleString()} [${pct >= 100 ? "💯" : pct}%]`;
+      const to = hit ? "✅" : `${(d.tgt - d.cur).toLocaleString()} to go`;
+      return `${sq} ${d.emoji} <b>${d.label}</b>  <code>${raidBar(pct)}</code>\n     ${d.cur.toLocaleString()} / ${d.tgt.toLocaleString()} · ${pct >= 100 ? "💯" : pct + "%"} · ${to}`;
     }
-    return `▫️ <b>${d.label}</b> ${d.cur.toLocaleString()}`;
+    return `${d.emoji} <b>${d.label}</b> ${d.cur.toLocaleString()}`;
   });
   const overall = hasTargets ? Math.round((pctSum / active.length) * 100) : 0;
   const done = allHit || timedOut; // stop editing once smashed or timed out
@@ -32219,22 +32440,50 @@ function buildRaidProgressCard(p) {
     ? `🔥🔥 <b>${sym}RAID SMASHED!</b> 🔥🔥`
     : timedOut
       ? "⚠️ <b>Raid Ended — Time limit reached!</b>"
-      : `⚔️ <b>${sym}RAID is LIVE</b>${hasTargets ? ` — <b>${overall}%</b>` : ""}`;
+      : `⚔️ <b>${sym}RAID is LIVE</b>${hasTargets ? `  ·  <b>${overall}%</b>  <code>${raidBar(overall)}</code>` : ""}`;
   const durLine = (startedAt && durationMs)
-    ? (done ? `🕐 Duration: ${raidDurStr(durationMs)}` : `🕐 Ends in ${raidDurStr(Math.max(0, durationMs - elapsed))}`)
+    ? (done ? `🕐 Duration: ${raidDurStr(durationMs)}` : `⏳ Ends in <b>${raidDurStr(Math.max(0, durationMs - elapsed))}</b>`)
     : "";
+  const viewsLine = Number(p.views) > 0 ? `👀 ${raidCompact(p.views)} views` : "";
   const lines = [
     header, "",
-    ...rows, "",
-    `👉 <a href="${p.url}">The post</a>`,
+    ...rows,
+    viewsLine ? "\n" + viewsLine : "",
+    "",
+    `👉 <a href="${p.url}">Open the post & raid it</a>`,
     durLine,
-    done ? "🔥 <a href=\"https://www.slimewire.org/raids\">Trending board</a>" : "👇 Like, RT, reply &amp; bookmark — this card updates live."
+    done ? "🔥 <a href=\"https://www.slimewire.org/raids\">Trending board</a>" : "👆 Like · RT · reply · bookmark — this card updates live."
   ].filter(Boolean);
-  const markup = { inline_keyboard: [[
-    { text: done ? "✅ Raided" : "⚔️ Raid this post", url: p.url },
-    { text: "🔥 Trending", url: "https://www.slimewire.org/raids" }
-  ]] };
+  const btns = [{ text: done ? "✅ Raided" : "⚔️ Raid this post", url: p.url }];
+  if (!done && p.tid) btns.push({ text: "🔄 Refresh", callback_data: "rr:" + p.tid });
+  btns.push({ text: "🔥 Trending", url: "https://www.slimewire.org/raids" });
+  const markup = { inline_keyboard: [btns] };
   return { text: lines.join("\n"), markup, done };
+}
+// Force an on-demand engagement pull when a raider taps 🔄 Refresh. Returns true when handled.
+async function handleRaidRefreshCallback(query, userId) {
+  const data = String(query?.data || "");
+  if (!data.startsWith("rr:")) return false;
+  const tid = data.slice(3);
+  const chatId = query.message?.chat?.id, msgId = query.message?.message_id;
+  try {
+    const s = await readRaidTg();
+    const c = s.cards[tid];
+    if (!c) { try { await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "This raid has ended." }); } catch {} return true; }
+    const eng = await fetchXEngagement(tid).catch(() => null);
+    const likes = eng ? eng.likes : (c.likes || 0), rts = eng ? eng.rts : (c.rts || 0);
+    const replies = eng ? eng.replies : (c.replies || 0), bookmarks = eng ? (eng.bookmarks || 0) : (c.bookmarks || 0);
+    const views = eng ? (eng.views || 0) : 0;
+    const card = buildRaidProgressCard({ tid, symbol: c.symbol, targets: c.targets, likes, rts, replies, bookmarks, views, url: c.url, startedAt: c.startedAt, durationMs: c.durationMs });
+    const ref = (c.refs || []).find((r) => String(r.messageId) === String(msgId)) || {};
+    try {
+      if (ref.hasMedia) await telegram("editMessageCaption", { chat_id: chatId, message_id: msgId, caption: card.text, parse_mode: "HTML", reply_markup: card.markup });
+      else await telegram("editMessageText", { chat_id: chatId, message_id: msgId, text: card.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: card.markup });
+    } catch (e) { if (!/not modified/i.test(String(e?.message || ""))) throw e; }
+    await updateRaidTgCard(tid, { likes, rts, replies, bookmarks, lastCard: card.text, done: card.done });
+    try { await telegram("answerCallbackQuery", { callback_query_id: query.id, text: eng ? "🔄 Refreshed" : "Couldn't reach X — try again." }); } catch {}
+  } catch { try { await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "Refresh failed — try again." }); } catch {} }
+  return true;
 }
 // ---- Interactive /raid setup: tap-to-set goals + duration, then Start (no typing needed) -------
 const raidDrafts = new Map(); // `${chatId}:${messageId}` -> draft {tid,url,symbol,by,targets,durationH,at}
@@ -32265,7 +32514,7 @@ async function startRaidFromDraft(chatId, d) {
   if (!res.ok) { await say(chatId, "Couldn't start that raid — send a valid X post link."); return; }
   const ge = await getGroupBotEntry(chatId).catch(() => null);
   const startedAt = Date.now(), durationMs = Math.max(1, Number(d.durationH) || 2) * 3600_000;
-  const card = buildRaidProgressCard({ symbol: res.symbol || d.symbol, targets: d.targets, likes: res.likes, rts: res.rts, replies: res.replies, bookmarks: res.bookmarks || 0, url: res.url || d.url, startedAt, durationMs });
+  const card = buildRaidProgressCard({ tid: res.tid, symbol: res.symbol || d.symbol, targets: d.targets, likes: res.likes, rts: res.rts, replies: res.replies, bookmarks: res.bookmarks || 0, url: res.url || d.url, startedAt, durationMs });
   const media = (ge && ge.customMedia && ge.customMedia.value) ? ge.customMedia : null;
   const sent = await sendGroupAlertMedia(chatId, media, card.text, card.markup);
   if (sent && sent.result && sent.result.message_id) {
@@ -32366,7 +32615,8 @@ async function refreshRaidTgCards() {
       const rts = eng ? eng.rts : (c.rts || 0);
       const replies = eng ? eng.replies : (c.replies || 0);
       const bookmarks = eng ? (eng.bookmarks || 0) : (c.bookmarks || 0);
-      const card = buildRaidProgressCard({ symbol: c.symbol, targets: c.targets, likes, rts, replies, bookmarks, url: c.url, startedAt: c.startedAt, durationMs: c.durationMs });
+      const views = eng ? (eng.views || 0) : (c.views || 0);
+      const card = buildRaidProgressCard({ tid: c.tid, symbol: c.symbol, targets: c.targets, likes, rts, replies, bookmarks, views, url: c.url, startedAt: c.startedAt, durationMs: c.durationMs });
       if (card.text === c.lastCard && !card.done) { await updateRaidTgCard(c.tid, { likes, rts, replies, bookmarks }); continue; }
       const dead = [];
       for (const ref of c.refs) {

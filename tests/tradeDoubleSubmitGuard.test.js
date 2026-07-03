@@ -694,3 +694,47 @@ for (const [label, source] of [["gg.html", ggSource], ["index.html", indexSource
     }
   });
 }
+
+// ---- TG bot parity: SpyDefiBuyBot / Raidar / MissRose_bot feature guards ----
+test("Rose (MissRose parity): captcha verify, fillings, timed mutes, notes, filters, antiflood, purge", () => {
+  // Config schema carries the new modules.
+  assert.match(functionBody(serverSource, "roseDefaults"), /captcha:\s*false/);
+  assert.match(functionBody(serverSource, "roseDefaults"), /goodbye:\s*null/);
+  assert.match(functionBody(serverSource, "roseDefaults"), /warnLimit:\s*3/);
+  assert.match(functionBody(serverSource, "roseDefaults"), /antiflood:\s*0/);
+  assert.match(functionBody(serverSource, "roseDefaults"), /notes:\s*\{\}/);
+  assert.match(functionBody(serverSource, "roseDefaults"), /filters:\s*\{\}/);
+  // Captcha: mute-on-join + "I'm human" button + verify callback wired in the dispatcher.
+  assert.match(serverSource, /async function handleRoseCaptchaCallback\(/);
+  assert.match(serverSource, /cap:v:/);
+  assert.match(serverSource, /startsWith\("cap:"\)/);            // routed in the callback dispatcher
+  // Welcome/goodbye fillings + duration parsing helpers exist.
+  assert.match(serverSource, /function roseFill\(/);
+  assert.match(functionBody(serverSource, "roseFill"), /mention/);        // {mention} filling (braces escaped in-source)
+  assert.match(functionBody(serverSource, "roseFill"), /chatname\|title/); // {chatname}/{title} filling
+  assert.match(serverSource, /function roseParseDuration\(/);
+  const rose = functionBody(serverSource, "handleGroupRose");
+  for (const cmd of ["captcha", "tmute", "tban", "antiflood", "setwarnlimit", "setwarnmode", "save", "filter", "report", "purge", "pin"]) {
+    assert.ok(rose.includes(`"${cmd}"`) || rose.includes(`'${cmd}'`) || rose.includes(cmd), `Rose must handle /${cmd}`);
+  }
+  // Full mute perm set (not just can_send_messages) so newer Bot API actually mutes.
+  assert.match(serverSource, /ROSE_MUTE_PERMS\s*=\s*\{[^}]*can_send_polls:\s*false/);
+});
+
+test("Buy bot (SpyDefi parity): whale-tier badge + new-holder flag + volume", () => {
+  const buy = functionBody(serverSource, "postGroupBuy");
+  assert.match(buy, /MEGA BUY|WHALE|DOLPHIN|FISH|SHRIMP/);        // whale tiers by USD size
+  assert.match(buy, /New holder!/);                              // first-seen buyer flag
+  assert.match(buy, /groupBuyHolders/);                          // per-token seen-buyer set
+  assert.match(buy, /Vol \$\{?|· Vol /);                         // volume shown on the MC line
+});
+
+test("Raid bot (Raidar parity): per-metric progress bars + views + Refresh button", () => {
+  assert.match(serverSource, /function raidBar\(/);              // ▰▰▱ progress bar
+  const card = functionBody(serverSource, "buildRaidProgressCard");
+  assert.match(card, /raidBar\(/);                              // bars rendered per metric + overall
+  assert.match(card, /views/);                                  // 👀 views line
+  assert.match(card, /callback_data:\s*"rr:"/);                // Refresh button
+  assert.match(serverSource, /async function handleRaidRefreshCallback\(/);
+  assert.match(serverSource, /startsWith\("rr:"\)/);            // routed in the dispatcher
+});
