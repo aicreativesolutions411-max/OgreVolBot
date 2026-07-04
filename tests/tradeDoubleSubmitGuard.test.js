@@ -1322,24 +1322,28 @@ test("Trench super-menu folds all trench features into the existing organized se
   assert.ok(trenchIdx > 0 && gateIdx > 0 && trenchIdx < gateIdx, "trench routed before admin gate");
   assert.match(serverSource, /parseCommandWithArgument\(text, \["menu"\]\)/);
 });
-test("Narrative Radar: metas are tappable → a coin list with MC + age + chart link", () => {
+test("Narrative Radar: metas are tappable → LIVE coins only (dedup by ticker, drop dust, top MCs)", () => {
   assert.match(functionBody(serverSource, "narrativeMetas"), /recentLaunchers\.values\(\)/);
   assert.match(functionBody(serverSource, "narrativeMetas"), /counts\.entries\(\)/);   // keyword clustering
   const nar = functionBody(serverSource, "narrativeRadarView");
   assert.match(nar, /callback_data: `nr:m:\$\{w\}`/);                                   // each meta is a button
   const meta = functionBody(serverSource, "narrativeMetaView");
   assert.match(meta, /alphaRadarFetchMc/);                                             // live MC
-  assert.match(meta, /alphaAgeLabel/);                                                 // age
-  assert.match(meta, /slimewireTokenLinks\(c\.mint\)/);                                // chart link
+  assert.match(meta, /c\.mc >= NARRATIVE_MIN_MC/);                                     // drop dead dust
+  assert.match(meta, /bySym\.set/);                                                    // dedup by ticker
+  assert.match(meta, /sort\(\(a, b\) => b\.mc - a\.mc\)\.slice\(0, 5\)/);              // top 5 by MC
+  assert.match(serverSource, /NARRATIVE_MIN_MC = 2700/);
   assert.match(serverSource, /startsWith\("nr:"\)/);                                   // routed
   assert.match(serverSource, /parseCommandWithArgument\(text, \["narrative", "meta"\]\)/);
 });
-test("Graduation Gauntlet: only ≥$18k coins about to bond (not already graduated)", () => {
+test("Graduation Gauntlet: resilient feed (Moralis-down fallback) + ≥$18k + closest-first + rotate", () => {
   const grad = functionBody(serverSource, "graduationGauntletView");
-  assert.match(grad, /buildMoralisPumpCategory\("system", "graduating"/);
-  assert.match(grad, /!\(r\.graduated \|\| r\.isGraduated\)/);        // exclude already-bonded
-  assert.match(grad, /progOf\(r\) >= GRAD_MIN_PROGRESS && progOf\(r\) < 100/); // about to bond
-  assert.match(grad, /x\.mc >= GRAD_MIN_MC/);                        // ≥ $18k gate
+  assert.match(grad, /webLivePairs\("system", "live", \{ cat: "graduating"/); // resilient path (has pump-frontend fallback), NOT Moralis-only
+  assert.doesNotMatch(grad, /buildMoralisPumpCategory/);                       // the Moralis-only call that returned empty is gone
+  assert.match(grad, /r\.bondingProgressPct \?\? r\.bondingCurveProgress/);    // read the field the row ACTUALLY has
+  assert.match(grad, /mcOf\(r\) >= GRAD_MIN_MC/);                              // ≥$18k
+  assert.match(grad, /sort\(\(a, b\) => progOf\(b\) - progOf\(a\)\)/);         // closest-to-bonding first
+  assert.match(grad, /gradRotateOffset/);                                     // rotates on refresh
   assert.match(serverSource, /GRAD_MIN_MC = 18000/);
   assert.match(serverSource, /parseCommandWithArgument\(text, \["grad", "graduation", "gauntlet"\]\)/);
 });

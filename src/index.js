@@ -29625,21 +29625,29 @@ function narrativeRadarView() {
     markup: { inline_keyboard: [...metaBtns, backRow, gbTrenchBackRow()] }
   };
 }
-// Tap a meta → the coins in it, newest first, with live MC + age; the $symbol links to its chart.
+const NARRATIVE_MIN_MC = 2700;   // drop the dead sub-$2.7k dust — we only want live coins with real MC
+// Tap a meta → its LIVE coins only: enrich MC, drop the dust, keep ONE (the best-MC) per ticker, top 5.
 async function narrativeMetaView(word) {
   const now = Date.now();
   const W = String(word || "").toUpperCase();
-  const coins = [...recentLaunchers.values()]
+  // Grab a wide candidate set (many share the keyword), enrich MC, then prune to the top live ones.
+  const raw = [...recentLaunchers.values()]
     .filter((r) => now - r.at < 2 * 60 * 60 * 1000 && `${r.symbol || ""} ${r.name || ""}`.toUpperCase().split(/[^A-Z0-9]+/).includes(W))
-    .sort((a, b) => b.at - a.at).slice(0, 10);
-  const back = { inline_keyboard: [[{ text: "⬅️ Narrative", callback_data: "gb:go:narrative" }, { text: "✓ Done", callback_data: "gb:close" }]] };
-  if (!coins.length) return { text: `🌀 <b>${escapeTelegramHtml(W)}</b>\n\nThose launches aged out — tap ⬅️ Narrative for the current metas.`, markup: back };
-  const enriched = await Promise.all(coins.map(async (c) => { let mc = 0; try { const r = await alphaRadarFetchMc(c.mint); mc = (r && r.mc) || 0; } catch {} return { ...c, mc }; }));
-  const lines = enriched.map((c, i) => {
+    .sort((a, b) => b.at - a.at).slice(0, 18);
+  const back = { inline_keyboard: [[{ text: "⬅️ Narrative", callback_data: "gb:go:narrative" }, { text: "🔄 Refresh", callback_data: `nr:m:${W}` }], gbTrenchBackRow()] };
+  if (!raw.length) return { text: `🌀 <b>${escapeTelegramHtml(W)}</b>\n\nThose launches aged out — tap ⬅️ Narrative for the current metas.`, markup: back };
+  const enriched = await Promise.all(raw.map(async (c) => { let mc = 0; try { const r = await alphaRadarFetchMc(c.mint); mc = (r && r.mc) || 0; } catch {} return { ...c, mc }; }));
+  // Dedup by ticker — a bunch of same-name copies just came out; keep only the best-MC one of each.
+  const bySym = new Map();
+  for (const c of enriched) { const k = String(c.symbol || c.mint).toUpperCase(); const cur = bySym.get(k); if (!cur || c.mc > cur.mc) bySym.set(k, c); }
+  // Live coins only (MC ≥ $2.7k), ranked by MC, top 5.
+  const top = [...bySym.values()].filter((c) => c.mc >= NARRATIVE_MIN_MC).sort((a, b) => b.mc - a.mc).slice(0, 5);
+  if (!top.length) return { text: `🌀 <b>${escapeTelegramHtml(W)} meta</b>\n\nNothing in this meta has a live MC yet (all still sub-${scanFmtMoney(NARRATIVE_MIN_MC)} dust). Tap 🔄 in a bit or ⬅️ Narrative.`, markup: back };
+  const lines = top.map((c, i) => {
     const lx = slimewireTokenLinks(c.mint);
-    return `${i + 1}. <a href="${lx.site}"><b>$${escapeTelegramHtml(c.symbol || shortMint(c.mint))}</b></a> — ${c.mc > 0 ? scanFmtMoney(c.mc) : "new"} · ${alphaAgeLabel(now - c.at)}`;
+    return `${i + 1}. <a href="${lx.site}"><b>$${escapeTelegramHtml(c.symbol || shortMint(c.mint))}</b></a> — ${scanFmtMoney(c.mc)} · ${alphaAgeLabel(now - c.at)}`;
   });
-  return { text: [`🌀 <b>${escapeTelegramHtml(W)} meta</b> — tap a $ticker for its chart:`, "", ...lines, "", "<i>Live MC + age. Freshest first.</i>"].join("\n"), markup: back };
+  return { text: [`🌀 <b>${escapeTelegramHtml(W)} meta</b> — the live ones, best MC first (tap a $ticker for its chart):`, "", ...lines, "", `<i>Dead sub-${scanFmtMoney(NARRATIVE_MIN_MC)} dust + duplicate tickers dropped.</i>`].join("\n"), markup: back };
 }
 async function handleNarrativeCallback(query) {
   const data = String(query?.data || ""); if (!data.startsWith("nr:")) return false;
@@ -29652,28 +29660,37 @@ async function handleNarrativeCallback(query) {
 // 🎓 GRADUATION GAUNTLET — only ~1% of pump.fun coins graduate; surface the ones closest to making it
 // (high on the bonding curve + still alive), so you're in before the DEX-listing pop, not after.
 const GRAD_MIN_MC = 18000;      // user: at least $18k — skip the dead sub-$18k dust
-const GRAD_MIN_PROGRESS = 80;   // "very close" — 80%+ up the curve
+// Parse a compact money label ("$25k", "1.2M") → a number, for rows that only carry marketCapLabel.
+function parseMoneyLabel(s) {
+  const m = String(s || "").replace(/[^0-9.kmb]/gi, "").match(/^([\d.]+)\s*([kmb]?)$/i);
+  if (!m) return 0;
+  const n = parseFloat(m[1]) || 0; const u = (m[2] || "").toLowerCase();
+  return u === "b" ? n * 1e9 : u === "m" ? n * 1e6 : u === "k" ? n * 1e3 : n;
+}
+let gradRotateOffset = 0;   // advance the shown window each refresh so it rotates through the runway
 async function graduationGauntletView() {
   let rows = [];
-  try { const feed = await buildMoralisPumpCategory("system", "graduating", "graduating").catch(() => null); rows = ((feed && feed.rows) || []); } catch {}
+  // Use the RESILIENT graduating feed (webLivePairs cat:graduating) — it has a pump-frontend fallback, so
+  // it still returns bonding coins when Moralis is down (the Moralis-only category returned empty →
+  // "nothing shows"). Rows carry numeric bondingProgressPct + marketCap. force:true = fresh each tap.
+  try { const feed = await webLivePairs("system", "live", { cat: "graduating", sort: "best", force: true }); rows = (feed && feed.rows) || []; } catch {}
   const back = { inline_keyboard: [[{ text: "🔄 Refresh", callback_data: "gb:go:grad" }], gbTrenchBackRow()] };
-  const progOf = (r) => Math.round(Number(r.bondingCurveProgress ?? r.bondingProgressPct ?? r.bondingProgress ?? 0));
-  const mcOf = (r) => Number(r.marketCap ?? r.marketCapUsd ?? r.fdv ?? r.usdMarketCap ?? 0);
-  // ABOUT to bond only: high on the curve, NOT already graduated. (Already-bonded coins are on a DEX now.)
-  let cands = rows.filter((r) => !(r.graduated || r.isGraduated) && progOf(r) >= GRAD_MIN_PROGRESS && progOf(r) < 100);
-  // Fill any missing MC on the top candidates, then gate ≥ $18k.
-  cands = (await Promise.all(cands.slice(0, 14).map(async (r) => {
-    let mc = mcOf(r);
-    if (!(mc >= 1)) { try { const x = await alphaRadarFetchMc(r.tokenMint || r.mint); mc = (x && x.mc) || 0; } catch {} }
-    return { r, mc, p: progOf(r) };
-  }))).filter((x) => x.mc >= GRAD_MIN_MC).sort((a, b) => b.p - a.p).slice(0, 8);
-  if (!cands.length) return { text: `🎓 <b>Graduation Gauntlet</b>\n\nNothing ≥ ${scanFmtMoney(GRAD_MIN_MC)} sitting right on the graduation line this second — the runway's between waves. Tap 🔄 shortly.`, markup: back };
-  const lines = cands.map((x, i) => {
-    const r = x.r; const sym = r.symbol || shortMint(r.tokenMint || r.mint || "");
+  const progOf = (r) => Math.round(Number(r.bondingProgressPct ?? r.bondingCurveProgress ?? 0));
+  const mcOf = (r) => { const c = [r.marketCap, r.fdv, r.marketCapUsd, r.usdMarketCap].map(Number).find((n) => Number.isFinite(n) && n > 0); return c || parseMoneyLabel(r.marketCapLabel); };
+  // ≥$18k, not graduated, on the curve — sorted CLOSEST-TO-BONDING first (highest curve %).
+  const cands = rows.filter((r) => !(r.graduated || r.isGraduated) && progOf(r) < 100 && mcOf(r) >= GRAD_MIN_MC)
+    .sort((a, b) => progOf(b) - progOf(a));
+  if (!cands.length) return { text: `🎓 <b>Graduation Gauntlet</b>\n\nThe runway's quiet this second — nothing ≥${scanFmtMoney(GRAD_MIN_MC)} on the curve right now. Tap 🔄 in a moment.`, markup: back };
+  const rotate = cands.length > 8;
+  const start = rotate ? (gradRotateOffset % cands.length) : 0;
+  const windowed = rotate ? [...cands.slice(start), ...cands.slice(0, start)].slice(0, 8) : cands.slice(0, 8);
+  if (rotate) gradRotateOffset = start + 8;
+  const lines = windowed.map((r, i) => {
+    const p = progOf(r); const mc = mcOf(r); const sym = r.symbol || shortMint(r.tokenMint || r.mint || "");
     const lx = slimewireTokenLinks(r.tokenMint || r.mint || "");
-    return `${i + 1}. <a href="${lx.site}"><b>$${escapeTelegramHtml(sym)}</b></a> — <b>${x.p}%</b> · ${scanFmtMoney(x.mc)}`;
+    return `${i + 1}. <a href="${lx.site}"><b>$${escapeTelegramHtml(sym)}</b></a> — <b>${p > 0 ? p + "%" : "on curve"}</b> to bond${mc > 0 ? ` · ${scanFmtMoney(mc)}` : ""}`;
   });
-  return { text: [`🎓 <b>Graduation Gauntlet</b> — ≥${scanFmtMoney(GRAD_MIN_MC)} &amp; about to bond (not graduated yet):`, "", ...lines, "", `<i>${GRAD_MIN_PROGRESS}%+ up the curve, still on it — get in before the DEX-listing pop. Tap a $ticker for its chart.</i>`].join("\n"), markup: back };
+  return { text: [`🎓 <b>Graduation Gauntlet</b> — ≥${scanFmtMoney(GRAD_MIN_MC)}, closest to bonding first (not graduated):`, "", ...lines, "", `<i>Live on the curve — get in before the DEX-listing pop. Tap a $ticker for its chart · 🔄 to rotate.</i>`].join("\n"), markup: back };
 }
 // The 🎯 Trench super-menu — one tidy home for everything trench (snipe / room / signals / boards / radars).
 function gbTrenchBackRow() { return [{ text: "⬅️ Trench", callback_data: "gb:m:trench" }, { text: "✓ Done", callback_data: "gb:close" }]; }
