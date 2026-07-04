@@ -1037,6 +1037,24 @@ test("trader wow-UX: rich receipts (live MC + realized PnL), price alerts, auto-
   assert.match(functionBody(serverSource, "handleTpCallback"), /dir: ">=", pct: rung\.pct/);
   assert.match(functionBody(serverSource, "quickBuyReceiptKeyboard"), /callback_data: `tp:\$\{mint\}`/);
 });
+test("viral + onboarding: win-flex card, first-run wallet CTA, fee transparency, deposit QR", () => {
+  // 📸 personal win-flex from own realized PnL, routed, offered on a winning sell
+  assert.match(serverSource, /async function sendUserWinFlex/);
+  assert.match(functionBody(serverSource, "sendUserWinFlex"), /realizedPnlForMint\(userId, mint\)/);
+  assert.match(serverSource, /startsWith\("wf:"\)/);
+  assert.match(functionBody(serverSource, "tgQuickSellReceipt"), /callback_data: `wf:\$\{mint\}`/);
+  assert.match(functionBody(serverSource, "tgQuickSellReceipt"), /pnl\.net > 0n && pnl\.pct >= 25/); // only on a real win
+  // first-run onboarding: a walletless DM user gets a one-tap create CTA on the menu
+  assert.match(functionBody(serverSource, "showMenu"), /walletsForOwner\(await readWalletStore\(\), userId\)\.length === 0/);
+  assert.match(functionBody(serverSource, "showMenu"), /Create your free wallet/);
+  // fee transparency in settings
+  assert.match(functionBody(serverSource, "dmSettingsMenu"), /CONFIG\.bundleFeeBps/);
+  assert.match(functionBody(serverSource, "dmSettingsMenu"), /Trade fee/);
+  // deposit view: QR of the (public) address + wired
+  assert.match(serverSource, /async function showDepositView/);
+  assert.match(functionBody(serverSource, "showDepositView"), /api\.qrserver\.com/);
+  assert.match(serverSource, /callback_data: "deposit_menu"/);
+});
 test("smooth nav: DM sub-views carry a Main Menu button (no re-/start)", () => {
   for (const fn of ["showTelegramLinksMenu", "showTelegramPortfolioMenu", "showTelegramOgreToolsMenu", "showWalletMenu"]) {
     assert.match(functionBody(serverSource, fn), /callback_data: "main_menu"/, `${fn} needs Main Menu`);

@@ -3968,6 +3968,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "import_wallet",
   "delete_wallets",
   "wallet_menu",
+  "deposit_menu",
   "buy_prompt",
   "settings_menu",
   "dm_signals",
@@ -11558,6 +11559,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("tp:")) {
     if (await handleTpCallback(query, userId).catch(() => false)) return;
   }
+  // 📸 Win-flex card (wf:*) — shareable card of your own realized PnL on a coin.
+  if (String(query.data || "").startsWith("wf:")) {
+    if (await handleWinFlexCallback(query, userId).catch(() => false)) return;
+  }
   // ⚙️ Buy presets (bp:*) — set the amounts your ⚡ buttons use.
   if (String(query.data || "").startsWith("bp:")) {
     if (await handleBuyPrefCallback(query, userId).catch(() => false)) return;
@@ -11755,6 +11760,9 @@ async function handleCallback(query, userId) {
       break;
     case "wallet_menu":
       await showWalletMenu(chatId, messageId);
+      break;
+    case "deposit_menu":
+      await showDepositView(chatId, userId);
       break;
     case "trade_menu":
       await showTradeMenu(chatId, messageId);
@@ -21064,7 +21072,7 @@ async function showWalletMenu(chatId, messageId = null) {
   await sendOrEditMessage(chatId, messageId, withBrandFooter("Wallet tools:"), {
     inline_keyboard: [
       [{ text: "💴💶💷 Create Wallet Set", callback_data: "create_wallets" }],
-      [{ text: "Import Wallet", callback_data: "import_wallet" }],
+      [{ text: "💰 Deposit (QR)", callback_data: "deposit_menu" }, { text: "Import Wallet", callback_data: "import_wallet" }],
       [{ text: "💳 My Wallets", callback_data: "list_wallets" }],
       [{ text: "🔍 Check Balances", callback_data: "check_balances" }],
       [{ text: "Positions Overview", callback_data: "positions_overview" }],
@@ -21075,6 +21083,32 @@ async function showWalletMenu(chatId, messageId = null) {
       [{ text: "Main Menu", callback_data: "main_menu" }]
     ]
   });
+}
+// 💰 Deposit view — the "how do I fund this?" answer in one screen: a scannable QR of the wallet
+// address (a public receive key — safe to render), the copyable address, live balance, and a fund hint.
+async function showDepositView(chatId, userId) {
+  const wallets = walletsForOwner(await readWalletStore(), userId);
+  if (!wallets.length) { await sayHtml(chatId, "You don't have a wallet yet — tap 🚀 <b>Create your free wallet</b> from the menu (/start).", { inline_keyboard: [[{ text: "🚀 Create Wallet", callback_data: "create_wallets" }, { text: "🏠 Main Menu", callback_data: "main_menu" }]] }); return; }
+  const w = wallets[0];
+  const addr = w.publicKey;
+  let bal = "";
+  try { const sol = await getSolBalanceCached(new PublicKey(addr)); if (sol != null) bal = `Balance: <b>◎${lamportsBigToSol(BigInt(sol))}</b>\n`; } catch (_) {}
+  const qr = `https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=12&data=${encodeURIComponent(addr)}`;
+  const cap = [
+    "💰 <b>Deposit SOL</b>",
+    "",
+    `Send SOL to your SlimeWire wallet <b>${escapeTelegramHtml(w.label || "main")}</b>:`,
+    `<code>${escapeTelegramHtml(addr)}</code>`,
+    "",
+    bal,
+    "Scan the QR from Phantom/Solflare or copy the address. It lands in seconds — then paste any coin's contract to buy in one tap."
+  ].filter(Boolean).join("\n");
+  const kb = { inline_keyboard: [
+    [{ text: "🔍 Check Balance", callback_data: "check_balances" }, { text: "💳 My Wallets", callback_data: "list_wallets" }],
+    [{ text: "🏠 Main Menu", callback_data: "main_menu" }]
+  ] };
+  await telegram("sendPhoto", { chat_id: chatId, photo: qr, caption: cap, parse_mode: "HTML", reply_markup: kb })
+    .catch(async () => { await sayHtml(chatId, cap, kb).catch(() => {}); });
 }
 
 async function showTradeMenu(chatId, messageId = null) {
@@ -27054,18 +27088,29 @@ async function walletPrompt(userId, prefix) {
 async function showMenu(chatId, userId, messageId = null) {
   const state = await readState();
   const menu = isAdmin(userId) ? [...PUBLIC_MENU, ...ADMIN_MENU] : PUBLIC_MENU;
-  await sendOrEditMessage(chatId, messageId, withBrandFooter([
-    state.paused ? "⏸️ Emergency stop active." : "🐸 SlimeWire — your Solana trading terminal",
+  // First run: a DM user with no wallet yet gets a one-tap "create wallet" CTA up top, so onboarding
+  // is a single tap instead of a menu hunt (chatId === userId is the DM signal). Text stays PLAIN —
+  // sendOrEditMessage's edit branch omits parse_mode.
+  let firstRun = false;
+  try { if (String(chatId) === String(userId)) firstRun = walletsForOwner(await readWalletStore(), userId).length === 0; } catch (_) {}
+  const kb = firstRun ? [[{ text: "🚀 Create your free wallet (10s)", callback_data: "create_wallets" }], ...menu] : menu;
+  const intro = state.paused ? ["⏸️ Emergency stop active."] : (firstRun ? [
+    "🐸 Welcome to SlimeWire — your Solana trading terminal.",
+    "",
+    "Tap 🚀 below to spin up a free wallet in 10 seconds — no sign-up, no seed phrase to write down. Then fund it with SOL and buy any coin in one tap.",
+    "",
+    "Already trade elsewhere? 👛 Wallet → Import brings your wallet in.",
+  ] : [
+    "🐸 SlimeWire — your Solana trading terminal",
     "",
     "Paste any token contract to pull it up and buy in one tap — then sell, arm ⏰ limit / TP-SL, or bank it, all right here.",
     "",
     "🟢 Buy / Sell · 👛 Wallet · ⚙️ Settings — the essentials.",
     "🎯 Signals · 🕵️ Sniper & Copy · 🚀 Launch · 📈 Volume Bot — what other bots don't have.",
     "",
-    "Same wallet + settings also work on slimewire.org — /web to connect."
-  ].join("\n")), {
-    inline_keyboard: menu
-  });
+    "Same wallet + settings also work on slimewire.org — /web to connect.",
+  ]);
+  await sendOrEditMessage(chatId, messageId, withBrandFooter(intro.join("\n")), { inline_keyboard: kb });
 }
 
 async function sendQuickAmountPrompt(chatId, text, options = {}) {
@@ -29895,8 +29940,9 @@ async function setBuyPref(userId, kind, value) {
 // ⚙️ TRADE SETTINGS hub (the recognized panel): buy presets + slippage, one clean place.
 const SLIP_TIERS = [300, 500, 1000, 1500, 2500];
 function dmSettingsMenu(prefs) {
+  const feePct = (CONFIG.bundleFeeBps / 100).toFixed(2).replace(/\.?0+$/, "");
   return {
-    text: ["⚙️ <b>Trade settings</b>", "", `⚡ Buy presets: <b>${prefs.presets[0]}◎ · ${prefs.presets[1]}◎ · ${prefs.presets[2]}◎</b>  (✏️ custom ${prefs.custom}◎)`, `🎚 Slippage: <b>${(prefs.slippageBps / 100).toFixed(prefs.slippageBps % 100 ? 1 : 0)}%</b>`, "", "<i>These apply to your ⚡ one-click buys everywhere. Same wallet + settings on slimewire.org via /web.</i>"].join("\n"),
+    text: ["⚙️ <b>Trade settings</b>", "", `⚡ Buy presets: <b>${prefs.presets[0]}◎ · ${prefs.presets[1]}◎ · ${prefs.presets[2]}◎</b>  (✏️ custom ${prefs.custom}◎)`, `🎚 Slippage: <b>${(prefs.slippageBps / 100).toFixed(prefs.slippageBps % 100 ? 1 : 0)}%</b>`, `💸 Trade fee: <b>${feePct}%</b> per buy/sell — that's it, no subscription.`, `🎁 Invite friends → earn a rebate on their fees (Profile → Referral / <code>/reflink</code>).`, "", "<i>These apply to your ⚡ one-click buys everywhere. Same wallet + settings on slimewire.org via /web.</i>"].join("\n"),
     markup: { inline_keyboard: [
       [{ text: "🎚 Buy presets", callback_data: "bp:menu" }, { text: `⚡ Slippage: ${(prefs.slippageBps / 100).toFixed(prefs.slippageBps % 100 ? 1 : 0)}%`, callback_data: "st:slip" }],
       [{ text: "👛 Wallet", callback_data: "wallet_menu" }, { text: "🏠 Menu", callback_data: "main_menu" }]
@@ -30112,13 +30158,18 @@ async function tgQuickSellReceipt(userId, mint, r) {
     const up = pnl.net >= 0n;
     pnlLine = `${up ? "🟢" : "🔻"} <b>Realized: ${up ? "+" : ""}◎${lamportsBigToSol(pnl.net)}</b> (${up ? "+" : ""}${pnl.pct.toFixed(0)}%)`;
   }
+  // On a win, offer a one-tap shareable flex card at the top of the receipt (viral loop).
+  const kb = await quickBuyReceiptKeyboard(mint, userId);
+  if (pnl && pnl.hasBuys && pnl.net > 0n && pnl.pct >= 25) {
+    kb.inline_keyboard = [[{ text: "📸 Flex this win", callback_data: `wf:${mint}` }], ...kb.inline_keyboard];
+  }
   await sayHtml(userId, [
     `🔴 <b>Sold ${r.pct}%</b> of ${sym} — ~<b>◎${sol}</b> back to your wallet${r.fails ? ` (${r.fails} wallet(s) skipped)` : ""}.`,
     pnlLine,
     `<a href="${lx.site}">Chart · positions →</a>`,
     "",
     "<i>Sell more, buy back, or arm ⏰ limit / TP-SL:</i>"
-  ].filter(Boolean).join("\n"), await quickBuyReceiptKeyboard(mint, userId)).catch(() => {});
+  ].filter(Boolean).join("\n"), kb).catch(() => {});
 }
 async function handleQuickSellCallback(query, userId) {
   const data = String(query?.data || ""); if (!data.startsWith("qs:")) return false;
@@ -30688,6 +30739,49 @@ async function sendCallFlexImageCard(chatId, mint, message) {
     await sendPhoto(chatId, `flex-${sanitizeFilenamePart(sym || mint)}.png`, png, cap, slimeScanKeyboard(mint), "HTML");
     return true;
   } catch { try { return await postCallFlexCard(chatId, mint, message); } catch { return false; } }
+}
+
+// 📸 Personal win-flex — a shareable card of YOUR realized PnL on a coin (from your own trades, not a
+// channel call). Fires from a button on the sell receipt when you're up. Viral loop: forward it, it
+// links back to SlimeWire. Honest — the numbers come straight from your recorded buys/sells.
+async function sendUserWinFlex(userId, mint) {
+  try {
+    const pnl = await realizedPnlForMint(userId, mint);
+    if (!pnl || !pnl.hasBuys) { await sayHtml(userId, "No recorded PnL on this coin yet — buy/sell it through the bot first."); return true; }
+    const info = await alphaRadarFetchMc(mint).catch(() => null);
+    const sym = (info && info.sym) || shortMint(mint);
+    const win = pnl.net >= 0n;
+    const spentSol = Number(lamportsBigToSol(pnl.spent)) || 0;
+    const recvSol = Number(lamportsBigToSol(pnl.received)) || 0;
+    const x = spentSol > 0 ? recvSol / spentSol : 0;
+    const png = await renderSlimeCard({
+      mint, symbol: sym, name: "SlimeWire", imageUrl: "",
+      loss: !win, receipt: true,
+      headline: win ? (x >= 2 ? `${Math.round(x * 10) / 10}X` : `+${pnl.pct.toFixed(0)}%`) : `${pnl.pct.toFixed(0)}%`,
+      lines: [
+        win ? `Banked +◎${lamportsBigToSol(pnl.net)}` : `Down ◎${lamportsBigToSol(-pnl.net)}`,
+        `on $${sym}`,
+        "traded on @SlimeWiredBot"
+      ]
+    }).catch(() => null);
+    const lx = slimewireTokenLinks(mint);
+    if (!png) {
+      await sayHtml(userId, `${win ? "🟢" : "🔴"} <b>$${escapeTelegramHtml(sym)}</b> — realized ${win ? "+" : ""}◎${lamportsBigToSol(pnl.net)} (${win ? "+" : ""}${pnl.pct.toFixed(0)}%).\n⚡ <a href="${lx.site}">Trade it on SlimeWire</a>`);
+      return true;
+    }
+    const cap = `${win ? "🟢" : "🔴"} <b>$${escapeTelegramHtml(sym)}</b> — I ${win ? "banked" : "took"} <b>${win ? "+" : ""}◎${lamportsBigToSol(pnl.net)}</b> (${win ? "+" : ""}${pnl.pct.toFixed(0)}%) on @SlimeWiredBot.\n⚡ <a href="${lx.site}">Trade it here →</a>`;
+    await sendPhoto(userId, `flex-${sanitizeFilenamePart(sym)}.png`, png, cap, { inline_keyboard: [[{ text: "⚡ Trade on SlimeWire", url: lx.site }]] }, "HTML");
+    return true;
+  } catch { return false; }
+}
+async function handleWinFlexCallback(query, userId) {
+  const data = String(query?.data || ""); if (!data.startsWith("wf:")) return false;
+  const ack = (t) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t } : {}) }).catch(() => {});
+  const m = data.match(/^wf:([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+  if (!m) { await ack(); return true; }
+  await ack("📸 Building your flex card…");
+  await sendUserWinFlex(userId, m[1]);
+  return true;
 }
 
 // Detect a "PnL flex / brag" that names a coin, so the scan bot can answer with a SlimeWire card.
