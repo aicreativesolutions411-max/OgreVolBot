@@ -11530,6 +11530,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("cs:")) {
     if (await handleCommunitySnipeCallback(query, userId).catch(() => false)) return;
   }
+  // The Room menu (room:*) — verifiable PnL board + skin-in-the-game callers.
+  if (String(query.data || "").startsWith("room:")) {
+    if (await handleRoomCallback(query, userId).catch(() => false)) return;
+  }
 
   if (ADMIN_ACTIONS.has(query.data) && !isAdmin(userId)) {
     await say(chatId, "Only bot admins can use that control.");
@@ -12575,6 +12579,8 @@ async function handleMessage(message, userId) {
     const cs = parseCommandWithArgument(text, ["snipe", "communitysnipe", "csnipe"]);
     if (cs) { await handleCommunitySnipeCommand(chatId, message, cs.argument, userId); return; }
   }
+  // /room — the group's verifiable trading board (opt-in Room PnL + skin-in-the-game callers).
+  if (parseCommandWithArgument(text, ["room", "board", "roompnl"])) { await handleRoomCommand(chatId, message); return; }
 
   if (text === "/withdraw" || text === "/sweep") {
     if (!isPrivateChat(message.chat)) {
@@ -27727,6 +27733,7 @@ async function recordTelegramCall(message, mint, mcUsd) {
         entryMc: mc, firstAt: nowMs, peakMc: mc, lastMc: mc, lastAt: nowMs
       };
       store.calls[key] = rec;
+      roomMaybeVerifyCall(rec, chatId, mint);   // skin-in-the-game: verify the caller actually holds it (opt-in)
       console.info(JSON.stringify({ event: "tg_call_recorded", chat: rec.chatTitle, caller: callerName, mint, entryMc: mc }));
     } else if (mc > 0) {
       rec.lastMc = mc; rec.lastAt = nowMs;
@@ -29094,6 +29101,109 @@ async function applyCsInput(message, userId) {
   }
   return true;
 }
+// ===== THE ROOM — group social trading layer (verifiable PnL board + skin-in-the-game callers) =====
+// The one thing no bot can copy: we're IN the chat AND every member has a non-custodial wallet. Members
+// opt IN to share their REALIZED SOL PnL (from their own SlimeWire trades) to a live room leaderboard, and
+// "calls" only count when the caller actually HOLDS what they called (on-chain verified) — killing the
+// "call everything, screenshot the winners" grift. Fully opt-in, button-driven.
+function roomBoardPath() { return path.join(CONFIG.dataDir, "room-board.json"); }
+let roomBoardCache = null;
+async function readRoomBoard() {
+  if (roomBoardCache) return roomBoardCache;
+  let s = null; try { s = await readJson(roomBoardPath()); } catch { s = null; }
+  if (!s || typeof s !== "object") s = {};
+  if (!s.rooms || typeof s.rooms !== "object") s.rooms = {};
+  roomBoardCache = s; return s;
+}
+async function writeRoomBoard(store) { roomBoardCache = store; await writeJsonFile(roomBoardPath(), store).catch(() => {}); }
+function roomOptedIn(store, chatId, userId) { const r = store.rooms[String(chatId)]; return Boolean(r && r.members && r.members[String(userId)]); }
+async function setRoomOptIn(chatId, userId, from, on) {
+  const store = await readRoomBoard();
+  const r = store.rooms[String(chatId)] || (store.rooms[String(chatId)] = { members: {} });
+  if (on) r.members[String(userId)] = { name: from.username ? `@${from.username}` : (from.first_name || String(userId)).slice(0, 24), at: Date.now() };
+  else delete r.members[String(userId)];
+  await writeRoomBoard(store);
+}
+// Realized (banked) SOL per user = received − spent across their SlimeWire trade history (honest cash PnL).
+async function roomRealizedByUser(userIds) {
+  const want = new Set(userIds.map(String));
+  const byUser = new Map();
+  try {
+    const history = await readTradeHistory();
+    for (const t of history.trades || []) {
+      const uid = String(t.userId || "");
+      if (!want.has(uid)) continue;
+      const cur = byUser.get(uid) || { spent: 0n, received: 0n };
+      if (t.type === "buy") cur.spent += positiveBigIntOrZero(t.solLamportsSpent);
+      else if (t.type === "sell") cur.received += positiveBigIntOrZero(t.solLamportsReceived);
+      byUser.set(uid, cur);
+    }
+  } catch {}
+  return byUser;
+}
+function roomMenuMarkup() {
+  return { inline_keyboard: [
+    [{ text: "🏆 Room PnL", callback_data: "room:pnl" }, { text: "📢 Top callers", callback_data: "room:callers" }],
+    [{ text: "✅ Join board", callback_data: "room:join" }, { text: "🚪 Leave board", callback_data: "room:leave" }]
+  ] };
+}
+async function roomPnlView(chatId) {
+  const store = await readRoomBoard();
+  const members = Object.entries((store.rooms[String(chatId)] || {}).members || {});
+  if (!members.length) return { text: "🏆 <b>Room PnL</b>\n\nNobody's shared their trading yet. Tap <b>✅ Join board</b> — your realized SOL (from your own SlimeWire trades) shows here and the room competes. Opt out anytime.", markup: roomMenuMarkup() };
+  const byUser = await roomRealizedByUser(members.map(([u]) => u));
+  const rows = members.map(([uid, m]) => { const a = byUser.get(String(uid)) || { spent: 0n, received: 0n }; return { name: m.name, sol: Number(a.received - a.spent) / 1e9 }; })
+    .filter((x) => Number.isFinite(x.sol)).sort((a, b) => b.sol - a.sol).slice(0, 15);
+  const medal = (i) => ["🥇", "🥈", "🥉"][i] || `${i + 1}.`;
+  const total = rows.reduce((s, x) => s + x.sol, 0);
+  const lines = rows.map((x, i) => `${medal(i)} ${escapeTelegramHtml(String(x.name).slice(0, 20))} — <b>${x.sol >= 0 ? "+" : ""}${x.sol.toFixed(2)} ◎</b>`);
+  return { text: [`🏆 <b>Room PnL</b> — the room is <b>${total >= 0 ? "+" : ""}${total.toFixed(2)} ◎</b> banked`, ...lines, "", "<i>Realized SOL from members' own SlimeWire trades. Fully opt-in — your call.</i>"].join("\n"), markup: roomMenuMarkup() };
+}
+async function roomCallersView(chatId) {
+  let callers = [];
+  try {
+    const store = await readTelegramCalls();
+    const scoped = Object.values(store.calls || {}).filter((c) => String(c.chatId) === String(chatId) && c.verified);
+    callers = (callerIntel.buildLeaderboards(scoped, { minResolved: 1 }).callers || []).slice(0, 10);
+  } catch {}
+  if (!callers.length) return { text: "📢 <b>Verified callers</b>\n\nNo verified calls yet. A call only counts when you actually <b>hold</b> what you called — drop a $ticker/CA while holding it (and Join the board) and it lands here with your real hit-rate.", markup: roomMenuMarkup() };
+  const medal = (i) => ["🥇", "🥈", "🥉"][i] || `${i + 1}.`;
+  const lines = callers.map((c, i) => `${medal(i)} ✅ ${escapeTelegramHtml(String(c.name).slice(0, 20))} — ${Math.round((c.smoothedHitRate || 0) * 100)}% hit · ${c.wins}W/${c.losses}L${Number(c.bestPeakX) >= 2 ? ` · best ${c.bestPeakX}x` : ""}`);
+  return { text: [`📢 <b>Verified callers</b> — they held what they called:`, ...lines, "", "<i>Skin-in-the-game only. Screenshot-callers don't make this board.</i>"].join("\n"), markup: roomMenuMarkup() };
+}
+async function roomRender(chatId, messageId, view) {
+  if (messageId) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: view.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: view.markup }).catch(() => {});
+  else await sayHtml(chatId, view.text, view.markup);
+}
+async function handleRoomCallback(query, userId) {
+  const data = String(query?.data || "");
+  if (!data.startsWith("room:")) return false;
+  const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  const ack = (t) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: true } : {}) }).catch(() => {});
+  if (data === "room:pnl") { await roomRender(chatId, messageId, await roomPnlView(chatId)); await ack(); return true; }
+  if (data === "room:callers") { await roomRender(chatId, messageId, await roomCallersView(chatId)); await ack(); return true; }
+  if (data === "room:join") { await setRoomOptIn(chatId, userId, query.from || {}, true); await roomRender(chatId, messageId, await roomPnlView(chatId)); await ack("✅ You're on the board — your realized SOL + verified calls now count."); return true; }
+  if (data === "room:leave") { await setRoomOptIn(chatId, userId, query.from || {}, false); await roomRender(chatId, messageId, await roomPnlView(chatId)); await ack("You left the board."); return true; }
+  await ack(); return true;
+}
+async function handleRoomCommand(chatId, message) {
+  await sayHtml(chatId, "🏆 <b>The Room</b> — this group's live, verifiable trading board.\n\n• <b>Room PnL</b>: real banked SOL from members' own trades.\n• <b>Top callers</b>: only counts calls where you actually held the coin.\n\nFully opt-in — Join to compete, Leave anytime.", roomMenuMarkup());
+}
+// Skin-in-the-game: mark a recorded call VERIFIED if the (opted-in) caller actually holds what they called.
+function roomMaybeVerifyCall(rec, chatId, mint) {
+  try {
+    if (!rec || !rec.callerId) return;
+    void (async () => {
+      try {
+        const store = await readRoomBoard();
+        if (!roomOptedIn(store, chatId, rec.callerId)) return;
+        const wallets = walletsForOwner(await readWalletStore(), rec.callerId);
+        for (const w of wallets) { if ((await walletTokenUiBalance(w.publicKey, mint)) > 0) { rec.verified = true; scheduleTelegramCallsFlush(); break; } }
+      } catch {}
+    })();
+  } catch {}
+}
+
 // onCreation hook: does this fresh launch's creator wallet match an armed community snipe?
 function maybeCommunitySnipe(entry) {
   try {

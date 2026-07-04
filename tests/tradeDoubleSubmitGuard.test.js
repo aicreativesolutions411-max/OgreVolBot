@@ -1211,3 +1211,27 @@ test("community snipe is button-driven: tap-to-join amounts, dev setup, preset p
   assert.match(inp, /pend\.kind === "presets"/);
   assert.match(inp, /pend\.kind === "wallet"/);
 });
+
+// ---- The Room: opt-in verifiable PnL board + skin-in-the-game callers (our unfair in-chat edge) ----
+test("Room PnL board is opt-in and shows REAL realized SOL from members' own trades", () => {
+  const pnl = functionBody(serverSource, "roomPnlView");
+  assert.match(pnl, /roomRealizedByUser/);
+  assert.match(functionBody(serverSource, "roomRealizedByUser"), /readTradeHistory/);       // real trade history
+  assert.match(functionBody(serverSource, "roomRealizedByUser"), /received.*spent|spent.*received/); // received − spent
+  // opt-in only
+  assert.match(serverSource, /callback_data: "room:join"/);
+  assert.match(serverSource, /callback_data: "room:leave"/);
+  assert.match(serverSource, /await setRoomOptIn\(chatId, userId, query\.from/);
+});
+test("skin-in-the-game callers: a call only verifies if the (opted-in) caller actually holds it", () => {
+  const v = functionBody(serverSource, "roomMaybeVerifyCall");
+  assert.match(v, /roomOptedIn\(store, chatId, rec\.callerId\)/);          // opt-in gate
+  assert.match(v, /walletTokenUiBalance\(w\.publicKey, mint\)/);            // on-chain holdings check
+  assert.match(v, /rec\.verified = true/);
+  assert.match(serverSource, /roomMaybeVerifyCall\(rec, chatId, mint\)/);   // hooked into recordTelegramCall
+  // the callers board shows ONLY verified calls
+  assert.match(functionBody(serverSource, "roomCallersView"), /c\.chatId\) === String\(chatId\) && c\.verified/);
+  // command + callback wired
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["room", "board", "roompnl"\]\)/);
+  assert.match(serverSource, /startsWith\("room:"\)/);
+});
