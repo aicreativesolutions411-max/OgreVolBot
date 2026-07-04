@@ -29041,7 +29041,8 @@ function communitySnipeCardMarkup(snipe) {
   return { inline_keyboard: [
     [{ text: "💰 Join 0.1", callback_data: "cs:amt:0.1" }, { text: "💰 0.5", callback_data: "cs:amt:0.5" }, { text: "💰 1", callback_data: "cs:amt:1" }],
     [{ text: "✏️ Custom amount", callback_data: "cs:custom" }, { text: "🎯 TP/SL", callback_data: "cs:presets" }],
-    [{ text: "🚪 Leave", callback_data: "cs:leave" }, { text: "⚙️ Dev setup", callback_data: "cs:admin" }]
+    [{ text: "🚪 Leave", callback_data: "cs:leave" }, { text: "⚙️ Dev setup", callback_data: "cs:admin" }],
+    [{ text: "⬅️ Trench", callback_data: "gb:m:trench" }, { text: "✓ Done", callback_data: "gb:close" }]
   ] };
 }
 function communitySnipeAdminMarkup(snipe) {
@@ -29202,7 +29203,8 @@ function roomMenuMarkup() {
   return { inline_keyboard: [
     [{ text: "🏆 Room PnL", callback_data: "room:pnl" }, { text: "📢 Top callers", callback_data: "room:callers" }],
     [{ text: "🧾 My Proof-of-Call", callback_data: "room:receipt" }, { text: "🪞 Copy the best", callback_data: "gb:go:copy" }],
-    [{ text: "✅ Join board", callback_data: "room:join" }, { text: "🚪 Leave board", callback_data: "room:leave" }]
+    [{ text: "🎫 Join / leave board", callback_data: "room:toggle" }],
+    [{ text: "⬅️ Trench", callback_data: "gb:m:trench" }, { text: "✓ Done", callback_data: "gb:close" }]
   ] };
 }
 // 🧾 PROOF-OF-CALL — a shareable, verifiable receipt of a member's best VERIFIED winning call (they held
@@ -29223,7 +29225,7 @@ async function roomReceiptView(chatId, userId) {
 async function roomPnlView(chatId) {
   const store = await readRoomBoard();
   const members = Object.entries((store.rooms[String(chatId)] || {}).members || {});
-  if (!members.length) return { text: "🏆 <b>Room PnL</b>\n\nNobody's shared their trading yet. Tap <b>✅ Join board</b> — your realized SOL (from your own SlimeWire trades) shows here and the room competes. Opt out anytime.", markup: roomMenuMarkup() };
+  if (!members.length) return { text: "🏆 <b>Room PnL</b>\n\nNobody's shared their trading yet. Tap <b>🎫 Join / leave board</b> — your realized SOL (from your own SlimeWire trades) shows here and the room competes. Opt out anytime.", markup: roomMenuMarkup() };
   const byUser = await roomRealizedByUser(members.map(([u]) => u));
   const rows = members.map(([uid, m]) => { const a = byUser.get(String(uid)) || { spent: 0n, received: 0n }; return { name: m.name, sol: Number(a.received - a.spent) / 1e9 }; })
     .filter((x) => Number.isFinite(x.sol)).sort((a, b) => b.sol - a.sol).slice(0, 15);
@@ -29256,6 +29258,13 @@ async function handleRoomCallback(query, userId) {
   if (data === "room:pnl") { await roomRender(chatId, messageId, await roomPnlView(chatId)); await ack(); return true; }
   if (data === "room:callers") { await roomRender(chatId, messageId, await roomCallersView(chatId)); await ack(); return true; }
   if (data === "room:receipt") { await roomRender(chatId, messageId, await roomReceiptView(chatId, userId)); await ack(); return true; }
+  if (data === "room:toggle") {
+    const on = roomOptedIn(await readRoomBoard(), chatId, userId);
+    await setRoomOptIn(chatId, userId, query.from || {}, !on);
+    await roomRender(chatId, messageId, await roomPnlView(chatId));
+    await ack(on ? "🚪 You left the board." : "✅ You're on the board — your realized SOL + verified calls now count.");
+    return true;
+  }
   if (data === "room:join") { await setRoomOptIn(chatId, userId, query.from || {}, true); await roomRender(chatId, messageId, await roomPnlView(chatId)); await ack("✅ You're on the board — your realized SOL + verified calls now count."); return true; }
   if (data === "room:leave") { await setRoomOptIn(chatId, userId, query.from || {}, false); await roomRender(chatId, messageId, await roomPnlView(chatId)); await ack("You left the board."); return true; }
   await ack(); return true;
@@ -29308,7 +29317,8 @@ async function signalsMenu(chatId, userId, isDm) {
       text: "📡 <b>Your Signals</b> — tap to toggle the alerts you want (DM):\n\n🎯 <b>Exit Radar</b> — watches your own open bags and pings you to take profit when one tops (hard fade off the peak, or the dev dumps).\n🕵️ <b>Alpha Radar</b> — network-backed long-term runners.",
       markup: { inline_keyboard: [
         [{ text: `🎯 Exit Radar  ${ex ? "✅ ON" : "◻️ off"}`, callback_data: "sig:exit" }],
-        [{ text: `🕵️ Alpha Radar  ${al ? "✅ ON" : "◻️ off"}`, callback_data: "sig:alpha" }]
+        [{ text: `🕵️ Alpha Radar  ${al ? "✅ ON" : "◻️ off"}`, callback_data: "sig:alpha" }],
+        [{ text: "✓ Done", callback_data: "gb:close" }]
       ] }
     };
   }
@@ -29317,7 +29327,8 @@ async function signalsMenu(chatId, userId, isDm) {
   return {
     text: "📡 <b>Group Signals</b> — admins toggle what this group gets:\n\n🕵️ <b>Alpha Radar</b> — network-backed long-term-runner alerts (replaces the short-term plays).\n🎯 <b>Exit Radar</b> is personal (watches your own bags) — DM me <code>/signals</code> to turn it on.",
     markup: { inline_keyboard: [
-      [{ text: `🕵️ Alpha Radar  ${al ? "✅ ON" : "◻️ off"}`, callback_data: "sig:galpha" }]
+      [{ text: `🕵️ Alpha Radar  ${al ? "✅ ON" : "◻️ off"}`, callback_data: "sig:galpha" }],
+      gbTrenchBackRow()
     ] }
   };
 }
@@ -29552,7 +29563,7 @@ function trenchMenuView() {
       [{ text: "🪞 Copy the Best", callback_data: "gb:go:copy" }, { text: "🚀 Launch Room", callback_data: "gb:go:launch" }],
       [{ text: "🏆 Leaderboard", callback_data: "gb:go:lb" }, { text: "🌀 Narrative Radar", callback_data: "gb:go:narrative" }],
       [{ text: "🎓 Graduation Gauntlet", callback_data: "gb:go:grad" }],
-      [{ text: "⬅️ Back", callback_data: "gb:home" }, { text: "✓ Done", callback_data: "gb:close" }]
+      [{ text: "🏠 Settings (admin)", callback_data: "gb:home" }, { text: "✓ Done", callback_data: "gb:close" }]
     ] }
   };
 }
@@ -30213,7 +30224,8 @@ function callerLeaderboardKeyboard(activeKey) {
   return {
     inline_keyboard: [
       CALLER_LB_WINDOWS.map((w) => ({ text: (w.key === activeKey ? "✅ " : "") + w.label, callback_data: `clb:${w.key}` })),
-      [{ text: "🧾 Full proof wall", url: "https://www.slimewire.org/proof" }]
+      [{ text: "🧾 Full proof wall", url: "https://www.slimewire.org/proof" }],
+      [{ text: "⬅️ Trench", callback_data: "gb:m:trench" }, { text: "✓ Done", callback_data: "gb:close" }]
     ]
   };
 }
@@ -30647,17 +30659,24 @@ function groupBotModuleView(module, entry) {
   if (module === "ref") {
     const rc = referralConfig(e);
     const top = Object.entries(rc.counts || {}).sort((a, b) => b[1] - a[1])[0];
+    const reward = referralRewardLabel(rc);
+    const isCoin = rc.rewardKind === "coin";
     return {
       text: [
         "🎟️ <b>Referral Contest</b>",
-        rc.on ? `Status: <b>LIVE</b>${rc.prize ? ` · 🏆 ${escapeTelegramHtml(rc.prize)}` : ""}` : "Status: <b>off</b>",
+        rc.on ? "Status: <b>🟢 LIVE</b>" : "Status: <b>⚪ off</b>",
+        `Reward: <b>${reward ? escapeTelegramHtml(reward) : "not set"}</b>`,
         top ? `Leader: <b>${top[1]}</b> referrals` : "No referrals yet.",
         "",
-        "Members grab a unique invite link with <code>/reflink</code>; every real join via it counts for them. <code>/refboard</code> shows standings.",
+        "Members grab a link with <code>/reflink</code>. It works two ways: <b>👥 group joins</b> via their invite link, and <b>🌐 site conversions</b> — a friend who makes a wallet + trades on slimewire.org counts too. <code>/refboard</code> = standings.",
+        "",
+        "Set the reward below, then Start. At the end the winner is announced with their payout wallet — you send the prize from your own Wallet → Send.",
       ].join("\n"),
       markup: { inline_keyboard: [
         [{ text: rc.on ? "⏹️ Stop contest" : "▶️ Start contest", callback_data: rc.on ? "gb:ref:stop" : "gb:ref:start" }],
-        [{ text: "🏆 Set prize", callback_data: "gb:in:refprize" }, { text: "📊 Leaderboard", callback_data: "gb:ref:board" }],
+        [{ text: `💰 Reward: ${isCoin ? "Coin" : "SOL"}`, callback_data: "gb:ref:kind" }, { text: `🔢 Amount: ${Number(rc.rewardAmount) || 0}`, callback_data: "gb:in:refamount" }],
+        ...(isCoin ? [[{ text: `🪙 Coin: ${rc.rewardMint ? (rc.rewardSymbol ? "$" + rc.rewardSymbol : shortMint(rc.rewardMint)) : "set CA"}`, callback_data: "gb:in:refcoin" }]] : []),
+        [{ text: "🏆 Prize note (optional)", callback_data: "gb:in:refprize" }, { text: "📊 Leaderboard", callback_data: "gb:ref:board" }],
         gbBackRow()
       ] }
     };
@@ -30709,9 +30728,11 @@ const GB_INPUT_PROMPT = {
   antiflood: "Send N — mute after N messages / 10s (0 = off)",
   autowhitelist: "Send N — trust a user after N clean messages (0 = off)",
   whalesmin: "Send the min token amount a member must hold to chat (e.g. 100000)",
-  refprize: "Send the contest prize text (shown on the leaderboard, or 'off')",
+  refprize: "Send an optional prize note shown on the leaderboard (or 'off')",
+  refamount: "Send the reward amount — a number (e.g. 0.5 for SOL, or 10000 for coins)",
+  refcoin: "Send the reward coin's contract address (CA). I'll fetch its symbol.",
 };
-const GB_INPUT_MODULE = { buyemoji: "buy", message: "buy", minbuy: "buy", track: "buy", welcome: "rose", rules: "rose", antiflood: "rose", autowhitelist: "rose", whalesmin: "rose", refprize: "ref" };
+const GB_INPUT_MODULE = { buyemoji: "buy", message: "buy", minbuy: "buy", track: "buy", welcome: "rose", rules: "rose", antiflood: "rose", autowhitelist: "rose", whalesmin: "rose", refprize: "ref", refamount: "ref", refcoin: "ref" };
 // Apply a typed value to the pending menu field, then re-render that sub-menu. Returns
 // true when it consumed the message (an admin was mid-entry).
 async function applyGbInput(message, userId) {
@@ -30738,6 +30759,17 @@ async function applyGbInput(message, userId) {
     case "autowhitelist": setRose({ autoWhitelist: Math.max(0, Math.min(100, parseInt(raw, 10) || 0)) }); break;
     case "whalesmin": e.whales = { ...whalesConfig(e), minHold: Math.max(0, Number(raw) || 0), mint: whalesConfig(e).mint || e.token || null }; break;
     case "refprize": e.referral = { ...referralConfig(e), prize: off ? "" : raw.slice(0, 100) }; break;
+    case "refamount": e.referral = { ...referralConfig(e), rewardAmount: Math.max(0, Number(raw) || 0) }; break;
+    case "refcoin": {
+      const rc = referralConfig(e);
+      if (off) { e.referral = { ...rc, rewardMint: "", rewardSymbol: "" }; }
+      else if (solanaPublicKeyLike(raw)) {
+        let sym = "";
+        try { const meta = await getDexScreenerTokenMetadata(raw).catch(() => null); sym = meta ? String(meta.symbol || meta.baseSymbol || meta.ticker || "").slice(0, 12) : ""; } catch {}
+        e.referral = { ...rc, rewardKind: "coin", rewardMint: raw, rewardSymbol: sym };
+      }
+      break;
+    }
     default: break;
   }
   store.groups[k] = e; await writeGroupBot(store);
@@ -30978,9 +31010,16 @@ async function handleGroupBotCallback(query, userId) {
     await groupBotRenderModule(chatId, "rose", messageId); await ack(wc.on ? undefined : "Whales mode ON — set the min hold next"); return true;
   }
   // Referral contest controls.
-  if (data === "gb:ref:start") { await setGroupSub(chatId, "referral", { on: true, startedAt: Date.now(), counts: {}, links: {}, credited: {} }); await groupBotRenderModule(chatId, "ref", messageId); await sayHtml(chatId, "🎟️ <b>Referral contest is LIVE!</b> Everyone: grab your link with <b>/reflink</b> and invite people. Standings: <b>/refboard</b>.").catch(() => {}); await ack("Contest started"); return true; }
-  if (data === "gb:ref:stop") { const cfg = referralConfig(await getGroupBotEntry(chatId)); const win = Object.entries(cfg.counts || {}).sort((a, b) => b[1] - a[1])[0]; await setGroupSub(chatId, "referral", { on: false }); await groupBotRenderModule(chatId, "ref", messageId); await sayHtml(chatId, win ? `🏁 <b>Referral contest ended!</b> 🥇 <a href="tg://user?id=${win[0]}">top inviter</a> — <b>${win[1]}</b> referrals.${cfg.prize ? ` 🏆 ${escapeTelegramHtml(cfg.prize)}` : ""}` : "🏁 Referral contest ended — no referrals recorded.").catch(() => {}); await ack("Contest ended"); return true; }
-  if (data === "gb:ref:board") { await sayHtml(chatId, referralBoardText(referralConfig(await getGroupBotEntry(chatId)))).catch(() => {}); await ack(); return true; }
+  if (data === "gb:ref:start") {
+    const cfg0 = referralConfig(await getGroupBotEntry(chatId));
+    await setGroupSub(chatId, "referral", { on: true, startedAt: Date.now(), counts: {}, sources: {}, links: {}, credited: {}, siteCredited: {} });
+    await groupBotRenderModule(chatId, "ref", messageId);
+    const reward = referralRewardLabel(cfg0);
+    await sayHtml(chatId, `🎟️ <b>Referral contest is LIVE!</b>${reward ? `\n🏆 Reward: <b>${escapeTelegramHtml(reward)}</b>` : ""}\n\nEveryone: grab your link with <b>/reflink</b> — invites <b>and</b> friends who trade on slimewire.org both count. Standings: <b>/refboard</b>.`).catch(() => {}); await ack("Contest started"); return true;
+  }
+  if (data === "gb:ref:stop") { const cfg = referralConfig(await getGroupBotEntry(chatId)); const win = Object.entries(cfg.counts || {}).sort((a, b) => b[1] - a[1])[0]; await setGroupSub(chatId, "referral", { on: false }); await groupBotRenderModule(chatId, "ref", messageId); await referralAnnounceWinner(chatId, cfg, win).catch(() => {}); await ack("Contest ended"); return true; }
+  if (data === "gb:ref:board") { await sayHtml(chatId, referralBoardText(referralConfig(await getGroupBotEntry(chatId)), userId)).catch(() => {}); await ack(); return true; }
+  if (data === "gb:ref:kind") { const cfg = referralConfig(await getGroupBotEntry(chatId)); await setGroupSub(chatId, "referral", { rewardKind: cfg.rewardKind === "coin" ? "sol" : "coin" }); await groupBotRenderModule(chatId, "ref", messageId); await ack(cfg.rewardKind === "coin" ? "Reward kind: SOL" : "Reward kind: Coin"); return true; }
   const tm = data.match(/^gb:t:(buybot|raid|rose|scan)$/);
   if (tm) {
     const cur = await getGroupBotEntry(chatId);
@@ -31603,7 +31642,64 @@ async function shieldIsImpersonator(chatId, user) {
 // ============================================================================
 function whalesConfig(e) { return { on: false, mint: null, minHold: 0, symbol: "", ...((e && e.whales) || {}) }; }
 function webverifyConfig(e) { return { on: false, ...((e && e.webverify) || {}) }; }
-function referralConfig(e) { return { on: false, startedAt: 0, prize: "", counts: {}, links: {}, credited: {}, ...((e && e.referral) || {}) }; }
+function referralConfig(e) { return { on: false, startedAt: 0, prize: "", rewardKind: "sol", rewardAmount: 0, rewardMint: "", rewardSymbol: "", counts: {}, sources: {}, links: {}, siteCodes: {}, credited: {}, siteCredited: {}, ...((e && e.referral) || {}) }; }
+// Human label for the declared prize: "0.5 SOL", "10000 $SLIME", or free-text prize, or "".
+function referralRewardLabel(cfg) {
+  const c = referralConfig(cfg && cfg.referral ? cfg : { referral: cfg });
+  const amt = Number(c.rewardAmount) || 0;
+  if (amt > 0 && c.rewardKind === "coin") return `${amt} $${c.rewardSymbol || (c.rewardMint ? shortMint(c.rewardMint) : "tokens")}`;
+  if (amt > 0) return `${amt} SOL`;
+  return c.prize || "";
+}
+// A stable per-(group,member) site referral code — the SAME link works on the site. Deterministic so a
+// member always gets their own code; stored in the group's referral.siteCodes for reverse lookup.
+function referralSiteCode(chatId, userId) {
+  const h = crypto.createHash("sha1").update(`${chatId}:${userId}`).digest("hex").slice(0, 6).toUpperCase();
+  return normalizeReferralCode("SWR" + h);
+}
+function referralSiteLink(code) { return `https://www.slimewire.org/?ref=${encodeURIComponent(normalizeReferralCode(code))}`; }
+// Find which group + inviter a site ref code belongs to (scans group referral.siteCodes — rare, cheap).
+async function findReferralBySiteCode(code) {
+  const norm = normalizeReferralCode(code);
+  if (!norm || !norm.startsWith("SWR")) return null;
+  const store = await readGroupBot().catch(() => null);
+  for (const [chatId, e] of Object.entries((store && store.groups) || {})) {
+    const sc = (e && e.referral && e.referral.siteCodes) || {};
+    if (sc[norm]) return { chatId: String(chatId), userId: String(sc[norm]), code: norm };
+  }
+  return null;
+}
+// Credit a referral for an inviter (source = "tg" join or "site" conversion). Counts each joiner once.
+async function referralBump(chatId, inviterId, source) {
+  const cfg = referralConfig(await getGroupBotEntry(chatId).catch(() => null));
+  if (!cfg.on) return;
+  const iid = String(inviterId);
+  const counts = { ...cfg.counts, [iid]: (cfg.counts[iid] || 0) + 1 };
+  const src = { ...cfg.sources }; const cur = { tg: 0, site: 0, ...(src[iid] || {}) };
+  cur[source === "site" ? "site" : "tg"] += 1; src[iid] = cur;
+  await setGroupSub(chatId, "referral", { counts, sources: src });
+}
+// recordTradeEvents hook: when a site-referred user makes their first qualifying buy (wallet + trade),
+// credit the TG inviter's contest ONCE. Non-money — just a counter. Loop-proof + idempotent.
+async function maybeCreditReferralConversion(events) {
+  try {
+    const buyers = new Set();
+    for (const ev of events || []) { if (ev && ev.type === "buy" && ev.userId) buyers.add(String(ev.userId)); }
+    if (!buyers.size) return;
+    const authStore = await readWebAuthStore().catch(() => null);
+    for (const uid of buyers) {
+      const prof = authStore && authStore.profiles ? authStore.profiles[uid] : null;
+      const rg = prof && prof.referredByGroup;
+      if (!rg || !rg.chatId || !rg.userId || String(rg.userId) === uid) continue;
+      const cfg = referralConfig(await getGroupBotEntry(rg.chatId).catch(() => null));
+      if (!cfg.on) continue;
+      if (cfg.siteCredited && cfg.siteCredited[uid]) continue;       // count each referred user once
+      await setGroupSub(rg.chatId, "referral", { siteCredited: { ...(cfg.siteCredited || {}), [uid]: String(rg.userId) } });
+      await referralBump(rg.chatId, rg.userId, "site");
+      await sayHtml(rg.chatId, `🎟️ <b>Site conversion!</b> A member <a href="tg://user?id=${rg.userId}">you invited</a> just made their first trade on <b>slimewire.org</b> — +1 referral. /refboard`).catch(() => {});
+    }
+  } catch {}
+}
 async function setGroupSub(chatId, field, patch) {
   const cfgFn = { whales: whalesConfig, webverify: webverifyConfig, referral: referralConfig }[field];
   const store = await readGroupBot(); const k = String(chatId); const e = store.groups[k] || defaultGroupBotEntry();
@@ -31721,14 +31817,28 @@ async function handleChatMemberUpdate(cm) {
   const inviterId = m[1], joinerId = String(cm?.new_chat_member?.user?.id || "");
   if (!joinerId || joinerId === inviterId) return;
   if (cfg.credited[joinerId]) return; // count each joiner once
-  const counts = { ...cfg.counts, [inviterId]: (cfg.counts[inviterId] || 0) + 1 };
-  await setGroupSub(chatId, "referral", { counts, credited: { ...cfg.credited, [joinerId]: inviterId } });
+  await setGroupSub(chatId, "referral", { credited: { ...cfg.credited, [joinerId]: inviterId } });
+  await referralBump(chatId, inviterId, "tg");
 }
-function referralBoardText(cfg) {
-  const rows = Object.entries(cfg.counts || {}).sort((a, b) => b[1] - a[1]).slice(0, 15);
-  if (!rows.length) return "🎟️ <b>Referral leaderboard</b>\nNo referrals yet — grab your link with /reflink and share it!";
-  const lines = rows.map(([id, n], i) => `${["🥇", "🥈", "🥉"][i] || (i + 1) + "."} <a href="tg://user?id=${id}">inviter ${escapeTelegramHtml(id.slice(-4))}</a> — <b>${n}</b>`);
-  return `🎟️ <b>Referral leaderboard</b>${cfg.prize ? ` · 🏆 ${escapeTelegramHtml(cfg.prize)}` : ""}\n\n${lines.join("\n")}`;
+function referralBoardText(cfg, viewerId) {
+  const c = referralConfig({ referral: cfg });
+  const reward = referralRewardLabel(c);
+  const ranked = Object.entries(c.counts || {}).sort((a, b) => b[1] - a[1]);
+  const header = `🎟️ <b>Referral leaderboard</b>${reward ? ` · 🏆 <b>${escapeTelegramHtml(reward)}</b>` : ""}`;
+  if (!ranked.length) return `${header}\n\nNo referrals yet — grab your link with <code>/reflink</code> and share it. Invites <b>and</b> friends who trade on slimewire.org both count!`;
+  const rows = ranked.slice(0, 15);
+  const lines = rows.map(([id, n], i) => {
+    const s = (c.sources || {})[id] || {}; const tg = Number(s.tg) || 0, site = Number(s.site) || 0;
+    const bd = (tg || site) ? ` <i>(${tg}👥${site ? ` · ${site}🌐` : ""})</i>` : "";
+    return `${["🥇", "🥈", "🥉"][i] || (i + 1) + "."} <a href="tg://user?id=${id}">inviter ${escapeTelegramHtml(String(id).slice(-4))}</a> — <b>${n}</b>${bd}`;
+  });
+  let tail = "\n\n<i>👥 = TG joins · 🌐 = friends who traded on the site.</i>";
+  if (viewerId) {
+    const rank = ranked.findIndex(([id]) => String(id) === String(viewerId));
+    if (rank >= 0) tail += `\n<i>You're <b>#${rank + 1}</b> with ${ranked[rank][1]}.</i>`;
+    else tail += "\n<i>You're not on the board yet — grab /reflink.</i>";
+  }
+  return `${header}\n\n${lines.join("\n")}${tail}`;
 }
 // /referral start|stop|status (admin) + /reflink + /refboard (anyone). Returns true if handled.
 async function handleReferralCommand(message, userId) {
@@ -31741,12 +31851,20 @@ async function handleReferralCommand(message, userId) {
   if (!mBoard && !mLink && !mRef) return false;
   const entry = await getGroupBotEntry(chatId).catch(() => null);
   const cfg = referralConfig(entry);
-  if (mBoard) { await sayHtml(chatId, referralBoardText(cfg)); return true; }
+  if (mBoard) { await sayHtml(chatId, referralBoardText(cfg, userId)); return true; }
   if (mLink) {
     if (!cfg.on) { await say(chatId, "No referral contest is running. An admin can start one with /referral start."); return true; }
     const link = await referralGetOrCreateLink(chatId, userId).catch(() => null);
-    if (!link) { await say(chatId, "Couldn't make your link — make sure I'm an admin with 'Invite users via link'."); return true; }
-    await sayHtml(chatId, `🎟️ <b>Your referral link</b>\n${escapeTelegramHtml(link)}\n\nShare it — every new member who joins with it counts for you. See standings with /refboard.`);
+    // Register a site code so friends who trade on slimewire.org also count.
+    const code = referralSiteCode(chatId, userId);
+    if (!cfg.siteCodes || cfg.siteCodes[code] !== String(userId)) await setGroupSub(chatId, "referral", { siteCodes: { ...(cfg.siteCodes || {}), [code]: String(userId) } });
+    const site = referralSiteLink(code);
+    const reward = referralRewardLabel(cfg);
+    if (!link) {
+      await sayHtml(chatId, `🎟️ <b>Your referral link</b>${reward ? ` · 🏆 <b>${escapeTelegramHtml(reward)}</b>` : ""}\n\n🌐 <b>Site link</b> (they make a wallet + trade on slimewire.org → counts for you):\n${escapeTelegramHtml(site)}\n\n<i>(I couldn't make a TG invite link — make me an admin with 'Invite users via link' to also count group joins.)</i>`);
+      return true;
+    }
+    await sayHtml(chatId, `🎟️ <b>Your referral link</b>${reward ? ` · 🏆 <b>${escapeTelegramHtml(reward)}</b>` : ""}\n\n👥 <b>Group invite</b> (new members who join count):\n${escapeTelegramHtml(link)}\n\n🌐 <b>Site link</b> (friends who trade on slimewire.org count too):\n${escapeTelegramHtml(site)}\n\nShare either. Standings: <code>/refboard</code>.`);
     return true;
   }
   // /referral … (admin only)
@@ -31754,19 +31872,33 @@ async function handleReferralCommand(message, userId) {
   if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only admins can manage the referral contest."); return true; }
   if (sub === "start") {
     const prize = (mRef[2] || "").trim().slice(0, 100);
-    await setGroupSub(chatId, "referral", { on: true, startedAt: Date.now(), prize, counts: {}, links: {}, credited: {} });
-    await sayHtml(chatId, `🎟️ <b>Referral contest is LIVE!</b>${prize ? `\n🏆 Prize: ${escapeTelegramHtml(prize)}` : ""}\n\nEveryone: get your link with <b>/reflink</b> and invite people. Standings: <b>/refboard</b>.`);
+    await setGroupSub(chatId, "referral", { on: true, startedAt: Date.now(), prize, counts: {}, sources: {}, links: {}, credited: {}, siteCredited: {} });
+    const reward = referralRewardLabel({ ...cfg, prize });
+    await sayHtml(chatId, `🎟️ <b>Referral contest is LIVE!</b>${reward ? `\n🏆 Reward: <b>${escapeTelegramHtml(reward)}</b>` : ""}\n\nEveryone: grab your link with <b>/reflink</b> — invites <b>and</b> friends who trade on slimewire.org both count. Standings: <b>/refboard</b>.`);
     return true;
   }
   if (sub === "stop") {
     const rows = Object.entries(cfg.counts || {}).sort((a, b) => b[1] - a[1]);
     await setGroupSub(chatId, "referral", { on: false });
-    const win = rows[0];
-    await sayHtml(chatId, win ? `🏁 <b>Referral contest ended!</b>\n🥇 Winner: <a href="tg://user?id=${win[0]}">top inviter</a> with <b>${win[1]}</b> referrals.${cfg.prize ? `\n🏆 ${escapeTelegramHtml(cfg.prize)}` : ""}` : "🏁 Referral contest ended — no referrals were recorded.");
+    await referralAnnounceWinner(chatId, cfg, rows[0]);
     return true;
   }
-  await sayHtml(chatId, cfg.on ? `🎟️ Referral contest is <b>ON</b>.${cfg.prize ? ` Prize: ${escapeTelegramHtml(cfg.prize)}.` : ""} /refboard for standings.` : "Referral contest is off. Start one with <code>/referral start [prize]</code>.");
+  const reward = referralRewardLabel(cfg);
+  await sayHtml(chatId, cfg.on ? `🎟️ Referral contest is <b>ON</b>.${reward ? ` 🏆 ${escapeTelegramHtml(reward)}.` : ""} /refboard for standings.` : "Referral contest is off. Start one with <code>/referral start [prize]</code>, or open <code>/settings</code> → 🎟️ Referral Contest.");
   return true;
+}
+// Announce the winner at close + a clean, non-custodial claim flow (admin pays from their own Wallet → Send).
+async function referralAnnounceWinner(chatId, cfg, winRow) {
+  if (!winRow) { await sayHtml(chatId, "🏁 <b>Referral contest ended</b> — no referrals were recorded."); return; }
+  const reward = referralRewardLabel(cfg);
+  const [winId, n] = winRow;
+  let claim = "";
+  try {
+    const wallets = walletsForOwner(await readWalletStore(), winId);
+    if (wallets && wallets.length) claim = `\n💸 Payout wallet: <code>${escapeTelegramHtml(wallets[0].publicKey)}</code>\n<i>Admin: send the reward from your Wallet → Send (your own funds, your call).</i>`;
+    else claim = "\n<i>Winner: DM me and create a wallet so the admin can send your reward.</i>";
+  } catch {}
+  await sayHtml(chatId, `🏁 <b>Referral contest ended!</b>\n🥇 Winner: <a href="tg://user?id=${winId}">top inviter</a> — <b>${n}</b> referrals.${reward ? `\n🏆 Reward: <b>${escapeTelegramHtml(reward)}</b>` : ""}${claim}`);
 }
 // SHARED SCAMMER DATABASE: the open CAS list (cas.chat) + SlimeWire's own cross-group
 // ban list (a ban in any group running this bot protects every other group).
@@ -36433,6 +36565,7 @@ async function recordTradeEvents(events) {
     await writeJsonFile(tradeHistoryPath(), store);
   });
   void maybeCopyRoomBest(events).catch(() => {});   // 🪞 Copy-the-room's-best: mirror a followed trader's buy
+  void maybeCreditReferralConversion(events).catch(() => {});   // 🎟️ credit a site-referred user's first trade to their TG inviter
 
   const hasWebBuyNeedingGuard = events.some((event) => (
     event?.type === "buy"
@@ -36872,7 +37005,10 @@ async function createWebAccount(options = {}) {
     }
   }
   const passwordLogin = wantsPasswordLogin ? hashWebPassword(normalizeWebPassword(rawPassword)) : null;
-  const referralEntry = findWebProfileByReferralCode(store, body.referralCode || body.ref || "");
+  const rawRefCode = body.referralCode || body.ref || "";
+  const referralEntry = findWebProfileByReferralCode(store, rawRefCode);
+  // A TG-group referral code (SWR…) — bridges the site to the group contest (credited on first trade).
+  const groupRef = await findReferralBySiteCode(rawRefCode).catch(() => null);
   const referralCode = generateWebReferralCode(store, username || userId);
   const session = issueWebSessionRecord(userId, userId, now);
 
@@ -36884,6 +37020,7 @@ async function createWebAccount(options = {}) {
     referralCode,
     referredByUserId: referralEntry && referralEntry.userId !== userId ? String(referralEntry.userId) : "",
     referredByCode: referralEntry && referralEntry.userId !== userId ? normalizeReferralCode(referralEntry.profile.referralCode) : "",
+    referredByGroup: groupRef ? { chatId: groupRef.chatId, userId: groupRef.userId, code: groupRef.code, at: now } : null,
     referralPayoutWallet: "",
     showOnTraderBoard: false,
     traderBoardWalletMode: "all",

@@ -881,6 +881,40 @@ test("phase-2 menu: Referral tile + whales/web-verify toggles routed", () => {
   assert.match(cb, /gb:ref:stop/);
 });
 
+// ---- Referral contest v2: SOL/coin rewards + site-conversion bridge + rich board ----
+test("referral v2: configurable SOL/coin reward with amount + coin CA", () => {
+  assert.match(functionBody(serverSource, "referralConfig"), /rewardKind: "sol", rewardAmount: 0, rewardMint: "", rewardSymbol: ""/);
+  const label = functionBody(serverSource, "referralRewardLabel");
+  assert.match(label, /rewardKind === "coin"/);
+  assert.match(label, /SOL/);
+  // reward setup wired in the ref module + input handlers
+  assert.match(serverSource, /callback_data: "gb:ref:kind"/);
+  assert.match(serverSource, /callback_data: "gb:in:refamount"/);
+  assert.match(serverSource, /rewardAmount: Math\.max\(0, Number\(raw\)/);
+  assert.match(serverSource, /rewardKind: "coin", rewardMint: raw/);
+});
+test("referral v2: site-referred user's first trade credits their TG inviter (non-money counter)", () => {
+  const conv = functionBody(serverSource, "maybeCreditReferralConversion");
+  assert.match(conv, /ev\.type === "buy"/);                       // first trade
+  assert.match(conv, /prof && prof\.referredByGroup/);            // captured at web signup
+  assert.match(conv, /cfg\.siteCredited\[uid\]/);                 // count each referred user once
+  assert.match(conv, /referralBump\(rg\.chatId, rg\.userId, "site"\)/);
+  assert.doesNotMatch(conv, /buyTokenForPlan|sendTransaction|sellToken/); // just a counter, no funds move
+  // hooked into the single trade choke point + captured on web signup
+  assert.match(serverSource, /void maybeCreditReferralConversion\(events\)/);
+  assert.match(serverSource, /referredByGroup: groupRef \? \{ chatId: groupRef\.chatId/);
+  // /reflink hands out BOTH a group invite and a site link
+  assert.match(functionBody(serverSource, "handleReferralCommand"), /referralSiteLink\(code\)/);
+});
+test("referral v2: rich board (reward + per-source) + non-custodial winner claim", () => {
+  const board = functionBody(serverSource, "referralBoardText");
+  assert.match(board, /referralRewardLabel/);
+  assert.match(board, /tg.*site|site.*tg/);                       // per-source breakdown
+  const win = functionBody(serverSource, "referralAnnounceWinner");
+  assert.match(win, /walletsForOwner/);                          // shows the winner's payout wallet
+  assert.doesNotMatch(win, /buyTokenForPlan|sendTransaction/);   // admin sends via Wallet → Send; bot never moves funds
+});
+
 // ---- Shared scammer database: CAS (cas.chat) + SlimeWire cross-group ban list ----
 test("known-scammer gate: CAS + cross-group ban list, wired into join + messages + /ban", () => {
   assert.match(serverSource, /async function casBanned\(/);
@@ -1218,10 +1252,12 @@ test("Room PnL board is opt-in and shows REAL realized SOL from members' own tra
   assert.match(pnl, /roomRealizedByUser/);
   assert.match(functionBody(serverSource, "roomRealizedByUser"), /readTradeHistory/);       // real trade history
   assert.match(functionBody(serverSource, "roomRealizedByUser"), /received.*spent|spent.*received/); // received − spent
-  // opt-in only
-  assert.match(serverSource, /callback_data: "room:join"/);
-  assert.match(serverSource, /callback_data: "room:leave"/);
+  // opt-in only — single toggle button (join/leave in one), always gives visible feedback
+  assert.match(serverSource, /callback_data: "room:toggle"/);
+  assert.match(serverSource, /data === "room:toggle"/);
   assert.match(serverSource, /await setRoomOptIn\(chatId, userId, query\.from/);
+  // every Room view can bounce back to the Trench menu (no dead-end)
+  assert.match(functionBody(serverSource, "roomMenuMarkup"), /callback_data: "gb:m:trench"/);
 });
 test("skin-in-the-game callers: a call only verifies if the (opted-in) caller actually holds it", () => {
   const v = functionBody(serverSource, "roomMaybeVerifyCall");
