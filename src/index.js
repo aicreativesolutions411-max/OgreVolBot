@@ -20781,7 +20781,7 @@ async function showTelegramTerminalMenu(chatId, messageId = null) {
     "Fast single-wallet actions, positions, balances, and the web command center."
   ].join("\n")), {
     inline_keyboard: [
-      [{ text: "Trade", callback_data: "trade_menu" }, { text: "Check Balances", callback_data: "check_balances" }],
+      [{ text: "Trade", callback_data: "trade_menu" }, { text: "🔍 Check Balances", callback_data: "check_balances" }],
       [{ text: "Positions", callback_data: "positions_overview" }, { text: "PnL Cards", callback_data: "pnl_results" }],
       [{ text: "Open Web Terminal", callback_data: "web_portal" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
@@ -21030,7 +21030,7 @@ async function showTelegramPortfolioMenu(chatId, messageId = null) {
       [{ text: "Wallets", callback_data: "wallet_menu" }, { text: "Balances", callback_data: "check_balances" }],
       [{ text: "Positions", callback_data: "positions_overview" }, { text: "PnL / Results", callback_data: "pnl_results" }],
       [{ text: "⏰ Limit Orders", callback_data: "orders_hub" }, { text: "🔁 DCA", callback_data: "dca_buy" }],
-      [{ text: "Backup / Restore", callback_data: "backup_menu" }, { text: "Withdraw / Sweep", callback_data: "withdrawal_menu" }],
+      [{ text: "💾 Backup / Restore", callback_data: "backup_menu" }, { text: "Withdraw / Sweep", callback_data: "withdrawal_menu" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
     ]
   });
@@ -21059,10 +21059,10 @@ async function showTelegramLinksMenu(chatId, messageId = null) {
 async function showWalletMenu(chatId, messageId = null) {
   await sendOrEditMessage(chatId, messageId, withBrandFooter("Wallet tools:"), {
     inline_keyboard: [
-      [{ text: "ðŸ’´ðŸ’¶ðŸ’· Create Wallet Set", callback_data: "create_wallets" }],
+      [{ text: "💴💶💷 Create Wallet Set", callback_data: "create_wallets" }],
       [{ text: "Import Wallet", callback_data: "import_wallet" }],
-      [{ text: "ðŸ’³ My Wallets", callback_data: "list_wallets" }],
-      [{ text: "ðŸ” Check Balances", callback_data: "check_balances" }],
+      [{ text: "💳 My Wallets", callback_data: "list_wallets" }],
+      [{ text: "🔍 Check Balances", callback_data: "check_balances" }],
       [{ text: "Positions Overview", callback_data: "positions_overview" }],
       [{ text: "PnL / Results", callback_data: "pnl_results" }],
       [{ text: "Copy Trade / KOL Tracker", callback_data: "kol_tracker_menu" }],
@@ -21084,7 +21084,7 @@ async function showTradeMenu(chatId, messageId = null) {
     inline_keyboard: [
       [{ text: "🟢 Buy", callback_data: "trade_buy" }, { text: "🔴 Sell", callback_data: "trade_sell" }],
       [{ text: "⚡ Live Mainnet Test", callback_data: "live_mainnet_test" }],
-      [{ text: "📦 Bundle Buy", callback_data: "bundle_menu" }, { text: "👥 Copy Trade", callback_data: "kol_tracker_menu" }],
+      [{ text: "🧲 Bundle Buy", callback_data: "bundle_menu" }, { text: "👥 Copy Trade", callback_data: "kol_tracker_menu" }],
       [{ text: "🚀 Launch from Pump", callback_data: "launch_build_menu" }, { text: "📈 Volume", callback_data: "timed_trade_plans" }],
       [{ text: "🔁 DCA Buy", callback_data: "trade_dca_buy" }, { text: "🔁 DCA Sell", callback_data: "trade_dca_sell" }],
       [{ text: "⏱️ Auto Sell", callback_data: "trade_auto_sell" }, { text: "🧹 Sell All", callback_data: "sell_all_tokens" }],
@@ -21370,8 +21370,8 @@ async function showBundleMenu(chatId, messageId = null) {
   await sendOrEditMessage(chatId, messageId, withBrandFooter("Bundle tools:\n\nAuto Bundle buys selected wallets, then watches stop-loss / take-profit exits."), {
     inline_keyboard: [
       [{ text: "Auto Bundle", callback_data: "auto_bundle" }],
-      [{ text: "ðŸ§² Bundle Buy", callback_data: "batch_buy" }],
-      [{ text: "ðŸ§² Bundle Sell", callback_data: "batch_sell" }],
+      [{ text: "🧲 Bundle Buy", callback_data: "batch_buy" }],
+      [{ text: "🧲 Bundle Sell", callback_data: "batch_sell" }],
       [{ text: "DCA Buy", callback_data: "dca_buy" }, { text: "DCA Sell", callback_data: "dca_sell" }],
       [{ text: "Copy Trade / KOL Tracker", callback_data: "kol_tracker_menu" }],
       [{ text: "Copy Trade Info", callback_data: "copy_trade_info" }],
@@ -21383,7 +21383,7 @@ async function showBundleMenu(chatId, messageId = null) {
 async function showWithdrawalMenu(chatId, messageId = null) {
   await sendOrEditMessage(chatId, messageId, withBrandFooter("Withdrawal tools:"), {
     inline_keyboard: [
-      [{ text: "ðŸ¦ Withdraw SOL", callback_data: "sweep_sol" }],
+      [{ text: "🏦 Withdraw SOL", callback_data: "sweep_sol" }],
       [{ text: "Sell All Tokens to SOL", callback_data: "sell_all_tokens" }],
       [{ text: "Sweep Tokens", callback_data: "sweep_tokens" }],
       [{ text: "Fund Wallets", callback_data: "fund_wallets" }],
@@ -26605,12 +26605,12 @@ function howToMenuKeyboard() {
   return [
     [{ text: "Ogre A.I.", callback_data: "howto_ogre_ai" }],
     [{ text: "KOL Tracker", callback_data: "howto_kol" }],
-    [{ text: "ðŸ’± Trade", callback_data: "howto_trade" }],
-    [{ text: "ðŸŽ¯ OgreSniper", callback_data: "howto_sniper" }],
-    [{ text: "ðŸ’³ Wallet", callback_data: "howto_wallet" }, { text: "ðŸ§² Bundle", callback_data: "howto_bundle" }],
-    [{ text: "ðŸ“ŠðŸ“ˆ Volume", callback_data: "howto_volume" }, { text: "ðŸ” Check Balances", callback_data: "howto_balances" }],
-    [{ text: "ðŸ’¾ Backup / Restore", callback_data: "howto_backup" }, { text: "ðŸ¦ Withdrawal", callback_data: "howto_withdrawal" }],
-    [{ text: "âœ… Success Checklist", callback_data: "howto_success" }],
+    [{ text: "💱 Trade", callback_data: "howto_trade" }],
+    [{ text: "🎯 OgreSniper", callback_data: "howto_sniper" }],
+    [{ text: "💳 Wallet", callback_data: "howto_wallet" }, { text: "🧲 Bundle", callback_data: "howto_bundle" }],
+    [{ text: "📊📈 Volume", callback_data: "howto_volume" }, { text: "🔍 Check Balances", callback_data: "howto_balances" }],
+    [{ text: "💾 Backup / Restore", callback_data: "howto_backup" }, { text: "🏦 Withdrawal", callback_data: "howto_withdrawal" }],
+    [{ text: "✅ Success Checklist", callback_data: "howto_success" }],
     [{ text: "Open Main Menu", callback_data: "main_menu" }]
   ];
 }
@@ -27053,12 +27053,12 @@ async function showMenu(chatId, userId, messageId = null) {
   await sendOrEditMessage(chatId, messageId, withBrandFooter([
     state.paused ? "⏸️ Emergency stop active." : "🐸 SlimeWire — your Solana trading terminal",
     "",
-    "Paste any token contract address to pull it up and buy in one tap, or pick below.",
+    "Paste any token contract to pull it up and buy in one tap — then sell, arm ⏰ limit / TP-SL, or bank it, all right here.",
     "",
     "🟢 Buy / Sell · 👛 Wallet · ⚙️ Settings — the essentials.",
-    "🚀 Launch a Coin · 📈 Volume Bot · 🤖 Ogre A.I. — what other bots don't have.",
+    "🎯 Signals · 🕵️ Sniper & Copy · 🚀 Launch · 📈 Volume Bot — what other bots don't have.",
     "",
-    "Your wallet + settings also work on slimewire.org — /web to connect."
+    "Same wallet + settings also work on slimewire.org — /web to connect."
   ].join("\n")), {
     inline_keyboard: menu
   });
