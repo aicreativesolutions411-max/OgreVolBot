@@ -1108,6 +1108,20 @@ test("vanity pool low-watchdog: DM admins before pump mints run dry", () => {
   assert.match(p, /_lastVanityLowAlertAt < 6 \* 60 \* 60 \* 1000/);   // rate-limited
   assert.match(p, /for \(const adminId of \(CONFIG\.adminUserIds/);   // DMs admins
 });
+test("🏆⚡ Throne Bundle: atomic Jito waves of 4 by opt-in order, safe RPC fallback", () => {
+  assert.match(serverSource, /async function fireCommunitySnipeThroneBundle/);
+  assert.match(serverSource, /async function buildSignedPumpBuyTx/);   // build+sign, no send
+  const fb = functionBody(serverSource, "fireCommunitySnipeThroneBundle");
+  assert.match(fb, /i \+= 4\) chunks\.push\(orderedMembers\.slice\(i, i \+ 4\)\)/);   // waves of 4
+  assert.match(fb, /submitJitoBundle\(bundle/);                                       // real atomic Jito bundle
+  assert.match(fb, /sendVersionedTransaction\(b\.tx, `throne-bundle fallback/);       // SAME signed tx via RPC = no double-buy, bad wallet can't block the wave
+  // fired only when throneBundle on, members sorted by opt-in time (first-opted-first)
+  assert.match(serverSource, /if \(snipe\.throneBundle\) \{/);
+  assert.match(serverSource, /sort\(\(a, b\) => \(Number\(a\[1\]\.at\) \|\| 0\) - \(Number\(b\[1\]\.at\) \|\| 0\)\)/);
+  // toggle wired (button + handler)
+  assert.match(serverSource, /data === "cs:tbundle"/);
+  assert.match(serverSource, /callback_data: "cs:tbundle"/);
+});
 test("smooth nav: DM sub-views carry a Main Menu button (no re-/start)", () => {
   for (const fn of ["showTelegramLinksMenu", "showTelegramPortfolioMenu", "showTelegramOgreToolsMenu", "showWalletMenu"]) {
     assert.match(functionBody(serverSource, fn), /callback_data: "main_menu"/, `${fn} needs Main Menu`);
@@ -1588,7 +1602,7 @@ test("Tweet-to-Snipe: admin drops the CA → instant community-snipe fire (X has
 test("Throne mode: same-second co-entry with aggressive slippage (honest — not fake atomic bundling)", () => {
   assert.match(functionBody(serverSource, "communitySnipeAdminMarkup"), /callback_data: "cs:throne"/);
   const fire = functionBody(serverSource, "fireCommunitySnipe");
-  assert.match(fire, /snipe\.throneMode \? 2500 : \(Number\(snipe\.slippageBps\)/); // aggressive fills in throne mode
+  assert.match(fire, /\(snipe\.throneMode \|\| snipe\.throneBundle\) \? 2500 : \(Number\(snipe\.slippageBps\)/); // aggressive fills in throne / throne-bundle mode
   assert.match(fire, /THRONE — the room took it/);
   assert.match(serverSource, /if \(sub === "throne"\)/);
 });

@@ -29266,11 +29266,13 @@ function communitySnipeCardMarkup(snipe) {
 function communitySnipeAdminMarkup(snipe) {
   const armed = Boolean(snipe && snipe.armed);
   const throne = Boolean(snipe && snipe.throneMode);
+  const tbundle = Boolean(snipe && snipe.throneBundle);
   return { inline_keyboard: [
     [{ text: "🎯 Set launch wallet", callback_data: "cs:setwallet" }],
     [{ text: armed ? "⚪ Disarm" : "🟢 Arm", callback_data: armed ? "cs:disarm" : "cs:arm" }],
     [{ text: "🔥 Fire NOW (paste CA)", callback_data: "cs:fire" }],
     [{ text: `🏆 Throne mode ${throne ? "✅" : "◻️"}`, callback_data: "cs:throne" }],
+    [{ text: `🏆⚡ Throne BUNDLE ${tbundle ? "✅" : "◻️"}`, callback_data: "cs:tbundle" }],
     [{ text: "👥 Members", callback_data: "cs:who" }, { text: "♻️ Reset", callback_data: "cs:reset" }],
     [{ text: "⬅ Back", callback_data: "cs:card" }]
   ] };
@@ -29317,12 +29319,13 @@ async function handleCommunitySnipeCallback(query, userId) {
   if (data === "cs:leave") { const s = snipe(); if (s && s.members[String(userId)]) { delete s.members[String(userId)]; await writeCommunitySnipe(store); } await csRender(chatId, messageId, snipe(), communitySnipeCardMarkup(snipe())); await ack("You left the snipe."); return true; }
   if (data === "cs:card") { await csRender(chatId, messageId, snipe(), communitySnipeCardMarkup(snipe())); await ack(); return true; }
   // admin actions (gated)
-  if (["cs:admin", "cs:setwallet", "cs:arm", "cs:disarm", "cs:who", "cs:reset", "cs:fire", "cs:throne"].includes(data)) {
+  if (["cs:admin", "cs:setwallet", "cs:arm", "cs:disarm", "cs:who", "cs:reset", "cs:fire", "cs:throne", "cs:tbundle"].includes(data)) {
     if (!(await isTgChatAdmin(chatId, userId))) { await ack("Only group admins can set up the snipe."); return true; }
     if (data === "cs:admin") { await csRender(chatId, messageId, snipe(), communitySnipeAdminMarkup(snipe())); await ack(); return true; }
     if (data === "cs:setwallet") { csInputPending.set(`${chatId}:${userId}`, { kind: "wallet", at: Date.now() }); await ack("Paste the wallet you'll launch from (add a label after it if you like)."); return true; }
     if (data === "cs:fire") { csInputPending.set(`${chatId}:${userId}`, { kind: "fire", at: Date.now() }); await ack("Paste the CA the instant you tweet it — everyone snipes NOW."); return true; }
     if (data === "cs:throne") { const s = snipe(); if (!s) { await ack("Set the launch wallet first."); return true; } s.throneMode = !s.throneMode; await writeCommunitySnipe(store); await csRender(chatId, messageId, s, communitySnipeAdminMarkup(s)); await ack(s.throneMode ? "🏆 Throne mode ON — everyone enters the same second with max priority." : "Throne mode off."); return true; }
+    if (data === "cs:tbundle") { const s = snipe(); if (!s) { await ack("Set the launch wallet first."); return true; } s.throneBundle = !s.throneBundle; await writeCommunitySnipe(store); await csRender(chatId, messageId, s, communitySnipeAdminMarkup(s)); await ack(s.throneBundle ? "🏆⚡ Throne BUNDLE ON — the room lands atomically in waves of 4 (real Jito bundles), first-opted-first. Safe fallback if a wave can't bundle." : "Throne Bundle off."); return true; }
     if (data === "cs:arm" || data === "cs:disarm") {
       const s = snipe();
       if (!s || !s.creatorWallet) { await ack("Set the launch wallet first."); return true; }
@@ -30058,6 +30061,85 @@ function maybeCommunitySnipe(entry) {
     void fireCommunitySnipe(chatId, String(mint), entry.symbol || entry.ticker || "", entry.name || "").catch((e) => console.warn(`[community-snipe] ${e && e.message}`));
   } catch {}
 }
+// Build + SIGN a member's pump bonding-curve buy tx WITHOUT sending — so several can be assembled into
+// one Jito bundle for atomic co-entry. Buys the full amount (no separate platform-fee tx — the premium
+// co-entry mode forgoes the fee to keep the bundle within Jito's 5-tx limit).
+async function buildSignedPumpBuyTx(wallet, tokenMint, swapLamports, slippageBps) {
+  const keypair = decryptWallet(wallet);
+  const amountSol = Number((Number(swapLamports) / LAMPORTS_PER_SOL).toFixed(9));
+  if (!(amountSol > 0)) throw new Error("buy amount rounded to zero SOL");
+  const slippagePct = Math.max(0.01, Math.min(50, (Number.parseInt(slippageBps, 10) || CONFIG.defaultSlippageBps) / 100));
+  const payload = { publicKey: keypair.publicKey.toBase58(), action: "buy", mint: tokenMint, denominatedInSol: "true", amount: amountSol, slippage: slippagePct, priorityFee: CONFIG.pumpLaunchPriorityFeeSol, pool: "pump" };
+  const tx = await requestPumpPortalLocalTransaction(payload, 20_000, { url: CONFIG.pumpPortalTradeLocalUrl });
+  tx.sign([keypair]);
+  return { tx, signature: bs58.encode(Buffer.from(tx.signatures[0])), keypair };
+}
+async function buildJitoTipTx(keypair, tipSol) {
+  const tipLamports = Math.max(1000, Math.round((Number(tipSol) || CONFIG.tradeJitoTipSol || 0.0005) * 1e9));
+  const tipAccount = new PublicKey(JITO_TIP_ACCOUNTS[Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)]);
+  const { blockhash } = await rpcWithRetry("jito tip blockhash", () => connection.getLatestBlockhash("confirmed"));
+  const tipTx = new Transaction().add(SystemProgram.transfer({ fromPubkey: keypair.publicKey, toPubkey: tipAccount, lamports: tipLamports }));
+  tipTx.recentBlockhash = blockhash; tipTx.feePayer = keypair.publicKey; tipTx.sign(keypair);
+  return tipTx;
+}
+// 🏆⚡ THRONE BUNDLE: members (in opt-in order) are chunked into WAVES OF 4 — each wave = 4 member buys
+// + 1 tip in a single Jito bundle that lands ATOMICALLY in one block. Waves fire back-to-back (min Jito
+// gap) so wave 2/3/… land within ~a second of wave 1 — everyone beats the public snipers, first-opted
+// first. SAFE: if a bundle can't land (Jito drops all-or-nothing, e.g. one wallet underfunded), each
+// member's SAME signed tx is re-broadcast via RPC (same signature = no double-buy) so a bad wallet in a
+// wave never blocks the rest.
+async function fireCommunitySnipeThroneBundle(chatId, mint, orderedMembers, walletStore, slippageBps) {
+  const results = [];
+  const chunks = [];
+  for (let i = 0; i < orderedMembers.length; i += 4) chunks.push(orderedMembers.slice(i, i + 4));
+  for (const chunk of chunks) {
+    const built = [];
+    for (const [userId, m] of chunk) {
+      const nameTag = m.name || shortMint(userId);
+      try {
+        const wallets = walletsForOwner(walletStore, userId);
+        const wallet = wallets[(Number(m.walletIndex) || 1) - 1] || wallets[0];
+        if (!wallet) { results.push({ nameTag, ok: false, why: "no wallet" }); continue; }
+        const lamports = solToLamports(Number(m.amountSol) || 0);
+        const b = await buildSignedPumpBuyTx(wallet, mint, lamports, slippageBps);
+        built.push({ userId, m, wallet, nameTag, lamports, ...b });
+      } catch (e) { results.push({ nameTag, ok: false, why: friendlyError ? friendlyError(e) : (e && e.message) }); }
+    }
+    if (!built.length) continue;
+    let bundleLanded = false;
+    try {
+      const tipTx = await buildJitoTipTx(built[0].keypair, CONFIG.tradeJitoTipSol);
+      const bundle = [...built.map((b) => Buffer.from(b.tx.serialize()).toString("base64")), tipTx.serialize().toString("base64")];
+      const gap = Date.now() - lastJitoBundleSubmitMs;
+      if (gap < JITO_MIN_SUBMIT_GAP_MS) await sleep(JITO_MIN_SUBMIT_GAP_MS - gap);
+      lastJitoBundleSubmitMs = Date.now();
+      await submitJitoBundle(bundle, 8_000);
+      const deadline = Date.now() + (Number(CONFIG.tradeJitoConfirmMs) || 2500);
+      while (Date.now() < deadline) {
+        const sts = await Promise.all(built.map((b) => connection.getSignatureStatus(b.signature).catch(() => null)));
+        if (sts.every((s) => s && s.value && (s.value.confirmationStatus === "confirmed" || s.value.confirmationStatus === "finalized"))) { bundleLanded = true; break; }
+        await sleep(400);
+      }
+    } catch (e) { console.warn(`[throne-bundle] ${e && e.message}`); }
+    for (const b of built) {
+      let ok = bundleLanded;
+      if (!ok) {
+        try { const st = await connection.getSignatureStatus(b.signature); if (st && st.value && !st.value.err) ok = true; } catch (_) {}
+        if (!ok) { try { await sendVersionedTransaction(b.tx, `throne-bundle fallback ${b.userId}`); ok = true; } catch (e) { results.push({ nameTag: b.nameTag, ok: false, why: friendlyError ? friendlyError(e) : (e && e.message) }); continue; } }
+      }
+      try { invalidateWalletReadCache(b.wallet.publicKey); } catch (_) {}
+      results.push({ nameTag: b.nameTag, ok: true, sol: Number(b.m.amountSol) || 0, bundled: bundleLanded });
+      recordTradeEvents([{ userId: b.userId, type: "buy", source: "community-snipe", tokenMint: mint, walletLabel: b.wallet.label, walletPublicKey: b.wallet.publicKey, solLamportsSpent: String(b.lamports), signature: b.signature }]).catch(() => {});
+      if (Number(b.m.tpPct) > 0 || Number(b.m.slPct) > 0) {
+        try {
+          const permission = await requireWebAutomationPermission(b.userId, "community snipe auto exits");
+          await webCreateSingleTradeAutoExitPlan(b.userId, b.wallet, mint, { amountLamports: String(b.lamports), signature: b.signature }, { takeProfitPct: String(b.m.tpPct || "0"), stopLossPct: String(b.m.slPct || "0"), sellPercent: "100", sellDelay: "off" }, slippageBps, permission);
+        } catch (_) { /* buy landed; exit just isn't armed */ }
+      }
+    }
+  }
+  return results;
+}
 async function fireCommunitySnipe(chatId, mint, symbol, name) {
   const store = await readCommunitySnipe();
   const snipe = store.snipes[String(chatId)];
@@ -30067,38 +30149,46 @@ async function fireCommunitySnipe(chatId, mint, symbol, name) {
   const members = Object.entries(snipe.members || {});
   if (!members.length) return;
   const walletStore = await readWalletStore();
-  // 🏆 Throne mode: everyone enters the same second with aggressive slippage so the fills actually land
-  // together at launch (best-effort same-block co-entry — not a false claim of atomic bundling).
-  const slippageBps = snipe.throneMode ? 2500 : (Number(snipe.slippageBps) || 1500);
+  // 🏆 Throne (and Throne Bundle) enter with aggressive slippage so fills land at a violent launch.
+  const slippageBps = (snipe.throneMode || snipe.throneBundle) ? 2500 : (Number(snipe.slippageBps) || 1500);
   const links0 = slimewireTokenLinks(mint);
-  // Everyone who opted in auto-buys from their OWN wallet, isolated. Presets (TP/SL) were their choice.
-  const results = await Promise.all(members.map(async ([userId, m]) => {
-    const nameTag = m.name || shortMint(userId);
-    try {
-      const wallets = walletsForOwner(walletStore, userId);
-      const wallet = wallets[(Number(m.walletIndex) || 1) - 1] || wallets[0];
-      if (!wallet) return { nameTag, ok: false, why: "no wallet" };
-      const amountLamports = solToLamports(Number(m.amountSol) || 0);
-      // Idempotent per member+mint so a stream hiccup can't double-buy.
-      const buyResult = await runIdempotentMoneyOp("community-snipe", userId, `${chatId}:${mint}`,
-        () => buyTokenForPlan(wallet, mint, amountLamports, slippageBps, { trackTokenDelta: true, userId }));
-      // Optional own TP/SL — arm the same auto-exit engine the web quick-buy uses (best-effort).
-      if ((Number(m.tpPct) > 0 || Number(m.slPct) > 0) && buyResult) {
-        try {
-          const permission = await requireWebAutomationPermission(userId, "community snipe auto exits");
-          await webCreateSingleTradeAutoExitPlan(userId, wallet, mint, buyResult,
-            { takeProfitPct: String(m.tpPct || "0"), stopLossPct: String(m.slPct || "0"), sellPercent: "100", sellDelay: "off" }, slippageBps, permission);
-        } catch { /* buy still landed; exit just isn't armed */ }
-      }
-      return { nameTag, ok: true, sol: Number(m.amountSol) || 0 };
-    } catch (e) { return { nameTag, ok: false, why: friendlyError ? friendlyError(e) : (e && e.message) }; }
-  }));
+  let results;
+  if (snipe.throneBundle) {
+    // ⚡ Atomic waves of 4, first-opted-first — real Jito bundles.
+    const ordered = members.slice().sort((a, b) => (Number(a[1].at) || 0) - (Number(b[1].at) || 0));
+    results = await fireCommunitySnipeThroneBundle(chatId, mint, ordered, walletStore, slippageBps);
+  } else {
+    // Everyone who opted in auto-buys from their OWN wallet, isolated. Presets (TP/SL) were their choice.
+    results = await Promise.all(members.map(async ([userId, m]) => {
+      const nameTag = m.name || shortMint(userId);
+      try {
+        const wallets = walletsForOwner(walletStore, userId);
+        const wallet = wallets[(Number(m.walletIndex) || 1) - 1] || wallets[0];
+        if (!wallet) return { nameTag, ok: false, why: "no wallet" };
+        const amountLamports = solToLamports(Number(m.amountSol) || 0);
+        // Idempotent per member+mint so a stream hiccup can't double-buy.
+        const buyResult = await runIdempotentMoneyOp("community-snipe", userId, `${chatId}:${mint}`,
+          () => buyTokenForPlan(wallet, mint, amountLamports, slippageBps, { trackTokenDelta: true, userId }));
+        // Optional own TP/SL — arm the same auto-exit engine the web quick-buy uses (best-effort).
+        if ((Number(m.tpPct) > 0 || Number(m.slPct) > 0) && buyResult) {
+          try {
+            const permission = await requireWebAutomationPermission(userId, "community snipe auto exits");
+            await webCreateSingleTradeAutoExitPlan(userId, wallet, mint, buyResult,
+              { takeProfitPct: String(m.tpPct || "0"), stopLossPct: String(m.slPct || "0"), sellPercent: "100", sellDelay: "off" }, slippageBps, permission);
+          } catch { /* buy still landed; exit just isn't armed */ }
+        }
+        return { nameTag, ok: true, sol: Number(m.amountSol) || 0 };
+      } catch (e) { return { nameTag, ok: false, why: friendlyError ? friendlyError(e) : (e && e.message) }; }
+    }));
+  }
   const won = results.filter((r) => r && r.ok);
   const lost = results.filter((r) => r && !r.ok);
+  const bundled = won.filter((r) => r && r.bundled).length;
+  const header = snipe.throneBundle ? "🏆⚡ <b>THRONE BUNDLE — the room landed together" : (snipe.throneMode ? "🏆 <b>THRONE — the room took it, same second" : "🎯 <b>Community Snipe FIRED —");
   const text = [
-    `${snipe.throneMode ? "🏆 <b>THRONE — the room took it, same second" : "🎯 <b>Community Snipe FIRED —"} $${escapeTelegramHtml(symbol || shortMint(mint))}</b>`,
+    `${header} $${escapeTelegramHtml(symbol || shortMint(mint))}</b>`,
     `<code>${escapeTelegramHtml(mint)}</code>`,
-    `✅ <b>${won.length}</b> got in (◎${won.reduce((s, r) => s + (r.sol || 0), 0).toFixed(2)})${lost.length ? ` · ⚠️ ${lost.length} missed` : ""}`,
+    `✅ <b>${won.length}</b> got in (◎${won.reduce((s, r) => s + (r.sol || 0), 0).toFixed(2)})${snipe.throneBundle && bundled ? ` · ⚡ ${bundled} bundled` : ""}${lost.length ? ` · ⚠️ ${lost.length} missed` : ""}`,
     `<a href="${links0.site}">Chart</a> · TP/SL auto-exits are running for anyone who set them.`
   ].join("\n");
   await sayHtml(chatId, text, slimeScanKeyboard(mint)).catch(() => {});
