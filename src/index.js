@@ -28982,8 +28982,26 @@ async function handleCommunitySnipeCommand(chatId, message, argument, userId) {
   }
 
   // ---- admin actions ----
-  if (sub === "wallet" || sub === "arm" || sub === "disarm" || sub === "who" || sub === "reset") {
+  if (sub === "wallet" || sub === "arm" || sub === "disarm" || sub === "who" || sub === "reset" || sub === "fire" || sub === "throne") {
     if (!dm && !(await isTgChatAdmin(chatId, userId))) { await say(chatId, "Only group admins can set up the community snipe."); return; }
+  }
+  if (sub === "fire") {
+    // 🔥 Tweet-to-Snipe (reliable): admin drops the CA the second they tweet → everyone snipes NOW.
+    let mint = null; try { mint = parsePublicKey(String(parts[1] || "").replace(/^\$/, "")).toBase58(); } catch {}
+    if (!mint) { await say(chatId, "Usage: /snipe fire <CA> — paste it the instant you tweet the launch."); return; }
+    const snipe = store.snipes[key];
+    if (!snipe) { await say(chatId, "Set up the snipe first: /snipe wallet <addr>."); return; }
+    snipe.armed = true; snipe.fired = null; await writeCommunitySnipe(store);
+    await sayHtml(chatId, `🔥 <b>FIRING</b> on <code>${escapeTelegramHtml(shortMint(mint))}</code> now — everyone who joined buys from their own wallet.`);
+    void fireCommunitySnipe(chatId, mint, "", "").catch(() => {});
+    return;
+  }
+  if (sub === "throne") {
+    const snipe = store.snipes[key];
+    if (!snipe) { await say(chatId, "Set up the snipe first: /snipe wallet <addr>."); return; }
+    snipe.throneMode = !snipe.throneMode; await writeCommunitySnipe(store);
+    await sayHtml(chatId, snipe.throneMode ? "🏆 <b>Throne mode ON</b> — everyone enters the same second with max priority slippage so the fills land together." : "Throne mode off.");
+    return;
   }
   if (sub === "wallet") {
     let addr = null; try { addr = parsePublicKey(String(parts[1] || "")).toBase58(); } catch {}
@@ -29018,7 +29036,7 @@ async function handleCommunitySnipeCommand(chatId, message, argument, userId) {
 }
 
 // ---- Community Snipe MENUS (button-driven, so members tap-to-join and the dev sets up by buttons) ----
-const csInputPending = new Map(); // `${chatId}:${userId}` -> { kind: "custom"|"presets"|"wallet", at }
+const csInputPending = new Map(); // `${chatId}:${userId}` -> { kind: "custom"|"presets"|"wallet"|"fire", at }
 function communitySnipeCardMarkup(snipe) {
   return { inline_keyboard: [
     [{ text: "💰 Join 0.1", callback_data: "cs:amt:0.1" }, { text: "💰 0.5", callback_data: "cs:amt:0.5" }, { text: "💰 1", callback_data: "cs:amt:1" }],
@@ -29028,9 +29046,12 @@ function communitySnipeCardMarkup(snipe) {
 }
 function communitySnipeAdminMarkup(snipe) {
   const armed = Boolean(snipe && snipe.armed);
+  const throne = Boolean(snipe && snipe.throneMode);
   return { inline_keyboard: [
     [{ text: "🎯 Set launch wallet", callback_data: "cs:setwallet" }],
     [{ text: armed ? "⚪ Disarm" : "🟢 Arm", callback_data: armed ? "cs:disarm" : "cs:arm" }],
+    [{ text: "🔥 Fire NOW (paste CA)", callback_data: "cs:fire" }],
+    [{ text: `🏆 Throne mode ${throne ? "✅" : "◻️"}`, callback_data: "cs:throne" }],
     [{ text: "👥 Members", callback_data: "cs:who" }, { text: "♻️ Reset", callback_data: "cs:reset" }],
     [{ text: "⬅ Back", callback_data: "cs:card" }]
   ] };
@@ -29077,10 +29098,12 @@ async function handleCommunitySnipeCallback(query, userId) {
   if (data === "cs:leave") { const s = snipe(); if (s && s.members[String(userId)]) { delete s.members[String(userId)]; await writeCommunitySnipe(store); } await csRender(chatId, messageId, snipe(), communitySnipeCardMarkup(snipe())); await ack("You left the snipe."); return true; }
   if (data === "cs:card") { await csRender(chatId, messageId, snipe(), communitySnipeCardMarkup(snipe())); await ack(); return true; }
   // admin actions (gated)
-  if (["cs:admin", "cs:setwallet", "cs:arm", "cs:disarm", "cs:who", "cs:reset"].includes(data)) {
+  if (["cs:admin", "cs:setwallet", "cs:arm", "cs:disarm", "cs:who", "cs:reset", "cs:fire", "cs:throne"].includes(data)) {
     if (!(await isTgChatAdmin(chatId, userId))) { await ack("Only group admins can set up the snipe."); return true; }
     if (data === "cs:admin") { await csRender(chatId, messageId, snipe(), communitySnipeAdminMarkup(snipe())); await ack(); return true; }
     if (data === "cs:setwallet") { csInputPending.set(`${chatId}:${userId}`, { kind: "wallet", at: Date.now() }); await ack("Paste the wallet you'll launch from (add a label after it if you like)."); return true; }
+    if (data === "cs:fire") { csInputPending.set(`${chatId}:${userId}`, { kind: "fire", at: Date.now() }); await ack("Paste the CA the instant you tweet it — everyone snipes NOW."); return true; }
+    if (data === "cs:throne") { const s = snipe(); if (!s) { await ack("Set the launch wallet first."); return true; } s.throneMode = !s.throneMode; await writeCommunitySnipe(store); await csRender(chatId, messageId, s, communitySnipeAdminMarkup(s)); await ack(s.throneMode ? "🏆 Throne mode ON — everyone enters the same second with max priority." : "Throne mode off."); return true; }
     if (data === "cs:arm" || data === "cs:disarm") {
       const s = snipe();
       if (!s || !s.creatorWallet) { await ack("Set the launch wallet first."); return true; }
@@ -29122,6 +29145,16 @@ async function applyCsInput(message, userId) {
     s.creatorWallet = addr; s.label = parts.slice(1).join(" ").slice(0, 40); s.fired = null; s.armed = false;
     await writeCommunitySnipe(store);
     await sayHtml(chatId, `🎯 Target set to <code>${escapeTelegramHtml(shortMint(addr))}</code>. Tap 🟢 Arm when the launch is close.`, communitySnipeAdminMarkup(s));
+  } else if (pend.kind === "fire") {
+    // 🔥 Tweet-to-Snipe (reliable): admin drops the CA the instant they tweet it → everyone snipes NOW.
+    if (!(await isTgChatAdmin(chatId, userId))) return true;
+    let mint = null; try { mint = parsePublicKey(String(raw).split(/\s+/)[0].replace(/^\$/, "")).toBase58(); } catch {}
+    if (!mint) { await say(chatId, "That's not a valid CA. Tap 🔥 Fire NOW again and paste the contract address."); return true; }
+    const s = store.snipes[String(chatId)];
+    if (!s) { await say(chatId, "Set up the snipe first (⚙️ Dev setup)."); return true; }
+    s.armed = true; s.fired = null; await writeCommunitySnipe(store);   // ensure it can fire on this manual CA
+    await sayHtml(chatId, `🔥 <b>FIRING</b> the community snipe on <code>${escapeTelegramHtml(shortMint(mint))}</code> now — everyone who joined buys from their own wallet.`);
+    void fireCommunitySnipe(chatId, mint, "", "").catch(() => {});
   }
   return true;
 }
@@ -29545,7 +29578,9 @@ async function fireCommunitySnipe(chatId, mint, symbol, name) {
   const members = Object.entries(snipe.members || {});
   if (!members.length) return;
   const walletStore = await readWalletStore();
-  const slippageBps = Number(snipe.slippageBps) || 1500;
+  // 🏆 Throne mode: everyone enters the same second with aggressive slippage so the fills actually land
+  // together at launch (best-effort same-block co-entry — not a false claim of atomic bundling).
+  const slippageBps = snipe.throneMode ? 2500 : (Number(snipe.slippageBps) || 1500);
   const links0 = slimewireTokenLinks(mint);
   // Everyone who opted in auto-buys from their OWN wallet, isolated. Presets (TP/SL) were their choice.
   const results = await Promise.all(members.map(async ([userId, m]) => {
@@ -29572,7 +29607,7 @@ async function fireCommunitySnipe(chatId, mint, symbol, name) {
   const won = results.filter((r) => r && r.ok);
   const lost = results.filter((r) => r && !r.ok);
   const text = [
-    `🎯 <b>Community Snipe FIRED — $${escapeTelegramHtml(symbol || shortMint(mint))}</b>`,
+    `${snipe.throneMode ? "🏆 <b>THRONE — the room took it, same second" : "🎯 <b>Community Snipe FIRED —"} $${escapeTelegramHtml(symbol || shortMint(mint))}</b>`,
     `<code>${escapeTelegramHtml(mint)}</code>`,
     `✅ <b>${won.length}</b> got in (◎${won.reduce((s, r) => s + (r.sol || 0), 0).toFixed(2)})${lost.length ? ` · ⚠️ ${lost.length} missed` : ""}`,
     `<a href="${links0.site}">Chart</a> · TP/SL auto-exits are running for anyone who set them.`

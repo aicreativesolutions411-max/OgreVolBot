@@ -1308,3 +1308,23 @@ test("Launch Room + Proof-of-call are wired into the Trench menu", () => {
   assert.match(serverSource, /startsWith\("lr:"\)/);
   assert.match(serverSource, /await applyCopyInput\(message, userId\)/);
 });
+
+// ---- Tweet-to-Snipe (reliable manual fire) + Throne mode (same-second co-entry) on Community Snipe ----
+test("Tweet-to-Snipe: admin drops the CA → instant community-snipe fire (X has no reliable free timeline)", () => {
+  // admin menu button + input capture + text command
+  assert.match(functionBody(serverSource, "communitySnipeAdminMarkup"), /callback_data: "cs:fire"/);
+  assert.match(serverSource, /data === "cs:fire"\) \{ csInputPending\.set/);
+  const inp = functionBody(serverSource, "applyCsInput");
+  assert.match(inp, /pend\.kind === "fire"/);
+  assert.match(inp, /void fireCommunitySnipe\(chatId, mint, "", ""\)/);   // fires on the pasted CA
+  assert.match(serverSource, /if \(sub === "fire"\)/);                     // /snipe fire <CA>
+  // admin-gated
+  assert.match(serverSource, /sub === "fire" \|\| sub === "throne"/);
+});
+test("Throne mode: same-second co-entry with aggressive slippage (honest — not fake atomic bundling)", () => {
+  assert.match(functionBody(serverSource, "communitySnipeAdminMarkup"), /callback_data: "cs:throne"/);
+  const fire = functionBody(serverSource, "fireCommunitySnipe");
+  assert.match(fire, /snipe\.throneMode \? 2500 : \(Number\(snipe\.slippageBps\)/); // aggressive fills in throne mode
+  assert.match(fire, /THRONE — the room took it/);
+  assert.match(serverSource, /if \(sub === "throne"\)/);
+});
