@@ -30594,7 +30594,10 @@ async function isGroupBotAdmin(chatId, userId, message = null) {
 }
 // ── Multi-level settings menu: HOME (pick a bot) → per-module sub-menu ──────────
 // HOME menu = the main "which bot do you want to edit?" screen.
-function groupBotMenuMarkup(entry) {
+// Is this chat opted into SlimeWire engine alerts (plays / launches / TP-SL / KOL / 2x)? Lives in the
+// telegram-groups store (separate from the groupBot settings store), toggled by /slimewire + the menu.
+async function groupAlertsOn(chatId) { try { const s = await readTelegramGroups(); return Boolean(s.groups?.[String(chatId)]?.alerts); } catch { return false; } }
+function groupBotMenuMarkup(entry, alertsOn = false) {
   const e = entry || defaultGroupBotEntry();
   const dot = (k) => (groupBotFeatureOn(e, k) ? "🟢" : "⚪");
   const refOn = referralConfig(e).on ? "🟢" : "⚪";
@@ -30602,6 +30605,7 @@ function groupBotMenuMarkup(entry) {
     [{ text: `${dot("buybot")} Buy Bot`, callback_data: "gb:m:buy" }, { text: `${dot("raid")} Raid Bot`, callback_data: "gb:m:raid" }],
     [{ text: `${dot("rose")} Rose & Shield`, callback_data: "gb:m:rose" }, { text: `${dot("scan")} Scan Bot`, callback_data: "gb:m:scan" }],
     [{ text: "🎯 Trench Tools", callback_data: "gb:m:trench" }],
+    [{ text: `${alertsOn ? "🟢" : "⚪"} 📣 SlimeWire Alerts`, callback_data: "gb:alerts" }],
     [{ text: `${refOn} 🎟️ Referral Contest`, callback_data: "gb:m:ref" }],
     [{ text: "✓ Done", callback_data: "gb:close" }]
   ] };
@@ -30617,6 +30621,7 @@ function groupBotMenuText(entry) {
     `⚔️ <b>Raid Bot</b> — ${st("raid")} · live X-raid cards`,
     `🛡️ <b>Rose & Shield</b> — ${st("rose")} · moderation + anti-scam protection`,
     `🔍 <b>Scan Bot</b> — ${st("scan")} · CA / $ticker → scan card`,
+    `📣 <b>SlimeWire Alerts</b> — auto plays every 15 min + fresh launches, TP/SL fires, KOL copies &amp; 2x receipts (capped a few/hr)`,
     "",
     "Prefer typing? <b>/help</b> lists every command. Re-open this anytime with <b>/settings</b>."
   ].join("\n");
@@ -30832,10 +30837,11 @@ function groupBotHelpText() {
 }
 async function groupBotPostSetup(chatId, entry, messageId = null) {
   const e = entry || (await getGroupBotEntry(chatId)) || defaultGroupBotEntry();
+  const alertsOn = await groupAlertsOn(chatId);
   if (messageId) {
-    await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: groupBotMenuText(e), parse_mode: "HTML", disable_web_page_preview: true, reply_markup: groupBotMenuMarkup(e) }).catch(() => {});
+    await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: groupBotMenuText(e), parse_mode: "HTML", disable_web_page_preview: true, reply_markup: groupBotMenuMarkup(e, alertsOn) }).catch(() => {});
   } else {
-    await sayHtml(chatId, groupBotMenuText(e), groupBotMenuMarkup(e));
+    await sayHtml(chatId, groupBotMenuText(e), groupBotMenuMarkup(e, alertsOn));
   }
 }
 // Called when the bot is added to a group — register + post the setup menu.
@@ -30997,6 +31003,17 @@ async function handleGroupBotCallback(query, userId) {
   if (!(await isGroupBotAdmin(chatId, userId, query.message))) { await ack("Admins only 🛡️"); return true; }
 
   if (data === "gb:home") { await groupBotPostSetup(chatId, await getGroupBotEntry(chatId), messageId); await ack(); return true; }
+  if (data === "gb:alerts") {
+    const cur = await groupAlertsOn(chatId);
+    await withFileLock(telegramGroupsPath(), async () => {
+      const store = await readTelegramGroups(); const key = String(chatId);
+      store.groups[key] = { ...(store.groups[key] || { addedAt: new Date().toISOString() }), title: String(query.message?.chat?.title || store.groups[key]?.title || "").slice(0, 80), alerts: !cur };
+      await writeJsonFile(telegramGroupsPath(), store);
+    });
+    await groupBotPostSetup(chatId, await getGroupBotEntry(chatId), messageId);
+    await telegram("answerCallbackQuery", { callback_query_id: query.id, show_alert: true, text: cur ? "SlimeWire alerts OFF here." : "🟢 SlimeWire Alerts ON — this chat now gets 🐸 plays every 15 min, fresh launches, TP/SL fires, KOL copies & 2x receipts. Capped at a few posts/hour." }).catch(() => {});
+    return true;
+  }
   const mm = data.match(/^gb:m:(buy|raid|rose|scan|ref)$/);
   if (mm) { await groupBotRenderModule(chatId, mm[1], messageId); await ack(); return true; }
   // Entry verification toggles (whales / web) — not rose fields, so handled separately.

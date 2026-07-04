@@ -919,6 +919,16 @@ test("referral v2: rich board (reward + per-source) + non-custodial winner claim
   assert.match(serverSource, /REFERRAL_WINNER_TIERS = \[1, 3, 5, 10\]/);
   assert.match(serverSource, /callback_data: "gb:ref:winners"/);
 });
+test("SlimeWire Alerts = a menu toggle any admin flips per channel, on the main bot token", () => {
+  // surfaced as a toggle in the /settings hub (not just the hidden /slimewire command)
+  assert.match(functionBody(serverSource, "groupBotMenuMarkup"), /callback_data: "gb:alerts"/);
+  const cb = functionBody(serverSource, "handleGroupBotCallback");
+  assert.match(cb, /data === "gb:alerts"/);
+  assert.match(cb, /alerts: !cur/);                                  // flips the per-chat opt-in
+  // per-group broadcast works on the MAIN bot token (bot is already in the channels), no extra secret
+  assert.match(serverSource, /telegramChannelBotToken: process\.env\.TG_CHANNEL_BOT_TOKEN \|\| process\.env\.TELEGRAM_BOT_TOKEN/);
+  assert.match(functionBody(serverSource, "runAlphaDropTick"), /groupBridgeFor\(chatId\)\.announce/);
+});
 
 // ---- Shared scammer database: CAS (cas.chat) + SlimeWire cross-group ban list ----
 test("known-scammer gate: CAS + cross-group ban list, wired into join + messages + /ban", () => {
