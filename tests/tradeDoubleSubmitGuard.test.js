@@ -1322,15 +1322,36 @@ test("Trench super-menu folds all trench features into the existing organized se
   assert.ok(trenchIdx > 0 && gateIdx > 0 && trenchIdx < gateIdx, "trench routed before admin gate");
   assert.match(serverSource, /parseCommandWithArgument\(text, \["menu"\]\)/);
 });
-test("Narrative Radar reads the meta from recent launches; Graduation Gauntlet from the graduating feed", () => {
+test("Narrative Radar: metas are tappable → a coin list with MC + age + chart link", () => {
+  assert.match(functionBody(serverSource, "narrativeMetas"), /recentLaunchers\.values\(\)/);
+  assert.match(functionBody(serverSource, "narrativeMetas"), /counts\.entries\(\)/);   // keyword clustering
   const nar = functionBody(serverSource, "narrativeRadarView");
-  assert.match(nar, /recentLaunchers\.values\(\)/);
-  assert.match(nar, /counts\.entries\(\)/);           // keyword clustering
+  assert.match(nar, /callback_data: `nr:m:\$\{w\}`/);                                   // each meta is a button
+  const meta = functionBody(serverSource, "narrativeMetaView");
+  assert.match(meta, /alphaRadarFetchMc/);                                             // live MC
+  assert.match(meta, /alphaAgeLabel/);                                                 // age
+  assert.match(meta, /slimewireTokenLinks\(c\.mint\)/);                                // chart link
+  assert.match(serverSource, /startsWith\("nr:"\)/);                                   // routed
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["narrative", "meta"\]\)/);
+});
+test("Graduation Gauntlet: only ≥$18k coins about to bond (not already graduated)", () => {
   const grad = functionBody(serverSource, "graduationGauntletView");
   assert.match(grad, /buildMoralisPumpCategory\("system", "graduating"/);
-  assert.match(grad, /to graduation/);
-  assert.match(serverSource, /parseCommandWithArgument\(text, \["narrative", "meta"\]\)/);
+  assert.match(grad, /!\(r\.graduated \|\| r\.isGraduated\)/);        // exclude already-bonded
+  assert.match(grad, /progOf\(r\) >= GRAD_MIN_PROGRESS && progOf\(r\) < 100/); // about to bond
+  assert.match(grad, /x\.mc >= GRAD_MIN_MC/);                        // ≥ $18k gate
+  assert.match(serverSource, /GRAD_MIN_MC = 18000/);
   assert.match(serverSource, /parseCommandWithArgument\(text, \["grad", "graduation", "gauntlet"\]\)/);
+});
+test("Top Plays signal: 2h brain-drop DM + hot early-push, opt-in via /signals", () => {
+  assert.match(functionBody(serverSource, "buildPlaysSignalMessage"), /telegramAlphaRows/);   // brain scan
+  const poll = functionBody(serverSource, "pollPlaysSignal");
+  assert.match(poll, /readPlaysSignalSubs/);                         // opt-in only
+  assert.match(poll, /PLAYS_SIGNAL_CADENCE_MS/);                     // 2h cadence
+  assert.match(poll, /newHot/);                                      // hot early-push
+  assert.match(serverSource, /PLAYS_SIGNAL_CADENCE_MS = 2 \* 60 \* 60 \* 1000/);
+  assert.match(serverSource, /callback_data: "sig:plays"/);          // menu toggle
+  assert.match(serverSource, /void pollPlaysSignal\(\); }, 5 \* 60_000/); // registered
 });
 
 // ---- Copy-the-room's-best + Launch Room + Proof-of-call (the rest, all in the Trench menu) ----

@@ -11534,9 +11534,13 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("room:")) {
     if (await handleRoomCallback(query, userId).catch(() => false)) return;
   }
-  // Signals hub (sig:*) — Exit Radar + Alpha Radar opt-in toggles.
+  // Signals hub (sig:*) — Top Plays + Exit Radar + Alpha Radar opt-in toggles.
   if (String(query.data || "").startsWith("sig:")) {
     if (await handleSignalsCallback(query, userId).catch(() => false)) return;
+  }
+  // Narrative Radar (nr:*) — tap a meta to see its coins.
+  if (String(query.data || "").startsWith("nr:")) {
+    if (await handleNarrativeCallback(query).catch(() => false)) return;
   }
   // Copy-the-room's-best (copy:*) + Launch Room (lr:*).
   if (String(query.data || "").startsWith("copy:")) {
@@ -29309,14 +29313,85 @@ async function setExitRadarSub(userId, on) {
   await writeJsonFile(exitRadarSubsPath(), s).catch(() => {});
   return on;
 }
+// 🎯 TOP PLAYS — the proactive signal: DM opted-in users the SlimeWire brain's best plays every ~2h
+// (earlier when a hot one ignites). Sourced from the same scanners + smart-money the autopilot reads.
+function playsSignalSubsPath() { return path.join(CONFIG.dataDir, "plays-signal-subs.json"); }
+let playsSignalSubsCache = null;
+async function readPlaysSignalSubs() {
+  if (playsSignalSubsCache) return playsSignalSubsCache;
+  let s = null; try { s = await readJson(playsSignalSubsPath()); } catch { s = null; }
+  if (!s || typeof s !== "object") s = {};
+  if (!Array.isArray(s.dm)) s.dm = [];
+  if (!s.last || typeof s.last !== "object") s.last = {};
+  playsSignalSubsCache = s; return s;
+}
+async function setPlaysSignalSub(userId, on) {
+  const s = await readPlaysSignalSubs();
+  const set = new Set((s.dm || []).map(String));
+  if (on) set.add(String(userId)); else { set.delete(String(userId)); delete s.last[String(userId)]; }
+  s.dm = [...set]; playsSignalSubsCache = s;
+  await writeJsonFile(playsSignalSubsPath(), s).catch(() => {});
+  return on;
+}
+// Build the DM body + keyboard for a plays drop from the current brain scan (top 3). Returns null if dry.
+async function buildPlaysSignalMessage(hotLabel) {
+  const { rows } = await telegramAlphaRows("plays-signal");
+  if (!rows || !rows.length) return null;
+  const lines = rows.map((r, i) => {
+    const sym = escapeTelegramHtml(r.symbol || shortMint(r.tokenMint));
+    const stats = [r.marketCapLabel ? `MC ${r.marketCapLabel}` : "", r.liquidityLabel ? `Liq ${r.liquidityLabel}` : "", r.pairAgeLabel || ""].filter(Boolean).map(escapeTelegramHtml).join(" · ");
+    const lx = slimewireTokenLinks(r.tokenMint);
+    return `${i + 1}. <a href="${lx.site}"><b>$${sym}</b></a>${stats ? ` — ${stats}` : ""}\n<code>${escapeTelegramHtml(r.tokenMint)}</code>`;
+  });
+  const links0 = slimewireTokenLinks(rows[0].tokenMint);
+  const text = [
+    hotLabel ? "🔥 <b>SlimeWire — hot play igniting</b>" : "🎯 <b>SlimeWire — your top plays</b>",
+    ...lines, "",
+    "<i>From the SlimeWire brain — scanners + smart-money + wallet behavior. Not financial advice. /signals to mute.</i>"
+  ].join("\n");
+  const markup = { inline_keyboard: [
+    rows.map((r) => ({ text: `📈 $${(r.symbol || shortMint(r.tokenMint)).slice(0, 10)}`, url: slimewireTokenLinks(r.tokenMint).site })),
+    ...(links0.dmBuy ? [[{ text: "⚡ Quick Buy", url: links0.dmBuy }]] : [])
+  ] };
+  return { text, markup, topMint: rows[0].tokenMint, hot: Boolean(rows[0] && (Number(rows[0].jumpScore) >= 0.28 || /moonshot|ignition|surg/i.test(String(rows[0].badge || rows[0].reason || rows[0].mode || "")))) };
+}
+const PLAYS_SIGNAL_CADENCE_MS = 2 * 60 * 60 * 1000;   // every 2h per user
+const PLAYS_SIGNAL_HOT_FLOOR_MS = 45 * 60 * 1000;      // a hot early-push can't fire more than ~this often
+let _playsSignalPolling = false;
+async function pollPlaysSignal() {
+  if (_playsSignalPolling) return; _playsSignalPolling = true;
+  try {
+    const subs = await readPlaysSignalSubs();
+    const users = (subs.dm || []).map(String);
+    if (!users.length) return;
+    const msg = await buildPlaysSignalMessage();
+    if (!msg) return;
+    const now = Date.now();
+    const newHot = msg.hot && subs.hotMint !== msg.topMint;   // a fresh ignition worth an early nudge
+    let changed = false;
+    for (const uid of users) {
+      const last = Number(subs.last[uid]) || 0;
+      const due = (now - last) >= PLAYS_SIGNAL_CADENCE_MS;
+      const earlyHot = newHot && (now - last) >= PLAYS_SIGNAL_HOT_FLOOR_MS;
+      if (!due && !earlyHot) continue;
+      const body = earlyHot && !due ? (await buildPlaysSignalMessage("hot")) : msg;
+      await sayHtml(uid, (body || msg).text, (body || msg).markup).catch(() => {});
+      subs.last[uid] = now; changed = true;
+    }
+    if (newHot) { subs.hotMint = msg.topMint; changed = true; }
+    if (changed) { playsSignalSubsCache = subs; await writeJsonFile(playsSignalSubsPath(), subs).catch(() => {}); }
+  } catch { /* never crash the tick */ } finally { _playsSignalPolling = false; }
+}
 async function signalsMenu(chatId, userId, isDm) {
   if (isDm) {
+    const pl = new Set((await readPlaysSignalSubs()).dm.map(String)).has(String(userId));
     const ex = new Set((await readExitRadarSubs()).dm.map(String)).has(String(userId));
     const al = new Set(((await readAlphaRadarSubs()).dm || []).map(String)).has(String(userId));
     return {
-      text: "📡 <b>Your Signals</b> — tap to toggle the alerts you want (DM):\n\n🎯 <b>Exit Radar</b> — watches your own open bags and pings you to take profit when one tops (hard fade off the peak, or the dev dumps).\n🕵️ <b>Alpha Radar</b> — network-backed long-term runners.",
+      text: "📡 <b>Your Signals</b> — tap to toggle the alerts you want (DM):\n\n🎯 <b>Top Plays</b> — the SlimeWire brain DMs you its best plays every ~2h (sooner when one's igniting), from the scanners + smart-money + wallet behavior.\n🚪 <b>Exit Radar</b> — watches your own open bags and pings you to take profit when one tops.\n🕵️ <b>Alpha Radar</b> — network-backed long-term runners.",
       markup: { inline_keyboard: [
-        [{ text: `🎯 Exit Radar  ${ex ? "✅ ON" : "◻️ off"}`, callback_data: "sig:exit" }],
+        [{ text: `🎯 Top Plays  ${pl ? "✅ ON" : "◻️ off"}`, callback_data: "sig:plays" }],
+        [{ text: `🚪 Exit Radar  ${ex ? "✅ ON" : "◻️ off"}`, callback_data: "sig:exit" }],
         [{ text: `🕵️ Alpha Radar  ${al ? "✅ ON" : "◻️ off"}`, callback_data: "sig:alpha" }],
         [{ text: "✓ Done", callback_data: "gb:close" }]
       ] }
@@ -29342,7 +29417,13 @@ async function handleSignalsCallback(query, userId) {
   const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
   const isDm = isPrivateChat(query.message?.chat);
   const ack = (t) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: true } : {}) }).catch(() => {});
-  if (data === "sig:exit") { const cur = new Set((await readExitRadarSubs()).dm.map(String)).has(String(userId)); await setExitRadarSub(userId, !cur); await ack(cur ? "Exit Radar off." : "🎯 Exit Radar ON — I'll DM you when one of your bags tops."); }
+  if (data === "sig:plays") {
+    const cur = new Set((await readPlaysSignalSubs()).dm.map(String)).has(String(userId));
+    await setPlaysSignalSub(userId, !cur);
+    await ack(cur ? "Top Plays off." : "🎯 Top Plays ON — best plays every ~2h, sooner when one's hot. Sending a taste now…");
+    if (!cur) { try { const s = await readPlaysSignalSubs(); s.last[String(userId)] = Date.now(); playsSignalSubsCache = s; await writeJsonFile(playsSignalSubsPath(), s).catch(() => {}); const m = await buildPlaysSignalMessage(); if (m) await sayHtml(userId, m.text, m.markup).catch(() => {}); } catch {} }
+  }
+  else if (data === "sig:exit") { const cur = new Set((await readExitRadarSubs()).dm.map(String)).has(String(userId)); await setExitRadarSub(userId, !cur); await ack(cur ? "Exit Radar off." : "🚪 Exit Radar ON — I'll DM you when one of your bags tops."); }
   else if (data === "sig:alpha") { const cur = new Set(((await readAlphaRadarSubs()).dm || []).map(String)).has(String(userId)); await setAlphaRadarDmSub(userId, !cur); await ack(cur ? "Alpha Radar off." : "🕵️ Alpha Radar ON."); }
   else if (data === "sig:galpha") {
     if (!(await isTgChatAdmin(chatId, userId))) { await ack("Only group admins can toggle group signals."); return true; }
@@ -29522,7 +29603,7 @@ async function handleLaunchRoomCallback(query, userId) {
 // 🌀 NARRATIVE RADAR — cluster the last ~2h of launches by keyword to surface the ROTATING meta ("5 new
 // 'AI agent' coins in the last hour"). No bot reads the meta-level; single-coin scanners miss the wave.
 const NARRATIVE_STOP = new Set(["THE", "AND", "FOR", "SOL", "COIN", "TOKEN", "OFFICIAL", "PUMP", "MEME", "ON", "OF", "TO", "YOUR", "GET", "NEW"]);
-function narrativeRadarView() {
+function narrativeMetas() {
   const now = Date.now();
   const recent = [...recentLaunchers.values()].filter((r) => now - r.at < 2 * 60 * 60 * 1000);
   const counts = new Map();
@@ -29530,27 +29611,69 @@ function narrativeRadarView() {
     const words = `${r.symbol || ""} ${r.name || ""}`.toUpperCase().split(/[^A-Z0-9]+/).filter((w) => w.length >= 3 && !NARRATIVE_STOP.has(w) && !/^\d+$/.test(w));
     for (const w of new Set(words)) counts.set(w, (counts.get(w) || 0) + 1);
   }
-  const metas = [...counts.entries()].filter(([, n]) => n >= 3).sort((a, b) => b[1] - a[1]).slice(0, 8);
-  const back = { inline_keyboard: [[{ text: "🔄 Refresh", callback_data: "gb:go:narrative" }], gbTrenchBackRow()] };
-  if (recent.length < 8) return { text: "🌀 <b>Narrative Radar</b>\n\nNot enough fresh launches in the last 2h to read the meta yet — check back soon.", markup: back };
-  if (!metas.length) return { text: `🌀 <b>Narrative Radar</b>\n\nNo clear meta forming — the ${recent.length} recent launches are scattered (quiet trench, or between metas).`, markup: back };
-  const lines = metas.map(([w, n], i) => `${["🥇", "🥈", "🥉"][i] || "🔥"} <b>${escapeTelegramHtml(w)}</b> — ${n} launches`);
-  return { text: [`🌀 <b>Narrative Radar</b> — what the trench is minting (last 2h):`, ...lines, "", `<i>${recent.length} fresh launches scanned. A meta with 3+ launches = where attention (and volume) is rotating. Get in front of the wave.</i>`].join("\n"), markup: back };
+  return { recent, metas: [...counts.entries()].filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1]).slice(0, 8) };
+}
+function narrativeRadarView() {
+  const { recent, metas } = narrativeMetas();
+  const backRow = [{ text: "🔄 Refresh", callback_data: "gb:go:narrative" }];
+  if (recent.length < 5) return { text: "🌀 <b>Narrative Radar</b>\n\nNot enough fresh launches in the last 2h to read the meta yet — check back soon.", markup: { inline_keyboard: [backRow, gbTrenchBackRow()] } };
+  if (!metas.length) return { text: `🌀 <b>Narrative Radar</b>\n\nNo clear meta forming — the ${recent.length} recent launches are scattered (quiet trench, or between metas).`, markup: { inline_keyboard: [backRow, gbTrenchBackRow()] } };
+  // Each meta is a BUTTON — tap it to see the actual coins (MC + age + chart link).
+  const metaBtns = metas.map(([w, n]) => [{ text: `🔥 ${w} — ${n} coins`, callback_data: `nr:m:${w}` }]);
+  return {
+    text: [`🌀 <b>Narrative Radar</b> — what the trench is minting (last 2h). <b>Tap a meta</b> to see its coins:`, "", ...metas.map(([w, n], i) => `${["🥇", "🥈", "🥉"][i] || "🔥"} <b>${escapeTelegramHtml(w)}</b> — ${n} coins`), "", `<i>${recent.length} fresh launches scanned. A meta with 2+ launches = where attention (and volume) is rotating.</i>`].join("\n"),
+    markup: { inline_keyboard: [...metaBtns, backRow, gbTrenchBackRow()] }
+  };
+}
+// Tap a meta → the coins in it, newest first, with live MC + age; the $symbol links to its chart.
+async function narrativeMetaView(word) {
+  const now = Date.now();
+  const W = String(word || "").toUpperCase();
+  const coins = [...recentLaunchers.values()]
+    .filter((r) => now - r.at < 2 * 60 * 60 * 1000 && `${r.symbol || ""} ${r.name || ""}`.toUpperCase().split(/[^A-Z0-9]+/).includes(W))
+    .sort((a, b) => b.at - a.at).slice(0, 10);
+  const back = { inline_keyboard: [[{ text: "⬅️ Narrative", callback_data: "gb:go:narrative" }, { text: "✓ Done", callback_data: "gb:close" }]] };
+  if (!coins.length) return { text: `🌀 <b>${escapeTelegramHtml(W)}</b>\n\nThose launches aged out — tap ⬅️ Narrative for the current metas.`, markup: back };
+  const enriched = await Promise.all(coins.map(async (c) => { let mc = 0; try { const r = await alphaRadarFetchMc(c.mint); mc = (r && r.mc) || 0; } catch {} return { ...c, mc }; }));
+  const lines = enriched.map((c, i) => {
+    const lx = slimewireTokenLinks(c.mint);
+    return `${i + 1}. <a href="${lx.site}"><b>$${escapeTelegramHtml(c.symbol || shortMint(c.mint))}</b></a> — ${c.mc > 0 ? scanFmtMoney(c.mc) : "new"} · ${alphaAgeLabel(now - c.at)}`;
+  });
+  return { text: [`🌀 <b>${escapeTelegramHtml(W)} meta</b> — tap a $ticker for its chart:`, "", ...lines, "", "<i>Live MC + age. Freshest first.</i>"].join("\n"), markup: back };
+}
+async function handleNarrativeCallback(query) {
+  const data = String(query?.data || ""); if (!data.startsWith("nr:")) return false;
+  const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  const m = data.match(/^nr:m:(.+)$/);
+  if (m) { const v = await narrativeMetaView(m[1]); await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: v.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: v.markup }).catch(() => {}); }
+  await telegram("answerCallbackQuery", { callback_query_id: query.id }).catch(() => {});
+  return true;
 }
 // 🎓 GRADUATION GAUNTLET — only ~1% of pump.fun coins graduate; surface the ones closest to making it
 // (high on the bonding curve + still alive), so you're in before the DEX-listing pop, not after.
+const GRAD_MIN_MC = 18000;      // user: at least $18k — skip the dead sub-$18k dust
+const GRAD_MIN_PROGRESS = 80;   // "very close" — 80%+ up the curve
 async function graduationGauntletView() {
   let rows = [];
-  try { const feed = await buildMoralisPumpCategory("system", "graduating", "graduating").catch(() => null); rows = ((feed && feed.rows) || []).slice(0, 8); } catch {}
+  try { const feed = await buildMoralisPumpCategory("system", "graduating", "graduating").catch(() => null); rows = ((feed && feed.rows) || []); } catch {}
   const back = { inline_keyboard: [[{ text: "🔄 Refresh", callback_data: "gb:go:grad" }], gbTrenchBackRow()] };
-  if (!rows.length) return { text: "🎓 <b>Graduation Gauntlet</b>\n\nNo coins on the graduation runway right now — check back soon.", markup: back };
-  const lines = rows.map((r, i) => {
-    const p = Math.round(Number(r.bondingCurveProgress ?? r.bondingProgressPct ?? 0));
-    const sym = r.symbol || shortMint(r.tokenMint || r.mint || "");
+  const progOf = (r) => Math.round(Number(r.bondingCurveProgress ?? r.bondingProgressPct ?? r.bondingProgress ?? 0));
+  const mcOf = (r) => Number(r.marketCap ?? r.marketCapUsd ?? r.fdv ?? r.usdMarketCap ?? 0);
+  // ABOUT to bond only: high on the curve, NOT already graduated. (Already-bonded coins are on a DEX now.)
+  let cands = rows.filter((r) => !(r.graduated || r.isGraduated) && progOf(r) >= GRAD_MIN_PROGRESS && progOf(r) < 100);
+  // Fill any missing MC on the top candidates, then gate ≥ $18k.
+  cands = (await Promise.all(cands.slice(0, 14).map(async (r) => {
+    let mc = mcOf(r);
+    if (!(mc >= 1)) { try { const x = await alphaRadarFetchMc(r.tokenMint || r.mint); mc = (x && x.mc) || 0; } catch {} }
+    return { r, mc, p: progOf(r) };
+  }))).filter((x) => x.mc >= GRAD_MIN_MC).sort((a, b) => b.p - a.p).slice(0, 8);
+  if (!cands.length) return { text: `🎓 <b>Graduation Gauntlet</b>\n\nNothing ≥ ${scanFmtMoney(GRAD_MIN_MC)} sitting right on the graduation line this second — the runway's between waves. Tap 🔄 shortly.`, markup: back };
+  const lines = cands.map((x, i) => {
+    const r = x.r; const sym = r.symbol || shortMint(r.tokenMint || r.mint || "");
     const lx = slimewireTokenLinks(r.tokenMint || r.mint || "");
-    return `${i + 1}. <a href="${lx.site}"><b>$${escapeTelegramHtml(sym)}</b></a> — <b>${p}%</b> to graduation${r.marketCapLabel ? ` · ${escapeTelegramHtml(r.marketCapLabel)}` : ""}`;
+    return `${i + 1}. <a href="${lx.site}"><b>$${escapeTelegramHtml(sym)}</b></a> — <b>${x.p}%</b> · ${scanFmtMoney(x.mc)}`;
   });
-  return { text: [`🎓 <b>Graduation Gauntlet</b> — closest to making it (only ~1% do):`, ...lines, "", `<i>High on the curve + still alive. These have real momentum toward a DEX listing — get in before the graduation pop.</i>`].join("\n"), markup: back };
+  return { text: [`🎓 <b>Graduation Gauntlet</b> — ≥${scanFmtMoney(GRAD_MIN_MC)} &amp; about to bond (not graduated yet):`, "", ...lines, "", `<i>${GRAD_MIN_PROGRESS}%+ up the curve, still on it — get in before the DEX-listing pop. Tap a $ticker for its chart.</i>`].join("\n"), markup: back };
 }
 // The 🎯 Trench super-menu — one tidy home for everything trench (snipe / room / signals / boards / radars).
 function gbTrenchBackRow() { return [{ text: "⬅️ Trench", callback_data: "gb:m:trench" }, { text: "✓ Done", callback_data: "gb:close" }]; }
@@ -31357,7 +31480,8 @@ function startGroupBuyBot() {
   setInterval(() => { void refreshRaidTgCards(); }, 50_000); // Raidar-style: edit live raid cards as likes/RTs/replies climb (free, fxtwitter)
   setInterval(() => { void pollTrackedWallets(); }, 30_000); // Cielo-style smart-money wallet alerts
   setInterval(() => { void pollAlphaRadar(); }, 60_000);     // network-backed long-term-runner alerts (opt-in)
-  setInterval(() => { void pollExitRadar(); }, 60_000);      // 🎯 Exit Radar — take-profit pings on your own bags (opt-in)
+  setInterval(() => { void pollExitRadar(); }, 60_000);      // 🚪 Exit Radar — take-profit pings on your own bags (opt-in)
+  setInterval(() => { void pollPlaysSignal(); }, 5 * 60_000); // 🎯 Top Plays — brain's best plays every ~2h + hot early-push (opt-in)
   void readCommunitySnipe().catch(() => {});                 // warm the armed-creator-wallet index so a snipe survives restart
 }
 
