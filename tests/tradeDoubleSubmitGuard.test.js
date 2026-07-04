@@ -937,7 +937,7 @@ test("⚡ one-click group buy fires from the tapper's OWN wallet, idempotent, re
   assert.match(exec, /buyTokenForPlan\(wallet, mint, lamports/);
   assert.match(exec, /if \(!wallet\) return \{ ok: false, needWallet: true \}/); // no wallet → funnel, not crash
   const cb = functionBody(serverSource, "handleQuickBuyCallback");
-  assert.match(cb, /quickBuySendReceipt\(userId, mint, amt\)/);                 // receipt to DM (userId), never the group
+  assert.match(cb, /quickBuySendReceipt\(userId, mint, amt, r\.result\)/);       // receipt to DM (userId), never the group; now carries live buy result
   assert.match(cb, /DM me \/start/);                                           // no-wallet funnel
   // ⚡ preset buttons on the group scan card + routed + custom-amount input wired
   assert.match(functionBody(serverSource, "slimeScanKeyboard"), /callback_data: `qb:0\.5:\$\{mint\}`/);
@@ -1017,6 +1017,25 @@ test("⏰ Limit orders: MC-triggered buy/sell, own-wallet, idempotent-claim, pau
   assert.match(functionBody(serverSource, "slimeScanKeyboard"), /callback_data: `lo:new:\$\{mint\}`/);
   // MC parser is fat-finger-safe (bare small number → $k, k/m suffix honored)
   assert.match(functionBody(serverSource, "parseMcInput"), /m\[2\] === "m"/);
+});
+test("trader wow-UX: rich receipts (live MC + realized PnL), price alerts, auto-TP ladder", () => {
+  // buy receipt now shows live token data (symbol + MC/liq), not just the CA
+  assert.match(functionBody(serverSource, "quickBuySendReceipt"), /alphaRadarFetchMc\(mint\)/);
+  assert.match(functionBody(serverSource, "quickBuySendReceipt"), /fmtMc\(info\.mc\)/);
+  // sell receipt shows realized PnL from trade history
+  assert.match(serverSource, /async function realizedPnlForMint/);
+  assert.match(functionBody(serverSource, "tgQuickSellReceipt"), /realizedPnlForMint\(userId, mint\)/);
+  // price/MC ALERT order type — DM heads-up, no trade; routed + built + stored without an amount
+  assert.match(functionBody(serverSource, "pollLimitOrders"), /o\.side === "alert"/);
+  assert.match(serverSource, /callback_data: `lo:a:\$\{mint\}`/);
+  assert.match(functionBody(serverSource, "handleLimitOrderCallback"), /side: "alert"/);
+  assert.match(functionBody(serverSource, "addLimitOrder"), /spec\.side === "sell" \? \{ pct: spec\.pct \} : \{\}/); // alert has no amount field
+  // 🎯 Auto-TP ladder arms limit-SELL rungs at MC multiples, one tap from the buy receipt
+  assert.match(serverSource, /const TP_LADDERS = \{/);
+  assert.match(serverSource, /startsWith\("tp:"\)/);
+  assert.match(functionBody(serverSource, "handleTpCallback"), /addLimitOrder\(userId, \{ side: "sell"/);
+  assert.match(functionBody(serverSource, "handleTpCallback"), /dir: ">=", pct: rung\.pct/);
+  assert.match(functionBody(serverSource, "quickBuyReceiptKeyboard"), /callback_data: `tp:\$\{mint\}`/);
 });
 test("smooth nav: DM sub-views carry a Main Menu button (no re-/start)", () => {
   for (const fn of ["showTelegramLinksMenu", "showTelegramPortfolioMenu", "showTelegramOgreToolsMenu", "showWalletMenu"]) {
