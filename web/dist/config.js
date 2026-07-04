@@ -1,6 +1,6 @@
 window.OGRE_PORTAL_CONFIG = {
   "apiBase": "https://ogrevolbot.onrender.com",
-  "telegramBotUsername": "OgreTradeBot",
+  "telegramBotUsername": "SlimeWiredBot",
   "portalUrl": "https://www.slimewire.org",
   "featureFlags": {
     "slimeShieldEnabled": true,

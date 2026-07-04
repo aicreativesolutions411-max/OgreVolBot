@@ -57,7 +57,7 @@ await copyDir(publicDir, distDir);
 
 const buildId = String(process.env.WEB_BUILD_ID || new Date().toISOString().replace(/[-:.TZ]/g, "")).slice(0, 14);
 const apiBase = normalizeBaseUrl(process.env.OGRE_API_BASE || process.env.WEB_API_BASE || process.env.RENDER_EXTERNAL_URL || "https://ogrevolbot.onrender.com");
-const telegramBotUsername = String(process.env.TELEGRAM_BOT_USERNAME || "OgreTradeBot").trim().replace(/^@/, "");
+const telegramBotUsername = String(process.env.TELEGRAM_BOT_USERNAME || "SlimeWiredBot").trim().replace(/^@/, "");
 const portalUrl = normalizeBaseUrl(process.env.WEB_PORTAL_URL || "https://www.slimewire.org");
 const ogreTek = {
   enabled: envBool("OGRE_TEK_ENABLED", envBool("NEXT_PUBLIC_ENABLE_OGRE_TEK", false)),

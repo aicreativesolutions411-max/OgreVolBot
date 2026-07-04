@@ -5951,7 +5951,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "GET" && pathname === "/api/web/config") {
       sendWebJson(request, response, 200, {
         ok: true,
-        service: "OgreTradeBot",
+        service: "SlimeWiredBot",
         portalUrl: CONFIG.webPortalUrl,
         telegramBotUsername: CONFIG.telegramBotUsername,
         telegramBotUrl: telegramBotStartUrl(),
@@ -33990,9 +33990,9 @@ ${theirCalls.length ? theirCalls.map((call) => `<div class="row"><b>$${esc(call.
       title: "SlimeWire Group Alpha League",
       description: "Telegram groups ranked by the 2x calls their drops produced. Add the bot, climb the board.",
       body: `<h1>Group <b>Alpha League</b></h1>
-<p class="sub">Groups ranked by tracked 2x wins from their drops. Add @OgreTradeBot + /slimewire on to compete.</p>
+<p class="sub">Groups ranked by tracked 2x wins from their drops. Add @SlimeWiredBot + /slimewire on to compete.</p>
 ${league.length ? league.map((group, index) => `<div class="row"><b>${index + 1}. ${esc(group.title)}</b><span class="win">${esc(String(group.wins))} wins</span></div>`).join("") : `<p class="sub">First wins crown the first groups - the board is wide open.</p>`}
-<a class="cta" href="https://t.me/${encodeURIComponent(CONFIG.telegramBotUsername || "OgreTradeBot")}">Add the bot</a>
+<a class="cta" href="https://t.me/${encodeURIComponent(CONFIG.telegramBotUsername || "SlimeWiredBot")}">Add the bot</a>
 <a class="cta ghost" href="https://www.slimewire.org/proof">Full proof wall</a>`
     }));
     return;
@@ -41073,7 +41073,7 @@ async function sendWebLoginCode(chatId, userId, messageId = null) {
     `Code: ${code}`,
     `Expires: ${expiresAt}`,
     "",
-    "Enter this one-time code on the OgreTradeBot web app. It is 64-bit random, expires in 10 minutes, and is stored only as a hash.",
+    "Enter this one-time code on the SlimeWiredBot web app. It is 64-bit random, expires in 10 minutes, and is stored only as a hash.",
     "The web app can open your dashboard and one-wallet trade desk. Private keys stay encrypted and are never shown to other users.",
     CONFIG.webPortalUrl ? `Portal: ${CONFIG.webPortalUrl}` : "Set WEB_PORTAL_URL on Render so this message can include your website link.",
     "",
@@ -53799,7 +53799,7 @@ function webSniperRow(row) {
 }
 
 function telegramBotStartUrl() {
-  return `https://t.me/${CONFIG.telegramBotUsername || "OgreTradeBot"}?start=web`;
+  return `https://t.me/${CONFIG.telegramBotUsername || "SlimeWiredBot"}?start=web`;
 }
 
 function brandSocialLinks() {

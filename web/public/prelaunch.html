@@ -261,7 +261,7 @@ async function load(){
   try{ const r=await fetch(API+"/api/web/presales",{cache:"no-store"}); const j=await r.json(); LIST=(j&&j.presales)||[]; }catch(_){ LIST=[]; }
   if(!LIST.length){ LIST=[{id:"demo",symbol:"OGRE",name:"Swamp King",by:"slimewire",live:true,interest:312,backerCount:208,target:500,
     wallet:"4Nd1mYabcExampleDEPOSITwa11et5678ZyxWvuTsrQ", raisedSol:18.42, contributors:42,
-    deadline:new Date(Date.now()+ (1*86400+6*3600+12*60)*1000).toISOString(), blurb:"The boss of the swamp. Fill the cauldron.", x:"https://twitter.com/SlimeWire", tg:"https://t.me/SlimeWireBot", topRefs:[{tag:"frogfather",n:34},{tag:"slimelord",n:21}]}]; }
+    deadline:new Date(Date.now()+ (1*86400+6*3600+12*60)*1000).toISOString(), blurb:"The boss of the swamp. Fill the cauldron.", x:"https://twitter.com/SlimeWire", tg:"https://t.me/SlimeWiredBot", topRefs:[{tag:"frogfather",n:34},{tag:"slimelord",n:21}]}]; }
   renderFeatured(); renderMore(); renderRefs();
 }
 function renderMore(){ const box=$("#more"); const others=LIST.filter(p=>!FEAT||p.id!==FEAT.id).slice(0,8);
