@@ -29391,6 +29391,50 @@ async function roomRender(chatId, messageId, view) {
   if (messageId) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: view.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: view.markup }).catch(() => {});
   else await sayHtml(chatId, view.text, view.markup);
 }
+// 🏆 Weekly "Caller of the Week" — crowns the top verified caller of the last 7 days in each opted-in
+// group (SlimeWire Alerts on). Free social flywheel: turns the caller leaderboard from vanity into a
+// weekly event. Prize (if any) is owner-paid / non-custodial — the bot never holds funds. Fires Sunday
+// 18:00–23:59 UTC, once per ISO week per group (tracked on the group entry).
+function isoWeekKey(d) {
+  const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const day = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+  return `${date.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+let _callerContestPolling = false;
+async function pollWeeklyCallerContest() {
+  if (_callerContestPolling) return; _callerContestPolling = true;
+  try {
+    const now = new Date();
+    if (now.getUTCDay() !== 0 || now.getUTCHours() < 18) return;   // Sunday evening UTC only
+    const week = isoWeekKey(now);
+    const groups = await readTelegramGroups();
+    const calls = await readTelegramCalls();
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    let dirty = false;
+    for (const [chatId, g] of Object.entries(groups.groups || {})) {
+      if (!g || !g.alerts) continue;                       // opt-in: SlimeWire Alerts on
+      if (g.lastCallerContestWeek === week) continue;      // already crowned this week
+      const scoped = Object.values(calls.calls || {}).filter((c) => String(c.chatId) === String(chatId) && c.verified && (Number(c.firstAt) || 0) >= cutoff);
+      const board = callerIntel.buildLeaderboards(scoped, { minResolved: 1 }).callers || [];
+      g.lastCallerContestWeek = week; dirty = true;        // mark now so we don't re-scan every hour
+      if (!board.length) continue;
+      const w = board[0];
+      await telegram("sendMessage", { chat_id: chatId, text: [
+        "🏆 <b>Caller of the Week</b>",
+        `👑 <b>${escapeTelegramHtml(String(w.name).slice(0, 24))}</b> — ${Math.round((w.smoothedHitRate || 0) * 100)}% hit · ${w.wins}W/${w.losses}L${Number(w.bestPeakX) >= 2 ? ` · best ${w.bestPeakX}x` : ""}`,
+        "",
+        "✅ Verified on-chain — they actually <b>held</b> what they called.",
+        "Admins: reward your top caller to keep them cooking (your call, owner-paid).",
+        "Want in? Call a $ticker/CA while you hold it + join the board → <code>/room</code>"
+      ].join("\n"), parse_mode: "HTML", disable_web_page_preview: true }).catch(() => {});
+    }
+    if (dirty) await writeJsonFile(telegramGroupsPath(), groups).catch(() => {});
+  } catch (e) { console.warn(`[caller-contest] ${e && e.message}`); }
+  finally { _callerContestPolling = false; }
+}
 async function handleRoomCallback(query, userId) {
   const data = String(query?.data || "");
   if (!data.startsWith("room:")) return false;
@@ -29525,7 +29569,7 @@ async function signalsMenu(chatId, userId, isDm) {
     const ex = new Set((await readExitRadarSubs()).dm.map(String)).has(String(userId));
     const al = new Set(((await readAlphaRadarSubs()).dm || []).map(String)).has(String(userId));
     return {
-      text: "📡 <b>Your Signals</b> — tap to toggle the alerts you want (DM):\n\n🎯 <b>Top Plays</b> — the SlimeWire brain DMs you its best plays every ~2h (sooner when one's igniting), from the scanners + smart-money + wallet behavior.\n🚪 <b>Exit Radar</b> — watches your own open bags and pings you to take profit when one tops.\n🕵️ <b>Alpha Radar</b> — network-backed long-term runners.",
+      text: "📡 <b>Your Signals</b> — tap to toggle the alerts you want (DM):\n\n🎯 <b>Top Plays</b> — the SlimeWire brain DMs you its best plays every ~2h (sooner when one's igniting), from the scanners + smart-money + wallet behavior.\n🚪 <b>Exit Radar</b> — watches your own open bags: pings you to take profit when one tops, and when one graduates to DEX (post-migration pop).\n🕵️ <b>Alpha Radar</b> — network-backed long-term runners.",
       markup: { inline_keyboard: [
         [{ text: `🎯 Top Plays  ${pl ? "✅ ON" : "◻️ off"}`, callback_data: "sig:plays" }],
         [{ text: `🚪 Exit Radar  ${ex ? "✅ ON" : "◻️ off"}`, callback_data: "sig:exit" }],
@@ -29612,6 +29656,20 @@ async function pollExitRadar() {
           devSold ? "🔴 the dev just <b>SOLD</b>." : `📉 faded <b>${fadePct}%</b> off its peak.`,
           "Consider taking profit while there's still liquidity — your call.",
           `⚡ <a href="${links.site}">Chart / Sell on SlimeWire</a>`
+        ].join("\n"), slimeScanKeyboard(p.mint)).catch(() => {});
+      }
+      // 🎓 Migration ping: a bag you hold that was on the bonding curve (no DEX liquidity) just got a
+      // DEX pair — it graduated. Fresh DEX liquidity often brings a post-migration pop. `liq` is 0 while
+      // on the pump curve (pump-fallback source) and >0 once DexScreener has a pair.
+      if (!(live.liq > 0)) st.sawCurve = true;
+      if (st.sawCurve && live.liq > 0 && !st.migrated) {
+        st.migrated = true;
+        const links = slimewireTokenLinks(p.mint);
+        await sayHtml(p.userId, [
+          `🎓 <b>$${escapeTelegramHtml(st.sym || shortMint(p.mint))} just graduated to DEX</b> — a coin you're holding.`,
+          `〽️ MC ${fmtMc(live.mc)} · Liq ${fmtMc(live.liq)}`,
+          "Fresh DEX liquidity often brings a post-migration pop — ride it or bank it, your call.",
+          `⚡ <a href="${links.site}">Chart / Trade on SlimeWire</a>`
         ].join("\n"), slimeScanKeyboard(p.mint)).catch(() => {});
       }
       await new Promise((r) => setTimeout(r, 150));
@@ -32348,6 +32406,7 @@ function startGroupBuyBot() {
   setInterval(() => { void pollExitRadar(); }, 60_000);      // 🚪 Exit Radar — take-profit pings on your own bags (opt-in)
   setInterval(() => { void pollPlaysSignal(); }, 5 * 60_000); // 🎯 Top Plays — brain's best plays every ~2h + hot early-push (opt-in)
   setInterval(() => { void pollLimitOrders(); }, 30_000);    // ⏰ Limit orders — MC-triggered buy/sell auto-fire (opt-in, own wallet)
+  setInterval(() => { void pollWeeklyCallerContest(); }, 60 * 60_000); // 🏆 Caller of the Week — Sunday crown for opted-in groups
   void readCommunitySnipe().catch(() => {});                 // warm the armed-creator-wallet index so a snipe survives restart
 }
 
@@ -32410,6 +32469,32 @@ async function sendWalletAlert(userId, ev) {
 }
 const wtSeenSig = new Map(); // addr -> Set(sig)
 let _wtPolling = false;
+// 🚨 Convergence: when 2+ of a user's OWN tracked wallets buy the same coin inside a short window, that's
+// a coordinated-entry signal worth a louder ping than a single wallet buy. Keyed uid:mint → the wallets
+// seen buying it + when the window opened.
+const wtConvergence = new Map();
+const WT_CONVERGE_WINDOW_MS = 12 * 60 * 1000;
+async function sendWalletConvergenceAlert(userId, mint, wallets, labels) {
+  const info = await alphaRadarFetchMc(mint).catch(() => null);
+  const sym = (info && info.sym) ? `$${escapeTelegramHtml(info.sym)}` : `<code>${escapeTelegramHtml(shortMint(mint))}</code>`;
+  const who = wallets.slice(0, 4).map((a) => escapeTelegramHtml(labels[a] || shortMint(a))).join(", ");
+  await telegram("sendMessage", { chat_id: userId, text: [
+    `🚨 <b>Coordinated entry</b> — <b>${wallets.length}</b> of your tracked wallets just bought ${sym} within ${Math.round(WT_CONVERGE_WINDOW_MS / 60000)}m.`,
+    `👛 ${who}`,
+    (info && info.mc > 0) ? `〽️ MC ${fmtMc(info.mc)}${info.liq > 0 ? ` · Liq ${fmtMc(info.liq)}` : ""}` : "",
+    `<code>${escapeTelegramHtml(mint)}</code>`
+  ].filter(Boolean).join("\n"), parse_mode: "HTML", disable_web_page_preview: true, reply_markup: slimeScanKeyboard(mint) }).catch(() => {});
+}
+function noteWalletConvergence(uid, mint, addr, labelFor) {
+  const key = `${uid}:${mint}`; const now = Date.now();
+  let c = wtConvergence.get(key);
+  if (!c || now - c.first > WT_CONVERGE_WINDOW_MS) c = { wallets: new Set(), labels: {}, first: now, alerted: false };
+  c.wallets.add(addr); c.labels[addr] = labelFor || addr;
+  wtConvergence.set(key, c);
+  if (wtConvergence.size > 4000) { for (const [k, v] of wtConvergence) { if (now - v.first > WT_CONVERGE_WINDOW_MS) wtConvergence.delete(k); } }
+  if (c.wallets.size >= 2 && !c.alerted) { c.alerted = true; return { fire: true, wallets: [...c.wallets], labels: c.labels }; }
+  return { fire: false };
+}
 async function pollTrackedWallets() {
   if (_wtPolling) return; _wtPolling = true;
   try {
@@ -32435,6 +32520,11 @@ async function pollTrackedWallets() {
           if (w.side === "buy" && sw.side !== "buy") continue;
           if (Number(w.minUsd) > 0 && usd < Number(w.minUsd)) continue;
           await sendWalletAlert(uid, { wallet: addr, label: w.label, side: sw.side, mint: sw.mint, solAmount: sw.solAmount }).catch(() => {});
+          // Coordinated-entry detection: multiple of THIS user's tracked wallets buying the same coin.
+          if (sw.side === "buy") {
+            const conv = noteWalletConvergence(uid, sw.mint, addr, w.label);
+            if (conv.fire) await sendWalletConvergenceAlert(uid, sw.mint, conv.wallets, conv.labels).catch(() => {});
+          }
         }
       }
     }

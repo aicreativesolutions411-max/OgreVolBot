@@ -1055,6 +1055,22 @@ test("viral + onboarding: win-flex card, first-run wallet CTA, fee transparency,
   assert.match(functionBody(serverSource, "showDepositView"), /api\.qrserver\.com/);
   assert.match(serverSource, /callback_data: "deposit_menu"/);
 });
+test("deferred backlog: migration alerts, wallet convergence, weekly caller contest", () => {
+  // 🎓 migration-to-DEX ping folded into Exit Radar (a held bag that left the curve → got DEX liq)
+  assert.match(functionBody(serverSource, "pollExitRadar"), /st\.sawCurve && live\.liq > 0 && !st\.migrated/);
+  assert.match(functionBody(serverSource, "pollExitRadar"), /just graduated to DEX/);
+  // 🚨 wallet convergence: 2+ of a user's tracked wallets buy the same coin in a window
+  assert.match(serverSource, /function noteWalletConvergence/);
+  assert.match(serverSource, /async function sendWalletConvergenceAlert/);
+  assert.match(functionBody(serverSource, "noteWalletConvergence"), /c\.wallets\.size >= 2 && !c\.alerted/);
+  assert.match(functionBody(serverSource, "pollTrackedWallets"), /noteWalletConvergence\(uid, sw\.mint, addr, w\.label\)/);
+  // 🏆 weekly caller contest: Sunday-gated, once per ISO week per opted-in group, owner-paid prize
+  assert.match(serverSource, /async function pollWeeklyCallerContest/);
+  assert.match(serverSource, /setInterval\(\(\) => \{ void pollWeeklyCallerContest\(\); \}/);
+  assert.match(functionBody(serverSource, "pollWeeklyCallerContest"), /now\.getUTCDay\(\) !== 0/);
+  assert.match(functionBody(serverSource, "pollWeeklyCallerContest"), /g\.lastCallerContestWeek === week/);
+  assert.match(functionBody(serverSource, "pollWeeklyCallerContest"), /Caller of the Week/);
+});
 test("smooth nav: DM sub-views carry a Main Menu button (no re-/start)", () => {
   for (const fn of ["showTelegramLinksMenu", "showTelegramPortfolioMenu", "showTelegramOgreToolsMenu", "showWalletMenu"]) {
     assert.match(functionBody(serverSource, fn), /callback_data: "main_menu"/, `${fn} needs Main Menu`);
