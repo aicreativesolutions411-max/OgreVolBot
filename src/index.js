@@ -3249,7 +3249,7 @@ function recordRecentLauncher(entry) {
     const creator = String(entry?.event?.traderPublicKey || "").trim();
     const mint = String(entry?.mint || "").trim();
     if (!creator || !mint) return;
-    recentLaunchers.set(creator, { mint, symbol: String(entry?.event?.symbol || "???"), at: Date.now() });
+    recentLaunchers.set(creator, { mint, symbol: String(entry?.event?.symbol || "???"), name: String(entry?.name || entry?.event?.name || "").slice(0, 48), at: Date.now() });
     if (recentLaunchers.size > 500) { const k = recentLaunchers.keys().next().value; recentLaunchers.delete(k); }
   } catch {}
 }
@@ -12587,6 +12587,12 @@ async function handleMessage(message, userId) {
   if (parseCommandWithArgument(text, ["room", "board", "roompnl"])) { await handleRoomCommand(chatId, message); return; }
   // /signals — one menu for the opt-in alerts (Exit Radar, Alpha Radar).
   if (parseCommandWithArgument(text, ["signals", "alerts", "radar"])) { await handleSignalsCommand(chatId, message, userId); return; }
+  // /menu — the one organized hub (Buy / Raid / Rose / Scan / 🎯 Trench / Referral). /trench opens Trench directly.
+  if (parseCommandWithArgument(text, ["menu"])) { await groupBotPostSetup(chatId); return; }
+  if (parseCommandWithArgument(text, ["trench"])) { const v = trenchMenuView(); await sayHtml(chatId, v.text, v.markup); return; }
+  // /narrative — hot rotating meta; /grad — coins closest to graduating.
+  if (parseCommandWithArgument(text, ["narrative", "meta"])) { const v = narrativeRadarView(); await sayHtml(chatId, v.text, v.markup); return; }
+  if (parseCommandWithArgument(text, ["grad", "graduation", "gauntlet"])) { const v = await graduationGauntletView(); await sayHtml(chatId, v.text, v.markup); return; }
 
   if (text === "/withdraw" || text === "/sweep") {
     if (!isPrivateChat(message.chat)) {
@@ -29323,6 +29329,54 @@ async function pollExitRadar() {
   finally { _exitRadarPolling = false; }
 }
 
+// 🌀 NARRATIVE RADAR — cluster the last ~2h of launches by keyword to surface the ROTATING meta ("5 new
+// 'AI agent' coins in the last hour"). No bot reads the meta-level; single-coin scanners miss the wave.
+const NARRATIVE_STOP = new Set(["THE", "AND", "FOR", "SOL", "COIN", "TOKEN", "OFFICIAL", "PUMP", "MEME", "ON", "OF", "TO", "YOUR", "GET", "NEW"]);
+function narrativeRadarView() {
+  const now = Date.now();
+  const recent = [...recentLaunchers.values()].filter((r) => now - r.at < 2 * 60 * 60 * 1000);
+  const counts = new Map();
+  for (const r of recent) {
+    const words = `${r.symbol || ""} ${r.name || ""}`.toUpperCase().split(/[^A-Z0-9]+/).filter((w) => w.length >= 3 && !NARRATIVE_STOP.has(w) && !/^\d+$/.test(w));
+    for (const w of new Set(words)) counts.set(w, (counts.get(w) || 0) + 1);
+  }
+  const metas = [...counts.entries()].filter(([, n]) => n >= 3).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const back = { inline_keyboard: [[{ text: "🔄 Refresh", callback_data: "gb:go:narrative" }], gbTrenchBackRow()] };
+  if (recent.length < 8) return { text: "🌀 <b>Narrative Radar</b>\n\nNot enough fresh launches in the last 2h to read the meta yet — check back soon.", markup: back };
+  if (!metas.length) return { text: `🌀 <b>Narrative Radar</b>\n\nNo clear meta forming — the ${recent.length} recent launches are scattered (quiet trench, or between metas).`, markup: back };
+  const lines = metas.map(([w, n], i) => `${["🥇", "🥈", "🥉"][i] || "🔥"} <b>${escapeTelegramHtml(w)}</b> — ${n} launches`);
+  return { text: [`🌀 <b>Narrative Radar</b> — what the trench is minting (last 2h):`, ...lines, "", `<i>${recent.length} fresh launches scanned. A meta with 3+ launches = where attention (and volume) is rotating. Get in front of the wave.</i>`].join("\n"), markup: back };
+}
+// 🎓 GRADUATION GAUNTLET — only ~1% of pump.fun coins graduate; surface the ones closest to making it
+// (high on the bonding curve + still alive), so you're in before the DEX-listing pop, not after.
+async function graduationGauntletView() {
+  let rows = [];
+  try { const feed = await buildMoralisPumpCategory("system", "graduating", "graduating").catch(() => null); rows = ((feed && feed.rows) || []).slice(0, 8); } catch {}
+  const back = { inline_keyboard: [[{ text: "🔄 Refresh", callback_data: "gb:go:grad" }], gbTrenchBackRow()] };
+  if (!rows.length) return { text: "🎓 <b>Graduation Gauntlet</b>\n\nNo coins on the graduation runway right now — check back soon.", markup: back };
+  const lines = rows.map((r, i) => {
+    const p = Math.round(Number(r.bondingCurveProgress ?? r.bondingProgressPct ?? 0));
+    const sym = r.symbol || shortMint(r.tokenMint || r.mint || "");
+    const lx = slimewireTokenLinks(r.tokenMint || r.mint || "");
+    return `${i + 1}. <a href="${lx.site}"><b>$${escapeTelegramHtml(sym)}</b></a> — <b>${p}%</b> to graduation${r.marketCapLabel ? ` · ${escapeTelegramHtml(r.marketCapLabel)}` : ""}`;
+  });
+  return { text: [`🎓 <b>Graduation Gauntlet</b> — closest to making it (only ~1% do):`, ...lines, "", `<i>High on the curve + still alive. These have real momentum toward a DEX listing — get in before the graduation pop.</i>`].join("\n"), markup: back };
+}
+// The 🎯 Trench super-menu — one tidy home for everything trench (snipe / room / signals / boards / radars).
+function gbTrenchBackRow() { return [{ text: "⬅️ Trench", callback_data: "gb:m:trench" }, { text: "✓ Done", callback_data: "gb:close" }]; }
+function trenchMenuView() {
+  return {
+    text: ["🎯 <b>Trench Tools</b>", "Everything for the trenches, in one place:", "", "• <b>Community Snipe</b> — group snipes a dev's launch from everyone's own wallet", "• <b>The Room</b> — verifiable PnL board + skin-in-the-game callers", "• <b>Signals</b> — Exit Radar (take-profit pings) + Alpha Radar", "• <b>Leaderboard</b> — top callers · <b>Narrative Radar</b> — the hot meta · <b>Graduation Gauntlet</b> — coins about to make it"].join("\n"),
+    markup: { inline_keyboard: [
+      [{ text: "🎯 Community Snipe", callback_data: "gb:go:snipe" }],
+      [{ text: "🏆 The Room", callback_data: "gb:go:room" }, { text: "📡 Signals", callback_data: "gb:go:signals" }],
+      [{ text: "🏆 Leaderboard", callback_data: "gb:go:lb" }, { text: "🌀 Narrative Radar", callback_data: "gb:go:narrative" }],
+      [{ text: "🎓 Graduation Gauntlet", callback_data: "gb:go:grad" }],
+      [{ text: "⬅️ Back", callback_data: "gb:home" }, { text: "✓ Done", callback_data: "gb:close" }]
+    ] }
+  };
+}
+
 // onCreation hook: does this fresh launch's creator wallet match an armed community snipe?
 function maybeCommunitySnipe(entry) {
   try {
@@ -30353,6 +30407,7 @@ function groupBotMenuMarkup(entry) {
   return { inline_keyboard: [
     [{ text: `${dot("buybot")} Buy Bot`, callback_data: "gb:m:buy" }, { text: `${dot("raid")} Raid Bot`, callback_data: "gb:m:raid" }],
     [{ text: `${dot("rose")} Rose & Shield`, callback_data: "gb:m:rose" }, { text: `${dot("scan")} Scan Bot`, callback_data: "gb:m:scan" }],
+    [{ text: "🎯 Trench Tools", callback_data: "gb:m:trench" }],
     [{ text: `${refOn} 🎟️ Referral Contest`, callback_data: "gb:m:ref" }],
     [{ text: "✓ Done", callback_data: "gb:close" }]
   ] };
@@ -30376,6 +30431,7 @@ function groupBotMenuText(entry) {
 function gbBackRow() { return [{ text: "⬅️ Back", callback_data: "gb:home" }, { text: "✓ Done", callback_data: "gb:close" }]; }
 function groupBotModuleView(module, entry) {
   const e = entry || defaultGroupBotEntry();
+  if (module === "trench") return trenchMenuView();   // 🎯 Trench super-menu (snipe/room/signals/boards/radars)
   const on = groupBotFeatureOn(e, { buy: "buybot", raid: "raid", rose: "rose", scan: "scan" }[module]);
   const toggleBtn = (feat, label) => ({ text: `${on ? "🟢 " + label + " is ON — tap to turn off" : "⚪ " + label + " is off — tap to turn on"}`, callback_data: `gb:t:${feat}` });
   if (module === "buy") {
@@ -30703,6 +30759,21 @@ async function handleGroupBotCallback(query, userId) {
   if (data === "gb:close") {
     await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } }).catch(() => {});
     await ack(); return true;
+  }
+  // 🎯 Trench Tools + its feature launchers are MEMBER-facing (each feature gates its own admin actions
+  // internally), so they're reachable WITHOUT the settings admin-gate below.
+  const csEdit = async (v) => { if (v) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: v.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: v.markup }).catch(() => {}); };
+  if (data === "gb:m:trench") { await csEdit(trenchMenuView()); await ack(); return true; }
+  if (data.startsWith("gb:go:")) {
+    const target = data.slice("gb:go:".length);
+    let view = null;
+    if (target === "snipe") { const s = (await readCommunitySnipe()).snipes[String(chatId)]; view = { text: communitySnipeStatusText(s), markup: communitySnipeCardMarkup(s) }; }
+    else if (target === "room") view = await roomPnlView(chatId);
+    else if (target === "signals") view = await signalsMenu(chatId, userId, isPrivateChat(query.message?.chat));
+    else if (target === "lb") view = await buildCallerLeaderboardView("1w");
+    else if (target === "narrative") view = narrativeRadarView();
+    else if (target === "grad") view = await graduationGauntletView();
+    await csEdit(view); await ack(); return true;
   }
   // Everything below changes settings → admins only.
   if (!(await isGroupBotAdmin(chatId, userId, query.message))) { await ack("Admins only 🛡️"); return true; }

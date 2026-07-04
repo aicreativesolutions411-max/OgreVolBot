@@ -1257,3 +1257,27 @@ test("Exit Radar pings take-profit on your OWN open bags when a coin tops — ad
   assert.doesNotMatch(poll, /sellToken|buyToken|sendTransaction/); // ADVISORY — it never trades for you
   assert.match(serverSource, /setInterval\(\(\) => \{ void pollExitRadar\(\); \}, 60_000\)/);
 });
+
+// ---- Menu reorg: 🎯 Trench super-module in the Rose-style settings menu + Narrative/Graduation ----
+test("Trench super-menu folds all trench features into the existing organized settings menu", () => {
+  assert.match(functionBody(serverSource, "groupBotMenuMarkup"), /callback_data: "gb:m:trench"/);
+  assert.match(functionBody(serverSource, "groupBotModuleView"), /if \(module === "trench"\) return trenchMenuView\(\)/);
+  const trench = functionBody(serverSource, "trenchMenuView");
+  for (const cb of ["gb:go:snipe", "gb:go:room", "gb:go:signals", "gb:go:lb", "gb:go:narrative", "gb:go:grad"]) assert.ok(trench.includes(cb), `trench menu → ${cb}`);
+  // Trench + its launchers are member-facing: routed BEFORE the settings admin-gate
+  const cb = functionBody(serverSource, "handleGroupBotCallback");
+  const trenchIdx = cb.indexOf('data === "gb:m:trench"');
+  const gateIdx = cb.indexOf("changes settings → admins only");
+  assert.ok(trenchIdx > 0 && gateIdx > 0 && trenchIdx < gateIdx, "trench routed before admin gate");
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["menu"\]\)/);
+});
+test("Narrative Radar reads the meta from recent launches; Graduation Gauntlet from the graduating feed", () => {
+  const nar = functionBody(serverSource, "narrativeRadarView");
+  assert.match(nar, /recentLaunchers\.values\(\)/);
+  assert.match(nar, /counts\.entries\(\)/);           // keyword clustering
+  const grad = functionBody(serverSource, "graduationGauntletView");
+  assert.match(grad, /buildMoralisPumpCategory\("system", "graduating"/);
+  assert.match(grad, /to graduation/);
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["narrative", "meta"\]\)/);
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["grad", "graduation", "gauntlet"\]\)/);
+});
