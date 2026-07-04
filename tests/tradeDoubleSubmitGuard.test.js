@@ -1179,12 +1179,12 @@ test("community snipe is keyed on the creator wallet (unspoofable), armed index 
   assert.match(m, /communitySnipeArmed\.delete\(String\(creator\)\)/); // fire once
   assert.match(serverSource, /try \{ maybeCommunitySnipe\(entry\); \} catch \{\}/); // wired into onCreation
 });
-test("community snipe: admin-gated setup, optional presets, opt-out alert mode", () => {
+test("community snipe: admin-gated setup, everyone auto-buys, presets optional", () => {
   const cmd = functionBody(serverSource, "handleCommunitySnipeCommand");
   assert.match(cmd, /isTgChatAdmin\(chatId, userId\)/);            // admin-gated arm/wallet
-  assert.match(cmd, /mode: "auto"/);                               // auto-buy with optional TP/SL
-  assert.match(cmd, /mode: "alert"/);                              // opt out of auto-buy, just get pinged
+  assert.match(cmd, /amountSol: amt/);                             // each member sets their own SOL amount
+  assert.match(cmd, /tpPct: tp, slPct: sl/);                       // TP/SL are the only optional part
   assert.match(serverSource, /parseCommandWithArgument\(text, \["snipe", "communitysnipe", "csnipe"\]\)/);
-  // alert-only members get a DM buy card instead of an auto-buy
-  assert.match(functionBody(serverSource, "fireCommunitySnipe"), /m\.mode === "alert"/);
+  // everyone who opts in auto-buys — no alert-only carve-out in the fire path
+  assert.doesNotMatch(functionBody(serverSource, "fireCommunitySnipe"), /mode === "alert"/);
 });

@@ -28904,7 +28904,7 @@ function communitySnipeStatusText(snipe) {
     `State: <b>${snipe.fired ? "✅ fired" : snipe.armed ? "🟢 ARMED — waiting for launch" : "⚪ disarmed"}</b>`,
     `In: <b>${members.length}</b> member${members.length === 1 ? "" : "s"} · <b>◎${totalSol.toFixed(2)}</b> committed`,
     "",
-    "<i>Members: <code>/snipe join 0.5</code> auto-buys from your OWN wallet (optional presets: <code>/snipe join 0.5 100 30</code> = TP 100% / SL 30%). Or <code>/snipe alert</code> to skip auto-buy and just get pinged to trade it yourself. No pooling. High risk: sniping launches can rug; only your own funds.</i>"
+    "<i>Members: <code>/snipe join 0.5</code> auto-buys ◎0.5 from your OWN wallet the instant it launches. Presets are your choice — add TP/SL like <code>/snipe join 0.5 100 30</code> (TP 100% / SL 30%), or skip them and manage the exit yourself. No pooling. High risk: sniping launches can rug; only your own funds.</i>"
   ].join("\n");
 }
 async function handleCommunitySnipeCommand(chatId, message, argument, userId) {
@@ -28932,20 +28932,9 @@ async function handleCommunitySnipeCommand(chatId, message, argument, userId) {
     const tp = parts[2] != null ? Math.max(0, Math.min(100000, Number(parts[2]) || 0)) : 0;
     const sl = parts[3] != null ? Math.max(0, Math.min(99, Number(parts[3]) || 0)) : 0;
     const from = message.from || {};
-    snipe.members[String(userId)] = { mode: "auto", walletIndex: 1, amountSol: amt, tpPct: tp, slPct: sl, name: from.username ? `@${from.username}` : (from.first_name || String(userId)).slice(0, 24), at: Date.now() };
+    snipe.members[String(userId)] = { walletIndex: 1, amountSol: amt, tpPct: tp, slPct: sl, name: from.username ? `@${from.username}` : (from.first_name || String(userId)).slice(0, 24), at: Date.now() };
     await writeCommunitySnipe(store);
-    await sayHtml(chatId, `✅ You're in for <b>◎${amt}</b>${tp ? ` · TP ${tp}%` : ""}${sl ? ` · SL ${sl}%` : ""} from your own wallet — I auto-buy the instant it launches.${tp || sl ? "" : " <i>(no presets — you'll manage the exit yourself. Add them like /snipe join " + amt + " 100 30.)</i>"} <i>/snipe leave</i> to opt out.`);
-    return;
-  }
-  if (sub === "alert") {
-    // Opt out of auto-buy — just get pinged the instant it launches, with a one-tap buy card to trade it yourself.
-    if (dm) { await sayHtml(chatId, "Run <code>/snipe alert</code> inside the snipe group to get pinged the instant it launches (you buy manually)."); return; }
-    const snipe = store.snipes[key];
-    if (!snipe || !snipe.creatorWallet) { await say(chatId, "No community snipe is set up here yet."); return; }
-    const from = message.from || {};
-    snipe.members[String(userId)] = { mode: "alert", name: from.username ? `@${from.username}` : (from.first_name || String(userId)).slice(0, 24), at: Date.now() };
-    await writeCommunitySnipe(store);
-    await sayHtml(chatId, "🔔 You'll get pinged the <b>instant</b> it launches with a one-tap buy card — no auto-buy, you trade it yourself. <i>/snipe leave</i> to opt out.");
+    await sayHtml(chatId, `✅ You're in for <b>◎${amt}</b>${tp ? ` · TP ${tp}%` : ""}${sl ? ` · SL ${sl}%` : ""} from your own wallet — I auto-buy the instant it launches.${tp || sl ? "" : " <i>(no presets — you'll manage the exit yourself. Add them anytime: /snipe join " + amt + " 100 30.)</i>"} <i>/snipe leave</i> to opt out.`);
     return;
   }
   if (sub === "leave") {
@@ -29013,13 +29002,8 @@ async function fireCommunitySnipe(chatId, mint, symbol, name) {
   const walletStore = await readWalletStore();
   const slippageBps = Number(snipe.slippageBps) || 1500;
   const links0 = slimewireTokenLinks(mint);
-  // Alert-only members (opted out of auto-buy) get an instant DM buy card to trade it themselves.
-  const alertMembers = members.filter(([, m]) => m && m.mode === "alert");
-  const autoMembers = members.filter(([, m]) => !m || m.mode !== "alert");
-  for (const [uid] of alertMembers) {
-    await sayHtml(uid, `🎯 <b>Community snipe launched — $${escapeTelegramHtml(symbol || shortMint(mint))}</b>\n<code>${escapeTelegramHtml(mint)}</code>\n⚡ Tap to ape it now:`, slimeScanKeyboard(mint)).catch(() => {});
-  }
-  const results = await Promise.all(autoMembers.map(async ([userId, m]) => {
+  // Everyone who opted in auto-buys from their OWN wallet, isolated. Presets (TP/SL) were their choice.
+  const results = await Promise.all(members.map(async ([userId, m]) => {
     const nameTag = m.name || shortMint(userId);
     try {
       const wallets = walletsForOwner(walletStore, userId);
@@ -29045,7 +29029,7 @@ async function fireCommunitySnipe(chatId, mint, symbol, name) {
   const text = [
     `🎯 <b>Community Snipe FIRED — $${escapeTelegramHtml(symbol || shortMint(mint))}</b>`,
     `<code>${escapeTelegramHtml(mint)}</code>`,
-    `✅ <b>${won.length}</b> auto-bought (◎${won.reduce((s, r) => s + (r.sol || 0), 0).toFixed(2)})${lost.length ? ` · ⚠️ ${lost.length} missed` : ""}${alertMembers.length ? ` · 🔔 ${alertMembers.length} pinged to buy manually` : ""}`,
+    `✅ <b>${won.length}</b> got in (◎${won.reduce((s, r) => s + (r.sol || 0), 0).toFixed(2)})${lost.length ? ` · ⚠️ ${lost.length} missed` : ""}`,
     `<a href="${links0.site}">Chart</a> · TP/SL auto-exits are running for anyone who set them.`
   ].join("\n");
   await sayHtml(chatId, text, slimeScanKeyboard(mint)).catch(() => {});
