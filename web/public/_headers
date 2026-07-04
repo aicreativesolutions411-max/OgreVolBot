@@ -8,6 +8,13 @@
 /config.js
   Cache-Control: no-store
 
+# Downloadable PDFs are re-generated in place (same filename), so they MUST revalidate every fetch —
+# otherwise a stale copy (e.g. an older, sparser guide layout) stays pinned in the browser for hours.
+/SlimeWire-TG-Guide.pdf
+  Cache-Control: no-cache, must-revalidate
+/SlimeWire-User-Manual.pdf
+  Cache-Control: no-cache, must-revalidate
+
 # The service worker MUST be revalidated on every load. If it is cached, browsers stay pinned to
 # an OLD worker (which then hijacks navigations like /Ogreverse into the wrong page) until the cache
 # expires — sometimes hours. no-store guarantees the newest worker is always picked up immediately.
