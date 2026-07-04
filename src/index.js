@@ -3943,11 +3943,17 @@ const BRAND_FOOTER = [
 // device browser. A `url` button (not callback) so the tap leaves Telegram straight to the page.
 const APP_INSTALL_URL = `${(CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/$/, "")}/install`;
 
+// Recognized trading-terminal layout — the actions people expect front-and-centre, PLUS our own tools
+// (Launch, Volume Bot, Ogre A.I.) that other bots don't have. Each button routes to an existing handler.
 const PUBLIC_MENU = [
-  [{ text: "📲 Get the App", url: APP_INSTALL_URL }],
-  [{ text: "💸 Trade", callback_data: "trade_menu" }, { text: "💰 Portfolio", callback_data: "portfolio_menu" }],
-  [{ text: "🔎 Scans & Signals", callback_data: "market_intel_menu" }, { text: "🌐 Web App", callback_data: "web_portal" }],
-  [{ text: "🔗 Links & More", callback_data: "links_menu" }, { text: "❓ How To Use", callback_data: "quick_start" }]
+  [{ text: "🟢 Buy", callback_data: "buy_prompt" }, { text: "🔴 Sell & Positions", callback_data: "positions_overview" }],
+  [{ text: "👛 Wallet", callback_data: "wallet_menu" }, { text: "⚙️ Settings", callback_data: "settings_menu" }],
+  [{ text: "📊 Live Pairs & Scans", callback_data: "market_intel_menu" }, { text: "🎯 Signals", callback_data: "dm_signals" }],
+  [{ text: "🚀 Launch a Coin", callback_data: "launch_coin" }, { text: "📈 Volume Bot", callback_data: "ogre_tools_menu" }],
+  [{ text: "🤖 Ogre A.I.", callback_data: "ogre_ai_menu" }, { text: "🕵️ Sniper & Copy", callback_data: "sniper_menu" }],
+  [{ text: "💰 Portfolio & PnL", callback_data: "portfolio_menu" }, { text: "🔗 Links & More", callback_data: "links_menu" }],
+  [{ text: "📲 Get the App", url: APP_INSTALL_URL }, { text: "🌐 Web App", callback_data: "web_portal" }],
+  [{ text: "❓ How To Use", callback_data: "quick_start" }]
 ];
 
 const ADMIN_MENU = [
@@ -3962,6 +3968,10 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "import_wallet",
   "delete_wallets",
   "wallet_menu",
+  "buy_prompt",
+  "settings_menu",
+  "dm_signals",
+  "launch_coin",
   "trade_menu",
   "live_mainnet_test",
   "live_test_buy",
@@ -11538,6 +11548,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("bp:")) {
     if (await handleBuyPrefCallback(query, userId).catch(() => false)) return;
   }
+  // ⚙️ Trade settings (st:*) — slippage etc.
+  if (String(query.data || "").startsWith("st:")) {
+    if (await handleSettingsCallback(query, userId).catch(() => false)) return;
+  }
   // The Room menu (room:*) — verifiable PnL board + skin-in-the-game callers.
   if (String(query.data || "").startsWith("room:")) {
     if (await handleRoomCallback(query, userId).catch(() => false)) return;
@@ -11695,6 +11709,24 @@ async function handleCallback(query, userId) {
       break;
     case "main_menu":
       await showMenu(chatId, userId, messageId);
+      break;
+    case "buy_prompt":
+      await sayHtml(chatId, "🟢 <b>Buy any coin</b>\n\nPaste its <b>contract address</b> here and I'll pull up the chart + one-tap buy. Your amounts are under ⚙️ Settings → 🎚 Buy presets.");
+      break;
+    case "settings_menu": {
+      const v = dmSettingsMenu(userBuyPrefs(await readBuyPrefs(), userId));
+      if (messageId) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: v.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: v.markup }).catch(() => {});
+      else await sayHtml(chatId, v.text, v.markup);
+      break;
+    }
+    case "dm_signals": {
+      const v = await signalsMenu(chatId, userId, true);
+      if (messageId) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: v.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: v.markup }).catch(() => {});
+      else await sayHtml(chatId, v.text, v.markup);
+      break;
+    }
+    case "launch_coin":
+      await showLaunchBuilder(chatId, userId);
       break;
     case "backup_menu":
       await showBackupMenu(chatId, messageId);
@@ -26991,14 +27023,14 @@ async function showMenu(chatId, userId, messageId = null) {
   const state = await readState();
   const menu = isAdmin(userId) ? [...PUBLIC_MENU, ...ADMIN_MENU] : PUBLIC_MENU;
   await sendOrEditMessage(chatId, messageId, withBrandFooter([
-    state.paused ? "Status: emergency stop active." : "SlimeWire Command Center",
+    state.paused ? "⏸️ Emergency stop active." : "🐸 SlimeWire — your Solana trading terminal",
     "",
-    "Pick a lane. Each menu keeps the same tools, just grouped so you can move faster.",
+    "Paste any token contract address to pull it up and buy in one tap, or pick below.",
     "",
-    "Terminal: trade, balances, positions, PnL.",
-    "Market Intel: sniper scans and KOL signals.",
-    "Ogre Tools: Ogre A.I., bundle, volume, launch tools.",
-    "Portfolio: wallets, backups, sweeps, exits."
+    "🟢 Buy / Sell · 👛 Wallet · ⚙️ Settings — the essentials.",
+    "🚀 Launch a Coin · 📈 Volume Bot · 🤖 Ogre A.I. — what other bots don't have.",
+    "",
+    "Your wallet + settings also work on slimewire.org — /web to connect."
   ].join("\n")), {
     inline_keyboard: menu
   });
@@ -29814,17 +29846,44 @@ function userBuyPrefs(store, userId) {
   if (!presets.length) presets = DEFAULT_BUY_PRESETS.slice();
   while (presets.length < 3) presets.push(DEFAULT_BUY_PRESETS[presets.length]);
   const custom = Number(u.custom) > 0 ? Number(u.custom) : 0.25;
-  return { presets, custom };
+  const slippageBps = Number(u.slippageBps) > 0 ? Number(u.slippageBps) : CONFIG.defaultSlippageBps;
+  return { presets, custom, slippageBps };
 }
 async function setBuyPref(userId, kind, value) {
   const s = await readBuyPrefs();
   const cur = userBuyPrefs(s, userId);
-  const u = { presets: cur.presets.slice(), custom: cur.custom };
-  const v = Math.max(0.001, Math.min(1000, Number(value) || 0));
-  if (kind === "custom") u.custom = v; else u.presets[Number(kind)] = v;
+  const u = { presets: cur.presets.slice(), custom: cur.custom, slippageBps: cur.slippageBps };
+  if (kind === "slippage") u.slippageBps = Math.max(50, Math.min(5000, Math.round(Number(value) || CONFIG.defaultSlippageBps)));
+  else { const v = Math.max(0.001, Math.min(1000, Number(value) || 0)); if (kind === "custom") u.custom = v; else u.presets[Number(kind)] = v; }
   s.users[String(userId)] = u; buyPrefsCache = s;
   await writeJsonFile(buyPrefsPath(), s).catch(() => {});
   return u;
+}
+// ⚙️ TRADE SETTINGS hub (the recognized panel): buy presets + slippage, one clean place.
+const SLIP_TIERS = [300, 500, 1000, 1500, 2500];
+function dmSettingsMenu(prefs) {
+  return {
+    text: ["⚙️ <b>Trade settings</b>", "", `⚡ Buy presets: <b>${prefs.presets[0]}◎ · ${prefs.presets[1]}◎ · ${prefs.presets[2]}◎</b>  (✏️ custom ${prefs.custom}◎)`, `🎚 Slippage: <b>${(prefs.slippageBps / 100).toFixed(prefs.slippageBps % 100 ? 1 : 0)}%</b>`, "", "<i>These apply to your ⚡ one-click buys everywhere. Same wallet + settings on slimewire.org via /web.</i>"].join("\n"),
+    markup: { inline_keyboard: [
+      [{ text: "🎚 Buy presets", callback_data: "bp:menu" }, { text: `⚡ Slippage: ${(prefs.slippageBps / 100).toFixed(prefs.slippageBps % 100 ? 1 : 0)}%`, callback_data: "st:slip" }],
+      [{ text: "👛 Wallet", callback_data: "wallet_menu" }, { text: "🏠 Menu", callback_data: "main_menu" }]
+    ] }
+  };
+}
+async function handleSettingsCallback(query, userId) {
+  const data = String(query?.data || ""); if (!data.startsWith("st:")) return false;
+  const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  const ack = (t) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t } : {}) }).catch(() => {});
+  if (data === "st:slip") {
+    const cur = userBuyPrefs(await readBuyPrefs(), userId).slippageBps;
+    const next = SLIP_TIERS[(SLIP_TIERS.findIndex((t) => t >= cur) + 1) % SLIP_TIERS.length] || SLIP_TIERS[0];
+    await setBuyPref(userId, "slippage", next);
+    await ack(`Slippage: ${(next / 100).toFixed(next % 100 ? 1 : 0)}%`);
+  }
+  const v = dmSettingsMenu(userBuyPrefs(await readBuyPrefs(), userId));
+  if (messageId) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: v.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: v.markup }).catch(() => {});
+  await ack();
+  return true;
 }
 const buyPrefPending = new Map(); // userId -> { kind, at }
 function buyPresetsMenu(prefs) {
@@ -29873,10 +29932,11 @@ async function tgExecuteQuickBuy(userId, mint, amountSol) {
     const amt = Number(amountSol);
     if (!Number.isFinite(amt) || amt <= 0) return { ok: false, why: "bad amount" };
     const lamports = solToLamports(amt);
+    const slippageBps = userBuyPrefs(await readBuyPrefs(), userId).slippageBps;
     // Dedup rapid double-taps within ~15s so a fat-finger can't double-buy.
     const attemptId = `${mint}:${Math.floor(Date.now() / 15000)}`;
     const result = await runIdempotentMoneyOp("tg-quick-buy", userId, attemptId,
-      () => buyTokenForPlan(wallet, mint, lamports, CONFIG.defaultSlippageBps, { trackTokenDelta: true, userId }));
+      () => buyTokenForPlan(wallet, mint, lamports, slippageBps, { trackTokenDelta: true, userId }));
     if (result) {
       await recordTradeEvents([{ userId, type: "buy", source: "tg-quick-buy", tokenMint: mint, walletLabel: wallet.label, walletPublicKey: wallet.publicKey, solLamportsSpent: String(result.amountLamports || lamports), ...(result.tokenAmount != null ? { tokenAmount: String(result.tokenAmount) } : {}), signature: result.signature }]).catch(() => {});
     }

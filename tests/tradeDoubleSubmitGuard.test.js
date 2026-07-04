@@ -953,6 +953,18 @@ test("per-user BUY PRESETS: settable in DM, drive the DM receipt's ⚡ buttons +
   assert.match(serverSource, /applyBuyPrefInput\(message, userId\)/);       // typed input wired
   assert.match(serverSource, /text === "\/presets"/);                       // command
 });
+test("DM terminal hub: trading-first main menu + Settings (presets + slippage), our tools kept", () => {
+  const menu = serverSource.slice(serverSource.indexOf("const PUBLIC_MENU"), serverSource.indexOf("const PUBLIC_MENU") + 900);
+  assert.match(menu, /callback_data: "buy_prompt"/);
+  assert.match(menu, /callback_data: "positions_overview"/);      // sell & positions
+  assert.match(menu, /callback_data: "settings_menu"/);
+  assert.match(menu, /callback_data: "launch_coin"/);             // our tool
+  assert.match(menu, /callback_data: "ogre_ai_menu"/);           // our tool
+  // Settings hub = per-user slippage + presets; the quick-buy USES the user's slippage
+  assert.match(serverSource, /SLIP_TIERS = \[300, 500, 1000, 1500, 2500\]/);
+  assert.match(functionBody(serverSource, "tgExecuteQuickBuy"), /userBuyPrefs\(await readBuyPrefs\(\), userId\)\.slippageBps/);
+  assert.match(serverSource, /startsWith\("st:"\)/);
+});
 
 // ---- Shared scammer database: CAS (cas.chat) + SlimeWire cross-group ban list ----
 test("known-scammer gate: CAS + cross-group ban list, wired into join + messages + /ban", () => {
