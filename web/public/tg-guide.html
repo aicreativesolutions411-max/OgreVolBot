@@ -65,13 +65,19 @@
     *{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
     @page{ margin:0; size:A4; }
     html,body,.page{ background:var(--bg) !important; }
-    /* Sections FLOW and pack tightly (short ones share a page — no big empty bottoms), but each whole
-       feature is kept together so nothing ever leaks across a page break. */
-    .sec{ break-inside:avoid; padding:16px 0 14px; }
+    /* Content FLOWS continuously and fills every page top-to-bottom — NO gaps. Only individual items
+       (a card, a step, a tip, a table row) are kept whole so nothing is ever cut in half across a page;
+       a section header stays glued to its first line. Grids/tables break cleanly between rows. */
+    .sec{ padding:12px 0 10px; }
     .sec + .sec{ border-top:1px solid var(--line); }
-    .sech{ break-after:avoid; break-inside:avoid; }
-    .step,.card,.nav-row,.tip,.warn,.note,.cards{ break-inside:avoid; }
+    .sech{ break-inside:avoid; break-after:avoid; }
+    .step,.card,.nav-row,.tip,.warn,.note{ break-inside:avoid; }
     h2,h3{ break-after:avoid; }
+    /* Cards render as a grid, but in print flow them as inline-blocks so a full grid can break across a
+       page between cards (no forced atomic block that would leave a gap); each card still stays whole. */
+    .cards{ display:block; font-size:0; }
+    .cards .card{ display:inline-block; width:calc(50% - 6px); vertical-align:top; font-size:0.85rem; margin:0 10px 10px 0; }
+    .cards .card:nth-child(2n){ margin-right:0; }
     .no-print{ display:none !important; }
     .cover{ break-after:page; }
   }
@@ -91,7 +97,7 @@
         <span>⚡ 1-Tap Buy</span><span>🔎 Scan</span><span>🕵️ Alpha Radar</span><span>🎯 Exit Radar</span><span>🏆 The Room</span><span>🪞 Copy</span><span>🎯 Snipe</span><span>🚀 Launch Room</span><span>🛡️ Rose &amp; Shield</span>
       </div>
       <div class="cta-wrap no-print">
-        <a class="dl" href="https://t.me/SlimeWireBot" target="_blank" rel="noreferrer">▶ Open @SlimeWireBot</a>
+        <a class="dl" href="https://t.me/OgreTradeBot" target="_blank" rel="noreferrer">▶ Open @OgreTradeBot</a>
         <a class="dl ghost" href="/SlimeWire-TG-Guide.pdf" download>⬇ Download PDF</a>
       </div>
     </div>
@@ -125,9 +131,9 @@
 
     <div class="sec">
       <div class="sech"><div class="num">1</div><h2>Start here — bot &amp; wallet</h2><div class="tag">Member</div></div>
-      <p>Open <b>@SlimeWireBot</b> in Telegram and tap <b>Start</b>. Your wallet is created for you and lives inside the bot — non-custodial to you, no sign-up, no seed phrase to write down.</p>
+      <p>Open <b>@OgreTradeBot</b> in Telegram and tap <b>Start</b>. Your wallet is created for you and lives inside the bot — non-custodial to you, no sign-up, no seed phrase to write down.</p>
       <div class="steps">
-        <div class="step"><b>Open the bot.</b> Search <span class="cmd">@SlimeWireBot</span> → tap Start. A menu appears.</div>
+        <div class="step"><b>Open the bot.</b> Search <span class="cmd">@OgreTradeBot</span> → tap Start. A menu appears.</div>
         <div class="step"><b>See your wallet.</b> Tap <b>Wallet</b> (or send <span class="cmd">/wallet</span>). It shows your SlimeWire address and SOL balance.</div>
         <div class="step"><b>Fund it.</b> Send SOL to that address from any wallet or exchange. Balance updates in seconds.</div>
         <div class="step"><b>Save your backup.</b> On creation the bot hands you a backup. Keep it — it's how you restore your wallet if you ever lose the session.</div>
@@ -349,7 +355,7 @@
 
   <div class="foot">
     <img src="/assets/slimewire/svg/slimewire-lockup.svg" alt="SlimeWire" onerror="this.style.display='none'">
-    <p><b>SlimeWire</b> — Find it · Buy it · Bank it. &nbsp;·&nbsp; <a href="https://www.slimewire.org">slimewire.org</a> &nbsp;·&nbsp; <a href="https://t.me/SlimeWireBot">@SlimeWireBot</a></p>
+    <p><b>SlimeWire</b> — Find it · Buy it · Bank it. &nbsp;·&nbsp; <a href="https://www.slimewire.org">slimewire.org</a> &nbsp;·&nbsp; <a href="https://t.me/OgreTradeBot">@OgreTradeBot</a></p>
     <p style="opacity:.7">Trading memecoins is high-risk — only your own funds, only what you set. This guide is informational, not financial advice.</p>
   </div>
 </div>
