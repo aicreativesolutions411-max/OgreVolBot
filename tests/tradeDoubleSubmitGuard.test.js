@@ -1235,3 +1235,25 @@ test("skin-in-the-game callers: a call only verifies if the (opted-in) caller ac
   assert.match(serverSource, /parseCommandWithArgument\(text, \["room", "board", "roompnl"\]\)/);
   assert.match(serverSource, /startsWith\("room:"\)/);
 });
+
+// ---- Signals hub + Exit Radar: sell signals nobody gives, one clean opt-in menu ----
+test("/signals is one opt-in menu (Exit Radar + Alpha Radar toggles)", () => {
+  const menu = functionBody(serverSource, "signalsMenu");
+  assert.match(menu, /callback_data: "sig:exit"/);
+  assert.match(menu, /callback_data: "sig:alpha"/);
+  assert.match(menu, /callback_data: "sig:galpha"/);        // group alpha toggle (admin)
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["signals", "alerts", "radar"\]\)/);
+  assert.match(serverSource, /startsWith\("sig:"\)/);
+  // group toggle is admin-gated
+  assert.match(functionBody(serverSource, "handleSignalsCallback"), /isTgChatAdmin\(chatId, userId\)/);
+});
+test("Exit Radar pings take-profit on your OWN open bags when a coin tops — advisory, never auto-sells", () => {
+  const poll = functionBody(serverSource, "pollExitRadar");
+  assert.match(poll, /readExitRadarSubs/);                  // opt-in only
+  assert.match(poll, /readTradeHistory/);                   // your own open positions
+  assert.match(poll, /p\.buys > 0 && p\.received < p\.spent/); // "still holding the bag" heuristic
+  assert.match(poll, /fadePct >= 25 \|\| devSold/);          // top signal: hard fade OR dev dumped
+  assert.match(poll, /insiderDevSold/);
+  assert.doesNotMatch(poll, /sellToken|buyToken|sendTransaction/); // ADVISORY — it never trades for you
+  assert.match(serverSource, /setInterval\(\(\) => \{ void pollExitRadar\(\); \}, 60_000\)/);
+});

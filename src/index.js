@@ -11534,6 +11534,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("room:")) {
     if (await handleRoomCallback(query, userId).catch(() => false)) return;
   }
+  // Signals hub (sig:*) — Exit Radar + Alpha Radar opt-in toggles.
+  if (String(query.data || "").startsWith("sig:")) {
+    if (await handleSignalsCallback(query, userId).catch(() => false)) return;
+  }
 
   if (ADMIN_ACTIONS.has(query.data) && !isAdmin(userId)) {
     await say(chatId, "Only bot admins can use that control.");
@@ -12581,6 +12585,8 @@ async function handleMessage(message, userId) {
   }
   // /room — the group's verifiable trading board (opt-in Room PnL + skin-in-the-game callers).
   if (parseCommandWithArgument(text, ["room", "board", "roompnl"])) { await handleRoomCommand(chatId, message); return; }
+  // /signals — one menu for the opt-in alerts (Exit Radar, Alpha Radar).
+  if (parseCommandWithArgument(text, ["signals", "alerts", "radar"])) { await handleSignalsCommand(chatId, message, userId); return; }
 
   if (text === "/withdraw" || text === "/sweep") {
     if (!isPrivateChat(message.chat)) {
@@ -29204,6 +29210,119 @@ function roomMaybeVerifyCall(rec, chatId, mint) {
   } catch {}
 }
 
+// ===== SIGNALS HUB + EXIT RADAR — one clean opt-in menu for the alert features =====
+// The space only ever shills ENTRIES and ghosts you at the top. Exit Radar is the opposite: for your
+// OWN open bags (from your SlimeWire trade history) it watches for the top — a hard fade off the peak or
+// the dev dumping — and DMs "take profit." All the alert features live in one /signals menu so opting in
+// is a tidy toggle, not a scavenger hunt of commands.
+function exitRadarSubsPath() { return path.join(CONFIG.dataDir, "exit-radar-subs.json"); }
+let exitRadarSubsCache = null;
+async function readExitRadarSubs() {
+  if (exitRadarSubsCache) return exitRadarSubsCache;
+  let s = null; try { s = await readJson(exitRadarSubsPath()); } catch { s = null; }
+  if (!s || typeof s !== "object") s = {};
+  if (!Array.isArray(s.dm)) s.dm = [];
+  exitRadarSubsCache = s; return s;
+}
+async function setExitRadarSub(userId, on) {
+  const s = await readExitRadarSubs();
+  const set = new Set((s.dm || []).map(String));
+  if (on) set.add(String(userId)); else set.delete(String(userId));
+  s.dm = [...set]; exitRadarSubsCache = s;
+  await writeJsonFile(exitRadarSubsPath(), s).catch(() => {});
+  return on;
+}
+async function signalsMenu(chatId, userId, isDm) {
+  if (isDm) {
+    const ex = new Set((await readExitRadarSubs()).dm.map(String)).has(String(userId));
+    const al = new Set(((await readAlphaRadarSubs()).dm || []).map(String)).has(String(userId));
+    return {
+      text: "📡 <b>Your Signals</b> — tap to toggle the alerts you want (DM):\n\n🎯 <b>Exit Radar</b> — watches your own open bags and pings you to take profit when one tops (hard fade off the peak, or the dev dumps).\n🕵️ <b>Alpha Radar</b> — network-backed long-term runners.",
+      markup: { inline_keyboard: [
+        [{ text: `🎯 Exit Radar  ${ex ? "✅ ON" : "◻️ off"}`, callback_data: "sig:exit" }],
+        [{ text: `🕵️ Alpha Radar  ${al ? "✅ ON" : "◻️ off"}`, callback_data: "sig:alpha" }]
+      ] }
+    };
+  }
+  const e = (await readGroupBot()).groups[String(chatId)];
+  const al = groupBotFeatureOn(e, "alphaRadar");
+  return {
+    text: "📡 <b>Group Signals</b> — admins toggle what this group gets:\n\n🕵️ <b>Alpha Radar</b> — network-backed long-term-runner alerts (replaces the short-term plays).\n🎯 <b>Exit Radar</b> is personal (watches your own bags) — DM me <code>/signals</code> to turn it on.",
+    markup: { inline_keyboard: [
+      [{ text: `🕵️ Alpha Radar  ${al ? "✅ ON" : "◻️ off"}`, callback_data: "sig:galpha" }]
+    ] }
+  };
+}
+async function handleSignalsCommand(chatId, message, userId) {
+  const view = await signalsMenu(chatId, userId, isPrivateChat(message.chat));
+  await sayHtml(chatId, view.text, view.markup);
+}
+async function handleSignalsCallback(query, userId) {
+  const data = String(query?.data || "");
+  if (!data.startsWith("sig:")) return false;
+  const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  const isDm = isPrivateChat(query.message?.chat);
+  const ack = (t) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: true } : {}) }).catch(() => {});
+  if (data === "sig:exit") { const cur = new Set((await readExitRadarSubs()).dm.map(String)).has(String(userId)); await setExitRadarSub(userId, !cur); await ack(cur ? "Exit Radar off." : "🎯 Exit Radar ON — I'll DM you when one of your bags tops."); }
+  else if (data === "sig:alpha") { const cur = new Set(((await readAlphaRadarSubs()).dm || []).map(String)).has(String(userId)); await setAlphaRadarDmSub(userId, !cur); await ack(cur ? "Alpha Radar off." : "🕵️ Alpha Radar ON."); }
+  else if (data === "sig:galpha") {
+    if (!(await isTgChatAdmin(chatId, userId))) { await ack("Only group admins can toggle group signals."); return true; }
+    const e = (await readGroupBot()).groups[String(chatId)]; await setGroupBotFeature(chatId, "alphaRadar", !groupBotFeatureOn(e, "alphaRadar")); await ack();
+  } else { await ack(); return true; }
+  const view = await signalsMenu(chatId, userId, isDm);
+  if (messageId) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: view.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: view.markup }).catch(() => {});
+  return true;
+}
+// Exit Radar poller: watch opted-in users' OPEN bags (from trade history) and DM a take-profit signal when
+// one tops. Cheap: candidate positions come from our own trade log; only a small rotating batch is priced.
+const exitRadarState = new Map(); // `${userId}:${mint}` -> { peak, alerted, sym }
+let _exitRadarPolling = false;
+async function pollExitRadar() {
+  if (_exitRadarPolling) return;
+  _exitRadarPolling = true;
+  try {
+    const subs = new Set((await readExitRadarSubs()).dm.map(String));
+    if (!subs.size) { exitRadarState.clear(); return; }
+    const history = await readTradeHistory();
+    const cutoff = Date.now() - 10 * 24 * 60 * 60 * 1000;
+    const pos = new Map();
+    for (const t of history.trades || []) {
+      const uid = String(t.userId || ""); if (!subs.has(uid)) continue;
+      if ((Date.parse(t.timestamp || 0) || 0) < cutoff) continue;
+      const mint = t.tokenMint; if (!mint) continue;
+      const k = `${uid}:${mint}`;
+      const p = pos.get(k) || { userId: uid, mint, sym: t.tokenSymbol || "", spent: 0n, received: 0n, buys: 0, sells: 0 };
+      if (t.type === "buy") { p.spent += positiveBigIntOrZero(t.solLamportsSpent); p.buys += 1; if (t.tokenSymbol) p.sym = t.tokenSymbol; }
+      else if (t.type === "sell") { p.received += positiveBigIntOrZero(t.solLamportsReceived); p.sells += 1; }
+      pos.set(k, p);
+    }
+    // "Open" = bought and hasn't clearly cashed out (still net in the red = still holding the bag).
+    const open = [...pos.values()].filter((p) => p.buys > 0 && p.received < p.spent);
+    for (const p of open.slice(0, 8)) {
+      const live = await alphaRadarFetchMc(p.mint); if (!live || !(live.mc > 0)) continue;
+      const k = `${p.userId}:${p.mint}`;
+      const st = exitRadarState.get(k) || { peak: live.mc, alerted: false, sym: live.sym || p.sym };
+      if (live.mc > st.peak) st.peak = live.mc;
+      if (live.sym) st.sym = live.sym;
+      exitRadarState.set(k, st);
+      const fadePct = st.peak > 0 ? Math.round((1 - live.mc / st.peak) * 100) : 0;
+      const devSold = typeof insiderDevSold !== "undefined" && insiderDevSold && insiderDevSold.has ? insiderDevSold.has(p.mint) : false;
+      if (!st.alerted && (fadePct >= 25 || devSold)) {
+        st.alerted = true;
+        const links = slimewireTokenLinks(p.mint);
+        await sayHtml(p.userId, [
+          `🎯 <b>Exit Radar — $${escapeTelegramHtml(st.sym || shortMint(p.mint))} looks like it's topping</b>`,
+          devSold ? "🔴 the dev just <b>SOLD</b>." : `📉 faded <b>${fadePct}%</b> off its peak.`,
+          "Consider taking profit while there's still liquidity — your call.",
+          `⚡ <a href="${links.site}">Chart / Sell on SlimeWire</a>`
+        ].join("\n"), slimeScanKeyboard(p.mint)).catch(() => {});
+      }
+      await new Promise((r) => setTimeout(r, 150));
+    }
+  } catch (e) { console.warn(`[exit-radar] ${e && e.message}`); }
+  finally { _exitRadarPolling = false; }
+}
+
 // onCreation hook: does this fresh launch's creator wallet match an armed community snipe?
 function maybeCommunitySnipe(entry) {
   try {
@@ -30923,6 +31042,7 @@ function startGroupBuyBot() {
   setInterval(() => { void refreshRaidTgCards(); }, 50_000); // Raidar-style: edit live raid cards as likes/RTs/replies climb (free, fxtwitter)
   setInterval(() => { void pollTrackedWallets(); }, 30_000); // Cielo-style smart-money wallet alerts
   setInterval(() => { void pollAlphaRadar(); }, 60_000);     // network-backed long-term-runner alerts (opt-in)
+  setInterval(() => { void pollExitRadar(); }, 60_000);      // 🎯 Exit Radar — take-profit pings on your own bags (opt-in)
   void readCommunitySnipe().catch(() => {});                 // warm the armed-creator-wallet index so a snipe survives restart
 }
 
