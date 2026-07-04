@@ -30661,22 +30661,24 @@ function groupBotModuleView(module, entry) {
     const top = Object.entries(rc.counts || {}).sort((a, b) => b[1] - a[1])[0];
     const reward = referralRewardLabel(rc);
     const isCoin = rc.rewardKind === "coin";
+    const nWin = referralWinnersCount(rc);
     return {
       text: [
         "🎟️ <b>Referral Contest</b>",
         rc.on ? "Status: <b>🟢 LIVE</b>" : "Status: <b>⚪ off</b>",
-        `Reward: <b>${reward ? escapeTelegramHtml(reward) : "not set"}</b>`,
+        `Reward: <b>${reward ? escapeTelegramHtml(reward) : "not set"}</b>${nWin > 1 ? ` · <b>top ${nWin}</b> each win` : ""}`,
         top ? `Leader: <b>${top[1]}</b> referrals` : "No referrals yet.",
         "",
         "Members grab a link with <code>/reflink</code>. It works two ways: <b>👥 group joins</b> via their invite link, and <b>🌐 site conversions</b> — a friend who makes a wallet + trades on slimewire.org counts too. <code>/refboard</code> = standings.",
         "",
-        "Set the reward below, then Start. At the end the winner is announced with their payout wallet — you send the prize from your own Wallet → Send.",
+        `Set the reward + how many win, then Start. At the end the <b>top ${nWin}</b> ${nWin > 1 ? "are" : "is"} announced with payout wallet${nWin > 1 ? "s" : ""} — you send each prize from your own Wallet → Send. More winners = more people racing.`,
       ].join("\n"),
       markup: { inline_keyboard: [
         [{ text: rc.on ? "⏹️ Stop contest" : "▶️ Start contest", callback_data: rc.on ? "gb:ref:stop" : "gb:ref:start" }],
         [{ text: `💰 Reward: ${isCoin ? "Coin" : "SOL"}`, callback_data: "gb:ref:kind" }, { text: `🔢 Amount: ${Number(rc.rewardAmount) || 0}`, callback_data: "gb:in:refamount" }],
         ...(isCoin ? [[{ text: `🪙 Coin: ${rc.rewardMint ? (rc.rewardSymbol ? "$" + rc.rewardSymbol : shortMint(rc.rewardMint)) : "set CA"}`, callback_data: "gb:in:refcoin" }]] : []),
-        [{ text: "🏆 Prize note (optional)", callback_data: "gb:in:refprize" }, { text: "📊 Leaderboard", callback_data: "gb:ref:board" }],
+        [{ text: `🏅 Winners: top ${nWin}`, callback_data: "gb:ref:winners" }, { text: "🏆 Prize note", callback_data: "gb:in:refprize" }],
+        [{ text: "📊 Leaderboard", callback_data: "gb:ref:board" }],
         gbBackRow()
       ] }
     };
@@ -31015,11 +31017,13 @@ async function handleGroupBotCallback(query, userId) {
     await setGroupSub(chatId, "referral", { on: true, startedAt: Date.now(), counts: {}, sources: {}, links: {}, credited: {}, siteCredited: {} });
     await groupBotRenderModule(chatId, "ref", messageId);
     const reward = referralRewardLabel(cfg0);
-    await sayHtml(chatId, `🎟️ <b>Referral contest is LIVE!</b>${reward ? `\n🏆 Reward: <b>${escapeTelegramHtml(reward)}</b>` : ""}\n\nEveryone: grab your link with <b>/reflink</b> — invites <b>and</b> friends who trade on slimewire.org both count. Standings: <b>/refboard</b>.`).catch(() => {}); await ack("Contest started"); return true;
+    const nW = referralWinnersCount(cfg0);
+    await sayHtml(chatId, `🎟️ <b>Referral contest is LIVE!</b>${reward ? `\n🏆 Reward: <b>${escapeTelegramHtml(reward)}</b>${nW > 1 ? ` — <b>top ${nW}</b> each win!` : ""}` : ""}\n\nEveryone: grab your link with <b>/reflink</b> — invites <b>and</b> friends who trade on slimewire.org both count. Standings: <b>/refboard</b>.`).catch(() => {}); await ack("Contest started"); return true;
   }
-  if (data === "gb:ref:stop") { const cfg = referralConfig(await getGroupBotEntry(chatId)); const win = Object.entries(cfg.counts || {}).sort((a, b) => b[1] - a[1])[0]; await setGroupSub(chatId, "referral", { on: false }); await groupBotRenderModule(chatId, "ref", messageId); await referralAnnounceWinner(chatId, cfg, win).catch(() => {}); await ack("Contest ended"); return true; }
+  if (data === "gb:ref:stop") { const cfg = referralConfig(await getGroupBotEntry(chatId)); const ranked = Object.entries(cfg.counts || {}).sort((a, b) => b[1] - a[1]); await setGroupSub(chatId, "referral", { on: false }); await groupBotRenderModule(chatId, "ref", messageId); await referralAnnounceWinners(chatId, cfg, ranked).catch(() => {}); await ack("Contest ended"); return true; }
   if (data === "gb:ref:board") { await sayHtml(chatId, referralBoardText(referralConfig(await getGroupBotEntry(chatId)), userId)).catch(() => {}); await ack(); return true; }
   if (data === "gb:ref:kind") { const cfg = referralConfig(await getGroupBotEntry(chatId)); await setGroupSub(chatId, "referral", { rewardKind: cfg.rewardKind === "coin" ? "sol" : "coin" }); await groupBotRenderModule(chatId, "ref", messageId); await ack(cfg.rewardKind === "coin" ? "Reward kind: SOL" : "Reward kind: Coin"); return true; }
+  if (data === "gb:ref:winners") { const cfg = referralConfig(await getGroupBotEntry(chatId)); const cur = referralWinnersCount(cfg); const next = REFERRAL_WINNER_TIERS[(REFERRAL_WINNER_TIERS.indexOf(cur) + 1) % REFERRAL_WINNER_TIERS.length]; await setGroupSub(chatId, "referral", { winnersCount: next }); await groupBotRenderModule(chatId, "ref", messageId); await ack(next > 1 ? `Top ${next} win prizes` : "Single winner"); return true; }
   const tm = data.match(/^gb:t:(buybot|raid|rose|scan)$/);
   if (tm) {
     const cur = await getGroupBotEntry(chatId);
@@ -31642,7 +31646,9 @@ async function shieldIsImpersonator(chatId, user) {
 // ============================================================================
 function whalesConfig(e) { return { on: false, mint: null, minHold: 0, symbol: "", ...((e && e.whales) || {}) }; }
 function webverifyConfig(e) { return { on: false, ...((e && e.webverify) || {}) }; }
-function referralConfig(e) { return { on: false, startedAt: 0, prize: "", rewardKind: "sol", rewardAmount: 0, rewardMint: "", rewardSymbol: "", counts: {}, sources: {}, links: {}, siteCodes: {}, credited: {}, siteCredited: {}, ...((e && e.referral) || {}) }; }
+function referralConfig(e) { return { on: false, startedAt: 0, prize: "", rewardKind: "sol", rewardAmount: 0, rewardMint: "", rewardSymbol: "", winnersCount: 1, counts: {}, sources: {}, links: {}, siteCodes: {}, credited: {}, siteCredited: {}, ...((e && e.referral) || {}) }; }
+const REFERRAL_WINNER_TIERS = [1, 3, 5, 10];
+function referralWinnersCount(cfg) { const n = Number(cfg && cfg.winnersCount) || 1; return REFERRAL_WINNER_TIERS.includes(n) ? n : 1; }
 // Human label for the declared prize: "0.5 SOL", "10000 $SLIME", or free-text prize, or "".
 function referralRewardLabel(cfg) {
   const c = referralConfig(cfg && cfg.referral ? cfg : { referral: cfg });
@@ -31823,19 +31829,21 @@ async function handleChatMemberUpdate(cm) {
 function referralBoardText(cfg, viewerId) {
   const c = referralConfig({ referral: cfg });
   const reward = referralRewardLabel(c);
+  const nWin = referralWinnersCount(c);
   const ranked = Object.entries(c.counts || {}).sort((a, b) => b[1] - a[1]);
-  const header = `🎟️ <b>Referral leaderboard</b>${reward ? ` · 🏆 <b>${escapeTelegramHtml(reward)}</b>` : ""}`;
+  const header = `🎟️ <b>Referral leaderboard</b>${reward ? ` · 🏆 <b>${escapeTelegramHtml(reward)}</b>${nWin > 1 ? ` · top ${nWin} win` : ""}` : ""}`;
   if (!ranked.length) return `${header}\n\nNo referrals yet — grab your link with <code>/reflink</code> and share it. Invites <b>and</b> friends who trade on slimewire.org both count!`;
   const rows = ranked.slice(0, 15);
   const lines = rows.map(([id, n], i) => {
     const s = (c.sources || {})[id] || {}; const tg = Number(s.tg) || 0, site = Number(s.site) || 0;
     const bd = (tg || site) ? ` <i>(${tg}👥${site ? ` · ${site}🌐` : ""})</i>` : "";
-    return `${["🥇", "🥈", "🥉"][i] || (i + 1) + "."} <a href="tg://user?id=${id}">inviter ${escapeTelegramHtml(String(id).slice(-4))}</a> — <b>${n}</b>${bd}`;
+    const inPrize = i < nWin ? " 🏆" : "";
+    return `${["🥇", "🥈", "🥉"][i] || (i + 1) + "."} <a href="tg://user?id=${id}">inviter ${escapeTelegramHtml(String(id).slice(-4))}</a> — <b>${n}</b>${bd}${inPrize}`;
   });
-  let tail = "\n\n<i>👥 = TG joins · 🌐 = friends who traded on the site.</i>";
+  let tail = `\n\n<i>👥 = TG joins · 🌐 = friends who traded on the site.${nWin > 1 ? ` 🏆 = currently winning (top ${nWin}).` : ""}</i>`;
   if (viewerId) {
     const rank = ranked.findIndex(([id]) => String(id) === String(viewerId));
-    if (rank >= 0) tail += `\n<i>You're <b>#${rank + 1}</b> with ${ranked[rank][1]}.</i>`;
+    if (rank >= 0) tail += `\n<i>You're <b>#${rank + 1}</b> with ${ranked[rank][1]}${rank < nWin ? " — in the prizes! 🏆" : nWin > 1 ? ` — ${nWin - rank > 0 ? "climb into the top " + nWin : ""}` : ""}.</i>`;
     else tail += "\n<i>You're not on the board yet — grab /reflink.</i>";
   }
   return `${header}\n\n${lines.join("\n")}${tail}`;
@@ -31874,31 +31882,37 @@ async function handleReferralCommand(message, userId) {
     const prize = (mRef[2] || "").trim().slice(0, 100);
     await setGroupSub(chatId, "referral", { on: true, startedAt: Date.now(), prize, counts: {}, sources: {}, links: {}, credited: {}, siteCredited: {} });
     const reward = referralRewardLabel({ ...cfg, prize });
-    await sayHtml(chatId, `🎟️ <b>Referral contest is LIVE!</b>${reward ? `\n🏆 Reward: <b>${escapeTelegramHtml(reward)}</b>` : ""}\n\nEveryone: grab your link with <b>/reflink</b> — invites <b>and</b> friends who trade on slimewire.org both count. Standings: <b>/refboard</b>.`);
+    const nW = referralWinnersCount(cfg);
+    await sayHtml(chatId, `🎟️ <b>Referral contest is LIVE!</b>${reward ? `\n🏆 Reward: <b>${escapeTelegramHtml(reward)}</b>${nW > 1 ? ` — <b>top ${nW}</b> each win!` : ""}` : ""}\n\nEveryone: grab your link with <b>/reflink</b> — invites <b>and</b> friends who trade on slimewire.org both count. Standings: <b>/refboard</b>.`);
     return true;
   }
   if (sub === "stop") {
     const rows = Object.entries(cfg.counts || {}).sort((a, b) => b[1] - a[1]);
     await setGroupSub(chatId, "referral", { on: false });
-    await referralAnnounceWinner(chatId, cfg, rows[0]);
+    await referralAnnounceWinners(chatId, cfg, rows);
     return true;
   }
   const reward = referralRewardLabel(cfg);
-  await sayHtml(chatId, cfg.on ? `🎟️ Referral contest is <b>ON</b>.${reward ? ` 🏆 ${escapeTelegramHtml(reward)}.` : ""} /refboard for standings.` : "Referral contest is off. Start one with <code>/referral start [prize]</code>, or open <code>/settings</code> → 🎟️ Referral Contest.");
+  const nW = referralWinnersCount(cfg);
+  await sayHtml(chatId, cfg.on ? `🎟️ Referral contest is <b>ON</b>.${reward ? ` 🏆 ${escapeTelegramHtml(reward)}${nW > 1 ? ` × top ${nW}` : ""}.` : ""} /refboard for standings.` : "Referral contest is off. Start one with <code>/referral start [prize]</code>, or open <code>/settings</code> → 🎟️ Referral Contest.");
   return true;
 }
-// Announce the winner at close + a clean, non-custodial claim flow (admin pays from their own Wallet → Send).
-async function referralAnnounceWinner(chatId, cfg, winRow) {
-  if (!winRow) { await sayHtml(chatId, "🏁 <b>Referral contest ended</b> — no referrals were recorded."); return; }
+// Announce the TOP N winners at close + a clean, non-custodial claim flow (admin pays from own Wallet → Send).
+async function referralAnnounceWinners(chatId, cfg, ranked) {
+  const rows = (ranked || []).filter(([, n]) => Number(n) > 0);
+  if (!rows.length) { await sayHtml(chatId, "🏁 <b>Referral contest ended</b> — no referrals were recorded."); return; }
   const reward = referralRewardLabel(cfg);
-  const [winId, n] = winRow;
-  let claim = "";
-  try {
-    const wallets = walletsForOwner(await readWalletStore(), winId);
-    if (wallets && wallets.length) claim = `\n💸 Payout wallet: <code>${escapeTelegramHtml(wallets[0].publicKey)}</code>\n<i>Admin: send the reward from your Wallet → Send (your own funds, your call).</i>`;
-    else claim = "\n<i>Winner: DM me and create a wallet so the admin can send your reward.</i>";
-  } catch {}
-  await sayHtml(chatId, `🏁 <b>Referral contest ended!</b>\n🥇 Winner: <a href="tg://user?id=${winId}">top inviter</a> — <b>${n}</b> referrals.${reward ? `\n🏆 Reward: <b>${escapeTelegramHtml(reward)}</b>` : ""}${claim}`);
+  const N = referralWinnersCount(cfg);
+  const top = rows.slice(0, N);
+  const medal = (i) => ["🥇", "🥈", "🥉"][i] || `${i + 1}.`;
+  let store = null; try { store = await readWalletStore(); } catch {}
+  const lines = top.map(([id, n], i) => {
+    let wallet = "";
+    try { const w = store ? walletsForOwner(store, id) : []; if (w && w.length) wallet = w[0].publicKey; } catch {}
+    return `${medal(i)} <a href="tg://user?id=${id}">inviter ${escapeTelegramHtml(String(id).slice(-4))}</a> — <b>${n}</b>${wallet ? `\n    💸 <code>${escapeTelegramHtml(wallet)}</code>` : "  <i>(no wallet — DM the bot to create one)</i>"}`;
+  });
+  const head = N > 1 ? `🏆 <b>Top ${top.length} win</b>${reward ? ` — <b>${escapeTelegramHtml(reward)}</b> each` : ""}:` : `🏆 <b>Winner</b>${reward ? ` — <b>${escapeTelegramHtml(reward)}</b>` : ""}:`;
+  await sayHtml(chatId, [`🏁 <b>Referral contest ended!</b>`, head, ...lines, "", "<i>Admins: send each winner their reward from your Wallet → Send (your own funds, your call).</i>"].join("\n"));
 }
 // SHARED SCAMMER DATABASE: the open CAS list (cas.chat) + SlimeWire's own cross-group
 // ban list (a ban in any group running this bot protects every other group).

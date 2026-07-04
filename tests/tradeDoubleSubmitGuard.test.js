@@ -910,9 +910,14 @@ test("referral v2: rich board (reward + per-source) + non-custodial winner claim
   const board = functionBody(serverSource, "referralBoardText");
   assert.match(board, /referralRewardLabel/);
   assert.match(board, /tg.*site|site.*tg/);                       // per-source breakdown
-  const win = functionBody(serverSource, "referralAnnounceWinner");
-  assert.match(win, /walletsForOwner/);                          // shows the winner's payout wallet
+  const win = functionBody(serverSource, "referralAnnounceWinners");
+  assert.match(win, /walletsForOwner/);                          // shows each winner's payout wallet
+  assert.match(win, /referralWinnersCount\(cfg\)/);              // announces the TOP N
+  assert.match(win, /rows\.slice\(0, N\)/);
   assert.doesNotMatch(win, /buyTokenForPlan|sendTransaction/);   // admin sends via Wallet → Send; bot never moves funds
+  // configurable winner count (top 1/3/5/10) + cycle button
+  assert.match(serverSource, /REFERRAL_WINNER_TIERS = \[1, 3, 5, 10\]/);
+  assert.match(serverSource, /callback_data: "gb:ref:winners"/);
 });
 
 // ---- Shared scammer database: CAS (cas.chat) + SlimeWire cross-group ban list ----

@@ -65,7 +65,10 @@
     *{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
     @page{ margin:0; size:A4; }
     html,body,.page{ background:var(--bg) !important; }
-    .sec{ break-before:page; padding-top:34px; }        /* every feature starts on a fresh page — nothing bleeds */
+    /* Sections FLOW and pack tightly (short ones share a page — no big empty bottoms), but each whole
+       feature is kept together so nothing ever leaks across a page break. */
+    .sec{ break-inside:avoid; padding:16px 0 14px; }
+    .sec + .sec{ border-top:1px solid var(--line); }
     .sech{ break-after:avoid; break-inside:avoid; }
     .step,.card,.nav-row,.tip,.warn,.note,.cards{ break-inside:avoid; }
     h2,h3{ break-after:avoid; }
@@ -311,7 +314,7 @@
       <ul>
         <li><b>Launch Room</b> — a guided flow that ties Snipe + Raid + The Room + an "Announce launch" broadcast into one.</li>
         <li><b>Alpha Radar (group)</b> — <span class="cmd">/alpharadar on</span> makes the group get the network-backed runner alerts instead of the frequent short-term plays.</li>
-        <li><b>Referral contest</b> — open <span class="cmd">/settings</span> → 🎟️ Referral Contest. Set a <b>reward</b> (💰 SOL or 🪙 a coin + amount), then Start. Members grab <span class="cmd">/reflink</span> — it gives them a <b>group invite</b> (new joins count) <b>and</b> a <b>site link</b> (friends who make a wallet + trade on slimewire.org count too). <span class="cmd">/refboard</span> shows the live leaderboard with each source (👥 joins · 🌐 site). At the end the winner is announced with their payout wallet — you send the reward from your own Wallet → Send.</li>
+        <li><b>Referral contest</b> — open <span class="cmd">/settings</span> → 🎟️ Referral Contest. Set a <b>reward</b> (💰 SOL or 🪙 a coin + amount) and <b>🏅 how many win</b> (top 1 / 3 / 5 / 10 — more winners = more people racing), then Start. Members grab <span class="cmd">/reflink</span> — it gives them a <b>group invite</b> (new joins count) <b>and</b> a <b>site link</b> (friends who make a wallet + trade on slimewire.org count too). <span class="cmd">/refboard</span> shows the live leaderboard with each source (👥 joins · 🌐 site) and marks who's currently in the prizes (🏆). At the end the top N are announced with their payout wallets — you send each reward from your own Wallet → Send.</li>
       </ul>
     </div>
 
