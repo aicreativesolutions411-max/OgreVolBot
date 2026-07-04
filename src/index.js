@@ -3972,6 +3972,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "settings_menu",
   "dm_signals",
   "launch_coin",
+  "orders_hub",
   "trade_menu",
   "live_mainnet_test",
   "live_test_buy",
@@ -11254,6 +11255,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(webExitGuardsPath(), { guards: [] });
   await writeJsonIfMissing(tpSlWorkerStatePath(), defaultTpSlWorkerState());
   await writeJsonIfMissing(dcaPlansPath(), { plans: [] });
+  await writeJsonIfMissing(limitOrdersPath(), { orders: [] });
   await writeJsonIfMissing(sniperSettingsPath(), { users: {} });
   await writeJsonIfMissing(tradeHistoryPath(), { trades: [] });
   await writeJsonIfMissing(pumpLaunchAttemptsPath(), { attempts: [] });
@@ -11548,6 +11550,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("qs:")) {
     if (await handleQuickSellCallback(query, userId).catch(() => false)) return;
   }
+  // ⏰ Limit orders (lo:*) — arm a MC-triggered buy/sell that auto-fires from the tapper's own wallet.
+  if (String(query.data || "").startsWith("lo:")) {
+    if (await handleLimitOrderCallback(query, userId).catch(() => false)) return;
+  }
   // ⚙️ Buy presets (bp:*) — set the amounts your ⚡ buttons use.
   if (String(query.data || "").startsWith("bp:")) {
     if (await handleBuyPrefCallback(query, userId).catch(() => false)) return;
@@ -11736,6 +11742,9 @@ async function handleCallback(query, userId) {
     }
     case "launch_coin":
       await showLaunchBuilder(chatId, userId);
+      break;
+    case "orders_hub":
+      await showOrdersHub(chatId, userId, messageId);
       break;
     case "backup_menu":
       await showBackupMenu(chatId, messageId);
@@ -12122,6 +12131,8 @@ async function handleMessage(message, userId) {
   if (await applyTgQuickBuyInput(message, userId).catch(() => false)) return;
   // ⚙️ Buy presets: capture a typed preset amount.
   if (await applyBuyPrefInput(message, userId).catch(() => false)) return;
+  // ⏰ Limit order: capture the typed "<target MC> <amount>" for a coin the user is arming.
+  if (await applyLimitOrderInput(message, userId).catch(() => false)) return;
   // Community Snipe: capture a typed amount / TP-SL / launch wallet the user was prompted for.
   if (await applyCsInput(message, userId).catch(() => false)) return;
   // Copy-the-room's-best: capture a typed mirror amount.
@@ -12373,6 +12384,12 @@ async function handleMessage(message, userId) {
     if (!isPrivateChat(message.chat)) { await say(chatId, "Open the bot in DM to set your buy presets."); return; }
     const v = buyPresetsMenu(userBuyPrefs(await readBuyPrefs(), userId));
     await sayHtml(chatId, v.text, v.markup);
+    return;
+  }
+
+  if (/^\/(orders|limit|dca)(?:@\w+)?$/i.test(text)) {
+    if (!isPrivateChat(message.chat)) { await say(chatId, "Open the bot in DM to manage your limit orders + DCA."); return; }
+    await showOrdersHub(chatId, userId);
     return;
   }
 
@@ -21012,6 +21029,7 @@ async function showTelegramPortfolioMenu(chatId, messageId = null) {
     inline_keyboard: [
       [{ text: "Wallets", callback_data: "wallet_menu" }, { text: "Balances", callback_data: "check_balances" }],
       [{ text: "Positions", callback_data: "positions_overview" }, { text: "PnL / Results", callback_data: "pnl_results" }],
+      [{ text: "⏰ Limit Orders", callback_data: "orders_hub" }, { text: "🔁 DCA", callback_data: "dca_buy" }],
       [{ text: "Backup / Restore", callback_data: "backup_menu" }, { text: "Withdraw / Sweep", callback_data: "withdrawal_menu" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
     ]
@@ -28482,6 +28500,7 @@ function slimeScanKeyboard(mint) {
     ],
     [
       { text: "🌐 Buy on site", url: links.siteBuy },
+      { text: "⏰ Limit", callback_data: `lo:new:${mint}` },
       { text: "📈 Chart", url: links.site }
     ],
     [
@@ -29968,8 +29987,9 @@ async function quickBuyReceiptKeyboard(mint, userId) {
       { text: "🔴 50%", callback_data: `qs:50:${mint}` },
       { text: "🔴 100%", callback_data: `qs:100:${mint}` }
     ],
-    [{ text: "📈 SlimeWire chart", url: lx.site }, { text: "⚙️ Presets", callback_data: "bp:menu" }],
-    [{ text: "💰 Positions", callback_data: "positions_overview" }, { text: "🏠 Main Menu", callback_data: "main_menu" }]
+    [{ text: "⏰ Limit / TP-SL", callback_data: `lo:new:${mint}` }, { text: "📈 Chart", url: lx.site }],
+    [{ text: "⚙️ Presets", callback_data: "bp:menu" }, { text: "💰 Positions", callback_data: "positions_overview" }],
+    [{ text: "🏠 Main Menu", callback_data: "main_menu" }]
   ] };
 }
 async function quickBuySendReceipt(userId, mint, amt) {
@@ -30068,6 +30088,295 @@ async function handleQuickSellCallback(query, userId) {
   if (!r.ok) { await ack(`Sell didn't land: ${r.why || "try again in a sec"}.`, true); return true; }
   await ack(`🔴 Sold ${pct}% — ~◎${lamportsBigToSol(r.soldLamports || 0n)} in. Receipt in your DM.`, true);
   await tgQuickSellReceipt(userId, mint, r);
+  return true;
+}
+
+// ===== ⏰ LIMIT ORDERS — market-cap-triggered buy-the-dip / take-profit / stop-loss, in-DM =====
+// The last Trojan-parity trading feature. A user arms "buy 0.5◎ when MC hits $30k" or "sell 100% at
+// $250k"; a background poller watches the MC (free DexScreener→pump fallback via alphaRadarFetchMc) and,
+// when it crosses, fires the SAME own-wallet money-path the ⚡ quick buy/sell use (idempotent, recorded,
+// DM receipt). Boundary-OK: the user's own pre-authorized action on their own custodial wallet, same as
+// autopilot / community-snipe / DCA. Direction is auto-derived from the MC at arm time so the user never
+// has to reason about ≤ vs ≥: a buy target below now = dip-buy, above = breakout; a sell target above
+// now = take-profit, below = stop-loss. DCA (recurring, time-based) already exists — see the Bundle menu
+// (dca_buy/dca_sell → createDcaPlanFlow); the ⏰ Orders hub links to it.
+const LIMIT_MAX_PER_USER = 25;           // don't let one user arm thousands of watches
+const LIMIT_MIN_SOL = 0.01, LIMIT_MAX_SOL = 50;
+const LIMIT_ORDER_TTL_MS = 14 * 24 * 60 * 60 * 1000;   // orders auto-expire after 14 days
+function limitOrdersPath() { return path.join(CONFIG.dataDir, "limit-orders.json"); }
+async function readLimitOrders() {
+  const store = await readJson(limitOrdersPath());
+  if (!store || !Array.isArray(store.orders)) return { orders: [] };
+  return store;
+}
+async function writeLimitOrders(store) { await writeJsonFile(limitOrdersPath(), store); }
+function limitOrdersForUser(store, userId) {
+  return (store.orders || []).filter((o) => String(o.userId) === String(userId));
+}
+// Parse a market-cap the human way: "30k" → 30000, "1.2m" → 1200000, bare "30" → 30000 (assume $k for
+// small numbers so a fat-finger can't arm a $30 target), "50000" → 50000 literal. Returns 0 on junk.
+function parseMcInput(raw) {
+  const s = String(raw || "").trim().toLowerCase().replace(/[$,\s]/g, "");
+  const m = s.match(/^([0-9]*\.?[0-9]+)(k|m|b)?$/);
+  if (!m) return 0;
+  let n = Number(m[1]); if (!Number.isFinite(n) || n <= 0) return 0;
+  if (m[2] === "b") n *= 1e9; else if (m[2] === "m") n *= 1e6; else if (m[2] === "k") n *= 1e3;
+  else if (n < 10000) n *= 1e3;   // bare small number → treat as $k (buy at "30" = $30k, not $30)
+  return Math.round(n);
+}
+function fmtMc(n) {
+  const v = Number(n) || 0;
+  if (v >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
+  if (v >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
+  if (v >= 1e3) return `$${Math.round(v / 1e3)}k`;
+  return `$${Math.round(v)}`;
+}
+function limitOrderLine(o) {
+  const dirWord = o.side === "buy"
+    ? (o.dir === ">=" ? "breakout ≥" : "dip ≤")
+    : (o.dir === ">=" ? "take-profit ≥" : "stop-loss ≤");
+  const amt = o.side === "buy" ? `${o.amountSol}◎` : `${o.pct}%`;
+  const icon = o.side === "buy" ? "🟢" : "🔴";
+  return `${icon} <b>${escapeTelegramHtml(o.sym || shortMint(o.mint))}</b> — ${o.side} ${amt} · ${dirWord} <b>${fmtMc(o.triggerMc)}</b>`;
+}
+// Create + persist an armed order (RMW under a file lock). Returns { ok, why?, order?, count }.
+async function addLimitOrder(userId, spec) {
+  return withFileLock(limitOrdersPath(), async () => {
+    const store = await readLimitOrders();
+    const mine = limitOrdersForUser(store, userId).filter((o) => o.status === "armed");
+    if (mine.length >= LIMIT_MAX_PER_USER) return { ok: false, why: `you already have ${LIMIT_MAX_PER_USER} armed orders — cancel one first` };
+    const order = {
+      id: crypto.randomUUID(),
+      userId: String(userId),
+      side: spec.side,
+      mint: spec.mint,
+      sym: spec.sym || "",
+      refMc: spec.refMc || 0,
+      triggerMc: spec.triggerMc,
+      dir: spec.dir,
+      ...(spec.side === "buy" ? { amountSol: spec.amountSol } : { pct: spec.pct }),
+      slippageBps: spec.slippageBps || 0,
+      status: "armed",
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + LIMIT_ORDER_TTL_MS).toISOString()
+    };
+    store.orders.push(order);
+    await writeLimitOrders(store);
+    return { ok: true, order, count: mine.length + 1 };
+  });
+}
+async function cancelLimitOrder(userId, id) {
+  return withFileLock(limitOrdersPath(), async () => {
+    const store = await readLimitOrders();
+    const o = (store.orders || []).find((x) => x.id === id && String(x.userId) === String(userId) && x.status === "armed");
+    if (!o) return false;
+    o.status = "cancelled"; o.cancelledAt = new Date().toISOString();
+    await writeLimitOrders(store);
+    return true;
+  });
+}
+// Flip one order to a terminal status (filled/failed/expired) under the lock, so the poller and a user
+// cancel can't race. Returns the fresh order snapshot (or null if it's no longer armed).
+async function settleLimitOrder(id, status, patch = {}) {
+  return withFileLock(limitOrdersPath(), async () => {
+    const store = await readLimitOrders();
+    const o = (store.orders || []).find((x) => x.id === id);
+    if (!o || o.status !== "armed") return null;
+    o.status = status; Object.assign(o, patch);
+    await writeLimitOrders(store);
+    return { ...o };
+  });
+}
+let _limitPolling = false;
+async function pollLimitOrders() {
+  if (_limitPolling) return;
+  _limitPolling = true;
+  try {
+    const store = await readLimitOrders();
+    const armed = (store.orders || []).filter((o) => o.status === "armed");
+    if (!armed.length) return;
+    const st = await readState().catch(() => null);
+    const paused = Boolean(st && st.paused);
+    const now = Date.now();
+    // Expire stale orders first (cheap, no network).
+    const expired = armed.filter((o) => Date.parse(o.expiresAt || 0) && Date.parse(o.expiresAt) < now);
+    for (const o of expired) { await settleLimitOrder(o.id, "expired"); }
+    const live = armed.filter((o) => !expired.includes(o));
+    if (!live.length || paused) return;   // when paused, still expire but don't fire
+    // One MC fetch per distinct mint, shared across that mint's orders.
+    const mints = [...new Set(live.map((o) => o.mint))];
+    const mcByMint = new Map();
+    for (const mint of mints.slice(0, 40)) {
+      const info = await alphaRadarFetchMc(mint).catch(() => null);
+      if (info && info.mc > 0) mcByMint.set(mint, info);
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    for (const o of live) {
+      const info = mcByMint.get(o.mint); if (!info) continue;
+      const mc = info.mc;
+      const hit = o.dir === ">=" ? mc >= o.triggerMc : mc <= o.triggerMc;
+      if (!hit) continue;
+      // Claim it (terminal status) BEFORE executing so a slow fill can't double-fire next tick.
+      const claimed = await settleLimitOrder(o.id, "filling", { firedMc: mc, firedAt: new Date().toISOString() });
+      if (!claimed) continue;
+      try {
+        if (o.side === "buy") {
+          const r = await tgExecuteQuickBuy(o.userId, o.mint, o.amountSol);
+          if (r.ok) {
+            await settleLimitOrderStatus(o.id, "filled");
+            await sayHtml(o.userId, [
+              `⏰✅ <b>Limit BUY filled</b> — ${escapeTelegramHtml(info.sym || o.sym || shortMint(o.mint))} hit <b>${fmtMc(mc)}</b>.`,
+              `Bought <b>${o.amountSol}◎</b> from your SlimeWire wallet.`
+            ].join("\n"), await quickBuyReceiptKeyboard(o.mint, o.userId)).catch(() => {});
+          } else {
+            await settleLimitOrderStatus(o.id, r.needWallet ? "failed" : "failed", { failReason: r.why || (r.needWallet ? "no wallet" : "buy failed") });
+            await sayHtml(o.userId, `⏰⚠️ Limit BUY for ${escapeTelegramHtml(o.sym || shortMint(o.mint))} triggered at ${fmtMc(mc)} but didn't land: ${escapeTelegramHtml(r.why || "no wallet / try again")}.`).catch(() => {});
+          }
+        } else {
+          const r = await tgExecuteQuickSell(o.userId, o.mint, o.pct);
+          if (r.ok) {
+            await settleLimitOrderStatus(o.id, "filled");
+            await tgQuickSellReceipt(o.userId, o.mint, r);
+            await sayHtml(o.userId, `⏰✅ <b>Limit SELL filled</b> — ${escapeTelegramHtml(info.sym || o.sym || shortMint(o.mint))} hit <b>${fmtMc(mc)}</b> (sold ${o.pct}%).`).catch(() => {});
+          } else {
+            await settleLimitOrderStatus(o.id, "failed", { failReason: r.why || "sell failed" });
+            await sayHtml(o.userId, `⏰⚠️ Limit SELL for ${escapeTelegramHtml(o.sym || shortMint(o.mint))} triggered at ${fmtMc(mc)} but didn't land: ${escapeTelegramHtml(r.why || "no balance / try again")}.`).catch(() => {});
+          }
+        }
+      } catch (e) {
+        await settleLimitOrderStatus(o.id, "failed", { failReason: (e && e.message) || "error" }).catch(() => {});
+      }
+    }
+  } catch (e) { console.warn(`[limit-orders] ${e && e.message}`); }
+  finally { _limitPolling = false; }
+}
+// Small helper: move an order from the transient "filling" claim to a real terminal status.
+async function settleLimitOrderStatus(id, status, patch = {}) {
+  return withFileLock(limitOrdersPath(), async () => {
+    const store = await readLimitOrders();
+    const o = (store.orders || []).find((x) => x.id === id);
+    if (!o) return null;
+    o.status = status; Object.assign(o, patch);
+    await writeLimitOrders(store);
+    return { ...o };
+  });
+}
+
+// ---- ⏰ Orders UI: hub (list + cancel + DCA link), per-coin builder, typed input ----
+const limitOrderPending = new Map(); // userId -> { side, mint, sym, refMc, at }
+async function ordersHubView(userId) {
+  const store = await readLimitOrders();
+  const mine = limitOrdersForUser(store, userId).filter((o) => o.status === "armed")
+    .sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
+  const lines = ["⏰ <b>Your Orders</b>", ""];
+  if (mine.length) {
+    lines.push("<b>Armed limit orders</b> (auto-fire on market cap):");
+    for (const o of mine.slice(0, 25)) lines.push(limitOrderLine(o));
+  } else {
+    lines.push("No armed limit orders yet.");
+  }
+  lines.push("", "🟢 <b>Limit orders</b>: open any coin (paste its CA or tap ⏰ on a buy card) to arm a buy-the-dip / take-profit / stop-loss on its market cap.");
+  lines.push("🔁 <b>DCA</b>: recurring timed buys/sells — set one up under Bundle → DCA.");
+  const rows = mine.slice(0, 10).map((o) => ([{ text: `❌ ${o.side === "buy" ? "🟢" : "🔴"} ${o.sym || shortMint(o.mint)} @ ${fmtMc(o.triggerMc)}`, callback_data: `lo:x:${o.id}` }]));
+  rows.push([{ text: "🔁 DCA Buy", callback_data: "dca_buy" }, { text: "🔁 DCA Sell", callback_data: "dca_sell" }]);
+  rows.push([{ text: "💰 Positions", callback_data: "positions_overview" }, { text: "🏠 Main Menu", callback_data: "main_menu" }]);
+  return { text: lines.join("\n"), markup: { inline_keyboard: rows } };
+}
+async function showOrdersHub(chatId, userId, messageId = null) {
+  const v = await ordersHubView(userId);
+  if (messageId) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: v.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: v.markup }).catch(() => {});
+  else await sayHtml(chatId, v.text, v.markup);
+}
+// Per-coin builder: shows current MC + the two limit choices. Called from the ⏰ button (lo:new:<mint>).
+async function showLimitOrderBuilder(userId, mint, messageId = null) {
+  const info = await alphaRadarFetchMc(mint).catch(() => null);
+  const mc = info && info.mc > 0 ? info.mc : 0;
+  const sym = (info && info.sym) || "";
+  const text = [
+    `⏰ <b>Limit order</b> — ${escapeTelegramHtml(sym || shortMint(mint))}`,
+    mc ? `Current market cap: <b>${fmtMc(mc)}</b>` : "Current market cap: <i>unavailable right now</i>",
+    "",
+    "Pick a side, then I'll ask for the trigger + amount. It fires automatically when the market cap crosses your target — from your own SlimeWire wallet.",
+  ].join("\n");
+  const markup = { inline_keyboard: [
+    [{ text: "🟢 Limit Buy (dip / breakout)", callback_data: `lo:b:${mint}` }],
+    [{ text: "🔴 Limit Sell (TP / SL)", callback_data: `lo:s:${mint}` }],
+    [{ text: "⏰ My Orders", callback_data: "orders_hub" }, { text: "🏠 Main Menu", callback_data: "main_menu" }]
+  ] };
+  if (messageId) await telegram("editMessageText", { chat_id: userId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: markup }).catch(() => {});
+  else await sayHtml(userId, text, markup);
+}
+async function handleLimitOrderCallback(query, userId) {
+  const data = String(query?.data || ""); if (!data.startsWith("lo:")) return false;
+  const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  const ack = (t, alert) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: Boolean(alert) } : {}) }).catch(() => {});
+  // cancel
+  let m = data.match(/^lo:x:(.+)$/);
+  if (m) { const ok = await cancelLimitOrder(userId, m[1]); await ack(ok ? "Cancelled." : "Already gone."); await showOrdersHub(chatId, userId, messageId); return true; }
+  // open the per-coin builder
+  m = data.match(/^lo:new:([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+  if (m) { await ack(); await showLimitOrderBuilder(userId, m[1], isPrivateChat(query.message?.chat) ? messageId : null); return true; }
+  // choose a side → prompt for the trigger + amount
+  m = data.match(/^lo:(b|s):([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+  if (m) {
+    if (!walletsForOwner(await readWalletStore(), userId).length) { await ack("Make a free SlimeWire wallet first — DM me /start.", true); return true; }
+    const side = m[1] === "b" ? "buy" : "sell", mint = m[2];
+    const info = await alphaRadarFetchMc(mint).catch(() => null);
+    const refMc = info && info.mc > 0 ? info.mc : 0;
+    limitOrderPending.set(String(userId), { side, mint, sym: (info && info.sym) || "", refMc, at: Date.now() });
+    await ack();
+    const now = refMc ? ` (now ${fmtMc(refMc)})` : "";
+    if (side === "buy") {
+      await sayHtml(userId, [
+        `🟢 <b>Limit Buy</b>${now} — reply with <b>target MC</b> and <b>SOL amount</b>.`,
+        "e.g. <code>30k 0.5</code> = buy 0.5◎ when it hits $30k.",
+        "Target below now = buy the dip · above now = buy the breakout."
+      ].join("\n")).catch(() => {});
+    } else {
+      await sayHtml(userId, [
+        `🔴 <b>Limit Sell</b>${now} — reply with <b>target MC</b> and <b>sell %</b>.`,
+        "e.g. <code>250k 100</code> = sell 100% when it hits $250k.",
+        "Target above now = take profit · below now = stop loss."
+      ].join("\n")).catch(() => {});
+    }
+    return true;
+  }
+  await ack();
+  return true;
+}
+// Typed "<targetMC> <amount>" for a pending limit order. Returns true when it consumed the message.
+async function applyLimitOrderInput(message, userId) {
+  const pend = limitOrderPending.get(String(userId));
+  if (!pend) return false;
+  if (Date.now() - pend.at > 180000) { limitOrderPending.delete(String(userId)); return false; }
+  const raw = String(message.text || "").trim();
+  if (!raw || raw.startsWith("/")) return false;
+  const parts = raw.split(/[\s,]+/).filter(Boolean);
+  if (parts.length < 2) { await say(message.chat.id, "Send two values: target MC then amount, e.g. `30k 0.5`."); return true; }
+  const triggerMc = parseMcInput(parts[0]);
+  const amtNum = Number(String(parts[1]).replace(/[^0-9.]/g, ""));
+  if (!triggerMc) { await say(message.chat.id, "Couldn't read the target MC. Try like `30k`, `250k`, or `1.2m`."); return true; }
+  if (!Number.isFinite(amtNum) || amtNum <= 0) { await say(message.chat.id, pend.side === "buy" ? "Couldn't read the SOL amount, e.g. 0.5" : "Couldn't read the sell %, e.g. 100"); return true; }
+  limitOrderPending.delete(String(userId));
+  const slippageBps = userBuyPrefs(await readBuyPrefs(), userId).slippageBps;
+  const ref = pend.refMc || 0;
+  const dir = triggerMc >= ref ? ">=" : "<=";   // ref 0 → ">=" (treat as breakout/TP; harmless)
+  const spec = { side: pend.side, mint: pend.mint, sym: pend.sym, refMc: ref, triggerMc, dir, slippageBps };
+  if (pend.side === "buy") {
+    const sol = Math.min(LIMIT_MAX_SOL, Math.max(LIMIT_MIN_SOL, amtNum));
+    spec.amountSol = sol;
+  } else {
+    spec.pct = Math.min(100, Math.max(1, Math.round(amtNum)));
+  }
+  const res = await addLimitOrder(userId, spec);
+  if (!res.ok) { await sayHtml(message.chat.id, `⏰ Couldn't arm it: ${escapeTelegramHtml(res.why || "try again")}.`); return true; }
+  const o = res.order;
+  await sayHtml(message.chat.id, [
+    "⏰✅ <b>Order armed.</b>",
+    limitOrderLine(o),
+    "",
+    `<i>Fires automatically when ${escapeTelegramHtml(o.sym || shortMint(o.mint))} crosses ${fmtMc(o.triggerMc)}. I watch it for you — expires in 14 days.</i>`
+  ].join("\n"), { inline_keyboard: [[{ text: "⏰ My Orders", callback_data: "orders_hub" }, { text: "🏠 Main Menu", callback_data: "main_menu" }]] }).catch(() => {});
   return true;
 }
 
@@ -31812,6 +32121,7 @@ function startGroupBuyBot() {
   setInterval(() => { void pollAlphaRadar(); }, 60_000);     // network-backed long-term-runner alerts (opt-in)
   setInterval(() => { void pollExitRadar(); }, 60_000);      // 🚪 Exit Radar — take-profit pings on your own bags (opt-in)
   setInterval(() => { void pollPlaysSignal(); }, 5 * 60_000); // 🎯 Top Plays — brain's best plays every ~2h + hot early-push (opt-in)
+  setInterval(() => { void pollLimitOrders(); }, 30_000);    // ⏰ Limit orders — MC-triggered buy/sell auto-fire (opt-in, own wallet)
   void readCommunitySnipe().catch(() => {});                 // warm the armed-creator-wallet index so a snipe survives restart
 }
 

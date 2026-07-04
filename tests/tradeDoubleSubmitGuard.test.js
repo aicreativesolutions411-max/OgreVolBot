@@ -990,6 +990,34 @@ test("in-DM one-tap SELL (qs:*): own-wallet, idempotent, on the receipt + positi
   // positions overview has per-coin one-tap sell
   assert.match(functionBody(serverSource, "showPositionsOverview"), /callback_data: `qs:100:\$\{position\.tokenMint\}`/);
 });
+test("⏰ Limit orders: MC-triggered buy/sell, own-wallet, idempotent-claim, paused-safe, auto-expire", () => {
+  // persistent store, seeded at boot
+  assert.match(serverSource, /function limitOrdersPath\(\)/);
+  assert.match(serverSource, /writeJsonIfMissing\(limitOrdersPath\(\), \{ orders: \[\] \}\)/);
+  // poller registered + core logic
+  assert.match(serverSource, /setInterval\(\(\) => \{ void pollLimitOrders\(\); \}/);
+  const poll = functionBody(serverSource, "pollLimitOrders");
+  assert.match(poll, /alphaRadarFetchMc\(/);                                        // free MC source (Dex→pump)
+  assert.match(poll, /o\.dir === ">=" \? mc >= o\.triggerMc : mc <= o\.triggerMc/);  // trigger evaluation
+  assert.match(poll, /settleLimitOrder\(o\.id, "filling"/);                          // CLAIM before executing = no double-fire
+  assert.match(poll, /tgExecuteQuickBuy\(o\.userId, o\.mint, o\.amountSol\)/);        // own-wallet buy money-path
+  assert.match(poll, /tgExecuteQuickSell\(o\.userId, o\.mint, o\.pct\)/);            // own-wallet sell money-path
+  assert.match(poll, /if \(!live\.length \|\| paused\) return/);                     // global pause = don't fire
+  // direction auto-derived from MC at arm time (user never reasons about <= vs >=)
+  assert.match(functionBody(serverSource, "applyLimitOrderInput"), /triggerMc >= ref \? ">=" : "<="/);
+  // guards: per-user cap + expiry + sane SOL bounds
+  assert.match(serverSource, /LIMIT_MAX_PER_USER = 25/);
+  assert.match(serverSource, /LIMIT_ORDER_TTL_MS/);
+  assert.match(serverSource, /LIMIT_MIN_SOL = 0\.01, LIMIT_MAX_SOL = 50/);
+  // routed + wired end to end
+  assert.match(serverSource, /startsWith\("lo:"\)/);
+  assert.match(serverSource, /applyLimitOrderInput\(message, userId\)/);
+  assert.match(serverSource, /\(orders\|limit\|dca\)/);                              // /orders /limit /dca command
+  assert.match(functionBody(serverSource, "quickBuyReceiptKeyboard"), /callback_data: `lo:new:\$\{mint\}`/);
+  assert.match(functionBody(serverSource, "slimeScanKeyboard"), /callback_data: `lo:new:\$\{mint\}`/);
+  // MC parser is fat-finger-safe (bare small number → $k, k/m suffix honored)
+  assert.match(functionBody(serverSource, "parseMcInput"), /m\[2\] === "m"/);
+});
 test("smooth nav: DM sub-views carry a Main Menu button (no re-/start)", () => {
   for (const fn of ["showTelegramLinksMenu", "showTelegramPortfolioMenu", "showTelegramOgreToolsMenu", "showWalletMenu"]) {
     assert.match(functionBody(serverSource, fn), /callback_data: "main_menu"/, `${fn} needs Main Menu`);
