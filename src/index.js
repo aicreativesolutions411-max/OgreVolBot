@@ -11530,6 +11530,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("cs:")) {
     if (await handleCommunitySnipeCallback(query, userId).catch(() => false)) return;
   }
+  // ⚡ One-click buy (qb:*) — instant buy from the tapper's own SlimeWire wallet, from any group card.
+  if (String(query.data || "").startsWith("qb:")) {
+    if (await handleQuickBuyCallback(query, userId).catch(() => false)) return;
+  }
   // The Room menu (room:*) — verifiable PnL board + skin-in-the-game callers.
   if (String(query.data || "").startsWith("room:")) {
     if (await handleRoomCallback(query, userId).catch(() => false)) return;
@@ -12069,6 +12073,8 @@ async function handleMessage(message, userId) {
   if (await applyGbInput(message, userId).catch(() => false)) return;
   // Wallet Tracker: capture a wallet address / min-USD the user is entering.
   if (await applyWtInput(message, userId).catch(() => false)) return;
+  // ⚡ One-click buy: capture the custom SOL amount the user was prompted for (from a group ✏️ tap).
+  if (await applyTgQuickBuyInput(message, userId).catch(() => false)) return;
   // Community Snipe: capture a typed amount / TP-SL / launch wallet the user was prompted for.
   if (await applyCsInput(message, userId).catch(() => false)) return;
   // Copy-the-room's-best: capture a typed mirror amount.
@@ -28411,8 +28417,16 @@ function slimeScanKeyboard(mint) {
   // safety), so four near-identical redirects were clutter. The site's quick-buy lets you pick the
   // amount there. Buy → Chart on top, then the Menu / Refresh controls.
   return { inline_keyboard: [
+    // ⚡ ONE-CLICK: tap = instant buy from your OWN SlimeWire bot wallet (no site redirect). Set one up
+    // with /start; receipt lands in your DM. The site Buy stays as the non-wallet / pick-amount path.
     [
-      { text: "⚡ Buy on SlimeWire", url: links.siteBuy },
+      { text: "⚡ 0.5◎", callback_data: `qb:0.5:${mint}` },
+      { text: "⚡ 1◎", callback_data: `qb:1:${mint}` },
+      { text: "⚡ 2◎", callback_data: `qb:2:${mint}` },
+      { text: "✏️", callback_data: `qb:x:${mint}` }
+    ],
+    [
+      { text: "🌐 Buy on site", url: links.siteBuy },
       { text: "📈 Chart", url: links.site }
     ],
     [
@@ -29764,6 +29778,80 @@ async function fireCommunitySnipe(chatId, mint, symbol, name) {
     `<a href="${links0.site}">Chart</a> · TP/SL auto-exits are running for anyone who set them.`
   ].join("\n");
   await sayHtml(chatId, text, slimeScanKeyboard(mint)).catch(() => {});
+}
+
+// ---- ⚡ ONE-CLICK BUY (Trojan-style): tap a preset on ANY group card → instant buy from the tapper's
+// OWN SlimeWire bot wallet, no site redirect. Reuses the proven buyTokenForPlan + idempotency path; the
+// receipt (with wallet) goes to the user's DM, never the group. No wallet → funnel to /start. ----
+const tgQuickBuyPending = new Map(); // userId -> { mint, at } (awaiting a custom SOL amount typed in DM)
+async function tgExecuteQuickBuy(userId, mint, amountSol) {
+  try {
+    const st = await readState().catch(() => null);
+    if (st && st.paused) return { ok: false, why: "trading is paused right now" };
+    const wallets = walletsForOwner(await readWalletStore(), userId);
+    const wallet = wallets && wallets[0];
+    if (!wallet) return { ok: false, needWallet: true };
+    const amt = Number(amountSol);
+    if (!Number.isFinite(amt) || amt <= 0) return { ok: false, why: "bad amount" };
+    const lamports = solToLamports(amt);
+    // Dedup rapid double-taps within ~15s so a fat-finger can't double-buy.
+    const attemptId = `${mint}:${Math.floor(Date.now() / 15000)}`;
+    const result = await runIdempotentMoneyOp("tg-quick-buy", userId, attemptId,
+      () => buyTokenForPlan(wallet, mint, lamports, CONFIG.defaultSlippageBps, { trackTokenDelta: true, userId }));
+    if (result) {
+      await recordTradeEvents([{ userId, type: "buy", source: "tg-quick-buy", tokenMint: mint, walletLabel: wallet.label, walletPublicKey: wallet.publicKey, solLamportsSpent: String(result.amountLamports || lamports), ...(result.tokenAmount != null ? { tokenAmount: String(result.tokenAmount) } : {}), signature: result.signature }]).catch(() => {});
+    }
+    return { ok: Boolean(result), result, wallet, amt };
+  } catch (e) { return { ok: false, why: (friendlyError ? friendlyError(e) : (e && e.message)) || "buy failed" }; }
+}
+// DM receipt keyboard — buy more + sell/manage, so the user runs the whole position from Telegram.
+function quickBuyReceiptKeyboard(mint) {
+  const lx = slimewireTokenLinks(mint);
+  return { inline_keyboard: [
+    [{ text: "⚡ Buy ◎0.5", callback_data: `qb:0.5:${mint}` }, { text: "⚡ ◎1", callback_data: `qb:1:${mint}` }, { text: "✏️ Amount", callback_data: `qb:x:${mint}` }],
+    [{ text: "🔴 Sell / manage", url: lx.site }, { text: "📈 Chart", url: lx.site }]
+  ] };
+}
+async function quickBuySendReceipt(userId, mint, amt) {
+  const lx = slimewireTokenLinks(mint);
+  await sayHtml(userId, [`⚡ <b>Bought ◎${amt}</b> of <code>${escapeTelegramHtml(mint)}</code> from your SlimeWire wallet.`, `<a href="${lx.site}">Chart · sell · manage →</a>`, "", "<i>Buy more or sell right here:</i>"].join("\n"), quickBuyReceiptKeyboard(mint)).catch(() => {});
+}
+async function handleQuickBuyCallback(query, userId) {
+  const data = String(query?.data || ""); if (!data.startsWith("qb:")) return false;
+  const ack = (t, alert) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: Boolean(alert) } : {}) }).catch(() => {});
+  const mCustom = data.match(/^qb:x:([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+  if (mCustom) {
+    if (!walletsForOwner(await readWalletStore(), userId).length) { await ack("Make a free SlimeWire wallet first — DM me /start (takes 10s), then tap Buy.", true); return true; }
+    tgQuickBuyPending.set(String(userId), { mint: mCustom[1], at: Date.now() });
+    await ack("Sent you a DM — reply with the SOL amount to buy.", true);
+    await sayHtml(userId, `⚡ <b>Quick buy</b> — reply with the SOL amount to ape <code>${escapeTelegramHtml(mCustom[1])}</code> (e.g. <b>0.75</b>).`).catch(() => {});
+    return true;
+  }
+  const m = data.match(/^qb:([\d.]+):([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+  if (!m) { await ack(); return true; }
+  const amt = m[1], mint = m[2];
+  const r = await tgExecuteQuickBuy(userId, mint, amt);
+  if (r.needWallet) { await ack("You need a SlimeWire wallet first — DM me /start to make one free (10s), then tap Buy again.", true); return true; }
+  if (!r.ok) { await ack(`Buy didn't land: ${r.why || "try again in a sec"}.`, true); return true; }
+  await ack(`⚡ Bought ◎${amt}! Receipt + sell controls sent to your DM.`, true);
+  await quickBuySendReceipt(userId, mint, amt);
+  return true;
+}
+// Typed custom SOL amount for ⚡ quick buy (DM). Returns true when it consumed the message.
+async function applyTgQuickBuyInput(message, userId) {
+  const pend = tgQuickBuyPending.get(String(userId));
+  if (!pend) return false;
+  if (Date.now() - pend.at > 180000) { tgQuickBuyPending.delete(String(userId)); return false; }
+  const raw = String(message.text || "").trim();
+  if (!raw || raw.startsWith("/")) return false;
+  const amt = Number(raw.replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(amt) || amt <= 0) { await say(message.chat.id, "Send just the SOL amount, e.g. 0.5"); return true; }
+  tgQuickBuyPending.delete(String(userId));
+  const r = await tgExecuteQuickBuy(userId, pend.mint, amt);
+  if (r.needWallet) { await say(message.chat.id, "Make a wallet first — /start."); return true; }
+  if (!r.ok) { await say(message.chat.id, `Buy didn't land: ${r.why || "try again"}.`); return true; }
+  await quickBuySendReceipt(userId, pend.mint, amt);
+  return true;
 }
 
 // Caller footer for the scan card: who FIRST called this CA in this channel, when, and how

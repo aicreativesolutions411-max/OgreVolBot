@@ -929,6 +929,20 @@ test("SlimeWire Alerts = a menu toggle any admin flips per channel, on the main 
   assert.match(serverSource, /telegramChannelBotToken: process\.env\.TG_CHANNEL_BOT_TOKEN \|\| process\.env\.TELEGRAM_BOT_TOKEN/);
   assert.match(functionBody(serverSource, "runAlphaDropTick"), /groupBridgeFor\(chatId\)\.announce/);
 });
+test("⚡ one-click group buy fires from the tapper's OWN wallet, idempotent, receipt goes to DM", () => {
+  const exec = functionBody(serverSource, "tgExecuteQuickBuy");
+  assert.match(exec, /walletsForOwner\(await readWalletStore\(\), userId\)/);   // the tapper's own wallet
+  assert.match(exec, /runIdempotentMoneyOp\("tg-quick-buy"/);                   // dedup double-taps
+  assert.match(exec, /buyTokenForPlan\(wallet, mint, lamports/);
+  assert.match(exec, /if \(!wallet\) return \{ ok: false, needWallet: true \}/); // no wallet → funnel, not crash
+  const cb = functionBody(serverSource, "handleQuickBuyCallback");
+  assert.match(cb, /quickBuySendReceipt\(userId, mint, amt\)/);                 // receipt to DM (userId), never the group
+  assert.match(cb, /DM me \/start/);                                           // no-wallet funnel
+  // ⚡ preset buttons on the group scan card + routed + custom-amount input wired
+  assert.match(functionBody(serverSource, "slimeScanKeyboard"), /callback_data: `qb:0\.5:\$\{mint\}`/);
+  assert.match(serverSource, /startsWith\("qb:"\)/);
+  assert.match(serverSource, /applyTgQuickBuyInput\(message, userId\)/);
+});
 
 // ---- Shared scammer database: CAS (cas.chat) + SlimeWire cross-group ban list ----
 test("known-scammer gate: CAS + cross-group ban list, wired into join + messages + /ban", () => {
@@ -963,12 +977,14 @@ test("OCR image scan: cloud-offloaded, concurrency-capped, gated, delete-only", 
 
 // ---- Scan card buy row: ONE clean Buy button (the 0.5/1/5/custom amount buttons all just opened
 // the site, so they were consolidated). The &amount= deep-link helper still exists for the web preload.
-test("scan card has a single Buy button, not four near-identical amount redirects", () => {
+test("scan card = ⚡ one-click in-wallet buy presets + a site fallback + chart", () => {
   const kb = functionBody(serverSource, "slimeScanKeyboard");
-  assert.match(kb, /text: "⚡ Buy on SlimeWire", url: links\.siteBuy/);
+  // ⚡ presets now execute an in-wallet buy via the qb: callback (NOT four URL redirects); site Buy stays.
+  assert.match(kb, /callback_data: `qb:0\.5:\$\{mint\}`/);
+  assert.match(kb, /callback_data: `qb:1:\$\{mint\}`/);
+  assert.match(kb, /callback_data: `qb:x:\$\{mint\}`/);         // ✏️ custom amount
+  assert.match(kb, /text: "🌐 Buy on site", url: links\.siteBuy/); // fallback / pick-amount path
   assert.match(kb, /text: "📈 Chart"/);
-  assert.doesNotMatch(kb, /slimewireBuyUrl/);         // no per-amount buttons in the keyboard anymore
-  assert.doesNotMatch(kb, /⚡ Buy 0\.5/);
   // the amount deep-link capability itself is retained (web 1-click reads ?buy=1&amount=)
   assert.match(functionBody(serverSource, "slimewireBuyUrl"), /&amount=/);
 });
