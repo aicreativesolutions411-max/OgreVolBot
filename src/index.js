@@ -11538,6 +11538,13 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("sig:")) {
     if (await handleSignalsCallback(query, userId).catch(() => false)) return;
   }
+  // Copy-the-room's-best (copy:*) + Launch Room (lr:*).
+  if (String(query.data || "").startsWith("copy:")) {
+    if (await handleCopyCallback(query, userId).catch(() => false)) return;
+  }
+  if (String(query.data || "").startsWith("lr:")) {
+    if (await handleLaunchRoomCallback(query, userId).catch(() => false)) return;
+  }
 
   if (ADMIN_ACTIONS.has(query.data) && !isAdmin(userId)) {
     await say(chatId, "Only bot admins can use that control.");
@@ -12060,6 +12067,8 @@ async function handleMessage(message, userId) {
   if (await applyWtInput(message, userId).catch(() => false)) return;
   // Community Snipe: capture a typed amount / TP-SL / launch wallet the user was prompted for.
   if (await applyCsInput(message, userId).catch(() => false)) return;
+  // Copy-the-room's-best: capture a typed mirror amount.
+  if (await applyCopyInput(message, userId).catch(() => false)) return;
   // Wallet Tracker commands (/track, /untrack, /tracked) — DM only.
   if (await handleWalletTrackerCommand(message, userId).catch(() => false)) return;
 
@@ -12593,6 +12602,9 @@ async function handleMessage(message, userId) {
   // /narrative — hot rotating meta; /grad — coins closest to graduating.
   if (parseCommandWithArgument(text, ["narrative", "meta"])) { const v = narrativeRadarView(); await sayHtml(chatId, v.text, v.markup); return; }
   if (parseCommandWithArgument(text, ["grad", "graduation", "gauntlet"])) { const v = await graduationGauntletView(); await sayHtml(chatId, v.text, v.markup); return; }
+  // /copy — mirror a proven room trader; /launchroom — the dev war room.
+  if (parseCommandWithArgument(text, ["copy", "mirror"])) { const v = await copyMenuView(chatId, userId); await sayHtml(chatId, v.text, v.markup); return; }
+  if (parseCommandWithArgument(text, ["launchroom", "warroom"])) { const v = launchRoomView(chatId, (await readCommunitySnipe()).snipes[String(chatId)]); await sayHtml(chatId, v.text, v.markup); return; }
 
   if (text === "/withdraw" || text === "/sweep") {
     if (!isPrivateChat(message.chat)) {
@@ -29156,8 +29168,24 @@ async function roomRealizedByUser(userIds) {
 function roomMenuMarkup() {
   return { inline_keyboard: [
     [{ text: "🏆 Room PnL", callback_data: "room:pnl" }, { text: "📢 Top callers", callback_data: "room:callers" }],
+    [{ text: "🧾 My Proof-of-Call", callback_data: "room:receipt" }, { text: "🪞 Copy the best", callback_data: "gb:go:copy" }],
     [{ text: "✅ Join board", callback_data: "room:join" }, { text: "🚪 Leave board", callback_data: "room:leave" }]
   ] };
+}
+// 🧾 PROOF-OF-CALL — a shareable, verifiable receipt of a member's best VERIFIED winning call (they held
+// what they called). Provable alpha they can flex. No minting/cost — the proof is the on-chain hold + the
+// caller-intel record.
+async function roomReceiptView(chatId, userId) {
+  let best = null;
+  try {
+    const store = await readTelegramCalls();
+    const mine = Object.values(store.calls || {}).filter((c) => String(c.callerId) === String(userId) && c.verified && Number(c.peakX) > 0);
+    mine.sort((a, b) => Number(b.peakX) - Number(a.peakX)); best = mine[0];
+  } catch {}
+  const back = { inline_keyboard: [[{ text: "⬅️ The Room", callback_data: "gb:go:room" }]] };
+  if (!best) return { text: "🧾 <b>Proof-of-Call</b>\n\nNo verified winning call yet. Join the board, then call a coin you're actually <b>holding</b> — when it 2x's, your provable receipt lands here to screenshot &amp; flex.", markup: back };
+  const lx = slimewireTokenLinks(best.mint);
+  return { text: [`🧾 <b>Proof-of-Call — verified ✅</b>`, `<b>$${escapeTelegramHtml(best.symbol || shortMint(best.mint))}</b> — called at ${scanFmtMoney(best.entryMc)} → peak <b>${best.peakX}x</b>`, `by <b>${escapeTelegramHtml(best.callerName || "you")}</b> · <i>held it on-chain when you called it</i>`, `<code>${escapeTelegramHtml(best.mint)}</code>`, `<a href="${lx.site}">Chart</a> · <a href="https://www.slimewire.org/proof">proof wall</a>`, "", "<i>Provably yours — you held what you called. Screenshot &amp; flex.</i>"].join("\n"), markup: back };
 }
 async function roomPnlView(chatId) {
   const store = await readRoomBoard();
@@ -29194,6 +29222,7 @@ async function handleRoomCallback(query, userId) {
   const ack = (t) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: true } : {}) }).catch(() => {});
   if (data === "room:pnl") { await roomRender(chatId, messageId, await roomPnlView(chatId)); await ack(); return true; }
   if (data === "room:callers") { await roomRender(chatId, messageId, await roomCallersView(chatId)); await ack(); return true; }
+  if (data === "room:receipt") { await roomRender(chatId, messageId, await roomReceiptView(chatId, userId)); await ack(); return true; }
   if (data === "room:join") { await setRoomOptIn(chatId, userId, query.from || {}, true); await roomRender(chatId, messageId, await roomPnlView(chatId)); await ack("✅ You're on the board — your realized SOL + verified calls now count."); return true; }
   if (data === "room:leave") { await setRoomOptIn(chatId, userId, query.from || {}, false); await roomRender(chatId, messageId, await roomPnlView(chatId)); await ack("You left the board."); return true; }
   await ack(); return true;
@@ -29329,6 +29358,123 @@ async function pollExitRadar() {
   finally { _exitRadarPolling = false; }
 }
 
+// ===== COPY-THE-ROOM'S-BEST — non-custodial mirror of a PROVEN room trader (not anon whales, which are -EV) =====
+// A follower picks a top trader from THIS room's PnL board; when that trader BUYS through SlimeWire, the
+// follower's OWN wallet auto-buys the same coin at a size THEY set. Off by default, capped, idempotent,
+// loop-proof (mirror buys are tagged source:"copy_room" and never re-mirror). Real accountability — you
+// know who you're copying and see their verified PnL.
+const COPY_MIN_SOL = 0.02, COPY_MAX_SOL = 5;
+const copyInputPending = new Map();
+function copyRoomPath() { return path.join(CONFIG.dataDir, "copy-room.json"); }
+let copyRoomCache = null;
+async function readCopyRoom() {
+  if (copyRoomCache) return copyRoomCache;
+  let s = null; try { s = await readJson(copyRoomPath()); } catch { s = null; }
+  if (!s || typeof s !== "object") s = {};
+  if (!s.follows || typeof s.follows !== "object") s.follows = {};   // followerId -> { targetId, targetName, chatId, amountSol, at }
+  copyRoomCache = s; return s;
+}
+async function writeCopyRoom(store) { copyRoomCache = store; await writeJsonFile(copyRoomPath(), store).catch(() => {}); }
+// Fired from recordTradeEvents: a FOLLOWED trader just bought → mirror it into each follower's OWN wallet.
+async function maybeCopyRoomBest(events) {
+  try {
+    const buys = (events || []).filter((e) => e && e.type === "buy" && e.userId && e.tokenMint && !/copy_room/.test(String(e.source || "")));
+    if (!buys.length) return;
+    const store = await readCopyRoom();
+    if (!Object.keys(store.follows).length) return;
+    const byTarget = new Map();
+    for (const [fid, f] of Object.entries(store.follows)) { if (!f || !f.targetId) continue; const t = String(f.targetId); if (!byTarget.has(t)) byTarget.set(t, []); byTarget.get(t).push({ followerId: fid, ...f }); }
+    let walletStore = null;
+    for (const ev of buys) {
+      const followers = byTarget.get(String(ev.userId)); if (!followers) continue;
+      if (!walletStore) walletStore = await readWalletStore();
+      for (const f of followers) {
+        if (String(f.followerId) === String(ev.userId)) continue;
+        void (async () => {
+          try {
+            const wallet = walletsForOwner(walletStore, f.followerId)[0]; if (!wallet) return;
+            const amt = Math.max(COPY_MIN_SOL, Math.min(COPY_MAX_SOL, Number(f.amountSol) || 0));
+            const result = await runIdempotentMoneyOp("copy-room", f.followerId, `${ev.userId}:${ev.tokenMint}:${ev.signature || ev.id || ""}`,
+              () => buyTokenForPlan(wallet, ev.tokenMint, solToLamports(amt), 1500, { trackTokenDelta: true, userId: f.followerId }));
+            await recordTradeEvents([{ userId: f.followerId, type: "buy", source: "copy_room", tokenMint: ev.tokenMint, walletLabel: wallet.label, walletPublicKey: wallet.publicKey, solLamportsSpent: String(result.amountLamports || solToLamports(amt)), tokenAmount: result.tokenDeltaAmount || result.outputAmount || null, signature: result.signature }]);
+            await sayHtml(f.followerId, `🪞 <b>Mirrored ${escapeTelegramHtml(f.targetName || "a room trader")}</b> into <code>${escapeTelegramHtml(shortMint(ev.tokenMint))}</code> for <b>◎${amt}</b> from your wallet. <a href="${slimewireTokenLinks(ev.tokenMint).site}">Chart / manage</a>`).catch(() => {});
+          } catch {}
+        })();
+      }
+    }
+  } catch {}
+}
+async function copyMenuView(chatId, followerId) {
+  const rb = await readRoomBoard();
+  const members = Object.entries((rb.rooms[String(chatId)] || {}).members || {}).filter(([uid]) => String(uid) !== String(followerId));
+  const cur = (await readCopyRoom()).follows[String(followerId)];
+  const trenchBack = [{ text: "⬅️ Trench", callback_data: "gb:m:trench" }];
+  if (!members.length) return { text: "🪞 <b>Copy the room's best</b>\n\nNobody's on the Room board here yet. Members open <b>The Room</b> and Join the board first — then you can mirror the top traders.", markup: { inline_keyboard: [[{ text: "🏆 Open The Room", callback_data: "gb:go:room" }], trenchBack] } };
+  const byUser = await roomRealizedByUser(members.map(([u]) => u));
+  const ranked = members.map(([uid, m]) => { const a = byUser.get(String(uid)) || { spent: 0n, received: 0n }; return { uid, name: m.name, sol: Number(a.received - a.spent) / 1e9 }; }).sort((a, b) => b.sol - a.sol).slice(0, 5);
+  const rows = ranked.map((r, i) => [{ text: `${["🥇", "🥈", "🥉"][i] || "•"} Mirror ${String(r.name).slice(0, 14)} (${r.sol >= 0 ? "+" : ""}${r.sol.toFixed(1)}◎)`, callback_data: `copy:t:${r.uid}` }]);
+  if (cur) rows.push([{ text: `💰 Amount: ◎${cur.amountSol}`, callback_data: "copy:amt" }, { text: "🚫 Stop copying", callback_data: "copy:stop" }]);
+  rows.push(trenchBack);
+  return { text: ["🪞 <b>Copy the room's best</b>", cur ? `You're mirroring <b>${escapeTelegramHtml(cur.targetName || "a trader")}</b> for <b>◎${cur.amountSol}</b> — when they buy, your OWN wallet auto-buys the same coin.` : "Pick a proven trader from this room's board. When they buy, your OWN wallet auto-buys the same coin at a size you set. Non-custodial, capped, opt out anytime.", "", "<i>High risk — you're auto-buying whatever they ape. Only your own funds.</i>"].join("\n"), markup: { inline_keyboard: rows } };
+}
+async function handleCopyCallback(query, userId) {
+  const data = String(query?.data || ""); if (!data.startsWith("copy:")) return false;
+  const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  const ack = (t) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: true } : {}) }).catch(() => {});
+  const store = await readCopyRoom();
+  const rerender = async () => { const v = await copyMenuView(chatId, userId); await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: v.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: v.markup }).catch(() => {}); };
+  const mt = data.match(/^copy:t:(\d+)$/);
+  if (mt) {
+    if (!walletsForOwner(await readWalletStore(), userId).length) { await ack("Create a wallet first (DM me → Wallet), then copy."); return true; }
+    const rb = await readRoomBoard(); const name = ((rb.rooms[String(chatId)] || {}).members || {})[mt[1]]?.name || shortMint(mt[1]);
+    const prev = store.follows[String(userId)] || {};
+    store.follows[String(userId)] = { targetId: mt[1], targetName: name, chatId: String(chatId), amountSol: Number(prev.amountSol) || 0.5, at: Date.now() };
+    await writeCopyRoom(store); await rerender(); await ack(`🪞 Mirroring ${name} for ◎${store.follows[String(userId)].amountSol}. Tap 💰 to change the size.`); return true;
+  }
+  if (data === "copy:amt") { copyInputPending.set(`${chatId}:${userId}`, { at: Date.now() }); await ack("Send the SOL amount to mirror each of their buys (e.g. 0.5)."); return true; }
+  if (data === "copy:stop") { delete store.follows[String(userId)]; await writeCopyRoom(store); await rerender(); await ack("Stopped copying."); return true; }
+  await ack(); return true;
+}
+async function applyCopyInput(message, userId) {
+  const pkey = `${message?.chat?.id}:${userId}`; const pend = copyInputPending.get(pkey); if (!pend) return false;
+  if (Date.now() - pend.at > 180000) { copyInputPending.delete(pkey); return false; }
+  const raw = String(message.text || "").trim(); if (!raw || raw.startsWith("/")) return false;
+  copyInputPending.delete(pkey);
+  const amt = Math.max(COPY_MIN_SOL, Math.min(COPY_MAX_SOL, Number(raw) || 0));
+  const store = await readCopyRoom(); const f = store.follows[String(userId)];
+  if (f) { f.amountSol = amt; await writeCopyRoom(store); await sayHtml(message.chat.id, `💰 Mirror amount set to <b>◎${amt}</b> per buy.`); }
+  else await say(message.chat.id, "Pick a trader to mirror first — /copy.");
+  return true;
+}
+
+// 🚀 LAUNCH ROOM — a dev's one-stop war room: it stitches the pieces we already have (Community Snipe +
+// Raid + The Room) into a single guided flow so a launch fires everywhere at once.
+function launchRoomView(chatId, snipe) {
+  const armed = Boolean(snipe && snipe.armed && snipe.creatorWallet);
+  return {
+    text: ["🚀 <b>Launch Room</b> — run your launch like a war room:", "", `1️⃣ <b>Community Snipe</b> — ${armed ? "🟢 armed, the room fires the instant you launch" : "⚪ not armed yet"}`, "2️⃣ <b>Raid</b> — <code>/raid &lt;your X post&gt;</code> rallies likes/RT the second you drop", "3️⃣ <b>The Room</b> — your buyers land on the live PnL board", "", "<i>Set the snipe below, drop your raid link, and announce — your community gets in at t=0 with you.</i>"].join("\n"),
+    markup: { inline_keyboard: [
+      [{ text: armed ? "🎯 Snipe ✅ armed" : "🎯 Set up Community Snipe", callback_data: "gb:go:snipe" }],
+      [{ text: "⚔️ Raid help", callback_data: "lr:raidhelp" }, { text: "🏆 The Room", callback_data: "gb:go:room" }],
+      [{ text: "📣 Announce launch", callback_data: "lr:announce" }],
+      [{ text: "⬅️ Trench", callback_data: "gb:m:trench" }]
+    ] }
+  };
+}
+async function handleLaunchRoomCallback(query, userId) {
+  const data = String(query?.data || ""); if (!data.startsWith("lr:")) return false;
+  const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  const ack = (t) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: true } : {}) }).catch(() => {});
+  if (data === "lr:raidhelp") { await ack("Drop /raid <your X post link> the second you launch — the swamp raids it live (likes, RT, replies) with no API key."); return true; }
+  if (data === "lr:announce") {
+    if (!(await isTgChatAdmin(chatId, userId))) { await ack("Only admins can announce the launch."); return true; }
+    const snipe = (await readCommunitySnipe()).snipes[String(chatId)];
+    await sayHtml(chatId, ["🚀 <b>LAUNCH INCOMING</b> 🚀", snipe?.armed ? "🎯 Community Snipe is <b>ARMED</b> — everyone who joined fires from their own wallet the instant it drops. <code>/snipe join 0.5</code> to get in." : "🎯 An admin can arm the Community Snipe (/snipe) so the room gets in at t=0.", "⚔️ Raiders ready — <code>/raid</code> the announce post.", "🏆 Track the room's PnL live: /room"].join("\n"));
+    await ack("Announced 🚀"); return true;
+  }
+  await ack(); return true;
+}
+
 // 🌀 NARRATIVE RADAR — cluster the last ~2h of launches by keyword to surface the ROTATING meta ("5 new
 // 'AI agent' coins in the last hour"). No bot reads the meta-level; single-coin scanners miss the wave.
 const NARRATIVE_STOP = new Set(["THE", "AND", "FOR", "SOL", "COIN", "TOKEN", "OFFICIAL", "PUMP", "MEME", "ON", "OF", "TO", "YOUR", "GET", "NEW"]);
@@ -29370,6 +29516,7 @@ function trenchMenuView() {
     markup: { inline_keyboard: [
       [{ text: "🎯 Community Snipe", callback_data: "gb:go:snipe" }],
       [{ text: "🏆 The Room", callback_data: "gb:go:room" }, { text: "📡 Signals", callback_data: "gb:go:signals" }],
+      [{ text: "🪞 Copy the Best", callback_data: "gb:go:copy" }, { text: "🚀 Launch Room", callback_data: "gb:go:launch" }],
       [{ text: "🏆 Leaderboard", callback_data: "gb:go:lb" }, { text: "🌀 Narrative Radar", callback_data: "gb:go:narrative" }],
       [{ text: "🎓 Graduation Gauntlet", callback_data: "gb:go:grad" }],
       [{ text: "⬅️ Back", callback_data: "gb:home" }, { text: "✓ Done", callback_data: "gb:close" }]
@@ -30773,6 +30920,8 @@ async function handleGroupBotCallback(query, userId) {
     else if (target === "lb") view = await buildCallerLeaderboardView("1w");
     else if (target === "narrative") view = narrativeRadarView();
     else if (target === "grad") view = await graduationGauntletView();
+    else if (target === "copy") view = await copyMenuView(chatId, userId);
+    else if (target === "launch") view = launchRoomView(chatId, (await readCommunitySnipe()).snipes[String(chatId)]);
     await csEdit(view); await ack(); return true;
   }
   // Everything below changes settings → admins only.
@@ -36248,6 +36397,7 @@ async function recordTradeEvents(events) {
     }
     await writeJsonFile(tradeHistoryPath(), store);
   });
+  void maybeCopyRoomBest(events).catch(() => {});   // 🪞 Copy-the-room's-best: mirror a followed trader's buy
 
   const hasWebBuyNeedingGuard = events.some((event) => (
     event?.type === "buy"

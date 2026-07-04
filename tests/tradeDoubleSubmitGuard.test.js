@@ -1281,3 +1281,30 @@ test("Narrative Radar reads the meta from recent launches; Graduation Gauntlet f
   assert.match(serverSource, /parseCommandWithArgument\(text, \["narrative", "meta"\]\)/);
   assert.match(serverSource, /parseCommandWithArgument\(text, \["grad", "graduation", "gauntlet"\]\)/);
 });
+
+// ---- Copy-the-room's-best + Launch Room + Proof-of-call (the rest, all in the Trench menu) ----
+test("Copy-the-room's-best mirrors a followed trader's buy into the follower's OWN wallet — loop-proof, capped", () => {
+  const m = functionBody(serverSource, "maybeCopyRoomBest");
+  assert.match(m, /!\/copy_room\/\.test\(String\(e\.source/);          // never mirror a mirror (loop-proof)
+  assert.match(m, /walletsForOwner\(walletStore, f\.followerId\)\[0\]/); // follower's OWN wallet
+  assert.match(m, /runIdempotentMoneyOp\("copy-room"/);                  // no double-mirror
+  assert.match(m, /COPY_MIN_SOL, Math\.min\(COPY_MAX_SOL/);              // capped
+  assert.match(m, /source: "copy_room"/);                                // tags the mirror buy
+  assert.match(serverSource, /void maybeCopyRoomBest\(events\)\.catch/); // hooked into recordTradeEvents
+});
+test("Launch Room + Proof-of-call are wired into the Trench menu", () => {
+  assert.match(functionBody(serverSource, "trenchMenuView"), /callback_data: "gb:go:copy"/);
+  assert.match(functionBody(serverSource, "trenchMenuView"), /callback_data: "gb:go:launch"/);
+  assert.match(serverSource, /target === "copy"\) view = await copyMenuView/);
+  assert.match(serverSource, /target === "launch"\) view = launchRoomView/);
+  // Launch Room announce is admin-gated
+  assert.match(functionBody(serverSource, "handleLaunchRoomCallback"), /isTgChatAdmin\(chatId, userId\)/);
+  // Proof-of-call shows only VERIFIED winning calls
+  assert.match(functionBody(serverSource, "roomReceiptView"), /c\.callerId\) === String\(userId\) && c\.verified/);
+  assert.match(serverSource, /data === "room:receipt"/);
+  // commands + dispatchers
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["copy", "mirror"\]\)/);
+  assert.match(serverSource, /startsWith\("copy:"\)/);
+  assert.match(serverSource, /startsWith\("lr:"\)/);
+  assert.match(serverSource, /await applyCopyInput\(message, userId\)/);
+});
