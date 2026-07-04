@@ -335,6 +335,28 @@ async function webLoadVanityPool(body = {}) {
 function vanityPoolStatus() {
   return { enabled: Boolean(vanityMintPool || ensureVanityPool()), suffix: CONFIG.launchVanitySuffix, count: vanityPoolFileKeyCount() };
 }
+// Low-pool watchdog: DM admins when the vanity (pump) pool drops below the threshold so pump-ending
+// mints never run dry mid-launch. Rate-limited to once per 6h so it nudges without nagging.
+let _lastVanityLowAlertAt = 0;
+async function pollVanityPoolLow() {
+  try {
+    if (!CONFIG.launchVanityEnabled) return;
+    const count = vanityPoolFileKeyCount();
+    if (count >= CONFIG.launchVanityPoolMin) return;
+    if (Date.now() - _lastVanityLowAlertAt < 6 * 60 * 60 * 1000) return;
+    _lastVanityLowAlertAt = Date.now();
+    const suffix = CONFIG.launchVanitySuffix;
+    const msg = [
+      `⚠️ <b>Vanity pool low</b> — only <b>${count}</b> "…${escapeTelegramHtml(suffix)}" mint${count === 1 ? "" : "s"} left.`,
+      `New launches fall back to a RANDOM mint once it's empty (no ${escapeTelegramHtml(suffix)} ending).`,
+      "",
+      `Refill: <code>solana-keygen grind --ends-with ${escapeTelegramHtml(suffix)}:100</code> (fast), or <code>node scripts/grind-vanity.mjs ${escapeTelegramHtml(suffix)} 100</code>, then load them with your owner key.`
+    ].join("\n");
+    for (const adminId of (CONFIG.adminUserIds || [])) {
+      await telegram("sendMessage", { chat_id: adminId, text: msg, parse_mode: "HTML", disable_web_page_preview: true }).catch(() => {});
+    }
+  } catch (e) { console.warn(`[vanity-low] ${e && e.message}`); }
+}
 
 // Persisted Meteora DBC config (created ONE-TIME in-app by the owner). Lets the Meteora rail work with
 // NO Render env editing: the rail uses METEORA_DBC_CONFIG_KEY if set, else this persisted config key,
@@ -4594,6 +4616,8 @@ function loadConfig() {
     launchVanityEnabled: parseBoolean(process.env.LAUNCH_VANITY_ENABLED || "false"),
     launchVanitySuffix: (process.env.LAUNCH_VANITY_SUFFIX || "SL1ME").trim(),
     launchVanityCaseInsensitive: parseBoolean(process.env.LAUNCH_VANITY_CASE_INSENSITIVE || "false"),
+    // Ping admins when the vanity pool runs low so pump-ending mints never run dry mid-launch.
+    launchVanityPoolMin: Math.max(1, Number.parseInt(process.env.LAUNCH_VANITY_POOL_MIN || "4", 10) || 4),
     // Meteora DBC rail (our own bonding curve, dev wallet = fee claimer). Dark until a real launch
     // certifies fee routing. METEORA_DBC_CONFIG_KEY = the on-chain config pubkey defining curve+fees.
     meteoraLaunchEnabled: parseBoolean(process.env.METEORA_LAUNCH_ENABLED || "false"),
@@ -32526,6 +32550,7 @@ function startGroupBuyBot() {
   setInterval(() => { void pollPlaysSignal(); }, 5 * 60_000); // 🎯 Top Plays — brain's best plays every ~2h + hot early-push (opt-in)
   setInterval(() => { void pollLimitOrders(); }, 30_000);    // ⏰ Limit orders — MC-triggered buy/sell auto-fire (opt-in, own wallet)
   setInterval(() => { void pollWeeklyCallerContest(); }, 60 * 60_000); // 🏆 Caller of the Week — Sunday crown for opted-in groups
+  setInterval(() => { void pollVanityPoolLow(); }, 20 * 60_000);       // ⚠️ ping admins when the pump-mint pool runs low
   void readCommunitySnipe().catch(() => {});                 // warm the armed-creator-wallet index so a snipe survives restart
 }
 

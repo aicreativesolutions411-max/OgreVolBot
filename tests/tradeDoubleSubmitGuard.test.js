@@ -1099,6 +1099,15 @@ test("don't-get-cooked: Jito anti-sandwich path + catastrophic price-impact guar
   assert.match(ord, /impact > CONFIG\.maxBuyPriceImpact/);
   assert.match(ord, /Blocked to protect you/);
 });
+test("vanity pool low-watchdog: DM admins before pump mints run dry", () => {
+  assert.match(serverSource, /launchVanityPoolMin: Math\.max\(1, Number\.parseInt\(process\.env\.LAUNCH_VANITY_POOL_MIN/);
+  assert.match(serverSource, /async function pollVanityPoolLow/);
+  assert.match(serverSource, /setInterval\(\(\) => \{ void pollVanityPoolLow\(\); \}/);
+  const p = functionBody(serverSource, "pollVanityPoolLow");
+  assert.match(p, /count >= CONFIG\.launchVanityPoolMin/);            // only fires when low
+  assert.match(p, /_lastVanityLowAlertAt < 6 \* 60 \* 60 \* 1000/);   // rate-limited
+  assert.match(p, /for \(const adminId of \(CONFIG\.adminUserIds/);   // DMs admins
+});
 test("smooth nav: DM sub-views carry a Main Menu button (no re-/start)", () => {
   for (const fn of ["showTelegramLinksMenu", "showTelegramPortfolioMenu", "showTelegramOgreToolsMenu", "showWalletMenu"]) {
     assert.match(functionBody(serverSource, fn), /callback_data: "main_menu"/, `${fn} needs Main Menu`);
