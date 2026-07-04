@@ -11534,6 +11534,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("qb:")) {
     if (await handleQuickBuyCallback(query, userId).catch(() => false)) return;
   }
+  // ⚙️ Buy presets (bp:*) — set the amounts your ⚡ buttons use.
+  if (String(query.data || "").startsWith("bp:")) {
+    if (await handleBuyPrefCallback(query, userId).catch(() => false)) return;
+  }
   // The Room menu (room:*) — verifiable PnL board + skin-in-the-game callers.
   if (String(query.data || "").startsWith("room:")) {
     if (await handleRoomCallback(query, userId).catch(() => false)) return;
@@ -12075,6 +12079,8 @@ async function handleMessage(message, userId) {
   if (await applyWtInput(message, userId).catch(() => false)) return;
   // ⚡ One-click buy: capture the custom SOL amount the user was prompted for (from a group ✏️ tap).
   if (await applyTgQuickBuyInput(message, userId).catch(() => false)) return;
+  // ⚙️ Buy presets: capture a typed preset amount.
+  if (await applyBuyPrefInput(message, userId).catch(() => false)) return;
   // Community Snipe: capture a typed amount / TP-SL / launch wallet the user was prompted for.
   if (await applyCsInput(message, userId).catch(() => false)) return;
   // Copy-the-room's-best: capture a typed mirror amount.
@@ -12319,6 +12325,13 @@ async function handleMessage(message, userId) {
       return;
     }
     await listWallets(chatId, userId);
+    return;
+  }
+
+  if (text === "/presets" || /^\/presets(?:@\w+)?$/i.test(text) || text === "/buypresets") {
+    if (!isPrivateChat(message.chat)) { await say(chatId, "Open the bot in DM to set your buy presets."); return; }
+    const v = buyPresetsMenu(userBuyPrefs(await readBuyPrefs(), userId));
+    await sayHtml(chatId, v.text, v.markup);
     return;
   }
 
@@ -29784,6 +29797,72 @@ async function fireCommunitySnipe(chatId, mint, symbol, name) {
 // OWN SlimeWire bot wallet, no site redirect. Reuses the proven buyTokenForPlan + idempotency path; the
 // receipt (with wallet) goes to the user's DM, never the group. No wallet → funnel to /start. ----
 const tgQuickBuyPending = new Map(); // userId -> { mint, at } (awaiting a custom SOL amount typed in DM)
+// Per-user BUY PRESETS (Trojan-style): the amounts your ⚡ buttons + your custom preset use. Set in DM.
+const DEFAULT_BUY_PRESETS = [0.5, 1, 2];
+function buyPrefsPath() { return path.join(CONFIG.dataDir, "buy-prefs.json"); }
+let buyPrefsCache = null;
+async function readBuyPrefs() {
+  if (buyPrefsCache) return buyPrefsCache;
+  let s = null; try { s = await readJson(buyPrefsPath()); } catch { s = null; }
+  if (!s || typeof s !== "object") s = {};
+  if (!s.users || typeof s.users !== "object") s.users = {};
+  buyPrefsCache = s; return s;
+}
+function userBuyPrefs(store, userId) {
+  const u = (store.users || {})[String(userId)] || {};
+  let presets = Array.isArray(u.presets) ? u.presets.map(Number).filter((n) => n > 0).slice(0, 3) : [];
+  if (!presets.length) presets = DEFAULT_BUY_PRESETS.slice();
+  while (presets.length < 3) presets.push(DEFAULT_BUY_PRESETS[presets.length]);
+  const custom = Number(u.custom) > 0 ? Number(u.custom) : 0.25;
+  return { presets, custom };
+}
+async function setBuyPref(userId, kind, value) {
+  const s = await readBuyPrefs();
+  const cur = userBuyPrefs(s, userId);
+  const u = { presets: cur.presets.slice(), custom: cur.custom };
+  const v = Math.max(0.001, Math.min(1000, Number(value) || 0));
+  if (kind === "custom") u.custom = v; else u.presets[Number(kind)] = v;
+  s.users[String(userId)] = u; buyPrefsCache = s;
+  await writeJsonFile(buyPrefsPath(), s).catch(() => {});
+  return u;
+}
+const buyPrefPending = new Map(); // userId -> { kind, at }
+function buyPresetsMenu(prefs) {
+  return {
+    text: ["⚙️ <b>Buy presets</b>", "The amounts your ⚡ one-tap buy buttons use (in your DMs) + your custom preset. Tap one to change it.", "", `⚡ <b>${prefs.presets[0]}◎</b> · <b>${prefs.presets[1]}◎</b> · <b>${prefs.presets[2]}◎</b>   ✏️ custom <b>${prefs.custom}◎</b>`].join("\n"),
+    markup: { inline_keyboard: [
+      [{ text: `1️⃣ ${prefs.presets[0]}◎`, callback_data: "bp:set:0" }, { text: `2️⃣ ${prefs.presets[1]}◎`, callback_data: "bp:set:1" }, { text: `3️⃣ ${prefs.presets[2]}◎`, callback_data: "bp:set:2" }],
+      [{ text: `✏️ Custom: ${prefs.custom}◎`, callback_data: "bp:set:custom" }],
+      [{ text: "✓ Done", callback_data: "gb:close" }]
+    ] }
+  };
+}
+async function handleBuyPrefCallback(query, userId) {
+  const data = String(query?.data || ""); if (!data.startsWith("bp:")) return false;
+  const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  const ack = (t, a) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: Boolean(a) } : {}) }).catch(() => {});
+  if (data === "bp:menu") {
+    const v = buyPresetsMenu(userBuyPrefs(await readBuyPrefs(), userId));
+    if (messageId && isPrivateChat(query.message?.chat)) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: v.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: v.markup }).catch(() => {});
+    else await sayHtml(userId, v.text, v.markup).catch(() => {});
+    await ack(); return true;
+  }
+  const m = data.match(/^bp:set:(0|1|2|custom)$/);
+  if (m) { buyPrefPending.set(String(userId), { kind: m[1], at: Date.now() }); await ack("Send the SOL amount (e.g. 0.5).", true); await sayHtml(userId, `⚙️ Send the new SOL amount for <b>${m[1] === "custom" ? "your custom preset" : "preset " + (Number(m[1]) + 1)}</b> (e.g. <b>0.75</b>).`).catch(() => {}); return true; }
+  await ack(); return true;
+}
+async function applyBuyPrefInput(message, userId) {
+  const pend = buyPrefPending.get(String(userId)); if (!pend) return false;
+  if (Date.now() - pend.at > 180000) { buyPrefPending.delete(String(userId)); return false; }
+  const raw = String(message.text || "").trim(); if (!raw || raw.startsWith("/")) return false;
+  const v = Number(raw.replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(v) || v <= 0) { await say(message.chat.id, "Send just the SOL amount, e.g. 0.5"); return true; }
+  buyPrefPending.delete(String(userId));
+  await setBuyPref(userId, pend.kind, v);
+  const menu = buyPresetsMenu(userBuyPrefs(await readBuyPrefs(), userId));
+  await sayHtml(message.chat.id, "✅ Saved.\n" + menu.text, menu.markup).catch(() => {});
+  return true;
+}
 async function tgExecuteQuickBuy(userId, mint, amountSol) {
   try {
     const st = await readState().catch(() => null);
@@ -29804,17 +29883,22 @@ async function tgExecuteQuickBuy(userId, mint, amountSol) {
     return { ok: Boolean(result), result, wallet, amt };
   } catch (e) { return { ok: false, why: (friendlyError ? friendlyError(e) : (e && e.message)) || "buy failed" }; }
 }
-// DM receipt keyboard — buy more + sell/manage, so the user runs the whole position from Telegram.
-function quickBuyReceiptKeyboard(mint) {
+// DM receipt keyboard — YOUR preset amounts (buy more) + sell/manage, so you run the whole position from
+// Telegram. Chart always opens the SlimeWire chart site (a path into the site as well as the bot).
+async function quickBuyReceiptKeyboard(mint, userId) {
   const lx = slimewireTokenLinks(mint);
+  const { presets, custom } = userBuyPrefs(await readBuyPrefs(), userId);
+  const buyRow = presets.map((a) => ({ text: `⚡ ${a}◎`, callback_data: `qb:${a}:${mint}` }));
+  buyRow.push({ text: `✏️ ${custom}◎`, callback_data: `qb:${custom}:${mint}` });
   return { inline_keyboard: [
-    [{ text: "⚡ Buy ◎0.5", callback_data: `qb:0.5:${mint}` }, { text: "⚡ ◎1", callback_data: `qb:1:${mint}` }, { text: "✏️ Amount", callback_data: `qb:x:${mint}` }],
-    [{ text: "🔴 Sell / manage", url: lx.site }, { text: "📈 Chart", url: lx.site }]
+    buyRow,
+    [{ text: "🔴 Sell / manage", url: lx.site }, { text: "📈 SlimeWire chart", url: lx.site }],
+    [{ text: "⚙️ Buy presets", callback_data: "bp:menu" }]
   ] };
 }
 async function quickBuySendReceipt(userId, mint, amt) {
   const lx = slimewireTokenLinks(mint);
-  await sayHtml(userId, [`⚡ <b>Bought ◎${amt}</b> of <code>${escapeTelegramHtml(mint)}</code> from your SlimeWire wallet.`, `<a href="${lx.site}">Chart · sell · manage →</a>`, "", "<i>Buy more or sell right here:</i>"].join("\n"), quickBuyReceiptKeyboard(mint)).catch(() => {});
+  await sayHtml(userId, [`⚡ <b>Bought ◎${amt}</b> of <code>${escapeTelegramHtml(mint)}</code> from your SlimeWire wallet.`, `<a href="${lx.site}">Chart · sell · manage →</a>`, "", "<i>Buy more (your presets) or sell right here:</i>"].join("\n"), await quickBuyReceiptKeyboard(mint, userId)).catch(() => {});
 }
 async function handleQuickBuyCallback(query, userId) {
   const data = String(query?.data || ""); if (!data.startsWith("qb:")) return false;
@@ -29831,7 +29915,7 @@ async function handleQuickBuyCallback(query, userId) {
   if (!m) { await ack(); return true; }
   const amt = m[1], mint = m[2];
   const r = await tgExecuteQuickBuy(userId, mint, amt);
-  if (r.needWallet) { await ack("You need a SlimeWire wallet first — DM me /start to make one free (10s), then tap Buy again.", true); return true; }
+  if (r.needWallet) { await ack("Make a free SlimeWire wallet first — DM me /start (10s, no sign-up). Same wallet works on slimewire.org via /web. Then tap Buy.", true); return true; }
   if (!r.ok) { await ack(`Buy didn't land: ${r.why || "try again in a sec"}.`, true); return true; }
   await ack(`⚡ Bought ◎${amt}! Receipt + sell controls sent to your DM.`, true);
   await quickBuySendReceipt(userId, mint, amt);
@@ -31311,16 +31395,24 @@ const groupBuyMarkup = (mint, socials = {}) => {
   // Chart + Buy point at the NEW terminal (the ?token= deep-link opens the coin's
   // chart+buy view), matching the scan card — not the old chart-lab / /t layout.
   const links = slimewireTokenLinks(mint);
+  // ⚡ ONE-CLICK: tap = instant buy from your own SlimeWire bot wallet (no wallet → /start funnel). Same
+  // as the scan card. 📊 Chart always opens the SlimeWire chart site (a path into the site + the bot).
+  const qbRow = [
+    { text: "⚡ 0.5◎", callback_data: `qb:0.5:${mint}` },
+    { text: "⚡ 1◎", callback_data: `qb:1:${mint}` },
+    { text: "⚡ 2◎", callback_data: `qb:2:${mint}` },
+    { text: "✏️", callback_data: `qb:x:${mint}` }
+  ];
   const row1 = [
-    { text: "📊 Chart", url: links.site },
-    { text: "💲 Buy", url: links.siteBuy },
+    { text: "📊 SlimeWire Chart", url: links.site },
+    { text: "🌐 Buy on site", url: links.siteBuy },
     { text: "👍 Vote", url: `https://dexscreener.com/solana/${mint}` }
   ];
   const row2 = [];
   if (socials.tg) row2.push({ text: "✈️ TG", url: socials.tg });
   if (socials.x) row2.push({ text: "𝕏", url: socials.x });
   if (socials.web) row2.push({ text: "🌐 Web", url: socials.web });
-  return { inline_keyboard: row2.length ? [row1, row2] : [row1] };
+  return { inline_keyboard: row2.length ? [qbRow, row1, row2] : [qbRow, row1] };
 };
 function buyBondingBar(pct, n = 12) { pct = Math.max(0, Math.min(100, Number(pct) || 0)); const f = Math.round(pct / 100 * n); return "▰".repeat(f) + "▱".repeat(Math.max(0, n - f)); }
 // Buy cards reuse the full scan (bonding %, socials, MC, DEX-paid, image) — cached 30s so a burst of

@@ -749,10 +749,11 @@ test("buy card Chart/Buy open the NEW terminal (not old chart-lab / /t)", () => 
   // groupBuyMarkup is an arrow const, so slice its region directly.
   const i = serverSource.indexOf("const groupBuyMarkup =");
   assert.notEqual(i, -1, "groupBuyMarkup missing");
-  const mk = serverSource.slice(i, i + 600);
+  const mk = serverSource.slice(i, i + 1100);
   assert.match(mk, /slimewireTokenLinks\(mint\)/);
-  assert.match(mk, /url: links\.site\b/);       // Chart -> new terminal
-  assert.match(mk, /url: links\.siteBuy\b/);    // Buy   -> new terminal (buy view)
+  assert.match(mk, /url: links\.site\b/);       // Chart -> SlimeWire chart site
+  assert.match(mk, /url: links\.siteBuy\b/);    // site Buy fallback -> new terminal
+  assert.match(mk, /callback_data: `qb:0\.5:\$\{mint\}`/);  // ⚡ one-click buy row on the Buy Bot card too
   assert.doesNotMatch(mk, /chart-lab\?ca=/);    // old chart-page URL gone
   assert.doesNotMatch(mk, /url: groupBuyQuickBuyUrl/); // old /t redirect gone
 });
@@ -942,6 +943,15 @@ test("⚡ one-click group buy fires from the tapper's OWN wallet, idempotent, re
   assert.match(functionBody(serverSource, "slimeScanKeyboard"), /callback_data: `qb:0\.5:\$\{mint\}`/);
   assert.match(serverSource, /startsWith\("qb:"\)/);
   assert.match(serverSource, /applyTgQuickBuyInput\(message, userId\)/);
+});
+test("per-user BUY PRESETS: settable in DM, drive the DM receipt's ⚡ buttons + a custom preset", () => {
+  assert.match(serverSource, /DEFAULT_BUY_PRESETS = \[0\.5, 1, 2\]/);
+  assert.match(functionBody(serverSource, "setBuyPref"), /writeJsonFile\(buyPrefsPath\(\)/);
+  assert.match(functionBody(serverSource, "quickBuyReceiptKeyboard"), /userBuyPrefs\(await readBuyPrefs\(\), userId\)/); // receipt uses YOUR presets
+  assert.match(functionBody(serverSource, "quickBuyReceiptKeyboard"), /callback_data: `qb:\$\{custom\}:\$\{mint\}`/);     // custom preset one-tap
+  assert.match(serverSource, /startsWith\("bp:"\)/);                        // presets menu routed
+  assert.match(serverSource, /applyBuyPrefInput\(message, userId\)/);       // typed input wired
+  assert.match(serverSource, /text === "\/presets"/);                       // command
 });
 
 // ---- Shared scammer database: CAS (cas.chat) + SlimeWire cross-group ban list ----
