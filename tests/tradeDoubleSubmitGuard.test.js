@@ -1161,3 +1161,30 @@ test("groups on Alpha Radar get network-backed runners INSTEAD of the short-term
   assert.match(serverSource, /if \(groupBotFeatureOn\(e, "alphaRadar"\)\) alphaRadarGroups\.add\(String\(cid\)\)/);
   assert.match(serverSource, /if \(alphaRadarGroups\.has\(String\(chatId\)\)\) continue;/); // skip the alpha-drop for them
 });
+
+// ---- Community Snipe: non-custodial group launch snipe (own wallets, no pool, no obfuscation) ----
+test("community snipe fires each member's OWN wallet — never a shared pool", () => {
+  const fire = functionBody(serverSource, "fireCommunitySnipe");
+  assert.match(fire, /walletsForOwner\(walletStore, userId\)/);   // each member's own wallet
+  assert.match(fire, /buyTokenForPlan\(wallet, mint, amountLamports/);
+  assert.match(fire, /runIdempotentMoneyOp\("community-snipe"/);   // idempotent per member+mint (no double-buy)
+  assert.doesNotMatch(fire, /pool|sharedWallet|combined/i);        // NO pooling
+  // fire-once: mark fired + disarm BEFORE executing
+  assert.match(fire, /snipe\.fired = \{ mint, at: Date\.now\(\) \}; snipe\.armed = false;/);
+});
+test("community snipe is keyed on the creator wallet (unspoofable), armed index drops on fire", () => {
+  const m = functionBody(serverSource, "maybeCommunitySnipe");
+  assert.match(m, /entry\.event\.traderPublicKey/);                // the dev's launch wallet — follows the wallet
+  assert.match(m, /communitySnipeArmed\.get\(String\(creator\)\)/);
+  assert.match(m, /communitySnipeArmed\.delete\(String\(creator\)\)/); // fire once
+  assert.match(serverSource, /try \{ maybeCommunitySnipe\(entry\); \} catch \{\}/); // wired into onCreation
+});
+test("community snipe: admin-gated setup, optional presets, opt-out alert mode", () => {
+  const cmd = functionBody(serverSource, "handleCommunitySnipeCommand");
+  assert.match(cmd, /isTgChatAdmin\(chatId, userId\)/);            // admin-gated arm/wallet
+  assert.match(cmd, /mode: "auto"/);                               // auto-buy with optional TP/SL
+  assert.match(cmd, /mode: "alert"/);                              // opt out of auto-buy, just get pinged
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["snipe", "communitysnipe", "csnipe"\]\)/);
+  // alert-only members get a DM buy card instead of an auto-buy
+  assert.match(functionBody(serverSource, "fireCommunitySnipe"), /m\.mode === "alert"/);
+});
