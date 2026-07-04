@@ -959,11 +959,43 @@ test("DM terminal hub: trading-first main menu + Settings (presets + slippage), 
   assert.match(menu, /callback_data: "positions_overview"/);      // sell & positions
   assert.match(menu, /callback_data: "settings_menu"/);
   assert.match(menu, /callback_data: "launch_coin"/);             // our tool
-  assert.match(menu, /callback_data: "ogre_ai_menu"/);           // our tool
+  assert.match(menu, /callback_data: "dm_signals"/);              // alerts
+  assert.match(menu, /callback_data: "sniper_menu"/);             // sniper & copy
+  // Lean trading-first menu: Ogre A.I. + Live Pairs/Scans + top-level App/Web are removed
+  // (App/Web live under 🔗 Links now; pairs/scans are a richer experience on the site/app).
+  assert.doesNotMatch(menu, /callback_data: "ogre_ai_menu"/);
+  assert.doesNotMatch(menu, /callback_data: "market_intel_menu"/);
+  assert.doesNotMatch(menu, /callback_data: "web_portal"/);
+  // App + Web App both live inside the Links submenu instead.
+  assert.match(functionBody(serverSource, "showTelegramLinksMenu"), /text: "📲 Get the App"/);
+  assert.match(functionBody(serverSource, "showTelegramLinksMenu"), /callback_data: "web_portal"/);
   // Settings hub = per-user slippage + presets; the quick-buy USES the user's slippage
   assert.match(serverSource, /SLIP_TIERS = \[300, 500, 1000, 1500, 2500\]/);
   assert.match(functionBody(serverSource, "tgExecuteQuickBuy"), /userBuyPrefs\(await readBuyPrefs\(\), userId\)\.slippageBps/);
   assert.match(serverSource, /startsWith\("st:"\)/);
+});
+test("in-DM one-tap SELL (qs:*): own-wallet, idempotent, on the receipt + positions", () => {
+  // routed in the dispatcher alongside qb:
+  assert.match(serverSource, /startsWith\("qs:"\)/);
+  assert.match(serverSource, /handleQuickSellCallback\(query, userId\)/);
+  const sell = functionBody(serverSource, "tgExecuteQuickSell");
+  assert.match(sell, /walletsForOwner\(await readWalletStore\(\), userId\)/);   // the tapper's OWN wallets
+  assert.match(sell, /sellTokenFromWallet\(w, mint, pct, slippageBps/);          // real sell money-path
+  assert.match(sell, /runIdempotentMoneyOp\("tg-quick-sell"/);                   // double-tap-proof
+  assert.match(sell, /type: "sell", source: "tg-quick-sell"/);                   // recorded for PnL
+  // the DM buy receipt now carries in-chat sell buttons (25/50/100%) + Main Menu
+  const rk = functionBody(serverSource, "quickBuyReceiptKeyboard");
+  assert.match(rk, /callback_data: `qs:100:\$\{mint\}`/);
+  assert.match(rk, /callback_data: "main_menu"/);
+  // positions overview has per-coin one-tap sell
+  assert.match(functionBody(serverSource, "showPositionsOverview"), /callback_data: `qs:100:\$\{position\.tokenMint\}`/);
+});
+test("smooth nav: DM sub-views carry a Main Menu button (no re-/start)", () => {
+  for (const fn of ["showTelegramLinksMenu", "showTelegramPortfolioMenu", "showTelegramOgreToolsMenu", "showWalletMenu"]) {
+    assert.match(functionBody(serverSource, fn), /callback_data: "main_menu"/, `${fn} needs Main Menu`);
+  }
+  // the buy prompt + DM signals menu got Main Menu buttons too
+  assert.match(serverSource, /🟢 <b>Buy any coin<\/b>[\s\S]{0,400}?callback_data: "main_menu"/);
 });
 
 // ---- Shared scammer database: CAS (cas.chat) + SlimeWire cross-group ban list ----

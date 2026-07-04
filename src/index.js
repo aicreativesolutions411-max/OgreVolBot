@@ -3944,15 +3944,15 @@ const BRAND_FOOTER = [
 const APP_INSTALL_URL = `${(CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/$/, "")}/install`;
 
 // Recognized trading-terminal layout — the actions people expect front-and-centre, PLUS our own tools
-// (Launch, Volume Bot, Ogre A.I.) that other bots don't have. Each button routes to an existing handler.
+// (Launch, Volume Bot, Sniper/Copy) that other bots don't have. Each button routes to an existing handler.
+// Kept lean and trading-first: live pairs/scans + the app/web links live one tap deeper (📈 charts &
+// pairs are a richer experience on the site/app; 🔗 Links holds both). Signals covers alerts.
 const PUBLIC_MENU = [
   [{ text: "🟢 Buy", callback_data: "buy_prompt" }, { text: "🔴 Sell & Positions", callback_data: "positions_overview" }],
   [{ text: "👛 Wallet", callback_data: "wallet_menu" }, { text: "⚙️ Settings", callback_data: "settings_menu" }],
-  [{ text: "📊 Live Pairs & Scans", callback_data: "market_intel_menu" }, { text: "🎯 Signals", callback_data: "dm_signals" }],
+  [{ text: "🎯 Signals", callback_data: "dm_signals" }, { text: "🕵️ Sniper & Copy", callback_data: "sniper_menu" }],
   [{ text: "🚀 Launch a Coin", callback_data: "launch_coin" }, { text: "📈 Volume Bot", callback_data: "ogre_tools_menu" }],
-  [{ text: "🤖 Ogre A.I.", callback_data: "ogre_ai_menu" }, { text: "🕵️ Sniper & Copy", callback_data: "sniper_menu" }],
   [{ text: "💰 Portfolio & PnL", callback_data: "portfolio_menu" }, { text: "🔗 Links & More", callback_data: "links_menu" }],
-  [{ text: "📲 Get the App", url: APP_INSTALL_URL }, { text: "🌐 Web App", callback_data: "web_portal" }],
   [{ text: "❓ How To Use", callback_data: "quick_start" }]
 ];
 
@@ -11544,6 +11544,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("qb:")) {
     if (await handleQuickBuyCallback(query, userId).catch(() => false)) return;
   }
+  // 🔴 One-tap sell (qs:*) — sell 25/50/100% of a coin from the tapper's own wallets, in-DM.
+  if (String(query.data || "").startsWith("qs:")) {
+    if (await handleQuickSellCallback(query, userId).catch(() => false)) return;
+  }
   // ⚙️ Buy presets (bp:*) — set the amounts your ⚡ buttons use.
   if (String(query.data || "").startsWith("bp:")) {
     if (await handleBuyPrefCallback(query, userId).catch(() => false)) return;
@@ -11711,7 +11715,12 @@ async function handleCallback(query, userId) {
       await showMenu(chatId, userId, messageId);
       break;
     case "buy_prompt":
-      await sayHtml(chatId, "🟢 <b>Buy any coin</b>\n\nPaste its <b>contract address</b> here and I'll pull up the chart + one-tap buy. Your amounts are under ⚙️ Settings → 🎚 Buy presets.");
+      await sayHtml(chatId, "🟢 <b>Buy any coin</b>\n\nPaste its <b>contract address</b> here and I'll pull up the chart + one-tap buy. Your amounts are under ⚙️ Settings → 🎚 Buy presets.", {
+        inline_keyboard: [
+          [{ text: "⚙️ Buy presets", callback_data: "bp:menu" }, { text: "💰 Positions", callback_data: "positions_overview" }],
+          [{ text: "🏠 Main Menu", callback_data: "main_menu" }]
+        ]
+      });
       break;
     case "settings_menu": {
       const v = dmSettingsMenu(userBuyPrefs(await readBuyPrefs(), userId));
@@ -21428,10 +21437,11 @@ async function showPositionsOverview(chatId, userId, messageId = null) {
   const keyboard = [
     [{ text: "Buy", callback_data: "batch_buy" }, { text: "Sell & Manage", callback_data: "batch_sell" }],
     [{ text: "Refresh", callback_data: "positions_overview" }],
-    ...positions.slice(0, 5).map((position, index) => ([{
-      text: `Dex ${index + 1}: ${shortMint(position.tokenMint)}`,
-      url: dexScreenerUrl(position.tokenMint)
-    }])),
+    // Per-coin one-tap SELL (100% of that position across your wallets) + its chart. In-DM, no redirect.
+    ...positions.slice(0, 5).map((position, index) => ([
+      { text: `🔴 Sell ${index + 1}: ${shortMint(position.tokenMint)}`, callback_data: `qs:100:${position.tokenMint}` },
+      { text: "📈", url: dexScreenerUrl(position.tokenMint) }
+    ])),
     [{ text: "PnL / Results", callback_data: "pnl_results" }, { text: "Main Menu", callback_data: "main_menu" }]
   ];
 
@@ -29452,7 +29462,7 @@ async function signalsMenu(chatId, userId, isDm) {
         [{ text: `🎯 Top Plays  ${pl ? "✅ ON" : "◻️ off"}`, callback_data: "sig:plays" }],
         [{ text: `🚪 Exit Radar  ${ex ? "✅ ON" : "◻️ off"}`, callback_data: "sig:exit" }],
         [{ text: `🕵️ Alpha Radar  ${al ? "✅ ON" : "◻️ off"}`, callback_data: "sig:alpha" }],
-        [{ text: "✓ Done", callback_data: "gb:close" }]
+        [{ text: "🏠 Main Menu", callback_data: "main_menu" }]
       ] }
     };
   }
@@ -29952,8 +29962,14 @@ async function quickBuyReceiptKeyboard(mint, userId) {
   buyRow.push({ text: `✏️ ${custom}◎`, callback_data: `qb:${custom}:${mint}` });
   return { inline_keyboard: [
     buyRow,
-    [{ text: "🔴 Sell / manage", url: lx.site }, { text: "📈 SlimeWire chart", url: lx.site }],
-    [{ text: "⚙️ Buy presets", callback_data: "bp:menu" }]
+    // In-DM one-tap SELL — no site redirect. Sells that % of this coin across your SlimeWire wallets.
+    [
+      { text: "🔴 Sell 25%", callback_data: `qs:25:${mint}` },
+      { text: "🔴 50%", callback_data: `qs:50:${mint}` },
+      { text: "🔴 100%", callback_data: `qs:100:${mint}` }
+    ],
+    [{ text: "📈 SlimeWire chart", url: lx.site }, { text: "⚙️ Presets", callback_data: "bp:menu" }],
+    [{ text: "💰 Positions", callback_data: "positions_overview" }, { text: "🏠 Main Menu", callback_data: "main_menu" }]
   ] };
 }
 async function quickBuySendReceipt(userId, mint, amt) {
@@ -29995,6 +30011,63 @@ async function applyTgQuickBuyInput(message, userId) {
   if (r.needWallet) { await say(message.chat.id, "Make a wallet first — /start."); return true; }
   if (!r.ok) { await say(message.chat.id, `Buy didn't land: ${r.why || "try again"}.`); return true; }
   await quickBuySendReceipt(userId, pend.mint, amt);
+  return true;
+}
+
+// ⚡ In-DM one-tap SELL — sells `pct`% of a mint across ALL the user's SlimeWire wallets that hold it,
+// straight from Telegram (no site redirect). Mirrors tgExecuteQuickBuy: own wallets, own pre-authorized
+// action, idempotent per 15s bucket so a double-tap can't double-sell. Advisory nothing — the user tapped.
+async function tgExecuteQuickSell(userId, mint, pct) {
+  try {
+    const st = await readState().catch(() => null);
+    if (st && st.paused) return { ok: false, why: "trading is paused right now" };
+    const wallets = walletsForOwner(await readWalletStore(), userId);
+    if (!wallets || !wallets.length) return { ok: false, needWallet: true };
+    const slippageBps = userBuyPrefs(await readBuyPrefs(), userId).slippageBps;
+    const holders = [];
+    for (const w of wallets) {
+      try { if ((await walletTokenUiBalance(w.publicKey, mint)) > 0) holders.push(w); } catch (_) {}
+    }
+    if (!holders.length) return { ok: false, why: "you don't hold this coin in your SlimeWire wallets" };
+    let soldLamports = 0n, ok = 0, fails = 0;
+    for (const w of holders) {
+      const attemptId = `${mint}:${pct}:${w.publicKey}:${Math.floor(Date.now() / 15000)}`;
+      try {
+        const r = await runIdempotentMoneyOp("tg-quick-sell", userId, attemptId,
+          () => sellTokenFromWallet(w, mint, pct, slippageBps, { userId, priority: true }));
+        if (r) {
+          ok += 1;
+          const net = BigInt(r.outputLamports || 0) - BigInt(r.feeLamports || 0);
+          const keep = net > 0n ? net : 0n;
+          soldLamports += keep;
+          await recordTradeEvents([{ userId, type: "sell", source: "tg-quick-sell", tokenMint: mint, walletLabel: w.label, walletPublicKey: w.publicKey, solLamportsReceived: String(keep), ...(r.tokenAmount != null ? { tokenAmount: String(r.tokenAmount) } : {}), signature: r.signature }]).catch(() => {});
+        }
+      } catch (_) { fails += 1; }
+    }
+    return { ok: ok > 0, okCount: ok, fails, soldLamports, pct };
+  } catch (e) { return { ok: false, why: (friendlyError ? friendlyError(e) : (e && e.message)) || "sell failed" }; }
+}
+async function tgQuickSellReceipt(userId, mint, r) {
+  const lx = slimewireTokenLinks(mint);
+  const sol = lamportsBigToSol(r.soldLamports || 0n);
+  await sayHtml(userId, [
+    `🔴 <b>Sold ${r.pct}%</b> of <code>${escapeTelegramHtml(mint)}</code> — ~<b>◎${sol}</b> back to your wallet${r.fails ? ` (${r.fails} wallet(s) skipped)` : ""}.`,
+    `<a href="${lx.site}">Chart · positions →</a>`,
+    "",
+    "<i>Sell more, buy back, or check positions:</i>"
+  ].join("\n"), await quickBuyReceiptKeyboard(mint, userId)).catch(() => {});
+}
+async function handleQuickSellCallback(query, userId) {
+  const data = String(query?.data || ""); if (!data.startsWith("qs:")) return false;
+  const ack = (t, alert) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: Boolean(alert) } : {}) }).catch(() => {});
+  const m = data.match(/^qs:(25|50|100):([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+  if (!m) { await ack(); return true; }
+  const pct = Number(m[1]), mint = m[2];
+  const r = await tgExecuteQuickSell(userId, mint, pct);
+  if (r.needWallet) { await ack("Make a free SlimeWire wallet first — DM me /start (10s, no sign-up).", true); return true; }
+  if (!r.ok) { await ack(`Sell didn't land: ${r.why || "try again in a sec"}.`, true); return true; }
+  await ack(`🔴 Sold ${pct}% — ~◎${lamportsBigToSol(r.soldLamports || 0n)} in. Receipt in your DM.`, true);
+  await tgQuickSellReceipt(userId, mint, r);
   return true;
 }
 
