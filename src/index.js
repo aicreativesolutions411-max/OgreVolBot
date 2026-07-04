@@ -11563,6 +11563,11 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("wf:")) {
     if (await handleWinFlexCallback(query, userId).catch(() => false)) return;
   }
+  // 📊 Live position card (pos:<mint>) — one-coin manage card w/ in-place refresh.
+  {
+    const md = String(query.data || "").match(/^pos:([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+    if (md) { await telegram("answerCallbackQuery", { callback_query_id: query.id }).catch(() => {}); await showPositionCard(query.message?.chat?.id, userId, md[1], query.message?.message_id).catch(() => {}); return; }
+  }
   // ⚙️ Buy presets (bp:*) — set the amounts your ⚡ buttons use.
   if (String(query.data || "").startsWith("bp:")) {
     if (await handleBuyPrefCallback(query, userId).catch(() => false)) return;
@@ -21493,10 +21498,10 @@ async function showPositionsOverview(chatId, userId, messageId = null) {
   const keyboard = [
     [{ text: "Buy", callback_data: "batch_buy" }, { text: "Sell & Manage", callback_data: "batch_sell" }],
     [{ text: "Refresh", callback_data: "positions_overview" }],
-    // Per-coin one-tap SELL (100% of that position across your wallets) + its chart. In-DM, no redirect.
+    // Per-coin: open a live manage card (entry/value/PnL + sell ladder + TP) or one-tap sell 100%.
     ...positions.slice(0, 5).map((position, index) => ([
-      { text: `🔴 Sell ${index + 1}: ${shortMint(position.tokenMint)}`, callback_data: `qs:100:${position.tokenMint}` },
-      { text: "📈", url: dexScreenerUrl(position.tokenMint) }
+      { text: `📊 ${index + 1}: ${shortMint(position.tokenMint)}`, callback_data: `pos:${position.tokenMint}` },
+      { text: "🔴 Sell", callback_data: `qs:100:${position.tokenMint}` }
     ])),
     [{ text: "PnL / Results", callback_data: "pnl_results" }, { text: "Main Menu", callback_data: "main_menu" }]
   ];
@@ -21504,6 +21509,39 @@ async function showPositionsOverview(chatId, userId, messageId = null) {
   await sendOrEditMessage(chatId, targetMessageId, withBrandFooter(["Positions Overview", "Current holdings only.", `Updated in ${((Date.now() - started) / 1000).toFixed(1)}s.`, ...rows].join("\n\n")), {
     inline_keyboard: keyboard
   });
+}
+// 📊 Live per-coin manage card — one coin, all the numbers that matter (spent · live value · unrealized
+// PnL% · balance · MC) + a full buy/sell/TP control row + a 🔄 that re-renders IN PLACE. This is the
+// "live position card" (edit-in-place refresh rather than a background poll that would spam/rate-limit).
+async function showPositionCard(chatId, userId, mint, messageId = null) {
+  const info = await alphaRadarFetchMc(mint).catch(() => null);
+  const sym = (info && info.sym) ? `$${escapeTelegramHtml(info.sym)}` : `<code>${escapeTelegramHtml(shortMint(mint))}</code>`;
+  const positions = await buildPositionsOverview(userId).catch(() => []);
+  const p = (positions || []).find((x) => x.tokenMint === mint);
+  const lx = slimewireTokenLinks(mint);
+  const ctrls = [
+    ...(await quickBuyReceiptKeyboard(mint, userId)).inline_keyboard.slice(0, 3), // buy row + sell ladder + TP/limit/chart
+    [{ text: "🔄 Refresh", callback_data: `pos:${mint}` }, { text: "💰 Positions", callback_data: "positions_overview" }],
+    [{ text: "🏠 Main Menu", callback_data: "main_menu" }]
+  ];
+  if (!p) {
+    const text = [`📊 <b>${sym}</b>${info && info.mc > 0 ? ` · MC ${fmtMc(info.mc)}` : ""}`, "", "You're not holding this coin in your SlimeWire wallets right now.", `<a href="${lx.site}">Chart →</a>`].join("\n");
+    if (messageId) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: { inline_keyboard: ctrls } }).catch(() => {});
+    else await sayHtml(chatId, text, { inline_keyboard: ctrls });
+    return;
+  }
+  const val = p.estimatedValueLamports;
+  const unreal = val != null ? (val + p.received - p.spent) : null;
+  const upct = (val != null && p.spent > 0n) ? Number((val + p.received - p.spent) * 10000n / p.spent) / 100 : null;
+  const text = [
+    `📊 <b>${sym}</b>${info && info.mc > 0 ? ` · MC ${fmtMc(info.mc)}` : ""}${info && info.liq > 0 ? ` · Liq ${fmtMc(info.liq)}` : ""}`,
+    `Spent: <b>◎${lamportsBigToSol(p.spent)}</b>${p.received > 0n ? ` · Realized: <b>◎${lamportsBigToSol(p.received)}</b>` : ""}`,
+    val != null ? `Value now: <b>◎${lamportsBigToSol(val)}</b> est` : "Value: <i>updating…</i>",
+    unreal != null ? `${unreal >= 0n ? "🟢" : "🔻"} <b>PnL: ${unreal >= 0n ? "+" : ""}◎${lamportsBigToSol(unreal)}</b>${upct != null ? ` (${upct >= 0 ? "+" : ""}${upct.toFixed(0)}%)` : ""}` : "",
+    `Balance: ${formatTokenAmount(p.uiAmount)} across ${p.walletCount} wallet(s) · ${p.buys}B/${p.sells}S`
+  ].filter(Boolean).join("\n");
+  if (messageId) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: { inline_keyboard: ctrls } }).catch(() => {});
+  else await sayHtml(chatId, text, { inline_keyboard: ctrls });
 }
 
 async function buildPositionsOverview(userId, options = {}) {
@@ -29692,6 +29730,7 @@ async function readCopyRoom() {
   let s = null; try { s = await readJson(copyRoomPath()); } catch { s = null; }
   if (!s || typeof s !== "object") s = {};
   if (!s.follows || typeof s.follows !== "object") s.follows = {};   // followerId -> { targetId, targetName, chatId, amountSol, at }
+  if (!s.consensus || typeof s.consensus !== "object") s.consensus = {}; // followerId -> { chatId, amountSol, at } (mirror when ≥2 room traders agree)
   copyRoomCache = s; return s;
 }
 async function writeCopyRoom(store) { copyRoomCache = store; await writeJsonFile(copyRoomPath(), store).catch(() => {}); }
@@ -29724,18 +29763,69 @@ async function maybeCopyRoomBest(events) {
     }
   } catch {}
 }
+// 🤝 COPY ROOM CONSENSUS — instead of following ONE trader, mirror the room's AGREEMENT: when ≥2 of a
+// room's board members buy the SAME coin inside a window, that's a signal the whole room believes in it.
+// A consensus-follower's OWN wallet then auto-buys once. Same non-custodial/capped/idempotent/loop-proof
+// boundary as copy-the-best. Keyed per-room so you copy the specific room whose taste you trust.
+const roomConsensusTracker = new Map(); // `${chatId}:${mint}` -> { members:Set, first, fired }
+const ROOM_CONSENSUS_WINDOW_MS = 15 * 60 * 1000;
+const ROOM_CONSENSUS_MIN = 2;
+async function maybeCopyRoomConsensus(events) {
+  try {
+    const buys = (events || []).filter((e) => e && e.type === "buy" && e.userId && e.tokenMint && !/copy_room|copy_consensus/.test(String(e.source || "")));
+    if (!buys.length) return;
+    const store = await readCopyRoom();
+    const consensusFollowers = Object.entries(store.consensus || {});
+    if (!consensusFollowers.length) return;
+    const rb = await readRoomBoard();
+    let walletStore = null;
+    for (const ev of buys) {
+      const buyer = String(ev.userId);
+      for (const [chatId, room] of Object.entries(rb.rooms || {})) {
+        if (!room || !room.members || !room.members[buyer]) continue;   // buyer must be on THIS room's board
+        const key = `${chatId}:${ev.tokenMint}`; const now = Date.now();
+        let c = roomConsensusTracker.get(key);
+        if (!c || now - c.first > ROOM_CONSENSUS_WINDOW_MS) c = { members: new Set(), first: now, fired: false };
+        c.members.add(buyer); roomConsensusTracker.set(key, c);
+        if (roomConsensusTracker.size > 4000) { for (const [k, v] of roomConsensusTracker) { if (now - v.first > ROOM_CONSENSUS_WINDOW_MS) roomConsensusTracker.delete(k); } }
+        if (c.members.size < ROOM_CONSENSUS_MIN || c.fired) continue;
+        c.fired = true;
+        if (!walletStore) walletStore = await readWalletStore();
+        for (const [fid, f] of consensusFollowers) {
+          if (!f || String(f.chatId) !== String(chatId)) continue;
+          if (c.members.has(String(fid))) continue;   // don't mirror your own buy
+          void (async () => {
+            try {
+              const wallet = walletsForOwner(walletStore, fid)[0]; if (!wallet) return;
+              const amt = Math.max(COPY_MIN_SOL, Math.min(COPY_MAX_SOL, Number(f.amountSol) || 0));
+              const result = await runIdempotentMoneyOp("copy-consensus", fid, `${chatId}:${ev.tokenMint}:${c.first}`,
+                () => buyTokenForPlan(wallet, ev.tokenMint, solToLamports(amt), 1500, { trackTokenDelta: true, userId: fid }));
+              await recordTradeEvents([{ userId: fid, type: "buy", source: "copy_consensus", tokenMint: ev.tokenMint, walletLabel: wallet.label, walletPublicKey: wallet.publicKey, solLamportsSpent: String(result.amountLamports || solToLamports(amt)), tokenAmount: result.tokenDeltaAmount || result.outputAmount || null, signature: result.signature }]);
+              await sayHtml(fid, `🤝 <b>Room consensus</b> — <b>${c.members.size}</b> board traders bought <code>${escapeTelegramHtml(shortMint(ev.tokenMint))}</code>. Mirrored <b>◎${amt}</b> from your wallet. <a href="${slimewireTokenLinks(ev.tokenMint).site}">Chart / manage</a>`).catch(() => {});
+            } catch {}
+          })();
+        }
+      }
+    }
+  } catch {}
+}
 async function copyMenuView(chatId, followerId) {
   const rb = await readRoomBoard();
   const members = Object.entries((rb.rooms[String(chatId)] || {}).members || {}).filter(([uid]) => String(uid) !== String(followerId));
-  const cur = (await readCopyRoom()).follows[String(followerId)];
+  const cr = await readCopyRoom();
+  const cur = cr.follows[String(followerId)];
+  const con = cr.consensus[String(followerId)];
   const trenchBack = [{ text: "⬅️ Trench", callback_data: "gb:m:trench" }];
   if (!members.length) return { text: "🪞 <b>Copy the room's best</b>\n\nNobody's on the Room board here yet. Members open <b>The Room</b> and Join the board first — then you can mirror the top traders.", markup: { inline_keyboard: [[{ text: "🏆 Open The Room", callback_data: "gb:go:room" }], trenchBack] } };
   const byUser = await roomRealizedByUser(members.map(([u]) => u));
   const ranked = members.map(([uid, m]) => { const a = byUser.get(String(uid)) || { spent: 0n, received: 0n }; return { uid, name: m.name, sol: Number(a.received - a.spent) / 1e9 }; }).sort((a, b) => b.sol - a.sol).slice(0, 5);
   const rows = ranked.map((r, i) => [{ text: `${["🥇", "🥈", "🥉"][i] || "•"} Mirror ${String(r.name).slice(0, 14)} (${r.sol >= 0 ? "+" : ""}${r.sol.toFixed(1)}◎)`, callback_data: `copy:t:${r.uid}` }]);
   if (cur) rows.push([{ text: `💰 Amount: ◎${cur.amountSol}`, callback_data: "copy:amt" }, { text: "🚫 Stop copying", callback_data: "copy:stop" }]);
+  // 🤝 Consensus mode: mirror the room's AGREEMENT (≥2 board traders on the same coin) instead of one trader.
+  rows.push([{ text: `${con ? "🟢" : "⚪"} 🤝 Copy room consensus${con ? ` · ◎${con.amountSol}` : ""}`, callback_data: "copy:consensus" }]);
+  if (con) rows.push([{ text: `🤝 Consensus amount: ◎${con.amountSol}`, callback_data: "copy:camt" }]);
   rows.push(trenchBack);
-  return { text: ["🪞 <b>Copy the room's best</b>", cur ? `You're mirroring <b>${escapeTelegramHtml(cur.targetName || "a trader")}</b> for <b>◎${cur.amountSol}</b> — when they buy, your OWN wallet auto-buys the same coin.` : "Pick a proven trader from this room's board. When they buy, your OWN wallet auto-buys the same coin at a size you set. Non-custodial, capped, opt out anytime.", "", "<i>High risk — you're auto-buying whatever they ape. Only your own funds.</i>"].join("\n"), markup: { inline_keyboard: rows } };
+  return { text: ["🪞 <b>Copy the room</b>", cur ? `You're mirroring <b>${escapeTelegramHtml(cur.targetName || "a trader")}</b> for <b>◎${cur.amountSol}</b> — when they buy, your OWN wallet auto-buys the same coin.` : "Pick a proven trader to mirror one-for-one, OR turn on 🤝 <b>consensus</b> to auto-buy any coin <b>2+ board traders</b> agree on.", con ? `🤝 Consensus <b>ON</b> for <b>◎${con.amountSol}</b> — fires when ≥2 board traders buy the same coin within 15m.` : "", "", "<i>High risk — you're auto-buying whatever the room apes. Only your own funds, capped, opt out anytime.</i>"].filter(Boolean).join("\n"), markup: { inline_keyboard: rows } };
 }
 async function handleCopyCallback(query, userId) {
   const data = String(query?.data || ""); if (!data.startsWith("copy:")) return false;
@@ -29753,6 +29843,13 @@ async function handleCopyCallback(query, userId) {
   }
   if (data === "copy:amt") { copyInputPending.set(`${chatId}:${userId}`, { at: Date.now() }); await ack("Send the SOL amount to mirror each of their buys (e.g. 0.5)."); return true; }
   if (data === "copy:stop") { delete store.follows[String(userId)]; await writeCopyRoom(store); await rerender(); await ack("Stopped copying."); return true; }
+  if (data === "copy:consensus") {
+    if (store.consensus[String(userId)]) { delete store.consensus[String(userId)]; await writeCopyRoom(store); await rerender(); await ack("🤝 Consensus copying OFF."); return true; }
+    if (!walletsForOwner(await readWalletStore(), userId).length) { await ack("Create a wallet first (DM me → Wallet), then copy."); return true; }
+    store.consensus[String(userId)] = { chatId: String(chatId), amountSol: 0.5, at: Date.now() };
+    await writeCopyRoom(store); await rerender(); await ack("🤝 Consensus ON for ◎0.5 — fires when 2+ board traders buy the same coin. Tap 🤝 Amount to change."); return true;
+  }
+  if (data === "copy:camt") { copyInputPending.set(`${chatId}:${userId}`, { at: Date.now(), consensus: true }); await ack("Send the SOL amount to auto-buy on room consensus (e.g. 0.5)."); return true; }
   await ack(); return true;
 }
 async function applyCopyInput(message, userId) {
@@ -29761,7 +29858,14 @@ async function applyCopyInput(message, userId) {
   const raw = String(message.text || "").trim(); if (!raw || raw.startsWith("/")) return false;
   copyInputPending.delete(pkey);
   const amt = Math.max(COPY_MIN_SOL, Math.min(COPY_MAX_SOL, Number(raw) || 0));
-  const store = await readCopyRoom(); const f = store.follows[String(userId)];
+  const store = await readCopyRoom();
+  if (pend.consensus) {
+    const c = store.consensus[String(userId)];
+    if (c) { c.amountSol = amt; await writeCopyRoom(store); await sayHtml(message.chat.id, `🤝 Consensus amount set to <b>◎${amt}</b> per signal.`); }
+    else await say(message.chat.id, "Turn on 🤝 consensus first — /copy.");
+    return true;
+  }
+  const f = store.follows[String(userId)];
   if (f) { f.amountSol = amt; await writeCopyRoom(store); await sayHtml(message.chat.id, `💰 Mirror amount set to <b>◎${amt}</b> per buy.`); }
   else await say(message.chat.id, "Pick a trader to mirror first — /copy.");
   return true;
@@ -37676,6 +37780,7 @@ async function recordTradeEvents(events) {
     await writeJsonFile(tradeHistoryPath(), store);
   });
   void maybeCopyRoomBest(events).catch(() => {});   // 🪞 Copy-the-room's-best: mirror a followed trader's buy
+  void maybeCopyRoomConsensus(events).catch(() => {});   // 🤝 Copy room consensus: mirror when ≥2 board traders agree
   void maybeCreditReferralConversion(events).catch(() => {});   // 🎟️ credit a site-referred user's first trade to their TG inviter
 
   const hasWebBuyNeedingGuard = events.some((event) => (

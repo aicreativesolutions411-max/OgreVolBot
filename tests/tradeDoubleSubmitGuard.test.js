@@ -1071,6 +1071,20 @@ test("deferred backlog: migration alerts, wallet convergence, weekly caller cont
   assert.match(functionBody(serverSource, "pollWeeklyCallerContest"), /g\.lastCallerContestWeek === week/);
   assert.match(functionBody(serverSource, "pollWeeklyCallerContest"), /Caller of the Week/);
 });
+test("live position card + copy-room consensus", () => {
+  // 📊 live per-coin manage card, routed with in-place refresh, reachable from Positions
+  assert.match(serverSource, /async function showPositionCard/);
+  assert.match(serverSource, /match\(\/\^pos:\(\[1-9A-HJ-NP-Za-km-z\]\{32,44\}\)\$\/\)/);
+  assert.match(functionBody(serverSource, "showPositionCard"), /buildPositionsOverview\(userId\)/);
+  assert.match(functionBody(serverSource, "showPositionsOverview"), /callback_data: `pos:\$\{position\.tokenMint\}`/);
+  // 🤝 copy-room consensus: mirror when ≥2 board traders buy the same coin, own wallet, idempotent
+  assert.match(serverSource, /async function maybeCopyRoomConsensus/);
+  assert.match(serverSource, /void maybeCopyRoomConsensus\(events\)/);
+  assert.match(functionBody(serverSource, "maybeCopyRoomConsensus"), /c\.members\.size < ROOM_CONSENSUS_MIN \|\| c\.fired/);
+  assert.match(functionBody(serverSource, "maybeCopyRoomConsensus"), /runIdempotentMoneyOp\("copy-consensus"/);
+  assert.match(functionBody(serverSource, "maybeCopyRoomConsensus"), /source: "copy_consensus"/);
+  assert.match(serverSource, /data === "copy:consensus"/);   // toggle wired
+});
 test("smooth nav: DM sub-views carry a Main Menu button (no re-/start)", () => {
   for (const fn of ["showTelegramLinksMenu", "showTelegramPortfolioMenu", "showTelegramOgreToolsMenu", "showWalletMenu"]) {
     assert.match(functionBody(serverSource, fn), /callback_data: "main_menu"/, `${fn} needs Main Menu`);
