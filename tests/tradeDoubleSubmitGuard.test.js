@@ -1085,6 +1085,20 @@ test("live position card + copy-room consensus", () => {
   assert.match(functionBody(serverSource, "maybeCopyRoomConsensus"), /source: "copy_consensus"/);
   assert.match(serverSource, /data === "copy:consensus"/);   // toggle wired
 });
+test("don't-get-cooked: Jito anti-sandwich path + catastrophic price-impact guard on buys", () => {
+  // Jito trade-bundle send path exists (swap+tip bundle, safe RPC re-broadcast fallback, tip only on land)
+  assert.match(serverSource, /async function sendPumpTradeTx/);
+  assert.match(functionBody(serverSource, "sendPumpTradeTx"), /if \(!CONFIG\.tradeJitoBundle\) return sendVersionedTransaction/);
+  assert.match(functionBody(serverSource, "sendPumpTradeTx"), /submitJitoBundle\(bundle/);
+  assert.match(functionBody(serverSource, "sendPumpTradeTx"), /re-broadcasting the SAME signed tx via RPC/);
+  // price-impact cook-guard: buys only (SOL in), configurable cap, clear message
+  assert.match(serverSource, /maxBuyPriceImpact = Math\.min\(0\.95, Math\.max\(0\.05, Number\.parseFloat\(process\.env\.MAX_BUY_PRICE_IMPACT_PCT/);
+  const ord = functionBody(serverSource, "createJupiterOrder");
+  assert.match(ord, /if \(inputMint === SOL_MINT\)/);
+  assert.match(ord, /Math\.abs\(Number\(order\.priceImpactPct\)\)/);
+  assert.match(ord, /impact > CONFIG\.maxBuyPriceImpact/);
+  assert.match(ord, /Blocked to protect you/);
+});
 test("smooth nav: DM sub-views carry a Main Menu button (no re-/start)", () => {
   for (const fn of ["showTelegramLinksMenu", "showTelegramPortfolioMenu", "showTelegramOgreToolsMenu", "showWalletMenu"]) {
     assert.match(functionBody(serverSource, fn), /callback_data: "main_menu"/, `${fn} needs Main Menu`);

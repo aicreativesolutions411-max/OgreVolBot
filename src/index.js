@@ -4138,6 +4138,10 @@ function loadConfig() {
   const balanceCacheTtlMs = Number.parseInt(process.env.BALANCE_CACHE_TTL_MS || "12000", 10);
   const defaultSlippageBps = Number.parseInt(process.env.DEFAULT_SLIPPAGE_BPS || "400", 10);
   const sniperDefaultSlippageBps = Number.parseInt(process.env.SNIPER_DEFAULT_SLIPPAGE_BPS || "400", 10);
+  // "Don't get cooked" guard: reject a BUY whose quoted price impact is catastrophic (thin liquidity =
+  // you'd instantly lose most of it). Jupiter's slippageBps caps the fill vs the quote, but a huge impact
+  // means the QUOTE itself is terrible. A fraction (0.30 = 30%). Buys only; sells always allowed.
+  const maxBuyPriceImpact = Math.min(0.95, Math.max(0.05, Number.parseFloat(process.env.MAX_BUY_PRICE_IMPACT_PCT || "0.30") || 0.30));
   const jupiterSwapMaxAttempts = Number.parseInt(process.env.JUPITER_SWAP_MAX_ATTEMPTS || "2", 10);
   const manualLaunchScanIntervalMs = Number.parseInt(process.env.MANUAL_LAUNCH_SCAN_INTERVAL_MS || String(DEFAULT_MANUAL_LAUNCH_SCAN_INTERVAL_MS), 10);
   const webSessionTtlHours = Number.parseInt(process.env.WEB_SESSION_TTL_HOURS || "720", 10);
@@ -4713,6 +4717,7 @@ function loadConfig() {
     balanceCacheTtlMs,
     defaultSlippageBps,
     sniperDefaultSlippageBps,
+    maxBuyPriceImpact,
     jupiterSwapMaxAttempts,
     manualLaunchScanIntervalMs,
     priorityFeeLamports: Number.parseInt(process.env.PRIORITY_FEE_LAMPORTS || "0", 10),
@@ -19785,6 +19790,16 @@ async function createJupiterOrder({ taker, inputMint, outputMint, amount, slippa
     throw new Error(order?.errorMessage || order?.error || "Jupiter could not build a quote/order. Check the token mint, liquidity, slippage, API key/rate limits, and wallet SOL balance.");
   }
 
+  // 🛡 Cook-guard: block a BUY whose quoted price impact is catastrophic (too illiquid — you'd instantly
+  // lose most of it). Jupiter caps the fill vs the quote via slippageBps, but a giant impact means the
+  // quote itself is a trap. Only guards buys (SOL in); a sell of a thin bag must always be allowed out.
+  if (inputMint === SOL_MINT) {
+    const impact = Math.abs(Number(order.priceImpactPct)) || 0;
+    if (impact > CONFIG.maxBuyPriceImpact) {
+      throw new Error(`Blocked to protect you: this buy has ~${Math.round(impact * 100)}% price impact — the coin's too illiquid and you'd lose most of it instantly. Try a smaller size, or a coin with more liquidity.`);
+    }
+  }
+
   return order;
 }
 
@@ -30104,7 +30119,7 @@ const SLIP_TIERS = [300, 500, 1000, 1500, 2500];
 function dmSettingsMenu(prefs) {
   const feePct = (CONFIG.bundleFeeBps / 100).toFixed(2).replace(/\.?0+$/, "");
   return {
-    text: ["⚙️ <b>Trade settings</b>", "", `⚡ Buy presets: <b>${prefs.presets[0]}◎ · ${prefs.presets[1]}◎ · ${prefs.presets[2]}◎</b>  (✏️ custom ${prefs.custom}◎)`, `🎚 Slippage: <b>${(prefs.slippageBps / 100).toFixed(prefs.slippageBps % 100 ? 1 : 0)}%</b>`, `💸 Trade fee: <b>${feePct}%</b> per buy/sell — that's it, no subscription.`, `🎁 Invite friends → earn a rebate on their fees (Profile → Referral / <code>/reflink</code>).`, "", "<i>These apply to your ⚡ one-click buys everywhere. Same wallet + settings on slimewire.org via /web.</i>"].join("\n"),
+    text: ["⚙️ <b>Trade settings</b>", "", `⚡ Buy presets: <b>${prefs.presets[0]}◎ · ${prefs.presets[1]}◎ · ${prefs.presets[2]}◎</b>  (✏️ custom ${prefs.custom}◎)`, `🎚 Slippage: <b>${(prefs.slippageBps / 100).toFixed(prefs.slippageBps % 100 ? 1 : 0)}%</b>`, `💸 Trade fee: <b>${feePct}%</b> per buy/sell — that's it, no subscription.`, `🛡 <b>Sandwich-proof:</b> buys route through a Jito bundle (out of the mempool where MEV bots lurk) + a hard price-impact cap blocks buys that would cook you on an illiquid coin.`, `🎁 Invite friends → earn a rebate on their fees (Profile → Referral / <code>/reflink</code>).`, "", "<i>These apply to your ⚡ one-click buys everywhere. Same wallet + settings on slimewire.org via /web.</i>"].join("\n"),
     markup: { inline_keyboard: [
       [{ text: "🎚 Buy presets", callback_data: "bp:menu" }, { text: `⚡ Slippage: ${(prefs.slippageBps / 100).toFixed(prefs.slippageBps % 100 ? 1 : 0)}%`, callback_data: "st:slip" }],
       [{ text: "👛 Wallet", callback_data: "wallet_menu" }, { text: "🏠 Menu", callback_data: "main_menu" }]
