@@ -11526,6 +11526,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("wt:")) {
     if (await handleWalletTrackerCallback(query, userId).catch(() => false)) return;
   }
+  // Community Snipe menu (cs:*) — tap-to-join launch snipe + dev setup.
+  if (String(query.data || "").startsWith("cs:")) {
+    if (await handleCommunitySnipeCallback(query, userId).catch(() => false)) return;
+  }
 
   if (ADMIN_ACTIONS.has(query.data) && !isAdmin(userId)) {
     await say(chatId, "Only bot admins can use that control.");
@@ -12046,6 +12050,8 @@ async function handleMessage(message, userId) {
   if (await applyGbInput(message, userId).catch(() => false)) return;
   // Wallet Tracker: capture a wallet address / min-USD the user is entering.
   if (await applyWtInput(message, userId).catch(() => false)) return;
+  // Community Snipe: capture a typed amount / TP-SL / launch wallet the user was prompted for.
+  if (await applyCsInput(message, userId).catch(() => false)) return;
   // Wallet Tracker commands (/track, /untrack, /tracked) — DM only.
   if (await handleWalletTrackerCommand(message, userId).catch(() => false)) return;
 
@@ -28976,8 +28982,117 @@ async function handleCommunitySnipeCommand(chatId, message, argument, userId) {
   }
   if (sub === "reset") { delete store.snipes[key]; await writeCommunitySnipe(store); await say(chatId, "Community snipe cleared."); return; }
 
-  // default: status + help
-  await sayHtml(chatId, communitySnipeStatusText(store.snipes[key]));
+  // default: the button menu (tap-to-join amounts + dev setup). Text subcommands above still work.
+  await sayHtml(chatId, communitySnipeStatusText(store.snipes[key]), communitySnipeCardMarkup(store.snipes[key]));
+}
+
+// ---- Community Snipe MENUS (button-driven, so members tap-to-join and the dev sets up by buttons) ----
+const csInputPending = new Map(); // `${chatId}:${userId}` -> { kind: "custom"|"presets"|"wallet", at }
+function communitySnipeCardMarkup(snipe) {
+  return { inline_keyboard: [
+    [{ text: "💰 Join 0.1", callback_data: "cs:amt:0.1" }, { text: "💰 0.5", callback_data: "cs:amt:0.5" }, { text: "💰 1", callback_data: "cs:amt:1" }],
+    [{ text: "✏️ Custom amount", callback_data: "cs:custom" }, { text: "🎯 TP/SL", callback_data: "cs:presets" }],
+    [{ text: "🚪 Leave", callback_data: "cs:leave" }, { text: "⚙️ Dev setup", callback_data: "cs:admin" }]
+  ] };
+}
+function communitySnipeAdminMarkup(snipe) {
+  const armed = Boolean(snipe && snipe.armed);
+  return { inline_keyboard: [
+    [{ text: "🎯 Set launch wallet", callback_data: "cs:setwallet" }],
+    [{ text: armed ? "⚪ Disarm" : "🟢 Arm", callback_data: armed ? "cs:disarm" : "cs:arm" }],
+    [{ text: "👥 Members", callback_data: "cs:who" }, { text: "♻️ Reset", callback_data: "cs:reset" }],
+    [{ text: "⬅ Back", callback_data: "cs:card" }]
+  ] };
+}
+function communitySnipePresetMarkup() {
+  return { inline_keyboard: [
+    [{ text: "TP100 / SL30", callback_data: "cs:preset:100:30" }, { text: "TP200 / SL40", callback_data: "cs:preset:200:40" }],
+    [{ text: "TP500 / SL50", callback_data: "cs:preset:500:50" }, { text: "🚫 No presets", callback_data: "cs:preset:0:0" }],
+    [{ text: "✏️ Custom TP/SL", callback_data: "cs:presetcustom" }, { text: "⬅ Back", callback_data: "cs:card" }]
+  ] };
+}
+async function csRender(chatId, messageId, snipe, markup) {
+  const text = communitySnipeStatusText(snipe);
+  if (messageId) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: markup }).catch(() => {});
+  else await sayHtml(chatId, text, markup);
+}
+async function csJoinMember(chatId, userId, from, amt, store) {
+  const snipe = store.snipes[String(chatId)];
+  if (!snipe || !snipe.creatorWallet) return { ok: false, error: "No snipe target set yet — an admin taps ⚙️ Dev setup first." };
+  if (snipe.fired) return { ok: false, error: "This snipe already fired." };
+  if (!Number.isFinite(amt) || amt < COMMUNITY_SNIPE_MIN_SOL || amt > COMMUNITY_SNIPE_MAX_SOL) return { ok: false, error: `Amount must be ${COMMUNITY_SNIPE_MIN_SOL}-${COMMUNITY_SNIPE_MAX_SOL} SOL.` };
+  const walletStore = await readWalletStore();
+  if (!walletsForOwner(walletStore, userId).length) return { ok: false, error: "Create a wallet first (DM me → Wallet), then join." };
+  const prev = snipe.members[String(userId)] || {};
+  snipe.members[String(userId)] = { walletIndex: 1, amountSol: amt, tpPct: prev.tpPct || 0, slPct: prev.slPct || 0, name: from.username ? `@${from.username}` : (from.first_name || String(userId)).slice(0, 24), at: Date.now() };
+  await writeCommunitySnipe(store);
+  return { ok: true };
+}
+async function handleCommunitySnipeCallback(query, userId) {
+  const data = String(query?.data || "");
+  if (!data.startsWith("cs:")) return false;
+  const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  const from = query.from || {};
+  const ack = (t) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: true } : {}) }).catch(() => {});
+  const store = await readCommunitySnipe();
+  const snipe = () => store.snipes[String(chatId)];
+  const ma = data.match(/^cs:amt:([\d.]+)$/);
+  if (ma) { const r = await csJoinMember(chatId, userId, from, Number(ma[1]), store); if (!r.ok) { await ack(r.error); return true; } await csRender(chatId, messageId, snipe(), communitySnipeCardMarkup(snipe())); await ack(`✅ In for ◎${ma[1]} — tap 🎯 TP/SL to add presets (optional).`); return true; }
+  if (data === "cs:custom") { csInputPending.set(`${chatId}:${userId}`, { kind: "custom", at: Date.now() }); await ack("Send your SOL amount (e.g. 0.75)."); return true; }
+  if (data === "cs:presets") { if (!snipe() || !snipe().members[String(userId)]) { await ack("Join first (tap an amount), then set TP/SL."); return true; } await csRender(chatId, messageId, snipe(), communitySnipePresetMarkup()); await ack(); return true; }
+  const mp = data.match(/^cs:preset:(\d+):(\d+)$/);
+  if (mp) { const m = snipe() && snipe().members[String(userId)]; if (m) { m.tpPct = Number(mp[1]); m.slPct = Number(mp[2]); await writeCommunitySnipe(store); } await csRender(chatId, messageId, snipe(), communitySnipeCardMarkup(snipe())); await ack(Number(mp[1]) || Number(mp[2]) ? `🎯 TP ${mp[1]}% / SL ${mp[2]}%` : "Presets cleared"); return true; }
+  if (data === "cs:presetcustom") { csInputPending.set(`${chatId}:${userId}`, { kind: "presets", at: Date.now() }); await ack("Send TP and SL like:  150 40  (TP 150% / SL 40%). Send  0 0  for none."); return true; }
+  if (data === "cs:leave") { const s = snipe(); if (s && s.members[String(userId)]) { delete s.members[String(userId)]; await writeCommunitySnipe(store); } await csRender(chatId, messageId, snipe(), communitySnipeCardMarkup(snipe())); await ack("You left the snipe."); return true; }
+  if (data === "cs:card") { await csRender(chatId, messageId, snipe(), communitySnipeCardMarkup(snipe())); await ack(); return true; }
+  // admin actions (gated)
+  if (["cs:admin", "cs:setwallet", "cs:arm", "cs:disarm", "cs:who", "cs:reset"].includes(data)) {
+    if (!(await isTgChatAdmin(chatId, userId))) { await ack("Only group admins can set up the snipe."); return true; }
+    if (data === "cs:admin") { await csRender(chatId, messageId, snipe(), communitySnipeAdminMarkup(snipe())); await ack(); return true; }
+    if (data === "cs:setwallet") { csInputPending.set(`${chatId}:${userId}`, { kind: "wallet", at: Date.now() }); await ack("Paste the wallet you'll launch from (add a label after it if you like)."); return true; }
+    if (data === "cs:arm" || data === "cs:disarm") {
+      const s = snipe();
+      if (!s || !s.creatorWallet) { await ack("Set the launch wallet first."); return true; }
+      s.armed = data === "cs:arm"; if (data === "cs:arm") s.fired = null;
+      await writeCommunitySnipe(store);
+      await csRender(chatId, messageId, s, communitySnipeAdminMarkup(s)); await ack(data === "cs:arm" ? "🟢 ARMED — fires once the instant that wallet launches." : "⚪ Disarmed."); return true;
+    }
+    if (data === "cs:who") { const members = snipe() ? Object.values(snipe().members || {}) : []; await ack(members.length ? members.map((m) => `${m.name} ◎${m.amountSol}${m.tpPct ? ` TP${m.tpPct}` : ""}${m.slPct ? ` SL${m.slPct}` : ""}`).join("\n").slice(0, 190) : "Nobody's joined yet."); return true; }
+    if (data === "cs:reset") { delete store.snipes[String(chatId)]; await writeCommunitySnipe(store); await csRender(chatId, messageId, null, communitySnipeCardMarkup(null)); await ack("Snipe cleared."); return true; }
+  }
+  await ack(); return true;
+}
+async function applyCsInput(message, userId) {
+  const chatId = message?.chat?.id;
+  const pkey = `${chatId}:${userId}`;
+  const pend = csInputPending.get(pkey);
+  if (!pend) return false;
+  if (Date.now() - pend.at > 180000) { csInputPending.delete(pkey); return false; }
+  const raw = String(message.text || "").trim();
+  if (!raw) return false;
+  if (/^\/cancel$/i.test(raw)) { csInputPending.delete(pkey); return true; }
+  if (raw.startsWith("/")) return false;   // let other commands through
+  csInputPending.delete(pkey);
+  const store = await readCommunitySnipe();
+  if (pend.kind === "custom") {
+    const r = await csJoinMember(chatId, userId, message.from || {}, Number(raw), store);
+    if (r.ok) await sayHtml(chatId, `✅ In for <b>◎${Number(raw)}</b>. Tap 🎯 TP/SL to add presets (optional).`, communitySnipeCardMarkup(store.snipes[String(chatId)]));
+    else await say(chatId, r.error);
+  } else if (pend.kind === "presets") {
+    const nums = raw.split(/\s+/).map((n) => Math.max(0, Number(n) || 0));
+    const m = store.snipes[String(chatId)] && store.snipes[String(chatId)].members[String(userId)];
+    if (m) { m.tpPct = Math.min(100000, nums[0] || 0); m.slPct = Math.min(99, nums[1] || 0); await writeCommunitySnipe(store); await sayHtml(chatId, `🎯 Presets set: TP ${m.tpPct}% / SL ${m.slPct}%.`, communitySnipeCardMarkup(store.snipes[String(chatId)])); }
+    else await say(chatId, "Join first (tap an amount), then set presets.");
+  } else if (pend.kind === "wallet") {
+    if (!(await isTgChatAdmin(chatId, userId))) return true;
+    const parts = raw.split(/\s+/); let addr = null; try { addr = parsePublicKey(parts[0]).toBase58(); } catch {}
+    if (!addr) { await say(chatId, "That's not a valid wallet address. Tap 🎯 Set launch wallet again."); return true; }
+    const s = store.snipes[String(chatId)] || (store.snipes[String(chatId)] = { chatId: String(chatId), creatorWallet: null, label: "", armed: false, createdBy: String(userId), createdAt: new Date().toISOString(), slippageBps: 1500, members: {}, fired: null });
+    s.creatorWallet = addr; s.label = parts.slice(1).join(" ").slice(0, 40); s.fired = null; s.armed = false;
+    await writeCommunitySnipe(store);
+    await sayHtml(chatId, `🎯 Target set to <code>${escapeTelegramHtml(shortMint(addr))}</code>. Tap 🟢 Arm when the launch is close.`, communitySnipeAdminMarkup(s));
+  }
+  return true;
 }
 // onCreation hook: does this fresh launch's creator wallet match an armed community snipe?
 function maybeCommunitySnipe(entry) {

@@ -1188,3 +1188,26 @@ test("community snipe: admin-gated setup, everyone auto-buys, presets optional",
   // everyone who opts in auto-buys — no alert-only carve-out in the fire path
   assert.doesNotMatch(functionBody(serverSource, "fireCommunitySnipe"), /mode === "alert"/);
 });
+
+// ---- Community Snipe menus: button-driven join + dev setup (typed-input capture) ----
+test("community snipe is button-driven: tap-to-join amounts, dev setup, preset picker", () => {
+  const menu = functionBody(serverSource, "communitySnipeCardMarkup");
+  assert.match(menu, /callback_data: "cs:amt:0\.1"/);            // one-tap join amounts
+  assert.match(menu, /callback_data: "cs:custom"/);              // custom amount → typed input
+  assert.match(menu, /callback_data: "cs:presets"/);             // TP/SL picker
+  assert.match(menu, /callback_data: "cs:admin"/);              // dev setup
+  const admin = functionBody(serverSource, "communitySnipeAdminMarkup");
+  assert.match(admin, /callback_data: "cs:setwallet"/);
+  assert.match(admin, /cs:arm|cs:disarm/);
+  // callback routed + admin actions gated
+  assert.match(serverSource, /startsWith\("cs:"\)/);
+  const cb = functionBody(serverSource, "handleCommunitySnipeCallback");
+  assert.match(cb, /"cs:admin", "cs:setwallet", "cs:arm", "cs:disarm", "cs:who", "cs:reset"/);
+  assert.match(cb, /isTgChatAdmin\(chatId, userId\)/);
+  // typed-input capture wired (custom amount / presets / wallet), keyed chatId:userId
+  assert.match(serverSource, /await applyCsInput\(message, userId\)/);
+  const inp = functionBody(serverSource, "applyCsInput");
+  assert.match(inp, /pend\.kind === "custom"/);
+  assert.match(inp, /pend\.kind === "presets"/);
+  assert.match(inp, /pend\.kind === "wallet"/);
+});
