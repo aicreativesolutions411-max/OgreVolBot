@@ -28625,7 +28625,6 @@ function slimeScanKeyboard(mint) {
       { text: "✏️", callback_data: `qb:x:${mint}` }
     ],
     [
-      { text: "🌐 Buy on site", url: links.siteBuy },
       { text: "⏰ Limit", callback_data: `lo:new:${mint}` },
       { text: "📈 Chart", url: links.site }
     ],
@@ -30351,12 +30350,30 @@ async function quickBuySendReceipt(userId, mint, amt, result = null) {
     "<i>Buy more, sell, or arm ⏰ limit / TP-SL right here:</i>"
   ].filter(Boolean).join("\n"), await quickBuyReceiptKeyboard(mint, userId)).catch(() => {});
 }
+// No-wallet funnel: someone tapped ⚡ Buy in a group but has no SlimeWire wallet. Best-effort DM them a
+// one-tap "🚀 Create my wallet" button (works if they've ever opened the bot) so they go straight to
+// setup in the bot's chat; return whether the DM landed so the popup can tell them where to look. If they
+// never started the bot, Telegram blocks the DM — the popup then points them to open @bot and hit Start.
+async function funnelNoWallet(userId) {
+  const res = await telegram("sendMessage", {
+    chat_id: userId,
+    text: "🚀 <b>Make your free SlimeWire wallet to buy</b>\n\nNo sign-up, no seed phrase to write down — 10 seconds. Tap below, then go back to the coin and hit ⚡ Buy.",
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: [[{ text: "🚀 Create my wallet", callback_data: "create_wallets" }]] }
+  }).catch(() => null);
+  return Boolean(res && (res.ok || res.result || res.message_id));
+}
+function noWalletAckText(sent) {
+  return sent
+    ? "📩 Sent you a DM — tap 🚀 Create my wallet (10s), then come back here and buy."
+    : `Open @${CONFIG.telegramBotUsername || "SlimeWiredBot"} and tap Start to make a free wallet (10s), then come back and buy.`;
+}
 async function handleQuickBuyCallback(query, userId) {
   const data = String(query?.data || ""); if (!data.startsWith("qb:")) return false;
   const ack = (t, alert) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: Boolean(alert) } : {}) }).catch(() => {});
   const mCustom = data.match(/^qb:x:([1-9A-HJ-NP-Za-km-z]{32,44})$/);
   if (mCustom) {
-    if (!walletsForOwner(await readWalletStore(), userId).length) { await ack("Make a free SlimeWire wallet first — DM me /start (takes 10s), then tap Buy.", true); return true; }
+    if (!walletsForOwner(await readWalletStore(), userId).length) { await ack(noWalletAckText(await funnelNoWallet(userId)), true); return true; }
     tgQuickBuyPending.set(String(userId), { mint: mCustom[1], at: Date.now() });
     await ack("Sent you a DM — reply with the SOL amount to buy.", true);
     await sayHtml(userId, `⚡ <b>Quick buy</b> — reply with the SOL amount to ape <code>${escapeTelegramHtml(mCustom[1])}</code> (e.g. <b>0.75</b>).`).catch(() => {});
@@ -30366,7 +30383,7 @@ async function handleQuickBuyCallback(query, userId) {
   if (!m) { await ack(); return true; }
   const amt = m[1], mint = m[2];
   const r = await tgExecuteQuickBuy(userId, mint, amt);
-  if (r.needWallet) { await ack("Make a free SlimeWire wallet first — DM me /start (10s, no sign-up). Same wallet works on slimewire.org via /web. Then tap Buy.", true); return true; }
+  if (r.needWallet) { await ack(noWalletAckText(await funnelNoWallet(userId)), true); return true; }
   if (!r.ok) { await ack(`Buy didn't land: ${r.why || "try again in a sec"}.`, true); return true; }
   await ack(`⚡ Bought ◎${amt}! Receipt + sell controls sent to your DM.`, true);
   await quickBuySendReceipt(userId, mint, amt, r.result);
@@ -32362,16 +32379,12 @@ const groupBuyMarkup = (mint, socials = {}) => {
     { text: "⚡ 2◎", callback_data: `qb:2:${mint}` },
     { text: "✏️", callback_data: `qb:x:${mint}` }
   ];
-  const row1 = [
-    { text: "📊 SlimeWire Chart", url: links.site },
-    { text: "🌐 Buy on site", url: links.siteBuy },
-    { text: "👍 Vote", url: `https://dexscreener.com/solana/${mint}` }
-  ];
-  const row2 = [];
-  if (socials.tg) row2.push({ text: "✈️ TG", url: socials.tg });
-  if (socials.x) row2.push({ text: "𝕏", url: socials.x });
-  if (socials.web) row2.push({ text: "🌐 Web", url: socials.web });
-  return { inline_keyboard: row2.length ? [qbRow, row1, row2] : [qbRow, row1] };
+  // Buy = the ⚡ one-click row (own wallet). Chart just opens the SlimeWire site. No "Buy on site" /
+  // Vote / TG clutter — the group IS the coin's TG, and the ⚡ buttons are the buy.
+  const infoRow = [{ text: "📊 Chart", url: links.site }];
+  if (socials.x) infoRow.push({ text: "𝕏", url: socials.x });
+  if (socials.web) infoRow.push({ text: "🌐 Web", url: socials.web });
+  return { inline_keyboard: [qbRow, infoRow] };
 };
 function buyBondingBar(pct, n = 12) { pct = Math.max(0, Math.min(100, Number(pct) || 0)); const f = Math.round(pct / 100 * n); return "▰".repeat(f) + "▱".repeat(Math.max(0, n - f)); }
 // Buy cards reuse the full scan (bonding %, socials, MC, DEX-paid, image) — cached 30s so a burst of

@@ -752,8 +752,7 @@ test("buy card Chart/Buy open the NEW terminal (not old chart-lab / /t)", () => 
   const mk = serverSource.slice(i, i + 1100);
   assert.match(mk, /slimewireTokenLinks\(mint\)/);
   assert.match(mk, /url: links\.site\b/);       // Chart -> SlimeWire chart site
-  assert.match(mk, /url: links\.siteBuy\b/);    // site Buy fallback -> new terminal
-  assert.match(mk, /callback_data: `qb:0\.5:\$\{mint\}`/);  // ⚡ one-click buy row on the Buy Bot card too
+  assert.match(mk, /callback_data: `qb:0\.5:\$\{mint\}`/);  // ⚡ one-click buy row IS the buy
   assert.doesNotMatch(mk, /chart-lab\?ca=/);    // old chart-page URL gone
   assert.doesNotMatch(mk, /url: groupBuyQuickBuyUrl/); // old /t redirect gone
 });
@@ -938,7 +937,7 @@ test("⚡ one-click group buy fires from the tapper's OWN wallet, idempotent, re
   assert.match(exec, /if \(!wallet\) return \{ ok: false, needWallet: true \}/); // no wallet → funnel, not crash
   const cb = functionBody(serverSource, "handleQuickBuyCallback");
   assert.match(cb, /quickBuySendReceipt\(userId, mint, amt, r\.result\)/);       // receipt to DM (userId), never the group; now carries live buy result
-  assert.match(cb, /DM me \/start/);                                           // no-wallet funnel
+  assert.match(cb, /noWalletAckText\(await funnelNoWallet\(userId\)\)/);        // no-wallet → DM a Create-Wallet button + guide
   // ⚡ preset buttons on the group scan card + routed + custom-amount input wired
   assert.match(functionBody(serverSource, "slimeScanKeyboard"), /callback_data: `qb:0\.5:\$\{mint\}`/);
   assert.match(serverSource, /startsWith\("qb:"\)/);
@@ -1163,16 +1162,25 @@ test("OCR image scan: cloud-offloaded, concurrency-capped, gated, delete-only", 
 
 // ---- Scan card buy row: ONE clean Buy button (the 0.5/1/5/custom amount buttons all just opened
 // the site, so they were consolidated). The &amount= deep-link helper still exists for the web preload.
-test("scan card = ⚡ one-click in-wallet buy presets + a site fallback + chart", () => {
+test("scan card = ⚡ one-click in-wallet buy presets + limit + chart (no site-Buy clutter)", () => {
   const kb = functionBody(serverSource, "slimeScanKeyboard");
-  // ⚡ presets now execute an in-wallet buy via the qb: callback (NOT four URL redirects); site Buy stays.
+  // ⚡ presets execute an in-wallet buy via the qb: callback (NOT URL redirects).
   assert.match(kb, /callback_data: `qb:0\.5:\$\{mint\}`/);
   assert.match(kb, /callback_data: `qb:1:\$\{mint\}`/);
   assert.match(kb, /callback_data: `qb:x:\$\{mint\}`/);         // ✏️ custom amount
-  assert.match(kb, /text: "🌐 Buy on site", url: links\.siteBuy/); // fallback / pick-amount path
-  assert.match(kb, /text: "📈 Chart"/);
-  // the amount deep-link capability itself is retained (web 1-click reads ?buy=1&amount=)
-  assert.match(functionBody(serverSource, "slimewireBuyUrl"), /&amount=/);
+  assert.doesNotMatch(kb, /Buy on site/);                       // removed — ⚡ is the buy
+  assert.match(kb, /text: "📈 Chart", url: links\.site/);       // Chart just opens the site
+  // buy-bot card: no Vote / Buy-on-site / TG clutter (group IS the coin's TG), just ⚡ + Chart (+socials)
+  const gbi = serverSource.indexOf("const groupBuyMarkup =");
+  const gb = serverSource.slice(gbi, gbi + 1300);
+  assert.doesNotMatch(gb, /Vote", url/);            // 👍 Vote button gone
+  assert.doesNotMatch(gb, /url: links\.siteBuy/);   // Buy-on-site button gone
+  assert.doesNotMatch(gb, /TG", url: socials\.tg/); // ✈️ TG button gone
+  assert.match(gb, /text: "📊 Chart", url: links\.site/);
+  // no-wallet funnel: tapping ⚡ with no wallet DMs a Create-Wallet button + tells you where to look
+  assert.match(serverSource, /async function funnelNoWallet/);
+  assert.match(functionBody(serverSource, "funnelNoWallet"), /callback_data: "create_wallets"/);
+  assert.match(functionBody(serverSource, "handleQuickBuyCallback"), /noWalletAckText\(await funnelNoWallet\(userId\)\)/);
 });
 for (const [label, source] of [["gg.html", ggSource], ["index.html", indexSource]]) {
   test(`POS deep-link opens the 1-click buy preloaded with the amount (${label})`, () => {
