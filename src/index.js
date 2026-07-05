@@ -4008,6 +4008,11 @@ const SEO_PAGES = [
   { path: "/solana-launch-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/memecoin-launch-tools", priority: "0.8", changefreq: "weekly" },
   { path: "/telegram-raid-bot", priority: "0.76", changefreq: "weekly" },
+  { path: "/best-pump-fun-bots", priority: "0.8", changefreq: "weekly" },
+  { path: "/best-solana-sniper-bots", priority: "0.8", changefreq: "weekly" },
+  { path: "/telegram-buy-bot", priority: "0.8", changefreq: "weekly" },
+  { path: "/solana-pnl-tracker", priority: "0.78", changefreq: "weekly" },
+  { path: "/solana-trading-bot-for-groups", priority: "0.8", changefreq: "weekly" },
   { path: "/pump-fun-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-volume-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-copy-trading-bot", priority: "0.8", changefreq: "weekly" },
@@ -4123,6 +4128,26 @@ const SEO_PAGE_META = {
   "/telegram-raid-bot": {
     title: "Telegram Raid Bot for Solana Launches - SlimeWire Raid Tools",
     description: "SlimeWire Telegram raid bot workflows help Solana communities organize raids, launch cards, proof links, group alerts, and trader handoff without clutter."
+  },
+  "/best-pump-fun-bots": {
+    title: "Best pump.fun Bots - Solana Launch Scanners, Snipers and Alerts",
+    description: "Compare the best pump.fun bots by fresh launch discovery, Telegram alerts, chart handoff, token checks, presets, quick buys, and proof workflows."
+  },
+  "/best-solana-sniper-bots": {
+    title: "Best Solana Sniper Bots - Telegram Snipers, Launch Alerts and Exits",
+    description: "Compare the best Solana sniper bots by launch alerts, token checks, Telegram workflow, chart handoff, quick buy presets, TP/SL, and PnL tracking."
+  },
+  "/telegram-buy-bot": {
+    title: "Telegram Buy Bot for Solana - Scans, Quick Buys, Presets and Receipts",
+    description: "SlimeWire is a Telegram buy bot workflow for Solana traders: token scans, chart links, quick buy presets, wallet handoff, group alerts, receipts, and PnL."
+  },
+  "/solana-pnl-tracker": {
+    title: "Solana PnL Tracker - Positions, Receipts and Trading Bot Results",
+    description: "SlimeWire Solana PnL tracker workflows connect wallet positions, realized PnL, receipts, proof cards, Telegram calls, and terminal trade history."
+  },
+  "/solana-trading-bot-for-groups": {
+    title: "Solana Trading Bot for Telegram Groups - Alerts, Raids, Calls and Proof",
+    description: "SlimeWire is a Solana trading bot workflow for Telegram groups with token scans, calls, alerts, raid cards, proof links, launch rooms, and terminal handoff."
   },
   "/pump-fun-bot": {
     title: "Pump.fun Telegram Bot - Pump Fun Sniper Bot by SlimeWire",
@@ -5614,6 +5639,26 @@ function startHealthServer() {
     }
     if (request.method === "GET" && requestUrl.pathname === "/telegram-raid-bot") {
       await serveStaticHtmlPage(response, "telegram-raid-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/best-pump-fun-bots") {
+      await serveStaticHtmlPage(response, "best-pump-fun-bots.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/best-solana-sniper-bots") {
+      await serveStaticHtmlPage(response, "best-solana-sniper-bots.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/telegram-buy-bot") {
+      await serveStaticHtmlPage(response, "telegram-buy-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-pnl-tracker") {
+      await serveStaticHtmlPage(response, "solana-pnl-tracker.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-trading-bot-for-groups") {
+      await serveStaticHtmlPage(response, "solana-trading-bot-for-groups.html");
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/pump-fun-bot") {
