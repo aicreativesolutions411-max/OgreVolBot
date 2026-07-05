@@ -31131,8 +31131,9 @@ function maybeCommunitySnipe(entry) {
   } catch {}
 }
 // Build + SIGN a member's pump bonding-curve buy tx WITHOUT sending — so several can be assembled into
-// one Jito bundle for atomic co-entry. Buys the full amount (no separate platform-fee tx — the premium
-// co-entry mode forgoes the fee to keep the bundle within Jito's 5-tx limit).
+// one Jito bundle for atomic co-entry. Caller passes swapLamports = amount MINUS the platform fee (the
+// fee is collected in a separate transfer AFTER the bundle lands, so the bundle itself stays at 4 buys +
+// 1 tip within Jito's 5-tx limit while the co-entry still pays the same fee as any other buy).
 async function buildSignedPumpBuyTx(wallet, tokenMint, swapLamports, slippageBps) {
   const keypair = decryptWallet(wallet);
   const amountSol = Number((Number(swapLamports) / LAMPORTS_PER_SOL).toFixed(9));
@@ -31161,18 +31162,45 @@ async function fireCommunitySnipeThroneBundle(chatId, mint, orderedMembers, wall
   const results = [];
   const chunks = [];
   for (let i = 0; i < orderedMembers.length; i += 4) chunks.push(orderedMembers.slice(i, i + 4));
+  // AUTO-BUY safety net: any member the bundle couldn't seat (PumpPortal build hiccup, or an expired
+  // blockhash so the signed tx can no longer be rebroadcast) gets a FRESH independent buy from their own
+  // wallet — same proven path the plain snipe uses, which also carves + collects the fee and arms TP/SL.
+  // Idempotent per member+mint, so it can never double-buy someone who actually landed.
+  const autoBuyFallback = async (userId, m, wallet, nameTag) => {
+    try {
+      const lamports = solToLamports(Number(m.amountSol) || 0);
+      const buyResult = await runIdempotentMoneyOp("community-snipe", userId, `${chatId}:${mint}`,
+        () => buyTokenForPlan(wallet, mint, lamports, slippageBps, { trackTokenDelta: true, userId }));
+      if (!buyResult) return { nameTag, ok: false, why: "buy returned empty" };
+      recordTradeEvents([{ userId, type: "buy", source: "community-snipe", tokenMint: mint, walletLabel: wallet.label, walletPublicKey: wallet.publicKey, solLamportsSpent: String(lamports), signature: buyResult.signature }]).catch(() => {});
+      if (Number(m.tpPct) > 0 || Number(m.slPct) > 0) {
+        try {
+          const permission = await requireWebAutomationPermission(userId, "community snipe auto exits");
+          await webCreateSingleTradeAutoExitPlan(userId, wallet, mint, buyResult, { takeProfitPct: String(m.tpPct || "0"), stopLossPct: String(m.slPct || "0"), sellPercent: "100", sellDelay: "off" }, slippageBps, permission);
+        } catch (_) { /* buy landed; exit just isn't armed */ }
+      }
+      return { nameTag, ok: true, sol: Number(m.amountSol) || 0, fallback: true };
+    } catch (e) { return { nameTag, ok: false, why: friendlyError ? friendlyError(e) : (e && e.message) }; }
+  };
   for (const chunk of chunks) {
     const built = [];
     for (const [userId, m] of chunk) {
       const nameTag = m.name || shortMint(userId);
+      const wallets = walletsForOwner(walletStore, userId);
+      const wallet = wallets[(Number(m.walletIndex) || 1) - 1] || wallets[0];
+      if (!wallet) { results.push({ nameTag, ok: false, why: "no wallet" }); continue; }
+      // Carve the platform fee out of the co-entry buy (like every other buy in the app) so the fee is
+      // always affordable and gets collected right after — the bundle no longer trades fee-free.
+      const lamports = solToLamports(Number(m.amountSol) || 0);
+      const feeLamports = calculateFeeLamports(lamports);
+      const swapLamports = lamports - feeLamports;
       try {
-        const wallets = walletsForOwner(walletStore, userId);
-        const wallet = wallets[(Number(m.walletIndex) || 1) - 1] || wallets[0];
-        if (!wallet) { results.push({ nameTag, ok: false, why: "no wallet" }); continue; }
-        const lamports = solToLamports(Number(m.amountSol) || 0);
-        const b = await buildSignedPumpBuyTx(wallet, mint, lamports, slippageBps);
-        built.push({ userId, m, wallet, nameTag, lamports, ...b });
-      } catch (e) { results.push({ nameTag, ok: false, why: friendlyError ? friendlyError(e) : (e && e.message) }); }
+        const b = await buildSignedPumpBuyTx(wallet, mint, swapLamports, slippageBps);
+        built.push({ userId, m, wallet, nameTag, lamports, feeLamports, ...b });
+      } catch (e) {
+        // Never signed anything → safe to auto-buy fresh instead of leaving them to buy by hand.
+        results.push(await autoBuyFallback(userId, m, wallet, nameTag));
+      }
     }
     if (!built.length) continue;
     let bundleLanded = false;
@@ -31194,9 +31222,21 @@ async function fireCommunitySnipeThroneBundle(chatId, mint, orderedMembers, wall
       let ok = bundleLanded;
       if (!ok) {
         try { const st = await connection.getSignatureStatus(b.signature); if (st && st.value && !st.value.err) ok = true; } catch (_) {}
-        if (!ok) { try { await sendVersionedTransaction(b.tx, `throne-bundle fallback ${b.userId}`); ok = true; } catch (e) { results.push({ nameTag: b.nameTag, ok: false, why: friendlyError ? friendlyError(e) : (e && e.message) }); continue; } }
+        if (!ok) {
+          // Same-signature rebroadcast first (can't double-buy). If that throws, re-check status once —
+          // and if it still hasn't landed, the signed tx is dead (usually expired blockhash), so auto-buy
+          // a FRESH tx for them rather than dropping them to a manual buy.
+          try { await sendVersionedTransaction(b.tx, `throne-bundle fallback ${b.userId}`); ok = true; }
+          catch (_) {
+            try { const st2 = await connection.getSignatureStatus(b.signature); if (st2 && st2.value && !st2.value.err) ok = true; } catch (_) {}
+            if (!ok) { results.push(await autoBuyFallback(b.userId, b.m, b.wallet, b.nameTag)); continue; }
+          }
+        }
       }
       try { invalidateWalletReadCache(b.wallet.publicKey); } catch (_) {}
+      // Collect the platform fee for this landed co-entry buy (carved above). Best-effort, exactly like the
+      // normal buy path — this is what was missing before (bundle buys paid no fee at all).
+      try { await collectSolFee(b.keypair, b.feeLamports, { userId: b.userId }); } catch (_) {}
       results.push({ nameTag: b.nameTag, ok: true, sol: Number(b.m.amountSol) || 0, bundled: bundleLanded });
       recordTradeEvents([{ userId: b.userId, type: "buy", source: "community-snipe", tokenMint: mint, walletLabel: b.wallet.label, walletPublicKey: b.wallet.publicKey, solLamportsSpent: String(b.lamports), signature: b.signature }]).catch(() => {});
       if (Number(b.m.tpPct) > 0 || Number(b.m.slPct) > 0) {

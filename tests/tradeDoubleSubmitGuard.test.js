@@ -1236,6 +1236,14 @@ test("🏆⚡ Throne Bundle: atomic Jito waves of 4 by opt-in order, safe RPC fa
   assert.match(fb, /i \+= 4\) chunks\.push\(orderedMembers\.slice\(i, i \+ 4\)\)/);   // waves of 4
   assert.match(fb, /submitJitoBundle\(bundle/);                                       // real atomic Jito bundle
   assert.match(fb, /sendVersionedTransaction\(b\.tx, `throne-bundle fallback/);       // SAME signed tx via RPC = no double-buy, bad wallet can't block the wave
+  // AUTO-BUY safety net: a member the bundle couldn't seat gets a FRESH idempotent buy (no manual buy)
+  assert.match(fb, /const autoBuyFallback = async/);
+  assert.match(fb, /runIdempotentMoneyOp\("community-snipe", userId, `\$\{chatId\}:\$\{mint\}`/); // idempotent → never double-buys
+  assert.match(fb, /results\.push\(await autoBuyFallback\(/);
+  // co-entry buys now PAY THE FEE: carve it out of the buy + collect it in a separate transfer after
+  assert.match(fb, /const feeLamports = calculateFeeLamports\(lamports\)/);
+  assert.match(fb, /const swapLamports = lamports - feeLamports/);
+  assert.match(fb, /collectSolFee\(b\.keypair, b\.feeLamports/);
   // fired only when throneBundle on, members sorted by opt-in time (first-opted-first)
   assert.match(serverSource, /if \(snipe\.throneBundle\) \{/);
   assert.match(serverSource, /sort\(\(a, b\) => \(Number\(a\[1\]\.at\) \|\| 0\) - \(Number\(b\[1\]\.at\) \|\| 0\)\)/);
