@@ -32402,20 +32402,9 @@ async function handleBotChatMembershipUpdate(memberUpdate) {
     return;
   }
   registerTelegramGroup(chat);
-  // All-in-one setup menu: let admins toggle Buy / Raid / Rose / Scan for this group.
+  // On join, just pop up the room-options setup menu (admins toggle Buy / Raid / Rose / Scan) — no
+  // wall-of-text intro. The menu is the whole welcome.
   await groupBotOnAdded(chat).catch(() => {});
-  await say(chat.id, [
-    "🐸 SlimeWire is in the chat. Three things I do here:",
-    "",
-    "/look <CA> - instant SlimeShield risk read with chart + quick-buy links",
-    "/alpha - top scanner picks, every pair tap-to-chart",
-    "/ape - one fresh low-MC shot right now",
-    "/kols - what tracked KOL wallets are buying right now",
-    "/receipts - SlimeShield rug-call receipts and hit rate",
-    "/slimewire on - (admins) live engine alerts: fresh launches, TP/SL fires, KOL copies. Hard-capped at 3 posts/hour.",
-    "",
-    "DM me for wallets, buys, sells, and PnL cards. Full terminal: slimewire.org"
-  ].join("\n"));
 }
 
 // ============================================================================
