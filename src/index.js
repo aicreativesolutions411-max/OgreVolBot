@@ -4025,6 +4025,12 @@ const SEO_PAGES = [
   { path: "/solana-take-profit-stop-loss-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-watchlist", priority: "0.76", changefreq: "weekly" },
   { path: "/solana-launch-scanner", priority: "0.82", changefreq: "weekly" },
+  { path: "/solana-alpha-alerts", priority: "0.8", changefreq: "weekly" },
+  { path: "/solana-call-tracker", priority: "0.78", changefreq: "weekly" },
+  { path: "/solana-memecoin-bot", priority: "0.85", changefreq: "weekly" },
+  { path: "/pump-fun-sniper-bot", priority: "0.82", changefreq: "weekly" },
+  { path: "/solana-telegram-volume-bot", priority: "0.78", changefreq: "weekly" },
+  { path: "/telegram-raid-tools", priority: "0.76", changefreq: "weekly" },
   { path: "/pump-fun-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-volume-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-copy-trading-bot", priority: "0.8", changefreq: "weekly" },
@@ -4208,6 +4214,30 @@ const SEO_PAGE_META = {
   "/solana-launch-scanner": {
     title: "Solana Launch Scanner - Fresh Pairs, pump.fun Alerts and Token Review",
     description: "SlimeWire Solana launch scanner workflows help traders find fresh pairs, pump.fun launches, token scans, chart links, Telegram alerts, and launch proof."
+  },
+  "/solana-alpha-alerts": {
+    title: "Solana Alpha Alerts - Fresh Pairs, Wallet Signals and Telegram Calls",
+    description: "SlimeWire Solana alpha alerts connect fresh pairs, wallet signals, Telegram calls, token scans, chart links, proof cards, and terminal review."
+  },
+  "/solana-call-tracker": {
+    title: "Solana Call Tracker - Telegram Calls, Proof Cards, PnL and Receipts",
+    description: "SlimeWire Solana call tracker workflows help Telegram groups track token calls, proof cards, chart links, receipts, PnL, and launch activity."
+  },
+  "/solana-memecoin-bot": {
+    title: "Solana Memecoin Bot - Telegram Scans, Fresh Pairs, Charts and Trades",
+    description: "SlimeWire is a Solana memecoin bot workflow for Telegram scans, fresh pair discovery, pump.fun launches, charts, presets, PnL, and group tools."
+  },
+  "/pump-fun-sniper-bot": {
+    title: "pump.fun Sniper Bot - Fresh Launch Alerts, Charts, Presets and Exits",
+    description: "SlimeWire pump.fun sniper bot workflows combine fresh launch alerts, token scans, chart handoff, quick presets, TP/SL context, proof, and Telegram alerts."
+  },
+  "/solana-telegram-volume-bot": {
+    title: "Solana Telegram Volume Bot - Launch Visibility, Presets and Group Flow",
+    description: "SlimeWire Solana Telegram volume bot workflows explain launch visibility, wallet flows, presets, group updates, receipts, and safe user-facing context."
+  },
+  "/telegram-raid-tools": {
+    title: "Telegram Raid Tools for Solana - Raid Cards, Launch Alerts and Proof",
+    description: "SlimeWire Telegram raid tools help Solana communities coordinate raid cards, launch alerts, group actions, proof links, chart handoff, and trader flow."
   },
   "/pump-fun-bot": {
     title: "Pump.fun Telegram Bot - Pump Fun Sniper Bot by SlimeWire",
@@ -5767,6 +5797,30 @@ function startHealthServer() {
     }
     if (request.method === "GET" && requestUrl.pathname === "/solana-launch-scanner") {
       await serveStaticHtmlPage(response, "solana-launch-scanner.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-alpha-alerts") {
+      await serveStaticHtmlPage(response, "solana-alpha-alerts.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-call-tracker") {
+      await serveStaticHtmlPage(response, "solana-call-tracker.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-memecoin-bot") {
+      await serveStaticHtmlPage(response, "solana-memecoin-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/pump-fun-sniper-bot") {
+      await serveStaticHtmlPage(response, "pump-fun-sniper-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-telegram-volume-bot") {
+      await serveStaticHtmlPage(response, "solana-telegram-volume-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/telegram-raid-tools") {
+      await serveStaticHtmlPage(response, "telegram-raid-tools.html");
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/pump-fun-bot") {

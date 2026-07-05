@@ -247,5 +247,41 @@
     <guid isPermaLink="true">https://www.slimewire.org/solana-launch-scanner</guid>
     <description>SlimeWire Solana launch scanner workflows help traders find fresh pairs, pump.fun launches, token scans, chart links, Telegram alerts, and launch proof.</description>
   </item>
+  <item>
+    <title>Solana Alpha Alerts - Fresh Pairs, Wallet Signals and Telegram Calls</title>
+    <link>https://www.slimewire.org/solana-alpha-alerts</link>
+    <guid isPermaLink="true">https://www.slimewire.org/solana-alpha-alerts</guid>
+    <description>SlimeWire Solana alpha alerts connect fresh pairs, wallet signals, Telegram calls, token scans, chart links, proof cards, and terminal review.</description>
+  </item>
+  <item>
+    <title>Solana Call Tracker - Telegram Calls, Proof Cards, PnL and Receipts</title>
+    <link>https://www.slimewire.org/solana-call-tracker</link>
+    <guid isPermaLink="true">https://www.slimewire.org/solana-call-tracker</guid>
+    <description>SlimeWire Solana call tracker workflows help Telegram groups track token calls, proof cards, chart links, receipts, PnL, and launch activity.</description>
+  </item>
+  <item>
+    <title>Solana Memecoin Bot - Telegram Scans, Fresh Pairs, Charts and Trades</title>
+    <link>https://www.slimewire.org/solana-memecoin-bot</link>
+    <guid isPermaLink="true">https://www.slimewire.org/solana-memecoin-bot</guid>
+    <description>SlimeWire is a Solana memecoin bot workflow for Telegram scans, fresh pair discovery, pump.fun launches, charts, presets, PnL, and group tools.</description>
+  </item>
+  <item>
+    <title>pump.fun Sniper Bot - Fresh Launch Alerts, Charts, Presets and Exits</title>
+    <link>https://www.slimewire.org/pump-fun-sniper-bot</link>
+    <guid isPermaLink="true">https://www.slimewire.org/pump-fun-sniper-bot</guid>
+    <description>SlimeWire pump.fun sniper bot workflows combine fresh launch alerts, token scans, chart handoff, quick presets, TP/SL context, proof, and Telegram alerts.</description>
+  </item>
+  <item>
+    <title>Solana Telegram Volume Bot - Launch Visibility, Presets and Group Flow</title>
+    <link>https://www.slimewire.org/solana-telegram-volume-bot</link>
+    <guid isPermaLink="true">https://www.slimewire.org/solana-telegram-volume-bot</guid>
+    <description>SlimeWire Solana Telegram volume bot workflows explain launch visibility, wallet flows, presets, group updates, receipts, and safe user-facing context.</description>
+  </item>
+  <item>
+    <title>Telegram Raid Tools for Solana - Raid Cards, Launch Alerts and Proof</title>
+    <link>https://www.slimewire.org/telegram-raid-tools</link>
+    <guid isPermaLink="true">https://www.slimewire.org/telegram-raid-tools</guid>
+    <description>SlimeWire Telegram raid tools help Solana communities coordinate raid cards, launch alerts, group actions, proof links, chart handoff, and trader flow.</description>
+  </item>
 </channel>
 </rss>
