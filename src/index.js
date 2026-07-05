@@ -3984,6 +3984,7 @@ const SEO_HOST = (CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\
 const INDEXNOW_KEY = String(process.env.INDEXNOW_KEY || "slimewire7c1f9a4d2e8b6035a9c4f1d7b208e6a3").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 120) || "slimewire";
 const SEO_PAGES = [
   { path: "/", priority: "1.0", changefreq: "hourly" },
+  { path: "/resources", priority: "0.9", changefreq: "weekly" },
   { path: "/solana-telegram-bot", priority: "0.9", changefreq: "weekly" },
   { path: "/best-solana-trading-bots", priority: "0.85", changefreq: "weekly" },
   { path: "/solana-trading-terminal", priority: "0.85", changefreq: "weekly" },
@@ -5231,6 +5232,17 @@ function startHealthServer() {
       response.end(INDEXNOW_KEY);
       return;
     }
+    if (request.method === "GET" && requestUrl.pathname === "/llms.txt") {
+      try {
+        const body = await fs.readFile(path.join(WEB_STATIC_DIR, "llms.txt"), "utf8");
+        response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=3600" });
+        response.end(body);
+      } catch {
+        response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        response.end("Not found");
+      }
+      return;
+    }
     // Referral links keep working: capture the code and land on the new main site (gg signup reads ?ref=).
     if (request.method === "GET" && requestUrl.pathname.startsWith("/r/")) {
       const code = encodeURIComponent(requestUrl.pathname.slice(3).split("/")[0].slice(0, 32));
@@ -5294,6 +5306,10 @@ function startHealthServer() {
     // SEO landing page targeting "solana telegram (trading) bot" searches — real content, static + fast.
     if (request.method === "GET" && ["/solana-telegram-bot", "/bot", "/telegram-bot"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/resources") {
+      await serveStaticHtmlPage(response, "resources.html");
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/best-solana-trading-bots") {
