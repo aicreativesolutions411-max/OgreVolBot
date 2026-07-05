@@ -3976,6 +3976,62 @@ const BRAND_FOOTER = [
 // device browser. A `url` button (not callback) so the tap leaves Telegram straight to the page.
 const APP_INSTALL_URL = `${(CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/$/, "")}/install`;
 
+// ---- SEO / discoverability: robots.txt + auto sitemap.xml + IndexNow (Bing/Yandex/DDG) -----------
+// All served from cheap dedicated routes (no impact on trade paths). The sitemap auto-includes any
+// page added to SEO_PAGES with a fresh lastmod so Google recrawls; IndexNow pings the non-Google
+// engines the instant we deploy. Google itself has no push API — the sitemap + Search Console is it.
+const SEO_HOST = (CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/+$/, "");
+const INDEXNOW_KEY = String(process.env.INDEXNOW_KEY || "slimewire7c1f9a4d2e8b6035a9c4f1d7b208e6a3").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 120) || "slimewire";
+const SEO_PAGES = [
+  { path: "/", priority: "1.0", changefreq: "hourly" },
+  { path: "/solana-telegram-bot", priority: "0.9", changefreq: "weekly" },
+  { path: "/launch", priority: "0.8", changefreq: "daily" },
+  { path: "/raids", priority: "0.7", changefreq: "daily" },
+  { path: "/proof", priority: "0.7", changefreq: "daily" },
+  { path: "/hub", priority: "0.6", changefreq: "weekly" },
+  { path: "/manual", priority: "0.6", changefreq: "weekly" },
+  { path: "/tg-guide", priority: "0.6", changefreq: "weekly" },
+  { path: "/prelaunch", priority: "0.5", changefreq: "weekly" },
+  { path: "/pro", priority: "0.5", changefreq: "weekly" },
+  { path: "/install", priority: "0.5", changefreq: "monthly" }
+];
+function buildRobotsTxt() {
+  return [
+    "User-agent: *",
+    "Allow: /",
+    "Disallow: /api/",
+    "Disallow: /old",
+    "Disallow: /verify",
+    "Disallow: /account/",
+    "",
+    `Sitemap: ${SEO_HOST}/sitemap.xml`,
+    ""
+  ].join("\n");
+}
+function buildSitemapXml() {
+  const lastmod = new Date().toISOString().slice(0, 10);
+  const urls = SEO_PAGES.map((p) =>
+    `  <url><loc>${SEO_HOST}${p.path}</loc><lastmod>${lastmod}</lastmod><changefreq>${p.changefreq}</changefreq><priority>${p.priority}</priority></url>`
+  ).join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`;
+}
+// Automated indexing ping for IndexNow-participating engines (Bing, Yandex, DuckDuckGo, Seznam). Free,
+// no account. Best-effort + fully non-blocking. Google ignores IndexNow, so it's a bonus, not the plan.
+let _indexNowPingedAt = 0;
+async function submitIndexNow(paths = SEO_PAGES.map((p) => p.path)) {
+  try {
+    if (Date.now() - _indexNowPingedAt < 6 * 60 * 60 * 1000) return; // at most every 6h
+    _indexNowPingedAt = Date.now();
+    const host = SEO_HOST.replace(/^https?:\/\//, "");
+    const urlList = paths.map((p) => `${SEO_HOST}${p}`);
+    await fetch("https://api.indexnow.org/indexnow", {
+      method: "POST",
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify({ host, key: INDEXNOW_KEY, keyLocation: `${SEO_HOST}/${INDEXNOW_KEY}.txt`, urlList })
+    }).catch(() => {});
+  } catch (_) {}
+}
+
 // Recognized trading-terminal layout — the actions people expect front-and-centre, PLUS our own tools
 // (Launch, Volume Bot, Sniper/Copy) that other bots don't have. Each button routes to an existing handler.
 // Kept lean and trading-first: live pairs/scans + the app/web links live one tap deeper (📈 charts &
@@ -5150,6 +5206,22 @@ function startHealthServer() {
       await serveOldReference(response);
       return;
     }
+    // SEO: robots.txt + auto-generated sitemap.xml + the IndexNow key file. Cheap, cached at the edge.
+    if (request.method === "GET" && requestUrl.pathname === "/robots.txt") {
+      response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=3600" });
+      response.end(buildRobotsTxt());
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/sitemap.xml") {
+      response.writeHead(200, { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "public, max-age=3600" });
+      response.end(buildSitemapXml());
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === `/${INDEXNOW_KEY}.txt`) {
+      response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=86400" });
+      response.end(INDEXNOW_KEY);
+      return;
+    }
     // Referral links keep working: capture the code and land on the new main site (gg signup reads ?ref=).
     if (request.method === "GET" && requestUrl.pathname.startsWith("/r/")) {
       const code = encodeURIComponent(requestUrl.pathname.slice(3).split("/")[0].slice(0, 32));
@@ -5208,6 +5280,11 @@ function startHealthServer() {
     }
     if (request.method === "GET" && ["/launch", "/become-a-boss", "/launchpad-info"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "launch.html");
+      return;
+    }
+    // SEO landing page targeting "solana telegram (trading) bot" searches — real content, static + fast.
+    if (request.method === "GET" && ["/solana-telegram-bot", "/bot", "/telegram-bot"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "bot.html");
       return;
     }
     if (request.method === "GET" && ["/prelaunch", "/pre-launch", "/hype"].includes(requestUrl.pathname)) {
@@ -33278,6 +33355,7 @@ function startGroupBuyBot() {
   // 🎯 Top Plays ("SlimeWire plays") DM poller DISABLED for now — skewed toward frequent short-term/rug
   // pops; Alpha Radar (network-backed top wallets) + wallet tracking replace it. Re-enable to restore.
   // setInterval(() => { void pollPlaysSignal(); }, 5 * 60_000);
+  setTimeout(() => { void submitIndexNow(); }, 20_000);      // 🔎 auto-ping IndexNow (Bing/DDG/Yandex) on boot
   setInterval(() => { void pollLimitOrders(); }, 30_000);    // ⏰ Limit orders — MC-triggered buy/sell auto-fire (opt-in, own wallet)
   setInterval(() => { void pollWeeklyCallerContest(); }, 60 * 60_000); // 🏆 Caller of the Week — Sunday crown for opted-in groups
   void startVanityAutoGrind();       // 🅿️ keep the "…pump" mint pool auto-stocked (gentle bg worker; no user alerts)
