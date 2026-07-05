@@ -28736,20 +28736,34 @@ async function resolveCashtagToMint(symbol) {
   const key = q.toLowerCase();
   const cached = cashtagMintCache.get(key);
   if (cached && Date.now() - cached.at < 60_000) return cached.mint;
-  try {
-    const d = await fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { timeoutMs: 6000 }).catch(() => null);
-    const pairs = Array.isArray(d?.pairs) ? d.pairs : [];
-    // EXACT ticker match ONLY. The old code fell back to "any Solana pair" from the search, so casual
-    // chatter like "$lol"/"$gm" resolved to a random unrelated token and posted a fake card. Never do that.
-    const exact = pairs.filter((p) => String(p.chainId) === "solana" && String(p.baseToken?.symbol || "").toLowerCase() === key);
-    // Require REAL liquidity so we don't surface a dust/scam token that merely happens to share the ticker.
-    const pick = exact
-      .filter((p) => (Number(p.liquidity?.usd) || 0) >= 2000)
-      .sort((a, b) => (Number(b.liquidity?.usd) || 0) - (Number(a.liquidity?.usd) || 0))[0];
-    const mint = pick?.baseToken?.address || null;
-    cashtagMintCache.set(key, { at: Date.now(), mint });
-    return mint;
-  } catch { return null; }
+  let mint = null;
+  // 1) Solana Tracker search FIRST — it's keyed + paid, so it isn't silently 429'd on Render's shared
+  // IP the way DexScreener's public /search is (that throttle is why "$ticker" often scanned nothing).
+  if (CONFIG.solanaTrackerApiKey) {
+    try {
+      const d = await solanaTrackerJson(`/search?query=${encodeURIComponent(q)}`, { cacheTtlMs: 60_000, timeoutMs: 6000 }).catch(() => null);
+      const rows = Array.isArray(d?.data) ? d.data : Array.isArray(d?.tokens) ? d.tokens : Array.isArray(d) ? d : [];
+      // EXACT ticker match ONLY (never resolve "$gm"/"$lol" to a random token). Pick the deepest-liquidity one.
+      const exact = rows.filter((r) => String(r.symbol || "").toLowerCase() === key && (r.mint || r.address || r.tokenAddress));
+      const pick = exact.sort((a, b) => (Number(b.liquidityUsd ?? b.liquidity ?? 0)) - (Number(a.liquidityUsd ?? a.liquidity ?? 0)))[0];
+      mint = pick?.mint || pick?.address || pick?.tokenAddress || null;
+    } catch { mint = null; }
+  }
+  // 2) DexScreener fallback — exact ticker, best real liquidity. Relaxed floor (was $2k) so fresh/thin
+  // pump coins still resolve, but still exact-match-only so casual chatter never posts a fake card.
+  if (!mint) {
+    try {
+      const d = await fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { timeoutMs: 6000 }).catch(() => null);
+      const pairs = Array.isArray(d?.pairs) ? d.pairs : [];
+      const exact = pairs.filter((p) => String(p.chainId) === "solana" && String(p.baseToken?.symbol || "").toLowerCase() === key);
+      const pick = exact
+        .filter((p) => (Number(p.liquidity?.usd) || 0) >= 800)
+        .sort((a, b) => (Number(b.liquidity?.usd) || 0) - (Number(a.liquidity?.usd) || 0))[0];
+      mint = pick?.baseToken?.address || null;
+    } catch { mint = null; }
+  }
+  cashtagMintCache.set(key, { at: Date.now(), mint });
+  return mint;
 }
 
 // ── SLIMEWIRE NATIVE CHART DATA (free, no Helius) ───────────────────────────────────────────
@@ -32429,7 +32443,9 @@ async function readGroupBot() {
   return groupBotCache;
 }
 async function writeGroupBot(store) { groupBotCache = store; try { await writeJsonFile(GROUP_BOT_FILE, store); } catch {} }
-function defaultGroupBotEntry() { return { features: { buybot: false, raid: false, rose: false, scan: false }, token: null, addedAt: new Date().toISOString() }; }
+// Scan defaults ON — auto-reading a pasted CA / $ticker is the bot's core, benign, user-triggered value
+// (cooldown-gated, never floods). Buy/Raid/Rose stay OFF (those auto-post / moderate, so opt-in).
+function defaultGroupBotEntry() { return { features: { buybot: false, raid: false, rose: false, scan: true }, token: null, addedAt: new Date().toISOString() }; }
 async function getGroupBotEntry(chatId) { return (await readGroupBot()).groups[String(chatId)] || null; }
 function groupBotFeatureOn(entry, key) { return Boolean(entry && entry.features && entry.features[key]); }
 async function setGroupBotFeature(chatId, key, on) {
