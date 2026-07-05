@@ -4002,6 +4002,12 @@ const SEO_PAGES = [
   { path: "/slimewire-vs-trojan", priority: "0.74", changefreq: "weekly" },
   { path: "/solana-memecoin-screener", priority: "0.82", changefreq: "weekly" },
   { path: "/pump-fun-scanner", priority: "0.82", changefreq: "weekly" },
+  { path: "/solana-trading-bot-results", priority: "0.78", changefreq: "weekly" },
+  { path: "/telegram-trading-bot-results", priority: "0.78", changefreq: "weekly" },
+  { path: "/solana-memecoin-alerts", priority: "0.8", changefreq: "weekly" },
+  { path: "/solana-launch-bot", priority: "0.8", changefreq: "weekly" },
+  { path: "/memecoin-launch-tools", priority: "0.8", changefreq: "weekly" },
+  { path: "/telegram-raid-bot", priority: "0.76", changefreq: "weekly" },
   { path: "/pump-fun-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-volume-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-copy-trading-bot", priority: "0.8", changefreq: "weekly" },
@@ -4093,6 +4099,30 @@ const SEO_PAGE_META = {
   "/pump-fun-scanner": {
     title: "Pump.fun Scanner - Fresh Solana Launches, Charts and Token Checks",
     description: "Use SlimeWire as a pump.fun scanner for fresh Solana launches, market cap, liquidity, chart handoff, token checks, Telegram alerts, and trade presets."
+  },
+  "/solana-trading-bot-results": {
+    title: "Solana Trading Bot Results - Proof, Calls, Alerts and PnL Tracking",
+    description: "SlimeWire result pages explain how Solana trading bot proof, call tracking, alerts, PnL, positions, and public receipts help traders judge tools by outcomes."
+  },
+  "/telegram-trading-bot-results": {
+    title: "Telegram Trading Bot Results - Solana Alerts, Calls and Receipts",
+    description: "Learn what Telegram trading bot results should show: Solana alerts, call tracking, chart links, PnL, public proof, group activity, and risk context."
+  },
+  "/solana-memecoin-alerts": {
+    title: "Solana Memecoin Alerts - Telegram Scans, Fresh Pairs and Proof",
+    description: "SlimeWire Solana memecoin alerts connect fresh pair scans, Telegram group notifications, chart links, token safety context, proof cards, and terminal workflows."
+  },
+  "/solana-launch-bot": {
+    title: "Solana Launch Bot - Telegram Alerts, Launch Rooms and Trading Handoff",
+    description: "SlimeWire launch bot workflows help Solana creators connect Telegram alerts, launch rooms, scans, charts, raid cards, proof pages, and trader handoff."
+  },
+  "/memecoin-launch-tools": {
+    title: "Memecoin Launch Tools - Telegram, Scans, Charts, Raids and Proof",
+    description: "SlimeWire memecoin launch tools connect Telegram alerts, launch rooms, token scans, charts, raid cards, proof pages, and trading handoff for Solana teams."
+  },
+  "/telegram-raid-bot": {
+    title: "Telegram Raid Bot for Solana Launches - SlimeWire Raid Tools",
+    description: "SlimeWire Telegram raid bot workflows help Solana communities organize raids, launch cards, proof links, group alerts, and trader handoff without clutter."
   },
   "/pump-fun-bot": {
     title: "Pump.fun Telegram Bot - Pump Fun Sniper Bot by SlimeWire",
@@ -5560,6 +5590,30 @@ function startHealthServer() {
     }
     if (request.method === "GET" && requestUrl.pathname === "/pump-fun-scanner") {
       await serveStaticHtmlPage(response, "pump-fun-scanner.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-trading-bot-results") {
+      await serveStaticHtmlPage(response, "solana-trading-bot-results.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/telegram-trading-bot-results") {
+      await serveStaticHtmlPage(response, "telegram-trading-bot-results.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-memecoin-alerts") {
+      await serveStaticHtmlPage(response, "solana-memecoin-alerts.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-launch-bot") {
+      await serveStaticHtmlPage(response, "solana-launch-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/memecoin-launch-tools") {
+      await serveStaticHtmlPage(response, "memecoin-launch-tools.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/telegram-raid-bot") {
+      await serveStaticHtmlPage(response, "telegram-raid-bot.html");
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/pump-fun-bot") {
