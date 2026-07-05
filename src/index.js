@@ -3997,6 +3997,11 @@ const SEO_PAGES = [
   { path: "/best-pump-fun-tools", priority: "0.8", changefreq: "weekly" },
   { path: "/best-telegram-crypto-bots", priority: "0.8", changefreq: "weekly" },
   { path: "/best-solana-rug-checkers", priority: "0.8", changefreq: "weekly" },
+  { path: "/solana-telegram-bot-alternatives", priority: "0.8", changefreq: "weekly" },
+  { path: "/slimewire-vs-bonkbot", priority: "0.74", changefreq: "weekly" },
+  { path: "/slimewire-vs-trojan", priority: "0.74", changefreq: "weekly" },
+  { path: "/solana-memecoin-screener", priority: "0.82", changefreq: "weekly" },
+  { path: "/pump-fun-scanner", priority: "0.82", changefreq: "weekly" },
   { path: "/pump-fun-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-volume-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-copy-trading-bot", priority: "0.8", changefreq: "weekly" },
@@ -4068,6 +4073,26 @@ const SEO_PAGE_META = {
   "/best-solana-rug-checkers": {
     title: "Best Solana Rug Checkers - Token Safety Scanner Checklist",
     description: "What to look for in the best Solana rug checkers: liquidity, holder concentration, authority notes, socials, metadata, market data, chart context, and warnings."
+  },
+  "/solana-telegram-bot-alternatives": {
+    title: "Solana Telegram Bot Alternatives - Trading Bots, Scanners and Terminals",
+    description: "Compare Solana Telegram bot alternatives by trading speed, token scans, chart handoff, wallet controls, copy trading, group alerts, rug checks, and PnL tracking."
+  },
+  "/slimewire-vs-bonkbot": {
+    title: "SlimeWire vs BonkBot - Solana Telegram Bot and Terminal Comparison",
+    description: "Compare SlimeWire and BonkBot-style Solana trading workflows by Telegram speed, chart depth, token scans, wallet controls, copy trading, group tools, and PnL."
+  },
+  "/slimewire-vs-trojan": {
+    title: "SlimeWire vs Trojan - Solana Telegram Trading Bot Comparison",
+    description: "Compare SlimeWire and Trojan-style Solana Telegram trading workflows by scans, charts, wallet controls, exits, copy trading, group alerts, and web terminal depth."
+  },
+  "/solana-memecoin-screener": {
+    title: "Solana Memecoin Screener - Live Pairs, Scans, Charts and Alerts",
+    description: "Use SlimeWire as a Solana memecoin screener for live pairs, fresh launches, pump.fun style coins, token scans, charts, wallet controls, alerts, and PnL."
+  },
+  "/pump-fun-scanner": {
+    title: "Pump.fun Scanner - Fresh Solana Launches, Charts and Token Checks",
+    description: "Use SlimeWire as a pump.fun scanner for fresh Solana launches, market cap, liquidity, chart handoff, token checks, Telegram alerts, and trade presets."
   },
   "/pump-fun-bot": {
     title: "Pump.fun Telegram Bot - Pump Fun Sniper Bot by SlimeWire",
@@ -5515,6 +5540,26 @@ function startHealthServer() {
     }
     if (request.method === "GET" && requestUrl.pathname === "/best-solana-rug-checkers") {
       await serveStaticHtmlPage(response, "best-solana-rug-checkers.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-telegram-bot-alternatives") {
+      await serveStaticHtmlPage(response, "solana-telegram-bot-alternatives.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/slimewire-vs-bonkbot") {
+      await serveStaticHtmlPage(response, "slimewire-vs-bonkbot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/slimewire-vs-trojan") {
+      await serveStaticHtmlPage(response, "slimewire-vs-trojan.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-memecoin-screener") {
+      await serveStaticHtmlPage(response, "solana-memecoin-screener.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/pump-fun-scanner") {
+      await serveStaticHtmlPage(response, "pump-fun-scanner.html");
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/pump-fun-bot") {
