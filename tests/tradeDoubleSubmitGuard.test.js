@@ -236,6 +236,28 @@ test("Robinhood Chain: coin feed + wallet holdings + SOL->ETH funding (Relay)", 
   }
 });
 
+test("Robinhood Chain: cash ETH back out to SOL (reverse Relay bridge, idempotent, gas-reserved)", () => {
+  // Server: auth-gated, idempotent cash-out endpoint that delivers to the wallet's OWN Solana address.
+  assert.match(serverSource, /pathname === "\/api\/web\/rh\/bridge-to-sol"/);
+  assert.match(functionBody(serverSource, "webRhBridgeToSol"), /runIdempotentMoneyOp\("web-rh-bridge-sol"/);
+  const out = functionBody(serverSource, "webRhBridgeToSolCore");
+  assert.match(out, /rhBridgeEthToSol/);
+  assert.match(out, /keypair\.publicKey\.toBase58\(\)/);        // recipient = the wallet's OWN SOL address
+  // Lib: the reverse Relay route (RH 4663 -> Solana, native ETH -> native SOL) with a gas reserve left behind.
+  const rhLib = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
+  const bridge = functionBody(rhLib, "rhBridgeEthToSol");
+  assert.match(bridge, /originChainId: RH_CHAIN_ID/);
+  assert.match(bridge, /destinationChainId: RELAY_SOLANA_CHAIN_ID/);
+  assert.match(bridge, /gasReserveEth/);                        // never drains the wallet's gas
+  assert.match(bridge, /rhExecuteEvmSteps/);
+  // Client: cash-out button + handler in both mirrors.
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /function rhBridgeToSol/);
+    assert.match(src, /\/api\/web\/rh\/bridge-to-sol/);
+    assert.match(src, /Cash out ETH → SOL/);
+  }
+});
+
 test("Robinhood coins are tradeable in-app (Relay swap, gas-estimated, idempotent) + funded from Swap", () => {
   // Server: buy/sell endpoint routed through Relay same-chain swaps; sells execute approve+swap in order.
   assert.match(serverSource, /pathname === "\/api\/web\/rh\/trade"/);

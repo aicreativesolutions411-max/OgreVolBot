@@ -69,7 +69,7 @@ import {
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
-import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
+import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
 import {
@@ -8559,6 +8559,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
     if (request.method === "POST" && pathname === "/api/web/rh/fund-with-sol") {
       const result = await webRhFundWithSol(auth.userId, await readJsonRequestBody(request));
+      sendWebJson(request, response, 200, result);
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/rh/bridge-to-sol") {
+      const result = await webRhBridgeToSol(auth.userId, await readJsonRequestBody(request));
       sendWebJson(request, response, 200, result);
       return;
     }
@@ -38885,6 +38890,38 @@ async function webRhFundWithSolCore(userId, body = {}) {
   const bal = await rhEthBalance(evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ eth: "0" }));
   await audit("web_rh_fund_sol", { userId, wallet: wallet.publicKey, evmAddress, amountSol, signature, requestId: quote.requestId, relayStatus, outEthQuoted: quote.outEth, ethBalance: bal.eth });
   return { ok: true, signature, relayStatus, requestId: quote.requestId, evmAddress, quotedEth: quote.outEth, ethBalance: bal.eth, impactPercent: quote.impactPercent };
+}
+
+// Reverse of fund-with-sol: cash the wallet's Robinhood ETH back out to its OWN Solana address (native
+// ETH -> native SOL via the same Relay rail the fee sweep uses). User-triggered only; leaves a gas reserve.
+async function webRhBridgeToSol(userId, body = {}) {
+  return runIdempotentMoneyOp("web-rh-bridge-sol", userId, firstString(body.tradeAttemptId, body.clientRequestId),
+    () => webRhBridgeToSolCore(userId, body),
+    { busyMessage: "A cash-out is already in flight for this wallet — give it a moment." });
+}
+async function webRhBridgeToSolCore(userId, body = {}) {
+  const store = await readWalletStore();
+  const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
+  const keypair = decryptWallet(wallet);
+  const evmAddress = evmAddressFromSolana(keypair.secretKey);
+  const solRecipient = keypair.publicKey.toBase58();
+  // "all" (or blank) sweeps the whole ETH balance minus a gas reserve; a number cashes out that much ETH.
+  const rawAmount = firstString(body.amountEth, body.amount);
+  const wantAll = !rawAmount || String(rawAmount).trim().toLowerCase() === "all";
+  const amountEth = wantAll ? "all" : Number(rawAmount);
+  if (!wantAll && (!Number.isFinite(amountEth) || amountEth <= 0)) {
+    const e = new Error("Enter an ETH amount above 0, or use Cash out all."); e.statusCode = 400; throw e;
+  }
+  const result = await rhBridgeEthToSol({
+    solanaSecretKey: keypair.secretKey,
+    solRecipient,
+    amountEth,
+    rpcUrl: CONFIG.rhChainRpcUrl
+  });
+  invalidateWalletReadCache(wallet.publicKey);
+  const bal = await rhEthBalance(evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ eth: "0" }));
+  await audit("web_rh_bridge_sol", { userId, wallet: wallet.publicKey, evmAddress, solRecipient, sentEth: result.sentEth, outSol: result.outSol, hashes: result.hashes, ethBalance: bal.eth });
+  return { ok: true, sentEth: result.sentEth, outSol: result.outSol, hashes: result.hashes, requestId: result.requestId, evmAddress, solRecipient, ethBalance: bal.eth, impactPercent: result.impactPercent };
 }
 
 async function webLaunchRhCoin(userId, body = {}) {

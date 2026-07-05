@@ -801,6 +801,67 @@ export async function rhSweepFeesToSol({ appSecret, solFeeWallet, rpcUrl, minEth
   };
 }
 
+// Cash a USER's Robinhood ETH back out to their OWN Solana address (the reverse of relayQuoteSolToRhEth).
+// Same cross-chain rail as the fee sweep (Relay 4663 -> Solana, native ETH -> native SOL), but signed by
+// the user's derived EVM wallet and delivered to their Solana pubkey. Leaves a small gas reserve behind so
+// the wallet can still pay for a future trade. amountEth "all"/omitted = sweep the whole balance minus gas.
+export async function rhBridgeEthToSol({ solanaSecretKey, solRecipient, amountEth, rpcUrl, gasReserveEth = 0.0003 }) {
+  if (!solRecipient) throw new Error("Missing Solana destination address.");
+  const wallet = evmWalletFromSolana(solanaSecretKey, rpcUrl);
+  const balanceWei = BigInt((await rhEthBalance(wallet.address, rpcUrl)).wei);
+  const reserveWei = ethers.parseEther(String(gasReserveEth));
+  const wantAll = amountEth == null || String(amountEth).trim() === "" || String(amountEth).trim().toLowerCase() === "all";
+  // Spendable = balance minus the gas reserve; a specific amount is clamped to that so we never over-draw.
+  const spendableWei = balanceWei > reserveWei ? balanceWei - reserveWei : 0n;
+  let sendWei = spendableWei;
+  if (!wantAll) {
+    const reqWei = ethers.parseEther(String(amountEth));
+    if (reqWei <= 0n) { const e = new Error("Enter an ETH amount above 0."); e.statusCode = 400; throw e; }
+    sendWei = reqWei < spendableWei ? reqWei : spendableWei;
+  }
+  // Relay's cross-chain minimum is tiny but real; below ~0.0005 ETH the route won't quote. Fail clearly.
+  const minSendWei = ethers.parseEther("0.0005");
+  if (sendWei < minSendWei) {
+    const e = new Error(`This wallet has ${ethers.formatEther(balanceWei)} ETH — after leaving ${gasReserveEth} ETH for gas that's not enough to bridge (need ~0.0005 ETH). Trade or fund more first.`);
+    e.statusCode = 400; throw e;
+  }
+  const response = await fetch(`${RELAY_API}/quote`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user: wallet.address,
+      recipient: solRecipient,
+      originChainId: RH_CHAIN_ID,
+      destinationChainId: RELAY_SOLANA_CHAIN_ID,
+      originCurrency: "0x0000000000000000000000000000000000000000",
+      destinationCurrency: "11111111111111111111111111111111",
+      amount: sendWei.toString(),
+      tradeType: "EXACT_INPUT"
+    }),
+    signal: AbortSignal.timeout ? AbortSignal.timeout(20_000) : undefined
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.message) throw new Error(`ETH → SOL quote failed: ${String(data.message || response.status).slice(0, 200)}`);
+  const txs = [];
+  for (const step of data.steps || []) {
+    for (const item of step.items || []) {
+      const tx = item.data || {};
+      if (tx.to && tx.data !== undefined) txs.push({ to: tx.to, data: tx.data, value: tx.value || "0" });
+    }
+  }
+  if (!txs.length) throw new Error("ETH → SOL quote returned no transaction.");
+  const { hashes } = await rhExecuteEvmSteps(solanaSecretKey, txs, rpcUrl);
+  return {
+    ok: true,
+    hashes,
+    evmAddress: wallet.address,
+    sentEth: ethers.formatEther(sendWei),
+    outSol: data.details?.currencyOut?.amountFormatted || "",
+    requestId: data.steps?.[0]?.requestId || data.requestId || "",
+    impactPercent: data.details?.totalImpact?.percent || ""
+  };
+}
+
 // ERC-20 balance straight from the chain (fresher than Blockscout's indexer for just-traded wallets).
 const ERC20_MINI_ABI = [
   "function balanceOf(address) view returns (uint256)",
