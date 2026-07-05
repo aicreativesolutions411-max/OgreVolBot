@@ -1251,6 +1251,19 @@ test("🏆⚡ Throne Bundle: atomic Jito waves of 4 by opt-in order, safe RPC fa
   assert.match(serverSource, /data === "cs:tbundle"/);
   assert.match(serverSource, /callback_data: "cs:tbundle"/);
 });
+test("launch Jito bundle AUTO-RETRIES with escalating tips before falling back", () => {
+  const lb = functionBody(serverSource, "webLaunchPumpJitoBundle");
+  // multi-shot escalating tip ladder (not a single shot), env-tunable, capped at Jito's 0.01
+  assert.match(lb, /LAUNCH_JITO_TIP_MULTIPLIERS \|\| "3,6,10"/);
+  assert.match(lb, /Math\.min\(0\.01, CONFIG\.pumpLaunchJitoTipSol \* multiplier\)/);
+  // retry loop rebuilds a FRESH bundle each attempt (all-or-none miss spent nothing) until it lands
+  assert.match(lb, /for \(let attempt = 0; attempt < tipSchedule\.length && !landed; attempt \+= 1\)/);
+  assert.match(lb, /requestPumpPortalBundleTxs\(/);
+  assert.match(lb, /landed = await mintLanded\(attempt === 0 \? 8_000 : 6_000\)/);
+  // only after every shot misses does it fall back to the standard launch (never dead-ends)
+  assert.match(lb, /if \(!landed\) \{/);
+  assert.match(lb, /webLaunchPumpPortalLocal\(userId, body, basePayload\)/);
+});
 test("smooth nav: DM sub-views carry a Main Menu button (no re-/start)", () => {
   for (const fn of ["showTelegramLinksMenu", "showTelegramPortfolioMenu", "showTelegramOgreToolsMenu", "showWalletMenu"]) {
     assert.match(functionBody(serverSource, fn), /callback_data: "main_menu"/, `${fn} needs Main Menu`);

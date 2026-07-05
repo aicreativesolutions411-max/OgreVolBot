@@ -4042,6 +4042,12 @@ const SEO_PAGES = [
   { path: "/solana-copy-trading-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-sniper-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-rug-checker", priority: "0.8", changefreq: "weekly" },
+  { path: "/trust", priority: "0.82", changefreq: "monthly" },
+  { path: "/security", priority: "0.8", changefreq: "monthly" },
+  { path: "/how-it-works", priority: "0.84", changefreq: "monthly" },
+  { path: "/risk-disclosure", priority: "0.72", changefreq: "monthly" },
+  { path: "/support", priority: "0.72", changefreq: "monthly" },
+  { path: "/telegram-bot-setup", priority: "0.78", changefreq: "monthly" },
   { path: "/press", priority: "0.6", changefreq: "monthly" },
   { path: "/launch", priority: "0.8", changefreq: "daily" },
   { path: "/raids", priority: "0.7", changefreq: "daily" },
@@ -4288,6 +4294,30 @@ const SEO_PAGE_META = {
   "/solana-rug-checker": {
     title: "Solana Rug Checker - Token Safety Scanner by SlimeWire",
     description: "Use SlimeWire's Solana rug checker and token safety scanner to review liquidity, holders, market data, authority notes, and visible risks before trading."
+  },
+  "/trust": {
+    title: "SlimeWire Trust Center - Product, Security, Risk and Support",
+    description: "SlimeWire Trust Center explains the Solana terminal, Telegram bot, wallet safety posture, risk disclosures, support paths, and product transparency."
+  },
+  "/security": {
+    title: "SlimeWire Security - Wallet Safety, Bot Safety and Trading Risk Notes",
+    description: "SlimeWire security page explains wallet safety basics, Telegram bot safety, approvals, private key cautions, risk context, and user-safe trading workflows."
+  },
+  "/how-it-works": {
+    title: "How SlimeWire Works - Solana Terminal, Telegram Bot, Scans and Alerts",
+    description: "Learn how SlimeWire works across the Solana web terminal, Telegram bot, token scans, live pairs, charts, wallet context, alerts, proof, and PnL."
+  },
+  "/risk-disclosure": {
+    title: "SlimeWire Risk Disclosure - Crypto, Memecoin, Wallet and Bot Risks",
+    description: "Read SlimeWire risk disclosure for Solana memecoin trading, Telegram bots, token scans, alerts, wallet approvals, slippage, liquidity, and market volatility."
+  },
+  "/support": {
+    title: "SlimeWire Support - Help, Telegram Bot, Docs and Product Resources",
+    description: "SlimeWire support page points users to the terminal, Telegram bot, setup guide, trust center, security notes, risk disclosure, resources, and product docs."
+  },
+  "/telegram-bot-setup": {
+    title: "SlimeWire Telegram Bot Setup - Add @SlimeWiredBot to Solana Groups",
+    description: "Set up @SlimeWiredBot for Solana Telegram groups, token scans, alerts, launch rooms, raid tools, proof cards, and terminal handoff."
   },
   "/press": {
     title: "SlimeWire Press Kit - Solana Trading Terminal and Telegram Bot",
@@ -5898,6 +5928,30 @@ function startHealthServer() {
       return;
     }
     // Press / media kit — brand assets + boilerplate + the full feature suite (for listings/journalists).
+    if (request.method === "GET" && requestUrl.pathname === "/trust") {
+      await serveStaticHtmlPage(response, "trust.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/security") {
+      await serveStaticHtmlPage(response, "security.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/how-it-works") {
+      await serveStaticHtmlPage(response, "how-it-works.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/risk-disclosure") {
+      await serveStaticHtmlPage(response, "risk-disclosure.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/support") {
+      await serveStaticHtmlPage(response, "support.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/telegram-bot-setup") {
+      await serveStaticHtmlPage(response, "telegram-bot-setup.html");
+      return;
+    }
     if (request.method === "GET" && ["/press", "/media", "/media-kit", "/presskit"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "press.html");
       return;
@@ -49748,9 +49802,15 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
   // mint never existed). All-or-none means a missed bundle spent nothing, so we
   // rebuild with a fresh blockhash and a bigger tip and try again.
   const timeoutMs = CONFIG.pumpLaunchTimeoutMs || 30000;
-  // ONE decent-tip shot then fall back to the standard path - speed beats
-  // stubbornness, and the fallback fires managed buys seconds later anyway.
-  const tipSchedule = [3].map((multiplier) => Math.min(0.01, CONFIG.pumpLaunchJitoTipSol * multiplier));
+  // AUTO-RETRY the bundle before giving up: a missed bundle is all-or-none so it spent NOTHING —
+  // rebuild with a fresh blockhash + a bigger tip and try again. Escalating multipliers (capped at Jito's
+  // 0.01 SOL effective tip) so a low-tip miss climbs into the block; only after every shot misses do we
+  // fall back to the standard launch (which still fires the dev + bundle-wallet buys server-side). Tunable
+  // via LAUNCH_JITO_TIP_MULTIPLIERS (comma list) — default 3 escalating shots.
+  const tipSchedule = String(process.env.LAUNCH_JITO_TIP_MULTIPLIERS || "3,6,10")
+    .split(",").map((n) => Number(n.trim())).filter((n) => Number.isFinite(n) && n > 0)
+    .map((multiplier) => Math.min(0.01, CONFIG.pumpLaunchJitoTipSol * multiplier));
+  if (!tipSchedule.length) tipSchedule.push(Math.min(0.01, CONFIG.pumpLaunchJitoTipSol * 3));
   const mintPubkey = new PublicKey(mint);
   const mintLanded = async (waitMs) => {
     const deadline = Date.now() + waitMs;
@@ -49826,10 +49886,10 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
       launchAttemptId: basePayload.clientRequestId, userId, mint, bundleId,
       txCount: plan.length, attempt: attempt + 1, tipSol: tipSchedule[attempt]
     });
-    // Pump-speed budget: a bundle that lands does so within a few blocks; if it
-    // has not appeared in 8s, the standard path with instant managed buys is
-    // faster than waiting on the lottery.
-    landed = await mintLanded(8_000);
+    // Pump-speed budget: a bundle that lands does so within a few blocks. Give the first shot 8s (it also
+    // covers the one-time simulation), then 6s per retry — a land shows in <4s, so this keeps the whole
+    // retry ladder to ~20s worst case before the instant-managed-buys fallback takes over.
+    landed = await mintLanded(attempt === 0 ? 8_000 : 6_000);
   }
 
   if (!landed) {
