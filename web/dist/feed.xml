@@ -319,5 +319,41 @@
     <guid isPermaLink="true">https://www.slimewire.org/solana-token-alerts</guid>
     <description>SlimeWire Solana token alerts connect contract scans, watchlists, chart links, wallet signals, Telegram updates, proof cards, and terminal review.</description>
   </item>
+  <item>
+    <title>SlimeWire Trust Center - Product, Security, Risk and Support</title>
+    <link>https://www.slimewire.org/trust</link>
+    <guid isPermaLink="true">https://www.slimewire.org/trust</guid>
+    <description>SlimeWire Trust Center explains the Solana terminal, Telegram bot, wallet safety posture, risk disclosures, support paths, and product transparency.</description>
+  </item>
+  <item>
+    <title>SlimeWire Security - Wallet Safety, Bot Safety and Trading Risk Notes</title>
+    <link>https://www.slimewire.org/security</link>
+    <guid isPermaLink="true">https://www.slimewire.org/security</guid>
+    <description>SlimeWire security page explains wallet safety basics, Telegram bot safety, approvals, private key cautions, risk context, and user-safe trading workflows.</description>
+  </item>
+  <item>
+    <title>How SlimeWire Works - Solana Terminal, Telegram Bot, Scans and Alerts</title>
+    <link>https://www.slimewire.org/how-it-works</link>
+    <guid isPermaLink="true">https://www.slimewire.org/how-it-works</guid>
+    <description>Learn how SlimeWire works across the Solana web terminal, Telegram bot, token scans, live pairs, charts, wallet context, alerts, proof, and PnL.</description>
+  </item>
+  <item>
+    <title>SlimeWire Risk Disclosure - Crypto, Memecoin, Wallet and Bot Risks</title>
+    <link>https://www.slimewire.org/risk-disclosure</link>
+    <guid isPermaLink="true">https://www.slimewire.org/risk-disclosure</guid>
+    <description>Read SlimeWire risk disclosure for Solana memecoin trading, Telegram bots, token scans, alerts, wallet approvals, slippage, liquidity, and market volatility.</description>
+  </item>
+  <item>
+    <title>SlimeWire Support - Help, Telegram Bot, Docs and Product Resources</title>
+    <link>https://www.slimewire.org/support</link>
+    <guid isPermaLink="true">https://www.slimewire.org/support</guid>
+    <description>SlimeWire support page points users to the terminal, Telegram bot, setup guide, trust center, security notes, risk disclosure, resources, and product docs.</description>
+  </item>
+  <item>
+    <title>SlimeWire Telegram Bot Setup - Add @SlimeWiredBot to Solana Groups</title>
+    <link>https://www.slimewire.org/telegram-bot-setup</link>
+    <guid isPermaLink="true">https://www.slimewire.org/telegram-bot-setup</guid>
+    <description>Set up @SlimeWiredBot for Solana Telegram groups, token scans, alerts, launch rooms, raid tools, proof cards, and terminal handoff.</description>
+  </item>
 </channel>
 </rss>

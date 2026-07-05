@@ -42,6 +42,48 @@
       "content_text": "Indexable SlimeWire updates for the Solana trading terminal, Telegram bot, discovery feeds, share kit, AI resource hub, and tool pages."
     },
     {
+      "id": "https://www.slimewire.org/trust",
+      "url": "https://www.slimewire.org/trust",
+      "title": "SlimeWire Trust Center - Product, Security, Risk and Support",
+      "summary": "SlimeWire Trust Center explains the Solana terminal, Telegram bot, wallet safety posture, risk disclosures, support paths, and product transparency.",
+      "content_text": "SlimeWire Trust Center explains the Solana terminal, Telegram bot, wallet safety posture, risk disclosures, support paths, and product transparency."
+    },
+    {
+      "id": "https://www.slimewire.org/security",
+      "url": "https://www.slimewire.org/security",
+      "title": "SlimeWire Security - Wallet Safety, Bot Safety and Trading Risk Notes",
+      "summary": "SlimeWire security page explains wallet safety basics, Telegram bot safety, approvals, private key cautions, risk context, and user-safe trading workflows.",
+      "content_text": "SlimeWire security page explains wallet safety basics, Telegram bot safety, approvals, private key cautions, risk context, and user-safe trading workflows."
+    },
+    {
+      "id": "https://www.slimewire.org/how-it-works",
+      "url": "https://www.slimewire.org/how-it-works",
+      "title": "How SlimeWire Works - Solana Terminal, Telegram Bot, Scans and Alerts",
+      "summary": "Learn how SlimeWire works across the Solana web terminal, Telegram bot, token scans, live pairs, charts, wallet context, alerts, proof, and PnL.",
+      "content_text": "Learn how SlimeWire works across the Solana web terminal, Telegram bot, token scans, live pairs, charts, wallet context, alerts, proof, and PnL."
+    },
+    {
+      "id": "https://www.slimewire.org/risk-disclosure",
+      "url": "https://www.slimewire.org/risk-disclosure",
+      "title": "SlimeWire Risk Disclosure - Crypto, Memecoin, Wallet and Bot Risks",
+      "summary": "Read SlimeWire risk disclosure for Solana memecoin trading, Telegram bots, token scans, alerts, wallet approvals, slippage, liquidity, and market volatility.",
+      "content_text": "Read SlimeWire risk disclosure for Solana memecoin trading, Telegram bots, token scans, alerts, wallet approvals, slippage, liquidity, and market volatility."
+    },
+    {
+      "id": "https://www.slimewire.org/support",
+      "url": "https://www.slimewire.org/support",
+      "title": "SlimeWire Support - Help, Telegram Bot, Docs and Product Resources",
+      "summary": "SlimeWire support page points users to the terminal, Telegram bot, setup guide, trust center, security notes, risk disclosure, resources, and product docs.",
+      "content_text": "SlimeWire support page points users to the terminal, Telegram bot, setup guide, trust center, security notes, risk disclosure, resources, and product docs."
+    },
+    {
+      "id": "https://www.slimewire.org/telegram-bot-setup",
+      "url": "https://www.slimewire.org/telegram-bot-setup",
+      "title": "SlimeWire Telegram Bot Setup - Add @SlimeWiredBot to Solana Groups",
+      "summary": "Set up @SlimeWiredBot for Solana Telegram groups, token scans, alerts, launch rooms, raid tools, proof cards, and terminal handoff.",
+      "content_text": "Set up @SlimeWiredBot for Solana Telegram groups, token scans, alerts, launch rooms, raid tools, proof cards, and terminal handoff."
+    },
+    {
       "id": "https://www.slimewire.org/solana-trading-terminal",
       "url": "https://www.slimewire.org/solana-trading-terminal",
       "title": "Solana Trading Terminal - Live Pairs, Charts, Wallets and PnL",
