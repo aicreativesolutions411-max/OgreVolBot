@@ -4076,6 +4076,11 @@ const SEO_PAGES = [
   { path: "/solana-launch-group-bot", priority: "0.82", changefreq: "weekly" },
   { path: "/telegram-community-trading-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/telegram-coin-launch-bot", priority: "0.8", changefreq: "weekly" },
+  { path: "/proof-feed", priority: "0.82", changefreq: "weekly" },
+  { path: "/widgets", priority: "0.78", changefreq: "weekly" },
+  { path: "/all-in-one-telegram-bot-comparison", priority: "0.82", changefreq: "weekly" },
+  { path: "/video-demos", priority: "0.72", changefreq: "weekly" },
+  { path: "/cheap-crypto-advertising", priority: "0.72", changefreq: "weekly" },
   { path: "/features", priority: "0.84", changefreq: "monthly" },
   { path: "/pricing", priority: "0.7", changefreq: "monthly" },
   { path: "/data-freshness", priority: "0.72", changefreq: "monthly" },
@@ -4470,6 +4475,26 @@ const SEO_PAGE_META = {
   "/telegram-coin-launch-bot": {
     title: "Telegram Coin Launch Bot - Solana Launch Alerts, Scans, Raids and Buy Context",
     description: "SlimeWire's Telegram coin launch bot workflow helps Solana teams connect launch alerts, token scans, raid cards, buy tracking, proof pages, and web terminal handoff."
+  },
+  "/proof-feed": {
+    title: "SlimeWire Proof Feed - Public Solana Bot Calls, Receipts and Results",
+    description: "Follow SlimeWire proof cards, Solana token calls, Telegram bot receipts, buy tracking, scan outcomes, and public result loops in one crawlable feed."
+  },
+  "/widgets": {
+    title: "SlimeWire Widgets - Embeddable Solana Bot Badges, Proof Links and Token Cards",
+    description: "Embed SlimeWire proof, scan, raid, chart, and Telegram bot badges on launch pages, blogs, group sites, and token community pages."
+  },
+  "/all-in-one-telegram-bot-comparison": {
+    title: "All-in-One Telegram Bot Comparison - Trading, Raids, Buy Tracking and Moderation",
+    description: "Compare stacked Telegram crypto bots against SlimeWire's all-in-one bot workflow for Solana scans, buy tracking, raid tools, moderation, proof, and terminal handoff."
+  },
+  "/video-demos": {
+    title: "SlimeWire Video Demos - Solana Terminal, Telegram Bot and Launch Teasers",
+    description: "Watch and reuse SlimeWire demo assets for Solana trading terminal teasers, Telegram bot clips, launch posts, proof cards, and short social videos."
+  },
+  "/cheap-crypto-advertising": {
+    title: "Cheap Crypto Advertising Tests - How SlimeWire Should Buy Traffic Carefully",
+    description: "A practical SlimeWire playbook for low-budget crypto advertising, micro-KOL tests, Telegram placements, crypto ad networks, compliance limits, UTM tracking, and traffic quality."
   },
   "/features": {
     title: "SlimeWire Features - Solana Terminal, Telegram Bot, Alerts and Launch Tools",
@@ -6262,6 +6287,30 @@ function startHealthServer() {
     }
     if (request.method === "GET" && requestUrl.pathname === "/telegram-coin-launch-bot") {
       await serveStaticHtmlPage(response, "telegram-coin-launch-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/proof-feed") {
+      await serveStaticHtmlPage(response, "proof-feed.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/widgets") {
+      await serveStaticHtmlPage(response, "widgets.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/all-in-one-telegram-bot-comparison") {
+      await serveStaticHtmlPage(response, "all-in-one-telegram-bot-comparison.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/video-demos") {
+      await serveStaticHtmlPage(response, "video-demos.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/cheap-crypto-advertising") {
+      await serveStaticHtmlPage(response, "cheap-crypto-advertising.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/widget") {
+      await serveStaticHtmlPage(response, "widget.html");
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/features") {

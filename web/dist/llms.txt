@@ -92,6 +92,14 @@ SlimeWire is trading software, not financial advice. Crypto and memecoin trading
 - SlimeWire Telegram Bot Setup: https://www.slimewire.org/telegram-bot-setup
 - Press kit: https://www.slimewire.org/press
 
+## Proof, Widgets, Video and Growth Pages
+
+- Proof Feed: https://www.slimewire.org/proof-feed
+- Widgets: https://www.slimewire.org/widgets
+- All In One Telegram Bot Comparison: https://www.slimewire.org/all-in-one-telegram-bot-comparison
+- Video Demos: https://www.slimewire.org/video-demos
+- Cheap Crypto Advertising: https://www.slimewire.org/cheap-crypto-advertising
+
 ## Tool Pages
 
 - Solana Wallet Tracker: https://www.slimewire.org/solana-wallet-tracker

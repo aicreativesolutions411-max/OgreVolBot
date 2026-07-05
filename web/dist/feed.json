@@ -280,6 +280,41 @@
       "content_text": "SlimeWire's Telegram coin launch bot workflow helps Solana teams connect launch alerts, token scans, raid cards, buy tracking, proof pages, and web terminal handoff."
     },
     {
+      "id": "https://www.slimewire.org/proof-feed",
+      "url": "https://www.slimewire.org/proof-feed",
+      "title": "SlimeWire Proof Feed - Public Solana Bot Calls, Receipts and Results",
+      "summary": "Follow SlimeWire proof cards, Solana token calls, Telegram bot receipts, buy tracking, scan outcomes, and public result loops in one crawlable feed.",
+      "content_text": "Follow SlimeWire proof cards, Solana token calls, Telegram bot receipts, buy tracking, scan outcomes, and public result loops in one crawlable feed."
+    },
+    {
+      "id": "https://www.slimewire.org/widgets",
+      "url": "https://www.slimewire.org/widgets",
+      "title": "SlimeWire Widgets - Embeddable Solana Bot Badges, Proof Links and Token Cards",
+      "summary": "Embed SlimeWire proof, scan, raid, chart, and Telegram bot badges on launch pages, blogs, group sites, and token community pages.",
+      "content_text": "Embed SlimeWire proof, scan, raid, chart, and Telegram bot badges on launch pages, blogs, group sites, and token community pages."
+    },
+    {
+      "id": "https://www.slimewire.org/all-in-one-telegram-bot-comparison",
+      "url": "https://www.slimewire.org/all-in-one-telegram-bot-comparison",
+      "title": "All-in-One Telegram Bot Comparison - Trading, Raids, Buy Tracking and Moderation",
+      "summary": "Compare stacked Telegram crypto bots against SlimeWire's all-in-one bot workflow for Solana scans, buy tracking, raid tools, moderation, proof, and terminal handoff.",
+      "content_text": "Compare stacked Telegram crypto bots against SlimeWire's all-in-one bot workflow for Solana scans, buy tracking, raid tools, moderation, proof, and terminal handoff."
+    },
+    {
+      "id": "https://www.slimewire.org/video-demos",
+      "url": "https://www.slimewire.org/video-demos",
+      "title": "SlimeWire Video Demos - Solana Terminal, Telegram Bot and Launch Teasers",
+      "summary": "Watch and reuse SlimeWire demo assets for Solana trading terminal teasers, Telegram bot clips, launch posts, proof cards, and short social videos.",
+      "content_text": "Watch and reuse SlimeWire demo assets for Solana trading terminal teasers, Telegram bot clips, launch posts, proof cards, and short social videos."
+    },
+    {
+      "id": "https://www.slimewire.org/cheap-crypto-advertising",
+      "url": "https://www.slimewire.org/cheap-crypto-advertising",
+      "title": "Cheap Crypto Advertising Tests - How SlimeWire Should Buy Traffic Carefully",
+      "summary": "A practical SlimeWire playbook for low-budget crypto advertising, micro-KOL tests, Telegram placements, crypto ad networks, compliance limits, UTM tracking, and traffic quality.",
+      "content_text": "A practical SlimeWire playbook for low-budget crypto advertising, micro-KOL tests, Telegram placements, crypto ad networks, compliance limits, UTM tracking, and traffic quality."
+    },
+    {
       "id": "https://www.slimewire.org/features",
       "url": "https://www.slimewire.org/features",
       "title": "SlimeWire Features - Solana Terminal, Telegram Bot, Alerts and Launch Tools",
