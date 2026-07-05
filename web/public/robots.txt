@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /old
+Disallow: /verify
+Disallow: /account/
+
+Sitemap: https://www.slimewire.org/sitemap.xml
