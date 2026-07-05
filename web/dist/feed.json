@@ -147,6 +147,48 @@
       "content_text": "SlimeWire Telegram raid bot workflows help Solana communities organize raids, launch cards, proof links, group alerts, and trader handoff without clutter."
     },
     {
+      "id": "https://www.slimewire.org/solana-trading-alerts",
+      "url": "https://www.slimewire.org/solana-trading-alerts",
+      "title": "Solana Trading Alerts - Token Scans, Wallet Signals and Telegram Updates",
+      "summary": "SlimeWire Solana trading alerts connect token scans, wallet signals, fresh pairs, chart links, Telegram updates, proof cards, and terminal trade review.",
+      "content_text": "SlimeWire Solana trading alerts connect token scans, wallet signals, fresh pairs, chart links, Telegram updates, proof cards, and terminal trade review."
+    },
+    {
+      "id": "https://www.slimewire.org/telegram-crypto-alerts",
+      "url": "https://www.slimewire.org/telegram-crypto-alerts",
+      "title": "Telegram Crypto Alerts - Solana Scans, Calls, Charts and Proof",
+      "summary": "SlimeWire Telegram crypto alerts help Solana groups and traders receive token scans, calls, chart links, launch updates, proof cards, and terminal handoff.",
+      "content_text": "SlimeWire Telegram crypto alerts help Solana groups and traders receive token scans, calls, chart links, launch updates, proof cards, and terminal handoff."
+    },
+    {
+      "id": "https://www.slimewire.org/solana-limit-order-bot",
+      "url": "https://www.slimewire.org/solana-limit-order-bot",
+      "title": "Solana Limit Order Bot - Triggered Buys, Sells, Alerts and Presets",
+      "summary": "SlimeWire Solana limit order bot workflows explain triggered buys and sells, MC alerts, presets, wallet handoff, expiration, receipts, and risk context.",
+      "content_text": "SlimeWire Solana limit order bot workflows explain triggered buys and sells, MC alerts, presets, wallet handoff, expiration, receipts, and risk context."
+    },
+    {
+      "id": "https://www.slimewire.org/solana-take-profit-stop-loss-bot",
+      "url": "https://www.slimewire.org/solana-take-profit-stop-loss-bot",
+      "title": "Solana Take Profit Stop Loss Bot - TP/SL Presets, Timers and PnL",
+      "summary": "SlimeWire Solana TP/SL bot workflows cover take-profit, stop-loss, timer exits, presets, wallet state, receipts, and PnL tracking for memecoin trades.",
+      "content_text": "SlimeWire Solana TP/SL bot workflows cover take-profit, stop-loss, timer exits, presets, wallet state, receipts, and PnL tracking for memecoin trades."
+    },
+    {
+      "id": "https://www.slimewire.org/solana-watchlist",
+      "url": "https://www.slimewire.org/solana-watchlist",
+      "title": "Solana Watchlist - Track Tokens, Alerts, Charts and Positions",
+      "summary": "SlimeWire Solana watchlist workflows help traders track tokens, alerts, charts, fresh pairs, wallet positions, proof cards, and terminal review.",
+      "content_text": "SlimeWire Solana watchlist workflows help traders track tokens, alerts, charts, fresh pairs, wallet positions, proof cards, and terminal review."
+    },
+    {
+      "id": "https://www.slimewire.org/solana-launch-scanner",
+      "url": "https://www.slimewire.org/solana-launch-scanner",
+      "title": "Solana Launch Scanner - Fresh Pairs, pump.fun Alerts and Token Review",
+      "summary": "SlimeWire Solana launch scanner workflows help traders find fresh pairs, pump.fun launches, token scans, chart links, Telegram alerts, and launch proof.",
+      "content_text": "SlimeWire Solana launch scanner workflows help traders find fresh pairs, pump.fun launches, token scans, chart links, Telegram alerts, and launch proof."
+    },
+    {
       "id": "https://www.slimewire.org/solana-wallet-tracker",
       "url": "https://www.slimewire.org/solana-wallet-tracker",
       "title": "Solana Wallet Tracker - Alerts, Positions, PnL and Copy Signals",

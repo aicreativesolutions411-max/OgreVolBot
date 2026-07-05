@@ -4019,6 +4019,12 @@ const SEO_PAGES = [
   { path: "/solana-dex-chart", priority: "0.76", changefreq: "weekly" },
   { path: "/pump-fun-launch-alerts", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-copy-trading-tools", priority: "0.8", changefreq: "weekly" },
+  { path: "/solana-trading-alerts", priority: "0.8", changefreq: "weekly" },
+  { path: "/telegram-crypto-alerts", priority: "0.8", changefreq: "weekly" },
+  { path: "/solana-limit-order-bot", priority: "0.78", changefreq: "weekly" },
+  { path: "/solana-take-profit-stop-loss-bot", priority: "0.8", changefreq: "weekly" },
+  { path: "/solana-watchlist", priority: "0.76", changefreq: "weekly" },
+  { path: "/solana-launch-scanner", priority: "0.82", changefreq: "weekly" },
   { path: "/pump-fun-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-volume-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-copy-trading-bot", priority: "0.8", changefreq: "weekly" },
@@ -4178,6 +4184,30 @@ const SEO_PAGE_META = {
   "/solana-copy-trading-tools": {
     title: "Solana Copy Trading Tools - Wallet Watch, Alerts, Presets and PnL",
     description: "Compare Solana copy trading tools by wallet tracking, alerts, token context, chart review, presets, risk notes, receipts, and PnL tracking."
+  },
+  "/solana-trading-alerts": {
+    title: "Solana Trading Alerts - Token Scans, Wallet Signals and Telegram Updates",
+    description: "SlimeWire Solana trading alerts connect token scans, wallet signals, fresh pairs, chart links, Telegram updates, proof cards, and terminal trade review."
+  },
+  "/telegram-crypto-alerts": {
+    title: "Telegram Crypto Alerts - Solana Scans, Calls, Charts and Proof",
+    description: "SlimeWire Telegram crypto alerts help Solana groups and traders receive token scans, calls, chart links, launch updates, proof cards, and terminal handoff."
+  },
+  "/solana-limit-order-bot": {
+    title: "Solana Limit Order Bot - Triggered Buys, Sells, Alerts and Presets",
+    description: "SlimeWire Solana limit order bot workflows explain triggered buys and sells, MC alerts, presets, wallet handoff, expiration, receipts, and risk context."
+  },
+  "/solana-take-profit-stop-loss-bot": {
+    title: "Solana Take Profit Stop Loss Bot - TP/SL Presets, Timers and PnL",
+    description: "SlimeWire Solana TP/SL bot workflows cover take-profit, stop-loss, timer exits, presets, wallet state, receipts, and PnL tracking for memecoin trades."
+  },
+  "/solana-watchlist": {
+    title: "Solana Watchlist - Track Tokens, Alerts, Charts and Positions",
+    description: "SlimeWire Solana watchlist workflows help traders track tokens, alerts, charts, fresh pairs, wallet positions, proof cards, and terminal review."
+  },
+  "/solana-launch-scanner": {
+    title: "Solana Launch Scanner - Fresh Pairs, pump.fun Alerts and Token Review",
+    description: "SlimeWire Solana launch scanner workflows help traders find fresh pairs, pump.fun launches, token scans, chart links, Telegram alerts, and launch proof."
   },
   "/pump-fun-bot": {
     title: "Pump.fun Telegram Bot - Pump Fun Sniper Bot by SlimeWire",
@@ -5713,6 +5743,30 @@ function startHealthServer() {
     }
     if (request.method === "GET" && requestUrl.pathname === "/solana-copy-trading-tools") {
       await serveStaticHtmlPage(response, "solana-copy-trading-tools.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-trading-alerts") {
+      await serveStaticHtmlPage(response, "solana-trading-alerts.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/telegram-crypto-alerts") {
+      await serveStaticHtmlPage(response, "telegram-crypto-alerts.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-limit-order-bot") {
+      await serveStaticHtmlPage(response, "solana-limit-order-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-take-profit-stop-loss-bot") {
+      await serveStaticHtmlPage(response, "solana-take-profit-stop-loss-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-watchlist") {
+      await serveStaticHtmlPage(response, "solana-watchlist.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-launch-scanner") {
+      await serveStaticHtmlPage(response, "solana-launch-scanner.html");
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/pump-fun-bot") {

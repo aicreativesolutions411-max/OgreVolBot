@@ -211,5 +211,41 @@
     <guid isPermaLink="true">https://www.slimewire.org/solana-copy-trading-tools</guid>
     <description>Compare Solana copy trading tools by wallet tracking, alerts, token context, chart review, presets, risk notes, receipts, and PnL tracking.</description>
   </item>
+  <item>
+    <title>Solana Trading Alerts - Token Scans, Wallet Signals and Telegram Updates</title>
+    <link>https://www.slimewire.org/solana-trading-alerts</link>
+    <guid isPermaLink="true">https://www.slimewire.org/solana-trading-alerts</guid>
+    <description>SlimeWire Solana trading alerts connect token scans, wallet signals, fresh pairs, chart links, Telegram updates, proof cards, and terminal trade review.</description>
+  </item>
+  <item>
+    <title>Telegram Crypto Alerts - Solana Scans, Calls, Charts and Proof</title>
+    <link>https://www.slimewire.org/telegram-crypto-alerts</link>
+    <guid isPermaLink="true">https://www.slimewire.org/telegram-crypto-alerts</guid>
+    <description>SlimeWire Telegram crypto alerts help Solana groups and traders receive token scans, calls, chart links, launch updates, proof cards, and terminal handoff.</description>
+  </item>
+  <item>
+    <title>Solana Limit Order Bot - Triggered Buys, Sells, Alerts and Presets</title>
+    <link>https://www.slimewire.org/solana-limit-order-bot</link>
+    <guid isPermaLink="true">https://www.slimewire.org/solana-limit-order-bot</guid>
+    <description>SlimeWire Solana limit order bot workflows explain triggered buys and sells, MC alerts, presets, wallet handoff, expiration, receipts, and risk context.</description>
+  </item>
+  <item>
+    <title>Solana Take Profit Stop Loss Bot - TP/SL Presets, Timers and PnL</title>
+    <link>https://www.slimewire.org/solana-take-profit-stop-loss-bot</link>
+    <guid isPermaLink="true">https://www.slimewire.org/solana-take-profit-stop-loss-bot</guid>
+    <description>SlimeWire Solana TP/SL bot workflows cover take-profit, stop-loss, timer exits, presets, wallet state, receipts, and PnL tracking for memecoin trades.</description>
+  </item>
+  <item>
+    <title>Solana Watchlist - Track Tokens, Alerts, Charts and Positions</title>
+    <link>https://www.slimewire.org/solana-watchlist</link>
+    <guid isPermaLink="true">https://www.slimewire.org/solana-watchlist</guid>
+    <description>SlimeWire Solana watchlist workflows help traders track tokens, alerts, charts, fresh pairs, wallet positions, proof cards, and terminal review.</description>
+  </item>
+  <item>
+    <title>Solana Launch Scanner - Fresh Pairs, pump.fun Alerts and Token Review</title>
+    <link>https://www.slimewire.org/solana-launch-scanner</link>
+    <guid isPermaLink="true">https://www.slimewire.org/solana-launch-scanner</guid>
+    <description>SlimeWire Solana launch scanner workflows help traders find fresh pairs, pump.fun launches, token scans, chart links, Telegram alerts, and launch proof.</description>
+  </item>
 </channel>
 </rss>

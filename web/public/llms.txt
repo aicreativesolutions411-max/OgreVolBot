@@ -54,6 +54,12 @@ SlimeWire is trading software, not financial advice. Crypto and memecoin trading
 - Solana Dex Chart Workflow: https://www.slimewire.org/solana-dex-chart
 - pump.fun Launch Alerts: https://www.slimewire.org/pump-fun-launch-alerts
 - Solana Copy Trading Tools: https://www.slimewire.org/solana-copy-trading-tools
+- Solana Trading Alerts: https://www.slimewire.org/solana-trading-alerts
+- Telegram Crypto Alerts: https://www.slimewire.org/telegram-crypto-alerts
+- Solana Limit Order Bot: https://www.slimewire.org/solana-limit-order-bot
+- Solana Take Profit Stop Loss Bot: https://www.slimewire.org/solana-take-profit-stop-loss-bot
+- Solana Watchlist: https://www.slimewire.org/solana-watchlist
+- Solana Launch Scanner: https://www.slimewire.org/solana-launch-scanner
 - Pump.fun Telegram bot: https://www.slimewire.org/pump-fun-bot
 - Solana sniper bot: https://www.slimewire.org/solana-sniper-bot
 - Solana rug checker: https://www.slimewire.org/solana-rug-checker
