@@ -43,3 +43,6 @@ vid-*.mp4
 
 # local dev preview config
 .claude/launch.json
+
+# LibreOffice lock files
+.~lock.*#
