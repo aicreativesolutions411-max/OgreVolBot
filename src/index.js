@@ -32890,7 +32890,11 @@ async function handleGroupBotCallback(query, userId) {
   const messageId = query.message?.message_id;
   const ack = (text) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(text ? { text } : {}) }).catch(() => {});
   if (data === "gb:close") {
-    await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } }).catch(() => {});
+    // Delete the whole menu message on Done (a bot can always delete its OWN message) so the chat
+    // doesn't fill with leftover menus when several people open one. Falls back to stripping the
+    // keyboard if the delete fails (e.g. message too old to delete).
+    const del = await telegram("deleteMessage", { chat_id: chatId, message_id: messageId }).catch(() => null);
+    if (del === null) await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } }).catch(() => {});
     await ack(); return true;
   }
   // 🎯 Trench Tools + its feature launchers are MEMBER-facing (each feature gates its own admin actions
