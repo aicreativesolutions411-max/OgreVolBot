@@ -4096,6 +4096,13 @@ const SEO_PAGES = [
   { path: "/slimewire-launch-promo-kit", priority: "0.82", changefreq: "weekly" },
   { path: "/solana-memecoin-launch-checklist", priority: "0.78", changefreq: "weekly" },
   { path: "/crypto-telegram-growth-playbook", priority: "0.76", changefreq: "weekly" },
+  { path: "/blog", priority: "0.82", changefreq: "weekly" },
+  { path: "/blog/how-to-check-a-solana-contract-address", priority: "0.74", changefreq: "weekly" },
+  { path: "/blog/track-solana-memecoin-callers", priority: "0.74", changefreq: "weekly" },
+  { path: "/blog/pump-fun-launch-marketing-checklist", priority: "0.74", changefreq: "weekly" },
+  { path: "/blog/crypto-telegram-bot-stack", priority: "0.74", changefreq: "weekly" },
+  { path: "/blog/x-solana-memecoin-research", priority: "0.74", changefreq: "weekly" },
+  { path: "/blog/fresh-solana-pairs-under-10k", priority: "0.74", changefreq: "weekly" },
   { path: "/features", priority: "0.84", changefreq: "monthly" },
   { path: "/pricing", priority: "0.7", changefreq: "monthly" },
   { path: "/data-freshness", priority: "0.72", changefreq: "monthly" },
@@ -4530,6 +4537,34 @@ const SEO_PAGE_META = {
   "/crypto-telegram-growth-playbook": {
     title: "Crypto Telegram Growth Playbook - Bots, Pins, Proof, Raids and Group Tools",
     description: "A practical crypto Telegram growth playbook for groups using bots, pinned posts, proof links, raid workflows, buy alerts, scans, and SlimeWire handoff."
+  },
+  "/blog": {
+    title: "SlimeWire Blog - Solana Trading, Telegram Bots, X Research and Launch Guides",
+    description: "SlimeWire blog field guides for Solana memecoin trading, Telegram bots, X research, pump.fun launches, token scans, proof links, and launch workflows."
+  },
+  "/blog/how-to-check-a-solana-contract-address": {
+    title: "How to Check a Solana Contract Address Before You Buy",
+    description: "A practical SlimeWire guide to checking a Solana contract address from Telegram, X, or a launch page before buying a memecoin."
+  },
+  "/blog/track-solana-memecoin-callers": {
+    title: "How to Track Solana Memecoin Callers Without Guessing",
+    description: "Learn how Solana traders can track caller proof, entry market cap, follow-up movement, and public receipts instead of trusting hype alone."
+  },
+  "/blog/pump-fun-launch-marketing-checklist": {
+    title: "Pump.fun Launch Marketing Checklist for Telegram and X",
+    description: "A pump.fun launch marketing checklist for teams using Telegram, X, SlimeWire widgets, proof links, raid cards, and token scan pages."
+  },
+  "/blog/crypto-telegram-bot-stack": {
+    title: "Crypto Telegram Bot Stack: Scans, Raids, Buy Alerts and Moderation",
+    description: "A simple guide to the crypto Telegram bot stack groups use for scans, raids, buy alerts, moderation, proof, and SlimeWire terminal handoff."
+  },
+  "/blog/x-solana-memecoin-research": {
+    title: "How to Use X to Research Solana Memecoins Without Getting Lost",
+    description: "A SlimeWire guide to researching Solana memecoins on X by checking CAs, callers, replies, charts, proof links, and Telegram context."
+  },
+  "/blog/fresh-solana-pairs-under-10k": {
+    title: "Fresh Solana Pairs Under $10K: What Traders Should Check First",
+    description: "A risk-aware guide to reviewing fresh Solana pairs under $10K market cap with age, volume, liquidity, venue, chart behavior, and SlimeWire scan context."
   },
   "/features": {
     title: "SlimeWire Features - Solana Terminal, Telegram Bot, Alerts and Launch Tools",
@@ -6384,6 +6419,34 @@ function startHealthServer() {
     }
     if (request.method === "GET" && requestUrl.pathname === "/crypto-telegram-growth-playbook") {
       await serveStaticHtmlPage(response, "crypto-telegram-growth-playbook.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/blog") {
+      await serveStaticHtmlPage(response, "blog.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/blog/how-to-check-a-solana-contract-address") {
+      await serveStaticHtmlPage(response, "blog/how-to-check-a-solana-contract-address/index.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/blog/track-solana-memecoin-callers") {
+      await serveStaticHtmlPage(response, "blog/track-solana-memecoin-callers/index.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/blog/pump-fun-launch-marketing-checklist") {
+      await serveStaticHtmlPage(response, "blog/pump-fun-launch-marketing-checklist/index.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/blog/crypto-telegram-bot-stack") {
+      await serveStaticHtmlPage(response, "blog/crypto-telegram-bot-stack/index.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/blog/x-solana-memecoin-research") {
+      await serveStaticHtmlPage(response, "blog/x-solana-memecoin-research/index.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/blog/fresh-solana-pairs-under-10k") {
+      await serveStaticHtmlPage(response, "blog/fresh-solana-pairs-under-10k/index.html");
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/features") {

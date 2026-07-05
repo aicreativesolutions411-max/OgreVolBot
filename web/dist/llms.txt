@@ -92,6 +92,16 @@ SlimeWire is trading software, not financial advice. Crypto and memecoin trading
 - SlimeWire Telegram Bot Setup: https://www.slimewire.org/telegram-bot-setup
 - Press kit: https://www.slimewire.org/press
 
+## SlimeWire Blog Field Guides
+
+- Blog: https://www.slimewire.org/blog
+- How to Check a Solana Contract Address Before You Buy: https://www.slimewire.org/blog/how-to-check-a-solana-contract-address
+- How to Track Solana Memecoin Callers Without Guessing: https://www.slimewire.org/blog/track-solana-memecoin-callers
+- Pump.fun Launch Marketing Checklist for Telegram and X: https://www.slimewire.org/blog/pump-fun-launch-marketing-checklist
+- Crypto Telegram Bot Stack: Scans, Raids, Buy Alerts and Moderation: https://www.slimewire.org/blog/crypto-telegram-bot-stack
+- How to Use X to Research Solana Memecoins Without Getting Lost: https://www.slimewire.org/blog/x-solana-memecoin-research
+- Fresh Solana Pairs Under $10K: What Traders Should Check First: https://www.slimewire.org/blog/fresh-solana-pairs-under-10k
+
 ## Organic Share and Community Growth Pages
 
 - Add Slimewire Bot To Telegram Group: https://www.slimewire.org/add-slimewire-bot-to-telegram-group
