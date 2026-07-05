@@ -4081,6 +4081,11 @@ const SEO_PAGES = [
   { path: "/all-in-one-telegram-bot-comparison", priority: "0.82", changefreq: "weekly" },
   { path: "/video-demos", priority: "0.72", changefreq: "weekly" },
   { path: "/cheap-crypto-advertising", priority: "0.72", changefreq: "weekly" },
+  { path: "/add-slimewire-bot-to-telegram-group", priority: "0.83", changefreq: "weekly" },
+  { path: "/slimewire-community-kit", priority: "0.8", changefreq: "weekly" },
+  { path: "/slimewire-launch-promo-kit", priority: "0.82", changefreq: "weekly" },
+  { path: "/solana-memecoin-launch-checklist", priority: "0.78", changefreq: "weekly" },
+  { path: "/crypto-telegram-growth-playbook", priority: "0.76", changefreq: "weekly" },
   { path: "/features", priority: "0.84", changefreq: "monthly" },
   { path: "/pricing", priority: "0.7", changefreq: "monthly" },
   { path: "/data-freshness", priority: "0.72", changefreq: "monthly" },
@@ -4495,6 +4500,26 @@ const SEO_PAGE_META = {
   "/cheap-crypto-advertising": {
     title: "Cheap Crypto Advertising Tests - How SlimeWire Should Buy Traffic Carefully",
     description: "A practical SlimeWire playbook for low-budget crypto advertising, micro-KOL tests, Telegram placements, crypto ad networks, compliance limits, UTM tracking, and traffic quality."
+  },
+  "/add-slimewire-bot-to-telegram-group": {
+    title: "Add SlimeWire Bot to Telegram Group - Solana Scans, Raids and Buy Alerts",
+    description: "Add @SlimeWiredBot to a Telegram group for Solana token scans, buy alerts, raid cards, launch context, proof links, and terminal handoff."
+  },
+  "/slimewire-community-kit": {
+    title: "SlimeWire Community Kit - Telegram Pins, X Posts, Widgets and Share Links",
+    description: "Copy SlimeWire Telegram pinned posts, X posts, group admin DMs, widget links, bot start links, and proof links for organic community growth."
+  },
+  "/slimewire-launch-promo-kit": {
+    title: "SlimeWire Launch Promo Kit - Solana Launch Visibility, Raids, Widgets and Proof",
+    description: "A Solana launch promo kit for teams that want SlimeWire visibility, Telegram bot alerts, raid cards, widgets, proof links, charts, and launch handoff."
+  },
+  "/solana-memecoin-launch-checklist": {
+    title: "Solana Memecoin Launch Checklist - Telegram Bot, Scans, Proof and Launch Tools",
+    description: "A practical Solana memecoin launch checklist covering Telegram setup, token scans, launch links, proof pages, widgets, risk notes, and SlimeWire handoff."
+  },
+  "/crypto-telegram-growth-playbook": {
+    title: "Crypto Telegram Growth Playbook - Bots, Pins, Proof, Raids and Group Tools",
+    description: "A practical crypto Telegram growth playbook for groups using bots, pinned posts, proof links, raid workflows, buy alerts, scans, and SlimeWire handoff."
   },
   "/features": {
     title: "SlimeWire Features - Solana Terminal, Telegram Bot, Alerts and Launch Tools",
@@ -6311,6 +6336,26 @@ function startHealthServer() {
     }
     if (request.method === "GET" && requestUrl.pathname === "/widget") {
       await serveStaticHtmlPage(response, "widget.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/add-slimewire-bot-to-telegram-group") {
+      await serveStaticHtmlPage(response, "add-slimewire-bot-to-telegram-group.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/slimewire-community-kit") {
+      await serveStaticHtmlPage(response, "slimewire-community-kit.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/slimewire-launch-promo-kit") {
+      await serveStaticHtmlPage(response, "slimewire-launch-promo-kit.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-memecoin-launch-checklist") {
+      await serveStaticHtmlPage(response, "solana-memecoin-launch-checklist.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/crypto-telegram-growth-playbook") {
+      await serveStaticHtmlPage(response, "crypto-telegram-growth-playbook.html");
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/features") {
