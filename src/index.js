@@ -3985,6 +3985,11 @@ const INDEXNOW_KEY = String(process.env.INDEXNOW_KEY || "slimewire7c1f9a4d2e8b60
 const SEO_PAGES = [
   { path: "/", priority: "1.0", changefreq: "hourly" },
   { path: "/solana-telegram-bot", priority: "0.9", changefreq: "weekly" },
+  { path: "/pump-fun-bot", priority: "0.8", changefreq: "weekly" },
+  { path: "/solana-volume-bot", priority: "0.8", changefreq: "weekly" },
+  { path: "/solana-copy-trading-bot", priority: "0.8", changefreq: "weekly" },
+  { path: "/solana-sniper-bot", priority: "0.8", changefreq: "weekly" },
+  { path: "/solana-rug-checker", priority: "0.8", changefreq: "weekly" },
   { path: "/press", priority: "0.6", changefreq: "monthly" },
   { path: "/launch", priority: "0.8", changefreq: "daily" },
   { path: "/raids", priority: "0.7", changefreq: "daily" },
@@ -5285,6 +5290,26 @@ function startHealthServer() {
     // SEO landing page targeting "solana telegram (trading) bot" searches — real content, static + fast.
     if (request.method === "GET" && ["/solana-telegram-bot", "/bot", "/telegram-bot"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/pump-fun-bot") {
+      await serveStaticHtmlPage(response, "pump-fun-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-volume-bot") {
+      await serveStaticHtmlPage(response, "solana-volume-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-copy-trading-bot") {
+      await serveStaticHtmlPage(response, "solana-copy-trading-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-sniper-bot") {
+      await serveStaticHtmlPage(response, "solana-sniper-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-rug-checker") {
+      await serveStaticHtmlPage(response, "solana-rug-checker.html");
       return;
     }
     // Press / media kit — brand assets + boilerplate + the full feature suite (for listings/journalists).
