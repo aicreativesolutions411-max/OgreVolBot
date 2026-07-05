@@ -4052,6 +4052,19 @@ const SEO_PAGES = [
   { path: "/solana-token-research-tool", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-crypto-terminal", priority: "0.8", changefreq: "weekly" },
   { path: "/telegram-crypto-trading-bot", priority: "0.82", changefreq: "weekly" },
+  { path: "/all-in-one-telegram-crypto-bot", priority: "0.84", changefreq: "weekly" },
+  { path: "/all-in-one-solana-tg-bot", priority: "0.84", changefreq: "weekly" },
+  { path: "/tg-trading-bot", priority: "0.82", changefreq: "weekly" },
+  { path: "/tg-crypto-bot", priority: "0.82", changefreq: "weekly" },
+  { path: "/solana-tg-bot", priority: "0.82", changefreq: "weekly" },
+  { path: "/crypto-telegram-group-bot", priority: "0.82", changefreq: "weekly" },
+  { path: "/telegram-trading-bot-with-moderation", priority: "0.82", changefreq: "weekly" },
+  { path: "/telegram-raid-buy-bot", priority: "0.8", changefreq: "weekly" },
+  { path: "/telegram-buy-tracker-bot", priority: "0.8", changefreq: "weekly" },
+  { path: "/solana-buy-tracker-bot", priority: "0.8", changefreq: "weekly" },
+  { path: "/telegram-raid-bot-with-buy-tracker", priority: "0.8", changefreq: "weekly" },
+  { path: "/crypto-group-moderation-bot", priority: "0.78", changefreq: "weekly" },
+  { path: "/telegram-token-buy-alert-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/features", priority: "0.84", changefreq: "monthly" },
   { path: "/pricing", priority: "0.7", changefreq: "monthly" },
   { path: "/data-freshness", priority: "0.72", changefreq: "monthly" },
@@ -4350,6 +4363,58 @@ const SEO_PAGE_META = {
   "/telegram-crypto-trading-bot": {
     title: "Telegram Crypto Trading Bot - Solana Scans, Alerts, Groups and Terminal Handoff",
     description: "SlimeWire's Telegram crypto trading bot workflow helps Solana users scan tokens, share alerts, manage group context, open charts, review proof, and hand off to the web terminal."
+  },
+  "/all-in-one-telegram-crypto-bot": {
+    title: "All-in-One Telegram Crypto Bot - Trading, Raids, Buy Tracking and Moderation",
+    description: "SlimeWire positions @SlimeWiredBot as an all-in-one Telegram crypto bot for Solana groups: token scans, buy tracking, raid cards, Rose-style moderation, alerts, proof, and terminal handoff."
+  },
+  "/all-in-one-solana-tg-bot": {
+    title: "All-in-One Solana TG Bot - Scans, Buy Bot, Raids, Moderation and Terminal",
+    description: "SlimeWire is an all-in-one Solana TG bot workflow for Telegram groups that need token scans, buy tracking, raid tools, moderation, alerts, proof, and web terminal handoff."
+  },
+  "/tg-trading-bot": {
+    title: "TG Trading Bot - Solana Telegram Bot for Scans, Alerts and Group Tools",
+    description: "SlimeWire's TG trading bot workflow connects Telegram scans, Solana alerts, buy tracking, raid cards, token research, proof, PnL, and the SlimeWire web terminal."
+  },
+  "/tg-crypto-bot": {
+    title: "TG Crypto Bot - Telegram Crypto Bot for Solana Groups",
+    description: "SlimeWire is a TG crypto bot workflow for Solana groups: scans, alerts, buy tracking, raid tools, moderation, token research, proof links, and web terminal handoff."
+  },
+  "/solana-tg-bot": {
+    title: "Solana TG Bot - Telegram Scans, Buy Tracking, Raids and Token Tools",
+    description: "SlimeWire's Solana TG bot workflow helps Telegram groups scan tokens, post alerts, track buys, run raids, moderate chat, and open the SlimeWire terminal."
+  },
+  "/crypto-telegram-group-bot": {
+    title: "Crypto Telegram Group Bot - Buy Bot, Raid Bot, Scan Bot and Moderation",
+    description: "SlimeWire gives crypto Telegram groups a modular bot workflow: Buy Bot, Raid Bot, Scan Bot, Rose-style moderation, alerts, proof links, and Solana terminal handoff."
+  },
+  "/telegram-trading-bot-with-moderation": {
+    title: "Telegram Trading Bot with Moderation - Trading Tools plus Rose-Style Group Control",
+    description: "SlimeWire documents a Telegram trading bot with moderation: Solana scans, buy tracking, raid cards, alerts, Rose-style tools, anti-scam settings, proof, and terminal handoff."
+  },
+  "/telegram-raid-buy-bot": {
+    title: "Telegram Raid and Buy Bot - Solana Group Raids, Buy Tracking and Proof",
+    description: "SlimeWire combines Telegram raid and buy bot workflows for Solana groups: raid cards, buy tracking, token scans, alerts, proof links, and terminal handoff."
+  },
+  "/telegram-buy-tracker-bot": {
+    title: "Telegram Buy Tracker Bot - Solana Buy Alerts, Charts and Group Handoff",
+    description: "SlimeWire's Telegram buy tracker bot workflow helps Solana groups track buys, show token context, link charts, route quick review, and connect activity to proof and PnL."
+  },
+  "/solana-buy-tracker-bot": {
+    title: "Solana Buy Tracker Bot - Telegram Buy Alerts, Token Context and SlimeWire",
+    description: "SlimeWire's Solana buy tracker bot workflow connects Telegram buy alerts, tracked tokens, chart links, scans, group tools, proof cards, and terminal review."
+  },
+  "/telegram-raid-bot-with-buy-tracker": {
+    title: "Telegram Raid Bot with Buy Tracker - Solana Launch Group Workflow",
+    description: "SlimeWire documents a Telegram raid bot with buy tracker workflow for Solana launches: raid posts, buy alerts, token scans, proof links, and terminal handoff."
+  },
+  "/crypto-group-moderation-bot": {
+    title: "Crypto Group Moderation Bot - Rose-Style Moderation plus Solana Trading Tools",
+    description: "SlimeWire's crypto group moderation bot workflow combines Rose-style Telegram moderation, anti-scam options, token scans, buy tracking, raid tools, alerts, and terminal handoff."
+  },
+  "/telegram-token-buy-alert-bot": {
+    title: "Telegram Token Buy Alert Bot - Solana Buy Posts, Scans and Chart Links",
+    description: "SlimeWire's Telegram token buy alert bot workflow helps Solana groups post buy context, scan tokens, link charts, share proof, and route users into the web terminal."
   },
   "/features": {
     title: "SlimeWire Features - Solana Terminal, Telegram Bot, Alerts and Launch Tools",
@@ -6046,6 +6111,58 @@ function startHealthServer() {
     }
     if (request.method === "GET" && requestUrl.pathname === "/telegram-crypto-trading-bot") {
       await serveStaticHtmlPage(response, "telegram-crypto-trading-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/all-in-one-telegram-crypto-bot") {
+      await serveStaticHtmlPage(response, "all-in-one-telegram-crypto-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/all-in-one-solana-tg-bot") {
+      await serveStaticHtmlPage(response, "all-in-one-solana-tg-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/tg-trading-bot") {
+      await serveStaticHtmlPage(response, "tg-trading-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/tg-crypto-bot") {
+      await serveStaticHtmlPage(response, "tg-crypto-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-tg-bot") {
+      await serveStaticHtmlPage(response, "solana-tg-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/crypto-telegram-group-bot") {
+      await serveStaticHtmlPage(response, "crypto-telegram-group-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/telegram-trading-bot-with-moderation") {
+      await serveStaticHtmlPage(response, "telegram-trading-bot-with-moderation.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/telegram-raid-buy-bot") {
+      await serveStaticHtmlPage(response, "telegram-raid-buy-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/telegram-buy-tracker-bot") {
+      await serveStaticHtmlPage(response, "telegram-buy-tracker-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-buy-tracker-bot") {
+      await serveStaticHtmlPage(response, "solana-buy-tracker-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/telegram-raid-bot-with-buy-tracker") {
+      await serveStaticHtmlPage(response, "telegram-raid-bot-with-buy-tracker.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/crypto-group-moderation-bot") {
+      await serveStaticHtmlPage(response, "crypto-group-moderation-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/telegram-token-buy-alert-bot") {
+      await serveStaticHtmlPage(response, "telegram-token-buy-alert-bot.html");
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/features") {

@@ -54,6 +54,19 @@ SlimeWire is trading software, not financial advice. Crypto and memecoin trading
 - Solana Token Research Tool: https://www.slimewire.org/solana-token-research-tool
 - Solana Crypto Terminal: https://www.slimewire.org/solana-crypto-terminal
 - Telegram Crypto Trading Bot: https://www.slimewire.org/telegram-crypto-trading-bot
+- All In One Telegram Crypto Bot: https://www.slimewire.org/all-in-one-telegram-crypto-bot
+- All In One Solana TG Bot: https://www.slimewire.org/all-in-one-solana-tg-bot
+- TG Trading Bot: https://www.slimewire.org/tg-trading-bot
+- TG Crypto Bot: https://www.slimewire.org/tg-crypto-bot
+- Solana TG Bot: https://www.slimewire.org/solana-tg-bot
+- Crypto Telegram Group Bot: https://www.slimewire.org/crypto-telegram-group-bot
+- Telegram Trading Bot With Moderation: https://www.slimewire.org/telegram-trading-bot-with-moderation
+- Telegram Raid Buy Bot: https://www.slimewire.org/telegram-raid-buy-bot
+- Telegram Buy Tracker Bot: https://www.slimewire.org/telegram-buy-tracker-bot
+- Solana Buy Tracker Bot: https://www.slimewire.org/solana-buy-tracker-bot
+- Telegram Raid Bot With Buy Tracker: https://www.slimewire.org/telegram-raid-bot-with-buy-tracker
+- Crypto Group Moderation Bot: https://www.slimewire.org/crypto-group-moderation-bot
+- Telegram Token Buy Alert Bot: https://www.slimewire.org/telegram-token-buy-alert-bot
 - SlimeWire Features: https://www.slimewire.org/features
 - SlimeWire Pricing: https://www.slimewire.org/pricing
 - SlimeWire Data Freshness: https://www.slimewire.org/data-freshness
