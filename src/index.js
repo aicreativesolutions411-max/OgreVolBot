@@ -54352,6 +54352,13 @@ async function buildSlimePicksCategory(userId, sort, options = {}) {
 
 async function buildWebLivePairsForCategory(userId, cat, sort, options = {}) {
   if (cat === "slimePicks") return buildSlimePicksCategory(userId, sort, options);
+  // GRADUATING is special: Moralis's pumpfun BONDING endpoint IS pump.fun's real "about to graduate"
+  // list (deep + accurate MC/curve%), whereas pump-frontend can only approximate it from a trade/MC
+  // window. So prefer Moralis here; pump-frontend + Gecko stay as fallbacks below if it's down/thin.
+  if (cat === "graduating" && moralisEnabled()) {
+    const built = await buildMoralisPumpCategory(userId, "graduating", sort, options).catch(() => null);
+    if (built && Array.isArray(built.rows) && built.rows.length >= 3) { built.category = "cat:graduating"; built.label = "graduating"; return built; }
+  }
   // PRIMARY: pump.fun's own frontend-api (via the CF Worker) for Trending + Graduating — the exact coins
   // pump shows. Then Moralis (bonding/graduated lists + trending momentum). Then GeckoTerminal. Each
   // step falls through if the source is unset/down/thin, so a tab never empties.
