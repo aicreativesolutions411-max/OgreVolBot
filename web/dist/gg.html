@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta http-equiv="Cache-Control" content="no-store, max-age=0">
-<title>SlimeWire Terminal — Your Edge in Memecoin Trading</title>
+<title>SlimeWire — Solana Memecoin Terminal & Telegram Trading Bot</title>
 <link rel="preconnect" href="https://www.geckoterminal.com" crossorigin>
 <link rel="dns-prefetch" href="https://www.geckoterminal.com">
 <link rel="preconnect" href="https://api.geckoterminal.com" crossorigin>
@@ -12,7 +12,22 @@
 <link rel="preconnect" href="https://api.dexscreener.com" crossorigin>
 <link rel="preconnect" href="https://dexscreener.com" crossorigin>
 <link rel="preconnect" href="https://ogrevolbot.onrender.com" crossorigin>
-<meta name="description" content="SlimeWire Terminal — a fast Solana memecoin terminal. Discover fresh launches, trenches, trending pairs, create a wallet, and trade in one click.">
+<meta name="description" content="SlimeWire is an all-in-one Solana memecoin terminal & Telegram trading bot: one-click trading of fresh pump.fun launches, trending pairs, a rug-check scanner, copy trading, a volume bot, and launchpad — free wallet, no sign-up.">
+<meta name="keywords" content="solana telegram bot, solana trading bot, pump.fun bot, memecoin terminal, solana volume bot, copy trading bot, rug checker, telegram trading bot">
+<link rel="canonical" href="https://www.slimewire.org/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="SlimeWire">
+<meta property="og:title" content="SlimeWire — Solana Memecoin Terminal & Telegram Trading Bot">
+<meta property="og:description" content="One-click Solana memecoin trading: fresh pump.fun launches, trending pairs, rug scanner, copy trading, volume bot + an all-in-one Telegram bot. Free wallet, no sign-up.">
+<meta property="og:url" content="https://www.slimewire.org/">
+<meta property="og:image" content="https://www.slimewire.org/assets/slimewire/auto/login-hero.jpg">
+<meta property="og:image:width" content="1600">
+<meta property="og:image:height" content="893">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="SlimeWire — Solana Memecoin Terminal & Telegram Trading Bot">
+<meta name="twitter:description" content="One-click Solana memecoin trading: fresh launches, rug scanner, copy trading, volume bot + an all-in-one Telegram bot. Free wallet, no sign-up.">
+<meta name="twitter:image" content="https://www.slimewire.org/assets/slimewire/auto/login-hero.jpg">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://www.slimewire.org/#org","name":"SlimeWire","url":"https://www.slimewire.org/","logo":"https://www.slimewire.org/assets/slimewire/png/slimewire-mark.png","sameAs":["https://t.me/SlimeWiredBot"]},{"@type":"WebSite","@id":"https://www.slimewire.org/#site","url":"https://www.slimewire.org/","name":"SlimeWire","publisher":{"@id":"https://www.slimewire.org/#org"}},{"@type":"SoftwareApplication","name":"SlimeWire — Solana Memecoin Terminal & Telegram Trading Bot","operatingSystem":"Web, Telegram, iOS, Android","applicationCategory":"FinanceApplication","url":"https://www.slimewire.org/","description":"All-in-one Solana memecoin terminal and Telegram trading bot: one-click trading of fresh pump.fun launches, trending pairs, rug-check scanner, copy trading, volume bot, and launchpad.","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}]}</script>
 <link rel="icon" type="image/png" href="/assets/slimewire/png/slimewire-mark.png?v=logo4">
 <!-- Installable PWA: the NEW terminal IS the app (manifest start_url="/"). -->
 <link rel="manifest" href="/manifest.json">
@@ -732,9 +747,14 @@
       (toks.length?'<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Coins you hold here</div><div id="rhHoldings">'+toks.map(t=>'<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:5px" data-addr="'+esc(t.address)+'">'+(t.iconUrl?'<img src="'+esc(t.iconUrl)+'" style="width:18px;height:18px;border-radius:50%">':'🪙')+'<b>'+esc(t.symbol||"?")+'</b><span class="mut">'+esc(Number(t.uiAmount||0).toLocaleString())+'</span><span class="mut rhHoldVal" style="margin-left:auto">—</span></div>').join("")+'</div>':'<p class="mut" style="font-size:11px;margin:0 0 8px">No coins held here right now. If one just auto-sold, that\'s expected — the ETH from it is in your balance above, and the sale shows in the activity list below.</p>')+
       '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:12px 0 6px">Fund with SOL (swap → Robinhood ETH)</div>'+
       '<div style="display:flex;gap:8px"><input id="rhFundAmt" inputmode="decimal" placeholder="0.05" style="width:90px;flex:0 0 auto"><button class="wbtn" id="rhFundBtn" style="flex:1">⚡ Swap SOL → Robinhood ETH</button></div>'+
+      // Reverse: cash the Robinhood ETH back out to this wallet's own Solana address. Blank amount = cash out all (keeps a little ETH for gas).
+      '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:12px 0 6px">Cash out ETH → SOL (back to this wallet)</div>'+
+      '<div style="display:flex;gap:8px"><input id="rhOutAmt" inputmode="decimal" placeholder="all" style="width:90px;flex:0 0 auto"><button class="wbtn ghost" id="rhOutBtn" style="flex:1">💸 Convert ETH → SOL</button></div>'+
+      '<div class="mut" style="font-size:10px;margin:4px 0 0">Sends the ETH cross-chain and lands as SOL in this same wallet (leaves ~0.0003 ETH for gas). Blank = cash out all.</div>'+
       '<div id="rhDrainAlert"></div>'+
       '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 6px">Recent Robinhood activity</div><div id="rhActivity"><div class="loading"><span class="spin"></span></div></div>';
     const fb=$("#rhFundBtn");if(fb)fb.onclick=()=>rhFundWithSol(idx);
+    const ob=$("#rhOutBtn");if(ob)ob.onclick=()=>rhBridgeToSol(idx);
     const ws=$("#rhWalSel");if(ws){ws.value=idx;ws.onchange=()=>{state._rhWalIdx=ws.value;loadRhWalletPanel();};}
     // Live USD on the ETH balance + each holding (DexScreener over the user's IP; best-effort).
     if(toks.length)dexTokensBatch(toks.map(t=>t.address)).then(by=>{const byLc={};Object.keys(by||{}).forEach(k=>byLc[k.toLowerCase()]=by[k]);document.querySelectorAll("#rhHoldings [data-addr]").forEach(row=>{const o=byLc[String(row.dataset.addr).toLowerCase()];const t=toks.find(x=>String(x.address).toLowerCase()===String(row.dataset.addr).toLowerCase());const v=o&&o.price>0&&t?o.price*Number(t.uiAmount||0):0;const el=row.querySelector(".rhHoldVal");if(el&&v>0)el.textContent=fmtUsd(v);});});
@@ -772,6 +792,20 @@
       toast(d.relayStatus==="success"?("🪶 Landed! ~"+(d.quotedEth||"?")+" ETH on Robinhood Chain"):("Swap sent — ETH usually lands in seconds ("+(d.relayStatus||"pending")+")"));
       refreshWallets();loadRhWalletPanel();
     } else toast((d&&(d.message||d.error))||"Funding swap failed",true);
+  }
+  // Reverse: cash Robinhood ETH back out to this wallet's own SOL (blank = all). User-triggered.
+  async function rhBridgeToSol(idx){
+    const raw=(($("#rhOutAmt")||{}).value||"").trim();
+    const all=!raw||raw.toLowerCase()==="all";
+    if(!all){const n=Number(raw);if(!isFinite(n)||n<=0){toast("Enter an ETH amount, or leave blank to cash out all.",true);return;}}
+    if(!(await ensureTradeReady()))return;
+    const b=$("#rhOutBtn");if(b){b.disabled=true;b.textContent="Converting…";}
+    const {ok,d}=await jpost("/api/web/rh/bridge-to-sol",{walletIndex:String(idx),amountEth:all?"all":raw,tradeAttemptId:attemptId()});
+    if(b){b.disabled=false;b.textContent="💸 Convert ETH → SOL";}
+    if(ok&&d&&d.ok){
+      toast("💸 Cashed out "+(d.sentEth||"?")+" ETH → ~"+(d.outSol||"?")+" SOL — landing in this wallet");
+      refreshWallets();loadRhWalletPanel();
+    } else toast((d&&(d.message||d.error))||"Cash-out failed",true);
   }
   // ---------- fund recovery / exits ----------
   async function sellAllTokens(dest){

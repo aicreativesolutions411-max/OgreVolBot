@@ -1768,3 +1768,30 @@ test("Throne mode: same-second co-entry with aggressive slippage (honest — not
   assert.match(fire, /THRONE — the room took it/);
   assert.match(serverSource, /if \(sub === "throne"\)/);
 });
+
+// ---- 🐸 SlimeWire PFP maker (free branded profile-pic generator: web + /pfp) --------------------------
+test("SlimeWire PFP maker: sharp compositor + public endpoint + /pfp command, all wired", () => {
+  const pfpLib = fs.readFileSync(new URL("../src/lib/pfp.js", import.meta.url), "utf8");
+  // compositor: cover-crop the source, composite a frame SVG, optional Higgs accent sticker
+  assert.match(pfpLib, /export async function makeSlimewirePfp/);
+  assert.match(pfpLib, /export async function renderAllSlimewirePfps/);
+  assert.match(pfpLib, /export const PFP_FRAMES/);
+  assert.match(pfpLib, /fit: "cover", position: "attention"/);       // focus the crop on the face
+  for (const id of ["slime", "holo", "neon", "slimed", "crown", "horns"]) assert.match(pfpLib, new RegExp(`id: "${id}"`), `frame ${id}`);
+  assert.match(pfpLib, /accentExists/);                              // accent frames only offered when their asset exists
+  // server: public (pre-auth) page + generate endpoint; no wallet/login required
+  assert.match(serverSource, /import \{ renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES \} from "\.\/lib\/pfp\.js"/);
+  assert.match(serverSource, /pathname === "\/api\/web\/pfp\/generate"/);
+  assert.match(serverSource, /"\/pfp", "\/pfp-maker", "\/slime-pfp"/);
+  assert.match(serverSource, /function decodePfpImageDataUrl/);
+  // Telegram: /pfp turns the user's OWN current avatar into a branded PFP; frame-switch is owner-gated
+  assert.match(serverSource, /getUserProfilePhotos/);
+  assert.match(functionBody(serverSource, "handlePfpCommand"), /makeSlimewirePfp/);
+  assert.match(functionBody(serverSource, "handlePfpCallback"), /String\(userId\) !== ownerId/);
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["pfp", "slimepfp", "avatar"\]\)/);
+  assert.match(serverSource, /if \(await handlePfpCallback\(query, userId\)/);
+  // web page reaches the origin API + downloads the result
+  const pfpHtml = fs.readFileSync(new URL("../web/public/pfp.html", import.meta.url), "utf8");
+  assert.match(pfpHtml, /\/api\/web\/pfp\/generate/);
+  assert.match(pfpHtml, /download='slimewire-pfp-'/);
+});

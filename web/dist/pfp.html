@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SlimeWire PFP Maker — slime your profile pic (free)</title>
+<meta name="description" content="Turn any photo into a branded SlimeWire profile picture — free, instant, no login. Upload a pic, pick a slime frame, download. Or use /pfp in the SlimeWire Telegram bot to slime your Telegram avatar.">
+<link rel="canonical" href="https://www.slimewire.org/pfp">
+<meta property="og:title" content="SlimeWire PFP Maker — free slime profile pics">
+<meta property="og:description" content="Upload a pic, pick a slime frame, download. Free & instant.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://www.slimewire.org/pfp">
+<meta property="og:image" content="https://www.slimewire.org/pfp/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/favicon.ico">
+<style>
+  :root{--slime:#54e000;--slime2:#b6ff5a;--bg:#050b06;--bg2:#0a140a;--card:#0e1a10;--border:#1c3a20;--muted:#7fae86;--text:#e7ffe0}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0}
+  body{background:radial-gradient(120% 90% at 50% -10%,#123a1d 0%,var(--bg) 60%) fixed;color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;min-height:100vh;line-height:1.5}
+  .wrap{max-width:920px;margin:0 auto;padding:26px 18px 60px}
+  header{text-align:center;margin-bottom:22px}
+  .logo{font-family:"Arial Black",Arial,sans-serif;font-weight:900;font-size:30px;letter-spacing:1px;
+    background:linear-gradient(180deg,var(--slime2),var(--slime));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{color:var(--muted);font-size:14px;margin-top:6px}
+  .tg{display:inline-block;margin-top:12px;font-size:13px;color:var(--slime2);background:#04110a;border:1px solid var(--border);
+    border-radius:999px;padding:6px 14px}
+  .tg b{color:#fff}
+  .drop{margin:22px auto 0;max-width:560px;border:2px dashed var(--border);border-radius:20px;background:var(--card);
+    padding:34px 20px;text-align:center;cursor:pointer;transition:.15s}
+  .drop:hover,.drop.hot{border-color:var(--slime);background:#0f1f12;box-shadow:0 0 0 4px rgba(84,224,0,.08)}
+  .drop .emoji{font-size:44px;line-height:1}
+  .drop h2{margin:12px 0 4px;font-size:19px}
+  .drop p{margin:0;color:var(--muted);font-size:13px}
+  .btn{display:inline-block;margin-top:16px;background:linear-gradient(180deg,var(--slime2),var(--slime));color:#062;
+    font-weight:900;border:none;border-radius:12px;padding:12px 22px;font-size:15px;cursor:pointer}
+  .btn:active{transform:translateY(1px)}
+  input[type=file]{display:none}
+  .status{text-align:center;margin:22px 0;color:var(--muted);font-size:14px;min-height:20px}
+  .spin{display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--slime);
+    border-radius:50%;animation:s .7s linear infinite;vertical-align:-3px;margin-right:8px}
+  @keyframes s{to{transform:rotate(360deg)}}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:16px;margin-top:10px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:12px;text-align:center}
+  .card img{width:100%;border-radius:12px;display:block;background:#000}
+  .card .lbl{font-size:13px;font-weight:700;margin:9px 0 8px}
+  .dl{width:100%;background:#04110a;color:var(--slime2);border:1px solid var(--border);border-radius:10px;
+    padding:8px;font-weight:800;font-size:13px;cursor:pointer}
+  .dl:hover{border-color:var(--slime);background:#0f1f12}
+  .again{display:block;margin:26px auto 0;background:none;border:1px solid var(--border);color:var(--muted);
+    border-radius:10px;padding:10px 18px;cursor:pointer}
+  .foot{text-align:center;margin-top:34px;color:var(--muted);font-size:12px}
+  .foot a{color:var(--slime2);text-decoration:none}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">🐸 SlimeWire PFP Maker</div>
+    <div class="sub">Drop a pic, pick a slime, download. Free &amp; instant — no login.</div>
+    <div class="tg">In Telegram? Message <b>@SlimeWiredBot</b> <b>/pfp</b> to slime your avatar</div>
+  </header>
+
+  <label class="drop" id="drop" for="file">
+    <div class="emoji">🖼️</div>
+    <h2>Upload your photo</h2>
+    <p>Tap to choose, or drag a pic here · PNG / JPG · a face works best</p>
+    <span class="btn">Choose a pic</span>
+    <input type="file" id="file" accept="image/*">
+  </label>
+
+  <div class="status" id="status"></div>
+  <div class="grid" id="grid"></div>
+  <button class="again hidden" id="again">↺ Try another photo</button>
+
+  <div class="foot">
+    Made with 🟢 by <a href="/">SlimeWire</a> — the all-in-one Solana trading terminal &amp; Telegram bot.<br>
+    Your photo is processed to make the image and never stored.
+  </div>
+</div>
+<script>
+  var API_BASE=(window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||"https://ogrevolbot.onrender.com";
+  var drop=document.getElementById('drop'),file=document.getElementById('file'),
+      statusEl=document.getElementById('status'),grid=document.getElementById('grid'),again=document.getElementById('again');
+
+  ['dragenter','dragover'].forEach(function(e){drop.addEventListener(e,function(ev){ev.preventDefault();drop.classList.add('hot');});});
+  ['dragleave','drop'].forEach(function(e){drop.addEventListener(e,function(ev){ev.preventDefault();drop.classList.remove('hot');});});
+  drop.addEventListener('drop',function(ev){var f=ev.dataTransfer&&ev.dataTransfer.files&&ev.dataTransfer.files[0];if(f)handle(f);});
+  file.addEventListener('change',function(){if(file.files&&file.files[0])handle(file.files[0]);});
+
+  function handle(f){
+    if(!/^image\//.test(f.type)){statusEl.textContent='That\'s not an image — try a PNG or JPG.';return;}
+    if(f.size>8*1024*1024){statusEl.textContent='That image is a bit big (over 8MB) — try a smaller one.';return;}
+    var r=new FileReader();
+    r.onload=function(){slime(r.result);};
+    r.onerror=function(){statusEl.textContent='Couldn\'t read that file — try another.';};
+    r.readAsDataURL(f);
+  }
+
+  function slime(dataUrl){
+    grid.innerHTML='';again.classList.add('hidden');
+    statusEl.innerHTML='<span class="spin"></span>Sliming your pic…';
+    fetch(API_BASE+'/api/web/pfp/generate',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({imageDataUrl:dataUrl})})
+    .then(function(res){return res.json();})
+    .then(function(d){
+      if(!d||!d.ok||!d.results||!d.results.length){statusEl.textContent=(d&&d.error)||'Couldn\'t slime that one — try another pic.';return;}
+      statusEl.innerHTML='✅ <b>'+d.results.length+' styles ready</b> — tap Download on your favorite, then set it as your profile pic.';
+      d.results.forEach(function(fr){
+        var card=document.createElement('div');card.className='card';
+        var img=document.createElement('img');img.src=fr.png;img.alt=fr.label+' SlimeWire PFP';img.loading='lazy';
+        var lbl=document.createElement('div');lbl.className='lbl';lbl.textContent=fr.label;
+        var dl=document.createElement('button');dl.className='dl';dl.textContent='⬇ Download';
+        dl.onclick=function(){var a=document.createElement('a');a.href=fr.png;a.download='slimewire-pfp-'+fr.id+'.png';
+          document.body.appendChild(a);a.click();a.remove();};
+        card.appendChild(img);card.appendChild(lbl);card.appendChild(dl);grid.appendChild(card);
+      });
+      again.classList.remove('hidden');
+    })
+    .catch(function(){statusEl.textContent='Network hiccup — check your connection and try again.';});
+  }
+  again.addEventListener('click',function(){file.value='';grid.innerHTML='';statusEl.textContent='';again.classList.add('hidden');window.scrollTo(0,0);});
+</script>
+</body>
+</html>

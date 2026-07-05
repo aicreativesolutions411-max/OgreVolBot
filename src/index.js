@@ -70,6 +70,7 @@ import {
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
 import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
+import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES } from "./lib/pfp.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
 import {
@@ -3889,6 +3890,15 @@ const startedAt = new Date();
 const WEB_LOGIN_CODE_TTL_MS = 10 * 60 * 1000;
 const MOBILE_WALLET_CONNECT_TTL_MS = 20 * 60 * 1000;
 const WEB_STATIC_DIR = path.resolve(__dirname, "..", "web", "dist");
+// SlimeWire PFP maker: the built static dir holds the branded frame stickers (pfp/frames/*.png).
+const PFP_FRAME_DIR = path.join(WEB_STATIC_DIR, "pfp", "frames");
+// Accept only a base64 image data URL, size-capped, and return the raw bytes (or null). Never trusts the
+// declared MIME beyond routing — sharp validates the actual pixels downstream.
+function decodePfpImageDataUrl(dataUrl) {
+  const m = String(dataUrl || "").match(/^data:image\/(?:png|jpe?g|webp|gif|bmp);base64,([A-Za-z0-9+/=]+)$/);
+  if (!m) return null;
+  try { const buf = Buffer.from(m[1], "base64"); return buf.length > 64 && buf.length < 9_000_000 ? buf : null; } catch { return null; }
+}
 const WEB_AVATAR_MAX_BYTES = 160 * 1024;
 let lastKeepAliveStatus = {
   enabled: false,
@@ -5955,6 +5965,24 @@ function startHealthServer() {
     }
     if (request.method === "GET" && requestUrl.pathname === "/share") {
       await serveStaticHtmlPage(response, "share.html");
+      return;
+    }
+    // 🐸 SlimeWire PFP maker — free, public (no login). Upload a pic, get a branded slime PFP back.
+    if (request.method === "GET" && ["/pfp", "/pfp-maker", "/slime-pfp"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "pfp.html");
+      return;
+    }
+    if (request.method === "POST" && requestUrl.pathname === "/api/web/pfp/generate") {
+      try {
+        const body = await readJsonRequestBody(request, 12_000_000); // ~12MB cap (data URLs are ~1.33x bytes)
+        const src = decodePfpImageDataUrl(body && body.imageDataUrl);
+        if (!src) { sendWebJson(request, response, 400, { ok: false, error: "Send an image (PNG/JPG/WebP) to slime." }); return; }
+        const rendered = await renderAllSlimewirePfps({ sourceBuffer: src, frameDir: PFP_FRAME_DIR });
+        if (!rendered.length) { sendWebJson(request, response, 500, { ok: false, error: "Couldn't read that image — try a different one." }); return; }
+        sendWebJson(request, response, 200, { ok: true, results: rendered.map((r) => ({ id: r.id, label: r.label, png: `data:image/png;base64,${r.png.toString("base64")}` })) });
+      } catch (e) {
+        sendWebJson(request, response, 400, { ok: false, error: "That image didn't work — try another (PNG/JPG, under ~8MB)." });
+      }
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/learn") {
@@ -12796,6 +12824,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("cs:")) {
     if (await handleCommunitySnipeCallback(query, userId).catch(() => false)) return;
   }
+  // 🐸 PFP maker frame-switch (pfp:*) — restyle the tapper's own SlimeWire PFP in place.
+  if (String(query.data || "").startsWith("pfp:")) {
+    if (await handlePfpCallback(query, userId).catch(() => false)) return;
+  }
   // ⚡ One-click buy (qb:*) — instant buy from the tapper's own SlimeWire wallet, from any group card.
   if (String(query.data || "").startsWith("qb:")) {
     if (await handleQuickBuyCallback(query, userId).catch(() => false)) return;
@@ -13981,6 +14013,7 @@ async function handleMessage(message, userId) {
   {
     const cs = parseCommandWithArgument(text, ["snipe", "communitysnipe", "csnipe"]);
     if (cs) { await handleCommunitySnipeCommand(chatId, message, cs.argument, userId); return; }
+    if (parseCommandWithArgument(text, ["pfp", "slimepfp", "avatar"])) { await handlePfpCommand(chatId, message, userId); return; }
   }
   // /room — the group's verifiable trading board (opt-in Room PnL + skin-in-the-game callers).
   if (parseCommandWithArgument(text, ["room", "board", "roompnl"])) { await handleRoomCommand(chatId, message); return; }
@@ -29050,6 +29083,71 @@ async function fetchTelegramFileDataUrl(fileId) {
   const ext = String(file.file_path || "").split(".").pop().toLowerCase();
   const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : ext === "gif" ? "image/gif" : "image/jpeg";
   return { dataUrl: `data:${mime};base64,${buf.toString("base64")}`, mime, size: buf.length, name: `coin.${ext || "jpg"}` };
+}
+
+// ---- 🐸 SlimeWire PFP maker (Telegram): /pfp turns your CURRENT Telegram avatar into a branded slime
+// PFP — same free sharp compositor the website uses. Tap a style to restyle in place; no wallet needed.
+function pfpWebUrl() { return (CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/$/, "") + "/pfp"; }
+async function fetchTelegramAvatarBuffer(userId) {
+  try {
+    const res = await telegram("getUserProfilePhotos", { user_id: userId, limit: 1 });
+    const sizes = res && res.photos && res.photos[0];
+    if (!sizes || !sizes.length) return null;
+    const largest = sizes[sizes.length - 1]; // last size = highest resolution
+    const img = await fetchTelegramFileDataUrl(largest.file_id);
+    return Buffer.from(String(img.dataUrl).split(",")[1] || "", "base64");
+  } catch { return null; }
+}
+async function pfpFrameButtons(activeId, ownerId) {
+  const avail = await availablePfpFrames(PFP_FRAME_DIR);
+  const rows = [];
+  for (let i = 0; i < avail.length; i += 2) {
+    rows.push(avail.slice(i, i + 2).map((f) => ({ text: (f.id === activeId ? "• " : "") + f.label, callback_data: `pfp:f:${f.id}:${ownerId}` })));
+  }
+  rows.push([{ text: "🎨 Upload a different pic on the site", url: pfpWebUrl() }]);
+  return { inline_keyboard: rows };
+}
+const PFP_TG_CAPTION = "🐸 <b>Your SlimeWire PFP</b>\nTap a style below, then save the image and set it as your profile pic.";
+async function editMessagePhotoBuffer(chatId, messageId, buffer, caption, replyMarkup) {
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("message_id", String(messageId));
+  form.append("media", JSON.stringify({ type: "photo", media: "attach://pfp", caption, parse_mode: "HTML" }));
+  form.append("pfp", new Blob([buffer], { type: "image/png" }), "slimewire-pfp.png");
+  if (replyMarkup) form.append("reply_markup", JSON.stringify(replyMarkup));
+  const data = await fetchJson(`https://api.telegram.org/bot${CONFIG.telegramToken}/editMessageMedia`, { method: "POST", body: form });
+  if (!data.ok) throw new Error(data.description || "editMessageMedia failed");
+  return data.result;
+}
+async function handlePfpCommand(chatId, message, userId) {
+  const avatar = await fetchTelegramAvatarBuffer(userId);
+  if (!avatar) {
+    await sayHtml(chatId, "🐸 <b>SlimeWire PFP maker</b>\n\nI can't see a Telegram profile photo on your account (it may be private, or you don't have one). Upload any pic on the site and I'll slime it 👇",
+      { inline_keyboard: [[{ text: "🎨 Make my SlimeWire PFP", url: pfpWebUrl() }]] });
+    return;
+  }
+  let png;
+  try { png = await makeSlimewirePfp({ sourceBuffer: avatar, frameId: "slime", frameDir: PFP_FRAME_DIR }); }
+  catch { await say(chatId, "Couldn't slime that avatar — try uploading a pic on the site: " + pfpWebUrl()); return; }
+  await sendPhoto(chatId, "slimewire-pfp.png", png, PFP_TG_CAPTION, await pfpFrameButtons("slime", userId), "HTML");
+}
+async function handlePfpCallback(query, userId) {
+  const data = String(query?.data || "");
+  if (!data.startsWith("pfp:")) return false;
+  const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  const ack = (t, alert) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: Boolean(alert) } : {}) }).catch(() => {});
+  const m = data.match(/^pfp:f:([a-z]+):(\d+)$/);
+  if (!m) { await ack(); return true; }
+  const frameId = m[1], ownerId = m[2];
+  if (String(userId) !== ownerId) { await ack("This is someone else's PFP — send /pfp to make your own 🐸", true); return true; }
+  const avatar = await fetchTelegramAvatarBuffer(userId);
+  if (!avatar) { await ack("Couldn't load your avatar — make one on the site.", true); return true; }
+  try {
+    const png = await makeSlimewirePfp({ sourceBuffer: avatar, frameId, frameDir: PFP_FRAME_DIR });
+    await editMessagePhotoBuffer(chatId, messageId, png, PFP_TG_CAPTION, await pfpFrameButtons(frameId, userId));
+    await ack("Styled ✨");
+  } catch { await ack("Couldn't apply that style — try another.", true); }
+  return true;
 }
 
 function providerErrorValue(value) {
