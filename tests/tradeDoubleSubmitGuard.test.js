@@ -1631,7 +1631,17 @@ test("Trench super-menu folds all trench features into the existing organized se
   const trenchIdx = cb.indexOf('data === "gb:m:trench"');
   const gateIdx = cb.indexOf("changes settings → admins only");
   assert.ok(trenchIdx > 0 && gateIdx > 0 && trenchIdx < gateIdx, "trench routed before admin gate");
-  assert.match(serverSource, /parseCommandWithArgument\(text, \["menu"\]\)/);
+  // /menu (+ /trench /tools) opens the all-users toolkit hub; group /menu + /start route to it too.
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["menu", "trench", "tools"\]\)/);
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["start", "menu"\]\)/);   // group hub / DM terminal
+  // The hub is the all-users toolkit (member-facing), with a buy preset + site/app + admins-only settings.
+  assert.match(trench, /callback_data: "pe:open"/);                 // ⚡ set buy preset in chat
+  assert.match(trench, /text: "⚙️ Group Settings \(admins\)", callback_data: "gb:home"/);
+  assert.match(trench, /🐸 <b>SlimeWire — the room's toolkit<\/b>/);
+  // Scan card menu reaches the community tools (per-coin) via the Room Tools + Narratives entries.
+  const sm = functionBody(serverSource, "scanMenuKeyboard");
+  assert.match(sm, /callback_data: "gb:m:trench"/);
+  assert.match(sm, /callback_data: "gb:go:narrative"/);
 });
 test("Narrative Radar: metas are tappable → LIVE coins only (dedup by ticker, drop dust, top MCs)", () => {
   assert.match(functionBody(serverSource, "narrativeMetas"), /recentLaunchers\.values\(\)/);

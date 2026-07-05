@@ -12423,8 +12423,11 @@ async function handleMessage(message, userId) {
     return;
   }
 
-  if (text === "/start" || text === "/menu") {
+  if (parseCommandWithArgument(text, ["start", "menu"])) {
     clearSession(chatId);
+    // In a GROUP, /menu (or /start) pops the all-users toolkit hub (community snipe, narratives, room,
+    // signals…) — NOT the personal DM terminal. Admins configure modules via /settings.
+    if (!isPrivateChat(message.chat)) { const v = trenchMenuView(); await sayHtml(chatId, v.text, v.markup); return; }
     await showMenu(chatId, userId);
     return;
   }
@@ -12778,9 +12781,8 @@ async function handleMessage(message, userId) {
   if (parseCommandWithArgument(text, ["room", "board", "roompnl"])) { await handleRoomCommand(chatId, message); return; }
   // /signals — one menu for the opt-in alerts (Exit Radar, Alpha Radar).
   if (parseCommandWithArgument(text, ["signals", "alerts", "radar"])) { await handleSignalsCommand(chatId, message, userId); return; }
-  // /menu — the one organized hub (Buy / Raid / Rose / Scan / 🎯 Trench / Referral). /trench opens Trench directly.
-  if (parseCommandWithArgument(text, ["menu"])) { await groupBotPostSetup(chatId); return; }
-  if (parseCommandWithArgument(text, ["trench"])) { const v = trenchMenuView(); await sayHtml(chatId, v.text, v.markup); return; }
+  // /menu (any form, incl. /menu@Bot) → the all-users toolkit hub. Admins configure via /settings.
+  if (parseCommandWithArgument(text, ["menu", "trench", "tools"])) { const v = trenchMenuView(); await sayHtml(chatId, v.text, v.markup); return; }
   // /narrative — hot rotating meta; /grad — coins closest to graduating.
   if (parseCommandWithArgument(text, ["narrative", "meta"])) { const v = narrativeRadarView(); await sayHtml(chatId, v.text, v.markup); return; }
   if (parseCommandWithArgument(text, ["grad", "graduation", "gauntlet"])) { const v = await graduationGauntletView(); await sayHtml(chatId, v.text, v.markup); return; }
@@ -28994,6 +28996,7 @@ function scanMenuKeyboard(mint) {
     [{ text: "🧠 AI Read", callback_data: `scan:ai:${mint}` }, { text: "💸 Track Funds", callback_data: `scan:funds:${mint}` }],
     [{ text: "📈 Charts", callback_data: `scan:cat:chart:${mint}` }, { text: "🔒 Security", callback_data: `scan:cat:sec:${mint}` }],
     [{ text: "🔗 Socials", callback_data: `scan:cat:social:${mint}` }, { text: "🛠 Trade Tools", callback_data: `scan:cat:trade:${mint}` }],
+    [{ text: "🌀 Narratives", callback_data: "gb:go:narrative" }, { text: "🎯 Room Tools", callback_data: "gb:m:trench" }],
     [{ text: "⚡ Quick Buy", url: links.siteBuy }, { text: "⬅ Back", callback_data: `scan:back:${mint}` }]
   ] };
 }
@@ -30385,16 +30388,31 @@ async function graduationGauntletView() {
 }
 // The 🎯 Trench super-menu — one tidy home for everything trench (snipe / room / signals / boards / radars).
 function gbTrenchBackRow() { return [{ text: "⬅️ Trench", callback_data: "gb:m:trench" }, { text: "✓ Done", callback_data: "gb:close" }]; }
+// The all-users toolkit hub (opened by /menu or /start in a group — NOT admin-gated). Every button
+// here is member-facing (each feature gates its own admin actions internally); group settings live
+// behind the one ⚙️ button, which is admin-gated inside gb:home.
 function trenchMenuView() {
+  const site = (CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/$/, "");
   return {
-    text: ["🎯 <b>Trench Tools</b>", "Everything for the trenches, in one place:", "", "• <b>Community Snipe</b> — group snipes a dev's launch from everyone's own wallet", "• <b>The Room</b> — verifiable PnL board + skin-in-the-game callers", "• <b>Signals</b> — Exit Radar (take-profit pings) + Alpha Radar", "• <b>Leaderboard</b> — top callers · <b>Narrative Radar</b> — the hot meta · <b>Graduation Gauntlet</b> — coins about to make it"].join("\n"),
+    text: [
+      "🐸 <b>SlimeWire — the room's toolkit</b>",
+      "Everything anyone here can use, one tap away:",
+      "",
+      "• <b>Community Snipe</b> — the room snipes a dev's launch from everyone's own wallet",
+      "• <b>The Room</b> — live PnL board + verified callers · <b>Copy</b> the best trader",
+      "• <b>Narrative Radar</b> — the hot meta · <b>Graduation</b> — coins about to make it",
+      "• <b>Signals</b> — take-profit + alpha pings · <b>Leaderboard</b> — top callers",
+      "",
+      "<i>Paste any CA or $ticker for an instant scan + one-tap buy.</i>"
+    ].join("\n"),
     markup: { inline_keyboard: [
-      [{ text: "🎯 Community Snipe", callback_data: "gb:go:snipe" }],
-      [{ text: "🏆 The Room", callback_data: "gb:go:room" }, { text: "📡 Signals", callback_data: "gb:go:signals" }],
-      [{ text: "🪞 Copy the Best", callback_data: "gb:go:copy" }, { text: "🚀 Launch Room", callback_data: "gb:go:launch" }],
-      [{ text: "🏆 Leaderboard", callback_data: "gb:go:lb" }, { text: "🌀 Narrative Radar", callback_data: "gb:go:narrative" }],
-      [{ text: "🎓 Graduation Gauntlet", callback_data: "gb:go:grad" }],
-      [{ text: "🏠 Settings (admin)", callback_data: "gb:home" }, { text: "✓ Done", callback_data: "gb:close" }]
+      [{ text: "🎯 Community Snipe", callback_data: "gb:go:snipe" }, { text: "🚀 Launch Room", callback_data: "gb:go:launch" }],
+      [{ text: "🏆 The Room", callback_data: "gb:go:room" }, { text: "🪞 Copy the Best", callback_data: "gb:go:copy" }],
+      [{ text: "🌀 Narrative Radar", callback_data: "gb:go:narrative" }, { text: "🎓 Graduation", callback_data: "gb:go:grad" }],
+      [{ text: "📡 Signals", callback_data: "gb:go:signals" }, { text: "🏆 Leaderboard", callback_data: "gb:go:lb" }],
+      [{ text: "⚡ My Buy Preset", callback_data: "pe:open" }],
+      [{ text: "🌐 Website", url: site }, { text: "📲 Get the App", url: APP_INSTALL_URL }],
+      [{ text: "⚙️ Group Settings (admins)", callback_data: "gb:home" }, { text: "✓ Done", callback_data: "gb:close" }]
     ] }
   };
 }
