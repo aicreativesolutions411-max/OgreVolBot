@@ -3985,6 +3985,7 @@ const INDEXNOW_KEY = String(process.env.INDEXNOW_KEY || "slimewire7c1f9a4d2e8b60
 const SEO_PAGES = [
   { path: "/", priority: "1.0", changefreq: "hourly" },
   { path: "/solana-telegram-bot", priority: "0.9", changefreq: "weekly" },
+  { path: "/press", priority: "0.6", changefreq: "monthly" },
   { path: "/launch", priority: "0.8", changefreq: "daily" },
   { path: "/raids", priority: "0.7", changefreq: "daily" },
   { path: "/proof", priority: "0.7", changefreq: "daily" },
@@ -5284,6 +5285,11 @@ function startHealthServer() {
     // SEO landing page targeting "solana telegram (trading) bot" searches — real content, static + fast.
     if (request.method === "GET" && ["/solana-telegram-bot", "/bot", "/telegram-bot"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "bot.html");
+      return;
+    }
+    // Press / media kit — brand assets + boilerplate + the full feature suite (for listings/journalists).
+    if (request.method === "GET" && ["/press", "/media", "/media-kit", "/presskit"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "press.html");
       return;
     }
     if (request.method === "GET" && ["/prelaunch", "/pre-launch", "/hype"].includes(requestUrl.pathname)) {
