@@ -16643,7 +16643,11 @@ function pushTradePlanExitToUser(event, plan, planWallet, triggerReason = "") {
 // Anonymous public channel post when a TP/SL exit actually fires. No user ids, no
 // wallet addresses - just the engine doing its job. Rate/dedupe limits live in the bridge.
 function announceTradePlanExitToChannel(event, plan, planWallet, triggerReason = "") {
-  // tgChannel.announce no-ops when the channel is dark; opted-in groups still get it.
+  // Public TP/SL exit posts are OFF: users don't want their site take-profit / stop-loss fires shown in
+  // channels/rooms. The trade owner still gets their own private exit notification (web push / DM)
+  // separately — this only ever did the public flex, so disabling it loses nothing they want.
+  return;
+  // eslint-disable-next-line no-unreachable
   if (event !== "tp_sl_trade_closed") return;
   const movePct = Number(planWallet?.lastTriggerMovePct ?? planWallet?.lastMovePct);
   const moveLabel = Number.isFinite(movePct) ? `${movePct >= 0 ? "+" : ""}${movePct.toFixed(1)}%` : "";
@@ -34731,8 +34735,14 @@ function launchAnnounceKb(mint) {
   };
 }
 
+// By default the bot only shills SLIME LAUNCHES into rooms — a fresh SlimeWire launch is a story worth
+// posting, but engine chatter (TP/SL fires, KOL copies, the daily digest…) is spam in someone else's
+// group. Anything a group WANTS on top of that is opt-in via the admin module toggles (Buy / Raid /
+// Scan / Rose), which post through their own paths — not this broadcast.
+const GROUP_BROADCAST_LAUNCH_KINDS = new Set(["launch", "hype-launch", "hype-page"]);
 function broadcastToTelegramGroups(kind, key, text) {
   if (!CONFIG.telegramChannelBotToken || !text) return;
+  if (!GROUP_BROADCAST_LAUNCH_KINDS.has(kind)) return; // launches only into rooms; no engine-alert spam
   void (async () => {
     try {
       const store = await readTelegramGroups();
@@ -36070,9 +36080,8 @@ async function runDailySwampReport() {
     `Full record, wins AND losses: <a href="https://www.slimewire.org/proof">slimewire.org/proof</a>`
   ].filter(Boolean);
   const text = lines.join("\n");
-  for (const [chatId, group] of Object.entries(groupsStore.groups || {})) {
-    if (group?.alerts) groupBridgeFor(chatId).announce("daily-report", today, text);
-  }
+  // Daily digest posts ONLY to the official SlimeWire channel — NOT into every armed group (that's spam
+  // in someone else's room). Groups only get slime launches by default (see broadcastToTelegramGroups).
   tgChannel.announce("daily-report", today, text);
   await withFileLock(telegramGroupsPath(), async () => {
     const fresh = await readTelegramGroups();

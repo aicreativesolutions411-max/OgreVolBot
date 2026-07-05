@@ -288,7 +288,11 @@ export function slimeScopeProgressPct(row = {}) {
   const mcPct = pumpBondingPctFromMarketCap(isPump ? marketCap : 0);
   if (direct > 0) {
     const d = Math.max(0, Math.min(100, direct <= 1 ? direct * 100 : direct));
-    if (mcPct != null && Math.abs(d - mcPct) > 25) return mcPct;
+    // pump.fun / Moralis is AUTHORITATIVE for the real bonding %, so trust the reported value. Only a
+    // sub-$12k coin can report a garbage high % (vSOL reserves on a brand-new launch); there, anchor to
+    // the market-cap curve instead. (The old code anchored EVERY coin to a linear MC/69k, which badly
+    // understated real climbers — a $30k coin at a true ~98% showed ~44%.)
+    if (mcPct != null && marketCap > 0 && marketCap < 12_000 && Math.abs(d - mcPct) > 25) return mcPct;
     return d;
   }
   if (mcPct != null) return mcPct;
