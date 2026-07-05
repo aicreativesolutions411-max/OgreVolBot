@@ -42,6 +42,48 @@
       "content_text": "Indexable SlimeWire updates for the Solana trading terminal, Telegram bot, discovery feeds, share kit, AI resource hub, and tool pages."
     },
     {
+      "id": "https://www.slimewire.org/features",
+      "url": "https://www.slimewire.org/features",
+      "title": "SlimeWire Features - Solana Terminal, Telegram Bot, Alerts and Launch Tools",
+      "summary": "Explore SlimeWire features for Solana memecoin traders: live pairs, token scans, Telegram bot, charts, wallet context, alerts, proof, PnL, and launch tools.",
+      "content_text": "Explore SlimeWire features for Solana memecoin traders: live pairs, token scans, Telegram bot, charts, wallet context, alerts, proof, PnL, and launch tools."
+    },
+    {
+      "id": "https://www.slimewire.org/pricing",
+      "url": "https://www.slimewire.org/pricing",
+      "title": "SlimeWire Pricing - Free Solana Trading Tools and Product Access",
+      "summary": "SlimeWire pricing page explains free access expectations, Solana trading tools, Telegram bot workflows, product boundaries, and risk notes.",
+      "content_text": "SlimeWire pricing page explains free access expectations, Solana trading tools, Telegram bot workflows, product boundaries, and risk notes."
+    },
+    {
+      "id": "https://www.slimewire.org/data-freshness",
+      "url": "https://www.slimewire.org/data-freshness",
+      "title": "SlimeWire Data Freshness - Live Pairs, Alerts, Wallets and Market Updates",
+      "summary": "SlimeWire data freshness explains live pair refreshes, token scans, wallet updates, alerts, chart data, cached metadata, stale data, and user-safe status notes.",
+      "content_text": "SlimeWire data freshness explains live pair refreshes, token scans, wallet updates, alerts, chart data, cached metadata, stale data, and user-safe status notes."
+    },
+    {
+      "id": "https://www.slimewire.org/telegram-bot-commands",
+      "url": "https://www.slimewire.org/telegram-bot-commands",
+      "title": "SlimeWire Telegram Bot Commands - Scans, Alerts, Groups and Trading Workflows",
+      "summary": "Learn SlimeWire Telegram bot command workflows for token scans, alerts, group tools, calls, proof cards, launch rooms, raid tools, and terminal handoff.",
+      "content_text": "Learn SlimeWire Telegram bot command workflows for token scans, alerts, group tools, calls, proof cards, launch rooms, raid tools, and terminal handoff."
+    },
+    {
+      "id": "https://www.slimewire.org/launch-on-slimewire-guide",
+      "url": "https://www.slimewire.org/launch-on-slimewire-guide",
+      "title": "Launch on SlimeWire Guide - Solana Launch Rooms, Alerts, Raids and Proof",
+      "summary": "Launch on SlimeWire guide explains Solana launch rooms, Telegram alerts, raid cards, token scans, chart handoff, proof links, and trader visibility workflows.",
+      "content_text": "Launch on SlimeWire guide explains Solana launch rooms, Telegram alerts, raid cards, token scans, chart handoff, proof links, and trader visibility workflows."
+    },
+    {
+      "id": "https://www.slimewire.org/proof-of-calls",
+      "url": "https://www.slimewire.org/proof-of-calls",
+      "title": "Proof of Calls - Solana Trading Calls, Receipts, PnL and Telegram Proof",
+      "summary": "SlimeWire proof-of-calls workflows help Solana callers and Telegram groups connect token calls, chart links, receipts, PnL context, proof cards, and outcomes.",
+      "content_text": "SlimeWire proof-of-calls workflows help Solana callers and Telegram groups connect token calls, chart links, receipts, PnL context, proof cards, and outcomes."
+    },
+    {
       "id": "https://www.slimewire.org/trust",
       "url": "https://www.slimewire.org/trust",
       "title": "SlimeWire Trust Center - Product, Security, Risk and Support",

@@ -4042,6 +4042,12 @@ const SEO_PAGES = [
   { path: "/solana-copy-trading-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-sniper-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-rug-checker", priority: "0.8", changefreq: "weekly" },
+  { path: "/features", priority: "0.84", changefreq: "monthly" },
+  { path: "/pricing", priority: "0.7", changefreq: "monthly" },
+  { path: "/data-freshness", priority: "0.72", changefreq: "monthly" },
+  { path: "/telegram-bot-commands", priority: "0.78", changefreq: "monthly" },
+  { path: "/launch-on-slimewire-guide", priority: "0.8", changefreq: "monthly" },
+  { path: "/proof-of-calls", priority: "0.78", changefreq: "monthly" },
   { path: "/trust", priority: "0.82", changefreq: "monthly" },
   { path: "/security", priority: "0.8", changefreq: "monthly" },
   { path: "/how-it-works", priority: "0.84", changefreq: "monthly" },
@@ -4294,6 +4300,30 @@ const SEO_PAGE_META = {
   "/solana-rug-checker": {
     title: "Solana Rug Checker - Token Safety Scanner by SlimeWire",
     description: "Use SlimeWire's Solana rug checker and token safety scanner to review liquidity, holders, market data, authority notes, and visible risks before trading."
+  },
+  "/features": {
+    title: "SlimeWire Features - Solana Terminal, Telegram Bot, Alerts and Launch Tools",
+    description: "Explore SlimeWire features for Solana memecoin traders: live pairs, token scans, Telegram bot, charts, wallet context, alerts, proof, PnL, and launch tools."
+  },
+  "/pricing": {
+    title: "SlimeWire Pricing - Free Solana Trading Tools and Product Access",
+    description: "SlimeWire pricing page explains free access expectations, Solana trading tools, Telegram bot workflows, product boundaries, and risk notes."
+  },
+  "/data-freshness": {
+    title: "SlimeWire Data Freshness - Live Pairs, Alerts, Wallets and Market Updates",
+    description: "SlimeWire data freshness explains live pair refreshes, token scans, wallet updates, alerts, chart data, cached metadata, stale data, and user-safe status notes."
+  },
+  "/telegram-bot-commands": {
+    title: "SlimeWire Telegram Bot Commands - Scans, Alerts, Groups and Trading Workflows",
+    description: "Learn SlimeWire Telegram bot command workflows for token scans, alerts, group tools, calls, proof cards, launch rooms, raid tools, and terminal handoff."
+  },
+  "/launch-on-slimewire-guide": {
+    title: "Launch on SlimeWire Guide - Solana Launch Rooms, Alerts, Raids and Proof",
+    description: "Launch on SlimeWire guide explains Solana launch rooms, Telegram alerts, raid cards, token scans, chart handoff, proof links, and trader visibility workflows."
+  },
+  "/proof-of-calls": {
+    title: "Proof of Calls - Solana Trading Calls, Receipts, PnL and Telegram Proof",
+    description: "SlimeWire proof-of-calls workflows help Solana callers and Telegram groups connect token calls, chart links, receipts, PnL context, proof cards, and outcomes."
   },
   "/trust": {
     title: "SlimeWire Trust Center - Product, Security, Risk and Support",
@@ -5928,6 +5958,30 @@ function startHealthServer() {
       return;
     }
     // Press / media kit — brand assets + boilerplate + the full feature suite (for listings/journalists).
+    if (request.method === "GET" && requestUrl.pathname === "/features") {
+      await serveStaticHtmlPage(response, "features.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/pricing") {
+      await serveStaticHtmlPage(response, "pricing.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/data-freshness") {
+      await serveStaticHtmlPage(response, "data-freshness.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/telegram-bot-commands") {
+      await serveStaticHtmlPage(response, "telegram-bot-commands.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/launch-on-slimewire-guide") {
+      await serveStaticHtmlPage(response, "launch-on-slimewire-guide.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/proof-of-calls") {
+      await serveStaticHtmlPage(response, "proof-of-calls.html");
+      return;
+    }
     if (request.method === "GET" && requestUrl.pathname === "/trust") {
       await serveStaticHtmlPage(response, "trust.html");
       return;

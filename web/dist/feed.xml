@@ -355,5 +355,41 @@
     <guid isPermaLink="true">https://www.slimewire.org/telegram-bot-setup</guid>
     <description>Set up @SlimeWiredBot for Solana Telegram groups, token scans, alerts, launch rooms, raid tools, proof cards, and terminal handoff.</description>
   </item>
+  <item>
+    <title>SlimeWire Features - Solana Terminal, Telegram Bot, Alerts and Launch Tools</title>
+    <link>https://www.slimewire.org/features</link>
+    <guid isPermaLink="true">https://www.slimewire.org/features</guid>
+    <description>Explore SlimeWire features for Solana memecoin traders: live pairs, token scans, Telegram bot, charts, wallet context, alerts, proof, PnL, and launch tools.</description>
+  </item>
+  <item>
+    <title>SlimeWire Pricing - Free Solana Trading Tools and Product Access</title>
+    <link>https://www.slimewire.org/pricing</link>
+    <guid isPermaLink="true">https://www.slimewire.org/pricing</guid>
+    <description>SlimeWire pricing page explains free access expectations, Solana trading tools, Telegram bot workflows, product boundaries, and risk notes.</description>
+  </item>
+  <item>
+    <title>SlimeWire Data Freshness - Live Pairs, Alerts, Wallets and Market Updates</title>
+    <link>https://www.slimewire.org/data-freshness</link>
+    <guid isPermaLink="true">https://www.slimewire.org/data-freshness</guid>
+    <description>SlimeWire data freshness explains live pair refreshes, token scans, wallet updates, alerts, chart data, cached metadata, stale data, and user-safe status notes.</description>
+  </item>
+  <item>
+    <title>SlimeWire Telegram Bot Commands - Scans, Alerts, Groups and Trading Workflows</title>
+    <link>https://www.slimewire.org/telegram-bot-commands</link>
+    <guid isPermaLink="true">https://www.slimewire.org/telegram-bot-commands</guid>
+    <description>Learn SlimeWire Telegram bot command workflows for token scans, alerts, group tools, calls, proof cards, launch rooms, raid tools, and terminal handoff.</description>
+  </item>
+  <item>
+    <title>Launch on SlimeWire Guide - Solana Launch Rooms, Alerts, Raids and Proof</title>
+    <link>https://www.slimewire.org/launch-on-slimewire-guide</link>
+    <guid isPermaLink="true">https://www.slimewire.org/launch-on-slimewire-guide</guid>
+    <description>Launch on SlimeWire guide explains Solana launch rooms, Telegram alerts, raid cards, token scans, chart handoff, proof links, and trader visibility workflows.</description>
+  </item>
+  <item>
+    <title>Proof of Calls - Solana Trading Calls, Receipts, PnL and Telegram Proof</title>
+    <link>https://www.slimewire.org/proof-of-calls</link>
+    <guid isPermaLink="true">https://www.slimewire.org/proof-of-calls</guid>
+    <description>SlimeWire proof-of-calls workflows help Solana callers and Telegram groups connect token calls, chart links, receipts, PnL context, proof cards, and outcomes.</description>
+  </item>
 </channel>
 </rss>
