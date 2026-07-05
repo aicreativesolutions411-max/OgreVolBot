@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+<channel>
+  <title>SlimeWire Solana Trading Resources</title>
+  <link>https://www.slimewire.org</link>
+  <atom:link href="https://www.slimewire.org/feed.xml" rel="self" type="application/rss+xml" />
+  <description>SlimeWire updates and evergreen resources for Solana trading bots, Telegram trading, memecoin tools, token scans, launch tools, and web terminal workflows.</description>
+  <language>en-us</language>
+  <item>
+    <title>SlimeWire Resources - Solana Trading Bot, Terminal, Tools and Guides</title>
+    <link>https://www.slimewire.org/resources</link>
+    <guid isPermaLink="true">https://www.slimewire.org/resources</guid>
+    <description>A crawlable hub for SlimeWire's Solana trading bot, terminal, memecoin tools, Telegram bot pages, launch pages, guides, and press kit.</description>
+  </item>
+  <item>
+    <title>Share SlimeWire - Solana Trading Bot and Terminal</title>
+    <link>https://www.slimewire.org/share</link>
+    <guid isPermaLink="true">https://www.slimewire.org/share</guid>
+    <description>Ready-to-share SlimeWire links, posts, and messaging for Solana traders, Telegram groups, launch teams, and crypto communities.</description>
+  </item>
+  <item>
+    <title>Solana Telegram Bot - SlimeWire Trading Bot</title>
+    <link>https://www.slimewire.org/solana-telegram-bot</link>
+    <guid isPermaLink="true">https://www.slimewire.org/solana-telegram-bot</guid>
+    <description>Use @SlimeWiredBot for Solana token scans, Telegram alerts, quick trading flows, group tools, and SlimeWire terminal handoff.</description>
+  </item>
+  <item>
+    <title>Solana Trading Terminal - Live Pairs, Charts, Wallets and PnL</title>
+    <link>https://www.slimewire.org/solana-trading-terminal</link>
+    <guid isPermaLink="true">https://www.slimewire.org/solana-trading-terminal</guid>
+    <description>SlimeWire is a Solana trading terminal for live memecoin pairs, Dex charts, wallet balances, positions, PnL, protected buys, copy trading, and Telegram alerts.</description>
+  </item>
+  <item>
+    <title>Solana Memecoin Tools - Scanner, Bot, Terminal and Launch Tools</title>
+    <link>https://www.slimewire.org/solana-memecoin-tools</link>
+    <guid isPermaLink="true">https://www.slimewire.org/solana-memecoin-tools</guid>
+    <description>Solana memecoin tools from SlimeWire: Telegram scans, live pairs, charts, rug checks, quick buys, copy trading, volume tools, launch support, and PnL.</description>
+  </item>
+  <item>
+    <title>Solana Rug Checker - Token Safety Scanner by SlimeWire</title>
+    <link>https://www.slimewire.org/solana-rug-checker</link>
+    <guid isPermaLink="true">https://www.slimewire.org/solana-rug-checker</guid>
+    <description>Use SlimeWire's Solana rug checker and token safety scanner to review liquidity, holders, market data, authority notes, and visible risks before trading.</description>
+  </item>
+</channel>
+</rss>

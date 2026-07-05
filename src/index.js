@@ -3985,6 +3985,7 @@ const INDEXNOW_KEY = String(process.env.INDEXNOW_KEY || "slimewire7c1f9a4d2e8b60
 const SEO_PAGES = [
   { path: "/", priority: "1.0", changefreq: "hourly" },
   { path: "/resources", priority: "0.9", changefreq: "weekly" },
+  { path: "/share", priority: "0.75", changefreq: "weekly" },
   { path: "/solana-telegram-bot", priority: "0.9", changefreq: "weekly" },
   { path: "/best-solana-trading-bots", priority: "0.85", changefreq: "weekly" },
   { path: "/solana-trading-terminal", priority: "0.85", changefreq: "weekly" },
@@ -4005,6 +4006,64 @@ const SEO_PAGES = [
   { path: "/prelaunch", priority: "0.5", changefreq: "weekly" },
   { path: "/install", priority: "0.5", changefreq: "monthly" }
 ];
+const SEO_PAGE_META = {
+  "/": {
+    title: "SlimeWire - Solana Memecoin Terminal and Telegram Trading Bot",
+    description: "SlimeWire is a Solana memecoin terminal and Telegram trading bot for live pairs, token scans, charts, quick buys, copy trading, volume tools, launch support, positions, and PnL."
+  },
+  "/resources": {
+    title: "SlimeWire Resources - Solana Trading Bot, Terminal, Tools and Guides",
+    description: "A crawlable hub for SlimeWire's Solana trading bot, terminal, memecoin tools, Telegram bot pages, launch pages, guides, and press kit."
+  },
+  "/share": {
+    title: "Share SlimeWire - Solana Trading Bot and Terminal",
+    description: "Ready-to-share SlimeWire links, posts, and messaging for Solana traders, Telegram groups, launch teams, and crypto communities."
+  },
+  "/solana-telegram-bot": {
+    title: "Solana Telegram Bot - SlimeWire Trading Bot",
+    description: "Use @SlimeWiredBot for Solana token scans, Telegram alerts, quick trading flows, group tools, and SlimeWire terminal handoff."
+  },
+  "/best-solana-trading-bots": {
+    title: "Best Solana Trading Bots - SlimeWire Telegram Bot and Terminal",
+    description: "Compare what a Solana trading bot should include: Telegram alerts, fast buy and sell flows, rug checks, live charts, copy trading, volume tools, and PnL tracking."
+  },
+  "/solana-trading-terminal": {
+    title: "Solana Trading Terminal - Live Pairs, Charts, Wallets and PnL",
+    description: "SlimeWire is a Solana trading terminal for live memecoin pairs, Dex charts, wallet balances, positions, PnL, protected buys, copy trading, and Telegram alerts."
+  },
+  "/solana-memecoin-tools": {
+    title: "Solana Memecoin Tools - Scanner, Bot, Terminal and Launch Tools",
+    description: "Solana memecoin tools from SlimeWire: Telegram scans, live pairs, charts, rug checks, quick buys, copy trading, volume tools, launch support, and PnL."
+  },
+  "/top-solana-trading-sites": {
+    title: "Top Solana Trading Sites - What to Look For in a Memecoin Terminal",
+    description: "A practical guide to top Solana trading sites and what traders should look for: live pairs, charts, Telegram alerts, rug checks, wallet controls, and PnL."
+  },
+  "/pump-fun-bot": {
+    title: "Pump.fun Telegram Bot - Pump Fun Sniper Bot by SlimeWire",
+    description: "Use SlimeWire as a pump.fun Telegram bot for fresh launch scans, sniper entries, protected buys, TP/SL, group alerts, and web terminal charts."
+  },
+  "/solana-volume-bot": {
+    title: "Solana Volume Bot - SlimeWire Telegram and Web Volume Tools",
+    description: "SlimeWire volume tools help Solana communities and launch teams coordinate market visibility, wallet flows, presets, and Telegram/web workflows."
+  },
+  "/solana-copy-trading-bot": {
+    title: "Solana Copy Trading Bot - Copy Wallets with SlimeWire",
+    description: "Use SlimeWire copy trading workflows to follow wallet activity, route trade decisions through presets, and manage Solana positions from Telegram and web."
+  },
+  "/solana-sniper-bot": {
+    title: "Solana Sniper Bot - Telegram Sniper Tools by SlimeWire",
+    description: "SlimeWire provides Solana sniper bot workflows for Telegram and web: launch watch, token scans, wallet presets, charts, and protected trade controls."
+  },
+  "/solana-rug-checker": {
+    title: "Solana Rug Checker - Token Safety Scanner by SlimeWire",
+    description: "Use SlimeWire's Solana rug checker and token safety scanner to review liquidity, holders, market data, authority notes, and visible risks before trading."
+  },
+  "/press": {
+    title: "SlimeWire Press Kit - Solana Trading Terminal and Telegram Bot",
+    description: "Press, media, and directory resources for SlimeWire's Solana trading terminal, Telegram bot, memecoin tools, and launch suite."
+  }
+};
 function buildRobotsTxt() {
   return [
     "User-agent: *",
@@ -4015,6 +4074,7 @@ function buildRobotsTxt() {
     "Disallow: /account/",
     "",
     `Sitemap: ${SEO_HOST}/sitemap.xml`,
+    `Sitemap: ${SEO_HOST}/feed.xml`,
     ""
   ].join("\n");
 }
@@ -4024,6 +4084,62 @@ function buildSitemapXml() {
     `  <url><loc>${SEO_HOST}${p.path}</loc><lastmod>${lastmod}</lastmod><changefreq>${p.changefreq}</changefreq><priority>${p.priority}</priority></url>`
   ).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`;
+}
+function xmlEscape(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+function pageMeta(pathname) {
+  return SEO_PAGE_META[pathname] || {
+    title: `SlimeWire ${pathname.replace(/^[/]/, "").replace(/-/g, " ")}`,
+    description: "SlimeWire Solana trading terminal and Telegram bot resource."
+  };
+}
+function buildRssFeedXml() {
+  const now = new Date().toUTCString();
+  const items = SEO_PAGES
+    .filter((p) => p.path !== "/")
+    .map((p) => {
+      const meta = pageMeta(p.path);
+      const url = `${SEO_HOST}${p.path}`;
+      return [
+        "  <item>",
+        `    <title>${xmlEscape(meta.title)}</title>`,
+        `    <link>${xmlEscape(url)}</link>`,
+        `    <guid isPermaLink="true">${xmlEscape(url)}</guid>`,
+        `    <description>${xmlEscape(meta.description)}</description>`,
+        `    <pubDate>${now}</pubDate>`,
+        "  </item>"
+      ].join("\n");
+    }).join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">\n<channel>\n  <title>SlimeWire Solana Trading Resources</title>\n  <link>${xmlEscape(SEO_HOST)}</link>\n  <atom:link href="${xmlEscape(`${SEO_HOST}/feed.xml`)}" rel="self" type="application/rss+xml" />\n  <description>SlimeWire updates and evergreen resources for Solana trading bots, Telegram trading, memecoin tools, token scans, launch tools, and web terminal workflows.</description>\n  <language>en-us</language>\n  <lastBuildDate>${now}</lastBuildDate>\n${items}\n</channel>\n</rss>\n`;
+}
+function buildJsonFeed() {
+  return JSON.stringify({
+    version: "https://jsonfeed.org/version/1.1",
+    title: "SlimeWire Solana Trading Resources",
+    home_page_url: SEO_HOST,
+    feed_url: `${SEO_HOST}/feed.json`,
+    description: "SlimeWire updates and evergreen resources for Solana trading bots, Telegram trading, memecoin tools, token scans, launch tools, and web terminal workflows.",
+    language: "en-US",
+    items: SEO_PAGES.filter((p) => p.path !== "/").map((p) => {
+      const meta = pageMeta(p.path);
+      return {
+        id: `${SEO_HOST}${p.path}`,
+        url: `${SEO_HOST}${p.path}`,
+        title: meta.title,
+        summary: meta.description,
+        content_text: meta.description
+      };
+    })
+  }, null, 2) + "\n";
+}
+function buildOpenSearchXml() {
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">\n  <ShortName>SlimeWire</ShortName>\n  <Description>Search SlimeWire Solana trading resources.</Description>\n  <InputEncoding>UTF-8</InputEncoding>\n  <Image width="32" height="32" type="image/png">${xmlEscape(`${SEO_HOST}/assets/slimewire/png/slimewire-mark.png`)}</Image>\n  <Url type="text/html" template="${xmlEscape(`${SEO_HOST}/?q={searchTerms}`)}" />\n  <Url type="application/rss+xml" rel="results" template="${xmlEscape(`${SEO_HOST}/feed.xml`)}" />\n</OpenSearchDescription>\n`;
 }
 // Automated indexing ping for IndexNow-participating engines (Bing, Yandex, DuckDuckGo, Seznam). Free,
 // no account. Best-effort + fully non-blocking. Google ignores IndexNow, so it's a bonus, not the plan.
@@ -5227,6 +5343,21 @@ function startHealthServer() {
       response.end(buildSitemapXml());
       return;
     }
+    if (request.method === "GET" && ["/feed.xml", "/rss.xml"].includes(requestUrl.pathname)) {
+      response.writeHead(200, { "Content-Type": "application/rss+xml; charset=utf-8", "Cache-Control": "public, max-age=3600" });
+      response.end(buildRssFeedXml());
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/feed.json") {
+      response.writeHead(200, { "Content-Type": "application/feed+json; charset=utf-8", "Cache-Control": "public, max-age=3600" });
+      response.end(buildJsonFeed());
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/opensearch.xml") {
+      response.writeHead(200, { "Content-Type": "application/opensearchdescription+xml; charset=utf-8", "Cache-Control": "public, max-age=86400" });
+      response.end(buildOpenSearchXml());
+      return;
+    }
     if (request.method === "GET" && requestUrl.pathname === `/${INDEXNOW_KEY}.txt`) {
       response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=86400" });
       response.end(INDEXNOW_KEY);
@@ -5310,6 +5441,10 @@ function startHealthServer() {
     }
     if (request.method === "GET" && requestUrl.pathname === "/resources") {
       await serveStaticHtmlPage(response, "resources.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/share") {
+      await serveStaticHtmlPage(response, "share.html");
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/best-solana-trading-bots") {

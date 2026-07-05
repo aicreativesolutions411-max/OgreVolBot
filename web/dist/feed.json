@@ -1,0 +1,31 @@
+{
+  "version": "https://jsonfeed.org/version/1.1",
+  "title": "SlimeWire Solana Trading Resources",
+  "home_page_url": "https://www.slimewire.org",
+  "feed_url": "https://www.slimewire.org/feed.json",
+  "description": "SlimeWire updates and evergreen resources for Solana trading bots, Telegram trading, memecoin tools, token scans, launch tools, and web terminal workflows.",
+  "language": "en-US",
+  "items": [
+    {
+      "id": "https://www.slimewire.org/resources",
+      "url": "https://www.slimewire.org/resources",
+      "title": "SlimeWire Resources - Solana Trading Bot, Terminal, Tools and Guides",
+      "summary": "A crawlable hub for SlimeWire's Solana trading bot, terminal, memecoin tools, Telegram bot pages, launch pages, guides, and press kit.",
+      "content_text": "A crawlable hub for SlimeWire's Solana trading bot, terminal, memecoin tools, Telegram bot pages, launch pages, guides, and press kit."
+    },
+    {
+      "id": "https://www.slimewire.org/share",
+      "url": "https://www.slimewire.org/share",
+      "title": "Share SlimeWire - Solana Trading Bot and Terminal",
+      "summary": "Ready-to-share SlimeWire links, posts, and messaging for Solana traders, Telegram groups, launch teams, and crypto communities.",
+      "content_text": "Ready-to-share SlimeWire links, posts, and messaging for Solana traders, Telegram groups, launch teams, and crypto communities."
+    },
+    {
+      "id": "https://www.slimewire.org/solana-trading-terminal",
+      "url": "https://www.slimewire.org/solana-trading-terminal",
+      "title": "Solana Trading Terminal - Live Pairs, Charts, Wallets and PnL",
+      "summary": "SlimeWire is a Solana trading terminal for live memecoin pairs, Dex charts, wallet balances, positions, PnL, protected buys, copy trading, and Telegram alerts.",
+      "content_text": "SlimeWire is a Solana trading terminal for live memecoin pairs, Dex charts, wallet balances, positions, PnL, protected buys, copy trading, and Telegram alerts."
+    }
+  ]
+}
