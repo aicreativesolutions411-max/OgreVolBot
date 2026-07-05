@@ -11611,6 +11611,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("lo:")) {
     if (await handleLimitOrderCallback(query, userId).catch(() => false)) return;
   }
+  // ⏰ Clean in-chat limit builder (lo2:*) — sub-menu buttons + tidy per-field typed inputs.
+  if (String(query.data || "").startsWith("lo2:")) {
+    if (await handleLimitBuilderCallback(query, userId).catch(() => false)) return;
+  }
   // 🎯 Auto-TP ladder (tp:*) — one tap arms a set of limit-sell take-profits at MC multiples.
   if (String(query.data || "").startsWith("tp:")) {
     if (await handleTpCallback(query, userId).catch(() => false)) return;
@@ -12221,6 +12225,9 @@ async function handleMessage(message, userId) {
   if (await applyGbInput(message, userId).catch(() => false)) return;
   // Wallet Tracker: capture a wallet address / min-USD the user is entering.
   if (await applyWtInput(message, userId).catch(() => false)) return;
+  // ⏰/⚙️ Clean in-chat input: capture ONE typed value (limit MC/amount, preset amount) then auto-delete
+  // both the prompt and the reply so the group stays tidy. Runs first so it wins over legacy text hooks.
+  if (await applyCleanInput(message, userId).catch(() => false)) return;
   // ⚡ One-click buy: capture the custom SOL amount the user was prompted for (from a group ✏️ tap).
   if (await applyTgQuickBuyInput(message, userId).catch(() => false)) return;
   // ⚙️ Buy presets: capture a typed preset amount.
@@ -26979,11 +26986,15 @@ async function showHowToPage(chatId, topic, messageId = null) {
 }
 
 function howToMenuKeyboard() {
+  // Mirrors the CURRENT main menu (owner 2026-07-04: "how to use was showing the old
+  // features") - every row here matches a live main-menu button, and each page's
+  // "Open This Menu" jumps straight into that real flow.
   return [
-    [{ text: "🟢 Buy & Sell", callback_data: "howto_trade" }],
-    [{ text: "👥 Copy Trade", callback_data: "howto_copy" }, { text: "📈 Volume Bot", callback_data: "howto_volume" }],
-    [{ text: "🚀 Launch a Coin", callback_data: "howto_launch" }, { text: "🎯 Signals", callback_data: "howto_signals" }],
-    [{ text: "🧲 Bundle", callback_data: "howto_bundle" }, { text: "💳 Wallet", callback_data: "howto_wallet" }],
+    [{ text: "🟢 Buy & Sell (paste a CA)", callback_data: "howto_buy_sell" }],
+    [{ text: "🎯 Signals", callback_data: "howto_signals" }, { text: "👥 Copy Trade", callback_data: "howto_copytrade" }],
+    [{ text: "🚀 Launch a Coin", callback_data: "howto_launch" }, { text: "📈 Volume Bot", callback_data: "howto_volume" }],
+    [{ text: "💰 Portfolio & PnL", callback_data: "howto_portfolio" }, { text: "👛 Wallet", callback_data: "howto_wallet" }],
+    [{ text: "⚡ Group Commands", callback_data: "howto_groupcmds" }, { text: "🌐 Web & App", callback_data: "howto_webapp" }],
     [{ text: "💾 Backup / Restore", callback_data: "howto_backup" }, { text: "🏦 Withdrawal", callback_data: "howto_withdrawal" }],
     [{ text: "✅ Success Checklist", callback_data: "howto_success" }],
     [{ text: "Open Main Menu", callback_data: "main_menu" }]
@@ -27004,6 +27015,130 @@ function howToPageKeyboard(openAction) {
 
 function howToPage(topic) {
   const pages = {
+    buy_sell: {
+      openAction: "buy_prompt",
+      text: [
+        "How To Use: Buy & Sell",
+        "",
+        "The fastest flow in the bot - no menus needed:",
+        "1. Paste any token contract address (CA) into this chat.",
+        "2. The bot pulls up the coin card: price, chart link, and one-tap buy buttons.",
+        "3. Tap a preset amount and the buy fires instantly from your bot wallet.",
+        "",
+        "Presets:",
+        "- Your one-tap amounts live under Settings > Buy presets.",
+        "- Preset taps are INSTANT - no confirm screen. Set sizes you are comfortable with.",
+        "",
+        "Selling:",
+        "- Tap Sell & Positions on the main menu (or /positions) to see every coin you hold.",
+        "- Each position has Sell 25% / 50% / 100% buttons and a live PnL readout.",
+        "- Exits like take-profit, stop-loss, trailing and breakeven are on the position card.",
+        "",
+        "First trade tip: start small, sell a little to test the route, then size up."
+      ].join("\n")
+    },
+    signals: {
+      openAction: "dm_signals",
+      text: [
+        "How To Use: Signals",
+        "",
+        "The Signals hub is your alert center:",
+        "- Top Plays: proactive DMs when the engine spots a strong setup.",
+        "- Exit Radar: advisory sell-signals for coins you hold - it warns, you decide.",
+        "- Alpha Radar: long-term runners with real wallet-network backing, not fast flips.",
+        "- Narrative Radar: hot metas and the coins riding them.",
+        "",
+        "Every alert has quick-buy buttons so you can act from the message.",
+        "Alerts are opt-in per feature - toggle each one on or off inside the hub.",
+        "",
+        "In groups: /slimewire on turns engine alerts on for that chat (admins only)."
+      ].join("\n")
+    },
+    copytrade: {
+      openAction: "copy_trade_start",
+      text: [
+        "How To Use: Copy Trade",
+        "",
+        "Copy Trade mirrors another wallet's buys from YOUR wallet:",
+        "1. Open Copy Trade from the main menu.",
+        "2. Paste the wallet address you want to mirror.",
+        "3. Choose your size per copy, max concurrent positions, and exits.",
+        "",
+        "Your keys, your wallet - the bot only mirrors entries; exits follow your own TP/SL.",
+        "If the menu says it is warming up, the feature is being rolled out - check back soon.",
+        "",
+        "Group version: the Trench module's Copy-the-room's-best mirrors your group's top verified caller."
+      ].join("\n")
+    },
+    launch: {
+      openAction: "launch_coin",
+      text: [
+        "How To Use: Launch a Coin",
+        "",
+        "Launch your own token straight from the bot:",
+        "1. Tap Launch a Coin and follow the builder: name, ticker, image, socials.",
+        "2. Pick the rail: pump.fun-style bonding curve or bonk-style launch.",
+        "3. Set your dev buy and confirm - the bot creates the coin and buys your dev bag atomically.",
+        "",
+        "Extras:",
+        "- SL1ME vanity mint endings are applied automatically when available.",
+        "- Creator fees route to your wallet - you are the dev.",
+        "- Anti-snipe: the create + dev-buy can go as one bundle so snipers cannot front-run your own buy.",
+        "",
+        "After launch: share the CA in your group, arm the Volume Bot, and use /snipe so your community can co-enter from their own wallets."
+      ].join("\n")
+    },
+    portfolio: {
+      openAction: "portfolio_menu",
+      text: [
+        "How To Use: Portfolio & PnL",
+        "",
+        "- Portfolio: every coin across your bot wallets with live values.",
+        "- PnL: realized + unrealized profit per position and overall.",
+        "- Flex cards: shareable PnL images backed by your real trade receipts - post your wins in the group with /mywins on.",
+        "",
+        "Graduated coins are valued off the live DEX price, and PnL is measured from your true entry - what you see is what actually happened."
+      ].join("\n")
+    },
+    groupcmds: {
+      openAction: null,
+      text: [
+        "How To Use: Group Commands",
+        "",
+        "Add the bot to your Telegram group and every member gets:",
+        "- /look <CA> - SlimeShield safety read on any token before you ape.",
+        "- /alpha - top scanner picks right now.",
+        "- /ape - one fresh low-MC shot, scanner-picked.",
+        "- /kols - what tracked KOL wallets are buying live.",
+        "- /receipts - SlimeShield rug-call receipts and hit rate.",
+        "- /proof - the engine's live track record.",
+        "- /snipe <wallet> - non-custodial group launch snipe: when that dev launches, every opted-in member auto-buys from their OWN wallet.",
+        "- /leaderboard - top callers in your group.",
+        "- /reflink - your referral link for the group contest.",
+        "",
+        "Admin toggles: /slimewire on|off for engine alerts, /mywins on|off for win posts.",
+        "Quick-buy: alert cards in groups have one-tap buy buttons tied to each member's own wallet.",
+        "",
+        "The 🎯 Trench module (via /menu in a group) adds The Room PnL board, verified callers, Launch Room, proof-of-call, and Throne co-entry bundles."
+      ].join("\n")
+    },
+    webapp: {
+      openAction: "web_portal",
+      text: [
+        "How To Use: Web Terminal & App",
+        "",
+        "The full SlimeWire terminal lives at slimewire.org:",
+        "- Live Terminal: seconds-old launches, trending boards, one-click instant buys.",
+        "- Pro terminal at /gg: trending table, trenches board, charts, portfolio.",
+        "- Ogre A.I.: managed-wallet automation with TP/SL/timer exits.",
+        "- SlimeShield scans, KOL tracker, launchpad, raid tools, and per-coin chat.",
+        "",
+        "Login: tap Open This Menu below (or /web) for a one-time login code - no password, your Telegram is the account.",
+        "Mobile app: /app for the download link.",
+        "",
+        "Same wallets everywhere: the bot, the web terminal, and the app share your SlimeWire wallets."
+      ].join("\n")
+    },
     launch: {
       openAction: "launch_coin",
       text: [
@@ -30660,7 +30795,7 @@ function presetEditorView(prefs, uid) {
     ].join("\n"),
     markup: { inline_keyboard: [
       PE_AMOUNTS.slice(0, 3).map((a) => ({ text: mark(prefs.quickAmount === a, `${a}◎`), callback_data: `pe:a:${a}:${uid}` })),
-      PE_AMOUNTS.slice(3).map((a) => ({ text: mark(prefs.quickAmount === a, `${a}◎`), callback_data: `pe:a:${a}:${uid}` })),
+      PE_AMOUNTS.slice(3).map((a) => ({ text: mark(prefs.quickAmount === a, `${a}◎`), callback_data: `pe:a:${a}:${uid}` })).concat([{ text: "✏️", callback_data: `pe:ax:${uid}` }]),
       PE_TP.map((t) => ({ text: mark(prefs.takeProfitPct === t, t === 0 ? "TP off" : `+${t}%`), callback_data: `pe:tp:${t}:${uid}` })),
       PE_SL.map((s) => ({ text: mark(prefs.stopLossPct === s, s === 0 ? "SL off" : `-${s}%`), callback_data: `pe:sl:${s}:${uid}` })),
       [{ text: "✅ Done", callback_data: `pe:x:${uid}` }]
@@ -30679,11 +30814,16 @@ async function handlePresetEditorCallback(query, userId) {
   }
   const parts = data.split(":");
   const kind = parts[1];
-  const owner = kind === "x" ? parts[2] : parts[3];
+  const owner = (kind === "x" || kind === "ax") ? parts[2] : parts[3];
   if (String(userId) !== String(owner)) { await ack("Tap ⚙️ Preset to open your own.", true); return true; }
   if (kind === "x") {
     if (messageId) await telegram("deleteMessage", { chat_id: chatId, message_id: messageId }).catch(() => {});
     await ack("Saved ✅"); return true;
+  }
+  if (kind === "ax") {   // ✏️ custom amount → clean in-chat typed input (auto-deletes), re-renders this editor
+    await ack();
+    await promptCleanInput(chatId, userId, "💰 Reply with your <b>Quick Buy amount</b> in SOL (e.g. <code>0.5</code>).", "pe_amt", messageId);
+    return true;
   }
   const kindMap = { a: "amount", tp: "tp", sl: "sl" };
   if (kindMap[kind]) {
@@ -31032,9 +31172,9 @@ async function handleLimitOrderCallback(query, userId) {
   // cancel
   let m = data.match(/^lo:x:(.+)$/);
   if (m) { const ok = await cancelLimitOrder(userId, m[1]); await ack(ok ? "Cancelled." : "Already gone."); await showOrdersHub(chatId, userId, messageId); return true; }
-  // open the per-coin builder
+  // open the clean per-coin builder (sub-menu buttons, in-chat, tidy typed inputs) — works in groups + DM
   m = data.match(/^lo:new:([1-9A-HJ-NP-Za-km-z]{32,44})$/);
-  if (m) { await ack(); await showLimitOrderBuilder(userId, m[1], isPrivateChat(query.message?.chat) ? messageId : null); return true; }
+  if (m) { await ack(); await openLimitBuilder(chatId, userId, m[1]); return true; }
   // price alert (no trade) → prompt for the target MC only
   m = data.match(/^lo:a:([1-9A-HJ-NP-Za-km-z]{32,44})$/);
   if (m) {
@@ -31076,6 +31216,161 @@ async function handleLimitOrderCallback(query, userId) {
     return true;
   }
   await ack();
+  return true;
+}
+// ---- ⏰ CLEAN in-chat Limit builder (lo2:*) — sub-menu buttons, per-field, tidy typed inputs -----------
+// Everything happens right in the chat (group or DM): tap Side, tap 🎯 Target MC / 💰 Amount to type ONE
+// value, and the bot deletes both the prompt and your typed reply so the chat never fills with text.
+// Per-user (owner-gated) + keyed by chat+user, so many people can build orders in the same group.
+const limitDraft = new Map();        // `${chatId}:${userId}` -> { mint, sym, refMc, side, triggerMc, amount, uid, builderMsgId, at }
+const cleanInputPending = new Map();  // `${chatId}:${userId}` -> { kind, at, promptMsgId, builderMsgId }
+function limitBuilderView(draft, mc) {
+  const side = draft.side || "buy";
+  const uid = draft.uid;
+  const mk = (on, l) => (on ? "• " : "") + l;
+  const sideLabel = side === "buy" ? "🟢 Buy" : side === "sell" ? "🔴 Sell" : "🔔 Alert";
+  const mcLine = draft.triggerMc ? fmtMc(draft.triggerMc) : "— tap to set";
+  const dir = draft.triggerMc && mc ? (draft.triggerMc >= mc ? "▲ up" : "▼ down") : "";
+  const amtLine = side === "alert" ? "" : (draft.amount ? (side === "buy" ? `${draft.amount}◎` : `${draft.amount}%`) : "— tap to set");
+  const rows = [
+    [
+      { text: mk(side === "buy", "🟢 Buy"), callback_data: `lo2:s:b:${uid}` },
+      { text: mk(side === "sell", "🔴 Sell"), callback_data: `lo2:s:s:${uid}` },
+      { text: mk(side === "alert", "🔔 Alert"), callback_data: `lo2:s:a:${uid}` }
+    ],
+    [{ text: `🎯 Target MC${draft.triggerMc ? `: ${fmtMc(draft.triggerMc)}` : ""}`, callback_data: `lo2:mc:${uid}` }]
+  ];
+  if (side !== "alert") {
+    const quick = side === "buy" ? [0.1, 0.25, 0.5, 1] : [25, 50, 100];
+    rows.push(quick.map((v) => ({ text: mk(draft.amount === v, side === "buy" ? `${v}◎` : `${v}%`), callback_data: `lo2:amt:${v}:${uid}` }))
+      .concat([{ text: "✏️", callback_data: `lo2:amtx:${uid}` }]));
+  }
+  rows.push([{ text: "✅ Arm order", callback_data: `lo2:arm:${uid}` }, { text: "✖ Cancel", callback_data: `lo2:x:${uid}` }]);
+  const text = [
+    `⏰ <b>Limit order</b> — ${escapeTelegramHtml(draft.sym || shortMint(draft.mint))}`,
+    mc ? `Now: <b>${fmtMc(mc)}</b>` : "Now: <i>MC unavailable</i>",
+    "",
+    `Side: <b>${sideLabel}</b>`,
+    `Target MC: <b>${mcLine}</b>${dir ? ` <i>(${dir})</i>` : ""}`,
+    side === "alert" ? "" : `Amount: <b>${amtLine}</b>`,
+    "",
+    side === "buy" ? "<i>Below now = buy the dip · above = buy the breakout. Fires from your own wallet.</i>"
+      : side === "sell" ? "<i>Above now = take profit · below = stop loss. Fires from your own wallet.</i>"
+      : "<i>I'll DM you when it crosses — no trade.</i>"
+  ].filter(Boolean).join("\n");
+  return { text, markup: { inline_keyboard: rows } };
+}
+async function openLimitBuilder(chatId, userId, mint) {
+  const info = await alphaRadarFetchMc(mint).catch(() => null);
+  const mc = info && info.mc > 0 ? info.mc : 0;
+  const draft = { mint, sym: (info && info.sym) || "", refMc: mc, side: "buy", triggerMc: 0, amount: 0, uid: String(userId), builderMsgId: null, at: Date.now() };
+  limitDraft.set(`${chatId}:${userId}`, draft);
+  const v = limitBuilderView(draft, mc);
+  const res = await telegram("sendMessage", { chat_id: chatId, text: v.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: v.markup }).catch(() => null);
+  if (res && res.message_id) draft.builderMsgId = res.message_id;
+}
+async function renderLimitBuilder(chatId, userId) {
+  const draft = limitDraft.get(`${chatId}:${userId}`);
+  if (!draft || !draft.builderMsgId) return;
+  const v = limitBuilderView(draft, draft.refMc);
+  await telegram("editMessageText", { chat_id: chatId, message_id: draft.builderMsgId, text: v.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: v.markup }).catch(() => {});
+}
+async function handleLimitBuilderCallback(query, userId) {
+  const data = String(query?.data || ""); if (!data.startsWith("lo2:")) return false;
+  const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  const ack = (t, a) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: Boolean(a) } : {}) }).catch(() => {});
+  const parts = data.split(":");
+  const kind = parts[1];
+  const owner = parts[parts.length - 1];
+  if (String(userId) !== String(owner)) { await ack("Tap ⏰ Limit to open your own.", true); return true; }
+  const key = `${chatId}:${owner}`;
+  const draft = limitDraft.get(key);
+  if (!draft) { await ack("That order builder expired — tap ⏰ Limit again.", true); return true; }
+  if (messageId) draft.builderMsgId = messageId;
+  if (kind === "s") {
+    const s = parts[2]; draft.side = s === "b" ? "buy" : s === "s" ? "sell" : "alert";
+    if (draft.side === "alert") draft.amount = 0;
+    await renderLimitBuilder(chatId, userId); await ack(); return true;
+  }
+  if (kind === "mc") { await ack(); await promptCleanInput(chatId, userId, "🎯 Reply with the <b>target market cap</b> (e.g. <code>30k</code>, <code>250k</code>, <code>1.2m</code>).", "lo_mc"); return true; }
+  if (kind === "amt") { draft.amount = Number(parts[2]); await renderLimitBuilder(chatId, userId); await ack(); return true; }
+  if (kind === "amtx") { await ack(); await promptCleanInput(chatId, userId, draft.side === "buy" ? "💰 Reply with the <b>SOL amount</b> (e.g. <code>0.5</code>)." : "💰 Reply with the <b>sell %</b> (e.g. <code>100</code>).", "lo_amt"); return true; }
+  if (kind === "x") { limitDraft.delete(key); if (messageId) await telegram("deleteMessage", { chat_id: chatId, message_id: messageId }).catch(() => {}); await ack("Cancelled"); return true; }
+  if (kind === "arm") {
+    if (!draft.triggerMc) { await ack("Set the target market cap first.", true); return true; }
+    if (draft.side !== "alert" && !(draft.amount > 0)) { await ack(draft.side === "buy" ? "Set the SOL amount first." : "Set the sell % first.", true); return true; }
+    if (draft.side !== "alert" && !walletsForOwner(await readWalletStore(), userId).length) { await ack(noWalletAckText(await funnelNoWallet(userId)), true); return true; }
+    const slippageBps = userBuyPrefs(await readBuyPrefs(), userId).slippageBps;
+    const dir = draft.triggerMc >= (draft.refMc || 0) ? ">=" : "<=";
+    const spec = { side: draft.side, mint: draft.mint, sym: draft.sym, refMc: draft.refMc || 0, triggerMc: draft.triggerMc, dir, slippageBps };
+    if (draft.side === "buy") spec.amountSol = Math.min(LIMIT_MAX_SOL, Math.max(LIMIT_MIN_SOL, draft.amount));
+    else if (draft.side === "sell") spec.pct = Math.min(100, Math.max(1, Math.round(draft.amount)));
+    const res = await addLimitOrder(userId, spec);
+    if (!res.ok) { if (res.needWallet) await ack(noWalletAckText(await funnelNoWallet(userId)), true); else await ack(`Couldn't arm: ${res.why || "try again"}.`, true); return true; }
+    limitDraft.delete(key);
+    const o = res.order;
+    const text = ["⏰✅ <b>Order armed</b>", limitOrderLine(o), "", `<i>Fires automatically when ${escapeTelegramHtml(o.sym || shortMint(o.mint))} crosses ${fmtMc(o.triggerMc)}. Expires in 14 days.</i>`].join("\n");
+    const markup = { inline_keyboard: [[{ text: "⏰ My Orders", callback_data: "orders_hub" }, { text: "➕ Another", callback_data: `lo:new:${draft.mint}` }]] };
+    if (messageId) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: markup }).catch(() => {});
+    await ack("⏰ Armed!");
+    return true;
+  }
+  await ack(); return true;
+}
+// Prompt for ONE value with force-reply; store the prompt id so we can delete it after the answer.
+async function promptCleanInput(chatId, userId, promptText, kind, builderMsgId = null) {
+  const res = await telegram("sendMessage", { chat_id: chatId, text: promptText, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: { force_reply: true, selective: true } }).catch(() => null);
+  cleanInputPending.set(`${chatId}:${userId}`, { kind, at: Date.now(), promptMsgId: (res && res.message_id) || null, builderMsgId });
+}
+// Consume a typed value for a pending clean-input, then DELETE the user's message + the prompt so the
+// chat stays clean (message deletion in groups needs the bot's Delete-messages admin right; best-effort).
+async function applyCleanInput(message, userId) {
+  const chatId = message.chat.id;
+  const key = `${chatId}:${userId}`;
+  const pend = cleanInputPending.get(key);
+  if (!pend) return false;
+  if (Date.now() - pend.at > 180000) { cleanInputPending.delete(key); return false; }
+  const raw = String(message.text || "").trim();
+  if (!raw || raw.startsWith("/")) return false;
+  const cleanup = () => {
+    telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }).catch(() => {});
+    if (pend.promptMsgId) telegram("deleteMessage", { chat_id: chatId, message_id: pend.promptMsgId }).catch(() => {});
+  };
+  const reprompt = async (hint) => {
+    cleanup();
+    const res = await telegram("sendMessage", { chat_id: chatId, text: hint, parse_mode: "HTML", reply_markup: { force_reply: true, selective: true } }).catch(() => null);
+    cleanInputPending.set(key, { ...pend, at: Date.now(), promptMsgId: (res && res.message_id) || null });
+  };
+  if (pend.kind === "lo_mc" || pend.kind === "lo_amt") {
+    const draft = limitDraft.get(key);
+    if (!draft) { cleanInputPending.delete(key); cleanup(); return true; }
+    if (pend.kind === "lo_mc") {
+      const mc = parseMcInput(raw);
+      if (!mc) { await reprompt("🎯 Couldn't read that. Reply with a market cap like <code>30k</code>, <code>250k</code>, or <code>1.2m</code>."); return true; }
+      draft.triggerMc = mc;
+    } else {
+      const n = Number(raw.replace(/[^0-9.]/g, ""));
+      if (!Number.isFinite(n) || n <= 0) { await reprompt(draft.side === "buy" ? "💰 Couldn't read that. Reply with a SOL amount like <code>0.5</code>." : "💰 Couldn't read that. Reply with a sell % like <code>100</code>."); return true; }
+      draft.amount = draft.side === "buy" ? n : Math.min(100, Math.max(1, Math.round(n)));
+    }
+    cleanInputPending.delete(key);
+    cleanup();
+    await renderLimitBuilder(chatId, userId);
+    return true;
+  }
+  if (pend.kind === "pe_amt") {
+    const n = Number(raw.replace(/[^0-9.]/g, ""));
+    if (!Number.isFinite(n) || n <= 0) { await reprompt("💰 Couldn't read that. Reply with a SOL amount like <code>0.5</code>."); return true; }
+    cleanInputPending.delete(key);
+    cleanup();
+    await setBuyPref(userId, "amount", n);
+    if (pend.builderMsgId) {
+      const v = presetEditorView(userBuyPrefs(await readBuyPrefs(), userId), userId);
+      await telegram("editMessageText", { chat_id: chatId, message_id: pend.builderMsgId, text: v.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: v.markup }).catch(() => {});
+    }
+    return true;
+  }
+  cleanInputPending.delete(key);
   return true;
 }
 // ---- 🎯 Auto-TP ladder: one tap after a buy arms a set of limit-sell rungs at multiples of entry MC ----

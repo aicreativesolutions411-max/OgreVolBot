@@ -945,6 +945,25 @@ test("⚡ one-click group buy fires from the tapper's OWN wallet, idempotent, re
   assert.match(serverSource, /startsWith\("qb:"\)/);
   assert.match(serverSource, /applyTgQuickBuyInput\(message, userId\)/);
 });
+test("⏰ Limit order = clean in-chat sub-menu builder with tidy auto-deleting typed inputs", () => {
+  // The ⏰ button opens the NEW button-driven builder (in whatever chat you tapped it — group or DM).
+  assert.match(functionBody(serverSource, "handleLimitOrderCallback"), /openLimitBuilder\(chatId, userId, m\[1\]\)/);
+  assert.match(serverSource, /startsWith\("lo2:"\)/);   // builder callbacks routed
+  // Builder = per-field sub-menu buttons (Side / Target MC / Amount / Arm), owner-gated per user.
+  const cb = functionBody(serverSource, "handleLimitBuilderCallback");
+  assert.match(cb, /String\(userId\) !== String\(owner\)/);   // collision-safe in a shared group
+  assert.match(cb, /addLimitOrder\(userId, spec\)/);          // Arm creates the order
+  assert.match(cb, /promptCleanInput\(chatId, userId/);       // 🎯/💰 buttons prompt ONE tidy value
+  // Clean input: consume ONE value, then DELETE both the prompt and the user's reply.
+  const ci = functionBody(serverSource, "applyCleanInput");
+  assert.match(ci, /deleteMessage", \{ chat_id: chatId, message_id: message\.message_id \}/); // user's reply
+  assert.match(ci, /deleteMessage", \{ chat_id: chatId, message_id: pend\.promptMsgId \}/);    // the prompt
+  assert.match(ci, /renderLimitBuilder\(chatId, userId\)/);   // re-renders the builder in place
+  assert.match(serverSource, /applyCleanInput\(message, userId\)/);   // hooked in the message handler
+  // Quick-buy custom amount also uses the clean in-chat input (no DM), via the ⚙️ Preset editor ✏️.
+  assert.match(serverSource, /callback_data: `pe:ax:\$\{uid\}`/);
+  assert.match(functionBody(serverSource, "handlePresetEditorCallback"), /kind === "ax"/);
+});
 test("⚡ Quick Buy (preset) + ⚙️ in-group Preset editor: buy your preset + edit amount/TP/SL, no DM", () => {
   // Preset store now holds a one-tap amount + TP/SL, all editable via setBuyPref.
   assert.match(functionBody(serverSource, "userBuyPrefs"), /quickAmount/);
