@@ -54198,12 +54198,14 @@ async function buildPumpFrontendCategory(userId, cat, sort, options = {}) {
   else path = "/coins?offset=0&limit=100&sort=last_trade_timestamp&order=DESC&includeNsfw=false&complete=true";
   let coins;
   if (cat === "graduating") {
-    // pump caps a SINGLE list call at ~70 coins, and the recent-trade window is mostly fresh sub-45%
-    // launches — so one call yields only ~2 coins that are genuinely 45-99% bonded (the "Graduating
-    // blank" bug). PAGINATE the recent-trade list (4 pages → ~200 coins) and union: verified live this
-    // surfaces ~16 real about-to-graduate climbers instead of 2.
+    // GRADUATION RUNWAY = highest-market-cap coins still on the curve (complete=false). MC and bonding %
+    // are tightly correlated (a pump coin bonds near ~$69k), so sort=market_cap&order=DESC returns the
+    // coins CLOSEST to graduating first, straight down the runway. The old sort=last_trade_timestamp
+    // window was mostly fresh sub-40% launches, so the genuinely-near-bonding coins never surfaced and
+    // the ≥$18k Gauntlet filter emptied the list (the "Graduating blank" bug). PAGINATE 4×50 → ~200
+    // on-curve coins from ~$69k down, a deep, steady runway that refreshes as coins climb.
     const pages = await Promise.all([0, 50, 100, 150].map((off) =>
-      fetchPumpFrontend(`/coins?offset=${off}&limit=50&sort=last_trade_timestamp&order=DESC&includeNsfw=false&complete=false`, { force })));
+      fetchPumpFrontend(`/coins?offset=${off}&limit=50&sort=market_cap&order=DESC&includeNsfw=false&complete=false`, { force })));
     const seenMint = new Set();
     coins = pages.flat().filter((c) => { const m = String(c?.mint || ""); if (!m || seenMint.has(m)) return false; seenMint.add(m); return true; });
   } else {
