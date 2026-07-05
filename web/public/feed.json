@@ -147,6 +147,48 @@
       "content_text": "SlimeWire Telegram raid bot workflows help Solana communities organize raids, launch cards, proof links, group alerts, and trader handoff without clutter."
     },
     {
+      "id": "https://www.slimewire.org/solana-wallet-tracker",
+      "url": "https://www.slimewire.org/solana-wallet-tracker",
+      "title": "Solana Wallet Tracker - Alerts, Positions, PnL and Copy Signals",
+      "summary": "Track Solana wallets with SlimeWire workflows for alerts, positions, PnL, token activity, copy-trading context, and Telegram or terminal handoff.",
+      "content_text": "Track Solana wallets with SlimeWire workflows for alerts, positions, PnL, token activity, copy-trading context, and Telegram or terminal handoff."
+    },
+    {
+      "id": "https://www.slimewire.org/solana-token-scanner",
+      "url": "https://www.slimewire.org/solana-token-scanner",
+      "title": "Solana Token Scanner - Rug Context, Charts, Alerts and Trade Handoff",
+      "summary": "Use SlimeWire as a Solana token scanner for contract addresses, token context, market data, charts, Telegram alerts, rug-check notes, and trade handoff.",
+      "content_text": "Use SlimeWire as a Solana token scanner for contract addresses, token context, market data, charts, Telegram alerts, rug-check notes, and trade handoff."
+    },
+    {
+      "id": "https://www.slimewire.org/telegram-token-scanner",
+      "url": "https://www.slimewire.org/telegram-token-scanner",
+      "title": "Telegram Token Scanner for Solana - CA Scans, Alerts and Charts",
+      "summary": "SlimeWire Telegram token scanner workflows help Solana groups scan contract addresses, open charts, see risk context, share alerts, and move into the terminal.",
+      "content_text": "SlimeWire Telegram token scanner workflows help Solana groups scan contract addresses, open charts, see risk context, share alerts, and move into the terminal."
+    },
+    {
+      "id": "https://www.slimewire.org/solana-dex-chart",
+      "url": "https://www.slimewire.org/solana-dex-chart",
+      "title": "Solana Dex Chart Workflow - Charts, Txns, Token Context and Buy Panel",
+      "summary": "SlimeWire Solana Dex chart workflows connect token charts, transactions, market data, wallet controls, presets, and PnL review in a terminal view.",
+      "content_text": "SlimeWire Solana Dex chart workflows connect token charts, transactions, market data, wallet controls, presets, and PnL review in a terminal view."
+    },
+    {
+      "id": "https://www.slimewire.org/pump-fun-launch-alerts",
+      "url": "https://www.slimewire.org/pump-fun-launch-alerts",
+      "title": "pump.fun Launch Alerts - Fresh Solana Pairs, Telegram Cards and Charts",
+      "summary": "SlimeWire pump.fun launch alerts help traders and groups monitor fresh Solana pairs, scan tokens, open charts, review risk context, and share proof.",
+      "content_text": "SlimeWire pump.fun launch alerts help traders and groups monitor fresh Solana pairs, scan tokens, open charts, review risk context, and share proof."
+    },
+    {
+      "id": "https://www.slimewire.org/solana-copy-trading-tools",
+      "url": "https://www.slimewire.org/solana-copy-trading-tools",
+      "title": "Solana Copy Trading Tools - Wallet Watch, Alerts, Presets and PnL",
+      "summary": "Compare Solana copy trading tools by wallet tracking, alerts, token context, chart review, presets, risk notes, receipts, and PnL tracking.",
+      "content_text": "Compare Solana copy trading tools by wallet tracking, alerts, token context, chart review, presets, risk notes, receipts, and PnL tracking."
+    },
+    {
       "id": "https://www.slimewire.org/best-pump-fun-bots",
       "url": "https://www.slimewire.org/best-pump-fun-bots",
       "title": "Best pump.fun Bots - Solana Launch Scanners, Snipers and Alerts",
