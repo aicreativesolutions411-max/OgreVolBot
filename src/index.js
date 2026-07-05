@@ -3985,6 +3985,10 @@ const INDEXNOW_KEY = String(process.env.INDEXNOW_KEY || "slimewire7c1f9a4d2e8b60
 const SEO_PAGES = [
   { path: "/", priority: "1.0", changefreq: "hourly" },
   { path: "/solana-telegram-bot", priority: "0.9", changefreq: "weekly" },
+  { path: "/best-solana-trading-bots", priority: "0.85", changefreq: "weekly" },
+  { path: "/solana-trading-terminal", priority: "0.85", changefreq: "weekly" },
+  { path: "/solana-memecoin-tools", priority: "0.85", changefreq: "weekly" },
+  { path: "/top-solana-trading-sites", priority: "0.85", changefreq: "weekly" },
   { path: "/pump-fun-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-volume-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-copy-trading-bot", priority: "0.8", changefreq: "weekly" },
@@ -5290,6 +5294,22 @@ function startHealthServer() {
     // SEO landing page targeting "solana telegram (trading) bot" searches — real content, static + fast.
     if (request.method === "GET" && ["/solana-telegram-bot", "/bot", "/telegram-bot"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/best-solana-trading-bots") {
+      await serveStaticHtmlPage(response, "best-solana-trading-bots.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-trading-terminal") {
+      await serveStaticHtmlPage(response, "solana-trading-terminal.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-memecoin-tools") {
+      await serveStaticHtmlPage(response, "solana-memecoin-tools.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/top-solana-trading-sites") {
+      await serveStaticHtmlPage(response, "top-solana-trading-sites.html");
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/pump-fun-bot") {
