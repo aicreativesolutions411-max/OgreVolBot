@@ -283,5 +283,41 @@
     <guid isPermaLink="true">https://www.slimewire.org/telegram-raid-tools</guid>
     <description>SlimeWire Telegram raid tools help Solana communities coordinate raid cards, launch alerts, group actions, proof links, chart handoff, and trader flow.</description>
   </item>
+  <item>
+    <title>Solana AI Trading Bot - Token Scans, Signals, Alerts and Trade Review</title>
+    <link>https://www.slimewire.org/solana-ai-trading-bot</link>
+    <guid isPermaLink="true">https://www.slimewire.org/solana-ai-trading-bot</guid>
+    <description>SlimeWire Solana AI trading bot workflows connect token scans, signals, fresh pairs, alerts, charts, presets, proof, and human trade review.</description>
+  </item>
+  <item>
+    <title>Solana Trading Bot Signals - Alerts, Scans, Wallet Activity and Proof</title>
+    <link>https://www.slimewire.org/solana-trading-bot-signals</link>
+    <guid isPermaLink="true">https://www.slimewire.org/solana-trading-bot-signals</guid>
+    <description>SlimeWire Solana trading bot signals connect alerts, token scans, wallet activity, fresh pair movement, chart links, Telegram calls, proof, and PnL review.</description>
+  </item>
+  <item>
+    <title>Solana Memecoin Terminal - Live Pairs, Charts, Alerts, Wallets and PnL</title>
+    <link>https://www.slimewire.org/solana-memecoin-terminal</link>
+    <guid isPermaLink="true">https://www.slimewire.org/solana-memecoin-terminal</guid>
+    <description>SlimeWire is a Solana memecoin terminal for live pairs, fresh launches, token scans, Dex charts, Telegram alerts, wallets, positions, PnL, and launch tools.</description>
+  </item>
+  <item>
+    <title>Solana New Pair Alerts - Fresh Launches, Charts, Telegram and Scanner Flow</title>
+    <link>https://www.slimewire.org/solana-new-pair-alerts</link>
+    <guid isPermaLink="true">https://www.slimewire.org/solana-new-pair-alerts</guid>
+    <description>SlimeWire Solana new pair alerts help traders monitor fresh launches, pump.fun-style pairs, token scans, chart links, Telegram updates, and proof.</description>
+  </item>
+  <item>
+    <title>pump.fun Trading Bot - Fresh Launch Scans, Telegram Alerts and Charts</title>
+    <link>https://www.slimewire.org/pump-fun-trading-bot</link>
+    <guid isPermaLink="true">https://www.slimewire.org/pump-fun-trading-bot</guid>
+    <description>SlimeWire pump.fun trading bot workflows connect fresh launch scans, Telegram alerts, token context, Dex charts, presets, proof cards, and PnL review.</description>
+  </item>
+  <item>
+    <title>Solana Token Alerts - Contract Scans, Watchlists, Charts and Telegram Updates</title>
+    <link>https://www.slimewire.org/solana-token-alerts</link>
+    <guid isPermaLink="true">https://www.slimewire.org/solana-token-alerts</guid>
+    <description>SlimeWire Solana token alerts connect contract scans, watchlists, chart links, wallet signals, Telegram updates, proof cards, and terminal review.</description>
+  </item>
 </channel>
 </rss>
