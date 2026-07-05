@@ -279,12 +279,13 @@ export function slimeScopeProgressPct(row = {}) {
   );
   const marketCap = firstPositiveNumber(row.marketCap, row.fdv);
   const isPump = Boolean(row.isPump) || /pump/.test(textBlob(row)) || String(row.tokenMint || "").toLowerCase().endsWith("pump");
-  // Pump.fun graduates near a ~$69k market cap, so MC/69k is a reliable, user-visible proxy for how
-  // far up the bonding curve a coin is. The PumpPortal vSOL-reserve % can be a garbage constant for
-  // fresh coins (e.g. brand-new $2k launches reporting 90%+), which made the Graduating tab show dust
-  // instead of coins actually about to bond. So for pump coins we trust market cap when the reported
-  // curve % wildly disagrees with it.
-  const mcPct = (isPump && marketCap > 0) ? Math.max(0, Math.min(99, (marketCap / 69_000) * 100)) : null;
+  // Pump.fun's bonding BAR = tokens sold on its constant-product curve, which is CONVEX in market cap
+  // (the last tokens cost far more), so a plain MC/69k badly UNDERSTATES it — a $40k coin reads 58%
+  // linearly but is really ~89% bonded, which is why the Gauntlet looked wrong. Invert the actual curve
+  // instead: virtual reserves 1073M tokens, 279.9M left at graduation, 793.1M sellable; graduation ≈ $69k
+  // MC. This tracks pump.fun's own %. It still anchors to MC (so a fresh $2k coin reporting a garbage 90%
+  // from vSOL reserves gets corrected down), just with the RIGHT shape.
+  const mcPct = pumpBondingPctFromMarketCap(isPump ? marketCap : 0);
   if (direct > 0) {
     const d = Math.max(0, Math.min(100, direct <= 1 ? direct * 100 : direct));
     if (mcPct != null && Math.abs(d - mcPct) > 25) return mcPct;
@@ -292,6 +293,23 @@ export function slimeScopeProgressPct(row = {}) {
   }
   if (mcPct != null) return mcPct;
   return 0;
+}
+
+// Invert pump.fun's constant-product bonding curve: market cap (as a fraction of the ~$69k graduation
+// cap) → % of the curve's tokens sold, which is what pump.fun's progress bar shows. Returns null for a
+// non-pump / zero MC. Below the curve's ~$4.7k floor it clamps to 0; at/above graduation it caps at 99.
+const PUMP_GRAD_MC_USD = 69_000;          // graduation market cap (~410.9 SOL)
+const PUMP_VIRT_TOKENS_M = 1073;          // initial virtual token reserves (millions)
+const PUMP_GRAD_TOKENS_LEFT_M = 279.9;    // virtual token reserves remaining at graduation (millions)
+const PUMP_SELLABLE_TOKENS_M = 793.1;     // real (sellable) token reserves on the curve (millions)
+export function pumpBondingPctFromMarketCap(marketCapUsd) {
+  const mc = Number(marketCapUsd);
+  if (!Number.isFinite(mc) || mc <= 0) return null;
+  const ratio = Math.min(1, mc / PUMP_GRAD_MC_USD);          // MC as a fraction of graduation
+  if (ratio <= 0) return 0;
+  const tokensLeftM = PUMP_GRAD_TOKENS_LEFT_M / Math.sqrt(ratio); // curve: MC ∝ 1/tokensLeft²
+  const soldM = PUMP_VIRT_TOKENS_M - tokensLeftM;
+  return Math.max(0, Math.min(99, (soldM / PUMP_SELLABLE_TOKENS_M) * 100));
 }
 
 export function isGraduatedSlimeScopePair(row = {}) {
