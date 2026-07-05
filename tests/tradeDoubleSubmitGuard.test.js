@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+const vanityMintSource = fs.readFileSync(new URL("../src/lib/vanityMint.js", import.meta.url), "utf8");
 const ggSource = fs.readFileSync(new URL("../web/public/gg.html", import.meta.url), "utf8");
 const indexSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
 
@@ -959,19 +960,68 @@ test("DM terminal hub: trading-first main menu + Settings (presets + slippage), 
   assert.match(menu, /callback_data: "settings_menu"/);
   assert.match(menu, /callback_data: "launch_coin"/);             // our tool
   assert.match(menu, /callback_data: "dm_signals"/);              // alerts
-  assert.match(menu, /callback_data: "sniper_menu"/);             // sniper & copy
+  assert.match(menu, /callback_data: "copy_trade_start"/);        // Copy Trade (input a wallet), replaces Sniper & Copy
+  assert.match(menu, /callback_data: "volume_bot"/);              // real Volume Bot (matches the site), replaces ogre_tools_menu
+  assert.doesNotMatch(menu, /callback_data: "sniper_menu"/);      // sniper removed from the main menu
   // Lean trading-first menu: Ogre A.I. + Live Pairs/Scans + top-level App/Web are removed
   // (App/Web live under 🔗 Links now; pairs/scans are a richer experience on the site/app).
   assert.doesNotMatch(menu, /callback_data: "ogre_ai_menu"/);
   assert.doesNotMatch(menu, /callback_data: "market_intel_menu"/);
   assert.doesNotMatch(menu, /callback_data: "web_portal"/);
-  // App + Web App both live inside the Links submenu instead.
-  assert.match(functionBody(serverSource, "showTelegramLinksMenu"), /text: "📲 Get the App"/);
-  assert.match(functionBody(serverSource, "showTelegramLinksMenu"), /callback_data: "web_portal"/);
+  // Links submenu keeps Get the App but drops Open Web App + Autopilot + Raids per user; old Ogre TG/X
+  // links are gone (single SlimeWire website link instead).
+  const links = functionBody(serverSource, "showTelegramLinksMenu");
+  assert.match(links, /text: "📲 Get the App"/);
+  assert.doesNotMatch(links, /callback_data: "web_portal"/);      // Open Web App removed
+  assert.doesNotMatch(links, /text: "🤖 Autopilot"/);             // Autopilot removed
+  assert.doesNotMatch(links, /text: "⚔️ Raids"/);                 // Raids removed
+  assert.doesNotMatch(links, /ogrecoinonsol/);                    // old Ogre TG link gone
+  assert.match(links, /text: "🌐 SlimeWire Website"/);            // single site link
   // Settings hub = per-user slippage + presets; the quick-buy USES the user's slippage
   assert.match(serverSource, /SLIP_TIERS = \[300, 500, 1000, 1500, 2500\]/);
   assert.match(functionBody(serverSource, "tgExecuteQuickBuy"), /userBuyPrefs\(await readBuyPrefs\(\), userId\)\.slippageBps/);
   assert.match(serverSource, /startsWith\("st:"\)/);
+});
+test("Copy Trade (input a wallet): 3-step flow arms the same site copy-wallet watcher", () => {
+  // Main-menu button routes to the copy-trade entry, which is registered as a private action.
+  assert.match(serverSource, /case "copy_trade_start":\s*\n\s*await startCopyTradeFlow/);
+  // 3 session steps: paste wallet -> pick your wallets -> SOL per copied buy.
+  assert.match(serverSource, /case "copytrade_wallet":/);
+  assert.match(serverSource, /case "copytrade_wallets":/);
+  assert.match(serverSource, /case "copytrade_amount":/);
+  // Reuses the SAME server-side engine the site uses (webCreateKolCopyWallet) with sane default exits.
+  const fin = functionBody(serverSource, "finalizeCopyTrade");
+  assert.match(fin, /webCreateKolCopyWallet\(userId, \{/);
+  assert.match(fin, /takeProfitPct: "25"/);
+  assert.match(fin, /stopLossPct: "8"/);
+});
+test("Volume Bot (TG): matches the site — rolling ghost pool, offset sells, keepDust, one funding wallet", () => {
+  // Main-menu 📈 Volume Bot opens the real volume home; style chosen via vbstyle: callback.
+  assert.match(serverSource, /case "volume_bot":\s*\n\s*await showVolumeBotHome/);
+  assert.match(serverSource, /startsWith\("vbstyle:"\)/);
+  assert.match(serverSource, /case "vbot_ca":/);
+  assert.match(serverSource, /case "vbot_source":/);
+  // The start path reuses the site engine (webStartVolumeBot) with the exact site behavior:
+  const start = functionBody(serverSource, "startVolumeBotWithStyle");
+  assert.match(start, /webStartVolumeBot\(userId, \{/);
+  assert.match(start, /rollingWallets: true/);   // fresh ghost wallets, never reused
+  assert.match(start, /offsetSell: true/);       // a different/older wallet sells (no back-to-back same wallet)
+  assert.match(start, /keepDust: true/);         // leaves a sliver of token to pad holders
+  assert.match(start, /sweepBack: true/);
+  // Stop path sweeps back to source.
+  assert.match(functionBody(serverSource, "stopVolumeBotForChat"), /webStopVolumeBot\(userId,/);
+});
+test("Power Tools + brand footer cleaned: no Sniper Modes / Volume Plans buttons, no old Ogre links", () => {
+  const tools = functionBody(serverSource, "showTelegramOgreToolsMenu");
+  assert.doesNotMatch(tools, /callback_data: "sniper_modes"/);       // sniper mode removed
+  assert.doesNotMatch(tools, /callback_data: "timed_trade_plans"/);  // volume plans removed
+  assert.match(tools, /callback_data: "volume_bot"/);                // real volume bot instead
+  // Brand footer (appended to nearly every message) drops the old Ogre TG/site/X links.
+  const footer = serverSource.slice(serverSource.indexOf("const BRAND_FOOTER"), serverSource.indexOf("const BRAND_FOOTER") + 200);
+  assert.doesNotMatch(footer, /ogrecoinonsol/);
+  assert.doesNotMatch(footer, /ogremode\.com/);
+  assert.doesNotMatch(footer, /twitter\.com\/i\/communities/);
+  assert.match(footer, /slimewire\.org/);
 });
 test("in-DM one-tap SELL (qs:*): own-wallet, idempotent, on the receipt + positions", () => {
   // routed in the dispatcher alongside qb:
@@ -1098,14 +1148,23 @@ test("don't-get-cooked: Jito anti-sandwich path + catastrophic price-impact guar
   assert.match(ord, /impact > CONFIG\.maxBuyPriceImpact/);
   assert.match(ord, /Blocked to protect you/);
 });
-test("vanity pool low-watchdog: DM admins before pump mints run dry", () => {
-  assert.match(serverSource, /launchVanityPoolMin: Math\.max\(1, Number\.parseInt\(process\.env\.LAUNCH_VANITY_POOL_MIN/);
-  assert.match(serverSource, /async function pollVanityPoolLow/);
-  assert.match(serverSource, /setInterval\(\(\) => \{ void pollVanityPoolLow\(\); \}/);
-  const p = functionBody(serverSource, "pollVanityPoolLow");
-  assert.match(p, /count >= CONFIG\.launchVanityPoolMin/);            // only fires when low
-  assert.match(p, /_lastVanityLowAlertAt < 6 \* 60 \* 60 \* 1000/);   // rate-limited
-  assert.match(p, /for \(const adminId of \(CONFIG\.adminUserIds/);   // DMs admins
+test("vanity pool AUTO-STOCK: gentle bg grinder keeps pump mints stocked, no user-facing alert", () => {
+  // config: auto-grind on by default, a target stockpile, tunable worker count
+  assert.match(serverSource, /launchVanityAutoGrind: parseBoolean\(process\.env\.LAUNCH_VANITY_AUTOGRIND \|\| "true"\)/);
+  assert.match(serverSource, /launchVanityPoolTarget: Math\.max\(1, Math\.min\(500, Number\.parseInt\(process\.env\.LAUNCH_VANITY_POOL_TARGET/);
+  // the grinder stores on the MAIN thread via pool.add (no race with a launch pop) + idles at target
+  assert.match(serverSource, /async function startVanityAutoGrind/);
+  const g = functionBody(serverSource, "startVanityAutoGrind");
+  assert.match(g, /new Worker\(workerUrl/);
+  assert.match(g, /const size = p\.add\(entry\)/);
+  assert.match(g, /size >= CONFIG\.launchVanityPoolTarget\) stopAll\(\)/);
+  assert.match(g, /count >= CONFIG\.launchVanityPoolTarget\) \{ if \(_vanityGrindWorkers\.length\) stopAll/);
+  assert.match(serverSource, /void startVanityAutoGrind\(\);/);
+  // pool.add exists (in-memory + persist, main-thread only)
+  assert.match(vanityMintSource, /function add\(entry\)/);
+  // the old backend-leaking admin DM is gone (no solana-keygen command shown to users)
+  assert.doesNotMatch(serverSource, /async function pollVanityPoolLow/);
+  assert.doesNotMatch(serverSource, /solana-keygen grind/);
 });
 test("🏆⚡ Throne Bundle: atomic Jito waves of 4 by opt-in order, safe RPC fallback", () => {
   assert.match(serverSource, /async function fireCommunitySnipeThroneBundle/);
@@ -1557,15 +1616,15 @@ test("Graduation Gauntlet: resilient feed (Moralis-down fallback) + ≥$18k + cl
   assert.match(serverSource, /GRAD_MIN_MC = 18000/);
   assert.match(serverSource, /parseCommandWithArgument\(text, \["grad", "graduation", "gauntlet"\]\)/);
 });
-test("Top Plays signal: 2h brain-drop DM + hot early-push, opt-in via /signals", () => {
-  assert.match(functionBody(serverSource, "buildPlaysSignalMessage"), /telegramAlphaRows/);   // brain scan
-  const poll = functionBody(serverSource, "pollPlaysSignal");
-  assert.match(poll, /readPlaysSignalSubs/);                         // opt-in only
-  assert.match(poll, /PLAYS_SIGNAL_CADENCE_MS/);                     // 2h cadence
-  assert.match(poll, /newHot/);                                      // hot early-push
-  assert.match(serverSource, /PLAYS_SIGNAL_CADENCE_MS = 2 \* 60 \* 60 \* 1000/);
-  assert.match(serverSource, /callback_data: "sig:plays"/);          // menu toggle
-  assert.match(serverSource, /void pollPlaysSignal\(\); }, 5 \* 60_000/); // registered
+test("SlimeWire plays REMOVED for now — no Top Plays toggle, both play pollers disabled", () => {
+  // The 🎯 Top Plays DM toggle is pulled from the Signals menu (Alpha Radar / wallet tracking replace it).
+  assert.doesNotMatch(serverSource, /callback_data: "sig:plays"/);
+  // Both "SlimeWire plays" pollers are commented out (reversible), so neither DM nor group spam fires.
+  assert.doesNotMatch(serverSource, /^\s*setInterval\(\(\) => \{ void pollPlaysSignal\(\); \}/m);
+  assert.doesNotMatch(serverSource, /^\s*runAlphaDropTick\(\)\.catch/m);
+  // The functions themselves are kept (dead but present) so it's a one-line re-enable if we bring it back.
+  assert.match(serverSource, /async function pollPlaysSignal/);
+  assert.match(serverSource, /async function runAlphaDropTick/);
 });
 
 // ---- Copy-the-room's-best + Launch Room + Proof-of-call (the rest, all in the Trench menu) ----

@@ -335,27 +335,41 @@ async function webLoadVanityPool(body = {}) {
 function vanityPoolStatus() {
   return { enabled: Boolean(vanityMintPool || ensureVanityPool()), suffix: CONFIG.launchVanitySuffix, count: vanityPoolFileKeyCount() };
 }
-// Low-pool watchdog: DM admins when the vanity (pump) pool drops below the threshold so pump-ending
-// mints never run dry mid-launch. Rate-limited to once per 6h so it nudges without nagging.
-let _lastVanityLowAlertAt = 0;
-async function pollVanityPoolLow() {
-  try {
-    if (!CONFIG.launchVanityEnabled) return;
-    const count = vanityPoolFileKeyCount();
-    if (count >= CONFIG.launchVanityPoolMin) return;
-    if (Date.now() - _lastVanityLowAlertAt < 6 * 60 * 60 * 1000) return;
-    _lastVanityLowAlertAt = Date.now();
-    const suffix = CONFIG.launchVanitySuffix;
-    const msg = [
-      `⚠️ <b>Vanity pool low</b> — only <b>${count}</b> "…${escapeTelegramHtml(suffix)}" mint${count === 1 ? "" : "s"} left.`,
-      `New launches fall back to a RANDOM mint once it's empty (no ${escapeTelegramHtml(suffix)} ending).`,
-      "",
-      `Refill: <code>solana-keygen grind --ends-with ${escapeTelegramHtml(suffix)}:100</code> (fast), or <code>node scripts/grind-vanity.mjs ${escapeTelegramHtml(suffix)} 100</code>, then load them with your owner key.`
-    ].join("\n");
-    for (const adminId of (CONFIG.adminUserIds || [])) {
-      await telegram("sendMessage", { chat_id: adminId, text: msg, parse_mode: "HTML", disable_web_page_preview: true }).catch(() => {});
-    }
-  } catch (e) { console.warn(`[vanity-low] ${e && e.message}`); }
+// AUTO-STOCK the vanity ("…pump") pool: a gentle background worker grinds pump-ending mint keypairs and
+// stores them (via pool.add on THIS main thread — no race with a launch pop) until the stockpile hits
+// the target, then idles; it resumes automatically when launches draw the pool down. So the owner never
+// grinds/loads anything and never gets a "pool low" message — it just always has fresh pump CAs ready.
+// (Backend-only: no user/admin-facing alerts.) Off-switch: LAUNCH_VANITY_AUTOGRIND=false.
+let _vanityGrindWorkers = [];
+async function startVanityAutoGrind() {
+  if (!CONFIG.launchVanityAutoGrind || !CONFIG.launchVanityEnabled) return;
+  let Worker;
+  try { ({ Worker } = await import("node:worker_threads")); } catch { return; }
+  const workerUrl = new URL("../scripts/vanity-grind-worker.mjs", import.meta.url);
+  const stopAll = () => { for (const w of _vanityGrindWorkers.splice(0)) { try { w.terminate(); } catch (_) {} } };
+  const ensureGrinding = () => {
+    try {
+      if (!(vanityMintPool || ensureVanityPool())) return;
+      const count = vanityPoolFileKeyCount();
+      if (count >= CONFIG.launchVanityPoolTarget) { if (_vanityGrindWorkers.length) stopAll(); return; }
+      if (_vanityGrindWorkers.length) return;   // already grinding
+      for (let i = 0; i < CONFIG.launchVanityGrindWorkers; i += 1) {
+        const w = new Worker(workerUrl, { workerData: { suffix: CONFIG.launchVanitySuffix, caseInsensitive: CONFIG.launchVanityCaseInsensitive } });
+        w.on("message", (entry) => {
+          try {
+            const p = vanityMintPool || ensureVanityPool(); if (!p || !p.add) return;
+            const size = p.add(entry);                       // main-thread store: in-memory + persist, no race
+            if (size >= CONFIG.launchVanityPoolTarget) stopAll();
+          } catch (_) {}
+        });
+        w.on("error", (e) => { console.warn(`[vanity-grind] worker error: ${e && e.message}`); stopAll(); });
+        _vanityGrindWorkers.push(w);
+      }
+      console.log(`[vanity-grind] auto-stocking "${CONFIG.launchVanitySuffix}" → target ${CONFIG.launchVanityPoolTarget} (have ${count}, ${CONFIG.launchVanityGrindWorkers} worker(s))`);
+    } catch (e) { console.warn(`[vanity-grind] ${e && e.message}`); }
+  };
+  ensureGrinding();
+  setInterval(ensureGrinding, 60_000);   // re-check every minute: resume grinding after launches consume keys
 }
 
 // Persisted Meteora DBC config (created ONE-TIME in-app by the owner). Lets the Meteora rail work with
@@ -3955,10 +3969,7 @@ const PNL_CARD_BORDER_FILES = [
 const pnlBorderDataUrlCache = new Map();
 let pnlBorderRotationIndex = 0;
 const BRAND_FOOTER = [
-  "Powered by Ogres",
-  "Telegram: https://t.me/ogrecoinonsol",
-  "Website: https://ogremode.com/",
-  "Twitter: https://twitter.com/i/communities/1930265213917425858"
+  "SlimeWire — https://www.slimewire.org"
 ].join("\n");
 
 // One-tap mobile install — opens the /install landing (PWA add-to-home-screen) directly in the
@@ -3972,8 +3983,8 @@ const APP_INSTALL_URL = `${(CONFIG.webPortalUrl || "https://www.slimewire.org").
 const PUBLIC_MENU = [
   [{ text: "🟢 Buy", callback_data: "buy_prompt" }, { text: "🔴 Sell & Positions", callback_data: "positions_overview" }],
   [{ text: "👛 Wallet", callback_data: "wallet_menu" }, { text: "⚙️ Settings", callback_data: "settings_menu" }],
-  [{ text: "🎯 Signals", callback_data: "dm_signals" }, { text: "🕵️ Sniper & Copy", callback_data: "sniper_menu" }],
-  [{ text: "🚀 Launch a Coin", callback_data: "launch_coin" }, { text: "📈 Volume Bot", callback_data: "ogre_tools_menu" }],
+  [{ text: "🎯 Signals", callback_data: "dm_signals" }, { text: "👥 Copy Trade", callback_data: "copy_trade_start" }],
+  [{ text: "🚀 Launch a Coin", callback_data: "launch_coin" }, { text: "📈 Volume Bot", callback_data: "volume_bot" }],
   [{ text: "💰 Portfolio & PnL", callback_data: "portfolio_menu" }, { text: "🔗 Links & More", callback_data: "links_menu" }],
   [{ text: "❓ How To Use", callback_data: "quick_start" }]
 ];
@@ -3996,6 +4007,10 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "dm_signals",
   "launch_coin",
   "orders_hub",
+  "copy_trade_start",
+  "volume_bot",
+  "volume_bot_start",
+  "volume_bot_stop",
   "trade_menu",
   "live_mainnet_test",
   "live_test_buy",
@@ -4616,8 +4631,12 @@ function loadConfig() {
     launchVanityEnabled: parseBoolean(process.env.LAUNCH_VANITY_ENABLED || "false"),
     launchVanitySuffix: (process.env.LAUNCH_VANITY_SUFFIX || "SL1ME").trim(),
     launchVanityCaseInsensitive: parseBoolean(process.env.LAUNCH_VANITY_CASE_INSENSITIVE || "false"),
-    // Ping admins when the vanity pool runs low so pump-ending mints never run dry mid-launch.
-    launchVanityPoolMin: Math.max(1, Number.parseInt(process.env.LAUNCH_VANITY_POOL_MIN || "4", 10) || 4),
+    // Auto-stock: a gentle background worker keeps the "…pump" pool topped up to a target stockpile so
+    // pump-ending mints never run dry — the owner never has to grind/load anything. Grinds hard (default
+    // 1 core) until the pool hits the target, then idles; resumes when launches draw it down.
+    launchVanityAutoGrind: parseBoolean(process.env.LAUNCH_VANITY_AUTOGRIND || "true"),
+    launchVanityPoolTarget: Math.max(1, Math.min(500, Number.parseInt(process.env.LAUNCH_VANITY_POOL_TARGET || "30", 10) || 30)),
+    launchVanityGrindWorkers: Math.max(1, Math.min(8, Number.parseInt(process.env.LAUNCH_VANITY_GRIND_WORKERS || "1", 10) || 1)),
     // Meteora DBC rail (our own bonding curve, dev wallet = fee claimer). Dark until a real launch
     // certifies fee routing. METEORA_DBC_CONFIG_KEY = the on-chain config pubkey defining curve+fees.
     meteoraLaunchEnabled: parseBoolean(process.env.METEORA_LAUNCH_ENABLED || "false"),
@@ -11730,6 +11749,15 @@ async function handleCallback(query, userId) {
     return;
   }
 
+  if (query.data?.startsWith("vbstyle:")) {
+    if (!isPrivateChat(chat)) {
+      await say(chatId, "Open this bot in DM to run the Volume Bot.");
+      return;
+    }
+    await startVolumeBotWithStyle(chatId, userId, query.data.slice("vbstyle:".length));
+    return;
+  }
+
   if (await isPausedActionBlocked(query.data)) {
     await say(chatId, "Emergency stop is active. Use Unlock Bot to re-enable transaction flows.");
     return;
@@ -11753,6 +11781,18 @@ async function handleCallback(query, userId) {
       break;
     case "ogre_tools_menu":
       await showTelegramOgreToolsMenu(chatId, messageId);
+      break;
+    case "copy_trade_start":
+      await startCopyTradeFlow(chatId, userId, messageId);
+      break;
+    case "volume_bot":
+      await showVolumeBotHome(chatId, userId, messageId);
+      break;
+    case "volume_bot_start":
+      await startVolumeBotFlow(chatId, userId);
+      break;
+    case "volume_bot_stop":
+      await stopVolumeBotForChat(chatId, userId);
       break;
     case "portfolio_menu":
       await showTelegramPortfolioMenu(chatId, messageId);
@@ -13180,6 +13220,44 @@ async function continueFlow(chatId, text, session) {
         const owner = parsePublicKey(text).toBase58();
         sessions.delete(chatId);
         await showKolScan(chatId, session.userId, "fresh", null, owner);
+        break;
+      }
+      case "copytrade_wallet": {
+        const copyWallet = parsePublicKey(text).toBase58();
+        session.data.copyWallet = copyWallet;
+        session.step = "copytrade_wallets";
+        await say(chatId, await walletPrompt(session.userId, `Copying ${shortMint(copyWallet)}.\n\nWhich of YOUR wallets should copy its buys? Send one or more wallet numbers (e.g. 1 or 1,2), or \`all\`.`));
+        break;
+      }
+      case "copytrade_wallets": {
+        const indexes = await parseWalletSelectionOrGroup(text, session.userId);
+        session.data.walletIndexes = indexes;
+        session.step = "copytrade_amount";
+        await say(chatId, withBrandFooter([
+          `Copying ${shortMint(session.data.copyWallet)} with ${indexes.length} wallet(s).`,
+          "",
+          "How much SOL should each wallet spend on every copied buy? (e.g. 0.1)"
+        ].join("\n")));
+        break;
+      }
+      case "copytrade_amount": {
+        const amountSol = parsePositiveNumber(text);
+        if (!(amountSol > 0)) { await say(chatId, "Send a SOL amount greater than 0, e.g. 0.1."); break; }
+        sessions.delete(chatId);
+        await finalizeCopyTrade(chatId, session.userId, session.data.copyWallet, session.data.walletIndexes, amountSol);
+        break;
+      }
+      case "vbot_ca": {
+        const tokenMint = parsePublicKey(text).toBase58();
+        session.data.tokenMint = tokenMint;
+        session.step = "vbot_source";
+        await say(chatId, await walletPrompt(session.userId, `Coin: ${shortMint(tokenMint)}\n\nWhich wallet should fund the volume bot? Send one wallet number. It spawns the ghost wallets and runs until this wallet's SOL is spent (or you Stop) — fund it with however much you want it to push.`));
+        break;
+      }
+      case "vbot_source": {
+        const wallet = await setSingleWalletSelection(session, text);
+        session.step = "vbot_style";
+        await showVolumeBotStyles(chatId, session.data.tokenMint, wallet);
         break;
       }
       case "trade_sell_wallet": {
@@ -20865,12 +20943,12 @@ async function showTelegramOgreToolsMenu(chatId, messageId = null) {
   await sendOrEditMessage(chatId, messageId, withBrandFooter([
     "🛠️ Power Tools",
     "",
-    "Bundle workflows, timed volume plans, launch watches, and sniper modes."
+    "Bundle workflows and launch watches."
   ].join("\n")), {
     inline_keyboard: [
       [{ text: "🚀 Launch a Coin", callback_data: "launch_build_menu" }],
+      [{ text: "📈 Volume Bot", callback_data: "volume_bot" }],
       [{ text: "Auto Bundle", callback_data: "auto_bundle" }, { text: "Bundle", callback_data: "bundle_menu" }],
-      [{ text: "Volume Plans", callback_data: "timed_trade_plans" }, { text: "Sniper Modes", callback_data: "sniper_modes" }],
       [{ text: "Launch Snipe", callback_data: "sniper_manual_launch" }, { text: "Active Watches", callback_data: "manual_launch_watches" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
     ]
@@ -21097,16 +21175,14 @@ async function showTelegramLinksMenu(chatId, messageId = null) {
   await sendOrEditMessage(chatId, messageId, withBrandFooter([
     "🔗 Links & More",
     "",
-    "The bot is for fast trading. For live charts, pairs, the autopilot, raids, and the full terminal, jump to the app or the site."
+    "The bot is for fast trading. For live charts, pairs, and the full terminal, jump to the app or the site."
   ].join("\n")), {
     inline_keyboard: [
       [{ text: "📲 Get the App", url: APP_INSTALL_URL }],
-      [{ text: "🌐 Open Web App", callback_data: "web_portal" }],
       [{ text: "📈 Live Charts & Pairs", url: `${site}/terminal` }],
-      [{ text: "🤖 Autopilot", url: `${site}/terminal` }, { text: "🚀 Pump Launch", url: `${site}/launch` }],
-      [{ text: "⚔️ Raids", url: `${site}/raids` }, { text: "🏅 Proof Wall", url: `${site}/proof` }],
+      [{ text: "🚀 Pump Launch", url: `${site}/launch` }, { text: "🏅 Proof Wall", url: `${site}/proof` }],
       [{ text: "🛠️ Power Tools", callback_data: "ogre_tools_menu" }],
-      [{ text: "💬 Community", url: "https://t.me/ogrecoinonsol" }, { text: "𝕏 Twitter", url: "https://twitter.com/i/communities/1930265213917425858" }],
+      [{ text: "🌐 SlimeWire Website", url: site }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
     ]
   });
@@ -21167,7 +21243,7 @@ async function showTradeMenu(chatId, messageId = null) {
       [{ text: "🟢 Buy", callback_data: "trade_buy" }, { text: "🔴 Sell", callback_data: "trade_sell" }],
       [{ text: "⚡ Live Mainnet Test", callback_data: "live_mainnet_test" }],
       [{ text: "🧲 Bundle Buy", callback_data: "bundle_menu" }, { text: "👥 Copy Trade", callback_data: "kol_tracker_menu" }],
-      [{ text: "🚀 Launch from Pump", callback_data: "launch_build_menu" }, { text: "📈 Volume", callback_data: "timed_trade_plans" }],
+      [{ text: "🚀 Launch from Pump", callback_data: "launch_build_menu" }, { text: "📈 Volume Bot", callback_data: "volume_bot" }],
       [{ text: "🔁 DCA Buy", callback_data: "trade_dca_buy" }, { text: "🔁 DCA Sell", callback_data: "trade_dca_sell" }],
       [{ text: "⏱️ Auto Sell", callback_data: "trade_auto_sell" }, { text: "🧹 Sell All", callback_data: "sell_all_tokens" }],
       [{ text: "📊 Positions", callback_data: "positions_overview" }, { text: "👛 Wallets", callback_data: "list_wallets" }],
@@ -21282,6 +21358,185 @@ async function showKolTrackerMenu(chatId, messageId = null) {
   });
 }
 
+// ---- 👥 Copy Trade (input a wallet) --------------------------------------------------------------
+// One simple flow: paste a wallet → pick your wallets → SOL per copied buy. It arms the SAME
+// server-side copy-wallet watcher the site uses (webCreateKolCopyWallet): the moment the watched
+// wallet buys a new coin, your wallet buys the same coin with your size, TP/SL armed automatically.
+async function startCopyTradeFlow(chatId, userId, messageId = null) {
+  if (!CONFIG.solanaTrackerApiKey) {
+    await sendOrEditMessage(chatId, messageId, withBrandFooter([
+      "👥 Copy Trade",
+      "",
+      "Copy Trade is warming up and isn't available right now. You can still trade any coin from the app or by pasting a CA here."
+    ].join("\n")), { inline_keyboard: [[{ text: "🏠 Main Menu", callback_data: "main_menu" }]] });
+    return;
+  }
+  sessions.set(chatId, { step: "copytrade_wallet", userId, data: {} });
+  await sendOrEditMessage(chatId, messageId, withBrandFooter([
+    "👥 Copy Trade",
+    "",
+    "Mirror any wallet's buys with your own. The bot watches the wallet, and the moment it buys a new coin your wallet buys the same coin with the size you set — take-profit and stop-loss armed automatically.",
+    "",
+    "Paste the wallet address you want to copy."
+  ].join("\n")), { inline_keyboard: [[{ text: "🏠 Main Menu", callback_data: "main_menu" }]] });
+}
+
+async function finalizeCopyTrade(chatId, userId, copyWallet, walletIndexes, amountSol) {
+  try {
+    await webCreateKolCopyWallet(userId, {
+      copyWallet,
+      walletIndexes,
+      amountSol: String(amountSol),
+      takeProfitPct: "25",
+      stopLossPct: "8",
+      slippageBps: 400
+    });
+    await sayHtml(chatId, [
+      "✅ <b>Copy Trade armed</b>",
+      "",
+      `Watching <code>${escapeTelegramHtml(shortMint(copyWallet))}</code>.`,
+      `Each new coin it buys → your ${walletIndexes.length} wallet(s) buy the same coin with ${amountSol} SOL.`,
+      "Auto-exit: +25% take-profit / -8% stop-loss.",
+      "",
+      "It runs in the background — you'll get a message the moment it fires."
+    ].join("\n"), { inline_keyboard: [[{ text: "📊 Positions", callback_data: "positions_overview" }, { text: "🏠 Main Menu", callback_data: "main_menu" }]] });
+  } catch (error) {
+    await say(chatId, `Couldn't start copy trade: ${friendlyError(error)}`);
+  }
+}
+
+// ---- 📈 Volume Bot (matches the site: rolling ghost pool) -----------------------------------------
+// Same engine as the web Volume Bot (webStartVolumeBot). One funding wallet feeds a rolling pool of
+// fresh ghost wallets: buys on one, a DIFFERENT older wallet sells partials, sweeps SOL back, never
+// the same wallet back-to-back, and leaves a sliver of token in each to pad holders (keepDust).
+const VOLUME_BOT_STYLES = {
+  organic: { staggerPattern: "organic", buyBias: 55, delaySecs: 8, minBuyAmountSol: 0.012, maxBuyAmountSol: 0.03, label: "Organic" },
+  uptrend: { staggerPattern: "ladder", buyBias: 75, delaySecs: 8, minBuyAmountSol: 0.012, maxBuyAmountSol: 0.03, label: "Uptrend" },
+  waves: { staggerPattern: "waves", buyBias: 55, delaySecs: 8, minBuyAmountSol: 0.012, maxBuyAmountSol: 0.03, label: "Waves" },
+  fast: { staggerPattern: "organic", buyBias: 55, delaySecs: 3, minBuyAmountSol: 0.012, maxBuyAmountSol: 0.03, label: "Fast" },
+  calm: { staggerPattern: "steady", buyBias: 55, delaySecs: 20, minBuyAmountSol: 0.012, maxBuyAmountSol: 0.03, label: "Calm" }
+};
+
+async function showVolumeBotHome(chatId, userId, messageId = null) {
+  const statusLines = [];
+  try {
+    const rows = await webVolumeBotRows(userId);
+    const running = (rows || []).filter((b) => b.status !== "completed" && b.stage !== "done" && b.stage !== "stopped");
+    if (running.length) {
+      statusLines.push("", "Running now:");
+      for (const b of running.slice(0, 3)) {
+        const st = b.stats || {};
+        statusLines.push(`• ${b.shortMint || shortMint(b.tokenMint)} — buys ${st.buys || 0} · sells ${st.sells || 0} · vol ◎${Number(st.volumeSol || 0).toFixed(3)}`);
+      }
+    }
+  } catch (_) {}
+  await sendOrEditMessage(chatId, messageId, withBrandFooter([
+    "📈 Volume Bot",
+    "",
+    "Pick one wallet to fund it. It spawns fresh ghost wallets in the background — buys on one, sells a partial amount from a different older wallet, sweeps SOL back, and never trades the same wallet twice in a row. It leaves a sliver of token in each wallet to pad your holder count.",
+    "",
+    "Runs until the funding wallet's SOL is spent or you tap Stop.",
+    ...statusLines
+  ].join("\n")), {
+    inline_keyboard: [
+      [{ text: "▶ Start Volume Bot", callback_data: "volume_bot_start" }],
+      [{ text: "⏹ Stop & Sweep", callback_data: "volume_bot_stop" }],
+      [{ text: "🏠 Main Menu", callback_data: "main_menu" }]
+    ]
+  });
+}
+
+async function startVolumeBotFlow(chatId, userId) {
+  sessions.set(chatId, { step: "vbot_ca", userId, data: {} });
+  await say(chatId, withBrandFooter([
+    "📈 Volume Bot",
+    "",
+    "Paste the contract address (CA) of the coin you want to build volume on."
+  ].join("\n")));
+}
+
+async function showVolumeBotStyles(chatId, tokenMint, wallet) {
+  await sendOrEditMessage(chatId, null, withBrandFooter([
+    `Coin: ${shortMint(tokenMint)}`,
+    `Funding wallet: ${wallet.label}`,
+    "",
+    "Pick a volume style — same shapes as the site:",
+    "",
+    "🌿 Organic — natural, mixed sizes",
+    "📈 Uptrend — leans buy-side for green candles",
+    "🌊 Waves — pushes then eases in waves",
+    "⚡ Fast — quick, high-frequency tape",
+    "😌 Calm — slow and steady"
+  ].join("\n")), {
+    inline_keyboard: [
+      [{ text: "🌿 Organic", callback_data: "vbstyle:organic" }, { text: "📈 Uptrend", callback_data: "vbstyle:uptrend" }],
+      [{ text: "🌊 Waves", callback_data: "vbstyle:waves" }],
+      [{ text: "⚡ Fast", callback_data: "vbstyle:fast" }, { text: "😌 Calm", callback_data: "vbstyle:calm" }],
+      [{ text: "🏠 Main Menu", callback_data: "main_menu" }]
+    ]
+  });
+}
+
+async function startVolumeBotWithStyle(chatId, userId, styleKey) {
+  const session = sessions.get(chatId);
+  if (!session || session.step !== "vbot_style" || !session.data?.tokenMint || session.data.walletIndex == null) {
+    await say(chatId, "That volume setup expired. Tap 📈 Volume Bot to start again.");
+    return;
+  }
+  if (await isPausedActionBlocked("volume_bot")) {
+    await say(chatId, "Trading is paused right now. Try again shortly.");
+    return;
+  }
+  const style = VOLUME_BOT_STYLES[styleKey] || VOLUME_BOT_STYLES.organic;
+  const { tokenMint, walletIndex } = session.data;
+  sessions.delete(chatId);
+  await say(chatId, "Starting your volume bot…");
+  try {
+    await webStartVolumeBot(userId, {
+      tokenMint,
+      sourceWalletIndex: walletIndex,
+      walletIndex,
+      buyAmountSol: ((style.minBuyAmountSol + style.maxBuyAmountSol) / 2).toFixed(6),
+      minBuyAmountSol: String(style.minBuyAmountSol),
+      maxBuyAmountSol: String(style.maxBuyAmountSol),
+      poolSize: "3",
+      sellPercent: "100",
+      buyBias: String(style.buyBias),
+      delaySecs: String(style.delaySecs),
+      slippageBps: 600,
+      rollingWallets: true,
+      offsetSell: true,
+      keepDust: true,
+      sweepBack: true,
+      staggerPattern: style.staggerPattern,
+      maxRounds: "250",
+      tradeAttemptId: `tg-vol-${userId}-${tokenMint}-${Math.floor(Date.now() / 60000)}`
+    });
+    await sayHtml(chatId, [
+      "✅ <b>Volume Bot running</b>",
+      "",
+      `Coin: <code>${escapeTelegramHtml(shortMint(tokenMint))}</code>`,
+      `Style: ${escapeTelegramHtml(style.label)}`,
+      "",
+      "It's pushing volume in the background across fresh ghost wallets, leaving a sliver in each to pad holders. Tap Stop &amp; Sweep anytime to end it and pull SOL back."
+    ].join("\n"), { inline_keyboard: [[{ text: "📈 Volume Bot", callback_data: "volume_bot" }, { text: "🏠 Main Menu", callback_data: "main_menu" }]] });
+  } catch (error) {
+    await sayHtml(chatId, `Couldn't start the volume bot: ${escapeTelegramHtml(friendlyError(error))}`, { inline_keyboard: [[{ text: "🔁 Try again", callback_data: "volume_bot_start" }, { text: "🏠 Main Menu", callback_data: "main_menu" }]] });
+  }
+}
+
+async function stopVolumeBotForChat(chatId, userId) {
+  try {
+    const rows = await webVolumeBotRows(userId);
+    const run = (rows || []).find((b) => b.status !== "completed" && b.stage !== "done" && b.stage !== "stopped");
+    if (!run) { await say(chatId, "No volume bot is running right now."); return; }
+    await webStopVolumeBot(userId, { planId: run.id });
+    await say(chatId, withBrandFooter("⏹ Stopping — selling the last bags and sweeping SOL back to your funding wallet."));
+  } catch (error) {
+    await say(chatId, `Couldn't stop: ${friendlyError(error)}`);
+  }
+}
+
 async function showOgreAiMenu(chatId, messageId = null) {
   await sendOrEditMessage(chatId, messageId, withBrandFooter([
     "Ogre A.I.",
@@ -21298,7 +21553,7 @@ async function showOgreAiMenu(chatId, messageId = null) {
   ].join("\n")), {
     inline_keyboard: [
       [{ text: "Open Web App", callback_data: "web_portal" }],
-      [{ text: "OgreSniper", callback_data: "sniper_menu" }, { text: "Volume Plans", callback_data: "timed_trade_plans" }],
+      [{ text: "📈 Volume Bot", callback_data: "volume_bot" }],
       [{ text: "Positions", callback_data: "positions_overview" }, { text: "Wallets", callback_data: "wallet_menu" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
     ]
@@ -26659,15 +26914,14 @@ async function tokenImageDataUrl(imageUrl) {
 
 function copyTradeText() {
   return withBrandFooter([
-    "Copy Trade",
+    "👥 Copy Trade",
     "",
-    "Safe copy-trade setup is planned as a separate wallet-watcher flow:",
-    "- Choose a public wallet to watch.",
-    "- Pick your own bot wallets.",
-    "- Set max SOL per copied buy.",
-    "- Set take-profit and stop-loss.",
+    "Mirror any wallet's buys with your own:",
+    "- Paste the wallet you want to copy.",
+    "- Pick your own bot wallet(s).",
+    "- Set the SOL per copied buy.",
     "",
-    "For now, use Volume or Bundle tools for user-confirmed trades."
+    "The moment it buys a new coin, your wallet buys the same coin — take-profit and stop-loss armed automatically. Tap 👥 Copy Trade on the main menu to set it up."
   ].join("\n"));
 }
 
@@ -29644,13 +29898,13 @@ async function pollPlaysSignal() {
 }
 async function signalsMenu(chatId, userId, isDm) {
   if (isDm) {
-    const pl = new Set((await readPlaysSignalSubs()).dm.map(String)).has(String(userId));
     const ex = new Set((await readExitRadarSubs()).dm.map(String)).has(String(userId));
     const al = new Set(((await readAlphaRadarSubs()).dm || []).map(String)).has(String(userId));
     return {
-      text: "📡 <b>Your Signals</b> — tap to toggle the alerts you want (DM):\n\n🎯 <b>Top Plays</b> — the SlimeWire brain DMs you its best plays every ~2h (sooner when one's igniting), from the scanners + smart-money + wallet behavior.\n🚪 <b>Exit Radar</b> — watches your own open bags: pings you to take profit when one tops, and when one graduates to DEX (post-migration pop).\n🕵️ <b>Alpha Radar</b> — network-backed long-term runners.",
+      // 🎯 Top Plays ("SlimeWire plays") removed for now — it skewed toward frequent short-term/rug-prone
+      // pops. Use 🕵️ Alpha Radar (network-backed top wallets) + wallet tracking instead. Poller off too.
+      text: "📡 <b>Your Signals</b> — tap to toggle the alerts you want (DM):\n\n🚪 <b>Exit Radar</b> — watches your own open bags: pings you to take profit when one tops, and when one graduates to DEX (post-migration pop).\n🕵️ <b>Alpha Radar</b> — network-backed long-term runners (the top wallets behind a coin).",
       markup: { inline_keyboard: [
-        [{ text: `🎯 Top Plays  ${pl ? "✅ ON" : "◻️ off"}`, callback_data: "sig:plays" }],
         [{ text: `🚪 Exit Radar  ${ex ? "✅ ON" : "◻️ off"}`, callback_data: "sig:exit" }],
         [{ text: `🕵️ Alpha Radar  ${al ? "✅ ON" : "◻️ off"}`, callback_data: "sig:alpha" }],
         [{ text: "🏠 Main Menu", callback_data: "main_menu" }]
@@ -32650,10 +32904,12 @@ function startGroupBuyBot() {
   setInterval(() => { void pollTrackedWallets(); }, 30_000); // Cielo-style smart-money wallet alerts
   setInterval(() => { void pollAlphaRadar(); }, 60_000);     // network-backed long-term-runner alerts (opt-in)
   setInterval(() => { void pollExitRadar(); }, 60_000);      // 🚪 Exit Radar — take-profit pings on your own bags (opt-in)
-  setInterval(() => { void pollPlaysSignal(); }, 5 * 60_000); // 🎯 Top Plays — brain's best plays every ~2h + hot early-push (opt-in)
+  // 🎯 Top Plays ("SlimeWire plays") DM poller DISABLED for now — skewed toward frequent short-term/rug
+  // pops; Alpha Radar (network-backed top wallets) + wallet tracking replace it. Re-enable to restore.
+  // setInterval(() => { void pollPlaysSignal(); }, 5 * 60_000);
   setInterval(() => { void pollLimitOrders(); }, 30_000);    // ⏰ Limit orders — MC-triggered buy/sell auto-fire (opt-in, own wallet)
   setInterval(() => { void pollWeeklyCallerContest(); }, 60 * 60_000); // 🏆 Caller of the Week — Sunday crown for opted-in groups
-  setInterval(() => { void pollVanityPoolLow(); }, 20 * 60_000);       // ⚠️ ping admins when the pump-mint pool runs low
+  void startVanityAutoGrind();       // 🅿️ keep the "…pump" mint pool auto-stocked (gentle bg worker; no user alerts)
   void readCommunitySnipe().catch(() => {});                 // warm the armed-creator-wallet index so a snipe survives restart
 }
 
@@ -35227,7 +35483,9 @@ if (CONFIG.serviceRole === "web") {
     if (Date.now() - lastBackupAt > 24 * 60 * 60 * 1000) { // daily off-box backup to R2 (no-op if unconfigured)
       backupDataToR2("daily").catch((error) => console.warn(`[backup] daily failed: ${error.message}`));
     }
-    runAlphaDropTick().catch((error) => console.warn(`[alpha-drop] tick failed: ${error.message}`));
+    // "🐸 SlimeWire plays" group broadcast DISABLED for now — spammed frequent short-term/rug-prone
+    // pops; groups use 🕵️ Alpha Radar (top wallets) instead. Re-enable this line to restore.
+    // runAlphaDropTick().catch((error) => console.warn(`[alpha-drop] tick failed: ${error.message}`));
     checkBoardCallOutcomes().catch((error) => console.warn(`[call-board] check failed: ${error.message}`));
     runDailySwampReport().catch((error) => console.warn(`[swamp-report] failed: ${error.message}`));
     runWeeklySeasonPost().catch((error) => console.warn(`[season] failed: ${error.message}`));

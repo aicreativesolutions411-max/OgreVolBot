@@ -126,5 +126,17 @@ export function createVanityPool({ file, suffix, caseInsensitive = false, log = 
     }
     return null;
   }
-  return { load, size, persist, popKeypair, get suffix() { return suffix; } };
+  // Stock a freshly-ground key into the pool (in-memory + persist). Called on the SAME main thread as
+  // popKeypair(), so the background auto-grinder never races the launch pop against the file. Ignores
+  // dupes + keys that don't match the suffix. Returns the new pool size.
+  function add(entry) {
+    if (!loaded) load();
+    if (!entry || !entry.publicKey || !entry.secretKey) return mem.length;
+    if (!matchesVanity(entry.publicKey, suffix, { caseInsensitive })) return mem.length;
+    if (mem.some((e) => e.publicKey === entry.publicKey)) return mem.length;
+    mem.push(entry);
+    persist();
+    return mem.length;
+  }
+  return { load, size, add, persist, popKeypair, get suffix() { return suffix; } };
 }
