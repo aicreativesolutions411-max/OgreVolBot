@@ -11595,6 +11595,14 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("qb:")) {
     if (await handleQuickBuyCallback(query, userId).catch(() => false)) return;
   }
+  // ⚡ Quick Buy PRESET (qbp:<mint>) — buys the tapper's saved preset amount + arms their TP/SL.
+  if (String(query.data || "").startsWith("qbp:")) {
+    if (await handleQuickBuyPresetCallback(query, userId).catch(() => false)) return;
+  }
+  // ⚙️ Preset editor (pe:*) — edit your Quick Buy amount / TP / SL right in the group, button-only.
+  if (String(query.data || "").startsWith("pe:")) {
+    if (await handlePresetEditorCallback(query, userId).catch(() => false)) return;
+  }
   // 🔴 One-tap sell (qs:*) — sell 25/50/100% of a coin from the tapper's own wallets, in-DM.
   if (String(query.data || "").startsWith("qs:")) {
     if (await handleQuickSellCallback(query, userId).catch(() => false)) return;
@@ -28812,13 +28820,11 @@ function slimeScanKeyboard(mint) {
   // safety), so four near-identical redirects were clutter. The site's quick-buy lets you pick the
   // amount there. Buy → Chart on top, then the Menu / Refresh controls.
   return { inline_keyboard: [
-    // ⚡ ONE-CLICK: tap = instant buy from your OWN SlimeWire bot wallet (no site redirect). Set one up
-    // with /start; receipt lands in your DM. The site Buy stays as the non-wallet / pick-amount path.
+    // ⚡ ONE-CLICK: tap = instant buy from your OWN SlimeWire bot wallet using YOUR saved preset (amount +
+    // TP/SL), no site redirect, no DM needed. ⚙️ Preset edits that amount/TP/SL right here in chat.
     [
-      { text: "⚡ 0.5◎", callback_data: `qb:0.5:${mint}` },
-      { text: "⚡ 1◎", callback_data: `qb:1:${mint}` },
-      { text: "⚡ 2◎", callback_data: `qb:2:${mint}` },
-      { text: "✏️", callback_data: `qb:x:${mint}` }
+      { text: "⚡ Quick Buy", callback_data: `qbp:${mint}` },
+      { text: "⚙️ Preset", callback_data: "pe:open" }
     ],
     [
       { text: "⏰ Limit", callback_data: `lo:new:${mint}` },
@@ -30411,13 +30417,21 @@ function userBuyPrefs(store, userId) {
   while (presets.length < 3) presets.push(DEFAULT_BUY_PRESETS[presets.length]);
   const custom = Number(u.custom) > 0 ? Number(u.custom) : 0.25;
   const slippageBps = Number(u.slippageBps) > 0 ? Number(u.slippageBps) : CONFIG.defaultSlippageBps;
-  return { presets, custom, slippageBps };
+  // The one-tap ⚡ Quick Buy preset used on group/scan cards: amount + optional auto TP/SL. All editable
+  // right in the group via the ⚙️ Preset button — no DM needed. Amount defaults small (0.1◎) for safety.
+  const quickAmount = Number(u.amount) > 0 ? Number(u.amount) : 0.1;
+  const takeProfitPct = Number(u.takeProfitPct) > 0 ? Number(u.takeProfitPct) : 0;
+  const stopLossPct = Number(u.stopLossPct) > 0 ? Number(u.stopLossPct) : 0;
+  return { presets, custom, slippageBps, quickAmount, takeProfitPct, stopLossPct };
 }
 async function setBuyPref(userId, kind, value) {
   const s = await readBuyPrefs();
   const cur = userBuyPrefs(s, userId);
-  const u = { presets: cur.presets.slice(), custom: cur.custom, slippageBps: cur.slippageBps };
+  const u = { presets: cur.presets.slice(), custom: cur.custom, slippageBps: cur.slippageBps, amount: cur.quickAmount, takeProfitPct: cur.takeProfitPct, stopLossPct: cur.stopLossPct };
   if (kind === "slippage") u.slippageBps = Math.max(50, Math.min(5000, Math.round(Number(value) || CONFIG.defaultSlippageBps)));
+  else if (kind === "amount") u.amount = Math.max(0.001, Math.min(1000, Number(value) || 0.1));
+  else if (kind === "tp") u.takeProfitPct = Math.max(0, Math.min(10000, Math.round(Number(value) || 0)));
+  else if (kind === "sl") u.stopLossPct = Math.max(0, Math.min(95, Math.round(Number(value) || 0)));
   else { const v = Math.max(0.001, Math.min(1000, Number(value) || 0)); if (kind === "custom") u.custom = v; else u.presets[Number(kind)] = v; }
   s.users[String(userId)] = u; buyPrefsCache = s;
   await writeJsonFile(buyPrefsPath(), s).catch(() => {});
@@ -30584,6 +30598,101 @@ async function handleQuickBuyCallback(query, userId) {
   await ack(`⚡ Bought ◎${amt}! Receipt + sell controls sent to your DM.`, true);
   await quickBuySendReceipt(userId, mint, amt, r.result);
   return true;
+}
+// ⚡ QUICK BUY (preset) — one tap on any group/scan card buys the tapper's saved preset amount from
+// their own wallet AND arms their saved take-profit / stop-loss, all without leaving the group. Reuses
+// the idempotent own-wallet buy (tgExecuteQuickBuy) + the site's auto-exit engine.
+async function tgExecuteQuickBuyPreset(userId, mint) {
+  const prefs = userBuyPrefs(await readBuyPrefs(), userId);
+  const r = await tgExecuteQuickBuy(userId, mint, prefs.quickAmount);
+  if (!r.ok) return { ...r, amt: prefs.quickAmount };
+  let armed = null;
+  if ((prefs.takeProfitPct > 0 || prefs.stopLossPct > 0) && r.result && r.wallet) {
+    try {
+      const buyResult = {
+        amountLamports: String(r.result.amountLamports || solToLamports(prefs.quickAmount)),
+        swapLamports: r.result.swapLamports,
+        feeLamports: r.result.feeLamports,
+        tokenDeltaAmount: r.result.tokenDeltaAmount,
+        outputAmount: r.result.outputAmount,
+        signature: r.result.signature
+      };
+      await webCreateSingleTradeAutoExitPlan(userId, r.wallet, mint, buyResult, {
+        takeProfitPct: String(prefs.takeProfitPct || 0),
+        stopLossPct: String(prefs.stopLossPct || 0),
+        walletIndex: "1"
+      }, prefs.slippageBps);
+      armed = { tp: prefs.takeProfitPct, sl: prefs.stopLossPct };
+    } catch (_) { armed = null; }
+  }
+  return { ...r, amt: prefs.quickAmount, armed };
+}
+async function handleQuickBuyPresetCallback(query, userId) {
+  const data = String(query?.data || ""); if (!data.startsWith("qbp:")) return false;
+  const ack = (t, alert) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: Boolean(alert) } : {}) }).catch(() => {});
+  const m = data.match(/^qbp:([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+  if (!m) { await ack(); return true; }
+  const mint = m[1];
+  const r = await tgExecuteQuickBuyPreset(userId, mint);
+  if (r.needWallet) { await ack(noWalletAckText(await funnelNoWallet(userId)), true); return true; }
+  if (!r.ok) { await ack(`Buy didn't land: ${r.why || "try again in a sec"}.`, true); return true; }
+  const exitNote = r.armed ? ` · 🎯${r.armed.tp ? `+${r.armed.tp}%` : ""}${r.armed.tp && r.armed.sl ? "/" : ""}${r.armed.sl ? `-${r.armed.sl}%` : ""}` : "";
+  await ack(`⚡ Bought ◎${r.amt}${exitNote}! Receipt in your DM.`, true);
+  await quickBuySendReceipt(userId, mint, r.amt, r.result);
+  if (r.armed) await sayHtml(userId, `🎯 Auto-exit armed: <b>${r.armed.tp ? `+${r.armed.tp}% take-profit` : ""}${r.armed.tp && r.armed.sl ? " · " : ""}${r.armed.sl ? `-${r.armed.sl}% stop-loss` : ""}</b>.`).catch(() => {});
+  return true;
+}
+// ⚙️ PRESET editor — opens right in the group (button-only, no typing, no DM). Every tap edits the
+// TAPPER'S own saved preset (keyed by their userId), so it's collision-safe in a shared chat; the editor
+// message is owned by whoever opened it so someone else's taps don't move its displayed numbers.
+const PE_AMOUNTS = [0.05, 0.1, 0.25, 0.5, 1, 2];
+const PE_TP = [0, 25, 50, 100, 200];
+const PE_SL = [0, 10, 20, 30];
+function presetEditorView(prefs, uid) {
+  const mark = (on, label) => (on ? "• " : "") + label;
+  return {
+    text: [
+      "⚙️ <b>Your Quick Buy preset</b>",
+      "",
+      `Amount <b>${prefs.quickAmount}◎</b> · TP <b>${prefs.takeProfitPct ? "+" + prefs.takeProfitPct + "%" : "off"}</b> · SL <b>${prefs.stopLossPct ? "-" + prefs.stopLossPct + "%" : "off"}</b>`,
+      "",
+      "<i>Tap to change. ⚡ Quick Buy on any coin card uses this — no DM needed.</i>"
+    ].join("\n"),
+    markup: { inline_keyboard: [
+      PE_AMOUNTS.slice(0, 3).map((a) => ({ text: mark(prefs.quickAmount === a, `${a}◎`), callback_data: `pe:a:${a}:${uid}` })),
+      PE_AMOUNTS.slice(3).map((a) => ({ text: mark(prefs.quickAmount === a, `${a}◎`), callback_data: `pe:a:${a}:${uid}` })),
+      PE_TP.map((t) => ({ text: mark(prefs.takeProfitPct === t, t === 0 ? "TP off" : `+${t}%`), callback_data: `pe:tp:${t}:${uid}` })),
+      PE_SL.map((s) => ({ text: mark(prefs.stopLossPct === s, s === 0 ? "SL off" : `-${s}%`), callback_data: `pe:sl:${s}:${uid}` })),
+      [{ text: "✅ Done", callback_data: `pe:x:${uid}` }]
+    ] }
+  };
+}
+async function handlePresetEditorCallback(query, userId) {
+  const data = String(query?.data || ""); if (!data.startsWith("pe:")) return false;
+  const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  const ack = (t, a) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: Boolean(a) } : {}) }).catch(() => {});
+  if (data === "pe:open") {
+    const prefs = userBuyPrefs(await readBuyPrefs(), userId);
+    const v = presetEditorView(prefs, userId);
+    await telegram("sendMessage", { chat_id: chatId, text: v.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: v.markup }).catch(() => {});
+    await ack(); return true;
+  }
+  const parts = data.split(":");
+  const kind = parts[1];
+  const owner = kind === "x" ? parts[2] : parts[3];
+  if (String(userId) !== String(owner)) { await ack("Tap ⚙️ Preset to open your own.", true); return true; }
+  if (kind === "x") {
+    if (messageId) await telegram("deleteMessage", { chat_id: chatId, message_id: messageId }).catch(() => {});
+    await ack("Saved ✅"); return true;
+  }
+  const kindMap = { a: "amount", tp: "tp", sl: "sl" };
+  if (kindMap[kind]) {
+    await setBuyPref(userId, kindMap[kind], Number(parts[2]));
+    const v = presetEditorView(userBuyPrefs(await readBuyPrefs(), userId), userId);
+    if (messageId) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: v.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: v.markup }).catch(() => {});
+    await ack("Updated"); return true;
+  }
+  await ack(); return true;
 }
 // Typed custom SOL amount for ⚡ quick buy (DM). Returns true when it consumed the message.
 async function applyTgQuickBuyInput(message, userId) {
@@ -32567,13 +32676,11 @@ const groupBuyMarkup = (mint, socials = {}) => {
   // Chart + Buy point at the NEW terminal (the ?token= deep-link opens the coin's
   // chart+buy view), matching the scan card — not the old chart-lab / /t layout.
   const links = slimewireTokenLinks(mint);
-  // ⚡ ONE-CLICK: tap = instant buy from your own SlimeWire bot wallet (no wallet → /start funnel). Same
-  // as the scan card. 📊 Chart always opens the SlimeWire chart site (a path into the site + the bot).
+  // ⚡ ONE-CLICK: tap = instant buy from your own SlimeWire bot wallet using YOUR saved preset (amount +
+  // TP/SL); no wallet → /start funnel. ⚙️ Preset edits that amount/TP/SL right here in the group — no DM.
   const qbRow = [
-    { text: "⚡ 0.5◎", callback_data: `qb:0.5:${mint}` },
-    { text: "⚡ 1◎", callback_data: `qb:1:${mint}` },
-    { text: "⚡ 2◎", callback_data: `qb:2:${mint}` },
-    { text: "✏️", callback_data: `qb:x:${mint}` }
+    { text: "⚡ Quick Buy", callback_data: `qbp:${mint}` },
+    { text: "⚙️ Preset", callback_data: "pe:open" }
   ];
   // Buy = the ⚡ one-click row (own wallet). Chart just opens the SlimeWire site. No "Buy on site" /
   // Vote / TG clutter — the group IS the coin's TG, and the ⚡ buttons are the buy.

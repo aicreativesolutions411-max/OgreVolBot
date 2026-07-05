@@ -753,7 +753,8 @@ test("buy card Chart/Buy open the NEW terminal (not old chart-lab / /t)", () => 
   const mk = serverSource.slice(i, i + 1100);
   assert.match(mk, /slimewireTokenLinks\(mint\)/);
   assert.match(mk, /url: links\.site\b/);       // Chart -> SlimeWire chart site
-  assert.match(mk, /callback_data: `qb:0\.5:\$\{mint\}`/);  // ⚡ one-click buy row IS the buy
+  assert.match(mk, /callback_data: `qbp:\$\{mint\}`/);  // ⚡ Quick Buy (your preset) IS the buy
+  assert.match(mk, /callback_data: "pe:open"/);         // ⚙️ Preset editor next to it
   assert.doesNotMatch(mk, /chart-lab\?ca=/);    // old chart-page URL gone
   assert.doesNotMatch(mk, /url: groupBuyQuickBuyUrl/); // old /t redirect gone
 });
@@ -939,10 +940,31 @@ test("⚡ one-click group buy fires from the tapper's OWN wallet, idempotent, re
   const cb = functionBody(serverSource, "handleQuickBuyCallback");
   assert.match(cb, /quickBuySendReceipt\(userId, mint, amt, r\.result\)/);       // receipt to DM (userId), never the group; now carries live buy result
   assert.match(cb, /noWalletAckText\(await funnelNoWallet\(userId\)\)/);        // no-wallet → DM a Create-Wallet button + guide
-  // ⚡ preset buttons on the group scan card + routed + custom-amount input wired
-  assert.match(functionBody(serverSource, "slimeScanKeyboard"), /callback_data: `qb:0\.5:\$\{mint\}`/);
+  // ⚡ Quick Buy (preset) button on the group scan card + qb: routing (DM receipt) + custom input wired
+  assert.match(functionBody(serverSource, "slimeScanKeyboard"), /callback_data: `qbp:\$\{mint\}`/);
   assert.match(serverSource, /startsWith\("qb:"\)/);
   assert.match(serverSource, /applyTgQuickBuyInput\(message, userId\)/);
+});
+test("⚡ Quick Buy (preset) + ⚙️ in-group Preset editor: buy your preset + edit amount/TP/SL, no DM", () => {
+  // Preset store now holds a one-tap amount + TP/SL, all editable via setBuyPref.
+  assert.match(functionBody(serverSource, "userBuyPrefs"), /quickAmount/);
+  assert.match(functionBody(serverSource, "userBuyPrefs"), /takeProfitPct/);
+  assert.match(functionBody(serverSource, "userBuyPrefs"), /stopLossPct/);
+  const setp = functionBody(serverSource, "setBuyPref");
+  assert.match(setp, /kind === "amount"/);
+  assert.match(setp, /kind === "tp"/);
+  assert.match(setp, /kind === "sl"/);
+  // Quick Buy preset: buys the tapper's amount then arms their TP/SL via the site auto-exit engine.
+  const exec = functionBody(serverSource, "tgExecuteQuickBuyPreset");
+  assert.match(exec, /tgExecuteQuickBuy\(userId, mint, prefs\.quickAmount\)/);
+  assert.match(exec, /webCreateSingleTradeAutoExitPlan\(userId, r\.wallet, mint/);
+  // Routed: qbp: (buy) + pe: (editor) both dispatched.
+  assert.match(serverSource, /startsWith\("qbp:"\)/);
+  assert.match(serverSource, /startsWith\("pe:"\)/);
+  // In-group editor is per-user (owner-gated) and edits the tapper's own pref — collision-safe.
+  const ed = functionBody(serverSource, "handlePresetEditorCallback");
+  assert.match(ed, /String\(userId\) !== String\(owner\)/);   // someone else's taps don't move it
+  assert.match(ed, /setBuyPref\(userId, kindMap\[kind\], Number\(parts\[2\]\)\)/);
 });
 test("per-user BUY PRESETS: settable in DM, drive the DM receipt's ⚡ buttons + a custom preset", () => {
   assert.match(serverSource, /DEFAULT_BUY_PRESETS = \[0\.5, 1, 2\]/);
@@ -1221,17 +1243,18 @@ test("OCR image scan: cloud-offloaded, concurrency-capped, gated, delete-only", 
 
 // ---- Scan card buy row: ONE clean Buy button (the 0.5/1/5/custom amount buttons all just opened
 // the site, so they were consolidated). The &amount= deep-link helper still exists for the web preload.
-test("scan card = ⚡ one-click in-wallet buy presets + limit + chart (no site-Buy clutter)", () => {
+test("scan card = ⚡ Quick Buy (preset) + ⚙️ Preset editor + limit + chart (no site-Buy clutter)", () => {
   const kb = functionBody(serverSource, "slimeScanKeyboard");
-  // ⚡ presets execute an in-wallet buy via the qb: callback (NOT URL redirects).
-  assert.match(kb, /callback_data: `qb:0\.5:\$\{mint\}`/);
-  assert.match(kb, /callback_data: `qb:1:\$\{mint\}`/);
-  assert.match(kb, /callback_data: `qb:x:\$\{mint\}`/);         // ✏️ custom amount
+  // ⚡ Quick Buy executes an in-wallet buy of YOUR preset via the qbp: callback (NOT URL redirects).
+  assert.match(kb, /callback_data: `qbp:\$\{mint\}`/);
+  assert.match(kb, /callback_data: "pe:open"/);                 // ⚙️ Preset — edit amount/TP/SL in chat
   assert.doesNotMatch(kb, /Buy on site/);                       // removed — ⚡ is the buy
   assert.match(kb, /text: "📈 Chart", url: links\.site/);       // Chart just opens the site
-  // buy-bot card: no Vote / Buy-on-site / TG clutter (group IS the coin's TG), just ⚡ + Chart (+socials)
+  // buy-bot card: no Vote / Buy-on-site / TG clutter (group IS the coin's TG), just ⚡ Quick Buy + ⚙️ Preset + Chart (+socials)
   const gbi = serverSource.indexOf("const groupBuyMarkup =");
   const gb = serverSource.slice(gbi, gbi + 1300);
+  assert.match(gb, /callback_data: `qbp:\$\{mint\}`/);          // ⚡ Quick Buy (preset)
+  assert.match(gb, /callback_data: "pe:open"/);                 // ⚙️ Preset editor
   assert.doesNotMatch(gb, /Vote", url/);            // 👍 Vote button gone
   assert.doesNotMatch(gb, /url: links\.siteBuy/);   // Buy-on-site button gone
   assert.doesNotMatch(gb, /TG", url: socials\.tg/); // ✈️ TG button gone
