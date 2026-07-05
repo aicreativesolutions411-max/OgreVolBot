@@ -3992,7 +3992,6 @@ const SEO_PAGES = [
   { path: "/manual", priority: "0.6", changefreq: "weekly" },
   { path: "/tg-guide", priority: "0.6", changefreq: "weekly" },
   { path: "/prelaunch", priority: "0.5", changefreq: "weekly" },
-  { path: "/pro", priority: "0.5", changefreq: "weekly" },
   { path: "/install", priority: "0.5", changefreq: "monthly" }
 ];
 function buildRobotsTxt() {
