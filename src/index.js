@@ -4065,6 +4065,17 @@ const SEO_PAGES = [
   { path: "/telegram-raid-bot-with-buy-tracker", priority: "0.8", changefreq: "weekly" },
   { path: "/crypto-group-moderation-bot", priority: "0.78", changefreq: "weekly" },
   { path: "/telegram-token-buy-alert-bot", priority: "0.8", changefreq: "weekly" },
+  { path: "/missrose-alternative-for-crypto-groups", priority: "0.78", changefreq: "weekly" },
+  { path: "/rose-bot-alternative-crypto", priority: "0.78", changefreq: "weekly" },
+  { path: "/telegram-anti-scam-bot-crypto", priority: "0.8", changefreq: "weekly" },
+  { path: "/telegram-ca-scanner-bot", priority: "0.82", changefreq: "weekly" },
+  { path: "/tg-ca-scanner", priority: "0.8", changefreq: "weekly" },
+  { path: "/memecoin-tg-bot", priority: "0.82", changefreq: "weekly" },
+  { path: "/degen-telegram-bot", priority: "0.78", changefreq: "weekly" },
+  { path: "/pump-fun-buy-tracker-bot", priority: "0.8", changefreq: "weekly" },
+  { path: "/solana-launch-group-bot", priority: "0.82", changefreq: "weekly" },
+  { path: "/telegram-community-trading-bot", priority: "0.8", changefreq: "weekly" },
+  { path: "/telegram-coin-launch-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/features", priority: "0.84", changefreq: "monthly" },
   { path: "/pricing", priority: "0.7", changefreq: "monthly" },
   { path: "/data-freshness", priority: "0.72", changefreq: "monthly" },
@@ -4415,6 +4426,50 @@ const SEO_PAGE_META = {
   "/telegram-token-buy-alert-bot": {
     title: "Telegram Token Buy Alert Bot - Solana Buy Posts, Scans and Chart Links",
     description: "SlimeWire's Telegram token buy alert bot workflow helps Solana groups post buy context, scan tokens, link charts, share proof, and route users into the web terminal."
+  },
+  "/missrose-alternative-for-crypto-groups": {
+    title: "MissRose Alternative for Crypto Groups - Moderation plus Solana Tools",
+    description: "SlimeWire documents a MissRose-style alternative for crypto groups that combines Telegram moderation, anti-scam settings, Solana scans, buy tracking, raid tools, proof, and terminal handoff."
+  },
+  "/rose-bot-alternative-crypto": {
+    title: "Rose Bot Alternative for Crypto - Telegram Moderation and Solana Group Tools",
+    description: "SlimeWire is a Rose bot alternative angle for crypto groups that need moderation, anti-scam controls, Solana token scans, buy alerts, raid posts, proof, and terminal links."
+  },
+  "/telegram-anti-scam-bot-crypto": {
+    title: "Telegram Anti-Scam Bot for Crypto Groups - Shield, Scans and Moderation",
+    description: "SlimeWire's Telegram anti-scam bot angle for crypto groups combines Shield-style protections, Rose-style moderation, Solana token scans, CA context, alerts, and terminal handoff."
+  },
+  "/telegram-ca-scanner-bot": {
+    title: "Telegram CA Scanner Bot - Solana Contract Address Scans and Chart Handoff",
+    description: "SlimeWire's Telegram CA scanner bot workflow scans Solana contract addresses, returns token context, links charts, supports group alerts, and hands users to the web terminal."
+  },
+  "/tg-ca-scanner": {
+    title: "TG CA Scanner - Telegram Contract Address Scanner for Solana",
+    description: "SlimeWire's TG CA scanner page targets Telegram shorthand searches for Solana contract address scanning, token context, chart links, group alerts, and terminal handoff."
+  },
+  "/memecoin-tg-bot": {
+    title: "Memecoin TG Bot - Telegram Scans, Buy Tracking, Raids and Solana Terminal",
+    description: "SlimeWire is a memecoin TG bot workflow for Telegram groups that need Solana token scans, buy tracking, raid cards, launch alerts, proof, PnL, and web terminal handoff."
+  },
+  "/degen-telegram-bot": {
+    title: "Degen Telegram Bot - Solana Memecoin Scans, Raids, Buy Tracking and Proof",
+    description: "SlimeWire's degen Telegram bot angle covers fast Solana memecoin scans, TG alerts, buy tracking, raid tools, launch context, proof cards, PnL, and terminal handoff."
+  },
+  "/pump-fun-buy-tracker-bot": {
+    title: "pump.fun Buy Tracker Bot - Telegram Buy Alerts, Launch Context and Charts",
+    description: "SlimeWire's pump.fun buy tracker bot workflow connects fresh launch buy alerts, Telegram groups, token scans, chart handoff, proof pages, and Solana terminal review."
+  },
+  "/solana-launch-group-bot": {
+    title: "Solana Launch Group Bot - Telegram Launch Alerts, Raids, Buy Tracking and Proof",
+    description: "SlimeWire's Solana launch group bot workflow helps launch teams use Telegram alerts, raid cards, buy tracking, token scans, proof links, and terminal handoff."
+  },
+  "/telegram-community-trading-bot": {
+    title: "Telegram Community Trading Bot - Solana Groups, Scans, Alerts and Proof",
+    description: "SlimeWire's Telegram community trading bot workflow supports Solana groups with scans, alerts, buy tracking, raids, moderation, proof, PnL, and terminal links."
+  },
+  "/telegram-coin-launch-bot": {
+    title: "Telegram Coin Launch Bot - Solana Launch Alerts, Scans, Raids and Buy Context",
+    description: "SlimeWire's Telegram coin launch bot workflow helps Solana teams connect launch alerts, token scans, raid cards, buy tracking, proof pages, and web terminal handoff."
   },
   "/features": {
     title: "SlimeWire Features - Solana Terminal, Telegram Bot, Alerts and Launch Tools",
@@ -6163,6 +6218,50 @@ function startHealthServer() {
     }
     if (request.method === "GET" && requestUrl.pathname === "/telegram-token-buy-alert-bot") {
       await serveStaticHtmlPage(response, "telegram-token-buy-alert-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/missrose-alternative-for-crypto-groups") {
+      await serveStaticHtmlPage(response, "missrose-alternative-for-crypto-groups.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/rose-bot-alternative-crypto") {
+      await serveStaticHtmlPage(response, "rose-bot-alternative-crypto.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/telegram-anti-scam-bot-crypto") {
+      await serveStaticHtmlPage(response, "telegram-anti-scam-bot-crypto.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/telegram-ca-scanner-bot") {
+      await serveStaticHtmlPage(response, "telegram-ca-scanner-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/tg-ca-scanner") {
+      await serveStaticHtmlPage(response, "tg-ca-scanner.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/memecoin-tg-bot") {
+      await serveStaticHtmlPage(response, "memecoin-tg-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/degen-telegram-bot") {
+      await serveStaticHtmlPage(response, "degen-telegram-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/pump-fun-buy-tracker-bot") {
+      await serveStaticHtmlPage(response, "pump-fun-buy-tracker-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-launch-group-bot") {
+      await serveStaticHtmlPage(response, "solana-launch-group-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/telegram-community-trading-bot") {
+      await serveStaticHtmlPage(response, "telegram-community-trading-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/telegram-coin-launch-bot") {
+      await serveStaticHtmlPage(response, "telegram-coin-launch-bot.html");
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/features") {

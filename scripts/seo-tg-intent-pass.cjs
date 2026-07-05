@@ -306,6 +306,259 @@ const PAGES = [
       ["Are buy alerts enough to trade from?", "No. Users should still review liquidity, chart behavior, wallet prompts, and risk."]
     ],
     related: ["telegram-buy-tracker-bot", "telegram-buy-bot", "solana-token-alerts", "solana-dex-chart"]
+  },
+  {
+    slug: "missrose-alternative-for-crypto-groups",
+    priority: "0.78",
+    title: "MissRose Alternative for Crypto Groups - Moderation plus Solana Tools",
+    description: "SlimeWire documents a MissRose-style alternative for crypto groups that combines Telegram moderation, anti-scam settings, Solana scans, buy tracking, raid tools, proof, and terminal handoff.",
+    h1: "MissRose alternative for crypto groups",
+    intro: "Crypto groups often add MissRose or a Rose-style bot for moderation, then add separate trading bots for buy posts, scans, raids, and alerts. SlimeWire's long-tail angle is the combined workflow: moderation plus Solana group trading tools.",
+    cards: [
+      ["Rose-style controls", "Captcha, rules, welcome messages, notes, filters, anti-link, anti-flood, warns, mute, kick, ban, report, purge, and pin-style workflows."],
+      ["Crypto-aware Shield", "Anti-scam, anti-impersonator, known-scammer, and suspicious link controls belong next to trading utilities."],
+      ["Trading modules", "Buy Bot, Raid Bot, Scan Bot, alerts, launch workflows, proof links, and terminal handoff sit in the same SlimeWire ecosystem."],
+      ["Cleaner groups", "Admins can reduce bot sprawl by using modular tools through one SlimeWire group setup."],
+      ["Solana focus", "The product language is aimed at Solana memecoin rooms, launch teams, and Telegram communities."],
+      ["Not affiliated", "SlimeWire is its own product; MissRose-style means familiar moderation patterns, not ownership or endorsement."]
+    ],
+    faqs: [
+      ["Is SlimeWire a MissRose alternative?", "SlimeWire can cover Rose-style moderation patterns for crypto groups while also adding Solana scans, buy tracking, raids, proof, and terminal handoff."],
+      ["Is SlimeWire affiliated with MissRose?", "No. SlimeWire is independent. The page uses MissRose alternative wording because many Telegram admins search that phrase."],
+      ["Why would crypto groups want moderation and trading together?", "Trading groups need both safety and market workflow. Combining them can reduce clutter and make setup easier."],
+      ["Does moderation guarantee a safe group?", "No. It can reduce obvious abuse, but admins and users still need caution."]
+    ],
+    related: ["telegram-trading-bot-with-moderation", "crypto-group-moderation-bot", "security", "trust"]
+  },
+  {
+    slug: "rose-bot-alternative-crypto",
+    priority: "0.78",
+    title: "Rose Bot Alternative for Crypto - Telegram Moderation and Solana Group Tools",
+    description: "SlimeWire is a Rose bot alternative angle for crypto groups that need moderation, anti-scam controls, Solana token scans, buy alerts, raid posts, proof, and terminal links.",
+    h1: "Rose bot alternative for crypto",
+    intro: "A normal Rose-style bot helps manage a Telegram group. A crypto group also needs token scans, buy context, raid posts, launch links, proof, and chart handoff. SlimeWire puts those ideas on one product map.",
+    cards: [
+      ["Moderation basics", "Rules, welcomes, notes, filters, anti-link, anti-flood, and admin actions keep the room manageable."],
+      ["Crypto protection", "Scam, impersonator, phishing, and known-bad-actor controls matter more in token groups than normal chat rooms."],
+      ["Token scans", "CA and ticker scan workflows help turn chat noise into useful token context."],
+      ["Buy and raid modules", "Buy tracking and raid posts help launch teams and communities stay organized."],
+      ["Web terminal", "SlimeWire's site adds charts, wallet context, positions, PnL, and proof outside the group feed."],
+      ["All-in-one positioning", "This is the search angle Google was missing: group moderation plus trading utilities under one brand."]
+    ],
+    faqs: [
+      ["What is a Rose bot alternative for crypto?", "It is a Telegram group bot workflow with Rose-style moderation plus crypto-specific scans, anti-scam settings, buy alerts, and launch tools."],
+      ["Does SlimeWire copy Rose?", "No. SlimeWire is a separate Solana terminal and Telegram bot stack that documents familiar moderation-style workflows."],
+      ["Can SlimeWire help token launch groups?", "Yes. SlimeWire pages describe launch alerts, raid cards, buy tracking, scans, proof, and terminal handoff."],
+      ["Does a moderation bot remove trading risk?", "No. Moderation and scans are tools, not guarantees."]
+    ],
+    related: ["missrose-alternative-for-crypto-groups", "crypto-group-moderation-bot", "all-in-one-telegram-crypto-bot", "telegram-bot-setup"]
+  },
+  {
+    slug: "telegram-anti-scam-bot-crypto",
+    priority: "0.8",
+    title: "Telegram Anti-Scam Bot for Crypto Groups - Shield, Scans and Moderation",
+    description: "SlimeWire's Telegram anti-scam bot angle for crypto groups combines Shield-style protections, Rose-style moderation, Solana token scans, CA context, alerts, and terminal handoff.",
+    h1: "Telegram anti-scam bot for crypto groups",
+    intro: "Crypto Telegram groups get spam, impersonators, fake links, hidden scam text, suspicious CAs, and wallet-drainer bait. SlimeWire's anti-scam positioning ties moderation to token scans and the Solana trading terminal.",
+    cards: [
+      ["Scam link cleanup", "Anti-link and scam/phishing deletion settings can reduce obvious group attacks."],
+      ["Impersonator checks", "Crypto groups need tools that watch for fake-admin and brand impersonation behavior."],
+      ["Known bad actors", "Cross-group bad actor awareness helps groups react faster when patterns repeat."],
+      ["Token scan context", "CA scans and SlimeShield-style cards give users a safer next step than trusting a raw pasted address."],
+      ["Moderation actions", "Warn, mute, kick, ban, report, purge, and captcha workflows help admins respond."],
+      ["Risk honesty", "No Telegram anti-scam bot can catch everything; user wallet caution still matters."]
+    ],
+    faqs: [
+      ["What should a Telegram anti-scam bot do for crypto groups?", "It should reduce scam links, impersonators, spam, suspicious content, and provide token scan context when users discuss a coin."],
+      ["Does SlimeWire include anti-scam group tools?", "SlimeWire documents Shield-style group protections alongside Telegram scans, moderation, buy tracking, and terminal handoff."],
+      ["Can a bot guarantee no scams?", "No. It can reduce obvious abuse, but crypto groups still need active admins and careful users."],
+      ["Why connect anti-scam tools to token scans?", "Because crypto scams often happen through token links, contract addresses, fake launches, and wallet-drainer prompts."]
+    ],
+    related: ["security", "crypto-group-moderation-bot", "telegram-token-scanner", "solana-rug-checker"]
+  },
+  {
+    slug: "telegram-ca-scanner-bot",
+    priority: "0.82",
+    title: "Telegram CA Scanner Bot - Solana Contract Address Scans and Chart Handoff",
+    description: "SlimeWire's Telegram CA scanner bot workflow scans Solana contract addresses, returns token context, links charts, supports group alerts, and hands users to the web terminal.",
+    h1: "Telegram CA scanner bot",
+    intro: "Crypto users often paste a CA before they paste a full token name. SlimeWire should rank for that shorthand too: CA scanner, contract scanner, token scanner, and Telegram scan bot.",
+    cards: [
+      ["CA detection", "A Telegram scanner should recognize contract addresses and avoid triggering on random text."],
+      ["Token context", "Useful scans include symbol, name, market basics, links, risk notes, and chart handoff when available."],
+      ["Group flow", "A scanner should work in a busy group without flooding or confusing users."],
+      ["Quick review", "Chart links and terminal pages give traders more context before wallet actions."],
+      ["Launch utility", "Launch teams and callers can use CA scans to route users into cleaner proof and chart pages."],
+      ["SlimeWire fit", "@SlimeWiredBot supports the CA scanner search intent through token scan and terminal workflows."]
+    ],
+    faqs: [
+      ["What does CA mean in crypto Telegram groups?", "CA usually means contract address. On Solana, users paste a token mint address for scanners and chart tools."],
+      ["Is SlimeWire a Telegram CA scanner bot?", "SlimeWire includes Telegram token scan workflows and CA scanner pages connected to its Solana web terminal."],
+      ["Can CA scans prove a token is safe?", "No. A scan can surface useful context, but users still need to review liquidity, holders, chart behavior, and wallet prompts."],
+      ["Why link CA scans to a terminal?", "The terminal can show deeper charts, transactions, wallet context, positions, PnL, and proof pages."]
+    ],
+    related: ["telegram-token-scanner", "solana-token-scanner", "solana-token-research-tool", "telegram-token-buy-alert-bot"]
+  },
+  {
+    slug: "tg-ca-scanner",
+    priority: "0.8",
+    title: "TG CA Scanner - Telegram Contract Address Scanner for Solana",
+    description: "SlimeWire's TG CA scanner page targets Telegram shorthand searches for Solana contract address scanning, token context, chart links, group alerts, and terminal handoff.",
+    h1: "TG CA scanner",
+    intro: "People in crypto rooms type TG for Telegram and CA for contract address. This page gives search engines the exact shorthand while explaining the real SlimeWire workflow.",
+    cards: [
+      ["TG equals Telegram", "The page explicitly connects Telegram and TG language so shorthand searches find SlimeWire."],
+      ["CA equals contract address", "Solana groups often paste token mints as CAs for scanner bots."],
+      ["Scan Bot workflow", "A scanner can turn a CA into token context and SlimeWire chart handoff."],
+      ["Risk notes", "Scans should warn when data is thin instead of pretending every token is clean."],
+      ["Group-friendly", "The best scanner works without flooding and lets admins control modules."],
+      ["Terminal handoff", "Charts, transactions, wallet state, and proof live better on the web terminal."]
+    ],
+    faqs: [
+      ["What is a TG CA scanner?", "It is shorthand for a Telegram contract address scanner, usually used in crypto groups."],
+      ["Does SlimeWire use both TG and Telegram wording?", "Yes. SlimeWire pages use both terms so users and AI systems can connect the shorthand."],
+      ["Can a CA scanner catch every bad token?", "No. It can provide context, but it cannot guarantee safety."],
+      ["What should happen after a CA scan?", "Users should review chart, liquidity, token context, warnings, and wallet prompts before acting."]
+    ],
+    related: ["telegram-ca-scanner-bot", "tg-crypto-bot", "solana-tg-bot", "solana-rug-checker"]
+  },
+  {
+    slug: "memecoin-tg-bot",
+    priority: "0.82",
+    title: "Memecoin TG Bot - Telegram Scans, Buy Tracking, Raids and Solana Terminal",
+    description: "SlimeWire is a memecoin TG bot workflow for Telegram groups that need Solana token scans, buy tracking, raid cards, launch alerts, proof, PnL, and web terminal handoff.",
+    h1: "memecoin TG bot",
+    intro: "Memecoin groups move fast and use shorthand. A memecoin TG bot needs to understand CAs, tickers, buy activity, raids, launches, and the need for a deeper chart and wallet-aware review.",
+    cards: [
+      ["Fresh market context", "Memecoin rooms need quick scans, alerts, and chart links when a token starts moving."],
+      ["Buy tracking", "Visible buy activity can help communities understand current attention around a token."],
+      ["Raid and launch flow", "Launch teams need Telegram cards, proof, and links that route users into the terminal."],
+      ["Moderation", "Fast rooms need anti-spam, anti-link, anti-scam, and admin tools too."],
+      ["Proof and PnL", "Receipts, call context, and PnL pages help communities review outcomes."],
+      ["SlimeWire fit", "SlimeWire combines Telegram and web workflows for Solana memecoin traders."]
+    ],
+    faqs: [
+      ["What is a memecoin TG bot?", "It is a Telegram bot used by memecoin groups for scans, alerts, buy tracking, raids, and community workflows."],
+      ["Is SlimeWire focused on memecoins?", "Yes. SlimeWire is built around Solana memecoin terminal and Telegram bot workflows."],
+      ["Can it help with launches?", "Yes. SlimeWire documents launch alerts, raid cards, proof, token scans, and terminal handoff."],
+      ["Does it guarantee wins?", "No. Memecoin trading is risky, and software cannot guarantee results."]
+    ],
+    related: ["solana-memecoin-bot", "tg-trading-bot", "pump-fun-terminal", "solana-memecoin-trading-platform"]
+  },
+  {
+    slug: "degen-telegram-bot",
+    priority: "0.78",
+    title: "Degen Telegram Bot - Solana Memecoin Scans, Raids, Buy Tracking and Proof",
+    description: "SlimeWire's degen Telegram bot angle covers fast Solana memecoin scans, TG alerts, buy tracking, raid tools, launch context, proof cards, PnL, and terminal handoff.",
+    h1: "degen Telegram bot",
+    intro: "Degen searches are informal, but real users type them. SlimeWire can rank for that language while still presenting the product responsibly: fast tools, clear risk, and no profit guarantees.",
+    cards: [
+      ["Fast scans", "Degen rooms need fast CA scans and chart handoff when a token starts trending."],
+      ["Buy tracking", "Buy posts and token activity can help show group momentum."],
+      ["Raid tools", "Community posts and raid cards help route attention around launches."],
+      ["Terminal review", "The web terminal gives deeper charts, txns, wallet context, and PnL."],
+      ["Moderation", "High-speed rooms need moderation and anti-scam options to stay usable."],
+      ["Responsible framing", "The page uses degen language without promising easy money."]
+    ],
+    faqs: [
+      ["What is a degen Telegram bot?", "It is an informal term for a Telegram bot used by fast crypto trading communities for scans, alerts, buy tracking, raids, and token workflows."],
+      ["Does SlimeWire use degen tools responsibly?", "SlimeWire documents fast workflows while keeping risk disclosures and wallet caution visible."],
+      ["Can the bot trade automatically for users?", "Wallet and trade actions depend on user-selected flows and should never be treated as guaranteed or risk-free."],
+      ["Why target this search term?", "Because real Solana memecoin users search casual phrases like degen bot, TG bot, CA scanner, and buy tracker."]
+    ],
+    related: ["memecoin-tg-bot", "solana-ai-trading-bot", "solana-alpha-alerts", "risk-disclosure"]
+  },
+  {
+    slug: "pump-fun-buy-tracker-bot",
+    priority: "0.8",
+    title: "pump.fun Buy Tracker Bot - Telegram Buy Alerts, Launch Context and Charts",
+    description: "SlimeWire's pump.fun buy tracker bot workflow connects fresh launch buy alerts, Telegram groups, token scans, chart handoff, proof pages, and Solana terminal review.",
+    h1: "pump.fun buy tracker bot",
+    intro: "Launch teams and memecoin rooms search for pump.fun buy trackers because visible buys create attention. SlimeWire connects that intent to a broader launch and terminal workflow.",
+    cards: [
+      ["Launch buy context", "Buy posts around fresh launch tokens can send users to scan and chart pages."],
+      ["Telegram visibility", "Groups can see tracked activity where the community already lives."],
+      ["Chart handoff", "Buy alerts should not be dead ends; users need chart and transaction context."],
+      ["Proof links", "Proof and call pages help communities revisit launch performance."],
+      ["Raid pairing", "Buy tracking pairs naturally with raid cards and launch alerts."],
+      ["Risk reminder", "Buy activity can reverse fast, especially on fresh memecoins."]
+    ],
+    faqs: [
+      ["What is a pump.fun buy tracker bot?", "It is a bot workflow that surfaces buy activity for pump.fun-style launches in Telegram."],
+      ["Does SlimeWire support pump.fun launch workflows?", "Yes. SlimeWire has pump.fun scanner, launch alert, terminal, raid, and buy tracking pages."],
+      ["Can buy tracking help launch visibility?", "It can help communities see activity, but it does not guarantee price movement."],
+      ["Should users trade only from buy posts?", "No. Users should review chart, liquidity, risk notes, and wallet prompts."]
+    ],
+    related: ["pump-fun-terminal", "pump-fun-launch-platform", "telegram-buy-tracker-bot", "telegram-raid-bot-with-buy-tracker"]
+  },
+  {
+    slug: "solana-launch-group-bot",
+    priority: "0.82",
+    title: "Solana Launch Group Bot - Telegram Launch Alerts, Raids, Buy Tracking and Proof",
+    description: "SlimeWire's Solana launch group bot workflow helps launch teams use Telegram alerts, raid cards, buy tracking, token scans, proof links, and terminal handoff.",
+    h1: "Solana launch group bot",
+    intro: "Launch groups need coordinated attention, but the best workflow is not just hype. SlimeWire connects launch alerts, raids, buy tracking, scans, proof, and chart review into one ecosystem.",
+    cards: [
+      ["Launch alerts", "Announce and route launch attention into Telegram and SlimeWire pages."],
+      ["Raid cards", "Use group-friendly raid posts with progress and links."],
+      ["Buy tracking", "Surface buy context around the launch token when enabled."],
+      ["CA scans", "Let users inspect token context instead of blindly following a post."],
+      ["Proof pages", "Calls, receipts, and outcomes can be revisited after the launch."],
+      ["Terminal handoff", "Charts, txns, wallet context, PnL, and launch tools live in the web terminal."]
+    ],
+    faqs: [
+      ["What is a Solana launch group bot?", "It is a Telegram bot workflow for launch alerts, raids, buy tracking, token scans, proof links, and community coordination."],
+      ["Can SlimeWire help launch teams?", "Yes. SlimeWire documents launch rooms, raid tools, buy tracking, scans, proof pages, and terminal handoff."],
+      ["Does a launch bot guarantee buyers?", "No. It can improve visibility and workflow, but it cannot guarantee market results."],
+      ["Why use one bot for launch workflows?", "One modular bot can keep launch alerts, scans, raids, and buy context easier to manage."]
+    ],
+    related: ["launch-on-slimewire-guide", "pump-fun-launch-platform", "solana-launch-bot", "telegram-raid-buy-bot"]
+  },
+  {
+    slug: "telegram-community-trading-bot",
+    priority: "0.8",
+    title: "Telegram Community Trading Bot - Solana Groups, Scans, Alerts and Proof",
+    description: "SlimeWire's Telegram community trading bot workflow supports Solana groups with scans, alerts, buy tracking, raids, moderation, proof, PnL, and terminal links.",
+    h1: "Telegram community trading bot",
+    intro: "Community trading is not just one wallet or one alert. It is the whole group loop: token discovery, scans, calls, buy activity, raids, moderation, proof, and a shared terminal destination.",
+    cards: [
+      ["Group scans", "Turn CAs and tickers into useful token context."],
+      ["Community alerts", "Route launch, token, and proof updates into Telegram."],
+      ["Buy and raid modules", "Track buy activity and coordinate social attention when admins enable modules."],
+      ["Moderation", "Rose-style controls help keep the room usable while trading conversations move fast."],
+      ["Proof and PnL", "Receipts and performance context make community claims easier to judge."],
+      ["Terminal destination", "The web terminal gives users a deeper place to inspect charts and wallet state."]
+    ],
+    faqs: [
+      ["What is a Telegram community trading bot?", "It is a bot workflow for trading communities that need scans, alerts, group tools, buy context, moderation, proof, and terminal links."],
+      ["Is SlimeWire only for solo traders?", "No. SlimeWire also targets Telegram groups, launch teams, callers, and communities."],
+      ["Can groups use only scanning and moderation?", "Yes. SlimeWire's group workflows are modular by design."],
+      ["Does community activity guarantee a winner?", "No. Community signals are context, not certainty."]
+    ],
+    related: ["solana-trading-bot-for-groups", "crypto-telegram-group-bot", "all-in-one-telegram-crypto-bot", "proof-of-calls"]
+  },
+  {
+    slug: "telegram-coin-launch-bot",
+    priority: "0.8",
+    title: "Telegram Coin Launch Bot - Solana Launch Alerts, Scans, Raids and Buy Context",
+    description: "SlimeWire's Telegram coin launch bot workflow helps Solana teams connect launch alerts, token scans, raid cards, buy tracking, proof pages, and web terminal handoff.",
+    h1: "Telegram coin launch bot",
+    intro: "Launch teams often search for a Telegram coin launch bot, but the real need is a connected workflow: alert the room, scan the token, route to charts, track activity, and preserve proof.",
+    cards: [
+      ["Launch announcement", "Use Telegram to route early attention to the coin and the SlimeWire terminal."],
+      ["Token scan", "CA scans give users a cleaner token context path."],
+      ["Raid tools", "Raid cards can coordinate community attention without a separate one-off bot."],
+      ["Buy context", "Buy tracking can sit beside launch alerts when enabled."],
+      ["Proof trail", "Proof pages and receipts help teams show what happened."],
+      ["Risk clarity", "Launch visibility is not a promise of price action."]
+    ],
+    faqs: [
+      ["What is a Telegram coin launch bot?", "It is a bot workflow for announcing, coordinating, scanning, and routing attention around a crypto token launch."],
+      ["Does SlimeWire support coin launch workflows?", "Yes. SlimeWire pages cover launch alerts, raid cards, scans, buy tracking, proof, and terminal handoff."],
+      ["Can it be used with Solana launches?", "Yes. SlimeWire is focused on Solana memecoin and Telegram launch workflows."],
+      ["Does it guarantee launch success?", "No. It organizes visibility and workflow, not market outcomes."]
+    ],
+    related: ["solana-launch-group-bot", "memecoin-launch-tools", "solana-launch-scanner", "pump-fun-launch-alerts"]
   }
 ];
 
