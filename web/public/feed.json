@@ -21,11 +21,53 @@
       "content_text": "Ready-to-share SlimeWire links, posts, and messaging for Solana traders, Telegram groups, launch teams, and crypto communities."
     },
     {
+      "id": "https://www.slimewire.org/learn",
+      "url": "https://www.slimewire.org/learn",
+      "title": "Learn Solana Trading Bots, Terminals, Rug Checks and Memecoin Tools",
+      "summary": "Learn how Solana Telegram bots, trading terminals, rug checkers, copy trading, volume tools, launch tools, TP/SL, slippage, and memecoin scanners work.",
+      "content_text": "Learn how Solana Telegram bots, trading terminals, rug checkers, copy trading, volume tools, launch tools, TP/SL, slippage, and memecoin scanners work."
+    },
+    {
+      "id": "https://www.slimewire.org/glossary",
+      "url": "https://www.slimewire.org/glossary",
+      "title": "Solana Memecoin Glossary - MC, Liquidity, Slippage, TP/SL and Rug Checks",
+      "summary": "A plain-English Solana memecoin glossary for MC, liquidity, slippage, take profit, stop loss, Token-2022, pump.fun, dev wallets, and rug checks.",
+      "content_text": "A plain-English Solana memecoin glossary for MC, liquidity, slippage, take profit, stop loss, Token-2022, pump.fun, dev wallets, and rug checks."
+    },
+    {
+      "id": "https://www.slimewire.org/updates",
+      "url": "https://www.slimewire.org/updates",
+      "title": "SlimeWire Updates - Solana Trading Terminal and Telegram Bot Changelog",
+      "summary": "Indexable SlimeWire updates for the Solana trading terminal, Telegram bot, discovery feeds, share kit, AI resource hub, and tool pages.",
+      "content_text": "Indexable SlimeWire updates for the Solana trading terminal, Telegram bot, discovery feeds, share kit, AI resource hub, and tool pages."
+    },
+    {
       "id": "https://www.slimewire.org/solana-trading-terminal",
       "url": "https://www.slimewire.org/solana-trading-terminal",
       "title": "Solana Trading Terminal - Live Pairs, Charts, Wallets and PnL",
       "summary": "SlimeWire is a Solana trading terminal for live memecoin pairs, Dex charts, wallet balances, positions, PnL, protected buys, copy trading, and Telegram alerts.",
       "content_text": "SlimeWire is a Solana trading terminal for live memecoin pairs, Dex charts, wallet balances, positions, PnL, protected buys, copy trading, and Telegram alerts."
+    },
+    {
+      "id": "https://www.slimewire.org/best-pump-fun-tools",
+      "url": "https://www.slimewire.org/best-pump-fun-tools",
+      "title": "Best pump.fun Tools - Scanners, Bots, Charts and Safety Checks",
+      "summary": "What to look for in the best pump.fun tools: fresh launch discovery, Telegram alerts, token safety checks, charts, quick buys, TP/SL, and wallet controls.",
+      "content_text": "What to look for in the best pump.fun tools: fresh launch discovery, Telegram alerts, token safety checks, charts, quick buys, TP/SL, and wallet controls."
+    },
+    {
+      "id": "https://www.slimewire.org/best-telegram-crypto-bots",
+      "url": "https://www.slimewire.org/best-telegram-crypto-bots",
+      "title": "Best Telegram Crypto Bots - Solana Trading, Scans and Group Alerts",
+      "summary": "Compare Telegram crypto bots by token scans, Solana trading flows, group alerts, chart links, wallet controls, safety context, and PnL tracking.",
+      "content_text": "Compare Telegram crypto bots by token scans, Solana trading flows, group alerts, chart links, wallet controls, safety context, and PnL tracking."
+    },
+    {
+      "id": "https://www.slimewire.org/best-solana-rug-checkers",
+      "url": "https://www.slimewire.org/best-solana-rug-checkers",
+      "title": "Best Solana Rug Checkers - Token Safety Scanner Checklist",
+      "summary": "What to look for in the best Solana rug checkers: liquidity, holder concentration, authority notes, socials, metadata, market data, chart context, and warnings.",
+      "content_text": "What to look for in the best Solana rug checkers: liquidity, holder concentration, authority notes, socials, metadata, market data, chart context, and warnings."
     }
   ]
 }

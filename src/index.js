@@ -3986,11 +3986,17 @@ const SEO_PAGES = [
   { path: "/", priority: "1.0", changefreq: "hourly" },
   { path: "/resources", priority: "0.9", changefreq: "weekly" },
   { path: "/share", priority: "0.75", changefreq: "weekly" },
+  { path: "/learn", priority: "0.82", changefreq: "weekly" },
+  { path: "/glossary", priority: "0.78", changefreq: "weekly" },
+  { path: "/updates", priority: "0.7", changefreq: "weekly" },
   { path: "/solana-telegram-bot", priority: "0.9", changefreq: "weekly" },
   { path: "/best-solana-trading-bots", priority: "0.85", changefreq: "weekly" },
   { path: "/solana-trading-terminal", priority: "0.85", changefreq: "weekly" },
   { path: "/solana-memecoin-tools", priority: "0.85", changefreq: "weekly" },
   { path: "/top-solana-trading-sites", priority: "0.85", changefreq: "weekly" },
+  { path: "/best-pump-fun-tools", priority: "0.8", changefreq: "weekly" },
+  { path: "/best-telegram-crypto-bots", priority: "0.8", changefreq: "weekly" },
+  { path: "/best-solana-rug-checkers", priority: "0.8", changefreq: "weekly" },
   { path: "/pump-fun-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-volume-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-copy-trading-bot", priority: "0.8", changefreq: "weekly" },
@@ -4019,6 +4025,18 @@ const SEO_PAGE_META = {
     title: "Share SlimeWire - Solana Trading Bot and Terminal",
     description: "Ready-to-share SlimeWire links, posts, and messaging for Solana traders, Telegram groups, launch teams, and crypto communities."
   },
+  "/learn": {
+    title: "Learn Solana Trading Bots, Terminals, Rug Checks and Memecoin Tools",
+    description: "Learn how Solana Telegram bots, trading terminals, rug checkers, copy trading, volume tools, launch tools, TP/SL, slippage, and memecoin scanners work."
+  },
+  "/glossary": {
+    title: "Solana Memecoin Glossary - MC, Liquidity, Slippage, TP/SL and Rug Checks",
+    description: "A plain-English Solana memecoin glossary for MC, liquidity, slippage, take profit, stop loss, Token-2022, pump.fun, dev wallets, and rug checks."
+  },
+  "/updates": {
+    title: "SlimeWire Updates - Solana Trading Terminal and Telegram Bot Changelog",
+    description: "Indexable SlimeWire updates for the Solana trading terminal, Telegram bot, discovery feeds, share kit, AI resource hub, and tool pages."
+  },
   "/solana-telegram-bot": {
     title: "Solana Telegram Bot - SlimeWire Trading Bot",
     description: "Use @SlimeWiredBot for Solana token scans, Telegram alerts, quick trading flows, group tools, and SlimeWire terminal handoff."
@@ -4038,6 +4056,18 @@ const SEO_PAGE_META = {
   "/top-solana-trading-sites": {
     title: "Top Solana Trading Sites - What to Look For in a Memecoin Terminal",
     description: "A practical guide to top Solana trading sites and what traders should look for: live pairs, charts, Telegram alerts, rug checks, wallet controls, and PnL."
+  },
+  "/best-pump-fun-tools": {
+    title: "Best pump.fun Tools - Scanners, Bots, Charts and Safety Checks",
+    description: "What to look for in the best pump.fun tools: fresh launch discovery, Telegram alerts, token safety checks, charts, quick buys, TP/SL, and wallet controls."
+  },
+  "/best-telegram-crypto-bots": {
+    title: "Best Telegram Crypto Bots - Solana Trading, Scans and Group Alerts",
+    description: "Compare Telegram crypto bots by token scans, Solana trading flows, group alerts, chart links, wallet controls, safety context, and PnL tracking."
+  },
+  "/best-solana-rug-checkers": {
+    title: "Best Solana Rug Checkers - Token Safety Scanner Checklist",
+    description: "What to look for in the best Solana rug checkers: liquidity, holder concentration, authority notes, socials, metadata, market data, chart context, and warnings."
   },
   "/pump-fun-bot": {
     title: "Pump.fun Telegram Bot - Pump Fun Sniper Bot by SlimeWire",
@@ -5447,6 +5477,18 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "share.html");
       return;
     }
+    if (request.method === "GET" && requestUrl.pathname === "/learn") {
+      await serveStaticHtmlPage(response, "learn.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/glossary") {
+      await serveStaticHtmlPage(response, "glossary.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/updates") {
+      await serveStaticHtmlPage(response, "updates.html");
+      return;
+    }
     if (request.method === "GET" && requestUrl.pathname === "/best-solana-trading-bots") {
       await serveStaticHtmlPage(response, "best-solana-trading-bots.html");
       return;
@@ -5461,6 +5503,18 @@ function startHealthServer() {
     }
     if (request.method === "GET" && requestUrl.pathname === "/top-solana-trading-sites") {
       await serveStaticHtmlPage(response, "top-solana-trading-sites.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/best-pump-fun-tools") {
+      await serveStaticHtmlPage(response, "best-pump-fun-tools.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/best-telegram-crypto-bots") {
+      await serveStaticHtmlPage(response, "best-telegram-crypto-bots.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/best-solana-rug-checkers") {
+      await serveStaticHtmlPage(response, "best-solana-rug-checkers.html");
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/pump-fun-bot") {
