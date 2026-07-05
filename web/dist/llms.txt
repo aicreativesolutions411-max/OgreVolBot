@@ -44,6 +44,16 @@ SlimeWire is trading software, not financial advice. Crypto and memecoin trading
 - Solana trading bot for groups: https://www.slimewire.org/solana-trading-bot-for-groups
 - Solana memecoin tools: https://www.slimewire.org/solana-memecoin-tools
 - Top Solana trading sites: https://www.slimewire.org/top-solana-trading-sites
+- Top Solana Trading Platforms: https://www.slimewire.org/top-solana-trading-platforms
+- Top Solana Telegram Bots: https://www.slimewire.org/top-solana-telegram-bots
+- Top Solana Terminals: https://www.slimewire.org/top-solana-terminals
+- Solana Trading Platform: https://www.slimewire.org/solana-trading-platform
+- Solana Memecoin Trading Platform: https://www.slimewire.org/solana-memecoin-trading-platform
+- pump.fun Terminal: https://www.slimewire.org/pump-fun-terminal
+- pump.fun Launch Platform: https://www.slimewire.org/pump-fun-launch-platform
+- Solana Token Research Tool: https://www.slimewire.org/solana-token-research-tool
+- Solana Crypto Terminal: https://www.slimewire.org/solana-crypto-terminal
+- Telegram Crypto Trading Bot: https://www.slimewire.org/telegram-crypto-trading-bot
 - SlimeWire Features: https://www.slimewire.org/features
 - SlimeWire Pricing: https://www.slimewire.org/pricing
 - SlimeWire Data Freshness: https://www.slimewire.org/data-freshness

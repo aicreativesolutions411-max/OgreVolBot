@@ -4042,6 +4042,16 @@ const SEO_PAGES = [
   { path: "/solana-copy-trading-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-sniper-bot", priority: "0.8", changefreq: "weekly" },
   { path: "/solana-rug-checker", priority: "0.8", changefreq: "weekly" },
+  { path: "/top-solana-trading-platforms", priority: "0.84", changefreq: "weekly" },
+  { path: "/top-solana-telegram-bots", priority: "0.84", changefreq: "weekly" },
+  { path: "/top-solana-terminals", priority: "0.84", changefreq: "weekly" },
+  { path: "/solana-trading-platform", priority: "0.82", changefreq: "weekly" },
+  { path: "/solana-memecoin-trading-platform", priority: "0.84", changefreq: "weekly" },
+  { path: "/pump-fun-terminal", priority: "0.82", changefreq: "weekly" },
+  { path: "/pump-fun-launch-platform", priority: "0.82", changefreq: "weekly" },
+  { path: "/solana-token-research-tool", priority: "0.8", changefreq: "weekly" },
+  { path: "/solana-crypto-terminal", priority: "0.8", changefreq: "weekly" },
+  { path: "/telegram-crypto-trading-bot", priority: "0.82", changefreq: "weekly" },
   { path: "/features", priority: "0.84", changefreq: "monthly" },
   { path: "/pricing", priority: "0.7", changefreq: "monthly" },
   { path: "/data-freshness", priority: "0.72", changefreq: "monthly" },
@@ -4300,6 +4310,46 @@ const SEO_PAGE_META = {
   "/solana-rug-checker": {
     title: "Solana Rug Checker - Token Safety Scanner by SlimeWire",
     description: "Use SlimeWire's Solana rug checker and token safety scanner to review liquidity, holders, market data, authority notes, and visible risks before trading."
+  },
+  "/top-solana-trading-platforms": {
+    title: "Top Solana Trading Platforms - Bots, Terminals, Scanners and Alerts",
+    description: "A practical guide to top Solana trading platforms and what traders should compare: live pairs, Telegram bots, scans, charts, wallet controls, proof, PnL, and launch tools."
+  },
+  "/top-solana-telegram-bots": {
+    title: "Top Solana Telegram Bots - Scans, Alerts, Buy Flow and Group Tools",
+    description: "Compare top Solana Telegram bots by token scans, group alerts, chart links, wallet handoff, quick buy flows, receipts, proof, and launch visibility."
+  },
+  "/top-solana-terminals": {
+    title: "Top Solana Terminals - Live Pairs, Dex Charts, Wallets and PnL",
+    description: "A guide to top Solana terminals for live pairs, Dex chart review, token scans, wallet state, positions, PnL, alerts, and Telegram trading workflows."
+  },
+  "/solana-trading-platform": {
+    title: "Solana Trading Platform - Terminal, Telegram Bot, Scans and PnL",
+    description: "SlimeWire is a Solana trading platform for memecoin workflows: live pairs, Telegram scans, Dex charts, wallet context, alerts, positions, PnL, proof, and launch tools."
+  },
+  "/solana-memecoin-trading-platform": {
+    title: "Solana Memecoin Trading Platform - Fresh Pairs, Telegram and Proof",
+    description: "SlimeWire is a Solana memecoin trading platform for fresh pairs, pump.fun style launches, token scans, Dex charts, Telegram alerts, wallet context, proof, and PnL."
+  },
+  "/pump-fun-terminal": {
+    title: "pump.fun Terminal - Fresh Launch Scanner, Charts, Alerts and Presets",
+    description: "Use SlimeWire as a pump.fun terminal workflow for fresh launch scanning, chart handoff, Telegram alerts, token context, presets, proof, and PnL review."
+  },
+  "/pump-fun-launch-platform": {
+    title: "pump.fun Launch Platform Workflow - Alerts, Raids, Proof and Trader Handoff",
+    description: "SlimeWire gives launch teams a pump.fun launch platform workflow with Telegram alerts, raid cards, token scans, chart links, proof pages, and terminal handoff."
+  },
+  "/solana-token-research-tool": {
+    title: "Solana Token Research Tool - Scanner, Dex Chart, Alerts and Risk Context",
+    description: "Use SlimeWire as a Solana token research tool for contract scans, market cap, liquidity, Dex charts, transaction flow, Telegram alerts, wallet context, and risk notes."
+  },
+  "/solana-crypto-terminal": {
+    title: "Solana Crypto Terminal - Live Pairs, Token Scans, Telegram and Wallet Context",
+    description: "SlimeWire is a Solana crypto terminal workflow for live pairs, token scans, Dex charts, Telegram alerts, wallet state, positions, PnL, proof, and launch tools."
+  },
+  "/telegram-crypto-trading-bot": {
+    title: "Telegram Crypto Trading Bot - Solana Scans, Alerts, Groups and Terminal Handoff",
+    description: "SlimeWire's Telegram crypto trading bot workflow helps Solana users scan tokens, share alerts, manage group context, open charts, review proof, and hand off to the web terminal."
   },
   "/features": {
     title: "SlimeWire Features - Solana Terminal, Telegram Bot, Alerts and Launch Tools",
@@ -5958,6 +6008,46 @@ function startHealthServer() {
       return;
     }
     // Press / media kit — brand assets + boilerplate + the full feature suite (for listings/journalists).
+    if (request.method === "GET" && requestUrl.pathname === "/top-solana-trading-platforms") {
+      await serveStaticHtmlPage(response, "top-solana-trading-platforms.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/top-solana-telegram-bots") {
+      await serveStaticHtmlPage(response, "top-solana-telegram-bots.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/top-solana-terminals") {
+      await serveStaticHtmlPage(response, "top-solana-terminals.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-trading-platform") {
+      await serveStaticHtmlPage(response, "solana-trading-platform.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-memecoin-trading-platform") {
+      await serveStaticHtmlPage(response, "solana-memecoin-trading-platform.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/pump-fun-terminal") {
+      await serveStaticHtmlPage(response, "pump-fun-terminal.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/pump-fun-launch-platform") {
+      await serveStaticHtmlPage(response, "pump-fun-launch-platform.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-token-research-tool") {
+      await serveStaticHtmlPage(response, "solana-token-research-tool.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-crypto-terminal") {
+      await serveStaticHtmlPage(response, "solana-crypto-terminal.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/telegram-crypto-trading-bot") {
+      await serveStaticHtmlPage(response, "telegram-crypto-trading-bot.html");
+      return;
+    }
     if (request.method === "GET" && requestUrl.pathname === "/features") {
       await serveStaticHtmlPage(response, "features.html");
       return;
