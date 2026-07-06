@@ -3895,6 +3895,8 @@ const MOBILE_WALLET_CONNECT_TTL_MS = 20 * 60 * 1000;
 const WEB_STATIC_DIR = path.resolve(__dirname, "..", "web", "dist");
 // SlimeWire PFP maker: the built static dir holds the branded frame stickers (pfp/frames/*.png).
 const PFP_FRAME_DIR = path.join(WEB_STATIC_DIR, "pfp", "frames");
+// Rotating Higgs backgrounds for the X scan card (pfp/xcard/*.png) — makes replies POP.
+const X_CARD_BG_DIR = path.join(WEB_STATIC_DIR, "pfp", "xcard");
 // Accept only a base64 image data URL, size-capped, and return the raw bytes (or null). Never trusts the
 // declared MIME beyond routing — sharp validates the actual pixels downstream.
 function decodePfpImageDataUrl(dataUrl) {
@@ -30624,6 +30626,28 @@ async function xFetchLogo(url) {
     return buf.length > 100 && buf.length < 6_000_000 ? buf : null;
   } catch { return null; }
 }
+// Coin logo (PFP) for the card — DexScreener sources first, then pump.fun. Tries the scan's cached fields,
+// then re-fetches DexScreener token-info + pump.fun metadata as a fallback so the logo almost always fills.
+async function xCoinLogo(scan, mint) {
+  const { meta, best, bonding } = scan || {};
+  const tryList = async (urls) => { for (const u of urls.filter(Boolean)) { const b = await xFetchLogo(u).catch(() => null); if (b) return b; } return null; };
+  // 1) whatever the scan already resolved (Dex `info.imageUrl` / pump image)
+  let logo = await tryList([meta?.icon, meta?.image, best?.info?.imageUrl, bonding?.image, bonding?.image_uri, bonding?.imageUri, bonding?.metadata?.image]);
+  if (logo) return logo;
+  // 2) DexScreener token-info re-fetch
+  try {
+    const dx = await fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeoutMs: 4000 }).catch(() => null);
+    logo = await tryList((Array.isArray(dx?.pairs) ? dx.pairs : []).map((p) => p?.info?.imageUrl));
+    if (logo) return logo;
+  } catch { /* fall through to pump */ }
+  // 3) pump.fun metadata (image / IPFS)
+  try {
+    const pf = await getPumpFunTokenMetadata(mint).catch(() => null);
+    logo = await tryList([pf?.image, pf?.image_uri, pf?.imageUri]);
+    if (logo) return logo;
+  } catch { /* no logo → the slime ring alone still looks intentional */ }
+  return null;
+}
 function extractMintsFromText(text) {
   const out = [];
   // Scan EVERY base58 run in the text — catches a CA whether it's bare or embedded in a dexscreener /
@@ -30661,25 +30685,28 @@ async function buildXScanReply(mint) {
   const symbol = String(meta?.symbol || bonding?.symbol || "").slice(0, 12);
   const name = String(meta?.name || bonding?.name || "").slice(0, 40);
   const mc = Number(meta?.marketCap || bonding?.usd_market_cap || bonding?.marketCap || 0);
-  const liq = Number(best?.liquidity?.usd || 0);
+  const liq = Number(best?.liquidity?.usd || meta?.liquidityUsd || bonding?.liquidityUsd || bonding?.virtual_sol_reserves && (Number(bonding.virtual_sol_reserves) / 1e9) * (Number(solUsdPriceCache?.value) || 0) || 0);
   if (!symbol && !(mc > 0)) return null;
   const createdAt = Number(best?.pairCreatedAt || 0) || (Number(bonding?.created_timestamp || 0) * (String(bonding?.created_timestamp || "").length <= 10 ? 1000 : 1));
-  const ageLabel = createdAt > 0 ? xAgeLabel(Date.now() - createdAt) : "—";
+  const ageLabel = createdAt > 0 ? xAgeLabel(Date.now() - createdAt) : "new";
   const rail = xRailLabel(mint, best, bonding);
   const { verdict, tone } = xVerdict(shield, rug, liq, mc);
   const mcLabel = mc > 0 ? scanFmtMoney(mc) : "—";
   const liqLabel = liq > 0 ? scanFmtMoney(liq) : "—";
+  const ch1 = Number(meta?.priceChange?.h1);
+  const changeLabel = Number.isFinite(ch1) ? `${ch1 >= 0 ? "+" : ""}${ch1.toFixed(1)}%` : "";
+  const changeTone = Number.isFinite(ch1) ? (ch1 >= 0 ? "up" : "down") : "";
   const links = slimewireTokenLinks(mint);
   const text = [
     `$${symbol || "coin"}${name ? " · " + name : ""}`,
-    `MC ${mcLabel} · Liq ${liqLabel} · Age ${ageLabel} · ${rail}`,
+    `MC ${mcLabel} · Liq ${liqLabel} · Age ${ageLabel}${changeLabel ? " · 1H " + changeLabel : ""} · ${rail}`,
     `${tone === "danger" ? "⛔" : tone === "warn" ? "⚠️" : "✅"} ${verdict}`,
     `Full scan 👉 ${links.site}`
   ].join("\n").slice(0, 279);
   let mediaBuffer = null;
   try {
-    const logoBuffer = await xFetchLogo(meta?.icon || meta?.image || bonding?.image || bonding?.image_uri);
-    mediaBuffer = await renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel: rail, verdict, verdictTone: tone, logoBuffer });
+    const logoBuffer = await xCoinLogo(scan, mint);   // DexScreener logo first, else pump.fun
+    mediaBuffer = await renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel: rail, verdict, verdictTone: tone, changeLabel, changeTone, logoBuffer, bgDir: X_CARD_BG_DIR, seed: symbol || mint });
   } catch { /* text-only is fine if the card render fails */ }
   return { text, mediaBuffer, symbol, mc };
 }
@@ -30775,8 +30802,8 @@ async function buildXRugReply(mint) {
   ].filter(Boolean).join("\n").slice(0, 279);
   let mediaBuffer = null;
   try {
-    const logoBuffer = await xFetchLogo(meta?.icon || meta?.image || bonding?.image || bonding?.image_uri);
-    mediaBuffer = await renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel: rail, verdict: facts.verdict, verdictTone: facts.tone, logoBuffer });
+    const logoBuffer = await xCoinLogo(scan, mint);   // DexScreener logo first, else pump.fun
+    mediaBuffer = await renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel: rail, verdict: facts.verdict, verdictTone: facts.tone, logoBuffer, bgDir: X_CARD_BG_DIR, seed: symbol || mint });
   } catch { /* text-only is fine */ }
   return { text, mediaBuffer, symbol, mc };
 }
