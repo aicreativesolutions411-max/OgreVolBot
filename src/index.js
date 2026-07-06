@@ -71,6 +71,7 @@ import {
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
 import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES } from "./lib/pfp.js";
+import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
 import { xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle } from "./lib/xClient.js";
 import { renderXScanCard } from "./lib/xCard.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
@@ -3900,6 +3901,21 @@ function decodePfpImageDataUrl(dataUrl) {
   const m = String(dataUrl || "").match(/^data:image\/(?:png|jpe?g|webp|gif|bmp);base64,([A-Za-z0-9+/=]+)$/);
   if (!m) return null;
   try { const buf = Buffer.from(m[1], "base64"); return buf.length > 64 && buf.length < 9_000_000 ? buf : null; } catch { return null; }
+}
+// Global budget rate-limit for the paid AI-Slime model — protects the fal.ai spend from abuse.
+const _aiPfpHits = [];
+function aiPfpRateOk() {
+  const now = Date.now();
+  while (_aiPfpHits.length && now - _aiPfpHits[0] > 60_000) _aiPfpHits.shift();
+  if (_aiPfpHits.length >= Math.max(1, Number(process.env.AI_PFP_MAX_PER_MIN || 20))) return false;
+  _aiPfpHits.push(now);
+  return true;
+}
+// Stamp a subtle SlimeWire wordmark on the AI art (keeps the art, adds the brand on every share).
+async function brandAiPfp(buf) {
+  const size = 1024;
+  const badge = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}"><rect x="${size - 300}" y="${size - 66}" width="270" height="44" rx="22" fill="#04110a" fill-opacity="0.8" stroke="#54e000" stroke-width="2"/><text x="${size - 165}" y="${size - 36}" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="22" letter-spacing="3" fill="#b6ff5a">SLIMEWIRE</text></svg>`);
+  return sharp(buf).resize(size, size, { fit: "cover", position: "attention" }).composite([{ input: badge, top: 0, left: 0 }]).png().toBuffer();
 }
 const WEB_AVATAR_MAX_BYTES = 160 * 1024;
 let lastKeepAliveStatus = {
@@ -8319,6 +8335,27 @@ async function handleWebApiRequest(request, response, requestUrl) {
         sendWebJson(request, response, 200, { ok: true, results: rendered.map((r) => ({ id: r.id, label: r.label, png: `data:image/png;base64,${r.png.toString("base64")}` })) });
       } catch {
         sendWebJson(request, response, 400, { ok: false, error: "That image didn't work — try another (PNG/JPG, under ~8MB)." });
+      }
+      return;
+    }
+    // ✨ AI Slime — the custom effect. Public; guarded by a budget rate-limit (a paid model runs per call).
+    if (request.method === "GET" && pathname === "/api/web/pfp/ai-styles") {
+      sendWebJson(request, response, 200, { ok: true, enabled: aiPfpConfigured(), styles: aiPfpStyles() });
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/pfp/ai") {
+      if (!aiPfpConfigured()) { sendWebJson(request, response, 503, { ok: false, error: "AI Slime isn't enabled yet." }); return; }
+      if (!aiPfpRateOk()) { sendWebJson(request, response, 429, { ok: false, error: "AI Slime is busy — try again in a moment." }); return; }
+      try {
+        const body = await readJsonRequestBody(request, 12_000_000);
+        const src = decodePfpImageDataUrl(body && body.imageDataUrl);
+        if (!src) { sendWebJson(request, response, 400, { ok: false, error: "Send a photo (PNG/JPG) to slime." }); return; }
+        const ai = await aiSlimePfp({ imageDataUrl: body.imageDataUrl, styleId: String(body.style || "") });
+        if (!ai) { sendWebJson(request, response, 503, { ok: false, error: "AI Slime isn't enabled yet." }); return; }
+        const branded = await brandAiPfp(ai).catch(() => ai);
+        sendWebJson(request, response, 200, { ok: true, png: `data:image/png;base64,${branded.toString("base64")}` });
+      } catch (e) {
+        sendWebJson(request, response, Number(e?.statusCode) || 502, { ok: false, error: String(e?.message || "AI Slime failed — try again.").slice(0, 180) });
       }
       return;
     }
@@ -29179,6 +29216,13 @@ async function pfpFrameButtons(activeId, ownerId) {
   for (let i = 0; i < avail.length; i += 2) {
     rows.push(avail.slice(i, i + 2).map((f) => ({ text: (f.id === activeId ? "• " : "") + f.label, callback_data: `pfp:f:${f.id}:${ownerId}` })));
   }
+  // ✨ AI Slime styles (custom repaint) — only when the model is enabled (FAL_KEY set).
+  if (aiPfpConfigured()) {
+    const styles = aiPfpStyles().slice(0, 4);
+    for (let i = 0; i < styles.length; i += 2) {
+      rows.push(styles.slice(i, i + 2).map((s) => ({ text: "✨ " + s.label, callback_data: `pfp:ai:${s.id}:${ownerId}` })));
+    }
+  }
   rows.push([{ text: "🎨 Upload a different pic on the site", url: pfpWebUrl() }]);
   return { inline_keyboard: rows };
 }
@@ -29211,6 +29255,24 @@ async function handlePfpCallback(query, userId) {
   if (!data.startsWith("pfp:")) return false;
   const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
   const ack = (t, alert) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: Boolean(alert) } : {}) }).catch(() => {});
+  // ✨ AI Slime — repaint the tapper's avatar into custom slime art (owner-gated, paid model).
+  const mAi = data.match(/^pfp:ai:([a-z]+):(\d+)$/);
+  if (mAi) {
+    const styleId = mAi[1], ownerId = mAi[2];
+    if (String(userId) !== ownerId) { await ack("Send /pfp to make your own 🐸", true); return true; }
+    if (!aiPfpConfigured()) { await ack("AI Slime isn't enabled yet.", true); return true; }
+    const avatar = await fetchTelegramAvatarBuffer(userId);
+    if (!avatar) { await ack("Couldn't load your avatar.", true); return true; }
+    await ack("✨ Painting you in slime… ~10s");
+    try {
+      const png = await sharp(avatar).png().toBuffer();
+      const ai = await aiSlimePfp({ imageDataUrl: `data:image/png;base64,${png.toString("base64")}`, styleId });
+      if (!ai) { await telegram("sendMessage", { chat_id: chatId, text: "AI Slime isn't enabled yet." }).catch(() => {}); return true; }
+      const branded = await brandAiPfp(ai).catch(() => ai);
+      await sendPhoto(chatId, "slimewire-ai-pfp.png", branded, "✨ <b>Your AI SlimeWire PFP</b> — save it &amp; set it as your profile pic.", await pfpFrameButtons(null, userId), "HTML");
+    } catch (e) { await telegram("sendMessage", { chat_id: chatId, text: `AI Slime failed: ${String(e?.message || "try again").slice(0, 120)}` }).catch(() => {}); }
+    return true;
+  }
   const m = data.match(/^pfp:f:([a-z]+):(\d+)$/);
   if (!m) { await ack(); return true; }
   const frameId = m[1], ownerId = m[2];
@@ -30474,8 +30536,10 @@ async function xReplyPollTick() {
   for (const k of Object.keys(state.seen)) if (now - Number(state.seen[k]) > 3 * 86_400_000) delete state.seen[k];
   state.posts = state.posts.filter((t) => now - Number(t) < 3_600_000);
   const auto = xReplyAuto();
-  const maxPerHour = Math.max(1, Number(process.env.X_REPLY_MAX_PER_HOUR || 8));
-  const minGapMs = Math.max(15_000, Number(process.env.X_REPLY_MIN_GAP_MS || 90_000));
+  // Owner wants it to reply freely (test account, ban risk accepted). Defaults are near-unrestricted; a
+  // tiny min-gap only avoids hammering X's endpoint in the same instant. Tighten via env if ever needed.
+  const maxPerHour = Math.max(1, Number(process.env.X_REPLY_MAX_PER_HOUR || 60));
+  const minGapMs = Math.max(3_000, Number(process.env.X_REPLY_MIN_GAP_MS || 8_000));
   mentions.sort((a, b) => (a.createdAtMs || 0) - (b.createdAtMs || 0));
   for (const m of mentions) {
     if (state.seen[m.id]) continue;

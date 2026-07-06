@@ -1823,3 +1823,26 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(serverSource, /parseCommandWithArgument\(text, \["xtest", "xstatus"\]\)/); // owner setup check
   assert.match(serverSource, /import \{ xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle \} from "\.\/lib\/xClient\.js"/);
 });
+
+// ---- ✨ AI Slime PFP (fal.ai image-to-image; the real custom slime effect) + looser X throttle --------
+test("AI Slime PFP: fal.ai img2img, rotating styles, budget-guarded, dark until FAL_KEY", () => {
+  const ai = fs.readFileSync(new URL("../src/lib/aiPfp.js", import.meta.url), "utf8");
+  assert.match(ai, /export function aiPfpConfigured/);
+  assert.match(ai, /FAL_KEY/);
+  assert.match(ai, /https:\/\/fal\.run\//);                          // fal.ai sync endpoint
+  assert.match(ai, /image_urls: \[imageDataUrl\]/);                  // image-to-image (repaint the real photo)
+  assert.match(ai, /const AI_STYLES = \[/);                          // rotating style options
+  // server: styles + generate endpoint, DARK until configured, budget rate-limited, branded output
+  assert.match(serverSource, /pathname === "\/api\/web\/pfp\/ai-styles"/);
+  assert.match(serverSource, /pathname === "\/api\/web\/pfp\/ai"/);
+  assert.match(serverSource, /if \(!aiPfpConfigured\(\)\) \{ sendWebJson\(request, response, 503/);  // dark until FAL_KEY
+  assert.match(serverSource, /if \(!aiPfpRateOk\(\)\)/);             // protects the paid budget
+  assert.match(serverSource, /async function brandAiPfp/);           // SlimeWire wordmark on the art
+  assert.match(serverSource, /data\.match\(\/\^pfp:ai:/);            // TG AI callback
+  assert.match(serverSource, /import \{ aiPfpConfigured, aiPfpStyles, aiSlimePfp \} from "\.\/lib\/aiPfp\.js"/);
+  const pfpHtml = fs.readFileSync(new URL("../web/public/pfp.html", import.meta.url), "utf8");
+  assert.match(pfpHtml, /\/api\/web\/pfp\/ai/);
+  assert.match(pfpHtml, /function aiSlime/);
+  // X reply throttle loosened (owner: reply freely, ban risk accepted on the test account)
+  assert.match(functionBody(serverSource, "xReplyPollTick"), /X_REPLY_MAX_PER_HOUR \|\| 60/);
+});
