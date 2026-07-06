@@ -1825,6 +1825,9 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(xc, /export async function xSearchMentions/);
   assert.match(xc, /export async function xReply/);
   assert.match(xc, /SearchTimeline/); assert.match(xc, /CreateTweet/); // read + write ops
+  // mentions come from a UNION of the notifications feed + search (either alone can drop a tag), deduped
+  assert.match(xc, /notificationMentions/);
+  assert.match(functionBody(xc, "xSearchMentions"), /byId/);            // merge-dedupe both sources
   assert.match(xc, /-filter:retweets/);                        // reads OUR mentions
   const xcard = fs.readFileSync(new URL("../src/lib/xCard.js", import.meta.url), "utf8");
   assert.match(xcard, /export async function renderXScanCard/);
@@ -1832,11 +1835,13 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   const tick = functionBody(serverSource, "xReplyPollTick");
   assert.match(tick, /if \(!xReplyEnabled\(\) \|\| !xConfigured\(\)\) return/);   // dark by default
   assert.match(tick, /X_REPLY_MAX_PER_HOUR/); assert.match(tick, /X_REPLY_MIN_GAP_MS/); // throttle
-  assert.match(tick, /if \(state\.seen\[m\.id\]\)/);                             // idempotent (reply once)
-  // HIGH-WATER-MARK: never backtracks to old tags, auto-advances, picks up only NEW mentions
-  assert.match(tick, /state\.lastMentionMs/);                                   // watermark tracked + persisted
-  assert.match(tick, /if \(ts && ts <= highWater\) continue/);                  // skip anything at/behind the mark
-  assert.match(tick, /newHigh = Math\.max\(newHigh, ts\)/);                     // advance forward only
+  assert.match(tick, /if \(state\.seen\[m\.id\]\)/);                             // SEEN-SET is the real dedup (reply once, ever)
+  // FLOOR + SEEN model: the floor is only a backlog boundary, NOT a chasing high-water mark, so an
+  // out-of-order or pacing-deferred mention can never be skipped forever ("fires when it wants to" fix).
+  assert.match(tick, /state\.replyFloorMs/);                                    // backlog floor persisted
+  assert.match(tick, /if \(ts && ts <= floor\)/);                               // ignore only ancient backlog
+  assert.doesNotMatch(tick, /newHigh/);                                         // no per-mention high-water that skipped un-answered tags
+  assert.match(tick, /console\.log\(`\[xreply\]/);                              // observable: logs each tick + reply to Render logs
   assert.match(tick, /if \(auto\)/);                                            // auto vs assist branch
   assert.match(tick, /xReplyOwnerDraft/);                                       // assist = one-tap draft to owner
   assert.match(functionBody(serverSource, "handleXReplyCallback"), /String\(chatId\) !== xReplyOwnerChat\(\)/); // owner-only posting
@@ -1863,6 +1868,13 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(serverSource, /function xRugFacts/);
   assert.match(functionBody(serverSource, "buildXChartReply"), /renderCandleChartPng/);
   assert.match(functionBody(serverSource, "xReplyPollTick"), /xIntentFromText\(m\.text\)/); // intent routed at reply time
+  // ANTI-SPAM: reply text carries NO raw URL (X folds link-replies from cold accounts); the card image
+  // already shows slimewire.org. A rotating link-free CTA also avoids "you already said that" duplicates.
+  assert.match(serverSource, /const X_REPLY_CTAS =/);
+  assert.match(serverSource, /function nextXCta/);
+  assert.doesNotMatch(functionBody(serverSource, "buildXScanReply"), /links\.site/);
+  assert.doesNotMatch(functionBody(serverSource, "buildXChartReply"), /links\.site/);
+  assert.doesNotMatch(functionBody(serverSource, "buildXRugReply"), /links\.site/);
 });
 
 // ---- ✨ AI Slime PFP (fal.ai image-to-image; the real custom slime effect) + looser X throttle --------

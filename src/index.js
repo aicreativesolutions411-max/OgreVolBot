@@ -30731,7 +30731,22 @@ async function resolveXTargetMint(mention) {
   }
   return null;
 }
-// The reply = tight value text (not link-spam) + a branded scan card. Returns null if the mint won't scan.
+// X aggressively de-ranks reply tweets that contain a raw URL — especially from newer accounts (they get
+// folded under "show more replies", which is exactly the "it only shows in the reply tab / feels like a DM"
+// symptom). The scan CARD already has "slimewire.org" baked into the image, so the text link is pure
+// downside. We drop the URL entirely and rotate a natural, link-free call-to-action so identical coins
+// tagged twice don't post byte-identical text (X rejects duplicates with "you already said that").
+let _xFlavorIdx = 0;
+const X_REPLY_CTAS = [
+  "Tag me on any coin for a free scan.",
+  "Drop a CA and I'll scan it.",
+  "Free scan on any Solana coin — just tag me.",
+  "Want another? Reply with a contract.",
+  "I read any Solana CA — tag away.",
+  "Scan anything. No wallet needed."
+];
+function nextXCta() { const s = X_REPLY_CTAS[_xFlavorIdx % X_REPLY_CTAS.length]; _xFlavorIdx++; return s; }
+// The reply = tight value text (no link-spam) + a branded scan card. Returns null if the mint won't scan.
 async function buildXScanReply(mint) {
   const scan = await gatherSlimeScan(mint).catch(() => null);
   if (!scan) return null;
@@ -30750,12 +30765,11 @@ async function buildXScanReply(mint) {
   const ch1 = Number(meta?.priceChange?.h1);
   const changeLabel = Number.isFinite(ch1) ? `${ch1 >= 0 ? "+" : ""}${ch1.toFixed(1)}%` : "";
   const changeTone = Number.isFinite(ch1) ? (ch1 >= 0 ? "up" : "down") : "";
-  const links = slimewireTokenLinks(mint);
   const text = [
     `$${symbol || "coin"}${name ? " · " + name : ""}`,
     `MC ${mcLabel} · Liq ${liqLabel} · Age ${ageLabel}${changeLabel ? " · 1H " + changeLabel : ""} · ${rail}`,
     `${tone === "danger" ? "⛔" : tone === "warn" ? "⚠️" : "✅"} ${verdict}`,
-    `Full scan 👉 ${links.site}`
+    nextXCta()
   ].join("\n").slice(0, 279);
   let mediaBuffer = null;
   try {
@@ -30792,11 +30806,10 @@ async function buildXChartReply(mint) {
   const sub = `SlimeWire${name ? " · " + name : ""}${mcLabel ? " · MC " + mcLabel : ""}`;
   let mediaBuffer = null;
   try { mediaBuffer = await renderCandleChartPng(chartCandles, { title, sub }); } catch { /* text-only fallback */ }
-  const links = slimewireTokenLinks(mint);
   const text = [
     `$${symbol || "coin"} chart ${ch >= 0 ? "🟢 +" : "🔴 "}${ch.toFixed(1)}%`,
     mcLabel ? `MC ${mcLabel} · ${fmtChartPrice(last)}` : fmtChartPrice(last),
-    `Live chart 👉 ${links.site}`
+    nextXCta()
   ].filter(Boolean).join("\n").slice(0, 279);
   return { text, mediaBuffer, symbol, mc };
 }
@@ -30846,13 +30859,12 @@ async function buildXRugReply(mint) {
   const facts = xRugFacts(scan);
   const mcLabel = mc > 0 ? scanFmtMoney(mc) : "—";
   const liqLabel = liq > 0 ? scanFmtMoney(liq) : "—";
-  const links = slimewireTokenLinks(mint);
   const icon = facts.tone === "danger" ? "⛔" : facts.tone === "warn" ? "⚠️" : "✅";
   const detail = [...facts.bad.map((x) => "⛔ " + x), ...facts.warn.map((x) => "⚠️ " + x), ...facts.good.map((x) => "✅ " + x)].slice(0, 3).join("\n");
   const text = [
     `Did $${symbol || "coin"} rug? ${icon} ${facts.verdict}`,
     detail,
-    `Full safety 👉 ${links.site}`
+    nextXCta()
   ].filter(Boolean).join("\n").slice(0, 279);
   let mediaBuffer = null;
   try {
@@ -30892,58 +30904,69 @@ async function xReplyPollTick() {
   const state = await readXReplyState();
   if (!state.fails || typeof state.fails !== "object") state.fails = {};
   const now = Date.now();
-  for (const k of Object.keys(state.seen)) if (now - Number(state.seen[k]) > 3 * 86_400_000) delete state.seen[k];
+  const SEEN_TTL = 3 * 86_400_000;
+  for (const k of Object.keys(state.seen)) if (now - Number(state.seen[k]) > SEEN_TTL) delete state.seen[k];
   state.posts = state.posts.filter((t) => now - Number(t) < 3_600_000);
   const auto = xReplyAuto();
   // Owner wants it to reply freely (test account, ban risk accepted). Defaults are near-unrestricted; a
   // tiny min-gap only avoids hammering X's endpoint in the same instant. Tighten via env if ever needed.
   const maxPerHour = Math.max(1, Number(process.env.X_REPLY_MAX_PER_HOUR || 60));
   const minGapMs = Math.max(2_000, Number(process.env.X_REPLY_MIN_GAP_MS || 4_000));
-  // HIGH-WATER-MARK: only ever handle mentions NEWER than the last one we processed. This auto-advances,
-  // so the bot NEVER backtracks to tags it already answered and never needs a manual reset — it just picks
-  // up whatever's new. First run: start ~10 min back so a very recent tag still gets caught, not the whole history.
-  if (state.lastMentionMs == null) state.lastMentionMs = Date.now() - 10 * 60_000;
-  const highWater = Number(state.lastMentionMs) || 0;
-  let newHigh = highWater;
-  mentions.sort((a, b) => (a.createdAtMs || 0) - (b.createdAtMs || 0));   // oldest first
+  // FLOOR + SEEN-SET (the airtight version). The old design used a high-water mark AS the firing gate and
+  // advanced it to the newest tweet each cycle — so any mention that arrived slightly out of order, or was
+  // deferred by pacing, fell below the mark and was skipped FOREVER even though we never answered it. That
+  // was the "fires when it wants to" bug. Now:
+  //   • `replyFloorMs` is only a backlog boundary ("don't mine ancient history"); it NEVER chases the newest
+  //     tweet, so it can't skip an un-answered mention.
+  //   • the SEEN-SET (`state.seen[id]`) is the real dedup — reply exactly once per tweet, ever.
+  // First run: 15-min catch-up window (grab very recent tags, not the whole timeline). Then the floor only
+  // ever creeps up to stay level with the seen-set's 3-day retention, so the two windows always agree.
+  if (state.replyFloorMs == null) state.replyFloorMs = now - 15 * 60_000;
+  state.replyFloorMs = Math.max(Number(state.replyFloorMs) || 0, now - SEEN_TTL);
+  const floor = Number(state.replyFloorMs) || 0;
+  mentions.sort((a, b) => (a.createdAtMs || 0) - (b.createdAtMs || 0));   // oldest first (answer in order)
+  let posted = 0, skipped = 0;
   for (const m of mentions) {
     const ts = Number(m.createdAtMs) || 0;
-    if (ts && ts <= highWater) continue;                          // already past the watermark → never re-reply
-    if (state.seen[m.id]) { newHigh = Math.max(newHigh, ts); continue; }
+    if (ts && ts <= floor) { skipped++; continue; }               // older than the backlog floor → ignore
+    if (state.seen[m.id]) { skipped++; continue; }                // already answered → never repeat
     const mint = await resolveXTargetMint(m).catch(() => null);   // CA / $ticker in the mention OR the parent post
-    if (!mint) { state.seen[m.id] = now; newHigh = Math.max(newHigh, ts); results.push({ u: m.username, s: "skip", d: "no CA/ticker found" }); continue; }
+    if (!mint) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "no CA/ticker found" }); continue; }
     const intent = xIntentFromText(m.text);                        // did-it-rug? chart? else scan
     const reply = await buildXReply(mint, intent).catch(() => null);
-    if (!reply) { state.seen[m.id] = now; newHigh = Math.max(newHigh, ts); results.push({ u: m.username, s: "skip", d: "coin didn't scan" }); continue; }
+    if (!reply) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "coin didn't scan" }); continue; }
     if (auto) {
       if (state.posts.length >= maxPerHour) { results.push({ u: m.username, s: "defer", d: "hourly cap" }); break; }
       if (state.posts.length && (now - Number(state.posts[state.posts.length - 1]) < minGapMs)) { results.push({ u: m.username, s: "defer", d: "pacing" }); break; }
       const res = await xReply({ inReplyToId: m.id, text: reply.text, mediaBuffer: reply.mediaBuffer });
       if (res.ok) {
-        state.seen[m.id] = now; delete state.fails[m.id]; state.posts.push(Date.now()); newHigh = Math.max(newHigh, ts);
+        state.seen[m.id] = now; delete state.fails[m.id]; state.posts.push(Date.now()); posted++;
         results.push({ u: m.username, s: "replied", d: `${intent === "chart" ? "📈" : intent === "rug" ? "🛡️" : "🔎"} $${reply.symbol}${res.media && res.media !== "card" ? " · " + res.media : " · card"}` });
+        console.log(`[xreply] ✅ @${m.username} ${intent} $${reply.symbol} media=${res.media || "text"} id=${res.id || ""}`);
         await xReplyOwnerNotify(`✅ Auto-replied on X to @${m.username} · ${intent} · $${reply.symbol} (${res.media || "text"})`);
       } else {
-        // Transient failure → don't advance the watermark past this one; break so it retries next cycle (up to 3x).
+        // Transient failure → do NOT mark seen; break so it retries next cycle (the floor won't skip it,
+        // since the floor never advances past un-answered tweets). Give up only after 3 tries or auth death.
         state.fails[m.id] = (Number(state.fails[m.id]) || 0) + 1;
         const giveUp = state.fails[m.id] >= 3 || /not configured|401|unauthor/i.test(res.reason || "");
         results.push({ u: m.username, s: "fail", d: res.reason || "post failed" });
+        console.log(`[xreply] ⚠️ @${m.username} fail: ${res.reason || ""}${giveUp ? " (gave up)" : " (retry)"}`);
         await xReplyOwnerNotify(`⚠️ X reply to @${m.username} failed: ${res.reason || ""}${giveUp ? " (gave up)" : " (will retry)"}`);
-        if (giveUp) { state.seen[m.id] = now; delete state.fails[m.id]; newHigh = Math.max(newHigh, ts); await writeXReplyState(state); await sleep(1200); continue; }
-        break; // keep the watermark below this one so it retries
+        if (giveUp) { state.seen[m.id] = now; delete state.fails[m.id]; await writeXReplyState(state); await sleep(1200); continue; }
+        break; // leave it un-seen so the next tick retries it
       }
       await writeXReplyState(state);
       await sleep(1200);
     } else {
-      state.seen[m.id] = now; newHigh = Math.max(newHigh, ts);
+      state.seen[m.id] = now;
       state.queue[m.id] = { mint, intent, at: now, author: m.username, url: m.permanentUrl };
       await writeXReplyState(state);
       results.push({ u: m.username, s: "draft", d: `$${reply.symbol}` });
       await xReplyOwnerDraft(m, reply);
     }
   }
-  state.lastMentionMs = Math.max(highWater, newHigh);
   await writeXReplyState(state);
+  console.log(`[xreply] tick: ${mentions.length} mentions · replied ${posted} · skipped ${skipped} · floor=${Math.round((now - floor) / 60000)}m ago · seen=${Object.keys(state.seen).length}`);
   return { checked: mentions.length, results };
 }
 async function handleXReplyCallback(query, userId) {
@@ -31031,9 +31054,17 @@ async function handleXPollCommand(chatId, userId) {
   if (r?.error) { await sayHtml(chatId, `⚠️ Poll error: <code>${escapeTelegramHtml(r.error)}</code>`); return; }
   const icon = (s) => s === "replied" ? "✅" : s === "fail" ? "⚠️" : s === "draft" ? "📝" : s === "defer" ? "⏳" : "·";
   const lines = (r?.results || []).map((x) => `${icon(x.s)} @${escapeTelegramHtml(x.u)} — ${x.s}${x.d ? ` <i>(${escapeTelegramHtml(x.d)})</i>` : ""}`);
+  // Diagnostics so you can SEE the machine's state, not guess: how far back it will look, how many tags it
+  // remembers answering, how many posts it's made this hour, and whether it's auto-posting or drafting.
+  const st = await readXReplyState();
+  const now = Date.now();
+  const floorAgo = st.replyFloorMs ? Math.max(0, Math.round((now - Number(st.replyFloorMs)) / 60000)) : null;
+  const posts1h = (Array.isArray(st.posts) ? st.posts : []).filter((t) => now - Number(t) < 3_600_000).length;
+  const diag = `🔎 <i>mode ${xReplyAuto() ? "AUTO" : "assist"} · window ${floorAgo == null ? "—" : floorAgo + "m"} · answered ${Object.keys(st.seen || {}).length} · ${posts1h}/hr</i>`;
   await sayHtml(chatId, [
     `🐦 Checked <b>${r?.checked || 0}</b> recent mentions.`,
-    ...(lines.length ? lines : ["No new mentions to act on — <b>they're all already handled (seen).</b><br>Post a BRAND-NEW tweet tagging @your-handle with a CA, or run <code>/xreset</code> to forget the seen-list and re-reply to the current ones."])
+    diag,
+    ...(lines.length ? lines : ["No NEW mentions to act on — everything current is already answered.<br>Post a brand-new tweet tagging your handle with a CA, or <code>/xreset force</code> to replay the last 30 min."])
   ].join("\n"));
 }
 // Clear the seen/queue state so the bot RE-REPLIES to the mentions it already handled — for testing, so
@@ -31045,14 +31076,14 @@ async function handleXResetCommand(chatId, userId, argument) {
   const cleared = Object.keys(state.seen || {}).length;
   state.seen = {}; state.fails = {}; state.queue = {}; state.posts = [];
   if (force) {
-    // FORCE (testing): wipe the watermark too so the very next poll re-answers the current backlog.
-    state.lastMentionMs = Date.now() - 30 * 60_000;
+    // FORCE (testing): drop the floor 30 min back + clear seen so the very next poll re-answers that backlog.
+    state.replyFloorMs = Date.now() - 30 * 60_000;
     await writeXReplyState(state);
-    await say(chatId, `🧪 Force-reset — cleared ${cleared} seen + throttle + watermark. Re-answering the last ~30 min of mentions now…`);
+    await say(chatId, `🧪 Force-reset — cleared ${cleared} seen + throttle, floor back 30 min. Re-answering recent mentions now…`);
   } else {
-    // DEFAULT: catch up. Push the watermark PAST everything current so it can NEVER backtrack to old tags —
-    // from here it only replies to genuinely NEW mentions, automatically, no reset needed again.
-    state.lastMentionMs = Date.now();
+    // DEFAULT: catch up. Push the floor to NOW so it can never backtrack to old tags — from here it only
+    // answers genuinely NEW mentions, automatically, and never needs a reset again.
+    state.replyFloorMs = Date.now();
     await writeXReplyState(state);
     await say(chatId, `🧹 Caught up — cleared ${cleared} seen + throttle. From now it only replies to NEW tags (never backtracks). Post a fresh tag to test, or /xreset force to replay the last 30 min.`);
     return;

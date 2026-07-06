@@ -200,24 +200,30 @@ async function notificationMentions(count = 20) {
   return out.sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
 }
 export async function xSearchMentions(count = 20) {
-  const handle = await xResolvedHandle();
-  // PRIMARY: notifications feed — instant + complete (the account's actual @mentions).
-  try {
-    const notif = await notificationMentions(count);
-    return notif.filter((t) => t.id && t.username && t.username.toLowerCase() !== handle.toLowerCase());
-  } catch { /* fall back to search */ }
-  // FALLBACK: search (laggy/incomplete) only if notifications is unavailable.
+  const handle = String(await xResolvedHandle()).toLowerCase();
+  const tagRe = new RegExp("@" + handle.replace(/[^a-z0-9_]/g, "") + "\\b", "i");
+  const byId = new Map();
+  const add = (t, requireTag) => {
+    if (!t || !t.id || !t.username) return;
+    if (t.username.toLowerCase() === handle) return;             // never treat our own tweets as mentions
+    // The notifications feed's globalObjects also holds PARENT/quoted tweets that don't tag us — only keep
+    // ones that actually @-mention us so we never reply to a random coin tweet we were merely quoted under.
+    if (requireTag && !tagRe.test(t.text || "")) return;
+    if (!byId.has(t.id)) byId.set(t.id, t);
+  };
+  // SOURCE 1: notifications feed — instant + complete (the account's real @mentions).
+  try { for (const t of await notificationMentions(count)) add(t, true); } catch { /* source 2 still runs */ }
+  // SOURCE 2: search — UNION, not just a fallback. Catches anything notifications dropped (and vice-versa),
+  // so a tag can't slip through a single-source gap. Best-effort; a 4xx here just leaves source 1's results.
   try {
     const j = await gql("GET", "SearchTimeline", { variables: { rawQuery: `@${handle} -filter:retweets`, count: Math.min(40, count), querySource: "typed_query", product: "Latest" }, features: READ_FEATURES });
     const instr = j?.data?.search_by_raw_query?.search_timeline?.timeline?.instructions || [];
-    const out = [];
     for (const ins of instr) for (const entry of (ins.entries || [])) {
       if (!String(entry.entryId || "").startsWith("tweet-")) continue;
-      const t = parseTweetResult(entry.content?.itemContent?.tweet_results?.result);
-      if (t && t.id && t.username.toLowerCase() !== handle.toLowerCase()) out.push(t);
+      add(parseTweetResult(entry.content?.itemContent?.tweet_results?.result), false);
     }
-    return out;
-  } catch { return []; }
+  } catch { /* search is optional */ }
+  return [...byId.values()].sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
 }
 export async function xGetTweet(id) {
   if (!id) return null;
