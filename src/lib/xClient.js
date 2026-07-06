@@ -14,8 +14,27 @@
 // imported at module top — so this optional, fragile feature can never crash the main app's boot. If the
 // dep fails to load, every X call just no-ops.
 let _xti = null;
+// The signing lib uses ArrayBuffer.prototype.transfer() (Node 22+). Render may run older Node, where it's
+// missing → "output.buffer.transfer is not a function". Polyfill it (a plain copy is functionally fine for
+// the lib's hashing) right before the lazy import, so we don't have to bump the whole app's Node version.
+function polyfillArrayBufferTransfer() {
+  for (const name of ["transfer", "transferToFixedLength"]) {
+    if (typeof ArrayBuffer.prototype[name] !== "function") {
+      Object.defineProperty(ArrayBuffer.prototype, name, {
+        value: function (newLength) {
+          const len = newLength === undefined ? this.byteLength : Number(newLength);
+          const out = new ArrayBuffer(len);
+          new Uint8Array(out).set(new Uint8Array(this).subarray(0, Math.min(this.byteLength, len)));
+          return out;
+        },
+        writable: true, configurable: true
+      });
+    }
+  }
+}
 async function loadXti() {
   if (_xti) return _xti;
+  polyfillArrayBufferTransfer();
   _xti = await import("x-client-transaction-id");
   return _xti;
 }
