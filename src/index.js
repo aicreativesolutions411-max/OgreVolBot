@@ -14126,6 +14126,9 @@ async function handleMessage(message, userId) {
     const xclaim = parseCommandWithArgument(text, ["xclaim"]);
     if (xclaim) { await handleXClaimCommand(chatId, message, xclaim.argument, userId); return; }
     if (parseCommandWithArgument(text, ["xtest", "xstatus"])) { await handleXTestCommand(chatId, userId); return; }
+    if (parseCommandWithArgument(text, ["xpoll"])) { await handleXPollCommand(chatId, userId); return; }
+    const xscan = parseCommandWithArgument(text, ["xscan"]);
+    if (xscan) { await handleXScanCommand(chatId, xscan.argument, userId); return; }
   }
   // /room — the group's verifiable trading board (opt-in Room PnL + skin-in-the-game callers).
   if (parseCommandWithArgument(text, ["room", "board", "roompnl"])) { await handleRoomCommand(chatId, message); return; }
@@ -30474,10 +30477,10 @@ async function xFetchLogo(url) {
 }
 function extractMintsFromText(text) {
   const out = [];
-  for (const tok of String(text || "").split(/[\s,]+/)) {
-    const t = tok.replace(/[^1-9A-HJ-NP-Za-km-z]/g, "");
-    if (t.length >= 32 && t.length <= 44 && isLikelySolMint(t) && !out.includes(t)) out.push(t);
-  }
+  // Scan EVERY base58 run in the text — catches a CA whether it's bare or embedded in a dexscreener /
+  // pump.fun / x.com URL (people paste links, not bare mints). Each is byte-validated as a real mint.
+  const runs = String(text || "").match(/[1-9A-HJ-NP-Za-km-z]{32,44}/g) || [];
+  for (const t of runs) if (isLikelySolMint(t) && !out.includes(t)) out.push(t);
   return out;
 }
 // The reply = tight value text (not link-spam) + a branded scan card. Returns null if the mint won't scan.
@@ -30608,11 +30611,41 @@ async function handleXTestCommand(chatId, userId) {
   if (String(chatId) !== xReplyOwnerChat()) { await say(chatId, "This command is owner-only."); return; }
   if (!xConfigured()) { await sayHtml(chatId, "🐦 <b>X not configured.</b> Set <code>X_AUTH_TOKEN</code> + <code>X_CT0</code> (your x.com cookies) on Render, then <code>X_REPLY_ENABLED=true</code>."); return; }
   const me = await xWhoAmI().catch(() => null);
-  if (me && (me.username || me.screenName)) {
-    await sayHtml(chatId, `🐦 <b>Connected as @${escapeTelegramHtml(me.username || me.screenName)}</b>\nMode: <b>${xReplyAuto() ? "AUTO (posts itself)" : "ASSIST (one-tap posting)"}</b> · Replies: <b>${xReplyEnabled() ? "ON" : "OFF"}</b>\nMentions with a CA get a scan reply.`);
-  } else {
+  if (!(me && (me.username || me.screenName))) {
     await sayHtml(chatId, "🐦 <b>Cookies didn't authenticate.</b> They may be expired — grab fresh <code>auth_token</code> + <code>ct0</code> from x.com and update the Render env vars.");
+    return;
   }
+  // Live probe: how many recent @mentions the search sees + how many carry a CA (proves detection works).
+  const mentions = await xSearchMentions(20).catch(() => []);
+  const withCa = mentions.filter((m) => extractMintsFromText(m.text).length).length;
+  await sayHtml(chatId, [
+    `🐦 <b>Connected as @${escapeTelegramHtml(me.username || me.screenName)}</b>`,
+    `Mode: <b>${xReplyAuto() ? "AUTO — posts on X itself" : "ASSIST — I DM you to one-tap post"}</b> · Replies: <b>${xReplyEnabled() ? "ON" : "OFF"}</b>`,
+    `Sees <b>${mentions.length}</b> recent mentions of @${escapeTelegramHtml(me.username || me.screenName)} · <b>${withCa}</b> with a CA`,
+    withCa ? "✅ Detection works. If it's not replying, check Mode/Replies above." : "⚠️ No CA-mentions found yet — tag @that-handle in a tweet WITH a contract, then run /xpoll.",
+    "",
+    "Test now: <code>/xpoll</code> (check mentions immediately) · <code>/xscan &lt;CA&gt;</code> (preview the reply card)."
+  ].join("\n"));
+}
+// Force a mention check right now (no ~2.5-min wait) — great for testing.
+async function handleXPollCommand(chatId, userId) {
+  if (!xReplyOwnerChat() || String(chatId) !== xReplyOwnerChat()) { await say(chatId, "Owner-only — DM /xclaim first."); return; }
+  if (!xReplyEnabled() || !xConfigured()) { await say(chatId, "X replies are OFF or not configured. Set X_REPLY_ENABLED=true + cookies, then /xtest."); return; }
+  await say(chatId, "🐦 Checking mentions now…");
+  await xReplyPollTick().catch(() => {});
+  await say(chatId, xReplyAuto() ? "Done — any new CA-mentions were replied to on X." : "Done — any new CA-mentions were sent here as a draft to post.");
+}
+// Preview the exact reply (card + text) for a CA or a link containing one — proves the pipeline end-to-end.
+async function handleXScanCommand(chatId, argument, userId) {
+  if (!xReplyOwnerChat() || String(chatId) !== xReplyOwnerChat()) { await say(chatId, "Owner-only — DM /xclaim first."); return; }
+  const mints = extractMintsFromText(String(argument || ""));
+  if (!mints.length) { await say(chatId, "Usage: /xscan <CA or a link that contains one>"); return; }
+  await say(chatId, "🐦 Building the reply preview…");
+  const reply = await buildXScanReply(mints[0]).catch(() => null);
+  if (!reply) { await say(chatId, "Couldn't scan that CA — it may be too new or unlisted."); return; }
+  const cap = `🐦 <b>Reply preview</b> for <code>${escapeTelegramHtml(shortMint(mints[0]))}</code>\n\n<i>${escapeTelegramHtml(reply.text)}</i>`;
+  if (reply.mediaBuffer) await sendPhoto(chatId, "x-scan-preview.png", reply.mediaBuffer, cap, null, "HTML").catch(() => sayHtml(chatId, cap));
+  else await sayHtml(chatId, cap);
 }
 
 // Compact bottom row: just Menu + Quick Buy + Refresh (3 small buttons, not bulky).

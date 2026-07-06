@@ -47,12 +47,22 @@ export async function getXScraper() {
 // Force a fresh login on the next call (e.g. after a 401 / cookie rotation).
 export function resetXScraper() { scraperPromise = null; }
 
+// The @handle we reply as — resolved from the LOGGED-IN account (the cookies), so a mistyped/omitted
+// X_HANDLE env can't make it watch the wrong account. Falls back to X_HANDLE only if whoami fails.
+let cachedHandle = null;
+export async function xResolvedHandle() {
+  if (cachedHandle) return cachedHandle;
+  const s = await getXScraper();
+  if (s) { try { const me = await s.me(); const h = me?.username || me?.screenName || me?.legacy?.screen_name; if (h) { cachedHandle = String(h).replace(/^@+/, ""); return cachedHandle; } } catch {} }
+  return xHandle();
+}
+
 // Recent tweets that MENTION our handle (people asking us) — the least-abusive read: our own inbox.
 // Excludes our own tweets + retweets. Returns [{ id, text, username, userId, permanentUrl, createdAtMs }].
 export async function xSearchMentions(count = 20) {
   const s = await getXScraper();
   if (!s) return [];
-  const handle = xHandle();
+  const handle = await xResolvedHandle();
   try {
     const res = await s.fetchSearchTweets(`@${handle} -from:${handle} -filter:retweets`, Math.min(50, count), SearchMode.Latest);
     const tweets = (res && res.tweets) || [];
