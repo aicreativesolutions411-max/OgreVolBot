@@ -165,8 +165,48 @@ function parseTweetResult(result) {
     createdAtMs: legacy.created_at ? new Date(legacy.created_at).getTime() : 0
   };
 }
+// A raw (non-GraphQL) signed GET — for X's v2 REST endpoints like the notifications feed.
+async function signedGet(path, query) {
+  if (!hasXCookies()) throw new Error("no cookies");
+  const { auth, ct0 } = readCookieParts();
+  const { tx } = await getSession();
+  const tid = await tx.generateTransactionId("GET", path);
+  const url = `https://x.com/i/api${path}${query ? "?" + query : ""}`;
+  const res = await fetch(url, { headers: { ...baseHeaders(ct0, tid), cookie: `auth_token=${auth}; ct0=${ct0}` } });
+  const text = await res.text();
+  if (res.status === 401 || res.status === 403) { resetXScraper(); const e = new Error(`auth ${res.status}`); e.status = res.status; throw e; }
+  if (!res.ok) { const e = new Error(`${path} ${res.status}`); e.status = res.status; throw e; }
+  return JSON.parse(text);
+}
+// The account's REAL @mentions feed (notifications) — instant + complete, unlike search. This is the
+// TG-scan-bot-style source: the moment someone tags us, it's here.
+async function notificationMentions(count = 20) {
+  const j = await signedGet("/2/notifications/mentions.json", `count=${Math.min(40, count)}&include_profile_interstitial_type=1&include_ext_alt_text=true&tweet_mode=extended&include_entities=true`);
+  const tweets = j?.globalObjects?.tweets || {};
+  const users = j?.globalObjects?.users || {};
+  const out = [];
+  for (const id of Object.keys(tweets)) {
+    const t = tweets[id]; const u = users[String(t.user_id_str)] || {};
+    out.push({
+      id: String(t.id_str || id),
+      text: String(t.full_text || t.text || ""),
+      username: String(u.screen_name || ""),
+      userId: String(t.user_id_str || ""),
+      inReplyToId: String(t.in_reply_to_status_id_str || t.conversation_id_str || ""),
+      permanentUrl: u.screen_name ? `https://x.com/${u.screen_name}/status/${id}` : "",
+      createdAtMs: t.created_at ? new Date(t.created_at).getTime() : 0
+    });
+  }
+  return out.sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
+}
 export async function xSearchMentions(count = 20) {
   const handle = await xResolvedHandle();
+  // PRIMARY: notifications feed — instant + complete (the account's actual @mentions).
+  try {
+    const notif = await notificationMentions(count);
+    return notif.filter((t) => t.id && t.username && t.username.toLowerCase() !== handle.toLowerCase());
+  } catch { /* fall back to search */ }
+  // FALLBACK: search (laggy/incomplete) only if notifications is unavailable.
   try {
     const j = await gql("GET", "SearchTimeline", { variables: { rawQuery: `@${handle} -filter:retweets`, count: Math.min(40, count), querySource: "typed_query", product: "Latest" }, features: READ_FEATURES });
     const instr = j?.data?.search_by_raw_query?.search_timeline?.timeline?.instructions || [];
