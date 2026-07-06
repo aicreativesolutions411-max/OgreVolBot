@@ -1782,7 +1782,13 @@ test("SlimeWire PFP maker: sharp compositor + public endpoint + /pfp command, al
   assert.match(pfpLib, /async function applySlimeGrade/);            // grades the ACTUAL photo (custom, not a slapped-on sticker)
   assert.match(pfpLib, /\.tint\(tintColor\)/);
   // server: public (pre-auth) page + generate endpoint; no wallet/login required
-  assert.match(serverSource, /import \{ renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES \} from "\.\/lib\/pfp\.js"/);
+  assert.match(serverSource, /import \{ renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp \} from "\.\/lib\/pfp\.js"/);
+  // 🎨 Slime Studio — FREE combinatorial engine (Higgs bg × ring × hat × grade), no per-pic cost
+  assert.match(pfpLib, /export async function makeSlimeStudioPfp/);
+  assert.match(pfpLib, /export async function renderSlimeStudioGallery/);
+  assert.match(serverSource, /pathname === "\/api\/web\/pfp\/studio"/);
+  assert.match(serverSource, /pathname === "\/api\/web\/pfp\/studio-info"/);
+  assert.match(serverSource, /data\.match\(\/\^pfp:st:/);            // TG Slime Studio roll button
   assert.match(serverSource, /pathname === "\/api\/web\/pfp\/generate"/);
   assert.match(serverSource, /"\/pfp", "\/pfp-maker", "\/slime-pfp"/);
   assert.match(serverSource, /function decodePfpImageDataUrl/);

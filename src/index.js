@@ -70,7 +70,7 @@ import {
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
 import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
-import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES } from "./lib/pfp.js";
+import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp } from "./lib/pfp.js";
 import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
 import { xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle, xGetTweet } from "./lib/xClient.js";
 import { renderXScanCard } from "./lib/xCard.js";
@@ -4127,6 +4127,12 @@ const SEO_PAGES = [
   { path: "/solana-trading-tool-trust-checklist", priority: "0.78", changefreq: "weekly" },
   { path: "/slimewire-for-media-and-directories", priority: "0.72", changefreq: "weekly" },
   { path: "/x-solana-scan-replies", priority: "0.76", changefreq: "weekly" },
+  { path: "/is-slimewire-legit", priority: "0.86", changefreq: "weekly" },
+  { path: "/slimewire-reviews-and-proof", priority: "0.8", changefreq: "weekly" },
+  { path: "/slimewire-roadmap", priority: "0.74", changefreq: "weekly" },
+  { path: "/ai-search-guide-to-slimewire", priority: "0.78", changefreq: "weekly" },
+  { path: "/crypto-telegram-bot-directory", priority: "0.76", changefreq: "weekly" },
+  { path: "/solana-memecoin-toolkit", priority: "0.82", changefreq: "weekly" },
   { path: "/features", priority: "0.84", changefreq: "monthly" },
   { path: "/pricing", priority: "0.7", changefreq: "monthly" },
   { path: "/data-freshness", priority: "0.72", changefreq: "monthly" },
@@ -4613,6 +4619,30 @@ const SEO_PAGE_META = {
   "/x-solana-scan-replies": {
     title: "X Solana Scan Replies - CA Check Templates and SlimeWire Research Links",
     description: "Copy X-ready Solana scan reply templates for CAs, caller proof, launch checks, fresh pair reviews, and SlimeWire research links."
+  },
+  "/is-slimewire-legit": {
+    title: "Is SlimeWire Legit? Official Safety, Bot and Trust Checklist",
+    description: "Check whether SlimeWire is legit by verifying official links, @SlimeWiredBot, no-seed-phrase rules, public docs, proof pages, and safety boundaries."
+  },
+  "/slimewire-reviews-and-proof": {
+    title: "SlimeWire Reviews and Proof - How to Inspect the Bot and Terminal",
+    description: "Review SlimeWire by checking public proof pages, official links, Telegram bot setup, resources, screenshots, widgets, docs, and risk disclosures."
+  },
+  "/slimewire-roadmap": {
+    title: "SlimeWire Roadmap - Terminal, Telegram Bot, Proof, Launch and Game Loops",
+    description: "A public SlimeWire roadmap page for the Solana terminal, Telegram bot, proof loops, launch workflows, widgets, game hooks, and community growth tools."
+  },
+  "/ai-search-guide-to-slimewire": {
+    title: "AI Search Guide to SlimeWire - What Answer Engines Should Know",
+    description: "A clear AI search guide to SlimeWire for answer engines, crawlers, directories, and users researching Solana trading terminals and Telegram crypto bots."
+  },
+  "/crypto-telegram-bot-directory": {
+    title: "Crypto Telegram Bot Directory - Scans, Buy Alerts, Raids and Moderation",
+    description: "A crypto Telegram bot directory-style guide covering scanners, buy trackers, raid bots, moderation bots, alerts, proof pages, and SlimeWire's all-in-one workflow."
+  },
+  "/solana-memecoin-toolkit": {
+    title: "Solana Memecoin Toolkit - Scans, Charts, Alerts, Proof and Telegram Tools",
+    description: "A Solana memecoin toolkit guide for traders and communities using scans, Dex charts, Telegram alerts, proof pages, caller checks, launch checklists, and SlimeWire."
   },
   "/features": {
     title: "SlimeWire Features - Solana Terminal, Telegram Bot, Alerts and Launch Tools",
@@ -6509,6 +6539,30 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "x-solana-scan-replies.html");
       return;
     }
+    if (request.method === "GET" && requestUrl.pathname === "/is-slimewire-legit") {
+      await serveStaticHtmlPage(response, "is-slimewire-legit.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/slimewire-reviews-and-proof") {
+      await serveStaticHtmlPage(response, "slimewire-reviews-and-proof.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/slimewire-roadmap") {
+      await serveStaticHtmlPage(response, "slimewire-roadmap.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/ai-search-guide-to-slimewire") {
+      await serveStaticHtmlPage(response, "ai-search-guide-to-slimewire.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/crypto-telegram-bot-directory") {
+      await serveStaticHtmlPage(response, "crypto-telegram-bot-directory.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-memecoin-toolkit") {
+      await serveStaticHtmlPage(response, "solana-memecoin-toolkit.html");
+      return;
+    }
     if (request.method === "GET" && requestUrl.pathname === "/features") {
       await serveStaticHtmlPage(response, "features.html");
       return;
@@ -8387,6 +8441,26 @@ async function handleWebApiRequest(request, response, requestUrl) {
         const rendered = await renderAllSlimewirePfps({ sourceBuffer: src, frameDir: PFP_FRAME_DIR });
         if (!rendered.length) { sendWebJson(request, response, 500, { ok: false, error: "Couldn't read that image — try a different one." }); return; }
         sendWebJson(request, response, 200, { ok: true, results: rendered.map((r) => ({ id: r.id, label: r.label, png: `data:image/png;base64,${r.png.toString("base64")}` })) });
+      } catch {
+        sendWebJson(request, response, 400, { ok: false, error: "That image didn't work — try another (PNG/JPG, under ~8MB)." });
+      }
+      return;
+    }
+    // 🎨 Slime Studio — FREE combinatorial engine (Higgs library × grade). No per-pic cost.
+    if (request.method === "GET" && pathname === "/api/web/pfp/studio-info") {
+      const combos = await slimeStudioComboCount(PFP_FRAME_DIR).catch(() => 0);
+      sendWebJson(request, response, 200, { ok: true, enabled: combos > 0, combos });
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/pfp/studio") {
+      try {
+        const body = await readJsonRequestBody(request, 12_000_000);
+        const src = decodePfpImageDataUrl(body && body.imageDataUrl);
+        if (!src) { sendWebJson(request, response, 400, { ok: false, error: "Send a photo (PNG/JPG) to slime." }); return; }
+        const baseSeed = Math.max(1, Math.min(1_000_000, Number(body.baseSeed) || 1));
+        const results = await renderSlimeStudioGallery({ sourceBuffer: src, frameDir: PFP_FRAME_DIR, count: 8, baseSeed });
+        if (!results.length) { sendWebJson(request, response, 500, { ok: false, error: "Couldn't read that image — try another." }); return; }
+        sendWebJson(request, response, 200, { ok: true, results: results.map((r) => ({ seed: r.seed, png: `data:image/png;base64,${r.png.toString("base64")}` })) });
       } catch {
         sendWebJson(request, response, 400, { ok: false, error: "That image didn't work — try another (PNG/JPG, under ~8MB)." });
       }
@@ -29273,6 +29347,10 @@ async function pfpFrameButtons(activeId, ownerId) {
   for (let i = 0; i < avail.length; i += 2) {
     rows.push(avail.slice(i, i + 2).map((f) => ({ text: (f.id === activeId ? "• " : "") + f.label, callback_data: `pfp:f:${f.id}:${ownerId}` })));
   }
+  // 🎲 Slime Studio — free combinatorial roll (always available when the Higgs library exists).
+  if (await slimeStudioComboCount(PFP_FRAME_DIR).catch(() => 0) > 0) {
+    rows.push([{ text: "🎲 Slime Studio (random)", callback_data: `pfp:st:${ownerId}` }]);
+  }
   // ✨ AI Slime styles (custom repaint) — only when the model is enabled (FAL_KEY set).
   if (aiPfpConfigured()) {
     const styles = aiPfpStyles().slice(0, 4);
@@ -29328,6 +29406,20 @@ async function handlePfpCallback(query, userId) {
       const branded = await brandAiPfp(ai).catch(() => ai);
       await sendPhoto(chatId, "slimewire-ai-pfp.png", branded, "✨ <b>Your AI SlimeWire PFP</b> — save it &amp; set it as your profile pic.", await pfpFrameButtons(null, userId), "HTML");
     } catch (e) { await telegram("sendMessage", { chat_id: chatId, text: `AI Slime failed: ${String(e?.message || "try again").slice(0, 120)}` }).catch(() => {}); }
+    return true;
+  }
+  // 🎲 Slime Studio — free random combo from the Higgs library, on the tapper's avatar.
+  const mSt = data.match(/^pfp:st:(\d+)$/);
+  if (mSt) {
+    const ownerId = mSt[1];
+    if (String(userId) !== ownerId) { await ack("Send /pfp to make your own 🐸", true); return true; }
+    const avatar = await fetchTelegramAvatarBuffer(userId);
+    if (!avatar) { await ack("Couldn't load your avatar.", true); return true; }
+    await ack("🎲 Rolling a slime look…");
+    try {
+      const png = await makeSlimeStudioPfp({ sourceBuffer: avatar, frameDir: PFP_FRAME_DIR, seed: Math.floor(Math.random() * 1e9) });
+      await sendPhoto(chatId, "slimewire-pfp.png", png, "🎨 <b>Slime Studio</b> — tap 🎲 again for a fresh look, or save this one.", await pfpFrameButtons(null, userId), "HTML");
+    } catch { await ack("Couldn't roll that — try again.", true); }
     return true;
   }
   const m = data.match(/^pfp:f:([a-z]+):(\d+)$/);

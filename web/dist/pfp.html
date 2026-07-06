@@ -81,6 +81,13 @@
 
   <div class="status" id="status"></div>
 
+  <div id="studioSection" class="hidden">
+    <div class="aihead">🎨 Slime Studio — endless free styles</div>
+    <div class="aisub">Every roll = a fresh slime look (<span id="comboCount">hundreds of</span> combos). 100% free.</div>
+    <div class="grid" id="studioGrid"></div>
+    <button class="dl" id="studioMore" style="max-width:300px;margin:16px auto 0">🎲 More styles</button>
+  </div>
+
   <div id="aiSection" class="hidden">
     <div class="aihead">✨ AI Slime — turn YOU into a SlimeWire creature</div>
     <div class="aisub">Our AI repaints your actual photo into custom slime art (~10s each). Pick a style:</div>
@@ -100,7 +107,7 @@
   var API_BASE=(window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||"https://ogrevolbot.onrender.com";
   var drop=document.getElementById('drop'),file=document.getElementById('file'),
       statusEl=document.getElementById('status'),grid=document.getElementById('grid'),again=document.getElementById('again');
-  var lastDataUrl=null,aiEnabled=false,aiBusy=false;
+  var lastDataUrl=null,aiEnabled=false,aiBusy=false,studioEnabled=false,studioSeed=1,studioBusy=false;
 
   ['dragenter','dragover'].forEach(function(e){drop.addEventListener(e,function(ev){ev.preventDefault();drop.classList.add('hot');});});
   ['dragleave','drop'].forEach(function(e){drop.addEventListener(e,function(ev){ev.preventDefault();drop.classList.remove('hot');});});
@@ -119,6 +126,7 @@
   function slime(dataUrl){
     lastDataUrl=dataUrl;
     if(aiEnabled){var s=document.getElementById('aiSection');if(s)s.classList.remove('hidden');}
+    if(studioEnabled){var ss=document.getElementById('studioSection');if(ss)ss.classList.remove('hidden');studioSeed=1;document.getElementById('studioGrid').innerHTML='';studioGen();}
     grid.innerHTML='';again.classList.add('hidden');
     statusEl.innerHTML='<span class="spin"></span>Sliming your pic…';
     fetch(API_BASE+'/api/web/pfp/generate',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -141,6 +149,31 @@
     .catch(function(){statusEl.textContent='Network hiccup — check your connection and try again.';});
   }
   again.addEventListener('click',function(){file.value='';grid.innerHTML='';statusEl.textContent='';again.classList.add('hidden');window.scrollTo(0,0);});
+
+  // 🎨 Slime Studio — free combinatorial engine (always on when the Higgs library exists).
+  fetch(API_BASE+'/api/web/pfp/studio-info').then(function(r){return r.json();}).then(function(d){
+    if(d&&d.ok&&d.enabled){studioEnabled=true;var c=document.getElementById('comboCount');if(c&&d.combos)c.textContent=d.combos.toLocaleString();}
+  }).catch(function(){});
+  function studioCard(png,seed){
+    var card=document.createElement('div');card.className='card';
+    var img=document.createElement('img');img.src=png;img.alt='SlimeWire studio PFP';img.loading='lazy';
+    var dl=document.createElement('button');dl.className='dl';dl.textContent='⬇ Download';
+    dl.onclick=function(){var a=document.createElement('a');a.href=png;a.download='slimewire-pfp-'+seed+'.png';document.body.appendChild(a);a.click();a.remove();};
+    card.appendChild(img);card.appendChild(dl);return card;
+  }
+  function studioGen(){
+    if(!lastDataUrl||studioBusy)return;studioBusy=true;
+    var more=document.getElementById('studioMore');if(more){more.disabled=true;more.textContent='🎲 Rolling…';}
+    fetch(API_BASE+'/api/web/pfp/studio',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({imageDataUrl:lastDataUrl,baseSeed:studioSeed})})
+    .then(function(r){return r.json();}).then(function(d){
+      studioBusy=false;if(more){more.disabled=false;more.textContent='🎲 More styles';}
+      if(!d||!d.ok||!d.results)return;
+      var g=document.getElementById('studioGrid');d.results.forEach(function(x){g.appendChild(studioCard(x.png,x.seed));});
+      studioSeed+=d.results.length;
+    }).catch(function(){studioBusy=false;if(more){more.disabled=false;more.textContent='🎲 More styles';}});
+  }
+  var sm=document.getElementById('studioMore');if(sm)sm.addEventListener('click',studioGen);
 
   // ✨ AI Slime — load styles (only shows if the server has it enabled) and repaint the uploaded pic.
   fetch(API_BASE+'/api/web/pfp/ai-styles').then(function(r){return r.json();}).then(function(d){

@@ -183,3 +183,68 @@ export async function renderAllSlimewirePfps({ sourceBuffer, frameDir, size = PF
   }
   return out;
 }
+
+// ---- 🎨 SLIME STUDIO — free combinatorial engine (Higgs backgrounds × rings × hats × grade) ----------
+// A library-driven, $0-per-pic alternative to the paid AI restyle: composite the graded face onto a Higgs
+// slime BACKGROUND, add a RING border and (sometimes) a HAT, stamp the brand. bg/ring/hat live as PNGs in
+// pfp/{bg,ring,hat}/ — just DROP MORE FILES IN and the combination count multiplies, no code change.
+function mulberry32(a) { return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+async function listAssetFiles(dir) { try { return (await fs.readdir(dir)).filter((f) => /\.(png|jpe?g|webp)$/i.test(f)).sort(); } catch { return []; } }
+function pickFrom(arr, rng) { return arr.length ? arr[Math.floor(rng() * arr.length)] : null; }
+
+// How many distinct combos the current library can make (shown to the user).
+export async function slimeStudioComboCount(frameDir) {
+  const root = path.dirname(frameDir);
+  const [bg, ring, hat] = await Promise.all([listAssetFiles(path.join(root, "bg")), listAssetFiles(path.join(root, "ring")), listAssetFiles(path.join(root, "hat"))]);
+  if (!bg.length && !ring.length && !hat.length) return 0;
+  return Math.max(1, bg.length || 1) * Math.max(1, ring.length || 1) * (Math.max(1, hat.length) + 1) * 3; // ×3 grades, +1 = "no hat"
+}
+
+// One studio PFP. seed → deterministic combo (so a gallery gives N *different* looks). Returns PNG buffer.
+export async function makeSlimeStudioPfp({ sourceBuffer, frameDir, size = PFP_SIZE, seed }) {
+  const rng = Number.isFinite(seed) ? mulberry32(seed >>> 0) : Math.random;
+  const root = path.dirname(frameDir);
+  const [bgs, rings, hats] = await Promise.all([listAssetFiles(path.join(root, "bg")), listAssetFiles(path.join(root, "ring")), listAssetFiles(path.join(root, "hat"))]);
+
+  // graded circle face (the actual photo, slimed then masked to a circle)
+  const grade = [null, "slime", "toxic"][Math.floor(rng() * 3)];
+  let face = await sharp(sourceBuffer, { animated: false }).resize(size, size, { fit: "cover", position: "attention" }).flatten({ background: "#0a140a" }).toBuffer();
+  if (grade) { try { face = await applySlimeGrade(face, grade); } catch { /* keep ungraded */ } }
+  const fs2 = Math.round(size * 0.7);
+  const mask = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${fs2}" height="${fs2}"><circle cx="${fs2 / 2}" cy="${fs2 / 2}" r="${fs2 / 2}" fill="#fff"/></svg>`);
+  const faceCircle = await sharp(face).resize(fs2, fs2, { fit: "cover", position: "attention" }).composite([{ input: mask, blend: "dest-in" }]).png().toBuffer();
+
+  // base = a Higgs background (or a dark slime fallback if the library's empty)
+  const bgFile = pickFrom(bgs, rng);
+  let base = bgFile
+    ? await sharp(path.join(root, "bg", bgFile)).resize(size, size, { fit: "cover" }).toBuffer()
+    : await sharp({ create: { width: size, height: size, channels: 3, background: { r: 8, g: 24, b: 13 } } }).png().toBuffer();
+
+  const layers = [];
+  const off = Math.round((size - fs2) / 2);
+  layers.push({ input: faceCircle, top: off, left: off });
+  // ring border around the face (transparent-center overlay, full canvas)
+  const ringFile = pickFrom(rings, rng);
+  if (ringFile) { try { layers.push({ input: await sharp(path.join(root, "ring", ringFile)).resize(size, size, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } } ).png().toBuffer(), top: 0, left: 0 }); } catch {} }
+  // a hat/crown on the head ~65% of the time — placed at the top (face is attention-cropped up top)
+  const hatFile = rng() > 0.35 ? pickFrom(hats, rng) : null;
+  if (hatFile) {
+    try {
+      const hw = Math.round(size * 0.6);
+      const hat = await sharp(path.join(root, "hat", hatFile)).resize({ width: hw }).png().toBuffer();
+      const hatLayer = await sharp({ create: { width: size, height: size, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).composite([{ input: hat, gravity: "north" }]).png().toBuffer();
+      layers.push({ input: hatLayer, top: 0, left: 0 });
+    } catch {}
+  }
+  layers.push({ input: Buffer.from(svgWrap(wordmark())), top: 0, left: 0 });
+  return sharp(base).composite(layers).png().toBuffer();
+}
+
+// A gallery of N *different* studio combos from one upload (each seed = a distinct look).
+export async function renderSlimeStudioGallery({ sourceBuffer, frameDir, size = PFP_SIZE, count = 8, baseSeed = 1 }) {
+  const out = [];
+  for (let i = 0; i < Math.max(1, Math.min(24, count)); i += 1) {
+    try { out.push({ seed: baseSeed + i, png: await makeSlimeStudioPfp({ sourceBuffer, frameDir, size, seed: (baseSeed + i) * 2654435761 }) }); } catch { /* skip a bad combo */ }
+  }
+  return out;
+}
