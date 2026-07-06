@@ -260,3 +260,48 @@ export async function renderSlimeStudioGallery({ sourceBuffer, frameDir, size = 
   }
   return out;
 }
+
+// ---- 🧟 SlimeWire Character Gallery — complete pre-made degen characters (each a finished art piece,
+// no compositing — reads far better than layered stickers). "SlimeWire PFP" = roll one of these.
+export async function listCharacterFiles(frameDir) {
+  return listAssetFiles(path.join(path.dirname(frameDir), "characters"));
+}
+export async function characterPfpCount(frameDir) {
+  return (await listCharacterFiles(frameDir)).length;
+}
+// Render one character PFP: the complete character (cover-resized), optional corner degen badge + wordmark.
+export async function makeCharacterPfp({ frameDir, size = PFP_SIZE, seed, file, badge = true }) {
+  const root = path.dirname(frameDir);
+  const dir = path.join(root, "characters");
+  const files = await listAssetFiles(dir);
+  if (!files.length) return null;
+  const rng = Number.isFinite(seed) ? mulberry32(seed >>> 0) : Math.random;
+  const chosen = file && files.includes(file) ? file : files[Math.floor(rng() * files.length)];
+  const baseBuf = await sharp(path.join(dir, chosen)).resize(size, size, { fit: "cover", position: "attention" }).png().toBuffer();
+  const layers = [];
+  if (badge) {
+    try {
+      const badges = await listAssetFiles(path.join(root, "badge"));
+      if (badges.length && rng() > 0.4) {
+        const bw = Math.round(size * 0.28);
+        const b = await sharp(path.join(root, "badge", badges[Math.floor(rng() * badges.length)])).resize({ width: bw }).png().toBuffer();
+        const bl = await sharp({ create: { width: size, height: size, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).composite([{ input: b, gravity: rng() > 0.5 ? "southeast" : "southwest" }]).png().toBuffer();
+        layers.push({ input: bl, top: 0, left: 0 });
+      }
+    } catch { /* no badge is fine */ }
+  }
+  layers.push({ input: Buffer.from(svgWrap(wordmark())), top: 0, left: 0 });
+  return { file: chosen, png: await sharp(baseBuf).composite(layers).png().toBuffer() };
+}
+// A spread of N distinct characters (branded), for the TG "more" roll.
+export async function renderCharacterGallery({ frameDir, size = PFP_SIZE, count = 12, baseSeed = 1 }) {
+  const files = await listCharacterFiles(frameDir);
+  const out = [];
+  const n = Math.min(count, files.length);
+  const step = Math.max(1, Math.floor(files.length / Math.max(1, n)));
+  for (let i = 0; i < n; i += 1) {
+    const file = files[(baseSeed + i * step) % files.length];
+    try { const r = await makeCharacterPfp({ frameDir, size, seed: (baseSeed + i) * 2654435761, file, badge: true }); if (r) out.push(r); } catch { /* skip */ }
+  }
+  return out;
+}

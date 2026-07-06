@@ -70,7 +70,7 @@ import {
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
 import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
-import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp } from "./lib/pfp.js";
+import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp, listCharacterFiles, characterPfpCount, makeCharacterPfp } from "./lib/pfp.js";
 import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
 import { xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode, xAuthReport } from "./lib/xClient.js";
 import { renderXScanCard } from "./lib/xCard.js";
@@ -8468,6 +8468,20 @@ async function handleWebApiRequest(request, response, requestUrl) {
       }
       return;
     }
+    // 🧟 SlimeWire PFP — gallery of pre-made degen characters. GET list of filenames; the frontend serves
+    // the clean static images from /pfp/characters/<file> and offers a download.
+    if (request.method === "GET" && pathname === "/api/web/pfp/characters") {
+      const files = await listCharacterFiles(PFP_FRAME_DIR).catch(() => []);
+      sendWebJson(request, response, 200, { ok: true, count: files.length, files });
+      return;
+    }
+    // One random branded character (PNG) — used by "surprise me" + shareable download.
+    if (request.method === "GET" && pathname === "/api/web/pfp/character") {
+      const r = await makeCharacterPfp({ frameDir: PFP_FRAME_DIR }).catch(() => null);
+      if (!r) { sendWebJson(request, response, 503, { ok: false, error: "No characters available yet." }); return; }
+      sendWebJson(request, response, 200, { ok: true, file: r.file, png: `data:image/png;base64,${r.png.toString("base64")}` });
+      return;
+    }
     // ✨ AI Slime — the custom effect. Public; guarded by a budget rate-limit (a paid model runs per call).
     if (request.method === "GET" && pathname === "/api/web/pfp/ai-styles") {
       sendWebJson(request, response, 200, { ok: true, enabled: aiPfpConfigured(), styles: aiPfpStyles() });
@@ -14257,7 +14271,8 @@ async function handleMessage(message, userId) {
     if (xclaim) { await handleXClaimCommand(chatId, message, xclaim.argument, userId); return; }
     if (parseCommandWithArgument(text, ["xtest", "xstatus"])) { await handleXTestCommand(chatId, userId); return; }
     if (parseCommandWithArgument(text, ["xpoll"])) { await handleXPollCommand(chatId, userId); return; }
-    if (parseCommandWithArgument(text, ["xreset"])) { await handleXResetCommand(chatId, userId); return; }
+    const xreset = parseCommandWithArgument(text, ["xreset"]);
+    if (xreset) { await handleXResetCommand(chatId, userId, xreset.argument); return; }
     const xscan = parseCommandWithArgument(text, ["xscan"]);
     if (xscan) { await handleXScanCommand(chatId, xscan.argument, userId); return; }
   }
@@ -29376,23 +29391,61 @@ async function editMessagePhotoBuffer(chatId, messageId, buffer, caption, replyM
   if (!data.ok) throw new Error(data.description || "editMessageMedia failed");
   return data.result;
 }
+// Two-option PFP UX: 🧟 SlimeWire PFP (roll one of our characters) · 🫠 Slime Your PFP (your pic + assets).
+function pfpChooserKeyboard(userId) {
+  return { inline_keyboard: [
+    [{ text: "🧟 SlimeWire PFP", callback_data: `pfp:char:${userId}` }],
+    [{ text: "🫠 Slime Your PFP", callback_data: `pfp:slime:${userId}` }],
+    [{ text: "🎨 Do it on the site", url: pfpWebUrl() }]
+  ] };
+}
+function pfpResultKeyboard(userId, mode) {
+  const other = mode === "char"
+    ? { text: "🫠 Slime Your PFP", data: `pfp:slime:${userId}` }
+    : { text: "🧟 SlimeWire PFP", data: `pfp:char:${userId}` };
+  return { inline_keyboard: [
+    [{ text: "🎲 Another", callback_data: `pfp:${mode}:${userId}` }, { text: other.text, callback_data: other.data }],
+    [{ text: "🎨 Site", url: pfpWebUrl() }]
+  ] };
+}
 async function handlePfpCommand(chatId, message, userId) {
-  const avatar = await fetchTelegramAvatarBuffer(userId);
-  if (!avatar) {
-    await sayHtml(chatId, "🐸 <b>SlimeWire PFP maker</b>\n\nI can't see a Telegram profile photo on your account (it may be private, or you don't have one). Upload any pic on the site and I'll slime it 👇",
-      { inline_keyboard: [[{ text: "🎨 Make my SlimeWire PFP", url: pfpWebUrl() }]] });
-    return;
-  }
-  let png;
-  try { png = await makeSlimewirePfp({ sourceBuffer: avatar, frameId: "slime", frameDir: PFP_FRAME_DIR }); }
-  catch { await say(chatId, "Couldn't slime that avatar — try uploading a pic on the site: " + pfpWebUrl()); return; }
-  await sendPhoto(chatId, "slimewire-pfp.png", png, PFP_TG_CAPTION, await pfpFrameButtons("slime", userId), "HTML");
+  await sayHtml(chatId, [
+    "🐸 <b>SlimeWire PFP</b> — pick one:",
+    "",
+    "🧟 <b>SlimeWire PFP</b> — get one of our slime-degen characters (tons to roll, dark-humor).",
+    "🫠 <b>Slime Your PFP</b> — turn YOUR pic into a slime look with our backgrounds + assets.",
+  ].join("\n"), pfpChooserKeyboard(userId));
 }
 async function handlePfpCallback(query, userId) {
   const data = String(query?.data || "");
   if (!data.startsWith("pfp:")) return false;
   const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
   const ack = (t, alert) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: Boolean(alert) } : {}) }).catch(() => {});
+  // 🧟 SlimeWire PFP — roll one of OUR pre-made slime-degen characters (no photo needed).
+  const mChar = data.match(/^pfp:char:(\d+)$/);
+  if (mChar) {
+    if (String(userId) !== mChar[1]) { await ack("Send /pfp to make your own 🐸", true); return true; }
+    await ack("🧟 Summoning a SlimeWire character…");
+    try {
+      const r = await makeCharacterPfp({ frameDir: PFP_FRAME_DIR, seed: Math.floor(Math.random() * 1e9) });
+      if (!r) { await telegram("sendMessage", { chat_id: chatId, text: "No characters ready yet — try the site: " + pfpWebUrl() }).catch(() => {}); return true; }
+      await sendPhoto(chatId, "slimewire-pfp.png", r.png, "🧟 <b>Your SlimeWire PFP</b> — save it &amp; set it as your profile pic. Tap 🎲 for another.", pfpResultKeyboard(userId, "char"), "HTML");
+    } catch { await ack("Couldn't roll — try again.", true); }
+    return true;
+  }
+  // 🫠 Slime Your PFP — YOUR avatar composited with our backgrounds/rings/hats/props (Slime Studio).
+  const mSlime = data.match(/^pfp:slime:(\d+)$/);
+  if (mSlime) {
+    if (String(userId) !== mSlime[1]) { await ack("Send /pfp to make your own 🐸", true); return true; }
+    const avatar = await fetchTelegramAvatarBuffer(userId);
+    if (!avatar) { await telegram("sendMessage", { chat_id: chatId, text: "I can't see your Telegram profile photo (private or none). Slime any pic on the site 👉 " + pfpWebUrl() }).catch(() => {}); await ack(); return true; }
+    await ack("🫠 Sliming your pic…");
+    try {
+      const png = await makeSlimeStudioPfp({ sourceBuffer: avatar, frameDir: PFP_FRAME_DIR, seed: Math.floor(Math.random() * 1e9) });
+      await sendPhoto(chatId, "slimewire-pfp.png", png, "🫠 <b>Slimed!</b> Tap 🎲 for a fresh look, or save this one.", pfpResultKeyboard(userId, "slime"), "HTML");
+    } catch { await ack("Couldn't slime that — try again.", true); }
+    return true;
+  }
   // ✨ AI Slime — repaint the tapper's avatar into custom slime art (owner-gated, paid model).
   const mAi = data.match(/^pfp:ai:([a-z]+):(\d+)$/);
   if (mAi) {
@@ -30715,8 +30768,8 @@ async function buildXScanReply(mint) {
 // gets a safety verdict, "chart?" gets a chart image, anything else gets the standard scan card.
 function xIntentFromText(text) {
   const t = String(text || "").toLowerCase();
-  if (/\b(did ?it ?rug|rug(ged|ging|pull|s)?|honey ?pot|is ?(this|it) ?safe|safe\??|safu|scam|can ?i ?sell|sell ?able|legit\??)\b/.test(t)) return "rug";
-  if (/\b(chart|candles?|price ?action|\bta\b|how'?s? ?(it|this) ?look(ing)?)\b/.test(t)) return "chart";
+  if (/\b(did ?it ?rug|rug(ged|ging|pull|s)?|honey ?pot|is ?(this|it) ?safe|safe\??|safu|scam|can ?i ?sell|sell ?able|legit\??|rekt|dev ?sold)\b/.test(t)) return "rug";
+  if (/\b(chart|candle\w*|price|pa\b|\bta\b|technicals?|how'?s? ?(it|this) ?look(ing)?|going ?up|pump(ing)?|dump(ing)?)\b/.test(t)) return "chart";
   return "scan";
 }
 // 📈 CHART CARD — reply with a live candlestick image of the coin (GeckoTerminal candles, pump-tick synth
@@ -30846,41 +30899,50 @@ async function xReplyPollTick() {
   // tiny min-gap only avoids hammering X's endpoint in the same instant. Tighten via env if ever needed.
   const maxPerHour = Math.max(1, Number(process.env.X_REPLY_MAX_PER_HOUR || 60));
   const minGapMs = Math.max(2_000, Number(process.env.X_REPLY_MIN_GAP_MS || 4_000));
-  mentions.sort((a, b) => (a.createdAtMs || 0) - (b.createdAtMs || 0));
+  // HIGH-WATER-MARK: only ever handle mentions NEWER than the last one we processed. This auto-advances,
+  // so the bot NEVER backtracks to tags it already answered and never needs a manual reset — it just picks
+  // up whatever's new. First run: start ~10 min back so a very recent tag still gets caught, not the whole history.
+  if (state.lastMentionMs == null) state.lastMentionMs = Date.now() - 10 * 60_000;
+  const highWater = Number(state.lastMentionMs) || 0;
+  let newHigh = highWater;
+  mentions.sort((a, b) => (a.createdAtMs || 0) - (b.createdAtMs || 0));   // oldest first
   for (const m of mentions) {
-    if (state.seen[m.id]) continue;
+    const ts = Number(m.createdAtMs) || 0;
+    if (ts && ts <= highWater) continue;                          // already past the watermark → never re-reply
+    if (state.seen[m.id]) { newHigh = Math.max(newHigh, ts); continue; }
     const mint = await resolveXTargetMint(m).catch(() => null);   // CA / $ticker in the mention OR the parent post
-    if (!mint) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "no CA/ticker found" }); continue; }
+    if (!mint) { state.seen[m.id] = now; newHigh = Math.max(newHigh, ts); results.push({ u: m.username, s: "skip", d: "no CA/ticker found" }); continue; }
     const intent = xIntentFromText(m.text);                        // did-it-rug? chart? else scan
     const reply = await buildXReply(mint, intent).catch(() => null);
-    if (!reply) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "coin didn't scan" }); continue; }
+    if (!reply) { state.seen[m.id] = now; newHigh = Math.max(newHigh, ts); results.push({ u: m.username, s: "skip", d: "coin didn't scan" }); continue; }
     if (auto) {
       if (state.posts.length >= maxPerHour) { results.push({ u: m.username, s: "defer", d: "hourly cap" }); break; }
       if (state.posts.length && (now - Number(state.posts[state.posts.length - 1]) < minGapMs)) { results.push({ u: m.username, s: "defer", d: "pacing" }); break; }
       const res = await xReply({ inReplyToId: m.id, text: reply.text, mediaBuffer: reply.mediaBuffer });
       if (res.ok) {
-        state.seen[m.id] = now; delete state.fails[m.id]; state.posts.push(Date.now());
-        results.push({ u: m.username, s: "replied", d: `$${reply.symbol}${res.media && res.media !== "card" ? " · " + res.media : " · card"}` });
-        await xReplyOwnerNotify(`✅ Auto-replied on X to @${m.username} · $${reply.symbol} (${res.media || "text"})`);
+        state.seen[m.id] = now; delete state.fails[m.id]; state.posts.push(Date.now()); newHigh = Math.max(newHigh, ts);
+        results.push({ u: m.username, s: "replied", d: `${intent === "chart" ? "📈" : intent === "rug" ? "🛡️" : "🔎"} $${reply.symbol}${res.media && res.media !== "card" ? " · " + res.media : " · card"}` });
+        await xReplyOwnerNotify(`✅ Auto-replied on X to @${m.username} · ${intent} · $${reply.symbol} (${res.media || "text"})`);
       } else {
-        // Transient failure → retry next cycle (up to 3x) instead of marking it done forever.
+        // Transient failure → don't advance the watermark past this one; break so it retries next cycle (up to 3x).
         state.fails[m.id] = (Number(state.fails[m.id]) || 0) + 1;
         const giveUp = state.fails[m.id] >= 3 || /not configured|401|unauthor/i.test(res.reason || "");
-        if (giveUp) { state.seen[m.id] = now; delete state.fails[m.id]; }
         results.push({ u: m.username, s: "fail", d: res.reason || "post failed" });
-        await xReplyOwnerNotify(`⚠️ X reply to @${m.username} failed: ${res.reason || ""}${giveUp ? "" : " (will retry)"}`);
-        if (/not configured|401|unauthor/i.test(res.reason || "")) break;
+        await xReplyOwnerNotify(`⚠️ X reply to @${m.username} failed: ${res.reason || ""}${giveUp ? " (gave up)" : " (will retry)"}`);
+        if (giveUp) { state.seen[m.id] = now; delete state.fails[m.id]; newHigh = Math.max(newHigh, ts); await writeXReplyState(state); await sleep(1200); continue; }
+        break; // keep the watermark below this one so it retries
       }
       await writeXReplyState(state);
       await sleep(1200);
     } else {
-      state.seen[m.id] = now;
+      state.seen[m.id] = now; newHigh = Math.max(newHigh, ts);
       state.queue[m.id] = { mint, intent, at: now, author: m.username, url: m.permanentUrl };
       await writeXReplyState(state);
       results.push({ u: m.username, s: "draft", d: `$${reply.symbol}` });
       await xReplyOwnerDraft(m, reply);
     }
   }
+  state.lastMentionMs = Math.max(highWater, newHigh);
   await writeXReplyState(state);
   return { checked: mentions.length, results };
 }
@@ -30976,13 +31038,25 @@ async function handleXPollCommand(chatId, userId) {
 }
 // Clear the seen/queue state so the bot RE-REPLIES to the mentions it already handled — for testing, so
 // you can watch it fire without needing a fresh tweet each time. Then immediately runs a poll.
-async function handleXResetCommand(chatId, userId) {
+async function handleXResetCommand(chatId, userId, argument) {
   if (!xReplyOwnerChat() || String(chatId) !== xReplyOwnerChat()) { await say(chatId, "Owner-only — DM /xclaim first."); return; }
+  const force = /\b(force|old|backtrack|replay)\b/i.test(String(argument || ""));
   const state = await readXReplyState();
   const cleared = Object.keys(state.seen || {}).length;
   state.seen = {}; state.fails = {}; state.queue = {}; state.posts = [];
-  await writeXReplyState(state);
-  await say(chatId, `🧹 Cleared ${cleared} seen mentions + throttle. Re-replying to current mentions now…`);
+  if (force) {
+    // FORCE (testing): wipe the watermark too so the very next poll re-answers the current backlog.
+    state.lastMentionMs = Date.now() - 30 * 60_000;
+    await writeXReplyState(state);
+    await say(chatId, `🧪 Force-reset — cleared ${cleared} seen + throttle + watermark. Re-answering the last ~30 min of mentions now…`);
+  } else {
+    // DEFAULT: catch up. Push the watermark PAST everything current so it can NEVER backtrack to old tags —
+    // from here it only replies to genuinely NEW mentions, automatically, no reset needed again.
+    state.lastMentionMs = Date.now();
+    await writeXReplyState(state);
+    await say(chatId, `🧹 Caught up — cleared ${cleared} seen + throttle. From now it only replies to NEW tags (never backtracks). Post a fresh tag to test, or /xreset force to replay the last 30 min.`);
+    return;
+  }
   const r = await xReplyPollTick().catch((e) => ({ error: String(e?.message || e).slice(0, 140) }));
   if (r?.error) { await sayHtml(chatId, `⚠️ Poll error: <code>${escapeTelegramHtml(r.error)}</code>`); return; }
   const icon = (s) => s === "replied" ? "✅" : s === "fail" ? "⚠️" : s === "draft" ? "📝" : s === "defer" ? "⏳" : "·";

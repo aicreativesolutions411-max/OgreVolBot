@@ -1782,7 +1782,11 @@ test("SlimeWire PFP maker: sharp compositor + public endpoint + /pfp command, al
   assert.match(pfpLib, /async function applySlimeGrade/);            // grades the ACTUAL photo (custom, not a slapped-on sticker)
   assert.match(pfpLib, /\.tint\(tintColor\)/);
   // server: public (pre-auth) page + generate endpoint; no wallet/login required
-  assert.match(serverSource, /import \{ renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp \} from "\.\/lib\/pfp\.js"/);
+  assert.match(serverSource, /import \{ renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp, listCharacterFiles, characterPfpCount, makeCharacterPfp \} from "\.\/lib\/pfp\.js"/);
+  // 🧟 Character Gallery — pre-made slime-degen characters ("SlimeWire PFP" option)
+  assert.match(pfpLib, /export async function makeCharacterPfp/);
+  assert.match(pfpLib, /export async function listCharacterFiles/);
+  assert.match(serverSource, /pathname === "\/api\/web\/pfp\/characters"/);
   // 🎨 Slime Studio — FREE combinatorial engine (Higgs bg × ring × hat × grade), no per-pic cost
   assert.match(pfpLib, /export async function makeSlimeStudioPfp/);
   assert.match(pfpLib, /export async function renderSlimeStudioGallery/);
@@ -1795,14 +1799,17 @@ test("SlimeWire PFP maker: sharp compositor + public endpoint + /pfp command, al
   assert.match(serverSource, /function decodePfpImageDataUrl/);
   // Telegram: /pfp turns the user's OWN current avatar into a branded PFP; frame-switch is owner-gated
   assert.match(serverSource, /getUserProfilePhotos/);
-  assert.match(functionBody(serverSource, "handlePfpCommand"), /makeSlimewirePfp/);
-  assert.match(functionBody(serverSource, "handlePfpCallback"), /String\(userId\) !== ownerId/);
+  // /pfp = 2-option chooser: 🧟 SlimeWire PFP (roll a character) · 🫠 Slime Your PFP (your pic + assets)
+  assert.match(functionBody(serverSource, "handlePfpCommand"), /pfpChooserKeyboard/);
+  assert.match(serverSource, /data\.match\(\/\^pfp:char:/);   // roll a pre-made character
+  assert.match(serverSource, /data\.match\(\/\^pfp:slime:/);  // slime the tapper's avatar
   assert.match(serverSource, /parseCommandWithArgument\(text, \["pfp", "slimepfp", "avatar"\]\)/);
   assert.match(serverSource, /if \(await handlePfpCallback\(query, userId\)/);
-  // web page reaches the origin API + downloads the result
+  // web page = 2 options, reaches the origin API
   const pfpHtml = fs.readFileSync(new URL("../web/public/pfp.html", import.meta.url), "utf8");
-  assert.match(pfpHtml, /\/api\/web\/pfp\/generate/);
-  assert.match(pfpHtml, /download='slimewire-pfp-'/);
+  assert.match(pfpHtml, /\/api\/web\/pfp\/characters/);
+  assert.match(pfpHtml, /\/api\/web\/pfp\/studio/);
+  assert.match(pfpHtml, /slimewire-pfp-/);
 });
 
 // ---- 🐦 X (Twitter) CA reply bot — unofficial cookie auth, assist/auto modes, DARK by default --------
@@ -1825,7 +1832,11 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   const tick = functionBody(serverSource, "xReplyPollTick");
   assert.match(tick, /if \(!xReplyEnabled\(\) \|\| !xConfigured\(\)\) return/);   // dark by default
   assert.match(tick, /X_REPLY_MAX_PER_HOUR/); assert.match(tick, /X_REPLY_MIN_GAP_MS/); // throttle
-  assert.match(tick, /if \(state\.seen\[m\.id\]\) continue/);                    // idempotent (reply once)
+  assert.match(tick, /if \(state\.seen\[m\.id\]\)/);                             // idempotent (reply once)
+  // HIGH-WATER-MARK: never backtracks to old tags, auto-advances, picks up only NEW mentions
+  assert.match(tick, /state\.lastMentionMs/);                                   // watermark tracked + persisted
+  assert.match(tick, /if \(ts && ts <= highWater\) continue/);                  // skip anything at/behind the mark
+  assert.match(tick, /newHigh = Math\.max\(newHigh, ts\)/);                     // advance forward only
   assert.match(tick, /if \(auto\)/);                                            // auto vs assist branch
   assert.match(tick, /xReplyOwnerDraft/);                                       // assist = one-tap draft to owner
   assert.match(functionBody(serverSource, "handleXReplyCallback"), /String\(chatId\) !== xReplyOwnerChat\(\)/); // owner-only posting

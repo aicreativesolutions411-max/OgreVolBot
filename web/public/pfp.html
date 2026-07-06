@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>SlimeWire PFP Maker — slime your profile pic (free)</title>
-<meta name="description" content="Turn any photo into a branded SlimeWire profile picture — free, instant, no login. Upload a pic, pick a slime frame, download. Or use /pfp in the SlimeWire Telegram bot to slime your Telegram avatar.">
+<title>SlimeWire PFP — grab a slime-degen character or slime your own pic (free)</title>
+<meta name="description" content="Free SlimeWire profile pics. Grab one of hundreds of slime-degen characters, or slime YOUR photo with our backgrounds + assets. No login. Or use /pfp in the SlimeWire Telegram bot.">
 <link rel="canonical" href="https://www.slimewire.org/pfp">
-<meta property="og:title" content="SlimeWire PFP Maker — free slime profile pics">
-<meta property="og:description" content="Upload a pic, pick a slime frame, download. Free & instant.">
+<meta property="og:title" content="SlimeWire PFP — free slime-degen profile pics">
+<meta property="og:description" content="Grab a slime-degen character, or slime your own pic. Free & instant.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://www.slimewire.org/pfp">
 <meta property="og:image" content="https://www.slimewire.org/pfp/og.png">
@@ -19,45 +19,43 @@
   html,body{margin:0;padding:0}
   body{background:radial-gradient(120% 90% at 50% -10%,#123a1d 0%,var(--bg) 60%) fixed;color:var(--text);
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;min-height:100vh;line-height:1.5}
-  .wrap{max-width:920px;margin:0 auto;padding:26px 18px 60px}
-  header{text-align:center;margin-bottom:22px}
+  .wrap{max-width:960px;margin:0 auto;padding:26px 18px 60px}
+  header{text-align:center;margin-bottom:16px}
   .logo{font-family:"Arial Black",Arial,sans-serif;font-weight:900;font-size:30px;letter-spacing:1px;
     background:linear-gradient(180deg,var(--slime2),var(--slime));-webkit-background-clip:text;background-clip:text;color:transparent}
   .sub{color:var(--muted);font-size:14px;margin-top:6px}
-  .tg{display:inline-block;margin-top:12px;font-size:13px;color:var(--slime2);background:#04110a;border:1px solid var(--border);
-    border-radius:999px;padding:6px 14px}
+  .tg{display:inline-block;margin-top:12px;font-size:13px;color:var(--slime2);background:#04110a;border:1px solid var(--border);border-radius:999px;padding:6px 14px}
   .tg b{color:#fff}
-  .drop{margin:22px auto 0;max-width:560px;border:2px dashed var(--border);border-radius:20px;background:var(--card);
-    padding:34px 20px;text-align:center;cursor:pointer;transition:.15s}
-  .drop:hover,.drop.hot{border-color:var(--slime);background:#0f1f12;box-shadow:0 0 0 4px rgba(84,224,0,.08)}
-  .drop .emoji{font-size:44px;line-height:1}
-  .drop h2{margin:12px 0 4px;font-size:19px}
-  .drop p{margin:0;color:var(--muted);font-size:13px}
-  .btn{display:inline-block;margin-top:16px;background:linear-gradient(180deg,var(--slime2),var(--slime));color:#062;
-    font-weight:900;border:none;border-radius:12px;padding:12px 22px;font-size:15px;cursor:pointer}
+  .tabs{display:flex;gap:12px;max-width:620px;margin:22px auto 6px}
+  .tab{flex:1;background:var(--card);border:2px solid var(--border);border-radius:16px;padding:16px 12px;text-align:center;cursor:pointer;transition:.15s}
+  .tab:hover{border-color:var(--slime);background:#0f1f12}
+  .tab.on{border-color:var(--slime);background:#0f1f12;box-shadow:0 0 0 4px rgba(84,224,0,.08)}
+  .tab .ic{font-size:30px;line-height:1}
+  .tab .t{font-weight:900;font-size:16px;margin-top:6px}
+  .tab .d{color:var(--muted);font-size:12px;margin-top:2px}
+  .panel{display:none;margin-top:14px}
+  .panel.on{display:block}
+  .bar{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;margin:6px 0 12px;color:var(--muted);font-size:13px}
+  .btn{display:inline-block;background:linear-gradient(180deg,var(--slime2),var(--slime));color:#062;font-weight:900;border:none;border-radius:12px;padding:11px 20px;font-size:15px;cursor:pointer}
   .btn:active{transform:translateY(1px)}
+  .ghost{background:none;border:1px solid var(--border);color:var(--muted);border-radius:10px;padding:9px 16px;cursor:pointer;font-weight:800}
+  .ghost:hover{border-color:var(--slime)}
+  .drop{margin:4px auto 0;max-width:560px;border:2px dashed var(--border);border-radius:20px;background:var(--card);padding:30px 20px;text-align:center;cursor:pointer;transition:.15s}
+  .drop:hover,.drop.hot{border-color:var(--slime);background:#0f1f12;box-shadow:0 0 0 4px rgba(84,224,0,.08)}
+  .drop .emoji{font-size:40px;line-height:1}
+  .drop h2{margin:10px 0 4px;font-size:18px}
+  .drop p{margin:0;color:var(--muted);font-size:13px}
   input[type=file]{display:none}
-  .status{text-align:center;margin:22px 0;color:var(--muted);font-size:14px;min-height:20px}
-  .spin{display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--slime);
-    border-radius:50%;animation:s .7s linear infinite;vertical-align:-3px;margin-right:8px}
+  .status{text-align:center;margin:14px 0;color:var(--muted);font-size:14px;min-height:18px}
+  .spin{display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--slime);border-radius:50%;animation:s .7s linear infinite;vertical-align:-3px;margin-right:8px}
   @keyframes s{to{transform:rotate(360deg)}}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:16px;margin-top:10px}
-  .card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:12px;text-align:center}
-  .card img{width:100%;border-radius:12px;display:block;background:#000}
-  .card .lbl{font-size:13px;font-weight:700;margin:9px 0 8px}
-  .dl{width:100%;background:#04110a;color:var(--slime2);border:1px solid var(--border);border-radius:10px;
-    padding:8px;font-weight:800;font-size:13px;cursor:pointer}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;margin-top:6px}
+  .cgrid{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:10px;text-align:center;transition:.12s}
+  .card:hover{border-color:var(--slime)}
+  .card img{width:100%;border-radius:12px;display:block;background:#000;aspect-ratio:1/1;object-fit:cover}
+  .dl{width:100%;margin-top:8px;background:#04110a;color:var(--slime2);border:1px solid var(--border);border-radius:10px;padding:7px;font-weight:800;font-size:12px;cursor:pointer}
   .dl:hover{border-color:var(--slime);background:#0f1f12}
-  .again{display:block;margin:26px auto 0;background:none;border:1px solid var(--border);color:var(--muted);
-    border-radius:10px;padding:10px 18px;cursor:pointer}
-  .aihead{font-family:"Arial Black",Arial;font-weight:900;font-size:20px;text-align:center;background:linear-gradient(180deg,var(--slime2),var(--slime));-webkit-background-clip:text;background-clip:text;color:transparent;margin-top:28px}
-  .aisub{text-align:center;color:var(--muted);font-size:13px;margin:6px 0 14px}
-  .aistyles{display:flex;flex-wrap:wrap;gap:9px;justify-content:center}
-  .aibtn{background:#0e1a10;border:1px solid var(--border);color:var(--text);border-radius:12px;padding:10px 16px;font-weight:800;font-size:14px;cursor:pointer}
-  .aibtn:hover{border-color:var(--slime);background:#0f1f12}
-  .aibtn:disabled{opacity:.5;cursor:wait}
-  #aiOut{margin-top:18px;text-align:center;min-height:8px}
-  #aiOut img{width:min(380px,82vw);border-radius:20px;border:2px solid var(--border);display:block;margin:0 auto 12px}
   .foot{text-align:center;margin-top:34px;color:var(--muted);font-size:12px}
   .foot a{color:var(--slime2);text-decoration:none}
   .hidden{display:none}
@@ -66,37 +64,45 @@
 <body>
 <div class="wrap">
   <header>
-    <div class="logo">🐸 SlimeWire PFP Maker</div>
-    <div class="sub">Drop a pic, pick a slime, download. Free &amp; instant — no login.</div>
-    <div class="tg">In Telegram? Message <b>@SlimeWiredBot</b> <b>/pfp</b> to slime your avatar</div>
+    <div class="logo">🐸 SlimeWire PFP</div>
+    <div class="sub">Free slime-degen profile pics — no login.</div>
+    <div class="tg">In Telegram? Message <b>@SlimeWiredBot</b> <b>/pfp</b></div>
   </header>
 
-  <label class="drop" id="drop" for="file">
-    <div class="emoji">🖼️</div>
-    <h2>Upload your photo</h2>
-    <p>Tap to choose, or drag a pic here · PNG / JPG · a face works best</p>
-    <span class="btn">Choose a pic</span>
-    <input type="file" id="file" accept="image/*">
-  </label>
+  <div class="tabs">
+    <div class="tab on" id="tabChar" onclick="showTab('char')">
+      <div class="ic">🧟</div><div class="t">SlimeWire PFP</div><div class="d">grab one of ours</div>
+    </div>
+    <div class="tab" id="tabSlime" onclick="showTab('slime')">
+      <div class="ic">🫠</div><div class="t">Slime Your PFP</div><div class="d">slime your own pic</div>
+    </div>
+  </div>
 
-  <div class="status" id="status"></div>
+  <!-- 🧟 SlimeWire PFP: a gallery of our slime-degen characters -->
+  <div class="panel on" id="panelChar">
+    <div class="bar"><span id="charCount">Loading characters…</span> <button class="ghost" id="shuffle">🎲 Shuffle</button></div>
+    <div class="grid cgrid" id="charGrid"></div>
+  </div>
 
-  <div id="studioSection" class="hidden">
-    <div class="aihead">🎨 Slime Studio — endless free styles</div>
-    <div class="aisub">Every roll = a fresh slime look (<span id="comboCount">hundreds of</span> combos). 100% free.</div>
+  <!-- 🫠 Slime Your PFP: upload → composite with our backgrounds/assets -->
+  <div class="panel" id="panelSlime">
+    <label class="drop" id="drop" for="file">
+      <div class="emoji">🖼️</div>
+      <h2>Upload your photo</h2>
+      <p>Tap to choose, or drag a pic here · PNG / JPG · a face works best</p>
+      <span class="btn">Choose a pic</span>
+      <input type="file" id="file" accept="image/*">
+    </label>
+    <div class="status" id="status"></div>
     <div class="grid" id="studioGrid"></div>
-    <button class="dl" id="studioMore" style="max-width:300px;margin:16px auto 0">🎲 More styles</button>
+    <button class="btn hidden" id="studioMore" style="display:block;margin:16px auto 0">🎲 More looks</button>
+    <div id="aiSection" class="hidden" style="text-align:center;margin-top:22px">
+      <div style="font-weight:900;color:var(--slime2)">✨ AI Slime</div>
+      <div class="sub">Repaint your actual photo into custom slime art.</div>
+      <div id="aiStyles" style="display:flex;flex-wrap:wrap;gap:9px;justify-content:center;margin-top:10px"></div>
+      <div id="aiOut" style="margin-top:14px"></div>
+    </div>
   </div>
-
-  <div id="aiSection" class="hidden">
-    <div class="aihead">✨ AI Slime — turn YOU into a SlimeWire creature</div>
-    <div class="aisub">Our AI repaints your actual photo into custom slime art (~10s each). Pick a style:</div>
-    <div id="aiStyles" class="aistyles"></div>
-    <div id="aiOut"></div>
-  </div>
-
-  <div class="grid" id="grid"></div>
-  <button class="again hidden" id="again">↺ Try another photo</button>
 
   <div class="foot">
     Made with 🟢 by <a href="/">SlimeWire</a> — the all-in-one Solana trading terminal &amp; Telegram bot.<br>
@@ -105,105 +111,98 @@
 </div>
 <script>
   var API_BASE=(window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||"https://ogrevolbot.onrender.com";
-  var drop=document.getElementById('drop'),file=document.getElementById('file'),
-      statusEl=document.getElementById('status'),grid=document.getElementById('grid'),again=document.getElementById('again');
-  var lastDataUrl=null,aiEnabled=false,aiBusy=false,studioEnabled=false,studioSeed=1,studioBusy=false;
+  function showTab(which){
+    document.getElementById('tabChar').classList.toggle('on',which==='char');
+    document.getElementById('tabSlime').classList.toggle('on',which==='slime');
+    document.getElementById('panelChar').classList.toggle('on',which==='char');
+    document.getElementById('panelSlime').classList.toggle('on',which==='slime');
+  }
+  function dl(url,name){var a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();}
 
+  // ---- 🧟 SlimeWire PFP: character gallery (static images) ----
+  var charFiles=[];
+  function renderChars(){
+    var g=document.getElementById('charGrid');g.innerHTML='';
+    charFiles.forEach(function(f){
+      var url=API_BASE+'/pfp/characters/'+f;
+      var card=document.createElement('div');card.className='card';
+      var img=document.createElement('img');img.src=url;img.alt='SlimeWire slime character PFP';img.loading='lazy';
+      var b=document.createElement('button');b.className='dl';b.textContent='⬇ Use as PFP';
+      b.onclick=function(){dl(url,'slimewire-'+f);};
+      card.appendChild(img);card.appendChild(b);g.appendChild(card);
+    });
+  }
+  function shuffle(a){for(var i=a.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1));var t=a[i];a[i]=a[j];a[j]=t;}return a;}
+  fetch(API_BASE+'/api/web/pfp/characters').then(function(r){return r.json();}).then(function(d){
+    var c=document.getElementById('charCount');
+    if(!d||!d.ok||!d.files||!d.files.length){c.textContent='Characters loading soon…';return;}
+    charFiles=shuffle(d.files.slice());
+    c.textContent='🧟 '+d.count+' slime characters — tap one to save it';
+    renderChars();
+  }).catch(function(){document.getElementById('charCount').textContent='Couldn\'t load characters — refresh.';});
+  document.getElementById('shuffle').addEventListener('click',function(){shuffle(charFiles);renderChars();window.scrollTo(0,document.getElementById('panelChar').offsetTop-20);});
+
+  // ---- 🫠 Slime Your PFP: upload → Slime Studio composite ----
+  var drop=document.getElementById('drop'),file=document.getElementById('file'),statusEl=document.getElementById('status');
+  var lastDataUrl=null,studioSeed=1,studioBusy=false,aiEnabled=false,aiBusy=false;
   ['dragenter','dragover'].forEach(function(e){drop.addEventListener(e,function(ev){ev.preventDefault();drop.classList.add('hot');});});
   ['dragleave','drop'].forEach(function(e){drop.addEventListener(e,function(ev){ev.preventDefault();drop.classList.remove('hot');});});
   drop.addEventListener('drop',function(ev){var f=ev.dataTransfer&&ev.dataTransfer.files&&ev.dataTransfer.files[0];if(f)handle(f);});
   file.addEventListener('change',function(){if(file.files&&file.files[0])handle(file.files[0]);});
-
   function handle(f){
     if(!/^image\//.test(f.type)){statusEl.textContent='That\'s not an image — try a PNG or JPG.';return;}
-    if(f.size>8*1024*1024){statusEl.textContent='That image is a bit big (over 8MB) — try a smaller one.';return;}
-    var r=new FileReader();
-    r.onload=function(){slime(r.result);};
-    r.onerror=function(){statusEl.textContent='Couldn\'t read that file — try another.';};
-    r.readAsDataURL(f);
+    if(f.size>8*1024*1024){statusEl.textContent='That image is over 8MB — try a smaller one.';return;}
+    var r=new FileReader();r.onload=function(){slimeUpload(r.result);};r.onerror=function(){statusEl.textContent='Couldn\'t read that file.';};r.readAsDataURL(f);
   }
-
-  function slime(dataUrl){
+  function slimeUpload_stub(){}
+  function slimeUpload(dataUrl){
     lastDataUrl=dataUrl;
-    if(aiEnabled){var s=document.getElementById('aiSection');if(s)s.classList.remove('hidden');}
-    if(studioEnabled){var ss=document.getElementById('studioSection');if(ss)ss.classList.remove('hidden');studioSeed=1;document.getElementById('studioGrid').innerHTML='';studioGen();}
-    grid.innerHTML='';again.classList.add('hidden');
+    if(aiEnabled){document.getElementById('aiSection').classList.remove('hidden');}
+    document.getElementById('studioGrid').innerHTML='';studioSeed=1;
+    document.getElementById('studioMore').classList.remove('hidden');
     statusEl.innerHTML='<span class="spin"></span>Sliming your pic…';
-    fetch(API_BASE+'/api/web/pfp/generate',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({imageDataUrl:dataUrl})})
-    .then(function(res){return res.json();})
-    .then(function(d){
-      if(!d||!d.ok||!d.results||!d.results.length){statusEl.textContent=(d&&d.error)||'Couldn\'t slime that one — try another pic.';return;}
-      statusEl.innerHTML='✅ <b>'+d.results.length+' styles ready</b> — tap Download on your favorite, then set it as your profile pic.';
-      d.results.forEach(function(fr){
-        var card=document.createElement('div');card.className='card';
-        var img=document.createElement('img');img.src=fr.png;img.alt=fr.label+' SlimeWire PFP';img.loading='lazy';
-        var lbl=document.createElement('div');lbl.className='lbl';lbl.textContent=fr.label;
-        var dl=document.createElement('button');dl.className='dl';dl.textContent='⬇ Download';
-        dl.onclick=function(){var a=document.createElement('a');a.href=fr.png;a.download='slimewire-pfp-'+fr.id+'.png';
-          document.body.appendChild(a);a.click();a.remove();};
-        card.appendChild(img);card.appendChild(lbl);card.appendChild(dl);grid.appendChild(card);
-      });
-      again.classList.remove('hidden');
-    })
-    .catch(function(){statusEl.textContent='Network hiccup — check your connection and try again.';});
+    studioGen(true);
   }
-  again.addEventListener('click',function(){file.value='';grid.innerHTML='';statusEl.textContent='';again.classList.add('hidden');window.scrollTo(0,0);});
-
-  // 🎨 Slime Studio — free combinatorial engine (always on when the Higgs library exists).
-  fetch(API_BASE+'/api/web/pfp/studio-info').then(function(r){return r.json();}).then(function(d){
-    if(d&&d.ok&&d.enabled){studioEnabled=true;var c=document.getElementById('comboCount');if(c&&d.combos)c.textContent=d.combos.toLocaleString();}
-  }).catch(function(){});
-  function studioCard(png,seed){
-    var card=document.createElement('div');card.className='card';
-    var img=document.createElement('img');img.src=png;img.alt='SlimeWire studio PFP';img.loading='lazy';
-    var dl=document.createElement('button');dl.className='dl';dl.textContent='⬇ Download';
-    dl.onclick=function(){var a=document.createElement('a');a.href=png;a.download='slimewire-pfp-'+seed+'.png';document.body.appendChild(a);a.click();a.remove();};
-    card.appendChild(img);card.appendChild(dl);return card;
-  }
-  function studioGen(){
+  function studioGen(first){
     if(!lastDataUrl||studioBusy)return;studioBusy=true;
-    var more=document.getElementById('studioMore');if(more){more.disabled=true;more.textContent='🎲 Rolling…';}
-    fetch(API_BASE+'/api/web/pfp/studio',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({imageDataUrl:lastDataUrl,baseSeed:studioSeed})})
+    var more=document.getElementById('studioMore');more.disabled=true;more.textContent='🎲 Rolling…';
+    fetch(API_BASE+'/api/web/pfp/studio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({imageDataUrl:lastDataUrl,baseSeed:studioSeed})})
     .then(function(r){return r.json();}).then(function(d){
-      studioBusy=false;if(more){more.disabled=false;more.textContent='🎲 More styles';}
-      if(!d||!d.ok||!d.results)return;
-      var g=document.getElementById('studioGrid');d.results.forEach(function(x){g.appendChild(studioCard(x.png,x.seed));});
+      studioBusy=false;more.disabled=false;more.textContent='🎲 More looks';
+      if(!d||!d.ok||!d.results){statusEl.textContent=(d&&d.error)||'Couldn\'t slime that — try another pic.';return;}
+      if(first)statusEl.innerHTML='✅ <b>Slimed!</b> Tap Download on your favorite, or 🎲 for more.';
+      var g=document.getElementById('studioGrid');
+      d.results.forEach(function(x){
+        var card=document.createElement('div');card.className='card';
+        var img=document.createElement('img');img.src=x.png;img.alt='Your slimed SlimeWire PFP';img.loading='lazy';
+        var b=document.createElement('button');b.className='dl';b.textContent='⬇ Download';
+        b.onclick=function(){dl(x.png,'slimewire-pfp-'+x.seed+'.png');};
+        card.appendChild(img);card.appendChild(b);g.appendChild(card);
+      });
       studioSeed+=d.results.length;
-    }).catch(function(){studioBusy=false;if(more){more.disabled=false;more.textContent='🎲 More styles';}});
+    }).catch(function(){studioBusy=false;more.disabled=false;more.textContent='🎲 More looks';statusEl.textContent='Network hiccup — try again.';});
   }
-  var sm=document.getElementById('studioMore');if(sm)sm.addEventListener('click',studioGen);
+  document.getElementById('studioMore').addEventListener('click',function(){studioGen(false);});
 
-  // ✨ AI Slime — load styles (only shows if the server has it enabled) and repaint the uploaded pic.
+  // ✨ AI Slime (optional, only if the server has it enabled)
   fetch(API_BASE+'/api/web/pfp/ai-styles').then(function(r){return r.json();}).then(function(d){
-    if(!d||!d.ok||!d.enabled||!d.styles||!d.styles.length)return;
-    aiEnabled=true;
+    if(!d||!d.ok||!d.enabled||!d.styles||!d.styles.length)return;aiEnabled=true;
     var wrap=document.getElementById('aiStyles');
-    d.styles.forEach(function(s){
-      var b=document.createElement('button');b.className='aibtn';b.textContent=s.label;
-      b.onclick=function(){aiSlime(s.id,b);};wrap.appendChild(b);
-    });
+    d.styles.forEach(function(s){var b=document.createElement('button');b.className='ghost';b.textContent='✨ '+s.label;b.onclick=function(){aiSlime(s.id);};wrap.appendChild(b);});
   }).catch(function(){});
-
-  function aiSlime(style,btn){
+  function aiSlime(style){
     if(!lastDataUrl){statusEl.textContent='Upload a photo first.';return;}
-    if(aiBusy)return;aiBusy=true;
-    var out=document.getElementById('aiOut');
-    out.innerHTML='<div class="mut" style="color:var(--muted)"><span class="spin"></span>Painting you in slime… (~10s)</div>';
-    document.querySelectorAll('.aibtn').forEach(function(x){x.disabled=true;});
-    fetch(API_BASE+'/api/web/pfp/ai',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({imageDataUrl:lastDataUrl,style:style})})
-    .then(function(r){return r.json();})
-    .then(function(d){
-      aiBusy=false;document.querySelectorAll('.aibtn').forEach(function(x){x.disabled=false;});
-      if(!d||!d.ok||!d.png){out.innerHTML='<div class="mut" style="color:var(--muted)">'+((d&&d.error)||'AI slime failed — try again.')+'</div>';return;}
-      var img=document.createElement('img');img.src=d.png;img.alt='Your AI SlimeWire PFP';
-      var dl=document.createElement('button');dl.className='dl';dl.style.maxWidth='380px';dl.style.margin='0 auto';dl.textContent='⬇ Download';
-      dl.onclick=function(){var a=document.createElement('a');a.href=d.png;a.download='slimewire-ai-pfp.png';document.body.appendChild(a);a.click();a.remove();};
-      out.innerHTML='';out.appendChild(img);out.appendChild(dl);
-    })
-    .catch(function(){aiBusy=false;document.querySelectorAll('.aibtn').forEach(function(x){x.disabled=false;});out.innerHTML='<div class="mut" style="color:var(--muted)">Network hiccup — try again.</div>';});
+    if(aiBusy)return;aiBusy=true;var out=document.getElementById('aiOut');
+    out.innerHTML='<span class="spin"></span>Painting you in slime… (~10s)';
+    fetch(API_BASE+'/api/web/pfp/ai',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({imageDataUrl:lastDataUrl,style:style})})
+    .then(function(r){return r.json();}).then(function(d){
+      aiBusy=false;
+      if(!d||!d.ok||!d.png){out.textContent=(d&&d.error)||'AI slime failed — try again.';return;}
+      var img=document.createElement('img');img.src=d.png;img.style.width='min(360px,80vw)';img.style.borderRadius='18px';img.style.display='block';img.style.margin='0 auto 10px';
+      var b=document.createElement('button');b.className='dl';b.style.maxWidth='360px';b.style.margin='0 auto';b.textContent='⬇ Download';
+      b.onclick=function(){dl(d.png,'slimewire-ai-pfp.png');};
+      out.innerHTML='';out.appendChild(img);out.appendChild(b);
+    }).catch(function(){aiBusy=false;out.textContent='Network hiccup — try again.';});
   }
 </script>
 </body>
