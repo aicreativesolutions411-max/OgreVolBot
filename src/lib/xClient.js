@@ -228,26 +228,32 @@ export async function xGetTweet(id) {
   } catch { return null; }
 }
 
-// Best-effort media upload (v1.1). Returns a media_id string or null (text-only reply still works).
+// Media upload (v1.1 simple upload). Returns { id, error } — tries upload.twitter.com then upload.x.com.
 async function uploadMedia(buffer) {
-  if (!buffer || !hasXCookies()) return null;
-  try {
-    const { auth, ct0 } = readCookieParts();
-    const { tx } = await getSession();
-    const path = "/1.1/media/upload.json";
-    const tid = await tx.generateTransactionId("POST", path);
-    const form = new FormData();
-    form.append("media_data", buffer.toString("base64"));
-    const res = await fetch(`https://upload.twitter.com${path}`, { method: "POST", headers: { authorization: `Bearer ${BEARER}`, "x-csrf-token": ct0, "x-client-transaction-id": tid, cookie: `auth_token=${auth}; ct0=${ct0}`, "user-agent": UA, referer: "https://x.com/" }, body: form });
-    if (!res.ok) return null;
-    const j = await res.json().catch(() => null);
-    return j?.media_id_string || (j?.media_id ? String(j.media_id) : null);
-  } catch { return null; }
+  if (!buffer || !hasXCookies()) return { id: null, error: "no buffer" };
+  const { auth, ct0 } = readCookieParts();
+  let tx; try { ({ tx } = await getSession()); } catch (e) { return { id: null, error: "session:" + String(e?.message || e).slice(0, 50) }; }
+  const path = "/1.1/media/upload.json";
+  let lastErr = "upload failed";
+  for (const host of ["https://upload.twitter.com", "https://upload.x.com"]) {
+    try {
+      const tid = await tx.generateTransactionId("POST", path);
+      const form = new FormData();
+      form.append("media_data", buffer.toString("base64"));
+      form.append("media_category", "tweet_image");
+      const res = await fetch(`${host}${path}`, { method: "POST", headers: { authorization: `Bearer ${BEARER}`, "x-csrf-token": ct0, "x-client-transaction-id": tid, cookie: `auth_token=${auth}; ct0=${ct0}`, "user-agent": UA, referer: "https://x.com/", origin: "https://x.com" }, body: form });
+      const t = await res.text();
+      if (res.ok) { try { const j = JSON.parse(t); const id = j?.media_id_string || (j?.media_id ? String(j.media_id) : null); if (id) return { id, error: null }; } catch {} }
+      lastErr = `${res.status}:${t.slice(0, 60).replace(/\s+/g, " ")}`;
+    } catch (e) { lastErr = String(e?.message || e).slice(0, 60); }
+  }
+  return { id: null, error: lastErr };
 }
 export async function xReply({ inReplyToId, text, mediaBuffer }) {
   if (!hasXCookies()) return { ok: false, reason: "not configured" };
   try {
-    const mediaId = mediaBuffer ? await uploadMedia(mediaBuffer).catch(() => null) : null;
+    let mediaId = null, media = "none";
+    if (mediaBuffer) { const up = await uploadMedia(mediaBuffer); mediaId = up.id; media = up.id ? "card" : ("no-card:" + (up.error || "")); }
     const variables = {
       tweet_text: String(text || "").slice(0, 279),
       reply: { in_reply_to_tweet_id: String(inReplyToId), exclude_reply_user_ids: [] },
@@ -257,8 +263,8 @@ export async function xReply({ inReplyToId, text, mediaBuffer }) {
     };
     const j = await gql("POST", "CreateTweet", { variables, features: WRITE_FEATURES });
     const id = j?.data?.create_tweet?.tweet_results?.result?.rest_id || "";
-    if (j?.errors?.length && !id) return { ok: false, reason: String(j.errors[0]?.message || "create_tweet error").slice(0, 140) };
-    return { ok: true, id };
+    if (j?.errors?.length && !id) return { ok: false, reason: String(j.errors[0]?.message || "create_tweet error").slice(0, 140), media };
+    return { ok: true, id, media };
   } catch (e) {
     if (e.status === 401 || e.status === 403) resetXScraper();
     return { ok: false, reason: String(e?.message || "reply failed").slice(0, 160) };

@@ -30832,8 +30832,8 @@ async function xReplyPollTick() {
       const res = await xReply({ inReplyToId: m.id, text: reply.text, mediaBuffer: reply.mediaBuffer });
       if (res.ok) {
         state.seen[m.id] = now; delete state.fails[m.id]; state.posts.push(Date.now());
-        results.push({ u: m.username, s: "replied", d: `$${reply.symbol}` });
-        await xReplyOwnerNotify(`✅ Auto-replied on X to @${m.username} · $${reply.symbol}`);
+        results.push({ u: m.username, s: "replied", d: `$${reply.symbol}${res.media && res.media !== "card" ? " · " + res.media : " · card"}` });
+        await xReplyOwnerNotify(`✅ Auto-replied on X to @${m.username} · $${reply.symbol} (${res.media || "text"})`);
       } else {
         // Transient failure → retry next cycle (up to 3x) instead of marking it done forever.
         state.fails[m.id] = (Number(state.fails[m.id]) || 0) + 1;
