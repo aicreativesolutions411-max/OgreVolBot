@@ -72,7 +72,7 @@ import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVan
 import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp } from "./lib/pfp.js";
 import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
-import { xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode } from "./lib/xClient.js";
+import { xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode, xAuthReport } from "./lib/xClient.js";
 import { renderXScanCard } from "./lib/xCard.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
@@ -30886,16 +30886,21 @@ async function handleXTestCommand(chatId, userId) {
   if (!xConfigured()) { await sayHtml(chatId, "🐦 <b>X not configured.</b> Set EITHER <code>X_AUTH_TOKEN</code> + <code>X_CT0</code> (x.com cookies) OR <code>X_USERNAME</code> + <code>X_PASSWORD</code> (durable — doesn't expire) on Render, then <code>X_REPLY_ENABLED=true</code>."); return; }
   const me = await xWhoAmI().catch(() => null);
   if (!(me && (me.username || me.screenName))) {
-    const why = xLastAuthError();
+    const rep = xAuthReport() || {};
     await sayHtml(chatId, [
-      "🐦 <b>Auth failed.</b>",
-      `Using: <b>${xAuthMode() === "cookies" ? "cookies (auth_token + ct0)" : xAuthMode() === "password" ? "username + password" : "nothing"}</b>`,
-      why ? `Reason: <b>${escapeTelegramHtml(why)}</b>` : "",
+      "🐦 <b>Auth failed.</b> Here's what each method did:",
+      `• <b>Cookies:</b> ${escapeTelegramHtml(rep.cookies || "not set")}`,
+      `• <b>Password:</b> ${escapeTelegramHtml(rep.password || "not set")}`,
       "",
-      "Fixes:",
-      "• Password login challenged → add <code>X_EMAIL</code> (the email on the account) and, if 2FA is on, <code>X_2FA_SECRET</code> (the TOTP secret, not a one-time code).",
-      "• Or use cookies: log into x.com in a browser, copy <code>auth_token</code> + <code>ct0</code> from DevTools → Application → Cookies, set <code>X_AUTH_TOKEN</code> + <code>X_CT0</code>. Cookies beat password when X is challenging logins.",
-      "Then redeploy and run <code>/xtest</code> again."
+      "👉 <b>Cookies are the reliable path from a server</b> (X blocks password logins from datacenter IPs with an emailed code the bot can't read). Do this:",
+      "1. Log into <b>x.com</b> in your browser.",
+      "2. F12 → <b>Application</b> → <b>Cookies</b> → <code>https://x.com</code>.",
+      "3. Copy the <b>Value</b> of <code>auth_token</code> (~40 hex chars) and <code>ct0</code> (~160 hex chars) — the value only, no name, no quotes.",
+      "4. On Render set <code>X_AUTH_TOKEN</code> = auth_token, <code>X_CT0</code> = ct0.",
+      "",
+      "🪄 <b>Easier:</b> in the browser console run <code>document.cookie</code>, copy the whole line, and paste it into one env var <code>X_COOKIES</code> — I'll pull auth_token + ct0 out of it (no way to mistype).",
+      "",
+      "Then redeploy and run <code>/xtest</code>. (Tip: clear the old <code>X_AUTH_TOKEN</code>/<code>X_CT0</code> first if they were stale.)"
     ].filter(Boolean).join("\n"));
     return;
   }

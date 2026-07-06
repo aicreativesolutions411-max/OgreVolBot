@@ -11,13 +11,33 @@
 import { Scraper, SearchMode } from "agent-twitter-client";
 
 let scraperPromise = null;
-// Last auth failure reason, in plain English, so /xtest can tell the owner WHY (expired cookies vs a
-// login challenge vs wrong password) instead of a useless "failed". Never contains the secret itself.
+// Per-method auth outcome, in plain English, so /xtest can tell the owner WHY (expired cookies vs a login
+// challenge vs wrong password) instead of a useless "failed". Never contains the secret itself.
 let lastAuthError = "";
+let lastAuthReport = { cookies: "", password: "" };
 export function xLastAuthError() { return lastAuthError; }
+export function xAuthReport() { return lastAuthReport; }
 
-function hasXCookies() { return Boolean((process.env.X_AUTH_TOKEN || "").trim() && (process.env.X_CT0 || "").trim()); }
-function hasXPassword() { return Boolean((process.env.X_USERNAME || "").trim() && (process.env.X_PASSWORD || "").trim()); }
+// Cookies can be supplied two ways, in priority order:
+//  (1) X_AUTH_TOKEN + X_CT0 (+ optional X_GUEST_ID) — the individual values, OR
+//  (2) X_COOKIES — paste the WHOLE cookie string from the browser (Application → Cookies, or
+//      `document.cookie`); we parse auth_token / ct0 / guest_id out of it. Far harder to get wrong.
+// Strips accidental wrapping quotes / spaces that silently break the individual-var path.
+function clean(v) { return String(v || "").trim().replace(/^["']|["']$/g, "").trim(); }
+function readCookieParts() {
+  let auth = clean(process.env.X_AUTH_TOKEN);
+  let ct0 = clean(process.env.X_CT0);
+  let guest = clean(process.env.X_GUEST_ID);
+  const blob = clean(process.env.X_COOKIES);
+  if (blob) {
+    if (!auth) { const m = blob.match(/auth_token=([^;\s]+)/i); if (m) auth = m[1]; }
+    if (!ct0) { const m = blob.match(/ct0=([^;\s]+)/i); if (m) ct0 = m[1]; }
+    if (!guest) { const m = blob.match(/guest_id=([^;\s]+)/i); if (m) guest = m[1]; }
+  }
+  return { auth, ct0, guest };
+}
+function hasXCookies() { const { auth, ct0 } = readCookieParts(); return Boolean(auth && ct0); }
+function hasXPassword() { return Boolean(clean(process.env.X_USERNAME) && String(process.env.X_PASSWORD || "").length); }
 export function xConfigured() { return hasXCookies() || hasXPassword(); }
 export function xAuthMode() { return hasXCookies() ? "cookies" : hasXPassword() ? "password" : "none"; }
 export function xHandle() {
@@ -30,6 +50,7 @@ export async function getXScraper() {
   if (!xConfigured()) return null;
   if (scraperPromise) return scraperPromise;
   scraperPromise = (async () => {
+    const report = { cookies: "", password: "" };
     try {
       const s = new Scraper();
       // A login "took" if EITHER isLoggedIn() says so OR me() returns a handle. isLoggedIn() is flaky on
@@ -38,50 +59,56 @@ export async function getXScraper() {
         if (await s.isLoggedIn().catch(() => false)) return true;
         try { const me = await s.me(); return Boolean(me && (me.username || me.screenName || me?.legacy?.screen_name)); } catch { return false; }
       };
+      const finish = (sc) => { lastAuthError = ""; lastAuthReport = report; return sc; };
       // 1) COOKIES — an already-authenticated browser session; most reliable WHEN FRESH (they expire).
-      if (hasXCookies()) {
+      const { auth, ct0, guest } = readCookieParts();
+      if (auth && ct0) {
         try {
-          const domain = "twitter.com";
-          const cookies = [
-            `auth_token=${String(process.env.X_AUTH_TOKEN).trim()}; Domain=.${domain}; Path=/; Secure; HttpOnly`,
-            `ct0=${String(process.env.X_CT0).trim()}; Domain=.${domain}; Path=/; Secure`
-          ];
-          if ((process.env.X_GUEST_ID || "").trim()) cookies.push(`guest_id=${String(process.env.X_GUEST_ID).trim()}; Domain=.${domain}; Path=/`);
+          // Set for BOTH twitter.com and x.com so whichever host the client hits is covered.
+          const cookies = [];
+          for (const d of ["twitter.com", "x.com"]) {
+            cookies.push(`auth_token=${auth}; Domain=.${d}; Path=/; Secure; HttpOnly`);
+            cookies.push(`ct0=${ct0}; Domain=.${d}; Path=/; Secure`);
+            if (guest) cookies.push(`guest_id=${guest}; Domain=.${d}; Path=/`);
+          }
           await s.setCookies(cookies).catch(() => {});
-          if (await authed()) { lastAuthError = ""; return s; }
-          lastAuthError = "cookies rejected (auth_token/ct0 expired — grab fresh ones from x.com)";
-        } catch (e) { lastAuthError = `cookie auth: ${String(e?.message || e).slice(0, 160)}`; }
+          if (await authed()) { report.cookies = "ok"; return finish(s); }
+          report.cookies = "rejected — auth_token/ct0 are stale or mistyped (grab fresh from x.com; copy the VALUE only, no name/quotes)";
+        } catch (e) { report.cookies = `error: ${String(e?.message || e).slice(0, 120)}`; }
+      } else {
+        report.cookies = "not set";
       }
       // 2) USERNAME/PASSWORD — durable fallback that DOESN'T expire like cookies. Set X_USERNAME +
       // X_PASSWORD (+ X_EMAIL, + X_2FA_SECRET if 2FA is on). The password is owner-set env; never logged.
       if (hasXPassword()) {
-        const user = String(process.env.X_USERNAME).trim();
-        const email = (process.env.X_EMAIL || "").trim();
-        const twoFa = (process.env.X_2FA_SECRET || "").trim();
+        const user = clean(process.env.X_USERNAME);
+        const email = clean(process.env.X_EMAIL);
+        const twoFa = clean(process.env.X_2FA_SECRET);
         try {
           await s.login(user, String(process.env.X_PASSWORD), email || undefined, twoFa || undefined);
-          if (await authed()) { lastAuthError = ""; return s; }
-          // Some flows want the EMAIL as the identifier (X asks "confirm your email"); retry with it.
-          if (email) {
-            try {
-              await s.login(email, String(process.env.X_PASSWORD), user || undefined, twoFa || undefined);
-              if (await authed()) { lastAuthError = ""; return s; }
-            } catch { /* keep the first error below */ }
+          if (await authed()) { report.password = "ok"; return finish(s); }
+          if (email) { // some flows want the EMAIL as the identifier ("confirm your email")
+            try { await s.login(email, String(process.env.X_PASSWORD), user || undefined, twoFa || undefined); if (await authed()) { report.password = "ok"; return finish(s); } } catch { /* keep error below */ }
           }
-          lastAuthError = twoFa
-            ? "login didn't authenticate — check X_USERNAME/X_PASSWORD; if the 2FA secret is wrong the code won't match"
-            : "login didn't authenticate — X likely wants an email/phone confirmation code or 2FA. Set X_EMAIL (and X_2FA_SECRET if 2FA is on), or use fresh X_AUTH_TOKEN + X_CT0 cookies instead";
+          report.password = twoFa ? "login didn't authenticate — check creds; a wrong X_2FA_SECRET fails silently" : "login didn't authenticate — X wants a confirmation code it emailed/texted (the library can't read it). Use cookies.";
         } catch (e) {
           const msg = String(e?.message || e || "login failed");
-          if (/acid|confirm|verif|challenge|code/i.test(msg)) lastAuthError = "X challenged the login (email/phone confirmation). Set X_EMAIL + X_2FA_SECRET, or switch to cookie auth (X_AUTH_TOKEN + X_CT0)";
-          else if (/suspend|locked/i.test(msg)) lastAuthError = "the X account is suspended/locked — log in on x.com and clear it";
-          else if (/password|credential|denied|401|403/i.test(msg)) lastAuthError = "X rejected the credentials — double-check X_USERNAME + X_PASSWORD";
-          else lastAuthError = `login: ${msg.slice(0, 160)}`;
+          if (/acid|confirm|verif|challenge|code|arkose|captcha/i.test(msg)) report.password = "X challenged the login (datacenter IP → emailed code the library can't read). Use cookies.";
+          else if (/suspend|locked/i.test(msg)) report.password = "account suspended/locked — log in on x.com and clear it";
+          else if (/password|credential|denied|401|403|unauthor/i.test(msg)) report.password = "X rejected the credentials — double-check X_USERNAME + X_PASSWORD";
+          else report.password = `login error: ${msg.slice(0, 120)}`;
         }
+      } else {
+        report.password = "not set";
       }
+      // Both paths failed — surface the most actionable one (cookies is the reliable route from a server).
+      lastAuthReport = report;
+      lastAuthError = report.cookies && report.cookies !== "not set" && report.cookies !== "ok"
+        ? `cookies ${report.cookies}`
+        : (report.password && report.password !== "not set" ? report.password : "not configured");
       scraperPromise = null;
       return null;
-    } catch (e) { scraperPromise = null; lastAuthError = `client: ${String(e?.message || e).slice(0, 160)}`; return null; }
+    } catch (e) { scraperPromise = null; lastAuthReport = report; lastAuthError = `client: ${String(e?.message || e).slice(0, 140)}`; return null; }
   })();
   return scraperPromise;
 }
