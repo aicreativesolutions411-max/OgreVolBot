@@ -30883,24 +30883,21 @@ async function handleXClaimCommand(chatId, message, argument, userId) {
 async function handleXTestCommand(chatId, userId) {
   if (!xReplyOwnerChat()) { await sayHtml(chatId, "🐦 No X-reply owner yet — DM me <code>/xclaim</code>" + (CONFIG.autopilotOwnerKey ? " <code>&lt;your owner key&gt;</code>" : "") + " first to bind approvals to this chat."); return; }
   if (String(chatId) !== xReplyOwnerChat()) { await say(chatId, "This command is owner-only."); return; }
-  if (!xConfigured()) { await sayHtml(chatId, "🐦 <b>X not configured.</b> Set EITHER <code>X_AUTH_TOKEN</code> + <code>X_CT0</code> (x.com cookies) OR <code>X_USERNAME</code> + <code>X_PASSWORD</code> (durable — doesn't expire) on Render, then <code>X_REPLY_ENABLED=true</code>."); return; }
+  if (!xConfigured()) { await sayHtml(chatId, "🐦 <b>X not configured.</b> Set <code>X_AUTH_TOKEN</code> + <code>X_CT0</code> (x.com cookies) on Render. (Grab from x.com → F12 → Application → Cookies → copy the values; or paste your whole <code>document.cookie</code> into one <code>X_COOKIES</code> var.)"); return; }
   const me = await xWhoAmI().catch(() => null);
   if (!(me && (me.username || me.screenName))) {
     const rep = xAuthReport() || {};
     await sayHtml(chatId, [
-      "🐦 <b>Auth failed.</b> Here's what each method did:",
+      "🐦 <b>Auth failed.</b>",
       `• <b>Cookies:</b> ${escapeTelegramHtml(rep.cookies || "not set")}`,
-      `• <b>Password:</b> ${escapeTelegramHtml(rep.password || "not set")}`,
+      rep.api ? `• <b>X API:</b> ${escapeTelegramHtml(rep.api)}` : "",
       "",
-      "👉 <b>Cookies are the reliable path from a server</b> (X blocks password logins from datacenter IPs with an emailed code the bot can't read). Do this:",
-      "1. Log into <b>x.com</b> in your browser.",
-      "2. F12 → <b>Application</b> → <b>Cookies</b> → <code>https://x.com</code>.",
-      "3. Copy the <b>Value</b> of <code>auth_token</code> (~40 hex chars) and <code>ct0</code> (~160 hex chars) — the value only, no name, no quotes.",
-      "4. On Render set <code>X_AUTH_TOKEN</code> = auth_token, <code>X_CT0</code> = ct0.",
+      "The bot now signs requests the way X's own site does, so valid cookies work. If this still fails, the <code>auth_token</code>/<code>ct0</code> are stale — grab fresh ones:",
+      "1. Log into <b>x.com</b> → F12 → <b>Application</b> → <b>Cookies</b> → <code>https://x.com</code>.",
+      "2. Copy the <b>Value</b> of <code>auth_token</code> and <code>ct0</code> (value only, no quotes).",
+      "3. Set <code>X_AUTH_TOKEN</code> + <code>X_CT0</code> on Render, redeploy, <code>/xtest</code>.",
       "",
-      "🪄 <b>Easier:</b> in the browser console run <code>document.cookie</code>, copy the whole line, and paste it into one env var <code>X_COOKIES</code> — I'll pull auth_token + ct0 out of it (no way to mistype).",
-      "",
-      "Then redeploy and run <code>/xtest</code>. (Tip: clear the old <code>X_AUTH_TOKEN</code>/<code>X_CT0</code> first if they were stale.)"
+      "(Grab both from the SAME panel at once so they match — <code>ct0</code> rotates on reload.)"
     ].filter(Boolean).join("\n"));
     return;
   }

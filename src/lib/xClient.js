@@ -1,33 +1,35 @@
-// Unofficial X (Twitter) access via a logged-in account's SESSION COOKIES — no paid API. Isolates the
-// fragile third-party client (agent-twitter-client) behind a tiny, stable interface so the rest of the
-// app never imports it directly. Everything degrades to "not configured" (returns null/[]) when the
-// cookies aren't set, so nothing here can fire until the owner opts in.
+// Unofficial X (Twitter) access — no paid API. Talks to X's CURRENT web GraphQL endpoints directly,
+// signing each request with the `x-client-transaction-id` header X now requires (its anti-bot measure).
+// This replaces agent-twitter-client, which calls RETIRED api.twitter.com endpoints and can't produce
+// the transaction id, so it 401s against 2026 X. Query IDs are scraped live from X's JS bundle so they
+// stay current when X rotates them.
 //
-// SECRETS: the account's auth_token + ct0 cookies come from env (X_AUTH_TOKEN / X_CT0). They are set by
-// the owner in Render — this code only READS them. Never log them.
+// SECRETS: the account's auth_token + ct0 come from env (X_AUTH_TOKEN / X_CT0, or a pasted X_COOKIES
+// string). This code only READS them — never logs them. Everything degrades to null/[] when unset.
 //
-// TERMS: automating a logged-in account is against X's ToS and can get the account suspended. The owner
-// accepted that risk; callers throttle hard + reply with value (a scan card), not bare-link spam.
-import { Scraper, SearchMode } from "agent-twitter-client";
+// TERMS: automating a logged-in account is against X's ToS and can get it suspended. The owner accepted
+// that risk; callers throttle + reply with value (a scan card), not bare-link spam.
+import { ClientTransaction, fetchXDocument } from "x-client-transaction-id";
 
-let scraperPromise = null;
-// Per-method auth outcome, in plain English, so /xtest can tell the owner WHY (expired cookies vs a login
-// challenge vs wrong password) instead of a useless "failed". Never contains the secret itself.
+// The public web-app bearer (not a secret — it's shipped in x.com's JS). Overridable via env.
+const BEARER = (process.env.X_BEARER_TOKEN || "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA").trim();
+const UA = (process.env.X_USER_AGENT || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36").trim();
+// Fallbacks if the live scrape fails; the scrape keeps the real ones current automatically.
+const FALLBACK_QID = { SearchTimeline: "Bcw3RzK-PatNAmbnw54hFw", CreateTweet: "R5EPiGHgSqbTYFyozd-gFw", UserByScreenName: "2qvSHpkWTMS9i0zJAwDNiA", Viewer: "u4ni7JqpqdAQxWQfkLsdUQ", TweetResultByRestId: "zAz9764BcLZOJ0JU2wrd1A" };
+
+// GraphQL feature flags X validates per operation (missing ones → 400). Broad current set.
+const READ_FEATURES = { rweb_video_screen_enabled: false, profile_label_improvements_pcf_label_in_post_enabled: true, rweb_tipjar_consumption_enabled: true, responsive_web_graphql_exclude_directive_enabled: true, verified_phone_label_enabled: false, creator_subscriptions_tweet_preview_api_enabled: true, responsive_web_graphql_timeline_navigation_enabled: true, responsive_web_graphql_skip_user_profile_image_extensions_enabled: false, premium_content_api_read_enabled: false, communities_web_enable_tweet_community_results_fetch: true, c9s_tweet_anatomy_moderator_badge_enabled: true, responsive_web_grok_analyze_button_fetch_trends_enabled: false, responsive_web_grok_analyze_post_followups_enabled: true, responsive_web_jetfuel_frame: false, responsive_web_grok_share_attachment_enabled: true, articles_preview_enabled: true, responsive_web_edit_tweet_api_enabled: true, graphql_is_translatable_rweb_tweet_is_translatable_enabled: true, view_counts_everywhere_api_enabled: true, longform_notetweets_consumption_enabled: true, responsive_web_twitter_article_tweet_consumption_enabled: true, tweet_awards_web_tipping_enabled: false, responsive_web_grok_show_grok_translated_post: false, responsive_web_grok_analysis_button_from_backend: true, creator_subscriptions_quote_tweet_preview_enabled: false, freedom_of_speech_not_reach_fetch_enabled: true, standardized_nudges_misinfo: true, tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled: true, longform_notetweets_rich_text_read_enabled: true, longform_notetweets_inline_media_enabled: true, responsive_web_grok_image_annotation_enabled: true, responsive_web_grok_imagine_annotation_enabled: true, responsive_web_grok_community_note_auto_translation_is_enabled: false, responsive_web_enhance_cards_enabled: false, payments_enabled: false };
+const WRITE_FEATURES = { premium_content_api_read_enabled: false, communities_web_enable_tweet_community_results_fetch: true, c9s_tweet_anatomy_moderator_badge_enabled: true, responsive_web_grok_analyze_button_fetch_trends_enabled: false, responsive_web_grok_analyze_post_followups_enabled: true, responsive_web_jetfuel_frame: false, responsive_web_grok_share_attachment_enabled: true, responsive_web_edit_tweet_api_enabled: true, graphql_is_translatable_rweb_tweet_is_translatable_enabled: true, view_counts_everywhere_api_enabled: true, longform_notetweets_consumption_enabled: true, responsive_web_twitter_article_tweet_consumption_enabled: true, tweet_awards_web_tipping_enabled: false, responsive_web_grok_show_grok_translated_post: false, responsive_web_grok_analysis_button_from_backend: true, creator_subscriptions_quote_tweet_preview_enabled: false, longform_notetweets_rich_text_read_enabled: true, longform_notetweets_inline_media_enabled: true, profile_label_improvements_pcf_label_in_post_enabled: true, rweb_tipjar_consumption_enabled: true, verified_phone_label_enabled: false, articles_preview_enabled: true, responsive_web_graphql_exclude_directive_enabled: true, responsive_web_graphql_skip_user_profile_image_extensions_enabled: false, freedom_of_speech_not_reach_fetch_enabled: true, standardized_nudges_misinfo: true, tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled: true, responsive_web_graphql_timeline_navigation_enabled: true, responsive_web_grok_image_annotation_enabled: true, responsive_web_enhance_cards_enabled: false, payments_enabled: false, rweb_video_screen_enabled: false, responsive_web_grok_imagine_annotation_enabled: true, responsive_web_grok_community_note_auto_translation_is_enabled: false };
+
 let lastAuthError = "";
-let lastAuthReport = { cookies: "", password: "" };
+let lastAuthReport = { cookies: "", api: "" };
 export function xLastAuthError() { return lastAuthError; }
 export function xAuthReport() { return lastAuthReport; }
 
-// Cookies can be supplied two ways, in priority order:
-//  (1) X_AUTH_TOKEN + X_CT0 (+ optional X_GUEST_ID) — the individual values, OR
-//  (2) X_COOKIES — paste the WHOLE cookie string from the browser (Application → Cookies, or
-//      `document.cookie`); we parse auth_token / ct0 / guest_id out of it. Far harder to get wrong.
-// Strips accidental wrapping quotes / spaces that silently break the individual-var path.
+// ---- Cookies -------------------------------------------------------------------------------------
 function clean(v) { return String(v || "").trim().replace(/^["']|["']$/g, "").trim(); }
 function readCookieParts() {
-  let auth = clean(process.env.X_AUTH_TOKEN);
-  let ct0 = clean(process.env.X_CT0);
-  let guest = clean(process.env.X_GUEST_ID);
+  let auth = clean(process.env.X_AUTH_TOKEN), ct0 = clean(process.env.X_CT0), guest = clean(process.env.X_GUEST_ID);
   const blob = clean(process.env.X_COOKIES);
   if (blob) {
     if (!auth) { const m = blob.match(/auth_token=([^;\s]+)/i); if (m) auth = m[1]; }
@@ -37,144 +39,159 @@ function readCookieParts() {
   return { auth, ct0, guest };
 }
 function hasXCookies() { const { auth, ct0 } = readCookieParts(); return Boolean(auth && ct0); }
+// password auth is dead against current X (datacenter logins get an email-code challenge the bot can't
+// read) — kept only so /xtest can explain it; cookies are the only working path.
 function hasXPassword() { return Boolean(clean(process.env.X_USERNAME) && String(process.env.X_PASSWORD || "").length); }
-export function xConfigured() { return hasXCookies() || hasXPassword(); }
-export function xAuthMode() { return hasXCookies() ? "cookies" : hasXPassword() ? "password" : "none"; }
-export function xHandle() {
-  return String(process.env.X_HANDLE || process.env.TELEGRAM_BOT_USERNAME || "SlimeWiredBot").replace(/^@+/, "").trim();
+export function xConfigured() { return hasXCookies(); }
+export function xAuthMode() { return hasXCookies() ? "cookies" : hasXPassword() ? "password (unsupported — use cookies)" : "none"; }
+export function xHandle() { return String(process.env.X_HANDLE || process.env.TELEGRAM_BOT_USERNAME || "SlimeWiredBot").replace(/^@+/, "").trim(); }
+
+// ---- Session (transaction signer + live query-id map), refreshed periodically --------------------
+let session = null; // { tx, qmap, at }
+async function scrapeQueryIds() {
+  const map = {};
+  try {
+    const home = await (await fetch("https://x.com/", { headers: { "user-agent": UA, accept: "text/html" } })).text();
+    const urls = [...new Set([...home.matchAll(/https:\/\/abs\.twimg\.com\/responsive-web\/client-web\/[a-zA-Z0-9._/-]+\.js/g)].map((m) => m[0]))];
+    const scan = (urls.filter((u) => /\/(main|api|endpoints|bundle)\./.test(u)) || []);
+    for (const u of (scan.length ? scan : urls).slice(0, 12)) {
+      try {
+        const js = await (await fetch(u, { headers: { "user-agent": UA } })).text();
+        for (const m of js.matchAll(/queryId:"([^"]+)",operationName:"([^"]+)"/g)) map[m[2]] = m[1];
+        for (const m of js.matchAll(/operationName:"([^"]+)"[^}]{0,80}?queryId:"([^"]+)"/g)) map[m[1]] = m[2];
+      } catch { /* skip a bundle */ }
+    }
+  } catch { /* fall back to hardcoded ids */ }
+  return map;
+}
+async function getSession() {
+  if (session && Date.now() - session.at < 25 * 60_000) return session;
+  const doc = await fetchXDocument();
+  const tx = await ClientTransaction.create(doc);
+  const qmap = await scrapeQueryIds();
+  session = { tx, qmap, at: Date.now() };
+  return session;
+}
+export function resetXScraper() { session = null; }
+function qid(qmap, op) { return qmap[op] || FALLBACK_QID[op] || ""; }
+function baseHeaders(ct0, tid) {
+  return { authorization: `Bearer ${BEARER}`, "x-csrf-token": ct0, "x-client-transaction-id": tid, cookie: `auth_token=${readCookieParts().auth}; ct0=${ct0}`, "content-type": "application/json", "x-twitter-active-user": "yes", "x-twitter-auth-type": "OAuth2Session", "x-twitter-client-language": "en", "user-agent": UA, accept: "*/*", origin: "https://x.com", referer: "https://x.com/" };
+}
+// A signed GraphQL call. Returns parsed JSON, or throws { status } on a non-200.
+async function gql(method, op, { variables, features }) {
+  if (!hasXCookies()) throw new Error("no cookies");
+  const { auth, ct0 } = readCookieParts();
+  const { tx, qmap } = await getSession();
+  const id = qid(qmap, op);
+  if (!id) throw new Error(`no queryId for ${op}`);
+  const path = `/i/api/graphql/${id}/${op}`;
+  const tid = await tx.generateTransactionId(method, path);
+  let url = `https://x.com${path}`, body;
+  if (method === "GET") url += `?variables=${encodeURIComponent(JSON.stringify(variables || {}))}&features=${encodeURIComponent(JSON.stringify(features || {}))}`;
+  else body = JSON.stringify({ variables: variables || {}, features: features || {}, queryId: id });
+  const res = await fetch(url, { method, headers: { ...baseHeaders(ct0, tid), cookie: `auth_token=${auth}; ct0=${ct0}` }, body });
+  const text = await res.text();
+  if (res.status === 401 || res.status === 403) { resetXScraper(); const e = new Error(`auth ${res.status}`); e.status = res.status; throw e; }
+  if (!res.ok) { const e = new Error(`${op} ${res.status}: ${text.slice(0, 120)}`); e.status = res.status; throw e; }
+  try { return JSON.parse(text); } catch { throw new Error(`${op}: bad JSON`); }
 }
 
-// Build (once) a cookie-authenticated Scraper. Returns null if not configured or the session is dead
-// (expired/invalidated cookies) so callers just no-op instead of throwing.
-export async function getXScraper() {
-  if (!xConfigured()) return null;
-  if (scraperPromise) return scraperPromise;
-  scraperPromise = (async () => {
-    const report = { cookies: "", password: "" };
-    try {
-      const s = new Scraper();
-      // A login "took" if EITHER isLoggedIn() says so OR me() returns a handle. isLoggedIn() is flaky on
-      // this client (sometimes false right after a good login), so me() is the tie-breaker.
-      const authed = async () => {
-        if (await s.isLoggedIn().catch(() => false)) return true;
-        try { const me = await s.me(); return Boolean(me && (me.username || me.screenName || me?.legacy?.screen_name)); } catch { return false; }
-      };
-      const finish = (sc) => { lastAuthError = ""; lastAuthReport = report; return sc; };
-      // 1) COOKIES — an already-authenticated browser session; most reliable WHEN FRESH (they expire).
-      const { auth, ct0, guest } = readCookieParts();
-      if (auth && ct0) {
-        try {
-          // Set for BOTH twitter.com and x.com so whichever host the client hits is covered.
-          const cookies = [];
-          for (const d of ["twitter.com", "x.com"]) {
-            cookies.push(`auth_token=${auth}; Domain=.${d}; Path=/; Secure; HttpOnly`);
-            cookies.push(`ct0=${ct0}; Domain=.${d}; Path=/; Secure`);
-            if (guest) cookies.push(`guest_id=${guest}; Domain=.${d}; Path=/`);
-          }
-          await s.setCookies(cookies).catch(() => {});
-          if (await authed()) { report.cookies = "ok"; return finish(s); }
-          report.cookies = "rejected — auth_token/ct0 are stale or mistyped (grab fresh from x.com; copy the VALUE only, no name/quotes)";
-        } catch (e) { report.cookies = `error: ${String(e?.message || e).slice(0, 120)}`; }
-      } else {
-        report.cookies = "not set";
-      }
-      // 2) USERNAME/PASSWORD — durable fallback that DOESN'T expire like cookies. Set X_USERNAME +
-      // X_PASSWORD (+ X_EMAIL, + X_2FA_SECRET if 2FA is on). The password is owner-set env; never logged.
-      if (hasXPassword()) {
-        const user = clean(process.env.X_USERNAME);
-        const email = clean(process.env.X_EMAIL);
-        const twoFa = clean(process.env.X_2FA_SECRET);
-        try {
-          await s.login(user, String(process.env.X_PASSWORD), email || undefined, twoFa || undefined);
-          if (await authed()) { report.password = "ok"; return finish(s); }
-          if (email) { // some flows want the EMAIL as the identifier ("confirm your email")
-            try { await s.login(email, String(process.env.X_PASSWORD), user || undefined, twoFa || undefined); if (await authed()) { report.password = "ok"; return finish(s); } } catch { /* keep error below */ }
-          }
-          report.password = twoFa ? "login didn't authenticate — check creds; a wrong X_2FA_SECRET fails silently" : "login didn't authenticate — X wants a confirmation code it emailed/texted (the library can't read it). Use cookies.";
-        } catch (e) {
-          const msg = String(e?.message || e || "login failed");
-          if (/acid|confirm|verif|challenge|code|arkose|captcha/i.test(msg)) report.password = "X challenged the login (datacenter IP → emailed code the library can't read). Use cookies.";
-          else if (/suspend|locked/i.test(msg)) report.password = "account suspended/locked — log in on x.com and clear it";
-          else if (/password|credential|denied|401|403|unauthor/i.test(msg)) report.password = "X rejected the credentials — double-check X_USERNAME + X_PASSWORD";
-          else report.password = `login error: ${msg.slice(0, 120)}`;
-        }
-      } else {
-        report.password = "not set";
-      }
-      // Both paths failed — surface the most actionable one (cookies is the reliable route from a server).
-      lastAuthReport = report;
-      lastAuthError = report.cookies && report.cookies !== "not set" && report.cookies !== "ok"
-        ? `cookies ${report.cookies}`
-        : (report.password && report.password !== "not set" ? report.password : "not configured");
-      scraperPromise = null;
-      return null;
-    } catch (e) { scraperPromise = null; lastAuthReport = report; lastAuthError = `client: ${String(e?.message || e).slice(0, 140)}`; return null; }
-  })();
-  return scraperPromise;
-}
-
-// Force a fresh login on the next call (e.g. after a 401 / cookie rotation).
-export function resetXScraper() { scraperPromise = null; }
-
-// The @handle we reply as — resolved from the LOGGED-IN account (the cookies), so a mistyped/omitted
-// X_HANDLE env can't make it watch the wrong account. Falls back to X_HANDLE only if whoami fails.
+// ---- Public interface (unchanged shape, so index.js doesn't change) ------------------------------
 let cachedHandle = null;
+export async function xWhoAmI() {
+  try {
+    const j = await gql("GET", "Viewer", { variables: { withCommunitiesMemberships: true }, features: READ_FEATURES });
+    const u = j?.data?.viewer?.user_results?.result;
+    const screen = u?.legacy?.screen_name || u?.core?.screen_name;
+    const name = u?.legacy?.name || u?.core?.name;
+    lastAuthError = ""; lastAuthReport = { cookies: "ok", api: "ok" };
+    return screen ? { username: screen, screenName: screen, name } : null;
+  } catch (e) {
+    lastAuthReport = { cookies: hasXCookies() ? (e.status === 401 || e.status === 403 ? "rejected — auth_token/ct0 stale (re-grab from x.com)" : "set") : "not set", api: String(e?.message || e).slice(0, 120) };
+    lastAuthError = String(e?.message || e).slice(0, 160);
+    return null;
+  }
+}
 export async function xResolvedHandle() {
   if (cachedHandle) return cachedHandle;
-  const s = await getXScraper();
-  if (s) { try { const me = await s.me(); const h = me?.username || me?.screenName || me?.legacy?.screen_name; if (h) { cachedHandle = String(h).replace(/^@+/, ""); return cachedHandle; } } catch {} }
+  const me = await xWhoAmI().catch(() => null);
+  if (me?.username) { cachedHandle = String(me.username).replace(/^@+/, ""); return cachedHandle; }
   return xHandle();
 }
 
-// Recent tweets that MENTION our handle (people asking us) — the least-abusive read: our own inbox.
-// Excludes our own tweets + retweets. Returns [{ id, text, username, userId, permanentUrl, createdAtMs }].
+function parseTweetResult(result) {
+  if (!result) return null;
+  if (result.__typename === "TweetWithVisibilityResults") result = result.tweet;
+  const legacy = result?.legacy; if (!legacy) return null;
+  const user = result?.core?.user_results?.result;
+  const uname = user?.legacy?.screen_name || user?.core?.screen_name || "";
+  const id = result?.rest_id || legacy?.id_str || "";
+  return {
+    id: String(id),
+    text: String(legacy.full_text || legacy.text || ""),
+    username: String(uname),
+    userId: String(legacy.user_id_str || user?.rest_id || ""),
+    inReplyToId: String(legacy.in_reply_to_status_id_str || legacy.conversation_id_str || ""),
+    permanentUrl: uname && id ? `https://x.com/${uname}/status/${id}` : "",
+    createdAtMs: legacy.created_at ? new Date(legacy.created_at).getTime() : 0
+  };
+}
 export async function xSearchMentions(count = 20) {
-  const s = await getXScraper();
-  if (!s) return [];
   const handle = await xResolvedHandle();
   try {
-    const res = await s.fetchSearchTweets(`@${handle} -from:${handle} -filter:retweets`, Math.min(50, count), SearchMode.Latest);
-    const tweets = (res && res.tweets) || [];
-    return tweets.map((t) => ({
-      id: String(t.id || t.rest_id || ""),
-      text: String(t.text || t.full_text || ""),
-      username: String(t.username || t.user?.screen_name || ""),
-      userId: String(t.userId || t.user_id || ""),
-      // the tweet this mention is a reply TO — lets us scan the coin in the PARENT post (tag us anywhere).
-      inReplyToId: String(t.inReplyToStatusId || t.in_reply_to_status_id_str || t.conversationId || ""),
-      permanentUrl: t.permanentUrl || (t.username && t.id ? `https://x.com/${t.username}/status/${t.id}` : ""),
-      createdAtMs: t.timeParsed ? new Date(t.timeParsed).getTime() : (Number(t.timestamp) ? Number(t.timestamp) * 1000 : 0)
-    })).filter((t) => t.id);
+    const j = await gql("GET", "SearchTimeline", { variables: { rawQuery: `@${handle} -filter:retweets`, count: Math.min(40, count), querySource: "typed_query", product: "Latest" }, features: READ_FEATURES });
+    const instr = j?.data?.search_by_raw_query?.search_timeline?.timeline?.instructions || [];
+    const out = [];
+    for (const ins of instr) for (const entry of (ins.entries || [])) {
+      if (!String(entry.entryId || "").startsWith("tweet-")) continue;
+      const t = parseTweetResult(entry.content?.itemContent?.tweet_results?.result);
+      if (t && t.id && t.username.toLowerCase() !== handle.toLowerCase()) out.push(t);
+    }
+    return out;
   } catch { return []; }
 }
-
-// Read one tweet's text by id (used to scan the coin in a post someone tagged us UNDER).
 export async function xGetTweet(id) {
-  const s = await getXScraper();
-  if (!s || !id) return null;
-  try { const t = await s.getTweet(String(id)); return t ? { id: String(t.id || id), text: String(t.text || t.full_text || "") } : null; } catch { return null; }
+  if (!id) return null;
+  try {
+    const j = await gql("GET", "TweetResultByRestId", { variables: { tweetId: String(id), withCommunity: false, includePromotedContent: false, withVoice: false }, features: READ_FEATURES });
+    const t = parseTweetResult(j?.data?.tweetResult?.result);
+    return t ? { id: t.id, text: t.text } : null;
+  } catch { return null; }
 }
 
-// Reply to a tweet, optionally with a PNG card attached. Returns { ok, id? } — never throws.
-export async function xReply({ inReplyToId, text, mediaBuffer }) {
-  const s = await getXScraper();
-  if (!s) return { ok: false, reason: "not configured" };
+// Best-effort media upload (v1.1). Returns a media_id string or null (text-only reply still works).
+async function uploadMedia(buffer) {
+  if (!buffer || !hasXCookies()) return null;
   try {
-    const media = mediaBuffer ? [{ data: mediaBuffer, mediaType: "image/png" }] : undefined;
-    const resp = await s.sendTweet(String(text || "").slice(0, 279), String(inReplyToId), media);
-    // sendTweet returns a fetch Response (graphql); a 200 means posted. Best-effort id parse.
-    let id = "";
-    try { const j = await resp.json(); id = j?.data?.create_tweet?.tweet_results?.result?.rest_id || ""; } catch {}
-    const ok = !resp || resp.ok !== false;
-    return { ok, id };
+    const { auth, ct0 } = readCookieParts();
+    const { tx } = await getSession();
+    const path = "/1.1/media/upload.json";
+    const tid = await tx.generateTransactionId("POST", path);
+    const form = new FormData();
+    form.append("media_data", buffer.toString("base64"));
+    const res = await fetch(`https://upload.twitter.com${path}`, { method: "POST", headers: { authorization: `Bearer ${BEARER}`, "x-csrf-token": ct0, "x-client-transaction-id": tid, cookie: `auth_token=${auth}; ct0=${ct0}`, "user-agent": UA, referer: "https://x.com/" }, body: form });
+    if (!res.ok) return null;
+    const j = await res.json().catch(() => null);
+    return j?.media_id_string || (j?.media_id ? String(j.media_id) : null);
+  } catch { return null; }
+}
+export async function xReply({ inReplyToId, text, mediaBuffer }) {
+  if (!hasXCookies()) return { ok: false, reason: "not configured" };
+  try {
+    const mediaId = mediaBuffer ? await uploadMedia(mediaBuffer).catch(() => null) : null;
+    const variables = {
+      tweet_text: String(text || "").slice(0, 279),
+      reply: { in_reply_to_tweet_id: String(inReplyToId), exclude_reply_user_ids: [] },
+      dark_request: false,
+      media: { media_entities: mediaId ? [{ media_id: mediaId, tagged_users: [] }] : [], possibly_sensitive: false },
+      semantic_annotation_ids: []
+    };
+    const j = await gql("POST", "CreateTweet", { variables, features: WRITE_FEATURES });
+    const id = j?.data?.create_tweet?.tweet_results?.result?.rest_id || "";
+    if (j?.errors?.length && !id) return { ok: false, reason: String(j.errors[0]?.message || "create_tweet error").slice(0, 140) };
+    return { ok: true, id };
   } catch (e) {
-    if (/401|unauthor/i.test(String(e?.message || ""))) resetXScraper();
+    if (e.status === 401 || e.status === 403) resetXScraper();
     return { ok: false, reason: String(e?.message || "reply failed").slice(0, 160) };
   }
-}
-
-export async function xWhoAmI() {
-  const s = await getXScraper();
-  if (!s) return null;
-  try { return await s.me(); } catch { return null; }
 }

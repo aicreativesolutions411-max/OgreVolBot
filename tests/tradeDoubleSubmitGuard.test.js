@@ -1808,13 +1808,16 @@ test("SlimeWire PFP maker: sharp compositor + public endpoint + /pfp command, al
 // ---- 🐦 X (Twitter) CA reply bot — unofficial cookie auth, assist/auto modes, DARK by default --------
 test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throttle, owner-gated, dark", () => {
   const xc = fs.readFileSync(new URL("../src/lib/xClient.js", import.meta.url), "utf8");
-  // cookie auth (no paid API), env-only secrets, graceful when unconfigured
-  assert.match(xc, /from "agent-twitter-client"/);
+  // direct signed GraphQL (no paid API, no dead library), env-only secrets, graceful when unconfigured
+  assert.match(xc, /from "x-client-transaction-id"/);            // the anti-bot header X now requires
+  assert.match(xc, /generateTransactionId/);
+  assert.match(xc, /scrapeQueryIds/);                           // query ids scraped live (auto-current)
   assert.match(xc, /X_AUTH_TOKEN/); assert.match(xc, /X_CT0/);
   assert.match(xc, /export function xConfigured/);
   assert.match(xc, /export async function xSearchMentions/);
   assert.match(xc, /export async function xReply/);
-  assert.match(xc, /-from:\$\{handle\}/);                      // reads OUR mentions, excludes our own posts
+  assert.match(xc, /SearchTimeline/); assert.match(xc, /CreateTweet/); // read + write ops
+  assert.match(xc, /-filter:retweets/);                        // reads OUR mentions
   const xcard = fs.readFileSync(new URL("../src/lib/xCard.js", import.meta.url), "utf8");
   assert.match(xcard, /export async function renderXScanCard/);
   // server: DARK unless X_REPLY_ENABLED + cookies; assist (default) vs auto; throttle; idempotent; owner-gated
@@ -1835,8 +1838,8 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "resolveXTargetMint"), /mention\.inReplyToId/);
   // auth diagnostics: xClient captures a plain-English reason so /xtest can say WHY it failed
   assert.match(xc, /export function xLastAuthError/);
-  assert.match(xc, /X_USERNAME/); assert.match(xc, /X_PASSWORD/);          // durable password fallback
-  assert.match(xc, /if \(await authed\(\)\)/);                            // me()-backed login confirmation
+  assert.match(xc, /export function xAuthReport/);
+  assert.match(xc, /X_COOKIES/);                                         // paste-the-whole-cookie option
   // auto-start: replies default ON once X is configured (no extra flag to flip)
   assert.match(serverSource, /function xReplyEnabled\(\) \{ const v = \(process\.env\.X_REPLY_ENABLED/);
   assert.match(serverSource, /function xReplyAuto\(\) \{ const v = \(process\.env\.X_REPLY_AUTO/);
