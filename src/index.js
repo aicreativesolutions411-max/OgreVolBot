@@ -30898,6 +30898,7 @@ async function handleMapCallback(query, userId) {
 function xReplyStateFile() { return path.join(CONFIG.dataDir, "x-reply-state.json"); }
 let xReplyStateCache = null;
 let xPollRunning = false;   // reentrancy guard: a tick can pace-sleep between replies, so it may outlast the poll interval
+let xPollRunningAt = 0;     // when the current tick started — lets us force-reset a HUNG tick (see xReplyPollTick)
 async function readXReplyState() {
   if (xReplyStateCache) return xReplyStateCache;
   let s = null; try { s = await readJson(xReplyStateFile()); } catch { s = null; }
@@ -31262,11 +31263,18 @@ async function xReplyOwnerDraft(m, reply) {
 async function xReplyPollTick() {
   const results = [];
   if (!xReplyEnabled() || !xConfigured()) return { checked: 0, results, off: true };
-  if (xPollRunning) return { checked: 0, results, busy: true };   // don't let ticks overlap (a tick can pace-sleep)
-  xPollRunning = true;
+  // SELF-HEALING reentrancy guard: normally skip an overlapping tick, BUT if the flagged tick has been
+  // "running" for >2min it's hung on a network await that never returns — ignore the stale flag and start a
+  // fresh tick, so the poll can NEVER stay dead. (This was the "poller went silent" bug: a hung await left
+  // xPollRunning stuck true forever and every future tick no-op'd.)
+  if (xPollRunning && (Date.now() - xPollRunningAt) < 120_000) return { checked: 0, results, busy: true };
+  xPollRunning = true; xPollRunningAt = Date.now();
+  console.log("[xreply] tick…");   // heartbeat: proves the interval fires + a tick actually starts (temporary diag)
   try {
   let mentions = [];
-  try { mentions = await xSearchMentions(20); } catch (e) { return { checked: 0, results, error: String(e?.message || e).slice(0, 140) }; }
+  // Hard 20s timeout on the mention fetch — an X GraphQL call that hangs must NOT freeze the whole poll.
+  try { mentions = await Promise.race([xSearchMentions(20), new Promise((_, rej) => setTimeout(() => rej(new Error("mentions fetch timeout")), 20_000))]); }
+  catch (e) { console.log(`[xreply] tick: mentions fetch failed (${String(e?.message || e).slice(0, 70)})`); return { checked: 0, results, error: String(e?.message || e).slice(0, 140) }; }
   if (!mentions.length) return { checked: 0, results };
   const state = await readXReplyState();
   if (!state.fails || typeof state.fails !== "object") state.fails = {};

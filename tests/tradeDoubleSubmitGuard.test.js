@@ -1891,7 +1891,8 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(xcard, /const HEADERS =/);                              // rotating header wording
   // reliability: no overlapping ticks; NO hourly cap by default; replies SPACED not deferred
   assert.match(serverSource, /let xPollRunning = false/);              // reentrancy guard
-  assert.match(functionBody(serverSource, "xReplyPollTick"), /if \(xPollRunning\) return/);
+  assert.match(functionBody(serverSource, "xReplyPollTick"), /if \(xPollRunning && \(Date\.now\(\) - xPollRunningAt\) < 120_000\) return/); // SELF-HEALING: force-reset a hung tick after 2min
+  assert.match(functionBody(serverSource, "xReplyPollTick"), /mentions fetch timeout/); // mention fetch can't hang the poll
   assert.match(functionBody(serverSource, "xReplyPollTick"), /let lastPostAt =/); // spacing, not defer
 });
 
