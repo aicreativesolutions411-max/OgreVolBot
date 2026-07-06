@@ -1854,6 +1854,12 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(serverSource, /async function resolveXTargetMint/);
   assert.match(serverSource, /function extractCashtags/);
   assert.match(functionBody(serverSource, "resolveXTargetMint"), /mention\.inReplyToId/);
+  // scans the tag, its direct parent AND the thread ROOT, incl. expanded links — "CA on the original post,
+  // someone just tags the bot" must resolve even when the reply itself has no contract.
+  assert.match(functionBody(serverSource, "resolveXTargetMint"), /mention\.conversationId/);
+  assert.match(functionBody(serverSource, "resolveXTargetMint"), /mention\.urls/);
+  assert.match(xc, /conversation_id_str/);                             // thread root captured in the client
+  assert.match(xc, /expanded_url/);                                    // expanded links captured (t.co hides the CA)
   // auth diagnostics: xClient captures a plain-English reason so /xtest can say WHY it failed
   assert.match(xc, /export function xLastAuthError/);
   assert.match(xc, /export function xAuthReport/);
@@ -1873,7 +1879,7 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   // detection on BOTH text and images ("same sentence/same picture to many accounts" = automation signal).
   assert.match(serverSource, /const X_REPLY_CTAS =/);
   assert.match(serverSource, /function makeXVary/);                    // seeded per-reply text variation
-  assert.match(serverSource, /textOnly: rand\(\) </);                  // ~1-in-7 replies go image-free
+  assert.doesNotMatch(functionBody(serverSource, "buildXScanReply"), /textOnly/); // ALWAYS attach a card (rotating design), never image-free
   assert.doesNotMatch(functionBody(serverSource, "buildXScanReply"), /links\.site/);
   assert.doesNotMatch(functionBody(serverSource, "buildXChartReply"), /links\.site/);
   assert.doesNotMatch(functionBody(serverSource, "buildXRugReply"), /links\.site/);

@@ -30718,17 +30718,26 @@ function extractCashtags(text) {
 // The coin to reply about for a mention: a CA or $ticker in the mention itself, else the CA/$ticker in
 // the PARENT post they tagged us under (so "@SlimeWire ?" under any coin tweet just works).
 async function resolveXTargetMint(mention) {
-  const fromText = async (text) => {
-    const mints = extractMintsFromText(text);
+  // Scan a post's TEXT plus its expanded links (people paste a dexscreener/pump URL, which X shortens to
+  // t.co in the text — the real CA only lives in the expanded url). Then $tickers as a last resort.
+  const scan = async (text, urls) => {
+    const blob = [String(text || ""), ...(Array.isArray(urls) ? urls : [])].join(" ");
+    const mints = extractMintsFromText(blob);
     if (mints.length) return mints[0];
-    for (const tag of extractCashtags(text)) { const m = await resolveCashtagToMint(tag).catch(() => null); if (m) return m; }
+    for (const tag of extractCashtags(String(text || ""))) { const m = await resolveCashtagToMint(tag).catch(() => null); if (m) return m; }
     return null;
   };
-  const own = await fromText(mention.text);
-  if (own) return own;
-  if (mention.inReplyToId) {
-    const parent = await xGetTweet(mention.inReplyToId).catch(() => null);
-    if (parent && parent.text) return await fromText(parent.text);
+  // 1) the tag itself
+  let mint = await scan(mention.text, mention.urls);
+  if (mint) return mint;
+  // 2) the post it replied to, AND 3) the thread ROOT — so tagging us under any coin post "just works"
+  // even when the reply has no CA. This is the fix for "CA is on the original post, someone just tags bot".
+  const seen = new Set();
+  for (const pid of [mention.inReplyToId, mention.conversationId]) {
+    if (!pid || seen.has(pid)) continue;
+    seen.add(pid);
+    const parent = await xGetTweet(pid).catch(() => null);
+    if (parent) { mint = await scan(parent.text, parent.urls); if (mint) return mint; }
   }
   return null;
 }
@@ -30760,8 +30769,7 @@ function makeXVary(seed) {
     cta: pick(X_REPLY_CTAS),
     ok: pick(["✅", "🟢", "🛡️"]),
     warn: pick(["⚠️", "🟡"]),
-    danger: pick(["⛔", "🔴", "🚨"]),
-    textOnly: rand() < 0.14   // ~1 in 7 scan replies go image-free — most human, zero image-dup footprint
+    danger: pick(["⛔", "🔴", "🚨"])
   };
 }
 // The reply = tight value text (no link-spam) + a branded scan card. Returns null if the mint won't scan.
@@ -30793,12 +30801,12 @@ async function buildXScanReply(mint, variant) {
     v.cta
   ].join("\n").slice(0, 279);
   let mediaBuffer = null;
-  if (!v.textOnly) {
-    try {
-      const logoBuffer = await xCoinLogo(scan, mint);   // DexScreener logo first, else pump.fun
-      mediaBuffer = await renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel: rail, verdict, verdictTone: tone, changeLabel, changeTone, logoBuffer, bgDir: X_CARD_BG_DIR, seed: variant || symbol || mint });
-    } catch { /* text-only is fine if the card render fails */ }
-  }
+  // ALWAYS attach a card (owner wants every reply to show one — just rotate the design/bg/layout, which
+  // renderXScanCard already does per-tweet). Only falls back to text if the render itself throws.
+  try {
+    const logoBuffer = await xCoinLogo(scan, mint);   // DexScreener logo first, else pump.fun
+    mediaBuffer = await renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel: rail, verdict, verdictTone: tone, changeLabel, changeTone, logoBuffer, bgDir: X_CARD_BG_DIR, seed: variant || symbol || mint });
+  } catch { /* text-only is the fallback only if the card render fails */ }
   return { text, mediaBuffer, symbol, mc };
 }
 // What the tagger is asking for → picks which card to reply with. Keeps the bot feeling smart: "did it rug?"

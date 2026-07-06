@@ -161,6 +161,8 @@ function parseTweetResult(result) {
     username: String(uname),
     userId: String(legacy.user_id_str || user?.rest_id || ""),
     inReplyToId: String(legacy.in_reply_to_status_id_str || legacy.conversation_id_str || ""),
+    conversationId: String(legacy.conversation_id_str || ""),                     // thread ROOT (CA often lives here)
+    urls: (legacy.entities?.urls || []).map((u) => u.expanded_url || u.url).filter(Boolean), // expanded links (dexscreener/pump CA)
     permanentUrl: uname && id ? `https://x.com/${uname}/status/${id}` : "",
     createdAtMs: legacy.created_at ? new Date(legacy.created_at).getTime() : 0
   };
@@ -193,6 +195,8 @@ async function notificationMentions(count = 20) {
       username: String(u.screen_name || ""),
       userId: String(t.user_id_str || ""),
       inReplyToId: String(t.in_reply_to_status_id_str || t.conversation_id_str || ""),
+      conversationId: String(t.conversation_id_str || ""),                        // thread ROOT
+      urls: (t.entities?.urls || []).map((x) => x.expanded_url || x.url).filter(Boolean), // expanded links
       permanentUrl: u.screen_name ? `https://x.com/${u.screen_name}/status/${id}` : "",
       createdAtMs: t.created_at ? new Date(t.created_at).getTime() : 0
     });
@@ -230,7 +234,7 @@ export async function xGetTweet(id) {
   try {
     const j = await gql("GET", "TweetResultByRestId", { variables: { tweetId: String(id), withCommunity: false, includePromotedContent: false, withVoice: false }, features: READ_FEATURES });
     const t = parseTweetResult(j?.data?.tweetResult?.result);
-    return t ? { id: t.id, text: t.text } : null;
+    return t ? { id: t.id, text: t.text, urls: t.urls, conversationId: t.conversationId } : null;
   } catch { return null; }
 }
 
