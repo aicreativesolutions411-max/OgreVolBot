@@ -1777,8 +1777,10 @@ test("SlimeWire PFP maker: sharp compositor + public endpoint + /pfp command, al
   assert.match(pfpLib, /export async function renderAllSlimewirePfps/);
   assert.match(pfpLib, /export const PFP_FRAMES/);
   assert.match(pfpLib, /fit: "cover", position: "attention"/);       // focus the crop on the face
-  for (const id of ["slime", "holo", "neon", "slimed", "crown", "horns"]) assert.match(pfpLib, new RegExp(`id: "${id}"`), `frame ${id}`);
+  for (const id of ["slime", "toxic", "holo", "neon", "crown", "horns"]) assert.match(pfpLib, new RegExp(`id: "${id}"`), `frame ${id}`);
   assert.match(pfpLib, /accentExists/);                              // accent frames only offered when their asset exists
+  assert.match(pfpLib, /async function applySlimeGrade/);            // grades the ACTUAL photo (custom, not a slapped-on sticker)
+  assert.match(pfpLib, /\.tint\(tintColor\)/);
   // server: public (pre-auth) page + generate endpoint; no wallet/login required
   assert.match(serverSource, /import \{ renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES \} from "\.\/lib\/pfp\.js"/);
   assert.match(serverSource, /pathname === "\/api\/web\/pfp\/generate"/);

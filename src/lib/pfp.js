@@ -100,15 +100,16 @@ function frameSlimed() {
 // Ring-only base used under the Higgs "accent" (sticker) frames.
 function frameRingOnly() { return svgWrap(ringBase(452, 500) + wordmark()); }
 
-// id order = display order. accent frames carry {file,width,gravity}; they show only if the asset exists.
+// id order = display order. `grade` slimes the ACTUAL photo (transforms the pixels → feels custom, not a
+// sticker slapped on). accent frames carry {file,width,top|gravity}; they show only if the asset exists.
 export const PFP_FRAMES = [
-  { id: "slime", label: "🟢 Slime Drip", svg: frameSlime },
-  { id: "holo", label: "🌈 Holo Glow", svg: frameHolo },
-  { id: "neon", label: "⚡ Neon Wire", svg: frameNeon },
-  { id: "slimed", label: "💚 SLIMED", svg: frameSlimed },
-  { id: "crown", label: "👑 Slime King", svg: frameRingOnly, accent: { file: "crown.png", width: 660, gravity: "north" } },
-  { id: "horns", label: "😈 Ogre Horns", svg: frameRingOnly, accent: { file: "horns.png", width: 900, gravity: "north" } },
-  { id: "mascot", label: "🐸 Ogre Buddy", svg: frameRingOnly, accent: { file: "mascot.png", width: 470, gravity: "southeast" } }
+  { id: "slime", label: "💚 Slimed", svg: frameSlime, grade: "slime" },        // hero: green-graded photo + drips
+  { id: "toxic", label: "☢️ Toxic", svg: frameSlimed, grade: "toxic" },        // heavier neon-green wash + SLIMED
+  { id: "holo", label: "🌈 Holo Glow", svg: frameHolo },                       // clean: natural photo + holo ring
+  { id: "neon", label: "⚡ Neon Wire", svg: frameNeon },                       // clean: natural photo + neon ring
+  { id: "crown", label: "👑 Slime King", svg: frameRingOnly, grade: "slime", accent: { file: "crown.png", width: 520, top: 4 } },
+  { id: "horns", label: "😈 Ogre Horns", svg: frameRingOnly, grade: "slime", accent: { file: "horns.png", width: 720, top: 0 } },
+  { id: "mascot", label: "🐸 Ogre Buddy", svg: frameRingOnly, accent: { file: "mascot.png", width: 430, gravity: "southeast" } }
 ];
 
 function frameById(id) { return PFP_FRAMES.find((f) => f.id === id) || PFP_FRAMES[0]; }
@@ -127,24 +128,43 @@ export async function availableFrames(frameDir) {
   return out;
 }
 
+// "Slime" the actual photo — a green colour-grade + wet pop so the picture itself looks transformed
+// (this is what makes it feel custom, not a random sticker). "toxic" = heavier neon duotone.
+async function applySlimeGrade(buf, level) {
+  const strong = level === "toxic";
+  // .tint() = a green DUOTONE: it recolors the photo toward slime-green while preserving the luminance
+  // (all the face detail/shading survives) — a clear, reliable "slimed" transform, not a faint wash.
+  const tintColor = strong ? { r: 34, g: 236, b: 78 } : { r: 118, g: 208, b: 128 };
+  return sharp(buf)
+    .modulate({ saturation: 1.12, brightness: 1.02 })
+    .tint(tintColor)
+    .linear(strong ? 1.16 : 1.07, strong ? -10 : -3)            // contrast pop so it looks glossy/wet
+    .png().toBuffer();
+}
+
 // Build ONE framed PFP. sourceBuffer = any image the user gave us. Returns a PNG buffer.
 export async function makeSlimewirePfp({ sourceBuffer, frameId, frameDir, size = PFP_SIZE }) {
   const frame = frameById(frameId);
   // Cover-crop to a square, focusing on the salient region (a face) so heads aren't chopped.
-  const base = await sharp(sourceBuffer, { animated: false })
+  let base = await sharp(sourceBuffer, { animated: false })
     .resize(size, size, { fit: "cover", position: "attention" })
     .flatten({ background: "#0a140a" })
     .toBuffer();
+  if (frame.grade) { try { base = await applySlimeGrade(base, frame.grade, size); } catch { /* keep ungraded base */ } }
   const layers = [{ input: Buffer.from(frame.svg()), top: 0, left: 0 }];
   if (frame.accent && frameDir) {
     try {
       const raw = await fs.readFile(path.join(frameDir, frame.accent.file));
-      // Place the sticker on a full-canvas transparent layer via gravity — no out-of-bounds math, and a
-      // width <= canvas can never "extend beyond" the base, so odd sticker aspect ratios stay safe.
-      const sticker = await sharp(raw).resize({ width: Math.min(size, frame.accent.width) }).png().toBuffer();
+      const w = Math.min(size, frame.accent.width);
+      const sticker = await sharp(raw).resize({ width: w }).png().toBuffer();
+      const sh = (await sharp(sticker).metadata()).height || w;
+      // Corner buddy → gravity; head-piece (crown/horns) → explicit top so it sits ON the head (a face
+      // attention-cropped to a square has its head near the top-centre), never floating in a fixed corner.
+      const place = frame.accent.gravity
+        ? { input: sticker, gravity: frame.accent.gravity }
+        : { input: sticker, left: Math.round((size - w) / 2), top: Math.max(0, Math.min(size - sh, frame.accent.top || 0)) };
       const accentLayer = await sharp({ create: { width: size, height: size, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
-        .composite([{ input: sticker, gravity: frame.accent.gravity }])
-        .png().toBuffer();
+        .composite([place]).png().toBuffer();
       layers.push({ input: accentLayer, top: 0, left: 0 });
     } catch { /* asset missing/unreadable → ring-only, still a clean PFP */ }
   }

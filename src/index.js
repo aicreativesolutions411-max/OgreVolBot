@@ -14086,6 +14086,8 @@ async function handleMessage(message, userId) {
     const cs = parseCommandWithArgument(text, ["snipe", "communitysnipe", "csnipe"]);
     if (cs) { await handleCommunitySnipeCommand(chatId, message, cs.argument, userId); return; }
     if (parseCommandWithArgument(text, ["pfp", "slimepfp", "avatar"])) { await handlePfpCommand(chatId, message, userId); return; }
+    const xclaim = parseCommandWithArgument(text, ["xclaim"]);
+    if (xclaim) { await handleXClaimCommand(chatId, message, xclaim.argument, userId); return; }
     if (parseCommandWithArgument(text, ["xtest", "xstatus"])) { await handleXTestCommand(chatId, userId); return; }
   }
   // /room — the group's verifiable trading board (opt-in Room PnL + skin-in-the-game callers).
@@ -30359,7 +30361,13 @@ async function readXReplyState() {
   xReplyStateCache = s; return s;
 }
 async function writeXReplyState(s) { xReplyStateCache = s; await writeJsonFile(xReplyStateFile(), s).catch(() => {}); }
-function xReplyOwnerChat() { return String(process.env.X_REPLY_OWNER_CHAT || "").trim(); }
+// Owner chat = where assist-mode drafts + approvals go. NO manual Telegram-ID needed: it's either set via
+// env X_REPLY_OWNER_CHAT, or CLAIMED once with /xclaim from a DM (persisted in the state file).
+function xReplyOwnerChat() {
+  const env = String(process.env.X_REPLY_OWNER_CHAT || "").trim();
+  if (env) return env;
+  return String(xReplyStateCache?.ownerChat || "").trim();
+}
 function xReplyEnabled() { return parseBoolean(process.env.X_REPLY_ENABLED || "false"); }
 function xReplyAuto() { return parseBoolean(process.env.X_REPLY_AUTO || "false"); }
 
@@ -30516,9 +30524,24 @@ async function handleXReplyCallback(query, userId) {
   await ack();
   return true;
 }
+// Claim this DM as the X-reply owner chat — so you never have to look up a numeric Telegram id. If
+// AUTOPILOT_OWNER_KEY is set, you must pass it (/xclaim <key>); otherwise the first claimer wins (TOFU).
+async function handleXClaimCommand(chatId, message, argument, userId) {
+  if (message?.chat?.type && message.chat.type !== "private") { await say(chatId, "DM me /xclaim (not in a group) to become the X-reply owner."); return; }
+  const already = xReplyOwnerChat();
+  if (already && String(already) !== String(chatId)) { await say(chatId, "An X-reply owner is already set. Clear X_REPLY_OWNER_CHAT / the state to re-claim."); return; }
+  if (CONFIG.autopilotOwnerKey) {
+    if (String(argument || "").trim() !== CONFIG.autopilotOwnerKey) { await say(chatId, "Usage: /xclaim <your AUTOPILOT_OWNER_KEY> — this binds X-reply approvals to this chat."); return; }
+  }
+  const state = await readXReplyState();
+  state.ownerChat = String(chatId);
+  await writeXReplyState(state);
+  await sayHtml(chatId, "✅ <b>You're the X-reply owner.</b> Drafts + approvals come here. Now run <code>/xtest</code> to confirm the X cookies are connected.");
+}
 // Owner setup check: confirm the cookies took + which handle we're posting as.
 async function handleXTestCommand(chatId, userId) {
-  if (!xReplyOwnerChat() || String(chatId) !== xReplyOwnerChat()) { await say(chatId, "This command is owner-only. Set X_REPLY_OWNER_CHAT to your chat id."); return; }
+  if (!xReplyOwnerChat()) { await sayHtml(chatId, "🐦 No X-reply owner yet — DM me <code>/xclaim</code>" + (CONFIG.autopilotOwnerKey ? " <code>&lt;your owner key&gt;</code>" : "") + " first to bind approvals to this chat."); return; }
+  if (String(chatId) !== xReplyOwnerChat()) { await say(chatId, "This command is owner-only."); return; }
   if (!xConfigured()) { await sayHtml(chatId, "🐦 <b>X not configured.</b> Set <code>X_AUTH_TOKEN</code> + <code>X_CT0</code> (your x.com cookies) on Render, then <code>X_REPLY_ENABLED=true</code>."); return; }
   const me = await xWhoAmI().catch(() => null);
   if (me && (me.username || me.screenName)) {
@@ -34890,6 +34913,7 @@ function startGroupBuyBot() {
   setInterval(() => { void xReplyPollTick(); }, Math.max(60_000, Number(process.env.X_REPLY_POLL_MS || 150_000))); // 🐦 X CA reply bot — DARK until X_REPLY_ENABLED + cookies
   void startVanityAutoGrind();       // 🅿️ keep the "…pump" mint pool auto-stocked (gentle bg worker; no user alerts)
   void readCommunitySnipe().catch(() => {});                 // warm the armed-creator-wallet index so a snipe survives restart
+  void readXReplyState().catch(() => {});                    // warm the X-reply state so the claimed owner-chat survives restart
 }
 
 // ============================================================================
