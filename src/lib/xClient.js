@@ -118,7 +118,7 @@ async function gql(method, op, { variables, features }) {
   let url = `https://x.com${path}`, body;
   if (method === "GET") url += `?variables=${encodeURIComponent(JSON.stringify(variables || {}))}&features=${encodeURIComponent(JSON.stringify(features || {}))}`;
   else body = JSON.stringify({ variables: variables || {}, features: features || {}, queryId: id });
-  const res = await fetch(url, { method, headers: { ...baseHeaders(ct0, tid), cookie: `auth_token=${auth}; ct0=${ct0}` }, body });
+  const res = await fetch(url, { method, headers: { ...baseHeaders(ct0, tid), cookie: `auth_token=${auth}; ct0=${ct0}` }, body, signal: AbortSignal.timeout(12_000) });
   const text = await res.text();
   if (res.status === 401 || res.status === 403) { resetXScraper(); const e = new Error(`auth ${res.status}`); e.status = res.status; throw e; }
   if (!res.ok) { const e = new Error(`${op} ${res.status}: ${text.slice(0, 120)}`); e.status = res.status; throw e; }
@@ -172,7 +172,7 @@ async function signedGet(path, query) {
   const { tx } = await getSession();
   const tid = await tx.generateTransactionId("GET", path);
   const url = `https://x.com/i/api${path}${query ? "?" + query : ""}`;
-  const res = await fetch(url, { headers: { ...baseHeaders(ct0, tid), cookie: `auth_token=${auth}; ct0=${ct0}` } });
+  const res = await fetch(url, { headers: { ...baseHeaders(ct0, tid), cookie: `auth_token=${auth}; ct0=${ct0}` }, signal: AbortSignal.timeout(10_000) });
   const text = await res.text();
   if (res.status === 401 || res.status === 403) { resetXScraper(); const e = new Error(`auth ${res.status}`); e.status = res.status; throw e; }
   if (!res.ok) { const e = new Error(`${path} ${res.status}`); e.status = res.status; throw e; }
@@ -241,7 +241,7 @@ async function uploadMedia(buffer) {
       const form = new FormData();
       form.append("media_data", buffer.toString("base64"));
       form.append("media_category", "tweet_image");
-      const res = await fetch(`${host}${path}`, { method: "POST", headers: { authorization: `Bearer ${BEARER}`, "x-csrf-token": ct0, "x-client-transaction-id": tid, cookie: `auth_token=${auth}; ct0=${ct0}`, "user-agent": UA, referer: "https://x.com/", origin: "https://x.com" }, body: form });
+      const res = await fetch(`${host}${path}`, { method: "POST", headers: { authorization: `Bearer ${BEARER}`, "x-csrf-token": ct0, "x-client-transaction-id": tid, cookie: `auth_token=${auth}; ct0=${ct0}`, "user-agent": UA, referer: "https://x.com/", origin: "https://x.com" }, body: form, signal: AbortSignal.timeout(12_000) });
       const t = await res.text();
       if (res.ok) { try { const j = JSON.parse(t); const id = j?.media_id_string || (j?.media_id ? String(j.media_id) : null); if (id) return { id, error: null }; } catch {} }
       lastErr = `${res.status}:${t.slice(0, 60).replace(/\s+/g, " ")}`;

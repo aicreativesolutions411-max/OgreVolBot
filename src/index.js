@@ -14257,6 +14257,7 @@ async function handleMessage(message, userId) {
     if (xclaim) { await handleXClaimCommand(chatId, message, xclaim.argument, userId); return; }
     if (parseCommandWithArgument(text, ["xtest", "xstatus"])) { await handleXTestCommand(chatId, userId); return; }
     if (parseCommandWithArgument(text, ["xpoll"])) { await handleXPollCommand(chatId, userId); return; }
+    if (parseCommandWithArgument(text, ["xreset"])) { await handleXResetCommand(chatId, userId); return; }
     const xscan = parseCommandWithArgument(text, ["xscan"]);
     if (xscan) { await handleXScanCommand(chatId, xscan.argument, userId); return; }
   }
@@ -30970,8 +30971,23 @@ async function handleXPollCommand(chatId, userId) {
   const lines = (r?.results || []).map((x) => `${icon(x.s)} @${escapeTelegramHtml(x.u)} — ${x.s}${x.d ? ` <i>(${escapeTelegramHtml(x.d)})</i>` : ""}`);
   await sayHtml(chatId, [
     `🐦 Checked <b>${r?.checked || 0}</b> recent mentions.`,
-    ...(lines.length ? lines : ["No new mentions to act on — either already handled, or none carried a CA/$ticker.<br>Tag @your-handle in a NEW tweet with a contract, wait ~1 min for X to index it, then /xpoll again."])
+    ...(lines.length ? lines : ["No new mentions to act on — <b>they're all already handled (seen).</b><br>Post a BRAND-NEW tweet tagging @your-handle with a CA, or run <code>/xreset</code> to forget the seen-list and re-reply to the current ones."])
   ].join("\n"));
+}
+// Clear the seen/queue state so the bot RE-REPLIES to the mentions it already handled — for testing, so
+// you can watch it fire without needing a fresh tweet each time. Then immediately runs a poll.
+async function handleXResetCommand(chatId, userId) {
+  if (!xReplyOwnerChat() || String(chatId) !== xReplyOwnerChat()) { await say(chatId, "Owner-only — DM /xclaim first."); return; }
+  const state = await readXReplyState();
+  const cleared = Object.keys(state.seen || {}).length;
+  state.seen = {}; state.fails = {}; state.queue = {}; state.posts = [];
+  await writeXReplyState(state);
+  await say(chatId, `🧹 Cleared ${cleared} seen mentions + throttle. Re-replying to current mentions now…`);
+  const r = await xReplyPollTick().catch((e) => ({ error: String(e?.message || e).slice(0, 140) }));
+  if (r?.error) { await sayHtml(chatId, `⚠️ Poll error: <code>${escapeTelegramHtml(r.error)}</code>`); return; }
+  const icon = (s) => s === "replied" ? "✅" : s === "fail" ? "⚠️" : s === "draft" ? "📝" : s === "defer" ? "⏳" : "·";
+  const lines = (r?.results || []).map((x) => `${icon(x.s)} @${escapeTelegramHtml(x.u)} — ${x.s}${x.d ? ` <i>(${escapeTelegramHtml(x.d)})</i>` : ""}`);
+  await sayHtml(chatId, [`🐦 Re-checked <b>${r?.checked || 0}</b> mentions.`, ...(lines.length ? lines : ["Nothing scannable in the current mentions."])].join("\n"));
 }
 // Preview the exact reply (card + text) for a CA or a link containing one — proves the pipeline end-to-end.
 async function handleXScanCommand(chatId, argument, userId) {
