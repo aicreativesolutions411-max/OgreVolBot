@@ -13093,6 +13093,11 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("pe:")) {
     if (await handlePresetEditorCallback(query, userId).catch(() => false)) return;
   }
+  // 🔍 Full Scan from the DM buy panel (dmscan:<mint>) — pull the detailed scan card without leaving the buy flow.
+  if (String(query.data || "").startsWith("dmscan:")) {
+    await handleTelegramLookCommand(chatId, query.message, String(query.data).slice(7)).catch(() => {});
+    return;
+  }
   // 🔴 One-tap sell (qs:*) — sell 25/50/100% of a coin from the tapper's own wallets, in-DM.
   if (String(query.data || "").startsWith("qs:")) {
     if (await handleQuickSellCallback(query, userId).catch(() => false)) return;
@@ -13771,13 +13776,14 @@ async function handleMessage(message, userId) {
       }
     }
   }
-  // DM: a bare CA pasted with NO pending prompt → the same automatic scan card groups get (this is
-  // the "I pasted a CA and nothing came up" fix). Gated on !session so it never hijacks a flow that's
-  // waiting for a CA (e.g. the /pnlcard "paste the mint" prompt).
+  // DM: a bare CA pasted with NO pending prompt → open the one-tap BUY PANEL (Trojan-style: paste a
+  // contract, pick an amount, done). This was showing the heavy SCAN card, which blocked "I just want
+  // to buy" — the full scan is still one tap away (🔍 Full Scan) and via /look <CA> / $ticker. Gated on
+  // !session so it never hijacks a flow that's waiting for a CA (e.g. the /pnlcard "paste the mint" prompt).
   if (isPrivateChat(message.chat) && !session) {
     const caTokDm = text.trim().replace(/^\$/, "");
     if (isLikelySolMint(caTokDm)) {
-      await handleTelegramLookCommand(chatId, message, caTokDm);
+      await sendDmBuyPanel(chatId, userId, caTokDm);
       return;
     }
   }
@@ -33008,6 +33014,32 @@ async function quickBuySendReceipt(userId, mint, amt, result = null) {
     "",
     "<i>Buy more, sell, or arm ⏰ limit / TP-SL right here:</i>"
   ].filter(Boolean).join("\n"), await quickBuyReceiptKeyboard(mint, userId)).catch(() => {});
+}
+// Paste-a-CA-to-BUY (Trojan-style): a bare contract dropped in the DM opens the one-tap buy PANEL —
+// a light read (symbol + MC/Liq) plus the preset amount buttons that buy from the user's own wallet —
+// NOT the heavy scan card (which blocked "I just want to buy"). The full scan stays one tap away via
+// 🔍 Scan, and /look <CA> / $ticker still pull the detailed security card.
+async function sendDmBuyPanel(chatId, userId, mint) {
+  const lx = slimewireTokenLinks(mint);
+  const info = await alphaRadarFetchMc(mint).catch(() => null);
+  const sym = (info && info.sym) ? `$${escapeTelegramHtml(info.sym)}` : `<code>${escapeTelegramHtml(shortMint(mint))}</code>`;
+  const stat = [];
+  if (info && info.mc > 0) stat.push(`MC <b>${fmtMc(info.mc)}</b>`);
+  if (info && info.liq > 0) stat.push(`Liq <b>${fmtMc(info.liq)}</b>`);
+  const kb = await quickBuyReceiptKeyboard(mint, userId);
+  // Drop a 🔍 Full Scan row in just above Main Menu so the detailed read is one tap away, never blocking the buy.
+  kb.inline_keyboard.splice(Math.max(0, kb.inline_keyboard.length - 1), 0, [{ text: "🔍 Full Scan", callback_data: `dmscan:${mint}` }]);
+  await sayHtml(chatId, [
+    `🟢 <b>Buy ${sym}</b>`,
+    `<code>${escapeTelegramHtml(mint)}</code>`,
+    stat.length ? stat.join(" · ") : "",
+    `<a href="${lx.site}">📈 Chart →</a>`,
+    "",
+    "<i>Pick an amount — buys instantly from your SlimeWire wallet:</i>"
+  ].filter(Boolean).join("\n"), kb).catch(async () => {
+    // Any failure (e.g. no wallet) still leaves them able to trade: fall back to the scan card + links.
+    await handleTelegramLookCommand(chatId, { chat: { id: chatId, type: "private" } }, mint).catch(() => {});
+  });
 }
 // No-wallet funnel: someone tapped ⚡ Buy in a group but has no SlimeWire wallet. Best-effort DM them a
 // one-tap "🚀 Create my wallet" button (works if they've ever opened the bot) so they go straight to
