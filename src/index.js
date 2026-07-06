@@ -30608,7 +30608,11 @@ async function gatherSlimeScan(mint) {
   const ath = parseTokenAth(athRaw, supply);
   // Free on-chain fill so the Security block is never blank when RugCheck is rate-limited / unindexed.
   const rugFilled = await enrichScanSecurityOnchain(mint, rug, bonding).catch(() => rug);
-  return { best, meta, rug: rugFilled, shield, bonding, dexPaid, supply, ath };
+  // Universal on-chain name/symbol/image fallback so the X card ALWAYS has a symbol + pic, even for a
+  // graduated / non-pump coin DexScreener + pump don't cover. Only fetched when the cheap sources are thin.
+  let onchain = null;
+  if (!(meta && meta.symbol) && !(bonding && bonding.symbol)) onchain = await fetchOnchainTokenMeta(mint).catch(() => null);
+  return { best, meta, rug: rugFilled, shield, bonding, dexPaid, supply, ath, onchain };
 }
 
 // ============ 🐦 X (Twitter) CA REPLY BOT — reply to @mentions with a branded SlimeWire scan ============
@@ -30681,24 +30685,67 @@ async function xFetchLogo(url) {
     return buf.length > 100 && buf.length < 6_000_000 ? buf : null;
   } catch { return null; }
 }
-// Coin logo (PFP) for the card — DexScreener sources first, then pump.fun. Tries the scan's cached fields,
-// then re-fetches DexScreener token-info + pump.fun metadata as a fallback so the logo almost always fills.
+// UNIVERSAL token metadata via on-chain Metaplex — works for ANY SPL token (pump, graduated, bonk, custom)
+// even when DexScreener/pump don't carry it. Reads the Token Metadata PDA → name/symbol/uri, then the JSON
+// uri → image. Cached so repeat scans of the same coin don't re-hit RPC. This is what makes the meta pic
+// (and $SYMBOL) fill for graduated coins like $Pauly that have no DexScreener image.
+const MPL_TOKEN_METADATA = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s";
+const onchainMetaCache = new Map();
+async function fetchOnchainTokenMeta(mint) {
+  const cached = onchainMetaCache.get(mint);
+  if (cached && Date.now() - cached.at < 30 * 60_000) return cached.v;
+  let out = null;
+  try {
+    const prog = new PublicKey(MPL_TOKEN_METADATA);
+    const [pda] = PublicKey.findProgramAddressSync([Buffer.from("metadata"), prog.toBuffer(), new PublicKey(mint).toBuffer()], prog);
+    const acc = await rpcRead("x-card onchain meta", (c) => c.getAccountInfo(pda, "confirmed"), { timeoutMs: 4500 }).catch(() => null);
+    if (acc && acc.data && acc.data.length > 70) {
+      const data = acc.data; let o = 1 + 32 + 32;                    // key + update_authority + mint
+      const rd = () => { const len = data.readUInt32LE(o); o += 4; const s = data.slice(o, o + Math.max(0, Math.min(len, 400))).toString("utf8").replace(/\0+$/, "").trim(); o += len; return s; };
+      const name = rd(), symbol = rd(), uri = rd();
+      let image = null;
+      if (uri && /^(https?:|ipfs:)/i.test(uri)) {
+        const u = uri.startsWith("ipfs://") ? "https://ipfs.io/ipfs/" + uri.slice(7) : uri;
+        const j = await fetchJson(u, { timeoutMs: 4500 }).catch(() => null);
+        image = j?.image || j?.image_uri || j?.properties?.image || (Array.isArray(j?.properties?.files) ? j.properties.files[0]?.uri : null) || null;
+      }
+      out = { name: name || "", symbol: symbol || "", image };
+    }
+  } catch { out = null; }
+  onchainMetaCache.set(mint, { at: Date.now(), v: out });
+  if (onchainMetaCache.size > 500) onchainMetaCache.clear();
+  return out;
+}
+// Coin logo (PFP) for the card — DexScreener → pump.fun → Jupiter token list → on-chain Metaplex. Ordered
+// cheapest-first; the last two make the pic fill for graduated / non-pump coins DexScreener has no image for.
 async function xCoinLogo(scan, mint) {
-  const { meta, best, bonding } = scan || {};
+  const { meta, best, bonding, onchain } = scan || {};
   const tryList = async (urls) => { for (const u of urls.filter(Boolean)) { const b = await xFetchLogo(u).catch(() => null); if (b) return b; } return null; };
-  // 1) whatever the scan already resolved (Dex `info.imageUrl` / pump image)
-  let logo = await tryList([meta?.icon, meta?.image, best?.info?.imageUrl, bonding?.image, bonding?.image_uri, bonding?.imageUri, bonding?.metadata?.image]);
+  // 1) whatever the scan already resolved (Dex `info.imageUrl` / pump image / on-chain image)
+  let logo = await tryList([meta?.icon, meta?.image, best?.info?.imageUrl, bonding?.image, bonding?.image_uri, bonding?.imageUri, bonding?.metadata?.image, onchain?.image]);
   if (logo) return logo;
   // 2) DexScreener token-info re-fetch
   try {
     const dx = await fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeoutMs: 4000 }).catch(() => null);
     logo = await tryList((Array.isArray(dx?.pairs) ? dx.pairs : []).map((p) => p?.info?.imageUrl));
     if (logo) return logo;
-  } catch { /* fall through to pump */ }
+  } catch { /* fall through */ }
   // 3) pump.fun metadata (image / IPFS)
   try {
     const pf = await getPumpFunTokenMetadata(mint).catch(() => null);
     logo = await tryList([pf?.image, pf?.image_uri, pf?.imageUri]);
+    if (logo) return logo;
+  } catch { /* fall through */ }
+  // 4) Jupiter token list — covers ~all traded/graduated tokens (free, no key)
+  try {
+    const jt = await fetchJson(`https://tokens.jup.ag/token/${mint}`, { timeoutMs: 4000 }).catch(() => null);
+    logo = await tryList([jt?.logoURI]);
+    if (logo) return logo;
+  } catch { /* fall through */ }
+  // 5) on-chain Metaplex metadata → JSON image (UNIVERSAL last resort)
+  try {
+    const oc = onchain || await fetchOnchainTokenMeta(mint);
+    logo = await tryList([oc?.image]);
     if (logo) return logo;
   } catch { /* no logo → the slime ring alone still looks intentional */ }
   return null;
@@ -30777,9 +30824,9 @@ function makeXVary(seed) {
 async function buildXScanReply(mint, variant) {
   const scan = await gatherSlimeScan(mint).catch(() => null);
   if (!scan) return null;
-  const { meta, bonding, best, shield, rug } = scan;
-  const symbol = String(meta?.symbol || bonding?.symbol || "").slice(0, 12);
-  const name = String(meta?.name || bonding?.name || "").slice(0, 40);
+  const { meta, bonding, best, shield, rug, onchain } = scan;
+  const symbol = String(meta?.symbol || bonding?.symbol || onchain?.symbol || "").slice(0, 12);
+  const name = String(meta?.name || bonding?.name || onchain?.name || "").slice(0, 40);
   const mc = Number(meta?.marketCap || bonding?.usd_market_cap || bonding?.marketCap || 0);
   const liq = Number(best?.liquidity?.usd || meta?.liquidityUsd || bonding?.liquidityUsd || bonding?.virtual_sol_reserves && (Number(bonding.virtual_sol_reserves) / 1e9) * (Number(solUsdPriceCache?.value) || 0) || 0);
   if (!symbol && !(mc > 0)) return null;
@@ -30822,8 +30869,8 @@ function xIntentFromText(text) {
 async function buildXChartReply(mint, variant) {
   const scan = await gatherSlimeScan(mint).catch(() => null);
   const meta = scan?.meta, bonding = scan?.bonding;
-  const symbol = String(meta?.symbol || bonding?.symbol || "").slice(0, 12);
-  const name = String(meta?.name || bonding?.name || "").slice(0, 40);
+  const symbol = String(meta?.symbol || bonding?.symbol || scan?.onchain?.symbol || "").slice(0, 12);
+  const name = String(meta?.name || bonding?.name || scan?.onchain?.name || "").slice(0, 40);
   const mc = Number(meta?.marketCap || bonding?.usd_market_cap || bonding?.marketCap || 0);
   let payload = await webOhlcvPayload(mint, "5m").catch(() => null);
   let candles = (payload && payload.candles) || [];
@@ -30879,9 +30926,9 @@ function xRugFacts(scan) {
 async function buildXRugReply(mint, variant) {
   const scan = await gatherSlimeScan(mint).catch(() => null);
   if (!scan) return null;
-  const { meta, bonding, best } = scan;
-  const symbol = String(meta?.symbol || bonding?.symbol || "").slice(0, 12);
-  const name = String(meta?.name || bonding?.name || "").slice(0, 40);
+  const { meta, bonding, best, onchain } = scan;
+  const symbol = String(meta?.symbol || bonding?.symbol || onchain?.symbol || "").slice(0, 12);
+  const name = String(meta?.name || bonding?.name || onchain?.name || "").slice(0, 40);
   const mc = Number(meta?.marketCap || bonding?.usd_market_cap || bonding?.marketCap || 0);
   const liq = Number(best?.liquidity?.usd || 0);
   if (!symbol && !(mc > 0)) return null;
@@ -35532,14 +35579,12 @@ function startGroupBuyBot() {
       else console.log(`[xreply] SELFTEST buildXReply(BONK,scan) OK → $${r.symbol} mc=${r.mc} media=${r.mediaBuffer ? "card(" + r.mediaBuffer.length + "b)" : "NONE"} text=${JSON.stringify(String(r.text || "").slice(0, 80))} in ${Date.now() - t0}ms`);
       const who = await xWhoAmI().catch((e) => ({ __e: String(e?.message || e) }));
       console.log(`[xreply] SELFTEST whoami → ${who && who.username ? "@" + who.username : "FAIL:" + (who && who.__e || "null") + " (write path likely 401 → replies would fail)"}`);
-      // Run CA-RESOLUTION against the account's REAL mentions (the user's own test tags are in here) — read
-      // only, no posting. This shows, per actual tag, whether a CA resolves from the tag/parent/root.
-      const ms = await xSearchMentions(20).catch(() => []);
-      console.log(`[xreply] SELFTEST resolving CA on ${ms.length} live mentions…`);
-      for (const m of ms.slice(0, 8)) {
-        const mint = await resolveXTargetMint(m).catch((e) => "ERR:" + String(e?.message || e).slice(0, 60));
-        console.log(`[xreply] SELFTEST   @${m.username} replyTo=${m.inReplyToId || "-"} conv=${m.conversationId || "-"} urls=${(m.urls || []).length} text=${JSON.stringify(String(m.text || "").slice(0, 90))} → ${mint || "NONE"}`);
-      }
+      // Verify the META-PIC fix against the exact coin that failed ($Pauly, a graduated non-pump mint with no
+      // DexScreener image): its logo + symbol must now fill via Jupiter / on-chain Metaplex.
+      const PAULY = "5RyeWfbjVw6Ktj6j8SmTiAnVXWvmV8YxGtTebNsU2dBo";
+      const pl = await gatherSlimeScan(PAULY).catch(() => null);
+      const logo = pl ? await xCoinLogo(pl, PAULY).catch(() => null) : null;
+      console.log(`[xreply] SELFTEST $Pauly → symbol=${pl?.meta?.symbol || pl?.bonding?.symbol || pl?.onchain?.symbol || "?"} mc=${Math.round(Number(pl?.meta?.marketCap || pl?.bonding?.usd_market_cap || 0))} logo=${logo ? logo.length + "b ✅" : "NONE ✗"} onchainMeta=${pl?.onchain ? "yes" : "no"}`);
     } catch (e) { console.log(`[xreply] SELFTEST THREW: ${String(e?.message || e).slice(0, 160)}`); }
   }, 13_000);
   void startVanityAutoGrind();       // 🅿️ keep the "…pump" mint pool auto-stocked (gentle bg worker; no user alerts)
