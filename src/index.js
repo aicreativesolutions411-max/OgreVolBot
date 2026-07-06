@@ -30844,7 +30844,7 @@ async function xReplyPollTick() {
   // Owner wants it to reply freely (test account, ban risk accepted). Defaults are near-unrestricted; a
   // tiny min-gap only avoids hammering X's endpoint in the same instant. Tighten via env if ever needed.
   const maxPerHour = Math.max(1, Number(process.env.X_REPLY_MAX_PER_HOUR || 60));
-  const minGapMs = Math.max(3_000, Number(process.env.X_REPLY_MIN_GAP_MS || 8_000));
+  const minGapMs = Math.max(2_000, Number(process.env.X_REPLY_MIN_GAP_MS || 4_000));
   mentions.sort((a, b) => (a.createdAtMs || 0) - (b.createdAtMs || 0));
   for (const m of mentions) {
     if (state.seen[m.id]) continue;
@@ -30871,7 +30871,7 @@ async function xReplyPollTick() {
         if (/not configured|401|unauthor/i.test(res.reason || "")) break;
       }
       await writeXReplyState(state);
-      await sleep(2500);
+      await sleep(1200);
     } else {
       state.seen[m.id] = now;
       state.queue[m.id] = { mint, intent, at: now, author: m.username, url: m.permanentUrl };
@@ -35348,7 +35348,10 @@ function startGroupBuyBot() {
   setTimeout(() => { void submitIndexNow(); }, 20_000);      // 🔎 auto-ping IndexNow (Bing/DDG/Yandex) on boot
   setInterval(() => { void pollLimitOrders(); }, 30_000);    // ⏰ Limit orders — MC-triggered buy/sell auto-fire (opt-in, own wallet)
   setInterval(() => { void pollWeeklyCallerContest(); }, 60 * 60_000); // 🏆 Caller of the Week — Sunday crown for opted-in groups
-  setInterval(() => { void xReplyPollTick(); }, Math.max(60_000, Number(process.env.X_REPLY_POLL_MS || 150_000))); // 🐦 X CA reply bot — DARK until X_REPLY_ENABLED + cookies
+  // 🐦 X CA reply bot — responsive: first check ~10s after boot, then every ~30s (DARK until X_REPLY_ENABLED + cookies).
+  const xPollMs = Math.max(15_000, Number(process.env.X_REPLY_POLL_MS || 30_000));
+  setTimeout(() => { void xReplyPollTick(); }, 10_000);
+  setInterval(() => { void xReplyPollTick(); }, xPollMs);
   void startVanityAutoGrind();       // 🅿️ keep the "…pump" mint pool auto-stocked (gentle bg worker; no user alerts)
   void readCommunitySnipe().catch(() => {});                 // warm the armed-creator-wallet index so a snipe survives restart
   void readXReplyState().catch(() => {});                    // warm the X-reply state so the claimed owner-chat survives restart

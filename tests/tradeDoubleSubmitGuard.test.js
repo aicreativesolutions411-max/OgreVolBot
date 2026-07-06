@@ -1829,7 +1829,8 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(tick, /if \(auto\)/);                                            // auto vs assist branch
   assert.match(tick, /xReplyOwnerDraft/);                                       // assist = one-tap draft to owner
   assert.match(functionBody(serverSource, "handleXReplyCallback"), /String\(chatId\) !== xReplyOwnerChat\(\)/); // owner-only posting
-  assert.match(serverSource, /void xReplyPollTick\(\); \}, Math\.max\(60_000/);   // poller wired
+  assert.match(serverSource, /setInterval\(\(\) => \{ void xReplyPollTick\(\); \}, xPollMs\)/); // poller wired (responsive)
+  assert.match(serverSource, /setTimeout\(\(\) => \{ void xReplyPollTick\(\); \}, 10_000\)/);   // + immediate first check on boot
   assert.match(serverSource, /if \(await handleXReplyCallback\(query, userId\)/); // callback dispatch
   assert.match(serverSource, /parseCommandWithArgument\(text, \["xtest", "xstatus"\]\)/); // owner setup check
   assert.match(serverSource, /import \{ xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode, xAuthReport \} from "\.\/lib\/xClient\.js"/);
