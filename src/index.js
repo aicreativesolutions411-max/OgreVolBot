@@ -72,7 +72,7 @@ import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVan
 import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES } from "./lib/pfp.js";
 import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
-import { xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle } from "./lib/xClient.js";
+import { xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle, xGetTweet } from "./lib/xClient.js";
 import { renderXScanCard } from "./lib/xCard.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
@@ -4121,6 +4121,12 @@ const SEO_PAGES = [
   { path: "/blog/crypto-telegram-bot-stack", priority: "0.74", changefreq: "weekly" },
   { path: "/blog/x-solana-memecoin-research", priority: "0.74", changefreq: "weekly" },
   { path: "/blog/fresh-solana-pairs-under-10k", priority: "0.74", changefreq: "weekly" },
+  { path: "/official-slimewire-links", priority: "0.84", changefreq: "weekly" },
+  { path: "/slimewire-verified-bot", priority: "0.82", changefreq: "weekly" },
+  { path: "/telegram-crypto-bot-safety", priority: "0.8", changefreq: "weekly" },
+  { path: "/solana-trading-tool-trust-checklist", priority: "0.78", changefreq: "weekly" },
+  { path: "/slimewire-for-media-and-directories", priority: "0.72", changefreq: "weekly" },
+  { path: "/x-solana-scan-replies", priority: "0.76", changefreq: "weekly" },
   { path: "/features", priority: "0.84", changefreq: "monthly" },
   { path: "/pricing", priority: "0.7", changefreq: "monthly" },
   { path: "/data-freshness", priority: "0.72", changefreq: "monthly" },
@@ -4583,6 +4589,30 @@ const SEO_PAGE_META = {
   "/blog/fresh-solana-pairs-under-10k": {
     title: "Fresh Solana Pairs Under $10K: What Traders Should Check First",
     description: "A risk-aware guide to reviewing fresh Solana pairs under $10K market cap with age, volume, liquidity, venue, chart behavior, and SlimeWire scan context."
+  },
+  "/official-slimewire-links": {
+    title: "Official SlimeWire Links - Website, Telegram Bot, Trust and Safety",
+    description: "Verify official SlimeWire links for the Solana terminal, @SlimeWiredBot, trust pages, resources, proof, widgets, blog guides, and launch tools."
+  },
+  "/slimewire-verified-bot": {
+    title: "SlimeWire Verified Bot - How to Confirm @SlimeWiredBot Is the Real Telegram Bot",
+    description: "Confirm the real @SlimeWiredBot Telegram bot, avoid fake bot links, understand safe setup, and learn what SlimeWire will never ask for."
+  },
+  "/telegram-crypto-bot-safety": {
+    title: "Telegram Crypto Bot Safety Checklist - Avoid Fake Bots and Wallet Drainers",
+    description: "A Telegram crypto bot safety checklist for avoiding fake bots, seed phrase scams, wallet drainers, impersonators, unsafe links, and noisy group tools."
+  },
+  "/solana-trading-tool-trust-checklist": {
+    title: "Solana Trading Tool Trust Checklist - What to Check Before Using a Bot or Terminal",
+    description: "A Solana trading tool trust checklist covering official links, wallet safety, risk disclosure, proof, public docs, support paths, and transparent limits."
+  },
+  "/slimewire-for-media-and-directories": {
+    title: "SlimeWire for Media and Directories - Solana Terminal and Telegram Bot Facts",
+    description: "A media and directory facts page for SlimeWire: official description, links, product categories, Telegram bot, Solana terminal, proof pages, widgets, and safety notes."
+  },
+  "/x-solana-scan-replies": {
+    title: "X Solana Scan Replies - CA Check Templates and SlimeWire Research Links",
+    description: "Copy X-ready Solana scan reply templates for CAs, caller proof, launch checks, fresh pair reviews, and SlimeWire research links."
   },
   "/features": {
     title: "SlimeWire Features - Solana Terminal, Telegram Bot, Alerts and Launch Tools",
@@ -6453,6 +6483,30 @@ function startHealthServer() {
     }
     if (request.method === "GET" && requestUrl.pathname === "/blog/fresh-solana-pairs-under-10k") {
       await serveStaticHtmlPage(response, "blog/fresh-solana-pairs-under-10k/index.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/official-slimewire-links") {
+      await serveStaticHtmlPage(response, "official-slimewire-links.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/slimewire-verified-bot") {
+      await serveStaticHtmlPage(response, "slimewire-verified-bot.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/telegram-crypto-bot-safety") {
+      await serveStaticHtmlPage(response, "telegram-crypto-bot-safety.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/solana-trading-tool-trust-checklist") {
+      await serveStaticHtmlPage(response, "solana-trading-tool-trust-checklist.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/slimewire-for-media-and-directories") {
+      await serveStaticHtmlPage(response, "slimewire-for-media-and-directories.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/x-solana-scan-replies") {
+      await serveStaticHtmlPage(response, "x-solana-scan-replies.html");
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/features") {
@@ -30483,6 +30537,27 @@ function extractMintsFromText(text) {
   for (const t of runs) if (isLikelySolMint(t) && !out.includes(t)) out.push(t);
   return out;
 }
+// $tickers in a tweet (exact-symbol only; resolveCashtagToMint never resolves casual chatter).
+function extractCashtags(text) {
+  return [...new Set((String(text || "").match(/\$[A-Za-z][A-Za-z0-9]{1,14}\b/g) || []).map((s) => s.slice(1)))];
+}
+// The coin to reply about for a mention: a CA or $ticker in the mention itself, else the CA/$ticker in
+// the PARENT post they tagged us under (so "@SlimeWire ?" under any coin tweet just works).
+async function resolveXTargetMint(mention) {
+  const fromText = async (text) => {
+    const mints = extractMintsFromText(text);
+    if (mints.length) return mints[0];
+    for (const tag of extractCashtags(text)) { const m = await resolveCashtagToMint(tag).catch(() => null); if (m) return m; }
+    return null;
+  };
+  const own = await fromText(mention.text);
+  if (own) return own;
+  if (mention.inReplyToId) {
+    const parent = await xGetTweet(mention.inReplyToId).catch(() => null);
+    if (parent && parent.text) return await fromText(parent.text);
+  }
+  return null;
+}
 // The reply = tight value text (not link-spam) + a branded scan card. Returns null if the mint won't scan.
 async function buildXScanReply(mint) {
   const scan = await gatherSlimeScan(mint).catch(() => null);
@@ -30546,9 +30621,9 @@ async function xReplyPollTick() {
   mentions.sort((a, b) => (a.createdAtMs || 0) - (b.createdAtMs || 0));
   for (const m of mentions) {
     if (state.seen[m.id]) continue;
-    const mints = extractMintsFromText(m.text);
-    if (!mints.length) { state.seen[m.id] = now; continue; }        // a mention with no CA → nothing to scan
-    const reply = await buildXScanReply(mints[0]).catch(() => null);
+    const mint = await resolveXTargetMint(m).catch(() => null);   // CA / $ticker in the mention OR the parent post
+    if (!mint) { state.seen[m.id] = now; continue; }               // nothing scannable → skip
+    const reply = await buildXScanReply(mint).catch(() => null);
     if (!reply) { state.seen[m.id] = now; continue; }
     if (auto) {
       if (state.posts.length >= maxPerHour) break;                   // hourly cap reached — leave the rest for later
@@ -30617,7 +30692,7 @@ async function handleXTestCommand(chatId, userId) {
   }
   // Live probe: how many recent @mentions the search sees + how many carry a CA (proves detection works).
   const mentions = await xSearchMentions(20).catch(() => []);
-  const withCa = mentions.filter((m) => extractMintsFromText(m.text).length).length;
+  const withCa = mentions.filter((m) => extractMintsFromText(m.text).length || extractCashtags(m.text).length || m.inReplyToId).length;
   await sayHtml(chatId, [
     `🐦 <b>Connected as @${escapeTelegramHtml(me.username || me.screenName)}</b>`,
     `Mode: <b>${xReplyAuto() ? "AUTO — posts on X itself" : "ASSIST — I DM you to one-tap post"}</b> · Replies: <b>${xReplyEnabled() ? "ON" : "OFF"}</b>`,
@@ -30638,12 +30713,13 @@ async function handleXPollCommand(chatId, userId) {
 // Preview the exact reply (card + text) for a CA or a link containing one — proves the pipeline end-to-end.
 async function handleXScanCommand(chatId, argument, userId) {
   if (!xReplyOwnerChat() || String(chatId) !== xReplyOwnerChat()) { await say(chatId, "Owner-only — DM /xclaim first."); return; }
-  const mints = extractMintsFromText(String(argument || ""));
-  if (!mints.length) { await say(chatId, "Usage: /xscan <CA or a link that contains one>"); return; }
+  let mint = extractMintsFromText(String(argument || ""))[0];
+  if (!mint) { const tag = extractCashtags(String(argument || ""))[0]; if (tag) mint = await resolveCashtagToMint(tag).catch(() => null); }
+  if (!mint) { await say(chatId, "Usage: /xscan <CA or $ticker>"); return; }
   await say(chatId, "🐦 Building the reply preview…");
-  const reply = await buildXScanReply(mints[0]).catch(() => null);
-  if (!reply) { await say(chatId, "Couldn't scan that CA — it may be too new or unlisted."); return; }
-  const cap = `🐦 <b>Reply preview</b> for <code>${escapeTelegramHtml(shortMint(mints[0]))}</code>\n\n<i>${escapeTelegramHtml(reply.text)}</i>`;
+  const reply = await buildXScanReply(mint).catch(() => null);
+  if (!reply) { await say(chatId, "Couldn't scan that — it may be too new or unlisted."); return; }
+  const cap = `🐦 <b>Reply preview</b> for <code>${escapeTelegramHtml(shortMint(mint))}</code>\n\n<i>${escapeTelegramHtml(reply.text)}</i>`;
   if (reply.mediaBuffer) await sendPhoto(chatId, "x-scan-preview.png", reply.mediaBuffer, cap, null, "HTML").catch(() => sayHtml(chatId, cap));
   else await sayHtml(chatId, cap);
 }

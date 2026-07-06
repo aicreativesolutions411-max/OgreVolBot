@@ -71,10 +71,19 @@ export async function xSearchMentions(count = 20) {
       text: String(t.text || t.full_text || ""),
       username: String(t.username || t.user?.screen_name || ""),
       userId: String(t.userId || t.user_id || ""),
+      // the tweet this mention is a reply TO — lets us scan the coin in the PARENT post (tag us anywhere).
+      inReplyToId: String(t.inReplyToStatusId || t.in_reply_to_status_id_str || t.conversationId || ""),
       permanentUrl: t.permanentUrl || (t.username && t.id ? `https://x.com/${t.username}/status/${t.id}` : ""),
       createdAtMs: t.timeParsed ? new Date(t.timeParsed).getTime() : (Number(t.timestamp) ? Number(t.timestamp) * 1000 : 0)
     })).filter((t) => t.id);
   } catch { return []; }
+}
+
+// Read one tweet's text by id (used to scan the coin in a post someone tagged us UNDER).
+export async function xGetTweet(id) {
+  const s = await getXScraper();
+  if (!s || !id) return null;
+  try { const t = await s.getTweet(String(id)); return t ? { id: String(t.id || id), text: String(t.text || t.full_text || "") } : null; } catch { return null; }
 }
 
 // Reply to a tweet, optionally with a PNG card attached. Returns { ok, id? } — never throws.

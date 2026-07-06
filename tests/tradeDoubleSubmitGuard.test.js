@@ -1821,7 +1821,11 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(serverSource, /void xReplyPollTick\(\); \}, Math\.max\(60_000/);   // poller wired
   assert.match(serverSource, /if \(await handleXReplyCallback\(query, userId\)/); // callback dispatch
   assert.match(serverSource, /parseCommandWithArgument\(text, \["xtest", "xstatus"\]\)/); // owner setup check
-  assert.match(serverSource, /import \{ xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle \} from "\.\/lib\/xClient\.js"/);
+  assert.match(serverSource, /import \{ xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle, xGetTweet \} from "\.\/lib\/xClient\.js"/);
+  // interactive: replies off a CA, a $ticker, OR the coin in the PARENT post you tagged us under
+  assert.match(serverSource, /async function resolveXTargetMint/);
+  assert.match(serverSource, /function extractCashtags/);
+  assert.match(functionBody(serverSource, "resolveXTargetMint"), /mention\.inReplyToId/);
 });
 
 // ---- ✨ AI Slime PFP (fal.ai image-to-image; the real custom slime effect) + looser X throttle --------
