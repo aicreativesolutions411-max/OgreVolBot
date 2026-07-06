@@ -1869,12 +1869,24 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "buildXChartReply"), /renderCandleChartPng/);
   assert.match(functionBody(serverSource, "xReplyPollTick"), /xIntentFromText\(m\.text\)/); // intent routed at reply time
   // ANTI-SPAM: reply text carries NO raw URL (X folds link-replies from cold accounts); the card image
-  // already shows slimewire.org. A rotating link-free CTA also avoids "you already said that" duplicates.
+  // already shows slimewire.org. Seeded per-tweet variation (wording + card art) beats X's near-duplicate
+  // detection on BOTH text and images ("same sentence/same picture to many accounts" = automation signal).
   assert.match(serverSource, /const X_REPLY_CTAS =/);
-  assert.match(serverSource, /function nextXCta/);
+  assert.match(serverSource, /function makeXVary/);                    // seeded per-reply text variation
+  assert.match(serverSource, /textOnly: rand\(\) </);                  // ~1-in-7 replies go image-free
   assert.doesNotMatch(functionBody(serverSource, "buildXScanReply"), /links\.site/);
   assert.doesNotMatch(functionBody(serverSource, "buildXChartReply"), /links\.site/);
   assert.doesNotMatch(functionBody(serverSource, "buildXRugReply"), /links\.site/);
+  assert.match(functionBody(serverSource, "xReplyPollTick"), /buildXReply\(mint, intent, m\.id\)/); // tweet id seeds variation
+  // card renderer varies EVERY render (rotating jittered bg + unique grain + mirrored layouts + rotating text)
+  assert.match(xcard, /function makeRng/);                             // seeded PRNG drives all choices
+  assert.match(xcard, /feTurbulence/);                                 // unique per-card film grain (beats image dedup)
+  assert.match(xcard, /const mirror =/);                               // two mirrored layouts
+  assert.match(xcard, /const HEADERS =/);                              // rotating header wording
+  // reliability: no overlapping ticks; NO hourly cap by default; replies SPACED not deferred
+  assert.match(serverSource, /let xPollRunning = false/);              // reentrancy guard
+  assert.match(functionBody(serverSource, "xReplyPollTick"), /if \(xPollRunning\) return/);
+  assert.match(functionBody(serverSource, "xReplyPollTick"), /let lastPostAt =/); // spacing, not defer
 });
 
 // ---- ✨ AI Slime PFP (fal.ai image-to-image; the real custom slime effect) + looser X throttle --------
@@ -1896,6 +1908,6 @@ test("AI Slime PFP: fal.ai img2img, rotating styles, budget-guarded, dark until 
   const pfpHtml = fs.readFileSync(new URL("../web/public/pfp.html", import.meta.url), "utf8");
   assert.match(pfpHtml, /\/api\/web\/pfp\/ai/);
   assert.match(pfpHtml, /function aiSlime/);
-  // X reply throttle loosened (owner: reply freely, ban risk accepted on the test account)
-  assert.match(functionBody(serverSource, "xReplyPollTick"), /X_REPLY_MAX_PER_HOUR \|\| 60/);
+  // X reply throttle: NO hourly cap by default (owner wants it to never go quiet + look broken under load)
+  assert.match(functionBody(serverSource, "xReplyPollTick"), /X_REPLY_MAX_PER_HOUR \|\| 0/);
 });

@@ -30618,6 +30618,7 @@ async function gatherSlimeScan(mint) {
 // AUTO = post it ourselves, throttled. Fully DARK until X_REPLY_ENABLED=true AND cookies are set.
 function xReplyStateFile() { return path.join(CONFIG.dataDir, "x-reply-state.json"); }
 let xReplyStateCache = null;
+let xPollRunning = false;   // reentrancy guard: a tick can pace-sleep between replies, so it may outlast the poll interval
 async function readXReplyState() {
   if (xReplyStateCache) return xReplyStateCache;
   let s = null; try { s = await readJson(xReplyStateFile()); } catch { s = null; }
@@ -30736,18 +30737,36 @@ async function resolveXTargetMint(mention) {
 // symptom). The scan CARD already has "slimewire.org" baked into the image, so the text link is pure
 // downside. We drop the URL entirely and rotate a natural, link-free call-to-action so identical coins
 // tagged twice don't post byte-identical text (X rejects duplicates with "you already said that").
-let _xFlavorIdx = 0;
 const X_REPLY_CTAS = [
   "Tag me on any coin for a free scan.",
   "Drop a CA and I'll scan it.",
   "Free scan on any Solana coin — just tag me.",
   "Want another? Reply with a contract.",
   "I read any Solana CA — tag away.",
-  "Scan anything. No wallet needed."
+  "Scan anything. No wallet needed.",
+  "Reply a CA, get a scan.",
+  "Free to use — just tag me a coin.",
+  "Got a coin? Tag me, I'll read it."
 ];
-function nextXCta() { const s = X_REPLY_CTAS[_xFlavorIdx % X_REPLY_CTAS.length]; _xFlavorIdx++; return s; }
+// Light per-reply text variation, SEEDED by the tweet id so a given reply is stable but two replies almost
+// never come out byte-identical (X flags "the same sentence to many accounts"). Same INFO every time — only
+// the separators, sign-off line and verdict glyph shift. The heavy anti-dedup lifting is the card image.
+function makeXVary(seed) {
+  let h = 2166136261; const s = String(seed || "slime"); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  const rand = () => { h = (Math.imul(h, 1103515245) + 12345) >>> 0; return h / 4294967296; };
+  const pick = (arr) => arr[Math.floor(rand() * arr.length) % arr.length];
+  return {
+    sep: pick([" · ", " | ", " • "]),
+    cta: pick(X_REPLY_CTAS),
+    ok: pick(["✅", "🟢", "🛡️"]),
+    warn: pick(["⚠️", "🟡"]),
+    danger: pick(["⛔", "🔴", "🚨"]),
+    textOnly: rand() < 0.14   // ~1 in 7 scan replies go image-free — most human, zero image-dup footprint
+  };
+}
 // The reply = tight value text (no link-spam) + a branded scan card. Returns null if the mint won't scan.
-async function buildXScanReply(mint) {
+// `variant` (the tweet id) seeds BOTH the text wording and the card art so no two replies look/read alike.
+async function buildXScanReply(mint, variant) {
   const scan = await gatherSlimeScan(mint).catch(() => null);
   if (!scan) return null;
   const { meta, bonding, best, shield, rug } = scan;
@@ -30765,17 +30784,21 @@ async function buildXScanReply(mint) {
   const ch1 = Number(meta?.priceChange?.h1);
   const changeLabel = Number.isFinite(ch1) ? `${ch1 >= 0 ? "+" : ""}${ch1.toFixed(1)}%` : "";
   const changeTone = Number.isFinite(ch1) ? (ch1 >= 0 ? "up" : "down") : "";
+  const v = makeXVary(variant || symbol || mint);
+  const toneEmoji = tone === "danger" ? v.danger : tone === "warn" ? v.warn : v.ok;
   const text = [
-    `$${symbol || "coin"}${name ? " · " + name : ""}`,
-    `MC ${mcLabel} · Liq ${liqLabel} · Age ${ageLabel}${changeLabel ? " · 1H " + changeLabel : ""} · ${rail}`,
-    `${tone === "danger" ? "⛔" : tone === "warn" ? "⚠️" : "✅"} ${verdict}`,
-    nextXCta()
+    `$${symbol || "coin"}${name ? v.sep + name : ""}`,
+    [`MC ${mcLabel}`, `Liq ${liqLabel}`, `Age ${ageLabel}`, changeLabel ? `1H ${changeLabel}` : null, rail].filter(Boolean).join(v.sep),
+    `${toneEmoji} ${verdict}`,
+    v.cta
   ].join("\n").slice(0, 279);
   let mediaBuffer = null;
-  try {
-    const logoBuffer = await xCoinLogo(scan, mint);   // DexScreener logo first, else pump.fun
-    mediaBuffer = await renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel: rail, verdict, verdictTone: tone, changeLabel, changeTone, logoBuffer, bgDir: X_CARD_BG_DIR, seed: symbol || mint });
-  } catch { /* text-only is fine if the card render fails */ }
+  if (!v.textOnly) {
+    try {
+      const logoBuffer = await xCoinLogo(scan, mint);   // DexScreener logo first, else pump.fun
+      mediaBuffer = await renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel: rail, verdict, verdictTone: tone, changeLabel, changeTone, logoBuffer, bgDir: X_CARD_BG_DIR, seed: variant || symbol || mint });
+    } catch { /* text-only is fine if the card render fails */ }
+  }
   return { text, mediaBuffer, symbol, mc };
 }
 // What the tagger is asking for → picks which card to reply with. Keeps the bot feeling smart: "did it rug?"
@@ -30788,7 +30811,7 @@ function xIntentFromText(text) {
 }
 // 📈 CHART CARD — reply with a live candlestick image of the coin (GeckoTerminal candles, pump-tick synth
 // fallback). Falls back to the scan card if there's no chartable history yet.
-async function buildXChartReply(mint) {
+async function buildXChartReply(mint, variant) {
   const scan = await gatherSlimeScan(mint).catch(() => null);
   const meta = scan?.meta, bonding = scan?.bonding;
   const symbol = String(meta?.symbol || bonding?.symbol || "").slice(0, 12);
@@ -30797,7 +30820,8 @@ async function buildXChartReply(mint) {
   let payload = await webOhlcvPayload(mint, "5m").catch(() => null);
   let candles = (payload && payload.candles) || [];
   if (candles.length < 4) { payload = await webOhlcvPayload(mint, "1m").catch(() => null); candles = (payload && payload.candles) || []; }
-  if (candles.length < 4) return await buildXScanReply(mint); // no chart yet → standard scan card
+  if (candles.length < 4) return await buildXScanReply(mint, variant); // no chart yet → standard scan card
+  const v = makeXVary(variant || symbol || mint);
   const chartCandles = candles.map((c) => ({ ...c, t: c.t * 1000 })); // GeckoTerminal t is seconds; chart wants ms
   const first = chartCandles[0].o, last = chartCandles[chartCandles.length - 1].c;
   const ch = first > 0 ? ((last - first) / first) * 100 : 0;
@@ -30808,8 +30832,8 @@ async function buildXChartReply(mint) {
   try { mediaBuffer = await renderCandleChartPng(chartCandles, { title, sub }); } catch { /* text-only fallback */ }
   const text = [
     `$${symbol || "coin"} chart ${ch >= 0 ? "🟢 +" : "🔴 "}${ch.toFixed(1)}%`,
-    mcLabel ? `MC ${mcLabel} · ${fmtChartPrice(last)}` : fmtChartPrice(last),
-    nextXCta()
+    mcLabel ? `MC ${mcLabel}${v.sep}${fmtChartPrice(last)}` : fmtChartPrice(last),
+    v.cta
   ].filter(Boolean).join("\n").slice(0, 279);
   return { text, mediaBuffer, symbol, mc };
 }
@@ -30844,7 +30868,7 @@ function xRugFacts(scan) {
   else { verdict = "No rug flags found"; tone = "ok"; }
   return { verdict, tone, bad, warn, good };
 }
-async function buildXRugReply(mint) {
+async function buildXRugReply(mint, variant) {
   const scan = await gatherSlimeScan(mint).catch(() => null);
   if (!scan) return null;
   const { meta, bonding, best } = scan;
@@ -30853,31 +30877,32 @@ async function buildXRugReply(mint) {
   const mc = Number(meta?.marketCap || bonding?.usd_market_cap || bonding?.marketCap || 0);
   const liq = Number(best?.liquidity?.usd || 0);
   if (!symbol && !(mc > 0)) return null;
+  const v = makeXVary(variant || symbol || mint);
   const createdAt = Number(best?.pairCreatedAt || 0) || (Number(bonding?.created_timestamp || 0) * (String(bonding?.created_timestamp || "").length <= 10 ? 1000 : 1));
   const ageLabel = createdAt > 0 ? xAgeLabel(Date.now() - createdAt) : "—";
   const rail = xRailLabel(mint, best, bonding);
   const facts = xRugFacts(scan);
   const mcLabel = mc > 0 ? scanFmtMoney(mc) : "—";
   const liqLabel = liq > 0 ? scanFmtMoney(liq) : "—";
-  const icon = facts.tone === "danger" ? "⛔" : facts.tone === "warn" ? "⚠️" : "✅";
-  const detail = [...facts.bad.map((x) => "⛔ " + x), ...facts.warn.map((x) => "⚠️ " + x), ...facts.good.map((x) => "✅ " + x)].slice(0, 3).join("\n");
+  const icon = facts.tone === "danger" ? v.danger : facts.tone === "warn" ? v.warn : v.ok;
+  const detail = [...facts.bad.map((x) => v.danger + " " + x), ...facts.warn.map((x) => v.warn + " " + x), ...facts.good.map((x) => v.ok + " " + x)].slice(0, 3).join("\n");
   const text = [
     `Did $${symbol || "coin"} rug? ${icon} ${facts.verdict}`,
     detail,
-    nextXCta()
+    v.cta
   ].filter(Boolean).join("\n").slice(0, 279);
   let mediaBuffer = null;
   try {
     const logoBuffer = await xCoinLogo(scan, mint);   // DexScreener logo first, else pump.fun
-    mediaBuffer = await renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel: rail, verdict: facts.verdict, verdictTone: facts.tone, logoBuffer, bgDir: X_CARD_BG_DIR, seed: symbol || mint });
+    mediaBuffer = await renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel: rail, verdict: facts.verdict, verdictTone: facts.tone, logoBuffer, bgDir: X_CARD_BG_DIR, seed: variant || symbol || mint });
   } catch { /* text-only is fine */ }
   return { text, mediaBuffer, symbol, mc };
 }
-// Dispatch a mention to the right card based on what they asked.
-async function buildXReply(mint, intent = "scan") {
-  if (intent === "chart") return await buildXChartReply(mint);
-  if (intent === "rug") return await buildXRugReply(mint);
-  return await buildXScanReply(mint);
+// Dispatch a mention to the right card based on what they asked. `variant` (tweet id) seeds the wording + art.
+async function buildXReply(mint, intent = "scan", variant) {
+  if (intent === "chart") return await buildXChartReply(mint, variant);
+  if (intent === "rug") return await buildXRugReply(mint, variant);
+  return await buildXScanReply(mint, variant);
 }
 async function xReplyOwnerNotify(text) {
   const chat = xReplyOwnerChat();
@@ -30898,6 +30923,9 @@ async function xReplyOwnerDraft(m, reply) {
 async function xReplyPollTick() {
   const results = [];
   if (!xReplyEnabled() || !xConfigured()) return { checked: 0, results, off: true };
+  if (xPollRunning) return { checked: 0, results, busy: true };   // don't let ticks overlap (a tick can pace-sleep)
+  xPollRunning = true;
+  try {
   let mentions = [];
   try { mentions = await xSearchMentions(20); } catch (e) { return { checked: 0, results, error: String(e?.message || e).slice(0, 140) }; }
   if (!mentions.length) return { checked: 0, results };
@@ -30908,10 +30936,12 @@ async function xReplyPollTick() {
   for (const k of Object.keys(state.seen)) if (now - Number(state.seen[k]) > SEEN_TTL) delete state.seen[k];
   state.posts = state.posts.filter((t) => now - Number(t) < 3_600_000);
   const auto = xReplyAuto();
-  // Owner wants it to reply freely (test account, ban risk accepted). Defaults are near-unrestricted; a
-  // tiny min-gap only avoids hammering X's endpoint in the same instant. Tighten via env if ever needed.
-  const maxPerHour = Math.max(1, Number(process.env.X_REPLY_MAX_PER_HOUR || 60));
-  const minGapMs = Math.max(2_000, Number(process.env.X_REPLY_MIN_GAP_MS || 4_000));
+  // NO hourly cap by default — if a bunch of people tag us at once it must answer them ALL, not go quiet and
+  // look broken (owner's call; test account, ban risk accepted). Set X_REPLY_MAX_PER_HOUR>0 to add one back.
+  // We only SPACE replies a couple seconds apart (jittered) so we're not machine-gunning X in the same instant.
+  const maxPerHour = Number(process.env.X_REPLY_MAX_PER_HOUR || 0);
+  const minGapMs = Math.max(1_200, Number(process.env.X_REPLY_MIN_GAP_MS || 2_500));
+  let lastPostAt = state.posts.length ? Number(state.posts[state.posts.length - 1]) : 0;
   // FLOOR + SEEN-SET (the airtight version). The old design used a high-water mark AS the firing gate and
   // advanced it to the newest tweet each cycle — so any mention that arrived slightly out of order, or was
   // deferred by pacing, fell below the mark and was skipped FOREVER even though we never answered it. That
@@ -30933,14 +30963,18 @@ async function xReplyPollTick() {
     const mint = await resolveXTargetMint(m).catch(() => null);   // CA / $ticker in the mention OR the parent post
     if (!mint) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "no CA/ticker found" }); continue; }
     const intent = xIntentFromText(m.text);                        // did-it-rug? chart? else scan
-    const reply = await buildXReply(mint, intent).catch(() => null);
+    const reply = await buildXReply(mint, intent, m.id).catch(() => null);   // m.id seeds unique wording + card art
     if (!reply) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "coin didn't scan" }); continue; }
     if (auto) {
-      if (state.posts.length >= maxPerHour) { results.push({ u: m.username, s: "defer", d: "hourly cap" }); break; }
-      if (state.posts.length && (now - Number(state.posts[state.posts.length - 1]) < minGapMs)) { results.push({ u: m.username, s: "defer", d: "pacing" }); break; }
+      if (maxPerHour > 0 && state.posts.length >= maxPerHour) { results.push({ u: m.username, s: "defer", d: "hourly cap" }); break; }
+      // Space replies out (jittered) rather than deferring — answer everyone, just not all in the same instant.
+      const gap = minGapMs + Math.floor(Math.random() * 1500);
+      const wait = lastPostAt ? (lastPostAt + gap) - Date.now() : 0;
+      if (wait > 0) await sleep(Math.min(wait, 20_000));
       const res = await xReply({ inReplyToId: m.id, text: reply.text, mediaBuffer: reply.mediaBuffer });
       if (res.ok) {
-        state.seen[m.id] = now; delete state.fails[m.id]; state.posts.push(Date.now()); posted++;
+        lastPostAt = Date.now();
+        state.seen[m.id] = now; delete state.fails[m.id]; state.posts.push(lastPostAt); posted++;
         results.push({ u: m.username, s: "replied", d: `${intent === "chart" ? "📈" : intent === "rug" ? "🛡️" : "🔎"} $${reply.symbol}${res.media && res.media !== "card" ? " · " + res.media : " · card"}` });
         console.log(`[xreply] ✅ @${m.username} ${intent} $${reply.symbol} media=${res.media || "text"} id=${res.id || ""}`);
         await xReplyOwnerNotify(`✅ Auto-replied on X to @${m.username} · ${intent} · $${reply.symbol} (${res.media || "text"})`);
@@ -30952,11 +30986,10 @@ async function xReplyPollTick() {
         results.push({ u: m.username, s: "fail", d: res.reason || "post failed" });
         console.log(`[xreply] ⚠️ @${m.username} fail: ${res.reason || ""}${giveUp ? " (gave up)" : " (retry)"}`);
         await xReplyOwnerNotify(`⚠️ X reply to @${m.username} failed: ${res.reason || ""}${giveUp ? " (gave up)" : " (will retry)"}`);
-        if (giveUp) { state.seen[m.id] = now; delete state.fails[m.id]; await writeXReplyState(state); await sleep(1200); continue; }
+        if (giveUp) { state.seen[m.id] = now; delete state.fails[m.id]; await writeXReplyState(state); continue; }
         break; // leave it un-seen so the next tick retries it
       }
       await writeXReplyState(state);
-      await sleep(1200);
     } else {
       state.seen[m.id] = now;
       state.queue[m.id] = { mint, intent, at: now, author: m.username, url: m.permanentUrl };
@@ -30968,6 +31001,7 @@ async function xReplyPollTick() {
   await writeXReplyState(state);
   console.log(`[xreply] tick: ${mentions.length} mentions · replied ${posted} · skipped ${skipped} · floor=${Math.round((now - floor) / 60000)}m ago · seen=${Object.keys(state.seen).length}`);
   return { checked: mentions.length, results };
+  } finally { xPollRunning = false; }
 }
 async function handleXReplyCallback(query, userId) {
   const data = String(query?.data || "");
