@@ -30734,6 +30734,7 @@ async function buildTokenHolderMap(mint) {
   const info = await alphaRadarFetchMc(mint).catch(() => null);
   const sym = (info && info.sym) ? info.sym : shortMint(mint);
   const mc = (info && info.mc) || 0;
+  const liq = (info && info.liq) || 0;
   const maxPct = holders.reduce((m, h) => Math.max(m, h.pct || 0), 0) || 1;
   let kolsIn = 0, whales = 0;
   const nodes = holders.map((h, i) => {
@@ -30749,12 +30750,13 @@ async function buildTokenHolderMap(mint) {
       name: id.name, twitter: id.twitter, avatarUrl: id.avatarUrl, pct: h.pct || 0,
     };
   });
+  // Coin DETAILS (MC + liquidity) sit right alongside the holder picture, so one map card = details + map.
   const stats = [
-    { label: "TOP HOLDERS", value: String(holders.length) },
-    { label: "KOLS IN", value: String(kolsIn) },
+    { label: "MARKET CAP", value: mc ? fmtMc(mc) : "—" },
+    { label: "LIQUIDITY", value: liq ? fmtMc(liq) : "—" },
     { label: "TOP 10", value: (dist && dist.top10Percent != null) ? Math.round(dist.top10Percent) + "%" : "—" },
     { label: "WHALES", value: String(whales) },
-    { label: "STREET VALUE", value: mc ? fmtMc(mc) : "—" },
+    { label: "KOLS IN", value: String(kolsIn) },
   ];
   return { kind: "token", subject: `$${String(sym).slice(0, 11)}`, subtitle: `top ${nodes.length} holders`, mint, stats, nodes };
 }
@@ -30832,11 +30834,13 @@ async function renderSubjectMapPng(target, mode = "bags") {
 async function buildXMapReply(target, variant, mode = "bags") {
   const { png, map } = await renderSubjectMapPng(target, mode).catch(() => ({ png: null, map: null }));
   if (!png || !map) return null;
+  const stat = (l) => (map.stats.find((s) => s.label === l) || {}).value;
   const kols = map.stats.find((s) => s.label === "KOLS IN");
   const ctas = ["mapped on SlimeWire", "live map on SlimeWire", "who's holding — SlimeWire", "the whole board, SlimeWire"];
   const cta = ctas[Math.abs((Number(String(variant).slice(-4)) || 0)) % ctas.length];
+  // Details + map in one reply: coin stats in the text, the holder bubble-map as the image.
   const text = map.kind === "token"
-    ? `${map.subject} holder map 🗺️${kols && Number(kols.value) > 0 ? ` — ${kols.value} known KOLs in` : ""}\n${cta}`
+    ? `${map.subject} 🗺️ holder map\nMC ${stat("MARKET CAP")} · Liq ${stat("LIQUIDITY")} · top10 ${stat("TOP 10")}${kols && Number(kols.value) > 0 ? ` · ${kols.value} KOLs in` : ""}\n${cta}`
     : `${map.subject} ${map.mode === "network" ? "network" : "bag"} map 🗺️\n${cta}`;
   return { text: text.slice(0, 270), mediaBuffer: png, symbol: map.subject, mc: 0 };
 }
@@ -31307,8 +31311,17 @@ async function xReplyPollTick() {
       if (w) { target = w; intent = "map"; console.log(`[xreply]   no CA but bare wallet ${w} → map`); }
     }
     if (!target) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "no CA/wallet found" }); console.log(`[xreply]   ✗ no CA/wallet in tag/parent/root → skip`); continue; }
+    // 🗺️ X HEADLINE: any plain coin tag → the MAP card (which now carries coin details) + falls back to the
+    // scan card if the map can't build. Explicit chart/rug keywords still route to those cards.
+    if (intent === "scan") intent = "map";
     console.log(`[xreply]   target=${target} intent=${intent} → building reply…`);
-    const reply = await buildXReply(target, intent, m.id).catch((e) => { console.log(`[xreply]   build THREW: ${String(e?.message || e).slice(0, 140)}`); return null; });   // m.id seeds unique wording + card art
+    // Hard 40s timeout — a single slow/hanging reply build can NEVER freeze the poll again (the "poller went
+    // silent" bug: a render hung a tick, and the reentrancy guard then skipped every future tick forever).
+    const reply = await Promise.race([
+      buildXReply(target, intent, m.id),
+      new Promise((res) => setTimeout(() => res("__timeout__"), 40_000)),
+    ]).catch((e) => { console.log(`[xreply]   build THREW: ${String(e?.message || e).slice(0, 140)}`); return null; });   // m.id seeds unique wording + card art
+    if (reply === "__timeout__") { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "build timeout" }); console.log(`[xreply]   ⏱ build TIMED OUT (>40s) target=${target} → skip (poll stays alive)`); continue; }
     if (!reply) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "coin didn't scan" }); console.log(`[xreply]   ✗ buildXReply null (coin didn't scan) target=${target}`); continue; }
     console.log(`[xreply]   reply ready: $${reply.symbol} media=${reply.mediaBuffer ? "card" : "NONE"} → posting (auto=${auto})…`);
     if (auto) {

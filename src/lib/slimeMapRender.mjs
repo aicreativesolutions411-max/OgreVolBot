@@ -126,15 +126,21 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
 // Fetch a remote avatar (X pfp etc.) → square PNG data-URI so it embeds in the SVG (resvg/librsvg won't
 // fetch remote hrefs at raster time). Small + cached by the caller. Returns null on any failure.
 export async function fetchAvatarDataUri(url, size = 96) {
+  if (!url) return null;
+  // AbortController + setTimeout works on EVERY Node version (AbortSignal.timeout is missing on Render's older
+  // Node → without a real timeout a hanging avatar fetch would never resolve and would stall the whole render,
+  // which stalls the X poll tick — the "poller went silent" bug).
+  const ctl = new AbortController();
+  const t = setTimeout(() => { try { ctl.abort(); } catch {} }, 4500);
   try {
-    if (!url) return null;
-    const res = await fetch(url, { signal: AbortSignal.timeout ? AbortSignal.timeout(5000) : undefined });
+    const res = await fetch(url, { signal: ctl.signal });
     if (!res.ok) return null;
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length < 80) return null;
     const png = await sharp(buf).resize(size, size, { fit: "cover", position: "attention" }).png().toBuffer();
     return "data:image/png;base64," + png.toString("base64");
   } catch { return null; }
+  finally { clearTimeout(t); }
 }
 
 // Full premium render: resolve avatars → build transparent map SVG → composite over a branded background
