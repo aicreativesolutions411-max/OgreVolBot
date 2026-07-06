@@ -9,7 +9,16 @@
 //
 // TERMS: automating a logged-in account is against X's ToS and can get it suspended. The owner accepted
 // that risk; callers throttle + reply with value (a scan card), not bare-link spam.
-import { ClientTransaction, fetchXDocument } from "x-client-transaction-id";
+//
+// The `x-client-transaction-id` dep (+ its heavy linkedom DOM lib) is LAZY-loaded inside getSession, NOT
+// imported at module top — so this optional, fragile feature can never crash the main app's boot. If the
+// dep fails to load, every X call just no-ops.
+let _xti = null;
+async function loadXti() {
+  if (_xti) return _xti;
+  _xti = await import("x-client-transaction-id");
+  return _xti;
+}
 
 // The public web-app bearer (not a secret — it's shipped in x.com's JS). Overridable via env.
 const BEARER = (process.env.X_BEARER_TOKEN || "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA").trim();
@@ -66,6 +75,7 @@ async function scrapeQueryIds() {
 }
 async function getSession() {
   if (session && Date.now() - session.at < 25 * 60_000) return session;
+  const { ClientTransaction, fetchXDocument } = await loadXti(); // lazy: never loaded at app boot
   const doc = await fetchXDocument();
   const tx = await ClientTransaction.create(doc);
   const qmap = await scrapeQueryIds();

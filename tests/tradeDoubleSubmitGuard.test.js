@@ -1809,7 +1809,8 @@ test("SlimeWire PFP maker: sharp compositor + public endpoint + /pfp command, al
 test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throttle, owner-gated, dark", () => {
   const xc = fs.readFileSync(new URL("../src/lib/xClient.js", import.meta.url), "utf8");
   // direct signed GraphQL (no paid API, no dead library), env-only secrets, graceful when unconfigured
-  assert.match(xc, /from "x-client-transaction-id"/);            // the anti-bot header X now requires
+  assert.match(xc, /import\("x-client-transaction-id"\)/);       // LAZY-loaded (never crashes app boot)
+  assert.doesNotMatch(xc, /^import .* from "x-client-transaction-id"/m); // must NOT be a top-level import
   assert.match(xc, /generateTransactionId/);
   assert.match(xc, /scrapeQueryIds/);                           // query ids scraped live (auto-current)
   assert.match(xc, /X_AUTH_TOKEN/); assert.match(xc, /X_CT0/);
