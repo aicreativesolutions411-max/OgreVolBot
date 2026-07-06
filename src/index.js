@@ -30968,11 +30968,16 @@ async function xReplyPollTick() {
     const ts = Number(m.createdAtMs) || 0;
     if (ts && ts <= floor) { skipped++; continue; }               // older than the backlog floor → ignore
     if (state.seen[m.id]) { skipped++; continue; }                // already answered → never repeat
-    const mint = await resolveXTargetMint(m).catch(() => null);   // CA / $ticker in the mention OR the parent post
-    if (!mint) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "no CA/ticker found" }); continue; }
+    // FLIGHT RECORDER: log the fate of every NEW mention so a single test tag tells us exactly where it dies
+    // (was invisible before — no-CA and no-scan both hid behind .catch(()=>null)). Cheap; keep it on.
+    console.log(`[xreply] NEW @${m.username} id=${m.id} auto=${auto} replyTo=${m.inReplyToId || "-"} conv=${m.conversationId || "-"} urls=${(m.urls || []).length} text=${JSON.stringify(String(m.text || "").slice(0, 140))}`);
+    const mint = await resolveXTargetMint(m).catch((e) => { console.log(`[xreply]   resolve THREW: ${String(e?.message || e).slice(0, 140)}`); return null; });
+    if (!mint) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "no CA/ticker found" }); console.log(`[xreply]   ✗ no CA in tag/parent/root → skip`); continue; }
     const intent = xIntentFromText(m.text);                        // did-it-rug? chart? else scan
-    const reply = await buildXReply(mint, intent, m.id).catch(() => null);   // m.id seeds unique wording + card art
-    if (!reply) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "coin didn't scan" }); continue; }
+    console.log(`[xreply]   mint=${mint} intent=${intent} → building reply…`);
+    const reply = await buildXReply(mint, intent, m.id).catch((e) => { console.log(`[xreply]   build THREW: ${String(e?.message || e).slice(0, 140)}`); return null; });   // m.id seeds unique wording + card art
+    if (!reply) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "coin didn't scan" }); console.log(`[xreply]   ✗ buildXReply null (coin didn't scan) mint=${mint}`); continue; }
+    console.log(`[xreply]   reply ready: $${reply.symbol} media=${reply.mediaBuffer ? "card" : "NONE"} → posting (auto=${auto})…`);
     if (auto) {
       if (maxPerHour > 0 && state.posts.length >= maxPerHour) { results.push({ u: m.username, s: "defer", d: "hourly cap" }); break; }
       // Space replies out (jittered) rather than deferring — answer everyone, just not all in the same instant.
@@ -35515,6 +35520,20 @@ function startGroupBuyBot() {
   const xPollMs = Math.max(15_000, Number(process.env.X_REPLY_POLL_MS || 30_000));
   setTimeout(() => { void xReplyPollTick(); }, 10_000);
   setInterval(() => { void xReplyPollTick(); }, xPollMs);
+  // SELF-TEST (boot, no post): build a reply for a KNOWN-GOOD coin (BONK) so the logs prove whether the
+  // scan→card pipeline works at all — isolates "coin didn't scan" (build broken) from "no CA" (resolve).
+  setTimeout(async () => {
+    if (!xReplyEnabled() || !xConfigured()) { console.log("[xreply] SELFTEST skipped — off/unconfigured"); return; }
+    const BONK = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
+    try {
+      const t0 = Date.now();
+      const r = await buildXReply(BONK, "scan", "selftest");
+      if (!r) console.log("[xreply] SELFTEST buildXReply(BONK,scan) → NULL (scan/card pipeline is broken)");
+      else console.log(`[xreply] SELFTEST buildXReply(BONK,scan) OK → $${r.symbol} mc=${r.mc} media=${r.mediaBuffer ? "card(" + r.mediaBuffer.length + "b)" : "NONE"} text=${JSON.stringify(String(r.text || "").slice(0, 80))} in ${Date.now() - t0}ms`);
+      const who = await xWhoAmI().catch((e) => ({ __e: String(e?.message || e) }));
+      console.log(`[xreply] SELFTEST whoami → ${who && who.username ? "@" + who.username : "FAIL:" + (who && who.__e || "null") + " (write path likely 401 → replies would fail)"}`);
+    } catch (e) { console.log(`[xreply] SELFTEST THREW: ${String(e?.message || e).slice(0, 160)}`); }
+  }, 13_000);
   void startVanityAutoGrind();       // 🅿️ keep the "…pump" mint pool auto-stocked (gentle bg worker; no user alerts)
   void readCommunitySnipe().catch(() => {});                 // warm the armed-creator-wallet index so a snipe survives restart
   void readXReplyState().catch(() => {});                    // warm the X-reply state so the claimed owner-chat survives restart
