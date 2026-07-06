@@ -72,7 +72,7 @@ import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVan
 import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp } from "./lib/pfp.js";
 import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
-import { xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle, xGetTweet } from "./lib/xClient.js";
+import { xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode } from "./lib/xClient.js";
 import { renderXScanCard } from "./lib/xCard.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
@@ -30579,8 +30579,11 @@ function xReplyOwnerChat() {
   if (env) return env;
   return String(xReplyStateCache?.ownerChat || "").trim();
 }
-function xReplyEnabled() { return parseBoolean(process.env.X_REPLY_ENABLED || "false"); }
-function xReplyAuto() { return parseBoolean(process.env.X_REPLY_AUTO || "false"); }
+// AUTO-START: once the owner has set X creds on Render, the bot should just work — no extra flag to flip.
+// So both default to ON when X is configured. Set X_REPLY_ENABLED=false / X_REPLY_AUTO=false to override
+// (e.g. AUTO=false = assist mode, DM the owner a draft to one-tap post instead of auto-posting).
+function xReplyEnabled() { const v = (process.env.X_REPLY_ENABLED || "").trim(); return v ? parseBoolean(v) : xConfigured(); }
+function xReplyAuto() { const v = (process.env.X_REPLY_AUTO || "").trim(); return v ? parseBoolean(v) : xConfigured(); }
 
 function xAgeLabel(ms) {
   const m = ms / 60_000;
@@ -30680,6 +30683,109 @@ async function buildXScanReply(mint) {
   } catch { /* text-only is fine if the card render fails */ }
   return { text, mediaBuffer, symbol, mc };
 }
+// What the tagger is asking for → picks which card to reply with. Keeps the bot feeling smart: "did it rug?"
+// gets a safety verdict, "chart?" gets a chart image, anything else gets the standard scan card.
+function xIntentFromText(text) {
+  const t = String(text || "").toLowerCase();
+  if (/\b(did ?it ?rug|rug(ged|ging|pull|s)?|honey ?pot|is ?(this|it) ?safe|safe\??|safu|scam|can ?i ?sell|sell ?able|legit\??)\b/.test(t)) return "rug";
+  if (/\b(chart|candles?|price ?action|\bta\b|how'?s? ?(it|this) ?look(ing)?)\b/.test(t)) return "chart";
+  return "scan";
+}
+// 📈 CHART CARD — reply with a live candlestick image of the coin (GeckoTerminal candles, pump-tick synth
+// fallback). Falls back to the scan card if there's no chartable history yet.
+async function buildXChartReply(mint) {
+  const scan = await gatherSlimeScan(mint).catch(() => null);
+  const meta = scan?.meta, bonding = scan?.bonding;
+  const symbol = String(meta?.symbol || bonding?.symbol || "").slice(0, 12);
+  const name = String(meta?.name || bonding?.name || "").slice(0, 40);
+  const mc = Number(meta?.marketCap || bonding?.usd_market_cap || bonding?.marketCap || 0);
+  let payload = await webOhlcvPayload(mint, "5m").catch(() => null);
+  let candles = (payload && payload.candles) || [];
+  if (candles.length < 4) { payload = await webOhlcvPayload(mint, "1m").catch(() => null); candles = (payload && payload.candles) || []; }
+  if (candles.length < 4) return await buildXScanReply(mint); // no chart yet → standard scan card
+  const chartCandles = candles.map((c) => ({ ...c, t: c.t * 1000 })); // GeckoTerminal t is seconds; chart wants ms
+  const first = chartCandles[0].o, last = chartCandles[chartCandles.length - 1].c;
+  const ch = first > 0 ? ((last - first) / first) * 100 : 0;
+  const mcLabel = mc > 0 ? scanFmtMoney(mc) : "";
+  const title = `$${symbol || "coin"}  ${fmtChartPrice(last)}  ${ch >= 0 ? "▲ +" : "▼ "}${ch.toFixed(1)}%`;
+  const sub = `SlimeWire${name ? " · " + name : ""}${mcLabel ? " · MC " + mcLabel : ""}`;
+  let mediaBuffer = null;
+  try { mediaBuffer = await renderCandleChartPng(chartCandles, { title, sub }); } catch { /* text-only fallback */ }
+  const links = slimewireTokenLinks(mint);
+  const text = [
+    `$${symbol || "coin"} chart ${ch >= 0 ? "🟢 +" : "🔴 "}${ch.toFixed(1)}%`,
+    mcLabel ? `MC ${mcLabel} · ${fmtChartPrice(last)}` : fmtChartPrice(last),
+    `Live chart 👉 ${links.site}`
+  ].filter(Boolean).join("\n").slice(0, 279);
+  return { text, mediaBuffer, symbol, mc };
+}
+// 🛡️ DID-IT-RUG — a rug-focused verdict: LP, mint/freeze authority, dev-sold, top-holder concentration.
+function xRugFacts(scan) {
+  const { rug, shield, best, bonding, meta } = scan;
+  const honeypot = Boolean(shield?.honeypot || shield?.isHoneypot || shield?.verdict === "danger" || shield?.level === "danger");
+  const rugged = Boolean(rug?.rugged);
+  const mintAuth = Boolean(shield?.mintAuthority || rug?.mintAuthority);
+  const freezeAuth = Boolean(shield?.freezeAuthority || rug?.freezeAuthority);
+  const top10 = Number(rug?.top10Pct);
+  const devSold = rug?.devSold;
+  const lpBurned = Number(rug?.lpBurnedPct);
+  const liq = Number(best?.liquidity?.usd || meta?.liquidityUsd || bonding?.liquidityUsd || 0);
+  const bad = [], warn = [], good = [];
+  if (honeypot) bad.push("honeypot — sells blocked");
+  if (rugged) bad.push("flagged RUGGED");
+  if (mintAuth) bad.push("mint authority LIVE");
+  else if (shield?.mintAuthority === false || rug?.mintAuthority === false) good.push("mint revoked");
+  if (freezeAuth) bad.push("freeze authority LIVE");
+  else if (shield?.freezeAuthority === false || rug?.freezeAuthority === false) good.push("freeze revoked");
+  if (devSold === true) bad.push("dev already sold");
+  else if (devSold === false) good.push("dev hasn't sold");
+  if (Number.isFinite(top10)) { if (top10 >= 60) bad.push(`top-10 hold ${Math.round(top10)}%`); else if (top10 >= 35) warn.push(`top-10 hold ${Math.round(top10)}%`); else if (top10 > 0) good.push(`top-10 only ${Math.round(top10)}%`); }
+  if (Number.isFinite(lpBurned) && lpBurned > 0) { if (lpBurned >= 90) good.push(`LP ${Math.round(lpBurned)}% burned`); else warn.push(`LP only ${Math.round(lpBurned)}% burned`); }
+  if (liq > 0 && liq < 3000) warn.push(`liq ${scanFmtMoney(liq)} — thin`);
+  let verdict, tone;
+  if (honeypot || rugged) { verdict = "RUGGED / honeypot — do not buy"; tone = "danger"; }
+  else if (bad.length) { verdict = "High rug risk"; tone = "danger"; }
+  else if (warn.length >= 2) { verdict = "Risky — be careful"; tone = "warn"; }
+  else if (warn.length) { verdict = "Mostly ok — one flag"; tone = "warn"; }
+  else { verdict = "No rug flags found"; tone = "ok"; }
+  return { verdict, tone, bad, warn, good };
+}
+async function buildXRugReply(mint) {
+  const scan = await gatherSlimeScan(mint).catch(() => null);
+  if (!scan) return null;
+  const { meta, bonding, best } = scan;
+  const symbol = String(meta?.symbol || bonding?.symbol || "").slice(0, 12);
+  const name = String(meta?.name || bonding?.name || "").slice(0, 40);
+  const mc = Number(meta?.marketCap || bonding?.usd_market_cap || bonding?.marketCap || 0);
+  const liq = Number(best?.liquidity?.usd || 0);
+  if (!symbol && !(mc > 0)) return null;
+  const createdAt = Number(best?.pairCreatedAt || 0) || (Number(bonding?.created_timestamp || 0) * (String(bonding?.created_timestamp || "").length <= 10 ? 1000 : 1));
+  const ageLabel = createdAt > 0 ? xAgeLabel(Date.now() - createdAt) : "—";
+  const rail = xRailLabel(mint, best, bonding);
+  const facts = xRugFacts(scan);
+  const mcLabel = mc > 0 ? scanFmtMoney(mc) : "—";
+  const liqLabel = liq > 0 ? scanFmtMoney(liq) : "—";
+  const links = slimewireTokenLinks(mint);
+  const icon = facts.tone === "danger" ? "⛔" : facts.tone === "warn" ? "⚠️" : "✅";
+  const detail = [...facts.bad.map((x) => "⛔ " + x), ...facts.warn.map((x) => "⚠️ " + x), ...facts.good.map((x) => "✅ " + x)].slice(0, 3).join("\n");
+  const text = [
+    `Did $${symbol || "coin"} rug? ${icon} ${facts.verdict}`,
+    detail,
+    `Full safety 👉 ${links.site}`
+  ].filter(Boolean).join("\n").slice(0, 279);
+  let mediaBuffer = null;
+  try {
+    const logoBuffer = await xFetchLogo(meta?.icon || meta?.image || bonding?.image || bonding?.image_uri);
+    mediaBuffer = await renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel: rail, verdict: facts.verdict, verdictTone: facts.tone, logoBuffer });
+  } catch { /* text-only is fine */ }
+  return { text, mediaBuffer, symbol, mc };
+}
+// Dispatch a mention to the right card based on what they asked.
+async function buildXReply(mint, intent = "scan") {
+  if (intent === "chart") return await buildXChartReply(mint);
+  if (intent === "rug") return await buildXRugReply(mint);
+  return await buildXScanReply(mint);
+}
 async function xReplyOwnerNotify(text) {
   const chat = xReplyOwnerChat();
   if (chat) await say(chat, text).catch(() => {});
@@ -30715,7 +30821,8 @@ async function xReplyPollTick() {
     if (state.seen[m.id]) continue;
     const mint = await resolveXTargetMint(m).catch(() => null);   // CA / $ticker in the mention OR the parent post
     if (!mint) { state.seen[m.id] = now; continue; }               // nothing scannable → skip
-    const reply = await buildXScanReply(mint).catch(() => null);
+    const intent = xIntentFromText(m.text);                        // did-it-rug? chart? else scan
+    const reply = await buildXReply(mint, intent).catch(() => null);
     if (!reply) { state.seen[m.id] = now; continue; }
     if (auto) {
       if (state.posts.length >= maxPerHour) break;                   // hourly cap reached — leave the rest for later
@@ -30728,7 +30835,7 @@ async function xReplyPollTick() {
       await sleep(2500);
     } else {
       state.seen[m.id] = now;
-      state.queue[m.id] = { mint: mints[0], at: now, author: m.username, url: m.permanentUrl };
+      state.queue[m.id] = { mint, intent, at: now, author: m.username, url: m.permanentUrl };
       await writeXReplyState(state);
       await xReplyOwnerDraft(m, reply);
     }
@@ -30748,7 +30855,7 @@ async function handleXReplyCallback(query, userId) {
   if (mPost) {
     const q = state.queue[mPost[1]];
     if (!q) { await ack("That draft expired — tag us again to re-scan.", true); return true; }
-    const reply = await buildXScanReply(q.mint).catch(() => null);
+    const reply = await buildXReply(q.mint, q.intent || "scan").catch(() => null);
     if (!reply) { await ack("Couldn't rebuild the scan — try again.", true); return true; }
     const res = await xReply({ inReplyToId: mPost[1], text: reply.text, mediaBuffer: reply.mediaBuffer });
     if (res.ok) { delete state.queue[mPost[1]]; state.posts.push(Date.now()); await writeXReplyState(state); await clearKb("✅ Posted to X"); await ack("Posted ✨"); }
@@ -30779,7 +30886,17 @@ async function handleXTestCommand(chatId, userId) {
   if (!xConfigured()) { await sayHtml(chatId, "🐦 <b>X not configured.</b> Set EITHER <code>X_AUTH_TOKEN</code> + <code>X_CT0</code> (x.com cookies) OR <code>X_USERNAME</code> + <code>X_PASSWORD</code> (durable — doesn't expire) on Render, then <code>X_REPLY_ENABLED=true</code>."); return; }
   const me = await xWhoAmI().catch(() => null);
   if (!(me && (me.username || me.screenName))) {
-    await sayHtml(chatId, "🐦 <b>Auth failed.</b> If using cookies, they're likely <b>expired</b> — grab fresh <code>auth_token</code> + <code>ct0</code> from x.com and update Render. Or switch to <code>X_USERNAME</code> + <code>X_PASSWORD</code> (+ <code>X_EMAIL</code> / <code>X_2FA_SECRET</code> if 2FA is on) — that doesn't expire.");
+    const why = xLastAuthError();
+    await sayHtml(chatId, [
+      "🐦 <b>Auth failed.</b>",
+      `Using: <b>${xAuthMode() === "cookies" ? "cookies (auth_token + ct0)" : xAuthMode() === "password" ? "username + password" : "nothing"}</b>`,
+      why ? `Reason: <b>${escapeTelegramHtml(why)}</b>` : "",
+      "",
+      "Fixes:",
+      "• Password login challenged → add <code>X_EMAIL</code> (the email on the account) and, if 2FA is on, <code>X_2FA_SECRET</code> (the TOTP secret, not a one-time code).",
+      "• Or use cookies: log into x.com in a browser, copy <code>auth_token</code> + <code>ct0</code> from DevTools → Application → Cookies, set <code>X_AUTH_TOKEN</code> + <code>X_CT0</code>. Cookies beat password when X is challenging logins.",
+      "Then redeploy and run <code>/xtest</code> again."
+    ].filter(Boolean).join("\n"));
     return;
   }
   // Live probe: how many recent @mentions the search sees + how many carry a CA (proves detection works).
@@ -30791,7 +30908,12 @@ async function handleXTestCommand(chatId, userId) {
     `Sees <b>${mentions.length}</b> recent mentions of @${escapeTelegramHtml(me.username || me.screenName)} · <b>${withCa}</b> with a CA`,
     withCa ? "✅ Detection works. If it's not replying, check Mode/Replies above." : "⚠️ No CA-mentions found yet — tag @that-handle in a tweet WITH a contract, then run /xpoll.",
     "",
-    "Test now: <code>/xpoll</code> (check mentions immediately) · <code>/xscan &lt;CA&gt;</code> (preview the reply card)."
+    "🎯 <b>Smart replies</b> — the bot reads what they ask:",
+    "• “did it rug?” / “safe?” → 🛡️ safety verdict card",
+    "• “chart?” / “price?” → 📈 live candlestick card",
+    "• tag us under any coin tweet → 🔎 scans that post’s CA",
+    "",
+    "Test now: <code>/xpoll</code> (check mentions) · <code>/xscan &lt;CA&gt;</code> · <code>/xscan rug &lt;CA&gt;</code> · <code>/xscan chart &lt;CA&gt;</code>."
   ].join("\n"));
 }
 // Force a mention check right now (no ~2.5-min wait) — great for testing.
@@ -30805,13 +30927,15 @@ async function handleXPollCommand(chatId, userId) {
 // Preview the exact reply (card + text) for a CA or a link containing one — proves the pipeline end-to-end.
 async function handleXScanCommand(chatId, argument, userId) {
   if (!xReplyOwnerChat() || String(chatId) !== xReplyOwnerChat()) { await say(chatId, "Owner-only — DM /xclaim first."); return; }
-  let mint = extractMintsFromText(String(argument || ""))[0];
-  if (!mint) { const tag = extractCashtags(String(argument || ""))[0]; if (tag) mint = await resolveCashtagToMint(tag).catch(() => null); }
-  if (!mint) { await say(chatId, "Usage: /xscan <CA or $ticker>"); return; }
-  await say(chatId, "🐦 Building the reply preview…");
-  const reply = await buildXScanReply(mint).catch(() => null);
+  const arg = String(argument || "");
+  const intent = xIntentFromText(arg);                            // "/xscan rug <CA>" or "chart <CA>" previews that card
+  let mint = extractMintsFromText(arg)[0];
+  if (!mint) { const tag = extractCashtags(arg)[0]; if (tag) mint = await resolveCashtagToMint(tag).catch(() => null); }
+  if (!mint) { await say(chatId, "Usage: /xscan <CA or $ticker> — or <code>/xscan rug &lt;CA&gt;</code> / <code>/xscan chart &lt;CA&gt;</code> to preview those cards."); return; }
+  await say(chatId, `🐦 Building the <b>${intent === "rug" ? "did-it-rug" : intent === "chart" ? "chart" : "scan"}</b> reply preview…`);
+  const reply = await buildXReply(mint, intent).catch(() => null);
   if (!reply) { await say(chatId, "Couldn't scan that — it may be too new or unlisted."); return; }
-  const cap = `🐦 <b>Reply preview</b> for <code>${escapeTelegramHtml(shortMint(mint))}</code>\n\n<i>${escapeTelegramHtml(reply.text)}</i>`;
+  const cap = `🐦 <b>Reply preview</b> (${intent}) for <code>${escapeTelegramHtml(shortMint(mint))}</code>\n\n<i>${escapeTelegramHtml(reply.text)}</i>`;
   if (reply.mediaBuffer) await sendPhoto(chatId, "x-scan-preview.png", reply.mediaBuffer, cap, null, "HTML").catch(() => sayHtml(chatId, cap));
   else await sayHtml(chatId, cap);
 }

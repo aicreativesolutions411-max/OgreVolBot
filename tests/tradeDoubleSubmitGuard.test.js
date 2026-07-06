@@ -1828,11 +1828,25 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(serverSource, /void xReplyPollTick\(\); \}, Math\.max\(60_000/);   // poller wired
   assert.match(serverSource, /if \(await handleXReplyCallback\(query, userId\)/); // callback dispatch
   assert.match(serverSource, /parseCommandWithArgument\(text, \["xtest", "xstatus"\]\)/); // owner setup check
-  assert.match(serverSource, /import \{ xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle, xGetTweet \} from "\.\/lib\/xClient\.js"/);
+  assert.match(serverSource, /import \{ xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode \} from "\.\/lib\/xClient\.js"/);
   // interactive: replies off a CA, a $ticker, OR the coin in the PARENT post you tagged us under
   assert.match(serverSource, /async function resolveXTargetMint/);
   assert.match(serverSource, /function extractCashtags/);
   assert.match(functionBody(serverSource, "resolveXTargetMint"), /mention\.inReplyToId/);
+  // auth diagnostics: xClient captures a plain-English reason so /xtest can say WHY it failed
+  assert.match(xc, /export function xLastAuthError/);
+  assert.match(xc, /X_USERNAME/); assert.match(xc, /X_PASSWORD/);          // durable password fallback
+  assert.match(xc, /if \(await authed\(\)\)/);                            // me()-backed login confirmation
+  // auto-start: replies default ON once X is configured (no extra flag to flip)
+  assert.match(serverSource, /function xReplyEnabled\(\) \{ const v = \(process\.env\.X_REPLY_ENABLED/);
+  assert.match(serverSource, /function xReplyAuto\(\) \{ const v = \(process\.env\.X_REPLY_AUTO/);
+  // 3 stand-out reply modes: Did-It-Rug, Chart Card, Scan-This-Tweet, routed by what the tagger asked
+  assert.match(serverSource, /function xIntentFromText/);
+  assert.match(serverSource, /async function buildXChartReply/);          // 📈 live candlestick card
+  assert.match(serverSource, /async function buildXRugReply/);            // 🛡️ did-it-rug verdict card
+  assert.match(serverSource, /function xRugFacts/);
+  assert.match(functionBody(serverSource, "buildXChartReply"), /renderCandleChartPng/);
+  assert.match(functionBody(serverSource, "xReplyPollTick"), /xIntentFromText\(m\.text\)/); // intent routed at reply time
 });
 
 // ---- ✨ AI Slime PFP (fal.ai image-to-image; the real custom slime effect) + looser X throttle --------
