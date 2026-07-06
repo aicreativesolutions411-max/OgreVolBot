@@ -35532,6 +35532,14 @@ function startGroupBuyBot() {
       else console.log(`[xreply] SELFTEST buildXReply(BONK,scan) OK → $${r.symbol} mc=${r.mc} media=${r.mediaBuffer ? "card(" + r.mediaBuffer.length + "b)" : "NONE"} text=${JSON.stringify(String(r.text || "").slice(0, 80))} in ${Date.now() - t0}ms`);
       const who = await xWhoAmI().catch((e) => ({ __e: String(e?.message || e) }));
       console.log(`[xreply] SELFTEST whoami → ${who && who.username ? "@" + who.username : "FAIL:" + (who && who.__e || "null") + " (write path likely 401 → replies would fail)"}`);
+      // Run CA-RESOLUTION against the account's REAL mentions (the user's own test tags are in here) — read
+      // only, no posting. This shows, per actual tag, whether a CA resolves from the tag/parent/root.
+      const ms = await xSearchMentions(20).catch(() => []);
+      console.log(`[xreply] SELFTEST resolving CA on ${ms.length} live mentions…`);
+      for (const m of ms.slice(0, 8)) {
+        const mint = await resolveXTargetMint(m).catch((e) => "ERR:" + String(e?.message || e).slice(0, 60));
+        console.log(`[xreply] SELFTEST   @${m.username} replyTo=${m.inReplyToId || "-"} conv=${m.conversationId || "-"} urls=${(m.urls || []).length} text=${JSON.stringify(String(m.text || "").slice(0, 90))} → ${mint || "NONE"}`);
+      }
     } catch (e) { console.log(`[xreply] SELFTEST THREW: ${String(e?.message || e).slice(0, 160)}`); }
   }, 13_000);
   void startVanityAutoGrind();       // 🅿️ keep the "…pump" mint pool auto-stocked (gentle bg worker; no user alerts)
