@@ -30803,11 +30803,13 @@ async function xReplyOwnerDraft(m, reply) {
   else await sayHtml(chat, cap, kb).catch(() => {});
 }
 async function xReplyPollTick() {
-  if (!xReplyEnabled() || !xConfigured()) return;
+  const results = [];
+  if (!xReplyEnabled() || !xConfigured()) return { checked: 0, results, off: true };
   let mentions = [];
-  try { mentions = await xSearchMentions(20); } catch { return; }
-  if (!mentions.length) return;
+  try { mentions = await xSearchMentions(20); } catch (e) { return { checked: 0, results, error: String(e?.message || e).slice(0, 140) }; }
+  if (!mentions.length) return { checked: 0, results };
   const state = await readXReplyState();
+  if (!state.fails || typeof state.fails !== "object") state.fails = {};
   const now = Date.now();
   for (const k of Object.keys(state.seen)) if (now - Number(state.seen[k]) > 3 * 86_400_000) delete state.seen[k];
   state.posts = state.posts.filter((t) => now - Number(t) < 3_600_000);
@@ -30820,27 +30822,39 @@ async function xReplyPollTick() {
   for (const m of mentions) {
     if (state.seen[m.id]) continue;
     const mint = await resolveXTargetMint(m).catch(() => null);   // CA / $ticker in the mention OR the parent post
-    if (!mint) { state.seen[m.id] = now; continue; }               // nothing scannable → skip
+    if (!mint) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "no CA/ticker found" }); continue; }
     const intent = xIntentFromText(m.text);                        // did-it-rug? chart? else scan
     const reply = await buildXReply(mint, intent).catch(() => null);
-    if (!reply) { state.seen[m.id] = now; continue; }
+    if (!reply) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "coin didn't scan" }); continue; }
     if (auto) {
-      if (state.posts.length >= maxPerHour) break;                   // hourly cap reached — leave the rest for later
-      if (state.posts.length && (now - Number(state.posts[state.posts.length - 1]) < minGapMs)) break; // pace posts
+      if (state.posts.length >= maxPerHour) { results.push({ u: m.username, s: "defer", d: "hourly cap" }); break; }
+      if (state.posts.length && (now - Number(state.posts[state.posts.length - 1]) < minGapMs)) { results.push({ u: m.username, s: "defer", d: "pacing" }); break; }
       const res = await xReply({ inReplyToId: m.id, text: reply.text, mediaBuffer: reply.mediaBuffer });
-      state.seen[m.id] = now;
-      if (res.ok) { state.posts.push(Date.now()); await xReplyOwnerNotify(`✅ Auto-replied on X to @${m.username} · $${reply.symbol}`); }
-      else { await xReplyOwnerNotify(`⚠️ X reply to @${m.username} failed: ${res.reason || ""}`); if (/not configured|401|unauthor/i.test(res.reason || "")) break; }
+      if (res.ok) {
+        state.seen[m.id] = now; delete state.fails[m.id]; state.posts.push(Date.now());
+        results.push({ u: m.username, s: "replied", d: `$${reply.symbol}` });
+        await xReplyOwnerNotify(`✅ Auto-replied on X to @${m.username} · $${reply.symbol}`);
+      } else {
+        // Transient failure → retry next cycle (up to 3x) instead of marking it done forever.
+        state.fails[m.id] = (Number(state.fails[m.id]) || 0) + 1;
+        const giveUp = state.fails[m.id] >= 3 || /not configured|401|unauthor/i.test(res.reason || "");
+        if (giveUp) { state.seen[m.id] = now; delete state.fails[m.id]; }
+        results.push({ u: m.username, s: "fail", d: res.reason || "post failed" });
+        await xReplyOwnerNotify(`⚠️ X reply to @${m.username} failed: ${res.reason || ""}${giveUp ? "" : " (will retry)"}`);
+        if (/not configured|401|unauthor/i.test(res.reason || "")) break;
+      }
       await writeXReplyState(state);
       await sleep(2500);
     } else {
       state.seen[m.id] = now;
       state.queue[m.id] = { mint, intent, at: now, author: m.username, url: m.permanentUrl };
       await writeXReplyState(state);
+      results.push({ u: m.username, s: "draft", d: `$${reply.symbol}` });
       await xReplyOwnerDraft(m, reply);
     }
   }
   await writeXReplyState(state);
+  return { checked: mentions.length, results };
 }
 async function handleXReplyCallback(query, userId) {
   const data = String(query?.data || "");
@@ -30923,8 +30937,14 @@ async function handleXPollCommand(chatId, userId) {
   if (!xReplyOwnerChat() || String(chatId) !== xReplyOwnerChat()) { await say(chatId, "Owner-only — DM /xclaim first."); return; }
   if (!xReplyEnabled() || !xConfigured()) { await say(chatId, "X replies are OFF or not configured. Set X_REPLY_ENABLED=true + cookies, then /xtest."); return; }
   await say(chatId, "🐦 Checking mentions now…");
-  await xReplyPollTick().catch(() => {});
-  await say(chatId, xReplyAuto() ? "Done — any new CA-mentions were replied to on X." : "Done — any new CA-mentions were sent here as a draft to post.");
+  const r = await xReplyPollTick().catch((e) => ({ error: String(e?.message || e).slice(0, 140) }));
+  if (r?.error) { await sayHtml(chatId, `⚠️ Poll error: <code>${escapeTelegramHtml(r.error)}</code>`); return; }
+  const icon = (s) => s === "replied" ? "✅" : s === "fail" ? "⚠️" : s === "draft" ? "📝" : s === "defer" ? "⏳" : "·";
+  const lines = (r?.results || []).map((x) => `${icon(x.s)} @${escapeTelegramHtml(x.u)} — ${x.s}${x.d ? ` <i>(${escapeTelegramHtml(x.d)})</i>` : ""}`);
+  await sayHtml(chatId, [
+    `🐦 Checked <b>${r?.checked || 0}</b> recent mentions.`,
+    ...(lines.length ? lines : ["No new mentions to act on — either already handled, or none carried a CA/$ticker.<br>Tag @your-handle in a NEW tweet with a contract, wait ~1 min for X to index it, then /xpoll again."])
+  ].join("\n"));
 }
 // Preview the exact reply (card + text) for a CA or a link containing one — proves the pipeline end-to-end.
 async function handleXScanCommand(chatId, argument, userId) {
