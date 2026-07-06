@@ -1883,7 +1883,7 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.doesNotMatch(functionBody(serverSource, "buildXScanReply"), /links\.site/);
   assert.doesNotMatch(functionBody(serverSource, "buildXChartReply"), /links\.site/);
   assert.doesNotMatch(functionBody(serverSource, "buildXRugReply"), /links\.site/);
-  assert.match(functionBody(serverSource, "xReplyPollTick"), /buildXReply\(mint, intent, m\.id\)/); // tweet id seeds variation
+  assert.match(functionBody(serverSource, "xReplyPollTick"), /buildXReply\(target, intent, m\.id\)/); // tweet id seeds variation (target = coin CA or bare wallet for maps)
   // card renderer varies EVERY render (rotating jittered bg + unique grain + mirrored layouts + rotating text)
   assert.match(xcard, /function makeRng/);                             // seeded PRNG drives all choices
   assert.match(xcard, /feTurbulence/);                                 // unique per-card film grain (beats image dedup)
@@ -1893,6 +1893,44 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(serverSource, /let xPollRunning = false/);              // reentrancy guard
   assert.match(functionBody(serverSource, "xReplyPollTick"), /if \(xPollRunning\) return/);
   assert.match(functionBody(serverSource, "xReplyPollTick"), /let lastPostAt =/); // spacing, not defer
+});
+
+// ---- 🗺️ KOL / WALLET MAP — radial holder bubble-map (X + TG + interactive web) -----------------------
+test("KOL/wallet map: on-chain holders + ST identity, X 'map' intent + wallet tag, TG /map + drill, web /api/map + /map page", () => {
+  // data layer: coin map from free on-chain top holders; wallet map from ST portfolio/trades; token-vs-wallet auto
+  assert.match(serverSource, /async function buildTokenHolderMap\(mint\)/);
+  assert.match(serverSource, /async function buildWalletMap\(wallet, mode/);
+  assert.match(serverSource, /async function buildSubjectMap\(target/);
+  assert.match(serverSource, /computeOnchainDistribution\(\{ mint, rpcRead, withHolderCount: true \}\)/); // free holders
+  // identity: ONE hour-cached ST leaderboard pull → wallet→{name,twitter,avatar}; unavatar for X pfp
+  assert.match(serverSource, /async function mapKolIdentityIndex\(\)/);
+  assert.match(serverSource, /unavatar\.io\/twitter\//);
+  assert.match(serverSource, /autoKolWallets\.get\(wallet\) \|\| trackedKolWallets\.get\(wallet\)/);
+  // render: separate ESM module, avatar embedding + branded background composite
+  assert.match(serverSource, /await import\("\.\/lib\/slimeMapRender\.mjs"\)/);
+  const mapRender = fs.readFileSync(new URL("../src/lib/slimeMapRender.mjs", import.meta.url), "utf8");
+  assert.match(mapRender, /export async function renderSlimeMapPng/);
+  assert.match(mapRender, /export async function fetchAvatarDataUri/);       // X pfp → data-uri (resvg can't fetch)
+  assert.match(mapRender, /slimewire\.org/);                                 // branding baked in
+  // X bot: map intent + bare-wallet tag detection + dispatch
+  assert.match(functionBody(serverSource, "xIntentFromText"), /return "map"/);
+  assert.match(serverSource, /function extractBareWalletAddress\(text, urls\)/);
+  assert.match(functionBody(serverSource, "buildXReply"), /intent === "map"/);
+  // TG: /map command, Map button on scan card, map: callback with drill-through
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["map", "holders"/);
+  assert.match(serverSource, /async function handleMapCallback\(query, userId\)/);
+  assert.match(functionBody(serverSource, "slimeScanKeyboard"), /🗺️ Holder Map/);
+  assert.match(serverSource, /startsWith\("map:"\)/);
+  // web: public /api/map + /api/map/img BEFORE the auth gate, and /map page route
+  const apiIdx = serverSource.indexOf('pathname === "/api/map"');
+  const gateIdx = serverSource.indexOf("const auth = await authenticateWebRequest(request)");
+  assert.ok(apiIdx > 0 && apiIdx < gateIdx, "/api/map must be registered before the web auth gate");
+  assert.match(serverSource, /serveStaticHtmlPage\(response, "map\.html"\)/);
+  // interactive page exists + drills in (click a node → that wallet/coin map)
+  const mapHtml = fs.readFileSync(new URL("../web/public/map.html", import.meta.url), "utf8");
+  assert.match(mapHtml, /\/api\/map\?/);
+  assert.match(mapHtml, /function loadTarget/);
+  assert.match(mapHtml, /crumbs/);                                           // breadcrumb drill trail
 });
 
 // ---- ✨ AI Slime PFP (fal.ai image-to-image; the real custom slime effect) + looser X throttle --------

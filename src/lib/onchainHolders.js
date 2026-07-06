@@ -153,5 +153,8 @@ export async function computeOnchainDistribution({ mint, creatorWallet = "", rpc
     burnedPercent: round1(clampPct(burnedUi, supply)),
     holderCount,
     realHolderSample: realHolders.length,
+    // Per-wallet top holders (owner + amount + % of supply) — the KOL/wallet MAP needs the actual list,
+    // not just the aggregate. Pools/curve/burn already excluded above, so these are real holders only.
+    holders: realHolders.slice(0, 40).map((h) => ({ wallet: h.owner, ui: h.ui, pct: round1(clampPct(h.ui, supply)) })),
   };
 }

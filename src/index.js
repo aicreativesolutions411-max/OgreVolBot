@@ -6088,6 +6088,10 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "pfp.html");
       return;
     }
+    if (request.method === "GET" && ["/map", "/kolmap", "/holders", "/bubblemap", "/wallet-map"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "map.html");
+      return;
+    }
     if (request.method === "GET" && requestUrl.pathname === "/learn") {
       await serveStaticHtmlPage(response, "learn.html");
       return;
@@ -7447,6 +7451,37 @@ async function handleWebApiRequest(request, response, requestUrl) {
         try { const gif = await buildLaunchTrailerGif(draft, mint, null); result.gifBytes = gif?.length || 0; } catch (ge) { result.gifError = ge.message; }
       } catch (e) { result.error = e.message; console.warn(`[launch-card-test] ${e && e.stack}`); }
       sendWebJson(request, response, 200, result);
+      return;
+    }
+
+    // 🗺️ MAP DATA (public, API-light) — radial holder/wallet bubble map for the interactive /map page + bots.
+    // ca=<mint> → coin's KOL holders; wallet=<addr> → that wallet's bags (or mode=network). Cached upstream.
+    if (request.method === "GET" && pathname === "/api/map") {
+      const mmint = String(requestUrl.searchParams.get("ca") || requestUrl.searchParams.get("mint") || "").trim();
+      const mwallet = String(requestUrl.searchParams.get("wallet") || "").trim();
+      const mmode = requestUrl.searchParams.get("mode") === "network" ? "network" : "bags";
+      const mtarget = mmint || mwallet;
+      if (!solanaPublicKeyLike(mtarget)) { sendWebJson(request, response, 400, { ok: false, error: "ca or wallet required" }); return; }
+      let map;
+      try { map = (mwallet && !mmint) ? await buildWalletMap(mtarget, mmode) : await buildSubjectMap(mtarget, mmode); }
+      catch (e) { sendWebJson(request, response, 200, { ok: false, error: String((e && e.message) || e) }); return; }
+      if (!map || !Array.isArray(map.nodes) || !map.nodes.length) { sendWebJson(request, response, 200, { ok: false, error: "no map data yet" }); return; }
+      sendWebJson(request, response, 200, { ok: true, map });
+      return;
+    }
+    // 🗺️ MAP IMAGE (public) — the branded PNG (og:image, X/TG share card, no-JS fallback).
+    if (request.method === "GET" && pathname === "/api/map/img") {
+      const gmint = String(requestUrl.searchParams.get("ca") || requestUrl.searchParams.get("mint") || "").trim();
+      const gwallet = String(requestUrl.searchParams.get("wallet") || "").trim();
+      const gmode = requestUrl.searchParams.get("mode") === "network" ? "network" : "bags";
+      const gtarget = gmint || gwallet;
+      if (!solanaPublicKeyLike(gtarget)) { sendWebJson(request, response, 400, { ok: false, error: "ca or wallet required" }); return; }
+      try {
+        const { png } = await renderSubjectMapPng(gtarget, gmode);
+        if (!png) { sendWebJson(request, response, 404, { ok: false, error: "no map" }); return; }
+        response.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "public, max-age=180" });
+        response.end(png);
+      } catch (e) { sendWebJson(request, response, 500, { ok: false, error: String((e && e.message) || e) }); }
       return;
     }
 
@@ -13098,6 +13133,10 @@ async function handleCallback(query, userId) {
     await handleTelegramLookCommand(chatId, query.message, String(query.data).slice(7)).catch(() => {});
     return;
   }
+  // 🗺️ Holder/wallet MAP (map:<addr>[:mode]) — tap a coin's Map button or a KOL bubble to drill in.
+  if (String(query.data || "").startsWith("map:")) {
+    if (await handleMapCallback(query, userId).catch(() => false)) return;
+  }
   // 🔴 One-tap sell (qs:*) — sell 25/50/100% of a coin from the tapper's own wallets, in-DM.
   if (String(query.data || "").startsWith("qs:")) {
     if (await handleQuickSellCallback(query, userId).catch(() => false)) return;
@@ -13817,6 +13856,11 @@ async function handleMessage(message, userId) {
     return;
   }
 
+  const mapCommand = parseCommandWithArgument(text, ["map", "holders", "bubblemap", "kolmap", "holdermap"]);
+  if (mapCommand) {
+    await handleTelegramMapCommand(chatId, message, mapCommand.argument);
+    return;
+  }
   const lookCommand = parseCommandWithArgument(text, ["look", "scan_ca", "check"]);
   if (lookCommand) {
     await handleTelegramLookCommand(chatId, message, lookCommand.argument);
@@ -30621,6 +30665,221 @@ async function gatherSlimeScan(mint) {
   return { best, meta, rug: rugFilled, shield, bonding, dexPaid, supply, ath, onchain };
 }
 
+// ============ 🗺️ KOL / WALLET MAP — radial holder bubble-map, SlimeWire-branded (X + TG + web) ============
+// Tag the bot with a coin CA → map its KOL holders. Tag it with a wallet → map that wallet's bags (or its
+// trading network). API-LIGHT: holders come FREE from our RPC (computeOnchainDistribution top list), KOL
+// identity from ONE hourly-cached ST leaderboard pull, X pfps from unavatar. Rendered by src/lib/slimeMapRender.
+const MAP_BG_DIR = path.join(WEB_STATIC_DIR, "pfp", "mapbg");
+const mapRenderCache = new Map();       // subjectKey -> { at, png } — repeat tags of the same coin reuse one render
+const MAP_RENDER_TTL = 4 * 60_000;
+let mapKolIdxCache = { at: 0, idx: null };
+
+// ONE shared, hour-cached pull of the ST top-traders leaderboard → wallet -> {name, twitter, avatar}.
+// This is the only per-feature ST call, so a hundred map tags cost ~one API call an hour.
+async function mapKolIdentityIndex() {
+  if (mapKolIdxCache.idx && Date.now() - mapKolIdxCache.at < 60 * 60_000) return mapKolIdxCache.idx;
+  const idx = new Map();
+  if (CONFIG.solanaTrackerApiKey) {
+    for (const page of [1, 2]) {
+      try {
+        const data = await solanaTrackerJson(`/top-traders/all/${page}`, { cacheTtlMs: 55 * 60_000, timeoutMs: 9000 });
+        for (const k of normalizeKolLeaderboard(data)) {
+          if (k.wallet && (k.twitter || k.name)) idx.set(k.wallet, { name: k.name, twitter: k.twitter || "", avatar: k.avatar || "" });
+        }
+      } catch { break; }
+    }
+  }
+  mapKolIdxCache = { at: Date.now(), idx };
+  return idx;
+}
+
+// wallet -> identity: ST leaderboard index first (carries twitter/avatar), then our in-memory KOL rosters
+// (name only). X pfp resolves via unavatar when we know the handle; unknown wallets stay branded blobs.
+function mapResolveIdentity(wallet, idx) {
+  const short = shortMint(wallet);
+  const fromIdx = idx && idx.get(wallet);
+  if (fromIdx && (fromIdx.twitter || fromIdx.name)) {
+    const tw = String(fromIdx.twitter || "").replace(/^@/, "");
+    return { isKol: true, name: fromIdx.name || (tw ? `@${tw}` : short), twitter: tw,
+      avatarUrl: fromIdx.avatar || (tw ? `https://unavatar.io/twitter/${tw}` : null) };
+  }
+  const mem = autoKolWallets.get(wallet) || trackedKolWallets.get(wallet);
+  if (mem && mem.name) return { isKol: true, name: String(mem.name).slice(0, 18), twitter: "", avatarUrl: null };
+  if (KOL_WALLETS.has(wallet)) return { isKol: true, name: short, twitter: "", avatarUrl: null };
+  return { isKol: false, name: short, twitter: "", avatarUrl: null };
+}
+
+// Pick a rotating branded background from the map-kit set (deterministic per subject so a coin's map is stable).
+async function mapPickBg(seed) {
+  try {
+    const files = (await fs.readdir(MAP_BG_DIR)).filter((f) => /\.(png|jpe?g)$/i.test(f));
+    if (!files.length) return null;
+    let h = 0; const s = String(seed || "x"); for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return path.join(MAP_BG_DIR, files[h % files.length]);
+  } catch { return null; }
+}
+
+// COIN map: free on-chain top holders → nodes, matched to KOL identities, with a live stat header.
+async function buildTokenHolderMap(mint) {
+  const idx = await mapKolIdentityIndex().catch(() => new Map());
+  const dist = await computeOnchainDistribution({ mint, rpcRead, withHolderCount: true }).catch(() => null);
+  const holders = (dist && Array.isArray(dist.holders)) ? dist.holders : [];
+  if (!holders.length) return { kind: "token", mint, nodes: [] };
+  const info = await alphaRadarFetchMc(mint).catch(() => null);
+  const sym = (info && info.sym) ? info.sym : shortMint(mint);
+  const mc = (info && info.mc) || 0;
+  const maxPct = holders.reduce((m, h) => Math.max(m, h.pct || 0), 0) || 1;
+  let kolsIn = 0, whales = 0;
+  const nodes = holders.map((h, i) => {
+    const id = mapResolveIdentity(h.wallet, idx);
+    if (id.isKol) kolsIn++;
+    const isWhale = (h.pct || 0) >= Math.max(1, maxPct * 0.5) || i === 0;
+    if (isWhale) whales++;
+    return {
+      i, wallet: h.wallet,
+      weight: Math.max(0.05, Math.min(1, (h.pct || 0) / maxPct)),
+      state: isWhale ? "whale" : "hold",
+      label: id.isKol ? `${id.name} · ${(h.pct || 0).toFixed(1)}%` : null,
+      name: id.name, twitter: id.twitter, avatarUrl: id.avatarUrl, pct: h.pct || 0,
+    };
+  });
+  const stats = [
+    { label: "HOLDERS", value: String((dist && dist.holderCount) || holders.length) },
+    { label: "KOLS IN", value: String(kolsIn) },
+    { label: "TOP 10", value: (dist && dist.top10Percent != null) ? Math.round(dist.top10Percent) + "%" : "—" },
+    { label: "WHALES", value: String(whales) },
+    { label: "STREET VALUE", value: mc ? fmtMc(mc) : "—" },
+  ];
+  return { kind: "token", subject: `$${String(sym).slice(0, 11)}`, subtitle: `top ${nodes.length} holders`, mint, stats, nodes };
+}
+
+// WALLET map: bags = tokens currently held (ST portfolio); network = tokens recently traded (ST trades).
+async function buildWalletMap(wallet, mode = "bags") {
+  const idx = await mapKolIdentityIndex().catch(() => new Map());
+  const id = mapResolveIdentity(wallet, idx);
+  let rows = [];
+  try {
+    if (mode === "network") {
+      const d = await solanaTrackerJson(`/wallet/${encodeURIComponent(wallet)}/trades?limit=100`, { cacheTtlMs: 4 * 60_000, timeoutMs: 9000 });
+      const trades = (d && (d.trades || d.items)) || [];
+      const byTok = new Map();
+      for (const t of trades) {
+        const tk = t.token || t; const sym = tk.symbol || tk.ticker || shortMint(tk.mint || tk.address || t.mint || "");
+        const v = Number(t.volume || t.amountUsd || t.valueUsd || 0) || 1;
+        byTok.set(sym, (byTok.get(sym) || 0) + v);
+      }
+      rows = [...byTok.entries()].map(([sym, val]) => ({ sym, val }));
+    } else {
+      const d = await solanaTrackerJson(`/wallet/${encodeURIComponent(wallet)}`, { cacheTtlMs: 4 * 60_000, timeoutMs: 9000 });
+      const toks = (d && (d.tokens || d.holdings || d.assets)) || [];
+      rows = toks.map((t) => {
+        const tk = t.token || t;
+        const sym = tk.symbol || tk.ticker || shortMint(tk.mint || tk.address || "");
+        const val = Number(t.value || t.valueUsd || t.usdValue || (t.balance && t.price ? t.balance * t.price : 0)) || 0;
+        return { sym, val, mint: tk.mint || tk.address || "" };
+      });
+    }
+  } catch { rows = []; }
+  rows = rows.filter((r) => r.val > 0).sort((a, b) => b.val - a.val).slice(0, 40);
+  const maxVal = rows.reduce((m, r) => Math.max(m, r.val), 0) || 1;
+  const totalVal = rows.reduce((s, r) => s + r.val, 0);
+  const nodes = rows.map((r, i) => ({
+    i, weight: Math.max(0.05, Math.min(1, r.val / maxVal)),
+    state: i === 0 ? "whale" : "hold",
+    label: i < 6 ? `$${r.sym} · ${fmtMc(r.val)}` : null,
+    name: r.sym, avatarUrl: null, mint: r.mint || "",
+  }));
+  const stats = [
+    { label: mode === "network" ? "TRADED" : "TOKENS", value: String(rows.length) },
+    { label: mode === "network" ? "VOLUME" : "PORTFOLIO", value: totalVal ? fmtMc(totalVal) : "—" },
+    { label: id.isKol ? "KOL" : "WALLET", value: id.isKol ? "✓ verified" : "unlabeled" },
+    { label: "TOP BAG", value: rows[0] ? fmtMc(rows[0].val) : "—" },
+    { label: "MODE", value: mode === "network" ? "NETWORK" : "BAGS" },
+  ];
+  const subj = (id.isKol && id.twitter) ? `@${id.twitter}` : shortMint(wallet);
+  return { kind: "wallet", subject: String(subj).slice(0, 12), subtitle: mode === "network" ? "trading network" : "bags held", wallet, mode, stats, nodes };
+}
+
+// Decide token vs wallet (token map first; a wallet address yields no on-chain holders → fall back to wallet map).
+async function buildSubjectMap(target, mode = "bags") {
+  const tok = await buildTokenHolderMap(target).catch(() => null);
+  if (tok && tok.nodes && tok.nodes.length) return tok;
+  return buildWalletMap(target, mode);
+}
+
+// Render a map subject to a PNG (short-cached so repeat tags of the same coin don't re-pull/re-render).
+async function renderSubjectMapPng(target, mode = "bags") {
+  const key = `${target}:${mode}`;
+  const cached = mapRenderCache.get(key);
+  if (cached && Date.now() - cached.at < MAP_RENDER_TTL) return { png: cached.png, map: cached.map };
+  const map = await buildSubjectMap(target, mode);
+  if (!map || !map.nodes || !map.nodes.length) return { png: null, map: null };
+  const { renderSlimeMapPng } = await import("./lib/slimeMapRender.mjs");
+  const bgPath = await mapPickBg(`${map.subject}${map.mint || map.wallet || ""}`);
+  const png = await renderSlimeMapPng({ subject: map.subject, subtitle: map.subtitle, stats: map.stats, nodes: map.nodes, bgPath });
+  mapRenderCache.set(key, { at: Date.now(), png, map });
+  if (mapRenderCache.size > 200) mapRenderCache.delete(mapRenderCache.keys().next().value);
+  return { png, map };
+}
+
+// X reply: a "map" intent (or a bare wallet tagged) → post the branded map image.
+async function buildXMapReply(target, variant, mode = "bags") {
+  const { png, map } = await renderSubjectMapPng(target, mode).catch(() => ({ png: null, map: null }));
+  if (!png || !map) return null;
+  const kols = map.stats.find((s) => s.label === "KOLS IN");
+  const ctas = ["mapped on SlimeWire", "live map on SlimeWire", "who's holding — SlimeWire", "the whole board, SlimeWire"];
+  const cta = ctas[Math.abs((Number(String(variant).slice(-4)) || 0)) % ctas.length];
+  const text = map.kind === "token"
+    ? `${map.subject} holder map 🗺️${kols && Number(kols.value) > 0 ? ` — ${kols.value} known KOLs in` : ""}\n${cta}`
+    : `${map.subject} ${map.mode === "network" ? "network" : "bag"} map 🗺️\n${cta}`;
+  return { text: text.slice(0, 270), mediaBuffer: png, symbol: map.subject, mc: 0 };
+}
+
+// TG map card keyboard — tap-through drill buttons (in-chat interactivity): tap a KOL bubble → their bag
+// map; plus a link to the fully-interactive web map, a bags/network toggle for wallets, and buy on coins.
+function mapCardKeyboard(map) {
+  const rows = [];
+  const drill = (map.nodes || []).filter((n) => n.wallet && n.label).slice(0, 4);
+  for (let i = 0; i < drill.length; i += 2) {
+    rows.push(drill.slice(i, i + 2).map((n) => ({ text: `🔍 ${String(n.name || "wallet").replace(/^@?/, "@")}`.slice(0, 22), callback_data: `map:${n.wallet}` })));
+  }
+  const webQ = map.mint ? `ca=${map.mint}` : `wallet=${map.wallet}`;
+  rows.push([{ text: "🌐 Open interactive map", url: `https://www.slimewire.org/map?${webQ}` }]);
+  if (map.kind === "wallet") {
+    rows.push([{ text: map.mode === "network" ? "💰 Show bags" : "🕸️ Show trading network", callback_data: `map:${map.wallet}:${map.mode === "network" ? "bags" : "network"}` }]);
+  }
+  if (map.mint) rows.push([{ text: "🔎 Scan", callback_data: `scan:refresh:${map.mint}` }, { text: "⚡ Quick Buy", callback_data: `qbp:${map.mint}` }]);
+  return { inline_keyboard: rows };
+}
+async function sendMapCard(chatId, target, mode = "bags") {
+  const { png, map } = await renderSubjectMapPng(target, mode).catch(() => ({ png: null, map: null }));
+  if (!png || !map) { await say(chatId, "Couldn't build a map for that yet — give me a coin CA or an active wallet."); return; }
+  const kols = map.stats.find((s) => s.label === "KOLS IN");
+  const webQ = map.mint ? `ca=${map.mint}` : `wallet=${map.wallet}`;
+  const cap = map.kind === "token"
+    ? `🗺️ <b>${escapeTelegramHtml(map.subject)}</b> holder map${kols && Number(kols.value) > 0 ? ` — <b>${kols.value}</b> known KOLs holding` : ""}.\n<i>Tap a KOL below to see their bags.</i>`
+    : `🗺️ <b>${escapeTelegramHtml(map.subject)}</b> ${map.mode === "network" ? "trading network" : "bags held"}.\n<a href="https://www.slimewire.org/map?${webQ}">Open the interactive map →</a>`;
+  await sendPhoto(chatId, "slimewire-map.png", png, cap, mapCardKeyboard(map), "HTML").catch(async () => {
+    await sayHtml(chatId, cap, mapCardKeyboard(map)).catch(() => {});
+  });
+}
+async function handleTelegramMapCommand(chatId, message, argument) {
+  const target = (String(argument || "").match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/) || [])[0] || "";
+  if (!target) { await say(chatId, "Usage: /map <coin CA or wallet> — I'll draw the holder / bag bubble map."); return; }
+  if (tgCommandOnCooldown(chatId, "map", 6000)) return;
+  await sendMapCard(chatId, target, "bags");
+}
+async function handleMapCallback(query, userId) {
+  const parts = String(query.data || "").split(":");   // map : <addr> [: mode]
+  const target = parts[1];
+  const mode = parts[2] === "network" ? "network" : "bags";
+  if (!target || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(target)) return false;
+  const chatId = query.message?.chat?.id;
+  await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "🗺️ Drawing map…" }).catch(() => {});
+  await sendMapCard(chatId, target, mode).catch(() => {});
+  return true;
+}
+
 // ============ 🐦 X (Twitter) CA REPLY BOT — reply to @mentions with a branded SlimeWire scan ============
 // Turns the SlimeWire X account into "the CA bot": someone tags us under any post with a contract, we
 // reply with a scan card. Route 2 (unofficial cookie auth — no paid API; see src/lib/xClient.js). Two
@@ -30770,6 +31029,13 @@ function extractCashtags(text) {
 }
 // The coin to reply about for a mention: a CA or $ticker in the mention itself, else the CA/$ticker in
 // the PARENT post they tagged us under (so "@SlimeWire ?" under any coin tweet just works).
+// Pull the first plausible bare wallet/pubkey from a tag (text + expanded links) — used when there's no
+// coin CA but someone tagged a WALLET for a map. Same base58 shape as a mint; buildSubjectMap decides which.
+function extractBareWalletAddress(text, urls) {
+  const blob = [String(text || ""), ...((Array.isArray(urls) ? urls : []).map((u) => String(u || "")))].join(" ");
+  const m = blob.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/);
+  return m ? m[0] : null;
+}
 async function resolveXTargetMint(mention) {
   // Scan a post's TEXT plus its expanded links (people paste a dexscreener/pump URL, which X shortens to
   // t.co in the text — the real CA only lives in the expanded url). Then $tickers as a last resort.
@@ -30867,6 +31133,7 @@ async function buildXScanReply(mint, variant) {
 function xIntentFromText(text) {
   const t = String(text || "").toLowerCase();
   if (/\b(did ?it ?rug|rug(ged|ging|pull|s)?|honey ?pot|is ?(this|it) ?safe|safe\??|safu|scam|can ?i ?sell|sell ?able|legit\??|rekt|dev ?sold)\b/.test(t)) return "rug";
+  if (/\b(map|bubble ?map|bubblemap|holder ?map|kol ?map|whale ?map|who'?s? ?(holding|in|buying)|distribution|holders?|bundle ?map)\b/.test(t)) return "map";
   if (/\b(chart|candle\w*|price|pa\b|\bta\b|technicals?|how'?s? ?(it|this) ?look(ing)?|going ?up|pump(ing)?|dump(ing)?)\b/.test(t)) return "chart";
   return "scan";
 }
@@ -30961,6 +31228,7 @@ async function buildXRugReply(mint, variant) {
 }
 // Dispatch a mention to the right card based on what they asked. `variant` (tweet id) seeds the wording + art.
 async function buildXReply(mint, intent = "scan", variant) {
+  if (intent === "map") return (await buildXMapReply(mint, variant).catch(() => null)) || await buildXScanReply(mint, variant);
   if (intent === "chart") return await buildXChartReply(mint, variant);
   if (intent === "rug") return await buildXRugReply(mint, variant);
   return await buildXScanReply(mint, variant);
@@ -31025,11 +31293,17 @@ async function xReplyPollTick() {
     // (was invisible before — no-CA and no-scan both hid behind .catch(()=>null)). Cheap; keep it on.
     console.log(`[xreply] NEW @${m.username} id=${m.id} auto=${auto} replyTo=${m.inReplyToId || "-"} conv=${m.conversationId || "-"} urls=${(m.urls || []).length} text=${JSON.stringify(String(m.text || "").slice(0, 140))}`);
     const mint = await resolveXTargetMint(m).catch((e) => { console.log(`[xreply]   resolve THREW: ${String(e?.message || e).slice(0, 140)}`); return null; });
-    if (!mint) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "no CA/ticker found" }); console.log(`[xreply]   ✗ no CA in tag/parent/root → skip`); continue; }
-    const intent = xIntentFromText(m.text);                        // did-it-rug? chart? else scan
-    console.log(`[xreply]   mint=${mint} intent=${intent} → building reply…`);
-    const reply = await buildXReply(mint, intent, m.id).catch((e) => { console.log(`[xreply]   build THREW: ${String(e?.message || e).slice(0, 140)}`); return null; });   // m.id seeds unique wording + card art
-    if (!reply) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "coin didn't scan" }); console.log(`[xreply]   ✗ buildXReply null (coin didn't scan) mint=${mint}`); continue; }
+    let intent = xIntentFromText(m.text);                          // map? did-it-rug? chart? else scan
+    let target = mint;
+    if (!target) {
+      // No coin CA — maybe they tagged a bare WALLET (for a wallet map). Route it to the map builder.
+      const w = extractBareWalletAddress(m.text, m.urls);
+      if (w) { target = w; intent = "map"; console.log(`[xreply]   no CA but bare wallet ${w} → map`); }
+    }
+    if (!target) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "no CA/wallet found" }); console.log(`[xreply]   ✗ no CA/wallet in tag/parent/root → skip`); continue; }
+    console.log(`[xreply]   target=${target} intent=${intent} → building reply…`);
+    const reply = await buildXReply(target, intent, m.id).catch((e) => { console.log(`[xreply]   build THREW: ${String(e?.message || e).slice(0, 140)}`); return null; });   // m.id seeds unique wording + card art
+    if (!reply) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "coin didn't scan" }); console.log(`[xreply]   ✗ buildXReply null (coin didn't scan) target=${target}`); continue; }
     console.log(`[xreply]   reply ready: $${reply.symbol} media=${reply.mediaBuffer ? "card" : "NONE"} → posting (auto=${auto})…`);
     if (auto) {
       if (maxPerHour > 0 && state.posts.length >= maxPerHour) { results.push({ u: m.username, s: "defer", d: "hourly cap" }); break; }
@@ -31058,7 +31332,7 @@ async function xReplyPollTick() {
       await writeXReplyState(state);
     } else {
       state.seen[m.id] = now;
-      state.queue[m.id] = { mint, intent, at: now, author: m.username, url: m.permanentUrl };
+      state.queue[m.id] = { mint: target, intent, at: now, author: m.username, url: m.permanentUrl };
       await writeXReplyState(state);
       results.push({ u: m.username, s: "draft", d: `$${reply.symbol}` });
       await xReplyOwnerDraft(m, reply);
@@ -31230,7 +31504,10 @@ function slimeScanKeyboard(mint) {
       { text: "📈 Chart", url: links.site }
     ],
     [
-      { text: "📊 Menu", callback_data: `scan:menu:${mint}` },
+      { text: "🗺️ Holder Map", callback_data: `map:${mint}` },
+      { text: "📊 Menu", callback_data: `scan:menu:${mint}` }
+    ],
+    [
       { text: "🔄 Refresh", callback_data: `scan:refresh:${mint}` }
     ]
   ] };
