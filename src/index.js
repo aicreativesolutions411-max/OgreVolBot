@@ -30680,14 +30680,13 @@ async function mapKolIdentityIndex() {
   if (mapKolIdxCache.idx && Date.now() - mapKolIdxCache.at < 60 * 60_000) return mapKolIdxCache.idx;
   const idx = new Map();
   if (CONFIG.solanaTrackerApiKey) {
-    for (const page of [1, 2]) {
-      try {
-        const data = await solanaTrackerJson(`/top-traders/all/${page}`, { cacheTtlMs: 55 * 60_000, timeoutMs: 9000 });
-        for (const k of normalizeKolLeaderboard(data)) {
-          if (k.wallet && (k.twitter || k.name)) idx.set(k.wallet, { name: k.name, twitter: k.twitter || "", avatar: k.avatar || "" });
-        }
-      } catch { break; }
-    }
+    // Page 1 only (top ~100 traders = the named KOLs people care about). One call, cached an hour → maps stay free.
+    try {
+      const data = await solanaTrackerJson(`/top-traders/all/1`, { cacheTtlMs: 55 * 60_000, timeoutMs: 7000 });
+      for (const k of normalizeKolLeaderboard(data)) {
+        if (k.wallet && (k.twitter || k.name)) idx.set(k.wallet, { name: k.name, twitter: k.twitter || "", avatar: k.avatar || "" });
+      }
+    } catch { /* leave empty — unknown wallets just render as branded blobs */ }
   }
   mapKolIdxCache = { at: Date.now(), idx };
   return idx;
@@ -30722,7 +30721,10 @@ async function mapPickBg(seed) {
 // COIN map: free on-chain top holders → nodes, matched to KOL identities, with a live stat header.
 async function buildTokenHolderMap(mint) {
   const idx = await mapKolIdentityIndex().catch(() => new Map());
-  const dist = await computeOnchainDistribution({ mint, rpcRead, withHolderCount: true }).catch(() => null);
+  // withHolderCount:false — the exact holder count is a getProgramAccounts over EVERY token account (millions
+  // for a popular coin → times out / gets rejected). The map only needs the top-holder LIST + concentration,
+  // both of which come from the cheap getTokenLargestAccounts read.
+  const dist = await computeOnchainDistribution({ mint, rpcRead, withHolderCount: false }).catch(() => null);
   const holders = (dist && Array.isArray(dist.holders)) ? dist.holders : [];
   if (!holders.length) return { kind: "token", mint, nodes: [] };
   const info = await alphaRadarFetchMc(mint).catch(() => null);
@@ -30744,7 +30746,7 @@ async function buildTokenHolderMap(mint) {
     };
   });
   const stats = [
-    { label: "HOLDERS", value: String((dist && dist.holderCount) || holders.length) },
+    { label: "TOP HOLDERS", value: String(holders.length) },
     { label: "KOLS IN", value: String(kolsIn) },
     { label: "TOP 10", value: (dist && dist.top10Percent != null) ? Math.round(dist.top10Percent) + "%" : "—" },
     { label: "WHALES", value: String(whales) },

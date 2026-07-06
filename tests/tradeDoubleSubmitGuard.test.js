@@ -1901,7 +1901,7 @@ test("KOL/wallet map: on-chain holders + ST identity, X 'map' intent + wallet ta
   assert.match(serverSource, /async function buildTokenHolderMap\(mint\)/);
   assert.match(serverSource, /async function buildWalletMap\(wallet, mode/);
   assert.match(serverSource, /async function buildSubjectMap\(target/);
-  assert.match(serverSource, /computeOnchainDistribution\(\{ mint, rpcRead, withHolderCount: true \}\)/); // free holders
+  assert.match(serverSource, /computeOnchainDistribution\(\{ mint, rpcRead, withHolderCount: false \}\)/); // free holders, skip the mega getProgramAccounts count
   // identity: ONE hour-cached ST leaderboard pull → wallet→{name,twitter,avatar}; unavatar for X pfp
   assert.match(serverSource, /async function mapKolIdentityIndex\(\)/);
   assert.match(serverSource, /unavatar\.io\/twitter\//);
