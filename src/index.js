@@ -30718,29 +30718,57 @@ async function mapPickBg(seed) {
   } catch { return null; }
 }
 
-// COIN map: free on-chain top holders → nodes, matched to KOL identities, with a live stat header.
-async function buildTokenHolderMap(mint) {
-  const idx = await mapKolIdentityIndex().catch(() => new Map());
-  // withHolderCount:false — the exact holder count is a getProgramAccounts over EVERY token account (millions
-  // for a popular coin → times out / gets rejected). The map only needs the top-holder LIST + concentration,
-  // both of which come from the cheap getTokenLargestAccounts read. HARD 14s timeout so a mega-coin whose RPC
-  // reads run slow returns a clean "still loading" instead of ever hanging the endpoint (BONK-scale guard).
+// Holder LIST for the map: Solana Tracker first (many more real holders than the free on-chain top-20 — the
+// owner is fine leaning on ST here), free on-chain top list as the no-cost fallback. Returns [{wallet, pct}].
+async function fetchTokenHolderRows(mint) {
+  if (CONFIG.solanaTrackerApiKey) {
+    try {
+      const d = await solanaTrackerJson(`/tokens/${encodeURIComponent(mint)}/holders`, { cacheTtlMs: 4 * 60_000, timeoutMs: 8000 });
+      const arr = Array.isArray(d) ? d : (d && (d.holders || d.accounts || d.data || d.items)) || [];
+      const rows = arr.map((h) => ({
+        wallet: firstString(h.wallet, h.address, h.owner, h.account, h.holder),
+        pct: firstMeaningfulNumber(h.percentage, h.pct, h.percent, h.share, h.ownership) || 0,
+      })).filter((r) => r.wallet && r.pct > 0);
+      if (rows.length) return rows.sort((a, b) => b.pct - a.pct).slice(0, 60);
+    } catch { /* fall through to on-chain */ }
+  }
   const dist = await Promise.race([
     computeOnchainDistribution({ mint, rpcRead, withHolderCount: false }).catch(() => null),
-    new Promise((resolve) => setTimeout(() => resolve(null), 14_000)),
+    new Promise((resolve) => setTimeout(() => resolve(null), 12_000)),
   ]);
-  const holders = (dist && Array.isArray(dist.holders)) ? dist.holders : [];
-  if (!holders.length) return { kind: "token", mint, nodes: [] };
-  const info = await alphaRadarFetchMc(mint).catch(() => null);
-  const sym = (info && info.sym) ? info.sym : shortMint(mint);
-  const mc = (info && info.mc) || 0;
-  const liq = (info && info.liq) || 0;
-  const maxPct = holders.reduce((m, h) => Math.max(m, h.pct || 0), 0) || 1;
+  return (dist && Array.isArray(dist.holders)) ? dist.holders.map((h) => ({ wallet: h.wallet, pct: h.pct || 0 })) : [];
+}
+
+// COIN map: detect the token from METADATA first (pump + DexScreener) so a real coin is NEVER mis-read as a
+// wallet, pull the full coin info (MC · liq · age · 1H%) onto the card, then map its holders (KOL-labeled).
+async function buildTokenHolderMap(mint) {
+  const idx = await mapKolIdentityIndex().catch(() => new Map());
+  // 1) COIN INFO — this ALSO answers "is this a token?" (a wallet address has no pump/dex metadata). Same
+  //    pump-first / dex-fallback precedence as the scan card, so MC/liq/1H/age are accurate.
+  const [pumpMeta, pairs] = await Promise.all([
+    getPumpFunTokenMetadata(mint).catch(() => null),
+    fetchDexScreenerTokenPairsFallback(mint).catch(() => null),
+  ]);
+  const best = bestDexPairForToken(mint, pairs);
+  const dexMeta = best ? metadataFromDexPair(mint, best) : null;
+  const onCurve = Boolean(pumpMeta && !pumpMeta.graduated && !(dexMeta && dexMeta.marketCap));
+  const pick = (p, d) => onCurve ? firstMeaningfulNumber(p, d) : firstMeaningfulNumber(d, p);
+  const sym = String(dexMeta?.symbol || pumpMeta?.symbol || "").trim();
+  const mc = pick(pumpMeta?.marketCap, dexMeta?.marketCap ?? dexMeta?.fdv) || 0;
+  const liq = pick(pumpMeta?.liquidityUsd, dexMeta?.liquidityUsd) || 0;
+  const ch1 = firstMeaningfulNumber(dexMeta?.priceChange?.h1, pumpMeta?.priceChange?.h1);
+  const createdAt = normalizePairCreatedAt(dexMeta?.pairCreatedAt) || pumpMeta?.pairCreatedAt || pumpMeta?.createdAt || 0;
+  const isToken = Boolean(sym || mc > 0 || pumpMeta?.symbol || String(mint).endsWith("pump"));
+  if (!isToken) return { kind: "token", mint, isToken: false, nodes: [] };  // truly not a token → caller falls to wallet map
+
+  // 2) HOLDERS — ST (more) → on-chain (free). A token ALWAYS renders as a token map now, even if holders are thin.
+  const holderRows = await fetchTokenHolderRows(mint).catch(() => []);
+  const maxPct = holderRows.reduce((m, h) => Math.max(m, h.pct || 0), 0) || 1;
   let kolsIn = 0, whales = 0;
-  const nodes = holders.map((h, i) => {
+  const nodes = holderRows.slice(0, 45).map((h, i) => {
     const id = mapResolveIdentity(h.wallet, idx);
     if (id.isKol) kolsIn++;
-    const isWhale = (h.pct || 0) >= Math.max(1, maxPct * 0.5) || i === 0;
+    const isWhale = (h.pct || 0) >= Math.max(1, maxPct * 0.5) || (i === 0 && (h.pct || 0) > 0);
     if (isWhale) whales++;
     return {
       i, wallet: h.wallet,
@@ -30750,15 +30778,22 @@ async function buildTokenHolderMap(mint) {
       name: id.name, twitter: id.twitter, avatarUrl: id.avatarUrl, pct: h.pct || 0,
     };
   });
-  // Coin DETAILS (MC + liquidity) sit right alongside the holder picture, so one map card = details + map.
+  const top10 = holderRows.slice(0, 10).reduce((s, h) => s + (h.pct || 0), 0);
+  const ageLabel = createdAt ? xAgeLabel(Math.max(0, Date.now() - Number(createdAt))) : "—";
+  // Coin DETAILS ride on the card: MC · liq · age · 1H % · concentration — details + map in one shot.
   const stats = [
     { label: "MARKET CAP", value: mc ? fmtMc(mc) : "—" },
     { label: "LIQUIDITY", value: liq ? fmtMc(liq) : "—" },
-    { label: "TOP 10", value: (dist && dist.top10Percent != null) ? Math.round(dist.top10Percent) + "%" : "—" },
-    { label: "WHALES", value: String(whales) },
-    { label: "KOLS IN", value: String(kolsIn) },
+    { label: "AGE", value: ageLabel },
+    { label: "1H", value: Number.isFinite(ch1) ? `${ch1 >= 0 ? "+" : ""}${Math.round(ch1)}%` : "—" },
+    { label: "TOP 10", value: top10 > 0 ? `${Math.round(top10)}%` : "—" },
   ];
-  return { kind: "token", subject: `$${String(sym).slice(0, 11)}`, subtitle: `top ${nodes.length} holders`, mint, stats, nodes };
+  return {
+    kind: "token", isToken: true, mint,
+    subject: `$${(sym || shortMint(mint)).slice(0, 11)}`,
+    subtitle: nodes.length ? `${nodes.length} top holders` : "holders loading…",
+    kolsIn, stats, nodes,
+  };
 }
 
 // WALLET map: bags = tokens currently held (ST portfolio); network = tokens recently traded (ST trades).
@@ -30808,10 +30843,11 @@ async function buildWalletMap(wallet, mode = "bags") {
   return { kind: "wallet", subject: String(subj).slice(0, 12), subtitle: mode === "network" ? "trading network" : "bags held", wallet, mode, stats, nodes };
 }
 
-// Decide token vs wallet (token map first; a wallet address yields no on-chain holders → fall back to wallet map).
+// Decide token vs wallet by METADATA (buildTokenHolderMap sets isToken from pump/dex meta) — NOT by holder
+// count, so a real coin whose holder read is slow is never mis-read as a wallet.
 async function buildSubjectMap(target, mode = "bags") {
   const tok = await buildTokenHolderMap(target).catch(() => null);
-  if (tok && tok.nodes && tok.nodes.length) return tok;
+  if (tok && tok.isToken) return tok;
   return buildWalletMap(target, mode);
 }
 
@@ -30835,12 +30871,12 @@ async function buildXMapReply(target, variant, mode = "bags") {
   const { png, map } = await renderSubjectMapPng(target, mode).catch(() => ({ png: null, map: null }));
   if (!png || !map) return null;
   const stat = (l) => (map.stats.find((s) => s.label === l) || {}).value;
-  const kols = map.stats.find((s) => s.label === "KOLS IN");
+  const kolsIn = Number(map.kolsIn) || 0;
   const ctas = ["mapped on SlimeWire", "live map on SlimeWire", "who's holding — SlimeWire", "the whole board, SlimeWire"];
   const cta = ctas[Math.abs((Number(String(variant).slice(-4)) || 0)) % ctas.length];
   // Details + map in one reply: coin stats in the text, the holder bubble-map as the image.
   const text = map.kind === "token"
-    ? `${map.subject} 🗺️ holder map\nMC ${stat("MARKET CAP")} · Liq ${stat("LIQUIDITY")} · top10 ${stat("TOP 10")}${kols && Number(kols.value) > 0 ? ` · ${kols.value} KOLs in` : ""}\n${cta}`
+    ? `${map.subject} 🗺️ holder map\nMC ${stat("MARKET CAP")} · Liq ${stat("LIQUIDITY")} · ${stat("AGE")} old · 1H ${stat("1H")}${kolsIn > 0 ? ` · ${kolsIn} KOLs in` : ""}\n${cta}`
     : `${map.subject} ${map.mode === "network" ? "network" : "bag"} map 🗺️\n${cta}`;
   return { text: text.slice(0, 270), mediaBuffer: png, symbol: map.subject, mc: 0 };
 }

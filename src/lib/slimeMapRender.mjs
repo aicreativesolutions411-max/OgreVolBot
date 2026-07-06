@@ -58,18 +58,23 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
 
   // Spokes (draw first, behind nodes)
   const spokes = placed.map((p) =>
-    `<line x1="${cx}" y1="${cy}" x2="${p.x.toFixed(1)}" y2="${p.y.toFixed(1)}" stroke="#2c5f38" stroke-width="${(0.6 + p.size / 30).toFixed(2)}" stroke-opacity="0.55"/>`
+    `<line x1="${cx}" y1="${cy}" x2="${p.x.toFixed(1)}" y2="${p.y.toFixed(1)}" stroke="#3a7d49" stroke-width="${(0.6 + p.size / 28).toFixed(2)}" stroke-opacity="0.5"/>`
   ).join("");
 
-  // Nodes
+  // Nodes — glossy gradient "spheres" with a soft glow + specular highlight (premium, not flat circles).
+  const GRAD = { hold: "gHold", sold: "gSold", whale: "gWhale", new: "gNew" };
   const nodeEls = placed.map((p) => {
     const c = STATE_COLOR[p.state] || STATE_COLOR.hold;
-    const av = p.avatar
+    const g = GRAD[p.state] || "gHold";
+    const glow = `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(p.size + 6).toFixed(1)}" fill="${c.fill}" fill-opacity="0.16"/>`;
+    const body = p.avatar
       ? `<clipPath id="cp${p.i}"><circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(p.size - 2).toFixed(1)}"/></clipPath>
+         <circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(p.size - 2).toFixed(1)}" fill="${c.fill}"/>
          <image href="${esc(p.avatar)}" x="${(p.x - p.size).toFixed(1)}" y="${(p.y - p.size).toFixed(1)}" width="${(p.size * 2).toFixed(1)}" height="${(p.size * 2).toFixed(1)}" clip-path="url(#cp${p.i})" preserveAspectRatio="xMidYMid slice"/>`
-      : `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(p.size - 2).toFixed(1)}" fill="${c.fill}"/>
-         <text x="${p.x.toFixed(1)}" y="${(p.y + p.size / 3).toFixed(1)}" text-anchor="middle" font-family="Arial Black, Arial" font-size="${(p.size).toFixed(0)}" fill="#0a2a12">$</text>`;
-    return `<g>${av}<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${p.size.toFixed(1)}" fill="none" stroke="${c.ring}" stroke-width="3"/><circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(p.size + 1.5).toFixed(1)}" fill="none" stroke="${c.fill}" stroke-width="1.2" stroke-opacity="0.7"/></g>`;
+      : `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(p.size - 1).toFixed(1)}" fill="url(#${g})"/>` +
+        `<ellipse cx="${(p.x - p.size * 0.28).toFixed(1)}" cy="${(p.y - p.size * 0.34).toFixed(1)}" rx="${(p.size * 0.36).toFixed(1)}" ry="${(p.size * 0.22).toFixed(1)}" fill="#ffffff" fill-opacity="0.4"/>`;
+    const rim = `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${p.size.toFixed(1)}" fill="none" stroke="${c.ring}" stroke-width="2.5"/><circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(p.size + 1.6).toFixed(1)}" fill="none" stroke="${c.fill}" stroke-width="1" stroke-opacity="0.6"/>`;
+    return `<g>${glow}${body}${rim}</g>`;
   }).join("");
 
   // Labels for the biggest / named nodes
@@ -86,12 +91,16 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
     </g>`;
   }).join("");
 
-  // Center hub
+  // Center hub — glowing gradient orb, the coin front-and-center
+  const hubR = subject.length > 8 ? 62 : 58;
+  const fs = subject.length > 8 ? 22 : 26;
   const hub = `<g>
-    <circle cx="${cx}" cy="${cy}" r="58" fill="#0a1f12" stroke="#5be36a" stroke-width="3"/>
-    <circle cx="${cx}" cy="${cy}" r="64" fill="none" stroke="#5be36a" stroke-width="1.2" stroke-opacity="0.5"/>
-    <text x="${cx}" y="${(cy + 8).toFixed(1)}" text-anchor="middle" font-family="Arial Black, Arial" font-size="26" font-weight="900" fill="#eafff0">${esc(subject)}</text>
-    <text x="${cx}" y="${(cy + 30).toFixed(1)}" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#7bd98a">${esc(subtitle)}</text>
+    <circle cx="${cx}" cy="${cy}" r="${hubR + 14}" fill="#5be36a" fill-opacity="0.12"/>
+    <circle cx="${cx}" cy="${cy}" r="${hubR}" fill="url(#gHub)" stroke="#5be36a" stroke-width="3"/>
+    <circle cx="${cx}" cy="${cy}" r="${hubR + 6}" fill="none" stroke="#7dff5b" stroke-width="1.4" stroke-opacity="0.55"/>
+    <ellipse cx="${(cx - 16).toFixed(1)}" cy="${(cy - hubR * 0.45).toFixed(1)}" rx="28" ry="12" fill="#ffffff" fill-opacity="0.10"/>
+    <text x="${cx}" y="${(cy + 6).toFixed(1)}" text-anchor="middle" font-family="Arial Black, Arial" font-size="${fs}" font-weight="900" fill="#eafff0">${esc(subject)}</text>
+    <text x="${cx}" y="${(cy + 28).toFixed(1)}" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#7bd98a">${esc(subtitle)}</text>
   </g>`;
 
   const bg = transparent
@@ -112,7 +121,15 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
     <text x="${W - 204}" y="${H - 24}" font-family="Arial Black, Arial" font-size="17" font-weight="900" fill="#bfffa8">slimewire.org</text>
   </g>`;
 
+  const defs = `<defs>
+    <radialGradient id="gHold" cx="38%" cy="30%" r="78%"><stop offset="0%" stop-color="#d6ffc4"/><stop offset="42%" stop-color="#5be36a"/><stop offset="100%" stop-color="#0a6b28"/></radialGradient>
+    <radialGradient id="gWhale" cx="38%" cy="30%" r="78%"><stop offset="0%" stop-color="#fff2c2"/><stop offset="42%" stop-color="#ffcf4d"/><stop offset="100%" stop-color="#8a6410"/></radialGradient>
+    <radialGradient id="gSold" cx="38%" cy="30%" r="78%"><stop offset="0%" stop-color="#ffcabf"/><stop offset="42%" stop-color="#e2564b"/><stop offset="100%" stop-color="#7a1010"/></radialGradient>
+    <radialGradient id="gNew" cx="38%" cy="30%" r="78%"><stop offset="0%" stop-color="#c8f4ff"/><stop offset="42%" stop-color="#4dd6ff"/><stop offset="100%" stop-color="#0c5a7a"/></radialGradient>
+    <radialGradient id="gHub" cx="50%" cy="36%" r="72%"><stop offset="0%" stop-color="#12401f"/><stop offset="100%" stop-color="#05160c"/></radialGradient>
+  </defs>`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+    ${defs}
     ${bg}
     ${spokes}
     ${header}
