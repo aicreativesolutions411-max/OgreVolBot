@@ -6002,22 +6002,10 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "share.html");
       return;
     }
-    // 🐸 SlimeWire PFP maker — free, public (no login). Upload a pic, get a branded slime PFP back.
+    // 🐸 SlimeWire PFP maker page — free, public (no login). The generate ENDPOINT lives in
+    // handleWebApiRequest (before its auth gate); /api/* is dispatched there earlier in this handler.
     if (request.method === "GET" && ["/pfp", "/pfp-maker", "/slime-pfp"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "pfp.html");
-      return;
-    }
-    if (request.method === "POST" && requestUrl.pathname === "/api/web/pfp/generate") {
-      try {
-        const body = await readJsonRequestBody(request, 12_000_000); // ~12MB cap (data URLs are ~1.33x bytes)
-        const src = decodePfpImageDataUrl(body && body.imageDataUrl);
-        if (!src) { sendWebJson(request, response, 400, { ok: false, error: "Send an image (PNG/JPG/WebP) to slime." }); return; }
-        const rendered = await renderAllSlimewirePfps({ sourceBuffer: src, frameDir: PFP_FRAME_DIR });
-        if (!rendered.length) { sendWebJson(request, response, 500, { ok: false, error: "Couldn't read that image — try a different one." }); return; }
-        sendWebJson(request, response, 200, { ok: true, results: rendered.map((r) => ({ id: r.id, label: r.label, png: `data:image/png;base64,${r.png.toString("base64")}` })) });
-      } catch (e) {
-        sendWebJson(request, response, 400, { ok: false, error: "That image didn't work — try another (PNG/JPG, under ~8MB)." });
-      }
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/learn") {
@@ -8315,6 +8303,21 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "GET" && pathname === "/api/web/top-wallets") {
       const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
       sendWebJson(request, response, 200, { ok: true, ...await topWalletsFeed({ force }) });
+      return;
+    }
+
+    // 🐸 SlimeWire PFP maker — free & PUBLIC (no login): upload a pic → a gallery of branded slime PFPs.
+    if (request.method === "POST" && pathname === "/api/web/pfp/generate") {
+      try {
+        const body = await readJsonRequestBody(request, 12_000_000); // ~12MB cap (data URLs are ~1.33x bytes)
+        const src = decodePfpImageDataUrl(body && body.imageDataUrl);
+        if (!src) { sendWebJson(request, response, 400, { ok: false, error: "Send an image (PNG/JPG/WebP) to slime." }); return; }
+        const rendered = await renderAllSlimewirePfps({ sourceBuffer: src, frameDir: PFP_FRAME_DIR });
+        if (!rendered.length) { sendWebJson(request, response, 500, { ok: false, error: "Couldn't read that image — try a different one." }); return; }
+        sendWebJson(request, response, 200, { ok: true, results: rendered.map((r) => ({ id: r.id, label: r.label, png: `data:image/png;base64,${r.png.toString("base64")}` })) });
+      } catch {
+        sendWebJson(request, response, 400, { ok: false, error: "That image didn't work — try another (PNG/JPG, under ~8MB)." });
+      }
       return;
     }
 
