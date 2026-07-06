@@ -12,9 +12,9 @@ import { Scraper, SearchMode } from "agent-twitter-client";
 
 let scraperPromise = null;
 
-export function xConfigured() {
-  return Boolean((process.env.X_AUTH_TOKEN || "").trim() && (process.env.X_CT0 || "").trim());
-}
+function hasXCookies() { return Boolean((process.env.X_AUTH_TOKEN || "").trim() && (process.env.X_CT0 || "").trim()); }
+function hasXPassword() { return Boolean((process.env.X_USERNAME || "").trim() && (process.env.X_PASSWORD || "").trim()); }
+export function xConfigured() { return hasXCookies() || hasXPassword(); }
 export function xHandle() {
   return String(process.env.X_HANDLE || process.env.TELEGRAM_BOT_USERNAME || "SlimeWiredBot").replace(/^@+/, "").trim();
 }
@@ -27,18 +27,32 @@ export async function getXScraper() {
   scraperPromise = (async () => {
     try {
       const s = new Scraper();
-      const authToken = String(process.env.X_AUTH_TOKEN).trim();
-      const ct0 = String(process.env.X_CT0).trim();
-      const domain = "twitter.com";
-      const cookies = [
-        `auth_token=${authToken}; Domain=.${domain}; Path=/; Secure; HttpOnly`,
-        `ct0=${ct0}; Domain=.${domain}; Path=/; Secure`
-      ];
-      if ((process.env.X_GUEST_ID || "").trim()) cookies.push(`guest_id=${String(process.env.X_GUEST_ID).trim()}; Domain=.${domain}; Path=/`);
-      await s.setCookies(cookies);
-      const ok = await s.isLoggedIn().catch(() => false);
-      if (!ok) { scraperPromise = null; return null; }
-      return s;
+      // 1) COOKIES — an already-authenticated browser session; most reliable WHEN FRESH (they expire).
+      if (hasXCookies()) {
+        const domain = "twitter.com";
+        const cookies = [
+          `auth_token=${String(process.env.X_AUTH_TOKEN).trim()}; Domain=.${domain}; Path=/; Secure; HttpOnly`,
+          `ct0=${String(process.env.X_CT0).trim()}; Domain=.${domain}; Path=/; Secure`
+        ];
+        if ((process.env.X_GUEST_ID || "").trim()) cookies.push(`guest_id=${String(process.env.X_GUEST_ID).trim()}; Domain=.${domain}; Path=/`);
+        await s.setCookies(cookies).catch(() => {});
+        if (await s.isLoggedIn().catch(() => false)) return s;
+      }
+      // 2) USERNAME/PASSWORD — durable fallback that DOESN'T expire like cookies. Set X_USERNAME +
+      // X_PASSWORD (+ X_EMAIL, + X_2FA_SECRET if 2FA is on). The password is owner-set env; never logged.
+      if (hasXPassword()) {
+        try {
+          await s.login(
+            String(process.env.X_USERNAME).trim(),
+            String(process.env.X_PASSWORD),
+            (process.env.X_EMAIL || "").trim() || undefined,
+            (process.env.X_2FA_SECRET || "").trim() || undefined
+          );
+          if (await s.isLoggedIn().catch(() => false)) return s;
+        } catch { /* fall through to null */ }
+      }
+      scraperPromise = null;
+      return null;
     } catch { scraperPromise = null; return null; }
   })();
   return scraperPromise;

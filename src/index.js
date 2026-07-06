@@ -30684,10 +30684,10 @@ async function handleXClaimCommand(chatId, message, argument, userId) {
 async function handleXTestCommand(chatId, userId) {
   if (!xReplyOwnerChat()) { await sayHtml(chatId, "🐦 No X-reply owner yet — DM me <code>/xclaim</code>" + (CONFIG.autopilotOwnerKey ? " <code>&lt;your owner key&gt;</code>" : "") + " first to bind approvals to this chat."); return; }
   if (String(chatId) !== xReplyOwnerChat()) { await say(chatId, "This command is owner-only."); return; }
-  if (!xConfigured()) { await sayHtml(chatId, "🐦 <b>X not configured.</b> Set <code>X_AUTH_TOKEN</code> + <code>X_CT0</code> (your x.com cookies) on Render, then <code>X_REPLY_ENABLED=true</code>."); return; }
+  if (!xConfigured()) { await sayHtml(chatId, "🐦 <b>X not configured.</b> Set EITHER <code>X_AUTH_TOKEN</code> + <code>X_CT0</code> (x.com cookies) OR <code>X_USERNAME</code> + <code>X_PASSWORD</code> (durable — doesn't expire) on Render, then <code>X_REPLY_ENABLED=true</code>."); return; }
   const me = await xWhoAmI().catch(() => null);
   if (!(me && (me.username || me.screenName))) {
-    await sayHtml(chatId, "🐦 <b>Cookies didn't authenticate.</b> They may be expired — grab fresh <code>auth_token</code> + <code>ct0</code> from x.com and update the Render env vars.");
+    await sayHtml(chatId, "🐦 <b>Auth failed.</b> If using cookies, they're likely <b>expired</b> — grab fresh <code>auth_token</code> + <code>ct0</code> from x.com and update Render. Or switch to <code>X_USERNAME</code> + <code>X_PASSWORD</code> (+ <code>X_EMAIL</code> / <code>X_2FA_SECRET</code> if 2FA is on) — that doesn't expire.");
     return;
   }
   // Live probe: how many recent @mentions the search sees + how many carry a CA (proves detection works).
