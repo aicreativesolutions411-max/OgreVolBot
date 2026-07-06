@@ -1786,6 +1786,7 @@ test("SlimeWire PFP maker: sharp compositor + public endpoint + /pfp command, al
   // 🎨 Slime Studio — FREE combinatorial engine (Higgs bg × ring × hat × grade), no per-pic cost
   assert.match(pfpLib, /export async function makeSlimeStudioPfp/);
   assert.match(pfpLib, /export async function renderSlimeStudioGallery/);
+  assert.match(pfpLib, /listAssetFiles\(path\.join\(root, "prop"\)\)/); // degen corner-prop category (rocket/diamond/moneybag/bull…)
   assert.match(serverSource, /pathname === "\/api\/web\/pfp\/studio"/);
   assert.match(serverSource, /pathname === "\/api\/web\/pfp\/studio-info"/);
   assert.match(serverSource, /data\.match\(\/\^pfp:st:/);            // TG Slime Studio roll button

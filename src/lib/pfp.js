@@ -195,16 +195,17 @@ function pickFrom(arr, rng) { return arr.length ? arr[Math.floor(rng() * arr.len
 // How many distinct combos the current library can make (shown to the user).
 export async function slimeStudioComboCount(frameDir) {
   const root = path.dirname(frameDir);
-  const [bg, ring, hat] = await Promise.all([listAssetFiles(path.join(root, "bg")), listAssetFiles(path.join(root, "ring")), listAssetFiles(path.join(root, "hat"))]);
-  if (!bg.length && !ring.length && !hat.length) return 0;
-  return Math.max(1, bg.length || 1) * Math.max(1, ring.length || 1) * (Math.max(1, hat.length) + 1) * 3; // ×3 grades, +1 = "no hat"
+  const [bg, ring, hat, prop] = await Promise.all([listAssetFiles(path.join(root, "bg")), listAssetFiles(path.join(root, "ring")), listAssetFiles(path.join(root, "hat")), listAssetFiles(path.join(root, "prop"))]);
+  if (!bg.length && !ring.length && !hat.length && !prop.length) return 0;
+  // bg × (ring+1) × (hat+1) × (prop+1) × 3 grades  — +1 each = the "none" option for that slot
+  return Math.max(1, bg.length || 1) * (ring.length + 1) * (hat.length + 1) * (prop.length + 1) * 3;
 }
 
 // One studio PFP. seed → deterministic combo (so a gallery gives N *different* looks). Returns PNG buffer.
 export async function makeSlimeStudioPfp({ sourceBuffer, frameDir, size = PFP_SIZE, seed }) {
   const rng = Number.isFinite(seed) ? mulberry32(seed >>> 0) : Math.random;
   const root = path.dirname(frameDir);
-  const [bgs, rings, hats] = await Promise.all([listAssetFiles(path.join(root, "bg")), listAssetFiles(path.join(root, "ring")), listAssetFiles(path.join(root, "hat"))]);
+  const [bgs, rings, hats, props] = await Promise.all([listAssetFiles(path.join(root, "bg")), listAssetFiles(path.join(root, "ring")), listAssetFiles(path.join(root, "hat")), listAssetFiles(path.join(root, "prop"))]);
 
   // graded circle face (the actual photo, slimed then masked to a circle)
   const grade = [null, "slime", "toxic"][Math.floor(rng() * 3)];
@@ -234,6 +235,17 @@ export async function makeSlimeStudioPfp({ sourceBuffer, frameDir, size = PFP_SI
       const hat = await sharp(path.join(root, "hat", hatFile)).resize({ width: hw }).png().toBuffer();
       const hatLayer = await sharp({ create: { width: size, height: size, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).composite([{ input: hat, gravity: "north" }]).png().toBuffer();
       layers.push({ input: hatLayer, top: 0, left: 0 });
+    } catch {}
+  }
+  // a degen corner prop (rocket / diamond / moneybag / bull …) ~45% of the time — bottom corner, alternating side by seed
+  const propFile = rng() > 0.55 ? pickFrom(props, rng) : null;
+  if (propFile) {
+    try {
+      const pw = Math.round(size * (0.3 + rng() * 0.08)); // ~30-38% width
+      const prop = await sharp(path.join(root, "prop", propFile)).resize({ width: pw }).png().toBuffer();
+      const gravity = rng() > 0.5 ? "southeast" : "southwest";
+      const propLayer = await sharp({ create: { width: size, height: size, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).composite([{ input: prop, gravity }]).png().toBuffer();
+      layers.push({ input: propLayer, top: 0, left: 0 });
     } catch {}
   }
   layers.push({ input: Buffer.from(svgWrap(wordmark())), top: 0, left: 0 });
