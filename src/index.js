@@ -71,6 +71,8 @@ import {
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
 import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES } from "./lib/pfp.js";
+import { xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle } from "./lib/xClient.js";
+import { renderXScanCard } from "./lib/xCard.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
 import {
@@ -12894,6 +12896,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("pfp:")) {
     if (await handlePfpCallback(query, userId).catch(() => false)) return;
   }
+  // 🐦 X reply approval (xr:*) — owner one-tap post/skip a drafted X reply.
+  if (String(query.data || "").startsWith("xr:")) {
+    if (await handleXReplyCallback(query, userId).catch(() => false)) return;
+  }
   // ⚡ One-click buy (qb:*) — instant buy from the tapper's own SlimeWire wallet, from any group card.
   if (String(query.data || "").startsWith("qb:")) {
     if (await handleQuickBuyCallback(query, userId).catch(() => false)) return;
@@ -14080,6 +14086,7 @@ async function handleMessage(message, userId) {
     const cs = parseCommandWithArgument(text, ["snipe", "communitysnipe", "csnipe"]);
     if (cs) { await handleCommunitySnipeCommand(chatId, message, cs.argument, userId); return; }
     if (parseCommandWithArgument(text, ["pfp", "slimepfp", "avatar"])) { await handlePfpCommand(chatId, message, userId); return; }
+    if (parseCommandWithArgument(text, ["xtest", "xstatus"])) { await handleXTestCommand(chatId, userId); return; }
   }
   // /room — the group's verifiable trading board (opt-in Room PnL + skin-in-the-game callers).
   if (parseCommandWithArgument(text, ["room", "board", "roompnl"])) { await handleRoomCommand(chatId, message); return; }
@@ -30335,6 +30342,192 @@ async function gatherSlimeScan(mint) {
   return { best, meta, rug: rugFilled, shield, bonding, dexPaid, supply, ath };
 }
 
+// ============ 🐦 X (Twitter) CA REPLY BOT — reply to @mentions with a branded SlimeWire scan ============
+// Turns the SlimeWire X account into "the CA bot": someone tags us under any post with a contract, we
+// reply with a scan card. Route 2 (unofficial cookie auth — no paid API; see src/lib/xClient.js). Two
+// modes via env: ASSIST (default, zero ban risk) = DM the owner the draft + card for one-tap posting;
+// AUTO = post it ourselves, throttled. Fully DARK until X_REPLY_ENABLED=true AND cookies are set.
+function xReplyStateFile() { return path.join(CONFIG.dataDir, "x-reply-state.json"); }
+let xReplyStateCache = null;
+async function readXReplyState() {
+  if (xReplyStateCache) return xReplyStateCache;
+  let s = null; try { s = await readJson(xReplyStateFile()); } catch { s = null; }
+  if (!s || typeof s !== "object") s = {};
+  if (!s.seen || typeof s.seen !== "object") s.seen = {};    // tweetId -> ts (idempotency: reply once)
+  if (!Array.isArray(s.posts)) s.posts = [];                 // recent post timestamps (hourly throttle)
+  if (!s.queue || typeof s.queue !== "object") s.queue = {}; // assist-mode drafts: tweetId -> {mint,at,author,url}
+  xReplyStateCache = s; return s;
+}
+async function writeXReplyState(s) { xReplyStateCache = s; await writeJsonFile(xReplyStateFile(), s).catch(() => {}); }
+function xReplyOwnerChat() { return String(process.env.X_REPLY_OWNER_CHAT || "").trim(); }
+function xReplyEnabled() { return parseBoolean(process.env.X_REPLY_ENABLED || "false"); }
+function xReplyAuto() { return parseBoolean(process.env.X_REPLY_AUTO || "false"); }
+
+function xAgeLabel(ms) {
+  const m = ms / 60_000;
+  if (m < 60) return `${Math.max(1, Math.round(m))}m`;
+  if (m < 1440) return `${Math.round(m / 60)}h`;
+  return `${Math.round(m / 1440)}d`;
+}
+function xRailLabel(mint, best, bonding) {
+  const dex = String(best?.dexId || "").toLowerCase();
+  if (bonding && !(bonding.complete || bonding.graduated || bonding.raydium_pool)) return "pump";
+  if (String(mint).endsWith("pump")) return dex.includes("raydium") ? "pump→ray" : "pump";
+  if (dex.includes("meteora")) return "meteora";
+  if (dex.includes("raydium")) return "raydium";
+  if (dex.includes("orca")) return "orca";
+  if (String(mint).toLowerCase().includes("bonk")) return "bonk";
+  return dex || "dex";
+}
+function xVerdict(shield, rug, liq, mc) {
+  // Defensive across shield/rug shapes — surface the loudest safety signal in plain English.
+  const danger = Boolean(shield?.honeypot || shield?.isHoneypot || rug?.rugged || shield?.verdict === "danger" || shield?.level === "danger" || (shield?.risk && /danger|honeypot|scam/i.test(String(shield.risk))));
+  const mintAuth = Boolean(shield?.mintAuthority || rug?.mintAuthority);
+  const freezeAuth = Boolean(shield?.freezeAuthority || rug?.freezeAuthority);
+  if (danger) return { verdict: "High risk — be careful", tone: "danger" };
+  if (liq > 0 && liq < 1500) return { verdict: "Thin liquidity", tone: "warn" };
+  if (mintAuth || freezeAuth) return { verdict: `${mintAuth ? "Mint" : "Freeze"} authority live`, tone: "warn" };
+  if (mc > 0) return { verdict: "Looks alive", tone: "ok" };
+  return { verdict: "Scanned", tone: "ok" };
+}
+async function xFetchLogo(url) {
+  let u = String(url || "").trim();
+  if (!u) return null;
+  if (u.startsWith("ipfs://")) u = "https://ipfs.io/ipfs/" + u.slice(7);
+  if (!/^https?:/.test(u)) return null;
+  try {
+    const res = await fetch(u, { signal: AbortSignal.timeout ? AbortSignal.timeout(6000) : undefined });
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.length > 100 && buf.length < 6_000_000 ? buf : null;
+  } catch { return null; }
+}
+function extractMintsFromText(text) {
+  const out = [];
+  for (const tok of String(text || "").split(/[\s,]+/)) {
+    const t = tok.replace(/[^1-9A-HJ-NP-Za-km-z]/g, "");
+    if (t.length >= 32 && t.length <= 44 && isLikelySolMint(t) && !out.includes(t)) out.push(t);
+  }
+  return out;
+}
+// The reply = tight value text (not link-spam) + a branded scan card. Returns null if the mint won't scan.
+async function buildXScanReply(mint) {
+  const scan = await gatherSlimeScan(mint).catch(() => null);
+  if (!scan) return null;
+  const { meta, bonding, best, shield, rug } = scan;
+  const symbol = String(meta?.symbol || bonding?.symbol || "").slice(0, 12);
+  const name = String(meta?.name || bonding?.name || "").slice(0, 40);
+  const mc = Number(meta?.marketCap || bonding?.usd_market_cap || bonding?.marketCap || 0);
+  const liq = Number(best?.liquidity?.usd || 0);
+  if (!symbol && !(mc > 0)) return null;
+  const createdAt = Number(best?.pairCreatedAt || 0) || (Number(bonding?.created_timestamp || 0) * (String(bonding?.created_timestamp || "").length <= 10 ? 1000 : 1));
+  const ageLabel = createdAt > 0 ? xAgeLabel(Date.now() - createdAt) : "—";
+  const rail = xRailLabel(mint, best, bonding);
+  const { verdict, tone } = xVerdict(shield, rug, liq, mc);
+  const mcLabel = mc > 0 ? scanFmtMoney(mc) : "—";
+  const liqLabel = liq > 0 ? scanFmtMoney(liq) : "—";
+  const links = slimewireTokenLinks(mint);
+  const text = [
+    `$${symbol || "coin"}${name ? " · " + name : ""}`,
+    `MC ${mcLabel} · Liq ${liqLabel} · Age ${ageLabel} · ${rail}`,
+    `${tone === "danger" ? "⛔" : tone === "warn" ? "⚠️" : "✅"} ${verdict}`,
+    `Full scan 👉 ${links.site}`
+  ].join("\n").slice(0, 279);
+  let mediaBuffer = null;
+  try {
+    const logoBuffer = await xFetchLogo(meta?.icon || meta?.image || bonding?.image || bonding?.image_uri);
+    mediaBuffer = await renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel: rail, verdict, verdictTone: tone, logoBuffer });
+  } catch { /* text-only is fine if the card render fails */ }
+  return { text, mediaBuffer, symbol, mc };
+}
+async function xReplyOwnerNotify(text) {
+  const chat = xReplyOwnerChat();
+  if (chat) await say(chat, text).catch(() => {});
+}
+async function xReplyOwnerDraft(m, reply) {
+  const chat = xReplyOwnerChat();
+  if (!chat) return;
+  const cap = [
+    `🐦 <b>X reply ready</b> — @${escapeTelegramHtml(m.username)} tagged us`,
+    m.permanentUrl ? `<a href="${escapeTelegramHtml(m.permanentUrl)}">their post ↗</a>` : "",
+    "", "<i>Draft reply:</i>", escapeTelegramHtml(reply.text)
+  ].filter(Boolean).join("\n");
+  const kb = { inline_keyboard: [[{ text: "✅ Post to X", callback_data: `xr:post:${m.id}` }, { text: "🗑 Skip", callback_data: `xr:skip:${m.id}` }]] };
+  if (reply.mediaBuffer) await sendPhoto(chat, "x-scan.png", reply.mediaBuffer, cap, kb, "HTML").catch(() => sayHtml(chat, cap, kb).catch(() => {}));
+  else await sayHtml(chat, cap, kb).catch(() => {});
+}
+async function xReplyPollTick() {
+  if (!xReplyEnabled() || !xConfigured()) return;
+  let mentions = [];
+  try { mentions = await xSearchMentions(20); } catch { return; }
+  if (!mentions.length) return;
+  const state = await readXReplyState();
+  const now = Date.now();
+  for (const k of Object.keys(state.seen)) if (now - Number(state.seen[k]) > 3 * 86_400_000) delete state.seen[k];
+  state.posts = state.posts.filter((t) => now - Number(t) < 3_600_000);
+  const auto = xReplyAuto();
+  const maxPerHour = Math.max(1, Number(process.env.X_REPLY_MAX_PER_HOUR || 8));
+  const minGapMs = Math.max(15_000, Number(process.env.X_REPLY_MIN_GAP_MS || 90_000));
+  mentions.sort((a, b) => (a.createdAtMs || 0) - (b.createdAtMs || 0));
+  for (const m of mentions) {
+    if (state.seen[m.id]) continue;
+    const mints = extractMintsFromText(m.text);
+    if (!mints.length) { state.seen[m.id] = now; continue; }        // a mention with no CA → nothing to scan
+    const reply = await buildXScanReply(mints[0]).catch(() => null);
+    if (!reply) { state.seen[m.id] = now; continue; }
+    if (auto) {
+      if (state.posts.length >= maxPerHour) break;                   // hourly cap reached — leave the rest for later
+      if (state.posts.length && (now - Number(state.posts[state.posts.length - 1]) < minGapMs)) break; // pace posts
+      const res = await xReply({ inReplyToId: m.id, text: reply.text, mediaBuffer: reply.mediaBuffer });
+      state.seen[m.id] = now;
+      if (res.ok) { state.posts.push(Date.now()); await xReplyOwnerNotify(`✅ Auto-replied on X to @${m.username} · $${reply.symbol}`); }
+      else { await xReplyOwnerNotify(`⚠️ X reply to @${m.username} failed: ${res.reason || ""}`); if (/not configured|401|unauthor/i.test(res.reason || "")) break; }
+      await writeXReplyState(state);
+      await sleep(2500);
+    } else {
+      state.seen[m.id] = now;
+      state.queue[m.id] = { mint: mints[0], at: now, author: m.username, url: m.permanentUrl };
+      await writeXReplyState(state);
+      await xReplyOwnerDraft(m, reply);
+    }
+  }
+  await writeXReplyState(state);
+}
+async function handleXReplyCallback(query, userId) {
+  const data = String(query?.data || "");
+  if (!data.startsWith("xr:")) return false;
+  const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  const ack = (t, a) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: Boolean(a) } : {}) }).catch(() => {});
+  if (!xReplyOwnerChat() || String(chatId) !== xReplyOwnerChat()) { await ack("Only the SlimeWire owner controls X replies.", true); return true; }
+  const clearKb = (label) => telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [[{ text: label, callback_data: "noop" }]] } }).catch(() => {});
+  const mSkip = data.match(/^xr:skip:(\d+)$/), mPost = data.match(/^xr:post:(\d+)$/);
+  const state = await readXReplyState();
+  if (mSkip) { delete state.queue[mSkip[1]]; await writeXReplyState(state); await clearKb("🗑 Skipped"); await ack("Skipped"); return true; }
+  if (mPost) {
+    const q = state.queue[mPost[1]];
+    if (!q) { await ack("That draft expired — tag us again to re-scan.", true); return true; }
+    const reply = await buildXScanReply(q.mint).catch(() => null);
+    if (!reply) { await ack("Couldn't rebuild the scan — try again.", true); return true; }
+    const res = await xReply({ inReplyToId: mPost[1], text: reply.text, mediaBuffer: reply.mediaBuffer });
+    if (res.ok) { delete state.queue[mPost[1]]; state.posts.push(Date.now()); await writeXReplyState(state); await clearKb("✅ Posted to X"); await ack("Posted ✨"); }
+    else { await ack(`Post failed: ${res.reason || "try again"}`, true); }
+    return true;
+  }
+  await ack();
+  return true;
+}
+// Owner setup check: confirm the cookies took + which handle we're posting as.
+async function handleXTestCommand(chatId, userId) {
+  if (!xReplyOwnerChat() || String(chatId) !== xReplyOwnerChat()) { await say(chatId, "This command is owner-only. Set X_REPLY_OWNER_CHAT to your chat id."); return; }
+  if (!xConfigured()) { await sayHtml(chatId, "🐦 <b>X not configured.</b> Set <code>X_AUTH_TOKEN</code> + <code>X_CT0</code> (your x.com cookies) on Render, then <code>X_REPLY_ENABLED=true</code>."); return; }
+  const me = await xWhoAmI().catch(() => null);
+  if (me && (me.username || me.screenName)) {
+    await sayHtml(chatId, `🐦 <b>Connected as @${escapeTelegramHtml(me.username || me.screenName)}</b>\nMode: <b>${xReplyAuto() ? "AUTO (posts itself)" : "ASSIST (one-tap posting)"}</b> · Replies: <b>${xReplyEnabled() ? "ON" : "OFF"}</b>\nMentions with a CA get a scan reply.`);
+  } else {
+    await sayHtml(chatId, "🐦 <b>Cookies didn't authenticate.</b> They may be expired — grab fresh <code>auth_token</code> + <code>ct0</code> from x.com and update the Render env vars.");
+  }
+}
+
 // Compact bottom row: just Menu + Quick Buy + Refresh (3 small buttons, not bulky).
 // Menu opens user-friendly submenus; Quick Buy deep-links the CA prefilled to the site.
 function slimeScanKeyboard(mint) {
@@ -34694,6 +34887,7 @@ function startGroupBuyBot() {
   setTimeout(() => { void submitIndexNow(); }, 20_000);      // 🔎 auto-ping IndexNow (Bing/DDG/Yandex) on boot
   setInterval(() => { void pollLimitOrders(); }, 30_000);    // ⏰ Limit orders — MC-triggered buy/sell auto-fire (opt-in, own wallet)
   setInterval(() => { void pollWeeklyCallerContest(); }, 60 * 60_000); // 🏆 Caller of the Week — Sunday crown for opted-in groups
+  setInterval(() => { void xReplyPollTick(); }, Math.max(60_000, Number(process.env.X_REPLY_POLL_MS || 150_000))); // 🐦 X CA reply bot — DARK until X_REPLY_ENABLED + cookies
   void startVanityAutoGrind();       // 🅿️ keep the "…pump" mint pool auto-stocked (gentle bg worker; no user alerts)
   void readCommunitySnipe().catch(() => {});                 // warm the armed-creator-wallet index so a snipe survives restart
 }

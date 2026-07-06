@@ -1795,3 +1795,29 @@ test("SlimeWire PFP maker: sharp compositor + public endpoint + /pfp command, al
   assert.match(pfpHtml, /\/api\/web\/pfp\/generate/);
   assert.match(pfpHtml, /download='slimewire-pfp-'/);
 });
+
+// ---- 🐦 X (Twitter) CA reply bot — unofficial cookie auth, assist/auto modes, DARK by default --------
+test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throttle, owner-gated, dark", () => {
+  const xc = fs.readFileSync(new URL("../src/lib/xClient.js", import.meta.url), "utf8");
+  // cookie auth (no paid API), env-only secrets, graceful when unconfigured
+  assert.match(xc, /from "agent-twitter-client"/);
+  assert.match(xc, /X_AUTH_TOKEN/); assert.match(xc, /X_CT0/);
+  assert.match(xc, /export function xConfigured/);
+  assert.match(xc, /export async function xSearchMentions/);
+  assert.match(xc, /export async function xReply/);
+  assert.match(xc, /-from:\$\{handle\}/);                      // reads OUR mentions, excludes our own posts
+  const xcard = fs.readFileSync(new URL("../src/lib/xCard.js", import.meta.url), "utf8");
+  assert.match(xcard, /export async function renderXScanCard/);
+  // server: DARK unless X_REPLY_ENABLED + cookies; assist (default) vs auto; throttle; idempotent; owner-gated
+  const tick = functionBody(serverSource, "xReplyPollTick");
+  assert.match(tick, /if \(!xReplyEnabled\(\) \|\| !xConfigured\(\)\) return/);   // dark by default
+  assert.match(tick, /X_REPLY_MAX_PER_HOUR/); assert.match(tick, /X_REPLY_MIN_GAP_MS/); // throttle
+  assert.match(tick, /if \(state\.seen\[m\.id\]\) continue/);                    // idempotent (reply once)
+  assert.match(tick, /if \(auto\)/);                                            // auto vs assist branch
+  assert.match(tick, /xReplyOwnerDraft/);                                       // assist = one-tap draft to owner
+  assert.match(functionBody(serverSource, "handleXReplyCallback"), /String\(chatId\) !== xReplyOwnerChat\(\)/); // owner-only posting
+  assert.match(serverSource, /void xReplyPollTick\(\); \}, Math\.max\(60_000/);   // poller wired
+  assert.match(serverSource, /if \(await handleXReplyCallback\(query, userId\)/); // callback dispatch
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["xtest", "xstatus"\]\)/); // owner setup check
+  assert.match(serverSource, /import \{ xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle \} from "\.\/lib\/xClient\.js"/);
+});

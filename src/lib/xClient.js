@@ -1,0 +1,92 @@
+// Unofficial X (Twitter) access via a logged-in account's SESSION COOKIES — no paid API. Isolates the
+// fragile third-party client (agent-twitter-client) behind a tiny, stable interface so the rest of the
+// app never imports it directly. Everything degrades to "not configured" (returns null/[]) when the
+// cookies aren't set, so nothing here can fire until the owner opts in.
+//
+// SECRETS: the account's auth_token + ct0 cookies come from env (X_AUTH_TOKEN / X_CT0). They are set by
+// the owner in Render — this code only READS them. Never log them.
+//
+// TERMS: automating a logged-in account is against X's ToS and can get the account suspended. The owner
+// accepted that risk; callers throttle hard + reply with value (a scan card), not bare-link spam.
+import { Scraper, SearchMode } from "agent-twitter-client";
+
+let scraperPromise = null;
+
+export function xConfigured() {
+  return Boolean((process.env.X_AUTH_TOKEN || "").trim() && (process.env.X_CT0 || "").trim());
+}
+export function xHandle() {
+  return String(process.env.X_HANDLE || process.env.TELEGRAM_BOT_USERNAME || "SlimeWiredBot").replace(/^@+/, "").trim();
+}
+
+// Build (once) a cookie-authenticated Scraper. Returns null if not configured or the session is dead
+// (expired/invalidated cookies) so callers just no-op instead of throwing.
+export async function getXScraper() {
+  if (!xConfigured()) return null;
+  if (scraperPromise) return scraperPromise;
+  scraperPromise = (async () => {
+    try {
+      const s = new Scraper();
+      const authToken = String(process.env.X_AUTH_TOKEN).trim();
+      const ct0 = String(process.env.X_CT0).trim();
+      const domain = "twitter.com";
+      const cookies = [
+        `auth_token=${authToken}; Domain=.${domain}; Path=/; Secure; HttpOnly`,
+        `ct0=${ct0}; Domain=.${domain}; Path=/; Secure`
+      ];
+      if ((process.env.X_GUEST_ID || "").trim()) cookies.push(`guest_id=${String(process.env.X_GUEST_ID).trim()}; Domain=.${domain}; Path=/`);
+      await s.setCookies(cookies);
+      const ok = await s.isLoggedIn().catch(() => false);
+      if (!ok) { scraperPromise = null; return null; }
+      return s;
+    } catch { scraperPromise = null; return null; }
+  })();
+  return scraperPromise;
+}
+
+// Force a fresh login on the next call (e.g. after a 401 / cookie rotation).
+export function resetXScraper() { scraperPromise = null; }
+
+// Recent tweets that MENTION our handle (people asking us) — the least-abusive read: our own inbox.
+// Excludes our own tweets + retweets. Returns [{ id, text, username, userId, permanentUrl, createdAtMs }].
+export async function xSearchMentions(count = 20) {
+  const s = await getXScraper();
+  if (!s) return [];
+  const handle = xHandle();
+  try {
+    const res = await s.fetchSearchTweets(`@${handle} -from:${handle} -filter:retweets`, Math.min(50, count), SearchMode.Latest);
+    const tweets = (res && res.tweets) || [];
+    return tweets.map((t) => ({
+      id: String(t.id || t.rest_id || ""),
+      text: String(t.text || t.full_text || ""),
+      username: String(t.username || t.user?.screen_name || ""),
+      userId: String(t.userId || t.user_id || ""),
+      permanentUrl: t.permanentUrl || (t.username && t.id ? `https://x.com/${t.username}/status/${t.id}` : ""),
+      createdAtMs: t.timeParsed ? new Date(t.timeParsed).getTime() : (Number(t.timestamp) ? Number(t.timestamp) * 1000 : 0)
+    })).filter((t) => t.id);
+  } catch { return []; }
+}
+
+// Reply to a tweet, optionally with a PNG card attached. Returns { ok, id? } — never throws.
+export async function xReply({ inReplyToId, text, mediaBuffer }) {
+  const s = await getXScraper();
+  if (!s) return { ok: false, reason: "not configured" };
+  try {
+    const media = mediaBuffer ? [{ data: mediaBuffer, mediaType: "image/png" }] : undefined;
+    const resp = await s.sendTweet(String(text || "").slice(0, 279), String(inReplyToId), media);
+    // sendTweet returns a fetch Response (graphql); a 200 means posted. Best-effort id parse.
+    let id = "";
+    try { const j = await resp.json(); id = j?.data?.create_tweet?.tweet_results?.result?.rest_id || ""; } catch {}
+    const ok = !resp || resp.ok !== false;
+    return { ok, id };
+  } catch (e) {
+    if (/401|unauthor/i.test(String(e?.message || ""))) resetXScraper();
+    return { ok: false, reason: String(e?.message || "reply failed").slice(0, 160) };
+  }
+}
+
+export async function xWhoAmI() {
+  const s = await getXScraper();
+  if (!s) return null;
+  try { return await s.me(); } catch { return null; }
+}
