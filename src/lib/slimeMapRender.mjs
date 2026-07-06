@@ -162,15 +162,28 @@ export async function fetchAvatarDataUri(url, size = 96) {
 
 // Full premium render: resolve avatars → build transparent map SVG → composite over a branded background
 // (map-kit PNG) with a dark wash so nodes pop. Returns a PNG buffer ready to post/serve. bgPath optional.
+// Read a LOCAL face PNG (anon slime face) → small data-URI. Cached by the caller (only ~20 unique faces).
+async function localFaceDataUri(file, size = 88) {
+  try {
+    const png = await sharp(file).resize(size, size, { fit: "cover" }).png().toBuffer();
+    return "data:image/png;base64," + png.toString("base64");
+  } catch { return null; }
+}
+
 export async function renderSlimeMapPng({ subject, subtitle, stats = [], nodes = [], bgPath = null, W = 900, H = 820 } = {}) {
-  // Resolve any avatarUrl → embedded data-URI, in parallel (deduped by url).
-  const cache = new Map();
+  // Resolve avatars → embedded data-URIs, in parallel. KOL X pfps come from a remote URL (fetch); anonymous
+  // wallets get a LOCAL slime face (read off disk). Deduped so the same face/url is only processed once.
+  const cache = new Map(), faceCache = new Map();
   await Promise.all(nodes.map(async (n) => {
     if (n.avatar) return;                       // already a data-URI
-    const u = n.avatarUrl;
-    if (!u) return;
-    if (!cache.has(u)) cache.set(u, fetchAvatarDataUri(u));
-    n.avatar = await cache.get(u);
+    if (n.avatarUrl) {
+      if (!cache.has(n.avatarUrl)) cache.set(n.avatarUrl, fetchAvatarDataUri(n.avatarUrl));
+      n.avatar = await cache.get(n.avatarUrl);
+    }
+    if (!n.avatar && n.faceFile) {              // fall back to the wallet's deterministic slime face
+      if (!faceCache.has(n.faceFile)) faceCache.set(n.faceFile, localFaceDataUri(n.faceFile));
+      n.avatar = await faceCache.get(n.faceFile);
+    }
   }));
 
   const svg = buildMapSvg({ subject, subtitle, stats, nodes, transparent: true, W, H });

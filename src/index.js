@@ -30680,13 +30680,23 @@ async function mapKolIdentityIndex() {
   if (mapKolIdxCache.idx && Date.now() - mapKolIdxCache.at < 60 * 60_000) return mapKolIdxCache.idx;
   const idx = new Map();
   if (CONFIG.solanaTrackerApiKey) {
-    // Page 1 only (top ~100 traders = the named KOLs people care about). One call, cached an hour → maps stay free.
+    // Page 1 of the leaderboard (top ~100 traders). One call, cached an hour → maps stay free.
     try {
       const data = await solanaTrackerJson(`/top-traders/all/1`, { cacheTtlMs: 55 * 60_000, timeoutMs: 7000 });
       for (const k of normalizeKolLeaderboard(data)) {
         if (k.wallet && (k.twitter || k.name)) idx.set(k.wallet, { name: k.name, twitter: k.twitter || "", avatar: k.avatar || "" });
       }
-    } catch { /* leave empty — unknown wallets just render as branded blobs */ }
+    } catch { /* leave empty — unknown wallets just render as slime faces */ }
+    // WIDER coverage: fold in our KOL scanner's roster (hot/top/consistent) — more named wallets + avatars than
+    // the raw leaderboard, harnessing ST + our learned winners (owner: "follow kols... not just from our api").
+    try {
+      const scans = await Promise.all(["hot", "top", "consistent"].map((m) => buildKolScan("map", m, "").catch(() => null)));
+      for (const sc of scans) for (const k of (sc && sc.kols) || []) {
+        const w = firstString(k.wallet, k.kolWallet, k.address);
+        const tw = String(firstString(k.twitter, k.xHandle, k.handle, k.x) || "").replace(/^@/, "");
+        if (w && !idx.has(w) && (tw || k.name)) idx.set(w, { name: k.name || (tw ? `@${tw}` : ""), twitter: tw, avatar: firstString(k.avatar, k.pfp, k.image) || "" });
+      }
+    } catch { /* leaderboard-only is fine */ }
   }
   mapKolIdxCache = { at: Date.now(), idx };
   return idx;
@@ -30716,6 +30726,25 @@ async function mapPickBg(seed) {
     let h = 0; const s = String(seed || "x"); for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
     return path.join(MAP_BG_DIR, files[h % files.length]);
   } catch { return null; }
+}
+
+// 🙂 Slime FACE for anonymous (non-KOL) wallets — every bubble gets personality (owner: "default bubbles show
+// a slime pfp icon if no x profile"). Deterministic per wallet (same wallet → same face). Returns both a local
+// file path (for the server PNG renderer) and a served URL (for the interactive web map).
+const MAP_FACE_DIR = path.join(WEB_STATIC_DIR, "pfp", "mapfaces");
+let mapFaceFilesCache = null;
+async function mapFaceFiles() {
+  if (mapFaceFilesCache) return mapFaceFilesCache;
+  try { mapFaceFilesCache = (await fs.readdir(MAP_FACE_DIR)).filter((f) => /\.(png|jpe?g)$/i.test(f)).sort(); }
+  catch { mapFaceFilesCache = []; }
+  return mapFaceFilesCache;
+}
+async function mapAnonFace(wallet) {
+  const files = await mapFaceFiles();
+  if (!files.length) return null;
+  let h = 0; const s = String(wallet || "x"); for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  const f = files[h % files.length];
+  return { file: path.join(MAP_FACE_DIR, f), url: `/pfp/mapfaces/${f}` };
 }
 
 // Holder LIST for the map: Solana Tracker first (many more real holders than the free on-chain top-20 — the
@@ -30765,19 +30794,26 @@ async function buildTokenHolderMap(mint) {
   const holderRows = await fetchTokenHolderRows(mint).catch(() => []);
   const maxPct = holderRows.reduce((m, h) => Math.max(m, h.pct || 0), 0) || 1;
   let kolsIn = 0, whales = 0;
-  const nodes = holderRows.slice(0, 45).map((h, i) => {
+  const nodes = await Promise.all(holderRows.slice(0, 45).map(async (h, i) => {
     const id = mapResolveIdentity(h.wallet, idx);
     if (id.isKol) kolsIn++;
     const isWhale = (h.pct || 0) >= Math.max(1, maxPct * 0.5) || (i === 0 && (h.pct || 0) > 0);
     if (isWhale) whales++;
+    const usd = mc ? ((h.pct || 0) / 100) * mc : 0;
+    const face = id.avatarUrl ? null : await mapAnonFace(h.wallet);   // slime face for anon wallets
+    // Label KOLs (name + %) and the biggest anon holders ($ + %), so the whales are always readable.
+    let label = null;
+    if (id.isKol) label = `${id.name} · ${(h.pct || 0).toFixed(1)}%`;
+    else if (i < 3 && usd > 0) label = `$${fmtMc(usd)} · ${(h.pct || 0).toFixed(1)}%`;
     return {
-      i, wallet: h.wallet,
+      i, wallet: h.wallet, isKol: id.isKol, name: id.name, twitter: id.twitter,
       weight: Math.max(0.05, Math.min(1, (h.pct || 0) / maxPct)),
-      state: isWhale ? "whale" : "hold",
-      label: id.isKol ? `${id.name} · ${(h.pct || 0).toFixed(1)}%` : null,
-      name: id.name, twitter: id.twitter, avatarUrl: id.avatarUrl, pct: h.pct || 0,
+      state: isWhale ? "whale" : "hold", label, pct: h.pct || 0, usd,
+      avatarUrl: id.avatarUrl,               // KOL X pfp (remote) — renderer fetches, web uses
+      faceUrl: face ? face.url : null,       // anon slime face (served URL) — web uses when no avatarUrl
+      faceFile: face ? face.file : null,     // anon slime face (local path) — server PNG renderer reads
     };
-  });
+  }));
   const top10 = holderRows.slice(0, 10).reduce((s, h) => s + (h.pct || 0), 0);
   const ageLabel = createdAt ? xAgeLabel(Math.max(0, Date.now() - Number(createdAt))) : "—";
   // Coin DETAILS ride on the card: MC · liq · age · 1H % · concentration — details + map in one shot.

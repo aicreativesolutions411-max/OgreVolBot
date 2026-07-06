@@ -134,7 +134,8 @@ function render(map){
     const tgtId = map.kind==='token' ? p.wallet : p.mint;
     s += '<g class="node" data-i="'+idx+'"'+(clickable?(' data-kind="'+tgtKind+'" data-id="'+esc(tgtId)+'"'):'')+'>';
     s += '<circle cx="'+p.x.toFixed(1)+'" cy="'+p.y.toFixed(1)+'" r="'+(p.size-1).toFixed(1)+'" fill="'+c.f+'"/>';
-    if (p.avatarUrl){ const id='cp'+idx; s += '<clipPath id="'+id+'"><circle cx="'+p.x.toFixed(1)+'" cy="'+p.y.toFixed(1)+'" r="'+(p.size-2).toFixed(1)+'"/></clipPath><image href="'+esc(p.avatarUrl)+'" x="'+(p.x-p.size).toFixed(1)+'" y="'+(p.y-p.size).toFixed(1)+'" width="'+(p.size*2).toFixed(1)+'" height="'+(p.size*2).toFixed(1)+'" clip-path="url(#'+id+')" preserveAspectRatio="xMidYMid slice"/>'; }
+    const av = p.avatarUrl || p.faceUrl;
+    if (av){ const id='cp'+idx; s += '<clipPath id="'+id+'"><circle cx="'+p.x.toFixed(1)+'" cy="'+p.y.toFixed(1)+'" r="'+(p.size-2).toFixed(1)+'"/></clipPath><image href="'+esc(av)+'" x="'+(p.x-p.size).toFixed(1)+'" y="'+(p.y-p.size).toFixed(1)+'" width="'+(p.size*2).toFixed(1)+'" height="'+(p.size*2).toFixed(1)+'" clip-path="url(#'+id+')" preserveAspectRatio="xMidYMid slice"/>'; }
     s += '<circle cx="'+p.x.toFixed(1)+'" cy="'+p.y.toFixed(1)+'" r="'+p.size.toFixed(1)+'" fill="none" stroke="'+c.r+'" stroke-width="3"/>';
     s += '</g>';
   });
