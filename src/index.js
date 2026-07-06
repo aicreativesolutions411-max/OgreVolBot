@@ -30723,8 +30723,12 @@ async function buildTokenHolderMap(mint) {
   const idx = await mapKolIdentityIndex().catch(() => new Map());
   // withHolderCount:false — the exact holder count is a getProgramAccounts over EVERY token account (millions
   // for a popular coin → times out / gets rejected). The map only needs the top-holder LIST + concentration,
-  // both of which come from the cheap getTokenLargestAccounts read.
-  const dist = await computeOnchainDistribution({ mint, rpcRead, withHolderCount: false }).catch(() => null);
+  // both of which come from the cheap getTokenLargestAccounts read. HARD 14s timeout so a mega-coin whose RPC
+  // reads run slow returns a clean "still loading" instead of ever hanging the endpoint (BONK-scale guard).
+  const dist = await Promise.race([
+    computeOnchainDistribution({ mint, rpcRead, withHolderCount: false }).catch(() => null),
+    new Promise((resolve) => setTimeout(() => resolve(null), 14_000)),
+  ]);
   const holders = (dist && Array.isArray(dist.holders)) ? dist.holders : [];
   if (!holders.length) return { kind: "token", mint, nodes: [] };
   const info = await alphaRadarFetchMc(mint).catch(() => null);
