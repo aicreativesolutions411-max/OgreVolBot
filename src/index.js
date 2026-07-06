@@ -34043,11 +34043,15 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
   const pick = (pumpVal, dexVal) => onCurve ? firstMeaningfulNumber(pumpVal, dexVal) : firstMeaningfulNumber(dexVal, pumpVal);
   const mc = pick(bonding?.marketCap, meta?.marketCap ?? meta?.fdv) || 0;
   const liq = pick(bonding?.liquidityUsd, meta?.liquidityUsd) || 0;
-  const vol24 = Number(meta?.volume?.h24 || meta?.volume?.h6 || bonding?.volume24h || 0);
-  const ch24 = meta?.priceChange?.h24 ?? bonding?.priceChange24h;
-  const ch1 = meta?.priceChange?.h1;
-  const buys1 = Number(meta?.txns?.h1?.buys || 0);
-  const sells1 = Number(meta?.txns?.h1?.sells || 0);
+  // Fill from pump metadata (bonding) too — a fresh on-curve coin has NO DexScreener pair yet, so
+  // vol/1H/24H/buys/sells all live on the pump object. Reading only `meta` (Dex) is what left these
+  // "0 / na" until Dex indexed ~minutes later. Pump nests them (volume.h24, priceChange.h1, txns.h1),
+  // NOT the flat *24h / *Change24h shape the card used to read.
+  const vol24 = Number(meta?.volume?.h24 || meta?.volume?.h6 || bonding?.volume?.h24 || bonding?.volume24h || 0);
+  const ch24 = meta?.priceChange?.h24 ?? bonding?.priceChange?.h24 ?? bonding?.priceChange24h;
+  const ch1 = meta?.priceChange?.h1 ?? bonding?.priceChange?.h1;
+  const buys1 = Number(meta?.txns?.h1?.buys || bonding?.txns?.h1?.buys || 0);
+  const sells1 = Number(meta?.txns?.h1?.sells || bonding?.txns?.h1?.sells || 0);
   const price = scanFmtPriceSub(pick(Number(bonding?.priceUsd), Number(best?.priceUsd)) || (mc && supply ? mc / supply : 0));
   // ATH (real, from SolanaTracker) — only shown when genuinely at/above the current MC.
   const showAth = ath && Number(ath.mc) > 0 && Number(ath.mc) >= mc * 0.999;
@@ -34068,10 +34072,16 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
 
   // socials: REAL links only — X, website, Telegram, Pump.fun. (Dropped the generic "about";
   // show only what the token actually has, with a chart/Pump link always present.)
+  // Socials: prefer DexScreener, fall back to the creator-entered pump.fun links (bonding). pump has
+  // these the instant a coin launches — long before Dex lists it — so a fresh coin shows real 𝕏/TG/Web
+  // instead of just the search fallback. (This was reading `meta` only → empty socials on new coins.)
+  const twUrl = meta?.twitterUrl || bonding?.twitterUrl;
+  const webUrl = meta?.websiteUrl || bonding?.websiteUrl;
+  const tgUrl = meta?.telegramUrl || bonding?.telegramUrl;
   const socialBits = [];
-  socialBits.push(`<a href="${esc(meta?.twitterUrl || `https://x.com/search?q=${encodeURIComponent(mint)}&f=live`)}">𝕏</a>`);
-  if (meta?.websiteUrl) socialBits.push(`<a href="${esc(meta.websiteUrl)}">🌐 Web</a>`);
-  if (meta?.telegramUrl) socialBits.push(`<a href="${esc(meta.telegramUrl)}">✈️ TG</a>`);
+  socialBits.push(`<a href="${esc(twUrl || `https://x.com/search?q=${encodeURIComponent(mint)}&f=live`)}">𝕏</a>`);
+  if (webUrl) socialBits.push(`<a href="${esc(webUrl)}">🌐 Web</a>`);
+  if (tgUrl) socialBits.push(`<a href="${esc(tgUrl)}">✈️ TG</a>`);
   socialBits.push(`<a href="https://pump.fun/coin/${mint}">🚀 Pump</a>`);
 
   // security (RugCheck full)
