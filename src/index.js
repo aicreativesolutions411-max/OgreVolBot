@@ -31317,14 +31317,21 @@ const airdropperCoinsCache = new Map();
 async function scanAirdropperCoins(devWallet, maxTx = 80, deadlineMs = 11000) {
   if (!solanaPublicKeyLike(devWallet)) return [];
   const cached = airdropperCoinsCache.get(devWallet);
-  if (cached && Date.now() - cached.at < 30 * 60_000) return cached.list;
+  // A real result caches 30 min; an EMPTY one only 90s — so a scan that was cut short by the deadline (or a
+  // slow-RPC blip) doesn't lock a genuine airdropper out of a retry for half an hour.
+  if (cached) { const ttl = (cached.list && cached.list.length) ? 30 * 60_000 : 90_000; if (Date.now() - cached.at < ttl) return cached.list; }
   let pk; try { pk = new PublicKey(devWallet); } catch { return []; }
   const byMint = new Map();   // mint -> { recipients:Set, tokens }
   const withTimeout = (p, ms) => Promise.race([p, new Promise((res) => setTimeout(() => res(null), ms))]);
   const deadline = Date.now() + deadlineMs;
   try {
-    const sigs = await withTimeout(rpcRead("airdropper: sigs", (c) => c.getSignaturesForAddress(pk, { limit: 1000 }), { retries: 0 }).catch(() => []), 4000);
-    if (!Array.isArray(sigs) || !sigs.length) { airdropperCoinsCache.set(devWallet, { at: Date.now(), list: [] }); return []; }
+    // Only the NEWEST ~maxTx sigs are ever used (slice below), so fetch a tight window — a limit:1000 payload
+    // for a busy airdropper wallet routinely blew the 4s timeout → null → false "no airdrop data". limit:150
+    // returns fast; 6.5s gives Alchemy real headroom. And a TIMEOUT here must NOT poison the 30-min cache with
+    // an empty list (that made every retry keep failing) — only cache a genuine scan result, never a fetch miss.
+    const sigs = await withTimeout(rpcRead("airdropper: sigs", (c) => c.getSignaturesForAddress(pk, { limit: Math.max(120, maxTx + 40) }), { retries: 0 }).catch(() => null), 6500);
+    if (!Array.isArray(sigs)) return [];                               // fetch failed/timed out → transient, don't cache
+    if (!sigs.length) { airdropperCoinsCache.set(devWallet, { at: Date.now(), list: [] }); return []; }  // truly no history
     // NEWEST maxTx (getSignaturesForAddress is newest-first): an active airdropper's drops are recent — the
     // oldest-tx window (right for a coin's launch dev) would miss them for a general airdropper wallet.
     const candidates = sigs.slice(0, maxTx).map((s) => s.signature);
