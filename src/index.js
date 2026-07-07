@@ -7544,23 +7544,42 @@ async function handleWebApiRequest(request, response, requestUrl) {
       } catch (e) { sendWebJson(request, response, 200, { ok: false, error: String((e && e.message) || e) }); }
       return;
     }
-    // 💰 AIRDROP MAP (public) — who the dev/airdropper fed + who still diamond-hands the bag. Hard 18s race
-    // (the outbound-transfer scan parses on-chain txs) so it never hangs; a valid token always returns its map.
+    // 💰 AIRDROP MAP (public) — who the dev/airdropper fed + who still diamond-hands the bag. Accepts a COIN CA
+    // OR an AIRDROPPER WALLET (owner pasted a wallet → resolve to the coins it airdropped, map the biggest).
+    // `dev` = optional airdropper override (the coin selector passes it so each coin is scanned from that sender).
     if (request.method === "GET" && pathname === "/api/airdrop") {
       const am = String(requestUrl.searchParams.get("ca") || requestUrl.searchParams.get("mint") || "").trim();
+      const devParam = String(requestUrl.searchParams.get("dev") || "").trim();
       if (!solanaPublicKeyLike(am)) { sendWebJson(request, response, 400, { ok: false, error: "ca required" }); return; }
-      let map;
       try {
-        map = await Promise.race([
-          buildAirdropMap(am),
-          new Promise((_, rej) => setTimeout(() => rej(new Error("__airdrop_timeout__")), 18_000)),
+        const resolved = await Promise.race([
+          (async () => {
+            // 1) explicit airdropper override → scan that sender's sends of the coin
+            if (solanaPublicKeyLike(devParam)) {
+              const m = await buildAirdropMap(am, devParam).catch(() => null);
+              return (m && m.isToken) ? { map: m } : null;
+            }
+            // 2) `am` is a coin → normal coin airdrop map
+            const asToken = await buildAirdropMap(am).catch(() => null);
+            if (asToken && asToken.isToken) return { map: asToken };
+            // 3) `am` is a WALLET → find the coins it airdropped, map the biggest (scanned from this wallet)
+            const coins = await scanAirdropperCoins(am).catch(() => []);
+            if (Array.isArray(coins) && coins.length) {
+              const m = await buildAirdropMap(coins[0].mint, am).catch(() => null);
+              if (m && m.isToken) { m.airdropperCoins = coins; m.fromWallet = am; return { map: m }; }
+            }
+            return null;
+          })(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("__airdrop_timeout__")), 24_000)),
         ]);
+        if (!resolved || !resolved.map) {
+          sendWebJson(request, response, 200, { ok: false, error: "no airdrop data — paste a coin CA, or an airdropper wallet that has sent a coin to holders" }); return;
+        }
+        sendWebJson(request, response, 200, { ok: true, map: resolved.map });
       } catch (e) {
         const slow = /__airdrop_timeout__/.test(String(e && e.message));
-        sendWebJson(request, response, 200, { ok: false, error: slow ? "the chain is slow right now — try again" : String((e && e.message) || e) }); return;
+        sendWebJson(request, response, 200, { ok: false, error: slow ? "still tracing that wallet's drops — tap again in a few seconds" : String((e && e.message) || e) });
       }
-      if (!map || !map.isToken) { sendWebJson(request, response, 200, { ok: false, error: "no airdrop data — paste a coin CA" }); return; }
-      sendWebJson(request, response, 200, { ok: true, map });
       return;
     }
 
@@ -31082,8 +31101,11 @@ async function scanAirdropRecipients(devWallet, mint, poolExclude = "", maxTx = 
   } catch { /* partial is fine */ }
   return { recips, bagsDropped };
 }
-async function buildAirdropMap(mint) {
-  const cached = airdropMapCache.get(mint);
+async function buildAirdropMap(mint, devOverride = "") {
+  // devOverride = scan THIS wallet's outbound sends of the coin (used when the user pastes an AIRDROPPER
+  // WALLET, not the coin's creator). Cache is keyed per airdropper so a coin viewed from two senders doesn't collide.
+  const cacheKey = solanaPublicKeyLike(devOverride) ? `${mint}|${devOverride}` : mint;
+  const cached = airdropMapCache.get(cacheKey);
   if (cached && Date.now() - cached.at < AIRDROP_MAP_TTL) return cached.v;
   const _t0 = Date.now();
   // PARALLEL gather — every independent read fires AT ONCE (~2s) instead of the old chain kolIdx → coin-info
@@ -31112,28 +31134,31 @@ async function buildAirdropMap(mint) {
   if (!(supplyUi > 0)) { const raw = firstMeaningfulNumber(pumpMeta?.totalSupply, dexMeta?.totalSupply) || 0; supplyUi = raw > 1e12 ? raw / 1e6 : raw; }
   if (!(supplyUi > 0)) supplyUi = 1e9;
   const pricePerToken = mc > 0 && supplyUi > 0 ? mc / supplyUi : 0;
-  // Airdropper = the creator/dev wallet. Pump meta first, else the mint's first-tx signer (fetched in parallel above).
-  let dev = String(pumpMeta?.creator || pumpMeta?.creatorWallet || pumpMeta?.dev || pumpMeta?.deployer || "").trim();
+  // Airdropper = the pasted wallet (devOverride) if given, else the creator/dev wallet (pump meta → mint's first-tx signer).
+  let dev = solanaPublicKeyLike(devOverride) ? String(devOverride).trim()
+    : String(pumpMeta?.creator || pumpMeta?.creatorWallet || pumpMeta?.dev || pumpMeta?.deployer || "").trim();
   if (!solanaPublicKeyLike(dev)) dev = String(devInf?.likelyDevWallet || "").trim();
   const poolAddr = String(best?.pairAddress || best?.address || "").trim();
   // FAST PATH: render from holders (or a prior background scan) NOW — don't block on the dev-transfer scan.
   // getParsedTransaction × N is too slow on our RPC to await (every request was burning ~8s finding nothing).
   const coinLogo = firstString(best?.info?.imageUrl, dexMeta?.imageUrl, dexMeta?.info?.imageUrl, pumpMeta?.image, pumpMeta?.imageUrl, pumpMeta?.image_uri, pumpMeta?.uri);
   const args = { mint, sym, mc, supplyUi, pricePerToken, dev, idx, holderRows, coinLogo };
-  const prior = airdropScanCache.get(mint);
+  const prior = airdropScanCache.get(cacheKey);
   const haveScan = prior && Date.now() - prior.at < 30 * 60_000;
   const v = await buildAirdropView({ ...args, recips: haveScan ? prior.recips : new Map(), bagsDropped: haveScan ? prior.bagsDropped : 0 });
-  airdropMapCache.set(mint, { at: Date.now(), v });
-  if (airdropMapCache.size > 150) airdropMapCache.delete(airdropMapCache.keys().next().value);
-  try { console.log(`[airdrop] ${sym || shortMint(mint)} ${Date.now() - _t0}ms · ${v.approx ? "holders" : "dev-sends"} · fed=${(v.stats.find((s) => s.label === "WALLETS FED") || {}).value} · scan=${haveScan ? prior.recips.size : "bg"}`); } catch { /* best-effort */ }
+  if (solanaPublicKeyLike(devOverride)) v.fromWallet = dev;   // flag: this map was reached from a pasted airdropper wallet
+  airdropMapCache.set(cacheKey, { at: Date.now(), v });
+  if (airdropMapCache.size > 200) airdropMapCache.delete(airdropMapCache.keys().next().value);
+  try { console.log(`[airdrop] ${sym || shortMint(mint)} ${Date.now() - _t0}ms · ${v.approx ? "holders" : "dev-sends"} · fed=${(v.stats.find((s) => s.label === "WALLETS FED") || {}).value} · scan=${haveScan ? prior.recips.size : "bg"}${devOverride ? " · from-wallet" : ""}`); } catch { /* best-effort */ }
   // BACKGROUND dev-transfer scan (fire-and-forget, once per mint / 30min). On success it stashes the real
   // recipients so the NEXT request or the page's 45s auto-refresh upgrades to "who the dev actually fed".
   if (solanaPublicKeyLike(dev) && !haveScan && airdropBudgetOk()) {
     scanAirdropRecipients(dev, mint, poolAddr, 40, 12000).then(async (r) => {
-      airdropScanCache.set(mint, { at: Date.now(), recips: r.recips, bagsDropped: r.bagsDropped });
+      airdropScanCache.set(cacheKey, { at: Date.now(), recips: r.recips, bagsDropped: r.bagsDropped });
       if (r.recips.size >= 5) {
         const enhanced = await buildAirdropView({ ...args, recips: r.recips, bagsDropped: r.bagsDropped });
-        airdropMapCache.set(mint, { at: Date.now(), v: enhanced });
+        if (solanaPublicKeyLike(devOverride)) enhanced.fromWallet = dev;
+        airdropMapCache.set(cacheKey, { at: Date.now(), v: enhanced });
         try { console.log(`[airdrop] ${sym || shortMint(mint)} bg-scan → ${r.recips.size} recipients (upgraded to dev-sends)`); } catch { /* */ }
       }
     }).catch(() => {});
@@ -31245,7 +31270,9 @@ async function scanAirdropperCoins(devWallet, maxTx = 80, deadlineMs = 11000) {
   try {
     const sigs = await withTimeout(rpcRead("airdropper: sigs", (c) => c.getSignaturesForAddress(pk, { limit: 1000 }), { retries: 0 }).catch(() => []), 4000);
     if (!Array.isArray(sigs) || !sigs.length) { airdropperCoinsCache.set(devWallet, { at: Date.now(), list: [] }); return []; }
-    const candidates = sigs.slice(-maxTx).map((s) => s.signature).reverse();
+    // NEWEST maxTx (getSignaturesForAddress is newest-first): an active airdropper's drops are recent — the
+    // oldest-tx window (right for a coin's launch dev) would miss them for a general airdropper wallet.
+    const candidates = sigs.slice(0, maxTx).map((s) => s.signature);
     const BATCH = 10;
     for (let i = 0; i < candidates.length; i += BATCH) {
       if (Date.now() > deadline || !airdropBudgetOk()) break;

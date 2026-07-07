@@ -88,7 +88,7 @@
 <div id="app">
   <header>
     <div class="brand"><span class="dot"></span><b>Slime</b><span>Drop</span></div>
-    <form id="f"><input id="q" placeholder="Paste a coin CA to map its airdrop…" autocomplete="off" spellcheck="false"/><button type="submit">Map drop</button></form>
+    <form id="f"><input id="q" placeholder="Paste a coin CA — or an airdropper wallet…" autocomplete="off" spellcheck="false"/><button type="submit">Map drop</button></form>
   </header>
   <div id="crumbs"></div>
   <div id="coinsel"></div>
@@ -117,7 +117,7 @@ const BAGPAL=[['#7fb8e6','#3a6ea5'],['#e79cc4','#a8477e'],['#b79ae0','#6f4aa0'],
 const BAG="M20 4.5c-2.5 0-4.2 1.5-4.2 3.2 0 1 .55 1.9 1.45 2.5l-.9 1.6C12.4 14.1 8 19.7 8 26.1 8 32.6 13.2 36 20 36s12-3.4 12-9.9c0-6.4-4.4-12-8.35-14.3l-.9-1.6c.9-.6 1.45-1.5 1.45-2.5 0-1.7-1.7-3.2-4.2-3.2z";
 const BAGTIE="M15.2 9.6q4.8 2 9.6 0";
 const stage=document.getElementById('stage'),tip=document.getElementById('tip'),overlay=document.getElementById('overlay');
-let crumbs=[],refreshTimer=null,sim=null,zoomB=null;
+let crumbs=[],refreshTimer=null,sim=null,zoomB=null,curAirdropper='';
 function short(a){return a&&a.length>10?a.slice(0,4)+'…'+a.slice(-4):a}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 function fmt(n){n=+n||0;if(n>=1e9)return(n/1e9).toFixed(1)+'B';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(1)+'K';return Math.round(n)}
@@ -125,28 +125,31 @@ function hash(s){let h=0;s=String(s||'');for(let i=0;i<s.length;i++)h=(h*31+s.ch
 function palOf(w){return BAGPAL[hash(w)%BAGPAL.length]}
 
 // _silent = a background auto-refresh: never flash the spinner and never replace a working map with an error.
-async function loadDrop(ca,_retry,_silent){
+// `ca` can be a COIN or an AIRDROPPER WALLET (backend resolves a wallet → its biggest airdropped coin).
+// `dev` = airdropper override (the coin selector passes it so each coin stays scanned from that sender).
+async function loadDrop(ca,_retry,_silent,dev){
   if(!ca)return; if(!_silent)showLoading();
   let j=null;
   try{
-    const ctl=('AbortController'in window)?new AbortController():null; const to=ctl?setTimeout(()=>ctl.abort(),20000):0;
-    const res=await fetch(API_BASE+'/api/airdrop?ca='+encodeURIComponent(ca),ctl?{signal:ctl.signal}:{}); if(to)clearTimeout(to);
+    const ctl=('AbortController'in window)?new AbortController():null; const to=ctl?setTimeout(()=>ctl.abort(),26000):0;
+    const res=await fetch(API_BASE+'/api/airdrop?ca='+encodeURIComponent(ca)+(dev?'&dev='+encodeURIComponent(dev):''),ctl?{signal:ctl.signal}:{}); if(to)clearTimeout(to);
     j=await res.json();
   }catch(e){
     // NETWORK/fetch problem (mobile drop, abort) — retry once, then (only on the first load) surface it.
-    if(!_retry){await new Promise(r=>setTimeout(r,1200));return loadDrop(ca,true,_silent)}
-    if(!_silent)showError('the network dropped — tap Start over to retry'); scheduleRefresh(ca); return;
+    if(!_retry){await new Promise(r=>setTimeout(r,1200));return loadDrop(ca,true,_silent,dev)}
+    if(!_silent)showError('the network dropped — tap Start over to retry'); scheduleRefresh(ca,dev); return;
   }
   if(!j||!j.ok||!j.map){
-    if(!_retry){await new Promise(r=>setTimeout(r,1200));return loadDrop(ca,true,_silent)}
-    if(!_silent)showError((j&&j.error)||'no airdrop data yet'); scheduleRefresh(ca); return;
+    if(!_retry){await new Promise(r=>setTimeout(r,1200));return loadDrop(ca,true,_silent,dev)}
+    if(!_silent)showError((j&&j.error)||'no airdrop data yet'); scheduleRefresh(ca,dev); return;
   }
+  curAirdropper=j.map.fromWallet||dev||'';   // wallet-airdropper mode → coin selector + coin-switch stay on this sender
   // RENDER is separate from the fetch: a draw error (e.g. D3 missing) must NOT be reported as "chain is slow".
-  try{ render(j.map); }catch(e){ if(!_silent)showError('couldn’t draw the map (display error) — tap Start over'); try{console.error(e)}catch(_){} scheduleRefresh(ca); return; }
-  history.replaceState(null,'','/airdrop?ca='+ca);
-  scheduleRefresh(ca);
+  try{ render(j.map); }catch(e){ if(!_silent)showError('couldn’t draw the map (display error) — tap Start over'); try{console.error(e)}catch(_){} scheduleRefresh(ca,dev); return; }
+  history.replaceState(null,'','/airdrop?ca='+(j.map.mint||ca)+(curAirdropper?'&dev='+curAirdropper:''));
+  scheduleRefresh(j.map.mint||ca,curAirdropper);
 }
-function scheduleRefresh(ca){ if(refreshTimer)clearTimeout(refreshTimer); refreshTimer=setTimeout(()=>loadDrop(ca,false,true),45000); }
+function scheduleRefresh(ca,dev){ if(refreshTimer)clearTimeout(refreshTimer); refreshTimer=setTimeout(()=>loadDrop(ca,false,true,dev),45000); }
 function showLoading(){overlay.className='';overlay.innerHTML='<div class="spin"></div><p>Tracing the drop…</p>'}
 function showError(m){overlay.className='';overlay.innerHTML='<h1>🫥</h1><p>'+esc(m)+'</p><button class="ghost" onclick="location.href=\'/airdrop\'">Start over</button>'}
 function drawCrumbs(map){document.getElementById('crumbs').innerHTML='💰 <b>'+esc(map.subject)+'</b> airdrop map'+(map.approx?' <span style="opacity:.7">· distribution view</span>':'');}
@@ -167,19 +170,26 @@ function drawSide(map){
   [...kl.querySelectorAll('.krow')].forEach(r=>r.onclick=()=>{const t=r.dataset.t;if(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t))openDrill(t)});
 }
 function drawFoot(map){const L=[];if(map.mint){L.push('<a class="pill" href="https://www.slimewire.org/t?ca='+map.mint+'">⚡ Trade $'+esc(map.subject.replace(/^\$/,''))+'</a>');L.push('<a class="pill" href="/map?ca='+map.mint+'">🗺️ Holder map</a>')}document.getElementById('foot').innerHTML=L.join('')}
-// 🪂 Coin selector — the airdropper's other coins (progressive fetch; don't refetch on the 45s refresh).
-let coinSelFor=null;
-function loadCoinSel(mint){
-  if(!mint||coinSelFor===mint)return;
-  fetch(API_BASE+'/api/airdrop/coins?ca='+encodeURIComponent(mint)).then(r=>r.json()).then(j=>{
-    if(!j||!j.ok||!j.coins||!j.coins.length){document.getElementById('coinsel').innerHTML='';return}
-    coinSelFor=mint; drawCoinSel(mint,j.coins);
+// 🪂 Coin selector — the airdropper's coins. When we came from a wallet it lists that WALLET's drops (by dev);
+// otherwise the coin's dev's coins. Same-sender re-highlights instantly (no refetch on coin-switch/refresh).
+let coinSelKey='',coinSelCoins=[];
+function loadCoinSel(map){
+  const mint=map.mint; if(!mint)return;
+  const key=curAirdropper||mint;
+  if(map.airdropperCoins&&map.airdropperCoins.length){coinSelKey=key;coinSelCoins=map.airdropperCoins;drawCoinSel(mint,coinSelCoins);return}
+  if(coinSelKey===key){drawCoinSel(mint,coinSelCoins);return}   // same sender → just move the highlight
+  const url=curAirdropper?('/api/airdrop/coins?dev='+encodeURIComponent(curAirdropper)):('/api/airdrop/coins?ca='+encodeURIComponent(mint));
+  fetch(API_BASE+url).then(r=>r.json()).then(j=>{
+    if(!j||!j.ok||!j.coins||!j.coins.length){document.getElementById('coinsel').innerHTML='';coinSelKey=key;coinSelCoins=[];return}
+    coinSelKey=key;coinSelCoins=j.coins;drawCoinSel(mint,j.coins);
   }).catch(()=>{});
 }
 function drawCoinSel(cur,coins){
   const el=document.getElementById('coinsel');
-  el.innerHTML='<span class="cl">🪂 airdropper\'s coins</span>'+coins.map(c=>'<span class="cp'+(c.mint===cur?' on':'')+'" data-m="'+esc(c.mint)+'">'+(c.image?'<img src="'+esc(c.image)+'" onerror="this.remove()"/>':'')+'$'+esc(c.sym||short(c.mint))+' <span style="opacity:.65;font-weight:700">'+(c.recipients||0)+'</span></span>').join('');
-  [...el.querySelectorAll('.cp')].forEach(p=>p.onclick=()=>{const m=p.dataset.m;if(m&&m!==cur){coinSelFor=null;loadDrop(m)}});
+  if(!coins||!coins.length){el.innerHTML='';return}
+  const lbl=curAirdropper?('🪂 '+short(curAirdropper)+' airdropped'):'🪂 airdropper\'s coins';
+  el.innerHTML='<span class="cl">'+esc(lbl)+'</span>'+coins.map(c=>'<span class="cp'+(c.mint===cur?' on':'')+'" data-m="'+esc(c.mint)+'">'+(c.image?'<img src="'+esc(c.image)+'" onerror="this.remove()"/>':'')+'$'+esc(c.sym||short(c.mint))+' <span style="opacity:.65;font-weight:700">'+(c.recipients||0)+'</span></span>').join('');
+  [...el.querySelectorAll('.cp')].forEach(p=>p.onclick=()=>{const m=p.dataset.m;if(m&&m!==cur){loadDrop(m,false,false,curAirdropper||undefined)}});
 }
 // 💼 Drill-in — tap a recipient → the other coins that wallet holds, value high→low, with a coin filter.
 function openDrill(w){
@@ -204,7 +214,7 @@ function renderDrill(w,toks){
 function closeDrill(){document.getElementById('drill').className=''}
 
 function render(map){
-  overlay.className='hide'; drawCrumbs(map); drawStats(map); drawSide(map); drawFoot(map); loadCoinSel(map.mint);
+  overlay.className='hide'; drawCrumbs(map); drawStats(map); drawSide(map); drawFoot(map); loadCoinSel(map);
   if(sim)sim.stop();
   const old=stage.querySelector('svg'); if(old)old.remove();
   const W=stage.clientWidth,H=stage.clientHeight;
@@ -264,10 +274,10 @@ function render(map){
     });
 }
 
-document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const v=document.getElementById('q').value.trim().replace(/^\$/,'');if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v)){showError('paste a valid coin CA');return}loadDrop(v)});
-window.addEventListener('resize',()=>{const u=new URL(location.href);const ca=u.searchParams.get('ca');if(ca)loadDrop(ca,true)});
+document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const v=document.getElementById('q').value.trim().replace(/^\$/,'');if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v)){showError('paste a valid coin CA or airdropper wallet');return}curAirdropper='';loadDrop(v)});
+window.addEventListener('resize',()=>{const u=new URL(location.href);const ca=u.searchParams.get('ca');if(ca)loadDrop(ca,true,false,u.searchParams.get('dev')||undefined)});
 document.getElementById('drill').addEventListener('click',e=>{if(e.target.id==='drill')closeDrill()});
-(function init(){const u=new URL(location.href);const ca=u.searchParams.get('ca')||u.searchParams.get('mint');if(ca)loadDrop(ca)})();
+(function init(){const u=new URL(location.href);const ca=u.searchParams.get('ca')||u.searchParams.get('mint');if(ca)loadDrop(ca,false,false,u.searchParams.get('dev')||undefined)})();
 </script>
 </body>
 </html>
