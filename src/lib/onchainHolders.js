@@ -160,42 +160,96 @@ export async function computeOnchainDistribution({ mint, creatorWallet = "", rpc
 }
 
 // BIGGER holder list for the bubble MAP / airdrop (up to `limit`, default 150). getTokenLargestAccounts only
-// returns the top 20; this enumerates ALL token accounts for the mint via getProgramAccounts (owner+amount via
-// a 40-byte dataSlice so the payload stays light), sorts by balance, classifies the top owners to drop
-// pools/curve/burn (they're always near the top), and returns real holders with %. HEAVIER than the top-20 path
-// (one gPA can be large on a mega-token), so the CALLER must budget-cap + timeout it. Returns [] on any failure.
-export async function computeManyHolders({ mint, rpcRead, limit = 150, poolAddr = "" } = {}) {
-  if (!mint || typeof rpcRead !== "function") return [];
+// returns the top 20; this enumerates ALL token accounts for the mint via getProgramAccounts.
+//
+// MEMORY SAFETY (this used to OOM-crash the whole service): web3.js's Connection.getProgramAccounts
+// deserializes EVERY matching account into JS objects, so a busy coin (tens of thousands of holders) blew the
+// Node heap — "FATAL ERROR: Reached heap limit". Instead we hit the JSON-RPC endpoint with a RAW STREAMED
+// fetch and a HARD BYTE CAP: the moment the response exceeds `maxBytes` we abort and return [], so a mega-holder
+// token safely falls back to the top-20 path instead of taking the process down. We parse owner+amount from the
+// 40-byte dataSlice ourselves, defer base58 encoding until AFTER sort+slice (only the top ~165, never all N),
+// and allow only ONE heavy read at a time. Returns [] on any failure (caller then uses the top-20 fallback).
+let _manyHoldersInFlight = 0;
+export async function computeManyHolders({ mint, rpcRead, rpcUrl = "", limit = 150, poolAddr = "", maxBytes = 3_000_000 } = {}) {
+  if (!mint || !rpcUrl) return [];
   let mintPk; try { mintPk = new PublicKey(mint); } catch { return []; }
-  const [supplyRes, accts] = await Promise.all([
-    rpcRead("many holders: supply", (c) => c.getTokenSupply(mintPk, "confirmed")).catch(() => null),
-    rpcRead("many holders: gPA", (c) => c.getProgramAccounts(new PublicKey(TOKEN_PROGRAM), {
-      commitment: "confirmed",
-      dataSlice: { offset: 32, length: 40 },                       // SPL token account: owner(32) + amount(u64,8)
-      filters: [{ dataSize: 165 }, { memcmp: { offset: 0, bytes: mint } }],
-    })).catch(() => null),
-  ]);
+  // Supply first (light, cheap) — no point streaming the big list if we can't compute percentages.
+  const supplyRes = typeof rpcRead === "function"
+    ? await rpcRead("many holders: supply", (c) => c.getTokenSupply(mintPk, "confirmed")).catch(() => null)
+    : null;
   const rawSupply = Number(supplyRes?.value?.amount || 0);
-  if (!Array.isArray(accts) || !accts.length || !(rawSupply > 0)) return [];
+  if (!(rawSupply > 0)) return [];
+
+  if (_manyHoldersInFlight >= 1) return [];   // one heavy read at a time — protects the heap from concurrent bursts
+  _manyHoldersInFlight++;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => { try { ctl.abort(); } catch { /* noop */ } }, 8_000);
+  let body = null;
+  try {
+    const res = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      signal: ctl.signal,
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "getProgramAccounts",
+        params: [TOKEN_PROGRAM, {
+          encoding: "base64", commitment: "confirmed",
+          dataSlice: { offset: 32, length: 40 },                   // SPL token account: owner(32) + amount(u64,8)
+          filters: [{ dataSize: 165 }, { memcmp: { offset: 0, bytes: mint } }],
+        }],
+      }),
+    });
+    if (!res.ok || !res.body) return [];
+    const reader = res.body.getReader();
+    const chunks = [];
+    let total = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > maxBytes) {                                       // too many holders → bail, fall back to top-20
+        try { await reader.cancel(); } catch { /* noop */ }
+        try { ctl.abort(); } catch { /* noop */ }
+        return [];
+      }
+      chunks.push(value);
+    }
+    body = Buffer.concat(chunks);
+  } catch { return []; }
+  finally { clearTimeout(timer); _manyHoldersInFlight--; }
+
+  let accts;
+  try { accts = JSON.parse(body.toString("utf8"))?.result; } catch { return []; }
+  if (!Array.isArray(accts) || !accts.length) return [];
+
   const rows = [];
   for (const a of accts) {
-    const buf = a?.account?.data; if (!buf || buf.length < 40) continue;
-    let owner, amt;
-    try { owner = new PublicKey(buf.subarray(0, 32)).toBase58(); amt = Number(buf.readBigUInt64LE(32)); } catch { continue; }
-    if (amt > 0 && owner) rows.push({ owner, amt });
+    const d = a?.account?.data;
+    const b64 = Array.isArray(d) ? d[0] : d;
+    if (!b64) continue;
+    let buf; try { buf = Buffer.from(b64, "base64"); } catch { continue; }
+    if (buf.length < 40) continue;
+    const amt = Number(buf.readBigUInt64LE(32));
+    if (amt > 0) rows.push({ ownerBuf: buf.subarray(0, 32), amt });  // defer base58 until after sort/slice
   }
+  if (!rows.length) return [];
   rows.sort((a, b) => b.amt - a.amt);
-  const head = rows.slice(0, limit + 15);
+  const head = rows.slice(0, limit + 15)
+    .map((r) => { let owner = ""; try { owner = new PublicKey(r.ownerBuf).toBase58(); } catch { /* skip */ } return { owner, amt: r.amt }; })
+    .filter((r) => r.owner);
+
   const exclude = new Set([poolAddr].filter(Boolean));
-  try {
-    const probe = head.slice(0, Math.min(24, head.length)).map((r) => new PublicKey(r.owner));
-    const infos = await rpcRead("many holders: classify", (c) => c.getMultipleAccountsInfo(probe)).catch(() => null);
-    (infos || []).forEach((info, i) => {
-      const prog = info?.owner?.toBase58?.() || (info?.owner ? String(info.owner) : "");
-      if (prog && POOL_OWNER_PROGRAMS.has(prog)) exclude.add(head[i].owner);
-      if (BURN_ADDRESSES.has(head[i].owner)) exclude.add(head[i].owner);
-    });
-  } catch { /* worst case a pool shows as one bubble */ }
+  if (typeof rpcRead === "function") {
+    try {
+      const probe = head.slice(0, Math.min(24, head.length)).map((r) => new PublicKey(r.owner));
+      const infos = await rpcRead("many holders: classify", (c) => c.getMultipleAccountsInfo(probe)).catch(() => null);
+      (infos || []).forEach((info, i) => {
+        const prog = info?.owner?.toBase58?.() || (info?.owner ? String(info.owner) : "");
+        if (prog && POOL_OWNER_PROGRAMS.has(prog)) exclude.add(head[i].owner);
+        if (BURN_ADDRESSES.has(head[i].owner)) exclude.add(head[i].owner);
+      });
+    } catch { /* worst case a pool shows as one bubble */ }
+  }
   return head.filter((r) => !exclude.has(r.owner)).slice(0, limit)
     .map((r) => ({ wallet: r.owner, pct: round1((r.amt / rawSupply) * 100) || 0 }));
 }

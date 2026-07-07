@@ -30843,12 +30843,14 @@ async function fetchTokenHolderRows(mint) {
       if (rows.length) return rows.sort((a, b) => b.pct - a.pct).slice(0, 150);
     } catch { /* fall through to on-chain */ }
   }
-  // TOP 150 real wallets via getProgramAccounts (getTokenLargestAccounts only gives 20). Budget-capped + hard
-  // 8s timeout so it can't hang the map or blow the RPC quota; only trusted when it clearly beats the top-20.
-  if (manyHoldersBudgetOk()) {
+  // TOP 150 real wallets — memory-safe streamed getProgramAccounts (raw fetch + hard byte cap inside
+  // computeManyHolders; a mega-holder coin aborts and falls back to the top-20 below instead of OOM-crashing
+  // the process, which it did once). ON by default; set MAP_MANY_HOLDERS_ENABLED=false on Render for an
+  // instant kill-switch. Budget-capped + 8s timeout so a burst of map loads can't run away with the quota.
+  if (String(process.env.MAP_MANY_HOLDERS_ENABLED || "true").toLowerCase() !== "false" && manyHoldersBudgetOk()) {
     manyHoldersUsedToday += 1;
     const many = await Promise.race([
-      computeManyHolders({ mint, rpcRead, limit: 150 }).catch(() => []),
+      computeManyHolders({ mint, rpcRead, rpcUrl: CONFIG.readRpcUrl || CONFIG.rpcUrl, limit: 150 }).catch(() => []),
       new Promise((resolve) => setTimeout(() => resolve(null), 8_000)),
     ]);
     if (Array.isArray(many) && many.length >= 20) return many;
