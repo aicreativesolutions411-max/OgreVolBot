@@ -221,7 +221,7 @@ export async function xSearchMentions(count = 20, { includeSearch = true } = {})
   // to this account's mentions feed, but user_mentions carries the OLD spelling — so we must recognize it too
   // or every old-handle tag is dropped (live logs: tweets mention "slimewiresol", handle is "slimewirebot",
   // → 0 uniq). Configurable via X_HANDLE_ALIASES (comma/space list); defaults to the known former handle.
-  const aliases = String(process.env.X_HANDLE_ALIASES || "slimewiresol").toLowerCase()
+  const aliases = String(process.env.X_HANDLE_ALIASES || "slimewiresol,slimewiredbot,slimewireorg").toLowerCase()
     .split(/[,\s]+/).map((h) => h.replace(/^@+/, "").replace(/[^a-z0-9_]/g, "")).filter(Boolean);
   const handles = [...new Set([resolved, envH, ...aliases].filter(Boolean))];
   const tagRe = new RegExp("@(" + handles.map((h) => h.replace(/[^a-z0-9_]/g, "")).join("|") + ")\\b", "i");
@@ -289,7 +289,7 @@ export async function xGetTweet(id) {
   try {
     const j = await gql("GET", "TweetResultByRestId", { variables: { tweetId: String(id), withCommunity: false, includePromotedContent: false, withVoice: false }, features: READ_FEATURES });
     const t = parseTweetResult(j?.data?.tweetResult?.result);
-    return t ? { id: t.id, text: t.text, urls: t.urls, conversationId: t.conversationId } : null;
+    return t || null;
   } catch { return null; }
 }
 

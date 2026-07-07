@@ -1839,6 +1839,8 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(xc, /notificationMentions/);
   assert.match(functionBody(xc, "xSearchMentions"), /byId/);            // merge-dedupe both sources
   assert.match(xc, /-filter:retweets/);                        // reads OUR mentions
+  assert.match(xc, /slimewiredbot/);                            // Telegram-style @SlimeWiredBot tags are searched too
+  assert.match(functionBody(xc, "xGetTweet"), /return t \|\| null/); // keep full parent/root fields for thread resolution
   const xcard = fs.readFileSync(new URL("../src/lib/xCard.js", import.meta.url), "utf8");
   assert.match(xcard, /export async function renderXScanCard/);
   // server: DARK unless X_REPLY_ENABLED + cookies; assist (default) vs auto; throttle; idempotent; owner-gated
@@ -1894,6 +1896,10 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.doesNotMatch(functionBody(serverSource, "buildXChartReply"), /links\.site/);
   assert.doesNotMatch(functionBody(serverSource, "buildXRugReply"), /links\.site/);
   assert.match(functionBody(serverSource, "xReplyPollTick"), /buildXReply\(target, intent, m\.id\)/); // tweet id seeds variation (target = coin CA or bare wallet for maps)
+  assert.match(functionBody(serverSource, "xReplyPollTick"), /buildXScanReply\(target, m\.id\)/); // slow maps fall back to scan instead of no-post
+  assert.doesNotMatch(functionBody(serverSource, "xReplyPollTick"), /if \(reply === "__timeout__"\) \{ state\.seen/); // timeout is retryable, not burned forever
+  assert.match(functionBody(serverSource, "buildXScanReply"), /scanBestVolumeWindow\(\.\.\.activitySources\)/);
+  assert.match(functionBody(serverSource, "buildXMapReply"), /Liq \$\{stat\("LIQUIDITY"\)\}/);
   // card renderer varies EVERY render (rotating jittered bg + unique grain + mirrored layouts + rotating text)
   assert.match(xcard, /function makeRng/);                             // seeded PRNG drives all choices
   assert.match(xcard, /feTurbulence/);                                 // unique per-card film grain (beats image dedup)

@@ -31745,13 +31745,15 @@ async function buildXMapReply(target, variant, mode = "bags") {
     if (drop && drop.png) media.push(drop.png);
     else console.log(`[xreply]   airdrop map skipped (no nodes) mint=${map.mint}`);
   }
-  // Trench-degen read: MC + concentration verdict (top10) + KOLs aped + age. (Server-side liquidity/1H are
-  // often blank — DexScreener rate-limits our IP — so we lead with signals that are always reliable.)
+  // Trench-degen read: MC + liquidity + 1H + concentration + KOLs. These stats already use Dex/Gecko/Pump
+  // fallbacks in buildTokenHolderMap, so keep the public reply informative instead of hiding market fields.
   const t10n = parseInt(String(stat("TOP 10") || "").replace(/[^0-9]/g, ""), 10) || 0;
   const conc = t10n >= 70 ? `top10 ${t10n}% 🔴` : t10n >= 45 ? `top10 ${t10n}% 🟡` : t10n > 0 ? `top10 ${t10n}% 🟢` : "";
   const hooks = ["who's REALLY holding this 👀", "the whole board — KOLs, whales & clusters", "aped or airdropped? see for yourself 🧪", "peep the bags before you send it 🐸", "every wallet, unfiltered 🗺️"];
   const hook = hooks[Math.abs((Number(String(variant).slice(-4)) || 0)) % hooks.length];
   const parts = [`MC ${stat("MARKET CAP")}`];
+  if (stat("LIQUIDITY") && stat("LIQUIDITY") !== "—") parts.push(`Liq ${stat("LIQUIDITY")}`);
+  if (stat("1H") && stat("1H") !== "—") parts.push(`1H ${stat("1H")}`);
   if (conc) parts.push(conc);
   if (kolsIn > 0) parts.push(`${kolsIn} KOL${kolsIn > 1 ? "s" : ""} in ⭐`);
   if (stat("AGE") && stat("AGE") !== "—") parts.push(`${stat("AGE")} old`);
@@ -32061,8 +32063,12 @@ async function buildXScanReply(mint, variant) {
   const { meta, bonding, best, shield, rug, onchain } = scan;
   const symbol = String(meta?.symbol || bonding?.symbol || onchain?.symbol || "").slice(0, 12);
   const name = String(meta?.name || bonding?.name || onchain?.name || "").slice(0, 40);
-  const mc = Number(meta?.marketCap || bonding?.usd_market_cap || bonding?.marketCap || 0);
-  const liq = Number(best?.liquidity?.usd || meta?.liquidityUsd || bonding?.liquidityUsd || bonding?.virtual_sol_reserves && (Number(bonding.virtual_sol_reserves) / 1e9) * (Number(solUsdPriceCache?.value) || 0) || 0);
+  const activitySources = [meta, bonding, best].filter(Boolean);
+  const onCurve = Boolean(bonding && !bonding.complete && !bonding.graduated && !(meta && meta.marketCap));
+  const pick = (pumpVal, dexVal) => onCurve ? firstMeaningfulNumber(pumpVal, dexVal) : firstMeaningfulNumber(dexVal, pumpVal);
+  const pumpVirtualLiq = bonding?.virtual_sol_reserves ? (Number(bonding.virtual_sol_reserves) / 1e9) * (Number(solUsdPriceCache?.value) || 0) : 0;
+  const mc = pick(firstMeaningfulNumber(bonding?.marketCap, bonding?.usd_market_cap), firstMeaningfulNumber(meta?.marketCap, meta?.fdv, best?.marketCap, best?.fdv)) || 0;
+  const liq = pick(firstMeaningfulNumber(bonding?.liquidityUsd, pumpVirtualLiq), firstMeaningfulNumber(best?.liquidity?.usd, meta?.liquidityUsd)) || 0;
   if (!symbol && !(mc > 0)) return null;
   const createdAt = Number(best?.pairCreatedAt || 0) || (Number(bonding?.created_timestamp || 0) * (String(bonding?.created_timestamp || "").length <= 10 ? 1000 : 1));
   const ageLabel = createdAt > 0 ? xAgeLabel(Date.now() - createdAt) : "new";
@@ -32070,14 +32076,16 @@ async function buildXScanReply(mint, variant) {
   const { verdict, tone } = xVerdict(shield, rug, liq, mc, variant || mint);
   const mcLabel = mc > 0 ? scanFmtMoney(mc) : "—";
   const liqLabel = liq > 0 ? scanFmtMoney(liq) : "—";
-  const ch1 = Number(meta?.priceChange?.h1);
+  const ch1 = scanBestPriceChange("h1", ...activitySources);
   const changeLabel = Number.isFinite(ch1) ? `${ch1 >= 0 ? "+" : ""}${ch1.toFixed(1)}%` : "";
   const changeTone = Number.isFinite(ch1) ? (ch1 >= 0 ? "up" : "down") : "";
+  const vol = scanBestVolumeWindow(...activitySources);
+  const volLabel = vol.value > 0 ? `Vol ${scanFmtMoney(vol.value)}${vol.label ? " " + vol.label : ""}` : null;
   const v = makeXVary(variant || symbol || mint);
   const toneEmoji = tone === "danger" ? v.danger : tone === "warn" ? v.warn : v.ok;
   const text = [
     `$${symbol || "coin"}${name ? v.sep + name : ""}`,
-    [`MC ${mcLabel}`, `Liq ${liqLabel}`, `Age ${ageLabel}`, changeLabel ? `1H ${changeLabel}` : null, rail].filter(Boolean).join(v.sep),
+    [`MC ${mcLabel}`, `Liq ${liqLabel}`, volLabel, `Age ${ageLabel}`, changeLabel ? `1H ${changeLabel}` : null, rail].filter(Boolean).join(v.sep),
     `${toneEmoji} ${verdict}`,
     v.cta
   ].join("\n").slice(0, 279);
@@ -32283,26 +32291,51 @@ async function xReplyPollTick() {
       buildXReply(target, intent, m.id),
       new Promise((res) => setTimeout(() => res("__timeout__"), 40_000)),
     ]).catch((e) => { console.log(`[xreply]   build THREW: ${String(e?.message || e).slice(0, 140)}`); return null; });   // m.id seeds unique wording + card art
-    if (reply === "__timeout__") { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "build timeout" }); console.log(`[xreply]   ⏱ build TIMED OUT (>40s) target=${target} → skip (poll stays alive)`); continue; }
-    if (!reply) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "coin didn't scan" }); console.log(`[xreply]   ✗ buildXReply null (coin didn't scan) target=${target}`); continue; }
+    let finalReply = reply;
+    if (finalReply === "__timeout__" && intent === "map" && solanaPublicKeyLike(target)) {
+      console.log(`[xreply]   ⏱ map build TIMED OUT (>40s) target=${target} → trying fast scan fallback`);
+      finalReply = await Promise.race([
+        buildXScanReply(target, m.id),
+        new Promise((res) => setTimeout(() => res("__timeout__"), 16_000)),
+      ]).catch((e) => { console.log(`[xreply]   scan fallback THREW: ${String(e?.message || e).slice(0, 140)}`); return null; });
+      if (finalReply && finalReply !== "__timeout__") intent = "scan";
+    }
+    if (finalReply === "__timeout__") {
+      state.fails[m.id] = (Number(state.fails[m.id]) || 0) + 1;
+      const giveUp = state.fails[m.id] >= 3;
+      results.push({ u: m.username, s: giveUp ? "skip" : "defer", d: "build timeout" });
+      console.log(`[xreply]   ⏱ build TIMED OUT target=${target} (${giveUp ? "gave up" : "retry"})`);
+      if (giveUp) { state.seen[m.id] = now; delete state.fails[m.id]; await writeXReplyState(state); continue; }
+      await writeXReplyState(state);
+      break;
+    }
+    if (!finalReply) {
+      state.fails[m.id] = (Number(state.fails[m.id]) || 0) + 1;
+      const giveUp = state.fails[m.id] >= 3;
+      results.push({ u: m.username, s: giveUp ? "skip" : "defer", d: "coin didn't scan yet" });
+      console.log(`[xreply]   ✗ buildXReply null target=${target} (${giveUp ? "gave up" : "retry"})`);
+      if (giveUp) { state.seen[m.id] = now; delete state.fails[m.id]; await writeXReplyState(state); continue; }
+      await writeXReplyState(state);
+      break;
+    }
     // 🐸 Enrich the reply with coin-memory ("flagged this 2h ago at $X") + degen persona (text-only, safe).
-    if (solanaPublicKeyLike(target)) { try { await xEnrichReplyText(target, reply); } catch { /* keep base reply */ } }
-    console.log(`[xreply]   reply ready: $${reply.symbol} media=${reply.mediaBuffer ? "card" : "NONE"} → posting (auto=${auto})…`);
+    if (solanaPublicKeyLike(target)) { try { await xEnrichReplyText(target, finalReply); } catch { /* keep base reply */ } }
+    console.log(`[xreply]   reply ready: $${finalReply.symbol} media=${finalReply.mediaBuffer ? "card" : "NONE"} → posting (auto=${auto})…`);
     if (auto) {
       if (maxPerHour > 0 && state.posts.length >= maxPerHour) { results.push({ u: m.username, s: "defer", d: "hourly cap" }); break; }
       // Space replies out (jittered) rather than deferring — answer everyone, just not all in the same instant.
       const gap = minGapMs + Math.floor(Math.random() * 1500);
       const wait = lastPostAt ? (lastPostAt + gap) - Date.now() : 0;
       if (wait > 0) await sleep(Math.min(wait, 20_000));
-      const res = await xReply({ inReplyToId: m.id, text: reply.text, mediaBuffer: reply.mediaBuffer, mediaBuffers: reply.mediaBuffers });
+      const res = await xReply({ inReplyToId: m.id, text: finalReply.text, mediaBuffer: finalReply.mediaBuffer, mediaBuffers: finalReply.mediaBuffers });
       if (res.ok) {
         lastPostAt = Date.now();
         state.seen[m.id] = now; delete state.fails[m.id]; state.posts.push(lastPostAt); posted++;
-        results.push({ u: m.username, s: "replied", d: `${intent === "chart" ? "📈" : intent === "rug" ? "🛡️" : "🔎"} $${reply.symbol}${res.media && res.media !== "card" ? " · " + res.media : " · card"}` });
-        console.log(`[xreply] ✅ @${m.username} ${intent} $${reply.symbol} media=${res.media || "text"} id=${res.id || ""}`);
+        results.push({ u: m.username, s: "replied", d: `${intent === "chart" ? "📈" : intent === "rug" ? "🛡️" : "🔎"} $${finalReply.symbol}${res.media && res.media !== "card" ? " · " + res.media : " · card"}` });
+        console.log(`[xreply] ✅ @${m.username} ${intent} $${finalReply.symbol} media=${res.media || "text"} id=${res.id || ""}`);
         // 🎯 Record for RECEIPTS — anchor to our reply so a later 2x/10x quote-tweets this exact post.
-        try { if (solanaPublicKeyLike(target)) await xTrackCoin({ mint: target, symbol: reply.symbol, mc: reply.mc, tweetId: res.id, kind: "reply" }); } catch { /* best-effort */ }
-        await xReplyOwnerNotify(`✅ Auto-replied on X to @${m.username} · ${intent} · $${reply.symbol} (${res.media || "text"})`);
+        try { if (solanaPublicKeyLike(target)) await xTrackCoin({ mint: target, symbol: finalReply.symbol, mc: finalReply.mc, tweetId: res.id, kind: "reply" }); } catch { /* best-effort */ }
+        await xReplyOwnerNotify(`✅ Auto-replied on X to @${m.username} · ${intent} · $${finalReply.symbol} (${res.media || "text"})`);
       } else {
         // Transient failure → do NOT mark seen; break so it retries next cycle (the floor won't skip it,
         // since the floor never advances past un-answered tweets). Give up only after 3 tries or auth death.
@@ -32319,8 +32352,8 @@ async function xReplyPollTick() {
       state.seen[m.id] = now;
       state.queue[m.id] = { mint: target, intent, at: now, author: m.username, url: m.permanentUrl };
       await writeXReplyState(state);
-      results.push({ u: m.username, s: "draft", d: `$${reply.symbol}` });
-      await xReplyOwnerDraft(m, reply);
+      results.push({ u: m.username, s: "draft", d: `$${finalReply.symbol}` });
+      await xReplyOwnerDraft(m, finalReply);
     }
   }
   await writeXReplyState(state);
