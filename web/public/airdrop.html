@@ -178,7 +178,7 @@ function rosterRow(n){return '<div class="krow" data-t="'+esc(n.wallet)+'">'+(n.
 function renderXray(map){
   const el=document.getElementById('xray'); if(!el)return;
   const nodes=map.nodes||[];
-  const fedS=(map.stats||[]).find(s=>s.label==='WALLETS FED'); const fed=fedS?(parseInt(String(fedS.value).replace(/[^0-9]/g,''))||nodes.length):nodes.length;
+  const fedS=(map.stats||[]).find(s=>s.label==='WALLETS FED'||s.label==='TOP HOLDERS'); const fed=fedS?(parseInt(String(fedS.value).replace(/[^0-9]/g,''))||nodes.length):nodes.length;
   const dhS=(map.stats||[]).find(s=>s.label==='DIAMOND HANDS'); const held=dhS?(parseInt(String(dhS.value).replace(/[^0-9]/g,''))||0):nodes.filter(n=>n.held).length;
   const ratio=fed?Math.round(held/fed*100):0;
   const kols=map.kolsIn||0;
@@ -194,7 +194,7 @@ function renderXray(map){
 function drawSide(map){
   renderXray(map);
   const nodes=(map.nodes||[]).slice();
-  document.getElementById('side').querySelector('h3').textContent=(map.kolsIn||0)+' KOLs fed · '+(((map.stats||[]).find(s=>s.label==='WALLETS FED')||{}).value||'')+' wallets';
+  document.getElementById('side').querySelector('h3').textContent=(map.kolsIn||0)+' KOLs fed · '+(((map.stats||[]).find(s=>s.label==='WALLETS FED'||s.label==='TOP HOLDERS')||{}).value||'')+' wallets';
   const byUsd=(a,b)=>(b.usd||0)-(a.usd||0);
   const whales=nodes.slice().sort(byUsd).slice(0,6);
   const wset=new Set(whales.map(n=>n.wallet));
@@ -252,6 +252,7 @@ function closeDrill(){document.getElementById('drill').className=''}
 function render(map){
   overlay.className='hide'; drawCrumbs(map); drawStats(map); drawSide(map); drawFoot(map); loadCoinSel(map);
   if(sim)sim.stop();
+  clusterLines=null;clusterLbls=null;   // reset the cluster layer per render (it re-fetches below)
   const old=stage.querySelector('svg'); if(old)old.remove();
   const W=stage.clientWidth,H=stage.clientHeight;
   const svg=d3.select(stage).insert('svg',':first-child').attr('viewBox','0 0 '+W+' '+H);
@@ -307,7 +308,44 @@ function render(map){
     .on('tick',()=>{
       spoke.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
       node.attr('transform',d=>'translate('+d.x+','+d.y+')');
+      if(clusterLines)clusterLines.attr('x1',d=>d.s.x).attr('y1',d=>d.s.y).attr('x2',d=>d.t.x).attr('y2',d=>d.t.y);
+      if(clusterLbls)clusterLbls.attr('x',d=>d.hub.x).attr('y',d=>d.hub.y-(d.hub.r||20)-8);
     });
+  loadDropClusters(map,nodes,g);
+}
+// 🕸️ CLUSTER LAYER — same-funder recipients = one actor (farm/insider). Loads progressively after the bags;
+// draws colored dashed links member↔member + a ◆% label on each cluster hub, and surfaces totals in the
+// header + X-ray. Retries once on a cold-coin timeout (funder lookups warm server-side between calls).
+let clusterLines=null,clusterLbls=null;
+const CLPAL=['#e05a9b','#8e5ae0','#3fb6e6','#f4b721','#57c04a','#e0755a'];
+async function loadDropClusters(map,nodes,g,_retry){
+  if(!map.mint)return;
+  let gr=null;
+  try{
+    const url=API_BASE+'/api/airdrop/graph?ca='+encodeURIComponent(map.mint)+(curAirdropper?'&dev='+encodeURIComponent(curAirdropper):'');
+    gr=await(await fetch(url)).json();
+  }catch(e){return}
+  if(!gr||!gr.ok)return;
+  if((!gr.clusters||!gr.clusters.length)&&gr.timeout&&!_retry){setTimeout(()=>loadDropClusters(map,nodes,g,true),9000);return}
+  const byi=new Map(nodes.map(n=>[n.i,n]));
+  const clusters=(gr.clusters||[]).map((c,k)=>({...c,color:CLPAL[k%CLPAL.length],members:(c.members||[]).map(i=>byi.get(i)).filter(Boolean)})).filter(c=>c.members.length>=2);
+  if(!clusters.length)return;
+  const lines=[];clusters.forEach(c=>{for(let i=1;i<c.members.length;i++)lines.push({s:c.members[0],t:c.members[i],color:c.color})});
+  clusterLines=g.insert('g',':first-child').selectAll('line').data(lines).join('line')
+    .attr('stroke',d=>d.color).attr('stroke-width',2.4).attr('stroke-dasharray','5 4').attr('stroke-opacity',0)
+    .attr('x1',d=>d.s.x||0).attr('y1',d=>d.s.y||0).attr('x2',d=>d.t.x||0).attr('y2',d=>d.t.y||0);
+  clusterLines.transition().duration(700).attr('stroke-opacity',.85);
+  clusterLbls=g.append('g').selectAll('text').data(clusters.map(c=>({...c,hub:c.members[0]}))).join('text')
+    .attr('text-anchor','middle').style('font','900 12px sans-serif').style('paint-order','stroke')
+    .attr('stroke','#fffaf0').attr('stroke-width',3).attr('fill',d=>d.color).text(d=>'◆ '+(+d.pct).toFixed(1)+'%');
+  if(sim)sim.alpha(0.25).restart();
+  // header stat + X-ray chip: how much of the drop sits in connected clusters (the farm/insider signal)
+  const totPct=Math.round(clusters.reduce((s,c)=>s+(+c.pct||0),0)*10)/10;
+  const stEl=document.getElementById('stats');
+  if(stEl&&!document.getElementById('clstat'))stEl.insertAdjacentHTML('beforeend','<div class="stat" id="clstat" style="background:#ffe9c9"><div class="l">🕸️ Clusters</div><div class="v">'+clusters.length+'</div><div class="sub">'+totPct+'% connected</div></div>');
+  const xr=document.querySelector('#xray .xg');
+  if(xr&&!document.getElementById('clcell'))xr.insertAdjacentHTML('beforeend','<div class="c" id="clcell"><div class="k">🕸️ Clustered</div><div class="val" style="color:#b0640f">'+totPct+'%</div></div>'+
+    '<div class="c"><div class="k">Biggest cluster</div><div class="val">'+clusters[0].members.length+' wallets · '+(+clusters[0].pct).toFixed(1)+'%</div></div>');
 }
 
 document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const v=document.getElementById('q').value.trim().replace(/^\$/,'');if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v)){showError('paste a valid coin CA or airdropper wallet');return}curAirdropper='';loadDrop(v)});

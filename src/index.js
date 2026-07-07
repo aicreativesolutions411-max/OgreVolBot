@@ -7544,6 +7544,27 @@ async function handleWebApiRequest(request, response, requestUrl) {
       } catch (e) { sendWebJson(request, response, 200, { ok: false, error: String((e && e.message) || e) }); }
       return;
     }
+    // 🕸️ AIRDROP CLUSTERS (public, progressive) — funder-clusters over the airdrop recipients: wallets fed by
+    // the drop that were FUNDED by the same source are one actor (farm/insider). Same engine as /api/map/graph;
+    // loads after the bags render, never blocks them.
+    if (request.method === "GET" && pathname === "/api/airdrop/graph") {
+      const cm = String(requestUrl.searchParams.get("ca") || requestUrl.searchParams.get("mint") || "").trim();
+      const dv = String(requestUrl.searchParams.get("dev") || "").trim();
+      if (!solanaPublicKeyLike(cm)) { sendWebJson(request, response, 400, { ok: false, error: "ca required" }); return; }
+      try {
+        const graph = await Promise.race([
+          (async () => {
+            const m = await buildAirdropMap(cm, solanaPublicKeyLike(dv) ? dv : "").catch(() => null);
+            if (!m || !m.isToken || !Array.isArray(m.nodes) || !m.nodes.length) return { edges: [], clusters: [] };
+            const cnodes = m.nodes.slice(0, 45).map((n) => ({ i: n.i, wallet: n.wallet, pct: n.pct || 0, usd: n.usd || 0 }));
+            return await mapComputeClusters(`${cm}:drop`, cnodes);
+          })(),
+          new Promise((res) => setTimeout(() => res({ edges: [], clusters: [], timeout: true }), 15_000))
+        ]);
+        sendWebJson(request, response, 200, { ok: true, edges: graph.edges || [], clusters: graph.clusters || [], timeout: Boolean(graph.timeout) });
+      } catch (e) { sendWebJson(request, response, 200, { ok: false, error: String((e && e.message) || e) }); }
+      return;
+    }
     // 💰 AIRDROP MAP (public) — who the dev/airdropper fed + who still diamond-hands the bag. Accepts a COIN CA
     // OR an AIRDROPPER WALLET (owner pasted a wallet → resolve to the coins it airdropped, map the biggest).
     // `dev` = optional airdropper override (the coin selector passes it so each coin is scanned from that sender).
@@ -30996,6 +31017,7 @@ async function fetchTokenHolderRows(mint) {
 
 // COIN map: detect the token from METADATA first (pump + DexScreener) so a real coin is NEVER mis-read as a
 // wallet, pull the full coin info (MC · liq · age · 1H%) onto the card, then map its holders (KOL-labeled).
+const mapMetaLastGood = new Map();   // mint -> { at, mc, liq, ch1, sym } — survives a flaky dex/gecko pull
 async function buildTokenHolderMap(mint) {
   const _t0 = Date.now();
   // PARALLEL — kol identity, coin info (pump+dex, answers "is this a token?"), AND holders all fire at ONCE
@@ -31018,11 +31040,23 @@ async function buildTokenHolderMap(mint) {
   const dexMeta = best ? metadataFromDexPair(mint, best) : null;
   const onCurve = Boolean(pumpMeta && !pumpMeta.graduated && !(dexMeta && dexMeta.marketCap));
   const pick = (p, d) => onCurve ? firstMeaningfulNumber(p, d) : firstMeaningfulNumber(d, p);
-  const sym = String(dexMeta?.symbol || pumpMeta?.symbol || geckoMeta?.symbol || "").trim();
-  const mc = pick(pumpMeta?.marketCap, dexMeta?.marketCap ?? dexMeta?.fdv) || firstMeaningfulNumber(geckoMeta?.marketCap, geckoMeta?.fdv) || 0;
+  let sym = String(dexMeta?.symbol || pumpMeta?.symbol || geckoMeta?.symbol || "").trim();
+  let mc = pick(pumpMeta?.marketCap, dexMeta?.marketCap ?? dexMeta?.fdv) || firstMeaningfulNumber(geckoMeta?.marketCap, geckoMeta?.fdv) || 0;
   // liq/1H: prefer DexScreener when present, else GeckoTerminal (the fix for the blank X-card values).
-  const liq = pick(pumpMeta?.liquidityUsd, dexMeta?.liquidityUsd) || firstMeaningfulNumber(geckoMeta?.liquidityUsd) || 0;
-  const ch1 = firstMeaningfulNumber(dexMeta?.priceChange?.h1, geckoMeta?.priceChange?.h1, geckoMeta?.priceChange?.h1Percent, pumpMeta?.priceChange?.h1);
+  let liq = pick(pumpMeta?.liquidityUsd, dexMeta?.liquidityUsd) || firstMeaningfulNumber(geckoMeta?.liquidityUsd) || 0;
+  let ch1 = firstMeaningfulNumber(dexMeta?.priceChange?.h1, geckoMeta?.priceChange?.h1, geckoMeta?.priceChange?.h1Percent, pumpMeta?.priceChange?.h1);
+  // STICKY last-good coin numbers: dex + gecko BOTH flake regularly (rate limits/timeouts), which left the
+  // card's MC/LIQ/1H showing "—" on random pulls (owner: "make sure liquidity always shows"). A ≤15-min-old
+  // value beats a blank; fresh good reads refresh the cache.
+  { const lg = mapMetaLastGood.get(mint);
+    if (lg && Date.now() - lg.at < 15 * 60_000) {
+      if (!(mc > 0) && lg.mc > 0) mc = lg.mc;
+      if (!(liq > 0) && lg.liq > 0) liq = lg.liq;
+      if (!Number.isFinite(ch1) && Number.isFinite(lg.ch1)) ch1 = lg.ch1;
+      if (!sym && lg.sym) sym = lg.sym;
+    }
+    if (mc > 0 || liq > 0) { mapMetaLastGood.set(mint, { at: Date.now(), mc, liq, ch1, sym });
+      if (mapMetaLastGood.size > 400) mapMetaLastGood.delete(mapMetaLastGood.keys().next().value); } }
   const createdAt = normalizePairCreatedAt(dexMeta?.pairCreatedAt) || pumpMeta?.pairCreatedAt || pumpMeta?.createdAt || 0;
   let isToken = Boolean(sym || mc > 0 || pumpMeta?.symbol || String(mint).endsWith("pump"));
   // Metadata sources are all IP-rate-limited or slow sometimes (dex=null, gecko timeout) — a real coin then
@@ -31155,8 +31189,10 @@ async function buildAirdropMap(mint, devOverride = "", tokenHint = null) {
   const dexMeta = best ? metadataFromDexPair(mint, best) : null;
   const onCurve = Boolean(pumpMeta && !pumpMeta.graduated && !(dexMeta && dexMeta.marketCap));
   const pick = (p, d) => onCurve ? firstMeaningfulNumber(p, d) : firstMeaningfulNumber(d, p);
-  const sym = String(dexMeta?.symbol || pumpMeta?.symbol || tokenHint?.sym || "").trim();
-  const mc = pick(pumpMeta?.marketCap, dexMeta?.marketCap ?? dexMeta?.fdv) || Number(tokenHint?.mc) || 0;
+  let sym = String(dexMeta?.symbol || pumpMeta?.symbol || tokenHint?.sym || "").trim();
+  let mc = pick(pumpMeta?.marketCap, dexMeta?.marketCap ?? dexMeta?.fdv) || Number(tokenHint?.mc) || 0;
+  { const lg = mapMetaLastGood.get(mint);   // sticky last-good (same cache the holder map keeps warm)
+    if (lg && Date.now() - lg.at < 15 * 60_000) { if (!(mc > 0) && lg.mc > 0) mc = lg.mc; if (!sym && lg.sym) sym = lg.sym; } }
   let isToken = Boolean(sym || mc > 0 || pumpMeta?.symbol || String(mint).endsWith("pump") || tokenHint?.isToken);
   // Chain-authoritative fallback (same as the holder map): metadata sources flake, mints don't.
   if (!isToken) { try { await getMintTokenProgramId(mint); isToken = true; } catch { /* not a mint */ } }
@@ -31188,7 +31224,7 @@ async function buildAirdropMap(mint, devOverride = "", tokenHint = null) {
   if (solanaPublicKeyLike(dev) && !haveScan && airdropBudgetOk()) {
     scanAirdropRecipients(dev, mint, poolAddr, 40, 12000).then(async (r) => {
       airdropScanCache.set(cacheKey, { at: Date.now(), recips: r.recips, bagsDropped: r.bagsDropped });
-      if (r.recips.size >= 5) {
+      if (r.recips.size >= 2) {
         const enhanced = await buildAirdropView({ ...args, recips: r.recips, bagsDropped: r.bagsDropped });
         if (solanaPublicKeyLike(devOverride)) enhanced.fromWallet = dev;
         airdropMapCache.set(cacheKey, { at: Date.now(), v: enhanced });
@@ -31205,7 +31241,9 @@ async function buildAirdropView({ mint, sym, mc, supplyUi, pricePerToken, dev, i
   const holderSet = new Set(holderRows.map((h) => h.wallet));
   let usedFallback = false;
   let entries = [...recips.entries()].map(([wallet, tokens]) => ({ wallet, tokens, held: holderSet.has(wallet) }));
-  if (entries.length < 5) {
+  // A REAL dev-send set wins whenever we found ≥2 recipients (was ≥5 — genuine small airdrops were being
+  // thrown away and replaced by the holders view, which then claimed "100 bags dropped" every time).
+  if (entries.length < 2) {
     usedFallback = true;   // no real dev-airdrop found (or RPC-limited) → top holders as bags so it ALWAYS renders
     entries = holderRows.slice(0, 150).map((h) => ({ wallet: h.wallet, tokens: supplyUi * ((h.pct || 0) / 100), held: true }));
     bagsDropped = entries.length;
@@ -31225,6 +31263,7 @@ async function buildAirdropView({ mint, sym, mc, supplyUi, pricePerToken, dev, i
     return {
       i, wallet: e.wallet, isKol: id.isKol, name: id.name, twitter: id.twitter,
       tokens: e.tokens, amountLabel: amtLabel, usd, held: e.held,
+      pct: supplyUi > 0 ? Math.round((e.tokens / supplyUi) * 1000) / 10 : 0,   // % of supply — cluster math + tooltips
       crown: i === 0,                                   // biggest bag wears the crown
       weight: Math.max(0.12, Math.min(1, e.tokens / maxTok)),
       state: e.held ? "diamond" : "sold",
@@ -31234,7 +31273,16 @@ async function buildAirdropView({ mint, sym, mc, supplyUi, pricePerToken, dev, i
   }));
   const streetValue = pricePerToken > 0 ? totalTokens * pricePerToken : mc;
   const devId = solanaPublicKeyLike(dev) ? mapResolveIdentity(dev, idx) : null;
-  const stats = [
+  // HONEST stats: the holders fallback must never CLAIM airdrop numbers — "BAGS DROPPED 100" every time was
+  // just the top-100 holder list. Fallback mode says what it is (top holders); airdrop labels only appear
+  // when we actually parsed the dev's outbound sends.
+  const stats = usedFallback ? [
+    { label: "TOP HOLDERS", value: String(entries.length), sub: "no dev sends found yet" },
+    { label: "KOLS IN", value: String(kolsIn) },
+    { label: "TOKENS HELD", value: airdropAmt(totalTokens) },
+    { label: "VALUE", value: streetValue > 0 ? "≈" + fmtMc(streetValue) : "—", sub: "at today's price" },
+    { label: "DIAMOND HANDS", value: String(held), sub: "of shown" },
+  ] : [
     { label: "BAGS DROPPED", value: String(bagsDropped || nodes.length) },
     { label: "WALLETS FED", value: String(entries.length) },
     { label: "TOKENS AIRDROPPED", value: airdropAmt(totalTokens) + "+" },
@@ -31650,10 +31698,12 @@ async function sendAirdropCard(chatId, mint) {
   const web = `https://www.slimewire.org/airdrop?ca=${mint}`;
   const lines = [
     `💰 <b>${escapeTelegramHtml(map.subject)} airdrop map</b>${map.devName ? ` · by ${escapeTelegramHtml(map.devName)}` : ""}`,
-    map.approx ? "<i>distribution view (top holders)</i>" : "",
+    map.approx ? "<i>no dev sends found (yet) — showing top holders instead</i>" : "",
     "",
-    `🎒 <b>${stat("BAGS DROPPED")}</b> bags · 👥 <b>${stat("WALLETS FED")}</b> fed`,
-    `🪙 <b>${stat("TOKENS AIRDROPPED")}</b> · 💵 <b>${stat("STREET VALUE")}</b>`,
+    map.approx
+      ? `👥 <b>${stat("TOP HOLDERS")}</b> top holders · 🪙 <b>${stat("TOKENS HELD")}</b> · 💵 <b>${stat("VALUE")}</b>`
+      : `🎒 <b>${stat("BAGS DROPPED")}</b> bags · 👥 <b>${stat("WALLETS FED")}</b> fed`,
+    map.approx ? "" : `🪙 <b>${stat("TOKENS AIRDROPPED")}</b> · 💵 <b>${stat("STREET VALUE")}</b>`,
     `💎 <b>${stat("DIAMOND HANDS")}</b> still holding the whole bag`,
     fed ? "\n<b>Biggest bags:</b>\n" + fed : "",
   ].filter((l) => l !== "").join("\n");
