@@ -134,9 +134,10 @@ function render(map){
   // avatar clip + pattern per node
   nodes.forEach(n=>{const av=n.avatarUrl||n.faceUrl;if(av){defs.append('clipPath').attr('id','c'+n.id).append('circle').attr('r',n.r-2);defs.append('pattern').attr('id','p'+n.id).attr('width',1).attr('height',1).attr('patternContentUnits','objectBoundingBox').append('image').attr('href',av).attr('width',1).attr('height',1).attr('preserveAspectRatio','xMidYMid slice')}});
   const link=g.append('g').selectAll('line').data(links).join('line').attr('class','link').attr('stroke-width',d=>0.5+d.w*2);
+  const clinkG=g.append('g');   // 🕸️ cluster/connection edges (loaded progressively after the bubbles)
   const node=g.append('g').selectAll('g').data(nodes).join('g').attr('class','node');
   node.append('circle').attr('r',d=>d.r+5).attr('fill',d=>(COL[d.state]||COL.hold).f).attr('fill-opacity',0.14);
-  node.append('circle').attr('r',d=>d.r).attr('fill',d=>{const av=d.avatarUrl||d.faceUrl;return av?'url(#p'+d.id+')':(COL[d.state]||COL.hold).f}).attr('stroke',d=>(COL[d.state]||COL.hold).r).attr('stroke-width',2.5);
+  node.append('circle').attr('class','body').attr('r',d=>d.r).attr('fill',d=>{const av=d.avatarUrl||d.faceUrl;return av?'url(#p'+d.id+')':(COL[d.state]||COL.hold).f}).attr('stroke',d=>(COL[d.state]||COL.hold).r).attr('stroke-width',2.5);
   node.append('circle').attr('r',d=>d.r+1.5).attr('fill','none').attr('stroke',d=>(COL[d.state]||COL.hold).f).attr('stroke-opacity',.6);
   // labels for KOLs + big holders
   node.filter(d=>d.label).append('text').attr('class','lbl').attr('x',d=>d.r+4).attr('y',4).text(d=>d.label);
@@ -158,8 +159,19 @@ function render(map){
     .force('center',d3.forceCenter(W/2,H/2).strength(.02))
     .on('tick',()=>{
       link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+      clinkG.selectAll('line').attr('x1',d=>d.s.x).attr('y1',d=>d.s.y).attr('x2',d=>d.t.x).attr('y2',d=>d.t.y);
       node.attr('transform',d=>'translate('+d.x+','+d.y+')');
     });
+  // 🕸️ progressive cluster/connection overlay — bubbles render instantly, the fund-flow cluster web fades in after
+  if(map.kind==='token'&&map.mint){fetch('/api/map/graph?ca='+map.mint).then(r=>r.json()).then(gr=>{
+    if(!gr||!gr.ok||!gr.edges||!gr.edges.length)return;
+    const byi=new Map(nodes.map(n=>[n.i,n]));
+    const lines=gr.edges.map(e=>({s:byi.get(e.a),t:byi.get(e.b)})).filter(l=>l.s&&l.t);
+    clinkG.selectAll('line').data(lines).join('line').attr('stroke','#ffcf4d').attr('stroke-width',2).attr('stroke-dasharray','4 3').attr('stroke-opacity',0).transition().duration(700).attr('stroke-opacity',.75);
+    const inCl=new Set(); gr.edges.forEach(e=>{inCl.add(e.a);inCl.add(e.b)});
+    node.filter(d=>inCl.has(d.i)).select('.body').attr('stroke','#ffcf4d').attr('stroke-width',3.5);
+    if((gr.clusters||[]).length){const big=gr.clusters.slice().sort((a,b)=>b.usd-a.usd)[0];const el=document.getElementById('stats');el.insertAdjacentHTML('beforeend','<div class="stat" style="border-color:#ffcf4d"><div class="l">🕸️ CLUSTERS</div><div class="v">'+gr.clusters.length+(big&&big.usd?' · $'+fmt(big.usd):'')+'</div></div>')}
+  }).catch(()=>{})}
 }
 
 document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const v=document.getElementById('q').value.trim().replace(/^\$/,'');if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v)){showError('paste a valid coin CA or wallet address');return}crumbs=[];loadTarget('coin',v,'bags',true)});

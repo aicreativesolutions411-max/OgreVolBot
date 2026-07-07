@@ -7484,6 +7484,21 @@ async function handleWebApiRequest(request, response, requestUrl) {
       } catch (e) { sendWebJson(request, response, 500, { ok: false, error: String((e && e.message) || e) }); }
       return;
     }
+    // 🕸️ MAP CLUSTERS (public) — connection edges + funder-clusters for a coin, loaded PROGRESSIVELY by the web
+    // AFTER the bubbles render (funder resolution is the priciest read, so it's budget-gated + cached, and never
+    // blocks the initial map). Edges reference holder node indices (same stable order as /api/map).
+    if (request.method === "GET" && pathname === "/api/map/graph") {
+      const cm = String(requestUrl.searchParams.get("ca") || requestUrl.searchParams.get("mint") || "").trim();
+      if (!solanaPublicKeyLike(cm)) { sendWebJson(request, response, 400, { ok: false, error: "ca required" }); return; }
+      try {
+        const rows = await fetchTokenHolderRows(cm).catch(() => []);
+        const info = await alphaRadarFetchMc(cm).catch(() => null); const cmc = (info && info.mc) || 0;
+        const cnodes = rows.slice(0, 45).map((h, i) => ({ i, wallet: h.wallet, pct: h.pct || 0, usd: cmc ? ((h.pct || 0) / 100) * cmc : 0 }));
+        const graph = await mapComputeClusters(cm, cnodes);
+        sendWebJson(request, response, 200, { ok: true, edges: graph.edges, clusters: graph.clusters });
+      } catch (e) { sendWebJson(request, response, 200, { ok: false, error: String((e && e.message) || e) }); }
+      return;
+    }
 
     // --- Live Autopilot terminal control (off the website) ------------------
     // Authenticated by your existing terminal session (Bearer token) OR, for a
@@ -30879,6 +30894,45 @@ async function buildWalletMap(wallet, mode = "bags") {
   return { kind: "wallet", subject: String(subj).slice(0, 12), subtitle: mode === "network" ? "trading network" : "bags held", wallet, mode, stats, nodes };
 }
 
+// 🕸️ CLUSTERS + CONNECTIONS (Bubblemaps-style) — group the top holders by shared on-chain FUNDER (reusing the
+// autopilot's funding-graph: lookupWalletFunder + walletObs.funder). Wallets funded by the same source are one
+// actor → a cluster; we draw connection edges between them + sum their $/%. BUDGET-GATED (funder lookups are the
+// priciest RPC reads) + cached per coin, so it stays cheap. Loaded PROGRESSIVELY by the web (after the bubbles).
+const mapClusterCache = new Map();
+async function mapComputeClusters(mint, nodes) {
+  const cached = mapClusterCache.get(mint);
+  if (cached && Date.now() - cached.at < 10 * 60_000) return cached.v;
+  const top = (nodes || []).filter((n) => n.wallet).slice(0, 14);   // only the biggest holders (cost control)
+  const funderOf = new Map();
+  for (const n of top) {
+    let f = walletFunderCache.get(n.wallet);
+    if (f === undefined) { const obs = walletObs.get(n.wallet); if (obs && obs.funder !== undefined) f = obs.funder; }
+    if (f === undefined) {
+      if (!funderBudgetOk()) break;                 // out of the daily Alchemy budget → stop (partial clusters)
+      funderUsedToday += 1;
+      f = await lookupWalletFunder(n.wallet).catch(() => null);
+    }
+    if (f) funderOf.set(n.wallet, f);
+  }
+  const byFunder = new Map();
+  for (const [w, f] of funderOf) { let a = byFunder.get(f); if (!a) { a = []; byFunder.set(f, a); } a.push(w); }
+  const nodeOf = new Map(nodes.map((n) => [n.wallet, n]));
+  const edges = [], clusters = []; let cid = 0;
+  for (const [, arr] of byFunder) {
+    if (arr.length < 2 || arr.length > 4) continue;   // tight cluster = one actor; 5+ = CEX/common source, skip
+    const members = arr.map((w) => nodeOf.get(w)).filter(Boolean);
+    if (members.length < 2) continue;
+    for (const m of members) m.clusterId = cid;
+    for (let i = 1; i < members.length; i++) edges.push({ a: members[0].i, b: members[i].i });
+    clusters.push({ id: cid, size: members.length, usd: members.reduce((s, m) => s + (m.usd || 0), 0), pct: members.reduce((s, m) => s + (m.pct || 0), 0) });
+    cid++;
+  }
+  const v = { edges, clusters };
+  mapClusterCache.set(mint, { at: Date.now(), v });
+  if (mapClusterCache.size > 200) mapClusterCache.delete(mapClusterCache.keys().next().value);
+  return v;
+}
+
 // Decide token vs wallet by METADATA (buildTokenHolderMap sets isToken from pump/dex meta) — NOT by holder
 // count, so a real coin whose holder read is slow is never mis-read as a wallet.
 async function buildSubjectMap(target, mode = "bags") {
@@ -32674,11 +32728,27 @@ async function handleSignalsCallback(query, userId) {
 // Exit Radar poller: watch opted-in users' OPEN bags (from trade history) and DM a take-profit signal when
 // one tops. Cheap: candidate positions come from our own trade log; only a small rotating batch is priced.
 const exitRadarState = new Map(); // `${userId}:${mint}` -> { peak, alerted, sym }
+// PERSISTED once-only alert de-dup. exitRadarState is in-memory, so a restart (or a flaky liquidity read
+// that flickers 0↔>0 for an already-graduated coin) re-fired the "graduated to DEX" / "topping" pings over
+// and over. This set survives restarts on disk → each (user, coin, kind) alert fires at most ONCE, ever.
+const exitRadarAlerted = new Set();
+let exitRadarAlertedLoaded = false;
+function exitRadarAlertedPath() { return path.join(CONFIG.dataDir, "exit-radar-alerted.json"); }
+async function loadExitRadarAlerted() {
+  if (exitRadarAlertedLoaded) return;
+  exitRadarAlertedLoaded = true;
+  try { const j = await readJson(exitRadarAlertedPath()); if (j && Array.isArray(j.keys)) for (const k of j.keys) exitRadarAlerted.add(k); } catch {}
+}
+async function markExitRadarAlerted(key) {
+  exitRadarAlerted.add(key);
+  try { await writeJsonFile(exitRadarAlertedPath(), { keys: [...exitRadarAlerted].slice(-8000) }); } catch {}
+}
 let _exitRadarPolling = false;
 async function pollExitRadar() {
   if (_exitRadarPolling) return;
   _exitRadarPolling = true;
   try {
+    await loadExitRadarAlerted();
     const subs = new Set((await readExitRadarSubs()).dm.map(String));
     if (!subs.size) { exitRadarState.clear(); return; }
     const history = await readTradeHistory();
@@ -32705,8 +32775,9 @@ async function pollExitRadar() {
       exitRadarState.set(k, st);
       const fadePct = st.peak > 0 ? Math.round((1 - live.mc / st.peak) * 100) : 0;
       const devSold = typeof insiderDevSold !== "undefined" && insiderDevSold && insiderDevSold.has ? insiderDevSold.has(p.mint) : false;
-      if (!st.alerted && (fadePct >= 25 || devSold)) {
+      if (!st.alerted && !exitRadarAlerted.has(`${k}:top`) && (fadePct >= 25 || devSold)) {
         st.alerted = true;
+        await markExitRadarAlerted(`${k}:top`);
         const links = slimewireTokenLinks(p.mint);
         await sayHtml(p.userId, [
           `🎯 <b>Exit Radar — $${escapeTelegramHtml(st.sym || shortMint(p.mint))} looks like it's topping</b>`,
@@ -32719,8 +32790,11 @@ async function pollExitRadar() {
       // DEX pair — it graduated. Fresh DEX liquidity often brings a post-migration pop. `liq` is 0 while
       // on the pump curve (pump-fallback source) and >0 once DexScreener has a pair.
       if (!(live.liq > 0)) st.sawCurve = true;
-      if (st.sawCurve && live.liq > 0 && !st.migrated) {
+      // Fire ONCE ever (persisted de-dup) and only for pump-curve coins — a graduated coin whose liquidity
+      // read flickers 0↔>0 must NEVER re-ping "just graduated" on every MC change / restart.
+      if (st.sawCurve && live.liq > 0 && !st.migrated && String(p.mint).endsWith("pump") && !exitRadarAlerted.has(`${k}:mig`)) {
         st.migrated = true;
+        await markExitRadarAlerted(`${k}:mig`);
         const links = slimewireTokenLinks(p.mint);
         await sayHtml(p.userId, [
           `🎓 <b>$${escapeTelegramHtml(st.sym || shortMint(p.mint))} just graduated to DEX</b> — a coin you're holding.`,
