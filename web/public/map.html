@@ -76,8 +76,12 @@
     <div id="side"><h3>On this coin</h3><div id="kolist"></div></div>
   </div>
 </div>
+<script src="/config.js"></script>
 <script src="/vendor/d3.v7.min.js"></script>
 <script>
+// Static host (slimewire.org) doesn't proxy /api/* → a relative fetch returns index.html and res.json()
+// threw ("network dropped"). Hit the Render ORIGIN absolutely (CORS open), like the main terminal.
+const API_BASE=(window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||'https://ogrevolbot.onrender.com';
 const COL={hold:{f:'#5be36a',r:'#0c7a2a'},sold:{f:'#e2564b',r:'#7a1010'},whale:{f:'#ffcf4d',r:'#8a6410'},new:{f:'#4dd6ff',r:'#0c5a7a'}};
 const stage=document.getElementById('stage'),tip=document.getElementById('tip'),overlay=document.getElementById('overlay');
 let crumbs=[],refreshTimer=null,sim=null,zoomB=null;
@@ -91,7 +95,7 @@ async function loadTarget(kind,id,mode,push,label,_retry,_silent){
   let j=null;
   try{
     const ctl=('AbortController'in window)?new AbortController():null; const to=ctl?setTimeout(()=>ctl.abort(),20000):0;
-    const res=await fetch('/api/map?'+q,ctl?{signal:ctl.signal}:{}); if(to)clearTimeout(to);
+    const res=await fetch(API_BASE+'/api/map?'+q,ctl?{signal:ctl.signal}:{}); if(to)clearTimeout(to);
     j=await res.json();
   }catch(e){
     if(!_retry){await new Promise(r=>setTimeout(r,1000));return loadTarget(kind,id,mode,push,label,true,_silent)}
@@ -126,7 +130,7 @@ function fmt(n){n=+n||0;if(n>=1e9)return(n/1e9).toFixed(1)+'B';if(n>=1e6)return(
 function drawToggleFoot(map){
   const t=document.getElementById('toggle'),f=document.getElementById('foot');
   if(map.kind==='wallet'){const o=map.mode==='network'?'bags':'network';t.innerHTML='<button class="ghost" id="tg">'+(map.mode==='network'?'💰 Show bags':'🕸️ Show network')+'</button>';document.getElementById('tg').onclick=()=>loadTarget('wallet',map.wallet,o,false)}else t.innerHTML='';
-  const L=[];if(map.mint){L.push('<a class="pill" href="https://www.slimewire.org/t?ca='+map.mint+'">⚡ Trade</a>');L.push('<a class="pill" href="/api/map/img?ca='+map.mint+'">🖼 Card</a>')}f.innerHTML=L.join('');
+  const L=[];if(map.mint){L.push('<a class="pill" href="https://www.slimewire.org/t?ca='+map.mint+'">⚡ Trade</a>');L.push('<a class="pill" href="'+API_BASE+'/api/map/img?ca='+map.mint+'">🖼 Card</a>')}f.innerHTML=L.join('');
 }
 
 function render(map){
@@ -175,7 +179,7 @@ function render(map){
       node.attr('transform',d=>'translate('+d.x+','+d.y+')');
     });
   // 🕸️ progressive cluster/connection overlay — bubbles render instantly, the fund-flow cluster web fades in after
-  if(map.kind==='token'&&map.mint){fetch('/api/map/graph?ca='+map.mint).then(r=>r.json()).then(gr=>{
+  if(map.kind==='token'&&map.mint){fetch(API_BASE+'/api/map/graph?ca='+map.mint).then(r=>r.json()).then(gr=>{
     if(!gr||!gr.ok||!gr.edges||!gr.edges.length)return;
     const byi=new Map(nodes.map(n=>[n.i,n]));
     const lines=gr.edges.map(e=>({s:byi.get(e.a),t:byi.get(e.b)})).filter(l=>l.s&&l.t);

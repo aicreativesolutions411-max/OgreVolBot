@@ -80,8 +80,14 @@
     <div id="side"><h3>Fed wallets</h3><div id="kolist"></div></div>
   </div>
 </div>
+<script src="/config.js"></script>
 <script src="/vendor/d3.v7.min.js"></script>
 <script>
+// The site is served from a STATIC host (slimewire.org) that does NOT proxy /api/* to the backend — a
+// relative fetch('/api/…') returns the SPA index.html, so res.json() threw and the page mislabeled it
+// "network dropped". The API lives on the Render ORIGIN; hit it absolutely (CORS is open, ACAO:*), exactly
+// like the main terminal (OGRE_PORTAL_CONFIG.apiBase).
+const API_BASE=(window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||'https://ogrevolbot.onrender.com';
 // Reference-style bag palette (blues/pinks/purples/lavender/teal), deterministic per wallet.
 const BAGPAL=[['#7fb8e6','#3a6ea5'],['#e79cc4','#a8477e'],['#b79ae0','#6f4aa0'],['#9aa6e6','#4a56a0'],['#7fd0d0','#3a9a9a'],['#e6b07f','#a86a3a'],['#88d18a','#3f9c34'],['#d99ad0','#9a4a90']];
 const BAG="M20 4.5c-2.5 0-4.2 1.5-4.2 3.2 0 1 .55 1.9 1.45 2.5l-.9 1.6C12.4 14.1 8 19.7 8 26.1 8 32.6 13.2 36 20 36s12-3.4 12-9.9c0-6.4-4.4-12-8.35-14.3l-.9-1.6c.9-.6 1.45-1.5 1.45-2.5 0-1.7-1.7-3.2-4.2-3.2z";
@@ -100,7 +106,7 @@ async function loadDrop(ca,_retry,_silent){
   let j=null;
   try{
     const ctl=('AbortController'in window)?new AbortController():null; const to=ctl?setTimeout(()=>ctl.abort(),20000):0;
-    const res=await fetch('/api/airdrop?ca='+encodeURIComponent(ca),ctl?{signal:ctl.signal}:{}); if(to)clearTimeout(to);
+    const res=await fetch(API_BASE+'/api/airdrop?ca='+encodeURIComponent(ca),ctl?{signal:ctl.signal}:{}); if(to)clearTimeout(to);
     j=await res.json();
   }catch(e){
     // NETWORK/fetch problem (mobile drop, abort) — retry once, then (only on the first load) surface it.
