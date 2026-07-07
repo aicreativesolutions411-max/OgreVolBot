@@ -1507,6 +1507,9 @@ test("scan Security fills from our own RPC when RugCheck returns null (no more n
   assert.match(serverSource, /enrichScanSecurityOnchain\(mint, rug, bonding\)/);
   // card shows n/a (not a false "revoked") when authority state was never actually read
   const card = functionBody(serverSource, "formatSlimeScanCard");
+  assert.match(card, /scanBestVolumeWindow\(\.\.\.activitySources\)/);
+  assert.match(card, /scanBestPriceChange\("h1", \.\.\.activitySources\)/);
+  assert.match(card, /scanBestTxnCount\("buys", "h1", \.\.\.activitySources\)/);
   assert.match(card, /const authKnown = Boolean\(rug && rug\.authoritiesKnown\)/);
   assert.match(card, /authKnown \? \(rug\.mintAuthority \? "🔴 active" : "🟢 none"\)/);
   // RugCheck marks its authority read as definitive so its null == revoked

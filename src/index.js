@@ -30562,6 +30562,53 @@ function scanFmtPct(value) {
   if (!Number.isFinite(n)) return "n/a";
   return `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
 }
+function scanActivityNumber(...values) {
+  return firstMeaningfulNumber(...values);
+}
+function scanBestVolumeWindow(...sources) {
+  const read = (source, key) => scanActivityNumber(
+    source?.volume?.[key],
+    key === "h24" ? source?.volume?.["24h"] : null,
+    key === "h6" ? source?.volume?.["6h"] : null,
+    key === "h1" ? source?.volume?.["1h"] : null,
+    key === "m5" ? source?.volume?.["5m"] : null,
+    key === "h24" ? source?.volume24h : null,
+    key === "h6" ? source?.volume6h : null,
+    key === "h1" ? source?.volumeH1 : null,
+    key === "m5" ? source?.volume5m : null
+  );
+  const windows = [
+    ["24H", "h24"],
+    ["6H", "h6"],
+    ["1H", "h1"],
+    ["5M", "m5"]
+  ];
+  for (const [label, key] of windows) {
+    const value = scanActivityNumber(...sources.map((source) => read(source, key)));
+    if (Number.isFinite(Number(value)) && Number(value) > 0) return { value: Number(value), label };
+  }
+  return { value: 0, label: "" };
+}
+function scanBestPriceChange(windowKey, ...sources) {
+  const alias = windowKey === "h1" ? "1h" : windowKey === "h24" ? "24h" : windowKey === "m5" ? "5m" : windowKey;
+  return scanActivityNumber(...sources.map((source) => (
+    source?.priceChange?.[windowKey]
+    ?? source?.priceChange?.[alias]
+    ?? (windowKey === "h24" ? source?.priceChange24h : null)
+    ?? (windowKey === "h1" ? source?.priceChange1h : null)
+    ?? (windowKey === "m5" ? source?.priceChange5m : null)
+    ?? source?.[`priceChange${windowKey.toUpperCase()}`]
+  )));
+}
+function scanBestTxnCount(side, windowKey, ...sources) {
+  const alias = windowKey === "h1" ? "1h" : windowKey === "m5" ? "5m" : windowKey;
+  return scanActivityNumber(...sources.map((source) => (
+    source?.txns?.[windowKey]?.[side]
+    ?? source?.txns?.[alias]?.[side]
+    ?? source?.transactions?.[windowKey]?.[side]
+    ?? source?.transactions?.[alias]?.[side]
+  ))) || 0;
+}
 // Crypto subscript price: 0.00002572 -> "$0.0₄2572" (matches Phanes/DEX display).
 function scanFmtPriceSub(value) {
   const n = Number(value);
@@ -35873,15 +35920,14 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
   const pick = (pumpVal, dexVal) => onCurve ? firstMeaningfulNumber(pumpVal, dexVal) : firstMeaningfulNumber(dexVal, pumpVal);
   const mc = pick(bonding?.marketCap, meta?.marketCap ?? meta?.fdv) || 0;
   const liq = pick(bonding?.liquidityUsd, meta?.liquidityUsd) || 0;
-  // Fill from pump metadata (bonding) too — a fresh on-curve coin has NO DexScreener pair yet, so
-  // vol/1H/24H/buys/sells all live on the pump object. Reading only `meta` (Dex) is what left these
-  // "0 / na" until Dex indexed ~minutes later. Pump nests them (volume.h24, priceChange.h1, txns.h1),
-  // NOT the flat *24h / *Change24h shape the card used to read.
-  const vol24 = Number(meta?.volume?.h24 || meta?.volume?.h6 || bonding?.volume?.h24 || bonding?.volume24h || 0);
-  const ch24 = meta?.priceChange?.h24 ?? bonding?.priceChange?.h24 ?? bonding?.priceChange24h;
-  const ch1 = meta?.priceChange?.h1 ?? bonding?.priceChange?.h1;
-  const buys1 = Number(meta?.txns?.h1?.buys || bonding?.txns?.h1?.buys || 0);
-  const sells1 = Number(meta?.txns?.h1?.sells || bonding?.txns?.h1?.sells || 0);
+  // Fresh coins may only expose activity on the raw pair or on shorter windows first. Use every
+  // market source before falling back to n/a so scan posts don't show blank Vol / 1H while indexed.
+  const activitySources = [meta, bonding, best].filter(Boolean);
+  const vol = scanBestVolumeWindow(...activitySources);
+  const ch24 = scanBestPriceChange("h24", ...activitySources);
+  const ch1 = scanBestPriceChange("h1", ...activitySources);
+  const buys1 = Number(scanBestTxnCount("buys", "h1", ...activitySources)) || 0;
+  const sells1 = Number(scanBestTxnCount("sells", "h1", ...activitySources)) || 0;
   const price = scanFmtPriceSub(pick(Number(bonding?.priceUsd), Number(best?.priceUsd)) || (mc && supply ? mc / supply : 0));
   // ATH (real, from SolanaTracker) — only shown when genuinely at/above the current MC.
   const showAth = ath && Number(ath.mc) > 0 && Number(ath.mc) >= mc * 0.999;
@@ -35935,7 +35981,7 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
     `📊 <b>Stats</b>`,
     `├ USD  <b>${price}</b> (${scanFmtPct(ch24)})`,
     `├ MC   <b>${scanFmtMoney(mc)}</b>`,
-    `├ Vol  <b>${scanFmtMoney(vol24)}</b>`,
+    `├ Vol  <b>${scanFmtMoney(vol.value)}</b>${vol.label ? ` <i>${vol.label}</i>` : ""}`,
     `├ LP   <b>${scanFmtMoney(liq)}</b>`,
     supply ? `├ Sup  <b>${scanFmtSupply(supply)}</b>` : null,
     `${showAth ? "├" : "└"} 1H   <b>${scanFmtPct(ch1)}</b>  🟢 ${buys1}  🔴 ${sells1}`,
