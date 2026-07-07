@@ -54,6 +54,18 @@
   .wm{position:absolute;right:14px;bottom:12px;font-weight:900;color:var(--slime2);z-index:4;opacity:.85}
   .foot{position:absolute;left:14px;bottom:12px;display:flex;gap:8px;z-index:4}
   .pill{font-size:12px;background:#06180d;border:1px solid var(--line);border-radius:20px;padding:6px 12px}
+  /* cluster dive-deeper modal */
+  #drill{position:absolute;inset:0;background:rgba(2,10,6,.66);backdrop-filter:blur(3px);display:none;align-items:center;justify-content:center;z-index:9;padding:16px}
+  #drill.on{display:flex}
+  #drillcard{width:min(430px,94vw);max-height:82%;overflow:auto;background:#06180d;border:2px solid var(--slime);border-radius:16px;padding:14px;box-shadow:0 16px 54px rgba(0,0,0,.6)}
+  #drillcard .dh{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+  #drillcard .dh b{font-size:15px;color:var(--ink)}
+  #drillcard .x{cursor:pointer;font-weight:900;color:var(--dim);border:0;background:none;font-size:20px;padding:0 4px}
+  .hrow{display:flex;align-items:center;gap:9px;padding:8px 6px;border-radius:10px;cursor:pointer;border-bottom:1px solid #0e2a16}
+  .hrow:hover{background:#0a2412} .hrow img{width:28px;height:28px;border-radius:50%;object-fit:cover;background:#0a2a12;border:1px solid var(--line)}
+  .hrow .hs{width:28px;height:28px;flex:0 0 28px;text-align:center;line-height:28px;font-size:16px}
+  .hrow .nm{font-size:13px;font-weight:800}.hrow .sub{font-size:11px;color:var(--dim)}
+  .hrow .v{margin-left:auto;text-align:right;font-weight:800;font-size:12.5px;color:var(--slime2)}
   @media(max-width:720px){#side{display:none}}
 </style>
 </head>
@@ -75,6 +87,7 @@
     </div>
     <div id="side"><h3>On this coin</h3><div id="kolist"></div></div>
   </div>
+  <div id="drill"><div id="drillcard"></div></div>
 </div>
 <script src="/config.js"></script>
 <script src="/vendor/d3.v7.min.js"></script>
@@ -193,38 +206,61 @@ function render(map){
       node.attr('transform',d=>'translate('+d.x+','+d.y+')');
       if(clusterHulls){hullG.selectAll('path.hull').attr('d',d=>hullPath(d.members));hullG.selectAll('text.clbl').attr('x',d=>cx(d.members)).attr('y',d=>cy(d.members)-4)}
     });
-  // 🕸️ progressive cluster overlay (bubblemaps-style) — bubbles render instantly, the fund-flow clusters +
-  // translucent hulls + combined-% labels fade in after. Each connected-wallet group gets its own color.
-  if(map.kind==='token'&&map.mint){fetch(API_BASE+'/api/map/graph?ca='+map.mint).then(r=>r.json()).then(gr=>{
-    if(!gr||!gr.ok)return;
+  // 🕸️ progressive cluster overlay (bubblemaps-style, but CLICKABLE to dive deeper). Bubbles render instantly;
+  // the fund-flow clusters + hulls + %-labels + legend fade in after. Retries ONCE on a cold-coin timeout
+  // (funder resolution warms server-side between calls), so clusters reliably appear.
+  function applyGraph(gr){
+    if(!gr||!gr.ok)return false;
     const byi=new Map(nodes.map(n=>[n.i,n]));
     const clusters=(gr.clusters||[]).map((c,k)=>({...c,color:CLC[k%CLC.length],letter:String.fromCharCode(65+k),members:(c.members||[]).map(i=>byi.get(i)).filter(Boolean)})).filter(c=>c.members.length>=2);
-    // fallback: if the backend sent edges but no cluster members, still draw the edges gold
-    if(!clusters.length&&gr.edges&&gr.edges.length){const lines=gr.edges.map(e=>({s:byi.get(e.a),t:byi.get(e.b),color:'#ffcf4d'})).filter(l=>l.s&&l.t);clinkG.selectAll('line').data(lines).join('line').attr('stroke','#ffcf4d').attr('stroke-width',2).attr('stroke-dasharray','4 3').attr('stroke-opacity',.7);const inCl=new Set();gr.edges.forEach(e=>{inCl.add(e.a);inCl.add(e.b)});node.filter(d=>inCl.has(d.i)).select('.body').attr('stroke','#ffcf4d').attr('stroke-width',3.5);return}
-    if(!clusters.length)return;
-    // color-per-cluster: connection edges (star to the biggest bag), member rings, hulls, % labels
+    if(!clusters.length){ if(!gr.timeout)renderClusterEmpty(); return false; }
     const lines=[];clusters.forEach(c=>{for(let i=1;i<c.members.length;i++)lines.push({s:c.members[0],t:c.members[i],color:c.color})});
     clinkG.selectAll('line').data(lines).join('line').attr('stroke',d=>d.color).attr('stroke-width',2).attr('stroke-dasharray','4 3').attr('stroke-opacity',0).transition().duration(700).attr('stroke-opacity',.7);
     const colOf=new Map();clusters.forEach(c=>c.members.forEach(m=>colOf.set(m.i,c.color)));
     node.filter(d=>colOf.has(d.i)).select('.body').attr('stroke',d=>colOf.get(d.i)).attr('stroke-width',3.5);
     clusterHulls=clusters;
-    hullG.selectAll('path.hull').data(clusters).join('path').attr('class','hull').attr('fill',d=>d.color).attr('fill-opacity',0).attr('stroke',d=>d.color).attr('stroke-opacity',.35).attr('stroke-width',1.5).transition().duration(700).attr('fill-opacity',.09);
-    hullG.selectAll('text.clbl').data(clusters).join('text').attr('class','clbl').attr('text-anchor','middle').style('font','800 12px sans-serif').style('paint-order','stroke').attr('stroke','#04120a').attr('stroke-width',3).attr('fill',d=>d.color).text(d=>'◆ '+(+d.pct).toFixed(1)+'%');
+    hullG.selectAll('path.hull').data(clusters).join('path').attr('class','hull').attr('fill',d=>d.color).attr('fill-opacity',0).attr('stroke',d=>d.color).attr('stroke-opacity',.35).attr('stroke-width',1.5).style('cursor','pointer').on('click',(ev,d)=>openCluster(d)).transition().duration(700).attr('fill-opacity',.09);
+    hullG.selectAll('text.clbl').data(clusters).join('text').attr('class','clbl').attr('text-anchor','middle').style('font','800 12px sans-serif').style('paint-order','stroke').style('cursor','pointer').attr('stroke','#04120a').attr('stroke-width',3).attr('fill',d=>d.color).text(d=>'◆ '+(+d.pct).toFixed(1)+'%').on('click',(ev,d)=>openCluster(d));
     sim.alpha(.35).restart();
     renderClusterLegend(clusters);
-    const el=document.getElementById('stats');el.insertAdjacentHTML('beforeend','<div class="stat" style="border-color:#ffcf4d"><div class="l">🕸️ CLUSTERS</div><div class="v">'+clusters.length+' · '+(+clusters[0].pct).toFixed(1)+'%</div></div>');
-  }).catch(()=>{})}
+    document.getElementById('stats').insertAdjacentHTML('beforeend','<div class="stat" style="border-color:#ffcf4d"><div class="l">🕸️ CLUSTERS</div><div class="v">'+clusters.length+' · '+(+clusters[0].pct).toFixed(1)+'%</div></div>');
+    return true;
+  }
+  if(map.kind==='token'&&map.mint){
+    const gurl=API_BASE+'/api/map/graph?ca='+map.mint;
+    fetch(gurl).then(r=>r.json()).then(gr=>{ if(!applyGraph(gr)&&gr&&gr.timeout){ setTimeout(()=>fetch(gurl).then(r=>r.json()).then(applyGraph).catch(()=>{}),6000); } }).catch(()=>{});
+  }
 }
-// Cluster legend in the side panel: color swatch · combined % · wallet count. Click flashes the members.
+// Cluster legend in the side panel — color swatch · combined % · wallet count. CLICK a row → dive-deeper modal.
+let clustersData=null;
 function renderClusterLegend(cl){
+  clustersData=cl;
   const side=document.getElementById('side'); if(!side)return;
   let el=document.getElementById('clusters'); if(!el){el=document.createElement('div');el.id='clusters';side.insertBefore(el,side.firstChild)}
-  el.innerHTML='<h3>🕸️ Clusters ('+cl.length+')</h3>'+cl.map(c=>'<div class="krow" data-m="'+c.members.map(m=>m.i).join(',')+'"><span style="width:14px;height:14px;border-radius:4px;flex:0 0 14px;background:'+c.color+';box-shadow:0 0 8px '+c.color+'"></span><div><div class="nm">Cluster '+c.letter+' · '+(+c.pct).toFixed(1)+'%</div><div class="sub">'+c.size+' wallets · $'+fmt(c.usd)+'</div></div></div>').join('');
-  [...el.querySelectorAll('.krow')].forEach(r=>r.onclick=()=>{const ids=new Set(r.dataset.m.split(',').map(Number));const svg=stage.querySelector('svg');if(!svg)return;d3.select(svg).selectAll('.node').filter(d=>ids.has(d.i)).select('.body').transition().duration(180).attr('stroke-width',7).transition().duration(600).attr('stroke-width',3.5)});
+  el.innerHTML='<h3>🕸️ Clusters ('+cl.length+') · tap to dive</h3>'+cl.map((c,k)=>'<div class="krow" data-k="'+k+'"><span style="width:14px;height:14px;border-radius:4px;flex:0 0 14px;background:'+c.color+';box-shadow:0 0 8px '+c.color+'"></span><div><div class="nm">Cluster '+c.letter+' · '+(+c.pct).toFixed(1)+'%</div><div class="sub">'+c.size+' wallets · $'+fmt(c.usd)+' →</div></div></div>').join('');
+  [...el.querySelectorAll('.krow')].forEach(r=>r.onclick=()=>openCluster(clustersData[+r.dataset.k]));
 }
+function renderClusterEmpty(){
+  const side=document.getElementById('side'); if(!side)return;
+  let el=document.getElementById('clusters'); if(!el){el=document.createElement('div');el.id='clusters';side.insertBefore(el,side.firstChild)}
+  el.innerHTML='<h3>🕸️ Clusters</h3><div class="sub" style="color:var(--dim);font-size:12px;padding:2px 2px 8px;line-height:1.4">No wallet clusters detected — the top holders were funded independently (no shared source). Bundled / insider coins light up here.</div>';
+}
+// Dive-deeper: the wallets INSIDE a cluster (one funding source = likely one actor), each tap-through to its map.
+function openCluster(cl){
+  if(!cl)return;
+  const d=document.getElementById('drill'),c=document.getElementById('drillcard');
+  d.className='on';
+  const rows=(cl.members||[]).slice().sort((a,b)=>(b.pct||0)-(a.pct||0)).map(m=>'<div class="hrow" data-w="'+esc(m.wallet)+'">'+((m.avatarUrl||m.faceUrl)?'<img src="'+esc(m.avatarUrl||m.faceUrl)+'" onerror="this.style.visibility=\'hidden\'"/>':'<div class="hs">🫧</div>')+'<div><div class="nm">'+(m.isKol?'⭐ ':'')+esc(m.name||short(m.wallet))+'</div><div class="sub">'+short(m.wallet)+'</div></div><div class="v">'+(m.pct!=null?(+m.pct).toFixed(1)+'%':'')+(m.usd?'<br>$'+fmt(m.usd):'')+'</div></div>').join('');
+  c.innerHTML='<div class="dh"><b><span style="color:'+cl.color+'">◆</span> Cluster '+cl.letter+'</b><button class="x" onclick="closeDrill()">×</button></div>'+
+    '<div class="sub" style="color:var(--dim);font-size:12.5px;margin-bottom:8px;line-height:1.45">'+cl.size+' wallets funded by ONE source · <b style="color:'+cl.color+'">'+(+cl.pct).toFixed(1)+'%</b> of supply · $'+fmt(cl.usd)+' combined — likely one actor (insider / bundle). Tap a wallet to map it.</div>'+
+    '<div id="hrows">'+rows+'</div>';
+  [...c.querySelectorAll('.hrow')].forEach(r=>r.onclick=()=>{const w=r.dataset.w;if(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(w)){closeDrill();loadTarget('wallet',w,'bags',true)}});
+}
+function closeDrill(){document.getElementById('drill').className=''}
 
 document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const v=document.getElementById('q').value.trim().replace(/^\$/,'');if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v)){showError('paste a valid coin CA or wallet address');return}crumbs=[];loadTarget('coin',v,'bags',true)});
 window.addEventListener('resize',()=>{const c=crumbs[crumbs.length-1];if(c)loadTarget(c.kind,c.id,c.mode,false)});
+document.getElementById('drill').addEventListener('click',e=>{if(e.target.id==='drill')closeDrill()});
 (function init(){const u=new URL(location.href);const ca=u.searchParams.get('ca')||u.searchParams.get('mint'),w=u.searchParams.get('wallet');if(ca)loadTarget('coin',ca,'bags',true);else if(w)loadTarget('wallet',w,u.searchParams.get('mode')==='network'?'network':'bags',true)})();
 </script>
 </body>

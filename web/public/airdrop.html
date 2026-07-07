@@ -219,7 +219,6 @@ function render(map){
   // center avatar clip (airdropper pfp if we have one)
   // center = the COIN's PFP (from pump/dex) → falls back to the airdropper's pfp → 💰
   const hubImg=map.coinLogo||map.devAvatar||'';
-  if(hubImg){defs.append('pattern').attr('id','hubimg').attr('width',1).attr('height',1).attr('patternContentUnits','objectBoundingBox').append('image').attr('href',hubImg).attr('width',1).attr('height',1).attr('preserveAspectRatio','xMidYMid slice')}
   const spoke=g.append('g').selectAll('line').data(links).join('line').attr('class',d=>d.named?'named':'spoke').attr('stroke-width',d=>d.named?2:1);
   // bag nodes
   const node=g.append('g').selectAll('g').data(nodes).join('g').attr('class','node');
@@ -237,10 +236,15 @@ function render(map){
   lab.each(function(d){const t=d3.select(this),txt=d.label,w=txt.length*6.7+18;
     t.append('rect').attr('x',0).attr('y',-11).attr('rx',9).attr('width',w).attr('height',22).attr('fill','#fffaf0').attr('stroke',palOf(d.wallet)[1]).attr('stroke-width',1.4);
     t.append('text').attr('x',9).attr('y',4).attr('class','lbl').text(txt);});
-  // center hub — airdropper
+  // center hub — the coin PFP clipped into the circle, with an onerror fallback to 💰 (a failed IPFS logo
+  // must never leave the center blank — pattern fills can't fire onerror, a clipped <image> can).
   const hubg=g.append('g');
-  hubg.append('circle').attr('cx',W/2).attr('cy',H/2).attr('r',44).attr('fill',hubImg?'url(#hubimg)':'#eaf6e6').attr('stroke','#3f9c34').attr('stroke-width',3.5);
-  if(!hubImg){hubg.append('text').attr('x',W/2).attr('y',H/2+2).attr('text-anchor','middle').style('font','26px sans-serif').text('💰');}
+  hubg.append('circle').attr('cx',W/2).attr('cy',H/2).attr('r',44).attr('fill','#eaf6e6').attr('stroke','#3f9c34').attr('stroke-width',3.5);
+  const hubFallback=()=>hubg.append('text').attr('x',W/2).attr('y',H/2+9).attr('text-anchor','middle').style('font','26px sans-serif').text('💰');
+  if(hubImg){
+    defs.append('clipPath').attr('id','hubclip').append('circle').attr('cx',W/2).attr('cy',H/2).attr('r',41);
+    hubg.append('image').attr('href',hubImg).attr('x',W/2-41).attr('y',H/2-41).attr('width',82).attr('height',82).attr('clip-path','url(#hubclip)').attr('preserveAspectRatio','xMidYMid slice').on('error',function(){d3.select(this).remove();hubFallback()});
+  } else { hubFallback(); }
   hubg.append('text').attr('x',W/2).attr('y',H/2+62).attr('text-anchor','middle').style('font','900 16px sans-serif').attr('fill','#2b2417').text(map.subject);
   if(map.devName)hubg.append('text').attr('x',W/2).attr('y',H/2+80).attr('text-anchor','middle').style('font','12px sans-serif').attr('fill','#8b7d5f').text('by '+map.devName);
   // interactions

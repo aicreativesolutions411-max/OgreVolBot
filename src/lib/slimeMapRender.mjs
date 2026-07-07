@@ -41,7 +41,7 @@ function layout(nodes, cx, cy, rMin, rMax) {
   });
 }
 
-export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stats = [], nodes = [], bgHref = null, transparent = false, W = 900, H = 820 } = {}) {
+export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stats = [], nodes = [], bgHref = null, transparent = false, centerImage = null, W = 900, H = 820 } = {}) {
   const cx = W / 2, cy = 118 + (H - 118) / 2;
   const placed = layout(nodes, cx, cy, 130, Math.min(W, H - 118) / 2 - 40);
 
@@ -91,10 +91,21 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
     </g>`;
   }).join("");
 
-  // Center hub — glowing gradient orb, the coin front-and-center
+  // Center hub — the COIN's PFP filling the orb when we have it (resolved to a data-URI in renderSlimeMapPng),
+  // else a glowing gradient orb. Ticker + subtitle sit UNDER the orb when the image is present (like the site).
   const hubR = subject.length > 8 ? 62 : 58;
   const fs = subject.length > 8 ? 22 : 26;
-  const hub = `<g>
+  const hub = centerImage
+    ? `<g>
+    <clipPath id="hubClip"><circle cx="${cx}" cy="${cy}" r="${hubR - 2}"/></clipPath>
+    <circle cx="${cx}" cy="${cy}" r="${hubR + 14}" fill="#5be36a" fill-opacity="0.12"/>
+    <circle cx="${cx}" cy="${cy}" r="${hubR}" fill="#0a1f12" stroke="#5be36a" stroke-width="3"/>
+    <image href="${esc(centerImage)}" x="${(cx - hubR + 2).toFixed(1)}" y="${(cy - hubR + 2).toFixed(1)}" width="${(hubR * 2 - 4).toFixed(1)}" height="${(hubR * 2 - 4).toFixed(1)}" clip-path="url(#hubClip)" preserveAspectRatio="xMidYMid slice"/>
+    <circle cx="${cx}" cy="${cy}" r="${hubR + 6}" fill="none" stroke="#7dff5b" stroke-width="1.4" stroke-opacity="0.55"/>
+    <text x="${cx}" y="${(cy + hubR + 28).toFixed(1)}" text-anchor="middle" font-family="Arial Black, Arial" font-size="${fs}" font-weight="900" fill="#eafff0" paint-order="stroke" stroke="#04120a" stroke-width="5">${esc(subject)}</text>
+    <text x="${cx}" y="${(cy + hubR + 48).toFixed(1)}" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#7bd98a" paint-order="stroke" stroke="#04120a" stroke-width="3">${esc(subtitle)}</text>
+  </g>`
+    : `<g>
     <circle cx="${cx}" cy="${cy}" r="${hubR + 14}" fill="#5be36a" fill-opacity="0.12"/>
     <circle cx="${cx}" cy="${cy}" r="${hubR}" fill="url(#gHub)" stroke="#5be36a" stroke-width="3"/>
     <circle cx="${cx}" cy="${cy}" r="${hubR + 6}" fill="none" stroke="#7dff5b" stroke-width="1.4" stroke-opacity="0.55"/>
@@ -142,15 +153,20 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
 
 // Fetch a remote avatar (X pfp etc.) → square PNG data-URI so it embeds in the SVG (resvg/librsvg won't
 // fetch remote hrefs at raster time). Small + cached by the caller. Returns null on any failure.
-export async function fetchAvatarDataUri(url, size = 96) {
+export async function fetchAvatarDataUri(url, size = 96, ms = 4500) {
   if (!url) return null;
   // AbortController + setTimeout works on EVERY Node version (AbortSignal.timeout is missing on Render's older
   // Node → without a real timeout a hanging avatar fetch would never resolve and would stall the whole render,
-  // which stalls the X poll tick — the "poller went silent" bug).
+  // which stalls the X poll tick — the "poller went silent" bug). A browser User-Agent is REQUIRED: coin-logo
+  // CDNs (DexScreener) 422/403 a bare fetch, and IPFS gateways are slow so `ms` is bumped for the big center
+  // coin PFP (a 2MB IPFS logo blew the old 4.5s cap → the share card fell back to text with no PFP).
   const ctl = new AbortController();
-  const t = setTimeout(() => { try { ctl.abort(); } catch {} }, 4500);
+  const t = setTimeout(() => { try { ctl.abort(); } catch {} }, ms);
   try {
-    const res = await fetch(url, { signal: ctl.signal });
+    const res = await fetch(url, {
+      signal: ctl.signal, redirect: "follow",
+      headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36", "accept": "image/*,*/*" },
+    });
     if (!res.ok) return null;
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length < 80) return null;
@@ -170,10 +186,12 @@ async function localFaceDataUri(file, size = 88) {
   } catch { return null; }
 }
 
-export async function renderSlimeMapPng({ subject, subtitle, stats = [], nodes = [], bgPath = null, W = 900, H = 820 } = {}) {
+export async function renderSlimeMapPng({ subject, subtitle, stats = [], nodes = [], bgPath = null, centerImage = null, W = 900, H = 820 } = {}) {
   // Resolve avatars → embedded data-URIs, in parallel. KOL X pfps come from a remote URL (fetch); anonymous
   // wallets get a LOCAL slime face (read off disk). Deduped so the same face/url is only processed once.
+  // The COIN's PFP (centerImage) is fetched the same way so it embeds in the center hub of the share card.
   const cache = new Map(), faceCache = new Map();
+  const centerImageP = centerImage ? fetchAvatarDataUri(centerImage, 160, 9000) : Promise.resolve(null);   // 9s: coin logos live on slow IPFS gateways
   await Promise.all(nodes.map(async (n) => {
     if (n.avatar) return;                       // already a data-URI
     if (n.avatarUrl) {
@@ -185,8 +203,9 @@ export async function renderSlimeMapPng({ subject, subtitle, stats = [], nodes =
       n.avatar = await faceCache.get(n.faceFile);
     }
   }));
+  const centerData = await centerImageP;        // null if the coin logo failed → hub falls back to the orb
 
-  const svg = buildMapSvg({ subject, subtitle, stats, nodes, transparent: true, W, H });
+  const svg = buildMapSvg({ subject, subtitle, stats, nodes, transparent: true, centerImage: centerData, W, H });
   const mapPng = await sharp(Buffer.from(svg)).png().toBuffer();
 
   // Base = branded background (cover) or a dark-green fallback gradient.

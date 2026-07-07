@@ -31418,7 +31418,7 @@ async function renderSubjectMapPng(target, mode = "bags") {
   if (!map || !map.nodes || !map.nodes.length) return { png: null, map: null };
   const { renderSlimeMapPng } = await import("./lib/slimeMapRender.mjs");
   const bgPath = await mapPickBg(`${map.subject}${map.mint || map.wallet || ""}`);
-  const png = await renderSlimeMapPng({ subject: map.subject, subtitle: map.subtitle, stats: map.stats, nodes: map.nodes, bgPath });
+  const png = await renderSlimeMapPng({ subject: map.subject, subtitle: map.subtitle, stats: map.stats, nodes: map.nodes, bgPath, centerImage: map.coinLogo || "" });
   mapRenderCache.set(key, { at: Date.now(), png, map });
   if (mapRenderCache.size > 200) mapRenderCache.delete(mapRenderCache.keys().next().value);
   return { png, map };
@@ -31436,7 +31436,7 @@ async function renderAirdropMapPng(mint) {
   const { renderSlimeMapPng } = await import("./lib/slimeMapRender.mjs");
   const bgPath = await mapPickBg(`${map.subject}${mint}drop`);
   const nodes = map.nodes.map((n) => ({ ...n, state: n.state === "sold" ? "sold" : (n.crown ? "whale" : "hold") }));
-  const png = await renderSlimeMapPng({ subject: map.subject, subtitle: map.subtitle, stats: map.stats, nodes, bgPath });
+  const png = await renderSlimeMapPng({ subject: map.subject, subtitle: map.subtitle, stats: map.stats, nodes, bgPath, centerImage: map.coinLogo || map.devAvatar || "" });
   airdropRenderCache.set(mint, { at: Date.now(), png, map });
   if (airdropRenderCache.size > 150) airdropRenderCache.delete(airdropRenderCache.keys().next().value);
   return { png, map };
