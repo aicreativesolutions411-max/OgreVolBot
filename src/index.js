@@ -30915,6 +30915,16 @@ async function mapPickBg(seed) {
     return path.join(MAP_BG_DIR, files[h % files.length]);
   } catch { return null; }
 }
+// The premium Codex-made slime frame (consistent branded backdrop for the X/og share cards). Falls back to the
+// rotating map-kit backgrounds if the asset isn't present.
+let _premiumBgPath;
+async function premiumMapBg(seed) {
+  if (_premiumBgPath === undefined) {
+    const p = path.join(WEB_STATIC_DIR, "ui", "slime-dark.png");
+    _premiumBgPath = fsSync.existsSync(p) ? p : null;
+  }
+  return _premiumBgPath || mapPickBg(seed);
+}
 
 // 🙂 Slime FACE for anonymous (non-KOL) wallets — every bubble gets personality (owner: "default bubbles show
 // a slime pfp icon if no x profile"). Deterministic per wallet (same wallet → same face). Returns both a local
@@ -31444,7 +31454,7 @@ async function renderSubjectMapPng(target, mode = "bags") {
   const map = await buildSubjectMap(target, mode);
   if (!map || !map.nodes || !map.nodes.length) return { png: null, map: null };
   const { renderSlimeMapPng } = await import("./lib/slimeMapRender.mjs");
-  const bgPath = await mapPickBg(`${map.subject}${map.mint || map.wallet || ""}`);
+  const bgPath = await premiumMapBg(`${map.subject}${map.mint || map.wallet || ""}`);
   const png = await renderSlimeMapPng({ subject: map.subject, subtitle: map.subtitle, stats: map.stats, nodes: map.nodes, bgPath, centerImage: map.coinLogo || "" });
   mapRenderCache.set(key, { at: Date.now(), png, map });
   if (mapRenderCache.size > 200) mapRenderCache.delete(mapRenderCache.keys().next().value);
@@ -31461,7 +31471,7 @@ async function renderAirdropMapPng(mint) {
   const map = await buildAirdropMap(mint).catch(() => null);
   if (!map || !map.isToken || !Array.isArray(map.nodes) || !map.nodes.length) return { png: null, map: null };
   const { renderSlimeMapPng } = await import("./lib/slimeMapRender.mjs");
-  const bgPath = await mapPickBg(`${map.subject}${mint}drop`);
+  const bgPath = await premiumMapBg(`${map.subject}${mint}drop`);
   const nodes = map.nodes.map((n) => ({ ...n, state: n.state === "sold" ? "sold" : (n.crown ? "whale" : "hold") }));
   const png = await renderSlimeMapPng({ subject: map.subject, subtitle: map.subtitle, stats: map.stats, nodes, bgPath, centerImage: map.coinLogo || map.devAvatar || "" });
   airdropRenderCache.set(mint, { at: Date.now(), png, map });
