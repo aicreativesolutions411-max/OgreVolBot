@@ -150,7 +150,9 @@ function render(map){
   const links=nodes.map(n=>({source:'__hub',target:n.id,named:Boolean(n.label||n.crown)}));
   const all=[hub,...nodes];
   // center avatar clip (airdropper pfp if we have one)
-  if(map.devAvatar){defs.append('clipPath').attr('id','hubclip').append('circle').attr('r',40);defs.append('pattern').attr('id','hubimg').attr('width',1).attr('height',1).attr('patternContentUnits','objectBoundingBox').append('image').attr('href',map.devAvatar).attr('width',1).attr('height',1).attr('preserveAspectRatio','xMidYMid slice')}
+  // center = the COIN's PFP (from pump/dex) → falls back to the airdropper's pfp → 💰
+  const hubImg=map.coinLogo||map.devAvatar||'';
+  if(hubImg){defs.append('pattern').attr('id','hubimg').attr('width',1).attr('height',1).attr('patternContentUnits','objectBoundingBox').append('image').attr('href',hubImg).attr('width',1).attr('height',1).attr('preserveAspectRatio','xMidYMid slice')}
   const spoke=g.append('g').selectAll('line').data(links).join('line').attr('class',d=>d.named?'named':'spoke').attr('stroke-width',d=>d.named?2:1);
   // bag nodes
   const node=g.append('g').selectAll('g').data(nodes).join('g').attr('class','node');
@@ -170,8 +172,8 @@ function render(map){
     t.append('text').attr('x',9).attr('y',4).attr('class','lbl').text(txt);});
   // center hub — airdropper
   const hubg=g.append('g');
-  hubg.append('circle').attr('cx',W/2).attr('cy',H/2).attr('r',44).attr('fill',map.devAvatar?'url(#hubimg)':'#eaf6e6').attr('stroke',map.devAvatar?'#3f9c34':'#57c04a').attr('stroke-width',3.5).attr('clip-path',map.devAvatar?'url(#hubclip)':null);
-  if(!map.devAvatar){hubg.append('text').attr('x',W/2).attr('y',H/2+2).attr('text-anchor','middle').style('font','26px sans-serif').text('💰');}
+  hubg.append('circle').attr('cx',W/2).attr('cy',H/2).attr('r',44).attr('fill',hubImg?'url(#hubimg)':'#eaf6e6').attr('stroke','#3f9c34').attr('stroke-width',3.5);
+  if(!hubImg){hubg.append('text').attr('x',W/2).attr('y',H/2+2).attr('text-anchor','middle').style('font','26px sans-serif').text('💰');}
   hubg.append('text').attr('x',W/2).attr('y',H/2+62).attr('text-anchor','middle').style('font','900 16px sans-serif').attr('fill','#2b2417').text(map.subject);
   if(map.devName)hubg.append('text').attr('x',W/2).attr('y',H/2+80).attr('text-anchor','middle').style('font','12px sans-serif').attr('fill','#8b7d5f').text('by '+map.devName);
   // interactions

@@ -157,11 +157,17 @@ function render(map){
   node.append('circle').attr('r',d=>d.r+1.5).attr('fill','none').attr('stroke',d=>(COL[d.state]||COL.hold).f).attr('stroke-opacity',.6);
   // labels for KOLs + big holders
   node.filter(d=>d.label).append('text').attr('class','lbl').attr('x',d=>d.r+4).attr('y',4).text(d=>d.label);
-  // hub
+  // hub — the coin: its PFP (from pump/dex) fills the center circle, ticker + subtitle below.
   const hubg=g.append('g');
   hubg.append('circle').attr('cx',W/2).attr('cy',H/2).attr('r',52).attr('fill','#0a1f12').attr('stroke','#5be36a').attr('stroke-width',3);
-  hubg.append('text').attr('x',W/2).attr('y',H/2+6).attr('text-anchor','middle').style('font','900 22px sans-serif').attr('fill','#eafff0').text(map.subject);
-  hubg.append('text').attr('x',W/2).attr('y',H/2+26).attr('text-anchor','middle').style('font','12px sans-serif').attr('fill','#7bd98a').text(map.subtitle||'');
+  if(map.coinLogo){
+    defs.append('clipPath').attr('id','coinclip').append('circle').attr('cx',W/2).attr('cy',H/2).attr('r',49);
+    hubg.append('image').attr('href',map.coinLogo).attr('x',W/2-49).attr('y',H/2-49).attr('width',98).attr('height',98).attr('clip-path','url(#coinclip)').attr('preserveAspectRatio','xMidYMid slice').on('error',function(){d3.select(this).remove();hubg.append('text').attr('x',W/2).attr('y',H/2+8).attr('text-anchor','middle').style('font','900 20px sans-serif').attr('fill','#eafff0').text(map.subject)});
+  } else {
+    hubg.append('text').attr('x',W/2).attr('y',H/2+8).attr('text-anchor','middle').style('font','900 20px sans-serif').attr('fill','#eafff0').text(map.subject);
+  }
+  hubg.append('text').attr('x',W/2).attr('y',H/2+70).attr('text-anchor','middle').style('font','900 16px sans-serif').attr('fill','#eafff0').text(map.subject);
+  hubg.append('text').attr('x',W/2).attr('y',H/2+88).attr('text-anchor','middle').style('font','12px sans-serif').attr('fill','#7bd98a').text(map.subtitle||'');
   // interactions
   node.on('mousemove',(ev,d)=>{const r=stage.getBoundingClientRect();tip.style.opacity=1;tip.style.left=(ev.clientX-r.left+14)+'px';tip.style.top=(ev.clientY-r.top+14)+'px';tip.innerHTML='<div class="n">'+esc(d.name||short(d.wallet)||'')+'</div><div class="s">'+(d.pct!=null?'holds '+(+d.pct).toFixed(2)+'%':'')+(d.usd?' · $'+fmt(d.usd):'')+(d.wallet?'<br>'+short(d.wallet):'')+'<br>tap to drill in →</div>'})
       .on('mouseleave',()=>tip.style.opacity=0)

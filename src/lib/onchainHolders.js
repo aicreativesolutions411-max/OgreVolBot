@@ -158,3 +158,44 @@ export async function computeOnchainDistribution({ mint, creatorWallet = "", rpc
     holders: realHolders.slice(0, 40).map((h) => ({ wallet: h.owner, ui: h.ui, pct: round1(clampPct(h.ui, supply)) })),
   };
 }
+
+// BIGGER holder list for the bubble MAP / airdrop (up to `limit`, default 150). getTokenLargestAccounts only
+// returns the top 20; this enumerates ALL token accounts for the mint via getProgramAccounts (owner+amount via
+// a 40-byte dataSlice so the payload stays light), sorts by balance, classifies the top owners to drop
+// pools/curve/burn (they're always near the top), and returns real holders with %. HEAVIER than the top-20 path
+// (one gPA can be large on a mega-token), so the CALLER must budget-cap + timeout it. Returns [] on any failure.
+export async function computeManyHolders({ mint, rpcRead, limit = 150, poolAddr = "" } = {}) {
+  if (!mint || typeof rpcRead !== "function") return [];
+  let mintPk; try { mintPk = new PublicKey(mint); } catch { return []; }
+  const [supplyRes, accts] = await Promise.all([
+    rpcRead("many holders: supply", (c) => c.getTokenSupply(mintPk, "confirmed")).catch(() => null),
+    rpcRead("many holders: gPA", (c) => c.getProgramAccounts(new PublicKey(TOKEN_PROGRAM), {
+      commitment: "confirmed",
+      dataSlice: { offset: 32, length: 40 },                       // SPL token account: owner(32) + amount(u64,8)
+      filters: [{ dataSize: 165 }, { memcmp: { offset: 0, bytes: mint } }],
+    })).catch(() => null),
+  ]);
+  const rawSupply = Number(supplyRes?.value?.amount || 0);
+  if (!Array.isArray(accts) || !accts.length || !(rawSupply > 0)) return [];
+  const rows = [];
+  for (const a of accts) {
+    const buf = a?.account?.data; if (!buf || buf.length < 40) continue;
+    let owner, amt;
+    try { owner = new PublicKey(buf.subarray(0, 32)).toBase58(); amt = Number(buf.readBigUInt64LE(32)); } catch { continue; }
+    if (amt > 0 && owner) rows.push({ owner, amt });
+  }
+  rows.sort((a, b) => b.amt - a.amt);
+  const head = rows.slice(0, limit + 15);
+  const exclude = new Set([poolAddr].filter(Boolean));
+  try {
+    const probe = head.slice(0, Math.min(24, head.length)).map((r) => new PublicKey(r.owner));
+    const infos = await rpcRead("many holders: classify", (c) => c.getMultipleAccountsInfo(probe)).catch(() => null);
+    (infos || []).forEach((info, i) => {
+      const prog = info?.owner?.toBase58?.() || (info?.owner ? String(info.owner) : "");
+      if (prog && POOL_OWNER_PROGRAMS.has(prog)) exclude.add(head[i].owner);
+      if (BURN_ADDRESSES.has(head[i].owner)) exclude.add(head[i].owner);
+    });
+  } catch { /* worst case a pool shows as one bubble */ }
+  return head.filter((r) => !exclude.has(r.owner)).slice(0, limit)
+    .map((r) => ({ wallet: r.owner, pct: round1((r.amt / rawSupply) * 100) || 0 }));
+}

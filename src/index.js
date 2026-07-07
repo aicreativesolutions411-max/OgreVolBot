@@ -94,7 +94,7 @@ import {
 import { createTokenMetadataResolver } from "./lib/tokenMetadataResolver.js";
 import { createPumpPortalStream } from "./lib/pumpPortalStream.js";
 import { computeSlimeShield, slimeShieldHasHardDanger } from "./lib/slimeShield.js";
-import { computeOnchainDistribution } from "./lib/onchainHolders.js";
+import { computeOnchainDistribution, computeManyHolders } from "./lib/onchainHolders.js";
 import * as callerIntel from "./lib/callerIntel.js";
 import { computeCalibration as computeAutopilotCalibration, computeCalibrationByMode, modeScorecard } from "./lib/selfCalibration.js";
 import { r2PutObject, r2Configured } from "./lib/r2.js";
@@ -30821,6 +30821,16 @@ async function mapAnonFace(wallet) {
 
 // Holder LIST for the map: Solana Tracker first (many more real holders than the free on-chain top-20 — the
 // owner is fine leaning on ST here), free on-chain top list as the no-cost fallback. Returns [{wallet, pct}].
+// getProgramAccounts (the many-holders read) is the priciest RPC call — daily-capped so a burst of map loads
+// can't run away with the quota (it tripped the free-tier alert once). Map/airdrop are cached 8-10min, so this
+// fires at most once per coin per window.
+let manyHoldersDay = ""; let manyHoldersUsedToday = 0;
+const MANY_HOLDERS_DAILY_CAP = Math.max(50, Number(process.env.MAP_MANY_HOLDERS_DAILY_CAP) || 500);
+function manyHoldersBudgetOk() {
+  const day = new Date().toISOString().slice(0, 10);
+  if (day !== manyHoldersDay) { manyHoldersDay = day; manyHoldersUsedToday = 0; }
+  return manyHoldersUsedToday < MANY_HOLDERS_DAILY_CAP;
+}
 async function fetchTokenHolderRows(mint) {
   if (CONFIG.solanaTrackerApiKey) {
     try {
@@ -30830,8 +30840,18 @@ async function fetchTokenHolderRows(mint) {
         wallet: firstString(h.wallet, h.address, h.owner, h.account, h.holder),
         pct: firstMeaningfulNumber(h.percentage, h.pct, h.percent, h.share, h.ownership) || 0,
       })).filter((r) => r.wallet && r.pct > 0);
-      if (rows.length) return rows.sort((a, b) => b.pct - a.pct).slice(0, 60);
+      if (rows.length) return rows.sort((a, b) => b.pct - a.pct).slice(0, 150);
     } catch { /* fall through to on-chain */ }
+  }
+  // TOP 150 real wallets via getProgramAccounts (getTokenLargestAccounts only gives 20). Budget-capped + hard
+  // 8s timeout so it can't hang the map or blow the RPC quota; only trusted when it clearly beats the top-20.
+  if (manyHoldersBudgetOk()) {
+    manyHoldersUsedToday += 1;
+    const many = await Promise.race([
+      computeManyHolders({ mint, rpcRead, limit: 150 }).catch(() => []),
+      new Promise((resolve) => setTimeout(() => resolve(null), 8_000)),
+    ]);
+    if (Array.isArray(many) && many.length >= 20) return many;
   }
   const dist = await Promise.race([
     computeOnchainDistribution({ mint, rpcRead, withHolderCount: false }).catch(() => null),
@@ -30866,9 +30886,11 @@ async function buildTokenHolderMap(mint) {
   const createdAt = normalizePairCreatedAt(dexMeta?.pairCreatedAt) || pumpMeta?.pairCreatedAt || pumpMeta?.createdAt || 0;
   const isToken = Boolean(sym || mc > 0 || pumpMeta?.symbol || String(mint).endsWith("pump"));
   if (!isToken) return { kind: "token", mint, isToken: false, nodes: [] };  // truly not a token → caller falls to wallet map
+  // Coin PFP for the center bubble — DexScreener pair image → pump.fun image → on-chain metadata uri.
+  const coinLogo = firstString(best?.info?.imageUrl, dexMeta?.imageUrl, dexMeta?.info?.imageUrl, pumpMeta?.image, pumpMeta?.imageUrl, pumpMeta?.image_uri, pumpMeta?.uri);
   const maxPct = holderRows.reduce((m, h) => Math.max(m, h.pct || 0), 0) || 1;
   let kolsIn = 0, whales = 0;
-  const nodes = await Promise.all(holderRows.slice(0, 45).map(async (h, i) => {
+  const nodes = await Promise.all(holderRows.slice(0, 150).map(async (h, i) => {
     const id = mapResolveIdentity(h.wallet, idx);
     if (id.isKol) kolsIn++;
     const isWhale = (h.pct || 0) >= Math.max(1, maxPct * 0.5) || (i === 0 && (h.pct || 0) > 0);
@@ -30902,6 +30924,7 @@ async function buildTokenHolderMap(mint) {
   return {
     kind: "token", isToken: true, mint,
     subject: `$${(sym || shortMint(mint)).slice(0, 11)}`,
+    ticker: sym || "", coinLogo: coinLogo || "",           // coin PFP + ticker for the center bubble
     subtitle: nodes.length ? `${nodes.length} top holders` : "holders loading…",
     kolsIn, stats, nodes,
   };
@@ -30996,7 +31019,8 @@ async function buildAirdropMap(mint) {
   const poolAddr = String(best?.pairAddress || best?.address || "").trim();
   // FAST PATH: render from holders (or a prior background scan) NOW — don't block on the dev-transfer scan.
   // getParsedTransaction × N is too slow on our RPC to await (every request was burning ~8s finding nothing).
-  const args = { mint, sym, mc, supplyUi, pricePerToken, dev, idx, holderRows };
+  const coinLogo = firstString(best?.info?.imageUrl, dexMeta?.imageUrl, dexMeta?.info?.imageUrl, pumpMeta?.image, pumpMeta?.imageUrl, pumpMeta?.image_uri, pumpMeta?.uri);
+  const args = { mint, sym, mc, supplyUi, pricePerToken, dev, idx, holderRows, coinLogo };
   const prior = airdropScanCache.get(mint);
   const haveScan = prior && Date.now() - prior.at < 30 * 60_000;
   const v = await buildAirdropView({ ...args, recips: haveScan ? prior.recips : new Map(), bagsDropped: haveScan ? prior.bagsDropped : 0 });
@@ -31019,18 +31043,18 @@ async function buildAirdropMap(mint) {
 }
 // Build the airdrop map view object from a recipient set (real dev-sends) OR the holder distribution fallback.
 // Split out so the fast path and the background-enhance path share one renderer.
-async function buildAirdropView({ mint, sym, mc, supplyUi, pricePerToken, dev, idx, holderRows, recips, bagsDropped }) {
+async function buildAirdropView({ mint, sym, mc, supplyUi, pricePerToken, dev, idx, holderRows, recips, bagsDropped, coinLogo }) {
   const holderPctByWallet = new Map(holderRows.map((h) => [h.wallet, h.pct || 0]));
   const holderSet = new Set(holderRows.map((h) => h.wallet));
   let usedFallback = false;
   let entries = [...recips.entries()].map(([wallet, tokens]) => ({ wallet, tokens, held: holderSet.has(wallet) }));
   if (entries.length < 5) {
     usedFallback = true;   // no real dev-airdrop found (or RPC-limited) → top holders as bags so it ALWAYS renders
-    entries = holderRows.slice(0, 60).map((h) => ({ wallet: h.wallet, tokens: supplyUi * ((h.pct || 0) / 100), held: true }));
+    entries = holderRows.slice(0, 150).map((h) => ({ wallet: h.wallet, tokens: supplyUi * ((h.pct || 0) / 100), held: true }));
     bagsDropped = entries.length;
   }
   entries.sort((a, b) => b.tokens - a.tokens);
-  const top = entries.slice(0, 60);
+  const top = entries.slice(0, 150);
   const totalTokens = entries.reduce((s, e) => s + e.tokens, 0);
   const held = entries.filter((e) => e.held).length;
   const maxTok = top.reduce((m, e) => Math.max(m, e.tokens), 0) || 1;
@@ -31063,6 +31087,7 @@ async function buildAirdropView({ mint, sym, mc, supplyUi, pricePerToken, dev, i
   return {
     kind: "airdrop", isToken: true, mint,
     subject: `$${(sym || shortMint(mint)).slice(0, 11)}`,
+    ticker: sym || "", coinLogo: coinLogo || "",          // coin PFP + ticker for the center bubble
     subtitle: usedFallback ? "top holders" : `${entries.length} wallets fed`,
     dev, devName: devId?.isKol ? devId.name : "", devAvatar: devId?.avatarUrl || "",
     approx: usedFallback,                                 // true = distribution fallback, not literal dev-sends

@@ -1926,7 +1926,7 @@ test("KOL/wallet map: on-chain holders + ST identity, X 'map' intent + wallet ta
   const apiIdx = serverSource.indexOf('pathname === "/api/map"');
   const gateIdx = serverSource.indexOf("const auth = await authenticateWebRequest(request)");
   assert.ok(apiIdx > 0 && apiIdx < gateIdx, "/api/map must be registered before the web auth gate");
-  assert.match(serverSource, /serveStaticHtmlPage\(response, "map\.html"\)/);
+  assert.match(serverSource, /serveStaticHtmlPage\(response, "map\.html"/);
   // interactive page exists + drills in (click a node → that wallet/coin map)
   const mapHtml = fs.readFileSync(new URL("../web/public/map.html", import.meta.url), "utf8");
   assert.match(mapHtml, /\/api\/map\?/);
