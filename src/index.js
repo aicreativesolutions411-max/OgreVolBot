@@ -6089,11 +6089,11 @@ function startHealthServer() {
       return;
     }
     if (request.method === "GET" && ["/map", "/kolmap", "/holders", "/bubblemap", "/wallet-map"].includes(requestUrl.pathname)) {
-      await serveStaticHtmlPage(response, "map.html");
+      await serveStaticHtmlPage(response, "map.html", "no-store, must-revalidate");   // dynamic tool page — never cache the HTML
       return;
     }
     if (request.method === "GET" && ["/airdrop", "/airdrops", "/drop", "/bags"].includes(requestUrl.pathname)) {
-      await serveStaticHtmlPage(response, "airdrop.html");
+      await serveStaticHtmlPage(response, "airdrop.html", "no-store, must-revalidate");
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/learn") {

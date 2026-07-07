@@ -8,6 +8,18 @@
 /config.js
   Cache-Control: no-store
 
+# Dynamic tool pages (live on-chain map/airdrop data). MUST never be cached: a stale copy pins the OLD
+# page whose relative /api/ fetch hits this static host (returns index.html) → false "chain is slow" /
+# "network dropped". no-store guarantees the browser always gets the current page (which calls the API origin).
+/map
+  Cache-Control: no-store, must-revalidate
+/map.html
+  Cache-Control: no-store, must-revalidate
+/airdrop
+  Cache-Control: no-store, must-revalidate
+/airdrop.html
+  Cache-Control: no-store, must-revalidate
+
 # Downloadable PDFs are re-generated in place (same filename), so they MUST revalidate every fetch —
 # otherwise a stale copy (e.g. an older, sparser guide layout) stays pinned in the browser for hours.
 /SlimeWire-TG-Guide.pdf
