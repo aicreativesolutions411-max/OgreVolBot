@@ -1,4 +1,0 @@
-# raw drops + processed originals are scratch — don't commit them, only the README + this file
-*
-!.gitignore
-!README.md

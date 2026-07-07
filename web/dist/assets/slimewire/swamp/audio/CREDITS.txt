@@ -1,2 +1,0 @@
-Audio: Kenney CC0 packs (impact-sounds, ui-audio, rpg-audio, music-jingles, digital-audio, interface-sounds) — kenney.nl, CC0/public domain.
-Ambient loop: synthesized with ffmpeg (original).
