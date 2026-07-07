@@ -30,11 +30,11 @@
   #crumbs{display:flex;gap:6px;align-items:center;padding:8px 16px 0;flex-wrap:wrap;font-size:13px;color:var(--dim)}
   #crumbs .c{cursor:pointer;padding:3px 11px;border:1px solid var(--line);border-radius:20px;background:rgba(6,24,13,.7)}
   #crumbs .c:last-child{color:var(--ink);border-color:var(--slime)}
-  #stats{display:flex;gap:9px;padding:11px 16px;overflow-x:auto}
-  .stat{flex:0 0 auto;min-width:96px;background:linear-gradient(180deg,rgba(13,42,24,.9),rgba(8,28,16,.72));border:1px solid var(--line);border-radius:15px;padding:9px 13px;position:relative;overflow:hidden;box-shadow:0 4px 14px rgba(0,0,0,.25)}
+  #stats{display:flex;gap:7px;padding:9px 14px;overflow-x:auto}
+  .stat{flex:0 0 auto;min-width:86px;background:linear-gradient(180deg,rgba(13,42,24,.9),rgba(8,28,16,.72));border:1px solid var(--line);border-radius:13px;padding:7px 11px;position:relative;overflow:hidden;box-shadow:0 4px 14px rgba(0,0,0,.25)}
   .stat::before{content:"";position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--slime),transparent)}
-  .stat .l{font-size:10.5px;color:var(--dim);font-weight:800;letter-spacing:.5px;text-transform:uppercase}
-  .stat .v{font-size:19px;font-weight:900;color:var(--ink);line-height:1.15}
+  .stat .l{font-size:9.5px;color:var(--dim);font-weight:800;letter-spacing:.5px;text-transform:uppercase}
+  .stat .v{font-size:17px;font-weight:900;color:var(--ink);line-height:1.12}
   #main{flex:1;position:relative;min-height:0;display:flex}
   #stage{flex:1;position:relative;min-height:0}
   svg{width:100%;height:100%;display:block;touch-action:none}
@@ -158,9 +158,19 @@ function scheduleRefresh(kind,id,mode){if(refreshTimer)clearTimeout(refreshTimer
 function showLoading(){overlay.className='';overlay.innerHTML='<div class="spin"></div><p>Reading the chain…</p>'}
 function showError(m){overlay.className='';overlay.innerHTML='<h1>🫥</h1><p>'+esc(m)+'</p><button class="ghost" onclick="location.href=\'/map\'">Start over</button>'}
 function drawCrumbs(){const el=document.getElementById('crumbs');el.innerHTML=crumbs.map((c,i)=>'<span class="c" data-i="'+i+'">'+(i===0?'🗺️ ':'')+esc(c.label)+'</span>').join('<span style="opacity:.5">›</span>');[...el.querySelectorAll('.c')].forEach(n=>n.onclick=()=>{const i=+n.dataset.i,c=crumbs[i];crumbs=crumbs.slice(0,i);loadTarget(c.kind,c.id,c.mode,true,c.label)})}
-function drawStats(map){document.getElementById('stats').innerHTML=(map.stats||[]).map(s=>'<div class="stat"><div class="l">'+esc(s.label)+'</div><div class="v">'+esc(s.value)+'</div></div>').join('')}
+function drawStats(map){
+  const st=(map.stats||[]).slice();
+  if(map&&map.kind==='token'&&!st.some(s=>s.label==='HOLDERS'))st.splice(Math.min(4,st.length),0,{label:'HOLDERS',value:String((map.nodes||[]).length||'--')});
+  document.getElementById('stats').innerHTML=st.map(s=>'<div class="stat"><div class="l">'+esc(s.label)+'</div><div class="v">'+esc(s.value)+'</div></div>').join('');
+}
 function fmtUsd(n){n=+n||0;if(n>=1e9)return'$'+(n/1e9).toFixed(1)+'B';if(n>=1e6)return'$'+(n/1e6).toFixed(1)+'M';if(n>=1e3)return'$'+(n/1e3).toFixed(n>=1e5?0:1)+'K';return'$'+Math.round(n)}
-function setStat(label,val){[...document.querySelectorAll('#stats .stat')].forEach(el=>{const l=el.querySelector('.l');if(l&&l.textContent.trim()===label){const v=el.querySelector('.v');if(v)v.textContent=val}})}
+function ensureStat(label){
+  let found=null;[...document.querySelectorAll('#stats .stat')].forEach(el=>{const l=el.querySelector('.l');if(l&&l.textContent.trim()===label)found=el});
+  if(found)return found;
+  const el=document.createElement('div');el.className='stat';el.innerHTML='<div class="l">'+esc(label)+'</div><div class="v">--</div>';
+  document.getElementById('stats').appendChild(el);return el;
+}
+function setStat(label,val){const el=ensureStat(label);const v=el&&el.querySelector('.v');if(v)v.textContent=val}
 // 💧 LIQUIDITY + 1H come from DexScreener, which RATE-LIMITS our Render IP → the server returns them blank.
 // Fetch from the BROWSER (the user's IP, not rate-limited) and patch the two cards — same trick the main feed uses.
 function enrichCoinStats(mint){
@@ -275,7 +285,7 @@ function render(map){
     node.filter(d=>colOf.has(d.i)).select('.body').attr('stroke',d=>colOf.get(d.i)).attr('stroke-width',3.5);
     clusterHulls=clusters;
     hullG.selectAll('path.hull').data(clusters).join('path').attr('class','hull').attr('fill',d=>d.color).attr('fill-opacity',0).attr('stroke',d=>d.color).attr('stroke-opacity',.35).attr('stroke-width',1.5).style('cursor','pointer').on('click',(ev,d)=>openCluster(d)).transition().duration(700).attr('fill-opacity',.09);
-    hullG.selectAll('text.clbl').data(clusters).join('text').attr('class','clbl').attr('text-anchor','middle').style('font','800 12px sans-serif').style('paint-order','stroke').style('cursor','pointer').attr('stroke','#04120a').attr('stroke-width',3).attr('fill',d=>d.color).text(d=>'◆ '+(+d.pct).toFixed(1)+'%').on('click',(ev,d)=>openCluster(d));
+    hullG.selectAll('text.clbl').data(clusters).join('text').attr('class','clbl').attr('text-anchor','middle').style('font','800 11px sans-serif').style('paint-order','stroke').style('cursor','pointer').attr('stroke','#04120a').attr('stroke-width',3).attr('fill',d=>d.color).text(d=>d.members.length+' wallets · '+(+d.pct).toFixed(1)+'%').on('click',(ev,d)=>openCluster(d));
     sim.alpha(.35).restart();
     renderClusterLegend(clusters);
     const total=(gr.summary&&Number.isFinite(+gr.summary.clusteredPct))?+gr.summary.clusteredPct:Math.round(clusters.reduce((s,c)=>s+(+c.pct||0),0)*10)/10;
@@ -294,7 +304,7 @@ function renderClusterLegend(cl){
   clustersData=cl;
   const side=document.getElementById('side'); if(!side)return;
   let el=document.getElementById('clusters'); if(!el){el=document.createElement('div');el.id='clusters';side.insertBefore(el,side.firstChild)}
-  el.innerHTML='<h3>🕸️ Clusters ('+cl.length+') · tap to dive</h3>'+cl.map((c,k)=>'<div class="krow" data-k="'+k+'"><span style="width:14px;height:14px;border-radius:4px;flex:0 0 14px;background:'+c.color+';box-shadow:0 0 8px '+c.color+'"></span><div><div class="nm">Cluster '+c.letter+' · '+(+c.pct).toFixed(1)+'%</div><div class="sub">'+c.size+' wallets · $'+fmt(c.usd)+' →</div></div></div>').join('');
+  el.innerHTML='<h3>🕸️ Clusters ('+cl.length+') · tap to dive</h3>'+cl.map((c,k)=>'<div class="krow" data-k="'+k+'"><span style="width:14px;height:14px;border-radius:4px;flex:0 0 14px;background:'+c.color+';box-shadow:0 0 8px '+c.color+'"></span><div><div class="nm">Cluster '+c.letter+' · '+c.members.length+' wallets</div><div class="sub">'+(+c.pct).toFixed(1)+'% held together · $'+fmt(c.usd)+' →</div></div></div>').join('');
   [...el.querySelectorAll('.krow')].forEach(r=>r.onclick=()=>openCluster(clustersData[+r.dataset.k]));
 }
 function renderClusterEmpty(){
@@ -309,8 +319,8 @@ function openCluster(cl){
   const d=document.getElementById('drill'),c=document.getElementById('drillcard');
   d.className='on';
   const rows=(cl.members||[]).slice().sort((a,b)=>(b.pct||0)-(a.pct||0)).map(m=>'<div class="hrow" data-w="'+esc(m.wallet)+'">'+((m.avatarUrl||m.faceUrl)?'<img src="'+esc(m.avatarUrl||m.faceUrl)+'" onerror="this.style.visibility=\'hidden\'"/>':'<div class="hs">🫧</div>')+'<div><div class="nm">'+(m.isKol?'⭐ ':'')+esc(m.name||short(m.wallet))+'</div><div class="sub">'+short(m.wallet)+'</div></div><div class="v">'+(m.pct!=null?(+m.pct).toFixed(1)+'%':'')+(m.usd?'<br>$'+fmt(m.usd):'')+'</div></div>').join('');
-  c.innerHTML='<div class="dh"><b><span style="color:'+cl.color+'">◆</span> Cluster '+cl.letter+'</b><button class="x" onclick="closeDrill()">×</button></div>'+
-    '<div class="sub" style="color:var(--dim);font-size:12.5px;margin-bottom:8px;line-height:1.45">'+cl.size+' wallets funded by ONE source · <b style="color:'+cl.color+'">'+(+cl.pct).toFixed(1)+'%</b> of supply · $'+fmt(cl.usd)+' combined — likely one actor (insider / bundle). Tap a wallet to map it.</div>'+
+  c.innerHTML='<div class="dh"><b><span style="color:'+cl.color+'">◆</span> Cluster '+cl.letter+' · '+cl.members.length+' wallets</b><button class="x" onclick="closeDrill()">×</button></div>'+
+    '<div class="sub" style="color:var(--dim);font-size:12.5px;margin-bottom:8px;line-height:1.45">'+cl.members.length+' wallets funded by ONE source · <b style="color:'+cl.color+'">'+(+cl.pct).toFixed(1)+'%</b> of supply · $'+fmt(cl.usd)+' combined — likely one actor (insider / bundle). Tap a wallet to map it.</div>'+
     '<div id="hrows">'+rows+'</div>';
   [...c.querySelectorAll('.hrow')].forEach(r=>r.onclick=()=>{const w=r.dataset.w;if(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(w)){closeDrill();loadTarget('wallet',w,'bags',true)}});
 }

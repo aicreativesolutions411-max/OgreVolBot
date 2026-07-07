@@ -30948,6 +30948,21 @@ async function fetchKolscanIdentities() {
       while ((m = re2.exec(html)) && out.length < 120) out.push({ name: `@${m[1]}`, twitter: m[1], wallet: m[2], avatar: `https://unavatar.io/twitter/${m[1]}` });
     }
   } catch { /* IP-blocked / offline → [] */ }
+  try {
+    const seen = new Set(out.map((x) => String(x.wallet || "")));
+    for (let i = 0; i < KOLSCAN_SEED_WALLETS.length; i++) {
+      const wallet = KOLSCAN_SEED_WALLETS[i];
+      if (!solanaPublicKeyLike(wallet) || seen.has(wallet)) continue;
+      const handle = String(KOLSCAN_SEED_HANDLES[i] || "").replace(/^@/, "");
+      out.push({
+        name: handle ? `@${handle}` : shortMint(wallet),
+        twitter: handle,
+        wallet,
+        avatar: handle ? `https://unavatar.io/twitter/${handle}` : "",
+      });
+      seen.add(wallet);
+    }
+  } catch { /* seed list is optional */ }
   kolscanIdCache = { at: Date.now(), list: out };
   return out;
 }
@@ -31135,6 +31150,7 @@ async function buildTokenHolderMap(mint) {
     { label: "LIQUIDITY", value: liq ? fmtMc(liq) : "—" },
     { label: "AGE", value: ageLabel },
     { label: "1H", value: Number.isFinite(ch1) ? `${ch1 >= 0 ? "+" : ""}${Math.round(ch1)}%` : "—" },
+    { label: "HOLDERS", value: holderRows.length ? String(holderRows.length) : (nodes.length ? String(nodes.length) : "—") },
     { label: "TOP 10", value: top10 > 0 ? `${Math.round(top10)}%` : "—" },
   ];
   try { console.log(`[map] ${sym || shortMint(mint)} ${Date.now() - _t0}ms · holders=${holderRows.length} kols=${kolsIn} · liq=${liq} src[dex=${dexMeta ? (dexMeta.liquidityUsd || 0) : "null"} gk=${geckoMeta ? (geckoMeta.liquidityUsd == null ? "null" : geckoMeta.liquidityUsd) : "MISS"} pump=${pumpMeta ? (pumpMeta.liquidityUsd || 0) : "null"}] ch1=${ch1}`); } catch { /* best-effort */ }
