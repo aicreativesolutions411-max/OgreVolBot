@@ -278,8 +278,9 @@ function render(map){
     hullG.selectAll('text.clbl').data(clusters).join('text').attr('class','clbl').attr('text-anchor','middle').style('font','800 12px sans-serif').style('paint-order','stroke').style('cursor','pointer').attr('stroke','#04120a').attr('stroke-width',3).attr('fill',d=>d.color).text(d=>'◆ '+(+d.pct).toFixed(1)+'%').on('click',(ev,d)=>openCluster(d));
     sim.alpha(.35).restart();
     renderClusterLegend(clusters);
-    const xc=document.getElementById('xrayCl'); if(xc)xc.innerHTML='<b style="color:#ffcf4d">'+clusters.length+'</b> · '+(+clusters[0].pct).toFixed(1)+'%';
-    document.getElementById('stats').insertAdjacentHTML('beforeend','<div class="stat" style="border-color:#ffcf4d"><div class="l">🕸️ CLUSTERS</div><div class="v">'+clusters.length+' · '+(+clusters[0].pct).toFixed(1)+'%</div></div>');
+    const total=(gr.summary&&Number.isFinite(+gr.summary.clusteredPct))?+gr.summary.clusteredPct:Math.round(clusters.reduce((s,c)=>s+(+c.pct||0),0)*10)/10;
+    const xc=document.getElementById('xrayCl'); if(xc)xc.innerHTML='<b style="color:#ffcf4d">'+clusters.length+'</b> · '+total+'%';
+    const stats=document.getElementById('stats'); if(stats&&!document.getElementById('clstat'))stats.insertAdjacentHTML('beforeend','<div class="stat" id="clstat" style="border-color:#ffcf4d"><div class="l">🕸️ CLUSTERS</div><div class="v">'+clusters.length+' · '+total+'%</div></div>');
     return true;
   }
   if(map.kind==='token'&&map.mint){

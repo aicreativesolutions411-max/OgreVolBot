@@ -7540,7 +7540,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
           })(),
           new Promise((res) => setTimeout(() => res({ edges: [], clusters: [], timeout: true }), 15_000))
         ]);
-        sendWebJson(request, response, 200, { ok: true, edges: graph.edges || [], clusters: graph.clusters || [], timeout: Boolean(graph.timeout) });
+        sendWebJson(request, response, 200, { ok: true, edges: graph.edges || [], clusters: graph.clusters || [], summary: graph.summary || null, timeout: Boolean(graph.timeout) });
       } catch (e) { sendWebJson(request, response, 200, { ok: false, error: String((e && e.message) || e) }); }
       return;
     }
@@ -7561,7 +7561,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
           })(),
           new Promise((res) => setTimeout(() => res({ edges: [], clusters: [], timeout: true }), 15_000))
         ]);
-        sendWebJson(request, response, 200, { ok: true, edges: graph.edges || [], clusters: graph.clusters || [], timeout: Boolean(graph.timeout) });
+        sendWebJson(request, response, 200, { ok: true, edges: graph.edges || [], clusters: graph.clusters || [], summary: graph.summary || null, timeout: Boolean(graph.timeout) });
       } catch (e) { sendWebJson(request, response, 200, { ok: false, error: String((e && e.message) || e) }); }
       return;
     }
@@ -25398,6 +25398,31 @@ function metadataFromDexPair(tokenMint, best = null) {
   };
 }
 
+function mergeTokenMarketMetadata(primary = null, fallback = null) {
+  if (!fallback || typeof fallback !== "object") return primary || null;
+  if (!primary || typeof primary !== "object") return { ...fallback };
+  const priceChange = { ...((fallback && fallback.priceChange) || {}), ...((primary && primary.priceChange) || {}) };
+  const volume = { ...((fallback && fallback.volume) || {}), ...((primary && primary.volume) || {}) };
+  const txns = { ...((fallback && fallback.txns) || {}), ...((primary && primary.txns) || {}) };
+  return {
+    ...fallback,
+    ...primary,
+    symbol: firstString(primary.symbol, fallback.symbol),
+    name: firstString(primary.name, fallback.name),
+    imageUrl: firstString(primary.imageUrl, primary.imageUri, fallback.imageUrl, fallback.imageUri),
+    websiteUrl: firstString(primary.websiteUrl, fallback.websiteUrl),
+    twitterUrl: firstString(primary.twitterUrl, fallback.twitterUrl),
+    telegramUrl: firstString(primary.telegramUrl, fallback.telegramUrl),
+    marketCap: firstMeaningfulNumber(primary.marketCap, fallback.marketCap, fallback.fdv),
+    fdv: firstMeaningfulNumber(primary.fdv, fallback.fdv),
+    priceUsd: firstMeaningfulNumber(primary.priceUsd, fallback.priceUsd),
+    liquidityUsd: firstMeaningfulNumber(primary.liquidityUsd, fallback.liquidityUsd),
+    priceChange: Object.keys(priceChange).length ? priceChange : null,
+    volume: Object.keys(volume).length ? volume : null,
+    txns: Object.keys(txns).length ? txns : null,
+  };
+}
+
 function dexPairLinks(pair = null) {
   const websites = Array.isArray(pair?.info?.websites) ? pair.info.websites : [];
   const socials = Array.isArray(pair?.info?.socials) ? pair.info.socials : [];
@@ -30808,17 +30833,18 @@ async function gatherSlimeScan(mint) {
   // (volume, 1H txns, price-change). Fetch everything in parallel so the card always has the
   // richest read available — no field is left blank just because one source was slow.
   const pumpStyle = isPumpStyleToken({ tokenMint: mint });
-  const [pairs, rug, shield, dexPaid, supply, pumpMeta, athRaw] = await Promise.all([
+  const [pairs, rug, shield, dexPaid, supply, pumpMeta, athRaw, geckoMeta] = await Promise.all([
     fetchDexScreenerTokenPairsFallback(mint).catch(() => null),
     fetchRugcheckFull(mint).catch(() => null),
     webSlimeShield(mint).catch(() => null),
     fetchDexPaidStatus(mint).catch(() => null),
     fetchTokenSupplyUi(mint).catch(() => null),
     (pumpStyle ? getPumpFunTokenMetadata(mint).catch(() => null) : Promise.resolve(null)),
-    (CONFIG.solanaTrackerApiKey ? solanaTrackerJson(`/tokens/${mint}/ath`, { cacheTtlMs: 60_000, timeoutMs: 5_000 }).catch(() => null) : Promise.resolve(null))
+    (CONFIG.solanaTrackerApiKey ? solanaTrackerJson(`/tokens/${mint}/ath`, { cacheTtlMs: 60_000, timeoutMs: 5_000 }).catch(() => null) : Promise.resolve(null)),
+    getGeckoTerminalTokenMetadata(mint, { timeoutMs: 2_200 }).catch(() => null)
   ]);
   const best = bestDexPairForToken(mint, pairs);
-  const meta = best ? metadataFromDexPair(mint, best) : null;
+  let meta = mergeTokenMarketMetadata(best ? metadataFromDexPair(mint, best) : null, geckoMeta);
   // bonding = Pump metadata. Always present for pump-style coins (fetched above); for the rare
   // case it wasn't pump-style yet has no Dex MC, grab it now so MC/price/LP never read blank.
   let bonding = pumpMeta;
@@ -30830,6 +30856,17 @@ async function gatherSlimeScan(mint) {
   // graduated / non-pump coin DexScreener + pump don't cover. Only fetched when the cheap sources are thin.
   let onchain = null;
   if (!(meta && meta.symbol) && !(bonding && bonding.symbol)) onchain = await fetchOnchainTokenMeta(mint).catch(() => null);
+  if (onchain && (onchain.symbol || onchain.name || onchain.imageUrl || onchain.avatarUrl)) {
+    meta = mergeTokenMarketMetadata(meta, {
+      symbol: onchain.symbol,
+      name: onchain.name,
+      imageUrl: firstString(onchain.imageUrl, onchain.avatarUrl, onchain.imageUri),
+      websiteUrl: onchain.websiteUrl,
+      twitterUrl: onchain.twitterUrl,
+      telegramUrl: onchain.telegramUrl,
+      priceUsd: onchain.priceUsd,
+    });
+  }
   return { best, meta, rug: rugFilled, shield, bonding, dexPaid, supply, ath, onchain };
 }
 
@@ -31037,7 +31074,7 @@ async function buildTokenHolderMap(mint) {
     getGeckoTerminalTokenMetadata(mint, { timeoutMs: 4800 }).catch(() => null),
   ]);
   const best = bestDexPairForToken(mint, pairs);
-  const dexMeta = best ? metadataFromDexPair(mint, best) : null;
+  const dexMeta = mergeTokenMarketMetadata(best ? metadataFromDexPair(mint, best) : null, geckoMeta);
   const onCurve = Boolean(pumpMeta && !pumpMeta.graduated && !(dexMeta && dexMeta.marketCap));
   const pick = (p, d) => onCurve ? firstMeaningfulNumber(p, d) : firstMeaningfulNumber(d, p);
   let sym = String(dexMeta?.symbol || pumpMeta?.symbol || geckoMeta?.symbol || "").trim();
@@ -31102,7 +31139,7 @@ async function buildTokenHolderMap(mint) {
   ];
   try { console.log(`[map] ${sym || shortMint(mint)} ${Date.now() - _t0}ms · holders=${holderRows.length} kols=${kolsIn} · liq=${liq} src[dex=${dexMeta ? (dexMeta.liquidityUsd || 0) : "null"} gk=${geckoMeta ? (geckoMeta.liquidityUsd == null ? "null" : geckoMeta.liquidityUsd) : "MISS"} pump=${pumpMeta ? (pumpMeta.liquidityUsd || 0) : "null"}] ch1=${ch1}`); } catch { /* best-effort */ }
   return {
-    kind: "token", isToken: true, mint, mc,                // raw MC number — X reply receipts + airdrop hint
+    kind: "token", isToken: true, mint, mc, liq, ch1,      // raw market numbers — X receipts + airdrop hint
     subject: `$${(sym || shortMint(mint)).slice(0, 11)}`,
     ticker: sym || "", coinLogo: coinLogo || "",           // coin PFP + ticker for the center bubble
     subtitle: nodes.length ? `${nodes.length} top holders` : "holders loading…",
@@ -31177,22 +31214,32 @@ async function buildAirdropMap(mint, devOverride = "", tokenHint = null) {
   // → supply → dev-infer → holders (~6s+ sequential). This is the fix for the frequent "chain is slow" on
   // /api/airdrop: only the transfer scan (which needs the dev wallet) is left to run after.
   const _rt = (p, ms, fb) => Promise.race([p, new Promise((r) => setTimeout(() => r(fb), ms))]);   // hard per-read cap
-  const [idx, pumpMeta, pairs, holderRows, supplyRes, devInf] = await Promise.all([
+  const [idx, pumpMeta, pairs, holderRows, supplyRes, devInf, geckoMeta] = await Promise.all([
     _rt(mapKolIdentityIndex().catch(() => new Map()), 5000, new Map()),
     _rt(getPumpFunTokenMetadata(mint).catch(() => null), 6000, null),
     _rt(fetchDexScreenerTokenPairsFallback(mint).catch(() => null), 6000, null),
     _rt(fetchTokenHolderRows(mint).catch(() => []), 8000, []),
     _rt(rpcRead("airdrop supply", (c) => c.getTokenSupply(new PublicKey(mint), "confirmed"), { retries: 0 }).catch(() => null), 3500, null),
     _rt(inferDevCandidateFromMintSource(mint).catch(() => null), 4000, null),
+    _rt(getGeckoTerminalTokenMetadata(mint, { timeoutMs: 3200 }).catch(() => null), 3600, null),
   ]);
   const best = bestDexPairForToken(mint, pairs);
-  const dexMeta = best ? metadataFromDexPair(mint, best) : null;
+  const dexMeta = mergeTokenMarketMetadata(best ? metadataFromDexPair(mint, best) : null, geckoMeta);
   const onCurve = Boolean(pumpMeta && !pumpMeta.graduated && !(dexMeta && dexMeta.marketCap));
   const pick = (p, d) => onCurve ? firstMeaningfulNumber(p, d) : firstMeaningfulNumber(d, p);
   let sym = String(dexMeta?.symbol || pumpMeta?.symbol || tokenHint?.sym || "").trim();
   let mc = pick(pumpMeta?.marketCap, dexMeta?.marketCap ?? dexMeta?.fdv) || Number(tokenHint?.mc) || 0;
+  let liq = pick(pumpMeta?.liquidityUsd, dexMeta?.liquidityUsd) || firstMeaningfulNumber(tokenHint?.liq, tokenHint?.liquidityUsd) || 0;
+  let ch1 = firstMeaningfulNumber(dexMeta?.priceChange?.h1, pumpMeta?.priceChange?.h1, tokenHint?.ch1, tokenHint?.priceChange?.h1);
   { const lg = mapMetaLastGood.get(mint);   // sticky last-good (same cache the holder map keeps warm)
-    if (lg && Date.now() - lg.at < 15 * 60_000) { if (!(mc > 0) && lg.mc > 0) mc = lg.mc; if (!sym && lg.sym) sym = lg.sym; } }
+    if (lg && Date.now() - lg.at < 15 * 60_000) {
+      if (!(mc > 0) && lg.mc > 0) mc = lg.mc;
+      if (!(liq > 0) && lg.liq > 0) liq = lg.liq;
+      if (!Number.isFinite(ch1) && Number.isFinite(lg.ch1)) ch1 = lg.ch1;
+      if (!sym && lg.sym) sym = lg.sym;
+    }
+    if (mc > 0 || liq > 0) { mapMetaLastGood.set(mint, { at: Date.now(), mc, liq, ch1, sym });
+      if (mapMetaLastGood.size > 400) mapMetaLastGood.delete(mapMetaLastGood.keys().next().value); } }
   let isToken = Boolean(sym || mc > 0 || pumpMeta?.symbol || String(mint).endsWith("pump") || tokenHint?.isToken);
   // Chain-authoritative fallback (same as the holder map): metadata sources flake, mints don't.
   if (!isToken) { try { await getMintTokenProgramId(mint); isToken = true; } catch { /* not a mint */ } }
@@ -31211,14 +31258,14 @@ async function buildAirdropMap(mint, devOverride = "", tokenHint = null) {
   // FAST PATH: render from holders (or a prior background scan) NOW — don't block on the dev-transfer scan.
   // getParsedTransaction × N is too slow on our RPC to await (every request was burning ~8s finding nothing).
   const coinLogo = firstString(best?.info?.imageUrl, dexMeta?.imageUrl, dexMeta?.info?.imageUrl, pumpMeta?.image, pumpMeta?.imageUrl, pumpMeta?.image_uri, pumpMeta?.uri);
-  const args = { mint, sym, mc, supplyUi, pricePerToken, dev, idx, holderRows, coinLogo };
+  const args = { mint, sym, mc, liq, ch1, supplyUi, pricePerToken, dev, idx, holderRows, coinLogo };
   const prior = airdropScanCache.get(cacheKey);
   const haveScan = prior && Date.now() - prior.at < 30 * 60_000;
   const v = await buildAirdropView({ ...args, recips: haveScan ? prior.recips : new Map(), bagsDropped: haveScan ? prior.bagsDropped : 0 });
   if (solanaPublicKeyLike(devOverride)) v.fromWallet = dev;   // flag: this map was reached from a pasted airdropper wallet
   airdropMapCache.set(cacheKey, { at: Date.now(), v });
   if (airdropMapCache.size > 200) airdropMapCache.delete(airdropMapCache.keys().next().value);
-  try { console.log(`[airdrop] ${sym || shortMint(mint)} ${Date.now() - _t0}ms · ${v.approx ? "holders" : "dev-sends"} · fed=${(v.stats.find((s) => s.label === "WALLETS FED") || {}).value} · scan=${haveScan ? prior.recips.size : "bg"}${devOverride ? " · from-wallet" : ""}`); } catch { /* best-effort */ }
+  try { console.log(`[airdrop] ${sym || shortMint(mint)} ${Date.now() - _t0}ms · ${v.approx ? "holders" : "dev-sends"} · bags=${(v.stats.find((s) => s.label === "BAGS DROPPED" || s.label === "TOP HOLDERS") || {}).value} · scan=${haveScan ? prior.recips.size : "bg"}${devOverride ? " · from-wallet" : ""}`); } catch { /* best-effort */ }
   // BACKGROUND dev-transfer scan (fire-and-forget, once per mint / 30min). On success it stashes the real
   // recipients so the NEXT request or the page's 45s auto-refresh upgrades to "who the dev actually fed".
   if (solanaPublicKeyLike(dev) && !haveScan && airdropBudgetOk()) {
@@ -31236,7 +31283,7 @@ async function buildAirdropMap(mint, devOverride = "", tokenHint = null) {
 }
 // Build the airdrop map view object from a recipient set (real dev-sends) OR the holder distribution fallback.
 // Split out so the fast path and the background-enhance path share one renderer.
-async function buildAirdropView({ mint, sym, mc, supplyUi, pricePerToken, dev, idx, holderRows, recips, bagsDropped, coinLogo }) {
+async function buildAirdropView({ mint, sym, mc, liq, ch1, supplyUi, pricePerToken, dev, idx, holderRows, recips, bagsDropped, coinLogo }) {
   const holderPctByWallet = new Map(holderRows.map((h) => [h.wallet, h.pct || 0]));
   const holderSet = new Set(holderRows.map((h) => h.wallet));
   let usedFallback = false;
@@ -31279,18 +31326,19 @@ async function buildAirdropView({ mint, sym, mc, supplyUi, pricePerToken, dev, i
   const stats = usedFallback ? [
     { label: "TOP HOLDERS", value: String(entries.length), sub: "no dev sends found yet" },
     { label: "KOLS IN", value: String(kolsIn) },
-    { label: "TOKENS HELD", value: airdropAmt(totalTokens) },
-    { label: "VALUE", value: streetValue > 0 ? "≈" + fmtMc(streetValue) : "—", sub: "at today's price" },
+    { label: "VALUE", value: streetValue > 0 ? "≈" + fmtMc(streetValue) : "—", sub: airdropAmt(totalTokens) + " shown" },
+    { label: "LIQUIDITY", value: liq > 0 ? fmtMc(liq) : "—", sub: Number.isFinite(ch1) ? `${ch1 >= 0 ? "+" : ""}${Math.round(ch1)}% 1H` : "" },
     { label: "DIAMOND HANDS", value: String(held), sub: "of shown" },
   ] : [
-    { label: "BAGS DROPPED", value: String(bagsDropped || nodes.length) },
-    { label: "WALLETS FED", value: String(entries.length) },
-    { label: "TOKENS AIRDROPPED", value: airdropAmt(totalTokens) + "+" },
-    { label: "STREET VALUE", value: streetValue > 0 ? "≈" + fmtMc(streetValue) : "—", sub: "at today's price" },
+    { label: "BAGS DROPPED", value: String(entries.length), sub: bagsDropped ? `${bagsDropped} send tx${bagsDropped === 1 ? "" : "s"}` : "unique wallets" },
+    { label: "KOLS FED", value: String(kolsIn) },
+    { label: "VALUE", value: streetValue > 0 ? "≈" + fmtMc(streetValue) : "—", sub: airdropAmt(totalTokens) + " dropped" },
+    { label: "LIQUIDITY", value: liq > 0 ? fmtMc(liq) : "—", sub: Number.isFinite(ch1) ? `${ch1 >= 0 ? "+" : ""}${Math.round(ch1)}% 1H` : "" },
     { label: "DIAMOND HANDS", value: String(held), sub: "still holding" },
   ];
   return {
     kind: "airdrop", isToken: true, mint,
+    mc: Number(mc) || 0, liq: Number(liq) || 0, ch1: Number.isFinite(ch1) ? Number(ch1) : null,
     subject: `$${(sym || shortMint(mint)).slice(0, 11)}`,
     ticker: sym || "", coinLogo: coinLogo || "",          // coin PFP + ticker for the center bubble
     subtitle: usedFallback ? "top holders" : `${entries.length} wallets fed`,
@@ -31552,7 +31600,22 @@ async function mapComputeClusters(mint, nodes) {
     cid++;
   }
   clusters.sort((a, b) => b.pct - a.pct);                   // biggest cluster first (for the legend)
-  const v = { edges, clusters };
+  const clusteredPct = Math.round(clusters.reduce((s, c) => s + (Number(c.pct) || 0), 0) * 10) / 10;
+  const clusteredUsd = Math.round(clusters.reduce((s, c) => s + (Number(c.usd) || 0), 0));
+  const v = {
+    edges,
+    clusters,
+    summary: {
+      scannedWallets: top.length,
+      linkedWallets: clusters.reduce((s, c) => s + (Number(c.size) || 0), 0),
+      fundersResolved: funderOf.size,
+      clusterCount: clusters.length,
+      clusteredPct,
+      clusteredUsd,
+      biggestPct: clusters[0] ? clusters[0].pct : 0,
+      biggestSize: clusters[0] ? clusters[0].size : 0,
+    }
+  };
   try { console.log(`[map graph] ${shortMint(mint)} top=${top.length} fresh=${fresh.length} funders=${funderOf.size} clusters=${clusters.length}`); } catch { /* best-effort */ }
   mapClusterCache.set(mint, { at: Date.now(), v });
   if (mapClusterCache.size > 200) mapClusterCache.delete(mapClusterCache.keys().next().value);
@@ -31614,7 +31677,7 @@ async function buildXMapReply(target, variant, mode = "bags") {
   if (map.kind === "token" && map.mint) {
     // Pass what the holder map already resolved so the airdrop builder can't mis-judge "not a token" (the
     // silent airdrop-map miss on non-pump coins). Log any remaining skip — never fail invisibly again.
-    const drop = await renderAirdropMapPng(map.mint, { isToken: true, sym: map.ticker, mc: map.mc })
+    const drop = await renderAirdropMapPng(map.mint, { isToken: true, sym: map.ticker, mc: map.mc, liq: map.liq, ch1: map.ch1 })
       .catch((e) => { console.log(`[xreply]   airdrop png THREW: ${String(e?.message || e).slice(0, 120)}`); return null; });
     if (drop && drop.png) media.push(drop.png);
     else console.log(`[xreply]   airdrop map skipped (no nodes) mint=${map.mint}`);
@@ -31701,10 +31764,9 @@ async function sendAirdropCard(chatId, mint) {
     map.approx ? "<i>no dev sends found (yet) — showing top holders instead</i>" : "",
     "",
     map.approx
-      ? `👥 <b>${stat("TOP HOLDERS")}</b> top holders · 🪙 <b>${stat("TOKENS HELD")}</b> · 💵 <b>${stat("VALUE")}</b>`
-      : `🎒 <b>${stat("BAGS DROPPED")}</b> bags · 👥 <b>${stat("WALLETS FED")}</b> fed`,
-    map.approx ? "" : `🪙 <b>${stat("TOKENS AIRDROPPED")}</b> · 💵 <b>${stat("STREET VALUE")}</b>`,
-    `💎 <b>${stat("DIAMOND HANDS")}</b> still holding the whole bag`,
+      ? `👥 <b>${stat("TOP HOLDERS")}</b> top holders · 💵 <b>${stat("VALUE")}</b> · LP <b>${stat("LIQUIDITY")}</b>`
+      : `🎒 <b>${stat("BAGS DROPPED")}</b> bags · ⭐ <b>${stat("KOLS FED")}</b> KOLs · 💵 <b>${stat("VALUE")}</b>`,
+    `💧 LP <b>${stat("LIQUIDITY")}</b> · 💎 <b>${stat("DIAMOND HANDS")}</b> still holding`,
     fed ? "\n<b>Biggest bags:</b>\n" + fed : "",
   ].filter((l) => l !== "").join("\n");
   const kb = { inline_keyboard: [
@@ -36193,16 +36255,45 @@ function callerLeaderboardKeyboard(activeKey) {
     ]
   };
 }
+function callerLeaderboardKey(call) {
+  return call && call.callerId != null ? String(call.callerId) : String(call?.callerName || "anon");
+}
+function bestCallerLeaderboardCall(calls, caller) {
+  const cid = String(caller?.id || "");
+  if (!cid) return null;
+  return (calls || [])
+    .filter((call) => callerLeaderboardKey(call) === cid && call.status === "resolved")
+    .map((call) => ({ ...call, _px: Number(call.peakX) || callerIntel.peakMultiple(call) || 0 }))
+    .filter((call) => call._px > 0)
+    .sort((a, b) => b._px - a._px || Number(b.firstAt || 0) - Number(a.firstAt || 0))[0] || null;
+}
 async function buildCallerLeaderboardView(win) {
   const w = CALLER_LB_WINDOWS.find((x) => x.key === win) || CALLER_LB_WINDOWS[1];
-  let callers = [];
+  let callers = [], scoped = [];
   try {
     const store = await readTelegramCalls();
     const cutoff = Date.now() - w.ms;
-    const scoped = Object.values(store.calls || {}).filter((c) => Number(c.firstAt) >= cutoff);
+    scoped = Object.values(store.calls || {}).filter((c) => Number(c.firstAt) >= cutoff);
     const boards = callerIntel.buildLeaderboards(scoped, { minResolved: w.minResolved });
     callers = (boards.callers || []).slice(0, 10);
   } catch {}
+  const topByCaller = new Map();
+  for (const c of callers) {
+    const top = bestCallerLeaderboardCall(scoped, c);
+    if (top) topByCaller.set(String(c.id), top);
+  }
+  const missingSymbols = [...new Set([...topByCaller.values()].filter((c) => c.mint && !c.symbol).map((c) => c.mint))].slice(0, 10);
+  if (missingSymbols.length) {
+    try {
+      const pairs = await fetchDexScreenerTokenPairsBatch(missingSymbols, { timeoutMs: 3200 }).catch(() => []);
+      for (const top of topByCaller.values()) {
+        if (top.symbol || !top.mint) continue;
+        const best = bestDexPairForToken(top.mint, (pairs || []).filter((p) => pairMatchesToken(p, top.mint)));
+        const sym = best?.baseToken?.symbol || best?.quoteToken?.symbol || "";
+        if (sym) top.symbol = String(sym).slice(0, 18);
+      }
+    } catch {}
+  }
   const medal = (i) => (i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `<b>${i + 1}.</b>`);
   const header = `🏆 <b>Top Callers · ${w.label}</b>`;
   if (!callers.length) {
@@ -36214,8 +36305,11 @@ async function buildCallerLeaderboardView(win) {
   const lines = callers.map((c, i) => {
     const hit = Math.round((c.smoothedHitRate || 0) * 100);
     const name = escapeTelegramHtml(String(c.name || "anon").slice(0, 22));
-    const best = Number(c.bestPeakX) >= 2 ? ` · best <b>${c.bestPeakX}x</b>` : "";
-    return `${medal(i)} <b>${name}</b> — ${hit}% hit · ${c.wins}W/${c.losses}L · avg <b>${c.avgPeakX}x</b>${best}`;
+    const top = topByCaller.get(String(c.id));
+    const topCoin = top && top.mint
+      ? ` · top <a href="${slimewireTokenLinks(top.mint).site}"><b>$${escapeTelegramHtml(String(top.symbol || shortMint(top.mint)).slice(0, 14))}</b></a> <b>${Math.round((top._px || 0) * 100) / 100}x</b>`
+      : (Number(c.bestPeakX) >= 2 ? ` · best <b>${c.bestPeakX}x</b>` : "");
+    return `${medal(i)} <b>${name}</b> — ${hit}% hit · ${c.wins}W/${c.losses}L · avg <b>${c.avgPeakX}x</b>${topCoin}`;
   });
   return {
     text: [header, ...lines, "", `<i>Ranked by win-rate × size on ${w.label.toLowerCase()}'s resolved calls. Drop a $ticker or CA in chat — the swamp tracks who's really printing.</i>`].join("\n"),

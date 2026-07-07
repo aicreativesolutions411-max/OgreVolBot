@@ -1392,6 +1392,10 @@ test("/leaderboard ranks callers by window; /wins keeps the coin hall of fame", 
   const view = functionBody(serverSource, "buildCallerLeaderboardView");
   assert.match(view, /callerIntel\.buildLeaderboards\(scoped, \{ minResolved/);
   assert.match(view, /Number\(c\.firstAt\) >= cutoff/);
+  assert.match(serverSource, /function bestCallerLeaderboardCall/);
+  assert.match(view, /topByCaller/);
+  assert.match(view, /fetchDexScreenerTokenPairsBatch\(missingSymbols/);
+  assert.match(view, /top <a href/);
   for (const k of ["today", "1w", "1m", "6m"]) assert.ok(serverSource.includes(`key: "${k}"`), `window ${k}`);
   // window buttons routed in the callback dispatcher, editing in place
   assert.match(serverSource, /query\.data\?\.startsWith\("clb:"\)/);
@@ -1491,6 +1495,9 @@ test("flex detector ignores a bare tweet link so the X-post preview still fires"
 
 // ---- Scan card Security block never blank: free on-chain fill when RugCheck is down/unindexed ----
 test("scan Security fills from our own RPC when RugCheck returns null (no more n/a wall)", () => {
+  const scan = functionBody(serverSource, "gatherSlimeScan");
+  assert.match(scan, /getGeckoTerminalTokenMetadata\(mint, \{ timeoutMs: 2_200 \}/); // market fallback for n/a LP/MC/1H fields
+  assert.match(scan, /mergeTokenMarketMetadata/);
   const enrich = functionBody(serverSource, "enrichScanSecurityOnchain");
   assert.match(enrich, /getParsedAccountInfo/);                 // mint/freeze authority = ground truth
   assert.match(enrich, /computeOnchainDistribution\(/);          // concentration + holders + dev
@@ -2013,4 +2020,24 @@ test("AI Slime PFP: fal.ai img2img, rotating styles, budget-guarded, dark until 
   assert.match(pfpHtml, /function aiSlime/);
   // X reply throttle: NO hourly cap by default (owner wants it to never go quiet + look broken under load)
   assert.match(functionBody(serverSource, "xReplyPollTick"), /X_REPLY_MAX_PER_HOUR \|\| 0/);
+});
+
+test("airdrop and holder maps expose real cluster summaries + liquidity fallbacks", () => {
+  const graph = functionBody(serverSource, "mapComputeClusters");
+  assert.match(graph, /summary:\s*\{/);
+  assert.match(graph, /clusteredPct/);
+  assert.match(serverSource, /pathname === "\/api\/airdrop\/graph"/);
+  assert.match(serverSource, /summary: graph\.summary \|\| null/);
+  const holder = functionBody(serverSource, "buildTokenHolderMap");
+  assert.match(holder, /mergeTokenMarketMetadata/);
+  assert.match(holder, /liq, ch1/);
+  const drop = functionBody(serverSource, "buildAirdropView");
+  assert.match(drop, /BAGS DROPPED/);
+  assert.match(drop, /TOP HOLDERS/);
+  assert.match(drop, /LIQUIDITY/);
+  const dropHtml = fs.readFileSync(new URL("../web/public/airdrop.html", import.meta.url), "utf8");
+  assert.match(dropHtml, /renderDropClusterLegend/);
+  assert.match(dropHtml, /openDropCluster/);
+  assert.match(dropHtml, /renderDropClusterEmpty/);
+  assert.match(dropHtml, /enrichDropStats/);
 });
