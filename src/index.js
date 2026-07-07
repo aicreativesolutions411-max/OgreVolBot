@@ -30706,11 +30706,7 @@ function scanMarketStatsFromSources({ meta = null, bonding = null, best = null, 
       if (!(liq > 0) && lg.liq > 0) liq = lg.liq;
       if (!Number.isFinite(ch1) && Number.isFinite(lg.ch1)) ch1 = lg.ch1;
     }
-    if (mc > 0 || liq > 0) {
-      const sym = firstString(meta?.symbol, bonding?.symbol);
-      mapMetaLastGood.set(mint, { at: Date.now(), mc: mc || (lg_mc(mint)), liq: liq || (lg_liq(mint)), ch1: Number.isFinite(ch1) ? ch1 : lg_ch1(mint), sym });
-      if (mapMetaLastGood.size > 400) mapMetaLastGood.delete(mapMetaLastGood.keys().next().value);
-    }
+    rememberMeta(mint, { mc, liq, ch1, sym: firstString(meta?.symbol, bonding?.symbol) });
   }
   return {
     sources,
@@ -30725,10 +30721,23 @@ function scanMarketStatsFromSources({ meta = null, bonding = null, best = null, 
     holders: Number(holders) || 0
   };
 }
-// tiny sticky-cache readers (keep a prior good field when only one of mc/liq refreshed this pull)
-function lg_mc(mint) { const v = mapMetaLastGood.get(mint); return v ? v.mc : 0; }
-function lg_liq(mint) { const v = mapMetaLastGood.get(mint); return v ? v.liq : 0; }
-function lg_ch1(mint) { const v = mapMetaLastGood.get(mint); return v && Number.isFinite(v.ch1) ? v.ch1 : null; }
+// Shared sticky last-good market cache — UPGRADE-ONLY: a pull with good MC but blank LIQ must never wipe a
+// previously-cached good LIQ (that was the "liq shows then blanks" flicker). Used by the scan card, the
+// bubble map, and the airdrop map so all three read the same MC/LIQ/1H. (mapMetaLastGood is defined below.)
+function rememberMeta(mint, { mc = 0, liq = 0, ch1 = null, sym = "" } = {}) {
+  if (!mint) return;
+  const prev = mapMetaLastGood.get(mint) || {};
+  const next = {
+    at: Date.now(),
+    mc: Number(mc) > 0 ? Number(mc) : (Number(prev.mc) || 0),
+    liq: Number(liq) > 0 ? Number(liq) : (Number(prev.liq) || 0),
+    ch1: Number.isFinite(ch1) ? ch1 : (Number.isFinite(prev.ch1) ? prev.ch1 : null),
+    sym: sym || prev.sym || "",
+  };
+  if (!(next.mc > 0) && !(next.liq > 0)) return;   // nothing worth remembering yet
+  mapMetaLastGood.set(mint, next);
+  if (mapMetaLastGood.size > 400) mapMetaLastGood.delete(mapMetaLastGood.keys().next().value);
+}
 // Crypto subscript price: 0.00002572 -> "$0.0₄2572" (matches Phanes/DEX display).
 function scanFmtPriceSub(value) {
   const n = Number(value);
@@ -31278,8 +31287,7 @@ async function buildTokenHolderMap(mint) {
       if (!Number.isFinite(ch1) && Number.isFinite(lg.ch1)) ch1 = lg.ch1;
       if (!sym && lg.sym) sym = lg.sym;
     }
-    if (mc > 0 || liq > 0) { mapMetaLastGood.set(mint, { at: Date.now(), mc, liq, ch1, sym });
-      if (mapMetaLastGood.size > 400) mapMetaLastGood.delete(mapMetaLastGood.keys().next().value); } }
+    rememberMeta(mint, { mc, liq, ch1, sym }); }
   const createdAt = normalizePairCreatedAt(dexMeta?.pairCreatedAt) || pumpMeta?.pairCreatedAt || pumpMeta?.createdAt || 0;
   let isToken = Boolean(sym || mc > 0 || pumpMeta?.symbol || String(mint).endsWith("pump"));
   // Metadata sources are all IP-rate-limited or slow sometimes (dex=null, gecko timeout) — a real coin then
@@ -31425,8 +31433,7 @@ async function buildAirdropMap(mint, devOverride = "", tokenHint = null) {
       if (!Number.isFinite(ch1) && Number.isFinite(lg.ch1)) ch1 = lg.ch1;
       if (!sym && lg.sym) sym = lg.sym;
     }
-    if (mc > 0 || liq > 0) { mapMetaLastGood.set(mint, { at: Date.now(), mc, liq, ch1, sym });
-      if (mapMetaLastGood.size > 400) mapMetaLastGood.delete(mapMetaLastGood.keys().next().value); } }
+    rememberMeta(mint, { mc, liq, ch1, sym }); }
   let isToken = Boolean(sym || mc > 0 || pumpMeta?.symbol || String(mint).endsWith("pump") || tokenHint?.isToken);
   // Chain-authoritative fallback (same as the holder map): metadata sources flake, mints don't.
   if (!isToken) { try { await getMintTokenProgramId(mint); isToken = true; } catch { /* not a mint */ } }
