@@ -30911,7 +30911,8 @@ async function buildTokenHolderMap(mint) {
 // Reads the airdropper wallet's OUTBOUND token transfers of this mint straight off the chain (free RPC),
 // aggregates per recipient, then cross-references the live holder list so each bag is tagged 💎 (still
 // holding) or 💸 (dumped). BOUNDED (caps parsed txs) + budget-gated + cached, so it stays cheap.
-const airdropMapCache = new Map();               // mint -> { at, v }
+const airdropMapCache = new Map();               // mint -> { at, v } (rendered view)
+const airdropScanCache = new Map();              // mint -> { at, recips, bagsDropped } (background dev-transfer scan result)
 const AIRDROP_MAP_TTL = 8 * 60_000;
 let airdropDay = ""; let airdropTxUsedToday = 0;
 const AIRDROP_TX_DAILY_CAP = Math.max(200, Number(process.env.AIRDROP_TX_DAILY_CAP) || 3000);
@@ -30993,17 +30994,38 @@ async function buildAirdropMap(mint) {
   let dev = String(pumpMeta?.creator || pumpMeta?.creatorWallet || pumpMeta?.dev || pumpMeta?.deployer || "").trim();
   if (!solanaPublicKeyLike(dev)) dev = String(devInf?.likelyDevWallet || "").trim();
   const poolAddr = String(best?.pairAddress || best?.address || "").trim();
-  // Real airdrop recipients from the dev's outbound sends — TIGHT budget (6.5s / 40 tx) so the endpoint stays
-  // well under its 18s cap even on a slow RPC moment. Holders are already in hand (fallback + diamond-hands).
-  let recips = new Map(), bagsDropped = 0;
-  if (solanaPublicKeyLike(dev) && airdropBudgetOk()) { const r = await _rt(scanAirdropRecipients(dev, mint, poolAddr, 40, 6500), 8000, { recips: new Map(), bagsDropped: 0 }); recips = r.recips; bagsDropped = r.bagsDropped; }
+  // FAST PATH: render from holders (or a prior background scan) NOW — don't block on the dev-transfer scan.
+  // getParsedTransaction × N is too slow on our RPC to await (every request was burning ~8s finding nothing).
+  const args = { mint, sym, mc, supplyUi, pricePerToken, dev, idx, holderRows };
+  const prior = airdropScanCache.get(mint);
+  const haveScan = prior && Date.now() - prior.at < 30 * 60_000;
+  const v = await buildAirdropView({ ...args, recips: haveScan ? prior.recips : new Map(), bagsDropped: haveScan ? prior.bagsDropped : 0 });
+  airdropMapCache.set(mint, { at: Date.now(), v });
+  if (airdropMapCache.size > 150) airdropMapCache.delete(airdropMapCache.keys().next().value);
+  try { console.log(`[airdrop] ${sym || shortMint(mint)} ${Date.now() - _t0}ms · ${v.approx ? "holders" : "dev-sends"} · fed=${(v.stats.find((s) => s.label === "WALLETS FED") || {}).value} · scan=${haveScan ? prior.recips.size : "bg"}`); } catch { /* best-effort */ }
+  // BACKGROUND dev-transfer scan (fire-and-forget, once per mint / 30min). On success it stashes the real
+  // recipients so the NEXT request or the page's 45s auto-refresh upgrades to "who the dev actually fed".
+  if (solanaPublicKeyLike(dev) && !haveScan && airdropBudgetOk()) {
+    scanAirdropRecipients(dev, mint, poolAddr, 40, 12000).then(async (r) => {
+      airdropScanCache.set(mint, { at: Date.now(), recips: r.recips, bagsDropped: r.bagsDropped });
+      if (r.recips.size >= 5) {
+        const enhanced = await buildAirdropView({ ...args, recips: r.recips, bagsDropped: r.bagsDropped });
+        airdropMapCache.set(mint, { at: Date.now(), v: enhanced });
+        try { console.log(`[airdrop] ${sym || shortMint(mint)} bg-scan → ${r.recips.size} recipients (upgraded to dev-sends)`); } catch { /* */ }
+      }
+    }).catch(() => {});
+  }
+  return v;
+}
+// Build the airdrop map view object from a recipient set (real dev-sends) OR the holder distribution fallback.
+// Split out so the fast path and the background-enhance path share one renderer.
+async function buildAirdropView({ mint, sym, mc, supplyUi, pricePerToken, dev, idx, holderRows, recips, bagsDropped }) {
   const holderPctByWallet = new Map(holderRows.map((h) => [h.wallet, h.pct || 0]));
   const holderSet = new Set(holderRows.map((h) => h.wallet));
   let usedFallback = false;
   let entries = [...recips.entries()].map(([wallet, tokens]) => ({ wallet, tokens, held: holderSet.has(wallet) }));
   if (entries.length < 5) {
-    // Transfer scan thin (RPC-limited, or a non-airdrop token) → show the top holders as bags so it ALWAYS renders.
-    usedFallback = true;
+    usedFallback = true;   // no real dev-airdrop found (or RPC-limited) → top holders as bags so it ALWAYS renders
     entries = holderRows.slice(0, 60).map((h) => ({ wallet: h.wallet, tokens: supplyUi * ((h.pct || 0) / 100), held: true }));
     bagsDropped = entries.length;
   }
@@ -31038,7 +31060,7 @@ async function buildAirdropMap(mint) {
     { label: "STREET VALUE", value: streetValue > 0 ? "≈" + fmtMc(streetValue) : "—", sub: "at today's price" },
     { label: "DIAMOND HANDS", value: String(held), sub: "still holding" },
   ];
-  const v = {
+  return {
     kind: "airdrop", isToken: true, mint,
     subject: `$${(sym || shortMint(mint)).slice(0, 11)}`,
     subtitle: usedFallback ? "top holders" : `${entries.length} wallets fed`,
@@ -31046,10 +31068,6 @@ async function buildAirdropMap(mint) {
     approx: usedFallback,                                 // true = distribution fallback, not literal dev-sends
     kolsIn, stats, nodes,
   };
-  airdropMapCache.set(mint, { at: Date.now(), v });
-  if (airdropMapCache.size > 150) airdropMapCache.delete(airdropMapCache.keys().next().value);
-  try { console.log(`[airdrop] ${sym || shortMint(mint)} ${Date.now() - _t0}ms · ${usedFallback ? "holders" : "dev-sends"} · fed=${entries.length} 💎${held} scanRecips=${recips.size}`); } catch { /* best-effort */ }
-  return v;
 }
 // Compact token-amount label: 200000000 -> "200M", 10500000 -> "10.5M", 427100000 -> "427.1M".
 function airdropAmt(n) {
