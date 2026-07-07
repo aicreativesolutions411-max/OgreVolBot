@@ -1914,10 +1914,18 @@ test("X growth engine: broadcast-gated proactive posts + receipts + KOL responde
   assert.match(functionBody(serverSource, "xPickAutoCallCandidate"), /if \(s\.coins\[mint\]\) continue/); // never re-call a posted coin
   assert.match(functionBody(serverSource, "xKolWatchTick"), /from:\$\{h\}/);                            // first-responder searches a KOL's own tweets
   assert.match(functionBody(serverSource, "xKolWatchTick"), /XBOT_KOL_FRESH_MIN/);                      // only FRESH KOL calls (tunable window)
-  assert.match(functionBody(serverSource, "xKolWatchTick"), /refreshKolscanTopHandles/);               // pulls kolscan's live top-30 each cycle
+  assert.match(functionBody(serverSource, "xKolWatchTick"), /refreshKolscanTop/);                       // pulls kolscan's live top-30 each cycle
   assert.match(serverSource, /const KOLSCAN_SEED_HANDLES = \[/);                                        // hardcoded seed survives an IP-block
-  assert.match(functionBody(serverSource, "fetchKolscanTopHandles"), /kolscan\.io\/leaderboard/);        // scrape handles from the leaderboard
+  assert.match(functionBody(serverSource, "fetchKolscanTop"), /kolscan\.io\/leaderboard/);              // scrape handles+wallets from the leaderboard
   assert.match(functionBody(serverSource, "xKolWatchHandles"), /_kolscanTopHandles/);                   // watched set = manual ∪ kolscan top-30
+  // 🐋 on-chain wallet-follow: convergence of kolscan top-30 WALLETS → X post (reuses the TG buy-detector)
+  assert.match(serverSource, /const KOLSCAN_SEED_WALLETS = \[/);                                        // top-30 wallets seeded
+  assert.match(functionBody(serverSource, "xDetectKolBuys"), /parseHeliusSwap/);                        // same swap parser as the wallet tracker
+  assert.match(functionBody(serverSource, "xDetectKolBuys"), /firstPoll/);                              // baseline first poll — never post pre-existing history
+  assert.match(functionBody(serverSource, "xKolTradeTick"), /rec\.wallets\.size >= need/);              // fire only on CONVERGENCE (≥N KOLs same coin)
+  assert.match(functionBody(serverSource, "xKolTradeTick"), /!s\.coins\[mint\]/);                       // dedup vs everything already surfaced
+  assert.match(functionBody(serverSource, "xPostKolConvergence"), /top kolscan KOLs are loading/);      // the smart-money post
+  assert.match(serverSource, /setInterval\(\(\) => \{ void xKolTradeTick\(\); \}/);                     // scheduled
   // tracking is always on (records our reply for later receipts) — independent of the broadcast gate
   assert.match(functionBody(serverSource, "xReplyPollTick"), /await xTrackCoin\(/);
   assert.match(functionBody(serverSource, "xReplyPollTick"), /await xEnrichReplyText\(/);               // memory + persona on replies

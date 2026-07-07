@@ -32364,7 +32364,8 @@ async function handleXBotCommand(chatId, argument, userId) {
     `• 🎯 Receipts (10x quote-tweets): ${on(xReceiptsOn())}`,
     `• 📣 Auto-calls (network-backed): ${on(xAutoCallOn())}`,
     `• 🐸 Trench-watch heartbeat (movers): ${on(xHeartbeatOn())}`,
-    `• ⚡ KOL first-responder: ${on(xKolWatchOn())} — watching <b>${xKolWatchHandles().length}</b> handles (kolscan top ${_kolscanTopHandles.length} + manual)`,
+    `• ⚡ KOL first-responder (their tweets): ${on(xKolWatchOn())} — watching <b>${xKolWatchHandles().length}</b> handles (kolscan top ${_kolscanTopHandles.length} + manual)`,
+    `• 🐋 KOL wallet convergence (their trades): ${on(xKolTradeOn())} — following <b>${xKolTopWallets().length}</b> kolscan wallets${CONFIG.heliusApiKey ? "" : " ⚠️ needs Helius key"}`,
     `• 📊 Weekly scorecard: ${on(xScorecardOn())}`,
     "",
     `Tracked coins: <b>${tracked}</b> (${withTweet} with a post to quote)`,
@@ -32393,6 +32394,7 @@ const xReceiptsOn  = () => xFeatureOn("XBOT_RECEIPTS", true);
 const xAutoCallOn  = () => xFeatureOn("XBOT_AUTOCALL", true);
 const xHeartbeatOn = () => xFeatureOn("XBOT_HEARTBEAT", true);   // "trenches now" mover post when no high-conviction call
 const xKolWatchOn  = () => xFeatureOn("XBOT_KOLWATCH", false);   // highest ban risk → OFF even under broadcast until opted in
+const xKolTradeOn  = () => xFeatureOn("XBOT_KOLTRADES", true);   // 🐋 follow kolscan top-30 WALLETS on-chain, post on convergence
 const xScorecardOn = () => xFeatureOn("XBOT_SCORECARD", true);
 const xPersonaOn   = () => { const v = String(process.env.XBOT_PERSONA || "").trim(); return v ? parseBoolean(v) : true; };   // text-only, safe → on by default
 const XBOT_MILESTONES = [2, 3, 5, 10, 25, 50, 100];
@@ -32587,32 +32589,38 @@ let _xKolWatchRunning = false, _xKolRotor = 0;
 // Seed = kolscan.io leaderboard top ~30 (scraped 2026-07-07, rank order) — the fallback if the live scrape is
 // empty (kolscan client-renders + can IP-block Render). The live refresh keeps this current automatically.
 const KOLSCAN_SEED_HANDLES = ["ihateoop", "dovvvv7", "OnlyLJC", "theonomix", "Humanevolvd", "rise_crypt", "idrawline", "roboPBOC", "Kevsznx", "Chestererer", "Advyth", "Setsu2k", "Kimbazxz", "10xJDOG", "cryptodivix", "melxprt", "KayTheDoc", "xKaaox", "NillaGurilla", "narracanz", "Felixonchain", "zilxbt", "CookerFlips", "goatedondsticks", "kayz_ce", "Satsbuyer", "VERYKOOLLUKEY", "Ga__ke", "TheMoro87", "spunosounds"];
+const KOLSCAN_SEED_WALLETS = ["BtMBMPkoNbnLF9Xn552guQq528KKXcsNBNNBre3oaQtr", "8nqtxpFpuXwfXG4pBLsDkkuMMPK9FjSkBMCn542HiM3v", "6HJetMbdHBuk3mLUainxAPpBpWzDgYbHGTS2TqDAUSX2", "Bi4rd5FH5bYEN8scZ7wevxNZyNmKHdaBcvewdPFxYdLt", "5ZuV8eqkvzYFVEKbLvGBdexL2tFv7E5BCd2HZpjqbdg", "PMJA8UQDyWTFw2Smhyp9jGA6aTaP7jKHR7BPudrgyYN", "4ZdCpHJrSn4E9GmfP8jjfsAExHGja2TEn4JmXfEeNtyT", "AUEQxhkAVz71w2WBa9BYSoZrydhYNJaKmfNomoNs9E4t", "4Be9CvxqHW6BYiRAxW9Q3xu1ycTMWaL5z8NX4HR3ha7t", "BTf4A2exGK9BCVDNzy65b9dUzXgMqB4weVkvTMFQsadd", "GEKZWL474tFAyYDUoTgKEgYuMxT3Se7HzKDDptrnXnvS", "2k7Mnf2K3GhpB7hEVN1CFFeV4oNzzuCS5Q6SmcfAoLHd", "3H9LVHarjBoZ2YPEsgFbVD1zuERCGwfp4AeyHoHsFSEC", "FajxNukkjDLGXfB5V3L1msrU9qgzuzhN4s4YQfefSCKp", "36A6mEN5rYJdVTb6fMqVvG6ez8g2mTYdr1omWcQ1kDKG", "DYAn4XpAkN5mhiXkRB7dGq4Jadnx6XYgu8L5b3WGhbrt", "3j5c4aD1aznxQXJ3DWw1b7UD8kKuaqXVbpaVeWPR83TG", "j38fhfqWsJyt8hzym48P8QMsXWx1FfLUxQwuor7Ti4o", "FSAmbD6jm6SZZQadSJeC1paX3oTtAiY9hTx1UYzVoXqj", "CxgPWvH2GoEDENELne2XKAR2z2Fr4shG2uaeyqZceGve", "3uz65G8e463MA5FxcSu1rTUyWRtrRLRZYskKtEHHj7qn", "8deJ9xeUvXSJwicYptA9mHsU2rN2pDx37KWzkDkEXhU6", "2net6etAtTe3Rbq2gKECmQwnzcKVXRaLcHy2Zy1iCiWz", "F8WtsrLzexRkjv11b1sgA3Qj7E889RGYa1jFLGoPwKTB", "DNfuF1L62WWyW3pNakVkyGGFzVVhj4Yr52jSmdTyeBHm", "DjM7Tu7whh6P3pGVBfDzwXAx2zaw51GJWrJE3PwtuN7s", "BWQPaFCn5Fp5ok2x5W69wspbsgiRXuPPUYX8Zgnm7XeQ", "6S8GezkxYUfZy9JPtYnanbcZTMB87Wjt1qx3c6ELajKC", "39q2g5tTQn9n7KnuapzwS2smSx3NGYqBoea11tBjsGEt", "DxwDRWxQXDaVZquH3YvCVBQ75nUf16FttQ4q88okn5mc"];
 let _kolscanTopHandles = KOLSCAN_SEED_HANDLES.slice();
+let _kolscanTopWallets = KOLSCAN_SEED_WALLETS.slice();
 let _kolscanTopAt = 0;
-// FREE: scrape kolscan.io/leaderboard for the current top-N KOL X handles (rank order). Needs a real browser
-// UA (a bare fetch gets a stripped/variable render). Returns [] on failure → caller keeps the seed/last-good.
-async function fetchKolscanTopHandles(n = 30) {
+// FREE: ONE scrape of kolscan.io/leaderboard → both the top-N KOL X handles AND their wallets (rank order).
+// Needs a real browser UA (a bare fetch gets a stripped/variable render). Returns empties on failure → caller
+// keeps the seed/last-good so the feature never goes dark.
+async function fetchKolscanTop(n = 30) {
   try {
     const res = await fetch("https://kolscan.io/leaderboard", { headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36", "accept": "text/html" }, signal: AbortSignal.timeout(7000) });
-    if (!res.ok) return [];
+    if (!res.ok) return { handles: [], wallets: [] };
     const html = await res.text();
-    const seen = new Set(), out = [];
+    const seen = new Set(), handles = [];
     const skip = /^(home|share|intent|i|search|hashtag|explore|kolscan|status|compose|messages|notifications|settings)$/;
     for (const m of html.matchAll(/(?:twitter\.com|x\.com)\/([A-Za-z0-9_]{2,20})/g)) {
       const low = m[1].toLowerCase();
       if (seen.has(low) || skip.test(low)) continue;
-      seen.add(low); out.push(m[1]);
-      if (out.length >= n) break;
+      seen.add(low); handles.push(m[1]);
+      if (handles.length >= n) break;
     }
-    return out;
-  } catch { return []; }
+    const wallets = [...new Set([...html.matchAll(/\/account\/([1-9A-HJ-NP-Za-km-z]{32,44})/g)].map((x) => x[1]))].slice(0, n);
+    return { handles, wallets };
+  } catch { return { handles: [], wallets: [] }; }
 }
-async function refreshKolscanTopHandles() {
+async function refreshKolscanTop() {
   if (Date.now() - _kolscanTopAt < 60 * 60_000) return;   // hourly
   _kolscanTopAt = Date.now();
-  const live = await fetchKolscanTopHandles(30);
-  if (live.length >= 10) _kolscanTopHandles = live;        // only replace with a real render, else keep seed/last-good
+  const { handles, wallets } = await fetchKolscanTop(30);
+  if (handles.length >= 10) _kolscanTopHandles = handles;  // only replace with a real render, else keep seed/last-good
+  if (wallets.length >= 10) _kolscanTopWallets = wallets;
 }
+function xKolTopWallets() { return _kolscanTopWallets.filter((w) => solanaPublicKeyLike(w)); }
 // The watched set = manually-pinned handles (XBOT_KOL_HANDLES) ∪ kolscan's top ~30 (unless XBOT_KOLSCAN_TOP=false).
 // Capped so the rotation still cycles in reasonable time.
 function xKolWatchHandles() {
@@ -32626,7 +32634,7 @@ async function xKolWatchTick() {
   if (!xConfigured() || !xKolWatchOn() || _xKolWatchRunning) return;
   _xKolWatchRunning = true;
   try {
-    await refreshKolscanTopHandles().catch(() => {});    // keep the kolscan top-30 current (self-throttled hourly)
+    await refreshKolscanTop().catch(() => {});    // keep the kolscan top-30 handles+wallets current (self-throttled hourly)
     const handles = xKolWatchHandles();
     if (!handles.length) return;
     // Process a small ROTATING window per tick so 30+ handles still cycle fast enough to catch a fresh call,
@@ -32664,6 +32672,86 @@ async function xKolWatchTick() {
     await writeXCoins(s);
   } catch (e) { console.log(`[xbot] kolwatch tick err: ${String(e?.message || e).slice(0, 100)}`); }
   finally { _xKolWatchRunning = false; }
+}
+
+// ---- 🐋 KOL WALLET TRADES → X: follow kolscan's top-30 WALLETS on-chain; broadcast when smart money CONVERGES ----
+// The killer "smart money on X" signal: when ≥N of the top-30 kolscan KOLs BUY the same coin inside a rolling
+// window, post it. Convergence (not every single buy) keeps it rare + high-signal + un-spammy. Reuses the exact
+// buy-detector the TG wallet tracker uses (getSignaturesForAddress → Helius parse → parseHeliusSwap).
+const XBOT_TRADE_SKIP_MINTS = new Set(["So11111111111111111111111111111111111111112", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"]);
+let _xKolTradeRunning = false, _xKolTradeRotor = 0;
+const _xKolBuyWindow = new Map();   // mint -> { wallets:Set, names:[], firstAt, totalSol, posted }
+const _xKolSeenSig = new Map();     // wallet -> Set(sig) — dedup so a buy is counted once
+async function xDetectKolBuys(wallet) {
+  if (!CONFIG.heliusApiKey) return [];
+  let sigs = [];
+  try { const r = await rpcRead("x-kol sigs", (c) => c.getSignaturesForAddress(new PublicKey(wallet), { limit: 10 })); sigs = (r || []).map((s) => s.signature).filter(Boolean); } catch { return []; }
+  const seen = _xKolSeenSig.get(wallet) || new Set(); const firstPoll = !_xKolSeenSig.has(wallet);
+  const fresh = sigs.filter((s) => !seen.has(s));
+  for (const s of sigs) seen.add(s);
+  if (seen.size > 240) { const a = [...seen]; _xKolSeenSig.set(wallet, new Set(a.slice(-140))); } else _xKolSeenSig.set(wallet, seen);
+  if (firstPoll || !fresh.length) return [];   // first poll = baseline only (never post pre-existing history)
+  let parsed = null;
+  try { parsed = await fetch(`https://api.helius.xyz/v0/transactions?api-key=${CONFIG.heliusApiKey}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ transactions: fresh.slice(0, 10) }), signal: AbortSignal.timeout(8000) }).then((r) => r.ok ? r.json() : null); } catch { return []; }
+  if (!Array.isArray(parsed)) return [];
+  const buys = [];
+  for (const tx of parsed) { const sw = parseHeliusSwap(tx); if (sw && sw.side === "buy" && sw.mint && !XBOT_TRADE_SKIP_MINTS.has(sw.mint)) buys.push(sw); }
+  return buys;
+}
+function xKolName(wallet) {
+  const r = trackedKolWallets.get(wallet) || autoKolWallets.get(wallet);
+  const nm = r && (r.name || (r.twitter ? `@${r.twitter}` : "")); return nm || "";   // unknown → caller says "a top KOL"
+}
+async function xKolTradeTick() {
+  if (!xConfigured() || !xKolTradeOn() || _xKolTradeRunning) return;
+  _xKolTradeRunning = true;
+  try {
+    await refreshKolscanTop().catch(() => {});
+    const wallets = xKolTopWallets();
+    if (!wallets.length || !CONFIG.heliusApiKey) return;
+    const now = Date.now();
+    const windowMs = Math.max(15, Number(process.env.XBOT_KOLTRADE_WINDOW_MIN || 120)) * 60_000;
+    for (const [mint, rec] of _xKolBuyWindow) if (now - rec.firstAt > windowMs) _xKolBuyWindow.delete(mint);   // age out
+    const perTick = Math.max(2, Math.min(12, Number(process.env.XBOT_KOLTRADE_PER_TICK || 6)));
+    const batch = []; for (let i = 0; i < perTick; i++) batch.push(wallets[(_xKolTradeRotor + i) % wallets.length]);
+    _xKolTradeRotor = (_xKolTradeRotor + perTick) % wallets.length;
+    const need = Math.max(2, Number(process.env.XBOT_KOLTRADE_MIN_KOLS || 2));
+    const s = await readXCoins(); let posted = 0;
+    for (const w of batch) {
+      const buys = await xDetectKolBuys(w);
+      for (const b of buys) {
+        const mint = b.mint;
+        let rec = _xKolBuyWindow.get(mint); if (!rec) { rec = { wallets: new Set(), names: [], firstAt: now, totalSol: 0, posted: false }; _xKolBuyWindow.set(mint, rec); }
+        if (!rec.wallets.has(w)) { rec.wallets.add(w); const nm = xKolName(w); if (nm) rec.names.push(nm); }
+        rec.totalSol += b.solAmount || 0;
+        if (rec.wallets.size >= need && !rec.posted && !s.coins[mint] && posted < 1) {   // convergence, once per coin
+          rec.posted = true;
+          if (await xPostKolConvergence(mint, rec)) posted++;
+        }
+      }
+    }
+  } catch (e) { console.log(`[xbot] koltrade tick err: ${String(e?.message || e).slice(0, 100)}`); }
+  finally { _xKolTradeRunning = false; }
+}
+async function xPostKolConvergence(mint, rec) {
+  const reply = await buildXReply(mint, "scan", `conv${mint}`);
+  if (!reply || !reply.mediaBuffer) return false;
+  const n = rec.wallets.size;
+  const who = rec.names.slice(0, 3).map((x) => (x.startsWith("@") ? x : `@${x}`)).join(" + ");
+  const sym = reply.symbol ? `$${reply.symbol}` : shortMint(mint);
+  const text = [
+    `🐋 ${n} top kolscan KOLs are loading ${sym}`,
+    who ? `${who}${n > 3 ? " +more" : ""} · ${scanFmtMoney(reply.mc)} MC · NFA` : `${scanFmtMoney(reply.mc)} MC · smart money converging · NFA`,
+    "Full read + bubble map → tag @SlimeWirebot 🐸",
+  ].join("\n").slice(0, 279);
+  const res = await xPost({ text, mediaBuffer: reply.mediaBuffer });
+  if (res.ok) {
+    await xTrackCoin({ mint, symbol: reply.symbol, mc: reply.mc, tweetId: res.id, kind: "convergence" });
+    console.log(`[xbot] 🐋 convergence ${sym} ${n} KOLs id=${res.id}`);
+    await xReplyOwnerNotify(`🐋 X convergence: ${n} top KOLs loading ${sym} (${scanFmtMoney(reply.mc)})`).catch(() => {});
+    return true;
+  }
+  return false;
 }
 
 // ---- 📊 WEEKLY SCORECARD: social-proof recap of the week's calls ----
@@ -37162,7 +37250,8 @@ function startGroupBuyBot() {
   // and self-throttled, so they no-op cheaply until the owner flips the env vars.
   setInterval(() => { void xReceiptsTick(); }, 10 * 60_000);   // 🎯 milestone quote-tweets ("called at $30k → 10x")
   setInterval(() => { void xAutoCallTick(); }, 8 * 60_000);    // 📣 proactive network-backed calls (self-throttled to ~3h)
-  setInterval(() => { void xKolWatchTick(); }, 90_000);        // ⚡ KOL first-responder (one handle/tick, OFF until XBOT_KOLWATCH)
+  setInterval(() => { void xKolWatchTick(); }, 90_000);        // ⚡ KOL first-responder (watches kolscan top-30 + manual, OFF until XBOT_KOLWATCH)
+  setInterval(() => { void xKolTradeTick(); }, 30_000);        // 🐋 KOL wallet trades → X on convergence (kolscan top-30 wallets)
   setInterval(() => { void xScorecardTick(); }, 6 * 3600_000); // 📊 weekly scorecard (self-gated to ~weekly)
   // SELF-TEST (boot, no post): build a reply for a KNOWN-GOOD coin (BONK) so the logs prove whether the
   // scan→card pipeline works at all — isolates "coin didn't scan" (build broken) from "no CA" (resolve).
