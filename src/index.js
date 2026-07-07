@@ -30940,18 +30940,20 @@ async function scanAirdropRecipients(devWallet, mint, poolExclude = "", maxTx = 
     for (const [o, d] of delta) { if (!exclude.has(o) && d > 0) { recips.set(o, (recips.get(o) || 0) + d); sentHere = true; } }
     if (sentHere) bagsDropped += 1;
   };
+  // Per-call HARD timeout: getParsedTransaction has no built-in timeout, so a single stuck RPC read made a
+  // whole Promise.all batch wait forever (the deadline is only checked BETWEEN batches) → buildAirdropMap ran
+  // 35-48s while the endpoint returned "chain is slow" at 18s. Now every call resolves null after 2.5s.
+  const withTimeout = (p, ms) => Promise.race([p, new Promise((res) => setTimeout(() => res(null), ms))]);
   try {
-    const sigs = await rpcRead("airdrop: dev sigs", (c) => c.getSignaturesForAddress(pk, { limit: 1000 }), { retries: 0 }).catch(() => []);
+    const sigs = await withTimeout(rpcRead("airdrop: dev sigs", (c) => c.getSignaturesForAddress(pk, { limit: 1000 }), { retries: 0 }).catch(() => []), 4000);
     if (!Array.isArray(sigs) || !sigs.length) return { recips, bagsDropped };
     const candidates = sigs.slice(-maxTx).map((s) => s.signature).reverse(); // oldest-first
-    // Parse in CONCURRENT batches (sequential 55× getParsedTransaction blows the endpoint's time budget).
-    // Soft deadline stops launching new batches once we're out of time — partial recipients still render.
     const BATCH = 10;
     for (let i = 0; i < candidates.length; i += BATCH) {
       if (Date.now() > deadline || !airdropBudgetOk()) break;
       const slice = candidates.slice(i, i + BATCH);
       airdropTxUsedToday += slice.length;
-      const txs = await Promise.all(slice.map((sig) => rpcRead("airdrop: tx", (c) => c.getParsedTransaction(sig, { maxSupportedTransactionVersion: 0 }), { retries: 0 }).catch(() => null)));
+      const txs = await Promise.all(slice.map((sig) => withTimeout(rpcRead("airdrop: tx", (c) => c.getParsedTransaction(sig, { maxSupportedTransactionVersion: 0 }), { retries: 0 }).catch(() => null), 2500)));
       for (const tx of txs) consume(tx);
     }
   } catch { /* partial is fine */ }
@@ -30964,13 +30966,14 @@ async function buildAirdropMap(mint) {
   // PARALLEL gather — every independent read fires AT ONCE (~2s) instead of the old chain kolIdx → coin-info
   // → supply → dev-infer → holders (~6s+ sequential). This is the fix for the frequent "chain is slow" on
   // /api/airdrop: only the transfer scan (which needs the dev wallet) is left to run after.
+  const _rt = (p, ms, fb) => Promise.race([p, new Promise((r) => setTimeout(() => r(fb), ms))]);   // hard per-read cap
   const [idx, pumpMeta, pairs, holderRows, supplyRes, devInf] = await Promise.all([
-    mapKolIdentityIndex().catch(() => new Map()),
-    getPumpFunTokenMetadata(mint).catch(() => null),
-    fetchDexScreenerTokenPairsFallback(mint).catch(() => null),
-    fetchTokenHolderRows(mint).catch(() => []),
-    rpcRead("airdrop supply", (c) => c.getTokenSupply(new PublicKey(mint), "confirmed"), { retries: 0 }).catch(() => null),
-    inferDevCandidateFromMintSource(mint).catch(() => null),
+    _rt(mapKolIdentityIndex().catch(() => new Map()), 5000, new Map()),
+    _rt(getPumpFunTokenMetadata(mint).catch(() => null), 6000, null),
+    _rt(fetchDexScreenerTokenPairsFallback(mint).catch(() => null), 6000, null),
+    _rt(fetchTokenHolderRows(mint).catch(() => []), 8000, []),
+    _rt(rpcRead("airdrop supply", (c) => c.getTokenSupply(new PublicKey(mint), "confirmed"), { retries: 0 }).catch(() => null), 3500, null),
+    _rt(inferDevCandidateFromMintSource(mint).catch(() => null), 4000, null),
   ]);
   const best = bestDexPairForToken(mint, pairs);
   const dexMeta = best ? metadataFromDexPair(mint, best) : null;
@@ -30993,7 +30996,7 @@ async function buildAirdropMap(mint) {
   // Real airdrop recipients from the dev's outbound sends — TIGHT budget (6.5s / 40 tx) so the endpoint stays
   // well under its 18s cap even on a slow RPC moment. Holders are already in hand (fallback + diamond-hands).
   let recips = new Map(), bagsDropped = 0;
-  if (solanaPublicKeyLike(dev) && airdropBudgetOk()) { const r = await scanAirdropRecipients(dev, mint, poolAddr, 40, 6500); recips = r.recips; bagsDropped = r.bagsDropped; }
+  if (solanaPublicKeyLike(dev) && airdropBudgetOk()) { const r = await _rt(scanAirdropRecipients(dev, mint, poolAddr, 40, 6500), 8000, { recips: new Map(), bagsDropped: 0 }); recips = r.recips; bagsDropped = r.bagsDropped; }
   const holderPctByWallet = new Map(holderRows.map((h) => [h.wallet, h.pct || 0]));
   const holderSet = new Set(holderRows.map((h) => h.wallet));
   let usedFallback = false;
