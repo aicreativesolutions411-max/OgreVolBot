@@ -30565,17 +30565,39 @@ function scanFmtPct(value) {
 function scanActivityNumber(...values) {
   return firstMeaningfulNumber(...values);
 }
+function scanWindowAliases(key) {
+  if (key === "h24") return ["h24", "24h", "d1", "1d", "day", "daily"];
+  if (key === "h6") return ["h6", "6h", "sixHour", "six_hour"];
+  if (key === "h1") return ["h1", "1h", "hour", "oneHour", "one_hour"];
+  if (key === "m5") return ["m5", "5m", "fiveMinute", "five_minute"];
+  return [key];
+}
+function scanNestedWindowNumber(source, objectKeys, key, side = "") {
+  const values = [];
+  const aliases = scanWindowAliases(key);
+  for (const objectKey of objectKeys) {
+    const obj = source?.[objectKey];
+    if (!obj || typeof obj !== "object") continue;
+    for (const alias of aliases) {
+      const value = obj[alias];
+      values.push(side ? value?.[side] : value);
+    }
+  }
+  return scanActivityNumber(...values);
+}
+function scanFlatWindowNumber(source, prefixes, key) {
+  const cap = key === "h24" ? "H24" : key === "h6" ? "H6" : key === "h1" ? "H1" : key === "m5" ? "5m" : key.toUpperCase();
+  const snake = key === "h24" ? "24h" : key === "h6" ? "6h" : key === "h1" ? "1h" : key === "m5" ? "5m" : key;
+  const values = [];
+  for (const prefix of prefixes) {
+    values.push(source?.[`${prefix}${cap}`], source?.[`${prefix}_${snake}`], source?.[`${prefix}${snake}`]);
+  }
+  return scanActivityNumber(...values);
+}
 function scanBestVolumeWindow(...sources) {
   const read = (source, key) => scanActivityNumber(
-    source?.volume?.[key],
-    key === "h24" ? source?.volume?.["24h"] : null,
-    key === "h6" ? source?.volume?.["6h"] : null,
-    key === "h1" ? source?.volume?.["1h"] : null,
-    key === "m5" ? source?.volume?.["5m"] : null,
-    key === "h24" ? source?.volume24h : null,
-    key === "h6" ? source?.volume6h : null,
-    key === "h1" ? source?.volumeH1 : null,
-    key === "m5" ? source?.volume5m : null
+    scanNestedWindowNumber(source, ["volume", "volumeUsd", "volumeUSD", "volume_usd", "volumes"], key),
+    scanFlatWindowNumber(source, ["volume", "volumeUsd", "volumeUSD", "volume_usd"], key)
   );
   const windows = [
     ["24H", "h24"],
@@ -30592,22 +30614,96 @@ function scanBestVolumeWindow(...sources) {
 function scanBestPriceChange(windowKey, ...sources) {
   const alias = windowKey === "h1" ? "1h" : windowKey === "h24" ? "24h" : windowKey === "m5" ? "5m" : windowKey;
   return scanActivityNumber(...sources.map((source) => (
-    source?.priceChange?.[windowKey]
-    ?? source?.priceChange?.[alias]
+    scanNestedWindowNumber(source, ["priceChange", "price_change", "priceChangePercentage", "price_change_percentage"], windowKey)
+    ?? source?.[windowKey]
+    ?? source?.[alias]
     ?? (windowKey === "h24" ? source?.priceChange24h : null)
     ?? (windowKey === "h1" ? source?.priceChange1h : null)
     ?? (windowKey === "m5" ? source?.priceChange5m : null)
+    ?? scanFlatWindowNumber(source, ["priceChange", "price_change", "priceChangePercentage", "price_change_percentage"], windowKey)
     ?? source?.[`priceChange${windowKey.toUpperCase()}`]
   )));
 }
 function scanBestTxnCount(side, windowKey, ...sources) {
   const alias = windowKey === "h1" ? "1h" : windowKey === "m5" ? "5m" : windowKey;
   return scanActivityNumber(...sources.map((source) => (
-    source?.txns?.[windowKey]?.[side]
+    scanNestedWindowNumber(source, ["txns", "transactions"], windowKey, side)
+    ?? source?.txns?.[windowKey]?.[side]
     ?? source?.txns?.[alias]?.[side]
     ?? source?.transactions?.[windowKey]?.[side]
     ?? source?.transactions?.[alias]?.[side]
   ))) || 0;
+}
+function scanSourceMarketCap(source) {
+  return firstMeaningfulNumber(
+    source?.marketCap,
+    source?.marketCapUsd,
+    source?.market_cap,
+    source?.market_cap_usd,
+    source?.usd_market_cap,
+    source?.fdv,
+    source?.fdvUsd,
+    source?.fdv_usd
+  );
+}
+function scanSourceLiquidity(source) {
+  return firstMeaningfulNumber(
+    source?.liquidityUsd,
+    source?.liquidity?.usd,
+    source?.liquidity_usd,
+    source?.reserveUsd,
+    source?.reserve_in_usd,
+    source?.poolLiquidityUsd
+  );
+}
+function scanPumpVirtualLiquidity(source) {
+  const raw = firstMeaningfulNumber(source?.virtual_sol_reserves, source?.virtualSolReserves);
+  if (!Number.isFinite(Number(raw)) || Number(raw) <= 0) return 0;
+  const sol = Number(raw) > 1_000_000 ? Number(raw) / 1e9 : Number(raw);
+  const usd = Number(solUsdPriceCache?.value) || 0;
+  return usd > 0 ? sol * usd : 0;
+}
+function scanBestHolderCount(...sources) {
+  return firstMeaningfulNumber(...sources.flatMap((source) => [
+    source?.holderCount,
+    source?.holders,
+    source?.holdersCount,
+    source?.holder_count,
+    source?.holders_count,
+    source?.totalHolders,
+    source?.total_holders,
+    source?.numHolders,
+    source?.num_holders
+  ]));
+}
+function scanMarketStatsFromSources({ meta = null, bonding = null, best = null, rug = null, supply = null } = {}) {
+  const sources = [meta, bonding, best].filter(Boolean);
+  const metaMc = scanSourceMarketCap(meta);
+  const bondPct = firstMeaningfulNumber(bonding?.bondingProgressPct, bonding?.bonding_progress, bonding?.bondingCurveProgress);
+  const onCurve = Boolean(bonding && !bonding.complete && !bonding.graduated && !meta?.graduated && (bondPct != null || !metaMc));
+  const pick = (pumpVal, dexVal) => onCurve ? firstMeaningfulNumber(pumpVal, dexVal) : firstMeaningfulNumber(dexVal, pumpVal);
+  const pumpMc = scanSourceMarketCap(bonding);
+  const dexMc = firstMeaningfulNumber(metaMc, scanSourceMarketCap(best));
+  const pumpLiq = firstMeaningfulNumber(scanSourceLiquidity(bonding), scanPumpVirtualLiquidity(bonding));
+  const dexLiq = firstMeaningfulNumber(scanSourceLiquidity(best), scanSourceLiquidity(meta));
+  const vol = scanBestVolumeWindow(...sources);
+  const ch24 = scanBestPriceChange("h24", ...sources);
+  const ch1 = scanBestPriceChange("h1", ...sources);
+  const buys1 = Number(scanBestTxnCount("buys", "h1", ...sources)) || 0;
+  const sells1 = Number(scanBestTxnCount("sells", "h1", ...sources)) || 0;
+  const holders = scanBestHolderCount(rug, meta, bonding, best, supply);
+  return {
+    sources,
+    onCurve,
+    mc: pick(pumpMc, dexMc) || 0,
+    liq: pick(pumpLiq, dexLiq) || 0,
+    vol,
+    ch24,
+    ch1,
+    buys1,
+    sells1,
+    holders: Number(holders) || 0
+  };
 }
 // Crypto subscript price: 0.00002572 -> "$0.0₄2572" (matches Phanes/DEX display).
 function scanFmtPriceSub(value) {
@@ -31399,6 +31495,33 @@ async function buildAirdropView({ mint, sym, mc, liq, ch1, supplyUi, pricePerTok
     { label: "LIQUIDITY", value: liq > 0 ? fmtMc(liq) : "—", sub: Number.isFinite(ch1) ? `${ch1 >= 0 ? "+" : ""}${Math.round(ch1)}% 1H` : "" },
     { label: "DIAMOND HANDS", value: String(held), sub: "still holding" },
   ];
+  const sourceLabel = usedFallback
+    ? "Top holder sheet"
+    : (devId?.isKol ? devId.name : (solanaPublicKeyLike(dev) ? shortMint(dev) : "airdrop source"));
+  const flowRows = nodes.slice(0, 18).map((node) => ({
+    i: node.i,
+    from: sourceLabel,
+    to: node.isKol ? node.name : shortMint(node.wallet),
+    wallet: node.wallet,
+    amountLabel: node.amountLabel,
+    pct: node.pct,
+    held: Boolean(node.held),
+    isKol: Boolean(node.isKol),
+    state: node.state
+  }));
+  const flow = {
+    title: usedFallback ? "Holder Sheet" : "Drop Flow",
+    subtitle: usedFallback
+      ? "no dev sends parsed yet; showing largest bags"
+      : `${sourceLabel} -> ${entries.length} wallet${entries.length === 1 ? "" : "s"}`,
+    sourceLabel,
+    sourceWallet: solanaPublicKeyLike(dev) ? dev : "",
+    approx: usedFallback,
+    rows: flowRows,
+    totalWallets: entries.length,
+    held,
+    kolsIn
+  };
   return {
     kind: "airdrop", isToken: true, mint,
     mc: Number(mc) || 0, liq: Number(liq) || 0, ch1: Number.isFinite(ch1) ? Number(ch1) : null,
@@ -31407,7 +31530,7 @@ async function buildAirdropView({ mint, sym, mc, liq, ch1, supplyUi, pricePerTok
     subtitle: usedFallback ? "top holders" : `${entries.length} wallets fed`,
     dev, devName: devId?.isKol ? devId.name : "", devAvatar: devId?.avatarUrl || "",
     approx: usedFallback,                                 // true = distribution fallback, not literal dev-sends
-    kolsIn, stats, nodes,
+    kolsIn, stats, nodes, flow,
   };
 }
 // Compact token-amount label: 200000000 -> "200M", 10500000 -> "10.5M", 427100000 -> "427.1M".
@@ -31720,7 +31843,7 @@ async function renderAirdropMapPng(mint, tokenHint = null) {
   if (!map || !map.isToken || !Array.isArray(map.nodes) || !map.nodes.length) return { png: null, map: null };
   const { renderSlimeAirdropPng } = await import("./lib/slimeMapRender.mjs");
   if (_creamBgPath === undefined) { const p = path.join(WEB_STATIC_DIR, "ui", "slime-cream.png"); _creamBgPath = fsSync.existsSync(p) ? p : null; }
-  const png = await renderSlimeAirdropPng({ subject: map.subject, subtitle: map.subtitle || "airdrop map", stats: map.stats, nodes: map.nodes, centerImage: map.coinLogo || map.devAvatar || "", devName: map.devName || "", bgPath: _creamBgPath });
+  const png = await renderSlimeAirdropPng({ subject: map.subject, subtitle: map.subtitle || "airdrop map", stats: map.stats, nodes: map.nodes, flow: map.flow, centerImage: map.coinLogo || map.devAvatar || "", devName: map.devName || "", bgPath: _creamBgPath });
   airdropRenderCache.set(mint, { at: Date.now(), png, map });
   if (airdropRenderCache.size > 150) airdropRenderCache.delete(airdropRenderCache.keys().next().value);
   return { png, map };
@@ -32063,12 +32186,9 @@ async function buildXScanReply(mint, variant) {
   const { meta, bonding, best, shield, rug, onchain } = scan;
   const symbol = String(meta?.symbol || bonding?.symbol || onchain?.symbol || "").slice(0, 12);
   const name = String(meta?.name || bonding?.name || onchain?.name || "").slice(0, 40);
-  const activitySources = [meta, bonding, best].filter(Boolean);
-  const onCurve = Boolean(bonding && !bonding.complete && !bonding.graduated && !(meta && meta.marketCap));
-  const pick = (pumpVal, dexVal) => onCurve ? firstMeaningfulNumber(pumpVal, dexVal) : firstMeaningfulNumber(dexVal, pumpVal);
-  const pumpVirtualLiq = bonding?.virtual_sol_reserves ? (Number(bonding.virtual_sol_reserves) / 1e9) * (Number(solUsdPriceCache?.value) || 0) : 0;
-  const mc = pick(firstMeaningfulNumber(bonding?.marketCap, bonding?.usd_market_cap), firstMeaningfulNumber(meta?.marketCap, meta?.fdv, best?.marketCap, best?.fdv)) || 0;
-  const liq = pick(firstMeaningfulNumber(bonding?.liquidityUsd, pumpVirtualLiq), firstMeaningfulNumber(best?.liquidity?.usd, meta?.liquidityUsd)) || 0;
+  const stats = scanMarketStatsFromSources({ meta, bonding, best, rug });
+  const mc = stats.mc;
+  const liq = stats.liq;
   if (!symbol && !(mc > 0)) return null;
   const createdAt = Number(best?.pairCreatedAt || 0) || (Number(bonding?.created_timestamp || 0) * (String(bonding?.created_timestamp || "").length <= 10 ? 1000 : 1));
   const ageLabel = createdAt > 0 ? xAgeLabel(Date.now() - createdAt) : "new";
@@ -32076,16 +32196,18 @@ async function buildXScanReply(mint, variant) {
   const { verdict, tone } = xVerdict(shield, rug, liq, mc, variant || mint);
   const mcLabel = mc > 0 ? scanFmtMoney(mc) : "—";
   const liqLabel = liq > 0 ? scanFmtMoney(liq) : "—";
-  const ch1 = scanBestPriceChange("h1", ...activitySources);
+  const ch1 = stats.ch1;
   const changeLabel = Number.isFinite(ch1) ? `${ch1 >= 0 ? "+" : ""}${ch1.toFixed(1)}%` : "";
   const changeTone = Number.isFinite(ch1) ? (ch1 >= 0 ? "up" : "down") : "";
-  const vol = scanBestVolumeWindow(...activitySources);
-  const volLabel = vol.value > 0 ? `Vol ${scanFmtMoney(vol.value)}${vol.label ? " " + vol.label : ""}` : null;
+  const vol = stats.vol;
+  const volumeLabel = vol.value > 0 ? `${scanFmtMoney(vol.value)}${vol.label ? " " + vol.label : ""}` : "";
+  const volLabel = volumeLabel ? `Vol ${volumeLabel}` : null;
+  const holderLabel = stats.holders > 0 ? scanFmtSupply(stats.holders) : "";
   const v = makeXVary(variant || symbol || mint);
   const toneEmoji = tone === "danger" ? v.danger : tone === "warn" ? v.warn : v.ok;
   const text = [
     `$${symbol || "coin"}${name ? v.sep + name : ""}`,
-    [`MC ${mcLabel}`, `Liq ${liqLabel}`, volLabel, `Age ${ageLabel}`, changeLabel ? `1H ${changeLabel}` : null, rail].filter(Boolean).join(v.sep),
+    [`MC ${mcLabel}`, `Liq ${liqLabel}`, volLabel, holderLabel ? `Holders ${holderLabel}` : null, `Age ${ageLabel}`, changeLabel ? `1H ${changeLabel}` : null, rail].filter(Boolean).join(v.sep),
     `${toneEmoji} ${verdict}`,
     v.cta
   ].join("\n").slice(0, 279);
@@ -32094,7 +32216,7 @@ async function buildXScanReply(mint, variant) {
   // renderXScanCard already does per-tweet). Only falls back to text if the render itself throws.
   try {
     const logoBuffer = await xCoinLogo(scan, mint);   // DexScreener logo first, else pump.fun
-    mediaBuffer = await renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel: rail, verdict, verdictTone: tone, changeLabel, changeTone, logoBuffer, bgDir: X_CARD_BG_DIR, seed: variant || symbol || mint });
+    mediaBuffer = await renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel: rail, volumeLabel, holderLabel, verdict, verdictTone: tone, changeLabel, changeTone, logoBuffer, bgDir: X_CARD_BG_DIR, seed: variant || symbol || mint });
   } catch { /* text-only is the fallback only if the card render fails */ }
   return { text, mediaBuffer, symbol, mc };
 }
@@ -32169,11 +32291,12 @@ function xRugFacts(scan) {
 async function buildXRugReply(mint, variant) {
   const scan = await gatherSlimeScan(mint).catch(() => null);
   if (!scan) return null;
-  const { meta, bonding, best, onchain } = scan;
+  const { meta, bonding, best, onchain, rug } = scan;
   const symbol = String(meta?.symbol || bonding?.symbol || onchain?.symbol || "").slice(0, 12);
   const name = String(meta?.name || bonding?.name || onchain?.name || "").slice(0, 40);
-  const mc = Number(meta?.marketCap || bonding?.usd_market_cap || bonding?.marketCap || 0);
-  const liq = Number(best?.liquidity?.usd || 0);
+  const stats = scanMarketStatsFromSources({ meta, bonding, best, rug });
+  const mc = stats.mc;
+  const liq = stats.liq;
   if (!symbol && !(mc > 0)) return null;
   const v = makeXVary(variant || symbol || mint);
   const createdAt = Number(best?.pairCreatedAt || 0) || (Number(bonding?.created_timestamp || 0) * (String(bonding?.created_timestamp || "").length <= 10 ? 1000 : 1));
@@ -32182,6 +32305,10 @@ async function buildXRugReply(mint, variant) {
   const facts = xRugFacts(scan);
   const mcLabel = mc > 0 ? scanFmtMoney(mc) : "—";
   const liqLabel = liq > 0 ? scanFmtMoney(liq) : "—";
+  const changeLabel = Number.isFinite(stats.ch1) ? `${stats.ch1 >= 0 ? "+" : ""}${stats.ch1.toFixed(1)}%` : "";
+  const changeTone = Number.isFinite(stats.ch1) ? (stats.ch1 >= 0 ? "up" : "down") : "";
+  const volumeLabel = stats.vol?.value > 0 ? `${scanFmtMoney(stats.vol.value)}${stats.vol.label ? " " + stats.vol.label : ""}` : "";
+  const holderLabel = stats.holders > 0 ? scanFmtSupply(stats.holders) : "";
   const icon = facts.tone === "danger" ? v.danger : facts.tone === "warn" ? v.warn : v.ok;
   const detail = [...facts.bad.map((x) => v.danger + " " + x), ...facts.warn.map((x) => v.warn + " " + x), ...facts.good.map((x) => v.ok + " " + x)].slice(0, 3).join("\n");
   const text = [
@@ -32192,7 +32319,7 @@ async function buildXRugReply(mint, variant) {
   let mediaBuffer = null;
   try {
     const logoBuffer = await xCoinLogo(scan, mint);   // DexScreener logo first, else pump.fun
-    mediaBuffer = await renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel: rail, verdict: facts.verdict, verdictTone: facts.tone, logoBuffer, bgDir: X_CARD_BG_DIR, seed: variant || symbol || mint });
+    mediaBuffer = await renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel: rail, volumeLabel, holderLabel, verdict: facts.verdict, verdictTone: facts.tone, changeLabel, changeTone, logoBuffer, bgDir: X_CARD_BG_DIR, seed: variant || symbol || mint });
   } catch { /* text-only is fine */ }
   return { text, mediaBuffer, symbol, mc };
 }
@@ -35948,20 +36075,14 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
   // header status FIRST — it also decides metadata PRECEDENCE: a coin still ON the bonding
   // curve reads Pump-first (live + accurate there); a migrated coin reads Dex-first (Pump
   // metadata freezes at migration). This is the "pump coins use Pump first" priority.
+  const stats = scanMarketStatsFromSources({ meta, bonding, best, rug, supply });
   const bondPct = firstMeaningfulNumber(bonding?.bondingProgressPct);
-  const onCurve = Boolean(bonding && bondPct != null && !meta?.graduated);
+  const onCurve = Boolean(stats.onCurve || (bonding && bondPct != null && !meta?.graduated));
   const pick = (pumpVal, dexVal) => onCurve ? firstMeaningfulNumber(pumpVal, dexVal) : firstMeaningfulNumber(dexVal, pumpVal);
-  const mc = pick(bonding?.marketCap, meta?.marketCap ?? meta?.fdv) || 0;
-  const liq = pick(bonding?.liquidityUsd, meta?.liquidityUsd) || 0;
-  // Fresh coins may only expose activity on the raw pair or on shorter windows first. Use every
-  // market source before falling back to n/a so scan posts don't show blank Vol / 1H while indexed.
-  const activitySources = [meta, bonding, best].filter(Boolean);
-  const vol = scanBestVolumeWindow(...activitySources);
-  const ch24 = scanBestPriceChange("h24", ...activitySources);
-  const ch1 = scanBestPriceChange("h1", ...activitySources);
-  const buys1 = Number(scanBestTxnCount("buys", "h1", ...activitySources)) || 0;
-  const sells1 = Number(scanBestTxnCount("sells", "h1", ...activitySources)) || 0;
-  const price = scanFmtPriceSub(pick(Number(bonding?.priceUsd), Number(best?.priceUsd)) || (mc && supply ? mc / supply : 0));
+  const mc = stats.mc;
+  const liq = stats.liq;
+  const { vol, ch24, ch1, buys1, sells1 } = stats;
+  const price = scanFmtPriceSub(pick(Number(bonding?.priceUsd), Number(best?.priceUsd || meta?.priceUsd)) || (mc && supply ? mc / supply : 0));
   // ATH (real, from SolanaTracker) — only shown when genuinely at/above the current MC.
   const showAth = ath && Number(ath.mc) > 0 && Number(ath.mc) >= mc * 0.999;
   let athTail = "";
@@ -35976,7 +36097,7 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
     ? `(Pump @ ${Math.max(0, Math.min(100, Math.round(bondPct)))}%)`
     : (meta?.graduated ? "(Migrated)" : "");
   const headerTail = [`#SOL${headStatus ? ` ${headStatus}` : ""}`, `🌱 ${scanFmtAge(meta?.pairCreatedAt || bonding?.createdAt || bonding?.pairCreatedAt)}`]
-    .concat(rug?.holderCount ? [`∞ ${scanFmtSupply(rug.holderCount)}`] : [])
+    .concat(stats.holders ? [`∞ ${scanFmtSupply(stats.holders)}`] : [])
     .join(" | ");
 
   // socials: REAL links only — X, website, Telegram, Pump.fun. (Dropped the generic "about";
@@ -35996,7 +36117,7 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
   // security (RugCheck full)
   const light = (b, onYes) => b === true ? (onYes ? "🟢" : "🔴") : b === false ? (onYes ? "🔴" : "🟢") : "⚪";
   const top10 = rug?.top10Pct != null ? `${Math.round(rug.top10Pct)}%` : "n/a";
-  const holders = rug?.holderCount != null ? ` | ${rug.holderCount} (total)` : "";
+  const holders = stats.holders ? ` | ${stats.holders} (total)` : "";
   const th = rug?.topHolders?.length ? rug.topHolders.map((p) => (Number(p) || 0).toFixed(1)).join("|") : "n/a";
   const devSold = rug ? `${light(rug.devSold, false)} ${rug.devSold === true ? "Yes" : rug.devSold === false ? "No" : "n/a"}` : "⚪ n/a";
   const dexPaidStr = `${light(dexPaid, true)} ${dexPaid === true ? "Paid" : dexPaid === false ? "Unpaid" : "n/a"}`;

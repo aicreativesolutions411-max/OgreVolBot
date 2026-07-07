@@ -240,7 +240,7 @@ const BAGPAL = [["#7fb8e6", "#3a6ea5"], ["#e79cc4", "#a8477e"], ["#b79ae0", "#6f
 const STAT_BG = ["#bfe2f5", "#f6c9dd", "#e9d5f2", "#cdd0f4", "#3a3550"];   // matches the site's s0..s4 header
 function bagHash(s) { let h = 0; s = String(s || ""); for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h; }
 
-export function buildAirdropSvg({ subject = "$SLIME", subtitle = "airdrop", stats = [], nodes = [], centerImage = null, devName = "", W = 900, H = 820 } = {}) {
+export function buildAirdropSvg({ subject = "$SLIME", subtitle = "airdrop", stats = [], nodes = [], flow = null, centerImage = null, devName = "", W = 900, H = 820 } = {}) {
   const cx = W / 2, cy = 150 + (H - 150) / 2;
   const laid = layout(nodes.slice(0, 90), cx, cy, 96, Math.min(cx, cy) - 66);
   const cardW = (W - 2 * 22 - 4 * 10) / 5;
@@ -253,6 +253,80 @@ export function buildAirdropSvg({ subject = "$SLIME", subtitle = "airdrop", stat
       ${s.sub ? `<text x="${(x + cardW / 2).toFixed(1)}" y="${y + 78}" text-anchor="middle" font-family="Arial" font-size="10" fill="${dark ? "#c9b8ff" : "#8b7d5f"}">${esc(s.sub)}</text>` : ""}
     </g>`;
   }).join("");
+  const flowRows = Array.isArray(flow?.rows) ? flow.rows.slice(0, 18) : [];
+  if (flowRows.length) {
+    const nodeByIndex = new Map(nodes.map((n) => [n.i, n]));
+    const sourceX = 150, sourceY = 290;
+    const cols = [360, 535, 710];
+    const placed = flowRows.map((row, i) => {
+      const node = nodeByIndex.get(row.i) || {};
+      const col = i % cols.length;
+      const y = 158 + Math.floor(i / cols.length) * 68;
+      return { ...node, ...row, x: cols[col], y, size: 18 + Math.max(0.15, Math.min(1, node.weight || 0.35)) * 18 };
+    });
+    const paths = placed.map((row, i) => {
+      const held = row.held !== false;
+      const stroke = held ? "#50b947" : "#d76a58";
+      const w = Math.max(1.4, Math.min(5.2, 1.4 + (Number(row.weight) || 0.25) * 4));
+      return `<path d="M${sourceX + 108} ${sourceY} C${sourceX + 170} ${sourceY + (i % 3 - 1) * 18},${row.x - 84} ${row.y},${row.x - 28} ${row.y}" fill="none" stroke="${stroke}" stroke-opacity="${held ? "0.62" : "0.42"}" stroke-width="${w.toFixed(1)}"/>`;
+    }).join("");
+    const sourceCard = `<g>
+      <rect x="28" y="126" width="256" height="228" rx="22" fill="#fffaf0" fill-opacity="0.88" stroke="#3f9c34" stroke-opacity="0.72" stroke-width="2.4"/>
+      <text x="52" y="164" font-family="Arial Black, Arial" font-size="26" font-weight="900" fill="#2b2417">${esc(flow.title || "Drop Flow")}</text>
+      <text x="52" y="188" font-family="Arial" font-size="13" font-weight="700" fill="#8b7d5f">${esc(String(flow.subtitle || subtitle).slice(0, 46))}</text>
+      <circle cx="${sourceX}" cy="${sourceY}" r="58" fill="#eaf6e6" stroke="#3f9c34" stroke-width="4"/>
+      ${centerImage
+        ? `<clipPath id="flowSourceClip"><circle cx="${sourceX}" cy="${sourceY}" r="53"/></clipPath><image href="${esc(centerImage)}" x="${sourceX - 53}" y="${sourceY - 53}" width="106" height="106" clip-path="url(#flowSourceClip)" preserveAspectRatio="xMidYMid slice"/>`
+        : `<text x="${sourceX}" y="${sourceY + 12}" text-anchor="middle" font-size="34">💰</text>`}
+      <text x="${sourceX}" y="${sourceY + 82}" text-anchor="middle" font-family="Arial Black, Arial" font-size="19" font-weight="900" fill="#2b2417">${esc(subject)}</text>
+      <text x="${sourceX}" y="${sourceY + 103}" text-anchor="middle" font-family="Arial" font-size="12" font-weight="700" fill="#8b7d5f">${esc(String(flow.sourceLabel || devName || "source").slice(0, 24))}</text>
+    </g>`;
+    const bagEls = placed.map((row) => {
+      const pal = BAGPAL[bagHash(row.wallet || row.to || String(row.i)) % BAGPAL.length];
+      const held = row.held !== false;
+      const sc = (row.size * 2) / 40;
+      const label = String(row.to || "").slice(0, 14);
+      const amount = String(row.amountLabel || "").slice(0, 10);
+      return `<g transform="translate(${row.x.toFixed(1)},${row.y.toFixed(1)})">
+        <g transform="scale(${sc.toFixed(3)}) translate(-20,-20)" opacity="${held ? 1 : 0.58}">
+          <path d="${BAG_PATH}" fill="${pal[0]}" stroke="${pal[1]}" stroke-width="1.8"/>
+          <path d="${BAG_TIE}" fill="none" stroke="${pal[1]}" stroke-width="2" stroke-linecap="round"/>
+          <text x="20" y="28" text-anchor="middle" font-family="Arial Black, Arial" font-size="12" font-weight="900" fill="#ffffff">${held ? "$" : "x"}</text>
+        </g>
+        <rect x="${(row.size + 7).toFixed(1)}" y="-17" width="116" height="34" rx="13" fill="#fffaf0" stroke="${held ? "#3f9c34" : "#b56256"}" stroke-width="1.4"/>
+        <text x="${(row.size + 16).toFixed(1)}" y="-2" font-family="Arial Black, Arial" font-size="12" font-weight="900" fill="#2b2417">${esc(amount)}</text>
+        <text x="${(row.size + 16).toFixed(1)}" y="13" font-family="Arial" font-size="10" font-weight="700" fill="#8b7d5f">${esc(label)}</text>
+      </g>`;
+    }).join("");
+    const tableRows = placed.slice(0, 5).map((row, i) => {
+      const y = 655 + i * 22;
+      const status = row.held !== false ? "HELD" : "DUMPED";
+      const color = row.held !== false ? "#3f9c34" : "#b56256";
+      return `<g>
+        <rect x="44" y="${y - 16}" width="812" height="21" rx="8" fill="${i % 2 ? "#fff6e8" : "#fffaf0"}" fill-opacity="0.82"/>
+        <text x="58" y="${y}" font-family="Arial" font-size="12" font-weight="800" fill="#6d614d">${esc(String(flow.sourceLabel || "source").slice(0, 17))}</text>
+        <text x="250" y="${y}" font-family="Arial Black, Arial" font-size="12" font-weight="900" fill="#2b2417">${esc(row.amountLabel || "")}</text>
+        <text x="382" y="${y}" font-family="Arial" font-size="12" font-weight="800" fill="#6d614d">${esc(String(row.to || "").slice(0, 21))}</text>
+        <text x="704" y="${y}" font-family="Arial Black, Arial" font-size="12" font-weight="900" fill="${color}">${status}${row.isKol ? " / KOL" : ""}</text>
+      </g>`;
+    }).join("");
+    const table = `<g>
+      <rect x="28" y="574" width="844" height="176" rx="22" fill="#fffaf0" fill-opacity="0.9" stroke="#cbb98d" stroke-width="2"/>
+      <text x="52" y="610" font-family="Arial Black, Arial" font-size="24" font-weight="900" fill="#2b2417">Top transfer paths</text>
+      <text x="58" y="631" font-family="Arial" font-size="10" font-weight="900" fill="#9a8b6e">FROM</text>
+      <text x="250" y="631" font-family="Arial" font-size="10" font-weight="900" fill="#9a8b6e">AMOUNT</text>
+      <text x="382" y="631" font-family="Arial" font-size="10" font-weight="900" fill="#9a8b6e">TO WALLET / KOL</text>
+      <text x="704" y="631" font-family="Arial" font-size="10" font-weight="900" fill="#9a8b6e">STATUS</text>
+      ${tableRows}
+    </g>`;
+    const legend = `<g font-family="Arial" font-size="12" font-weight="700">
+      <text x="30" y="${H - 22}" fill="#8b7d5f">Green paths = still holding · red paths = dumped · top rows show the strongest visible routes</text>
+      <rect x="${W - 244}" y="${H - 40}" width="216" height="28" rx="14" fill="#fffaf0" stroke="#3f9c34" stroke-opacity="0.55"/>
+      <circle cx="${W - 226}" cy="${H - 26}" r="6" fill="#57c04a"/>
+      <text x="${W - 212}" y="${H - 21}" font-family="Arial Black, Arial" font-size="16" font-weight="900" fill="#3f9c34">slimewire.org</text>
+    </g>`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${header}${paths}${sourceCard}${bagEls}${table}${legend}</svg>`;
+  }
   const spokes = laid.map((n) => `<line x1="${cx}" y1="${cy}" x2="${n.x.toFixed(1)}" y2="${n.y.toFixed(1)}" stroke="#cbb98d" stroke-opacity="0.5" stroke-width="${n.crown || n.label ? 1.6 : 1}"/>`).join("");
   const bags = laid.map((n) => {
     const pal = BAGPAL[bagHash(n.wallet || n.name || String(n.i)) % BAGPAL.length];
@@ -295,9 +369,9 @@ export function buildAirdropSvg({ subject = "$SLIME", subtitle = "airdrop", stat
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${spokes}${header}${bags}${labels}${hub}${legend}</svg>`;
 }
 
-export async function renderSlimeAirdropPng({ subject, subtitle, stats = [], nodes = [], centerImage = null, devName = "", bgPath = null, W = 900, H = 820 } = {}) {
+export async function renderSlimeAirdropPng({ subject, subtitle, stats = [], nodes = [], flow = null, centerImage = null, devName = "", bgPath = null, W = 900, H = 820 } = {}) {
   const centerData = centerImage ? await fetchAvatarDataUri(centerImage, 160, 9000) : null;   // coin/airdropper pfp → center
-  const svg = buildAirdropSvg({ subject, subtitle, stats, nodes, centerImage: centerData, devName, W, H });
+  const svg = buildAirdropSvg({ subject, subtitle, stats, nodes, flow, centerImage: centerData, devName, W, H });
   const cardPng = await sharp(Buffer.from(svg)).png().toBuffer();
   // Base = the LIGHT cream slime frame (distinct from the dark map card) or a cream gradient fallback.
   let base;

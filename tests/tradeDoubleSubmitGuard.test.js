@@ -1507,9 +1507,8 @@ test("scan Security fills from our own RPC when RugCheck returns null (no more n
   assert.match(serverSource, /enrichScanSecurityOnchain\(mint, rug, bonding\)/);
   // card shows n/a (not a false "revoked") when authority state was never actually read
   const card = functionBody(serverSource, "formatSlimeScanCard");
-  assert.match(card, /scanBestVolumeWindow\(\.\.\.activitySources\)/);
-  assert.match(card, /scanBestPriceChange\("h1", \.\.\.activitySources\)/);
-  assert.match(card, /scanBestTxnCount\("buys", "h1", \.\.\.activitySources\)/);
+  assert.match(card, /scanMarketStatsFromSources\(\{ meta, bonding, best, rug, supply \}\)/);
+  assert.match(card, /const \{ vol, ch24, ch1, buys1, sells1 \} = stats/);
   assert.match(card, /const authKnown = Boolean\(rug && rug\.authoritiesKnown\)/);
   assert.match(card, /authKnown \? \(rug\.mintAuthority \? "🔴 active" : "🟢 none"\)/);
   // RugCheck marks its authority read as definitive so its null == revoked
@@ -1885,6 +1884,10 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(serverSource, /async function buildXRugReply/);            // 🛡️ did-it-rug verdict card
   assert.match(serverSource, /function xRugFacts/);
   assert.match(functionBody(serverSource, "buildXChartReply"), /renderCandleChartPng/);
+  assert.match(serverSource, /function scanMarketStatsFromSources/);
+  assert.match(functionBody(serverSource, "buildXScanReply"), /scanMarketStatsFromSources/);
+  assert.match(xcard, /volumeLabel/);
+  assert.match(xcard, /HOLDERS/);
   assert.match(functionBody(serverSource, "xReplyPollTick"), /xIntentFromText\(m\.text\)/); // intent routed at reply time
   // ANTI-SPAM: reply text carries NO raw URL (X folds link-replies from cold accounts); the card image
   // already shows slimewire.org. Seeded per-tweet variation (wording + card art) beats X's near-duplicate
@@ -1898,7 +1901,7 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "xReplyPollTick"), /buildXReply\(target, intent, m\.id\)/); // tweet id seeds variation (target = coin CA or bare wallet for maps)
   assert.match(functionBody(serverSource, "xReplyPollTick"), /buildXScanReply\(target, m\.id\)/); // slow maps fall back to scan instead of no-post
   assert.doesNotMatch(functionBody(serverSource, "xReplyPollTick"), /if \(reply === "__timeout__"\) \{ state\.seen/); // timeout is retryable, not burned forever
-  assert.match(functionBody(serverSource, "buildXScanReply"), /scanBestVolumeWindow\(\.\.\.activitySources\)/);
+  assert.match(functionBody(serverSource, "buildXScanReply"), /scanMarketStatsFromSources\(\{ meta, bonding, best, rug \}\)/);
   assert.match(functionBody(serverSource, "buildXMapReply"), /Liq \$\{stat\("LIQUIDITY"\)\}/);
   // card renderer varies EVERY render (rotating jittered bg + unique grain + mirrored layouts + rotating text)
   assert.match(xcard, /function makeRng/);                             // seeded PRNG drives all choices
@@ -2046,6 +2049,12 @@ test("airdrop and holder maps expose real cluster summaries + liquidity fallback
   assert.match(drop, /BAGS DROPPED/);
   assert.match(drop, /TOP HOLDERS/);
   assert.match(drop, /LIQUIDITY/);
+  assert.match(drop, /const flow = \{/);
+  assert.match(drop, /sourceLabel/);
+  const mapRender = fs.readFileSync(new URL("../src/lib/slimeMapRender.mjs", import.meta.url), "utf8");
+  assert.match(mapRender, /flowRows/);
+  assert.match(mapRender, /Drop Flow/);
+  assert.match(mapRender, /Top transfer paths/);
   const mapHtml = fs.readFileSync(new URL("../web/public/map.html", import.meta.url), "utf8");
   assert.match(mapHtml, /ensureStat/);
   assert.match(mapHtml, /HOLDERS/);

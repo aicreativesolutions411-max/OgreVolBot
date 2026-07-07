@@ -28,12 +28,16 @@ const FOOTERS = ["Scan any coin free · slimewire.org", "Free scans · slimewire
 const ACCENTS = ["#8aff6b", "#7dff8f", "#a6ff5b", "#63f0c0", "#9bff77", "#54e000"];
 
 // Neon info chip.
-function chip(x, y, w, label, value, accent) {
-  const val = String(value == null || value === "" ? "—" : value);
+function chip(x, y, w, label, value, accent, opts = {}) {
+  const val = String(value == null || value === "" ? "-" : value);
+  const h = opts.h || 104;
+  const labelSize = opts.labelSize || 21;
+  const baseValueSize = opts.valueSize || 38;
+  const valueSize = Math.max(18, Math.min(baseValueSize, baseValueSize - Math.max(0, val.length - 8) * 1.8));
   return `<g>
-    <rect x="${x}" y="${y}" width="${w}" height="104" rx="18" fill="#06120b" fill-opacity="0.82" stroke="${accent}" stroke-opacity="0.55" stroke-width="2"/>
-    <text x="${x + 22}" y="${y + 38}" font-family="Arial" font-size="21" fill="#8fbf93" letter-spacing="2">${esc(label)}</text>
-    <text x="${x + 22}" y="${y + 82}" font-family="Arial Black, Arial" font-weight="900" font-size="38" fill="#ffffff">${esc(val)}</text>
+    <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="16" fill="#06120b" fill-opacity="0.84" stroke="${accent}" stroke-opacity="0.55" stroke-width="2"/>
+    <text x="${x + 16}" y="${y + 28}" font-family="Arial" font-size="${labelSize}" fill="#8fbf93" letter-spacing="1.4">${esc(label)}</text>
+    <text x="${x + 16}" y="${y + h - 18}" font-family="Arial Black, Arial" font-weight="900" font-size="${valueSize.toFixed(1)}" fill="#ffffff">${esc(val)}</text>
   </g>`;
 }
 
@@ -53,7 +57,7 @@ async function pickBg(bgDir, r) {
   } catch { return null; }
 }
 
-export async function renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel, verdict, verdictTone = "ok", changeLabel, changeTone, logoBuffer, bgDir, seed }) {
+export async function renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel, volumeLabel, holderLabel, verdict, verdictTone = "ok", changeLabel, changeTone, logoBuffer, bgDir, seed }) {
   const r = makeRng(seed != null ? seed : symbol || "slime");
   const vColor = verdictColor(verdictTone);
   const chColor = changeTone === "up" ? "#54e000" : changeTone === "down" ? "#ff5b5b" : "#8aff6b";
@@ -67,6 +71,9 @@ export async function renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabe
 
   const logoCx = mirror ? 236 : 964, logoCy = 300, ringR = 176;
   const tx = mirror ? 470 : 60;                          // text/chips column origin
+  const chipW = 176;
+  const chipGap = 16;
+  const chipOpts = { h: 82, labelSize: 15, valueSize: 27 };
 
   // 1) Base: a rotating (jittered) background, else a rich gradient.
   const bg = bgDir ? await pickBg(bgDir, r) : null;
@@ -90,14 +97,16 @@ export async function renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabe
       <text x="${tx}" y="205" font-family="Arial Black, Arial" font-weight="900" font-size="96" fill="#ffffff" filter="url(#glow)">$${esc(sym)}</text>
       <text x="${tx + 2}" y="252" font-family="Arial" font-size="30" fill="#b6e6bd">${esc((name || "").slice(0, 40))}</text>
 
-      ${chip(tx, 292, 250, "MARKET CAP", mcLabel, accent)}
-      ${chip(tx + 270, 292, 250, "LIQUIDITY", liqLabel, accent)}
-      ${chip(tx, 410, 250, "AGE", ageLabel, accent)}
-      ${chip(tx + 270, 410, 250, changeLabel ? "1H" : "RAIL", changeLabel ? changeLabel : railLabel, changeLabel ? chColor : accent)}
+      ${chip(tx, 292, chipW, "MC", mcLabel, accent, chipOpts)}
+      ${chip(tx + chipW + chipGap, 292, chipW, "LIQ", liqLabel, accent, chipOpts)}
+      ${chip(tx + (chipW + chipGap) * 2, 292, chipW, "VOL", volumeLabel, accent, chipOpts)}
+      ${chip(tx, 386, chipW, "1H", changeLabel, changeLabel ? chColor : accent, chipOpts)}
+      ${chip(tx + chipW + chipGap, 386, chipW, "HOLDERS", holderLabel, accent, chipOpts)}
+      ${chip(tx + (chipW + chipGap) * 2, 386, chipW, "AGE", ageLabel, accent, chipOpts)}
 
-      <rect x="${tx}" y="536" width="560" height="86" rx="20" fill="#04110a" fill-opacity="0.9" stroke="${vColor}" stroke-width="3" filter="url(#glow)"/>
-      <circle cx="${tx + 44}" cy="579" r="14" fill="${vColor}"/>
-      <text x="${tx + 76}" y="590" font-family="Arial Black, Arial" font-weight="900" font-size="34" fill="${vColor}">${esc((verdict || "Scanned").slice(0, 28))}</text>
+      <rect x="${tx}" y="500" width="560" height="92" rx="20" fill="#04110a" fill-opacity="0.9" stroke="${vColor}" stroke-width="3" filter="url(#glow)"/>
+      <circle cx="${tx + 44}" cy="546" r="14" fill="${vColor}"/>
+      <text x="${tx + 76}" y="557" font-family="Arial Black, Arial" font-weight="900" font-size="32" fill="${vColor}">${esc((verdict || "Scanned").slice(0, 30))}</text>
     </g>
 
     <text x="${mirror ? 60 : 600}" y="648" font-family="Arial Black, Arial" font-weight="900" font-size="26" fill="#cdeacf">${esc(footer)}</text>
