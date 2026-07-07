@@ -32364,7 +32364,7 @@ async function handleXBotCommand(chatId, argument, userId) {
     `• 🎯 Receipts (10x quote-tweets): ${on(xReceiptsOn())}`,
     `• 📣 Auto-calls (network-backed): ${on(xAutoCallOn())}`,
     `• 🐸 Trench-watch heartbeat (movers): ${on(xHeartbeatOn())}`,
-    `• ⚡ KOL first-responder: ${on(xKolWatchOn())}${xKolWatchHandles().length ? ` (${xKolWatchHandles().length} handles)` : " (set XBOT_KOL_HANDLES)"}`,
+    `• ⚡ KOL first-responder: ${on(xKolWatchOn())} — watching <b>${xKolWatchHandles().length}</b> handles (kolscan top ${_kolscanTopHandles.length} + manual)`,
     `• 📊 Weekly scorecard: ${on(xScorecardOn())}`,
     "",
     `Tracked coins: <b>${tracked}</b> (${withTweet} with a post to quote)`,
@@ -32584,36 +32584,80 @@ function xSeedHash(s) { let h = 2166136261; const str = String(s || ""); for (le
 
 // ---- ⚡ KOL FIRST-RESPONDER: when a tracked KOL tweets a CA, quote it with an instant scan ----
 let _xKolWatchRunning = false, _xKolRotor = 0;
+// Seed = kolscan.io leaderboard top ~30 (scraped 2026-07-07, rank order) — the fallback if the live scrape is
+// empty (kolscan client-renders + can IP-block Render). The live refresh keeps this current automatically.
+const KOLSCAN_SEED_HANDLES = ["ihateoop", "dovvvv7", "OnlyLJC", "theonomix", "Humanevolvd", "rise_crypt", "idrawline", "roboPBOC", "Kevsznx", "Chestererer", "Advyth", "Setsu2k", "Kimbazxz", "10xJDOG", "cryptodivix", "melxprt", "KayTheDoc", "xKaaox", "NillaGurilla", "narracanz", "Felixonchain", "zilxbt", "CookerFlips", "goatedondsticks", "kayz_ce", "Satsbuyer", "VERYKOOLLUKEY", "Ga__ke", "TheMoro87", "spunosounds"];
+let _kolscanTopHandles = KOLSCAN_SEED_HANDLES.slice();
+let _kolscanTopAt = 0;
+// FREE: scrape kolscan.io/leaderboard for the current top-N KOL X handles (rank order). Needs a real browser
+// UA (a bare fetch gets a stripped/variable render). Returns [] on failure → caller keeps the seed/last-good.
+async function fetchKolscanTopHandles(n = 30) {
+  try {
+    const res = await fetch("https://kolscan.io/leaderboard", { headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36", "accept": "text/html" }, signal: AbortSignal.timeout(7000) });
+    if (!res.ok) return [];
+    const html = await res.text();
+    const seen = new Set(), out = [];
+    const skip = /^(home|share|intent|i|search|hashtag|explore|kolscan|status|compose|messages|notifications|settings)$/;
+    for (const m of html.matchAll(/(?:twitter\.com|x\.com)\/([A-Za-z0-9_]{2,20})/g)) {
+      const low = m[1].toLowerCase();
+      if (seen.has(low) || skip.test(low)) continue;
+      seen.add(low); out.push(m[1]);
+      if (out.length >= n) break;
+    }
+    return out;
+  } catch { return []; }
+}
+async function refreshKolscanTopHandles() {
+  if (Date.now() - _kolscanTopAt < 60 * 60_000) return;   // hourly
+  _kolscanTopAt = Date.now();
+  const live = await fetchKolscanTopHandles(30);
+  if (live.length >= 10) _kolscanTopHandles = live;        // only replace with a real render, else keep seed/last-good
+}
+// The watched set = manually-pinned handles (XBOT_KOL_HANDLES) ∪ kolscan's top ~30 (unless XBOT_KOLSCAN_TOP=false).
+// Capped so the rotation still cycles in reasonable time.
 function xKolWatchHandles() {
-  return String(process.env.XBOT_KOL_HANDLES || "").split(/[,\s]+/).map((x) => x.replace(/^@+/, "").replace(/[^a-z0-9_]/gi, "").toLowerCase()).filter(Boolean).slice(0, 10);
+  const clean = (x) => String(x).replace(/^@+/, "").replace(/[^a-z0-9_]/gi, "").toLowerCase();
+  const manual = String(process.env.XBOT_KOL_HANDLES || "").split(/[,\s]+/).map(clean).filter(Boolean);
+  const useKolscan = (() => { const v = String(process.env.XBOT_KOLSCAN_TOP || "").trim(); return v ? parseBoolean(v) : true; })();
+  const kol = useKolscan ? _kolscanTopHandles.map(clean).filter(Boolean) : [];
+  return [...new Set([...manual, ...kol])].slice(0, Math.max(10, Number(process.env.XBOT_KOL_MAX || 40)));
 }
 async function xKolWatchTick() {
   if (!xConfigured() || !xKolWatchOn() || _xKolWatchRunning) return;
   _xKolWatchRunning = true;
   try {
+    await refreshKolscanTopHandles().catch(() => {});    // keep the kolscan top-30 current (self-throttled hourly)
     const handles = xKolWatchHandles();
     if (!handles.length) return;
-    const h = handles[_xKolRotor % handles.length]; _xKolRotor++;   // one handle per tick (rate-limit friendly)
-    const tweets = await xSearchQuery(`from:${h} -filter:replies -filter:retweets`, 5).catch(() => []);
+    // Process a small ROTATING window per tick so 30+ handles still cycle fast enough to catch a fresh call,
+    // without machine-gunning X's search endpoint. perTick default 3 → ~30 handles cover in ~15 min at 90s ticks.
+    const perTick = Math.max(1, Math.min(8, Number(process.env.XBOT_KOL_PER_TICK || 3)));
+    const freshMs = Math.max(10, Number(process.env.XBOT_KOL_FRESH_MIN || 45)) * 60_000;
+    const batch = []; for (let i = 0; i < perTick; i++) batch.push(handles[(_xKolRotor + i) % handles.length]);
+    _xKolRotor = (_xKolRotor + perTick) % handles.length;
     const s = await readXCoins(); const now = Date.now();
-    let acted = false;
-    for (const t of tweets) {
-      if (!t.id || s.kolSeen[t.id]) continue;
-      s.kolSeen[t.id] = now;
-      if (acted) continue;
-      if (now - (t.createdAtMs || now) > 30 * 60_000) continue;    // only FRESH calls (<30m) — being late kills the point
-      const blob = [t.text, ...(t.urls || [])].join(" ");
-      const mint = extractMintsFromText(blob)[0];
-      if (!mint) continue;
-      const reply = await buildXReply(mint, "scan", `kol${t.id}`);
-      if (!reply || !reply.mediaBuffer) continue;
-      const text = [`$${reply.symbol} — instant read 👇`, `${scanFmtMoney(reply.mc)} MC · free scan on any coin, tag @SlimeWirebot 🐸`].join("\n").slice(0, 279);
-      const res = await xPost({ quoteTweetId: t.id, text, mediaBuffer: reply.mediaBuffer });
-      if (res.ok) {
-        acted = true;
-        await xTrackCoin({ mint, symbol: reply.symbol, mc: reply.mc, tweetId: res.id, kind: "kol" });
-        console.log(`[xbot] ⚡ KOL first-responder @${h} $${reply.symbol} id=${res.id}`);
-        await xReplyOwnerNotify(`⚡ X quoted @${h} on $${reply.symbol} (${scanFmtMoney(reply.mc)})`).catch(() => {});
+    let posted = 0;
+    for (const h of batch) {
+      if (posted >= 2) break;                            // at most 2 KOL quotes per tick (spacing/ban safety)
+      const tweets = await xSearchQuery(`from:${h} -filter:replies -filter:retweets`, 5).catch(() => []);
+      for (const t of tweets) {
+        if (!t.id || s.kolSeen[t.id]) continue;
+        s.kolSeen[t.id] = now;
+        if (now - (t.createdAtMs || now) > freshMs) continue;   // only FRESH calls — being late kills the point
+        const blob = [t.text, ...(t.urls || [])].join(" ");
+        const mint = extractMintsFromText(blob)[0];
+        if (!mint || s.coins[mint]) continue;            // no CA, or we already surfaced this coin → skip
+        const reply = await buildXReply(mint, "scan", `kol${t.id}`);
+        if (!reply || !reply.mediaBuffer) continue;
+        const text = [`$${reply.symbol} — @${h} just called it. instant read 👇`, `${scanFmtMoney(reply.mc)} MC · free scan on any coin, tag @SlimeWirebot 🐸`].join("\n").slice(0, 279);
+        const res = await xPost({ quoteTweetId: t.id, text, mediaBuffer: reply.mediaBuffer });
+        if (res.ok) {
+          posted++;
+          await xTrackCoin({ mint, symbol: reply.symbol, mc: reply.mc, tweetId: res.id, kind: "kol" });
+          console.log(`[xbot] ⚡ KOL first-responder @${h} $${reply.symbol} id=${res.id}`);
+          await xReplyOwnerNotify(`⚡ X quoted @${h} on $${reply.symbol} (${scanFmtMoney(reply.mc)})`).catch(() => {});
+          break;                                         // one quote per handle per tick
+        }
       }
     }
     for (const k of Object.keys(s.kolSeen)) if (now - s.kolSeen[k] > 3 * 86_400_000) delete s.kolSeen[k];

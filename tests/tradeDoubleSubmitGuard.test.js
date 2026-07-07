@@ -1913,7 +1913,11 @@ test("X growth engine: broadcast-gated proactive posts + receipts + KOL responde
   assert.match(functionBody(serverSource, "xPickAutoCallCandidate"), /computeNetworkBacking/);          // auto-calls reuse the brain
   assert.match(functionBody(serverSource, "xPickAutoCallCandidate"), /if \(s\.coins\[mint\]\) continue/); // never re-call a posted coin
   assert.match(functionBody(serverSource, "xKolWatchTick"), /from:\$\{h\}/);                            // first-responder searches a KOL's own tweets
-  assert.match(functionBody(serverSource, "xKolWatchTick"), /30 \* 60_000/);                            // only FRESH KOL calls (<30m)
+  assert.match(functionBody(serverSource, "xKolWatchTick"), /XBOT_KOL_FRESH_MIN/);                      // only FRESH KOL calls (tunable window)
+  assert.match(functionBody(serverSource, "xKolWatchTick"), /refreshKolscanTopHandles/);               // pulls kolscan's live top-30 each cycle
+  assert.match(serverSource, /const KOLSCAN_SEED_HANDLES = \[/);                                        // hardcoded seed survives an IP-block
+  assert.match(functionBody(serverSource, "fetchKolscanTopHandles"), /kolscan\.io\/leaderboard/);        // scrape handles from the leaderboard
+  assert.match(functionBody(serverSource, "xKolWatchHandles"), /_kolscanTopHandles/);                   // watched set = manual ∪ kolscan top-30
   // tracking is always on (records our reply for later receipts) — independent of the broadcast gate
   assert.match(functionBody(serverSource, "xReplyPollTick"), /await xTrackCoin\(/);
   assert.match(functionBody(serverSource, "xReplyPollTick"), /await xEnrichReplyText\(/);               // memory + persona on replies
