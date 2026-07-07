@@ -1849,7 +1849,7 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(serverSource, /setTimeout\(\(\) => \{ void xReplyPollTick\(\); \}, 10_000\)/);   // + immediate first check on boot
   assert.match(serverSource, /if \(await handleXReplyCallback\(query, userId\)/); // callback dispatch
   assert.match(serverSource, /parseCommandWithArgument\(text, \["xtest", "xstatus"\]\)/); // owner setup check
-  assert.match(serverSource, /import \{ xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode, xAuthReport \} from "\.\/lib\/xClient\.js"/);
+  assert.match(serverSource, /import \{ xConfigured, xSearchMentions, xReply, xPost, xSearchQuery, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode, xAuthReport \} from "\.\/lib\/xClient\.js"/);
   // interactive: replies off a CA, a $ticker, OR the coin in the PARENT post you tagged us under
   assert.match(serverSource, /async function resolveXTargetMint/);
   assert.match(serverSource, /function extractCashtags/);
@@ -1894,6 +1894,40 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "xReplyPollTick"), /if \(xPollRunning && \(Date\.now\(\) - xPollRunningAt\) < 120_000\) return/); // SELF-HEALING: force-reset a hung tick after 2min
   assert.match(functionBody(serverSource, "xReplyPollTick"), /mentions fetch timeout/); // mention fetch can't hang the poll
   assert.match(functionBody(serverSource, "xReplyPollTick"), /let lastPostAt =/); // spacing, not defer
+});
+
+// ---- 🐦🔥 X GROWTH ENGINE — proactive calls, receipts, KOL first-responder, scorecard, persona -----------
+test("X growth engine: broadcast-gated proactive posts + receipts + KOL responder + scorecard, tracking always on", () => {
+  const xclientSource = fs.readFileSync(new URL("../src/lib/xClient.js", import.meta.url), "utf8");
+  // xClient gained a general poster (standalone + quote-tweet) and a general search — receipts/first-responder need them
+  assert.match(xclientSource, /export async function xPost\(/);
+  assert.match(functionBody(xclientSource, "xPost"), /if \(quoteTweetId\) variables\.attachment_url/); // quote-tweet support
+  assert.match(functionBody(xclientSource, "xPost"), /if \(inReplyToId\) variables\.reply/);            // standalone vs reply
+  assert.match(xclientSource, /export async function xSearchQuery\(/);
+  // master gate: everything that POSTS requires XBOT_BROADCAST (default OFF); tracking + persona are separate
+  assert.match(serverSource, /function xBroadcastOn\(\)/);
+  assert.match(functionBody(serverSource, "xFeatureOn"), /xBroadcastOn\(\) &&/);        // per-feature AND master
+  assert.match(functionBody(serverSource, "xReceiptsTick"), /if \(crossed\.length && xReceiptsOn\(\) && posted < 2\)/); // milestones held until broadcast on
+  assert.match(functionBody(serverSource, "xReceiptsTick"), /c\.milestones\.push\(\.\.\.crossed\)/);   // only marked fired after a successful post
+  assert.match(functionBody(serverSource, "xPostReceipt"), /quoteTweetId: c\.tweetId/);                // receipt QUOTES our original post
+  assert.match(functionBody(serverSource, "xPickAutoCallCandidate"), /computeNetworkBacking/);          // auto-calls reuse the brain
+  assert.match(functionBody(serverSource, "xPickAutoCallCandidate"), /if \(s\.coins\[mint\]\) continue/); // never re-call a posted coin
+  assert.match(functionBody(serverSource, "xKolWatchTick"), /from:\$\{h\}/);                            // first-responder searches a KOL's own tweets
+  assert.match(functionBody(serverSource, "xKolWatchTick"), /30 \* 60_000/);                            // only FRESH KOL calls (<30m)
+  // tracking is always on (records our reply for later receipts) — independent of the broadcast gate
+  assert.match(functionBody(serverSource, "xReplyPollTick"), /await xTrackCoin\(/);
+  assert.match(functionBody(serverSource, "xReplyPollTick"), /await xEnrichReplyText\(/);               // memory + persona on replies
+  assert.match(functionBody(serverSource, "xEnrichReplyText"), /flagged this \$\{ago\} ago/);           // "saw it Xh ago" memory line
+  // schedulers wired
+  assert.match(serverSource, /setInterval\(\(\) => \{ void xReceiptsTick\(\); \}/);
+  assert.match(serverSource, /setInterval\(\(\) => \{ void xAutoCallTick\(\); \}/);
+  assert.match(serverSource, /setInterval\(\(\) => \{ void xKolWatchTick\(\); \}/);
+  assert.match(serverSource, /setInterval\(\(\) => \{ void xScorecardTick\(\); \}/);
+  // owner controls: /xbot dashboard + /xreply force-reply override, both owner-gated
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["xbot"\]\)/);
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["xreply", "xr"\]\)/);
+  assert.match(functionBody(serverSource, "handleXBotCommand"), /String\(chatId\) !== xReplyOwnerChat\(\)/);
+  assert.match(functionBody(serverSource, "handleXForceReplyCommand"), /resolveXTargetMint\(tweet\)/);   // force-reply reuses the poller's resolver
 });
 
 // ---- 🗺️ KOL / WALLET MAP — radial holder bubble-map (X + TG + interactive web) -----------------------

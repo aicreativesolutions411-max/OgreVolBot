@@ -264,6 +264,22 @@ export async function xSearchMentions(count = 20) {
   try { console.log(`[xreply] mentions: handles=[${handles.join(",")}] notif=${n1} search=${n2} → ${out.length} uniq${errs.length ? " · ERR " + errs.join(" | ") : ""}${out.length === 0 ? sample : ""}`); } catch { /* logging is best-effort */ }
   return out;
 }
+// General SearchTimeline query → parsed tweets (newest first). Powers the KOL first-responder
+// (rawQuery `from:<handle>`) and any other "watch a search" feature. Best-effort: returns [] on error.
+export async function xSearchQuery(rawQuery, count = 10) {
+  if (!hasXCookies() || !rawQuery) return [];
+  const out = [];
+  try {
+    const j = await gql("GET", "SearchTimeline", { variables: { rawQuery: String(rawQuery), count: Math.min(40, count), querySource: "typed_query", product: "Latest" }, features: READ_FEATURES });
+    const instr = j?.data?.search_by_raw_query?.search_timeline?.timeline?.instructions || [];
+    for (const ins of instr) for (const entry of (ins.entries || [])) {
+      if (!String(entry.entryId || "").startsWith("tweet-")) continue;
+      const t = parseTweetResult(entry.content?.itemContent?.tweet_results?.result);
+      if (t && t.id) out.push(t);
+    }
+  } catch { /* best-effort */ }
+  return out.sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
+}
 export async function xGetTweet(id) {
   if (!id) return null;
   try {
@@ -294,28 +310,36 @@ async function uploadMedia(buffer) {
   }
   return { id: null, error: lastErr };
 }
-export async function xReply({ inReplyToId, text, mediaBuffer, mediaBuffers }) {
+// General tweet poster — powers replies, STANDALONE posts (proactive auto-calls), and QUOTE-tweets (receipts,
+// KOL first-responder). Pass inReplyToId for a reply, quoteTweetId to quote another tweet, neither for a plain
+// broadcast. Up to 4 images (mediaBuffers[] or mediaBuffer).
+export async function xPost({ text, mediaBuffer, mediaBuffers, inReplyToId, quoteTweetId } = {}) {
   if (!hasXCookies()) return { ok: false, reason: "not configured" };
   try {
-    // Up to 4 images per reply (Twitter cap): mediaBuffers (array) OR mediaBuffer (single). Used to send BOTH
-    // the holder bubble map AND the airdrop map in one reply when a coin is tagged.
     const bufs = (Array.isArray(mediaBuffers) ? mediaBuffers : [mediaBuffer]).filter(Boolean).slice(0, 4);
     const mediaIds = []; let media = "none";
     for (const b of bufs) { const up = await uploadMedia(b); if (up.id) mediaIds.push(up.id); else media = "no-card:" + (up.error || ""); }
     if (mediaIds.length) media = mediaIds.length + "img";
     const variables = {
       tweet_text: String(text || "").slice(0, 279),
-      reply: { in_reply_to_tweet_id: String(inReplyToId), exclude_reply_user_ids: [] },
       dark_request: false,
       media: { media_entities: mediaIds.map((id) => ({ media_id: id, tagged_users: [] })), possibly_sensitive: false },
       semantic_annotation_ids: []
     };
+    if (inReplyToId) variables.reply = { in_reply_to_tweet_id: String(inReplyToId), exclude_reply_user_ids: [] };
+    // A quote-tweet on X's CreateTweet is just the quoted tweet's URL as attachment_url.
+    if (quoteTweetId) variables.attachment_url = `https://x.com/i/status/${String(quoteTweetId)}`;
     const j = await gql("POST", "CreateTweet", { variables, features: WRITE_FEATURES });
     const id = j?.data?.create_tweet?.tweet_results?.result?.rest_id || "";
     if (j?.errors?.length && !id) return { ok: false, reason: String(j.errors[0]?.message || "create_tweet error").slice(0, 140), media };
     return { ok: true, id, media };
   } catch (e) {
     if (e.status === 401 || e.status === 403) resetXScraper();
-    return { ok: false, reason: String(e?.message || "reply failed").slice(0, 160) };
+    return { ok: false, reason: String(e?.message || "post failed").slice(0, 160) };
   }
+}
+// Back-compat wrapper — a reply is just a post with an in_reply_to. (Up to 4 images: the holder bubble map AND
+// the airdrop map in one reply when a coin is tagged.)
+export async function xReply({ inReplyToId, text, mediaBuffer, mediaBuffers }) {
+  return xPost({ inReplyToId, text, mediaBuffer, mediaBuffers });
 }

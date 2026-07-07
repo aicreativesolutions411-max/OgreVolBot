@@ -72,7 +72,7 @@ import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVan
 import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp, listCharacterFiles, characterPfpCount, makeCharacterPfp } from "./lib/pfp.js";
 import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
-import { xConfigured, xSearchMentions, xReply, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode, xAuthReport } from "./lib/xClient.js";
+import { xConfigured, xSearchMentions, xReply, xPost, xSearchQuery, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode, xAuthReport } from "./lib/xClient.js";
 import { renderXScanCard } from "./lib/xCard.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
@@ -14463,6 +14463,8 @@ async function handleMessage(message, userId) {
     if (xscan) { await handleXScanCommand(chatId, xscan.argument, userId); return; }
     const xreplycmd = parseCommandWithArgument(text, ["xreply", "xr"]);
     if (xreplycmd) { await handleXForceReplyCommand(chatId, xreplycmd.argument, userId); return; }
+    const xbotcmd = parseCommandWithArgument(text, ["xbot"]);
+    if (xbotcmd) { await handleXBotCommand(chatId, xbotcmd.argument, userId); return; }
   }
   // /room — the group's verifiable trading board (opt-in Room PnL + skin-in-the-game callers).
   if (parseCommandWithArgument(text, ["room", "board", "roompnl"])) { await handleRoomCommand(chatId, message); return; }
@@ -31008,7 +31010,7 @@ async function buildTokenHolderMap(mint) {
     getPumpFunTokenMetadata(mint).catch(() => null),
     fetchDexScreenerTokenPairsFallback(mint).catch(() => null),
     fetchTokenHolderRows(mint).catch(() => []),
-    getGeckoTerminalTokenMetadata(mint, { timeoutMs: 3200 }).catch(() => null),
+    getGeckoTerminalTokenMetadata(mint, { timeoutMs: 4800 }).catch(() => null),
   ]);
   const best = bestDexPairForToken(mint, pairs);
   const dexMeta = best ? metadataFromDexPair(mint, best) : null;
@@ -31056,7 +31058,7 @@ async function buildTokenHolderMap(mint) {
     { label: "1H", value: Number.isFinite(ch1) ? `${ch1 >= 0 ? "+" : ""}${Math.round(ch1)}%` : "—" },
     { label: "TOP 10", value: top10 > 0 ? `${Math.round(top10)}%` : "—" },
   ];
-  try { console.log(`[map] ${sym || shortMint(mint)} ${Date.now() - _t0}ms · holders=${holderRows.length} kols=${kolsIn}`); } catch { /* best-effort */ }
+  try { console.log(`[map] ${sym || shortMint(mint)} ${Date.now() - _t0}ms · holders=${holderRows.length} kols=${kolsIn} · liq=${liq} src[dex=${dexMeta ? (dexMeta.liquidityUsd || 0) : "null"} gk=${geckoMeta ? (geckoMeta.liquidityUsd == null ? "null" : geckoMeta.liquidityUsd) : "MISS"} pump=${pumpMeta ? (pumpMeta.liquidityUsd || 0) : "null"}] ch1=${ch1}`); } catch { /* best-effort */ }
   return {
     kind: "token", isToken: true, mint,
     subject: `$${(sym || shortMint(mint)).slice(0, 11)}`,
@@ -32084,6 +32086,8 @@ async function xReplyPollTick() {
     ]).catch((e) => { console.log(`[xreply]   build THREW: ${String(e?.message || e).slice(0, 140)}`); return null; });   // m.id seeds unique wording + card art
     if (reply === "__timeout__") { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "build timeout" }); console.log(`[xreply]   ⏱ build TIMED OUT (>40s) target=${target} → skip (poll stays alive)`); continue; }
     if (!reply) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "coin didn't scan" }); console.log(`[xreply]   ✗ buildXReply null (coin didn't scan) target=${target}`); continue; }
+    // 🐸 Enrich the reply with coin-memory ("flagged this 2h ago at $X") + degen persona (text-only, safe).
+    if (solanaPublicKeyLike(target)) { try { await xEnrichReplyText(target, reply); } catch { /* keep base reply */ } }
     console.log(`[xreply]   reply ready: $${reply.symbol} media=${reply.mediaBuffer ? "card" : "NONE"} → posting (auto=${auto})…`);
     if (auto) {
       if (maxPerHour > 0 && state.posts.length >= maxPerHour) { results.push({ u: m.username, s: "defer", d: "hourly cap" }); break; }
@@ -32097,6 +32101,8 @@ async function xReplyPollTick() {
         state.seen[m.id] = now; delete state.fails[m.id]; state.posts.push(lastPostAt); posted++;
         results.push({ u: m.username, s: "replied", d: `${intent === "chart" ? "📈" : intent === "rug" ? "🛡️" : "🔎"} $${reply.symbol}${res.media && res.media !== "card" ? " · " + res.media : " · card"}` });
         console.log(`[xreply] ✅ @${m.username} ${intent} $${reply.symbol} media=${res.media || "text"} id=${res.id || ""}`);
+        // 🎯 Record for RECEIPTS — anchor to our reply so a later 2x/10x quote-tweets this exact post.
+        try { if (solanaPublicKeyLike(target)) await xTrackCoin({ mint: target, symbol: reply.symbol, mc: reply.mc, tweetId: res.id, kind: "reply" }); } catch { /* best-effort */ }
         await xReplyOwnerNotify(`✅ Auto-replied on X to @${m.username} · ${intent} · $${reply.symbol} (${res.media || "text"})`);
       } else {
         // Transient failure → do NOT mark seen; break so it retries next cycle (the floor won't skip it,
@@ -32301,11 +32307,344 @@ async function handleXForceReplyCommand(chatId, argument, userId) {
   if (res.ok) {
     // Mark it seen so the auto-poller doesn't double-reply if the tag DOES surface later.
     try { const st = await readXReplyState(); st.seen = st.seen || {}; st.seen[tweetId] = Date.now(); await writeXReplyState(st); } catch { /* best-effort */ }
+    try { await xTrackCoin({ mint: target, symbol: reply.symbol, mc: reply.mc, tweetId: res.id, kind: "reply" }); } catch { /* receipts tracking is best-effort */ }
     await sayHtml(chatId, `✅ <b>Posted.</b> Replied to that tweet with the ${intent} card for <code>${escapeTelegramHtml(shortMint(target))}</code>.${res.id ? ` <a href="https://x.com/i/status/${escapeTelegramHtml(String(res.id))}">view</a>` : ""}`);
     console.log(`[xreply] ✅ FORCE reply to ${tweetId} ${intent} $${reply.symbol} media=${res.media || "text"} id=${res.id || ""}`);
   } else {
     await sayHtml(chatId, `⚠️ Post failed: <code>${escapeTelegramHtml(res.reason || "unknown")}</code>. If it's an auth error, refresh the X cookies and <code>/xtest</code>.`);
   }
+}
+
+// Owner dashboard for the X growth engine: what's on, how many coins tracked, and the exact env flips.
+// `/xbot`               → status  ·  `/xbot receipt <mint>` → force a receipt-style post now (test)
+// `/xbot call`          → force one auto-call now (test)  ·  `/xbot scorecard` → post the weekly card now
+async function handleXBotCommand(chatId, argument, userId) {
+  if (!xReplyOwnerChat() || String(chatId) !== xReplyOwnerChat()) { await say(chatId, "Owner-only — DM /xclaim first."); return; }
+  const arg = String(argument || "").trim();
+  const s = await readXCoins();
+  const now = Date.now();
+  const tracked = Object.keys(s.coins).length;
+  const withTweet = Object.values(s.coins).filter((c) => c.tweetId && c.entryMc > 0).length;
+  // Test actions (owner-triggered, bypass the broadcast gate so you can prove the pipeline before going live).
+  const mMint = arg.match(/^receipt\s+([1-9A-HJ-NP-Za-km-z]{32,44})/);
+  if (mMint) {
+    const mint = mMint[1];
+    await say(chatId, "🎯 Building a test receipt post…");
+    const live = await xQuickMc(mint); if (!live) { await say(chatId, "Couldn't read that coin's MC."); return; }
+    const c = { mint, symbol: live.sym, entryMc: Math.max(1, Math.round(live.mc / 3)), tweetId: "", peakMc: live.mc };  // pretend entry = ⅓ current
+    let mediaBuffer = null; try { const r = await buildXReply(mint, "scan", "rtest"); mediaBuffer = r?.mediaBuffer || null; } catch { /* */ }
+    const text = `📈 ${c.symbol ? "$" + c.symbol : shortMint(mint)} — flagged at ${scanFmtMoney(c.entryMc)}, now ${scanFmtMoney(live.mc)}. ~3x.\nreceipts, not promises 🐸 (TEST)`;
+    const res = await xPost({ text, mediaBuffer });
+    await sayHtml(chatId, res.ok ? `✅ Test receipt posted.${res.id ? ` <a href="https://x.com/i/status/${res.id}">view</a>` : ""}` : `⚠️ ${escapeTelegramHtml(res.reason || "failed")}`);
+    return;
+  }
+  if (/^call\b/i.test(arg)) {
+    await say(chatId, "📣 Looking for a network-backed coin to call…");
+    const cand = await xPickAutoCallCandidate(s);
+    if (!cand) { await say(chatId, "No candidate right now — the observatory has nothing scoring high enough. Try again later."); return; }
+    const reply = await buildXReply(cand.mint, "scan", `calltest${now}`);
+    if (!reply || !reply.mediaBuffer) { await say(chatId, "Candidate found but its card wouldn't build. Try again."); return; }
+    const res = await xPost({ text: xAutoCallText(cand, reply), mediaBuffer: reply.mediaBuffer });
+    if (res.ok) { await xTrackCoin({ mint: cand.mint, symbol: reply.symbol, mc: reply.mc || cand.mc, tweetId: res.id, kind: "autocall" }); }
+    await sayHtml(chatId, res.ok ? `✅ Called $${escapeTelegramHtml(reply.symbol || "")} (score ${cand.score}).${res.id ? ` <a href="https://x.com/i/status/${res.id}">view</a>` : ""}` : `⚠️ ${escapeTelegramHtml(res.reason || "failed")}`);
+    return;
+  }
+  if (/^scorecard\b/i.test(arg)) {
+    const before = s.lastScorecardAt; s.lastScorecardAt = 0; await writeXCoins(s);   // force the weekly gate open once
+    await xScorecardTick();
+    const after = await readXCoins();
+    await say(chatId, after.lastScorecardAt > before ? "✅ Scorecard posted." : "Nothing to post yet (need ≥3 tracked coins with an entry MC this week).");
+    return;
+  }
+  const on = (b) => b ? "🟢 ON" : "⚪️ off";
+  await sayHtml(chatId, [
+    "🐦🔥 <b>X Growth Engine</b>",
+    `Master broadcast: <b>${xBroadcastOn() ? "🟢 LIVE" : "⚪️ DARK"}</b>  ·  Persona: ${on(xPersonaOn())}`,
+    `• 🎯 Receipts (10x quote-tweets): ${on(xReceiptsOn())}`,
+    `• 📣 Auto-calls (network-backed): ${on(xAutoCallOn())}`,
+    `• ⚡ KOL first-responder: ${on(xKolWatchOn())}${xKolWatchHandles().length ? ` (${xKolWatchHandles().length} handles)` : " (set XBOT_KOL_HANDLES)"}`,
+    `• 📊 Weekly scorecard: ${on(xScorecardOn())}`,
+    "",
+    `Tracked coins: <b>${tracked}</b> (${withTweet} with a post to quote)`,
+    "",
+    "<b>Go live</b> (Render env → redeploy):",
+    "<code>XBOT_BROADCAST=true</code> — master switch (everything below needs it)",
+    "<code>XBOT_KOLWATCH=true</code> + <code>XBOT_KOL_HANDLES=cupsey,euris,…</code> — first-responder",
+    "Tune: <code>XBOT_AUTOCALL_GAP_MIN</code> (180) · <code>XBOT_AUTOCALL_DAILY</code> (6) · <code>XBOT_AUTOCALL_MIN_SCORE</code> (55) · <code>XBOT_AUTOCALL_MIN_MC</code> (15000)",
+    "",
+    "<b>Test now</b> (posts for real, ignores the gate):",
+    "<code>/xbot call</code> · <code>/xbot receipt &lt;mint&gt;</code> · <code>/xbot scorecard</code>",
+  ].join("\n"));
+}
+
+// ============================================================================
+// 🐦🔥 X GROWTH ENGINE — turns the reactive scan-bot into a trench account people
+// FOLLOW: proactive alpha calls, public RECEIPTS (auto "🎯 called at $30k → 10x"
+// quote-tweets), a KOL first-responder, a weekly scorecard, plus smarter/degen
+// reply text. Everything that POSTS is gated behind XBOT_BROADCAST=true (master,
+// default OFF) + per-feature flags — flip one env var to go live, nothing blasts
+// the account by accident. Tracking + reply enrich are always on (no post risk).
+// ============================================================================
+function xBroadcastOn() { return parseBoolean(process.env.XBOT_BROADCAST || "false"); }
+function xFeatureOn(env, def) { const v = String(process.env[env] || "").trim(); return xBroadcastOn() && (v ? parseBoolean(v) : def); }
+const xReceiptsOn  = () => xFeatureOn("XBOT_RECEIPTS", true);
+const xAutoCallOn  = () => xFeatureOn("XBOT_AUTOCALL", true);
+const xKolWatchOn  = () => xFeatureOn("XBOT_KOLWATCH", false);   // highest ban risk → OFF even under broadcast until opted in
+const xScorecardOn = () => xFeatureOn("XBOT_SCORECARD", true);
+const xPersonaOn   = () => { const v = String(process.env.XBOT_PERSONA || "").trim(); return v ? parseBoolean(v) : true; };   // text-only, safe → on by default
+const XBOT_MILESTONES = [2, 3, 5, 10, 25, 50, 100];
+
+// ---- tracked-coins store: entry snapshots so receipts can quote our original post later ----
+function xCoinsStateFile() { return path.join(CONFIG.dataDir, "x-coins-state.json"); }
+let xCoinsCache = null;
+async function readXCoins() {
+  if (xCoinsCache) return xCoinsCache;
+  let s = null; try { s = await readJson(xCoinsStateFile()); } catch { s = null; }
+  if (!s || typeof s !== "object") s = {};
+  if (!s.coins || typeof s.coins !== "object") s.coins = {};
+  if (!Array.isArray(s.posts)) s.posts = [];
+  if (typeof s.lastAutoCallAt !== "number") s.lastAutoCallAt = 0;
+  if (typeof s.lastScorecardAt !== "number") s.lastScorecardAt = 0;
+  if (!s.kolSeen || typeof s.kolSeen !== "object") s.kolSeen = {};
+  xCoinsCache = s; return s;
+}
+async function writeXCoins(s) { xCoinsCache = s; await writeJsonFile(xCoinsStateFile(), s).catch(() => {}); }
+// Record a coin the bot surfaced (reply or proactive post). tweetId = OUR post — the receipt quotes it later.
+async function xTrackCoin({ mint, symbol, mc, tweetId, kind } = {}) {
+  if (!solanaPublicKeyLike(mint)) return null;
+  const s = await readXCoins();
+  const now = Date.now();
+  let c = s.coins[mint];
+  if (!c) {
+    c = s.coins[mint] = { mint, symbol: symbol || "", entryMc: Number(mc) || 0, firstAt: now, tweetId: tweetId ? String(tweetId) : "", kind: kind || "reply", peakMc: Number(mc) || 0, milestones: [], lastCheckAt: 0 };
+  } else {
+    if (symbol && !c.symbol) c.symbol = symbol;
+    if (!(c.entryMc > 0) && Number(mc) > 0) { c.entryMc = Number(mc); c.firstAt = now; }
+    if (tweetId && !c.tweetId) c.tweetId = String(tweetId);   // anchor to our FIRST post/reply for the quote
+    if (Number(mc) > (c.peakMc || 0)) c.peakMc = Number(mc);
+  }
+  const keys = Object.keys(s.coins);
+  if (keys.length > 800) keys.map((k) => s.coins[k]).sort((a, b) => (a.firstAt || 0) - (b.firstAt || 0)).slice(0, keys.length - 800).forEach((x) => delete s.coins[x.mint]);
+  await writeXCoins(s);
+  return c;
+}
+async function xCoinMemory(mint) { try { const s = await readXCoins(); return s.coins[mint] || null; } catch { return null; } }
+// Light MC read for receipts/candidate-vetting — GeckoTerminal (free, not IP-limited on Render), then DexScreener.
+async function xQuickMc(mint) {
+  try { const g = await getGeckoTerminalTokenMetadata(mint, { timeoutMs: 3500 }).catch(() => null); const mc = Number(g?.marketCap || g?.fdv || 0); if (mc > 0) return { mc, sym: g?.symbol || "" }; } catch { /* */ }
+  try { const p = await fetchDexScreenerTokenPairsFallback(mint).catch(() => null); const b = bestDexPairForToken(mint, p); const m = b ? metadataFromDexPair(mint, b) : null; const mc = Number(m?.marketCap || m?.fdv || 0); if (mc > 0) return { mc, sym: m?.symbol || "" }; } catch { /* */ }
+  return null;
+}
+
+// ---- 🎯 RECEIPTS: when a tracked coin crosses a multiple, quote-tweet our original post ----
+let _xReceiptsRunning = false;
+async function xReceiptsTick() {
+  if (!xConfigured() || _xReceiptsRunning) return;
+  _xReceiptsRunning = true;
+  try {
+    const s = await readXCoins();
+    const now = Date.now();
+    // Due = anchored to our tweet + has an entry MC + not checked in 12min; oldest-checked first, bounded batch.
+    const due = Object.values(s.coins)
+      .filter((c) => c.tweetId && c.entryMc > 0 && (now - (c.lastCheckAt || 0)) > 12 * 60_000)
+      .sort((a, b) => (a.lastCheckAt || 0) - (b.lastCheckAt || 0)).slice(0, 10);
+    let posted = 0;
+    for (const c of due) {
+      c.lastCheckAt = now;
+      const live = await xQuickMc(c.mint);
+      if (!live) continue;
+      if (live.sym && !c.symbol) c.symbol = live.sym;
+      if (live.mc > (c.peakMc || 0)) c.peakMc = live.mc;
+      const mult = c.entryMc > 0 ? live.mc / c.entryMc : 0;
+      const crossed = XBOT_MILESTONES.filter((m) => mult >= m && !c.milestones.includes(m));
+      if (crossed.length && xReceiptsOn() && posted < 2) {
+        const top = crossed[crossed.length - 1];
+        const ok = await xPostReceipt(c, live.mc, top);
+        if (ok) { c.milestones.push(...crossed); posted++; }   // only mark fired when we actually posted (holds until broadcast on)
+      }
+    }
+    await writeXCoins(s);
+  } catch (e) { console.log(`[xbot] receipts tick err: ${String(e?.message || e).slice(0, 100)}`); }
+  finally { _xReceiptsRunning = false; }
+}
+async function xPostReceipt(c, curMc, mult) {
+  const sym = c.symbol ? `$${c.symbol}` : shortMint(c.mint);
+  const emoji = mult >= 100 ? "🌕" : mult >= 50 ? "🚀" : mult >= 10 ? "🔥" : mult >= 5 ? "💰" : "📈";
+  const text = [
+    `${emoji} ${sym} — flagged at ${scanFmtMoney(c.entryMc)}, now ${scanFmtMoney(curMc)}. ${mult}x.`,
+    "receipts, not promises. the SlimeWire brain called it early.",
+    "Tag @SlimeWirebot on any coin for a free read 🐸",
+  ].join("\n").slice(0, 279);
+  let mediaBuffer = null;
+  try { const r = await buildXReply(c.mint, "scan", `receipt${mult}${c.mint}`); mediaBuffer = r?.mediaBuffer || null; } catch { /* text-only ok */ }
+  const res = await xPost({ quoteTweetId: c.tweetId, text, mediaBuffer });
+  if (res.ok) { console.log(`[xbot] 🎯 receipt ${sym} ${mult}x id=${res.id}`); await xReplyOwnerNotify(`🎯 X receipt: ${sym} ${mult}x (${scanFmtMoney(c.entryMc)} → ${scanFmtMoney(curMc)})`).catch(() => {}); return true; }
+  console.log(`[xbot] receipt FAILED ${sym}: ${res.reason}`); return false;
+}
+
+// ---- 📣 PROACTIVE AUTO-CALL: post the SlimeWire brain's best network-backed coin, throttled ----
+let _xAutoCallRunning = false;
+async function xAutoCallTick() {
+  if (!xConfigured() || !xAutoCallOn() || _xAutoCallRunning) return;
+  _xAutoCallRunning = true;
+  try {
+    const s = await readXCoins();
+    const now = Date.now();
+    const gapMin = Math.max(45, Number(process.env.XBOT_AUTOCALL_GAP_MIN || 180));
+    if (now - (s.lastAutoCallAt || 0) < gapMin * 60_000) return;
+    const dailyCap = Math.max(1, Number(process.env.XBOT_AUTOCALL_DAILY || 6));
+    s.posts = s.posts.filter((t) => now - t < 86_400_000);
+    if (s.posts.length >= dailyCap) return;
+    const cand = await xPickAutoCallCandidate(s);
+    if (!cand) return;
+    const reply = await buildXReply(cand.mint, "scan", `autocall${now}`);
+    if (!reply || !reply.mediaBuffer) return;   // never post a text-only call — the card is the point
+    const res = await xPost({ text: xAutoCallText(cand, reply), mediaBuffer: reply.mediaBuffer });
+    if (res.ok) {
+      s.lastAutoCallAt = now; s.posts.push(now); await writeXCoins(s);
+      await xTrackCoin({ mint: cand.mint, symbol: reply.symbol, mc: reply.mc || cand.mc, tweetId: res.id, kind: "autocall" });
+      console.log(`[xbot] 📣 auto-call $${reply.symbol} score=${cand.score} id=${res.id}`);
+      await xReplyOwnerNotify(`📣 X auto-call: $${reply.symbol} (${scanFmtMoney(reply.mc || cand.mc)} · score ${cand.score})`).catch(() => {});
+    }
+  } catch (e) { console.log(`[xbot] autocall tick err: ${String(e?.message || e).slice(0, 100)}`); }
+  finally { _xAutoCallRunning = false; }
+}
+// Candidate = highest network-backed coin from the observatory not already posted, live-MC vetted (dust filter).
+async function xPickAutoCallCandidate(s) {
+  const seen = new Set();
+  try { for (const m of insiderLaunches.keys()) seen.add(m); } catch { /* */ }
+  try { for (const m of obsCoins.keys()) seen.add(m); } catch { /* */ }
+  try { for (const m of earlyBuyers.keys()) seen.add(m); } catch { /* */ }
+  const minScore = Math.max(40, Number(process.env.XBOT_AUTOCALL_MIN_SCORE || 55));
+  const cands = [];
+  for (const mint of seen) {
+    if (s.coins[mint]) continue;                 // never re-call a coin we already surfaced
+    let net; try { net = computeNetworkBacking(mint); } catch { continue; }
+    if (!net || !net.backed || (net.score || 0) < minScore) continue;
+    cands.push({ mint, score: net.score || 0 });
+  }
+  cands.sort((a, b) => b.score - a.score);
+  for (const c of cands.slice(0, 6)) {           // vet the top few with a live MC read; skip dust
+    const live = await xQuickMc(c.mint);
+    if (live && live.mc >= Math.max(8_000, Number(process.env.XBOT_AUTOCALL_MIN_MC || 15_000))) return { ...c, mc: live.mc, sym: live.sym };
+  }
+  return null;
+}
+function xAutoCallText(cand, reply) {
+  const sym = reply.symbol ? `$${reply.symbol}` : shortMint(cand.mint);
+  const openers = ["👀 eyes on", "🐸 trench watch:", "⚡ on the radar:", "🧪 the SlimeWire brain flagged"];
+  const op = openers[Math.abs(xSeedHash(cand.mint)) % openers.length];
+  return [
+    `${op} ${sym}`,
+    `${scanFmtMoney(reply.mc || cand.mc)} MC · network-backed · NFA`,
+    "Full read + bubble map → tag @SlimeWirebot 🐸",
+  ].join("\n").slice(0, 279);
+}
+function xSeedHash(s) { let h = 2166136261; const str = String(s || ""); for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return h | 0; }
+
+// ---- ⚡ KOL FIRST-RESPONDER: when a tracked KOL tweets a CA, quote it with an instant scan ----
+let _xKolWatchRunning = false, _xKolRotor = 0;
+function xKolWatchHandles() {
+  return String(process.env.XBOT_KOL_HANDLES || "").split(/[,\s]+/).map((x) => x.replace(/^@+/, "").replace(/[^a-z0-9_]/gi, "").toLowerCase()).filter(Boolean).slice(0, 10);
+}
+async function xKolWatchTick() {
+  if (!xConfigured() || !xKolWatchOn() || _xKolWatchRunning) return;
+  _xKolWatchRunning = true;
+  try {
+    const handles = xKolWatchHandles();
+    if (!handles.length) return;
+    const h = handles[_xKolRotor % handles.length]; _xKolRotor++;   // one handle per tick (rate-limit friendly)
+    const tweets = await xSearchQuery(`from:${h} -filter:replies -filter:retweets`, 5).catch(() => []);
+    const s = await readXCoins(); const now = Date.now();
+    let acted = false;
+    for (const t of tweets) {
+      if (!t.id || s.kolSeen[t.id]) continue;
+      s.kolSeen[t.id] = now;
+      if (acted) continue;
+      if (now - (t.createdAtMs || now) > 30 * 60_000) continue;    // only FRESH calls (<30m) — being late kills the point
+      const blob = [t.text, ...(t.urls || [])].join(" ");
+      const mint = extractMintsFromText(blob)[0];
+      if (!mint) continue;
+      const reply = await buildXReply(mint, "scan", `kol${t.id}`);
+      if (!reply || !reply.mediaBuffer) continue;
+      const text = [`$${reply.symbol} — instant read 👇`, `${scanFmtMoney(reply.mc)} MC · free scan on any coin, tag @SlimeWirebot 🐸`].join("\n").slice(0, 279);
+      const res = await xPost({ quoteTweetId: t.id, text, mediaBuffer: reply.mediaBuffer });
+      if (res.ok) {
+        acted = true;
+        await xTrackCoin({ mint, symbol: reply.symbol, mc: reply.mc, tweetId: res.id, kind: "kol" });
+        console.log(`[xbot] ⚡ KOL first-responder @${h} $${reply.symbol} id=${res.id}`);
+        await xReplyOwnerNotify(`⚡ X quoted @${h} on $${reply.symbol} (${scanFmtMoney(reply.mc)})`).catch(() => {});
+      }
+    }
+    for (const k of Object.keys(s.kolSeen)) if (now - s.kolSeen[k] > 3 * 86_400_000) delete s.kolSeen[k];
+    await writeXCoins(s);
+  } catch (e) { console.log(`[xbot] kolwatch tick err: ${String(e?.message || e).slice(0, 100)}`); }
+  finally { _xKolWatchRunning = false; }
+}
+
+// ---- 📊 WEEKLY SCORECARD: social-proof recap of the week's calls ----
+async function xScorecardTick() {
+  if (!xConfigured() || !xScorecardOn()) return;
+  try {
+    const s = await readXCoins(); const now = Date.now();
+    if (now - (s.lastScorecardAt || 0) < 6.8 * 86_400_000) return;   // ~weekly cadence
+    const wk = Object.values(s.coins).filter((c) => c.entryMc > 0 && now - c.firstAt < 8 * 86_400_000);
+    if (wk.length < 3) return;                                       // not enough to brag about yet
+    const scored = wk.map((c) => ({ ...c, mult: (c.peakMc > 0 && c.entryMc > 0) ? c.peakMc / c.entryMc : 0 })).sort((a, b) => b.mult - a.mult);
+    const hits = scored.filter((c) => c.mult >= 2).length;
+    const best = scored[0];
+    const text = [
+      "📊 SlimeWire — week in the trenches",
+      `${wk.length} coins flagged · ${hits} did 2x+${best && best.mult >= 2 ? ` · best ${best.symbol ? "$" + best.symbol : ""} +${Math.round((best.mult - 1) * 100)}%` : ""}`,
+      "Free reads all week. Tag @SlimeWirebot on any coin 🐸",
+    ].join("\n").slice(0, 279);
+    const res = await xPost({ text });
+    if (res.ok) { s.lastScorecardAt = now; await writeXCoins(s); console.log(`[xbot] 📊 scorecard posted id=${res.id}`); await xReplyOwnerNotify(`📊 X weekly scorecard posted (${wk.length} coins · ${hits} 2x+)`).catch(() => {}); }
+  } catch (e) { console.log(`[xbot] scorecard tick err: ${String(e?.message || e).slice(0, 100)}`); }
+}
+
+// ---- 🐸 REPLY ENRICH: memory ("saw it Xh ago") + degen persona sign-off (text-only, always safe) ----
+// Inserts extra beats ABOVE the CTA (last line), each only if it still fits the 279-char cap — so the
+// call-to-action is never truncated. Applied to scan/map/chart replies at the poll layer (buildXReply
+// stays untouched, keeping the working reply path safe).
+async function xEnrichReplyText(mint, reply) {
+  if (!reply || typeof reply.text !== "string") return reply;
+  const lines = reply.text.split("\n");
+  const cta = lines.length > 1 ? lines.pop() : "";
+  const inserts = [];
+  // Memory: if we surfaced this coin before, show the move since — instant differentiation + a receipt tease.
+  try {
+    const mem = await xCoinMemory(mint);
+    if (mem && mem.entryMc > 0 && Date.now() - mem.firstAt > 25 * 60_000) {
+      const cur = Number(reply.mc) || 0;
+      const ago = xAgeLabel(Date.now() - mem.firstAt);
+      if (cur > 0) {
+        const mult = cur / mem.entryMc;
+        inserts.push(mult >= 1.5 ? `📈 flagged this ${ago} ago at ${scanFmtMoney(mem.entryMc)} → now ${scanFmtMoney(cur)} (${mult.toFixed(1)}x)`
+          : mult <= 0.6 ? `👀 saw this ${ago} ago at ${scanFmtMoney(mem.entryMc)} — down since`
+          : `👀 seen it before — flagged ${ago} ago at ${scanFmtMoney(mem.entryMc)}`);
+      }
+    }
+  } catch { /* memory is best-effort */ }
+  // Persona: degen attitude on the verdict tone (read from the card glyphs already in the text).
+  if (xPersonaOn()) {
+    const tone = /⛔|🔴|🚨/.test(reply.text) ? "danger" : /⚠️|🟡/.test(reply.text) ? "warn" : "ok";
+    const so = xDegenSignoff(tone, mint);
+    if (so) inserts.push(so);
+  }
+  let out = [...lines];
+  for (const ins of inserts) { if ([...out, ins, cta].filter(Boolean).join("\n").length <= 279) out.push(ins); }
+  reply.text = [...out, cta].filter(Boolean).join("\n").slice(0, 279);
+  return reply;
+}
+// Degen persona sign-off — attitude keyed to the verdict tone. Deterministic per coin so a reply is stable.
+function xDegenSignoff(tone, seed) {
+  const bank = tone === "danger"
+    ? ["this one looks cooked 💀 be careful ser", "smells like exit liquidity 🚩", "verify before you send it 💀"]
+    : tone === "warn"
+    ? ["mid — size accordingly 🤝", "not the cleanest, trim risk ⚠️", "playable but keep a stop 🫡"]
+    : ["actually not terrible ser 🐸", "structure looks ok — nfa 🫡", "clean-ish, do your own ape 🐸"];
+  return bank[Math.abs(xSeedHash(String(seed || ""))) % bank.length];
 }
 
 // Compact bottom row: just Menu + Quick Buy + Refresh (3 small buttons, not bulky).
@@ -36735,6 +37074,12 @@ function startGroupBuyBot() {
   const xPollMs = Math.max(15_000, Number(process.env.X_REPLY_POLL_MS || 30_000));
   setTimeout(() => { void xReplyPollTick(); }, 10_000);
   setInterval(() => { void xReplyPollTick(); }, xPollMs);
+  // 🐦🔥 X GROWTH ENGINE tickers — all internally gated by XBOT_BROADCAST + per-feature flags (default OFF),
+  // and self-throttled, so they no-op cheaply until the owner flips the env vars.
+  setInterval(() => { void xReceiptsTick(); }, 10 * 60_000);   // 🎯 milestone quote-tweets ("called at $30k → 10x")
+  setInterval(() => { void xAutoCallTick(); }, 8 * 60_000);    // 📣 proactive network-backed calls (self-throttled to ~3h)
+  setInterval(() => { void xKolWatchTick(); }, 90_000);        // ⚡ KOL first-responder (one handle/tick, OFF until XBOT_KOLWATCH)
+  setInterval(() => { void xScorecardTick(); }, 6 * 3600_000); // 📊 weekly scorecard (self-gated to ~weekly)
   // SELF-TEST (boot, no post): build a reply for a KNOWN-GOOD coin (BONK) so the logs prove whether the
   // scan→card pipeline works at all — isolates "coin didn't scan" (build broken) from "no CA" (resolve).
   setTimeout(async () => {
