@@ -30960,11 +30960,17 @@ async function scanAirdropRecipients(devWallet, mint, poolExclude = "", maxTx = 
 async function buildAirdropMap(mint) {
   const cached = airdropMapCache.get(mint);
   if (cached && Date.now() - cached.at < AIRDROP_MAP_TTL) return cached.v;
-  const idx = await mapKolIdentityIndex().catch(() => new Map());
-  // Coin info (same pump-first / dex-fallback precedence as the scan + holder map).
-  const [pumpMeta, pairs] = await Promise.all([
+  const _t0 = Date.now();
+  // PARALLEL gather — every independent read fires AT ONCE (~2s) instead of the old chain kolIdx → coin-info
+  // → supply → dev-infer → holders (~6s+ sequential). This is the fix for the frequent "chain is slow" on
+  // /api/airdrop: only the transfer scan (which needs the dev wallet) is left to run after.
+  const [idx, pumpMeta, pairs, holderRows, supplyRes, devInf] = await Promise.all([
+    mapKolIdentityIndex().catch(() => new Map()),
     getPumpFunTokenMetadata(mint).catch(() => null),
     fetchDexScreenerTokenPairsFallback(mint).catch(() => null),
+    fetchTokenHolderRows(mint).catch(() => []),
+    rpcRead("airdrop supply", (c) => c.getTokenSupply(new PublicKey(mint), "confirmed"), { retries: 0 }).catch(() => null),
+    inferDevCandidateFromMintSource(mint).catch(() => null),
   ]);
   const best = bestDexPairForToken(mint, pairs);
   const dexMeta = best ? metadataFromDexPair(mint, best) : null;
@@ -30975,22 +30981,19 @@ async function buildAirdropMap(mint) {
   const isToken = Boolean(sym || mc > 0 || pumpMeta?.symbol || String(mint).endsWith("pump"));
   if (!isToken) return { kind: "airdrop", mint, isToken: false, nodes: [] };
   // Total supply (DECIMAL-ADJUSTED UI amount) → price per token + token labels. getTokenSupply().value.uiAmount
-  // is authoritative + already decimal-adjusted; pumpMeta.totalSupply is RAW base units (1e9 × 10^6 decimals =
-  // 1e15) which inflated every token label ~1e6× — so prefer the on-chain UI supply, metadata only as a last resort.
-  let supplyUi = 0;
-  try { const s = await rpcRead("airdrop supply", (c) => c.getTokenSupply(new PublicKey(mint), "confirmed"), { retries: 0 }); supplyUi = Number(s?.value?.uiAmount || 0); } catch { /* fallback below */ }
-  if (!(supplyUi > 0)) { const raw = firstMeaningfulNumber(pumpMeta?.totalSupply, dexMeta?.totalSupply) || 0; supplyUi = raw > 1e12 ? raw / 1e6 : raw; } // metadata is raw → de-scale pump's 6 decimals
+  // is already decimal-adjusted; pumpMeta.totalSupply is RAW base units (1e15) → de-scale as a last resort.
+  let supplyUi = Number(supplyRes?.value?.uiAmount || 0);
+  if (!(supplyUi > 0)) { const raw = firstMeaningfulNumber(pumpMeta?.totalSupply, dexMeta?.totalSupply) || 0; supplyUi = raw > 1e12 ? raw / 1e6 : raw; }
   if (!(supplyUi > 0)) supplyUi = 1e9;
   const pricePerToken = mc > 0 && supplyUi > 0 ? mc / supplyUi : 0;
-  // Airdropper = the creator/dev wallet. Pump meta first, then infer from the mint's first-tx signer.
+  // Airdropper = the creator/dev wallet. Pump meta first, else the mint's first-tx signer (fetched in parallel above).
   let dev = String(pumpMeta?.creator || pumpMeta?.creatorWallet || pumpMeta?.dev || pumpMeta?.deployer || "").trim();
-  if (!solanaPublicKeyLike(dev)) { const inf = await inferDevCandidateFromMintSource(mint).catch(() => null); dev = String(inf?.likelyDevWallet || "").trim(); }
+  if (!solanaPublicKeyLike(dev)) dev = String(devInf?.likelyDevWallet || "").trim();
   const poolAddr = String(best?.pairAddress || best?.address || "").trim();
-  // Real airdrop recipients from the dev's outbound sends.
+  // Real airdrop recipients from the dev's outbound sends — TIGHT budget (6.5s / 40 tx) so the endpoint stays
+  // well under its 18s cap even on a slow RPC moment. Holders are already in hand (fallback + diamond-hands).
   let recips = new Map(), bagsDropped = 0;
-  if (solanaPublicKeyLike(dev) && airdropBudgetOk()) { const r = await scanAirdropRecipients(dev, mint, poolAddr, 70); recips = r.recips; bagsDropped = r.bagsDropped; }
-  // Live holders → who STILL holds (diamond hands) + a fallback source of bags if the transfer scan is thin.
-  const holderRows = await fetchTokenHolderRows(mint).catch(() => []);
+  if (solanaPublicKeyLike(dev) && airdropBudgetOk()) { const r = await scanAirdropRecipients(dev, mint, poolAddr, 40, 6500); recips = r.recips; bagsDropped = r.bagsDropped; }
   const holderPctByWallet = new Map(holderRows.map((h) => [h.wallet, h.pct || 0]));
   const holderSet = new Set(holderRows.map((h) => h.wallet));
   let usedFallback = false;
@@ -31042,6 +31045,7 @@ async function buildAirdropMap(mint) {
   };
   airdropMapCache.set(mint, { at: Date.now(), v });
   if (airdropMapCache.size > 150) airdropMapCache.delete(airdropMapCache.keys().next().value);
+  try { console.log(`[airdrop] ${sym || shortMint(mint)} ${Date.now() - _t0}ms · ${usedFallback ? "holders" : "dev-sends"} · fed=${entries.length} 💎${held} scanRecips=${recips.size}`); } catch { /* best-effort */ }
   return v;
 }
 // Compact token-amount label: 200000000 -> "200M", 10500000 -> "10.5M", 427100000 -> "427.1M".
