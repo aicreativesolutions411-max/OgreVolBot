@@ -30676,7 +30676,7 @@ function scanBestHolderCount(...sources) {
     source?.num_holders
   ]));
 }
-function scanMarketStatsFromSources({ meta = null, bonding = null, best = null, rug = null, supply = null } = {}) {
+function scanMarketStatsFromSources({ meta = null, bonding = null, best = null, rug = null, supply = null, mint = "" } = {}) {
   const sources = [meta, bonding, best].filter(Boolean);
   const metaMc = scanSourceMarketCap(meta);
   const bondPct = firstMeaningfulNumber(bonding?.bondingProgressPct, bonding?.bonding_progress, bonding?.bondingCurveProgress);
@@ -30688,15 +30688,35 @@ function scanMarketStatsFromSources({ meta = null, bonding = null, best = null, 
   const dexLiq = firstMeaningfulNumber(scanSourceLiquidity(best), scanSourceLiquidity(meta));
   const vol = scanBestVolumeWindow(...sources);
   const ch24 = scanBestPriceChange("h24", ...sources);
-  const ch1 = scanBestPriceChange("h1", ...sources);
+  let ch1 = scanBestPriceChange("h1", ...sources);
   const buys1 = Number(scanBestTxnCount("buys", "h1", ...sources)) || 0;
   const sells1 = Number(scanBestTxnCount("sells", "h1", ...sources)) || 0;
   const holders = scanBestHolderCount(rug, meta, bonding, best, supply);
+  let mc = pick(pumpMc, dexMc) || 0;
+  let liq = pick(pumpLiq, dexLiq) || 0;
+  // STICKY last-good (SHARED with the holder/airdrop map via mapMetaLastGood): DexScreener + Gecko both
+  // rate-limit Render's IP, so a single scan pull often comes back with a blank LIQ/1H even though the map
+  // and trench-watch show them. A <=15-min-old value beats a blank; fresh good reads refresh the cache — so
+  // the scan card, the bubble map, and the airdrop map all read the same numbers. (Owner: "use whatever path
+  // the trench watch has to make the scan the same as the coin/airdrop/bubble map.")
+  if (mint) {
+    const lg = mapMetaLastGood.get(mint);
+    if (lg && Date.now() - lg.at < 15 * 60_000) {
+      if (!(mc > 0) && lg.mc > 0) mc = lg.mc;
+      if (!(liq > 0) && lg.liq > 0) liq = lg.liq;
+      if (!Number.isFinite(ch1) && Number.isFinite(lg.ch1)) ch1 = lg.ch1;
+    }
+    if (mc > 0 || liq > 0) {
+      const sym = firstString(meta?.symbol, bonding?.symbol);
+      mapMetaLastGood.set(mint, { at: Date.now(), mc: mc || (lg_mc(mint)), liq: liq || (lg_liq(mint)), ch1: Number.isFinite(ch1) ? ch1 : lg_ch1(mint), sym });
+      if (mapMetaLastGood.size > 400) mapMetaLastGood.delete(mapMetaLastGood.keys().next().value);
+    }
+  }
   return {
     sources,
     onCurve,
-    mc: pick(pumpMc, dexMc) || 0,
-    liq: pick(pumpLiq, dexLiq) || 0,
+    mc: mc || 0,
+    liq: liq || 0,
     vol,
     ch24,
     ch1,
@@ -30705,6 +30725,10 @@ function scanMarketStatsFromSources({ meta = null, bonding = null, best = null, 
     holders: Number(holders) || 0
   };
 }
+// tiny sticky-cache readers (keep a prior good field when only one of mc/liq refreshed this pull)
+function lg_mc(mint) { const v = mapMetaLastGood.get(mint); return v ? v.mc : 0; }
+function lg_liq(mint) { const v = mapMetaLastGood.get(mint); return v ? v.liq : 0; }
+function lg_ch1(mint) { const v = mapMetaLastGood.get(mint); return v && Number.isFinite(v.ch1) ? v.ch1 : null; }
 // Crypto subscript price: 0.00002572 -> "$0.0₄2572" (matches Phanes/DEX display).
 function scanFmtPriceSub(value) {
   const n = Number(value);
@@ -30984,7 +31008,11 @@ async function gatherSlimeScan(mint) {
     fetchTokenSupplyUi(mint).catch(() => null),
     (pumpStyle ? getPumpFunTokenMetadata(mint).catch(() => null) : Promise.resolve(null)),
     (CONFIG.solanaTrackerApiKey ? solanaTrackerJson(`/tokens/${mint}/ath`, { cacheTtlMs: 60_000, timeoutMs: 5_000 }).catch(() => null) : Promise.resolve(null)),
-    getGeckoTerminalTokenMetadata(mint, { timeoutMs: 2_200 }).catch(() => null)
+    // 4.5s (was 2.2s): GeckoTerminal is a TWO-call fetch (info+pools) and is our only liq/1H source when
+    // DexScreener rate-limits Render — the tight 2.2s cap made it time out → blank LIQ/1H on the scan card
+    // even though the map (4.8s cap) + trench-watch showed them. Gecko is not IP-blocked on Render, so it's
+    // worth the wait; the sticky cache covers the rare miss.
+    getGeckoTerminalTokenMetadata(mint, { timeoutMs: 4_500 }).catch(() => null)
   ]);
   const best = bestDexPairForToken(mint, pairs);
   let meta = mergeTokenMarketMetadata(best ? metadataFromDexPair(mint, best) : null, geckoMeta);
@@ -31498,12 +31526,15 @@ async function buildAirdropView({ mint, sym, mc, liq, ch1, supplyUi, pricePerTok
   const sourceLabel = usedFallback
     ? "Top holder sheet"
     : (devId?.isKol ? devId.name : (solanaPublicKeyLike(dev) ? shortMint(dev) : "airdrop source"));
-  const flowRows = nodes.slice(0, 18).map((node) => ({
+  // Keep the top 50 biggest bags as the flow dataset (owner: "if there's too many, do the top fifty").
+  // The renderer draws ~15 as bags and lists more in the "top transfer paths" table — this feeds both.
+  const flowRows = nodes.slice(0, 50).map((node) => ({
     i: node.i,
     from: sourceLabel,
     to: node.isKol ? node.name : shortMint(node.wallet),
     wallet: node.wallet,
     amountLabel: node.amountLabel,
+    usd: node.usd || 0,
     pct: node.pct,
     held: Boolean(node.held),
     isKol: Boolean(node.isKol),
@@ -32186,7 +32217,7 @@ async function buildXScanReply(mint, variant) {
   const { meta, bonding, best, shield, rug, onchain } = scan;
   const symbol = String(meta?.symbol || bonding?.symbol || onchain?.symbol || "").slice(0, 12);
   const name = String(meta?.name || bonding?.name || onchain?.name || "").slice(0, 40);
-  const stats = scanMarketStatsFromSources({ meta, bonding, best, rug });
+  const stats = scanMarketStatsFromSources({ meta, bonding, best, rug, mint });
   const mc = stats.mc;
   const liq = stats.liq;
   if (!symbol && !(mc > 0)) return null;
@@ -32294,7 +32325,7 @@ async function buildXRugReply(mint, variant) {
   const { meta, bonding, best, onchain, rug } = scan;
   const symbol = String(meta?.symbol || bonding?.symbol || onchain?.symbol || "").slice(0, 12);
   const name = String(meta?.name || bonding?.name || onchain?.name || "").slice(0, 40);
-  const stats = scanMarketStatsFromSources({ meta, bonding, best, rug });
+  const stats = scanMarketStatsFromSources({ meta, bonding, best, rug, mint });
   const mc = stats.mc;
   const liq = stats.liq;
   if (!symbol && !(mc > 0)) return null;
@@ -36075,7 +36106,7 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
   // header status FIRST — it also decides metadata PRECEDENCE: a coin still ON the bonding
   // curve reads Pump-first (live + accurate there); a migrated coin reads Dex-first (Pump
   // metadata freezes at migration). This is the "pump coins use Pump first" priority.
-  const stats = scanMarketStatsFromSources({ meta, bonding, best, rug, supply });
+  const stats = scanMarketStatsFromSources({ meta, bonding, best, rug, supply, mint });
   const bondPct = firstMeaningfulNumber(bonding?.bondingProgressPct);
   const onCurve = Boolean(stats.onCurve || (bonding && bondPct != null && !meta?.graduated));
   const pick = (pumpVal, dexVal) => onCurve ? firstMeaningfulNumber(pumpVal, dexVal) : firstMeaningfulNumber(dexVal, pumpVal);

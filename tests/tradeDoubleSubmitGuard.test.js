@@ -1496,7 +1496,7 @@ test("flex detector ignores a bare tweet link so the X-post preview still fires"
 // ---- Scan card Security block never blank: free on-chain fill when RugCheck is down/unindexed ----
 test("scan Security fills from our own RPC when RugCheck returns null (no more n/a wall)", () => {
   const scan = functionBody(serverSource, "gatherSlimeScan");
-  assert.match(scan, /getGeckoTerminalTokenMetadata\(mint, \{ timeoutMs: 2_200 \}/); // market fallback for n/a LP/MC/1H fields
+  assert.match(scan, /getGeckoTerminalTokenMetadata\(mint, \{ timeoutMs: 4_500 \}/); // market fallback for n/a LP/MC/1H fields — 4.5s so Gecko's 2-call fetch survives Render rate limits
   assert.match(scan, /mergeTokenMarketMetadata/);
   const enrich = functionBody(serverSource, "enrichScanSecurityOnchain");
   assert.match(enrich, /getParsedAccountInfo/);                 // mint/freeze authority = ground truth
@@ -1507,7 +1507,7 @@ test("scan Security fills from our own RPC when RugCheck returns null (no more n
   assert.match(serverSource, /enrichScanSecurityOnchain\(mint, rug, bonding\)/);
   // card shows n/a (not a false "revoked") when authority state was never actually read
   const card = functionBody(serverSource, "formatSlimeScanCard");
-  assert.match(card, /scanMarketStatsFromSources\(\{ meta, bonding, best, rug, supply \}\)/);
+  assert.match(card, /scanMarketStatsFromSources\(\{ meta, bonding, best, rug, supply, mint \}\)/);
   assert.match(card, /const \{ vol, ch24, ch1, buys1, sells1 \} = stats/);
   assert.match(card, /const authKnown = Boolean\(rug && rug\.authoritiesKnown\)/);
   assert.match(card, /authKnown \? \(rug\.mintAuthority \? "🔴 active" : "🟢 none"\)/);
@@ -1901,7 +1901,7 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "xReplyPollTick"), /buildXReply\(target, intent, m\.id\)/); // tweet id seeds variation (target = coin CA or bare wallet for maps)
   assert.match(functionBody(serverSource, "xReplyPollTick"), /buildXScanReply\(target, m\.id\)/); // slow maps fall back to scan instead of no-post
   assert.doesNotMatch(functionBody(serverSource, "xReplyPollTick"), /if \(reply === "__timeout__"\) \{ state\.seen/); // timeout is retryable, not burned forever
-  assert.match(functionBody(serverSource, "buildXScanReply"), /scanMarketStatsFromSources\(\{ meta, bonding, best, rug \}\)/);
+  assert.match(functionBody(serverSource, "buildXScanReply"), /scanMarketStatsFromSources\(\{ meta, bonding, best, rug, mint \}\)/);
   assert.match(functionBody(serverSource, "buildXMapReply"), /Liq \$\{stat\("LIQUIDITY"\)\}/);
   // card renderer varies EVERY render (rotating jittered bg + unique grain + mirrored layouts + rotating text)
   assert.match(xcard, /function makeRng/);                             // seeded PRNG drives all choices

@@ -253,16 +253,19 @@ export function buildAirdropSvg({ subject = "$SLIME", subtitle = "airdrop", stat
       ${s.sub ? `<text x="${(x + cardW / 2).toFixed(1)}" y="${y + 78}" text-anchor="middle" font-family="Arial" font-size="10" fill="${dark ? "#c9b8ff" : "#8b7d5f"}">${esc(s.sub)}</text>` : ""}
     </g>`;
   }).join("");
-  const flowRows = Array.isArray(flow?.rows) ? flow.rows.slice(0, 18) : [];
+  const flowAll = Array.isArray(flow?.rows) ? flow.rows.slice(0, 50) : [];
+  // Draw the biggest ~15 as bags (readable), then LIST more in the "top transfer paths" table below —
+  // that's the clean way to surface up to the top 50 without cramming the visual (owner's "top fifty").
+  const flowRows = flowAll.slice(0, 15);
   if (flowRows.length) {
     const nodeByIndex = new Map(nodes.map((n) => [n.i, n]));
-    const sourceX = 150, sourceY = 290;
+    const sourceX = 150, sourceY = 275;
     const cols = [360, 535, 710];
     // Spread + vertically center the rows between the header and the transfer table — a small drop (few
     // rows) otherwise bunched at the top and left a dead band above the table.
     const gridRows = Math.max(1, Math.ceil(flowRows.length / cols.length));
-    const rowH = gridRows > 1 ? Math.min(100, (530 - 158) / (gridRows - 1)) : 0;
-    const startY = 158 + Math.max(0, (530 - 158 - (gridRows - 1) * rowH) / 2);
+    const rowH = gridRows > 1 ? Math.min(96, (500 - 158) / (gridRows - 1)) : 0;
+    const startY = 158 + Math.max(0, (500 - 158 - (gridRows - 1) * rowH) / 2);
     const placed = flowRows.map((row, i) => {
       const node = nodeByIndex.get(row.i) || {};
       const col = i % cols.length;
@@ -303,29 +306,46 @@ export function buildAirdropSvg({ subject = "$SLIME", subtitle = "airdrop", stat
         <text x="${(row.size + 16).toFixed(1)}" y="13" font-family="Arial" font-size="10" font-weight="700" fill="#8b7d5f">${esc(label)}</text>
       </g>`;
     }).join("");
-    const tableRows = placed.slice(0, 5).map((row, i) => {
-      const y = 655 + i * 22;
+    // Table = the top transfer paths from the full top-50 set (not just the 15 drawn), biggest bag first.
+    // TWO columns of 7 (14 rows) so a big drop reads like a real distribution sheet without cramming. The
+    // FROM column is dropped — it's always the one source (shown in the source card), so the space goes to
+    // rank/amount/%/wallet/status instead.
+    const perCol = 7;
+    const tableSrc = flowAll.slice(0, perCol * 2).map((row) => ({ ...(nodeByIndex.get(row.i) || {}), ...row }));
+    const colX = [{ base: 44, rank: 58, amt: 92, pct: 176, to: 226, status: 340 }, { base: 452, rank: 466, amt: 500, pct: 584, to: 634, status: 748 }];
+    const tableRows = tableSrc.map((row, i) => {
+      const c = colX[Math.floor(i / perCol)];
+      const y = 648 + (i % perCol) * 16.4;
       const status = row.held !== false ? "HELD" : "DUMPED";
       const color = row.held !== false ? "#3f9c34" : "#b56256";
+      const pctTxt = Number(row.pct) > 0 ? `${(+row.pct).toFixed(1)}%` : "—";
       return `<g>
-        <rect x="44" y="${y - 16}" width="812" height="21" rx="8" fill="${i % 2 ? "#fff6e8" : "#fffaf0"}" fill-opacity="0.82"/>
-        <text x="58" y="${y}" font-family="Arial" font-size="12" font-weight="800" fill="#6d614d">${esc(String(flow.sourceLabel || "source").slice(0, 17))}</text>
-        <text x="250" y="${y}" font-family="Arial Black, Arial" font-size="12" font-weight="900" fill="#2b2417">${esc(row.amountLabel || "")}</text>
-        <text x="382" y="${y}" font-family="Arial" font-size="12" font-weight="800" fill="#6d614d">${esc(String(row.to || "").slice(0, 21))}</text>
-        <text x="704" y="${y}" font-family="Arial Black, Arial" font-size="12" font-weight="900" fill="${color}">${status}${row.isKol ? " / KOL" : ""}</text>
+        <rect x="${c.base}" y="${(y - 13).toFixed(1)}" width="376" height="15.6" rx="6" fill="${(i % perCol) % 2 ? "#fff6e8" : "#fffaf0"}" fill-opacity="0.82"/>
+        <text x="${c.rank}" y="${y.toFixed(1)}" font-family="Arial Black, Arial" font-size="10.5" font-weight="900" fill="#9a8b6e">${i + 1}</text>
+        <text x="${c.amt}" y="${y.toFixed(1)}" font-family="Arial Black, Arial" font-size="11" font-weight="900" fill="#2b2417">${esc(String(row.amountLabel || "").slice(0, 8))}</text>
+        <text x="${c.pct}" y="${y.toFixed(1)}" font-family="Arial" font-size="10.5" font-weight="800" fill="#8b7d5f">${esc(pctTxt)}</text>
+        <text x="${c.to}" y="${y.toFixed(1)}" font-family="Arial" font-size="10.5" font-weight="800" fill="#6d614d">${esc(String(row.to || "").slice(0, 13))}</text>
+        <text x="${c.status}" y="${y.toFixed(1)}" font-family="Arial Black, Arial" font-size="10.5" font-weight="900" fill="${color}">${status}${row.isKol ? " ★" : ""}</text>
       </g>`;
     }).join("");
+    const totalFed = Number(flow.totalWallets) || flowAll.length;
+    const moreNote = totalFed > tableSrc.length ? `top ${tableSrc.length} of ${totalFed} fed · biggest bag first` : `${tableSrc.length} wallet${tableSrc.length === 1 ? "" : "s"} · biggest bag first`;
+    const colHdr = (c) => `
+      <text x="${c.rank}" y="628" font-family="Arial" font-size="9.5" font-weight="900" fill="#9a8b6e">#</text>
+      <text x="${c.amt}" y="628" font-family="Arial" font-size="9.5" font-weight="900" fill="#9a8b6e">AMOUNT</text>
+      <text x="${c.pct}" y="628" font-family="Arial" font-size="9.5" font-weight="900" fill="#9a8b6e">%</text>
+      <text x="${c.to}" y="628" font-family="Arial" font-size="9.5" font-weight="900" fill="#9a8b6e">WALLET / KOL</text>
+      <text x="${c.status}" y="628" font-family="Arial" font-size="9.5" font-weight="900" fill="#9a8b6e">STATUS</text>`;
     const table = `<g>
-      <rect x="28" y="574" width="844" height="176" rx="22" fill="#fffaf0" fill-opacity="0.9" stroke="#cbb98d" stroke-width="2"/>
-      <text x="52" y="610" font-family="Arial Black, Arial" font-size="24" font-weight="900" fill="#2b2417">Top transfer paths</text>
-      <text x="58" y="631" font-family="Arial" font-size="10" font-weight="900" fill="#9a8b6e">FROM</text>
-      <text x="250" y="631" font-family="Arial" font-size="10" font-weight="900" fill="#9a8b6e">AMOUNT</text>
-      <text x="382" y="631" font-family="Arial" font-size="10" font-weight="900" fill="#9a8b6e">TO WALLET / KOL</text>
-      <text x="704" y="631" font-family="Arial" font-size="10" font-weight="900" fill="#9a8b6e">STATUS</text>
+      <rect x="28" y="556" width="844" height="212" rx="20" fill="#fffaf0" fill-opacity="0.92" stroke="#cbb98d" stroke-width="2"/>
+      <text x="52" y="588" font-family="Arial Black, Arial" font-size="22" font-weight="900" fill="#2b2417">Top transfer paths</text>
+      <text x="${W - 52}" y="588" text-anchor="end" font-family="Arial" font-size="12" font-weight="700" fill="#9a8b6e">${esc(moreNote)}</text>
+      <line x1="450" y1="616" x2="450" y2="760" stroke="#e2d3ad" stroke-width="1.5"/>
+      ${colHdr(colX[0])}${tableSrc.length > perCol ? colHdr(colX[1]) : ""}
       ${tableRows}
     </g>`;
     const legend = `<g font-family="Arial" font-size="12" font-weight="700">
-      <text x="30" y="${H - 22}" fill="#8b7d5f">Green paths = still holding · red paths = dumped · top rows show the strongest visible routes</text>
+      <text x="30" y="${H - 22}" fill="#8b7d5f">Green = still holding · red = dumped · ★ = KOL · bags show the 15 biggest, table lists the top ${tableSrc.length}</text>
       <rect x="${W - 244}" y="${H - 40}" width="216" height="28" rx="14" fill="#fffaf0" stroke="#3f9c34" stroke-opacity="0.55"/>
       <circle cx="${W - 226}" cy="${H - 26}" r="6" fill="#57c04a"/>
       <text x="${W - 212}" y="${H - 21}" font-family="Arial Black, Arial" font-size="16" font-weight="900" fill="#3f9c34">slimewire.org</text>
