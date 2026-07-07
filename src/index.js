@@ -14461,6 +14461,8 @@ async function handleMessage(message, userId) {
     if (xreset) { await handleXResetCommand(chatId, userId, xreset.argument); return; }
     const xscan = parseCommandWithArgument(text, ["xscan"]);
     if (xscan) { await handleXScanCommand(chatId, xscan.argument, userId); return; }
+    const xreplycmd = parseCommandWithArgument(text, ["xreply", "xr"]);
+    if (xreplycmd) { await handleXForceReplyCommand(chatId, xreplycmd.argument, userId); return; }
   }
   // /room — the group's verifiable trading board (opt-in Room PnL + skin-in-the-game callers).
   if (parseCommandWithArgument(text, ["room", "board", "roompnl"])) { await handleRoomCommand(chatId, message); return; }
@@ -32181,7 +32183,8 @@ async function handleXTestCommand(chatId, userId) {
     "• “chart?” / “price?” → 📈 live candlestick card",
     "• tag us under any coin tweet → 🔎 scans that post’s CA",
     "",
-    "Test now: <code>/xpoll</code> (check mentions) · <code>/xscan &lt;CA&gt;</code> · <code>/xscan rug &lt;CA&gt;</code> · <code>/xscan chart &lt;CA&gt;</code>."
+    "Test now: <code>/xpoll</code> (check mentions) · <code>/xscan &lt;CA&gt;</code> · <code>/xscan rug &lt;CA&gt;</code> · <code>/xscan chart &lt;CA&gt;</code>.",
+    "🎯 <b>Didn't auto-answer a tag?</b> <code>/xreply &lt;tweet url&gt;</code> forces the reply to that exact tweet (bypasses the mention feed)."
   ].join("\n"));
 }
 // Force a mention check right now (no ~2.5-min wait) — great for testing.
@@ -32247,6 +32250,49 @@ async function handleXScanCommand(chatId, argument, userId) {
   const cap = `🐦 <b>Reply preview</b> (${intent}) for <code>${escapeTelegramHtml(shortMint(mint))}</code>\n\n<i>${escapeTelegramHtml(reply.text)}</i>`;
   if (reply.mediaBuffer) await sendPhoto(chatId, "x-scan-preview.png", reply.mediaBuffer, cap, null, "HTML").catch(() => sayHtml(chatId, cap));
   else await sayHtml(chatId, cap);
+}
+
+// FORCE-REPLY to a SPECIFIC tweet — the manual override for "I tagged the bot and nothing happened".
+// The auto-poller depends on X's mention feed surfacing the tag; when notifications lag AND search is
+// 429-rate-limited, a fresh tag can slip through and never get answered. This bypasses detection entirely:
+// paste the tweet URL (or id) and the bot fetches THAT tweet, pulls its CA/wallet (from the tweet, its parent,
+// or the thread root — same resolver the poller uses), builds the card, and posts the reply right there.
+//   /xreply https://x.com/user/status/123…           → auto-picks the map/scan card
+//   /xreply 123…  rug        (or chart / map)         → force a specific card
+async function handleXForceReplyCommand(chatId, argument, userId) {
+  if (!xReplyOwnerChat() || String(chatId) !== xReplyOwnerChat()) { await say(chatId, "Owner-only — DM /xclaim first."); return; }
+  if (!xReplyEnabled() || !xConfigured()) { await say(chatId, "X replies are OFF or not configured. Set X_REPLY_ENABLED=true + cookies, then /xtest."); return; }
+  const arg = String(argument || "").trim();
+  const idMatch = arg.match(/status(?:es)?\/(\d{6,25})/) || arg.match(/\b(\d{15,25})\b/);
+  const tweetId = idMatch ? idMatch[1] : "";
+  if (!tweetId) { await sayHtml(chatId, "Usage: <code>/xreply &lt;tweet url or id&gt; [rug|chart|map]</code> — I'll fetch that exact tweet, find its CA, and post the reply. Use this when a tag didn't auto-answer."); return; }
+  // Optional forced intent keyword anywhere in the argument.
+  let intent = /\b(rug|safe|honeypot)\b/i.test(arg) ? "rug" : /\b(chart|price|candle)\b/i.test(arg) ? "chart" : /\bmap\b/i.test(arg) ? "map" : "";
+  await say(chatId, `🐦 Fetching tweet ${tweetId}…`);
+  const tweet = await xGetTweet(tweetId).catch(() => null);
+  if (!tweet) { await sayHtml(chatId, `⚠️ Couldn't fetch that tweet (deleted, protected, or the cookies can't see it). Confirm the URL, then <code>/xtest</code>.`); return; }
+  // Resolve the target the SAME way the poller does: tweet → its parent/root, then bare-wallet fallback.
+  let target = await resolveXTargetMint(tweet).catch(() => null);
+  if (!target) { const w = extractBareWalletAddress(tweet.text, tweet.urls); if (w) { target = w; if (!intent) intent = "map"; } }
+  if (!target) { await sayHtml(chatId, `⚠️ No contract/wallet found in that tweet (or its parent/root). Text seen: <i>${escapeTelegramHtml(String(tweet.text || "").slice(0, 160))}</i>`); return; }
+  if (!intent) intent = xIntentFromText(tweet.text);
+  if (intent === "scan") intent = "map";                                  // plain tag → the map headline card
+  await say(chatId, `🎯 Target <code>${escapeTelegramHtml(shortMint(target))}</code> · ${intent} — building + posting…`);
+  const reply = await Promise.race([
+    buildXReply(target, intent, tweetId),
+    new Promise((res) => setTimeout(() => res("__timeout__"), 45_000)),
+  ]).catch((e) => { console.log(`[xreply] force build THREW: ${String(e?.message || e).slice(0, 140)}`); return null; });
+  if (reply === "__timeout__") { await say(chatId, "⏱ The card took too long to build (>45s). Try again — feeds may have been slow."); return; }
+  if (!reply) { await sayHtml(chatId, "⚠️ Couldn't build a card for that target — it may be too new or unlisted. Try a different intent, or check it scans with <code>/xscan &lt;CA&gt;</code>."); return; }
+  const res = await xReply({ inReplyToId: tweetId, text: reply.text, mediaBuffer: reply.mediaBuffer, mediaBuffers: reply.mediaBuffers });
+  if (res.ok) {
+    // Mark it seen so the auto-poller doesn't double-reply if the tag DOES surface later.
+    try { const st = await readXReplyState(); st.seen = st.seen || {}; st.seen[tweetId] = Date.now(); await writeXReplyState(st); } catch { /* best-effort */ }
+    await sayHtml(chatId, `✅ <b>Posted.</b> Replied to that tweet with the ${intent} card for <code>${escapeTelegramHtml(shortMint(target))}</code>.${res.id ? ` <a href="https://x.com/i/status/${escapeTelegramHtml(String(res.id))}">view</a>` : ""}`);
+    console.log(`[xreply] ✅ FORCE reply to ${tweetId} ${intent} $${reply.symbol} media=${res.media || "text"} id=${res.id || ""}`);
+  } else {
+    await sayHtml(chatId, `⚠️ Post failed: <code>${escapeTelegramHtml(res.reason || "unknown")}</code>. If it's an auth error, refresh the X cookies and <code>/xtest</code>.`);
+  }
 }
 
 // Compact bottom row: just Menu + Quick Buy + Refresh (3 small buttons, not bulky).
