@@ -7535,7 +7535,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
             const cnodes = rows.slice(0, 45).map((h, i) => ({ i, wallet: h.wallet, pct: h.pct || 0, usd: cmc ? ((h.pct || 0) / 100) * cmc : 0 }));
             return await mapComputeClusters(cm, cnodes);
           })(),
-          new Promise((res) => setTimeout(() => res({ edges: [], clusters: [], timeout: true }), 11_000))
+          new Promise((res) => setTimeout(() => res({ edges: [], clusters: [], timeout: true }), 15_000))
         ]);
         sendWebJson(request, response, 200, { ok: true, edges: graph.edges || [], clusters: graph.clusters || [], timeout: Boolean(graph.timeout) });
       } catch (e) { sendWebJson(request, response, 200, { ok: false, error: String((e && e.message) || e) }); }
@@ -31340,18 +31340,25 @@ async function mapComputeClusters(mint, nodes) {
   if (cached && Date.now() - cached.at < 10 * 60_000) return cached.v;
   const top = (nodes || []).filter((n) => n.wallet).slice(0, 40);   // top ~40 holders (owner-chosen cluster depth)
   const funderOf = new Map();
-  // Cluster across the FULL top-40, but cap FRESH Alchemy funder reads per coin: already-cached/observed
-  // funders (most active holders, tracked by autopilot) are free + instant, so coverage stays deep without
-  // 40 sequential RPC calls blowing the daily budget or the /api/map/graph 11s race.
-  let newLookups = 0; const MAX_NEW_FUNDER_LOOKUPS = 14;
+  const need = [];
+  // Cluster across the FULL top-40. Already-cached/observed funders (most active holders, tracked by
+  // autopilot) are free + instant; the rest need a fresh Alchemy read.
   for (const n of top) {
     let f = walletFunderCache.get(n.wallet);
     if (f === undefined) { const obs = walletObs.get(n.wallet); if (obs && obs.funder !== undefined) f = obs.funder; }
-    if (f === undefined && newLookups < MAX_NEW_FUNDER_LOOKUPS && funderBudgetOk()) {
-      newLookups += 1; funderUsedToday += 1;
-      f = await lookupWalletFunder(n.wallet).catch(() => null);
-    }
-    if (f) funderOf.set(n.wallet, f);
+    if (f !== undefined) { if (f) funderOf.set(n.wallet, f); }
+    else need.push(n.wallet);
+  }
+  // FRESH lookups: capped per coin (budget) AND run in parallel batches so 14 reads take ~2-3s, not ~14s
+  // sequential — the old sequential loop blew the /api/map/graph race → 0 clusters on cold coins.
+  const MAX_NEW_FUNDER_LOOKUPS = 14, FUNDER_BATCH = 6;
+  const fresh = need.slice(0, MAX_NEW_FUNDER_LOOKUPS);
+  for (let i = 0; i < fresh.length; i += FUNDER_BATCH) {
+    if (!funderBudgetOk()) break;
+    const slice = fresh.slice(i, i + FUNDER_BATCH);
+    funderUsedToday += slice.length;
+    const res = await Promise.all(slice.map((w) => lookupWalletFunder(w).catch(() => null)));
+    res.forEach((f, k) => { if (f) funderOf.set(slice[k], f); });
   }
   const byFunder = new Map();
   for (const [w, f] of funderOf) { let a = byFunder.get(f); if (!a) { a = []; byFunder.set(f, a); } a.push(w); }
@@ -31376,6 +31383,7 @@ async function mapComputeClusters(mint, nodes) {
   }
   clusters.sort((a, b) => b.pct - a.pct);                   // biggest cluster first (for the legend)
   const v = { edges, clusters };
+  try { console.log(`[map graph] ${shortMint(mint)} top=${top.length} fresh=${fresh.length} funders=${funderOf.size} clusters=${clusters.length}`); } catch { /* best-effort */ }
   mapClusterCache.set(mint, { at: Date.now(), v });
   if (mapClusterCache.size > 200) mapClusterCache.delete(mapClusterCache.keys().next().value);
   return v;
