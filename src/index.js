@@ -30999,20 +30999,26 @@ async function buildTokenHolderMap(mint) {
   // empty read (500ms + a second ≤12s attempt = up to ~24s), which tripped /api/map's 14s cap → "chain is
   // slow" on fresh coins. Dropped that retry: a token already returns its details card on thin holders and the
   // page refreshes every 30s, so the bubbles fill on their own. Holders for a non-token come back empty fast.
-  const [idx, pumpMeta, pairs, holderRows] = await Promise.all([
+  // GeckoTerminal is a FREE, key-less price source that (unlike DexScreener) does NOT rate-limit Render's IP —
+  // so it's the server-side fallback for LIQUIDITY + 1H%, which were "always blank" on the X card (that card is
+  // rendered on Render, so it can't use the client-IP DexScreener enrichment the web page does). reserve_in_usd
+  // → liquidity, price_change_percentage.h1 → 1H.
+  const [idx, pumpMeta, pairs, holderRows, geckoMeta] = await Promise.all([
     mapKolIdentityIndex().catch(() => new Map()),
     getPumpFunTokenMetadata(mint).catch(() => null),
     fetchDexScreenerTokenPairsFallback(mint).catch(() => null),
     fetchTokenHolderRows(mint).catch(() => []),
+    getGeckoTerminalTokenMetadata(mint, { timeoutMs: 3200 }).catch(() => null),
   ]);
   const best = bestDexPairForToken(mint, pairs);
   const dexMeta = best ? metadataFromDexPair(mint, best) : null;
   const onCurve = Boolean(pumpMeta && !pumpMeta.graduated && !(dexMeta && dexMeta.marketCap));
   const pick = (p, d) => onCurve ? firstMeaningfulNumber(p, d) : firstMeaningfulNumber(d, p);
-  const sym = String(dexMeta?.symbol || pumpMeta?.symbol || "").trim();
-  const mc = pick(pumpMeta?.marketCap, dexMeta?.marketCap ?? dexMeta?.fdv) || 0;
-  const liq = pick(pumpMeta?.liquidityUsd, dexMeta?.liquidityUsd) || 0;
-  const ch1 = firstMeaningfulNumber(dexMeta?.priceChange?.h1, pumpMeta?.priceChange?.h1);
+  const sym = String(dexMeta?.symbol || pumpMeta?.symbol || geckoMeta?.symbol || "").trim();
+  const mc = pick(pumpMeta?.marketCap, dexMeta?.marketCap ?? dexMeta?.fdv) || firstMeaningfulNumber(geckoMeta?.marketCap, geckoMeta?.fdv) || 0;
+  // liq/1H: prefer DexScreener when present, else GeckoTerminal (the fix for the blank X-card values).
+  const liq = pick(pumpMeta?.liquidityUsd, dexMeta?.liquidityUsd) || firstMeaningfulNumber(geckoMeta?.liquidityUsd) || 0;
+  const ch1 = firstMeaningfulNumber(dexMeta?.priceChange?.h1, geckoMeta?.priceChange?.h1, geckoMeta?.priceChange?.h1Percent, pumpMeta?.priceChange?.h1);
   const createdAt = normalizePairCreatedAt(dexMeta?.pairCreatedAt) || pumpMeta?.pairCreatedAt || pumpMeta?.createdAt || 0;
   const isToken = Boolean(sym || mc > 0 || pumpMeta?.symbol || String(mint).endsWith("pump"));
   if (!isToken) return { kind: "token", mint, isToken: false, nodes: [] };  // truly not a token → caller falls to wallet map
