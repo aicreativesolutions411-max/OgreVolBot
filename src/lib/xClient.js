@@ -204,30 +204,44 @@ async function notificationMentions(count = 20) {
   return out.sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
 }
 export async function xSearchMentions(count = 20) {
-  const handle = String(await xResolvedHandle()).toLowerCase();
-  const tagRe = new RegExp("@" + handle.replace(/[^a-z0-9_]/g, "") + "\\b", "i");
+  // Search BOTH the logged-in account's real handle (from whoami) AND the configured/TG handle — they can
+  // differ (e.g. @SlimeWirebot vs @SlimeWiredBot), and a tag of one spelling would otherwise be invisible to
+  // a search for the other. We reply from the cookie account either way, so a union is strictly safer.
+  const resolved = String(await xResolvedHandle()).toLowerCase().replace(/^@+/, "");
+  const envH = String(xHandle()).toLowerCase().replace(/^@+/, "");
+  const handles = [...new Set([resolved, envH].filter(Boolean))];
+  const tagRe = new RegExp("@(" + handles.map((h) => h.replace(/[^a-z0-9_]/g, "")).join("|") + ")\\b", "i");
+  const self = new Set(handles);
   const byId = new Map();
   const add = (t, requireTag) => {
     if (!t || !t.id || !t.username) return;
-    if (t.username.toLowerCase() === handle) return;             // never treat our own tweets as mentions
+    if (self.has(t.username.toLowerCase())) return;              // never treat our own tweets as mentions
     // The notifications feed's globalObjects also holds PARENT/quoted tweets that don't tag us — only keep
     // ones that actually @-mention us so we never reply to a random coin tweet we were merely quoted under.
     if (requireTag && !tagRe.test(t.text || "")) return;
     if (!byId.has(t.id)) byId.set(t.id, t);
   };
+  let n1 = 0, n2 = 0; const errs = [];
   // SOURCE 1: notifications feed — instant + complete (the account's real @mentions).
-  try { for (const t of await notificationMentions(count)) add(t, true); } catch { /* source 2 still runs */ }
+  try { const arr = await notificationMentions(count); n1 = arr.length; for (const t of arr) add(t, true); }
+  catch (e) { errs.push("notif:" + String(e?.message || e).slice(0, 50)); }
   // SOURCE 2: search — UNION, not just a fallback. Catches anything notifications dropped (and vice-versa),
-  // so a tag can't slip through a single-source gap. Best-effort; a 4xx here just leaves source 1's results.
-  try {
-    const j = await gql("GET", "SearchTimeline", { variables: { rawQuery: `@${handle} -filter:retweets`, count: Math.min(40, count), querySource: "typed_query", product: "Latest" }, features: READ_FEATURES });
-    const instr = j?.data?.search_by_raw_query?.search_timeline?.timeline?.instructions || [];
-    for (const ins of instr) for (const entry of (ins.entries || [])) {
-      if (!String(entry.entryId || "").startsWith("tweet-")) continue;
-      add(parseTweetResult(entry.content?.itemContent?.tweet_results?.result), false);
-    }
-  } catch { /* search is optional */ }
-  return [...byId.values()].sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
+  // so a tag can't slip through a single-source gap. Run once PER handle spelling. Best-effort per query.
+  for (const h of handles) {
+    try {
+      const j = await gql("GET", "SearchTimeline", { variables: { rawQuery: `@${h} -filter:retweets`, count: Math.min(40, count), querySource: "typed_query", product: "Latest" }, features: READ_FEATURES });
+      const instr = j?.data?.search_by_raw_query?.search_timeline?.timeline?.instructions || [];
+      for (const ins of instr) for (const entry of (ins.entries || [])) {
+        if (!String(entry.entryId || "").startsWith("tweet-")) continue;
+        n2++; add(parseTweetResult(entry.content?.itemContent?.tweet_results?.result), false);
+      }
+    } catch (e) { errs.push(`search(@${h}):` + String(e?.message || e).slice(0, 50)); }
+  }
+  const out = [...byId.values()].sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
+  // DIAGNOSTIC: both sources previously swallowed errors, so a double failure returned [] with NO log — the
+  // "poll ticks but never sees a mention" blind spot. Now every fetch reports what it saw.
+  try { console.log(`[xreply] mentions: handles=[${handles.join(",")}] notif=${n1} search=${n2} → ${out.length} uniq${errs.length ? " · ERR " + errs.join(" | ") : ""}`); } catch { /* logging is best-effort */ }
+  return out;
 }
 export async function xGetTweet(id) {
   if (!id) return null;

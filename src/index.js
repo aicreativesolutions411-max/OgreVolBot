@@ -7463,9 +7463,23 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const mtarget = mmint || mwallet;
       if (!solanaPublicKeyLike(mtarget)) { sendWebJson(request, response, 400, { ok: false, error: "ca or wallet required" }); return; }
       let map;
-      try { map = (mwallet && !mmint) ? await buildWalletMap(mtarget, mmode) : await buildSubjectMap(mtarget, mmode); }
-      catch (e) { sendWebJson(request, response, 200, { ok: false, error: String((e && e.message) || e) }); return; }
-      if (!map || !Array.isArray(map.nodes) || !map.nodes.length) { sendWebJson(request, response, 200, { ok: false, error: "no map data yet" }); return; }
+      try {
+        // HARD 14s timeout so a slow chain read can never hang the request into a client "failed to load"
+        // (mobile browsers bail fast, and Render 504s an idle socket). On timeout we return a clean retryable
+        // message instead of a dead connection.
+        map = await Promise.race([
+          (mwallet && !mmint) ? buildWalletMap(mtarget, mmode) : buildSubjectMap(mtarget, mmode),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("__map_timeout__")), 14_000)),
+        ]);
+      } catch (e) {
+        const slow = /__map_timeout__/.test(String(e && e.message));
+        sendWebJson(request, response, 200, { ok: false, error: slow ? "the chain is slow right now — try again" : String((e && e.message) || e) }); return;
+      }
+      // A valid TOKEN ALWAYS returns its details card (MC/liq/age/1H/top10), even when holders are still thin
+      // (fresh coin, RPC hiccup) — the whole point is "paste a CA → always get details + map". Only a genuine
+      // nothing (not a token AND no nodes, e.g. an empty wallet) is a real miss.
+      const hasNodes = map && Array.isArray(map.nodes) && map.nodes.length;
+      if (!map || (!map.isToken && !hasNodes)) { sendWebJson(request, response, 200, { ok: false, error: "no map data yet — paste a coin CA or wallet address" }); return; }
       sendWebJson(request, response, 200, { ok: true, map });
       return;
     }
@@ -30815,7 +30829,10 @@ async function buildTokenHolderMap(mint) {
   if (!isToken) return { kind: "token", mint, isToken: false, nodes: [] };  // truly not a token → caller falls to wallet map
 
   // 2) HOLDERS — ST (more) → on-chain (free). A token ALWAYS renders as a token map now, even if holders are thin.
-  const holderRows = await fetchTokenHolderRows(mint).catch(() => []);
+  // Retry once on an empty first read — holders are the whole point of a bubble map, and the first RPC/ST call
+  // can transiently return nothing on a fresh coin. Cheap (only fires when empty) and keeps "always shows bubbles".
+  let holderRows = await fetchTokenHolderRows(mint).catch(() => []);
+  if (!holderRows.length) { await new Promise((r) => setTimeout(r, 500)); holderRows = await fetchTokenHolderRows(mint).catch(() => []); }
   const maxPct = holderRows.reduce((m, h) => Math.max(m, h.pct || 0), 0) || 1;
   let kolsIn = 0, whales = 0;
   const nodes = await Promise.all(holderRows.slice(0, 45).map(async (h, i) => {

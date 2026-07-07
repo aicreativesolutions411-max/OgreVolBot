@@ -84,17 +84,23 @@ let crumbs=[],refreshTimer=null,sim=null,zoomB=null;
 function short(a){return a&&a.length>10?a.slice(0,4)+'…'+a.slice(-4):a}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 
-async function loadTarget(kind,id,mode,push,label){
+async function loadTarget(kind,id,mode,push,label,_retry){
   if(!id)return; mode=mode||'bags'; showLoading();
   try{
     const q=kind==='coin'?('ca='+encodeURIComponent(id)):('wallet='+encodeURIComponent(id)+'&mode='+mode);
     const j=await (await fetch('/api/map?'+q)).json();
-    if(!j.ok||!j.map){showError(j.error||'no map data yet');return}
+    if(!j.ok||!j.map){
+      if(!_retry){await new Promise(r=>setTimeout(r,1000));return loadTarget(kind,id,mode,push,label,true)}
+      showError(j.error||'no map data yet');return
+    }
     if(push!==false)crumbs.push({kind,id,mode,label:label||j.map.subject});
     else if(crumbs.length)crumbs[crumbs.length-1]={kind,id,mode,label:j.map.subject};
     render(j.map); scheduleRefresh(kind,id,mode);
     history.replaceState(null,'',kind==='coin'?('/map?ca='+id):('/map?wallet='+id));
-  }catch(e){showError('failed to load')}
+  }catch(e){
+    if(!_retry){await new Promise(r=>setTimeout(r,1000));return loadTarget(kind,id,mode,push,label,true)}
+    showError('the chain is slow right now — tap Start over to retry')
+  }
 }
 function scheduleRefresh(kind,id,mode){if(refreshTimer)clearTimeout(refreshTimer);refreshTimer=setTimeout(()=>loadTarget(kind,id,mode,false),30000)}
 function showLoading(){overlay.className='';overlay.innerHTML='<div class="spin"></div><p>Reading the chain…</p>'}
