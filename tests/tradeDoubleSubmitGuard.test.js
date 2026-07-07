@@ -1169,7 +1169,7 @@ test("viral + onboarding: win-flex card, first-run wallet CTA, fee transparency,
 });
 test("deferred backlog: migration alerts, wallet convergence, weekly caller contest", () => {
   // 🎓 migration-to-DEX ping folded into Exit Radar (a held bag that left the curve → got DEX liq)
-  assert.match(functionBody(serverSource, "pollExitRadar"), /st\.sawCurve && live\.liq > 0 && !st\.migrated/);
+  assert.match(functionBody(serverSource, "pollExitRadar"), /st\.sawCurve && !st\.bornWithLiq && live\.liq > 0 && !st\.migrated/);
   assert.match(functionBody(serverSource, "pollExitRadar"), /just graduated to DEX/);
   // 🚨 wallet convergence: 2+ of a user's tracked wallets buy the same coin in a window
   assert.match(serverSource, /function noteWalletConvergence/);

@@ -32769,7 +32769,7 @@ async function pollExitRadar() {
     for (const p of open.slice(0, 8)) {
       const live = await alphaRadarFetchMc(p.mint); if (!live || !(live.mc > 0)) continue;
       const k = `${p.userId}:${p.mint}`;
-      const st = exitRadarState.get(k) || { peak: live.mc, alerted: false, sym: live.sym || p.sym };
+      const st = exitRadarState.get(k) || { peak: live.mc, alerted: false, sym: live.sym || p.sym, bornWithLiq: live.liq > 0 };
       if (live.mc > st.peak) st.peak = live.mc;
       if (live.sym) st.sym = live.sym;
       exitRadarState.set(k, st);
@@ -32791,8 +32791,10 @@ async function pollExitRadar() {
       // on the pump curve (pump-fallback source) and >0 once DexScreener has a pair.
       if (!(live.liq > 0)) st.sawCurve = true;
       // Fire ONCE ever (persisted de-dup) and only for pump-curve coins — a graduated coin whose liquidity
-      // read flickers 0↔>0 must NEVER re-ping "just graduated" on every MC change / restart.
-      if (st.sawCurve && live.liq > 0 && !st.migrated && String(p.mint).endsWith("pump") && !exitRadarAlerted.has(`${k}:mig`)) {
+      // read flickers 0↔>0 must NEVER re-ping "just graduated" on every MC change / restart. bornWithLiq
+      // guards the "graduated a day ago" case: if the coin ALREADY had DEX liquidity the very first time we
+      // saw the bag, it did not graduate on our watch → never ping, even if a later read flickers to 0.
+      if (st.sawCurve && !st.bornWithLiq && live.liq > 0 && !st.migrated && String(p.mint).endsWith("pump") && !exitRadarAlerted.has(`${k}:mig`)) {
         st.migrated = true;
         await markExitRadarAlerted(`${k}:mig`);
         const links = slimewireTokenLinks(p.mint);
