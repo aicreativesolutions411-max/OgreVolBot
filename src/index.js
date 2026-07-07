@@ -32339,14 +32339,15 @@ async function handleXBotCommand(chatId, argument, userId) {
     return;
   }
   if (/^call\b/i.test(arg)) {
-    await say(chatId, "📣 Looking for a network-backed coin to call…");
-    const cand = await xPickAutoCallCandidate(s);
-    if (!cand) { await say(chatId, "No candidate right now — the observatory has nothing scoring high enough. Try again later."); return; }
+    await say(chatId, "📣 Looking for a coin to call…");
+    let cand = await xPickAutoCallCandidate(s), watch = false;
+    if (!cand) { cand = await xPickMoverCandidate(s); watch = true; }   // fall back to the trench-watch mover so a test always posts
+    if (!cand) { await say(chatId, "Nothing to post right now — no network-backed coin AND no qualifying trending mover. Try again shortly."); return; }
     const reply = await buildXReply(cand.mint, "scan", `calltest${now}`);
     if (!reply || !reply.mediaBuffer) { await say(chatId, "Candidate found but its card wouldn't build. Try again."); return; }
-    const res = await xPost({ text: xAutoCallText(cand, reply), mediaBuffer: reply.mediaBuffer });
-    if (res.ok) { await xTrackCoin({ mint: cand.mint, symbol: reply.symbol, mc: reply.mc || cand.mc, tweetId: res.id, kind: "autocall" }); }
-    await sayHtml(chatId, res.ok ? `✅ Called $${escapeTelegramHtml(reply.symbol || "")} (score ${cand.score}).${res.id ? ` <a href="https://x.com/i/status/${res.id}">view</a>` : ""}` : `⚠️ ${escapeTelegramHtml(res.reason || "failed")}`);
+    const res = await xPost({ text: watch ? xMoverText(cand, reply) : xAutoCallText(cand, reply), mediaBuffer: reply.mediaBuffer });
+    if (res.ok) { await xTrackCoin({ mint: cand.mint, symbol: reply.symbol, mc: reply.mc || cand.mc, tweetId: res.id, kind: watch ? "watch" : "autocall" }); }
+    await sayHtml(chatId, res.ok ? `✅ ${watch ? "Trench-watch" : "Called"} $${escapeTelegramHtml(reply.symbol || "")} (${watch ? `1H +${Math.round(cand.h1)}%` : `score ${cand.score}`}).${res.id ? ` <a href="https://x.com/i/status/${res.id}">view</a>` : ""}` : `⚠️ ${escapeTelegramHtml(res.reason || "failed")}`);
     return;
   }
   if (/^scorecard\b/i.test(arg)) {
@@ -32362,6 +32363,7 @@ async function handleXBotCommand(chatId, argument, userId) {
     `Master broadcast: <b>${xBroadcastOn() ? "🟢 LIVE" : "⚪️ DARK"}</b>  ·  Persona: ${on(xPersonaOn())}`,
     `• 🎯 Receipts (10x quote-tweets): ${on(xReceiptsOn())}`,
     `• 📣 Auto-calls (network-backed): ${on(xAutoCallOn())}`,
+    `• 🐸 Trench-watch heartbeat (movers): ${on(xHeartbeatOn())}`,
     `• ⚡ KOL first-responder: ${on(xKolWatchOn())}${xKolWatchHandles().length ? ` (${xKolWatchHandles().length} handles)` : " (set XBOT_KOL_HANDLES)"}`,
     `• 📊 Weekly scorecard: ${on(xScorecardOn())}`,
     "",
@@ -32389,6 +32391,7 @@ function xBroadcastOn() { return parseBoolean(process.env.XBOT_BROADCAST || "fal
 function xFeatureOn(env, def) { const v = String(process.env[env] || "").trim(); return xBroadcastOn() && (v ? parseBoolean(v) : def); }
 const xReceiptsOn  = () => xFeatureOn("XBOT_RECEIPTS", true);
 const xAutoCallOn  = () => xFeatureOn("XBOT_AUTOCALL", true);
+const xHeartbeatOn = () => xFeatureOn("XBOT_HEARTBEAT", true);   // "trenches now" mover post when no high-conviction call
 const xKolWatchOn  = () => xFeatureOn("XBOT_KOLWATCH", false);   // highest ban risk → OFF even under broadcast until opted in
 const xScorecardOn = () => xFeatureOn("XBOT_SCORECARD", true);
 const xPersonaOn   = () => { const v = String(process.env.XBOT_PERSONA || "").trim(); return v ? parseBoolean(v) : true; };   // text-only, safe → on by default
@@ -32495,19 +32498,56 @@ async function xAutoCallTick() {
     const dailyCap = Math.max(1, Number(process.env.XBOT_AUTOCALL_DAILY || 6));
     s.posts = s.posts.filter((t) => now - t < 86_400_000);
     if (s.posts.length >= dailyCap) return;
-    const cand = await xPickAutoCallCandidate(s);
+    // 1) HIGH-CONVICTION network-backed call (rare, the real signal). 2) HEARTBEAT: if none, post the best live
+    // trending MOVER as a clearly-framed "trench watch" so the account has daily content + seeds the receipt
+    // store (a mover we watch today is a receipt candidate if it runs). Same throttle → still ≤daily-cap posts.
+    let cand = await xPickAutoCallCandidate(s), watch = false;
+    if (!cand && xHeartbeatOn()) { cand = await xPickMoverCandidate(s); watch = true; }
     if (!cand) return;
     const reply = await buildXReply(cand.mint, "scan", `autocall${now}`);
     if (!reply || !reply.mediaBuffer) return;   // never post a text-only call — the card is the point
-    const res = await xPost({ text: xAutoCallText(cand, reply), mediaBuffer: reply.mediaBuffer });
+    const res = await xPost({ text: watch ? xMoverText(cand, reply) : xAutoCallText(cand, reply), mediaBuffer: reply.mediaBuffer });
     if (res.ok) {
       s.lastAutoCallAt = now; s.posts.push(now); await writeXCoins(s);
-      await xTrackCoin({ mint: cand.mint, symbol: reply.symbol, mc: reply.mc || cand.mc, tweetId: res.id, kind: "autocall" });
-      console.log(`[xbot] 📣 auto-call $${reply.symbol} score=${cand.score} id=${res.id}`);
-      await xReplyOwnerNotify(`📣 X auto-call: $${reply.symbol} (${scanFmtMoney(reply.mc || cand.mc)} · score ${cand.score})`).catch(() => {});
+      await xTrackCoin({ mint: cand.mint, symbol: reply.symbol, mc: reply.mc || cand.mc, tweetId: res.id, kind: watch ? "watch" : "autocall" });
+      console.log(`[xbot] ${watch ? "🐸 trench-watch" : "📣 auto-call"} $${reply.symbol} ${watch ? `1H=${cand.h1}%` : `score=${cand.score}`} id=${res.id}`);
+      await xReplyOwnerNotify(`${watch ? "🐸 X trench-watch" : "📣 X auto-call"}: $${reply.symbol} (${scanFmtMoney(reply.mc || cand.mc)}${watch ? ` · 1H +${Math.round(cand.h1)}%` : ` · score ${cand.score}`})`).catch(() => {});
     }
   } catch (e) { console.log(`[xbot] autocall tick err: ${String(e?.message || e).slice(0, 100)}`); }
   finally { _xAutoCallRunning = false; }
+}
+// HEARTBEAT candidate = best FREE trending mover (GeckoTerminal, not IP-limited): real momentum + liquidity,
+// trench-sized MC (not a mega-cap), not already surfaced. Keeps the account alive between rare conviction calls.
+async function xPickMoverCandidate(s) {
+  let pools = [];
+  try { pools = await fetchGeckoPools("trending", { pages: 2, timeoutMs: 3500 }); } catch { pools = []; }
+  const minLiq = Number(process.env.XBOT_MOVER_MIN_LIQ || 20_000);
+  const minMc = Number(process.env.XBOT_MOVER_MIN_MC || 25_000);
+  const maxMc = Number(process.env.XBOT_MOVER_MAX_MC || 8_000_000);
+  const minH1 = Number(process.env.XBOT_MOVER_MIN_H1 || 8);
+  const cands = [];
+  for (const p of (pools || [])) {
+    const mint = p.tokenMint; const pr = p.profile || {};
+    if (!mint || s.coins[mint]) continue;
+    const liq = Number(pr.liquidityUsd || pr.liquidity?.usd || 0);
+    const mc = Number(pr.marketCap || pr.fdv || 0);
+    const h1 = Number(pr.priceChange?.h1 || 0);
+    if (liq < minLiq || mc < minMc || mc > maxMc || h1 < minH1) continue;   // real, liquid, trench-sized, moving up
+    cands.push({ mint, mc, sym: pr.symbol || "", h1, liq, score: h1 + Math.min(40, Math.log10(Math.max(1, liq)) * 6) });
+  }
+  cands.sort((a, b) => b.score - a.score);
+  return cands[0] || null;
+}
+function xMoverText(cand, reply) {
+  const sym = reply.symbol ? `$${reply.symbol}` : shortMint(cand.mint);
+  const openers = ["🐸 trench watch:", "👀 moving in the trenches:", "🔥 heating up:", "⚡ on the move:"];
+  const op = openers[Math.abs(xSeedHash(cand.mint)) % openers.length];
+  const h1 = `${cand.h1 >= 0 ? "+" : ""}${Math.round(cand.h1)}%`;
+  return [
+    `${op} ${sym}`,
+    `${scanFmtMoney(reply.mc || cand.mc)} MC · 1H ${h1} · liq ${scanFmtMoney(cand.liq)} · NFA`,
+    "Full read + bubble map → tag @SlimeWirebot 🐸",
+  ].join("\n").slice(0, 279);
 }
 // Candidate = highest network-backed coin from the observatory not already posted, live-MC vetted (dust filter).
 async function xPickAutoCallCandidate(s) {
