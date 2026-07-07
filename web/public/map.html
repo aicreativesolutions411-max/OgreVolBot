@@ -159,6 +159,21 @@ function showLoading(){overlay.className='';overlay.innerHTML='<div class="spin"
 function showError(m){overlay.className='';overlay.innerHTML='<h1>🫥</h1><p>'+esc(m)+'</p><button class="ghost" onclick="location.href=\'/map\'">Start over</button>'}
 function drawCrumbs(){const el=document.getElementById('crumbs');el.innerHTML=crumbs.map((c,i)=>'<span class="c" data-i="'+i+'">'+(i===0?'🗺️ ':'')+esc(c.label)+'</span>').join('<span style="opacity:.5">›</span>');[...el.querySelectorAll('.c')].forEach(n=>n.onclick=()=>{const i=+n.dataset.i,c=crumbs[i];crumbs=crumbs.slice(0,i);loadTarget(c.kind,c.id,c.mode,true,c.label)})}
 function drawStats(map){document.getElementById('stats').innerHTML=(map.stats||[]).map(s=>'<div class="stat"><div class="l">'+esc(s.label)+'</div><div class="v">'+esc(s.value)+'</div></div>').join('')}
+function fmtUsd(n){n=+n||0;if(n>=1e9)return'$'+(n/1e9).toFixed(1)+'B';if(n>=1e6)return'$'+(n/1e6).toFixed(1)+'M';if(n>=1e3)return'$'+(n/1e3).toFixed(n>=1e5?0:1)+'K';return'$'+Math.round(n)}
+function setStat(label,val){[...document.querySelectorAll('#stats .stat')].forEach(el=>{const l=el.querySelector('.l');if(l&&l.textContent.trim()===label){const v=el.querySelector('.v');if(v)v.textContent=val}})}
+// 💧 LIQUIDITY + 1H come from DexScreener, which RATE-LIMITS our Render IP → the server returns them blank.
+// Fetch from the BROWSER (the user's IP, not rate-limited) and patch the two cards — same trick the main feed uses.
+function enrichCoinStats(mint){
+  if(!mint)return;
+  fetch('https://api.dexscreener.com/latest/dex/tokens/'+encodeURIComponent(mint)).then(r=>r.json()).then(j=>{
+    const p=((j&&j.pairs)||[]).filter(x=>x.chainId==='solana').sort((a,b)=>((b.liquidity&&b.liquidity.usd)||0)-((a.liquidity&&a.liquidity.usd)||0))[0];
+    if(!p)return;
+    const liq=p.liquidity&&p.liquidity.usd, h1=p.priceChange&&p.priceChange.h1, mc=p.marketCap||p.fdv;
+    if(liq>0)setStat('LIQUIDITY',fmtUsd(liq));
+    if(Number.isFinite(+h1))setStat('1H',(h1>=0?'+':'')+Math.round(h1)+'%');
+    if(mc>0)setStat('MARKET CAP',fmtUsd(mc));
+  }).catch(()=>{});
+}
 // 🛡️ Distribution X-ray — concentration verdict + whales/KOLs/clusters at a glance (info bubblemaps doesn't give).
 function renderXray(map){
   const el=document.getElementById('xray'); if(!el)return;
@@ -193,7 +208,7 @@ function drawToggleFoot(map){
 }
 
 function render(map){
-  overlay.className='hide'; drawCrumbs(); drawStats(map); drawToggleFoot(map); drawSide(map);
+  overlay.className='hide'; drawCrumbs(); drawStats(map); drawToggleFoot(map); drawSide(map); if(map.kind==='token'&&map.mint)enrichCoinStats(map.mint);
   if(sim)sim.stop();
   clusterHulls=null; const oc=document.getElementById('clusters'); if(oc)oc.remove();   // reset cluster layer per render
   const old=stage.querySelector('svg'); if(old)old.remove();

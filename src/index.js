@@ -31479,19 +31479,19 @@ async function renderSubjectMapPng(target, mode = "bags") {
   return { png, map };
 }
 
-// 💰 Render the AIRDROP map to a branded PNG — the og:image / X-TG share card (the meta tag pointed at
-// /api/airdrop/img, which used to 404). Reuses the same slime renderer; airdrop node states map to the
-// renderer's palette (diamond→hold green, sold→red).
+// 💰 Render the AIRDROP map to a branded PNG — the og:image / X-TG share card. Uses a DISTINCT light/cream
+// money-bag card (renderSlimeAirdropPng) so it doesn't look identical to the dark holder-map card (owner:
+// "looks like 2 same cards"). Nodes keep their diamond/sold/crown state; center = the coin/airdropper pfp.
 const airdropRenderCache = new Map();
+let _creamBgPath;
 async function renderAirdropMapPng(mint) {
   const cached = airdropRenderCache.get(mint);
   if (cached && Date.now() - cached.at < MAP_RENDER_TTL) return { png: cached.png, map: cached.map };
   const map = await buildAirdropMap(mint).catch(() => null);
   if (!map || !map.isToken || !Array.isArray(map.nodes) || !map.nodes.length) return { png: null, map: null };
-  const { renderSlimeMapPng } = await import("./lib/slimeMapRender.mjs");
-  const bgPath = await premiumMapBg(`${map.subject}${mint}drop`);
-  const nodes = map.nodes.map((n) => ({ ...n, state: n.state === "sold" ? "sold" : (n.crown ? "whale" : "hold") }));
-  const png = await renderSlimeMapPng({ subject: map.subject, subtitle: map.subtitle, stats: map.stats, nodes, bgPath, centerImage: map.coinLogo || map.devAvatar || "" });
+  const { renderSlimeAirdropPng } = await import("./lib/slimeMapRender.mjs");
+  if (_creamBgPath === undefined) { const p = path.join(WEB_STATIC_DIR, "ui", "slime-cream.png"); _creamBgPath = fsSync.existsSync(p) ? p : null; }
+  const png = await renderSlimeAirdropPng({ subject: map.subject, subtitle: map.subtitle || "airdrop map", stats: map.stats, nodes: map.nodes, centerImage: map.coinLogo || map.devAvatar || "", devName: map.devName || "", bgPath: _creamBgPath });
   airdropRenderCache.set(mint, { at: Date.now(), png, map });
   if (airdropRenderCache.size > 150) airdropRenderCache.delete(airdropRenderCache.keys().next().value);
   return { png, map };

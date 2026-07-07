@@ -225,6 +225,86 @@ export async function renderSlimeMapPng({ subject, subtitle, stats = [], nodes =
   return sharp(base).composite([{ input: wash }, { input: mapPng }]).png().toBuffer();
 }
 
+// ===== 💰 AIRDROP CARD — a DISTINCT light/cream slime look (money bags + diamonds), so the airdrop share
+// card doesn't look identical to the dark holder-map card. Matches the /airdrop site aesthetic. =====
+const BAG_PATH = "M20 4.5c-2.5 0-4.2 1.5-4.2 3.2 0 1 .55 1.9 1.45 2.5l-.9 1.6C12.4 14.1 8 19.7 8 26.1 8 32.6 13.2 36 20 36s12-3.4 12-9.9c0-6.4-4.4-12-8.35-14.3l-.9-1.6c.9-.6 1.45-1.5 1.45-2.5 0-1.7-1.7-3.2-4.2-3.2z";
+const BAG_TIE = "M15.2 9.6q4.8 2 9.6 0";
+const BAGPAL = [["#7fb8e6", "#3a6ea5"], ["#e79cc4", "#a8477e"], ["#b79ae0", "#6f4aa0"], ["#9aa6e6", "#4a56a0"], ["#7fd0d0", "#3a9a9a"], ["#e6b07f", "#a86a3a"], ["#88d18a", "#3f9c34"], ["#d99ad0", "#9a4a90"]];
+const STAT_BG = ["#bfe2f5", "#f6c9dd", "#e9d5f2", "#cdd0f4", "#3a3550"];   // matches the site's s0..s4 header
+function bagHash(s) { let h = 0; s = String(s || ""); for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h; }
+
+export function buildAirdropSvg({ subject = "$SLIME", subtitle = "airdrop", stats = [], nodes = [], centerImage = null, devName = "", W = 900, H = 820 } = {}) {
+  const cx = W / 2, cy = 150 + (H - 150) / 2;
+  const laid = layout(nodes.slice(0, 90), cx, cy, 96, Math.min(cx, cy) - 66);
+  const cardW = (W - 2 * 22 - 4 * 10) / 5;
+  const header = stats.slice(0, 5).map((s, i) => {
+    const x = 22 + i * (cardW + 10), y = 18, bg = STAT_BG[i] || "#e9d5f2", dark = i === 4;
+    return `<g>
+      <rect x="${x.toFixed(1)}" y="${y}" width="${cardW.toFixed(1)}" height="92" rx="16" fill="${bg}"/>
+      <text x="${(x + cardW / 2).toFixed(1)}" y="${y + 24}" text-anchor="middle" font-family="Arial" font-size="12" font-weight="800" fill="${dark ? "#c9b8ff" : "#5b4a58"}">${esc(String(s.label || "").toUpperCase())}</text>
+      <text x="${(x + cardW / 2).toFixed(1)}" y="${y + 58}" text-anchor="middle" font-family="Arial Black, Arial" font-size="26" font-weight="900" fill="${dark ? "#ffffff" : "#2b2417"}">${esc(s.value || "")}</text>
+      ${s.sub ? `<text x="${(x + cardW / 2).toFixed(1)}" y="${y + 78}" text-anchor="middle" font-family="Arial" font-size="10" fill="${dark ? "#c9b8ff" : "#8b7d5f"}">${esc(s.sub)}</text>` : ""}
+    </g>`;
+  }).join("");
+  const spokes = laid.map((n) => `<line x1="${cx}" y1="${cy}" x2="${n.x.toFixed(1)}" y2="${n.y.toFixed(1)}" stroke="#cbb98d" stroke-opacity="0.5" stroke-width="${n.crown || n.label ? 1.6 : 1}"/>`).join("");
+  const bags = laid.map((n) => {
+    const pal = BAGPAL[bagHash(n.wallet || n.name || String(n.i)) % BAGPAL.length];
+    const sc = (n.size * 2) / 40;
+    const held = n.state === "diamond" || n.held === true;
+    const faded = !held;
+    return `<g transform="translate(${n.x.toFixed(1)},${n.y.toFixed(1)})">
+      ${n.crown ? `<text x="0" y="${(-n.size - 8).toFixed(1)}" text-anchor="middle" font-size="19">👑</text>` : ""}
+      <g transform="scale(${sc.toFixed(3)}) translate(-20,-20)" opacity="${faded ? 0.5 : 1}">
+        <path d="${BAG_PATH}" fill="${pal[0]}" stroke="${pal[1]}" stroke-width="1.6"/>
+        <path d="${BAG_TIE}" fill="none" stroke="${pal[1]}" stroke-width="2" stroke-linecap="round"/>
+        <text x="20" y="28" text-anchor="middle" font-family="Arial Black, Arial" font-size="12" font-weight="900" fill="#ffffff" opacity="0.92">${held ? "$" : ""}</text>
+        ${held && n.weight > 0.35 ? `<text x="20" y="15" text-anchor="middle" font-size="9">💎</text>` : ""}
+      </g>
+    </g>`;
+  }).join("");
+  const labels = laid.filter((n) => n.label).map((n) => {
+    const w = String(n.label).length * 6.7 + 18, pal = BAGPAL[bagHash(n.wallet || "") % BAGPAL.length];
+    return `<g transform="translate(${(n.x + n.size + 6).toFixed(1)},${n.y.toFixed(1)})">
+      <rect x="0" y="-11" rx="9" width="${w.toFixed(0)}" height="22" fill="#fffaf0" stroke="${pal[1]}" stroke-width="1.4"/>
+      <text x="9" y="4" font-family="Arial" font-size="12.5" font-weight="800" fill="#2b2417">${esc(n.label)}</text>
+    </g>`;
+  }).join("");
+  const hubR = 56;
+  const hub = `<g>
+    <circle cx="${cx}" cy="${cy}" r="${hubR + 4}" fill="#3f9c34" fill-opacity="0.12"/>
+    <circle cx="${cx}" cy="${cy}" r="${hubR}" fill="#eaf6e6" stroke="#3f9c34" stroke-width="4"/>
+    ${centerImage
+      ? `<clipPath id="aclip"><circle cx="${cx}" cy="${cy}" r="${hubR - 3}"/></clipPath><image href="${esc(centerImage)}" x="${cx - hubR + 3}" y="${cy - hubR + 3}" width="${(hubR - 3) * 2}" height="${(hubR - 3) * 2}" clip-path="url(#aclip)" preserveAspectRatio="xMidYMid slice"/>`
+      : `<text x="${cx}" y="${cy + 10}" text-anchor="middle" font-size="32">💰</text>`}
+    <text x="${cx}" y="${cy + hubR + 30}" text-anchor="middle" font-family="Arial Black, Arial" font-size="26" font-weight="900" fill="#2b2417" paint-order="stroke" stroke="#fffaf0" stroke-width="5">${esc(subject)}</text>
+    <text x="${cx}" y="${cy + hubR + 50}" text-anchor="middle" font-family="Arial" font-size="13" fill="#8b7d5f" paint-order="stroke" stroke="#fffaf0" stroke-width="3">${esc(devName ? "by " + devName : subtitle)}</text>
+  </g>`;
+  const legend = `<g font-family="Arial" font-size="12" font-weight="700">
+    <text x="24" y="${H - 22}" fill="#8b7d5f">💎 held · 💸 dumped · 👑 biggest bag</text>
+    <rect x="${W - 244}" y="${H - 40}" width="216" height="28" rx="14" fill="#fffaf0" stroke="#3f9c34" stroke-opacity="0.55"/>
+    <circle cx="${W - 226}" cy="${H - 26}" r="6" fill="#57c04a"/>
+    <text x="${W - 212}" y="${H - 21}" font-family="Arial Black, Arial" font-size="16" font-weight="900" fill="#3f9c34">slimewire.org</text>
+  </g>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${spokes}${header}${bags}${labels}${hub}${legend}</svg>`;
+}
+
+export async function renderSlimeAirdropPng({ subject, subtitle, stats = [], nodes = [], centerImage = null, devName = "", bgPath = null, W = 900, H = 820 } = {}) {
+  const centerData = centerImage ? await fetchAvatarDataUri(centerImage, 160, 9000) : null;   // coin/airdropper pfp → center
+  const svg = buildAirdropSvg({ subject, subtitle, stats, nodes, centerImage: centerData, devName, W, H });
+  const cardPng = await sharp(Buffer.from(svg)).png().toBuffer();
+  // Base = the LIGHT cream slime frame (distinct from the dark map card) or a cream gradient fallback.
+  let base;
+  if (bgPath && fs.existsSync(bgPath)) {
+    base = await sharp(bgPath).resize(W, H, { fit: "cover", position: "centre" })
+      .composite([{ input: Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}"><rect width="${W}" height="${H}" fill="#f6ecd7" fill-opacity="0.32"/></svg>`), top: 0, left: 0 }]).png().toBuffer();
+  } else {
+    base = await sharp(Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}"><defs><radialGradient id="g" cx="50%" cy="42%" r="65%"><stop offset="0%" stop-color="#fbf3e0"/><stop offset="100%" stop-color="#efe2c6"/></radialGradient></defs><rect width="${W}" height="${H}" fill="url(#g)"/></svg>`
+    )).png().toBuffer();
+  }
+  return sharp(base).composite([{ input: cardPng }]).png().toBuffer();
+}
+
 // ---- sample render (run directly) ----
 function sampleNodes() {
   const named = [
