@@ -213,7 +213,13 @@ export async function xSearchMentions(count = 20) {
   // a search for the other. We reply from the cookie account either way, so a union is strictly safer.
   const resolved = String(await xResolvedHandle()).toLowerCase().replace(/^@+/, "");
   const envH = String(xHandle()).toLowerCase().replace(/^@+/, "");
-  const handles = [...new Set([resolved, envH].filter(Boolean))];
+  // ALIASES: the account was RENAMED (@SlimeWireSol → @slimewirebot). X still routes tags of a FORMER handle
+  // to this account's mentions feed, but user_mentions carries the OLD spelling — so we must recognize it too
+  // or every old-handle tag is dropped (live logs: tweets mention "slimewiresol", handle is "slimewirebot",
+  // → 0 uniq). Configurable via X_HANDLE_ALIASES (comma/space list); defaults to the known former handle.
+  const aliases = String(process.env.X_HANDLE_ALIASES || "slimewiresol").toLowerCase()
+    .split(/[,\s]+/).map((h) => h.replace(/^@+/, "").replace(/[^a-z0-9_]/g, "")).filter(Boolean);
+  const handles = [...new Set([resolved, envH, ...aliases].filter(Boolean))];
   const tagRe = new RegExp("@(" + handles.map((h) => h.replace(/[^a-z0-9_]/g, "")).join("|") + ")\\b", "i");
   const self = new Set(handles);
   const byId = new Map();

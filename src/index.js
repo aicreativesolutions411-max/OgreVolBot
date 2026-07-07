@@ -6092,6 +6092,10 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "map.html");
       return;
     }
+    if (request.method === "GET" && ["/airdrop", "/airdrops", "/drop", "/bags"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "airdrop.html");
+      return;
+    }
     if (request.method === "GET" && requestUrl.pathname === "/learn") {
       await serveStaticHtmlPage(response, "learn.html");
       return;
@@ -7520,6 +7524,25 @@ async function handleWebApiRequest(request, response, requestUrl) {
         ]);
         sendWebJson(request, response, 200, { ok: true, edges: graph.edges || [], clusters: graph.clusters || [], timeout: Boolean(graph.timeout) });
       } catch (e) { sendWebJson(request, response, 200, { ok: false, error: String((e && e.message) || e) }); }
+      return;
+    }
+    // 💰 AIRDROP MAP (public) — who the dev/airdropper fed + who still diamond-hands the bag. Hard 18s race
+    // (the outbound-transfer scan parses on-chain txs) so it never hangs; a valid token always returns its map.
+    if (request.method === "GET" && pathname === "/api/airdrop") {
+      const am = String(requestUrl.searchParams.get("ca") || requestUrl.searchParams.get("mint") || "").trim();
+      if (!solanaPublicKeyLike(am)) { sendWebJson(request, response, 400, { ok: false, error: "ca required" }); return; }
+      let map;
+      try {
+        map = await Promise.race([
+          buildAirdropMap(am),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("__airdrop_timeout__")), 18_000)),
+        ]);
+      } catch (e) {
+        const slow = /__airdrop_timeout__/.test(String(e && e.message));
+        sendWebJson(request, response, 200, { ok: false, error: slow ? "the chain is slow right now — try again" : String((e && e.message) || e) }); return;
+      }
+      if (!map || !map.isToken) { sendWebJson(request, response, 200, { ok: false, error: "no airdrop data — paste a coin CA" }); return; }
+      sendWebJson(request, response, 200, { ok: true, map });
       return;
     }
 
@@ -13175,6 +13198,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("map:")) {
     if (await handleMapCallback(query, userId).catch(() => false)) return;
   }
+  // 💰 AIRDROP map (drop:<mint>) — tap a coin's Airdrop button → who the dev fed + who still holds.
+  if (String(query.data || "").startsWith("drop:")) {
+    if (await handleAirdropCallback(query, userId).catch(() => false)) return;
+  }
   // 🔴 One-tap sell (qs:*) — sell 25/50/100% of a coin from the tapper's own wallets, in-DM.
   if (String(query.data || "").startsWith("qs:")) {
     if (await handleQuickSellCallback(query, userId).catch(() => false)) return;
@@ -14373,6 +14400,13 @@ async function handleMessage(message, userId) {
   // /narrative — hot rotating meta; /grad — coins closest to graduating.
   if (parseCommandWithArgument(text, ["narrative", "meta"])) { const v = narrativeRadarView(); await sayHtml(chatId, v.text, v.markup); return; }
   if (parseCommandWithArgument(text, ["grad", "graduation", "gauntlet"])) { const v = await graduationGauntletView(); await sayHtml(chatId, v.text, v.markup); return; }
+  // 💰 /airdrop <ca> — map a coin's airdrop: who the dev fed + who still diamond-hands the bag.
+  { const ad = parseCommandWithArgument(text, ["airdrop", "drop", "bags"]);
+    if (ad) {
+      const ca = String(ad.argument || "").trim().replace(/^\$/, "");
+      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(ca)) { await sayHtml(chatId, "💰 <b>Airdrop map</b>\nUsage: <code>/airdrop &lt;coin CA&gt;</code> — I'll show who the dev fed, how big each bag was, and who's still holding."); return; }
+      await sendAirdropCard(chatId, ca); return;
+    } }
   // /copy — mirror a proven room trader; /launchroom — the dev war room.
   if (parseCommandWithArgument(text, ["copy", "mirror"])) { const v = await copyMenuView(chatId, userId); await sayHtml(chatId, v.text, v.markup); return; }
   if (parseCommandWithArgument(text, ["launchroom", "warroom"])) { const v = launchRoomView(chatId, (await readCommunitySnipe()).snipes[String(chatId)]); await sayHtml(chatId, v.text, v.markup); return; }
@@ -30873,6 +30907,141 @@ async function buildTokenHolderMap(mint) {
   };
 }
 
+// ===== 💰 AIRDROP MAP — who the dev/airdropper fed, how much, and who still diamond-hands the bag =====
+// Reads the airdropper wallet's OUTBOUND token transfers of this mint straight off the chain (free RPC),
+// aggregates per recipient, then cross-references the live holder list so each bag is tagged 💎 (still
+// holding) or 💸 (dumped). BOUNDED (caps parsed txs) + budget-gated + cached, so it stays cheap.
+const airdropMapCache = new Map();               // mint -> { at, v }
+const AIRDROP_MAP_TTL = 8 * 60_000;
+let airdropDay = ""; let airdropTxUsedToday = 0;
+const AIRDROP_TX_DAILY_CAP = Math.max(200, Number(process.env.AIRDROP_TX_DAILY_CAP) || 3000);
+function airdropBudgetOk() {
+  const day = new Date().toISOString().slice(0, 10);
+  if (day !== airdropDay) { airdropDay = day; airdropTxUsedToday = 0; }
+  return airdropTxUsedToday < AIRDROP_TX_DAILY_CAP;
+}
+// Scan the airdropper's outbound sends of `mint`: for each of its OLDEST ~maxTx signatures (airdrops fire
+// right after launch), parse per-owner token-balance deltas — a tx where the dev's balance DROPS and other
+// wallets' balances RISE is a drop. Excludes the AMM pool (that's a sell, not an airdrop). Returns
+// { recips: Map<owner, tokensReceived>, bagsDropped }.
+async function scanAirdropRecipients(devWallet, mint, poolExclude = "", maxTx = 70) {
+  const recips = new Map(); let bagsDropped = 0;
+  let pk; try { pk = new PublicKey(devWallet); } catch { return { recips, bagsDropped }; }
+  const exclude = new Set([devWallet, poolExclude].filter(Boolean));
+  try {
+    const sigs = await rpcRead("airdrop: dev sigs", (c) => c.getSignaturesForAddress(pk, { limit: 1000 }), { retries: 0 }).catch(() => []);
+    if (!Array.isArray(sigs) || !sigs.length) return { recips, bagsDropped };
+    const candidates = sigs.slice(-maxTx).map((s) => s.signature).reverse(); // oldest-first
+    for (const sig of candidates) {
+      if (!airdropBudgetOk()) break;
+      airdropTxUsedToday += 1;
+      const tx = await rpcRead("airdrop: tx", (c) => c.getParsedTransaction(sig, { maxSupportedTransactionVersion: 0 }), { retries: 0 }).catch(() => null);
+      const pre = tx?.meta?.preTokenBalances || [], post = tx?.meta?.postTokenBalances || [];
+      if (!pre.length && !post.length) continue;
+      const delta = new Map();
+      for (const b of pre) if (b.mint === mint && b.owner) delta.set(b.owner, (delta.get(b.owner) || 0) - Number(b.uiTokenAmount?.uiAmount || 0));
+      for (const b of post) if (b.mint === mint && b.owner) delta.set(b.owner, (delta.get(b.owner) || 0) + Number(b.uiTokenAmount?.uiAmount || 0));
+      if ((delta.get(devWallet) || 0) >= 0) continue;                 // dev didn't send out here
+      let sentHere = false;
+      for (const [o, d] of delta) { if (!exclude.has(o) && d > 0) { recips.set(o, (recips.get(o) || 0) + d); sentHere = true; } }
+      if (sentHere) bagsDropped += 1;
+    }
+  } catch { /* partial is fine */ }
+  return { recips, bagsDropped };
+}
+async function buildAirdropMap(mint) {
+  const cached = airdropMapCache.get(mint);
+  if (cached && Date.now() - cached.at < AIRDROP_MAP_TTL) return cached.v;
+  const idx = await mapKolIdentityIndex().catch(() => new Map());
+  // Coin info (same pump-first / dex-fallback precedence as the scan + holder map).
+  const [pumpMeta, pairs] = await Promise.all([
+    getPumpFunTokenMetadata(mint).catch(() => null),
+    fetchDexScreenerTokenPairsFallback(mint).catch(() => null),
+  ]);
+  const best = bestDexPairForToken(mint, pairs);
+  const dexMeta = best ? metadataFromDexPair(mint, best) : null;
+  const onCurve = Boolean(pumpMeta && !pumpMeta.graduated && !(dexMeta && dexMeta.marketCap));
+  const pick = (p, d) => onCurve ? firstMeaningfulNumber(p, d) : firstMeaningfulNumber(d, p);
+  const sym = String(dexMeta?.symbol || pumpMeta?.symbol || "").trim();
+  const mc = pick(pumpMeta?.marketCap, dexMeta?.marketCap ?? dexMeta?.fdv) || 0;
+  const isToken = Boolean(sym || mc > 0 || pumpMeta?.symbol || String(mint).endsWith("pump"));
+  if (!isToken) return { kind: "airdrop", mint, isToken: false, nodes: [] };
+  // Total supply → price per token (for STREET VALUE). Pump standard is 1e9; read on-chain when we can.
+  let supplyUi = firstMeaningfulNumber(pumpMeta?.totalSupply, dexMeta?.totalSupply) || 0;
+  if (!(supplyUi > 0)) { try { const s = await rpcRead("airdrop supply", (c) => c.getTokenSupply(new PublicKey(mint), "confirmed"), { retries: 0 }); supplyUi = Number(s?.value?.uiAmount || 0); } catch { /* fallback below */ } }
+  if (!(supplyUi > 0)) supplyUi = 1e9;
+  const pricePerToken = mc > 0 && supplyUi > 0 ? mc / supplyUi : 0;
+  // Airdropper = the creator/dev wallet. Pump meta first, then infer from the mint's first-tx signer.
+  let dev = String(pumpMeta?.creator || pumpMeta?.creatorWallet || pumpMeta?.dev || pumpMeta?.deployer || "").trim();
+  if (!solanaPublicKeyLike(dev)) { const inf = await inferDevCandidateFromMintSource(mint).catch(() => null); dev = String(inf?.likelyDevWallet || "").trim(); }
+  const poolAddr = String(best?.pairAddress || best?.address || "").trim();
+  // Real airdrop recipients from the dev's outbound sends.
+  let recips = new Map(), bagsDropped = 0;
+  if (solanaPublicKeyLike(dev) && airdropBudgetOk()) { const r = await scanAirdropRecipients(dev, mint, poolAddr, 70); recips = r.recips; bagsDropped = r.bagsDropped; }
+  // Live holders → who STILL holds (diamond hands) + a fallback source of bags if the transfer scan is thin.
+  const holderRows = await fetchTokenHolderRows(mint).catch(() => []);
+  const holderPctByWallet = new Map(holderRows.map((h) => [h.wallet, h.pct || 0]));
+  const holderSet = new Set(holderRows.map((h) => h.wallet));
+  let usedFallback = false;
+  let entries = [...recips.entries()].map(([wallet, tokens]) => ({ wallet, tokens, held: holderSet.has(wallet) }));
+  if (entries.length < 5) {
+    // Transfer scan thin (RPC-limited, or a non-airdrop token) → show the top holders as bags so it ALWAYS renders.
+    usedFallback = true;
+    entries = holderRows.slice(0, 60).map((h) => ({ wallet: h.wallet, tokens: supplyUi * ((h.pct || 0) / 100), held: true }));
+    bagsDropped = entries.length;
+  }
+  entries.sort((a, b) => b.tokens - a.tokens);
+  const top = entries.slice(0, 60);
+  const totalTokens = entries.reduce((s, e) => s + e.tokens, 0);
+  const held = entries.filter((e) => e.held).length;
+  const maxTok = top.reduce((m, e) => Math.max(m, e.tokens), 0) || 1;
+  let kolsIn = 0;
+  const nodes = await Promise.all(top.map(async (e, i) => {
+    const id = mapResolveIdentity(e.wallet, idx);
+    if (id.isKol) kolsIn++;
+    const usd = pricePerToken > 0 ? e.tokens * pricePerToken : (mc * ((holderPctByWallet.get(e.wallet) || 0) / 100));
+    const face = id.avatarUrl ? null : await mapAnonFace(e.wallet);
+    const amtLabel = airdropAmt(e.tokens);
+    return {
+      i, wallet: e.wallet, isKol: id.isKol, name: id.name, twitter: id.twitter,
+      tokens: e.tokens, amountLabel: amtLabel, usd, held: e.held,
+      crown: i === 0,                                   // biggest bag wears the crown
+      weight: Math.max(0.12, Math.min(1, e.tokens / maxTok)),
+      state: e.held ? "diamond" : "sold",
+      label: id.isKol ? `${id.name} · ${amtLabel}` : (i < 6 ? `${amtLabel}` : null),
+      avatarUrl: id.avatarUrl, faceUrl: face ? face.url : null, faceFile: face ? face.file : null,
+    };
+  }));
+  const streetValue = pricePerToken > 0 ? totalTokens * pricePerToken : mc;
+  const devId = solanaPublicKeyLike(dev) ? mapResolveIdentity(dev, idx) : null;
+  const stats = [
+    { label: "BAGS DROPPED", value: String(bagsDropped || nodes.length) },
+    { label: "WALLETS FED", value: String(entries.length) },
+    { label: "TOKENS AIRDROPPED", value: airdropAmt(totalTokens) + "+" },
+    { label: "STREET VALUE", value: streetValue > 0 ? "≈" + fmtMc(streetValue) : "—", sub: "at today's price" },
+    { label: "DIAMOND HANDS", value: String(held), sub: "still holding" },
+  ];
+  const v = {
+    kind: "airdrop", isToken: true, mint,
+    subject: `$${(sym || shortMint(mint)).slice(0, 11)}`,
+    subtitle: usedFallback ? "top holders" : `${entries.length} wallets fed`,
+    dev, devName: devId?.isKol ? devId.name : "", devAvatar: devId?.avatarUrl || "",
+    approx: usedFallback,                                 // true = distribution fallback, not literal dev-sends
+    kolsIn, stats, nodes,
+  };
+  airdropMapCache.set(mint, { at: Date.now(), v });
+  if (airdropMapCache.size > 150) airdropMapCache.delete(airdropMapCache.keys().next().value);
+  return v;
+}
+// Compact token-amount label: 200000000 -> "200M", 10500000 -> "10.5M", 427100000 -> "427.1M".
+function airdropAmt(n) {
+  n = Number(n) || 0;
+  if (n >= 1e9) return (n / 1e9).toFixed(n >= 1e10 ? 0 : 1).replace(/\.0$/, "") + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e8 ? 0 : 1).replace(/\.0$/, "") + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e5 ? 0 : 1).replace(/\.0$/, "") + "K";
+  return String(Math.round(n));
+}
+
 // WALLET map: bags = tokens currently held (ST portfolio); network = tokens recently traded (ST trades).
 async function buildWalletMap(wallet, mode = "bags") {
   const idx = await mapKolIdentityIndex().catch(() => new Map());
@@ -31040,6 +31209,36 @@ async function handleMapCallback(query, userId) {
   await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "🗺️ Drawing map…" }).catch(() => {});
   await sendMapCard(chatId, target, mode).catch(() => {});
   return true;
+}
+// 💰 AIRDROP callback + card — who the dev fed, how big, and who's still diamond-handing the bag.
+async function handleAirdropCallback(query, userId) {
+  const target = String(query.data || "").split(":")[1];
+  if (!target || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(target)) return false;
+  const chatId = query.message?.chat?.id;
+  await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "💰 Tracing the drop…" }).catch(() => {});
+  await sendAirdropCard(chatId, target).catch(() => {});
+  return true;
+}
+async function sendAirdropCard(chatId, mint) {
+  const map = await buildAirdropMap(mint).catch(() => null);
+  if (!map || !map.isToken) { await say(chatId, "💰 Couldn't trace an airdrop for that coin — paste a valid coin CA."); return; }
+  const stat = (k) => (map.stats.find((s) => s.label === k) || {}).value || "—";
+  const fed = (map.nodes || []).slice(0, 6).map((n) => `${n.crown ? "👑 " : (n.held ? "💎 " : "💸 ")}${n.isKol ? escapeTelegramHtml(n.name) : shortMint(n.wallet)} — ${escapeTelegramHtml(n.amountLabel || "")}`).join("\n");
+  const web = `https://www.slimewire.org/airdrop?ca=${mint}`;
+  const lines = [
+    `💰 <b>${escapeTelegramHtml(map.subject)} airdrop map</b>${map.devName ? ` · by ${escapeTelegramHtml(map.devName)}` : ""}`,
+    map.approx ? "<i>distribution view (top holders)</i>" : "",
+    "",
+    `🎒 <b>${stat("BAGS DROPPED")}</b> bags · 👥 <b>${stat("WALLETS FED")}</b> fed`,
+    `🪙 <b>${stat("TOKENS AIRDROPPED")}</b> · 💵 <b>${stat("STREET VALUE")}</b>`,
+    `💎 <b>${stat("DIAMOND HANDS")}</b> still holding the whole bag`,
+    fed ? "\n<b>Biggest bags:</b>\n" + fed : "",
+  ].filter((l) => l !== "").join("\n");
+  const kb = { inline_keyboard: [
+    [{ text: "💰 Open airdrop map", url: web }, { text: "🗺️ Holder map", callback_data: `map:${mint}` }],
+    [{ text: "⚡ Trade", callback_data: `qbp:${mint}` }, { text: "🔄 Refresh", callback_data: `drop:${mint}` }],
+  ] };
+  await sayHtml(chatId, lines, kb).catch(() => {});
 }
 
 // ============ 🐦 X (Twitter) CA REPLY BOT — reply to @mentions with a branded SlimeWire scan ============
@@ -31684,6 +31883,9 @@ function slimeScanKeyboard(mint) {
     ],
     [
       { text: "🗺️ Holder Map", callback_data: `map:${mint}` },
+      { text: "💰 Airdrop", callback_data: `drop:${mint}` }
+    ],
+    [
       { text: "📊 Menu", callback_data: `scan:menu:${mint}` }
     ],
     [
