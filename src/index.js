@@ -30974,9 +30974,12 @@ async function buildAirdropMap(mint) {
   const mc = pick(pumpMeta?.marketCap, dexMeta?.marketCap ?? dexMeta?.fdv) || 0;
   const isToken = Boolean(sym || mc > 0 || pumpMeta?.symbol || String(mint).endsWith("pump"));
   if (!isToken) return { kind: "airdrop", mint, isToken: false, nodes: [] };
-  // Total supply → price per token (for STREET VALUE). Pump standard is 1e9; read on-chain when we can.
-  let supplyUi = firstMeaningfulNumber(pumpMeta?.totalSupply, dexMeta?.totalSupply) || 0;
-  if (!(supplyUi > 0)) { try { const s = await rpcRead("airdrop supply", (c) => c.getTokenSupply(new PublicKey(mint), "confirmed"), { retries: 0 }); supplyUi = Number(s?.value?.uiAmount || 0); } catch { /* fallback below */ } }
+  // Total supply (DECIMAL-ADJUSTED UI amount) → price per token + token labels. getTokenSupply().value.uiAmount
+  // is authoritative + already decimal-adjusted; pumpMeta.totalSupply is RAW base units (1e9 × 10^6 decimals =
+  // 1e15) which inflated every token label ~1e6× — so prefer the on-chain UI supply, metadata only as a last resort.
+  let supplyUi = 0;
+  try { const s = await rpcRead("airdrop supply", (c) => c.getTokenSupply(new PublicKey(mint), "confirmed"), { retries: 0 }); supplyUi = Number(s?.value?.uiAmount || 0); } catch { /* fallback below */ }
+  if (!(supplyUi > 0)) { const raw = firstMeaningfulNumber(pumpMeta?.totalSupply, dexMeta?.totalSupply) || 0; supplyUi = raw > 1e12 ? raw / 1e6 : raw; } // metadata is raw → de-scale pump's 6 decimals
   if (!(supplyUi > 0)) supplyUi = 1e9;
   const pricePerToken = mc > 0 && supplyUi > 0 ? mc / supplyUi : 0;
   // Airdropper = the creator/dev wallet. Pump meta first, then infer from the mint's first-tx signer.
