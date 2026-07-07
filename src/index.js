@@ -7491,11 +7491,20 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const cm = String(requestUrl.searchParams.get("ca") || requestUrl.searchParams.get("mint") || "").trim();
       if (!solanaPublicKeyLike(cm)) { sendWebJson(request, response, 400, { ok: false, error: "ca required" }); return; }
       try {
-        const rows = await fetchTokenHolderRows(cm).catch(() => []);
-        const info = await alphaRadarFetchMc(cm).catch(() => null); const cmc = (info && info.mc) || 0;
-        const cnodes = rows.slice(0, 45).map((h, i) => ({ i, wallet: h.wallet, pct: h.pct || 0, usd: cmc ? ((h.pct || 0) / 100) * cmc : 0 }));
-        const graph = await mapComputeClusters(cm, cnodes);
-        sendWebJson(request, response, 200, { ok: true, edges: graph.edges, clusters: graph.clusters });
+        // HARD 11s race: this loads PROGRESSIVELY after the bubbles already render, so it must never hang the
+        // connection. A mega-holder graduated token can make fetchTokenHolderRows run long — on timeout we
+        // return an empty graph (bubbles stay, the gold connection layer just no-ops) instead of holding the
+        // socket open for 45s+.
+        const graph = await Promise.race([
+          (async () => {
+            const rows = await fetchTokenHolderRows(cm).catch(() => []);
+            const info = await alphaRadarFetchMc(cm).catch(() => null); const cmc = (info && info.mc) || 0;
+            const cnodes = rows.slice(0, 45).map((h, i) => ({ i, wallet: h.wallet, pct: h.pct || 0, usd: cmc ? ((h.pct || 0) / 100) * cmc : 0 }));
+            return await mapComputeClusters(cm, cnodes);
+          })(),
+          new Promise((res) => setTimeout(() => res({ edges: [], clusters: [], timeout: true }), 11_000))
+        ]);
+        sendWebJson(request, response, 200, { ok: true, edges: graph.edges || [], clusters: graph.clusters || [], timeout: Boolean(graph.timeout) });
       } catch (e) { sendWebJson(request, response, 200, { ok: false, error: String((e && e.message) || e) }); }
       return;
     }
