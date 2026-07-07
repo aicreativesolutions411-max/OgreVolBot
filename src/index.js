@@ -31259,6 +31259,24 @@ async function fetchWalletHoldings(wallet) {
       };
     }).filter((r) => r.mint && r.val > 0).sort((a, b) => b.val - a.val).slice(0, 40);
   } catch { tokens = []; }
+  // ON-CHAIN FALLBACK — Solana Tracker only indexes active/known wallets, so random airdrop-recipient wallets
+  // came back empty ("everyone says 0"). Read the wallet's SPL token accounts straight off the RPC (works for
+  // ANY wallet) and price/label them via one DexScreener batch. This is the fix for the drill-in showing nothing.
+  if (!tokens.length) {
+    try {
+      const res = await rpcRead("holdings: token accounts", (c) => c.getParsedTokenAccountsByOwner(new PublicKey(wallet), { programId: TOKEN_PROGRAM_ID }, "confirmed"));
+      let accts = (res?.value || []).map((a) => { const info = a?.account?.data?.parsed?.info; return { mint: String(info?.mint || ""), bal: Number(info?.tokenAmount?.uiAmount || 0) }; }).filter((x) => x.mint && x.bal > 0);
+      accts.sort((a, b) => b.bal - a.bal);
+      const top = accts.slice(0, 30);
+      const priceByMint = new Map();
+      try {
+        const pairs = await fetchDexScreenerTokenPairsBatch(top.map((t) => t.mint), { timeoutMs: 6000 });
+        for (const p of (pairs || [])) { const m = String(p?.baseToken?.address || ""); if (!m || priceByMint.has(m)) continue; priceByMint.set(m, { price: Number(p.priceUsd) || 0, sym: p.baseToken?.symbol || "", name: p.baseToken?.name || "", image: p.info?.imageUrl || "" }); }
+      } catch { /* prices best-effort — coins still list without a $ value */ }
+      tokens = top.map((t) => { const m = priceByMint.get(t.mint) || {}; return { mint: t.mint, sym: String(m.sym || shortMint(t.mint)).slice(0, 14), name: String(m.name || "").slice(0, 24), val: (m.price ? t.bal * m.price : 0), image: m.image || "" }; })
+        .sort((a, b) => b.val - a.val).slice(0, 40);
+    } catch { /* leave empty */ }
+  }
   const v = { ok: true, wallet, tokens, total: tokens.reduce((s, t) => s + t.val, 0), count: tokens.length };
   walletHoldingsCache.set(wallet, { at: Date.now(), v });
   if (walletHoldingsCache.size > 400) walletHoldingsCache.delete(walletHoldingsCache.keys().next().value);
@@ -31487,11 +31505,17 @@ async function buildXMapReply(target, variant, mode = "bags") {
   const kolsIn = Number(map.kolsIn) || 0;
   const ctas = ["mapped on SlimeWire", "live map on SlimeWire", "who's holding — SlimeWire", "the whole board, SlimeWire"];
   const cta = ctas[Math.abs((Number(String(variant).slice(-4)) || 0)) % ctas.length];
-  // Details + map in one reply: coin stats in the text, the holder bubble-map as the image.
+  // For a COIN: reply with BOTH the holder bubble map AND the airdrop map (owner: "sends the coins airdrop map
+  // shot and the bubble map with mc etc"). Airdrop is best-effort — if it can't build, we still send the map.
+  const media = [png];
+  if (map.kind === "token" && map.mint) {
+    const drop = await renderAirdropMapPng(map.mint).catch(() => null);
+    if (drop && drop.png) media.push(drop.png);
+  }
   const text = map.kind === "token"
-    ? `${map.subject} 🗺️ holder map\nMC ${stat("MARKET CAP")} · Liq ${stat("LIQUIDITY")} · ${stat("AGE")} old · 1H ${stat("1H")}${kolsIn > 0 ? ` · ${kolsIn} KOLs in` : ""}\n${cta}`
+    ? `${map.subject} 🗺️ holder map${media.length > 1 ? " + 💰 airdrop map" : ""}\nMC ${stat("MARKET CAP")} · Liq ${stat("LIQUIDITY")} · ${stat("AGE")} old · 1H ${stat("1H")}${kolsIn > 0 ? ` · ${kolsIn} KOLs in` : ""}\n${cta}`
     : `${map.subject} ${map.mode === "network" ? "network" : "bag"} map 🗺️\n${cta}`;
-  return { text: text.slice(0, 270), mediaBuffer: png, symbol: map.subject, mc: 0 };
+  return { text: text.slice(0, 270), mediaBuffer: png, mediaBuffers: media, symbol: map.subject, mc: 0 };
 }
 
 // TG map card keyboard — tap-through drill buttons (in-chat interactivity): tap a KOL bubble → their bag
@@ -32017,7 +32041,7 @@ async function xReplyPollTick() {
       const gap = minGapMs + Math.floor(Math.random() * 1500);
       const wait = lastPostAt ? (lastPostAt + gap) - Date.now() : 0;
       if (wait > 0) await sleep(Math.min(wait, 20_000));
-      const res = await xReply({ inReplyToId: m.id, text: reply.text, mediaBuffer: reply.mediaBuffer });
+      const res = await xReply({ inReplyToId: m.id, text: reply.text, mediaBuffer: reply.mediaBuffer, mediaBuffers: reply.mediaBuffers });
       if (res.ok) {
         lastPostAt = Date.now();
         state.seen[m.id] = now; delete state.fails[m.id]; state.posts.push(lastPostAt); posted++;
@@ -32064,7 +32088,7 @@ async function handleXReplyCallback(query, userId) {
     if (!q) { await ack("That draft expired — tag us again to re-scan.", true); return true; }
     const reply = await buildXReply(q.mint, q.intent || "scan").catch(() => null);
     if (!reply) { await ack("Couldn't rebuild the scan — try again.", true); return true; }
-    const res = await xReply({ inReplyToId: mPost[1], text: reply.text, mediaBuffer: reply.mediaBuffer });
+    const res = await xReply({ inReplyToId: mPost[1], text: reply.text, mediaBuffer: reply.mediaBuffer, mediaBuffers: reply.mediaBuffers });
     if (res.ok) { delete state.queue[mPost[1]]; state.posts.push(Date.now()); await writeXReplyState(state); await clearKb("✅ Posted to X"); await ack("Posted ✨"); }
     else { await ack(`Post failed: ${res.reason || "try again"}`, true); }
     return true;

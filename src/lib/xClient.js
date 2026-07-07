@@ -294,16 +294,20 @@ async function uploadMedia(buffer) {
   }
   return { id: null, error: lastErr };
 }
-export async function xReply({ inReplyToId, text, mediaBuffer }) {
+export async function xReply({ inReplyToId, text, mediaBuffer, mediaBuffers }) {
   if (!hasXCookies()) return { ok: false, reason: "not configured" };
   try {
-    let mediaId = null, media = "none";
-    if (mediaBuffer) { const up = await uploadMedia(mediaBuffer); mediaId = up.id; media = up.id ? "card" : ("no-card:" + (up.error || "")); }
+    // Up to 4 images per reply (Twitter cap): mediaBuffers (array) OR mediaBuffer (single). Used to send BOTH
+    // the holder bubble map AND the airdrop map in one reply when a coin is tagged.
+    const bufs = (Array.isArray(mediaBuffers) ? mediaBuffers : [mediaBuffer]).filter(Boolean).slice(0, 4);
+    const mediaIds = []; let media = "none";
+    for (const b of bufs) { const up = await uploadMedia(b); if (up.id) mediaIds.push(up.id); else media = "no-card:" + (up.error || ""); }
+    if (mediaIds.length) media = mediaIds.length + "img";
     const variables = {
       tweet_text: String(text || "").slice(0, 279),
       reply: { in_reply_to_tweet_id: String(inReplyToId), exclude_reply_user_ids: [] },
       dark_request: false,
-      media: { media_entities: mediaId ? [{ media_id: mediaId, tagged_users: [] }] : [], possibly_sensitive: false },
+      media: { media_entities: mediaIds.map((id) => ({ media_id: id, tagged_users: [] })), possibly_sensitive: false },
       semantic_annotation_ids: []
     };
     const j = await gql("POST", "CreateTweet", { variables, features: WRITE_FEATURES });

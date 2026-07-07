@@ -892,6 +892,8 @@
     {ic:"👥",label:"Copy / KOL Tracker",route:"copy"},
     {ic:"🎯",label:"Launch Sniper",route:"sniper"},
     {ic:"🚀",label:"Launch a Coin",route:"launch"},
+    {ic:"🗺️",label:"Bubble Map — who's holding (KOLs · whales · clusters)",url:"/map"},
+    {ic:"💰",label:"Airdrop Map — who the dev fed & who's still holding",url:"/airdrop"},
   ];
   function toolLinkHtml(t,onclick){return t.route?'<a href="#'+t.route+'"'+(onclick?' onclick="'+onclick+'"':'')+'><span>'+t.ic+'</span>'+esc(t.label)+'</a>':'<a href="'+esc(t.url)+'" target="_blank"><span>'+t.ic+'</span>'+esc(t.label)+'</a>';}
   function openToolsSheet(){
