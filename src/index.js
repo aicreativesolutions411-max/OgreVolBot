@@ -31512,8 +31512,18 @@ async function buildXMapReply(target, variant, mode = "bags") {
     const drop = await renderAirdropMapPng(map.mint).catch(() => null);
     if (drop && drop.png) media.push(drop.png);
   }
+  // Trench-degen read: MC + concentration verdict (top10) + KOLs aped + age. (Server-side liquidity/1H are
+  // often blank — DexScreener rate-limits our IP — so we lead with signals that are always reliable.)
+  const t10n = parseInt(String(stat("TOP 10") || "").replace(/[^0-9]/g, ""), 10) || 0;
+  const conc = t10n >= 70 ? `top10 ${t10n}% 🔴` : t10n >= 45 ? `top10 ${t10n}% 🟡` : t10n > 0 ? `top10 ${t10n}% 🟢` : "";
+  const hooks = ["who's REALLY holding this 👀", "the whole board — KOLs, whales & clusters", "aped or airdropped? see for yourself 🧪", "peep the bags before you send it 🐸", "every wallet, unfiltered 🗺️"];
+  const hook = hooks[Math.abs((Number(String(variant).slice(-4)) || 0)) % hooks.length];
+  const parts = [`MC ${stat("MARKET CAP")}`];
+  if (conc) parts.push(conc);
+  if (kolsIn > 0) parts.push(`${kolsIn} KOL${kolsIn > 1 ? "s" : ""} in ⭐`);
+  if (stat("AGE") && stat("AGE") !== "—") parts.push(`${stat("AGE")} old`);
   const text = map.kind === "token"
-    ? `${map.subject} 🗺️ holder map${media.length > 1 ? " + 💰 airdrop map" : ""}\nMC ${stat("MARKET CAP")} · Liq ${stat("LIQUIDITY")} · ${stat("AGE")} old · 1H ${stat("1H")}${kolsIn > 0 ? ` · ${kolsIn} KOLs in` : ""}\n${cta}`
+    ? `${map.subject} 🗺️ holder map${media.length > 1 ? " + 💰 airdrop map" : ""}\n${parts.join(" · ")}\n${hook} → slimewire.org`
     : `${map.subject} ${map.mode === "network" ? "network" : "bag"} map 🗺️\n${cta}`;
   return { text: text.slice(0, 270), mediaBuffer: png, mediaBuffers: media, symbol: map.subject, mc: 0 };
 }

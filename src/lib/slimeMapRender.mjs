@@ -29,14 +29,16 @@ const STATE_COLOR = {
   new:   { fill: "#4dd6ff", ring: "#0c5a7a" }, // fresh in — cyan
 };
 
-// Lay out nodes on staggered spokes (firework look): each gets its own angle, radius varies by size tier.
+// Lay out nodes with the GOLDEN ANGLE (sunflower) so consecutive-by-size nodes land ~137° apart — the biggest
+// holders (which arrive first, sorted by %) get spread evenly around the hub instead of stacking in one spot
+// where their labels collided. Whales sit on a comfortable inner ring (not on the hub), dust drifts outward.
 function layout(nodes, cx, cy, rMin, rMax) {
-  const n = nodes.length;
-  const r = rng(n + 7);
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  const r = rng(nodes.length + 7);
   return nodes.map((node, i) => {
-    const ang = (i / n) * Math.PI * 2 + (r() - 0.5) * 0.10;      // even spread + tiny jitter
-    const tier = Math.max(0, Math.min(1, node.weight || 0));      // 0..1
-    const rad = rMin + (rMax - rMin) * (0.18 + 0.82 * (1 - tier)) + (r() - 0.5) * 96; // whales sit closer, wide firework spread
+    const ang = i * golden;                                       // even angular spread, no clustering
+    const tier = Math.max(0, Math.min(1, node.weight || 0));      // 0..1 (1 = biggest)
+    const rad = rMin + (rMax - rMin) * (0.30 + 0.66 * (1 - tier)) + (r() - 0.5) * 40; // whales inner ring, dust outer
     return { ...node, x: cx + Math.cos(ang) * rad, y: cy + Math.sin(ang) * rad, size: 7 + tier * 22 };
   });
 }
@@ -74,7 +76,12 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
       : `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(p.size - 1).toFixed(1)}" fill="url(#${g})"/>` +
         `<ellipse cx="${(p.x - p.size * 0.28).toFixed(1)}" cy="${(p.y - p.size * 0.34).toFixed(1)}" rx="${(p.size * 0.36).toFixed(1)}" ry="${(p.size * 0.22).toFixed(1)}" fill="#ffffff" fill-opacity="0.4"/>`;
     const rim = `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${p.size.toFixed(1)}" fill="none" stroke="${c.ring}" stroke-width="2.5"/><circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(p.size + 1.6).toFixed(1)}" fill="none" stroke="${c.fill}" stroke-width="1" stroke-opacity="0.6"/>`;
-    return `<g>${glow}${body}${rim}</g>`;
+    // % printed ON the big bubbles (heavy dark outline so it's legible over any sphere/avatar even if two touch)
+    // — the side pills stacked and hid the number; this always shows each whale's % right on its bubble.
+    const pctTxt = (p.pct != null && +p.pct > 0 && p.size >= 15)
+      ? `<text x="${p.x.toFixed(1)}" y="${(p.y + p.size * 0.42 + 4).toFixed(1)}" text-anchor="middle" font-family="Arial Black, Arial" font-size="${Math.max(11, Math.min(19, 8 + p.size * 0.44)).toFixed(0)}" font-weight="900" fill="#ffffff" paint-order="stroke" stroke="#04120a" stroke-width="4">${(+p.pct).toFixed(+p.pct >= 10 ? 0 : 1)}%</text>`
+      : "";
+    return `<g>${glow}${body}${rim}${pctTxt}</g>`;
   }).join("");
 
   // Labels for the biggest / named nodes
