@@ -161,7 +161,9 @@ function parseTweetResult(result) {
     username: String(uname),
     userId: String(legacy.user_id_str || user?.rest_id || ""),
     inReplyToId: String(legacy.in_reply_to_status_id_str || legacy.conversation_id_str || ""),
+    inReplyToScreen: String(legacy.in_reply_to_screen_name || "").toLowerCase(),   // who this tweet REPLIES to
     conversationId: String(legacy.conversation_id_str || ""),                     // thread ROOT (CA often lives here)
+    mentions: (legacy.entities?.user_mentions || []).map((u) => String(u.screen_name || "").toLowerCase()).filter(Boolean), // X-parsed @-mentions (works even when the handle isn't in the visible reply text)
     urls: (legacy.entities?.urls || []).map((u) => u.expanded_url || u.url).filter(Boolean), // expanded links (dexscreener/pump CA)
     permanentUrl: uname && id ? `https://x.com/${uname}/status/${id}` : "",
     createdAtMs: legacy.created_at ? new Date(legacy.created_at).getTime() : 0
@@ -195,7 +197,9 @@ async function notificationMentions(count = 20) {
       username: String(u.screen_name || ""),
       userId: String(t.user_id_str || ""),
       inReplyToId: String(t.in_reply_to_status_id_str || t.conversation_id_str || ""),
+      inReplyToScreen: String(t.in_reply_to_screen_name || "").toLowerCase(),      // who this tweet REPLIES to
       conversationId: String(t.conversation_id_str || ""),                        // thread ROOT
+      mentions: (t.entities?.user_mentions || []).map((x) => String(x.screen_name || "").toLowerCase()).filter(Boolean), // X-parsed @-mentions (present even when handle isn't in visible reply text)
       urls: (t.entities?.urls || []).map((x) => x.expanded_url || x.url).filter(Boolean), // expanded links
       permanentUrl: u.screen_name ? `https://x.com/${u.screen_name}/status/${id}` : "",
       createdAtMs: t.created_at ? new Date(t.created_at).getTime() : 0
@@ -213,17 +217,28 @@ export async function xSearchMentions(count = 20) {
   const tagRe = new RegExp("@(" + handles.map((h) => h.replace(/[^a-z0-9_]/g, "")).join("|") + ")\\b", "i");
   const self = new Set(handles);
   const byId = new Map();
+  // Does this tweet REALLY tag us? Use X's authoritative signals, NOT just regex-on-text: a reply on X puts
+  // the handle in entities.user_mentions / in_reply_to_screen_name, and often NOT in the visible full_text —
+  // so a text-only check dropped every reply-mention (the "10 notifs → 0 uniq, bot stays silent" bug).
+  const mentionsUs = (t) =>
+    (Array.isArray(t.mentions) && t.mentions.some((m) => self.has(m))) ||   // X-parsed @-mentions
+    (t.inReplyToScreen && self.has(t.inReplyToScreen)) ||                    // a direct reply to us
+    tagRe.test(t.text || "");                                               // handle literally in the text
   const add = (t, requireTag) => {
     if (!t || !t.id || !t.username) return;
     if (self.has(t.username.toLowerCase())) return;              // never treat our own tweets as mentions
     // The notifications feed's globalObjects also holds PARENT/quoted tweets that don't tag us — only keep
-    // ones that actually @-mention us so we never reply to a random coin tweet we were merely quoted under.
-    if (requireTag && !tagRe.test(t.text || "")) return;
+    // ones that actually mention us so we never reply to a random coin tweet we were merely quoted under.
+    if (requireTag && !mentionsUs(t)) return;
     if (!byId.has(t.id)) byId.set(t.id, t);
   };
-  let n1 = 0, n2 = 0; const errs = [];
+  let n1 = 0, n2 = 0; const errs = []; let sample = "";
   // SOURCE 1: notifications feed — instant + complete (the account's real @mentions).
-  try { const arr = await notificationMentions(count); n1 = arr.length; for (const t of arr) add(t, true); }
+  try {
+    const arr = await notificationMentions(count); n1 = arr.length; for (const t of arr) add(t, true);
+    // If notifications returned tweets but none passed the mention filter, capture WHY from the newest one.
+    if (arr.length && byId.size === 0) { const t = arr[0]; sample = ` sample[@${t.username} mentions=${(t.mentions || []).join("/") || "-"} replyTo=${t.inReplyToScreen || "-"} txt=${JSON.stringify(String(t.text || "").slice(0, 40))}]`; }
+  }
   catch (e) { errs.push("notif:" + String(e?.message || e).slice(0, 50)); }
   // SOURCE 2: search — UNION, not just a fallback. Catches anything notifications dropped (and vice-versa),
   // so a tag can't slip through a single-source gap. Run once PER handle spelling. Best-effort per query.
@@ -240,7 +255,7 @@ export async function xSearchMentions(count = 20) {
   const out = [...byId.values()].sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
   // DIAGNOSTIC: both sources previously swallowed errors, so a double failure returned [] with NO log — the
   // "poll ticks but never sees a mention" blind spot. Now every fetch reports what it saw.
-  try { console.log(`[xreply] mentions: handles=[${handles.join(",")}] notif=${n1} search=${n2} → ${out.length} uniq${errs.length ? " · ERR " + errs.join(" | ") : ""}`); } catch { /* logging is best-effort */ }
+  try { console.log(`[xreply] mentions: handles=[${handles.join(",")}] notif=${n1} search=${n2} → ${out.length} uniq${errs.length ? " · ERR " + errs.join(" | ") : ""}${out.length === 0 ? sample : ""}`); } catch { /* logging is best-effort */ }
   return out;
 }
 export async function xGetTweet(id) {
