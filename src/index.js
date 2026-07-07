@@ -30843,12 +30843,17 @@ async function fetchTokenHolderRows(mint) {
 // COIN map: detect the token from METADATA first (pump + DexScreener) so a real coin is NEVER mis-read as a
 // wallet, pull the full coin info (MC · liq · age · 1H%) onto the card, then map its holders (KOL-labeled).
 async function buildTokenHolderMap(mint) {
-  const idx = await mapKolIdentityIndex().catch(() => new Map());
-  // 1) COIN INFO — this ALSO answers "is this a token?" (a wallet address has no pump/dex metadata). Same
-  //    pump-first / dex-fallback precedence as the scan card, so MC/liq/1H/age are accurate.
-  const [pumpMeta, pairs] = await Promise.all([
+  const _t0 = Date.now();
+  // PARALLEL — kol identity, coin info (pump+dex, answers "is this a token?"), AND holders all fire at ONCE
+  // (~2s) instead of chaining kolIdx → coin-info → holders. The old flow ALSO retried the holder fetch on an
+  // empty read (500ms + a second ≤12s attempt = up to ~24s), which tripped /api/map's 14s cap → "chain is
+  // slow" on fresh coins. Dropped that retry: a token already returns its details card on thin holders and the
+  // page refreshes every 30s, so the bubbles fill on their own. Holders for a non-token come back empty fast.
+  const [idx, pumpMeta, pairs, holderRows] = await Promise.all([
+    mapKolIdentityIndex().catch(() => new Map()),
     getPumpFunTokenMetadata(mint).catch(() => null),
     fetchDexScreenerTokenPairsFallback(mint).catch(() => null),
+    fetchTokenHolderRows(mint).catch(() => []),
   ]);
   const best = bestDexPairForToken(mint, pairs);
   const dexMeta = best ? metadataFromDexPair(mint, best) : null;
@@ -30861,12 +30866,6 @@ async function buildTokenHolderMap(mint) {
   const createdAt = normalizePairCreatedAt(dexMeta?.pairCreatedAt) || pumpMeta?.pairCreatedAt || pumpMeta?.createdAt || 0;
   const isToken = Boolean(sym || mc > 0 || pumpMeta?.symbol || String(mint).endsWith("pump"));
   if (!isToken) return { kind: "token", mint, isToken: false, nodes: [] };  // truly not a token → caller falls to wallet map
-
-  // 2) HOLDERS — ST (more) → on-chain (free). A token ALWAYS renders as a token map now, even if holders are thin.
-  // Retry once on an empty first read — holders are the whole point of a bubble map, and the first RPC/ST call
-  // can transiently return nothing on a fresh coin. Cheap (only fires when empty) and keeps "always shows bubbles".
-  let holderRows = await fetchTokenHolderRows(mint).catch(() => []);
-  if (!holderRows.length) { await new Promise((r) => setTimeout(r, 500)); holderRows = await fetchTokenHolderRows(mint).catch(() => []); }
   const maxPct = holderRows.reduce((m, h) => Math.max(m, h.pct || 0), 0) || 1;
   let kolsIn = 0, whales = 0;
   const nodes = await Promise.all(holderRows.slice(0, 45).map(async (h, i) => {
@@ -30899,6 +30898,7 @@ async function buildTokenHolderMap(mint) {
     { label: "1H", value: Number.isFinite(ch1) ? `${ch1 >= 0 ? "+" : ""}${Math.round(ch1)}%` : "—" },
     { label: "TOP 10", value: top10 > 0 ? `${Math.round(top10)}%` : "—" },
   ];
+  try { console.log(`[map] ${sym || shortMint(mint)} ${Date.now() - _t0}ms · holders=${holderRows.length} kols=${kolsIn}`); } catch { /* best-effort */ }
   return {
     kind: "token", isToken: true, mint,
     subject: `$${(sym || shortMint(mint)).slice(0, 11)}`,
