@@ -258,10 +258,15 @@ export function buildAirdropSvg({ subject = "$SLIME", subtitle = "airdrop", stat
     const nodeByIndex = new Map(nodes.map((n) => [n.i, n]));
     const sourceX = 150, sourceY = 290;
     const cols = [360, 535, 710];
+    // Spread + vertically center the rows between the header and the transfer table — a small drop (few
+    // rows) otherwise bunched at the top and left a dead band above the table.
+    const gridRows = Math.max(1, Math.ceil(flowRows.length / cols.length));
+    const rowH = gridRows > 1 ? Math.min(100, (530 - 158) / (gridRows - 1)) : 0;
+    const startY = 158 + Math.max(0, (530 - 158 - (gridRows - 1) * rowH) / 2);
     const placed = flowRows.map((row, i) => {
       const node = nodeByIndex.get(row.i) || {};
       const col = i % cols.length;
-      const y = 158 + Math.floor(i / cols.length) * 68;
+      const y = startY + Math.floor(i / cols.length) * rowH;
       return { ...node, ...row, x: cols[col], y, size: 18 + Math.max(0.15, Math.min(1, node.weight || 0.35)) * 18 };
     });
     const paths = placed.map((row, i) => {
