@@ -30924,27 +30924,35 @@ function airdropBudgetOk() {
 // right after launch), parse per-owner token-balance deltas — a tx where the dev's balance DROPS and other
 // wallets' balances RISE is a drop. Excludes the AMM pool (that's a sell, not an airdrop). Returns
 // { recips: Map<owner, tokensReceived>, bagsDropped }.
-async function scanAirdropRecipients(devWallet, mint, poolExclude = "", maxTx = 70) {
+async function scanAirdropRecipients(devWallet, mint, poolExclude = "", maxTx = 55, deadlineMs = 9500) {
   const recips = new Map(); let bagsDropped = 0;
   let pk; try { pk = new PublicKey(devWallet); } catch { return { recips, bagsDropped }; }
   const exclude = new Set([devWallet, poolExclude].filter(Boolean));
+  const deadline = Date.now() + deadlineMs;
+  const consume = (tx) => {
+    const pre = tx?.meta?.preTokenBalances || [], post = tx?.meta?.postTokenBalances || [];
+    if (!pre.length && !post.length) return;
+    const delta = new Map();
+    for (const b of pre) if (b.mint === mint && b.owner) delta.set(b.owner, (delta.get(b.owner) || 0) - Number(b.uiTokenAmount?.uiAmount || 0));
+    for (const b of post) if (b.mint === mint && b.owner) delta.set(b.owner, (delta.get(b.owner) || 0) + Number(b.uiTokenAmount?.uiAmount || 0));
+    if ((delta.get(devWallet) || 0) >= 0) return;                    // dev didn't send out here
+    let sentHere = false;
+    for (const [o, d] of delta) { if (!exclude.has(o) && d > 0) { recips.set(o, (recips.get(o) || 0) + d); sentHere = true; } }
+    if (sentHere) bagsDropped += 1;
+  };
   try {
     const sigs = await rpcRead("airdrop: dev sigs", (c) => c.getSignaturesForAddress(pk, { limit: 1000 }), { retries: 0 }).catch(() => []);
     if (!Array.isArray(sigs) || !sigs.length) return { recips, bagsDropped };
     const candidates = sigs.slice(-maxTx).map((s) => s.signature).reverse(); // oldest-first
-    for (const sig of candidates) {
-      if (!airdropBudgetOk()) break;
-      airdropTxUsedToday += 1;
-      const tx = await rpcRead("airdrop: tx", (c) => c.getParsedTransaction(sig, { maxSupportedTransactionVersion: 0 }), { retries: 0 }).catch(() => null);
-      const pre = tx?.meta?.preTokenBalances || [], post = tx?.meta?.postTokenBalances || [];
-      if (!pre.length && !post.length) continue;
-      const delta = new Map();
-      for (const b of pre) if (b.mint === mint && b.owner) delta.set(b.owner, (delta.get(b.owner) || 0) - Number(b.uiTokenAmount?.uiAmount || 0));
-      for (const b of post) if (b.mint === mint && b.owner) delta.set(b.owner, (delta.get(b.owner) || 0) + Number(b.uiTokenAmount?.uiAmount || 0));
-      if ((delta.get(devWallet) || 0) >= 0) continue;                 // dev didn't send out here
-      let sentHere = false;
-      for (const [o, d] of delta) { if (!exclude.has(o) && d > 0) { recips.set(o, (recips.get(o) || 0) + d); sentHere = true; } }
-      if (sentHere) bagsDropped += 1;
+    // Parse in CONCURRENT batches (sequential 55× getParsedTransaction blows the endpoint's time budget).
+    // Soft deadline stops launching new batches once we're out of time — partial recipients still render.
+    const BATCH = 10;
+    for (let i = 0; i < candidates.length; i += BATCH) {
+      if (Date.now() > deadline || !airdropBudgetOk()) break;
+      const slice = candidates.slice(i, i + BATCH);
+      airdropTxUsedToday += slice.length;
+      const txs = await Promise.all(slice.map((sig) => rpcRead("airdrop: tx", (c) => c.getParsedTransaction(sig, { maxSupportedTransactionVersion: 0 }), { retries: 0 }).catch(() => null)));
+      for (const tx of txs) consume(tx);
     }
   } catch { /* partial is fine */ }
   return { recips, bagsDropped };
