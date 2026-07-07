@@ -207,7 +207,11 @@ async function notificationMentions(count = 20) {
   }
   return out.sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
 }
-export async function xSearchMentions(count = 20) {
+// opts.includeSearch=false skips the SearchTimeline union (notifications only). The poller runs search on a
+// slow cadence: 2 searches (one per handle spelling) EVERY 30s tick was ~240 searches/hr → constant 429s that
+// ALSO starved the KOL first-responder + trench-watch, which share the same search quota. Notifications is the
+// instant, complete source; search is a safety net that doesn't need to run every tick.
+export async function xSearchMentions(count = 20, { includeSearch = true } = {}) {
   // Search BOTH the logged-in account's real handle (from whoami) AND the configured/TG handle — they can
   // differ (e.g. @SlimeWirebot vs @SlimeWiredBot), and a tag of one spelling would otherwise be invisible to
   // a search for the other. We reply from the cookie account either way, so a union is strictly safer.
@@ -248,7 +252,7 @@ export async function xSearchMentions(count = 20) {
   catch (e) { errs.push("notif:" + String(e?.message || e).slice(0, 50)); }
   // SOURCE 2: search — UNION, not just a fallback. Catches anything notifications dropped (and vice-versa),
   // so a tag can't slip through a single-source gap. Run once PER handle spelling. Best-effort per query.
-  for (const h of handles) {
+  for (const h of includeSearch ? handles : []) {
     try {
       const j = await gql("GET", "SearchTimeline", { variables: { rawQuery: `@${h} -filter:retweets`, count: Math.min(40, count), querySource: "typed_query", product: "Latest" }, features: READ_FEATURES });
       const instr = j?.data?.search_by_raw_query?.search_timeline?.timeline?.instructions || [];

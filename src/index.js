@@ -94,7 +94,7 @@ import {
 import { createTokenMetadataResolver } from "./lib/tokenMetadataResolver.js";
 import { createPumpPortalStream } from "./lib/pumpPortalStream.js";
 import { computeSlimeShield, slimeShieldHasHardDanger } from "./lib/slimeShield.js";
-import { computeOnchainDistribution, computeManyHolders } from "./lib/onchainHolders.js";
+import { computeOnchainDistribution, computeManyHolders, excludePoolOwnerRows } from "./lib/onchainHolders.js";
 import * as callerIntel from "./lib/callerIntel.js";
 import { computeCalibration as computeAutopilotCalibration, computeCalibrationByMode, modeScorecard } from "./lib/selfCalibration.js";
 import { r2PutObject, r2Configured } from "./lib/r2.js";
@@ -30970,7 +30970,9 @@ async function fetchTokenHolderRows(mint) {
         wallet: firstString(h.wallet, h.address, h.owner, h.account, h.holder),
         pct: firstMeaningfulNumber(h.percentage, h.pct, h.percent, h.share, h.ownership) || 0,
       })).filter((r) => r.wallet && r.pct > 0);
-      if (rows.length) return rows.sort((a, b) => b.pct - a.pct).slice(0, 150);
+      // ST counts the AMM pool / bonding curve as a "holder" — drop it or a fresh coin's map shows one
+      // mega bubble holding ~all supply (owner: "showed bubble map as 1 holds all which cant be right").
+      if (rows.length) return await excludePoolOwnerRows(rows.sort((a, b) => b.pct - a.pct).slice(0, 150), { rpcRead });
     } catch { /* fall through to on-chain */ }
   }
   // TOP 150 real wallets — memory-safe streamed getProgramAccounts (raw fetch + hard byte cap inside
@@ -31005,7 +31007,7 @@ async function buildTokenHolderMap(mint) {
   // so it's the server-side fallback for LIQUIDITY + 1H%, which were "always blank" on the X card (that card is
   // rendered on Render, so it can't use the client-IP DexScreener enrichment the web page does). reserve_in_usd
   // → liquidity, price_change_percentage.h1 → 1H.
-  const [idx, pumpMeta, pairs, holderRows, geckoMeta] = await Promise.all([
+  let [idx, pumpMeta, pairs, holderRows, geckoMeta] = await Promise.all([
     mapKolIdentityIndex().catch(() => new Map()),
     getPumpFunTokenMetadata(mint).catch(() => null),
     fetchDexScreenerTokenPairsFallback(mint).catch(() => null),
@@ -31022,10 +31024,16 @@ async function buildTokenHolderMap(mint) {
   const liq = pick(pumpMeta?.liquidityUsd, dexMeta?.liquidityUsd) || firstMeaningfulNumber(geckoMeta?.liquidityUsd) || 0;
   const ch1 = firstMeaningfulNumber(dexMeta?.priceChange?.h1, geckoMeta?.priceChange?.h1, geckoMeta?.priceChange?.h1Percent, pumpMeta?.priceChange?.h1);
   const createdAt = normalizePairCreatedAt(dexMeta?.pairCreatedAt) || pumpMeta?.pairCreatedAt || pumpMeta?.createdAt || 0;
-  const isToken = Boolean(sym || mc > 0 || pumpMeta?.symbol || String(mint).endsWith("pump"));
+  let isToken = Boolean(sym || mc > 0 || pumpMeta?.symbol || String(mint).endsWith("pump"));
+  // Metadata sources are all IP-rate-limited or slow sometimes (dex=null, gecko timeout) — a real coin then
+  // mis-rendered as a WALLET map. The chain is the authority: if the address IS an SPL mint, it's a token.
+  if (!isToken) { try { await getMintTokenProgramId(mint); isToken = true; } catch { /* not a mint → wallet path */ } }
   if (!isToken) return { kind: "token", mint, isToken: false, nodes: [] };  // truly not a token → caller falls to wallet map
   // Coin PFP for the center bubble — DexScreener pair image → pump.fun image → on-chain metadata uri.
   const coinLogo = firstString(best?.info?.imageUrl, dexMeta?.imageUrl, dexMeta?.info?.imageUrl, pumpMeta?.image, pumpMeta?.imageUrl, pumpMeta?.image_uri, pumpMeta?.uri);
+  // Belt-and-braces pool drop: the DEX pair address itself must never bubble as a holder.
+  const pairAddr = String(best?.pairAddress || best?.address || "").trim();
+  if (pairAddr) holderRows = holderRows.filter((h) => h.wallet !== pairAddr);
   const maxPct = holderRows.reduce((m, h) => Math.max(m, h.pct || 0), 0) || 1;
   let kolsIn = 0, whales = 0;
   const nodes = await Promise.all(holderRows.slice(0, 150).map(async (h, i) => {
@@ -31060,7 +31068,7 @@ async function buildTokenHolderMap(mint) {
   ];
   try { console.log(`[map] ${sym || shortMint(mint)} ${Date.now() - _t0}ms · holders=${holderRows.length} kols=${kolsIn} · liq=${liq} src[dex=${dexMeta ? (dexMeta.liquidityUsd || 0) : "null"} gk=${geckoMeta ? (geckoMeta.liquidityUsd == null ? "null" : geckoMeta.liquidityUsd) : "MISS"} pump=${pumpMeta ? (pumpMeta.liquidityUsd || 0) : "null"}] ch1=${ch1}`); } catch { /* best-effort */ }
   return {
-    kind: "token", isToken: true, mint,
+    kind: "token", isToken: true, mint, mc,                // raw MC number — X reply receipts + airdrop hint
     subject: `$${(sym || shortMint(mint)).slice(0, 11)}`,
     ticker: sym || "", coinLogo: coinLogo || "",           // coin PFP + ticker for the center bubble
     subtitle: nodes.length ? `${nodes.length} top holders` : "holders loading…",
@@ -31121,9 +31129,12 @@ async function scanAirdropRecipients(devWallet, mint, poolExclude = "", maxTx = 
   } catch { /* partial is fine */ }
   return { recips, bagsDropped };
 }
-async function buildAirdropMap(mint, devOverride = "") {
+async function buildAirdropMap(mint, devOverride = "", tokenHint = null) {
   // devOverride = scan THIS wallet's outbound sends of the coin (used when the user pastes an AIRDROPPER
   // WALLET, not the coin's creator). Cache is keyed per airdropper so a coin viewed from two senders doesn't collide.
+  // tokenHint = { isToken, sym, mc } from a caller that ALREADY resolved the coin (the X map reply) — without
+  // it, a non-pump coin whose dex/pump reads miss was mis-judged "not a token" and the airdrop map silently
+  // skipped (the "tag posted the bubble map but no airdrop map" bug).
   const cacheKey = solanaPublicKeyLike(devOverride) ? `${mint}|${devOverride}` : mint;
   const cached = airdropMapCache.get(cacheKey);
   if (cached && Date.now() - cached.at < AIRDROP_MAP_TTL) return cached.v;
@@ -31144,9 +31155,11 @@ async function buildAirdropMap(mint, devOverride = "") {
   const dexMeta = best ? metadataFromDexPair(mint, best) : null;
   const onCurve = Boolean(pumpMeta && !pumpMeta.graduated && !(dexMeta && dexMeta.marketCap));
   const pick = (p, d) => onCurve ? firstMeaningfulNumber(p, d) : firstMeaningfulNumber(d, p);
-  const sym = String(dexMeta?.symbol || pumpMeta?.symbol || "").trim();
-  const mc = pick(pumpMeta?.marketCap, dexMeta?.marketCap ?? dexMeta?.fdv) || 0;
-  const isToken = Boolean(sym || mc > 0 || pumpMeta?.symbol || String(mint).endsWith("pump"));
+  const sym = String(dexMeta?.symbol || pumpMeta?.symbol || tokenHint?.sym || "").trim();
+  const mc = pick(pumpMeta?.marketCap, dexMeta?.marketCap ?? dexMeta?.fdv) || Number(tokenHint?.mc) || 0;
+  let isToken = Boolean(sym || mc > 0 || pumpMeta?.symbol || String(mint).endsWith("pump") || tokenHint?.isToken);
+  // Chain-authoritative fallback (same as the holder map): metadata sources flake, mints don't.
+  if (!isToken) { try { await getMintTokenProgramId(mint); isToken = true; } catch { /* not a mint */ } }
   if (!isToken) return { kind: "airdrop", mint, isToken: false, nodes: [] };
   // Total supply (DECIMAL-ADJUSTED UI amount) → price per token + token labels. getTokenSupply().value.uiAmount
   // is already decimal-adjusted; pumpMeta.totalSupply is RAW base units (1e15) → de-scale as a last resort.
@@ -31526,10 +31539,10 @@ async function renderSubjectMapPng(target, mode = "bags") {
 // "looks like 2 same cards"). Nodes keep their diamond/sold/crown state; center = the coin/airdropper pfp.
 const airdropRenderCache = new Map();
 let _creamBgPath;
-async function renderAirdropMapPng(mint) {
+async function renderAirdropMapPng(mint, tokenHint = null) {
   const cached = airdropRenderCache.get(mint);
   if (cached && Date.now() - cached.at < MAP_RENDER_TTL) return { png: cached.png, map: cached.map };
-  const map = await buildAirdropMap(mint).catch(() => null);
+  const map = await buildAirdropMap(mint, "", tokenHint).catch(() => null);
   if (!map || !map.isToken || !Array.isArray(map.nodes) || !map.nodes.length) return { png: null, map: null };
   const { renderSlimeAirdropPng } = await import("./lib/slimeMapRender.mjs");
   if (_creamBgPath === undefined) { const p = path.join(WEB_STATIC_DIR, "ui", "slime-cream.png"); _creamBgPath = fsSync.existsSync(p) ? p : null; }
@@ -31551,8 +31564,12 @@ async function buildXMapReply(target, variant, mode = "bags") {
   // shot and the bubble map with mc etc"). Airdrop is best-effort — if it can't build, we still send the map.
   const media = [png];
   if (map.kind === "token" && map.mint) {
-    const drop = await renderAirdropMapPng(map.mint).catch(() => null);
+    // Pass what the holder map already resolved so the airdrop builder can't mis-judge "not a token" (the
+    // silent airdrop-map miss on non-pump coins). Log any remaining skip — never fail invisibly again.
+    const drop = await renderAirdropMapPng(map.mint, { isToken: true, sym: map.ticker, mc: map.mc })
+      .catch((e) => { console.log(`[xreply]   airdrop png THREW: ${String(e?.message || e).slice(0, 120)}`); return null; });
     if (drop && drop.png) media.push(drop.png);
+    else console.log(`[xreply]   airdrop map skipped (no nodes) mint=${map.mint}`);
   }
   // Trench-degen read: MC + concentration verdict (top10) + KOLs aped + age. (Server-side liquidity/1H are
   // often blank — DexScreener rate-limits our IP — so we lead with signals that are always reliable.)
@@ -31567,7 +31584,9 @@ async function buildXMapReply(target, variant, mode = "bags") {
   const text = map.kind === "token"
     ? `${map.subject} 🗺️ holder map${media.length > 1 ? " + 💰 airdrop map" : ""}\n${parts.join(" · ")}\n${hook} → slimewire.org`
     : `${map.subject} ${map.mode === "network" ? "network" : "bag"} map 🗺️\n${cta}`;
-  return { text: text.slice(0, 270), mediaBuffer: png, mediaBuffers: media, symbol: map.subject, mc: 0 };
+  // symbol WITHOUT the "$" (map.subject carries one; callers prefix their own → "$$TORO" in logs/receipts).
+  // mc = real number so 🎯 receipts track map replies from the right baseline (was hardcoded 0).
+  return { text: text.slice(0, 270), mediaBuffer: png, mediaBuffers: media, symbol: map.ticker || map.subject.replace(/^\$+/, ""), mc: Number(map.mc) || 0 };
 }
 
 // TG map card keyboard — tap-through drill buttons (in-chat interactivity): tap a KOL bubble → their bag
@@ -31654,6 +31673,7 @@ function xReplyStateFile() { return path.join(CONFIG.dataDir, "x-reply-state.jso
 let xReplyStateCache = null;
 let xPollRunning = false;   // reentrancy guard: a tick can pace-sleep between replies, so it may outlast the poll interval
 let xPollRunningAt = 0;     // when the current tick started — lets us force-reset a HUNG tick (see xReplyPollTick)
+let _xPollTickN = 0;        // tick counter — the SearchTimeline union runs every 4th tick (quota, see xSearchMentions)
 async function readXReplyState() {
   if (xReplyStateCache) return xReplyStateCache;
   let s = null; try { s = await readJson(xReplyStateFile()); } catch { s = null; }
@@ -32028,8 +32048,11 @@ async function xReplyPollTick() {
   console.log("[xreply] tick…");   // heartbeat: proves the interval fires + a tick actually starts (temporary diag)
   try {
   let mentions = [];
+  // Search union only every 4th tick — notifications is the instant source; running 2 SearchTimeline calls
+  // every 30s burned the shared search quota into constant 429s (starving the KOL first-responder too).
+  _xPollTickN = (_xPollTickN + 1) % 4;
   // Hard 20s timeout on the mention fetch — an X GraphQL call that hangs must NOT freeze the whole poll.
-  try { mentions = await Promise.race([xSearchMentions(20), new Promise((_, rej) => setTimeout(() => rej(new Error("mentions fetch timeout")), 20_000))]); }
+  try { mentions = await Promise.race([xSearchMentions(20, { includeSearch: _xPollTickN === 0 }), new Promise((_, rej) => setTimeout(() => rej(new Error("mentions fetch timeout")), 20_000))]); }
   catch (e) { console.log(`[xreply] tick: mentions fetch failed (${String(e?.message || e).slice(0, 70)})`); return { checked: 0, results, error: String(e?.message || e).slice(0, 140) }; }
   if (!mentions.length) return { checked: 0, results };
   const state = await readXReplyState();
@@ -32771,6 +32794,7 @@ async function xScorecardTick() {
     if (now - (s.lastScorecardAt || 0) < 6.8 * 86_400_000) return;   // ~weekly cadence
     const wk = Object.values(s.coins).filter((c) => c.entryMc > 0 && now - c.firstAt < 8 * 86_400_000);
     if (wk.length < 3) return;                                       // not enough to brag about yet
+    if (!xBroadcastGateOk()) return;                                 // global gate — weekly post can wait a tick
     const scored = wk.map((c) => ({ ...c, mult: (c.peakMc > 0 && c.entryMc > 0) ? c.peakMc / c.entryMc : 0 })).sort((a, b) => b.mult - a.mult);
     const hits = scored.filter((c) => c.mult >= 2).length;
     const best = scored[0];
@@ -32780,7 +32804,7 @@ async function xScorecardTick() {
       "Free reads all week. Tag @SlimeWirebot on any coin 🐸",
     ].join("\n").slice(0, 279);
     const res = await xPost({ text });
-    if (res.ok) { s.lastScorecardAt = now; await writeXCoins(s); console.log(`[xbot] 📊 scorecard posted id=${res.id}`); await xReplyOwnerNotify(`📊 X weekly scorecard posted (${wk.length} coins · ${hits} 2x+)`).catch(() => {}); }
+    if (res.ok) { xMarkBroadcast(); s.lastScorecardAt = now; await writeXCoins(s); console.log(`[xbot] 📊 scorecard posted id=${res.id}`); await xReplyOwnerNotify(`📊 X weekly scorecard posted (${wk.length} coins · ${hits} 2x+)`).catch(() => {}); }
   } catch (e) { console.log(`[xbot] scorecard tick err: ${String(e?.message || e).slice(0, 100)}`); }
 }
 

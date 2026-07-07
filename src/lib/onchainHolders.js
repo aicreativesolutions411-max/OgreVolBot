@@ -22,11 +22,21 @@ export const POOL_OWNER_PROGRAMS = new Set([
   "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8", // Raydium Liquidity Pool v4
   "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C", // Raydium CPMM
   "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK", // Raydium CLMM
+  "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",  // Raydium LaunchLab (letsbonk bonding curve — a fresh bonk coin's curve held ~all supply and rendered as one mega holder bubble)
   "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",  // Meteora DLMM
   "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB", // Meteora Dynamic AMM Pools
+  "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN",  // Meteora Dynamic Bonding Curve (our own launchpad rail)
+  "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG",  // Meteora DAMM v2
   "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",  // Orca Whirlpool
   "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM", // Orca Token Swap v2
   "SwaPpA9LAaLfeLi3a68M4DjnLqgtticKg6CnyNwgAC8",  // Saber / generic swap
+]);
+
+// Pool AUTHORITY wallets that can't be caught by the program check above: Raydium v4 vaults are owned by
+// this global authority PDA, and reading ITS account doesn't reveal the AMM program — so v4 pools slipped
+// through classification and showed as a whale bubble. Match the wallet directly.
+export const KNOWN_POOL_WALLETS = new Set([
+  "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1", // Raydium AMM v4 global authority
 ]);
 
 // Common burn / incinerator destinations.
@@ -94,6 +104,7 @@ export async function computeOnchainDistribution({ mint, creatorWallet = "", rpc
   const isBurn = (accAddr) => { const o = ownerOf(accAddr); return !!(o && BURN_ADDRESSES.has(o)); };
   const isPool = (accAddr) => {
     const o = ownerOf(accAddr); if (!o) return false;
+    if (KNOWN_POOL_WALLETS.has(o)) return true;
     const prog = ownerProgram.get(o);
     return !!(prog && POOL_OWNER_PROGRAMS.has(prog));
   };
@@ -157,6 +168,31 @@ export async function computeOnchainDistribution({ mint, creatorWallet = "", rpc
     // not just the aggregate. Pools/curve/burn already excluded above, so these are real holders only.
     holders: realHolders.slice(0, 40).map((h) => ({ wallet: h.owner, ui: h.ui, pct: round1(clampPct(h.ui, supply)) })),
   };
+}
+
+// Drop pool/curve/burn wallets from an ALREADY-FETCHED holder-row list ({wallet, pct}). The Solana Tracker
+// holders feed includes the AMM pool / bonding curve as a "holder", so a fresh coin's map showed ONE mega
+// bubble "holding" ~all supply (it was the curve, not a person). Classifies the top `probeLimit` owners with
+// one getMultipleAccountsInfo read; best-effort — on RPC failure the known-wallet/burn drops still apply.
+export async function excludePoolOwnerRows(rows, { rpcRead, probeLimit = 25, extraExclude = [] } = {}) {
+  if (!Array.isArray(rows) || !rows.length) return rows || [];
+  const drop = new Set(extraExclude.filter(Boolean));
+  for (const r of rows) {
+    const w = String(r?.wallet || "");
+    if (BURN_ADDRESSES.has(w) || KNOWN_POOL_WALLETS.has(w)) drop.add(w);
+  }
+  const probe = rows.slice(0, probeLimit).map((r) => String(r?.wallet || "")).filter((w) => w && !drop.has(w));
+  if (probe.length && typeof rpcRead === "function") {
+    try {
+      const infos = await rpcRead("holder rows: classify pools",
+        (c) => c.getMultipleAccountsInfo(probe.map((w) => new PublicKey(w))));
+      (infos || []).forEach((info, i) => {
+        const prog = info?.owner?.toBase58?.() || (info?.owner ? String(info.owner) : "");
+        if (prog && POOL_OWNER_PROGRAMS.has(prog)) drop.add(probe[i]);
+      });
+    } catch { /* classification is best-effort — unfiltered rows beat no rows */ }
+  }
+  return drop.size ? rows.filter((r) => !drop.has(String(r?.wallet || ""))) : rows;
 }
 
 // BIGGER holder list for the bubble MAP / airdrop (up to `limit`, default 150). getTokenLargestAccounts only
@@ -238,7 +274,7 @@ export async function computeManyHolders({ mint, rpcRead, rpcUrl = "", limit = 1
     .map((r) => { let owner = ""; try { owner = new PublicKey(r.ownerBuf).toBase58(); } catch { /* skip */ } return { owner, amt: r.amt }; })
     .filter((r) => r.owner);
 
-  const exclude = new Set([poolAddr].filter(Boolean));
+  const exclude = new Set([poolAddr, ...KNOWN_POOL_WALLETS].filter(Boolean));
   if (typeof rpcRead === "function") {
     try {
       const probe = head.slice(0, Math.min(24, head.length)).map((r) => new PublicKey(r.owner));
