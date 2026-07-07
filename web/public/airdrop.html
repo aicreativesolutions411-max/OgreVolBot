@@ -80,7 +80,7 @@
     <div id="side"><h3>Fed wallets</h3><div id="kolist"></div></div>
   </div>
 </div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script src="/vendor/d3.v7.min.js"></script>
 <script>
 // Reference-style bag palette (blues/pinks/purples/lavender/teal), deterministic per wallet.
 const BAGPAL=[['#7fb8e6','#3a6ea5'],['#e79cc4','#a8477e'],['#b79ae0','#6f4aa0'],['#9aa6e6','#4a56a0'],['#7fd0d0','#3a9a9a'],['#e6b07f','#a86a3a'],['#88d18a','#3f9c34'],['#d99ad0','#9a4a90']];
@@ -94,22 +94,29 @@ function fmt(n){n=+n||0;if(n>=1e9)return(n/1e9).toFixed(1)+'B';if(n>=1e6)return(
 function hash(s){let h=0;s=String(s||'');for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;return h}
 function palOf(w){return BAGPAL[hash(w)%BAGPAL.length]}
 
-async function loadDrop(ca,_retry){
-  if(!ca)return; showLoading();
+// _silent = a background auto-refresh: never flash the spinner and never replace a working map with an error.
+async function loadDrop(ca,_retry,_silent){
+  if(!ca)return; if(!_silent)showLoading();
+  let j=null;
   try{
-    const j=await (await fetch('/api/airdrop?ca='+encodeURIComponent(ca))).json();
-    if(!j.ok||!j.map){
-      if(!_retry){await new Promise(r=>setTimeout(r,1200));return loadDrop(ca,true)}
-      showError(j.error||'no airdrop data yet');return
-    }
-    render(j.map);
-    if(refreshTimer)clearTimeout(refreshTimer);refreshTimer=setTimeout(()=>loadDrop(ca,true),45000);
-    history.replaceState(null,'','/airdrop?ca='+ca);
+    const ctl=('AbortController'in window)?new AbortController():null; const to=ctl?setTimeout(()=>ctl.abort(),20000):0;
+    const res=await fetch('/api/airdrop?ca='+encodeURIComponent(ca),ctl?{signal:ctl.signal}:{}); if(to)clearTimeout(to);
+    j=await res.json();
   }catch(e){
-    if(!_retry){await new Promise(r=>setTimeout(r,1200));return loadDrop(ca,true)}
-    showError('the chain is slow right now — tap Start over to retry')
+    // NETWORK/fetch problem (mobile drop, abort) — retry once, then (only on the first load) surface it.
+    if(!_retry){await new Promise(r=>setTimeout(r,1200));return loadDrop(ca,true,_silent)}
+    if(!_silent)showError('the network dropped — tap Start over to retry'); scheduleRefresh(ca); return;
   }
+  if(!j||!j.ok||!j.map){
+    if(!_retry){await new Promise(r=>setTimeout(r,1200));return loadDrop(ca,true,_silent)}
+    if(!_silent)showError((j&&j.error)||'no airdrop data yet'); scheduleRefresh(ca); return;
+  }
+  // RENDER is separate from the fetch: a draw error (e.g. D3 missing) must NOT be reported as "chain is slow".
+  try{ render(j.map); }catch(e){ if(!_silent)showError('couldn’t draw the map (display error) — tap Start over'); try{console.error(e)}catch(_){} scheduleRefresh(ca); return; }
+  history.replaceState(null,'','/airdrop?ca='+ca);
+  scheduleRefresh(ca);
 }
+function scheduleRefresh(ca){ if(refreshTimer)clearTimeout(refreshTimer); refreshTimer=setTimeout(()=>loadDrop(ca,false,true),45000); }
 function showLoading(){overlay.className='';overlay.innerHTML='<div class="spin"></div><p>Tracing the drop…</p>'}
 function showError(m){overlay.className='';overlay.innerHTML='<h1>🫥</h1><p>'+esc(m)+'</p><button class="ghost" onclick="location.href=\'/airdrop\'">Start over</button>'}
 function drawCrumbs(map){document.getElementById('crumbs').innerHTML='💰 <b>'+esc(map.subject)+'</b> airdrop map'+(map.approx?' <span style="opacity:.7">· distribution view</span>':'');}

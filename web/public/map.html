@@ -76,7 +76,7 @@
     <div id="side"><h3>On this coin</h3><div id="kolist"></div></div>
   </div>
 </div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script src="/vendor/d3.v7.min.js"></script>
 <script>
 const COL={hold:{f:'#5be36a',r:'#0c7a2a'},sold:{f:'#e2564b',r:'#7a1010'},whale:{f:'#ffcf4d',r:'#8a6410'},new:{f:'#4dd6ff',r:'#0c5a7a'}};
 const stage=document.getElementById('stage'),tip=document.getElementById('tip'),overlay=document.getElementById('overlay');
@@ -84,25 +84,31 @@ let crumbs=[],refreshTimer=null,sim=null,zoomB=null;
 function short(a){return a&&a.length>10?a.slice(0,4)+'…'+a.slice(-4):a}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 
-async function loadTarget(kind,id,mode,push,label,_retry){
-  if(!id)return; mode=mode||'bags'; showLoading();
+// _silent = a background auto-refresh: never flash the spinner and never replace a working map with an error.
+async function loadTarget(kind,id,mode,push,label,_retry,_silent){
+  if(!id)return; mode=mode||'bags'; if(!_silent)showLoading();
+  const q=kind==='coin'?('ca='+encodeURIComponent(id)):('wallet='+encodeURIComponent(id)+'&mode='+mode);
+  let j=null;
   try{
-    const q=kind==='coin'?('ca='+encodeURIComponent(id)):('wallet='+encodeURIComponent(id)+'&mode='+mode);
-    const j=await (await fetch('/api/map?'+q)).json();
-    if(!j.ok||!j.map){
-      if(!_retry){await new Promise(r=>setTimeout(r,1000));return loadTarget(kind,id,mode,push,label,true)}
-      showError(j.error||'no map data yet');return
-    }
-    if(push!==false)crumbs.push({kind,id,mode,label:label||j.map.subject});
-    else if(crumbs.length)crumbs[crumbs.length-1]={kind,id,mode,label:j.map.subject};
-    render(j.map); scheduleRefresh(kind,id,mode);
-    history.replaceState(null,'',kind==='coin'?('/map?ca='+id):('/map?wallet='+id));
+    const ctl=('AbortController'in window)?new AbortController():null; const to=ctl?setTimeout(()=>ctl.abort(),20000):0;
+    const res=await fetch('/api/map?'+q,ctl?{signal:ctl.signal}:{}); if(to)clearTimeout(to);
+    j=await res.json();
   }catch(e){
-    if(!_retry){await new Promise(r=>setTimeout(r,1000));return loadTarget(kind,id,mode,push,label,true)}
-    showError('the chain is slow right now — tap Start over to retry')
+    if(!_retry){await new Promise(r=>setTimeout(r,1000));return loadTarget(kind,id,mode,push,label,true,_silent)}
+    if(!_silent)showError('the network dropped — tap Start over to retry'); scheduleRefresh(kind,id,mode); return;
   }
+  if(!j||!j.ok||!j.map){
+    if(!_retry){await new Promise(r=>setTimeout(r,1000));return loadTarget(kind,id,mode,push,label,true,_silent)}
+    if(!_silent)showError((j&&j.error)||'no map data yet'); scheduleRefresh(kind,id,mode); return;
+  }
+  if(push!==false)crumbs.push({kind,id,mode,label:label||j.map.subject});
+  else if(crumbs.length)crumbs[crumbs.length-1]={kind,id,mode,label:j.map.subject};
+  // RENDER separate from fetch: a draw error (e.g. D3 missing) must NOT be reported as "chain is slow".
+  try{ render(j.map); }catch(e){ if(!_silent)showError('couldn’t draw the map (display error) — tap Start over'); try{console.error(e)}catch(_){} scheduleRefresh(kind,id,mode); return; }
+  scheduleRefresh(kind,id,mode);
+  history.replaceState(null,'',kind==='coin'?('/map?ca='+id):('/map?wallet='+id));
 }
-function scheduleRefresh(kind,id,mode){if(refreshTimer)clearTimeout(refreshTimer);refreshTimer=setTimeout(()=>loadTarget(kind,id,mode,false),30000)}
+function scheduleRefresh(kind,id,mode){if(refreshTimer)clearTimeout(refreshTimer);refreshTimer=setTimeout(()=>loadTarget(kind,id,mode,false,null,false,true),30000)}
 function showLoading(){overlay.className='';overlay.innerHTML='<div class="spin"></div><p>Reading the chain…</p>'}
 function showError(m){overlay.className='';overlay.innerHTML='<h1>🫥</h1><p>'+esc(m)+'</p><button class="ghost" onclick="location.href=\'/map\'">Start over</button>'}
 function drawCrumbs(){const el=document.getElementById('crumbs');el.innerHTML=crumbs.map((c,i)=>'<span class="c" data-i="'+i+'">'+(i===0?'🗺️ ':'')+esc(c.label)+'</span>').join('<span style="opacity:.5">›</span>');[...el.querySelectorAll('.c')].forEach(n=>n.onclick=()=>{const i=+n.dataset.i,c=crumbs[i];crumbs=crumbs.slice(0,i);loadTarget(c.kind,c.id,c.mode,true,c.label)})}
