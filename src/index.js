@@ -31262,10 +31262,35 @@ async function fetchWalletHoldings(wallet) {
   // ON-CHAIN FALLBACK — Solana Tracker only indexes active/known wallets, so random airdrop-recipient wallets
   // came back empty ("everyone says 0"). Read the wallet's SPL token accounts straight off the RPC (works for
   // ANY wallet) and price/label them via one DexScreener batch. This is the fix for the drill-in showing nothing.
+  //
+  // MEMORY-SAFE: getParsedTokenAccountsByOwner via web3.js deserializes EVERY account → a whale/exchange wallet
+  // with thousands of token accounts blew the Node heap (OOM → 502). Instead we stream the raw JSON-RPC response
+  // with a hard 2.5MB byte cap: a mega-holder wallet bails (returns []) instead of taking the process down.
   if (!tokens.length) {
     try {
-      const res = await rpcRead("holdings: token accounts", (c) => c.getParsedTokenAccountsByOwner(new PublicKey(wallet), { programId: TOKEN_PROGRAM_ID }, "confirmed"));
-      let accts = (res?.value || []).map((a) => { const info = a?.account?.data?.parsed?.info; return { mint: String(info?.mint || ""), bal: Number(info?.tokenAmount?.uiAmount || 0) }; }).filter((x) => x.mint && x.bal > 0);
+      const rpcUrl = CONFIG.readRpcUrl || CONFIG.rpcUrl;
+      let accts = [];
+      if (rpcUrl) {
+        const ctl = new AbortController(); const timer = setTimeout(() => { try { ctl.abort(); } catch { /* noop */ } }, 8000);
+        let body = null;
+        try {
+          const res = await fetch(rpcUrl, {
+            method: "POST", headers: { "content-type": "application/json" }, signal: ctl.signal,
+            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getTokenAccountsByOwner", params: [wallet, { programId: TOKEN_PROGRAM_ID.toBase58() }, { encoding: "jsonParsed", commitment: "confirmed" }] }),
+          });
+          if (res.ok && res.body) {
+            const reader = res.body.getReader(); const chunks = []; let total = 0, capped = false; const MAX = 2_500_000;
+            while (true) { const { done, value } = await reader.read(); if (done) break; total += value.length; if (total > MAX) { capped = true; try { await reader.cancel(); } catch { /* */ } try { ctl.abort(); } catch { /* */ } break; } chunks.push(value); }
+            if (!capped && chunks.length) body = Buffer.concat(chunks);   // capped (mega-wallet) → leave body null, fall back to empty
+          }
+        } catch { body = null; } finally { clearTimeout(timer); }
+        if (body) {
+          try {
+            const val = JSON.parse(body.toString("utf8"))?.result?.value;
+            if (Array.isArray(val)) accts = val.map((a) => { const info = a?.account?.data?.parsed?.info; return { mint: String(info?.mint || ""), bal: Number(info?.tokenAmount?.uiAmount || 0) }; }).filter((x) => x.mint && x.bal > 0);
+          } catch { accts = []; }
+        }
+      }
       accts.sort((a, b) => b.bal - a.bal);
       const top = accts.slice(0, 30);
       const priceByMint = new Map();
