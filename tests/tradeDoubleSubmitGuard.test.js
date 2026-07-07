@@ -1926,6 +1926,18 @@ test("X growth engine: broadcast-gated proactive posts + receipts + KOL responde
   assert.match(functionBody(serverSource, "xKolTradeTick"), /!s\.coins\[mint\]/);                       // dedup vs everything already surfaced
   assert.match(functionBody(serverSource, "xPostKolConvergence"), /top kolscan KOLs are loading/);      // the smart-money post
   assert.match(serverSource, /setInterval\(\(\) => \{ void xKolTradeTick\(\); \}/);                     // scheduled
+  // global anti-spam gate on PROACTIVE posts (replies to tags stay ungated)
+  assert.match(serverSource, /function xBroadcastGateOk\(\)/);
+  assert.match(functionBody(serverSource, "xAutoCallTick"), /if \(!xBroadcastGateOk\(\)\) return/);
+  assert.match(functionBody(serverSource, "xReceiptsTick"), /xBroadcastGateOk/);
+  assert.match(functionBody(serverSource, "xKolWatchTick"), /if \(!xBroadcastGateOk\(\)\) break/);
+  // every proactive post carries the FULL contract on its own line for copy-paste aping
+  assert.match(functionBody(serverSource, "xPostText"), /const ca = String\(mint/);
+  assert.match(functionBody(serverSource, "xAutoCallText"), /xPostText\(/);
+  assert.match(functionBody(serverSource, "xMoverText"), /xPostText\(/);
+  assert.match(functionBody(serverSource, "xPostKolConvergence"), /xPostText\(/);
+  // degen verdict glow-up (safety verdicts stay clear; only the all-clear green rotates)
+  assert.match(functionBody(serverSource, "xVerdict"), /ape-worthy/);
   // tracking is always on (records our reply for later receipts) — independent of the broadcast gate
   assert.match(functionBody(serverSource, "xReplyPollTick"), /await xTrackCoin\(/);
   assert.match(functionBody(serverSource, "xReplyPollTick"), /await xEnrichReplyText\(/);               // memory + persona on replies

@@ -31693,16 +31693,17 @@ function xRailLabel(mint, best, bonding) {
   if (String(mint).toLowerCase().includes("bonk")) return "bonk";
   return dex || "dex";
 }
-function xVerdict(shield, rug, liq, mc) {
-  // Defensive across shield/rug shapes — surface the loudest safety signal in plain English.
+function xVerdict(shield, rug, liq, mc, seed) {
+  // Defensive across shield/rug shapes — surface the loudest safety signal. Safety verdicts stay CLEAR (never
+  // dress up a risk as hype); only the all-clear green verdict gets the degen glow-up, rotated per-coin.
   const danger = Boolean(shield?.honeypot || shield?.isHoneypot || rug?.rugged || shield?.verdict === "danger" || shield?.level === "danger" || (shield?.risk && /danger|honeypot|scam/i.test(String(shield.risk))));
   const mintAuth = Boolean(shield?.mintAuthority || rug?.mintAuthority);
   const freezeAuth = Boolean(shield?.freezeAuthority || rug?.freezeAuthority);
-  if (danger) return { verdict: "High risk — be careful", tone: "danger" };
-  if (liq > 0 && liq < 1500) return { verdict: "Thin liquidity", tone: "warn" };
-  if (mintAuth || freezeAuth) return { verdict: `${mintAuth ? "Mint" : "Freeze"} authority live`, tone: "warn" };
-  if (mc > 0) return { verdict: "Looks alive", tone: "ok" };
-  return { verdict: "Scanned", tone: "ok" };
+  if (danger) return { verdict: "cooked — steer clear 💀", tone: "danger" };
+  if (liq > 0 && liq < 1500) return { verdict: "thin liq — risky ape ⚠️", tone: "warn" };
+  if (mintAuth || freezeAuth) return { verdict: `${mintAuth ? "mint" : "freeze"} authority live ⚠️`, tone: "warn" };
+  if (mc > 0) { const ok = ["ape-worthy 🦍", "looks clean 🟢", "sending it 🚀", "degen-approved 🐸", "fresh & based", "no red flags — send it"]; return { verdict: ok[Math.abs(xSeedHash(String(seed || mc))) % ok.length], tone: "ok" }; }
+  return { verdict: "scanned 🐸", tone: "ok" };
 }
 async function xFetchLogo(url) {
   let u = String(url || "").trim();
@@ -31871,7 +31872,7 @@ async function buildXScanReply(mint, variant) {
   const createdAt = Number(best?.pairCreatedAt || 0) || (Number(bonding?.created_timestamp || 0) * (String(bonding?.created_timestamp || "").length <= 10 ? 1000 : 1));
   const ageLabel = createdAt > 0 ? xAgeLabel(Date.now() - createdAt) : "new";
   const rail = xRailLabel(mint, best, bonding);
-  const { verdict, tone } = xVerdict(shield, rug, liq, mc);
+  const { verdict, tone } = xVerdict(shield, rug, liq, mc, variant || mint);
   const mcLabel = mc > 0 ? scanFmtMoney(mc) : "—";
   const liqLabel = liq > 0 ? scanFmtMoney(liq) : "—";
   const ch1 = Number(meta?.priceChange?.h1);
@@ -32398,6 +32399,25 @@ const xKolTradeOn  = () => xFeatureOn("XBOT_KOLTRADES", true);   // 🐋 follow 
 const xScorecardOn = () => xFeatureOn("XBOT_SCORECARD", true);
 const xPersonaOn   = () => { const v = String(process.env.XBOT_PERSONA || "").trim(); return v ? parseBoolean(v) : true; };   // text-only, safe → on by default
 const XBOT_MILESTONES = [2, 3, 5, 10, 25, 50, 100];
+// GLOBAL anti-spam gate for PROACTIVE posts only (auto-call, heartbeat, receipts, KOL quotes, convergence).
+// Replies to user tags are NOT gated — people who tag the bot always get answered, even under heavy use. This
+// only stops the proactive broadcasters from bunching up (X folds accounts that machine-gun posts). Short gap by
+// default (40s) so the account stays steadily active without long dead pauses; a blocked post just defers to the
+// next tick (never lost). Tunable via XBOT_MIN_GAP_SEC.
+let _xLastBroadcastAt = 0;
+function xBroadcastGateOk() { return Date.now() - _xLastBroadcastAt >= Math.max(10, Number(process.env.XBOT_MIN_GAP_SEC || 40)) * 1000; }
+function xMarkBroadcast() { _xLastBroadcastAt = Date.now(); }
+// Compose a proactive post with the FULL contract on its own last line, so followers can one-tap copy + ape it.
+// Keeps the CA intact (never truncated): fits the CTA if there's room, else drops the CTA to protect the CA.
+function xPostText(hook, stats, mint, cta) {
+  const ca = String(mint || "");
+  for (const withCta of [true, false]) {
+    const t = [hook, stats, (withCta && cta) ? cta : "", ca].filter(Boolean).join("\n");
+    if (t.length <= 279) return t;
+  }
+  return [hook, stats, ca].filter(Boolean).join("\n").slice(0, 279);
+}
+const XBOT_CTA = "🔎 free scan on any coin — tag @SlimeWirebot 🐸";
 
 // ---- tracked-coins store: entry snapshots so receipts can quote our original post later ----
 function xCoinsStateFile() { return path.join(CONFIG.dataDir, "x-coins-state.json"); }
@@ -32463,6 +32483,7 @@ async function xReceiptsTick() {
       const mult = c.entryMc > 0 ? live.mc / c.entryMc : 0;
       const crossed = XBOT_MILESTONES.filter((m) => mult >= m && !c.milestones.includes(m));
       if (crossed.length && xReceiptsOn() && posted < 2) {
+        if (!xBroadcastGateOk()) break;          // global gate — leave milestones unfired, retry next tick
         const top = crossed[crossed.length - 1];
         const ok = await xPostReceipt(c, live.mc, top);
         if (ok) { c.milestones.push(...crossed); posted++; }   // only mark fired when we actually posted (holds until broadcast on)
@@ -32475,15 +32496,11 @@ async function xReceiptsTick() {
 async function xPostReceipt(c, curMc, mult) {
   const sym = c.symbol ? `$${c.symbol}` : shortMint(c.mint);
   const emoji = mult >= 100 ? "🌕" : mult >= 50 ? "🚀" : mult >= 10 ? "🔥" : mult >= 5 ? "💰" : "📈";
-  const text = [
-    `${emoji} ${sym} — flagged at ${scanFmtMoney(c.entryMc)}, now ${scanFmtMoney(curMc)}. ${mult}x.`,
-    "receipts, not promises. the SlimeWire brain called it early.",
-    "Tag @SlimeWirebot on any coin for a free read 🐸",
-  ].join("\n").slice(0, 279);
+  const text = xPostText(`${emoji} ${sym} — flagged at ${scanFmtMoney(c.entryMc)}, now ${scanFmtMoney(curMc)}. ${mult}x.`, "receipts, not promises. called it early 🐸", c.mint, XBOT_CTA);
   let mediaBuffer = null;
   try { const r = await buildXReply(c.mint, "scan", `receipt${mult}${c.mint}`); mediaBuffer = r?.mediaBuffer || null; } catch { /* text-only ok */ }
   const res = await xPost({ quoteTweetId: c.tweetId, text, mediaBuffer });
-  if (res.ok) { console.log(`[xbot] 🎯 receipt ${sym} ${mult}x id=${res.id}`); await xReplyOwnerNotify(`🎯 X receipt: ${sym} ${mult}x (${scanFmtMoney(c.entryMc)} → ${scanFmtMoney(curMc)})`).catch(() => {}); return true; }
+  if (res.ok) { xMarkBroadcast(); console.log(`[xbot] 🎯 receipt ${sym} ${mult}x id=${res.id}`); await xReplyOwnerNotify(`🎯 X receipt: ${sym} ${mult}x (${scanFmtMoney(c.entryMc)} → ${scanFmtMoney(curMc)})`).catch(() => {}); return true; }
   console.log(`[xbot] receipt FAILED ${sym}: ${res.reason}`); return false;
 }
 
@@ -32503,6 +32520,7 @@ async function xAutoCallTick() {
     // 1) HIGH-CONVICTION network-backed call (rare, the real signal). 2) HEARTBEAT: if none, post the best live
     // trending MOVER as a clearly-framed "trench watch" so the account has daily content + seeds the receipt
     // store (a mover we watch today is a receipt candidate if it runs). Same throttle → still ≤daily-cap posts.
+    if (!xBroadcastGateOk()) return;            // global anti-spam gate — defer to next tick
     let cand = await xPickAutoCallCandidate(s), watch = false;
     if (!cand && xHeartbeatOn()) { cand = await xPickMoverCandidate(s); watch = true; }
     if (!cand) return;
@@ -32510,6 +32528,7 @@ async function xAutoCallTick() {
     if (!reply || !reply.mediaBuffer) return;   // never post a text-only call — the card is the point
     const res = await xPost({ text: watch ? xMoverText(cand, reply) : xAutoCallText(cand, reply), mediaBuffer: reply.mediaBuffer });
     if (res.ok) {
+      xMarkBroadcast();
       s.lastAutoCallAt = now; s.posts.push(now); await writeXCoins(s);
       await xTrackCoin({ mint: cand.mint, symbol: reply.symbol, mc: reply.mc || cand.mc, tweetId: res.id, kind: watch ? "watch" : "autocall" });
       console.log(`[xbot] ${watch ? "🐸 trench-watch" : "📣 auto-call"} $${reply.symbol} ${watch ? `1H=${cand.h1}%` : `score=${cand.score}`} id=${res.id}`);
@@ -32545,11 +32564,7 @@ function xMoverText(cand, reply) {
   const openers = ["🐸 trench watch:", "👀 moving in the trenches:", "🔥 heating up:", "⚡ on the move:"];
   const op = openers[Math.abs(xSeedHash(cand.mint)) % openers.length];
   const h1 = `${cand.h1 >= 0 ? "+" : ""}${Math.round(cand.h1)}%`;
-  return [
-    `${op} ${sym}`,
-    `${scanFmtMoney(reply.mc || cand.mc)} MC · 1H ${h1} · liq ${scanFmtMoney(cand.liq)} · NFA`,
-    "Full read + bubble map → tag @SlimeWirebot 🐸",
-  ].join("\n").slice(0, 279);
+  return xPostText(`${op} ${sym}`, `${scanFmtMoney(reply.mc || cand.mc)} MC · 1H ${h1} · liq ${scanFmtMoney(cand.liq)} · NFA`, cand.mint, XBOT_CTA);
 }
 // Candidate = highest network-backed coin from the observatory not already posted, live-MC vetted (dust filter).
 async function xPickAutoCallCandidate(s) {
@@ -32576,11 +32591,7 @@ function xAutoCallText(cand, reply) {
   const sym = reply.symbol ? `$${reply.symbol}` : shortMint(cand.mint);
   const openers = ["👀 eyes on", "🐸 trench watch:", "⚡ on the radar:", "🧪 the SlimeWire brain flagged"];
   const op = openers[Math.abs(xSeedHash(cand.mint)) % openers.length];
-  return [
-    `${op} ${sym}`,
-    `${scanFmtMoney(reply.mc || cand.mc)} MC · network-backed · NFA`,
-    "Full read + bubble map → tag @SlimeWirebot 🐸",
-  ].join("\n").slice(0, 279);
+  return xPostText(`${op} ${sym}`, `${scanFmtMoney(reply.mc || cand.mc)} MC · network-backed · NFA`, cand.mint, XBOT_CTA);
 }
 function xSeedHash(s) { let h = 2166136261; const str = String(s || ""); for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return h | 0; }
 
@@ -32650,22 +32661,23 @@ async function xKolWatchTick() {
       const tweets = await xSearchQuery(`from:${h} -filter:replies -filter:retweets`, 5).catch(() => []);
       for (const t of tweets) {
         if (!t.id || s.kolSeen[t.id]) continue;
-        s.kolSeen[t.id] = now;
-        if (now - (t.createdAtMs || now) > freshMs) continue;   // only FRESH calls — being late kills the point
+        if (now - (t.createdAtMs || now) > freshMs) { s.kolSeen[t.id] = now; continue; }   // stale → mark seen, skip
         const blob = [t.text, ...(t.urls || [])].join(" ");
         const mint = extractMintsFromText(blob)[0];
-        if (!mint || s.coins[mint]) continue;            // no CA, or we already surfaced this coin → skip
+        if (!mint || s.coins[mint]) { s.kolSeen[t.id] = now; continue; }                     // no CA / already surfaced → mark seen, skip
+        if (!xBroadcastGateOk()) break;                                                      // global gate → DON'T mark seen, retry next tick
         const reply = await buildXReply(mint, "scan", `kol${t.id}`);
-        if (!reply || !reply.mediaBuffer) continue;
-        const text = [`$${reply.symbol} — @${h} just called it. instant read 👇`, `${scanFmtMoney(reply.mc)} MC · free scan on any coin, tag @SlimeWirebot 🐸`].join("\n").slice(0, 279);
+        if (!reply || !reply.mediaBuffer) { s.kolSeen[t.id] = now; continue; }               // won't build → mark seen, skip
+        const text = xPostText(`$${reply.symbol} — @${h} just called it 👇`, `${scanFmtMoney(reply.mc)} MC`, mint, XBOT_CTA);
         const res = await xPost({ quoteTweetId: t.id, text, mediaBuffer: reply.mediaBuffer });
         if (res.ok) {
-          posted++;
+          s.kolSeen[t.id] = now; xMarkBroadcast(); posted++;
           await xTrackCoin({ mint, symbol: reply.symbol, mc: reply.mc, tweetId: res.id, kind: "kol" });
           console.log(`[xbot] ⚡ KOL first-responder @${h} $${reply.symbol} id=${res.id}`);
           await xReplyOwnerNotify(`⚡ X quoted @${h} on $${reply.symbol} (${scanFmtMoney(reply.mc)})`).catch(() => {});
           break;                                         // one quote per handle per tick
         }
+        break;                                           // post failed (not gated) → leave un-seen, retry; don't hammer this handle
       }
     }
     for (const k of Object.keys(s.kolSeen)) if (now - s.kolSeen[k] > 3 * 86_400_000) delete s.kolSeen[k];
@@ -32724,7 +32736,7 @@ async function xKolTradeTick() {
         let rec = _xKolBuyWindow.get(mint); if (!rec) { rec = { wallets: new Set(), names: [], firstAt: now, totalSol: 0, posted: false }; _xKolBuyWindow.set(mint, rec); }
         if (!rec.wallets.has(w)) { rec.wallets.add(w); const nm = xKolName(w); if (nm) rec.names.push(nm); }
         rec.totalSol += b.solAmount || 0;
-        if (rec.wallets.size >= need && !rec.posted && !s.coins[mint] && posted < 1) {   // convergence, once per coin
+        if (rec.wallets.size >= need && !rec.posted && !s.coins[mint] && posted < 1 && xBroadcastGateOk()) {   // convergence, gated, once/coin
           rec.posted = true;
           if (await xPostKolConvergence(mint, rec)) posted++;
         }
@@ -32739,13 +32751,10 @@ async function xPostKolConvergence(mint, rec) {
   const n = rec.wallets.size;
   const who = rec.names.slice(0, 3).map((x) => (x.startsWith("@") ? x : `@${x}`)).join(" + ");
   const sym = reply.symbol ? `$${reply.symbol}` : shortMint(mint);
-  const text = [
-    `🐋 ${n} top kolscan KOLs are loading ${sym}`,
-    who ? `${who}${n > 3 ? " +more" : ""} · ${scanFmtMoney(reply.mc)} MC · NFA` : `${scanFmtMoney(reply.mc)} MC · smart money converging · NFA`,
-    "Full read + bubble map → tag @SlimeWirebot 🐸",
-  ].join("\n").slice(0, 279);
+  const text = xPostText(`🐋 ${n} top kolscan KOLs are loading ${sym}`, who ? `${who}${n > 3 ? " +more" : ""} · ${scanFmtMoney(reply.mc)} MC · NFA` : `${scanFmtMoney(reply.mc)} MC · smart money converging · NFA`, mint, XBOT_CTA);
   const res = await xPost({ text, mediaBuffer: reply.mediaBuffer });
   if (res.ok) {
+    xMarkBroadcast();
     await xTrackCoin({ mint, symbol: reply.symbol, mc: reply.mc, tweetId: res.id, kind: "convergence" });
     console.log(`[xbot] 🐋 convergence ${sym} ${n} KOLs id=${res.id}`);
     await xReplyOwnerNotify(`🐋 X convergence: ${n} top KOLs loading ${sym} (${scanFmtMoney(reply.mc)})`).catch(() => {});
