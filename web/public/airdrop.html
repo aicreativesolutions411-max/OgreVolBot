@@ -59,6 +59,28 @@
   .wm{position:absolute;right:14px;bottom:10px;font-weight:900;color:var(--slime2);z-index:4;opacity:.8;font-size:14px}
   .foot{position:absolute;left:14px;bottom:10px;display:flex;gap:8px;z-index:4}
   .pill{font-size:12px;background:#fffaf0;border:1.5px solid var(--line);border-radius:20px;padding:6px 12px;font-weight:700}
+  /* coin selector — the airdropper's other coins ("filter by coin, select from there") */
+  #coinsel{display:flex;gap:6px;padding:0 6px;overflow-x:auto;align-items:center}
+  #coinsel .cp{flex:0 0 auto;display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:800;background:#fffaf0;border:1.5px solid var(--line);border-radius:20px;padding:5px 11px;cursor:pointer;white-space:nowrap}
+  #coinsel .cp:hover{border-color:var(--slime)} #coinsel .cp.on{background:var(--slime);color:#fff;border-color:var(--slime)}
+  #coinsel .cp img{width:18px;height:18px;border-radius:50%;object-fit:cover}
+  #coinsel .cl{font-size:11px;color:var(--dim);font-weight:800;flex:0 0 auto}
+  /* sectioned roster */
+  .sec-h{font-size:11px;font-weight:900;letter-spacing:.4px;color:var(--dim);text-transform:uppercase;margin:10px 2px 4px;padding-top:6px;border-top:1px solid var(--line)}
+  .sec-h:first-child{border-top:0;padding-top:0}
+  /* wallet drill-in */
+  #drill{position:absolute;inset:0;background:rgba(20,16,8,.55);backdrop-filter:blur(3px);display:none;align-items:center;justify-content:center;z-index:9;padding:16px}
+  #drill.on{display:flex}
+  #drillcard{width:min(420px,94vw);max-height:82%;overflow:auto;background:#fffaf0;border:2px solid var(--slime);border-radius:16px;padding:14px;box-shadow:0 14px 50px rgba(0,0,0,.35)}
+  #drillcard .dh{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+  #drillcard .dh b{font-size:15px}
+  #drillcard .x{cursor:pointer;font-weight:900;color:var(--dim);border:0;background:none;font-size:20px;padding:0 4px}
+  #drillcard input{width:100%;margin:4px 0 8px;padding:8px 12px;border:1.5px solid var(--line);border-radius:10px;font-size:14px;background:#fff}
+  .hrow{display:flex;align-items:center;gap:9px;padding:7px 6px;border-radius:10px;cursor:pointer}
+  .hrow:hover{background:#f2e6cc} .hrow img{width:26px;height:26px;border-radius:50%;object-fit:cover;background:#eadfc0}
+  .hrow .hs{width:26px;height:26px;flex:0 0 26px;text-align:center;line-height:26px}
+  .hrow .nm{font-size:13px;font-weight:800}.hrow .sub{font-size:11px;color:var(--dim)}
+  .hrow .v{margin-left:auto;font-weight:800;font-size:13px;color:var(--slime2)}
   @media(max-width:720px){#side{display:none}.stat{min-width:90px}.stat .v{font-size:18px}}
 </style>
 </head>
@@ -69,6 +91,7 @@
     <form id="f"><input id="q" placeholder="Paste a coin CA to map its airdrop…" autocomplete="off" spellcheck="false"/><button type="submit">Map drop</button></form>
   </header>
   <div id="crumbs"></div>
+  <div id="coinsel"></div>
   <div id="stats"></div>
   <div id="main">
     <div id="stage">
@@ -79,6 +102,7 @@
     </div>
     <div id="side"><h3>Fed wallets</h3><div id="kolist"></div></div>
   </div>
+  <div id="drill"><div id="drillcard"></div></div>
 </div>
 <script src="/config.js"></script>
 <script src="/vendor/d3.v7.min.js"></script>
@@ -127,17 +151,60 @@ function showLoading(){overlay.className='';overlay.innerHTML='<div class="spin"
 function showError(m){overlay.className='';overlay.innerHTML='<h1>🫥</h1><p>'+esc(m)+'</p><button class="ghost" onclick="location.href=\'/airdrop\'">Start over</button>'}
 function drawCrumbs(map){document.getElementById('crumbs').innerHTML='💰 <b>'+esc(map.subject)+'</b> airdrop map'+(map.approx?' <span style="opacity:.7">· distribution view</span>':'');}
 function drawStats(map){document.getElementById('stats').innerHTML=(map.stats||[]).map((s,i)=>'<div class="stat s'+i+'"><div class="l">'+esc(s.label)+'</div><div class="v">'+esc(s.value)+'</div>'+(s.sub?'<div class="sub">'+esc(s.sub)+'</div>':'')+'</div>').join('')}
+function rosterRow(n){return '<div class="krow" data-t="'+esc(n.wallet)+'">'+(n.avatarUrl?'<img src="'+esc(n.avatarUrl)+'" onerror="this.style.visibility=\'hidden\'"/>':'<div class="bag">'+(n.held?'💎':'💰')+'</div>')+'<div><div class="nm">'+(n.crown?'👑 ':'')+esc(n.name||short(n.wallet))+'</div><div class="sub">'+esc(n.amountLabel||'')+(n.usd?' · $'+fmt(n.usd):'')+(n.held?' · 💎':' · 💸')+'</div></div></div>';}
+// Sectioned roster — 👑 Whales / 💎 Diamond hands / 💸 Dumped, each sorted by value high→low.
 function drawSide(map){
-  const ns=(map.nodes||[]).slice(0,16);
-  document.getElementById('side').querySelector('h3').textContent=(map.kolsIn||0)+' KOLs fed · '+((map.stats||[]).find(s=>s.label==='WALLETS FED')||{}).value+' wallets';
+  const nodes=(map.nodes||[]).slice();
+  document.getElementById('side').querySelector('h3').textContent=(map.kolsIn||0)+' KOLs fed · '+(((map.stats||[]).find(s=>s.label==='WALLETS FED')||{}).value||'')+' wallets';
+  const byUsd=(a,b)=>(b.usd||0)-(a.usd||0);
+  const whales=nodes.slice().sort(byUsd).slice(0,6);
+  const wset=new Set(whales.map(n=>n.wallet));
+  const held=nodes.filter(n=>n.held&&!wset.has(n.wallet)).sort(byUsd).slice(0,24);
+  const dumped=nodes.filter(n=>!n.held&&!wset.has(n.wallet)).sort(byUsd).slice(0,24);
+  const sec=(t,arr)=>arr.length?('<div class="sec-h">'+t+' <span style="opacity:.6">'+arr.length+'</span></div>'+arr.map(rosterRow).join('')):'';
   const kl=document.getElementById('kolist');
-  kl.innerHTML=ns.map(n=>'<div class="krow" data-t="'+esc(n.wallet)+'">'+(n.avatarUrl?'<img src="'+esc(n.avatarUrl)+'" onerror="this.style.visibility=\'hidden\'"/>':'<div class="bag">'+(n.held?'💎':'💰')+'</div>')+'<div><div class="nm">'+(n.crown?'👑 ':'')+esc(n.name||short(n.wallet))+'</div><div class="sub">'+esc(n.amountLabel||'')+(n.usd?' · $'+fmt(n.usd):'')+(n.held?' · 💎':' · 💸')+'</div></div></div>').join('')||'<div class="sub" style="color:var(--dim);font-size:12px">no labeled wallets</div>';
-  [...kl.querySelectorAll('.krow')].forEach(r=>r.onclick=()=>{const t=r.dataset.t;if(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t))location.href='/map?wallet='+t});
+  kl.innerHTML=(sec('👑 Whales',whales)+sec('💎 Diamond hands',held)+sec('💸 Dumped',dumped))||'<div class="sub" style="color:var(--dim);font-size:12px">no wallets yet</div>';
+  [...kl.querySelectorAll('.krow')].forEach(r=>r.onclick=()=>{const t=r.dataset.t;if(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t))openDrill(t)});
 }
 function drawFoot(map){const L=[];if(map.mint){L.push('<a class="pill" href="https://www.slimewire.org/t?ca='+map.mint+'">⚡ Trade $'+esc(map.subject.replace(/^\$/,''))+'</a>');L.push('<a class="pill" href="/map?ca='+map.mint+'">🗺️ Holder map</a>')}document.getElementById('foot').innerHTML=L.join('')}
+// 🪂 Coin selector — the airdropper's other coins (progressive fetch; don't refetch on the 45s refresh).
+let coinSelFor=null;
+function loadCoinSel(mint){
+  if(!mint||coinSelFor===mint)return;
+  fetch(API_BASE+'/api/airdrop/coins?ca='+encodeURIComponent(mint)).then(r=>r.json()).then(j=>{
+    if(!j||!j.ok||!j.coins||!j.coins.length){document.getElementById('coinsel').innerHTML='';return}
+    coinSelFor=mint; drawCoinSel(mint,j.coins);
+  }).catch(()=>{});
+}
+function drawCoinSel(cur,coins){
+  const el=document.getElementById('coinsel');
+  el.innerHTML='<span class="cl">🪂 airdropper\'s coins</span>'+coins.map(c=>'<span class="cp'+(c.mint===cur?' on':'')+'" data-m="'+esc(c.mint)+'">'+(c.image?'<img src="'+esc(c.image)+'" onerror="this.remove()"/>':'')+'$'+esc(c.sym||short(c.mint))+' <span style="opacity:.65;font-weight:700">'+(c.recipients||0)+'</span></span>').join('');
+  [...el.querySelectorAll('.cp')].forEach(p=>p.onclick=()=>{const m=p.dataset.m;if(m&&m!==cur){coinSelFor=null;loadDrop(m)}});
+}
+// 💼 Drill-in — tap a recipient → the other coins that wallet holds, value high→low, with a coin filter.
+function openDrill(w){
+  if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(w))return;
+  const d=document.getElementById('drill'),c=document.getElementById('drillcard');
+  d.className='on';
+  c.innerHTML='<div class="dh"><b>💼 '+short(w)+'</b><button class="x" onclick="closeDrill()">×</button></div><div class="sub" style="color:var(--dim);font-size:12px;padding:6px 2px">loading what this wallet holds…</div>';
+  fetch(API_BASE+'/api/wallet/holdings?wallet='+encodeURIComponent(w)).then(r=>r.json()).then(j=>renderDrill(w,(j&&j.tokens)||[])).catch(()=>renderDrill(w,[]));
+}
+function renderDrill(w,toks){
+  const c=document.getElementById('drillcard');
+  const total=toks.reduce((s,t)=>s+(t.val||0),0);
+  const head='<div class="dh"><b>💼 '+short(w)+'</b><button class="x" onclick="closeDrill()">×</button></div>'+
+    '<div class="sub" style="color:var(--dim);font-size:12px;margin-bottom:6px">'+toks.length+' coins · $'+fmt(total)+' total · <a href="/map?wallet='+w+'">full wallet map →</a></div>'+
+    (toks.length>6?'<input id="dfil" placeholder="filter by coin…" autocomplete="off" spellcheck="false"/>':'');
+  const rows=toks.map(t=>'<div class="hrow" data-m="'+esc(t.mint)+'" data-s="'+esc((t.sym||'').toLowerCase())+'">'+(t.image?'<img src="'+esc(t.image)+'" onerror="this.style.visibility=\'hidden\'"/>':'<div class="hs">🪙</div>')+'<div><div class="nm">$'+esc(t.sym||short(t.mint))+'</div><div class="sub">'+short(t.mint)+'</div></div><div class="v">$'+fmt(t.val)+'</div></div>').join('')||'<div class="sub" style="color:var(--dim);padding:10px 2px">no other indexed holdings for this wallet</div>';
+  c.innerHTML=head+'<div id="hrows">'+rows+'</div>';
+  [...c.querySelectorAll('.hrow')].forEach(r=>r.onclick=()=>{const m=r.dataset.m;if(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(m)){closeDrill();coinSelFor=null;loadDrop(m)}});
+  const fil=document.getElementById('dfil');
+  if(fil)fil.oninput=()=>{const q=fil.value.trim().toLowerCase();[...c.querySelectorAll('.hrow')].forEach(r=>{r.style.display=(!q||r.dataset.s.indexOf(q)>=0)?'':'none'})};
+}
+function closeDrill(){document.getElementById('drill').className=''}
 
 function render(map){
-  overlay.className='hide'; drawCrumbs(map); drawStats(map); drawSide(map); drawFoot(map);
+  overlay.className='hide'; drawCrumbs(map); drawStats(map); drawSide(map); drawFoot(map); loadCoinSel(map.mint);
   if(sim)sim.stop();
   const old=stage.querySelector('svg'); if(old)old.remove();
   const W=stage.clientWidth,H=stage.clientHeight;
@@ -180,7 +247,7 @@ function render(map){
   node.on('mousemove',(ev,d)=>{const r=stage.getBoundingClientRect();tip.style.opacity=1;tip.style.left=(ev.clientX-r.left+14)+'px';tip.style.top=(ev.clientY-r.top+14)+'px';
       tip.innerHTML='<div class="n">'+(d.crown?'👑 ':'')+esc(d.name||short(d.wallet))+'</div><div class="s">got '+esc(d.amountLabel||'')+(d.usd?' · ≈$'+fmt(d.usd):'')+'<br>'+(d.held?'💎 still holding':'💸 dumped')+'<br>'+short(d.wallet)+' · tap → wallet map</div>'})
       .on('mouseleave',()=>tip.style.opacity=0)
-      .on('click',(ev,d)=>{tip.style.opacity=0;if(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(d.wallet))location.href='/map?wallet='+d.wallet});
+      .on('click',(ev,d)=>{tip.style.opacity=0;openDrill(d.wallet)});
   node.call(d3.drag().on('start',(ev,d)=>{if(!ev.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y}).on('drag',(ev,d)=>{d.fx=ev.x;d.fy=ev.y}).on('end',(ev,d)=>{if(!ev.active)sim.alphaTarget(0);d.fx=null;d.fy=null}));
   sim=d3.forceSimulation(all)
     .force('charge',d3.forceManyBody().strength(-60))
@@ -195,6 +262,7 @@ function render(map){
 
 document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const v=document.getElementById('q').value.trim().replace(/^\$/,'');if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v)){showError('paste a valid coin CA');return}loadDrop(v)});
 window.addEventListener('resize',()=>{const u=new URL(location.href);const ca=u.searchParams.get('ca');if(ca)loadDrop(ca,true)});
+document.getElementById('drill').addEventListener('click',e=>{if(e.target.id==='drill')closeDrill()});
 (function init(){const u=new URL(location.href);const ca=u.searchParams.get('ca')||u.searchParams.get('mint');if(ca)loadDrop(ca)})();
 </script>
 </body>

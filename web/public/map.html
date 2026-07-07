@@ -84,9 +84,15 @@
 const API_BASE=(window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||'https://ogrevolbot.onrender.com';
 const COL={hold:{f:'#5be36a',r:'#0c7a2a'},sold:{f:'#e2564b',r:'#7a1010'},whale:{f:'#ffcf4d',r:'#8a6410'},new:{f:'#4dd6ff',r:'#0c5a7a'}};
 const stage=document.getElementById('stage'),tip=document.getElementById('tip'),overlay=document.getElementById('overlay');
-let crumbs=[],refreshTimer=null,sim=null,zoomB=null;
+let crumbs=[],refreshTimer=null,sim=null,zoomB=null,clusterHulls=null;
+// 🕸️ Bubblemaps-style cluster palette — distinct hue per connected-wallet group.
+const CLC=['#ffcf4d','#4dd6ff','#ff7de3','#8bff5b','#ff9f4d','#b98cff','#4dffd0','#ff6b6b'];
 function short(a){return a&&a.length>10?a.slice(0,4)+'…'+a.slice(-4):a}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+// Convex hull around a cluster's member bubbles (padded so 2-wallet clusters still get a blob).
+function hullPath(members){const pts=[];members.forEach(m=>{if(m.x==null)return;const p=(m.r||10)+16;pts.push([m.x-p,m.y-p],[m.x+p,m.y-p],[m.x-p,m.y+p],[m.x+p,m.y+p])});if(pts.length<3)return'';const h=d3.polygonHull(pts);if(!h)return'';return'M'+h.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join('L')+'Z'}
+function cx(ms){let s=0,n=0;ms.forEach(m=>{if(m.x!=null){s+=m.x;n++}});return n?s/n:0}
+function cy(ms){let s=0,n=0;ms.forEach(m=>{if(m.y!=null){s+=m.y;n++}});return n?s/n:0}
 
 // _silent = a background auto-refresh: never flash the spinner and never replace a working map with an error.
 async function loadTarget(kind,id,mode,push,label,_retry,_silent){
@@ -136,6 +142,7 @@ function drawToggleFoot(map){
 function render(map){
   overlay.className='hide'; drawCrumbs(); drawStats(map); drawToggleFoot(map); drawSide(map);
   if(sim)sim.stop();
+  clusterHulls=null; const oc=document.getElementById('clusters'); if(oc)oc.remove();   // reset cluster layer per render
   const old=stage.querySelector('svg'); if(old)old.remove();
   const W=stage.clientWidth,H=stage.clientHeight;
   const svg=d3.select(stage).insert('svg',':first-child').attr('viewBox','0 0 '+W+' '+H);
@@ -149,6 +156,7 @@ function render(map){
   const all=[hub,...nodes];
   // avatar clip + pattern per node
   nodes.forEach(n=>{const av=n.avatarUrl||n.faceUrl;if(av){defs.append('clipPath').attr('id','c'+n.id).append('circle').attr('r',n.r-2);defs.append('pattern').attr('id','p'+n.id).attr('width',1).attr('height',1).attr('patternContentUnits','objectBoundingBox').append('image').attr('href',av).attr('width',1).attr('height',1).attr('preserveAspectRatio','xMidYMid slice')}});
+  const hullG=g.append('g');    // 🕸️ cluster hulls (bubblemaps-style translucent blobs) — behind everything
   const link=g.append('g').selectAll('line').data(links).join('line').attr('class','link').attr('stroke-width',d=>0.5+d.w*2);
   const clinkG=g.append('g');   // 🕸️ cluster/connection edges (loaded progressively after the bubbles)
   const node=g.append('g').selectAll('g').data(nodes).join('g').attr('class','node');
@@ -183,17 +191,36 @@ function render(map){
       link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
       clinkG.selectAll('line').attr('x1',d=>d.s.x).attr('y1',d=>d.s.y).attr('x2',d=>d.t.x).attr('y2',d=>d.t.y);
       node.attr('transform',d=>'translate('+d.x+','+d.y+')');
+      if(clusterHulls){hullG.selectAll('path.hull').attr('d',d=>hullPath(d.members));hullG.selectAll('text.clbl').attr('x',d=>cx(d.members)).attr('y',d=>cy(d.members)-4)}
     });
-  // 🕸️ progressive cluster/connection overlay — bubbles render instantly, the fund-flow cluster web fades in after
+  // 🕸️ progressive cluster overlay (bubblemaps-style) — bubbles render instantly, the fund-flow clusters +
+  // translucent hulls + combined-% labels fade in after. Each connected-wallet group gets its own color.
   if(map.kind==='token'&&map.mint){fetch(API_BASE+'/api/map/graph?ca='+map.mint).then(r=>r.json()).then(gr=>{
-    if(!gr||!gr.ok||!gr.edges||!gr.edges.length)return;
+    if(!gr||!gr.ok)return;
     const byi=new Map(nodes.map(n=>[n.i,n]));
-    const lines=gr.edges.map(e=>({s:byi.get(e.a),t:byi.get(e.b)})).filter(l=>l.s&&l.t);
-    clinkG.selectAll('line').data(lines).join('line').attr('stroke','#ffcf4d').attr('stroke-width',2).attr('stroke-dasharray','4 3').attr('stroke-opacity',0).transition().duration(700).attr('stroke-opacity',.75);
-    const inCl=new Set(); gr.edges.forEach(e=>{inCl.add(e.a);inCl.add(e.b)});
-    node.filter(d=>inCl.has(d.i)).select('.body').attr('stroke','#ffcf4d').attr('stroke-width',3.5);
-    if((gr.clusters||[]).length){const big=gr.clusters.slice().sort((a,b)=>b.usd-a.usd)[0];const el=document.getElementById('stats');el.insertAdjacentHTML('beforeend','<div class="stat" style="border-color:#ffcf4d"><div class="l">🕸️ CLUSTERS</div><div class="v">'+gr.clusters.length+(big&&big.usd?' · $'+fmt(big.usd):'')+'</div></div>')}
+    const clusters=(gr.clusters||[]).map((c,k)=>({...c,color:CLC[k%CLC.length],letter:String.fromCharCode(65+k),members:(c.members||[]).map(i=>byi.get(i)).filter(Boolean)})).filter(c=>c.members.length>=2);
+    // fallback: if the backend sent edges but no cluster members, still draw the edges gold
+    if(!clusters.length&&gr.edges&&gr.edges.length){const lines=gr.edges.map(e=>({s:byi.get(e.a),t:byi.get(e.b),color:'#ffcf4d'})).filter(l=>l.s&&l.t);clinkG.selectAll('line').data(lines).join('line').attr('stroke','#ffcf4d').attr('stroke-width',2).attr('stroke-dasharray','4 3').attr('stroke-opacity',.7);const inCl=new Set();gr.edges.forEach(e=>{inCl.add(e.a);inCl.add(e.b)});node.filter(d=>inCl.has(d.i)).select('.body').attr('stroke','#ffcf4d').attr('stroke-width',3.5);return}
+    if(!clusters.length)return;
+    // color-per-cluster: connection edges (star to the biggest bag), member rings, hulls, % labels
+    const lines=[];clusters.forEach(c=>{for(let i=1;i<c.members.length;i++)lines.push({s:c.members[0],t:c.members[i],color:c.color})});
+    clinkG.selectAll('line').data(lines).join('line').attr('stroke',d=>d.color).attr('stroke-width',2).attr('stroke-dasharray','4 3').attr('stroke-opacity',0).transition().duration(700).attr('stroke-opacity',.7);
+    const colOf=new Map();clusters.forEach(c=>c.members.forEach(m=>colOf.set(m.i,c.color)));
+    node.filter(d=>colOf.has(d.i)).select('.body').attr('stroke',d=>colOf.get(d.i)).attr('stroke-width',3.5);
+    clusterHulls=clusters;
+    hullG.selectAll('path.hull').data(clusters).join('path').attr('class','hull').attr('fill',d=>d.color).attr('fill-opacity',0).attr('stroke',d=>d.color).attr('stroke-opacity',.35).attr('stroke-width',1.5).transition().duration(700).attr('fill-opacity',.09);
+    hullG.selectAll('text.clbl').data(clusters).join('text').attr('class','clbl').attr('text-anchor','middle').style('font','800 12px sans-serif').style('paint-order','stroke').attr('stroke','#04120a').attr('stroke-width',3).attr('fill',d=>d.color).text(d=>'◆ '+(+d.pct).toFixed(1)+'%');
+    sim.alpha(.35).restart();
+    renderClusterLegend(clusters);
+    const el=document.getElementById('stats');el.insertAdjacentHTML('beforeend','<div class="stat" style="border-color:#ffcf4d"><div class="l">🕸️ CLUSTERS</div><div class="v">'+clusters.length+' · '+(+clusters[0].pct).toFixed(1)+'%</div></div>');
   }).catch(()=>{})}
+}
+// Cluster legend in the side panel: color swatch · combined % · wallet count. Click flashes the members.
+function renderClusterLegend(cl){
+  const side=document.getElementById('side'); if(!side)return;
+  let el=document.getElementById('clusters'); if(!el){el=document.createElement('div');el.id='clusters';side.insertBefore(el,side.firstChild)}
+  el.innerHTML='<h3>🕸️ Clusters ('+cl.length+')</h3>'+cl.map(c=>'<div class="krow" data-m="'+c.members.map(m=>m.i).join(',')+'"><span style="width:14px;height:14px;border-radius:4px;flex:0 0 14px;background:'+c.color+';box-shadow:0 0 8px '+c.color+'"></span><div><div class="nm">Cluster '+c.letter+' · '+(+c.pct).toFixed(1)+'%</div><div class="sub">'+c.size+' wallets · $'+fmt(c.usd)+'</div></div></div>').join('');
+  [...el.querySelectorAll('.krow')].forEach(r=>r.onclick=()=>{const ids=new Set(r.dataset.m.split(',').map(Number));const svg=stage.querySelector('svg');if(!svg)return;d3.select(svg).selectAll('.node').filter(d=>ids.has(d.i)).select('.body').transition().duration(180).attr('stroke-width',7).transition().duration(600).attr('stroke-width',3.5)});
 }
 
 document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const v=document.getElementById('q').value.trim().replace(/^\$/,'');if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v)){showError('paste a valid coin CA or wallet address');return}crumbs=[];loadTarget('coin',v,'bags',true)});

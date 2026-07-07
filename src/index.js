@@ -7502,6 +7502,21 @@ async function handleWebApiRequest(request, response, requestUrl) {
       } catch (e) { sendWebJson(request, response, 500, { ok: false, error: String((e && e.message) || e) }); }
       return;
     }
+    // 💰 AIRDROP IMAGE (public) — branded PNG for the airdrop og:image / share card (was 404ing).
+    if (request.method === "GET" && pathname === "/api/airdrop/img") {
+      const dmint = String(requestUrl.searchParams.get("ca") || requestUrl.searchParams.get("mint") || "").trim();
+      if (!solanaPublicKeyLike(dmint)) { sendWebJson(request, response, 400, { ok: false, error: "ca required" }); return; }
+      try {
+        const { png } = await Promise.race([
+          renderAirdropMapPng(dmint),
+          new Promise((res) => setTimeout(() => res({ png: null }), 16_000)),
+        ]);
+        if (!png) { sendWebJson(request, response, 404, { ok: false, error: "no airdrop" }); return; }
+        response.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "public, max-age=180" });
+        response.end(png);
+      } catch (e) { sendWebJson(request, response, 500, { ok: false, error: String((e && e.message) || e) }); }
+      return;
+    }
     // 🕸️ MAP CLUSTERS (public) — connection edges + funder-clusters for a coin, loaded PROGRESSIVELY by the web
     // AFTER the bubbles render (funder resolution is the priciest read, so it's budget-gated + cached, and never
     // blocks the initial map). Edges reference holder node indices (same stable order as /api/map).
@@ -7543,6 +7558,40 @@ async function handleWebApiRequest(request, response, requestUrl) {
       }
       if (!map || !map.isToken) { sendWebJson(request, response, 200, { ok: false, error: "no airdrop data — paste a coin CA" }); return; }
       sendWebJson(request, response, 200, { ok: true, map });
+      return;
+    }
+
+    // 💼 WALLET HOLDINGS (public) — the airdrop/map drill-in: tap a wallet → what other coins it holds,
+    // value high→low. Cached; a bad/empty wallet returns an empty list (never an error card).
+    if (request.method === "GET" && pathname === "/api/wallet/holdings") {
+      const hw = String(requestUrl.searchParams.get("wallet") || requestUrl.searchParams.get("w") || "").trim();
+      if (!solanaPublicKeyLike(hw)) { sendWebJson(request, response, 400, { ok: false, error: "wallet required" }); return; }
+      const v = await Promise.race([
+        fetchWalletHoldings(hw).catch(() => ({ ok: true, wallet: hw, tokens: [], total: 0, count: 0 })),
+        new Promise((res) => setTimeout(() => res({ ok: true, wallet: hw, tokens: [], total: 0, count: 0, timeout: true }), 11_000)),
+      ]);
+      sendWebJson(request, response, 200, v);
+      return;
+    }
+
+    // 🪂 AIRDROPPER COINS (public) — every coin the airdropper of `ca` has sent out, for the airdrop coin
+    // selector ("filter by coin, select from there"). Progressive: the airdrop map renders first, then the
+    // page fetches this to populate the selector. Bounded + cached; empty list is a fine answer.
+    if (request.method === "GET" && pathname === "/api/airdrop/coins") {
+      let dev = String(requestUrl.searchParams.get("dev") || "").trim();
+      const ca = String(requestUrl.searchParams.get("ca") || requestUrl.searchParams.get("mint") || "").trim();
+      try {
+        if (!solanaPublicKeyLike(dev) && solanaPublicKeyLike(ca)) {
+          const map = await Promise.race([buildAirdropMap(ca).catch(() => null), new Promise((r) => setTimeout(() => r(null), 12_000))]);
+          dev = String(map?.dev || "").trim();
+        }
+        if (!solanaPublicKeyLike(dev)) { sendWebJson(request, response, 200, { ok: true, dev: "", coins: [] }); return; }
+        const coins = await Promise.race([
+          scanAirdropperCoins(dev).catch(() => []),
+          new Promise((res) => setTimeout(() => res([]), 15_000)),
+        ]);
+        sendWebJson(request, response, 200, { ok: true, dev, coins: coins || [] });
+      } catch (e) { sendWebJson(request, response, 200, { ok: true, dev: dev || "", coins: [] }); }
       return;
     }
 
@@ -30751,27 +30800,72 @@ let mapKolIdxCache = { at: 0, idx: null };
 async function mapKolIdentityIndex() {
   if (mapKolIdxCache.idx && Date.now() - mapKolIdxCache.at < 60 * 60_000) return mapKolIdxCache.idx;
   const idx = new Map();
+  const put = (w, name, tw, avatar) => {
+    if (!w) return;
+    tw = String(tw || "").replace(/^@/, "");
+    if (!(tw || name)) return;
+    const prev = idx.get(w);
+    // Keep the RICHEST record: prefer one that carries a twitter handle + avatar (so a later name-only
+    // source never downgrades a fully-resolved KOL). New entries always win when we have nothing yet.
+    if (prev && (prev.twitter || prev.avatar) && !(tw && avatar)) return;
+    idx.set(w, { name: name || (tw ? `@${tw}` : (prev && prev.name) || ""), twitter: tw || (prev && prev.twitter) || "", avatar: avatar || (prev && prev.avatar) || "" });
+  };
   if (CONFIG.solanaTrackerApiKey) {
-    // Page 1 of the leaderboard (top ~100 traders). One call, cached an hour → maps stay free.
+    // WIDER leaderboard: pages 1-3 (~top 300 traders), each cached an hour → maps stay ~free. More named
+    // wallets = more of a coin's holders resolve to a real KOL identity instead of an anon slime face.
     try {
-      const data = await solanaTrackerJson(`/top-traders/all/1`, { cacheTtlMs: 55 * 60_000, timeoutMs: 7000 });
-      for (const k of normalizeKolLeaderboard(data)) {
-        if (k.wallet && (k.twitter || k.name)) idx.set(k.wallet, { name: k.name, twitter: k.twitter || "", avatar: k.avatar || "" });
-      }
+      const pages = await Promise.all([1, 2, 3].map((p) =>
+        solanaTrackerJson(`/top-traders/all/${p}`, { cacheTtlMs: 55 * 60_000, timeoutMs: 7000 }).catch(() => null)));
+      for (const data of pages) for (const k of normalizeKolLeaderboard(data)) put(k.wallet, k.name, k.twitter, k.avatar);
     } catch { /* leave empty — unknown wallets just render as slime faces */ }
-    // WIDER coverage: fold in our KOL scanner's roster (hot/top/consistent) — more named wallets + avatars than
-    // the raw leaderboard, harnessing ST + our learned winners (owner: "follow kols... not just from our api").
+    // Fold in our KOL scanner's roster (hot/top/consistent) — more named wallets + avatars than the raw
+    // leaderboard, harnessing ST + our learned winners (owner: "follow kols... not just from our api").
     try {
       const scans = await Promise.all(["hot", "top", "consistent"].map((m) => buildKolScan("map", m, "").catch(() => null)));
       for (const sc of scans) for (const k of (sc && sc.kols) || []) {
-        const w = firstString(k.wallet, k.kolWallet, k.address);
-        const tw = String(firstString(k.twitter, k.xHandle, k.handle, k.x) || "").replace(/^@/, "");
-        if (w && !idx.has(w) && (tw || k.name)) idx.set(w, { name: k.name || (tw ? `@${tw}` : ""), twitter: tw, avatar: firstString(k.avatar, k.pfp, k.image) || "" });
+        put(firstString(k.wallet, k.kolWallet, k.address), k.name, firstString(k.twitter, k.xHandle, k.handle, k.x), firstString(k.avatar, k.pfp, k.image));
       }
     } catch { /* leaderboard-only is fine */ }
   }
+  // EVERY roster we've built in-memory over time (free, no API): the winner-follow poller, the KOL tracker,
+  // the copy engine, and the env-seeded KOL_WALLETS. These carry names our leaderboards may not.
+  try {
+    for (const [w, m] of trackedKolWallets) put(w, m && (m.name || m.twitter) ? (m.name || `@${m.twitter}`) : "", m && (m.twitter || m.xHandle), m && (m.avatar || m.pfp));
+    for (const [w, m] of autoKolWallets) put(w, m && m.name ? m.name : "", m && m.twitter, m && m.avatar);
+    for (const w of KOL_WALLETS) if (!idx.has(w)) put(w, shortMint(w), "", "");
+  } catch { /* in-memory rosters are best-effort */ }
+  // FREE kolscan.io identities (no API key) — guarded: it IP-blocks from some hosts (like fxtwitter on
+  // Render), so it silently no-ops on failure and the other sources still populate the index.
+  try {
+    const ks = await fetchKolscanIdentities().catch(() => []);
+    for (const k of ks || []) put(k.wallet, k.name, k.twitter, k.avatar);
+  } catch { /* kolscan optional */ }
   mapKolIdxCache = { at: Date.now(), idx };
   return idx;
+}
+// FREE KOL identity scrape from kolscan.io's leaderboard (name + X handle + wallet). No API key. Cached 1h.
+// Returns [] on any failure (it IP-blocks from some hosts) so it can never break the map.
+let kolscanIdCache = { at: 0, list: [] };
+async function fetchKolscanIdentities() {
+  if (Date.now() - kolscanIdCache.at < 60 * 60_000 && kolscanIdCache.list.length) return kolscanIdCache.list;
+  const out = [];
+  try {
+    const res = await fetch("https://kolscan.io/leaderboard", { headers: { "user-agent": "Mozilla/5.0 SlimeWire", "accept": "text/html" }, signal: AbortSignal.timeout(6000) });
+    if (!res.ok) throw new Error("kolscan " + res.status);
+    const html = await res.text();
+    // Wallets + X handles are embedded in the page's RSC/JSON payload. Pull (name, twitter, wallet) triples
+    // heuristically: any 32-44 char base58 near a @handle. Best-effort — malformed matches are dropped.
+    const re = /"(?:name|username)":"([^"]{1,24})"[^}]{0,120}?"(?:twitter|x|handle)":"@?([A-Za-z0-9_]{1,20})"[^}]{0,200}?"([1-9A-HJ-NP-Za-km-z]{32,44})"/g;
+    let m; let n = 0;
+    while ((m = re.exec(html)) && n < 200) { out.push({ name: m[1], twitter: m[2], wallet: m[3], avatar: `https://unavatar.io/twitter/${m[2]}` }); n++; }
+    // Fallback: bare wallet↔handle pairs if the structured triple missed.
+    if (!out.length) {
+      const re2 = /@([A-Za-z0-9_]{2,20})[^"]{0,80}?([1-9A-HJ-NP-Za-km-z]{32,44})/g;
+      while ((m = re2.exec(html)) && out.length < 120) out.push({ name: `@${m[1]}`, twitter: m[1], wallet: m[2], avatar: `https://unavatar.io/twitter/${m[1]}` });
+    }
+  } catch { /* IP-blocked / offline → [] */ }
+  kolscanIdCache = { at: Date.now(), list: out };
+  return out;
 }
 
 // wallet -> identity: ST leaderboard index first (carries twitter/avatar), then our in-memory KOL rosters
@@ -30902,7 +30996,7 @@ async function buildTokenHolderMap(mint) {
     // Label KOLs (name + %) and the biggest anon holders ($ + %), so the whales are always readable.
     let label = null;
     if (id.isKol) label = `${id.name} · ${(h.pct || 0).toFixed(1)}%`;
-    else if (i < 3 && usd > 0) label = `$${fmtMc(usd)} · ${(h.pct || 0).toFixed(1)}%`;
+    else if (i < 3 && usd > 0) label = `${fmtMc(usd)} · ${(h.pct || 0).toFixed(1)}%`;   // fmtMc already prefixes $ — no double $$
     return {
       i, wallet: h.wallet, isKol: id.isKol, name: id.name, twitter: id.twitter,
       weight: Math.max(0.05, Math.min(1, (h.pct || 0) / maxPct)),
@@ -31105,6 +31199,90 @@ function airdropAmt(n) {
   return String(Math.round(n));
 }
 
+// 💼 What a wallet HOLDS — the airdrop drill-in ("tap a recipient → what other coins do they hold?"). Free:
+// reuses the Solana Tracker portfolio the wallet map already reads. Returns tokens sorted value high→low.
+const walletHoldingsCache = new Map();
+async function fetchWalletHoldings(wallet) {
+  if (!solanaPublicKeyLike(wallet)) return { ok: false, error: "bad wallet", tokens: [] };
+  const cached = walletHoldingsCache.get(wallet);
+  if (cached && Date.now() - cached.at < 4 * 60_000) return cached.v;
+  let tokens = [];
+  try {
+    const d = await solanaTrackerJson(`/wallet/${encodeURIComponent(wallet)}`, { cacheTtlMs: 4 * 60_000, timeoutMs: 9000 });
+    const toks = (d && (d.tokens || d.holdings || d.assets)) || [];
+    tokens = toks.map((t) => {
+      const tk = t.token || t;
+      return {
+        mint: firstString(tk.mint, tk.address, t.mint) || "",
+        sym: String(firstString(tk.symbol, tk.ticker) || shortMint(firstString(tk.mint, tk.address) || "")).slice(0, 14),
+        name: String(firstString(tk.name, tk.symbol) || "").slice(0, 24),
+        val: Number(t.value ?? t.valueUsd ?? t.usdValue ?? (t.balance && t.price ? t.balance * t.price : 0)) || 0,
+        image: firstString(tk.image, tk.logo, tk.icon, tk.imageUrl) || "",
+      };
+    }).filter((r) => r.mint && r.val > 0).sort((a, b) => b.val - a.val).slice(0, 40);
+  } catch { tokens = []; }
+  const v = { ok: true, wallet, tokens, total: tokens.reduce((s, t) => s + t.val, 0), count: tokens.length };
+  walletHoldingsCache.set(wallet, { at: Date.now(), v });
+  if (walletHoldingsCache.size > 400) walletHoldingsCache.delete(walletHoldingsCache.keys().next().value);
+  return v;
+}
+
+// 🪂 The airdropper's WHOLE history — every coin this dev/airdropper has sent out (for the airdrop coin
+// selector: "filter by coin, select from there"). Scans the dev's recent signatures ONCE, groups outbound
+// token sends by mint, then labels the top mints with a ticker. Bounded + budget-gated + cached per dev.
+const airdropperCoinsCache = new Map();
+async function scanAirdropperCoins(devWallet, maxTx = 80, deadlineMs = 11000) {
+  if (!solanaPublicKeyLike(devWallet)) return [];
+  const cached = airdropperCoinsCache.get(devWallet);
+  if (cached && Date.now() - cached.at < 30 * 60_000) return cached.list;
+  let pk; try { pk = new PublicKey(devWallet); } catch { return []; }
+  const byMint = new Map();   // mint -> { recipients:Set, tokens }
+  const withTimeout = (p, ms) => Promise.race([p, new Promise((res) => setTimeout(() => res(null), ms))]);
+  const deadline = Date.now() + deadlineMs;
+  try {
+    const sigs = await withTimeout(rpcRead("airdropper: sigs", (c) => c.getSignaturesForAddress(pk, { limit: 1000 }), { retries: 0 }).catch(() => []), 4000);
+    if (!Array.isArray(sigs) || !sigs.length) { airdropperCoinsCache.set(devWallet, { at: Date.now(), list: [] }); return []; }
+    const candidates = sigs.slice(-maxTx).map((s) => s.signature).reverse();
+    const BATCH = 10;
+    for (let i = 0; i < candidates.length; i += BATCH) {
+      if (Date.now() > deadline || !airdropBudgetOk()) break;
+      const slice = candidates.slice(i, i + BATCH);
+      airdropTxUsedToday += slice.length;
+      const txs = await Promise.all(slice.map((sig) => withTimeout(rpcRead("airdropper: tx", (c) => c.getParsedTransaction(sig, { maxSupportedTransactionVersion: 0 }), { retries: 0 }).catch(() => null), 2500)));
+      for (const tx of txs) {
+        const pre = tx?.meta?.preTokenBalances || [], post = tx?.meta?.postTokenBalances || [];
+        if (!pre.length && !post.length) continue;
+        const perMint = new Map();   // mint -> Map(owner -> delta)
+        const bump = (mint, owner, d) => { if (!perMint.has(mint)) perMint.set(mint, new Map()); const mm = perMint.get(mint); mm.set(owner, (mm.get(owner) || 0) + d); };
+        for (const b of pre) if (b.mint && b.owner) bump(b.mint, b.owner, -Number(b.uiTokenAmount?.uiAmount || 0));
+        for (const b of post) if (b.mint && b.owner) bump(b.mint, b.owner, Number(b.uiTokenAmount?.uiAmount || 0));
+        for (const [mint, mm] of perMint) {
+          if ((mm.get(devWallet) || 0) >= 0) continue;                 // dev didn't send this mint out here
+          let rec = byMint.get(mint); if (!rec) { rec = { recipients: new Set(), tokens: 0 }; byMint.set(mint, rec); }
+          for (const [o, d] of mm) { if (o !== devWallet && d > 0) { rec.recipients.add(o); rec.tokens += d; } }
+        }
+      }
+    }
+  } catch { /* partial is fine */ }
+  let list = [...byMint.entries()]
+    .map(([mint, r]) => ({ mint, recipients: r.recipients.size, tokens: r.tokens }))
+    .filter((x) => x.recipients >= 2)                                  // real drops only (2+ recipients)
+    .sort((a, b) => b.recipients - a.recipients).slice(0, 12);
+  // Label the top mints with a ticker (cached pump/dex meta) so the selector shows $TICKER not a raw mint.
+  try {
+    await Promise.all(list.map(async (x) => {
+      const pm = await withTimeout(getPumpFunTokenMetadata(x.mint).catch(() => null), 2500);
+      let sym = pm?.symbol || "";
+      if (!sym) { const pr = await withTimeout(fetchDexScreenerTokenPairsFallback(x.mint).catch(() => null), 2500); const bp = pr ? bestDexPairForToken(x.mint, pr) : null; sym = (bp && metadataFromDexPair(x.mint, bp)?.symbol) || ""; }
+      x.sym = sym || shortMint(x.mint);
+      x.image = firstString(pm?.image, pm?.imageUrl, pm?.image_uri) || "";
+    }));
+  } catch { /* labels are best-effort */ }
+  airdropperCoinsCache.set(devWallet, { at: Date.now(), list });
+  if (airdropperCoinsCache.size > 150) airdropperCoinsCache.delete(airdropperCoinsCache.keys().next().value);
+  return list;
+}
+
 // WALLET map: bags = tokens currently held (ST portfolio); network = tokens recently traded (ST trades).
 async function buildWalletMap(wallet, mode = "bags") {
   const idx = await mapKolIdentityIndex().catch(() => new Map());
@@ -31160,14 +31338,17 @@ const mapClusterCache = new Map();
 async function mapComputeClusters(mint, nodes) {
   const cached = mapClusterCache.get(mint);
   if (cached && Date.now() - cached.at < 10 * 60_000) return cached.v;
-  const top = (nodes || []).filter((n) => n.wallet).slice(0, 14);   // only the biggest holders (cost control)
+  const top = (nodes || []).filter((n) => n.wallet).slice(0, 40);   // top ~40 holders (owner-chosen cluster depth)
   const funderOf = new Map();
+  // Cluster across the FULL top-40, but cap FRESH Alchemy funder reads per coin: already-cached/observed
+  // funders (most active holders, tracked by autopilot) are free + instant, so coverage stays deep without
+  // 40 sequential RPC calls blowing the daily budget or the /api/map/graph 11s race.
+  let newLookups = 0; const MAX_NEW_FUNDER_LOOKUPS = 14;
   for (const n of top) {
     let f = walletFunderCache.get(n.wallet);
     if (f === undefined) { const obs = walletObs.get(n.wallet); if (obs && obs.funder !== undefined) f = obs.funder; }
-    if (f === undefined) {
-      if (!funderBudgetOk()) break;                 // out of the daily Alchemy budget → stop (partial clusters)
-      funderUsedToday += 1;
+    if (f === undefined && newLookups < MAX_NEW_FUNDER_LOOKUPS && funderBudgetOk()) {
+      newLookups += 1; funderUsedToday += 1;
       f = await lookupWalletFunder(n.wallet).catch(() => null);
     }
     if (f) funderOf.set(n.wallet, f);
@@ -31177,14 +31358,23 @@ async function mapComputeClusters(mint, nodes) {
   const nodeOf = new Map(nodes.map((n) => [n.wallet, n]));
   const edges = [], clusters = []; let cid = 0;
   for (const [, arr] of byFunder) {
-    if (arr.length < 2 || arr.length > 4) continue;   // tight cluster = one actor; 5+ = CEX/common source, skip
+    // 2-6 wallets sharing ONE funder = one actor (insider/bundle) → a cluster. 7+ = a common source (CEX
+    // withdrawals etc.), not a coordinated group, so we skip it to avoid false clusters.
+    if (arr.length < 2 || arr.length > 6) continue;
     const members = arr.map((w) => nodeOf.get(w)).filter(Boolean);
     if (members.length < 2) continue;
+    members.sort((a, b) => (b.pct || 0) - (a.pct || 0));   // biggest bag = cluster hub for the star edges
     for (const m of members) m.clusterId = cid;
     for (let i = 1; i < members.length; i++) edges.push({ a: members[0].i, b: members[i].i });
-    clusters.push({ id: cid, size: members.length, usd: members.reduce((s, m) => s + (m.usd || 0), 0), pct: members.reduce((s, m) => s + (m.pct || 0), 0) });
+    clusters.push({
+      id: cid, size: members.length,
+      members: members.map((m) => m.i),                     // node indices → frontend colors/hulls the group
+      usd: members.reduce((s, m) => s + (m.usd || 0), 0),
+      pct: Math.round(members.reduce((s, m) => s + (m.pct || 0), 0) * 10) / 10,
+    });
     cid++;
   }
+  clusters.sort((a, b) => b.pct - a.pct);                   // biggest cluster first (for the legend)
   const v = { edges, clusters };
   mapClusterCache.set(mint, { at: Date.now(), v });
   if (mapClusterCache.size > 200) mapClusterCache.delete(mapClusterCache.keys().next().value);
@@ -31211,6 +31401,24 @@ async function renderSubjectMapPng(target, mode = "bags") {
   const png = await renderSlimeMapPng({ subject: map.subject, subtitle: map.subtitle, stats: map.stats, nodes: map.nodes, bgPath });
   mapRenderCache.set(key, { at: Date.now(), png, map });
   if (mapRenderCache.size > 200) mapRenderCache.delete(mapRenderCache.keys().next().value);
+  return { png, map };
+}
+
+// 💰 Render the AIRDROP map to a branded PNG — the og:image / X-TG share card (the meta tag pointed at
+// /api/airdrop/img, which used to 404). Reuses the same slime renderer; airdrop node states map to the
+// renderer's palette (diamond→hold green, sold→red).
+const airdropRenderCache = new Map();
+async function renderAirdropMapPng(mint) {
+  const cached = airdropRenderCache.get(mint);
+  if (cached && Date.now() - cached.at < MAP_RENDER_TTL) return { png: cached.png, map: cached.map };
+  const map = await buildAirdropMap(mint).catch(() => null);
+  if (!map || !map.isToken || !Array.isArray(map.nodes) || !map.nodes.length) return { png: null, map: null };
+  const { renderSlimeMapPng } = await import("./lib/slimeMapRender.mjs");
+  const bgPath = await mapPickBg(`${map.subject}${mint}drop`);
+  const nodes = map.nodes.map((n) => ({ ...n, state: n.state === "sold" ? "sold" : (n.crown ? "whale" : "hold") }));
+  const png = await renderSlimeMapPng({ subject: map.subject, subtitle: map.subtitle, stats: map.stats, nodes, bgPath });
+  airdropRenderCache.set(mint, { at: Date.now(), png, map });
+  if (airdropRenderCache.size > 150) airdropRenderCache.delete(airdropRenderCache.keys().next().value);
   return { png, map };
 }
 
