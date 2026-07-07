@@ -7530,8 +7530,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
         // socket open for 45s+.
         const graph = await Promise.race([
           (async () => {
-            const rows = await fetchTokenHolderRows(cm).catch(() => []);
-            const info = await alphaRadarFetchMc(cm).catch(() => null); const cmc = (info && info.mc) || 0;
+            const [rows, info] = await Promise.all([   // holders + mc in parallel (both cached, but independent)
+              fetchTokenHolderRows(cm).catch(() => []),
+              alphaRadarFetchMc(cm).catch(() => null),
+            ]);
+            const cmc = (info && info.mc) || 0;
             const cnodes = rows.slice(0, 45).map((h, i) => ({ i, wallet: h.wallet, pct: h.pct || 0, usd: cmc ? ((h.pct || 0) / 100) * cmc : 0 }));
             return await mapComputeClusters(cm, cnodes);
           })(),
@@ -31337,7 +31340,9 @@ async function buildWalletMap(wallet, mode = "bags") {
 const mapClusterCache = new Map();
 async function mapComputeClusters(mint, nodes) {
   const cached = mapClusterCache.get(mint);
-  if (cached && Date.now() - cached.at < 10 * 60_000) return cached.v;
+  // Good cluster results cache 10min; EMPTY/partial results only 90s so background-warmed funders (the
+  // slow fresh lookups that timed out but kept running + cached) surface on the next load.
+  if (cached) { const ttl = (cached.v && cached.v.clusters && cached.v.clusters.length) ? 10 * 60_000 : 90_000; if (Date.now() - cached.at < ttl) return cached.v; }
   const top = (nodes || []).filter((n) => n.wallet).slice(0, 40);   // top ~40 holders (owner-chosen cluster depth)
   const funderOf = new Map();
   const need = [];
@@ -31357,7 +31362,14 @@ async function mapComputeClusters(mint, nodes) {
     if (!funderBudgetOk()) break;
     const slice = fresh.slice(i, i + FUNDER_BATCH);
     funderUsedToday += slice.length;
-    const res = await Promise.all(slice.map((w) => lookupWalletFunder(w).catch(() => null)));
+    // Per-lookup HARD 3s cap: lookupWalletFunder walks up to 3× getSignaturesForAddress(1000)+4× getParsed
+    // with NO internal timeout, and it runs on the biggest/most-active wallets (slowest) — one slow read
+    // hung the whole graph. On timeout we return null here, but the lookup keeps running and caches the
+    // real funder, so the NEXT graph load (page auto-refresh) warms in the clusters.
+    const res = await Promise.all(slice.map((w) => Promise.race([
+      lookupWalletFunder(w).catch(() => null),
+      new Promise((r) => setTimeout(() => r(null), 3000)),
+    ])));
     res.forEach((f, k) => { if (f) funderOf.set(slice[k], f); });
   }
   const byFunder = new Map();
