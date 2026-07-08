@@ -69,7 +69,7 @@ import {
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
-import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
+import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenInfo, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
 import { getNoxaScan, fetchNoxaFeed, fetchPoolBuys, NOXA_RH } from "./lib/noxaLaunchpad.js";
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp, listCharacterFiles, characterPfpCount, makeCharacterPfp } from "./lib/pfp.js";
 import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
@@ -14035,7 +14035,7 @@ async function handleMessage(message, userId) {
   const cashtag = /^\$([A-Za-z][A-Za-z0-9._]{1,19})$/.exec(text.trim());
   if (cashtag) {
     if (tgCommandOnCooldown(chatId, "cashtag", TG_LOOK_COOLDOWN_MS)) return;
-    const mint = await resolveCashtagToMint(cashtag[1]).catch(() => null);
+    const mint = await resolveTickerToScanTarget(cashtag[1]).catch(() => null);
     if (mint) await handleTelegramLookCommand(chatId, message, mint);
     else if (isPrivateChat(message.chat)) await say(chatId, `Couldn't find a token for $${escapeTelegramHtml(cashtag[1])}. Paste its contract address (CA) and I'll pull the card.`);
     return;
@@ -30888,6 +30888,26 @@ function isLikelySolMint(s) {
 // Resolve a cashtag ("$OGRE") to its token mint so a ticker posts the SAME scan card as a CA.
 // DexScreener symbol search → the highest-liquidity Solana pair whose base symbol matches.
 const cashtagMintCache = new Map();
+function tokenSearchRows(data) {
+  const rows = [];
+  const addRows = (value) => {
+    for (const row of arrayFromApiData(value)) if (row && typeof row === "object") rows.push(row);
+  };
+  addRows(data);
+  addRows(data?.data);
+  addRows(data?.result);
+  addRows(data?.response);
+  return rows;
+}
+function tokenSearchSymbol(row = {}) {
+  return firstString(row.symbol, row.token?.symbol, row.baseToken?.symbol, row.base?.symbol);
+}
+function tokenSearchMint(row = {}) {
+  return firstString(row.mint, row.address, row.tokenAddress, row.token?.mint, row.token?.address, row.baseToken?.address, row.base?.address);
+}
+function tokenSearchLiquidity(row = {}) {
+  return firstMeaningfulNumber(row.liquidityUsd, row.liquidity?.usd, row.liquidity, row.token?.liquidityUsd, row.token?.liquidity?.usd, row.pool?.liquidity?.usd, row.market?.liquidityUsd) || 0;
+}
 async function resolveCashtagToMint(symbol) {
   const q = String(symbol || "").replace(/^\$/, "").trim();
   if (q.length < 2) return null;
@@ -30900,11 +30920,11 @@ async function resolveCashtagToMint(symbol) {
   if (CONFIG.solanaTrackerApiKey) {
     try {
       const d = await solanaTrackerJson(`/search?query=${encodeURIComponent(q)}`, { cacheTtlMs: 60_000, timeoutMs: 6000 }).catch(() => null);
-      const rows = Array.isArray(d?.data) ? d.data : Array.isArray(d?.tokens) ? d.tokens : Array.isArray(d) ? d : [];
+      const rows = tokenSearchRows(d);
       // EXACT ticker match ONLY (never resolve "$gm"/"$lol" to a random token). Pick the deepest-liquidity one.
-      const exact = rows.filter((r) => String(r.symbol || "").toLowerCase() === key && (r.mint || r.address || r.tokenAddress));
-      const pick = exact.sort((a, b) => (Number(b.liquidityUsd ?? b.liquidity ?? 0)) - (Number(a.liquidityUsd ?? a.liquidity ?? 0)))[0];
-      mint = pick?.mint || pick?.address || pick?.tokenAddress || null;
+      const exact = rows.filter((r) => String(tokenSearchSymbol(r)).toLowerCase() === key && tokenSearchMint(r));
+      const pick = exact.sort((a, b) => tokenSearchLiquidity(b) - tokenSearchLiquidity(a))[0];
+      mint = tokenSearchMint(pick);
     } catch { mint = null; }
   }
   // 2) DexScreener fallback — exact ticker, best real liquidity. Relaxed floor (was $2k) so fresh/thin
@@ -30924,6 +30944,68 @@ async function resolveCashtagToMint(symbol) {
   }
   cashtagMintCache.set(key, { at: Date.now(), mint });
   return mint;
+}
+const rhTickerTargetCache = new Map();
+async function resolveRhTickerToAddress(symbol) {
+  const q = String(symbol || "").replace(/^\$|^#/, "").trim();
+  if (q.length < 2) return null;
+  const key = q.toLowerCase();
+  const cached = rhTickerTargetCache.get(key);
+  if (cached && Date.now() - cached.at < 60_000) return cached.address;
+  const candidates = [];
+  const add = (address, row = {}, source = "") => {
+    const a = String(address || "").trim();
+    if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return;
+    const sym = String(row.symbol || row.baseToken?.symbol || "").replace(/^\$+/, "").toLowerCase();
+    if (sym !== key) return;
+    const liq = firstMeaningfulNumber(row.liquidityUsd, row.liquidity?.usd, row.liq) || 0;
+    const vol = firstMeaningfulNumber(row.volume24hUsd, row.volume?.h24, row.volume?.["24h"], row.vol24) || 0;
+    const mc = firstMeaningfulNumber(row.marketCapUsd, row.marketCap, row.fdv, row.mc) || 0;
+    const holders = firstMeaningfulNumber(row.holders, row.holders_count) || 0;
+    candidates.push({ address: a, source, score: liq * 8 + vol + mc * 0.04 + holders * 50 });
+  };
+  try {
+    const d = await fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { timeoutMs: 4500 }).catch(() => null);
+    for (const p of Array.isArray(d?.pairs) ? d.pairs : []) {
+      if (String(p.chainId || "").toLowerCase() !== "robinhood") continue;
+      add(p.baseToken?.address, p, "dexscreener");
+    }
+  } catch { /* keep feed fallback */ }
+  try {
+    const feed = await Promise.race([rhFeedTokens().catch(() => []), new Promise((resolve) => setTimeout(() => resolve([]), 3500))]);
+    for (const row of Array.isArray(feed) ? feed : []) add(row.address, row, row.source || "blockscout");
+  } catch { /* no RH ticker hit */ }
+  const pick = candidates.sort((a, b) => b.score - a.score)[0] || null;
+  const address = pick?.address || null;
+  rhTickerTargetCache.set(key, { at: Date.now(), address });
+  if (rhTickerTargetCache.size > 300) rhTickerTargetCache.delete(rhTickerTargetCache.keys().next().value);
+  return address;
+}
+async function resolveTickerToScanTarget(symbol) {
+  const q = String(symbol || "").replace(/^\$|^#/, "").trim();
+  if (q.length < 2) return null;
+  const [sol, rh] = await Promise.all([
+    resolveCashtagToMint(q).catch(() => null),
+    resolveRhTickerToAddress(q).catch(() => null)
+  ]);
+  return sol || rh || null;
+}
+const BARE_TICKER_STOPWORDS = new Set([
+  "scan", "check", "look", "chart", "rug", "safe", "safety", "ca", "cas", "contract", "token", "coin", "coins",
+  "buy", "sell", "price", "info", "this", "that", "with", "from", "what", "when", "where", "under", "reply",
+  "slimewire", "slimewiredbot", "bot", "please", "pls"
+]);
+function extractBareTickerHints(text) {
+  const cleaned = String(text || "")
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/@\w+/g, " ")
+    .replace(/\$[A-Za-z][A-Za-z0-9]{1,14}\b/g, " ");
+  const commandy = /\b(scan|check|look|chart|rug|safe|price|ca|contract|ticker|token|coin)\b/i.test(cleaned);
+  const words = [...cleaned.matchAll(/\b[A-Za-z][A-Za-z0-9]{1,14}\b/g)]
+    .map((m) => m[0])
+    .filter((w) => !BARE_TICKER_STOPWORDS.has(w.toLowerCase()));
+  if (!commandy && words.length > 2) return [];
+  return [...new Set(words.filter((w) => commandy || /^[A-Z0-9]{2,14}$/.test(w)).map((w) => w.toUpperCase()))].slice(0, 4);
 }
 // A DexScreener link's address is the PAIR, NOT the token mint (dexscreener.com/solana/<pairAddr>). Resolve
 // pair → the coin's mint via the pairs API so a pasted DS link scans the coin (owner: "post dexscreener link
@@ -30962,8 +31044,10 @@ async function resolveScanTargetFromText(text, urls = []) {
   // 2) bare CA / pump link → the base58 is the mint
   const mints = extractMintsFromText(blob);
   if (mints.length) return mints[0];
-  // 3) $ticker
-  for (const tag of extractCashtags(blob)) { const m = await resolveCashtagToMint(tag).catch(() => null); if (m) return m; }
+  // 3) $ticker (Solana first, Robinhood Chain fallback)
+  for (const tag of extractCashtags(blob)) { const m = await resolveTickerToScanTarget(tag).catch(() => null); if (m) return m; }
+  // 4) bare ticker in an intentional scan request ("scan CASHCAT", "@bot chart OGRE")
+  for (const tag of extractBareTickerHints(blob)) { const m = await resolveTickerToScanTarget(tag).catch(() => null); if (m) return m; }
   return null;
 }
 
@@ -30996,9 +31080,15 @@ async function resolveAllScanTargetsFromText(text, urls = [], cap = 4) {
     add(m);
     if (out.length >= cap) return out.slice(0, cap);
   }
-  // 3) $tickers — resolve each to a mint
+  // 3) $tickers — resolve each to a Solana mint or Robinhood Chain 0x token
   for (const tag of extractCashtags(blob)) {
-    const mint = await resolveCashtagToMint(tag).catch(() => null);
+    const mint = await resolveTickerToScanTarget(tag).catch(() => null);
+    if (mint) add(mint);
+    if (out.length >= cap) return out.slice(0, cap);
+  }
+  // 4) bare ticker hints in intentional scan requests
+  for (const tag of extractBareTickerHints(blob)) {
+    const mint = await resolveTickerToScanTarget(tag).catch(() => null);
     if (mint) add(mint);
     if (out.length >= cap) return out.slice(0, cap);
   }
@@ -31209,11 +31299,11 @@ async function gatherSlimeScan(mint) {
       liquidityUsd: stMarket.liquidityUsd,
       holderCount: stMarket.holderCount,
       priceUsd: stMarket.priceUsd,
-      pairCreatedAt: stMarket.createdAtMs || null,
-      priceChange: (Number.isFinite(stMarket.ch1) || Number.isFinite(stMarket.ch24))
-        ? { ...(Number.isFinite(stMarket.ch1) ? { h1: stMarket.ch1 } : {}), ...(Number.isFinite(stMarket.ch24) ? { h24: stMarket.ch24 } : {}) }
+      pairCreatedAt: firstMeaningfulNumber(stMarket.createdAtMs, stMarket.pairCreatedAt) || null,
+      priceChange: (Number.isFinite(stMarket.ch1) || Number.isFinite(stMarket.ch24) || stMarket.priceChange)
+        ? { ...(stMarket.priceChange || {}), ...(Number.isFinite(stMarket.ch1) ? { h1: stMarket.ch1 } : {}), ...(Number.isFinite(stMarket.ch24) ? { h24: stMarket.ch24 } : {}) }
         : null,
-      volume: stMarket.volume24Usd > 0 ? { h24: stMarket.volume24Usd } : null,
+      volume: stMarket.volume || (stMarket.volume24Usd > 0 ? { h24: stMarket.volume24Usd } : null),
       txns: (stMarket.buys24 > 0 || stMarket.sells24 > 0) ? { h24: { buys: stMarket.buys24 || 0, sells: stMarket.sells24 || 0 } } : null,
     });
   }
@@ -31227,7 +31317,9 @@ async function gatherSlimeScan(mint) {
   // Universal on-chain name/symbol/image fallback so the X card ALWAYS has a symbol + pic, even for a
   // graduated / non-pump coin DexScreener + pump don't cover. Only fetched when the cheap sources are thin.
   let onchain = null;
-  if (!(meta && meta.symbol) && !(bonding && bonding.symbol)) onchain = await fetchOnchainTokenMeta(mint).catch(() => null);
+  const hasCheapSymbol = Boolean(meta?.symbol || bonding?.symbol);
+  const hasCheapImage = Boolean(meta?.imageUrl || meta?.image || meta?.icon || bonding?.imageUrl || bonding?.image || bonding?.imageUri || bonding?.image_uri);
+  if (!hasCheapSymbol || !hasCheapImage) onchain = await fetchOnchainTokenMeta(mint).catch(() => null);
   if (onchain && (onchain.symbol || onchain.name || onchain.imageUrl || onchain.avatarUrl)) {
     meta = mergeTokenMarketMetadata(meta, {
       symbol: onchain.symbol,
@@ -32441,6 +32533,9 @@ function extractMintsFromText(text) {
   for (const t of runs) if (isLikelySolMint(t) && !out.includes(t)) out.push(t);
   return out;
 }
+function extractRhAddressesFromText(text) {
+  return [...new Set(String(text || "").match(/0x[0-9a-fA-F]{40}/g) || [])];
+}
 // $tickers in a tweet (exact-symbol only; resolveCashtagToMint never resolves casual chatter).
 function extractCashtags(text) {
   return [...new Set((String(text || "").match(/\$[A-Za-z][A-Za-z0-9]{1,14}\b/g) || []).map((s) => s.slice(1)))];
@@ -32522,18 +32617,41 @@ function makeXVary(seed) {
     danger: pick(["⛔", "🔴", "🚨"])
   };
 }
+async function xFallbackLogoBuffer(label, seed = "") {
+  const clean = String(label || "SW").replace(/^\$+/, "").replace(/[^\w]/g, "").slice(0, 5).toUpperCase() || "SW";
+  let h = 2166136261; const s = String(seed || clean); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  const hue = Math.abs(h % 70) + 80;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+    <defs>
+      <radialGradient id="g" cx="35%" cy="25%" r="75%">
+        <stop offset="0" stop-color="#eaff9a"/>
+        <stop offset="0.5" stop-color="hsl(${hue}, 95%, 48%)"/>
+        <stop offset="1" stop-color="#031007"/>
+      </radialGradient>
+      <filter id="glow"><feGaussianBlur stdDeviation="9" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    </defs>
+    <rect width="512" height="512" rx="112" fill="url(#g)"/>
+    <circle cx="256" cy="256" r="214" fill="none" stroke="#b9ff6b" stroke-width="18" opacity="0.85"/>
+    <text x="256" y="287" text-anchor="middle" font-family="Arial Black, Arial" font-size="${clean.length <= 3 ? 128 : 94}" font-weight="900" fill="#061007" filter="url(#glow)">${clean}</text>
+  </svg>`;
+  try { return await sharp(Buffer.from(svg)).png().toBuffer(); } catch { return null; }
+}
 // The reply = tight value text (no link-spam) + a branded scan card. Returns null if the mint won't scan.
 // `variant` (the tweet id) seeds BOTH the text wording and the card art so no two replies look/read alike.
 async function buildXScanReply(mint, variant) {
   const scan = await gatherSlimeScan(mint).catch(() => null);
   if (!scan) return null;
   const { meta, bonding, best, shield, rug, onchain } = scan;
-  const symbol = String(meta?.symbol || bonding?.symbol || onchain?.symbol || "").replace(/^\$+/, "").slice(0, 12);
-  const name = String(meta?.name || bonding?.name || onchain?.name || "").slice(0, 40);
+  let symbol = String(meta?.symbol || bonding?.symbol || onchain?.symbol || "").replace(/^\$+/, "").slice(0, 12);
+  let name = String(meta?.name || bonding?.name || onchain?.name || "").slice(0, 40);
   const stats = scanMarketStatsFromSources({ meta, bonding, best, rug, supply: scan.supply, mint });
   const mc = stats.mc;
   const liq = stats.liq;
-  if (!symbol && !(mc > 0)) return null;
+  if (!symbol && !(mc > 0)) {
+    try { await getMintTokenProgramId(mint); } catch { return null; }
+    symbol = shortMint(mint).replace(/[^\w]/g, "").slice(0, 10) || "SOL";
+    name = name || "Solana token";
+  }
   const createdAt = Number(stats.createdAt) || 0;   // resolved from all sources + sticky-cached in the aggregator
   const ageLabel = createdAt > 0 ? xAgeLabel(Date.now() - createdAt) : "new";
   const rail = xRailLabel(mint, best, bonding);
@@ -32541,17 +32659,18 @@ async function buildXScanReply(mint, variant) {
   const mcLabel = mc > 0 ? scanFmtMoney(mc) : "—";
   const liqLabel = liq > 0 ? scanFmtMoney(liq) : "—";
   const ch1 = stats.ch1;
-  const changeLabel = Number.isFinite(ch1) ? `${ch1 >= 0 ? "+" : ""}${ch1.toFixed(1)}%` : "";
+  const hasCh1 = Number.isFinite(ch1);
+  const changeLabel = hasCh1 ? `${ch1 >= 0 ? "+" : ""}${ch1.toFixed(1)}%` : "n/a";
   const changeTone = Number.isFinite(ch1) ? (ch1 >= 0 ? "up" : "down") : "";
   const vol = stats.vol;
-  const volumeLabel = vol.value > 0 ? `${scanFmtMoney(vol.value)}${vol.label ? " " + vol.label : ""}` : "";
-  const volLabel = volumeLabel ? `Vol ${volumeLabel}` : null;
-  const holderLabel = stats.holders > 0 ? scanFmtSupply(stats.holders) : "";
+  const volumeLabel = vol.value > 0 ? `${scanFmtMoney(vol.value)}${vol.label ? " " + vol.label : ""}` : "n/a";
+  const volLabel = vol.value > 0 ? `Vol ${volumeLabel}` : null;
+  const holderLabel = stats.holders > 0 ? scanFmtSupply(stats.holders) : "n/a";
   const v = makeXVary(variant || symbol || mint);
   const toneEmoji = tone === "danger" ? v.danger : tone === "warn" ? v.warn : v.ok;
   const text = [
     `$${symbol || "coin"}${name ? v.sep + name : ""}`,
-    [`MC ${mcLabel}`, `Liq ${liqLabel}`, volLabel, holderLabel ? `Holders ${holderLabel}` : null, `Age ${ageLabel}`, changeLabel ? `1H ${changeLabel}` : null, rail].filter(Boolean).join(v.sep),
+    [`MC ${mcLabel}`, `Liq ${liqLabel}`, volLabel, stats.holders > 0 ? `Holders ${holderLabel}` : null, `Age ${ageLabel}`, hasCh1 ? `1H ${changeLabel}` : null, rail].filter(Boolean).join(v.sep),
     `${toneEmoji} ${verdict}`,
     v.cta
   ].join("\n").slice(0, 279);
@@ -32559,7 +32678,7 @@ async function buildXScanReply(mint, variant) {
   // ALWAYS attach a card (owner wants every reply to show one — just rotate the design/bg/layout, which
   // renderXScanCard already does per-tweet). Only falls back to text if the render itself throws.
   try {
-    const logoBuffer = await xCoinLogo(scan, mint);   // DexScreener logo first, else pump.fun
+    const logoBuffer = (await xCoinLogo(scan, mint).catch(() => null)) || await xFallbackLogoBuffer(symbol || shortMint(mint), variant || mint);   // DexScreener/Pump first, then generated badge
     mediaBuffer = await renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel: rail, volumeLabel, holderLabel, verdict, verdictTone: tone, changeLabel, changeTone, logoBuffer, bgDir: X_CARD_BG_DIR, seed: variant || symbol || mint });
   } catch { /* text-only is the fallback only if the card render fails */ }
   return { text, mediaBuffer, symbol, mc };
@@ -32649,10 +32768,10 @@ async function buildXRugReply(mint, variant) {
   const facts = xRugFacts(scan);
   const mcLabel = mc > 0 ? scanFmtMoney(mc) : "—";
   const liqLabel = liq > 0 ? scanFmtMoney(liq) : "—";
-  const changeLabel = Number.isFinite(stats.ch1) ? `${stats.ch1 >= 0 ? "+" : ""}${stats.ch1.toFixed(1)}%` : "";
+  const changeLabel = Number.isFinite(stats.ch1) ? `${stats.ch1 >= 0 ? "+" : ""}${stats.ch1.toFixed(1)}%` : "n/a";
   const changeTone = Number.isFinite(stats.ch1) ? (stats.ch1 >= 0 ? "up" : "down") : "";
-  const volumeLabel = stats.vol?.value > 0 ? `${scanFmtMoney(stats.vol.value)}${stats.vol.label ? " " + stats.vol.label : ""}` : "";
-  const holderLabel = stats.holders > 0 ? scanFmtSupply(stats.holders) : "";
+  const volumeLabel = stats.vol?.value > 0 ? `${scanFmtMoney(stats.vol.value)}${stats.vol.label ? " " + stats.vol.label : ""}` : "n/a";
+  const holderLabel = stats.holders > 0 ? scanFmtSupply(stats.holders) : "n/a";
   const icon = facts.tone === "danger" ? v.danger : facts.tone === "warn" ? v.warn : v.ok;
   const detail = [...facts.bad.map((x) => v.danger + " " + x), ...facts.warn.map((x) => v.warn + " " + x), ...facts.good.map((x) => v.ok + " " + x)].slice(0, 3).join("\n");
   const text = [
@@ -32662,7 +32781,7 @@ async function buildXRugReply(mint, variant) {
   ].filter(Boolean).join("\n").slice(0, 279);
   let mediaBuffer = null;
   try {
-    const logoBuffer = await xCoinLogo(scan, mint);   // DexScreener logo first, else pump.fun
+    const logoBuffer = (await xCoinLogo(scan, mint).catch(() => null)) || await xFallbackLogoBuffer(symbol || shortMint(mint), variant || mint);   // DexScreener/Pump first, then generated badge
     mediaBuffer = await renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel: rail, volumeLabel, holderLabel, verdict: facts.verdict, verdictTone: facts.tone, changeLabel, changeTone, logoBuffer, bgDir: X_CARD_BG_DIR, seed: variant || symbol || mint });
   } catch { /* text-only is fine */ }
   return { text, mediaBuffer, symbol, mc };
@@ -32688,6 +32807,58 @@ function rhFiniteNumber(value) {
   if (value === null || value === undefined || value === "") return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+function rhTokenSupplyUi(row = {}) {
+  const decimals = Number(row.decimals || 18);
+  const raw = String(row.total_supply ?? row.totalSupply ?? row.supply ?? "");
+  if (!raw) return 0;
+  try {
+    return Number(BigInt(raw) / 10n ** BigInt(Math.max(0, decimals - 6))) / 1e6;
+  } catch {
+    return firstMeaningfulNumber(row.totalSupplyUi, row.total_supply_ui, row.supplyUi) || 0;
+  }
+}
+function normalizeRhBlockscoutToken(row = {}) {
+  if (!row || typeof row !== "object") return null;
+  const address = firstString(row.address_hash, row.address, row.token?.address_hash, row.token?.address);
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address)) return null;
+  return {
+    address,
+    name: firstString(row.name, row.token?.name),
+    symbol: firstString(row.symbol, row.token?.symbol),
+    decimals: Number(row.decimals || row.token?.decimals || 18),
+    totalSupplyUi: firstMeaningfulNumber(row.totalSupplyUi, row.total_supply_ui, row.token?.totalSupplyUi, rhTokenSupplyUi(row)),
+    iconUrl: firstString(row.icon_url, row.iconUrl, row.image_url, row.imageUrl, row.token?.icon_url, row.token?.iconUrl),
+    holders: firstMeaningfulNumber(row.holders_count, row.holdersCount, row.holders, row.token?.holders_count, row.token?.holders),
+    priceUsd: firstMeaningfulNumber(row.exchange_rate, row.exchangeRate, row.priceUsd, row.price_usd, row.token?.exchange_rate),
+    marketCapUsd: firstMeaningfulNumber(row.circulating_market_cap, row.marketCapUsd, row.market_cap_usd, row.marketCap, row.fdv, row.token?.circulating_market_cap),
+    volume24hUsd: firstMeaningfulNumber(row.volume_24h, row.volume24hUsd, row.volumeH24Usd, row.volume?.h24, row.token?.volume_24h),
+    createdAt: firstString(row.created_at, row.createdAt, row.timestamp, row.lastActiveAt),
+    reputation: firstString(row.reputation),
+    source: "blockscout",
+  };
+}
+function mergeRhTokenRows(...rows) {
+  const clean = rows.filter(Boolean);
+  if (!clean.length) return null;
+  return {
+    address: firstString(...clean.map((r) => r.address)),
+    name: firstString(...clean.map((r) => r.name)),
+    symbol: firstString(...clean.map((r) => r.symbol)),
+    decimals: firstMeaningfulNumber(...clean.map((r) => r.decimals)) || 18,
+    totalSupplyUi: firstMeaningfulNumber(...clean.map((r) => r.totalSupplyUi)) || 0,
+    iconUrl: firstString(...clean.map((r) => r.iconUrl)),
+    holders: firstMeaningfulNumber(...clean.map((r) => r.holders)) || 0,
+    priceUsd: firstMeaningfulNumber(...clean.map((r) => r.priceUsd)) || null,
+    marketCapUsd: firstMeaningfulNumber(...clean.map((r) => r.marketCapUsd)) || null,
+    liquidityUsd: firstMeaningfulNumber(...clean.map((r) => r.liquidityUsd)) || null,
+    volume1hUsd: firstMeaningfulNumber(...clean.map((r) => r.volume1hUsd ?? r.volumeH1Usd)) || null,
+    volume24hUsd: firstMeaningfulNumber(...clean.map((r) => r.volume24hUsd)) || null,
+    priceChange1h: firstMeaningfulNumber(...clean.map((r) => r.priceChange1h ?? r.priceChangeH1)) ?? null,
+    priceChange24h: firstMeaningfulNumber(...clean.map((r) => r.priceChange24h ?? r.priceChangeH24)) ?? null,
+    createdAt: firstString(...clean.map((r) => r.createdAt), ...clean.map((r) => r.lastActiveAt)),
+    source: firstString(...clean.map((r) => r.source)),
+  };
 }
 function rhChangeInfo(info = {}) {
   const ch1 = rhFiniteNumber(info.ch1);
@@ -32732,15 +32903,17 @@ async function gatherRhScan(address) {
   const key = a.toLowerCase();
   const cached = rhScanCache.get(key);
   if (cached && Date.now() - cached.at < 60_000) return cached.v;
-  const [dsRes, saf, feedRows, launchMap] = await Promise.all([
+  const [dsRes, saf, feedRows, directToken, launchMap] = await Promise.all([
     fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${a}`, { timeoutMs: 6000 }).catch(() => null),
     rhHoneypotCheck(a, CONFIG.rhChainRpcUrl).catch(() => null),
     rhPromiseTimeout(rhFeedTokens(), 3500, []),
+    rhPromiseTimeout(rhTokenInfo(a), 3500, null),
     rhPromiseTimeout(rhLaunchMetaByAddress(), 2000, new Map()),
   ]);
   const pairs = (dsRes?.pairs || []).filter((p) => String(p.chainId || "").toLowerCase() === "robinhood");
   const pair = pairs.sort((x, y) => (Number(y.liquidity?.usd) || 0) - (Number(x.liquidity?.usd) || 0))[0] || null;
-  const feed = (Array.isArray(feedRows) ? feedRows : []).find((t) => String(t.address || "").toLowerCase() === key) || null;
+  const listFeed = (Array.isArray(feedRows) ? feedRows : []).find((t) => String(t.address || "").toLowerCase() === key) || null;
+  const feed = mergeRhTokenRows(normalizeRhBlockscoutToken(directToken), listFeed);
   const launchMeta = launchMap && typeof launchMap.get === "function" ? launchMap.get(key) : null;
   const cachedPrice = rhPriceCache.get(key) || null;
   const cachedCreatedAt = rhCreatedCache.get(key) || "";
@@ -32818,28 +32991,31 @@ function rhVerdictTone(safety) {
 // X reply for a Robinhood coin (image card + text), matching the Solana scan card's look.
 async function buildXRhReply(address, variant) {
   const info = await gatherRhScan(address).catch(() => null);
-  if (!info || (!info.symbol && !(info.mc > 0) && !(info.priceUsd > 0))) return null;
+  if (!info) return null;
   const { verdict, tone } = rhVerdictTone(info.safety);
   const v = makeXVary(variant || info.symbol || address);
+  if (!info.symbol) info.symbol = shortMint(address).replace(/[^\w]/g, "").slice(0, 10) || "RH";
+  if (!info.name) info.name = "Robinhood token";
   const mcLabel = info.mc > 0 ? scanFmtMoney(info.mc) : "—";
   const liqLabel = info.liq > 0 ? scanFmtMoney(info.liq) : "—";
   const vol = rhVolumeInfo(info);
-  const volLabel = vol.value > 0 ? `${scanFmtMoney(vol.value)}${vol.title ? " " + vol.title : ""}` : "";
-  const holdersLabel = info.holders > 0 ? scanFmtSupply(info.holders) : "";
+  const volLabel = vol.value > 0 ? `${scanFmtMoney(vol.value)}${vol.title ? " " + vol.title : ""}` : "n/a";
+  const holdersLabel = info.holders > 0 ? scanFmtSupply(info.holders) : "n/a";
   const ageLabel = info.createdAt > 0 ? xAgeLabel(Date.now() - info.createdAt) : "new";
   const ch = rhChangeInfo(info);
-  const changeLabel = Number.isFinite(ch.value) ? `${ch.value >= 0 ? "+" : ""}${ch.value.toFixed(1)}%` : "";
+  const hasChange = Number.isFinite(ch.value);
+  const changeLabel = hasChange ? `${ch.value >= 0 ? "+" : ""}${ch.value.toFixed(1)}%` : "n/a";
   const changeTone = Number.isFinite(ch.value) ? (ch.value >= 0 ? "up" : "down") : "";
   const toneEmoji = tone === "danger" ? v.danger : tone === "warn" ? v.warn : v.ok;
   const text = [
     `$${info.symbol || "coin"}${info.name ? v.sep + info.name : ""} 🪶`,
-    [`MC ${mcLabel}`, `Liq ${liqLabel}`, volLabel ? `Vol ${volLabel}` : null, holdersLabel ? `Holders ${holdersLabel}` : null, changeLabel ? `${ch.title} ${changeLabel}` : null, "Robinhood Chain"].filter(Boolean).join(v.sep),
+    [`MC ${mcLabel}`, `Liq ${liqLabel}`, vol.value > 0 ? `Vol ${volLabel}` : null, info.holders > 0 ? `Holders ${holdersLabel}` : null, hasChange ? `${ch.title} ${changeLabel}` : null, "Robinhood Chain"].filter(Boolean).join(v.sep),
     `${toneEmoji} ${verdict}`,
     v.cta,
   ].join("\n").slice(0, 279);
   let mediaBuffer = null;
   try {
-    const logoBuffer = await rhScanLogo(info).catch(() => null);
+    const logoBuffer = (await rhScanLogo(info).catch(() => null)) || await xFallbackLogoBuffer(info.symbol || shortMint(address), variant || address);
     mediaBuffer = await renderXScanCard({ symbol: info.symbol, name: info.name, mcLabel, liqLabel, ageLabel, railLabel: "Robinhood", volumeLabel: volLabel, holderLabel: holdersLabel, verdict, verdictTone: tone, changeLabel, changeTone, changeTitle: ch.title, logoBuffer, bgDir: X_CARD_BG_DIR, seed: variant || info.symbol || address });
   } catch { /* text-only fallback */ }
   return { text, mediaBuffer, symbol: info.symbol, mc: info.mc, chain: "robinhood" };
@@ -32886,16 +33062,18 @@ function formatRhScanCard(info) {
 }
 async function sendRhScanCard(chatId, address) {
   const info = await gatherRhScan(address).catch(() => null);
-  if (!info || (!info.symbol && !(info.mc > 0) && !(info.priceUsd > 0))) {
+  if (!info) {
     await say(chatId, "🪶 Couldn't pull that Robinhood coin yet — paste a valid Robinhood Chain contract (0x…).");
     return;
   }
+  if (!info.symbol) info.symbol = shortMint(address).replace(/[^\w]/g, "").slice(0, 10) || "RH";
+  if (!info.name) info.name = "Robinhood token";
   const text = formatRhScanCard(info);
   const kb = { inline_keyboard: [
     [{ text: `⚡ Trade $${(info.symbol || "coin").slice(0, 12)}`, url: `https://www.slimewire.org/#rhtrade/${address}` }, { text: "🔎 Blockscout", url: info.explorer }],
   ] };
   let png = null;
-  try { const b = await rhScanLogo(info).catch(() => null);
+  try { const b = (await rhScanLogo(info).catch(() => null)) || await xFallbackLogoBuffer(info.symbol || shortMint(address), address);
     const { verdict, tone } = rhVerdictTone(info.safety);
     const vol = rhVolumeInfo(info);
     const ch = rhChangeInfo(info);
@@ -32906,11 +33084,11 @@ async function sendRhScanCard(chatId, address) {
       liqLabel: info.liq > 0 ? scanFmtMoney(info.liq) : "—",
       ageLabel: info.createdAt > 0 ? xAgeLabel(Date.now() - info.createdAt) : "new",
       railLabel: "Robinhood",
-      volumeLabel: vol.value > 0 ? `${scanFmtMoney(vol.value)}${vol.title ? " " + vol.title : ""}` : "",
-      holderLabel: info.holders > 0 ? scanFmtSupply(info.holders) : "",
+      volumeLabel: vol.value > 0 ? `${scanFmtMoney(vol.value)}${vol.title ? " " + vol.title : ""}` : "n/a",
+      holderLabel: info.holders > 0 ? scanFmtSupply(info.holders) : "n/a",
       verdict,
       verdictTone: tone,
-      changeLabel: Number.isFinite(ch.value) ? `${ch.value >= 0 ? "+" : ""}${ch.value.toFixed(1)}%` : "",
+      changeLabel: Number.isFinite(ch.value) ? `${ch.value >= 0 ? "+" : ""}${ch.value.toFixed(1)}%` : "n/a",
       changeTone: Number.isFinite(ch.value) ? (ch.value >= 0 ? "up" : "down") : "",
       changeTitle: ch.title,
       logoBuffer: b,
@@ -33010,7 +33188,19 @@ async function xReplyPollTick() {
       const w = extractBareWalletAddress(m.text, m.urls);
       if (w) { target = w; intent = "map"; console.log(`[xreply]   no CA but bare wallet ${w} → map`); }
     }
-    if (!target) { state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "no CA/wallet found" }); console.log(`[xreply]   ✗ no CA/wallet in tag/parent/root → skip`); continue; }
+    if (!target) {
+      const parentLikely = Boolean(m.inReplyToId || (m.conversationId && m.conversationId !== m.id));
+      if (parentLikely) {
+        state.fails[m.id] = (Number(state.fails[m.id]) || 0) + 1;
+        const giveUp = state.fails[m.id] >= 3;
+        results.push({ u: m.username, s: giveUp ? "skip" : "defer", d: "no CA/wallet found yet" });
+        console.log(`[xreply]   ✗ no CA/wallet in tag/parent/root (${giveUp ? "gave up" : "retry"})`);
+        if (giveUp) { state.seen[m.id] = now; delete state.fails[m.id]; await writeXReplyState(state); continue; }
+        await writeXReplyState(state);
+        break;
+      }
+      state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "no CA/wallet found" }); console.log(`[xreply]   ✗ no CA/wallet in tag → skip`); continue;
+    }
     // 🗺️ X HEADLINE: any plain coin tag → the MAP card (which now carries coin details) + falls back to the
     // scan card if the map can't build. Explicit chart/rug keywords still route to those cards.
     if (intent === "scan") intent = "map";
@@ -33187,7 +33377,7 @@ async function handleXTestCommand(chatId, userId) {
   }
   // Live probe: how many recent @mentions the search sees + how many carry a CA (proves detection works).
   const mentions = await xSearchMentions(20).catch(() => []);
-  const withCa = mentions.filter((m) => extractMintsFromText(m.text).length || extractCashtags(m.text).length || m.inReplyToId).length;
+  const withCa = mentions.filter((m) => extractMintsFromText(m.text).length || extractRhAddressesFromText(m.text).length || extractCashtags(m.text).length || extractBareTickerHints(m.text).length || m.inReplyToId).length;
   await sayHtml(chatId, [
     `🐦 <b>Connected as @${escapeTelegramHtml(me.username || me.screenName)}</b>`,
     `Mode: <b>${xReplyAuto() ? "AUTO — posts on X itself" : "ASSIST — I DM you to one-tap post"}</b> · Replies: <b>${xReplyEnabled() ? "ON" : "OFF"}</b>`,
@@ -33257,8 +33447,7 @@ async function handleXScanCommand(chatId, argument, userId) {
   if (!xReplyOwnerChat() || String(chatId) !== xReplyOwnerChat()) { await say(chatId, "Owner-only — DM /xclaim first."); return; }
   const arg = String(argument || "");
   const intent = xIntentFromText(arg);                            // "/xscan rug <CA>" or "chart <CA>" previews that card
-  let mint = extractMintsFromText(arg)[0];
-  if (!mint) { const tag = extractCashtags(arg)[0]; if (tag) mint = await resolveCashtagToMint(tag).catch(() => null); }
+  let mint = await resolveScanTargetFromText(arg).catch(() => null);
   if (!mint) { await say(chatId, "Usage: /xscan <CA or $ticker> — or <code>/xscan rug &lt;CA&gt;</code> / <code>/xscan chart &lt;CA&gt;</code> to preview those cards."); return; }
   await say(chatId, `🐦 Building the <b>${intent === "rug" ? "did-it-rug" : intent === "chart" ? "chart" : "scan"}</b> reply preview…`);
   const reply = await buildXReply(mint, intent).catch(() => null);
@@ -36803,10 +36992,11 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
 // /look <CA>: instant SlimeShield read with trade links - the group-native version of
 // pasting a CA into Slime Scope.
 async function handleTelegramLookCommand(chatId, message, argument) {
-  // Robinhood Chain coin (0x…40-hex) → RH scan card (checked first: a 0x address isn't a Solana mint).
-  const rhAddr = (String(argument || "").match(/0x[0-9a-fA-F]{40}/) || [])[0] || "";
+  // One resolver for CA, Dex/Pump links, $tickers, bare scan tickers, and Robinhood Chain 0x contracts.
+  const target = await resolveScanTargetFromText(argument).catch(() => null);
+  const rhAddr = /^0x[0-9a-fA-F]{40}$/.test(String(target || "")) ? String(target) : "";
   if (rhAddr) { if (tgCommandOnCooldown(chatId, "look", TG_LOOK_COOLDOWN_MS)) return; await sendRhScanCard(chatId, rhAddr); return; }
-  const mint = (String(argument || "").match(/\b[A-HJ-NP-Za-km-z1-9]{32,48}\b/) || [])[0] || "";
+  const mint = isLikelySolMint(target) ? String(target) : "";
   if (!mint) {
     await say(chatId, "Usage: /look <token CA> — Solana mint OR Robinhood Chain 0x… address. I'll run a SlimeShield read with chart + quick-buy.");
     return;
@@ -57872,6 +58062,7 @@ async function fetchSolanaTrackerTokenReport(mint = "") {
   const pools = Array.isArray(data.pools) ? data.pools : [];
   // Prefer the deepest pool (most liquidity) for security/LP/deployer.
   const pool = pools.slice().sort((a, b) => (stNum(b?.liquidity?.usd) || 0) - (stNum(a?.liquidity?.usd) || 0))[0] || {};
+  const events = pool.events || data.events || token.events || {};
   const security = pool.security || data.security || {};
   const risk = data.risk || {};
   const risks = Array.isArray(risk.risks) ? risk.risks : [];
@@ -57909,26 +58100,39 @@ async function fetchSolanaTrackerTokenReport(mint = "") {
     rugged: risk.rugged === true,
     rugScore: stNum(risk.score),               // display only — NOT a higher=riskier scale (see note above)
     riskNotes: risks.map((r) => String(r?.name || r?.description || r || "")).filter(Boolean).slice(0, 6),
+    symbol: firstString(token.symbol, data.symbol, pool.symbol, pool.baseToken?.symbol),
+    name: firstString(token.name, data.name, pool.name, pool.baseToken?.name),
+    imageUrl: firstString(token.image, token.imageUrl, token.image_uri, token.logoURI, data.image, data.imageUrl, pool.image, pool.imageUrl, pool.baseToken?.imageUrl, pool.baseToken?.logoURI),
+    priceUsd: stNum(pool.price?.usd ?? pool.priceUsd ?? data.priceUsd ?? token.priceUsd),
+    priceChange: {
+      h1: stNum(events["1h"]?.priceChangePercentage ?? events.h1?.priceChangePercentage ?? events["1h"]?.priceChange ?? events.h1?.priceChange ?? data.priceChange?.h1),
+      h24: stNum(events["24h"]?.priceChangePercentage ?? events.h24?.priceChangePercentage ?? events["24h"]?.priceChange ?? events.h24?.priceChange ?? data.priceChange?.h24)
+    },
+    volume: {
+      h1: stNum(events["1h"]?.volumeUsd ?? events.h1?.volumeUsd ?? pool.volume?.h1 ?? data.volume?.h1),
+      h24: stNum(events["24h"]?.volumeUsd ?? events.h24?.volumeUsd ?? pool.volume?.h24 ?? data.volume?.h24)
+    },
+    pairCreatedAt: normalizePairCreatedAt(firstString(pool.createdAt, pool.pairCreatedAt, token.createdAt, token.created_at, creation.createdAt, creation.time)),
     holderCount: stNum(data.holders ?? data.holderCount ?? token.holders),
     marketCap: stNum(pool.marketCap?.usd ?? data.marketCapUsd ?? token.marketCapUsd),
     liquidityUsd: stNum(pool.liquidity?.usd),
     // FULL market read — ST is our KEYED source (immune to the IP rate-limits that can blank DexScreener /
     // GeckoTerminal on Render's shared IP). These fields were being thrown away, which left 1H/vol/price
     // with fewer fallbacks whenever the free sources whiffed.
-    priceUsd: stNum(pool.price?.usd ?? token.priceUsd),
-    ch1: stNum(data.events?.["1h"]?.priceChangePercentage),
-    ch24: stNum(data.events?.["24h"]?.priceChangePercentage),
-    volume24Usd: stNum(pool.txns?.volume ?? pool.volume?.usd ?? pool.volume24h ?? data.volume?.h24 ?? data.volume24h),
+    priceUsd: stNum(pool.price?.usd ?? pool.priceUsd ?? data.priceUsd ?? token.priceUsd),
+    ch1: stNum(events["1h"]?.priceChangePercentage ?? events.h1?.priceChangePercentage ?? events["1h"]?.priceChange ?? events.h1?.priceChange ?? data.priceChange?.h1),
+    ch24: stNum(events["24h"]?.priceChangePercentage ?? events.h24?.priceChangePercentage ?? events["24h"]?.priceChange ?? events.h24?.priceChange ?? data.priceChange?.h24),
+    volume24Usd: stNum(events["24h"]?.volumeUsd ?? events.h24?.volumeUsd ?? pool.txns?.volume ?? pool.volume?.usd ?? pool.volume24h ?? data.volume?.h24 ?? data.volume24h),
     buys24: stNum(pool.txns?.buys ?? data.buys),
     sells24: stNum(pool.txns?.sells ?? data.sells),
     createdAtMs: (() => {
-      const raw = firstMeaningfulNumber(pool.createdAt, pool.openTime, creation.created_time, creation.createdTime, creation.created_at);
+      const raw = firstMeaningfulNumber(pool.createdAt, pool.pairCreatedAt, pool.openTime, token.createdAt, token.created_at, creation.created_time, creation.createdTime, creation.created_at, creation.time);
       if (!raw) return null;
       return String(Math.trunc(raw)).length <= 10 ? raw * 1000 : raw;   // seconds → ms
     })(),
-    symbol: String(token.symbol || "").replace(/^\$+/, "").trim() || "",
-    name: String(token.name || "").trim() || "",
-    imageUrl: firstString(token.image, token.imageUrl, token.image_uri),
+    symbol: String(firstString(token.symbol, data.symbol, pool.symbol, pool.baseToken?.symbol) || "").replace(/^\$+/, "").trim(),
+    name: String(firstString(token.name, data.name, pool.name, pool.baseToken?.name) || "").trim(),
+    imageUrl: firstString(token.image, token.imageUrl, token.image_uri, token.logoURI, data.image, data.imageUrl, pool.image, pool.imageUrl, pool.baseToken?.imageUrl, pool.baseToken?.logoURI),
   };
 }
 

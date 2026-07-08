@@ -1892,6 +1892,13 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(xcard, /String\(changeTitle \|\| "1H"\)/);
   assert.match(serverSource, /function scanImageUrlFromScan/);
   assert.match(functionBody(serverSource, "handleTelegramLookCommand"), /scanImageUrlFromScan\(scan\)/);
+  assert.match(serverSource, /async function resolveRhTickerToAddress/);
+  assert.match(serverSource, /async function resolveTickerToScanTarget/);
+  assert.match(functionBody(serverSource, "resolveScanTargetFromText"), /resolveTickerToScanTarget/);
+  assert.match(functionBody(serverSource, "resolveAllScanTargetsFromText"), /extractBareTickerHints/);
+  assert.match(functionBody(serverSource, "handleTelegramLookCommand"), /resolveScanTargetFromText\(argument\)/);
+  assert.match(functionBody(serverSource, "handleXScanCommand"), /resolveScanTargetFromText\(arg\)/);
+  assert.match(functionBody(serverSource, "xReplyPollTick"), /no CA\/wallet found yet/);
   assert.match(functionBody(serverSource, "gatherSlimeScan"), /fetchSolanaTrackerTokenReport\(mint\)/);
   assert.match(functionBody(serverSource, "gatherRhScan"), /rhFeedTokens\(\)/);
   assert.match(functionBody(serverSource, "gatherRhScan"), /rhLaunchMetaByAddress\(\)/);

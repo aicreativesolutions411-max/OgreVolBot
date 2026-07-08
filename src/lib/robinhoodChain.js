@@ -227,6 +227,16 @@ export async function rhListTokens(maxPages = 3) {
   return items;
 }
 
+export async function rhTokenInfo(tokenAddress) {
+  const a = String(tokenAddress || "").trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return null;
+  try {
+    return await bsJson(`/tokens/${a}`, 6_000);
+  } catch {
+    return null;
+  }
+}
+
 // The shared "rug-as-a-service" drain controller (see rhHoneypotCheck). Exported so the feed can build a
 // bulk scam-token exclusion set from it without a per-coin scan.
 export const RH_DRAIN_CONTROLLER = "0x2D7aA179B485D25FE89f8E1B26b9f3CC2668f615";
