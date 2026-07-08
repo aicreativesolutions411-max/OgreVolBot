@@ -57,3 +57,6 @@ vid-*.mp4
 
 # LibreOffice lock files
 .~lock.*#
+
+# root-level media exports (dead weight in the deploy checkout — the served copies live under web/public)
+/slimewire-*.mp4

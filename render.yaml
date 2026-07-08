@@ -4,7 +4,7 @@ services:
     env: node
     plan: standard
     autoDeploy: true
-    buildCommand: npm ci && npm run build:web
+    buildCommand: node scripts/render-build.mjs
     startCommand: npm run render-start
     healthCheckPath: /healthz
     disk:
@@ -314,7 +314,7 @@ services:
     env: node
     plan: standard
     autoDeploy: true
-    buildCommand: npm ci
+    buildCommand: node scripts/render-build.mjs --no-web
     startCommand: npm run worker
     envVars:
       - key: NODE_VERSION
@@ -401,7 +401,7 @@ services:
     env: node
     plan: standard
     autoDeploy: true
-    buildCommand: npm ci
+    buildCommand: node scripts/render-build.mjs --no-web
     startCommand: npm run worker
     envVars:
       - key: NODE_VERSION
