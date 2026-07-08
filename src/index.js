@@ -38260,12 +38260,15 @@ function startGroupBuyBot() {
   // scan→card pipeline works at all — isolates "coin didn't scan" (build broken) from "no CA" (resolve).
   setTimeout(async () => {
     if (!xReplyEnabled() || !xConfigured()) { console.log("[xreply] SELFTEST skipped — off/unconfigured"); return; }
-    const BONK = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
+    // CANONICAL BONK — the old constant was a corrupted mint (diverged from real BONK after 18 chars), so
+    // the boot probe wasn't testing what a real scan sees. Full text logged (200) so 1H/rail are VISIBLE in
+    // Render logs — this line is the field-by-field live check for "info always full".
+    const BONK = "DezXAZ8z7PnrnRJjz3uq8NgV8Q9ddCzB9Ckr7JpPvvR";
     try {
       const t0 = Date.now();
       const r = await buildXReply(BONK, "scan", "selftest");
       if (!r) console.log("[xreply] SELFTEST buildXReply(BONK,scan) → NULL (scan/card pipeline is broken)");
-      else console.log(`[xreply] SELFTEST buildXReply(BONK,scan) OK → $${r.symbol} mc=${r.mc} media=${r.mediaBuffer ? "card(" + r.mediaBuffer.length + "b)" : "NONE"} text=${JSON.stringify(String(r.text || "").slice(0, 80))} in ${Date.now() - t0}ms`);
+      else console.log(`[xreply] SELFTEST buildXReply(BONK,scan) OK → $${r.symbol} mc=${r.mc} media=${r.mediaBuffer ? "card(" + r.mediaBuffer.length + "b)" : "NONE"} text=${JSON.stringify(String(r.text || "").slice(0, 200))} in ${Date.now() - t0}ms`);
       const who = await xWhoAmI().catch((e) => ({ __e: String(e?.message || e) }));
       console.log(`[xreply] SELFTEST whoami → ${who && who.username ? "@" + who.username : "FAIL:" + (who && who.__e || "null") + " (write path likely 401 → replies would fail)"}`);
       // Verify the META-PIC fix against the exact coin that failed ($Pauly, a graduated non-pump mint with no
