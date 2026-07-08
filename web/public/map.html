@@ -125,6 +125,10 @@ let crumbs=[],refreshTimer=null,sim=null,zoomB=null,clusterHulls=null;
 const CLC=['#ffcf4d','#4dd6ff','#ff7de3','#8bff5b','#ff9f4d','#b98cff','#4dffd0','#ff6b6b'];
 function short(a){return a&&a.length>10?a.slice(0,4)+'…'+a.slice(-4):a}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+// 🙂 slime-face / KOL-pfp URL for a node. faceUrl is a RELATIVE /pfp path served by the API ORIGIN — when this
+// page is served from slimewire.org (CF), a relative /pfp 404s → blank bubble; prefix API_BASE so faces always
+// load from where they live. avatarUrl (unavatar) is already absolute. This is why cluster bubbles looked blank.
+function faceHref(n){const a=n&&(n.avatarUrl||n.faceUrl);if(!a)return'';return /^(https?:|data:)/i.test(a)?a:(API_BASE+a)}
 // Convex hull around a cluster's member bubbles (padded so 2-wallet clusters still get a blob).
 function hullPath(members){const pts=[];members.forEach(m=>{if(m.x==null)return;const p=(m.r||10)+16;pts.push([m.x-p,m.y-p],[m.x+p,m.y-p],[m.x-p,m.y+p],[m.x+p,m.y+p])});if(pts.length<3)return'';const h=d3.polygonHull(pts);if(!h)return'';return'M'+h.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join('L')+'Z'}
 function cx(ms){let s=0,n=0;ms.forEach(m=>{if(m.x!=null){s+=m.x;n++}});return n?s/n:0}
@@ -209,7 +213,7 @@ function drawSide(map){
   renderXray(map);
   const kols=(map.nodes||[]).filter(n=>n.isKol).slice(0,12);
   const rest=(map.nodes||[]).filter(n=>!n.isKol).slice(0,10);
-  const row=(n,tgt)=>'<div class="krow" data-t="'+(tgt||'')+'"><img src="'+esc(n.avatarUrl||n.faceUrl||'')+'" onerror="this.style.visibility=\'hidden\'"/><div><div class="nm">'+esc(n.name||short(n.wallet)||n.name)+'</div><div class="sub">'+(n.pct!=null?(+n.pct).toFixed(1)+'%':'')+(n.usd?' · $'+fmt(n.usd):'')+'</div></div></div>';
+  const row=(n,tgt)=>'<div class="krow" data-t="'+(tgt||'')+'"><img src="'+esc(faceHref(n))+'" onerror="this.style.visibility=\'hidden\'"/><div><div class="nm">'+esc(n.name||short(n.wallet)||n.name)+'</div><div class="sub">'+(n.pct!=null?(+n.pct).toFixed(1)+'%':'')+(n.usd?' · $'+fmt(n.usd):'')+'</div></div></div>';
   document.getElementById('side').querySelector('h3').textContent=map.kind==='wallet'?'Bags':((kols.length||0)+' KOLs holding');
   const kl=document.getElementById('kolist');
   kl.innerHTML=(kols.length?kols:rest).map(n=>row(n, map.kind==='token'?n.wallet:(n.mint||''))).join('')||'<div class="sub" style="color:var(--dim);font-size:12px">no labeled wallets</div>';
@@ -242,14 +246,14 @@ function render(map){
   const links=nodes.map(n=>({source:'__hub',target:n.id,w:n.weight}));
   const all=[hub,...nodes];
   // avatar clip + pattern per node
-  nodes.forEach(n=>{const av=n.avatarUrl||n.faceUrl;if(av){defs.append('clipPath').attr('id','c'+n.id).append('circle').attr('r',n.r-2);defs.append('pattern').attr('id','p'+n.id).attr('width',1).attr('height',1).attr('patternContentUnits','objectBoundingBox').append('image').attr('href',av).attr('width',1).attr('height',1).attr('preserveAspectRatio','xMidYMid slice')}});
+  nodes.forEach(n=>{const av=faceHref(n);if(av){defs.append('clipPath').attr('id','c'+n.id).append('circle').attr('r',n.r-2);defs.append('pattern').attr('id','p'+n.id).attr('width',1).attr('height',1).attr('patternContentUnits','objectBoundingBox').append('image').attr('href',av).attr('width',1).attr('height',1).attr('preserveAspectRatio','xMidYMid slice')}});
   const hullG=g.append('g');    // 🕸️ cluster hulls (bubblemaps-style translucent blobs) — behind everything
   const xclinkG=g.append('g');  // 🔗 INTER-cluster arrows (cluster→cluster "funded by") — behind member edges
   const link=g.append('g').selectAll('line').data(links).join('line').attr('class','link').attr('stroke-width',d=>0.5+d.w*2);
   const clinkG=g.append('g');   // 🕸️ cluster member edges (loaded progressively after the bubbles)
   const node=g.append('g').selectAll('g').data(nodes).join('g').attr('class','node');
   node.append('circle').attr('r',d=>d.r+5).attr('fill',d=>(COL[d.state]||COL.hold).f).attr('fill-opacity',0.14);
-  node.append('circle').attr('class','body').attr('r',d=>d.r).attr('fill',d=>{const av=d.avatarUrl||d.faceUrl;return av?'url(#p'+d.id+')':(COL[d.state]||COL.hold).f}).attr('stroke',d=>(COL[d.state]||COL.hold).r).attr('stroke-width',2.5);
+  node.append('circle').attr('class','body').attr('r',d=>d.r).attr('fill',d=>{const av=faceHref(d);return av?'url(#p'+d.id+')':(COL[d.state]||COL.hold).f}).attr('stroke',d=>(COL[d.state]||COL.hold).r).attr('stroke-width',2.5);
   node.append('circle').attr('r',d=>d.r+1.5).attr('fill','none').attr('stroke',d=>(COL[d.state]||COL.hold).f).attr('stroke-opacity',.6);
   // labels for KOLs + big holders
   node.filter(d=>d.label).append('text').attr('class','lbl').attr('x',d=>d.r+4).attr('y',4).text(d=>d.label);
@@ -355,7 +359,7 @@ function openCluster(cl){
   if(!cl)return;
   const d=document.getElementById('drill'),c=document.getElementById('drillcard');
   d.className='on';
-  const rows=(cl.members||[]).slice().sort((a,b)=>(b.pct||0)-(a.pct||0)).map(m=>'<div class="hrow" data-w="'+esc(m.wallet)+'">'+((m.avatarUrl||m.faceUrl)?'<img src="'+esc(m.avatarUrl||m.faceUrl)+'" onerror="this.style.visibility=\'hidden\'"/>':'<div class="hs">🫧</div>')+'<div><div class="nm">'+(m.isKol?'⭐ ':'')+esc(m.name||short(m.wallet))+'</div><div class="sub">'+short(m.wallet)+'</div></div><div class="v">'+(m.pct!=null?(+m.pct).toFixed(1)+'%':'')+(m.usd?'<br>$'+fmt(m.usd):'')+'</div></div>').join('');
+  const rows=(cl.members||[]).slice().sort((a,b)=>(b.pct||0)-(a.pct||0)).map(m=>'<div class="hrow" data-w="'+esc(m.wallet)+'">'+(faceHref(m)?'<img src="'+esc(faceHref(m))+'" onerror="this.style.visibility=\'hidden\'"/>':'<div class="hs">🫧</div>')+'<div><div class="nm">'+(m.isKol?'⭐ ':'')+esc(m.name||short(m.wallet))+'</div><div class="sub">'+short(m.wallet)+'</div></div><div class="v">'+(m.pct!=null?(+m.pct).toFixed(1)+'%':'')+(m.usd?'<br>$'+fmt(m.usd):'')+'</div></div>').join('');
   const outN=(clusterEdgesData||[]).filter(e=>e.from===cl.id).length;
   const inN=(clusterEdgesData||[]).filter(e=>e.to===cl.id).length;
   const connLine=(outN||inN)?('<div style="margin-top:6px">🔗 connected to <b style="color:'+cl.color+'">'+(outN+inN)+'</b> other cluster'+((outN+inN)>1?'s':'')+(outN?' · funded from '+outN:'')+(inN?' · feeds '+inN:'')+'</div>'):'';
