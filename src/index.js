@@ -7540,7 +7540,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
           })(),
           new Promise((res) => setTimeout(() => res({ edges: [], clusters: [], timeout: true }), 15_000))
         ]);
-        sendWebJson(request, response, 200, { ok: true, edges: graph.edges || [], clusters: graph.clusters || [], summary: graph.summary || null, timeout: Boolean(graph.timeout) });
+        sendWebJson(request, response, 200, { ok: true, edges: graph.edges || [], clusters: graph.clusters || [], clusterEdges: graph.clusterEdges || [], summary: graph.summary || null, timeout: Boolean(graph.timeout) });
       } catch (e) { sendWebJson(request, response, 200, { ok: false, error: String((e && e.message) || e) }); }
       return;
     }
@@ -7561,7 +7561,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
           })(),
           new Promise((res) => setTimeout(() => res({ edges: [], clusters: [], timeout: true }), 15_000))
         ]);
-        sendWebJson(request, response, 200, { ok: true, edges: graph.edges || [], clusters: graph.clusters || [], summary: graph.summary || null, timeout: Boolean(graph.timeout) });
+        sendWebJson(request, response, 200, { ok: true, edges: graph.edges || [], clusters: graph.clusters || [], clusterEdges: graph.clusterEdges || [], summary: graph.summary || null, timeout: Boolean(graph.timeout) });
       } catch (e) { sendWebJson(request, response, 200, { ok: false, error: String((e && e.message) || e) }); }
       return;
     }
