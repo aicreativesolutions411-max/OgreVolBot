@@ -31353,7 +31353,7 @@ async function buildTokenHolderMap(mint) {
   const shown = nodes.length;
   return {
     kind: "token", isToken: true, mint, mc, liq, ch1,      // raw market numbers — X receipts + airdrop hint
-    subject: `$${(sym || shortMint(mint)).slice(0, 11)}`,
+    subject: `$${String(sym || shortMint(mint)).replace(/^\$+/, "").slice(0, 11)}`,
     ticker: sym || "", coinLogo: coinLogo || "",           // coin PFP + ticker for the center bubble
     subtitle: shown ? (holderCount > shown ? `${fmtHolderCount(holderCount)} holders · top ${shown} shown` : `${shown} holders`) : "holders loading…",
     holderCount, kolsIn, stats, nodes,
@@ -31588,7 +31588,7 @@ async function buildAirdropView({ mint, sym, mc, liq, ch1, supplyUi, pricePerTok
   return {
     kind: "airdrop", isToken: true, mint,
     mc: Number(mc) || 0, liq: Number(liq) || 0, ch1: Number.isFinite(ch1) ? Number(ch1) : null,
-    subject: `$${(sym || shortMint(mint)).slice(0, 11)}`,
+    subject: `$${String(sym || shortMint(mint)).replace(/^\$+/, "").slice(0, 11)}`,
     ticker: sym || "", coinLogo: coinLogo || "",          // coin PFP + ticker for the center bubble
     subtitle: usedFallback ? "top holders" : `${entries.length} wallets fed`,
     dev, devName: devId?.isKol ? devId.name : "", devAvatar: devId?.avatarUrl || "",
@@ -32285,7 +32285,7 @@ async function buildXScanReply(mint, variant) {
   const scan = await gatherSlimeScan(mint).catch(() => null);
   if (!scan) return null;
   const { meta, bonding, best, shield, rug, onchain } = scan;
-  const symbol = String(meta?.symbol || bonding?.symbol || onchain?.symbol || "").slice(0, 12);
+  const symbol = String(meta?.symbol || bonding?.symbol || onchain?.symbol || "").replace(/^\$+/, "").slice(0, 12);
   const name = String(meta?.name || bonding?.name || onchain?.name || "").slice(0, 40);
   const stats = scanMarketStatsFromSources({ meta, bonding, best, rug, mint });
   const mc = stats.mc;
@@ -32335,7 +32335,7 @@ function xIntentFromText(text) {
 async function buildXChartReply(mint, variant) {
   const scan = await gatherSlimeScan(mint).catch(() => null);
   const meta = scan?.meta, bonding = scan?.bonding;
-  const symbol = String(meta?.symbol || bonding?.symbol || scan?.onchain?.symbol || "").slice(0, 12);
+  const symbol = String(meta?.symbol || bonding?.symbol || scan?.onchain?.symbol || "").replace(/^\$+/, "").slice(0, 12);
   const name = String(meta?.name || bonding?.name || scan?.onchain?.name || "").slice(0, 40);
   const mc = Number(meta?.marketCap || bonding?.usd_market_cap || bonding?.marketCap || 0);
   let payload = await webOhlcvPayload(mint, "5m").catch(() => null);
@@ -32393,7 +32393,7 @@ async function buildXRugReply(mint, variant) {
   const scan = await gatherSlimeScan(mint).catch(() => null);
   if (!scan) return null;
   const { meta, bonding, best, onchain, rug } = scan;
-  const symbol = String(meta?.symbol || bonding?.symbol || onchain?.symbol || "").slice(0, 12);
+  const symbol = String(meta?.symbol || bonding?.symbol || onchain?.symbol || "").replace(/^\$+/, "").slice(0, 12);
   const name = String(meta?.name || bonding?.name || onchain?.name || "").slice(0, 40);
   const stats = scanMarketStatsFromSources({ meta, bonding, best, rug, mint });
   const mc = stats.mc;

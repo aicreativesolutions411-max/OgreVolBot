@@ -64,7 +64,7 @@ export async function renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabe
   const accent = ACCENTS[Math.floor(r() * ACCENTS.length) % ACCENTS.length];
   const header = HEADERS[Math.floor(r() * HEADERS.length) % HEADERS.length];
   const footer = FOOTERS[Math.floor(r() * FOOTERS.length) % FOOTERS.length];
-  const sym = (symbol || "?").slice(0, 12);
+  const sym = String(symbol || "?").replace(/^\$+/, "").slice(0, 12) || "?";
   const grainSeed = Math.floor(r() * 100000);            // unique film grain per card → beats image dedup
   const jx = Math.round((r() - 0.5) * 18), jy = Math.round((r() - 0.5) * 14); // whole-panel position jitter
   const mirror = r() < 0.45;                             // ~45% flip logo↔text (two distinct layouts)

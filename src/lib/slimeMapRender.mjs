@@ -343,27 +343,46 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
 
 // Fetch a remote avatar (X pfp etc.) → square PNG data-URI so it embeds in the SVG (resvg/librsvg won't
 // fetch remote hrefs at raster time). Small + cached by the caller. Returns null on any failure.
+// An `ipfs.io/ipfs/<cid>` or `ipfs://<cid>` URL → ordered gateway candidates (Cloudflare + pump's own CDN are
+// FAST; ipfs.io is slow/rate-limited on Render — the "coin PFP won't load on the airdrop card" cause). We try
+// them in order until one returns an image. Non-IPFS URLs pass through unchanged.
+function ipfsGatewayCandidates(url) {
+  const s = String(url || "");
+  const m = s.match(/\/ipfs\/([^?#]+)/i) || s.match(/^ipfs:\/\/(?:ipfs\/)?([^?#]+)/i);
+  if (!m || !m[1]) return [s];
+  const cid = m[1].replace(/^ipfs\//, "");
+  return [
+    `https://cf-ipfs.com/ipfs/${cid}`,        // Cloudflare — fast + reliable
+    `https://ipfs-gw.pump.fun/ipfs/${cid}`,   // pump's own gateway (their logos live here)
+    `https://dweb.link/ipfs/${cid}`,
+    `https://ipfs.io/ipfs/${cid}`,            // slow original last
+  ];
+}
 export async function fetchAvatarDataUri(url, size = 96, ms = 4500) {
   if (!url) return null;
   // AbortController + setTimeout works on EVERY Node version (AbortSignal.timeout is missing on Render's older
-  // Node → without a real timeout a hanging avatar fetch would never resolve and would stall the whole render,
-  // which stalls the X poll tick — the "poller went silent" bug). A browser User-Agent is REQUIRED: coin-logo
-  // CDNs (DexScreener) 422/403 a bare fetch, and IPFS gateways are slow so `ms` is bumped for the big center
-  // coin PFP (a 2MB IPFS logo blew the old 4.5s cap → the share card fell back to text with no PFP).
-  const ctl = new AbortController();
-  const t = setTimeout(() => { try { ctl.abort(); } catch {} }, ms);
-  try {
-    const res = await fetch(url, {
-      signal: ctl.signal, redirect: "follow",
-      headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36", "accept": "image/*,*/*" },
-    });
-    if (!res.ok) return null;
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length < 80) return null;
-    const png = await sharp(buf).resize(size, size, { fit: "cover", position: "attention" }).png().toBuffer();
-    return "data:image/png;base64," + png.toString("base64");
-  } catch { return null; }
-  finally { clearTimeout(t); }
+  // Node). A browser User-Agent is REQUIRED: coin-logo CDNs (DexScreener) 422/403 a bare fetch. For IPFS we
+  // race through fast gateways (see ipfsGatewayCandidates) so a slow ipfs.io never blanks the coin PFP.
+  const candidates = ipfsGatewayCandidates(url);
+  for (const href of candidates) {
+    const ctl = new AbortController();
+    const per = candidates.length > 1 ? Math.max(2500, Math.floor(ms / candidates.length) + 1500) : ms;
+    const t = setTimeout(() => { try { ctl.abort(); } catch {} }, per);
+    try {
+      const res = await fetch(href, {
+        signal: ctl.signal, redirect: "follow",
+        headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36", "accept": "image/*,*/*" },
+      });
+      if (!res.ok) { clearTimeout(t); continue; }
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length < 80) { clearTimeout(t); continue; }
+      const png = await sharp(buf).resize(size, size, { fit: "cover", position: "attention" }).png().toBuffer();
+      clearTimeout(t);
+      return "data:image/png;base64," + png.toString("base64");
+    } catch { /* try the next gateway */ }
+    finally { clearTimeout(t); }
+  }
+  return null;
 }
 
 // Full premium render: resolve avatars → build transparent map SVG → composite over a branded background
