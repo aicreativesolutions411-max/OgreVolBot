@@ -31893,7 +31893,15 @@ async function renderSubjectMapPng(target, mode = "bags") {
       if (gr && Array.isArray(gr.clusters)) { clusters = gr.clusters; clusterEdges = gr.clusterEdges || []; }
     } catch { /* plain map is fine */ }
   }
-  const png = await renderSlimeMapPng({ subject: map.subject, subtitle: map.subtitle, stats: map.stats, nodes: map.nodes, bgPath, centerImage: map.coinLogo || "", clusters, clusterEdges });
+  // Token maps get the WIDE Bubblemaps-style card: map on the left + a ranked-clusters/stats/KOL side panel
+  // on the right (owner: "show up to 10 clusters biggest→smallest with bars + info on the side"). Wallet maps
+  // stay square (no clusters to rank).
+  const wide = map.kind === "token";
+  const png = await renderSlimeMapPng({
+    subject: map.subject, subtitle: map.subtitle, stats: map.stats, nodes: map.nodes, bgPath,
+    centerImage: map.coinLogo || "", clusters, clusterEdges,
+    sidePanel: wide, kolsIn: Number(map.kolsIn) || 0, W: wide ? 1320 : 900, H: 820,
+  });
   mapRenderCache.set(key, { at: Date.now(), png, map });
   if (mapRenderCache.size > 200) mapRenderCache.delete(mapRenderCache.keys().next().value);
   return { png, map };
@@ -32426,11 +32434,12 @@ async function xReplyPollTick() {
   console.log("[xreply] tick…");   // heartbeat: proves the interval fires + a tick actually starts (temporary diag)
   try {
   let mentions = [];
-  // Search union only every 4th tick — notifications is the instant source; running 2 SearchTimeline calls
-  // every 30s burned the shared search quota into constant 429s (starving the KOL first-responder too).
-  _xPollTickN = (_xPollTickN + 1) % 4;
+  // X's notifications feed goes STALE (returns the same fixed ~19 tweets for hours), so a fresh tag only shows
+  // up via SEARCH. Run search every OTHER tick (~60s) — frequent enough to catch a new tag fast, spaced enough
+  // to avoid the constant-429 storm that every-tick search caused. Notifications still runs every tick.
+  _xPollTickN = (_xPollTickN + 1) % 2;
   // Hard 20s timeout on the mention fetch — an X GraphQL call that hangs must NOT freeze the whole poll.
-  try { mentions = await Promise.race([xSearchMentions(20, { includeSearch: _xPollTickN === 0 }), new Promise((_, rej) => setTimeout(() => rej(new Error("mentions fetch timeout")), 20_000))]); }
+  try { mentions = await Promise.race([xSearchMentions(40, { includeSearch: _xPollTickN === 0 }), new Promise((_, rej) => setTimeout(() => rej(new Error("mentions fetch timeout")), 20_000))]); }
   catch (e) { console.log(`[xreply] tick: mentions fetch failed (${String(e?.message || e).slice(0, 70)})`); return { checked: 0, results, error: String(e?.message || e).slice(0, 140) }; }
   if (!mentions.length) return { checked: 0, results };
   const state = await readXReplyState();

@@ -95,9 +95,13 @@ function arrowSvg(x1, y1, x2, y2, color, w, targetR, dash) {
 const CLUSTER_COLORS = ["#ffcf4d", "#4dd6ff", "#ff7de3", "#8bff5b", "#ff9f4d", "#b98cff", "#4dffd0", "#ff6b6b"];
 function shortAddr(a) { a = String(a || ""); return a.length > 10 ? a.slice(0, 4) + "…" + a.slice(-4) : a; }
 
-export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stats = [], nodes = [], bgHref = null, transparent = false, centerImage = null, clusters = [], clusterEdges = [], W = 900, H = 820 } = {}) {
-  const cx = W / 2, cy = 118 + (H - 118) / 2;
-  const rMax = Math.min(W, H - 118) / 2 - 40;
+export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stats = [], nodes = [], bgHref = null, transparent = false, centerImage = null, clusters = [], clusterEdges = [], sidePanel = false, kolsIn = 0, W = 900, H = 820 } = {}) {
+  // Side panel (Bubblemaps-style, on the RIGHT): ranked clusters w/ bars + a holders/whales/KOLs stat grid +
+  // a KOL roster. The map draws into the LEFT `mapW` region; the panel fills the rest.
+  const PANEL = sidePanel ? 452 : 0;
+  const mapW = W - PANEL;
+  const cx = mapW / 2, cy = 118 + (H - 118) / 2;
+  const rMax = Math.min(mapW, H - 118) / 2 - 40;
   // Colour + letter each cluster (biggest first — server already sorted), then lay members into tight blobs.
   const cls = (clusters || []).filter((c) => Array.isArray(c.members) && c.members.length >= 2)
     .map((c, k) => ({ ...c, color: CLUSTER_COLORS[k % CLUSTER_COLORS.length], letter: String.fromCharCode(65 + k) }));
@@ -105,8 +109,8 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
   const placed = useClusters ? layoutClustered(nodes, cls, cx, cy, 130, rMax) : layout(nodes, cx, cy, 130, rMax);
   const posByI = new Map(placed.map((p) => [p.i, p]));
 
-  // Header stat pills
-  const pillW = (W - 60 - 4 * 14) / 5;
+  // Header stat pills (span the MAP region, not the panel)
+  const pillW = (mapW - 60 - 4 * 14) / 5;
   const header = stats.slice(0, 5).map((s, i) => {
     const x = 30 + i * (pillW + 14);
     return `<g>
@@ -233,6 +237,70 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
       ? `<image href="${esc(bgHref)}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="xMidYMid slice"/><rect width="${W}" height="${H}" fill="#04120a" fill-opacity="0.35"/>`
       : `<rect width="${W}" height="${H}" fill="#04120a"/><radialGradient id="glow" cx="50%" cy="55%" r="55%"><stop offset="0%" stop-color="#0d3a1e"/><stop offset="100%" stop-color="#04120a"/></radialGradient><rect width="${W}" height="${H}" fill="url(#glow)"/>`;
 
+  // 📊 SIDE PANEL — ranked clusters w/ bars + holders/whales/KOLs stat grid + KOL roster (Bubblemaps-style).
+  let panel = "";
+  if (sidePanel) {
+    const px = mapW + 20, pw = PANEL - 40;
+    const whales = placed.filter((p) => p.state === "whale").length;
+    const kolNodes = nodes.filter((n) => n.isKol);
+    const kolCount = Math.max(Number(kolsIn) || 0, kolNodes.length);
+    const maxPct = cls.reduce((m, c) => Math.max(m, +c.pct || 0), 0) || 1;
+    let y = 34;
+    const rows = [];
+    // header
+    rows.push(`<text x="${px}" y="${y}" font-family="Arial Black, Arial" font-size="19" font-weight="900" fill="#eafff0">🕸️ Clusters (${cls.length})</text>`);
+    rows.push(`<text x="${px + pw}" y="${y}" text-anchor="end" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#7bd98a">bundled / insider</text>`);
+    y += 22;
+    if (!cls.length) {
+      rows.push(`<text x="${px}" y="${y + 8}" font-family="Arial, sans-serif" font-size="12.5" font-weight="600" fill="#9fe0ab">No wallet clusters — top holders</text>`);
+      rows.push(`<text x="${px}" y="${y + 26}" font-family="Arial, sans-serif" font-size="12.5" font-weight="600" fill="#9fe0ab">were funded independently. Clean.</text>`);
+      y += 44;
+    } else {
+      cls.slice(0, 8).forEach((c) => {
+        const barW = pw - 8, fillW = Math.max(6, barW * Math.min(1, (+c.pct || 0) / maxPct));
+        rows.push(`<g>
+          <circle cx="${px + 7}" cy="${y + 6}" r="6" fill="${c.color}"/>
+          <text x="${px + 20}" y="${y + 10}" font-family="Arial Black, Arial" font-size="13" font-weight="900" fill="#eafff0">Cluster ${c.letter}</text>
+          <text x="${px + 96}" y="${y + 10}" font-family="Arial, sans-serif" font-size="11.5" font-weight="700" fill="#9fe0ab">${c.size || (c.members || []).length} wallets</text>
+          <text x="${px + pw}" y="${y + 10}" text-anchor="end" font-family="Arial Black, Arial" font-size="13" font-weight="900" fill="${c.color}">${(+c.pct).toFixed(1)}% · ${fmtUsd(c.usd)}</text>
+          <rect x="${px}" y="${y + 17}" width="${barW}" height="8" rx="4" fill="#0c2113"/>
+          <rect x="${px}" y="${y + 17}" width="${fillW.toFixed(1)}" height="8" rx="4" fill="${c.color}"/>
+        </g>`);
+        y += 36;
+      });
+    }
+    y += 8;
+    // stat grid (2x2)
+    const cellW = (pw - 12) / 2;
+    const grid = [["HOLDERS", String(nodes.length)], ["🐋 WHALES", String(whales)], ["⭐ KOLS IN", String(kolCount)], ["🕸️ CLUSTERS", String(cls.length)]];
+    grid.forEach((g, i) => {
+      const gx = px + (i % 2) * (cellW + 12), gy = y + Math.floor(i / 2) * 62;
+      rows.push(`<g>
+        <rect x="${gx}" y="${gy}" width="${cellW.toFixed(1)}" height="52" rx="12" fill="#0a1f12" stroke="#2f6b3a" stroke-width="1.3"/>
+        <text x="${gx + 12}" y="${gy + 22}" font-family="Arial, sans-serif" font-size="10.5" font-weight="800" letter-spacing="0.4" fill="#7bd98a">${esc(g[0])}</text>
+        <text x="${gx + 12}" y="${gy + 44}" font-family="Arial Black, Arial" font-size="22" font-weight="900" fill="#eafff0">${esc(g[1])}</text>
+      </g>`);
+    });
+    y += 62 * 2 + 14;
+    // KOL roster
+    if (kolNodes.length) {
+      rows.push(`<text x="${px}" y="${y}" font-family="Arial Black, Arial" font-size="14" font-weight="900" fill="#eafff0">⭐ ${kolCount} KOL${kolCount > 1 ? "s" : ""} holding</text>`);
+      y += 20;
+      kolNodes.slice(0, 6).forEach((n) => {
+        rows.push(`<g>
+          <circle cx="${px + 9}" cy="${y + 6}" r="9" fill="#0a1f12" stroke="#ffcf4d" stroke-width="1.4"/>
+          ${n.avatar ? `<clipPath id="pk${n.i}"><circle cx="${px + 9}" cy="${y + 6}" r="8"/></clipPath><image href="${esc(n.avatar)}" x="${px + 1}" y="${y - 2}" width="16" height="16" clip-path="url(#pk${n.i})" preserveAspectRatio="xMidYMid slice"/>` : ""}
+          <text x="${px + 26}" y="${y + 10}" font-family="Arial, sans-serif" font-size="12.5" font-weight="800" fill="#eafff0">${esc(String(n.name || "").slice(0, 20))}</text>
+          <text x="${px + pw}" y="${y + 10}" text-anchor="end" font-family="Arial Black, Arial" font-size="12" font-weight="900" fill="#ffcf4d">${n.pct != null ? (+n.pct).toFixed(1) + "%" : ""}</text>
+        </g>`);
+        y += 24;
+      });
+    }
+    panel = `<line x1="${mapW}" y1="20" x2="${mapW}" y2="${H - 20}" stroke="#2f6b3a" stroke-opacity="0.6" stroke-width="1.5"/>
+      <rect x="${mapW + 8}" y="20" width="${PANEL - 20}" height="${H - 40}" rx="16" fill="#04120a" fill-opacity="0.55"/>
+      ${rows.join("")}`;
+  }
+
   // Legend + wordmark
   const legend = `<g font-family="Arial, sans-serif" font-size="12" font-weight="700">
     <circle cx="34" cy="${H - 30}" r="6" fill="#5be36a"/><text x="46" y="${H - 26}" fill="#9fe0ab">holding</text>
@@ -264,6 +332,7 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
     ${snippets}
     ${labels}
     ${clusterCards}
+    ${panel}
     ${legend}
   </svg>`;
 }
@@ -303,7 +372,7 @@ async function localFaceDataUri(file, size = 88) {
   } catch { return null; }
 }
 
-export async function renderSlimeMapPng({ subject, subtitle, stats = [], nodes = [], bgPath = null, centerImage = null, clusters = [], clusterEdges = [], W = 900, H = 820 } = {}) {
+export async function renderSlimeMapPng({ subject, subtitle, stats = [], nodes = [], bgPath = null, centerImage = null, clusters = [], clusterEdges = [], sidePanel = false, kolsIn = 0, W = 900, H = 820 } = {}) {
   // Resolve avatars → embedded data-URIs, in parallel. KOL X pfps come from a remote URL (fetch); anonymous
   // wallets get a LOCAL slime face (read off disk). Deduped so the same face/url is only processed once.
   // The COIN's PFP (centerImage) is fetched the same way so it embeds in the center hub of the share card.
@@ -322,7 +391,7 @@ export async function renderSlimeMapPng({ subject, subtitle, stats = [], nodes =
   }));
   const centerData = await centerImageP;        // null if the coin logo failed → hub falls back to the orb
 
-  const svg = buildMapSvg({ subject, subtitle, stats, nodes, transparent: true, centerImage: centerData, clusters, clusterEdges, W, H });
+  const svg = buildMapSvg({ subject, subtitle, stats, nodes, transparent: true, centerImage: centerData, clusters, clusterEdges, sidePanel, kolsIn, W, H });
   const mapPng = await sharp(Buffer.from(svg)).png().toBuffer();
 
   // Base = branded background (cover) or a dark-green fallback gradient.
