@@ -250,11 +250,14 @@ export async function xSearchMentions(count = 20, { includeSearch = true } = {})
     if (arr.length && byId.size === 0) { const t = arr[0]; sample = ` sample[@${t.username} mentions=${(t.mentions || []).join("/") || "-"} replyTo=${t.inReplyToScreen || "-"} txt=${JSON.stringify(String(t.text || "").slice(0, 40))}]`; }
   }
   catch (e) { errs.push("notif:" + String(e?.message || e).slice(0, 50)); }
-  // SOURCE 2: search — UNION, not just a fallback. Catches anything notifications dropped (and vice-versa),
-  // so a tag can't slip through a single-source gap. Run once PER handle spelling. Best-effort per query.
-  for (const h of includeSearch ? handles : []) {
+  // SOURCE 2: search — the freshest source (notifications lags for hours). Search ONLY the LIVE account handle
+  // (the one the cookies resolve to) + the env handle if different — NOT the dead aliases. Searching all 4
+  // spellings fired 4 SearchTimeline calls per tick → the last one always 429'd, throttling the REAL handle's
+  // search so fresh tags never surfaced (the "tagged, got nothing" bug). One or two calls = no 429.
+  const searchHandles = includeSearch ? [...new Set([resolved, envH].filter(Boolean))] : [];
+  for (const h of searchHandles) {
     try {
-      const j = await gql("GET", "SearchTimeline", { variables: { rawQuery: `@${h} -filter:retweets`, count: Math.min(40, count), querySource: "typed_query", product: "Latest" }, features: READ_FEATURES });
+      const j = await gql("GET", "SearchTimeline", { variables: { rawQuery: `(@${h}) -filter:retweets`, count: Math.min(40, count), querySource: "typed_query", product: "Latest" }, features: READ_FEATURES });
       const instr = j?.data?.search_by_raw_query?.search_timeline?.timeline?.instructions || [];
       for (const ins of instr) for (const entry of (ins.entries || [])) {
         if (!String(entry.entryId || "").startsWith("tweet-")) continue;

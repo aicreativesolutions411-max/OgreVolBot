@@ -30838,15 +30838,55 @@ async function resolveCashtagToMint(symbol) {
     try {
       const d = await fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { timeoutMs: 6000 }).catch(() => null);
       const pairs = Array.isArray(d?.pairs) ? d.pairs : [];
-      const exact = pairs.filter((p) => String(p.chainId) === "solana" && String(p.baseToken?.symbol || "").toLowerCase() === key);
-      const pick = exact
-        .filter((p) => (Number(p.liquidity?.usd) || 0) >= 800)
-        .sort((a, b) => (Number(b.liquidity?.usd) || 0) - (Number(a.liquidity?.usd) || 0))[0];
+      const exact = pairs.filter((p) => String(p.chainId) === "solana" && String(p.baseToken?.symbol || "").toLowerCase() === key)
+        .sort((a, b) => (Number(b.liquidity?.usd) || 0) - (Number(a.liquidity?.usd) || 0));   // deepest liquidity first
+      // Prefer a pair over the liq floor, but NEVER drop every match — a real ticker with thin liq (or a
+      // DexScreener that only lists a low-liq pool) must still resolve. Take the best-liquidity exact match;
+      // the >=800 floor is only a tie-breaker preference now (was a hard filter → "$ticker resolved nothing").
+      const pick = exact.find((p) => (Number(p.liquidity?.usd) || 0) >= 800) || exact[0];
       mint = pick?.baseToken?.address || null;
     } catch { mint = null; }
   }
   cashtagMintCache.set(key, { at: Date.now(), mint });
   return mint;
+}
+// A DexScreener link's address is the PAIR, NOT the token mint (dexscreener.com/solana/<pairAddr>). Resolve
+// pair → the coin's mint via the pairs API so a pasted DS link scans the coin (owner: "post dexscreener link
+// → post the coin info"). Returns the non-quote token (skips SOL/USDC/USDT). Cached 5min.
+const QUOTE_MINTS = new Set(["So11111111111111111111111111111111111111112", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"]);
+const dexPairMintCache = new Map();
+async function resolveDexPairToMint(addr) {
+  const a = String(addr || "").trim();
+  if (!isLikelySolMint(a)) return null;
+  const cached = dexPairMintCache.get(a);
+  if (cached && Date.now() - cached.at < 5 * 60_000) return cached.mint;
+  let mint = null;
+  try {
+    const d = await fetchJson(`https://api.dexscreener.com/latest/dex/pairs/solana/${a}`, { timeoutMs: 6000 }).catch(() => null);
+    const pairs = Array.isArray(d?.pairs) ? d.pairs : (d?.pair ? [d.pair] : []);
+    const p = pairs[0];
+    if (p) {
+      const b = p.baseToken?.address, q = p.quoteToken?.address;
+      mint = (b && !QUOTE_MINTS.has(b)) ? b : (q && !QUOTE_MINTS.has(q)) ? q : (b || q || null);
+    }
+  } catch { mint = null; }
+  dexPairMintCache.set(a, { at: Date.now(), mint });
+  return mint;
+}
+// Resolve a scan target from free text + links: a bare CA, a pump.fun/coin/<mint> link (addr IS the mint), a
+// DexScreener link (addr is a PAIR → resolve to the mint), or a $ticker. One place so every surface (X reply,
+// TG /look, web) handles pasted links the same way.
+async function resolveScanTargetFromText(text, urls = []) {
+  const blob = [String(text || ""), ...(Array.isArray(urls) ? urls : [])].join(" ");
+  // 1) DexScreener link → pair→mint (must run BEFORE the generic base58 grab, which would keep the pair addr)
+  const ds = blob.match(/dexscreener\.com\/solana\/([1-9A-HJ-NP-Za-km-z]{32,44})/i);
+  if (ds) { const m = await resolveDexPairToMint(ds[1]).catch(() => null); if (m) return m; }
+  // 2) bare CA / pump link → the base58 is the mint
+  const mints = extractMintsFromText(blob);
+  if (mints.length) return mints[0];
+  // 3) $ticker
+  for (const tag of extractCashtags(blob)) { const m = await resolveCashtagToMint(tag).catch(() => null); if (m) return m; }
+  return null;
 }
 
 // ── SLIMEWIRE NATIVE CHART DATA (free, no Helius) ───────────────────────────────────────────
@@ -32236,13 +32276,8 @@ function extractBareWalletAddress(text, urls) {
 async function resolveXTargetMint(mention) {
   // Scan a post's TEXT plus its expanded links (people paste a dexscreener/pump URL, which X shortens to
   // t.co in the text — the real CA only lives in the expanded url). Then $tickers as a last resort.
-  const scan = async (text, urls) => {
-    const blob = [String(text || ""), ...(Array.isArray(urls) ? urls : [])].join(" ");
-    const mints = extractMintsFromText(blob);
-    if (mints.length) return mints[0];
-    for (const tag of extractCashtags(String(text || ""))) { const m = await resolveCashtagToMint(tag).catch(() => null); if (m) return m; }
-    return null;
-  };
+  // Bare CA · pump link · DexScreener link (pair→mint) · $ticker — one shared resolver.
+  const scan = (text, urls) => resolveScanTargetFromText(text, urls);
   // 1) the tag itself
   let mint = await scan(mention.text, mention.urls);
   if (mint) return mint;
@@ -32468,12 +32503,11 @@ async function xReplyPollTick() {
   console.log("[xreply] tick…");   // heartbeat: proves the interval fires + a tick actually starts (temporary diag)
   try {
   let mentions = [];
-  // X's notifications feed goes STALE (returns the same fixed ~19 tweets for hours), so a fresh tag only shows
-  // up via SEARCH. Run search every OTHER tick (~60s) — frequent enough to catch a new tag fast, spaced enough
-  // to avoid the constant-429 storm that every-tick search caused. Notifications still runs every tick.
-  _xPollTickN = (_xPollTickN + 1) % 2;
+  // X's notifications feed goes STALE for hours, so a fresh tag only shows up via SEARCH. Now that search
+  // hits ONLY the live handle (1-2 calls, no 429), run it EVERY tick (~30s) so a fresh tag is caught fast.
+  _xPollTickN = (_xPollTickN + 1) % 1000;
   // Hard 20s timeout on the mention fetch — an X GraphQL call that hangs must NOT freeze the whole poll.
-  try { mentions = await Promise.race([xSearchMentions(40, { includeSearch: _xPollTickN === 0 }), new Promise((_, rej) => setTimeout(() => rej(new Error("mentions fetch timeout")), 20_000))]); }
+  try { mentions = await Promise.race([xSearchMentions(40, { includeSearch: true }), new Promise((_, rej) => setTimeout(() => rej(new Error("mentions fetch timeout")), 20_000))]); }
   catch (e) { console.log(`[xreply] tick: mentions fetch failed (${String(e?.message || e).slice(0, 70)})`); return { checked: 0, results, error: String(e?.message || e).slice(0, 140) }; }
   if (!mentions.length) return { checked: 0, results };
   const state = await readXReplyState();
