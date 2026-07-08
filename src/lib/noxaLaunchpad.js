@@ -140,6 +140,7 @@ export async function readNoxaMarkets(entries, { rpcUrl, ethUsd } = {}) {
     const priceUsd = priceWeth * eth;
     out.push({
       ...entries[i],
+      positionId: entries[i].positionId != null ? String(entries[i].positionId) : "",   // ethers BigInt → string (JSON.stringify throws on BigInt)
       chain: "robinhood", source: "noxa",
       name: String(name || ""), symbol: String(symbol || "").replace(/^\$+/, "").slice(0, 16), decimals: dec,
       supply, priceUsd, priceWeth,
