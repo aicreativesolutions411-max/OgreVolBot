@@ -129,6 +129,11 @@ function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'
 function hullPath(members){const pts=[];members.forEach(m=>{if(m.x==null)return;const p=(m.r||10)+16;pts.push([m.x-p,m.y-p],[m.x+p,m.y-p],[m.x-p,m.y+p],[m.x+p,m.y+p])});if(pts.length<3)return'';const h=d3.polygonHull(pts);if(!h)return'';return'M'+h.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join('L')+'Z'}
 function cx(ms){let s=0,n=0;ms.forEach(m=>{if(m.x!=null){s+=m.x;n++}});return n?s/n:0}
 function cy(ms){let s=0,n=0;ms.forEach(m=>{if(m.y!=null){s+=m.y;n++}});return n?s/n:0}
+// top of the cluster blob → float the total-card ABOVE the bubbles (bubblemaps-style) instead of over them.
+function cyTop(ms){let t=Infinity;ms.forEach(m=>{if(m.y!=null)t=Math.min(t,m.y-(m.r||10))});return t===Infinity?0:t-24}
+// stop an arrow at the TARGET bubble's rim (not its centre) so the arrowhead sits visibly on the edge.
+function edgeX(s,t){const dx=(t.x||0)-(s.x||0),dy=(t.y||0)-(s.y||0),d=Math.hypot(dx,dy)||1;return (t.x||0)-dx/d*((t.r||10)+4)}
+function edgeY(s,t){const dx=(t.x||0)-(s.x||0),dy=(t.y||0)-(s.y||0),d=Math.hypot(dx,dy)||1;return (t.y||0)-dy/d*((t.r||10)+4)}
 
 // _silent = a background auto-refresh: never flash the spinner and never replace a working map with an error.
 async function loadTarget(kind,id,mode,push,label,_retry,_silent){
@@ -225,6 +230,10 @@ function render(map){
   const W=stage.clientWidth,H=stage.clientHeight;
   const svg=d3.select(stage).insert('svg',':first-child').attr('viewBox','0 0 '+W+' '+H);
   const defs=svg.append('defs');
+  // 🔗 directional arrowheads — fill:context-stroke so each arrow matches its line's colour automatically,
+  // giving the map real fund-FLOW feel (who sent to whom) instead of plain undirected lines.
+  defs.append('marker').attr('id','arrow').attr('viewBox','0 0 10 10').attr('refX',9).attr('refY',5).attr('markerWidth',5.5).attr('markerHeight',5.5).attr('orient','auto-start-reverse').append('path').attr('d','M0,0L10,5L0,10z').attr('fill','context-stroke');
+  defs.append('marker').attr('id','arrowBig').attr('viewBox','0 0 10 10').attr('refX',9).attr('refY',5).attr('markerWidth',8).attr('markerHeight',8).attr('orient','auto-start-reverse').append('path').attr('d','M0,0L10,5L0,10z').attr('fill','context-stroke');
   const g=svg.append('g');
   zoomB=d3.zoom().scaleExtent([0.3,4]).on('zoom',ev=>g.attr('transform',ev.transform)); svg.call(zoomB);
   // center hub as a fixed node
@@ -235,14 +244,18 @@ function render(map){
   // avatar clip + pattern per node
   nodes.forEach(n=>{const av=n.avatarUrl||n.faceUrl;if(av){defs.append('clipPath').attr('id','c'+n.id).append('circle').attr('r',n.r-2);defs.append('pattern').attr('id','p'+n.id).attr('width',1).attr('height',1).attr('patternContentUnits','objectBoundingBox').append('image').attr('href',av).attr('width',1).attr('height',1).attr('preserveAspectRatio','xMidYMid slice')}});
   const hullG=g.append('g');    // 🕸️ cluster hulls (bubblemaps-style translucent blobs) — behind everything
+  const xclinkG=g.append('g');  // 🔗 INTER-cluster arrows (cluster→cluster "funded by") — behind member edges
   const link=g.append('g').selectAll('line').data(links).join('line').attr('class','link').attr('stroke-width',d=>0.5+d.w*2);
-  const clinkG=g.append('g');   // 🕸️ cluster/connection edges (loaded progressively after the bubbles)
+  const clinkG=g.append('g');   // 🕸️ cluster member edges (loaded progressively after the bubbles)
   const node=g.append('g').selectAll('g').data(nodes).join('g').attr('class','node');
   node.append('circle').attr('r',d=>d.r+5).attr('fill',d=>(COL[d.state]||COL.hold).f).attr('fill-opacity',0.14);
   node.append('circle').attr('class','body').attr('r',d=>d.r).attr('fill',d=>{const av=d.avatarUrl||d.faceUrl;return av?'url(#p'+d.id+')':(COL[d.state]||COL.hold).f}).attr('stroke',d=>(COL[d.state]||COL.hold).r).attr('stroke-width',2.5);
   node.append('circle').attr('r',d=>d.r+1.5).attr('fill','none').attr('stroke',d=>(COL[d.state]||COL.hold).f).attr('stroke-opacity',.6);
   // labels for KOLs + big holders
   node.filter(d=>d.label).append('text').attr('class','lbl').attr('x',d=>d.r+4).attr('y',4).text(d=>d.label);
+  // 🏷️ wallet SNIPPET under bigger bubbles (first4…last4) — reads as a real address you can click to drill in,
+  // like Bubblemaps. Only on the larger/whale bubbles + KOL-less nodes so it never turns into label soup.
+  node.filter(d=>!d.isKol&&d.wallet&&d.r>=14).append('text').attr('class','snip').attr('text-anchor','middle').attr('y',d=>d.r+13).style('font','700 9.5px ui-monospace,Menlo,Consolas,monospace').style('paint-order','stroke').attr('stroke','#04120a').attr('stroke-width',3).attr('fill','#bfe9c8').style('pointer-events','none').text(d=>short(d.wallet));
   // hub — the coin: its PFP (from pump/dex) fills the center circle, ticker + subtitle below.
   const hubg=g.append('g');
   hubg.append('circle').attr('cx',W/2).attr('cy',H/2).attr('r',52).attr('fill','#0a1f12').attr('stroke','#5be36a').attr('stroke-width',3);
@@ -267,9 +280,11 @@ function render(map){
     .force('center',d3.forceCenter(W/2,H/2).strength(.02))
     .on('tick',()=>{
       link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
-      clinkG.selectAll('line').attr('x1',d=>d.s.x).attr('y1',d=>d.s.y).attr('x2',d=>d.t.x).attr('y2',d=>d.t.y);
+      // member edges + funder→cluster arrows stop at the target's edge so the arrowhead sits ON the rim, not buried in the bubble
+      clinkG.selectAll('line').attr('x1',d=>d.s.x).attr('y1',d=>d.s.y).attr('x2',d=>edgeX(d.s,d.t)).attr('y2',d=>edgeY(d.s,d.t));
+      xclinkG.selectAll('line').attr('x1',d=>d.s.x).attr('y1',d=>d.s.y).attr('x2',d=>edgeX(d.s,d.t)).attr('y2',d=>edgeY(d.s,d.t));
       node.attr('transform',d=>'translate('+d.x+','+d.y+')');
-      if(clusterHulls){hullG.selectAll('path.hull').attr('d',d=>hullPath(d.members));hullG.selectAll('text.clbl').attr('x',d=>cx(d.members)).attr('y',d=>cy(d.members)-4)}
+      if(clusterHulls){hullG.selectAll('path.hull').attr('d',d=>hullPath(d.members));hullG.selectAll('g.clbl').attr('transform',d=>'translate('+cx(d.members)+','+cyTop(d.members)+')')}
     });
   // 🕸️ progressive cluster overlay (bubblemaps-style, but CLICKABLE to dive deeper). Bubbles render instantly;
   // the fund-flow clusters + hulls + %-labels + legend fade in after. Retries ONCE on a cold-coin timeout
@@ -277,17 +292,35 @@ function render(map){
   function applyGraph(gr){
     if(!gr||!gr.ok)return false;
     const byi=new Map(nodes.map(n=>[n.i,n]));
-    const clusters=(gr.clusters||[]).map((c,k)=>({...c,color:CLC[k%CLC.length],letter:String.fromCharCode(65+k),members:(c.members||[]).map(i=>byi.get(i)).filter(Boolean)})).filter(c=>c.members.length>=2);
+    const clusters=(gr.clusters||[]).map((c,k)=>({...c,color:CLC[k%CLC.length],letter:String.fromCharCode(65+k),members:(c.members||[]).map(i=>byi.get(i)).filter(Boolean),hubNode:byi.get(c.hub),funderNode:(c.funderIdx!=null?byi.get(c.funderIdx):null)})).filter(c=>c.members.length>=2);
     if(!clusters.length){ if(!gr.timeout)renderClusterEmpty(); return false; }
+    const byId=new Map(clusters.map(c=>[c.id,c]));
+    // member edges: funder/biggest bag → each member (directional). Trimmed to the rim + arrowhead in tick().
     const lines=[];clusters.forEach(c=>{for(let i=1;i<c.members.length;i++)lines.push({s:c.members[0],t:c.members[i],color:c.color})});
-    clinkG.selectAll('line').data(lines).join('line').attr('stroke',d=>d.color).attr('stroke-width',2).attr('stroke-dasharray','4 3').attr('stroke-opacity',0).transition().duration(700).attr('stroke-opacity',.7);
+    // funder → cluster hub: when the shared funding wallet is itself on the map, show the money coming IN.
+    clusters.forEach(c=>{if(c.funderNode&&c.hubNode&&c.funderNode!==c.hubNode)lines.push({s:c.funderNode,t:c.hubNode,color:c.color})});
+    clinkG.selectAll('line').data(lines).join('line').attr('stroke',d=>d.color).attr('stroke-width',2).attr('stroke-dasharray','5 3').attr('stroke-opacity',0).attr('marker-end','url(#arrow)').transition().duration(700).attr('stroke-opacity',.75);
+    // 🔗 INTER-cluster arrows: cluster A funded by a wallet inside cluster B → A points at B (thicker, solid).
+    const xlines=[];(gr.clusterEdges||[]).forEach(e=>{const a=byId.get(e.from),b=byId.get(e.to);if(a&&b&&a.hubNode&&b.hubNode)xlines.push({s:a.hubNode,t:b.hubNode,color:a.color})});
+    xclinkG.selectAll('line').data(xlines).join('line').attr('stroke',d=>d.color).attr('stroke-width',3.2).attr('stroke-opacity',0).attr('marker-end','url(#arrowBig)').transition().duration(800).attr('stroke-opacity',.85);
     const colOf=new Map();clusters.forEach(c=>c.members.forEach(m=>colOf.set(m.i,c.color)));
     node.filter(d=>colOf.has(d.i)).select('.body').attr('stroke',d=>colOf.get(d.i)).attr('stroke-width',3.5);
     clusterHulls=clusters;
     hullG.selectAll('path.hull').data(clusters).join('path').attr('class','hull').attr('fill',d=>d.color).attr('fill-opacity',0).attr('stroke',d=>d.color).attr('stroke-opacity',.35).attr('stroke-width',1.5).style('cursor','pointer').on('click',(ev,d)=>openCluster(d)).transition().duration(700).attr('fill-opacity',.09);
-    hullG.selectAll('text.clbl').data(clusters).join('text').attr('class','clbl').attr('text-anchor','middle').style('font','800 11px sans-serif').style('paint-order','stroke').style('cursor','pointer').attr('stroke','#04120a').attr('stroke-width',3).attr('fill',d=>d.color).text(d=>d.members.length+' wallets · '+(+d.pct).toFixed(1)+'%').on('click',(ev,d)=>openCluster(d));
+    // Cluster TOTAL card, floating over each blob: name · wallet count · % · $ · what it's connected to · funder snippet.
+    const clbl=hullG.selectAll('g.clbl').data(clusters).join('g').attr('class','clbl').style('cursor','pointer').on('click',(ev,d)=>openCluster(d));
+    clbl.each(function(d){const gel=d3.select(this);gel.selectAll('*').remove();
+      const outLinks=(gr.clusterEdges||[]).filter(e=>e.from===d.id).length;
+      const l1=d.members.length+' wallets · '+(+d.pct).toFixed(1)+'%';
+      const l2='$'+fmt(d.usd)+(outLinks?' · →'+outLinks+' cluster'+(outLinks>1?'s':''):'');
+      const l3='◆'+d.letter+' · from '+(d.funderShort||short(d.funder||''));
+      const w=Math.max(l1.length,l2.length,l3.length)*6.6+22;
+      gel.append('rect').attr('x',-w/2).attr('y',-25).attr('width',w).attr('height',50).attr('rx',10).attr('fill','#04120a').attr('fill-opacity',.66).attr('stroke',d.color).attr('stroke-opacity',.5).attr('stroke-width',1.3);
+      const mk=(t,y,sz,fill,wt)=>gel.append('text').attr('text-anchor','middle').attr('y',y).style('font',(wt||800)+' '+sz+'px sans-serif').style('paint-order','stroke').attr('stroke','#04120a').attr('stroke-width',2.5).attr('fill',fill).text(t);
+      mk(l3,-11,9.5,d.color,700); mk(l1,3,12,'#eafff0',800); mk(l2,17,10.5,d.color,700);
+    });
     sim.alpha(.35).restart();
-    renderClusterLegend(clusters);
+    renderClusterLegend(clusters,gr.clusterEdges||[]);
     const total=(gr.summary&&Number.isFinite(+gr.summary.clusteredPct))?+gr.summary.clusteredPct:Math.round(clusters.reduce((s,c)=>s+(+c.pct||0),0)*10)/10;
     const xc=document.getElementById('xrayCl'); if(xc)xc.innerHTML='<b style="color:#ffcf4d">'+clusters.length+'</b> · '+total+'%';
     const stats=document.getElementById('stats'); if(stats&&!document.getElementById('clstat'))stats.insertAdjacentHTML('beforeend','<div class="stat" id="clstat" style="border-color:#ffcf4d"><div class="l">🕸️ CLUSTERS</div><div class="v">'+clusters.length+' · '+total+'%</div></div>');
@@ -299,12 +332,16 @@ function render(map){
   }
 }
 // Cluster legend in the side panel — color swatch · combined % · wallet count. CLICK a row → dive-deeper modal.
-let clustersData=null;
-function renderClusterLegend(cl){
-  clustersData=cl;
+let clustersData=null,clusterEdgesData=[];
+function renderClusterLegend(cl,edges){
+  clustersData=cl; clusterEdgesData=edges||[];
   const side=document.getElementById('side'); if(!side)return;
   let el=document.getElementById('clusters'); if(!el){el=document.createElement('div');el.id='clusters';side.insertBefore(el,side.firstChild)}
-  el.innerHTML='<h3>🕸️ Clusters ('+cl.length+') · tap to dive</h3>'+cl.map((c,k)=>'<div class="krow" data-k="'+k+'"><span style="width:14px;height:14px;border-radius:4px;flex:0 0 14px;background:'+c.color+';box-shadow:0 0 8px '+c.color+'"></span><div><div class="nm">Cluster '+c.letter+' · '+c.members.length+' wallets</div><div class="sub">'+(+c.pct).toFixed(1)+'% held together · $'+fmt(c.usd)+' →</div></div></div>').join('');
+  const linkN=clusterEdgesData.length;
+  el.innerHTML='<h3>🕸️ Clusters ('+cl.length+')'+(linkN?' · '+linkN+' linked':'')+' · tap to dive</h3>'+cl.map((c,k)=>{
+    const outN=clusterEdgesData.filter(e=>e.from===c.id).length;
+    return '<div class="krow" data-k="'+k+'"><span style="width:14px;height:14px;border-radius:4px;flex:0 0 14px;background:'+c.color+';box-shadow:0 0 8px '+c.color+'"></span><div><div class="nm">Cluster '+c.letter+' · '+c.members.length+' wallets'+(outN?' <span style="color:'+c.color+';font-size:11px">→'+outN+'</span>':'')+'</div><div class="sub">'+(+c.pct).toFixed(1)+'% · $'+fmt(c.usd)+' · from '+esc(c.funderShort||short(c.funder||''))+' →</div></div></div>';
+  }).join('');
   [...el.querySelectorAll('.krow')].forEach(r=>r.onclick=()=>openCluster(clustersData[+r.dataset.k]));
 }
 function renderClusterEmpty(){
@@ -319,8 +356,12 @@ function openCluster(cl){
   const d=document.getElementById('drill'),c=document.getElementById('drillcard');
   d.className='on';
   const rows=(cl.members||[]).slice().sort((a,b)=>(b.pct||0)-(a.pct||0)).map(m=>'<div class="hrow" data-w="'+esc(m.wallet)+'">'+((m.avatarUrl||m.faceUrl)?'<img src="'+esc(m.avatarUrl||m.faceUrl)+'" onerror="this.style.visibility=\'hidden\'"/>':'<div class="hs">🫧</div>')+'<div><div class="nm">'+(m.isKol?'⭐ ':'')+esc(m.name||short(m.wallet))+'</div><div class="sub">'+short(m.wallet)+'</div></div><div class="v">'+(m.pct!=null?(+m.pct).toFixed(1)+'%':'')+(m.usd?'<br>$'+fmt(m.usd):'')+'</div></div>').join('');
+  const outN=(clusterEdgesData||[]).filter(e=>e.from===cl.id).length;
+  const inN=(clusterEdgesData||[]).filter(e=>e.to===cl.id).length;
+  const connLine=(outN||inN)?('<div style="margin-top:6px">🔗 connected to <b style="color:'+cl.color+'">'+(outN+inN)+'</b> other cluster'+((outN+inN)>1?'s':'')+(outN?' · funded from '+outN:'')+(inN?' · feeds '+inN:'')+'</div>'):'';
   c.innerHTML='<div class="dh"><b><span style="color:'+cl.color+'">◆</span> Cluster '+cl.letter+' · '+cl.members.length+' wallets</b><button class="x" onclick="closeDrill()">×</button></div>'+
-    '<div class="sub" style="color:var(--dim);font-size:12.5px;margin-bottom:8px;line-height:1.45">'+cl.members.length+' wallets funded by ONE source · <b style="color:'+cl.color+'">'+(+cl.pct).toFixed(1)+'%</b> of supply · $'+fmt(cl.usd)+' combined — likely one actor (insider / bundle). Tap a wallet to map it.</div>'+
+    '<div class="sub" style="color:var(--dim);font-size:12.5px;margin-bottom:8px;line-height:1.45">'+cl.members.length+' wallets funded by ONE source · <b style="color:'+cl.color+'">'+(+cl.pct).toFixed(1)+'%</b> of supply · $'+fmt(cl.usd)+' combined — likely one actor (insider / bundle).'+
+    '<div style="margin-top:5px">💰 funding wallet: <a href="/map?wallet='+esc(cl.funder||'')+'" style="color:'+cl.color+';font-family:ui-monospace,monospace">'+esc(cl.funderShort||short(cl.funder||''))+'</a></div>'+connLine+'<div style="margin-top:6px;opacity:.85">Tap a wallet to map it.</div></div>'+
     '<div id="hrows">'+rows+'</div>';
   [...c.querySelectorAll('.hrow')].forEach(r=>r.onclick=()=>{const w=r.dataset.w;if(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(w)){closeDrill();loadTarget('wallet',w,'bags',true)}});
 }

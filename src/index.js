@@ -31806,22 +31806,37 @@ async function mapComputeClusters(mint, nodes) {
   for (const [w, f] of funderOf) { let a = byFunder.get(f); if (!a) { a = []; byFunder.set(f, a); } a.push(w); }
   const nodeOf = new Map(nodes.map((n) => [n.wallet, n]));
   const edges = [], clusters = []; let cid = 0;
-  for (const [, arr] of byFunder) {
+  const walletCid = new Map();   // member wallet -> cluster id (for the inter-cluster "funded by" links)
+  for (const [funder, arr] of byFunder) {
     // 2-6 wallets sharing ONE funder = one actor (insider/bundle) → a cluster. 7+ = a common source (CEX
     // withdrawals etc.), not a coordinated group, so we skip it to avoid false clusters.
     if (arr.length < 2 || arr.length > 6) continue;
     const members = arr.map((w) => nodeOf.get(w)).filter(Boolean);
     if (members.length < 2) continue;
     members.sort((a, b) => (b.pct || 0) - (a.pct || 0));   // biggest bag = cluster hub for the star edges
-    for (const m of members) m.clusterId = cid;
+    for (const m of members) { m.clusterId = cid; walletCid.set(m.wallet, cid); }
     for (let i = 1; i < members.length; i++) edges.push({ a: members[0].i, b: members[i].i });
+    const hubNode = members[0];
+    const funderNode = nodeOf.get(funder) || null;   // is the shared funder itself a holder on this map?
     clusters.push({
       id: cid, size: members.length,
       members: members.map((m) => m.i),                     // node indices → frontend colors/hulls the group
+      hub: hubNode.i,                                        // biggest bag = the cluster's visual hub
       usd: members.reduce((s, m) => s + (m.usd || 0), 0),
       pct: Math.round(members.reduce((s, m) => s + (m.pct || 0), 0) * 10) / 10,
+      funder,                                               // the shared funding source (unspoofable link)
+      funderShort: shortMint(funder),                       // "AbCd…WxYz" for the in-map label
+      funderIdx: funderNode ? funderNode.i : null,          // if the funder is on-map, draw source→cluster arrow
     });
     cid++;
+  }
+  // 🔗 INTER-CLUSTER edges — a real on-chain relationship: cluster A's funding wallet is itself a MEMBER of
+  // cluster B → A "points at" B (its money came from that group). This is what makes the map read as a
+  // connected network of actors instead of isolated blobs.
+  const clusterEdges = [];
+  for (const c of clusters) {
+    const dst = walletCid.get(c.funder);
+    if (dst != null && dst !== c.id) clusterEdges.push({ from: c.id, to: dst, fromHub: c.hub, toHub: (clusters.find((x) => x.id === dst) || {}).hub });
   }
   clusters.sort((a, b) => b.pct - a.pct);                   // biggest cluster first (for the legend)
   const clusteredPct = Math.round(clusters.reduce((s, c) => s + (Number(c.pct) || 0), 0) * 10) / 10;
@@ -31829,11 +31844,13 @@ async function mapComputeClusters(mint, nodes) {
   const v = {
     edges,
     clusters,
+    clusterEdges,
     summary: {
       scannedWallets: top.length,
       linkedWallets: clusters.reduce((s, c) => s + (Number(c.size) || 0), 0),
       fundersResolved: funderOf.size,
       clusterCount: clusters.length,
+      clusterLinks: clusterEdges.length,
       clusteredPct,
       clusteredUsd,
       biggestPct: clusters[0] ? clusters[0].pct : 0,
