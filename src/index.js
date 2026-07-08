@@ -25332,14 +25332,29 @@ async function fetchDexScreenerTokenPairsBatch(tokenMints, options = {}) {
   return Array.isArray(data) ? data : [];
 }
 
+let _dsSoftBlockLogAt = 0;
 async function fetchDexScreenerTokenPairsFallback(tokenMint, options = {}) {
   const mint = String(tokenMint || "").trim();
   if (!mint) return [];
   const data = await fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(mint)}`, {
     headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
     timeoutMs: options.timeoutMs || 3_500
-  });
-  return Array.isArray(data?.pairs) ? data.pairs : [];
+  }).catch(() => null);
+  if (Array.isArray(data?.pairs) && data.pairs.length) return data.pairs;
+  // DexScreener SOFT-BLOCKS a busy IP with `200 {"pairs":null}` — no error, silent empty. Try the newer
+  // v1 endpoint (separately limited) before giving up, and log the block (rate-limited to 1/min) so
+  // "everything blank" is diagnosable from Render logs instead of looking like a data bug.
+  const alt = await fetchJson(`https://api.dexscreener.com/tokens/v1/solana/${encodeURIComponent(mint)}`, {
+    headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
+    timeoutMs: options.timeoutMs || 3_500
+  }).catch(() => null);
+  const altPairs = Array.isArray(alt) ? alt : (Array.isArray(alt?.pairs) ? alt.pairs : []);
+  if (altPairs.length) return altPairs;
+  if (data && data.pairs === null && Date.now() - _dsSoftBlockLogAt > 60_000) {
+    _dsSoftBlockLogAt = Date.now();
+    try { console.warn(`[dexscreener] SOFT-BLOCKED (200 + pairs:null) for ${shortMint(mint)} — both endpoints empty; scans lean on SolanaTracker/pump/cache`); } catch { /* logging is best-effort */ }
+  }
+  return [];
 }
 
 function bestDexPairForToken(tokenMint, pairs) {
@@ -30719,6 +30734,15 @@ function scanMarketStatsFromSources({ meta = null, bonding = null, best = null, 
   let holders = Number(scanBestHolderCount(rug, meta, bonding, best, supply)) || 0;
   let mc = pick(pumpMc, dexMc) || 0;
   let liq = pick(pumpLiq, dexLiq) || 0;
+  // MC SANITY — cross-check the reported MC against price × on-chain supply (supply comes from OUR free
+  // RPC read, never an API). Some sources report FDV-on-total-raw-supply as "marketCap" (BONK read $1.74T,
+  // 1000× real). If the source's MC disagrees with the chain math by >20×, trust the chain math.
+  const sanityPrice = firstMeaningfulNumber(meta?.priceUsd, best?.priceUsd, bonding?.priceUsd, bonding?.price_usd);
+  const sanitySupply = Number(supply) || Number(supply?.uiAmount) || 0;
+  if (mc > 0 && sanityPrice > 0 && sanitySupply > 0) {
+    const implied = sanityPrice * sanitySupply;
+    if (implied > 0 && (mc / implied > 20 || implied / mc > 20)) mc = implied;
+  }
   // AGE (createdAt, ms): resolve from EVERY source — dex/gecko pairCreatedAt (ms) + pump created_timestamp
   // (SECONDS→ms). This is why the card showed "new"/"age n/a": the old paths missed pump's created_timestamp.
   const pumpCreatedMs = Number(bonding?.created_timestamp) ? Number(bonding.created_timestamp) * (String(bonding.created_timestamp).replace(/\D/g, "").length <= 10 ? 1000 : 1) : 0;
@@ -31140,11 +31164,25 @@ async function gatherSlimeScan(mint) {
   const best = bestDexPairForToken(mint, pairs);
   let meta = mergeTokenMarketMetadata(best ? metadataFromDexPair(mint, best) : null, geckoMeta);
   if (stMarket) {
+    // Carry EVERYTHING ST returns — it's the keyed source that still answers when DexScreener soft-blocks
+    // Render (200 + pairs:null) and since GeckoTerminal killed its token endpoints (404). Shapes mirror
+    // DexScreener's ({priceChange:{h1}}, {volume:{h24}}, {txns:{h24}}) so scanBestPriceChange /
+    // scanBestVolumeWindow / scanBestTxnCount read it with zero special-casing.
     meta = mergeTokenMarketMetadata(meta, {
       source: "solanatracker",
+      symbol: stMarket.symbol,
+      name: stMarket.name,
+      imageUrl: stMarket.imageUrl,
       marketCap: stMarket.marketCap,
       liquidityUsd: stMarket.liquidityUsd,
-      holderCount: stMarket.holderCount
+      holderCount: stMarket.holderCount,
+      priceUsd: stMarket.priceUsd,
+      pairCreatedAt: stMarket.createdAtMs || null,
+      priceChange: (Number.isFinite(stMarket.ch1) || Number.isFinite(stMarket.ch24))
+        ? { ...(Number.isFinite(stMarket.ch1) ? { h1: stMarket.ch1 } : {}), ...(Number.isFinite(stMarket.ch24) ? { h24: stMarket.ch24 } : {}) }
+        : null,
+      volume: stMarket.volume24Usd > 0 ? { h24: stMarket.volume24Usd } : null,
+      txns: (stMarket.buys24 > 0 || stMarket.sells24 > 0) ? { h24: { buys: stMarket.buys24 || 0, sells: stMarket.sells24 || 0 } } : null,
     });
   }
   // bonding = Pump metadata. Always present for pump-style coins (fetched above); for the rare
@@ -31387,15 +31425,30 @@ async function buildTokenHolderMap(mint) {
   // so it's the server-side fallback for LIQUIDITY + 1H%, which were "always blank" on the X card (that card is
   // rendered on Render, so it can't use the client-IP DexScreener enrichment the web page does). reserve_in_usd
   // → liquidity, price_change_percentage.h1 → 1H.
-  let [idx, pumpMeta, pairs, holderRows, geckoMeta] = await Promise.all([
+  let [idx, pumpMeta, pairs, holderRows, geckoMeta, stMkt] = await Promise.all([
     mapKolIdentityIndex().catch(() => new Map()),
     getPumpFunTokenMetadata(mint).catch(() => null),
     fetchDexScreenerTokenPairsFallback(mint).catch(() => null),
     fetchTokenHolderRows(mint).catch(() => []),
     getGeckoTerminalTokenMetadata(mint, { timeoutMs: 6_000 }).catch(() => null),
+    (CONFIG.solanaTrackerApiKey ? fetchSolanaTrackerTokenReport(mint).catch(() => null) : Promise.resolve(null)),
   ]);
   const best = bestDexPairForToken(mint, pairs);
-  const dexMeta = mergeTokenMarketMetadata(best ? metadataFromDexPair(mint, best) : null, geckoMeta);
+  let dexMeta = mergeTokenMarketMetadata(best ? metadataFromDexPair(mint, best) : null, geckoMeta);
+  // ST = the KEYED backbone (DexScreener soft-blocks Render with 200+pairs:null; Gecko's token endpoints
+  // are 404 since their API change). Same merge the scan card does, so map == scan on every field.
+  if (stMkt) {
+    dexMeta = mergeTokenMarketMetadata(dexMeta, {
+      source: "solanatracker",
+      symbol: stMkt.symbol, name: stMkt.name, imageUrl: stMkt.imageUrl,
+      marketCap: stMkt.marketCap, liquidityUsd: stMkt.liquidityUsd, holderCount: stMkt.holderCount,
+      priceUsd: stMkt.priceUsd, pairCreatedAt: stMkt.createdAtMs || null,
+      priceChange: (Number.isFinite(stMkt.ch1) || Number.isFinite(stMkt.ch24))
+        ? { ...(Number.isFinite(stMkt.ch1) ? { h1: stMkt.ch1 } : {}), ...(Number.isFinite(stMkt.ch24) ? { h24: stMkt.ch24 } : {}) }
+        : null,
+      volume: stMkt.volume24Usd > 0 ? { h24: stMkt.volume24Usd } : null,
+    });
+  }
   const onCurve = Boolean(pumpMeta && !pumpMeta.graduated && !(dexMeta && dexMeta.marketCap));
   const pick = (p, d) => onCurve ? firstMeaningfulNumber(p, d) : firstMeaningfulNumber(d, p);
   // 🎯 UNIFIED market resolver — the SAME path the scan card uses (pump bonding-curve liquidity via
@@ -32445,7 +32498,7 @@ async function buildXScanReply(mint, variant) {
   const { meta, bonding, best, shield, rug, onchain } = scan;
   const symbol = String(meta?.symbol || bonding?.symbol || onchain?.symbol || "").replace(/^\$+/, "").slice(0, 12);
   const name = String(meta?.name || bonding?.name || onchain?.name || "").slice(0, 40);
-  const stats = scanMarketStatsFromSources({ meta, bonding, best, rug, mint });
+  const stats = scanMarketStatsFromSources({ meta, bonding, best, rug, supply: scan.supply, mint });
   const mc = stats.mc;
   const liq = stats.liq;
   if (!symbol && !(mc > 0)) return null;
@@ -32553,7 +32606,7 @@ async function buildXRugReply(mint, variant) {
   const { meta, bonding, best, onchain, rug } = scan;
   const symbol = String(meta?.symbol || bonding?.symbol || onchain?.symbol || "").replace(/^\$+/, "").slice(0, 12);
   const name = String(meta?.name || bonding?.name || onchain?.name || "").slice(0, 40);
-  const stats = scanMarketStatsFromSources({ meta, bonding, best, rug, mint });
+  const stats = scanMarketStatsFromSources({ meta, bonding, best, rug, supply: scan.supply, mint });
   const mc = stats.mc;
   const liq = stats.liq;
   if (!symbol && !(mc > 0)) return null;
@@ -57722,6 +57775,23 @@ async function fetchSolanaTrackerTokenReport(mint = "") {
     holderCount: stNum(data.holders ?? data.holderCount ?? token.holders),
     marketCap: stNum(pool.marketCap?.usd ?? data.marketCapUsd ?? token.marketCapUsd),
     liquidityUsd: stNum(pool.liquidity?.usd),
+    // FULL market read — ST is our KEYED source (immune to the IP soft-blocks that blank DexScreener on
+    // Render, and GeckoTerminal's token endpoints are GONE — 404 since their API change). These fields were
+    // being thrown away, which is why 1H/vol/price vanished from cards whenever DexScreener whiffed.
+    priceUsd: stNum(pool.price?.usd ?? token.priceUsd),
+    ch1: stNum(data.events?.["1h"]?.priceChangePercentage),
+    ch24: stNum(data.events?.["24h"]?.priceChangePercentage),
+    volume24Usd: stNum(pool.txns?.volume ?? pool.volume?.usd ?? pool.volume24h ?? data.volume?.h24 ?? data.volume24h),
+    buys24: stNum(pool.txns?.buys ?? data.buys),
+    sells24: stNum(pool.txns?.sells ?? data.sells),
+    createdAtMs: (() => {
+      const raw = firstMeaningfulNumber(pool.createdAt, pool.openTime, creation.created_time, creation.createdTime, creation.created_at);
+      if (!raw) return null;
+      return String(Math.trunc(raw)).length <= 10 ? raw * 1000 : raw;   // seconds → ms
+    })(),
+    symbol: String(token.symbol || "").replace(/^\$+/, "").trim() || "",
+    name: String(token.name || "").trim() || "",
+    imageUrl: firstString(token.image, token.imageUrl, token.image_uri),
   };
 }
 

@@ -1913,7 +1913,7 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "xReplyPollTick"), /buildXReply\(target, intent, m\.id\)/); // tweet id seeds variation (target = coin CA or bare wallet for maps)
   assert.match(functionBody(serverSource, "xReplyPollTick"), /buildXScanReply\(target, m\.id\)/); // slow maps fall back to scan instead of no-post
   assert.doesNotMatch(functionBody(serverSource, "xReplyPollTick"), /if \(reply === "__timeout__"\) \{ state\.seen/); // timeout is retryable, not burned forever
-  assert.match(functionBody(serverSource, "buildXScanReply"), /scanMarketStatsFromSources\(\{ meta, bonding, best, rug, mint \}\)/);
+  assert.match(functionBody(serverSource, "buildXScanReply"), /scanMarketStatsFromSources\(\{ meta, bonding, best, rug, supply: scan\.supply, mint \}\)/); // supply → MC sanity cross-check (price×supply beats a 1000× source lie)
   assert.match(functionBody(serverSource, "buildXMapReply"), /Liq \$\{stat\("LIQUIDITY"\)\}/);
   // card renderer varies EVERY render (rotating jittered bg + unique grain + mirrored layouts + rotating text)
   assert.match(xcard, /function makeRng/);                             // seeded PRNG drives all choices
