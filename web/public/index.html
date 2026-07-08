@@ -1270,6 +1270,7 @@
         o.img=info.imageUrl||info.image||(p.baseToken&&p.baseToken.imageUrl)||"";
         o.v24=Number(v.h24||0);o.v1=Number(v.h1||0);o.v5=Number(v.m5||0);o.liq=liq;o.mc=Number(p.marketCap||p.fdv||0);o.m5=Number(pc.m5??pc.h1);
         o.price=Number(p.priceUsd||0);o.pair=p.pairAddress||"";o.chain=p.chainId||"";   // pair -> chart embeds
+        o.sym=String((p.baseToken&&p.baseToken.symbol)||"").replace(/^\$+/,"");o.name=String((p.baseToken&&p.baseToken.name)||"");   // paste-a-fresh-CA fills its ticker/name
         by[m]=o;}
       return by;
     }catch(e){return {};}
@@ -1487,6 +1488,7 @@
         const o=byLc[String(r.address).toLowerCase()];if(!o)continue;changed=true;
         if(o.price>0)r.priceUsd=o.price;if(o.mc>0)r.marketCapUsd=o.mc;if(o.liq>0)r.liquidityUsd=o.liq;if(o.v24>0)r.volume24hUsd=o.v24;
         if(Number.isFinite(o.m5))r.m5=o.m5;if(o.pair)r.pairAddress=o.pair;
+        if(o.sym&&!r.symbol)r.symbol=o.sym;if(o.name&&!r.name)r.name=o.name;   // pasted-fresh RH coin: fill ticker/name so the page isn't "?"
         if(o.img&&!r.slimewire&&!r.imageUrl)r.imageUrl=o.img;   // registry PFP wins for our launches
         if(o.tw&&!r.x)r.x=o.tw;if(o.tg&&!r.telegram)r.telegram=o.tg;if(o.web&&!r.website)r.website=o.web;
       }
@@ -1530,7 +1532,7 @@
       '<div id="rhTvChart" style="flex:0 0 auto;background:#0a0f0b">'+(r.pairAddress?'<iframe src="https://dexscreener.com/robinhood/'+esc(r.pairAddress)+'?embed=1&theme=dark&trades=0&info=0&interval=5" style="width:100%;height:46vh;border:0;display:block"></iframe>':'<div class="msg" style="padding:30px;font-size:12px">Chart appears once this coin\'s pool is indexed (usually minutes after first trades).</div>')+'</div>'+
       '<div style="padding:12px 14px;max-width:720px;width:100%;margin:0 auto">'+
         '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">'+rhAvatar(r,44,"12px")+
-          '<div style="min-width:0;flex:1"><b style="font-size:15px">'+esc(r.symbol||"?")+'</b>'+(r.slimewire?' <span style="font-size:9px;background:var(--accent,#6dc36d);color:#08130a;border-radius:6px;padding:1px 5px;font-weight:700">SW</span>':'')+'<div class="mut" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.name||"")+' · Robinhood Chain</div></div></div>'+
+          '<div style="min-width:0;flex:1"><b id="rhTvSym" style="font-size:15px">'+esc(r.symbol||"?")+'</b>'+(r.slimewire?' <span style="font-size:9px;background:var(--accent,#6dc36d);color:#08130a;border-radius:6px;padding:1px 5px;font-weight:700">SW</span>':'')+'<div id="rhTvName" class="mut" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc((r.name||"")+' · Robinhood Chain')+'</div></div></div>'+
         '<div id="rhTvStats" style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px;margin-bottom:8px">'+statsHtml()+'</div>'+
         (r.description?'<p class="mut" style="font-size:11px;margin:0 0 8px">'+esc(r.description).slice(0,220)+'</p>':'')+
         '<div style="display:flex;gap:10px;font-size:11px;margin-bottom:10px">'+
@@ -1560,6 +1562,10 @@
       if(!changed||state.route!=="rhtrade")return;
       const s=$("#rhTvStats");if(s)s.innerHTML=statsHtml();
       const c=$("#rhTvChart");if(c&&r.pairAddress&&!c.querySelector("iframe"))c.innerHTML='<iframe src="https://dexscreener.com/robinhood/'+esc(r.pairAddress)+'?embed=1&theme=dark&trades=0&info=0&interval=5" style="width:100%;height:46vh;border:0;display:block"></iframe>';
+      // pasted-fresh coin: its ticker/name just arrived → fill the "?" header + the sub-bar title + avatar
+      const sy=$("#rhTvSym");if(sy&&r.symbol)sy.textContent=r.symbol;
+      const nm=$("#rhTvName");if(nm)nm.textContent=(r.name||"")+' · Robinhood Chain';
+      if(r.symbol){h.textContent=r.symbol;}
     });
     rhTmRefreshBal(address);
     loadRhSafety(address);
