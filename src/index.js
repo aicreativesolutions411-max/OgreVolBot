@@ -8901,7 +8901,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "GET" && pathname === "/api/web/rh/noxa") {
       const tok = String(requestUrl.searchParams.get("token") || "").trim();
       if (!/^0x[0-9a-fA-F]{40}$/.test(tok)) { sendWebJson(request, response, 400, { ok: false, error: "Invalid token address." }); return; }
-      const n = await getNoxaScan(tok, { rpcUrl: CONFIG.rhChainRpcUrl }).catch(() => null);
+      const n = await noxaScanFast(tok).catch(() => null);
       sendWebJson(request, response, 200, n ? { ok: true, coin: n } : { ok: false });
       return;
     }
@@ -32554,7 +32554,7 @@ async function gatherRhScan(address) {
   // still shows real MC/liq/price instead of "n/a". Only pay for the on-chain read when DexScreener whiffs.
   let noxa = null;
   if (!pair || !(Number(pair.priceUsd) > 0)) {
-    noxa = await getNoxaScan(a, { rpcUrl: CONFIG.rhChainRpcUrl }).catch(() => null);
+    noxa = await noxaScanFast(a).catch(() => null);
   }
   const socials = Array.isArray(pair?.info?.socials) ? pair.info.socials : [];
   const website = (Array.isArray(pair?.info?.websites) ? pair.info.websites : [])[0]?.url || "";
@@ -42563,6 +42563,22 @@ function scheduleNoxaFeed() {
       if (rows.length) noxaFeedCache = { at: Date.now(), tokens: rows };
     } catch { /* never throw from a background timer */ } finally { noxaFeedBusy = false; }
   }, 30);
+}
+// The RH RPC is slow/rate-limited from Render's IP, so an on-demand NOXA read can hang. The background
+// feed cache is already warm — serve fresh coins from it instantly, and cap any live read so a scan never
+// stalls the request. `noxaScanFast` returns a ready coin fast or null (caller keeps its DexScreener data).
+function noxaFromFeedCache(address) {
+  const a = String(address || "").toLowerCase();
+  return (noxaFeedCache.tokens || []).find((t) => String(t.token || "").toLowerCase() === a) || null;
+}
+async function noxaScanFast(address, timeoutMs = 12_000) {
+  scheduleNoxaFeed();
+  const cached = noxaFromFeedCache(address);
+  if (cached) return cached;
+  return await Promise.race([
+    getNoxaScan(address, { rpcUrl: CONFIG.rhChainRpcUrl }).catch(() => null),
+    new Promise((res) => setTimeout(() => res(null), timeoutMs)),
+  ]);
 }
 async function rhFeedTokens() {
   scheduleRhUniverse(); scheduleRhScamSet(); scheduleNoxaFeed();   // keep the big caches warm
