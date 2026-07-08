@@ -31033,7 +31033,8 @@ async function resolveDexPairToMint(addr) {
 // Resolve a scan target from free text + links: a bare CA, a pump.fun/coin/<mint> link (addr IS the mint), a
 // DexScreener link (addr is a PAIR → resolve to the mint), or a $ticker. One place so every surface (X reply,
 // TG /look, web) handles pasted links the same way.
-async function resolveScanTargetFromText(text, urls = []) {
+async function resolveScanTargetFromText(text, urls = [], options = {}) {
+  const allowBareTickerHints = options.allowBareTickerHints !== false;
   const blob = [String(text || ""), ...(Array.isArray(urls) ? urls : [])].join(" ");
   // 0) Robinhood Chain coin (EVM 0x…40-hex) — returned as-is; buildXReply routes it to the RH scan card.
   const evm = blob.match(/0x[0-9a-fA-F]{40}/);
@@ -31047,14 +31048,17 @@ async function resolveScanTargetFromText(text, urls = []) {
   // 3) $ticker (Solana first, Robinhood Chain fallback)
   for (const tag of extractCashtags(blob)) { const m = await resolveTickerToScanTarget(tag).catch(() => null); if (m) return m; }
   // 4) bare ticker in an intentional scan request ("scan CASHCAT", "@bot chart OGRE")
-  for (const tag of extractBareTickerHints(blob)) { const m = await resolveTickerToScanTarget(tag).catch(() => null); if (m) return m; }
+  if (allowBareTickerHints) {
+    for (const tag of extractBareTickerHints(blob)) { const m = await resolveTickerToScanTarget(tag).catch(() => null); if (m) return m; }
+  }
   return null;
 }
 
 // Like resolveScanTargetFromText, but returns EVERY distinct coin referenced (EVM RH addrs, Solana
 // mints, DexScreener links, $tickers) — deduped, order-preserved, capped. Powers "post 3 tickers →
 // scan all 3" on X. Cap keeps us within X's 4-images-per-tweet / sane-thread limits.
-async function resolveAllScanTargetsFromText(text, urls = [], cap = 4) {
+async function resolveAllScanTargetsFromText(text, urls = [], cap = 4, options = {}) {
+  const allowBareTickerHints = options.allowBareTickerHints !== false;
   const blob = [String(text || ""), ...(Array.isArray(urls) ? urls : [])].join(" ");
   const out = [];
   const seen = new Set();
@@ -31087,10 +31091,12 @@ async function resolveAllScanTargetsFromText(text, urls = [], cap = 4) {
     if (out.length >= cap) return out.slice(0, cap);
   }
   // 4) bare ticker hints in intentional scan requests
-  for (const tag of extractBareTickerHints(blob)) {
-    const mint = await resolveTickerToScanTarget(tag).catch(() => null);
-    if (mint) add(mint);
-    if (out.length >= cap) return out.slice(0, cap);
+  if (allowBareTickerHints) {
+    for (const tag of extractBareTickerHints(blob)) {
+      const mint = await resolveTickerToScanTarget(tag).catch(() => null);
+      if (mint) add(mint);
+      if (out.length >= cap) return out.slice(0, cap);
+    }
   }
   return out.slice(0, cap);
 }
@@ -32551,9 +32557,10 @@ function extractBareWalletAddress(text, urls) {
 }
 async function resolveXTargetMint(mention) {
   // Scan a post's TEXT plus its expanded links (people paste a dexscreener/pump URL, which X shortens to
-  // t.co in the text — the real CA only lives in the expanded url). Then $tickers as a last resort.
-  // Bare CA · pump link · DexScreener link (pair→mint) · $ticker — one shared resolver.
-  const scan = (text, urls) => resolveScanTargetFromText(text, urls);
+  // t.co in the text — the real CA only lives in the expanded url). Then explicit $tickers as a last
+  // resort. X is public/noisy, so NEVER resolve bare words as tickers here; a random sentence must not
+  // become a scan target. Bare ticker convenience stays for Telegram commands only.
+  const scan = (text, urls) => resolveScanTargetFromText(text, urls, { allowBareTickerHints: false });
   // 1) the tag itself
   let mint = await scan(mention.text, mention.urls);
   if (mint) return mint;
@@ -32572,7 +32579,7 @@ async function resolveXTargetMint(mention) {
 // text first; only falls back to the parent/root if the tag itself carries no coin (so "@bot ?" under a
 // coin post still resolves one, but "@bot scan $A $B 0xC" scans all three from the tag). Capped at 4.
 async function resolveAllXTargets(mention, cap = 4) {
-  let targets = await resolveAllScanTargetsFromText(mention.text, mention.urls, cap).catch(() => []);
+  let targets = await resolveAllScanTargetsFromText(mention.text, mention.urls, cap, { allowBareTickerHints: false }).catch(() => []);
   if (targets.length) return targets;
   const seen = new Set();
   for (const pid of [mention.inReplyToId, mention.conversationId]) {
@@ -32580,7 +32587,7 @@ async function resolveAllXTargets(mention, cap = 4) {
     seen.add(pid);
     const parent = await xGetTweet(pid).catch(() => null);
     if (parent) {
-      targets = await resolveAllScanTargetsFromText(parent.text, parent.urls, cap).catch(() => []);
+      targets = await resolveAllScanTargetsFromText(parent.text, parent.urls, cap, { allowBareTickerHints: false }).catch(() => []);
       if (targets.length) return targets;
     }
   }
@@ -33377,7 +33384,7 @@ async function handleXTestCommand(chatId, userId) {
   }
   // Live probe: how many recent @mentions the search sees + how many carry a CA (proves detection works).
   const mentions = await xSearchMentions(20).catch(() => []);
-  const withCa = mentions.filter((m) => extractMintsFromText(m.text).length || extractRhAddressesFromText(m.text).length || extractCashtags(m.text).length || extractBareTickerHints(m.text).length || m.inReplyToId).length;
+  const withCa = mentions.filter((m) => extractMintsFromText(m.text).length || extractRhAddressesFromText(m.text).length || extractCashtags(m.text).length || m.inReplyToId).length;
   await sayHtml(chatId, [
     `🐦 <b>Connected as @${escapeTelegramHtml(me.username || me.screenName)}</b>`,
     `Mode: <b>${xReplyAuto() ? "AUTO — posts on X itself" : "ASSIST — I DM you to one-tap post"}</b> · Replies: <b>${xReplyEnabled() ? "ON" : "OFF"}</b>`,
@@ -33447,7 +33454,7 @@ async function handleXScanCommand(chatId, argument, userId) {
   if (!xReplyOwnerChat() || String(chatId) !== xReplyOwnerChat()) { await say(chatId, "Owner-only — DM /xclaim first."); return; }
   const arg = String(argument || "");
   const intent = xIntentFromText(arg);                            // "/xscan rug <CA>" or "chart <CA>" previews that card
-  let mint = await resolveScanTargetFromText(arg).catch(() => null);
+  let mint = await resolveScanTargetFromText(arg, [], { allowBareTickerHints: false }).catch(() => null);
   if (!mint) { await say(chatId, "Usage: /xscan <CA or $ticker> — or <code>/xscan rug &lt;CA&gt;</code> / <code>/xscan chart &lt;CA&gt;</code> to preview those cards."); return; }
   await say(chatId, `🐦 Building the <b>${intent === "rug" ? "did-it-rug" : intent === "chart" ? "chart" : "scan"}</b> reply preview…`);
   const reply = await buildXReply(mint, intent).catch(() => null);
