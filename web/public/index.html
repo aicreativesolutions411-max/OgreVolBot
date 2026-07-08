@@ -3161,32 +3161,60 @@
   // that swaps buy↔sell (SOL↔token). Token side picks from popular pairs or a custom CA. Tap flip
   // again to swap back. SOL↔token only — buy spends SOL, sell takes a % of the token you hold.
   const SWAP_POPULAR=[{s:"USDC",m:"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"},{s:"USDT",m:"Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"},{s:"JUP",m:"JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"},{s:"RAY",m:"4k3Dyjzvzp8eCTuFJYgmGnN95VhWPuTsf1KfzYEU7K1k"},{s:"BONK",m:"DezXAZ8z7PnrnRJjz3uq8NgV8Q9ddCzB9Ckr7JpPvvR"},{s:"WIF",m:"EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLQBkRzUPzWf"}];
-  let swapDir="buy",swapTok=null;
+  let swapDir="buy",swapTok=null,swapChain="solana";   // chain follows the pasted CA (0x=Robinhood, base58=Solana)
+  function swapAssetMeta(){return swapChain==="robinhood"?{asset:"ETH",icon:"🪶",label:"Robinhood ETH",amtPh:"0.01"}:{asset:"SOL",icon:"◎",label:"SOL",amtPh:"0.5"};}
   async function renderSwap(){
-    setActiveView("v-swap");subbarTool("🔄 Swap");if(state.token)await refreshWallets();if(state.route!=="swap")return;
+    setActiveView("v-swap");subbarTool("🔄 Swap");if(state.token){await refreshWallets();await loadPresets();}if(state.route!=="swap")return;
     paintSwap();
   }
-  function swapTokLabel(){return swapTok?esc(swapTok.symbol||short(swapTok.mint)):"Select token";}
+  function swapTokLabel(){return swapTok?esc(swapTok.symbol||short(swapTok.mint)):"Select coin";}
   function paintSwap(){
     const v=$("#v-swap");if(!v)return;
-    const payIsTok=swapDir==="sell";const tl=swapTokLabel();
-    const payChip=payIsTok?('<button class="swtok pick" id="swTok">'+tl+' ▾</button>'):'<button class="swtok" disabled>SOL</button>';
-    const recvChip=payIsTok?'<button class="swtok" disabled>SOL</button>':('<button class="swtok pick" id="swTok">'+tl+' ▾</button>');
-    v.innerHTML='<div class="wgrid"><div class="wbox" style="max-width:460px;margin:0 auto;width:100%"><h3>🔄 Swap</h3>'+
-      '<div class="swapbox"><span class="swlab">You pay</span><div class="swrow"><input id="swAmt" inputmode="decimal" placeholder="'+(payIsTok?"100":"0.5")+'">'+payChip+'</div>'+(payIsTok?'<span class="swhint">% of your holdings</span>':'<span class="swhint">SOL</span>')+'</div>'+
+    const cm=swapAssetMeta();const payIsTok=swapDir==="sell";const tl=swapTokLabel();
+    const assetChip='<button class="swtok" disabled>'+cm.icon+' '+cm.asset+'</button>';
+    const tokChip='<button class="swtok pick" id="swTok">'+tl+' ▾</button>';
+    const payChip=payIsTok?tokChip:assetChip;const recvChip=payIsTok?assetChip:tokChip;
+    const selStyle=(on)=>on?"border-color:var(--green);color:var(--green);background:var(--green-dim)":"";
+    const preOpts='<option value="">Manual TP / SL</option>'+(state.presets.trade||[]).map(p=>'<option value="'+esc(p.id)+'">'+esc(p.name||"Preset")+(p.takeProfitPct?" · TP "+esc(p.takeProfitPct)+"%":"")+(p.stopLossPct?" · SL "+esc(p.stopLossPct)+"%":"")+'</option>').join("");
+    v.innerHTML='<div class="wgrid"><div class="wbox" style="max-width:470px;margin:0 auto;width:100%"><h3>🔄 Swap <span class="mut" style="font-size:11px;font-weight:400">· one wallet, both chains</span></h3>'+
+      '<div class="field"><label>Wallet</label>'+walletSelectHtml("swWal")+'</div>'+
+      '<div class="field"><label>Pay with</label><div style="display:flex;gap:8px">'+
+        '<button class="swtok" id="swAssetSol" style="flex:1;text-align:center;'+selStyle(swapChain==="solana")+'">◎ SOL</button>'+
+        '<button class="swtok" id="swAssetRh" style="flex:1;text-align:center;'+selStyle(swapChain==="robinhood")+'">🪶 Robinhood ETH</button>'+
+      '</div><span class="swhint" style="margin-top:5px;display:block">Solana coins buy with SOL · Robinhood (0x…) coins buy with ETH — pasting a CA sets this automatically.</span></div>'+
+      '<div class="swapbox"><span class="swlab">You pay</span><div class="swrow"><input id="swAmt" inputmode="decimal" placeholder="'+(payIsTok?"100":cm.amtPh)+'">'+payChip+'</div>'+(payIsTok?'<span class="swhint">% of your holdings</span>':'<span class="swhint">'+cm.label+'</span>')+'</div>'+
       '<div class="swapflip"><button id="swFlip" title="Flip buy / sell">⇅</button></div>'+
-      '<div class="swapbox"><span class="swlab">You receive</span><div class="swrow"><span class="swrecv mut">'+(payIsTok?"SOL":tl)+'</span>'+recvChip+'</div></div>'+
-      '<div class="field" style="margin-top:14px"><label>Slippage (bps)</label><input id="swSlip" inputmode="numeric" value="500"></div>'+
-      '<button class="bigbuy'+(swapDir==="sell"?" sell":"")+'" id="swGo">'+(swapDir==="buy"?"Buy ":"Sell ")+(swapTok?esc(swapTok.symbol||""):"")+'</button>'+activeWalletNote()+
+      '<div class="swapbox"><span class="swlab">You receive</span><div class="swrow"><span class="swrecv mut">'+(payIsTok?(cm.icon+" "+cm.asset):tl)+'</span>'+recvChip+'</div></div>'+
+      '<div class="field" style="margin-top:12px"><label>Coin contract (CA)</label><div style="display:flex;gap:8px"><input id="swCaMain" placeholder="Paste a Solana or Robinhood (0x…) CA" style="flex:1" value="'+(swapTok?esc(swapTok.mint):"")+'"><button class="wbtn" id="swCaUse" style="width:auto;padding:0 14px">Use</button></div></div>'+
+      '<div class="field"><label>Slippage (bps)</label><input id="swSlip" inputmode="numeric" value="500"></div>'+
+      // Exit presets — TP/SL that arm automatically on a BUY (the site watches the price + sells for you). Both chains.
+      '<div style="border-top:1px solid var(--border);margin:6px 0 10px"></div>'+
+      '<div class="field"><label>🎯 Exit preset (TP / SL)</label><select id="swPreset">'+preOpts+'</select></div>'+
+      '<div class="field row2"><div><label id="swTpLbl">Take profit %</label><input id="swTp" inputmode="numeric" placeholder="off"></div><div><label>Stop loss %</label><input id="swSl" inputmode="numeric" placeholder="off"></div></div>'+
+      '<label style="display:flex;align-items:center;gap:9px;font-size:12px;cursor:pointer;margin-bottom:10px"><input type="checkbox" id="swLadder"> Ladder across my wallets — buy from several &amp; sell at stepped TP targets (not all at one price)</label>'+
+      '<div id="swLadderWrap" style="display:none">'+
+        '<div class="field"><label>Take-profit MAX % (ladder top — the TP above is the MIN)</label><input id="swTpTop" inputmode="numeric" placeholder="e.g. 120"></div>'+
+        '<div class="field"><label>Buy size per wallet ('+cm.asset+') — min / max</label><div class="field row2" style="margin:0"><div><input id="swLMin" inputmode="decimal" placeholder="'+(swapChain==="robinhood"?"0.003":"0.05")+'"></div><div><input id="swLMax" inputmode="decimal" placeholder="'+(swapChain==="robinhood"?"0.01":"0.15")+'"></div></div></div>'+
+        '<div class="field"><label>Wallets</label>'+walletPickHtml()+'</div>'+
+      '</div>'+
+      '<button class="bigbuy'+(swapDir==="sell"?" sell":"")+'" id="swGo">'+(swapDir==="buy"?"Buy ":"Sell ")+(swapTok?esc(swapTok.symbol||""):"")+'</button>'+
+      '<div id="swLadderLog" style="margin-top:12px;max-height:240px;overflow:auto"></div>'+
       // ---- SOL -> Robinhood ETH: the gas + buying power for Robinhood Chain coins, right in Swap.
       '<div style="border-top:1px solid var(--border);margin:16px 0 12px"></div>'+
-      '<h3 style="font-size:14px">🪶 Get Robinhood Chain ETH</h3><p class="sub" style="font-size:12px">Swap SOL into ETH on Robinhood Chain — that\'s what you buy, sell &amp; launch with over there. Lands at your wallet\'s Robinhood address, usually in seconds.</p>'+
+      '<h3 style="font-size:14px">🪶 Get Robinhood Chain ETH</h3><p class="sub" style="font-size:12px">Swap SOL into ETH on Robinhood Chain — that\'s what you buy &amp; sell Robinhood coins with. Lands at your wallet\'s Robinhood address, usually in seconds.</p>'+
       '<div class="field"><label>To wallet</label>'+walletSelectHtml("swRhWal")+'</div>'+
       '<div style="display:flex;gap:8px"><input id="swRhAmt" inputmode="decimal" placeholder="0.05" style="width:96px;flex:0 0 auto"><button class="wbtn" id="swRhGo" style="flex:1">⚡ Swap SOL → Robinhood ETH</button></div>'+
-      '<p class="wnote" style="margin:8px 0 0">0.05 SOL ≈ plenty for launches + a stack of trades. Check the balance under Wallet → 🪶 Robinhood Chain.</p>'+
+      '<p class="wnote" style="margin:8px 0 0">0.05 SOL ≈ plenty for a stack of Robinhood trades. Balance shows under Wallet → 🪶 Robinhood Chain.</p>'+
       '</div></div>';
+    if($("#swWal"))$("#swWal").value=String(state.activeWallet||1);
     $("#swFlip").onclick=()=>{swapDir=swapDir==="buy"?"sell":"buy";paintSwap();};
     const tb=$("#swTok");if(tb)tb.onclick=()=>openSwapTokenPicker();
+    $("#swAssetSol").onclick=()=>{if(swapChain!=="solana"){swapChain="solana";if(swapTok&&swapTok.chain!=="solana")swapTok=null;paintSwap();}};
+    $("#swAssetRh").onclick=()=>{if(swapChain!=="robinhood"){swapChain="robinhood";if(swapTok&&swapTok.chain!=="robinhood")swapTok=null;paintSwap();}};
+    $("#swCaUse").onclick=()=>swapUseCa(($("#swCaMain")||{}).value);
+    const cin=$("#swCaMain");if(cin)cin.onkeydown=(e)=>{if(e.key==="Enter")swapUseCa(cin.value);};
+    $("#swPreset").onchange=()=>{const p=(state.presets.trade||[]).find(x=>x.id===$("#swPreset").value);if(p){$("#swTp").value=p.takeProfitPct||"";$("#swSl").value=p.stopLossPct||"";if(p.slippageBps)$("#swSlip").value=p.slippageBps;}};
+    const ld=$("#swLadder");if(ld)ld.onchange=()=>{const on=ld.checked;$("#swLadderWrap").style.display=on?"":"none";$("#swTpLbl").textContent=on?"Take profit MIN %":"Take profit %";};
     $("#swGo").onclick=()=>execSwap();
     const rg=$("#swRhGo");if(rg)rg.onclick=async()=>{
       const amt=Number((($("#swRhAmt")||{}).value||"").trim());
@@ -3200,23 +3228,91 @@
       else toast((d&&(d.message||d.error))||"Swap failed",true);
     };
   }
+  // Accept a pasted CA on either chain → set the token + funding asset automatically, then fill its symbol.
+  function swapUseCa(raw){
+    const ca=String(raw||"").trim();const chain=detectChain(ca);
+    if(!chain){toast("Paste a valid Solana or Robinhood (0x…) contract.",true);return;}
+    swapChain=chain;swapTok={mint:ca,symbol:short(ca),chain};
+    paintSwap();swapFillSymbol(ca,chain);
+  }
+  async function swapFillSymbol(ca,chain){
+    try{
+      const by=await dexTokensBatch([ca]);
+      const key=Object.keys(by).find(k=>k.toLowerCase()===ca.toLowerCase());
+      const o=key?by[key]:null;
+      if(o&&o.sym&&swapTok&&String(swapTok.mint).toLowerCase()===ca.toLowerCase()){swapTok.symbol=o.sym;paintSwap();}
+    }catch(e){/* symbol stays the short CA */}
+  }
   function openSwapTokenPicker(){
-    openModal('<h3>🪙 Choose token</h3>'+
-      '<div class="field"><label>Custom contract (CA)</label><div style="display:flex;gap:8px"><input id="swCa" placeholder="Paste any token mint" style="flex:1"><button class="wbtn" id="swCaGo" style="width:auto;padding:0 16px">Use</button></div></div>'+
-      '<div class="mut" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin:12px 0 8px">Popular</div><div style="display:flex;flex-wrap:wrap;gap:8px">'+SWAP_POPULAR.map(p=>'<button class="chip pop" data-m="'+esc(p.m)+'" data-s="'+esc(p.s)+'" style="cursor:pointer">'+esc(p.s)+'</button>').join("")+'</div>');
-    $("#swCaGo").onclick=()=>{const ca=$("#swCa").value.trim();if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(ca)){toast("Paste a valid mint.",true);return;}swapTok={mint:ca,symbol:short(ca)};closeModal();paintSwap();};
-    document.querySelectorAll("#modalBox .chip.pop").forEach(b=>b.onclick=()=>{swapTok={mint:b.dataset.m,symbol:b.dataset.s};closeModal();paintSwap();});
+    openModal('<h3>🪙 Choose coin</h3>'+
+      '<div class="field"><label>Contract (CA) — Solana or Robinhood 0x…</label><div style="display:flex;gap:8px"><input id="swCa" placeholder="Paste any coin CA" style="flex:1"><button class="wbtn" id="swCaGo" style="width:auto;padding:0 16px">Use</button></div></div>'+
+      '<div class="mut" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin:12px 0 8px">Popular (Solana)</div><div style="display:flex;flex-wrap:wrap;gap:8px">'+SWAP_POPULAR.map(p=>'<button class="chip pop" data-m="'+esc(p.m)+'" data-s="'+esc(p.s)+'" style="cursor:pointer">'+esc(p.s)+'</button>').join("")+'</div>'+
+      '<p class="wnote" style="margin-top:12px">For a Robinhood coin, paste its <b>0x…</b> address above — the swap flips to ETH automatically.</p>');
+    $("#swCaGo").onclick=()=>{const ca=$("#swCa").value.trim();if(!detectChain(ca)){toast("Paste a valid Solana or Robinhood CA.",true);return;}closeModal();swapUseCa(ca);};
+    document.querySelectorAll("#modalBox .chip.pop").forEach(b=>b.onclick=()=>{swapChain="solana";swapTok={mint:b.dataset.m,symbol:b.dataset.s,chain:"solana"};closeModal();paintSwap();});
   }
   async function execSwap(){
-    if(!swapTok){toast("Pick a token first.",true);return;}
-    const amt=$("#swAmt").value.trim();if(!amt){toast(swapDir==="buy"?"Enter a SOL amount.":"Enter a sell %.",true);return;}
+    if(!swapTok){toast("Paste a coin CA first.",true);return;}
+    const amt=(($("#swAmt")||{}).value||"").trim();if(!amt){toast(swapDir==="buy"?("Enter a "+swapAssetMeta().asset+" amount."):"Enter a sell %.",true);return;}
     if(!(await ensureTradeReady()))return;
-    const slip=$("#swSlip").value.trim()||"500";const b=$("#swGo");b.disabled=true;b.textContent="Submitting…";
-    let res;
-    if(swapDir==="buy")res=await jpost("/api/web/trade/buy",{tokenMint:swapTok.mint,walletIndex:state.activeWallet,amountSol:String(amt),slippageBps:slip,disableAutoExit:true,tradeAttemptId:attemptId()});
-    else res=await jpost("/api/web/trade/sell",{tokenMint:swapTok.mint,walletIndex:state.activeWallet,percent:String(amt),slippageBps:slip,tradeAttemptId:attemptId()});
-    b.disabled=false;b.textContent=(swapDir==="buy"?"Buy ":"Sell ")+(swapTok.symbol||"");
-    handleTradeResult(res.ok,res.status,res.d,swapDir==="buy"?"Buy":"Sell");
+    const wi=(($("#swWal")||{}).value)||String(state.activeWallet||1);
+    const slip=(($("#swSlip")||{}).value||"").trim()||"500";
+    const tp=(($("#swTp")||{}).value||"").trim(),sl=(($("#swSl")||{}).value||"").trim();
+    if($("#swLadder")&&$("#swLadder").checked&&swapDir==="buy")return execSwapLadder({tp,sl,slip});
+    const b=$("#swGo");b.disabled=true;b.textContent="Submitting…";
+    const done=()=>{b.disabled=false;b.textContent=(swapDir==="buy"?"Buy ":"Sell ")+(swapTok.symbol||"");};
+    if(swapChain==="robinhood"){
+      if(swapDir==="buy"){
+        const {d:sf}=await api("/api/web/rh/safety?token="+encodeURIComponent(swapTok.mint)).catch(()=>({}));
+        if(sf&&sf.verdict==="block"){done();toast("⛔ Blocked to protect you — "+((sf.reasons&&sf.reasons[0])||"this coin can't be sold (honeypot)"),true);return;}
+      }
+      const body={walletIndex:String(wi),side:swapDir,tokenAddress:swapTok.mint,tradeAttemptId:attemptId()};
+      if(swapDir==="buy")body.amountEth=String(amt);else body.percent=String(amt);
+      const {ok,d}=await jpost("/api/web/rh/trade",body);
+      if(ok&&d&&d.ok){
+        toast((swapDir==="buy"?"Bought ":"Sold → ")+(d.outFormatted?Number(d.outFormatted).toLocaleString(undefined,{maximumFractionDigits:6}):"")+" "+(d.outSymbol||swapTok.symbol||"")+" ✅");
+        if(swapDir==="buy"&&((Number(tp)>0)||(Number(sl)>0))){await jpost("/api/web/rh/guards",{walletIndex:String(wi),tokenAddress:swapTok.mint,symbol:swapTok.symbol||"",takeProfitPct:tp,stopLossPct:sl,sellPercent:"100"}).catch(()=>{});toast("🎯 TP/SL armed — the site is watching it");}
+      } else toast((d&&(d.message||d.error))||"Trade failed",true);
+      done();refreshWallets();
+    } else {
+      let res;
+      if(swapDir==="buy"){
+        const body={tokenMint:swapTok.mint,walletIndex:wi,amountSol:String(amt),slippageBps:slip,tradeAttemptId:attemptId()};
+        if((Number(tp)>0)||(Number(sl)>0)){body.autoExit=true;body.takeProfitPct=tp||"";body.stopLossPct=sl||"";body.sellPercent="100";body.sellDelay="off";}
+        else body.disableAutoExit=true;
+        res=await jpost("/api/web/trade/buy",body);
+      } else res=await jpost("/api/web/trade/sell",{tokenMint:swapTok.mint,walletIndex:wi,percent:String(amt),slippageBps:slip,tradeAttemptId:attemptId()});
+      done();
+      handleTradeResult(res.ok,res.status,res.d,swapDir==="buy"?"Buy":"Sell");
+    }
+  }
+  // Ladder a BUY across the checked wallets with a stepped take-profit (lowest TP on the first wallet, up
+  // to the MAX on the last) so they don't all exit at one price. Works on both chains.
+  async function execSwapLadder({tp,sl,slip}){
+    if(staggerRunning){toast("A bundle/volume/ladder run is already going.",true);return;}
+    const wallets=selectedWalletIdxs();if(!wallets.length){toast("Check at least one wallet for the ladder.",true);return;}
+    if(!(Number(tp)>0)){toast("Ladder needs a take-profit MIN %.",true);return;}
+    const min=Number((($("#swLMin")||{}).value||"").trim()),max=Number((($("#swLMax")||{}).value||"").trim());
+    if(!(min>0)||!(max>=min)){toast("Set a valid buy-size min / max.",true);return;}
+    const tpTop=(($("#swTpTop")||{}).value||"").trim();
+    const logEl=$("#swLadderLog");if(logEl)logEl.innerHTML="";
+    const b=$("#swGo");b.disabled=true;b.textContent="Laddering…";
+    if(swapChain==="robinhood"){
+      staggerRunning=true;let okc=0,fail=0;
+      for(let k=0;k<wallets.length;k++){
+        const idx=wallets[k];const amt=min+Math.random()*(max-min);
+        let tpv=String(tp);if(tpTop&&Number(tpTop)>Number(tp))tpv=String(Math.round((Number(tp)+(Number(tpTop)-Number(tp))*(wallets.length>1?k/(wallets.length-1):0))*10)/10);
+        const {ok,d}=await jpost("/api/web/rh/trade",{walletIndex:String(idx),side:"buy",tokenAddress:swapTok.mint,amountEth:amt.toFixed(5),tradeAttemptId:attemptId()});
+        const good=ok&&d&&d.ok;if(good){okc++;await jpost("/api/web/rh/guards",{walletIndex:String(idx),tokenAddress:swapTok.mint,symbol:swapTok.symbol||"",takeProfitPct:tpv,stopLossPct:sl,sellPercent:"100"}).catch(()=>{});}else fail++;
+        staggerLog(logEl,'<div style="font-size:12px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05)"><b style="color:'+(good?"var(--green)":"var(--red)")+'">🟢 BUY '+amt.toFixed(4)+' ETH · TP '+tpv+'%</b> · wallet '+idx+' · '+(good?"✓":esc(String((d&&(d.error||d.message))||"failed").slice(0,34)))+'</div>');
+        if(k<wallets.length-1)await sleepMs(Math.round(rnd(1,4)*1000));
+      }
+      staggerRunning=false;toast("Ladder done — "+okc+" armed"+(fail?", "+fail+" failed":""));
+    } else {
+      const r=await runStagger({wallets,rounds:1,mode:"buy",amtMin:min,amtMax:max,sellMin:0,sellMax:0,sellBias:0,delayMin:1,delayMax:4,slip:Number(slip),tp:tp,tpTop:tpTop||"",sl:sl},logEl);
+      toast("Ladder done — "+r.okc+" buys"+(r.fail?", "+r.fail+" failed":"")+" · ◎"+r.spent.toFixed(3));
+    }
+    b.disabled=false;b.textContent="Buy "+(swapTok.symbol||"");refreshWallets();
   }
   // ---------- staggered multi-wallet engine (shared by Bundle + Volume) ----------
   // Runs orders one wallet at a time with RANDOMIZED amounts and RANDOMIZED gaps so it never looks
