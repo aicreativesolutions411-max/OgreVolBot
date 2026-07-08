@@ -247,8 +247,9 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
     const maxPct = cls.reduce((m, c) => Math.max(m, +c.pct || 0), 0) || 1;
     let y = 34;
     const rows = [];
-    // header
-    rows.push(`<text x="${px}" y="${y}" font-family="Arial Black, Arial" font-size="19" font-weight="900" fill="#eafff0">🕸️ Clusters (${cls.length})</text>`);
+    // header (no emoji — resvg has no emoji font, they'd render as tofu; use a drawn accent instead)
+    rows.push(`<circle cx="${px + 7}" cy="${y - 5}" r="7" fill="none" stroke="#ffcf4d" stroke-width="2"/><circle cx="${px + 7}" cy="${y - 5}" r="2.5" fill="#ffcf4d"/>`);
+    rows.push(`<text x="${px + 22}" y="${y}" font-family="Arial Black, Arial" font-size="19" font-weight="900" fill="#eafff0">Clusters (${cls.length})</text>`);
     rows.push(`<text x="${px + pw}" y="${y}" text-anchor="end" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#7bd98a">bundled / insider</text>`);
     y += 22;
     if (!cls.length) {
@@ -272,19 +273,20 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
     y += 8;
     // stat grid (2x2)
     const cellW = (pw - 12) / 2;
-    const grid = [["HOLDERS", String(nodes.length)], ["🐋 WHALES", String(whales)], ["⭐ KOLS IN", String(kolCount)], ["🕸️ CLUSTERS", String(cls.length)]];
+    const grid = [["HOLDERS", String(nodes.length), "#5be36a"], ["WHALES", String(whales), "#ffcf4d"], ["KOLS IN", String(kolCount), "#ffcf4d"], ["CLUSTERS", String(cls.length), "#ff7de3"]];
     grid.forEach((g, i) => {
       const gx = px + (i % 2) * (cellW + 12), gy = y + Math.floor(i / 2) * 62;
       rows.push(`<g>
         <rect x="${gx}" y="${gy}" width="${cellW.toFixed(1)}" height="52" rx="12" fill="#0a1f12" stroke="#2f6b3a" stroke-width="1.3"/>
-        <text x="${gx + 12}" y="${gy + 22}" font-family="Arial, sans-serif" font-size="10.5" font-weight="800" letter-spacing="0.4" fill="#7bd98a">${esc(g[0])}</text>
+        <circle cx="${gx + 16}" cy="${gy + 18}" r="4" fill="${g[2]}"/>
+        <text x="${gx + 26}" y="${gy + 22}" font-family="Arial, sans-serif" font-size="10.5" font-weight="800" letter-spacing="0.4" fill="#7bd98a">${esc(g[0])}</text>
         <text x="${gx + 12}" y="${gy + 44}" font-family="Arial Black, Arial" font-size="22" font-weight="900" fill="#eafff0">${esc(g[1])}</text>
       </g>`);
     });
     y += 62 * 2 + 14;
     // KOL roster
     if (kolNodes.length) {
-      rows.push(`<text x="${px}" y="${y}" font-family="Arial Black, Arial" font-size="14" font-weight="900" fill="#eafff0">⭐ ${kolCount} KOL${kolCount > 1 ? "s" : ""} holding</text>`);
+      rows.push(`<circle cx="${px + 6}" cy="${y - 5}" r="5" fill="#ffcf4d"/><text x="${px + 18}" y="${y}" font-family="Arial Black, Arial" font-size="14" font-weight="900" fill="#eafff0">${kolCount} KOL${kolCount > 1 ? "s" : ""} holding</text>`);
       y += 20;
       kolNodes.slice(0, 6).forEach((n) => {
         rows.push(`<g>
@@ -464,7 +466,7 @@ export function buildAirdropSvg({ subject = "$SLIME", subtitle = "airdrop", stat
       <circle cx="${sourceX}" cy="${sourceY}" r="58" fill="#eaf6e6" stroke="#3f9c34" stroke-width="4"/>
       ${centerImage
         ? `<clipPath id="flowSourceClip"><circle cx="${sourceX}" cy="${sourceY}" r="53"/></clipPath><image href="${esc(centerImage)}" x="${sourceX - 53}" y="${sourceY - 53}" width="106" height="106" clip-path="url(#flowSourceClip)" preserveAspectRatio="xMidYMid slice"/>`
-        : `<text x="${sourceX}" y="${sourceY + 12}" text-anchor="middle" font-size="34">💰</text>`}
+        : `<text x="${sourceX}" y="${sourceY + 15}" text-anchor="middle" font-family="Arial Black, Arial" font-size="42" font-weight="900" fill="#3f9c34">$</text>`}
       <text x="${sourceX}" y="${sourceY + 82}" text-anchor="middle" font-family="Arial Black, Arial" font-size="19" font-weight="900" fill="#2b2417">${esc(subject)}</text>
       <text x="${sourceX}" y="${sourceY + 103}" text-anchor="middle" font-family="Arial" font-size="12" font-weight="700" fill="#8b7d5f">${esc(String(flow.sourceLabel || devName || "source").slice(0, 24))}</text>
     </g>`;
@@ -539,12 +541,12 @@ export function buildAirdropSvg({ subject = "$SLIME", subtitle = "airdrop", stat
     const held = n.state === "diamond" || n.held === true;
     const faded = !held;
     return `<g transform="translate(${n.x.toFixed(1)},${n.y.toFixed(1)})">
-      ${n.crown ? `<text x="0" y="${(-n.size - 8).toFixed(1)}" text-anchor="middle" font-size="19">👑</text>` : ""}
+      ${n.crown ? `<g transform="translate(0,${(-n.size - 6).toFixed(1)})"><path d="M-9 0 L-9 -7 L-4 -3 L0 -9 L4 -3 L9 -7 L9 0 Z" fill="#f4b721" stroke="#a8770f" stroke-width="0.8"/></g>` : ""}
       <g transform="scale(${sc.toFixed(3)}) translate(-20,-20)" opacity="${faded ? 0.5 : 1}">
         <path d="${BAG_PATH}" fill="${pal[0]}" stroke="${pal[1]}" stroke-width="1.6"/>
         <path d="${BAG_TIE}" fill="none" stroke="${pal[1]}" stroke-width="2" stroke-linecap="round"/>
         <text x="20" y="28" text-anchor="middle" font-family="Arial Black, Arial" font-size="12" font-weight="900" fill="#ffffff" opacity="0.92">${held ? "$" : ""}</text>
-        ${held && n.weight > 0.35 ? `<text x="20" y="15" text-anchor="middle" font-size="9">💎</text>` : ""}
+        ${held && n.weight > 0.35 ? `<text x="20" y="15" text-anchor="middle" font-family="Arial" font-size="12" fill="#3fb6e6">◆</text>` : ""}
       </g>
     </g>`;
   }).join("");
@@ -561,12 +563,14 @@ export function buildAirdropSvg({ subject = "$SLIME", subtitle = "airdrop", stat
     <circle cx="${cx}" cy="${cy}" r="${hubR}" fill="#eaf6e6" stroke="#3f9c34" stroke-width="4"/>
     ${centerImage
       ? `<clipPath id="aclip"><circle cx="${cx}" cy="${cy}" r="${hubR - 3}"/></clipPath><image href="${esc(centerImage)}" x="${cx - hubR + 3}" y="${cy - hubR + 3}" width="${(hubR - 3) * 2}" height="${(hubR - 3) * 2}" clip-path="url(#aclip)" preserveAspectRatio="xMidYMid slice"/>`
-      : `<text x="${cx}" y="${cy + 10}" text-anchor="middle" font-size="32">💰</text>`}
+      : `<text x="${cx}" y="${cy + 13}" text-anchor="middle" font-family="Arial Black, Arial" font-size="38" font-weight="900" fill="#3f9c34">$</text>`}
     <text x="${cx}" y="${cy + hubR + 30}" text-anchor="middle" font-family="Arial Black, Arial" font-size="26" font-weight="900" fill="#2b2417" paint-order="stroke" stroke="#fffaf0" stroke-width="5">${esc(subject)}</text>
     <text x="${cx}" y="${cy + hubR + 50}" text-anchor="middle" font-family="Arial" font-size="13" fill="#8b7d5f" paint-order="stroke" stroke="#fffaf0" stroke-width="3">${esc(devName ? "by " + devName : subtitle)}</text>
   </g>`;
   const legend = `<g font-family="Arial" font-size="12" font-weight="700">
-    <text x="24" y="${H - 22}" fill="#8b7d5f">💎 held · 💸 dumped · 👑 biggest bag</text>
+    <circle cx="30" cy="${H - 26}" r="6" fill="#3f9c34"/><text x="42" y="${H - 22}" fill="#8b7d5f">held</text>
+    <circle cx="92" cy="${H - 26}" r="6" fill="#b56256"/><text x="104" y="${H - 22}" fill="#8b7d5f">dumped</text>
+    <path d="M172 ${H - 22} L172 ${H - 29} L177 ${H - 25} L181 ${H - 31} L185 ${H - 25} L190 ${H - 29} L190 ${H - 22} Z" fill="#f4b721"/><text x="196" y="${H - 22}" fill="#8b7d5f">biggest bag</text>
     <rect x="${W - 244}" y="${H - 40}" width="216" height="28" rx="14" fill="#fffaf0" stroke="#3f9c34" stroke-opacity="0.55"/>
     <circle cx="${W - 226}" cy="${H - 26}" r="6" fill="#57c04a"/>
     <text x="${W - 212}" y="${H - 21}" font-family="Arial Black, Arial" font-size="16" font-weight="900" fill="#3f9c34">slimewire.org</text>
