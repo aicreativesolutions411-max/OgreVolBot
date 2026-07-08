@@ -55648,6 +55648,7 @@ async function webLaunchWatches(userId) {
     .filter((plan) => String(plan.userId) === String(userId) && (
       (["launch_watch", "watching"].includes(plan.status) && plan.manualLaunch)
       || plan.status === "wallet_launch_watch"
+      || plan.status === "copy_wallet_watch"
     ))
     .sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0))
     .slice(0, 20)
@@ -55660,8 +55661,8 @@ async function webCancelLaunchWatch(userId, planId) {
   if (!plan) {
     throw new Error("Launch watch not found.");
   }
-  if (plan.status !== "launch_watch" && plan.status !== "wallet_launch_watch") {
-    throw new Error("This launch watch is no longer scanning.");
+  if (plan.status !== "launch_watch" && plan.status !== "wallet_launch_watch" && plan.status !== "copy_wallet_watch") {
+    throw new Error("This watch is no longer scanning.");
   }
 
   plan.status = "canceled";
@@ -55670,14 +55671,52 @@ async function webCancelLaunchWatch(userId, planId) {
   await writeTradePlans(store);
   void refreshSnipeWatchTickers(); // drop it from the real-time sniper set
   void refreshWalletLaunchWatchCreators();
-  await audit("web_cancel_manual_launch_snipe", { userId, planId: plan.id, ticker: plan.launchTicker, launchWallet: plan.launchWallet || "", chain: plan.chain || "" });
+  await audit("web_cancel_manual_launch_snipe", { userId, planId: plan.id, ticker: plan.launchTicker, launchWallet: plan.launchWallet || "", copyWallet: plan.copyWallet || "", chain: plan.chain || "" });
   return webLaunchWatchRow(plan);
 }
 
 function webLaunchWatchRow(plan) {
   const chain = normalizeWalletLaunchChain(plan.chain);
   const walletLaunch = plan.status === "wallet_launch_watch" || plan.walletLaunchSnipe;
+  const copyWalletWatch = plan.status === "copy_wallet_watch" || plan.source === "kol_copy_wallet";
   const watched = plan.launchWallet || "";
+  if (copyWalletWatch) {
+    const copyWallet = plan.copyWallet || "";
+    return {
+      id: plan.id,
+      status: plan.status,
+      type: "kol_copy_wallet",
+      chain: "solana",
+      copyWallet,
+      shortCopyWallet: copyWallet ? shortMint(copyWallet) : "",
+      ticker: copyWallet ? shortMint(copyWallet) : "",
+      launchWallet: "",
+      shortLaunchWallet: "",
+      tokenMint: plan.lastMatchedToken || plan.tokenMint || null,
+      tokenAddress: plan.lastMatchedToken || plan.tokenAddress || null,
+      shortMint: plan.lastMatchedToken ? shortMint(plan.lastMatchedToken) : (plan.tokenMint ? shortMint(plan.tokenMint) : null),
+      walletCount: plan.wallets?.length || 0,
+      amountSol: plan.amountSol,
+      amountEth: null,
+      amount: plan.amountSol,
+      takeProfitPct: plan.takeProfitPct,
+      stopLossPct: plan.stopLossPct,
+      takeProfitSummary: formatPlanTakeProfitSummary(plan),
+      stopLossSummary: formatPlanStopLossSummary(plan),
+      sellDelaySeconds: plan.sellDelaySeconds,
+      loopCount: plan.loopCount || 1,
+      loopDelaySeconds: plan.loopDelaySeconds || 0,
+      slippageBps: plan.slippageBps,
+      scanIntervalMs: plan.scanIntervalMs || CONFIG.kolCopyScanIntervalMs,
+      createdAt: plan.createdAt,
+      lastScanAt: plan.lastScanAt || null,
+      results: (plan.results || []).slice(-6),
+      dexUrl: plan.lastMatchedToken ? dexScreenerUrl(plan.lastMatchedToken) : (plan.tokenMint ? dexScreenerUrl(plan.tokenMint) : null),
+      message: plan.status === "copy_wallet_watch"
+        ? `Copying next buys from ${shortMint(copyWallet)}.`
+        : `Copy wallet watch ${plan.status}.`
+    };
+  }
   const amount = walletLaunch && chain === "robinhood" ? plan.amountEth : plan.amountSol;
   return {
     id: plan.id,

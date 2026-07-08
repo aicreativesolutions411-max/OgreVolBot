@@ -352,6 +352,9 @@
   .walletrow .info b{font-size:13px}
   .walletrow .info .addr{font-family:var(--mono);font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;margin-top:3px}
   .walletrow .info .addr button{color:var(--muted);font-size:12px}.walletrow .info .addr button:hover{color:var(--green)}
+  .walletrow .rename{display:flex;gap:7px;margin-top:8px}
+  .walletrow .rename input{min-width:0;flex:1;padding:8px 9px;border-radius:9px;border:1px solid var(--border2);background:#020703;color:var(--text);font-size:12px}
+  .walletrow .rename button{flex:0 0 auto;padding:8px 11px;border-radius:9px;font-size:11px}
   .walletrow .bal{text-align:right}.walletrow .bal b{font-size:15px;font-family:var(--mono)}.walletrow .bal span{font-size:10px;color:var(--muted);display:block}
   .walletrow.sel{border-color:rgba(114,255,35,.4);box-shadow:0 0 0 1px rgba(114,255,35,.18) inset}
   .wbtn{padding:11px 16px;border-radius:11px;font-weight:800;font-size:13px;color:#06140a;background:linear-gradient(180deg,var(--green2),var(--green));box-shadow:0 2px 12px rgba(114,255,35,.22)}
@@ -845,6 +848,15 @@
     const {ok,d}=await jpost("/api/web/wallets/remove",{walletIndexes:[idx]});
     if(ok&&d&&d.ok){if(state.activeWallet===idx)state.activeWallet=null;await refreshWallets();toast("Wallet removed");return true;}
     toast((d&&d.error)||"Could not remove wallet",true);return false;
+  }
+  async function renameWallet(idx,label,btn){
+    label=String(label||"").trim();
+    if(!idx||!label){toast("Enter a wallet name first.",true);return false;}
+    if(btn){btn.disabled=true;btn.textContent="Saving...";}
+    const {ok,d}=await jpost("/api/web/wallets/rename",{walletIndex:idx,label});
+    if(ok&&d&&d.ok){if(d.wallets)state.wallets=d.wallets;await refreshWallets();toast("Wallet renamed");if(state.route==="wallet")paintWallet();return true;}
+    if(btn){btn.disabled=false;btn.textContent="Save";}
+    toast((d&&(d.error||d.message))||"Could not rename wallet",true);return false;
   }
   async function loadMe(){
     if(!state.token)return;
@@ -3093,7 +3105,8 @@
       const list=state.wallets.map(w=>{
         const sel=w.index===state.activeWallet;
         return'<div class="walletrow'+(sel?" sel":"")+'"><div class="ico">👛</div><div class="info"><b>'+esc(w.label||"Wallet")+(sel?" · active":"")+'</b>'+
-          '<div class="addr">'+esc(short(w.publicKey))+'<button onclick="GG.copy(\''+esc(w.publicKey)+'\')" title="Copy address">⧉</button></div></div>'+
+          '<div class="addr">'+esc(short(w.publicKey))+'<button onclick="GG.copy(\''+esc(w.publicKey)+'\')" title="Copy address">⧉</button></div>'+
+          '<div class="rename"><input data-rename-wallet-input="'+w.index+'" value="'+esc(w.label||"")+'" maxlength="32" aria-label="Rename wallet '+esc(String(w.index))+'"><button class="wbtn ghost" data-rename-wallet-btn="'+w.index+'">Save</button></div></div>'+
           '<div class="bal"><b>◎ '+Number(w.sol||0).toFixed(3)+'</b><span>balance</span></div>'+
           (sel?'':'<button class="wbtn ghost" style="margin-left:10px" onclick="GG.pickWallet('+w.index+')">Use</button>')+
           '<button class="wbtn ghost" style="margin-left:8px;padding:9px 11px" onclick="GG.removeWalletPrompt('+w.index+')" title="Remove wallet">🗑</button></div>';
@@ -3188,6 +3201,7 @@
     const lg=$("#loginBtn");if(lg)lg.onclick=()=>loginModal();
     const sl=$("#setLoginBtn");if(sl)sl.onclick=()=>setLoginModal();
     const rf=$("#refWallet");if(rf)rf.onclick=async()=>{rf.disabled=true;rf.textContent="…";await refreshWallets();renderWallet();};
+    document.querySelectorAll("[data-rename-wallet-btn]").forEach(btn=>btn.onclick=()=>{const idx=btn.getAttribute("data-rename-wallet-btn");const input=document.querySelector('[data-rename-wallet-input="'+idx+'"]');renameWallet(idx,input?input.value:"",btn);});
     const cd=$("#copyDep");if(cd)cd.onclick=()=>{const w=activeWalletObj();if(w)copy(w.publicKey);};
     const sp=$("#savePre");if(sp){if(state._editPreset)sp.textContent="Update preset";sp.onclick=async()=>{
       const name=$("#pName").value.trim(),amt=$("#pAmt").value.trim();
@@ -3853,16 +3867,42 @@
   async function renderCopy(){
     setActiveView("v-copy");subbarToolKol();
     const view=$("#v-copy");
+    const copyWatches=await loadActiveCopyWatches();
+    if(state.route!=="copy")return;
     view.innerHTML='<div class="wgrid">'+
       '<div class="wbox"><h3>🎯 Copy any wallet</h3><p class="sub">Auto-buy whatever a wallet buys — from your wallet, your size, with auto-exit.</p>'+
         '<div class="field"><label>Wallet to copy</label><input id="cpWallet" placeholder="Paste any Solana wallet address"></div>'+
         '<div class="field row2"><div><label>Buy size (SOL)</label><input id="cpAmt" inputmode="decimal" value="0.1"></div><div><label>Slippage (bps)</label><input id="cpSlip" inputmode="numeric" value="500"></div></div>'+
         '<div class="field row2"><div><label>Take profit %</label><input id="cpTp" inputmode="numeric" value="25"></div><div><label>Stop loss %</label><input id="cpSl" inputmode="numeric" value="8"></div></div>'+
         '<button class="wbtn" id="cpGo">Start copying</button></div>'+
+      activeCopyWalletsHtml(copyWatches)+
       '<div class="wbox" style="grid-column:1/-1"><h3 id="kolH">🔥 KOL Buys</h3><p class="sub" id="kolD">What known KOL wallets are buying right now.</p><div id="kolList"><div class="loading" style="padding:18px"><span class="spin"></span></div></div></div>'+
     '</div>';
-    $("#cpGo").onclick=async()=>{const w=$("#cpWallet").value.trim();if(!w){toast("Paste a wallet to copy.",true);return;}if(!(await ensureTradeReady()))return;const b=$("#cpGo");b.disabled=true;b.textContent="Starting…";const {ok,status,d}=await jpost("/api/web/kol/copy-wallet",{copyWallet:w,walletIndexes:[state.activeWallet],amountSol:$("#cpAmt").value.trim()||"0.1",slippageBps:Number($("#cpSlip").value.trim()||"500"),takeProfitPct:$("#cpTp").value.trim()||"25",stopLossPct:$("#cpSl").value.trim()||"8",sellDelay:"off",loopCount:"1"});b.disabled=false;b.textContent="Start copying";if(status===401){setToken("");go("wallet");return;}if(ok&&d&&d.ok){toast("Now copying "+short(w)+" — buys mirror to your wallet");}else toast((d&&d.error)||"Could not start copy",true);};
+    document.querySelectorAll("[data-copy-stop]").forEach(btn=>btn.onclick=()=>stopCopyWalletWatch(btn.getAttribute("data-copy-stop"),btn));
+    $("#cpGo").onclick=async()=>{const w=$("#cpWallet").value.trim();if(!w){toast("Paste a wallet to copy.",true);return;}if(!(await ensureTradeReady()))return;const b=$("#cpGo");b.disabled=true;b.textContent="Starting…";const {ok,status,d}=await jpost("/api/web/kol/copy-wallet",{copyWallet:w,walletIndexes:[state.activeWallet],amountSol:$("#cpAmt").value.trim()||"0.1",slippageBps:Number($("#cpSlip").value.trim()||"500"),takeProfitPct:$("#cpTp").value.trim()||"25",stopLossPct:$("#cpSl").value.trim()||"8",sellDelay:"off",loopCount:"1"});b.disabled=false;b.textContent="Start copying";if(status===401){setToken("");go("wallet");return;}if(ok&&d&&d.ok){toast("Now copying "+short(w)+" — buys mirror to your wallet");renderCopy();}else toast((d&&d.error)||"Could not start copy",true);};
     loadKol();
+  }
+  async function loadActiveCopyWatches(){
+    const {d}=await api("/api/web/launch/watches").catch(()=>({}));
+    return ((d&&d.watches)||[]).filter(w=>w&&w.type==="kol_copy_wallet");
+  }
+  function activeCopyWalletsHtml(watches){
+    const rows=(watches||[]).map(w=>{
+      const wallet=esc(w.shortCopyWallet||w.ticker||short(w.copyWallet||""));
+      const amt=esc(String(w.amountSol||w.amount||"0"));
+      const tp=esc(w.takeProfitSummary||("+"+(w.takeProfitPct||0)+"%"));
+      const sl=esc(w.stopLossSummary||("-"+(w.stopLossPct||0)+"%"));
+      const last=w.lastScanAt?(" · checked "+esc(ageLabel({createdAt:w.lastScanAt})||"recently")):"";
+      return '<div class="walletrow" style="align-items:center"><div class="ico">🎯</div><div class="info" style="min-width:0"><b>'+wallet+'</b><div class="addr mut">'+esc(w.walletCount||0)+' wallet(s) · '+amt+' SOL · TP '+tp+' / SL '+sl+last+'</div></div><button class="wbtn ghost" style="margin-left:10px;padding:9px 12px" data-copy-stop="'+esc(w.id)+'">Stop</button></div>';
+    }).join("");
+    return '<details class="wbox" style="grid-column:1/-1" '+(rows?'open':'')+'><summary style="cursor:pointer;font-weight:800;font-size:18px">Active copy wallets '+(watches&&watches.length?'('+watches.length+')':'')+'</summary><p class="sub">Start more than one watched wallet, or stop any copy watch without touching the others.</p>'+(rows||'<p class="mut" style="font-size:12px;margin:10px 0 0">No active copy wallets yet.</p>')+'</details>';
+  }
+  async function stopCopyWalletWatch(id,btn){
+    if(!id)return;
+    btn.disabled=true;btn.textContent="Stopping…";
+    const {ok,d}=await jpost("/api/web/launch/cancel",{planId:id});
+    if(ok&&d&&d.ok){toast("Copy wallet stopped");renderCopy();}
+    else{btn.disabled=false;btn.textContent="Stop";toast((d&&(d.error||d.message))||"Could not stop copy wallet",true);}
   }
   function kolSecLabel(t){return '<div class="mut" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin:14px 0 8px">'+t+'</div>';}
   // Pull a clean @handle out of a (sometimes double-prefixed) twitter/x URL, then fall back to

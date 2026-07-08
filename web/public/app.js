@@ -7411,6 +7411,9 @@ function launchShareText(watch) {
   if (watch.type === "wallet_launch_snipe") {
     return `Watching ${watch.chain === "robinhood" ? "RH deployer" : "Solana creator"} ${watch.shortLaunchWallet || watch.ticker} with Wallet Launch Snipe: ${watch.walletCount} wallet(s), TP ${watch.takeProfitSummary || `+${watch.takeProfitPct}%`}, SL ${watch.stopLossSummary || `-${watch.stopLossPct}%`}.`;
   }
+  if (watch.type === "kol_copy_wallet") {
+    return `Copying wallet ${watch.shortCopyWallet || watch.ticker}: ${watch.walletCount} wallet(s), ${watch.amountSol || watch.amount || "0"} SOL each, TP ${watch.takeProfitSummary || `+${watch.takeProfitPct}%`}, SL ${watch.stopLossSummary || `-${watch.stopLossPct}%`}.`;
+  }
   return `Watching $${watch.ticker} with Launch Snipe: ${watch.walletCount} wallet(s), ${watch.amountSol} SOL each, TP ${watch.takeProfitSummary || `+${watch.takeProfitPct}%`}, SL ${watch.stopLossSummary || `-${watch.stopLossPct}%`}.`;
 }
 
@@ -11233,28 +11236,34 @@ function launchScanSeconds() {
 function launchWatchesHtml(filter = "all") {
   const watches = (state.launchWatches || []).filter((watch) => {
     const isWalletLaunch = watch.type === "wallet_launch_snipe";
+    const isCopyWallet = watch.type === "kol_copy_wallet";
     if (filter === "wallet") return isWalletLaunch;
-    if (filter === "manual") return !isWalletLaunch;
+    if (filter === "manual") return !isWalletLaunch && !isCopyWallet;
+    if (filter === "copy") return isCopyWallet;
     return true;
   });
   if (!watches.length) {
     if (filter === "wallet") return "<p>No active wallet launch snipes yet. Arm one above, then add more whenever you want.</p>";
     if (filter === "manual") return "<p>No active ticker launch watches yet.</p>";
+    if (filter === "copy") return "<p>No active copy wallets yet. Paste a wallet above, choose wallets, then start copying.</p>";
     return "<p>No active launch watches yet.</p>";
   }
   return `
     <div class="mini-results">
       ${watches.map((watch) => {
         const isWalletLaunch = watch.type === "wallet_launch_snipe";
+        const isCopyWallet = watch.type === "kol_copy_wallet";
         const label = isWalletLaunch
           ? `${watch.chain === "robinhood" ? "RH" : "SOL"} wallet ${watch.shortLaunchWallet || watch.ticker}`
+          : isCopyWallet
+          ? `Copy wallet ${watch.shortCopyWallet || watch.ticker}`
           : `$${watch.ticker}`;
-        const cancelLabel = isWalletLaunch ? "Stop" : "Cancel";
+        const cancelLabel = isWalletLaunch || isCopyWallet ? "Stop" : "Cancel";
         return `
         <span>
           ${escapeHtml(label)} - ${escapeHtml(watch.status)} - ${escapeHtml(watch.walletCount)} wallet(s)
           ${xShareButton(launchShareText(watch), "Share Watch")}
-          ${watch.status === "launch_watch" || watch.status === "wallet_launch_watch" ? `<button data-launch-cancel="${escapeHtml(watch.id)}">${cancelLabel}</button>` : ""}
+          ${watch.status === "launch_watch" || watch.status === "wallet_launch_watch" || watch.status === "copy_wallet_watch" ? `<button data-launch-cancel="${escapeHtml(watch.id)}">${cancelLabel}</button>` : ""}
         </span>
       `;}).join("")}
     </div>
@@ -11729,6 +11738,11 @@ function kolHtml() {
           </div>
         </article>
         <article>
+          <h3>Active Copy Wallets</h3>
+          <p>Every watched wallet you have armed. Stop one anytime, then add another without affecting the rest.</p>
+          ${kolCopyWatchesHtml()}
+        </article>
+        <article>
           <h3>KOL Tools</h3>
           <p>Open outside KOL dashboards for extra wallet context, then come back here to trade, bundle, or copy from your saved wallets.</p>
           <div class="card-actions">
@@ -11787,6 +11801,24 @@ function kolResultHtml() {
   const row = state.kolResult;
   if (!row?.results?.length) return "";
   return `<div class="mini-results">${row.results.map((item) => `<span data-ok="${item.ok ? "true" : "false"}">${escapeHtml(item.message || item)}</span>`).join("")}</div>`;
+}
+
+function kolCopyWatchesHtml() {
+  const watches = (state.launchWatches || []).filter((watch) => watch?.type === "kol_copy_wallet");
+  if (!watches.length) return `<p>No active copy wallets yet.</p>`;
+  return `
+    <div class="mini-results">
+      ${watches.map((watch) => `
+        <span>
+          ${escapeHtml(watch.shortCopyWallet || watch.ticker || shortAddress(watch.copyWallet || ""))} -
+          ${escapeHtml(watch.walletCount || 0)} wallet(s) -
+          ${escapeHtml(watch.amountSol || watch.amount || "0")} SOL -
+          TP ${escapeHtml(watch.takeProfitSummary || `+${watch.takeProfitPct || 0}%`)} / SL ${escapeHtml(watch.stopLossSummary || `-${watch.stopLossPct || 0}%`)}
+          ${watch.status === "copy_wallet_watch" ? `<button data-launch-cancel="${escapeHtml(watch.id)}">Stop</button>` : ""}
+        </span>
+      `).join("")}
+    </div>
+  `;
 }
 
 function kolSummaryHtml() {
@@ -15601,11 +15633,14 @@ async function cancelLaunchWatch(planId) {
     });
     state.launchResult = data.watch;
     const stoppedWalletLaunch = data.watch?.type === "wallet_launch_snipe" || state.activeTab === "walletLaunch";
+    const stoppedCopyWallet = data.watch?.type === "kol_copy_wallet" || state.activeTab === "kol";
     if (stoppedWalletLaunch) {
       setWalletLaunchSnipeStatus(data.watch?.message || "Wallet Launch Snipe stopped.");
+    } else if (stoppedCopyWallet) {
+      setKolStatus(data.watch?.message || "Copy wallet stopped.");
     }
     await loadAll();
-    state.activeTab = stoppedWalletLaunch ? "walletLaunch" : "launch";
+    state.activeTab = stoppedWalletLaunch ? "walletLaunch" : stoppedCopyWallet ? "kol" : "launch";
     render();
   } catch (error) {
     setLaunchStatus(error.message);

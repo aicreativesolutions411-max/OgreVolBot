@@ -216,6 +216,9 @@ test("web managed wallets can be renamed without touching wallet secrets", () =>
   assert.match(appSource, /data-wallet-rename-input/);
   assert.match(appSource, /data-rename-wallet/);
   assert.match(functionBody(appSource, "renameManagedWallet"), /\/api\/web\/wallets\/rename/);
+  assert.match(indexSource, /data-rename-wallet-input/);
+  assert.match(indexSource, /data-rename-wallet-btn/);
+  assert.match(functionBody(indexSource, "renameWallet"), /\/api\/web\/wallets\/rename/);
 });
 
 test("Wallet Launch Snipe is launch-only and supports Solana creators plus Robinhood deployers", () => {
@@ -232,8 +235,10 @@ test("Wallet Launch Snipe is launch-only and supports Solana creators plus Robin
   assert.doesNotMatch(pumpStreamBlock.match(/onTrade:[^\n]+/)?.[0] || "", /maybeWalletLaunchSnipe/);
   assert.match(functionBody(serverSource, "normalizeWalletLaunchChain"), /robinhood/);
   assert.match(functionBody(serverSource, "webCreateWalletLaunchSnipe"), /amountEth/);
-  assert.match(functionBody(serverSource, "webCancelLaunchWatch"), /plan\.status !== "launch_watch" && plan\.status !== "wallet_launch_watch"/);
+  assert.match(functionBody(serverSource, "webCancelLaunchWatch"), /plan\.status !== "launch_watch" && plan\.status !== "wallet_launch_watch" && plan\.status !== "copy_wallet_watch"/);
   assert.match(functionBody(serverSource, "webCancelLaunchWatch"), /refreshWalletLaunchWatchCreators/);
+  assert.match(functionBody(serverSource, "webLaunchWatches"), /plan\.status === "copy_wallet_watch"/);
+  assert.match(functionBody(serverSource, "webLaunchWatchRow"), /type: "kol_copy_wallet"/);
   assert.match(functionBody(serverSource, "executeSolWalletLaunchSnipe"), /webCreateManagedBuyPlan/);
   assert.match(functionBody(serverSource, "executeSolWalletLaunchSnipe"), /trustedLaunchMint: true/);
   assert.match(functionBody(serverSource, "executeRhWalletLaunchSnipe"), /webRhBundleCore/);
@@ -244,8 +249,13 @@ test("Wallet Launch Snipe is launch-only and supports Solana creators plus Robin
   assert.match(appSource, /\["walletLaunch", "Wallet Snipe"\]/);
   assert.match(functionBody(appSource, "renderTabs"), /state\.activeTab === "walletLaunch"[\s\S]*launchHtml\(\{ walletLaunchFirst: true \}\)/);
   assert.match(functionBody(appSource, "launchWatchesHtml"), /filter === "wallet"/);
-  assert.match(functionBody(appSource, "launchWatchesHtml"), /isWalletLaunch \? "Stop" : "Cancel"/);
-  assert.match(functionBody(appSource, "cancelLaunchWatch"), /stoppedWalletLaunch[\s\S]*state\.activeTab = stoppedWalletLaunch \? "walletLaunch" : "launch"/);
+  assert.match(functionBody(appSource, "launchWatchesHtml"), /filter === "manual"[\s\S]*!isWalletLaunch && !isCopyWallet/);
+  assert.match(functionBody(appSource, "launchWatchesHtml"), /isWalletLaunch \|\| isCopyWallet \? "Stop" : "Cancel"/);
+  assert.match(functionBody(appSource, "cancelLaunchWatch"), /stoppedCopyWallet[\s\S]*state\.activeTab = stoppedWalletLaunch \? "walletLaunch" : stoppedCopyWallet \? "kol" : "launch"/);
+  assert.match(functionBody(appSource, "kolCopyWatchesHtml"), /kol_copy_wallet/);
+  assert.match(indexSource, /function activeCopyWalletsHtml/);
+  assert.match(indexSource, /data-copy-stop/);
+  assert.match(indexSource, /\/api\/web\/launch\/cancel/);
   assert.match(appSource, /data-wallet-launch-chain/);
   assert.match(appSource, /data-wallet-launch-start/);
   assert.match(functionBody(appSource, "readWalletLaunchSnipeForm"), /Robinhood launch wallets must be 0x deployer addresses/);
