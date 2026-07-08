@@ -13944,6 +13944,13 @@ async function handleMessage(message, userId) {
     // ONLY a message that is JUST a real mint (decodes to 32 bytes) triggers it —
     // normal chatter never does (a sentence has spaces / isn't a valid key).
     const caTok = text.trim().replace(/^\$/, "");
+    // A bare Robinhood Chain contract (0x…40-hex) pasted in chat = auto RH scan card (same Scan toggle).
+    const rhCaTok = (text.trim().match(/^0x[0-9a-fA-F]{40}$/) || [])[0] || "";
+    if (rhCaTok) {
+      const gbEntry = await getGroupBotEntry(chatId).catch(() => null);
+      if (!gbEntry || groupBotFeatureOn(gbEntry, "scan")) await handleTelegramLookCommand(chatId, message, rhCaTok).catch(() => {});
+      return;
+    }
     const bareCa = isLikelySolMint(caTok) ? [caTok, caTok] : null;
     if (bareCa) {
       const gbEntry = await getGroupBotEntry(chatId).catch(() => null);
@@ -30881,6 +30888,9 @@ async function resolveDexPairToMint(addr) {
 // TG /look, web) handles pasted links the same way.
 async function resolveScanTargetFromText(text, urls = []) {
   const blob = [String(text || ""), ...(Array.isArray(urls) ? urls : [])].join(" ");
+  // 0) Robinhood Chain coin (EVM 0x…40-hex) — returned as-is; buildXReply routes it to the RH scan card.
+  const evm = blob.match(/0x[0-9a-fA-F]{40}/);
+  if (evm) return evm[0];
   // 1) DexScreener link → pair→mint (must run BEFORE the generic base58 grab, which would keep the pair addr)
   const ds = blob.match(/dexscreener\.com\/solana\/([1-9A-HJ-NP-Za-km-z]{32,44})/i);
   if (ds) { const m = await resolveDexPairToMint(ds[1]).catch(() => null); if (m) return m; }
@@ -30890,6 +30900,33 @@ async function resolveScanTargetFromText(text, urls = []) {
   // 3) $ticker
   for (const tag of extractCashtags(blob)) { const m = await resolveCashtagToMint(tag).catch(() => null); if (m) return m; }
   return null;
+}
+
+// Like resolveScanTargetFromText, but returns EVERY distinct coin referenced (EVM RH addrs, Solana
+// mints, DexScreener links, $tickers) — deduped, order-preserved, capped. Powers "post 3 tickers →
+// scan all 3" on X. Cap keeps us within X's 4-images-per-tweet / sane-thread limits.
+async function resolveAllScanTargetsFromText(text, urls = [], cap = 4) {
+  const blob = [String(text || ""), ...(Array.isArray(urls) ? urls : [])].join(" ");
+  const out = [];
+  const seen = new Set();
+  const add = (v) => { const k = String(v || "").toLowerCase(); if (v && !seen.has(k)) { seen.add(k); out.push(v); } };
+  // 0) Robinhood Chain coins (EVM 0x…40-hex) — all of them
+  for (const m of (blob.match(/0x[0-9a-fA-F]{40}/g) || [])) add(m);
+  // 1) DexScreener links → pair→mint (before the generic base58 grab)
+  for (const m of (blob.match(/dexscreener\.com\/solana\/([1-9A-HJ-NP-Za-km-z]{32,44})/gi) || [])) {
+    const pair = (m.match(/([1-9A-HJ-NP-Za-km-z]{32,44})$/) || [])[1];
+    if (pair) { const mint = await resolveDexPairToMint(pair).catch(() => null); if (mint) add(mint); }
+    if (out.length >= cap) return out.slice(0, cap);
+  }
+  // 2) bare CAs / pump links — every base58 mint in the text
+  for (const m of extractMintsFromText(blob)) { add(m); if (out.length >= cap) return out.slice(0, cap); }
+  // 3) $tickers — resolve each to a mint
+  for (const tag of extractCashtags(blob)) {
+    const mint = await resolveCashtagToMint(tag).catch(() => null);
+    if (mint) add(mint);
+    if (out.length >= cap) return out.slice(0, cap);
+  }
+  return out.slice(0, cap);
 }
 
 // ── SLIMEWIRE NATIVE CHART DATA (free, no Helius) ───────────────────────────────────────────
@@ -32286,6 +32323,24 @@ async function resolveXTargetMint(mention) {
   }
   return null;
 }
+// ALL coins referenced in a mention (post multiple CAs/$tickers → scan them all). Reads the tag's own
+// text first; only falls back to the parent/root if the tag itself carries no coin (so "@bot ?" under a
+// coin post still resolves one, but "@bot scan $A $B 0xC" scans all three from the tag). Capped at 4.
+async function resolveAllXTargets(mention, cap = 4) {
+  let targets = await resolveAllScanTargetsFromText(mention.text, mention.urls, cap).catch(() => []);
+  if (targets.length) return targets;
+  const seen = new Set();
+  for (const pid of [mention.inReplyToId, mention.conversationId]) {
+    if (!pid || seen.has(pid)) continue;
+    seen.add(pid);
+    const parent = await xGetTweet(pid).catch(() => null);
+    if (parent) {
+      targets = await resolveAllScanTargetsFromText(parent.text, parent.urls, cap).catch(() => []);
+      if (targets.length) return targets;
+    }
+  }
+  return [];
+}
 // X aggressively de-ranks reply tweets that contain a raw URL — especially from newer accounts (they get
 // folded under "show more replies", which is exactly the "it only shows in the reply tab / feels like a DM"
 // symptom). The scan CARD already has "slimewire.org" baked into the image, so the text link is pure
@@ -32462,8 +32517,141 @@ async function buildXRugReply(mint, variant) {
   } catch { /* text-only is fine */ }
   return { text, mediaBuffer, symbol, mc };
 }
+// ===== 🪶 ROBINHOOD CHAIN scan — an EVM (0x) coin tagged/pasted anywhere gets the SAME full scan treatment
+// as a Solana coin. Data = DexScreener's `robinhood` chain pairs (price/MC/liq/vol/1H — verified full) +
+// rhHoneypotCheck (sell-trap/honeypot safety). Bonk/pump/etc. are Solana mints and flow through the normal
+// scan already; this fills the ONE gap: RH coins were unscan-able (0x didn't match a Solana mint).
+const rhScanCache = new Map();
+async function gatherRhScan(address) {
+  const a = String(address || "").trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return null;
+  const key = a.toLowerCase();
+  const cached = rhScanCache.get(key);
+  if (cached && Date.now() - cached.at < 60_000) return cached.v;
+  const [dsRes, saf] = await Promise.all([
+    fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${a}`, { timeoutMs: 6000 }).catch(() => null),
+    rhHoneypotCheck(a, CONFIG.rhChainRpcUrl).catch(() => null),
+  ]);
+  const pairs = (dsRes?.pairs || []).filter((p) => String(p.chainId || "").toLowerCase() === "robinhood");
+  const pair = pairs.sort((x, y) => (Number(y.liquidity?.usd) || 0) - (Number(x.liquidity?.usd) || 0))[0] || null;
+  const socials = Array.isArray(pair?.info?.socials) ? pair.info.socials : [];
+  const website = (Array.isArray(pair?.info?.websites) ? pair.info.websites : [])[0]?.url || "";
+  const v = {
+    address: a, chain: "robinhood",
+    symbol: String(pair?.baseToken?.symbol || "").replace(/^\$+/, "").slice(0, 14),
+    name: String(pair?.baseToken?.name || "").slice(0, 40),
+    priceUsd: Number(pair?.priceUsd) || 0,
+    mc: Number(pair?.marketCap || pair?.fdv) || 0,
+    liq: Number(pair?.liquidity?.usd) || 0,
+    vol24: Number(pair?.volume?.h24) || 0,
+    ch1: Number(pair?.priceChange?.h1),
+    ch24: Number(pair?.priceChange?.h24),
+    pairAddress: pair?.pairAddress || "",
+    createdAt: Number(pair?.pairCreatedAt) || 0,
+    imageUrl: pair?.info?.imageUrl || "",
+    twitterUrl: (socials.find((s) => /twitter|x/i.test(s.type || s.label || "")) || {}).url || "",
+    telegramUrl: (socials.find((s) => /telegram|tg/i.test(s.type || s.label || "")) || {}).url || "",
+    websiteUrl: website,
+    safety: saf,   // { verdict: safe|warn|danger|unknown, reasons:[] }
+    explorer: `https://robinhoodchain.blockscout.com/token/${a}`,
+  };
+  rhScanCache.set(key, { at: Date.now(), v });
+  if (rhScanCache.size > 200) rhScanCache.delete(rhScanCache.keys().next().value);
+  return v;
+}
+// RH verdict → the same tone model the Solana card uses (danger/warn/ok) so the card art + wording match.
+function rhVerdictTone(safety) {
+  // rhHoneypotCheck verdicts: "verified" (SlimeWire fixed-supply) / "ok" / "warn" / "block" (sell-trap).
+  const vd = String(safety?.verdict || "").toLowerCase();
+  if (vd === "block" || safety?.honeypot === true) return { verdict: "honeypot / sell-trap risk", tone: "danger" };
+  if (vd === "warn") return { verdict: (safety?.reasons && safety.reasons[0]) ? String(safety.reasons[0]).slice(0, 40) : "some risk — be careful", tone: "warn" };
+  if (vd === "verified") return { verdict: "verified — cannot rug", tone: "ok" };
+  if (vd === "ok" || vd === "safe") return { verdict: "no sell traps found", tone: "ok" };
+  return { verdict: "scan inconclusive — DYOR", tone: "warn" };
+}
+// X reply for a Robinhood coin (image card + text), matching the Solana scan card's look.
+async function buildXRhReply(address, variant) {
+  const info = await gatherRhScan(address).catch(() => null);
+  if (!info || (!info.symbol && !(info.mc > 0) && !(info.priceUsd > 0))) return null;
+  const { verdict, tone } = rhVerdictTone(info.safety);
+  const v = makeXVary(variant || info.symbol || address);
+  const mcLabel = info.mc > 0 ? scanFmtMoney(info.mc) : "—";
+  const liqLabel = info.liq > 0 ? scanFmtMoney(info.liq) : "—";
+  const volLabel = info.vol24 > 0 ? scanFmtMoney(info.vol24) : "";
+  const ageLabel = info.createdAt > 0 ? xAgeLabel(Date.now() - info.createdAt) : "new";
+  const changeLabel = Number.isFinite(info.ch1) ? `${info.ch1 >= 0 ? "+" : ""}${info.ch1.toFixed(1)}%` : "";
+  const changeTone = Number.isFinite(info.ch1) ? (info.ch1 >= 0 ? "up" : "down") : "";
+  const toneEmoji = tone === "danger" ? v.danger : tone === "warn" ? v.warn : v.ok;
+  const text = [
+    `$${info.symbol || "coin"}${info.name ? v.sep + info.name : ""} 🪶`,
+    [`MC ${mcLabel}`, `Liq ${liqLabel}`, volLabel ? `Vol ${volLabel}` : null, changeLabel ? `1H ${changeLabel}` : null, "Robinhood Chain"].filter(Boolean).join(v.sep),
+    `${toneEmoji} ${verdict}`,
+    v.cta,
+  ].join("\n").slice(0, 279);
+  let mediaBuffer = null;
+  try {
+    const logoBuffer = info.imageUrl ? await xFetchLogo(info.imageUrl).catch(() => null) : null;
+    mediaBuffer = await renderXScanCard({ symbol: info.symbol, name: info.name, mcLabel, liqLabel, ageLabel, railLabel: "Robinhood", volumeLabel: volLabel, holderLabel: "", verdict, verdictTone: tone, changeLabel, changeTone, logoBuffer, bgDir: X_CARD_BG_DIR, seed: variant || info.symbol || address });
+  } catch { /* text-only fallback */ }
+  return { text, mediaBuffer, symbol: info.symbol, mc: info.mc, chain: "robinhood" };
+}
+// 🪶 TG scan card for a Robinhood coin — same OgreScan look as the Solana card, RH-flavored (chain, safety,
+// Blockscout, one-tap trade on the site's RH view). Used by /look + a pasted 0x address + $ticker that resolves EVM.
+function formatRhScanCard(info) {
+  const esc = escapeTelegramHtml;
+  const a = info.address;
+  const sym = (info.symbol || shortMint(a)).slice(0, 18);
+  const name = (info.name || sym).slice(0, 40);
+  const age = info.createdAt > 0 ? scanFmtAge(info.createdAt) : "age n/a";
+  const price = info.priceUsd > 0 ? scanFmtPriceSub(info.priceUsd) : "n/a";
+  const ch1 = Number.isFinite(info.ch1) ? `${info.ch1 >= 0 ? "+" : ""}${info.ch1.toFixed(1)}%` : "n/a";
+  const vd = String(info.safety?.verdict || "unknown").toLowerCase();
+  const safeLine = (vd === "block" || info.safety?.honeypot === true) ? "🔴 <b>Honeypot / sell-trap risk</b>" : vd === "warn" ? "⚠️ <b>Some risk — DYOR</b>" : vd === "verified" ? "🟢 <b>Verified — cannot rug</b>" : vd === "ok" ? "🟢 <b>No sell traps found</b>" : "⚪ <b>Scan inconclusive</b>";
+  const reasons = Array.isArray(info.safety?.reasons) ? info.safety.reasons.slice(0, 2).map((r) => "  • " + esc(String(r))).join("\n") : "";
+  const soc = [];
+  if (info.twitterUrl) soc.push(`<a href="${esc(info.twitterUrl)}">𝕏</a>`);
+  if (info.websiteUrl) soc.push(`<a href="${esc(info.websiteUrl)}">🌐 Web</a>`);
+  if (info.telegramUrl) soc.push(`<a href="${esc(info.telegramUrl)}">✈️ TG</a>`);
+  soc.push(`<a href="${esc(info.explorer)}">🔎 Blockscout</a>`);
+  return [
+    `🪶 <b>${esc(name)} ($${esc(sym)})</b> · <i>Robinhood Chain</i>`,
+    `├ <code>${esc(a)}</code>`,
+    `└ 🌱 ${age}`,
+    "",
+    "📊 <b>Stats</b>",
+    `├ USD  <b>${price}</b> (${ch1})`,
+    `├ MC   <b>${info.mc > 0 ? scanFmtMoney(info.mc) : "n/a"}</b>`,
+    `├ Vol  <b>${info.vol24 > 0 ? scanFmtMoney(info.vol24) : "n/a"}</b> <i>24h</i>`,
+    `└ Liq  <b>${info.liq > 0 ? scanFmtMoney(info.liq) : "n/a"}</b>`,
+    "",
+    `🛡 <b>Safety</b>`,
+    `└ ${safeLine}${reasons ? "\n" + reasons : ""}`,
+    soc.length ? "\n🔗 " + soc.join(" • ") : "",
+    `<a href="https://www.slimewire.org/#rhtrade/${esc(a)}">⚡ Trade $${esc(sym)} on SlimeWire</a> — Robinhood Chain`,
+  ].filter((l) => l !== "").join("\n");
+}
+async function sendRhScanCard(chatId, address) {
+  const info = await gatherRhScan(address).catch(() => null);
+  if (!info || (!info.symbol && !(info.mc > 0) && !(info.priceUsd > 0))) {
+    await say(chatId, "🪶 Couldn't pull that Robinhood coin yet — paste a valid Robinhood Chain contract (0x…).");
+    return;
+  }
+  const text = formatRhScanCard(info);
+  const kb = { inline_keyboard: [
+    [{ text: `⚡ Trade $${(info.symbol || "coin").slice(0, 12)}`, url: `https://www.slimewire.org/#rhtrade/${address}` }, { text: "🔎 Blockscout", url: info.explorer }],
+  ] };
+  let png = null;
+  try { const b = info.imageUrl ? await xFetchLogo(info.imageUrl).catch(() => null) : null;
+    const { verdict, tone } = rhVerdictTone(info.safety);
+    png = await renderXScanCard({ symbol: info.symbol, name: info.name, mcLabel: info.mc > 0 ? scanFmtMoney(info.mc) : "—", liqLabel: info.liq > 0 ? scanFmtMoney(info.liq) : "—", ageLabel: info.createdAt > 0 ? xAgeLabel(Date.now() - info.createdAt) : "new", railLabel: "Robinhood", volumeLabel: info.vol24 > 0 ? scanFmtMoney(info.vol24) : "", holderLabel: "", verdict, verdictTone: tone, changeLabel: Number.isFinite(info.ch1) ? `${info.ch1 >= 0 ? "+" : ""}${info.ch1.toFixed(1)}%` : "", changeTone: Number.isFinite(info.ch1) ? (info.ch1 >= 0 ? "up" : "down") : "", logoBuffer: b, bgDir: X_CARD_BG_DIR, seed: info.symbol || address });
+  } catch { /* text-only */ }
+  if (png) await sendPhoto(chatId, "rh-scan.png", png, text.slice(0, 1024), kb, "HTML").catch(async () => { await sayHtml(chatId, text, kb).catch(() => {}); });
+  else await sayHtml(chatId, text, kb).catch(() => {});
+}
 // Dispatch a mention to the right card based on what they asked. `variant` (tweet id) seeds the wording + art.
 async function buildXReply(mint, intent = "scan", variant) {
+  // Robinhood Chain coin (0x…) → RH scan card (falls back to text if its render fails).
+  if (/^0x[0-9a-fA-F]{40}$/.test(String(mint || ""))) return await buildXRhReply(mint, variant);
   if (intent === "map") return (await buildXMapReply(mint, variant).catch(() => null)) || await buildXScanReply(mint, variant);
   if (intent === "chart") return await buildXChartReply(mint, variant);
   if (intent === "rug") return await buildXRugReply(mint, variant);
@@ -32538,9 +32726,12 @@ async function xReplyPollTick() {
     // FLIGHT RECORDER: log the fate of every NEW mention so a single test tag tells us exactly where it dies
     // (was invisible before — no-CA and no-scan both hid behind .catch(()=>null)). Cheap; keep it on.
     console.log(`[xreply] NEW @${m.username} id=${m.id} auto=${auto} replyTo=${m.inReplyToId || "-"} conv=${m.conversationId || "-"} urls=${(m.urls || []).length} text=${JSON.stringify(String(m.text || "").slice(0, 140))}`);
-    const mint = await resolveXTargetMint(m).catch((e) => { console.log(`[xreply]   resolve THREW: ${String(e?.message || e).slice(0, 140)}`); return null; });
+    const allTargets = await resolveAllXTargets(m).catch((e) => { console.log(`[xreply]   resolve THREW: ${String(e?.message || e).slice(0, 140)}`); return []; });
+    const mint = allTargets[0] || null;
     let intent = xIntentFromText(m.text);                          // map? did-it-rug? chart? else scan
     let target = mint;
+    const extraTargets = allTargets.slice(1);                      // post multiple CAs/$tickers → answer each with its own card
+    if (extraTargets.length) console.log(`[xreply]   multi-target: ${allTargets.length} coins in one tag → ${allTargets.join(", ")}`);
     if (!target) {
       // No coin CA — maybe they tagged a bare WALLET (for a wallet map). Route it to the map builder.
       const w = extractBareWalletAddress(m.text, m.urls);
@@ -32602,6 +32793,34 @@ async function xReplyPollTick() {
         // 🎯 Record for RECEIPTS — anchor to our reply so a later 2x/10x quote-tweets this exact post.
         try { if (solanaPublicKeyLike(target)) await xTrackCoin({ mint: target, symbol: finalReply.symbol, mc: finalReply.mc, tweetId: res.id, kind: "reply" }); } catch { /* best-effort */ }
         await xReplyOwnerNotify(`✅ Auto-replied on X to @${m.username} · ${intent} · $${finalReply.symbol} (${res.media || "text"})`);
+        // 🔢 MULTI-COIN TAG: they posted more than one CA/$ticker → answer each extra coin with its own
+        // card, chained under the same mention. Best-effort: a coin that won't build is skipped, never
+        // blocks the others or the loop. Respects the hourly cap and paces like the main reply.
+        for (let ei = 0; ei < extraTargets.length; ei++) {
+          if (maxPerHour > 0 && state.posts.length >= maxPerHour) { console.log(`[xreply]   extra coins skipped — hourly cap`); break; }
+          const et = extraTargets[ei];
+          let eIntent = intent === "map" && /^0x[0-9a-fA-F]{40}$/.test(et) ? "scan" : intent;
+          const eReply = await Promise.race([
+            buildXReply(et, eIntent, `${m.id}:${ei + 1}`),
+            new Promise((r) => setTimeout(() => r("__timeout__"), 40_000)),
+          ]).catch(() => null);
+          if (!eReply || eReply === "__timeout__") { console.log(`[xreply]   extra ${et} didn't build → skip`); continue; }
+          if (solanaPublicKeyLike(et)) { try { await xEnrichReplyText(et, eReply); } catch { /* keep base */ } }
+          const eGap = minGapMs + Math.floor(Math.random() * 1500);
+          const eWait = lastPostAt ? (lastPostAt + eGap) - Date.now() : 0;
+          if (eWait > 0) await sleep(Math.min(eWait, 20_000));
+          const eRes = await xReply({ inReplyToId: m.id, text: eReply.text, mediaBuffer: eReply.mediaBuffer, mediaBuffers: eReply.mediaBuffers });
+          if (eRes.ok) {
+            lastPostAt = Date.now(); state.posts.push(lastPostAt); posted++;
+            results.push({ u: m.username, s: "replied", d: `＋$${eReply.symbol}` });
+            console.log(`[xreply] ✅ @${m.username} extra ${eIntent} $${eReply.symbol} id=${eRes.id || ""}`);
+            try { if (solanaPublicKeyLike(et)) await xTrackCoin({ mint: et, symbol: eReply.symbol, mc: eReply.mc, tweetId: eRes.id, kind: "reply" }); } catch { /* best-effort */ }
+            await writeXReplyState(state);
+          } else {
+            console.log(`[xreply]   extra $${eReply.symbol} post failed: ${eRes.reason || ""}`);
+            if (/not configured|401|unauthor/i.test(eRes.reason || "")) break;   // auth dead → stop trying extras
+          }
+        }
       } else {
         // Transient failure → do NOT mark seen; break so it retries next cycle (the floor won't skip it,
         // since the floor never advances past un-answered tweets). Give up only after 3 tries or auth death.
@@ -36304,9 +36523,12 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
 // /look <CA>: instant SlimeShield read with trade links - the group-native version of
 // pasting a CA into Slime Scope.
 async function handleTelegramLookCommand(chatId, message, argument) {
+  // Robinhood Chain coin (0x…40-hex) → RH scan card (checked first: a 0x address isn't a Solana mint).
+  const rhAddr = (String(argument || "").match(/0x[0-9a-fA-F]{40}/) || [])[0] || "";
+  if (rhAddr) { if (tgCommandOnCooldown(chatId, "look", TG_LOOK_COOLDOWN_MS)) return; await sendRhScanCard(chatId, rhAddr); return; }
   const mint = (String(argument || "").match(/\b[A-HJ-NP-Za-km-z1-9]{32,48}\b/) || [])[0] || "";
   if (!mint) {
-    await say(chatId, "Usage: /look <token CA> - I will run a SlimeShield read with chart and quick-buy links.");
+    await say(chatId, "Usage: /look <token CA> — Solana mint OR Robinhood Chain 0x… address. I'll run a SlimeShield read with chart + quick-buy.");
     return;
   }
   if (tgCommandOnCooldown(chatId, "look", TG_LOOK_COOLDOWN_MS)) return;
