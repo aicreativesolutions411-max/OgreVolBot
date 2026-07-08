@@ -19,6 +19,7 @@ const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url)
 const vanityMintSource = fs.readFileSync(new URL("../src/lib/vanityMint.js", import.meta.url), "utf8");
 const ggSource = fs.readFileSync(new URL("../web/public/gg.html", import.meta.url), "utf8");
 const indexSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
+const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
 
 function functionBody(source, name) {
   const syncMatch = new RegExp(`function\\s+${name}\\s*\\(`).exec(source);
@@ -192,6 +193,37 @@ test("Robinhood Chain rail: derived EVM wallet + self-deployed ERC-20 (gas-estim
     assert.match(src, /\/api\/web\/launch\/rh-coin/);
     assert.match(src, /function refreshRhSetup/);
   }
+});
+
+test("web managed wallets can be renamed without touching wallet secrets", () => {
+  assert.match(serverSource, /pathname === "\/api\/web\/wallets\/rename"/);
+  const rename = functionBody(serverSource, "renameWebWallet");
+  assert.match(rename, /mutateWalletStore\(/);
+  assert.match(rename, /wallet\.label = label/);
+  assert.doesNotMatch(rename, /decryptWallet\(/);
+  assert.doesNotMatch(rename, /encryptedSecretKey\s*=/);
+  assert.match(appSource, /data-wallet-rename-input/);
+  assert.match(appSource, /data-rename-wallet/);
+  assert.match(functionBody(appSource, "renameManagedWallet"), /\/api\/web\/wallets\/rename/);
+});
+
+test("Wallet Launch Snipe is launch-only and supports Solana creators plus Robinhood deployers", () => {
+  assert.match(serverSource, /pathname === "\/api\/web\/wallet-launch-snipe"/);
+  assert.match(serverSource, /status: "wallet_launch_watch"/);
+  assert.match(serverSource, /maybeWalletLaunchSnipe\(entry\)/);
+  assert.match(serverSource, /async function instantRhWalletLaunchSnipe/);
+  assert.match(functionBody(serverSource, "normalizeWalletLaunchChain"), /robinhood/);
+  assert.match(functionBody(serverSource, "webCreateWalletLaunchSnipe"), /amountEth/);
+  assert.match(functionBody(serverSource, "executeSolWalletLaunchSnipe"), /webCreateManagedBuyPlan/);
+  assert.match(functionBody(serverSource, "executeSolWalletLaunchSnipe"), /trustedLaunchMint: true/);
+  assert.match(functionBody(serverSource, "executeRhWalletLaunchSnipe"), /webRhBundleCore/);
+  assert.match(functionBody(serverSource, "executeRhWalletLaunchSnipe"), /webRhArmGuard/);
+  assert.doesNotMatch(functionBody(serverSource, "executeRhWalletLaunchSnipe"), /webCreateManagedBuyPlan/);
+  assert.match(functionBody(serverSource, "processWalletLaunchWatchPlan"), /executeRhWalletLaunchSnipe[\s\S]*executeSolWalletLaunchSnipe[\s\S]*plan\.seenLaunches = uniqueStrings/);
+  assert.match(appSource, /Wallet Launch Snipe/);
+  assert.match(appSource, /data-wallet-launch-chain/);
+  assert.match(appSource, /data-wallet-launch-start/);
+  assert.match(functionBody(appSource, "readWalletLaunchSnipeForm"), /Robinhood launch wallets must be 0x deployer addresses/);
 });
 
 test("site function scan: every GG.* used has an export; every client API path has a server route", () => {

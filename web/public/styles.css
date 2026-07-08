@@ -1761,6 +1761,13 @@ body.launch-focus .panel-host { max-width: 1000px; margin: 0 auto; }
   gap: 8px;
 }
 
+.wallet-rename-input {
+  min-width: 140px;
+  max-width: 220px;
+  height: 38px;
+  padding: 0 10px;
+}
+
 .share-watch-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(120px, auto));

@@ -533,6 +533,9 @@ const state = {
   editingTradePresetId: "",
   editingBundlePresetId: "",
   walletRemoveStatus: "",
+  walletRenameStatus: "",
+  walletLaunchSnipeStatus: "",
+  walletLaunchSnipeResult: null,
   walletSweepStatus: "",
   loginModalOpen: window.location.pathname.startsWith("/login") || window.location.pathname.startsWith("/account/login") || new URLSearchParams(window.location.search || "").get("login") === "1",
   loginModalTab: "login",
@@ -6242,7 +6245,8 @@ function tekHubHtml() {
     ["volume", "SlimeBot", "Auto-volume engine across recycled wallets."],
     ["bundle", "Bundle", "Buy or sell one token across many wallets."],
     ["launchCoin", "Launch", "Create and launch a Pump.fun token."],
-    ["launch", "Snipe", "Watch known tickers and new launches for entries."]
+    ["launch", "Snipe", "Watch known tickers and new launches for entries."],
+    ["launch", "Wallet Launch Snipe", "Copy only launches from a watched creator/deployer wallet."]
   ];
   return `
     <section class="tek-hub">
@@ -7403,6 +7407,9 @@ function kolProfileShareText(kol) {
 }
 
 function launchShareText(watch) {
+  if (watch.type === "wallet_launch_snipe") {
+    return `Watching ${watch.chain === "robinhood" ? "RH deployer" : "Solana creator"} ${watch.shortLaunchWallet || watch.ticker} with Wallet Launch Snipe: ${watch.walletCount} wallet(s), TP ${watch.takeProfitSummary || `+${watch.takeProfitPct}%`}, SL ${watch.stopLossSummary || `-${watch.stopLossPct}%`}.`;
+  }
   return `Watching $${watch.ticker} with Launch Snipe: ${watch.walletCount} wallet(s), ${watch.amountSol} SOL each, TP ${watch.takeProfitSummary || `+${watch.takeProfitPct}%`}, SL ${watch.stopLossSummary || `-${watch.stopLossPct}%`}.`;
 }
 
@@ -9853,6 +9860,101 @@ function volumeHtml() {
   return volumeBotPanelHtml();
 }
 
+function walletLaunchSnipeSetupHtml() {
+  if (!state.wallets.length) {
+    return `
+      <article class="trade-card">
+        <h3>Wallet Launch Snipe</h3>
+        <p>Create or restore managed wallets before arming launch-only copy buys.</p>
+        <div class="card-actions">
+          <button type="button" class="primary" data-tab="wallets">Open Wallets</button>
+        </div>
+      </article>
+    `;
+  }
+  return `
+    <article class="trade-card launch-watch-setup-card">
+      <h3>Wallet Launch Snipe</h3>
+      <p>Watch a creator/deployer wallet and buy only coins it launches. Ordinary buys and sells from that wallet are ignored.</p>
+      <label>
+        Chain
+        <select data-wallet-launch-chain>
+          <option value="solana">Solana / Pump</option>
+          <option value="robinhood">Robinhood Chain</option>
+        </select>
+      </label>
+      <label>
+        Launch Wallet
+        <input data-wallet-launch-address type="text" placeholder="Solana creator wallet or RH 0x deployer">
+      </label>
+      <div class="wallet-checks">
+        ${walletChecksHtml("wallet-launch")}
+      </div>
+      ${walletGroupHtml("wallet-launch")}
+      <div class="volume-grid">
+        <label>
+          Buy Per Wallet
+          <input data-wallet-launch-amount type="number" min="0" step="0.00001" value="0.1">
+        </label>
+        <label>
+          Take Profit
+          <select data-wallet-launch-tp data-custom-select="wallet-launch-tp">
+            <option value="0">Off</option>
+            <option value="25">+25%</option>
+            <option value="40" selected>+40%</option>
+            <option value="60">+60%</option>
+            <option value="100">+100%</option>
+            <option value="custom">Custom</option>
+          </select>
+          <input data-wallet-launch-tp-custom data-custom-for="wallet-launch-tp" type="text" placeholder="Custom: 500 or 5x" hidden>
+        </label>
+        <label>
+          Stop Loss
+          <select data-wallet-launch-sl data-custom-select="wallet-launch-sl">
+            <option value="0">Off</option>
+            <option value="8" selected>-8%</option>
+            <option value="10">-10%</option>
+            <option value="15">-15%</option>
+            <option value="custom">Custom</option>
+          </select>
+          <input data-wallet-launch-sl-custom data-custom-for="wallet-launch-sl" type="text" placeholder="Custom SL %" hidden>
+        </label>
+        <label>
+          Fallback Sell
+          ${fallbackTimerSelectHtml("wallet-launch-delay", "data-wallet-launch-delay", "5")}
+        </label>
+        <label>
+          Repeat
+          <select data-wallet-launch-loop data-custom-select="wallet-launch-loop">
+            <option value="1" selected>1x</option>
+            <option value="5">5x</option>
+            <option value="10">10x</option>
+            <option value="custom">Custom</option>
+          </select>
+          <input data-wallet-launch-loop-custom data-custom-for="wallet-launch-loop" type="number" min="1" max="10" step="1" placeholder="Custom 1-10" hidden>
+        </label>
+        <label>
+          Repeat Wait
+          ${repeatWaitSelectHtml("wallet-launch-loop-delay", "data-wallet-launch-loop-delay", "0")}
+        </label>
+        <label>
+          Slippage
+          <select data-wallet-launch-slippage data-custom-select="wallet-launch-slippage">
+            <option value="300" selected>3%</option>
+            <option value="400">4%</option>
+            <option value="500">5%</option>
+            <option value="custom">Custom</option>
+          </select>
+          <input data-wallet-launch-slippage-custom data-custom-for="wallet-launch-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
+        </label>
+      </div>
+      ${walletExitTargetsHtml("wallet-launch")}
+      <button class="primary" data-wallet-launch-start>Arm Wallet Launch Snipe</button>
+      <p class="trade-status" data-wallet-launch-status>${escapeHtml(state.walletLaunchSnipeStatus || state.walletLaunchSnipeResult?.message || "Ready.")}</p>
+    </article>
+  `;
+}
+
 function launchHtml() {
   const launchSourceRows = uniqueSignalRows([
     ...(state.livePairsByBucket.live?.rows || []),
@@ -9989,6 +10091,7 @@ function launchHtml() {
           <h3>Active Watches</h3>
           ${launchWatchesHtml()}
         </article>
+        ${walletLaunchSnipeSetupHtml()}
       </aside>
     </section>
   `;
@@ -11122,13 +11225,18 @@ function launchWatchesHtml() {
   if (!state.launchWatches.length) return "<p>No active launch watches yet.</p>";
   return `
     <div class="mini-results">
-      ${state.launchWatches.map((watch) => `
+      ${state.launchWatches.map((watch) => {
+        const isWalletLaunch = watch.type === "wallet_launch_snipe";
+        const label = isWalletLaunch
+          ? `${watch.chain === "robinhood" ? "RH" : "SOL"} wallet ${watch.shortLaunchWallet || watch.ticker}`
+          : `$${watch.ticker}`;
+        return `
         <span>
-          $${escapeHtml(watch.ticker)} - ${escapeHtml(watch.status)} - ${escapeHtml(watch.walletCount)} wallet(s)
+          ${escapeHtml(label)} - ${escapeHtml(watch.status)} - ${escapeHtml(watch.walletCount)} wallet(s)
           ${xShareButton(launchShareText(watch), "Share Watch")}
-          ${watch.status === "launch_watch" ? `<button data-launch-cancel="${escapeHtml(watch.id)}">Cancel</button>` : ""}
+          ${watch.status === "launch_watch" || watch.status === "wallet_launch_watch" ? `<button data-launch-cancel="${escapeHtml(watch.id)}">Cancel</button>` : ""}
         </span>
-      `).join("")}
+      `;}).join("")}
     </div>
   `;
 }
@@ -12303,6 +12411,34 @@ async function removeManagedWallet(walletIndex, walletLabel = "this wallet", wal
     render();
   } catch (error) {
     state.walletRemoveStatus = error.message;
+    writeText(status, error.message);
+    setError(error.message);
+  }
+}
+
+async function renameManagedWallet(walletIndex) {
+  const input = Array.from(document.querySelectorAll("[data-wallet-rename-input]"))
+    .find((node) => String(node.dataset.walletRenameInput || "") === String(walletIndex || ""));
+  const label = input?.value?.trim() || "";
+  const status = $("[data-wallet-rename-status]");
+  if (!walletIndex || !label) {
+    state.walletRenameStatus = "Enter a wallet name first.";
+    writeText(status, state.walletRenameStatus);
+    return;
+  }
+  state.walletRenameStatus = `Renaming wallet ${walletIndex}...`;
+  writeText(status, state.walletRenameStatus);
+  try {
+    const data = await api("/api/web/wallets/rename", {
+      method: "POST",
+      body: JSON.stringify({ walletIndex, label })
+    });
+    if (Array.isArray(data.wallets)) state.wallets = data.wallets;
+    state.walletRenameStatus = data.message || "Wallet renamed.";
+    state.activeTab = "wallets";
+    render();
+  } catch (error) {
+    state.walletRenameStatus = error.message;
     writeText(status, error.message);
     setError(error.message);
   }
@@ -15339,6 +15475,12 @@ function setLaunchStatus(message) {
   writeText(status, message);
 }
 
+function setWalletLaunchSnipeStatus(message) {
+  state.walletLaunchSnipeStatus = String(message || "");
+  const status = $("[data-wallet-launch-status]");
+  writeText(status, state.walletLaunchSnipeStatus);
+}
+
 function readLaunchForm() {
   const ticker = $("[data-launch-ticker]")?.value?.trim() || terminalLaunchKeywordList(terminalLaunchFilterState().keywords)[0] || "";
   const walletIndexes = checkedWalletIndexes("launch");
@@ -15357,6 +15499,44 @@ function readLaunchForm() {
   return { ticker, walletIndexes, walletGroup, amountSol, takeProfitPct, stopLossPct, sellDelay, loopCount, loopDelay, slippageBps, ...readWalletExitTargets("launch") };
 }
 
+function isRobinhoodAddressLike(value = "") {
+  return /^0x[0-9a-fA-F]{40}$/.test(String(value || "").trim());
+}
+
+function readWalletLaunchSnipeForm() {
+  const chain = $("[data-wallet-launch-chain]")?.value || "solana";
+  const launchWallet = $("[data-wallet-launch-address]")?.value?.trim() || "";
+  const walletIndexes = checkedWalletIndexes("wallet-launch");
+  const walletGroup = $("[data-wallet-launch-group]")?.value?.trim() || "";
+  const amount = $("[data-wallet-launch-amount]")?.value || "";
+  const takeProfitPct = fieldValue("[data-wallet-launch-tp]", "[data-wallet-launch-tp-custom]", "40");
+  const stopLossPct = fieldValue("[data-wallet-launch-sl]", "[data-wallet-launch-sl-custom]", "8");
+  const sellDelay = fieldValue("[data-wallet-launch-delay]", "[data-wallet-launch-delay-custom]", "5");
+  const loopCount = fieldValue("[data-wallet-launch-loop]", "[data-wallet-launch-loop-custom]", "1");
+  const loopDelay = fieldValue("[data-wallet-launch-loop-delay]", "[data-wallet-launch-loop-delay-custom]", "0");
+  const slippageBps = fieldValue("[data-wallet-launch-slippage]", "[data-wallet-launch-slippage-custom]", "300");
+  if (!launchWallet) throw new Error("Paste the creator/deployer wallet to watch.");
+  if (chain === "robinhood" && !isRobinhoodAddressLike(launchWallet)) throw new Error("Robinhood launch wallets must be 0x deployer addresses.");
+  if (chain !== "robinhood" && !isSolanaPublicKeyLike(launchWallet)) throw new Error("Solana launch wallets must be creator public keys.");
+  if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one wallet or enter a group label.");
+  return {
+    chain,
+    launchWallet,
+    walletIndexes,
+    walletGroup,
+    amount,
+    amountSol: amount,
+    amountEth: amount,
+    takeProfitPct,
+    stopLossPct,
+    sellDelay,
+    loopCount,
+    loopDelay,
+    slippageBps,
+    ...readWalletExitTargets("wallet-launch")
+  };
+}
+
 async function startLaunchWatch() {
   try {
     const payload = readLaunchForm();
@@ -15371,6 +15551,25 @@ async function startLaunchWatch() {
     render();
   } catch (error) {
     setLaunchStatus(error.message);
+  }
+}
+
+async function startWalletLaunchSnipe() {
+  try {
+    const payload = readWalletLaunchSnipeForm();
+    setWalletLaunchSnipeStatus("Arming wallet launch snipe...");
+    const data = await api("/api/web/wallet-launch-snipe", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    state.walletLaunchSnipeResult = data.watch;
+    state.launchResult = data.watch;
+    setWalletLaunchSnipeStatus(data.watch?.message || "Wallet Launch Snipe armed.");
+    await loadAll();
+    state.activeTab = "launch";
+    render();
+  } catch (error) {
+    setWalletLaunchSnipeStatus(error.message);
   }
 }
 
@@ -15505,6 +15704,7 @@ function walletsHtml() {
       <button data-tab="kol">Open KOL Tracker</button>
       <button data-tab="txAudit">Tx Audit</button>
       <small data-wallet-remove-status>${escapeHtml(state.walletRemoveStatus || "")}</small>
+      <small data-wallet-rename-status>${escapeHtml(state.walletRenameStatus || "")}</small>
     </section>
     <div class="table-list">
       ${displayWallets().map((wallet) => `
@@ -15519,6 +15719,8 @@ function walletsHtml() {
             </div>
           </div>
           <div class="card-actions compact">
+            <input class="wallet-rename-input" data-wallet-rename-input="${wallet.index}" value="${escapeHtml(wallet.label || "")}" aria-label="Rename wallet ${escapeHtml(String(wallet.index))}">
+            <button data-rename-wallet="${wallet.index}">Rename</button>
             <button data-copy="${wallet.publicKey}">Copy</button>
             <button class="danger-lite" data-remove-wallet="${wallet.index}" data-remove-wallet-key="${escapeHtml(wallet.publicKey)}" data-wallet-label="${escapeHtml(`${wallet.index}. ${wallet.label}`)}">Remove</button>
           </div>
@@ -24114,6 +24316,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-export-backup]")) await exportWalletBackup();
   if (target.matches("[data-import-wallet]")) await importWallet();
   if (target.matches("[data-remove-wallet]")) await removeManagedWallet(target.dataset.removeWallet || "", target.dataset.walletLabel || "", target.dataset.removeWalletKey || "");
+  if (target.matches("[data-rename-wallet]")) await renameManagedWallet(target.dataset.renameWallet || "");
   if (target.matches("[data-wallet-sweep-action]")) await runWalletSweepAction(target.dataset.walletSweepAction || "");
   if (target.matches("[data-download]")) {
     const file = state.downloads?.[target.dataset.download];
@@ -24281,6 +24484,9 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-launch-start]")) {
     await startLaunchWatch();
+  }
+  if (target.matches("[data-wallet-launch-start]")) {
+    await startWalletLaunchSnipe();
   }
   if (target.matches("[data-launch-cancel]")) {
     await cancelLaunchWatch(target.dataset.launchCancel);

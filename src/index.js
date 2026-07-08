@@ -249,6 +249,7 @@ const pumpPortalStream = createPumpPortalStream({
     try { recordInsiderLaunch(entry); } catch {}   // INSIDER-LAUNCH machine: known/linked wallet just deployed
     try { recordRecentLauncher(entry); } catch {}  // ROTATION-CATCHER: remember every launcher to funder-resolve
     try { maybeInstantLaunchSnipe(entry); } catch {} // USER SNIPER: ticker match → buy the instant it lands
+    try { maybeWalletLaunchSnipe(entry); } catch {} // WALLET LAUNCH SNIPE: creator wallet match → buy launch-only
     try { maybeCommunitySnipe(entry); } catch {} // COMMUNITY SNIPE: creator wallet match → group buys their own wallets
     try { recordCoinCreator(entry.mint, entry.event?.traderPublicKey); } catch {} // DEV-LIVE gate: signer = creator wallet
   },
@@ -9407,6 +9408,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/web/wallets/rename") {
+      const body = await readJsonRequestBody(request);
+      const result = await renameWebWallet(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        ...result
+      });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/wallets/distribute") {
       const body = await readJsonRequestBody(request);
       const result = await webDistributeToFreshWallets(auth.userId, body);
@@ -9688,6 +9699,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "POST" && pathname === "/api/web/launch/watch") {
       const body = await readJsonRequestBody(request);
       const result = await webCreateLaunchWatch(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        watch: result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/wallet-launch-snipe") {
+      const body = await readJsonRequestBody(request);
+      const result = await webCreateWalletLaunchSnipe(auth.userId, body);
       sendWebJson(request, response, 200, {
         ok: true,
         watch: result
@@ -18187,7 +18208,7 @@ function tradePlanPriorityScore(plan = {}) {
   score += activePriceExitWalletCount(plan) * 200;
   score += pendingPriceExitRetryCount(plan) * 300;
   if (/^web_/i.test(String(plan.source || ""))) score += 75;
-  if (plan.status === "launch_watch" || plan.status === "copy_wallet_watch") score += 25;
+  if (plan.status === "launch_watch" || plan.status === "copy_wallet_watch" || plan.status === "wallet_launch_watch") score += 25;
   return score;
 }
 
@@ -19950,6 +19971,15 @@ async function processTradePlans(options = {}) {
         continue;
       }
 
+      if (plan.status === "wallet_launch_watch") {
+        const result = await processWalletLaunchWatchPlan(plan, walletStore);
+        if (result.changed) changed = true;
+        if (result.message && plan.chatId) {
+          await say(plan.chatId, withBrandFooter(result.message));
+        }
+        continue;
+      }
+
       if (plan.status === "volume_bot") {
         const result = await processVolumeBotPlan(plan, walletStore, async () => {
           await writeTradePlansPreservingNewPlans(planStore, initialPlanIds);
@@ -20796,6 +20826,272 @@ async function instantLaunchWatchSnipe(entry) {
 async function notifyLaunchSnipeResult(plan, message) {
   // Best-effort: the bot user gets a TG ping if they have a chat linked; the web user polls /launch/watches.
   try { if (plan.chatId) await sendOrEditMessage(plan.chatId, null, message); } catch {}
+}
+
+// ===== WALLET LAUNCH SNIPE ================================================================
+// Launch-only copy trading: watch a creator/deployer wallet and buy ONLY when that wallet launches
+// a new coin. It never mirrors ordinary buys/sells from that wallet.
+let walletLaunchWatchSolanaCreators = new Set();
+let walletLaunchWatchCreatorsAt = 0;
+const walletLaunchSnipeInFlight = new Set();
+
+function normalizeWalletLaunchChain(value = "") {
+  const chain = String(value || "solana").trim().toLowerCase();
+  return ["rh", "robinhood", "robinhood-chain", "evm"].includes(chain) ? "robinhood" : "solana";
+}
+
+function normalizeWalletLaunchAddress(value = "", chain = "solana") {
+  const raw = String(value || "").trim();
+  if (chain === "robinhood") {
+    if (!/^0x[0-9a-fA-F]{40}$/.test(raw)) {
+      const error = new Error("Enter a Robinhood Chain deployer address (0x...).");
+      error.statusCode = 400;
+      throw error;
+    }
+    return raw.toLowerCase();
+  }
+  return parsePublicKey(raw).toBase58();
+}
+
+function walletLaunchShortAddress(address = "", chain = "solana") {
+  return chain === "robinhood" ? shortAddress(address) : shortMint(address);
+}
+
+function walletLaunchTokenKey(match = {}, chain = "solana") {
+  const token = String(chain === "robinhood"
+    ? (match.tokenAddress || match.address || match.token || "")
+    : (match.tokenMint || match.mint || match.ca || "")).trim();
+  if (!token) return "";
+  return chain === "robinhood" ? token.toLowerCase() : token;
+}
+
+async function refreshWalletLaunchWatchCreators() {
+  try {
+    const store = await readTradePlans();
+    const next = new Set();
+    for (const plan of store.plans || []) {
+      if (plan.status === "wallet_launch_watch" && normalizeWalletLaunchChain(plan.chain) === "solana" && plan.launchWallet) {
+        next.add(String(plan.launchWallet));
+      }
+    }
+    walletLaunchWatchSolanaCreators = next;
+    walletLaunchWatchCreatorsAt = Date.now();
+  } catch { /* keep current watch set on read failure */ }
+}
+
+function maybeWalletLaunchSnipe(entry) {
+  if (!walletLaunchWatchSolanaCreators.size) return;
+  const creator = String(entry?.event?.traderPublicKey || entry?.creatorWallet || entry?.creator || entry?.deployer || "").trim();
+  const mint = String(entry?.tokenMint || entry?.mint || entry?.ca || "").trim();
+  if (!creator || !mint || !walletLaunchWatchSolanaCreators.has(creator)) return;
+  void instantWalletLaunchSnipe(entry).catch((error) => console.warn(`[wallet-launch-snipe] instant fire failed: ${error && error.message}`));
+}
+
+async function instantWalletLaunchSnipe(entry) {
+  const creator = String(entry?.event?.traderPublicKey || entry?.creatorWallet || entry?.creator || entry?.deployer || "").trim();
+  const mint = String(entry?.tokenMint || entry?.mint || entry?.ca || "").trim();
+  if (!creator || !mint) return;
+  const store = await readTradePlans();
+  const walletStore = await readWalletStore();
+  let dirty = false;
+  for (const plan of store.plans || []) {
+    if (plan.status !== "wallet_launch_watch" || normalizeWalletLaunchChain(plan.chain) !== "solana") continue;
+    if (String(plan.launchWallet || "") !== creator) continue;
+    const result = await processWalletLaunchWatchPlan(plan, walletStore, {
+      chain: "solana",
+      tokenMint: mint,
+      symbol: entry.symbol || entry.ticker || "",
+      name: entry.name || "",
+      launcher: creator,
+      pairCreatedAt: Date.now()
+    });
+    if (result.changed) dirty = true;
+    if (result.message) void notifyLaunchSnipeResult(plan, result.message).catch(() => {});
+  }
+  if (dirty) await writeTradePlans(store);
+}
+
+async function instantRhWalletLaunchSnipe(match = {}) {
+  const deployer = String(match.deployer || match.launchWallet || "").toLowerCase();
+  const tokenAddress = String(match.tokenAddress || match.address || match.token || "").trim();
+  if (!deployer || !/^0x[0-9a-fA-F]{40}$/.test(tokenAddress)) return;
+  const store = await readTradePlans();
+  const walletStore = await readWalletStore();
+  let dirty = false;
+  for (const plan of store.plans || []) {
+    if (plan.status !== "wallet_launch_watch" || normalizeWalletLaunchChain(plan.chain) !== "robinhood") continue;
+    if (String(plan.launchWallet || "").toLowerCase() !== deployer) continue;
+    const result = await processWalletLaunchWatchPlan(plan, walletStore, {
+      chain: "robinhood",
+      tokenAddress,
+      token: tokenAddress,
+      symbol: match.symbol || "",
+      name: match.name || "",
+      deployer,
+      block: match.block || 0
+    });
+    if (result.changed) dirty = true;
+    if (result.message) void notifyLaunchSnipeResult(plan, result.message).catch(() => {});
+  }
+  if (dirty) await writeTradePlans(store);
+}
+
+async function findWalletLaunchCandidate(plan) {
+  const chain = normalizeWalletLaunchChain(plan.chain);
+  if (chain === "robinhood") {
+    scheduleNoxaFeed();
+    let rows = noxaFeedCache.tokens || [];
+    if (!rows.length || Date.now() - Number(noxaFeedCache.at || 0) > 90_000) {
+      rows = await Promise.race([
+        fetchNoxaFeed({ rpcUrl: CONFIG.rhChainRpcUrl, lookbackBlocks: 60000, max: 80 }).catch(() => []),
+        new Promise((resolve) => setTimeout(() => resolve(rows), 4_000))
+      ]);
+      if (Array.isArray(rows) && rows.length) noxaFeedCache = { at: Date.now(), tokens: rows };
+    }
+    const watched = String(plan.launchWallet || "").toLowerCase();
+    return (rows || [])
+      .filter((row) => String(row.deployer || row.launchWallet || "").toLowerCase() === watched)
+      .sort((a, b) => Number(b.block || 0) - Number(a.block || 0))[0] || null;
+  }
+
+  const recent = recentLaunchers.get(String(plan.launchWallet || ""));
+  if (!recent?.mint) return null;
+  return {
+    chain: "solana",
+    tokenMint: recent.mint,
+    symbol: recent.symbol || "",
+    name: recent.name || "",
+    launcher: plan.launchWallet,
+    pairCreatedAt: recent.at || Date.now()
+  };
+}
+
+async function processWalletLaunchWatchPlan(plan, walletStore, knownMatch = null) {
+  const chain = normalizeWalletLaunchChain(plan.chain);
+  const scanIntervalMs = chain === "robinhood" ? Math.max(10_000, Math.min(45_000, Number(plan.scanIntervalMs || 15_000))) : Math.max(500, Math.min(CONFIG.manualLaunchScanIntervalMs, 10_000));
+  if (!knownMatch) {
+    const lastScanAt = Date.parse(plan.lastScanAt || "");
+    if (Number.isFinite(lastScanAt) && Date.now() - lastScanAt < scanIntervalMs) {
+      return { changed: false, message: null };
+    }
+    plan.lastScanAt = new Date().toISOString();
+  }
+
+  const match = knownMatch || await findWalletLaunchCandidate(plan);
+  const tokenKey = walletLaunchTokenKey(match, chain);
+  if (!tokenKey) return { changed: true, message: null };
+
+  const seen = new Set([...(plan.seenLaunches || []), ...(plan.seenTokenMints || [])].map((value) => String(value || "").trim()).filter(Boolean));
+  if (seen.has(tokenKey)) return { changed: true, message: null };
+
+  const flightKey = `${plan.id}:${chain}:${tokenKey}`;
+  if (walletLaunchSnipeInFlight.has(flightKey)) return { changed: false, message: null };
+  walletLaunchSnipeInFlight.add(flightKey);
+  try {
+    plan.lastMatchedAt = new Date().toISOString();
+    plan.lastMatchedToken = tokenKey;
+
+    const result = chain === "robinhood"
+      ? await executeRhWalletLaunchSnipe(plan, walletStore, match)
+      : await executeSolWalletLaunchSnipe(plan, walletStore, match);
+    plan.seenLaunches = uniqueStrings([...(plan.seenLaunches || []), tokenKey]).slice(-100);
+    plan.lastResult = result.message || "";
+    plan.results = appendLimited([
+      ...(plan.results || []),
+      `${chain === "robinhood" ? "RH" : "SOL"} launch matched ${result.symbol || match?.symbol || walletLaunchShortAddress(tokenKey, chain)}: ${result.message || "submitted"}`
+    ]);
+    return {
+      changed: true,
+      message: [
+        `Wallet Launch Snipe matched ${result.symbol || match?.symbol || walletLaunchShortAddress(tokenKey, chain)}`,
+        `Launcher: ${walletLaunchShortAddress(plan.launchWallet, chain)}`,
+        chain === "robinhood" ? `Token: ${tokenKey}` : `CA: ${tokenKey}`,
+        result.message || "",
+      ].filter(Boolean).join("\n")
+    };
+  } catch (error) {
+    plan.lastError = friendlyError(error);
+    plan.results = appendLimited([...(plan.results || []), `Launch match ${walletLaunchShortAddress(tokenKey, chain)} failed - ${plan.lastError}`]);
+    return { changed: true, message: null };
+  } finally {
+    walletLaunchSnipeInFlight.delete(flightKey);
+  }
+}
+
+async function executeSolWalletLaunchSnipe(plan, walletStore, match) {
+  const tokenMint = parsePublicKey(String(match.tokenMint || match.mint || match.ca || "")).toBase58();
+  const ownerWallets = walletsForOwner(walletStore, plan.userId);
+  const selected = (plan.wallets || [])
+    .map((planWallet) => {
+      const wallet = ownerWallets.find((item) => item.publicKey === planWallet.publicKey);
+      return wallet ? { ...wallet, webIndex: planWallet.walletIndex } : null;
+    })
+    .filter(Boolean);
+  if (!selected.length) throw new Error("No selected managed wallets are still available.");
+  const result = await webCreateManagedBuyPlan(plan.userId, selected, {
+    tokenMint,
+    amountSol: plan.amountSol,
+    sellDelay: plan.sellDelaySeconds || plan.sellDelay || "5",
+    takeProfitPct: plan.takeProfitPct,
+    stopLossPct: plan.stopLossPct,
+    sellPercent: plan.sellPercent || "100",
+    loopCount: plan.loopCount || "1",
+    loopDelay: plan.loopDelaySeconds || "0",
+    slippageBps: plan.slippageBps || PUMPSNIPE_SLIPPAGE_BPS,
+    walletIndexes: (plan.wallets || []).map((wallet) => String(wallet.walletIndex)).filter(Boolean)
+  }, {
+    source: "wallet_launch_snipe",
+    label: "Wallet Launch Snipe",
+    auditType: "web_wallet_launch_snipe_buy",
+    defaultSellDelay: "5",
+    defaultTakeProfitPct: "40",
+    defaultStopLossPct: "8",
+    defaultSlippageBps: PUMPSNIPE_SLIPPAGE_BPS,
+    trustedLaunchMint: true
+  });
+  await audit("wallet_launch_snipe_fire", { userId: plan.userId, chain: "solana", launcher: plan.launchWallet, tokenMint, planId: plan.id, childPlanId: result.id });
+  return { ...result, symbol: match.symbol || result.shortMint || shortMint(tokenMint) };
+}
+
+async function executeRhWalletLaunchSnipe(plan, walletStore, match) {
+  const tokenAddress = String(match.tokenAddress || match.address || match.token || "").trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(tokenAddress)) throw new Error("Matched Robinhood launch did not include a token address.");
+  const selectedIndexes = (plan.wallets || [])
+    .map((wallet) => Number.parseInt(wallet.walletIndex, 10))
+    .filter((index) => Number.isInteger(index) && walletsForOwner(walletStore, plan.userId)[index - 1]);
+  if (!selectedIndexes.length) throw new Error("No selected managed wallets are still available.");
+  const amountEth = Number(plan.amountEth || plan.amountSol || 0);
+  if (!(amountEth > 0)) throw new Error("Enter a Robinhood ETH amount above 0.");
+  const result = await webRhBundleCore(plan.userId, {
+    tokenAddress,
+    walletIndexes: selectedIndexes,
+    minEth: amountEth,
+    maxEth: amountEth
+  });
+  const okRows = (result.rows || []).filter((row) => row.ok);
+  for (const row of okRows) {
+    if (Number(plan.takeProfitPct || 0) > 0 || Number(plan.stopLossPct || 0) > 0) {
+      await webRhArmGuard(plan.userId, {
+        walletIndex: String(row.walletIndex),
+        tokenAddress,
+        symbol: match.symbol || "",
+        takeProfitPct: plan.takeProfitPct || 0,
+        stopLossPct: plan.stopLossPct || 0,
+        sellPercent: plan.sellPercent || 100
+      }).catch((error) => {
+        result.summary = `${result.summary || ""} Guard ${row.walletIndex} failed: ${friendlyError(error)}`.trim();
+      });
+    }
+  }
+  await audit("wallet_launch_snipe_fire", { userId: plan.userId, chain: "robinhood", launcher: plan.launchWallet, tokenAddress, planId: plan.id, okCount: okRows.length });
+  return {
+    id: plan.id,
+    tokenAddress,
+    symbol: match.symbol || "",
+    successCount: okRows.length,
+    walletCount: selectedIndexes.length,
+    message: `${okRows.length}/${selectedIndexes.length} Robinhood wallet(s) bought${Number(plan.takeProfitPct || 0) > 0 || Number(plan.stopLossPct || 0) > 0 ? " and armed guards" : ""}.`
+  };
 }
 
 async function restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReason) {
@@ -43273,6 +43569,8 @@ async function rhLaunchMetaByAddress() {
       hasImage: Boolean(a.rhImageFile),
       creatorFeeBps: Number(a.rhCreatorFeeBps || 0),
       creatorFeeRecipient: a.rhCreatorFeeRecipient || "",
+      deployer: a.rhDeployer || "",
+      devWalletPublicKey: a.devWalletPublicKey || "",
       slimewire: true
     });
   }
@@ -43907,6 +44205,13 @@ async function webLaunchRhCoinCore(userId, body = {}) {
     createdAt: new Date().toISOString()
   });
   await audit("web_rh_launch", { userId, wallet: wallet.publicKey, token: result.tokenAddress, tx: result.txHash, supply: result.supplyTokens, gasEth: result.gasCostEth, creatorFeeBps: creatorFeeEnabled ? CONFIG.rhCreatorFeeBps : 0 });
+  void instantRhWalletLaunchSnipe({
+    tokenAddress: result.tokenAddress,
+    deployer: result.deployer,
+    symbol: String(body.symbol || "").trim(),
+    name: String(body.name || "").trim(),
+    block: result.blockNumber || 0
+  }).catch((error) => console.warn(`[wallet-launch-snipe:rh] instant fire failed: ${friendlyError(error)}`));
   return { ok: true, ...result, chainId: RH_CHAIN_ID, explorerToken: rhExplorerToken(result.tokenAddress), creatorFeeBps: creatorFeeEnabled ? CONFIG.rhCreatorFeeBps : 0 };
 }
 
@@ -49537,6 +49842,34 @@ async function createWebWalletSet(userId, body = {}) {
         text: recoveryKeys.text
       }
     }
+  };
+}
+
+async function renameWebWallet(userId, body = {}) {
+  const walletIndex = parseWebWalletIndex(body.walletIndex || body.index);
+  const label = cleanLabel(String(body.label || body.name || ""));
+  if (!label) {
+    const error = new Error("Enter a wallet name.");
+    error.statusCode = 400;
+    throw error;
+  }
+  let renamed = null;
+  await mutateWalletStore((store) => {
+    const wallet = getWalletAt(store, walletIndex, userId);
+    wallet.label = label;
+    wallet.renamedAt = new Date().toISOString();
+    renamed = webWalletRowFromRecord(wallet, walletIndex);
+  });
+  await audit("web_wallet_rename", {
+    userId,
+    walletIndex,
+    publicKey: renamed?.publicKey || "",
+    label
+  });
+  return {
+    wallet: renamed,
+    wallets: await webWalletRows(userId),
+    message: `Wallet ${walletIndex} renamed to ${label}.`
   };
 }
 
@@ -55178,10 +55511,123 @@ async function webCreateLaunchWatch(userId, body = {}) {
   return webLaunchWatchRow(plan);
 }
 
+async function webCreateWalletLaunchSnipe(userId, body = {}) {
+  const chain = normalizeWalletLaunchChain(body.chain);
+  const launchWallet = normalizeWalletLaunchAddress(firstString(body.launchWallet, body.copyWallet, body.wallet, body.deployer), chain);
+  const store = await readWalletStore();
+  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
+  const amount = parsePositiveNumber(String(firstString(body.amount, body.amountSol, body.amountEth, "")));
+  const sellDelaySeconds = parseOptionalSellDelaySeconds(firstString(body.sellDelay, body.sellDelaySeconds, chain === "robinhood" ? "0" : "5"));
+  const sellPercent = parsePercent(String(body.sellPercent || "100"));
+  const takeProfitPct = parseTakeProfitPercent(String(body.takeProfitPct || (chain === "robinhood" ? "25" : "40")));
+  const stopLossPct = parseOptionalTriggerPercent(String(body.stopLossPct || "8"));
+  const loopCount = parseLoopCount(String(body.loopCount || "1"));
+  const loopDelaySeconds = parseLoopDelaySeconds(String(body.loopDelay || body.loopDelaySeconds || "0"));
+  const slippageBps = parseWebSlippage(body.slippageBps || (chain === "robinhood" ? 400 : PUMPSNIPE_SLIPPAGE_BPS));
+  const walletIndexes = wallets.map((wallet, index) => Number(wallet.webIndex || index + 1));
+  const walletTakeProfitTargets = chain === "solana" ? parseWebWalletTakeProfitTargets(body, walletIndexes) : null;
+  const walletStopLossTargets = chain === "solana" ? parseWebWalletStopLossTargets(body, walletIndexes) : null;
+  ensureTimedPlanHasExit({
+    sellDelaySeconds,
+    takeProfitPct,
+    stopLossPct,
+    walletTakeProfitTargets,
+    walletStopLossTargets
+  });
+  const automationPermission = await requireWebAutomationPermission(userId, "Wallet Launch Snipe automation");
+  const initialSeen = [];
+  if (chain === "solana") {
+    const recent = recentLaunchers.get(launchWallet);
+    if (recent?.mint) initialSeen.push(recent.mint);
+  } else {
+    scheduleNoxaFeed();
+    for (const row of noxaFeedCache.tokens || []) {
+      if (String(row.deployer || "").toLowerCase() === launchWallet && row.token) {
+        initialSeen.push(String(row.token).toLowerCase());
+      }
+    }
+  }
+  const plan = {
+    id: crypto.randomUUID(),
+    status: "wallet_launch_watch",
+    userId,
+    chatId: null,
+    source: "wallet_launch_snipe",
+    chain,
+    launchWallet,
+    walletLaunchSnipe: true,
+    walletSelector: String(body.walletGroup || "").trim()
+      ? `group:${String(body.walletGroup).trim()}`
+      : walletIndexes.join(","),
+    amountSol: chain === "solana" ? amount : null,
+    amountEth: chain === "robinhood" ? amount : null,
+    sellDelayMinutes: sellDelaySeconds / 60,
+    sellDelaySeconds,
+    sellPercent,
+    triggerSellPercent: sellPercent,
+    loopCount,
+    loopDelaySeconds,
+    takeProfitPct,
+    stopLossPct,
+    takeProfitMode: walletTakeProfitTargets ? "wallets" : "single",
+    stopLossMode: walletStopLossTargets ? "wallets" : "single",
+    takeProfitLadder: [],
+    autoBundle: false,
+    slippageBps,
+    automationPermission,
+    createdAt: new Date().toISOString(),
+    lastScanAt: null,
+    scanIntervalMs: chain === "robinhood" ? 15_000 : CONFIG.manualLaunchScanIntervalMs,
+    seenLaunches: uniqueStrings(initialSeen).slice(-100),
+    wallets: wallets.map((wallet, index) => {
+      const walletIndex = walletIndexes[index];
+      return {
+        label: wallet.label,
+        publicKey: wallet.publicKey,
+        walletIndex,
+        takeProfitPct: walletTakeProfitTargets ? walletTakeProfitTargets[String(walletIndex)] || null : null,
+        stopLossPct: walletStopLossTargets ? walletStopLossTargets[String(walletIndex)] || null : null,
+        status: "watching",
+        results: []
+      };
+    }),
+    results: [
+      `Watching ${chain === "robinhood" ? "Robinhood deployer" : "Solana creator"} ${walletLaunchShortAddress(launchWallet, chain)} for launches only.`,
+      initialSeen.length ? `Ignored ${initialSeen.length} already-seen launch(es).` : "No prior launch seen in cache."
+    ]
+  };
+
+  const plans = await readTradePlans();
+  plans.plans.push(plan);
+  await writeTradePlans(plans);
+  await audit("web_create_wallet_launch_snipe", {
+    userId,
+    planId: plan.id,
+    chain,
+    launchWallet,
+    wallets: wallets.map(publicWallet),
+    amount,
+    sellDelaySeconds,
+    takeProfitPct,
+    stopLossPct,
+    loopCount,
+    loopDelaySeconds,
+    slippageBps
+  });
+  void refreshWalletLaunchWatchCreators();
+  setTimeout(() => void processTradePlans().catch((error) => {
+    console.error("Web wallet launch snipe immediate scan failed:", error.message);
+  }), 300);
+  return webLaunchWatchRow(plan);
+}
+
 async function webLaunchWatches(userId) {
   const plans = await readTradePlans();
   return plans.plans
-    .filter((plan) => String(plan.userId) === String(userId) && ["launch_watch", "watching"].includes(plan.status) && plan.manualLaunch)
+    .filter((plan) => String(plan.userId) === String(userId) && (
+      (["launch_watch", "watching"].includes(plan.status) && plan.manualLaunch)
+      || plan.status === "wallet_launch_watch"
+    ))
     .sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0))
     .slice(0, 20)
     .map(webLaunchWatchRow);
@@ -55193,7 +55639,7 @@ async function webCancelLaunchWatch(userId, planId) {
   if (!plan) {
     throw new Error("Launch watch not found.");
   }
-  if (plan.status !== "launch_watch") {
+  if (plan.status !== "launch_watch" && plan.status !== "wallet_launch_watch") {
     throw new Error("This launch watch is no longer scanning.");
   }
 
@@ -55202,19 +55648,31 @@ async function webCancelLaunchWatch(userId, planId) {
   plan.results = appendLimited([...(plan.results || []), "Canceled from web panel."]);
   await writeTradePlans(store);
   void refreshSnipeWatchTickers(); // drop it from the real-time sniper set
-  await audit("web_cancel_manual_launch_snipe", { userId, planId: plan.id, ticker: plan.launchTicker });
+  void refreshWalletLaunchWatchCreators();
+  await audit("web_cancel_manual_launch_snipe", { userId, planId: plan.id, ticker: plan.launchTicker, launchWallet: plan.launchWallet || "", chain: plan.chain || "" });
   return webLaunchWatchRow(plan);
 }
 
 function webLaunchWatchRow(plan) {
+  const chain = normalizeWalletLaunchChain(plan.chain);
+  const walletLaunch = plan.status === "wallet_launch_watch" || plan.walletLaunchSnipe;
+  const watched = plan.launchWallet || "";
+  const amount = walletLaunch && chain === "robinhood" ? plan.amountEth : plan.amountSol;
   return {
     id: plan.id,
     status: plan.status,
-    ticker: plan.launchTicker,
+    type: walletLaunch ? "wallet_launch_snipe" : "manual_launch_snipe",
+    chain,
+    ticker: walletLaunch ? walletLaunchShortAddress(watched, chain) : plan.launchTicker,
+    launchWallet: watched,
+    shortLaunchWallet: watched ? walletLaunchShortAddress(watched, chain) : "",
     tokenMint: plan.tokenMint || null,
+    tokenAddress: plan.lastMatchedToken || plan.tokenAddress || null,
     shortMint: plan.tokenMint ? shortMint(plan.tokenMint) : null,
     walletCount: plan.wallets?.length || 0,
     amountSol: plan.amountSol,
+    amountEth: plan.amountEth,
+    amount,
     takeProfitPct: plan.takeProfitPct,
     stopLossPct: plan.stopLossPct,
     takeProfitSummary: formatPlanTakeProfitSummary(plan),
@@ -55223,12 +55681,14 @@ function webLaunchWatchRow(plan) {
     loopCount: plan.loopCount || 1,
     loopDelaySeconds: plan.loopDelaySeconds || 0,
     slippageBps: plan.slippageBps,
-    scanIntervalMs: CONFIG.manualLaunchScanIntervalMs,
+    scanIntervalMs: plan.scanIntervalMs || CONFIG.manualLaunchScanIntervalMs,
     createdAt: plan.createdAt,
     lastScanAt: plan.lastScanAt || null,
     results: (plan.results || []).slice(-6),
     dexUrl: plan.tokenMint ? dexScreenerUrl(plan.tokenMint) : null,
-    message: plan.status === "launch_watch"
+    message: walletLaunch && plan.status === "wallet_launch_watch"
+      ? `Watching ${chain === "robinhood" ? "RH deployer" : "creator"} ${walletLaunchShortAddress(watched, chain)} for launches only.`
+      : plan.status === "launch_watch"
       ? `Watching $${plan.launchTicker} every ${(CONFIG.manualLaunchScanIntervalMs / 1000).toFixed(CONFIG.manualLaunchScanIntervalMs % 1000 === 0 ? 0 : 1)}s while the bot is online.`
       : `Launch watch ${plan.status}.`
   };
