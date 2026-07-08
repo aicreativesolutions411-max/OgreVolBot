@@ -223,8 +223,17 @@ test("Wallet Launch Snipe is launch-only and supports Solana creators plus Robin
   assert.match(serverSource, /status: "wallet_launch_watch"/);
   assert.match(serverSource, /maybeWalletLaunchSnipe\(entry\)/);
   assert.match(serverSource, /async function instantRhWalletLaunchSnipe/);
+  const pumpStreamBlock = serverSource.slice(
+    serverSource.indexOf("const pumpPortalStream = createPumpPortalStream"),
+    serverSource.indexOf("// --- Live Autopilot")
+  );
+  assert.match(pumpStreamBlock, /onCreation:[\s\S]*maybeWalletLaunchSnipe\(entry\)/);
+  assert.match(pumpStreamBlock, /onTrade:\s*\([^)]*\)\s*=>\s*\{ recordEarlyBuyer/);
+  assert.doesNotMatch(pumpStreamBlock.match(/onTrade:[^\n]+/)?.[0] || "", /maybeWalletLaunchSnipe/);
   assert.match(functionBody(serverSource, "normalizeWalletLaunchChain"), /robinhood/);
   assert.match(functionBody(serverSource, "webCreateWalletLaunchSnipe"), /amountEth/);
+  assert.match(functionBody(serverSource, "webCancelLaunchWatch"), /plan\.status !== "launch_watch" && plan\.status !== "wallet_launch_watch"/);
+  assert.match(functionBody(serverSource, "webCancelLaunchWatch"), /refreshWalletLaunchWatchCreators/);
   assert.match(functionBody(serverSource, "executeSolWalletLaunchSnipe"), /webCreateManagedBuyPlan/);
   assert.match(functionBody(serverSource, "executeSolWalletLaunchSnipe"), /trustedLaunchMint: true/);
   assert.match(functionBody(serverSource, "executeRhWalletLaunchSnipe"), /webRhBundleCore/);
@@ -232,9 +241,20 @@ test("Wallet Launch Snipe is launch-only and supports Solana creators plus Robin
   assert.doesNotMatch(functionBody(serverSource, "executeRhWalletLaunchSnipe"), /webCreateManagedBuyPlan/);
   assert.match(functionBody(serverSource, "processWalletLaunchWatchPlan"), /executeRhWalletLaunchSnipe[\s\S]*executeSolWalletLaunchSnipe[\s\S]*plan\.seenLaunches = uniqueStrings/);
   assert.match(appSource, /Wallet Launch Snipe/);
+  assert.match(appSource, /\["walletLaunch", "Wallet Snipe"\]/);
+  assert.match(functionBody(appSource, "renderTabs"), /state\.activeTab === "walletLaunch"[\s\S]*launchHtml\(\{ walletLaunchFirst: true \}\)/);
+  assert.match(functionBody(appSource, "launchWatchesHtml"), /filter === "wallet"/);
+  assert.match(functionBody(appSource, "launchWatchesHtml"), /isWalletLaunch \? "Stop" : "Cancel"/);
+  assert.match(functionBody(appSource, "cancelLaunchWatch"), /stoppedWalletLaunch[\s\S]*state\.activeTab = stoppedWalletLaunch \? "walletLaunch" : "launch"/);
   assert.match(appSource, /data-wallet-launch-chain/);
   assert.match(appSource, /data-wallet-launch-start/);
   assert.match(functionBody(appSource, "readWalletLaunchSnipeForm"), /Robinhood launch wallets must be 0x deployer addresses/);
+  assert.match(indexSource, /route:"walletLaunch"/);
+  assert.match(functionBody(indexSource, "renderWalletLaunch"), /\/api\/web\/wallet-launch-snipe/);
+  assert.match(functionBody(indexSource, "renderWalletLaunch"), /Normal buys, sells, and rotations from that wallet are ignored/);
+  assert.match(functionBody(indexSource, "loadWalletLaunchWatches"), /\/api\/web\/launch\/watches/);
+  assert.match(functionBody(indexSource, "walletLaunchWatchListHtml"), /data-wl-stop/);
+  assert.match(functionBody(indexSource, "renderWalletLaunch"), /\/api\/web\/launch\/cancel/);
 });
 
 test("site function scan: every GG.* used has an export; every client API path has a server route", () => {

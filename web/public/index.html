@@ -890,6 +890,7 @@
     {ic:"📦",label:"Bundle Buy",route:"bundle"},
     {ic:"📈",label:"Volume Bot",route:"volume"},
     {ic:"👥",label:"Copy / KOL Tracker",route:"copy"},
+    {ic:"🎯",label:"Wallet Launch Snipe",route:"walletLaunch"},
     {ic:"🎯",label:"Launch Sniper",route:"sniper"},
     {ic:"🚀",label:"Launch a Coin",route:"launch"},
     {ic:"🗺️",label:"Bubble Map — who's holding (KOLs · whales · clusters)",url:"/map"},
@@ -1068,6 +1069,7 @@
     else if(route==="bundle")renderBundle();
     else if(route==="volume")renderVolume();
     else if(route==="copy")renderCopy();
+    else if(route==="walletLaunch")renderWalletLaunch();
     else if(route==="launch")renderLaunch();
     else if(route==="sniper")renderSniper();
     else if(route==="lounge")renderLounge();
@@ -1883,6 +1885,68 @@
     };
     refreshSniperStatus();
     pollSniper();
+  }
+
+  async function loadWalletLaunchWatches(){
+    const {d}=await api("/api/web/launch/watches").catch(()=>({}));
+    return ((d&&d.watches)||[]).filter(w=>w&&w.type==="wallet_launch_snipe");
+  }
+  function walletLaunchWatchListHtml(watches){
+    if(!watches.length)return '<div class="lcnote" style="margin-bottom:12px"><b>Active Wallet Snipes</b><br>No watched launch wallets yet. Arm one below, then add more whenever you want.</div>';
+    return '<div class="lcnote" style="margin-bottom:12px"><b>Active Wallet Snipes</b>'+
+      watches.map(w=>{
+        const chain=w.chain==="robinhood"?"RH":"SOL";
+        const watched=esc(w.shortLaunchWallet||w.ticker||short(w.launchWallet||""));
+        const amt=esc(String(w.amount||w.amountSol||w.amountEth||""));
+        return '<div style="display:flex;align-items:center;gap:8px;margin-top:8px;border-top:1px solid var(--border);padding-top:8px">'+
+          '<div style="flex:1;min-width:0"><b>'+chain+' '+watched+'</b><div class="mut" style="font-size:10px">'+esc(w.walletCount||0)+' wallet(s) · '+amt+' '+(w.chain==="robinhood"?"ETH":"SOL")+' · TP '+esc(w.takeProfitSummary||("+"+(w.takeProfitPct||0)+"%"))+' / SL '+esc(w.stopLossSummary||("-"+(w.stopLossPct||0)+"%"))+'</div></div>'+
+          '<button class="wbtn ghost" data-wl-stop="'+esc(w.id)+'" style="width:auto;padding:8px 12px">Stop</button>'+
+        '</div>';
+      }).join("")+'</div>';
+  }
+  async function renderWalletLaunch(){
+    setActiveView("v-sniper");subbarTool("🎯 Wallet Launch Snipe");if(state.token)await refreshWallets();if(state.route!=="walletLaunch")return;
+    const watches=await loadWalletLaunchWatches();if(state.route!=="walletLaunch")return;
+    const has=state.wallets&&state.wallets.length;
+    $("#v-sniper").innerHTML='<div class="wgrid"><div class="wbox" style="grid-column:1/-1"><h3>🎯 Wallet Launch Snipe</h3>'+
+      '<p class="sub"><b>Launches only.</b> Watch a Solana creator wallet or Robinhood 0x deployer and buy only coins that wallet launches. Normal buys, sells, and rotations from that wallet are ignored.</p>'+
+      walletLaunchWatchListHtml(watches)+
+      (!has?'<div class="msg" style="font-size:12px">Create or restore a managed wallet first, then come back and arm launch-only copy buys.</div><button class="bigbuy" id="wlOpenWallets">Open Wallets</button>':
+      '<div class="field row2"><div><label>Chain</label><select id="wlChain"><option value="solana">Solana / Pump launches</option><option value="robinhood">Robinhood 0x deployer launches</option></select></div><div><label>Buy per wallet</label><input id="wlAmt" inputmode="decimal" value="0.1"></div></div>'+
+      '<div class="field"><label>Launch wallet to watch</label><input id="wlAddr" placeholder="Solana creator wallet or Robinhood 0x deployer"></div>'+
+      '<div class="field row2"><div><label>Take profit %</label><input id="wlTp" inputmode="numeric" value="40"></div><div><label>Stop loss %</label><input id="wlSl" inputmode="numeric" value="8"></div></div>'+
+      '<div class="field row2"><div><label>Fallback sell timer</label><select id="wlDelay"><option value="off">Off</option><option value="3">3 min</option><option value="5" selected>5 min</option><option value="10">10 min</option><option value="30">30 min</option></select></div><div><label>Slippage (bps)</label><input id="wlSlip" inputmode="numeric" value="300"></div></div>'+
+      '<div class="field row2"><div><label>Repeat</label><select id="wlLoop"><option value="1" selected>1x</option><option value="5">5x</option><option value="10">10x</option></select></div><div><label>Repeat wait</label><select id="wlLoopDelay"><option value="0" selected>No wait</option><option value="15">15 sec</option><option value="60">1 min</option><option value="300">5 min</option></select></div></div>'+
+      '<div class="field"><label>Wallets to buy from</label>'+walletPickHtml()+'</div>'+
+      '<button class="bigbuy" id="wlGo">Arm Wallet Launch Snipe</button><div id="wlStatus" class="lcnote" style="display:none;margin-top:12px"></div>')+
+      '<div class="lcnote" style="margin-top:12px"><b>Copy rule:</b> Solana matches creator launch events. Robinhood matches deployer launch records. This does not mirror all trades from the watched wallet.</div>'+
+      '</div></div>';
+    const openWallets=$("#wlOpenWallets");if(openWallets)openWallets.onclick=()=>go("wallet");
+    document.querySelectorAll("[data-wl-stop]").forEach(btn=>btn.onclick=async()=>{
+      const id=btn.getAttribute("data-wl-stop")||"";if(!id)return;
+      btn.disabled=true;btn.textContent="Stopping...";
+      const {ok,d}=await jpost("/api/web/launch/cancel",{planId:id});
+      if(ok&&d&&d.ok){toast("Wallet Launch Snipe stopped");renderWalletLaunch();}
+      else {btn.disabled=false;btn.textContent="Stop";toast((d&&(d.error||d.message))||"Could not stop watch",true);}
+    });
+    const goBtn=$("#wlGo");if(goBtn)goBtn.onclick=async()=>{
+      if(!(await ensureTradeReady()))return;
+      const chain=($("#wlChain")&&$("#wlChain").value)||"solana";
+      const launchWallet=(($("#wlAddr")&&$("#wlAddr").value)||"").trim();
+      if(!launchWallet){toast("Paste the creator/deployer wallet to watch.",true);return;}
+      if(chain==="robinhood"&&!/^0x[0-9a-fA-F]{40}$/.test(launchWallet)){toast("Robinhood launch wallets must be 0x deployer addresses.",true);return;}
+      if(chain!=="robinhood"&&!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(launchWallet)){toast("Solana launch wallets must be creator public keys.",true);return;}
+      const walletIndexes=selectedWalletIdxs();if(!walletIndexes.length){toast("Choose at least one wallet.",true);return;}
+      const amount=(($("#wlAmt")&&$("#wlAmt").value)||"").trim();if(!(Number(amount)>0)){toast("Enter a buy amount.",true);return;}
+      const body={chain,launchWallet,walletIndexes,amount,amountSol:amount,amountEth:amount,takeProfitPct:(($("#wlTp")&&$("#wlTp").value)||"40").trim(),stopLossPct:(($("#wlSl")&&$("#wlSl").value)||"8").trim(),sellDelay:(($("#wlDelay")&&$("#wlDelay").value)||"5").trim(),loopCount:(($("#wlLoop")&&$("#wlLoop").value)||"1").trim(),loopDelay:(($("#wlLoopDelay")&&$("#wlLoopDelay").value)||"0").trim(),slippageBps:(($("#wlSlip")&&$("#wlSlip").value)||"300").trim()};
+      const st=$("#wlStatus");if(st){st.style.display="block";st.textContent="Arming launch-only watch...";}
+      goBtn.disabled=true;goBtn.textContent="Arming...";
+      const {ok,status,d}=await jpost("/api/web/wallet-launch-snipe",body);
+      goBtn.disabled=false;goBtn.textContent="Arm Wallet Launch Snipe";
+      if(status===401){toast("Couldn't authorize — open Wallet and reconnect.",true);go("wallet");return;}
+      if(ok&&d&&d.watch){const msg=(d.watch.message||"Wallet Launch Snipe armed.");if(st)st.textContent=msg;toast("Wallet Launch Snipe armed");renderWalletLaunch();}
+      else {const msg=(d&&(d.error||d.message))||"Could not arm Wallet Launch Snipe";if(st)st.textContent=msg;toast(msg,true);}
+    };
   }
 
   // ---------- trade ----------
@@ -3197,11 +3261,11 @@
     const selStyle=(on)=>on?"border-color:var(--green);color:var(--green);background:var(--green-dim)":"";
     const preOpts='<option value="">Manual TP / SL</option>'+(state.presets.trade||[]).map(p=>'<option value="'+esc(p.id)+'">'+esc(p.name||"Preset")+(p.takeProfitPct?" · TP "+esc(p.takeProfitPct)+"%":"")+(p.stopLossPct?" · SL "+esc(p.stopLossPct)+"%":"")+'</option>').join("");
     v.innerHTML='<div class="wgrid"><div class="wbox" style="max-width:470px;margin:0 auto;width:100%"><h3>🔄 Swap <span class="mut" style="font-size:11px;font-weight:400">· one wallet, both chains</span></h3>'+
-      '<div class="field"><label>Wallet</label>'+walletSelectHtml("swWal")+'</div>'+
       '<div class="field"><label>Pay with</label><div style="display:flex;gap:8px">'+
         '<button class="swtok" id="swAssetSol" style="flex:1;text-align:center;'+selStyle(swapChain==="solana")+'">◎ SOL</button>'+
         '<button class="swtok" id="swAssetRh" style="flex:1;text-align:center;'+selStyle(swapChain==="robinhood")+'">🪶 Robinhood ETH</button>'+
       '</div><span class="swhint" style="margin-top:5px;display:block">Solana coins buy with SOL · Robinhood (0x…) coins buy with ETH — pasting a CA sets this automatically.</span></div>'+
+      '<div class="field"><label>Wallet for SOL / Robinhood</label>'+walletSelectHtml("swWal")+'<span class="swhint" style="margin-top:5px;display:block">Pick the saved wallet to use. Its Solana wallet handles SOL; its paired Robinhood address handles RH ETH trades.</span></div>'+
       '<div class="swapbox"><span class="swlab">You pay</span><div class="swrow"><input id="swAmt" inputmode="decimal" placeholder="'+(payIsTok?"100":cm.amtPh)+'">'+payChip+'</div>'+(payIsTok?'<span class="swhint">% of your holdings</span>':'<span class="swhint">'+cm.label+'</span>')+'</div>'+
       '<div class="swapflip"><button id="swFlip" title="Flip buy / sell">⇅</button></div>'+
       '<div class="swapbox"><span class="swlab">You receive</span><div class="swrow"><span class="swrecv mut">'+(payIsTok?(cm.icon+" "+cm.asset):tl)+'</span>'+recvChip+'</div></div>'+
@@ -3226,7 +3290,7 @@
       '<div style="display:flex;gap:8px"><input id="swRhAmt" inputmode="decimal" placeholder="0.05" style="width:96px;flex:0 0 auto"><button class="wbtn" id="swRhGo" style="flex:1">⚡ Swap SOL → Robinhood ETH</button></div>'+
       '<p class="wnote" style="margin:8px 0 0">0.05 SOL ≈ plenty for a stack of Robinhood trades. Balance shows under Wallet → 🪶 Robinhood Chain.</p>'+
       '</div></div>';
-    if($("#swWal"))$("#swWal").value=String(state.activeWallet||1);
+    const swWal=$("#swWal");if(swWal){swWal.value=String(state.activeWallet||1);swWal.onchange=()=>{state.activeWallet=Number(swWal.value)||state.activeWallet;updateWalletPill();};}
     $("#swFlip").onclick=()=>{swapDir=swapDir==="buy"?"sell":"buy";paintSwap();};
     const tb=$("#swTok");if(tb)tb.onclick=()=>openSwapTokenPicker();
     $("#swAssetSol").onclick=()=>{if(swapChain!=="solana"){swapChain="solana";if(swapTok&&swapTok.chain!=="solana")swapTok=null;paintSwap();}};
@@ -3506,7 +3570,7 @@
     };
     tick();volBotPollT=setInterval(tick,4000);
   }
-  function walletSelectHtml(id){const ws=state.wallets||[];if(!ws.length)return '<select id="'+id+'"><option value="">create a wallet first</option></select>';return '<select id="'+id+'">'+ws.map(w=>'<option value="'+w.index+'"'+(w.index===state.activeWallet?" selected":"")+'>'+esc(w.label||("Wallet "+w.index))+'</option>').join("")+'</select>';}
+  function walletSelectHtml(id){const ws=state.wallets||[];if(!ws.length)return '<select id="'+id+'"><option value="">create a wallet first</option></select>';return '<select id="'+id+'">'+ws.map(w=>'<option value="'+w.index+'"'+(w.index===state.activeWallet?" selected":"")+'>'+esc(w.label||("Wallet "+w.index))+' · ◎'+Number(w.sol||0).toFixed(3)+' / RH ETH</option>').join("")+'</select>';}
   // Native pump.fun launch panel — all the old fields, new style, no hype tab. We build the token on
   // pump.fun via /api/web/launch/coin; image is read to a base64 data URL client-side. The endpoint is
   // ASYNC (returns a launchAttemptId, then we poll /api/web/launch/progress for the real mint). Laid out

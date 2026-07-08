@@ -6161,6 +6161,7 @@ function renderTabs() {
   if (state.activeTab === "smartChart") panel.innerHTML = safeSmartChartHtml();
   if (state.activeTab === "launchCoin") panel.innerHTML = launchCoinHtml();
   if (state.activeTab === "launch") panel.innerHTML = launchHtml();
+  if (state.activeTab === "walletLaunch") panel.innerHTML = launchHtml({ walletLaunchFirst: true });
   if (state.activeTab === "kol") panel.innerHTML = kolHtml();
   if (state.activeTab === "ogreAi") panel.innerHTML = ogreAiHtml();
   if (state.activeTab === "wallets") panel.innerHTML = walletsHtml();
@@ -6242,11 +6243,11 @@ function tekWalletBarHtml() {
 function tekHubHtml() {
   const tools = [
     ["ogreAi", "Ogre A.I.", "Auto-scan and ape the best pick by category."],
+    ["walletLaunch", "Wallet Launch Snipe", "Copy only launches from a watched creator/deployer wallet."],
     ["volume", "SlimeBot", "Auto-volume engine across recycled wallets."],
     ["bundle", "Bundle", "Buy or sell one token across many wallets."],
     ["launchCoin", "Launch", "Create and launch a Pump.fun token."],
-    ["launch", "Snipe", "Watch known tickers and new launches for entries."],
-    ["launch", "Wallet Launch Snipe", "Copy only launches from a watched creator/deployer wallet."]
+    ["launch", "Snipe", "Watch known tickers and new launches for entries."]
   ];
   return `
     <section class="tek-hub">
@@ -7795,7 +7796,7 @@ function connectedBrowserWalletOptionHtml(selectedIndex = "") {
   if (!connected?.publicKey) return "";
   const selected = String(selectedIndex || "") === "connected" || (!selectedIndex && !state.wallets.length);
   const provider = connected.provider || "Browser Wallet";
-  return `<option value="connected" ${selected ? "selected" : ""}>${escapeHtml(provider)} - ${escapeHtml(shortAddress(connected.publicKey))}</option>`;
+  return `<option value="connected" ${selected ? "selected" : ""}>${escapeHtml(provider)} SOL wallet - ${escapeHtml(shortAddress(connected.publicKey))}</option>`;
 }
 
 function shortAddress(value) {
@@ -8426,8 +8427,8 @@ function tradeHtml() {
             </label>
           </div>
           <div class="oss-wallet-bar">
-            <label class="oss-pill oss-wallet" data-cap="Wallet">
-              <select data-trade-wallet aria-label="Wallet">
+            <label class="oss-pill oss-wallet" data-cap="SOL / RH Wallet">
+              <select data-trade-wallet aria-label="Wallet for Solana and Robinhood trades">
                 ${walletOptionsHtml(connected?.publicKey && !hasManagedWallets ? "connected" : "")}
               </select>
             </label>
@@ -8479,7 +8480,7 @@ function walletOptionsHtml(selectedIndex = "") {
     const balance = state.balances.find((row) => Number(row.index) === Number(wallet.index));
     const sol = balance?.sol !== null && balance?.sol !== undefined ? `${Number(balance.sol).toFixed(4)} SOL` : "balance loading";
     const sessionLabel = wallet.sessionWallet ? " Session" : "";
-    return `<option value="${wallet.index}" ${String(wallet.index) === String(selectedIndex || "") ? "selected" : ""}>${wallet.index}. ${escapeHtml(wallet.label)}${sessionLabel} - ${sol}</option>`;
+    return `<option value="${wallet.index}" ${String(wallet.index) === String(selectedIndex || "") ? "selected" : ""}>${wallet.index}. ${escapeHtml(wallet.label)}${sessionLabel} - ${sol} / RH ETH</option>`;
   }).join("");
   if (connectedOption || managedOptions) return `${connectedOption}${managedOptions}`;
   return `<option value="">No wallet connected</option>`;
@@ -9955,7 +9956,8 @@ function walletLaunchSnipeSetupHtml() {
   `;
 }
 
-function launchHtml() {
+function launchHtml(options = {}) {
+  const walletLaunchFirst = Boolean(options.walletLaunchFirst);
   const launchSourceRows = uniqueSignalRows([
     ...(state.livePairsByBucket.live?.rows || []),
     ...(state.livePairsByBucket.under1h?.rows || []),
@@ -9997,6 +9999,13 @@ function launchHtml() {
       </article>
 
       <aside class="trade-side">
+        ${walletLaunchFirst ? `
+          ${walletLaunchSnipeSetupHtml()}
+          <article>
+            <h3>Active Wallet Snipes</h3>
+            ${launchWatchesHtml("wallet")}
+          </article>
+        ` : ""}
         <article>
           <h3>Launch Watch Setup</h3>
           <p>Use this only when you want SlimeWire to keep watching and buy with selected managed wallets when the ticker appears.</p>
@@ -10088,10 +10097,10 @@ function launchHtml() {
           <p>It scans live launch/profile feeds about every ${escapeHtml(launchScanSeconds())} seconds while the bot is online.</p>
         </article>
         <article>
-          <h3>Active Watches</h3>
-          ${launchWatchesHtml()}
+          <h3>${walletLaunchFirst ? "Active Ticker Watches" : "Active Watches"}</h3>
+          ${launchWatchesHtml(walletLaunchFirst ? "manual" : "all")}
         </article>
-        ${walletLaunchSnipeSetupHtml()}
+        ${walletLaunchFirst ? "" : walletLaunchSnipeSetupHtml()}
       </aside>
     </section>
   `;
@@ -11221,20 +11230,31 @@ function launchScanSeconds() {
   return first ? (first / 1000).toFixed(first % 1000 === 0 ? 0 : 1) : "1.5";
 }
 
-function launchWatchesHtml() {
-  if (!state.launchWatches.length) return "<p>No active launch watches yet.</p>";
+function launchWatchesHtml(filter = "all") {
+  const watches = (state.launchWatches || []).filter((watch) => {
+    const isWalletLaunch = watch.type === "wallet_launch_snipe";
+    if (filter === "wallet") return isWalletLaunch;
+    if (filter === "manual") return !isWalletLaunch;
+    return true;
+  });
+  if (!watches.length) {
+    if (filter === "wallet") return "<p>No active wallet launch snipes yet. Arm one above, then add more whenever you want.</p>";
+    if (filter === "manual") return "<p>No active ticker launch watches yet.</p>";
+    return "<p>No active launch watches yet.</p>";
+  }
   return `
     <div class="mini-results">
-      ${state.launchWatches.map((watch) => {
+      ${watches.map((watch) => {
         const isWalletLaunch = watch.type === "wallet_launch_snipe";
         const label = isWalletLaunch
           ? `${watch.chain === "robinhood" ? "RH" : "SOL"} wallet ${watch.shortLaunchWallet || watch.ticker}`
           : `$${watch.ticker}`;
+        const cancelLabel = isWalletLaunch ? "Stop" : "Cancel";
         return `
         <span>
           ${escapeHtml(label)} - ${escapeHtml(watch.status)} - ${escapeHtml(watch.walletCount)} wallet(s)
           ${xShareButton(launchShareText(watch), "Share Watch")}
-          ${watch.status === "launch_watch" || watch.status === "wallet_launch_watch" ? `<button data-launch-cancel="${escapeHtml(watch.id)}">Cancel</button>` : ""}
+          ${watch.status === "launch_watch" || watch.status === "wallet_launch_watch" ? `<button data-launch-cancel="${escapeHtml(watch.id)}">${cancelLabel}</button>` : ""}
         </span>
       `;}).join("")}
     </div>
@@ -15566,7 +15586,7 @@ async function startWalletLaunchSnipe() {
     state.launchResult = data.watch;
     setWalletLaunchSnipeStatus(data.watch?.message || "Wallet Launch Snipe armed.");
     await loadAll();
-    state.activeTab = "launch";
+    state.activeTab = "walletLaunch";
     render();
   } catch (error) {
     setWalletLaunchSnipeStatus(error.message);
@@ -15580,8 +15600,12 @@ async function cancelLaunchWatch(planId) {
       body: JSON.stringify({ planId })
     });
     state.launchResult = data.watch;
+    const stoppedWalletLaunch = data.watch?.type === "wallet_launch_snipe" || state.activeTab === "walletLaunch";
+    if (stoppedWalletLaunch) {
+      setWalletLaunchSnipeStatus(data.watch?.message || "Wallet Launch Snipe stopped.");
+    }
     await loadAll();
-    state.activeTab = "launch";
+    state.activeTab = stoppedWalletLaunch ? "walletLaunch" : "launch";
     render();
   } catch (error) {
     setLaunchStatus(error.message);
@@ -24594,7 +24618,7 @@ document.addEventListener("click", async (event) => {
 
   const refreshLivePairsButton = target.closest?.("[data-refresh-live-pairs]");
   if (refreshLivePairsButton) {
-    const feedKey = state.activeTab === "slimeScope" ? "slimeScope" : state.activeTab === "terminal" ? "terminal" : (state.activeTab === "launch" || state.activeTab === "launchCoin") ? "launch" : "live";
+    const feedKey = state.activeTab === "slimeScope" ? "slimeScope" : state.activeTab === "terminal" ? "terminal" : (state.activeTab === "launch" || state.activeTab === "walletLaunch" || state.activeTab === "launchCoin") ? "launch" : "live";
     // The Cooks/Live Terminal feeds refresh in place (reconciler + its own mobile
     // anchor). Capturing/restoring a snapshot here too would double-correct and pull
     // the page — so only snapshot for the full-render feeds (e.g. Slime Scope).
@@ -25100,7 +25124,7 @@ const DESKTOP_NAV_GROUPS = [
   { key: "live", label: "Live", items: [["terminal", "Live Terminal"], ["live", "Cooks"], ["liveTrades", "Live Trades"]] },
   { key: "chart", label: "Swap & Chart", items: [["trade", "Slime Swap"], ["smartChart", "Smart Chart"]] },
   { key: "intel", label: "Intel", items: [["slimeScope", "Slime Scope"], ["watchlist", "Watchlist"], ["kol", "KOL Tracker"], ["sniper", "OgreSniper"], ["txAudit", "TP/SL Audit"]] },
-  { key: "tools", label: "Ogre Tek", items: [["tek", "Tek Hub"], ["ogreAi", "Ogre A.I."], ["launchCoin", "Pump Launch"], ["bundle", "Bundle"], ["volume", "SlimeBot"], ["launch", "Launch Watch"]] },
+  { key: "tools", label: "Ogre Tek", items: [["tek", "Tek Hub"], ["ogreAi", "Ogre A.I."], ["walletLaunch", "Wallet Snipe"], ["launchCoin", "Pump Launch"], ["bundle", "Bundle"], ["volume", "SlimeBot"], ["launch", "Launch Watch"]] },
   { key: "portfolio", label: "Portfolio", items: [["wallets", "Wallets"], ["positions", "Positions"], ["pnl", "PnL"], ["raids", "Raid Board", "/raids"]] },
   { key: "profile", label: "Profile", items: [["profile", "Home / Profile"]] }
 ];
@@ -25121,7 +25145,7 @@ const ICON_COLORS = {
   terminal: "#46e8ff", live: "#8dff45", liveTrades: "#ffd24a", smartChart: "#72ff23",
   trade: "#3fe0d0", slimeScope: "#5ab0ff", watchlist: "#ffd24a", kol: "#ffcf5a",
   sniper: "#ff6b6b", txAudit: "#bbff63", tek: "#9fb6c2", ogreAi: "#b06bff",
-  launchCoin: "#ff8a5a", bundle: "#ffa64d", volume: "#46e8ff", launch: "#9bff9b",
+  launchCoin: "#ff8a5a", walletLaunch: "#b8ff63", bundle: "#ffa64d", volume: "#46e8ff", launch: "#9bff9b",
   wallets: "#ffd24a", positions: "#5ab0ff", pnl: "#72ff23", profile: "#8dff45"
 };
 const SWAMP_ICON_PATHS = {
@@ -25157,6 +25181,8 @@ const SWAMP_ICON_PATHS = {
   volume: '<path d="M4 13v4"/><path d="M8 9v8"/><path d="M12 5v12"/><path d="M16 10v7"/><path d="M20 13v4"/>',
   // Watch — eye
   launch: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
+  // Wallet launch snipe — watched creator/deployer wallet
+  walletLaunch: '<rect x="3" y="7" width="18" height="12" rx="2.5"/><path d="M3 11h18"/><circle cx="16.5" cy="14" r="1.2"/><path d="M12 3l2.1 4.2 4.6.7-3.3 3.2.8 4.6L12 13.5l-4.2 2.2.8-4.6-3.3-3.2 4.6-.7z"/>',
   // Wallets — wallet
   wallets: '<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18"/><circle cx="17" cy="14" r="1.3"/>',
   // Positions — briefcase
