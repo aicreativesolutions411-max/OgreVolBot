@@ -30731,13 +30731,18 @@ function scanMarketStatsFromSources({ meta = null, bonding = null, best = null, 
   let volObj = vol;
   if (mint) {
     const lg = mapMetaLastGood.get(mint);
-    if (lg && Date.now() - lg.at < 15 * 60_000) {
-      if (!(mc > 0) && lg.mc > 0) mc = lg.mc;
-      if (!(liq > 0) && lg.liq > 0) liq = lg.liq;
-      if (!Number.isFinite(ch1) && Number.isFinite(lg.ch1)) ch1 = lg.ch1;
-      if (!(volObj && volObj.value > 0) && lg.vol && lg.vol.value > 0) volObj = lg.vol;
-      if (!(holders > 0) && lg.holders > 0) holders = lg.holders;
+    if (lg) {
+      // Age never changes and holder count only grows → restore them regardless of cache age: a real,
+      // slightly-stale number always beats a blank "Age n/a" / "Holders —" on the card.
       if (!(createdAt > 0) && lg.createdAt > 0) createdAt = lg.createdAt;
+      if (!(holders > 0) && lg.holders > 0) holders = lg.holders;
+      // Volatile fields (price-driven) keep the 15-min freshness gate so we never show badly-stale MC/LIQ/1H.
+      if (Date.now() - lg.at < 15 * 60_000) {
+        if (!(mc > 0) && lg.mc > 0) mc = lg.mc;
+        if (!(liq > 0) && lg.liq > 0) liq = lg.liq;
+        if (!Number.isFinite(ch1) && Number.isFinite(lg.ch1)) ch1 = lg.ch1;
+        if (!(volObj && volObj.value > 0) && lg.vol && lg.vol.value > 0) volObj = lg.vol;
+      }
     }
     rememberMeta(mint, { mc, liq, ch1, vol: volObj, holders, createdAt, sym: firstString(meta?.symbol, bonding?.symbol) });
   }
@@ -32247,14 +32252,15 @@ function scanImageUrlFromScan(scan = {}) {
     onchain?.imageUrl, onchain?.avatarUrl, onchain?.image, onchain?.imageUri
   ));
 }
+// Fetch a coin logo → guaranteed-decodable PNG Buffer (or null). Delegates to the ONE hardened fetcher in
+// slimeMapRender (fast IPFS gateway race + browser UA + Render-safe timeout + sharp re-encode) — the same
+// path the MAP card uses, which is why the map PFP loads on Render and the old bare-fetch scan PFP did not.
 async function xFetchLogo(url) {
-  let u = publicScanImageUrl(url);
-  if (!u) return null;
+  const raw = String(url || "").trim();
+  if (!raw || !/^(https?:|ipfs:)/i.test(raw)) return null;
   try {
-    const res = await fetch(u, { signal: AbortSignal.timeout ? AbortSignal.timeout(6000) : undefined });
-    if (!res.ok) return null;
-    const buf = Buffer.from(await res.arrayBuffer());
-    return buf.length > 100 && buf.length < 6_000_000 ? buf : null;
+    const { fetchLogoBuffer } = await import("./lib/slimeMapRender.mjs");
+    return await fetchLogoBuffer(raw, 220, 7000);
   } catch { return null; }
 }
 // UNIVERSAL token metadata via on-chain Metaplex — works for ANY SPL token (pump, graduated, bonk, custom)
@@ -32290,7 +32296,21 @@ async function fetchOnchainTokenMeta(mint) {
 }
 // Coin logo (PFP) for the card — DexScreener → pump.fun → Jupiter token list → on-chain Metaplex. Ordered
 // cheapest-first; the last two make the pic fill for graduated / non-pump coins DexScreener has no image for.
+// Sticky logo cache — once a coin's PFP resolves (on ANY surface: X scan/map, TG scan), keep the normalized
+// PNG so a later scan whose live fetch is rate-limited on Render still shows the face. This is THE fix for
+// "PFP loads sometimes, blank other times" — the image is now cached like the market stats are.
+const xLogoCache = new Map();   // mint → { at, buf }
 async function xCoinLogo(scan, mint) {
+  const live = await xCoinLogoLive(scan, mint).catch(() => null);
+  if (live) {
+    xLogoCache.set(mint, { at: Date.now(), buf: live });
+    if (xLogoCache.size > 400) xLogoCache.delete(xLogoCache.keys().next().value);
+    return live;
+  }
+  const c = xLogoCache.get(mint);
+  return (c && Date.now() - c.at < 45 * 60_000) ? c.buf : null;   // 45-min sticky face
+}
+async function xCoinLogoLive(scan, mint) {
   const { meta, best, bonding, onchain } = scan || {};
   const tryList = async (urls) => { for (const u of urls.filter(Boolean)) { const b = await xFetchLogo(u).catch(() => null); if (b) return b; } return null; };
   // 1) whatever the scan already resolved (Dex `info.imageUrl` / pump image / on-chain image)
@@ -36730,14 +36750,20 @@ async function handleTelegramLookCommand(chatId, message, argument) {
   // Telegram's 1024 caption limit applies to the VISIBLE text (after entity parsing), not the
   // raw HTML — the long href URLs don't count. Measure visible length so the richer card
   // (ATH + quick-links + caller line) still ships WITH the image at the top, not text-only.
-  const img = scanImageUrlFromScan(scan);
   const captionVisibleLen = text.replace(/<[^>]+>/g, "").length;
-  if (img && captionVisibleLen <= 1024) {
-    try {
-      await telegram("sendPhoto", { chat_id: chatId, photo: img, caption: text, parse_mode: "HTML", reply_markup: slimeScanKeyboard(mint) });
-      return;
-    } catch {
-      // image fetch/upload failed — fall back to the text card
+  if (captionVisibleLen <= 1024) {
+    // Resolve a NORMALIZED PNG buffer (hardened fetch + fast IPFS gateways + sticky cache) and UPLOAD it, so
+    // Telegram never has to reach a slow ipfs.io gateway or decode a webp itself — the old raw-URL sendPhoto
+    // silently fell to text-only whenever Telegram couldn't fetch/decode the coin's image. URL is the fallback.
+    const logoBuf = await xCoinLogo(scan, mint).catch(() => null);
+    if (logoBuf) {
+      try { await sendPhoto(chatId, "scan.png", logoBuf, text, slimeScanKeyboard(mint), "HTML"); return; }
+      catch { /* fall through to URL, then text */ }
+    }
+    const img = scanImageUrlFromScan(scan);
+    if (img) {
+      try { await telegram("sendPhoto", { chat_id: chatId, photo: img, caption: text, parse_mode: "HTML", reply_markup: slimeScanKeyboard(mint) }); return; }
+      catch { /* fall back to the text card */ }
     }
   }
   await sayHtml(chatId, text, slimeScanKeyboard(mint));

@@ -358,11 +358,16 @@ function ipfsGatewayCandidates(url) {
     `https://ipfs.io/ipfs/${cid}`,            // slow original last
   ];
 }
-export async function fetchAvatarDataUri(url, size = 96, ms = 4500) {
+// THE ONE hardened image fetcher — every coin PFP / avatar on every card goes through this. Returns a
+// guaranteed-decodable square PNG Buffer, or null. Hard-won lessons baked in (each cost a "PFP won't load"
+// bug): (1) AbortController + setTimeout, because AbortSignal.timeout is MISSING on Render's older Node so a
+// timeout there is a silent no-op; (2) a browser User-Agent + Accept, because coin-logo CDNs (DexScreener,
+// pump) 403/422 a bare fetch; (3) race the FAST IPFS gateways (Cloudflare/pump/dweb), never trust slow
+// ipfs.io alone; (4) ALWAYS re-encode through sharp → a non-image (HTML error page) or odd format (webp/
+// avif/gif) can NEVER slip through and get silently dropped by a downstream compositor. Callers that need a
+// data-URI wrap the buffer; callers that need a Buffer use it directly.
+export async function fetchLogoBuffer(url, size = 200, ms = 7000) {
   if (!url) return null;
-  // AbortController + setTimeout works on EVERY Node version (AbortSignal.timeout is missing on Render's older
-  // Node). A browser User-Agent is REQUIRED: coin-logo CDNs (DexScreener) 422/403 a bare fetch. For IPFS we
-  // race through fast gateways (see ipfsGatewayCandidates) so a slow ipfs.io never blanks the coin PFP.
   const candidates = ipfsGatewayCandidates(url);
   for (const href of candidates) {
     const ctl = new AbortController();
@@ -376,13 +381,18 @@ export async function fetchAvatarDataUri(url, size = 96, ms = 4500) {
       if (!res.ok) { clearTimeout(t); continue; }
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.length < 80) { clearTimeout(t); continue; }
-      const png = await sharp(buf).resize(size, size, { fit: "cover", position: "attention" }).png().toBuffer();
+      // animated? take the first frame. Any decode failure → try the next gateway (never return garbage).
+      const png = await sharp(buf, { animated: false }).resize(size, size, { fit: "cover", position: "attention" }).png().toBuffer();
       clearTimeout(t);
-      return "data:image/png;base64," + png.toString("base64");
+      return png;
     } catch { /* try the next gateway */ }
     finally { clearTimeout(t); }
   }
   return null;
+}
+export async function fetchAvatarDataUri(url, size = 96, ms = 4500) {
+  const png = await fetchLogoBuffer(url, size, ms);
+  return png ? "data:image/png;base64," + png.toString("base64") : null;
 }
 
 // Full premium render: resolve avatars → build transparent map SVG → composite over a branded background
