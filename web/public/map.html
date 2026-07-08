@@ -206,8 +206,11 @@ function renderXray(map){
   if(t10>=65){verdict='Concentrated';vc='#ff7b6b';vbg='rgba(226,86,75,.2)'}
   else if(t10>=42){verdict='Watch';vc='#ffcf4d';vbg='rgba(255,207,77,.18)'}
   const cell=(k,v)=>'<div class="c"><div class="k">'+k+'</div><div class="val">'+v+'</div></div>';
+  // Holders = the coin's REAL total (from the HOLDERS stat / map.holderCount), not just the bubble count.
+  const hStat=(map.stats||[]).find(s=>String(s.label).toUpperCase()==='HOLDERS');
+  const holdersVal=(map.holderCount&&map.holderCount>0)?map.holderCount.toLocaleString():((hStat&&hStat.value)||nodes.length);
   el.innerHTML='<div class="xray"><div class="vb" style="background:'+vbg+';color:'+vc+'">🛡️ '+verdict+' · top10 '+Math.round(t10)+'%</div><div class="xg">'+
-    cell('Holders',nodes.length)+cell('🐋 Whales',whales)+cell('⭐ KOLs in',kols)+cell('🕸️ Clusters','<span id="xrayCl">scanning…</span>')+'</div></div>';
+    cell('Holders',holdersVal)+cell('🐋 Whales',whales)+cell('⭐ KOLs in',kols)+cell('🕸️ Clusters','<span id="xrayCl">scanning…</span>')+'</div></div>';
 }
 function drawSide(map){
   renderXray(map);

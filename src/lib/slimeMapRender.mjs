@@ -273,7 +273,9 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
     y += 8;
     // stat grid (2x2)
     const cellW = (pw - 12) / 2;
-    const grid = [["HOLDERS", String(nodes.length), "#5be36a"], ["WHALES", String(whales), "#ffcf4d"], ["KOLS IN", String(kolCount), "#ffcf4d"], ["CLUSTERS", String(cls.length), "#ff7de3"]];
+    // HOLDERS shows the coin's REAL total (from the stats header), not just the bubble count.
+    const holdersVal = (stats.find((s) => String(s.label).toUpperCase() === "HOLDERS") || {}).value || String(nodes.length);
+    const grid = [["HOLDERS", String(holdersVal), "#5be36a"], ["WHALES", String(whales), "#ffcf4d"], ["KOLS IN", String(kolCount), "#ffcf4d"], ["CLUSTERS", String(cls.length), "#ff7de3"]];
     grid.forEach((g, i) => {
       const gx = px + (i % 2) * (cellW + 12), gy = y + Math.floor(i / 2) * 62;
       rows.push(`<g>

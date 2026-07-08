@@ -286,6 +286,12 @@ export async function computeManyHolders({ mint, rpcRead, rpcUrl = "", limit = 1
       });
     } catch { /* worst case a pool shows as one bubble */ }
   }
-  return head.filter((r) => !exclude.has(r.owner)).slice(0, limit)
+  const out = head.filter((r) => !exclude.has(r.owner)).slice(0, limit)
     .map((r) => ({ wallet: r.owner, pct: round1((r.amt / rawSupply) * 100) || 0 }));
+  // The FULL enumeration is a free byproduct — `rows.length` is the real holder-account count (every account
+  // with a non-zero balance). Attach it so the map can show the coin's ACTUAL holder total, not just the
+  // number of bubbles drawn. (Only trustworthy when the stream didn't bail on maxBytes; caller treats it as
+  // a best-effort hint.)
+  out.total = rows.length;
+  return out;
 }
