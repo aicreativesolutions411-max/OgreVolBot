@@ -25417,6 +25417,9 @@ function mergeTokenMarketMetadata(primary = null, fallback = null) {
     fdv: firstMeaningfulNumber(primary.fdv, fallback.fdv),
     priceUsd: firstMeaningfulNumber(primary.priceUsd, fallback.priceUsd),
     liquidityUsd: firstMeaningfulNumber(primary.liquidityUsd, fallback.liquidityUsd),
+    // carry AGE + holder-count through the merge (were being dropped → "age n/a"/blank holders on the merged meta)
+    pairCreatedAt: firstMeaningfulNumber(primary.pairCreatedAt, fallback.pairCreatedAt) || primary.pairCreatedAt || fallback.pairCreatedAt || null,
+    holderCount: firstMeaningfulNumber(primary.holderCount, primary.holders, fallback.holderCount, fallback.holders) || null,
     priceChange: Object.keys(priceChange).length ? priceChange : null,
     volume: Object.keys(volume).length ? volume : null,
     txns: Object.keys(txns).length ? txns : null,
@@ -31074,7 +31077,7 @@ async function gatherSlimeScan(mint) {
     // DexScreener rate-limits Render — the tight 2.2s cap made it time out → blank LIQ/1H on the scan card
     // even though the map (4.8s cap) + trench-watch showed them. Gecko is not IP-blocked on Render, so it's
     // worth the wait; the sticky cache covers the rare miss.
-    getGeckoTerminalTokenMetadata(mint, { timeoutMs: 4_500 }).catch(() => null)
+    getGeckoTerminalTokenMetadata(mint, { timeoutMs: 6_000 }).catch(() => null)
   ]);
   const best = bestDexPairForToken(mint, pairs);
   let meta = mergeTokenMarketMetadata(best ? metadataFromDexPair(mint, best) : null, geckoMeta);
@@ -31323,30 +31326,21 @@ async function buildTokenHolderMap(mint) {
     getPumpFunTokenMetadata(mint).catch(() => null),
     fetchDexScreenerTokenPairsFallback(mint).catch(() => null),
     fetchTokenHolderRows(mint).catch(() => []),
-    getGeckoTerminalTokenMetadata(mint, { timeoutMs: 4800 }).catch(() => null),
+    getGeckoTerminalTokenMetadata(mint, { timeoutMs: 6_000 }).catch(() => null),
   ]);
   const best = bestDexPairForToken(mint, pairs);
   const dexMeta = mergeTokenMarketMetadata(best ? metadataFromDexPair(mint, best) : null, geckoMeta);
   const onCurve = Boolean(pumpMeta && !pumpMeta.graduated && !(dexMeta && dexMeta.marketCap));
   const pick = (p, d) => onCurve ? firstMeaningfulNumber(p, d) : firstMeaningfulNumber(d, p);
-  let sym = String(dexMeta?.symbol || pumpMeta?.symbol || geckoMeta?.symbol || "").trim();
-  let mc = pick(pumpMeta?.marketCap, dexMeta?.marketCap ?? dexMeta?.fdv) || firstMeaningfulNumber(geckoMeta?.marketCap, geckoMeta?.fdv) || 0;
-  // liq/1H: prefer DexScreener when present, else GeckoTerminal (the fix for the blank X-card values).
-  let liq = pick(pumpMeta?.liquidityUsd, dexMeta?.liquidityUsd) || firstMeaningfulNumber(geckoMeta?.liquidityUsd) || 0;
-  let ch1 = firstMeaningfulNumber(dexMeta?.priceChange?.h1, geckoMeta?.priceChange?.h1, geckoMeta?.priceChange?.h1Percent, pumpMeta?.priceChange?.h1);
-  // STICKY last-good coin numbers: dex + gecko BOTH flake regularly (rate limits/timeouts), which left the
-  // card's MC/LIQ/1H showing "—" on random pulls (owner: "make sure liquidity always shows"). A ≤15-min-old
-  // value beats a blank; fresh good reads refresh the cache.
-  { const lg = mapMetaLastGood.get(mint);
-    if (lg && Date.now() - lg.at < 15 * 60_000) {
-      if (!(mc > 0) && lg.mc > 0) mc = lg.mc;
-      if (!(liq > 0) && lg.liq > 0) liq = lg.liq;
-      if (!Number.isFinite(ch1) && Number.isFinite(lg.ch1)) ch1 = lg.ch1;
-      if (!sym && lg.sym) sym = lg.sym;
-    }
-    rememberMeta(mint, { mc, liq, ch1, sym }); }
-  const pumpCreatedMs = Number(pumpMeta?.created_timestamp) ? Number(pumpMeta.created_timestamp) * (String(pumpMeta.created_timestamp).replace(/\D/g, "").length <= 10 ? 1000 : 1) : 0;
-  const createdAt = normalizePairCreatedAt(dexMeta?.pairCreatedAt) || normalizePairCreatedAt(geckoMeta?.pairCreatedAt) || pumpMeta?.pairCreatedAt || pumpMeta?.createdAt || pumpCreatedMs || 0;
+  // 🎯 UNIFIED market resolver — the SAME path the scan card uses (pump bonding-curve liquidity via
+  // scanPumpVirtualLiquidity + dex + gecko, all windows, + the shared sticky cache). This is the "stop
+  // circling" fix: the map, scan card, and airdrop map now read ONE source of truth for MC/LIQ/1H/VOL/
+  // HOLDERS/AGE, so a value that shows on one always shows on all — no per-card blank-field regressions.
+  const mkt = scanMarketStatsFromSources({ meta: dexMeta, bonding: pumpMeta, best, mint });
+  let sym = String(dexMeta?.symbol || pumpMeta?.symbol || geckoMeta?.symbol || "").replace(/^\$+/, "").trim();
+  if (!sym) { const lg = mapMetaLastGood.get(mint); if (lg && lg.sym) sym = lg.sym; }
+  let mc = mkt.mc, liq = mkt.liq, ch1 = mkt.ch1;
+  const createdAt = Number(mkt.createdAt) || 0;
   let isToken = Boolean(sym || mc > 0 || pumpMeta?.symbol || String(mint).endsWith("pump"));
   // Metadata sources are all IP-rate-limited or slow sometimes (dex=null, gecko timeout) — a real coin then
   // mis-rendered as a WALLET map. The chain is the authority: if the address IS an SPL mint, it's a token.
@@ -31385,7 +31379,7 @@ async function buildTokenHolderMap(mint) {
   // REAL holder count (owner: "show ACTUAL holders on the coin, not just 99 because that's how many bubbles").
   // On-chain enumeration total (holderRows.holderTotal) or a metadata holder-count, else the shown count.
   const holderTotal = holderTotalRaw;
-  const metaHolders = firstMeaningfulNumber(pumpMeta?.holderCount, pumpMeta?.holder_count, pumpMeta?.holders, pumpMeta?.numHolders, geckoMeta?.holderCount, geckoMeta?.holders, dexMeta?.holderCount) || 0;
+  const metaHolders = firstMeaningfulNumber(pumpMeta?.holderCount, pumpMeta?.holder_count, pumpMeta?.holders, pumpMeta?.numHolders, geckoMeta?.holderCount, geckoMeta?.holders, dexMeta?.holderCount, mkt.holders) || 0;
   let holderCount = Math.max(holderTotal, metaHolders, nodes.length);
   { const lg = mapMetaLastGood.get(mint); if (lg && lg.holders > holderCount && Date.now() - lg.at < 15 * 60_000) holderCount = lg.holders; }   // sticky: never regress a known-good count
   if (holderCount > 0) { const lg = mapMetaLastGood.get(mint) || {}; mapMetaLastGood.set(mint, { ...lg, at: Date.now(), holders: Math.max(holderCount, Number(lg.holders) || 0) }); }
@@ -31490,7 +31484,7 @@ async function buildAirdropMap(mint, devOverride = "", tokenHint = null) {
     _rt(fetchTokenHolderRows(mint).catch(() => []), 8000, []),
     _rt(rpcRead("airdrop supply", (c) => c.getTokenSupply(new PublicKey(mint), "confirmed"), { retries: 0 }).catch(() => null), 3500, null),
     _rt(inferDevCandidateFromMintSource(mint).catch(() => null), 4000, null),
-    _rt(getGeckoTerminalTokenMetadata(mint, { timeoutMs: 3200 }).catch(() => null), 3600, null),
+    _rt(getGeckoTerminalTokenMetadata(mint, { timeoutMs: 6_000 }).catch(() => null), 6200, null),
   ]);
   const best = bestDexPairForToken(mint, pairs);
   const dexMeta = mergeTokenMarketMetadata(best ? metadataFromDexPair(mint, best) : null, geckoMeta);

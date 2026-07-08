@@ -1496,7 +1496,7 @@ test("flex detector ignores a bare tweet link so the X-post preview still fires"
 // ---- Scan card Security block never blank: free on-chain fill when RugCheck is down/unindexed ----
 test("scan Security fills from our own RPC when RugCheck returns null (no more n/a wall)", () => {
   const scan = functionBody(serverSource, "gatherSlimeScan");
-  assert.match(scan, /getGeckoTerminalTokenMetadata\(mint, \{ timeoutMs: 4_500 \}/); // market fallback for n/a LP/MC/1H fields — 4.5s so Gecko's 2-call fetch survives Render rate limits
+  assert.match(scan, /getGeckoTerminalTokenMetadata\(mint, \{ timeoutMs: 6_000 \}/); // market fallback for n/a LP/MC/1H — 6s so Gecko's 2-call fetch (our reliable non-rate-limited source) never times out first
   assert.match(scan, /mergeTokenMarketMetadata/);
   const enrich = functionBody(serverSource, "enrichScanSecurityOnchain");
   assert.match(enrich, /getParsedAccountInfo/);                 // mint/freeze authority = ground truth
