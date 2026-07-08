@@ -1,14 +1,16 @@
-// Render build wrapper — makes deploys FAST by skipping the dependency install when nothing changed.
-// Render preserves the working directory (incl. node_modules) between builds, but `npm ci` DELETES
-// node_modules and reinstalls everything from scratch every time — several minutes of every deploy spent
-// re-downloading/re-building sharp, ffmpeg-static, solana, ethers for a lockfile that didn't change.
+// Render build wrapper — trims the install portion of every deploy, safely.
 //
-// Strategy (safe-by-default):
-//   1. Hash package-lock.json. If it matches the hash stored INSIDE node_modules from the last build
-//      AND canary packages resolve, SKIP the install entirely (seconds instead of minutes).
-//   2. Any mismatch / missing canary / any doubt → full `npm ci` (the exact behavior we have today).
-//   3. Always run the web build (it's seconds and depends on the working tree, not the lockfile).
-// Escape hatch: set FORCE_FULL_INSTALL=1 on Render to bypass the skip for one deploy.
+// MEASURED FACT (verified 2026-07-08 via build logs): Render does a CLEAN CHECKOUT each build — the
+// working tree, incl. node_modules, does NOT persist between deploys (canary probe was `false` on two
+// consecutive fresh builds). So a "skip install if node_modules is warm" cache can't fire here; it's kept
+// only as a correct no-op that would help if Render ever changes that (or when run locally).
+//
+// What ACTUALLY speeds Render up, and is applied unconditionally below:
+//   • `--prefer-offline` — Render DOES cache npm's tarball store (~/.npm), so packages are reused from
+//     cache instead of re-downloaded over the network.
+//   • `--no-audit --no-fund` — skips the audit/funding network round-trips (pure deploy-time overhead).
+//   • Fewer deps in package.json (dead `agent-twitter-client`, 47MB, removed) — less to install/build.
+// Escape hatch: FORCE_FULL_INSTALL=1 forces the plain path (no behavioral difference on Render today).
 import { createHash } from "node:crypto";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
