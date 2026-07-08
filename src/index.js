@@ -31880,7 +31880,20 @@ async function renderSubjectMapPng(target, mode = "bags") {
   if (!map || !map.nodes || !map.nodes.length) return { png: null, map: null };
   const { renderSlimeMapPng } = await import("./lib/slimeMapRender.mjs");
   const bgPath = await premiumMapBg(`${map.subject}${map.mint || map.wallet || ""}`);
-  const png = await renderSlimeMapPng({ subject: map.subject, subtitle: map.subtitle, stats: map.stats, nodes: map.nodes, bgPath, centerImage: map.coinLogo || "" });
+  // 🕸️ Bake the SAME funder-clusters the site shows INTO the share card (owner: "tie this style in with our
+  // x pic"). Best-effort + hard 12s cap so a slow funder scan never stalls the X reply — no clusters just
+  // renders the plain radial map. Uses the cluster cache, so a coin already mapped on-site is instant here.
+  let clusters = [], clusterEdges = [];
+  if (map.kind === "token" && map.mint) {
+    try {
+      const gr = await Promise.race([
+        mapComputeClusters(map.mint, map.nodes),
+        new Promise((r) => setTimeout(() => r(null), 12_000)),
+      ]);
+      if (gr && Array.isArray(gr.clusters)) { clusters = gr.clusters; clusterEdges = gr.clusterEdges || []; }
+    } catch { /* plain map is fine */ }
+  }
+  const png = await renderSlimeMapPng({ subject: map.subject, subtitle: map.subtitle, stats: map.stats, nodes: map.nodes, bgPath, centerImage: map.coinLogo || "", clusters, clusterEdges });
   mapRenderCache.set(key, { at: Date.now(), png, map });
   if (mapRenderCache.size > 200) mapRenderCache.delete(mapRenderCache.keys().next().value);
   return { png, map };

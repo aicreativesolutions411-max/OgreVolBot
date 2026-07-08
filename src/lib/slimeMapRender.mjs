@@ -43,9 +43,67 @@ function layout(nodes, cx, cy, rMin, rMax) {
   });
 }
 
-export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stats = [], nodes = [], bgHref = null, transparent = false, centerImage = null, W = 900, H = 820 } = {}) {
+// CLUSTER-AWARE layout — cluster members pack into tight satellite blobs around the hub (like the reference
+// "flower" groups), non-clustered holders scatter on the outer band via golden angle. Each cluster gets its
+// group center stamped on the cluster object (_cx/_cy/_blobR) so hulls + total cards + arrows can be drawn.
+function layoutClustered(nodes, clusters, cx, cy, rMin, rMax) {
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  const r = rng(nodes.length + 11);
+  const nodeByI = new Map(nodes.map((n) => [n.i, n]));
+  const memberSet = new Set();
+  clusters.forEach((c) => (c.members || []).forEach((mi) => memberSet.add(mi)));
+  const placed = {};
+  const nc = clusters.length;
+  clusters.forEach((c, k) => {
+    const ang = (2 * Math.PI * k) / Math.max(1, nc) + 0.5;
+    const gr = rMin + (rMax - rMin) * 0.52;                       // cluster groups sit on a mid ring
+    const gcx = cx + Math.cos(ang) * gr, gcy = cy + Math.sin(ang) * gr;
+    const mem = (c.members || []).map((mi) => nodeByI.get(mi)).filter(Boolean).sort((a, b) => (b.weight || 0) - (a.weight || 0));
+    const spread = 20 + mem.length * 9;
+    let maxD = 0;
+    mem.forEach((n, j) => {
+      const a2 = j * golden + k;
+      const rr = j === 0 ? 0 : (spread * (0.45 + 0.55 * (j / Math.max(1, mem.length))) + (r() - 0.5) * 10);
+      const size = 8 + Math.max(0, Math.min(1, n.weight || 0)) * 20;
+      placed[n.i] = { ...n, x: gcx + Math.cos(a2) * rr, y: gcy + Math.sin(a2) * rr, size, _cid: c.id };
+      maxD = Math.max(maxD, rr + size);
+    });
+    c._cx = gcx; c._cy = gcy; c._blobR = maxD + 14; c._hubI = mem[0] ? mem[0].i : null;
+  });
+  let si = 0;
+  nodes.forEach((n) => {
+    if (memberSet.has(n.i)) return;
+    const ang = si * golden;
+    const tier = Math.max(0, Math.min(1, n.weight || 0));
+    const rad = rMin + (rMax - rMin) * (0.66 + 0.32 * (1 - tier)) + (r() - 0.5) * 26; // singles ride the outer band
+    placed[n.i] = { ...n, x: cx + Math.cos(ang) * rad, y: cy + Math.sin(ang) * rad, size: 7 + tier * 22 };
+    si++;
+  });
+  return nodes.map((n) => placed[n.i]).filter(Boolean);
+}
+
+// Explicit directional arrow (line + solid triangle head) — resvg/librsvg don't reliably honour <marker>
+// context-stroke, so we draw the head ourselves. Backs the head off the target's rim so it sits ON the edge.
+function arrowSvg(x1, y1, x2, y2, color, w, targetR, dash) {
+  const dx = x2 - x1, dy = y2 - y1, d = Math.hypot(dx, dy) || 1, ux = dx / d, uy = dy / d;
+  const ex = x2 - ux * (targetR + 3), ey = y2 - uy * (targetR + 3);      // arrow tip on the rim
+  const bx = ex - ux * (7 + w), by = ey - uy * (7 + w);                  // base of the head
+  const px = -uy, py = ux, hw = 3.4 + w;
+  return `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}" stroke="${color}" stroke-width="${w}" stroke-opacity="0.8"${dash ? ` stroke-dasharray="${dash}"` : ""}/>` +
+    `<polygon points="${ex.toFixed(1)},${ey.toFixed(1)} ${(bx + px * hw).toFixed(1)},${(by + py * hw).toFixed(1)} ${(bx - px * hw).toFixed(1)},${(by - py * hw).toFixed(1)}" fill="${color}" fill-opacity="0.92"/>`;
+}
+const CLUSTER_COLORS = ["#ffcf4d", "#4dd6ff", "#ff7de3", "#8bff5b", "#ff9f4d", "#b98cff", "#4dffd0", "#ff6b6b"];
+function shortAddr(a) { a = String(a || ""); return a.length > 10 ? a.slice(0, 4) + "…" + a.slice(-4) : a; }
+
+export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stats = [], nodes = [], bgHref = null, transparent = false, centerImage = null, clusters = [], clusterEdges = [], W = 900, H = 820 } = {}) {
   const cx = W / 2, cy = 118 + (H - 118) / 2;
-  const placed = layout(nodes, cx, cy, 130, Math.min(W, H - 118) / 2 - 40);
+  const rMax = Math.min(W, H - 118) / 2 - 40;
+  // Colour + letter each cluster (biggest first — server already sorted), then lay members into tight blobs.
+  const cls = (clusters || []).filter((c) => Array.isArray(c.members) && c.members.length >= 2)
+    .map((c, k) => ({ ...c, color: CLUSTER_COLORS[k % CLUSTER_COLORS.length], letter: String.fromCharCode(65 + k) }));
+  const useClusters = cls.length > 0;
+  const placed = useClusters ? layoutClustered(nodes, cls, cx, cy, 130, rMax) : layout(nodes, cx, cy, 130, rMax);
+  const posByI = new Map(placed.map((p) => [p.i, p]));
 
   // Header stat pills
   const pillW = (W - 60 - 4 * 14) / 5;
@@ -58,9 +116,13 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
     </g>`;
   }).join("");
 
-  // Spokes (draw first, behind nodes)
+  // Spokes (draw first, behind nodes). Cluster members get their own funder→member arrows, so skip their
+  // hub spokes when clustering to keep the fund-flow readable instead of a spider web.
+  const clusteredSet = new Set();
+  if (useClusters) cls.forEach((c) => (c.members || []).forEach((mi) => clusteredSet.add(mi)));
   const spokes = placed.map((p) =>
-    `<line x1="${cx}" y1="${cy}" x2="${p.x.toFixed(1)}" y2="${p.y.toFixed(1)}" stroke="#3a7d49" stroke-width="${(0.6 + p.size / 28).toFixed(2)}" stroke-opacity="0.5"/>`
+    (useClusters && clusteredSet.has(p.i)) ? "" :
+    `<line x1="${cx}" y1="${cy}" x2="${p.x.toFixed(1)}" y2="${p.y.toFixed(1)}" stroke="#3a7d49" stroke-width="${(0.6 + p.size / 28).toFixed(2)}" stroke-opacity="${useClusters ? "0.32" : "0.5"}"/>`
   ).join("");
 
   // Nodes — glossy gradient "spheres" with a soft glow + specular highlight (premium, not flat circles).
@@ -83,6 +145,50 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
       : "";
     return `<g>${glow}${body}${rim}${pctTxt}</g>`;
   }).join("");
+
+  // 🕸️ CLUSTER LAYER — translucent blob per group, directional funder→member arrows, inter-cluster arrows,
+  // and a floating total card (◆letter · funder / N wallets · % / $ · →N linked). Drawn UNDER the bubbles so
+  // the slime spheres sit on top; the total cards render last so they stay readable.
+  let clusterBlobs = "", clusterArrows = "", clusterCards = "";
+  if (useClusters) {
+    const byId = new Map(cls.map((c) => [c.id, c]));
+    clusterBlobs = cls.map((c) =>
+      `<circle cx="${c._cx.toFixed(1)}" cy="${c._cy.toFixed(1)}" r="${(c._blobR || 40).toFixed(1)}" fill="${c.color}" fill-opacity="0.10" stroke="${c.color}" stroke-opacity="0.4" stroke-width="1.6"/>`
+    ).join("");
+    // funder/biggest-bag → each member (in-blob flow)
+    const memberArrows = cls.map((c) => {
+      const hub = posByI.get(c._hubI); if (!hub) return "";
+      return (c.members || []).filter((mi) => mi !== c._hubI).map((mi) => {
+        const t = posByI.get(mi); if (!t) return "";
+        return arrowSvg(hub.x, hub.y, t.x, t.y, c.color, 1.6, t.size, "5 3");
+      }).join("");
+    }).join("");
+    // inter-cluster: cluster A funded by a wallet inside cluster B → A points at B (thicker, solid)
+    const xArrows = (clusterEdges || []).map((e) => {
+      const a = byId.get(e.from), b = byId.get(e.to);
+      if (!a || !b || a._cx == null || b._cx == null) return "";
+      return arrowSvg(a._cx, a._cy, b._cx, b._cy, a.color, 3, b._blobR || 40);
+    }).join("");
+    clusterArrows = memberArrows + xArrows;
+    clusterCards = cls.map((c) => {
+      const outN = (clusterEdges || []).filter((e) => e.from === c.id).length;
+      const l1 = `${c.size || (c.members || []).length} wallets · ${(+c.pct).toFixed(1)}%`;
+      const l2 = `${fmtUsd(c.usd)}${outN ? ` · →${outN} cluster${outN > 1 ? "s" : ""}` : ""}`;
+      const l3 = `◆${c.letter} · from ${esc(c.funderShort || shortAddr(c.funder))}`;
+      const wpx = Math.max(l1.length, l2.length, l3.length) * 6.9 + 22;
+      const yTop = c._cy - (c._blobR || 40) - 30;
+      return `<g>
+        <rect x="${(c._cx - wpx / 2).toFixed(1)}" y="${yTop.toFixed(1)}" width="${wpx.toFixed(1)}" height="52" rx="11" fill="#04120a" fill-opacity="0.82" stroke="${c.color}" stroke-opacity="0.55" stroke-width="1.4"/>
+        <text x="${c._cx.toFixed(1)}" y="${(yTop + 16).toFixed(1)}" text-anchor="middle" font-family="Arial, sans-serif" font-size="10.5" font-weight="700" fill="${c.color}" paint-order="stroke" stroke="#04120a" stroke-width="2.5">${esc(l3)}</text>
+        <text x="${c._cx.toFixed(1)}" y="${(yTop + 32).toFixed(1)}" text-anchor="middle" font-family="Arial Black, Arial" font-size="13" font-weight="900" fill="#eafff0" paint-order="stroke" stroke="#04120a" stroke-width="2.5">${esc(l1)}</text>
+        <text x="${c._cx.toFixed(1)}" y="${(yTop + 47).toFixed(1)}" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="700" fill="${c.color}" paint-order="stroke" stroke="#04120a" stroke-width="2.5">${esc(l2)}</text>
+      </g>`;
+    }).join("");
+  }
+  // 🏷️ wallet SNIPPET under bigger bubbles (first4…last4) — reads like a real address (clickable on-site).
+  const snippets = placed.filter((p) => p.wallet && !p.label && p.size >= 13).map((p) =>
+    `<text x="${p.x.toFixed(1)}" y="${(p.y + p.size + 12).toFixed(1)}" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10" font-weight="700" fill="#bfe9c8" paint-order="stroke" stroke="#04120a" stroke-width="3">${esc(shortAddr(p.wallet))}</text>`
+  ).join("");
 
   // Labels for the biggest / named nodes
   const labels = placed.filter((p) => p.label).map((p) => {
@@ -149,11 +255,15 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
     ${defs}
     ${bg}
+    ${clusterBlobs}
     ${spokes}
+    ${clusterArrows}
     ${header}
     ${hub}
     ${nodeEls}
+    ${snippets}
     ${labels}
+    ${clusterCards}
     ${legend}
   </svg>`;
 }
@@ -193,7 +303,7 @@ async function localFaceDataUri(file, size = 88) {
   } catch { return null; }
 }
 
-export async function renderSlimeMapPng({ subject, subtitle, stats = [], nodes = [], bgPath = null, centerImage = null, W = 900, H = 820 } = {}) {
+export async function renderSlimeMapPng({ subject, subtitle, stats = [], nodes = [], bgPath = null, centerImage = null, clusters = [], clusterEdges = [], W = 900, H = 820 } = {}) {
   // Resolve avatars → embedded data-URIs, in parallel. KOL X pfps come from a remote URL (fetch); anonymous
   // wallets get a LOCAL slime face (read off disk). Deduped so the same face/url is only processed once.
   // The COIN's PFP (centerImage) is fetched the same way so it embeds in the center hub of the share card.
@@ -212,7 +322,7 @@ export async function renderSlimeMapPng({ subject, subtitle, stats = [], nodes =
   }));
   const centerData = await centerImageP;        // null if the coin logo failed → hub falls back to the orb
 
-  const svg = buildMapSvg({ subject, subtitle, stats, nodes, transparent: true, centerImage: centerData, W, H });
+  const svg = buildMapSvg({ subject, subtitle, stats, nodes, transparent: true, centerImage: centerData, clusters, clusterEdges, W, H });
   const mapPng = await sharp(Buffer.from(svg)).png().toBuffer();
 
   // Base = branded background (cover) or a dark-green fallback gradient.
