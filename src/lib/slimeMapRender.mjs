@@ -497,14 +497,15 @@ export function buildAirdropSvg({ subject = "$SLIME", subtitle = "airdrop", stat
       const y = 648 + (i % perCol) * 16.4;
       const status = row.held !== false ? "HELD" : "DUMPED";
       const color = row.held !== false ? "#3f9c34" : "#b56256";
-      const pctTxt = Number(row.pct) > 0 ? `${(+row.pct).toFixed(1)}%` : "—";
+      const valTxt = Number(row.usd) > 0 ? fmtUsd(row.usd) : "—";      // $ VALUE of the transfer (owner: "how much value")
+      const toTxt = (row.isKol ? "★ " : "") + String(row.to || "").slice(0, row.isKol ? 12 : 13);
       return `<g>
         <rect x="${c.base}" y="${(y - 13).toFixed(1)}" width="376" height="15.6" rx="6" fill="${(i % perCol) % 2 ? "#fff6e8" : "#fffaf0"}" fill-opacity="0.82"/>
         <text x="${c.rank}" y="${y.toFixed(1)}" font-family="Arial Black, Arial" font-size="10.5" font-weight="900" fill="#9a8b6e">${i + 1}</text>
         <text x="${c.amt}" y="${y.toFixed(1)}" font-family="Arial Black, Arial" font-size="11" font-weight="900" fill="#2b2417">${esc(String(row.amountLabel || "").slice(0, 8))}</text>
-        <text x="${c.pct}" y="${y.toFixed(1)}" font-family="Arial" font-size="10.5" font-weight="800" fill="#8b7d5f">${esc(pctTxt)}</text>
-        <text x="${c.to}" y="${y.toFixed(1)}" font-family="Arial" font-size="10.5" font-weight="800" fill="#6d614d">${esc(String(row.to || "").slice(0, 13))}</text>
-        <text x="${c.status}" y="${y.toFixed(1)}" font-family="Arial Black, Arial" font-size="10.5" font-weight="900" fill="${color}">${status}${row.isKol ? " ★" : ""}</text>
+        <text x="${c.pct}" y="${y.toFixed(1)}" font-family="Arial Black, Arial" font-size="10.5" font-weight="900" fill="#2f8f28">${esc(valTxt)}</text>
+        <text x="${c.to}" y="${y.toFixed(1)}" font-family="Arial" font-size="10.5" font-weight="800" fill="${row.isKol ? "#b0640f" : "#6d614d"}">${esc(toTxt)}</text>
+        <text x="${c.status}" y="${y.toFixed(1)}" font-family="Arial Black, Arial" font-size="10.5" font-weight="900" fill="${color}">${status}</text>
       </g>`;
     }).join("");
     const totalFed = Number(flow.totalWallets) || flowAll.length;
@@ -512,8 +513,8 @@ export function buildAirdropSvg({ subject = "$SLIME", subtitle = "airdrop", stat
     const colHdr = (c) => `
       <text x="${c.rank}" y="628" font-family="Arial" font-size="9.5" font-weight="900" fill="#9a8b6e">#</text>
       <text x="${c.amt}" y="628" font-family="Arial" font-size="9.5" font-weight="900" fill="#9a8b6e">AMOUNT</text>
-      <text x="${c.pct}" y="628" font-family="Arial" font-size="9.5" font-weight="900" fill="#9a8b6e">%</text>
-      <text x="${c.to}" y="628" font-family="Arial" font-size="9.5" font-weight="900" fill="#9a8b6e">WALLET / KOL</text>
+      <text x="${c.pct}" y="628" font-family="Arial" font-size="9.5" font-weight="900" fill="#9a8b6e">VALUE</text>
+      <text x="${c.to}" y="628" font-family="Arial" font-size="9.5" font-weight="900" fill="#9a8b6e">TO WALLET / KOL</text>
       <text x="${c.status}" y="628" font-family="Arial" font-size="9.5" font-weight="900" fill="#9a8b6e">STATUS</text>`;
     const table = `<g>
       <rect x="28" y="556" width="844" height="212" rx="20" fill="#fffaf0" fill-opacity="0.92" stroke="#cbb98d" stroke-width="2"/>
