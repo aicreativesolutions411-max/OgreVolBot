@@ -13985,6 +13985,10 @@ async function handleMessage(message, userId) {
   // !session so it never hijacks a flow that's waiting for a CA (e.g. the /pnlcard "paste the mint" prompt).
   if (isPrivateChat(message.chat) && !session) {
     const caTokDm = text.trim().replace(/^\$/, "");
+    // A bare Robinhood Chain contract (0x…) pasted in a DM = the RH scan card (RH trading lives on the
+    // site, so there's no DM buy panel — the card carries the ⚡ Trade link). Same "just paste a CA" reflex.
+    const rhDm = (caTokDm.match(/^0x[0-9a-fA-F]{40}$/) || [])[0] || "";
+    if (rhDm) { await sendRhScanCard(chatId, rhDm); return; }
     if (isLikelySolMint(caTokDm)) {
       await sendDmBuyPanel(chatId, userId, caTokDm);
       return;
