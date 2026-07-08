@@ -25341,8 +25341,8 @@ async function fetchDexScreenerTokenPairsFallback(tokenMint, options = {}) {
     timeoutMs: options.timeoutMs || 3_500
   }).catch(() => null);
   if (Array.isArray(data?.pairs) && data.pairs.length) return data.pairs;
-  // DexScreener SOFT-BLOCKS a busy IP with `200 {"pairs":null}` — no error, silent empty. Try the newer
-  // v1 endpoint (separately limited) before giving up, and log the block (rate-limited to 1/min) so
+  // `200 {"pairs":null}` = DexScreener's answer for an unindexed token AND (sometimes) a rate-limited IP —
+  // indistinguishable. Try the newer v1 endpoint (separately limited) before giving up, and log (1/min) so
   // "everything blank" is diagnosable from Render logs instead of looking like a data bug.
   const alt = await fetchJson(`https://api.dexscreener.com/tokens/v1/solana/${encodeURIComponent(mint)}`, {
     headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
@@ -25352,15 +25352,30 @@ async function fetchDexScreenerTokenPairsFallback(tokenMint, options = {}) {
   if (altPairs.length) return altPairs;
   if (data && data.pairs === null && Date.now() - _dsSoftBlockLogAt > 60_000) {
     _dsSoftBlockLogAt = Date.now();
-    try { console.warn(`[dexscreener] SOFT-BLOCKED (200 + pairs:null) for ${shortMint(mint)} — both endpoints empty; scans lean on SolanaTracker/pump/cache`); } catch { /* logging is best-effort */ }
+    try { console.warn(`[dexscreener] empty (200 + pairs:null) for ${shortMint(mint)} — unindexed or rate-limited; scans lean on Gecko/SolanaTracker/pump/cache`); } catch { /* logging is best-effort */ }
   }
   return [];
 }
 
 function bestDexPairForToken(tokenMint, pairs) {
-  return (pairs || [])
-    .filter((pair) => pairMatchesToken(pair, tokenMint))
-    .sort(compareDexPairsForSniper)[0] || null;
+  const matching = (pairs || []).filter((pair) => pairMatchesToken(pair, tokenMint));
+  // CORRUPT-LISTING GUARD: DexScreener sometimes carries a broken pair whose reported marketCap is
+  // wildly off (live case: BONK's deepest-liq pair was a Meteora listing with mc $1.744T — 1000× real —
+  // liq $40.67M and NO h1, so it won the liquidity sort and poisoned MC/LIQ/1H on the card). When 3+
+  // pairs exist, drop any pair whose mc/fdv disagrees with the MEDIAN across pairs by >5× before sorting.
+  let candidates = matching;
+  if (matching.length >= 3) {
+    const mcs = matching.map((p) => Number(p?.marketCap || p?.fdv) || 0).filter((v) => v > 0).sort((a, b) => a - b);
+    if (mcs.length >= 3) {
+      const median = mcs[Math.floor(mcs.length / 2)];
+      const sane = matching.filter((p) => {
+        const mc = Number(p?.marketCap || p?.fdv) || 0;
+        return !(mc > 0) || (mc / median <= 5 && median / mc <= 5);   // no-mc pairs pass; wild outliers drop
+      });
+      if (sane.length) candidates = sane;
+    }
+  }
+  return candidates.sort(compareDexPairsForSniper)[0] || null;
 }
 
 function pairMatchesToken(pair, tokenMint) {
@@ -31164,10 +31179,10 @@ async function gatherSlimeScan(mint) {
   const best = bestDexPairForToken(mint, pairs);
   let meta = mergeTokenMarketMetadata(best ? metadataFromDexPair(mint, best) : null, geckoMeta);
   if (stMarket) {
-    // Carry EVERYTHING ST returns — it's the keyed source that still answers when DexScreener soft-blocks
-    // Render (200 + pairs:null) and since GeckoTerminal killed its token endpoints (404). Shapes mirror
-    // DexScreener's ({priceChange:{h1}}, {volume:{h24}}, {txns:{h24}}) so scanBestPriceChange /
-    // scanBestVolumeWindow / scanBestTxnCount read it with zero special-casing.
+    // Carry EVERYTHING ST returns — it's the keyed source that still answers when the free sources
+    // (DexScreener/Gecko) rate-limit Render's shared IP. Shapes mirror DexScreener's ({priceChange:{h1}},
+    // {volume:{h24}}, {txns:{h24}}) so scanBestPriceChange / scanBestVolumeWindow / scanBestTxnCount read
+    // it with zero special-casing.
     meta = mergeTokenMarketMetadata(meta, {
       source: "solanatracker",
       symbol: stMarket.symbol,
@@ -31435,8 +31450,8 @@ async function buildTokenHolderMap(mint) {
   ]);
   const best = bestDexPairForToken(mint, pairs);
   let dexMeta = mergeTokenMarketMetadata(best ? metadataFromDexPair(mint, best) : null, geckoMeta);
-  // ST = the KEYED backbone (DexScreener soft-blocks Render with 200+pairs:null; Gecko's token endpoints
-  // are 404 since their API change). Same merge the scan card does, so map == scan on every field.
+  // ST = the KEYED backbone when the free sources rate-limit Render's shared IP. Same merge the scan
+  // card does, so map == scan on every field.
   if (stMkt) {
     dexMeta = mergeTokenMarketMetadata(dexMeta, {
       source: "solanatracker",
@@ -38260,10 +38275,10 @@ function startGroupBuyBot() {
   // scan→card pipeline works at all — isolates "coin didn't scan" (build broken) from "no CA" (resolve).
   setTimeout(async () => {
     if (!xReplyEnabled() || !xConfigured()) { console.log("[xreply] SELFTEST skipped — off/unconfigured"); return; }
-    // CANONICAL BONK — the old constant was a corrupted mint (diverged from real BONK after 18 chars), so
-    // the boot probe wasn't testing what a real scan sees. Full text logged (200) so 1H/rail are VISIBLE in
-    // Render logs — this line is the field-by-field live check for "info always full".
-    const BONK = "DezXAZ8z7PnrnRJjz3uq8NgV8Q9ddCzB9Ckr7JpPvvR";
+    // REAL BONK (verified on-chain: this account exists, owner = SPL Token program — do NOT "correct" it;
+    // a wrong lookalike mint here silently turns the probe into a nothing-test). Full text logged (200) so
+    // 1H/rail are VISIBLE in Render logs — this line is the field-by-field live check for "info always full".
+    const BONK = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
     try {
       const t0 = Date.now();
       const r = await buildXReply(BONK, "scan", "selftest");
@@ -57778,9 +57793,9 @@ async function fetchSolanaTrackerTokenReport(mint = "") {
     holderCount: stNum(data.holders ?? data.holderCount ?? token.holders),
     marketCap: stNum(pool.marketCap?.usd ?? data.marketCapUsd ?? token.marketCapUsd),
     liquidityUsd: stNum(pool.liquidity?.usd),
-    // FULL market read — ST is our KEYED source (immune to the IP soft-blocks that blank DexScreener on
-    // Render, and GeckoTerminal's token endpoints are GONE — 404 since their API change). These fields were
-    // being thrown away, which is why 1H/vol/price vanished from cards whenever DexScreener whiffed.
+    // FULL market read — ST is our KEYED source (immune to the IP rate-limits that can blank DexScreener /
+    // GeckoTerminal on Render's shared IP). These fields were being thrown away, which left 1H/vol/price
+    // with fewer fallbacks whenever the free sources whiffed.
     priceUsd: stNum(pool.price?.usd ?? token.priceUsd),
     ch1: stNum(data.events?.["1h"]?.priceChangePercentage),
     ch24: stNum(data.events?.["24h"]?.priceChangePercentage),
