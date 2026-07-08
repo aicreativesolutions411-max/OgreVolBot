@@ -37,6 +37,13 @@ const POOL = new ethers.Interface([
   "function slot0() view returns (uint160 sqrtPriceX96,int24 tick,uint16,uint16,uint16,uint8,bool)",
   "function token0() view returns (address)",
 ]);
+// The factory's O(1) view: confirms a coin is a NOXA launch + gives its paired token + pool fee tier, so a
+// single-coin lookup never has to scan log history (which the RPC rejects/times-out over the full range).
+const LAUNCHER = new ethers.Interface([
+  "function getLaunchedToken(address token) view returns (tuple(address token,address deployer,address pairedToken,address positionManager,uint256 positionId,uint256 dexId,uint256 launchConfigId,uint256 restrictionsEndBlock,uint256 supply,bool isToken0,uint24 poolFee,bool exists,uint256 initialBuyAmount))",
+]);
+const V3_FACTORY_ADDR = "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA";   // Robinhood Uniswap-V3 factory (from NOXA config)
+const V3_FACTORY = new ethers.Interface(["function getPool(address,address,uint24) view returns (address)"]);
 const MC3 = new ethers.Interface([
   "function aggregate3((address target,bool allowFailure,bytes callData)[] calls) view returns ((bool success,bytes returnData)[])",
 ]);
@@ -155,8 +162,9 @@ export async function fetchNoxaFeed({ rpcUrl, lookbackBlocks = 60000, max = 60 }
 }
 
 const scanCache = new Map();   // token → { at, v }
-// Single-coin scan: is this a NOXA launch? If so, return its live stats. Cheap (targeted log query by the
-// indexed `token` topic + one multicall). Returns null for non-NOXA tokens so callers can fall back.
+// Single-coin scan: is this a NOXA launch? If so, return its live stats. O(1) — asks the factory's
+// getLaunchedToken view (no log-history scan, which the RPC rejects over the full range), derives the V3
+// pool from the paired token + fee tier, then reads the market. Returns null for non-NOXA tokens.
 export async function getNoxaScan(tokenAddress, { rpcUrl, ethUsd } = {}) {
   const addr = String(tokenAddress || "").trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return null;
@@ -164,20 +172,22 @@ export async function getNoxaScan(tokenAddress, { rpcUrl, ethUsd } = {}) {
   const hit = scanCache.get(key);
   if (hit && Date.now() - hit.at < 45_000) return hit.v;
   const provider = noxaProvider(rpcUrl);
-  let entry = null;
+  const token = ethers.getAddress(addr);
+  let info = null;
+  try { [info] = await multicall(provider, [{ target: NOXA_RH.launchFactory, iface: LAUNCHER, fn: "getLaunchedToken", args: [token] }]); }
+  catch { /* fall through */ }
+  if (!info || !info.exists) { scanCache.set(key, { at: Date.now(), v: null }); return null; }
+  const pairToken = ethers.getAddress(info.pairedToken);
+  const fee = Number(info.poolFee) || 10000;
+  // Derive the pool: the coin's launch fee tier first, then the other RH tiers as a fallback.
+  const feeTiers = [...new Set([fee, 10000, 3000, 500])];
+  let pool = ethers.ZeroAddress;
   try {
-    // token is topics[1] on TokenLaunched (first indexed arg) — a targeted, cheap lookup across all history.
-    const logs = await provider.getLogs({
-      address: NOXA_RH.launchFactory, fromBlock: NOXA_RH.startBlock, toBlock: "latest",
-      topics: [TOPIC_LAUNCHED, ethers.zeroPadValue(ethers.getAddress(addr), 32)],
-    });
-    if (logs.length) {
-      const d = IFACE_FACTORY.parseLog(logs[logs.length - 1]);
-      entry = { token: ethers.getAddress(d.args.token), pool: ethers.getAddress(d.args.pool), pairToken: ethers.getAddress(d.args.pairToken), deployer: ethers.getAddress(d.args.deployer), positionId: d.args.positionId, block: Number(logs[logs.length - 1].blockNumber) };
-    }
-  } catch { /* fall through to null */ }
-  if (!entry) { scanCache.set(key, { at: Date.now(), v: null }); return null; }
-  const [mk] = await readNoxaMarkets([entry], { rpcUrl, ethUsd });
+    const pr = await multicall(provider, feeTiers.map((f) => ({ target: V3_FACTORY_ADDR, iface: V3_FACTORY, fn: "getPool", args: [token, pairToken, f] })));
+    for (const p of pr) { if (p && p !== ethers.ZeroAddress) { pool = ethers.getAddress(p); break; } }
+  } catch { /* no pool derivable */ }
+  if (pool === ethers.ZeroAddress) { scanCache.set(key, { at: Date.now(), v: null }); return null; }
+  const [mk] = await readNoxaMarkets([{ token, pool, pairToken, deployer: ethers.getAddress(info.deployer), positionId: info.positionId, block: 0 }], { rpcUrl, ethUsd });
   const v = mk || null;
   scanCache.set(key, { at: Date.now(), v });
   return v;
