@@ -1387,7 +1387,7 @@
       return '<div class="rhrow" data-rowaddr="'+esc(ca)+'" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;overflow:hidden" onclick="GG.rhTrade(\''+esc(ca)+'\')">'+
       rhAvatar(r,30)+
       '<div style="min-width:0;flex:1;overflow:hidden">'+
-        '<div style="display:flex;gap:6px;align-items:center;min-width:0"><b style="font-size:12.5px;flex:0 0 auto">'+esc(r.symbol||"?")+'</b>'+(r.createdAt?'<span class="mut" style="font-size:9px;flex:0 0 auto" title="Coin age">⏱'+ago(r.createdAt)+'</span>':'')+'<span class="mut" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.name||"")+'</span>'+(r.slimewire?'<span title="Launched on SlimeWire" style="font-size:9px;background:var(--accent,#6dc36d);color:#08130a;border-radius:6px;padding:1px 5px;font-weight:700;flex:0 0 auto">SW</span>':'')+'</div>'+
+        '<div style="display:flex;gap:6px;align-items:center;min-width:0"><b style="font-size:12.5px;flex:0 0 auto">'+esc(r.symbol||"?")+'</b>'+(r.createdAt?'<span class="mut" style="font-size:9px;flex:0 0 auto" title="Coin age">⏱'+ago(r.createdAt)+'</span>':'')+'<span class="mut" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.name||"")+'</span>'+(r.slimewire?'<span title="Launched on SlimeWire" style="font-size:9px;background:var(--accent,#6dc36d);color:#08130a;border-radius:6px;padding:1px 5px;font-weight:700;flex:0 0 auto">SW</span>':'')+(r.source==="noxa"?'<span title="Launched on NOXA" style="font-size:9px;flex:0 0 auto">🚀</span>':'')+'</div>'+
         '<div style="display:flex;gap:8px;align-items:center;min-width:0;margin-top:2px"><span class="mut" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(stats)+'</span><span class="rhsoc" style="display:inline-flex;gap:9px;flex:0 0 auto">'+soc.join("")+'</span></div>'+
       '</div>'+
       (Number.isFinite(r.m5)&&r.m5!==0?'<span class="chg '+(r.m5>=0?'up':'down')+'" style="font-size:10px;flex:0 0 auto;white-space:nowrap">'+(r.m5>=0?'+':'')+r.m5+'%</span>':'')+
@@ -1559,16 +1559,36 @@
     const cb=$("#rhTmBuy");if(cb)cb.onclick=()=>{const a=($("#rhTmAmt")||{}).value;if(!(Number(a)>0)){toast("Enter an ETH amount.",true);return;}rhTrade(address,"buy",{amountEth:String(a)});};
     // Freshen price/MC/liq/pair on open; mount the chart if the pair just appeared.
     rhEnrichRows([r]).then((changed)=>{
-      if(!changed||state.route!=="rhtrade")return;
-      const s=$("#rhTvStats");if(s)s.innerHTML=statsHtml();
-      const c=$("#rhTvChart");if(c&&r.pairAddress&&!c.querySelector("iframe"))c.innerHTML='<iframe src="https://dexscreener.com/robinhood/'+esc(r.pairAddress)+'?embed=1&theme=dark&trades=0&info=0&interval=5" style="width:100%;height:46vh;border:0;display:block"></iframe>';
-      // pasted-fresh coin: its ticker/name just arrived → fill the "?" header + the sub-bar title + avatar
-      const sy=$("#rhTvSym");if(sy&&r.symbol)sy.textContent=r.symbol;
-      const nm=$("#rhTvName");if(nm)nm.textContent=(r.name||"")+' · Robinhood Chain';
-      if(r.symbol){h.textContent=r.symbol;}
+      if(state.route==="rhtrade"&&changed){
+        const s=$("#rhTvStats");if(s)s.innerHTML=statsHtml();
+        const c=$("#rhTvChart");if(c&&r.pairAddress&&!c.querySelector("iframe"))c.innerHTML='<iframe src="https://dexscreener.com/robinhood/'+esc(r.pairAddress)+'?embed=1&theme=dark&trades=0&info=0&interval=5" style="width:100%;height:46vh;border:0;display:block"></iframe>';
+        // pasted-fresh coin: its ticker/name just arrived → fill the "?" header + the sub-bar title + avatar
+        const sy=$("#rhTvSym");if(sy&&r.symbol)sy.textContent=r.symbol;
+        const nm=$("#rhTvName");if(nm)nm.textContent=(r.name||"")+' · Robinhood Chain';
+        if(r.symbol){h.textContent=r.symbol;}
+      }
+      // 🚀 NOXA fallback — DexScreener indexes almost no RH coins. If it gave us no price, read the coin
+      // off NOXA's launchpad on-chain so a fresh launch still shows real MC/liq/price + a Trade-on-NOXA link.
+      if(!(r.priceUsd>0))loadNoxaFallback(r,address,statsHtml,h);
     });
     rhTmRefreshBal(address);
     loadRhSafety(address);
+  }
+  // Fill a coin the DEX doesn't index yet from NOXA's launchpad (on-chain read via our server). Updates the
+  // stats, ticker/name header, and drops a "🚀 Launched on NOXA" note with a link (chart comes once indexed).
+  async function loadNoxaFallback(r,address,statsHtml,h){
+    const {ok,d}=await api("/api/web/rh/noxa?token="+encodeURIComponent(address)).catch(()=>({}));
+    if(!ok||!d||!d.ok||!d.coin||state.route!=="rhtrade")return;
+    const c=d.coin;
+    if(c.symbol&&!r.symbol)r.symbol=c.symbol;if(c.name&&!r.name)r.name=c.name;
+    if(c.priceUsd>0)r.priceUsd=c.priceUsd;if(c.mc>0)r.marketCapUsd=c.mc;if(c.liq>0)r.liquidityUsd=c.liq;
+    r.noxa=true;r.noxaUrl=c.noxaUrl||("https://fun.noxa.fi/token/"+address);
+    const s=$("#rhTvStats");if(s&&statsHtml)s.innerHTML=statsHtml();
+    const sy=$("#rhTvSym");if(sy&&r.symbol)sy.textContent=r.symbol;
+    const nm=$("#rhTvName");if(nm)nm.textContent=(r.name||"")+' · Robinhood Chain · NOXA 🚀';
+    if(h&&r.symbol)h.textContent=r.symbol;
+    const chart=$("#rhTvChart");
+    if(chart&&!chart.querySelector("iframe"))chart.innerHTML='<div class="msg" style="padding:24px 20px;font-size:12px;line-height:1.6">🚀 <b>Launched on NOXA</b> — trading live on its bonding pool now. A full price chart appears here once the coin is indexed on DexScreener (usually after it gets some volume).<br><a href="'+esc(r.noxaUrl)+'" target="_blank" rel="noopener" style="color:var(--green)">View on NOXA ↗</a></div>';
   }
   async function loadRhSafety(address){
     const el=$("#rhSafety");if(!el)return;

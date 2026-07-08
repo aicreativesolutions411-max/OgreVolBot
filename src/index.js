@@ -70,6 +70,7 @@ import {
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
 import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
+import { getNoxaScan, fetchNoxaFeed, NOXA_RH } from "./lib/noxaLaunchpad.js";
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp, listCharacterFiles, characterPfpCount, makeCharacterPfp } from "./lib/pfp.js";
 import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
 import { xConfigured, xSearchMentions, xReply, xPost, xSearchQuery, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode, xAuthReport } from "./lib/xClient.js";
@@ -8892,6 +8893,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const tok = String(requestUrl.searchParams.get("token") || "").trim();
       if (!/^0x[0-9a-fA-F]{40}$/.test(tok)) { sendWebJson(request, response, 400, { ok: false, error: "Invalid token address." }); return; }
       sendWebJson(request, response, 200, await rhHoneypotCheck(tok, CONFIG.rhChainRpcUrl).catch(() => ({ ok: true, verdict: "unknown", reasons: ["couldn't scan right now"] })));
+      return;
+    }
+    // 🚀 NOXA on-chain stats for one RH coin — the coin page uses this to fill a fresh NOXA launch that
+    // DexScreener hasn't indexed yet (name/symbol/price/MC/liq + the NOXA link). Returns ok:false if the
+    // address isn't a NOXA launch (caller keeps its DexScreener data).
+    if (request.method === "GET" && pathname === "/api/web/rh/noxa") {
+      const tok = String(requestUrl.searchParams.get("token") || "").trim();
+      if (!/^0x[0-9a-fA-F]{40}$/.test(tok)) { sendWebJson(request, response, 400, { ok: false, error: "Invalid token address." }); return; }
+      const n = await getNoxaScan(tok, { rpcUrl: CONFIG.rhChainRpcUrl }).catch(() => null);
+      sendWebJson(request, response, 200, n ? { ok: true, coin: n } : { ok: false });
       return;
     }
     if (request.method === "GET" && pathname.startsWith("/api/web/rh/token-image/")) {
@@ -32538,19 +32549,26 @@ async function gatherRhScan(address) {
   ]);
   const pairs = (dsRes?.pairs || []).filter((p) => String(p.chainId || "").toLowerCase() === "robinhood");
   const pair = pairs.sort((x, y) => (Number(y.liquidity?.usd) || 0) - (Number(x.liquidity?.usd) || 0))[0] || null;
+  // NOXA FALLBACK: DexScreener indexes almost no RH pairs. When it has nothing (or no price) for this
+  // coin, read it straight off NOXA's launchpad on-chain (fresh pre-DexScreener launches) so the scan
+  // still shows real MC/liq/price instead of "n/a". Only pay for the on-chain read when DexScreener whiffs.
+  let noxa = null;
+  if (!pair || !(Number(pair.priceUsd) > 0)) {
+    noxa = await getNoxaScan(a, { rpcUrl: CONFIG.rhChainRpcUrl }).catch(() => null);
+  }
   const socials = Array.isArray(pair?.info?.socials) ? pair.info.socials : [];
   const website = (Array.isArray(pair?.info?.websites) ? pair.info.websites : [])[0]?.url || "";
   const v = {
     address: a, chain: "robinhood",
-    symbol: String(pair?.baseToken?.symbol || "").replace(/^\$+/, "").slice(0, 14),
-    name: String(pair?.baseToken?.name || "").slice(0, 40),
-    priceUsd: Number(pair?.priceUsd) || 0,
-    mc: Number(pair?.marketCap || pair?.fdv) || 0,
-    liq: Number(pair?.liquidity?.usd) || 0,
+    symbol: String(pair?.baseToken?.symbol || noxa?.symbol || "").replace(/^\$+/, "").slice(0, 16),
+    name: String(pair?.baseToken?.name || noxa?.name || "").slice(0, 40),
+    priceUsd: Number(pair?.priceUsd) || noxa?.priceUsd || 0,
+    mc: Number(pair?.marketCap || pair?.fdv) || noxa?.mc || 0,
+    liq: Number(pair?.liquidity?.usd) || noxa?.liq || 0,
     vol24: Number(pair?.volume?.h24) || 0,
     ch1: Number(pair?.priceChange?.h1),
     ch24: Number(pair?.priceChange?.h24),
-    pairAddress: pair?.pairAddress || "",
+    pairAddress: pair?.pairAddress || noxa?.pool || "",
     createdAt: Number(pair?.pairCreatedAt) || 0,
     imageUrl: pair?.info?.imageUrl || "",
     twitterUrl: (socials.find((s) => /twitter|x/i.test(s.type || s.label || "")) || {}).url || "",
@@ -32558,6 +32576,8 @@ async function gatherRhScan(address) {
     websiteUrl: website,
     safety: saf,   // { verdict: safe|warn|danger|unknown, reasons:[] }
     explorer: `https://robinhoodchain.blockscout.com/token/${a}`,
+    source: pair ? "dexscreener" : (noxa ? "noxa" : ""),
+    noxaUrl: noxa ? noxa.noxaUrl : "",
   };
   rhScanCache.set(key, { at: Date.now(), v });
   if (rhScanCache.size > 200) rhScanCache.delete(rhScanCache.keys().next().value);
@@ -32616,9 +32636,11 @@ function formatRhScanCard(info) {
   if (info.twitterUrl) soc.push(`<a href="${esc(info.twitterUrl)}">𝕏</a>`);
   if (info.websiteUrl) soc.push(`<a href="${esc(info.websiteUrl)}">🌐 Web</a>`);
   if (info.telegramUrl) soc.push(`<a href="${esc(info.telegramUrl)}">✈️ TG</a>`);
+  if (info.noxaUrl) soc.push(`<a href="${esc(info.noxaUrl)}">🚀 NOXA</a>`);
   soc.push(`<a href="${esc(info.explorer)}">🔎 Blockscout</a>`);
+  const railTag = info.source === "noxa" ? "Robinhood Chain · NOXA 🚀" : "Robinhood Chain";
   return [
-    `🪶 <b>${esc(name)} ($${esc(sym)})</b> · <i>Robinhood Chain</i>`,
+    `🪶 <b>${esc(name)} ($${esc(sym)})</b> · <i>${railTag}</i>`,
     `├ <code>${esc(a)}</code>`,
     `└ 🌱 ${age}`,
     "",
@@ -42527,8 +42549,23 @@ function scheduleRhScamSet() {
 }
 
 let rhFeedCache = { at: 0, tokens: [] };
+// 🚀 NOXA fresh-launch feed — read straight off NOXA's launchpad on-chain (the fresh coins DexScreener +
+// Blockscout's holder feed miss). Background-cached like the universe so it never blocks the board, and
+// never throws from the timer (a bad RPC sweep must not crash the money service — see rh-safety notes).
+let noxaFeedCache = { at: 0, tokens: [] };
+let noxaFeedBusy = false;
+function scheduleNoxaFeed() {
+  if (noxaFeedBusy || Date.now() - noxaFeedCache.at < 120_000) return;   // ~2-min refresh, serve-stale
+  noxaFeedBusy = true;
+  setTimeout(async () => {
+    try {
+      const rows = await fetchNoxaFeed({ rpcUrl: CONFIG.rhChainRpcUrl, lookbackBlocks: 60000, max: 60 }).catch(() => []);
+      if (rows.length) noxaFeedCache = { at: Date.now(), tokens: rows };
+    } catch { /* never throw from a background timer */ } finally { noxaFeedBusy = false; }
+  }, 30);
+}
 async function rhFeedTokens() {
-  scheduleRhUniverse(); scheduleRhScamSet();                // keep the big caches warm
+  scheduleRhUniverse(); scheduleRhScamSet(); scheduleNoxaFeed();   // keep the big caches warm
   if (Date.now() - rhFeedCache.at < 45_000 && rhFeedCache.tokens.length) return rhFeedCache.tokens;
   // Base = full universe once warm (else the fast top-by-holders path), PLUS the time-ordered transfers
   // feed for brand-new launches. Dedupe by address.
@@ -42560,6 +42597,21 @@ async function rhFeedTokens() {
       lastActiveAt: t.lastActiveAt || ""
     };
   }).filter((t) => t.address && t.symbol && !RH_FEED_HIDE.has(t.symbol.toLowerCase()) && !rhIsStockOrBluechip(t.iconUrl));
+  // 🚀 Merge in fresh NOXA launches (on-chain read) that aren't already in the Blockscout-sourced list —
+  // these are the brand-new coins the holder/transfer feeds haven't surfaced yet, with live MC/liq/price.
+  const have = new Set(tokens.map((t) => t.address.toLowerCase()));
+  for (const n of (noxaFeedCache.tokens || [])) {
+    const addr = String(n.token || "").toLowerCase();
+    if (!addr || have.has(addr) || scam.has(addr)) continue;
+    if (n.symbol && RH_FEED_HIDE.has(String(n.symbol).toLowerCase())) continue;
+    have.add(addr);
+    tokens.push({
+      address: n.token, name: n.name || "", symbol: n.symbol || "", decimals: Number(n.decimals || 18),
+      totalSupplyUi: Number(n.supply || 0), iconUrl: "", holders: 0,
+      priceUsd: n.priceUsd || null, marketCapUsd: n.mc || null, volume24hUsd: null, liquidityUsd: n.liq || null,
+      reputation: "", lastActiveAt: "", source: "noxa", noxaUrl: n.noxaUrl || "", launchBlock: n.block || 0,
+    });
+  }
   rhFeedCache = { at: Date.now(), tokens };
   return tokens;
 }
