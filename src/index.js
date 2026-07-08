@@ -70,7 +70,7 @@ import {
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
 import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
-import { getNoxaScan, fetchNoxaFeed, NOXA_RH } from "./lib/noxaLaunchpad.js";
+import { getNoxaScan, fetchNoxaFeed, fetchPoolBuys, NOXA_RH } from "./lib/noxaLaunchpad.js";
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp, listCharacterFiles, characterPfpCount, makeCharacterPfp } from "./lib/pfp.js";
 import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
 import { xConfigured, xSearchMentions, xReply, xPost, xSearchQuery, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode, xAuthReport } from "./lib/xClient.js";
@@ -13959,6 +13959,12 @@ async function handleMessage(message, userId) {
     const rhCaTok = (text.trim().match(/^0x[0-9a-fA-F]{40}$/) || [])[0] || "";
     if (rhCaTok) {
       const gbEntry = await getGroupBotEntry(chatId).catch(() => null);
+      // BUY BOT auto-CA (RH): the first 0x pasted becomes the group's tracked Robinhood coin — the
+      // per-buy watcher reads its V3 pool's Swap logs and posts the same buy card as Solana coins.
+      if (gbEntry && groupBotFeatureOn(gbEntry, "buybot") && !gbEntry.token) {
+        await setGroupBotToken(chatId, rhCaTok).catch(() => {});
+        await say(chatId, `🟢 Buy Bot locked onto ${escapeTelegramHtml(rhCaTok.slice(0, 6))}…${escapeTelegramHtml(rhCaTok.slice(-4))} 🪶 (Robinhood Chain) — I'll post buys here with a trade link.`);
+      }
       if (!gbEntry || groupBotFeatureOn(gbEntry, "scan")) await handleTelegramLookCommand(chatId, message, rhCaTok).catch(() => {});
       return;
     }
@@ -30971,14 +30977,25 @@ async function resolveAllScanTargetsFromText(text, urls = [], cap = 4) {
   const add = (v) => { const k = String(v || "").toLowerCase(); if (v && !seen.has(k)) { seen.add(k); out.push(v); } };
   // 0) Robinhood Chain coins (EVM 0x…40-hex) — all of them
   for (const m of (blob.match(/0x[0-9a-fA-F]{40}/g) || [])) add(m);
-  // 1) DexScreener links → pair→mint (before the generic base58 grab)
+  // 1) DexScreener links → pair→mint (before the generic base58 grab). The raw PAIR address from the URL
+  //    is CONSUMED — it must never also count as a "second coin" in the bare-mint pass below (live bug:
+  //    a tag with one DS link produced two replies — the real coin + a junk 2-holder card for its pair).
+  const consumedPairs = new Set();
   for (const m of (blob.match(/dexscreener\.com\/solana\/([1-9A-HJ-NP-Za-km-z]{32,44})/gi) || [])) {
     const pair = (m.match(/([1-9A-HJ-NP-Za-km-z]{32,44})$/) || [])[1];
-    if (pair) { const mint = await resolveDexPairToMint(pair).catch(() => null); if (mint) add(mint); }
+    if (pair) {
+      consumedPairs.add(pair.toLowerCase());
+      const mint = await resolveDexPairToMint(pair).catch(() => null);
+      if (mint) add(mint);
+    }
     if (out.length >= cap) return out.slice(0, cap);
   }
-  // 2) bare CAs / pump links — every base58 mint in the text
-  for (const m of extractMintsFromText(blob)) { add(m); if (out.length >= cap) return out.slice(0, cap); }
+  // 2) bare CAs / pump links — every base58 mint in the text (minus consumed pair addresses)
+  for (const m of extractMintsFromText(blob)) {
+    if (consumedPairs.has(m.toLowerCase())) continue;
+    add(m);
+    if (out.length >= cap) return out.slice(0, cap);
+  }
   // 3) $tickers — resolve each to a mint
   for (const tag of extractCashtags(blob)) {
     const mint = await resolveCashtagToMint(tag).catch(() => null);
@@ -33055,6 +33072,13 @@ async function xReplyPollTick() {
         for (let ei = 0; ei < extraTargets.length; ei++) {
           if (maxPerHour > 0 && state.posts.length >= maxPerHour) { console.log(`[xreply]   extra coins skipped — hourly cap`); break; }
           const et = extraTargets[ei];
+          // Extra Solana targets must be REAL SPL mints — a pair/curve/wallet address that slipped through
+          // extraction must never spawn a junk "2 holders" second reply (double-posting also feeds X's
+          // spam-folding). The main target gets this check inside buildSubjectMap; extras get it here.
+          if (solanaPublicKeyLike(et)) {
+            try { await getMintTokenProgramId(et); }
+            catch { console.log(`[xreply]   extra ${et} is not an SPL mint → skip`); continue; }
+          }
           let eIntent = intent === "map" && /^0x[0-9a-fA-F]{40}$/.test(et) ? "scan" : intent;
           const eReply = await Promise.race([
             buildXReply(et, eIntent, `${m.id}:${ei + 1}`),
@@ -37649,7 +37673,7 @@ async function applyGbInput(message, userId) {
     case "buyemoji": { const p = raw.split(/\s+/); e.buyEmoji = p[0].slice(0, 8); if (p[1] && Number(p[1]) > 0) e.buyEmojiStep = Math.max(0.01, Math.min(10, Number(p[1]))); break; }
     case "message": e.customText = off ? "" : raw.slice(0, 160); break;
     case "minbuy": e.minBuySol = Math.max(0, Number(raw) || 0); break;
-    case "track": if (solanaPublicKeyLike(raw)) { e.token = raw; e.features = e.features || {}; e.features.buybot = true; } break;
+    case "track": if (solanaPublicKeyLike(raw) || /^0x[0-9a-fA-F]{40}$/.test(raw)) { e.token = raw; e.features = e.features || {}; e.features.buybot = true; } break;   // Solana mint OR Robinhood 0x coin
     case "welcome": setRose({ welcome: off ? null : raw.slice(0, 3500) }); break;
     case "rules": setRose({ rules: off ? null : raw.slice(0, 3500) }); break;
     case "antiflood": setRose({ antiflood: Math.max(0, Math.min(50, parseInt(raw, 10) || 0)) }); break;
@@ -37803,14 +37827,15 @@ async function handleGroupBotCommand(message, userId) {
   // /track <CA> — explicitly set the Buy Bot's coin (works even with bot privacy mode ON, since it's
   // a command). Also flips Buy Bot on. This is the reliable way to "grab the CA" without relying on
   // the bot seeing a plain paste.
-  const tk = text.match(/^\/track(?:@\w+)?(?:\s+([A-HJ-NP-Za-km-z1-9]{32,48}))?\b/i);
+  const tk = text.match(/^\/track(?:@\w+)?(?:\s+(0x[0-9a-fA-F]{40}|[A-HJ-NP-Za-km-z1-9]{32,48}))?\b/i);
   if (tk) {
     const chatId = chat.id;
     if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only group admins can set the tracked coin."); return true; }
     const ca = tk[1] || "";
-    if (!ca || !solanaPublicKeyLike(ca)) { const e = await getGroupBotEntry(chatId); await say(chatId, e?.token ? `Buy Bot is tracking ${shortMint(e.token)}. Change it with /track <CA>.` : "Usage: /track <CA> — sets the coin the Buy Bot watches."); return true; }
+    const isRh = /^0x[0-9a-fA-F]{40}$/.test(ca);
+    if (!ca || (!isRh && !solanaPublicKeyLike(ca))) { const e = await getGroupBotEntry(chatId); await say(chatId, e?.token ? `Buy Bot is tracking ${shortMint(e.token)}. Change it with /track <CA>.` : "Usage: /track <CA> — sets the coin the Buy Bot watches (Solana mint or Robinhood 0x…)."); return true; }
     const store = await readGroupBot(); const k = String(chatId); const e = store.groups[k] || defaultGroupBotEntry(); e.token = ca; e.features = e.features || {}; e.features.buybot = true; store.groups[k] = e; await writeGroupBot(store);
-    await say(chatId, `🟢 Buy Bot now tracking ${escapeTelegramHtml(ca.slice(0, 4))}…${escapeTelegramHtml(ca.slice(-4))} — I'll post every buy here. Floor it with /minbuy <SOL>.`);
+    await say(chatId, `🟢 Buy Bot now tracking ${escapeTelegramHtml(ca.slice(0, isRh ? 6 : 4))}…${escapeTelegramHtml(ca.slice(-4))}${isRh ? " 🪶 (Robinhood Chain)" : ""} — I'll post every buy here. Floor it with /minbuy <${isRh ? "ETH" : "SOL"}>.`);
     try { await buyWsSync(); } catch {}
     return true;
   }
@@ -38121,6 +38146,99 @@ async function postGroupBuy(mint, { solAmount = 0, usdAmount = 0, tokens = 0, pr
   groupBuyLastAlertAt.set(mint, Date.now());
 }
 
+// ---- 🪶 ROBINHOOD BUY BOT: same card, other chain. Groups can track a 0x… coin; we watch its Uniswap-V3
+// pool's Swap logs on-chain (free RPC, no API) and post the SAME SpyDefi-style per-buy card — ETH units,
+// Blockscout links, one-tap trade on the site's RH view. ----
+const rhGroupBuyState = new Map();   // tokenLc → { pool, lastBlock, at }
+async function postGroupBuyRh(address, { ethAmount = 0, tokens = 0, trader = "", tx = "" } = {}) {
+  const store = await readGroupBot();
+  const targets = Object.entries(store.groups || {}).filter(([, e]) => groupBotFeatureOn(e, "buybot") && String(e.token || "").toLowerCase() === address.toLowerCase());
+  if (!targets.length) return;
+  const info = await gatherRhScan(address).catch(() => null);
+  const symClean = (String(info?.symbol || "").replace(/[<>&]/g, "")) || shortMint(address);
+  const priceUsd = Number(info?.priceUsd) || 0;
+  const usdAmount = tokens > 0 && priceUsd > 0 ? tokens * priceUsd : 0;
+  const botAt = CONFIG.telegramBotUsername ? "@" + CONFIG.telegramBotUsername : "SlimeWire";
+  const txLink = tx ? `https://robinhoodchain.blockscout.com/tx/${encodeURIComponent(tx)}` : "";
+  const walLink = trader ? `https://robinhoodchain.blockscout.com/address/${encodeURIComponent(trader)}` : "";
+  const fmtUsd0 = (v) => "$" + Math.round(Number(v) || 0).toLocaleString();
+  const fmtPx = (v) => { v = Number(v) || 0; return v >= 1 ? "$" + v.toFixed(3) : v >= 0.001 ? "$" + v.toFixed(5) : "$" + v.toPrecision(3); };
+  const fmtTok = (v) => { v = Number(v) || 0; return v >= 1e6 ? (v / 1e6).toFixed(2) + "M" : v >= 1e3 ? (v / 1e3).toFixed(1) + "K" : Math.round(v).toLocaleString(); };
+  const markup = { inline_keyboard: [
+    [{ text: "⚡ Trade on SlimeWire", url: `https://www.slimewire.org/#rhtrade/${address}` }],
+    [{ text: "📊 Chart", url: `https://www.slimewire.org/#rhtrade/${address}` }, ...(info?.twitterUrl ? [{ text: "𝕏", url: info.twitterUrl }] : []), ...(info?.websiteUrl ? [{ text: "🌐 Web", url: info.websiteUrl }] : [])],
+  ] };
+  for (const [chatId, e] of targets) {
+    const min = Number(e.minBuySol) || 0;                       // /minbuy = min in the chain's native coin (ETH here)
+    if (min > 0 && ethAmount < min) continue;
+    const emoji = (e.buyEmoji && String(e.buyEmoji).slice(0, 8)) || "🟢";
+    const step = Number(e.buyEmojiStep) > 0 ? Number(e.buyEmojiStep) : 0.003;   // ETH per emoji (ETH buys are smaller than SOL)
+    const count = Math.max(3, Math.min(32, Math.round(ethAmount / step) || 3));
+    const tier = usdAmount <= 0 ? null
+      : usdAmount >= 1000 ? { e: "🔱", t: "MEGA BUY" }
+      : usdAmount >= 500 ? { e: "🐋", t: "WHALE" }
+      : usdAmount >= 200 ? { e: "🐬", t: "DOLPHIN" }
+      : usdAmount >= 50 ? { e: "🐟", t: "FISH" }
+      : { e: "🦐", t: "SHRIMP" };
+    let holderLine = "";
+    if (trader) {
+      const key = `rh:${address.toLowerCase()}`;
+      const set = groupBuyHolders.get(key) || new Set();
+      const isNew = !set.has(trader);
+      set.add(trader);
+      groupBuyHolders.set(key, set);
+      holderLine = `👤 ${isNew ? "🌟 <b>New holder!</b> " : "➕ Added more · "}<a href="${walLink}">${escapeTelegramHtml(trader.slice(0, 6))}…${escapeTelegramHtml(trader.slice(-4))}</a>`;
+    }
+    const lines = [
+      `🆕 | <b>$${escapeTelegramHtml(symClean)} Buy!</b>${tier ? `  ${tier.e} <b>${tier.t}</b>` : ""}  🪶`,
+      `<i>by ${escapeTelegramHtml(botAt)} · Robinhood Chain</i>`,
+      "",
+      emoji.repeat(count),
+      "",
+      `📋 <b>${ethAmount.toFixed(5)} ETH</b>${usdAmount > 0 ? ` (${fmtUsd0(usdAmount)})` : ""}`,
+      tokens > 0
+        ? `🪙 Got <b>${fmtTok(tokens)}</b> $${escapeTelegramHtml(symClean)}${txLink ? ` · <a href="${txLink}">Tx</a>` : ""}`
+        : (txLink ? `🧾 <a href="${txLink}">View Tx</a>` : ""),
+      priceUsd > 0 ? `🏷 Price <b>${fmtPx(priceUsd)}</b>${Number.isFinite(info?.ch24) ? ` · ${info.ch24 >= 0 ? "🟢 +" : "🔴 "}${Math.round(info.ch24)}% 24h` : ""}` : "",
+      (info?.mc > 0 || info?.liq > 0) ? `〽️ MC <b>${fmtUsd0(info.mc)}</b>${info.liq > 0 ? ` · Liq ${fmtUsd0(info.liq)}` : ""}${info.vol24 > 0 ? ` · Vol ${fmtUsd0(info.vol24)}` : ""}` : "",
+      holderLine,
+    ].filter(Boolean);
+    if (e.customText) lines.unshift(`<b>${escapeTelegramHtml(String(e.customText).slice(0, 160))}</b>`);
+    await sendGroupAlertMedia(chatId, groupAlertMediaFor(e, info?.imageUrl || ""), lines.join("\n"), markup);
+  }
+}
+// Watcher tick: for every group-tracked 0x coin, resolve its pool once (DexScreener pair or NOXA pool via
+// gatherRhScan, cached) then read new Swap logs and post each buy. First tick per coin = baseline only
+// (never replays history). Best-effort: an RPC hiccup skips a tick, never throws (background-timer rule).
+async function rhGroupBuyTick() {
+  try {
+    const store = await readGroupBot();
+    const tracked = new Set();
+    for (const e of Object.values(store.groups || {})) {
+      if (groupBotFeatureOn(e, "buybot") && /^0x[0-9a-fA-F]{40}$/.test(String(e.token || ""))) tracked.add(String(e.token));
+    }
+    for (const addr of tracked) {
+      const key = addr.toLowerCase();
+      let st = rhGroupBuyState.get(key);
+      if (!st || !st.pool) {
+        const info = await gatherRhScan(addr).catch(() => null);
+        const pool = String(info?.pairAddress || "").trim();
+        if (!/^0x[0-9a-fA-F]{40}$/.test(pool)) continue;        // no pool yet → try again next tick
+        st = { pool, lastBlock: 0, at: Date.now() };
+        rhGroupBuyState.set(key, st);
+      }
+      const res = await fetchPoolBuys(st.pool, addr, { fromBlock: st.lastBlock, rpcUrl: CONFIG.rhChainRpcUrl }).catch(() => null);
+      if (!res) continue;
+      const first = !(st.lastBlock > 0);
+      st.lastBlock = res.toBlock;
+      if (first) continue;                                      // baseline pass — never replay pre-existing buys
+      for (const b of res.buys.slice(0, 6)) {                   // burst cap: max 6 cards per tick per coin
+        await postGroupBuyRh(addr, { ethAmount: b.ethAmount, tokens: b.tokens, trader: b.trader, tx: b.tx }).catch(() => {});
+      }
+    }
+  } catch { /* never throw from a background timer */ }
+}
+
 // ---- Dedicated PumpPortal trade socket: TRUE per-buy alerts (free), no firehose so token-trade
 // subs actually deliver (the main stream firehoses new-tokens, which makes PumpPortal drop trade
 // subs → trades:0). Also FEEDS the early-buyer wallet flywheel (free per-trade buyer wallets). ----
@@ -38250,6 +38368,7 @@ function startGroupBuyBot() {
   setInterval(() => { void buyWsSync(); }, 20_000);   // keep subs in step with toggles/tokens
   setInterval(() => { void pollGroupBuyTrades(); }, 12_000); // TRUE per-buy via Pump swap-api (primary)
   setInterval(() => { void pollGroupBuyBots(); }, 25_000); // DexScreener aggregate (secondary fallback)
+  setInterval(() => { void rhGroupBuyTick(); }, 30_000); // 🪶 Robinhood coins: per-buy off the V3 pool's Swap logs
   setInterval(() => { void refreshRaidTgCards(); }, 50_000); // Raidar-style: edit live raid cards as likes/RTs/replies climb (free, fxtwitter)
   setInterval(() => { void pollTrackedWallets(); }, 30_000); // Cielo-style smart-money wallet alerts
   setInterval(() => { void pollAlphaRadar(); }, 60_000);     // network-backed long-term-runner alerts (opt-in)

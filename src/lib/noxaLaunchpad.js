@@ -162,6 +162,69 @@ export async function fetchNoxaFeed({ rpcUrl, lookbackBlocks = 60000, max = 60 }
   return readNoxaMarkets(launches, { rpcUrl, ethUsd: eth });
 }
 
+// ── Uniswap-V3 pool BUY watcher (Robinhood Chain) ─────────────────────────────────────────────
+// Reads a pool's Swap logs since a block and returns decoded BUYS of `tokenAddress` (pool pays token out,
+// takes WETH in). Powers the group Buy Bot for RH coins — same idea as the pump per-buy feed, but straight
+// off the chain. Works for ANY RH V3 pool (NOXA or DexScreener-listed).
+// RH pools come in BOTH flavors (verified live): NOXA launches emit Uniswap-V3 Swaps, while other listed
+// pairs (e.g. HOOD's DexScreener pair) are Uniswap-V2 (Swap topic 0xd78ad95f… + Sync). Watch both.
+const SWAP_TOPIC_V3 = ethers.id("Swap(address,address,int256,int256,uint160,uint128,int24)");
+const SWAP_TOPIC_V2 = ethers.id("Swap(address,uint256,uint256,uint256,uint256,address)");
+const POOL_SWAP_IFACE = new ethers.Interface([
+  "event Swap(address indexed sender,address indexed recipient,int256 amount0,int256 amount1,uint160 sqrtPriceX96,uint128 liquidity,int24 tick)",
+]);
+const POOL_SWAP_V2_IFACE = new ethers.Interface([
+  "event Swap(address indexed sender,uint256 amount0In,uint256 amount1In,uint256 amount0Out,uint256 amount1Out,address indexed to)",
+]);
+const poolToken0Cache = new Map();   // pool → token0 addr (immutable)
+export async function fetchPoolBuys(pool, tokenAddress, { fromBlock, rpcUrl, maxSpan = 4000 } = {}) {
+  const provider = noxaProvider(rpcUrl);
+  const poolAddr = ethers.getAddress(pool);
+  const token = ethers.getAddress(tokenAddress);
+  const latest = await provider.getBlockNumber();
+  const start = Number.isFinite(Number(fromBlock)) && Number(fromBlock) > 0 ? Math.max(Number(fromBlock), latest - maxSpan) : latest - 100;
+  if (start >= latest) return { toBlock: latest, buys: [] };
+  let t0 = poolToken0Cache.get(poolAddr);
+  if (!t0) {
+    try { [t0] = await multicall(provider, [{ target: poolAddr, iface: POOL, fn: "token0" }]); } catch { t0 = null; }
+    if (t0) poolToken0Cache.set(poolAddr, String(t0));
+  }
+  if (!t0) return { toBlock: latest, buys: [] };
+  const tokenIs0 = String(t0).toLowerCase() === token.toLowerCase();
+  let logs = [];
+  try { logs = await provider.getLogs({ address: poolAddr, topics: [[SWAP_TOPIC_V3, SWAP_TOPIC_V2]], fromBlock: start + 1, toBlock: latest }); }
+  catch { return { toBlock: latest, buys: [] }; }
+  const buys = [];
+  for (const l of logs) {
+    try {
+      if (l.topics[0] === SWAP_TOPIC_V3) {
+        const d = POOL_SWAP_IFACE.parseLog(l);
+        const amtToken = tokenIs0 ? d.args.amount0 : d.args.amount1;
+        const amtOther = tokenIs0 ? d.args.amount1 : d.args.amount0;
+        if (amtToken >= 0n) continue;                     // pool RECEIVED token → that's a sell, skip
+        buys.push({
+          trader: ethers.getAddress(d.args.recipient),
+          tokens: Number(ethers.formatUnits(-amtToken, 18)),   // NOXA/RH memecoins are 18-dec; callers rescale if not
+          ethAmount: Number(ethers.formatUnits(amtOther > 0n ? amtOther : -amtOther, 18)),
+          tx: l.transactionHash, block: Number(l.blockNumber),
+        });
+      } else {
+        const d = POOL_SWAP_V2_IFACE.parseLog(l);
+        const tokenOut = tokenIs0 ? d.args.amount0Out : d.args.amount1Out;
+        const otherIn = tokenIs0 ? d.args.amount1In : d.args.amount0In;
+        if (tokenOut <= 0n) continue;                     // no token left the pool → not a buy
+        buys.push({
+          trader: ethers.getAddress(d.args.to),
+          tokens: Number(ethers.formatUnits(tokenOut, 18)),
+          ethAmount: Number(ethers.formatUnits(otherIn, 18)),
+          tx: l.transactionHash, block: Number(l.blockNumber),
+        });
+      }
+    } catch { /* undecodable swap */ }
+  }
+  return { toBlock: latest, buys };
+}
+
 const scanCache = new Map();   // token → { at, v }
 // Single-coin scan: is this a NOXA launch? If so, return its live stats. O(1) — asks the factory's
 // getLaunchedToken view (no log-history scan, which the RPC rejects over the full range), derives the V3
