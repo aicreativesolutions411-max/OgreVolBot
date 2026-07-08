@@ -1888,6 +1888,18 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "buildXScanReply"), /scanMarketStatsFromSources/);
   assert.match(xcard, /volumeLabel/);
   assert.match(xcard, /HOLDERS/);
+  assert.match(xcard, /changeTitle = "1H"/);
+  assert.match(xcard, /String\(changeTitle \|\| "1H"\)/);
+  assert.match(serverSource, /function scanImageUrlFromScan/);
+  assert.match(functionBody(serverSource, "handleTelegramLookCommand"), /scanImageUrlFromScan\(scan\)/);
+  assert.match(functionBody(serverSource, "gatherSlimeScan"), /fetchSolanaTrackerTokenReport\(mint\)/);
+  assert.match(functionBody(serverSource, "gatherRhScan"), /rhFeedTokens\(\)/);
+  assert.match(functionBody(serverSource, "gatherRhScan"), /rhLaunchMetaByAddress\(\)/);
+  assert.match(functionBody(serverSource, "gatherRhScan"), /holders/);
+  assert.match(functionBody(serverSource, "buildXRhReply"), /rhVolumeInfo\(info\)/);
+  assert.match(functionBody(serverSource, "buildXRhReply"), /holderLabel: holdersLabel/);
+  assert.match(functionBody(serverSource, "buildXRhReply"), /changeTitle: ch\.title/);
+  assert.match(functionBody(serverSource, "sendRhScanCard"), /rhScanLogo\(info\)/);
   assert.match(functionBody(serverSource, "xReplyPollTick"), /xIntentFromText\(m\.text\)/); // intent routed at reply time
   // ANTI-SPAM: reply text carries NO raw URL (X folds link-replies from cold accounts); the card image
   // already shows slimewire.org. Seeded per-tweet variation (wording + card art) beats X's near-duplicate

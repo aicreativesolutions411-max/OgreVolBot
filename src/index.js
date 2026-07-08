@@ -31117,7 +31117,7 @@ async function gatherSlimeScan(mint) {
   // (volume, 1H txns, price-change). Fetch everything in parallel so the card always has the
   // richest read available — no field is left blank just because one source was slow.
   const pumpStyle = isPumpStyleToken({ tokenMint: mint });
-  const [pairs, rug, shield, dexPaid, supply, pumpMeta, athRaw, geckoMeta] = await Promise.all([
+  const [pairs, rug, shield, dexPaid, supply, pumpMeta, athRaw, geckoMeta, stMarket] = await Promise.all([
     fetchDexScreenerTokenPairsFallback(mint).catch(() => null),
     fetchRugcheckFull(mint).catch(() => null),
     webSlimeShield(mint).catch(() => null),
@@ -31129,10 +31129,19 @@ async function gatherSlimeScan(mint) {
     // DexScreener rate-limits Render — the tight 2.2s cap made it time out → blank LIQ/1H on the scan card
     // even though the map (4.8s cap) + trench-watch showed them. Gecko is not IP-blocked on Render, so it's
     // worth the wait; the sticky cache covers the rare miss.
-    getGeckoTerminalTokenMetadata(mint, { timeoutMs: 6_000 }).catch(() => null)
+    getGeckoTerminalTokenMetadata(mint, { timeoutMs: 6_000 }).catch(() => null),
+    (CONFIG.solanaTrackerApiKey ? fetchSolanaTrackerTokenReport(mint).catch(() => null) : Promise.resolve(null))
   ]);
   const best = bestDexPairForToken(mint, pairs);
   let meta = mergeTokenMarketMetadata(best ? metadataFromDexPair(mint, best) : null, geckoMeta);
+  if (stMarket) {
+    meta = mergeTokenMarketMetadata(meta, {
+      source: "solanatracker",
+      marketCap: stMarket.marketCap,
+      liquidityUsd: stMarket.liquidityUsd,
+      holderCount: stMarket.holderCount
+    });
+  }
   // bonding = Pump metadata. Always present for pump-style coins (fetched above); for the rare
   // case it wasn't pump-style yet has no Dex MC, grab it now so MC/price/LP never read blank.
   let bonding = pumpMeta;
@@ -32221,11 +32230,26 @@ function xVerdict(shield, rug, liq, mc, seed) {
   if (mc > 0) { const ok = ["ape-worthy 🦍", "looks clean 🟢", "sending it 🚀", "degen-approved 🐸", "fresh & based", "no red flags — send it"]; return { verdict: ok[Math.abs(xSeedHash(String(seed || mc))) % ok.length], tone: "ok" }; }
   return { verdict: "scanned 🐸", tone: "ok" };
 }
+function publicScanImageUrl(url = "") {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("ipfs://")) return "https://ipfs.io/ipfs/" + raw.slice(7);
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return "";
+}
+function scanImageUrlFromScan(scan = {}) {
+  const { meta, best, bonding, onchain } = scan || {};
+  return publicScanImageUrl(firstString(
+    meta?.imageUrl, meta?.imageUri, meta?.image, meta?.icon, meta?.logoURI, meta?.logo,
+    best?.info?.imageUrl, best?.info?.image, best?.info?.logo, best?.imageUrl, best?.image,
+    best?.baseToken?.imageUrl, best?.baseToken?.image, best?.baseToken?.logoURI, best?.baseToken?.logo,
+    bonding?.imageUrl, bonding?.imageUri, bonding?.image_uri, bonding?.image, bonding?.metadata?.image,
+    onchain?.imageUrl, onchain?.avatarUrl, onchain?.image, onchain?.imageUri
+  ));
+}
 async function xFetchLogo(url) {
-  let u = String(url || "").trim();
+  let u = publicScanImageUrl(url);
   if (!u) return null;
-  if (u.startsWith("ipfs://")) u = "https://ipfs.io/ipfs/" + u.slice(7);
-  if (!/^https?:/.test(u)) return null;
   try {
     const res = await fetch(u, { signal: AbortSignal.timeout ? AbortSignal.timeout(6000) : undefined });
     if (!res.ok) return null;
@@ -32270,7 +32294,13 @@ async function xCoinLogo(scan, mint) {
   const { meta, best, bonding, onchain } = scan || {};
   const tryList = async (urls) => { for (const u of urls.filter(Boolean)) { const b = await xFetchLogo(u).catch(() => null); if (b) return b; } return null; };
   // 1) whatever the scan already resolved (Dex `info.imageUrl` / pump image / on-chain image)
-  let logo = await tryList([meta?.icon, meta?.image, best?.info?.imageUrl, bonding?.image, bonding?.image_uri, bonding?.imageUri, bonding?.metadata?.image, onchain?.image]);
+  let logo = await tryList([
+    meta?.imageUrl, meta?.imageUri, meta?.icon, meta?.image, meta?.logoURI, meta?.logo,
+    best?.info?.imageUrl, best?.info?.image, best?.info?.logo, best?.imageUrl, best?.image,
+    best?.baseToken?.imageUrl, best?.baseToken?.image, best?.baseToken?.logoURI, best?.baseToken?.logo,
+    bonding?.imageUrl, bonding?.imageUri, bonding?.image, bonding?.image_uri, bonding?.metadata?.image,
+    onchain?.imageUrl, onchain?.avatarUrl, onchain?.image, onchain?.imageUri
+  ]);
   if (logo) return logo;
   // 2) DexScreener token-info re-fetch
   try {
@@ -32293,7 +32323,7 @@ async function xCoinLogo(scan, mint) {
   // 5) on-chain Metaplex metadata → JSON image (UNIVERSAL last resort)
   try {
     const oc = onchain || await fetchOnchainTokenMeta(mint);
-    logo = await tryList([oc?.image]);
+    logo = await tryList([oc?.imageUrl, oc?.avatarUrl, oc?.image, oc?.imageUri]);
     if (logo) return logo;
   } catch { /* no logo → the slime ring alone still looks intentional */ }
   return null;
@@ -32537,46 +32567,133 @@ async function buildXRugReply(mint, variant) {
 // rhHoneypotCheck (sell-trap/honeypot safety). Bonk/pump/etc. are Solana mints and flow through the normal
 // scan already; this fills the ONE gap: RH coins were unscan-able (0x didn't match a Solana mint).
 const rhScanCache = new Map();
+function rhPromiseTimeout(promise, ms = 3500, fallback = null) {
+  return Promise.race([
+    Promise.resolve(promise).catch(() => fallback),
+    new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+function rhMs(value) {
+  const direct = normalizePairCreatedAt(value);
+  if (direct) return direct;
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+function rhFiniteNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+function rhChangeInfo(info = {}) {
+  const ch1 = rhFiniteNumber(info.ch1);
+  if (ch1 !== null) return { value: ch1, title: "1H" };
+  const ch24 = rhFiniteNumber(info.ch24);
+  if (ch24 !== null) return { value: ch24, title: "24H" };
+  return { value: null, title: "1H" };
+}
+function rhVolumeInfo(info = {}) {
+  const v1 = Number(info.vol1);
+  if (Number.isFinite(v1) && v1 > 0) return { value: v1, title: "1H" };
+  const v24 = Number(info.vol24);
+  if (Number.isFinite(v24) && v24 > 0) return { value: v24, title: "24H" };
+  return { value: 0, title: "" };
+}
+function rhLocalImageUrl(address, launchMeta = null) {
+  return launchMeta && launchMeta.hasImage ? `/api/web/rh/token-image/${address}` : "";
+}
+async function rhScanLogo(info = {}) {
+  const local = firstString(info.localImagePath, (/^\/api\/web\/rh\/token-image\//.test(String(info.imageUrl || "")) ? rhTokenImagePath(info.address) : ""));
+  if (local) {
+    try {
+      const b = await fs.readFile(local);
+      if (b.length > 100 && b.length < 6_000_000) return b;
+    } catch { /* try remote image next */ }
+  }
+  const urls = [
+    info.imageUrl,
+    info.iconUrl,
+    info.logoUrl,
+    info.metaImageUrl
+  ].filter(Boolean);
+  for (const url of urls) {
+    const b = await xFetchLogo(url).catch(() => null);
+    if (b) return b;
+  }
+  return null;
+}
 async function gatherRhScan(address) {
   const a = String(address || "").trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return null;
   const key = a.toLowerCase();
   const cached = rhScanCache.get(key);
   if (cached && Date.now() - cached.at < 60_000) return cached.v;
-  const [dsRes, saf] = await Promise.all([
+  const [dsRes, saf, feedRows, launchMap] = await Promise.all([
     fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${a}`, { timeoutMs: 6000 }).catch(() => null),
     rhHoneypotCheck(a, CONFIG.rhChainRpcUrl).catch(() => null),
+    rhPromiseTimeout(rhFeedTokens(), 3500, []),
+    rhPromiseTimeout(rhLaunchMetaByAddress(), 2000, new Map()),
   ]);
   const pairs = (dsRes?.pairs || []).filter((p) => String(p.chainId || "").toLowerCase() === "robinhood");
   const pair = pairs.sort((x, y) => (Number(y.liquidity?.usd) || 0) - (Number(x.liquidity?.usd) || 0))[0] || null;
+  const feed = (Array.isArray(feedRows) ? feedRows : []).find((t) => String(t.address || "").toLowerCase() === key) || null;
+  const launchMeta = launchMap && typeof launchMap.get === "function" ? launchMap.get(key) : null;
+  const cachedPrice = rhPriceCache.get(key) || null;
+  const cachedCreatedAt = rhCreatedCache.get(key) || "";
   // NOXA FALLBACK: DexScreener indexes almost no RH pairs. When it has nothing (or no price) for this
   // coin, read it straight off NOXA's launchpad on-chain (fresh pre-DexScreener launches) so the scan
   // still shows real MC/liq/price instead of "n/a". Only pay for the on-chain read when DexScreener whiffs.
   let noxa = null;
-  if (!pair || !(Number(pair.priceUsd) > 0)) {
-    noxa = await noxaScanFast(a).catch(() => null);
+  if (!pair || !(Number(pair.priceUsd) > 0) || !(Number(pair?.liquidity?.usd) > 0)) {
+    noxa = await rhPromiseTimeout(noxaScanFast(a), 4500, null);
   }
   const socials = Array.isArray(pair?.info?.socials) ? pair.info.socials : [];
   const website = (Array.isArray(pair?.info?.websites) ? pair.info.websites : [])[0]?.url || "";
+  const supply = firstMeaningfulNumber(feed?.totalSupplyUi, noxa?.supply);
+  const priceUsd = firstMeaningfulNumber(pair?.priceUsd, feed?.priceUsd, cachedPrice?.priceUsd, noxa?.priceUsd);
+  const mc = firstMeaningfulNumber(
+    pair?.marketCap,
+    pair?.fdv,
+    feed?.marketCapUsd,
+    noxa?.mc,
+    priceUsd && supply ? Number(priceUsd) * Number(supply) : null
+  ) || 0;
+  const liq = firstMeaningfulNumber(pair?.liquidity?.usd, feed?.liquidityUsd, noxa?.liq) || 0;
+  const vol1 = firstMeaningfulNumber(pair?.volume?.h1, pair?.volume?.["1h"], feed?.volume1hUsd, feed?.volumeH1Usd, noxa?.volume1hUsd, noxa?.volumeH1Usd) || 0;
+  const vol24 = firstMeaningfulNumber(pair?.volume?.h24, pair?.volume?.["24h"], feed?.volume24hUsd, feed?.volume_24h, noxa?.volume24hUsd, noxa?.volumeH24Usd) || 0;
+  const ch1 = firstMeaningfulNumber(pair?.priceChange?.h1, pair?.priceChange?.["1h"], feed?.priceChange1h, feed?.priceChangeH1, noxa?.ch1, noxa?.priceChange1h);
+  const ch24 = firstMeaningfulNumber(pair?.priceChange?.h24, pair?.priceChange?.["24h"], feed?.priceChange24h, feed?.priceChangeH24, noxa?.ch24, noxa?.priceChange24h);
+  const holders = firstMeaningfulNumber(pair?.holders, feed?.holders, feed?.holders_count, saf?.holders, noxa?.holders) || 0;
+  let createdAt = rhMs(pair?.pairCreatedAt) || rhMs(feed?.createdAt) || rhMs(cachedCreatedAt) || rhMs(feed?.lastActiveAt) || 0;
+  if (!(createdAt > 0)) {
+    const chainCreated = await rhPromiseTimeout(rhTokenCreationTime(a), 2500, "");
+    createdAt = rhMs(chainCreated);
+    if (chainCreated) rhCreatedCache.set(key, chainCreated);
+  }
+  if (!(priceUsd > 0)) scheduleRhPriceFill([{ address: a, priceUsd: 0 }]);
   const v = {
     address: a, chain: "robinhood",
-    symbol: String(pair?.baseToken?.symbol || noxa?.symbol || "").replace(/^\$+/, "").slice(0, 16),
-    name: String(pair?.baseToken?.name || noxa?.name || "").slice(0, 40),
-    priceUsd: Number(pair?.priceUsd) || noxa?.priceUsd || 0,
-    mc: Number(pair?.marketCap || pair?.fdv) || noxa?.mc || 0,
-    liq: Number(pair?.liquidity?.usd) || noxa?.liq || 0,
-    vol24: Number(pair?.volume?.h24) || 0,
-    ch1: Number(pair?.priceChange?.h1),
-    ch24: Number(pair?.priceChange?.h24),
+    symbol: String(firstString(pair?.baseToken?.symbol, feed?.symbol, noxa?.symbol) || "").replace(/^\$+/, "").slice(0, 16),
+    name: String(firstString(pair?.baseToken?.name, feed?.name, noxa?.name) || "").slice(0, 40),
+    priceUsd: Number(priceUsd) || 0,
+    mc,
+    liq,
+    vol1,
+    vol24,
+    ch1: rhFiniteNumber(ch1),
+    ch24: rhFiniteNumber(ch24),
+    holders,
+    supply: Number(supply) || 0,
     pairAddress: pair?.pairAddress || noxa?.pool || "",
-    createdAt: Number(pair?.pairCreatedAt) || 0,
-    imageUrl: pair?.info?.imageUrl || "",
-    twitterUrl: (socials.find((s) => /twitter|x/i.test(s.type || s.label || "")) || {}).url || "",
-    telegramUrl: (socials.find((s) => /telegram|tg/i.test(s.type || s.label || "")) || {}).url || "",
-    websiteUrl: website,
+    createdAt,
+    imageUrl: firstString(pair?.info?.imageUrl, rhLocalImageUrl(a, launchMeta), feed?.imageUrl, feed?.iconUrl, noxa?.imageUrl, noxa?.iconUrl),
+    localImagePath: rhLocalImageUrl(a, launchMeta) ? rhTokenImagePath(a) : "",
+    iconUrl: firstString(feed?.iconUrl),
+    twitterUrl: firstString((socials.find((s) => /twitter|x/i.test(s.type || s.label || "")) || {}).url, normalizeSocialLink(launchMeta?.x, "twitter")),
+    telegramUrl: firstString((socials.find((s) => /telegram|tg/i.test(s.type || s.label || "")) || {}).url, normalizeSocialLink(launchMeta?.telegram, "telegram")),
+    websiteUrl: firstString(website, normalizeSocialLink(launchMeta?.website, "website")),
     safety: saf,   // { verdict: safe|warn|danger|unknown, reasons:[] }
     explorer: `https://robinhoodchain.blockscout.com/token/${a}`,
-    source: pair ? "dexscreener" : (noxa ? "noxa" : ""),
+    source: pair ? "dexscreener" : (noxa ? "noxa" : (feed ? "blockscout" : "")),
     noxaUrl: noxa ? noxa.noxaUrl : "",
   };
   rhScanCache.set(key, { at: Date.now(), v });
@@ -32601,21 +32718,24 @@ async function buildXRhReply(address, variant) {
   const v = makeXVary(variant || info.symbol || address);
   const mcLabel = info.mc > 0 ? scanFmtMoney(info.mc) : "—";
   const liqLabel = info.liq > 0 ? scanFmtMoney(info.liq) : "—";
-  const volLabel = info.vol24 > 0 ? scanFmtMoney(info.vol24) : "";
+  const vol = rhVolumeInfo(info);
+  const volLabel = vol.value > 0 ? `${scanFmtMoney(vol.value)}${vol.title ? " " + vol.title : ""}` : "";
+  const holdersLabel = info.holders > 0 ? scanFmtSupply(info.holders) : "";
   const ageLabel = info.createdAt > 0 ? xAgeLabel(Date.now() - info.createdAt) : "new";
-  const changeLabel = Number.isFinite(info.ch1) ? `${info.ch1 >= 0 ? "+" : ""}${info.ch1.toFixed(1)}%` : "";
-  const changeTone = Number.isFinite(info.ch1) ? (info.ch1 >= 0 ? "up" : "down") : "";
+  const ch = rhChangeInfo(info);
+  const changeLabel = Number.isFinite(ch.value) ? `${ch.value >= 0 ? "+" : ""}${ch.value.toFixed(1)}%` : "";
+  const changeTone = Number.isFinite(ch.value) ? (ch.value >= 0 ? "up" : "down") : "";
   const toneEmoji = tone === "danger" ? v.danger : tone === "warn" ? v.warn : v.ok;
   const text = [
     `$${info.symbol || "coin"}${info.name ? v.sep + info.name : ""} 🪶`,
-    [`MC ${mcLabel}`, `Liq ${liqLabel}`, volLabel ? `Vol ${volLabel}` : null, changeLabel ? `1H ${changeLabel}` : null, "Robinhood Chain"].filter(Boolean).join(v.sep),
+    [`MC ${mcLabel}`, `Liq ${liqLabel}`, volLabel ? `Vol ${volLabel}` : null, holdersLabel ? `Holders ${holdersLabel}` : null, changeLabel ? `${ch.title} ${changeLabel}` : null, "Robinhood Chain"].filter(Boolean).join(v.sep),
     `${toneEmoji} ${verdict}`,
     v.cta,
   ].join("\n").slice(0, 279);
   let mediaBuffer = null;
   try {
-    const logoBuffer = info.imageUrl ? await xFetchLogo(info.imageUrl).catch(() => null) : null;
-    mediaBuffer = await renderXScanCard({ symbol: info.symbol, name: info.name, mcLabel, liqLabel, ageLabel, railLabel: "Robinhood", volumeLabel: volLabel, holderLabel: "", verdict, verdictTone: tone, changeLabel, changeTone, logoBuffer, bgDir: X_CARD_BG_DIR, seed: variant || info.symbol || address });
+    const logoBuffer = await rhScanLogo(info).catch(() => null);
+    mediaBuffer = await renderXScanCard({ symbol: info.symbol, name: info.name, mcLabel, liqLabel, ageLabel, railLabel: "Robinhood", volumeLabel: volLabel, holderLabel: holdersLabel, verdict, verdictTone: tone, changeLabel, changeTone, changeTitle: ch.title, logoBuffer, bgDir: X_CARD_BG_DIR, seed: variant || info.symbol || address });
   } catch { /* text-only fallback */ }
   return { text, mediaBuffer, symbol: info.symbol, mc: info.mc, chain: "robinhood" };
 }
@@ -32628,7 +32748,9 @@ function formatRhScanCard(info) {
   const name = (info.name || sym).slice(0, 40);
   const age = info.createdAt > 0 ? scanFmtAge(info.createdAt) : "age n/a";
   const price = info.priceUsd > 0 ? scanFmtPriceSub(info.priceUsd) : "n/a";
-  const ch1 = Number.isFinite(info.ch1) ? `${info.ch1 >= 0 ? "+" : ""}${info.ch1.toFixed(1)}%` : "n/a";
+  const ch = rhChangeInfo(info);
+  const chText = Number.isFinite(ch.value) ? `${ch.value >= 0 ? "+" : ""}${ch.value.toFixed(1)}%` : "n/a";
+  const vol = rhVolumeInfo(info);
   const vd = String(info.safety?.verdict || "unknown").toLowerCase();
   const safeLine = (vd === "block" || info.safety?.honeypot === true) ? "🔴 <b>Honeypot / sell-trap risk</b>" : vd === "warn" ? "⚠️ <b>Some risk — DYOR</b>" : vd === "verified" ? "🟢 <b>Verified — cannot rug</b>" : vd === "ok" ? "🟢 <b>No sell traps found</b>" : "⚪ <b>Scan inconclusive</b>";
   const reasons = Array.isArray(info.safety?.reasons) ? info.safety.reasons.slice(0, 2).map((r) => "  • " + esc(String(r))).join("\n") : "";
@@ -32645,9 +32767,10 @@ function formatRhScanCard(info) {
     `└ 🌱 ${age}`,
     "",
     "📊 <b>Stats</b>",
-    `├ USD  <b>${price}</b> (${ch1})`,
+    `├ USD  <b>${price}</b> (${ch.title} ${chText})`,
     `├ MC   <b>${info.mc > 0 ? scanFmtMoney(info.mc) : "n/a"}</b>`,
-    `├ Vol  <b>${info.vol24 > 0 ? scanFmtMoney(info.vol24) : "n/a"}</b> <i>24h</i>`,
+    `├ Vol  <b>${vol.value > 0 ? scanFmtMoney(vol.value) : "n/a"}</b>${vol.title ? ` <i>${vol.title.toLowerCase()}</i>` : ""}`,
+    `├ Holders <b>${info.holders > 0 ? scanFmtSupply(info.holders) : "n/a"}</b>`,
     `└ Liq  <b>${info.liq > 0 ? scanFmtMoney(info.liq) : "n/a"}</b>`,
     "",
     `🛡 <b>Safety</b>`,
@@ -32667,9 +32790,28 @@ async function sendRhScanCard(chatId, address) {
     [{ text: `⚡ Trade $${(info.symbol || "coin").slice(0, 12)}`, url: `https://www.slimewire.org/#rhtrade/${address}` }, { text: "🔎 Blockscout", url: info.explorer }],
   ] };
   let png = null;
-  try { const b = info.imageUrl ? await xFetchLogo(info.imageUrl).catch(() => null) : null;
+  try { const b = await rhScanLogo(info).catch(() => null);
     const { verdict, tone } = rhVerdictTone(info.safety);
-    png = await renderXScanCard({ symbol: info.symbol, name: info.name, mcLabel: info.mc > 0 ? scanFmtMoney(info.mc) : "—", liqLabel: info.liq > 0 ? scanFmtMoney(info.liq) : "—", ageLabel: info.createdAt > 0 ? xAgeLabel(Date.now() - info.createdAt) : "new", railLabel: "Robinhood", volumeLabel: info.vol24 > 0 ? scanFmtMoney(info.vol24) : "", holderLabel: "", verdict, verdictTone: tone, changeLabel: Number.isFinite(info.ch1) ? `${info.ch1 >= 0 ? "+" : ""}${info.ch1.toFixed(1)}%` : "", changeTone: Number.isFinite(info.ch1) ? (info.ch1 >= 0 ? "up" : "down") : "", logoBuffer: b, bgDir: X_CARD_BG_DIR, seed: info.symbol || address });
+    const vol = rhVolumeInfo(info);
+    const ch = rhChangeInfo(info);
+    png = await renderXScanCard({
+      symbol: info.symbol,
+      name: info.name,
+      mcLabel: info.mc > 0 ? scanFmtMoney(info.mc) : "—",
+      liqLabel: info.liq > 0 ? scanFmtMoney(info.liq) : "—",
+      ageLabel: info.createdAt > 0 ? xAgeLabel(Date.now() - info.createdAt) : "new",
+      railLabel: "Robinhood",
+      volumeLabel: vol.value > 0 ? `${scanFmtMoney(vol.value)}${vol.title ? " " + vol.title : ""}` : "",
+      holderLabel: info.holders > 0 ? scanFmtSupply(info.holders) : "",
+      verdict,
+      verdictTone: tone,
+      changeLabel: Number.isFinite(ch.value) ? `${ch.value >= 0 ? "+" : ""}${ch.value.toFixed(1)}%` : "",
+      changeTone: Number.isFinite(ch.value) ? (ch.value >= 0 ? "up" : "down") : "",
+      changeTitle: ch.title,
+      logoBuffer: b,
+      bgDir: X_CARD_BG_DIR,
+      seed: info.symbol || address
+    });
   } catch { /* text-only */ }
   if (png) await sendPhoto(chatId, "rh-scan.png", png, text.slice(0, 1024), kb, "HTML").catch(async () => { await sayHtml(chatId, text, kb).catch(() => {}); });
   else await sayHtml(chatId, text, kb).catch(() => {});
@@ -36588,7 +36730,7 @@ async function handleTelegramLookCommand(chatId, message, argument) {
   // Telegram's 1024 caption limit applies to the VISIBLE text (after entity parsing), not the
   // raw HTML — the long href URLs don't count. Measure visible length so the richer card
   // (ATH + quick-links + caller line) still ships WITH the image at the top, not text-only.
-  const img = firstString(scan.meta?.imageUrl, scan.bonding?.imageUrl, scan.bonding?.imageUri);
+  const img = scanImageUrlFromScan(scan);
   const captionVisibleLen = text.replace(/<[^>]+>/g, "").length;
   if (img && captionVisibleLen <= 1024) {
     try {

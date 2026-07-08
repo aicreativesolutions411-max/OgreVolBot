@@ -57,7 +57,7 @@ async function pickBg(bgDir, r) {
   } catch { return null; }
 }
 
-export async function renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel, volumeLabel, holderLabel, verdict, verdictTone = "ok", changeLabel, changeTone, logoBuffer, bgDir, seed }) {
+export async function renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabel, railLabel, volumeLabel, holderLabel, verdict, verdictTone = "ok", changeLabel, changeTone, changeTitle = "1H", logoBuffer, bgDir, seed }) {
   const r = makeRng(seed != null ? seed : symbol || "slime");
   const vColor = verdictColor(verdictTone);
   const chColor = changeTone === "up" ? "#54e000" : changeTone === "down" ? "#ff5b5b" : "#8aff6b";
@@ -100,7 +100,7 @@ export async function renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabe
       ${chip(tx, 292, chipW, "MC", mcLabel, accent, chipOpts)}
       ${chip(tx + chipW + chipGap, 292, chipW, "LIQ", liqLabel, accent, chipOpts)}
       ${chip(tx + (chipW + chipGap) * 2, 292, chipW, "VOL", volumeLabel, accent, chipOpts)}
-      ${chip(tx, 386, chipW, "1H", changeLabel, changeLabel ? chColor : accent, chipOpts)}
+      ${chip(tx, 386, chipW, String(changeTitle || "1H").slice(0, 7).toUpperCase(), changeLabel, changeLabel ? chColor : accent, chipOpts)}
       ${chip(tx + chipW + chipGap, 386, chipW, "HOLDERS", holderLabel, accent, chipOpts)}
       ${chip(tx + (chipW + chipGap) * 2, 386, chipW, "AGE", ageLabel, accent, chipOpts)}
 
