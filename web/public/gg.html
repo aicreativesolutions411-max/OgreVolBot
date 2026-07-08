@@ -1042,6 +1042,11 @@
   // ---------- router ----------
   function parseHash(){const h=(location.hash||"#trending").slice(1);const[r,arg]=h.split("/");return{route:r||"trending",arg:arg||null};}
   function go(route,arg){location.hash=arg?("#"+route+"/"+arg):("#"+route);}
+  function isRobinhoodAddress(v){return /^0x[0-9a-fA-F]{40}$/.test(String(v||"").trim());}
+  function coinRouteName(v){return isRobinhoodAddress(v)?"rhtrade":"trade";}
+  function coinRouteHash(v){const s=String(v||"").trim();return "#"+coinRouteName(s)+"/"+s;}
+  function coinRouteUrl(v){return location.origin+"/gg"+coinRouteHash(v);}
+  function openCoinRoute(v){const s=String(v||"").trim();if(s)go(coinRouteName(s),s);}
   window.addEventListener("hashchange",render);
   function setActiveView(id){document.querySelectorAll(".view").forEach(v=>v.classList.toggle("on",v.id===id));}
   function setNav(route){
@@ -2936,10 +2941,12 @@
       '<div class="cell"><b>'+(t.tradeCount||0)+'</b><span>trades</span></div>'+
       '<div class="cell"><b>'+(t.buys||0)+' / '+(t.sells||0)+'</b><span>buys / sells</span></div></div></div>';
     const list=toks.length?toks.map(tk=>{const r=Number(tk.realizedSol),cls=isFinite(r)?(r>=0?"up":"down"):"mut";
-      return '<div class="walletrow"><div class="ico">'+(tk.imageUrl?'<img src="'+esc(tk.imageUrl)+'" style="width:100%;height:100%;border-radius:11px;object-fit:cover">':'🪙')+'</div>'+
-        '<div class="info"><b>'+esc(tk.symbol||short(tk.tokenMint))+'</b><div class="addr mut">'+esc(tk.holdTime||tk.name||"")+'</div></div>'+
+      const token=tk.tokenMint||tk.address||"",sym=tk.symbol||short(token);
+      return '<div class="walletrow" style="cursor:pointer" onclick="GG.pnlCard(\''+esc(token)+'\',\''+esc(sym||"")+'\')"><div class="ico" title="Open chart" role="button" tabindex="0" onclick="event.stopPropagation();GG.open(\''+esc(token)+'\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();event.stopPropagation();GG.open(\''+esc(token)+'\')}" style="cursor:pointer">'+(tk.imageUrl?'<img src="'+esc(tk.imageUrl)+'" style="width:100%;height:100%;border-radius:11px;object-fit:cover">':'🪙')+'</div>'+
+        '<div class="info"><b>'+esc(sym||short(token))+'</b><div class="addr mut">'+esc(tk.holdTime||tk.name||"")+'</div></div>'+
         '<div class="bal"><b class="'+cls+'">'+(isFinite(r)?(r>=0?"+":"")+r.toFixed(3)+"◎":"—")+'</b><span>realized</span></div>'+
-        '<button class="wbtn ghost" style="margin-left:10px;padding:9px 12px" onclick="GG.pnlCard(\''+esc(tk.tokenMint)+'\',\''+esc(tk.symbol||"")+'\')">🏆 Card</button></div>';
+        '<button class="wbtn ghost" style="margin-left:10px;padding:9px 12px" onclick="event.stopPropagation();GG.open(\''+esc(token)+'\')">Chart</button>'+
+        '<button class="wbtn ghost" style="padding:9px 12px" onclick="event.stopPropagation();GG.pnlCard(\''+esc(token)+'\',\''+esc(sym||"")+'\')">🏆 Card</button></div>';
     }).join(""):'<p class="mut" style="font-size:12px">No closed trades yet — your trade history &amp; PnL cards appear here once you take some profit.</p>';
     view.innerHTML='<div class="wgrid">'+totals+'<div class="wbox"><h3>📜 Trade history</h3><p class="sub">Every coin you\'ve closed, with realized PnL. Tap <b>🏆 Card</b> to build a shareable SlimeWire PnL card you can save &amp; post on X.</p>'+list+'</div></div>';
   }
@@ -2951,8 +2958,9 @@
       const url=URL.createObjectURL(await r.blob());
       openModal('<h3>🏆 PnL Card — '+esc(sym||short(mint))+'</h3>'+
         '<img src="'+url+'" style="width:100%;border-radius:12px;border:1px solid var(--border);margin:4px 0 12px">'+
-        '<div style="display:flex;gap:9px"><a class="wbtn" style="flex:1;text-align:center;text-decoration:none" href="'+url+'" download="slimewire-pnl-'+esc((sym||"card").replace(/[^a-z0-9]/gi,""))+'.png">Save card</a>'+
-        '<button class="wbtn ghost" style="flex:1" onclick="GG.copy(\''+esc(location.origin)+'/gg#trade/'+esc(mint)+'\')">Copy link</button></div>');
+        '<div style="display:flex;gap:9px;flex-wrap:wrap"><a class="wbtn" style="flex:1;min-width:105px;text-align:center;text-decoration:none" href="'+url+'" download="slimewire-pnl-'+esc((sym||"card").replace(/[^a-z0-9]/gi,""))+'.png">Save card</a>'+
+        '<button class="wbtn ghost" style="flex:1;min-width:105px" onclick="GG.copy(\''+esc(coinRouteUrl(mint))+'\')">Copy link</button>'+
+        '<button class="wbtn ghost" style="flex:1;min-width:105px" onclick="GG.closeModal();GG.open(\''+esc(mint)+'\')">Chart</button></div>');
     }catch(e){toast("Could not build card",true);}
   }
 
@@ -3987,7 +3995,7 @@
   document.addEventListener("click",(e)=>{if(!e.target.closest(".ctmore"))document.querySelectorAll(".ctmore.open").forEach(x=>x.classList.remove("open"));});
 
   // ---------- expose + boot ----------
-  window.GG={open:(m)=>go("trade",m),openSell:(m)=>{state.pendingSell=m;go("trade",m);},sellPos:(m,s)=>quickSellModal(m,s),armPos:(m,s)=>armExitsModal(m,s),go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,
+  window.GG={open:openCoinRoute,openSell:(m)=>{state.pendingSell=m;go("trade",m);},sellPos:(m,s)=>quickSellModal(m,s),armPos:(m,s)=>armExitsModal(m,s),go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,
     escrowModal,renderEscrow,escrowFinalize,escrowRefund,launchesModal,claimFees,toast,
     launchRh:()=>{state.launchRail="robinhood";state.launchTab="coin";go("launch");},
     rhTrade:(a)=>rhTradeModal(a),rhBuy:(a,amt)=>rhTrade(a,"buy",{amountEth:amt}),rhSell:(a,p)=>rhTrade(a,"sell",{percent:p}),rhQuick:(a)=>rhTrade(a,"buy",{amountEth:rhQuickEth()}),

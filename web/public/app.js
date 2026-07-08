@@ -16033,7 +16033,9 @@ function pnlHtml() {
       ${state.pnl.tokens.map((row) => `
         <article class="pnl-portfolio-row with-avatar">
           <div class="pnl-token-cell">
-            ${livePairAvatarHtml(row)}
+            <button type="button" class="pnl-avatar-action" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="pnl-avatar" data-token-chart-tab="chart" aria-label="Open ${escapeHtml(row.symbol || row.shortMint || "token")} chart" style="border:0;background:transparent;padding:0;margin:0;display:inline-flex;cursor:pointer">
+              ${livePairAvatarHtml(row)}
+            </button>
             <div>
               <strong>${escapeHtml(row.symbol || row.shortMint)}</strong>
               ${row.name ? `<small>${escapeHtml(row.name)}</small>` : ""}
@@ -16046,6 +16048,7 @@ function pnlHtml() {
           <span>${escapeHtml(row.holdTime || "n/a")}<small>Latest ${escapeHtml(formatDate(row.lastTradeAt))}</small></span>
           <div class="card-actions compact">
             ${xShareButton(pnlShareText(row), "Share")}
+            <button data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="pnl-chart-button" data-token-chart-tab="chart">Chart</button>
             <button data-pnl-card="${escapeHtml(row.tokenMint)}">Card</button>
             <button data-share-pnl-card="${escapeHtml(row.tokenMint)}" data-share-text="${escapeHtml(pnlShareText(row))}">Post</button>
             <a href="${row.dexUrl}" target="_blank" rel="noreferrer">Dex</a>
@@ -23805,18 +23808,26 @@ document.addEventListener("click", async (event) => {
     if (token) void openGlobalTokenSearch(token);
     return;
   }
-  if (target.matches("[data-token-chart]")) {
+  const tokenChartTarget = target.matches("[data-token-chart]")
+    ? target
+    : target.closest?.("[data-token-chart]");
+  if (tokenChartTarget) {
+    const interactiveTarget = target.closest?.("button,a,input,select,textarea,label,[role='button']");
+    if (interactiveTarget && interactiveTarget !== tokenChartTarget) {
+      // Let nested action buttons inside chartable cards keep their own behavior.
+    } else {
     event.preventDefault();
-    const mint = target.dataset.tokenChart || target.dataset.previewToken || "";
-    openTokenChart(tokenRefFromMint(target.dataset.tokenChart || target.dataset.previewToken || "", {
-      source: target.dataset.tokenChartSource || "token-card"
+    const mint = tokenChartTarget.dataset.tokenChart || tokenChartTarget.dataset.previewToken || "";
+    openTokenChart(tokenRefFromMint(mint, {
+      source: tokenChartTarget.dataset.tokenChartSource || "token-card"
     }), {
-      defaultTab: target.dataset.tokenChartTab || "buy",
+      defaultTab: tokenChartTarget.dataset.tokenChartTab || "buy",
       view: "chartTxns",
       focusAmountInput: target.closest?.(".live-pair-avatar") ? true : false,
-      source: target.dataset.tokenChartSource || "token-card"
+      source: tokenChartTarget.dataset.tokenChartSource || "token-card"
     });
     return;
+    }
   }
   if (target.matches("[data-token-trade]")) {
     event.preventDefault();
