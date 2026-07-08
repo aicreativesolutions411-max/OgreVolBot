@@ -4939,8 +4939,11 @@ async function main() {
   }
 
   if (CONFIG.webhookUrl) {
-    await setupWebhook();
-    console.log("Telegram bot is running in webhook mode.");
+    const webhookReady = await setupWebhook();
+    if (!webhookReady) scheduleWebhookSetupRetry();
+    console.log(webhookReady
+      ? "Telegram bot is running in webhook mode."
+      : "Telegram bot is running in webhook mode; webhook setup retry scheduled.");
     return;
   }
 
@@ -5796,21 +5799,39 @@ function startDcaPlanRunner() {
   }), 60_000);
 }
 
-async function setupWebhook() {
+function scheduleWebhookSetupRetry(attempt = 1) {
+  const delayMs = Math.min(5 * 60_000, 30_000 * Math.max(1, attempt));
+  setTimeout(() => {
+    void setupWebhook({ retry: true }).then((ok) => {
+      if (!ok && attempt < 10) scheduleWebhookSetupRetry(attempt + 1);
+    }).catch((error) => {
+      console.warn(`[tg] webhook retry failed: ${friendlyError(error)}`);
+      if (attempt < 10) scheduleWebhookSetupRetry(attempt + 1);
+    });
+  }, delayMs);
+}
+
+async function setupWebhook(options = {}) {
   if (!CONFIG.webhookSecret) {
     throw new Error("TELEGRAM_WEBHOOK_SECRET is required when TELEGRAM_WEBHOOK_URL is set.");
   }
 
-  await telegram("setWebhook", {
-    url: `${CONFIG.webhookUrl}${webhookPath()}`,
-    secret_token: CONFIG.webhookSecret,
-    // channel_post: channels never emit "message", so /look + /alpha + /slimewire in
-    // channels need it. my_chat_member: fires when the bot is added, for the welcome.
-    // chat_member: referral contests attribute a join to the inviter's unique invite link.
-    allowed_updates: ["message", "callback_query", "channel_post", "my_chat_member", "chat_member"],
-    drop_pending_updates: false
-  });
+  try {
+    await telegram("setWebhook", {
+      url: `${CONFIG.webhookUrl}${webhookPath()}`,
+      secret_token: CONFIG.webhookSecret,
+      // channel_post: channels never emit "message", so /look + /alpha + /slimewire in
+      // channels need it. my_chat_member: fires when the bot is added, for the welcome.
+      // chat_member: referral contests attribute a join to the inviter's unique invite link.
+      allowed_updates: ["message", "callback_query", "channel_post", "my_chat_member", "chat_member"],
+      drop_pending_updates: false
+    });
+  } catch (error) {
+    console.warn(`[tg] setWebhook failed${options.retry ? " on retry" : ""}; keeping web service online: ${friendlyError(error)}`);
+    return false;
+  }
   await registerTelegramBotCommands().catch((error) => console.warn(`[tg] setMyCommands failed: ${error.message}`));
+  return true;
 }
 
 // Command autocomplete in the Telegram UI - discovery matters more than docs.

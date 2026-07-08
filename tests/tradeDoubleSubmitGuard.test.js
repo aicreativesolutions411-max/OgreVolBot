@@ -110,6 +110,17 @@ test("subscription grant is idempotent + re-entrancy-guarded (no stacked free ti
   assert.match(body, /balLamports - grantedFor >= thresholdLamports/);
 });
 
+test("Telegram webhook setup timeouts do not kill the web service deploy", () => {
+  const main = functionBody(serverSource, "main");
+  assert.match(main, /const webhookReady = await setupWebhook\(\)/);
+  assert.match(main, /scheduleWebhookSetupRetry\(\)/);
+  assert.match(serverSource, /function scheduleWebhookSetupRetry\(attempt = 1\)/);
+  const setup = functionBody(serverSource, "setupWebhook");
+  assert.match(setup, /catch \(error\)/);
+  assert.match(setup, /setWebhook failed[\s\S]*return false/);
+  assert.match(setup, /TELEGRAM_WEBHOOK_SECRET is required/);
+});
+
 test("sweeps run bounded-concurrent (not serial N+1) + referral writes are locked", () => {
   assert.match(functionBody(serverSource, "webSweepSol"), /runWithConcurrency\(wallets,/);
   assert.match(functionBody(serverSource, "webSweepTokens"), /runWithConcurrency\(wallets,/);
