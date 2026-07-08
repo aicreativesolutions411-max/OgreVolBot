@@ -30691,14 +30691,18 @@ function scanMarketStatsFromSources({ meta = null, bonding = null, best = null, 
   let ch1 = scanBestPriceChange("h1", ...sources);
   const buys1 = Number(scanBestTxnCount("buys", "h1", ...sources)) || 0;
   const sells1 = Number(scanBestTxnCount("sells", "h1", ...sources)) || 0;
-  const holders = scanBestHolderCount(rug, meta, bonding, best, supply);
+  let holders = Number(scanBestHolderCount(rug, meta, bonding, best, supply)) || 0;
   let mc = pick(pumpMc, dexMc) || 0;
   let liq = pick(pumpLiq, dexLiq) || 0;
+  // AGE (createdAt, ms): resolve from EVERY source — dex/gecko pairCreatedAt (ms) + pump created_timestamp
+  // (SECONDS→ms). This is why the card showed "new"/"age n/a": the old paths missed pump's created_timestamp.
+  const pumpCreatedMs = Number(bonding?.created_timestamp) ? Number(bonding.created_timestamp) * (String(bonding.created_timestamp).replace(/\D/g, "").length <= 10 ? 1000 : 1) : 0;
+  let createdAt = normalizePairCreatedAt(meta?.pairCreatedAt) || normalizePairCreatedAt(best?.pairCreatedAt) || Number(bonding?.pairCreatedAt) || Number(bonding?.createdAt) || pumpCreatedMs || 0;
   // STICKY last-good (SHARED with the holder/airdrop map via mapMetaLastGood): DexScreener + Gecko both
-  // rate-limit Render's IP, so a single scan pull often comes back with a blank LIQ/1H even though the map
-  // and trench-watch show them. A <=15-min-old value beats a blank; fresh good reads refresh the cache — so
-  // the scan card, the bubble map, and the airdrop map all read the same numbers. (Owner: "use whatever path
-  // the trench watch has to make the scan the same as the coin/airdrop/bubble map.")
+  // rate-limit Render's IP, so a single scan pull often comes back blank even though the map + trench-watch
+  // show the value. A <=15-min-old cached value beats a blank; fresh good reads refresh it. This ONE cache
+  // buttons up MC/LIQ/VOL/1H/HOLDERS/AGE for the scan card, bubble map, and airdrop map (owner: "we keep
+  // circling — need this always right and buttoned up").
   let volObj = vol;
   if (mint) {
     const lg = mapMetaLastGood.get(mint);
@@ -30706,9 +30710,11 @@ function scanMarketStatsFromSources({ meta = null, bonding = null, best = null, 
       if (!(mc > 0) && lg.mc > 0) mc = lg.mc;
       if (!(liq > 0) && lg.liq > 0) liq = lg.liq;
       if (!Number.isFinite(ch1) && Number.isFinite(lg.ch1)) ch1 = lg.ch1;
-      if (!(volObj && volObj.value > 0) && lg.vol && lg.vol.value > 0) volObj = lg.vol;   // VOLUME persists too (owner: "volume didn't load")
+      if (!(volObj && volObj.value > 0) && lg.vol && lg.vol.value > 0) volObj = lg.vol;
+      if (!(holders > 0) && lg.holders > 0) holders = lg.holders;
+      if (!(createdAt > 0) && lg.createdAt > 0) createdAt = lg.createdAt;
     }
-    rememberMeta(mint, { mc, liq, ch1, vol: volObj, sym: firstString(meta?.symbol, bonding?.symbol) });
+    rememberMeta(mint, { mc, liq, ch1, vol: volObj, holders, createdAt, sym: firstString(meta?.symbol, bonding?.symbol) });
   }
   return {
     sources,
@@ -30720,13 +30726,14 @@ function scanMarketStatsFromSources({ meta = null, bonding = null, best = null, 
     ch1,
     buys1,
     sells1,
+    createdAt: createdAt || 0,
     holders: Number(holders) || 0
   };
 }
 // Shared sticky last-good market cache — UPGRADE-ONLY: a pull with good MC but blank LIQ must never wipe a
 // previously-cached good LIQ (that was the "liq shows then blanks" flicker). Used by the scan card, the
 // bubble map, and the airdrop map so all three read the same MC/LIQ/1H/VOL. (mapMetaLastGood is defined below.)
-function rememberMeta(mint, { mc = 0, liq = 0, ch1 = null, vol = null, sym = "" } = {}) {
+function rememberMeta(mint, { mc = 0, liq = 0, ch1 = null, vol = null, holders = 0, createdAt = 0, sym = "" } = {}) {
   if (!mint) return;
   const prev = mapMetaLastGood.get(mint) || {};
   const next = {
@@ -30736,9 +30743,11 @@ function rememberMeta(mint, { mc = 0, liq = 0, ch1 = null, vol = null, sym = "" 
     liq: Number(liq) > 0 ? Number(liq) : (Number(prev.liq) || 0),
     ch1: Number.isFinite(ch1) ? ch1 : (Number.isFinite(prev.ch1) ? prev.ch1 : null),
     vol: (vol && vol.value > 0) ? vol : (prev.vol || null),
+    holders: Number(holders) > (Number(prev.holders) || 0) ? Number(holders) : (Number(prev.holders) || 0),   // holder count only grows
+    createdAt: Number(createdAt) > 0 ? Number(createdAt) : (Number(prev.createdAt) || 0),   // creation time never changes
     sym: sym || prev.sym || "",
   };
-  if (!(next.mc > 0) && !(next.liq > 0)) return;   // nothing worth remembering yet
+  if (!(next.mc > 0) && !(next.liq > 0) && !(next.holders > 0) && !(next.createdAt > 0)) return;   // nothing worth remembering yet
   mapMetaLastGood.set(mint, next);
   if (mapMetaLastGood.size > 400) mapMetaLastGood.delete(mapMetaLastGood.keys().next().value);
 }
@@ -32291,7 +32300,7 @@ async function buildXScanReply(mint, variant) {
   const mc = stats.mc;
   const liq = stats.liq;
   if (!symbol && !(mc > 0)) return null;
-  const createdAt = Number(best?.pairCreatedAt || 0) || (Number(bonding?.created_timestamp || 0) * (String(bonding?.created_timestamp || "").length <= 10 ? 1000 : 1));
+  const createdAt = Number(stats.createdAt) || 0;   // resolved from all sources + sticky-cached in the aggregator
   const ageLabel = createdAt > 0 ? xAgeLabel(Date.now() - createdAt) : "new";
   const rail = xRailLabel(mint, best, bonding);
   const { verdict, tone } = xVerdict(shield, rug, liq, mc, variant || mint);
@@ -36198,11 +36207,8 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
   const headStatus = onCurve
     ? `(Pump @ ${Math.max(0, Math.min(100, Math.round(bondPct)))}%)`
     : (meta?.graduated ? "(Migrated)" : "");
-  // AGE: pump exposes creation as `created_timestamp` (SECONDS) — the old code only read createdAt/pairCreatedAt
-  // so pump coins showed "age n/a". Resolve from every source (dex/gecko ms, pump seconds→ms) so it always
-  // shows real time (1m / 2h / 3d).
-  const pumpCreatedMs = Number(bonding?.created_timestamp) ? Number(bonding.created_timestamp) * (String(bonding.created_timestamp).replace(/\D/g, "").length <= 10 ? 1000 : 1) : 0;
-  const createdMs = normalizePairCreatedAt(meta?.pairCreatedAt) || normalizePairCreatedAt(best?.pairCreatedAt) || Number(bonding?.pairCreatedAt) || Number(bonding?.createdAt) || pumpCreatedMs || 0;
+  // AGE + holders come from the aggregator now (all sources + sticky cache) so they always populate.
+  const createdMs = Number(stats.createdAt) || 0;
   const headerTail = [`#SOL${headStatus ? ` ${headStatus}` : ""}`, `🌱 ${scanFmtAge(createdMs)}`]
     .concat(stats.holders ? [`∞ ${scanFmtSupply(stats.holders)}`] : [])
     .join(" | ");
