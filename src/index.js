@@ -4140,6 +4140,7 @@ const SEO_PAGES = [
   { path: "/solana-trading-tool-trust-checklist", priority: "0.78", changefreq: "weekly" },
   { path: "/slimewire-for-media-and-directories", priority: "0.72", changefreq: "weekly" },
   { path: "/x-solana-scan-replies", priority: "0.76", changefreq: "weekly" },
+  { path: "/x-terminal", priority: "0.84", changefreq: "weekly" },
   { path: "/is-slimewire-legit", priority: "0.86", changefreq: "weekly" },
   { path: "/slimewire-reviews-and-proof", priority: "0.8", changefreq: "weekly" },
   { path: "/slimewire-roadmap", priority: "0.74", changefreq: "weekly" },
@@ -4632,6 +4633,10 @@ const SEO_PAGE_META = {
   "/x-solana-scan-replies": {
     title: "X Solana Scan Replies - CA Check Templates and SlimeWire Research Links",
     description: "Copy X-ready Solana scan reply templates for CAs, caller proof, launch checks, fresh pair reviews, and SlimeWire research links."
+  },
+  "/x-terminal": {
+    title: "SlimeWire X Terminal - Trade Commands, Scans and Pinned Post Hub",
+    description: "Use SlimeWire from X with a pinned terminal-style post, DM command flow, Solana scan replies, chart links, wallet approval handoff, and safe trade routing."
   },
   "/is-slimewire-legit": {
     title: "Is SlimeWire Legit? Official Safety, Bot and Trust Checklist",
@@ -6601,6 +6606,10 @@ function startHealthServer() {
     }
     if (request.method === "GET" && requestUrl.pathname === "/x-solana-scan-replies") {
       await serveStaticHtmlPage(response, "x-solana-scan-replies.html");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/x-terminal") {
+      await serveStaticHtmlPage(response, "x-terminal.html");
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/is-slimewire-legit") {
@@ -34725,6 +34734,31 @@ async function handleXBotCommand(chatId, argument, userId) {
     await say(chatId, after.lastScorecardAt > before ? "✅ Scorecard posted." : "Nothing to post yet (need ≥3 tracked coins with an entry MC this week).");
     return;
   }
+  if (/^terminal\b/i.test(arg)) {
+    const text = [
+      "SLIMEWIRE X TERMINAL",
+      "",
+      "Tag @SlimeWirebot under any Solana coin:",
+      "scan <CA>",
+      "chart <CA>",
+      "rug <CA>",
+      "",
+      "DM:",
+      "buy 0.1 <CA> / sell 50% <CA>",
+      "positions / help",
+      "",
+      "Wallet approvals stay user-confirmed. No seed phrases.",
+      "https://www.slimewire.org/x-terminal"
+    ].join("\n");
+    const cardPath = path.join(WEB_STATIC_DIR, "assets", "slimewire", "auto", "x-terminal-card.png");
+    const sourceCardPath = path.resolve(__dirname, "..", "web", "public", "assets", "slimewire", "auto", "x-terminal-card.png");
+    const mediaBuffer = await fs.readFile(cardPath).catch(() => fs.readFile(sourceCardPath).catch(() => null));
+    const res = await xPost({ text, mediaBuffer });
+    await sayHtml(chatId, res.ok
+      ? `✅ X terminal post sent.${res.id ? ` <a href="https://x.com/i/status/${res.id}">view</a>` : ""}\nPin it from X so it stays at the top of the profile.`
+      : `⚠️ ${escapeTelegramHtml(res.reason || "failed")}`);
+    return;
+  }
   const on = (b) => b ? "🟢 ON" : "⚪️ off";
   await sayHtml(chatId, [
     "🐦🔥 <b>X Growth Engine</b>",
@@ -34744,7 +34778,7 @@ async function handleXBotCommand(chatId, argument, userId) {
     "Tune: <code>XBOT_AUTOCALL_GAP_MIN</code> (180) · <code>XBOT_AUTOCALL_DAILY</code> (6) · <code>XBOT_AUTOCALL_MIN_SCORE</code> (55) · <code>XBOT_AUTOCALL_MIN_MC</code> (15000)",
     "",
     "<b>Test now</b> (posts for real, ignores the gate):",
-    "<code>/xbot call</code> · <code>/xbot receipt &lt;mint&gt;</code> · <code>/xbot scorecard</code>",
+    "<code>/xbot terminal</code> · <code>/xbot call</code> · <code>/xbot receipt &lt;mint&gt;</code> · <code>/xbot scorecard</code>",
   ].join("\n"));
 }
 

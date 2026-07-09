@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SlimeWire X Terminal - Trade Commands, Scans and Pinned Post Hub</title>
+<meta name="description" content="Use SlimeWire from X: pinned terminal-style post, DM command flow, Solana scan replies, chart links, wallet approval handoff, and safe trade routing.">
+<link rel="canonical" href="https://www.slimewire.org/x-terminal">
+<meta name="robots" content="index,follow">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="SlimeWire">
+<meta property="og:title" content="SlimeWire X Terminal - Scans, Charts and Trade Commands">
+<meta property="og:description" content="A pinned X command hub for SlimeWire scans, chart handoff, DM trading commands, and user-confirmed wallet approvals.">
+<meta property="og:url" content="https://www.slimewire.org/x-terminal">
+<meta property="og:image" content="https://www.slimewire.org/assets/slimewire/auto/x-terminal-card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="675">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="SlimeWire X Terminal - Scans, Charts and Trade Commands">
+<meta name="twitter:description" content="Pin this terminal-style hub on X so users can scan, chart, DM commands, and route wallet approvals safely.">
+<meta name="twitter:image" content="https://www.slimewire.org/assets/slimewire/auto/x-terminal-card.png">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","name":"SlimeWire X Terminal - Trade Commands, Scans and Pinned Post Hub","url":"https://www.slimewire.org/x-terminal","description":"Use SlimeWire from X: pinned terminal-style post, DM command flow, Solana scan replies, chart links, wallet approval handoff, and safe trade routing.","isPartOf":{"@type":"WebSite","name":"SlimeWire","url":"https://www.slimewire.org"},"about":[{"@type":"Thing","name":"X trading bot"},{"@type":"Thing","name":"Solana memecoin terminal"},{"@type":"Thing","name":"Solana Actions and Blinks"}]},{"@type":"SoftwareApplication","name":"SlimeWire","alternateName":["SlimeWire X Terminal","SlimeWire Terminal","@SlimeWirebot"],"applicationCategory":"FinanceApplication","operatingSystem":"Web, X, Telegram","url":"https://www.slimewire.org/x-terminal","description":"SlimeWire X Terminal is a pinned-post command hub for token scans, chart links, DM command workflows, and user-confirmed wallet approval handoff.","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}},{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Can X host a full SlimeWire trading terminal inside a post?","acceptedAnswer":{"@type":"Answer","text":"No. A normal X post cannot host a full embedded web app, but a pinned post can act as a command hub that routes users to DM commands, scan replies, chart links, and wallet approval flows."}},{"@type":"Question","name":"Can users trade directly from X?","acceptedAnswer":{"@type":"Answer","text":"Users can start a trade workflow from X, but wallet actions still require explicit user confirmation through the SlimeWire terminal, a wallet approval, or a supported Solana Action client."}},{"@type":"Question","name":"What should users DM?","acceptedAnswer":{"@type":"Answer","text":"Useful commands include scan plus a contract address, chart plus a contract address, buy plus amount and contract address, sell plus percent and contract address, positions, wallet, and help."}},{"@type":"Question","name":"Does SlimeWire ask for seed phrases in X DMs?","acceptedAnswer":{"@type":"Answer","text":"No. SlimeWire should never ask for seed phrases or private keys in X, Telegram, or the web terminal."}},{"@type":"Question","name":"Why pin this page on X?","acceptedAnswer":{"@type":"Answer","text":"A pinned terminal page gives visitors one obvious command center for scans, charts, proof, Telegram, and wallet-approved trade handoff without cluttering every reply."}}]}]}</script>
+<style>
+  :root{--green:#72ff23;--green2:#bbff63;--bg:#050705;--panel:#0a0f0b;--panel2:#071109;--text:#e9ffe0;--muted:#8ea28a;--border:rgba(114,255,35,.18);--line:rgba(114,255,35,.08)}
+  *{box-sizing:border-box}
+  html,body{margin:0;background:radial-gradient(900px 420px at 50% -10%,rgba(114,255,35,.12),transparent 64%),var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;line-height:1.55}
+  a{color:var(--green2);text-decoration:none}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+  header{padding:58px 0 28px;text-align:center}
+  .eyebrow{display:inline-flex;gap:8px;align-items:center;border:1px solid var(--border);border-radius:999px;padding:6px 12px;color:var(--green);font-size:12px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;background:rgba(114,255,35,.05)}
+  h1{font-size:clamp(34px,6vw,62px);line-height:1.03;margin:18px 0 14px;letter-spacing:-.02em}
+  h1 span,h2 span{color:var(--green)}
+  .sub{font-size:clamp(16px,2.3vw,20px);color:var(--muted);max-width:820px;margin:0 auto 24px}
+  .cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:12px 18px;border-radius:12px;font-weight:900;border:1px solid var(--border);background:rgba(114,255,35,.05)}
+  .primary{background:linear-gradient(180deg,var(--green2),var(--green));color:#04120a;border:0}
+  section{padding:36px 0;border-top:1px solid var(--line)}
+  h2{font-size:clamp(22px,4vw,34px);margin:0 0 14px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+  .card,.terminal,details,.copybox{background:linear-gradient(180deg,rgba(114,255,35,.045),transparent),var(--panel);border:1px solid var(--border);border-radius:16px;padding:18px}
+  .card h3{margin:0 0 8px}.card p,details p{margin:0;color:var(--muted);font-size:14px}
+  .terminal{max-width:920px;margin:0 auto;text-align:left;box-shadow:0 0 36px rgba(114,255,35,.08)}
+  .termbar{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:14px;color:var(--muted);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em}
+  .lights{display:flex;gap:6px}.lights i{width:10px;height:10px;border-radius:50%;background:var(--green);box-shadow:0 0 12px rgba(114,255,35,.8)}.lights i:nth-child(2){background:#ffe56d}.lights i:nth-child(3){background:#17d38d}
+  .cmd{display:grid;grid-template-columns:145px 1fr;gap:10px;padding:10px 0;border-top:1px solid rgba(114,255,35,.06);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .cmd:first-of-type{border-top:0}.cmd b{color:var(--green)}.cmd span{color:#dfffe3}
+  .pillrow{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.pill{border:1px solid var(--border);border-radius:999px;padding:7px 10px;background:rgba(114,255,35,.05);color:#dfffe3;font-size:12px;font-weight:900}
+  .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px;counter-reset:s}
+  .step{position:relative;padding-left:58px}.step:before{counter-increment:s;content:counter(s);position:absolute;left:16px;top:18px;width:30px;height:30px;border-radius:9px;background:var(--green);color:#04120a;display:grid;place-items:center;font-weight:900}
+  .copybox pre{white-space:pre-wrap;margin:10px 0 0;color:#e9ffe0;font:700 13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .copybtn{margin-top:12px;width:100%}
+  summary{cursor:pointer;font-weight:900;padding:6px 0}
+  footer{padding:34px 0 56px;text-align:center;color:var(--muted);font-size:13px;border-top:1px solid var(--line)}
+  footer a{margin:0 6px}
+  @media(max-width:640px){header{padding-top:42px}.cmd{grid-template-columns:1fr}.btn{width:100%;max-width:360px}.cta{align-items:center;flex-direction:column}.step{padding-left:18px;padding-top:50px}.step:before{top:16px}}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="eyebrow"><span>live command hub</span><span>X + SlimeWire</span></div>
+    <h1><span>SlimeWire</span> X Terminal</h1>
+    <p class="sub">Pin one post that feels like a trading terminal: users can tag for scans, DM commands, open charts, route wallet approvals, and jump into the full SlimeWire terminal without hunting through replies.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://x.com/SlimeWirebot" target="_blank" rel="noopener noreferrer">Open @SlimeWirebot</a>
+      <a class="btn" href="/terminal">Open web terminal</a>
+      <a class="btn" href="/x-solana-scan-replies">X scan replies</a>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <div class="terminal" aria-label="SlimeWire X terminal command preview">
+      <div class="termbar"><span>slimewire.org/x-terminal</span><span class="lights"><i></i><i></i><i></i></span></div>
+      <div class="cmd"><b>tag</b><span>@SlimeWirebot scan &lt;CA&gt;</span></div>
+      <div class="cmd"><b>dm</b><span>scan &lt;CA&gt; | chart &lt;CA&gt; | rug &lt;CA&gt;</span></div>
+      <div class="cmd"><b>trade</b><span>buy 0.1 &lt;CA&gt; | sell 50% &lt;CA&gt; | positions</span></div>
+      <div class="cmd"><b>safety</b><span>wallet approval required. no seed phrases. no silent buys.</span></div>
+      <div class="pillrow">
+        <span class="pill">CA scans</span><span class="pill">Dex chart</span><span class="pill">PnL proof</span><span class="pill">DM flow</span><span class="pill">Blink-ready links</span><span class="pill">Telegram fallback</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>How the pinned X post works</h2>
+    <div class="steps">
+      <div class="card step"><h3>Pin the command hub</h3><p>Use the copy below as the pinned post. It gives visitors the commands and points them to this terminal-style page.</p></div>
+      <div class="card step"><h3>Keep public replies simple</h3><p>Public X replies should scan, chart, or explain. Wallet-specific questions move to DM or the web terminal.</p></div>
+      <div class="card step"><h3>Confirm every wallet action</h3><p>Buy/sell flows can start from X, but signing still happens through the wallet or SlimeWire terminal so users stay in control.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Copy-ready pinned post</h2>
+    <div class="copybox">
+      <b>Pin this on @SlimeWirebot</b>
+      <pre id="pinCopy">SLIMEWIRE X TERMINAL
+
+Tag @SlimeWirebot under any Solana coin:
+scan &lt;CA&gt;
+chart &lt;CA&gt;
+rug &lt;CA&gt;
+
+DM the bot:
+buy 0.1 &lt;CA&gt;
+sell 50% &lt;CA&gt;
+positions
+help
+
+Wallet approvals stay user-confirmed. No seed phrases. No silent buys.
+https://www.slimewire.org/x-terminal</pre>
+      <button class="btn primary copybtn" type="button" id="copyPin">Copy pinned post text</button>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>What X can and cannot do</h2>
+    <div class="grid">
+      <div class="card"><h3>Works well</h3><p>Tagged scan replies, branded scan cards, chart links, proof links, pinned command hubs, and user-started DM workflows.</p></div>
+      <div class="card"><h3>Needs confirmation</h3><p>Any buy, sell, TP/SL, or wallet action must be confirmed by the user through a wallet approval or the SlimeWire terminal.</p></div>
+      <div class="card"><h3>Best future upgrade</h3><p>X DM terminal with account linking, one-time trade nonces, and the existing SlimeWire trade wrappers behind explicit confirm.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>FAQ</h2>
+    <details><summary>Can X host a full SlimeWire trading terminal inside a post?</summary><p>No. A normal X post cannot host a full embedded web app, but a pinned post can act as a command hub that routes users to DM commands, scan replies, chart links, and wallet approval flows.</p></details>
+    <details><summary>Can users trade directly from X?</summary><p>Users can start a trade workflow from X, but wallet actions still require explicit user confirmation through the SlimeWire terminal, a wallet approval, or a supported Solana Action client.</p></details>
+    <details><summary>What should users DM?</summary><p>Useful commands include scan plus a contract address, chart plus a contract address, buy plus amount and contract address, sell plus percent and contract address, positions, wallet, and help.</p></details>
+    <details><summary>Does SlimeWire ask for seed phrases in X DMs?</summary><p>No. SlimeWire should never ask for seed phrases or private keys in X, Telegram, or the web terminal.</p></details>
+    <details><summary>Why pin this page on X?</summary><p>A pinned terminal page gives visitors one obvious command center for scans, charts, proof, Telegram, and wallet-approved trade handoff without cluttering every reply.</p></details>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <a href="/">Home</a> &middot; <a href="/x-terminal">X Terminal</a> &middot; <a href="/x-solana-scan-replies">X Scan Replies</a> &middot; <a href="/official-slimewire-links">Official Links</a> &middot; <a href="/trust">Trust</a> &middot; <a href="/risk-disclosure">Risk</a> &middot; <a href="https://t.me/SlimeWiredBot" target="_blank" rel="noopener noreferrer">@SlimeWiredBot</a>
+  </div>
+</footer>
+<script>
+  (function(){
+    var btn=document.getElementById("copyPin"),pre=document.getElementById("pinCopy");
+    if(!btn||!pre)return;
+    btn.addEventListener("click",async function(){
+      try{await navigator.clipboard.writeText(pre.textContent.trim());btn.textContent="Copied";setTimeout(function(){btn.textContent="Copy pinned post text";},1600);}
+      catch(e){btn.textContent="Select text above";setTimeout(function(){btn.textContent="Copy pinned post text";},1600);}
+    });
+  })();
+</script>
+</body>
+</html>
