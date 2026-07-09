@@ -14217,7 +14217,6 @@ async function handleMessage(message, userId) {
   // (records the channel call too, via the look handler). Works in groups + DM.
   const cashtag = /^\$([A-Za-z][A-Za-z0-9._]{1,19})$/.exec(text.trim());
   if (cashtag) {
-    if (tgCommandOnCooldown(chatId, "cashtag", TG_LOOK_COOLDOWN_MS)) return;
     const mint = await resolveTickerToScanTarget(cashtag[1]).catch(() => null);
     if (mint) await handleTelegramLookCommand(chatId, message, mint);
     else if (isPrivateChat(message.chat)) await say(chatId, `Couldn't find a token for $${escapeTelegramHtml(cashtag[1])}. Paste its contract address (CA) and I'll pull the card.`);
@@ -31964,7 +31963,9 @@ async function resolveCashtagToMint(symbol) {
   if (q.length < 2) return null;
   const key = q.toLowerCase();
   const cached = cashtagMintCache.get(key);
-  if (cached && Date.now() - cached.at < 60_000) return cached.mint;
+  // Successful symbols are stable enough for a minute. Provider failures are not: a null result used to
+  // suppress every retry for a full minute, which made a valid $ticker feel randomly unsupported.
+  if (cached && Date.now() - cached.at < (cached.mint ? 60_000 : 10_000)) return cached.mint;
   let mint = null;
   // 1) Solana Tracker search FIRST — it's keyed + paid, so it isn't silently 429'd on Render's shared
   // IP the way DexScreener's public /search is (that throttle is why "$ticker" often scanned nothing).
@@ -32002,7 +32003,7 @@ async function resolveRhTickerToAddress(symbol) {
   if (q.length < 2) return null;
   const key = q.toLowerCase();
   const cached = rhTickerTargetCache.get(key);
-  if (cached && Date.now() - cached.at < 60_000) return cached.address;
+  if (cached && Date.now() - cached.at < (cached.address ? 60_000 : 10_000)) return cached.address;
   const candidates = [];
   const add = (address, row = {}, source = "") => {
     const a = String(address || "").trim();
@@ -32035,11 +32036,11 @@ async function resolveRhTickerToAddress(symbol) {
 async function resolveTickerToScanTarget(symbol) {
   const q = String(symbol || "").replace(/^\$|^#/, "").trim();
   if (q.length < 2) return null;
-  const [sol, rh] = await Promise.all([
-    resolveCashtagToMint(q).catch(() => null),
-    resolveRhTickerToAddress(q).catch(() => null)
-  ]);
-  return sol || rh || null;
+  // Solana is the overwhelmingly common path. Waiting for the parallel Robinhood feed added up to
+  // 3.5s to every successful Solana ticker even when Solana Tracker answered immediately.
+  const sol = await resolveCashtagToMint(q).catch(() => null);
+  if (sol) return sol;
+  return await resolveRhTickerToAddress(q).catch(() => null);
 }
 const BARE_TICKER_STOPWORDS = new Set([
   "scan", "check", "look", "chart", "rug", "safe", "safety", "ca", "cas", "contract", "token", "coin", "coins",
@@ -32067,11 +32068,21 @@ async function resolveDexPairToMint(addr) {
   const a = String(addr || "").trim();
   if (!isLikelySolMint(a)) return null;
   const cached = dexPairMintCache.get(a);
-  if (cached && Date.now() - cached.at < 5 * 60_000) return cached.mint;
+  // Cache real pair resolutions, but retry transient misses quickly. The old five-minute negative cache
+  // made a single DexScreener hiccup break the same pasted link for everyone.
+  if (cached && Date.now() - cached.at < (cached.mint ? 5 * 60_000 : 10_000)) return cached.mint;
   let mint = null;
   try {
     const d = await fetchJson(`https://api.dexscreener.com/latest/dex/pairs/solana/${a}`, { timeoutMs: 6000 }).catch(() => null);
-    const pairs = Array.isArray(d?.pairs) ? d.pairs : (d?.pair ? [d.pair] : []);
+    let pairs = Array.isArray(d?.pairs) ? d.pairs : (d?.pair ? [d.pair] : []);
+    // Some DexScreener deployments intermittently return pairs:null from the direct pair route while the
+    // search index still knows the pair. Use that independent route before declaring the link unresolved.
+    if (!pairs.length) {
+      const search = await fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(a)}`, { timeoutMs: 4_000 }).catch(() => null);
+      pairs = (Array.isArray(search?.pairs) ? search.pairs : []).filter((row) =>
+        String(row?.chainId || "").toLowerCase() === "solana"
+        && String(row?.pairAddress || row?.address || "").toLowerCase() === a.toLowerCase());
+    }
     const p = pairs[0];
     if (p) {
       const b = p.baseToken?.address, q = p.quoteToken?.address;
@@ -32099,10 +32110,17 @@ async function resolveScanTargetFromText(text, urls = [], options = {}) {
   const evm = blob.match(/0x[0-9a-fA-F]{40}/);
   if (evm) return evm[0];
   // 1) DexScreener link → pair→mint (must run BEFORE the generic base58 grab, which would keep the pair addr)
+  const consumedPairs = new Set();
   const ds = blob.match(/dexscreener\.com\/solana\/([1-9A-HJ-NP-Za-km-z]{32,44})/i);
-  if (ds) { const m = await resolveDexPairToMint(ds[1]).catch(() => null); if (m) return m; }
+  if (ds) {
+    consumedPairs.add(ds[1].toLowerCase());
+    const m = await resolveDexPairToMint(ds[1]).catch(() => null);
+    if (m) return m;
+  }
   // 2) bare CA / pump link → the base58 is the mint
-  const mints = extractMintsFromText(blob);
+  // Never reinterpret an unresolved DexScreener PAIR address as the token itself; that produced a
+  // convincing-looking junk scan instead of a clean retry on the next poll.
+  const mints = extractMintsFromText(blob).filter((mint) => !consumedPairs.has(mint.toLowerCase()));
   if (mints.length) return mints[0];
   // 3) $ticker (Solana first, Robinhood Chain fallback)
   for (const tag of extractCashtags(blob)) { const m = await resolveTickerToScanTarget(tag).catch(() => null); if (m) return m; }
@@ -32357,7 +32375,33 @@ async function enrichScanSecurityOnchain(mint, rug, bonding) {
   return Object.keys(out).length ? out : null;
 }
 
-async function gatherSlimeScan(mint) {
+// One shared result cache for every scan surface (Telegram, X replies/DMs, buy cards, and callbacks).
+// Besides making repeat scans instant, the in-flight map collapses simultaneous requests for the same CA
+// into one upstream fan-out. Last-good fallback prevents a brief provider blank from erasing a card that
+// populated seconds earlier.
+const slimeScanCache = new Map();
+const slimeScanInFlight = new Map();
+async function gatherSlimeScan(mint, options = {}) {
+  const cleanMint = String(mint || "").trim();
+  if (!isLikelySolMint(cleanMint)) return null;
+  const now = Date.now();
+  const freshTtlMs = Math.max(2_000, Number(process.env.SCAN_CACHE_TTL_MS || 20_000));
+  const swrTtlMs = Math.max(freshTtlMs, Number(process.env.SCAN_SWR_TTL_MS || 90_000));
+  const staleTtlMs = Math.max(freshTtlMs, Number(process.env.SCAN_STALE_TTL_MS || 15 * 60_000));
+  const cached = slimeScanCache.get(cleanMint);
+  const cachedAgeMs = cached ? now - cached.at : Number.POSITIVE_INFINITY;
+  if (!options.force && cached && cachedAgeMs < freshTtlMs) return cached.scan;
+  // Stale-while-revalidate keeps repeat cards instant: return a recent last-good result and refresh it in
+  // the background. Every 90s at most, a caller waits for a full fresh read instead of seeing old markets.
+  if (!options.force && cached && cachedAgeMs < swrTtlMs) {
+    if (!slimeScanInFlight.get(cleanMint)) void gatherSlimeScan(cleanMint, { force: true }).catch(() => {});
+    return { ...cached.scan, stale: true, backgroundRefreshing: true };
+  }
+  const pending = slimeScanInFlight.get(cleanMint);
+  if (pending) return pending;
+
+  const refresh = (async () => {
+  mint = cleanMint;
   // Pump coins read Pump metadata FIRST (priority), Dex fills the gaps it doesn't have
   // (volume, 1H txns, price-change). Fetch everything in parallel, but keep hard per-source
   // deadlines so Telegram/X answer fast instead of spinning behind one slow upstream.
@@ -32406,18 +32450,21 @@ async function gatherSlimeScan(mint) {
   if (!bonding && (!meta || !meta.marketCap)) bonding = await scanFastTimeout(getPumpFunTokenMetadata(mint, { timeoutMs: 1_800 }), 2_000, null);
   const ath = parseTokenAth(athRaw, supply);
   // Free on-chain fill so the Security block is never blank when RugCheck is rate-limited / unindexed.
-  const rugFilled = await scanFastTimeout(enrichScanSecurityOnchain(mint, rug, bonding), 2_000, rug);
+  // The security fill and metadata fallback are independent. Running them together removes up to 1.7s
+  // from a cold scan instead of serially stacking both RPC paths after the market fetches.
+  const needsOnchain = !Boolean(meta?.symbol || bonding?.symbol)
+    || !Boolean(meta?.imageUrl || meta?.image || meta?.icon || bonding?.imageUrl || bonding?.image || bonding?.imageUri || bonding?.image_uri);
+  const [rugFilled, onchain] = await Promise.all([
+    scanFastTimeout(enrichScanSecurityOnchain(mint, rug, bonding), 2_000, rug),
+    needsOnchain ? scanFastTimeout(fetchOnchainTokenMeta(mint), 1_700, null) : Promise.resolve(null)
+  ]);
   // Universal on-chain name/symbol/image fallback so the X card ALWAYS has a symbol + pic, even for a
   // graduated / non-pump coin DexScreener + pump don't cover. Only fetched when the cheap sources are thin.
-  let onchain = null;
-  const hasCheapSymbol = Boolean(meta?.symbol || bonding?.symbol);
-  const hasCheapImage = Boolean(meta?.imageUrl || meta?.image || meta?.icon || bonding?.imageUrl || bonding?.image || bonding?.imageUri || bonding?.image_uri);
-  if (!hasCheapSymbol || !hasCheapImage) onchain = await scanFastTimeout(fetchOnchainTokenMeta(mint), 1_700, null);
-  if (onchain && (onchain.symbol || onchain.name || onchain.imageUrl || onchain.avatarUrl)) {
+  if (onchain && (onchain.symbol || onchain.name || onchain.imageUrl || onchain.avatarUrl || onchain.image)) {
     meta = mergeTokenMarketMetadata(meta, {
       symbol: onchain.symbol,
       name: onchain.name,
-      imageUrl: firstString(onchain.imageUrl, onchain.avatarUrl, onchain.imageUri),
+      imageUrl: firstString(onchain.imageUrl, onchain.avatarUrl, onchain.imageUri, onchain.image),
       websiteUrl: onchain.websiteUrl,
       twitterUrl: onchain.twitterUrl,
       telegramUrl: onchain.telegramUrl,
@@ -32425,6 +32472,25 @@ async function gatherSlimeScan(mint) {
     });
   }
   return { best, meta, rug: rugFilled, shield, bonding, dexPaid, supply, ath, onchain };
+  })();
+
+  const managed = refresh.then((scan) => {
+    const useful = Boolean(scan && (scan.meta || scan.bonding || scan.shield || scan.rug || scan.onchain || scan.best));
+    if (useful) {
+      slimeScanCache.set(cleanMint, { at: Date.now(), scan });
+      if (slimeScanCache.size > 500) slimeScanCache.delete(slimeScanCache.keys().next().value);
+      return scan;
+    }
+    if (cached && now - cached.at < staleTtlMs) return { ...cached.scan, stale: true, staleReason: "provider-refresh-empty" };
+    return scan;
+  }).catch((error) => {
+    if (cached && now - cached.at < staleTtlMs) return { ...cached.scan, stale: true, staleReason: "provider-refresh-failed" };
+    throw error;
+  }).finally(() => {
+    if (slimeScanInFlight.get(cleanMint) === managed) slimeScanInFlight.delete(cleanMint);
+  });
+  slimeScanInFlight.set(cleanMint, managed);
+  return managed;
 }
 
 // ============ 🗺️ KOL / WALLET MAP — radial holder bubble-map, SlimeWire-branded (X + TG + web) ============
@@ -34021,7 +34087,9 @@ const MPL_TOKEN_METADATA = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s";
 const onchainMetaCache = new Map();
 async function fetchOnchainTokenMeta(mint) {
   const cached = onchainMetaCache.get(mint);
-  if (cached && Date.now() - cached.at < 30 * 60_000) return cached.v;
+  // Real metadata is stable; an RPC/IPFS miss is not. Long negative caching was why a coin image/symbol
+  // could stay blank for 30 minutes after one transient provider failure.
+  if (cached && Date.now() - cached.at < (cached.v ? 30 * 60_000 : 15_000)) return cached.v;
   let out = null;
   try {
     const prog = new PublicKey(MPL_TOKEN_METADATA);
@@ -34161,35 +34229,25 @@ async function resolveXTargetMint(mention) {
 // text first; only falls back to the parent/root if the tag itself carries no coin (so "@bot ?" under a
 // coin post still resolves one, but "@bot scan $A $B 0xC" scans all three from the tag). Capped at 4.
 async function resolveAllXTargets(mention, cap = 4) {
-  const ownExplicit = await resolveExplicitScanTargetsFromText(mention.text, mention.urls, cap).catch(() => []);
-  if (ownExplicit.length) return await resolveAllScanTargetsFromText(mention.text, mention.urls, cap, { allowBareTickerHints: false }).catch(() => ownExplicit);
-  const parentExplicit = [];
+  // Everything the user explicitly wrote in the tag (CA, link, or $ticker) wins. Previously only CAs won
+  // here; an explicit "$OTHER" under a coin thread was ignored in favor of the parent coin's CA.
+  const ownTargets = await resolveAllScanTargetsFromText(mention.text, mention.urls, cap, { allowBareTickerHints: false }).catch(() => []);
+  if (ownTargets.length) return ownTargets;
+
+  const parentTargets = [];
   const seen = new Set();
   for (const pid of [mention.inReplyToId, mention.conversationId]) {
     if (!pid || seen.has(pid)) continue;
     seen.add(pid);
     const parent = await xGetTweet(pid).catch(() => null);
     if (parent) {
-      for (const t of await resolveExplicitScanTargetsFromText(parent.text, parent.urls, cap).catch(() => [])) {
-        if (!parentExplicit.some((x) => String(x).toLowerCase() === String(t).toLowerCase())) parentExplicit.push(t);
-        if (parentExplicit.length >= cap) return parentExplicit.slice(0, cap);
+      for (const t of await resolveAllScanTargetsFromText(parent.text, parent.urls, cap, { allowBareTickerHints: false }).catch(() => [])) {
+        if (!parentTargets.some((x) => String(x).toLowerCase() === String(t).toLowerCase())) parentTargets.push(t);
+        if (parentTargets.length >= cap) return parentTargets.slice(0, cap);
       }
     }
   }
-  if (parentExplicit.length) return parentExplicit.slice(0, cap);
-  let targets = await resolveAllScanTargetsFromText(mention.text, mention.urls, cap, { allowBareTickerHints: false }).catch(() => []);
-  if (targets.length) return targets;
-  seen.clear();
-  for (const pid of [mention.inReplyToId, mention.conversationId]) {
-    if (!pid || seen.has(pid)) continue;
-    seen.add(pid);
-    const parent = await xGetTweet(pid).catch(() => null);
-    if (parent) {
-      targets = await resolveAllScanTargetsFromText(parent.text, parent.urls, cap, { allowBareTickerHints: false }).catch(() => []);
-      if (targets.length) return targets;
-    }
-  }
-  return [];
+  return parentTargets.slice(0, cap);
 }
 // X aggressively de-ranks reply tweets that contain a raw URL — especially from newer accounts (they get
 // folded under "show more replies", which is exactly the "it only shows in the reply tab / feels like a DM"
@@ -34827,7 +34885,7 @@ async function xReplyPollTick(options = {}) {
         console.log(`[xreply]   ✗ no CA/wallet in tag/parent/root (${giveUp ? "gave up" : "retry"})`);
         if (giveUp) { state.seen[m.id] = now; delete state.fails[m.id]; await writeXReplyState(state); continue; }
         await writeXReplyState(state);
-        break;
+        continue; // keep queue moving; retry this mention next tick
       }
       state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "no CA/wallet found" }); console.log(`[xreply]   ✗ no CA/wallet in tag → skip`); continue;
     }
@@ -34863,7 +34921,7 @@ async function xReplyPollTick(options = {}) {
       console.log(`[xreply]   ⏱ build TIMED OUT target=${target} (${giveUp ? "gave up" : "retry"})`);
       if (giveUp) { state.seen[m.id] = now; delete state.fails[m.id]; await writeXReplyState(state); continue; }
       await writeXReplyState(state);
-      break;
+      continue; // keep queue moving; retry this mention next tick
     }
     if (!finalReply) {
       state.fails[m.id] = (Number(state.fails[m.id]) || 0) + 1;
@@ -34872,7 +34930,7 @@ async function xReplyPollTick(options = {}) {
       console.log(`[xreply]   ✗ buildXReply null target=${target} (${giveUp ? "gave up" : "retry"})`);
       if (giveUp) { state.seen[m.id] = now; delete state.fails[m.id]; await writeXReplyState(state); continue; }
       await writeXReplyState(state);
-      break;
+      continue; // keep queue moving; retry this mention next tick
     }
     // 🐸 Enrich the reply with coin-memory ("flagged this 2h ago at $X") + degen persona (text-only, safe).
     if (solanaPublicKeyLike(target)) { try { await xEnrichReplyText(target, finalReply); } catch { /* keep base reply */ } }
@@ -34930,15 +34988,16 @@ async function xReplyPollTick(options = {}) {
           }
         }
       } else {
-        // Transient failure → do NOT mark seen; break so it retries next cycle (the floor won't skip it,
-        // since the floor never advances past un-answered tweets). Give up only after 3 tries or auth death.
+        // Transient failure → do NOT mark seen; retry it next cycle while continuing with newer mentions
+        // now (the floor won't skip it). Give up only after 3 tries or auth death.
         state.fails[m.id] = (Number(state.fails[m.id]) || 0) + 1;
         const giveUp = state.fails[m.id] >= 3 || /not configured|401|unauthor/i.test(res.reason || "");
         results.push({ u: m.username, s: "fail", d: res.reason || "post failed" });
         console.log(`[xreply] ⚠️ @${m.username} fail: ${res.reason || ""}${giveUp ? " (gave up)" : " (retry)"}`);
         await xReplyOwnerNotify(`⚠️ X reply to @${m.username} failed: ${res.reason || ""}${giveUp ? " (gave up)" : " (will retry)"}`);
         if (giveUp) { state.seen[m.id] = now; delete state.fails[m.id]; await writeXReplyState(state); continue; }
-        break; // leave it un-seen so the next tick retries it
+        await writeXReplyState(state);
+        continue; // keep queue moving; retry this mention next tick
       }
       await writeXReplyState(state);
     } else {
@@ -38700,13 +38759,16 @@ async function handleTelegramLookCommand(chatId, message, argument) {
   // One resolver for CA, Dex/Pump links, $tickers, bare scan tickers, and Robinhood Chain 0x contracts.
   const target = await resolveScanTargetFromText(argument).catch(() => null);
   const rhAddr = /^0x[0-9a-fA-F]{40}$/.test(String(target || "")) ? String(target) : "";
-  if (rhAddr) { if (tgCommandOnCooldown(chatId, "look", TG_LOOK_COOLDOWN_MS)) return; await sendRhScanCard(chatId, rhAddr); return; }
+  if (rhAddr) { if (tgCommandOnCooldown(chatId, `look:${rhAddr.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return; await sendRhScanCard(chatId, rhAddr); return; }
   const mint = isLikelySolMint(target) ? String(target) : "";
   if (!mint) {
     await say(chatId, "Usage: /look <token CA> — Solana mint OR Robinhood Chain 0x… address. I'll run a SlimeShield read with chart + quick-buy.");
     return;
   }
-  if (tgCommandOnCooldown(chatId, "look", TG_LOOK_COOLDOWN_MS)) return;
+  // Deduplicate only the SAME token. A busy group may paste several different CAs within 20 seconds;
+  // the old chat-wide cooldown silently discarded all but the first and looked like a broken scanner.
+  if (tgCommandOnCooldown(chatId, `look:${mint.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return;
+  void telegram("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {});
   // Clean OgreScanBot-style scan card: stats + audit + socials + a prefilled
   // "Buy on SlimeWire" button. The all-in-one funnel — scan in any channel, buy on the site.
   let scan = null;
@@ -38725,7 +38787,7 @@ async function handleTelegramLookCommand(chatId, message, argument) {
   // this exact chat never did. Empty only when nobody anywhere has called the coin.
   const callerLine = await buildScanCallerFooter(message?.chat?.id, mint, curMc, message).catch(() => "");
   let text = null;
-  if (scan && (scan.meta || scan.bonding || scan.shield)) {
+  if (scan && (scan.meta || scan.bonding || scan.shield || scan.rug || scan.onchain)) {
     try { text = formatSlimeScanCard({ mint, ...scan, callerLine }); } catch { text = null; }
   }
   if (!text) {

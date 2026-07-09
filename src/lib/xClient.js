@@ -161,7 +161,10 @@ function parseTweetResult(result) {
     text: String(legacy.full_text || legacy.text || ""),
     username: String(uname),
     userId: String(legacy.user_id_str || user?.rest_id || ""),
-    inReplyToId: String(legacy.in_reply_to_status_id_str || legacy.conversation_id_str || ""),
+    // Keep the direct parent distinct from the conversation root. A standalone tag has its own
+    // conversation_id; treating that as a parent made the poller retry a no-target tag three times and
+    // pause newer mentions behind it even though there was no parent coin to resolve.
+    inReplyToId: String(legacy.in_reply_to_status_id_str || ""),
     inReplyToScreen: String(legacy.in_reply_to_screen_name || "").toLowerCase(),   // who this tweet REPLIES to
     conversationId: String(legacy.conversation_id_str || ""),                     // thread ROOT (CA often lives here)
     mentions: (legacy.entities?.user_mentions || []).map((u) => String(u.screen_name || "").toLowerCase()).filter(Boolean), // X-parsed @-mentions (works even when the handle isn't in the visible reply text)
@@ -315,7 +318,9 @@ async function notificationMentions(count = 20) {
       text: String(t.full_text || t.text || ""),
       username: String(u.screen_name || ""),
       userId: String(t.user_id_str || ""),
-      inReplyToId: String(t.in_reply_to_status_id_str || t.conversation_id_str || ""),
+      // conversation_id_str is the thread root (and equals this tweet for standalone posts), not the
+      // direct parent. Keep it in conversationId only so retry logic can tell real replies apart.
+      inReplyToId: String(t.in_reply_to_status_id_str || ""),
       inReplyToScreen: String(t.in_reply_to_screen_name || "").toLowerCase(),      // who this tweet REPLIES to
       conversationId: String(t.conversation_id_str || ""),                        // thread ROOT
       mentions: (t.entities?.user_mentions || []).map((x) => String(x.screen_name || "").toLowerCase()).filter(Boolean), // X-parsed @-mentions (present even when handle isn't in visible reply text)

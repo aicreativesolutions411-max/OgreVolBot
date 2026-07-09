@@ -2025,6 +2025,63 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "xReplyPollTick"), /let lastPostAt =/); // spacing, not defer
 });
 
+test("shared scan pipeline stays fast and resilient across Telegram, X, and repeat requests", () => {
+  const scan = functionBody(serverSource, "gatherSlimeScan");
+  assert.match(serverSource, /const slimeScanCache = new Map\(\)/);
+  assert.match(serverSource, /const slimeScanInFlight = new Map\(\)/);
+  assert.match(scan, /slimeScanInFlight\.get\(cleanMint\)/); // concurrent X/TG scans share one upstream fan-out
+  assert.match(scan, /SCAN_CACHE_TTL_MS/);                    // repeat scans return the fresh shared result
+  assert.match(scan, /SCAN_SWR_TTL_MS/);                      // recent scans render now and refresh in background
+  assert.match(scan, /backgroundRefreshing: true/);
+  assert.match(scan, /SCAN_STALE_TTL_MS/);                    // transient provider blanks keep last-good data
+
+  const resolvePair = functionBody(serverSource, "resolveDexPairToMint");
+  assert.match(resolvePair, /cached\.mint \? 5 \* 60_000 : 10_000/); // a temporary miss is never sticky for 5 minutes
+  assert.match(resolvePair, /latest\/dex\/search/);                 // second pair lookup path when the direct endpoint misses
+  const resolveTarget = functionBody(serverSource, "resolveScanTargetFromText");
+  assert.match(resolveTarget, /consumedPairs/);                      // failed DS lookup cannot mis-scan the pair as a token mint
+
+  const ticker = functionBody(serverSource, "resolveTickerToScanTarget");
+  assert.doesNotMatch(ticker, /Promise\.all/);                       // Solana tickers do not wait on the slower RH fallback
+  assert.match(ticker, /if \(sol\) return sol/);
+});
+
+test("Telegram scan throttling is per token and partial reads still render", () => {
+  const look = functionBody(serverSource, "handleTelegramLookCommand");
+  assert.match(look, /tgCommandOnCooldown\(chatId, `look:\$\{mint\.toLowerCase\(\)\}`/);
+  assert.doesNotMatch(look, /tgCommandOnCooldown\(chatId, "look"/); // a different CA in the same group is not silently dropped
+  assert.match(look, /sendChatAction/);                              // visible progress while a cold scan is resolving
+  assert.match(look, /scan\.rug \|\| scan\.onchain/);              // valid on-chain-only reads still get a card
+
+  const messageRouter = functionBody(serverSource, "handleMessage");
+  assert.doesNotMatch(messageRouter, /tgCommandOnCooldown\(chatId, "cashtag"/); // handler owns the per-token cooldown
+});
+
+test("X mention parsing and retry failures cannot starve newer scans", () => {
+  const xc = fs.readFileSync(new URL("../src/lib/xClient.js", import.meta.url), "utf8");
+  assert.doesNotMatch(functionBody(xc, "parseTweetResult"), /in_reply_to_status_id_str \|\| legacy\.conversation_id_str/);
+  assert.doesNotMatch(functionBody(xc, "notificationMentions"), /in_reply_to_status_id_str \|\| t\.conversation_id_str/);
+
+  const resolveAll = functionBody(serverSource, "resolveAllXTargets");
+  const ownTargetsAt = resolveAll.indexOf("resolveAllScanTargetsFromText(mention.text");
+  const parentFetchAt = resolveAll.indexOf("xGetTweet(pid)");
+  assert.ok(ownTargetsAt >= 0 && parentFetchAt > ownTargetsAt, "a ticker explicitly written in the tag must beat the parent coin");
+
+  const tick = functionBody(serverSource, "xReplyPollTick");
+  assert.match(tick, /keep queue moving; retry this mention next tick/g);
+  assert.doesNotMatch(tick, /writeXReplyState\(state\);\s*break;\s*\/\/ leave it un-seen/);
+});
+
+test("site scanner preserves last-good rows and ignores stale responses", () => {
+  assert.match(appSource, /let scanLoadVersion = 0/);
+  const load = functionBody(appSource, "loadScan");
+  assert.match(load, /requestVersion = \+\+scanLoadVersion/);
+  assert.match(load, /Scanner refresh timed out/);
+  assert.match(load, /previousRows\.length > 0/);
+  assert.match(load, /rows: previous\.rows/);
+  assert.match(load, /if \(!isCurrentRequest\(\)\) return/);
+});
+
 // ---- 🐦🔥 X GROWTH ENGINE — proactive calls, receipts, KOL first-responder, scorecard, persona -----------
 test("X DM terminal: link from Telegram, scan/settings/buy/sell over official DMs", () => {
   const xdm = fs.readFileSync(new URL("../src/lib/xDmClient.js", import.meta.url), "utf8");

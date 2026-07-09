@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
-const htmlSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
+const htmlSource = fs.readFileSync(new URL("../web/public/old.html", import.meta.url), "utf8");
 const overridesSource = fs.readFileSync(new URL("../web/public/slimewire-final-overrides.css", import.meta.url), "utf8");
 
 function functionBody(name) {

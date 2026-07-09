@@ -4,7 +4,8 @@ import fs from "node:fs";
 
 const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
 const cssSource = fs.readFileSync(new URL("../web/public/slimewire-final-overrides.css", import.meta.url), "utf8");
-const indexSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
+// The app.js terminal shell is intentionally frozen at old.html; index.html is the newer GG homepage.
+const indexSource = fs.readFileSync(new URL("../web/public/old.html", import.meta.url), "utf8");
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const configSource = fs.readFileSync(new URL("../config.js", import.meta.url), "utf8");
 const envSource = fs.readFileSync(new URL("../.env.example", import.meta.url), "utf8");

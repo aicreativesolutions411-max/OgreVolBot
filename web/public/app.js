@@ -553,6 +553,7 @@ let livePairsTimerKey = "";
 const livePairsWarmupKeys = new Set();
 let scanTimer = null;
 let scanTimerKey = "";
+let scanLoadVersion = 0;
 let kolTimer = null;
 let kolTimerKey = "";
 let ogreAgentSpeechStartTimer = null;
@@ -4218,23 +4219,57 @@ function scheduleWatchlistAutoRefresh() {
 async function loadScan(mode = state.scanMode, options = {}) {
   const startedAt = perfNow();
   const silent = Boolean(options.silent);
+  const requestVersion = ++scanLoadVersion;
+  const isCurrentRequest = () => requestVersion === scanLoadVersion;
   state.scanMode = mode;
+  const previous = state.scan?.mode === mode ? state.scan : null;
+  const previousRows = Array.isArray(previous?.rows) ? previous.rows : [];
   if (!silent) {
     state.loading = true;
     render();
   }
 
   try {
-    const data = await api(`/api/web/sniper/scan?mode=${encodeURIComponent(mode)}`);
-    state.scan = data.scan;
+    const data = await Promise.race([
+      api(`/api/web/sniper/scan?mode=${encodeURIComponent(mode)}`),
+      new Promise((_, reject) => window.setTimeout(() => reject(new Error("Scanner refresh timed out.")), 12_000))
+    ]);
+    if (!isCurrentRequest()) return;
+    let next = data.scan || { mode, rows: [], count: 0, lastUpdatedAt: new Date().toISOString() };
+    const nextRows = Array.isArray(next?.rows) ? next.rows : [];
+    if (nextRows.length === 0 && previousRows.length > 0) {
+      next = {
+        ...previous,
+        ...next,
+        rows: previous.rows,
+        count: previousRows.length,
+        stale: true,
+        emptyRefresh: true,
+        message: "Scanner is refreshing. Showing the last good picks until fresh rows qualify."
+      };
+    }
+    state.scan = next;
+  } catch (error) {
+    if (!isCurrentRequest()) return;
+    if (previousRows.length > 0) {
+      state.scan = {
+        ...previous,
+        stale: true,
+        refreshError: true,
+        message: "Scanner refresh was interrupted. Showing the last good picks while it retries."
+      };
+    }
+    throw error;
   } finally {
     perfMeasure("scanner-refresh", startedAt, {
       component: "sniper",
-      resultCount: Array.isArray(state.scan?.candidates) ? state.scan.candidates.length : 0,
+      resultCount: Array.isArray(state.scan?.rows) ? state.scan.rows.length : 0,
       details: mode
     });
-    if (!silent) state.loading = false;
-    render();
+    if (isCurrentRequest()) {
+      if (!silent) state.loading = false;
+      render();
+    }
   }
 }
 

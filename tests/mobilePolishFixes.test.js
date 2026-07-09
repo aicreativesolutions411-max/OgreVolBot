@@ -4,7 +4,7 @@ import fs from "node:fs";
 
 const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
 const cssSource = fs.readFileSync(new URL("../web/public/slimewire-final-overrides.css", import.meta.url), "utf8");
-const htmlSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
+const htmlSource = fs.readFileSync(new URL("../web/public/old.html", import.meta.url), "utf8");
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 
 function functionBody(source, name) {
