@@ -860,9 +860,12 @@ test("buy bot posts only real per-buy cards — no 'Buys rolling in' aggregate",
   assert.doesNotMatch(serverSource, /Buys rolling in/);            // the card text is gone entirely
 });
 
-test("scan only fires on a real mint (32-byte decode) — no sentence false-positives", () => {
+test("scan catches real pasted CAs in text without sentence false-positives", () => {
   assert.match(serverSource, /function isLikelySolMint\(/);
   assert.match(functionBody(serverSource, "isLikelySolMint"), /toBytes\(\)\.length === 32/);
+  assert.match(serverSource, /function hasExplicitScanAddressHint\(/);
+  assert.match(serverSource, /resolveExplicitScanTargetsFromText\(rawGroupText, \[\], 1\)/); // "thoughts on <CA>?"
+  assert.match(serverSource, /resolveExplicitScanTargetsFromText\(rawDmText, \[\], 1\)/);    // DM text + CA
   assert.match(serverSource, /isLikelySolMint\(caTok\)/);   // group trigger
   assert.match(serverSource, /isLikelySolMint\(caTokDm\)/); // DM trigger
   // The old space-stripping exec (which concatenated a sentence into a fake CA) is gone.

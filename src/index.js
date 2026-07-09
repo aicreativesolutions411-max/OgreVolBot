@@ -14114,39 +14114,41 @@ async function handleMessage(message, userId) {
     // Combot-style karma: a "thanks / +rep" reply silently awards the replied-to member +1 rep.
     // Fire-and-forget + cheap keyword gate inside, so it never slows the message path.
     void maybeAwardKarma(message).catch(() => {});
-    // Bare CA pasted in a group = automatic shield read. Someone drops a
-    // contract, SlimeWire answers with the verdict + chart + trade links -
-    // the most natural funnel there is. Cooldown inside the handler stops spam.
-    // ONLY a message that is JUST a real mint (decodes to 32 bytes) triggers it —
-    // normal chatter never does (a sentence has spaces / isn't a valid key).
-    const caTok = text.trim().replace(/^\$/, "");
-    // A bare Robinhood Chain contract (0x…40-hex) pasted in chat = auto RH scan card (same Scan toggle).
-    const rhCaTok = (text.trim().match(/^0x[0-9a-fA-F]{40}$/) || [])[0] || "";
-    if (rhCaTok) {
-      const gbEntry = await getGroupBotEntry(chatId).catch(() => null);
-      // BUY BOT auto-CA (RH): the first 0x pasted becomes the group's tracked Robinhood coin — the
-      // per-buy watcher reads its V3 pool's Swap logs and posts the same buy card as Solana coins.
-      if (gbEntry && groupBotFeatureOn(gbEntry, "buybot") && !gbEntry.token) {
-        await setGroupBotToken(chatId, rhCaTok).catch(() => {});
-        await say(chatId, `🟢 Buy Bot locked onto ${escapeTelegramHtml(rhCaTok.slice(0, 6))}…${escapeTelegramHtml(rhCaTok.slice(-4))} 🪶 (Robinhood Chain) — I'll post buys here with a trade link.`);
+    // CA pasted in a group = automatic shield read. It can be bare OR inside normal text
+    // ("thoughts on <CA>?") or a DexScreener link. Cheap gate first so ordinary chatter stays silent.
+    const rawGroupText = text.trim();
+    const caTok = rawGroupText.replace(/^\$/, "");
+    if (!rawGroupText.startsWith("/") && hasExplicitScanAddressHint(rawGroupText)) {
+      const explicitTargets = await resolveExplicitScanTargetsFromText(rawGroupText, [], 1).catch(() => []);
+      const explicitTarget = explicitTargets[0] || "";
+      // A Robinhood Chain contract (0x…40-hex) anywhere in chat = auto RH scan card (same Scan toggle).
+      const rhCaTok = /^0x[0-9a-fA-F]{40}$/.test(String(explicitTarget)) ? String(explicitTarget) : ((rawGroupText.match(/^0x[0-9a-fA-F]{40}$/) || [])[0] || "");
+      if (rhCaTok) {
+        const gbEntry = await getGroupBotEntry(chatId).catch(() => null);
+        // BUY BOT auto-CA (RH): the first 0x pasted becomes the group's tracked Robinhood coin — the
+        // per-buy watcher reads its V3 pool's Swap logs and posts the same buy card as Solana coins.
+        if (gbEntry && groupBotFeatureOn(gbEntry, "buybot") && !gbEntry.token) {
+          await setGroupBotToken(chatId, rhCaTok).catch(() => {});
+          await say(chatId, `🟢 Buy Bot locked onto ${escapeTelegramHtml(rhCaTok.slice(0, 6))}…${escapeTelegramHtml(rhCaTok.slice(-4))} 🪶 (Robinhood Chain) — I'll post buys here with a trade link.`);
+        }
+        if (!gbEntry || groupBotFeatureOn(gbEntry, "scan")) await handleTelegramLookCommand(chatId, message, rhCaTok).catch(() => {});
+        return;
       }
-      if (!gbEntry || groupBotFeatureOn(gbEntry, "scan")) await handleTelegramLookCommand(chatId, message, rhCaTok).catch(() => {});
-      return;
-    }
-    const bareCa = isLikelySolMint(caTok) ? [caTok, caTok] : null;
-    if (bareCa) {
-      const gbEntry = await getGroupBotEntry(chatId).catch(() => null);
-      // BUY BOT auto-CA: the first CA pasted becomes the group's tracked token (when Buy Bot is on).
-      if (groupBotFeatureOn(gbEntry, "buybot") && !gbEntry.token) {
-        await setGroupBotToken(chatId, bareCa[1]).catch(() => {});
-        await say(chatId, `🟢 Buy Bot locked onto ${escapeTelegramHtml(bareCa[1].slice(0, 4))}…${escapeTelegramHtml(bareCa[1].slice(-4))} — I'll post buys here with a Quick-Buy link.`);
+      const bareCa = isLikelySolMint(explicitTarget) ? [explicitTarget, explicitTarget] : (isLikelySolMint(caTok) ? [caTok, caTok] : null);
+      if (bareCa) {
+        const gbEntry = await getGroupBotEntry(chatId).catch(() => null);
+        // BUY BOT auto-CA: the first CA pasted becomes the group's tracked token (when Buy Bot is on).
+        if (groupBotFeatureOn(gbEntry, "buybot") && !gbEntry.token) {
+          await setGroupBotToken(chatId, bareCa[1]).catch(() => {});
+          await say(chatId, `🟢 Buy Bot locked onto ${escapeTelegramHtml(bareCa[1].slice(0, 4))}…${escapeTelegramHtml(bareCa[1].slice(-4))} — I'll post buys here with a Quick-Buy link.`);
+        }
+        // SCAN BOT: auto-scan pasted CAs. Off-by-default for configured groups (Scan toggle); legacy
+        // groups that never opened the menu (no entry) keep auto-scanning so nothing regresses.
+        if (!gbEntry || groupBotFeatureOn(gbEntry, "scan")) {
+          await handleTelegramLookCommand(chatId, message, bareCa[1]);
+        }
+        return;
       }
-      // SCAN BOT: auto-scan pasted CAs. Off-by-default for configured groups (Scan toggle); legacy
-      // groups that never opened the menu (no entry) keep auto-scanning so nothing regresses.
-      if (!gbEntry || groupBotFeatureOn(gbEntry, "scan")) {
-        await handleTelegramLookCommand(chatId, message, bareCa[1]);
-      }
-      return;
     }
     // SCAN BOT — PnL FLEX CARDS: a win-brag that names a coin ("+340% on $OGRE", "5x on <CA>") gets
     // answered with OUR rotating SlimeWire slime PnL card instead of a rival's screenshot. Rides with
@@ -14166,13 +14168,19 @@ async function handleMessage(message, userId) {
   // to buy" — the full scan is still one tap away (🔍 Full Scan) and via /look <CA> / $ticker. Gated on
   // !session so it never hijacks a flow that's waiting for a CA (e.g. the /pnlcard "paste the mint" prompt).
   if (isPrivateChat(message.chat) && !session) {
-    const caTokDm = text.trim().replace(/^\$/, "");
-    // A bare Robinhood Chain contract (0x…) pasted in a DM = the RH scan card (RH trading lives on the
+    const rawDmText = text.trim();
+    const caTokDm = rawDmText.replace(/^\$/, "");
+    const dmTargets = (!rawDmText.startsWith("/") && hasExplicitScanAddressHint(rawDmText))
+      ? await resolveExplicitScanTargetsFromText(rawDmText, [], 1).catch(() => [])
+      : [];
+    const dmTarget = dmTargets[0] || caTokDm;
+    // A Robinhood Chain contract (0x…) pasted in a DM = the RH scan card (RH trading lives on the
     // site, so there's no DM buy panel — the card carries the ⚡ Trade link). Same "just paste a CA" reflex.
-    const rhDm = (caTokDm.match(/^0x[0-9a-fA-F]{40}$/) || [])[0] || "";
+    const rhDm = /^0x[0-9a-fA-F]{40}$/.test(String(dmTarget)) ? String(dmTarget) : ((caTokDm.match(/^0x[0-9a-fA-F]{40}$/) || [])[0] || "");
     if (rhDm) { await sendRhScanCard(chatId, rhDm); return; }
-    if (isLikelySolMint(caTokDm)) {
-      await sendDmBuyPanel(chatId, userId, caTokDm);
+    const dmSolMint = isLikelySolMint(dmTarget) ? String(dmTarget) : (isLikelySolMint(caTokDm) ? caTokDm : "");
+    if (dmSolMint) {
+      await sendDmBuyPanel(chatId, userId, dmSolMint);
       return;
     }
   }
@@ -32060,6 +32068,14 @@ async function resolveDexPairToMint(addr) {
   dexPairMintCache.set(a, { at: Date.now(), mint });
   return mint;
 }
+
+function hasExplicitScanAddressHint(text) {
+  const blob = String(text || "");
+  return /0x[0-9a-fA-F]{40}/.test(blob)
+    || /dexscreener\.com\/solana\/[1-9A-HJ-NP-Za-km-z]{32,44}/i.test(blob)
+    || /[1-9A-HJ-NP-Za-km-z]{32,44}/.test(blob);
+}
+
 // Resolve a scan target from free text + links: a bare CA, a pump.fun/coin/<mint> link (addr IS the mint), a
 // DexScreener link (addr is a PAIR → resolve to the mint), or a $ticker. One place so every surface (X reply,
 // TG /look, web) handles pasted links the same way.

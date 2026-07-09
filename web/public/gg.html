@@ -2293,9 +2293,9 @@
       const r=await recStartScreen(btn);
       if(r==="started"||r==="cancelled")return; // recording, or the user dismissed the share picker
     }
-    // No screen-capture API (iOS Safari / most phones): DON'T show an instructions wall — just record a
-    // SlimeWire highlight clip right now. It records, you tap ⏹ to stop, then get Save / Share / Cancel.
-    recStartCanvas(btn);
+    // No screen-capture API (iOS Safari / some phones): show the honest mobile recording path.
+    // A SlimeWire highlight clip is still available, but only as an explicit user choice.
+    recOfferFallback(btn);
   }
   async function loadChatLive(mint){
     if(chatPollT){clearTimeout(chatPollT);chatPollT=null;}
