@@ -252,6 +252,35 @@
   .champCard b{display:block;font-family:Cinzel,serif;font-size:clamp(1.35rem,7vw,2.3rem);color:#fff;text-shadow:0 0 22px rgba(114,255,35,0.75),0 3px 8px #000}.champCard span{display:block;color:#ffd24a;font-weight:900;text-shadow:0 2px 6px #000}
   @keyframes champFade{0%{opacity:0}14%{opacity:1}82%{opacity:1}100%{opacity:0}} @keyframes champZoom{0%{transform:scale(1.18)}100%{transform:scale(0.86)}}
   .champIntro.on .champCard{animation:champZoom 1.55s ease-out forwards}
+  .launchOps{width:min(660px,94vw);display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin:12px auto 0;pointer-events:auto;}
+  .opsCard{min-height:74px;border:1px solid rgba(114,255,35,0.24);border-radius:12px;background:linear-gradient(180deg,rgba(10,30,15,0.86),rgba(5,14,8,0.9));color:#eaffe0;text-align:left;padding:9px 10px;cursor:pointer;box-shadow:0 8px 22px rgba(0,0,0,0.28);font-family:inherit;}
+  .opsCard:hover,.opsCard:focus-visible{border-color:rgba(187,255,99,0.7);outline:none;box-shadow:0 0 0 1px rgba(187,255,99,0.18),0 8px 22px rgba(0,0,0,0.32);}
+  .opsCard b{display:block;color:#bbff63;font-size:0.72rem;line-height:1.05;text-transform:uppercase;letter-spacing:0.7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .opsCard span{display:block;color:#eaffe0;font-weight:900;font-size:0.84rem;line-height:1.16;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .opsCard small{display:block;color:var(--dim);font-size:0.62rem;line-height:1.22;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .opsMeter{height:5px;border-radius:99px;background:rgba(255,255,255,0.1);overflow:hidden;margin-top:7px;}
+  .opsMeter i{display:block;height:100%;width:0%;border-radius:99px;background:linear-gradient(90deg,#46e8ff,#72ff23,#ffd24a);transition:width .18s linear;}
+  .opsHud{position:absolute;right:12px;bottom:calc(14px + env(safe-area-inset-bottom));width:176px;z-index:6;pointer-events:auto;cursor:pointer;background:rgba(8,20,10,0.76);border:1px solid rgba(70,232,255,0.34);border-radius:12px;padding:8px 9px;box-shadow:0 5px 18px rgba(0,0,0,0.35);backdrop-filter:blur(4px);}
+  .opsHud b{display:block;font-size:0.66rem;line-height:1.1;color:#46e8ff;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .opsHud span{display:block;font-size:0.62rem;line-height:1.2;color:#dbe6f2;font-weight:800;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .opsPanel{max-width:min(720px,96vw)!important;}
+  .opsSplit{display:grid;grid-template-columns:1.1fr 0.9fr;gap:10px;margin-top:10px;}
+  .opsBlock{border:1px solid rgba(114,255,35,0.2);border-radius:12px;background:rgba(8,20,10,0.58);padding:11px;text-align:left;}
+  .opsBlock h3{margin:0 0 5px;color:#bbff63;font-size:0.76rem;text-transform:uppercase;letter-spacing:0.8px;}
+  .opsBlock p{margin:4px 0;color:#dbe6f2;font-size:0.8rem;line-height:1.36;text-shadow:none;}
+  .opsBlock strong{color:#fff;}
+  .opsPassport{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:8px;}
+  .opsBadge{min-height:54px;border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:7px;background:rgba(255,255,255,0.045);opacity:0.62;}
+  .opsBadge.done{opacity:1;border-color:rgba(255,210,74,0.56);box-shadow:0 0 14px rgba(255,210,74,0.12);}
+  .opsBadge b{display:block;color:#eaffe0;font-size:0.68rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .opsBadge span{display:block;color:var(--dim);font-size:0.6rem;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .weatherMap{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-top:10px;}
+  .weatherZone{min-height:70px;border:1px solid rgba(70,232,255,0.22);border-radius:11px;background:linear-gradient(180deg,rgba(9,26,18,0.72),rgba(5,14,10,0.84));padding:8px;text-align:left;}
+  .weatherZone b{display:block;color:#dffbff;font-size:0.68rem;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .weatherZone span{display:block;color:#fff;font-size:0.78rem;font-weight:900;line-height:1.15;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .weatherZone small{display:block;color:var(--dim);font-size:0.6rem;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .opsEndpoints{margin-top:9px;color:rgba(226,255,215,0.52);font-size:0.62rem;line-height:1.35;text-align:left;}
+  @media(max-width:620px){.launchOps{grid-template-columns:repeat(2,minmax(0,1fr));max-width:360px}.opsSplit{grid-template-columns:1fr}.weatherMap{grid-template-columns:repeat(2,minmax(0,1fr))}.opsPassport{grid-template-columns:repeat(2,minmax(0,1fr))}.opsHud{width:142px;right:8px;bottom:calc(10px + env(safe-area-inset-bottom));}}
   @media(max-width:480px){.nftHero{grid-template-columns:62px 1fr}.nftHero img{width:62px;height:62px}.nftGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.nftCard{min-height:142px}.nftCard img{width:72px;height:72px}.topbtns{gap:4px}.tbtn{width:34px;height:34px;font-size:0.65rem}}
   .toast{position:fixed; left:50%; bottom:calc(120px + env(safe-area-inset-bottom)); transform:translateX(-50%); z-index:12; background:rgba(8,20,10,0.94);
     border:1px solid rgba(114,255,35,0.45); color:#eaffe0; font-weight:800; padding:9px 18px; border-radius:99px; opacity:0; transition:opacity .25s; pointer-events:none; font-size:0.84rem; text-align:center; max-width:88vw;}
@@ -307,6 +336,7 @@
     </div>
     <div class="prompt" id="prompt"></div>
     <div class="radar" id="radar"><div class="rt" id="radarTitle">Goal</div><div class="rs" id="radarSub">Find a launch creature</div><div class="map" id="radarMap"></div></div>
+    <div class="opsHud" id="opsHud"><b id="opsHudTitle">Launch Ops</b><span id="opsHudSub">Passport loading</span></div>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -327,6 +357,7 @@
     <button class="big" id="openShop" style="margin-top:8px;background:linear-gradient(90deg,#46e8ff,#6aa0ff)">🛠️ WORKSHOP & UPGRADES</button>
     <div id="titleStats" style="margin-top:10px;font-size:0.82rem;font-weight:800;color:#ffe9a8"></div>
     <div id="titleDaily" style="margin-top:4px;font-size:0.78rem;color:#9dd6ff"></div>
+    <div class="launchOps" id="launchOps"></div>
     <div class="contracts" id="contracts"></div>
     <div id="best" style="color:var(--dim);margin-top:10px;font-size:0.84rem"></div>
   </div>
@@ -410,6 +441,51 @@
     <div class="sub" id="mapSub">Tap the radar any time. Yellow is your active goal.</div>
     <div class="fullmap" id="fullMap"></div>
     <div class="maplegend"><span>White: you</span><span>Yellow: goal</span><span>Blue: huts</span><span>Gold: launches</span><span>Red: hostiles</span><span>Tan: resources</span></div>
+    <div class="weatherMap" id="weatherMap"></div>
+  </div></div>
+
+  <!-- LAUNCH OPS -->
+  <div class="sheet" id="opsSheet"><div class="panel opsPanel">
+    <button class="closeX" id="opsX">x</button>
+    <h2>Launch Ops</h2>
+    <div class="sub" id="opsSub">Boss raids, founder eggs, passport badges, Muck Pass, and liquidity weather are local-first hooks for launch retention.</div>
+    <div class="opsSplit">
+      <div class="opsBlock">
+        <h3>Launch Boss Raid</h3>
+        <p><strong id="opsRaidTitle">Boss hook warming</strong></p>
+        <p id="opsRaidSub">Fresh launches become raid targets here.</p>
+        <div class="opsMeter"><i id="opsRaidFill"></i></div>
+      </div>
+      <div class="opsBlock">
+        <h3>Founder Egg</h3>
+        <p><strong id="opsEggTitle">Egg unclaimed</strong></p>
+        <p id="opsEggSub">Claiming adds a legendary local Dex card now.</p>
+      </div>
+    </div>
+    <div class="opsSplit">
+      <div class="opsBlock">
+        <h3>Swamp Passport</h3>
+        <p id="opsPassportSub">Badges track play loops without a wallet requirement.</p>
+        <div class="opsPassport" id="opsPassport"></div>
+      </div>
+      <div class="opsBlock">
+        <h3>Muck Pass Season</h3>
+        <p><strong id="opsSeasonTitle">Season loading</strong></p>
+        <p id="opsSeasonSub">XP comes from catches, raids, badges, and relics.</p>
+        <div class="opsMeter"><i id="opsSeasonFill"></i></div>
+      </div>
+    </div>
+    <div class="opsBlock" style="margin-top:10px">
+      <h3>Liquidity Weather Map</h3>
+      <p id="opsWeatherSub">Weather turns launch/liquidity signals into readable play prompts.</p>
+      <div class="weatherMap" id="opsWeatherMap"></div>
+    </div>
+    <div class="rowbtns">
+      <button class="pBuy" id="opsEnterRaid">Enter Horde Raid</button>
+      <button class="pAlt" id="opsClaimEgg">Claim Founder Egg</button>
+      <button class="pAlt" id="opsOpenMap">Open Map</button>
+    </div>
+    <div class="opsEndpoints" id="opsEndpoints"></div>
   </div></div>
 
   <!-- CARD ARENA (deck builder + battle) -->
@@ -1630,6 +1706,122 @@ async function loadFeed(){
   feedReal = feedRows.some(r=>r&&!r._training&&!String(r.tokenMint||r.mint||"").startsWith("syn_"));
 }
 
+/* ---- Launch Ops: bounded retention hooks, local-first ---- */
+const SWAMP_OPS_ENDPOINTS={
+  bossRaid:"GET /api/web/swamp-raid",
+  egg:"GET /api/web/swamp-egg",
+  passport:"GET /api/web/swamp-passport",
+  muckPass:"GET /api/web/swamp-muck-pass",
+  liquidityWeather:"GET /api/web/swamp-weather"
+};
+const MUCK_SEASON_EPOCH=Date.UTC(2026,6,1);
+const MUCK_SEASON_DAYS=28;
+const MUCK_SEASON_NAMES=["Bog Bloom","Reed Rush","Candle Rot","Vault Mist"];
+function clamp(n,a,b){ return Math.max(a,Math.min(b,n)); }
+function opsLaunchRows(){ const rows=(feedRows&&feedRows.length?feedRows:TRAINING_LAUNCHES).filter(r=>r&&(r.symbol||r.tokenMint||r.mint)); return rows.length?rows:TRAINING_LAUNCHES; }
+function opsTopLaunch(){ const rows=opsLaunchRows(); return rows.find(r=>r._ogre&&!r._training)||rows.find(r=>!r._training)||rows[0]||null; }
+function rowLiquidity(row){ return num(row&&(row.liquidityUsd ?? row.liquidityUSD ?? row.liquidity)); }
+function rowVolume(row){ return num(row&&(row.volume5m ?? row.volumeM5 ?? row.volumeUsd ?? row.volume24h)); }
+function rowMove(row){ return num(row&&(row.m5 ?? row.priceChangeM5 ?? row.change5m)); }
+function opsRaidState(){
+  const row=opsTopLaunch(), rar=row?rarityOf(row):RAR.rare, rank=(RAR_RANK[rar.k]||3), sym=row?symOf(row):"TBA";
+  const fresh=row?Math.max(0,1-ageSec(row)/1800):0, move=clamp(rowMove(row)/100,-0.35,0.7), live=!!(row&&!row._training&&feedReal);
+  const pct=clamp(0.2+rank*0.105+fresh*0.18+move+(live?0.12:0),0.16,0.96);
+  return {row,rar,sym,live,pct,title:(live?"Live Boss: $":"Raid Hook: $")+sym,sub:(live?"Fresh launch feed is driving this raid":"Training raid until the live launch feed wakes")+" - "+rar.label};
+}
+function opsEggState(){
+  const claimed=!!store.eggClaimed, dex=Object.values(store.dex||{}).find(c=>c&&c.symbol==="FOUNDER");
+  return {claimed,title:claimed?"Founder Egg Hatched":"Founder Egg Ready",sub:claimed?("Legendary Dex card armed"+(dex&&dex.at?" locally":"")):"Claim adds a legendary local Dex card now"};
+}
+function muckPassXp(){
+  const relics=(store.res&&store.res.relic)||0;
+  return Math.floor(dexCount()*36+(store.survRuns||0)*45+(store.survRunBest||0)*0.7+achCount()*64+relics*12+(store.eggClaimed?120:0)+(store.arenaWins||0)*55+(store.storyBeat||0)*90);
+}
+function muckPassState(){
+  const len=MUCK_SEASON_DAYS*86400000, now=Date.now(), raw=Math.max(0,now-MUCK_SEASON_EPOCH), idx=Math.floor(raw/len), start=MUCK_SEASON_EPOCH+idx*len, end=start+len;
+  const xp=muckPassXp(), tier=Math.min(30,Math.floor(xp/100)+1), tierPct=(xp%100)/100, seasonPct=clamp((now-start)/len,0,1), daysLeft=Math.max(0,Math.ceil((end-now)/86400000));
+  return {idx,name:"S"+(idx+1)+" "+MUCK_SEASON_NAMES[idx%MUCK_SEASON_NAMES.length],xp,tier,tierPct,seasonPct,daysLeft};
+}
+function passportBadges(){
+  const d=dexCount(), runs=store.survRuns||0, best=store.survRunBest||0, rel=(store.res&&store.res.relic)||0;
+  return [
+    {id:"first",name:"First Catch",done:d>=1,sub:Math.min(d,1)+"/1 launch"},
+    {id:"collector",name:"Dex Stamped",done:d>=10,sub:Math.min(d,10)+"/10 caught"},
+    {id:"raider",name:"Raid Runner",done:runs>=1,sub:runs+" horde run"+(runs===1?"":"s")},
+    {id:"boss",name:"Boss Breaker",done:best>=100||(store.storyBeat||0)>0,sub:Math.max(best,store.storyBeat||0)+" best mark"},
+    {id:"egg",name:"Egg Founder",done:!!store.eggClaimed,sub:store.eggClaimed?"hatched":"unclaimed"},
+    {id:"weather",name:"Weather Watch",done:!!store.opsWeatherSeen,sub:store.opsWeatherSeen?"weather viewed":"open weather"},
+    {id:"relic",name:"Relic Holder",done:rel>=8,sub:rel+"/8 relics"}
+  ];
+}
+function weatherZones(){
+  const rows=opsLaunchRows(), fresh=rows.filter(r=>ageSec(r)<600).length, thin=rows.filter(r=>{ const l=rowLiquidity(r); return l>0&&l<1800; }).length;
+  const movers=rows.filter(r=>rowMove(r)>=25).length, vol=rows.reduce((s,r)=>s+rowVolume(r),0), liqs=rows.map(rowLiquidity).filter(Boolean), avgLiq=liqs.length?liqs.reduce((a,b)=>a+b,0)/liqs.length:0, worth=worthAvg()||1;
+  return [
+    {name:"Launch Delta",state:fresh>=3?"Fresh Steam":fresh?"Warm Mist":"Quiet Fog",detail:fresh+" fresh",heat:clamp(fresh/5+movers/10,0.08,1),color:"#72ff23"},
+    {name:"Thin-Liq Bog",state:thin>=2?"Risk Fog":thin?"Shallow Pool":"Clear Pool",detail:thin+" low-liq",heat:clamp(thin/4,0.08,1),color:thin?"#ff9a4a":"#46e8ff"},
+    {name:"Volume Rain",state:vol>50000?"Green Rain":vol>8000?"Drizzle":"Dry Air",detail:fmtUsd(vol)+" vol",heat:clamp(vol/70000,0.08,1),color:"#bbff63"},
+    {name:"Dex Tide",state:worth>=2?"High Tide":worth>=1.15?"Rising":"Flat Water",detail:worth.toFixed(2)+"x bags",heat:clamp((worth-1)/3,0.08,1),color:worth>=1.15?"#ffd24a":"#9fb3a3"}
+  ].map(z=>({...z,avgLiq}));
+}
+function weatherHeadline(){ const z=weatherZones().slice().sort((a,b)=>b.heat-a.heat)[0]; return z||{state:"Quiet Fog",detail:"waiting for launches"}; }
+function renderWeatherInto(id){
+  const box=$(id); if(!box) return; box.innerHTML="";
+  for(const z of weatherZones()){
+    const d=document.createElement("div"); d.className="weatherZone"; d.style.borderColor=z.color+"66";
+    const name=document.createElement("b"); name.textContent=z.name; d.appendChild(name);
+    const st=document.createElement("span"); st.textContent=z.state; d.appendChild(st);
+    const sm=document.createElement("small"); sm.textContent=z.detail; d.appendChild(sm);
+    const meter=document.createElement("div"); meter.className="opsMeter"; const fill=document.createElement("i"); fill.style.width=Math.round(z.heat*100)+"%"; fill.style.background="linear-gradient(90deg,"+z.color+",#eaffe0)"; meter.appendChild(fill); d.appendChild(meter);
+    box.appendChild(d);
+  }
+}
+function renderPassportInto(id){
+  const box=$(id); if(!box) return; box.innerHTML="";
+  for(const b of passportBadges()){
+    const d=document.createElement("div"); d.className="opsBadge"+(b.done?" done":"");
+    const nm=document.createElement("b"); nm.textContent=(b.done?"DONE ":"LOCK ")+b.name; d.appendChild(nm);
+    const sub=document.createElement("span"); sub.textContent=b.sub; d.appendChild(sub);
+    box.appendChild(d);
+  }
+}
+function addOpsCard(root,label,title,sub,pct){
+  const btn=document.createElement("button"); btn.type="button"; btn.className="opsCard"; btn.onclick=openOps;
+  const b=document.createElement("b"); b.textContent=label; btn.appendChild(b);
+  const t=document.createElement("span"); t.textContent=title; btn.appendChild(t);
+  const s=document.createElement("small"); s.textContent=sub; btn.appendChild(s);
+  const m=document.createElement("div"); m.className="opsMeter"; const f=document.createElement("i"); f.style.width=Math.round(clamp(pct,0,1)*100)+"%"; m.appendChild(f); btn.appendChild(m);
+  root.appendChild(btn);
+}
+function renderLaunchOps(){
+  const raid=opsRaidState(), egg=opsEggState(), pass=passportBadges(), got=pass.filter(b=>b.done).length, season=muckPassState(), weather=weatherHeadline();
+  const root=$("launchOps"); if(root){ root.innerHTML="";
+    addOpsCard(root,"Boss Raid",raid.title,raid.sub,raid.pct);
+    addOpsCard(root,"Passport",got+"/"+pass.length+" badges",got===pass.length?"All stamped":"Next badge waiting",got/pass.length);
+    addOpsCard(root,"Muck Pass",season.name+" T"+season.tier,season.daysLeft+"d left - "+season.xp+" XP",season.tierPct);
+    addOpsCard(root,"Liquidity Weather",weather.state,weather.detail,weather.heat||0.1);
+  }
+  const hudT=$("opsHudTitle"), hudS=$("opsHudSub"); if(hudT&&hudS){ hudT.textContent=weather.state; hudS.textContent=season.name+" T"+season.tier+" - "+got+"/"+pass.length+" badges"; }
+  const rT=$("opsRaidTitle"), rS=$("opsRaidSub"), rF=$("opsRaidFill"); if(rT){ rT.textContent=raid.title; rT.style.color=raid.rar.col; } if(rS) rS.textContent=raid.sub; if(rF) rF.style.width=Math.round(raid.pct*100)+"%";
+  const eT=$("opsEggTitle"), eS=$("opsEggSub"); if(eT) eT.textContent=egg.title; if(eS) eS.textContent=egg.sub;
+  const pS=$("opsPassportSub"); if(pS) pS.textContent=got+"/"+pass.length+" passport badges stamped from local play.";
+  const sT=$("opsSeasonTitle"), sS=$("opsSeasonSub"), sF=$("opsSeasonFill"); if(sT) sT.textContent=season.name+" - Tier "+season.tier; if(sS) sS.textContent=season.xp+" season XP - "+season.daysLeft+" days left"; if(sF) sF.style.width=Math.round(season.tierPct*100)+"%";
+  const wS=$("opsWeatherSub"); if(wS) wS.textContent=weather.state+" over the swamp - "+weather.detail+".";
+  renderPassportInto("opsPassport"); renderWeatherInto("opsWeatherMap");
+  const claim=$("opsClaimEgg"); if(claim){ claim.textContent=egg.claimed?"Egg Hatched":"Claim Founder Egg"; claim.disabled=egg.claimed; claim.style.opacity=egg.claimed?"0.55":"1"; }
+  const ep=$("opsEndpoints"); if(ep) ep.textContent="Optional backend contracts: "+Object.values(SWAMP_OPS_ENDPOINTS).join(" | ")+". Current slice uses local save state plus /api/web/swamp-launches.";
+}
+function openOps(){ pauseWorldUi(); store.opsWeatherSeen=Date.now(); save(); renderLaunchOps(); const s=$("opsSheet"); if(s) s.classList.add("on"); }
+function closeOps(){ const s=$("opsSheet"); if(s) s.classList.remove("on"); resumeWorldUi(); }
+function claimFounderEgg(){
+  if(store.eggClaimed){ toast("Founder egg already hatched."); return false; }
+  store.eggClaimed=true; const id="founder_"+Date.now();
+  store.dex[id]={ symbol:"FOUNDER", mc:1, mcNow:1, rarity:"legendary", stage:1, ogre:true, at:Date.now() };
+  store.xp+=120; save(); try{ refreshHud(); }catch(_){} try{ updateTitleStats(); updateContracts(); renderLaunchOps(); }catch(_){}
+  toast("Legendary founder creature added. Launch later can bind it to a real coin.");
+  return true;
+}
+
 /* ---- balls (energy) ---- */
 function refillBalls(){ const now=Date.now(); const gain=Math.floor((now-store.lastBall)/180000); if(gain>0){ store.balls=Math.min(15,store.balls+gain); store.lastBall=now; save(); } }
 setInterval(()=>{ if(state==="world"){ refillBalls(); manageMobs(); refreshHud(); } },20000);
@@ -1724,8 +1916,9 @@ function renderFullMap(){
   if(RUN&&RUN.rooms){ for(const r of RUN.rooms.filter(r=>r&&!r.done)) mapDot(map,"t",r.state==="locked"?"LOCKED ROOM":"ARENA ROOM",r.x,r.y); }
   if(companion) mapDot(map,"a",companion.sym||"Ally",companion.x,companion.y);
   if(t) mapDot(map,"t","GOAL",t.x,t.y);
+  renderWeatherInto("weatherMap");
 }
-function openMap(){ if(state!=="world") return; pauseWorldUi(); renderFullMap(); const m=$("mapSheet"); if(m) m.classList.add("on"); }
+function openMap(){ if(state!=="world") return; pauseWorldUi(); store.opsWeatherSeen=Date.now(); save(); try{ renderLaunchOps(); }catch(_){} renderFullMap(); const m=$("mapSheet"); if(m) m.classList.add("on"); }
 function closeMap(){ const m=$("mapSheet"); if(m) m.classList.remove("on"); resumeWorldUi(); }
 let targetMob=null, targetHudT=0, targetHudKey="";
 function pickCombatTarget(){
@@ -1774,12 +1967,13 @@ function refreshHud(){
   const wins = store.pvpWins>0 ? ` · ⚔️ ${store.pvpWins} KO` : "";
   checkQuests(); try{ checkAch(); }catch(_){}
   $("quest").textContent = clan + questLine() + online + wins;
+  try{ renderLaunchOps(); }catch(_){}
 }
 function pauseWorldUi(){ if(state==="world"){ uiPaused=true; atkHeld=false; } }
 function resumeWorldUi(){ if(uiPaused){ uiPaused=false; lastTs=performance.now(); } }
 function closeActivePanel(){
   const closers=[
-    ["runEnd",closeRunEnd],["shop",closeShop],["bld",closeBld],["arena",closeArena],["dex",closeDex],
+    ["runEnd",closeRunEnd],["shop",closeShop],["opsSheet",closeOps],["bld",closeBld],["arena",closeArena],["dex",closeDex],
     ["enc",closeEnc],["mapSheet",closeMap],["nft",closeNft],["beam",closeBeam]
   ];
   for(const row of closers){ const el=$(row[0]); if(el&&el.classList.contains("on")){ row[1](); return true; } }
@@ -1817,6 +2011,12 @@ $("rageBtn").onclick=()=>{ if(state==="world") activateRage(); };
 $("radar").onclick=()=>{ if(state==="world") openMap(); };
 $("mapX").onclick=closeMap;
 backdropClose("mapSheet",closeMap);
+$("opsHud").onclick=openOps;
+$("opsX").onclick=closeOps;
+$("opsEnterRaid").onclick=()=>{ closeOps(); survStart(); };
+$("opsClaimEgg").onclick=()=>{ if(claimFounderEgg()) renderLaunchOps(); };
+$("opsOpenMap").onclick=()=>{ if(state==="world"){ closeOps(); openMap(); } else toast("Enter the swamp to open the live weather map."); };
+backdropClose("opsSheet",closeOps);
 // HOLD-to-fire: press & hold Attack to keep shooting while you move (mobile + mouse)
 let atkHeld=false;
 function clearInputState(){
@@ -2858,10 +3058,8 @@ function openBuilding(b){ state="bld"; curBld=b; $("prompt").classList.remove("o
 function refreshBld(){ if(curBld&&state==="bld") openBuilding(curBld); }
 function doBldAct(act){
   if(act==="claimEgg"){
-    if(store.eggClaimed){ toast("You already hatched your founder Legendary 🌟"); return; }
-    store.eggClaimed=true; const id="founder_"+Date.now();
-    store.dex[id]={ symbol:"FOUNDER", mc:1, mcNow:1, rarity:"legendary", stage:1, ogre:true, at:Date.now() };
-    store.xp+=120; save(); refreshHud(); toast("🌟 LEGENDARY founder creature added! Launch a coin to make it real."); closeBld();
+    if(claimFounderEgg()) closeBld();
+    return;
   } else if(act==="craftBalls"){
     if((store.res.wood||0)>=3 && (store.res.scrap||0)>=2){ store.res.wood-=3; store.res.scrap-=2; store.balls=Math.min(20,store.balls+5); save(); refreshHud(); sfx("quest",0.4); toast("🟢 Crafted 5 slimeballs!"); }
     else toast("Need 3 🪵 wood + 2 🔩 scrap — fight mobs to gather");
@@ -2926,7 +3124,7 @@ function showTitle(){ state="title"; $("load").style.display="none"; $("start").
   $("best").textContent=dexCount()?("your Swampdex: "+dexCount()+" caught - "+(worthAvg()?worthAvg().toFixed(2)+"x worth":"")):"";
   $("mute").textContent=store.muted?"OFF":"SND";
   refreshNftButton();
-  try{ checkAch(); updateTitleStats(); updateContracts(); }catch(_){}
+  try{ checkAch(); updateTitleStats(); updateContracts(); renderLaunchOps(); }catch(_){}
 }
 function enterWorld(){ $("start").classList.remove("on"); $("hud").style.display="block"; startAmbient(); newGame();
   connectWS();

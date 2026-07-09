@@ -5842,7 +5842,8 @@ async function setupWebhook(options = {}) {
       // channel_post: channels never emit "message", so /look + /alpha + /slimewire in
       // channels need it. my_chat_member: fires when the bot is added, for the welcome.
       // chat_member: referral contests attribute a join to the inviter's unique invite link.
-      allowed_updates: ["message", "callback_query", "channel_post", "my_chat_member", "chat_member"],
+      // inline_query: read-only token explainer cards users can insert from any chat.
+      allowed_updates: ["message", "callback_query", "inline_query", "channel_post", "my_chat_member", "chat_member"],
       drop_pending_updates: false
     });
   } catch (error) {
@@ -8440,6 +8441,46 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, result.ok ? 200 : 400, result);
       return;
     }
+    // Swamp Blink/action metadata: public, metadata-only, no transactions.
+    if (request.method === "GET" && (pathname === "/api/web/actions" || pathname === "/api/web/blinks")) {
+      sendCachedWebJson(request, response, 200, {
+        ok: true,
+        actions: ["scan", "trade", "share"].map((kind) => swampActionMetadata(kind, requestUrl))
+      }, "public, max-age=60, stale-while-revalidate=300");
+      return;
+    }
+    if (request.method === "GET" && (
+      pathname.startsWith("/api/web/actions/")
+      || pathname.startsWith("/api/web/blinks/")
+      || pathname.startsWith("/api/actions/")
+    )) {
+      sendCachedWebJson(request, response, 200, swampActionMetadata(swampActionKindFromPath(pathname), requestUrl), "public, max-age=60, stale-while-revalidate=300");
+      return;
+    }
+    // Public proof feed: only receipts that owners explicitly mark public are exposed.
+    if (request.method === "GET" && (pathname === "/api/web/swamp/receipts/public" || pathname === "/api/web/swamp-receipts/public")) {
+      const payload = await webPublicSwampReceipts({
+        mint: firstString(requestUrl.searchParams.get("mint"), requestUrl.searchParams.get("tokenMint"), requestUrl.searchParams.get("ca")),
+        limit: requestUrl.searchParams.get("limit") || ""
+      });
+      sendCachedWebJson(request, response, 200, { ok: true, ...payload }, "public, max-age=20, stale-while-revalidate=120");
+      return;
+    }
+    if (request.method === "GET" && (pathname === "/api/web/swamp/launch-state" || pathname === "/api/web/launch/state-summary")) {
+      const summary = await webSwampLaunchStateSummary();
+      sendCachedWebJson(request, response, 200, { ok: true, ...summary }, "public, max-age=20, stale-while-revalidate=120");
+      return;
+    }
+    if (request.method === "GET" && pathname === "/api/web/launch/boss-raid-summary") {
+      const bossRaid = await webLaunchBossRaidSummary();
+      sendCachedWebJson(request, response, 200, { ok: true, bossRaid }, "public, max-age=20, stale-while-revalidate=120");
+      return;
+    }
+    if (request.method === "GET" && pathname === "/api/web/launch/egg-summary") {
+      const launchEgg = await webLaunchEggSummary();
+      sendCachedWebJson(request, response, 200, { ok: true, launchEgg }, "public, max-age=20, stale-while-revalidate=120");
+      return;
+    }
     // Presales: hype/commit listings (no custody yet).
     if (request.method === "GET" && pathname === "/api/web/presales") {
       void refreshPresaleChain(); // fire-and-forget: keep raised SOL + contributor counts live (throttled)
@@ -9137,6 +9178,33 @@ async function handleWebApiRequest(request, response, requestUrl) {
           hitRatePct: resolved.length ? Math.round((rugged.length / resolved.length) * 100) : null
         }
       });
+      return;
+    }
+
+    if (request.method === "GET" && (pathname === "/api/web/swamp/receipts" || pathname === "/api/web/swamp-receipts")) {
+      const payload = await webSwampReceiptsForUser(auth.userId, {
+        limit: requestUrl.searchParams.get("limit") || ""
+      });
+      sendWebJson(request, response, 200, { ok: true, ...payload });
+      return;
+    }
+
+    if (request.method === "POST" && (pathname === "/api/web/swamp/receipts" || pathname === "/api/web/swamp-receipts")) {
+      const body = await readJsonRequestBody(request, 8_000);
+      const receipt = await webCreateSwampReceipt(auth.userId, body);
+      sendWebJson(request, response, 200, { ok: true, receipt });
+      return;
+    }
+
+    if (request.method === "GET" && (pathname === "/api/web/swamp/passport" || pathname === "/api/web/swamp-passport")) {
+      const passport = await webSwampPassportSummary(auth.userId);
+      sendWebJson(request, response, 200, { ok: true, passport });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/launch/my-state-summary") {
+      const summary = await webSwampLaunchStateSummary({ userId: auth.userId });
+      sendWebJson(request, response, 200, { ok: true, ...summary });
       return;
     }
 
@@ -13281,7 +13349,7 @@ async function sendLoop() {
       const result = await telegram("getUpdates", {
         offset,
         timeout: 30,
-        allowed_updates: ["message", "callback_query", "my_chat_member", "chat_member"]
+        allowed_updates: ["message", "callback_query", "inline_query", "my_chat_member", "chat_member"]
       });
 
       for (const update of result) {
@@ -13315,6 +13383,12 @@ async function handleUpdate(update) {
   if (update.channel_post) {
     await handleChannelPostCommands(update.channel_post).catch((error) => {
       console.warn(`[tg] channel_post failed: ${error.message}`);
+    });
+    return;
+  }
+  if (update.inline_query) {
+    await handleInlineTokenExplainer(update.inline_query).catch((error) => {
+      console.warn(`[tg] inline_query failed: ${error.message}`);
     });
     return;
   }
@@ -14221,6 +14295,15 @@ async function handleMessage(message, userId) {
   if (deepLinkBuy && isPrivateChat(message.chat)) {
     clearSession(chatId);
     await startKolSignalAction(chatId, userId, "kol_trade", deepLinkBuy[1]);
+    return;
+  }
+
+  // Deep link from inline explain/share buttons: /start explain_<mint> opens
+  // the richer scan card in DM without adding any group chatter.
+  const deepLinkExplain = /^\/start(?:@\w+)?\s+explain_([A-HJ-NP-Za-km-z1-9]{32,48})$/i.exec(text);
+  if (deepLinkExplain && isPrivateChat(message.chat)) {
+    clearSession(chatId);
+    await handleTelegramLookCommand(chatId, message, deepLinkExplain[1]);
     return;
   }
 
@@ -23641,7 +23724,9 @@ async function showTelegramPortfolioMenu(chatId, messageId = null) {
 }
 
 async function showTelegramLinksMenu(chatId, messageId = null) {
-  const site = (CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/$/, "");
+  const site = slimewireBaseUrl();
+  const miniApp = telegramStartAppLink("home");
+  const addGroup = telegramStartGroupLink("alerts");
   await sendOrEditMessage(chatId, messageId, withBrandFooter([
     "🔗 Links & More",
     "",
@@ -23651,6 +23736,8 @@ async function showTelegramLinksMenu(chatId, messageId = null) {
       [{ text: "📲 Get the App", url: APP_INSTALL_URL }],
       [{ text: "📈 Live Charts & Pairs", url: `${site}/terminal` }],
       [{ text: "🚀 Pump Launch", url: `${site}/launch` }, { text: "🏅 Proof Wall", url: `${site}/proof` }],
+      [{ text: "🧾 Swamp Receipts", url: `${site}/receipts` }, { text: "📦 Group Setup", url: addGroup || `${site}/add-slimewire-bot-to-telegram-group` }],
+      ...(miniApp ? [[{ text: "Open Telegram Mini App", url: miniApp }]] : []),
       [{ text: "🛠️ Power Tools", callback_data: "ogre_tools_menu" }],
       [{ text: "🌐 SlimeWire Website", url: site }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
@@ -30658,6 +30745,8 @@ function defaultJsonForPath(filePath) {
       return { wallets: [] };
     case "swamp-leaderboard.json":
       return { scores: [] };
+    case "swamp-receipts.json":
+      return { receipts: [] };
     case "community-raids.json":
       return { raids: [] };
     case "raid-posts.json":
@@ -31158,20 +31247,93 @@ function tgCommandOnCooldown(chatId, kind, intervalMs) {
   return false;
 }
 
+function slimewireBaseUrl() {
+  return (CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/+$/, "");
+}
+
+function slimewirePublicUrl(pathname = "/", params = {}) {
+  const url = new URL(String(pathname || "/"), `${slimewireBaseUrl()}/`);
+  for (const [key, value] of Object.entries(params || {})) {
+    if (value !== undefined && value !== null && String(value) !== "") url.searchParams.set(key, String(value));
+  }
+  return url.toString();
+}
+
+function telegramDeepLinkPayload(value, fallback = "swamp") {
+  const cleaned = String(value || "")
+    .replace(/[^A-Za-z0-9_-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 64);
+  return cleaned || fallback;
+}
+
+function telegramBotUrl(params = {}) {
+  if (!CONFIG.telegramBotUsername) return "";
+  const url = new URL(`https://t.me/${CONFIG.telegramBotUsername}`);
+  for (const [key, value] of Object.entries(params || {})) {
+    if (value !== undefined && value !== null && String(value) !== "") url.searchParams.set(key, String(value));
+  }
+  return url.toString();
+}
+
+function telegramStartLink(payload) {
+  return telegramBotUrl({ start: telegramDeepLinkPayload(payload) });
+}
+
+function telegramStartGroupLink(payload) {
+  return telegramBotUrl({ startgroup: telegramDeepLinkPayload(payload) });
+}
+
+function telegramStartAppLink(payload, options = {}) {
+  if (!CONFIG.telegramBotUsername) return "";
+  const url = new URL(`https://t.me/${CONFIG.telegramBotUsername}`);
+  url.searchParams.set("startapp", telegramDeepLinkPayload(payload));
+  if (options.compact) url.searchParams.set("mode", "compact");
+  return url.toString();
+}
+
+function xPostIntentUrl({ text = "", url = "", hashtags = [], via = "" } = {}) {
+  const params = new URLSearchParams();
+  if (text) params.set("text", String(text).slice(0, 260));
+  if (url) params.set("url", String(url));
+  const cleanTags = (Array.isArray(hashtags) ? hashtags : String(hashtags || "").split(","))
+    .map((tag) => String(tag || "").replace(/^#/, "").replace(/[^A-Za-z0-9_]/g, ""))
+    .filter(Boolean)
+    .slice(0, 4);
+  if (cleanTags.length) params.set("hashtags", cleanTags.join(","));
+  const cleanVia = String(via || "").replace(/^@/, "").replace(/[^A-Za-z0-9_]/g, "").slice(0, 15);
+  if (cleanVia) params.set("via", cleanVia);
+  return `https://x.com/intent/tweet?${params.toString()}`;
+}
+
 // Maestro-style instant-buy deep link: lands on the coin in the terminal and pops the
 // 1-click buy preloaded with the amount (fee is taken in-app on confirm — the trade is
 // the user's own tap, we don't execute it). No amount → opens the custom buy.
 function slimewireBuyUrl(tokenMint, amt) {
-  const base = `https://www.slimewire.org/terminal/chart?token=${encodeURIComponent(tokenMint)}&source=telegram&buy=1`;
+  const base = `${slimewireBaseUrl()}/terminal/chart?token=${encodeURIComponent(tokenMint)}&source=telegram&buy=1`;
   return amt ? `${base}&amount=${encodeURIComponent(amt)}` : base;
 }
 function slimewireTokenLinks(tokenMint) {
+  const siteBase = slimewireBaseUrl();
+  const tokenPage = slimewirePublicUrl("/t", { ca: tokenMint, source: "telegram" });
+  const receipts = slimewirePublicUrl("/receipts", { ca: tokenMint, source: "telegram" });
+  const symbolText = shortMint(tokenMint);
   return {
-    site: `https://www.slimewire.org/terminal/chart?token=${encodeURIComponent(tokenMint)}&source=telegram`,
-    siteBuy: `https://www.slimewire.org/terminal/chart?token=${encodeURIComponent(tokenMint)}&source=telegram&buy=1`,
+    site: `${siteBase}/terminal/chart?token=${encodeURIComponent(tokenMint)}&source=telegram`,
+    siteBuy: `${siteBase}/terminal/chart?token=${encodeURIComponent(tokenMint)}&source=telegram&buy=1`,
+    tokenPage,
+    receipts,
     dex: dexScreenerUrl(tokenMint),
-    dmBuy: CONFIG.telegramBotUsername ? `https://t.me/${CONFIG.telegramBotUsername}?start=buy_${tokenMint}` : "",
-    proof: "https://www.slimewire.org/proof"
+    dmBuy: telegramStartLink(`buy_${tokenMint}`),
+    explainStart: telegramStartLink(`explain_${tokenMint}`),
+    startApp: telegramStartAppLink(`token_${tokenMint}`),
+    proof: `${siteBase}/proof`,
+    xShare: xPostIntentUrl({
+      text: `Checking ${symbolText} with SlimeWire before I ape.`,
+      url: tokenPage,
+      hashtags: ["SlimeWire", "Solana"]
+    })
   };
 }
 
@@ -31273,7 +31435,110 @@ function tokenActionKeyboard(tokenMint) {
     { text: "⚡ Buy on Site", url: links.siteBuy }
   ];
   if (links.dmBuy) row.push({ text: "Buy in DM", url: links.dmBuy });
-  return { inline_keyboard: [row, [{ text: "Dex", url: links.dex }, { text: "🧾 Proof Wall", url: links.proof }]] };
+  return { inline_keyboard: [
+    row,
+    [{ text: "💬 Explain inline", switch_inline_query_current_chat: tokenMint }, { text: "🧾 Receipts", url: links.receipts }],
+    [{ text: "Dex", url: links.dex }, { text: "🧾 Proof Wall", url: links.proof }]
+  ] };
+}
+
+function inlineTokenExplainerKeyboard(tokenMint) {
+  const links = slimewireTokenLinks(tokenMint);
+  const rows = [
+    [{ text: "📈 Chart", url: links.site }, { text: "🧾 Receipts", url: links.receipts }],
+    [{ text: "🧠 Full scan in DM", url: links.explainStart || links.site }, { text: "Post to X", url: links.xShare }]
+  ];
+  if (links.startApp) rows.push([{ text: "Open Mini App", url: links.startApp }]);
+  return { inline_keyboard: rows };
+}
+
+function inlineTokenExplainerText(tokenMint, scan = null) {
+  const meta = scan?.meta || {};
+  const bonding = scan?.bonding || {};
+  const shield = scan?.shield || {};
+  const sym = String(meta.symbol || bonding.symbol || shortMint(tokenMint)).replace(/^\$+/, "");
+  const name = firstString(meta.name, bonding.name);
+  const verdict = String(shield.verdict || "UNRATED").toUpperCase();
+  const score = shield.score != null ? ` ${shield.score}/100` : "";
+  const statBits = [
+    firstMeaningfulNumber(meta.marketCap, meta.fdv, bonding.marketCap) ? `MC ${formatUsdCompact(firstMeaningfulNumber(meta.marketCap, meta.fdv, bonding.marketCap))}` : "",
+    firstMeaningfulNumber(meta.liquidityUsd, bonding.liquidityUsd) ? `Liq ${formatUsdCompact(firstMeaningfulNumber(meta.liquidityUsd, bonding.liquidityUsd))}` : "",
+    Number.isFinite(Number(meta.priceChange?.h1)) ? `1H ${Number(meta.priceChange.h1) >= 0 ? "+" : ""}${Number(meta.priceChange.h1).toFixed(1)}%` : ""
+  ].filter(Boolean).join(" · ");
+  const summary = shield.summary ? String(shield.summary).replace(/\s+/g, " ").slice(0, 180) : "";
+  return [
+    `🧪 <b>$${escapeTelegramHtml(sym)} token explainer</b>`,
+    name ? `<i>${escapeTelegramHtml(name.slice(0, 80))}</i>` : "",
+    `SlimeShield: <b>${escapeTelegramHtml(verdict)}${score}</b>${statBits ? ` · ${escapeTelegramHtml(statBits)}` : ""}`,
+    summary ? escapeTelegramHtml(summary) : "Live data is still filling in. Use the scan button before trading.",
+    `<code>${escapeTelegramHtml(tokenMint)}</code>`,
+    "<i>Read-only context, not financial advice.</i>"
+  ].filter(Boolean).join("\n");
+}
+
+async function handleInlineTokenExplainer(query) {
+  const inlineQueryId = query?.id;
+  if (!inlineQueryId) return;
+  const raw = String(query.query || "").trim().slice(0, 140);
+  const botName = CONFIG.telegramBotUsername ? `@${CONFIG.telegramBotUsername}` : "@SlimeWiredBot";
+  const answer = (results, extra = {}) => telegram("answerInlineQuery", {
+    inline_query_id: inlineQueryId,
+    results,
+    cache_time: 8,
+    is_personal: false,
+    ...extra
+  }).catch(() => {});
+
+  if (!raw) {
+    await answer([{
+      type: "article",
+      id: "slimewire-inline-help",
+      title: "SlimeWire token explainer",
+      description: `Type a Solana CA or $ticker after ${botName}.`,
+      input_message_content: {
+        message_text: `Type <code>${escapeTelegramHtml(botName)} &lt;CA or $ticker&gt;</code> to insert a SlimeWire token explainer card.`,
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      },
+      reply_markup: { inline_keyboard: [[{ text: "Open SlimeWire", url: slimewireBaseUrl() }]] }
+    }]);
+    return;
+  }
+
+  const target = await scanFastTimeout(resolveScanTargetFromText(raw, [], { allowBareTickerHints: true }), 2_200, null);
+  if (!target || !isLikelySolMint(target)) {
+    await answer([{
+      type: "article",
+      id: "slimewire-inline-none",
+      title: "No Solana token found",
+      description: "Try a contract address, pump.fun link, DexScreener link, or exact $ticker.",
+      input_message_content: {
+        message_text: `I could not resolve <b>${escapeTelegramHtml(raw)}</b> to a Solana token. Try a CA, pump.fun link, DexScreener link, or exact $ticker.`,
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      },
+      reply_markup: { inline_keyboard: [[{ text: "Open SlimeWire", url: slimewireBaseUrl() }]] }
+    }]);
+    return;
+  }
+
+  const scan = await scanFastTimeout(gatherSlimeScan(target), 2_000, null);
+  const sym = String(scan?.meta?.symbol || scan?.bonding?.symbol || shortMint(target)).replace(/^\$+/, "");
+  const verdict = String(scan?.shield?.verdict || "UNRATED").toUpperCase();
+  const mc = firstMeaningfulNumber(scan?.meta?.marketCap, scan?.meta?.fdv, scan?.bonding?.marketCap);
+  const desc = [`Shield ${verdict}${scan?.shield?.score != null ? ` ${scan.shield.score}/100` : ""}`, mc ? `MC ${formatUsdCompact(mc)}` : ""].filter(Boolean).join(" · ");
+  await answer([{
+    type: "article",
+    id: `token-${target}`,
+    title: `$${sym} token explainer`,
+    description: desc || "SlimeWire scan context",
+    input_message_content: {
+      message_text: inlineTokenExplainerText(target, scan),
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    },
+    reply_markup: inlineTokenExplainerKeyboard(target)
+  }]);
 }
 
 // /ape: one fresh low-MC shot right now - no modes, no menus. Moonshot pool first
@@ -34939,6 +35204,10 @@ function slimeScanKeyboard(mint) {
       { text: "💰 Airdrop", callback_data: `drop:${mint}` }
     ],
     [
+      { text: "💬 Explain inline", switch_inline_query_current_chat: mint },
+      { text: "🧾 Receipts", url: links.receipts }
+    ],
+    [
       { text: "📊 Menu", callback_data: `scan:menu:${mint}` }
     ],
     [
@@ -34956,6 +35225,7 @@ function scanMenuKeyboard(mint) {
     [{ text: "📈 Charts", callback_data: `scan:cat:chart:${mint}` }, { text: "🔒 Security", callback_data: `scan:cat:sec:${mint}` }],
     [{ text: "🔗 Socials", callback_data: `scan:cat:social:${mint}` }, { text: "🛠 Trade Tools", callback_data: `scan:cat:trade:${mint}` }],
     [{ text: "🌀 Narratives", callback_data: "gb:go:narrative" }, { text: "🎯 Room Tools", callback_data: "gb:m:trench" }],
+    [{ text: "💬 Explain inline", switch_inline_query_current_chat: mint }, { text: "Post to X", url: links.xShare }],
     [{ text: "⚡ Quick Buy", url: links.siteBuy }, { text: "⬅ Back", callback_data: `scan:back:${mint}` }]
   ] };
 }
@@ -34973,7 +35243,8 @@ function scanCategoryKeyboard(mint, cat) {
       [{ text: "Solscan", url: `https://solscan.io/token/${mint}` }, { text: "🧾 Proof Wall", url: links.proof }]
     ],
     social: [
-      [{ text: "𝕏 Search", url: `https://x.com/search?q=${encodeURIComponent(mint)}&f=live` }, { text: "🚀 Pump.fun", url: `https://pump.fun/coin/${mint}` }]
+      [{ text: "𝕏 Search", url: `https://x.com/search?q=${encodeURIComponent(mint)}&f=live` }, { text: "Post to X", url: links.xShare }],
+      [{ text: "🚀 Pump.fun", url: `https://pump.fun/coin/${mint}` }, { text: "🧾 Receipts", url: links.receipts }]
     ],
     trade: [
       [{ text: "⚡ Buy on SlimeWire", url: links.siteBuy }, ...(links.dmBuy ? [{ text: "🤖 Buy in DM", url: links.dmBuy }] : [])],
@@ -38023,6 +38294,26 @@ async function handleTelegramAlphaCommand(chatId, message) {
 
 // /receipts: the SlimeShield brag sheet - flagged tokens that went on to rug, with
 // minutes of warning. The single most shareable proof the shield works.
+function swampReceiptsKeyboard({ hitRate = null, rugged = 0 } = {}) {
+  const receiptsUrl = slimewirePublicUrl("/receipts", { source: "telegram" });
+  const reportUrl = slimewirePublicUrl("/api/web/shield-report-card", { days: 7, source: "telegram" });
+  const rows = [
+    [{ text: "🧾 Swamp Receipts", url: receiptsUrl }, { text: "🖼️ Weekly Card", url: reportUrl }],
+    [{ text: "🏅 Proof Wall", url: slimewirePublicUrl("/proof", { source: "telegram" }) }, { text: "Post to X", url: xPostIntentUrl({
+      text: `SlimeWire Swamp Receipts: ${rugged} confirmed rugs flagged${hitRate !== null ? `, ${hitRate}% hit-rate on resolved flags` : ""}. Receipts over hype.`,
+      url: receiptsUrl,
+      hashtags: ["SlimeWire", "Solana"]
+    }) }]
+  ];
+  const startApp = telegramStartAppLink("receipts");
+  const addGroup = telegramStartGroupLink("alerts");
+  if (startApp || addGroup) rows.push([
+    ...(startApp ? [{ text: "Open Mini App", url: startApp }] : []),
+    ...(addGroup ? [{ text: "Add to Group", url: addGroup }] : [])
+  ]);
+  return { inline_keyboard: rows };
+}
+
 async function handleTelegramReceiptsCommand(chatId) {
   if (tgCommandOnCooldown(chatId, "receipts", TG_LOOK_COOLDOWN_MS)) return;
   const store = await readShieldReceipts().catch(() => ({ receipts: [] }));
@@ -38041,11 +38332,11 @@ async function handleTelegramReceiptsCommand(chatId) {
     return `🔴 $${symbol} - flagged ${escapeTelegramHtml(item.verdict)} (score ${item.score}), rugged. ${warning}.`;
   });
   await sayHtml(chatId, [
-    `🛡 <b>SlimeShield receipts</b>: ${receipts.length} tokens flagged${hitRate !== null ? `, <b>${hitRate}%</b> of resolved flags went on to rug or die` : ""}.`,
+    `🛡 <b>Swamp Receipts</b>: ${receipts.length} tokens flagged${hitRate !== null ? `, <b>${hitRate}%</b> of resolved flags went on to rug or die` : ""}.`,
     ...(lines.length ? lines : ["No confirmed rugs in the log yet - flags resolve as the market moves."]),
     "",
-    `Live shield reads on every pair: <a href="https://www.slimewire.org">slimewire.org</a> | /look &lt;CA&gt; here`
-  ].join("\n"));
+    `Live shield reads on every pair: <a href="${slimewireBaseUrl()}">slimewire.org</a> | /look &lt;CA&gt; here`
+  ].join("\n"), swampReceiptsKeyboard({ hitRate, rugged: rugged.length }));
 }
 
 // One-tap account link: the site issues a short-lived code, the user taps a t.me
@@ -38145,6 +38436,22 @@ function postUserWinToGroups(plan, planWallet, triggerReason = "") {
 
 // /kols: what tracked KOL wallets are actually buying right now - their wallets ARE
 // their calls, no X API needed. Each pick links straight to its chart.
+function kolCallerCardKeyboard(rows = []) {
+  const top = (rows || []).find((row) => row && row.tokenMint);
+  if (!top) return null;
+  const links = slimewireTokenLinks(top.tokenMint);
+  const symbol = String(top.symbol || shortMint(top.tokenMint)).replace(/^\$+/, "").slice(0, 16);
+  return { inline_keyboard: [
+    [{ text: "📈 Top Chart", url: links.site }, { text: "⚡ Buy on Site", url: links.siteBuy }],
+    [{ text: "💬 Explain inline", switch_inline_query_current_chat: top.tokenMint }, { text: "🏆 Top Callers", callback_data: "clb:1w" }],
+    [{ text: "🐋 KOL Tracker", url: slimewirePublicUrl("/terminal", { tab: "kol", source: "telegram" }) }, { text: "Post to X", url: xPostIntentUrl({
+      text: `KOL caller card: tracked wallets are moving on $${symbol}. Verifying on SlimeWire.`,
+      url: links.tokenPage,
+      hashtags: ["SlimeWire", "Solana"]
+    }) }]
+  ] };
+}
+
 async function handleTelegramKolsCommand(chatId) {
   if (tgCommandOnCooldown(chatId, "kols", TG_ALPHA_COOLDOWN_MS / 5)) return;
   let scan = null;
@@ -38166,10 +38473,10 @@ async function handleTelegramKolsCommand(chatId) {
 <code>${escapeTelegramHtml(row.tokenMint)}</code>`;
   });
   await sayHtml(chatId, [
-    `🐋 <b>KOL flow</b> - tracked wallets are buying:`,
+    `🐋 <b>KOL caller cards</b> - tracked wallets are buying:`,
     ...lines,
-    `Their wallets are their real calls. /look &lt;CA&gt; for a shield read | <a href="https://www.slimewire.org">copy-trade on slimewire.org</a>`
-  ].join("\n"), tokenActionKeyboard(rows[0].tokenMint));
+    `Their wallets are their real calls. /look &lt;CA&gt; for a shield read | <a href="${slimewireBaseUrl()}">copy-trade on slimewire.org</a>`
+  ].join("\n"), kolCallerCardKeyboard(rows));
 }
 
 // /proof: the quotable track record - one line of live stats + the public page.
@@ -38213,10 +38520,16 @@ const CALLER_LB_WINDOWS = [
   { key: "6m", label: "6 Months", ms: 180 * 24 * 60 * 60 * 1000, minResolved: 3 }
 ];
 function callerLeaderboardKeyboard(activeKey) {
+  const proofUrl = slimewirePublicUrl("/proof", { source: "telegram", board: "callers" });
   return {
     inline_keyboard: [
       CALLER_LB_WINDOWS.map((w) => ({ text: (w.key === activeKey ? "✅ " : "") + w.label, callback_data: `clb:${w.key}` })),
-      [{ text: "🧾 Full proof wall", url: "https://www.slimewire.org/proof" }],
+      [{ text: "🧾 Full proof wall", url: proofUrl }, { text: "🐋 KOL Tracker", url: slimewirePublicUrl("/terminal", { tab: "kol", source: "telegram" }) }],
+      [{ text: "Post callers to X", url: xPostIntentUrl({
+        text: `SlimeWire caller board: every CA call gets tracked to the outcome. Receipts over hype.`,
+        url: proofUrl,
+        hashtags: ["SlimeWire", "Solana"]
+      }) }],
       [{ text: "⬅️ Trench", callback_data: "gb:m:trench" }, { text: "✓ Done", callback_data: "gb:close" }]
     ]
   };
@@ -38387,11 +38700,20 @@ async function handleTelegramProofCommand(chatId) {
   const losses = resolved.filter((call) => call.outcome === "lost");
   const bestX = wins.length ? Math.max(...wins.map((call) => Number(call.peakX) || 0)) : null;
   const rugs = receipts.receipts.filter((item) => item.outcome === "rugged").length;
+  const proofUrl = slimewirePublicUrl("/proof", { source: "telegram" });
+  const receiptsUrl = slimewirePublicUrl("/receipts", { source: "telegram" });
   await sayHtml(chatId, [
     `🧾 <b>SlimeWire engine record</b>: ${wins.length}W-${losses.length}L on tracked calls${bestX ? `, best call <b>${bestX}x</b>` : ""}.`,
     `${calls.calls.filter((call) => call.status === "watching").length} calls being tracked live. ${rugs} rugs flagged before death by SlimeShield.`,
-    `Wins AND losses, public: <a href="https://www.slimewire.org/proof">slimewire.org/proof</a>`
-  ].join("\n"));
+    `Wins AND losses, public: <a href="${proofUrl}">slimewire.org/proof</a>`
+  ].join("\n"), { inline_keyboard: [
+    [{ text: "🏅 Proof Wall", url: proofUrl }, { text: "🧾 Swamp Receipts", url: receiptsUrl }],
+    [{ text: "Post Record to X", url: xPostIntentUrl({
+      text: `SlimeWire proof wall: ${wins.length}W-${losses.length}L tracked calls${bestX ? `, best ${bestX}x` : ""}; ${rugs} rugs flagged before death.`,
+      url: proofUrl,
+      hashtags: ["SlimeWire", "Solana"]
+    }) }]
+  ] });
 }
 
 async function handleTelegramRaidCommand(chatId, message, argument) {
@@ -38620,7 +38942,7 @@ function groupBotMenuMarkup(entry, alertsOn = false) {
     [{ text: `${dot("buybot")} Buy Bot`, callback_data: "gb:m:buy" }, { text: `${dot("raid")} Raid Bot`, callback_data: "gb:m:raid" }],
     [{ text: `${dot("rose")} Rose & Shield`, callback_data: "gb:m:rose" }, { text: `${dot("scan")} Scan Bot`, callback_data: "gb:m:scan" }],
     [{ text: "🎯 Trench Tools", callback_data: "gb:m:trench" }],
-    [{ text: `${alertsOn ? "🟢" : "⚪"} 📣 SlimeWire Alerts`, callback_data: "gb:alerts" }],
+    [{ text: "📦 Alert Packs", callback_data: "gb:m:packs" }, { text: `${alertsOn ? "🟢" : "⚪"} 📣 Alerts`, callback_data: "gb:alerts" }],
     [{ text: `${refOn} 🎟️ Referral Contest`, callback_data: "gb:m:ref" }],
     [{ text: "✓ Done", callback_data: "gb:close" }]
   ] };
@@ -38637,9 +38959,86 @@ function groupBotMenuText(entry) {
     `🛡️ <b>Rose & Shield</b> — ${st("rose")} · moderation + anti-scam protection`,
     `🔍 <b>Scan Bot</b> — ${st("scan")} · CA / $ticker → scan card`,
     `📣 <b>SlimeWire Alerts</b> — auto plays every 15 min + fresh launches, TP/SL fires, KOL copies &amp; 2x receipts (capped a few/hr)`,
+    `📦 <b>Alert Packs</b> — one-tap quiet scanner, launch room, proof room, or all-quiet presets`,
     "",
     "Prefer typing? <b>/help</b> lists every command. Re-open this anytime with <b>/settings</b>."
   ].join("\n");
+}
+function groupAlertPacksView(entry, alertsOn = false) {
+  const e = entry || defaultGroupBotEntry();
+  const on = (key) => groupBotFeatureOn(e, key) ? "ON" : "off";
+  return {
+    text: [
+      "📦 <b>Group Alert Packs</b>",
+      "Admin presets for existing SlimeWire modules. No X posting, no DMs, no extra automation — just this chat's Telegram settings.",
+      "",
+      `Current: Scan <b>${on("scan")}</b> · Raid <b>${on("raid")}</b> · Buy Bot <b>${on("buybot")}</b> · Engine alerts <b>${alertsOn ? "ON" : "off"}</b>`,
+      "",
+      "• <b>Quiet Scanner</b>: CA / $ticker scan cards only.",
+      "• <b>Launch Room</b>: scan cards + raid setup + capped engine alerts.",
+      "• <b>Proof Room</b>: scan cards + capped proof/receipt/alpha alerts.",
+      "• <b>All Quiet</b>: keeps scan cards, turns noisy modules off."
+    ].join("\n"),
+    markup: { inline_keyboard: [
+      [{ text: "🔍 Quiet Scanner", callback_data: "gb:pack:scanner" }, { text: "🚀 Launch Room", callback_data: "gb:pack:launch" }],
+      [{ text: "🧾 Proof Room", callback_data: "gb:pack:proof" }, { text: "🔕 All Quiet", callback_data: "gb:pack:quiet" }],
+      gbBackRow()
+    ] }
+  };
+}
+async function setGroupAlertsState(chatId, on, title = "") {
+  await withFileLock(telegramGroupsPath(), async () => {
+    const store = await readTelegramGroups();
+    const key = String(chatId);
+    store.groups[key] = {
+      ...(store.groups[key] || { addedAt: new Date().toISOString() }),
+      title: String(title || store.groups[key]?.title || "").slice(0, 80),
+      alerts: Boolean(on)
+    };
+    await writeJsonFile(telegramGroupsPath(), store);
+  });
+}
+async function applyGroupAlertPack(chatId, pack, title = "") {
+  const store = await readGroupBot();
+  const key = String(chatId);
+  const e = store.groups[key] || defaultGroupBotEntry();
+  e.features = { ...(e.features || {}) };
+  let alertsOn = await groupAlertsOn(chatId);
+  let label = "Pack applied";
+  if (pack === "scanner") {
+    e.features.scan = true;
+    e.features.raid = false;
+    e.features.buybot = false;
+    alertsOn = false;
+    label = "Quiet Scanner pack applied";
+  } else if (pack === "launch") {
+    e.features.scan = true;
+    e.features.raid = true;
+    alertsOn = true;
+    label = "Launch Room pack applied";
+  } else if (pack === "proof") {
+    e.features.scan = true;
+    alertsOn = true;
+    label = "Proof Room pack applied";
+  } else if (pack === "quiet") {
+    e.features.scan = true;
+    e.features.raid = false;
+    e.features.buybot = false;
+    alertsOn = false;
+    label = "All Quiet pack applied";
+  } else {
+    return { entry: e, alertsOn, label: "Unknown pack" };
+  }
+  store.groups[key] = e;
+  await writeGroupBot(store);
+  await setGroupAlertsState(chatId, alertsOn, title);
+  return { entry: e, alertsOn, label };
+}
+async function groupBotRenderAlertPacks(chatId, messageId) {
+  const e = (await getGroupBotEntry(chatId)) || defaultGroupBotEntry();
+  const alertsOn = await groupAlertsOn(chatId);
+  const v = groupAlertPacksView(e, alertsOn);
+  await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: v.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: v.markup }).catch(() => {});
 }
 // A per-module sub-menu: the module's on/off + all its clickable settings.
 function gbBackRow() { return [{ text: "⬅️ Back", callback_data: "gb:home" }, { text: "✓ Done", callback_data: "gb:close" }]; }
@@ -38808,6 +39207,7 @@ function groupBotHelpText() {
     "<b>⚙️ Admin setup</b>",
     "• <code>/settings</code> — open the menu: tap a bot → its sub-menu of toggles + options (all clickable, no typing needed)",
     "• <code>/buybot on</code> · <code>/raid on</code> · <code>/scan on</code> · <code>/rose on</code> — or just flip them in the menu",
+    "• <b>Alert Packs</b> in settings — Quiet Scanner, Launch Room, Proof Room, or All Quiet presets",
     "",
     "🟢 <b>Buy Bot</b> — posts every buy with a <b>whale-tier badge</b> (🦐🐟🐬🐋🔱), 🌟 new-holder flag, bonding %, MC·Liq·Vol, DEX-paid + Quick-Buy",
     "• <code>/track &lt;CA&gt;</code> — set the coin to watch (or just paste a CA once)",
@@ -39023,13 +39423,18 @@ async function handleGroupBotCallback(query, userId) {
   if (!(await isGroupBotAdmin(chatId, userId, query.message))) { await ack("Admins only 🛡️"); return true; }
 
   if (data === "gb:home") { await groupBotPostSetup(chatId, await getGroupBotEntry(chatId), messageId); await ack(); return true; }
+  if (data === "gb:m:packs") { await groupBotRenderAlertPacks(chatId, messageId); await ack(); return true; }
+  const pack = data.match(/^gb:pack:(scanner|launch|proof|quiet)$/);
+  if (pack) {
+    const result = await applyGroupAlertPack(chatId, pack[1], query.message?.chat?.title || "").catch(() => null);
+    await groupBotRenderAlertPacks(chatId, messageId);
+    await ack(result?.label || "Pack applied");
+    return true;
+  }
   if (data === "gb:alerts") {
     const cur = await groupAlertsOn(chatId);
-    await withFileLock(telegramGroupsPath(), async () => {
-      const store = await readTelegramGroups(); const key = String(chatId);
-      store.groups[key] = { ...(store.groups[key] || { addedAt: new Date().toISOString() }), title: String(query.message?.chat?.title || store.groups[key]?.title || "").slice(0, 80), alerts: !cur };
-      await writeJsonFile(telegramGroupsPath(), store);
-    });
+    const alertPatch = { alerts: !cur };
+    await setGroupAlertsState(chatId, alertPatch.alerts, query.message?.chat?.title || "");
     await groupBotPostSetup(chatId, await getGroupBotEntry(chatId), messageId);
     await telegram("answerCallbackQuery", { callback_query_id: query.id, show_alert: true, text: cur ? "SlimeWire alerts OFF here." : "🟢 SlimeWire Alerts ON — this chat now gets 🐸 plays every 15 min, fresh launches, TP/SL fires, KOL copies & 2x receipts. Capped at a few posts/hour." }).catch(() => {});
     return true;
@@ -39869,7 +40274,23 @@ function referralSiteCode(chatId, userId) {
   const h = crypto.createHash("sha1").update(`${chatId}:${userId}`).digest("hex").slice(0, 6).toUpperCase();
   return normalizeReferralCode("SWR" + h);
 }
-function referralSiteLink(code) { return `https://www.slimewire.org/?ref=${encodeURIComponent(normalizeReferralCode(code))}`; }
+function referralSiteLink(code) { return slimewirePublicUrl("/", { ref: normalizeReferralCode(code), source: "telegram" }); }
+function referralShareKeyboard({ site = "", invite = "", code = "", reward = "" } = {}) {
+  const rows = [];
+  const primary = [];
+  if (site) primary.push({ text: "🌐 Site Referral", url: site });
+  if (invite) primary.push({ text: "👥 Group Invite", url: invite });
+  if (primary.length) rows.push(primary);
+  const shareText = reward
+    ? `Join my SlimeWire referral run for ${reward}. Invites and friends who trade count.`
+    : "Join my SlimeWire referral run. Invites and friends who trade count.";
+  const startApp = code ? telegramStartAppLink(`ref_${normalizeReferralCode(code)}`) : "";
+  rows.push([
+    ...(startApp ? [{ text: "Open Mini App", url: startApp }] : []),
+    { text: "Post to X", url: xPostIntentUrl({ text: shareText, url: site || invite || slimewireBaseUrl(), hashtags: ["SlimeWire", "Solana"] }) }
+  ]);
+  return { inline_keyboard: rows.filter((row) => row.length) };
+}
 // Find which group + inviter a site ref code belongs to (scans group referral.siteCodes — rare, cheap).
 async function findReferralBySiteCode(code) {
   const norm = normalizeReferralCode(code);
@@ -40080,11 +40501,12 @@ async function handleReferralCommand(message, userId) {
     if (!cfg.siteCodes || cfg.siteCodes[code] !== String(userId)) await setGroupSub(chatId, "referral", { siteCodes: { ...(cfg.siteCodes || {}), [code]: String(userId) } });
     const site = referralSiteLink(code);
     const reward = referralRewardLabel(cfg);
+    const keyboard = referralShareKeyboard({ site, invite: link || "", code, reward });
     if (!link) {
-      await sayHtml(chatId, `🎟️ <b>Your referral link</b>${reward ? ` · 🏆 <b>${escapeTelegramHtml(reward)}</b>` : ""}\n\n🌐 <b>Site link</b> (they make a wallet + trade on slimewire.org → counts for you):\n${escapeTelegramHtml(site)}\n\n<i>(I couldn't make a TG invite link — make me an admin with 'Invite users via link' to also count group joins.)</i>`);
+      await sayHtml(chatId, `🎟️ <b>Your referral link</b>${reward ? ` · 🏆 <b>${escapeTelegramHtml(reward)}</b>` : ""}\n\n🌐 <b>Site link</b> (they make a wallet + trade on slimewire.org → counts for you):\n${escapeTelegramHtml(site)}\n\n<i>(I couldn't make a TG invite link — make me an admin with 'Invite users via link' to also count group joins.)</i>`, keyboard);
       return true;
     }
-    await sayHtml(chatId, `🎟️ <b>Your referral link</b>${reward ? ` · 🏆 <b>${escapeTelegramHtml(reward)}</b>` : ""}\n\n👥 <b>Group invite</b> (new members who join count):\n${escapeTelegramHtml(link)}\n\n🌐 <b>Site link</b> (friends who trade on slimewire.org count too):\n${escapeTelegramHtml(site)}\n\nShare either. Standings: <code>/refboard</code>.`);
+    await sayHtml(chatId, `🎟️ <b>Your referral link</b>${reward ? ` · 🏆 <b>${escapeTelegramHtml(reward)}</b>` : ""}\n\n👥 <b>Group invite</b> (new members who join count):\n${escapeTelegramHtml(link)}\n\n🌐 <b>Site link</b> (friends who trade on slimewire.org count too):\n${escapeTelegramHtml(site)}\n\nShare either. Standings: <code>/refboard</code>.`, keyboard);
     return true;
   }
   // /referral … (admin only)
@@ -40488,24 +40910,19 @@ async function handleTelegramGroupToggle(chatId, message, userId, argument, admi
   const turnOn = /^(on|enable|start|yes)$/i.test(String(argument || "").trim());
   const turnOff = /^(off|disable|stop|no)$/i.test(String(argument || "").trim());
   if (!turnOn && !turnOff) {
-    await say(chatId, "Usage: /slimewire on - or - /slimewire off\nWhen on, this group gets SlimeWire engine alerts (fresh launches, TP/SL fires, KOL copies), hard-capped at a few posts per hour.");
+    await say(chatId, "Usage: /slimewire on - or - /slimewire off\nWhen on, this group gets SlimeWire engine alerts (fresh launches, TP/SL fires, KOL copies, Swamp Receipts), hard-capped at a few posts per hour. Fine-tune with /settings → Alert Packs.");
     return;
   }
-  await withFileLock(telegramGroupsPath(), async () => {
-    const store = await readTelegramGroups();
-    const key = String(chatId);
-    store.groups[key] = {
-      ...(store.groups[key] || { addedAt: new Date().toISOString() }),
-      title: String(message.chat?.title || store.groups[key]?.title || "").slice(0, 80),
-      alerts: turnOn
-    };
-    await writeJsonFile(telegramGroupsPath(), store);
-  });
+  await setGroupAlertsState(chatId, turnOn, message.chat?.title || "");
   if (turnOn) {
     const sent = await telegram("sendMessage", {
       chat_id: chatId,
-      text: "SlimeWire alerts are ON: plays every 15 min, fresh launches, TP/SL fires, KOL copies, 2x receipts. /slimewire off any time. Try /look <CA>, /alpha, /ape, /proof. Track record: slimewire.org/proof",
-      disable_web_page_preview: true
+      text: "SlimeWire alerts are ON: plays every 15 min, fresh launches, TP/SL fires, KOL copies, 2x receipts, and Swamp Receipts. /slimewire off any time. Try /look <CA>, /alpha, /ape, /proof. Use /settings → Alert Packs for quieter presets.",
+      disable_web_page_preview: true,
+      reply_markup: { inline_keyboard: [
+        [{ text: "🏅 Proof Wall", url: slimewirePublicUrl("/proof", { source: "telegram" }) }, { text: "🧾 Swamp Receipts", url: slimewirePublicUrl("/receipts", { source: "telegram" }) }],
+        [{ text: "📦 Alert Packs", callback_data: "gb:m:packs" }]
+      ] }
     }).catch(() => null);
     // Best-effort pin so the proof funnel stays at the top of the chat.
     if (sent?.message_id) {
@@ -42976,6 +43393,493 @@ async function submitCommunityRaid(body = {}) {
   store.raids = store.raids.slice(-80);
   await writeJsonFile(communityRaidsPath(), store);
   return { ok: true, mint, symbol };
+}
+
+// --- Swamp Receipts + metadata summaries -----------------------------------------
+// Opt-in proof crumbs for scan/trade/share/launch moments. This store is deliberately
+// metadata-only: no transaction construction, signing, or delegated wallet powers.
+const SWAMP_RECEIPT_LIMIT = 1000;
+const SWAMP_PUBLIC_RECEIPT_LIMIT = 80;
+const SWAMP_RECEIPT_KINDS = new Set(["scan", "trade", "share", "launch", "raid", "passport"]);
+
+function swampReceiptsPath() { return path.join(CONFIG.dataDir, "swamp-receipts.json"); }
+async function readSwampReceipts() {
+  const store = await readJson(swampReceiptsPath());
+  if (!Array.isArray(store.receipts)) store.receipts = [];
+  return store;
+}
+
+function normalizeSwampReceiptKind(value = "") {
+  const kind = String(value || "").trim().toLowerCase();
+  return SWAMP_RECEIPT_KINDS.has(kind) ? kind : "share";
+}
+
+function safeSwampText(value = "", max = 160) {
+  return String(value || "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[^\x20-\x7E]/g, "")
+    .trim()
+    .slice(0, max);
+}
+
+function safeSwampUrl(value = "", fallback = "") {
+  const raw = String(value || fallback || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    if (!["http:", "https:"].includes(url.protocol)) return "";
+    return url.toString().slice(0, 320);
+  } catch {
+    return "";
+  }
+}
+
+function swampReceiptMint(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw || !solanaPublicKeyLike(raw)) return "";
+  try { return new PublicKey(raw).toBase58(); } catch { return ""; }
+}
+
+function swampReceiptDefaultLabel(kind) {
+  return {
+    scan: "Scan Receipt",
+    trade: "Trade Receipt",
+    share: "Share Receipt",
+    launch: "Launch Receipt",
+    raid: "Raid Receipt",
+    passport: "Passport Receipt"
+  }[kind] || "Swamp Receipt";
+}
+
+function swampReceiptSiteUrl(receipt = {}) {
+  if (receipt.tokenMint) return `https://www.slimewire.org/t?ca=${encodeURIComponent(receipt.tokenMint)}`;
+  return safeSwampUrl(receipt.url, CONFIG.webPortalUrl || "https://www.slimewire.org") || "https://www.slimewire.org";
+}
+
+function swampReceiptShareText(receipt = {}) {
+  const symbol = receipt.symbol ? `$${receipt.symbol}` : (receipt.tokenMint ? shortMint(receipt.tokenMint) : "SlimeWire");
+  const label = safeSwampText(receipt.label || swampReceiptDefaultLabel(receipt.kind), 60);
+  const summary = safeSwampText(receipt.summary || "", 120);
+  return [label, symbol, summary].filter(Boolean).join(" - ");
+}
+
+function swampReceiptShareTargets(receipt = {}) {
+  const site = swampReceiptSiteUrl(receipt);
+  const text = swampReceiptShareText(receipt);
+  return {
+    site,
+    x: xShareUrl(text, site),
+    telegram: `https://t.me/share/url?url=${encodeURIComponent(site)}&text=${encodeURIComponent(text)}`
+  };
+}
+
+function publicSwampReceipt(receipt = {}, options = {}) {
+  const own = Boolean(options.own);
+  return {
+    id: receipt.id,
+    kind: receipt.kind,
+    label: receipt.label,
+    summary: receipt.summary,
+    tokenMint: receipt.tokenMint || "",
+    shortMint: receipt.tokenMint ? shortMint(receipt.tokenMint) : "",
+    symbol: receipt.symbol || "",
+    url: receipt.url || swampReceiptSiteUrl(receipt),
+    source: receipt.source || "",
+    public: Boolean(receipt.public),
+    createdAt: receipt.createdAt || "",
+    stats: receipt.stats || {},
+    share: swampReceiptShareTargets(receipt),
+    ...(own ? { userScope: "self" } : {})
+  };
+}
+
+function swampReceiptStats(receipts = []) {
+  const byKind = {};
+  for (const receipt of receipts) {
+    const kind = normalizeSwampReceiptKind(receipt.kind);
+    byKind[kind] = (byKind[kind] || 0) + 1;
+  }
+  return {
+    total: receipts.length,
+    public: receipts.filter((receipt) => receipt.public).length,
+    byKind
+  };
+}
+
+async function buildSwampReceipt(userId, body = {}) {
+  const kind = normalizeSwampReceiptKind(body.kind || body.type);
+  const tokenMint = swampReceiptMint(firstString(body.tokenMint, body.mint, body.ca));
+  const label = safeSwampText(body.label || swampReceiptDefaultLabel(kind), 70);
+  let summary = safeSwampText(body.summary || body.note || "", 180);
+  let symbol = safeSwampText(body.symbol || "", 18).replace(/^\$+/, "");
+  const stats = {};
+
+  if (tokenMint) {
+    const metadata = await getDexTokenMetadata(tokenMint).catch(() => ({}));
+    symbol = safeSwampText(symbol || metadata.symbol || shortMint(tokenMint), 18).replace(/^\$+/, "");
+    if (kind === "scan") {
+      const shield = await webSlimeShield(tokenMint).catch(() => null);
+      if (shield) {
+        stats.verdict = shield.verdict || "";
+        stats.score = shield.score ?? null;
+        stats.confidence = shield.confidence ?? null;
+        if (!summary) summary = safeSwampText(shield.summary || `SlimeShield ${shield.verdict || "read"} for $${symbol}.`, 180);
+      }
+    } else if (kind === "trade") {
+      const rows = await pnlRows(userId, tokenMint, { groupByToken: true, limit: 1 }).catch(() => []);
+      const row = rows[0] || null;
+      if (row) {
+        stats.buys = row.buys || 0;
+        stats.sells = row.sells || 0;
+        stats.spentSol = lamportsBigToSol(row.spent || 0n);
+        stats.receivedSol = lamportsBigToSol(row.received || 0n);
+        stats.realizedSol = formatSignedLamports((row.received || 0n) - (row.spent || 0n));
+        if (!summary) summary = `Realized ${stats.realizedSol} SOL on $${symbol}.`;
+      }
+    } else if (kind === "launch") {
+      const launches = await readPumpLaunchAttempts().catch(() => ({ attempts: [] }));
+      const attempt = [...(launches.attempts || [])].reverse().find((item) =>
+        String(item.userId || "") === String(userId)
+        && firstString(item.tokenMint, item.mintPublicKey, item.mint) === tokenMint);
+      if (attempt) {
+        stats.status = String(attempt.status || "").toUpperCase();
+        stats.rail = String(attempt.rail || "pump").slice(0, 24);
+        stats.txSignature = firstString(attempt.txSignature, attempt.signature, attempt.createSignature);
+        if (!summary) summary = `$${symbol} launched through SlimeWire.`;
+      }
+    }
+  }
+
+  if (!summary) {
+    summary = {
+      scan: "Token scan saved as a swamp receipt.",
+      trade: "Trade moment saved as a swamp receipt.",
+      share: "Share moment saved as a swamp receipt.",
+      launch: "Launch moment saved as a swamp receipt.",
+      raid: "Raid moment saved as a swamp receipt.",
+      passport: "Passport badge moment saved as a swamp receipt."
+    }[kind];
+  }
+
+  const publicOptIn = parseBoolean(firstString(body.public, body.sharePublic, body.publicReceipt, "false"));
+  const url = safeSwampUrl(body.url || body.shareUrl || "", tokenMint ? `https://www.slimewire.org/t?ca=${encodeURIComponent(tokenMint)}` : "");
+  return {
+    id: `swr-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`,
+    userId: String(userId),
+    kind,
+    label,
+    summary,
+    tokenMint,
+    symbol,
+    url,
+    source: safeSwampText(body.source || "web", 40),
+    public: publicOptIn,
+    stats,
+    createdAt: new Date().toISOString()
+  };
+}
+
+async function webCreateSwampReceipt(userId, body = {}) {
+  const receipt = await buildSwampReceipt(userId, body);
+  await withFileLock(swampReceiptsPath(), async () => {
+    const store = await readSwampReceipts();
+    store.receipts.push(receipt);
+    store.receipts = store.receipts.slice(-SWAMP_RECEIPT_LIMIT);
+    await writeJsonFile(swampReceiptsPath(), store);
+  });
+  await audit("web_swamp_receipt_create", {
+    userId,
+    kind: receipt.kind,
+    tokenMint: receipt.tokenMint || "",
+    public: receipt.public
+  }).catch(() => {});
+  return publicSwampReceipt(receipt, { own: true });
+}
+
+async function webSwampReceiptsForUser(userId, options = {}) {
+  const limit = Math.max(1, Math.min(200, Number(options.limit) || 80));
+  const store = await readSwampReceipts();
+  const mine = (store.receipts || [])
+    .filter((receipt) => String(receipt.userId || "") === String(userId))
+    .sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""));
+  return {
+    receipts: mine.slice(0, limit).map((receipt) => publicSwampReceipt(receipt, { own: true })),
+    stats: swampReceiptStats(mine)
+  };
+}
+
+async function webPublicSwampReceipts(options = {}) {
+  const mint = swampReceiptMint(options.mint || "");
+  const limit = Math.max(1, Math.min(SWAMP_PUBLIC_RECEIPT_LIMIT, Number(options.limit) || 40));
+  const store = await readSwampReceipts();
+  const receipts = (store.receipts || [])
+    .filter((receipt) => receipt.public)
+    .filter((receipt) => !mint || receipt.tokenMint === mint)
+    .sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""))
+    .slice(0, limit)
+    .map((receipt) => publicSwampReceipt(receipt));
+  return { receipts, stats: swampReceiptStats(receipts) };
+}
+
+function swampActionMetadata(kind = "scan", requestUrl = null) {
+  const action = ["scan", "trade", "share"].includes(String(kind || "").toLowerCase()) ? String(kind).toLowerCase() : "scan";
+  const rawMint = firstString(
+    requestUrl?.searchParams?.get("tokenMint"),
+    requestUrl?.searchParams?.get("mint"),
+    requestUrl?.searchParams?.get("ca")
+  );
+  const mint = swampReceiptMint(rawMint);
+  const base = (CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/+$/, "");
+  const links = mint ? slimewireTokenLinks(mint) : null;
+  const targetUrl = action === "trade"
+    ? (links?.siteBuy || `${base}/terminal`)
+    : action === "scan"
+      ? (links?.site || `${base}/terminal`)
+      : safeSwampUrl(requestUrl?.searchParams?.get("url") || "", links?.site || base);
+  const title = {
+    scan: "SlimeWire Scan",
+    trade: "SlimeWire Trade",
+    share: "SlimeWire Share"
+  }[action];
+  const description = {
+    scan: "Open a SlimeWire token read with chart, SlimeShield, proof receipts, and socials.",
+    trade: "Open the SlimeWire trade panel for user-confirmed wallet actions.",
+    share: "Share a SlimeWire token, receipt, chart, or proof page."
+  }[action];
+  const shareText = safeSwampText(requestUrl?.searchParams?.get("text") || (mint ? `Check ${shortMint(mint)} on SlimeWire` : "Open SlimeWire"), 180);
+  const actions = [
+    { label: action === "trade" ? "Open Trade Panel" : action === "share" ? "Open Share Page" : "Scan Token", href: targetUrl },
+    ...(mint ? [{ label: "Signal Card", href: `${base}/api/web/signal-card?tokenMint=${encodeURIComponent(mint)}` }] : []),
+    { label: "Proof Wall", href: `${base}/proof` }
+  ];
+  return {
+    ok: true,
+    type: "swamp-action-metadata",
+    action,
+    title: mint ? `${title} ${shortMint(mint)}` : title,
+    icon: `${base}/assets/slimewire/png/slimewire-mark.png`,
+    description,
+    label: actions[0].label,
+    disabled: false,
+    links: { actions },
+    metadata: {
+      version: "2026-07-09",
+      noTransaction: true,
+      tokenMint: mint,
+      targetUrl,
+      xShareUrl: xShareUrl(shareText, targetUrl),
+      telegramShareUrl: `https://t.me/share/url?url=${encodeURIComponent(targetUrl)}&text=${encodeURIComponent(shareText)}`,
+      telegramBotUrl: telegramBotStartUrl()
+    }
+  };
+}
+
+function swampActionKindFromPath(pathname = "") {
+  const tail = String(pathname || "").split("/").filter(Boolean).pop() || "scan";
+  return tail.replace(/^swamp-/, "").replace(/^blink-/, "").toLowerCase();
+}
+
+function publicLaunchAttemptSummary(attempt = {}) {
+  const mint = firstString(attempt.tokenMint, attempt.mintPublicKey, attempt.mint);
+  const symbol = safeSwampText(firstString(attempt.symbol, attempt.ticker, attempt.metadataJson?.symbol), 18).replace(/^\$+/, "");
+  const status = String(attempt.status || "").toUpperCase();
+  return {
+    status,
+    stage: safeSwampText(firstString(attempt.stage, attempt.stageText), 80),
+    rail: safeSwampText(attempt.rail || "pump", 24),
+    tokenMint: mint,
+    shortMint: mint ? shortMint(mint) : "",
+    symbol,
+    name: safeSwampText(firstString(attempt.name, attempt.tokenName, attempt.metadataJson?.name), 48),
+    createdAt: firstString(attempt.createdAt, attempt.startedAt),
+    completedAt: firstString(attempt.completedAt, attempt.confirmedAt, attempt.updatedAt),
+    url: mint ? `https://www.slimewire.org/t?ca=${encodeURIComponent(mint)}` : ""
+  };
+}
+
+async function webLaunchBossRaidSummary() {
+  const [launches, community, posts] = await Promise.all([
+    readPumpLaunchAttempts().catch(() => ({ attempts: [] })),
+    readCommunityRaids().catch(() => ({ raids: [] })),
+    readRaidPosts().catch(() => ({ posts: [] }))
+  ]);
+  const completedLaunches = [...(launches.attempts || [])]
+    .reverse()
+    .filter((attempt) => ["COMPLETE", "CONFIRMED", "LAUNCHED"].includes(String(attempt.status || "").toUpperCase()))
+    .slice(0, 12)
+    .map((attempt) => ({ kind: "slimewire-launch", ...publicLaunchAttemptSummary(attempt) }));
+  const communityBosses = [...(community.raids || [])]
+    .reverse()
+    .slice(0, 12)
+    .map((raid) => ({
+      kind: "community-raid",
+      tokenMint: raid.mint || "",
+      shortMint: raid.mint ? shortMint(raid.mint) : "",
+      symbol: safeSwampText(raid.symbol || "COIN", 18).replace(/^\$+/, ""),
+      bumps: Number(raid.bumps || 0),
+      at: raid.at || "",
+      url: raid.mint ? `https://www.slimewire.org/t?ca=${encodeURIComponent(raid.mint)}` : ""
+    }));
+  const xRaids = [...(posts.posts || [])]
+    .sort((a, b) => (Number(b.score || 0) - Number(a.score || 0)) || Date.parse(b.at || "") - Date.parse(a.at || ""))
+    .slice(0, 12)
+    .map((post) => ({
+      kind: "x-raid",
+      id: post.tid || "",
+      symbol: safeSwampText(post.symbol || "POST", 18).replace(/^\$+/, ""),
+      score: Number(post.score || 0),
+      likes: Number(post.likes || 0),
+      reposts: Number(post.rts || post.reposts || 0),
+      replies: Number(post.replies || 0),
+      url: safeSwampUrl(post.url || "")
+    }));
+  return {
+    updatedAt: new Date().toISOString(),
+    active: completedLaunches.length + communityBosses.length + xRaids.length,
+    bosses: [...completedLaunches, ...communityBosses, ...xRaids].slice(0, 24),
+    sources: {
+      launches: completedLaunches.length,
+      communityRaids: communityBosses.length,
+      xRaids: xRaids.length
+    }
+  };
+}
+
+async function webLaunchEggSummary(options = {}) {
+  const userId = options.userId ? String(options.userId) : "";
+  const [launches, hype, presales] = await Promise.all([
+    readPumpLaunchAttempts().catch(() => ({ attempts: [] })),
+    readLaunchHype().catch(() => ({ pages: {} })),
+    readPresales().catch(() => ({ presales: [] }))
+  ]);
+  const attempts = userId ? (launches.attempts || [])
+    .filter((attempt) => String(attempt.userId || "") === userId)
+    .filter((attempt) => {
+      const status = String(attempt.status || "").toUpperCase();
+      return status && !["COMPLETE", "CONFIRMED", "LAUNCHED", "FAILED", "CANCELLED"].includes(status);
+    })
+    .slice(-20)
+    .map((attempt) => ({ kind: "launch-attempt", ...publicLaunchAttemptSummary(attempt) })) : [];
+  const now = Date.now();
+  const hypeEggs = Object.values(hype.pages || {})
+    .filter((page) => !userId || String(page.userId || "") === userId)
+    .filter((page) => !page.mint)
+    .sort((a, b) => Date.parse(a.launchAt || "") - Date.parse(b.launchAt || ""))
+    .slice(0, 20)
+    .map((page) => ({
+      kind: "hype-page",
+      id: page.id,
+      name: safeSwampText(page.name || "", 48),
+      symbol: safeSwampText(page.symbol || "", 18).replace(/^\$+/, ""),
+      launchAt: page.launchAt || "",
+      subscriberCount: Array.isArray(page.subscriberTgIds) ? page.subscriberTgIds.length : 0,
+      url: `${SHARE_PAGE_ORIGIN}/hype/${encodeURIComponent(page.id)}`
+    }));
+  const presaleEggs = (presales.presales || [])
+    .filter((item) => Date.parse(item.deadline || "") > now)
+    .sort((a, b) => Date.parse(a.deadline || "") - Date.parse(b.deadline || ""))
+    .slice(0, 12)
+    .map((item) => ({
+      kind: "presale",
+      id: item.id,
+      name: safeSwampText(item.name || "", 48),
+      symbol: safeSwampText(item.symbol || "", 18).replace(/^\$+/, ""),
+      deadline: item.deadline || "",
+      target: Number(item.target || 0),
+      interest: Number(item.interest || 0)
+    }));
+  const eggs = [...attempts, ...hypeEggs, ...presaleEggs].slice(0, 36);
+  return {
+    updatedAt: new Date().toISOString(),
+    count: eggs.length,
+    eggs,
+    sources: {
+      launchAttempts: attempts.length,
+      hypePages: hypeEggs.length,
+      presales: presaleEggs.length
+    }
+  };
+}
+
+async function webSwampLaunchStateSummary(options = {}) {
+  const [bossRaid, launchEgg] = await Promise.all([
+    webLaunchBossRaidSummary(),
+    webLaunchEggSummary(options)
+  ]);
+  return { bossRaid, launchEgg };
+}
+
+function swampPassportBadge(id, label, earned, progress = 0, detail = "", count = 0) {
+  return {
+    id,
+    label,
+    earned: Boolean(earned),
+    progress: Math.max(0, Math.min(100, Math.round(Number(progress) || 0))),
+    detail: safeSwampText(detail, 140),
+    count: Number(count || 0)
+  };
+}
+
+async function webSwampPassportSummary(userId) {
+  const [profile, walletStore, tradeStore, launchStore, receiptStore] = await Promise.all([
+    webProfileForUser(userId).catch(() => ({})),
+    readWalletStore().catch(() => ({ wallets: [] })),
+    readTradeHistory().catch(() => ({ trades: [] })),
+    readPumpLaunchAttempts().catch(() => ({ attempts: [] })),
+    readSwampReceipts().catch(() => ({ receipts: [] }))
+  ]);
+  const wallets = walletsForOwner(walletStore, userId);
+  const trades = (tradeStore.trades || []).filter((trade) => String(trade.userId || "") === String(userId));
+  const buys = trades.filter((trade) => trade.type === "buy").length;
+  const sells = trades.filter((trade) => trade.type === "sell").length;
+  const tokenCount = new Set(trades.map((trade) => trade.tokenMint).filter(Boolean)).size;
+  const spent = trades.reduce((sum, trade) => trade.type === "buy" ? sum + positiveBigIntOrZero(trade.solLamportsSpent) : sum, 0n);
+  const received = trades.reduce((sum, trade) => trade.type === "sell" ? sum + positiveBigIntOrZero(trade.solLamportsReceived) : sum, 0n);
+  const launches = (launchStore.attempts || []).filter((attempt) =>
+    String(attempt.userId || "") === String(userId)
+    && ["COMPLETE", "CONFIRMED", "LAUNCHED"].includes(String(attempt.status || "").toUpperCase()));
+  const receipts = (receiptStore.receipts || []).filter((receipt) => String(receipt.userId || "") === String(userId));
+  const receiptKinds = swampReceiptStats(receipts).byKind;
+  const referralStats = normalizeReferralStats(profile.referralStats || {});
+  const referralCount = Array.isArray(referralStats.referrals) ? referralStats.referrals.length : 0;
+  const badges = [
+    swampPassportBadge("account", "Swamp Account", true, 100, "Profile is initialized.", 1),
+    swampPassportBadge("managed-wallet", "Managed Wallet", wallets.length > 0, wallets.length ? 100 : 0, "Create or import a managed wallet.", wallets.length),
+    swampPassportBadge("connected-wallet", "Connected Wallet", Boolean(profile.connectedWallet?.publicKey), profile.connectedWallet?.publicKey ? 100 : 0, "Connect a browser wallet for view-only context.", profile.connectedWallet?.publicKey ? 1 : 0),
+    swampPassportBadge("x-handle", "X Handle", Boolean(profile.xHandle), profile.xHandle ? 100 : 0, "Link an X handle for share flows.", profile.xHandle ? 1 : 0),
+    swampPassportBadge("first-trade", "First Trade", trades.length > 0, Math.min(100, trades.length * 100), "Make a user-confirmed SlimeWire trade.", trades.length),
+    swampPassportBadge("pnl-tracker", "PnL Tracker", tokenCount > 0, Math.min(100, tokenCount * 25), "Build token-level PnL history.", tokenCount),
+    swampPassportBadge("scan-receipt", "Scan Receipt", Number(receiptKinds.scan || 0) > 0, Math.min(100, Number(receiptKinds.scan || 0) * 50), "Save an opt-in scan receipt.", Number(receiptKinds.scan || 0)),
+    swampPassportBadge("public-receipt", "Public Receipt", receipts.some((receipt) => receipt.public), receipts.some((receipt) => receipt.public) ? 100 : 0, "Opt a receipt into the public proof feed.", receipts.filter((receipt) => receipt.public).length),
+    swampPassportBadge("launch-boss", "Launch Boss", launches.length > 0, Math.min(100, launches.length * 50), "Launch a coin through SlimeWire.", launches.length),
+    swampPassportBadge("referral-link", "Referral Link", Boolean(profile.referralCode), profile.referralCode ? 100 : 0, "Own a referral link.", profile.referralCode ? 1 : 0),
+    swampPassportBadge("referral-builder", "Referral Builder", referralCount > 0, Math.min(100, referralCount * 25), "Bring in referred traders.", referralCount)
+  ];
+  const earned = badges.filter((badge) => badge.earned).length;
+  const score = earned * 100 + Math.min(400, trades.length * 10) + Math.min(300, receipts.length * 25) + Math.min(300, launches.length * 75);
+  return {
+    updatedAt: new Date().toISOString(),
+    summary: {
+      earned,
+      total: badges.length,
+      score,
+      level: score >= 1400 ? "legend" : score >= 900 ? "raider" : score >= 500 ? "scout" : "newt"
+    },
+    stats: {
+      wallets: wallets.length,
+      connectedWallet: Boolean(profile.connectedWallet?.publicKey),
+      trades: trades.length,
+      buys,
+      sells,
+      tokenCount,
+      realizedSol: formatSignedLamports(received - spent),
+      launches: launches.length,
+      receipts: receipts.length,
+      publicReceipts: receipts.filter((receipt) => receipt.public).length,
+      referralCount
+    },
+    badges
+  };
 }
 
 // --- PvP deck duels: a small published-deck store for async battles ---

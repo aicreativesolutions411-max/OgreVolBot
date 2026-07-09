@@ -361,6 +361,14 @@
   .wbtn.ghost{background:none;color:var(--green);border:1px solid var(--border)}
   .wbtn:disabled{opacity:.6}
   .wnote{font-size:12px;color:var(--muted);line-height:1.5}
+  .swampgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin-top:8px}
+  .swampmini{border:1px solid var(--border2);border-radius:12px;background:var(--row);padding:10px 11px;min-width:0}
+  .swampmini b{display:block;font-size:12px;margin-bottom:4px}
+  .swampmini span{display:block;font-size:11px;color:var(--muted);line-height:1.35}
+  .swampactions{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}
+  .swampactions .chip{cursor:pointer;background:rgba(137,255,67,.04)}
+  .swampcheck{display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--muted);line-height:1.35;margin:7px 0;cursor:pointer}
+  .swampcheck input{margin-top:2px;flex:0 0 auto}
   .socbox{text-align:center}
   .socrow{display:flex;gap:9px;flex-wrap:wrap;margin-top:12px}
   .socbtn{flex:1;min-width:120px;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:11px 14px;border-radius:11px;font-weight:700;font-size:13px;color:var(--green);border:1px solid var(--border);background:rgba(137,255,67,.04);transition:.12s}
@@ -572,13 +580,17 @@
   // ---------- API + auth ----------
   const API_BASE=(window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||"https://ogrevolbot.onrender.com";
   const TOKEN_KEY="ogreWebToken"; // shared with the main SlimeWire app (same origin)
+  const SCOUT_QUEUE_KEY="ggSwampScoutQueue";
+  const ALERT_RULE_KEY="ggSwampAlertRules";
   const state={route:"trending",mint:null,trendTab:"best",trenchTab:"board",volTf:"h1",rows:[],pollT:null,
     token:localStorage.getItem(TOKEN_KEY)||"",user:null,wallets:[],activeWallet:null,
     presets:{trade:[],bundle:[]},activeTradePreset:localStorage.getItem("ggTradePreset")||"",searchTerm:"",pendingSell:null,portfolioTab:"positions",
     watch:new Set(),watchRows:[],
     // Seed positions from the last session so the Portfolio paints INSTANTLY on load, then refreshes.
     posCache:(function(){try{return JSON.parse(localStorage.getItem("ggPosCache")||"null");}catch(e){return null;}})(),
-    quickBuy:(function(){try{return JSON.parse(localStorage.getItem("ggQuickBuy")||"null");}catch(e){return null;}})()};
+    quickBuy:(function(){try{return JSON.parse(localStorage.getItem("ggQuickBuy")||"null");}catch(e){return null;}})(),
+    scoutQueue:(function(){try{const q=JSON.parse(localStorage.getItem(SCOUT_QUEUE_KEY)||"[]");return Array.isArray(q)?q.slice(0,24):[];}catch(e){return [];}})(),
+    alertRules:(function(){const d={kol:true,scout:true,launch:true,receipts:true};try{return Object.assign(d,JSON.parse(localStorage.getItem(ALERT_RULE_KEY)||"{}"));}catch(e){return d;}})()};
   // No credentials:include — the API returns ACAO:* which forbids credentialed CORS. Auth is the Bearer header.
   async function api(path,opts){
     opts=opts||{};
@@ -643,6 +655,141 @@
     if(w){bal.textContent="◎ "+Number(w.sol||0).toFixed(3);if(dot)dot.className="dot";}
     else if(state.token){bal.textContent="+ Wallet";if(dot)dot.className="dot off";}
     else{bal.textContent="Connect";if(dot)dot.className="dot off";}
+  }
+  function shortAscii(v){v=String(v||"");return v?v.slice(0,4)+"..."+v.slice(-4):"";}
+  function shareOrTweet(text,url){
+    url=url||location.href;
+    if(navigator.share){navigator.share({title:"SlimeWire",text,url}).catch(()=>{});return;}
+    window.open("https://x.com/intent/tweet?text="+encodeURIComponent(text)+"&url="+encodeURIComponent(url),"_blank","noopener");
+  }
+  function swampAction(label,onclick){return '<button class="chip" type="button" onclick="'+onclick+'">'+esc(label)+'</button>';}
+  function swampMini(title,body,actions){return '<div class="swampmini"><b>'+esc(title)+'</b><span>'+body+'</span>'+(actions?'<div class="swampactions">'+actions+'</div>':'')+'</div>';}
+  function tgMuckMapUrl(){return "https://t.me/SlimeWiredBot?startapp=muck-map";}
+  function openMuckMap(){window.open(tgMuckMapUrl(),"_blank","noopener");}
+  function blinkTarget(kind,mint){
+    mint=String(mint||"").trim();
+    if(kind==="scan")return location.origin+"/gg?ca="+encodeURIComponent(mint);
+    if(kind==="trade")return location.origin+"/gg?token="+encodeURIComponent(mint)+"&buy=1";
+    return coinRouteUrl(mint);
+  }
+  function copyBlink(kind,mint){copy(blinkTarget(kind,mint));toast((kind==="scan"?"Scan":kind==="trade"?"Trade":"Share")+" link copied");}
+  function shareBlink(mint){
+    const r=(state.tradeRow&&state.tradeRow.tokenMint===mint)?state.tradeRow:null;
+    const sym=(r&&r.symbol)||shortAscii(mint);
+    shareOrTweet("Scan and trade "+sym+" on SlimeWire.",blinkTarget("share",mint));
+  }
+  function blinkLinksHtml(mint,r){
+    mint=String(mint||"").trim();if(!mint)return "";
+    const sym=(r&&(r.symbol||r.name))||shortAscii(mint);
+    return '<details class="fold" style="margin-top:12px"><summary>Blink-to-scan/trade/share<span class="sub">'+esc(sym)+'</span><span class="chev">v</span></summary><div class="foldbody">'+
+      '<p class="wnote" style="margin:0 0 10px">Portable links for scanner posts, one-tap trade handoffs, and public share cards.</p>'+
+      '<div class="swampgrid">'+
+        swampMini("Scan link","Opens this coin with chart, socials, and safety data.",swampAction("Copy scan","GG.copyBlink('scan','"+esc(mint)+"')")+swampAction("Save receipt","GG.saveScanReceipt('"+esc(mint)+"')"))+
+        swampMini("Trade link","Opens this coin with the buy flow ready for confirmation.",swampAction("Copy trade","GG.copyBlink('trade','"+esc(mint)+"')"))+
+        swampMini("Share link","Posts the coin route without adding extra clutter to the trade screen.",swampAction("Share","GG.shareBlink('"+esc(mint)+"')"))+
+      '</div></div></details>';
+  }
+  function verifiedReceiptsHtml(pnl){
+    const t=(pnl&&pnl.totals)||{};state._lastPnlTotals=t;
+    const rz=Number(t.realizedSol),realized=isFinite(rz)?((rz>=0?"+":"")+rz.toFixed(3)+" SOL"):"pending";
+    const trades=Number(t.tradeCount||0);
+    return '<details class="fold" style="grid-column:1/-1"><summary>Verified Swamp Receipts sharing<span class="sub">proof links, PnL cards, share text</span><span class="chev">v</span></summary><div class="foldbody">'+
+      '<div class="swampgrid">'+
+        swampMini("Receipt summary",esc(realized)+" realized across "+esc(String(trades))+" closed trade"+(trades===1?"":"s")+".",swampAction("Copy proof","GG.copyReceipt()")+swampAction("Share","GG.shareReceipt()"))+
+        swampMini("Card flow","Use any closed trade row to generate a verified PnL card, then save or share it.",swampAction("Refresh history","GG.go('portfolio')"))+
+        swampMini("Public route","The receipt points back to SlimeWire instead of a loose screenshot.",swampAction("Copy portfolio link","GG.copy('"+esc(location.origin+"/gg#portfolio")+"')"))+
+      '</div></div></details>';
+  }
+  function receiptText(mint){
+    const t=state._lastPnlTotals||{},rz=Number(t.realizedSol);
+    if(mint)return "Verified Swamp Receipt: trade proof on SlimeWire for "+shortAscii(mint)+". "+coinRouteUrl(mint);
+    return "Verified Swamp Receipts: "+(isFinite(rz)?((rz>=0?"+":"")+rz.toFixed(3)+" SOL realized"):"trade history")+" on SlimeWire. "+location.origin+"/gg#portfolio";
+  }
+  async function recordSwampReceipt(kind,mint,summary,pub){
+    if(!state.token)return null;
+    const body={kind:kind||"share",tokenMint:mint||"",summary:summary||receiptText(mint),source:"gg",public:!!pub};
+    const {ok,d}=await jpost("/api/web/swamp/receipts",body);
+    return ok&&d&&d.ok?d.receipt:null;
+  }
+  function copyReceipt(mint){const txt=receiptText(mint);copy(txt);toast("Receipt proof copied");recordSwampReceipt("trade",mint,txt,false);}
+  function shareReceipt(mint){const txt=receiptText(mint);shareOrTweet(txt,mint?coinRouteUrl(mint):(location.origin+"/gg#portfolio"));recordSwampReceipt("trade",mint,txt,true);}
+  function saveScanReceipt(mint){recordSwampReceipt("scan",mint,"SlimeWire scan saved from the token chart.",true).then(r=>toast(r?"Scan receipt saved":"Connect an account to save receipts",!r));}
+  function saveScoutQueue(){try{localStorage.setItem(SCOUT_QUEUE_KEY,JSON.stringify((state.scoutQueue||[]).slice(0,24)));}catch(e){}}
+  function rerenderSwampSurface(){if(state.route==="copy")renderCopy();else if(state.route==="sniper")renderSniper();else if(state.route==="wallet")renderWallet();}
+  function scoutAdd(raw){
+    const value=String(raw||"").trim();if(!value){toast("Add a CA, wallet, ticker, or note to scout.",true);return;}
+    const id="sq-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,5);
+    const chain=detectChain(value);
+    state.scoutQueue=[{id,value,chain,label:chain?shortAscii(value):value.slice(0,48),addedAt:Date.now()}].concat(state.scoutQueue||[]).slice(0,24);
+    saveScoutQueue();toast("Added to Swamp Scout Queue");rerenderSwampSurface();
+  }
+  function scoutOpen(id){const q=(state.scoutQueue||[]).find(x=>x.id===id);if(!q)return;const chain=detectChain(q.value);if(chain){openCoinRoute(q.value);return;}copy(q.value);}
+  function scoutRemove(id){state.scoutQueue=(state.scoutQueue||[]).filter(x=>x.id!==id);saveScoutQueue();rerenderSwampSurface();}
+  function swampScoutQueueHtml(){
+    const rows=(state.scoutQueue||[]).slice(0,8).map(q=>'<div class="walletrow" style="padding:9px 10px;margin-bottom:7px"><div class="ico" style="width:32px;height:32px;font-size:13px">SQ</div><div class="info" style="min-width:0"><b>'+esc(q.label||shortAscii(q.value))+'</b><div class="addr mut">'+esc(q.chain||"note")+' · '+esc(shortAscii(q.value)||q.value.slice(0,22))+'</div></div><button class="wbtn ghost" style="padding:7px 10px" onclick="GG.scoutOpen(\''+esc(q.id)+'\')">Open</button><button class="wbtn ghost" style="padding:7px 10px" onclick="GG.scoutRemove(\''+esc(q.id)+'\')">Remove</button></div>').join("");
+    return '<details class="fold" data-scout-box style="grid-column:1/-1"><summary>Swamp Scout Queue<span class="sub">triage coins, wallets, caller ideas</span><span class="chev">v</span></summary><div class="foldbody">'+
+      '<div class="field"><label>Add scout item</label><div style="display:flex;gap:8px"><input data-scout-input placeholder="CA, wallet, ticker, or note" style="flex:1;min-width:0"><button class="wbtn ghost" data-scout-add style="flex:0 0 auto">Add</button></div></div>'+
+      (rows||'<p class="mut" style="font-size:12px;margin:4px 0 0">Queue is empty. Add a CA or wallet while you research.</p>')+
+      '</div></details>';
+  }
+  function wireSwampScoutQueue(){
+    document.querySelectorAll("[data-scout-add]").forEach(btn=>btn.onclick=()=>{const box=btn.closest("[data-scout-box]");const inp=box&&box.querySelector("[data-scout-input]");scoutAdd(inp?inp.value:"");});
+    document.querySelectorAll("[data-scout-input]").forEach(inp=>inp.onkeydown=(e)=>{if(e.key==="Enter"){e.preventDefault();scoutAdd(inp.value);}});
+  }
+  function kolCallerCardsHtml(){
+    return '<details class="fold" style="grid-column:1/-1"><summary>KOL Caller Cards<span class="sub">copyable caller briefs</span><span class="chev">v</span></summary><div class="foldbody"><div class="swampgrid">'+
+      swampMini("Hot caller","Summarize the hottest active caller with ROI, win rate, and current coin.",swampAction("Copy hot card","GG.kolCallerCard('hot')"))+
+      swampMini("Consistency card","Frame a steady wallet with recent wins and copy-risk notes.",swampAction("Copy steady card","GG.kolCallerCard('consistent')"))+
+      swampMini("Fresh caller","Package a new caller candidate into a scoutable brief.",swampAction("Queue fresh","GG.kolCallerCard('fresh')"))+
+      '</div></div></details>';
+  }
+  function kolCallerCard(kind){
+    const k=(state._kols||[])[0]||{};
+    const title=kind==="consistent"?"Consistent KOL Caller Card":kind==="fresh"?"Fresh KOL Caller Card":"Hot KOL Caller Card";
+    const wallet=k.wallet||"paste-wallet";
+    const text=title+"\nName: "+(k.name||k.shortWallet||"KOL")+"\nWallet: "+wallet+"\nROI: "+(k.roiLabel||"n/a")+"\nWin rate: "+(k.winRateLabel||"n/a")+"\nRoute: "+location.origin+"/gg#copy";
+    copy(text);toast("Caller card copied");
+    if(kind==="fresh"&&wallet!=="paste-wallet")scoutAdd(wallet);
+  }
+  function launchBossFoldHtml(){
+    return '<details class="fold" style="margin-bottom:14px"><summary>Launch Boss Raids / Eggs<span class="sub">raid post, egg link, room handoff</span><span class="chev">v</span></summary><div class="foldbody"><div class="swampgrid">'+
+      swampMini("Boss raid room","Copy a launch-room brief, then send holders to Lounge or Telegram.",swampAction("Copy raid brief","GG.copyLaunchBoss('raid')")+swampAction("Open Lounge","GG.go('lounge')"))+
+      swampMini("Egg links","Short post hooks for early supporters, giveaways, and reveal moments.",swampAction("Copy egg post","GG.copyLaunchBoss('egg')"))+
+      swampMini("Muck Map handoff","Send buyers to the Telegram Mini App map after the first trades land.",swampAction("Open Muck Map","GG.openMuckMap()"))+
+      '</div></div></details>';
+  }
+  function copyLaunchBoss(kind){
+    const name=(($("#lcName")||{}).value||"New launch").trim();
+    const sym=(($("#lcSym")||{}).value||"TICKER").trim();
+    const text=kind==="egg"
+      ? "Egg drop for $"+sym+": early supporters, receipts, and map clues here -> "+tgMuckMapUrl()
+      : "Launch Boss Raid: $"+sym+" / "+name+" is staging on SlimeWire. Scan, trade, share receipts, then meet in Lounge -> "+location.origin+"/gg#launch";
+    copy(text);toast(kind==="egg"?"Egg post copied":"Raid brief copied");
+  }
+  function alertRulesHtml(){
+    const r=state.alertRules||{};
+    const row=(k,txt)=>'<label class="swampcheck"><input type="checkbox" data-alert-rule value="'+k+'" '+(r[k]?"checked":"")+'> <span>'+esc(txt)+'</span></label>';
+    return '<div data-alert-rules>'+row("kol","KOL pile-on: tracked caller plus smart-wallet confluence.")+row("scout","Scout queue: watched CA or wallet starts moving.")+row("launch","Launch Boss: fresh launch, egg post, or raid-room milestone.")+row("receipts","Receipts: PnL card or verified receipt ready to share.")+'<div class="swampactions"><button class="chip" data-alert-save type="button">Save alert rules</button><button class="chip" type="button" onclick="GG.enableAlerts()">Enable push</button></div></div>';
+  }
+  function swampPassportFoldHtml(){
+    const w=activeWalletObj(),u=state.user||{},pid=w?("SWP-"+shortAscii(w.publicKey)):"SWP-guest";
+    return '<details class="fold"><summary>Swamp Passport<span class="sub">Muck Map · alert rules · share links</span><span class="chev">v</span></summary><div class="foldbody">'+
+      '<div class="swampgrid">'+
+        swampMini("Swamp Passport","ID "+esc(pid)+" · "+(w?"wallet linked":"connect a wallet to stamp it")+".",swampAction("Copy passport","GG.copyPassport()"))+
+        swampMini("Telegram Mini App Muck Map","Open or copy the Mini App map for on-phone scouting.",swampAction("Open map","GG.openMuckMap()")+swampAction("Copy link","GG.copy('"+esc(tgMuckMapUrl())+"')"))+
+        swampMini("Blink links","Use coin pages to copy scan, trade, and share links.",swampAction("Open Trending","GG.go('trending')"))+
+      '</div><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 7px">Alert Rules</div>'+alertRulesHtml()+
+      (u.referralLink?'<p class="wnote" style="margin:12px 0 0">Referral attached: <b>'+esc(u.referralCode||shortAscii(u.referralLink))+'</b></p>':'')+
+      '</div></details>';
+  }
+  function copyPassport(){
+    const w=activeWalletObj(),u=state.user||{};
+    const text="Swamp Passport\nID: "+(w?("SWP-"+shortAscii(w.publicKey)):"SWP-guest")+"\nWallet: "+(w?(w.publicKey||""):"not linked")+"\nMuck Map: "+tgMuckMapUrl()+"\nReferral: "+(u.referralLink||"");
+    copy(text);toast("Passport copied");
+  }
+  function wireSwampOps(){
+    document.querySelectorAll("[data-alert-save]").forEach(btn=>btn.onclick=()=>{const box=btn.closest("[data-alert-rules]");const next={};if(box)box.querySelectorAll("[data-alert-rule]").forEach(c=>{next[c.value]=!!c.checked;});state.alertRules=Object.assign({kol:false,scout:false,launch:false,receipts:false},next);try{localStorage.setItem(ALERT_RULE_KEY,JSON.stringify(state.alertRules));}catch(e){}toast("Alert rules saved");});
+    wireSwampScoutQueue();
   }
   async function createWallet(){
     if(!(await ensureAccount())){toast("Could not start your account — try again.",true);return false;}
@@ -905,6 +1052,7 @@
     {ic:"🎯",label:"Wallet Launch Snipe",route:"walletLaunch"},
     {ic:"🎯",label:"Launch Snipe",route:"sniper"},
     {ic:"🚀",label:"Launch a Coin",route:"launch"},
+    {ic:"MM",label:"Telegram Mini App Muck Map",url:tgMuckMapUrl()},
     {ic:"🗺️",label:"Bubble Map — who's holding (KOLs · whales · clusters)",url:"/map"},
     {ic:"💰",label:"Airdrop Map — who the dev fed & who's still holding",url:"/airdrop"},
   ];
@@ -1583,6 +1731,7 @@
         '</div>'+
         '<p class="wnote" style="margin:10px 0 14px">Trades run from your active wallet. Use Robinhood ETH for max speed, or SOL auto-fund when you only have SOL. Standard SlimeWire trade fee applies, same as Solana.</p>'+
       '</div></div>';
+    const rhBlink=$("#rhSafety");if(rhBlink){const h=document.createElement("div");h.innerHTML=blinkLinksHtml(address,r);if(h.firstElementChild)rhBlink.insertAdjacentElement("afterend",h.firstElementChild);}
     const pe=$("#rhPayEth");if(pe)pe.onclick=()=>{state.rhPayAsset="eth";renderRhTrade();};
     const ps=$("#rhPaySol");if(ps)ps.onclick=()=>{state.rhPayAsset="sol";renderRhTrade();};
     const buyLabel=Array.from(document.querySelectorAll("#v-rhtrade span")).find(s=>String(s.textContent||"").trim()==="Buy (ETH)");
@@ -1894,8 +2043,10 @@
       '<div class="field row2"><div><label>Take profit %</label><input id="snTp" inputmode="numeric" placeholder="off" value="'+esc(q.tp||"")+'"></div><div><label>Stop loss %</label><input id="snSl" inputmode="numeric" placeholder="off" value="'+esc(q.sl||"")+'"></div></div>'+
       '<div class="field row2"><div><label>Slippage (bps)</label><input id="snSlip" inputmode="numeric" value="'+esc(q.slip||"700")+'"></div><div style="display:flex;align-items:flex-end"><button class="bigbuy" id="snArm" style="width:100%">🎯 Arm sniper</button></div></div>'+
       '<div id="snStatus" class="lcnote" style="display:none"></div>'+
+      swampScoutQueueHtml()+
       '<div style="display:flex;align-items:center;gap:8px;margin:16px 0 8px"><span class="pulse"></span><b style="font-size:13px">Fresh launches</b><span class="mut" id="snCount" style="font-size:12px"></span></div>'+
       '<div id="snFeed"><div class="loading"><span class="spin"></span></div></div></div></div>';
+    wireSwampScoutQueue();
     $("#snArm").onclick=async()=>{
       const ab=$("#snArm");
       if(state.sniperWatch&&state.sniperWatch.id){
@@ -2393,6 +2544,7 @@
         '<button class="tradefab" id="tradeFab" onclick="GG.flipTrade()" aria-label="Flip between bigger chart and bigger buy panel">💰 Buy</button>'+
       '</div>';
     wireTradePanel(mint,r);updateWselLine();paintPresetSel();wireCtab();loadTradePnl(mint);loadTradeStats(mint);
+    const blSec=$("#secbox");if(blSec){const h=document.createElement("div");h.innerHTML=blinkLinksHtml(mint,r);if(h.firstElementChild)blSec.insertAdjacentElement("afterend",h.firstElementChild);}
     const mb=$("#ctMoreBtn");if(mb)mb.onclick=(e)=>{e.stopPropagation();mb.parentNode.classList.toggle("open");};
     if(state.token&&!(state.presets.trade||[]).length){loadPresets().then(()=>{if(state.route==="trade")paintPresetSel();});}
     if(!r){const rows=await fetchPairs(tabById("best"));r=rows.find(x=>x.tokenMint===mint)||null;if(r&&state.route==="trade"){state.tradeRow=r;$("#thead").innerHTML=theadHtml(r);fillPerf(r);}}
@@ -2978,7 +3130,7 @@
         '<button class="wbtn ghost" style="margin-left:10px;padding:9px 12px" onclick="event.stopPropagation();GG.open(\''+esc(token)+'\')">Chart</button>'+
         '<button class="wbtn ghost" style="padding:9px 12px" onclick="event.stopPropagation();GG.pnlCard(\''+esc(token)+'\',\''+esc(sym||"")+'\')">🏆 Card</button></div>';
     }).join(""):'<p class="mut" style="font-size:12px">No closed trades yet — your trade history &amp; PnL cards appear here once you take some profit.</p>';
-    view.innerHTML='<div class="wgrid">'+totals+'<div class="wbox"><h3>📜 Trade history</h3><p class="sub">Every coin you\'ve closed, with realized PnL. Tap <b>🏆 Card</b> to build a shareable SlimeWire PnL card you can save &amp; post on X.</p>'+list+'</div></div>';
+    view.innerHTML='<div class="wgrid">'+totals+verifiedReceiptsHtml(pnl)+'<div class="wbox"><h3>📜 Trade history</h3><p class="sub">Every coin you\'ve closed, with realized PnL. Tap <b>🏆 Card</b> to build a shareable SlimeWire PnL card you can save &amp; post on X.</p>'+list+'</div></div>';
   }
   async function openPnlCard(mint,sym){
     toast("Building your PnL card…");
@@ -2990,6 +3142,7 @@
         '<img src="'+url+'" style="width:100%;border-radius:12px;border:1px solid var(--border);margin:4px 0 12px">'+
         '<div style="display:flex;gap:9px;flex-wrap:wrap"><a class="wbtn" style="flex:1;min-width:105px;text-align:center;text-decoration:none" href="'+url+'" download="slimewire-pnl-'+esc((sym||"card").replace(/[^a-z0-9]/gi,""))+'.png">Save card</a>'+
         '<button class="wbtn ghost" style="flex:1;min-width:105px" onclick="GG.copy(\''+esc(coinRouteUrl(mint))+'\')">Copy link</button>'+
+        '<button class="wbtn ghost" style="flex:1;min-width:105px" onclick="GG.shareReceipt(\''+esc(mint)+'\')">Share receipt</button>'+
         '<button class="wbtn ghost" style="flex:1;min-width:105px" onclick="GG.closeModal();GG.open(\''+esc(mint)+'\')">Chart</button></div>');
     }catch(e){toast("Could not build card",true);}
   }
@@ -3204,6 +3357,7 @@
           '</div><button class="wbtn ghost" id="saveRefSplit">Save split</button>'+
         '</div></details>';})();
     }
+    wrap.innerHTML+=swampPassportFoldHtml();
     // Community social links — present on the wallet page for both signed-out and signed-in states.
     wrap.innerHTML+='<div class="wbox socbox"><h3>🐸 Join the SlimeWire community</h3><p class="sub">News, alpha drops and support — straight from the swamp.</p>'+
       '<div class="socrow">'+
@@ -3211,7 +3365,7 @@
         '<a class="socbtn" href="https://t.me/SlimeWiredBot" target="_blank" rel="noopener noreferrer">✈ Telegram</a>'+
         '<a class="socbtn" href="https://www.slimewire.org" target="_blank" rel="noopener noreferrer">🌐 Website</a>'+
       '</div></div>';
-    view.innerHTML="";view.appendChild(wrap);
+    view.innerHTML="";view.appendChild(wrap);wireSwampOps();
     const cf=$("#connectFundBtn");if(cf)cf.onclick=()=>openConnectModal();
     const mk=$("#mkWallet");if(mk)mk.onclick=async()=>{mk.disabled=true;mk.textContent="Creating…";await createWallet();if(state.route==="wallet")renderWallet();};
     const rs=$("#restoreBtn");if(rs)rs.onclick=()=>restoreModal();
@@ -3799,6 +3953,8 @@
         '<div id="lcChatBody">'+(mint?lcChatForMint(mint):'<p class="mut" style="font-size:12px">💬 Chat &amp; live light up once you launch a coin (or paste any coin CA above). They open on pump.fun in one tap, and the coin\'s live SlimeWire room loads right here.</p>')+'</div>'+
       '</div>'+
       '<button class="bigbuy" id="lcGo" style="margin-top:16px">🚀 Launch token</button><div id="lcOut" style="margin-top:12px"></div></div></div>';
+    const bossHost=$("#v-launch .wbox"),bossTabs=$("#v-launch .tabs");
+    if(bossHost&&bossTabs){const h=document.createElement("div");h.innerHTML=launchBossFoldHtml();if(h.firstElementChild)bossHost.insertBefore(h.firstElementChild,bossTabs);}
     // Tab switching toggles panel visibility WITHOUT re-rendering, so typed fields + uploaded images survive.
     document.querySelectorAll("#v-launch [data-ltab]").forEach(b=>b.onclick=()=>{state.launchTab=b.dataset.ltab;document.querySelectorAll("#v-launch [data-ltab]").forEach(x=>x.classList.toggle("on",x===b));document.querySelectorAll("#v-launch [data-lpanel]").forEach(p=>p.style.display=(p.dataset.lpanel===b.dataset.ltab?"":"none"));if(b.dataset.ltab==="chat")lcWireChat();});
     // Rail picker (no re-render — keeps typed fields/images). meteora is dark; the backend returns a clear "test mode" message.
@@ -3923,9 +4079,12 @@
         '<div class="field row2"><div><label>Take profit %</label><input id="cpTp" inputmode="numeric" value="25"></div><div><label>Stop loss %</label><input id="cpSl" inputmode="numeric" value="8"></div></div>'+
         '<button class="wbtn" id="cpGo">Start copying</button></div>'+
       activeCopyWalletsHtml(copyWatches)+
+      kolCallerCardsHtml()+
+      swampScoutQueueHtml()+
       '<div class="wbox" style="grid-column:1/-1"><h3 id="kolH">🔥 KOL Buys</h3><p class="sub" id="kolD">What known KOL wallets are buying right now.</p><div id="kolList"><div class="loading" style="padding:18px"><span class="spin"></span></div></div></div>'+
     '</div>';
     document.querySelectorAll("[data-copy-stop]").forEach(btn=>btn.onclick=()=>stopCopyWalletWatch(btn.getAttribute("data-copy-stop"),btn));
+    wireSwampScoutQueue();
     $("#cpGo").onclick=async()=>{const w=$("#cpWallet").value.trim();if(!w){toast("Paste a wallet to copy.",true);return;}if(!(await ensureTradeReady()))return;const b=$("#cpGo");b.disabled=true;b.textContent="Starting…";const {ok,status,d}=await jpost("/api/web/kol/copy-wallet",{copyWallet:w,walletIndexes:[state.activeWallet],amountSol:$("#cpAmt").value.trim()||"0.1",slippageBps:Number($("#cpSlip").value.trim()||"500"),takeProfitPct:$("#cpTp").value.trim()||"25",stopLossPct:$("#cpSl").value.trim()||"8",sellDelay:"off",loopCount:"1"});b.disabled=false;b.textContent="Start copying";if(status===401){setToken("");go("wallet");return;}if(ok&&d&&d.ok){toast("Now copying "+short(w)+" — buys mirror to your wallet");renderCopy();}else toast((d&&d.error)||"Could not start copy",true);};
     loadKol();
   }
@@ -4101,7 +4260,8 @@
     // Coin-image fallback: if the fast proxy thumbnail fails, try the raw URL once, then the logo.
     avFallback:(img)=>{const ph="/assets/slimewire/png/slimewire-mark.png?v=logo4";const raw=img.getAttribute("data-raw")||"";if(raw&&!img.dataset.fb&&img.src.indexOf("weserv")>-1){img.dataset.fb="1";img.src=raw;}else{img.onerror=null;img.src=ph;}},
     removeWalletPrompt:(i)=>{const w=state.wallets.find(x=>x.index===i);if(w)removeWalletModal(w);},
-    refreshPos:refreshPositionsNow};
+    refreshPos:refreshPositionsNow,
+    copyBlink,shareBlink,copyReceipt,shareReceipt,saveScanReceipt,scoutOpen,scoutRemove,kolCallerCard,copyLaunchBoss,openMuckMap,copyPassport};
   // Register the service worker on load so the NEW terminal is an installable PWA (manifest + SW =
   // "Install app" / "Add to Home Screen"). Push opt-in re-registers the same scope later; harmless.
   if("serviceWorker" in navigator){try{navigator.serviceWorker.register("/sw.js").catch(()=>{});}catch(e){}}
