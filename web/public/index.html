@@ -1545,6 +1545,10 @@
     const ca=el("button","chip cachip");ca.title="Click to copy contract address";ca.innerHTML=esc(short(address))+' <span class="cc">⧉</span>';ca.onclick=()=>copy(address);sb.appendChild(ca);
     const pill=el("button","chip qbpill");pill.style.cssText="margin-left:auto";pill.textContent="⚡ "+rhQuickEth()+" ETH presets";pill.title="Set your Robinhood quick-buy amounts";pill.onclick=()=>rhPresetModal();sb.appendChild(pill);
     const st=(v)=>v==null?"—":fmtUsd(Number(v));
+    const rhPayAsset=state.rhPayAsset||"eth";
+    const buyUnit=rhPayAsset==="sol"?"SOL":"ETH";
+    const buyPresets=rhPayAsset==="sol"?["0.01","0.025","0.05","0.10"]:rhPresets();
+    const payStyle=(on)=>on?"border-color:var(--green);color:var(--green);background:var(--green-dim)":"";
     const rhAge=(iso)=>{const s=(Date.now()-Date.parse(iso||0))/1000;return !isFinite(s)||s<0?"":s<5400?Math.round(s/60)+"m":s<129600?Math.round(s/3600)+"h":Math.round(s/86400)+"d";};
     const statsHtml=()=>'<span>Price <b>'+(r.priceUsd?('$'+(r.priceUsd>=1?r.priceUsd.toFixed(2):r.priceUsd.toPrecision(3))):"—")+'</b></span><span>MC <b>'+st(r.marketCapUsd)+'</b></span><span>Liq <b>'+st(r.liquidityUsd)+'</b></span><span>Vol 24h <b>'+st(r.volume24hUsd)+'</b></span><span>Holders <b>'+(r.holders||0)+'</b></span>'+(r.createdAt?'<span>Age <b>'+rhAge(r.createdAt)+'</b></span>':'');
     $("#v-rhtrade").innerHTML='<div style="display:flex;flex-direction:column;height:100%;overflow:auto">'+
@@ -1562,7 +1566,11 @@
         '<div id="rhSafety" class="mut" style="font-size:11px;margin-bottom:8px">🛡 Scanning coin for honeypot / sell traps…</div>'+
         '<div id="rhTmBal" class="mut" style="font-size:11px;margin-bottom:10px">Checking your wallet…</div>'+
         '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Buy (ETH)</span><button class="chip" style="font-size:10px;padding:2px 8px" onclick="GG.rhPresetModal()">⚙ presets</button></div>'+
-        '<div style="display:flex;gap:6px;margin-bottom:8px">'+rhPresets().map(a=>'<button class="wbtn ghost" style="flex:1;padding:9px 4px;font-size:13px" onclick="GG.rhBuy(\''+esc(address)+'\',\''+esc(a)+'\')">'+esc(a)+'</button>').join("")+'</div>'+
+        '<div class="field" style="margin:0 0 8px"><label>Pay with</label><div style="display:flex;gap:8px">'+
+          '<button class="swtok" id="rhPayEth" style="flex:1;text-align:center;'+payStyle(rhPayAsset!=="sol")+'">Robinhood ETH</button>'+
+          '<button class="swtok" id="rhPaySol" style="flex:1;text-align:center;'+payStyle(rhPayAsset==="sol")+'">SOL auto-fund</button>'+
+        '</div><span class="swhint" style="margin-top:5px;display:block">ETH is fastest if funded. SOL mode swaps SOL to RH ETH, waits for it to land, then buys.</span></div>'+
+        '<div style="display:flex;gap:6px;margin-bottom:8px">'+buyPresets.map(a=>'<button class="wbtn ghost" style="flex:1;padding:9px 4px;font-size:13px" onclick="GG.rhBuyAmount(\''+esc(address)+'\',\''+esc(a)+'\')">'+esc(a)+'</button>').join("")+'</div>'+
         '<div style="display:flex;gap:8px;margin-bottom:4px"><input id="rhTmAmt" inputmode="decimal" placeholder="custom ETH" style="flex:1;min-width:0"><button class="wbtn" id="rhTmBuy" style="flex:0 0 auto">⚡ Buy</button></div>'+
         '<div id="rhTmSellSec" style="display:none"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:10px 0 6px">Sell (% of your bag)</div>'+
         '<div style="display:flex;gap:6px">'+[25,50,75,100].map(p=>'<button class="wbtn ghost" style="flex:1;padding:9px 4px;font-size:13px" onclick="GG.rhSell(\''+esc(address)+'\','+p+')">'+p+'%</button>').join("")+'</div></div>'+
@@ -1573,9 +1581,14 @@
           '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhBundleModal(\''+esc(address)+'\')">📦 Bundle buy</button>'+
           '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhVolumeModal(\''+esc(address)+'\')">🔁 Volume bot</button>'+
         '</div>'+
-        '<p class="wnote" style="margin:10px 0 14px">Trades run from your active wallet\'s Robinhood account, paid in its ETH. One tap = real trade, no confirm. Standard SlimeWire trade fee applies, same as Solana.</p>'+
+        '<p class="wnote" style="margin:10px 0 14px">Trades run from your active wallet. Use Robinhood ETH for max speed, or SOL auto-fund when you only have SOL. Standard SlimeWire trade fee applies, same as Solana.</p>'+
       '</div></div>';
-    const cb=$("#rhTmBuy");if(cb)cb.onclick=()=>{const a=($("#rhTmAmt")||{}).value;if(!(Number(a)>0)){toast("Enter an ETH amount.",true);return;}rhTrade(address,"buy",{amountEth:String(a)});};
+    const pe=$("#rhPayEth");if(pe)pe.onclick=()=>{state.rhPayAsset="eth";renderRhTrade();};
+    const ps=$("#rhPaySol");if(ps)ps.onclick=()=>{state.rhPayAsset="sol";renderRhTrade();};
+    const buyLabel=Array.from(document.querySelectorAll("#v-rhtrade span")).find(s=>String(s.textContent||"").trim()==="Buy (ETH)");
+    if(buyLabel)buyLabel.textContent="Buy ("+buyUnit+")";
+    const amtInput=$("#rhTmAmt");if(amtInput)amtInput.placeholder="custom "+buyUnit;
+    const cb=$("#rhTmBuy");if(cb)cb.onclick=()=>{const a=($("#rhTmAmt")||{}).value;if(!(Number(a)>0)){toast("Enter a "+buyUnit+" amount.",true);return;}rhBuyAmount(address,String(a));};
     // Freshen price/MC/liq/pair on open; mount the chart if the pair just appeared.
     rhEnrichRows([r]).then((changed)=>{
       if(state.route==="rhtrade"&&changed){
@@ -1793,6 +1806,11 @@
   // TOP WALLET PICKS — the whole "picks" tab is now the coins the top wallets & KOLs are buying right now
   // (backend /api/web/top-wallets: ST live buys when on, free RPC wallet-watch as backup), NEWEST FIRST.
   // Single full-width list, steady in-place refresh (syncCards, ~15s), client-enriched socials + stats.
+  function rhBuyAmount(address,amount){
+    const a=String(amount||"").trim();
+    if((state.rhPayAsset||"eth")==="sol")return rhTrade(address,"buy",{payCurrency:"SOL",amountSol:a});
+    return rhTrade(address,"buy",{payCurrency:"ETH",amountEth:a});
+  }
   async function renderSlimePicks(wrap){
     wrap.dataset.mode="picks";
     const fresh=!wrap.querySelector(".pickwrap");
@@ -3267,8 +3285,8 @@
   // that swaps buy↔sell (SOL↔token). Token side picks from popular pairs or a custom CA. Tap flip
   // again to swap back. SOL↔token only — buy spends SOL, sell takes a % of the token you hold.
   const SWAP_POPULAR=[{s:"USDC",m:"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"},{s:"USDT",m:"Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"},{s:"JUP",m:"JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"},{s:"RAY",m:"4k3Dyjzvzp8eCTuFJYgmGnN95VhWPuTsf1KfzYEU7K1k"},{s:"BONK",m:"DezXAZ8z7PnrnRJjz3uq8NgV8Q9ddCzB9Ckr7JpPvvR"},{s:"WIF",m:"EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLQBkRzUPzWf"}];
-  let swapDir="buy",swapTok=null,swapChain="solana";   // chain follows the pasted CA (0x=Robinhood, base58=Solana)
-  function swapAssetMeta(){return swapChain==="robinhood"?{asset:"ETH",icon:"🪶",label:"Robinhood ETH",amtPh:"0.01"}:{asset:"SOL",icon:"◎",label:"SOL",amtPh:"0.5"};}
+  let swapDir="buy",swapTok=null,swapChain="solana",swapRhPayAsset="eth";   // chain follows the pasted CA (0x=Robinhood, base58=Solana)
+  function swapAssetMeta(){return swapChain==="robinhood"?(swapRhPayAsset==="sol"?{asset:"SOL",icon:"\u25ce",label:"SOL auto-fund",amtPh:"0.05"}:{asset:"ETH",icon:"RH",label:"Robinhood ETH",amtPh:"0.01"}):{asset:"SOL",icon:"\u25ce",label:"SOL",amtPh:"0.5"};}
   async function renderSwap(){
     setActiveView("v-swap");subbarTool("🔄 Swap");if(state.token){await refreshWallets();await loadPresets();}if(state.route!=="swap")return;
     paintSwap();
@@ -3315,8 +3333,14 @@
     const swWal=$("#swWal");if(swWal){swWal.value=String(state.activeWallet||1);swWal.onchange=()=>{state.activeWallet=Number(swWal.value)||state.activeWallet;updateWalletPill();};}
     $("#swFlip").onclick=()=>{swapDir=swapDir==="buy"?"sell":"buy";paintSwap();};
     const tb=$("#swTok");if(tb)tb.onclick=()=>openSwapTokenPicker();
-    $("#swAssetSol").onclick=()=>{if(swapChain!=="solana"){swapChain="solana";if(swapTok&&swapTok.chain!=="solana")swapTok=null;paintSwap();}};
-    $("#swAssetRh").onclick=()=>{if(swapChain!=="robinhood"){swapChain="robinhood";if(swapTok&&swapTok.chain!=="robinhood")swapTok=null;paintSwap();}};
+    const swSolBtn=$("#swAssetSol"),swRhBtn=$("#swAssetRh");
+    const swSolActive=swapChain==="solana"||(swapChain==="robinhood"&&swapRhPayAsset==="sol");
+    const swRhActive=swapChain==="robinhood"&&swapRhPayAsset!=="sol";
+    const paintAssetBtn=(btn,on)=>{if(!btn)return;btn.style.borderColor=on?"var(--green)":"";btn.style.color=on?"var(--green)":"";btn.style.background=on?"var(--green-dim)":"";};
+    if(swSolBtn){swSolBtn.textContent=swapChain==="robinhood"?"SOL auto-fund":"SOL";paintAssetBtn(swSolBtn,swSolActive);}
+    if(swRhBtn){swRhBtn.textContent="Robinhood ETH";paintAssetBtn(swRhBtn,swRhActive);}
+    $("#swAssetSol").onclick=()=>{if(swapChain==="robinhood"&&swapTok&&swapTok.chain==="robinhood"){swapRhPayAsset="sol";paintSwap();return;}if(swapChain!=="solana"){swapChain="solana";if(swapTok&&swapTok.chain!=="solana")swapTok=null;paintSwap();}};
+    $("#swAssetRh").onclick=()=>{swapRhPayAsset="eth";if(swapChain!=="robinhood"){swapChain="robinhood";if(swapTok&&swapTok.chain!=="robinhood")swapTok=null;}paintSwap();};
     $("#swCaUse").onclick=()=>swapUseCa(($("#swCaMain")||{}).value);
     const cin=$("#swCaMain");if(cin)cin.onkeydown=(e)=>{if(e.key==="Enter")swapUseCa(cin.value);};
     $("#swPreset").onchange=()=>{const p=(state.presets.trade||[]).find(x=>x.id===$("#swPreset").value);if(p){$("#swTp").value=p.takeProfitPct||"";$("#swSl").value=p.stopLossPct||"";if(p.slippageBps)$("#swSlip").value=p.slippageBps;}};
@@ -3338,7 +3362,7 @@
   function swapUseCa(raw){
     const ca=String(raw||"").trim();const chain=detectChain(ca);
     if(!chain){toast("Paste a valid Solana or Robinhood (0x…) contract.",true);return;}
-    swapChain=chain;swapTok={mint:ca,symbol:short(ca),chain};
+    swapChain=chain;if(chain==="robinhood"&&!swapRhPayAsset)swapRhPayAsset="eth";swapTok={mint:ca,symbol:short(ca),chain};
     paintSwap();swapFillSymbol(ca,chain);
   }
   async function swapFillSymbol(ca,chain){
@@ -3373,7 +3397,10 @@
         if(sf&&sf.verdict==="block"){done();toast("⛔ Blocked to protect you — "+((sf.reasons&&sf.reasons[0])||"this coin can't be sold (honeypot)"),true);return;}
       }
       const body={walletIndex:String(wi),side:swapDir,tokenAddress:swapTok.mint,tradeAttemptId:attemptId()};
-      if(swapDir==="buy")body.amountEth=String(amt);else body.percent=String(amt);
+      if(swapDir==="buy"){
+        if(swapRhPayAsset==="sol"){body.payCurrency="SOL";body.amountSol=String(amt);}
+        else{body.payCurrency="ETH";body.amountEth=String(amt);}
+      }else body.percent=String(amt);
       const {ok,d}=await jpost("/api/web/rh/trade",body);
       if(ok&&d&&d.ok){
         toast((swapDir==="buy"?"Bought ":"Sold → ")+(d.outFormatted?Number(d.outFormatted).toLocaleString(undefined,{maximumFractionDigits:6}):"")+" "+(d.outSymbol||swapTok.symbol||"")+" ✅");
@@ -3408,9 +3435,12 @@
       for(let k=0;k<wallets.length;k++){
         const idx=wallets[k];const amt=min+Math.random()*(max-min);
         let tpv=String(tp);if(tpTop&&Number(tpTop)>Number(tp))tpv=String(Math.round((Number(tp)+(Number(tpTop)-Number(tp))*(wallets.length>1?k/(wallets.length-1):0))*10)/10);
-        const {ok,d}=await jpost("/api/web/rh/trade",{walletIndex:String(idx),side:"buy",tokenAddress:swapTok.mint,amountEth:amt.toFixed(5),tradeAttemptId:attemptId()});
+        const rhLadderBody={walletIndex:String(idx),side:"buy",tokenAddress:swapTok.mint,tradeAttemptId:attemptId()};
+        if(swapRhPayAsset==="sol"){rhLadderBody.payCurrency="SOL";rhLadderBody.amountSol=amt.toFixed(5);}
+        else{rhLadderBody.payCurrency="ETH";rhLadderBody.amountEth=amt.toFixed(5);}
+        const {ok,d}=await jpost("/api/web/rh/trade",rhLadderBody);
         const good=ok&&d&&d.ok;if(good){okc++;await jpost("/api/web/rh/guards",{walletIndex:String(idx),tokenAddress:swapTok.mint,symbol:swapTok.symbol||"",takeProfitPct:tpv,stopLossPct:sl,sellPercent:"100"}).catch(()=>{});}else fail++;
-        staggerLog(logEl,'<div style="font-size:12px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05)"><b style="color:'+(good?"var(--green)":"var(--red)")+'">🟢 BUY '+amt.toFixed(4)+' ETH · TP '+tpv+'%</b> · wallet '+idx+' · '+(good?"✓":esc(String((d&&(d.error||d.message))||"failed").slice(0,34)))+'</div>');
+        staggerLog(logEl,'<div style="font-size:12px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05)"><b style="color:'+(good?"var(--green)":"var(--red)")+'">🟢 BUY '+amt.toFixed(4)+' '+(swapRhPayAsset==="sol"?"SOL":"ETH")+' · TP '+tpv+'%</b> · wallet '+idx+' · '+(good?"✓":esc(String((d&&(d.error||d.message))||"failed").slice(0,34)))+'</div>');
         if(k<wallets.length-1)await sleepMs(Math.round(rnd(1,4)*1000));
       }
       staggerRunning=false;toast("Ladder done — "+okc+" armed"+(fail?", "+fail+" failed":""));
@@ -3686,7 +3716,9 @@
     const eth=Number(d.eth||0);
     el.innerHTML='<div class="feebox" style="margin:0">🪶 <b>Launch your coin on Robinhood Chain</b> — Robinhood\'s new ETH network. A real on-chain token with the whole supply sent to your wallet — fixed supply, <b>no owner functions</b>, so the contract itself can\'t rug. It goes live on the 🪶 Robinhood board (with your PFP &amp; socials) the moment it deploys.'+
       '<div class="ln" style="margin-top:6px">Your Robinhood address (from your dev wallet): <b style="word-break:break-all">'+esc(d.address)+'</b> <button class="wbtn ghost" type="button" style="padding:2px 8px;font-size:11px" onclick="navigator.clipboard.writeText(\''+esc(d.address)+'\').then(()=>GG.toast(\'Address copied\'))">Copy</button></div>'+
-      '<div class="ln">ETH balance: <b>'+eth.toFixed(6)+' ETH</b> '+(eth>0.00005?'✅ enough for a deploy (~$0.05)':'⚠️ <b>fund it first</b> — bridge a little ETH (0.0005 is plenty) to the address above via the <a href="https://portal.arbitrum.io/?orbitChain=robinhood" target="_blank" rel="noopener">Arbitrum bridge</a>')+' · <a href="'+esc(d.explorer)+'" target="_blank" rel="noopener">explorer</a></div>'+
+      '<div class="ln">ETH balance: <b>'+eth.toFixed(6)+' ETH</b> '+(eth>0.00005?'✅ enough for a deploy (~$0.05)':'⚠️ <b>needs gas</b> — leave auto-fund checked below and SlimeWire swaps a little SOL into Robinhood ETH before deploy')+' · <a href="'+esc(d.explorer)+'" target="_blank" rel="noopener">explorer</a></div>'+
+      '<label class="lcheck" style="display:flex;align-items:flex-start;gap:8px;font-size:11px;cursor:pointer;margin-top:8px"><input type="checkbox" id="lcRhFundSol" checked> <span><b>Fund launch from SOL automatically</b> - SlimeWire swaps a little SOL from this dev wallet to its Robinhood ETH address before deploy if it needs gas.</span></label>'+
+      '<div class="field" style="margin-top:8px"><label style="font-size:11px">SOL to use for RH gas</label><input id="lcRhFundAmt" inputmode="decimal" value="0.01"></div>'+
       '<div class="field" style="margin-top:8px"><label style="font-size:11px">Total supply (tokens, all to your wallet)</label><input id="lcRhSupply" inputmode="numeric" value="1000000000"></div>'+
       '<label class="lcheck" style="display:flex;align-items:flex-start;gap:8px;font-size:11px;cursor:pointer;margin-top:4px"><input type="checkbox" id="lcRhCreatorFee"> <span>💰 <b>Earn creator fees — 1% of every trade</b> (same as pump.fun), paid in ETH to your wallet on trades through SlimeWire. It\'s taken by the site at trade time — <b>never</b> baked into the token, so your coin stays <b>✅ Verified safe</b>.</span></label>'+
       lcHolderRewardsHtml("lcRh")+
@@ -3809,6 +3841,7 @@
         // coin shows its PFP/links on the 🪶 Robinhood board like pump coins do.
         const rhHolderRewards=lcReadHolderRewards("lcRh");
         const rhBody={name,symbol:sym,supplyTokens:supply,devWalletIndex:devIdx,launchAttemptId:attemptId(),
+          fundRhWithSol:!!($("#lcRhFundSol")&&$("#lcRhFundSol").checked),fundSolAmount:(($("#lcRhFundAmt")&&$("#lcRhFundAmt").value.trim())||"0.01"),
           creatorFeeEnabled:!!($("#lcRhCreatorFee")&&$("#lcRhCreatorFee").checked)||!!rhHolderRewards.enabled,holderRewards:rhHolderRewards,
           description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim()};
         if(state.launchImg)rhBody.imageDataUrl=state.launchImg.dataUrl;
@@ -4052,7 +4085,7 @@
   window.GG={open:openCoinRoute,openSell:(m)=>{state.pendingSell=m;go("trade",m);},sellPos:(m,s)=>quickSellModal(m,s),armPos:(m,s)=>armExitsModal(m,s),go,quickBuy,copy,closeModal,pickWallet,pnlCard:openPnlCard,
     escrowModal,renderEscrow,escrowFinalize,escrowRefund,launchesModal,claimFees,toast,
     launchRh:()=>{state.launchRail="robinhood";state.launchTab="coin";go("launch");},
-    rhTrade:(a)=>rhTradeModal(a),rhBuy:(a,amt)=>rhTrade(a,"buy",{amountEth:amt}),rhSell:(a,p)=>rhTrade(a,"sell",{percent:p}),rhQuick:(a)=>rhTrade(a,"buy",{amountEth:rhQuickEth()}),
+    rhTrade:(a)=>rhTradeModal(a),rhBuy:(a,amt)=>rhBuyAmount(a,amt),rhBuyAmount:(a,amt)=>rhBuyAmount(a,amt),rhSell:(a,p)=>rhTrade(a,"sell",{percent:p}),rhQuick:(a)=>rhBuyAmount(a,rhQuickEth()),
     rhSellPos:async(a,p)=>{await rhTrade(a,"sell",{percent:p});loadRhPositions();},rhAvTile:(s,z,r)=>rhAvTileHtml(s,z,r),rhPresetModal:()=>rhPresetModal(),
     rhGuardModal:(a)=>rhGuardModal(a),rhGuardCancel:(id,a)=>rhGuardCancel(id,a),rhBundleModal:(a)=>rhBundleModal(a),rhVolumeModal:(a)=>rhVolumeModal(a),
     rhAutoBundleModal:(a)=>rhAutoBundleModal(a),rhAutoBundleCancel:(id,a)=>rhAutoBundleCancel(id,a),rhAddLiquidity:(a,w)=>rhAddLiquidityModal(a,w),

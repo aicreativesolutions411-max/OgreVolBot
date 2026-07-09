@@ -44140,6 +44140,21 @@ async function webRhTrade(userId, body = {}) {
     () => webRhTradeCore(userId, body),
     { busyMessage: "A Robinhood Chain trade is already in flight for this wallet — give it a moment." });
 }
+
+function rhWeiFromEthNumber(amountEth) {
+  return BigInt(Math.round(Number(amountEth) * 1e9)) * 10n ** 9n;
+}
+
+async function waitForRhEthBalanceAtLeast(evmAddress, minEth, timeoutMs = 45_000) {
+  const deadline = Date.now() + Math.max(3_000, Number(timeoutMs) || 45_000);
+  let last = await rhEthBalance(evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ eth: "0", wei: "0" }));
+  while (Number(last.eth || 0) < minEth && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    last = await rhEthBalance(evmAddress, CONFIG.rhChainRpcUrl).catch(() => last);
+  }
+  return last;
+}
+
 async function webRhTradeCore(userId, body = {}) {
   const store = await readWalletStore();
   const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
@@ -44153,8 +44168,47 @@ async function webRhTradeCore(userId, body = {}) {
   const side = String(body.side || "").toLowerCase();
   const ETH = "0x0000000000000000000000000000000000000000";
   let fromCurrency, toCurrency, amountRaw;
+  let solFunding = null;
   if (side === "buy") {
-    const amountEth = Number(body.amountEth || 0);
+    const payCurrency = String(firstString(body.payCurrency, body.payWith, body.fundingAsset) || "").trim().toLowerCase();
+    const solFundedBuy = ["sol", "solana", "native_sol"].includes(payCurrency) || (!body.amountEth && body.amountSol);
+    let amountEth = Number(body.amountEth || 0);
+    if (solFundedBuy) {
+      const amountSol = Number(firstString(body.amountSol, body.amount) || 0);
+      if (!Number.isFinite(amountSol) || amountSol < 0.005 || amountSol > 5) {
+        const e = new Error("Enter a SOL amount between 0.005 and 5.");
+        e.statusCode = 400; throw e;
+      }
+      const beforeEth = await rhEthBalance(evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ eth: "0" }));
+      const fundingAttemptId = firstString(body.tradeAttemptId, body.clientRequestId)
+        ? `${firstString(body.tradeAttemptId, body.clientRequestId)}-rh-sol-fund`
+        : crypto.randomUUID();
+      const funding = await webRhFundWithSol(userId, {
+        walletIndex: body.walletIndex,
+        amountSol,
+        tradeAttemptId: fundingAttemptId
+      });
+      const quotedEth = Number(funding?.quotedEth || 0);
+      const targetEth = Number(beforeEth.eth || 0) + Math.max(0.00001, quotedEth * 0.86);
+      const afterEth = await waitForRhEthBalanceAtLeast(evmAddress, targetEth, 45_000);
+      const availableEth = Number(afterEth.eth || 0);
+      const reserveEth = Math.max(0.00035, Number(body.rhGasReserveEth || 0) || 0);
+      const spendableEth = Math.max(0, availableEth - reserveEth);
+      amountEth = Math.min(spendableEth, quotedEth > 0 ? quotedEth * 0.96 : spendableEth);
+      solFunding = {
+        amountSol,
+        quotedEth: funding?.quotedEth || "",
+        relayStatus: funding?.relayStatus || "",
+        requestId: funding?.requestId || "",
+        signature: funding?.signature || "",
+        spendEth: amountEth
+      };
+      if (!(amountEth >= 0.00001)) {
+        const e = new Error("SOL funding was sent, but the Robinhood ETH is not spendable yet. Wait a few seconds, then buy with Robinhood ETH.");
+        e.statusCode = 425;
+        throw e;
+      }
+    }
     if (!Number.isFinite(amountEth) || amountEth < 0.00001 || amountEth > 2) {
       const e = new Error("Enter an ETH amount between 0.00001 and 2.");
       e.statusCode = 400; throw e;
@@ -44167,7 +44221,7 @@ async function webRhTradeCore(userId, body = {}) {
       e.statusCode = 400; throw e;
     }
     fromCurrency = ETH; toCurrency = tokenAddress;
-    amountRaw = BigInt(Math.round(amountEth * 1e9)) * 10n ** 9n; // ETH -> wei without float overflow
+    amountRaw = rhWeiFromEthNumber(amountEth); // ETH -> wei without float overflow
   } else if (side === "sell") {
     const percent = Math.min(100, Math.max(1, Number(body.percent || 100)));
     const bal = await rhErc20Balance(tokenAddress, evmAddress, CONFIG.rhChainRpcUrl);
@@ -44270,7 +44324,7 @@ async function webRhTradeCore(userId, body = {}) {
     rhEthBalance(evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ eth: "0" })),
     rhErc20Balance(tokenAddress, evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ uiAmount: 0 }))
   ]);
-  await audit("web_rh_trade", { userId, wallet: wallet.publicKey, evmAddress, side, tokenAddress, txHashes: hashes, out: quote.outFormatted, impact: quote.impactPercent, feeWei: feeWei.toString(), feeTxHash, creatorFeeTxHash, holderRewardTxHashes, holderRewardCount });
+  await audit("web_rh_trade", { userId, wallet: wallet.publicKey, evmAddress, side, tokenAddress, txHashes: hashes, out: quote.outFormatted, impact: quote.impactPercent, feeWei: feeWei.toString(), feeTxHash, creatorFeeTxHash, holderRewardTxHashes, holderRewardCount, solFunding });
   return {
     ok: true,
     side,
@@ -44281,7 +44335,8 @@ async function webRhTradeCore(userId, body = {}) {
     impactPercent: quote.impactPercent,
     feeEth: feeWei > 0n ? lamportsToSol(Number(feeWei / 10n ** 9n)) : "0", // wei -> gwei -> formatted like SOL (both 9dp)
     ethBalance: ethBal.eth,
-    tokenBalance: tokenBal.uiAmount
+    tokenBalance: tokenBal.uiAmount,
+    solFunding
   };
 }
 
@@ -44667,8 +44722,42 @@ async function webLaunchRhCoin(userId, body = {}) {
 
 async function webLaunchRhCoinCore(userId, body = {}) {
   const store = await readWalletStore();
-  const wallet = getWalletAt(store, parseWebWalletIndex(body.devWalletIndex || body.walletIndex), userId);
+  const walletIndex = parseWebWalletIndex(body.devWalletIndex || body.walletIndex);
+  const wallet = getWalletAt(store, walletIndex, userId);
   const keypair = decryptWallet(wallet);
+  const attemptId = firstString(body.launchAttemptId, body.tradeAttemptId) || crypto.randomUUID();
+  const evmAddress = evmAddressFromSolana(keypair.secretKey);
+  let launchFunding = null;
+  const fundWithSol = parseOptionalBoolean(body.fundRhWithSol ?? body.fundWithSol, false)
+    || ["sol", "solana"].includes(String(firstString(body.launchFunding, body.payCurrency, body.payWith) || "").toLowerCase());
+  if (fundWithSol) {
+    const amountSol = Number(firstString(body.fundSolAmount, body.rhFundSolAmount, body.amountSol) || "0.01");
+    if (!Number.isFinite(amountSol) || amountSol < 0.005 || amountSol > 5) {
+      const e = new Error("Enter a SOL funding amount between 0.005 and 5.");
+      e.statusCode = 400; throw e;
+    }
+    const beforeEth = await rhEthBalance(evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ eth: "0" }));
+    if (Number(beforeEth.eth || 0) < 0.00008) {
+      const funding = await webRhFundWithSol(userId, {
+        walletIndex,
+        amountSol,
+        tradeAttemptId: `${attemptId}-rh-launch-fund`
+      });
+      const quotedEth = Number(funding?.quotedEth || 0);
+      const targetEth = Number(beforeEth.eth || 0) + Math.max(0.00008, quotedEth * 0.72);
+      const afterEth = await waitForRhEthBalanceAtLeast(evmAddress, targetEth, 45_000);
+      launchFunding = {
+        amountSol,
+        quotedEth: funding?.quotedEth || "",
+        relayStatus: funding?.relayStatus || "",
+        requestId: funding?.requestId || "",
+        signature: funding?.signature || "",
+        ethBalance: afterEth.eth || "0"
+      };
+    } else {
+      launchFunding = { skipped: true, reason: "wallet already had deploy ETH", ethBalance: beforeEth.eth || "0" };
+    }
+  }
   const result = await rhDeployToken({
     solanaSecretKey: keypair.secretKey,
     name: body.name,
@@ -44676,7 +44765,6 @@ async function webLaunchRhCoinCore(userId, body = {}) {
     supplyTokens: body.supplyTokens || 1_000_000_000,
     rpcUrl: CONFIG.rhChainRpcUrl
   });
-  const attemptId = firstString(body.launchAttemptId, body.tradeAttemptId) || crypto.randomUUID();
   // Metadata registry: EVM tokens have no native image/socials, so we store what the launch form
   // collected keyed by token address — the RH feed + coin rows read it back (like wallets/DEXes keep
   // their own address->logo registries on other chains).
@@ -44708,7 +44796,7 @@ async function webLaunchRhCoinCore(userId, body = {}) {
     txSignature: result.txHash,
     createdAt: new Date().toISOString()
   });
-  await audit("web_rh_launch", { userId, wallet: wallet.publicKey, token: result.tokenAddress, tx: result.txHash, supply: result.supplyTokens, gasEth: result.gasCostEth, creatorFeeBps: creatorFeeEnabled ? CONFIG.rhCreatorFeeBps : 0, holderRewards });
+  await audit("web_rh_launch", { userId, wallet: wallet.publicKey, token: result.tokenAddress, tx: result.txHash, supply: result.supplyTokens, gasEth: result.gasCostEth, creatorFeeBps: creatorFeeEnabled ? CONFIG.rhCreatorFeeBps : 0, holderRewards, launchFunding });
   void instantRhWalletLaunchSnipe({
     tokenAddress: result.tokenAddress,
     deployer: result.deployer,
@@ -44716,7 +44804,7 @@ async function webLaunchRhCoinCore(userId, body = {}) {
     name: String(body.name || "").trim(),
     block: result.blockNumber || 0
   }).catch((error) => console.warn(`[wallet-launch-snipe:rh] instant fire failed: ${friendlyError(error)}`));
-  return { ok: true, ...result, chainId: RH_CHAIN_ID, explorerToken: rhExplorerToken(result.tokenAddress), creatorFeeBps: creatorFeeEnabled ? CONFIG.rhCreatorFeeBps : 0, holderRewards };
+  return { ok: true, ...result, chainId: RH_CHAIN_ID, explorerToken: rhExplorerToken(result.tokenAddress), creatorFeeBps: creatorFeeEnabled ? CONFIG.rhCreatorFeeBps : 0, holderRewards, launchFunding };
 }
 
 // Make a launched coin BUYABLE: create + seed its Uniswap V3 pool with the creator's ETH + tokens. This
