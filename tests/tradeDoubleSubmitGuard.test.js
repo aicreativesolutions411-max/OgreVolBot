@@ -879,10 +879,16 @@ test("scan catches real pasted CAs in text without sentence false-positives", ()
 test("raid setup: click a metric -> type the number; duration in minutes", () => {
   assert.match(serverSource, /async function applyRaidTypedInput\(/);
   assert.match(serverSource, /const raidInputPending = new Map\(\)/);
+  assert.match(serverSource, /function raidConfig\(/);
+  assert.match(serverSource, /async function setRaidConfig\(/);
+  assert.match(serverSource, /\/raidpreset/);
+  assert.match(serverSource, /callback_data: "rd:p:five"/);
+  assert.match(serverSource, /callback_data: "rd:p:save"/);
   // Callback asks via a POPUP (no chat message -> no flood), not a ladder.
   const cb = functionBody(serverSource, "handleRaidSetupCallback");
   assert.match(cb, /show_alert: true/);
   assert.match(cb, /raidInputPending\.set\(/);
+  assert.match(cb, /setRaidConfig\(chatId/);
   assert.doesNotMatch(serverSource, /raidLadderNext/);   // ladder removed
   // The admin's typed number is deleted so it doesn't flood the chat.
   assert.match(functionBody(serverSource, "applyRaidTypedInput"), /deleteMessage.*message\.message_id/);
@@ -2038,7 +2044,10 @@ test("X DM terminal: link from Telegram, scan/settings/buy/sell over official DM
   assert.match(serverSource, /parseCommandWithArgument\(text, \["xdm", "xdmstatus"\]\)/);
   assert.match(serverSource, /function xDmHelpText/);
   assert.match(serverSource, /scan <CA> \/ chart <CA> \/ rug <CA> \/ map <CA>/);
-  assert.match(serverSource, /Money actions require CONFIRM/);
+  assert.match(serverSource, /Reply YES to send or NO to cancel/);
+  assert.match(serverSource, /\^\(yes\|y\|ok\|confirm\|send\|ape\)\$/);
+  assert.match(serverSource, /\^\(no\|n\|cancel\|stop\)\$/);
+  assert.doesNotMatch(functionBody(serverSource, "xDmHelpText"), /bundle \/ volume \/ launch/);
   assert.match(serverSource, /tgExecuteQuickBuy\(userId, rec\.mint, rec\.amountSol/);
   assert.match(serverSource, /tgExecuteQuickSell\(userId, rec\.mint, rec\.percent\)/);
   assert.match(serverSource, /setInterval\(\(\) => \{ void xDmPollTick\(\); \}, xDmPollMs\)/);

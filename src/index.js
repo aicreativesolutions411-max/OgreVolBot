@@ -33558,7 +33558,7 @@ async function handleXLinkCommand(chatId, message, userId) {
     `1. Open <b>@${escapeTelegramHtml(handle)}</b> on X.`,
     `2. DM exactly: <code>link ${escapeTelegramHtml(code)}</code>`,
     "",
-    "After that, X DMs can scan, show positions, edit quick settings, and start buy/sell flows with a confirm code.",
+    "After that, X DMs can scan, show positions, edit quick settings, and start buy/sell flows with a simple yes/no confirm.",
     "<i>Never send seed phrases or private keys.</i>"
   ].join("\n"), { inline_keyboard: [[{ text: "Open X profile", url: `https://x.com/${handle}` }, { text: "Open X Terminal", url: "https://www.slimewire.org/x-terminal" }]] });
   return true;
@@ -33580,9 +33580,8 @@ function xDmHelpText(linked = false) {
     "set slippage 5",
     "buy 0.1 <CA>",
     "sell 50% <CA>",
-    "bundle / volume / launch",
     "",
-    linked ? "Money actions require CONFIRM <code> before they run." : "To trade here, DM: link <code> after /xlink in Telegram.",
+    linked ? "Money actions ask for yes/no before they run." : "To trade here, DM: link <code> after /xlink in Telegram.",
     "No seed phrases. Wallet-confirmed / managed-wallet only."
   ].join("\n");
 }
@@ -33666,10 +33665,18 @@ function xDmStartPending(state, senderId, payload) {
 }
 async function xDmConfirmPending(state, senderId, raw) {
   const rec = state.pending[String(senderId)];
-  const code = (String(raw || "").match(/\bconfirm\s+([a-f0-9]{6})\b/i) || [])[1]?.toUpperCase();
-  if (!rec || !code || code !== String(rec.id || "").toUpperCase()) return null;
-  delete state.pending[String(senderId)];
-  return rec;
+  if (!rec) return null;
+  const text = String(raw || "").trim();
+  const code = (text.match(/\bconfirm\s+([a-f0-9]{6})\b/i) || [])[1]?.toUpperCase();
+  if (/^(no|n|cancel|stop)$/i.test(text)) {
+    delete state.pending[String(senderId)];
+    return { cancelled: true, rec };
+  }
+  if (/^(yes|y|ok|confirm|send|ape)$/i.test(text) || (code && code === String(rec.id || "").toUpperCase())) {
+    delete state.pending[String(senderId)];
+    return rec;
+  }
+  return null;
 }
 async function xDmHandleTradeConfirm(senderId, rec, state) {
   const userId = rec.userId;
@@ -33706,6 +33713,7 @@ async function xDmHandleEvent(event, state) {
     return await xDmSend(senderId, "Linked. You can now use: scan, chart, rug, positions, settings, buy, sell. Send help anytime.", state);
   }
   const pending = await xDmConfirmPending(state, senderId, text);
+  if (pending?.cancelled) return await xDmSend(senderId, "Canceled. No trade sent.", state);
   if (pending) return await xDmHandleTradeConfirm(senderId, pending, state);
   if (/^(help|menu|start)\b/i.test(lower)) return await xDmSend(senderId, xDmHelpText(Boolean(linked)), state);
   const intent = xIntentFromText(text);
@@ -33720,7 +33728,7 @@ async function xDmHandleEvent(event, state) {
     return await xDmSend(senderId, `${body}\n${xDmTokenUrl(target)}`, state);
   }
   if (!linked) {
-    if (/\b(buy|sell|positions?|wallet|settings?|preset|bundle|volume|launch|copy)\b/i.test(lower)) return await xDmSend(senderId, xDmNeedLinkText(), state);
+    if (/\b(buy|sell|positions?|wallet|settings?|preset)\b/i.test(lower)) return await xDmSend(senderId, xDmNeedLinkText(), state);
     return await xDmSend(senderId, xDmHelpText(false), state);
   }
   const userId = linked.userId;
@@ -33737,22 +33745,20 @@ async function xDmHandleEvent(event, state) {
   if (buyMatch) {
     const amountSol = Math.max(0.001, Math.min(50, Number(buyMatch[1]) || 0));
     const mint = buyMatch[2];
-    const id = xDmStartPending(state, senderId, { action: "buy", userId, amountSol, mint });
-    return await xDmSend(senderId, `Confirm buy ${amountSol} SOL of ${shortMint(mint)}?\nReply: CONFIRM ${id}\nExpires in 2 minutes.\n${xDmTokenUrl(mint)}`, state);
+    xDmStartPending(state, senderId, { action: "buy", userId, amountSol, mint });
+    return await xDmSend(senderId, `Confirm buy ${amountSol} SOL of ${shortMint(mint)}?\nReply YES to send or NO to cancel.\nExpires in 2 minutes.\n${xDmTokenUrl(mint)}`, state);
   }
   const sellMatch = text.match(/\bsell\s+(25|50|75|100)%?\s+([1-9A-HJ-NP-Za-km-z]{32,48}|0x[0-9a-fA-F]{40})/i);
   if (sellMatch) {
     const percent = Number(sellMatch[1]);
     const mint = sellMatch[2];
-    const id = xDmStartPending(state, senderId, { action: "sell", userId, percent, mint });
-    return await xDmSend(senderId, `Confirm sell ${percent}% of ${shortMint(mint)}?\nReply: CONFIRM ${id}\nExpires in 2 minutes.\n${xDmTokenUrl(mint)}`, state);
+    xDmStartPending(state, senderId, { action: "sell", userId, percent, mint });
+    return await xDmSend(senderId, `Confirm sell ${percent}% of ${shortMint(mint)}?\nReply YES to send or NO to cancel.\nExpires in 2 minutes.\n${xDmTokenUrl(mint)}`, state);
   }
   if (/^(bundle|volume|launch|copy)\b/i.test(lower)) {
     return await xDmSend(senderId, [
-      "That tool is richer than a plain X DM, so open the live panel:",
-      "https://www.slimewire.org/terminal?source=x-dm",
-      "",
-      "Telegram also has the full button flow: /start"
+      "X DM can run scans, wallet/position reads, settings, and simple buy/sell confirms.",
+      "Open Telegram /start or the web terminal for launch, volume, bundle, and copy tools."
     ].join("\n"), state);
   }
   return await xDmSend(senderId, xDmHelpText(true), state);
@@ -39109,7 +39115,8 @@ async function handleTelegramRaidCommand(chatId, message, argument) {
   const nums = (rest.match(/\d{1,7}/g) || []).map(Number).filter((n) => n > 0);
   // No goals typed → open the interactive tap-to-set menu (the "fill out + submit" flow).
   if (!nums.length) {
-    const d = { tid, url, symbol, by, targets: { likes: 100, rts: 25, replies: 10, bookmarks: 10 }, durationMin: 120, at: Date.now() };
+    const cfg = raidConfig(await getGroupBotEntry(chatId).catch(() => null));
+    const d = { tid, url, symbol, by, targets: { ...cfg.targets }, durationMin: cfg.durationMin, savedPresetLabel: raidPresetLabel(cfg), at: Date.now() };
     const card = raidSetupCard(d);
     const sent = await sendGroupAlertMedia(chatId, null, card.text, card.markup);
     if (sent && sent.result && sent.result.message_id) raidDrafts.set(raidDraftKey(chatId, sent.result.message_id), d);
@@ -39258,6 +39265,36 @@ async function writeGroupBot(store) { groupBotCache = store; try { await writeJs
 function defaultGroupBotEntry() { return { features: { buybot: false, raid: false, rose: false, scan: true }, token: null, addedAt: new Date().toISOString() }; }
 async function getGroupBotEntry(chatId) { return (await readGroupBot()).groups[String(chatId)] || null; }
 function groupBotFeatureOn(entry, key) { return Boolean(entry && entry.features && entry.features[key]); }
+const RAID_DEFAULT_PRESET = { targets: { likes: 100, rts: 25, replies: 10, bookmarks: 10 }, durationMin: 120 };
+function cleanRaidTargets(targets = {}) {
+  const clamp = (v) => Math.max(0, Math.min(1_000_000, Math.round(Number(v) || 0)));
+  return { likes: clamp(targets.likes), rts: clamp(targets.rts), replies: clamp(targets.replies), bookmarks: clamp(targets.bookmarks) };
+}
+function raidConfig(entry) {
+  const saved = entry && entry.raidConfig && typeof entry.raidConfig === "object" ? entry.raidConfig : {};
+  return {
+    targets: cleanRaidTargets({ ...RAID_DEFAULT_PRESET.targets, ...(saved.targets || {}) }),
+    durationMin: Math.max(1, Math.min(24 * 60, Math.round(Number(saved.durationMin) || RAID_DEFAULT_PRESET.durationMin)))
+  };
+}
+function raidPresetLabel(cfg) {
+  const c = cfg?.targets ? cfg : raidConfig(null);
+  const t = cleanRaidTargets(c.targets);
+  return `${t.likes}/${t.rts}/${t.replies}/${t.bookmarks} · ${Math.max(1, Number(c.durationMin) || 120)}m`;
+}
+async function setRaidConfig(chatId, patch) {
+  const store = await readGroupBot();
+  const k = String(chatId);
+  const e = store.groups[k] || defaultGroupBotEntry();
+  const cur = raidConfig(e);
+  e.raidConfig = {
+    targets: cleanRaidTargets({ ...cur.targets, ...(patch.targets || {}) }),
+    durationMin: Math.max(1, Math.min(24 * 60, Math.round(Number(patch.durationMin ?? cur.durationMin) || cur.durationMin)))
+  };
+  store.groups[k] = e;
+  await writeGroupBot(store);
+  return e.raidConfig;
+}
 async function setGroupBotFeature(chatId, key, on) {
   const store = await readGroupBot();
   const k = String(chatId);
@@ -39426,8 +39463,15 @@ function groupBotModuleView(module, entry) {
     };
   }
   if (module === "raid") {
+    const rc = raidConfig(e);
     return {
-      text: ["⚔️ <b>Raid Bot</b>", "Start a raid with <code>/raid &lt;X post link&gt;</code> → tap the goals → 🚀. Set custom art below (separate from the Buy Bot's):"].join("\n"),
+      text: [
+        "⚔️ <b>Raid Bot</b>",
+        "Start a raid with <code>/raid &lt;X post link&gt;</code> → tap the goals → 🚀. Set custom art below (separate from the Buy Bot's).",
+        "",
+        `Default preset: <b>${escapeTelegramHtml(raidPresetLabel(rc))}</b>`,
+        "Fast save: <code>/raidpreset 5 5 5 5 60</code> = likes RT replies bookmarks duration."
+      ].join("\n"),
       markup: { inline_keyboard: [
         [toggleBtn("raid", "Raid Bot")],
         [{ text: "🖼️ Raid image / video", callback_data: "gb:media:raid" }],
@@ -39657,6 +39701,28 @@ async function handleGroupBotCommand(message, userId) {
       const store = await readGroupBot(); const k = String(chatId); const e = store.groups[k] || defaultGroupBotEntry(); e.raidMedia = media; store.groups[k] = e; await writeGroupBot(store);
       await say(chatId, media ? `⚔️ Custom ${media.type} set for raid posts.` : "⚔️ Raid art cleared — falls back to the buy art / coin image.");
     }
+    return true;
+  }
+  // /raidpreset [likes rts replies bookmarks durationMin] — save the default raid setup for this group.
+  const rp = text.match(/^\/raidpreset(?:@\w+)?(?:\s+([\d\s.]+))?\s*$/i);
+  if (rp) {
+    const chatId = chat.id;
+    if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only group admins can set raid presets."); return true; }
+    const nums = (rp[1] || "").match(/\d{1,7}/g)?.map(Number).filter((n) => Number.isFinite(n) && n >= 0) || [];
+    if (!nums.length) {
+      const cfg = raidConfig(await getGroupBotEntry(chatId).catch(() => null));
+      await sayHtml(chatId, `⚔️ Raid default is <b>${escapeTelegramHtml(raidPresetLabel(cfg))}</b>.\nSet it with <code>/raidpreset 5 5 5 5 60</code> (likes RT replies bookmarks duration-min).`);
+      return true;
+    }
+    const targets = {
+      likes: nums[0] ?? 0,
+      rts: nums[1] ?? nums[0] ?? 0,
+      replies: nums[2] ?? nums[0] ?? 0,
+      bookmarks: nums[3] ?? nums[0] ?? 0
+    };
+    const durationMin = nums[4] || raidConfig(await getGroupBotEntry(chatId).catch(() => null)).durationMin;
+    const cfg = await setRaidConfig(chatId, { targets, durationMin });
+    await sayHtml(chatId, `⚔️ Raid default saved: <b>${escapeTelegramHtml(raidPresetLabel(cfg))}</b>.\nNew <code>/raid &lt;X link&gt;</code> menus start from this preset.`);
     return true;
   }
   // /setmedia — custom picture/video for this group's buy + raid posts (reply to a photo/video, paste
@@ -44928,17 +44994,21 @@ function raidDraftKey(chatId, msgId) { return String(chatId) + ":" + String(msgI
 function raidSetupCard(d) {
   const sym = d.symbol ? "$" + escapeTelegramHtml(d.symbol) + " " : "";
   const v = (n) => (Number(n) > 0 ? n : "—");
+  const preset = d.savedPresetLabel ? `\nDefault: <b>${escapeTelegramHtml(d.savedPresetLabel)}</b>` : "";
   return {
     text: [
       `⚔️ <b>Set up the ${sym}raid</b>`,
       "Tap a goal, then reply with the number you want (e.g. <b>25</b>). Duration is in <b>minutes</b>. Then 🚀 Start.",
+      preset,
       "",
       `👉 <a href="${escapeTelegramHtml(d.url)}">The post you're raiding</a>`
     ].join("\n"),
     markup: { inline_keyboard: [
+      [{ text: "⚡ 5 each", callback_data: "rd:p:five" }, { text: "⭐ Use Default", callback_data: "rd:p:def" }],
       [{ text: `❤️ Likes: ${v(d.targets.likes)}`, callback_data: "rd:c:likes" }, { text: `🔁 RT: ${v(d.targets.rts)}`, callback_data: "rd:c:rts" }],
       [{ text: `💬 Replies: ${v(d.targets.replies)}`, callback_data: "rd:c:replies" }, { text: `🔖 Bookmarks: ${v(d.targets.bookmarks)}`, callback_data: "rd:c:bm" }],
       [{ text: `🕐 Duration: ${Number(d.durationMin) || 120}m`, callback_data: "rd:c:dur" }],
+      [{ text: "💾 Save as Default", callback_data: "rd:p:save" }, { text: "↩ Reset", callback_data: "rd:p:reset" }],
       [{ text: "🚀 Start Raid", callback_data: "rd:go" }, { text: "✖ Cancel", callback_data: "rd:x" }]
     ] }
   };
@@ -44998,6 +45068,32 @@ async function handleRaidSetupCallback(query, userId) {
     raidDrafts.delete(key);
     try { await telegram("deleteMessage", { chat_id: chatId, message_id: msgId }); } catch {}
     await startRaidFromDraft(chatId, d).catch(() => {});
+    return true;
+  }
+  if (data.startsWith("rd:p:")) {
+    const action = data.slice(5);
+    if (action === "five") {
+      d.targets = { likes: 5, rts: 5, replies: 5, bookmarks: 5 };
+      d.durationMin = Math.max(1, Number(d.durationMin) || 60);
+    } else if (action === "def") {
+      const cfg = raidConfig(await getGroupBotEntry(chatId).catch(() => null));
+      d.targets = { ...cfg.targets };
+      d.durationMin = cfg.durationMin;
+      d.savedPresetLabel = raidPresetLabel(cfg);
+    } else if (action === "reset") {
+      d.targets = { ...RAID_DEFAULT_PRESET.targets };
+      d.durationMin = RAID_DEFAULT_PRESET.durationMin;
+      d.savedPresetLabel = raidPresetLabel(RAID_DEFAULT_PRESET);
+    } else if (action === "save") {
+      const cfg = await setRaidConfig(chatId, { targets: d.targets, durationMin: d.durationMin });
+      d.savedPresetLabel = raidPresetLabel(cfg);
+      try { await telegram("answerCallbackQuery", { callback_query_id: query.id, text: `Default saved: ${raidPresetLabel(cfg)}` }); } catch {}
+    }
+    d.at = Date.now();
+    raidDrafts.set(key, d);
+    const card = raidSetupCard(d);
+    try { await telegram("editMessageText", { chat_id: chatId, message_id: msgId, text: card.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: card.markup }); } catch {}
+    if (action !== "save") { try { await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "Preset applied." }); } catch {} }
     return true;
   }
   if (data.startsWith("rd:c:")) {
