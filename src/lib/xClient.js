@@ -133,8 +133,9 @@ export async function xWhoAmI() {
     const u = j?.data?.viewer?.user_results?.result;
     const screen = u?.legacy?.screen_name || u?.core?.screen_name;
     const name = u?.legacy?.name || u?.core?.name;
+    const id = u?.rest_id || u?.legacy?.id_str || "";
     lastAuthError = ""; lastAuthReport = { cookies: "ok", api: "ok" };
-    return screen ? { username: screen, screenName: screen, name } : null;
+    return screen ? { username: screen, screenName: screen, name, id: id ? String(id) : "" } : null;
   } catch (e) {
     lastAuthReport = { cookies: hasXCookies() ? (e.status === 401 || e.status === 403 ? "rejected — auth_token/ct0 stale (re-grab from x.com)" : "set") : "not set", api: String(e?.message || e).slice(0, 120) };
     lastAuthError = String(e?.message || e).slice(0, 160);
@@ -181,6 +182,124 @@ async function signedGet(path, query) {
   if (res.status === 401 || res.status === 403) { resetXScraper(); const e = new Error(`auth ${res.status}`); e.status = res.status; throw e; }
   if (!res.ok) { const e = new Error(`${path} ${res.status}`); e.status = res.status; throw e; }
   return JSON.parse(text);
+}
+function cookieOwnUserId() {
+  const blob = clean(process.env.X_COOKIES);
+  const twid = clean((blob.match(/(?:^|;\s*)twid=([^;]+)/i) || [])[1] || "");
+  const decoded = (() => { try { return decodeURIComponent(twid); } catch { return twid; } })();
+  return String((decoded.match(/u=(\d+)/) || [])[1] || "").trim();
+}
+function uuid4() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = Math.floor(Math.random() * 16);
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+async function signedApiJson(method, path, { query = "", body = null } = {}) {
+  if (!hasXCookies()) throw new Error("no cookies");
+  const { auth, ct0 } = readCookieParts();
+  const { tx } = await getSession();
+  const tid = await tx.generateTransactionId(method, path);
+  const qs = query ? (String(query).startsWith("?") ? String(query) : "?" + String(query)) : "";
+  const headers = {
+    ...baseHeaders(ct0, tid),
+    cookie: `auth_token=${auth}; ct0=${ct0}`,
+    "x-client-uuid": uuid4(),
+    "content-type": "application/json"
+  };
+  let lastErr = "x api failed";
+  for (const host of ["https://x.com/i/api", "https://api.x.com"]) {
+    try {
+      const res = await fetch(`${host}${path}${qs}`, {
+        method,
+        headers,
+        body: body == null ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(Number(process.env.X_DM_TIMEOUT_MS || 12_000))
+      });
+      const text = await res.text();
+      if (res.status === 401 || res.status === 403) { resetXScraper(); const e = new Error(`auth ${res.status}`); e.status = res.status; throw e; }
+      if (!res.ok) { lastErr = `${path} ${res.status}: ${text.slice(0, 120).replace(/\s+/g, " ")}`; continue; }
+      try { return text ? JSON.parse(text) : {}; } catch { throw new Error(`${path}: bad JSON`); }
+    } catch (e) {
+      if (e.status === 401 || e.status === 403) throw e;
+      lastErr = String(e?.message || e).slice(0, 160);
+    }
+  }
+  throw new Error(lastErr);
+}
+function collectCookieDmEvents(node, out = [], seen = new Set()) {
+  if (!node) return out;
+  if (Array.isArray(node)) { for (const item of node) collectCookieDmEvents(item, out, seen); return out; }
+  if (typeof node !== "object") return out;
+  const msg = node.message || (node.message_data ? node : null);
+  const data = msg?.message_data || msg;
+  const text = data?.text || data?.message || "";
+  const senderId = data?.sender_id || msg?.sender_id || "";
+  const id = msg?.id || data?.id || node.id || msg?.request_id || `${senderId}:${data?.time || msg?.time || ""}:${String(text).slice(0, 20)}`;
+  if (text && senderId && id && !seen.has(String(id))) {
+    seen.add(String(id));
+    out.push({
+      id: String(id),
+      senderId: String(senderId),
+      conversationId: String(data?.conversation_id || msg?.conversation_id || node.conversation_id || ""),
+      createdAt: String(data?.time || msg?.time || ""),
+      text: String(text)
+    });
+  }
+  for (const value of Object.values(node)) collectCookieDmEvents(value, out, seen);
+  return out;
+}
+const DM_QUERY = "ext=mediaColor%2CaltText%2CmediaStats%2ChighlightedLabel%2CvoiceInfo%2CbirdwatchPivot%2CsuperFollowMetadata%2CunmentionInfo%2CeditControl%2Carticle&include_ext_alt_text=true&include_ext_limited_action_results=true&include_reply_count=1&tweet_mode=extended&include_ext_views=true&include_groups=true&include_inbox_timelines=true&include_ext_media_color=true&supports_reactions=true&supports_edit=true&dm_users=true";
+export function xCookieDmConfigured() { return hasXCookies(); }
+export async function xCookieDmOwnUserId() {
+  const fromCookie = cookieOwnUserId();
+  if (fromCookie) return fromCookie;
+  const me = await xWhoAmI().catch(() => null);
+  return String(me?.id || "");
+}
+export async function xCookieDmFetchEvents({ maxResults = 50 } = {}) {
+  if (!hasXCookies()) return [];
+  const json = await signedApiJson("GET", "/1.1/dm/inbox_initial_state.json", { query: DM_QUERY });
+  const own = await xCookieDmOwnUserId().catch(() => "");
+  return collectCookieDmEvents(json)
+    .filter((event) => event.id && event.senderId && event.text && (!own || event.senderId !== own))
+    .sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }))
+    .slice(-Math.max(10, Math.min(100, Number(maxResults) || 50)));
+}
+export async function xCookieDmSendText(participantId, text) {
+  if (!hasXCookies()) return { ok: false, reason: "not configured" };
+  const recipient = String(participantId || "").trim();
+  if (!recipient) throw new Error("Missing X DM participant id");
+  const own = await xCookieDmOwnUserId().catch(() => "");
+  const base = {
+    request_id: uuid4(),
+    text: String(text || "").slice(0, 9500),
+    cards_platform: "Web-12",
+    include_cards: 1,
+    include_quote_count: true,
+    dm_users: true
+  };
+  const variants = own
+    ? [
+        { ...base, conversation_id: `${recipient}-${own}`, recipient_ids: false },
+        { ...base, conversation_id: `${own}-${recipient}`, recipient_ids: false },
+        { ...base, recipient_ids: recipient }
+      ]
+    : [{ ...base, recipient_ids: recipient }];
+  let lastErr = "";
+  for (const body of variants) {
+    try {
+      const json = await signedApiJson("POST", "/1.1/dm/new2.json", { query: DM_QUERY, body });
+      const entries = Array.isArray(json?.entries) ? json.entries : Object.values(json?.entries || {});
+      const sent = collectCookieDmEvents(entries).find((event) => event.text === base.text);
+      return { ok: true, id: sent?.id || body.request_id };
+    } catch (e) {
+      lastErr = String(e?.message || e).slice(0, 160);
+    }
+  }
+  return { ok: false, reason: lastErr || "dm send failed" };
 }
 // The account's REAL @mentions feed (notifications) — instant + complete, unlike search. This is the
 // TG-scan-bot-style source: the moment someone tags us, it's here.

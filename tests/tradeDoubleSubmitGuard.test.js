@@ -2023,12 +2023,16 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
 test("X DM terminal: link from Telegram, scan/settings/buy/sell over official DMs", () => {
   const xdm = fs.readFileSync(new URL("../src/lib/xDmClient.js", import.meta.url), "utf8");
   assert.match(xdm, /X_DM_OAUTH2_TOKEN|X_DM_ACCESS_TOKEN/);
+  assert.match(xdm, /xCookieDmConfigured/);
+  assert.match(xdm, /xCookieDmFetchEvents/);
+  assert.match(xdm, /xCookieDmSendText/);
   assert.match(xdm, /export function xDmConfigured/);
+  assert.match(xdm, /export async function xDmOwnUserId/);
   assert.match(xdm, /export async function xDmFetchEvents/);
   assert.match(xdm, /export async function xDmSendText/);
   assert.match(xdm, /\/dm_events/);
   assert.match(xdm, /\/dm_conversations\/with\/\$\{encodeURIComponent\(id\)\}\/messages/);
-  assert.match(serverSource, /import \{ xDmAuthMode, xDmConfigured, xDmFetchEvents, xDmSendText \} from "\.\/lib\/xDmClient\.js"/);
+  assert.match(serverSource, /import \{ xDmAuthMode, xDmConfigured, xDmFetchEvents, xDmOwnUserId as xDmResolvedOwnUserId, xDmSendText \} from "\.\/lib\/xDmClient\.js"/);
   assert.match(serverSource, /async function handleXLinkCommand/);
   assert.match(serverSource, /parseCommandWithArgument\(text, \["xlink"\]\)/);
   assert.match(serverSource, /parseCommandWithArgument\(text, \["xdm", "xdmstatus"\]\)/);

@@ -74,7 +74,7 @@ import { getNoxaScan, fetchNoxaFeed, fetchPoolBuys, NOXA_RH } from "./lib/noxaLa
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp, listCharacterFiles, characterPfpCount, makeCharacterPfp } from "./lib/pfp.js";
 import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
 import { xConfigured, xSearchMentions, xReply, xPost, xSearchQuery, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode, xAuthReport } from "./lib/xClient.js";
-import { xDmAuthMode, xDmConfigured, xDmFetchEvents, xDmSendText } from "./lib/xDmClient.js";
+import { xDmAuthMode, xDmConfigured, xDmFetchEvents, xDmOwnUserId as xDmResolvedOwnUserId, xDmSendText } from "./lib/xDmClient.js";
 import { renderXScanCard } from "./lib/xCard.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
@@ -33514,7 +33514,7 @@ function xDmTerminalEnabled() {
   const v = String(process.env.X_DM_ENABLED || "").trim();
   return v ? parseBoolean(v) : xDmConfigured();
 }
-function xDmOwnUserId() { return String(process.env.X_DM_OWN_USER_ID || "").trim(); }
+async function xDmOwnUserId() { return await xDmResolvedOwnUserId().catch(() => String(process.env.X_DM_OWN_USER_ID || "").trim()); }
 async function readXDmState() {
   if (xDmStateCache) return xDmStateCache;
   let s = null; try { s = await readJson(xDmStateFile()); } catch { s = null; }
@@ -33691,7 +33691,7 @@ async function xDmHandleTradeConfirm(senderId, rec, state) {
 }
 async function xDmHandleEvent(event, state) {
   const senderId = String(event.senderId || "");
-  const ownId = xDmOwnUserId();
+  const ownId = await xDmOwnUserId();
   if (!senderId || (ownId && senderId === ownId)) return;
   const text = String(event.text || "").trim();
   if (!text) return;

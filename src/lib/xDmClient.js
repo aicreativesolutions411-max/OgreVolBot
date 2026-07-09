@@ -1,6 +1,7 @@
-// Official X API v2 Direct Message helper.
-// Requires an OAuth 2.0 user-context token with DM scopes. Keep it optional:
-// when unset, callers no-op and the main bot keeps running normally.
+// X Direct Message helper. Prefers official X API v2 OAuth when configured,
+// then falls back to the same cookie-auth web session used by the X reply bot.
+// Keep it optional: when unset, callers no-op and the main bot keeps running.
+import { xCookieDmConfigured, xCookieDmFetchEvents, xCookieDmOwnUserId, xCookieDmSendText } from "./xClient.js";
 
 function clean(value) {
   return String(value || "").trim().replace(/^["']|["']$/g, "").trim();
@@ -15,11 +16,17 @@ function dmBaseUrl() {
 }
 
 export function xDmConfigured() {
-  return Boolean(dmToken());
+  return Boolean(dmToken()) || xCookieDmConfigured();
 }
 
 export function xDmAuthMode() {
-  return xDmConfigured() ? "official-oauth2" : "none";
+  return dmToken() ? "official-oauth2" : xCookieDmConfigured() ? "cookies" : "none";
+}
+
+export async function xDmOwnUserId() {
+  const envId = clean(process.env.X_DM_OWN_USER_ID || "");
+  if (envId) return envId;
+  return await xCookieDmOwnUserId().catch(() => "");
 }
 
 async function xDmRequest(path, options = {}) {
@@ -58,6 +65,7 @@ function normalizeDmEvent(event) {
 }
 
 export async function xDmFetchEvents({ maxResults = 50 } = {}) {
+  if (!dmToken()) return await xCookieDmFetchEvents({ maxResults });
   const params = new URLSearchParams();
   params.set("max_results", String(Math.max(10, Math.min(100, Number(maxResults) || 50))));
   params.set("dm_event.fields", "id,text,event_type,created_at,sender_id,dm_conversation_id");
@@ -68,6 +76,7 @@ export async function xDmFetchEvents({ maxResults = 50 } = {}) {
 }
 
 export async function xDmSendText(participantId, text) {
+  if (!dmToken()) return await xCookieDmSendText(participantId, text);
   const id = String(participantId || "").trim();
   if (!id) throw new Error("Missing X DM participant id");
   const body = JSON.stringify({ text: String(text || "").slice(0, 9500) });
