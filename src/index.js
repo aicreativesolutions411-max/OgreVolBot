@@ -4932,6 +4932,7 @@ async function main() {
   } else {
     console.log("Autopilot STOPPED (AUTOPILOT_ENABLED=false) — Ogre A.I. tick off, no auto-trading.");
   }
+  startHolderRewardAutoClaimRunner();
   startDevObservatory(); // brain/dev-rep one-time loads + the Launch Sniper warmer always run; its credit-burning pollers are gated inside on CONFIG.autopilotEnabled
   startGroupBuyBot();
   startSubscriptionWatcher();
@@ -5068,6 +5069,9 @@ function loadConfig() {
   // GOES THROUGH SLIMEWIRE — collected at the venue (like pump.fun's fee), paid to their wallet, and
   // NEVER baked into the token (so the coin stays ✅ Verified-safe). 100 bps = 1%, matching pump's fee.
   const rhCreatorFeeBps = Math.max(0, Math.min(300, Number.parseInt(process.env.RH_CREATOR_FEE_BPS || "100", 10) || 100));
+  const holderRewardsAutoClaimEnabled = parseBoolean(process.env.HOLDER_REWARDS_AUTO_CLAIM_ENABLED || "true");
+  const holderRewardsAutoClaimIntervalMs = Math.max(60_000, Math.min(60 * 60_000, Number.parseInt(process.env.HOLDER_REWARDS_AUTO_CLAIM_INTERVAL_MS || "300000", 10) || 300_000));
+  const holderRewardsAutoClaimMaxPerTick = Math.max(1, Math.min(20, Number.parseInt(process.env.HOLDER_REWARDS_AUTO_CLAIM_MAX_PER_TICK || "4", 10) || 4));
   const pumpLaunchJitoUrl = (process.env.PUMP_LAUNCH_JITO_URL || "https://mainnet.block-engine.jito.wtf/api/v1/bundles").trim();
   const pumpLaunchJitoTipSol = Math.max(0.00001, Number.parseFloat(process.env.PUMP_LAUNCH_JITO_TIP_SOL || "0.001") || 0.001);
   // TRADE JITO — route pump buys/sells through a Jito bundle (swap tx + a tiny tip tx) for FAST,
@@ -5477,6 +5481,9 @@ function loadConfig() {
     rhChainRpcUrl,
     rhFeeSweepMinEth,
     rhCreatorFeeBps,
+    holderRewardsAutoClaimEnabled,
+    holderRewardsAutoClaimIntervalMs,
+    holderRewardsAutoClaimMaxPerTick,
     pumpLaunchJitoUrl,
     pumpLaunchJitoTipSol,
     tradeJitoBundle,
@@ -22413,7 +22420,7 @@ function normalizeHolderRewardPolicy(raw = {}) {
     source.minimumHoldHours,
     4
   ) ?? 4));
-  const maxRecipients = Math.max(1, Math.min(25, Math.round(firstMeaningfulNumber(source.maxRecipients, source.recipientCap, 8) || 8)));
+  const maxRecipients = Math.max(1, Math.min(100, Math.round(firstMeaningfulNumber(source.maxRecipients, source.recipientCap, 100) || 100)));
   return {
     enabled: true,
     shareBps,
@@ -22472,7 +22479,7 @@ function holderRewardRawTokenAmountToUi(raw, decimals = 18) {
 function splitBigIntByWeights(total, rows) {
   const amount = BigInt(total);
   if (amount <= 0n || !Array.isArray(rows) || !rows.length) return [];
-  const weights = rows.map((r) => BigInt(Math.max(1, Math.round(Number(r.amount || r.weight || 0) * 1_000_000))));
+  const weights = rows.map((r) => BigInt(Math.max(1, Math.round(Number(r.weight ?? r.amount ?? 0) * 1_000_000))));
   const sum = weights.reduce((a, b) => a + b, 0n);
   if (sum <= 0n) return [];
   const parts = [];
@@ -22521,7 +22528,8 @@ async function markAndSelectHolderRewardRecipients({ chain, token, rows, policy,
     eligible = clean
       .filter((r) => minMs <= 0 || now - Number(r.firstSeenAt || now) >= minMs)
       .sort((a, b) => b.amount - a.amount)
-      .slice(0, Math.max(1, Math.min(25, Number(policy.maxRecipients || 8))));
+      .slice(0, Math.max(1, Math.min(100, Number(policy.maxRecipients || 100))))
+      .map((r) => ({ ...r, weight: 1 }));
   });
   return eligible;
 }
@@ -22567,18 +22575,23 @@ async function distributeSolHolderRewards({ signer, tokenMint, policy, totalLamp
   const recipients = await solanaHolderRewardRecipients(tokenMint, normalized, signer.publicKey.toBase58()).catch(() => []);
   const parts = splitBigIntByWeights(rewardLamports, recipients).filter((p) => p.value >= 5000n);
   if (!parts.length) return { paidLamports: 0n, count: 0, signature: "", reason: "no_eligible_holders" };
-  const tx = new Transaction();
   let paidLamports = 0n;
-  for (const p of parts) {
-    tx.add(SystemProgram.transfer({
-      fromPubkey: signer.publicKey,
-      toPubkey: new PublicKey(p.wallet),
-      lamports: Number(p.value)
-    }));
-    paidLamports += p.value;
+  const signatures = [];
+  const chunkSize = 18;
+  for (let i = 0; i < parts.length; i += chunkSize) {
+    const tx = new Transaction();
+    const chunk = parts.slice(i, i + chunkSize);
+    for (const p of chunk) {
+      tx.add(SystemProgram.transfer({
+        fromPubkey: signer.publicKey,
+        toPubkey: new PublicKey(p.wallet),
+        lamports: Number(p.value)
+      }));
+      paidLamports += p.value;
+    }
+    signatures.push(await sendLegacyTransaction(tx, [signer]));
   }
-  const signature = await sendLegacyTransaction(tx, [signer]);
-  return { paidLamports, count: parts.length, signature, recipients: parts.map((p) => ({ wallet: p.wallet, lamports: p.value.toString() })) };
+  return { paidLamports, count: parts.length, signature: signatures[0] || "", signatures, recipients: parts.map((p) => ({ wallet: p.wallet, lamports: p.value.toString() })) };
 }
 
 async function distributeRhHolderRewards({ signerSecretKey, tokenAddress, policy, totalWei, payerAddress }) {
@@ -22601,6 +22614,96 @@ async function distributeRhHolderRewards({ signerSecretKey, tokenAddress, policy
     }
   }
   return { paidWei, count: txHashes.length, txHashes, recipients: parts.map((p) => ({ wallet: p.wallet, wei: p.value.toString() })) };
+}
+
+let holderRewardsAutoClaimBusy = false;
+function startHolderRewardAutoClaimRunner() {
+  if (!CONFIG.holderRewardsAutoClaimEnabled) {
+    console.log("Holder reward auto-claim disabled.");
+    return;
+  }
+  const tick = () => {
+    void processHolderRewardAutoClaims().catch((error) => {
+      console.warn(`[holder-rewards] auto-claim tick failed: ${friendlyError(error)}`);
+    });
+  };
+  setTimeout(tick, 45_000);
+  setInterval(tick, CONFIG.holderRewardsAutoClaimIntervalMs);
+}
+
+async function processHolderRewardAutoClaims() {
+  if (holderRewardsAutoClaimBusy) return { ok: true, skipped: "busy" };
+  holderRewardsAutoClaimBusy = true;
+  try {
+    const store = await readPumpLaunchAttempts().catch(() => ({ attempts: [] }));
+    const walletStore = await readWalletStore();
+    const now = Date.now();
+    const due = [];
+    for (const attempt of (store.attempts || []).slice().reverse()) {
+      const policy = launchHolderRewardsFromAttempt(attempt);
+      if (!policy.enabled) continue;
+      const rail = String(attempt.rail || "pump").toLowerCase();
+      if (rail === "robinhood") continue; // RH pays holder rewards directly from SlimeWire trades.
+      const mint = firstString(attempt.mintPublicKey, attempt.tokenMint, attempt.mint);
+      if (!mint) continue;
+      const userId = String(attempt.userId || "");
+      if (!userId) continue;
+      const status = String(attempt.status || "").toLowerCase();
+      if (status && !["complete", "confirmed", "submitted", "launched"].includes(status)) continue;
+      const lastAt = Date.parse(firstString(attempt.holderRewardsAutoClaimAt, attempt.holderRewardsLastAutoClaimAt) || "") || 0;
+      if (lastAt && now - lastAt < CONFIG.holderRewardsAutoClaimIntervalMs) continue;
+      const wallets = walletsForOwner(walletStore, userId);
+      const idx = wallets.findIndex((w) => w.publicKey === attempt.devWalletPublicKey);
+      if (idx < 0) {
+        due.push({ attempt, mint, rail, skip: "creator_wallet_missing" });
+      } else {
+        due.push({ attempt, mint, rail, walletIndex: idx + 1 });
+      }
+      if (due.length >= CONFIG.holderRewardsAutoClaimMaxPerTick) break;
+    }
+    const results = [];
+    for (const item of due) {
+      const id = String(item.attempt.id || item.attempt.launchAttemptId || "");
+      const stamp = new Date().toISOString();
+      if (!id) continue;
+      if (item.skip) {
+        await upsertPumpLaunchAttempt({ id, holderRewardsAutoClaimAt: stamp, holderRewardsAutoClaimStatus: item.skip });
+        results.push({ id, mint: item.mint, status: item.skip });
+        continue;
+      }
+      await upsertPumpLaunchAttempt({ id, holderRewardsAutoClaimAt: stamp, holderRewardsAutoClaimStatus: "checking" });
+      try {
+        const result = await webClaimCreatorFeesCore(item.attempt.userId, {
+          walletIndex: item.walletIndex,
+          rail: item.rail,
+          mint: item.mint,
+          autoClaim: true
+        });
+        await upsertPumpLaunchAttempt({
+          id,
+          holderRewardsAutoClaimAt: new Date().toISOString(),
+          holderRewardsAutoClaimStatus: result?.holderRewards?.count > 0 ? "paid" : "checked",
+          holderRewardsLastAutoClaimSignature: result?.signature || "",
+          holderRewardsLastAutoPayoutSignature: result?.holderRewards?.signature || "",
+          holderRewardsLastAutoPayoutCount: result?.holderRewards?.count || 0
+        });
+        results.push({ id, mint: item.mint, status: "checked", paid: result?.holderRewards?.count || 0 });
+      } catch (error) {
+        const msg = friendlyError(error).slice(0, 220);
+        await upsertPumpLaunchAttempt({
+          id,
+          holderRewardsAutoClaimAt: new Date().toISOString(),
+          holderRewardsAutoClaimStatus: /nothing to claim|no fees|claim/i.test(msg) ? "nothing_to_claim" : "failed",
+          holderRewardsAutoClaimError: msg
+        });
+        results.push({ id, mint: item.mint, status: "failed", error: msg });
+      }
+    }
+    if (results.length) await audit("holder_rewards_auto_claim_tick", { count: results.length, results }).catch(() => {});
+    return { ok: true, results };
+  } finally {
+    holderRewardsAutoClaimBusy = false;
+  }
 }
 
 async function referralFeeTargets(userId, feeLamports) {
@@ -43650,6 +43753,7 @@ async function webClaimCreatorFeesCore(userId, body = {}) {
           count: dist.count || 0,
           paidLamports: String(dist.paidLamports || 0n),
           signature: dist.signature || "",
+          signatures: dist.signatures || [],
           reason: dist.reason || ""
         };
       } catch (error) {
@@ -44119,21 +44223,41 @@ async function webRhTradeCore(userId, body = {}) {
         let paidToHolders = 0n;
         const holderPolicy = normalizeHolderRewardPolicy(meta?.holderRewards || {});
         if (holderPolicy.enabled) {
-          const dist = await distributeRhHolderRewards({
-            signerSecretKey: keypair.secretKey,
-            tokenAddress,
-            policy: holderPolicy,
-            totalWei: cWei,
-            payerAddress: evmAddress
-          }).catch((error) => {
-            void audit("web_rh_holder_rewards_failed", { userId, tokenAddress, error: friendlyError(error) }).catch(() => {});
-            return null;
-          });
-          if (dist) {
-            paidToHolders = BigInt(dist.paidWei || 0);
-            holderRewardTxHashes = dist.txHashes || [];
-            holderRewardCount = Number(dist.count || 0);
-          }
+          const secretKey = keypair.secretKey;
+          const creatorRecipient = cRecipient;
+          void (async () => {
+            let dist = null;
+            try {
+              dist = await distributeRhHolderRewards({
+                signerSecretKey: secretKey,
+                tokenAddress,
+                policy: holderPolicy,
+                totalWei: cWei,
+                payerAddress: evmAddress
+              });
+            } catch (error) {
+              await audit("web_rh_holder_rewards_failed", { userId, tokenAddress, error: friendlyError(error) }).catch(() => {});
+            }
+            const asyncPaidToHolders = BigInt(dist?.paidWei || 0);
+            const asyncCreatorWei = cWei > asyncPaidToHolders ? cWei - asyncPaidToHolders : 0n;
+            let asyncCreatorFeeTxHash = "";
+            if (asyncCreatorWei > 0n) {
+              try { asyncCreatorFeeTxHash = await rhTransferEth(secretKey, creatorRecipient, asyncCreatorWei, CONFIG.rhChainRpcUrl); }
+              catch (error) { await audit("web_rh_creator_fee_failed", { userId, tokenAddress, error: friendlyError(error) }).catch(() => {}); }
+            }
+            await audit("web_rh_holder_rewards_payout", {
+              userId,
+              tokenAddress,
+              holderRewardCount: Number(dist?.count || 0),
+              holderRewardTxHashes: dist?.txHashes || [],
+              holderRewardWei: asyncPaidToHolders.toString(),
+              creatorFeeTxHash: asyncCreatorFeeTxHash,
+              creatorWei: asyncCreatorWei.toString()
+            }).catch(() => {});
+          })();
+          paidToHolders = cWei;
+          holderRewardTxHashes = ["queued"];
+          holderRewardCount = -1;
         }
         const creatorWei = cWei > paidToHolders ? cWei - paidToHolders : 0n;
         if (creatorWei > 0n) creatorFeeTxHash = await rhTransferEth(keypair.secretKey, cRecipient, creatorWei, CONFIG.rhChainRpcUrl);

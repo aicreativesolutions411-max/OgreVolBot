@@ -10462,7 +10462,7 @@ function launchCoinHtml() {
             </label>
             <label>
               Recipients per payout
-              <input data-launch-coin-holder-reward-max type="number" min="1" max="25" step="1" value="${escapeHtml(String(draft.holderRewards?.maxRecipients || 8))}">
+              <input data-launch-coin-holder-reward-max type="number" min="1" max="100" step="1" value="${escapeHtml(String(draft.holderRewards?.maxRecipients || 100))}">
             </label>
             <p class="muted full-span">Optional launch hook: holders above the token threshold and observed for the hold window can receive creator-fee rewards. This is not a token tax and does not add transfer restrictions.</p>
           </div>`
@@ -10659,7 +10659,7 @@ function readLaunchCoinDraft() {
       shareBps: Number($("[data-launch-coin-holder-reward-share]")?.value || 5000),
       minTokens: Number($("[data-launch-coin-holder-reward-min-tokens]")?.value || 3000000) || 3000000,
       minHoldHours: Number($("[data-launch-coin-holder-reward-min-hours]")?.value ?? 4),
-      maxRecipients: Number($("[data-launch-coin-holder-reward-max]")?.value || 8) || 8
+      maxRecipients: Number($("[data-launch-coin-holder-reward-max]")?.value || 100) || 100
     },
     devBuyEnabled: Boolean($("[data-launch-coin-dev-buy-enabled]")?.checked),
     devWalletIndex: $("[data-launch-coin-dev-wallet]")?.value || draft.devWalletIndex || "",
