@@ -13051,6 +13051,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(sniperSettingsPath(), { users: {} });
   await writeJsonIfMissing(tradeHistoryPath(), { trades: [] });
   await writeJsonIfMissing(pumpLaunchAttemptsPath(), { attempts: [] });
+  await writeJsonIfMissing(holderRewardsPath(), { seen: {} });
   await writeJsonIfMissing(rhGuardsPath(), { guards: [] });
   await writeJsonIfMissing(rhAutoBundlesPath(), { bundles: [] });
   await writeJsonIfMissing(webAuthPath(), { codes: [], sessions: [] });
@@ -13148,6 +13149,10 @@ function tradeHistoryPath() {
 
 function pumpLaunchAttemptsPath() {
   return path.join(CONFIG.dataDir, "pump-launch-attempts.json");
+}
+
+function holderRewardsPath() {
+  return path.join(CONFIG.dataDir, "holder-rewards.json");
 }
 
 function swampLeaderboardPath() {
@@ -22388,6 +22393,216 @@ function splitReferralLamports(referralLamports, split) {
   return parts;
 }
 
+function normalizeHolderRewardPolicy(raw = {}) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const enabled = parseBoolean(source.enabled ?? source.holderRewardsEnabled ?? source.checked);
+  if (!enabled) return { enabled: false };
+  const shareText = String(source.shareMode || source.mode || "").trim().toLowerCase();
+  let shareBps = Number.parseInt(String(source.shareBps ?? source.feeShareBps ?? source.rewardShareBps ?? ""), 10);
+  if (!Number.isFinite(shareBps)) shareBps = shareText === "all" || shareText === "100" || shareText === "100%" ? 10_000 : 5_000;
+  shareBps = shareBps >= 7_500 ? 10_000 : 5_000;
+  const minTokens = Math.max(1, Math.min(1_000_000_000_000, firstMeaningfulNumber(
+    source.minTokens,
+    source.minimumTokens,
+    source.minHolderTokens,
+    3_000_000
+  ) || 3_000_000));
+  const minHoldHours = Math.max(0, Math.min(720, firstMeaningfulNumber(
+    source.minHoldHours,
+    source.holdHours,
+    source.minimumHoldHours,
+    4
+  ) ?? 4));
+  const maxRecipients = Math.max(1, Math.min(25, Math.round(firstMeaningfulNumber(source.maxRecipients, source.recipientCap, 8) || 8)));
+  return {
+    enabled: true,
+    shareBps,
+    shareMode: shareBps >= 10_000 ? "all" : "half",
+    minTokens,
+    minHoldHours,
+    maxRecipients,
+    basis: "creator_fees"
+  };
+}
+
+function launchHolderRewardsFromBody(body = {}) {
+  return normalizeHolderRewardPolicy(body.holderRewards || {
+    enabled: body.holderRewardsEnabled,
+    shareBps: body.holderRewardShareBps,
+    shareMode: body.holderRewardShareMode,
+    minTokens: body.holderRewardMinTokens,
+    minHoldHours: body.holderRewardMinHoldHours,
+    maxRecipients: body.holderRewardMaxRecipients
+  });
+}
+
+function launchHolderRewardsFromAttempt(attempt = {}) {
+  return normalizeHolderRewardPolicy(attempt.holderRewards || attempt.launchHolderRewards || attempt.rhHolderRewards || {
+    enabled: attempt.holderRewardsEnabled,
+    shareBps: attempt.holderRewardShareBps,
+    minTokens: attempt.holderRewardMinTokens,
+    minHoldHours: attempt.holderRewardMinHoldHours,
+    maxRecipients: attempt.holderRewardMaxRecipients
+  });
+}
+
+async function holderRewardPolicyForMint(mint, rail = "") {
+  const target = String(mint || "").trim().toLowerCase();
+  if (!target) return { enabled: false };
+  const store = await readPumpLaunchAttempts().catch(() => ({ attempts: [] }));
+  for (const a of (store.attempts || []).slice().reverse()) {
+    if (rail && String(a.rail || "").toLowerCase() !== String(rail).toLowerCase()) continue;
+    const keys = [a.mintPublicKey, a.tokenMint, a.mint, a.tokenAddress].map((v) => String(v || "").trim().toLowerCase()).filter(Boolean);
+    if (!keys.includes(target)) continue;
+    return launchHolderRewardsFromAttempt(a);
+  }
+  return { enabled: false };
+}
+
+function holderRewardRawTokenAmountToUi(raw, decimals = 18) {
+  const s = String(raw ?? "0").replace(/[^\d]/g, "") || "0";
+  const dec = Math.max(0, Math.min(36, Number(decimals) || 0));
+  if (!dec) return Number(s) || 0;
+  if (s.length <= dec) return Number(`0.${"0".repeat(dec - s.length)}${s}`) || 0;
+  const whole = s.slice(0, -dec);
+  const frac = s.slice(-dec, -dec + 8);
+  return Number(`${whole}.${frac}`) || 0;
+}
+
+function splitBigIntByWeights(total, rows) {
+  const amount = BigInt(total);
+  if (amount <= 0n || !Array.isArray(rows) || !rows.length) return [];
+  const weights = rows.map((r) => BigInt(Math.max(1, Math.round(Number(r.amount || r.weight || 0) * 1_000_000))));
+  const sum = weights.reduce((a, b) => a + b, 0n);
+  if (sum <= 0n) return [];
+  const parts = [];
+  let assigned = 0n;
+  for (let i = 0; i < rows.length; i += 1) {
+    const value = i === rows.length - 1 ? amount - assigned : (amount * weights[i]) / sum;
+    assigned += value;
+    parts.push({ ...rows[i], value });
+  }
+  return parts;
+}
+
+function holderRewardSeenKey(chain, token) {
+  return `${String(chain || "").toLowerCase()}:${String(token || "").toLowerCase()}`;
+}
+
+async function markAndSelectHolderRewardRecipients({ chain, token, rows, policy, payer }) {
+  const clean = (Array.isArray(rows) ? rows : [])
+    .map((r) => ({ wallet: String(r.wallet || r.address || "").trim(), amount: Number(r.amount || 0) }))
+    .filter((r) => r.wallet && r.amount >= Number(policy.minTokens || 0) && String(r.wallet).toLowerCase() !== String(payer || "").toLowerCase());
+  if (!clean.length) return [];
+  const key = holderRewardSeenKey(chain, token);
+  const now = Date.now();
+  let eligible = [];
+  await withFileLock(holderRewardsPath(), async () => {
+    const store = await readJson(holderRewardsPath()).catch(() => ({ seen: {} }));
+    if (!store.seen || typeof store.seen !== "object") store.seen = {};
+    if (!store.seen[key] || typeof store.seen[key] !== "object") store.seen[key] = {};
+    const seen = store.seen[key];
+    for (const r of clean) {
+      const w = r.wallet.toLowerCase();
+      if (!seen[w]) seen[w] = now;
+      r.firstSeenAt = Number(seen[w]) || now;
+    }
+    const maxKeys = 6000;
+    const all = Object.keys(store.seen);
+    if (all.length > 400) {
+      for (const old of all.slice(0, all.length - 400)) delete store.seen[old];
+    }
+    const walletKeys = Object.keys(seen);
+    if (walletKeys.length > maxKeys) {
+      for (const old of walletKeys.slice(0, walletKeys.length - maxKeys)) delete seen[old];
+    }
+    await writeJsonFile(holderRewardsPath(), store);
+    const minMs = Math.max(0, Number(policy.minHoldHours || 0)) * 60 * 60 * 1000;
+    eligible = clean
+      .filter((r) => minMs <= 0 || now - Number(r.firstSeenAt || now) >= minMs)
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, Math.max(1, Math.min(25, Number(policy.maxRecipients || 8))));
+  });
+  return eligible;
+}
+
+async function solanaHolderRewardRecipients(tokenMint, policy, payer) {
+  const mintPk = parsePublicKey(String(tokenMint || ""));
+  const [holderRows, supply] = await Promise.all([
+    fetchTokenHolderRows(mintPk.toBase58()).catch(() => []),
+    rpcWithRetry("holder reward supply", () => connection.getTokenSupply(mintPk, "confirmed")).catch(() => null)
+  ]);
+  const supplyUi = Number(supply?.value?.uiAmount || supply?.value?.uiAmountString || 0) || 0;
+  const rows = (Array.isArray(holderRows) ? holderRows : [])
+    .map((h) => ({ wallet: h.wallet, amount: supplyUi > 0 ? supplyUi * (Number(h.pct || 0) / 100) : Number(h.amount || h.uiAmount || 0) }))
+    .filter((h) => {
+      try { new PublicKey(h.wallet); return true; } catch { return false; }
+    });
+  return markAndSelectHolderRewardRecipients({ chain: "solana", token: mintPk.toBase58(), rows, policy, payer });
+}
+
+async function rhHolderRewardRecipients(tokenAddress, policy, payer) {
+  const addr = String(tokenAddress || "").trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return [];
+  const data = await fetchJson(`https://robinhoodchain.blockscout.com/api/v2/tokens/${addr}/holders`, {
+    headers: { accept: "application/json" },
+    timeoutMs: 6000
+  }).catch(() => null);
+  const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
+  const rows = items.map((item) => {
+    const wallet = firstString(item?.address?.hash, item?.address_hash, item?.holder?.hash, item?.holder, item?.address);
+    const decimals = firstMeaningfulNumber(item?.token?.decimals, item?.decimals, 18) || 18;
+    const raw = firstString(item?.value, item?.balance, item?.token_balance, item?.total?.value);
+    return { wallet, amount: holderRewardRawTokenAmountToUi(raw, decimals) };
+  }).filter((r) => /^0x[0-9a-fA-F]{40}$/.test(r.wallet));
+  return markAndSelectHolderRewardRecipients({ chain: "robinhood", token: addr, rows, policy, payer });
+}
+
+async function distributeSolHolderRewards({ signer, tokenMint, policy, totalLamports }) {
+  const normalized = normalizeHolderRewardPolicy(policy);
+  if (!normalized.enabled) return { paidLamports: 0n, count: 0, signature: "" };
+  const total = BigInt(totalLamports || 0);
+  const rewardLamports = (total * BigInt(normalized.shareBps)) / 10_000n;
+  if (rewardLamports < 5000n) return { paidLamports: 0n, count: 0, signature: "", reason: "dust" };
+  const recipients = await solanaHolderRewardRecipients(tokenMint, normalized, signer.publicKey.toBase58()).catch(() => []);
+  const parts = splitBigIntByWeights(rewardLamports, recipients).filter((p) => p.value >= 5000n);
+  if (!parts.length) return { paidLamports: 0n, count: 0, signature: "", reason: "no_eligible_holders" };
+  const tx = new Transaction();
+  let paidLamports = 0n;
+  for (const p of parts) {
+    tx.add(SystemProgram.transfer({
+      fromPubkey: signer.publicKey,
+      toPubkey: new PublicKey(p.wallet),
+      lamports: Number(p.value)
+    }));
+    paidLamports += p.value;
+  }
+  const signature = await sendLegacyTransaction(tx, [signer]);
+  return { paidLamports, count: parts.length, signature, recipients: parts.map((p) => ({ wallet: p.wallet, lamports: p.value.toString() })) };
+}
+
+async function distributeRhHolderRewards({ signerSecretKey, tokenAddress, policy, totalWei, payerAddress }) {
+  const normalized = normalizeHolderRewardPolicy(policy);
+  if (!normalized.enabled) return { paidWei: 0n, count: 0, txHashes: [] };
+  const total = BigInt(totalWei || 0);
+  const rewardWei = (total * BigInt(normalized.shareBps)) / 10_000n;
+  if (rewardWei < 1_000_000_000_000n) return { paidWei: 0n, count: 0, txHashes: [], reason: "dust" };
+  const recipients = await rhHolderRewardRecipients(tokenAddress, normalized, payerAddress).catch(() => []);
+  const parts = splitBigIntByWeights(rewardWei, recipients).filter((p) => p.value >= 1_000_000_000_000n);
+  const txHashes = [];
+  let paidWei = 0n;
+  for (const p of parts) {
+    try {
+      const txHash = await rhTransferEth(signerSecretKey, p.wallet, p.value, CONFIG.rhChainRpcUrl);
+      if (txHash) txHashes.push(txHash);
+      paidWei += p.value;
+    } catch (error) {
+      await audit("web_rh_holder_reward_failed", { tokenAddress, wallet: p.wallet, wei: p.value.toString(), error: friendlyError(error) }).catch(() => {});
+    }
+  }
+  return { paidWei, count: txHashes.length, txHashes, recipients: parts.map((p) => ({ wallet: p.wallet, wei: p.value.toString() })) };
+}
+
 async function referralFeeTargets(userId, feeLamports) {
   const total = BigInt(feeLamports);
   const fallback = { ownerLamports: total, referralLamports: 0n, referralWallet: "", referralSplits: [], referrerUserId: "" };
@@ -30318,6 +30533,8 @@ function defaultJsonForPath(filePath) {
       return { configs: {} };
     case "trade-history.json":
       return { trades: [] };
+    case "holder-rewards.json":
+      return { seen: {} };
     case "web-auth.json":
       return { codes: [], sessions: [], profiles: {}, browserTradeOrders: [], sessionWalletOrders: [] };
     case "lock-in-events.json":
@@ -43344,7 +43561,8 @@ async function webLaunchedCoins(userId) {
       mint, symbol: a.symbol || "", name: a.tokenName || a.name || "",
       rail: a.rail || "pump", devWallet: a.devWalletPublicKey || "", status: a.status || "",
       txSignature: a.txSignature || "", imageUri: a.imageUri || (a.metadataJson && a.metadataJson.image) || "",
-      createdAt: a.createdAt || a.updatedAt || ""
+      createdAt: a.createdAt || a.updatedAt || "",
+      holderRewards: launchHolderRewardsFromAttempt(a)
     });
   }
   const walletStore = await readWalletStore();
@@ -43418,8 +43636,30 @@ async function webClaimCreatorFeesCore(userId, body = {}) {
   invalidateWalletReadCache(wallet.publicKey);
   const after = Number(await getSolBalanceCached(keypair.publicKey, { force: true }).catch(() => before));
   const claimedSol = lamportsToSol(Math.max(0, after - before));
-  await audit("web_claim_creator_fees", { userId, wallet: wallet.publicKey, rail, mint: body.mint || "", signature, claimedSol, toppedUp });
-  return { ok: true, signature, claimedSol, wallet: wallet.publicKey, rail, funded: toppedUp };
+  let holderRewards = null;
+  const claimMint = String(body.mint || "").trim();
+  if (claimMint) {
+    const policy = await holderRewardPolicyForMint(claimMint, rail).catch(() => ({ enabled: false }));
+    if (policy?.enabled) {
+      try {
+        const claimedLamports = BigInt(Math.max(0, Math.floor(Number(claimedSol || 0) * LAMPORTS_PER_SOL)));
+        const dist = await distributeSolHolderRewards({ signer: keypair, tokenMint: claimMint, policy, totalLamports: claimedLamports });
+        holderRewards = {
+          enabled: true,
+          shareBps: policy.shareBps,
+          count: dist.count || 0,
+          paidLamports: String(dist.paidLamports || 0n),
+          signature: dist.signature || "",
+          reason: dist.reason || ""
+        };
+      } catch (error) {
+        holderRewards = { enabled: true, error: friendlyError(error) };
+        await audit("web_claim_holder_rewards_failed", { userId, wallet: wallet.publicKey, rail, mint: claimMint, error: friendlyError(error) }).catch(() => {});
+      }
+    }
+  }
+  await audit("web_claim_creator_fees", { userId, wallet: wallet.publicKey, rail, mint: body.mint || "", signature, claimedSol, toppedUp, holderRewards });
+  return { ok: true, signature, claimedSol, wallet: wallet.publicKey, rail, funded: toppedUp, holderRewards };
 }
 
 // ---------- Robinhood Chain (EVM) launch rail ----------
@@ -43681,6 +43921,7 @@ async function rhLaunchMetaByAddress() {
       hasImage: Boolean(a.rhImageFile),
       creatorFeeBps: Number(a.rhCreatorFeeBps || 0),
       creatorFeeRecipient: a.rhCreatorFeeRecipient || "",
+      holderRewards: launchHolderRewardsFromAttempt(a),
       deployer: a.rhDeployer || "",
       devWalletPublicKey: a.devWalletPublicKey || "",
       slimewire: true
@@ -43705,7 +43946,7 @@ async function webRhPairs(category = "trending") {
         holders: null, marketCapUsd: null, volume24hUsd: null, priceUsd: null, totalSupplyUi: 0,
         slimewire: true, description: a.description || "", website: a.website || "", x: a.x || "", telegram: a.telegram || "",
         imageUrl: a.rhImageFile ? `/api/web/rh/token-image/${addr}` : "",
-        creatorFeeBps: Number(a.rhCreatorFeeBps || 0), explorer: rhExplorerToken(addr),
+        creatorFeeBps: Number(a.rhCreatorFeeBps || 0), holderRewards: launchHolderRewardsFromAttempt(a), explorer: rhExplorerToken(addr),
       });
     }
     rows.sort((x, y) => Date.parse(y.createdAt || 0) - Date.parse(x.createdAt || 0));
@@ -43724,7 +43965,7 @@ async function webRhPairs(category = "trending") {
     const m = meta.get(t.address.toLowerCase());
     return {
       ...t,
-      ...(m ? { slimewire: true, description: m.description, website: m.website, x: m.x, telegram: m.telegram } : {}),
+      ...(m ? { slimewire: true, description: m.description, website: m.website, x: m.x, telegram: m.telegram, holderRewards: m.holderRewards } : {}),
       imageUrl: (m && m.hasImage) ? `/api/web/rh/token-image/${t.address}` : (t.iconUrl || ""),
       explorer: rhExplorerToken(t.address)
     };
@@ -43864,6 +44105,8 @@ async function webRhTradeCore(userId, body = {}) {
   // Creator fee (pump-style, venue-side): if this coin's launcher opted in, pay them their % of this
   // trade in ETH — straight to their wallet, on top of the platform fee. Best-effort, never blocks.
   let creatorFeeTxHash = "";
+  let holderRewardTxHashes = [];
+  let holderRewardCount = 0;
   try {
     const meta = (await rhLaunchMetaByAddress().catch(() => new Map())).get(tokenAddress.toLowerCase());
     const cBps = BigInt(Math.max(0, (meta && meta.creatorFeeBps) || 0));
@@ -43872,7 +44115,29 @@ async function webRhTradeCore(userId, body = {}) {
       let cWei = 0n;
       if (side === "buy") cWei = (feeBps > 0n ? (amountRaw + feeWei) : amountRaw) * cBps / 10_000n; // % of gross ETH in
       else { const outEth = Number(quote.outFormatted || 0); if (outEth > 0) cWei = (BigInt(Math.round(outEth * 1e9)) * 10n ** 9n * cBps) / 10_000n; }
-      if (cWei > 0n) creatorFeeTxHash = await rhTransferEth(keypair.secretKey, cRecipient, cWei, CONFIG.rhChainRpcUrl);
+      if (cWei > 0n) {
+        let paidToHolders = 0n;
+        const holderPolicy = normalizeHolderRewardPolicy(meta?.holderRewards || {});
+        if (holderPolicy.enabled) {
+          const dist = await distributeRhHolderRewards({
+            signerSecretKey: keypair.secretKey,
+            tokenAddress,
+            policy: holderPolicy,
+            totalWei: cWei,
+            payerAddress: evmAddress
+          }).catch((error) => {
+            void audit("web_rh_holder_rewards_failed", { userId, tokenAddress, error: friendlyError(error) }).catch(() => {});
+            return null;
+          });
+          if (dist) {
+            paidToHolders = BigInt(dist.paidWei || 0);
+            holderRewardTxHashes = dist.txHashes || [];
+            holderRewardCount = Number(dist.count || 0);
+          }
+        }
+        const creatorWei = cWei > paidToHolders ? cWei - paidToHolders : 0n;
+        if (creatorWei > 0n) creatorFeeTxHash = await rhTransferEth(keypair.secretKey, cRecipient, creatorWei, CONFIG.rhChainRpcUrl);
+      }
     }
   } catch (error) {
     await audit("web_rh_creator_fee_failed", { userId, tokenAddress, error: friendlyError(error) }).catch(() => {});
@@ -43881,7 +44146,7 @@ async function webRhTradeCore(userId, body = {}) {
     rhEthBalance(evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ eth: "0" })),
     rhErc20Balance(tokenAddress, evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ uiAmount: 0 }))
   ]);
-  await audit("web_rh_trade", { userId, wallet: wallet.publicKey, evmAddress, side, tokenAddress, txHashes: hashes, out: quote.outFormatted, impact: quote.impactPercent, feeWei: feeWei.toString(), feeTxHash, creatorFeeTxHash });
+  await audit("web_rh_trade", { userId, wallet: wallet.publicKey, evmAddress, side, tokenAddress, txHashes: hashes, out: quote.outFormatted, impact: quote.impactPercent, feeWei: feeWei.toString(), feeTxHash, creatorFeeTxHash, holderRewardTxHashes, holderRewardCount });
   return {
     ok: true,
     side,
@@ -44295,7 +44560,8 @@ async function webLaunchRhCoinCore(userId, body = {}) {
   // Creator-fee opt-in (pump-style, venue-side): if checked, the creator earns rhCreatorFeeBps of every
   // trade of this coin THROUGH SLIMEWIRE, paid in ETH to the dev wallet's EVM address. Stored on the coin,
   // NOT baked into the token — so the coin stays ✅ Verified. Recipient = deployer (the dev wallet).
-  const creatorFeeEnabled = parseBoolean(body.creatorFeeEnabled);
+  const holderRewards = launchHolderRewardsFromBody(body);
+  const creatorFeeEnabled = parseBoolean(body.creatorFeeEnabled) || holderRewards.enabled;
   await upsertPumpLaunchAttempt({
     id: attemptId,
     userId,
@@ -44313,10 +44579,12 @@ async function webLaunchRhCoinCore(userId, body = {}) {
     rhDeployer: result.deployer,
     rhCreatorFeeBps: creatorFeeEnabled ? CONFIG.rhCreatorFeeBps : 0,
     rhCreatorFeeRecipient: creatorFeeEnabled ? result.deployer : "",
+    holderRewards,
+    rhHolderRewards: holderRewards,
     txSignature: result.txHash,
     createdAt: new Date().toISOString()
   });
-  await audit("web_rh_launch", { userId, wallet: wallet.publicKey, token: result.tokenAddress, tx: result.txHash, supply: result.supplyTokens, gasEth: result.gasCostEth, creatorFeeBps: creatorFeeEnabled ? CONFIG.rhCreatorFeeBps : 0 });
+  await audit("web_rh_launch", { userId, wallet: wallet.publicKey, token: result.tokenAddress, tx: result.txHash, supply: result.supplyTokens, gasEth: result.gasCostEth, creatorFeeBps: creatorFeeEnabled ? CONFIG.rhCreatorFeeBps : 0, holderRewards });
   void instantRhWalletLaunchSnipe({
     tokenAddress: result.tokenAddress,
     deployer: result.deployer,
@@ -44324,7 +44592,7 @@ async function webLaunchRhCoinCore(userId, body = {}) {
     name: String(body.name || "").trim(),
     block: result.blockNumber || 0
   }).catch((error) => console.warn(`[wallet-launch-snipe:rh] instant fire failed: ${friendlyError(error)}`));
-  return { ok: true, ...result, chainId: RH_CHAIN_ID, explorerToken: rhExplorerToken(result.tokenAddress), creatorFeeBps: creatorFeeEnabled ? CONFIG.rhCreatorFeeBps : 0 };
+  return { ok: true, ...result, chainId: RH_CHAIN_ID, explorerToken: rhExplorerToken(result.tokenAddress), creatorFeeBps: creatorFeeEnabled ? CONFIG.rhCreatorFeeBps : 0, holderRewards };
 }
 
 // Make a launched coin BUYABLE: create + seed its Uniswap V3 pool with the creator's ETH + tokens. This
@@ -53584,6 +53852,8 @@ function buildPumpLaunchPayload(basePayload) {
       buybackWallet: basePayload.buybackWallet,
       burnCreatorFees: basePayload.burnCreatorFees,
       feeMode: basePayload.feeMode,
+      holderRewards: basePayload.holderRewards?.enabled ? basePayload.holderRewards : null,
+      holderRewardShareBps: basePayload.holderRewards?.enabled ? basePayload.holderRewards.shareBps : null,
       devBuySol: basePayload.devBuy?.amountSol,
       initialBuySol: basePayload.devBuy?.amountSol,
       devBuyEnabled: basePayload.devBuy?.enabled,
@@ -54406,6 +54676,7 @@ async function recordPumpLaunchEarlyFailure({
     selectedDevWalletId: selectedDevWalletId || firstString(body.selectedDevWalletId, body.devWalletIndex, body.devWalletPublicKey),
     tokenName: name || cleanLaunchText(body.name, 64),
     symbol: symbol || cleanTickerSymbol(body.symbol || body.ticker || ""),
+    holderRewards: launchHolderRewardsFromBody(body),
     status: PUMP_LAUNCH_STATUS.FAILED,
     stage: error.stage || PUMP_LAUNCH_STAGE.CONFIG,
     errorCode: error.code || "PUMP_LAUNCH_FAILED",
@@ -54977,6 +55248,7 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
     tokenName: basePayload.name,
     symbol: basePayload.symbol,
     tokenMint: mint,
+    holderRewards: basePayload.holderRewards || { enabled: false },
     status: PUMP_LAUNCH_STATUS.COMPLETE,
     provider: "jito-bundle",
     bundleId,
@@ -55053,6 +55325,7 @@ async function webLaunchMeteoraDbc(userId, body, basePayload) {
     id: attemptId, userId, selectedDevWalletId, devWalletPublicKey: creatorPk,
     tokenName: basePayload.name, symbol: basePayload.symbol, mintPublicKey: tokenMint, rail: "meteora",
     metadataUri: metadata.uri,
+    holderRewards: basePayload.holderRewards || { enabled: false },
     // Store the image + metadata JSON so the SlimeWire coin page/feed shows the image INSTANTLY (same
     // as pump) instead of waiting for DexScreener to index the brand-new coin.
     imageUri: metadata.imageUri || metadata.imageUrl || "",
@@ -55359,6 +55632,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
   const creatorFeeRecipient = cleanLaunchText(body.creatorFeeRecipient || body.feeRecipient, 64);
   const buybackWallet = cleanLaunchText(body.buybackWallet, 64);
   const burnCreatorFees = cleanLaunchBoolean(body.burnCreatorFees) || feeMode === "burn";
+  const holderRewards = launchHolderRewardsFromBody(body);
 
   const basePayload = {
     name,
@@ -55382,8 +55656,10 @@ async function webLaunchPumpCoin(userId, body = {}) {
       creatorFeeBps,
       creatorFeeRecipient,
       buybackWallet,
-      burnCreatorFees
+      burnCreatorFees,
+      holderRewards
     },
+    holderRewards,
     // Up to 4 promoter wallets + % to share the creator's earnings with. Stored on the coin (display +
     // pre-fill); paid out by the creator-driven /api/web/launch/split-creator-fees action.
     creatorFeeSplit: normalizeReferralPayoutSplit(body.creatorFeeSplit) || [],
@@ -55514,6 +55790,19 @@ async function webLaunchPumpCoin(userId, body = {}) {
     tokenMint: tokenMint ? shortMint(tokenMint) : "",
     hasImage: Boolean(imageDataUrl)
   });
+  await upsertPumpLaunchAttempt({
+    id: launchAttemptId,
+    userId,
+    tokenName: name,
+    symbol,
+    mintPublicKey: tokenMint || "",
+    tokenMint: tokenMint || "",
+    rail: basePayload.rail,
+    status,
+    provider: "generic",
+    holderRewards,
+    updatedAt: new Date().toISOString()
+  }).catch((error) => console.warn(`[pump-launch] generic ledger write failed: ${error.message}`));
 
   return {
     status,

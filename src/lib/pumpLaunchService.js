@@ -715,6 +715,7 @@ export class PumpLaunchService {
       authResult: "authorized",
       tokenName: basePayload?.name || "",
       symbol: basePayload?.symbol || "",
+      holderRewards: basePayload?.holderRewards || { enabled: false },
       mintPublicKey,
       mintSecretStored: Boolean(this.encryptMintSecret),
       encryptedMintSecret: this.encryptMintSecret ? this.encryptMintSecret(mintKeypair) : null,

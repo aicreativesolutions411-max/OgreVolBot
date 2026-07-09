@@ -1449,7 +1449,7 @@
     const ago=(iso)=>{const s=(Date.now()-Date.parse(iso||0))/1000;return !isFinite(s)?"":s<90?Math.round(s)+"s":s<5400?Math.round(s/60)+"m":s<129600?Math.round(s/3600)+"h":Math.round(s/86400)+"d";};
     const list=$("#shList");if(!list)return;
     if(!rows.length){list.innerHTML='<div class="msg" style="font-size:12px;padding:8px 2px">No SlimeWire launches on Robinhood yet — be the first. Your coin lands here the moment it deploys, ✅ Verified.</div>';return;}
-    const row=(r)=>{const stats=[r.marketCapUsd?('MC '+fmtUsd(r.marketCapUsd)):'',r.holders?(r.holders+' holders'):'',r.creatorFeeBps?('you earn '+(r.creatorFeeBps/100)+'%'):''].filter(Boolean).join(' · ')||'just launched — no pool yet';
+    const row=(r)=>{const stats=[r.marketCapUsd?('MC '+fmtUsd(r.marketCapUsd)):'',r.holders?(r.holders+' holders'):'',r.creatorFeeBps?('you earn '+(r.creatorFeeBps/100)+'%'):'',(r.holderRewards&&r.holderRewards.enabled)?('holder rewards '+(r.holderRewards.shareBps>=10000?'all':'half')):''].filter(Boolean).join(' · ')||'just launched — no pool yet';
       const soc=[];if(r.x)soc.push('<a href="'+esc(r.x)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="X">𝕏</a>');if(r.telegram)soc.push('<a href="'+esc(r.telegram)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Telegram">✈</a>');if(r.website)soc.push('<a href="'+esc(r.website)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Website">🌐</a>');soc.push('<a onclick="event.stopPropagation();GG.copy(\''+esc(r.address)+'\')" title="Copy contract address">⧉</a>');
       return '<div class="rhrow" style="display:flex;align-items:center;gap:8px;padding:9px 10px;border-bottom:1px solid var(--border);cursor:pointer;overflow:hidden" onclick="GG.rhTrade(\''+esc(r.address)+'\')">'+rhAvatar(r,30)+
         '<div style="min-width:0;flex:1;overflow:hidden"><div style="display:flex;gap:6px;align-items:center;min-width:0"><b style="font-size:12.5px;flex:0 0 auto">'+esc(r.symbol||"?")+'</b>'+(r.createdAt?'<span class="mut" style="font-size:9px;flex:0 0 auto">⏱'+ago(r.createdAt)+'</span>':'')+'<span class="mut" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.name||"")+'</span><span title="Verified — our no-rug contract" style="font-size:11px;flex:0 0 auto">✅</span></div>'+
@@ -3608,6 +3608,15 @@
     '<div class="chartwrap" style="position:relative;height:360px;border-radius:12px;overflow:hidden;border:1px solid var(--border2)">'+chartIframe(mint,r)+'</div>';
   }
   function lcWireChat(){const i=$("#lcChatCa");if(!i)return;const refresh=()=>{const m=i.value.trim();const b=$("#lcChatBody");if(b)b.innerHTML=m?lcChatForMint(m):'<p class="mut" style="font-size:12px">Paste a coin CA above to load its chat &amp; live room.</p>';};i.onchange=refresh;i.onkeydown=(e)=>{if(e.key==="Enter")refresh();};}
+  function lcHolderRewardsHtml(pfx){
+    return '<div class="feebox" style="margin-top:8px">'+
+      '<label class="lcheck" style="margin:0"><input type="checkbox" id="'+pfx+'HolderRewards"> <span><b>Holder rewards from creator fees</b> - split creator fees to real holders instead of only the dev wallet.</span></label>'+
+      '<div id="'+pfx+'HolderRewardsFields" class="field row2" style="display:none;margin-top:8px"><div><label style="font-size:11px">Fee split</label><select id="'+pfx+'HolderRewardShare"><option value="5000">Half to holders</option><option value="10000">All to holders</option></select></div><div><label style="font-size:11px">Hold rule</label><input id="'+pfx+'HolderRewardMinHours" inputmode="numeric" value="4" placeholder="hours"></div><div><label style="font-size:11px">Minimum tokens</label><input id="'+pfx+'HolderRewardMinTokens" inputmode="numeric" value="3000000"></div><div><label style="font-size:11px">Recipients per payout</label><input id="'+pfx+'HolderRewardMax" inputmode="numeric" value="8"></div></div>'+
+      '<div class="ln mut" style="font-size:10px;margin-top:6px">Optional launch hook: holders with at least 3M tokens observed for 4h can receive creator-fee rewards. No token tax, no transfer trap.</div>'+
+    '</div>';
+  }
+  function lcWireHolderRewards(pfx){const cb=$("#"+pfx+"HolderRewards"),box=$("#"+pfx+"HolderRewardsFields");if(!cb||!box)return;const sync=()=>{box.style.display=cb.checked?"":"none";};cb.onchange=sync;sync();}
+  function lcReadHolderRewards(pfx){const cb=$("#"+pfx+"HolderRewards");if(!cb||!cb.checked)return{enabled:false};return{enabled:true,shareBps:Number(($("#"+pfx+"HolderRewardShare")||{}).value||5000),minTokens:Number((($("#"+pfx+"HolderRewardMinTokens")||{}).value||"3000000").replace(/,/g,""))||3000000,minHoldHours:Number(($("#"+pfx+"HolderRewardMinHours")||{}).value||4)||4,maxRecipients:Number(($("#"+pfx+"HolderRewardMax")||{}).value||8)||8};}
   async function pollLaunchProgress(aid,btn){
     const out=$("#lcOut");let tries=0;
     const tick=async()=>{
@@ -3680,6 +3689,7 @@
       '<div class="ln">ETH balance: <b>'+eth.toFixed(6)+' ETH</b> '+(eth>0.00005?'✅ enough for a deploy (~$0.05)':'⚠️ <b>fund it first</b> — bridge a little ETH (0.0005 is plenty) to the address above via the <a href="https://portal.arbitrum.io/?orbitChain=robinhood" target="_blank" rel="noopener">Arbitrum bridge</a>')+' · <a href="'+esc(d.explorer)+'" target="_blank" rel="noopener">explorer</a></div>'+
       '<div class="field" style="margin-top:8px"><label style="font-size:11px">Total supply (tokens, all to your wallet)</label><input id="lcRhSupply" inputmode="numeric" value="1000000000"></div>'+
       '<label class="lcheck" style="display:flex;align-items:flex-start;gap:8px;font-size:11px;cursor:pointer;margin-top:4px"><input type="checkbox" id="lcRhCreatorFee"> <span>💰 <b>Earn creator fees — 1% of every trade</b> (same as pump.fun), paid in ETH to your wallet on trades through SlimeWire. It\'s taken by the site at trade time — <b>never</b> baked into the token, so your coin stays <b>✅ Verified safe</b>.</span></label>'+
+      lcHolderRewardsHtml("lcRh")+
       '<div class="ln mut" style="font-size:10px;margin-top:6px">No dev-buy at launch on Robinhood: the coin has no trading pool the instant it deploys, so there\'s nothing to buy yet. Use <b>📦 Auto-bundle when it gets a pool</b> (shows after you launch) to buy the moment liquidity opens — that\'s the dev-buy for this chain.</div>'+
       '<div class="ln mut" style="font-size:10px">Your image, description &amp; socials show on SlimeWire\'s <b>🪶 Robinhood board</b> (Trenches tab) — on-chain the coin is name + ticker on <a href="https://robinhoodchain.blockscout.com" target="_blank" rel="noopener">Blockscout</a> (EVM chains have no native PFP standard). Trading pools (Uniswap) come next once its addresses publish.</div></div>';
   }
@@ -3706,6 +3716,7 @@
     if(state.launchBanner&&$("#lcBannerPrev"))$("#lcBannerPrev").innerHTML='<img src="'+state.launchBanner.dataUrl+'" style="height:40px;border-radius:10px;object-fit:cover;border:1px solid var(--border)">';
     // Re-apply the show/hide that depends on restored checkbox state (promoter rows, bundle amount).
     const pm=$("#lcPromo");if(pm){const e=$("#lcPromoRows"),pp=$("#lcPayPromo");if(e)e.style.display=pm.checked?"":"none";if(pp)pp.style.display=pm.checked?"":"none";}
+    lcWireHolderRewards("lc");lcWireHolderRewards("lcRh");
     const bw=$("#lcBundleWallets");if(bw){const on=bw.checked;["lcBundleAmtWrap","lcBundleNote"].forEach(id=>{const e=$("#"+id);if(e)e.style.display=on?"":"none";});}}
   async function renderLaunch(){
     setActiveView("v-launch");subbarTool("🚀 Launch a Coin");if(state.token)await refreshWallets();if(state.route!=="launch")return;
@@ -3742,6 +3753,7 @@
         '<div class="lcnote" style="display:block;font-size:11px">💧 <b>Your first buy IS the starting liquidity.</b> It puts real SOL into the curve so the coin isn\'t empty at launch — and you (or anyone) can add more any time by buying. On a bonding curve, buying = adding liquidity.</div>'+
         '<label class="lcheck"><input type="checkbox" id="lcBundle" checked> <span><b>Buy at the exact launch moment</b> (anti-snipe) — your first buy lands together with the coin, so bots can\'t jump in ahead of you.</span></label>'+
         '<label class="lcheck"><input type="checkbox" id="lcFeeMax" checked> <span><b>Send all creator fees to my wallet</b> — you keep 100% of the fees this coin earns, paid straight to your wallet. (Uncheck for none.)</span></label>'+
+        lcHolderRewardsHtml("lc")+
         '<label class="lcheck"><input type="checkbox" id="lcPromo"> <span><b>Share earnings with promoters</b> — set up to 4 wallets + a % each. Stored on the coin; you pay them their cut with one tap from <b>“Pay promoters”</b> whenever you’ve claimed creator fees.</span></label>'+
         '<div id="lcPromoRows" style="display:none">'+[0,1,2,3].map(i=>'<div class="field row2" style="margin-bottom:6px"><div><label>Promoter wallet '+(i+1)+'</label><input id="lcPmW'+i+'" placeholder="Solana address'+(i?" (optional)":"")+'"></div><div><label>%</label><input id="lcPmP'+i+'" inputmode="numeric" placeholder="0"></div></div>').join("")+'<button class="wbtn ghost" type="button" id="lcPayPromo" style="display:none;width:100%;margin-top:2px">💸 Pay promoters now</button></div>'+
         '<label class="lcheck"><input type="checkbox" id="lcBundleWallets"> <span><b>Also bundle-buy from my other wallets</b> at launch — first-block buys across your funded wallets so the early supply is yours, not snipers\'.</span></label>'+
@@ -3775,6 +3787,7 @@
     const lb=$("#lcBanner");if(lb)lb.onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchBanner","lcBannerPrev",true);
     const bw=$("#lcBundleWallets");if(bw)bw.onchange=()=>{const on=bw.checked;["lcBundleAmtWrap","lcBundleNote"].forEach(id=>{const e=$("#"+id);if(e)e.style.display=on?"":"none";});};
     const pm=$("#lcPromo");if(pm)pm.onchange=()=>{const e=$("#lcPromoRows"),pp=$("#lcPayPromo");if(e)e.style.display=pm.checked?"":"none";if(pp)pp.style.display=pm.checked?"":"none";};
+    lcWireHolderRewards("lc");lcWireHolderRewards("lcRh");
     const pp=$("#lcPayPromo");if(pp)pp.onclick=()=>payPromotersModal();
     const dwSel=$("#lcDevWallet");if(dwSel)dwSel.onchange=()=>refreshRhSetup();   // RH address is per-wallet
     lcWireChat();
@@ -3794,8 +3807,9 @@
         const supply=($("#lcRhSupply")&&$("#lcRhSupply").value.trim())||"1000000000";
         // Image + socials go into OUR metadata registry (EVM has no native token-image standard) so the
         // coin shows its PFP/links on the 🪶 Robinhood board like pump coins do.
+        const rhHolderRewards=lcReadHolderRewards("lcRh");
         const rhBody={name,symbol:sym,supplyTokens:supply,devWalletIndex:devIdx,launchAttemptId:attemptId(),
-          creatorFeeEnabled:!!($("#lcRhCreatorFee")&&$("#lcRhCreatorFee").checked),
+          creatorFeeEnabled:!!($("#lcRhCreatorFee")&&$("#lcRhCreatorFee").checked)||!!rhHolderRewards.enabled,holderRewards:rhHolderRewards,
           description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim()};
         if(state.launchImg)rhBody.imageDataUrl=state.launchImg.dataUrl;
         const {ok,d}=await jpost("/api/web/launch/rh-coin",rhBody);
@@ -3828,7 +3842,7 @@
       const devW=(state.wallets||[]).find(w=>String(w.index)===devIdx);
       // Creator fee is now a simple toggle: checked = MAX (1000 bps) to the dev wallet, unchecked = none.
       const creatorFeeBps=($("#lcFeeMax")&&$("#lcFeeMax").checked)?"1000":"0";
-      const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),slippageBps:($("#lcSlip")&&$("#lcSlip").value.trim())||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg",feeMode:"dev",devWalletIndex:devIdx,creatorFeeBps,rail:state.launchRail||"pump"};
+      const body={name,symbol:sym,description:$("#lcDesc").value.trim(),website:$("#lcWeb").value.trim(),x:$("#lcX").value.trim(),telegram:$("#lcTg").value.trim(),slippageBps:($("#lcSlip")&&$("#lcSlip").value.trim())||"300",action:"watch",launchAttemptId:attemptId(),source:"slimewire_gg",feeMode:"dev",devWalletIndex:devIdx,creatorFeeBps,holderRewards:lcReadHolderRewards("lc"),rail:state.launchRail||"pump"};
       if(devW&&devW.publicKey)body.creatorFeeRecipient=devW.publicKey;
       // Promoter fee-split (up to 4 wallets + %) stored on the coin; paid out via "Pay promoters".
       if($("#lcPromo")&&$("#lcPromo").checked){const sp=[0,1,2,3].map(i=>({wallet:(($("#lcPmW"+i)||{}).value||"").trim(),pct:Number((($("#lcPmP"+i)||{}).value||"").trim())})).filter(r=>r.wallet&&r.pct>0);if(sp.length)body.creatorFeeSplit=sp;}

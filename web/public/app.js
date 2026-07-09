@@ -10441,6 +10441,30 @@ function launchCoinHtml() {
               <input data-launch-coin-burn-creator-fees type="checkbox" ${draft.burnCreatorFees ? "checked" : ""}>
               <span>Burn creator fees when supported by the launch connector</span>
             </label>
+            <label class="switch-row full-span">
+              <input data-launch-coin-holder-rewards type="checkbox" ${draft.holderRewards?.enabled ? "checked" : ""}>
+              <span>Holder rewards from creator fees - split fee rewards to holders instead of only the dev wallet.</span>
+            </label>
+            <label>
+              Holder reward split
+              <select data-launch-coin-holder-reward-share>
+                <option value="5000" ${(draft.holderRewards?.shareBps || 5000) < 10000 ? "selected" : ""}>Half to holders</option>
+                <option value="10000" ${(draft.holderRewards?.shareBps || 0) >= 10000 ? "selected" : ""}>All to holders</option>
+              </select>
+            </label>
+            <label>
+              Minimum holder tokens
+              <input data-launch-coin-holder-reward-min-tokens type="number" min="1" step="1" value="${escapeHtml(String(draft.holderRewards?.minTokens || 3000000))}">
+            </label>
+            <label>
+              Minimum hold time (hours)
+              <input data-launch-coin-holder-reward-min-hours type="number" min="0" max="720" step="1" value="${escapeHtml(String(draft.holderRewards?.minHoldHours ?? 4))}">
+            </label>
+            <label>
+              Recipients per payout
+              <input data-launch-coin-holder-reward-max type="number" min="1" max="25" step="1" value="${escapeHtml(String(draft.holderRewards?.maxRecipients || 8))}">
+            </label>
+            <p class="muted full-span">Optional launch hook: holders above the token threshold and observed for the hold window can receive creator-fee rewards. This is not a token tax and does not add transfer restrictions.</p>
           </div>`
     },
     {
@@ -10630,6 +10654,13 @@ function readLaunchCoinDraft() {
     feeMode: $("[data-launch-coin-fee-mode]")?.value || draft.feeMode || "dev",
     buybackWallet: ($("[data-launch-coin-buyback-wallet]")?.value || "").trim(),
     burnCreatorFees: Boolean($("[data-launch-coin-burn-creator-fees]")?.checked),
+    holderRewards: {
+      enabled: Boolean($("[data-launch-coin-holder-rewards]")?.checked),
+      shareBps: Number($("[data-launch-coin-holder-reward-share]")?.value || 5000),
+      minTokens: Number($("[data-launch-coin-holder-reward-min-tokens]")?.value || 3000000) || 3000000,
+      minHoldHours: Number($("[data-launch-coin-holder-reward-min-hours]")?.value ?? 4),
+      maxRecipients: Number($("[data-launch-coin-holder-reward-max]")?.value || 8) || 8
+    },
     devBuyEnabled: Boolean($("[data-launch-coin-dev-buy-enabled]")?.checked),
     devWalletIndex: $("[data-launch-coin-dev-wallet]")?.value || draft.devWalletIndex || "",
     devBuySol: normalizedQuickBuyAmount($("[data-launch-coin-dev-buy-sol]")?.value || draft.devBuySol || "") || "",
