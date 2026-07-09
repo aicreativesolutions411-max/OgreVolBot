@@ -5870,9 +5870,14 @@ async function registerTelegramBotCommands() {
 // backoff, and the proxy only ever returns 502 for /Ogreverse paths if the child is down.
 const OGV_PORT = Number(process.env.OGREVERSE_INTERNAL_PORT || 5178);
 const OGV_DIR = path.join(__dirname, "..", "ogreverse");
+// The game is a whole SECOND Node server running inside the trading instance (its own RAM + CPU +
+// Postgres connections). Default OFF so it never weighs down the money bot — flip OGREVERSE_ENABLED=true
+// on Render to bring the MMO back. When off, /Ogreverse serves a lightweight "offline" note (no proxy).
+const OGREVERSE_ENABLED = parseBoolean(process.env.OGREVERSE_ENABLED || "false");
 let ogvChild = null, ogvRestarts = 0, ogvStartedAt = 0;
 function startOgreverse() {
   try {
+    if (!OGREVERSE_ENABLED) { console.log("[ogreverse] disabled (OGREVERSE_ENABLED=false) — game not mounted, trading instance stays light"); return; }
     if (!fsSync.existsSync(path.join(OGV_DIR, "server.mjs"))) { console.warn("[ogreverse] server.mjs not found — game mount skipped"); return; }
     ogvStartedAt = Date.now();
     ogvChild = spawn(process.execPath, ["server.mjs"], {
@@ -5906,6 +5911,12 @@ function proxyOgreverse(request, response, requestUrl) {
     "vary": "Origin",
   };
   if (request.method === "OPTIONS") { response.writeHead(204, cors); response.end(); return; }
+  // Game disabled → no child process to proxy to. Serve a tiny static note, never a hanging 502.
+  if (!OGREVERSE_ENABLED) {
+    response.writeHead(200, { ...cors, "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+    response.end('<!doctype html><meta charset="utf-8"><title>OgreVerse</title><body style="margin:0;background:#0a140c;color:#8fe38f;font-family:system-ui,sans-serif;display:grid;place-items:center;height:100vh;text-align:center"><div><div style="font-size:40px">🐸</div><h2>OgreVerse is resting</h2><p style="color:#6a8f6a;max-width:26rem;margin:0 auto">The MMO is offline right now so the trading engine stays fast. Back soon.</p><p><a href="/" style="color:#89ff43">← Back to SlimeWire</a></p></div></body>');
+    return;
+  }
   // Redirect /Ogreverse → /Ogreverse/ so the game's relative assets + API base path resolve.
   if (requestUrl.pathname === "/Ogreverse") { response.writeHead(302, { ...cors, Location: "/Ogreverse/" }); response.end(); return; }
   const upstreamPath = (requestUrl.pathname.replace(/^\/Ogreverse/, "") || "/") + (requestUrl.search || "");
