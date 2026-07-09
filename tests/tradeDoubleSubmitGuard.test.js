@@ -1569,7 +1569,8 @@ test("flex detector ignores a bare tweet link so the X-post preview still fires"
 // ---- Scan card Security block never blank: free on-chain fill when RugCheck is down/unindexed ----
 test("scan Security fills from our own RPC when RugCheck returns null (no more n/a wall)", () => {
   const scan = functionBody(serverSource, "gatherSlimeScan");
-  assert.match(scan, /getGeckoTerminalTokenMetadata\(mint, \{ timeoutMs: 6_000 \}/); // market fallback for n/a LP/MC/1H — 6s so Gecko's 2-call fetch (our reliable non-rate-limited source) never times out first
+  assert.match(scan, /scanFastTimeout\(getGeckoTerminalTokenMetadata\(mint, \{ timeoutMs: 3_000 \}\)/); // market fallback for n/a LP/MC/1H stays, but it cannot stall TG/X replies
+  assert.match(scan, /scanCachedMarketMeta\(mint\)/); // local/sticky cache fills MC/LIQ/VOL/1H when public APIs blank
   assert.match(scan, /mergeTokenMarketMetadata/);
   const enrich = functionBody(serverSource, "enrichScanSecurityOnchain");
   assert.match(enrich, /getParsedAccountInfo/);                 // mint/freeze authority = ground truth
@@ -1975,7 +1976,7 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "handleTelegramLookCommand"), /resolveScanTargetFromText\(argument\)/);
   assert.match(functionBody(serverSource, "handleXScanCommand"), /allowBareTickerHints: false/);
   assert.match(functionBody(serverSource, "xReplyPollTick"), /no CA\/wallet found yet/);
-  assert.match(functionBody(serverSource, "gatherSlimeScan"), /fetchSolanaTrackerTokenReport\(mint\)/);
+  assert.match(functionBody(serverSource, "gatherSlimeScan"), /fetchSolanaTrackerTokenReport\(mint, \{ timeoutMs: 3_000 \}\)/);
   assert.match(functionBody(serverSource, "gatherRhScan"), /rhFeedTokens\(\)/);
   assert.match(functionBody(serverSource, "gatherRhScan"), /rhLaunchMetaByAddress\(\)/);
   assert.match(functionBody(serverSource, "gatherRhScan"), /holders/);

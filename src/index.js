@@ -31163,6 +31163,56 @@ function rememberMeta(mint, { mc = 0, liq = 0, ch1 = null, vol = null, holders =
   mapMetaLastGood.set(mint, next);
   if (mapMetaLastGood.size > 400) mapMetaLastGood.delete(mapMetaLastGood.keys().next().value);
 }
+function scanFastTimeout(promise, ms = 2_500, fallback = null) {
+  return Promise.race([
+    Promise.resolve(promise).catch(() => fallback),
+    new Promise((resolve) => setTimeout(() => resolve(fallback), Math.max(250, Number(ms) || 2_500)))
+  ]);
+}
+function scanCachedMarketMeta(mint = "") {
+  const clean = String(mint || "").trim();
+  if (!clean) return null;
+  let row = null, lastGood = null;
+  try { row = localMarketRowForMint(clean) || null; } catch { row = null; }
+  try { lastGood = mapMetaLastGood.get(clean) || null; } catch { lastGood = null; }
+  if (!row && !lastGood) return null;
+  const lastVolValue = Number(lastGood?.vol?.value) || 0;
+  const lastVolLabel = String(lastGood?.vol?.label || "").toUpperCase();
+  const h1Change = firstMeaningfulNumber(row?.h1, row?.changeH1, row?.priceChangeH1, row?.priceChange?.h1, Number.isFinite(lastGood?.ch1) ? lastGood.ch1 : null);
+  const h24Change = firstMeaningfulNumber(row?.h24, row?.changeH24, row?.priceChangeH24, row?.priceChange?.h24);
+  const volumeH1 = firstMeaningfulNumber(row?.volumeH1, row?.volume1h, row?.volume_1h, row?.volume?.h1, lastVolLabel === "1H" ? lastVolValue : null);
+  const volumeH24 = firstMeaningfulNumber(row?.volumeH24, row?.volume24h, row?.volume24Usd, row?.volume?.h24, lastVolLabel === "24H" ? lastVolValue : null);
+  const volumeM5 = firstMeaningfulNumber(row?.volume5m, row?.volumeM5, row?.volume?.m5, lastVolLabel === "5M" ? lastVolValue : null);
+  const pairCreatedAt = normalizePairCreatedAt(firstMeaningfulNumber(row?.pairCreatedAt)) || (Number(row?.pairAgeSeconds) > 0 ? Date.now() - Number(row.pairAgeSeconds) * 1000 : 0) || Number(lastGood?.createdAt) || null;
+  const holderCount = firstMeaningfulNumber(row?.holderCount, row?.holders, row?.holdersCount, lastGood?.holders);
+  const meta = {
+    source: "slimewire-cache",
+    symbol: firstString(row?.symbol, row?.baseSymbol, lastGood?.sym),
+    name: firstString(row?.name, row?.baseName, row?.tokenName, row?.symbol, lastGood?.sym),
+    imageUrl: firstString(row?.imageUrl, row?.avatarUrl, row?.logoURI, row?.image),
+    marketCap: firstMeaningfulNumber(row?.marketCap, row?.fdv, row?.marketCapUsd, lastGood?.mc),
+    liquidityUsd: firstMeaningfulNumber(row?.liquidityUsd, row?.liquidity, row?.lpUsd, lastGood?.liq),
+    holderCount,
+    priceUsd: firstMeaningfulNumber(row?.priceUsd, row?.price),
+    pairCreatedAt,
+    priceChange: (h1Change != null || h24Change != null) ? {
+      ...(h1Change != null ? { h1: h1Change } : {}),
+      ...(h24Change != null ? { h24: h24Change } : {})
+    } : null,
+    volume: (volumeH1 || volumeH24 || volumeM5) ? {
+      ...(volumeM5 ? { m5: volumeM5 } : {}),
+      ...(volumeH1 ? { h1: volumeH1 } : {}),
+      ...(volumeH24 ? { h24: volumeH24 } : {})
+    } : null,
+    txns: (row?.buysH1 || row?.sellsH1 || row?.buys5m || row?.sells5m || row?.txns) ? {
+      h1: { buys: Number(row?.buysH1 || row?.txns?.h1?.buys || 0), sells: Number(row?.sellsH1 || row?.txns?.h1?.sells || 0) },
+      m5: { buys: Number(row?.buys5m || row?.txns?.m5?.buys || 0), sells: Number(row?.sells5m || row?.txns?.m5?.sells || 0) }
+    } : null
+  };
+  const useful = firstString(meta.symbol, meta.name, meta.imageUrl)
+    || firstMeaningfulNumber(meta.marketCap, meta.liquidityUsd, meta.holderCount, meta.pairCreatedAt, meta.priceUsd, volumeH1, volumeH24, volumeM5);
+  return useful ? meta : null;
+}
 // Crypto subscript price: 0.00002572 -> "$0.0₄2572" (matches Phanes/DEX display).
 function scanFmtPriceSub(value) {
   const n = Number(value);
@@ -31608,26 +31658,25 @@ async function enrichScanSecurityOnchain(mint, rug, bonding) {
 
 async function gatherSlimeScan(mint) {
   // Pump coins read Pump metadata FIRST (priority), Dex fills the gaps it doesn't have
-  // (volume, 1H txns, price-change). Fetch everything in parallel so the card always has the
-  // richest read available — no field is left blank just because one source was slow.
+  // (volume, 1H txns, price-change). Fetch everything in parallel, but keep hard per-source
+  // deadlines so Telegram/X answer fast instead of spinning behind one slow upstream.
   const pumpStyle = isPumpStyleToken({ tokenMint: mint });
+  const cachedMarketMeta = scanCachedMarketMeta(mint);
   const [pairs, rug, shield, dexPaid, supply, pumpMeta, athRaw, geckoMeta, stMarket] = await Promise.all([
-    fetchDexScreenerTokenPairsFallback(mint).catch(() => null),
-    fetchRugcheckFull(mint).catch(() => null),
-    webSlimeShield(mint).catch(() => null),
-    fetchDexPaidStatus(mint).catch(() => null),
-    fetchTokenSupplyUi(mint).catch(() => null),
-    (pumpStyle ? getPumpFunTokenMetadata(mint).catch(() => null) : Promise.resolve(null)),
-    (CONFIG.solanaTrackerApiKey ? solanaTrackerJson(`/tokens/${mint}/ath`, { cacheTtlMs: 60_000, timeoutMs: 5_000 }).catch(() => null) : Promise.resolve(null)),
-    // 4.5s (was 2.2s): GeckoTerminal is a TWO-call fetch (info+pools) and is our only liq/1H source when
-    // DexScreener rate-limits Render — the tight 2.2s cap made it time out → blank LIQ/1H on the scan card
-    // even though the map (4.8s cap) + trench-watch showed them. Gecko is not IP-blocked on Render, so it's
-    // worth the wait; the sticky cache covers the rare miss.
-    getGeckoTerminalTokenMetadata(mint, { timeoutMs: 6_000 }).catch(() => null),
-    (CONFIG.solanaTrackerApiKey ? fetchSolanaTrackerTokenReport(mint).catch(() => null) : Promise.resolve(null))
+    scanFastTimeout(fetchDexScreenerTokenPairsFallback(mint, { timeoutMs: 2_400 }), 5_200, []),
+    scanFastTimeout(fetchRugcheckFull(mint), 2_400, null),
+    scanFastTimeout(webSlimeShield(mint), 2_200, null),
+    scanFastTimeout(fetchDexPaidStatus(mint), 1_500, null),
+    scanFastTimeout(fetchTokenSupplyUi(mint), 1_800, null),
+    (pumpStyle ? scanFastTimeout(getPumpFunTokenMetadata(mint, { timeoutMs: 2_000 }), 4_500, null) : Promise.resolve(null)),
+    (CONFIG.solanaTrackerApiKey ? scanFastTimeout(solanaTrackerJson(`/tokens/${mint}/ath`, { cacheTtlMs: 60_000, timeoutMs: 2_500 }), 2_700, null) : Promise.resolve(null)),
+    // Gecko is the best free fallback for LIQ/1H when DexScreener soft-blocks Render, but a slow Gecko pull
+    // must not hold the whole scan. Cached/local rows carry the last-good values while it catches up.
+    scanFastTimeout(getGeckoTerminalTokenMetadata(mint, { timeoutMs: 3_000 }).catch(() => null), 3_200, null),
+    (CONFIG.solanaTrackerApiKey ? scanFastTimeout(fetchSolanaTrackerTokenReport(mint, { timeoutMs: 3_000 }), 3_200, null) : Promise.resolve(null))
   ]);
   const best = bestDexPairForToken(mint, pairs);
-  let meta = mergeTokenMarketMetadata(best ? metadataFromDexPair(mint, best) : null, geckoMeta);
+  let meta = mergeTokenMarketMetadata(mergeTokenMarketMetadata(best ? metadataFromDexPair(mint, best) : null, geckoMeta), cachedMarketMeta);
   if (stMarket) {
     // Carry EVERYTHING ST returns — it's the keyed source that still answers when the free sources
     // (DexScreener/Gecko) rate-limit Render's shared IP. Shapes mirror DexScreener's ({priceChange:{h1}},
@@ -31653,16 +31702,16 @@ async function gatherSlimeScan(mint) {
   // bonding = Pump metadata. Always present for pump-style coins (fetched above); for the rare
   // case it wasn't pump-style yet has no Dex MC, grab it now so MC/price/LP never read blank.
   let bonding = pumpMeta;
-  if (!bonding && (!meta || !meta.marketCap)) bonding = await getPumpFunTokenMetadata(mint).catch(() => null);
+  if (!bonding && (!meta || !meta.marketCap)) bonding = await scanFastTimeout(getPumpFunTokenMetadata(mint, { timeoutMs: 1_800 }), 2_000, null);
   const ath = parseTokenAth(athRaw, supply);
   // Free on-chain fill so the Security block is never blank when RugCheck is rate-limited / unindexed.
-  const rugFilled = await enrichScanSecurityOnchain(mint, rug, bonding).catch(() => rug);
+  const rugFilled = await scanFastTimeout(enrichScanSecurityOnchain(mint, rug, bonding), 2_000, rug);
   // Universal on-chain name/symbol/image fallback so the X card ALWAYS has a symbol + pic, even for a
   // graduated / non-pump coin DexScreener + pump don't cover. Only fetched when the cheap sources are thin.
   let onchain = null;
   const hasCheapSymbol = Boolean(meta?.symbol || bonding?.symbol);
   const hasCheapImage = Boolean(meta?.imageUrl || meta?.image || meta?.icon || bonding?.imageUrl || bonding?.image || bonding?.imageUri || bonding?.image_uri);
-  if (!hasCheapSymbol || !hasCheapImage) onchain = await fetchOnchainTokenMeta(mint).catch(() => null);
+  if (!hasCheapSymbol || !hasCheapImage) onchain = await scanFastTimeout(fetchOnchainTokenMeta(mint), 1_700, null);
   if (onchain && (onchain.symbol || onchain.name || onchain.imageUrl || onchain.avatarUrl)) {
     meta = mergeTokenMarketMetadata(meta, {
       symbol: onchain.symbol,
@@ -32821,14 +32870,20 @@ async function fetchOnchainTokenMeta(mint) {
 // "PFP loads sometimes, blank other times" — the image is now cached like the market stats are.
 const xLogoCache = new Map();   // mint → { at, buf }
 async function xCoinLogo(scan, mint) {
+  const c = xLogoCache.get(mint);
+  if (c && Date.now() - c.at < 45 * 60_000) {
+    void xCoinLogoLive(scan, mint).then((live) => {
+      if (live) xLogoCache.set(mint, { at: Date.now(), buf: live });
+    }).catch(() => {});
+    return c.buf;   // cached face first; live refresh is best-effort so replies do not wait on IPFS/Dex images
+  }
   const live = await xCoinLogoLive(scan, mint).catch(() => null);
   if (live) {
     xLogoCache.set(mint, { at: Date.now(), buf: live });
     if (xLogoCache.size > 400) xLogoCache.delete(xLogoCache.keys().next().value);
     return live;
   }
-  const c = xLogoCache.get(mint);
-  return (c && Date.now() - c.at < 45 * 60_000) ? c.buf : null;   // 45-min sticky face
+  return null;   // 45-min sticky face above
 }
 async function xCoinLogoLive(scan, mint) {
   const { meta, best, bonding, onchain } = scan || {};
@@ -33468,6 +33523,25 @@ async function xReplyOwnerDraft(m, reply) {
   if (reply.mediaBuffer) await sendPhoto(chat, "x-scan.png", reply.mediaBuffer, cap, kb, "HTML").catch(() => sayHtml(chat, cap, kb).catch(() => {}));
   else await sayHtml(chat, cap, kb).catch(() => {});
 }
+function xReplyAnchorId(m = {}) {
+  const own = String(m?.id || "");
+  const root = String(m?.conversationId || "");
+  const parent = String(m?.inReplyToId || "");
+  if (root && root !== own) return root;
+  if (parent && parent !== own) return parent;
+  return own || parent || root;
+}
+async function xReplyToThreadAnchor(m, payload = {}) {
+  const anchorId = xReplyAnchorId(m);
+  const own = String(m?.id || "");
+  let res = await xReply({ inReplyToId: anchorId, ...payload });
+  if (!res.ok && anchorId && own && anchorId !== own && /(?:403|404|not found|permission|visibility|reply|conversation|cannot)/i.test(String(res.reason || ""))) {
+    console.log(`[xreply]   anchor ${anchorId} rejected (${String(res.reason || "").slice(0, 80)}) → fallback to tag ${own}`);
+    res = await xReply({ inReplyToId: own, ...payload });
+    if (res.ok) res.anchorFallback = true;
+  }
+  return { ...res, anchorId: res.ok && !res.anchorFallback ? anchorId : own };
+}
 async function xReplyPollTick() {
   const results = [];
   if (!xReplyEnabled() || !xConfigured()) return { checked: 0, results, off: true };
@@ -33545,9 +33619,7 @@ async function xReplyPollTick() {
       }
       state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "no CA/wallet found" }); console.log(`[xreply]   ✗ no CA/wallet in tag → skip`); continue;
     }
-    // 🗺️ X HEADLINE: any plain coin tag → the MAP card (which now carries coin details) + falls back to the
-    // scan card if the map can't build. Explicit chart/rug keywords still route to those cards.
-    if (intent === "scan") intent = "map";
+    // Plain tags must answer FAST with the scan card. Map/chart/rug still work when explicitly requested.
     console.log(`[xreply]   target=${target} intent=${intent} → building reply…`);
     // Hard 40s timeout — a single slow/hanging reply build can NEVER freeze the poll again (the "poller went
     // silent" bug: a render hung a tick, and the reentrancy guard then skipped every future tick forever).
@@ -33591,12 +33663,12 @@ async function xReplyPollTick() {
       const gap = minGapMs + Math.floor(Math.random() * 1500);
       const wait = lastPostAt ? (lastPostAt + gap) - Date.now() : 0;
       if (wait > 0) await sleep(Math.min(wait, 20_000));
-      const res = await xReply({ inReplyToId: m.id, text: finalReply.text, mediaBuffer: finalReply.mediaBuffer, mediaBuffers: finalReply.mediaBuffers });
+      const res = await xReplyToThreadAnchor(m, { text: finalReply.text, mediaBuffer: finalReply.mediaBuffer, mediaBuffers: finalReply.mediaBuffers });
       if (res.ok) {
         lastPostAt = Date.now();
         state.seen[m.id] = now; delete state.fails[m.id]; state.posts.push(lastPostAt); posted++;
         results.push({ u: m.username, s: "replied", d: `${intent === "chart" ? "📈" : intent === "rug" ? "🛡️" : "🔎"} $${finalReply.symbol}${res.media && res.media !== "card" ? " · " + res.media : " · card"}` });
-        console.log(`[xreply] ✅ @${m.username} ${intent} $${finalReply.symbol} media=${res.media || "text"} id=${res.id || ""}`);
+        console.log(`[xreply] ✅ @${m.username} ${intent} $${finalReply.symbol} media=${res.media || "text"} id=${res.id || ""} anchor=${res.anchorId || ""}`);
         // 🎯 Record for RECEIPTS — anchor to our reply so a later 2x/10x quote-tweets this exact post.
         try { if (solanaPublicKeyLike(target)) await xTrackCoin({ mint: target, symbol: finalReply.symbol, mc: finalReply.mc, tweetId: res.id, kind: "reply" }); } catch { /* best-effort */ }
         await xReplyOwnerNotify(`✅ Auto-replied on X to @${m.username} · ${intent} · $${finalReply.symbol} (${res.media || "text"})`);
@@ -33623,11 +33695,11 @@ async function xReplyPollTick() {
           const eGap = minGapMs + Math.floor(Math.random() * 1500);
           const eWait = lastPostAt ? (lastPostAt + eGap) - Date.now() : 0;
           if (eWait > 0) await sleep(Math.min(eWait, 20_000));
-          const eRes = await xReply({ inReplyToId: m.id, text: eReply.text, mediaBuffer: eReply.mediaBuffer, mediaBuffers: eReply.mediaBuffers });
+          const eRes = await xReplyToThreadAnchor(m, { text: eReply.text, mediaBuffer: eReply.mediaBuffer, mediaBuffers: eReply.mediaBuffers });
           if (eRes.ok) {
             lastPostAt = Date.now(); state.posts.push(lastPostAt); posted++;
             results.push({ u: m.username, s: "replied", d: `＋$${eReply.symbol}` });
-            console.log(`[xreply] ✅ @${m.username} extra ${eIntent} $${eReply.symbol} id=${eRes.id || ""}`);
+            console.log(`[xreply] ✅ @${m.username} extra ${eIntent} $${eReply.symbol} id=${eRes.id || ""} anchor=${eRes.anchorId || ""}`);
             try { if (solanaPublicKeyLike(et)) await xTrackCoin({ mint: et, symbol: eReply.symbol, mc: eReply.mc, tweetId: eRes.id, kind: "reply" }); } catch { /* best-effort */ }
             await writeXReplyState(state);
           } else {
@@ -33649,7 +33721,7 @@ async function xReplyPollTick() {
       await writeXReplyState(state);
     } else {
       state.seen[m.id] = now;
-      state.queue[m.id] = { mint: target, intent, at: now, author: m.username, url: m.permanentUrl };
+      state.queue[m.id] = { mint: target, intent, at: now, author: m.username, url: m.permanentUrl, anchorId: xReplyAnchorId(m) };
       await writeXReplyState(state);
       results.push({ u: m.username, s: "draft", d: `$${finalReply.symbol}` });
       await xReplyOwnerDraft(m, finalReply);
@@ -33675,7 +33747,7 @@ async function handleXReplyCallback(query, userId) {
     if (!q) { await ack("That draft expired — tag us again to re-scan.", true); return true; }
     const reply = await buildXReply(q.mint, q.intent || "scan").catch(() => null);
     if (!reply) { await ack("Couldn't rebuild the scan — try again.", true); return true; }
-    const res = await xReply({ inReplyToId: mPost[1], text: reply.text, mediaBuffer: reply.mediaBuffer, mediaBuffers: reply.mediaBuffers });
+    const res = await xReply({ inReplyToId: q.anchorId || mPost[1], text: reply.text, mediaBuffer: reply.mediaBuffer, mediaBuffers: reply.mediaBuffers });
     if (res.ok) { delete state.queue[mPost[1]]; state.posts.push(Date.now()); await writeXReplyState(state); await clearKb("✅ Posted to X"); await ack("Posted ✨"); }
     else { await ack(`Post failed: ${res.reason || "try again"}`, true); }
     return true;
@@ -33825,7 +33897,6 @@ async function handleXForceReplyCommand(chatId, argument, userId) {
   if (!target) { const w = extractBareWalletAddress(tweet.text, tweet.urls); if (w) { target = w; if (!intent) intent = "map"; } }
   if (!target) { await sayHtml(chatId, `⚠️ No contract/wallet found in that tweet (or its parent/root). Text seen: <i>${escapeTelegramHtml(String(tweet.text || "").slice(0, 160))}</i>`); return; }
   if (!intent) intent = xIntentFromText(tweet.text);
-  if (intent === "scan") intent = "map";                                  // plain tag → the map headline card
   await say(chatId, `🎯 Target <code>${escapeTelegramHtml(shortMint(target))}</code> · ${intent} — building + posting…`);
   const reply = await Promise.race([
     buildXReply(target, intent, tweetId),
@@ -33833,7 +33904,7 @@ async function handleXForceReplyCommand(chatId, argument, userId) {
   ]).catch((e) => { console.log(`[xreply] force build THREW: ${String(e?.message || e).slice(0, 140)}`); return null; });
   if (reply === "__timeout__") { await say(chatId, "⏱ The card took too long to build (>45s). Try again — feeds may have been slow."); return; }
   if (!reply) { await sayHtml(chatId, "⚠️ Couldn't build a card for that target — it may be too new or unlisted. Try a different intent, or check it scans with <code>/xscan &lt;CA&gt;</code>."); return; }
-  const res = await xReply({ inReplyToId: tweetId, text: reply.text, mediaBuffer: reply.mediaBuffer, mediaBuffers: reply.mediaBuffers });
+  const res = await xReplyToThreadAnchor({ ...tweet, id: tweet.id || tweetId }, { text: reply.text, mediaBuffer: reply.mediaBuffer, mediaBuffers: reply.mediaBuffers });
   if (res.ok) {
     // Mark it seen so the auto-poller doesn't double-reply if the tag DOES surface later.
     try { const st = await readXReplyState(); st.seen = st.seen || {}; st.seen[tweetId] = Date.now(); await writeXReplyState(st); } catch { /* best-effort */ }
@@ -37381,13 +37452,13 @@ async function handleTelegramLookCommand(chatId, message, argument) {
     // Resolve a NORMALIZED PNG buffer (hardened fetch + fast IPFS gateways + sticky cache) and UPLOAD it, so
     // Telegram never has to reach a slow ipfs.io gateway or decode a webp itself — the old raw-URL sendPhoto
     // silently fell to text-only whenever Telegram couldn't fetch/decode the coin's image. URL is the fallback.
-    const logoBuf = await xCoinLogo(scan, mint).catch(() => null);
+    const logoBuf = await scanFastTimeout(xCoinLogo(scan, mint), Number(process.env.TG_SCAN_LOGO_TIMEOUT_MS || 1_400), null);
     if (logoBuf) {
       try { await sendPhoto(chatId, "scan.png", logoBuf, text, slimeScanKeyboard(mint), "HTML"); return; }
       catch { /* fall through to URL, then text */ }
     }
     const img = scanImageUrlFromScan(scan);
-    if (img) {
+    if (img && /^true$/i.test(String(process.env.TG_SCAN_RAW_IMAGE_FALLBACK || ""))) {
       try { await telegram("sendPhoto", { chat_id: chatId, photo: img, caption: text, parse_mode: "HTML", reply_markup: slimeScanKeyboard(mint) }); return; }
       catch { /* fall back to the text card */ }
     }
@@ -58595,13 +58666,13 @@ async function solanaTrackerJson(pathName, options = {}) {
 // throws). Cached 90s by mint (on-demand opens are bursty; Premium has the quota). Returns null if
 // no key or the call fails — callers treat null as "ST didn't answer" (unknown), not "clean".
 function stNum(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
-async function fetchSolanaTrackerTokenReport(mint = "") {
+async function fetchSolanaTrackerTokenReport(mint = "", options = {}) {
   const clean = String(mint || "").trim();
   if (!clean) return null;
   if (!CONFIG.solanaTrackerApiKey) { try { console.warn(`[st-report] ${shortMint(clean)} — NO solanaTrackerApiKey set on this instance`); } catch {} return null; }
   let data = null;
   try {
-    data = await solanaTrackerJson(`/tokens/${encodeURIComponent(clean)}`, { cacheTtlMs: 90_000, timeoutMs: 6_500 });
+    data = await solanaTrackerJson(`/tokens/${encodeURIComponent(clean)}`, { cacheTtlMs: 90_000, timeoutMs: options.timeoutMs || 6_500 });
   } catch (e) { try { console.warn(`[st-report] ${shortMint(clean)} FETCH ERROR: ${e && e.message}`); } catch {} return null; }
   if (!data || typeof data !== "object") return null;
   const token = data.token || {};
