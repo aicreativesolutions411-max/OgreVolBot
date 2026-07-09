@@ -20023,6 +20023,7 @@ async function processTradePlans(options = {}) {
 
     for (const plan of prioritizedTradePlans(planStore.plans)) {
       summary.checkedPlans += 1;
+      try {
       if (plan.status === "launch_watch") {
         const result = await processLaunchWatchPlan(plan, walletStore);
         if (result.changed) changed = true;
@@ -20156,6 +20157,35 @@ async function processTradePlans(options = {}) {
 
       for (const tokenMint of plan.chatId ? pnlCardTokens : []) {
         await sendPnlCard(plan.chatId, plan.userId, tokenMint, { quietNoData: true });
+      }
+      } catch (error) {
+        const errorMessage = friendlyError(error);
+        const nowIso = new Date().toISOString();
+        const runnerFailures = Number.parseInt(plan.runnerFailures || 0, 10) + 1;
+        const activeWallets = objectRows(plan.wallets).filter((wallet) => isActiveTimedWalletStatus(wallet.status)).length;
+        plan.runnerFailures = runnerFailures;
+        plan.lastRunnerError = errorMessage;
+        plan.lastFailedAt = nowIso;
+        plan.updatedAt = nowIso;
+        if (!plan.tokenMint && plan.status === "watching") {
+          plan.status = "failed";
+          plan.error = errorMessage || "invalid trade plan missing token mint";
+        }
+        changed = true;
+        summary.failedPlans = (summary.failedPlans || 0) + 1;
+        summary.messages.push(`${plan.id || "trade plan"} runner isolated an error: ${errorMessage}`);
+        console.warn(`[tp-sl] isolated trade plan runner error plan=${plan.id || "unknown"} status=${plan.status || "unknown"} token=${shortMint(plan.tokenMint || "")} activeWallets=${activeWallets} failures=${runnerFailures}: ${errorMessage}`);
+        if (error?.stack) console.warn(error.stack.split("\n").slice(0, 5).join("\n"));
+        await audit("trade_plan_runner_plan_error", {
+          planId: plan.id || null,
+          userId: plan.userId || null,
+          source: plan.source || null,
+          status: plan.status || null,
+          tokenMint: plan.tokenMint || null,
+          activeWallets,
+          runnerFailures,
+          error: errorMessage
+        }).catch(() => {});
       }
     }
 
