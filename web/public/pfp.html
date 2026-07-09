@@ -121,10 +121,15 @@
 
   // ---- 🧟 SlimeWire PFP: character gallery (static images) ----
   var charFiles=[];
+  var charBaseUrl='';
+  function charUrl(f){
+    var base=(charBaseUrl || (API_BASE+'/pfp/characters')).replace(/\/+$/,'');
+    return base+'/'+encodeURIComponent(f);
+  }
   function renderChars(){
     var g=document.getElementById('charGrid');g.innerHTML='';
     charFiles.forEach(function(f){
-      var url=API_BASE+'/pfp/characters/'+f;
+      var url=charUrl(f);
       var card=document.createElement('div');card.className='card';
       var img=document.createElement('img');img.src=url;img.alt='SlimeWire slime character PFP';img.loading='lazy';
       var b=document.createElement('button');b.className='dl';b.textContent='⬇ Use as PFP';
@@ -136,6 +141,7 @@
   fetch(API_BASE+'/api/web/pfp/characters').then(function(r){return r.json();}).then(function(d){
     var c=document.getElementById('charCount');
     if(!d||!d.ok||!d.files||!d.files.length){c.textContent='Characters loading soon…';return;}
+    charBaseUrl=(d.baseUrl||'').replace(/\/+$/,'');
     charFiles=shuffle(d.files.slice());
     c.textContent='🧟 '+d.count+' slime characters — tap one to save it';
     renderChars();

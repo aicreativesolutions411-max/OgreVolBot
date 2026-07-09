@@ -59,6 +59,7 @@ const buildId = String(process.env.WEB_BUILD_ID || new Date().toISOString().repl
 const apiBase = normalizeBaseUrl(process.env.OGRE_API_BASE || process.env.WEB_API_BASE || process.env.RENDER_EXTERNAL_URL || "https://ogrevolbot.onrender.com");
 const telegramBotUsername = String(process.env.TELEGRAM_BOT_USERNAME || "SlimeWiredBot").trim().replace(/^@/, "");
 const portalUrl = normalizeBaseUrl(process.env.WEB_PORTAL_URL || "https://www.slimewire.org");
+const pfpCdnBase = normalizeBaseUrl(process.env.PFP_CDN_BASE || "");
 const ogreTek = {
   enabled: envBool("OGRE_TEK_ENABLED", envBool("NEXT_PUBLIC_ENABLE_OGRE_TEK", false)),
   demoMode: envBool("OGRE_TEK_DEMO_MODE", true),
@@ -93,7 +94,7 @@ const featureFlags = {
   disableUnfinishedButtons: envBool("VITE_DISABLE_UNFINISHED_BUTTONS", true),
   debugPerformanceCounters: envBool("VITE_DEBUG_PERFORMANCE_COUNTERS", false)
 };
-const configSource = `window.OGRE_PORTAL_CONFIG = ${JSON.stringify({ apiBase, telegramBotUsername, portalUrl, featureFlags, ogreTek, pumpLive }, null, 2)};\n`;
+const configSource = `window.OGRE_PORTAL_CONFIG = ${JSON.stringify({ apiBase, telegramBotUsername, portalUrl, pfpCdnBase, featureFlags, ogreTek, pumpLive }, null, 2)};\n`;
 await fs.writeFile(path.join(distDir, "config.js"), configSource, "utf8");
 
 const indexPath = path.join(distDir, "index.html");
@@ -134,4 +135,3 @@ try {
 }
 
 console.log(`Built OgreTrade web portal at ${path.relative(rootDir, distDir)}`);
-

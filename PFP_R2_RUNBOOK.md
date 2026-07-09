@@ -47,9 +47,10 @@ git push --force origin main
 2. **Public access:** in the Cloudflare dashboard, either enable the bucket's `r2.dev` public URL (zero setup,
    fine to start) or connect a **custom domain** like `cdn.slimewire.org` (R2 → bucket → Settings → Custom
    Domains — production-grade, cached, still free egress).
-3. **Point the app at it:** set `PFP_CDN_BASE=https://<r2-public-or-custom-domain>` on Render. (App-side rewrite
-   of `/pfp/characters/*` → `${PFP_CDN_BASE}/...` is a small follow-up change, gated on this env so it's a no-op
-   until you're ready; falls back to local serving when unset.)
+3. **Point the app at it:** set `PFP_CDN_BASE=https://<r2-public-or-custom-domain>` on Render. The app-side
+   rewrite is already gated on this env: `/pfp/characters/*` redirects to `${PFP_CDN_BASE}/pfp/characters/*`,
+   `/api/web/pfp/characters` returns that public base for the PFP page, and everything falls back to local
+   serving when unset.
 4. Once CDN serving is confirmed: `git rm -r --cached web/public/pfp/characters`, add to `.gitignore`, and
    fold `characters/` into the Tier-2 history purge to reclaim the last ~1 GB. New character batches upload
    straight to R2 (the intake can call `pfp-to-r2.mjs`) and never touch git again.

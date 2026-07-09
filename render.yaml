@@ -55,6 +55,10 @@ services:
         sync: false
       - key: R2_BACKUP_PG
         value: false
+      # Optional public R2/custom-domain base for browser-served PFP character art.
+      # Example: https://cdn.slimewire.org ; app falls back to local /pfp/characters when unset.
+      - key: PFP_CDN_BASE
+        sync: false
       # SEND FAILOVER (P4): re-broadcast the SAME signed tx to a backup write RPC if the
       # primary (Helius) hits a transient error, so an outage can't stop trading. Kill switch
       # below (default on). Optional dedicated 3rd provider here; if unset, the Alchemy

@@ -5142,6 +5142,8 @@ function loadConfig() {
   const kvRestUrl = String(process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || process.env.SLIMEWIRE_KV_REST_URL || "").trim().replace(/\/$/, "");
   const kvRestToken = String(process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || process.env.SLIMEWIRE_KV_REST_TOKEN || "").trim();
   const cacheNamespace = String(process.env.CACHE_NAMESPACE || process.env.KV_CACHE_NAMESPACE || "slimewire").trim().replace(/[^\w:-]/g, "").slice(0, 40) || "slimewire";
+  const rawPfpCdnBase = String(process.env.PFP_CDN_BASE || "").trim().replace(/\/+$/, "");
+  const pfpCdnBase = /^https:\/\/[^\s"'<>]+$/i.test(rawPfpCdnBase) ? rawPfpCdnBase : "";
   const databaseUrl = String(process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.RENDER_DATABASE_URL || "").trim();
   const postgresHistoryEnabled = parseOptionalBoolean(process.env.POSTGRES_HISTORY_ENABLED, Boolean(databaseUrl));
   const devInfoEnabled = parseOptionalBoolean(process.env.VITE_DEV_INFO_ENABLED || process.env.DEV_INFO_ENABLED, true);
@@ -5529,6 +5531,7 @@ function loadConfig() {
     kvRestUrl,
     kvRestToken,
     cacheNamespace,
+    pfpCdnBase,
     databaseUrl,
     postgresHistoryEnabled,
     devInfoEnabled,
@@ -6757,6 +6760,19 @@ function startHealthServer() {
     if (request.method === "GET" && /^[/](call|u|g|hype)([/]|$)/.test(requestUrl.pathname)) {
       await serveProofSharePage(requestUrl, request, response);
       return;
+    }
+
+    if ((request.method === "GET" || request.method === "HEAD") && CONFIG.pfpCdnBase && requestUrl.pathname.startsWith("/pfp/characters/")) {
+      const fileName = decodeURIComponent(requestUrl.pathname.slice("/pfp/characters/".length));
+      if (fileName && !/[\\/\0]/.test(fileName)) {
+        const cdnUrl = `${CONFIG.pfpCdnBase}/pfp/characters/${encodeURIComponent(fileName)}`;
+        response.writeHead(302, {
+          Location: cdnUrl,
+          "Cache-Control": "public, max-age=300"
+        });
+        response.end();
+        return;
+      }
     }
 
     if ((request.method === "GET" || request.method === "HEAD") && (requestUrl.pathname.startsWith("/assets/")
@@ -8710,7 +8726,8 @@ async function handleWebApiRequest(request, response, requestUrl) {
     // the clean static images from /pfp/characters/<file> and offers a download.
     if (request.method === "GET" && pathname === "/api/web/pfp/characters") {
       const files = await listCharacterFiles(PFP_FRAME_DIR).catch(() => []);
-      sendWebJson(request, response, 200, { ok: true, count: files.length, files });
+      const baseUrl = CONFIG.pfpCdnBase ? `${CONFIG.pfpCdnBase}/pfp/characters` : "";
+      sendWebJson(request, response, 200, { ok: true, count: files.length, files, baseUrl });
       return;
     }
     // One random branded character (PNG) — used by "surprise me" + shareable download.
