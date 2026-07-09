@@ -803,6 +803,10 @@ test("Rose (MissRose parity): captcha verify, fillings, timed mutes, notes, filt
   // Captcha: mute-on-join + "I'm human" button + verify callback wired in the dispatcher.
   assert.match(serverSource, /async function handleRoseCaptchaCallback\(/);
   assert.match(serverSource, /cap:v:/);
+  assert.match(serverSource, /ROSE_CAPTCHA_TIMEOUT_MS[\s\S]*5\s*\*\s*60_000/);
+  assert.match(serverSource, /ROSE_CAPTCHA_REMINDER_MS/);
+  assert.match(serverSource, /callback_data:\s*`cap:v:\$\{chatId\}:\$\{m\.id\}`/);
+  assert.match(serverSource, /chat_id:\s*m\.id[\s\S]*Verify for/);
   assert.match(serverSource, /startsWith\("cap:"\)/);            // routed in the callback dispatcher
   // Welcome/goodbye fillings + duration parsing helpers exist.
   assert.match(serverSource, /function roseFill\(/);
@@ -2016,6 +2020,26 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
 });
 
 // ---- 🐦🔥 X GROWTH ENGINE — proactive calls, receipts, KOL first-responder, scorecard, persona -----------
+test("X DM terminal: link from Telegram, scan/settings/buy/sell over official DMs", () => {
+  const xdm = fs.readFileSync(new URL("../src/lib/xDmClient.js", import.meta.url), "utf8");
+  assert.match(xdm, /X_DM_OAUTH2_TOKEN|X_DM_ACCESS_TOKEN/);
+  assert.match(xdm, /export function xDmConfigured/);
+  assert.match(xdm, /export async function xDmFetchEvents/);
+  assert.match(xdm, /export async function xDmSendText/);
+  assert.match(xdm, /\/dm_events/);
+  assert.match(xdm, /\/dm_conversations\/with\/\$\{encodeURIComponent\(id\)\}\/messages/);
+  assert.match(serverSource, /import \{ xDmAuthMode, xDmConfigured, xDmFetchEvents, xDmSendText \} from "\.\/lib\/xDmClient\.js"/);
+  assert.match(serverSource, /async function handleXLinkCommand/);
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["xlink"\]\)/);
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["xdm", "xdmstatus"\]\)/);
+  assert.match(serverSource, /function xDmHelpText/);
+  assert.match(serverSource, /scan <CA> \/ chart <CA> \/ rug <CA> \/ map <CA>/);
+  assert.match(serverSource, /Money actions require CONFIRM/);
+  assert.match(serverSource, /tgExecuteQuickBuy\(userId, rec\.mint, rec\.amountSol/);
+  assert.match(serverSource, /tgExecuteQuickSell\(userId, rec\.mint, rec\.percent\)/);
+  assert.match(serverSource, /setInterval\(\(\) => \{ void xDmPollTick\(\); \}, xDmPollMs\)/);
+});
+
 test("X growth engine: broadcast-gated proactive posts + receipts + KOL responder + scorecard, tracking always on", () => {
   const xclientSource = fs.readFileSync(new URL("../src/lib/xClient.js", import.meta.url), "utf8");
   // xClient gained a general poster (standalone + quote-tweet) and a general search — receipts/first-responder need them

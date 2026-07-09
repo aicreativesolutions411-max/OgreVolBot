@@ -74,6 +74,7 @@ import { getNoxaScan, fetchNoxaFeed, fetchPoolBuys, NOXA_RH } from "./lib/noxaLa
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp, listCharacterFiles, characterPfpCount, makeCharacterPfp } from "./lib/pfp.js";
 import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
 import { xConfigured, xSearchMentions, xReply, xPost, xSearchQuery, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode, xAuthReport } from "./lib/xClient.js";
+import { xDmAuthMode, xDmConfigured, xDmFetchEvents, xDmSendText } from "./lib/xDmClient.js";
 import { renderXScanCard } from "./lib/xCard.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
@@ -14693,6 +14694,9 @@ async function handleMessage(message, userId) {
     const cs = parseCommandWithArgument(text, ["snipe", "communitysnipe", "csnipe"]);
     if (cs) { await handleCommunitySnipeCommand(chatId, message, cs.argument, userId); return; }
     if (parseCommandWithArgument(text, ["pfp", "slimepfp", "avatar"])) { await handlePfpCommand(chatId, message, userId); return; }
+    const xlink = parseCommandWithArgument(text, ["xlink"]);
+    if (xlink) { await handleXLinkCommand(chatId, message, userId); return; }
+    if (parseCommandWithArgument(text, ["xdm", "xdmstatus"])) { await handleXDmStatusCommand(chatId, message, userId); return; }
     const xclaim = parseCommandWithArgument(text, ["xclaim"]);
     if (xclaim) { await handleXClaimCommand(chatId, message, xclaim.argument, userId); return; }
     if (parseCommandWithArgument(text, ["xtest", "xstatus"])) { await handleXTestCommand(chatId, userId); return; }
@@ -33500,6 +33504,302 @@ function xReplyOwnerChat() {
 function xReplyEnabled() { const v = (process.env.X_REPLY_ENABLED || "").trim(); return v ? parseBoolean(v) : xConfigured(); }
 function xReplyAuto() { const v = (process.env.X_REPLY_AUTO || "").trim(); return v ? parseBoolean(v) : xConfigured(); }
 
+// ============ X DM TERMINAL — TG-style command layer over official X DMs ============
+// Dark unless an official X OAuth2 user token with DM scopes is configured. It links an X sender id to the
+// user's existing SlimeWire/TG account, then reuses the same managed-wallet buy/sell helpers as Telegram.
+function xDmStateFile() { return path.join(CONFIG.dataDir, "x-dm-terminal.json"); }
+let xDmStateCache = null;
+let xDmPollRunning = false;
+function xDmTerminalEnabled() {
+  const v = String(process.env.X_DM_ENABLED || "").trim();
+  return v ? parseBoolean(v) : xDmConfigured();
+}
+function xDmOwnUserId() { return String(process.env.X_DM_OWN_USER_ID || "").trim(); }
+async function readXDmState() {
+  if (xDmStateCache) return xDmStateCache;
+  let s = null; try { s = await readJson(xDmStateFile()); } catch { s = null; }
+  if (!s || typeof s !== "object") s = {};
+  if (!s.seen || typeof s.seen !== "object") s.seen = {};
+  if (!s.ignored || typeof s.ignored !== "object") s.ignored = {};
+  if (!s.links || typeof s.links !== "object") s.links = {};       // xSenderId -> { userId, linkedAt }
+  if (!s.codes || typeof s.codes !== "object") s.codes = {};       // short code -> { userId, expiresAt }
+  if (!s.pending || typeof s.pending !== "object") s.pending = {}; // xSenderId -> trade confirm payload
+  xDmStateCache = s; return s;
+}
+async function writeXDmState(s) { xDmStateCache = s; await writeJsonFile(xDmStateFile(), s).catch(() => {}); }
+function xDmPruneState(s, now = Date.now()) {
+  for (const [id, ts] of Object.entries(s.seen || {})) if (now - Number(ts || 0) > 3 * 86_400_000) delete s.seen[id];
+  for (const [id, ts] of Object.entries(s.ignored || {})) if (now - Number(ts || 0) > 3 * 86_400_000) delete s.ignored[id];
+  for (const [code, rec] of Object.entries(s.codes || {})) if (Number(rec?.expiresAt || 0) < now) delete s.codes[code];
+  for (const [sender, rec] of Object.entries(s.pending || {})) if (Number(rec?.expiresAt || 0) < now) delete s.pending[sender];
+}
+function xDmNewLinkCode(state, userId) {
+  xDmPruneState(state);
+  let code = "";
+  for (let i = 0; i < 8; i++) {
+    code = crypto.randomBytes(3).toString("hex").toUpperCase();
+    if (!state.codes[code]) break;
+  }
+  state.codes[code] = { userId: String(userId), expiresAt: Date.now() + 15 * 60_000 };
+  return code;
+}
+async function handleXLinkCommand(chatId, message, userId) {
+  if (!isPrivateChat(message.chat)) {
+    await say(chatId, "Open the bot in DM and send /xlink so I can safely link your X DMs to your SlimeWire account.");
+    return true;
+  }
+  const state = await readXDmState();
+  const code = xDmNewLinkCode(state, userId);
+  await writeXDmState(state);
+  const handle = xHandle() || "SlimeWirebot";
+  await sayHtml(chatId, [
+    "🐦 <b>Link X DM Terminal</b>",
+    "",
+    `1. Open <b>@${escapeTelegramHtml(handle)}</b> on X.`,
+    `2. DM exactly: <code>link ${escapeTelegramHtml(code)}</code>`,
+    "",
+    "After that, X DMs can scan, show positions, edit quick settings, and start buy/sell flows with a confirm code.",
+    "<i>Never send seed phrases or private keys.</i>"
+  ].join("\n"), { inline_keyboard: [[{ text: "Open X profile", url: `https://x.com/${handle}` }, { text: "Open X Terminal", url: "https://www.slimewire.org/x-terminal" }]] });
+  return true;
+}
+function xDmHelpText(linked = false) {
+  return [
+    "SlimeWire X DM Terminal",
+    "",
+    "Public tags: @SlimeWirebot scan <CA>",
+    "",
+    "DM commands:",
+    "scan <CA> / chart <CA> / rug <CA> / map <CA>",
+    "positions",
+    "wallet",
+    "settings",
+    "set amount 0.1",
+    "set tp 25",
+    "set sl 8",
+    "set slippage 5",
+    "buy 0.1 <CA>",
+    "sell 50% <CA>",
+    "bundle / volume / launch",
+    "",
+    linked ? "Money actions require CONFIRM <code> before they run." : "To trade here, DM: link <code> after /xlink in Telegram.",
+    "No seed phrases. Wallet-confirmed / managed-wallet only."
+  ].join("\n");
+}
+function xDmNeedLinkText() {
+  const bot = CONFIG.telegramBotUsername || "SlimeWiredBot";
+  return [
+    "Link needed first.",
+    `Open Telegram @${bot} and send /xlink, then DM me the link code here.`,
+    "Until linked, I can still scan/chart/rug CAs."
+  ].join("\n");
+}
+async function xDmSend(senderId, text, state = null) {
+  const chunks = [];
+  const raw = String(text || "");
+  for (let i = 0; i < raw.length; i += 1800) chunks.push(raw.slice(i, i + 1800));
+  for (const chunk of (chunks.length ? chunks : [""])) {
+    const res = await xDmSendText(senderId, chunk).catch((e) => ({ ok: false, error: String(e?.message || e).slice(0, 160) }));
+    if (state && res?.id) state.ignored[res.id] = Date.now();
+    if (!res?.ok) return res;
+  }
+  return { ok: true };
+}
+function xDmParseTarget(text) {
+  const rh = extractRhAddressesFromText(text)[0];
+  if (rh) return rh;
+  const ca = extractMintsFromText(text)[0];
+  return ca || "";
+}
+function xDmTokenUrl(token) {
+  return `https://www.slimewire.org/terminal/chart?token=${encodeURIComponent(token)}&source=x-dm`;
+}
+async function xDmFormatPositions(userId) {
+  const rows = await webPositionRows(userId, { force: true, fast: true }).catch(() => []);
+  if (!rows.length) return "No open SlimeWire positions found.";
+  const lines = rows.slice(0, 8).map((p, i) => {
+    const value = p.estimatedValueSol ? ` value ${p.estimatedValueSol} SOL` : "";
+    const pnl = p.openPnlSol ? ` PnL ${p.openPnlSol}` : "";
+    return `${i + 1}. ${p.symbol || p.shortMint} ${p.uiAmount || ""}${value}${pnl}\n   ${xDmTokenUrl(p.tokenMint)}`;
+  });
+  return ["Positions", "", ...lines].join("\n");
+}
+async function xDmFormatWallets(userId) {
+  const wallets = walletsForOwner(await readWalletStore(), userId);
+  if (!wallets.length) return "No SlimeWire managed wallets yet. Open Telegram /start or the web terminal to create one.";
+  const lines = wallets.slice(0, 8).map((w, i) => `${i + 1}. ${w.label || "Wallet"} — ${shortMint(w.publicKey)}${i === 0 ? " (default)" : ""}`);
+  return ["Wallets", "", ...lines, "", "Full wallet actions: https://www.slimewire.org/terminal?tab=wallets&source=x-dm"].join("\n");
+}
+async function xDmFormatSettings(userId) {
+  const prefs = userBuyPrefs(await readBuyPrefs(), userId);
+  return [
+    "Trade settings",
+    "",
+    `Quick amount: ${prefs.quickAmount} SOL`,
+    `TP: ${prefs.takeProfitPct ? "+" + prefs.takeProfitPct + "%" : "off"}`,
+    `SL: ${prefs.stopLossPct ? "-" + prefs.stopLossPct + "%" : "off"}`,
+    `Slippage: ${(prefs.slippageBps / 100).toFixed(prefs.slippageBps % 100 ? 1 : 0)}%`,
+    "",
+    "Edit:",
+    "set amount 0.1",
+    "set tp 25",
+    "set sl 8",
+    "set slippage 5"
+  ].join("\n");
+}
+function xDmParseSet(text) {
+  const t = String(text || "").toLowerCase();
+  const n = Number((t.match(/(?:amount|buy|quick)\s+([0-9]*\.?[0-9]+)/) || [])[1]);
+  if (Number.isFinite(n) && n > 0) return { kind: "amount", value: n };
+  const tp = Number((t.match(/\btp\s*([0-9]*\.?[0-9]+)|take\s*profit\s*([0-9]*\.?[0-9]+)/) || []).filter(Boolean).pop());
+  if (Number.isFinite(tp) && tp >= 0) return { kind: "tp", value: tp };
+  const sl = Number((t.match(/\bsl\s*([0-9]*\.?[0-9]+)|stop\s*loss\s*([0-9]*\.?[0-9]+)/) || []).filter(Boolean).pop());
+  if (Number.isFinite(sl) && sl >= 0) return { kind: "sl", value: sl };
+  const slip = Number((t.match(/slippage\s*([0-9]*\.?[0-9]+)/) || [])[1]);
+  if (Number.isFinite(slip) && slip > 0) return { kind: "slippage", value: slip * 100 };
+  return null;
+}
+function xDmStartPending(state, senderId, payload) {
+  const id = crypto.randomBytes(3).toString("hex").toUpperCase();
+  state.pending[String(senderId)] = { ...payload, id, expiresAt: Date.now() + 2 * 60_000 };
+  return id;
+}
+async function xDmConfirmPending(state, senderId, raw) {
+  const rec = state.pending[String(senderId)];
+  const code = (String(raw || "").match(/\bconfirm\s+([a-f0-9]{6})\b/i) || [])[1]?.toUpperCase();
+  if (!rec || !code || code !== String(rec.id || "").toUpperCase()) return null;
+  delete state.pending[String(senderId)];
+  return rec;
+}
+async function xDmHandleTradeConfirm(senderId, rec, state) {
+  const userId = rec.userId;
+  if (rec.action === "buy") {
+    const r = await tgExecuteQuickBuy(userId, rec.mint, rec.amountSol, { idempotencyParts: ["x-dm", rec.id] });
+    if (r.needWallet) return await xDmSend(senderId, "Create/fund a SlimeWire wallet first: open Telegram /start or https://www.slimewire.org/terminal?tab=wallets", state);
+    if (!r.ok) return await xDmSend(senderId, `Buy did not land: ${r.why || "try again"}`, state);
+    await quickBuySendReceipt(userId, rec.mint, rec.amountSol, r.result).catch(() => {});
+    return await xDmSend(senderId, `Bought ${rec.amountSol} SOL of ${shortMint(rec.mint)}. Receipt + sell controls sent to Telegram.\n${xDmTokenUrl(rec.mint)}`, state);
+  }
+  if (rec.action === "sell") {
+    const r = await tgExecuteQuickSell(userId, rec.mint, rec.percent);
+    if (r.needWallet) return await xDmSend(senderId, "Create/fund a SlimeWire wallet first: open Telegram /start or https://www.slimewire.org/terminal?tab=wallets", state);
+    if (!r.ok) return await xDmSend(senderId, `Sell did not land: ${r.why || "try again"}`, state);
+    await tgQuickSellReceipt(userId, rec.mint, r).catch(() => {});
+    return await xDmSend(senderId, `Sold ${rec.percent}% of ${shortMint(rec.mint)}. Receipt sent to Telegram.\n${xDmTokenUrl(rec.mint)}`, state);
+  }
+  return await xDmSend(senderId, "That confirm expired. Send the command again.", state);
+}
+async function xDmHandleEvent(event, state) {
+  const senderId = String(event.senderId || "");
+  const ownId = xDmOwnUserId();
+  if (!senderId || (ownId && senderId === ownId)) return;
+  const text = String(event.text || "").trim();
+  if (!text) return;
+  const lower = text.toLowerCase();
+  const linked = state.links[senderId] || null;
+  if (/^link\s+[a-f0-9]{6}\b/i.test(text)) {
+    const code = (text.match(/^link\s+([a-f0-9]{6})\b/i) || [])[1].toUpperCase();
+    const rec = state.codes[code];
+    if (!rec || Number(rec.expiresAt || 0) < Date.now()) return await xDmSend(senderId, "That link code expired. Open Telegram and send /xlink for a fresh one.", state);
+    state.links[senderId] = { userId: String(rec.userId), linkedAt: new Date().toISOString() };
+    delete state.codes[code];
+    return await xDmSend(senderId, "Linked. You can now use: scan, chart, rug, positions, settings, buy, sell. Send help anytime.", state);
+  }
+  const pending = await xDmConfirmPending(state, senderId, text);
+  if (pending) return await xDmHandleTradeConfirm(senderId, pending, state);
+  if (/^(help|menu|start)\b/i.test(lower)) return await xDmSend(senderId, xDmHelpText(Boolean(linked)), state);
+  const intent = xIntentFromText(text);
+  const explicitScan = /^(scan|chart|rug|safe|map)\b/i.test(lower);
+  const bareTargetOnly = Boolean(xDmParseTarget(text)) && !/\b(buy|sell|positions?|wallets?|settings?|presets?|bundle|volume|launch|copy|set|confirm)\b/i.test(lower);
+  if (explicitScan || bareTargetOnly) {
+    let target = xDmParseTarget(text);
+    if (!target) target = await resolveScanTargetFromText(text, [], { allowBareTickerHints: false }).catch(() => "");
+    if (!target) return await xDmSend(senderId, "Send a CA or 0x contract, like: scan <CA>", state);
+    const reply = await buildXReply(target, /^(chart)\b/i.test(lower) ? "chart" : /^(rug|safe)\b/i.test(lower) ? "rug" : /^(map)\b/i.test(lower) ? "map" : intent, event.id).catch(() => null);
+    const body = reply?.text || `Scanned ${shortMint(target)}`;
+    return await xDmSend(senderId, `${body}\n${xDmTokenUrl(target)}`, state);
+  }
+  if (!linked) {
+    if (/\b(buy|sell|positions?|wallet|settings?|preset|bundle|volume|launch|copy)\b/i.test(lower)) return await xDmSend(senderId, xDmNeedLinkText(), state);
+    return await xDmSend(senderId, xDmHelpText(false), state);
+  }
+  const userId = linked.userId;
+  if (/^positions?\b/i.test(lower)) return await xDmSend(senderId, await xDmFormatPositions(userId), state);
+  if (/^wallets?\b/i.test(lower)) return await xDmSend(senderId, await xDmFormatWallets(userId), state);
+  if (/^(settings?|presets?)\b/i.test(lower)) return await xDmSend(senderId, await xDmFormatSettings(userId), state);
+  if (/^set\b/i.test(lower)) {
+    const edit = xDmParseSet(text);
+    if (!edit) return await xDmSend(senderId, "Try: set amount 0.1 / set tp 25 / set sl 8 / set slippage 5", state);
+    await setBuyPref(userId, edit.kind, edit.value);
+    return await xDmSend(senderId, "Saved.\n\n" + await xDmFormatSettings(userId), state);
+  }
+  const buyMatch = text.match(/\bbuy\s+([0-9]*\.?[0-9]+)\s+(?:sol\s+)?([1-9A-HJ-NP-Za-km-z]{32,48}|0x[0-9a-fA-F]{40})/i);
+  if (buyMatch) {
+    const amountSol = Math.max(0.001, Math.min(50, Number(buyMatch[1]) || 0));
+    const mint = buyMatch[2];
+    const id = xDmStartPending(state, senderId, { action: "buy", userId, amountSol, mint });
+    return await xDmSend(senderId, `Confirm buy ${amountSol} SOL of ${shortMint(mint)}?\nReply: CONFIRM ${id}\nExpires in 2 minutes.\n${xDmTokenUrl(mint)}`, state);
+  }
+  const sellMatch = text.match(/\bsell\s+(25|50|75|100)%?\s+([1-9A-HJ-NP-Za-km-z]{32,48}|0x[0-9a-fA-F]{40})/i);
+  if (sellMatch) {
+    const percent = Number(sellMatch[1]);
+    const mint = sellMatch[2];
+    const id = xDmStartPending(state, senderId, { action: "sell", userId, percent, mint });
+    return await xDmSend(senderId, `Confirm sell ${percent}% of ${shortMint(mint)}?\nReply: CONFIRM ${id}\nExpires in 2 minutes.\n${xDmTokenUrl(mint)}`, state);
+  }
+  if (/^(bundle|volume|launch|copy)\b/i.test(lower)) {
+    return await xDmSend(senderId, [
+      "That tool is richer than a plain X DM, so open the live panel:",
+      "https://www.slimewire.org/terminal?source=x-dm",
+      "",
+      "Telegram also has the full button flow: /start"
+    ].join("\n"), state);
+  }
+  return await xDmSend(senderId, xDmHelpText(true), state);
+}
+async function xDmPollTick() {
+  if (!xDmTerminalEnabled() || !xDmConfigured() || xDmPollRunning) return { off: true };
+  xDmPollRunning = true;
+  const state = await readXDmState();
+  try {
+    xDmPruneState(state);
+    const events = await xDmFetchEvents({ maxResults: Number(process.env.X_DM_FETCH_LIMIT || 50) });
+    events.sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
+    let handled = 0;
+    for (const event of events) {
+      if (state.seen[event.id] || state.ignored[event.id]) continue;
+      state.seen[event.id] = Date.now();
+      await xDmHandleEvent(event, state).catch((e) => console.log(`[xdm] event ${event.id} failed: ${String(e?.message || e).slice(0, 120)}`));
+      handled++;
+      await writeXDmState(state);
+    }
+    if (handled) console.log(`[xdm] handled ${handled} DM event(s)`);
+    await writeXDmState(state);
+    return { checked: events.length, handled };
+  } catch (e) {
+    console.log(`[xdm] poll failed: ${String(e?.message || e).slice(0, 160)}`);
+    return { error: String(e?.message || e).slice(0, 160) };
+  } finally {
+    xDmPollRunning = false;
+  }
+}
+async function handleXDmStatusCommand(chatId, message, userId) {
+  if (!isPrivateChat(message.chat)) { await say(chatId, "Open the bot in DM to manage X DM terminal."); return true; }
+  const state = await readXDmState();
+  const linked = Object.values(state.links || {}).filter((link) => String(link.userId) === String(userId)).length;
+  await sayHtml(chatId, [
+    "🐦 <b>X DM Terminal</b>",
+    `Enabled: <b>${xDmTerminalEnabled() ? "ON" : "off"}</b>`,
+    `Auth: <b>${escapeTelegramHtml(xDmAuthMode())}</b>`,
+    `Your linked X sender(s): <b>${linked}</b>`,
+    "",
+    "User flow: <code>/xlink</code> → DM <code>link CODE</code> to X → use <code>help</code> in X DM.",
+    "",
+    xDmConfigured() ? "If DMs are not moving, confirm X_DM_ENABLED=true and the token has dm.read + dm.write scopes." : "Set X_DM_OAUTH2_TOKEN on Render to turn on official X DMs."
+  ].join("\n"));
+  return true;
+}
+
 function xAgeLabel(ms) {
   const m = ms / 60_000;
   if (m < 60) return `${Math.max(1, Math.round(m))}m`;
@@ -39955,6 +40255,10 @@ function startGroupBuyBot() {
   const xPollMs = Math.max(15_000, Number(process.env.X_REPLY_POLL_MS || 30_000));
   setTimeout(() => { void xReplyPollTick(); }, 10_000);
   setInterval(() => { void xReplyPollTick(); }, xPollMs);
+  // 🐦💬 X DM terminal — official X DM API, dark until X_DM_OAUTH2_TOKEN (+ dm.read/dm.write scopes) exists.
+  const xDmPollMs = Math.max(15_000, Number(process.env.X_DM_POLL_MS || 30_000));
+  setTimeout(() => { void xDmPollTick(); }, 15_000);
+  setInterval(() => { void xDmPollTick(); }, xDmPollMs);
   // 🐦🔥 X GROWTH ENGINE tickers — all internally gated by XBOT_BROADCAST + per-feature flags (default OFF),
   // and self-throttled, so they no-op cheaply until the owner flips the env vars.
   setInterval(() => { void xReceiptsTick(); }, 10 * 60_000);   // 🎯 milestone quote-tweets ("called at $30k → 10x")
@@ -40274,6 +40578,25 @@ function roseFill(tmpl, user = {}, chat = {}, count = null) {
 }
 // Captcha: users pending human-verification (muted on join). key = `${chatId}:${userId}`.
 const roseCaptchaPending = new Map();
+function roseCaptchaEnvMs(name, fallbackMs, minMs, maxMs = Infinity) {
+  const raw = Number(process.env[name] || fallbackMs);
+  if (!Number.isFinite(raw)) return fallbackMs;
+  return Math.max(minMs, Math.min(maxMs, raw));
+}
+const ROSE_CAPTCHA_TIMEOUT_MS = roseCaptchaEnvMs("ROSE_CAPTCHA_TIMEOUT_MS", 5 * 60_000, 60_000);
+const ROSE_CAPTCHA_REMINDER_MS = roseCaptchaEnvMs("ROSE_CAPTCHA_REMINDER_MS", 60_000, 30_000, 90_000);
+function roseCaptchaTimeoutLabel() {
+  const mins = Math.max(1, Math.round(ROSE_CAPTCHA_TIMEOUT_MS / 60_000));
+  return `${mins} min`;
+}
+function roseClearCaptchaPending(key) {
+  const pend = roseCaptchaPending.get(key);
+  if (!pend) return null;
+  if (pend.timer) { try { clearTimeout(pend.timer); } catch {} }
+  if (pend.reminderTimer) { try { clearTimeout(pend.reminderTimer); } catch {} }
+  roseCaptchaPending.delete(key);
+  return pend;
+}
 // Antiflood: rolling per-user message-rate window. key = `${chatId}:${userId}`.
 const roseFloodState = new Map();
 // Ping the group's admins (for /report). Returns an HTML mention string, capped.
@@ -40694,27 +41017,42 @@ async function shieldRecordBannedFp(chatId, userId) {
     if (!e.bannedFps.includes(fp)) { e.bannedFps.push(fp); if (e.bannedFps.length > 500) e.bannedFps = e.bannedFps.slice(-400); store.groups[k] = e; await writeGroupBot(store); }
   } catch {}
 }
-// Route the "I'm human" captcha button (cap:v:<userId>). Returns true when handled.
+// Route the "I'm human" captcha button.
+// Supports old group buttons (cap:v:<userId>) and DM-safe buttons (cap:v:<chatId>:<userId>).
 async function handleRoseCaptchaCallback(query, clickerId) {
   const data = String(query?.data || "");
   if (!data.startsWith("cap:v:")) return false;
-  const chatId = query.message?.chat?.id, msgId = query.message?.message_id;
-  const wantId = data.slice(6);
+  const msgChatId = query.message?.chat?.id, msgId = query.message?.message_id;
+  const parts = data.slice(6).split(":").filter(Boolean);
+  const wantId = parts.length >= 2 ? parts.pop() : parts[0];
+  const chatId = parts.length ? parts.join(":") : msgChatId;
+  if (!chatId || !wantId) {
+    try { await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "Captcha expired. Rejoin or ask an admin.", show_alert: true }); } catch {}
+    return true;
+  }
   if (String(clickerId) !== String(wantId)) {
     try { await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "This button isn't for you 🐸", show_alert: true }); } catch {}
     return true;
   }
   const key = String(chatId) + ":" + String(wantId);
-  const pend = roseCaptchaPending.get(key);
-  if (pend && pend.timer) { try { clearTimeout(pend.timer); } catch {} }
-  roseCaptchaPending.delete(key);
+  const pend = roseClearCaptchaPending(key);
+  if (!pend) {
+    try { await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "Captcha expired. Rejoin or ask an admin.", show_alert: true }); } catch {}
+    return true;
+  }
   try { await telegram("restrictChatMember", { chat_id: chatId, user_id: Number(wantId), permissions: ROSE_UNMUTE_PERMS }); } catch {}
   try { await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "✅ Verified — welcome!" }); } catch {}
-  try { await telegram("deleteMessage", { chat_id: chatId, message_id: msgId }); } catch {}
+  if (pend.promptMsgId) { try { await telegram("deleteMessage", { chat_id: chatId, message_id: pend.promptMsgId }); } catch {} }
+  if (pend.reminderMsgId) { try { await telegram("deleteMessage", { chat_id: chatId, message_id: pend.reminderMsgId }); } catch {} }
+  if (msgChatId && msgId && String(msgChatId) !== String(chatId)) {
+    try { await telegram("editMessageText", { chat_id: msgChatId, message_id: msgId, text: "✅ Verified — you can talk in the group now." }); } catch {}
+  } else if (msgChatId && msgId) {
+    try { await telegram("deleteMessage", { chat_id: msgChatId, message_id: msgId }); } catch {}
+  }
   const entry = await getGroupBotEntry(chatId).catch(() => null);
   const cfg = roseConfig(entry);
   const tmpl = cfg.welcome || "👋 Welcome {mention}! Read /rules and enjoy the swamp. ⚡ slimewire.org";
-  const chat = query.message?.chat || {};
+  const chat = pend.chat || query.message?.chat || {};
   await sayHtml(chatId, roseFill(tmpl, pend?.user || query.from || {}, chat, chat.members_count)).catch(() => {});
   return true;
 }
@@ -40755,19 +41093,34 @@ async function handleGroupRose(message, userId) {
       if (groupNeedsWebVerify(entry)) { await postWebVerifyGate(chatId, m, entry).catch(() => {}); continue; }
       if (cfg.captcha) {
         try { await telegram("restrictChatMember", { chat_id: chatId, user_id: m.id, permissions: ROSE_MUTE_PERMS }); } catch {}
-        const mk = { inline_keyboard: [[{ text: "✅ I'm human — tap to verify", callback_data: "cap:v:" + m.id }]] };
+        const timeoutLabel = roseCaptchaTimeoutLabel();
+        const mk = { inline_keyboard: [[{ text: "✅ I'm human — tap to verify", callback_data: `cap:v:${chatId}:${m.id}` }]] };
         const sent = await telegram("sendMessage", { chat_id: chatId, parse_mode: "HTML", reply_markup: mk,
-          text: `🛡️ <a href="tg://user?id=${m.id}">${escapeTelegramHtml(m.first_name || "friend")}</a>, tap below within 2 min to verify you're human and unlock the chat.` }).catch(() => null);
+          text: `🛡️ <a href="tg://user?id=${m.id}">${escapeTelegramHtml(m.first_name || "friend")}</a>, tap below within ${timeoutLabel} to verify you're human and unlock the chat.` }).catch(() => null);
+        const dmSent = await telegram("sendMessage", { chat_id: m.id, parse_mode: "HTML", reply_markup: mk,
+          text: `🛡️ Verify for <b>${escapeTelegramHtml(chat.title || "the group")}</b> within ${timeoutLabel}. Tap below and I'll unlock you in chat.` }).catch(() => null);
         const key = String(chatId) + ":" + String(m.id);
+        const reminderTimer = setTimeout(() => { (async () => {
+          const pend = roseCaptchaPending.get(key);
+          if (!pend) return;
+          const reminder = await telegram("sendMessage", { chat_id: chatId, parse_mode: "HTML", reply_markup: mk,
+            text: `🛡️ Still need captcha: <a href="tg://user?id=${m.id}">${escapeTelegramHtml(m.first_name || "friend")}</a>, tap verify before the ${timeoutLabel} window closes.` }).catch(() => null);
+          if (reminder?.result?.message_id) {
+            pend.reminderMsgId = reminder.result.message_id;
+            roseCaptchaPending.set(key, pend);
+          }
+        })().catch(() => {}); }, ROSE_CAPTCHA_REMINDER_MS);
         const timer = setTimeout(() => { (async () => {
           if (!roseCaptchaPending.has(key)) return;
-          roseCaptchaPending.delete(key);
+          const pend = roseClearCaptchaPending(key);
           try { await telegram("banChatMember", { chat_id: chatId, user_id: m.id }); } catch {}
           try { await telegram("unbanChatMember", { chat_id: chatId, user_id: m.id, only_if_banned: true }); } catch {}
-          if (sent?.result?.message_id) { try { await telegram("deleteMessage", { chat_id: chatId, message_id: sent.result.message_id }); } catch {} }
-        })().catch(() => {}); }, 120000);
-        if (roseCaptchaPending.size > 500) { const first = roseCaptchaPending.keys().next().value; roseCaptchaPending.delete(first); }
-        roseCaptchaPending.set(key, { at: Date.now(), user: m, timer, promptMsgId: sent?.result?.message_id });
+          if (pend?.promptMsgId) { try { await telegram("deleteMessage", { chat_id: chatId, message_id: pend.promptMsgId }); } catch {} }
+          if (pend?.reminderMsgId) { try { await telegram("deleteMessage", { chat_id: chatId, message_id: pend.reminderMsgId }); } catch {} }
+          if (pend?.dmMsgId) { try { await telegram("editMessageText", { chat_id: m.id, message_id: pend.dmMsgId, text: "Captcha expired. Rejoin the group or ask an admin for help." }); } catch {} }
+        })().catch(() => {}); }, ROSE_CAPTCHA_TIMEOUT_MS);
+        if (roseCaptchaPending.size > 500) { const first = roseCaptchaPending.keys().next().value; roseClearCaptchaPending(first); }
+        roseCaptchaPending.set(key, { at: Date.now(), user: m, chat, timer, reminderTimer, promptMsgId: sent?.result?.message_id, dmMsgId: dmSent?.result?.message_id });
       } else {
         const tmpl = cfg.welcome || "👋 Welcome {mention}! Read /rules and enjoy the swamp. ⚡ slimewire.org";
         await sayHtml(chatId, roseFill(tmpl, m, chat, chat.members_count)).catch(() => {});
