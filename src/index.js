@@ -4636,7 +4636,7 @@ const SEO_PAGE_META = {
   },
   "/x-terminal": {
     title: "SlimeWire X Terminal - Trade Commands, Scans and Pinned Post Hub",
-    description: "Use SlimeWire from X with a pinned terminal-style post, DM command flow, Solana scan replies, chart links, wallet approval handoff, and safe trade routing."
+    description: "Use SlimeWire from X with a pinned terminal-style post, Solana scan replies, chart links, and a clear handoff to the web terminal or Telegram bot for wallet-confirmed trading."
   },
   "/is-slimewire-legit": {
     title: "Is SlimeWire Legit? Official Safety, Bot and Trust Checklist",
@@ -34735,28 +34735,44 @@ async function handleXBotCommand(chatId, argument, userId) {
     return;
   }
   if (/^terminal\b/i.test(arg)) {
-    const text = [
+    const pinText = [
       "SLIMEWIRE X TERMINAL",
       "",
-      "Tag @SlimeWirebot under any Solana coin:",
-      "scan <CA>",
-      "chart <CA>",
-      "rug <CA>",
+      "Tag @SlimeWirebot:",
+      "scan <CA> | chart <CA> | rug <CA>",
       "",
-      "DM:",
-      "buy 0.1 <CA> / sell 50% <CA>",
-      "positions / help",
+      "Full swaps, bundles, TP/SL, launch tools:",
+      "web + @SlimeWiredBot",
       "",
-      "Wallet approvals stay user-confirmed. No seed phrases.",
-      "https://www.slimewire.org/x-terminal"
+      "No seed phrases. Wallet-confirmed."
+    ].join("\n");
+    const terminalUrl = "https://www.slimewire.org/x-terminal";
+    const fullPinText = `${pinText}\n${terminalUrl}`;
+    const composerUrl = xPostIntentUrl({ text: pinText, url: terminalUrl, hashtags: ["SlimeWire", "Solana"] });
+    const cardUrl = "https://www.slimewire.org/assets/slimewire/auto/x-terminal-card.png";
+    const handleUrl = `https://x.com/${xHandle() || "SlimeWirebot"}`;
+    const kb = { inline_keyboard: [
+      [{ text: "Open X Composer", url: composerUrl }],
+      [{ text: "Open X Terminal", url: terminalUrl }, { text: "Open X Profile", url: handleUrl }],
+      [{ text: "Open logo card", url: cardUrl }]
+    ] };
+    const caption = [
+      "✅ <b>X pin kit ready.</b>",
+      "X blocked automated posting on this account, so use the composer button, post it manually, then pin it on X.",
+      "",
+      "<b>Pin text</b>",
+      `<pre>${escapeTelegramHtml(fullPinText)}</pre>`
     ].join("\n");
     const cardPath = path.join(WEB_STATIC_DIR, "assets", "slimewire", "auto", "x-terminal-card.png");
     const sourceCardPath = path.resolve(__dirname, "..", "web", "public", "assets", "slimewire", "auto", "x-terminal-card.png");
     const mediaBuffer = await fs.readFile(cardPath).catch(() => fs.readFile(sourceCardPath).catch(() => null));
-    const res = await xPost({ text, mediaBuffer });
-    await sayHtml(chatId, res.ok
-      ? `✅ X terminal post sent.${res.id ? ` <a href="https://x.com/i/status/${res.id}">view</a>` : ""}\nPin it from X so it stays at the top of the profile.`
-      : `⚠️ ${escapeTelegramHtml(res.reason || "failed")}`);
+    if (mediaBuffer) {
+      await sendPhoto(chatId, "x-terminal-card.png", mediaBuffer, caption, kb, "HTML").catch(async () => {
+        await sayHtml(chatId, caption, kb);
+      });
+    } else {
+      await sayHtml(chatId, caption, kb);
+    }
     return;
   }
   const on = (b) => b ? "🟢 ON" : "⚪️ off";
@@ -34777,8 +34793,8 @@ async function handleXBotCommand(chatId, argument, userId) {
     "<code>XBOT_KOLWATCH=true</code> + <code>XBOT_KOL_HANDLES=cupsey,euris,…</code> — first-responder",
     "Tune: <code>XBOT_AUTOCALL_GAP_MIN</code> (180) · <code>XBOT_AUTOCALL_DAILY</code> (6) · <code>XBOT_AUTOCALL_MIN_SCORE</code> (55) · <code>XBOT_AUTOCALL_MIN_MC</code> (15000)",
     "",
-    "<b>Test now</b> (posts for real, ignores the gate):",
-    "<code>/xbot terminal</code> · <code>/xbot call</code> · <code>/xbot receipt &lt;mint&gt;</code> · <code>/xbot scorecard</code>",
+    "<b>Test now</b>:",
+    "<code>/xbot terminal</code> (manual pin kit) · <code>/xbot call</code> · <code>/xbot receipt &lt;mint&gt;</code> · <code>/xbot scorecard</code>",
   ].join("\n"));
 }
 
