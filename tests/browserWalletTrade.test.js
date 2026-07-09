@@ -53,8 +53,10 @@ test("Trade tab treats a connected Phantom/Solflare wallet as a usable trade wal
 });
 
 test("browser wallet buy and sell sign locally instead of entering managed-wallet setup", () => {
-  assert.match(htmlSource, /vendor\/solana-web3\.iife\.min\.js/);
+  assert.match(htmlSource, /vendor\/solana-web3\.iife\.min\.js|unpkg\.com\/@solana\/web3\.js/);
   assert.match(web3BundleSource.slice(0, 80), /window\.solanaWeb3=/);
+  assert.match(htmlSource, /function loadWeb3\(\)/);
+  assert.match(htmlSource, /window\.solanaWeb3/);
   assert.match(appSource, /window\.solanaWeb3\.VersionedTransaction\.deserialize/);
   assert.match(functionBody(appSource, "executeWebBuy"), /isConnectedTradeWallet\(form\.walletIndex\)/);
   assert.match(functionBody(appSource, "executeWebBuy"), /executeConnectedBrowserTrade\(\{[\s\S]*side: "buy"/);
@@ -78,7 +80,7 @@ test("browser wallet buy and sell sign locally instead of entering managed-walle
 });
 
 test("top wallet status opens connect, wallets, or disconnect", () => {
-  assert.match(htmlSource, /data-top-wallet-status/);
+  assert.match(htmlSource, /data-top-wallet-status|id="walletPill"/);
   assert.match(functionBody(appSource, "updateTopWalletConnectStatus"), /data-top-wallet-status/);
   assert.match(functionBody(appSource, "updateTopWalletConnectStatus"), /Wallet: Connected/);
   assert.match(functionBody(appSource, "handleTopWalletStatusClick"), /disconnectBrowserWallet/);

@@ -34,7 +34,7 @@ self.addEventListener("fetch", (event) => {
   // Only the SPA's own routes are shell navigations. Standalone pages (/pro, /raids, /prelaunch,
   // /hub, /launch, /manual, share pages, …) pass through so they always load their real document,
   // never the cached app shell.
-  const isAppNav = req.mode === "navigate" && APP_NAV_ROUTES.has(url.pathname);
+  const isAppNav = req.mode === "navigate" && (APP_NAV_ROUTES.has(url.pathname) || url.pathname.startsWith("/terminal/"));
   const isStaticAsset = req.mode !== "navigate" && /\.(css|js|mjs|png|jpg|jpeg|svg|webp|ico|json|webmanifest|woff2?)$/i.test(url.pathname);
   if (!isAppNav && !isStaticAsset) return;
   event.respondWith((async () => {

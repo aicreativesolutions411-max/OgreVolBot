@@ -14137,7 +14137,7 @@ async function handleMessage(message, userId) {
     await handleTelegramMapCommand(chatId, message, mapCommand.argument);
     return;
   }
-  const lookCommand = parseCommandWithArgument(text, ["look", "scan_ca", "check"]);
+  const lookCommand = parseCommandWithArgument(text, ["look", "scan", "scan_ca", "check"]);
   if (lookCommand) {
     await handleTelegramLookCommand(chatId, message, lookCommand.argument);
     return;
@@ -31778,6 +31778,35 @@ async function resolveScanTargetFromText(text, urls = [], options = {}) {
   return null;
 }
 
+async function resolveExplicitScanTargetsFromText(text, urls = [], cap = 4) {
+  const blob = [String(text || ""), ...(Array.isArray(urls) ? urls : [])].join(" ");
+  const out = [];
+  const seen = new Set();
+  const add = (v) => {
+    const k = String(v || "").toLowerCase();
+    if (v && !seen.has(k)) { seen.add(k); out.push(v); }
+  };
+  for (const m of (blob.match(/0x[0-9a-fA-F]{40}/g) || [])) {
+    add(m);
+    if (out.length >= cap) return out.slice(0, cap);
+  }
+  const consumedPairs = new Set();
+  for (const m of (blob.match(/dexscreener\.com\/solana\/([1-9A-HJ-NP-Za-km-z]{32,44})/gi) || [])) {
+    const pair = (m.match(/([1-9A-HJ-NP-Za-km-z]{32,44})$/) || [])[1];
+    if (!pair) continue;
+    consumedPairs.add(pair.toLowerCase());
+    const mint = await resolveDexPairToMint(pair).catch(() => null);
+    if (mint) add(mint);
+    if (out.length >= cap) return out.slice(0, cap);
+  }
+  for (const m of extractMintsFromText(blob)) {
+    if (consumedPairs.has(m.toLowerCase())) continue;
+    add(m);
+    if (out.length >= cap) return out.slice(0, cap);
+  }
+  return out.slice(0, cap);
+}
+
 // Like resolveScanTargetFromText, but returns EVERY distinct coin referenced (EVM RH addrs, Solana
 // mints, DexScreener links, $tickers) — deduped, order-preserved, capped. Powers "post 3 tickers →
 // scan all 3" on X. Cap keeps us within X's 4-images-per-tweet / sane-thread limits.
@@ -33090,6 +33119,32 @@ let xReplyStateCache = null;
 let xPollRunning = false;   // reentrancy guard: a tick can pace-sleep between replies, so it may outlast the poll interval
 let xPollRunningAt = 0;     // when the current tick started — lets us force-reset a HUNG tick (see xReplyPollTick)
 let _xPollTickN = 0;        // tick counter — the SearchTimeline union runs every 4th tick (quota, see xSearchMentions)
+const X_REPLY_SEARCH_INTERVAL_MS = Math.max(30_000, Number(process.env.X_REPLY_SEARCH_INTERVAL_MS || 120_000));
+const X_REPLY_SEARCH_BACKOFF_MS = Math.max(60_000, Number(process.env.X_REPLY_SEARCH_BACKOFF_MS || 5 * 60_000));
+const X_REPLY_THREAD_DEDUPE_MS = Math.max(5 * 60_000, Number(process.env.X_REPLY_THREAD_DEDUPE_MS || 2 * 60 * 60_000));
+const xMentionSearchGate = { lastAt: 0, backoffUntil: 0 };
+function xShouldIncludeMentionSearch(now = Date.now(), force = false) {
+  if (force) return true;
+  if (now < xMentionSearchGate.backoffUntil) return false;
+  if (now - xMentionSearchGate.lastAt < X_REPLY_SEARCH_INTERVAL_MS) return false;
+  return true;
+}
+function xNoteMentionSearchResult(included, ok, now = Date.now()) {
+  if (!included) return;
+  if (ok) { xMentionSearchGate.lastAt = now; xMentionSearchGate.backoffUntil = 0; return; }
+  xMentionSearchGate.backoffUntil = now + X_REPLY_SEARCH_BACKOFF_MS;
+}
+function xPruneThreadDedupe(state, now = Date.now()) {
+  if (!state.threadReplies || typeof state.threadReplies !== "object") state.threadReplies = {};
+  for (const [k, ts] of Object.entries(state.threadReplies)) {
+    if (now - Number(ts || 0) > X_REPLY_THREAD_DEDUPE_MS) delete state.threadReplies[k];
+  }
+}
+function xThreadDedupeKey(m, target, intent) {
+  const anchor = xReplyAnchorId(m) || String(m?.id || "");
+  const t = String(target || "").trim().toLowerCase();
+  return anchor && t ? `${anchor}:${String(intent || "scan").toLowerCase()}:${t}` : "";
+}
 async function readXReplyState() {
   if (xReplyStateCache) return xReplyStateCache;
   let s = null; try { s = await readJson(xReplyStateFile()); } catch { s = null; }
@@ -33097,6 +33152,7 @@ async function readXReplyState() {
   if (!s.seen || typeof s.seen !== "object") s.seen = {};    // tweetId -> ts (idempotency: reply once)
   if (!Array.isArray(s.posts)) s.posts = [];                 // recent post timestamps (hourly throttle)
   if (!s.queue || typeof s.queue !== "object") s.queue = {}; // assist-mode drafts: tweetId -> {mint,at,author,url}
+  if (!s.threadReplies || typeof s.threadReplies !== "object") s.threadReplies = {}; // short-lived root+target+intent dedupe
   xReplyStateCache = s; return s;
 }
 async function writeXReplyState(s) { xReplyStateCache = s; await writeJsonFile(xReplyStateFile(), s).catch(() => {}); }
@@ -33290,12 +33346,21 @@ async function resolveXTargetMint(mention) {
   // resort. X is public/noisy, so NEVER resolve bare words as tickers here; a random sentence must not
   // become a scan target. Bare ticker convenience stays for Telegram commands only.
   const scan = (text, urls) => resolveScanTargetFromText(text, urls, { allowBareTickerHints: false });
-  // 1) the tag itself
+  // 1) explicit CA/link in the tag itself always wins.
+  let explicit = await resolveExplicitScanTargetsFromText(mention.text, mention.urls, 1).catch(() => []);
+  if (explicit[0]) return explicit[0];
+  // 2) explicit CA/link in the parent/root outranks an ambiguous $cashtag in the mention.
+  const seen = new Set();
+  for (const pid of [mention.inReplyToId, mention.conversationId]) {
+    if (!pid || seen.has(pid)) continue;
+    seen.add(pid);
+    const parent = await xGetTweet(pid).catch(() => null);
+    if (parent) { explicit = await resolveExplicitScanTargetsFromText(parent.text, parent.urls, 1).catch(() => []); if (explicit[0]) return explicit[0]; }
+  }
+  // 3) then the tag's $ticker, then the parent/root's $ticker.
   let mint = await scan(mention.text, mention.urls);
   if (mint) return mint;
-  // 2) the post it replied to, AND 3) the thread ROOT — so tagging us under any coin post "just works"
-  // even when the reply has no CA. This is the fix for "CA is on the original post, someone just tags bot".
-  const seen = new Set();
+  seen.clear();
   for (const pid of [mention.inReplyToId, mention.conversationId]) {
     if (!pid || seen.has(pid)) continue;
     seen.add(pid);
@@ -33308,9 +33373,25 @@ async function resolveXTargetMint(mention) {
 // text first; only falls back to the parent/root if the tag itself carries no coin (so "@bot ?" under a
 // coin post still resolves one, but "@bot scan $A $B 0xC" scans all three from the tag). Capped at 4.
 async function resolveAllXTargets(mention, cap = 4) {
+  const ownExplicit = await resolveExplicitScanTargetsFromText(mention.text, mention.urls, cap).catch(() => []);
+  if (ownExplicit.length) return await resolveAllScanTargetsFromText(mention.text, mention.urls, cap, { allowBareTickerHints: false }).catch(() => ownExplicit);
+  const parentExplicit = [];
+  const seen = new Set();
+  for (const pid of [mention.inReplyToId, mention.conversationId]) {
+    if (!pid || seen.has(pid)) continue;
+    seen.add(pid);
+    const parent = await xGetTweet(pid).catch(() => null);
+    if (parent) {
+      for (const t of await resolveExplicitScanTargetsFromText(parent.text, parent.urls, cap).catch(() => [])) {
+        if (!parentExplicit.some((x) => String(x).toLowerCase() === String(t).toLowerCase())) parentExplicit.push(t);
+        if (parentExplicit.length >= cap) return parentExplicit.slice(0, cap);
+      }
+    }
+  }
+  if (parentExplicit.length) return parentExplicit.slice(0, cap);
   let targets = await resolveAllScanTargetsFromText(mention.text, mention.urls, cap, { allowBareTickerHints: false }).catch(() => []);
   if (targets.length) return targets;
-  const seen = new Set();
+  seen.clear();
   for (const pid of [mention.inReplyToId, mention.conversationId]) {
     if (!pid || seen.has(pid)) continue;
     seen.add(pid);
@@ -33879,7 +33960,7 @@ async function xReplyToThreadAnchor(m, payload = {}) {
   }
   return { ...res, anchorId: res.ok && !res.anchorFallback ? anchorId : own };
 }
-async function xReplyPollTick() {
+async function xReplyPollTick(options = {}) {
   const results = [];
   if (!xReplyEnabled() || !xConfigured()) return { checked: 0, results, off: true };
   // SELF-HEALING reentrancy guard: normally skip an overlapping tick, BUT if the flagged tick has been
@@ -33891,18 +33972,23 @@ async function xReplyPollTick() {
   console.log("[xreply] tick…");   // heartbeat: proves the interval fires + a tick actually starts (temporary diag)
   try {
   let mentions = [];
-  // X's notifications feed goes STALE for hours, so a fresh tag only shows up via SEARCH. Now that search
-  // hits ONLY the live handle (1-2 calls, no 429), run it EVERY tick (~30s) so a fresh tag is caught fast.
+  // Poll notifications every tick; use SearchTimeline only on a shared slow cadence so it does not starve
+  // other X search users (KOL watch, movers) on the same quota.
   _xPollTickN = (_xPollTickN + 1) % 1000;
+  const includeSearch = xShouldIncludeMentionSearch(Date.now(), Boolean(options.forceSearch));
   // Hard 20s timeout on the mention fetch — an X GraphQL call that hangs must NOT freeze the whole poll.
-  try { mentions = await Promise.race([xSearchMentions(40, { includeSearch: true }), new Promise((_, rej) => setTimeout(() => rej(new Error("mentions fetch timeout")), 20_000))]); }
-  catch (e) { console.log(`[xreply] tick: mentions fetch failed (${String(e?.message || e).slice(0, 70)})`); return { checked: 0, results, error: String(e?.message || e).slice(0, 140) }; }
+  try {
+    mentions = await Promise.race([xSearchMentions(40, { includeSearch }), new Promise((_, rej) => setTimeout(() => rej(new Error("mentions fetch timeout")), 20_000))]);
+    xNoteMentionSearchResult(includeSearch, true);
+  }
+  catch (e) { xNoteMentionSearchResult(includeSearch, false); console.log(`[xreply] tick: mentions fetch failed (${String(e?.message || e).slice(0, 70)})`); return { checked: 0, results, error: String(e?.message || e).slice(0, 140) }; }
   if (!mentions.length) return { checked: 0, results };
   const state = await readXReplyState();
   if (!state.fails || typeof state.fails !== "object") state.fails = {};
   const now = Date.now();
   const SEEN_TTL = 3 * 86_400_000;
   for (const k of Object.keys(state.seen)) if (now - Number(state.seen[k]) > SEEN_TTL) delete state.seen[k];
+  xPruneThreadDedupe(state, now);
   state.posts = state.posts.filter((t) => now - Number(t) < 3_600_000);
   const auto = xReplyAuto();
   // NO hourly cap by default — if a bunch of people tag us at once it must answer them ALL, not go quiet and
@@ -33929,6 +34015,7 @@ async function xReplyPollTick() {
     const ts = Number(m.createdAtMs) || 0;
     if (ts && ts <= floor) { skipped++; continue; }               // older than the backlog floor → ignore
     if (state.seen[m.id]) { skipped++; continue; }                // already answered → never repeat
+    if (state.queue[m.id]) { skipped++; continue; }                // assist draft is pending owner action
     // FLIGHT RECORDER: log the fate of every NEW mention so a single test tag tells us exactly where it dies
     // (was invisible before — no-CA and no-scan both hid behind .catch(()=>null)). Cheap; keep it on.
     console.log(`[xreply] NEW @${m.username} id=${m.id} auto=${auto} replyTo=${m.inReplyToId || "-"} conv=${m.conversationId || "-"} urls=${(m.urls || []).length} text=${JSON.stringify(String(m.text || "").slice(0, 140))}`);
@@ -33955,6 +34042,14 @@ async function xReplyPollTick() {
         break;
       }
       state.seen[m.id] = now; results.push({ u: m.username, s: "skip", d: "no CA/wallet found" }); console.log(`[xreply]   ✗ no CA/wallet in tag → skip`); continue;
+    }
+    const threadKey = xThreadDedupeKey(m, target, intent);
+    if (threadKey && state.threadReplies[threadKey] && now - Number(state.threadReplies[threadKey]) < X_REPLY_THREAD_DEDUPE_MS) {
+      state.seen[m.id] = now;
+      results.push({ u: m.username, s: "skip", d: "duplicate thread target" });
+      console.log(`[xreply]   duplicate root/thread target ${threadKey} → skip`);
+      await writeXReplyState(state);
+      continue;
     }
     // Plain tags must answer FAST with the scan card. Map/chart/rug still work when explicitly requested.
     console.log(`[xreply]   target=${target} intent=${intent} → building reply…`);
@@ -34003,7 +34098,7 @@ async function xReplyPollTick() {
       const res = await xReplyToThreadAnchor(m, { text: finalReply.text, mediaBuffer: finalReply.mediaBuffer, mediaBuffers: finalReply.mediaBuffers });
       if (res.ok) {
         lastPostAt = Date.now();
-        state.seen[m.id] = now; delete state.fails[m.id]; state.posts.push(lastPostAt); posted++;
+        state.seen[m.id] = now; if (threadKey) state.threadReplies[threadKey] = lastPostAt; delete state.fails[m.id]; state.posts.push(lastPostAt); posted++;
         results.push({ u: m.username, s: "replied", d: `${intent === "chart" ? "📈" : intent === "rug" ? "🛡️" : "🔎"} $${finalReply.symbol}${res.media && res.media !== "card" ? " · " + res.media : " · card"}` });
         console.log(`[xreply] ✅ @${m.username} ${intent} $${finalReply.symbol} media=${res.media || "text"} id=${res.id || ""} anchor=${res.anchorId || ""}`);
         // 🎯 Record for RECEIPTS — anchor to our reply so a later 2x/10x quote-tweets this exact post.
@@ -34023,6 +34118,8 @@ async function xReplyPollTick() {
             catch { console.log(`[xreply]   extra ${et} is not an SPL mint → skip`); continue; }
           }
           let eIntent = intent === "map" && /^0x[0-9a-fA-F]{40}$/.test(et) ? "scan" : intent;
+          const eThreadKey = xThreadDedupeKey(m, et, eIntent);
+          if (eThreadKey && state.threadReplies[eThreadKey] && Date.now() - Number(state.threadReplies[eThreadKey]) < X_REPLY_THREAD_DEDUPE_MS) { console.log(`[xreply]   extra ${et} duplicate root/thread target → skip`); continue; }
           const eReply = await Promise.race([
             buildXReply(et, eIntent, `${m.id}:${ei + 1}`),
             new Promise((r) => setTimeout(() => r("__timeout__"), 40_000)),
@@ -34034,7 +34131,7 @@ async function xReplyPollTick() {
           if (eWait > 0) await sleep(Math.min(eWait, 20_000));
           const eRes = await xReplyToThreadAnchor(m, { text: eReply.text, mediaBuffer: eReply.mediaBuffer, mediaBuffers: eReply.mediaBuffers });
           if (eRes.ok) {
-            lastPostAt = Date.now(); state.posts.push(lastPostAt); posted++;
+            lastPostAt = Date.now(); if (eThreadKey) state.threadReplies[eThreadKey] = lastPostAt; state.posts.push(lastPostAt); posted++;
             results.push({ u: m.username, s: "replied", d: `＋$${eReply.symbol}` });
             console.log(`[xreply] ✅ @${m.username} extra ${eIntent} $${eReply.symbol} id=${eRes.id || ""} anchor=${eRes.anchorId || ""}`);
             try { if (solanaPublicKeyLike(et)) await xTrackCoin({ mint: et, symbol: eReply.symbol, mc: eReply.mc, tweetId: eRes.id, kind: "reply" }); } catch { /* best-effort */ }
@@ -34057,8 +34154,8 @@ async function xReplyPollTick() {
       }
       await writeXReplyState(state);
     } else {
-      state.seen[m.id] = now;
-      state.queue[m.id] = { mint: target, intent, at: now, author: m.username, url: m.permanentUrl, anchorId: xReplyAnchorId(m) };
+      if (threadKey) state.threadReplies[threadKey] = now;
+      state.queue[m.id] = { mint: target, intent, at: now, author: m.username, url: m.permanentUrl, anchorId: xReplyAnchorId(m), threadKey };
       await writeXReplyState(state);
       results.push({ u: m.username, s: "draft", d: `$${finalReply.symbol}` });
       await xReplyOwnerDraft(m, finalReply);
@@ -34078,14 +34175,25 @@ async function handleXReplyCallback(query, userId) {
   const clearKb = (label) => telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [[{ text: label, callback_data: "noop" }]] } }).catch(() => {});
   const mSkip = data.match(/^xr:skip:(\d+)$/), mPost = data.match(/^xr:post:(\d+)$/);
   const state = await readXReplyState();
-  if (mSkip) { delete state.queue[mSkip[1]]; await writeXReplyState(state); await clearKb("🗑 Skipped"); await ack("Skipped"); return true; }
+  if (mSkip) {
+    const q = state.queue[mSkip[1]];
+    state.seen[mSkip[1]] = Date.now();
+    if (q?.threadKey) state.threadReplies[q.threadKey] = Date.now();
+    delete state.queue[mSkip[1]];
+    await writeXReplyState(state); await clearKb("🗑 Skipped"); await ack("Skipped"); return true;
+  }
   if (mPost) {
     const q = state.queue[mPost[1]];
     if (!q) { await ack("That draft expired — tag us again to re-scan.", true); return true; }
     const reply = await buildXReply(q.mint, q.intent || "scan").catch(() => null);
     if (!reply) { await ack("Couldn't rebuild the scan — try again.", true); return true; }
     const res = await xReply({ inReplyToId: q.anchorId || mPost[1], text: reply.text, mediaBuffer: reply.mediaBuffer, mediaBuffers: reply.mediaBuffers });
-    if (res.ok) { delete state.queue[mPost[1]]; state.posts.push(Date.now()); await writeXReplyState(state); await clearKb("✅ Posted to X"); await ack("Posted ✨"); }
+    if (res.ok) {
+      const postedAt = Date.now();
+      state.seen[mPost[1]] = postedAt;
+      if (q.threadKey) state.threadReplies[q.threadKey] = postedAt;
+      delete state.queue[mPost[1]]; state.posts.push(postedAt); await writeXReplyState(state); await clearKb("✅ Posted to X"); await ack("Posted ✨");
+    }
     else { await ack(`Post failed: ${res.reason || "try again"}`, true); }
     return true;
   }
@@ -34151,7 +34259,7 @@ async function handleXPollCommand(chatId, userId) {
   if (!xReplyOwnerChat() || String(chatId) !== xReplyOwnerChat()) { await say(chatId, "Owner-only — DM /xclaim first."); return; }
   if (!xReplyEnabled() || !xConfigured()) { await say(chatId, "X replies are OFF or not configured. Set X_REPLY_ENABLED=true + cookies, then /xtest."); return; }
   await say(chatId, "🐦 Checking mentions now…");
-  const r = await xReplyPollTick().catch((e) => ({ error: String(e?.message || e).slice(0, 140) }));
+  const r = await xReplyPollTick({ forceSearch: true }).catch((e) => ({ error: String(e?.message || e).slice(0, 140) }));
   if (r?.error) { await sayHtml(chatId, `⚠️ Poll error: <code>${escapeTelegramHtml(r.error)}</code>`); return; }
   const icon = (s) => s === "replied" ? "✅" : s === "fail" ? "⚠️" : s === "draft" ? "📝" : s === "defer" ? "⏳" : "·";
   const lines = (r?.results || []).map((x) => `${icon(x.s)} @${escapeTelegramHtml(x.u)} — ${x.s}${x.d ? ` <i>(${escapeTelegramHtml(x.d)})</i>` : ""}`);
@@ -34175,7 +34283,7 @@ async function handleXResetCommand(chatId, userId, argument) {
   const force = /\b(force|old|backtrack|replay)\b/i.test(String(argument || ""));
   const state = await readXReplyState();
   const cleared = Object.keys(state.seen || {}).length;
-  state.seen = {}; state.fails = {}; state.queue = {}; state.posts = [];
+  state.seen = {}; state.fails = {}; state.queue = {}; state.posts = []; state.threadReplies = {};
   if (force) {
     // FORCE (testing): drop the floor 30 min back + clear seen so the very next poll re-answers that backlog.
     state.replyFloorMs = Date.now() - 30 * 60_000;
@@ -34189,7 +34297,7 @@ async function handleXResetCommand(chatId, userId, argument) {
     await say(chatId, `🧹 Caught up — cleared ${cleared} seen + throttle. From now it only replies to NEW tags (never backtracks). Post a fresh tag to test, or /xreset force to replay the last 30 min.`);
     return;
   }
-  const r = await xReplyPollTick().catch((e) => ({ error: String(e?.message || e).slice(0, 140) }));
+  const r = await xReplyPollTick({ forceSearch: true }).catch((e) => ({ error: String(e?.message || e).slice(0, 140) }));
   if (r?.error) { await sayHtml(chatId, `⚠️ Poll error: <code>${escapeTelegramHtml(r.error)}</code>`); return; }
   const icon = (s) => s === "replied" ? "✅" : s === "fail" ? "⚠️" : s === "draft" ? "📝" : s === "defer" ? "⏳" : "·";
   const lines = (r?.results || []).map((x) => `${icon(x.s)} @${escapeTelegramHtml(x.u)} — ${x.s}${x.d ? ` <i>(${escapeTelegramHtml(x.d)})</i>` : ""}`);
@@ -36540,7 +36648,7 @@ async function applyBuyPrefInput(message, userId) {
   await sayHtml(message.chat.id, "✅ Saved.\n" + menu.text, menu.markup).catch(() => {});
   return true;
 }
-async function tgExecuteQuickBuy(userId, mint, amountSol) {
+async function tgExecuteQuickBuy(userId, mint, amountSol, options = {}) {
   try {
     const st = await readState().catch(() => null);
     if (st && st.paused) return { ok: false, why: "trading is paused right now" };
@@ -36551,8 +36659,9 @@ async function tgExecuteQuickBuy(userId, mint, amountSol) {
     if (!Number.isFinite(amt) || amt <= 0) return { ok: false, why: "bad amount" };
     const lamports = solToLamports(amt);
     const slippageBps = userBuyPrefs(await readBuyPrefs(), userId).slippageBps;
-    // Dedup rapid double-taps within ~15s so a fat-finger can't double-buy.
-    const attemptId = `${mint}:${Math.floor(Date.now() / 15000)}`;
+    // Dedup rapid identical double-taps within ~15s without collapsing different wallets/amounts/settings.
+    const extraKeyParts = Array.isArray(options.idempotencyParts) ? options.idempotencyParts.map((v) => String(v || "").replace(/:/g, "_")).filter(Boolean) : [];
+    const attemptId = [mint, wallet.publicKey || "", String(lamports), `slip${slippageBps}`, ...extraKeyParts, Math.floor(Date.now() / 15000)].join(":");
     const result = await runIdempotentMoneyOp("tg-quick-buy", userId, attemptId,
       () => buyTokenForPlan(wallet, mint, lamports, slippageBps, { trackTokenDelta: true, userId }));
     if (result) {
@@ -36669,7 +36778,7 @@ async function handleQuickBuyCallback(query, userId) {
 // the idempotent own-wallet buy (tgExecuteQuickBuy) + the site's auto-exit engine.
 async function tgExecuteQuickBuyPreset(userId, mint) {
   const prefs = userBuyPrefs(await readBuyPrefs(), userId);
-  const r = await tgExecuteQuickBuy(userId, mint, prefs.quickAmount);
+  const r = await tgExecuteQuickBuy(userId, mint, prefs.quickAmount, { idempotencyParts: [`tp${prefs.takeProfitPct || 0}`, `sl${prefs.stopLossPct || 0}`, "preset"] });
   if (!r.ok) return { ...r, amt: prefs.quickAmount };
   let armed = null;
   if ((prefs.takeProfitPct > 0 || prefs.stopLossPct > 0) && r.result && r.wallet) {
@@ -36792,10 +36901,19 @@ async function tgExecuteQuickSell(userId, mint, pct) {
     if (!wallets || !wallets.length) return { ok: false, needWallet: true };
     const slippageBps = userBuyPrefs(await readBuyPrefs(), userId).slippageBps;
     const holders = [];
+    const balanceErrors = [];
     for (const w of wallets) {
-      try { if ((await walletTokenUiBalance(w.publicKey, mint)) > 0) holders.push(w); } catch (_) {}
+      const balance = await walletTokenUiBalanceRead(w.publicKey, mint);
+      if (balance.ok) {
+        if (balance.balance > 0) holders.push(w);
+      } else {
+        balanceErrors.push(`${w.label || shortMint(w.publicKey)}: ${balance.error || "balance unavailable"}`);
+      }
     }
-    if (!holders.length) return { ok: false, why: "you don't hold this coin in your SlimeWire wallets" };
+    if (!holders.length) {
+      if (balanceErrors.length) return { ok: false, why: `token balance temporarily unavailable (${balanceErrors[0]})` };
+      return { ok: false, why: "you don't hold this coin in your SlimeWire wallets" };
+    }
     let soldLamports = 0n, ok = 0, fails = 0;
     for (const w of holders) {
       const attemptId = `${mint}:${pct}:${w.publicKey}:${Math.floor(Date.now() / 15000)}`;
@@ -38285,7 +38403,7 @@ async function handleChannelPostCommands(post) {
   const text = String(post?.text || "").trim();
   if (!chatId || !text.startsWith("/")) return;
   registerTelegramGroup(post.chat);
-  const lookCommand = parseCommandWithArgument(text, ["look", "scan_ca", "check"]);
+  const lookCommand = parseCommandWithArgument(text, ["look", "scan", "scan_ca", "check"]);
   if (lookCommand) {
     await handleTelegramLookCommand(chatId, post, lookCommand.argument);
     return;
@@ -39777,14 +39895,20 @@ function readVerifyToken(token) {
   try { const p = JSON.parse(b64urlDecode(body).toString("utf8")); if (p.exp && Date.now() > p.exp) return null; return p; } catch { return null; }
 }
 // Read-only holdings: a wallet's UI balance of a specific SPL mint.
-async function walletTokenUiBalance(owner, mint) {
+async function walletTokenUiBalanceRead(owner, mint) {
   try {
     const ownerKey = new PublicKey(owner), mintKey = new PublicKey(mint);
-    const res = await connection.getParsedTokenAccountsByOwner(ownerKey, { mint: mintKey }, "confirmed").catch(() => null);
+    const res = await connection.getParsedTokenAccountsByOwner(ownerKey, { mint: mintKey }, "confirmed");
     let total = 0;
     for (const a of (res?.value || [])) total += Number(a.account?.data?.parsed?.info?.tokenAmount?.uiAmount) || 0;
-    return total;
-  } catch { return 0; }
+    return { ok: true, balance: total };
+  } catch (error) {
+    return { ok: false, balance: null, error: friendlyError ? friendlyError(error) : String(error?.message || error || "RPC read failed") };
+  }
+}
+async function walletTokenUiBalance(owner, mint) {
+  const result = await walletTokenUiBalanceRead(owner, mint);
+  return result.ok ? result.balance : 0;
 }
 // Pending web-verify prompts so we can tidy them on success. key = `${chatId}:${userId}`.
 const webVerifyPending = new Map();

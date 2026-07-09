@@ -501,7 +501,7 @@
       <button class="iconbtn watchbtn" id="watchBtn" title="Watchlist — your saved coins">★</button>
       <div class="walletpill" id="walletPill" title="Wallet"><span class="dot off"></span><b id="solBal">Connect</b></div>
       <button class="iconbtn clipbtn" id="clipFarmBtn" data-icon="1" title="Clip farm — record a shareable SlimeWire clip (works on phone too)">🎬</button>
-      <a class="iconbtn" href="/manual" target="_blank" title="Help">?</a>
+      <a class="iconbtn" href="/manual" target="_blank" rel="noopener noreferrer" title="Help">?</a>
     </div>
   </header>
 
@@ -525,9 +525,9 @@
 
   <footer class="statusbar">
     <span class="s live"><span class="dot"></span>Live</span>
-    <a href="/radar" target="_blank">Radar</a>
-    <a href="/launch" target="_blank">Launch</a>
-    <a href="/manual" target="_blank">Guide</a>
+    <a href="/radar" target="_blank" rel="noopener noreferrer">Radar</a>
+    <a href="/launch" target="_blank" rel="noopener noreferrer">Launch</a>
+    <a href="/manual" target="_blank" rel="noopener noreferrer">Guide</a>
     <div class="right"><span class="px" id="solPx">◎ SOL —</span><span>Powered by SlimeWire</span></div>
   </footer>
 </div>
@@ -746,7 +746,7 @@
         '<div style="font-size:22px;font-weight:800;margin:2px 0">'+eth.toFixed(6)+' <span style="font-size:13px;color:var(--muted)">ETH</span> <span id="rhEthUsd" class="mut" style="font-size:12px"></span></div>'+
         '<div class="mut" style="font-size:10px">This is real ETH in your wallet — what buys, sells &amp; launches spend. When a coin sells (or auto-sells), the ETH lands right back here.</div>'+
       '</div>'+
-      '<div class="field"><label>Your Robinhood address — receive here</label><div style="display:flex;gap:8px;align-items:center"><input readonly value="'+esc(d.address)+'" style="flex:1;min-width:0;font-size:11px" onclick="this.select()"><button class="wbtn ghost" type="button" style="padding:6px 10px" onclick="GG.copy(\''+esc(d.address)+'\')">⧉</button> <a class="wbtn ghost" style="padding:6px 10px" href="'+esc(d.explorer)+'" target="_blank" rel="noopener">↗</a></div></div>'+
+      '<div class="field"><label>Your Robinhood address — receive here</label><div style="display:flex;gap:8px;align-items:center"><input readonly value="'+esc(d.address)+'" style="flex:1;min-width:0;font-size:11px" onclick="this.select()"><button class="wbtn ghost" type="button" style="padding:6px 10px" onclick="GG.copy(\''+esc(d.address)+'\')">⧉</button> <a class="wbtn ghost" style="padding:6px 10px" href="'+esc(d.explorer)+'" target="_blank" rel="noopener noreferrer">↗</a></div></div>'+
       (toks.length?'<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Coins you hold here</div><div id="rhHoldings">'+toks.map(t=>'<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:5px" data-addr="'+esc(t.address)+'">'+(t.iconUrl?'<img src="'+esc(t.iconUrl)+'" style="width:18px;height:18px;border-radius:50%">':'🪙')+'<b>'+esc(t.symbol||"?")+'</b><span class="mut">'+esc(Number(t.uiAmount||0).toLocaleString())+'</span><span class="mut rhHoldVal" style="margin-left:auto">—</span></div>').join("")+'</div>':'<p class="mut" style="font-size:11px;margin:0 0 8px">No coins held here right now. If one just auto-sold, that\'s expected — the ETH from it is in your balance above, and the sale shows in the activity list below.</p>')+
       '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:12px 0 6px">Fund with SOL (swap → Robinhood ETH)</div>'+
       '<div style="display:flex;gap:8px"><input id="rhFundAmt" inputmode="decimal" placeholder="0.05" style="width:90px;flex:0 0 auto"><button class="wbtn" id="rhFundBtn" style="flex:1">⚡ Swap SOL → Robinhood ETH</button></div>'+
@@ -782,7 +782,7 @@
     const ago=(iso)=>{const s=(Date.now()-Date.parse(iso||0))/1000;return !isFinite(s)?"":s<90?Math.round(s)+"s":s<5400?Math.round(s/60)+"m":s<129600?Math.round(s/3600)+"h":Math.round(s/86400)+"d";};
     const label=(r)=>r.kind==="buy"?'🟢 Bought '+esc(r.symbol||"coin"):r.kind==="sell"?'🔴 Sold '+esc(r.symbol||"coin"):r.kind==="auto-sell"?'🎯 Auto-sold '+esc(r.symbol||"coin")+' <span class="mut">('+esc(r.trigger||"exit")+(r.movePct?' '+esc(r.movePct)+'%':'')+')</span>':r.kind==="fund"?'⚡ Funded with SOL':r.kind==="launch"?'🚀 Launched':esc(r.kind);
     const detail=(r)=>r.kind==="fund"?(r.amountSol?r.amountSol+' SOL → ~'+(r.quotedEth||"?")+' ETH':''):(r.out?'→ '+Number(r.out).toLocaleString(undefined,{maximumFractionDigits:6})+(r.kind==="buy"?' tokens':' ETH'):'');
-    el.innerHTML=rows.map(r=>'<div style="display:flex;align-items:center;gap:8px;font-size:11px;border-bottom:1px solid var(--border);padding:6px 2px"><span style="flex:1;min-width:0">'+label(r)+' <span class="mut">'+detail(r)+'</span></span><span class="mut">'+ago(r.at)+'</span>'+(r.url?' <a href="'+esc(r.url)+'" target="_blank" rel="noopener">tx↗</a>':'')+'</div>').join("");
+    el.innerHTML=rows.map(r=>'<div style="display:flex;align-items:center;gap:8px;font-size:11px;border-bottom:1px solid var(--border);padding:6px 2px"><span style="flex:1;min-width:0">'+label(r)+' <span class="mut">'+detail(r)+'</span></span><span class="mut">'+ago(r.at)+'</span>'+(r.url?' <a href="'+esc(r.url)+'" target="_blank" rel="noopener noreferrer">tx↗</a>':'')+'</div>').join("");
   }
   async function rhFundWithSol(idx){
     const amt=Number((($("#rhFundAmt")||{}).value||"").trim());
@@ -903,12 +903,12 @@
     {ic:"📈",label:"Volume Bot",route:"volume"},
     {ic:"👥",label:"Copy / KOL Tracker",route:"copy"},
     {ic:"🎯",label:"Wallet Launch Snipe",route:"walletLaunch"},
-    {ic:"🎯",label:"Launch Sniper",route:"sniper"},
+    {ic:"🎯",label:"Launch Snipe",route:"sniper"},
     {ic:"🚀",label:"Launch a Coin",route:"launch"},
     {ic:"🗺️",label:"Bubble Map — who's holding (KOLs · whales · clusters)",url:"/map"},
     {ic:"💰",label:"Airdrop Map — who the dev fed & who's still holding",url:"/airdrop"},
   ];
-  function toolLinkHtml(t,onclick){return t.route?'<a href="#'+t.route+'"'+(onclick?' onclick="'+onclick+'"':'')+'><span>'+t.ic+'</span>'+esc(t.label)+'</a>':'<a href="'+esc(t.url)+'" target="_blank"><span>'+t.ic+'</span>'+esc(t.label)+'</a>';}
+  function toolLinkHtml(t,onclick){return t.route?'<a href="#'+t.route+'"'+(onclick?' onclick="'+onclick+'"':'')+'><span>'+t.ic+'</span>'+esc(t.label)+'</a>':'<a href="'+esc(t.url)+'" target="_blank" rel="noopener noreferrer"><span>'+t.ic+'</span>'+esc(t.label)+'</a>';}
   function openToolsSheet(){
     openModal('<h3>🛠️ Tools</h3><div class="toolsheet">'+TOOLS.map(t=>toolLinkHtml(t,"GG.closeModal()")).join("")+'</div>');
   }
@@ -1141,9 +1141,9 @@
   }
   function pairMetaInner(r){
     const links=[];
-    if(r.twitterUrl)links.push('<a href="'+esc(r.twitterUrl)+'" target="_blank" onclick="event.stopPropagation()">𝕏</a>');
-    if(r.telegramUrl)links.push('<a href="'+esc(r.telegramUrl)+'" target="_blank" onclick="event.stopPropagation()">✈</a>');
-    if(r.websiteUrl)links.push('<a href="'+esc(r.websiteUrl)+'" target="_blank" onclick="event.stopPropagation()">🌐</a>');
+    if(r.twitterUrl)links.push('<a href="'+esc(r.twitterUrl)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">𝕏</a>');
+    if(r.telegramUrl)links.push('<a href="'+esc(r.telegramUrl)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">✈</a>');
+    if(r.websiteUrl)links.push('<a href="'+esc(r.websiteUrl)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">🌐</a>');
     return'<span class="age">'+esc(ageLabel(r))+'</span>'+(links.length?'<span class="ic">'+links.join("")+'</span>':'')+
       '<span class="ic"><a onclick="event.stopPropagation();GG.copy(\''+esc(r.tokenMint)+'\')" title="Copy CA">⧉</a></span>';
   }
@@ -1327,9 +1327,9 @@
   // sniper feed so every row can be vetted + copied in one tap.
   function socialIconsHtml(r){
     let s="";
-    if(r.twitterUrl)s+='<a href="'+esc(r.twitterUrl)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">𝕏</a>';
-    if(r.telegramUrl)s+='<a href="'+esc(r.telegramUrl)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">✈</a>';
-    if(r.websiteUrl)s+='<a href="'+esc(r.websiteUrl)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">🌐</a>';
+    if(r.twitterUrl)s+='<a href="'+esc(r.twitterUrl)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">𝕏</a>';
+    if(r.telegramUrl)s+='<a href="'+esc(r.telegramUrl)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">✈</a>';
+    if(r.websiteUrl)s+='<a href="'+esc(r.websiteUrl)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">🌐</a>';
     s+='<a onclick="event.stopPropagation();GG.copy(\''+esc(r.tokenMint)+'\')" title="Copy CA">⧉</a>';
     return '<span class="ic">'+s+'</span>';
   }
@@ -1398,9 +1398,9 @@
       const stats=[r.marketCapUsd?('MC '+fmtUsd(r.marketCapUsd)):'',r.volume24hUsd?('Vol '+fmtUsd(r.volume24hUsd)):'',(r.holders?r.holders+' holders':'')].filter(Boolean).join(' · ')||(r.noPool?'no pool yet — tradable at open':(isNew?'brand new — no trades yet':'…'));
       // Copy + socials strip (parity with the Solana rows), on the info line where there's room.
       const soc=[];
-      if(r.x)soc.push('<a href="'+esc(r.x)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="X">𝕏</a>');
-      if(r.telegram)soc.push('<a href="'+esc(r.telegram)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Telegram">✈</a>');
-      if(r.website)soc.push('<a href="'+esc(r.website)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Website">🌐</a>');
+      if(r.x)soc.push('<a href="'+esc(r.x)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" title="X">𝕏</a>');
+      if(r.telegram)soc.push('<a href="'+esc(r.telegram)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" title="Telegram">✈</a>');
+      if(r.website)soc.push('<a href="'+esc(r.website)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" title="Website">🌐</a>');
       soc.push('<a onclick="event.stopPropagation();GG.copy(\''+esc(ca)+'\')" title="Copy contract address">⧉</a>');
       // Right side is exactly 3 flex:0 0 auto chips (change · safety · buy) so the ⚡ is ALWAYS in frame.
       return '<div class="rhrow" data-rowaddr="'+esc(ca)+'" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;overflow:hidden" onclick="GG.rhTrade(\''+esc(ca)+'\')">'+
@@ -1450,7 +1450,7 @@
     const list=$("#shList");if(!list)return;
     if(!rows.length){list.innerHTML='<div class="msg" style="font-size:12px;padding:8px 2px">No SlimeWire launches on Robinhood yet — be the first. Your coin lands here the moment it deploys, ✅ Verified.</div>';return;}
     const row=(r)=>{const stats=[r.marketCapUsd?('MC '+fmtUsd(r.marketCapUsd)):'',r.holders?(r.holders+' holders'):'',r.creatorFeeBps?('you earn '+(r.creatorFeeBps/100)+'%'):'',(r.holderRewards&&r.holderRewards.enabled)?('holder rewards '+(r.holderRewards.shareBps>=10000?'all':'half')):''].filter(Boolean).join(' · ')||'just launched — no pool yet';
-      const soc=[];if(r.x)soc.push('<a href="'+esc(r.x)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="X">𝕏</a>');if(r.telegram)soc.push('<a href="'+esc(r.telegram)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Telegram">✈</a>');if(r.website)soc.push('<a href="'+esc(r.website)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Website">🌐</a>');soc.push('<a onclick="event.stopPropagation();GG.copy(\''+esc(r.address)+'\')" title="Copy contract address">⧉</a>');
+      const soc=[];if(r.x)soc.push('<a href="'+esc(r.x)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" title="X">𝕏</a>');if(r.telegram)soc.push('<a href="'+esc(r.telegram)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" title="Telegram">✈</a>');if(r.website)soc.push('<a href="'+esc(r.website)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" title="Website">🌐</a>');soc.push('<a onclick="event.stopPropagation();GG.copy(\''+esc(r.address)+'\')" title="Copy contract address">⧉</a>');
       return '<div class="rhrow" style="display:flex;align-items:center;gap:8px;padding:9px 10px;border-bottom:1px solid var(--border);cursor:pointer;overflow:hidden" onclick="GG.rhTrade(\''+esc(r.address)+'\')">'+rhAvatar(r,30)+
         '<div style="min-width:0;flex:1;overflow:hidden"><div style="display:flex;gap:6px;align-items:center;min-width:0"><b style="font-size:12.5px;flex:0 0 auto">'+esc(r.symbol||"?")+'</b>'+(r.createdAt?'<span class="mut" style="font-size:9px;flex:0 0 auto">⏱'+ago(r.createdAt)+'</span>':'')+'<span class="mut" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.name||"")+'</span><span title="Verified — our no-rug contract" style="font-size:11px;flex:0 0 auto">✅</span></div>'+
         '<div style="display:flex;gap:8px;align-items:center;min-width:0;margin-top:2px"><span class="mut" style="font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(stats)+'</span><span class="rhsoc" style="display:inline-flex;gap:9px;flex:0 0 auto">'+soc.join("")+'</span></div></div>'+
@@ -1559,10 +1559,10 @@
         '<div id="rhTvStats" style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px;margin-bottom:8px">'+statsHtml()+'</div>'+
         (r.description?'<p class="mut" style="font-size:11px;margin:0 0 8px">'+esc(r.description).slice(0,220)+'</p>':'')+
         '<div style="display:flex;gap:10px;font-size:11px;margin-bottom:10px">'+
-          (r.x?'<a href="'+esc(/^https?:/.test(r.x)?r.x:("https://x.com/"+String(r.x).replace(/^@/,"")))+'" target="_blank" rel="noopener">𝕏 Twitter</a>':'')+
-          (r.telegram?'<a href="'+esc(r.telegram)+'" target="_blank" rel="noopener">Telegram</a>':'')+
-          (r.website?'<a href="'+esc(r.website)+'" target="_blank" rel="noopener">Website</a>':'')+
-          '<a href="'+esc(r.explorer||("https://robinhoodchain.blockscout.com/token/"+address))+'" target="_blank" rel="noopener">Blockscout</a></div>'+
+          (r.x?'<a href="'+esc(/^https?:/.test(r.x)?r.x:("https://x.com/"+String(r.x).replace(/^@/,"")))+'" target="_blank" rel="noopener noreferrer">𝕏 Twitter</a>':'')+
+          (r.telegram?'<a href="'+esc(r.telegram)+'" target="_blank" rel="noopener noreferrer">Telegram</a>':'')+
+          (r.website?'<a href="'+esc(r.website)+'" target="_blank" rel="noopener noreferrer">Website</a>':'')+
+          '<a href="'+esc(r.explorer||("https://robinhoodchain.blockscout.com/token/"+address))+'" target="_blank" rel="noopener noreferrer">Blockscout</a></div>'+
         '<div id="rhSafety" class="mut" style="font-size:11px;margin-bottom:8px">🛡 Scanning coin for honeypot / sell traps…</div>'+
         '<div id="rhTmBal" class="mut" style="font-size:11px;margin-bottom:10px">Checking your wallet…</div>'+
         '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Buy (ETH)</span><button class="chip" style="font-size:10px;padding:2px 8px" onclick="GG.rhPresetModal()">⚙ presets</button></div>'+
@@ -1620,7 +1620,7 @@
     const nm=$("#rhTvName");if(nm)nm.textContent=(r.name||"")+' · Robinhood Chain · NOXA 🚀';
     if(h&&r.symbol)h.textContent=r.symbol;
     const chart=$("#rhTvChart");
-    if(chart&&!chart.querySelector("iframe"))chart.innerHTML='<div class="msg" style="padding:24px 20px;font-size:12px;line-height:1.6">🚀 <b>Launched on NOXA</b> — trading live on its bonding pool now. A full price chart appears here once the coin is indexed on DexScreener (usually after it gets some volume).<br><a href="'+esc(r.noxaUrl)+'" target="_blank" rel="noopener" style="color:var(--green)">View on NOXA ↗</a></div>';
+    if(chart&&!chart.querySelector("iframe"))chart.innerHTML='<div class="msg" style="padding:24px 20px;font-size:12px;line-height:1.6">🚀 <b>Launched on NOXA</b> — trading live on its bonding pool now. A full price chart appears here once the coin is indexed on DexScreener (usually after it gets some volume).<br><a href="'+esc(r.noxaUrl)+'" target="_blank" rel="noopener noreferrer" style="color:var(--green)">View on NOXA ↗</a></div>';
   }
   async function loadRhSafety(address){
     const el=$("#rhSafety");if(!el)return;
@@ -1712,7 +1712,7 @@
       const {ok,d}=await jpost("/api/web/rh/create-pool",{tokenAddress:address,walletIndex:wIdx,ethAmount:eth,tokenAmount:tok,poolAttemptId:attemptId()});
       btn.disabled=false;btn.textContent="💧 Create pool & open trading";
       const out=$("#rhLpOut");
-      if(ok&&d&&d.ok){if(out)out.innerHTML='<div class="feebox" style="margin:0">✅ <b>Pool created — '+esc(r.symbol||"your coin")+' is now buyable!</b><div class="ln">Seeded '+esc(d.ethSeeded)+' ETH + '+esc(Number(d.tokenSeeded||tok).toLocaleString())+' tokens'+(d.pool?' · pool '+esc(short(d.pool)):'')+'</div><div class="ln"><a href="'+esc(d.explorerTx||"#")+'" target="_blank" rel="noopener">tx ↗</a></div></div>';toast("💧 Trading is open!");setTimeout(()=>{closeModal();rhTrade(address);},1800);}
+      if(ok&&d&&d.ok){if(out)out.innerHTML='<div class="feebox" style="margin:0">✅ <b>Pool created — '+esc(r.symbol||"your coin")+' is now buyable!</b><div class="ln">Seeded '+esc(d.ethSeeded)+' ETH + '+esc(Number(d.tokenSeeded||tok).toLocaleString())+' tokens'+(d.pool?' · pool '+esc(short(d.pool)):'')+'</div><div class="ln"><a href="'+esc(d.explorerTx||"#")+'" target="_blank" rel="noopener noreferrer">tx ↗</a></div></div>';toast("💧 Trading is open!");setTimeout(()=>{closeModal();rhTrade(address);},1800);}
       else{if(out)out.innerHTML='<div class="mut" style="font-size:12px;color:var(--red,#ff6b6b)">'+esc((d&&(d.message||d.error))||"Pool creation failed — nothing was spent.")+'</div>';}
     };
   }
@@ -2019,7 +2019,7 @@
     if(!live)return"";
     if(live.embedUrl)return'<div class="liveframe"><iframe src="'+esc(live.embedUrl)+'" title="live" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>';
     const label=live.kind==="x"?"𝕏 Space / Live":live.kind==="pump"?"🔴 Pump Live":"🔴 Live now";
-    return'<a class="livecard" href="'+esc(live.url)+'" target="_blank" rel="noopener"><span class="pulse"></span><b>'+label+'</b><span class="mut">tap to watch '+esc(live.url.replace(/^https?:\/\//,"").slice(0,34))+' ↗</span></a>';
+    return'<a class="livecard" href="'+esc(live.url)+'" target="_blank" rel="noopener noreferrer"><span class="pulse"></span><b>'+label+'</b><span class="mut">tap to watch '+esc(live.url.replace(/^https?:\/\//,"").slice(0,34))+' ↗</span></a>';
   }
   function renderChatLog(msgs){
     const log=$("#chatLog");if(!log)return;
@@ -2081,8 +2081,8 @@
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">'+
         '<button class="wbtn" id="clipSave" style="flex:1 1 110px">⬇ Save</button>'+
         '<button class="wbtn ghost" id="clipShare" style="flex:1 1 110px">📤 Share</button>'+
-        '<a class="wbtn ghost" href="'+tw+'" target="_blank" rel="noopener" style="flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;min-width:46px">𝕏</a>'+
-        '<a class="wbtn ghost" href="'+tg+'" target="_blank" rel="noopener" style="flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;min-width:46px">TG</a>'+
+        '<a class="wbtn ghost" href="'+tw+'" target="_blank" rel="noopener noreferrer" style="flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;min-width:46px">𝕏</a>'+
+        '<a class="wbtn ghost" href="'+tg+'" target="_blank" rel="noopener noreferrer" style="flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;min-width:46px">TG</a>'+
         '<button class="wbtn ghost" onclick="GG.closeModal()" style="flex:0 0 auto">Cancel</button>'+
       '</div>'+
       '<p class="mut" style="font-size:11px;margin:10px 0 0">Save the clip, then attach it to your 𝕏 / Telegram post.</p>');
@@ -2154,7 +2154,7 @@
       pane.innerHTML='<div class="chatwrap">'+
         '<div class="chathead"><b>💬 '+esc(sym)+' chat</b><span class="mut" style="font-size:10.5px">live on SlimeWire</span>'+
           '<button class="chiplink" id="recClip" title="Record a shareable SlimeWire clip (works on phone too)">🎬 Record</button>'+
-          '<a class="chiplink" href="https://pump.fun/coin/'+esc(mint)+'" target="_blank" rel="noopener" title="See the pump.fun chat">pump chat ↗</a></div>'+
+          '<a class="chiplink" href="https://pump.fun/coin/'+esc(mint)+'" target="_blank" rel="noopener noreferrer" title="See the pump.fun chat">pump chat ↗</a></div>'+
         '<div id="liveArea"></div><div id="devLive"></div>'+
         '<div class="chatlog" id="chatLog"><div class="loading" style="padding:20px"><span class="spin"></span></div></div>'+
         '<div class="chatbar"><input id="chatMsg" maxlength="280" placeholder="Message '+esc(sym)+' chat…"><button class="buybtn sm" id="chatSend">Send</button></div></div>';
@@ -2296,7 +2296,7 @@
       tr.map(t=>{const cls=t.kind==="sell"?"s":"b";
         const amt=t.usd?fmtUsd(t.usd):(t.sol?("◎"+Number(t.sol).toFixed(3)):"—");
         const href=t.tx?("https://solscan.io/tx/"+encodeURIComponent(t.tx)):("https://solscan.io/account/"+encodeURIComponent(t.maker));
-        return '<tr><td>'+esc(txAgo(t.ts))+'</td><td class="'+cls+'">'+(t.kind==="sell"?"SELL":"BUY")+'</td><td>'+amt+'</td><td>'+(t.price?("$"+fmtPrice(t.price)):"—")+'</td><td><a href="'+href+'" target="_blank" rel="noopener">'+esc(short(t.maker))+' ↗</a></td></tr>';}).join("")+'</tbody></table>';
+        return '<tr><td>'+esc(txAgo(t.ts))+'</td><td class="'+cls+'">'+(t.kind==="sell"?"SELL":"BUY")+'</td><td>'+amt+'</td><td>'+(t.price?("$"+fmtPrice(t.price)):"—")+'</td><td><a href="'+href+'" target="_blank" rel="noopener noreferrer">'+esc(short(t.maker))+' ↗</a></td></tr>';}).join("")+'</tbody></table>';
     again(4000);
   }
   async function loadPosPane(mint){
@@ -2370,9 +2370,9 @@
           '<button data-ct="pos">Positions</button>'+
           '<button data-ct="chat">💬 Chat &amp; Live</button>'+
           '<div class="ctmore" style="margin-left:auto;position:relative"><button class="chip" id="ctMoreBtn">•••</button><div class="ctmenu" id="ctMore">'+
-            '<a href="https://pump.fun/coin/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener">🚀 pump.fun</a>'+
-            '<a href="https://solscan.io/token/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener">🔎 Solscan</a>'+
-            '<a href="https://dexscreener.com/solana/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener">📊 DexScreener</a>'+
+            '<a href="https://pump.fun/coin/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener noreferrer">🚀 pump.fun</a>'+
+            '<a href="https://solscan.io/token/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener noreferrer">🔎 Solscan</a>'+
+            '<a href="https://dexscreener.com/solana/'+encodeURIComponent(mint)+'" target="_blank" rel="noopener noreferrer">📊 DexScreener</a>'+
           '</div></div></div>'+
         '<div class="chartwrap" data-pane="chart">'+chartIframe(mint,r)+'</div>'+
         '<div class="txpane" data-pane="tx" style="display:none"></div>'+
@@ -2416,11 +2416,11 @@
   }
   function theadHtml(r){
     const soc=[];
-    if(r.twitterUrl)soc.push('<a href="'+esc(r.twitterUrl)+'" target="_blank" rel="noopener" title="X / Twitter">𝕏</a>');
-    if(r.telegramUrl)soc.push('<a href="'+esc(r.telegramUrl)+'" target="_blank" rel="noopener" title="Telegram">✈</a>');
-    if(r.websiteUrl)soc.push('<a href="'+esc(r.websiteUrl)+'" target="_blank" rel="noopener" title="Website">🌐</a>');
-    soc.push('<a href="https://pump.fun/coin/'+encodeURIComponent(r.tokenMint||"")+'" target="_blank" rel="noopener" title="pump.fun">🚀</a>');
-    soc.push('<a href="https://dexscreener.com/solana/'+encodeURIComponent(r.tokenMint||"")+'" target="_blank" rel="noopener" title="DexScreener">📊</a>');
+    if(r.twitterUrl)soc.push('<a href="'+esc(r.twitterUrl)+'" target="_blank" rel="noopener noreferrer" title="X / Twitter">𝕏</a>');
+    if(r.telegramUrl)soc.push('<a href="'+esc(r.telegramUrl)+'" target="_blank" rel="noopener noreferrer" title="Telegram">✈</a>');
+    if(r.websiteUrl)soc.push('<a href="'+esc(r.websiteUrl)+'" target="_blank" rel="noopener noreferrer" title="Website">🌐</a>');
+    soc.push('<a href="https://pump.fun/coin/'+encodeURIComponent(r.tokenMint||"")+'" target="_blank" rel="noopener noreferrer" title="pump.fun">🚀</a>');
+    soc.push('<a href="https://dexscreener.com/solana/'+encodeURIComponent(r.tokenMint||"")+'" target="_blank" rel="noopener noreferrer" title="DexScreener">📊</a>');
     const socHtml='<span class="ic chartsoc">'+soc.join("")+'</span>';
     // Order: MC, Volume, Liquidity — so Volume sits right next to MC (the two a trader reads first). The
     // mobile rule hides the 3rd cell (Liquidity) on small screens, keeping MC + Vol always visible.
@@ -2463,7 +2463,7 @@
     }catch(e){}
     statPollT=setTimeout(()=>{if(state.route==="trade"&&state.mint===mint)loadTradeStats(mint);},6000);
   }
-  function fillPerf(r){const p=$("#perf");if(!p)return;[["5M",r.m5],["1H",r.h1],["6H",r.h6],["24H",r.h24]].forEach;p.innerHTML=[["5M",r.m5],["1H",r.h1],["6H",r.h6],["24H",r.h24]].map(([lab,v])=>{const n=pctNum(v);const cls=n==null?"mut":(n>=0?"up":"down");const t=n==null?"—":(n>=0?"+":"")+n.toFixed(1)+"%";return'<div><span>'+lab+'</span><b class="'+cls+'">'+t+'</b></div>';}).join("");}
+  function fillPerf(r){const p=$("#perf");if(!p)return;p.innerHTML=[["5M",r.m5],["1H",r.h1],["6H",r.h6],["24H",r.h24]].map(([lab,v])=>{const n=pctNum(v);const cls=n==null?"mut":(n>=0?"up":"down");const t=n==null?"—":(n>=0?"+":"")+n.toFixed(1)+"%";return'<div><span>'+lab+'</span><b class="'+cls+'">'+t+'</b></div>';}).join("");}
   function updateWselLine(){
     const line=$("#wselTxt"),dot=$("#wsel")&&$("#wsel").querySelector(".dot");if(!line)return;
     const w=activeWalletObj();
@@ -2912,7 +2912,7 @@
     const bad=((audit&&audit.tokens)||[]).filter(t=>t.drained);
     if(!bad.length)return "";
     return '<div class="poshead" style="margin-top:14px"><b style="font-size:13px;color:var(--red,#ff6b6b)">🚩 Rugged bags</b><span class="mut" style="font-size:10px">coins that drained your tokens — not in your balance</span></div>'+
-      '<div class="pcard">'+bad.map(t=>'<div style="display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--border)"><span style="flex:0 0 auto">🚩</span><div style="flex:1;min-width:0"><b style="font-size:12px">'+esc(t.symbol||short(t.address))+'</b><div class="mut" style="font-size:10px">bought '+Number(t.received).toLocaleString()+' · hold '+Number(t.held).toLocaleString()+' · lost '+t.lostPct+'% with no sale</div></div><a class="mut" style="font-size:11px;flex:0 0 auto" href="https://robinhoodchain.blockscout.com/token/'+esc(t.address)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">tx↗</a></div>').join("")+'</div>';
+      '<div class="pcard">'+bad.map(t=>'<div style="display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--border)"><span style="flex:0 0 auto">🚩</span><div style="flex:1;min-width:0"><b style="font-size:12px">'+esc(t.symbol||short(t.address))+'</b><div class="mut" style="font-size:10px">bought '+Number(t.received).toLocaleString()+' · hold '+Number(t.held).toLocaleString()+' · lost '+t.lostPct+'% with no sale</div></div><a class="mut" style="font-size:11px;flex:0 0 auto" href="https://robinhoodchain.blockscout.com/token/'+esc(t.address)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">tx↗</a></div>').join("")+'</div>';
   }
   // Build the RH positions HTML and apply it ONLY when it changed. paintPositions re-seeds #rhPosWrap with
   // the last-known html (state.rhPosHtml) so the section never blanks between polls — that blank-then-refill
@@ -3113,7 +3113,7 @@
     const view=$("#v-wallet");if(!view)return;
     const wrap=el("div","wgrid");
     // New users land here on connect — surface the guide first thing, clean and one tap.
-    const guideBar='<a class="guidebar" href="/manual" target="_blank" rel="noopener"><span class="gi">📖</span><span class="gt"><b>New here? Read the 2-min guide</b><span class="sub">Find coins, fund a wallet, buy in one tap — all of SlimeWire explained.</span></span><span class="garrow">→</span></a>';
+    const guideBar='<a class="guidebar" href="/manual" target="_blank" rel="noopener noreferrer"><span class="gi">📖</span><span class="gt"><b>New here? Read the 2-min guide</b><span class="sub">Find coins, fund a wallet, buy in one tap — all of SlimeWire explained.</span></span><span class="garrow">→</span></a>';
     if(!state.token){
       wrap.innerHTML=guideBar+'<div class="wbox"><h3>👛 Set up your trading wallet</h3><p class="sub">No sign-up, no email needed. Either create a fresh SlimeWire wallet, or connect Phantom/Solflare and move some SOL into one — then trade right here.</p>'+
         '<div style="display:flex;flex-direction:column;gap:9px"><button class="wbtn" id="connectFundBtn">🔗 Connect &amp; fund (Phantom / Solflare)</button><button class="wbtn ghost" id="mkWallet">Create an empty wallet</button>'+
@@ -3207,9 +3207,9 @@
     // Community social links — present on the wallet page for both signed-out and signed-in states.
     wrap.innerHTML+='<div class="wbox socbox"><h3>🐸 Join the SlimeWire community</h3><p class="sub">News, alpha drops and support — straight from the swamp.</p>'+
       '<div class="socrow">'+
-        '<a class="socbtn" href="https://x.com/i/communities/1930265213917425858" target="_blank" rel="noopener">𝕏 X Community</a>'+
-        '<a class="socbtn" href="https://t.me/SlimeWiredBot" target="_blank" rel="noopener">✈ Telegram</a>'+
-        '<a class="socbtn" href="https://www.slimewire.org" target="_blank" rel="noopener">🌐 Website</a>'+
+        '<a class="socbtn" href="https://x.com/i/communities/1930265213917425858" target="_blank" rel="noopener noreferrer">𝕏 X Community</a>'+
+        '<a class="socbtn" href="https://t.me/SlimeWiredBot" target="_blank" rel="noopener noreferrer">✈ Telegram</a>'+
+        '<a class="socbtn" href="https://www.slimewire.org" target="_blank" rel="noopener noreferrer">🌐 Website</a>'+
       '</div></div>';
     view.innerHTML="";view.appendChild(wrap);
     const cf=$("#connectFundBtn");if(cf)cf.onclick=()=>openConnectModal();
@@ -3716,14 +3716,14 @@
     const eth=Number(d.eth||0);
     el.innerHTML='<div class="feebox" style="margin:0">🪶 <b>Launch your coin on Robinhood Chain</b> — Robinhood\'s new ETH network. A real on-chain token with the whole supply sent to your wallet — fixed supply, <b>no owner functions</b>, so the contract itself can\'t rug. It goes live on the 🪶 Robinhood board (with your PFP &amp; socials) the moment it deploys.'+
       '<div class="ln" style="margin-top:6px">Your Robinhood address (from your dev wallet): <b style="word-break:break-all">'+esc(d.address)+'</b> <button class="wbtn ghost" type="button" style="padding:2px 8px;font-size:11px" onclick="navigator.clipboard.writeText(\''+esc(d.address)+'\').then(()=>GG.toast(\'Address copied\'))">Copy</button></div>'+
-      '<div class="ln">ETH balance: <b>'+eth.toFixed(6)+' ETH</b> '+(eth>0.00005?'✅ enough for a deploy (~$0.05)':'⚠️ <b>needs gas</b> — leave auto-fund checked below and SlimeWire swaps a little SOL into Robinhood ETH before deploy')+' · <a href="'+esc(d.explorer)+'" target="_blank" rel="noopener">explorer</a></div>'+
+      '<div class="ln">ETH balance: <b>'+eth.toFixed(6)+' ETH</b> '+(eth>0.00005?'✅ enough for a deploy (~$0.05)':'⚠️ <b>needs gas</b> — leave auto-fund checked below and SlimeWire swaps a little SOL into Robinhood ETH before deploy')+' · <a href="'+esc(d.explorer)+'" target="_blank" rel="noopener noreferrer">explorer</a></div>'+
       '<label class="lcheck" style="display:flex;align-items:flex-start;gap:8px;font-size:11px;cursor:pointer;margin-top:8px"><input type="checkbox" id="lcRhFundSol" checked> <span><b>Fund launch from SOL automatically</b> - SlimeWire swaps a little SOL from this dev wallet to its Robinhood ETH address before deploy if it needs gas.</span></label>'+
       '<div class="field" style="margin-top:8px"><label style="font-size:11px">SOL to use for RH gas</label><input id="lcRhFundAmt" inputmode="decimal" value="0.01"></div>'+
       '<div class="field" style="margin-top:8px"><label style="font-size:11px">Total supply (tokens, all to your wallet)</label><input id="lcRhSupply" inputmode="numeric" value="1000000000"></div>'+
       '<label class="lcheck" style="display:flex;align-items:flex-start;gap:8px;font-size:11px;cursor:pointer;margin-top:4px"><input type="checkbox" id="lcRhCreatorFee"> <span>💰 <b>Earn creator fees — 1% of every trade</b> (same as pump.fun), paid in ETH to your wallet on trades through SlimeWire. It\'s taken by the site at trade time — <b>never</b> baked into the token, so your coin stays <b>✅ Verified safe</b>.</span></label>'+
       lcHolderRewardsHtml("lcRh")+
       '<div class="ln mut" style="font-size:10px;margin-top:6px">No dev-buy at launch on Robinhood: the coin has no trading pool the instant it deploys, so there\'s nothing to buy yet. Use <b>📦 Auto-bundle when it gets a pool</b> (shows after you launch) to buy the moment liquidity opens — that\'s the dev-buy for this chain.</div>'+
-      '<div class="ln mut" style="font-size:10px">Your image, description &amp; socials show on SlimeWire\'s <b>🪶 Robinhood board</b> (Trenches tab) — on-chain the coin is name + ticker on <a href="https://robinhoodchain.blockscout.com" target="_blank" rel="noopener">Blockscout</a> (EVM chains have no native PFP standard). Trading pools (Uniswap) come next once its addresses publish.</div></div>';
+      '<div class="ln mut" style="font-size:10px">Your image, description &amp; socials show on SlimeWire\'s <b>🪶 Robinhood board</b> (Trenches tab) — on-chain the coin is name + ticker on <a href="https://robinhoodchain.blockscout.com" target="_blank" rel="noopener noreferrer">Blockscout</a> (EVM chains have no native PFP standard). Trading pools (Uniswap) come next once its addresses publish.</div></div>';
   }
   async function setupMeteoraCurve(){
     if(!confirm("Create the SlimeWire curve on-chain now?\n\nOne-time setup — your wallet pays a small SOL network fee. After this, anyone can launch on the SlimeWire rail and each coin's fees go to whoever launched it."))return;
@@ -3852,7 +3852,7 @@
           $("#lcOut").innerHTML='<div class="feebox">🪶 <b>'+esc(name)+' ('+esc(sym)+') is LIVE on Robinhood Chain!</b>'+
             '<div class="ln">Token: <b style="word-break:break-all">'+esc(d.tokenAddress)+'</b></div>'+
             '<div class="ln">Supply '+esc(Number(d.supplyTokens||supply).toLocaleString())+' — all in your wallet · gas paid '+esc(d.gasCostEth||"~0")+' ETH</div>'+
-            '<div class="ln"><a href="'+esc(d.explorerToken||"#")+'" target="_blank" rel="noopener">View token on Blockscout</a> · <a href="'+esc(d.explorerTx||"#")+'" target="_blank" rel="noopener">deploy tx</a></div>'+
+            '<div class="ln"><a href="'+esc(d.explorerToken||"#")+'" target="_blank" rel="noopener noreferrer">View token on Blockscout</a> · <a href="'+esc(d.explorerTx||"#")+'" target="_blank" rel="noopener noreferrer">deploy tx</a></div>'+
             '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="wbtn" type="button" onclick="GG.rhAddLiquidity(\''+esc(d.tokenAddress)+'\',\''+esc(devIdx)+'\')">💧 Make it buyable — add liquidity</button><button class="wbtn ghost" type="button" onclick="GG.rhAutoBundleModal(\''+esc(d.tokenAddress)+'\')">📦 Auto-bundle</button><button class="wbtn ghost" type="button" onclick="GG.rhTrade(\''+esc(d.tokenAddress)+'\')">Open coin →</button></div>'+
             '<div class="ln mut" style="font-size:10px;margin-top:6px">Your coin has <b>no trading pool yet</b> — nobody (including you) can buy it until one exists. Tap <b>💧 Make it buyable</b> to create its pool with a little ETH + some of your tokens; that <b>opens trading</b> and sets the starting price.</div></div>';
           toast("🪶 Deployed on Robinhood Chain!");
@@ -3973,9 +3973,9 @@
       const body=$("#kpBody");if(!body)return;
       const handle=kolHandle(k);
       const links=[];
-      if(handle||k.twitter||k.xUrl)links.push('<a class="chip" href="'+(handle?"https://x.com/"+handle:esc(k.twitter||k.xUrl))+'" target="_blank" rel="noopener">𝕏 '+(handle?"@"+esc(handle):"Twitter")+'</a>');
-      links.push('<a class="chip" href="https://solscan.io/account/'+encodeURIComponent(wallet)+'" target="_blank" rel="noopener">Solscan ↗</a>');
-      links.push('<a class="chip" href="https://kolscan.io/account/'+encodeURIComponent(wallet)+'" target="_blank" rel="noopener">KOLScan ↗</a>');
+      if(handle||k.twitter||k.xUrl)links.push('<a class="chip" href="'+(handle?"https://x.com/"+handle:esc(k.twitter||k.xUrl))+'" target="_blank" rel="noopener noreferrer">𝕏 '+(handle?"@"+esc(handle):"Twitter")+'</a>');
+      links.push('<a class="chip" href="https://solscan.io/account/'+encodeURIComponent(wallet)+'" target="_blank" rel="noopener noreferrer">Solscan ↗</a>');
+      links.push('<a class="chip" href="https://kolscan.io/account/'+encodeURIComponent(wallet)+'" target="_blank" rel="noopener noreferrer">KOLScan ↗</a>');
       const realized=(k.realizedLabel&&k.realizedLabel!=="n/a")?esc(k.realizedLabel):(k.trades?esc(k.trades)+" tr":"—");
       const posHtml=loadingPos
         ? '<div class="loading" style="padding:14px"><span class="spin"></span></div>'

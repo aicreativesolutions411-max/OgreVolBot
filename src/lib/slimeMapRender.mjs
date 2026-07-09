@@ -93,7 +93,7 @@ function arrowSvg(x1, y1, x2, y2, color, w, targetR, dash) {
     `<polygon points="${ex.toFixed(1)},${ey.toFixed(1)} ${(bx + px * hw).toFixed(1)},${(by + py * hw).toFixed(1)} ${(bx - px * hw).toFixed(1)},${(by - py * hw).toFixed(1)}" fill="${color}" fill-opacity="0.92"/>`;
 }
 const CLUSTER_COLORS = ["#ffcf4d", "#4dd6ff", "#ff7de3", "#8bff5b", "#ff9f4d", "#b98cff", "#4dffd0", "#ff6b6b"];
-function shortAddr(a) { a = String(a || ""); return a.length > 10 ? a.slice(0, 4) + "…" + a.slice(-4) : a; }
+function shortAddr(a) { a = String(a || ""); return a.length > 10 ? a.slice(0, 4) + "..." + a.slice(-4) : a; }
 
 export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stats = [], nodes = [], bgHref = null, transparent = false, centerImage = null, clusters = [], clusterEdges = [], sidePanel = false, kolsIn = 0, W = 900, H = 820 } = {}) {
   // Side panel (Bubblemaps-style, on the RIGHT): ranked clusters w/ bars + a holders/whales/KOLs stat grid +
@@ -530,8 +530,8 @@ export function buildAirdropSvg({ subject = "$SLIME", subtitle = "airdrop", stat
       const y = 648 + (i % perCol) * 16.4;
       const status = row.held !== false ? "HELD" : "DUMPED";
       const color = row.held !== false ? "#3f9c34" : "#b56256";
-      const valTxt = Number(row.usd) > 0 ? fmtUsd(row.usd) : "—";      // $ VALUE of the transfer (owner: "how much value")
-      const toTxt = (row.isKol ? "★ " : "") + String(row.to || "").slice(0, row.isKol ? 12 : 13);
+      const valTxt = Number(row.usd) > 0 ? fmtUsd(row.usd) : "-";      // $ VALUE of the transfer (owner: "how much value")
+      const toTxt = (row.isKol ? "KOL " : "") + String(row.to || "").slice(0, row.isKol ? 12 : 13);
       return `<g>
         <rect x="${c.base}" y="${(y - 13).toFixed(1)}" width="376" height="15.6" rx="6" fill="${(i % perCol) % 2 ? "#fff6e8" : "#fffaf0"}" fill-opacity="0.82"/>
         <text x="${c.rank}" y="${y.toFixed(1)}" font-family="Arial Black, Arial" font-size="10.5" font-weight="900" fill="#9a8b6e">${i + 1}</text>
@@ -542,7 +542,7 @@ export function buildAirdropSvg({ subject = "$SLIME", subtitle = "airdrop", stat
       </g>`;
     }).join("");
     const totalFed = Number(flow.totalWallets) || flowAll.length;
-    const moreNote = totalFed > tableSrc.length ? `top ${tableSrc.length} of ${totalFed} fed · biggest bag first` : `${tableSrc.length} wallet${tableSrc.length === 1 ? "" : "s"} · biggest bag first`;
+    const moreNote = totalFed > tableSrc.length ? `top ${tableSrc.length} of ${totalFed} fed | biggest bag first` : `${tableSrc.length} wallet${tableSrc.length === 1 ? "" : "s"} | biggest bag first`;
     const colHdr = (c) => `
       <text x="${c.rank}" y="628" font-family="Arial" font-size="9.5" font-weight="900" fill="#9a8b6e">#</text>
       <text x="${c.amt}" y="628" font-family="Arial" font-size="9.5" font-weight="900" fill="#9a8b6e">AMOUNT</text>
@@ -558,7 +558,7 @@ export function buildAirdropSvg({ subject = "$SLIME", subtitle = "airdrop", stat
       ${tableRows}
     </g>`;
     const legend = `<g font-family="Arial" font-size="12" font-weight="700">
-      <text x="30" y="${H - 22}" fill="#8b7d5f">Green = still holding · red = dumped · ★ = KOL · bags show the 15 biggest, table lists the top ${tableSrc.length}</text>
+      <text x="30" y="${H - 22}" fill="#8b7d5f">Green = still holding | red = dumped | KOL = known account | bags show the 15 biggest, table lists the top ${tableSrc.length}</text>
       <rect x="${W - 244}" y="${H - 40}" width="216" height="28" rx="14" fill="#fffaf0" stroke="#3f9c34" stroke-opacity="0.55"/>
       <circle cx="${W - 226}" cy="${H - 26}" r="6" fill="#57c04a"/>
       <text x="${W - 212}" y="${H - 21}" font-family="Arial Black, Arial" font-size="16" font-weight="900" fill="#3f9c34">slimewire.org</text>
@@ -577,7 +577,7 @@ export function buildAirdropSvg({ subject = "$SLIME", subtitle = "airdrop", stat
         <path d="${BAG_PATH}" fill="${pal[0]}" stroke="${pal[1]}" stroke-width="1.6"/>
         <path d="${BAG_TIE}" fill="none" stroke="${pal[1]}" stroke-width="2" stroke-linecap="round"/>
         <text x="20" y="28" text-anchor="middle" font-family="Arial Black, Arial" font-size="12" font-weight="900" fill="#ffffff" opacity="0.92">${held ? "$" : ""}</text>
-        ${held && n.weight > 0.35 ? `<text x="20" y="15" text-anchor="middle" font-family="Arial" font-size="12" fill="#3fb6e6">◆</text>` : ""}
+        ${held && n.weight > 0.35 ? `<path d="M20 8 L25 13 L20 18 L15 13 Z" fill="#3fb6e6" opacity="0.92"/>` : ""}
       </g>
     </g>`;
   }).join("");

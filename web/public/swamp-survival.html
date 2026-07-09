@@ -101,6 +101,7 @@
   .err{position:fixed; inset:0; z-index:20; display:none; align-items:center; justify-content:center; flex-direction:column; padding:30px; text-align:center; background:#05040d;}
   .err.on{display:flex;}
 </style>
+<script src="/config.js"></script>
 </head>
 <body>
   <canvas id="cv"></canvas>
@@ -185,6 +186,7 @@
 (function(){
 /* ============================ boot / dom ============================ */
 const $=(id)=>document.getElementById(id);
+const API = (window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||((location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1") ? "" : "https://ogrevolbot.onrender.com");
 const cv=$("cv"), ctx=cv.getContext("2d");
 let W=0,H=0,DPR=1;
 function resize(){
@@ -305,7 +307,7 @@ function setMuted(m){
 /* ============================ launches (boss source) ============================ */
 let LAUNCHES=[];
 async function loadLaunches(){
-  try{ const r=await fetch("/api/web/swamp-launches",{cache:"no-store"});
+  try{ const r=await fetch(API+"/api/web/swamp-launches",{cache:"no-store"});
     if(r.ok){ const j=await r.json(); LAUNCHES=(j&&j.launches||j&&j.ogres||[]).filter(x=>x&&(x.symbol||x.name)); }
   }catch(_){ LAUNCHES=[]; }
 }
@@ -964,7 +966,7 @@ async function submitAndLoadBoard(score){
   let rankTxt="";
   const nm=(store.lbName||$("lbName").value||"").trim();
   if(nm){
-    try{ const r=await fetch("/api/web/swamp-leaderboard",{method:"POST",headers:{"content-type":"application/json"},
+    try{ const r=await fetch(API+"/api/web/swamp-leaderboard",{method:"POST",headers:{"content-type":"application/json"},
       body:JSON.stringify({mode:"survival",score,name:nm,meta:"W"+G.wave+" L"+G.level})});
       const j=await r.json(); if(j&&j.ok&&j.rank) rankTxt=j.improved?`🏆 New best — rank #${j.rank}!`:`Rank #${j.rank} (best ${(j.best||score).toLocaleString()})`;
     }catch(_){}
@@ -973,7 +975,7 @@ async function submitAndLoadBoard(score){
   loadBoard(nm);
 }
 async function loadBoard(myName){
-  try{ const r=await fetch("/api/web/swamp-leaderboard?mode=survival",{cache:"no-store"}); const j=await r.json();
+  try{ const r=await fetch(API+"/api/web/swamp-leaderboard?mode=survival",{cache:"no-store"}); const j=await r.json();
     const rows=(j&&j.scores||[]).slice(0,8);
     const box=$("board"); box.innerHTML="";
     if(!rows.length){ box.innerHTML='<div style="color:var(--dim);text-align:center;font-size:0.84rem">be the first on the board</div>'; return; }

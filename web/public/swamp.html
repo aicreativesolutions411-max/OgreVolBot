@@ -264,6 +264,7 @@
   .err{position:fixed; inset:0; z-index:20; display:none; align-items:center; justify-content:center; flex-direction:column; padding:30px; text-align:center; background:#05040d;}
   .err.on{display:flex;}
 </style>
+<script src="/config.js"></script>
 </head>
 <body>
   <canvas id="cv"></canvas>
@@ -517,7 +518,7 @@ function resize(){ DPR=Math.min(2,window.devicePixelRatio||1); W=window.innerWid
 window.addEventListener("resize",resize); resize();
 
 /* ---- API base: static host serves SPA for /api/*, so hit the Node origin ---- */
-const API = (location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1") ? "" : "https://ogrevolbot.onrender.com";
+const API = (window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||((location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1") ? "" : "https://ogrevolbot.onrender.com");
 const SITE = "https://www.slimewire.org";
 
 /* ---- save (shared with terminal: store.dex feeds Swamp Worth) ---- */

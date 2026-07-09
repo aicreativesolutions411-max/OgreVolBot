@@ -28,8 +28,13 @@ const FOOTERS = ["Scan any coin free · slimewire.org", "Free scans · slimewire
 const ACCENTS = ["#8aff6b", "#7dff8f", "#a6ff5b", "#63f0c0", "#9bff77", "#54e000"];
 
 // Neon info chip.
+function cleanValue(value) {
+  const val = String(value == null || value === "" ? "-" : value).trim();
+  return /^(undefined|null|nan)$/i.test(val) ? "-" : val;
+}
+
 function chip(x, y, w, label, value, accent, opts = {}) {
-  const val = String(value == null || value === "" ? "-" : value);
+  const val = cleanValue(value);
   const h = opts.h || 104;
   const labelSize = opts.labelSize || 21;
   const baseValueSize = opts.valueSize || 38;
@@ -38,6 +43,18 @@ function chip(x, y, w, label, value, accent, opts = {}) {
     <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="16" fill="#06120b" fill-opacity="0.84" stroke="${accent}" stroke-opacity="0.55" stroke-width="2"/>
     <text x="${x + 16}" y="${y + 28}" font-family="Arial" font-size="${labelSize}" fill="#8fbf93" letter-spacing="1.4">${esc(label)}</text>
     <text x="${x + 16}" y="${y + h - 18}" font-family="Arial Black, Arial" font-weight="900" font-size="${valueSize.toFixed(1)}" fill="#ffffff">${esc(val)}</text>
+  </g>`;
+}
+
+function railChip(x, y, railLabel, accent) {
+  const val = cleanValue(railLabel);
+  if (val === "-") return "";
+  const label = val.slice(0, 28).toUpperCase();
+  const w = Math.min(270, Math.max(112, 70 + label.length * 9));
+  return `<g>
+    <rect x="${x}" y="${y}" width="${w}" height="26" rx="13" fill="#06120b" fill-opacity="0.88" stroke="${accent}" stroke-opacity="0.55" stroke-width="1.4"/>
+    <circle cx="${x + 17}" cy="${y + 13}" r="4.5" fill="${accent}"/>
+    <text x="${x + 30}" y="${y + 18}" font-family="Arial Black, Arial" font-size="12" font-weight="900" fill="#dfffe3" letter-spacing="1.1">RAIL | ${esc(label)}</text>
   </g>`;
 }
 
@@ -96,6 +113,7 @@ export async function renderXScanCard({ symbol, name, mcLabel, liqLabel, ageLabe
       <text x="${tx}" y="86" font-family="Arial Black, Arial" font-weight="900" font-size="32" letter-spacing="2" fill="url(#slime)" filter="url(#glow)">${esc(header)}</text>
       <text x="${tx}" y="205" font-family="Arial Black, Arial" font-weight="900" font-size="96" fill="#ffffff" filter="url(#glow)">$${esc(sym)}</text>
       <text x="${tx + 2}" y="252" font-family="Arial" font-size="30" fill="#b6e6bd">${esc((name || "").slice(0, 40))}</text>
+      ${railChip(tx + 2, 262, railLabel, accent)}
 
       ${chip(tx, 292, chipW, "MC", mcLabel, accent, chipOpts)}
       ${chip(tx + chipW + chipGap, 292, chipW, "LIQ", liqLabel, accent, chipOpts)}

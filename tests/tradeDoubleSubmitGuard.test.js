@@ -1070,7 +1070,8 @@ test("⚡ Quick Buy (preset) + ⚙️ in-group Preset editor: buy your preset + 
   assert.match(setp, /kind === "sl"/);
   // Quick Buy preset: buys the tapper's amount then arms their TP/SL via the site auto-exit engine.
   const exec = functionBody(serverSource, "tgExecuteQuickBuyPreset");
-  assert.match(exec, /tgExecuteQuickBuy\(userId, mint, prefs\.quickAmount\)/);
+  assert.match(exec, /tgExecuteQuickBuy\(userId, mint, prefs\.quickAmount/);
+  assert.match(exec, /idempotencyParts/);
   assert.match(exec, /webCreateSingleTradeAutoExitPlan\(userId, r\.wallet, mint/);
   // Routed: qbp: (buy) + pe: (editor) both dispatched.
   assert.match(serverSource, /startsWith\("qbp:"\)/);
