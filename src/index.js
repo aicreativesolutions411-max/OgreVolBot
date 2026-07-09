@@ -182,6 +182,15 @@ if (readConnection !== connection) {
 // BACKUP_RPC_URL); otherwise reuses the Alchemy read provider (which can also send). Kill
 // switch: set SEND_FAILOVER_ENABLED=false on Render to disable instantly. Unset/no distinct
 // provider => null => send behavior is byte-identical to before.
+// Optional 3rd read provider — CHAINSTACK. Slots as the MIDDLE tier: reads try the read provider
+// (Alchemy) first, then Chainstack, then Helius. So a paid Chainstack node absorbs read failover BEFORE
+// the primary (Helius, the pricey one) is touched — and if Chainstack is the ONLY extra provider set, the
+// read resolver already makes it `readConnection` directly. Dormant + byte-identical until CHAINSTACK_RPC_URL
+// is set to a distinct node (Render env only — keep the token secret).
+const chainstackRpcUrl = String(process.env.CHAINSTACK_RPC_URL || "").trim();
+const chainstackReadConnection = (chainstackRpcUrl && chainstackRpcUrl !== CONFIG.rpcUrl && chainstackRpcUrl !== CONFIG.readRpcUrl)
+  ? new Connection(chainstackRpcUrl, "confirmed") : null;
+if (chainstackReadConnection) { try { console.info(`[rpc] read failover tier -> chainstack (${(chainstackRpcUrl.match(/https?:\/\/([^/]+)/) || [])[1] || "set"}) before Helius`); } catch { /* logging best-effort */ } }
 const sendFailoverEnabled = String(process.env.SEND_FAILOVER_ENABLED ?? "true").toLowerCase() !== "false";
 const sendFallbackRpcUrl = String(process.env.SEND_FALLBACK_RPC_URL || process.env.BACKUP_RPC_URL || CONFIG.readRpcUrl || "").trim();
 const backupConnection = (sendFailoverEnabled && sendFallbackRpcUrl && sendFallbackRpcUrl !== CONFIG.rpcUrl)
@@ -62963,6 +62972,14 @@ async function rpcRead(label, opFactory, options = {}) {
     return await rpcWithRetry(label, () => opFactory(readConnection), readOpts.retries ?? CONFIG.rpcRetries, readOpts);
   } catch (error) {
     rpcStats.readFallbackCount = (rpcStats.readFallbackCount || 0) + 1;
+    // Tier 2 — CHAINSTACK (paid): absorb the failover before touching the primary Helius. Only if set.
+    if (chainstackReadConnection) {
+      try {
+        return await rpcWithRetry(label, () => opFactory(chainstackReadConnection), options.retries ?? CONFIG.rpcRetries, { ...options, providerName: "chainstack", providerHost: (chainstackRpcUrl.match(/https?:\/\/([^/]+)/) || [])[1] || "" });
+      } catch (csError) {
+        console.warn(`${label}: chainstack read also failed (${friendlyError(csError)}); falling back to Helius.`);
+      }
+    }
     console.warn(`${label}: read provider failed (${friendlyError(error)}); falling back to Helius.`);
     return rpcWithRetry(label, () => opFactory(connection), options.retries ?? CONFIG.rpcRetries, options);
   }
