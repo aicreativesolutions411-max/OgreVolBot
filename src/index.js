@@ -5727,12 +5727,12 @@ async function activeWebCriticalTpSlWork() {
     readWebExitGuards(),
     readTradePlans()
   ]);
-  const activeGuards = (guardStore.guards || []).filter((guard) => (
+  const activeGuards = objectRows(guardStore.guards).filter((guard) => (
     isActiveWebExitGuardStatus(guard.status || guard.exitStatus)
   )).length;
-  const activePlans = (planStore.plans || []).filter((plan) => (
+  const activePlans = objectRows(planStore.plans).filter((plan) => (
     plan.status === "watching"
-    && (plan.wallets || []).some((wallet) => isActiveTimedWalletStatus(wallet.status || wallet.exitStatus))
+    && objectRows(plan.wallets).some((wallet) => isActiveTimedWalletStatus(wallet.status || wallet.exitStatus))
   )).length;
   return { activeGuards, activePlans };
 }
@@ -18283,7 +18283,7 @@ function tradePlanPriorityScore(plan = {}) {
 }
 
 function prioritizedTradePlans(plans = []) {
-  return [...plans].sort((left, right) => (
+  return objectRows(plans).sort((left, right) => (
     tradePlanPriorityScore(right) - tradePlanPriorityScore(left)
   ) || (
     Date.parse(right.createdAt || right.updatedAt || 0) - Date.parse(left.createdAt || left.updatedAt || 0)
@@ -18565,10 +18565,10 @@ async function backfillWebExitGuardsFromLiveWebPositions(guardStore, walletStore
   const history = await readTradeHistory();
   const entries = webOpenTradeEntriesFromHistory(history);
 
-  const activeGuardKeys = new Set((guardStore.guards || [])
+  const activeGuardKeys = new Set(objectRows(guardStore.guards)
     .filter((guard) => isActiveWebExitGuardStatus(guard.status))
     .map((guard) => webWalletTokenGuardKey(guard.userId, guard.walletPublicKey, guard.tokenMint)));
-  const existingTerminalKeys = new Set((guardStore.guards || [])
+  const existingTerminalKeys = new Set(objectRows(guardStore.guards)
     .filter((guard) => isTerminalWebExitGuardStatus(guard.status))
     .map((guard) => guard.key || ""));
   const candidates = entries.filter((entry) => (
@@ -18653,11 +18653,11 @@ function webPortfolioPositionKey(entry) {
 
 function webPortfolioExitSettings(entry, planStore, guardStore) {
   const defaults = defaultWebExitGuardSettings();
-  const planMatch = (planStore.plans || [])
+  const planMatch = objectRows(planStore.plans)
     .filter((plan) => isWebManagedExitPlan(plan) || eligibleWebDefaultExitSource(plan.source))
     .map((plan) => ({
       plan,
-      planWallet: (plan.wallets || []).find((wallet) => wallet.publicKey === entry.walletPublicKey)
+      planWallet: objectRows(plan.wallets).find((wallet) => wallet.publicKey === entry.walletPublicKey)
     }))
     .find(({ plan, planWallet }) => (
       planWallet
@@ -18665,7 +18665,7 @@ function webPortfolioExitSettings(entry, planStore, guardStore) {
       && String(plan.tokenMint || "") === String(entry.tokenMint || "")
       && isActiveTimedWalletStatus(planWallet.status)
     ));
-  const guardMatch = (guardStore.guards || []).find((guard) => (
+  const guardMatch = objectRows(guardStore.guards).find((guard) => (
     activeWebExitGuardCovers(guard, entry.userId, entry.walletPublicKey, entry.tokenMint)
   ));
 
@@ -18739,12 +18739,12 @@ async function markWebPortfolioPositionClosed(entry, sell, triggerReason) {
   let plansChanged = false;
   let guardsChanged = false;
 
-  for (const plan of planStore.plans || []) {
+  for (const plan of objectRows(planStore.plans)) {
     if (String(plan.userId || "") !== String(entry.userId || "")) continue;
     if (String(plan.tokenMint || "") !== String(entry.tokenMint || "")) continue;
     if (!isWebManagedExitPlan(plan) && !eligibleWebDefaultExitSource(plan.source)) continue;
 
-    for (const planWallet of plan.wallets || []) {
+    for (const planWallet of objectRows(plan.wallets)) {
       if (planWallet.publicKey !== entry.walletPublicKey) continue;
       if (!isActiveTimedWalletStatus(planWallet.status)) continue;
       planWallet.status = "sold";
@@ -18762,14 +18762,14 @@ async function markWebPortfolioPositionClosed(entry, sell, triggerReason) {
       plansChanged = true;
     }
 
-    if ((plan.wallets || []).every((wallet) => !isActiveTimedWalletStatus(wallet.status))) {
+    if (objectRows(plan.wallets).every((wallet) => !isActiveTimedWalletStatus(wallet.status))) {
       plan.status = "completed";
       plan.completedAt = plan.completedAt || now;
       plansChanged = true;
     }
   }
 
-  for (const guard of guardStore.guards || []) {
+  for (const guard of objectRows(guardStore.guards)) {
     if (!activeWebExitGuardCovers(guard, entry.userId, entry.walletPublicKey, entry.tokenMint)) continue;
     guard.status = "sold";
     guard.exitStatus = "confirmed";
@@ -19090,16 +19090,16 @@ function mergeWebExitGuardUpdate(previous, next) {
 }
 
 function backfillWebExitGuardsFromPlanStore(guardStore, planStore) {
-  const existing = new Map((guardStore.guards || []).map((guard) => [
+  const existing = new Map(objectRows(guardStore.guards).map((guard) => [
     guard.key || webExitGuardKey(guard.planId, guard.walletPublicKey, guard.buySignature),
     guard
   ]));
   let added = 0;
   let updated = 0;
 
-  for (const plan of planStore.plans || []) {
+  for (const plan of objectRows(planStore.plans)) {
     if (!isWebManagedExitPlan(plan)) continue;
-    for (const planWallet of plan.wallets || []) {
+    for (const planWallet of objectRows(plan.wallets)) {
       if (!isActiveTimedWalletStatus(planWallet.status)) continue;
       if (!shouldArmWebExitGuardForWallet(plan, planWallet)) continue;
 
@@ -19305,9 +19305,9 @@ function copyWebExitGuardFieldsFromPlanWallet(guard, planWallet) {
 }
 
 function findTradePlanWalletForGuard(planStore, guard) {
-  const plan = (planStore.plans || []).find((item) => item.id === guard.planId);
+  const plan = objectRows(planStore.plans).find((item) => item.id === guard.planId);
   if (!plan) return null;
-  const wallets = Array.isArray(plan.wallets) ? plan.wallets : [];
+  const wallets = objectRows(plan.wallets);
   const exact = wallets.find((wallet) => (
     wallet.publicKey === guard.walletPublicKey
     && (!guard.buySignature || !wallet.buySignature || wallet.buySignature === guard.buySignature)
@@ -19516,7 +19516,7 @@ async function processWebExitGuards(options = {}) {
       }
     }
 
-    for (const guard of guardStore.guards) {
+    for (const guard of objectRows(guardStore.guards)) {
       if (syncWebExitGuardFromPlanStore(guard, planStore)) {
         changed = true;
       }
@@ -20017,7 +20017,7 @@ async function processTradePlans(options = {}) {
     }
 
     const planStore = await readTradePlans();
-    const initialPlanIds = new Set(planStore.plans.map((plan) => plan.id).filter(Boolean));
+    const initialPlanIds = new Set(objectRows(planStore.plans).map((plan) => plan.id).filter(Boolean));
     const walletStore = await readWalletStore();
     let changed = false;
 
@@ -20062,7 +20062,7 @@ async function processTradePlans(options = {}) {
 
       const walletMessages = [];
       const pnlCardTokens = new Set();
-      for (const planWallet of plan.wallets) {
+      for (const planWallet of objectRows(plan.wallets)) {
         if (!isActiveTimedWalletStatus(planWallet.status)) continue;
         summary.checkedWallets += 1;
         const runnerStarted = Date.now();
@@ -20141,7 +20141,7 @@ async function processTradePlans(options = {}) {
         if (result.pnlCardToken) pnlCardTokens.add(result.pnlCardToken);
       }
 
-      if (plan.wallets.every((wallet) => !isActiveTimedWalletStatus(wallet.status))) {
+      if (objectRows(plan.wallets).every((wallet) => !isActiveTimedWalletStatus(wallet.status))) {
         plan.status = "completed";
         plan.completedAt = new Date().toISOString();
         changed = true;
@@ -21271,14 +21271,14 @@ async function processDcaPlans() {
     const walletStore = await readWalletStore();
     let changed = false;
 
-    for (const plan of planStore.plans) {
+    for (const plan of objectRows(planStore.plans)) {
       if (plan.status !== "active") continue;
       const nextRunAt = Date.parse(plan.nextRunAt || plan.createdAt || new Date().toISOString());
       if (Date.now() < nextRunAt) continue;
 
       const messages = [];
       const pnlCardTokens = new Set();
-      for (const planWallet of plan.wallets) {
+      for (const planWallet of objectRows(plan.wallets)) {
         if (planWallet.status !== "active") continue;
         const result = await processDcaPlanWallet(plan, planWallet, walletStore);
         if (result.changed) changed = true;
@@ -21286,7 +21286,7 @@ async function processDcaPlans() {
         if (result.pnlCardToken) pnlCardTokens.add(result.pnlCardToken);
       }
 
-      if (plan.wallets.every((wallet) => wallet.status !== "active")) {
+      if (objectRows(plan.wallets).every((wallet) => wallet.status !== "active")) {
         plan.status = "completed";
         plan.completedAt = new Date().toISOString();
         changed = true;
@@ -30695,6 +30695,12 @@ function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function objectRows(value) {
+  return Array.isArray(value)
+    ? value.filter((item) => item && typeof item === "object" && !Array.isArray(item))
+    : [];
+}
+
 async function audit(action, details) {
   // Cap + lock: this is appended on EVERY money op. Unbounded growth meant an O(n) read+stringify+write
   // per call (write amplification that worsens forever) and concurrent appends could drop entries.
@@ -30717,7 +30723,10 @@ async function readState() {
 
 async function readTradePlans() {
   const store = await readJson(tradePlansPath());
-  if (!Array.isArray(store.plans)) store.plans = [];
+  store.plans = objectRows(store.plans);
+  for (const plan of store.plans) {
+    plan.wallets = objectRows(plan.wallets);
+  }
   return store;
 }
 
@@ -42580,20 +42589,21 @@ function startOgreAutopilotRunner() {
 
 async function writeTradePlansPreservingNewPlans(store, initialPlanIds = new Set()) {
   const latest = await readTradePlans();
-  const incomingIds = new Set((store.plans || []).map((plan) => plan.id).filter(Boolean));
-  const newPlans = (latest.plans || []).filter((plan) => {
+  const incomingPlans = objectRows(store.plans);
+  const incomingIds = new Set(incomingPlans.map((plan) => plan.id).filter(Boolean));
+  const newPlans = objectRows(latest.plans).filter((plan) => {
     if (!plan?.id || incomingIds.has(plan.id)) return false;
     return !initialPlanIds.has(plan.id);
   });
   const merged = newPlans.length
-    ? { ...store, plans: [...(store.plans || []), ...newPlans] }
-    : store;
+    ? { ...store, plans: [...incomingPlans, ...newPlans] }
+    : { ...store, plans: incomingPlans };
   await writeTradePlans(merged);
 }
 
 async function readWebExitGuards() {
   const store = await readJson(webExitGuardsPath());
-  if (!Array.isArray(store.guards)) store.guards = [];
+  store.guards = objectRows(store.guards);
   return store;
 }
 
