@@ -2043,7 +2043,17 @@ test("X DM terminal: link from Telegram, scan/settings/buy/sell over official DM
   assert.match(serverSource, /parseCommandWithArgument\(text, \["xlink"\]\)/);
   assert.match(serverSource, /parseCommandWithArgument\(text, \["xdm", "xdmstatus"\]\)/);
   assert.match(serverSource, /function xDmHelpText/);
-  assert.match(serverSource, /scan <CA> \/ chart <CA> \/ rug <CA> \/ map <CA>/);
+  assert.match(serverSource, /function xDmRememberTargets/);
+  assert.match(serverSource, /function xDmResolveRecentTarget/);
+  assert.match(serverSource, /scan\/chart\/rug\/map <CA or #>/);
+  assert.match(serverSource, /buy 1 or buy 2 0\.1/);
+  assert.match(serverSource, /sell 1 50/);
+  assert.match(serverSource, /Coins saved:/);
+  assert.match(serverSource, /Fast actions: buy 1 \/ buy 2 0\.1 \/ sell 1 50/);
+  assert.match(serverSource, /const buySlot = text\.match/);
+  assert.match(serverSource, /const sellSlot = text\.match/);
+  assert.match(serverSource, /const buyAmountLast = text\.match/);
+  assert.match(serverSource, /const sellLastPct = text\.match/);
   assert.match(serverSource, /Reply YES to send or NO to cancel/);
   assert.match(serverSource, /\^\(yes\|y\|ok\|confirm\|send\|ape\)\$/);
   assert.match(serverSource, /\^\(no\|n\|cancel\|stop\)\$/);

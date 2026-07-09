@@ -33524,6 +33524,7 @@ async function readXDmState() {
   if (!s.links || typeof s.links !== "object") s.links = {};       // xSenderId -> { userId, linkedAt }
   if (!s.codes || typeof s.codes !== "object") s.codes = {};       // short code -> { userId, expiresAt }
   if (!s.pending || typeof s.pending !== "object") s.pending = {}; // xSenderId -> trade confirm payload
+  if (!s.contexts || typeof s.contexts !== "object") s.contexts = {}; // xSenderId -> recent token slots
   xDmStateCache = s; return s;
 }
 async function writeXDmState(s) { xDmStateCache = s; await writeJsonFile(xDmStateFile(), s).catch(() => {}); }
@@ -33532,6 +33533,7 @@ function xDmPruneState(s, now = Date.now()) {
   for (const [id, ts] of Object.entries(s.ignored || {})) if (now - Number(ts || 0) > 3 * 86_400_000) delete s.ignored[id];
   for (const [code, rec] of Object.entries(s.codes || {})) if (Number(rec?.expiresAt || 0) < now) delete s.codes[code];
   for (const [sender, rec] of Object.entries(s.pending || {})) if (Number(rec?.expiresAt || 0) < now) delete s.pending[sender];
+  for (const [sender, ctx] of Object.entries(s.contexts || {})) if (now - Number(ctx?.updatedAt || 0) > 7 * 86_400_000) delete s.contexts[sender];
 }
 function xDmNewLinkCode(state, userId) {
   xDmPruneState(state);
@@ -33563,24 +33565,72 @@ async function handleXLinkCommand(chatId, message, userId) {
   ].join("\n"), { inline_keyboard: [[{ text: "Open X profile", url: `https://x.com/${handle}` }, { text: "Open X Terminal", url: "https://www.slimewire.org/x-terminal" }]] });
   return true;
 }
-function xDmHelpText(linked = false) {
+function xDmRecentTargets(state, senderId) {
+  const ctx = state?.contexts?.[String(senderId)] || {};
+  const rows = Array.isArray(ctx.tokens) ? ctx.tokens : [];
+  return rows.map((r) => String(r?.mint || r || "").trim()).filter(Boolean).slice(0, 6);
+}
+function xDmRememberTargets(state, senderId, targets = []) {
+  if (!state || !senderId) return [];
+  if (!state.contexts || typeof state.contexts !== "object") state.contexts = {};
+  const fresh = [...new Set((targets || []).map((t) => String(t || "").trim()).filter(Boolean))].slice(0, 6);
+  if (!fresh.length) return xDmRecentTargets(state, senderId);
+  const old = xDmRecentTargets(state, senderId).filter((t) => !fresh.some((f) => f.toLowerCase() === t.toLowerCase()));
+  const merged = [...fresh, ...old].slice(0, 6);
+  state.contexts[String(senderId)] = { updatedAt: Date.now(), tokens: merged.map((mint) => ({ mint, at: Date.now() })) };
+  return merged;
+}
+function xDmParseTargets(text) {
+  const raw = [...extractRhAddressesFromText(text), ...extractMintsFromText(text)];
+  const seen = new Set();
+  return raw.filter((t) => {
+    const key = String(t || "").toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 8);
+}
+function xDmResolveRecentTarget(state, senderId, value) {
+  const direct = xDmParseTarget(value);
+  if (direct) return direct;
+  const n = Number(String(value || "").match(/\b([1-6])\b/)?.[1] || 0);
+  if (!n) return "";
+  return xDmRecentTargets(state, senderId)[n - 1] || "";
+}
+function xDmTokenSlotsText(state, senderId) {
+  const rows = xDmRecentTargets(state, senderId);
+  if (!rows.length) return "";
+  return ["", "Recent coins:", ...rows.map((mint, i) => `${i + 1}. ${shortMint(mint)}`)].join("\n");
+}
+function xDmActionHints(state, senderId, linked = false) {
+  const hasCoins = xDmRecentTargets(state, senderId).length > 0;
+  if (!hasCoins) return "Paste one or more CAs anytime.";
+  return linked
+    ? "Fast actions: buy 1 / buy 2 0.1 / sell 1 50 / chart 2 / rug 2 / map 2"
+    : "Fast actions: chart 1 / rug 1 / map 1. Link first to buy/sell.";
+}
+function xDmHelpText(linked = false, state = null, senderId = "") {
   return [
     "SlimeWire X DM Terminal",
     "",
     "Public tags: @SlimeWirebot scan <CA>",
     "",
-    "DM commands:",
-    "scan <CA> / chart <CA> / rug <CA> / map <CA>",
-    "positions",
-    "wallet",
-    "settings",
-    "set amount 0.1",
-    "set tp 25",
-    "set sl 8",
-    "set slippage 5",
-    "buy 0.1 <CA>",
-    "sell 50% <CA>",
+    "Reply menu:",
+    "1 Paste/scan a CA",
+    "2 Positions",
+    "3 Wallets",
+    "4 Settings",
+    "5 Buy last coin",
+    "6 Sell help",
     "",
+    "Commands:",
+    "scan/chart/rug/map <CA or #>",
+    "buy 1 or buy 2 0.1",
+    "sell 1 50",
+    "set amount 0.1 / set tp 25 / set sl 8 / set slippage 5",
+    xDmTokenSlotsText(state, senderId),
+    "",
+    xDmActionHints(state, senderId, linked),
     linked ? "Money actions ask for yes/no before they run." : "To trade here, DM: link <code> after /xlink in Telegram.",
     "No seed phrases. Wallet-confirmed / managed-wallet only."
   ].join("\n");
@@ -33710,28 +33760,48 @@ async function xDmHandleEvent(event, state) {
     if (!rec || Number(rec.expiresAt || 0) < Date.now()) return await xDmSend(senderId, "That link code expired. Open Telegram and send /xlink for a fresh one.", state);
     state.links[senderId] = { userId: String(rec.userId), linkedAt: new Date().toISOString() };
     delete state.codes[code];
-    return await xDmSend(senderId, "Linked. You can now use: scan, chart, rug, positions, settings, buy, sell. Send help anytime.", state);
+    return await xDmSend(senderId, "Linked.\n\n" + xDmHelpText(true, state, senderId), state);
   }
   const pending = await xDmConfirmPending(state, senderId, text);
   if (pending?.cancelled) return await xDmSend(senderId, "Canceled. No trade sent.", state);
   if (pending) return await xDmHandleTradeConfirm(senderId, pending, state);
-  if (/^(help|menu|start)\b/i.test(lower)) return await xDmSend(senderId, xDmHelpText(Boolean(linked)), state);
+  if (/^(help|menu|start)\b/i.test(lower)) return await xDmSend(senderId, xDmHelpText(Boolean(linked), state, senderId), state);
   const intent = xIntentFromText(text);
   const explicitScan = /^(scan|chart|rug|safe|map)\b/i.test(lower);
-  const bareTargetOnly = Boolean(xDmParseTarget(text)) && !/\b(buy|sell|positions?|wallets?|settings?|presets?|bundle|volume|launch|copy|set|confirm)\b/i.test(lower);
+  const targetList = xDmParseTargets(text);
+  const bareTargetOnly = Boolean(targetList.length) && !/\b(buy|sell|positions?|wallets?|settings?|presets?|bundle|volume|launch|copy|set|confirm)\b/i.test(lower);
   if (explicitScan || bareTargetOnly) {
-    let target = xDmParseTarget(text);
+    let target = targetList[0] || xDmParseTarget(text);
+    if (!target) {
+      const numberTarget = String(text.match(/\b(?:scan|chart|rug|safe|map)\s+([1-6])\b/i)?.[1] || "");
+      if (numberTarget) target = xDmResolveRecentTarget(state, senderId, numberTarget);
+    }
     if (!target) target = await resolveScanTargetFromText(text, [], { allowBareTickerHints: false }).catch(() => "");
     if (!target) return await xDmSend(senderId, "Send a CA or 0x contract, like: scan <CA>", state);
+    const saved = xDmRememberTargets(state, senderId, targetList.length ? targetList : [target]);
     const reply = await buildXReply(target, /^(chart)\b/i.test(lower) ? "chart" : /^(rug|safe)\b/i.test(lower) ? "rug" : /^(map)\b/i.test(lower) ? "map" : intent, event.id).catch(() => null);
     const body = reply?.text || `Scanned ${shortMint(target)}`;
-    return await xDmSend(senderId, `${body}\n${xDmTokenUrl(target)}`, state);
+    const multi = saved.length > 1 ? `\n\nCoins saved:\n${saved.map((mint, i) => `${i + 1}. ${shortMint(mint)}`).join("\n")}` : "";
+    return await xDmSend(senderId, `${body}\n${xDmTokenUrl(target)}${multi}\n\n${xDmActionHints(state, senderId, Boolean(linked))}`, state);
   }
   if (!linked) {
     if (/\b(buy|sell|positions?|wallet|settings?|preset)\b/i.test(lower)) return await xDmSend(senderId, xDmNeedLinkText(), state);
-    return await xDmSend(senderId, xDmHelpText(false), state);
+    return await xDmSend(senderId, xDmHelpText(false, state, senderId), state);
   }
   const userId = linked.userId;
+  const menuNum = text.match(/^([1-6])$/)?.[1];
+  if (menuNum === "1") return await xDmSend(senderId, "Paste one or more CAs and I will save them as numbered slots.", state);
+  if (menuNum === "2") return await xDmSend(senderId, await xDmFormatPositions(userId), state);
+  if (menuNum === "3") return await xDmSend(senderId, await xDmFormatWallets(userId), state);
+  if (menuNum === "4") return await xDmSend(senderId, await xDmFormatSettings(userId), state);
+  if (menuNum === "5") {
+    const mint = xDmRecentTargets(state, senderId)[0] || "";
+    if (!mint) return await xDmSend(senderId, "Paste a CA first, then reply 5 or buy 1.", state);
+    const prefs = userBuyPrefs(await readBuyPrefs(), userId);
+    xDmStartPending(state, senderId, { action: "buy", userId, amountSol: prefs.quickAmount, mint });
+    return await xDmSend(senderId, `Confirm buy ${prefs.quickAmount} SOL of ${shortMint(mint)}?\nReply YES to send or NO to cancel.\nExpires in 2 minutes.\n${xDmTokenUrl(mint)}`, state);
+  }
+  if (menuNum === "6") return await xDmSend(senderId, "Sell needs a percent so nothing accidental fires.\nUse: sell 1 50 or sell 2 100", state);
   if (/^positions?\b/i.test(lower)) return await xDmSend(senderId, await xDmFormatPositions(userId), state);
   if (/^wallets?\b/i.test(lower)) return await xDmSend(senderId, await xDmFormatWallets(userId), state);
   if (/^(settings?|presets?)\b/i.test(lower)) return await xDmSend(senderId, await xDmFormatSettings(userId), state);
@@ -33741,10 +33811,62 @@ async function xDmHandleEvent(event, state) {
     await setBuyPref(userId, edit.kind, edit.value);
     return await xDmSend(senderId, "Saved.\n\n" + await xDmFormatSettings(userId), state);
   }
+  const targetIntent = text.match(/^(chart|rug|safe|map)\s+([1-6])\b/i);
+  if (targetIntent) {
+    const target = xDmResolveRecentTarget(state, senderId, targetIntent[2]);
+    if (!target) return await xDmSend(senderId, "That coin slot is empty. Paste one or more CAs first.", state);
+    const kind = targetIntent[1].toLowerCase();
+    const reply = await buildXReply(target, kind === "chart" ? "chart" : kind === "map" ? "map" : kind === "rug" || kind === "safe" ? "rug" : intent, event.id).catch(() => null);
+    return await xDmSend(senderId, `${reply?.text || `Scanned ${shortMint(target)}`}\n${xDmTokenUrl(target)}\n\n${xDmActionHints(state, senderId, true)}`, state);
+  }
+  const buySlot = text.match(/^(?:buy|ape)\s+(?:(\d*\.?\d+)\s+)?([1-6])(?:\s+(\d*\.?\d+))?$/i);
+  if (buySlot) {
+    const mint = xDmResolveRecentTarget(state, senderId, buySlot[2]);
+    if (!mint) return await xDmSend(senderId, "That coin slot is empty. Paste one or more CAs first.", state);
+    const prefs = userBuyPrefs(await readBuyPrefs(), userId);
+    const amountSol = Math.max(0.001, Math.min(50, Number(buySlot[1] || buySlot[3] || prefs.quickAmount) || prefs.quickAmount || 0.1));
+    xDmStartPending(state, senderId, { action: "buy", userId, amountSol, mint });
+    return await xDmSend(senderId, `Confirm buy ${amountSol} SOL of #${buySlot[2]} ${shortMint(mint)}?\nReply YES to send or NO to cancel.\nExpires in 2 minutes.\n${xDmTokenUrl(mint)}`, state);
+  }
+  const buyLast = text.match(/^(?:buy|ape)$/i);
+  if (buyLast) {
+    const mint = xDmRecentTargets(state, senderId)[0] || "";
+    if (!mint) return await xDmSend(senderId, "Paste a CA first, then say buy or buy 1.", state);
+    const prefs = userBuyPrefs(await readBuyPrefs(), userId);
+    xDmStartPending(state, senderId, { action: "buy", userId, amountSol: prefs.quickAmount, mint });
+    return await xDmSend(senderId, `Confirm buy ${prefs.quickAmount} SOL of ${shortMint(mint)}?\nReply YES to send or NO to cancel.\nExpires in 2 minutes.\n${xDmTokenUrl(mint)}`, state);
+  }
+  const buyAmountLast = text.match(/^(?:buy|ape)\s+([0-9]*\.[0-9]+|[0-9]+(?:\.[0-9]+)?)\s*(?:sol)?$/i);
+  if (buyAmountLast && !/^(?:buy|ape)\s+[1-6]$/i.test(text)) {
+    const mint = xDmRecentTargets(state, senderId)[0] || "";
+    if (!mint) return await xDmSend(senderId, "Paste a CA first, then say buy 0.1 or buy 1 0.1.", state);
+    const amountSol = Math.max(0.001, Math.min(50, Number(buyAmountLast[1]) || 0.1));
+    xDmStartPending(state, senderId, { action: "buy", userId, amountSol, mint });
+    return await xDmSend(senderId, `Confirm buy ${amountSol} SOL of ${shortMint(mint)}?\nReply YES to send or NO to cancel.\nExpires in 2 minutes.\n${xDmTokenUrl(mint)}`, state);
+  }
+  const sellSlot = text.match(/^sell\s+([1-6])\s+(25|50|75|100)%?$/i) || text.match(/^sell\s+(25|50|75|100)%?\s+([1-6])$/i);
+  if (sellSlot) {
+    const slot = sellSlot[2] && Number(sellSlot[2]) <= 6 ? sellSlot[2] : sellSlot[1];
+    const pct = sellSlot[2] && Number(sellSlot[2]) <= 6 ? sellSlot[1] : sellSlot[2];
+    const mint = xDmResolveRecentTarget(state, senderId, slot);
+    if (!mint) return await xDmSend(senderId, "That coin slot is empty. Paste one or more CAs first.", state);
+    const percent = Number(pct);
+    xDmStartPending(state, senderId, { action: "sell", userId, percent, mint });
+    return await xDmSend(senderId, `Confirm sell ${percent}% of #${slot} ${shortMint(mint)}?\nReply YES to send or NO to cancel.\nExpires in 2 minutes.\n${xDmTokenUrl(mint)}`, state);
+  }
+  const sellLastPct = text.match(/^sell\s+(25|50|75|100)%?$/i);
+  if (sellLastPct) {
+    const mint = xDmRecentTargets(state, senderId)[0] || "";
+    if (!mint) return await xDmSend(senderId, "Paste a CA first, then use sell 50 or sell 1 50.", state);
+    const percent = Number(sellLastPct[1]);
+    xDmStartPending(state, senderId, { action: "sell", userId, percent, mint });
+    return await xDmSend(senderId, `Confirm sell ${percent}% of ${shortMint(mint)}?\nReply YES to send or NO to cancel.\nExpires in 2 minutes.\n${xDmTokenUrl(mint)}`, state);
+  }
   const buyMatch = text.match(/\bbuy\s+([0-9]*\.?[0-9]+)\s+(?:sol\s+)?([1-9A-HJ-NP-Za-km-z]{32,48}|0x[0-9a-fA-F]{40})/i);
   if (buyMatch) {
     const amountSol = Math.max(0.001, Math.min(50, Number(buyMatch[1]) || 0));
     const mint = buyMatch[2];
+    xDmRememberTargets(state, senderId, [mint]);
     xDmStartPending(state, senderId, { action: "buy", userId, amountSol, mint });
     return await xDmSend(senderId, `Confirm buy ${amountSol} SOL of ${shortMint(mint)}?\nReply YES to send or NO to cancel.\nExpires in 2 minutes.\n${xDmTokenUrl(mint)}`, state);
   }
@@ -33752,6 +33874,7 @@ async function xDmHandleEvent(event, state) {
   if (sellMatch) {
     const percent = Number(sellMatch[1]);
     const mint = sellMatch[2];
+    xDmRememberTargets(state, senderId, [mint]);
     xDmStartPending(state, senderId, { action: "sell", userId, percent, mint });
     return await xDmSend(senderId, `Confirm sell ${percent}% of ${shortMint(mint)}?\nReply YES to send or NO to cancel.\nExpires in 2 minutes.\n${xDmTokenUrl(mint)}`, state);
   }
@@ -33761,7 +33884,7 @@ async function xDmHandleEvent(event, state) {
       "Open Telegram /start or the web terminal for launch, volume, bundle, and copy tools."
     ].join("\n"), state);
   }
-  return await xDmSend(senderId, xDmHelpText(true), state);
+  return await xDmSend(senderId, xDmHelpText(true, state, senderId), state);
 }
 async function xDmPollTick() {
   if (!xDmTerminalEnabled() || !xDmConfigured() || xDmPollRunning) return { off: true };
