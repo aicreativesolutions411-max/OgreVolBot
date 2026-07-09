@@ -20958,6 +20958,7 @@ function walletLaunchShortAddress(address = "", chain = "solana") {
 }
 
 function walletLaunchTokenKey(match = {}, chain = "solana") {
+  if (!match || typeof match !== "object") return "";
   const token = String(chain === "robinhood"
     ? (match.tokenAddress || match.address || match.token || "")
     : (match.tokenMint || match.mint || match.ca || "")).trim();
@@ -21078,6 +21079,7 @@ async function processWalletLaunchWatchPlan(plan, walletStore, knownMatch = null
   }
 
   const match = knownMatch || await findWalletLaunchCandidate(plan);
+  if (!match) return { changed: true, message: null };
   const tokenKey = walletLaunchTokenKey(match, chain);
   if (!tokenKey) return { changed: true, message: null };
 
