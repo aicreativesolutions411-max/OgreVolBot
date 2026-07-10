@@ -14280,7 +14280,7 @@ async function handleMessage(message, userId) {
     return;
   }
   // 👛 /wallet <address> — explicit wallet scan for a SOL or Robinhood (0x…) wallet: stats · PnL · top holdings.
-  const walletCommand = parseCommandWithArgument(text, ["wallet", "wallets", "pnl", "portfolio"]);
+  const walletCommand = parseCommandWithArgument(text, ["wallet", "walletscan"]);
   if (walletCommand) {
     const wraw = String(walletCommand.argument || "").trim();
     const waddr = (wraw.match(/0x[0-9a-fA-F]{40}/) || [])[0] || (wraw.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/) || [])[0] || "";
@@ -36195,7 +36195,7 @@ async function isSolMintAddress(addr) {
     const info = await rpcRead("addr-kind", (conn) => conn.getAccountInfo(new PublicKey(addr), "confirmed"), { timeoutMs: 4500 });
     const owner = info && info.owner ? info.owner.toBase58() : "";
     mint = owner === TOKEN_PROGRAM_ID.toBase58() || owner === "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";  // SPL + Token-2022
-  } catch { mint = false; }
+  } catch (error) { throw error; }
   _addrKindCache.set(addr, { at: Date.now(), mint });
   if (_addrKindCache.size > 1000) _addrKindCache.delete(_addrKindCache.keys().next().value);
   return mint;
@@ -36211,7 +36211,7 @@ async function isRhContract(addr) {
     const provider = new ethers.JsonRpcProvider(CONFIG.rhChainRpcUrl, RH_CHAIN_ID, { staticNetwork: true });
     const code = await provider.getCode(addr);
     contract = !!code && code !== "0x" && code.length > 2;
-  } catch { contract = false; }
+  } catch (error) { throw error; }
   _rhKindCache.set(addr.toLowerCase(), { at: Date.now(), contract });
   if (_rhKindCache.size > 1000) _rhKindCache.delete(_rhKindCache.keys().next().value);
   return contract;
