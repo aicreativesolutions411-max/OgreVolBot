@@ -20421,6 +20421,15 @@ async function processTradePlans(options = {}) {
         continue;
       }
 
+      if (plan.status === "rh_copy_wallet_watch") {
+        const result = await processRhCopyWalletWatchPlan(plan, { persistCheckpoint: persistPlanCheckpoint });
+        if (result.changed) changed = true;
+        if (result.message && plan.chatId) {
+          await sayHtml(plan.chatId, result.message).catch(() => {});
+        }
+        continue;
+      }
+
       if (plan.status === "wallet_launch_watch") {
         const result = await processWalletLaunchWatchPlan(plan, walletStore, null, { persistCheckpoint: persistPlanCheckpoint });
         if (result.changed) changed = true;
@@ -21091,6 +21100,154 @@ async function copyWalletSoldTokenSince(wallet, tokenMint, sinceIso) {
     if (ts === 0 || ts >= sinceMs - 5_000) return true;   // sold at/after our entry (small clock-skew grace)
   }
   return false;
+}
+
+// ---- 🪶🤖 Robinhood auto-copy-trade -------------------------------------------------------------
+// Mirrors the SOL copy engine on Robinhood Chain, reusing the bot's CUSTODIAL RH trading (each SOL
+// wallet has a derived EVM wallet the bot signs with): webRhTradeCore (buy/sell), webRhArmGuard (TP/SL).
+// The source wallet has no trades API, so we detect its buys by NEW ERC-20 tokens appearing in its
+// on-chain holdings (rhAddressTokens/Blockscout) and its sells by tokens disappearing. See [[rh-custodial-trading]].
+const RH_COPY_SCAN_INTERVAL_MS = 30_000;
+const RH_COPY_STABLE_RE = /^(w?eth|usdc|usdt|usdg|usdh|dai|busd|frax|usd|gusd)$/i;
+async function processRhCopyWalletWatchPlan(plan, options = {}) {
+  const lastScanAt = Date.parse(plan.lastScanAt || "");
+  if (Number.isFinite(lastScanAt) && Date.now() - lastScanAt < RH_COPY_SCAN_INTERVAL_MS) return { changed: false, message: null };
+  plan.lastScanAt = new Date().toISOString();
+
+  const source = String(plan.copyWallet || "").toLowerCase();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(source)) { plan.lastError = "invalid source wallet"; return { changed: true, message: null }; }
+  const current = await rhAddressTokens(source).catch(() => null);
+  if (!Array.isArray(current)) { plan.lastError = "couldn't read source holdings"; return { changed: true, message: null }; }
+
+  const held = new Map();  // tokenAddr(lc) -> { symbol, uiAmount }
+  for (const t of current) {
+    const addr = String(t.address || "").toLowerCase();
+    if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) continue;
+    if (RH_COPY_STABLE_RE.test(String(t.symbol || ""))) continue;   // don't mirror stablecoin/ETH balances
+    if (!(Number(t.uiAmount) > 0)) continue;
+    held.set(addr, { symbol: t.symbol || "", uiAmount: Number(t.uiAmount) });
+  }
+
+  if (!Array.isArray(plan.seenTokens)) plan.seenTokens = [];
+  if (!plan.holdings || typeof plan.holdings !== "object") plan.holdings = {};
+
+  // Safety baseline: the FIRST successful read seeds the seen-set and buys nothing, so we can NEVER mirror
+  // the source's pre-existing bags (guards against arm-time seeding failing on an RPC hiccup). Only FUTURE buys.
+  if (!plan.seeded) {
+    plan.seeded = true;
+    plan.seenTokens = uniqueStrings([...(plan.seenTokens || []), ...held.keys()]).slice(-200);
+    if (typeof options.persistCheckpoint === "function") await options.persistCheckpoint().catch(() => {});
+    return { changed: true, message: null };
+  }
+
+  const seen = new Set(plan.seenTokens.map((x) => String(x).toLowerCase()));
+  const messages = [];
+
+  // 1) NEW BUY — a token the source now holds that we haven't seen yet. Mirror ONE per tick (anti-burst).
+  const fresh = [...held.keys()].find((addr) => !seen.has(addr) && plan.holdings[addr] == null);
+  if (fresh) {
+    const info = held.get(fresh) || {};
+    const sym = escapeTelegramHtml((info.symbol || shortMint(fresh)).slice(0, 12));
+    try {
+      const safety = await rhHoneypotCheck(fresh, CONFIG.rhChainRpcUrl).catch(() => null);
+      if (safety && safety.verdict === "block") {
+        messages.push(`🪶🤖 Copy skipped $${sym}: honeypot / can't-sell trap.`);
+      } else {
+        await webRhTradeCore(plan.userId, {
+          walletIndex: plan.walletIndex,
+          tokenAddress: fresh,
+          side: "buy",
+          amountSol: plan.amountSol,
+          payCurrency: "sol",
+          tradeAttemptId: `${plan.id}-${fresh}-buy`,
+        }, {});
+        if (plan.mirrorSells) {
+          plan.holdings[fresh] = { symbol: info.symbol || shortMint(fresh), at: new Date().toISOString() };
+        } else if (Number(plan.takeProfitPct) > 0 || Number(plan.stopLossPct) > 0) {
+          await webRhArmGuard(plan.userId, {
+            walletIndex: plan.walletIndex, tokenAddress: fresh,
+            takeProfitPct: plan.takeProfitPct || 0, stopLossPct: plan.stopLossPct || 0,
+            sellPercent: 100, symbol: info.symbol || "",
+          }).catch(() => {});
+        }
+        const tail = plan.mirrorSells ? " — will sell when they sell." : ((Number(plan.takeProfitPct) > 0 || Number(plan.stopLossPct) > 0) ? ` — TP +${plan.takeProfitPct || 0}% / SL −${plan.stopLossPct || 0}% armed.` : ".");
+        messages.push(`🪶🤖 <b>Copied a Robinhood buy</b> — bought <b>$${sym}</b> with ${plan.amountSol} SOL${tail}`);
+      }
+    } catch (error) {
+      messages.push(`🪶🤖 Copy of $${sym} failed: ${escapeTelegramHtml(friendlyError(error))}.`);
+    }
+  }
+
+  // 2) Only mirror FUTURE new tokens: remember everything the source holds now.
+  plan.seenTokens = uniqueStrings([...(plan.seenTokens || []), ...held.keys()]).slice(-200);
+
+  // 3) MIRROR-SELLS — a token we copied that the source no longer holds → close our bag 100%.
+  if (plan.mirrorSells) {
+    for (const [addr, rec] of Object.entries(plan.holdings)) {
+      if (held.has(addr)) continue;   // source still holds it → keep riding
+      try {
+        await webRhTradeCore(plan.userId, {
+          walletIndex: plan.walletIndex, tokenAddress: addr, side: "sell", percent: 100,
+          tradeAttemptId: `${plan.id}-${addr}-sell`,
+        }, {});
+        messages.push(`🪶🤖 <b>Mirror-sold $${escapeTelegramHtml((rec.symbol || shortMint(addr)).slice(0, 12))}</b> — the tracked wallet exited, so I closed your bag.`);
+        delete plan.holdings[addr];
+      } catch (error) {
+        if (/holds none/i.test(String(error?.message || ""))) { delete plan.holdings[addr]; }  // already out
+        else plan.lastError = friendlyError(error);   // keep + retry next tick
+      }
+    }
+  }
+
+  if (typeof options.persistCheckpoint === "function") await options.persistCheckpoint().catch(() => {});
+  return { changed: true, message: messages.length ? messages.join("\n") : null };
+}
+
+// Arm a Robinhood copy-wallet watch (from the 🤖 Copy Trade popup). Seeds the seen-set with the source's
+// CURRENT holdings so only its FUTURE buys are mirrored. Runs on the same durable dispatcher as SOL copies.
+async function webCreateRhCopyWallet(userId, body = {}) {
+  const copyWallet = String(body.copyWallet || body.wallet || "").trim().toLowerCase();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(copyWallet)) { const e = new Error("Paste a valid Robinhood (0x…) wallet to copy."); e.statusCode = 400; throw e; }
+  const store = await readWalletStore();
+  const walletIndexes = Array.isArray(body.walletIndexes) ? body.walletIndexes.map((v) => Number.parseInt(v, 10)).filter((n) => n >= 1) : [];
+  const walletIndex = walletIndexes[0] || 1;
+  const wallet = getWalletAt(store, walletIndex, userId);   // throws if the user has no wallet
+  const amountSol = Number(firstString(body.amountSol, body.amount) || 0);
+  if (!(amountSol >= 0.005) || amountSol > 5) { const e = new Error("Copy size must be between 0.005 and 5 SOL."); e.statusCode = 400; throw e; }
+  const mirrorSells = cleanLaunchBoolean(body.mirrorSells);
+  const takeProfitPct = mirrorSells ? 0 : Math.max(0, Number(body.takeProfitPct || 0));
+  const stopLossPct = mirrorSells ? 0 : Math.max(0, Number(body.stopLossPct || 0));
+  const automationPermission = await requireWebAutomationPermission(userId, "Robinhood copy-wallet automation");
+  const currentTokens = await rhAddressTokens(copyWallet).catch(() => []);
+  const seenTokens = (Array.isArray(currentTokens) ? currentTokens : [])
+    .map((t) => String(t.address || "").toLowerCase()).filter((a) => /^0x[0-9a-fA-F]{40}$/.test(a));
+  const watchKey = durableTradeWatchKey([userId, "rh_copy_wallet", copyWallet, wallet.publicKey, amountSol, mirrorSells, takeProfitPct, stopLossPct]);
+  const plan = {
+    id: crypto.randomUUID(),
+    status: "rh_copy_wallet_watch",
+    source: "rh_copy_wallet",
+    userId,
+    chatId: body.chatId ?? null,
+    watchKey,
+    copyWallet,
+    walletIndex,
+    walletPublicKey: wallet.publicKey,
+    amountSol,
+    mirrorSells,
+    takeProfitPct,
+    stopLossPct,
+    automationPermission,
+    seenTokens,
+    holdings: {},
+    createdAt: new Date().toISOString(),
+    lastScanAt: null,
+  };
+  const stored = await addUniqueActiveTradeWatch(plan, ["rh_copy_wallet_watch"]);
+  if (stored.created) {
+    await audit("web_create_rh_copy_wallet_watch", { userId, copyWallet, amountSol, mirrorSells, takeProfitPct, stopLossPct }).catch(() => {});
+    scheduleTradePlanProcessing("rh copy wallet", [1500, 6000, 18000, 30000]);
+  }
+  return { ok: true, created: stored.created, plan: stored.plan };
 }
 
 async function processCopyWalletWatchPlan(plan, walletStore, options = {}) {
@@ -36480,8 +36637,8 @@ async function sendWalletScanCard(chatId, address) {
       { text: "🔎 Explorer", url: s.explorer },
       ...(s.chain === "solana" ? [{ text: "👛 Track this wallet", callback_data: `wt:add:${address}` }] : []),
     ],
-    // 🤖 Copy Trade — SOL only (the copy engine runs on Solana Tracker signals). Opens a settings popup.
-    ...(s.chain === "solana" ? [[{ text: "🤖 Copy Trade this wallet", callback_data: `ct:open:${address}` }]] : []),
+    // 🤖 Copy Trade — SOL (Solana Tracker signals) AND Robinhood (custodial RH trading). Opens a settings popup.
+    [{ text: "🤖 Copy Trade this wallet", callback_data: `ct:open:${address}` }],
   ] };
   await sayHtml(chatId, formatWalletScanCard(s), kb).catch(() => {});
 }
@@ -42551,8 +42708,8 @@ const copyCfgState = new Map();      // userId -> { wallet, amountSol, exitMode,
 const copyCfgInputPending = new Map();  // userId -> { kind:"size"|"tpsl", setupMsgId, at }
 const COPY_SIZE_PRESETS = [0.05, 0.1, 0.25, 0.5];
 const COPY_TP_PRESETS = { safe: { tp: 25, sl: 8, label: "Safe" }, balanced: { tp: 50, sl: 15, label: "Balanced" }, moon: { tp: 100, sl: 25, label: "Moon" } };
-function copyCfgDefaults(wallet) {
-  return { wallet, amountSol: 0.1, exitMode: "mirror", tpPct: 50, slPct: 35, at: Date.now() };
+function copyCfgDefaults(wallet, chain = "solana") {
+  return { wallet, chain, amountSol: 0.1, exitMode: "mirror", tpPct: 50, slPct: 35, at: Date.now() };
 }
 async function copyCfgTradingWalletLabel(userId) {
   try {
@@ -42565,18 +42722,22 @@ async function copyCfgView(userId) {
   const cfg = copyCfgState.get(String(userId));
   if (!cfg) return null;
   const tradingLabel = await copyCfgTradingWalletLabel(userId);
+  const isRh = cfg.chain === "robinhood";
+  const walletShort = isRh ? `${String(cfg.wallet).slice(0, 6)}…${String(cfg.wallet).slice(-4)}` : shortMint(cfg.wallet);
   const mirror = cfg.exitMode === "mirror";
   const exitLine = mirror
-    ? `🔁 <b>Mirror sells</b> — sells when the wallet sells (with a wide ${cfg.slPct}% safety stop)`
+    ? `🔁 <b>Mirror sells</b> — sells when the wallet sells${isRh ? "" : ` (with a wide ${cfg.slPct}% safety stop)`}`
     : `🎯 <b>Auto TP/SL</b> — take-profit +${cfg.tpPct}% / stop-loss −${cfg.slPct}%`;
   const text = [
-    `🤖 <b>Copy Trade</b>  <code>${escapeTelegramHtml(shortMint(cfg.wallet))}</code>`,
+    `🤖 <b>Copy Trade</b> ${isRh ? "🪶" : "◎"} <code>${escapeTelegramHtml(walletShort)}</code>`,
     "",
     "Every new coin this wallet buys, your wallet buys too — then exits on the strategy you pick.",
     "",
-    `💰 Buy size: <b>${cfg.amountSol} SOL</b> per copied coin`,
+    `💰 Buy size: <b>${cfg.amountSol} SOL</b> per copied coin${isRh ? " (funded to Robinhood ETH)" : ""}`,
     `🎯 Exit: ${exitLine}`,
-    tradingLabel ? `👛 Trades from: <b>${escapeTelegramHtml(tradingLabel)}</b>` : "⚠️ You have no wallet yet — create one first (/wallets).",
+    isRh
+      ? "🪶 Trades on <b>Robinhood Chain</b> from your wallet's RH balance (auto-funded from SOL)."
+      : (tradingLabel ? `👛 Trades from: <b>${escapeTelegramHtml(tradingLabel)}</b>` : "⚠️ You have no wallet yet — create one first (/wallets)."),
   ].join("\n");
   const sizeRow = COPY_SIZE_PRESETS.map((a) => ({ text: `${cfg.amountSol === a ? "✅ " : ""}${a}◎`, callback_data: `ct:sz:${a}` }));
   const rows = [
@@ -42613,10 +42774,11 @@ async function handleCopyTradeCallback(query, userId) {
   const ack = (t, alert) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: Boolean(alert) } : {}) }).catch(() => {});
   const key = String(userId);
   if (data === "ct:noop") { await ack(); return true; }
-  const mOpen = data.match(/^ct:open:([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+  const mOpen = data.match(/^ct:open:(0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$/);
   if (mOpen) {
-    if (!CONFIG.solanaTrackerApiKey) { await ack("Copy Trade is warming up and isn't available right now.", true); return true; }
-    copyCfgState.set(key, copyCfgDefaults(mOpen[1]));
+    const chain = /^0x/i.test(mOpen[1]) ? "robinhood" : "solana";
+    if (chain === "solana" && !CONFIG.solanaTrackerApiKey) { await ack("Copy Trade is warming up and isn't available right now.", true); return true; }
+    copyCfgState.set(key, copyCfgDefaults(mOpen[1], chain));
     await copyCfgRender(chatId, messageId, userId);
     await ack();
     return true;
@@ -42635,29 +42797,43 @@ async function handleCopyTradeCallback(query, userId) {
   if (data === "ct:arm") {
     await ack("Arming…");
     const mirror = cfg.exitMode === "mirror";
+    const isRh = cfg.chain === "robinhood";
+    const walletShort = isRh ? `${String(cfg.wallet).slice(0, 6)}…${String(cfg.wallet).slice(-4)}` : shortMint(cfg.wallet);
     try {
-      await webCreateKolCopyWallet(userId, {
-        copyWallet: cfg.wallet,
-        walletIndexes: [1],   // your primary wallet (matches the card's "Trades from"); multi-wallet copy lives in /copytrade
-        amountSol: String(cfg.amountSol),
-        mirrorSells: mirror,
-        ...(mirror ? { stopLossPct: String(cfg.slPct) } : { takeProfitPct: String(cfg.tpPct), stopLossPct: String(cfg.slPct) }),
-        slippageBps: 400,
-      });
+      if (isRh) {
+        await webCreateRhCopyWallet(userId, {
+          copyWallet: cfg.wallet,
+          walletIndexes: [1],
+          amountSol: String(cfg.amountSol),
+          mirrorSells: mirror,
+          chatId,
+          ...(mirror ? {} : { takeProfitPct: String(cfg.tpPct), stopLossPct: String(cfg.slPct) }),
+        });
+      } else {
+        await webCreateKolCopyWallet(userId, {
+          copyWallet: cfg.wallet,
+          walletIndexes: [1],   // your primary wallet (matches the card's "Trades from"); multi-wallet copy lives in /copytrade
+          amountSol: String(cfg.amountSol),
+          mirrorSells: mirror,
+          ...(mirror ? { stopLossPct: String(cfg.slPct) } : { takeProfitPct: String(cfg.tpPct), stopLossPct: String(cfg.slPct) }),
+          slippageBps: 400,
+        });
+      }
       copyCfgState.delete(key);
       const exitLine = mirror
-        ? `Exits when <code>${escapeTelegramHtml(shortMint(cfg.wallet))}</code> sells (safety stop −${cfg.slPct}%).`
+        ? `Exits when <code>${escapeTelegramHtml(walletShort)}</code> sells${isRh ? "." : ` (safety stop −${cfg.slPct}%).`}`
         : `Auto-exit: +${cfg.tpPct}% take-profit / −${cfg.slPct}% stop-loss.`;
       await telegram("editMessageText", {
         chat_id: chatId, message_id: messageId, parse_mode: "HTML", disable_web_page_preview: true,
         text: [
-          "✅ <b>Copy Trade armed</b>",
+          "✅ <b>Copy Trade armed</b>" + (isRh ? " 🪶" : ""),
           "",
-          `Watching <code>${escapeTelegramHtml(shortMint(cfg.wallet))}</code>. Each new coin it buys → your wallets buy the same coin with <b>${cfg.amountSol} SOL</b>.`,
+          `Watching <code>${escapeTelegramHtml(walletShort)}</code>. Each new coin it buys → your ${isRh ? "Robinhood wallet buys" : "wallet buys"} the same coin with <b>${cfg.amountSol} SOL</b>.`,
           exitLine,
+          isRh ? "\n<i>Robinhood buys auto-fund from your SOL — keep a little SOL in your wallet.</i>" : "",
           "",
           "It runs in the background — you'll get a message the moment it fires.",
-        ].join("\n"),
+        ].filter((l) => l !== "").join("\n"),
         reply_markup: { inline_keyboard: [[{ text: "📊 Positions", callback_data: "positions_overview" }]] },
       }).catch(() => {});
     } catch (error) {
