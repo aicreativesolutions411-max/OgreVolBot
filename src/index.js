@@ -14160,6 +14160,12 @@ async function handleMessage(message, userId) {
       // A Robinhood Chain contract (0x…40-hex) anywhere in chat = auto RH scan card (same Scan toggle).
       const rhCaTok = /^0x[0-9a-fA-F]{40}$/.test(String(explicitTarget)) ? String(explicitTarget) : ((rawGroupText.match(/^0x[0-9a-fA-F]{40}$/) || [])[0] || "");
       if (rhCaTok) {
+        // A plain WALLET (EOA) pasted → 👛 wallet scan, NOT a coin scan / buy-bot lock. Contract → coin path.
+        if (!(await isRhContract(rhCaTok).catch(() => true))) {
+          const gbW = await getGroupBotEntry(chatId).catch(() => null);
+          if (!gbW || groupBotFeatureOn(gbW, "scan")) await sendWalletScanCard(chatId, rhCaTok).catch(() => {});
+          return;
+        }
         const gbEntry = await getGroupBotEntry(chatId).catch(() => null);
         // BUY BOT auto-CA (RH): the first 0x pasted becomes the group's tracked Robinhood coin — the
         // per-buy watcher reads its V3 pool's Swap logs and posts the same buy card as Solana coins.
@@ -14172,6 +14178,12 @@ async function handleMessage(message, userId) {
       }
       const bareCa = isLikelySolMint(explicitTarget) ? [explicitTarget, explicitTarget] : (isLikelySolMint(caTok) ? [caTok, caTok] : null);
       if (bareCa) {
+        // A plain WALLET (base58 that isn't a mint) → 👛 wallet scan, NOT a coin scan / buy-bot lock.
+        if (!(await isSolMintAddress(bareCa[1]).catch(() => true))) {
+          const gbW = await getGroupBotEntry(chatId).catch(() => null);
+          if (!gbW || groupBotFeatureOn(gbW, "scan")) await sendWalletScanCard(chatId, bareCa[1]).catch(() => {});
+          return;
+        }
         const gbEntry = await getGroupBotEntry(chatId).catch(() => null);
         // BUY BOT auto-CA: the first CA pasted becomes the group's tracked token (when Buy Bot is on).
         if (groupBotFeatureOn(gbEntry, "buybot") && !gbEntry.token) {
@@ -14213,10 +14225,18 @@ async function handleMessage(message, userId) {
     // A Robinhood Chain contract (0x…) pasted in a DM = the RH scan card (RH trading lives on the
     // site, so there's no DM buy panel — the card carries the ⚡ Trade link). Same "just paste a CA" reflex.
     const rhDm = /^0x[0-9a-fA-F]{40}$/.test(String(dmTarget)) ? String(dmTarget) : ((caTokDm.match(/^0x[0-9a-fA-F]{40}$/) || [])[0] || "");
-    if (rhDm) { await sendRhScanCard(chatId, rhDm); return; }
+    if (rhDm) {
+      // A CONTRACT (token) → coin scan card; an EOA → 👛 wallet scan (stats · PnL · holdings). On any classify
+      // error default to the coin card so nothing regresses.
+      if (await isRhContract(rhDm).catch(() => true)) await sendRhScanCard(chatId, rhDm);
+      else await sendWalletScanCard(chatId, rhDm);
+      return;
+    }
     const dmSolMint = isLikelySolMint(dmTarget) ? String(dmTarget) : (isLikelySolMint(caTokDm) ? caTokDm : "");
     if (dmSolMint) {
-      await sendDmBuyPanel(chatId, userId, dmSolMint);
+      // A MINT → the one-tap buy panel; a plain WALLET → the 👛 wallet scan card.
+      if (await isSolMintAddress(dmSolMint).catch(() => true)) await sendDmBuyPanel(chatId, userId, dmSolMint);
+      else await sendWalletScanCard(chatId, dmSolMint);
       return;
     }
   }
@@ -14257,6 +14277,16 @@ async function handleMessage(message, userId) {
   const lookCommand = parseCommandWithArgument(text, ["look", "scan", "scan_ca", "check"]);
   if (lookCommand) {
     await handleTelegramLookCommand(chatId, message, lookCommand.argument);
+    return;
+  }
+  // 👛 /wallet <address> — explicit wallet scan for a SOL or Robinhood (0x…) wallet: stats · PnL · top holdings.
+  const walletCommand = parseCommandWithArgument(text, ["wallet", "wallets", "pnl", "portfolio"]);
+  if (walletCommand) {
+    const wraw = String(walletCommand.argument || "").trim();
+    const waddr = (wraw.match(/0x[0-9a-fA-F]{40}/) || [])[0] || (wraw.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/) || [])[0] || "";
+    if (!waddr) { await say(chatId, "👛 Usage: <code>/wallet &lt;address&gt;</code> — paste a Solana or Robinhood (0x…) wallet for its stats, PnL &amp; top holdings.").catch(() => {}); return; }
+    if (tgCommandOnCooldown(chatId, "walletscan", TG_LOOK_COOLDOWN_MS)) return;
+    await sendWalletScanCard(chatId, waddr);
     return;
   }
   const alphaCommand = parseCommandWithArgument(text, ["alpha", "picks", "trending"]);
@@ -36152,6 +36182,40 @@ async function solWalletScan(wallet) {
   if (solWalletScanCache.size > 200) solWalletScanCache.delete(solWalletScanCache.keys().next().value);
   return v;
 }
+// Is a base58 address a TOKEN MINT (owned by SPL Token / Token-2022) vs a plain WALLET? Cached. This is how
+// a pasted address routes: mint → coin scan, wallet → wallet scan. A non-existent/off-curve account reads as
+// "not a mint" → treated as a wallet (a coin scan would find nothing anyway).
+const _addrKindCache = new Map();
+async function isSolMintAddress(addr) {
+  if (!solanaPublicKeyLike(addr)) return false;
+  const c = _addrKindCache.get(addr);
+  if (c && Date.now() - c.at < 10 * 60_000) return c.mint;
+  let mint = false;
+  try {
+    const info = await rpcRead("addr-kind", (conn) => conn.getAccountInfo(new PublicKey(addr), "confirmed"), { timeoutMs: 4500 });
+    const owner = info && info.owner ? info.owner.toBase58() : "";
+    mint = owner === TOKEN_PROGRAM_ID.toBase58() || owner === "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";  // SPL + Token-2022
+  } catch { mint = false; }
+  _addrKindCache.set(addr, { at: Date.now(), mint });
+  if (_addrKindCache.size > 1000) _addrKindCache.delete(_addrKindCache.keys().next().value);
+  return mint;
+}
+// Is a 0x address a CONTRACT (token) vs an EOA (wallet)? Empty eth_getCode = EOA = wallet. Cached.
+const _rhKindCache = new Map();
+async function isRhContract(addr) {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return false;
+  const c = _rhKindCache.get(addr.toLowerCase());
+  if (c && Date.now() - c.at < 10 * 60_000) return c.contract;
+  let contract = false;
+  try {
+    const provider = new ethers.JsonRpcProvider(CONFIG.rhChainRpcUrl, RH_CHAIN_ID, { staticNetwork: true });
+    const code = await provider.getCode(addr);
+    contract = !!code && code !== "0x" && code.length > 2;
+  } catch { contract = false; }
+  _rhKindCache.set(addr.toLowerCase(), { at: Date.now(), contract });
+  if (_rhKindCache.size > 1000) _rhKindCache.delete(_rhKindCache.keys().next().value);
+  return contract;
+}
 // One entry point for a posted wallet on either chain → normalized scan (or null if not a wallet address).
 async function getWalletScan(address) {
   const a = String(address || "").trim();
@@ -42204,6 +42268,13 @@ async function handleWalletTrackerCallback(query, userId) {
     if (n >= WT_FREE_CAP) { await ack(`Max ${WT_FREE_CAP} wallets — remove one first.`); return true; }
     wtInputPending.set(String(userId), { kind: "add", setupMsgId: messageId, at: Date.now() });
     await ack("Send the wallet address (and an optional label), e.g.  <addr> Whale #1");
+    return true;
+  }
+  // One-tap track from a 👛 wallet-scan card (wt:add:<addr>) — adds it straight to this user's tracker.
+  const madd = data.match(/^wt:add:([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+  if (madd) {
+    const r = await wtAdd(userId, madd[1], "").catch(() => ({ ok: false, error: "couldn't add" }));
+    await ack(r.ok ? "👛 Tracking this wallet — I'll DM you its buys & sells." : (r.error || "Couldn't add this wallet."));
     return true;
   }
   const mw = data.match(/^wt:w:([1-9A-HJ-NP-Za-km-z]{32,44})$/);
