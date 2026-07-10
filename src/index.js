@@ -13514,6 +13514,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("qb:")) {
     if (await handleQuickBuyCallback(query, userId).catch(() => false)) return;
   }
+  // 🪶⚡ Robinhood one-tap trade (rqb:/rqs:) — SOL-funded buy or % sell on an RH coin, own wallet.
+  if (String(query.data || "").startsWith("rqb:") || String(query.data || "").startsWith("rqs:")) {
+    if (await handleRhQuickTradeCallback(query, userId).catch(() => false)) return;
+  }
   // ⚡ Quick Buy PRESET (qbp:<mint>) — buys the tapper's saved preset amount + arms their TP/SL.
   if (String(query.data || "").startsWith("qbp:")) {
     if (await handleQuickBuyPresetCallback(query, userId).catch(() => false)) return;
@@ -14326,12 +14330,15 @@ async function handleMessage(message, userId) {
     await handleTelegramLookCommand(chatId, message, lookCommand.argument);
     return;
   }
-  // 🥊 /pvp — group: the PvP arena panel (join, feed toggle, board). DM: the perps panel.
-  if (/^\/(pvp|perps)(?:@\w+)?\s*$/i.test(text.trim())) {
+  // 🥊 /pvp, /perps (slash optional) — group: the PvP arena panel in chat PLUS a setup DM to whoever
+  // typed it (wallet, funding, perps panel). DM: the perps panel directly.
+  if (/^\/?(pvp|perps)(?:@\w+)?\s*$/i.test(text.trim())) {
     if (isPrivateChat(message.chat)) { await pvpRenderPerps(userId, null); return; }
     const gbPvp = await getGroupBotEntry(chatId).catch(() => null);
     const vPvp = pvpArenaView(gbPvp, chatId);
     await sayHtml(chatId, vPvp.text, vPvp.kb).catch(() => {});
+    const dmOk = await pvpSendSetupDm(userId);
+    if (!dmOk) await sayHtml(chatId, `📩 I couldn't DM you the setup — open @${CONFIG.telegramBotUsername || "SlimeWiredBot"}, press <b>Start</b>, then type /pvp again.`).catch(() => {});
     return;
   }
   // 👛 /wallet <address> — explicit wallet scan for a SOL or Robinhood (0x…) wallet: stats · PnL · top holdings.
@@ -39709,6 +39716,56 @@ async function handleQuickBuyCallback(query, userId) {
   await quickBuySendReceipt(userId, mint, amt, r.result);
   return true;
 }
+// 🪶⚡ Robinhood one-tap trades from group cards (PvP feed, scan cards): rqb:<sol>:<0x> buys the coin
+// with SOL from the tapper's OWN SlimeWire wallet (auto-bridged to RH ETH), rqs:<pct>:<0x> sells.
+// Same custodial path the site uses (webRhTrade → Relay), so honeypot guard + idempotency come free.
+async function handleRhQuickTradeCallback(query, userId) {
+  const data = String(query?.data || "");
+  const ack = (t, alert) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: Boolean(alert) } : {}) }).catch(() => {});
+  const mBuy = data.match(/^rqb:([\d.]+):(0x[0-9a-fA-F]{40})$/);
+  const mSell = data.match(/^rqs:(\d{1,3}):(0x[0-9a-fA-F]{40})$/);
+  if (!mBuy && !mSell) { await ack(); return true; }
+  if (!walletsForOwner(await readWalletStore(), userId).length) { await ack(noWalletAckText(await funnelNoWallet(userId)), true); return true; }
+  const tokenAddress = (mBuy || mSell)[2];
+  const sellKb = { inline_keyboard: [
+    [{ text: "💸 Sell 50%", callback_data: `rqs:50:${tokenAddress}` }, { text: "💸 Sell 100%", callback_data: `rqs:100:${tokenAddress}` }],
+    [{ text: "🔄 Buy again", callback_data: `rqb:0.05:${tokenAddress}` }],
+  ] };
+  if (mBuy) {
+    const amt = Number(mBuy[1]);
+    await ack("🪶 Buying on Robinhood Chain — takes ~30s, receipt lands in your DM…", true);
+    try {
+      const r = await webRhTrade(userId, {
+        walletIndex: "1", side: "buy", tokenAddress, amountSol: amt, payCurrency: "sol",
+        tradeAttemptId: `tg-rqb-${userId}-${tokenAddress.toLowerCase()}-${amt}-${Math.floor(Date.now() / 30_000)}`,
+      });
+      await sayHtml(userId, [
+        `🪶 ✅ <b>Bought ${escapeTelegramHtml(String(r.outSymbol || shortMint(tokenAddress)).slice(0, 12))}</b> with <b>${amt} ◎</b>`,
+        `├ Got <b>${escapeTelegramHtml(String(r.outFormatted || "?"))}</b> · now holding ${escapeTelegramHtml(String(r.tokenBalance ?? "?"))}`,
+        `└ <a href="${r.explorerTx}">tx on Blockscout</a>`,
+      ].join("\n"), sellKb).catch(() => {});
+    } catch (error) {
+      await sayHtml(userId, `🪶 Buy didn't land: ${escapeTelegramHtml(friendlyError(error))}`).catch(() => {});
+    }
+    return true;
+  }
+  const pct = Math.min(100, Math.max(1, Number(mSell[1])));
+  await ack(`🪶 Selling ${pct}% — receipt lands in your DM…`, true);
+  try {
+    const r = await webRhTrade(userId, {
+      walletIndex: "1", side: "sell", tokenAddress, percent: pct,
+      tradeAttemptId: `tg-rqs-${userId}-${tokenAddress.toLowerCase()}-${pct}-${Math.floor(Date.now() / 30_000)}`,
+    });
+    await sayHtml(userId, [
+      `🪶 ✅ <b>Sold ${pct}%</b> of <code>${escapeTelegramHtml(shortMint(tokenAddress))}</code>`,
+      `├ Received <b>${escapeTelegramHtml(String(r.outFormatted || "?"))} ${escapeTelegramHtml(String(r.outSymbol || "ETH"))}</b>`,
+      `└ <a href="${r.explorerTx}">tx on Blockscout</a>`,
+    ].join("\n"), pct < 100 ? sellKb : undefined).catch(() => {});
+  } catch (error) {
+    await sayHtml(userId, `🪶 Sell didn't land: ${escapeTelegramHtml(friendlyError(error))}`).catch(() => {});
+  }
+  return true;
+}
 // ⚡ QUICK BUY (preset) — one tap on any group/scan card buys the tapper's saved preset amount from
 // their own wallet AND arms their saved take-profit / stop-loss, all without leaving the group. Reuses
 // the idempotent own-wallet buy (tgExecuteQuickBuy) + the site's auto-exit engine.
@@ -43043,9 +43100,8 @@ const pvpPerpPending = new Map();    // userId -> { at } (custom $ size typed ne
 // subscription FREE. The perp fee is auto-CONVERTED to SOL at the live price and sent from the user's
 // custodial SOL wallet to the FEE WALLET on each execution. Best-effort: a fee transfer that can't land
 // (no SOL for rent/fee) never blocks or reverses the trade — it's logged + audited instead.
+// Fees are NOT surfaced in any PvP text (owner call, 2026-07-10) — charged silently, visible in audit only.
 const PVP_PERP_FEE_BPS = Math.max(0, Number.parseInt(process.env.PVP_PERP_FEE_BPS || "5", 10));   // 5 bps = 0.05%
-function pvpPerpFeePctLabel() { return (PVP_PERP_FEE_BPS / 100).toFixed(2).replace(/0+$/, "").replace(/\.$/, ""); }
-function pvpSpotFeePctLabel() { return ((CONFIG.bundleFeeBps || 0) / 100).toFixed(2).replace(/0+$/, "").replace(/\.$/, ""); }
 async function pvpChargePerpFeeSol(userId, notionalUsd, label = "perp") {
   try {
     if (!(PVP_PERP_FEE_BPS > 0) || !CONFIG.feeWallet) return null;
@@ -43096,9 +43152,7 @@ function pvpArenaView(entry, chatId) {
     "",
     `⚔️ In the arena: <b>${Object.keys(members).length}</b>${names.length ? ` — ${names.join(", ")}` : ""}`,
     "",
-    "How it works: Join → trade normally from your own SlimeWire wallet (paste a CA, ⚡ quick buy, copy trade…) → the room sees your entries live and can copy or fade you. Skill talks, PnL walks — settle it on the 🏆 board.",
-    "",
-    `💸 <b>Fees</b>: futures <b>${pvpPerpFeePctLabel()}%</b> per execution · spot <b>${pvpSpotFeePctLabel()}%</b> per execution · <b>free</b> to use, no subscription.`,
+    "How it works: Join → trade normally from your own SlimeWire wallet (paste a CA, ⚡ quick buy, copy trade…) → the room sees your entries live and can copy or fade you. Solana and Robinhood 🪶 coins both count. Skill talks, PnL walks — settle it on the 🏆 board.",
   ].join("\n");
   const kb = { inline_keyboard: [
     [{ text: "⚔️ Join the arena", callback_data: "pvp:join" }, { text: "🚪 Leave", callback_data: "pvp:leave" }],
@@ -43123,12 +43177,15 @@ async function pvpBroadcastTradeEvents(events) {
     if (!targets.length) continue;
     const isRh = /^0x/i.test(String(ev.tokenMint));
     const sol = Number(ev.type === "buy" ? ev.solLamportsSpent : ev.solLamportsReceived) / 1e9;
-    let sym = shortMint(ev.tokenMint);
-    if (!isRh) {
+    const eth = Number(ev.rhEthAmount) || 0;
+    let sym = String(ev.symbol || "").trim() || shortMint(ev.tokenMint);
+    if (!isRh && !ev.symbol) {
       const pairs = await fetchDexScreenerTokenPairsBatch([ev.tokenMint]).catch(() => []);
       const p = bestDexPairForToken(ev.tokenMint, pairs);
       if (p?.baseToken?.symbol) sym = p.baseToken.symbol;
     }
+    const amtLabel = Number.isFinite(sol) && sol > 0 ? `<b>${sol.toFixed(3)} ◎</b> of `
+      : (isRh && eth > 0 ? `<b>${eth.toFixed(5)} Ξ</b> of ` : "");
     for (const [chatId, g] of targets) {
       const dedup = `${chatId}:${ev.signature || `${uid}:${ev.tokenMint}:${ev.type}`}`;
       if (_pvpFeedSeen.has(dedup)) continue;
@@ -43136,13 +43193,14 @@ async function pvpBroadcastTradeEvents(events) {
       const name = escapeTelegramHtml(pvpMembers(g)[uid].name || "trader");
       const side = ev.type === "buy" ? "🟢 <b>aped</b>" : "🔴 <b>sold</b>";
       const text = [
-        `🥊 <b>${name}</b> ${side} ${Number.isFinite(sol) && sol > 0 ? `<b>${sol.toFixed(3)} ◎</b> of ` : ""}<b>$${escapeTelegramHtml(String(sym).slice(0, 12))}</b>${isRh ? " 🪶" : ""}`,
+        `🥊 <b>${name}</b> ${side} ${amtLabel}<b>$${escapeTelegramHtml(String(sym).slice(0, 12))}</b>${isRh ? " 🪶" : ""}`,
         `<code>${escapeTelegramHtml(ev.tokenMint)}</code>`,
         "<i>Copy them or fade them 👇</i>",
       ].join("\n");
       const kb = { inline_keyboard: [
-        ...(isRh ? [[{ text: "⚡ Trade it", url: `https://www.slimewire.org/#rhtrade/${ev.tokenMint}` }]]
-          : [[{ text: "⚡ Copy 0.05◎", callback_data: `qb:0.05:${ev.tokenMint}` }, { text: "⚡ 0.1◎", callback_data: `qb:0.1:${ev.tokenMint}` }, { text: "⚡ 0.25◎", callback_data: `qb:0.25:${ev.tokenMint}` }]]),
+        (isRh
+          ? [{ text: "⚡ Copy 0.05◎", callback_data: `rqb:0.05:${ev.tokenMint}` }, { text: "⚡ 0.1◎", callback_data: `rqb:0.1:${ev.tokenMint}` }, { text: "⚡ 0.25◎", callback_data: `rqb:0.25:${ev.tokenMint}` }]
+          : [{ text: "⚡ Copy 0.05◎", callback_data: `qb:0.05:${ev.tokenMint}` }, { text: "⚡ 0.1◎", callback_data: `qb:0.1:${ev.tokenMint}` }, { text: "⚡ 0.25◎", callback_data: `qb:0.25:${ev.tokenMint}` }]),
         [{ text: "😈 Counter", callback_data: `pvp:ctr:${ev.tokenMint}` }, { text: "🏆 Board", callback_data: "room:pnl" }],
       ] };
       await sayHtml(chatId, text, kb).catch(() => {});
@@ -43174,7 +43232,6 @@ async function pvpPerpsView(userId) {
     lines.push("", `⚠️ <b>No margin yet.</b> Deposit <b>USDC on Arbitrum</b> to your trading address and Hyperliquid credits it:\n<code>${evm.address}</code>`);
   }
   lines.push("", `🎯 Order: <b>${cfg.side === "long" ? "🟢 LONG" : "🔴 SHORT"} ${cfg.asset}</b> · size <b>$${cfg.usd}</b> · <b>${cfg.lev}x</b> (margin ≈ $${(cfg.usd / cfg.lev).toFixed(2)})`);
-  lines.push(`💸 Fee: <b>${pvpPerpFeePctLabel()}%</b> per execution, auto-converted to SOL.`);
   const pick = (cur, val, label, cb) => ({ text: `${String(cur) === String(val) ? "✅ " : ""}${label}`, callback_data: cb });
   const kb = { inline_keyboard: [
     HL_PVP_ASSETS.map((a) => pick(cfg.asset, a, a, `pvp:pa:${a}`)),
@@ -43191,6 +43248,24 @@ async function pvpRenderPerps(userId, messageId = null) {
   const view = await pvpPerpsView(userId);
   if (messageId) await telegram("editMessageText", { chat_id: userId, message_id: messageId, text: view.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: view.kb }).catch(() => sayHtml(userId, view.text, view.kb).catch(() => {}));
   else await sayHtml(userId, view.text, view.kb).catch(() => {});
+}
+// 📩 Setup DM — sent when someone types /pvp or /perps in a group: what PvP is + their perps panel
+// (wallet check, funding address, order builder) in one message. Returns false when the DM can't be
+// delivered (user never started the bot) so the group handler can hint them to press Start.
+async function pvpSendSetupDm(userId) {
+  try {
+    const view = await pvpPerpsView(userId);
+    const intro = [
+      "🥊 <b>PvP setup</b>",
+      "",
+      "├ ⚔️ <b>Arena</b> — tap “Join the arena” in your group and every bot trade you make posts there live for the room to copy or fade.",
+      "├ ⚡ <b>Spot</b> — trade Solana and Robinhood 🪶 coins from your SlimeWire wallet: paste a CA or quick-buy from any card.",
+      "└ 📈 <b>Perps</b> — long/short majors with leverage, right from this DM:",
+      "",
+    ].join("\n");
+    await sayHtml(userId, intro + "\n" + view.text, view.kb);
+    return true;
+  } catch { return false; }
 }
 async function handlePvpCallback(query, userId) {
   const data = String(query?.data || "");
@@ -43251,12 +43326,11 @@ async function handlePvpCallback(query, userId) {
       if (!wallets.length) throw new Error("Create a wallet first (/wallets).");
       const evm = evmWalletFromSolana(decryptWallet(wallets[0]).secretKey);
       const r = await hlMarketOpen({ privateKey: evm.privateKey, coin: cfg.asset, isBuy: cfg.side === "long", notionalUsd: cfg.usd, leverage: cfg.lev });
-      const fee = await pvpChargePerpFeeSol(userId, r.notionalUsd, "open");
+      await pvpChargePerpFeeSol(userId, r.notionalUsd, "open");
       await sayHtml(userId, [
         `✅ <b>${r.isBuy ? "🟢 LONG" : "🔴 SHORT"} ${escapeTelegramHtml(r.coin)}</b> opened`,
         `├ Size <b>${r.size} ${escapeTelegramHtml(r.coin)}</b> ($${r.notionalUsd.toFixed(2)}) @ <b>${r.avgPx}</b>`,
-        `├ Leverage <b>${r.leverage}x</b>`,
-        `└ Fee ${fee ? `<b>${(fee.lamports / 1e9).toFixed(6)} ◎</b> (${pvpPerpFeePctLabel()}%)` : `${pvpPerpFeePctLabel()}% (deferred)`}`,
+        `└ Leverage <b>${r.leverage}x</b>`,
       ].join("\n")).catch(() => {});
       await pvpRenderPerps(userId, messageId);
     } catch (error) { await ack(friendlyError(error), true); }
@@ -43270,8 +43344,8 @@ async function handlePvpCallback(query, userId) {
       if (!wallets.length) throw new Error("No wallet.");
       const evm = evmWalletFromSolana(decryptWallet(wallets[0]).secretKey);
       const r = await hlMarketClose({ privateKey: evm.privateKey, address: evm.address, coin: mPc[1] });
-      const closeFee = await pvpChargePerpFeeSol(userId, (Number(r.closedSize) || 0) * (Number(r.avgPx) || 0), "close");
-      await sayHtml(userId, `✅ Closed <b>${r.wasLong ? "LONG" : "SHORT"} ${escapeTelegramHtml(r.coin)}</b> (${r.closedSize} @ ${r.avgPx}) · uPnL at close ${r.unrealizedPnl >= 0 ? "🟢 +" : "🔴 −"}$${Math.abs(r.unrealizedPnl).toFixed(2)}${closeFee ? ` · fee ${(closeFee.lamports / 1e9).toFixed(6)} ◎` : ""}`).catch(() => {});
+      await pvpChargePerpFeeSol(userId, (Number(r.closedSize) || 0) * (Number(r.avgPx) || 0), "close");
+      await sayHtml(userId, `✅ Closed <b>${r.wasLong ? "LONG" : "SHORT"} ${escapeTelegramHtml(r.coin)}</b> (${r.closedSize} @ ${r.avgPx}) · uPnL at close ${r.unrealizedPnl >= 0 ? "🟢 +" : "🔴 −"}$${Math.abs(r.unrealizedPnl).toFixed(2)}`).catch(() => {});
       await pvpRenderPerps(userId, messageId);
     } catch (error) { await ack(friendlyError(error), true); }
     return true;
@@ -48705,6 +48779,17 @@ async function webRhTradeCore(userId, body = {}, internal = {}) {
     // into a failed response that invites the user to submit the trade again.
     recordError = `Audit: ${friendlyError(error)}`;
   }
+  // 🥊 PvP live feed: Robinhood trades count too — post to the trader's arena groups. Direct call
+  // (not recordTradeEvents) so 0x rows never pollute the SOL trade history / PnL boards.
+  void pvpBroadcastTradeEvents([{
+    userId,
+    type: side,
+    tokenMint: tokenAddress,
+    signature: hashes[hashes.length - 1],
+    symbol: side === "buy" ? String(quote.outSymbol || "") : "",
+    rhEthAmount: side === "buy" ? Number(amountRaw) / 1e18 : Number(quote.outFormatted || 0),
+    ...(solFunding ? { solLamportsSpent: String(solToLamports(solFunding.amountSol)) } : {}),
+  }]).catch(() => {});
   return {
     ok: true,
     side,
