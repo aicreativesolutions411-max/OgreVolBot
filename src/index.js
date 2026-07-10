@@ -36338,14 +36338,18 @@ async function xDmPollTick() {
     let handled = 0;
     let failed = 0;
     let oldestFreshLagMs = 0;
+    const latestBareCaEventId = [...events].reverse().find((candidate) =>
+      xDmParseTargets(String(candidate?.text || "")).length > 0
+      && !/\b(buy|sell|yes|no|confirm|positions?|wallets?|settings?|presets?|bundle|volume|launch|copy|set)\b/i.test(String(candidate?.text || ""))
+    )?.id || "";
     for (const event of events) {
-      // Recovery for the exact failure seen live: a recent pasted CA was persisted as seen, but no delivered
-      // reply marker exists. Replay only a read-only bare CA from the last 30 minutes—never commands, YES/NO,
-      // buys, sells, settings, or old history. Once X accepts the reply, `replied` makes it one-shot.
+      // Recovery for the exact failure seen live: a pasted CA was persisted as seen, but no delivered reply
+      // marker exists. Replay a recent read-only bare CA, or exactly the newest legacy bare CA in the snapshot—
+      // never commands, YES/NO, buys, sells, or settings. `replied` makes the migration one-shot.
       const seenAt = Number(state.seen[event.id] || 0);
       const recentUnrepliedBareCa = seenAt > 0
         && !state.replied[event.id]
-        && Date.now() - seenAt < 30 * 60_000
+        && (Date.now() - seenAt < 30 * 60_000 || String(event.id) === String(latestBareCaEventId))
         && xDmParseTargets(String(event.text || "")).length > 0
         && !/\b(buy|sell|yes|no|confirm|positions?|wallets?|settings?|presets?|bundle|volume|launch|copy|set)\b/i.test(String(event.text || ""));
       if ((state.seen[event.id] && !recentUnrepliedBareCa) || state.ignored[event.id]) continue;
