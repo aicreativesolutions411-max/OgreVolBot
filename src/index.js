@@ -13469,6 +13469,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("wt:")) {
     if (await handleWalletTrackerCallback(query, userId).catch(() => false)) return;
   }
+  // 🤖 Copy Trade settings popup (ct:*) — arm a copy of a scanned wallet with size + exit strategy.
+  if (String(query.data || "").startsWith("ct:")) {
+    if (await handleCopyTradeCallback(query, userId).catch(() => false)) return;
+  }
   // Community Snipe menu (cs:*) — tap-to-join launch snipe + dev setup.
   if (String(query.data || "").startsWith("cs:")) {
     if (await handleCommunitySnipeCallback(query, userId).catch(() => false)) return;
@@ -14141,6 +14145,8 @@ async function handleMessage(message, userId) {
   if (await applyCsInput(message, userId).catch(() => false)) return;
   // Copy-the-room's-best: capture a typed mirror amount.
   if (await applyCopyInput(message, userId).catch(() => false)) return;
+  // 🤖 Copy Trade popup: capture a typed custom copy size / TP-SL.
+  if (await applyCopyCfgInput(message, userId).catch(() => false)) return;
   // Wallet Tracker commands (/track, /untrack, /tracked) — DM only.
   if (await handleWalletTrackerCommand(message, userId).catch(() => false)) return;
 
@@ -20613,6 +20619,30 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
     return { changed: true, triggered: false, sold: false, failed: false, message: `${planWallet.label}: exit outcome is unknown; automatic resubmission is paused.` };
   }
 
+  // 🔁 Mirror-sells — follow the tracked wallet OUT. When it has sold this token since we entered, set
+  // an exit trigger now; the shared idempotent sell path below closes our bag 100% (same code a timer
+  // exit uses). The protective stop-loss stays armed independently, and any ST error never force-sells.
+  if (
+    !triggerReason
+    && plan.mirrorSells
+    && plan.copyWallet
+    && plan.tokenMint
+    && planWallet.buySignature
+    && !["sold", "confirmed", "failed", "cancelled", "submitting"].includes(String(planWallet.exitStatus || planWallet.status || "").toLowerCase())
+  ) {
+    const lastMirrorCheck = Date.parse(planWallet.mirrorSellCheckedAt || "");
+    if (options.forcePriceCheck || !Number.isFinite(lastMirrorCheck) || (now - lastMirrorCheck) >= COPY_MIRROR_SELL_POLL_MS) {
+      planWallet.mirrorSellCheckedAt = new Date().toISOString();
+      const mirrorSince = planWallet.buyAt || plan.copyMatchedAt || plan.copyClaimedAt || plan.createdAt || planWallet.createdAt;
+      const sourceExited = await copyWalletSoldTokenSince(plan.copyWallet, plan.tokenMint, mirrorSince).catch(() => false);
+      if (sourceExited) {
+        triggerReason = "mirror-sell (tracked wallet exited)";
+        planWallet.triggerStatus = "mirror-triggered";
+        planWallet.mirrorSellDetectedAt = planWallet.mirrorSellCheckedAt;
+      }
+    }
+  }
+
   if (
     !triggerReason
     && isPriceExitTrigger(planWallet.triggerReason)
@@ -21019,6 +21049,34 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
       message: `${planWallet.label}: sell failed by ${triggerReason} (${failures}/${maxFailures}) - ${friendlyError(error)}${failures < maxFailures ? `. Will retry in ${Math.ceil(retryDelayMs / 1000)}s.` : ""}`
     };
   }
+}
+
+// 🔁 Mirror-sells: has the tracked wallet SOLD `tokenMint` at/after we entered? The KOL signal
+// pipeline drops sells (buy-only), so read the raw ST trades and look for a leg where this token is
+// the INPUT (token → SOL/USDC = a sell). Cheap + cached; returns false on any error (never force-sells).
+const COPY_MIRROR_SELL_POLL_MS = 20_000;
+async function copyWalletSoldTokenSince(wallet, tokenMint, sinceIso) {
+  if (!CONFIG.solanaTrackerApiKey) return false;
+  let owner = "";
+  try { owner = parsePublicKey(String(wallet || "")).toBase58(); } catch { return false; }
+  const mint = String(tokenMint || "").trim();
+  if (!owner || !mint) return false;
+  const sinceMs = Date.parse(sinceIso || "") || 0;
+  const data = await solanaTrackerJson(`/wallet/${encodeURIComponent(owner)}/trades?limit=25`, { cacheTtlMs: 8_000, timeoutMs: 6_500 }).catch(() => null);
+  for (const trade of arrayFromApiData(data)) {
+    const from = trade.from || trade.input || trade.inputToken || {};
+    const to = trade.to || trade.output || trade.outputToken || {};
+    const fromMint = firstString(from.address, from.mint, from.tokenAddress, trade.fromMint, trade.inputMint);
+    const toMint = firstString(to.address, to.mint, to.tokenAddress, trade.toMint, trade.outputMint);
+    const type = String(trade.type || trade.side || "").toLowerCase();
+    // A sell of THIS token: it's the token leaving the wallet (input), swapped for SOL/stables.
+    const isSellOfToken = fromMint === mint || (type.includes("sell") && toMint !== mint && fromMint !== SOL_MINT && (!fromMint || fromMint === mint));
+    if (!isSellOfToken) continue;
+    if (fromMint && fromMint !== mint) continue;
+    const ts = Date.parse(normalizeTimestamp(firstString(trade.time, trade.timestamp, trade.date, trade.createdAt)) || "") || 0;
+    if (ts === 0 || ts >= sinceMs - 5_000) return true;   // sold at/after our entry (small clock-skew grace)
+  }
+  return false;
 }
 
 async function processCopyWalletWatchPlan(plan, walletStore, options = {}) {
@@ -36150,6 +36208,48 @@ async function sendRhScanCard(chatId, address) {
 // SOL uses Solana Tracker (paid, already in use): /pnl for accurate realized+unrealized + win rate, /wallet
 // for holdings. RH has no PnL provider, so rhWalletScan (walletScan.js) reconstructs it on-chain from
 // Blockscout history (weighted-average cost basis in native ETH). Cached inside each source.
+// Reverse-resolve a wallet to its .sol name (SNS). FREE + API-light: the public Bonfida SNS proxy, favorite
+// (primary) domain first, else the first domain the wallet owns. Best-effort — never blocks the scan, short
+// timeout, cached 1h. Returns e.g. "moonpies.sol" or null. Cache null too so a domainless wallet isn't re-hit.
+const _solDomainCache = new Map();
+async function resolveSolWalletDomain(wallet) {
+  if (!solanaPublicKeyLike(wallet)) return null;
+  const cached = _solDomainCache.get(wallet);
+  if (cached && Date.now() - cached.at < 60 * 60_000) return cached.name;
+  // Only accept a clean SNS label — the proxy returns error strings ("Invalid domain input") in `result` on
+  // failure, so a loose parse would happily render "Invalid domain input.sol".
+  const withSol = (raw) => { const n = String(raw || "").trim().replace(/\.sol$/i, ""); return /^[a-z0-9._-]{1,60}$/i.test(n) ? `${n}.sol` : null; };
+  const getJson = async (url) => {
+    const ctl = new AbortController(); const t = setTimeout(() => { try { ctl.abort(); } catch { /* */ } }, 3500);
+    try {
+      const res = await fetch(url, { signal: ctl.signal, headers: { accept: "application/json" } });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch { return null; } finally { clearTimeout(t); }
+  };
+  let name = null;
+  try {
+    // Favorite/primary domain (what the owner chose to display). Must be s:ok and NOT stale — a stale reverse
+    // means the favorite was set then the domain moved on, so showing it would be wrong.
+    const fav = await getJson(`https://sns-sdk-proxy.bonfida.workers.dev/favorite-domain/${wallet}`);
+    if (fav?.s === "ok" && fav.result && !fav.result.stale) {
+      const fr = fav.result;
+      name = withSol(typeof fr === "string" ? fr : (fr.reverse || fr.domain));
+    }
+    // Fall back to the first domain the wallet owns.
+    if (!name) {
+      const owned = await getJson(`https://sns-sdk-proxy.bonfida.workers.dev/domains/${wallet}`);
+      if (owned?.s === "ok") {
+        const first = Array.isArray(owned.result) ? owned.result[0] : null;
+        if (first) name = withSol(typeof first === "string" ? first : (first.domain || first.name));
+      }
+    }
+  } catch { /* best-effort */ }
+  _solDomainCache.set(wallet, { at: Date.now(), name });
+  if (_solDomainCache.size > 500) _solDomainCache.delete(_solDomainCache.keys().next().value);
+  return name;
+}
+
 const solWalletScanCache = new Map();
 async function solWalletScan(wallet) {
   if (!solanaPublicKeyLike(wallet)) return null;
@@ -36157,9 +36257,10 @@ async function solWalletScan(wallet) {
   const c = solWalletScanCache.get(key);
   if (c && Date.now() - c.at < 90_000) return c.v;
   const solUsd = (await getSolUsdPrice().catch(() => 0)) || 0;
-  const [holdings, pnlRaw] = await Promise.all([
+  const [holdings, pnlRaw, domain] = await Promise.all([
     fetchWalletHoldings(wallet).catch(() => ({ tokens: [], total: 0 })),
     (CONFIG.solanaTrackerApiKey ? solanaTrackerJson(`/pnl/${encodeURIComponent(wallet)}`, { cacheTtlMs: 90_000, timeoutMs: 9000 }).catch(() => null) : Promise.resolve(null)),
+    resolveSolWalletDomain(wallet).catch(() => null),
   ]);
   // ST /pnl shape (defensive — the API nests the summary under a few possible keys).
   const sum = pnlRaw?.summary || pnlRaw?.stats || pnlRaw || {};
@@ -36173,6 +36274,7 @@ async function solWalletScan(wallet) {
   const holdingsList = (holdings.tokens || []).map((t) => ({ addr: t.mint, sym: t.sym || t.symbol || "", qty: 0, valueUsd: Number(t.val) || 0, costUsd: 0, pnlUsd: 0 })).filter((h) => h.valueUsd > 0.5).slice(0, 12);
   const v = {
     ok: true, address: wallet, chain: "solana",
+    domain: domain || null,
     solPrice: solUsd,
     realizedUsd: realizedUsd || 0, unrealizedUsd: unrealizedUsd || 0, totalPnlUsd: totalPnlUsd || 0,
     holdingsValueUsd: Number(holdings.total) || 0, totalValueUsd: Number(holdings.total) || 0,
@@ -36256,8 +36358,9 @@ function formatWalletScanCard(s) {
   const signed = (v) => { const n = Number(v) || 0; return `${n >= 0 ? "🟢 +" : "🔴 −"}${fmt(n)}`; };
   const short = `${s.address.slice(0, rh ? 6 : 4)}…${s.address.slice(-4)}`;
   const rail = rh ? "🪶 Robinhood Chain" : "◎ Solana";
+  const label = s.domain ? `<b>${esc(s.domain)}</b> <code>${esc(short)}</code>` : `<b>Wallet</b> <code>${esc(short)}</code>`;
   const lines = [
-    `👛 <b>Wallet</b> <code>${esc(short)}</code> · <i>${rail}</i>`,
+    `👛 ${label} · <i>${rail}</i>`,
     "",
     "💰 <b>PnL</b>",
     `├ Total   <b>${signed(s.totalPnlUsd)}</b>`,
@@ -36285,15 +36388,23 @@ function formatWalletScanCard(s) {
   return lines.join("\n");
 }
 async function sendWalletScanCard(chatId, address) {
+  // Idempotency guard — the same wallet card must post ONCE per chat, not double up. The four bare-paste
+  // routes (group/DM, SOL/RH) had no dedup (only the /wallet command did), so a wallet that matched more
+  // than one detection pass posted twice. One guard here covers every call site uniformly.
+  if (tgCommandOnCooldown(chatId, `walletcard:${String(address || "").toLowerCase()}`, 6000)) return;
   const _t0 = Date.now();
   const s = await getWalletScan(address).catch((e) => { console.warn(`[walletscan] getWalletScan(${String(address).slice(0, 10)}…) THREW: ${String(e?.message || e).slice(0, 140)}`); return null; });
   // FLIGHT RECORDER — one line per scan so "wallet shows nothing" is diagnosable from Render logs.
   try { console.log(`[walletscan] ${String(address).slice(0, 10)}… chain=${s?.chain || "?"} ok=${Boolean(s?.ok)} pnl=${s ? Math.round(s.totalPnlUsd || 0) : "-"} value=${s ? Math.round(s.totalValueUsd || 0) : "-"} trades=${s?.tradeCount ?? "-"} holdings=${s?.holdings?.length ?? "-"} in ${Date.now() - _t0}ms`); } catch { /* best-effort */ }
   if (!s || !s.ok) { await say(chatId, "👛 Couldn't read that wallet right now — paste a valid Solana or Robinhood (0x…) wallet address."); return; }
-  const kb = { inline_keyboard: [[
-    { text: "🔎 Explorer", url: s.explorer },
-    ...(s.chain === "solana" ? [{ text: "👛 Track this wallet", callback_data: `wt:add:${address}` }] : []),
-  ]] };
+  const kb = { inline_keyboard: [
+    [
+      { text: "🔎 Explorer", url: s.explorer },
+      ...(s.chain === "solana" ? [{ text: "👛 Track this wallet", callback_data: `wt:add:${address}` }] : []),
+    ],
+    // 🤖 Copy Trade — SOL only (the copy engine runs on Solana Tracker signals). Opens a settings popup.
+    ...(s.chain === "solana" ? [[{ text: "🤖 Copy Trade this wallet", callback_data: `ct:open:${address}` }]] : []),
+  ] };
   await sayHtml(chatId, formatWalletScanCard(s), kb).catch(() => {});
 }
 // Dispatch a mention to the right card based on what they asked. `variant` (tweet id) seeds the wording + art.
@@ -42351,6 +42462,156 @@ async function handleWalletTrackerCommand(message, userId) {
   if (mUn) { if (mUn[1] && await wtRemove(userId, mUn[1])) await say(chatId, "Removed from your tracker."); else await say(chatId, "Usage: /untrack <wallet>"); return true; }
   if (mTrack[1]) { const r = await wtAdd(userId, mTrack[1], mTrack[2] || ""); if (!r.ok) { await say(chatId, r.error); return true; } await sayHtml(chatId, `✅ Tracking <b>${escapeTelegramHtml((mTrack[2] || shortMint(mTrack[1])).trim())}</b> — you'll get a DM when it trades.`); await wtRender(chatId, null, await wtHomeView(userId)); return true; }
   await wtRender(chatId, null, await wtHomeView(userId)); // /track with no arg → open the menu
+  return true;
+}
+
+// ---- 🤖 Copy Trade settings popup (from the 👛 wallet-scan card) --------------------------------
+// One-tap "Copy Trade this wallet" → an editable settings card: copy size, and an exit strategy that's
+// either 🔁 Mirror sells (follow the wallet in AND out) or 🎯 Auto TP/SL (your own targets). Arming
+// hands off to the same durable engine as the /copytrade wizard (webCreateKolCopyWallet).
+const copyCfgState = new Map();      // userId -> { wallet, amountSol, exitMode, tpPct, slPct, at }
+const copyCfgInputPending = new Map();  // userId -> { kind:"size"|"tpsl", setupMsgId, at }
+const COPY_SIZE_PRESETS = [0.05, 0.1, 0.25, 0.5];
+const COPY_TP_PRESETS = { safe: { tp: 25, sl: 8, label: "Safe" }, balanced: { tp: 50, sl: 15, label: "Balanced" }, moon: { tp: 100, sl: 25, label: "Moon" } };
+function copyCfgDefaults(wallet) {
+  return { wallet, amountSol: 0.1, exitMode: "mirror", tpPct: 50, slPct: 35, at: Date.now() };
+}
+async function copyCfgTradingWalletLabel(userId) {
+  try {
+    const wallets = walletsForOwner(await readWalletStore(), userId);
+    if (!wallets.length) return null;
+    return wallets[0].label || `Wallet 1`;
+  } catch { return null; }
+}
+async function copyCfgView(userId) {
+  const cfg = copyCfgState.get(String(userId));
+  if (!cfg) return null;
+  const tradingLabel = await copyCfgTradingWalletLabel(userId);
+  const mirror = cfg.exitMode === "mirror";
+  const exitLine = mirror
+    ? `🔁 <b>Mirror sells</b> — sells when the wallet sells (with a wide ${cfg.slPct}% safety stop)`
+    : `🎯 <b>Auto TP/SL</b> — take-profit +${cfg.tpPct}% / stop-loss −${cfg.slPct}%`;
+  const text = [
+    `🤖 <b>Copy Trade</b>  <code>${escapeTelegramHtml(shortMint(cfg.wallet))}</code>`,
+    "",
+    "Every new coin this wallet buys, your wallet buys too — then exits on the strategy you pick.",
+    "",
+    `💰 Buy size: <b>${cfg.amountSol} SOL</b> per copied coin`,
+    `🎯 Exit: ${exitLine}`,
+    tradingLabel ? `👛 Trades from: <b>${escapeTelegramHtml(tradingLabel)}</b>` : "⚠️ You have no wallet yet — create one first (/wallets).",
+  ].join("\n");
+  const sizeRow = COPY_SIZE_PRESETS.map((a) => ({ text: `${cfg.amountSol === a ? "✅ " : ""}${a}◎`, callback_data: `ct:sz:${a}` }));
+  const rows = [
+    [{ text: "— Buy size per coin —", callback_data: "ct:noop" }],
+    sizeRow,
+    [{ text: "✏️ Custom size", callback_data: "ct:szc" }],
+    [{ text: "— Exit strategy —", callback_data: "ct:noop" }],
+    [
+      { text: `${mirror ? "✅ " : ""}🔁 Mirror sells`, callback_data: "ct:mode:mirror" },
+      { text: `${!mirror ? "✅ " : ""}🎯 Auto TP/SL`, callback_data: "ct:mode:tpsl" },
+    ],
+  ];
+  if (!mirror) {
+    rows.push(Object.entries(COPY_TP_PRESETS).map(([k, v]) => ({
+      text: `${cfg.tpPct === v.tp && cfg.slPct === v.sl ? "✅ " : ""}${v.label} (+${v.tp}/−${v.sl})`,
+      callback_data: `ct:tp:${k}`,
+    })));
+    rows.push([{ text: "✏️ Custom TP/SL", callback_data: "ct:tpc" }]);
+  }
+  rows.push([{ text: "✅ Start Copy Trading", callback_data: "ct:arm" }]);
+  rows.push([{ text: "✖️ Cancel", callback_data: "ct:cancel" }]);
+  return { text, markup: { inline_keyboard: rows } };
+}
+async function copyCfgRender(chatId, messageId, userId) {
+  const view = await copyCfgView(userId);
+  if (!view) return;
+  if (messageId) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: view.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: view.markup }).catch(() => {});
+  else await sayHtml(chatId, view.text, view.markup);
+}
+async function handleCopyTradeCallback(query, userId) {
+  const data = String(query?.data || "");
+  if (!data.startsWith("ct:")) return false;
+  const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  const ack = (t, alert) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: Boolean(alert) } : {}) }).catch(() => {});
+  const key = String(userId);
+  if (data === "ct:noop") { await ack(); return true; }
+  const mOpen = data.match(/^ct:open:([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+  if (mOpen) {
+    if (!CONFIG.solanaTrackerApiKey) { await ack("Copy Trade is warming up and isn't available right now.", true); return true; }
+    copyCfgState.set(key, copyCfgDefaults(mOpen[1]));
+    await copyCfgRender(chatId, messageId, userId);
+    await ack();
+    return true;
+  }
+  const cfg = copyCfgState.get(key);
+  if (!cfg) { await ack("That Copy Trade setup expired — tap 🤖 Copy Trade on the wallet card again.", true); return true; }
+  const mSz = data.match(/^ct:sz:([\d.]+)$/);
+  if (mSz) { const a = Number(mSz[1]); if (a > 0) cfg.amountSol = a; await copyCfgRender(chatId, messageId, userId); await ack(); return true; }
+  if (data === "ct:szc") { copyCfgInputPending.set(key, { kind: "size", setupMsgId: messageId, at: Date.now() }); await ack("Send the SOL amount to spend per copied coin (e.g. 0.15)."); return true; }
+  const mMode = data.match(/^ct:mode:(mirror|tpsl)$/);
+  if (mMode) { cfg.exitMode = mMode[1]; if (cfg.exitMode === "mirror" && cfg.slPct < 20) cfg.slPct = 35; if (cfg.exitMode === "tpsl" && cfg.slPct > 30) { cfg.tpPct = 50; cfg.slPct = 15; } await copyCfgRender(chatId, messageId, userId); await ack(); return true; }
+  const mTp = data.match(/^ct:tp:(safe|balanced|moon)$/);
+  if (mTp) { const p = COPY_TP_PRESETS[mTp[1]]; cfg.tpPct = p.tp; cfg.slPct = p.sl; cfg.exitMode = "tpsl"; await copyCfgRender(chatId, messageId, userId); await ack(); return true; }
+  if (data === "ct:tpc") { copyCfgInputPending.set(key, { kind: "tpsl", setupMsgId: messageId, at: Date.now() }); await ack("Send your take-profit and stop-loss as two numbers, e.g.  50 15  (TP +50% / SL −15%)."); return true; }
+  if (data === "ct:cancel") { copyCfgState.delete(key); copyCfgInputPending.delete(key); await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: "Copy Trade setup cancelled.", parse_mode: "HTML" }).catch(() => {}); await ack("Cancelled"); return true; }
+  if (data === "ct:arm") {
+    await ack("Arming…");
+    const mirror = cfg.exitMode === "mirror";
+    try {
+      await webCreateKolCopyWallet(userId, {
+        copyWallet: cfg.wallet,
+        walletIndexes: [1],   // your primary wallet (matches the card's "Trades from"); multi-wallet copy lives in /copytrade
+        amountSol: String(cfg.amountSol),
+        mirrorSells: mirror,
+        ...(mirror ? { stopLossPct: String(cfg.slPct) } : { takeProfitPct: String(cfg.tpPct), stopLossPct: String(cfg.slPct) }),
+        slippageBps: 400,
+      });
+      copyCfgState.delete(key);
+      const exitLine = mirror
+        ? `Exits when <code>${escapeTelegramHtml(shortMint(cfg.wallet))}</code> sells (safety stop −${cfg.slPct}%).`
+        : `Auto-exit: +${cfg.tpPct}% take-profit / −${cfg.slPct}% stop-loss.`;
+      await telegram("editMessageText", {
+        chat_id: chatId, message_id: messageId, parse_mode: "HTML", disable_web_page_preview: true,
+        text: [
+          "✅ <b>Copy Trade armed</b>",
+          "",
+          `Watching <code>${escapeTelegramHtml(shortMint(cfg.wallet))}</code>. Each new coin it buys → your wallets buy the same coin with <b>${cfg.amountSol} SOL</b>.`,
+          exitLine,
+          "",
+          "It runs in the background — you'll get a message the moment it fires.",
+        ].join("\n"),
+        reply_markup: { inline_keyboard: [[{ text: "📊 Positions", callback_data: "positions_overview" }]] },
+      }).catch(() => {});
+    } catch (error) {
+      await ack(friendlyError(error), true);
+    }
+    return true;
+  }
+  await ack(); return true;
+}
+async function applyCopyCfgInput(message, userId) {
+  const chatId = message?.chat?.id;
+  if (!isPrivateChat(message?.chat)) return false;
+  const pend = copyCfgInputPending.get(String(userId));
+  if (!pend) return false;
+  if (Date.now() - pend.at > 180000) { copyCfgInputPending.delete(String(userId)); return false; }
+  const raw = String(message.text || "").trim();
+  if (!raw) return false;
+  const cfg = copyCfgState.get(String(userId));
+  copyCfgInputPending.delete(String(userId));
+  if (/^\/cancel$/i.test(raw)) return true;
+  if (!cfg) { await say(chatId, "That Copy Trade setup expired — tap 🤖 Copy Trade on the wallet card again."); return true; }
+  if (pend.kind === "size") {
+    const a = Number(raw.replace(/[^\d.]/g, ""));
+    if (!(a > 0)) { await say(chatId, "Send a SOL amount greater than 0, e.g. 0.15."); return true; }
+    cfg.amountSol = a;
+  } else if (pend.kind === "tpsl") {
+    const nums = raw.match(/\d+(?:\.\d+)?/g) || [];
+    const tp = Number(nums[0]), sl = Number(nums[1]);
+    if (!(tp > 0) || !(sl > 0)) { await say(chatId, "Send two numbers — take-profit then stop-loss, e.g.  50 15."); return true; }
+    cfg.tpPct = Math.round(tp); cfg.slPct = Math.round(sl); cfg.exitMode = "tpsl";
+  }
+  await copyCfgRender(chatId, null, userId);
   return true;
 }
 
@@ -61674,9 +61935,15 @@ async function webCreateKolCopyWallet(userId, body = {}) {
   const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup, { walletPublicKeys: body.walletPublicKeys });
   const amountSol = parsePositiveNumber(String(body.amountSol || ""));
   const sellDelaySeconds = parseOptionalSellDelaySeconds(firstString(body.sellDelay, body.sellDelaySeconds, "5"));
-  const takeProfitLadder = parseWebTakeProfitLadder(body.takeProfitLadder);
-  const takeProfitPct = takeProfitLadder.length ? takeProfitLadder[0].pct : parseTakeProfitPercent(firstString(body.takeProfitPct, "25"));
-  const stopLossPct = parseOptionalTriggerPercent(firstString(body.stopLossPct, "8"));
+  // 🔁 Mirror-sells: follow the tracked wallet OUT (sell when it sells) instead of using our own
+  // take-profit. We drop the auto-TP (let it ride until the source exits) but KEEP a wide protective
+  // stop-loss as a safety net, so the plan always has a valid exit even if the source goes quiet.
+  const mirrorSells = cleanLaunchBoolean(body.mirrorSells);
+  const takeProfitLadder = mirrorSells ? [] : parseWebTakeProfitLadder(body.takeProfitLadder);
+  const takeProfitPct = mirrorSells ? null : (takeProfitLadder.length ? takeProfitLadder[0].pct : parseTakeProfitPercent(firstString(body.takeProfitPct, "25")));
+  const stopLossPct = mirrorSells
+    ? parseOptionalTriggerPercent(firstString(body.stopLossPct, "35"))
+    : parseOptionalTriggerPercent(firstString(body.stopLossPct, "8"));
   const trailingStopPct = Math.max(0, Math.min(95, Number(body.trailingStopPct) || 0));
   const trailingActivatePct = trailingStopPct > 0 ? Math.max(trailingStopPct, Number(body.trailingActivatePct) || trailingStopPct) : 0;
   const loopCount = parseLoopCount(String(body.loopCount || "1"));
@@ -61734,6 +62001,7 @@ async function webCreateKolCopyWallet(userId, body = {}) {
     trailingStopPct,
     trailingActivatePct,
     breakEvenAfterTp1: cleanLaunchBoolean(body.breakEvenAfterTp1),
+    mirrorSells,
     autoBundle: false,
     slippageBps,
     automationPermission,
