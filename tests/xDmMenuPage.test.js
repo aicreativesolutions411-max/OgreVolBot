@@ -7,6 +7,7 @@ const legacyPageUrl = new URL("../web/public/x-menu.html", import.meta.url);
 const legacyPage = fs.existsSync(legacyPageUrl) ? fs.readFileSync(legacyPageUrl, "utf8") : "";
 const headers = fs.readFileSync(new URL("../web/public/_headers", import.meta.url), "utf8");
 const server = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+const terminalPage = fs.readFileSync(new URL("../web/public/x-terminal.html", import.meta.url), "utf8");
 
 function functionBody(source, name) {
   const candidates = [`async function ${name}`, `function ${name}`];
@@ -193,4 +194,16 @@ test("X Trade Pad API exchanges scoped access and can only stage confirmed money
   assert.doesNotMatch(api, /tgExecuteQuickBuy|tgExecuteQuickSell|sellTokenFromWallet|webTradeBuy|webTradeSell|webRhTrade|webBundleBuy|webBundleSell/);
   assert.match(server, /request\.method === "POST" && pathname === "\/api\/x-dm\/menu"/);
   assert.doesNotMatch(server, /request\.method === "GET" && pathname === "\/api\/x-dm\/menu"/);
+});
+
+test("X Terminal can create a web-account link and open the X DM composer", () => {
+  assert.match(server, /pathname === "\/api\/web\/x\/link-code"/);
+  assert.match(server, /command: `link \$\{code\}`/);
+  assert.match(server, /https:\/\/x\.com\/messages\/compose\?recipient_id=/);
+  assert.match(functionBody(server, "handleXLinkCommand"), /text: "Open X DM"/);
+  assert.match(terminalPage, /id="createXLink"/);
+  assert.match(terminalPage, /id="openXDM"/);
+  assert.match(terminalPage, /\/api\/web\/x\/link-code/);
+  assert.match(terminalPage, /localStorage\.getItem\("ogreWebToken"\)/);
+  assert.match(terminalPage, /"Authorization":"Bearer "\+webToken/);
 });

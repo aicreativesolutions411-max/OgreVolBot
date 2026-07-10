@@ -9195,6 +9195,23 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/web/x/link-code") {
+      const state = await readXDmState();
+      const code = xDmNewLinkCode(state, auth.userId);
+      await writeXDmState(state);
+      const entry = await xDmBotEntryUrls();
+      sendWebJson(request, response, 200, {
+        ok: true,
+        code,
+        command: `link ${code}`,
+        dmUrl: entry.dmUrl,
+        profileUrl: entry.profileUrl,
+        handle: entry.handle,
+        expiresInMinutes: 15
+      });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/calls") {
       const body = await readJsonRequestBody(request);
       const call = await webPostBoardCall(auth.userId, body);
@@ -34394,6 +34411,21 @@ function xDmNewLinkCode(state, userId) {
   state.codes[code] = { userId: String(userId), expiresAt: Date.now() + 15 * 60_000 };
   return code;
 }
+async function xDmBotEntryUrls() {
+  const handle = xHandle() || "SlimeWirebot";
+  const profileUrl = `https://x.com/${encodeURIComponent(handle)}`;
+  const ownId = await Promise.race([
+    xDmOwnUserId(),
+    new Promise((resolve) => setTimeout(() => resolve(""), 4_000))
+  ]).catch(() => "");
+  return {
+    handle,
+    profileUrl,
+    dmUrl: ownId
+      ? `https://x.com/messages/compose?recipient_id=${encodeURIComponent(ownId)}`
+      : profileUrl
+  };
+}
 async function handleXLinkCommand(chatId, message, userId) {
   if (!isPrivateChat(message.chat)) {
     await say(chatId, "Open the bot in DM and send /xlink so I can safely link your X DMs to your SlimeWire account.");
@@ -34402,16 +34434,16 @@ async function handleXLinkCommand(chatId, message, userId) {
   const state = await readXDmState();
   const code = xDmNewLinkCode(state, userId);
   await writeXDmState(state);
-  const handle = xHandle() || "SlimeWirebot";
+  const entry = await xDmBotEntryUrls();
   await sayHtml(chatId, [
     "🐦 <b>Link X DM Terminal</b>",
     "",
-    `1. Open <b>@${escapeTelegramHtml(handle)}</b> on X.`,
+    `1. Tap <b>Open X DM</b> below.`,
     `2. DM exactly: <code>link ${escapeTelegramHtml(code)}</code>`,
     "",
     "After that, X DMs can scan, show positions, edit quick settings, and start buy/sell flows with a simple yes/no confirm.",
     "<i>Never send seed phrases or private keys.</i>"
-  ].join("\n"), { inline_keyboard: [[{ text: "Open X profile", url: `https://x.com/${handle}` }, { text: "Open X Terminal", url: "https://www.slimewire.org/x-terminal" }]] });
+  ].join("\n"), { inline_keyboard: [[{ text: "Open X DM", url: entry.dmUrl }, { text: "Setup guide", url: "https://www.slimewire.org/x-terminal" }]] });
   return true;
 }
 function xDmRecentTargets(state, senderId) {
@@ -34575,7 +34607,7 @@ function xDmHelpText(linked = false, state = null, senderId = "") {
     "",
     xDmActionHints(state, senderId, linked),
     linked ? "For real buttons, send a coin number (1-6), then tap Open Trade Pad." : "",
-    linked ? "Money actions ask for yes/no before they run." : "To trade here, run /xlink in Telegram, then DM: link CODE",
+    linked ? "Money actions ask for yes/no before they run." : "To trade here, open https://www.slimewire.org/x-terminal and connect X, or run /xlink in Telegram.",
     "No seed phrases. Wallet-confirmed / managed-wallet only."
   ].join("\n");
 }
@@ -34583,7 +34615,8 @@ function xDmNeedLinkText() {
   const bot = CONFIG.telegramBotUsername || "SlimeWiredBot";
   return [
     "Link needed first.",
-    `Open Telegram @${bot} and send /xlink, then DM me the link code here.`,
+    "Open https://www.slimewire.org/x-terminal to link your signed-in SlimeWire account.",
+    `Telegram fallback: open @${bot}, send /xlink, then DM me the link code here.`,
     "Until linked, I can still scan/chart/rug CAs."
   ].join("\n");
 }

@@ -19,6 +19,7 @@
 <meta name="twitter:title" content="SlimeWire X Terminal - Scans, Charts and Trade Commands">
 <meta name="twitter:description" content="Scan publicly, then use the live linked X DM terminal and mobile Trade Pad to stage a trade and confirm it in X.">
 <meta name="twitter:image" content="https://www.slimewire.org/assets/slimewire/auto/x-terminal-card.png">
+<script src="/config.js"></script>
 <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","name":"SlimeWire X Terminal - Trade Commands, Scans and Pinned Post Hub","url":"https://www.slimewire.org/x-terminal","description":"Use SlimeWire from X: public Solana scans plus a live account-linked X DM terminal and mobile Trade Pad for staged, explicitly confirmed buys and sells.","isPartOf":{"@type":"WebSite","name":"SlimeWire","url":"https://www.slimewire.org"},"about":[{"@type":"Thing","name":"X trading bot"},{"@type":"Thing","name":"Solana memecoin terminal"},{"@type":"Thing","name":"Solana Actions and Blinks"}]},{"@type":"SoftwareApplication","name":"SlimeWire","alternateName":["SlimeWire X Terminal","SlimeWire Terminal","@SlimeWirebot"],"applicationCategory":"FinanceApplication","operatingSystem":"Web, X, Telegram","url":"https://www.slimewire.org/x-terminal","description":"SlimeWire X Terminal combines a pinned-post scan hub with live account-linked X DM commands and a mobile Trade Pad for staged buy and sell confirmation.","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}},{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Can X host a full SlimeWire trading terminal inside a post?","acceptedAnswer":{"@type":"Answer","text":"No. A normal X post cannot host a full embedded web app, but a pinned post can act as a command hub that routes users to scan replies, chart links, the web terminal, and the Telegram bot."}},{"@type":"Question","name":"Can users trade directly from X?","acceptedAnswer":{"@type":"Answer","text":"Not from a normal X post. Linked users can stage a buy or sell from the live X DM terminal or its mobile Trade Pad, then reply YES or NO in the same DM before anything executes."}},{"@type":"Question","name":"What should users tag on X?","acceptedAnswer":{"@type":"Answer","text":"Useful public commands include scan plus a contract address, chart plus a contract address, and rug plus a contract address. Full swaps, bundles, TP/SL, launch tools, and wallets live in the web terminal and Telegram bot."}},{"@type":"Question","name":"Does SlimeWire ask for seed phrases in X DMs?","acceptedAnswer":{"@type":"Answer","text":"No. SlimeWire should never ask for seed phrases or private keys in X, Telegram, or the web terminal."}},{"@type":"Question","name":"Why pin this page on X?","acceptedAnswer":{"@type":"Answer","text":"A pinned terminal page gives visitors one obvious command center for scans, charts, proof, Telegram, and wallet-approved trade handoff without cluttering every reply."}}]}]}</script>
 <style>
   :root{--green:#72ff23;--green2:#bbff63;--bg:#050705;--panel:#0a0f0b;--panel2:#071109;--text:#e9ffe0;--muted:#8ea28a;--border:rgba(114,255,35,.18);--line:rgba(114,255,35,.08)}
@@ -49,10 +50,12 @@
   .step{position:relative;padding-left:58px}.step:before{counter-increment:s;content:counter(s);position:absolute;left:16px;top:18px;width:30px;height:30px;border-radius:9px;background:var(--green);color:#04120a;display:grid;place-items:center;font-weight:900}
   .copybox pre{white-space:pre-wrap;margin:10px 0 0;color:#e9ffe0;font:700 13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
   .copybtn{margin-top:12px;width:100%}
+  .setup{max-width:920px;margin:0 auto;background:linear-gradient(135deg,rgba(114,255,35,.11),rgba(7,17,9,.96) 48%),var(--panel);border:1px solid rgba(114,255,35,.34);border-radius:20px;padding:clamp(20px,4vw,32px);box-shadow:0 18px 60px rgba(0,0,0,.28),0 0 40px rgba(114,255,35,.08)}
+  .setuphead{display:flex;justify-content:space-between;gap:20px;align-items:flex-start}.setuphead p{margin:6px 0 0;color:var(--muted);max-width:650px}.status{margin-top:14px;color:var(--muted);font-size:14px;min-height:22px}.status.error{color:#ffb6a8}.linkresult{margin-top:18px;padding:18px;border:1px solid var(--border);border-radius:14px;background:#050805}.linkresult[hidden]{display:none}.command{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:10px 0 14px;padding:12px 14px;border-radius:10px;background:#020402;border:1px solid var(--line);font:800 17px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--green2)}.command code{overflow-wrap:anywhere}.linkactions{display:flex;gap:10px;flex-wrap:wrap}.fine{margin:12px 0 0;color:var(--muted);font-size:12px}
   summary{cursor:pointer;font-weight:900;padding:6px 0}
   footer{padding:34px 0 56px;text-align:center;color:var(--muted);font-size:13px;border-top:1px solid var(--line)}
   footer a{margin:0 6px}
-  @media(max-width:640px){header{padding-top:42px}.cmd{grid-template-columns:1fr}.btn{width:100%;max-width:360px}.cta{align-items:center;flex-direction:column}.step{padding-left:18px;padding-top:50px}.step:before{top:16px}}
+  @media(max-width:640px){header{padding-top:42px}.cmd{grid-template-columns:1fr}.btn{width:100%;max-width:360px}.cta{align-items:center;flex-direction:column}.step{padding-left:18px;padding-top:50px}.step:before{top:16px}.setuphead{display:block}.setuphead .btn{margin-top:16px}.command{align-items:flex-start;flex-direction:column}.linkactions{flex-direction:column}.linkactions .btn{max-width:none}}
 </style>
 </head>
 <body>
@@ -62,12 +65,38 @@
     <h1><span>SlimeWire</span> X Terminal</h1>
     <p class="sub">Pin one command hub for public scans and charts, then move into the live linked X DM terminal and its tap-friendly Trade Pad when it is time to stage a buy or sell.</p>
     <div class="cta">
-      <a class="btn primary" href="https://x.com/SlimeWirebot" target="_blank" rel="noopener noreferrer">Open @SlimeWirebot</a>
+      <a class="btn primary" href="#connect-x">Connect X DM</a>
       <a class="btn" href="/terminal">Open web terminal</a>
       <a class="btn" href="/x-solana-scan-replies">X scan replies</a>
     </div>
   </div>
 </header>
+
+<section id="connect-x">
+  <div class="wrap">
+    <div class="setup">
+      <div class="setuphead">
+        <div>
+          <div class="eyebrow">account setup</div>
+          <h2>Connect your <span>X DM</span></h2>
+          <p>Sign in to SlimeWire, generate a private 15-minute link command, then send it to @SlimeWirebot. Your wallets and presets stay attached to your SlimeWire account.</p>
+        </div>
+        <button class="btn primary" type="button" id="createXLink">Generate X link</button>
+      </div>
+      <div class="status" id="xLinkStatus" role="status" aria-live="polite">Already signed in? Generate your one-time command.</div>
+      <div class="linkresult" id="xLinkResult" hidden>
+        <b>Send this exact message in the X DM:</b>
+        <div class="command"><code id="xLinkCommand"></code><button class="btn" type="button" id="copyXLink">Copy</button></div>
+        <div class="linkactions">
+          <a class="btn primary" id="openXDM" href="https://x.com/SlimeWirebot" target="_blank" rel="noopener noreferrer">Open X DM</a>
+          <a class="btn" href="/terminal">Open SlimeWire account</a>
+        </div>
+        <p class="fine">The code expires in 15 minutes and never contains a wallet key. If X opens a sign-in screen, sign in there and open the DM again.</p>
+      </div>
+      <p class="fine">Fallback: open <a href="https://t.me/SlimeWiredBot" target="_blank" rel="noopener noreferrer">@SlimeWiredBot on Telegram</a>, send <b>/xlink</b>, then follow its Open X DM button.</p>
+    </div>
+  </div>
+</section>
 
 <section>
   <div class="wrap">
@@ -149,6 +178,34 @@ https://www.slimewire.org/x-terminal</pre>
     btn.addEventListener("click",async function(){
       try{await navigator.clipboard.writeText(pre.textContent.trim());btn.textContent="Copied";setTimeout(function(){btn.textContent="Copy pinned post text";},1600);}
       catch(e){btn.textContent="Select text above";setTimeout(function(){btn.textContent="Copy pinned post text";},1600);}
+    });
+  })();
+  (function(){
+    var create=document.getElementById("createXLink"),status=document.getElementById("xLinkStatus"),result=document.getElementById("xLinkResult"),command=document.getElementById("xLinkCommand"),open=document.getElementById("openXDM"),copy=document.getElementById("copyXLink");
+    if(!create||!status||!result||!command||!open||!copy)return;
+    var configured=window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase;
+    var apiBase=String(configured||window.location.origin).replace(/\/$/,"");
+    function token(){try{return window.localStorage.getItem("ogreWebToken")||"";}catch(e){return "";}}
+    function setStatus(text,isError){status.textContent=text;status.classList.toggle("error",Boolean(isError));}
+    create.addEventListener("click",async function(){
+      var webToken=token();
+      result.hidden=true;
+      if(!webToken){setStatus("Sign in to the SlimeWire web terminal first, then return here and generate the X link.",true);create.textContent="Open sign in";create.onclick=function(){window.location.href="/terminal";};return;}
+      create.disabled=true;create.textContent="Generating...";setStatus("Creating a private X link command...",false);
+      try{
+        var response=await fetch(apiBase+"/api/web/x/link-code",{method:"POST",mode:"cors",cache:"no-store",headers:{"Accept":"application/json","Content-Type":"application/json","Authorization":"Bearer "+webToken},body:"{}"});
+        var data=await response.json().catch(function(){return {};});
+        if(!response.ok||!data.ok)throw new Error(data.error||"Could not create the X link.");
+        command.textContent=data.command||("link "+data.code);open.href=data.dmUrl||data.profileUrl||"https://x.com/SlimeWirebot";result.hidden=false;setStatus("Ready. Copy the command, open X DM, paste it, and send.",false);create.textContent="Generate a new code";
+      }catch(error){
+        var message=String(error&&error.message||"");
+        if(/unauthorized|session|sign in|token/i.test(message)){setStatus("Your SlimeWire sign-in expired. Sign in again, then return to connect X.",true);create.textContent="Open sign in";create.onclick=function(){window.location.href="/terminal";};}
+        else{setStatus(message||"Could not create the X link. Please try again.",true);create.textContent="Try again";}
+      }finally{create.disabled=false;}
+    });
+    copy.addEventListener("click",async function(){
+      try{await navigator.clipboard.writeText(command.textContent);copy.textContent="Copied";setTimeout(function(){copy.textContent="Copy";},1400);}
+      catch(e){setStatus("Copy was blocked. Press and hold the command to copy it.",true);}
     });
   })();
 </script>
