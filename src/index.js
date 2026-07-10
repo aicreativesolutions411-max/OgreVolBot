@@ -34161,16 +34161,26 @@ async function buildWalletMap(wallet, mode = "bags") {
       }
       rows = [...byTok.values()];
     } else {
-      const d = await solanaTrackerJson(`/wallet/${encodeURIComponent(wallet)}`, { cacheTtlMs: 4 * 60_000, timeoutMs: 9000 });
-      const toks = (d && (d.tokens || d.holdings || d.assets)) || [];
-      rows = toks.map((t) => {
-        const tk = t.token || t;
-        const sym = tk.symbol || tk.ticker || shortMint(tk.mint || tk.address || "");
-        const qty = walletMapNumber(t.balance, t.uiAmount, t.amount, t.quantity, tk.balance, tk.uiAmount);
-        const val = walletMapNumber(t.value, t.valueUsd, t.usdValue, t.usd, qty * walletMapNumber(t.price, t.priceUsd, tk.price, tk.priceUsd));
-        const pnlUsd = walletMapNumber(t.pnlUsd, t.unrealizedPnlUsd, t.unrealized, t.pnl?.usd);
-        return { sym, val, qty, pnlUsd, mint: tk.mint || tk.address || "", image: firstString(tk.image, tk.logo, tk.icon, tk.imageUrl) };
-      });
+      // Reuse the normalized wallet scan instead of depending on only the legacy portfolio shape.
+      // The scan already merges PnL positions with the on-chain token-account fallback, so a wallet that
+      // successfully produced a scan card cannot incorrectly become "can't map" here.
+      const scan = await solWalletScan(wallet).catch(() => null);
+      rows = (scan?.holdings || []).map((holding) => ({
+        sym: holding.sym || shortMint(holding.addr || ""),
+        val: Number(holding.valueUsd) || 0,
+        qty: Number(holding.qty) || 0,
+        pnlUsd: Number(holding.pnlUsd) || 0,
+        mint: holding.addr || "",
+        image: "",
+      }));
+      // Native SOL is a real wallet bag too. Including it also gives funded wallets with no current token
+      // positions a useful map instead of rejecting them as empty.
+      if (Number(scan?.solBalance) > 0) {
+        rows.push({
+          sym: "SOL", val: Number(scan.solBalanceUsd) || 0, qty: Number(scan.solBalance) || 0,
+          pnlUsd: 0, mint: SOL_MINT, image: "", native: true,
+        });
+      }
     }
   } catch { rows = []; }
   rows = rows.filter((r) => mode === "network" ? (r.count > 0 || r.val > 0) : r.val > 0)
@@ -34181,7 +34191,7 @@ async function buildWalletMap(wallet, mode = "bags") {
   const nodes = rows.map((r, i) => {
     const details = mode === "network"
       ? [`${r.buys || 0} buy${r.buys === 1 ? "" : "s"}`, `${r.sells || 0} sell${r.sells === 1 ? "" : "s"}`, r.val > 0 ? `${fmtMc(r.val)} volume` : `${r.count || 0} swaps`]
-      : [fmtMc(r.val), r.qty > 0 ? `${walletMapQty(r.qty)} tokens` : "", r.pnlUsd ? `${walletMapSigned(r.pnlUsd)} open PnL` : ""].filter(Boolean);
+      : [r.val > 0 ? fmtMc(r.val) : "unpriced", r.qty > 0 ? `${walletMapQty(r.qty)} ${r.native ? "SOL" : "tokens"}` : "", r.pnlUsd ? `${walletMapSigned(r.pnlUsd)} open PnL` : ""].filter(Boolean);
     return {
       i, weight: Math.max(0.05, Math.min(1, mode === "network" && !(r.val > 0) ? (r.count || 1) / Math.max(1, rows[0]?.count || 1) : r.val / maxVal)),
       state: i === 0 ? "whale" : (mode === "network" && r.sells > r.buys ? "sold" : mode === "network" && r.buys > 0 ? "new" : "hold"),
@@ -37494,6 +37504,10 @@ async function sendWalletScanCard(chatId, address) {
     [
       { text: "🔎 Explorer", url: s.explorer },
       ...(s.chain === "solana" ? [{ text: "👛 Track this wallet", callback_data: `wt:add:${address}` }] : []),
+    ],
+    [
+      { text: "💸 Fund Map", callback_data: `mapw:${address}:funds` },
+      ...(s.chain === "solana" ? [{ text: "🪂 Airdrops Sent", url: `https://www.slimewire.org/airdrop?ca=${encodeURIComponent(address)}` }] : []),
     ],
     // 🤖 Copy Trade — SOL (Solana Tracker signals) AND Robinhood (custodial RH trading). Opens a settings popup.
     [{ text: "🤖 Copy Trade this wallet", callback_data: `ct:open:${address}` }],

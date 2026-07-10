@@ -2368,6 +2368,7 @@ test("Airdrop and wallet maps trace Solana/.sol and Robinhood fund flows on web 
   assert.match(rhWallet, /BUYS \/ SELLS/);
   assert.match(solWallet, /recent coins traded/);
   assert.match(solWallet, /flowLabel/);
+  assert.match(solWallet, /solWalletScan\(wallet\)/);
   assert.match(flowMap, /mode: "funds"/);
   assert.match(flowMap, /FUNDED/);
   assert.match(flowMap, /FUNDERS/);
@@ -2383,6 +2384,11 @@ test("Airdrop and wallet maps trace Solana/.sol and Robinhood fund flows on web 
   assert.match(functionBody(serverSource, "mapTelegramDetailLines"), /Top current bags/);
   assert.match(functionBody(serverSource, "sendMapCard"), /mapTelegramDetailLines\(map\)/);
   assert.match(functionBody(serverSource, "sendAirdropSubjectCard"), /sendMapCard\(chatId, target, "funds"\)/);
+  const walletCard = functionBody(serverSource, "sendWalletScanCard");
+  assert.match(walletCard, /Fund Map/);
+  assert.match(walletCard, /mapw:\$\{address\}:funds/);
+  assert.match(walletCard, /Airdrops Sent/);
+  assert.match(walletCard, /airdrop\?ca=\$\{encodeURIComponent\(address\)\}/);
   const walletScan = fs.readFileSync(new URL("../src/lib/walletScan.js", import.meta.url), "utf8");
   assert.match(walletScan, /bsAccountWithV2Fallback\(a, "tokenlist"\)/);
   assert.match(walletScan, /bsAccountWithV2Fallback\(a, "tokentx"\)/);
