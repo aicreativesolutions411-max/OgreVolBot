@@ -69,7 +69,7 @@ import {
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
-import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenInfo, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
+import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, evmWalletFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenInfo, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
 import { getNoxaScan, fetchNoxaFeed, fetchPoolBuys, NOXA_RH } from "./lib/noxaLaunchpad.js";
 import { rhWalletScan } from "./lib/walletScan.js";
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp, listCharacterFiles, characterPfpCount, makeCharacterPfp } from "./lib/pfp.js";
@@ -78,6 +78,7 @@ import { xConfigured, xSearchMentions, xReply, xPost, xSearchQuery, xWhoAmI, xHa
 import { xDmAuthMode, xDmConfigured, xDmFetchEvents, xDmOwnUserId as xDmResolvedOwnUserId, xDmSendText } from "./lib/xDmClient.js";
 import { isStaleXDmMoneyEvent, parseXDmBuySlotCommand, parseXDmSellSlotCommand, validateXDmBuyAmount, xDmEventTimestampMs, X_DM_BUY_LIMITS, X_DM_SELL_PERCENTAGES } from "./lib/xDmFlow.js";
 import { signXDmMenuToken, verifyXDmMenuToken, bootstrapExchangeDecision } from "./lib/xDmMenuToken.js";
+import { hlAccount, hlMarketOpen, hlMarketClose, HL_PVP_ASSETS } from "./lib/hyperliquid.js";
 import { createXDmPadSession, pruneXDmPadSessions, resolveXDmPadSession, revokeXDmPadSession, revokeXDmPadSessionsForSender } from "./lib/xDmPadSession.js";
 import { renderXScanCard } from "./lib/xCard.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
@@ -13474,6 +13475,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("ct:")) {
     if (await handleCopyTradeCallback(query, userId).catch(() => false)) return;
   }
+  // 🥊 PvP Mode (pvp:*) — arena join/leave, live-feed copy/counter, Hyperliquid perps panel.
+  if (String(query.data || "").startsWith("pvp:")) {
+    if (await handlePvpCallback(query, userId).catch(() => false)) return;
+  }
   // Community Snipe menu (cs:*) — tap-to-join launch snipe + dev setup.
   if (String(query.data || "").startsWith("cs:")) {
     if (await handleCommunitySnipeCallback(query, userId).catch(() => false)) return;
@@ -14148,6 +14153,8 @@ async function handleMessage(message, userId) {
   if (await applyCopyInput(message, userId).catch(() => false)) return;
   // 🤖 Copy Trade popup: capture a typed custom copy size / TP-SL.
   if (await applyCopyCfgInput(message, userId).catch(() => false)) return;
+  // 🥊 PvP perps: capture a typed custom position size.
+  if (await applyPvpPerpInput(message, userId).catch(() => false)) return;
   // Wallet Tracker commands (/track, /untrack, /tracked) — DM only.
   if (await handleWalletTrackerCommand(message, userId).catch(() => false)) return;
 
@@ -14298,6 +14305,14 @@ async function handleMessage(message, userId) {
   const lookCommand = parseCommandWithArgument(text, ["look", "scan", "scan_ca", "check"]);
   if (lookCommand) {
     await handleTelegramLookCommand(chatId, message, lookCommand.argument);
+    return;
+  }
+  // 🥊 /pvp — group: the PvP arena panel (join, feed toggle, board). DM: the perps panel.
+  if (/^\/(pvp|perps)(?:@\w+)?\s*$/i.test(text.trim())) {
+    if (isPrivateChat(message.chat)) { await pvpRenderPerps(userId, null); return; }
+    const gbPvp = await getGroupBotEntry(chatId).catch(() => null);
+    const vPvp = pvpArenaView(gbPvp, chatId);
+    await sayHtml(chatId, vPvp.text, vPvp.kb).catch(() => {});
     return;
   }
   // 👛 /wallet <address> — explicit wallet scan for a SOL or Robinhood (0x…) wallet: stats · PnL · top holdings.
@@ -33320,6 +33335,39 @@ async function fetchTokenHolderRows(mint) {
 // COIN map: detect the token from METADATA first (pump + DexScreener) so a real coin is NEVER mis-read as a
 // wallet, pull the full coin info (MC · liq · age · 1H%) onto the card, then map its holders (KOL-labeled).
 const mapMetaLastGood = new Map();   // mint -> { at, mc, liq, ch1, sym } — survives a flaky dex/gecko pull
+// 🖼️ X pfp for an ARBITRARY wallet (not just leaderboard KOLs): wallet → its .sol domain (SNS reverse,
+// cached) → the domain's `twitter` record → handle → unavatar pfp. Coverage is real but partial (only
+// wallets whose owner set a twitter record); cached 24h incl. misses so maps never re-pay the lookups.
+const _mapXAvatarCache = new Map();
+async function mapWalletXAvatar(wallet) {
+  const w = String(wallet || "");
+  const c = _mapXAvatarCache.get(w);
+  if (c && Date.now() - c.at < 24 * 60 * 60_000) return c.v;
+  let v = null;
+  try {
+    const domain = await resolveSolWalletDomain(w);
+    if (domain) {
+      const label = domain.replace(/\.sol$/i, "");
+      const ctl = new AbortController(); const t = setTimeout(() => { try { ctl.abort(); } catch { /* */ } }, 3000);
+      const res = await fetch(`https://sns-sdk-proxy.bonfida.workers.dev/record/${encodeURIComponent(label)}/twitter`, { signal: ctl.signal, headers: { accept: "application/json" } }).finally(() => clearTimeout(t));
+      if (res.ok) {
+        const d = await res.json().catch(() => null);
+        if (d?.s === "ok" && d.result) {
+          // record value is base64 of a null-padded string like "https://twitter.com/handle" or "@handle"
+          const rawTxt = Buffer.from(String(d.result), "base64").toString("utf8").replace(/\0+/g, "").trim();
+          const m = rawTxt.match(/(?:twitter\.com|x\.com)\/@?(\w{1,15})/i) || rawTxt.match(/^@?(\w{1,15})$/);
+          const handle = m ? m[1] : "";
+          if (handle) v = { twitter: handle, name: `@${handle}`, domain, avatarUrl: `https://unavatar.io/twitter/${handle}` };
+        }
+      }
+      if (!v) v = { twitter: "", name: domain, domain, avatarUrl: null };   // domain but no twitter → at least the .sol name
+    }
+  } catch { /* miss cached below */ }
+  _mapXAvatarCache.set(w, { at: Date.now(), v });
+  if (_mapXAvatarCache.size > 3000) _mapXAvatarCache.delete(_mapXAvatarCache.keys().next().value);
+  return v;
+}
+
 async function buildTokenHolderMap(mint) {
   const _t0 = Date.now();
   // PARALLEL — kol identity, coin info (pump+dex, answers "is this a token?"), AND holders all fire at ONCE
@@ -33381,6 +33429,12 @@ async function buildTokenHolderMap(mint) {
   let kolsIn = 0, whales = 0;
   const nodes = await Promise.all(holderRows.slice(0, 150).map(async (h, i) => {
     const id = mapResolveIdentity(h.wallet, idx);
+    // Not a known KOL → try the wallet's OWN X pfp via its .sol twitter record (top 30 only, 2.5s-raced so a
+    // slow SNS read can't stall the map; the lookup finishes + caches for the next render either way).
+    if (!id.avatarUrl && i < 30) {
+      const xa = await Promise.race([mapWalletXAvatar(h.wallet), new Promise((r) => setTimeout(() => r(null), 2500))]).catch(() => null);
+      if (xa) { id.name = xa.name || id.name; id.twitter = xa.twitter || id.twitter; if (xa.avatarUrl) id.avatarUrl = xa.avatarUrl; }
+    }
     if (id.isKol) kolsIn++;
     const isWhale = (h.pct || 0) >= Math.max(1, maxPct * 0.5) || (i === 0 && (h.pct || 0) > 0);
     if (isWhale) whales++;
@@ -33397,7 +33451,7 @@ async function buildTokenHolderMap(mint) {
       avatarUrl: id.avatarUrl,               // KOL X pfp (remote) — renderer fetches, web uses
       faceUrl: face ? face.url : null,       // anon slime face (served URL) — web uses when no avatarUrl
       faceFile: face ? face.file : null,     // anon slime face (local path) — server PNG renderer reads
-      xUrl: id.isKol && id.twitter ? `https://x.com/${id.twitter}` : "",          // socials for a pinged KOL
+      xUrl: id.twitter ? `https://x.com/${id.twitter}` : "",                      // socials for any X-linked wallet
       kolscanUrl: id.isKol ? `https://kolscan.io/account/${h.wallet}` : "",       // their kolscan profile
       solscanUrl: `https://solscan.io/account/${h.wallet}`,
     };
@@ -42942,6 +42996,231 @@ async function applyCopyCfgInput(message, userId) {
   return true;
 }
 
+// ---- 🥊 PvP MODE (pvp.trade-style social trading, per-group toggle) ---------------------------------
+// Trade together in a group: members JOIN the arena, every bot trade they make posts a live card the
+// whole room sees, with one-tap ⚡ Copy (own wallet, qb:) and 😈 Counter. Leaderboard = the existing
+// Room PnL board. Plus 📈 PERPS (long/short with leverage) on Hyperliquid — the user's HL account is the
+// SAME derived EVM wallet as Robinhood Chain, funded by USDC on Arbitrum. Feature key: "pvp" (off by default).
+const pvpPerpCfg = new Map();        // userId -> { asset, side, lev, usd, at }
+const pvpPerpPending = new Map();    // userId -> { at } (custom $ size typed next)
+const _pvpFeedSeen = new Map();      // `${chatId}:${sig}` -> at (broadcast dedup)
+function pvpMembers(entry) { return (entry && entry.pvp && entry.pvp.members) || {}; }
+async function pvpSetMember(chatId, userId, name, on) {
+  const store = await readGroupBot();
+  const k = String(chatId);
+  const e = store.groups[k] || defaultGroupBotEntry();
+  e.pvp = e.pvp || { members: {} }; e.pvp.members = e.pvp.members || {};
+  if (on) e.pvp.members[String(userId)] = { name: String(name || "").slice(0, 24) || "trader", at: Date.now() };
+  else delete e.pvp.members[String(userId)];
+  store.groups[k] = e;
+  await writeGroupBot(store);
+  return e;
+}
+function pvpArenaView(entry, chatId) {
+  const on = groupBotFeatureOn(entry, "pvp");
+  const members = pvpMembers(entry);
+  const names = Object.values(members).map((m) => escapeTelegramHtml(m.name)).slice(0, 12);
+  const text = [
+    "🥊 <b>PvP Mode</b> — trade together, in this chat",
+    "",
+    on ? "🟢 Live feed is ON — members' bot trades post here with one-tap Copy / Counter." : "🔴 Feed is OFF — an admin can turn it on below.",
+    "",
+    `⚔️ In the arena: <b>${Object.keys(members).length}</b>${names.length ? ` — ${names.join(", ")}` : ""}`,
+    "",
+    "How it works: Join → trade normally from your own SlimeWire wallet (paste a CA, ⚡ quick buy, copy trade…) → the room sees your entries live and can copy or fade you. Skill talks, PnL walks — settle it on the 🏆 board.",
+  ].join("\n");
+  const kb = { inline_keyboard: [
+    [{ text: "⚔️ Join the arena", callback_data: "pvp:join" }, { text: "🚪 Leave", callback_data: "pvp:leave" }],
+    [{ text: "🏆 Leaderboard", callback_data: "room:pnl" }, { text: "📈 Perps (DM)", callback_data: "pvp:perps" }],
+    [{ text: on ? "🔴 Turn feed OFF (admin)" : "🟢 Turn feed ON (admin)", callback_data: on ? "pvp:off" : "pvp:on" }],
+  ] };
+  return { text, kb };
+}
+// Live feed — called after recordTradeEvents persists. Posts each member trade to their PvP groups.
+async function pvpBroadcastTradeEvents(events) {
+  const rows = (events || []).filter((e) => e && e.userId && e.tokenMint && ["buy", "sell"].includes(String(e.type || "").toLowerCase()));
+  if (!rows.length) return;
+  const store = await readGroupBot().catch(() => null);
+  if (!store) return;
+  const groups = Object.entries(store.groups || {}).filter(([, g]) => groupBotFeatureOn(g, "pvp") && Object.keys(pvpMembers(g)).length);
+  if (!groups.length) return;
+  const now = Date.now();
+  for (const [k, at] of _pvpFeedSeen) { if (now - at > 30 * 60_000) _pvpFeedSeen.delete(k); }
+  for (const ev of rows.slice(0, 6)) {
+    const uid = String(ev.userId);
+    const targets = groups.filter(([, g]) => pvpMembers(g)[uid]);
+    if (!targets.length) continue;
+    const isRh = /^0x/i.test(String(ev.tokenMint));
+    const sol = Number(ev.type === "buy" ? ev.solLamportsSpent : ev.solLamportsReceived) / 1e9;
+    let sym = shortMint(ev.tokenMint);
+    if (!isRh) {
+      const pairs = await fetchDexScreenerTokenPairsBatch([ev.tokenMint]).catch(() => []);
+      const p = bestDexPairForToken(ev.tokenMint, pairs);
+      if (p?.baseToken?.symbol) sym = p.baseToken.symbol;
+    }
+    for (const [chatId, g] of targets) {
+      const dedup = `${chatId}:${ev.signature || `${uid}:${ev.tokenMint}:${ev.type}`}`;
+      if (_pvpFeedSeen.has(dedup)) continue;
+      _pvpFeedSeen.set(dedup, now);
+      const name = escapeTelegramHtml(pvpMembers(g)[uid].name || "trader");
+      const side = ev.type === "buy" ? "🟢 <b>aped</b>" : "🔴 <b>sold</b>";
+      const text = [
+        `🥊 <b>${name}</b> ${side} ${Number.isFinite(sol) && sol > 0 ? `<b>${sol.toFixed(3)} ◎</b> of ` : ""}<b>$${escapeTelegramHtml(String(sym).slice(0, 12))}</b>${isRh ? " 🪶" : ""}`,
+        `<code>${escapeTelegramHtml(ev.tokenMint)}</code>`,
+        "<i>Copy them or fade them 👇</i>",
+      ].join("\n");
+      const kb = { inline_keyboard: [
+        ...(isRh ? [[{ text: "⚡ Trade it", url: `https://www.slimewire.org/#rhtrade/${ev.tokenMint}` }]]
+          : [[{ text: "⚡ Copy 0.05◎", callback_data: `qb:0.05:${ev.tokenMint}` }, { text: "⚡ 0.1◎", callback_data: `qb:0.1:${ev.tokenMint}` }, { text: "⚡ 0.25◎", callback_data: `qb:0.25:${ev.tokenMint}` }]]),
+        [{ text: "😈 Counter", callback_data: `pvp:ctr:${ev.tokenMint}` }, { text: "🏆 Board", callback_data: "room:pnl" }],
+      ] };
+      await sayHtml(chatId, text, kb).catch(() => {});
+    }
+  }
+}
+// 📈 Perps panel (always in DM — leverage is nobody else's business).
+async function pvpPerpsView(userId) {
+  const wallets = walletsForOwner(await readWalletStore(), userId);
+  if (!wallets.length) return { text: "📈 <b>Perps</b>\n\nYou need a SlimeWire wallet first — open /wallets and create one.", kb: { inline_keyboard: [] } };
+  const evm = evmWalletFromSolana(decryptWallet(wallets[0]).secretKey);
+  const acct = await hlAccount(evm.address).catch(() => null);
+  const cfg = pvpPerpCfg.get(String(userId)) || { asset: "SOL", side: "long", lev: 5, usd: 25 };
+  pvpPerpCfg.set(String(userId), { ...cfg, at: Date.now() });
+  const lines = [
+    "📈 <b>Perps</b> — long/short with leverage (Hyperliquid)",
+    "",
+    acct ? `💵 Margin balance: <b>$${acct.withdrawable.toFixed(2)}</b>${acct.accountValue > acct.withdrawable ? ` (account $${acct.accountValue.toFixed(2)})` : ""}` : "💵 Balance: <i>couldn't reach Hyperliquid — try again</i>",
+  ];
+  if (acct && acct.positions.length) {
+    lines.push("", "📊 <b>Open positions</b>");
+    for (const p of acct.positions.slice(0, 6)) {
+      const side = p.size > 0 ? "🟢 LONG" : "🔴 SHORT";
+      const pnl = p.unrealizedPnl;
+      lines.push(`├ ${side} <b>${Math.abs(p.size)} ${escapeTelegramHtml(p.coin)}</b> @ ${p.entryPx} · ${pnl >= 0 ? "🟢 +" : "🔴 −"}$${Math.abs(pnl).toFixed(2)}${p.liqPx > 0 ? ` · liq ${p.liqPx}` : ""}`);
+    }
+  }
+  if (acct && !(acct.withdrawable > 0) && !acct.positions.length) {
+    lines.push("", `⚠️ <b>No margin yet.</b> Deposit <b>USDC on Arbitrum</b> to your trading address and Hyperliquid credits it:\n<code>${evm.address}</code>`);
+  }
+  lines.push("", `🎯 Order: <b>${cfg.side === "long" ? "🟢 LONG" : "🔴 SHORT"} ${cfg.asset}</b> · size <b>$${cfg.usd}</b> · <b>${cfg.lev}x</b> (margin ≈ $${(cfg.usd / cfg.lev).toFixed(2)})`);
+  const pick = (cur, val, label, cb) => ({ text: `${String(cur) === String(val) ? "✅ " : ""}${label}`, callback_data: cb });
+  const kb = { inline_keyboard: [
+    HL_PVP_ASSETS.map((a) => pick(cfg.asset, a, a, `pvp:pa:${a}`)),
+    [pick(cfg.side, "long", "🟢 Long", "pvp:ps:long"), pick(cfg.side, "short", "🔴 Short", "pvp:ps:short")],
+    [2, 5, 10, 20].map((l) => pick(cfg.lev, l, `${l}x`, `pvp:pl:${l}`)),
+    [10, 25, 50, 100].map((u) => pick(cfg.usd, u, `$${u}`, `pvp:pu:${u}`)).concat([{ text: "✏️", callback_data: "pvp:pux" }]),
+    [{ text: `🚀 Open ${cfg.side === "long" ? "LONG" : "SHORT"} ${cfg.asset} $${cfg.usd} @ ${cfg.lev}x`, callback_data: "pvp:popen" }],
+    ...(acct && acct.positions.length ? [acct.positions.slice(0, 3).map((p) => ({ text: `✖ Close ${p.coin}`, callback_data: `pvp:pclose:${p.coin}` }))] : []),
+    [{ text: "🔄 Refresh", callback_data: "pvp:perps" }],
+  ] };
+  return { text: lines.join("\n"), kb };
+}
+async function pvpRenderPerps(userId, messageId = null) {
+  const view = await pvpPerpsView(userId);
+  if (messageId) await telegram("editMessageText", { chat_id: userId, message_id: messageId, text: view.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: view.kb }).catch(() => sayHtml(userId, view.text, view.kb).catch(() => {}));
+  else await sayHtml(userId, view.text, view.kb).catch(() => {});
+}
+async function handlePvpCallback(query, userId) {
+  const data = String(query?.data || "");
+  if (!data.startsWith("pvp:")) return false;
+  const chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  const inDm = String(chatId) === String(userId);
+  const ack = (t, alert) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: Boolean(alert) } : {}) }).catch(() => {});
+  const from = query.from || {};
+  const displayName = [from.first_name, from.last_name].filter(Boolean).join(" ") || from.username || "trader";
+  if (data === "pvp:join" || data === "pvp:leave") {
+    if (inDm) { await ack("Use this in a group — PvP is a room sport."); return true; }
+    const e = await pvpSetMember(chatId, userId, displayName, data === "pvp:join");
+    const v = pvpArenaView(e, chatId);
+    await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: v.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: v.kb }).catch(() => {});
+    await ack(data === "pvp:join" ? "⚔️ You're in — your bot trades now post to this room." : "🚪 Out of the arena.");
+    return true;
+  }
+  if (data === "pvp:on" || data === "pvp:off") {
+    if (inDm) { await ack(); return true; }
+    if (!(await isGroupBotAdmin(chatId, userId))) { await ack("Admins only.", true); return true; }
+    const e = await setGroupBotFeature(chatId, "pvp", data === "pvp:on");
+    const v = pvpArenaView(e, chatId);
+    await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: v.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: v.kb }).catch(() => {});
+    await ack(data === "pvp:on" ? "🟢 PvP feed ON." : "🔴 PvP feed OFF.");
+    return true;
+  }
+  if (data === "pvp:perps") { await ack(inDm ? "" : "📈 Sent your perps panel in DM."); await pvpRenderPerps(userId, inDm ? messageId : null); return true; }
+  const mCtr = data.match(/^pvp:ctr:([1-9A-HJ-NP-Za-km-z]{32,44}|0x[0-9a-fA-F]{40})$/);
+  if (mCtr) {
+    await ack("😈 DM'd you counter options.");
+    await sayHtml(userId, [
+      `😈 <b>Countering</b> <code>${escapeTelegramHtml(mCtr[1])}</code>`,
+      "",
+      "Two ways to fade a play:",
+      "├ 💰 Hold it? Sell into their pump from 📊 Positions.",
+      "└ 📉 Or short a major (BTC/ETH/SOL…) with leverage on Perps.",
+    ].join("\n"), { inline_keyboard: [
+      [{ text: "📊 Positions (sell)", callback_data: "positions_overview" }],
+      [{ text: "📉 Open Perps", callback_data: "pvp:perps" }],
+    ] }).catch(() => {});
+    return true;
+  }
+  // Perps config taps (DM panel)
+  const cfg = pvpPerpCfg.get(String(userId)) || { asset: "SOL", side: "long", lev: 5, usd: 25 };
+  const mPa = data.match(/^pvp:pa:([A-Z]{2,10})$/);
+  if (mPa && HL_PVP_ASSETS.includes(mPa[1])) { cfg.asset = mPa[1]; pvpPerpCfg.set(String(userId), cfg); await pvpRenderPerps(userId, messageId); await ack(); return true; }
+  const mPs = data.match(/^pvp:ps:(long|short)$/);
+  if (mPs) { cfg.side = mPs[1]; pvpPerpCfg.set(String(userId), cfg); await pvpRenderPerps(userId, messageId); await ack(); return true; }
+  const mPl = data.match(/^pvp:pl:(\d+)$/);
+  if (mPl) { cfg.lev = Math.max(1, Math.min(20, Number(mPl[1]))); pvpPerpCfg.set(String(userId), cfg); await pvpRenderPerps(userId, messageId); await ack(); return true; }
+  const mPu = data.match(/^pvp:pu:(\d+)$/);
+  if (mPu) { cfg.usd = Math.max(10, Number(mPu[1])); pvpPerpCfg.set(String(userId), cfg); await pvpRenderPerps(userId, messageId); await ack(); return true; }
+  if (data === "pvp:pux") { pvpPerpPending.set(String(userId), { at: Date.now() }); await ack("Send the position size in USD (e.g. 75)."); return true; }
+  if (data === "pvp:popen") {
+    await ack("Placing order…");
+    try {
+      const wallets = walletsForOwner(await readWalletStore(), userId);
+      if (!wallets.length) throw new Error("Create a wallet first (/wallets).");
+      const evm = evmWalletFromSolana(decryptWallet(wallets[0]).secretKey);
+      const r = await hlMarketOpen({ privateKey: evm.privateKey, coin: cfg.asset, isBuy: cfg.side === "long", notionalUsd: cfg.usd, leverage: cfg.lev });
+      await sayHtml(userId, [
+        `✅ <b>${r.isBuy ? "🟢 LONG" : "🔴 SHORT"} ${escapeTelegramHtml(r.coin)}</b> opened`,
+        `├ Size <b>${r.size} ${escapeTelegramHtml(r.coin)}</b> ($${r.notionalUsd.toFixed(2)}) @ <b>${r.avgPx}</b>`,
+        `└ Leverage <b>${r.leverage}x</b>`,
+      ].join("\n")).catch(() => {});
+      await pvpRenderPerps(userId, messageId);
+    } catch (error) { await ack(friendlyError(error), true); }
+    return true;
+  }
+  const mPc = data.match(/^pvp:pclose:([A-Z]{2,10})$/);
+  if (mPc) {
+    await ack("Closing…");
+    try {
+      const wallets = walletsForOwner(await readWalletStore(), userId);
+      if (!wallets.length) throw new Error("No wallet.");
+      const evm = evmWalletFromSolana(decryptWallet(wallets[0]).secretKey);
+      const r = await hlMarketClose({ privateKey: evm.privateKey, address: evm.address, coin: mPc[1] });
+      await sayHtml(userId, `✅ Closed <b>${r.wasLong ? "LONG" : "SHORT"} ${escapeTelegramHtml(r.coin)}</b> (${r.closedSize} @ ${r.avgPx}) · uPnL at close ${r.unrealizedPnl >= 0 ? "🟢 +" : "🔴 −"}$${Math.abs(r.unrealizedPnl).toFixed(2)}`).catch(() => {});
+      await pvpRenderPerps(userId, messageId);
+    } catch (error) { await ack(friendlyError(error), true); }
+    return true;
+  }
+  await ack(); return true;
+}
+async function applyPvpPerpInput(message, userId) {
+  if (!isPrivateChat(message?.chat)) return false;
+  const pend = pvpPerpPending.get(String(userId));
+  if (!pend) return false;
+  if (Date.now() - pend.at > 180000) { pvpPerpPending.delete(String(userId)); return false; }
+  const raw = String(message.text || "").trim();
+  if (!raw) return false;
+  pvpPerpPending.delete(String(userId));
+  if (/^\/cancel$/i.test(raw)) return true;
+  const usd = Number(raw.replace(/[^\d.]/g, ""));
+  if (!(usd >= 10)) { await say(message.chat.id, "Send a USD size of at least $10, e.g. 75."); return true; }
+  const cfg = pvpPerpCfg.get(String(userId)) || { asset: "SOL", side: "long", lev: 5, usd: 25 };
+  cfg.usd = Math.round(usd);
+  pvpPerpCfg.set(String(userId), cfg);
+  await pvpRenderPerps(userId, null);
+  return true;
+}
+
 // ROSE MANAGER — group moderation (welcome, rules, anti-links, warn/mute/kick/ban). Per-group,
 // gated on the `rose` flag (off by default), admin-gated. Reply-based moderation targets.
 function roseDefaults() {
@@ -48963,6 +49242,7 @@ async function recordTradeEvents(events) {
   void maybeCopyRoomBest(events).catch(() => {});   // 🪞 Copy-the-room's-best: mirror a followed trader's buy
   void maybeCopyRoomConsensus(events).catch(() => {});   // 🤝 Copy room consensus: mirror when ≥2 board traders agree
   void maybeCreditReferralConversion(events).catch(() => {});   // 🎟️ credit a site-referred user's first trade to their TG inviter
+  void pvpBroadcastTradeEvents(events).catch(() => {});   // 🥊 PvP live feed: post members' trades to their arena groups
 
   const hasWebBuyNeedingGuard = events.some((event) => (
     event?.type === "buy"
