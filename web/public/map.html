@@ -216,7 +216,9 @@ function drawSide(map){
   renderXray(map);
   const kols=(map.nodes||[]).filter(n=>n.isKol).slice(0,12);
   const rest=(map.nodes||[]).filter(n=>!n.isKol).slice(0,10);
-  const row=(n,tgt)=>'<div class="krow" data-t="'+(tgt||'')+'"><img src="'+esc(faceHref(n))+'" onerror="this.style.visibility=\'hidden\'"/><div><div class="nm">'+esc(n.name||short(n.wallet)||n.name)+'</div><div class="sub">'+(n.pct!=null?(+n.pct).toFixed(1)+'%':'')+(n.usd?' · $'+fmt(n.usd):'')+'</div></div></div>';
+  const socLink=(href,label,title)=>href?'<a href="'+esc(href)+'" target="_blank" rel="noopener" title="'+title+'" onclick="event.stopPropagation()" style="margin-left:6px;text-decoration:none;opacity:.9;font-size:12px">'+label+'</a>':'';
+  const socials=(n)=>{const s=socLink(n.xUrl,'𝕏','X')+socLink(n.kolscanUrl,'🔎','kolscan')+(!n.xUrl&&!n.kolscanUrl?socLink(n.solscanUrl,'↗','solscan'):'');return s?'<span class="socs">'+s+'</span>':'';};
+  const row=(n,tgt)=>'<div class="krow" data-t="'+(tgt||'')+'"><img src="'+esc(faceHref(n))+'" onerror="this.style.visibility=\'hidden\'"/><div><div class="nm">'+esc(n.name||short(n.wallet)||n.name)+socials(n)+'</div><div class="sub">'+(n.pct!=null?(+n.pct).toFixed(1)+'%':'')+(n.usd?' · $'+fmt(n.usd):'')+'</div></div></div>';
   document.getElementById('side').querySelector('h3').textContent=map.kind==='wallet'?'Bags':((kols.length||0)+' KOLs holding');
   const kl=document.getElementById('kolist');
   kl.innerHTML=(kols.length?kols:rest).map(n=>row(n, map.kind==='token'?n.wallet:(n.mint||''))).join('')||'<div class="sub" style="color:var(--dim);font-size:12px">no labeled wallets</div>';

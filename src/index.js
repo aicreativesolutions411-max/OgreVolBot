@@ -33397,6 +33397,9 @@ async function buildTokenHolderMap(mint) {
       avatarUrl: id.avatarUrl,               // KOL X pfp (remote) — renderer fetches, web uses
       faceUrl: face ? face.url : null,       // anon slime face (served URL) — web uses when no avatarUrl
       faceFile: face ? face.file : null,     // anon slime face (local path) — server PNG renderer reads
+      xUrl: id.isKol && id.twitter ? `https://x.com/${id.twitter}` : "",          // socials for a pinged KOL
+      kolscanUrl: id.isKol ? `https://kolscan.io/account/${h.wallet}` : "",       // their kolscan profile
+      solscanUrl: `https://solscan.io/account/${h.wallet}`,
     };
   }));
   const top10 = holderRows.slice(0, 10).reduce((s, h) => s + (h.pct || 0), 0);
