@@ -37,8 +37,9 @@ async function bsPaged(base, { maxPages = 4, timeoutMs = 8000 } = {}) {
   const out = [];
   let params = null;
   for (let p = 0; p < maxPages; p++) {
-    const qs = params ? "&" + new URLSearchParams(params).toString() : "";
-    const d = await bsFetch(`${base}${base.includes("?") ? "" : "?"}${qs}`, timeoutMs);
+    const qs = params ? new URLSearchParams(params).toString() : "";
+    const d = await bsFetch(qs ? `${base}${base.includes("?") ? "&" : "?"}${qs}` : base, timeoutMs);
+    if (!d && p === 0) return null;
     const items = (d && Array.isArray(d.items)) ? d.items : [];
     out.push(...items);
     params = d && d.next_page_params ? d.next_page_params : null;
@@ -52,14 +53,55 @@ async function bsAccount(address, action, timeoutMs = 7000) {
     module: "account", action, address: String(address || ""),
     startblock: "0", endblock: "999999999", sort: "desc", page: "1", offset: "250"
   });
-  const ctl = new AbortController();
-  const timer = setTimeout(() => { try { ctl.abort(); } catch { /* noop */ } }, timeoutMs);
-  try {
-    const response = await fetch(`${BLOCKSCOUT_V1}?${params}`, { signal: ctl.signal, headers: { accept: "application/json", "user-agent": "SlimeWire/1.0" } });
-    if (!response.ok) return null;
-    const data = await response.json();
-    return String(data?.status) === "1" ? data.result : null;
-  } catch { return null; } finally { clearTimeout(timer); }
+  // Blockscout rate-limits bursts per IP. A wallet scan asks for several independent views at once, so
+  // retry each failed view instead of letting one transient 429 make a complete portfolio lose its PnL.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => { try { ctl.abort(); } catch { /* noop */ } }, timeoutMs);
+    try {
+      const response = await fetch(`${BLOCKSCOUT_V1}?${params}`, { signal: ctl.signal, headers: { accept: "application/json", "user-agent": "SlimeWire/1.0" } });
+      if (response.ok) {
+        const data = await response.json();
+        // Blockscout reports a valid empty history as status=0/result=[] on some deployments. Preserve that
+        // as an available (empty) history instead of presenting it as a provider outage.
+        if (String(data?.status) === "1" || Array.isArray(data?.result)) return data.result;
+      }
+      if (attempt < 2 && (response.status === 429 || response.status >= 500)) {
+        await new Promise((resolve) => setTimeout(resolve, 450 * (attempt + 1)));
+        continue;
+      }
+      return null;
+    } catch {
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+        continue;
+      }
+      return null;
+    } finally { clearTimeout(timer); }
+  }
+  return null;
+}
+
+// The legacy account index is normally the fastest source, but Robinhood Blockscout occasionally fails a
+// single action while its v2 address index is healthy. Normalize the v2 fallback into the same row shapes so
+// a balance response can never arrive without the history needed for PnL.
+async function bsAccountWithV2Fallback(address, action) {
+  const primary = await bsAccount(address, action).catch(() => null);
+  if (primary !== null) return primary;
+  const encoded = encodeURIComponent(String(address || ""));
+  if (action === "balance") {
+    const row = await bsFetch(`/addresses/${encoded}`).catch(() => null);
+    return row?.coin_balance ?? null;
+  }
+  if (action === "tokenlist") {
+    const rows = await bsFetch(`/addresses/${encoded}/token-balances`).catch(() => null);
+    return Array.isArray(rows) ? rows : (Array.isArray(rows?.items) ? rows.items : null);
+  }
+  const endpoint = action === "tokentx" ? "token-transfers"
+    : action === "txlist" ? "transactions"
+      : action === "txlistinternal" ? "internal-transactions" : "";
+  if (!endpoint) return null;
+  return await bsPaged(`/addresses/${encoded}/${endpoint}`, { maxPages: 5, timeoutMs: 8000 }).catch(() => null);
 }
 
 const wei = (v) => { try { return Number(ethers.formatEther(BigInt(String(v || "0")))); } catch { return 0; } };
@@ -124,11 +166,11 @@ async function rhWalletScanCore(address, { rpcUrl, ttlMs = 90_000, maxHoldingsPr
   // account API stays live when block bounds are explicit, so wallet Bags/Trades use it directly.
   const [ethUsd, ethBalRaw, curTokensRaw, xfersRaw, txsRaw, itxsRaw] = await Promise.all([
     rhEthUsd().catch(() => 0),
-    bsAccount(a, "balance").catch(() => null),
-    bsAccount(a, "tokenlist").catch(() => null),
-    bsAccount(a, "tokentx").catch(() => null),
-    bsAccount(a, "txlist").catch(() => null),
-    bsAccount(a, "txlistinternal").catch(() => null),
+    bsAccountWithV2Fallback(a, "balance").catch(() => null),
+    bsAccountWithV2Fallback(a, "tokenlist").catch(() => null),
+    bsAccountWithV2Fallback(a, "tokentx").catch(() => null),
+    bsAccountWithV2Fallback(a, "txlist").catch(() => null),
+    bsAccountWithV2Fallback(a, "txlistinternal").catch(() => null),
   ]);
   const curTokens = Array.isArray(curTokensRaw) ? curTokensRaw : [];
   const xfers = Array.isArray(xfersRaw) ? xfersRaw : [];
@@ -166,7 +208,7 @@ async function rhWalletScanCore(address, { rpcUrl, ttlMs = 90_000, maxHoldingsPr
     const addr = String(tkn.address || tkn.address_hash || x.contractAddress || "");
     if (!addr) continue;
     const sym = String(tkn.symbol || x.tokenSymbol || "").replace(/^\$+/, "").slice(0, 12);
-    const rawDecimals = tkn.decimals ?? x.tokenDecimal;
+    const rawDecimals = tkn.decimals ?? x.tokenDecimal ?? x.total?.decimals;
     const dec = rawDecimals == null || rawDecimals === "" ? 0 : Number(rawDecimals);
     const qty = tokQty((x.total || {}).value ?? x.value, dec);
     if (!(qty > 0)) continue;

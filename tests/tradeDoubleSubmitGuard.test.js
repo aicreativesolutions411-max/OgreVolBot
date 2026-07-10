@@ -2384,8 +2384,9 @@ test("Airdrop and wallet maps trace Solana/.sol and Robinhood fund flows on web 
   assert.match(functionBody(serverSource, "sendMapCard"), /mapTelegramDetailLines\(map\)/);
   assert.match(functionBody(serverSource, "sendAirdropSubjectCard"), /sendMapCard\(chatId, target, "funds"\)/);
   const walletScan = fs.readFileSync(new URL("../src/lib/walletScan.js", import.meta.url), "utf8");
-  assert.match(walletScan, /bsAccount\(a, "tokenlist"\)/);
-  assert.match(walletScan, /bsAccount\(a, "tokentx"\)/);
+  assert.match(walletScan, /bsAccountWithV2Fallback\(a, "tokenlist"\)/);
+  assert.match(walletScan, /bsAccountWithV2Fallback\(a, "tokentx"\)/);
+  assert.match(walletScan, /token-transfers/);
   assert.match(walletScan, /trades: tradeRows\.slice/);
   const mapHtml = fs.readFileSync(new URL("../web/public/map.html", import.meta.url), "utf8");
   assert.match(mapHtml, /\.sol domain, or Robinhood 0x/);
