@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const server = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+const xClient = fs.readFileSync(new URL("../src/lib/xClient.js", import.meta.url), "utf8");
 
 function functionBody(source, name) {
   const start = source.indexOf(`function ${name}`);
@@ -40,4 +41,14 @@ test("X DM cookie polling accelerates after activity while official polling resp
   assert.match(start, /Number\(result\?\.handled \|\| 0\) > 0/);
   assert.match(start, /Date\.now\(\) - xDmLastActivityAt < 90_000/);
   assert.match(start, /scheduleXDmPoll\(xDmOfficial \? 8_000 : 2_000\)/);
+});
+
+test("X DM pasted CAs acknowledge slow scans and cannot stall the inbox poller", () => {
+  const handle = functionBody(server, "xDmHandleEvent");
+  const poll = functionBody(server, "xDmPollTick");
+  assert.match(handle, /CA received/);
+  assert.match(handle, /scanFastTimeout\(replyWork, 11_500, null\)/);
+  assert.match(handle, /Market details are still warming; the live chart is ready/);
+  assert.match(poll, /\[xdm\] poll ok checked=/);
+  assert.match(xClient, /inbox_initial_state\.json[\s\S]*\$\{DM_QUERY\}&_\=\$\{Date\.now\(\)\}/);
 });

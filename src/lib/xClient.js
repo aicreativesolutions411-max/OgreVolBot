@@ -389,7 +389,9 @@ export async function xCookieDmOwnUserId() {
 }
 export async function xCookieDmFetchEvents({ maxResults = 50 } = {}) {
   if (!hasXCookies()) return [];
-  const json = await signedApiJson("GET", "/1.1/dm/inbox_initial_state.json", { query: DM_QUERY });
+  // This endpoint is polled repeatedly with the same authenticated URL. A timestamp prevents an X/CDN edge
+  // from replaying an older inbox snapshot after a deploy while a fresh CA is visibly sitting in the DM.
+  const json = await signedApiJson("GET", "/1.1/dm/inbox_initial_state.json", { query: `${DM_QUERY}&_=${Date.now()}` });
   const own = await xCookieDmOwnUserId().catch(() => "");
   return collectCookieDmEvents(json)
     .filter((event) => event.id && event.senderId && event.text && (!own || event.senderId !== own))

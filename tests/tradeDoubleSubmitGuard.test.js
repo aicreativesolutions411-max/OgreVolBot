@@ -2223,7 +2223,8 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   const dominance = functionBody(serverSource, "tickerCandidateDominance");
   const truth = functionBody(serverSource, "handleTickerTruthCallback");
   const look = functionBody(serverSource, "handleTelegramLookCommand");
-  const keyboard = functionBody(serverSource, "slimeScanKeyboard");
+  const keyboard = functionBody(serverSource, "scanResearchKeyboard");
+  const mainKeyboard = functionBody(serverSource, "slimeScanKeyboard");
   assert.match(score, /log\(liquidity\) \* 30/);
   assert.match(score, /log\(marketCap\) \* 18/);
   assert.match(score, /microCapPenalty/);
@@ -2234,6 +2235,12 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(truth, /dominant real market plus live activity/);
   assert.match(look, /tickerTruthLine/);
   assert.match(keyboard, /Ticker Truth/);
+  assert.match(keyboard, /Holder Map/);
+  assert.match(keyboard, /Airdrop/);
+  assert.match(keyboard, /Explain inline/);
+  assert.match(keyboard, /Receipts/);
+  assert.match(mainKeyboard, /🗂 Research/);
+  assert.doesNotMatch(mainKeyboard, /Holder Map|Airdrop|Explain inline|Receipts|Ticker Truth/);
   assert.match(serverSource, /startsWith\("tm:"\)/);
   const scoreFn = new Function("candidate", score);
   const dominanceFn = new Function("candidate", "maxima", dominance);
@@ -2326,7 +2333,7 @@ test("KOL/wallet map: on-chain holders + ST identity, X 'map' intent + wallet ta
   // TG: /map command, Map button on scan card, map: callback with drill-through
   assert.match(serverSource, /parseCommandWithArgument\(text, \["map", "holders"/);
   assert.match(serverSource, /async function handleMapCallback\(query, userId\)/);
-  assert.match(functionBody(serverSource, "slimeScanKeyboard"), /🗺️ Holder Map/);
+  assert.match(functionBody(serverSource, "scanResearchKeyboard"), /🗺️ Holder Map/);
   assert.match(serverSource, /startsWith\("map:"\)/);
   // web: public /api/map + /api/map/img BEFORE the auth gate, and /map page route
   const apiIdx = serverSource.indexOf('pathname === "/api/map"');

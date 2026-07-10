@@ -34878,6 +34878,7 @@ function xReplyAuto() { const v = (process.env.X_REPLY_AUTO || "").trim(); retur
 function xDmStateFile() { return path.join(CONFIG.dataDir, "x-dm-terminal.json"); }
 let xDmStateCache = null;
 let xDmPollRunning = false;
+let xDmLastPollHeartbeatAt = 0;
 let xDmStateWriteChain = Promise.resolve();
 function xDmTerminalEnabled() {
   const v = String(process.env.X_DM_ENABLED || "").trim();
@@ -36168,12 +36169,24 @@ async function xDmHandleEvent(event, state) {
     if (!target) target = await resolveScanTargetFromText(text, [], { allowBareTickerHints: false }).catch(() => "");
     if (!target) return await xDmSend(senderId, "Send a CA or 0x contract, like: scan <CA>", state);
     xDmRememberTargets(state, senderId, targetList.length ? targetList : [target]);
-    const reply = await buildXReply(target, /^(chart)\b/i.test(lower) ? "chart" : /^(rug|safe)\b/i.test(lower) ? "rug" : /^(map)\b/i.test(lower) ? "map" : intent, event.id).catch(() => null);
-    const body = reply?.text || `Scanned ${shortMint(target)}`;
     const slots = xDmTokenSlotsText(state, senderId, Boolean(linked));
     const saveLine = targetList.length > 1 ? `Saved ${targetList.length} new coin slots. Scanned #1.` : "Saved coin slot #1.";
     const chartUrl = xDmShortChartUrl(state, senderId, target, 1);
     const menuUrl = linked ? xDmMenuUrl(state, senderId, target, 1) : "";
+    // A deep scan can wait on several public providers. Never leave the user's pasted CA looking ignored and
+    // never let one slow scan freeze the self-scheduling DM poller behind it. Acknowledge only when it is slow,
+    // then cap the read; chart/Trade Pad links still return even when market enrichment is warming.
+    const replyWork = buildXReply(target, /^(chart)\b/i.test(lower) ? "chart" : /^(rug|safe)\b/i.test(lower) ? "rug" : /^(map)\b/i.test(lower) ? "map" : intent, event.id).catch(() => null);
+    const first = await Promise.race([
+      replyWork.then((value) => ({ ready: true, value })),
+      new Promise((resolve) => setTimeout(() => resolve({ ready: false, value: null }), 1_500))
+    ]);
+    let reply = first.value;
+    if (!first.ready) {
+      await xDmSend(senderId, `CA received · ${shortMint(target)}\nBuilding the scan and trade links now…`, state).catch(() => {});
+      reply = await scanFastTimeout(replyWork, 11_500, null);
+    }
+    const body = reply?.text || `Scanned ${shortMint(target)}. Market details are still warming; the live chart is ready.`;
     const links = [
       `📈 OPEN CHART + BUY/SELL PANEL\n${chartUrl}`,
       menuUrl ? `⚡ OPEN X TRADE PAD\n${menuUrl}` : "",
@@ -36358,6 +36371,10 @@ async function xDmPollTick() {
     if (outboxResult.changed) stateDirty = true;
     const totalMs = Date.now() - pollStartedAt;
     if (handled) console.log(`[xdm] handled ${handled} DM event(s) fetch=${fetchMs}ms total=${totalMs}ms oldestLag=${oldestFreshLagMs}ms`);
+    else if (Date.now() - xDmLastPollHeartbeatAt >= 60_000) {
+      xDmLastPollHeartbeatAt = Date.now();
+      console.log(`[xdm] poll ok checked=${events.length} fetch=${fetchMs}ms total=${totalMs}ms`);
+    }
     if (outboxResult.sent) console.log(`[xdm] delivered ${outboxResult.sent} queued trade receipt chunk(s)`);
     if (stateDirty) await writeXDmState(state);
     return { checked: events.length, handled, failed, fetchMs, totalMs, oldestFreshLagMs, receiptChunksSent: outboxResult.sent };
@@ -38413,8 +38430,16 @@ function xDegenSignoff(tone, seed) {
   return bank[Math.abs(xSeedHash(String(seed || ""))) % bank.length];
 }
 
-// Compact bottom row: just Menu + Quick Buy + Refresh (3 small buttons, not bulky).
-// Menu opens user-friendly submenus; Quick Buy deep-links the CA prefilled to the site.
+function tickerTruthMetaForMint(mint) {
+  const now = Date.now();
+  for (const meta of tickerResolutionMetaCache.values()) {
+    if (meta && now - Number(meta.at || 0) < 5 * 60_000 && Number(meta.exactMatches) > 1 && String(meta.selectedMint) === String(mint)) return meta;
+  }
+  return null;
+}
+
+// Keep the main scan trade-focused. Research/proof tools live in one folder so a normal CA scan does not
+// produce a wall of Telegram buttons; the folder only edits this message's keyboard, never posts a new card.
 function slimeScanKeyboard(mint, tickerSymbol = "") {
   const links = slimewireTokenLinks(mint);
   // ONE clean Buy button. The old 0.5/1/5/custom amount buttons all just opened the site's 1-click
@@ -38433,25 +38458,26 @@ function slimeScanKeyboard(mint, tickerSymbol = "") {
       { text: "📈 Chart", url: links.site }
     ],
     [
-      { text: "🗺️ Holder Map", callback_data: `map:${mint}` },
-      { text: "💰 Airdrop", callback_data: `drop:${mint}` }
-    ],
-    [
-      { text: "💬 Explain inline", switch_inline_query_current_chat: mint },
-      { text: "🧾 Receipts", url: links.receipts }
-    ],
-    [
-      { text: "📊 Menu", callback_data: `scan:menu:${mint}` }
+      { text: "🗂 Research", callback_data: `scan:research:${mint}` },
+      { text: "📊 More", callback_data: `scan:menu:${mint}` }
     ],
     [
       { text: "🔄 Refresh", callback_data: `scan:refresh:${mint}` }
     ]
   ];
-  const symbol = String(tickerSymbol || "").replace(/^\$+/, "").trim().toUpperCase();
-  const meta = tickerResolutionMetaCache.get(symbol.toLowerCase());
-  if (symbol && meta && Date.now() - meta.at < 5 * 60_000 && Number(meta.exactMatches) > 1) {
-    rows.splice(4, 0, [{ text: `🧬 Ticker Truth · ${meta.exactMatches} matches`, callback_data: `tm:${symbol.slice(0, 20)}` }]);
-  }
+  return { inline_keyboard: rows };
+}
+
+function scanResearchKeyboard(mint) {
+  const links = slimewireTokenLinks(mint);
+  const rows = [
+    [{ text: "🗺️ Holder Map", callback_data: `map:${mint}` }, { text: "💰 Airdrop", callback_data: `drop:${mint}` }],
+    [{ text: "💬 Explain inline", switch_inline_query_current_chat: mint }, { text: "🧾 Receipts", url: links.receipts }]
+  ];
+  const meta = tickerTruthMetaForMint(mint);
+  const symbol = String(meta?.symbol || "").replace(/^\$+/, "").trim().toUpperCase();
+  if (symbol) rows.push([{ text: `🧬 Ticker Truth · ${meta.exactMatches} matches`, callback_data: `tm:${symbol.slice(0, 20)}` }]);
+  rows.push([{ text: "⬅ Back to scan", callback_data: `scan:back:${mint}` }]);
   return { inline_keyboard: rows };
 }
 
@@ -38506,7 +38532,7 @@ function scanMenuKeyboard(mint) {
     [{ text: "📈 Charts", callback_data: `scan:cat:chart:${mint}` }, { text: "🔒 Security", callback_data: `scan:cat:sec:${mint}` }],
     [{ text: "🔗 Socials", callback_data: `scan:cat:social:${mint}` }, { text: "🛠 Trade Tools", callback_data: `scan:cat:trade:${mint}` }],
     [{ text: "🌀 Narratives", callback_data: "gb:go:narrative" }, { text: "🎯 Room Tools", callback_data: "gb:m:trench" }],
-    [{ text: "💬 Explain inline", switch_inline_query_current_chat: mint }, { text: "Post to X", url: links.xShare }],
+    [{ text: "🗂 Research & Proof", callback_data: `scan:research:${mint}` }, { text: "Post to X", url: links.xShare }],
     [{ text: "⚡ Quick Buy", url: links.siteBuy }, { text: "⬅ Back", callback_data: `scan:back:${mint}` }]
   ] };
 }
@@ -38560,6 +38586,8 @@ async function handleScanCallback(query, chatId, messageId) {
   try {
     if (action === "menu") {
       await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: scanMenuKeyboard(mint) });
+    } else if (action === "research") {
+      await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: scanResearchKeyboard(mint) });
     } else if (action === "ai") {
       await handleScanAiRead(chatId, mint, messageId, isPhoto);      // 🧠 AI verdict — edits THIS card in place
     } else if (action === "funds") {
