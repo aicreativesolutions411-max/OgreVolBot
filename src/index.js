@@ -42286,6 +42286,9 @@ async function handleChannelPostCommands(post) {
   }
   const kolFeed = text.match(/^\/(?:kolfeed|kollfeed|callfeed|kolcalls)(?:@\w+)?(?:\s+(on|off|status))?\s*$/i);
   if (kolFeed) {
+    // Telegram may retry a webhook update when the first response races a deploy/slow network. Key the
+    // setup action to the original channel message so one command can never post two status cards.
+    if (tgCommandOnCooldown(chatId, `kolfeed-command:${post.message_id}`, 10 * 60_000)) return;
     const action = String(kolFeed[1] || "status").toLowerCase();
     if (action === "on" || action === "off") {
       const source = await setKolSourceOptIn(post.chat, action === "on");
@@ -43116,6 +43119,9 @@ async function handleGroupBotCommand(message, userId) {
   const kf = text.match(/^\/(kolfeed|kollfeed|callfeed|kolcalls|kolsource|callsource)(?:@\w+)?(?:\s+(on|off|list|add|remove))?(?:\s+(\S+))?\s*$/i);
   if (kf) {
     const chatId = chat.id;
+    // Same message-id guard as the source-channel command. It prevents duplicate menus without blocking
+    // a real second /kolfeed command, which always has a new Telegram message_id.
+    if (tgCommandOnCooldown(chatId, `kolfeed-command:${message.message_id}`, 10 * 60_000)) return true;
     if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only group admins can change the KOL Call Feed."); return true; }
     const command = String(kf[1] || "").toLowerCase();
     const action = String(kf[2] || (/(?:kolsource|callsource)/.test(command) ? "add" : "list")).toLowerCase();

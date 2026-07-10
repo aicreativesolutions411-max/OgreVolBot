@@ -926,6 +926,7 @@ test("KOL Call Feed is source-consented, admin-selected, deduped, and posts one 
   const channel = functionBody(serverSource, "handleChannelPostCommands");
   assert.match(channel, /setKolSourceOptIn\(post\.chat, action === "on"\)/);
   assert.match(channel, /handleKolSourceChannelPost\(post\)/);
+  assert.match(channel, /kolfeed-command:\$\{post\.message_id\}/);
   const dispatch = functionBody(serverSource, "handleKolSourceChannelPost");
   assert.match(dispatch, /source\?\.optedIn/);
   assert.match(dispatch, /claimKolCallFeedPost/);
@@ -949,6 +950,7 @@ test("KOL Call Feed is source-consented, admin-selected, deduped, and posts one 
   assert.match(callback, /gb:kol:rm:/);
   assert.match(functionBody(serverSource, "handleGroupBotCommand"), /kolsource\|callsource/);
   assert.match(functionBody(serverSource, "handleGroupBotCommand"), /kollfeed/);
+  assert.match(functionBody(serverSource, "handleGroupBotCommand"), /kolfeed-command:\$\{message\.message_id\}/);
   assert.match(functionBody(serverSource, "applyKolFeedSourceInput"), /resolveKolSourceReference/);
 });
 
