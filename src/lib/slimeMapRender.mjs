@@ -362,16 +362,24 @@ function ipfsGatewayCandidates(url) {
 // guaranteed-decodable square PNG Buffer, or null. Hard-won lessons baked in (each cost a "PFP won't load"
 // bug): (1) AbortController + setTimeout, because AbortSignal.timeout is MISSING on Render's older Node so a
 // timeout there is a silent no-op; (2) a browser User-Agent + Accept, because coin-logo CDNs (DexScreener,
-// pump) 403/422 a bare fetch; (3) race the FAST IPFS gateways (Cloudflare/pump/dweb), never trust slow
-// ipfs.io alone; (4) ALWAYS re-encode through sharp → a non-image (HTML error page) or odd format (webp/
+// pump) 403/422 a bare fetch; (3) try the FAST IPFS gateways (Cloudflare/pump/dweb) under one total deadline,
+// never trust slow ipfs.io alone; (4) ALWAYS re-encode through sharp → a non-image (HTML error page) or odd format (webp/
 // avif/gif) can NEVER slip through and get silently dropped by a downstream compositor. Callers that need a
 // data-URI wrap the buffer; callers that need a Buffer use it directly.
 export async function fetchLogoBuffer(url, size = 200, ms = 7000) {
   if (!url) return null;
-  const candidates = ipfsGatewayCandidates(url);
-  for (const href of candidates) {
+  const candidates = [...new Set(ipfsGatewayCandidates(url).map((href) => String(href || "").trim()).filter(Boolean))];
+  const totalMs = Math.max(250, Number(ms) || 7000);
+  const deadline = Date.now() + totalMs;
+  for (let index = 0; index < candidates.length; index += 1) {
+    const href = candidates[index];
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    // Split one total budget across the gateways still available. Previously every gateway received its
+    // own 2.5s+ timeout, so a nominal 7s fetch could block for 10-15s before returning null.
+    const candidatesLeft = candidates.length - index;
+    const per = Math.max(1, Math.min(remainingMs, Math.max(100, Math.ceil(remainingMs / candidatesLeft))));
     const ctl = new AbortController();
-    const per = candidates.length > 1 ? Math.max(2500, Math.floor(ms / candidates.length) + 1500) : ms;
     const t = setTimeout(() => { try { ctl.abort(); } catch {} }, per);
     try {
       const res = await fetch(href, {
@@ -381,8 +389,17 @@ export async function fetchLogoBuffer(url, size = 200, ms = 7000) {
       if (!res.ok) { clearTimeout(t); continue; }
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.length < 80) { clearTimeout(t); continue; }
+      if (Date.now() >= deadline) continue;
       // animated? take the first frame. Any decode failure → try the next gateway (never return garbage).
-      const png = await sharp(buf, { animated: false }).resize(size, size, { fit: "cover", position: "attention" }).png().toBuffer();
+      const decode = sharp(buf, { animated: false }).resize(size, size, { fit: "cover", position: "attention" }).png().toBuffer();
+      const decodeRemainingMs = Math.max(1, deadline - Date.now());
+      let decodeTimer;
+      const png = await Promise.race([
+        decode,
+        new Promise((_, reject) => {
+          decodeTimer = setTimeout(() => reject(new Error("logo decode deadline exceeded")), decodeRemainingMs);
+        })
+      ]).finally(() => clearTimeout(decodeTimer));
       clearTimeout(t);
       return png;
     } catch { /* try the next gateway */ }

@@ -1,10 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { signXDmMenuToken, verifyXDmMenuToken } from "../src/lib/xDmMenuToken.js";
+import {
+  signXDmMenuToken,
+  verifyXDmMenuToken,
+  X_DM_MENU_MAX_TTL_MS
+} from "../src/lib/xDmMenuToken.js";
 
 const SECRET = "test-secret-that-is-long-enough-for-hmac";
-const PAYLOAD = { senderId: "123", userId: "456", mint: "So11111111111111111111111111111111111111112", slot: "1" };
+const PAYLOAD = { senderId: "123", userId: "456", mint: "So11111111111111111111111111111111111111112", slot: "1", linkVersion: "2026-07-09T00:00:00.000Z" };
 
 test("X DM menu tokens preserve their exact user, sender, coin, and expiry scope", () => {
   const token = signXDmMenuToken(SECRET, PAYLOAD, { now: 1_000, ttlMs: 60_000, nonce: "abc123" });
@@ -30,6 +34,8 @@ test("X DM menu tokens reject expiry, tampering, and a different signing secret"
 
 test("X DM menu token TTL is bounded and missing scope is rejected", () => {
   const token = signXDmMenuToken(SECRET, PAYLOAD, { now: 1_000, ttlMs: 99_999_999, nonce: "bounded" });
-  assert.equal(verifyXDmMenuToken(SECRET, token, { now: 30 * 60_000 + 1_001 }), null);
+  assert.equal(X_DM_MENU_MAX_TTL_MS, 24 * 60 * 60_000);
+  assert.notEqual(verifyXDmMenuToken(SECRET, token, { now: 1_000 + X_DM_MENU_MAX_TTL_MS }), null);
+  assert.equal(verifyXDmMenuToken(SECRET, token, { now: 1_001 + X_DM_MENU_MAX_TTL_MS }), null);
   assert.throws(() => signXDmMenuToken(SECRET, { senderId: "123", userId: "", mint: PAYLOAD.mint }), /Missing X DM menu token scope/);
 });

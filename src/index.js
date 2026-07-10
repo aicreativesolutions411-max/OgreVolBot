@@ -1,4 +1,4 @@
-﻿import crypto from "node:crypto";
+import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
@@ -71,12 +71,14 @@ import {
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
 import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenInfo, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
 import { getNoxaScan, fetchNoxaFeed, fetchPoolBuys, NOXA_RH } from "./lib/noxaLaunchpad.js";
+import { rhWalletScan } from "./lib/walletScan.js";
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp, listCharacterFiles, characterPfpCount, makeCharacterPfp } from "./lib/pfp.js";
 import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
 import { xConfigured, xSearchMentions, xReply, xPost, xSearchQuery, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode, xAuthReport } from "./lib/xClient.js";
 import { xDmAuthMode, xDmConfigured, xDmFetchEvents, xDmOwnUserId as xDmResolvedOwnUserId, xDmSendText } from "./lib/xDmClient.js";
 import { isStaleXDmMoneyEvent, parseXDmBuySlotCommand, parseXDmSellSlotCommand, validateXDmBuyAmount, xDmEventTimestampMs, X_DM_BUY_LIMITS, X_DM_SELL_PERCENTAGES } from "./lib/xDmFlow.js";
 import { signXDmMenuToken, verifyXDmMenuToken } from "./lib/xDmMenuToken.js";
+import { createXDmPadSession, pruneXDmPadSessions, resolveXDmPadSession, revokeXDmPadSession, revokeXDmPadSessionsForSender } from "./lib/xDmPadSession.js";
 import { renderXScanCard } from "./lib/xCard.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
@@ -6615,8 +6617,13 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "x-terminal.html");
       return;
     }
-    if (request.method === "GET" && (requestUrl.pathname === "/x-menu" || requestUrl.pathname === "/x-dm-menu")) {
-      await serveStaticHtmlPage(response, "x-dm-menu.html", "no-store, max-age=0");
+    if (request.method === "GET" && ["/x-menu", "/x-menu.html", "/x-dm-menu", "/x-dm-menu.html"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "x-dm-menu.html", "no-store, max-age=0", {
+        "Content-Security-Policy": "frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff"
+      });
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/is-slimewire-legit") {
@@ -7509,9 +7516,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
-    // Signed X DM Trade Pad. The token is short-lived and scoped to one linked
-    // X sender + SlimeWire user + coin. GETs never trade; this POST either reads
-    // the menu or stages a pending order that still requires YES inside X.
+    // Scoped X DM Trade Pad. A signed handoff is exchanged for an opaque,
+    // revocable session bound to one linked X sender + SlimeWire user + coin.
+    // Money and automation actions only stage here and still require YES in X.
     if (request.method === "POST" && pathname === "/api/x-dm/menu") {
       try {
         const body = await readJsonRequestBody(request, 8_000);
@@ -16628,7 +16635,10 @@ async function batchBuyFlow(chatId, session) {
     }
   });
 
-  await recordTradeEvents(tradeEvents);
+  let recordError = "";
+  await recordTradeEvents(tradeEvents).catch((error) => {
+    recordError = friendlyError(error);
+  });
   await audit(isLiveMainnetTest ? "live_mainnet_test_buy" : (isSingleTrade ? "single_buy_token" : "batch_buy_token"), {
     chatId,
     userId: session.userId,
@@ -16943,9 +16953,26 @@ async function createTimedTradePlanFlow(chatId, session) {
     results
   };
 
-  const plans = await readTradePlans();
-  plans.plans.push(plan);
-  await writeTradePlans(plans);
+  let planPersistError = "";
+  try {
+    await mutateTradePlans((plans) => { plans.plans.push(plan); });
+  } catch (error) {
+    // Buys already landed. Return a cacheable submitted result instead of
+    // throwing and inviting the same multi-wallet spend again.
+    planPersistError = friendlyError(error);
+  }
+  if (planPersistError) {
+    clearSession(chatId);
+    await audit("create_timed_trade_plan_persist_failed", {
+      chatId,
+      userId: session.userId,
+      tokenMint: plan.tokenMint,
+      buySignatures: planWallets.map((wallet) => wallet.buySignature).filter(Boolean),
+      error: planPersistError
+    }).catch(() => {});
+    await say(chatId, withBrandFooter(`The buys landed, but the exit plan could not be saved. Do not repeat the buy. Open Positions and arm exits manually. ${planPersistError}`));
+    return;
+  }
   await audit("create_timed_trade_plan", {
     chatId,
     userId: session.userId,
@@ -17030,9 +17057,7 @@ async function createManualLaunchPlanFlow(chatId, session) {
     results: [`Watching for ticker $${session.data.ticker}`]
   };
 
-  const plans = await readTradePlans();
-  plans.plans.push(plan);
-  await writeTradePlans(plans);
+  await mutateTradePlans((plans) => { plans.plans.push(plan); });
   await audit("create_manual_launch_snipe", {
     chatId,
     userId: session.userId,
@@ -17361,6 +17386,42 @@ function isPumpBondingCurveBuy(tokenMint, market = null) {
   return !migrated;
 }
 
+function asTradeExecutionError(value, fallbackMessage = "Trade failed.") {
+  if (value instanceof Error) return value;
+  const message = value && typeof value === "object" && typeof value.message === "string"
+    ? value.message
+    : String(value || fallbackMessage);
+  const error = new Error(message || fallbackMessage);
+  if (value && typeof value === "object") {
+    for (const [key, entry] of Object.entries(value)) {
+      if (!["name", "message", "stack", "cause"].includes(key)) error[key] = entry;
+    }
+  }
+  return error;
+}
+
+function copyTradeExecutionMetadata(target, source) {
+  if (!source || typeof source !== "object") return target;
+  for (const [key, value] of Object.entries(source)) {
+    if (!["name", "message", "stack", "cause"].includes(key)) target[key] = value;
+  }
+  return target;
+}
+
+function wrapTradeExecutionError(value, message) {
+  const source = asTradeExecutionError(value);
+  const wrapped = new Error(message);
+  wrapped.cause = source;
+  return copyTradeExecutionMetadata(wrapped, source);
+}
+
+function markTradeSubmissionAmbiguous(value, stage = "submit") {
+  const error = asTradeExecutionError(value, "Trade submission outcome is unknown.");
+  error.tradeSubmissionAmbiguous = true;
+  error.tradeStage = stage;
+  return error;
+}
+
 // Buy a token directly off the pump.fun bonding curve via PumpPortal's local trade API,
 // mirroring sellTokenAmountFromWalletViaPumpPortal. denominatedInSol "true" means amount
 // is the SOL to spend. Tries the most likely pools in order.
@@ -17386,6 +17447,7 @@ async function buyTokenViaPumpPortal(wallet, tokenMint, swapLamports, slippageBp
   const pumpErrors = [];
 
   for (const pool of pools) {
+    let submissionStarted = false;
     try {
       const tx = await requestPumpPortalLocalTransaction({ ...baseRequestPayload, pool }, timeoutMs, {
         url: CONFIG.pumpPortalTradeLocalUrl
@@ -17395,6 +17457,7 @@ async function buyTokenViaPumpPortal(wallet, tokenMint, swapLamports, slippageBp
         signature = tx.signature;
       } else {
         tx.sign([keypair]);
+        submissionStarted = true;
         signature = await sendPumpTradeTx(tx, keypair, `send PumpPortal buy transaction (${pool})`, { tipSol: CONFIG.tradeJitoTipSol });
       }
       invalidateWalletReadCache(wallet.publicKey);
@@ -17405,15 +17468,22 @@ async function buyTokenViaPumpPortal(wallet, tokenMint, swapLamports, slippageBp
         provider: `pumpportal:${pool}`
       };
     } catch (pumpError) {
-      pumpErrors.push(`${pool}: ${friendlyError(pumpError)}`);
+      const tradeError = asTradeExecutionError(pumpError, "PumpPortal buy failed.");
+      if (submissionStarted || tradeError.tradeSubmissionAmbiguous) {
+        throw markTradeSubmissionAmbiguous(tradeError, `pumpportal:${pool}:submit`);
+      }
+      pumpErrors.push(`${pool}: ${friendlyError(tradeError)}`);
     }
   }
-  throw new Error(`PumpPortal buy failed: ${pumpErrors.length ? pumpErrors.join(" | ") : "all PumpPortal pool attempts failed"}`);
+  const error = new Error(`PumpPortal buy failed: ${pumpErrors.length ? pumpErrors.join(" | ") : "all PumpPortal pool attempts failed"}`);
+  error.tradePreSubmit = true;
+  throw error;
 }
 
 // Jupiter buy with the full safety check (route included), used as the fallback when a
 // pump-pool buy fails because the token actually migrated to an AMM.
 async function buyViaJupiterWithSafety(keypair, tokenMint, swapLamports, slippageBps, priorError = null) {
+  if (priorError?.tradeSubmissionAmbiguous) throw priorError;
   try {
     const safetyOrder = await assertTokenBuySafety({
       tokenMint,
@@ -17431,7 +17501,10 @@ async function buyViaJupiterWithSafety(keypair, tokenMint, swapLamports, slippag
     });
   } catch (jupiterError) {
     if (priorError) {
-      throw new Error(`Pump buy failed: ${friendlyError(priorError)}. Jupiter buy fallback failed: ${friendlyError(jupiterError)}`);
+      throw wrapTradeExecutionError(
+        jupiterError,
+        `Pump buy failed: ${friendlyError(priorError)}. Jupiter buy fallback failed: ${friendlyError(jupiterError)}`
+      );
     }
     throw jupiterError;
   }
@@ -17479,6 +17552,7 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, o
       try {
         result = await buyTokenViaPumpPortal(wallet, tokenMint, swapLamports, slippageBps, options);
       } catch (pumpError) {
+        if (pumpError?.tradeSubmissionAmbiguous) throw pumpError;
         result = await buyViaJupiterWithSafety(keypair, tokenMint, swapLamports, slippageBps, pumpError);
       }
     } else {
@@ -17509,10 +17583,14 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, o
           prebuiltOrder: buyOrder
         });
       } catch (jupiterError) {
+        if (jupiterError?.tradeSubmissionAmbiguous) throw jupiterError;
         try {
           result = await buyTokenViaPumpPortal(wallet, tokenMint, swapLamports, slippageBps, options);
         } catch (pumpError) {
-          throw new Error(`Jupiter buy failed: ${friendlyError(jupiterError)}. Pump buy fallback failed: ${friendlyError(pumpError)}`);
+          throw wrapTradeExecutionError(
+            pumpError,
+            `Jupiter buy failed: ${friendlyError(jupiterError)}. Pump buy fallback failed: ${friendlyError(pumpError)}`
+          );
         }
       }
     }
@@ -17599,7 +17677,8 @@ async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps,
         exitProvider = result.provider || "pumpportal";
         break;
       } catch (error) {
-        pumpPortalError = error;
+        pumpPortalError = asTradeExecutionError(error, "PumpPortal sell failed.");
+        if (pumpPortalError.tradeSubmissionAmbiguous) throw pumpPortalError;
         continue;
       }
     }
@@ -17622,7 +17701,11 @@ async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps,
         exitProvider = "jupiter";
         break;
       } catch (error) {
-        jupiterError = error;
+        jupiterError = asTradeExecutionError(error, "Jupiter sell failed.");
+        if (jupiterError.tradeSubmissionAmbiguous) throw jupiterError;
+        // Jupiter explicitly marks order/build failures as pre-submit, so it is
+        // safe to try the next provider. Anything after /execute is surfaced as
+        // outcome-unknown above and can never cross-fall back into a second sell.
         continue;
       }
     }
@@ -17633,7 +17716,9 @@ async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps,
       pumpPortalError ? `PumpPortal: ${friendlyError(pumpPortalError)}` : "",
       jupiterError ? `Jupiter: ${friendlyError(jupiterError)}` : ""
     ].filter(Boolean);
-    throw new Error(errors.length ? errors.join(" | ") : "sell failed before a provider returned a transaction");
+    const error = new Error(errors.length ? errors.join(" | ") : "sell failed before a provider returned a transaction");
+    error.sellPreSubmit = true;
+    throw error;
   }
 
   const outputLamports = BigInt(result.outputAmount || 0);
@@ -17704,6 +17789,7 @@ async function sellTokenAmountFromWalletViaPumpPortal(wallet, tokenMint, sellAmo
       pool
     };
 
+    let submissionStarted = false;
     try {
       const tx = await requestPumpPortalLocalTransaction(requestPayload, timeoutMs, {
         url: CONFIG.pumpPortalTradeLocalUrl
@@ -17713,6 +17799,7 @@ async function sellTokenAmountFromWalletViaPumpPortal(wallet, tokenMint, sellAmo
         signature = tx.signature;
       } else {
         tx.sign([keypair]);
+        submissionStarted = true;
         signature = await sendPumpTradeTx(tx, keypair, `send PumpPortal sell transaction (${pool})`, { tipSol: CONFIG.tradeJitoExitTipSol });
       }
 
@@ -17736,13 +17823,19 @@ async function sellTokenAmountFromWalletViaPumpPortal(wallet, tokenMint, sellAmo
         provider: `pumpportal:${pool}`
       };
     } catch (pumpError) {
-      pumpErrors.push(`${pool}: ${friendlyError(pumpError)}`);
+      const tradeError = asTradeExecutionError(pumpError, "PumpPortal sell failed.");
+      if (submissionStarted || tradeError.tradeSubmissionAmbiguous) {
+        throw markTradeSubmissionAmbiguous(tradeError, `pumpportal:${pool}:submit`);
+      }
+      pumpErrors.push(`${pool}: ${friendlyError(tradeError)}`);
     }
   }
 
   const pumpMessage = pumpErrors.length ? pumpErrors.join(" | ") : "all PumpPortal pool attempts failed";
   if (!jupiterError) {
-    throw new Error(`PumpPortal sell failed: ${pumpMessage}`);
+    const error = new Error(`PumpPortal sell failed: ${pumpMessage}`);
+    error.sellPreSubmit = true;
+    throw error;
   }
   throw new Error(`Jupiter sell failed: ${friendlyError(jupiterError)}. PumpPortal sell fallback failed: ${pumpMessage}`);
 }
@@ -17914,7 +18007,7 @@ async function sellTradePlanWalletWithRetriesUnlocked(plan, planWallet, wallet, 
         slippageBps,
         error: friendlyError(error)
       });
-      if (!priceExit) break;
+      if (!priceExit || error?.sellPreSubmit !== true) break;
       await sleep(350);
     }
   }
@@ -18110,7 +18203,9 @@ async function runTpSlMonitorStep(label, work, onTimeout = null) {
   let timedOut = false;
   let timeoutHandle = null;
   const timeoutMs = CONFIG.tpSlMonitorStepTimeoutMs;
-  const task = Promise.resolve().then(work);
+  const task = Promise.resolve().then(() => work({
+    isTimedOut: () => timedOut
+  }));
   task.catch((error) => {
     if (timedOut) {
       console.warn(`${label} finished after timeout with error: ${friendlyError(error)}`);
@@ -18128,7 +18223,7 @@ async function runTpSlMonitorStep(label, work, onTimeout = null) {
       resolve({
         changed: true,
         timedOut: true,
-        message: `${label}: TP/SL monitor step timed out after ${timeoutMs}ms; stayed armed for retry.`
+        message: `${label}: TP/SL monitor step timed out after ${timeoutMs}ms; submission safety state was preserved.`
       });
     }, timeoutMs);
   });
@@ -18300,6 +18395,7 @@ function planHasPriceExit(plan, planWallet) {
       || planWallet?.stopLossPct
       || plan.takeProfitPct
       || planWallet?.takeProfitPct
+      || plan.trailingStopPct
       || nextTakeProfitLadderLevel(plan, planWallet)
   );
 }
@@ -18316,11 +18412,13 @@ function ensureTimedPlanHasExit({
   stopLossPct,
   walletTakeProfitTargets,
   walletStopLossTargets,
-  takeProfitLadder
+  takeProfitLadder,
+  trailingStopPct
 } = {}) {
   const hasExit = Number(sellDelaySeconds || 0) > 0
     || Number(takeProfitPct || 0) > 0
     || Number(stopLossPct || 0) > 0
+    || Number(trailingStopPct || 0) > 0
     || (Array.isArray(takeProfitLadder) && takeProfitLadder.length > 0)
     || Boolean(walletTakeProfitTargets && Object.keys(walletTakeProfitTargets).length)
     || Boolean(walletStopLossTargets && Object.keys(walletStopLossTargets).length);
@@ -18542,6 +18640,7 @@ function eligibleWebDefaultExitSource(source) {
 
 function shouldArmWebExitGuardForWallet(plan, planWallet) {
   if (!plan?.id || !plan?.userId || !plan?.tokenMint || !planWallet?.publicKey) return false;
+  if (!plan.automationPermission?.enabled) return false;
 
   const loopCount = Number.parseInt(plan.loopCount || 1, 10);
   if (Number.isInteger(loopCount) && loopCount > 1) return false;
@@ -18591,6 +18690,7 @@ function buildWebExitGuardFromPlanWallet(plan, planWallet) {
     userId: plan.userId,
     source: "web_exit_guard",
     planSource: plan.source || "web",
+    automationPermission: normalizeWebAutomationPermission(plan.automationPermission || {}),
     tokenMint: plan.tokenMint,
     walletPublicKey: planWallet.publicKey,
     walletLabel: planWallet.label || "Wallet",
@@ -18793,6 +18893,7 @@ function webPortfolioExitSettings(entry, planStore, guardStore) {
 
   const plan = planMatch?.plan || null;
   const planWallet = planMatch?.planWallet || null;
+  if (!plan && !guardMatch) return null;
   const guardTakeProfitPct = guardMatch ? Number(guardMatch.takeProfitPct || 0) : null;
   const guardStopLossPct = guardMatch ? Number(guardMatch.stopLossPct || 0) : null;
   const planTakeProfitPct = plan ? walletTakeProfitPct(plan, planWallet) : null;
@@ -18803,7 +18904,8 @@ function webPortfolioExitSettings(entry, planStore, guardStore) {
     sellPercent: guardMatch?.sellPercent || planWallet?.triggerSellPercent || plan?.triggerSellPercent || plan?.sellPercent || defaults.sellPercent,
     slippageBps: guardMatch?.slippageBps || plan?.slippageBps || defaults.slippageBps,
     sourcePlanId: plan?.id || guardMatch?.planId || null,
-    source: plan?.source || guardMatch?.planSource || entry.lastSource || "web_trade"
+    source: plan?.source || guardMatch?.planSource || entry.lastSource || "web_trade",
+    automationPermission: plan?.automationPermission || guardMatch?.automationPermission || null
   };
 }
 
@@ -18835,6 +18937,7 @@ function buildWebPortfolioExitPlan(entry, token, settings) {
     tokenMint: entry.tokenMint,
     source: "web_portfolio_exit_watchdog",
     executionMode: "managed_server",
+    automationPermission: settings.automationPermission,
     amountSol: lamportsBigToSol(openBasis),
     sellDelaySeconds: 0,
     sellAfterAt: null,
@@ -18948,11 +19051,19 @@ async function processWebPortfolioExits(options = {}) {
       return summary;
     }
 
-    const [history, walletStore, planStore, guardStore] = await Promise.all([
+    // Managed trade plans are the single money executor. This legacy
+    // portfolio watchdog rebuilt ladders as one-shot exits and could race TP1,
+    // so it remains disabled instead of ever submitting a second sell path.
+    summary.skipped = true;
+    summary.reason = "trade_plans_authoritative";
+    return summary;
+
+    const [history, walletStore, planStore, guardStore, automationStore] = await Promise.all([
       readTradeHistory(),
       readWalletStore(),
       readTradePlans(),
-      readWebExitGuards()
+      readWebExitGuards(),
+      readWebAuthStore().catch(() => null)
     ]);
     const candidates = webOpenTradeEntriesFromHistory(history).filter((entry) => entry.buyCount > 0 && entry.spent > 0n);
     await runWithConcurrency(candidates, Math.min(2, Math.max(1, CONFIG.balanceConcurrency)), async (entry) => {
@@ -18960,6 +19071,20 @@ async function processWebPortfolioExits(options = {}) {
       const memory = webPortfolioExitState.get(key) || {};
       const lastCheckedAt = Date.parse(memory.lastCheckedAt || "");
       if (!options.forcePriceCheck && Number.isFinite(lastCheckedAt) && Date.now() - lastCheckedAt < CONFIG.stopLossCheckIntervalMs) {
+        return;
+      }
+
+      const settings = webPortfolioExitSettings(entry, planStore, guardStore);
+      if (!settings) return;
+      const currentProfile = automationStore?.profiles?.[String(entry.userId)] || {};
+      if (!webAutomationExecutionAllowed(settings.automationPermission, currentProfile)) {
+        memory.lastError = "Managed-wallet automation permission is inactive. Re-enable it to resume this exit.";
+        memory.userId = entry.userId;
+        memory.walletPublicKey = entry.walletPublicKey;
+        memory.walletLabel = entry.walletLabel;
+        memory.tokenMint = entry.tokenMint;
+        memory.updatedAt = new Date().toISOString();
+        webPortfolioExitState.set(key, memory);
         return;
       }
 
@@ -18987,7 +19112,6 @@ async function processWebPortfolioExits(options = {}) {
         return;
       }
 
-      const settings = webPortfolioExitSettings(entry, planStore, guardStore);
       const plan = buildWebPortfolioExitPlan(entry, token, settings);
       const planWallet = plan.wallets[0];
       summary.checkedPositions += 1;
@@ -19606,9 +19730,12 @@ async function processWebExitGuards(options = {}) {
       return summary;
     }
 
-    const guardStore = await readWebExitGuards();
-    const planStore = await readTradePlans();
-    const walletStore = await readWalletStore();
+    const [guardStore, planStore, walletStore, automationStore] = await Promise.all([
+      readWebExitGuards(),
+      readTradePlans(),
+      readWalletStore(),
+      readWebAuthStore().catch(() => null)
+    ]);
     let changed = false;
     const backfill = backfillWebExitGuardsFromPlanStore(guardStore, planStore);
     if (backfill.added || backfill.updated) {
@@ -19621,22 +19748,9 @@ async function processWebExitGuards(options = {}) {
       scheduleWebExitGuardProcessing("web exit guard backfill", [500, 1500, 3000, 6000]);
     }
 
-    const shouldLiveBackfill = !options.skipLiveBackfill && (options.forceBackfill
-      || !webExitGuardLiveBackfillAt
-      || Date.now() - webExitGuardLiveBackfillAt > 30_000);
-    if (shouldLiveBackfill) {
-      webExitGuardLiveBackfillAt = Date.now();
-      const liveBackfill = await backfillWebExitGuardsFromLiveWebPositions(guardStore, walletStore);
-      if (liveBackfill.added || liveBackfill.updated) {
-        changed = true;
-        summary.liveBackfilledGuards = liveBackfill;
-        await audit("web_exit_guard_live_position_backfilled", {
-          added: liveBackfill.added,
-          updated: liveBackfill.updated
-        }).catch(() => {});
-        scheduleWebExitGuardProcessing("web live position guard backfill", [500, 1500, 3000, 6000]);
-      }
-    }
+    // Never invent default TP/SL for an open position. Only an explicit plan
+    // carrying an automation grant may create a guard; this preserves a Trade
+    // Pad user's deliberate "no exits" choice.
 
     for (const guard of objectRows(guardStore.guards)) {
       if (syncWebExitGuardFromPlanStore(guard, planStore)) {
@@ -19655,23 +19769,54 @@ async function processWebExitGuards(options = {}) {
 
       if (!isActiveWebExitGuardStatus(guard.status)) continue;
 
+      // A linked trade plan is the sole executor because it owns ladder rung
+      // state, retries, and durable checkpoints. The guard is a read-only
+      // mirror for UI/reconciliation; letting both sell can double-fire TP1.
+      if (guard.planId) {
+        summary.mirroredGuards = Number(summary.mirroredGuards || 0) + 1;
+        continue;
+      }
+
+      const currentProfile = automationStore?.profiles?.[String(guard.userId)] || {};
+      if (!webAutomationExecutionAllowed(guard.automationPermission, currentProfile)) {
+        const message = "Managed-wallet automation permission is inactive. Re-enable it to resume this guard.";
+        if (guard.lastError !== message) {
+          guard.lastError = message;
+          guard.updatedAt = new Date().toISOString();
+          changed = true;
+        }
+        summary.pausedGuards = Number(summary.pausedGuards || 0) + 1;
+        continue;
+      }
+
       summary.checkedGuards += 1;
       const result = await runTpSlMonitorStep(
         `${guard.walletLabel || guard.walletPublicKey || "Wallet"} ${shortMint(guard.tokenMint || "")} web guard`,
-        () => processWebExitGuard(guard, walletStore, {
+        (stepControl) => processWebExitGuard(guard, walletStore, {
           forcePriceCheck: Boolean(options.forcePriceCheck),
+          shouldAbort: stepControl.isTimedOut,
           persistCheckpoint: async () => {
             await writeWebExitGuards(guardStore);
           }
         }),
         (timeoutMs) => {
           const nowIso = new Date().toISOString();
-          const message = `TP/SL web guard timed out after ${timeoutMs}ms; retrying without blocking other trades.`;
+          const submissionMayBeInFlight = [guard.status, guard.exitStatus].some((status) => String(status || "").toLowerCase() === "submitting")
+            || Boolean(guard.preSellCheckpointAt && !guard.sellSignature);
+          const message = submissionMayBeInFlight
+            ? `TP/SL web guard timed out after ${timeoutMs}ms with a possible submission in flight; automatic retry is paused.`
+            : `TP/SL web guard timed out after ${timeoutMs}ms before submission; retrying without blocking other trades.`;
           guard.lastError = message;
           guard.lastFailedAt = nowIso;
           guard.updatedAt = nowIso;
           guard.failures = Number.parseInt(guard.failures || 0, 10) + 1;
-          if (isPriceExitTrigger(guard.triggerReason)) {
+          if (submissionMayBeInFlight) {
+            guard.status = "outcome_unknown";
+            guard.exitStatus = "outcome_unknown";
+            guard.triggerStatus = "outcome_unknown";
+            guard.retryAfterAt = null;
+            guard.nextRetryAt = null;
+          } else if (isPriceExitTrigger(guard.triggerReason)) {
             guard.status = "retrying";
             guard.exitStatus = "retrying";
             guard.triggerStatus = "retrying";
@@ -19690,7 +19835,9 @@ async function processWebExitGuards(options = {}) {
             takeProfit: guard.takeProfitPct || null,
             reason: message
           });
-          scheduleWebExitGuardProcessing("web guard timeout retry", [500, 1500, 3000, 6000]);
+          if (!submissionMayBeInFlight) {
+            scheduleWebExitGuardProcessing("web guard timeout retry", [500, 1500, 3000, 6000]);
+          }
         }
       );
 
@@ -19741,26 +19888,26 @@ async function processWebExitGuard(guard, walletStore, options = {}) {
   let triggerReason = null;
   let triggerMeta = null;
 
-  if (!triggerReason && staleSubmittingExit({
+  const staleUnresolvedSubmission = [guard.status, guard.exitStatus].some((status) => String(status || "").toLowerCase() === "submitting")
+    && Number.isFinite(Date.parse(guard.preSellCheckpointAt || guard.lastSellAttemptAt || ""))
+    && now - Date.parse(guard.preSellCheckpointAt || guard.lastSellAttemptAt) >= CONFIG.stopLossSubmitStaleMs;
+  if (!triggerReason && (staleUnresolvedSubmission || staleSubmittingExit({
     status: guard.status,
     exitStatus: guard.exitStatus,
     triggerReason: guard.triggerReason,
     lastSellAttemptAt: guard.lastSellAttemptAt,
     now,
     staleMs: CONFIG.stopLossSubmitStaleMs
-  })) {
-    triggerReason = guard.triggerReason;
-    triggerMeta = {
-      kind: /^stop-loss\b/i.test(String(guard.triggerReason || "")) ? "stop-loss" : "take-profit",
-      sellPercent: guard.triggerSellPercent || guard.sellPercent || 100,
-      staleSubmitRetry: true
-    };
-    guard.status = "retrying";
-    guard.exitStatus = "retrying";
-    guard.triggerStatus = "retrying";
+  }))) {
+    guard.status = "outcome_unknown";
+    guard.exitStatus = "outcome_unknown";
+    guard.triggerStatus = "outcome_unknown";
     guard.retryAfterAt = null;
     guard.nextRetryAt = null;
-    guard.lastError = "Previous web price-exit sell stayed submitting too long; retrying now.";
+    guard.lastError = "Previous exit submission has an unknown outcome. Automatic retry is paused to prevent a duplicate sell.";
+    guard.updatedAt = new Date().toISOString();
+    if (typeof options.persistCheckpoint === "function") await options.persistCheckpoint();
+    return { changed: true, triggered: false, sold: false, failed: false, message: `${guard.walletLabel || guard.walletPublicKey}: exit outcome is unknown; automatic resubmission is paused.` };
   }
 
   if (
@@ -19924,6 +20071,26 @@ async function processWebExitGuard(guard, walletStore, options = {}) {
     return { changed: false, message: null };
   }
 
+  if (typeof options.shouldAbort === "function" && options.shouldAbort()) {
+    return { changed: true, triggered: false, sold: false, message: null };
+  }
+
+  const requiresManagedPermission = Boolean(plan.automationPermission)
+    || (!plan.chatId && plan.executionMode === "managed_server");
+  if (requiresManagedPermission) {
+    try {
+      await requireWebAutomationPermission(plan.userId, "managed exit submission");
+    } catch (error) {
+      plan.lastError = "Managed-wallet automation permission is inactive. Re-enable it to resume this plan.";
+      plan.updatedAt = new Date().toISOString();
+      return { changed: true, triggered: false, sold: false, message: null };
+    }
+  }
+
+  if (typeof options.shouldAbort === "function" && options.shouldAbort()) {
+    return { changed: true, triggered: false, sold: false, message: null };
+  }
+
   try {
     const triggeredAt = new Date().toISOString();
     guard.status = "submitting";
@@ -19946,13 +20113,20 @@ async function processWebExitGuard(guard, walletStore, options = {}) {
     guard.exitSlippageBps = exitSlippageBps;
     if (typeof options.persistCheckpoint === "function") {
       guard.preSellCheckpointAt = new Date().toISOString();
-      await options.persistCheckpoint();
+      const accepted = await options.persistCheckpoint();
+      if (accepted === false) return { changed: false, triggered: false, sold: false, message: null };
+    }
+
+    if (typeof options.shouldAbort === "function" && options.shouldAbort()) {
+      return { changed: true, triggered: false, sold: false, message: null };
     }
 
     const sell = await sellTradePlanWalletWithRetries(plan, planWallet, wallet, sellPercent, exitSlippageBps, {
       userId: guard.userId,
       priceExit: priceExitTrigger
     });
+    guard.preSellCheckpointAt = null;
+    guard.submissionResolvedAt = new Date().toISOString();
     invalidateWalletReadCache(wallet.publicKey);
     sell.sellPercent = sellPercent;
     planWallet.completedLoops = 1;
@@ -19966,7 +20140,9 @@ async function processWebExitGuard(guard, walletStore, options = {}) {
       tokenAmount: sell.tokenAmount,
       solLamportsReceived: sell.outputLamports,
       signature: sell.signature
-    }]);
+    }]).catch((error) => {
+      guard.lastRecordError = friendlyError(error);
+    });
 
     guard.status = "sold";
     guard.exitStatus = "confirmed";
@@ -20006,6 +20182,19 @@ async function processWebExitGuard(guard, walletStore, options = {}) {
   } catch (error) {
     const failures = Number.parseInt(guard.failures || 0, 10) + 1;
     const priceExit = isPriceExitTrigger(triggerReason);
+    if (error?.tradeSubmissionAmbiguous) {
+      guard.failures = failures;
+      guard.status = "outcome_unknown";
+      guard.exitStatus = "outcome_unknown";
+      guard.triggerStatus = "outcome_unknown";
+      guard.lastError = `Exit submission outcome is unknown; automatic retry paused. ${friendlyError(error)}`;
+      guard.retryAfterAt = null;
+      guard.nextRetryAt = null;
+      guard.updatedAt = new Date().toISOString();
+      if (typeof options.persistCheckpoint === "function") await options.persistCheckpoint();
+      return { changed: true, triggered: priceExit, sold: false, failed: false, message: `${guard.walletLabel || guard.walletPublicKey}: exit outcome unknown; no automatic retry.` };
+    }
+    guard.preSellCheckpointAt = null;
     if (isNoLiveTokenBalanceError(error)) {
       // Fresh-launch tokens: the ATA was created seconds ago and balance reads
       // lag - "no balance" within 30 min of the plan is transient, not final.
@@ -20139,6 +20328,7 @@ async function processTradePlans(options = {}) {
     }
 
     const planStore = await readTradePlans();
+    const automationStore = await readWebAuthStore().catch(() => null);
     const initialPlanIds = new Set(objectRows(planStore.plans).map((plan) => plan.id).filter(Boolean));
     const walletStore = await readWalletStore();
     let changed = false;
@@ -20146,8 +20336,25 @@ async function processTradePlans(options = {}) {
     for (const plan of prioritizedTradePlans(planStore.plans)) {
       summary.checkedPlans += 1;
       try {
+      const persistPlanCheckpoint = async () => {
+        const merged = await writeTradePlansPreservingNewPlans(planStore, initialPlanIds);
+        const persisted = objectRows(merged.plans).find((row) => row.id === plan.id);
+        return Boolean(persisted && !["canceled", "cancelled", "stopped", "completed", "closed"].includes(String(persisted.status || "").toLowerCase()));
+      };
+      if (plan.automationPermission) {
+        const currentProfile = automationStore?.profiles?.[String(plan.userId)] || {};
+        if (!webAutomationExecutionAllowed(plan.automationPermission, currentProfile)) {
+          const message = "Managed-wallet automation permission is inactive. Re-enable it to resume this plan.";
+          if (plan.lastError !== message) {
+            plan.lastError = message;
+            plan.updatedAt = new Date().toISOString();
+            changed = true;
+          }
+          continue;
+        }
+      }
       if (plan.status === "launch_watch") {
-        const result = await processLaunchWatchPlan(plan, walletStore);
+        const result = await processLaunchWatchPlan(plan, walletStore, null, { persistCheckpoint: persistPlanCheckpoint });
         if (result.changed) changed = true;
         if (result.message && plan.chatId) {
           await say(plan.chatId, withBrandFooter(result.message));
@@ -20156,7 +20363,7 @@ async function processTradePlans(options = {}) {
       }
 
       if (plan.status === "copy_wallet_watch") {
-        const result = await processCopyWalletWatchPlan(plan, walletStore);
+        const result = await processCopyWalletWatchPlan(plan, walletStore, { persistCheckpoint: persistPlanCheckpoint });
         if (result.changed) changed = true;
         if (result.message && plan.chatId) {
           await say(plan.chatId, withBrandFooter(result.message));
@@ -20165,7 +20372,7 @@ async function processTradePlans(options = {}) {
       }
 
       if (plan.status === "wallet_launch_watch") {
-        const result = await processWalletLaunchWatchPlan(plan, walletStore);
+        const result = await processWalletLaunchWatchPlan(plan, walletStore, null, { persistCheckpoint: persistPlanCheckpoint });
         if (result.changed) changed = true;
         if (result.message && plan.chatId) {
           await say(plan.chatId, withBrandFooter(result.message));
@@ -20175,7 +20382,7 @@ async function processTradePlans(options = {}) {
 
       if (plan.status === "volume_bot") {
         const result = await processVolumeBotPlan(plan, walletStore, async () => {
-          await writeTradePlansPreservingNewPlans(planStore, initialPlanIds);
+          return persistPlanCheckpoint();
         });
         if (result.changed) changed = true;
         continue;
@@ -20194,24 +20401,28 @@ async function processTradePlans(options = {}) {
         try {
           result = await runTpSlMonitorStep(
             `${planWallet.label || planWallet.publicKey || "Wallet"} ${shortMint(plan.tokenMint || "")} trade plan`,
-            () => processTradePlanWallet(plan, planWallet, walletStore, {
+            (stepControl) => processTradePlanWallet(plan, planWallet, walletStore, {
               forcePriceCheck: Boolean(options.forcePriceCheck),
-              persistCheckpoint: async () => {
-                await writeTradePlansPreservingNewPlans(planStore, initialPlanIds);
-              }
+              shouldAbort: stepControl.isTimedOut,
+              persistCheckpoint: persistPlanCheckpoint
             }),
             (timeoutMs) => {
               const nowIso = new Date().toISOString();
-              const message = `TP/SL trade plan timed out after ${timeoutMs}ms; retrying without blocking other trades.`;
+              const submissionMayBeInFlight = [planWallet.status, planWallet.exitStatus].some((status) => String(status || "").toLowerCase() === "submitting")
+                || Boolean(planWallet.preSellCheckpointAt && !planWallet.sellSignature);
+              const message = submissionMayBeInFlight
+                ? `TP/SL trade plan timed out after ${timeoutMs}ms with a possible submission in flight; automatic retry is paused.`
+                : `TP/SL trade plan timed out after ${timeoutMs}ms before submission; retrying without blocking other trades.`;
               planWallet.failures = Number.parseInt(planWallet.failures || 0, 10) + 1;
-              planWallet.status = isPriceExitTrigger(planWallet.triggerReason) ? "retrying" : (planWallet.status || "watching");
-              planWallet.exitStatus = isPriceExitTrigger(planWallet.triggerReason) ? "retrying" : (planWallet.exitStatus || "watching");
-              planWallet.triggerStatus = isPriceExitTrigger(planWallet.triggerReason) ? "retrying" : (planWallet.triggerStatus || "watching");
+              planWallet.status = submissionMayBeInFlight ? "outcome_unknown" : (isPriceExitTrigger(planWallet.triggerReason) ? "retrying" : (planWallet.status || "watching"));
+              planWallet.exitStatus = submissionMayBeInFlight ? "outcome_unknown" : (isPriceExitTrigger(planWallet.triggerReason) ? "retrying" : (planWallet.exitStatus || "watching"));
+              planWallet.triggerStatus = submissionMayBeInFlight ? "outcome_unknown" : (isPriceExitTrigger(planWallet.triggerReason) ? "retrying" : (planWallet.triggerStatus || "watching"));
               planWallet.lastError = message;
               planWallet.lastRunnerError = message;
               planWallet.lastFailedAt = nowIso;
               planWallet.updatedAt = nowIso;
-              planWallet.retryAfterAt = new Date(Date.now() + 1_000).toISOString();
+              planWallet.retryAfterAt = submissionMayBeInFlight ? null : new Date(Date.now() + 1_000).toISOString();
+              planWallet.nextRetryAt = planWallet.retryAfterAt;
               logTpSlEvent("tp_sl_trade_skipped", {
                 tradeId: tradePlanWalletTradeId(plan, planWallet),
                 userId: plan.userId,
@@ -20224,7 +20435,9 @@ async function processTradePlans(options = {}) {
                 takeProfit: walletTakeProfitPct(plan, planWallet) || null,
                 reason: message
               });
-              scheduleTradePlanProcessing("trade plan timeout retry", [500, 1500, 3000, 6000]);
+              if (!submissionMayBeInFlight) {
+                scheduleTradePlanProcessing("trade plan timeout retry", [500, 1500, 3000, 6000]);
+              }
             }
           );
         } catch (error) {
@@ -20347,28 +20560,27 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
     return { changed: false, message: null };
   }
 
-  if (!triggerReason && staleSubmittingExit({
+  const staleUnresolvedSubmission = [planWallet.status, planWallet.exitStatus].some((status) => String(status || "").toLowerCase() === "submitting")
+    && Number.isFinite(Date.parse(planWallet.preSellCheckpointAt || planWallet.lastSellAttemptAt || ""))
+    && now - Date.parse(planWallet.preSellCheckpointAt || planWallet.lastSellAttemptAt) >= CONFIG.stopLossSubmitStaleMs;
+  if (!triggerReason && (staleUnresolvedSubmission || staleSubmittingExit({
     status: planWallet.status,
     exitStatus: planWallet.exitStatus,
     triggerReason: planWallet.triggerReason,
     lastSellAttemptAt: planWallet.lastSellAttemptAt,
     now,
     staleMs: CONFIG.stopLossSubmitStaleMs
-  })) {
-    triggerReason = planWallet.triggerReason;
-    const storedSellPercent = planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100;
-    triggerMeta = {
-      kind: /^stop-loss\b/i.test(String(planWallet.triggerReason || "")) ? "stop-loss" : "take-profit",
-      sellPercent: storedSellPercent,
-      staleSubmitRetry: true
-    };
-    planWallet.triggerStatus = "retrying";
-    planWallet.exitStatus = "retrying";
-    planWallet.status = "retrying";
+  }))) {
+    planWallet.triggerStatus = "outcome_unknown";
+    planWallet.exitStatus = "outcome_unknown";
+    planWallet.status = "outcome_unknown";
     planWallet.retryAfterAt = null;
     planWallet.nextRetryAt = null;
     planWallet.lastTriggerCheckAt = new Date().toISOString();
-    planWallet.lastError = "Previous price-exit sell stayed submitting too long; retrying now.";
+    planWallet.lastError = "Previous exit submission has an unknown outcome. Automatic retry is paused to prevent a duplicate sell.";
+    planWallet.updatedAt = new Date().toISOString();
+    if (typeof options.persistCheckpoint === "function") await options.persistCheckpoint();
+    return { changed: true, triggered: false, sold: false, failed: false, message: `${planWallet.label}: exit outcome is unknown; automatic resubmission is paused.` };
   }
 
   if (
@@ -20536,6 +20748,26 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
     return { changed: false, message: null };
   }
 
+  if (typeof options.shouldAbort === "function" && options.shouldAbort()) {
+    return { changed: true, triggered: false, sold: false, message: null };
+  }
+
+  const requiresManagedPermission = Boolean(plan.automationPermission)
+    || (!plan.chatId && plan.executionMode === "managed_server");
+  if (requiresManagedPermission) {
+    try {
+      await requireWebAutomationPermission(plan.userId, "managed exit submission");
+    } catch {
+      plan.lastError = "Managed-wallet automation permission is inactive. Re-enable it to resume this plan.";
+      plan.updatedAt = new Date().toISOString();
+      return { changed: true, triggered: false, sold: false, message: null };
+    }
+  }
+
+  if (typeof options.shouldAbort === "function" && options.shouldAbort()) {
+    return { changed: true, triggered: false, sold: false, message: null };
+  }
+
   try {
     const triggeredAt = new Date().toISOString();
     planWallet.status = "submitting";
@@ -20556,14 +20788,20 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
       ? Math.max(Number(plan.slippageBps || 0), CONFIG.stopLossExitSlippageBps)
       : plan.slippageBps;
     planWallet.exitSlippageBps = exitSlippageBps;
-    if (priceExitTrigger && typeof options.persistCheckpoint === "function") {
+    if (typeof options.persistCheckpoint === "function") {
       planWallet.preSellCheckpointAt = new Date().toISOString();
-      await options.persistCheckpoint();
+      const accepted = await options.persistCheckpoint();
+      if (accepted === false) return { changed: false, triggered: false, sold: false, message: null };
+    }
+    if (typeof options.shouldAbort === "function" && options.shouldAbort()) {
+      return { changed: true, triggered: false, sold: false, message: null };
     }
     const sell = await sellTradePlanWalletWithRetries(plan, planWallet, wallet, sellPercent, exitSlippageBps, {
       userId: plan.userId,
       priceExit: priceExitTrigger
     });
+    planWallet.preSellCheckpointAt = null;
+    planWallet.submissionResolvedAt = new Date().toISOString();
     planWallet.exitSlippageBps = sell.sellSlippageBps || exitSlippageBps;
     invalidateWalletReadCache(wallet.publicKey);
     sell.sellPercent = sellPercent;
@@ -20577,7 +20815,9 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
       tokenAmount: sell.tokenAmount,
       solLamportsReceived: sell.outputLamports,
       signature: sell.signature
-    }]);
+    }]).catch((error) => {
+      planWallet.lastRecordError = friendlyError(error);
+    });
     if (triggerMeta?.kind === "take-profit" && Number.isInteger(triggerMeta.ladderLevelIndex)) {
       const completed = new Set((planWallet.completedTakeProfitLevels || []).map((value) => Number.parseInt(value, 10)));
       completed.add(triggerMeta.ladderLevelIndex);
@@ -20603,6 +20843,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
         planWallet.exitStatus = "watching";
         planWallet.triggerStatus = "watching";
         planWallet.triggerKind = null;
+        if (typeof options.persistCheckpoint === "function") await options.persistCheckpoint();
         logTradePlanExitEvent("tp_sl_trade_closed", plan, planWallet, sell, planWallet.triggerReason, {
           reason: `${planWallet.triggerReason}; ladder continues`
         });
@@ -20618,6 +20859,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
       planWallet.exitStatus = "confirmed";
       planWallet.triggerStatus = "confirmed";
       planWallet.soldAt = new Date().toISOString();
+      if (typeof options.persistCheckpoint === "function") await options.persistCheckpoint();
       logTradePlanExitEvent("tp_sl_trade_closed", plan, planWallet, sell, planWallet.triggerReason);
       return {
         changed: true,
@@ -20647,6 +20889,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
         planWallet.triggerStatus = "waiting_next_loop";
         planWallet.nextLoopAt = new Date(Date.now() + loopDelaySeconds * 1000).toISOString();
         planWallet.updatedAt = new Date().toISOString();
+        if (typeof options.persistCheckpoint === "function") await options.persistCheckpoint();
         logTradePlanExitEvent("tp_sl_trade_closed", plan, planWallet, sell, triggerReason, {
           reason: `${triggerReason}; next loop starts in ${formatDelay(loopDelaySeconds)}`
         });
@@ -20657,6 +20900,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
           message: `${formatTimedSellSuccessLine(planWallet, sell, triggerReason, plan.loopCount || 1)}; next loop starts in ${formatDelay(loopDelaySeconds)}`
         };
       }
+      if (typeof options.persistCheckpoint === "function") await options.persistCheckpoint();
       logTradePlanExitEvent("tp_sl_trade_closed", plan, planWallet, sell, triggerReason, {
         reason: `${triggerReason}; restarting next loop`
       });
@@ -20666,6 +20910,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
     planWallet.status = "sold";
     planWallet.exitStatus = "confirmed";
     planWallet.soldAt = new Date().toISOString();
+    if (typeof options.persistCheckpoint === "function") await options.persistCheckpoint();
     logTradePlanExitEvent("tp_sl_trade_closed", plan, planWallet, sell, triggerReason);
     return {
       changed: true,
@@ -20677,6 +20922,20 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
   } catch (error) {
     const failures = Number.parseInt(planWallet.failures || 0, 10) + 1;
     const priceExit = isPriceExitTrigger(triggerReason);
+    if (error?.tradeSubmissionAmbiguous) {
+      planWallet.failures = failures;
+      planWallet.status = "outcome_unknown";
+      planWallet.exitStatus = "outcome_unknown";
+      planWallet.triggerStatus = "outcome_unknown";
+      planWallet.error = friendlyError(error);
+      planWallet.lastError = `Exit submission outcome is unknown; automatic retry paused. ${friendlyError(error)}`;
+      planWallet.retryAfterAt = null;
+      planWallet.nextRetryAt = null;
+      planWallet.updatedAt = new Date().toISOString();
+      if (typeof options.persistCheckpoint === "function") await options.persistCheckpoint();
+      return { changed: true, triggered: priceExit, sold: false, failed: false, message: `${planWallet.label}: exit outcome unknown; no automatic retry.` };
+    }
+    planWallet.preSellCheckpointAt = null;
     if (isNoLiveTokenBalanceError(error)) {
       const nowIso = new Date().toISOString();
       planWallet.failures = failures;
@@ -20732,7 +20991,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
   }
 }
 
-async function processCopyWalletWatchPlan(plan, walletStore) {
+async function processCopyWalletWatchPlan(plan, walletStore, options = {}) {
   const intervalMs = Math.max(5_000, Math.min(CONFIG.kolCopyScanIntervalMs, 300_000));
   const lastScanAt = Date.parse(plan.lastScanAt || "");
   if (Number.isFinite(lastScanAt) && Date.now() - lastScanAt < intervalMs) {
@@ -20775,6 +21034,11 @@ async function processCopyWalletWatchPlan(plan, walletStore) {
     lastTradeAt: signal.lastTradeAt || null
   };
   plan.sellAfterAt = planSellAfterAtFromNow(plan);
+  plan.copyClaimedAt = new Date().toISOString();
+  if (typeof options.persistCheckpoint === "function") {
+    const accepted = await options.persistCheckpoint();
+    if (accepted === false) return { changed: false, message: null };
+  }
 
   const ownerWallets = walletsForOwner(walletStore, plan.userId);
   const amountLamports = solToLamports(plan.amountSol);
@@ -20836,7 +21100,9 @@ async function processCopyWalletWatchPlan(plan, walletStore) {
   ].filter(Boolean).slice(-20);
 
   if (tradeEvents.length > 0) {
-    await recordTradeEvents(tradeEvents);
+    await recordTradeEvents(tradeEvents).catch((error) => {
+      plan.lastRecordError = friendlyError(error);
+    });
     plan.status = "watching";
     void sendWebPushToUser(plan.userId, {
       title: `KOL copy fired: ${signal.symbol || shortMint(tokenMint)}`,
@@ -20869,10 +21135,13 @@ async function processCopyWalletWatchPlan(plan, walletStore) {
   return { changed: true, message: null };
 }
 
-async function processLaunchWatchPlan(plan, walletStore, knownMatch = null) {
+async function processLaunchWatchPlan(plan, walletStore, knownMatch = null, options = {}) {
   // knownMatch = an already-resolved {tokenMint,symbol,name} from the INSTANT onCreation hook. When present
   // we skip the scan throttle AND the candidate lookup entirely — we snipe the exact coin the moment it
   // streams in (sub-second), instead of waiting for the next poll.
+  if (plan.tokenMint && plan.launchMatchedAt && plan.status === "launch_watch") {
+    return { changed: false, message: null };
+  }
   if (!knownMatch) {
     const lastScanAt = Date.parse(plan.lastScanAt || "");
     if (Number.isFinite(lastScanAt) && Date.now() - lastScanAt < CONFIG.manualLaunchScanIntervalMs) {
@@ -20888,6 +21157,10 @@ async function processLaunchWatchPlan(plan, walletStore, knownMatch = null) {
   plan.tokenMint = match.tokenMint;
   plan.launchMatchedAt = new Date().toISOString();
   plan.sellAfterAt = planSellAfterAtFromNow(plan);
+  if (typeof options.persistCheckpoint === "function") {
+    const accepted = await options.persistCheckpoint();
+    if (accepted === false) return { changed: false, message: null };
+  }
   const amountLamports = solToLamports(plan.amountSol);
   const tradeEvents = [];
   const results = [];
@@ -20940,7 +21213,9 @@ async function processLaunchWatchPlan(plan, walletStore, knownMatch = null) {
   }
 
   if (tradeEvents.length > 0) {
-    await recordTradeEvents(tradeEvents);
+    await recordTradeEvents(tradeEvents).catch((error) => {
+      plan.lastRecordError = friendlyError(error);
+    });
     plan.status = "watching";
     plan.results = appendLimited([...(plan.results || []), ...results]);
     // Ping the web user (push reaches them with the app closed — the point of a server-side snipe).
@@ -21015,6 +21290,7 @@ async function instantLaunchWatchSnipe(entry) {
   const sym = cleanTickerForCompare(entry && (entry.symbol || entry.ticker) || "");
   const nm = cleanTickerForCompare(entry && entry.name || "");
   const store = await readTradePlans();
+  const initialPlanIds = new Set(objectRows(store.plans).map((plan) => plan.id).filter(Boolean));
   const walletStore = await readWalletStore();
   let dirty = false;
   for (const plan of store.plans || []) {
@@ -21030,6 +21306,12 @@ async function instantLaunchWatchSnipe(entry) {
         symbol: entry.symbol || entry.ticker || "",
         name: entry.name || "",
         pairCreatedAt: Date.now()
+      }, {
+        persistCheckpoint: async () => {
+          const merged = await writeTradePlansPreservingNewPlans(store, initialPlanIds);
+          const persisted = objectRows(merged.plans).find((row) => row.id === plan.id);
+          return Boolean(persisted && persisted.status === "launch_watch");
+        }
       });
       if (result && result.changed) {
         dirty = true;
@@ -21041,7 +21323,7 @@ async function instantLaunchWatchSnipe(entry) {
     }
   }
   if (dirty) {
-    await writeTradePlans(store);
+    await writeTradePlansPreservingNewPlans(store, initialPlanIds);
     void refreshSnipeWatchTickers();
   }
 }
@@ -21115,6 +21397,7 @@ async function instantWalletLaunchSnipe(entry) {
   const mint = String(entry?.tokenMint || entry?.mint || entry?.ca || "").trim();
   if (!creator || !mint) return;
   const store = await readTradePlans();
+  const initialPlanIds = new Set(objectRows(store.plans).map((plan) => plan.id).filter(Boolean));
   const walletStore = await readWalletStore();
   let dirty = false;
   for (const plan of store.plans || []) {
@@ -21127,11 +21410,17 @@ async function instantWalletLaunchSnipe(entry) {
       name: entry.name || "",
       launcher: creator,
       pairCreatedAt: Date.now()
+    }, {
+      persistCheckpoint: async () => {
+        const merged = await writeTradePlansPreservingNewPlans(store, initialPlanIds);
+        const persisted = objectRows(merged.plans).find((row) => row.id === plan.id);
+        return Boolean(persisted && persisted.status === "wallet_launch_watch");
+      }
     });
     if (result.changed) dirty = true;
     if (result.message) void notifyLaunchSnipeResult(plan, result.message).catch(() => {});
   }
-  if (dirty) await writeTradePlans(store);
+  if (dirty) await writeTradePlansPreservingNewPlans(store, initialPlanIds);
 }
 
 async function instantRhWalletLaunchSnipe(match = {}) {
@@ -21139,6 +21428,7 @@ async function instantRhWalletLaunchSnipe(match = {}) {
   const tokenAddress = String(match.tokenAddress || match.address || match.token || "").trim();
   if (!deployer || !/^0x[0-9a-fA-F]{40}$/.test(tokenAddress)) return;
   const store = await readTradePlans();
+  const initialPlanIds = new Set(objectRows(store.plans).map((plan) => plan.id).filter(Boolean));
   const walletStore = await readWalletStore();
   let dirty = false;
   for (const plan of store.plans || []) {
@@ -21152,11 +21442,17 @@ async function instantRhWalletLaunchSnipe(match = {}) {
       name: match.name || "",
       deployer,
       block: match.block || 0
+    }, {
+      persistCheckpoint: async () => {
+        const merged = await writeTradePlansPreservingNewPlans(store, initialPlanIds);
+        const persisted = objectRows(merged.plans).find((row) => row.id === plan.id);
+        return Boolean(persisted && persisted.status === "wallet_launch_watch");
+      }
     });
     if (result.changed) dirty = true;
     if (result.message) void notifyLaunchSnipeResult(plan, result.message).catch(() => {});
   }
-  if (dirty) await writeTradePlans(store);
+  if (dirty) await writeTradePlansPreservingNewPlans(store, initialPlanIds);
 }
 
 async function findWalletLaunchCandidate(plan) {
@@ -21189,7 +21485,7 @@ async function findWalletLaunchCandidate(plan) {
   };
 }
 
-async function processWalletLaunchWatchPlan(plan, walletStore, knownMatch = null) {
+async function processWalletLaunchWatchPlan(plan, walletStore, knownMatch = null, options = {}) {
   const chain = normalizeWalletLaunchChain(plan.chain);
   const scanIntervalMs = chain === "robinhood" ? Math.max(10_000, Math.min(45_000, Number(plan.scanIntervalMs || 15_000))) : Math.max(500, Math.min(CONFIG.manualLaunchScanIntervalMs, 10_000));
   if (!knownMatch) {
@@ -21204,6 +21500,11 @@ async function processWalletLaunchWatchPlan(plan, walletStore, knownMatch = null
   if (!match) return { changed: true, message: null };
   const tokenKey = walletLaunchTokenKey(match, chain);
   if (!tokenKey) return { changed: true, message: null };
+  if (Number(plan.maxMatches || 0) > 0 && Number(plan.matchCount || 0) >= Number(plan.maxMatches)) {
+    plan.status = "completed";
+    plan.completedAt = plan.completedAt || new Date().toISOString();
+    return { changed: true, message: null };
+  }
 
   const seen = new Set([...(plan.seenLaunches || []), ...(plan.seenTokenMints || [])].map((value) => String(value || "").trim()).filter(Boolean));
   if (seen.has(tokenKey)) return { changed: true, message: null };
@@ -21214,12 +21515,24 @@ async function processWalletLaunchWatchPlan(plan, walletStore, knownMatch = null
   try {
     plan.lastMatchedAt = new Date().toISOString();
     plan.lastMatchedToken = tokenKey;
+    // Durable at-most-once claim before any wallet can spend. A process crash
+    // may leave this launch marked outcome-unknown, but it cannot replay buys.
+    plan.seenLaunches = uniqueStrings([...(plan.seenLaunches || []), tokenKey]).slice(-100);
+    plan.lastClaimedAt = plan.lastMatchedAt;
+    plan.matchCount = Number(plan.matchCount || 0) + 1;
+    if (typeof options.persistCheckpoint === "function") {
+      const accepted = await options.persistCheckpoint();
+      if (accepted === false) return { changed: false, message: null };
+    }
 
     const result = chain === "robinhood"
       ? await executeRhWalletLaunchSnipe(plan, walletStore, match)
       : await executeSolWalletLaunchSnipe(plan, walletStore, match);
-    plan.seenLaunches = uniqueStrings([...(plan.seenLaunches || []), tokenKey]).slice(-100);
     plan.lastResult = result.message || "";
+    if (Number(plan.maxMatches || 0) > 0 && Number(plan.matchCount || 0) >= Number(plan.maxMatches)) {
+      plan.status = "completed";
+      plan.completedAt = new Date().toISOString();
+    }
     plan.results = appendLimited([
       ...(plan.results || []),
       `${chain === "robinhood" ? "RH" : "SOL"} launch matched ${result.symbol || match?.symbol || walletLaunchShortAddress(tokenKey, chain)}: ${result.message || "submitted"}`
@@ -21235,6 +21548,10 @@ async function processWalletLaunchWatchPlan(plan, walletStore, knownMatch = null
     };
   } catch (error) {
     plan.lastError = friendlyError(error);
+    if (Number(plan.maxMatches || 0) > 0 && Number(plan.matchCount || 0) >= Number(plan.maxMatches)) {
+      plan.status = "completed";
+      plan.completedAt = new Date().toISOString();
+    }
     plan.results = appendLimited([...(plan.results || []), `Launch match ${walletLaunchShortAddress(tokenKey, chain)} failed - ${plan.lastError}`]);
     return { changed: true, message: null };
   } finally {
@@ -21252,16 +21569,22 @@ async function executeSolWalletLaunchSnipe(plan, walletStore, match) {
     })
     .filter(Boolean);
   if (!selected.length) throw new Error("No selected managed wallets are still available.");
+  const sellDelay = plan.sellDelaySeconds ?? plan.sellDelay ?? "5";
   const result = await webCreateManagedBuyPlan(plan.userId, selected, {
     tokenMint,
     amountSol: plan.amountSol,
-    sellDelay: plan.sellDelaySeconds || plan.sellDelay || "5",
+    sellDelay,
     takeProfitPct: plan.takeProfitPct,
     stopLossPct: plan.stopLossPct,
+    takeProfitLadder: plan.takeProfitLadder,
+    trailingStopPct: plan.trailingStopPct,
+    trailingActivatePct: plan.trailingActivatePct,
+    breakEvenAfterTp1: plan.breakEvenAfterTp1,
     sellPercent: plan.sellPercent || "100",
     loopCount: plan.loopCount || "1",
     loopDelay: plan.loopDelaySeconds || "0",
     slippageBps: plan.slippageBps || PUMPSNIPE_SLIPPAGE_BPS,
+    tradeAttemptId: `wallet-launch-${plan.id}-${tokenMint}`,
     walletIndexes: (plan.wallets || []).map((wallet) => String(wallet.walletIndex)).filter(Boolean)
   }, {
     source: "wallet_launch_snipe",
@@ -21280,15 +21603,22 @@ async function executeSolWalletLaunchSnipe(plan, walletStore, match) {
 async function executeRhWalletLaunchSnipe(plan, walletStore, match) {
   const tokenAddress = String(match.tokenAddress || match.address || match.token || "").trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(tokenAddress)) throw new Error("Matched Robinhood launch did not include a token address.");
-  const selectedIndexes = (plan.wallets || [])
-    .map((wallet) => Number.parseInt(wallet.walletIndex, 10))
-    .filter((index) => Number.isInteger(index) && walletsForOwner(walletStore, plan.userId)[index - 1]);
+  const ownerWallets = walletsForOwner(walletStore, plan.userId);
+  const selected = (plan.wallets || [])
+    .map((planWallet) => {
+      const wallet = ownerWallets.find((item) => item.publicKey === planWallet.publicKey);
+      return wallet ? { wallet, index: ownerWallets.indexOf(wallet) + 1 } : null;
+    })
+    .filter(Boolean);
+  const selectedIndexes = selected.map((row) => row.index);
+  const selectedPublicKeys = selected.map((row) => row.wallet.publicKey);
   if (!selectedIndexes.length) throw new Error("No selected managed wallets are still available.");
   const amountEth = Number(plan.amountEth || plan.amountSol || 0);
   if (!(amountEth > 0)) throw new Error("Enter a Robinhood ETH amount above 0.");
   const result = await webRhBundleCore(plan.userId, {
     tokenAddress,
     walletIndexes: selectedIndexes,
+    walletPublicKeys: selectedPublicKeys,
     minEth: amountEth,
     maxEth: amountEth
   });
@@ -21297,6 +21627,7 @@ async function executeRhWalletLaunchSnipe(plan, walletStore, match) {
     if (Number(plan.takeProfitPct || 0) > 0 || Number(plan.stopLossPct || 0) > 0) {
       await webRhArmGuard(plan.userId, {
         walletIndex: String(row.walletIndex),
+        walletPublicKey: row.walletPublicKey,
         tokenAddress,
         symbol: match.symbol || "",
         takeProfitPct: plan.takeProfitPct || 0,
@@ -21307,7 +21638,7 @@ async function executeRhWalletLaunchSnipe(plan, walletStore, match) {
       });
     }
   }
-  await audit("wallet_launch_snipe_fire", { userId: plan.userId, chain: "robinhood", launcher: plan.launchWallet, tokenAddress, planId: plan.id, okCount: okRows.length });
+  await audit("wallet_launch_snipe_fire", { userId: plan.userId, chain: "robinhood", launcher: plan.launchWallet, tokenAddress, planId: plan.id, okCount: okRows.length }).catch(() => {});
   return {
     id: plan.id,
     tokenAddress,
@@ -21322,18 +21653,6 @@ async function restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReaso
   try {
     const amountLamports = solToLamports(plan.amountSol);
     const buy = await buyTokenForPlan(wallet, plan.tokenMint, amountLamports, plan.slippageBps, { trackTokenDelta: true, userId: plan.userId });
-    await recordTradeEvents([{
-      userId: plan.userId,
-      type: "buy",
-      source: "timed_plan_loop",
-      tokenMint: plan.tokenMint,
-      walletLabel: wallet.label,
-      walletPublicKey: wallet.publicKey,
-      solLamportsSpent: String(amountLamports),
-      tokenAmount: buy.tokenDeltaAmount || buy.outputAmount || null,
-      signature: buy.signature
-    }]);
-
     planWallet.status = "watching";
     planWallet.currentLoop = planWallet.completedLoops + 1;
     planWallet.basisLamports = positiveRawString(buy.swapLamports) || String(amountLamports);
@@ -21347,6 +21666,17 @@ async function restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReaso
     planWallet.nextLoopAt = null;
     planWallet.sellAfterAt = planSellAfterAtFromNow(plan);
     planWallet.updatedAt = new Date().toISOString();
+    await recordTradeEvents([{
+      userId: plan.userId,
+      type: "buy",
+      source: "timed_plan_loop",
+      tokenMint: plan.tokenMint,
+      walletLabel: wallet.label,
+      walletPublicKey: wallet.publicKey,
+      solLamportsSpent: String(amountLamports),
+      tokenAmount: buy.tokenDeltaAmount || buy.outputAmount || null,
+      signature: buy.signature
+    }]).catch((error) => { planWallet.lastRecordError = friendlyError(error); });
 
     return {
       changed: true,
@@ -21372,18 +21702,6 @@ async function startDelayedTimedPlanLoop(plan, planWallet, wallet) {
   try {
     const amountLamports = solToLamports(plan.amountSol);
     const buy = await buyTokenForPlan(wallet, plan.tokenMint, amountLamports, plan.slippageBps, { trackTokenDelta: true, userId: plan.userId });
-    await recordTradeEvents([{
-      userId: plan.userId,
-      type: "buy",
-      source: "timed_plan_loop",
-      tokenMint: plan.tokenMint,
-      walletLabel: wallet.label,
-      walletPublicKey: wallet.publicKey,
-      solLamportsSpent: String(amountLamports),
-      tokenAmount: buy.tokenDeltaAmount || buy.outputAmount || null,
-      signature: buy.signature
-    }]);
-
     planWallet.status = "watching";
     planWallet.currentLoop = planWallet.completedLoops + 1;
     planWallet.basisLamports = positiveRawString(buy.swapLamports) || String(amountLamports);
@@ -21397,6 +21715,17 @@ async function startDelayedTimedPlanLoop(plan, planWallet, wallet) {
     planWallet.nextLoopAt = null;
     planWallet.sellAfterAt = planSellAfterAtFromNow(plan);
     planWallet.updatedAt = new Date().toISOString();
+    await recordTradeEvents([{
+      userId: plan.userId,
+      type: "buy",
+      source: "timed_plan_loop",
+      tokenMint: plan.tokenMint,
+      walletLabel: wallet.label,
+      walletPublicKey: wallet.publicKey,
+      solLamportsSpent: String(amountLamports),
+      tokenAmount: buy.tokenDeltaAmount || buy.outputAmount || null,
+      signature: buy.signature
+    }]).catch((error) => { planWallet.lastRecordError = friendlyError(error); });
 
     return {
       changed: true,
@@ -22090,8 +22419,10 @@ async function executeJupiterSwap({
   let lastError;
   const attempts = Math.max(1, Math.min(CONFIG.jupiterSwapMaxAttempts, Number.parseInt(maxAttempts, 10) || CONFIG.jupiterSwapMaxAttempts));
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    let order;
+    let signedTransaction;
     try {
-      const order = attempt === 0 && prebuiltOrder
+      order = attempt === 0 && prebuiltOrder
         ? prebuiltOrder
         : await createJupiterOrder({
         taker: signer.publicKey,
@@ -22106,14 +22437,30 @@ async function executeJupiterSwap({
 
       const tx = VersionedTransaction.deserialize(Buffer.from(order.transaction, "base64"));
       tx.sign([signer]);
+      signedTransaction = Buffer.from(tx.serialize()).toString("base64");
+    } catch (error) {
+      lastError = asTradeExecutionError(error, "Jupiter order/build failed.");
+      lastError.tradePreSubmit = true;
+      lastError.tradeStage = "jupiter:order";
+      if (attempt >= attempts - 1 || !isRetryableSwapError(lastError)) {
+        break;
+      }
+      await sleep(Math.min(900, 250 + attempt * 250));
+      continue;
+    }
 
-      const execute = await jupiterFetchJson(`${CONFIG.jupiterApiBase}/execute`, {
+    // From this point onward the signed transaction may have landed even if
+    // Jupiter's response is lost. jupiterFetchJson may retry only this exact
+    // signed payload/requestId; we must never create a fresh order afterward.
+    let execute;
+    try {
+      execute = await jupiterFetchJson(`${CONFIG.jupiterApiBase}/execute`, {
         priority,
         timeoutMs: executeTimeoutMs,
         method: "POST",
         headers: jupiterHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
-          signedTransaction: Buffer.from(tx.serialize()).toString("base64"),
+          signedTransaction,
           requestId: order.requestId,
           lastValidBlockHeight: order.lastValidBlockHeight
         })
@@ -22122,25 +22469,22 @@ async function executeJupiterSwap({
       if (execute.status && execute.status !== "Success") {
         throw new Error(execute.error || `Jupiter execute failed with code ${execute.code ?? "unknown"}.`);
       }
-
       if (!execute.signature) {
         throw new Error("Jupiter execute did not return a transaction signature.");
       }
-
-      return {
-        signature: execute.signature,
-        router: order.router,
-        mode: order.mode,
-        outputAmount: execute.outputAmountResult || order.outAmount,
-        attempts: attempt + 1
-      };
     } catch (error) {
-      lastError = error;
-      if (attempt >= attempts - 1 || !isRetryableSwapError(error)) {
-        break;
-      }
-      await sleep(Math.min(900, 250 + attempt * 250));
+      const ambiguous = markTradeSubmissionAmbiguous(error, "jupiter:execute");
+      ambiguous.jupiterRequestId = String(order.requestId || "").slice(0, 160);
+      throw ambiguous;
     }
+
+    return {
+      signature: execute.signature,
+      router: order.router,
+      mode: order.mode,
+      outputAmount: execute.outputAmountResult || order.outAmount,
+      attempts: attempt + 1
+    };
   }
 
   throw lastError;
@@ -33595,6 +33939,7 @@ function xReplyAuto() { const v = (process.env.X_REPLY_AUTO || "").trim(); retur
 function xDmStateFile() { return path.join(CONFIG.dataDir, "x-dm-terminal.json"); }
 let xDmStateCache = null;
 let xDmPollRunning = false;
+let xDmStateWriteChain = Promise.resolve();
 function xDmTerminalEnabled() {
   const v = String(process.env.X_DM_ENABLED || "").trim();
   return v ? parseBoolean(v) : xDmConfigured();
@@ -33611,24 +33956,48 @@ async function readXDmState() {
   if (!s.pending || typeof s.pending !== "object") s.pending = {}; // xSenderId -> trade confirm payload
   if (!s.contexts || typeof s.contexts !== "object") s.contexts = {}; // xSenderId -> recent token slots
   if (!s.failures || typeof s.failures !== "object") s.failures = {}; // event id -> retry/backoff metadata
+  if (!s.menuSessions || typeof s.menuSessions !== "object") s.menuSessions = {}; // hashed scoped Trade Pad sessions
+  if (!s.usedBootstraps || typeof s.usedBootstraps !== "object") s.usedBootstraps = {}; // one-time signed handoff nonces
+  if (!s.executing || typeof s.executing !== "object") s.executing = {}; // xSenderId -> confirmed money action in flight
+  if (!s.outbox || typeof s.outbox !== "object") s.outbox = {}; // durable trade receipts waiting for X delivery
   xDmStateCache = s; return s;
 }
 async function writeXDmState(s) {
   xDmStateCache = s;
+  const snapshot = structuredClone(s);
+  const write = xDmStateWriteChain
+    .catch(() => {})
+    .then(() => writeJsonFile(xDmStateFile(), snapshot));
+  xDmStateWriteChain = write.catch(() => {});
   try {
-    await writeJsonFile(xDmStateFile(), s);
+    await write;
   } catch (error) {
     console.log(`[xdm] state write failed: ${String(error?.message || error).slice(0, 160)}`);
     throw error;
   }
 }
 function xDmPruneState(s, now = Date.now()) {
+  const sizeBefore = [s.seen, s.ignored, s.codes, s.pending, s.contexts, s.failures, s.executing, s.outbox, s.menuSessions, s.usedBootstraps]
+    .reduce((sum, value) => sum + Object.keys(value || {}).length, 0);
   for (const [id, ts] of Object.entries(s.seen || {})) if (now - Number(ts || 0) > 3 * 86_400_000) delete s.seen[id];
   for (const [id, ts] of Object.entries(s.ignored || {})) if (now - Number(ts || 0) > 3 * 86_400_000) delete s.ignored[id];
   for (const [code, rec] of Object.entries(s.codes || {})) if (Number(rec?.expiresAt || 0) < now) delete s.codes[code];
   for (const [sender, rec] of Object.entries(s.pending || {})) if (Number(rec?.expiresAt || 0) < now) delete s.pending[sender];
   for (const [sender, ctx] of Object.entries(s.contexts || {})) if (now - Number(ctx?.updatedAt || 0) > 7 * 86_400_000) delete s.contexts[sender];
   for (const [id, rec] of Object.entries(s.failures || {})) if (now - Number(rec?.lastAt || 0) > 3 * 86_400_000) delete s.failures[id];
+  for (const [sender, rec] of Object.entries(s.executing || {})) if (Number(rec?.expiresAt || 0) < now) delete s.executing[sender];
+  for (const [id, expiresAt] of Object.entries(s.usedBootstraps || {})) if (Number(expiresAt || 0) < now) delete s.usedBootstraps[id];
+  for (const [id, rec] of Object.entries(s.outbox || {})) {
+    if (!rec || Number(rec.expiresAt || 0) < now || !String(rec.senderId || "") || !Array.isArray(rec.chunks)) delete s.outbox[id];
+  }
+  pruneXDmPadSessions(s, { now });
+  for (const [hash, session] of Object.entries(s.menuSessions || {})) {
+    const link = s.links?.[String(session?.senderId || "")];
+    if (!link || String(link.userId) !== String(session?.userId || "")) delete s.menuSessions[hash];
+  }
+  const sizeAfter = [s.seen, s.ignored, s.codes, s.pending, s.contexts, s.failures, s.executing, s.outbox, s.menuSessions, s.usedBootstraps]
+    .reduce((sum, value) => sum + Object.keys(value || {}).length, 0);
+  return sizeAfter !== sizeBefore;
 }
 function xDmNewLinkCode(state, userId) {
   xDmPruneState(state);
@@ -33692,7 +34061,7 @@ function xDmResolveRecentTarget(state, senderId, value) {
   if (!n) return "";
   return xDmRecentTargets(state, senderId)[n - 1] || "";
 }
-const X_DM_MENU_TTL_MS = 15 * 60_000;
+const X_DM_MENU_TTL_MS = 24 * 60 * 60_000;
 function xDmMenuToken(state, senderId, mint, slot = "") {
   const linked = state?.links?.[String(senderId)];
   const cleanMint = String(mint || "").trim();
@@ -33700,6 +34069,7 @@ function xDmMenuToken(state, senderId, mint, slot = "") {
   return signXDmMenuToken(CONFIG.appSecret, {
     senderId: String(senderId),
     userId: String(linked.userId),
+    linkVersion: String(linked.linkedAt || ""),
     mint: cleanMint,
     slot: String(slot || "")
   }, { ttlMs: X_DM_MENU_TTL_MS });
@@ -33707,7 +34077,7 @@ function xDmMenuToken(state, senderId, mint, slot = "") {
 function readXDmMenuToken(token) {
   const payload = verifyXDmMenuToken(CONFIG.appSecret, token);
   if (!payload) return null;
-  if (!payload.senderId || !payload.userId || !payload.mint || !payload.nonce) return null;
+  if (!payload.senderId || !payload.userId || !payload.mint || !payload.nonce || !payload.linkVersion) return null;
   const mint = String(payload.mint).trim();
   if (!solanaPublicKeyLike(mint) && !/^0x[0-9a-f]{40}$/i.test(mint)) return null;
   return { ...payload, senderId: String(payload.senderId), userId: String(payload.userId), mint };
@@ -33716,8 +34086,8 @@ function xDmMenuUrl(state, senderId, mint, slot = "") {
   const token = xDmMenuToken(state, senderId, mint, slot);
   if (!token) return "";
   const origin = String(CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/+$/, "");
-  // `/x-dm-menu` is also recognized by the production site's canonical-route
-  // layer; the shorter `/x-menu` currently falls through to the homepage there.
+  // Keep the signed handoff on the canonical page. `/x-menu` is a lightweight
+  // query-preserving redirect for old links and bookmarks.
   return `${origin}/x-dm-menu?t=${encodeURIComponent(token)}`;
 }
 function xDmTradeSupportedMint(mint) {
@@ -33757,26 +34127,50 @@ function xDmSlotMenuText(state, senderId, slot, linked = false) {
       : `Reply: chart ${slot} | rug ${slot} | map ${slot}`,
     menuUrl ? `Open Trade Pad (real buttons):\n${menuUrl}` : "",
     linked && tradeSupported ? "A button only stages the trade. YES or NO in X is still required." : "",
-    linked && !tradeSupported ? "X DM trading is Solana-only right now; this contract stays scan-only." : "",
+    linked && !tradeSupported ? "Text buy/sell commands are Solana-only; open Trade Pad for Robinhood Chain trading." : "",
     !linked ? "To trade, link X DM from Telegram with /xlink." : ""
   ].filter(Boolean).join("\n");
 }
+function xDmTradeSummary(rec = {}) {
+  const wallet = rec.walletLabel ? ` on ${rec.walletLabel}` : rec.walletIndex ? ` on wallet #${rec.walletIndex}` : "";
+  if (rec.action === "buy") return `Buy ${rec.amountSol} SOL${wallet}`;
+  if (rec.action === "sell") return `Sell ${rec.percent}%${wallet}`;
+  if (rec.action === "rh_buy") return `Buy with ${rec.amountEth} ETH${wallet}`;
+  if (rec.action === "rh_sell") return `Sell ${rec.percent}% on Robinhood${wallet}`;
+  if (rec.action === "bundle_buy") return `Bundle buy ${rec.amountSol} SOL × ${rec.walletCount} wallets (${Number(rec.amountSol * rec.walletCount).toFixed(6).replace(/\.?0+$/, "")} SOL total)`;
+  if (rec.action === "bundle_sell") return `Bundle sell ${rec.percent}% across ${rec.walletCount} wallets`;
+  if (rec.action === "rh_bundle_buy") return `Robinhood bundle ${rec.amountEth} ETH × ${rec.walletCount} wallets (${Number(rec.amountEth * rec.walletCount).toFixed(6).replace(/\.?0+$/, "")} ETH total)`;
+  if (rec.action === "rh_bundle_sell") return `Robinhood sell ${rec.percent}% across ${rec.walletCount} wallets`;
+  if (rec.action === "copy_wallet") return `Copy next buy from ${shortMint(rec.copyWallet)} with ${rec.amountSol} SOL across ${rec.walletCount || 1} wallet(s)`;
+  if (rec.action === "copy_launch") return `Copy next ${rec.chain === "robinhood" ? "Robinhood" : "Solana"} launch from ${shortMint(rec.launchWallet)} with ${rec.amount} ${rec.chain === "robinhood" ? "ETH" : "SOL"} across ${rec.walletCount || 1} wallet(s)`;
+  if (rec.action === "automation_enable") return "Enable managed-wallet TP/SL automation for 30 days";
+  if (rec.action === "automation_revoke") return "Revoke managed-wallet automation";
+  return "Trade Pad action";
+}
+
 function xDmTradeConfirmText(rec, slot = "") {
-  const isSell = rec?.action === "sell";
-  const side = isSell ? "Sell" : "Buy";
-  const amount = isSell ? `${rec.percent}%` : `${rec.amountSol} SOL`;
   const slotText = slot ? `#${slot} ` : "";
+  const exit = [
+    rec?.presetName ? `Preset: ${rec.presetName}` : "",
+    rec?.takeProfitLadder?.length ? `Ladder: ${rec.takeProfitLadder.map((row) => `+${row.pct}%/${row.sellPercent}%`).join(" → ")}` : rec?.takeProfitPct ? `TP: +${rec.takeProfitPct}%` : "",
+    rec?.stopLossPct ? `SL: -${rec.stopLossPct}%` : "",
+    rec?.trailingStopPct ? `Trailing stop: ${rec.trailingStopPct}% after +${rec.trailingActivatePct || rec.trailingStopPct}%` : ""
+  ].filter(Boolean);
   return [
-    `${side} ${amount}`,
-    `${slotText}${shortMint(rec?.mint)}`,
-    `CA: ${rec?.mint}`,
+    xDmTradeSummary(rec),
+    rec?.mint ? `${slotText}${shortMint(rec.mint)}` : "",
+    rec?.mint ? `CA: ${rec.mint}` : "",
+    rec?.copyWallet ? `Watched wallet: ${rec.copyWallet}` : "",
+    rec?.launchWallet ? `Launch wallet: ${rec.launchWallet}` : "",
+    Array.isArray(rec?.walletIndexes) && rec.walletIndexes.length ? `Wallets: ${rec.walletIndexes.map((index) => `#${index}`).join(", ")}` : "",
+    ...exit,
     `Confirm ID: ${rec?.id || ""}`,
     "",
     "Reply YES to send.",
     rec?.id ? `Or reply YES ${rec.id}.` : "",
     "Reply NO to cancel.",
     "Expires in 2 minutes.",
-    xDmTokenUrl(rec?.mint)
+    rec?.mint ? xDmTokenUrl(rec.mint) : ""
   ].filter(Boolean).join("\n");
 }
 function xDmHelpText(linked = false, state = null, senderId = "") {
@@ -33809,15 +34203,144 @@ function xDmNeedLinkText() {
   ].join("\n");
 }
 async function xDmSend(senderId, text, state = null) {
-  const chunks = [];
-  const raw = String(text || "");
-  for (let i = 0; i < raw.length; i += 1800) chunks.push(raw.slice(i, i + 1800));
+  const chunks = xDmTextChunks(text);
   for (const chunk of (chunks.length ? chunks : [""])) {
     const res = await xDmSendText(senderId, chunk).catch((e) => ({ ok: false, error: String(e?.message || e).slice(0, 160) }));
     if (state && res?.id) state.ignored[res.id] = Date.now();
     if (!res?.ok) return res;
   }
   return { ok: true };
+}
+const X_DM_RECEIPT_OUTBOX_TTL_MS = 24 * 60 * 60_000;
+const X_DM_RECEIPT_OUTBOX_LIMIT = 200;
+function xDmReceiptOutboxId(senderId, chunks, receiptId) {
+  return crypto.createHash("sha256")
+    .update(`${String(senderId)}\0${String(receiptId || "")}\0${chunks.join("\0")}`)
+    .digest("hex")
+    .slice(0, 32);
+}
+function xDmQueueReceipt(state, senderId, chunks, nextChunk = 0, receiptId = "", link = null) {
+  if (!state || !senderId) return "";
+  if (!state.outbox || typeof state.outbox !== "object") state.outbox = {};
+  const safeChunks = (Array.isArray(chunks) ? chunks : []).map((chunk) => String(chunk || "")).filter(Boolean);
+  if (!safeChunks.length) return "";
+  const uniqueReceiptId = String(receiptId || crypto.randomUUID());
+  const id = xDmReceiptOutboxId(senderId, safeChunks, uniqueReceiptId);
+  const now = Date.now();
+  const prior = state.outbox[id];
+  state.outbox[id] = {
+    senderId: String(senderId),
+    receiptId: uniqueReceiptId,
+    linkedUserId: String(link?.userId || ""),
+    linkedAt: String(link?.linkedAt || ""),
+    chunks: safeChunks,
+    nextChunk: Math.max(0, Math.min(safeChunks.length - 1, Math.max(Number(nextChunk || 0), Number(prior?.nextChunk || 0)))),
+    createdAt: Number(prior?.createdAt || now),
+    expiresAt: Number(prior?.expiresAt || (now + X_DM_RECEIPT_OUTBOX_TTL_MS)),
+    attempts: Number(prior?.attempts || 0),
+    nextRetryAt: Math.min(Number(prior?.nextRetryAt || Infinity), now + 2_000),
+    lastError: String(prior?.lastError || "").slice(0, 160)
+  };
+  const overflow = Object.entries(state.outbox)
+    .sort((a, b) => Number(a[1]?.createdAt || 0) - Number(b[1]?.createdAt || 0))
+    .slice(0, Math.max(0, Object.keys(state.outbox).length - X_DM_RECEIPT_OUTBOX_LIMIT));
+  for (const [oldId] of overflow) delete state.outbox[oldId];
+  return id;
+}
+async function xDmSendReceipt(senderId, text, state = null) {
+  if (!state) return await xDmSend(senderId, text, state);
+  const chunks = xDmTextChunks(text);
+  const receiptId = String(state.executing?.[String(senderId)]?.id || crypto.randomUUID());
+  const outboxId = xDmReceiptOutboxId(senderId, chunks, receiptId);
+  for (let index = 0; index < chunks.length; index += 1) {
+    const res = await xDmSendText(senderId, chunks[index]).catch((error) => ({ ok: false, error: String(error?.message || error).slice(0, 160) }));
+    if (res?.id) state.ignored[res.id] = Date.now();
+    if (!res?.ok) {
+      xDmQueueReceipt(state, senderId, chunks, index, receiptId, state.links?.[String(senderId)] || null);
+      // The money action is finished. Mark its incoming YES as handled and let
+      // the durable outbox retry only the receipt, never the transaction.
+      return { ok: true, queued: true, deliveryError: String(res?.error || "X delivery delayed").slice(0, 160) };
+    }
+  }
+  delete state.outbox?.[outboxId];
+  return { ok: true, queued: false };
+}
+async function xDmFlushReceiptOutbox(state, { maxAttempts = 3, now = Date.now() } = {}) {
+  if (!state?.outbox || typeof state.outbox !== "object") return { changed: false, sent: 0, failed: 0 };
+  let changed = false;
+  let sent = 0;
+  let failed = 0;
+  let attemptsMade = 0;
+  const due = Object.entries(state.outbox)
+    .filter(([, rec]) => Number(rec?.expiresAt || 0) >= now && Number(rec?.nextRetryAt || 0) <= now)
+    .sort((a, b) => Number(a[1]?.createdAt || 0) - Number(b[1]?.createdAt || 0));
+  for (const [id, rec] of due) {
+    const currentLink = state.links?.[String(rec.senderId || "")];
+    if (rec.linkedUserId && (!currentLink
+      || String(currentLink.userId || "") !== String(rec.linkedUserId)
+      || String(currentLink.linkedAt || "") !== String(rec.linkedAt || ""))) {
+      delete state.outbox[id];
+      changed = true;
+      continue;
+    }
+    while (attemptsMade < maxAttempts && Number(rec.nextChunk || 0) < rec.chunks.length) {
+      const index = Number(rec.nextChunk || 0);
+      attemptsMade += 1;
+      const res = await xDmSendText(rec.senderId, rec.chunks[index]).catch((error) => ({ ok: false, error: String(error?.message || error).slice(0, 160) }));
+      if (res?.id) state.ignored[res.id] = Date.now();
+      if (!res?.ok) {
+        rec.attempts = Math.max(0, Number(rec.attempts || 0)) + 1;
+        rec.nextRetryAt = Date.now() + Math.min(5 * 60_000, 2_000 * (2 ** Math.min(7, rec.attempts - 1)));
+        rec.lastError = String(res?.error || "X delivery delayed").slice(0, 160);
+        failed += 1;
+        changed = true;
+        break;
+      }
+      rec.nextChunk = index + 1;
+      rec.attempts = 0;
+      rec.nextRetryAt = Date.now();
+      rec.lastError = "";
+      sent += 1;
+      changed = true;
+    }
+    if (Number(rec.nextChunk || 0) >= rec.chunks.length) delete state.outbox[id];
+    if (attemptsMade >= maxAttempts) break;
+  }
+  return { changed, sent, failed };
+}
+function xDmTextChunks(text, maxLength = 1800) {
+  const raw = String(text || "");
+  if (!raw) return [""];
+  const chunks = [];
+  let current = "";
+  // Treat URLs as indivisible units so a signed Trade Pad link is never split
+  // across two X DMs. Only a pathological URL longer than X's message limit is
+  // hard-sliced as a last resort.
+  const units = raw.match(/https?:\/\/\S+|[^\s]+|\s+/g) || [raw];
+  const flush = () => {
+    const value = current.trimEnd();
+    if (value) chunks.push(value);
+    current = "";
+  };
+  for (const unit of units) {
+    if (current.length + unit.length <= maxLength) {
+      current += unit;
+      continue;
+    }
+    flush();
+    if (/^\s+$/.test(unit)) continue;
+    if (unit.length <= maxLength) {
+      current = unit;
+      continue;
+    }
+    for (let offset = 0; offset < unit.length; offset += maxLength) {
+      const part = unit.slice(offset, offset + maxLength);
+      if (part.length === maxLength) chunks.push(part);
+      else current = part;
+    }
+  }
+  flush();
+  return chunks.length ? chunks : [""];
 }
 function xDmParseTarget(text) {
   const rh = extractRhAddressesFromText(text)[0];
@@ -33880,34 +34403,267 @@ function xDmMenuFail(message, statusCode = 400) {
   error.statusCode = statusCode;
   throw error;
 }
-async function xDmMenuApi(body = {}) {
-  const payload = readXDmMenuToken(body.token);
-  if (!payload) xDmMenuFail("This Trade Pad link expired or is invalid. Send the coin number in X for a fresh one.", 401);
-  const state = await readXDmState();
-  xDmPruneState(state);
-  const linked = state.links[payload.senderId];
-  if (!linked || String(linked.userId) !== payload.userId) {
-    xDmMenuFail("This X account is no longer linked. Run /xlink in Telegram again.", 401);
+
+function xDmPadPayloadFromSession(record) {
+  if (!record) return null;
+  const mint = String(record.mint || "").trim();
+  if (!solanaPublicKeyLike(mint) && !/^0x[0-9a-f]{40}$/i.test(mint)) return null;
+  return {
+    senderId: String(record.senderId || ""),
+    userId: String(record.userId || ""),
+    mint,
+    slot: String(record.slot || ""),
+    exp: Number(record.expiresAt || 0)
+  };
+}
+
+function xDmPadLinkValid(state, payload) {
+  const linked = state.links?.[String(payload?.senderId || "")];
+  return Boolean(linked
+    && String(linked.userId) === String(payload?.userId || "")
+    && (!payload?.linkVersion || String(linked.linkedAt || "") === String(payload.linkVersion)));
+}
+
+async function xDmPadAccess(body, state, action = "view") {
+  const bootstrap = readXDmMenuToken(body.token);
+  if (bootstrap) {
+    if (action !== "view") xDmMenuFail("The signed X link can only open Trade Pad. Use its private session for every action.", 401);
+    if (!xDmPadLinkValid(state, bootstrap)) xDmMenuFail("This X account is no longer linked. Run /xlink in Telegram again.", 401);
+    const bootstrapId = crypto.createHash("sha256").update(`${bootstrap.senderId}:${bootstrap.nonce}`).digest("hex");
+    if (Number(state.usedBootstraps?.[bootstrapId] || 0) >= Date.now()) {
+      xDmMenuFail("This one-time Trade Pad link was already opened. Use the active page or request a fresh link in X.", 401);
+    }
+    state.usedBootstraps[bootstrapId] = Number(bootstrap.exp || Date.now() + X_DM_MENU_TTL_MS);
+    const created = createXDmPadSession(state, bootstrap);
+    return {
+      payload: xDmPadPayloadFromSession(created.record),
+      sessionToken: created.token,
+      sessionHash: "",
+      dirty: true
+    };
   }
-  const prefs = userBuyPrefs(await readBuyPrefs(), payload.userId);
-  const menu = {
+  const resolved = resolveXDmPadSession(state, body.session);
+  const payload = xDmPadPayloadFromSession(resolved?.record);
+  if (!payload || !xDmPadLinkValid(state, payload)) {
+    if (resolved?.hash) delete state.menuSessions[resolved.hash];
+    xDmMenuFail("This Trade Pad session expired. Open a fresh Trade Pad link from your X DM.", 401);
+  }
+  return {
+    payload,
+    sessionToken: "",
+    sessionHash: resolved.hash,
+    dirty: Boolean(resolved.dirty)
+  };
+}
+
+function xDmPadEnvelope(access, data = {}) {
+  return {
+    ok: true,
+    ...data,
+    session: access.sessionToken || undefined,
+    sessionExpiresAt: Number(access.payload?.exp || 0)
+  };
+}
+
+function xDmPadPendingSummary(state, senderId) {
+  const rec = state.pending?.[String(senderId)] || null;
+  return rec ? {
+    id: rec.id,
+    action: rec.action,
+    expiresAt: rec.expiresAt,
+    summary: xDmTradeSummary(rec)
+  } : null;
+}
+
+function xDmPadExecutingSummary(state, senderId) {
+  const rec = state.executing?.[String(senderId)] || null;
+  return rec ? { id: rec.id, action: rec.action, startedAt: rec.startedAt, expiresAt: rec.expiresAt } : null;
+}
+
+function xDmPadChain(mint) {
+  return /^0x[0-9a-f]{40}$/i.test(String(mint || "").trim()) ? "robinhood" : "solana";
+}
+
+function xDmPadWalletIndex(wallets, value, fallback = "1") {
+  const index = Number.parseInt(String(value || fallback), 10);
+  const wallet = wallets.find((row) => Number(row.index) === index && !row.volumeBot);
+  if (!wallet) xDmMenuFail("Choose an available SlimeWire managed wallet first.", 400);
+  return { index: String(index), wallet };
+}
+
+function xDmPadWalletIndexes(wallets, value, fallback = []) {
+  const requested = Array.isArray(value) ? value : fallback;
+  const available = new Set(wallets.filter((row) => !row.volumeBot).map((row) => String(row.index)));
+  const indexes = [...new Set(requested.map((item) => String(Number.parseInt(String(item), 10))).filter((item) => available.has(item)))].slice(0, 20);
+  if (!indexes.length) xDmMenuFail("Choose at least one available SlimeWire wallet.", 400);
+  return indexes;
+}
+
+function xDmPadWalletPublicKeys(wallets, indexes = []) {
+  return indexes.map((index) => {
+    const wallet = wallets.find((row) => String(row.index) === String(index) && !row.volumeBot);
+    if (!wallet?.publicKey) xDmMenuFail("A selected wallet changed. Refresh Trade Pad and choose wallets again.", 409);
+    return String(wallet.publicKey);
+  });
+}
+
+function xDmPadNumber(value, min, max, label, fallback = null) {
+  const number = Number(value ?? fallback);
+  if (!Number.isFinite(number) || number < min || number > max) xDmMenuFail(`${label} must be ${min}-${max}.`, 400);
+  return number;
+}
+
+function xDmPadPreset(presets, type, id) {
+  const rows = Array.isArray(presets?.[type]) ? presets[type] : [];
+  return rows.find((preset) => String(preset.id) === String(id || "")) || null;
+}
+
+function xDmPadExitConfig(source = {}, prefs = {}) {
+  const takeProfitPct = Math.max(0, Math.min(10_000, Number(source.takeProfitPct ?? prefs.takeProfitPct) || 0));
+  const stopLossPct = Math.max(0, Math.min(95, Number(source.stopLossPct ?? prefs.stopLossPct) || 0));
+  const slippageBps = Math.max(50, Math.min(5_000, Math.round(Number(source.slippageBps ?? prefs.slippageBps) || 400)));
+  const takeProfitLadder = normalizeWebTakeProfitLadder(source.takeProfitLadder);
+  return {
+    takeProfitPct,
+    stopLossPct,
+    slippageBps,
+    takeProfitLadder,
+    sellDelay: firstString(source.sellDelay, source.sellDelaySeconds, "off"),
+    sellPercent: Math.max(1, Math.min(100, Number(source.sellPercent) || 100)),
+    trailingStopPct: Math.max(0, Math.min(95, Number(source.trailingStopPct) || 0)),
+    trailingActivatePct: Math.max(0, Math.min(10_000, Number(source.trailingActivatePct) || Number(source.trailingStopPct) || 0)),
+    breakEvenAfterTp1: cleanLaunchBoolean(source.breakEvenAfterTp1)
+  };
+}
+
+function xDmPadExitRequested(source = {}) {
+  return Boolean(
+    normalizeWebTakeProfitLadder(source.takeProfitLadder).length
+    || Number(source.takeProfitPct) > 0
+    || Number(source.stopLossPct) > 0
+    || Number(source.trailingStopPct) > 0
+    || Number(source.sellDelay) > 0
+    || Number(source.sellDelaySeconds) > 0
+  );
+}
+
+const xDmWalletCreateResultCache = new Map();
+async function xDmCreateWalletSetOnce(userId, requestId, task) {
+  const now = Date.now();
+  for (const [key, record] of xDmWalletCreateResultCache) {
+    if (!record || Number(record.expiresAt || 0) <= now) xDmWalletCreateResultCache.delete(key);
+  }
+  while (xDmWalletCreateResultCache.size > 100) xDmWalletCreateResultCache.delete(xDmWalletCreateResultCache.keys().next().value);
+  const key = crypto.createHash("sha256").update(`${userId}:${requestId}`).digest("hex");
+  const cached = xDmWalletCreateResultCache.get(key);
+  if (cached?.result) return { ...cached.result, duplicate: true };
+  return LockService.withLock(`x-dm-wallet-create:${key}`, 30_000, async () => {
+    const duplicate = xDmWalletCreateResultCache.get(key);
+    if (duplicate?.result) return { ...duplicate.result, duplicate: true };
+    const result = await task(key);
+    // Recovery material must never enter Redis/KV or the persisted X state.
+    // Keep it only in this process briefly so a dropped HTTP response can be
+    // replayed without creating another wallet set.
+    xDmWalletCreateResultCache.set(key, { result, expiresAt: Date.now() + 2 * 60_000 });
+    return result;
+  }, () => xDmMenuFail("This wallet set is already being created. Wait a moment for the original response.", 409));
+}
+
+async function xDmPadMenuSnapshot(payload, state) {
+  const [prefsStore, wallets, presets, watches, profile] = await Promise.all([
+    readBuyPrefs(),
+    webWalletRows(payload.userId),
+    webPresetRows(payload.userId),
+    webLaunchWatches(payload.userId).catch(() => []),
+    webProfileForUser(payload.userId)
+  ]);
+  const prefs = userBuyPrefs(prefsStore, payload.userId);
+  const chain = xDmPadChain(payload.mint);
+  const permission = normalizeWebAutomationPermission(profile.automationPermission || {});
+  return {
     mint: payload.mint,
     shortMint: shortMint(payload.mint),
     slot: payload.slot || "",
-    isSolana: xDmTradeSupportedMint(payload.mint),
+    chain,
+    isSolana: chain === "solana",
+    assetSymbol: chain === "solana" ? "SOL" : "ETH",
     quickAmount: Number(prefs.quickAmount) || 0.1,
     takeProfitPct: Number(prefs.takeProfitPct) || 0,
     stopLossPct: Number(prefs.stopLossPct) || 0,
+    slippageBps: Number(prefs.slippageBps) || 400,
     slippagePct: (Number(prefs.slippageBps) || 0) / 100,
     expiresAt: Number(payload.exp) || 0,
+    wallets: wallets.filter((row) => !row.volumeBot),
+    presets,
+    watches: watches.slice(0, 12),
+    automation: { ...permission, active: webAutomationPermissionActive(profile) },
+    pending: xDmPadPendingSummary(state, payload.senderId),
+    executing: xDmPadExecutingSummary(state, payload.senderId),
+    features: {
+      solana: true,
+      robinhood: true,
+      solanaLadders: true,
+      robinhoodLadders: false,
+      bundle: true,
+      copyNextBuy: Boolean(CONFIG.solanaTrackerApiKey),
+      copyLaunch: true
+    },
     chartUrl: xDmTokenUrl(payload.mint),
     terminalUrl: `https://www.slimewire.org/terminal/chart?token=${encodeURIComponent(payload.mint)}&source=x-dm-menu`,
+    walletsUrl: "https://www.slimewire.org/terminal?tab=wallets&source=x-dm-menu",
     fullScanUrl: `https://www.slimewire.org/t?ca=${encodeURIComponent(payload.mint)}&source=x-dm-menu`
   };
+}
+
+async function xDmMenuApi(body = {}) {
+  const state = await readXDmState();
+  xDmPruneState(state);
   const action = String(body.action || "view").trim().toLowerCase();
-  if (!action || action === "view") return { ok: true, menu };
-  if (!menu.isSolana) xDmMenuFail("Trading from X is Solana-only right now. Scan and chart still work.", 400);
-  if (action !== "prepare_buy" && action !== "prepare_sell") xDmMenuFail("Unsupported Trade Pad action.", 400);
+  const access = await xDmPadAccess(body, state, action);
+  const payload = access.payload;
+  if (access.dirty) await writeXDmState(state);
+  if (action === "end_session") {
+    if (access.sessionToken) revokeXDmPadSession(state, access.sessionToken);
+    else if (body.session) revokeXDmPadSession(state, body.session);
+    else if (access.sessionHash) delete state.menuSessions[access.sessionHash];
+    await writeXDmState(state);
+    return { ok: true, ended: true };
+  }
+  if (action === "status") {
+    return xDmPadEnvelope(access, {
+      pending: xDmPadPendingSummary(state, payload.senderId),
+      executing: xDmPadExecutingSummary(state, payload.senderId)
+    });
+  }
+  if (!action || action === "view") {
+    return xDmPadEnvelope(access, { menu: await xDmPadMenuSnapshot(payload, state) });
+  }
+
+  if (action === "save_preset") {
+    const result = await updateWebPreset(payload.userId, {
+      type: String(body.type || "trade"),
+      action: String(body.presetAction || "save"),
+      id: body.id,
+      preset: body.preset || {}
+    });
+    return xDmPadEnvelope(access, { saved: true, presets: result.presets });
+  }
+
+  if (action === "create_wallet") {
+    const requestId = String(body.requestId || "").slice(0, 80) || crypto.randomUUID();
+    const created = await xDmCreateWalletSetOnce(payload.userId, requestId, (requestHash) => createWebWalletSet(payload.userId, {
+      label: String(body.label || "X Trade Pad").slice(0, 40),
+      count: Math.max(1, Math.min(6, Number.parseInt(body.count || "1", 10) || 1)),
+      idempotencyKeyHash: requestHash
+    }));
+    return xDmPadEnvelope(access, { created: true, ...created });
+  }
+
+  const allowed = new Set([
+    "prepare_buy", "prepare_sell", "prepare_bundle_buy", "prepare_bundle_sell",
+    "prepare_copy_wallet", "prepare_copy_launch", "prepare_automation"
+  ]);
+  if (!allowed.has(action)) xDmMenuFail("Unsupported Trade Pad action.", 400);
 
   return await LockService.withLock(`x-dm-menu:${payload.senderId}`, 10_000, async () => {
     const freshState = await readXDmState();
@@ -33919,17 +34675,89 @@ async function xDmMenuApi(body = {}) {
     if (freshState.pending[payload.senderId]) {
       xDmMenuFail("A trade confirmation is already waiting in X. Reply YES or NO there before staging another order.", 409);
     }
+    if (freshState.executing[payload.senderId]) {
+      xDmMenuFail("Your last confirmed action is still running. Wait for its X receipt before staging another.", 409);
+    }
+    const [wallets, presets, prefsStore, profile] = await Promise.all([
+      webWalletRows(payload.userId),
+      webPresetRows(payload.userId),
+      readBuyPrefs(),
+      webProfileForUser(payload.userId)
+    ]);
+    const prefs = userBuyPrefs(prefsStore, payload.userId);
+    const chain = xDmPadChain(payload.mint);
+    const tradePreset = xDmPadPreset(presets, "trade", body.presetId);
+    const bundlePreset = xDmPadPreset(presets, "bundle", body.presetId);
+    const source = body.config && typeof body.config === "object" ? body.config : {};
+    const exit = xDmPadExitConfig({ ...(tradePreset || bundlePreset || {}), ...source }, prefs);
     let rec;
     if (action === "prepare_buy") {
-      const amountSol = validateXDmBuyAmount(body.amountSol);
-      if (amountSol === null) {
-        xDmMenuFail(`Buy amount must be ${X_DM_BUY_LIMITS.minSol}-${X_DM_BUY_LIMITS.maxSol} SOL.`);
+      const selected = xDmPadWalletIndex(wallets, body.walletIndex || tradePreset?.walletIndex || "1");
+      if (chain === "solana") {
+        const amountSol = validateXDmBuyAmount(body.amountSol ?? tradePreset?.amountSol ?? prefs.quickAmount);
+        if (amountSol === null) xDmMenuFail(`Buy amount must be ${X_DM_BUY_LIMITS.minSol}-${X_DM_BUY_LIMITS.maxSol} SOL.`);
+        rec = { action: "buy", userId: payload.userId, amountSol, walletIndex: selected.index, walletPublicKey: selected.wallet.publicKey, walletLabel: selected.wallet.label, mint: payload.mint, presetName: tradePreset?.name || "Custom", ...exit, source: "x-dm-menu" };
+      } else {
+        const amountEth = xDmPadNumber(body.amountEth ?? body.amount, 0.00001, 2, "ETH buy amount", 0.01);
+        rec = { action: "rh_buy", userId: payload.userId, amountEth, walletIndex: selected.index, walletPublicKey: selected.wallet.publicKey, walletLabel: selected.wallet.label, mint: payload.mint, presetName: tradePreset?.name || "Custom", ...exit, takeProfitLadder: [], sellDelay: "off", trailingStopPct: 0, trailingActivatePct: 0, breakEvenAfterTp1: false, source: "x-dm-menu" };
       }
-      rec = { action: "buy", userId: payload.userId, amountSol, mint: payload.mint, source: "x-dm-menu" };
-    } else {
+      if (xDmPadExitRequested(rec) && !webAutomationPermissionActive(profile)) xDmMenuFail("Enable 30-day managed-wallet automation before using TP/SL or ladder exits.", 403);
+    } else if (action === "prepare_sell") {
+      const selected = xDmPadWalletIndex(wallets, body.walletIndex || tradePreset?.walletIndex || "1");
       const percent = Number(body.percent);
       if (!X_DM_SELL_PERCENTAGES.includes(percent)) xDmMenuFail("Sell amount must be 25%, 50%, 75%, or 100%.");
-      rec = { action: "sell", userId: payload.userId, percent, mint: payload.mint, source: "x-dm-menu" };
+      rec = { action: chain === "solana" ? "sell" : "rh_sell", userId: payload.userId, percent, walletIndex: selected.index, walletPublicKey: selected.wallet.publicKey, walletLabel: selected.wallet.label, mint: payload.mint, slippageBps: exit.slippageBps, source: "x-dm-menu" };
+    } else if (action === "prepare_bundle_buy" || action === "prepare_bundle_sell") {
+      const indexes = xDmPadWalletIndexes(wallets, body.walletIndexes, bundlePreset?.walletIndexes || []);
+      const percent = Number(body.percent || 100);
+      if (action === "prepare_bundle_sell" && !X_DM_SELL_PERCENTAGES.includes(percent)) xDmMenuFail("Bundle sell must be 25%, 50%, 75%, or 100%.");
+      if (chain === "solana") {
+        const amountSol = validateXDmBuyAmount(body.amountSol ?? bundlePreset?.amountSol ?? prefs.quickAmount);
+        if (action === "prepare_bundle_buy" && amountSol === null) xDmMenuFail(`Bundle amount must be ${X_DM_BUY_LIMITS.minSol}-${X_DM_BUY_LIMITS.maxSol} SOL per wallet.`);
+        rec = { action: action === "prepare_bundle_buy" ? "bundle_buy" : "bundle_sell", userId: payload.userId, amountSol, percent, walletIndexes: indexes, walletPublicKeys: xDmPadWalletPublicKeys(wallets, indexes), walletCount: indexes.length, mint: payload.mint, presetName: bundlePreset?.name || "Custom Bundle", ...exit, source: "x-dm-menu" };
+      } else {
+        const amountEth = action === "prepare_bundle_buy"
+          ? xDmPadNumber(body.amountEth ?? body.amount, 0.00001, 0.5, "ETH bundle amount", 0.01)
+          : null;
+        rec = { action: action === "prepare_bundle_buy" ? "rh_bundle_buy" : "rh_bundle_sell", userId: payload.userId, amountEth, percent, walletIndexes: indexes, walletPublicKeys: xDmPadWalletPublicKeys(wallets, indexes), walletCount: indexes.length, mint: payload.mint, presetName: bundlePreset?.name || "Custom Bundle", ...exit, takeProfitLadder: [], sellDelay: "off", trailingStopPct: 0, trailingActivatePct: 0, breakEvenAfterTp1: false, source: "x-dm-menu" };
+      }
+      if (action === "prepare_bundle_buy" && xDmPadExitRequested(rec) && !webAutomationPermissionActive(profile)) xDmMenuFail("Enable 30-day managed-wallet automation before using TP/SL or ladder exits.", 403);
+    } else if (action === "prepare_copy_wallet") {
+      if (!CONFIG.solanaTrackerApiKey) xDmMenuFail("Copy Next Buy is unavailable until its live wallet feed is configured.", 503);
+      if (!webAutomationPermissionActive(profile)) xDmMenuFail("Enable 30-day managed-wallet automation first.", 403);
+      const copyWallet = parsePublicKey(String(body.copyWallet || "")).toBase58();
+      const indexes = xDmPadWalletIndexes(wallets, body.walletIndexes, [body.walletIndex || tradePreset?.walletIndex || "1"]);
+      const amountSol = validateXDmBuyAmount(body.amountSol ?? tradePreset?.amountSol ?? prefs.quickAmount);
+      if (amountSol === null) xDmMenuFail(`Copy amount must be ${X_DM_BUY_LIMITS.minSol}-${X_DM_BUY_LIMITS.maxSol} SOL.`);
+      rec = { action: "copy_wallet", userId: payload.userId, copyWallet, amountSol, walletIndexes: indexes, walletPublicKeys: xDmPadWalletPublicKeys(wallets, indexes), walletCount: indexes.length, ...exit, source: "x-dm-menu" };
+    } else if (action === "prepare_copy_launch") {
+      if (!webAutomationPermissionActive(profile)) xDmMenuFail("Enable 30-day managed-wallet automation first.", 403);
+      const launchChain = String(body.chain || "solana").toLowerCase() === "robinhood" ? "robinhood" : "solana";
+      const launchWallet = normalizeWalletLaunchAddress(String(body.launchWallet || ""), launchChain);
+      const indexes = xDmPadWalletIndexes(wallets, body.walletIndexes, [body.walletIndex || tradePreset?.walletIndex || "1"]);
+      const amount = launchChain === "solana"
+        ? validateXDmBuyAmount(body.amountSol ?? tradePreset?.amountSol ?? prefs.quickAmount)
+        : xDmPadNumber(body.amountEth ?? body.amount, 0.00001, 0.5, "ETH launch-copy amount", 0.01);
+      if (amount === null) xDmMenuFail(`Launch-copy amount must be ${X_DM_BUY_LIMITS.minSol}-${X_DM_BUY_LIMITS.maxSol} SOL.`);
+      rec = {
+        action: "copy_launch",
+        userId: payload.userId,
+        chain: launchChain,
+        launchWallet,
+        amount,
+        walletIndexes: indexes,
+        walletPublicKeys: xDmPadWalletPublicKeys(wallets, indexes),
+        walletCount: indexes.length,
+        ...exit,
+        takeProfitLadder: launchChain === "solana" ? exit.takeProfitLadder : [],
+        trailingStopPct: launchChain === "solana" ? exit.trailingStopPct : 0,
+        trailingActivatePct: launchChain === "solana" ? exit.trailingActivatePct : 0,
+        breakEvenAfterTp1: launchChain === "solana" && exit.breakEvenAfterTp1,
+        source: "x-dm-menu"
+      };
+    } else if (action === "prepare_automation") {
+      const enable = String(body.mode || "enable").toLowerCase() !== "revoke";
+      rec = { action: enable ? "automation_enable" : "automation_revoke", userId: payload.userId, ttlHours: 720, source: "x-dm-menu" };
     }
     xDmStartPending(freshState, payload.senderId, rec);
     await writeXDmState(freshState);
@@ -33948,13 +34776,15 @@ async function xDmMenuApi(body = {}) {
       action: rec.action,
       tokenMint: payload.mint,
       amountSol: rec.amountSol || null,
+      amountEth: rec.amountEth || null,
       percent: rec.percent || null,
+      walletIndex: rec.walletIndex || null,
+      walletCount: rec.walletCount || null,
       confirmId: rec.id
     }).catch(() => {});
     return {
-      ok: true,
+      ...xDmPadEnvelope(access),
       staged: true,
-      menu,
       confirmId: rec.id,
       message: "Confirmation sent to your X DM. Reply YES to send or NO to cancel. Nothing has traded yet."
     };
@@ -34008,24 +34838,233 @@ async function xDmConfirmPending(state, senderId, raw, event = null) {
 async function xDmHandleTradeConfirm(senderId, rec, state) {
   const currentLink = state.links[String(senderId)];
   if (!currentLink || String(currentLink.userId) !== String(rec.userId)) {
-    return await xDmSend(senderId, "This trade was canceled because the linked SlimeWire account changed. Run /xlink in Telegram again.", state);
+    return await xDmSendReceipt(senderId, "This trade was canceled because the linked SlimeWire account changed. Run /xlink in Telegram again.", state);
   }
   const userId = rec.userId;
-  if (rec.action === "buy") {
-    const r = await tgExecuteQuickBuy(userId, rec.mint, rec.amountSol, { idempotencyParts: ["x-dm", rec.id] });
-    if (r.needWallet) return await xDmSend(senderId, "Create/fund a SlimeWire wallet first: open Telegram /start or https://www.slimewire.org/terminal?tab=wallets", state);
-    if (!r.ok) return await xDmSend(senderId, `Buy did not land: ${r.why || "try again"}`, state);
-    await quickBuySendReceipt(userId, rec.mint, rec.amountSol, r.result).catch(() => {});
-    return await xDmSend(senderId, `Bought ${rec.amountSol} SOL of ${shortMint(rec.mint)}. Receipt + sell controls sent to Telegram.\n${xDmTokenUrl(rec.mint)}`, state);
+  const attemptId = `x-dm-${rec.id}`;
+  try {
+    if (rec.action === "buy" && rec.source !== "x-dm-menu") {
+      const r = await tgExecuteQuickBuy(userId, rec.mint, rec.amountSol, { idempotencyParts: ["x-dm", rec.id] });
+      if (r.needWallet) return await xDmSendReceipt(senderId, "Create/fund a SlimeWire wallet first: open Telegram /start or https://www.slimewire.org/terminal?tab=wallets", state);
+      if (!r.ok) return await xDmSendReceipt(senderId, `Buy did not land: ${r.why || "try again"}`, state);
+      await quickBuySendReceipt(userId, rec.mint, rec.amountSol, r.result).catch(() => {});
+      return await xDmSendReceipt(senderId, `Bought ${rec.amountSol} SOL of ${shortMint(rec.mint)}. Receipt + sell controls sent to Telegram.\n${xDmTokenUrl(rec.mint)}`, state);
+    }
+    if (rec.action === "sell" && rec.source !== "x-dm-menu") {
+      const r = await tgExecuteQuickSell(userId, rec.mint, rec.percent, { idempotencyKey: `x-dm:${rec.id}` });
+      if (r.needWallet) return await xDmSendReceipt(senderId, "Create/fund a SlimeWire wallet first: open Telegram /start or https://www.slimewire.org/terminal?tab=wallets", state);
+      if (!r.ok) return await xDmSendReceipt(senderId, `Sell did not land: ${r.why || "try again"}`, state);
+      await tgQuickSellReceipt(userId, rec.mint, r).catch(() => {});
+      return await xDmSendReceipt(senderId, `Sold ${rec.percent}% of ${shortMint(rec.mint)}. Receipt sent to Telegram.\n${xDmTokenUrl(rec.mint)}`, state);
+    }
+
+    let result;
+    if (rec.action === "buy") {
+      result = await webTradeBuy(userId, {
+        walletIndex: rec.walletIndex,
+        walletPublicKey: rec.walletPublicKey,
+        tokenMint: rec.mint,
+        amountSol: rec.amountSol,
+        slippageBps: rec.slippageBps,
+        takeProfitPct: rec.takeProfitPct,
+        stopLossPct: rec.stopLossPct,
+        takeProfitLadder: rec.takeProfitLadder,
+        sellDelay: rec.sellDelay,
+        sellPercent: rec.sellPercent,
+        trailingStopPct: rec.trailingStopPct,
+        trailingActivatePct: rec.trailingActivatePct,
+        breakEvenAfterTp1: rec.breakEvenAfterTp1,
+        disableAutoExit: !xDmPadExitRequested(rec),
+        tradeAttemptId: attemptId
+      });
+    } else if (rec.action === "sell") {
+      result = await webTradeSell(userId, {
+        walletIndex: rec.walletIndex,
+        walletPublicKey: rec.walletPublicKey,
+        tokenMint: rec.mint,
+        percent: rec.percent,
+        slippageBps: rec.slippageBps,
+        strictWallet: true,
+        manualSellAttemptId: attemptId
+      });
+    } else if (rec.action === "bundle_buy") {
+      if (xDmPadExitRequested(rec)) await requireWebAutomationPermission(userId, "Solana bundle exits");
+      const body = {
+        walletIndexes: rec.walletIndexes,
+        walletPublicKeys: rec.walletPublicKeys,
+        tradeAttemptId: attemptId,
+        tokenMint: rec.mint,
+        amountSol: rec.amountSol,
+        slippageBps: rec.slippageBps,
+        takeProfitPct: String(rec.takeProfitPct || 0),
+        stopLossPct: String(rec.stopLossPct || 0),
+        takeProfitLadder: rec.takeProfitLadder,
+        sellDelay: rec.sellDelay,
+        sellPercent: String(rec.sellPercent || 100),
+        trailingStopPct: rec.trailingStopPct,
+        trailingActivatePct: rec.trailingActivatePct,
+        breakEvenAfterTp1: rec.breakEvenAfterTp1
+      };
+      result = await runIdempotentMoneyOp("x-dm-bundle-buy", userId, attemptId, async () => {
+        const bought = await webBundleBuy(userId, body);
+        if (!xDmPadExitRequested(rec) || Number(bought.successCount || 0) <= 0) return bought;
+        try {
+          const exits = await webArmExitsForExistingPositions(userId, { ...body, source: "x-dm-bundle-exits" });
+          return { ...bought, exits, message: `${bought.message} ${exits.message}` };
+        } catch (error) {
+          return { ...bought, autoExitError: friendlyError(error), message: `${bought.message} Buys landed, but exits did not arm: ${friendlyError(error)}` };
+        }
+      });
+    } else if (rec.action === "bundle_sell") {
+      result = await webBundleSell(userId, {
+        walletIndexes: rec.walletIndexes,
+        walletPublicKeys: rec.walletPublicKeys,
+        tokenMint: rec.mint,
+        percent: rec.percent,
+        slippageBps: rec.slippageBps,
+        manualSellAttemptId: attemptId
+      });
+    } else if (rec.action === "rh_buy") {
+      if (Number(rec.takeProfitPct) > 0 || Number(rec.stopLossPct) > 0) await requireWebAutomationPermission(userId, "Robinhood TP/SL guard");
+      result = await webRhTrade(userId, {
+        walletIndex: rec.walletIndex,
+        walletPublicKey: rec.walletPublicKey,
+        side: "buy",
+        tokenAddress: rec.mint,
+        amountEth: rec.amountEth,
+        tradeAttemptId: attemptId
+      });
+      if (Number(rec.takeProfitPct) > 0 || Number(rec.stopLossPct) > 0) {
+        try {
+          await webRhArmGuard(userId, {
+            walletIndex: rec.walletIndex,
+            walletPublicKey: rec.walletPublicKey,
+            tokenAddress: rec.mint,
+            takeProfitPct: rec.takeProfitPct,
+            stopLossPct: rec.stopLossPct,
+            sellPercent: rec.sellPercent
+          });
+          result.guardArmed = true;
+        } catch (error) {
+          // The buy already landed. Preserve that truth in the receipt so the
+          // user never retries a successful buy because only its guard failed.
+          result.guardError = friendlyError(error);
+        }
+      }
+    } else if (rec.action === "rh_sell") {
+      result = await webRhTrade(userId, {
+        walletIndex: rec.walletIndex,
+        walletPublicKey: rec.walletPublicKey,
+        side: "sell",
+        tokenAddress: rec.mint,
+        percent: rec.percent,
+        tradeAttemptId: attemptId
+      });
+    } else if (rec.action === "rh_bundle_buy") {
+      if (Number(rec.takeProfitPct) > 0 || Number(rec.stopLossPct) > 0) await requireWebAutomationPermission(userId, "Robinhood bundle TP/SL guards");
+      result = await webRhBundle(userId, {
+        walletIndexes: rec.walletIndexes,
+        walletPublicKeys: rec.walletPublicKeys,
+        tokenAddress: rec.mint,
+        minEth: rec.amountEth,
+        maxEth: rec.amountEth,
+        tradeAttemptId: attemptId
+      });
+      if (Number(rec.takeProfitPct) > 0 || Number(rec.stopLossPct) > 0) {
+        const filled = (result.rows || []).filter((row) => row.ok);
+        const guards = await Promise.allSettled(filled.map((row) => webRhArmGuard(userId, {
+          walletIndex: String(row.walletIndex),
+          walletPublicKey: row.walletPublicKey,
+          tokenAddress: rec.mint,
+          takeProfitPct: rec.takeProfitPct,
+          stopLossPct: rec.stopLossPct,
+          sellPercent: rec.sellPercent
+        })));
+        result.guardsArmed = guards.filter((row) => row.status === "fulfilled").length;
+        const failedGuards = guards.filter((row) => row.status === "rejected");
+        if (failedGuards.length) result.guardError = `${failedGuards.length} of ${filled.length} guard(s) failed to arm: ${friendlyError(failedGuards[0].reason)}`;
+      }
+    } else if (rec.action === "rh_bundle_sell") {
+      const rows = await runWithConcurrency(rec.walletIndexes, Math.max(1, Math.min(3, CONFIG.bundleConcurrency)), async (walletIndex) => {
+        try {
+          const walletPosition = rec.walletIndexes.indexOf(String(walletIndex));
+          const sold = await webRhTrade(userId, {
+            walletIndex,
+            walletPublicKey: walletPosition >= 0 ? rec.walletPublicKeys?.[walletPosition] : "",
+            side: "sell",
+            tokenAddress: rec.mint,
+            percent: rec.percent,
+            tradeAttemptId: `${attemptId}-${walletIndex}`
+          });
+          return { walletIndex, ok: true, tx: sold.txHashes?.at(-1) || "" };
+        } catch (error) {
+          return { walletIndex, ok: false, error: friendlyError(error).slice(0, 120) };
+        }
+      });
+      result = { ok: true, rows, summary: `${rows.filter((row) => row.ok).length}/${rows.length} wallets sold.` };
+    } else if (rec.action === "copy_wallet") {
+      result = await runIdempotentMoneyOp("x-dm-copy-wallet", userId, attemptId, () => webCreateKolCopyWallet(userId, {
+        copyWallet: rec.copyWallet,
+        walletIndexes: rec.walletIndexes,
+        walletPublicKeys: rec.walletPublicKeys,
+        amountSol: rec.amountSol,
+        takeProfitPct: String(rec.takeProfitPct || 0),
+        stopLossPct: String(rec.stopLossPct || 0),
+        takeProfitLadder: rec.takeProfitLadder,
+        sellDelay: rec.sellDelay,
+        trailingStopPct: rec.trailingStopPct,
+        trailingActivatePct: rec.trailingActivatePct,
+        breakEvenAfterTp1: rec.breakEvenAfterTp1,
+        slippageBps: rec.slippageBps
+      }));
+    } else if (rec.action === "copy_launch") {
+      result = await runIdempotentMoneyOp("x-dm-copy-launch", userId, attemptId, () => webCreateWalletLaunchSnipe(userId, {
+        chain: rec.chain,
+        launchWallet: rec.launchWallet,
+        walletIndexes: rec.walletIndexes,
+        walletPublicKeys: rec.walletPublicKeys,
+        maxMatches: 1,
+        amount: rec.amount,
+        takeProfitPct: String(rec.takeProfitPct || 0),
+        stopLossPct: String(rec.stopLossPct || 0),
+        takeProfitLadder: rec.chain === "solana" ? rec.takeProfitLadder : [],
+        sellDelay: rec.sellDelay,
+        sellPercent: String(rec.sellPercent || 100),
+        trailingStopPct: rec.chain === "solana" ? rec.trailingStopPct : 0,
+        trailingActivatePct: rec.chain === "solana" ? rec.trailingActivatePct : 0,
+        breakEvenAfterTp1: rec.chain === "solana" && rec.breakEvenAfterTp1,
+        slippageBps: rec.slippageBps
+      }));
+    } else if (rec.action === "automation_enable" || rec.action === "automation_revoke") {
+      result = await updateWebAutomationPermission(userId, {
+        action: rec.action === "automation_revoke" ? "revoke" : "enable",
+        ttlHours: rec.ttlHours || 720
+      });
+    } else {
+      return await xDmSendReceipt(senderId, "That confirmation is no longer supported. Stage the action again from Trade Pad.", state);
+    }
+
+    let success = rec.action === "automation_enable"
+      ? "Managed-wallet automation enabled for 30 days."
+      : rec.action === "automation_revoke"
+        ? "Managed-wallet automation revoked. Armed Trade Pad watches and exits are paused until permission is enabled again."
+        : rec.action === "copy_wallet" || rec.action === "copy_launch"
+          ? result.message || `${xDmTradeSummary(rec)} is armed.`
+          : result.message || result.summary || `${xDmTradeSummary(rec)} completed.`;
+    if (result.guardError) success += ` The buy landed, but its Robinhood TP/SL guard did not arm: ${result.guardError}`;
+    const resultRows = Array.isArray(result.rows) ? result.rows : Array.isArray(result.results) ? result.results : [];
+    const successCount = Number.isFinite(Number(result.successCount))
+      ? Number(result.successCount)
+      : resultRows.length ? resultRows.filter((row) => row?.ok).length : null;
+    const noneLanded = successCount === 0 && ["bundle_buy", "bundle_sell", "rh_bundle_buy", "rh_bundle_sell"].includes(rec.action);
+    if (noneLanded) {
+      const failure = resultRows.find((row) => row?.error || row?.message) || {};
+      success = `No wallet order landed. ${failure.error || failure.message || "Check wallet balances and try a new request."}`;
+    }
+    return await xDmSendReceipt(senderId, [noneLanded ? "Not submitted." : "Done.", success, rec.mint ? xDmTokenUrl(rec.mint) : ""].filter(Boolean).join("\n\n"), state);
+  } catch (error) {
+    return await xDmSendReceipt(senderId, `Nothing else will be retried automatically. ${xDmTradeSummary(rec)} failed: ${friendlyError(error)}`, state);
   }
-  if (rec.action === "sell") {
-    const r = await tgExecuteQuickSell(userId, rec.mint, rec.percent, { idempotencyKey: `x-dm:${rec.id}` });
-    if (r.needWallet) return await xDmSend(senderId, "Create/fund a SlimeWire wallet first: open Telegram /start or https://www.slimewire.org/terminal?tab=wallets", state);
-    if (!r.ok) return await xDmSend(senderId, `Sell did not land: ${r.why || "try again"}`, state);
-    await tgQuickSellReceipt(userId, rec.mint, r).catch(() => {});
-    return await xDmSend(senderId, `Sold ${rec.percent}% of ${shortMint(rec.mint)}. Receipt sent to Telegram.\n${xDmTokenUrl(rec.mint)}`, state);
-  }
-  return await xDmSend(senderId, "That confirm expired. Send the command again.", state);
 }
 async function xDmHandleEvent(event, state) {
   const senderId = String(event.senderId || "");
@@ -34044,6 +35083,11 @@ async function xDmHandleEvent(event, state) {
     const rec = state.codes[code];
     if (!rec || Number(rec.expiresAt || 0) < Date.now()) return await xDmSend(senderId, "That link code expired. Open Telegram and send /xlink for a fresh one.", state);
     delete state.pending[senderId];
+    delete state.executing[senderId];
+    revokeXDmPadSessionsForSender(state, senderId);
+    for (const [id, receipt] of Object.entries(state.outbox || {})) {
+      if (String(receipt?.senderId || "") === senderId) delete state.outbox[id];
+    }
     state.links[senderId] = { userId: String(rec.userId), linkedAt: new Date().toISOString() };
     delete state.codes[code];
     return await xDmSend(senderId, "Linked.\n\n" + xDmHelpText(true, state, senderId), state);
@@ -34061,8 +35105,19 @@ async function xDmHandleEvent(event, state) {
   if (pending) {
     // Persist the consumed confirmation before touching money. If the process
     // restarts during execution, this DM cannot replay the same sell.
+    state.executing[senderId] = {
+      id: pending.id,
+      action: pending.action,
+      startedAt: Date.now(),
+      expiresAt: Date.now() + 30 * 60_000
+    };
     await writeXDmState(state);
-    return await xDmHandleTradeConfirm(senderId, pending, state);
+    try {
+      return await xDmHandleTradeConfirm(senderId, pending, state);
+    } finally {
+      if (state.executing[senderId]?.id === pending.id) delete state.executing[senderId];
+      await writeXDmState(state).catch(() => {});
+    }
   }
   if (pendingBefore) {
     return await xDmSend(senderId, [
@@ -34215,22 +35270,38 @@ async function xDmHandleEvent(event, state) {
 async function xDmPollTick() {
   if (!xDmTerminalEnabled() || !xDmConfigured() || xDmPollRunning) return { off: true };
   xDmPollRunning = true;
-  const state = await readXDmState();
+  const pollStartedAt = Date.now();
   try {
-    xDmPruneState(state);
-    const events = await xDmFetchEvents({ maxResults: Number(process.env.X_DM_FETCH_LIMIT || 50) });
+    const state = await readXDmState();
+    let stateDirty = xDmPruneState(state);
+    const fetchStartedAt = Date.now();
+    let events;
+    try {
+      events = await xDmFetchEvents({ maxResults: Number(process.env.X_DM_FETCH_LIMIT || 50) });
+    } catch (error) {
+      // Receipt delivery is independent from inbox health. A temporary read
+      // failure must not strand confirmation results that are already queued.
+      const outboxResult = await xDmFlushReceiptOutbox(state);
+      if (outboxResult.changed || stateDirty) await writeXDmState(state);
+      throw error;
+    }
+    const fetchMs = Date.now() - fetchStartedAt;
     events.sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
     let handled = 0;
     let failed = 0;
+    let oldestFreshLagMs = 0;
     for (const event of events) {
       if (state.seen[event.id] || state.ignored[event.id]) continue;
       const previousFailure = state.failures[event.id];
       if (Number(previousFailure?.nextRetryAt || 0) > Date.now()) continue;
+      const eventAt = xDmEventTimestampMs(event);
+      if (eventAt) oldestFreshLagMs = Math.max(oldestFreshLagMs, Date.now() - eventAt);
       try {
         const result = await xDmHandleEvent(event, state);
         if (result?.ok === false) throw new Error(result.error || result.reason || "X DM reply failed");
         state.seen[event.id] = Date.now();
         delete state.failures[event.id];
+        stateDirty = true;
         handled++;
       } catch (error) {
         const attempts = Math.max(0, Number(previousFailure?.attempts || 0)) + 1;
@@ -34241,14 +35312,22 @@ async function xDmPollTick() {
           nextRetryAt: Date.now() + retryMs,
           error: String(error?.message || error).slice(0, 160)
         };
+        stateDirty = true;
         failed++;
         console.log(`[xdm] event ${event.id} failed (attempt ${attempts}, retry ${Math.ceil(retryMs / 1000)}s): ${String(error?.message || error).slice(0, 120)}`);
       }
-      await writeXDmState(state);
+      if (stateDirty) {
+        await writeXDmState(state);
+        stateDirty = false;
+      }
     }
-    if (handled) console.log(`[xdm] handled ${handled} DM event(s)`);
-    await writeXDmState(state);
-    return { checked: events.length, handled, failed };
+    const outboxResult = await xDmFlushReceiptOutbox(state);
+    if (outboxResult.changed) stateDirty = true;
+    const totalMs = Date.now() - pollStartedAt;
+    if (handled) console.log(`[xdm] handled ${handled} DM event(s) fetch=${fetchMs}ms total=${totalMs}ms oldestLag=${oldestFreshLagMs}ms`);
+    if (outboxResult.sent) console.log(`[xdm] delivered ${outboxResult.sent} queued trade receipt chunk(s)`);
+    if (stateDirty) await writeXDmState(state);
+    return { checked: events.length, handled, failed, fetchMs, totalMs, oldestFreshLagMs, receiptChunksSent: outboxResult.sent };
   } catch (e) {
     console.log(`[xdm] poll failed: ${String(e?.message || e).slice(0, 160)}`);
     return { error: String(e?.message || e).slice(0, 160) };
@@ -34327,12 +35406,12 @@ function scanImageUrlFromScan(scan = {}) {
 // Fetch a coin logo → guaranteed-decodable PNG Buffer (or null). Delegates to the ONE hardened fetcher in
 // slimeMapRender (fast IPFS gateway race + browser UA + Render-safe timeout + sharp re-encode) — the same
 // path the MAP card uses, which is why the map PFP loads on Render and the old bare-fetch scan PFP did not.
-async function xFetchLogo(url) {
+async function xFetchLogo(url, timeoutMs = 7_000) {
   const raw = String(url || "").trim();
   if (!raw || !/^(https?:|ipfs:)/i.test(raw)) return null;
   try {
     const { fetchLogoBuffer } = await import("./lib/slimeMapRender.mjs");
-    return await fetchLogoBuffer(raw, 220, 7000);
+    return await fetchLogoBuffer(raw, 220, Math.max(250, Number(timeoutMs) || 7_000));
   } catch { return null; }
 }
 // UNIVERSAL token metadata via on-chain Metaplex — works for ANY SPL token (pump, graduated, bonk, custom)
@@ -34390,9 +35469,28 @@ async function xCoinLogo(scan, mint) {
   }
   return null;   // 45-min sticky face above
 }
-async function xCoinLogoLive(scan, mint) {
+async function xCoinLogoLive(scan, mint, budgetMs = 3_500) {
   const { meta, best, bonding, onchain } = scan || {};
-  const tryList = async (urls) => { for (const u of urls.filter(Boolean)) { const b = await xFetchLogo(u).catch(() => null); if (b) return b; } return null; };
+  const deadline = Date.now() + Math.max(500, Number(budgetMs) || 3_500);
+  const remainingMs = () => Math.max(0, deadline - Date.now());
+  const bounded = (promise, fallback = null) => {
+    const ms = remainingMs();
+    if (ms <= 0) return Promise.resolve(fallback);
+    return Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(fallback), ms))]);
+  };
+  const tryList = async (urls) => {
+    const unique = [...new Set((urls || []).map((url) => String(url || "").trim()).filter(Boolean))].slice(0, 3);
+    const ms = Math.min(1_800, remainingMs());
+    if (!unique.length || ms <= 0) return null;
+    try {
+      return await Promise.any(unique.map((url) => xFetchLogo(url, ms).then((buffer) => {
+        if (!buffer) throw new Error("logo miss");
+        return buffer;
+      })));
+    } catch {
+      return null;
+    }
+  };
   // 1) whatever the scan already resolved (Dex `info.imageUrl` / pump image / on-chain image)
   let logo = await tryList([
     meta?.imageUrl, meta?.imageUri, meta?.icon, meta?.image, meta?.logoURI, meta?.logo,
@@ -34402,31 +35500,24 @@ async function xCoinLogoLive(scan, mint) {
     onchain?.imageUrl, onchain?.avatarUrl, onchain?.image, onchain?.imageUri
   ]);
   if (logo) return logo;
-  // 2) DexScreener token-info re-fetch
-  try {
-    const dx = await fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeoutMs: 4000 }).catch(() => null);
-    logo = await tryList((Array.isArray(dx?.pairs) ? dx.pairs : []).map((p) => p?.info?.imageUrl));
-    if (logo) return logo;
-  } catch { /* fall through */ }
-  // 3) pump.fun metadata (image / IPFS)
-  try {
-    const pf = await getPumpFunTokenMetadata(mint).catch(() => null);
-    logo = await tryList([pf?.image, pf?.image_uri, pf?.imageUri]);
-    if (logo) return logo;
-  } catch { /* fall through */ }
-  // 4) Jupiter token list — covers ~all traded/graduated tokens (free, no key)
-  try {
-    const jt = await fetchJson(`https://tokens.jup.ag/token/${mint}`, { timeoutMs: 4000 }).catch(() => null);
-    logo = await tryList([jt?.logoURI]);
-    if (logo) return logo;
-  } catch { /* fall through */ }
-  // 5) on-chain Metaplex metadata → JSON image (UNIVERSAL last resort)
-  try {
-    const oc = onchain || await fetchOnchainTokenMeta(mint);
-    logo = await tryList([oc?.imageUrl, oc?.avatarUrl, oc?.image, oc?.imageUri]);
-    if (logo) return logo;
-  } catch { /* no logo → the slime ring alone still looks intentional */ }
-  return null;
+  if (remainingMs() <= 0) return null;
+  // 2) Race the same complete fallback set inside one foreground budget. Scan
+  // facts never wait on a slow PFP; the card uses its generated coin badge if
+  // every image host is cold or blocked.
+  const timeoutMs = Math.max(250, remainingMs());
+  const [dx, pf, jt, oc] = await Promise.all([
+    bounded(fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeoutMs }).catch(() => null)),
+    bounded(getPumpFunTokenMetadata(mint).catch(() => null)),
+    bounded(fetchJson(`https://tokens.jup.ag/token/${mint}`, { timeoutMs }).catch(() => null)),
+    onchain || bounded(fetchOnchainTokenMeta(mint).catch(() => null))
+  ]);
+  logo = await tryList([
+    ...(Array.isArray(dx?.pairs) ? dx.pairs : []).map((pair) => pair?.info?.imageUrl),
+    pf?.image, pf?.image_uri, pf?.imageUri,
+    jt?.logoURI,
+    oc?.imageUrl, oc?.avatarUrl, oc?.image, oc?.imageUri
+  ]);
+  return logo || null;
 }
 function extractMintsFromText(text) {
   const out = [];
@@ -35017,6 +36108,101 @@ async function sendRhScanCard(chatId, address) {
   } catch { /* text-only */ }
   if (png) await sendPhoto(chatId, "rh-scan.png", png, text.slice(0, 1024), kb, "HTML").catch(async () => { await sayHtml(chatId, text, kb).catch(() => {}); });
   else await sayHtml(chatId, text, kb).catch(() => {});
+}
+
+// ============ 👛 WALLET SCAN — post a SOL or Robinhood wallet → stats · PnL · top holdings ============
+// SOL uses Solana Tracker (paid, already in use): /pnl for accurate realized+unrealized + win rate, /wallet
+// for holdings. RH has no PnL provider, so rhWalletScan (walletScan.js) reconstructs it on-chain from
+// Blockscout history (weighted-average cost basis in native ETH). Cached inside each source.
+const solWalletScanCache = new Map();
+async function solWalletScan(wallet) {
+  if (!solanaPublicKeyLike(wallet)) return null;
+  const key = wallet;
+  const c = solWalletScanCache.get(key);
+  if (c && Date.now() - c.at < 90_000) return c.v;
+  const solUsd = (await getSolUsdPrice().catch(() => 0)) || 0;
+  const [holdings, pnlRaw] = await Promise.all([
+    fetchWalletHoldings(wallet).catch(() => ({ tokens: [], total: 0 })),
+    (CONFIG.solanaTrackerApiKey ? solanaTrackerJson(`/pnl/${encodeURIComponent(wallet)}`, { cacheTtlMs: 90_000, timeoutMs: 9000 }).catch(() => null) : Promise.resolve(null)),
+  ]);
+  // ST /pnl shape (defensive — the API nests the summary under a few possible keys).
+  const sum = pnlRaw?.summary || pnlRaw?.stats || pnlRaw || {};
+  const num = (...v) => { for (const x of v) { const n = Number(x); if (Number.isFinite(n)) return n; } return null; };
+  const realizedUsd = num(sum.realized, sum.realizedUsd, sum.realized_usd);
+  const unrealizedUsd = num(sum.unrealized, sum.unrealizedUsd, sum.unrealized_usd);
+  const totalPnlUsd = num(sum.total, sum.totalUsd, sum.pnl) ?? ((realizedUsd || 0) + (unrealizedUsd || 0));
+  let winRate = num(sum.winPercentage, sum.winRate, sum.win_rate, sum.winrate);
+  if (winRate != null && winRate > 0 && winRate <= 1) winRate = winRate * 100;
+  const wins = num(sum.totalWins, sum.wins), losses = num(sum.totalLosses, sum.losses);
+  const holdingsList = (holdings.tokens || []).map((t) => ({ addr: t.mint, sym: t.sym || t.symbol || "", qty: 0, valueUsd: Number(t.val) || 0, costUsd: 0, pnlUsd: 0 })).filter((h) => h.valueUsd > 0.5).slice(0, 12);
+  const v = {
+    ok: true, address: wallet, chain: "solana",
+    solPrice: solUsd,
+    realizedUsd: realizedUsd || 0, unrealizedUsd: unrealizedUsd || 0, totalPnlUsd: totalPnlUsd || 0,
+    holdingsValueUsd: Number(holdings.total) || 0, totalValueUsd: Number(holdings.total) || 0,
+    winRate: winRate != null ? Math.round(winRate) : null,
+    wins: wins || 0, losses: losses || 0,
+    tradeCount: num(sum.totalTrades, sum.trades, sum.tradeCount) || 0,
+    tokensTraded: holdingsList.length,
+    holdings: holdingsList,
+    hasPnl: pnlRaw != null && (realizedUsd != null || totalPnlUsd != null),
+    explorer: `https://solscan.io/account/${wallet}`,
+  };
+  solWalletScanCache.set(key, { at: Date.now(), v });
+  if (solWalletScanCache.size > 200) solWalletScanCache.delete(solWalletScanCache.keys().next().value);
+  return v;
+}
+// One entry point for a posted wallet on either chain → normalized scan (or null if not a wallet address).
+async function getWalletScan(address) {
+  const a = String(address || "").trim();
+  if (/^0x[0-9a-fA-F]{40}$/.test(a)) return await rhWalletScan(a, { rpcUrl: CONFIG.rhChainRpcUrl }).catch(() => null);
+  if (solanaPublicKeyLike(a)) return await solWalletScan(a).catch(() => null);
+  return null;
+}
+// TG card for a wallet scan — same look on both chains. PnL green/red, top bags with $ + individual PnL.
+function formatWalletScanCard(s) {
+  const esc = escapeTelegramHtml;
+  const rh = s.chain === "robinhood";
+  const fmt = (v) => scanFmtMoney(Math.abs(Number(v) || 0));
+  const signed = (v) => { const n = Number(v) || 0; return `${n >= 0 ? "🟢 +" : "🔴 −"}${fmt(n)}`; };
+  const short = `${s.address.slice(0, rh ? 6 : 4)}…${s.address.slice(-4)}`;
+  const rail = rh ? "🪶 Robinhood Chain" : "◎ Solana";
+  const lines = [
+    `👛 <b>Wallet</b> <code>${esc(short)}</code> · <i>${rail}</i>`,
+    "",
+    "💰 <b>PnL</b>",
+    `├ Total   <b>${signed(s.totalPnlUsd)}</b>`,
+    `├ Realized <b>${signed(s.realizedUsd)}</b>`,
+    `└ Open    <b>${signed(s.unrealizedUsd)}</b>`,
+  ];
+  const wl = [];
+  if (s.winRate != null) wl.push(`🎯 Win rate <b>${s.winRate}%</b>${(s.wins || s.losses) ? ` (${s.wins}W/${s.losses}L)` : ""}`);
+  if (s.tradeCount) wl.push(`🔁 Trades <b>${s.tradeCount}</b>`);
+  if (s.tokensTraded) wl.push(`🪙 Tokens <b>${s.tokensTraded}</b>`);
+  if (wl.length) { lines.push("", wl.join("  ·  ")); }
+  lines.push("", "🏦 <b>Portfolio</b>", `├ Holdings <b>${fmt(s.holdingsValueUsd)}</b>`);
+  if (rh && s.ethBalance != null) lines.push(`├ ETH <b>${Number(s.ethBalance).toFixed(4)}</b> (${fmt(s.ethBalanceUsd)})`);
+  lines.push(`└ Total value <b>${fmt(s.totalValueUsd)}</b>`);
+  if (s.holdings && s.holdings.length) {
+    lines.push("", "📊 <b>Top holdings</b>");
+    for (const h of s.holdings.slice(0, 6)) {
+      const pnlBit = h.costUsd > 0 ? ` · ${signed(h.pnlUsd)}` : "";
+      lines.push(`├ <b>$${esc((h.sym || "?").slice(0, 10))}</b> ${fmt(h.valueUsd)}${pnlBit}`);
+    }
+  }
+  if (s.partial) lines.push("", "<i>⚠️ Long history — older trades may be truncated.</i>");
+  if (rh && !s.tradeCount) lines.push("", "<i>Note: no swap history found — PnL needs on-chain trades.</i>");
+  lines.push(`\n<a href="${esc(s.explorer)}">🔎 Explorer</a>`);
+  return lines.join("\n");
+}
+async function sendWalletScanCard(chatId, address) {
+  const s = await getWalletScan(address).catch(() => null);
+  if (!s || !s.ok) { await say(chatId, "👛 Couldn't read that wallet right now — paste a valid Solana or Robinhood (0x…) wallet address."); return; }
+  const kb = { inline_keyboard: [[
+    { text: "🔎 Explorer", url: s.explorer },
+    ...(s.chain === "solana" ? [{ text: "👛 Track this wallet", callback_data: `wt:add:${address}` }] : []),
+  ]] };
+  await sayHtml(chatId, formatWalletScanCard(s), kb).catch(() => {});
 }
 // Dispatch a mention to the right card based on what they asked. `variant` (tweet id) seeds the wording + art.
 async function buildXReply(mint, intent = "scan", variant) {
@@ -40792,15 +41978,32 @@ function startGroupBuyBot() {
   const xPollMs = Math.max(15_000, Number(process.env.X_REPLY_POLL_MS || 30_000));
   setTimeout(() => { void xReplyPollTick(); }, 10_000);
   setInterval(() => { void xReplyPollTick(); }, xPollMs);
-  // 🐦💬 X DM terminal. Official DM reads are limited to 15 requests / 15 min,
-  // so OAuth mode stays above one minute. Cookie compatibility keeps its old
-  // cadence until the Activity webhook/XChat transport replaces polling.
+  // 🐦💬 X DM terminal. Self-scheduling avoids interval overlap. Cookie mode
+  // checks quickly and becomes near-live while a user is active; official REST
+  // stays above one minute because its DM read limit is 15 requests / 15 min.
   const xDmOfficial = xDmAuthMode() === "official-oauth2";
-  const xDmPollDefaultMs = xDmOfficial ? 65_000 : 30_000;
-  const xDmPollMinMs = xDmOfficial ? 65_000 : 15_000;
-  const xDmPollMs = Math.max(xDmPollMinMs, Number(process.env.X_DM_POLL_MS || xDmPollDefaultMs));
-  setTimeout(() => { void xDmPollTick(); }, 15_000);
-  setInterval(() => { void xDmPollTick(); }, xDmPollMs);
+  const xDmIdlePollMs = Math.max(xDmOfficial ? 65_000 : 4_000, Number(process.env.X_DM_POLL_MS || (xDmOfficial ? 65_000 : 5_000)));
+  const xDmActivePollMs = xDmOfficial
+    ? xDmIdlePollMs
+    : Math.max(1_500, Number(process.env.X_DM_ACTIVE_POLL_MS || 2_000));
+  let xDmLastActivityAt = 0;
+  let xDmPollErrorStreak = 0;
+  const scheduleXDmPoll = (delayMs) => {
+    setTimeout(async () => {
+      const result = await xDmPollTick();
+      if (Number(result?.handled || 0) > 0) xDmLastActivityAt = Date.now();
+      const active = !xDmOfficial && Date.now() - xDmLastActivityAt < 90_000;
+      if (result?.error) {
+        xDmPollErrorStreak += 1;
+        const retryDelay = Math.min(5 * 60_000, Math.max(xDmIdlePollMs, 5_000 * (2 ** Math.min(6, xDmPollErrorStreak - 1))));
+        scheduleXDmPoll(retryDelay);
+      } else {
+        xDmPollErrorStreak = 0;
+        scheduleXDmPoll(active ? xDmActivePollMs : xDmIdlePollMs);
+      }
+    }, delayMs);
+  };
+  scheduleXDmPoll(xDmOfficial ? 8_000 : 2_000);
   // 🐦🔥 X GROWTH ENGINE tickers — all internally gated by XBOT_BROADCAST + per-feature flags (default OFF),
   // and self-throttled, so they no-op cheaply until the owner flips the env vars.
   setInterval(() => { void xReceiptsTick(); }, 10 * 60_000);   // 🎯 milestone quote-tweets ("called at $30k → 10x")
@@ -42988,12 +44191,13 @@ async function serveAutopilotAdminPage(requestUrl, request, response) {
   response.end(html);
 }
 
-async function serveStaticHtmlPage(response, fileName, cacheControl = "public, max-age=60, stale-while-revalidate=600") {
+async function serveStaticHtmlPage(response, fileName, cacheControl = "public, max-age=60, stale-while-revalidate=600", extraHeaders = {}) {
   try {
     const html = await fs.readFile(path.join(WEB_STATIC_DIR, fileName), "utf8");
     response.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": cacheControl
+      "Cache-Control": cacheControl,
+      ...extraHeaders
     });
     response.end(html);
   } catch {
@@ -43724,6 +44928,28 @@ async function mutateTradePlans(fn) {
   });
 }
 
+function durableTradeWatchKey(parts = []) {
+  return crypto.createHash("sha256")
+    .update(parts.map((value) => String(value ?? "")).join("\0"))
+    .digest("hex");
+}
+
+async function addUniqueActiveTradeWatch(plan, activeStatuses = []) {
+  let storedPlan = plan;
+  let created = false;
+  const active = new Set(activeStatuses.map((status) => String(status)));
+  await mutateTradePlans((store) => {
+    const existing = objectRows(store.plans).find((row) => row.watchKey === plan.watchKey && active.has(String(row.status || "")));
+    if (existing) {
+      storedPlan = existing;
+      return;
+    }
+    store.plans.push(plan);
+    created = true;
+  });
+  return { plan: storedPlan, created };
+}
+
 // --- Ogre A.I. autopilot (guarded auto-buy) -----------------------------
 // Hard, conservative limits. The autopilot only ever spends inside these.
 const OGRE_AUTOPILOT_LIMITS = {
@@ -43998,17 +45224,36 @@ function startOgreAutopilotRunner() {
 }
 
 async function writeTradePlansPreservingNewPlans(store, initialPlanIds = new Set()) {
-  const latest = await readTradePlans();
-  const incomingPlans = objectRows(store.plans);
-  const incomingIds = new Set(incomingPlans.map((plan) => plan.id).filter(Boolean));
-  const newPlans = objectRows(latest.plans).filter((plan) => {
-    if (!plan?.id || incomingIds.has(plan.id)) return false;
-    return !initialPlanIds.has(plan.id);
+  return withFileLock(tradePlansPath(), async () => {
+    const latest = await readTradePlans();
+    const incomingPlans = objectRows(store.plans);
+    const latestById = new Map(objectRows(latest.plans).map((plan) => [plan.id, plan]));
+    const incomingIds = new Set(incomingPlans.map((plan) => plan.id).filter(Boolean));
+    const terminal = new Set(["canceled", "cancelled", "stopped", "completed", "closed"]);
+    const mergedPlans = [];
+
+    for (const incoming of incomingPlans) {
+      if (!incoming?.id) continue;
+      const current = latestById.get(incoming.id);
+      // A plan removed while this worker was running stays removed.
+      if (initialPlanIds.has(incoming.id) && !current) continue;
+      // User cancellation/stop always wins over an older worker snapshot.
+      if (current && (terminal.has(String(current.status || "").toLowerCase())
+        || ["sweeping", "done", "stopped"].includes(String(current.botStage || "").toLowerCase()))) {
+        mergedPlans.push(current);
+      } else {
+        mergedPlans.push(incoming);
+      }
+    }
+
+    for (const current of objectRows(latest.plans)) {
+      if (!current?.id || incomingIds.has(current.id)) continue;
+      if (!initialPlanIds.has(current.id)) mergedPlans.push(current);
+    }
+    const merged = { ...latest, ...store, plans: mergedPlans };
+    await writeTradePlans(merged);
+    return merged;
   });
-  const merged = newPlans.length
-    ? { ...store, plans: [...incomingPlans, ...newPlans] }
-    : { ...store, plans: incomingPlans };
-  await writeTradePlans(merged);
 }
 
 async function readWebExitGuards() {
@@ -46233,9 +47478,13 @@ async function waitForRhEthBalanceAtLeast(evmAddress, minEth, timeoutMs = 45_000
   return last;
 }
 
-async function webRhTradeCore(userId, body = {}) {
+async function webRhTradeCore(userId, body = {}, internal = {}) {
   const store = await readWalletStore();
-  const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
+  const wallet = assertFrozenManagedWallet(
+    getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId),
+    body.walletPublicKey,
+    "Robinhood trade"
+  );
   const keypair = decryptWallet(wallet);
   const evmAddress = evmAddressFromSolana(keypair.secretKey);
   const tokenAddress = String(body.tokenAddress || "").trim();
@@ -46244,6 +47493,11 @@ async function webRhTradeCore(userId, body = {}) {
     e.statusCode = 400; throw e;
   }
   const side = String(body.side || "").toLowerCase();
+  if (side === "sell" && !internal.sellLockHeld) {
+    return withExitSellLock(userId, wallet.publicKey, `rh:${tokenAddress.toLowerCase()}`, () => (
+      webRhTradeCore(userId, body, { sellLockHeld: true })
+    ));
+  }
   const ETH = "0x0000000000000000000000000000000000000000";
   let fromCurrency, toCurrency, amountRaw;
   let solFunding = null;
@@ -46402,7 +47656,14 @@ async function webRhTradeCore(userId, body = {}) {
     rhEthBalance(evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ eth: "0" })),
     rhErc20Balance(tokenAddress, evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ uiAmount: 0 }))
   ]);
-  await audit("web_rh_trade", { userId, wallet: wallet.publicKey, evmAddress, side, tokenAddress, txHashes: hashes, out: quote.outFormatted, impact: quote.impactPercent, feeWei: feeWei.toString(), feeTxHash, creatorFeeTxHash, holderRewardTxHashes, holderRewardCount, solFunding });
+  let recordError = "";
+  try {
+    await audit("web_rh_trade", { userId, wallet: wallet.publicKey, evmAddress, side, tokenAddress, txHashes: hashes, out: quote.outFormatted, impact: quote.impactPercent, feeWei: feeWei.toString(), feeTxHash, creatorFeeTxHash, holderRewardTxHashes, holderRewardCount, solFunding });
+  } catch (error) {
+    // The chain transaction already landed. Never turn a delayed audit write
+    // into a failed response that invites the user to submit the trade again.
+    recordError = `Audit: ${friendlyError(error)}`;
+  }
   return {
     ok: true,
     side,
@@ -46414,7 +47675,8 @@ async function webRhTradeCore(userId, body = {}) {
     feeEth: feeWei > 0n ? lamportsToSol(Number(feeWei / 10n ** 9n)) : "0", // wei -> gwei -> formatted like SOL (both 9dp)
     ethBalance: ethBal.eth,
     tokenBalance: tokenBal.uiAmount,
-    solFunding
+    solFunding,
+    recordError
   };
 }
 
@@ -46452,16 +47714,29 @@ async function readRhGuards() {
   return store && Array.isArray(store.guards) ? store : { guards: [] };
 }
 async function writeRhGuards(store) { await writeJsonFile(rhGuardsPath(), store); }
+async function mutateRhGuards(fn) {
+  return withFileLock(rhGuardsPath(), async () => {
+    const store = await readRhGuards();
+    const result = await fn(store);
+    await writeRhGuards(store);
+    return result;
+  });
+}
 
 async function webRhArmGuard(userId, body = {}) {
   const store = await readWalletStore();
-  const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
+  const wallet = assertFrozenManagedWallet(
+    getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId),
+    body.walletPublicKey,
+    "Robinhood guard"
+  );
   const tokenAddress = String(body.tokenAddress || "").trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(tokenAddress)) { const e = new Error("Invalid token address."); e.statusCode = 400; throw e; }
   const tpPct = Number(body.takeProfitPct || 0);
   const slPct = Number(body.stopLossPct || 0);
   const sellPercent = Math.min(100, Math.max(1, Number(body.sellPercent || 100)));
   if (!(tpPct > 0) && !(slPct > 0)) { const e = new Error("Set a take-profit %, a stop-loss %, or both."); e.statusCode = 400; throw e; }
+  const automationPermission = await requireWebAutomationPermission(userId, "Robinhood TP/SL guard");
   let entryPriceUsd = Number(body.entryPriceUsd || 0);
   if (!(entryPriceUsd > 0)) {
     const implied = await rhImpliedPriceUsd(tokenAddress, rhFeeEvmWallet(CONFIG.appSecret, CONFIG.rhChainRpcUrl).address).catch(() => null);
@@ -46479,17 +47754,18 @@ async function webRhArmGuard(userId, body = {}) {
     takeProfitPct: tpPct > 0 ? tpPct : null,
     stopLossPct: slPct > 0 ? slPct : null,
     sellPercent,
+    automationPermission,
     status: "active",
     failCount: 0,
     createdAt: new Date().toISOString()
   };
-  const gs = await readRhGuards();
-  // One active guard per (user, wallet, token) — arming again replaces the old one.
-  gs.guards = gs.guards.filter((g) => !(g.status === "active" && g.userId === userId && g.walletIndex === guard.walletIndex && g.tokenAddress.toLowerCase() === tokenAddress.toLowerCase()));
-  gs.guards.push(guard);
-  gs.guards = gs.guards.slice(-300);
-  await writeRhGuards(gs);
-  await audit("web_rh_guard_arm", { userId, tokenAddress, tpPct, slPct, sellPercent, entryPriceUsd });
+  await mutateRhGuards((gs) => {
+    // One active guard per (user, wallet, token) — arming again replaces the old one.
+    gs.guards = gs.guards.filter((g) => !(g.status === "active" && g.userId === userId && String(g.walletPublicKey || "") === guard.walletPublicKey && g.tokenAddress.toLowerCase() === tokenAddress.toLowerCase()));
+    gs.guards.push(guard);
+    gs.guards = gs.guards.slice(-300);
+  });
+  await audit("web_rh_guard_arm", { userId, tokenAddress, tpPct, slPct, sellPercent, entryPriceUsd }).catch(() => {});
   return { ok: true, guard };
 }
 
@@ -46499,11 +47775,12 @@ async function webRhGuards(userId) {
 }
 
 async function webRhCancelGuard(userId, body = {}) {
-  const gs = await readRhGuards();
-  const guard = gs.guards.find((g) => g.id === String(body.id || "") && g.userId === userId);
-  if (!guard) { const e = new Error("Guard not found."); e.statusCode = 404; throw e; }
-  guard.status = "cancelled";
-  await writeRhGuards(gs);
+  await mutateRhGuards((gs) => {
+    const guard = gs.guards.find((g) => g.id === String(body.id || "") && g.userId === userId);
+    if (!guard) { const e = new Error("Guard not found."); e.statusCode = 404; throw e; }
+    guard.status = "cancelled";
+    guard.updatedAt = new Date().toISOString();
+  });
   return { ok: true };
 }
 
@@ -46576,9 +47853,22 @@ async function rhGuardTick() {
     const gs = await readRhGuards();
     const active = gs.guards.filter((g) => g.status === "active");
     if (!active.length) return;
+    const [automationStore, walletStore] = await Promise.all([
+      readWebAuthStore().catch(() => null),
+      readWalletStore()
+    ]);
     const priceByToken = new Map();
     let changed = false;
     for (const guard of active) {
+      if (guard.automationPermission) {
+        const currentProfile = automationStore?.profiles?.[String(guard.userId)] || {};
+        if (!webAutomationExecutionAllowed(guard.automationPermission, currentProfile)) {
+          guard.lastError = "Managed-wallet automation permission is inactive. Re-enable it to resume this guard.";
+          guard.updatedAt = new Date().toISOString();
+          changed = true;
+          continue;
+        }
+      }
       const key = guard.tokenAddress.toLowerCase();
       if (!priceByToken.has(key)) priceByToken.set(key, await rhImpliedPriceUsd(guard.tokenAddress, probe).catch(() => null));
       const res = priceByToken.get(key);
@@ -46589,27 +47879,63 @@ async function rhGuardTick() {
       const hitSl = guard.stopLossPct != null && movePct <= -guard.stopLossPct;
       if (!hitTp && !hitSl) continue;
       try {
+        await requireWebAutomationPermission(guard.userId, "Robinhood guard submission");
+        const ownerWallets = walletsForOwner(walletStore, guard.userId);
+        const frozenWallet = guard.walletPublicKey
+          ? ownerWallets.find((wallet) => wallet.publicKey === guard.walletPublicKey)
+          : ownerWallets[Number(guard.walletIndex || 1) - 1];
+        if (!frozenWallet) throw new Error("The guarded wallet was removed; no sell was sent.");
+        const currentWalletIndex = ownerWallets.indexOf(frozenWallet) + 1;
+        guard.status = "submitting";
+        guard.submittingAt = new Date().toISOString();
+        guard.trigger = hitTp ? "take-profit" : "stop-loss";
+        guard.triggerPriceUsd = price;
+        guard.updatedAt = guard.submittingAt;
+        const claimed = await mutateRhGuards((liveStore) => {
+          const live = liveStore.guards.find((row) => row.id === guard.id && row.status === "active");
+          if (!live) return false;
+          Object.assign(live, {
+            status: "submitting",
+            submittingAt: guard.submittingAt,
+            trigger: guard.trigger,
+            triggerPriceUsd: price,
+            updatedAt: guard.updatedAt
+          });
+          return true;
+        });
+        if (!claimed) continue;
         const result = await webRhTradeCore(guard.userId, {
-          walletIndex: String(guard.walletIndex),
+          walletIndex: String(currentWalletIndex),
+          walletPublicKey: frozenWallet.publicKey,
           side: "sell",
           tokenAddress: guard.tokenAddress,
           percent: guard.sellPercent
         });
         guard.status = "triggered";
         guard.triggeredAt = new Date().toISOString();
-        guard.trigger = hitTp ? "take-profit" : "stop-loss";
-        guard.triggerPriceUsd = price;
         guard.txHashes = result.txHashes;
         changed = true;
-        await audit("web_rh_guard_fired", { userId: guard.userId, tokenAddress: guard.tokenAddress, trigger: guard.trigger, movePct: movePct.toFixed(1), tx: result.txHashes });
+        await audit("web_rh_guard_fired", { userId: guard.userId, tokenAddress: guard.tokenAddress, trigger: guard.trigger, movePct: movePct.toFixed(1), tx: result.txHashes }).catch(() => {});
       } catch (error) {
         guard.failCount = (guard.failCount || 0) + 1;
         guard.lastError = friendlyError(error).slice(0, 200);
-        if (guard.failCount >= 3) guard.status = "failed";   // e.g. bag already sold manually
+        if (error?.tradeSubmissionAmbiguous) {
+          guard.status = "outcome_unknown";
+          guard.txHashes = Array.isArray(error.partialHashes) ? error.partialHashes : [];
+          guard.lastError = `Submission outcome unknown; no automatic retry. ${guard.lastError}`;
+        } else {
+          guard.status = guard.failCount >= 3 ? "failed" : "active";   // e.g. bag already sold manually
+        }
         changed = true;
       }
     }
-    if (changed) await writeRhGuards(gs);
+    if (changed) await mutateRhGuards((liveStore) => {
+      for (const update of gs.guards) {
+        const live = liveStore.guards.find((row) => row.id === update.id);
+        if (!live || ["cancelled", "canceled"].includes(String(live.status || "").toLowerCase())) continue;
+        Object.assign(live, update);
+      }
+    });
   } catch (error) {
     console.warn(`[rh-guards] tick failed: ${friendlyError(error)}`);
   } finally {
@@ -46623,27 +47949,34 @@ if (parseBoolean(process.env.RH_GUARDS_ENABLED || "true")) setInterval(rhGuardTi
 async function webRhBundle(userId, body = {}) {
   return runIdempotentMoneyOp("web-rh-bundle", userId, firstString(body.tradeAttemptId, body.clientRequestId),
     () => webRhBundleCore(userId, body),
-    { busyMessage: "A Robinhood bundle is already in flight — give it a moment." });
+    { busyMessage: "A Robinhood bundle is already in flight — give it a moment.", lockMs: 30 * 60_000, ttlMs: 24 * 60 * 60_000 });
 }
 async function webRhBundleCore(userId, body = {}) {
   const tokenAddress = String(body.tokenAddress || "").trim();
-  const indexes = (Array.isArray(body.walletIndexes) ? body.walletIndexes : []).map((v) => Number.parseInt(v, 10)).filter((n) => Number.isInteger(n) && n >= 1);
-  if (!indexes.length || indexes.length > 20) { const e = new Error("Pick 1-20 wallets."); e.statusCode = 400; throw e; }
+  const walletStore = await readWalletStore();
+  const selectedWallets = webSelectedWallets(walletStore, userId, body.walletIndexes, "", { walletPublicKeys: body.walletPublicKeys });
+  const indexes = selectedWallets.map((wallet) => Number(wallet.webIndex));
   const minEth = Number(body.minEth || 0), maxEth = Number(body.maxEth || 0);
   if (!(minEth > 0) || !(maxEth >= minEth) || maxEth > 0.5) { const e = new Error("Buy range must be 0 < min ≤ max ≤ 0.5 ETH."); e.statusCode = 400; throw e; }
   const rows = [];
-  for (const idx of indexes) {
+  for (const wallet of selectedWallets) {
+    const idx = Number(wallet.webIndex);
     const amountEth = (minEth + Math.random() * (maxEth - minEth)).toFixed(6);
     try {
-      const r = await webRhTradeCore(userId, { walletIndex: String(idx), side: "buy", tokenAddress, amountEth });
-      rows.push({ walletIndex: idx, ok: true, amountEth, out: r.outFormatted, tx: r.txHashes[r.txHashes.length - 1] });
+      const r = await webRhTradeCore(userId, { walletIndex: String(idx), walletPublicKey: wallet.publicKey, side: "buy", tokenAddress, amountEth });
+      rows.push({ walletIndex: idx, walletPublicKey: wallet.publicKey, ok: true, amountEth, out: r.outFormatted, tx: r.txHashes[r.txHashes.length - 1] });
     } catch (error) {
-      rows.push({ walletIndex: idx, ok: false, amountEth, error: friendlyError(error).slice(0, 160) });
+      rows.push({ walletIndex: idx, walletPublicKey: wallet.publicKey, ok: false, amountEth, error: friendlyError(error).slice(0, 160) });
     }
     await new Promise((resolve) => setTimeout(resolve, 400 + Math.random() * 1_800)); // human-ish gaps
   }
-  await audit("web_rh_bundle", { userId, tokenAddress, wallets: indexes.length, okCount: rows.filter((r) => r.ok).length });
-  return { ok: true, rows, summary: `${rows.filter((r) => r.ok).length}/${rows.length} wallets bought.` };
+  let recordError = "";
+  try {
+    await audit("web_rh_bundle", { userId, tokenAddress, wallets: indexes.length, okCount: rows.filter((r) => r.ok).length });
+  } catch (error) {
+    recordError = `Audit: ${friendlyError(error)}`;
+  }
+  return { ok: true, rows, recordError, summary: `${rows.filter((r) => r.ok).length}/${rows.length} wallets bought.` };
 }
 
 // Volume bot: rounds of buy -> sell-back per wallet on one RH coin, randomized sizes + gaps. Runs in
@@ -47132,7 +48465,7 @@ function defaultWebAutomationPermission() {
     revokedAt: "",
     walletScope: "managed",
     maxSellPercent: 100,
-    allowedActions: ["tp_sl_exit", "timer_exit"],
+    allowedActions: ["tp_sl_exit", "timer_exit", "copy_buy", "launch_buy"],
     connectedWalletPublicKey: ""
   };
 }
@@ -47142,7 +48475,7 @@ function normalizeWebAutomationPermission(value = {}) {
   const maxSellPercent = Math.max(1, Math.min(100, Number.parseFloat(value.maxSellPercent || "100") || 100));
   const allowedActions = Array.isArray(value.allowedActions) && value.allowedActions.length
     ? uniqueStrings(value.allowedActions.map((item) => String(item || "").trim()).filter(Boolean)).slice(0, 10)
-    : ["tp_sl_exit", "timer_exit"];
+    : ["tp_sl_exit", "timer_exit", "copy_buy", "launch_buy"];
   return {
     enabled,
     grantedAt: value.grantedAt || "",
@@ -47160,6 +48493,13 @@ function webAutomationPermissionActive(profile = {}) {
   if (!permission.enabled) return false;
   const expiresAt = Date.parse(permission.expiresAt || "");
   return Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
+
+function webAutomationExecutionAllowed(snapshot = null, currentProfile = {}) {
+  // The snapshot proves this plan/guard was explicitly authorized when it was
+  // armed. The live profile is the kill switch. A renewed live grant resumes
+  // existing plans instead of leaving them permanently pinned to an old date.
+  return Boolean(snapshot?.enabled) && webAutomationPermissionActive(currentProfile);
 }
 
 async function requireWebAutomationPermission(userId, context = "server-side TP/SL") {
@@ -47819,6 +49159,14 @@ async function recordManualSellTimingEvent(event = {}, request = {}) {
   }, request || {});
 }
 
+function manualSellAmbiguousReplayError(cached = {}) {
+  const saved = cached?.ambiguousError || {};
+  const error = new Error(saved.message || "The prior sell submission has an unknown outcome; it will not be sent again.");
+  error.tradeSubmissionAmbiguous = true;
+  error.partialHashes = Array.isArray(saved.partialHashes) ? saved.partialHashes : [];
+  return error;
+}
+
 async function runManualSellCriticalAttempt(userId, body = {}, options = {}, task) {
   // The web terminal sends the dedup key as `tradeAttemptId` (execSell), the bundle/critical paths send
   // `manualSellAttemptId`/`clientRequestId`. Honor ALL of them so a web sell actually engages the lock
@@ -47847,17 +49195,32 @@ async function runManualSellCriticalAttempt(userId, body = {}, options = {}, tas
     }, request).catch(() => {});
     return result;
   }
+  if (cached?.ambiguousError) throw manualSellAmbiguousReplayError(cached);
 
   const lockWaitStarted = Date.now();
   const lockName = `manual-sell:${manualSellUserHash(userId)}:${manualSellAttemptId}`;
   return LockService.withLock(lockName, 90_000, async () => {
     const duplicate = await idemResultGet(resultKey);
     if (duplicate?.result) return { ...duplicate.result, duplicate: true, status: duplicate.result.status || "SUBMITTED" };
-    const result = await task({
-      manualSellAttemptId,
-      queueWaitMs: Date.now() - lockWaitStarted,
-      duplicate: false
-    });
+    if (duplicate?.ambiguousError) throw manualSellAmbiguousReplayError(duplicate);
+    let result;
+    try {
+      result = await task({
+        manualSellAttemptId,
+        queueWaitMs: Date.now() - lockWaitStarted,
+        duplicate: false
+      });
+    } catch (error) {
+      if (error?.tradeSubmissionAmbiguous) {
+        await idemResultSet(resultKey, {
+          ambiguousError: {
+            message: `The sell transaction was submitted but confirmation is unknown. SlimeWire will not submit it again. ${friendlyError(error)}`.slice(0, 300),
+            partialHashes: Array.isArray(error.partialHashes) ? error.partialHashes.slice(0, 20) : []
+          }
+        }, 24 * 60 * 60_000);
+      }
+      throw error;
+    }
     // Cache ONLY a real submission. An all-failed bundle sell (status FAILED, 0 successes, no signature)
     // must NOT be cached — otherwise a retry replays it as "SUBMITTED" and tells the user they sold when
     // nothing did. Skipping the cache lets the retry actually re-attempt the sell.
@@ -47938,11 +49301,36 @@ async function runIdempotentMoneyOp(namespace, userId, attemptId, task, options 
   const resultKey = externalCacheKey(`${namespace}-result:${id}`, userId);
   const cached = await idemResultGet(resultKey);
   if (cached?.result) return { ...cached.result, duplicate: true };
+  if (cached?.ambiguousError) {
+    const error = new Error(cached.ambiguousError.message || "The prior submission has an unknown outcome; it will not be sent again.");
+    error.tradeSubmissionAmbiguous = true;
+    error.partialHashes = cached.ambiguousError.partialHashes || [];
+    throw error;
+  }
   const lockName = `${namespace}:${manualSellUserHash(userId)}:${id}`;
   return LockService.withLock(lockName, options.lockMs || 90_000, async () => {
     const dup = await idemResultGet(resultKey);
     if (dup?.result) return { ...dup.result, duplicate: true };
-    const result = await task();
+    if (dup?.ambiguousError) {
+      const error = new Error(dup.ambiguousError.message || "The prior submission has an unknown outcome; it will not be sent again.");
+      error.tradeSubmissionAmbiguous = true;
+      error.partialHashes = dup.ambiguousError.partialHashes || [];
+      throw error;
+    }
+    let result;
+    try {
+      result = await task();
+    } catch (error) {
+      if (error?.tradeSubmissionAmbiguous) {
+        await idemResultSet(resultKey, {
+          ambiguousError: {
+            message: `The transaction was submitted but confirmation is unknown. SlimeWire will not submit it again. ${friendlyError(error)}`.slice(0, 300),
+            partialHashes: Array.isArray(error.partialHashes) ? error.partialHashes.slice(0, 20) : []
+          }
+        }, options.ttlMs || 24 * 60 * 60_000);
+      }
+      throw error;
+    }
     await idemResultSet(resultKey, { result }, options.ttlMs || 120_000);
     return result;
   }, () => {
@@ -51584,50 +52972,48 @@ async function completeMobileWalletConnectCallback(body = {}) {
 }
 
 async function updateWebAutomationPermission(userId, body = {}) {
-  const store = await readWebAuthStore();
-  const key = String(userId);
   const nowMs = Date.now();
   const now = new Date(nowMs).toISOString();
-  const { profile: existing } = ensureWebProfileDefaults(store, userId);
   const action = String(body.action || (body.enabled === false ? "revoke" : "enable")).trim().toLowerCase();
-  let automationPermission;
-
-  if (action === "revoke" || body.clear) {
-    automationPermission = {
-      ...normalizeWebAutomationPermission(existing.automationPermission || {}),
-      enabled: false,
-      revokedAt: now,
-      expiresAt: ""
+  const profile = await mutateWebAuthStore((store) => {
+    const key = String(userId);
+    const { profile: existing } = ensureWebProfileDefaults(store, userId);
+    let automationPermission;
+    if (action === "revoke" || body.clear) {
+      automationPermission = {
+        ...normalizeWebAutomationPermission(existing.automationPermission || {}),
+        enabled: false,
+        revokedAt: now,
+        expiresAt: ""
+      };
+    } else {
+      const ttlHours = Math.max(1, Math.min(24 * 30, Number.parseFloat(body.ttlHours || "720") || 720));
+      automationPermission = {
+        enabled: true,
+        grantedAt: now,
+        expiresAt: new Date(nowMs + ttlHours * 60 * 60 * 1000).toISOString(),
+        revokedAt: "",
+        walletScope: "managed",
+        maxSellPercent: 100,
+        allowedActions: ["tp_sl_exit", "timer_exit", "copy_buy", "launch_buy"],
+        connectedWalletPublicKey: existing.connectedWallet?.publicKey || ""
+      };
+    }
+    const next = {
+      ...existing,
+      automationPermission: normalizeWebAutomationPermission(automationPermission),
+      updatedAt: now
     };
-  } else {
-    const ttlHours = Math.max(1, Math.min(24 * 30, Number.parseFloat(body.ttlHours || "720") || 720));
-    const connectedWalletPublicKey = existing.connectedWallet?.publicKey || "";
-    automationPermission = {
-      enabled: true,
-      grantedAt: now,
-      expiresAt: new Date(nowMs + ttlHours * 60 * 60 * 1000).toISOString(),
-      revokedAt: "",
-      walletScope: "managed",
-      maxSellPercent: 100,
-      allowedActions: ["tp_sl_exit", "timer_exit"],
-      connectedWalletPublicKey
-    };
-  }
-
-  const profile = {
-    ...existing,
-    automationPermission: normalizeWebAutomationPermission(automationPermission),
-    updatedAt: now
-  };
-  store.profiles[key] = profile;
-  await writeWebAuthStore(store);
+    store.profiles[key] = next;
+    return next;
+  });
   await audit("web_automation_permission_update", {
     userId,
     enabled: profile.automationPermission.enabled,
     expiresAt: profile.automationPermission.expiresAt,
     walletScope: profile.automationPermission.walletScope,
     connectedWalletPublicKey: profile.automationPermission.connectedWalletPublicKey || ""
-  });
+  }).catch(() => {});
   return { profile };
 }
 
@@ -51740,44 +53126,43 @@ async function webPresetRows(userId) {
 
 async function updateWebPreset(userId, body = {}) {
   const type = normalizeWebPresetType(body.type || body.kind);
-  const store = await readWebAuthStore();
-  const key = String(userId);
-  const { profile: existing } = ensureWebProfileDefaults(store, userId);
-  const field = type === "bundle" ? "bundlePresets" : "tradePresets";
-  const current = cleanStoredPresets(existing[field], type);
   const action = String(body.action || "save").trim().toLowerCase();
-  const defaultIds = new Set((defaultWebPresets()[type] || []).map((preset) => preset.id));
-  let hiddenWebPresetIds = Array.isArray(existing.hiddenWebPresetIds)
-    ? uniqueStrings(existing.hiddenWebPresetIds.map(String))
-    : [];
-
-  let next = current;
-  if (action === "delete") {
-    const id = String(body.id || "").trim();
-    if (defaultIds.has(id)) {
-      hiddenWebPresetIds = uniqueStrings([...hiddenWebPresetIds, id]);
+  const result = await mutateWebAuthStore((store) => {
+    const key = String(userId);
+    const { profile: existing } = ensureWebProfileDefaults(store, userId);
+    const field = type === "bundle" ? "bundlePresets" : "tradePresets";
+    const current = cleanStoredPresets(existing[field], type);
+    const defaultIds = new Set((defaultWebPresets()[type] || []).map((preset) => preset.id));
+    let hiddenWebPresetIds = Array.isArray(existing.hiddenWebPresetIds)
+      ? uniqueStrings(existing.hiddenWebPresetIds.map(String))
+      : [];
+    let next = current;
+    if (action === "delete") {
+      const id = String(body.id || "").trim();
+      if (defaultIds.has(id)) {
+        hiddenWebPresetIds = uniqueStrings([...hiddenWebPresetIds, id]);
+      } else {
+        next = current.filter((preset) => preset.id !== id);
+      }
     } else {
-      next = current.filter((preset) => preset.id !== id);
+      const rawPreset = body.preset || body;
+      const rawId = String(rawPreset.id || "").trim();
+      const preset = normalizeWebPreset(type, rawPreset, { keepId: Boolean(rawId && !defaultIds.has(rawId)) });
+      const existingIndex = current.findIndex((item) => item.id === preset.id);
+      next = existingIndex >= 0
+        ? current.map((item, index) => (index === existingIndex ? preset : item))
+        : [preset, ...current].slice(0, 5);
     }
-  } else {
-    const rawPreset = body.preset || body;
-    const rawId = String(rawPreset.id || "").trim();
-    const preset = normalizeWebPreset(type, rawPreset, { keepId: Boolean(rawId && !defaultIds.has(rawId)) });
-    const existingIndex = current.findIndex((item) => item.id === preset.id);
-    next = existingIndex >= 0
-      ? current.map((item, index) => (index === existingIndex ? preset : item))
-      : [preset, ...current].slice(0, 5);
-  }
-
-  const profile = {
-    ...existing,
-    [field]: next,
-    hiddenWebPresetIds,
-    updatedAt: new Date().toISOString()
-  };
-  store.profiles[key] = profile;
-  await writeWebAuthStore(store);
-  await audit("web_preset_update", { userId, type, action, count: next.length });
+    const profile = {
+      ...existing,
+      [field]: next,
+      hiddenWebPresetIds,
+      updatedAt: new Date().toISOString()
+    };
+    store.profiles[key] = profile;
+    return { count: next.length };
+  });
+  await audit("web_preset_update", { userId, type, action, count: result.count }).catch(() => {});
   return { presets: await webPresetRows(userId) };
 }
 
@@ -51809,11 +53194,11 @@ function normalizeWebPreset(type, raw = {}, options = {}) {
     ? String(raw.id).trim().slice(0, 80)
     : `${type}-${crypto.randomUUID()}`;
   const name = String(raw.name || `${type === "bundle" ? "Bundle" : "Trade"} Preset`).trim().replace(/[^\w .%-]/g, "").slice(0, 32) || "Preset";
-  const amountSol = String(raw.amountSol || raw.amount || "0.1").trim();
+  const amountSol = firstString(raw.amountSol, raw.amount, "0.1");
   parsePositiveNumber(amountSol);
-  const takeProfitPct = String(raw.takeProfitPct || "25").trim();
+  const takeProfitPct = firstString(raw.takeProfitPct, "25");
   parseTakeProfitPercent(takeProfitPct);
-  const stopLossPct = String(raw.stopLossPct || "8").trim();
+  const stopLossPct = firstString(raw.stopLossPct, "8");
   parseOptionalTriggerPercent(stopLossPct);
   const sellDelay = firstString(raw.sellDelay, raw.sellDelaySeconds, "off");
   parseOptionalSellDelaySeconds(sellDelay);
@@ -51844,7 +53229,7 @@ function normalizeWebPreset(type, raw = {}, options = {}) {
       : [];
     preset.walletGroup = String(raw.walletGroup || "").trim().replace(/[^\w .-]/g, "").slice(0, 40);
     if (!preset.walletIndexes.length && !preset.walletGroup) {
-      preset.walletIndexes = ["1", "2", "3", "4", "5", "6"];
+      preset.walletIndexes = ["1"];
     }
   }
   return preset;
@@ -52024,7 +53409,7 @@ async function coinChatMessages(mint) {
 async function postCoinChat(userId, mint, text) {
   const key = roomMint(mint);
   if (!key) { const e = new Error("Invalid coin address."); e.statusCode = 400; throw e; }
-  const body = String(text || "").replace(/[ -]/g, "").replace(/\s+/g, " ").trim().slice(0, 280);
+  const body = String(text || "").replace(/[\x00-\x1F\x7F]/g, "").replace(/\s+/g, " ").trim().slice(0, 280);
   if (!body) { const e = new Error("Type a message first."); e.statusCode = 400; throw e; }
   const profile = await webProfileForUser(userId).catch(() => ({}));
   const name = chatDisplayName(profile, userId);
@@ -52441,6 +53826,16 @@ function getWebServerTradeWalletAt(store, oneBasedIndex, userId, context = "trad
   return assertServerTradeWalletReady(getWalletAt(store, oneBasedIndex, userId), context);
 }
 
+function assertFrozenManagedWallet(wallet, expectedPublicKey, context = "trade") {
+  const expected = String(expectedPublicKey || "").trim();
+  if (expected && String(wallet?.publicKey || "") !== expected) {
+    const error = new Error(`The selected wallet changed before this ${context}. Refresh and stage it again; no order was sent.`);
+    error.statusCode = 409;
+    throw error;
+  }
+  return wallet;
+}
+
 // Sweeping/draining a wallet's OWN SOL or tokens out to an external address needs nothing but the
 // signing key — NOT a "funded session". So sweeps use this lighter check instead of the trade-ready
 // gate, otherwise one half-finished or expired session wallet in the set aborts the entire "sweep all".
@@ -52454,6 +53849,9 @@ function assertServerSignableWallet(wallet, context = "sweeping") {
 async function createWebWalletSet(userId, body = {}) {
   const label = cleanLabel(String(body.label || "Ogre Web"));
   const count = Number.parseInt(body.count || "1", 10);
+  const idempotencyKeyHash = /^[a-f0-9]{64}$/i.test(String(body.idempotencyKeyHash || ""))
+    ? String(body.idempotencyKeyHash).toLowerCase()
+    : "";
   if (!Number.isInteger(count) || count < 1 || count > 20) {
     const error = new Error("Wallet count must be from 1 to 20.");
     error.statusCode = 400;
@@ -52461,14 +53859,33 @@ async function createWebWalletSet(userId, body = {}) {
   }
 
   const createdRecords = [];
+  const createdIndexes = new Map();
+  let duplicate = false;
   // Append the new records under the wallet-store lock so a concurrent create/import can't drop them.
   await mutateWalletStore((store) => {
+    if (idempotencyKeyHash) {
+      const existing = walletsForOwner(store, userId).filter((wallet) => wallet.xDmCreateRequestHash === idempotencyKeyHash);
+      if (existing.length) {
+        createdRecords.push(...existing);
+        const ownerWallets = walletsForOwner(store, userId);
+        for (const wallet of existing) createdIndexes.set(wallet.publicKey, ownerWallets.indexOf(wallet) + 1);
+        duplicate = true;
+        return;
+      }
+      if (walletsForOwner(store, userId).length + count > 40) {
+        const error = new Error("X Trade Pad supports up to 40 managed wallets. Use or remove an existing wallet before creating more.");
+        error.statusCode = 400;
+        throw error;
+      }
+    }
     for (let index = 1; index <= count; index += 1) {
       const keypair = Keypair.generate();
       const walletLabel = count === 1 ? label : `${label} ${index}`;
       const record = walletRecord(walletLabel, keypair, userId);
+      if (idempotencyKeyHash) record.xDmCreateRequestHash = idempotencyKeyHash;
       store.wallets.push(record);
       createdRecords.push(record);
+      createdIndexes.set(record.publicKey, walletsForOwner(store, userId).indexOf(record) + 1);
     }
   });
 
@@ -52476,8 +53893,9 @@ async function createWebWalletSet(userId, body = {}) {
     userId,
     label,
     count,
-    publicKeys: createdRecords.map((wallet) => wallet.publicKey)
-  });
+    publicKeys: createdRecords.map((wallet) => wallet.publicKey),
+    duplicate
+  }).catch(() => {});
 
   const encryptedBackup = buildWalletBackupDocument(
     userId,
@@ -52496,8 +53914,9 @@ async function createWebWalletSet(userId, body = {}) {
   );
 
   return {
+    duplicate,
     wallets: createdRecords.map((wallet, index) => ({
-      index: index + 1,
+      index: createdIndexes.get(wallet.publicKey) || index + 1,
       label: wallet.label,
       publicKey: wallet.publicKey,
       shortPublicKey: shortMint(wallet.publicKey)
@@ -53228,7 +54647,11 @@ async function webTradeBuy(userId, body = {}) {
 
 async function webTradeBuyCore(userId, body = {}) {
   const store = await readWalletStore();
-  const wallet = getWebServerTradeWalletAt(store, parseWebWalletIndex(body.walletIndex), userId, "quick buy");
+  const wallet = assertFrozenManagedWallet(
+    getWebServerTradeWalletAt(store, parseWebWalletIndex(body.walletIndex), userId, "quick buy"),
+    body.walletPublicKey,
+    "buy"
+  );
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
   const slippageBps = parseWebSlippage(body.slippageBps);
   const autoExitBody = webQuickBuyAutoExitBody(body);
@@ -53240,17 +54663,22 @@ async function webTradeBuyCore(userId, body = {}) {
   const result = await buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, { trackTokenDelta: true, userId });
   const tokenAmount = result.tokenDeltaAmount || result.outputAmount || null;
 
-  await recordTradeEvents([{
-    userId,
-    type: "buy",
-    source: "web_trade",
-    tokenMint,
-    walletLabel: wallet.label,
-    walletPublicKey: wallet.publicKey,
-    solLamportsSpent: String(result.amountLamports),
-    tokenAmount,
-    signature: result.signature
-  }]);
+  let recordError = "";
+  try {
+    await recordTradeEvents([{
+      userId,
+      type: "buy",
+      source: "web_trade",
+      tokenMint,
+      walletLabel: wallet.label,
+      walletPublicKey: wallet.publicKey,
+      solLamportsSpent: String(result.amountLamports),
+      tokenAmount,
+      signature: result.signature
+    }]);
+  } catch (error) {
+    recordError = friendlyError(error);
+  }
   await audit("web_trade_buy", {
     userId,
     tokenMint,
@@ -53258,12 +54686,28 @@ async function webTradeBuyCore(userId, body = {}) {
     amountMode: String(body.amountMode || "").toLowerCase() === "max" ? "max" : "fixed",
     amountSol: lamportsToSol(result.amountLamports),
     slippageBps,
-    signature: result.signature
-  });
+    signature: result.signature,
+    recordError
+  }).catch(() => {});
 
-  const autoExitPlan = autoExitRequested
-    ? await webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, result, autoExitBody, slippageBps, autoExitPermission)
-    : null;
+  let autoExitPlan = null;
+  let autoExitError = "";
+  if (autoExitRequested) {
+    try {
+      autoExitPlan = await webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, result, autoExitBody, slippageBps, autoExitPermission);
+    } catch (error) {
+      // The swap is already on-chain. Return and cache the buy success so an
+      // exit-plan persistence problem can never be mistaken for a failed buy.
+      autoExitError = friendlyError(error);
+      await audit("web_trade_buy_auto_exit_failed", {
+        userId,
+        tokenMint,
+        wallet: publicWallet(wallet),
+        signature: result.signature,
+        error: autoExitError
+      }).catch(() => {});
+    }
+  }
   const baseMessage = `${wallet.label} bought ${shortMint(tokenMint)} with ${lamportsToSol(result.amountLamports)} SOL.`;
 
   return {
@@ -53278,12 +54722,16 @@ async function webTradeBuyCore(userId, body = {}) {
     tokenAmount,
     signature: result.signature,
     attempts: result.attempts,
+    recordError,
     dexUrl: dexScreenerUrl(tokenMint),
     autoExitRequested,
     autoExitDefaulted: Boolean(autoExitBody.defaultAutoExit),
     autoExitArmed: Boolean(autoExitPlan),
+    autoExitError,
     autoExitPlan,
-    message: autoExitPlan ? `${baseMessage} ${autoExitPlan.shortMessage}` : baseMessage
+    message: autoExitPlan
+      ? `${baseMessage} ${autoExitPlan.shortMessage}`
+      : autoExitError ? `${baseMessage} Auto-exit did not arm: ${autoExitError}` : baseMessage
   };
 }
 
@@ -53673,7 +55121,11 @@ async function webTradeSell(userId, body = {}, options = {}) {
 async function webTradeSellCore(userId, body = {}, options = {}, attempt = {}) {
   const backendStartedAt = Date.now();
   const store = await readWalletStore();
-  let wallet = getWebServerTradeWalletAt(store, parseWebWalletIndex(body.walletIndex), userId, "manual sell");
+  let wallet = assertFrozenManagedWallet(
+    getWebServerTradeWalletAt(store, parseWebWalletIndex(body.walletIndex), userId, "manual sell"),
+    body.walletPublicKey,
+    "sell"
+  );
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
   const percent = parsePercent(String(body.percent || "100"));
   const slippageBps = parseWebSlippage(body.slippageBps);
@@ -53681,16 +55133,20 @@ async function webTradeSellCore(userId, body = {}, options = {}, attempt = {}) {
   const submitStartedAt = Date.now();
   let result;
   try {
-    result = await sellWithFeeRetry(store, userId, wallet, tokenMint, percent, slippageBps);
+    result = await withExitSellLock(userId, wallet.publicKey, tokenMint, () => (
+      sellWithFeeRetry(store, userId, wallet, tokenMint, percent, slippageBps)
+    ));
   } catch (error) {
     // The active wallet doesn't hold this coin (the common cause of "sell server error"):
     // find the managed wallet that actually does and sell from there. If none hold it, the
     // coin is in a connected browser wallet and must be sold from that wallet directly.
-    if (isNoTokenBalanceError(error)) {
+    if (isNoTokenBalanceError(error) && !cleanLaunchBoolean(body.strictWallet)) {
       const holder = await findManagedWalletHoldingToken(store, userId, tokenMint, wallet.publicKey);
       if (holder) {
         wallet = holder;
-        result = await sellWithFeeRetry(store, userId, wallet, tokenMint, percent, slippageBps);
+        result = await withExitSellLock(userId, wallet.publicKey, tokenMint, () => (
+          sellWithFeeRetry(store, userId, wallet, tokenMint, percent, slippageBps)
+        ));
       } else {
         const friendly = new Error("None of your SlimeWire wallets hold this coin to sell. If you bought it with a connected browser wallet (Phantom/Solflare), sell it from that wallet.");
         friendly.statusCode = 400;
@@ -53706,25 +55162,34 @@ async function webTradeSellCore(userId, body = {}, options = {}, attempt = {}) {
   const netLamports = outputLamports > feeLamports ? outputLamports - feeLamports : 0n;
 
   const recordStartedAt = Date.now();
-  await recordTradeEvents([{
-    userId,
-    type: "sell",
-    source: "web_trade",
-    tokenMint,
-    walletLabel: wallet.label,
-    walletPublicKey: wallet.publicKey,
-    tokenAmount: result.tokenAmount,
-    solLamportsReceived: result.outputLamports,
-    signature: result.signature
-  }]);
-  await audit("web_trade_sell", {
-    userId,
-    tokenMint,
-    wallet: publicWallet(wallet),
-    percent,
-    slippageBps,
-    signature: result.signature
-  });
+  let recordError = "";
+  try {
+    await recordTradeEvents([{
+      userId,
+      type: "sell",
+      source: "web_trade",
+      tokenMint,
+      walletLabel: wallet.label,
+      walletPublicKey: wallet.publicKey,
+      tokenAmount: result.tokenAmount,
+      solLamportsReceived: result.outputLamports,
+      signature: result.signature
+    }]);
+  } catch (error) {
+    recordError = `Trade history: ${friendlyError(error)}`;
+  }
+  try {
+    await audit("web_trade_sell", {
+      userId,
+      tokenMint,
+      wallet: publicWallet(wallet),
+      percent,
+      slippageBps,
+      signature: result.signature
+    });
+  } catch (error) {
+    recordError = [recordError, `Audit: ${friendlyError(error)}`].filter(Boolean).join("; ");
+  }
   const recordMs = Date.now() - recordStartedAt;
   const backendMs = Date.now() - backendStartedAt;
   const manualSellTiming = manualSellTimingSummary({
@@ -53759,6 +55224,7 @@ async function webTradeSellCore(userId, body = {}, options = {}, attempt = {}) {
     netSol: lamportsBigToSol(netLamports),
     signature: result.signature,
     attempts: result.attempts,
+    recordError,
     dexUrl: dexScreenerUrl(tokenMint),
     message: `${wallet.label} sold ${percent}% of ${shortMint(tokenMint)} for ${lamportsBigToSol(netLamports)} SOL after fee.`
   };
@@ -53851,9 +55317,7 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     results: [`${wallet.label}: auto-exit armed after quick buy`]
   };
 
-  const plans = await readTradePlans();
-  plans.plans.push(plan);
-  await writeTradePlans(plans);
+  await mutateTradePlans((plans) => { plans.plans.push(plan); });
   await audit("web_trade_auto_exit_plan", {
     userId,
     planId: plan.id,
@@ -53904,7 +55368,7 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
 async function webCreateTradePlan(userId, body = {}) {
   const store = await readWalletStore();
   const wallets = Array.isArray(body.walletIndexes) || String(body.walletGroup || "").trim()
-    ? webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup)
+    ? webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup, { walletPublicKeys: body.walletPublicKeys })
     : [getWebServerTradeWalletAt(store, parseWebWalletIndex(body.walletIndex || "1"), userId, "managed trade")];
   return webCreateManagedBuyPlan(userId, wallets, body, {
     source: "web_trade_plan",
@@ -53940,13 +55404,19 @@ function parseWebTakeProfitLadder(raw) {
 const SMART_EXIT_LADDER = [{ pct: 50, sellPercent: 40 }, { pct: 120, sellPercent: 35 }, { pct: 300, sellPercent: 50 }];
 
 async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {}) {
+  return runIdempotentMoneyOp("web-managed-buy-plan", userId, firstString(body.tradeAttemptId, body.clientRequestId),
+    () => webCreateManagedBuyPlanCore(userId, wallets, body, options),
+    { busyMessage: "This managed buy plan is already submitting — SlimeWire won't send it twice.", lockMs: 30 * 60_000, ttlMs: 24 * 60 * 60_000 });
+}
+
+async function webCreateManagedBuyPlanCore(userId, wallets, body = {}, options = {}) {
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
   const amountSol = parsePositiveNumber(String(body.amountSol || ""));
   const amountLamports = solToLamports(amountSol);
   const sellDelaySeconds = parseOptionalSellDelaySeconds(firstString(body.sellDelay, body.sellDelaySeconds, options.defaultSellDelay, "5"));
   const sellPercent = parsePercent(String(body.sellPercent || "100"));
-  const takeProfitPct = parseTakeProfitPercent(String(body.takeProfitPct || options.defaultTakeProfitPct || "25"));
-  const stopLossPct = parseOptionalTriggerPercent(String(body.stopLossPct || options.defaultStopLossPct || "8"));
+  const takeProfitPct = parseTakeProfitPercent(firstString(body.takeProfitPct, options.defaultTakeProfitPct, "25"));
+  const stopLossPct = parseOptionalTriggerPercent(firstString(body.stopLossPct, options.defaultStopLossPct, "8"));
   const loopCount = parseLoopCount(String(body.loopCount || "1"));
   const loopDelaySeconds = parseLoopDelaySeconds(String(body.loopDelay || body.loopDelaySeconds || "0"));
   const slippageBps = parseWebSlippage(body.slippageBps || options.defaultSlippageBps);
@@ -53957,6 +55427,10 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
   let takeProfitLadder = parseWebTakeProfitLadder(body.takeProfitLadder);
   if (smartExits && takeProfitLadder.length === 0) takeProfitLadder = SMART_EXIT_LADDER.slice();
   const breakEvenAfterTp1 = body.breakEvenAfterTp1 === true || body.breakEvenAfterTp1 === "true" || (smartExits && body.breakEvenAfterTp1 !== false && body.breakEvenAfterTp1 !== "false");
+  const trailingStopPct = Math.max(0, Math.min(95, Number(body.trailingStopPct) || (smartExits ? 25 : 0)));
+  const trailingActivatePct = trailingStopPct > 0
+    ? Math.max(trailingStopPct, Number(body.trailingActivatePct) || (smartExits ? 40 : trailingStopPct))
+    : 0;
   const source = options.source || "web_volume";
   const label = options.label || "Plan";
   const results = [];
@@ -54008,7 +55482,7 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
         stopLossPct: walletStopLossTargets ? walletStopLossTargets[String(walletIndex)] || null : null,
         completedTakeProfitLevels: [],
         triggerSellPercent,
-        triggerStatus: takeProfitPct || stopLossPct || walletTakeProfitTargets || walletStopLossTargets ? "armed" : "timer-only",
+        triggerStatus: takeProfitPct || stopLossPct || trailingStopPct || walletTakeProfitTargets || walletStopLossTargets ? "armed" : "timer-only",
         exitStatus: "watching",
         armedAt: new Date(now).toISOString(),
         sellAfterAt,
@@ -54038,7 +55512,10 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
     throw new Error(`${label} was not created because no buys succeeded.\n\n${results.map((row) => row.message).join("\n")}`);
   }
 
-  await recordTradeEvents(tradeEvents);
+  let recordError = "";
+  await recordTradeEvents(tradeEvents).catch((error) => {
+    recordError = friendlyError(error);
+  });
 
   const plan = {
     id: crypto.randomUUID(),
@@ -54069,8 +55546,8 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
     takeProfitLadder,
     breakEvenAfterTp1: Boolean(breakEvenAfterTp1),
     breakEvenStopPct: 2,
-    trailingStopPct: smartExits ? (Number(body.trailingStopPct) || 25) : (Number(body.trailingStopPct) || 0),
-    trailingActivatePct: smartExits ? (Number(body.trailingActivatePct) || 40) : (Number(body.trailingActivatePct) || 0),
+    trailingStopPct,
+    trailingActivatePct,
     autoBundle: false,
     slippageBps,
     createdAt: new Date().toISOString(),
@@ -54078,9 +55555,14 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
     results: results.map((row) => row.message)
   };
 
-  const plans = await readTradePlans();
-  plans.plans.push(plan);
-  await writeTradePlans(plans);
+  let planPersistError = "";
+  try {
+    await mutateTradePlans((plans) => { plans.plans.push(plan); });
+  } catch (error) {
+    // Buys already landed. Return a cacheable submitted result instead of
+    // throwing and inviting the same multi-wallet spend again.
+    planPersistError = friendlyError(error);
+  }
   await audit(options.auditType || "web_create_managed_plan", {
     userId,
     planId: plan.id,
@@ -54099,10 +55581,12 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
     loopDelaySeconds,
     source,
     slippageBps
-  });
+  }).catch(() => {});
 
-  scheduleTradePlanProcessing(`${label} auto-exit`, [500, 1200, 2500, 5000, 8000, 12000, 20000, 30000]);
-  await safeArmWebExitGuardsForPlan(plan, planWallets);
+  if (!planPersistError) {
+    scheduleTradePlanProcessing(`${label} auto-exit`, [500, 1200, 2500, 5000, 8000, 12000, 20000, 30000]);
+    await safeArmWebExitGuardsForPlan(plan, planWallets);
+  }
 
   return {
     id: plan.id,
@@ -54125,16 +55609,20 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
     slippageBps,
     source,
     executionMode: "managed_server",
+    recordError,
+    planPersistError,
     results,
     dexUrl: dexScreenerUrl(tokenMint),
-    message: `${label} armed: ${planWallets.length}/${wallets.length} wallet(s) bought ${shortMint(tokenMint)}. Watching TP ${formatPlanTakeProfitSummary(plan)}, SL ${formatPlanStopLossSummary(plan)}${sellDelaySeconds > 0 ? `, timer ${formatSellTimerSummary(sellDelaySeconds)}` : ""}.`
+    message: planPersistError
+      ? `${label}: ${planWallets.length}/${wallets.length} wallet buy(s) landed, but exits could not be saved. Do not retry the buy; arm exits from Positions. ${planPersistError}`
+      : `${label} armed: ${planWallets.length}/${wallets.length} wallet(s) bought ${shortMint(tokenMint)}. Watching TP ${formatPlanTakeProfitSummary(plan)}, SL ${formatPlanStopLossSummary(plan)}${sellDelaySeconds > 0 ? `, timer ${formatSellTimerSummary(sellDelaySeconds)}` : ""}.`
   };
 }
 
 async function webCreateVolumePlan(userId, body = {}) {
   const store = await readWalletStore();
   const wallets = Array.isArray(body.walletIndexes) || String(body.walletGroup || "").trim()
-    ? webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup)
+    ? webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup, { walletPublicKeys: body.walletPublicKeys })
     : [getWebServerTradeWalletAt(store, parseWebWalletIndex(body.walletIndex), userId, "volume plan")];
   return webCreateManagedBuyPlan(userId, wallets, body, {
     source: "web_volume",
@@ -54149,7 +55637,7 @@ async function webCreateVolumePlan(userId, body = {}) {
 
 async function webCreateBundlePlan(userId, body = {}) {
   const store = await readWalletStore();
-  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
+  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup, { walletPublicKeys: body.walletPublicKeys });
   return webCreateManagedBuyPlan(userId, wallets, body, {
     source: "web_bundle_plan",
     label: "Bundle auto-exit plan",
@@ -54168,15 +55656,19 @@ async function webArmExitsForExistingPositions(userId, body = {}) {
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
   const sellDelaySeconds = parseOptionalSellDelaySeconds(firstString(body.sellDelay, body.sellDelaySeconds, "off"));
   const sellPercent = parsePercent(String(body.sellPercent || "100"));
-  const takeProfitPct = parseTakeProfitPercent(String(body.takeProfitPct || "40"));
+  const takeProfitLadder = parseWebTakeProfitLadder(body.takeProfitLadder);
+  const takeProfitPct = takeProfitLadder.length ? takeProfitLadder[0].pct : parseTakeProfitPercent(String(body.takeProfitPct || "40"));
   const stopLossPct = parseOptionalTriggerPercent(String(body.stopLossPct || "8"));
+  const trailingStopPct = Math.max(0, Math.min(95, Number(body.trailingStopPct) || 0));
+  const trailingActivatePct = trailingStopPct > 0 ? Math.max(trailingStopPct, Number(body.trailingActivatePct) || trailingStopPct) : 0;
+  const breakEvenAfterTp1 = cleanLaunchBoolean(body.breakEvenAfterTp1);
   const slippageBps = parseWebSlippage(body.slippageBps || 1_000);
-  ensureTimedPlanHasExit({ sellDelaySeconds, takeProfitPct, stopLossPct, walletTakeProfitTargets: null, walletStopLossTargets: null });
+  ensureTimedPlanHasExit({ sellDelaySeconds, takeProfitPct, stopLossPct, takeProfitLadder, trailingStopPct, walletTakeProfitTargets: null, walletStopLossTargets: null });
   const automationPermission = await requireWebAutomationPermission(userId, "Arm exits");
 
   const store = await readWalletStore();
   const wallets = (body.walletIndexes || body.walletGroup)
-    ? webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup)
+    ? webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup, { walletPublicKeys: body.walletPublicKeys })
     : walletsForOwner(store, userId);
 
   // Never double-cover: wallets already watched by a live plan for this mint
@@ -54233,7 +55725,7 @@ async function webArmExitsForExistingPositions(userId, body = {}) {
         stopLossPct: null,
         completedTakeProfitLevels: [],
         triggerSellPercent: sellPercent,
-        triggerStatus: takeProfitPct || stopLossPct ? "armed" : "timer-only",
+        triggerStatus: takeProfitPct || stopLossPct || trailingStopPct ? "armed" : "timer-only",
         exitStatus: "watching",
         armedAt: new Date(now).toISOString(),
         sellAfterAt,
@@ -54276,23 +55768,51 @@ async function webArmExitsForExistingPositions(userId, body = {}) {
     loopDelaySeconds: 0,
     takeProfitPct,
     stopLossPct,
-    takeProfitMode: "single",
+    takeProfitMode: takeProfitLadder.length ? "ladder" : "single",
     stopLossMode: "single",
-    takeProfitLadder: [],
+    takeProfitLadder,
+    trailingStopPct,
+    trailingActivatePct,
+    breakEvenAfterTp1,
+    breakEvenStopPct: 2,
     autoBundle: false,
     slippageBps,
     createdAt: new Date().toISOString(),
     wallets: planWallets,
     results: [`Armed exits on ${planWallets.length} wallet(s) holding ${shortMint(tokenMint)} - no buys made.`]
   };
-  const plans = await readTradePlans();
-  plans.plans.push(plan);
-  await writeTradePlans(plans);
+  // Re-check coverage while holding the plans-store lock. Two simultaneous
+  // "Arm exits" requests may both pass the earlier balance scan; only one may
+  // claim each wallet/mint pair.
+  await mutateTradePlans((plans) => {
+    const newlyCovered = new Set();
+    for (const existing of plans.plans || []) {
+      if (String(existing.userId) !== String(userId) || existing.tokenMint !== tokenMint) continue;
+      if (!['watching', 'active', 'pending'].includes(String(existing.status || '').toLowerCase())) continue;
+      for (const planWallet of existing.wallets || []) {
+        if (['watching', 'armed', 'pending'].includes(String(planWallet.status || planWallet.exitStatus || '').toLowerCase())) {
+          newlyCovered.add(planWallet.publicKey);
+        }
+      }
+    }
+    const unclaimed = plan.wallets.filter((wallet) => !newlyCovered.has(wallet.publicKey));
+    alreadyCovered += plan.wallets.length - unclaimed.length;
+    if (!unclaimed.length) {
+      const error = new Error('Exits are already armed on every wallet holding this token.');
+      error.statusCode = 400;
+      throw error;
+    }
+    plan.wallets = unclaimed;
+    plan.walletSelector = unclaimed.map((wallet) => wallet.walletIndex).join(',');
+    plan.results = [`Armed exits on ${unclaimed.length} wallet(s) holding ${shortMint(tokenMint)} - no buys made.`];
+    planWallets.splice(0, planWallets.length, ...unclaimed);
+    plans.plans.push(plan);
+  });
   await audit("web_arm_exits_existing", {
     userId, planId: plan.id, tokenMint,
     wallets: planWallets.map((wallet) => wallet.publicKey),
-    takeProfitPct, stopLossPct, sellDelaySeconds, sellPercent
-  });
+    takeProfitPct, stopLossPct, sellDelaySeconds, sellPercent, takeProfitLadder, trailingStopPct
+  }).catch(() => {});
   scheduleTradePlanProcessing("Arm exits", [500, 1500, 4000, 8000, 15000]);
   await safeArmWebExitGuardsForPlan(plan, planWallets);
   return {
@@ -54308,7 +55828,7 @@ async function webArmExitsForExistingPositions(userId, body = {}) {
 
 async function webCreateSniperEntry(userId, body = {}) {
   const store = await readWalletStore();
-  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
+  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup, { walletPublicKeys: body.walletPublicKeys });
   const mode = normalizeSniperMode(body.mode || "safe");
   const isPump = mode === "pumpsnipe";
   return webCreateManagedBuyPlan(userId, wallets, { ...body, mode }, {
@@ -55709,7 +57229,7 @@ function webOgreAiPickSummary(row = {}) {
 
 async function webStartOgreAiRun(userId, body = {}) {
   const store = await readWalletStore();
-  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
+  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup, { walletPublicKeys: body.walletPublicKeys });
   const runCount = clamp(Number.parseInt(String(body.runCount || "1"), 10) || 1, 1, OGRE_AI_PLANS_PER_RUN_LIMIT);
   const category = normalizeOgreAiCategory(firstString(body.category, body.mode));
   const mode = ogreAiModeForCategory(category);
@@ -55870,8 +57390,14 @@ async function webStartOgreAiRun(userId, body = {}) {
 }
 
 async function webBundleBuy(userId, body = {}) {
+  return runIdempotentMoneyOp("web-bundle-buy", userId, firstString(body.tradeAttemptId, body.clientRequestId),
+    () => webBundleBuyCore(userId, body),
+    { busyMessage: "This bundle buy is already submitting — SlimeWire won't send it twice.", lockMs: 15 * 60_000, ttlMs: 24 * 60 * 60_000 });
+}
+
+async function webBundleBuyCore(userId, body = {}) {
   const store = await readWalletStore();
-  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
+  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup, { walletPublicKeys: body.walletPublicKeys });
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
   const amountSol = parsePositiveNumber(String(body.amountSol || ""));
   const amountLamports = solToLamports(amountSol);
@@ -55913,17 +57439,26 @@ async function webBundleBuy(userId, body = {}) {
     }
   });
 
-  await recordTradeEvents(tradeEvents);
-  await audit("web_bundle_buy", {
-    userId,
-    tokenMint,
-    walletCount: wallets.length,
-    successCount: tradeEvents.length,
-    amountSol,
-    slippageBps
-  });
+  let recordError = "";
+  try {
+    await recordTradeEvents(tradeEvents);
+  } catch (error) {
+    recordError = `Trade history: ${friendlyError(error)}`;
+  }
+  try {
+    await audit("web_bundle_buy", {
+      userId,
+      tokenMint,
+      walletCount: wallets.length,
+      successCount: tradeEvents.length,
+      amountSol,
+      slippageBps
+    });
+  } catch (error) {
+    recordError = [recordError, `Audit: ${friendlyError(error)}`].filter(Boolean).join("; ");
+  }
 
-  return webBundleResult("bundle_buy", tokenMint, wallets.length, tradeEvents.length, results);
+  return { ...webBundleResult("bundle_buy", tokenMint, wallets.length, tradeEvents.length, results), recordError };
 }
 
 async function webBundleSell(userId, body = {}, options = {}) {
@@ -55933,7 +57468,7 @@ async function webBundleSell(userId, body = {}, options = {}) {
 async function webBundleSellCore(userId, body = {}, options = {}, attempt = {}) {
   const backendStartedAt = Date.now();
   const store = await readWalletStore();
-  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
+  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup, { walletPublicKeys: body.walletPublicKeys });
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
   const percent = parsePercent(String(body.percent || "100"));
   const slippageBps = parseWebSlippage(body.slippageBps);
@@ -55944,7 +57479,9 @@ async function webBundleSellCore(userId, body = {}, options = {}, attempt = {}) 
   const submitStartedAt = Date.now();
   await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     try {
-      const sell = await sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, { userId });
+      const sell = await withExitSellLock(userId, wallet.publicKey, tokenMint, () => (
+        sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, { userId })
+      ));
       const outputLamports = BigInt(sell.outputLamports || 0);
       const feeLamports = BigInt(sell.feeLamports || 0);
       const netLamports = outputLamports > feeLamports ? outputLamports - feeLamports : 0n;
@@ -55981,15 +57518,24 @@ async function webBundleSellCore(userId, body = {}, options = {}, attempt = {}) 
   const submitMs = Date.now() - submitStartedAt;
 
   const recordStartedAt = Date.now();
-  await recordTradeEvents(tradeEvents);
-  await audit("web_bundle_sell", {
-    userId,
-    tokenMint,
-    walletCount: wallets.length,
-    successCount: tradeEvents.length,
-    percent,
-    slippageBps
-  });
+  let recordError = "";
+  try {
+    await recordTradeEvents(tradeEvents);
+  } catch (error) {
+    recordError = `Trade history: ${friendlyError(error)}`;
+  }
+  try {
+    await audit("web_bundle_sell", {
+      userId,
+      tokenMint,
+      walletCount: wallets.length,
+      successCount: tradeEvents.length,
+      percent,
+      slippageBps
+    });
+  } catch (error) {
+    recordError = [recordError, `Audit: ${friendlyError(error)}`].filter(Boolean).join("; ");
+  }
   const recordMs = Date.now() - recordStartedAt;
   const backendMs = Date.now() - backendStartedAt;
 
@@ -56004,6 +57550,7 @@ async function webBundleSellCore(userId, body = {}, options = {}, attempt = {}) 
   result.manualSellAttemptId = attempt.manualSellAttemptId || "";
   result.manualSellTiming = manualSellTiming;
   result.status = tradeEvents.length ? "SUBMITTED" : "FAILED";
+  result.recordError = recordError;
   await recordManualSellTimingEvent({
     action: "manual-sell-backend",
     manualSellAttemptId: attempt.manualSellAttemptId || "",
@@ -58079,7 +59626,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
     status,
     tokenMint: tokenMint ? shortMint(tokenMint) : "",
     hasImage: Boolean(imageDataUrl)
-  });
+  }).catch(() => {});
   await upsertPumpLaunchAttempt({
     id: launchAttemptId,
     userId,
@@ -58114,7 +59661,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
 
 async function webCreateLaunchWatch(userId, body = {}) {
   const store = await readWalletStore();
-  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
+  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup, { walletPublicKeys: body.walletPublicKeys });
   const ticker = cleanTickerSymbol(String(body.ticker || ""));
   const amountSol = parsePositiveNumber(String(body.amountSol || ""));
   const sellDelayInput = firstString(body.sellDelay, body.sellDelaySeconds);
@@ -58136,12 +59683,18 @@ async function webCreateLaunchWatch(userId, body = {}) {
     walletTakeProfitTargets,
     walletStopLossTargets
   });
+  const watchKey = durableTradeWatchKey([
+    userId, "manual_launch_snipe", ticker,
+    ...wallets.map((wallet) => wallet.publicKey).sort(),
+    amountSol, sellDelaySeconds, takeProfitPct, stopLossPct, slippageBps
+  ]);
   const plan = {
     id: crypto.randomUUID(),
     status: "launch_watch",
     userId,
     chatId: null,
     source: "manual_launch_snipe",
+    watchKey,
     launchTicker: ticker,
     walletSelector: wallets.map((wallet) => wallet.label).join(", "),
     amountSol,
@@ -58176,10 +59729,8 @@ async function webCreateLaunchWatch(userId, body = {}) {
     results: [`Watching for ticker $${ticker}`]
   };
 
-  const plans = await readTradePlans();
-  plans.plans.push(plan);
-  await writeTradePlans(plans);
-  await audit("web_create_manual_launch_snipe", {
+  const storedWatch = await addUniqueActiveTradeWatch(plan, ["launch_watch"]);
+  if (storedWatch.created) await audit("web_create_manual_launch_snipe", {
     userId,
     planId: plan.id,
     ticker,
@@ -58193,28 +59744,34 @@ async function webCreateLaunchWatch(userId, body = {}) {
     walletTakeProfitTargets,
     walletStopLossTargets,
     slippageBps
-  });
+  }).catch(() => {});
   void refreshSnipeWatchTickers(); // arm the real-time onCreation sniper instantly
   setTimeout(() => void processTradePlans().catch((error) => {
     console.error("Web manual launch immediate scan failed:", error.message);
   }), 250);
 
-  return webLaunchWatchRow(plan);
+  return webLaunchWatchRow(storedWatch.plan);
 }
 
 async function webCreateWalletLaunchSnipe(userId, body = {}) {
   const chain = normalizeWalletLaunchChain(body.chain);
   const launchWallet = normalizeWalletLaunchAddress(firstString(body.launchWallet, body.copyWallet, body.wallet, body.deployer), chain);
   const store = await readWalletStore();
-  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
+  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup, { walletPublicKeys: body.walletPublicKeys });
   const amount = parsePositiveNumber(String(firstString(body.amount, body.amountSol, body.amountEth, "")));
   const sellDelaySeconds = parseOptionalSellDelaySeconds(firstString(body.sellDelay, body.sellDelaySeconds, chain === "robinhood" ? "0" : "5"));
   const sellPercent = parsePercent(String(body.sellPercent || "100"));
-  const takeProfitPct = parseTakeProfitPercent(String(body.takeProfitPct || (chain === "robinhood" ? "25" : "40")));
-  const stopLossPct = parseOptionalTriggerPercent(String(body.stopLossPct || "8"));
+  const takeProfitLadder = chain === "solana" ? parseWebTakeProfitLadder(body.takeProfitLadder) : [];
+  const takeProfitPct = takeProfitLadder.length
+    ? takeProfitLadder[0].pct
+    : parseTakeProfitPercent(firstString(body.takeProfitPct, chain === "robinhood" ? "25" : "40"));
+  const stopLossPct = parseOptionalTriggerPercent(firstString(body.stopLossPct, "8"));
+  const trailingStopPct = chain === "solana" ? Math.max(0, Math.min(95, Number(body.trailingStopPct) || 0)) : 0;
+  const trailingActivatePct = trailingStopPct > 0 ? Math.max(trailingStopPct, Number(body.trailingActivatePct) || trailingStopPct) : 0;
   const loopCount = parseLoopCount(String(body.loopCount || "1"));
   const loopDelaySeconds = parseLoopDelaySeconds(String(body.loopDelay || body.loopDelaySeconds || "0"));
   const slippageBps = parseWebSlippage(body.slippageBps || (chain === "robinhood" ? 400 : PUMPSNIPE_SLIPPAGE_BPS));
+  const maxMatches = Math.max(0, Math.min(100, Number.parseInt(body.maxMatches || "0", 10) || 0));
   const walletIndexes = wallets.map((wallet, index) => Number(wallet.webIndex || index + 1));
   const walletTakeProfitTargets = chain === "solana" ? parseWebWalletTakeProfitTargets(body, walletIndexes) : null;
   const walletStopLossTargets = chain === "solana" ? parseWebWalletStopLossTargets(body, walletIndexes) : null;
@@ -58223,9 +59780,17 @@ async function webCreateWalletLaunchSnipe(userId, body = {}) {
     takeProfitPct,
     stopLossPct,
     walletTakeProfitTargets,
-    walletStopLossTargets
+    walletStopLossTargets,
+    takeProfitLadder,
+    trailingStopPct
   });
   const automationPermission = await requireWebAutomationPermission(userId, "Wallet Launch Snipe automation");
+  const watchKey = durableTradeWatchKey([
+    userId, "wallet_launch_snipe", chain, launchWallet,
+    ...wallets.map((wallet) => wallet.publicKey).sort(),
+    amount, sellDelaySeconds, sellPercent, takeProfitPct, stopLossPct,
+    JSON.stringify(takeProfitLadder), trailingStopPct, slippageBps
+  ]);
   const initialSeen = [];
   if (chain === "solana") {
     const recent = recentLaunchers.get(launchWallet);
@@ -58244,9 +59809,12 @@ async function webCreateWalletLaunchSnipe(userId, body = {}) {
     userId,
     chatId: null,
     source: "wallet_launch_snipe",
+    watchKey,
     chain,
     launchWallet,
     walletLaunchSnipe: true,
+    maxMatches,
+    matchCount: 0,
     walletSelector: String(body.walletGroup || "").trim()
       ? `group:${String(body.walletGroup).trim()}`
       : walletIndexes.join(","),
@@ -58260,9 +59828,12 @@ async function webCreateWalletLaunchSnipe(userId, body = {}) {
     loopDelaySeconds,
     takeProfitPct,
     stopLossPct,
-    takeProfitMode: walletTakeProfitTargets ? "wallets" : "single",
+    takeProfitMode: takeProfitLadder.length ? "ladder" : (walletTakeProfitTargets ? "wallets" : "single"),
     stopLossMode: walletStopLossTargets ? "wallets" : "single",
-    takeProfitLadder: [],
+    takeProfitLadder,
+    trailingStopPct,
+    trailingActivatePct,
+    breakEvenAfterTp1: chain === "solana" && cleanLaunchBoolean(body.breakEvenAfterTp1),
     autoBundle: false,
     slippageBps,
     automationPermission,
@@ -58288,10 +59859,8 @@ async function webCreateWalletLaunchSnipe(userId, body = {}) {
     ]
   };
 
-  const plans = await readTradePlans();
-  plans.plans.push(plan);
-  await writeTradePlans(plans);
-  await audit("web_create_wallet_launch_snipe", {
+  const storedWatch = await addUniqueActiveTradeWatch(plan, ["wallet_launch_watch"]);
+  if (storedWatch.created) await audit("web_create_wallet_launch_snipe", {
     userId,
     planId: plan.id,
     chain,
@@ -58304,12 +59873,12 @@ async function webCreateWalletLaunchSnipe(userId, body = {}) {
     loopCount,
     loopDelaySeconds,
     slippageBps
-  });
+  }).catch(() => {});
   void refreshWalletLaunchWatchCreators();
   setTimeout(() => void processTradePlans().catch((error) => {
     console.error("Web wallet launch snipe immediate scan failed:", error.message);
   }), 300);
-  return webLaunchWatchRow(plan);
+  return webLaunchWatchRow(storedWatch.plan);
 }
 
 async function webLaunchWatches(userId) {
@@ -58326,22 +59895,20 @@ async function webLaunchWatches(userId) {
 }
 
 async function webCancelLaunchWatch(userId, planId) {
-  const store = await readTradePlans();
-  const plan = store.plans.find((item) => item.id === String(planId || "") && String(item.userId) === String(userId));
-  if (!plan) {
-    throw new Error("Launch watch not found.");
-  }
-  if (plan.status !== "launch_watch" && plan.status !== "wallet_launch_watch" && plan.status !== "copy_wallet_watch") {
-    throw new Error("This watch is no longer scanning.");
-  }
-
-  plan.status = "canceled";
-  plan.canceledAt = new Date().toISOString();
-  plan.results = appendLimited([...(plan.results || []), "Canceled from web panel."]);
-  await writeTradePlans(store);
+  const plan = await mutateTradePlans((store) => {
+    const row = store.plans.find((item) => item.id === String(planId || "") && String(item.userId) === String(userId));
+    if (!row) throw new Error("Launch watch not found.");
+    if (row.status !== "launch_watch" && row.status !== "wallet_launch_watch" && row.status !== "copy_wallet_watch") {
+      throw new Error("This watch is no longer scanning.");
+    }
+    row.status = "canceled";
+    row.canceledAt = new Date().toISOString();
+    row.results = appendLimited([...(row.results || []), "Canceled from web panel."]);
+    return row;
+  });
   void refreshSnipeWatchTickers(); // drop it from the real-time sniper set
   void refreshWalletLaunchWatchCreators();
-  await audit("web_cancel_manual_launch_snipe", { userId, planId: plan.id, ticker: plan.launchTicker, launchWallet: plan.launchWallet || "", copyWallet: plan.copyWallet || "", chain: plan.chain || "" });
+  await audit("web_cancel_manual_launch_snipe", { userId, planId: plan.id, ticker: plan.launchTicker, launchWallet: plan.launchWallet || "", copyWallet: plan.copyWallet || "", chain: plan.chain || "" }).catch(() => {});
   return webLaunchWatchRow(plan);
 }
 
@@ -58426,8 +59993,21 @@ function webLaunchWatchRow(plan) {
 
 function webSelectedWallets(store, userId, walletIndexes, walletGroup = "", options = {}) {
   const ownerWallets = walletsForOwner(store, userId);
+  const frozenPublicKeys = Array.isArray(options.walletPublicKeys)
+    ? uniqueStrings(options.walletPublicKeys.map((value) => String(value || "").trim()).filter(Boolean))
+    : [];
   const group = String(walletGroup || "").trim().toLowerCase();
-  const indexes = group
+  const indexes = frozenPublicKeys.length
+    ? frozenPublicKeys.map((publicKey) => {
+      const index = ownerWallets.findIndex((wallet) => String(wallet.publicKey) === publicKey);
+      if (index < 0) {
+        const error = new Error("A selected wallet was removed or changed. Refresh and stage the action again; no order was sent.");
+        error.statusCode = 409;
+        throw error;
+      }
+      return index + 1;
+    })
+    : group
     ? ownerWallets
       .map((wallet, index) => ({ wallet, index: index + 1 }))
       .filter(({ wallet }) => {
@@ -59973,7 +61553,7 @@ async function webKolDumpStats(kolId = "", options = {}) {
 
 async function webCreateKolEntry(userId, body = {}) {
   const store = await readWalletStore();
-  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
+  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup, { walletPublicKeys: body.walletPublicKeys });
   return webCreateManagedBuyPlan(userId, wallets, body, {
     source: "kol_tracker",
     label: "KOL copy plan",
@@ -59992,11 +61572,14 @@ async function webCreateKolCopyWallet(userId, body = {}) {
 
   const copyWallet = parsePublicKey(String(body.copyWallet || body.wallet || "")).toBase58();
   const store = await readWalletStore();
-  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
+  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup, { walletPublicKeys: body.walletPublicKeys });
   const amountSol = parsePositiveNumber(String(body.amountSol || ""));
   const sellDelaySeconds = parseOptionalSellDelaySeconds(firstString(body.sellDelay, body.sellDelaySeconds, "5"));
-  const takeProfitPct = parseTakeProfitPercent(String(body.takeProfitPct || "25"));
-  const stopLossPct = parseOptionalTriggerPercent(String(body.stopLossPct || "8"));
+  const takeProfitLadder = parseWebTakeProfitLadder(body.takeProfitLadder);
+  const takeProfitPct = takeProfitLadder.length ? takeProfitLadder[0].pct : parseTakeProfitPercent(firstString(body.takeProfitPct, "25"));
+  const stopLossPct = parseOptionalTriggerPercent(firstString(body.stopLossPct, "8"));
+  const trailingStopPct = Math.max(0, Math.min(95, Number(body.trailingStopPct) || 0));
+  const trailingActivatePct = trailingStopPct > 0 ? Math.max(trailingStopPct, Number(body.trailingActivatePct) || trailingStopPct) : 0;
   const loopCount = parseLoopCount(String(body.loopCount || "1"));
   const loopDelaySeconds = parseLoopDelaySeconds(String(body.loopDelay || body.loopDelaySeconds || "0"));
   const slippageBps = parseWebSlippage(body.slippageBps || 400);
@@ -60008,8 +61591,17 @@ async function webCreateKolCopyWallet(userId, body = {}) {
     takeProfitPct,
     stopLossPct,
     walletTakeProfitTargets,
-    walletStopLossTargets
+    walletStopLossTargets,
+    takeProfitLadder,
+    trailingStopPct
   });
+  const automationPermission = await requireWebAutomationPermission(userId, "Copy Wallet automation");
+  const watchKey = durableTradeWatchKey([
+    userId, "kol_copy_wallet", copyWallet,
+    ...wallets.map((wallet) => wallet.publicKey).sort(),
+    amountSol, sellDelaySeconds, takeProfitPct, stopLossPct,
+    JSON.stringify(takeProfitLadder), trailingStopPct, slippageBps
+  ]);
   const initialSignals = await fetchKolWalletTradeSignals(copyWallet, "fresh", {
     limit: 12,
     cacheTtlMs: Math.max(0, Math.min(CONFIG.kolCopyScanIntervalMs - 500, CONFIG.solanaTrackerKolCacheTtlMs))
@@ -60021,6 +61613,7 @@ async function webCreateKolCopyWallet(userId, body = {}) {
     userId,
     chatId: null,
     source: "kol_copy_wallet",
+    watchKey,
     copyWallet,
     walletSelector: String(body.walletGroup || "").trim()
       ? `group:${String(body.walletGroup).trim()}`
@@ -60036,11 +61629,15 @@ async function webCreateKolCopyWallet(userId, body = {}) {
     loopDelaySeconds,
     takeProfitPct,
     stopLossPct,
-    takeProfitMode: walletTakeProfitTargets ? "wallets" : "single",
+    takeProfitMode: takeProfitLadder.length ? "ladder" : (walletTakeProfitTargets ? "wallets" : "single"),
     stopLossMode: walletStopLossTargets ? "wallets" : "single",
-    takeProfitLadder: [],
+    takeProfitLadder,
+    trailingStopPct,
+    trailingActivatePct,
+    breakEvenAfterTp1: cleanLaunchBoolean(body.breakEvenAfterTp1),
     autoBundle: false,
     slippageBps,
+    automationPermission,
     seenTokenMints: uniqueStrings(initialSignals.map((row) => row.tokenMint).filter(Boolean)).slice(-80),
     createdAt: new Date().toISOString(),
     lastScanAt: null,
@@ -60062,10 +61659,9 @@ async function webCreateKolCopyWallet(userId, body = {}) {
     ]
   };
 
-  const plans = await readTradePlans();
-  plans.plans.push(plan);
-  await writeTradePlans(plans);
-  await audit("web_create_kol_copy_wallet_watch", {
+  const storedWatch = await addUniqueActiveTradeWatch(plan, ["copy_wallet_watch"]);
+  const resultPlan = storedWatch.plan;
+  if (storedWatch.created) await audit("web_create_kol_copy_wallet_watch", {
     userId,
     planId: plan.id,
     copyWallet,
@@ -60079,13 +61675,13 @@ async function webCreateKolCopyWallet(userId, body = {}) {
     loopCount,
     loopDelaySeconds,
     slippageBps
-  });
+  }).catch(() => {});
   setTimeout(() => void processTradePlans().catch((error) => {
     console.error("Web KOL copy-wallet watch failed:", error.message);
   }), 1_000);
 
   return {
-    id: plan.id,
+    id: resultPlan.id,
     type: "kol_copy_wallet",
     copyWallet,
     shortWallet: shortMint(copyWallet),
@@ -60093,14 +61689,14 @@ async function webCreateKolCopyWallet(userId, body = {}) {
     amountSol,
     takeProfitPct,
     stopLossPct,
-    takeProfitSummary: formatPlanTakeProfitSummary(plan),
-    stopLossSummary: formatPlanStopLossSummary(plan),
+    takeProfitSummary: formatPlanTakeProfitSummary(resultPlan),
+    stopLossSummary: formatPlanStopLossSummary(resultPlan),
     sellDelaySeconds,
     loopCount,
     loopDelaySeconds,
     slippageBps,
     scanIntervalMs: CONFIG.kolCopyScanIntervalMs,
-    results: plan.results,
+    results: resultPlan.results,
     message: `Copy Wallet armed for ${shortMint(copyWallet)}. It ignores already-seen buys and watches for the next new buy.`
   };
 }
@@ -64978,7 +66574,7 @@ function enrichBuyError(error, details) {
     `reserve ${CONFIG.buyReserveSol}`,
     `needs about ${lamportsToSol(details.recommendedLamports)}`
   ].join(", ");
-  return new Error(`Buy failed after funding check: ${base} (${debug}).`);
+  return wrapTradeExecutionError(error, `Buy failed after funding check: ${base} (${debug}).`);
 }
 
 function lamportsToSol(lamports) {

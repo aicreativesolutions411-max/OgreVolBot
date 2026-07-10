@@ -57,6 +57,17 @@ test("server sell dedup honors the web terminal's tradeAttemptId", () => {
   assert.match(body, /LockService\.withLock/);
 });
 
+test("manual sell keeps an outcome-unknown tombstone for 24 hours", () => {
+  const body = functionBody(serverSource, "runManualSellCriticalAttempt");
+  assert.match(body, /cached\?\.ambiguousError[\s\S]*manualSellAmbiguousReplayError\(cached\)/);
+  assert.match(body, /duplicate\?\.ambiguousError[\s\S]*manualSellAmbiguousReplayError\(duplicate\)/);
+  assert.match(body, /catch \(error\) \{[\s\S]*error\?\.tradeSubmissionAmbiguous[\s\S]*ambiguousError:/);
+  assert.match(body, /idemResultSet\(resultKey,[\s\S]*24 \* 60 \* 60_000\)/);
+  const replay = functionBody(serverSource, "manualSellAmbiguousReplayError");
+  assert.match(replay, /tradeSubmissionAmbiguous = true/);
+  assert.match(replay, /partialHashes/);
+});
+
 test("buy path is idempotent: webTradeBuy wraps webTradeBuyCore via runIdempotentMoneyOp", () => {
   // The real buy logic moved into a *Core fn; the public fn delegates to the shared idempotency wrapper.
   assert.match(serverSource, /async function webTradeBuyCore\(userId, body = \{\}\) \{/);
@@ -235,7 +246,7 @@ test("Wallet Launch Snipe is launch-only and supports Solana creators plus Robin
   assert.doesNotMatch(pumpStreamBlock.match(/onTrade:[^\n]+/)?.[0] || "", /maybeWalletLaunchSnipe/);
   assert.match(functionBody(serverSource, "normalizeWalletLaunchChain"), /robinhood/);
   assert.match(functionBody(serverSource, "webCreateWalletLaunchSnipe"), /amountEth/);
-  assert.match(functionBody(serverSource, "webCancelLaunchWatch"), /plan\.status !== "launch_watch" && plan\.status !== "wallet_launch_watch" && plan\.status !== "copy_wallet_watch"/);
+  assert.match(functionBody(serverSource, "webCancelLaunchWatch"), /row\.status !== "launch_watch" && row\.status !== "wallet_launch_watch" && row\.status !== "copy_wallet_watch"/);
   assert.match(functionBody(serverSource, "webCancelLaunchWatch"), /refreshWalletLaunchWatchCreators/);
   assert.match(functionBody(serverSource, "webLaunchWatches"), /plan\.status === "copy_wallet_watch"/);
   assert.match(functionBody(serverSource, "webLaunchWatchRow"), /type: "kol_copy_wallet"/);
@@ -244,7 +255,7 @@ test("Wallet Launch Snipe is launch-only and supports Solana creators plus Robin
   assert.match(functionBody(serverSource, "executeRhWalletLaunchSnipe"), /webRhBundleCore/);
   assert.match(functionBody(serverSource, "executeRhWalletLaunchSnipe"), /webRhArmGuard/);
   assert.doesNotMatch(functionBody(serverSource, "executeRhWalletLaunchSnipe"), /webCreateManagedBuyPlan/);
-  assert.match(functionBody(serverSource, "processWalletLaunchWatchPlan"), /executeRhWalletLaunchSnipe[\s\S]*executeSolWalletLaunchSnipe[\s\S]*plan\.seenLaunches = uniqueStrings/);
+  assert.match(functionBody(serverSource, "processWalletLaunchWatchPlan"), /plan\.seenLaunches = uniqueStrings[\s\S]*executeRhWalletLaunchSnipe[\s\S]*executeSolWalletLaunchSnipe/);
   assert.match(appSource, /Wallet Launch Snipe/);
   assert.match(appSource, /\["walletLaunch", "Wallet Snipe"\]/);
   assert.match(functionBody(appSource, "renderTabs"), /state\.activeTab === "walletLaunch"[\s\S]*launchHtml\(\{ walletLaunchFirst: true \}\)/);
@@ -2044,6 +2055,12 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   const ticker = functionBody(serverSource, "resolveTickerToScanTarget");
   assert.doesNotMatch(ticker, /Promise\.all/);                       // Solana tickers do not wait on the slower RH fallback
   assert.match(ticker, /if \(sol\) return sol/);
+
+  const xLogo = functionBody(serverSource, "xCoinLogoLive");
+  assert.match(xLogo, /Number\(budgetMs\) \|\| 3_500/); // a cold PFP host cannot consume the whole reply budget
+  assert.match(xLogo, /const deadline = Date\.now\(\)/);
+  assert.match(xLogo, /Promise\.any/);                   // deduped candidates race instead of timing out serially
+  assert.match(xLogo, /facts never wait on a slow PFP/);
 });
 
 test("Telegram scan throttling is per token and partial reads still render", () => {
@@ -2118,7 +2135,10 @@ test("X DM terminal: link from Telegram, scan/settings/buy/sell over official DM
   assert.match(serverSource, /signXDmMenuToken\(CONFIG\.appSecret/);
   assert.match(serverSource, /verifyXDmMenuToken\(CONFIG\.appSecret/);
   assert.match(serverSource, /pathname === "\/api\/x-dm\/menu"/);
-  assert.match(serverSource, /action !== "prepare_buy" && action !== "prepare_sell"/);
+  const xDmMenu = functionBody(serverSource, "xDmMenuApi");
+  for (const action of ["prepare_buy", "prepare_sell", "prepare_bundle_buy", "prepare_bundle_sell", "prepare_copy_wallet", "prepare_copy_launch", "prepare_automation"]) {
+    assert.match(xDmMenu, new RegExp(`"${action}"`));
+  }
   assert.match(serverSource, /nothing has traded yet/i);
   assert.doesNotMatch(functionBody(serverSource, "xDmHelpText"), /Reply menu:|Buy last coin|Sell help/);
   assert.match(serverSource, /parseXDmBuySlotCommand\(text\)/);
@@ -2154,7 +2174,9 @@ test("X DM terminal: link from Telegram, scan/settings/buy/sell over official DM
   assert.match(serverSource, /state\.seen\[event\.id\] = Date\.now\(\)/);
   assert.match(serverSource, /state\.failures\[event\.id\]/);
   assert.match(serverSource, /if \(result\?\.ok === false\) throw/);
-  assert.match(serverSource, /setInterval\(\(\) => \{ void xDmPollTick\(\); \}, xDmPollMs\)/);
+  assert.match(serverSource, /const scheduleXDmPoll = \(delayMs\) =>/);
+  assert.match(serverSource, /scheduleXDmPoll\(active \? xDmActivePollMs : xDmIdlePollMs\)/);
+  assert.doesNotMatch(serverSource, /setInterval\(\(\) => \{ void xDmPollTick\(\);/);
 });
 
 test("X growth engine: broadcast-gated proactive posts + receipts + KOL responder + scorecard, tracking always on", () => {

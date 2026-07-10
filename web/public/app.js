@@ -1,4 +1,4 @@
-﻿import {
+import {
   canSubmitPerpOrder,
   createPerpsProvider,
   ogreTekRouteStatus,
@@ -13788,6 +13788,7 @@ function readTradePlanForm() {
 async function createTradePlan() {
   try {
     const payload = readTradePlanForm();
+    payload.tradeAttemptId = createClientAttemptId("trade-plan");
     setTradeStatus("Buying and arming managed exit...");
     const data = await api("/api/web/trade/plan", {
       method: "POST",
@@ -13830,6 +13831,7 @@ function setVolumeStatus(message) {
 async function createVolumePlan() {
   try {
     const payload = readVolumeForm();
+    payload.tradeAttemptId = createClientAttemptId("volume-plan");
     setVolumeStatus("Buying and arming plan...");
     const data = await api("/api/web/volume/plan", {
       method: "POST",
@@ -14295,6 +14297,7 @@ async function executeBundle(action) {
 async function executeBundlePlan() {
   try {
     const payload = readBundlePlanForm();
+    payload.tradeAttemptId = createClientAttemptId("bundle-plan");
     setBundleStatus("Buying and arming bundle exits...");
     const data = await api("/api/web/bundle/plan", {
       method: "POST",
@@ -15176,6 +15179,7 @@ async function quickPresetBundle(tokenMint, presetOverride = null) {
     await sleep(0);
     await ensureWebAccount(null, "Opening secure web profile...");
     const payload = {
+      tradeAttemptId: createClientAttemptId("quick-preset-bundle"),
       tokenMint,
       walletIndexes: (preset.walletIndexes || []).filter((index) => state.wallets.some((wallet) => String(wallet.index) === String(index))),
       walletGroup: preset.walletGroup || "",

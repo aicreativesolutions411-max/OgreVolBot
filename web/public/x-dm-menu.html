@@ -5,555 +5,1853 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
   <meta name="referrer" content="no-referrer">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; object-src 'none'">
-  <title>SlimeWire X DM Trade Pad</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://ogrevolbot.onrender.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'; upgrade-insecure-requests">
+  <meta name="theme-color" content="#060a07">
+  <title>SlimeWire X Trade Pad</title>
+  <script src="/config.js"></script>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #040704;
-      --panel: #0a100b;
-      --panel-2: #0d160f;
+      --bg: #050806;
+      --panel: rgba(10, 17, 11, .94);
+      --panel-2: #0e1710;
+      --panel-3: #111d13;
       --green: #72ff23;
-      --green-soft: #baff82;
-      --text: #efffe9;
-      --muted: #97aa94;
-      --border: rgba(114, 255, 35, .19);
+      --green-soft: #bdff91;
+      --green-deep: #183b12;
+      --text: #f0ffeb;
+      --muted: #91a58d;
+      --muted-2: #657563;
+      --border: rgba(114, 255, 35, .17);
       --border-strong: rgba(114, 255, 35, .42);
-      --danger: #ff9b9b;
-      --danger-bg: rgba(255, 92, 92, .08);
-      --success-bg: rgba(114, 255, 35, .09);
-      --shadow: 0 24px 70px rgba(0, 0, 0, .42);
+      --danger: #ffaaaa;
+      --danger-bg: rgba(255, 91, 91, .09);
+      --warning: #ffd788;
+      --warning-bg: rgba(255, 189, 72, .08);
+      --shadow: 0 25px 80px rgba(0, 0, 0, .48);
+      --radius: 18px;
     }
 
     * { box-sizing: border-box; }
-
-    html { min-height: 100%; background: var(--bg); }
-
+    html { min-height: 100%; background: var(--bg); scroll-behavior: smooth; }
     body {
       min-height: 100vh;
       margin: 0;
-      padding: max(18px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
-      background:
-        radial-gradient(700px 360px at 50% -100px, rgba(114, 255, 35, .15), transparent 70%),
-        linear-gradient(180deg, #050805 0%, var(--bg) 100%);
+      padding:
+        max(12px, env(safe-area-inset-top))
+        max(12px, env(safe-area-inset-right))
+        max(30px, env(safe-area-inset-bottom))
+        max(12px, env(safe-area-inset-left));
+      overflow-x: hidden;
       color: var(--text);
+      background:
+        radial-gradient(850px 480px at 50% -180px, rgba(114, 255, 35, .18), transparent 70%),
+        #050806 url("/assets/slimewire/svg/terminal-grid-bg.svg") center top / 1100px auto repeat-y;
       font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       line-height: 1.45;
       -webkit-font-smoothing: antialiased;
     }
 
-    button, input { font: inherit; }
-    button, a { -webkit-tap-highlight-color: transparent; }
+    button, input, select, textarea { font: inherit; }
+    button, a, select { -webkit-tap-highlight-color: transparent; }
+    button { border: 0; }
     [hidden] { display: none !important; }
+    .shell { width: min(100%, 1120px); margin: 0 auto; }
 
-    .shell { width: min(100%, 620px); margin: 0 auto; }
-
-    .brand {
+    .topbar {
       display: flex;
+      min-height: 50px;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      margin-bottom: 18px;
+      margin-bottom: 12px;
     }
-
-    .wordmark {
-      color: var(--text);
-      font-size: 18px;
-      font-weight: 950;
-      letter-spacing: -.035em;
-      text-decoration: none;
-    }
-
-    .wordmark span { color: var(--green); }
-
-    .live {
+    .brand-link { display: inline-flex; align-items: center; text-decoration: none; }
+    .brand-link img { display: block; width: min(178px, 48vw); height: auto; }
+    .session-tools { display: flex; align-items: center; gap: 8px; }
+    .session-pill {
       display: inline-flex;
       align-items: center;
       gap: 7px;
       color: var(--green-soft);
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 900;
-      letter-spacing: .1em;
+      letter-spacing: .09em;
       text-transform: uppercase;
     }
-
-    .live::before {
+    .session-pill::before {
       width: 7px;
       height: 7px;
       border-radius: 50%;
       background: var(--green);
-      box-shadow: 0 0 13px rgba(114, 255, 35, .9);
+      box-shadow: 0 0 14px rgba(114, 255, 35, .9);
       content: "";
     }
+    .text-button {
+      min-height: 38px;
+      padding: 0 11px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--muted);
+      background: rgba(4, 8, 5, .72);
+      font-size: 11px;
+      font-weight: 850;
+      cursor: pointer;
+    }
 
-    .hero { margin: 0 0 18px; }
-    .eyebrow { margin: 0 0 7px; color: var(--green); font-size: 12px; font-weight: 900; letter-spacing: .11em; text-transform: uppercase; }
-    h1 { margin: 0; font-size: clamp(29px, 9vw, 42px); line-height: 1.06; letter-spacing: -.045em; }
-    .hero p { margin: 10px 0 0; color: var(--muted); font-size: 14px; }
-
-    .card {
-      margin-top: 12px;
-      padding: 17px;
+    .hero {
+      position: relative;
+      min-height: 232px;
+      padding: 24px 20px 20px;
       overflow: hidden;
       border: 1px solid var(--border);
-      border-radius: 18px;
-      background: linear-gradient(180deg, rgba(114, 255, 35, .035), transparent 78%), var(--panel);
+      border-radius: 24px;
+      background:
+        linear-gradient(105deg, rgba(5, 9, 6, .98) 0%, rgba(5, 9, 6, .89) 57%, rgba(5, 9, 6, .42) 100%),
+        url("/assets/slimewire/chart-bg.webp") center / cover;
       box-shadow: var(--shadow);
+      isolation: isolate;
     }
-
-    .token-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-    .label { display: block; margin-bottom: 5px; color: var(--muted); font-size: 11px; font-weight: 900; letter-spacing: .09em; text-transform: uppercase; }
-    .token-title { margin: 0; font-size: 21px; line-height: 1.15; letter-spacing: -.025em; }
-
-    .chain {
-      flex: 0 0 auto;
-      padding: 5px 8px;
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      color: var(--green-soft);
-      background: rgba(114, 255, 35, .05);
+    .hero::after {
+      position: absolute;
+      inset: auto -80px -110px auto;
+      width: 360px;
+      height: 280px;
+      border-radius: 50%;
+      background: rgba(114, 255, 35, .11);
+      filter: blur(45px);
+      content: "";
+      z-index: -1;
+    }
+    .hero-copy { position: relative; z-index: 2; max-width: 650px; }
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--green);
       font-size: 11px;
-      font-weight: 900;
+      font-weight: 950;
+      letter-spacing: .14em;
+      text-transform: uppercase;
     }
-
-    .ca-row {
+    h1 { max-width: 650px; margin: 0; font-size: clamp(31px, 8vw, 54px); line-height: 1.01; letter-spacing: -.052em; }
+    .hero-copy > p:last-of-type { max-width: 620px; margin: 12px 0 0; color: #afbea9; font-size: 13px; }
+    .hero-ogre {
+      position: absolute;
+      right: -36px;
+      bottom: -5px;
+      width: 260px;
+      max-height: 225px;
+      object-fit: contain;
+      object-position: bottom right;
+      opacity: .58;
+      filter: saturate(.85) contrast(1.08);
+      z-index: 1;
+      pointer-events: none;
+    }
+    .token-strip {
+      position: relative;
+      z-index: 3;
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 9px;
+      width: min(100%, 620px);
       align-items: center;
-      margin-top: 14px;
-      padding: 10px 10px 10px 12px;
-      border: 1px solid rgba(114, 255, 35, .1);
-      border-radius: 12px;
-      background: rgba(0, 0, 0, .2);
+      margin-top: 18px;
+      padding: 10px 10px 10px 13px;
+      border: 1px solid rgba(114, 255, 35, .21);
+      border-radius: 13px;
+      background: rgba(0, 0, 0, .42);
+      backdrop-filter: blur(10px);
     }
-
-    .ca {
-      min-width: 0;
+    .token-main { min-width: 0; }
+    .token-name { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 900; }
+    .chain-badge {
+      padding: 3px 6px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--green-soft);
+      font-size: 9px;
+      letter-spacing: .08em;
+    }
+    .mint {
+      display: block;
+      margin-top: 2px;
       overflow: hidden;
-      color: #dfffd5;
-      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-      font-size: 12px;
+      color: var(--muted);
+      font: 11px/1.4 "SFMono-Regular", Consolas, monospace;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
 
-    .expiry { margin: 8px 2px 0; color: #71806f; font-size: 11px; }
-
-    .copy {
-      min-height: 36px;
-      padding: 0 11px;
-      border: 1px solid var(--border);
-      border-radius: 9px;
-      color: var(--green-soft);
-      background: rgba(114, 255, 35, .055);
-      font-size: 12px;
-      font-weight: 900;
-      cursor: pointer;
-    }
-
-    .facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
-    .fact { min-width: 0; padding: 10px; border-radius: 11px; background: rgba(255, 255, 255, .025); }
-    .fact b { display: block; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-
-    .card-title { margin: 0; font-size: 18px; letter-spacing: -.02em; }
-    .card-copy { margin: 5px 0 15px; color: var(--muted); font-size: 13px; }
-
-    .button-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
-
-    .action, .secondary, .link-button {
-      min-height: 50px;
-      border: 1px solid var(--border-strong);
-      border-radius: 12px;
-      color: #061004;
-      background: linear-gradient(180deg, #c6ff91, var(--green));
-      font-weight: 950;
-      cursor: pointer;
-      transition: transform .12s ease, filter .12s ease, opacity .12s ease;
-    }
-
-    .action:active, .secondary:active, .link-button:active, .copy:active { transform: translateY(1px); }
-    button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid rgba(186, 255, 130, .42); outline-offset: 2px; }
-    button:disabled, input:disabled { cursor: wait; opacity: .48; }
-
-    .action small { display: block; margin-top: 1px; font-size: 10px; font-weight: 800; opacity: .65; }
-
-    .sell-button {
-      color: var(--text);
-      background: rgba(114, 255, 35, .065);
-      border-color: var(--border);
-    }
-
-    .custom-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px; margin-top: 10px; }
-
-    .amount-wrap { position: relative; }
-    .amount-wrap input {
-      width: 100%;
-      min-height: 50px;
-      padding: 0 56px 0 13px;
-      border: 1px solid rgba(114, 255, 35, .2);
-      border-radius: 12px;
-      color: var(--text);
-      background: rgba(0, 0, 0, .25);
-      appearance: textfield;
-    }
-
-    .amount-wrap span { position: absolute; top: 50%; right: 13px; color: var(--muted); font-size: 12px; font-weight: 900; transform: translateY(-50%); }
-    .secondary { min-width: 92px; padding: 0 16px; color: var(--green-soft); background: rgba(114, 255, 35, .055); }
-
-    .notice {
+    .status {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 11px;
+      align-items: start;
       margin-top: 12px;
       padding: 13px 14px;
-      border: 1px solid rgba(255, 255, 255, .08);
-      border-radius: 12px;
-      color: #c6d2c2;
-      background: rgba(255, 255, 255, .025);
-      font-size: 12px;
-    }
-
-    .notice b { color: var(--text); }
-
-    .links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 12px; }
-    .link-button { display: grid; min-height: 48px; place-items: center; color: var(--green-soft); background: rgba(114, 255, 35, .045); text-decoration: none; }
-
-    .status {
-      margin-top: 12px;
-      padding: 14px;
       border: 1px solid var(--border);
       border-radius: 14px;
       color: #dfffd5;
-      background: rgba(114, 255, 35, .055);
-      font-size: 13px;
+      background: rgba(11, 19, 12, .96);
+      box-shadow: 0 12px 35px rgba(0, 0, 0, .25);
+      font-size: 12px;
     }
-
-    .status.loading::before {
-      display: inline-block;
-      width: 10px;
-      height: 10px;
-      margin-right: 9px;
-      border: 2px solid rgba(114, 255, 35, .3);
-      border-top-color: var(--green);
+    .status-icon {
+      display: grid;
+      width: 27px;
+      height: 27px;
+      place-items: center;
+      border: 1px solid var(--border);
       border-radius: 50%;
-      vertical-align: -1px;
-      animation: spin .75s linear infinite;
-      content: "";
+      color: #071005;
+      background: var(--green);
+      font-size: 13px;
+      font-weight: 950;
+    }
+    .status strong { display: block; margin-bottom: 2px; color: var(--text); font-size: 13px; }
+    .status.loading .status-icon { color: transparent; background: transparent; border: 2px solid rgba(114, 255, 35, .22); border-top-color: var(--green); animation: spin .72s linear infinite; }
+    .status.error { border-color: rgba(255, 120, 120, .3); color: var(--danger); background: var(--danger-bg); }
+    .status.error .status-icon { color: #240303; background: #ff8d8d; border-color: transparent; }
+    .status.warning { border-color: rgba(255, 210, 120, .28); color: var(--warning); background: var(--warning-bg); }
+    .status.warning .status-icon { color: #261b02; background: var(--warning); border-color: transparent; }
+    .status-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+
+    .x-link, .small-action, .primary, .secondary, .danger-button {
+      display: inline-flex;
+      min-height: 42px;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 0 14px;
+      border: 1px solid var(--border-strong);
+      border-radius: 11px;
+      color: #071005;
+      background: linear-gradient(180deg, #caff9e, var(--green));
+      font-weight: 950;
+      text-decoration: none;
+      cursor: pointer;
+      transition: transform .12s ease, filter .12s ease, opacity .12s ease;
+    }
+    .small-action { min-height: 34px; padding: 0 10px; font-size: 11px; }
+    .secondary { color: var(--green-soft); background: rgba(114, 255, 35, .055); }
+    .danger-button { color: var(--danger); border-color: rgba(255, 120, 120, .26); background: var(--danger-bg); }
+    .x-link:active, .small-action:active, .primary:active, .secondary:active, .danger-button:active, .tab:active { transform: translateY(1px); }
+    button:disabled, input:disabled, select:disabled, textarea:disabled { cursor: not-allowed; opacity: .45; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: 3px solid rgba(186, 255, 145, .42); outline-offset: 2px; }
+
+    .tabs {
+      position: sticky;
+      top: max(6px, env(safe-area-inset-top));
+      z-index: 20;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(70px, 1fr));
+      gap: 5px;
+      margin-top: 12px;
+      padding: 5px;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: rgba(6, 11, 7, .94);
+      box-shadow: 0 13px 38px rgba(0, 0, 0, .3);
+      backdrop-filter: blur(15px);
+      scrollbar-width: none;
+    }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab {
+      min-height: 49px;
+      padding: 5px 8px;
+      border-radius: 10px;
+      color: var(--muted);
+      background: transparent;
+      font-size: 11px;
+      font-weight: 900;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .tab img { display: block; width: 17px; height: 17px; margin: 0 auto 3px; opacity: .7; }
+    .tab[aria-selected="true"] { color: #071005; background: var(--green); }
+    .tab[aria-selected="true"] img { filter: brightness(0); opacity: 1; }
+
+    .view { margin-top: 12px; }
+    .layout { display: grid; gap: 12px; }
+    .card {
+      position: relative;
+      padding: 17px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: linear-gradient(180deg, rgba(114, 255, 35, .035), transparent 62%), var(--panel);
+      box-shadow: 0 16px 50px rgba(0, 0, 0, .27);
+    }
+    .card::after { position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 1px rgba(255, 255, 255, .025); content: ""; pointer-events: none; }
+    .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 11px; margin-bottom: 14px; }
+    .card-title { display: flex; align-items: center; gap: 9px; margin: 0; font-size: 18px; letter-spacing: -.025em; }
+    .card-title img { width: 21px; height: 21px; }
+    .card-copy { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .tiny { color: var(--muted-2); font-size: 10px; }
+    .security-note {
+      display: flex;
+      gap: 9px;
+      margin-top: 12px;
+      padding: 11px;
+      border: 1px solid rgba(255, 255, 255, .065);
+      border-radius: 11px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, .025);
+      font-size: 11px;
+    }
+    .security-note img { flex: 0 0 auto; width: 17px; height: 17px; }
+    .green { color: var(--green-soft); }
+    .danger-text { color: var(--danger); }
+
+    .field-grid { display: grid; gap: 10px; }
+    .field-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .field-grid.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .field { display: block; min-width: 0; }
+    .field.wide { grid-column: 1 / -1; }
+    .field > span {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin: 0 0 6px 2px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+    }
+    .field input, .field select, .field textarea {
+      width: 100%;
+      min-height: 47px;
+      padding: 0 12px;
+      border: 1px solid rgba(114, 255, 35, .17);
+      border-radius: 11px;
+      color: var(--text);
+      background: rgba(0, 0, 0, .28);
+      appearance: none;
+    }
+    .field textarea { min-height: 76px; padding-top: 11px; resize: vertical; }
+    .field select {
+      padding-right: 32px;
+      background-image:
+        linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+        linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+      background-position: calc(100% - 16px) 20px, calc(100% - 11px) 20px;
+      background-size: 5px 5px, 5px 5px;
+      background-repeat: no-repeat;
+    }
+    .amount-box { position: relative; }
+    .amount-box input { padding-right: 58px; }
+    .unit {
+      position: absolute;
+      right: 12px;
+      bottom: 15px;
+      color: var(--green-soft);
+      font-size: 10px;
+      font-weight: 950;
+    }
+    .button-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .button-row .primary { flex: 1 1 150px; }
+    .button-row .secondary { flex: 0 1 auto; }
+    .sell-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin-top: 12px; }
+    .sell-grid button { min-height: 43px; padding: 0 4px; }
+
+    .preset-rail { display: flex; gap: 8px; margin-top: 12px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
+    .preset-chip {
+      flex: 0 0 auto;
+      min-width: 112px;
+      min-height: 48px;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      color: var(--text);
+      background: rgba(114, 255, 35, .035);
+      text-align: left;
+      cursor: pointer;
+    }
+    .preset-chip[aria-pressed="true"] { border-color: var(--border-strong); background: rgba(114, 255, 35, .11); }
+    .preset-chip b { display: block; font-size: 11px; }
+    .preset-chip small { color: var(--muted); font-size: 9px; }
+    .selected-config {
+      margin-top: 9px;
+      color: var(--muted);
+      font-size: 10px;
     }
 
-    .status.error { border-color: rgba(255, 123, 123, .3); color: var(--danger); background: var(--danger-bg); }
-    .status.success { border-color: var(--border-strong); color: var(--text); background: var(--success-bg); }
-    .status.success strong { display: block; margin-bottom: 3px; color: var(--green-soft); font-size: 15px; }
+    .wallet-list { display: grid; gap: 8px; }
+    .wallet-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 11px;
+      border: 1px solid rgba(114, 255, 35, .11);
+      border-radius: 12px;
+      background: rgba(0, 0, 0, .19);
+    }
+    .wallet-row.active { border-color: var(--border-strong); background: rgba(114, 255, 35, .065); }
+    .wallet-icon { display: grid; width: 35px; height: 35px; place-items: center; border-radius: 10px; background: rgba(114, 255, 35, .08); }
+    .wallet-icon img { width: 19px; height: 19px; }
+    .wallet-copy { min-width: 0; }
+    .wallet-copy b, .wallet-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .wallet-copy b { font-size: 12px; }
+    .wallet-copy small { margin-top: 2px; color: var(--muted); font: 9px/1.3 "SFMono-Regular", Consolas, monospace; }
+    .wallet-actions { display: flex; align-items: center; gap: 7px; }
+    .wallet-pick { min-height: 32px; padding: 0 9px; border: 1px solid var(--border); border-radius: 9px; color: var(--green-soft); background: rgba(114, 255, 35, .045); font-size: 10px; font-weight: 900; cursor: pointer; }
+    .bundle-check { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 9px; cursor: pointer; }
+    .bundle-check input { width: 17px; height: 17px; accent-color: var(--green); }
+    .empty { padding: 18px; border: 1px dashed var(--border); border-radius: 12px; color: var(--muted); font-size: 12px; text-align: center; }
 
-    .recovery { margin-top: 12px; color: var(--muted); font-size: 13px; text-align: center; }
-    .recovery a { color: var(--green-soft); font-weight: 850; }
-    .foot { margin: 18px 4px 0; color: #71806f; font-size: 11px; text-align: center; }
+    .preset-list, .watch-list { display: grid; gap: 8px; margin-top: 12px; }
+    .preset-row, .watch-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 11px;
+      border: 1px solid rgba(114, 255, 35, .11);
+      border-radius: 11px;
+      background: rgba(0, 0, 0, .18);
+    }
+    .preset-row b, .watch-row b { display: block; font-size: 12px; }
+    .preset-row small, .watch-row small { display: block; margin-top: 2px; color: var(--muted); font-size: 9px; }
+    .row-actions { display: flex; gap: 6px; }
+
+    .permission {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 11px;
+      align-items: center;
+      padding: 13px;
+      border: 1px solid var(--border);
+      border-radius: 13px;
+      background: rgba(114, 255, 35, .045);
+    }
+    .permission b { display: block; font-size: 12px; }
+    .permission span { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
+    .permission.off { border-color: rgba(255, 210, 120, .22); background: var(--warning-bg); }
+
+    .recovery-panel {
+      margin-top: 12px;
+      padding: 13px;
+      border: 1px solid rgba(255, 210, 120, .28);
+      border-radius: 12px;
+      color: var(--warning);
+      background: var(--warning-bg);
+      font-size: 11px;
+    }
+    .recovery-panel b { display: block; margin-bottom: 4px; color: #ffe7b4; }
+    .recovery-panel .button-row { margin-top: 9px; }
+
+    .footer {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 9px 15px;
+      margin: 20px 4px 0;
+      color: var(--muted-2);
+      font-size: 10px;
+      text-align: center;
+    }
+    .footer a { color: var(--green-soft); }
 
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    @media (min-width: 520px) {
-      body { padding-top: max(30px, env(safe-area-inset-top)); }
+    @media (min-width: 720px) {
+      body { padding-top: max(20px, env(safe-area-inset-top)); }
+      .hero { min-height: 276px; padding: 34px 32px 28px; }
+      .hero-copy > p:last-of-type { font-size: 14px; }
+      .hero-ogre { right: 10px; width: 340px; max-height: 270px; opacity: .72; }
+      .layout.two-col { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .layout.wallet-col { grid-template-columns: 1.25fr .75fr; }
+      .field-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .card { padding: 20px; }
-      .facts { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-      .button-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 540px) {
+      .hero-ogre { opacity: .25; right: -90px; }
+      .field-grid.two { grid-template-columns: 1fr; }
+      .session-pill { display: none; }
+      .sell-grid { gap: 5px; }
+      .tabs { margin-inline: -3px; }
+      .wallet-row { grid-template-columns: auto minmax(0, 1fr); }
+      .wallet-actions { grid-column: 1 / -1; justify-content: flex-end; }
     }
 
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
     }
   </style>
-  <script>
-    (function () {
-      var token = new URL(window.location.href).searchParams.get("t") || "";
-      Object.defineProperty(window, "__SLIME_X_DM_TOKEN__", { value: token, configurable: true });
-      try { window.history.replaceState(null, "", window.location.pathname + window.location.hash); } catch (_) {}
-    }());
-  </script>
 </head>
 <body>
-  <main class="shell">
-    <div class="brand">
-      <a class="wordmark" href="/" aria-label="SlimeWire home"><span>SLIME</span>WIRE</a>
-      <span class="live">X DM secure link</span>
-    </div>
-
-    <header class="hero">
-      <p class="eyebrow">Mobile Trade Pad</p>
-      <h1>Tap here. Confirm in X.</h1>
-      <p>Choose a buy or sell amount below. This page only stages the order; your final <b>YES</b> or <b>NO</b> happens in your X DM.</p>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand-link" href="/" aria-label="SlimeWire home">
+        <img src="/assets/slimewire/svg/slimewire-lockup.svg" alt="SlimeWire">
+      </a>
+      <div class="session-tools">
+        <span class="session-pill" id="sessionPill">Private session</span>
+        <button class="text-button" id="endSession" type="button" hidden>Sign out</button>
+      </div>
     </header>
 
-    <div id="status" class="status loading" role="status" aria-live="polite">Opening your private Trade Pad...</div>
-
-    <div id="errorRecovery" class="recovery" hidden>
-      Open your newest Trade Pad link from the SlimeWire bot in <a href="https://x.com/messages" target="_blank" rel="noopener noreferrer">X DMs</a>.
-    </div>
-
-    <div id="pad" hidden>
-      <section class="card" aria-labelledby="tokenHeading">
-        <div class="token-head">
-          <div>
-            <span class="label">Selected token</span>
-            <h2 class="token-title" id="tokenHeading">Solana token</h2>
+    <main>
+      <section class="hero" aria-labelledby="pageTitle">
+        <div class="hero-copy">
+          <p class="eyebrow">X DM Command Center</p>
+          <h1 id="pageTitle">Trade at tap speed.</h1>
+          <p>Set your wallets, presets, bundles and copy rules once. Every money or automation action is frozen, sent to your X DM, and runs only after your <strong>YES</strong>.</p>
+          <div class="token-strip" id="tokenStrip" hidden>
+            <div class="token-main">
+              <span class="token-name"><span id="tokenName">Token</span><span class="chain-badge" id="chainBadge">SOLANA</span></span>
+              <span class="mint" id="mintText"></span>
+            </div>
+            <button class="small-action secondary" id="copyMint" type="button">Copy CA</button>
           </div>
-          <span class="chain" id="chainBadge">SOLANA</span>
         </div>
-
-        <div class="ca-row">
-          <span class="ca" id="mintText" title=""></span>
-          <button class="copy" id="copyMint" type="button">Copy CA</button>
-        </div>
-        <p class="expiry" id="expiryText" hidden></p>
-
-        <div class="facts" aria-label="Trading settings">
-          <div class="fact"><span class="label">Quick buy</span><b id="quickFact">--</b></div>
-          <div class="fact"><span class="label">Slippage</span><b id="slippageFact">--</b></div>
-          <div class="fact"><span class="label">Take profit</span><b id="tpFact">--</b></div>
-          <div class="fact"><span class="label">Stop loss</span><b id="slFact">--</b></div>
-        </div>
+        <img class="hero-ogre" src="/assets/slimewire/hero-ogre.webp" alt="" aria-hidden="true">
       </section>
 
-      <section class="card trade-actions" aria-labelledby="buyHeading">
-        <h2 class="card-title" id="buyHeading">Stage a buy</h2>
-        <p class="card-copy">Pick a SOL amount. Nothing is bought until you return to X and reply YES.</p>
-        <div class="button-grid" id="buyPresets"></div>
-
-        <form class="custom-form" id="customBuyForm" novalidate>
-          <label class="amount-wrap">
-            <span class="label" hidden>Custom SOL amount</span>
-            <input id="customAmount" type="number" min="0.001" max="50" step="0.001" inputmode="decimal" autocomplete="off" placeholder="Custom amount" aria-label="Custom buy amount in SOL">
-            <span aria-hidden="true">SOL</span>
-          </label>
-          <button class="secondary" type="submit">Stage</button>
-        </form>
-      </section>
-
-      <section class="card trade-actions" aria-labelledby="sellHeading">
-        <h2 class="card-title" id="sellHeading">Stage a sell</h2>
-        <p class="card-copy">Choose how much of this token position to sell. Final confirmation still happens in X.</p>
-        <div class="button-grid" id="sellPresets">
-          <button class="action sell-button" type="button" data-sell="25">25%</button>
-          <button class="action sell-button" type="button" data-sell="50">50%</button>
-          <button class="action sell-button" type="button" data-sell="75">75%</button>
-          <button class="action sell-button" type="button" data-sell="100">100%</button>
+      <div class="status loading" id="status" role="status" aria-live="polite">
+        <span class="status-icon" aria-hidden="true"></span>
+        <div>
+          <strong id="statusTitle">Opening your Trade Pad</strong>
+          <span id="statusMessage">Exchanging the private X link for a scoped session...</span>
+          <div class="status-actions" id="statusActions" hidden></div>
         </div>
-      </section>
+      </div>
 
-      <div class="notice"><b>No trade runs on this page.</b> After staging, return to the same X conversation and reply YES to execute or NO to cancel. Never enter a seed phrase or private key.</div>
+      <div id="app" hidden>
+        <nav class="tabs" role="tablist" aria-label="Trade Pad sections" aria-orientation="horizontal">
+          <button class="tab" type="button" role="tab" tabindex="0" aria-selected="true" aria-controls="view-quick" id="tab-quick" data-tab="quick">
+            <img src="/assets/slimewire/svg/icons/trade.svg" alt="">Quick
+          </button>
+          <button class="tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="view-wallets" id="tab-wallets" data-tab="wallets">
+            <img src="/assets/slimewire/svg/icons/wallet.svg" alt="">Wallets
+          </button>
+          <button class="tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="view-presets" id="tab-presets" data-tab="presets">
+            <img src="/assets/slimewire/svg/icons/settings.svg" alt="">Presets
+          </button>
+          <button class="tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="view-copy" id="tab-copy" data-tab="copy">
+            <img src="/assets/slimewire/svg/icons/kol.svg" alt="">Copy
+          </button>
+          <button class="tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="view-launch" id="tab-launch" data-tab="launch">
+            <img src="/assets/slimewire/svg/icons/launch.svg" alt="">Launch
+          </button>
+        </nav>
 
-      <nav class="links" aria-label="Token tools">
-        <a class="link-button" id="chartLink" href="#" target="_blank" rel="noopener noreferrer">Open chart</a>
-        <a class="link-button" id="terminalLink" href="/terminal" target="_blank" rel="noopener noreferrer">Full terminal</a>
-      </nav>
-    </div>
+        <section class="view" id="view-quick" role="tabpanel" aria-labelledby="tab-quick">
+          <div class="layout two-col">
+            <article class="card">
+              <div class="card-head">
+                <div>
+                  <h2 class="card-title"><img src="/assets/slimewire/svg/icons/buy.svg" alt="">Lightning buy</h2>
+                  <p class="card-copy">Choose a managed wallet and amount. Preset exits apply after X confirmation.</p>
+                </div>
+              </div>
+              <div class="field-grid two">
+                <label class="field">
+                  <span>Wallet</span>
+                  <select id="quickWallet"></select>
+                </label>
+                <label class="field amount-box">
+                  <span>Buy amount</span>
+                  <input id="quickAmount" type="number" min="0.00001" max="50" step="0.001" inputmode="decimal" autocomplete="off">
+                  <i class="unit" id="quickUnit">SOL</i>
+                </label>
+              </div>
+              <div class="preset-rail" id="quickPresetRail" aria-label="Trade presets"></div>
+              <p class="selected-config" id="quickConfig"></p>
+              <div class="button-row">
+                <button class="primary" id="stageBuy" data-stage type="button">Stage buy in X</button>
+              </div>
+            </article>
 
-    <p class="foot">Private links expire. SlimeWire will always ask before a trade is sent.</p>
-  </main>
+            <article class="card">
+              <div class="card-head">
+                <div>
+                  <h2 class="card-title"><img src="/assets/slimewire/svg/icons/sell.svg" alt="">Instant sell</h2>
+                  <p class="card-copy">Sell from the selected wallet. SlimeWire still waits for YES in X.</p>
+                </div>
+              </div>
+              <label class="field">
+                <span>Wallet</span>
+                <select id="sellWallet"></select>
+              </label>
+              <div class="sell-grid" id="singleSellGrid" aria-label="Sell percentage">
+                <button class="secondary" data-sell-percent="25" data-stage type="button">25%</button>
+                <button class="secondary" data-sell-percent="50" data-stage type="button">50%</button>
+                <button class="secondary" data-sell-percent="75" data-stage type="button">75%</button>
+                <button class="secondary" data-sell-percent="100" data-stage type="button">100%</button>
+              </div>
+              <div class="security-note">
+                <img src="/assets/slimewire/svg/icons/lock.svg" alt="">
+                <span>No trade executes in this browser. The X bot sends a two-minute confirmation with the exact wallet, amount and preset.</span>
+              </div>
+            </article>
+          </div>
+
+          <article class="card" style="margin-top:12px">
+            <div class="card-head">
+              <div>
+                <h2 class="card-title"><img src="/assets/slimewire/svg/icons/bundle.svg" alt="">Wallet bundle</h2>
+                <p class="card-copy">One staged request, the same amount per checked wallet.</p>
+              </div>
+              <span class="chain-badge" id="bundleCount">0 selected</span>
+            </div>
+            <div class="field-grid three">
+              <label class="field">
+                <span>Bundle preset</span>
+                <select id="bundlePreset"></select>
+              </label>
+              <label class="field amount-box">
+                <span>Per-wallet amount</span>
+                <input id="bundleAmount" type="number" min="0.00001" max="50" step="0.001" inputmode="decimal" autocomplete="off">
+                <i class="unit" id="bundleUnit">SOL</i>
+              </label>
+              <label class="field">
+                <span>Bundle sell</span>
+                <select id="bundleSellPercent">
+                  <option value="25">25%</option>
+                  <option value="50">50%</option>
+                  <option value="75">75%</option>
+                  <option value="100" selected>100%</option>
+                </select>
+              </label>
+            </div>
+            <p class="selected-config" id="bundleSummary">Select a managed wallet for this bundle.</p>
+            <div class="button-row">
+              <button class="primary" id="stageBundleBuy" data-stage type="button" aria-describedby="bundleSummary">Stage bundle buy</button>
+              <button class="secondary" id="stageBundleSell" data-stage type="button" aria-describedby="bundleSummary">Stage bundle sell</button>
+            </div>
+          </article>
+        </section>
+
+        <section class="view" id="view-wallets" role="tabpanel" aria-labelledby="tab-wallets" hidden>
+          <div class="layout wallet-col">
+            <article class="card">
+              <div class="card-head">
+                <div>
+                  <h2 class="card-title"><img src="/assets/slimewire/svg/icons/wallet.svg" alt="">Managed wallets</h2>
+                  <p class="card-copy">Tap Use for single trades. Check Bundle for multi-wallet actions and copy plans.</p>
+                </div>
+              </div>
+              <div class="wallet-list" id="walletList"></div>
+            </article>
+
+            <article class="card">
+              <div class="card-head">
+                <div>
+                  <h2 class="card-title"><img src="/assets/slimewire/svg/icons/wallet.svg" alt="">Create wallets</h2>
+                  <p class="card-copy">Create up to six managed wallets here. Recovery files are delivered once.</p>
+                </div>
+              </div>
+              <form id="walletCreateForm">
+                <div class="field-grid two">
+                  <label class="field">
+                    <span>Wallet label</span>
+                    <input id="walletLabel" type="text" maxlength="40" autocomplete="off" value="X Trade Pad">
+                  </label>
+                  <label class="field">
+                    <span>Count</span>
+                    <select id="walletCount">
+                      <option value="1">1 wallet</option>
+                      <option value="2">2 wallets</option>
+                      <option value="3">3 wallets</option>
+                      <option value="4">4 wallets</option>
+                      <option value="5">5 wallets</option>
+                      <option value="6">6 wallets</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="button-row">
+                  <button class="primary" id="createWallets" type="submit">Create &amp; show backups</button>
+                </div>
+              </form>
+              <div class="recovery-panel" id="recoveryPanel" role="status" aria-live="polite" hidden>
+                <b>Download both files now.</b>
+                <span>They are held only in this open page and disappear when you leave. Never share recovery keys.</span>
+                <div class="button-row">
+                  <button class="secondary" id="downloadEncrypted" type="button">Encrypted backup</button>
+                  <button class="secondary" id="downloadRecovery" type="button">Recovery keys</button>
+                </div>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-presets" role="tabpanel" aria-labelledby="tab-presets" hidden>
+          <div class="layout two-col">
+            <article class="card">
+              <div class="card-head">
+                <div>
+                  <h2 class="card-title"><img src="/assets/slimewire/svg/icons/settings.svg" alt="">Save a preset</h2>
+                  <p class="card-copy">Your saved presets live on SlimeWire and are ready on your next Trade Pad session.</p>
+                </div>
+              </div>
+              <form id="presetForm">
+                <div class="field-grid two">
+                  <label class="field">
+                    <span>Preset type</span>
+                    <select id="presetType">
+                      <option value="trade">Single trade</option>
+                      <option value="bundle">Wallet bundle</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Name</span>
+                    <input id="presetName" type="text" maxlength="32" autocomplete="off" value="My Fast Setup">
+                  </label>
+                  <label class="field amount-box" id="presetAmountField">
+                    <span>Solana amount</span>
+                    <input id="presetAmount" type="number" min="0.001" max="50" step="0.001" inputmode="decimal" value="0.1">
+                    <i class="unit">SOL</i>
+                  </label>
+                  <label class="field">
+                    <span>Slippage</span>
+                    <input id="presetSlippage" type="number" min="0.5" max="50" step="0.1" inputmode="decimal" value="4">
+                  </label>
+                  <label class="field">
+                    <span>Take profit %</span>
+                    <input id="presetTp" type="number" min="0" max="10000" step="1" inputmode="decimal" value="25">
+                  </label>
+                  <label class="field">
+                    <span>Stop loss %</span>
+                    <input id="presetSl" type="number" min="0" max="95" step="1" inputmode="decimal" value="8">
+                  </label>
+                  <label class="field wide" id="ladderField">
+                    <span>Solana ladder <em class="tiny">profit:sell%, comma separated</em></span>
+                    <input id="presetLadder" type="text" maxlength="160" autocomplete="off" placeholder="25:30, 50:30, 100:40">
+                  </label>
+                </div>
+                <p class="tiny" id="presetWalletScope">The currently selected single wallet will be saved with this preset.</p>
+                <div class="button-row">
+                  <button class="primary" id="savePreset" type="submit">Save preset</button>
+                </div>
+              </form>
+              <div class="security-note" id="rhLadderNote" hidden>
+                <img src="/assets/slimewire/svg/icons/warning.svg" alt="">
+                <span>Robinhood trades support simple take-profit and stop-loss settings here. Ladder exits are Solana-only.</span>
+              </div>
+            </article>
+
+            <article class="card">
+              <div class="card-head">
+                <div>
+                  <h2 class="card-title"><img src="/assets/slimewire/svg/icons/positions.svg" alt="">Ready setups</h2>
+                  <p class="card-copy">Use switches the Quick or Bundle tab to that setup. Custom presets can also be removed.</p>
+                </div>
+              </div>
+              <div class="preset-list" id="presetList"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-copy" role="tabpanel" aria-labelledby="tab-copy" hidden>
+          <div class="layout">
+            <article class="card">
+              <div class="permission off" id="automationCard">
+                <div>
+                  <b id="automationTitle">Managed-wallet automation is off</b>
+                  <span id="automationCopy">Required for copy rules and automatic exits. Permission lasts up to 30 days and can be revoked here.</span>
+                </div>
+                <button class="small-action" id="automationButton" data-stage type="button">Enable in X</button>
+              </div>
+            </article>
+
+            <article class="card">
+              <div class="card-head">
+                <div>
+                  <h2 class="card-title"><img src="/assets/slimewire/svg/icons/kol.svg" alt="">Copy next buy</h2>
+                  <p class="card-copy">Watch one Solana wallet and copy its next unseen buy once. This is not an unlimited follow loop.</p>
+                </div>
+                <span class="chain-badge">SOLANA</span>
+              </div>
+              <div class="field-grid two">
+                <label class="field wide">
+                  <span>Wallet to watch</span>
+                  <input id="copyWalletAddress" type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="Solana wallet address">
+                </label>
+                <label class="field amount-box">
+                  <span>Amount per selected wallet</span>
+                  <input id="copyAmount" type="number" min="0.001" max="50" step="0.001" inputmode="decimal" value="0.1">
+                  <i class="unit">SOL</i>
+                </label>
+                <label class="field">
+                  <span>Exit preset</span>
+                  <select id="copyPreset"></select>
+                </label>
+              </div>
+              <p class="selected-config" id="copyWalletScope"></p>
+              <div class="button-row">
+                <button class="primary" id="stageCopyWallet" data-stage data-needs-automation type="button">Stage next-buy copy</button>
+              </div>
+              <div class="security-note" id="copyFeedNotice" hidden>
+                <img src="/assets/slimewire/svg/icons/warning.svg" alt="">
+                <span>The live wallet feed is not configured right now, so Copy Next Buy is unavailable. No placeholder action will be submitted.</span>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-launch" role="tabpanel" aria-labelledby="tab-launch" hidden>
+          <div class="layout two-col">
+            <article class="card">
+              <div class="card-head">
+                <div>
+                  <h2 class="card-title"><img src="/assets/slimewire/svg/icons/launch.svg" alt="">Copy next launch</h2>
+                  <p class="card-copy">Watch a creator wallet and buy the next token it launches on the selected chain.</p>
+                </div>
+              </div>
+              <div class="field-grid two">
+                <label class="field">
+                  <span>Launch chain</span>
+                  <select id="launchChain">
+                    <option value="solana">Solana</option>
+                    <option value="robinhood">Robinhood</option>
+                  </select>
+                </label>
+                <label class="field amount-box">
+                  <span>Amount per wallet</span>
+                  <input id="launchAmount" type="number" min="0.00001" max="50" step="0.001" inputmode="decimal" value="0.1">
+                  <i class="unit" id="launchUnit">SOL</i>
+                </label>
+                <label class="field wide">
+                  <span>Creator / deployer wallet</span>
+                  <input id="launchWalletAddress" type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="Wallet address">
+                </label>
+                <label class="field wide">
+                  <span>Exit preset</span>
+                  <select id="launchPreset"></select>
+                </label>
+              </div>
+              <p class="selected-config" id="launchWalletScope"></p>
+              <div class="button-row">
+                <button class="primary" id="stageCopyLaunch" data-stage data-needs-automation type="button">Stage launch watch</button>
+              </div>
+            </article>
+
+            <article class="card">
+              <div class="card-head">
+                <div>
+                  <h2 class="card-title"><img src="/assets/slimewire/svg/icons/live-trades.svg" alt="">Active watches</h2>
+                  <p class="card-copy">Live server watches associated with this linked account.</p>
+                </div>
+              </div>
+              <div class="watch-list" id="watchList"></div>
+            </article>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <span id="sessionExpiry">Scoped X Trade Pad session</span>
+      <a id="chartLink" href="/terminal" target="_blank" rel="noopener noreferrer">Chart</a>
+      <a id="scanLink" href="/t" target="_blank" rel="noopener noreferrer">Full scan</a>
+      <a id="terminalLink" href="/terminal" target="_blank" rel="noopener noreferrer">Full terminal</a>
+    </footer>
+  </div>
 
   <script>
     (function () {
       "use strict";
 
-      var signedToken = window.__SLIME_X_DM_TOKEN__ || "";
-      try { delete window.__SLIME_X_DM_TOKEN__; } catch (_) {}
+      var FALLBACK_API_BASE = "https://ogrevolbot.onrender.com";
+      var SESSION_KEY = "slimewire.xDmPad.session.v1";
+      var API_TIMEOUT_MS = 18000;
+      var model = null;
+      var sessionToken = "";
+      var bootstrapToken = "";
+      var selectedWalletIndex = "";
+      var selectedBundleWallets = [];
+      var bundleSelectionInitialized = false;
+      var selectedTradePresetId = "";
+      var selectedBundlePresetId = "";
+      var activeTab = "quick";
+      var requestBusy = false;
+      var confirmationActive = false;
+      var statusPollTimer = 0;
+      var keepAliveTimer = 0;
+      var recoveryDocs = null;
+      var recoveryDownloadState = { encryptedBackup: false, recoveryKeys: false };
+      var walletCreateAttempt = null;
 
       var statusEl = document.getElementById("status");
-      var recoveryEl = document.getElementById("errorRecovery");
-      var padEl = document.getElementById("pad");
-      var mint = "";
-      var busy = false;
+      var statusTitleEl = document.getElementById("statusTitle");
+      var statusMessageEl = document.getElementById("statusMessage");
+      var statusActionsEl = document.getElementById("statusActions");
+      var appEl = document.getElementById("app");
 
-      function cleanNumber(value) {
-        var number = Number(value);
-        return Number.isFinite(number) ? number : 0;
-      }
-
-      function amountText(value) {
-        return cleanNumber(value).toLocaleString(undefined, { maximumFractionDigits: 6 });
-      }
-
-      function settingText(value, prefix, suffix) {
-        var number = cleanNumber(value);
-        return number > 0 ? (prefix || "") + amountText(number) + (suffix || "") : "Off";
-      }
-
-      function safeUrl(value, fallback) {
+      function normalizeApiBase(value) {
+        var text = String(value || "").trim().replace(/\/+$/, "");
         try {
-          var url = new URL(String(value || fallback || ""), window.location.origin);
-          if (url.protocol !== "https:" && url.origin !== window.location.origin) return "";
-          return url.href;
+          var parsed = new URL(text || FALLBACK_API_BASE);
+          var localHttp = parsed.protocol === "http:" && /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(parsed.hostname);
+          return parsed.protocol === "https:" || localHttp ? parsed.origin + parsed.pathname.replace(/\/+$/, "") : FALLBACK_API_BASE;
+        } catch (_) {
+          return FALLBACK_API_BASE;
+        }
+      }
+
+      var API_BASE = normalizeApiBase(window.OGRE_PORTAL_CONFIG && window.OGRE_PORTAL_CONFIG.apiBase);
+      var API_URL = API_BASE + "/api/x-dm/menu";
+
+      function validSession(value) {
+        return /^[A-Za-z0-9_-]{40,180}$/.test(String(value || ""));
+      }
+
+      function loadSession() {
+        try {
+          var stored = window.localStorage.getItem(SESSION_KEY) || "";
+          if (stored && !validSession(stored)) {
+            window.localStorage.removeItem(SESSION_KEY);
+            return "";
+          }
+          return stored;
         } catch (_) {
           return "";
         }
       }
 
-      function setStatus(message, type, heading) {
-        statusEl.className = "status" + (type ? " " + type : "");
-        statusEl.replaceChildren();
-        if (heading) {
-          var strong = document.createElement("strong");
-          strong.textContent = heading;
-          statusEl.appendChild(strong);
+      function saveSession(value) {
+        if (!validSession(value)) throw new Error("The Trade Pad returned an invalid session.");
+        sessionToken = String(value);
+        try { window.localStorage.setItem(SESSION_KEY, sessionToken); } catch (_) {}
+      }
+
+      function clearSession() {
+        sessionToken = "";
+        try { window.localStorage.removeItem(SESSION_KEY); } catch (_) {}
+      }
+
+      function stripBootstrapToken() {
+        try {
+          var url = new URL(window.location.href);
+          url.searchParams.delete("t");
+          window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+        } catch (_) {}
+        bootstrapToken = "";
+      }
+
+      function safeUrl(value, fallback) {
+        try {
+          var parsed = new URL(String(value || fallback || ""), window.location.origin);
+          if (parsed.protocol !== "https:" && parsed.origin !== window.location.origin) return String(fallback || "/");
+          return parsed.href;
+        } catch (_) {
+          return String(fallback || "/");
         }
-        statusEl.appendChild(document.createTextNode(message));
-        statusEl.setAttribute("role", type === "error" ? "alert" : "status");
       }
 
       function friendlyError(error) {
-        var message = String(error && error.message || "Could not open this Trade Pad.");
-        if (/abort/i.test(message)) return "The request timed out. Open the latest link from your X DM and try again.";
-        return message.length > 180 ? "Could not open this Trade Pad. Request a fresh link in X DM." : message;
+        var message = String(error && error.message || "The Trade Pad request failed.");
+        if (/abort|timed out/i.test(message)) return "The request timed out. Your order was not restaged; check X before trying again.";
+        if (message.length > 220) return "The Trade Pad could not complete that request. Check X, then try again.";
+        return message;
       }
 
-      async function post(body) {
+      function walletCreateOutcomeUncertain(error) {
+        var status = Number(error && error.status);
+        if (status === 409 || status >= 500) return true;
+        if (status >= 400) return false;
+        return /abort|timed out|network|failed to fetch|load failed|recovery documents were not returned/i.test(String(error && (error.name + " " + error.message) || error || ""));
+      }
+
+      function recoveryFilesPending() {
+        return Boolean(recoveryDocs) && !(recoveryDownloadState.encryptedBackup && recoveryDownloadState.recoveryKeys);
+      }
+
+      function updateWalletCreateButton() {
+        var button = document.getElementById("createWallets");
+        if (!button) return;
+        button.disabled = requestBusy || confirmationActive || recoveryFilesPending();
+        button.textContent = recoveryFilesPending()
+          ? "Save both backups first"
+          : walletCreateAttempt
+            ? "Retry wallet recovery"
+            : recoveryDocs
+              ? "Create another wallet set"
+              : "Create & show backups";
+      }
+
+      function setWalletCreateFieldsDisabled(value) {
+        document.getElementById("walletLabel").disabled = Boolean(value);
+        document.getElementById("walletCount").disabled = Boolean(value);
+      }
+
+      async function post(body, options) {
+        options = options || {};
+        var payload = Object.assign({}, body || {});
+        if (!payload.token && !payload.session) {
+          if (!sessionToken) throw new Error("Open a fresh Trade Pad link from your X DM.");
+          payload.session = sessionToken;
+        }
         var controller = new AbortController();
-        var timeout = window.setTimeout(function () { controller.abort(); }, 15000);
+        var timeout = window.setTimeout(function () { controller.abort(); }, Number(options.timeoutMs) || API_TIMEOUT_MS);
         try {
-          var response = await fetch("/api/x-dm/menu", {
+          var response = await fetch(API_URL, {
             method: "POST",
-            credentials: "same-origin",
+            mode: "cors",
+            credentials: "omit",
             cache: "no-store",
             referrerPolicy: "no-referrer",
             headers: { "Accept": "application/json", "Content-Type": "application/json" },
-            body: JSON.stringify(body),
+            body: JSON.stringify(payload),
             signal: controller.signal
           });
           var data = await response.json().catch(function () { return {}; });
-          if (!response.ok || data.ok === false) throw new Error(data.error || "This private link is invalid or expired.");
+          if (!response.ok || data.ok === false) {
+            if (response.status === 401) clearSession();
+            var apiError = new Error(data.error || "This private Trade Pad session is no longer valid.");
+            apiError.status = response.status;
+            throw apiError;
+          }
+          if (data.session && validSession(data.session)) saveSession(data.session);
           return data;
         } finally {
           window.clearTimeout(timeout);
         }
       }
 
-      function allControls() {
-        return document.querySelectorAll(".trade-actions button, .trade-actions input");
+      function setStatus(title, message, type, withXLink) {
+        statusEl.className = "status" + (type ? " " + type : "");
+        statusTitleEl.textContent = title;
+        statusMessageEl.textContent = message;
+        statusEl.setAttribute("role", type === "error" ? "alert" : "status");
+        statusEl.setAttribute("aria-live", type === "error" ? "assertive" : "polite");
+        statusActionsEl.replaceChildren();
+        statusActionsEl.hidden = true;
+        if (withXLink) {
+          var link = document.createElement("a");
+          link.className = "x-link";
+          link.href = "https://x.com/messages";
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          link.textContent = "Open X DMs";
+          statusActionsEl.appendChild(link);
+          statusActionsEl.hidden = false;
+        }
       }
 
-      function setBusy(value, lock) {
-        busy = value;
-        allControls().forEach(function (control) { control.disabled = Boolean(value || lock); });
+      function showLocked(message) {
+        appEl.hidden = true;
+        document.getElementById("tokenStrip").hidden = true;
+        document.getElementById("endSession").hidden = true;
+        document.getElementById("sessionPill").textContent = "Session needed";
+        setStatus("Open your newest X Trade Pad link", message || "Send a coin number to the SlimeWire X bot, then tap its Trade Pad link.", "error", true);
       }
 
-      function renderBuyButtons(quickAmount, hasValidQuickAmount) {
-        var host = document.getElementById("buyPresets");
-        var values = hasValidQuickAmount ? [quickAmount, 0.05, 0.1, 0.25, 0.5] : [0.05, 0.1, 0.25, 0.5];
-        var seen = Object.create(null);
+      function numberValue(value, fallback) {
+        var number = Number(value);
+        return Number.isFinite(number) ? number : Number(fallback || 0);
+      }
+
+      function amountText(value) {
+        return numberValue(value, 0).toLocaleString(undefined, { maximumFractionDigits: 6 });
+      }
+
+      function shortAddress(value) {
+        var text = String(value || "");
+        return text.length > 16 ? text.slice(0, 7) + "…" + text.slice(-6) : text;
+      }
+
+      function el(tag, className, text) {
+        var node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = String(text);
+        return node;
+      }
+
+      function walletByIndex(value) {
+        var index = String(value || "");
+        return (model && Array.isArray(model.wallets) ? model.wallets : []).find(function (wallet) {
+          return String(wallet.index) === index;
+        }) || null;
+      }
+
+      function presetById(type, value) {
+        var rows = model && model.presets && Array.isArray(model.presets[type]) ? model.presets[type] : [];
+        return rows.find(function (preset) { return String(preset.id) === String(value || ""); }) || null;
+      }
+
+      function selectedWalletIndexes() {
+        var available = new Set((model.wallets || []).map(function (wallet) { return String(wallet.index); }));
+        return selectedBundleWallets.filter(function (index) { return available.has(String(index)); }).map(String);
+      }
+
+      function ensureSelections() {
+        var wallets = Array.isArray(model.wallets) ? model.wallets : [];
+        if (!walletByIndex(selectedWalletIndex)) selectedWalletIndex = wallets[0] ? String(wallets[0].index) : "";
+        var available = new Set(wallets.map(function (wallet) { return String(wallet.index); }));
+        selectedBundleWallets = selectedBundleWallets.filter(function (index) { return available.has(String(index)); });
+        if (!bundleSelectionInitialized && selectedWalletIndex) {
+          selectedBundleWallets = [String(selectedWalletIndex)];
+          bundleSelectionInitialized = true;
+        }
+        if (selectedTradePresetId && !presetById("trade", selectedTradePresetId)) selectedTradePresetId = "";
+        if (selectedBundlePresetId && !presetById("bundle", selectedBundlePresetId)) selectedBundlePresetId = "";
+      }
+
+      function renderWalletSelect(select, current) {
+        select.replaceChildren();
+        if (!model.wallets.length) {
+          var emptyOption = el("option", "", "Create a wallet first");
+          emptyOption.value = "";
+          select.appendChild(emptyOption);
+          select.disabled = true;
+          return;
+        }
+        model.wallets.forEach(function (wallet) {
+          var option = el("option", "", "#" + wallet.index + " · " + (wallet.label || "Wallet") + " · " + (wallet.shortPublicKey || shortAddress(wallet.publicKey)));
+          option.value = String(wallet.index);
+          select.appendChild(option);
+        });
+        select.disabled = false;
+        select.value = walletByIndex(current) ? String(current) : selectedWalletIndex;
+      }
+
+      function presetSummary(preset) {
+        if (!preset) {
+          return "Custom · TP " + (numberValue(model.takeProfitPct, 0) ? "+" + amountText(model.takeProfitPct) + "%" : "off")
+            + " · SL " + (numberValue(model.stopLossPct, 0) ? "-" + amountText(model.stopLossPct) + "%" : "off")
+            + " · " + amountText(numberValue(model.slippageBps, 400) / 100) + "% slippage";
+        }
+        var ladder = Array.isArray(preset.takeProfitLadder) && preset.takeProfitLadder.length
+          ? " · ladder " + preset.takeProfitLadder.map(function (row) { return "+" + row.pct + "%/" + row.sellPercent + "%"; }).join(" → ")
+          : "";
+        return preset.name + " · TP +" + preset.takeProfitPct + "% · SL -" + preset.stopLossPct + "% · "
+          + amountText(numberValue(preset.slippageBps, 400) / 100) + "% slippage" + ladder;
+      }
+
+      function renderPresetRail() {
+        var host = document.getElementById("quickPresetRail");
         host.replaceChildren();
-        values.forEach(function (raw, index) {
-          var amount = cleanNumber(raw);
-          var key = amount.toFixed(9);
-          if (amount <= 0 || seen[key]) return;
-          seen[key] = true;
-          var button = document.createElement("button");
-          button.className = "action";
+        var custom = el("button", "preset-chip");
+        custom.type = "button";
+        custom.setAttribute("aria-pressed", selectedTradePresetId ? "false" : "true");
+        custom.appendChild(el("b", "", "Current settings"));
+        custom.appendChild(el("small", "", model.chain === "solana" ? amountText(model.quickAmount) + " SOL" : "Robinhood exit settings"));
+        custom.addEventListener("click", function () {
+          selectedTradePresetId = "";
+          document.getElementById("quickAmount").value = model.chain === "solana" ? model.quickAmount : "0.01";
+          renderPresetRail();
+          renderSelectedConfig();
+        });
+        host.appendChild(custom);
+        (model.presets.trade || []).forEach(function (preset) {
+          var button = el("button", "preset-chip");
           button.type = "button";
-          button.dataset.buy = String(amount);
-          button.textContent = amountText(amount) + " SOL";
-          if (index === 0 && hasValidQuickAmount) {
-            var tag = document.createElement("small");
-            tag.textContent = "YOUR QUICK BUY";
-            button.appendChild(tag);
-          }
+          button.setAttribute("aria-pressed", String(preset.id) === selectedTradePresetId ? "true" : "false");
+          button.appendChild(el("b", "", preset.name));
+          button.appendChild(el("small", "", (model.chain === "solana" ? preset.amountSol + " SOL · " : "") + "TP " + preset.takeProfitPct + "%"));
+          button.addEventListener("click", function () { usePreset("trade", preset.id, false); });
           host.appendChild(button);
         });
       }
 
-      function renderMenu(payload) {
-        var menu = payload.menu || payload.data && payload.data.menu || payload.data || payload;
-        mint = String(menu.mint || "").trim();
-        var tradingSupported = menu.isSolana !== false;
-        var shortMint = String(menu.shortMint || (mint.length > 14 ? mint.slice(0, 7) + "..." + mint.slice(-6) : mint) || "Token");
-        var quickAmount = cleanNumber(menu.quickAmount);
-        var hasValidQuickAmount = quickAmount >= 0.001 && quickAmount <= 50;
-
-        document.getElementById("tokenHeading").textContent = shortMint;
-        document.getElementById("chainBadge").textContent = menu.isSolana === false ? "TOKEN" : "SOLANA";
-        document.getElementById("mintText").textContent = mint || "Contract unavailable";
-        document.getElementById("mintText").title = mint;
-        document.getElementById("copyMint").disabled = !mint;
-        var expiresAt = new Date(menu.expiresAt || "");
-        var expiryEl = document.getElementById("expiryText");
-        if (Number.isFinite(expiresAt.getTime())) {
-          expiryEl.textContent = "Private link expires " + expiresAt.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) + ".";
-          expiryEl.hidden = false;
+      function fillPresetSelect(select, type, selected, includeCustom) {
+        select.replaceChildren();
+        if (includeCustom) {
+          var custom = el("option", "", "Current settings");
+          custom.value = "";
+          select.appendChild(custom);
         }
-        document.getElementById("quickFact").textContent = hasValidQuickAmount ? amountText(quickAmount) + " SOL" : "Set 0.001-50";
-        document.getElementById("slippageFact").textContent = settingText(menu.slippagePct, "", "%");
-        document.getElementById("tpFact").textContent = settingText(menu.takeProfitPct, "+", "%");
-        document.getElementById("slFact").textContent = settingText(menu.stopLossPct, "-", "%");
+        (model.presets[type] || []).forEach(function (preset) {
+          var option = el("option", "", preset.name);
+          option.value = String(preset.id);
+          select.appendChild(option);
+        });
+        select.value = selected || "";
+      }
 
-        renderBuyButtons(quickAmount, hasValidQuickAmount);
+      function renderSelectedConfig() {
+        var bundleIndexes = selectedWalletIndexes();
+        var bundleAmount = Number(document.getElementById("bundleAmount").value);
+        var bundleTotal = Number.isFinite(bundleAmount) && bundleAmount > 0 ? bundleAmount * bundleIndexes.length : 0;
+        document.getElementById("quickConfig").textContent = presetSummary(presetById("trade", selectedTradePresetId));
+        document.getElementById("copyWalletScope").textContent = selectedWalletIndexes().length
+          ? "Will copy into managed wallet" + (selectedWalletIndexes().length === 1 ? " #" : "s #") + selectedWalletIndexes().join(", #") + "."
+          : "Select at least one Bundle wallet in Wallets.";
+        document.getElementById("launchWalletScope").textContent = selectedWalletIndexes().length
+          ? "Launch buy will use managed wallet" + (selectedWalletIndexes().length === 1 ? " #" : "s #") + selectedWalletIndexes().join(", #") + "."
+          : "Select at least one Bundle wallet in Wallets.";
+        document.getElementById("bundleCount").textContent = bundleIndexes.length + " selected";
+        document.getElementById("bundleSummary").textContent = bundleIndexes.length
+          ? "Wallet" + (bundleIndexes.length === 1 ? " #" : "s #") + bundleIndexes.join(", #")
+            + (bundleTotal ? " · Buy total " + amountText(bundleTotal) + " " + model.assetSymbol + " (" + amountText(bundleAmount) + " each)." : ".")
+          : "No bundle wallets selected. Check at least one wallet in Wallets.";
+      }
 
-        var chartFallback = mint ? "https://dexscreener.com/solana/" + encodeURIComponent(mint) : "/terminal";
-        document.getElementById("chartLink").href = safeUrl(menu.chartUrl, chartFallback) || "/terminal";
-        document.getElementById("terminalLink").href = safeUrl(menu.terminalUrl, "/terminal") || "/terminal";
+      function renderWallets() {
+        var host = document.getElementById("walletList");
+        host.replaceChildren();
+        if (!model.wallets.length) {
+          host.appendChild(el("div", "empty", "No managed wallets yet. Create one in the panel beside this list."));
+          return;
+        }
+        model.wallets.forEach(function (wallet) {
+          var index = String(wallet.index);
+          var row = el("div", "wallet-row" + (index === selectedWalletIndex ? " active" : ""));
+          var icon = el("span", "wallet-icon");
+          var iconImage = document.createElement("img");
+          iconImage.src = "/assets/slimewire/svg/icons/wallet.svg";
+          iconImage.alt = "";
+          icon.appendChild(iconImage);
+          var copy = el("div", "wallet-copy");
+          copy.appendChild(el("b", "", "#" + index + " · " + (wallet.label || "Wallet")));
+          copy.appendChild(el("small", "", wallet.publicKey || ""));
+          var actions = el("div", "wallet-actions");
+          var bundleLabel = el("label", "bundle-check");
+          var check = document.createElement("input");
+          check.type = "checkbox";
+          check.checked = selectedBundleWallets.includes(index);
+          check.setAttribute("aria-label", "Include " + (wallet.label || "wallet") + " in bundle");
+          check.addEventListener("change", function () {
+            if (check.checked) selectedBundleWallets = Array.from(new Set(selectedBundleWallets.concat(index)));
+            else selectedBundleWallets = selectedBundleWallets.filter(function (item) { return item !== index; });
+            renderSelectedConfig();
+            updateActionAvailability();
+          });
+          bundleLabel.appendChild(check);
+          bundleLabel.appendChild(document.createTextNode("Bundle"));
+          var useButton = el("button", "wallet-pick", index === selectedWalletIndex ? "Active" : "Use");
+          useButton.type = "button";
+          useButton.addEventListener("click", function () {
+            selectedWalletIndex = index;
+            document.getElementById("quickWallet").value = index;
+            document.getElementById("sellWallet").value = index;
+            renderWallets();
+          });
+          actions.appendChild(bundleLabel);
+          actions.appendChild(useButton);
+          row.appendChild(icon);
+          row.appendChild(copy);
+          row.appendChild(actions);
+          host.appendChild(row);
+        });
+      }
 
-        padEl.hidden = false;
-        recoveryEl.hidden = true;
-        if (!tradingSupported) {
-          setBusy(false, true);
-          setStatus("X DM trading is Solana-only right now. The chart and full terminal links are still available.", "");
+      function renderPresetList() {
+        var host = document.getElementById("presetList");
+        host.replaceChildren();
+        var rows = (model.presets.trade || []).concat(model.presets.bundle || []);
+        if (!rows.length) {
+          host.appendChild(el("div", "empty", "Save your first setup to make future trades one tap."));
+          return;
+        }
+        rows.forEach(function (preset) {
+          var row = el("div", "preset-row");
+          var copy = el("div");
+          copy.appendChild(el("b", "", preset.name));
+          var scope = preset.kind === "bundle"
+            ? ((preset.walletIndexes || []).length + " wallets")
+            : ("wallet #" + (preset.walletIndex || "1"));
+          var ladder = Array.isArray(preset.takeProfitLadder) && preset.takeProfitLadder.length ? " · ladder" : "";
+          copy.appendChild(el("small", "", (preset.kind === "bundle" ? "Bundle" : "Trade")
+            + (model.chain === "solana" ? " · " + preset.amountSol + " SOL" : "") + " · " + scope + ladder));
+          var actions = el("div", "row-actions");
+          var use = el("button", "small-action secondary", "Use");
+          use.type = "button";
+          use.addEventListener("click", function () { usePreset(preset.kind, preset.id, true); });
+          actions.appendChild(use);
+          if (!preset.readonly) {
+            var remove = el("button", "small-action danger-button", "Delete");
+            remove.type = "button";
+            remove.addEventListener("click", function () { deletePreset(preset); });
+            actions.appendChild(remove);
+          }
+          row.appendChild(copy);
+          row.appendChild(actions);
+          host.appendChild(row);
+        });
+      }
+
+      function renderAutomation() {
+        var active = Boolean(model.automation && model.automation.active);
+        var card = document.getElementById("automationCard");
+        var button = document.getElementById("automationButton");
+        card.classList.toggle("off", !active);
+        document.getElementById("automationTitle").textContent = active ? "Managed-wallet automation is active" : "Managed-wallet automation is off";
+        var expiry = active && model.automation.expiresAt ? new Date(model.automation.expiresAt) : null;
+        document.getElementById("automationCopy").textContent = active && expiry && Number.isFinite(expiry.getTime())
+          ? "Active through " + expiry.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) + ". Revoke at any time."
+          : "Required for copy rules and automatic exits. Permission lasts up to 30 days and can be revoked here.";
+        button.textContent = active ? "Revoke in X" : "Enable in X";
+        button.dataset.mode = active ? "revoke" : "enable";
+      }
+
+      function renderWatches() {
+        var host = document.getElementById("watchList");
+        host.replaceChildren();
+        if (!Array.isArray(model.watches) || !model.watches.length) {
+          host.appendChild(el("div", "empty", "No active copy or launch watches."));
+          return;
+        }
+        model.watches.forEach(function (watch) {
+          var row = el("div", "watch-row");
+          var copy = el("div");
+          var type = watch.type === "kol_copy_wallet" ? "Next-buy copy" : "Launch watch";
+          var address = watch.shortCopyWallet || watch.shortLaunchWallet || watch.ticker || shortAddress(watch.copyWallet || watch.launchWallet);
+          copy.appendChild(el("b", "", type + " · " + (address || "wallet")));
+          copy.appendChild(el("small", "", String(watch.chain || "solana").toUpperCase() + " · " + (watch.status || "watching") + " · " + (watch.walletCount || 1) + " wallet(s)"));
+          row.appendChild(copy);
+          row.appendChild(el("span", "chain-badge", String(watch.status || "live").toUpperCase()));
+          host.appendChild(row);
+        });
+      }
+
+      function renderMenu(menu) {
+        model = menu || {};
+        model.wallets = Array.isArray(model.wallets) ? model.wallets : [];
+        model.presets = model.presets && typeof model.presets === "object" ? model.presets : { trade: [], bundle: [] };
+        model.presets.trade = Array.isArray(model.presets.trade) ? model.presets.trade : [];
+        model.presets.bundle = Array.isArray(model.presets.bundle) ? model.presets.bundle : [];
+        model.features = model.features || {};
+        model.assetSymbol = model.assetSymbol || (model.chain === "robinhood" ? "ETH" : "SOL");
+        ensureSelections();
+
+        document.getElementById("tokenName").textContent = model.shortMint || shortAddress(model.mint) || "Selected token";
+        document.getElementById("chainBadge").textContent = model.chain === "robinhood" ? "ROBINHOOD" : "SOLANA";
+        document.getElementById("mintText").textContent = model.mint || "";
+        document.getElementById("mintText").title = model.mint || "";
+        document.getElementById("tokenStrip").hidden = false;
+        document.getElementById("quickUnit").textContent = model.assetSymbol;
+        document.getElementById("bundleUnit").textContent = model.assetSymbol;
+        document.getElementById("quickAmount").value = model.chain === "solana" ? numberValue(model.quickAmount, .1) : ".01";
+        document.getElementById("bundleAmount").value = model.chain === "solana" ? numberValue(model.quickAmount, .1) : ".01";
+        document.getElementById("quickAmount").min = model.chain === "solana" ? ".001" : ".00001";
+        document.getElementById("quickAmount").max = model.chain === "solana" ? "50" : "2";
+        document.getElementById("bundleAmount").min = model.chain === "solana" ? ".001" : ".00001";
+        document.getElementById("bundleAmount").max = model.chain === "solana" ? "50" : ".5";
+        document.getElementById("copyAmount").value = numberValue(model.quickAmount, .1);
+
+        renderWalletSelect(document.getElementById("quickWallet"), selectedWalletIndex);
+        renderWalletSelect(document.getElementById("sellWallet"), selectedWalletIndex);
+        renderPresetRail();
+        fillPresetSelect(document.getElementById("bundlePreset"), "bundle", selectedBundlePresetId, true);
+        fillPresetSelect(document.getElementById("copyPreset"), "trade", selectedTradePresetId, true);
+        fillPresetSelect(document.getElementById("launchPreset"), "trade", selectedTradePresetId, true);
+        renderWallets();
+        renderPresetList();
+        renderAutomation();
+        renderWatches();
+        renderSelectedConfig();
+
+        var isRh = model.chain === "robinhood";
+        document.getElementById("ladderField").hidden = isRh;
+        document.getElementById("presetAmountField").hidden = isRh;
+        document.getElementById("rhLadderNote").hidden = !isRh;
+        document.getElementById("copyFeedNotice").hidden = model.features.copyNextBuy !== false;
+
+        document.getElementById("chartLink").href = safeUrl(model.chartUrl, "/terminal");
+        document.getElementById("scanLink").href = safeUrl(model.fullScanUrl, "/t");
+        document.getElementById("terminalLink").href = safeUrl(model.terminalUrl, "/terminal");
+        var expiry = new Date(model.expiresAt || 0);
+        if (Number.isFinite(expiry.getTime()) && expiry.getTime() > 0) {
+          document.getElementById("sessionExpiry").textContent = "Scoped session active until " + expiry.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+        }
+
+        confirmationActive = Boolean(model.pending || model.executing);
+        appEl.hidden = false;
+        document.getElementById("endSession").hidden = false;
+        document.getElementById("sessionPill").textContent = "Private session";
+        updateActionAvailability();
+        if (confirmationActive) {
+          renderConfirmationState(model.pending, model.executing);
+          scheduleStatusPoll(400);
         } else {
-          setStatus("Ready. Choose an amount below; no trade runs until you confirm in X.", "");
+          setStatus("Trade Pad ready", "Choose a wallet and action. Money moves only after you reply YES in X.", "", false);
         }
       }
 
-      async function stage(action, value) {
-        if (busy) return;
-        var body = { token: signedToken };
-        var summary;
-        if (action === "prepare_buy") {
-          var amount = cleanNumber(value);
-          if (amount < 0.001 || amount > 50) {
-            setStatus("Enter a custom amount from 0.001 to 50 SOL.", "error");
-            document.getElementById("customAmount").focus();
-            return;
-          }
-          body.action = action;
-          body.amountSol = amount;
-          summary = "Buy " + amountText(amount) + " SOL";
+      function usePreset(type, id, changeTab) {
+        var preset = presetById(type, id);
+        if (!preset) return;
+        if (type === "bundle") {
+          selectedBundlePresetId = String(preset.id);
+          var indexes = Array.isArray(preset.walletIndexes) ? preset.walletIndexes.map(String).filter(function (index) { return walletByIndex(index); }) : [];
+          if (indexes.length) selectedBundleWallets = indexes;
+          document.getElementById("bundlePreset").value = selectedBundlePresetId;
+          if (model.chain === "solana") document.getElementById("bundleAmount").value = preset.amountSol;
+          if (changeTab) switchTab("quick");
         } else {
-          var percent = Math.round(cleanNumber(value));
-          if (![25, 50, 75, 100].includes(percent)) return;
-          body.action = "prepare_sell";
-          body.percent = percent;
-          summary = "Sell " + percent + "%";
+          selectedTradePresetId = String(preset.id);
+          if (walletByIndex(preset.walletIndex)) selectedWalletIndex = String(preset.walletIndex);
+          if (model.chain === "solana") document.getElementById("quickAmount").value = preset.amountSol;
+          document.getElementById("quickWallet").value = selectedWalletIndex;
+          document.getElementById("sellWallet").value = selectedWalletIndex;
+          document.getElementById("copyPreset").value = selectedTradePresetId;
+          document.getElementById("launchPreset").value = selectedTradePresetId;
+          renderPresetRail();
+          renderWallets();
+          if (changeTab) switchTab("quick");
         }
+        renderSelectedConfig();
+        updateActionAvailability();
+      }
 
-        setBusy(true, false);
-        setStatus("Staging " + summary + "...", "loading");
+      function switchTab(tabName) {
+        activeTab = tabName;
+        document.querySelectorAll(".tab").forEach(function (tab) {
+          var active = tab.dataset.tab === tabName;
+          tab.setAttribute("aria-selected", active ? "true" : "false");
+          tab.tabIndex = active ? 0 : -1;
+          document.getElementById("view-" + tab.dataset.tab).hidden = !active;
+        });
+        var selected = document.getElementById("tab-" + tabName);
+        if (selected) selected.focus({ preventScroll: true });
+      }
+
+      function handleTabKeydown(event) {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        var tabs = Array.from(document.querySelectorAll(".tab"));
+        var current = tabs.indexOf(event.currentTarget);
+        if (current < 0 || !tabs.length) return;
+        event.preventDefault();
+        var next = event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? tabs.length - 1
+            : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+        switchTab(tabs[next].dataset.tab);
+      }
+
+      function updateActionAvailability() {
+        if (!model) return;
+        var globallyLocked = requestBusy || confirmationActive;
+        var hasWallets = model.wallets.length > 0;
+        var automationActive = Boolean(model.automation && model.automation.active);
+        document.querySelectorAll("[data-stage]").forEach(function (button) {
+          var disabled = globallyLocked;
+          if (button.id !== "automationButton" && !hasWallets) disabled = true;
+          if (button.hasAttribute("data-needs-automation") && !automationActive) disabled = true;
+          if (button.id === "stageCopyWallet" && model.features.copyNextBuy === false) disabled = true;
+          if ((button.id === "stageBundleBuy" || button.id === "stageBundleSell" || button.id === "stageCopyWallet" || button.id === "stageCopyLaunch") && !selectedWalletIndexes().length) disabled = true;
+          button.disabled = disabled;
+        });
+        updateWalletCreateButton();
+      }
+
+      function setBusy(value) {
+        requestBusy = Boolean(value);
+        updateActionAvailability();
+      }
+
+      function positiveAmount(input, min, max, label) {
+        var value = Number(input.value);
+        if (!Number.isFinite(value) || value < min || value > max) {
+          input.focus();
+          throw new Error(label + " must be from " + min + " to " + max + ".");
+        }
+        return value;
+      }
+
+      async function stageAction(body, description) {
+        if (requestBusy || confirmationActive) return;
+        setBusy(true);
+        setStatus("Staging in X", description + " is being frozen and sent to your linked X DM...", "loading", false);
         try {
           var data = await post(body);
-          if (data.staged !== true) throw new Error(data.error || "The trade could not be staged.");
-          setBusy(false, true);
-          var detail = String(data.message || summary + " is waiting in your X DM.");
-          setStatus(detail + " No trade has run yet. Return to X and reply YES to execute or NO to cancel.", "success", "Trade staged - confirm in X");
+          if (data.staged !== true) throw new Error(data.error || "The action could not be staged.");
+          confirmationActive = true;
+          setBusy(false);
+          setStatus("Confirm in X — nothing has run yet", "Reply YES to execute or NO to cancel. This exact request expires in two minutes.", "warning", true);
           statusEl.scrollIntoView({ behavior: "smooth", block: "center" });
+          scheduleStatusPoll(700);
         } catch (error) {
-          setBusy(false, false);
-          setStatus(friendlyError(error) + " No trade ran.", "error");
+          setBusy(false);
+          if (/abort|timed out|failed to fetch|network|load failed/i.test(String(error && (error.name + " " + error.message) || error || "")) && sessionToken) {
+            confirmationActive = true;
+            updateActionAvailability();
+            setStatus("Checking whether X received it", "The response was interrupted. Do not restage; SlimeWire is checking the server's pending state now.", "loading", true);
+            scheduleStatusPoll(500);
+          } else {
+            setStatus("Nothing was submitted", friendlyError(error), "error", error && error.status === 401);
+          }
         }
       }
 
-      document.getElementById("buyPresets").addEventListener("click", function (event) {
-        var button = event.target.closest("button[data-buy]");
-        if (button) stage("prepare_buy", button.dataset.buy);
-      });
+      function renderConfirmationState(pending, executing) {
+        confirmationActive = Boolean(pending || executing);
+        updateActionAvailability();
+        if (executing) {
+          setStatus("Confirmed action is running", "SlimeWire is finishing the confirmed " + String(executing.action || "action").replace(/_/g, " ") + ". Keep this page open for the receipt.", "loading", true);
+        } else if (pending) {
+          var summary = pending.summary ? pending.summary + ". " : "";
+          setStatus("Waiting for YES or NO in X", summary + "Nothing executes until you confirm. The request expires automatically.", "warning", true);
+        }
+      }
 
-      document.getElementById("sellPresets").addEventListener("click", function (event) {
-        var button = event.target.closest("button[data-sell]");
-        if (button) stage("prepare_sell", button.dataset.sell);
-      });
+      function scheduleStatusPoll(delay) {
+        window.clearTimeout(statusPollTimer);
+        statusPollTimer = window.setTimeout(pollStatus, Number(delay) || 2000);
+      }
 
-      document.getElementById("customBuyForm").addEventListener("submit", function (event) {
+      async function pollStatus() {
+        if (!sessionToken || !confirmationActive) return;
+        try {
+          var data = await post({ action: "status" });
+          if (data.pending || data.executing) {
+            renderConfirmationState(data.pending, data.executing);
+            scheduleStatusPoll(2000);
+            return;
+          }
+          confirmationActive = false;
+          updateActionAvailability();
+          try {
+            await refreshMenu(true);
+            setStatus("X confirmation closed", "No active X confirmation remains. Check the X conversation for the final result before starting another action.", "", true);
+          } catch (refreshError) {
+            setStatus("X confirmation closed", "No active X confirmation remains, but wallet and preset data could not refresh yet. Check X for the final result, then reload this page.", "warning", true);
+          }
+        } catch (error) {
+          if (error && error.status === 401) {
+            showLocked(friendlyError(error));
+            return;
+          }
+          setStatus("Checking X confirmation", "The status check is taking longer than usual. Do not restage; the Trade Pad will keep checking.", "loading", true);
+          scheduleStatusPoll(3500);
+        }
+      }
+
+      async function refreshMenu(silent) {
+        var data = await post({ action: "view" });
+        if (!data.menu) throw new Error("Trade Pad data is unavailable.");
+        var keepMessage = silent && !confirmationActive;
+        renderMenu(data.menu);
+        if (keepMessage) setStatus("Trade Pad ready", "Wallets and settings are synced. Money moves only after YES in X.", "", false);
+      }
+
+      function parseLadder(value) {
+        var text = String(value || "").trim();
+        if (!text) return [];
+        var rows = text.split(",").map(function (part) {
+          var pieces = part.trim().split(":");
+          return { pct: Number(pieces[0]), sellPercent: Number(pieces[1]) };
+        });
+        if (rows.length > 8 || rows.some(function (row) { return !Number.isFinite(row.pct) || row.pct <= 0 || !Number.isFinite(row.sellPercent) || row.sellPercent <= 0 || row.sellPercent > 100; })) {
+          throw new Error("Use ladder format 25:30, 50:30, 100:40 with up to eight positive steps.");
+        }
+        var total = rows.reduce(function (sum, row) { return sum + row.sellPercent; }, 0);
+        if (total > 100) throw new Error("Ladder sell percentages cannot total more than 100%.");
+        return rows;
+      }
+
+      async function savePreset(event) {
         event.preventDefault();
-        stage("prepare_buy", document.getElementById("customAmount").value);
+        if (requestBusy) return;
+        try {
+          var type = document.getElementById("presetType").value === "bundle" ? "bundle" : "trade";
+          var amount = positiveAmount(document.getElementById("presetAmount"), .001, 50, "Solana amount");
+          var slippagePct = positiveAmount(document.getElementById("presetSlippage"), .5, 50, "Slippage");
+          var tp = numberValue(document.getElementById("presetTp").value, 0);
+          var sl = numberValue(document.getElementById("presetSl").value, 0);
+          if (tp < 0 || tp > 10000 || sl < 0 || sl > 95) throw new Error("Take profit or stop loss is outside the supported range.");
+          var preset = {
+            name: document.getElementById("presetName").value,
+            amountSol: String(amount),
+            takeProfitPct: String(tp),
+            stopLossPct: String(sl),
+            slippageBps: String(Math.round(slippagePct * 100)),
+            sellDelay: "off",
+            sellPercent: "100",
+            takeProfitLadder: model.chain === "solana" ? parseLadder(document.getElementById("presetLadder").value) : []
+          };
+          if (type === "trade") preset.walletIndex = selectedWalletIndex;
+          else {
+            preset.walletIndexes = selectedWalletIndexes();
+            if (!preset.walletIndexes.length) throw new Error("Select at least one Bundle wallet before saving this preset.");
+          }
+          setBusy(true);
+          setStatus("Saving preset", "Syncing this setup to your linked SlimeWire account...", "loading", false);
+          var data = await post({ action: "save_preset", type: type, presetAction: "save", preset: preset });
+          model.presets = data.presets || model.presets;
+          setBusy(false);
+          renderPresetRail();
+          renderPresetList();
+          fillPresetSelect(document.getElementById("bundlePreset"), "bundle", selectedBundlePresetId, true);
+          fillPresetSelect(document.getElementById("copyPreset"), "trade", selectedTradePresetId, true);
+          fillPresetSelect(document.getElementById("launchPreset"), "trade", selectedTradePresetId, true);
+          setStatus("Preset saved", "This setup will be ready in future Trade Pad sessions.", "", false);
+        } catch (error) {
+          setBusy(false);
+          setStatus("Preset was not saved", friendlyError(error), "error", false);
+        }
+      }
+
+      async function deletePreset(preset) {
+        if (requestBusy || !preset || preset.readonly) return;
+        setBusy(true);
+        try {
+          var data = await post({ action: "save_preset", type: preset.kind, presetAction: "delete", id: preset.id });
+          model.presets = data.presets || model.presets;
+          if (selectedTradePresetId === preset.id) selectedTradePresetId = "";
+          if (selectedBundlePresetId === preset.id) selectedBundlePresetId = "";
+          setBusy(false);
+          renderPresetRail();
+          renderPresetList();
+          fillPresetSelect(document.getElementById("bundlePreset"), "bundle", selectedBundlePresetId, true);
+          fillPresetSelect(document.getElementById("copyPreset"), "trade", selectedTradePresetId, true);
+          fillPresetSelect(document.getElementById("launchPreset"), "trade", selectedTradePresetId, true);
+          renderSelectedConfig();
+          setStatus("Preset removed", "The saved setup is no longer in your Trade Pad.", "", false);
+        } catch (error) {
+          setBusy(false);
+          setStatus("Preset was not removed", friendlyError(error), "error", false);
+        }
+      }
+
+      function randomRequestId() {
+        if (window.crypto && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
+        return String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+      }
+
+      async function createWallets(event) {
+        event.preventDefault();
+        if (requestBusy) return;
+        if (confirmationActive) {
+          setStatus("Finish the X confirmation first", "Reply YES or NO in X before creating wallets.", "warning", true);
+          return;
+        }
+        if (recoveryFilesPending()) {
+          setStatus("Save both recovery files first", "Start both downloads before creating another wallet set.", "warning", false);
+          switchTab("wallets");
+          return;
+        }
+        var label = String(document.getElementById("walletLabel").value || "").trim();
+        var count = Number(document.getElementById("walletCount").value);
+        if (!label || count < 1 || count > 6) {
+          setStatus("Check wallet details", "Enter a label and choose from one to six wallets.", "error", false);
+          return;
+        }
+        if (!walletCreateAttempt || walletCreateAttempt.label !== label || walletCreateAttempt.count !== count) {
+          walletCreateAttempt = { label: label, count: count, requestId: randomRequestId() };
+        }
+        var attempt = walletCreateAttempt;
+        setBusy(true);
+        setWalletCreateFieldsDisabled(true);
+        updateWalletCreateButton();
+        setStatus("Creating managed wallets", "Generating wallets and one-time recovery documents...", "loading", false);
+        try {
+          var data = await post({ action: "create_wallet", label: label, count: count, requestId: attempt.requestId }, { timeoutMs: 35000 });
+          if (!data.created || !data.downloads) throw new Error("Wallet recovery documents were not returned.");
+          recoveryDocs = data.downloads;
+          recoveryDownloadState = { encryptedBackup: false, recoveryKeys: false };
+          document.getElementById("downloadEncrypted").textContent = "Encrypted backup";
+          document.getElementById("downloadRecovery").textContent = "Recovery keys";
+          walletCreateAttempt = null;
+          document.getElementById("recoveryPanel").hidden = false;
+          var walletSyncFailed = false;
+          try { await refreshMenu(true); } catch (_) { walletSyncFailed = true; }
+          setWalletCreateFieldsDisabled(false);
+          setBusy(false);
+          setStatus(
+            "Wallets created — save both files",
+            walletSyncFailed
+              ? "The wallet list could not refresh yet, but creation completed. Download both recovery documents before leaving."
+              : "Recovery documents exist only in this open page. Download them before leaving.",
+            "warning",
+            false
+          );
+          switchTab("wallets");
+        } catch (error) {
+          var uncertain = walletCreateOutcomeUncertain(error);
+          walletCreateAttempt = uncertain ? attempt : null;
+          setWalletCreateFieldsDisabled(false);
+          setBusy(false);
+          if (uncertain) {
+            setStatus(
+              "Wallet creation status unknown",
+              "The server may have finished after the connection ended. Tap Retry wallet recovery now; the same request ID will ask for the original files without intentionally creating another set.",
+              "warning",
+              false
+            );
+          } else {
+            setStatus("Wallets were not created", friendlyError(error), "error", false);
+          }
+        }
+      }
+
+      function downloadDocument(kind) {
+        var doc = recoveryDocs && recoveryDocs[kind];
+        if (!doc || typeof doc.text !== "string") {
+          setStatus("Recovery file unavailable", "Create a fresh wallet set to generate a new recovery document.", "error", false);
+          return;
+        }
+        try {
+          var blob = new Blob([doc.text], { type: "text/plain;charset=utf-8" });
+          var url = URL.createObjectURL(blob);
+          var link = document.createElement("a");
+          link.href = url;
+          link.download = String(doc.filename || (kind + ".txt")).replace(/[\\/:*?"<>|]/g, "-");
+          link.rel = "noopener";
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+          recoveryDownloadState[kind] = true;
+          document.getElementById(kind === "encryptedBackup" ? "downloadEncrypted" : "downloadRecovery").textContent = "Download started";
+          updateWalletCreateButton();
+          if (!recoveryFilesPending()) {
+            setStatus("Both recovery downloads started", "Verify both files are saved somewhere private before funding these wallets.", "", false);
+          }
+        } catch (error) {
+          setStatus("Recovery download did not start", "Keep this page open and try again. " + friendlyError(error), "error", false);
+        }
+      }
+
+      function tradeBody(action) {
+        var walletIndex = String(document.getElementById(action === "prepare_sell" ? "sellWallet" : "quickWallet").value || selectedWalletIndex);
+        selectedWalletIndex = walletIndex;
+        var body = { action: action, walletIndex: walletIndex };
+        if (selectedTradePresetId) body.presetId = selectedTradePresetId;
+        if (action === "prepare_buy") {
+          var amount = positiveAmount(document.getElementById("quickAmount"), model.chain === "solana" ? .001 : .00001, model.chain === "solana" ? 50 : 2, model.assetSymbol + " buy amount");
+          if (model.chain === "solana") body.amountSol = amount;
+          else body.amountEth = amount;
+        }
+        return body;
+      }
+
+      document.querySelectorAll(".tab").forEach(function (tab) {
+        tab.addEventListener("click", function () { switchTab(tab.dataset.tab); });
+        tab.addEventListener("keydown", handleTabKeydown);
       });
+
+      document.getElementById("quickWallet").addEventListener("change", function () {
+        selectedWalletIndex = this.value;
+        document.getElementById("sellWallet").value = selectedWalletIndex;
+        renderWallets();
+      });
+      document.getElementById("sellWallet").addEventListener("change", function () {
+        selectedWalletIndex = this.value;
+        document.getElementById("quickWallet").value = selectedWalletIndex;
+        renderWallets();
+      });
+      document.getElementById("bundlePreset").addEventListener("change", function () {
+        selectedBundlePresetId = this.value;
+        if (selectedBundlePresetId) usePreset("bundle", selectedBundlePresetId, false);
+      });
+      document.getElementById("bundleAmount").addEventListener("input", renderSelectedConfig);
+      document.getElementById("copyPreset").addEventListener("change", function () {
+        selectedTradePresetId = this.value;
+        if (selectedTradePresetId) usePreset("trade", selectedTradePresetId, false);
+        else { renderPresetRail(); renderSelectedConfig(); }
+      });
+      document.getElementById("launchPreset").addEventListener("change", function () {
+        selectedTradePresetId = this.value;
+        if (selectedTradePresetId) usePreset("trade", selectedTradePresetId, false);
+        else { renderPresetRail(); renderSelectedConfig(); }
+      });
+
+      document.getElementById("stageBuy").addEventListener("click", function () {
+        try { stageAction(tradeBody("prepare_buy"), "Buy " + document.getElementById("quickAmount").value + " " + model.assetSymbol); }
+        catch (error) { setStatus("Check the buy", friendlyError(error), "error", false); }
+      });
+      document.getElementById("singleSellGrid").addEventListener("click", function (event) {
+        var button = event.target.closest("[data-sell-percent]");
+        if (!button) return;
+        try {
+          var body = tradeBody("prepare_sell");
+          body.percent = Number(button.dataset.sellPercent);
+          stageAction(body, "Sell " + body.percent + "% from wallet #" + body.walletIndex);
+        } catch (error) { setStatus("Check the sell", friendlyError(error), "error", false); }
+      });
+      document.getElementById("stageBundleBuy").addEventListener("click", function () {
+        try {
+          var amount = positiveAmount(document.getElementById("bundleAmount"), model.chain === "solana" ? .001 : .00001, model.chain === "solana" ? 50 : .5, model.assetSymbol + " bundle amount");
+          var indexes = selectedWalletIndexes();
+          if (!indexes.length) throw new Error("Select at least one Bundle wallet first.");
+          var body = { action: "prepare_bundle_buy", walletIndexes: indexes };
+          if (selectedBundlePresetId) body.presetId = selectedBundlePresetId;
+          if (model.chain === "solana") body.amountSol = amount;
+          else body.amountEth = amount;
+          stageAction(body, "Bundle buy " + amountText(amount) + " " + model.assetSymbol + " each, " + amountText(amount * indexes.length) + " " + model.assetSymbol + " total, on wallet" + (indexes.length === 1 ? " #" : "s #") + indexes.join(", #"));
+        } catch (error) { setStatus("Check the bundle", friendlyError(error), "error", false); }
+      });
+      document.getElementById("stageBundleSell").addEventListener("click", function () {
+        try {
+          var indexes = selectedWalletIndexes();
+          if (!indexes.length) throw new Error("Select at least one Bundle wallet first.");
+          var body = {
+            action: "prepare_bundle_sell",
+            walletIndexes: indexes,
+            percent: Number(document.getElementById("bundleSellPercent").value)
+          };
+          if (selectedBundlePresetId) body.presetId = selectedBundlePresetId;
+          stageAction(body, "Bundle sell " + body.percent + "% from wallet" + (indexes.length === 1 ? " #" : "s #") + indexes.join(", #"));
+        } catch (error) { setStatus("Check the bundle", friendlyError(error), "error", false); }
+      });
+
+      document.getElementById("automationButton").addEventListener("click", function () {
+        var mode = this.dataset.mode || "enable";
+        stageAction({ action: "prepare_automation", mode: mode }, mode === "enable" ? "Enable 30-day managed-wallet automation" : "Revoke managed-wallet automation");
+      });
+      document.getElementById("stageCopyWallet").addEventListener("click", function () {
+        try {
+          var amount = positiveAmount(document.getElementById("copyAmount"), .001, 50, "Copy amount");
+          var indexes = selectedWalletIndexes();
+          if (!indexes.length) throw new Error("Select at least one Bundle wallet first.");
+          var body = {
+            action: "prepare_copy_wallet",
+            copyWallet: document.getElementById("copyWalletAddress").value.trim(),
+            walletIndexes: indexes,
+            amountSol: amount
+          };
+          var preset = document.getElementById("copyPreset").value;
+          if (preset) body.presetId = preset;
+          if (!body.copyWallet) throw new Error("Enter the Solana wallet to watch.");
+          stageAction(body, "Copy one next unseen buy from " + shortAddress(body.copyWallet));
+        } catch (error) { setStatus("Check the copy rule", friendlyError(error), "error", false); }
+      });
+      document.getElementById("launchChain").addEventListener("change", function () {
+        var rh = this.value === "robinhood";
+        document.getElementById("launchUnit").textContent = rh ? "ETH" : "SOL";
+        document.getElementById("launchAmount").value = rh ? ".01" : numberValue(model.quickAmount, .1);
+        document.getElementById("launchAmount").max = rh ? ".5" : "50";
+        document.getElementById("launchAmount").min = rh ? ".00001" : ".001";
+      });
+      document.getElementById("stageCopyLaunch").addEventListener("click", function () {
+        try {
+          var chain = document.getElementById("launchChain").value === "robinhood" ? "robinhood" : "solana";
+          var amount = positiveAmount(document.getElementById("launchAmount"), chain === "robinhood" ? .00001 : .001, chain === "robinhood" ? .5 : 50, chain === "robinhood" ? "ETH amount" : "SOL amount");
+          var indexes = selectedWalletIndexes();
+          if (!indexes.length) throw new Error("Select at least one Bundle wallet first.");
+          var body = {
+            action: "prepare_copy_launch",
+            chain: chain,
+            launchWallet: document.getElementById("launchWalletAddress").value.trim(),
+            walletIndexes: indexes
+          };
+          if (chain === "robinhood") body.amountEth = amount;
+          else body.amountSol = amount;
+          var preset = document.getElementById("launchPreset").value;
+          if (preset) body.presetId = preset;
+          if (!body.launchWallet) throw new Error("Enter the creator or deployer wallet.");
+          stageAction(body, "Watch " + shortAddress(body.launchWallet) + " for its next " + (chain === "robinhood" ? "Robinhood" : "Solana") + " launch");
+        } catch (error) { setStatus("Check the launch watch", friendlyError(error), "error", false); }
+      });
+
+      document.getElementById("presetForm").addEventListener("submit", savePreset);
+      document.getElementById("presetType").addEventListener("change", function () {
+        document.getElementById("presetWalletScope").textContent = this.value === "bundle"
+          ? "The currently checked Bundle wallets will be saved with this preset."
+          : "The currently selected single wallet will be saved with this preset.";
+      });
+      document.getElementById("walletCreateForm").addEventListener("submit", createWallets);
+      document.getElementById("walletLabel").addEventListener("input", function () { walletCreateAttempt = null; updateWalletCreateButton(); });
+      document.getElementById("walletCount").addEventListener("change", function () { walletCreateAttempt = null; updateWalletCreateButton(); });
+      document.getElementById("downloadEncrypted").addEventListener("click", function () { downloadDocument("encryptedBackup"); });
+      document.getElementById("downloadRecovery").addEventListener("click", function () { downloadDocument("recoveryKeys"); });
 
       document.getElementById("copyMint").addEventListener("click", async function () {
-        if (!mint) return;
+        if (!model || !model.mint) return;
         var button = this;
         try {
-          await navigator.clipboard.writeText(mint);
+          await navigator.clipboard.writeText(model.mint);
           button.textContent = "Copied";
         } catch (_) {
           var selection = window.getSelection();
@@ -563,23 +1861,104 @@
           selection.addRange(range);
           button.textContent = "CA selected";
         }
-        window.setTimeout(function () { button.textContent = "Copy CA"; }, 1600);
+        window.setTimeout(function () { button.textContent = "Copy CA"; }, 1500);
       });
 
-      async function boot() {
-        if (!signedToken) {
-          setStatus("This Trade Pad link is missing or incomplete.", "error");
-          recoveryEl.hidden = false;
+      async function endSession() {
+        if (!sessionToken) return showLocked();
+        if (recoveryFilesPending()) {
+          setStatus("Save both recovery files first", "Signing out would remove this page's only copy of the recovery documents.", "warning", false);
+          switchTab("wallets");
           return;
         }
+        var old = sessionToken;
+        var button = document.getElementById("endSession");
+        setBusy(true);
+        button.disabled = true;
+        setStatus("Signing out", "Revoking this browser's Trade Pad session...", "loading", false);
         try {
-          var payload = await post({ token: signedToken, action: "view" });
-          renderMenu(payload);
+          await post({ action: "end_session", session: old });
         } catch (error) {
-          setStatus(friendlyError(error), "error");
-          recoveryEl.hidden = false;
+          if (!error || error.status !== 401) {
+            var revokeReason = /abort|timed out/i.test(String(error && (error.name + " " + error.message) || error || ""))
+              ? "The revoke request timed out."
+              : friendlyError(error);
+            setBusy(false);
+            button.disabled = false;
+            setStatus("Sign out could not be confirmed", "The server session may still be active. Keep this page open and tap Sign out again. " + revokeReason, "error", false);
+            return;
+          }
         }
+        clearSession();
+        window.clearTimeout(statusPollTimer);
+        window.clearInterval(keepAliveTimer);
+        confirmationActive = false;
+        recoveryDocs = null;
+        recoveryDownloadState = { encryptedBackup: false, recoveryKeys: false };
+        document.getElementById("recoveryPanel").hidden = true;
+        setBusy(false);
+        showLocked("This browser has been signed out. Open a fresh link from the SlimeWire X bot to reconnect. If a confirmation is already waiting in X, reply NO there to cancel it.");
       }
+
+      document.getElementById("endSession").addEventListener("click", endSession);
+
+      async function boot() {
+        var url;
+        try { url = new URL(window.location.href); bootstrapToken = url.searchParams.get("t") || ""; } catch (_) { bootstrapToken = ""; }
+        var handoffToken = bootstrapToken;
+        if (handoffToken) stripBootstrapToken();
+        var savedSession = loadSession();
+        if (handoffToken) {
+          try {
+            var exchanged = await post({ token: handoffToken, action: "view" });
+            if (!validSession(exchanged.session) && !sessionToken) throw new Error("The private session exchange was incomplete.");
+            saveSession(exchanged.session || sessionToken);
+            renderMenu(exchanged.menu);
+            return;
+          } catch (exchangeError) {
+            if (!savedSession) {
+              showLocked(friendlyError(exchangeError));
+              return;
+            }
+          }
+        }
+        if (savedSession) {
+          try {
+            sessionToken = savedSession;
+            var restored = await post({ session: savedSession, action: "view" });
+            saveSession(savedSession);
+            renderMenu(restored.menu);
+            if (handoffToken) {
+              setStatus("Previous Trade Pad restored", "The newest link could not be exchanged, so this browser restored its still-valid scoped session.", "warning", false);
+            }
+            return;
+          } catch (restoreError) {
+            clearSession();
+            showLocked(friendlyError(restoreError));
+            return;
+          }
+        }
+        showLocked("No private session was found. Send a coin number to the SlimeWire X bot and open its newest Trade Pad link.");
+      }
+
+      keepAliveTimer = window.setInterval(function () {
+        if (!sessionToken || document.visibilityState !== "visible" || confirmationActive) return;
+        post({ action: "status" }).catch(function (error) {
+          if (error && error.status === 401) showLocked(friendlyError(error));
+        });
+      }, 15 * 60 * 1000);
+      window.addEventListener("online", function () {
+        if (sessionToken && confirmationActive) scheduleStatusPoll(250);
+      });
+      window.addEventListener("beforeunload", function (event) {
+        if (!recoveryFilesPending()) return;
+        event.preventDefault();
+        event.returnValue = "";
+      });
+      window.addEventListener("pagehide", function () {
+        window.clearTimeout(statusPollTimer);
+        window.clearInterval(keepAliveTimer);
+      });
 
       boot();
     }());

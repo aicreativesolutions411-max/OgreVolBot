@@ -14,6 +14,22 @@
 // imported at module top — so this optional, fragile feature can never crash the main app's boot. If the
 // dep fails to load, every X call just no-ops.
 let _xti = null;
+let _xtiLoadPromise = null;
+function boundedMs(value, fallback, min, max) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(min, Math.min(max, parsed)) : fallback;
+}
+async function withDeadline(promise, timeoutMs, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 // The signing lib uses ArrayBuffer.prototype.transfer() (Node 22+). Render may run older Node, where it's
 // missing → "output.buffer.transfer is not a function". Polyfill it (a plain copy is functionally fine for
 // the lib's hashing) right before the lazy import, so we don't have to bump the whole app's Node version.
@@ -34,9 +50,22 @@ function polyfillArrayBufferTransfer() {
 }
 async function loadXti() {
   if (_xti) return _xti;
+  if (_xtiLoadPromise) return await _xtiLoadPromise;
   polyfillArrayBufferTransfer();
-  _xti = await import("x-client-transaction-id");
-  return _xti;
+  const pending = withDeadline(
+    import("x-client-transaction-id"),
+    boundedMs(process.env.X_SIGNER_IMPORT_TIMEOUT_MS, 5_000, 1_000, 15_000),
+    "X transaction signer import"
+  ).then((loaded) => {
+    _xti = loaded;
+    return loaded;
+  });
+  _xtiLoadPromise = pending;
+  try {
+    return await pending;
+  } finally {
+    if (_xtiLoadPromise === pending) _xtiLoadPromise = null;
+  }
 }
 
 // The public web-app bearer (not a secret — it's shipped in x.com's JS). Overridable via env.
@@ -74,34 +103,117 @@ export function xConfigured() { return hasXCookies(); }
 export function xAuthMode() { return hasXCookies() ? "cookies" : hasXPassword() ? "password (unsupported — use cookies)" : "none"; }
 export function xHandle() { return String(process.env.X_HANDLE || process.env.TELEGRAM_BOT_USERNAME || "SlimeWiredBot").replace(/^@+/, "").trim(); }
 
-// ---- Session (transaction signer + live query-id map), refreshed periodically --------------------
-let session = null; // { tx, qmap, at }
+// ---- Session caches -----------------------------------------------------------------------------
+// REST calls (including DMs) only need the transaction signer. Keep its refresh completely separate
+// from the slower GraphQL query-id scrape so a bundle-host hiccup can never stall the DM inbox.
+const X_SESSION_TTL_MS = 25 * 60_000;
+const X_COOKIE_OWN_USER_TTL_MS = 60 * 60_000;
+let signerSession = null;       // { tx, at }
+let signerRefreshPromise = null;
+let queryIdSession = null;      // { qmap, at }
+let queryIdRefreshPromise = null;
+let scraperGeneration = 0;
+let cookieOwnUserCache = { id: "", at: 0, auth: "" };
+
 async function scrapeQueryIds() {
   const map = {};
   try {
-    const home = await (await fetch("https://x.com/", { headers: { "user-agent": UA, accept: "text/html" } })).text();
+    const homeTimeoutMs = boundedMs(process.env.X_QUERY_HOME_TIMEOUT_MS, 4_000, 1_000, 10_000);
+    const bundleTimeoutMs = boundedMs(process.env.X_QUERY_BUNDLE_TIMEOUT_MS, 2_500, 750, 8_000);
+    const home = await (await fetch("https://x.com/", {
+      headers: { "user-agent": UA, accept: "text/html" },
+      signal: AbortSignal.timeout(homeTimeoutMs)
+    })).text();
     const urls = [...new Set([...home.matchAll(/https:\/\/abs\.twimg\.com\/responsive-web\/client-web\/[a-zA-Z0-9._/-]+\.js/g)].map((m) => m[0]))];
     const scan = (urls.filter((u) => /\/(main|api|endpoints|bundle)\./.test(u)) || []);
-    for (const u of (scan.length ? scan : urls).slice(0, 12)) {
+    const selected = (scan.length ? scan : urls).slice(0, 10);
+    const bundles = await Promise.allSettled(selected.map(async (u) => {
       try {
-        const js = await (await fetch(u, { headers: { "user-agent": UA } })).text();
-        for (const m of js.matchAll(/queryId:"([^"]+)",operationName:"([^"]+)"/g)) map[m[2]] = m[1];
-        for (const m of js.matchAll(/operationName:"([^"]+)"[^}]{0,80}?queryId:"([^"]+)"/g)) map[m[1]] = m[2];
-      } catch { /* skip a bundle */ }
+        return await (await fetch(u, {
+          headers: { "user-agent": UA },
+          signal: AbortSignal.timeout(bundleTimeoutMs)
+        })).text();
+      } catch { return ""; }
+    }));
+    for (const result of bundles) {
+      if (result.status !== "fulfilled" || !result.value) continue;
+      for (const m of result.value.matchAll(/queryId:"([^"]+)",operationName:"([^"]+)"/g)) map[m[2]] = m[1];
+      for (const m of result.value.matchAll(/operationName:"([^"]+)"[^}]{0,80}?queryId:"([^"]+)"/g)) map[m[1]] = m[2];
     }
   } catch { /* fall back to hardcoded ids */ }
   return map;
 }
-async function getSession() {
-  if (session && Date.now() - session.at < 25 * 60_000) return session;
-  const { ClientTransaction, fetchXDocument } = await loadXti(); // lazy: never loaded at app boot
-  const doc = await fetchXDocument();
-  const tx = await ClientTransaction.create(doc);
-  const qmap = await scrapeQueryIds();
-  session = { tx, qmap, at: Date.now() };
-  return session;
+
+async function buildSignerSession() {
+  const { ClientTransaction, fetchXDocument } = await loadXti();
+  const documentTimeoutMs = boundedMs(process.env.X_SIGNER_DOCUMENT_TIMEOUT_MS, 6_000, 1_500, 15_000);
+  const createTimeoutMs = boundedMs(process.env.X_SIGNER_CREATE_TIMEOUT_MS, 3_000, 750, 10_000);
+  const doc = await withDeadline(Promise.resolve().then(() => fetchXDocument()), documentTimeoutMs, "X signer document");
+  const tx = await withDeadline(Promise.resolve().then(() => ClientTransaction.create(doc)), createTimeoutMs, "X signer create");
+  return { tx, at: Date.now() };
 }
-export function resetXScraper() { session = null; }
+
+async function getSignerSession() {
+  if (signerSession && Date.now() - signerSession.at < X_SESSION_TTL_MS) return signerSession;
+  const stale = signerSession;
+  if (!signerRefreshPromise) {
+    const generation = scraperGeneration;
+    const pending = buildSignerSession().then((fresh) => {
+      if (generation === scraperGeneration) signerSession = fresh;
+      return fresh;
+    });
+    signerRefreshPromise = pending;
+    pending.finally(() => {
+      if (signerRefreshPromise === pending) signerRefreshPromise = null;
+    }).catch(() => {});
+  }
+  try {
+    return await signerRefreshPromise;
+  } catch (error) {
+    // A signer that was working moments ago is a safer temporary fallback than freezing every REST
+    // call because X's bootstrap document had a transient outage.
+    if (stale?.tx) return stale;
+    throw error;
+  }
+}
+
+async function getQueryIdMap() {
+  if (queryIdSession && Date.now() - queryIdSession.at < X_SESSION_TTL_MS) return queryIdSession.qmap;
+  const stale = queryIdSession;
+  if (!queryIdRefreshPromise) {
+    const generation = scraperGeneration;
+    const scrapeTimeoutMs = boundedMs(process.env.X_QUERY_SCRAPE_TIMEOUT_MS, 8_000, 2_000, 20_000);
+    const pending = withDeadline(scrapeQueryIds(), scrapeTimeoutMs, "X query-id scrape").then((qmap) => {
+      const fresh = { qmap: qmap || {}, at: Date.now() };
+      if (generation === scraperGeneration) queryIdSession = fresh;
+      return fresh.qmap;
+    });
+    queryIdRefreshPromise = pending;
+    pending.finally(() => {
+      if (queryIdRefreshPromise === pending) queryIdRefreshPromise = null;
+    }).catch(() => {});
+  }
+  try {
+    return await queryIdRefreshPromise;
+  } catch (error) {
+    if (stale?.qmap) return stale.qmap;
+    // qid() still has tested fallbacks for every operation used by this client.
+    return {};
+  }
+}
+
+async function getSession() {
+  const [{ tx, at }, qmap] = await Promise.all([getSignerSession(), getQueryIdMap()]);
+  return { tx, qmap, at };
+}
+export function resetXScraper() {
+  scraperGeneration++;
+  signerSession = null;
+  queryIdSession = null;
+  signerRefreshPromise = null;
+  queryIdRefreshPromise = null;
+  cookieOwnUserCache = { id: "", at: 0, auth: "" };
+}
 function qid(qmap, op) { return qmap[op] || FALLBACK_QID[op] || ""; }
 function baseHeaders(ct0, tid) {
   return { authorization: `Bearer ${BEARER}`, "x-csrf-token": ct0, "x-client-transaction-id": tid, cookie: `auth_token=${readCookieParts().auth}; ct0=${ct0}`, "content-type": "application/json", "x-twitter-active-user": "yes", "x-twitter-auth-type": "OAuth2Session", "x-twitter-client-language": "en", "user-agent": UA, accept: "*/*", origin: "https://x.com", referer: "https://x.com/" };
@@ -134,6 +246,7 @@ export async function xWhoAmI() {
     const screen = u?.legacy?.screen_name || u?.core?.screen_name;
     const name = u?.legacy?.name || u?.core?.name;
     const id = u?.rest_id || u?.legacy?.id_str || "";
+    if (id) rememberCookieOwnUserId(id);
     lastAuthError = ""; lastAuthReport = { cookies: "ok", api: "ok" };
     return screen ? { username: screen, screenName: screen, name, id: id ? String(id) : "" } : null;
   } catch (e) {
@@ -177,7 +290,7 @@ function parseTweetResult(result) {
 async function signedGet(path, query) {
   if (!hasXCookies()) throw new Error("no cookies");
   const { auth, ct0 } = readCookieParts();
-  const { tx } = await getSession();
+  const { tx } = await getSignerSession();
   const tid = await tx.generateTransactionId("GET", path);
   const url = `https://x.com/i/api${path}${query ? "?" + query : ""}`;
   const res = await fetch(url, { headers: { ...baseHeaders(ct0, tid), cookie: `auth_token=${auth}; ct0=${ct0}` }, signal: AbortSignal.timeout(10_000) });
@@ -192,6 +305,12 @@ function cookieOwnUserId() {
   const decoded = (() => { try { return decodeURIComponent(twid); } catch { return twid; } })();
   return String((decoded.match(/u=(\d+)/) || [])[1] || "").trim();
 }
+function rememberCookieOwnUserId(value) {
+  const id = String(value || "").trim();
+  if (!id) return "";
+  cookieOwnUserCache = { id, at: Date.now(), auth: readCookieParts().auth };
+  return id;
+}
 function uuid4() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
@@ -203,7 +322,7 @@ function uuid4() {
 async function signedApiJson(method, path, { query = "", body = null } = {}) {
   if (!hasXCookies()) throw new Error("no cookies");
   const { auth, ct0 } = readCookieParts();
-  const { tx } = await getSession();
+  const { tx } = await getSignerSession();
   const tid = await tx.generateTransactionId(method, path);
   const qs = query ? (String(query).startsWith("?") ? String(query) : "?" + String(query)) : "";
   const headers = {
@@ -219,7 +338,7 @@ async function signedApiJson(method, path, { query = "", body = null } = {}) {
         method,
         headers,
         body: body == null ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(Number(process.env.X_DM_TIMEOUT_MS || 12_000))
+        signal: AbortSignal.timeout(boundedMs(process.env.X_DM_TIMEOUT_MS, 6_000, 2_000, 12_000))
       });
       const text = await res.text();
       if (res.status === 401 || res.status === 403) { resetXScraper(); const e = new Error(`auth ${res.status}`); e.status = res.status; throw e; }
@@ -257,10 +376,16 @@ function collectCookieDmEvents(node, out = [], seen = new Set()) {
 const DM_QUERY = "ext=mediaColor%2CaltText%2CmediaStats%2ChighlightedLabel%2CvoiceInfo%2CbirdwatchPivot%2CsuperFollowMetadata%2CunmentionInfo%2CeditControl%2Carticle&include_ext_alt_text=true&include_ext_limited_action_results=true&include_reply_count=1&tweet_mode=extended&include_ext_views=true&include_groups=true&include_inbox_timelines=true&include_ext_media_color=true&supports_reactions=true&supports_edit=true&dm_users=true";
 export function xCookieDmConfigured() { return hasXCookies(); }
 export async function xCookieDmOwnUserId() {
+  const fromEnv = clean(process.env.X_DM_OWN_USER_ID || "");
+  if (fromEnv) return rememberCookieOwnUserId(fromEnv);
   const fromCookie = cookieOwnUserId();
-  if (fromCookie) return fromCookie;
+  if (fromCookie) return rememberCookieOwnUserId(fromCookie);
+  const auth = readCookieParts().auth;
+  if (cookieOwnUserCache.id && cookieOwnUserCache.auth === auth && Date.now() - cookieOwnUserCache.at < X_COOKIE_OWN_USER_TTL_MS) {
+    return cookieOwnUserCache.id;
+  }
   const me = await xWhoAmI().catch(() => null);
-  return String(me?.id || "");
+  return me?.id ? rememberCookieOwnUserId(me.id) : "";
 }
 export async function xCookieDmFetchEvents({ maxResults = 50 } = {}) {
   if (!hasXCookies()) return [];
@@ -275,7 +400,6 @@ export async function xCookieDmSendText(participantId, text) {
   if (!hasXCookies()) return { ok: false, reason: "not configured" };
   const recipient = String(participantId || "").trim();
   if (!recipient) throw new Error("Missing X DM participant id");
-  const own = await xCookieDmOwnUserId().catch(() => "");
   const base = {
     request_id: uuid4(),
     text: String(text || "").slice(0, 9500),
@@ -284,15 +408,13 @@ export async function xCookieDmSendText(participantId, text) {
     include_quote_count: true,
     dm_users: true
   };
-  const variants = own
-    ? [
-        { ...base, conversation_id: `${recipient}-${own}`, recipient_ids: false },
-        { ...base, conversation_id: `${own}-${recipient}`, recipient_ids: false },
-        { ...base, recipient_ids: recipient }
-      ]
-    : [{ ...base, recipient_ids: recipient }];
+  // Recipient addressing does not need a Viewer lookup or guessed conversation-id ordering and is
+  // the normal fast path. Keep both conversation forms only as compatibility fallbacks.
+  const variants = [{ ...base, recipient_ids: recipient }];
+  let addedConversationFallbacks = false;
   let lastErr = "";
-  for (const body of variants) {
+  for (let index = 0; index < variants.length; index++) {
+    const body = variants[index];
     try {
       const json = await signedApiJson("POST", "/1.1/dm/new2.json", { query: DM_QUERY, body });
       const entries = Array.isArray(json?.entries) ? json.entries : Object.values(json?.entries || {});
@@ -300,6 +422,16 @@ export async function xCookieDmSendText(participantId, text) {
       return { ok: true, id: sent?.id || body.request_id };
     } catch (e) {
       lastErr = String(e?.message || e).slice(0, 160);
+      if (!addedConversationFallbacks) {
+        addedConversationFallbacks = true;
+        const own = await xCookieDmOwnUserId().catch(() => "");
+        if (own) {
+          variants.push(
+            { ...base, conversation_id: `${recipient}-${own}`, recipient_ids: false },
+            { ...base, conversation_id: `${own}-${recipient}`, recipient_ids: false }
+          );
+        }
+      }
     }
   }
   return { ok: false, reason: lastErr || "dm send failed" };
@@ -331,16 +463,49 @@ async function notificationMentions(count = 20) {
   }
   return out.sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
 }
+
+async function searchMentionsForHandle(handle, count = 20) {
+  const h = String(handle || "").replace(/^@+/, "").trim();
+  if (!h) return { count: 0, tweets: [] };
+  const j = await gql("GET", "SearchTimeline", {
+    variables: {
+      rawQuery: `(@${h}) -filter:retweets`,
+      count: Math.min(40, count),
+      querySource: "typed_query",
+      product: "Latest"
+    },
+    features: READ_FEATURES
+  });
+  const instr = j?.data?.search_by_raw_query?.search_timeline?.timeline?.instructions || [];
+  const tweets = [];
+  let resultCount = 0;
+  for (const ins of instr) for (const entry of (ins.entries || [])) {
+    if (!String(entry.entryId || "").startsWith("tweet-")) continue;
+    resultCount += 1;
+    const tweet = parseTweetResult(entry.content?.itemContent?.tweet_results?.result);
+    if (tweet) tweets.push(tweet);
+  }
+  return { count: resultCount, tweets };
+}
 // opts.includeSearch=false skips the SearchTimeline union (notifications only). The poller runs search on a
 // slow cadence: 2 searches (one per handle spelling) EVERY 30s tick was ~240 searches/hr → constant 429s that
 // ALSO starved the KOL first-responder + trench-watch, which share the same search quota. Notifications is the
 // instant, complete source; search is a safety net that doesn't need to run every tick.
 export async function xSearchMentions(count = 20, { includeSearch = true } = {}) {
+  // Start sources that do not depend on the live handle immediately. On a cold process,
+  // xResolvedHandle may need Viewer + query-id bootstrap; notifications should not sit idle behind it.
+  // The env-handle search is one of the exact same (at most two) searches this function already made.
+  const settleSource = (promise) => Promise.resolve(promise)
+    .then((value) => ({ ok: true, value }), (error) => ({ ok: false, error }));
+  const notificationPromise = settleSource(notificationMentions(count));
+  const envH = String(xHandle()).toLowerCase().replace(/^@+/, "");
+  const envSearchPromise = includeSearch && envH
+    ? settleSource(searchMentionsForHandle(envH, count))
+    : null;
   // Search BOTH the logged-in account's real handle (from whoami) AND the configured/TG handle — they can
   // differ (e.g. @SlimeWirebot vs @SlimeWiredBot), and a tag of one spelling would otherwise be invisible to
   // a search for the other. We reply from the cookie account either way, so a union is strictly safer.
   const resolved = String(await xResolvedHandle()).toLowerCase().replace(/^@+/, "");
-  const envH = String(xHandle()).toLowerCase().replace(/^@+/, "");
   // ALIASES: the account was RENAMED (@SlimeWireSol → @slimewirebot). X still routes tags of a FORMER handle
   // to this account's mentions feed, but user_mentions carries the OLD spelling — so we must recognize it too
   // or every old-handle tag is dropped (live logs: tweets mention "slimewiresol", handle is "slimewirebot",
@@ -368,26 +533,43 @@ export async function xSearchMentions(count = 20, { includeSearch = true } = {})
   };
   let n1 = 0, n2 = 0; const errs = []; let sample = "";
   // SOURCE 1: notifications feed — instant + complete (the account's real @mentions).
-  try {
-    const arr = await notificationMentions(count); n1 = arr.length; for (const t of arr) add(t, true);
-    // If notifications returned tweets but none passed the mention filter, capture WHY from the newest one.
-    if (arr.length && byId.size === 0) { const t = arr[0]; sample = ` sample[@${t.username} mentions=${(t.mentions || []).join("/") || "-"} replyTo=${t.inReplyToScreen || "-"} txt=${JSON.stringify(String(t.text || "").slice(0, 40))}]`; }
-  }
-  catch (e) { errs.push("notif:" + String(e?.message || e).slice(0, 50)); }
   // SOURCE 2: search — the freshest source (notifications lags for hours). Search ONLY the LIVE account handle
   // (the one the cookies resolve to) + the env handle if different — NOT the dead aliases. Searching all 4
   // spellings fired 4 SearchTimeline calls per tick → the last one always 429'd, throttling the REAL handle's
   // search so fresh tags never surfaced (the "tagged, got nothing" bug). One or two calls = no 429.
   const searchHandles = includeSearch ? [...new Set([resolved, envH].filter(Boolean))] : [];
-  for (const h of searchHandles) {
-    try {
-      const j = await gql("GET", "SearchTimeline", { variables: { rawQuery: `(@${h}) -filter:retweets`, count: Math.min(40, count), querySource: "typed_query", product: "Latest" }, features: READ_FEATURES });
-      const instr = j?.data?.search_by_raw_query?.search_timeline?.timeline?.instructions || [];
-      for (const ins of instr) for (const entry of (ins.entries || [])) {
-        if (!String(entry.entryId || "").startsWith("tweet-")) continue;
-        n2++; add(parseTweetResult(entry.content?.itemContent?.tweet_results?.result), false);
-      }
-    } catch (e) { errs.push(`search(@${h}):` + String(e?.message || e).slice(0, 50)); }
+  const searchPromises = searchHandles.map((h) => ({
+    h,
+    promise: h === envH && envSearchPromise
+      ? envSearchPromise
+      : settleSource(searchMentionsForHandle(h, count))
+  }));
+
+  // Await every already-started source together. The source set/call count is unchanged; only serial wait
+  // time is removed, so latency becomes roughly the slowest source rather than their sum.
+  const [notificationResult, ...searchResults] = await Promise.all([
+    notificationPromise,
+    ...searchPromises.map(({ promise }) => promise)
+  ]);
+
+  if (notificationResult.ok) {
+    const arr = notificationResult.value || [];
+    n1 = arr.length;
+    for (const t of arr) add(t, true);
+    if (arr.length && byId.size === 0) { const t = arr[0]; sample = ` sample[@${t.username} mentions=${(t.mentions || []).join("/") || "-"} replyTo=${t.inReplyToScreen || "-"} txt=${JSON.stringify(String(t.text || "").slice(0, 40))}]`; }
+  } else {
+    errs.push("notif:" + String(notificationResult.error?.message || notificationResult.error).slice(0, 50));
+  }
+
+  for (let i = 0; i < searchResults.length; i += 1) {
+    const result = searchResults[i];
+    const h = searchPromises[i].h;
+    if (!result.ok) {
+      errs.push(`search(@${h}):` + String(result.error?.message || result.error).slice(0, 50));
+      continue;
+    }
+    n2 += Number(result.value?.count || 0);
+    for (const tweet of (result.value?.tweets || [])) add(tweet, false);
   }
   const out = [...byId.values()].sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
   // DIAGNOSTIC: both sources previously swallowed errors, so a double failure returned [] with NO log — the
@@ -424,7 +606,7 @@ export async function xGetTweet(id) {
 async function uploadMedia(buffer) {
   if (!buffer || !hasXCookies()) return { id: null, error: "no buffer" };
   const { auth, ct0 } = readCookieParts();
-  let tx; try { ({ tx } = await getSession()); } catch (e) { return { id: null, error: "session:" + String(e?.message || e).slice(0, 50) }; }
+  let tx; try { ({ tx } = await getSignerSession()); } catch (e) { return { id: null, error: "session:" + String(e?.message || e).slice(0, 50) }; }
   const path = "/1.1/media/upload.json";
   let lastErr = "upload failed";
   for (const host of ["https://upload.twitter.com", "https://upload.x.com"]) {
@@ -441,6 +623,21 @@ async function uploadMedia(buffer) {
   }
   return { id: null, error: lastErr };
 }
+
+async function runXWithConcurrency(items, concurrency, worker) {
+  if (!items.length) return [];
+  const results = Array.from({ length: items.length });
+  let nextIndex = 0;
+  const runners = Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
 // General tweet poster — powers replies, STANDALONE posts (proactive auto-calls), and QUOTE-tweets (receipts,
 // KOL first-responder). Pass inReplyToId for a reply, quoteTweetId to quote another tweet, neither for a plain
 // broadcast. Up to 4 images (mediaBuffers[] or mediaBuffer).
@@ -449,7 +646,10 @@ export async function xPost({ text, mediaBuffer, mediaBuffers, inReplyToId, quot
   try {
     const bufs = (Array.isArray(mediaBuffers) ? mediaBuffers : [mediaBuffer]).filter(Boolean).slice(0, 4);
     const mediaIds = []; let media = "none";
-    for (const b of bufs) { const up = await uploadMedia(b); if (up.id) mediaIds.push(up.id); else media = "no-card:" + (up.error || ""); }
+    // X allows up to four images. Upload at most two concurrently: this cuts two-card map latency without
+    // turning a four-image post into a burst of four simultaneous upload requests. Input order is preserved.
+    const uploads = await runXWithConcurrency(bufs, 2, (buffer) => uploadMedia(buffer));
+    for (const up of uploads) { if (up.id) mediaIds.push(up.id); else media = "no-card:" + (up.error || ""); }
     if (mediaIds.length) media = mediaIds.length + "img";
     const variables = {
       tweet_text: String(text || "").slice(0, 279),

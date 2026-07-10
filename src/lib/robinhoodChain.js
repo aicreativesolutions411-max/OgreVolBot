@@ -728,8 +728,19 @@ export async function rhExecuteEvmSteps(solanaSecretKey, txs, rpcUrl, confirmTim
       throw e;
     }
     const sent = await wallet.sendTransaction(request);
-    await sent.wait(1, confirmTimeoutMs);
     hashes.push(sent.hash);
+    try {
+      await sent.wait(1, confirmTimeoutMs);
+    } catch (error) {
+      // The node accepted a signed transaction and gave us its stable hash.
+      // A receipt timeout is outcome-unknown, never permission to build/send a
+      // second swap. Callers persist this hash and pause for reconciliation.
+      const ambiguous = error instanceof Error ? error : new Error(String(error || "Robinhood transaction confirmation failed"));
+      ambiguous.tradeSubmissionAmbiguous = true;
+      ambiguous.transactionHash = sent.hash;
+      ambiguous.partialHashes = hashes.slice();
+      throw ambiguous;
+    }
   }
   return { hashes, address: wallet.address };
 }

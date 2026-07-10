@@ -8,6 +8,33 @@
 /config.js
   Cache-Control: no-store
 
+# X DM Trade Pad routes carry a private bootstrap token and scoped trading
+# session. Never let a browser, CDN, or intermediary cache either document.
+/x-dm-menu
+  Cache-Control: no-store, max-age=0, must-revalidate
+  Referrer-Policy: no-referrer
+  Content-Security-Policy: frame-ancestors 'none'
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+/x-dm-menu.html
+  Cache-Control: no-store, max-age=0, must-revalidate
+  Referrer-Policy: no-referrer
+  Content-Security-Policy: frame-ancestors 'none'
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+/x-menu
+  Cache-Control: no-store, max-age=0, must-revalidate
+  Referrer-Policy: no-referrer
+  Content-Security-Policy: frame-ancestors 'none'
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+/x-menu.html
+  Cache-Control: no-store, max-age=0, must-revalidate
+  Referrer-Policy: no-referrer
+  Content-Security-Policy: frame-ancestors 'none'
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+
 # Dynamic tool pages (live on-chain map/airdrop data). MUST never be cached: a stale copy pins the OLD
 # page whose relative /api/ fetch hits this static host (returns index.html) → false "chain is slow" /
 # "network dropped". no-store guarantees the browser always gets the current page (which calls the API origin).
