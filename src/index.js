@@ -5601,6 +5601,11 @@ function loadConfig() {
     webSessionTtlHours,
     resendApiKey: process.env.RESEND_API_KEY || "",
     emailFrom: process.env.EMAIL_FROM || "",
+    socialKitEmailDomain: String(process.env.SOCIAL_KIT_EMAIL_DOMAIN || "slimewire.org").trim().toLowerCase(),
+    namecheapApiUser: String(process.env.NAMECHEAP_API_USER || "").trim(),
+    namecheapApiKey: String(process.env.NAMECHEAP_API_KEY || "").trim(),
+    namecheapUsername: String(process.env.NAMECHEAP_USERNAME || process.env.NAMECHEAP_API_USER || "").trim(),
+    namecheapClientIp: String(process.env.NAMECHEAP_CLIENT_IP || "").trim(),
     tradingSpeedPreset,
     feeWallet,
     bundleFeeBps,
@@ -6775,6 +6780,10 @@ function startHealthServer() {
     }
     if (request.method === "GET" && ["/tg-guide", "/bot-guide", "/telegram-guide"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "tg-guide.html");
+      return;
+    }
+    if (request.method === "GET" && ["/social-kit", "/community-kit", "/coin-social"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "social-kit.html", "no-store, max-age=0");
       return;
     }
     if (request.method === "GET" && ["/install", "/download", "/app", "/get", "/getapp"].includes(requestUrl.pathname)) {
@@ -9101,6 +9110,26 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
 
     const auth = await authenticateWebRequest(request);
+
+    if (request.method === "POST" && pathname === "/api/web/social-kit/resolve") {
+      const body = await readJsonRequestBody(request);
+      const token = await resolveSocialKitToken(body.input);
+      sendWebJson(request, response, 200, { ok: true, token });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/social-kit/create") {
+      const body = await readJsonRequestBody(request);
+      const draft = await createSocialKitDraft(auth.userId, body);
+      sendWebJson(request, response, 200, { ok: true, draft: publicSocialKitDraft(draft) });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/social-kit/status") {
+      const draft = await socialKitDraftStatus(auth.userId, String(requestUrl.searchParams.get("id") || ""));
+      sendWebJson(request, response, 200, { ok: true, draft: publicSocialKitDraft(draft) });
+      return;
+    }
     if (request.method === "GET" && [
       "/api/web/me",
       "/api/web/wallets",
@@ -13351,6 +13380,10 @@ function webAuthPath() {
   return path.join(CONFIG.dataDir, "web-auth.json");
 }
 
+function socialKitsPath() {
+  return path.join(CONFIG.dataDir, "social-kits.json");
+}
+
 function lockInEventsPath() {
   return path.join(CONFIG.dataDir, "lock-in-events.json");
 }
@@ -14195,6 +14228,41 @@ async function handleMessage(message, userId) {
   }
 
   if (!text) return;
+
+  // Owner/admin-only one-time Social Kit passes. These commands work only in the bot DM so codes
+  // cannot accidentally be exposed in a group. A consumed code can never be reused.
+  const socialCodeCommand = /^\/(?:socialcode|kitcode)(?:@\w+)?(?:\s+(\d+))?$/i.exec(text);
+  const socialCodesCommand = /^\/(?:socialcodes|kitcodes)(?:@\w+)?$/i.test(text);
+  const socialRevokeCommand = /^\/(?:socialrevoke|kitrevoke)(?:@\w+)?\s+(\S+)$/i.exec(text);
+  if (isPrivateChat(message.chat) && (socialCodeCommand || socialCodesCommand || socialRevokeCommand)) {
+    if (!isAdmin(userId)) {
+      await say(chatId, "That command is for SlimeWire admins.");
+      return;
+    }
+    if (socialCodeCommand) {
+      const codes = await createSocialKitCodes(socialCodeCommand[1] || 1, userId);
+      await sayHtml(chatId, [
+        `🎟 <b>${codes.length} one-time Social Kit code${codes.length === 1 ? "" : "s"}</b>`,
+        "",
+        ...codes.map((code) => `<code>${escapeTelegramHtml(code)}</code>`),
+        "",
+        "Each code unlocks one $10 kit and is burned on use."
+      ].join("\n"));
+      return;
+    }
+    if (socialCodesCommand) {
+      const rows = (await listSocialKitCodes()).slice(0, 30);
+      await sayHtml(chatId, rows.length ? [
+        "🎟 <b>Recent Social Kit codes</b>",
+        "",
+        ...rows.map((row) => `${row.usedAt ? "✅ used" : row.revokedAt ? "🚫 revoked" : "🟢 ready"} · <code>${escapeTelegramHtml(row.code)}</code>`)
+      ].join("\n") : "No Social Kit codes yet. Use /socialcode 5 to make five.");
+      return;
+    }
+    const revoked = await revokeSocialKitCode(socialRevokeCommand[1]);
+    await say(chatId, revoked ? "Code revoked." : "That code was not found or was already used.");
+    return;
+  }
 
   // Raid setup: if this admin just tapped a goal button, their next message is the
   // number for that field — capture it before anything else reads the text.
@@ -56293,6 +56361,232 @@ async function sendEmailViaResend(email, subject, text) {
     }),
     timeoutMs: 8_000
   });
+}
+
+const SOCIAL_KIT_PRICE_USD = 10;
+const SOCIAL_KIT_DEPOSIT_OWNER = "__social_kit_deposits__";
+async function readSocialKits() {
+  const value = await readJson(socialKitsPath()).catch(() => null);
+  return value && typeof value === "object"
+    ? { drafts: value.drafts && typeof value.drafts === "object" ? value.drafts : {}, codes: value.codes && typeof value.codes === "object" ? value.codes : {} }
+    : { drafts: {}, codes: {} };
+}
+async function mutateSocialKits(fn) {
+  return LockService.withLock("social-kits-store", 10_000, async () => {
+    const store = await readSocialKits();
+    const result = await fn(store);
+    await writeJsonFile(socialKitsPath(), store);
+    return result;
+  });
+}
+function socialKitCodeValue() {
+  return `SOC-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+}
+async function createSocialKitCodes(count = 1, createdBy = "") {
+  const amount = Math.max(1, Math.min(25, Math.round(Number(count) || 1)));
+  return mutateSocialKits((store) => {
+    const codes = [];
+    while (codes.length < amount) {
+      const code = socialKitCodeValue();
+      if (store.codes[code]) continue;
+      store.codes[code] = { code, createdAt: new Date().toISOString(), createdBy: String(createdBy), usedAt: null, usedBy: null, draftId: null, revokedAt: null };
+      codes.push(code);
+    }
+    return codes;
+  });
+}
+async function listSocialKitCodes() {
+  const store = await readSocialKits();
+  return Object.values(store.codes).sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
+}
+async function revokeSocialKitCode(raw = "") {
+  const code = String(raw).trim().toUpperCase();
+  return mutateSocialKits((store) => {
+    const row = store.codes[code];
+    if (!row || row.usedAt) return false;
+    row.revokedAt = new Date().toISOString();
+    return true;
+  });
+}
+function socialKitSlug(value = "") {
+  return String(value).normalize("NFKD").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase().slice(0, 36) || "coin";
+}
+function socialKitHandle(symbol = "", name = "") {
+  const base = String(symbol || name || "coin").replace(/[^a-zA-Z0-9_]/g, "").slice(0, 9) || "coin";
+  return `${base}Community`.slice(0, 15);
+}
+function socialKitPublicUrl(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw, "https://www.slimewire.org");
+    if (!["http:", "https:"].includes(parsed.protocol)) return "";
+    return raw.startsWith("/") ? `${parsed.pathname}${parsed.search}` : parsed.href;
+  } catch { return ""; }
+}
+async function resolveSocialKitToken(input = "") {
+  const raw = String(input || "").trim();
+  if (!raw) throw Object.assign(new Error("Paste a coin CA or supported coin link."), { statusCode: 400 });
+  const targets = await resolveExplicitScanTargetsFromText(raw, [raw], 1).catch(() => []);
+  const target = String(targets[0] || "").trim();
+  if (/^0x[0-9a-fA-F]{40}$/.test(target)) {
+    const info = await gatherRhScan(target).catch(() => null);
+    if (!info?.symbol && !info?.name) throw Object.assign(new Error("That Robinhood token could not be resolved."), { statusCode: 404 });
+    return {
+      chain: "robinhood", ca: target, name: info.name || info.symbol, symbol: info.symbol || "COIN",
+      description: `${info.name || info.symbol} community on Robinhood Chain.`, imageUrl: socialKitPublicUrl(firstString(info.imageUrl, info.iconUrl, info.logoUrl)),
+      websiteUrl: socialKitPublicUrl(info.websiteUrl), twitterUrl: socialKitPublicUrl(info.twitterUrl), telegramUrl: socialKitPublicUrl(info.telegramUrl),
+    };
+  }
+  if (!isLikelySolMint(target)) throw Object.assign(new Error("No supported coin address was found in that input."), { statusCode: 400 });
+  const meta = await getDexTokenMetadata(target, { timeoutMs: 4_000 }).catch(() => null);
+  if (!meta?.symbol && !meta?.name) throw Object.assign(new Error("That Solana token metadata could not be resolved."), { statusCode: 404 });
+  return {
+    chain: "solana", ca: target, name: meta.name || meta.symbol, symbol: meta.symbol || "COIN",
+    description: firstString(meta.description, `${meta.name || meta.symbol} community on Solana.`),
+    imageUrl: socialKitPublicUrl(firstString(meta.imageUrl, meta.imageUri)), websiteUrl: socialKitPublicUrl(meta.websiteUrl),
+    twitterUrl: socialKitPublicUrl(meta.twitterUrl), telegramUrl: socialKitPublicUrl(meta.telegramUrl),
+  };
+}
+function socialKitEmailConfigured() {
+  return Boolean(CONFIG.socialKitEmailDomain && CONFIG.namecheapApiUser && CONFIG.namecheapApiKey && CONFIG.namecheapUsername && CONFIG.namecheapClientIp);
+}
+async function namecheapEmailForwardings() {
+  const params = new URLSearchParams({
+    ApiUser: CONFIG.namecheapApiUser, ApiKey: CONFIG.namecheapApiKey, UserName: CONFIG.namecheapUsername,
+    ClientIp: CONFIG.namecheapClientIp, Command: "namecheap.domains.dns.getEmailForwarding", DomainName: CONFIG.socialKitEmailDomain,
+  });
+  const response = await fetch(`https://api.namecheap.com/xml.response?${params}`, { signal: AbortSignal.timeout(10_000) });
+  const xml = await response.text();
+  if (!response.ok || !/Status="OK"/i.test(xml)) throw new Error("Email forwarding provider rejected the request.");
+  return [...xml.matchAll(/<Forwarding\b[^>]*>/gi)].map((match) => {
+    const mailbox = /\bMailBox="([^"]+)"/i.exec(match[0])?.[1] || "";
+    const forwardTo = /\bForwardTo="([^"]+)"/i.exec(match[0])?.[1] || "";
+    return { mailbox, forwardTo };
+  }).filter((row) => row.mailbox && row.forwardTo);
+}
+async function provisionSocialKitEmail(alias, forwardTo) {
+  if (!socialKitEmailConfigured()) return { ok: false, status: "configuration_required" };
+  return LockService.withLock("social-kit-email-forwarding", 15_000, async () => {
+    const rows = await namecheapEmailForwardings();
+    const cleanAlias = socialKitSlug(alias).slice(0, 48);
+    const withoutAlias = rows.filter((row) => row.mailbox.toLowerCase() !== cleanAlias.toLowerCase());
+    if (withoutAlias.length >= 100) throw new Error("Email forwarding capacity is full; the alias remains reserved.");
+    const merged = [...withoutAlias, { mailbox: cleanAlias, forwardTo }];
+    const params = new URLSearchParams({
+      ApiUser: CONFIG.namecheapApiUser, ApiKey: CONFIG.namecheapApiKey, UserName: CONFIG.namecheapUsername,
+      ClientIp: CONFIG.namecheapClientIp, Command: "namecheap.domains.dns.setEmailForwarding", DomainName: CONFIG.socialKitEmailDomain,
+    });
+    merged.forEach((row, index) => { params.set(`MailBox${index + 1}`, row.mailbox); params.set(`ForwardTo${index + 1}`, row.forwardTo); });
+    const response = await fetch("https://api.namecheap.com/xml.response", { method: "POST", body: params, signal: AbortSignal.timeout(12_000) });
+    const xml = await response.text();
+    if (!response.ok || !/IsSuccess="true"/i.test(xml)) throw new Error("Email alias could not be activated.");
+    return { ok: true, status: "active", email: `${cleanAlias}@${CONFIG.socialKitEmailDomain}` };
+  });
+}
+async function createSocialKitDraft(userId, body = {}) {
+  const token = await resolveSocialKitToken(body.input);
+  const recoveryEmail = normalizeEmail(body.recoveryEmail);
+  if (!recoveryEmail) throw Object.assign(new Error("Enter the inbox where the generated address should forward."), { statusCode: 400 });
+  const code = String(body.code || "").trim().toUpperCase();
+  const id = crypto.randomBytes(6).toString("hex");
+  const solUsd = await getSolUsdPrice({ timeoutMs: 2_500 }).catch(() => 0);
+  if (!(solUsd > 0)) throw Object.assign(new Error("SOL/USD price is temporarily unavailable."), { statusCode: 503 });
+  let waived = false;
+  if (code) {
+    const row = (await readSocialKits()).codes[code];
+    waived = Boolean(row && !row.usedAt && !row.revokedAt);
+    if (!waived) throw Object.assign(new Error("That free code is invalid, used or revoked."), { statusCode: 400 });
+  }
+  const alias = `community-${socialKitSlug(token.symbol || token.name)}-${id.slice(0, 4)}`.slice(0, 48);
+  let depositAddress = "";
+  if (!waived) {
+    const wallet = await mutateWalletStore((store) => {
+      const kp = Keypair.generate();
+      const row = walletRecord(`socialkit:${id}`, kp, SOCIAL_KIT_DEPOSIT_OWNER);
+      store.wallets.push(row); return row;
+    });
+    depositAddress = wallet.publicKey;
+  }
+  const priceSol = Math.ceil((SOCIAL_KIT_PRICE_USD / solUsd) * 1_000_000) / 1_000_000;
+  const draft = {
+    id, userId: String(userId), createdAt: new Date().toISOString(), status: waived ? "unlocked" : "awaiting_payment",
+    waived, code: waived ? code : "", priceUsd: SOCIAL_KIT_PRICE_USD, priceSol, depositAddress, recoveryEmail,
+    emailAlias: alias, email: `${alias}@${CONFIG.socialKitEmailDomain}`, emailStatus: "reserved", token,
+    kit: {
+      displayName: `${token.name} Community`, suggestedHandle: socialKitHandle(token.symbol, token.name),
+      bio: `Community-run, unofficial ${token.name} ($${token.symbol}) hub. CA: ${token.ca}`.slice(0, 160),
+      communityName: `${token.name} Community`,
+      communityDescription: `Community-run discussion, scans and updates for $${token.symbol}. Unofficial and not affiliated with the token team.`.slice(0, 160),
+      rules: ["Stay on topic", "No impersonation or fake team claims", "No seed phrases or private keys", "Verify the CA before trading"],
+      pinnedPost: `Welcome to the community-run $${token.symbol} hub.\n\nCA: ${token.ca}\nScan + trade: https://www.slimewire.org/t?ca=${encodeURIComponent(token.ca)}\n\nUnofficial community. Always verify links and DYOR.`,
+    },
+  };
+  await mutateSocialKits((store) => {
+    if (waived) {
+      const row = store.codes[code];
+      if (!row || row.usedAt || row.revokedAt) throw Object.assign(new Error("That free code was already used."), { statusCode: 409 });
+      row.usedAt = new Date().toISOString(); row.usedBy = String(userId); row.draftId = id;
+    }
+    store.drafts[id] = draft;
+  });
+  if (waived) void activateSocialKitDraft(id).catch(() => {});
+  return draft;
+}
+async function activateSocialKitDraft(id) {
+  const draft = (await readSocialKits()).drafts[id];
+  if (!draft || draft.emailStatus === "active") return draft || null;
+  let emailResult;
+  try { emailResult = await provisionSocialKitEmail(draft.emailAlias, draft.recoveryEmail); }
+  catch (error) { emailResult = { ok: false, status: "error", error: String(error?.message || error).slice(0, 160) }; }
+  return mutateSocialKits((store) => {
+    const row = store.drafts[id]; if (!row) return null;
+    row.emailStatus = emailResult.status; row.emailError = emailResult.error || ""; row.updatedAt = new Date().toISOString();
+    return row;
+  });
+}
+async function socialKitDraftStatus(userId, id) {
+  let draft = (await readSocialKits()).drafts[id];
+  if (!draft || String(draft.userId) !== String(userId)) throw Object.assign(new Error("Social kit not found."), { statusCode: 404 });
+  if (draft.status === "awaiting_payment" && draft.depositAddress) {
+    await LockService.withLock(`social-kit-payment:${id}`, 15_000, async () => {
+      draft = (await readSocialKits()).drafts[id];
+      if (draft.status !== "awaiting_payment") return;
+      const lamports = Number(await getSolBalanceCached(new PublicKey(draft.depositAddress), { force: true }).catch(() => 0));
+      if (lamports < Math.round(Number(draft.priceSol) * 0.98 * 1e9)) return;
+      await mutateSocialKits((store) => { const row = store.drafts[id]; row.status = "unlocked"; row.paidAt = new Date().toISOString(); row.paidLamports = lamports; });
+    });
+    draft = (await readSocialKits()).drafts[id];
+  }
+  // The unlock is not rolled back if the treasury sweep has a temporary RPC failure. Retry it on
+  // every status check until a signature is stored, so a paid user gets the kit without lost revenue.
+  if (draft.status === "unlocked" && draft.depositAddress && !draft.sweptAt) {
+    const wallet = (await readWalletStore()).wallets.find((row) => row.ownerId === SOCIAL_KIT_DEPOSIT_OWNER && row.label === `socialkit:${id}`);
+    if (wallet) {
+      try {
+        const sweep = await drainSolFromWallet(decryptWallet(wallet), new PublicKey(CONFIG.feeWallet));
+        if (sweep?.signature) {
+          draft = await mutateSocialKits((store) => {
+            const row = store.drafts[id]; row.sweptAt = new Date().toISOString(); row.sweepSignature = sweep.signature; return row;
+          });
+        }
+      } catch { /* retry on the next status poll */ }
+    }
+  }
+  if (draft.status === "unlocked" && draft.emailStatus !== "active" && (draft.emailStatus !== "configuration_required" || socialKitEmailConfigured())) {
+    draft = await activateSocialKitDraft(id) || draft;
+  }
+  return draft;
+}
+
+function publicSocialKitDraft(draft) {
+  if (!draft) return null;
+  return {
+    id: draft.id, status: draft.status, waived: draft.waived, priceUsd: draft.priceUsd, priceSol: draft.priceSol,
+    depositAddress: draft.depositAddress, token: draft.token, kit: draft.kit,
+    email: draft.status === "unlocked" ? draft.email : "", emailStatus: draft.emailStatus, emailError: draft.emailError || "",
+    emailConfigured: socialKitEmailConfigured(), createdAt: draft.createdAt,
+  };
 }
 
 async function webWalletRows(userId) {
