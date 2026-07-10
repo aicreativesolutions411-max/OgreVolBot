@@ -2114,6 +2114,7 @@ test("X DM terminal: link from Telegram, scan/settings/buy/sell over official DM
   assert.match(serverSource, /Saved \$\{targetList\.length\} new coin slots\. Scanned #1/);
   assert.match(serverSource, /send 1 for tap menu/);
   assert.match(serverSource, /Open Trade Pad \(real buttons\)/);
+  assert.match(serverSource, /\/x-dm-menu\?t=\$\{encodeURIComponent\(token\)\}/);
   assert.match(serverSource, /signXDmMenuToken\(CONFIG\.appSecret/);
   assert.match(serverSource, /verifyXDmMenuToken\(CONFIG\.appSecret/);
   assert.match(serverSource, /pathname === "\/api\/x-dm\/menu"/);

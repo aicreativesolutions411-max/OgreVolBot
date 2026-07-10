@@ -33716,7 +33716,9 @@ function xDmMenuUrl(state, senderId, mint, slot = "") {
   const token = xDmMenuToken(state, senderId, mint, slot);
   if (!token) return "";
   const origin = String(CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/+$/, "");
-  return `${origin}/x-menu?t=${encodeURIComponent(token)}`;
+  // `/x-dm-menu` is also recognized by the production site's canonical-route
+  // layer; the shorter `/x-menu` currently falls through to the homepage there.
+  return `${origin}/x-dm-menu?t=${encodeURIComponent(token)}`;
 }
 function xDmTradeSupportedMint(mint) {
   return solanaPublicKeyLike(String(mint || "").trim());
