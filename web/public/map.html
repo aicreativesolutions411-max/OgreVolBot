@@ -95,7 +95,7 @@
 <div id="app">
   <header>
     <div class="brand"><span class="dot"></span><b>Slime</b><span>Map</span></div>
-    <form id="f"><input id="q" placeholder="Paste a coin CA or a wallet address…" autocomplete="off" spellcheck="false"/><button type="submit">Map it</button></form>
+    <form id="f"><input id="q" placeholder="Coin CA, wallet, .sol domain, or Robinhood 0x…" autocomplete="off" spellcheck="false"/><button type="submit">Map it</button></form>
   </header>
   <div id="crumbs"></div>
   <div id="stats"></div>
@@ -106,7 +106,7 @@
       <div class="toggle" id="toggle"></div>
       <div class="foot" id="foot"></div>
       <div class="wm">slimewire.org</div>
-      <div id="overlay"><h1>🗺️ SlimeMap</h1><p>Paste a coin contract to see who's holding — KOLs, whales & clusters — or a wallet to map its bags. Drag bubbles, scroll to zoom, tap any to drill in.</p></div>
+      <div id="overlay"><h1>🗺️ SlimeMap</h1><p>Map coin holders or trace a wallet's public fund flow: who funded it, who it funded, SOL / ETH, and token sends. Supports Solana wallets, .sol domains, and Robinhood Chain.</p></div>
     </div>
     <div id="side"><div id="xray"></div><h3>On this coin</h3><div id="kolist"></div></div>
   </div>
@@ -118,7 +118,7 @@
 // Static host (slimewire.org) doesn't proxy /api/* → a relative fetch returns index.html and res.json()
 // threw ("network dropped"). Hit the Render ORIGIN absolutely (CORS open), like the main terminal.
 const API_BASE=(window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||'https://ogrevolbot.onrender.com';
-const COL={hold:{f:'#5be36a',r:'#0c7a2a'},sold:{f:'#e2564b',r:'#7a1010'},whale:{f:'#ffcf4d',r:'#8a6410'},new:{f:'#4dd6ff',r:'#0c5a7a'}};
+const COL={hold:{f:'#5be36a',r:'#0c7a2a'},sold:{f:'#e2564b',r:'#7a1010'},whale:{f:'#ffcf4d',r:'#8a6410'},new:{f:'#4dd6ff',r:'#0c5a7a'},funded:{f:'#8dff6a',r:'#1d8f32'},funder:{f:'#4dd6ff',r:'#15718f'},both:{f:'#ffcf4d',r:'#9a7115'}};
 const stage=document.getElementById('stage'),tip=document.getElementById('tip'),overlay=document.getElementById('overlay');
 let crumbs=[],refreshTimer=null,sim=null,zoomB=null,clusterHulls=null;
 // 🕸️ Bubblemaps-style cluster palette — distinct hue per connected-wallet group.
@@ -161,7 +161,7 @@ async function loadTarget(kind,id,mode,push,label,_retry,_silent){
   // RENDER separate from fetch: a draw error (e.g. D3 missing) must NOT be reported as "chain is slow".
   try{ render(j.map); }catch(e){ if(!_silent)showError('couldn’t draw the map (display error) — tap Start over'); try{console.error(e)}catch(_){} scheduleRefresh(kind,id,mode); return; }
   scheduleRefresh(kind,id,mode);
-  history.replaceState(null,'',kind==='coin'?('/map?ca='+id):('/map?wallet='+id));
+  history.replaceState(null,'',kind==='coin'?('/map?ca='+encodeURIComponent(id)+(mode==='funds'?'&mode=funds':'')):('/map?wallet='+encodeURIComponent(id)+'&mode='+mode));
 }
 function scheduleRefresh(kind,id,mode){if(refreshTimer)clearTimeout(refreshTimer);refreshTimer=setTimeout(()=>loadTarget(kind,id,mode,false,null,false,true),30000)}
 function showLoading(){overlay.className='';overlay.innerHTML='<div class="spin"></div><p>Reading the chain…</p>'}
@@ -218,16 +218,20 @@ function drawSide(map){
   const rest=(map.nodes||[]).filter(n=>!n.isKol).slice(0,10);
   const socLink=(href,label,title)=>href?'<a href="'+esc(href)+'" target="_blank" rel="noopener" title="'+title+'" onclick="event.stopPropagation()" style="margin-left:6px;text-decoration:none;opacity:.9;font-size:12px">'+label+'</a>':'';
   const socials=(n)=>{const s=socLink(n.xUrl,'𝕏','X')+socLink(n.kolscanUrl,'🔎','kolscan')+(!n.xUrl&&!n.kolscanUrl?socLink(n.solscanUrl,'↗','solscan'):'');return s?'<span class="socs">'+s+'</span>':'';};
-  const row=(n,tgt)=>'<div class="krow" data-t="'+(tgt||'')+'"><img src="'+esc(faceHref(n))+'" onerror="this.style.visibility=\'hidden\'"/><div><div class="nm">'+esc(n.name||short(n.wallet)||n.name)+socials(n)+'</div><div class="sub">'+(n.pct!=null?(+n.pct).toFixed(1)+'%':'')+(n.usd?' · $'+fmt(n.usd):'')+'</div></div></div>';
-  document.getElementById('side').querySelector('h3').textContent=map.kind==='wallet'?'Bags':((kols.length||0)+' KOLs holding');
+  const row=(n,tgt)=>'<div class="krow" data-t="'+(tgt||'')+'"><img src="'+esc(faceHref(n))+'" onerror="this.style.visibility=\'hidden\'"/><div><div class="nm">'+esc(n.name||short(n.wallet)||n.name)+socials(n)+'</div><div class="sub">'+(map.mode==='funds'?esc(n.flowLabel||'public transfer'):(n.pct!=null?(+n.pct).toFixed(1)+'%':'')+(n.usd?' · $'+fmt(n.usd):''))+'</div></div></div>';
+  document.getElementById('side').querySelector('h3').textContent=map.kind==='wallet'?(map.mode==='funds'?'Funders & funded wallets':'Bags'):((kols.length||0)+' KOLs holding');
   const kl=document.getElementById('kolist');
-  kl.innerHTML=(kols.length?kols:rest).map(n=>row(n, map.kind==='token'?n.wallet:(n.mint||''))).join('')||'<div class="sub" style="color:var(--dim);font-size:12px">no labeled wallets</div>';
-  [...kl.querySelectorAll('.krow')].forEach(r=>r.onclick=()=>{const t=r.dataset.t;if(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t))loadTarget(map.kind==='token'?'wallet':'coin',t,'bags',true)});
+  const shown=map.mode==='funds'?(map.nodes||[]).slice(0,24):(kols.length?kols:rest);
+  kl.innerHTML=shown.map(n=>row(n, map.kind==='token'||map.mode==='funds'?n.wallet:(n.mint||''))).join('')||'<div class="sub" style="color:var(--dim);font-size:12px">no public transfers found yet</div>';
+  [...kl.querySelectorAll('.krow')].forEach(r=>r.onclick=()=>{const t=r.dataset.t;if(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t)||/^0x[0-9a-f]{40}$/i.test(t))loadTarget('wallet',t,map.mode==='funds'?'funds':'bags',true)});
 }
 function fmt(n){n=+n||0;if(n>=1e9)return(n/1e9).toFixed(1)+'B';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(1)+'K';return Math.round(n)}
 function drawToggleFoot(map){
   const t=document.getElementById('toggle'),f=document.getElementById('foot');
-  if(map.kind==='wallet'){const o=map.mode==='network'?'bags':'network';t.innerHTML='<button class="ghost" id="tg">'+(map.mode==='network'?'💰 Show bags':'🕸️ Show network')+'</button>';document.getElementById('tg').onclick=()=>loadTarget('wallet',map.wallet,o,false)}else t.innerHTML='';
+  if(map.kind==='wallet'){
+    t.innerHTML='<button class="ghost" data-m="bags">💰 Bags</button><button class="ghost" data-m="network">🕸 Trades</button><button class="ghost" data-m="funds">💸 Fund flow</button>';
+    [...t.querySelectorAll('button')].forEach(b=>{if(b.dataset.m===map.mode)b.style.borderColor='var(--slime)';b.onclick=()=>loadTarget('wallet',map.wallet,b.dataset.m,false)});
+  }else t.innerHTML='';
   const L=[];if(map.mint){L.push('<a class="pill" href="https://www.slimewire.org/t?ca='+map.mint+'">⚡ Trade</a>');L.push('<a class="pill" href="'+API_BASE+'/api/map/img?ca='+map.mint+'">🖼 Card</a>')}f.innerHTML=L.join('');
 }
 
@@ -248,13 +252,13 @@ function render(map){
   // center hub as a fixed node
   const hub={id:'__hub',hub:true,fx:W/2,fy:H/2};
   const nodes=(map.nodes||[]).map(n=>({...n,id:'n'+n.i,r:9+(n.weight||0)*26}));
-  const links=nodes.map(n=>({source:'__hub',target:n.id,w:n.weight}));
+  const links=nodes.map(n=>map.mode==='funds'&&n.direction==='in'?({source:n.id,target:'__hub',w:n.weight}):({source:'__hub',target:n.id,w:n.weight}));
   const all=[hub,...nodes];
   // avatar clip + pattern per node
   nodes.forEach(n=>{const av=faceHref(n);if(av){defs.append('clipPath').attr('id','c'+n.id).append('circle').attr('r',n.r-2);defs.append('pattern').attr('id','p'+n.id).attr('width',1).attr('height',1).attr('patternContentUnits','objectBoundingBox').append('image').attr('href',av).attr('width',1).attr('height',1).attr('preserveAspectRatio','xMidYMid slice')}});
   const hullG=g.append('g');    // 🕸️ cluster hulls (bubblemaps-style translucent blobs) — behind everything
   const xclinkG=g.append('g');  // 🔗 INTER-cluster arrows (cluster→cluster "funded by") — behind member edges
-  const link=g.append('g').selectAll('line').data(links).join('line').attr('class','link').attr('stroke-width',d=>0.5+d.w*2);
+  const link=g.append('g').selectAll('line').data(links).join('line').attr('class','link').attr('stroke-width',d=>0.5+d.w*2).attr('marker-end',map.mode==='funds'?'url(#arrow)':null);
   const clinkG=g.append('g');   // 🕸️ cluster member edges (loaded progressively after the bubbles)
   const node=g.append('g').selectAll('g').data(nodes).join('g').attr('class','node');
   node.append('circle').attr('r',d=>d.r+5).attr('fill',d=>(COL[d.state]||COL.hold).f).attr('fill-opacity',0.14);
@@ -277,9 +281,9 @@ function render(map){
   hubg.append('text').attr('x',W/2).attr('y',H/2+70).attr('text-anchor','middle').style('font','900 16px sans-serif').attr('fill','#eafff0').text(map.subject);
   hubg.append('text').attr('x',W/2).attr('y',H/2+88).attr('text-anchor','middle').style('font','12px sans-serif').attr('fill','#7bd98a').text(map.subtitle||'');
   // interactions
-  node.on('mousemove',(ev,d)=>{const r=stage.getBoundingClientRect();tip.style.opacity=1;tip.style.left=(ev.clientX-r.left+14)+'px';tip.style.top=(ev.clientY-r.top+14)+'px';tip.innerHTML='<div class="n">'+esc(d.name||short(d.wallet)||'')+'</div><div class="s">'+(d.pct!=null?'holds '+(+d.pct).toFixed(2)+'%':'')+(d.usd?' · $'+fmt(d.usd):'')+(d.wallet?'<br>'+short(d.wallet):'')+'<br>tap to drill in →</div>'})
+  node.on('mousemove',(ev,d)=>{const r=stage.getBoundingClientRect();tip.style.opacity=1;tip.style.left=(ev.clientX-r.left+14)+'px';tip.style.top=(ev.clientY-r.top+14)+'px';tip.innerHTML='<div class="n">'+esc(d.name||short(d.wallet)||'')+'</div><div class="s">'+(map.mode==='funds'?esc(d.flowLabel||'public transfer'):(d.pct!=null?'holds '+(+d.pct).toFixed(2)+'%':'')+(d.usd?' · $'+fmt(d.usd):''))+(d.wallet?'<br>'+short(d.wallet):'')+'<br>tap to drill in →</div>'})
       .on('mouseleave',()=>tip.style.opacity=0)
-      .on('click',(ev,d)=>{tip.style.opacity=0;const tk=map.kind==='token'?'wallet':'coin',ti=map.kind==='token'?d.wallet:d.mint;if(ti&&/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(ti))loadTarget(tk,ti,'bags',true,d.name)});
+      .on('click',(ev,d)=>{tip.style.opacity=0;const funds=map.mode==='funds',tk=(map.kind==='token'||funds)?'wallet':'coin',ti=(map.kind==='token'||funds)?d.wallet:d.mint;if(ti&&(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(ti)||/^0x[0-9a-f]{40}$/i.test(ti)))loadTarget(tk,ti,funds?'funds':'bags',true,d.name)});
   node.call(d3.drag().on('start',(ev,d)=>{if(!ev.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y}).on('drag',(ev,d)=>{d.fx=ev.x;d.fy=ev.y}).on('end',(ev,d)=>{if(!ev.active)sim.alphaTarget(0);d.fx=null;d.fy=null}));
   // force sim
   sim=d3.forceSimulation(all)
@@ -376,10 +380,10 @@ function openCluster(cl){
 }
 function closeDrill(){document.getElementById('drill').className=''}
 
-document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const v=document.getElementById('q').value.trim().replace(/^\$/,'');if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v)){showError('paste a valid coin CA or wallet address');return}crumbs=[];loadTarget('coin',v,'bags',true)});
+document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const v=document.getElementById('q').value.trim().replace(/^\$/,'');const sol=/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v),rh=/^0x[0-9a-f]{40}$/i.test(v),dom=/^[a-z0-9][a-z0-9._-]{0,58}\.sol$/i.test(v);if(!sol&&!rh&&!dom){showError('paste a valid coin CA, wallet, .sol domain, or Robinhood 0x');return}crumbs=[];loadTarget(dom?'wallet':'coin',v,dom?'funds':'bags',true)});
 window.addEventListener('resize',()=>{const c=crumbs[crumbs.length-1];if(c)loadTarget(c.kind,c.id,c.mode,false)});
 document.getElementById('drill').addEventListener('click',e=>{if(e.target.id==='drill')closeDrill()});
-(function init(){const u=new URL(location.href);const ca=u.searchParams.get('ca')||u.searchParams.get('mint'),w=u.searchParams.get('wallet');if(ca)loadTarget('coin',ca,'bags',true);else if(w)loadTarget('wallet',w,u.searchParams.get('mode')==='network'?'network':'bags',true)})();
+(function init(){const u=new URL(location.href);const ca=u.searchParams.get('ca')||u.searchParams.get('mint'),w=u.searchParams.get('wallet')||u.searchParams.get('domain'),mode=u.searchParams.get('mode')==='network'?'network':u.searchParams.get('mode')==='funds'?'funds':'bags';if(ca)loadTarget('coin',ca,mode,true);else if(w)loadTarget('wallet',w,mode,true)})();
 </script>
 </body>
 </html>

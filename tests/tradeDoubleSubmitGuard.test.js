@@ -2052,6 +2052,19 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(resolvePair, /latest\/dex\/search/);                 // second pair lookup path when the direct endpoint misses
   const resolveTarget = functionBody(serverSource, "resolveScanTargetFromText");
   assert.match(resolveTarget, /consumedPairs/);                      // failed DS lookup cannot mis-scan the pair as a token mint
+  assert.ok(
+    resolveTarget.indexOf("if (mints.length) return mints[0]") < resolveTarget.indexOf("extractCashtags(blob)"),
+    "a pasted CA must remain exact and bypass ambiguous ticker ranking"
+  );
+
+  const cashtag = functionBody(serverSource, "resolveCashtagToMint");
+  assert.match(cashtag, /fetchMoralisTrendingCoins/);                // live trend membership beats clone liquidity alone
+  assert.match(cashtag, /fetchGeckoPools\("trending"/);            // independent public trending source
+  assert.match(cashtag, /String\(ticker \|\| ""\).*toLowerCase\(\) !== key/); // exact ticker matches only
+  assert.match(cashtag, /tickerCandidateScore/);
+  assert.match(cashtag, /webSlimeShield/);                           // every returned ticker contract is safety-screened
+  assert.match(cashtag, /scanRecommendationBlocked/);
+  assert.match(cashtag, /const mint = screened\.find/);             // fail closed if every candidate is dangerous/unchecked
 
   const ticker = functionBody(serverSource, "resolveTickerToScanTarget");
   assert.doesNotMatch(ticker, /Promise\.all/);                       // Solana tickers do not wait on the slower RH fallback
@@ -2183,13 +2196,15 @@ test("X DM terminal: link from Telegram, scan/settings/buy/sell over official DM
 test("Telegram trending picks fail closed on honeypots and PvP menus can be dismissed", () => {
   const alphaRows = functionBody(serverSource, "telegramAlphaRows");
   const safety = functionBody(serverSource, "telegramRecommendationBlocked");
+  const sharedSafety = functionBody(serverSource, "scanRecommendationBlocked");
   const pvpView = functionBody(serverSource, "pvpArenaView");
   const pvpCallback = functionBody(serverSource, "handlePvpCallback");
   assert.match(alphaRows, /"dexTrending"/);
   assert.match(alphaRows, /telegramSafetyScreenTrendingRows/);
-  assert.match(safety, /hasHardBlockedLivePairRisk/);
-  assert.match(safety, /slimeShieldHasHardDanger/);
-  assert.match(safety, /honeypot\|honey\\s\*pot/);
+  assert.match(safety, /scanRecommendationBlocked/);
+  assert.match(sharedSafety, /hasHardBlockedLivePairRisk/);
+  assert.match(sharedSafety, /slimeShieldHasHardDanger/);
+  assert.match(sharedSafety, /honeypot\|honey\\s\*pot/);
   assert.match(pvpView, /pvp:done/);
   assert.match(serverSource, /text: "✅ Done", callback_data: "pvp:done"/);
   assert.match(pvpCallback, /data === "pvp:done"/);
@@ -2293,6 +2308,42 @@ test("KOL/wallet map: on-chain holders + ST identity, X 'map' intent + wallet ta
 });
 
 // ---- ✨ AI Slime PFP (fal.ai image-to-image; the real custom slime effect) + looser X throttle --------
+test("Airdrop and wallet maps trace Solana/.sol and Robinhood fund flows on web + Telegram", () => {
+  const solFunds = functionBody(serverSource, "buildSolanaWalletFundMap");
+  const rhFunds = functionBody(serverSource, "buildRhWalletFundMap");
+  const flowMap = functionBody(serverSource, "fundFlowRowsToMap");
+  assert.match(solFunds, /getSignaturesForAddress/);
+  assert.match(solFunds, /nativeTransfers/);
+  assert.match(solFunds, /tokenTransfers/);
+  assert.match(solFunds, /lookupWalletFunder/);
+  assert.match(rhFunds, /robinhoodchain\.blockscout\.com/);
+  assert.match(rhFunds, /token-transfers/);
+  assert.match(flowMap, /mode: "funds"/);
+  assert.match(flowMap, /FUNDED/);
+  assert.match(flowMap, /FUNDERS/);
+  assert.match(functionBody(serverSource, "buildSubjectMap"), /buildRhWalletFundMap/);
+  assert.match(functionBody(serverSource, "buildSubjectMap"), /buildSolanaWalletFundMap/);
+  assert.match(serverSource, /requestUrl\.searchParams\.get\("domain"\)/);
+  assert.match(serverSource, /resolveSolDomainToAddress\(rawTarget\)/);
+  assert.match(serverSource, /"fundmap", "funds", "flow"/);
+  assert.match(functionBody(serverSource, "handleTelegramMapCommand"), /resolveSolDomainToAddress/);
+  assert.match(functionBody(serverSource, "handleMapCallback"), /parts\[2\] === "funds"/);
+  assert.match(functionBody(serverSource, "sendAirdropSubjectCard"), /sendMapCard\(chatId, target, "funds"\)/);
+  const mapHtml = fs.readFileSync(new URL("../web/public/map.html", import.meta.url), "utf8");
+  assert.match(mapHtml, /\.sol domain, or Robinhood 0x/);
+  assert.match(mapHtml, /data-m="funds"/);
+  assert.match(mapHtml, /n\.direction==='in'/);
+  assert.match(mapHtml, /flowLabel/);
+  const dropHtml = fs.readFileSync(new URL("../web/public/airdrop.html", import.meta.url), "utf8");
+  assert.match(dropHtml, /Fund Map/);
+  assert.match(dropHtml, /mode=funds/);
+  assert.match(dropHtml, /j&&j\.redirect/);
+  const mapRender = fs.readFileSync(new URL("../src/lib/slimeMapRender.mjs", import.meta.url), "utf8");
+  assert.match(mapRender, /const fundMode = nodes\.some/);
+  assert.match(mapRender, /p\.direction === "in"/);
+  assert.match(mapRender, /funded this wallet/);
+});
+
 test("AI Slime PFP: fal.ai img2img, rotating styles, budget-guarded, dark until FAL_KEY", () => {
   const ai = fs.readFileSync(new URL("../src/lib/aiPfp.js", import.meta.url), "utf8");
   assert.match(ai, /export function aiPfpConfigured/);

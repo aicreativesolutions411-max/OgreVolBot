@@ -106,7 +106,7 @@
 <div id="app">
   <header>
     <div class="brand"><span class="dot"></span><b>Slime</b><span>Drop</span></div>
-    <form id="f"><input id="q" placeholder="Paste a coin CA — or an airdropper wallet…" autocomplete="off" spellcheck="false"/><button type="submit">Map drop</button></form>
+    <form id="f"><input id="q" placeholder="Coin CA, wallet, .sol, or Robinhood 0x…" autocomplete="off" spellcheck="false"/><button type="submit">Map it</button></form>
   </header>
   <div id="crumbs"></div>
   <div id="coinsel"></div>
@@ -117,7 +117,7 @@
       <div id="tip"></div>
       <div class="foot" id="foot"></div>
       <div class="wm">slimewire.org</div>
-      <div id="overlay"><h1>💰 SlimeDrop</h1><p>Paste a coin contract — or an airdropper wallet — to see the airdrop: who got fed, how big each bag was, which KOLs got in, and who's still diamond-handing.</p></div>
+      <div id="overlay"><h1>💰 SlimeDrop</h1><p>Coin CAs show who got fed and who still holds. Wallets and .sol domains open the Fund Map: incoming funders, wallets funded, SOL / ETH, and token sends. Robinhood Chain is supported too.</p></div>
     </div>
     <div id="side"><div id="xray"></div><h3>Fed wallets</h3><div id="kolist"></div></div>
   </div>
@@ -161,6 +161,7 @@ async function loadDrop(ca,_retry,_silent,dev){
     if(!_retry){await new Promise(r=>setTimeout(r,1200));return loadDrop(ca,true,_silent,dev)}
     if(!_silent)showError('the network dropped — tap Start over to retry'); scheduleRefresh(ca,dev); return;
   }
+  if(j&&j.redirect){location.href=j.redirect;return}
   if(!j||!j.ok||!j.map){
     if(!_retry){await new Promise(r=>setTimeout(r,1200));return loadDrop(ca,true,_silent,dev)}
     if(!_silent)showError((j&&j.error)||'no airdrop data yet'); scheduleRefresh(ca,dev); return;
@@ -224,7 +225,7 @@ function drawSide(map){
   kl.innerHTML=(sec('👑 Whales',whales)+sec('💎 Diamond hands',held)+sec('💸 Dumped',dumped))||'<div class="sub" style="color:var(--dim);font-size:12px">no wallets yet</div>';
   [...kl.querySelectorAll('.krow')].forEach(r=>r.onclick=()=>{const t=r.dataset.t;if(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t))openDrill(t)});
 }
-function drawFoot(map){const L=[];if(map.mint){L.push('<a class="pill" href="https://www.slimewire.org/t?ca='+map.mint+'">⚡ Trade $'+esc(map.subject.replace(/^\$/,''))+'</a>');L.push('<a class="pill" href="/map?ca='+map.mint+'">🗺️ Holder map</a>')}document.getElementById('foot').innerHTML=L.join('')}
+function drawFoot(map){const L=[];if(map.mint){L.push('<a class="pill" href="https://www.slimewire.org/t?ca='+map.mint+'">⚡ Trade $'+esc(map.subject.replace(/^\$/,''))+'</a>');L.push('<a class="pill" href="/map?ca='+map.mint+'">🗺️ Holder map</a>')}const w=map.fromWallet||map.dev;if(w)L.push('<a class="pill" href="/map?wallet='+encodeURIComponent(w)+'&mode=funds">💸 Fund map</a>');document.getElementById('foot').innerHTML=L.join('')}
 // 🪂 Coin selector — the airdropper's coins. When we came from a wallet it lists that WALLET's drops (by dev);
 // otherwise the coin's dev's coins. Same-sender re-highlights instantly (no refetch on coin-switch/refresh).
 let coinSelKey='',coinSelCoins=[];
@@ -400,10 +401,10 @@ function openDropCluster(cl){
   [...c.querySelectorAll('.hrow')].forEach(r=>r.onclick=()=>{const w=r.dataset.w;if(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(w)){closeDrill();openDrill(w)}});
 }
 
-document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const v=document.getElementById('q').value.trim().replace(/^\$/,'');if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v)){showError('paste a valid coin CA or airdropper wallet');return}curAirdropper='';loadDrop(v)});
+document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const v=document.getElementById('q').value.trim().replace(/^\$/,'');const sol=/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v),rh=/^0x[0-9a-f]{40}$/i.test(v),dom=/^[a-z0-9][a-z0-9._-]{0,58}\.sol$/i.test(v);if(!sol&&!rh&&!dom){showError('paste a valid coin CA, wallet, .sol domain, or Robinhood 0x');return}if(rh||dom){location.href=rh?('/map?ca='+encodeURIComponent(v)):('/map?wallet='+encodeURIComponent(v)+'&mode=funds');return}curAirdropper='';loadDrop(v)});
 window.addEventListener('resize',()=>{const u=new URL(location.href);const ca=u.searchParams.get('ca');if(ca)loadDrop(ca,true,false,u.searchParams.get('dev')||undefined)});
 document.getElementById('drill').addEventListener('click',e=>{if(e.target.id==='drill')closeDrill()});
-(function init(){const u=new URL(location.href);const ca=u.searchParams.get('ca')||u.searchParams.get('mint');if(ca)loadDrop(ca,false,false,u.searchParams.get('dev')||undefined)})();
+(function init(){const u=new URL(location.href);const ca=u.searchParams.get('ca')||u.searchParams.get('mint')||u.searchParams.get('wallet');if(ca){if(/^0x[0-9a-f]{40}$/i.test(ca)||/^[a-z0-9][a-z0-9._-]{0,58}\.sol$/i.test(ca)){location.replace(/^0x/i.test(ca)?('/map?ca='+encodeURIComponent(ca)):('/map?wallet='+encodeURIComponent(ca)+'&mode=funds'));return}loadDrop(ca,false,false,u.searchParams.get('dev')||undefined)}})();
 </script>
 </body>
 </html>

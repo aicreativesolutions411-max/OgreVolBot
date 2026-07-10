@@ -7579,18 +7579,21 @@ async function handleWebApiRequest(request, response, requestUrl) {
     // ca=<mint> → coin's KOL holders; wallet=<addr> → that wallet's bags (or mode=network). Cached upstream.
     if (request.method === "GET" && pathname === "/api/map") {
       const mmint = String(requestUrl.searchParams.get("ca") || requestUrl.searchParams.get("mint") || "").trim();
-      const mwallet = String(requestUrl.searchParams.get("wallet") || "").trim();
-      const mmode = requestUrl.searchParams.get("mode") === "network" ? "network" : "bags";
-      const mtarget = mmint || mwallet;
+      const mwallet = String(requestUrl.searchParams.get("wallet") || requestUrl.searchParams.get("domain") || "").trim();
+      const requestedMode = String(requestUrl.searchParams.get("mode") || "").toLowerCase();
+      const mmode = requestedMode === "network" ? "network" : requestedMode === "funds" ? "funds" : "bags";
+      const rawTarget = mmint || mwallet;
+      const domainTarget = /^[a-z0-9][a-z0-9._-]{0,58}\.sol$/i.test(rawTarget);
+      const mtarget = domainTarget ? await resolveSolDomainToAddress(rawTarget).catch(() => null) : rawTarget;
       const mIsRh = /^0x[0-9a-fA-F]{40}$/.test(mtarget);
-      if (!solanaPublicKeyLike(mtarget) && !mIsRh) { sendWebJson(request, response, 400, { ok: false, error: "ca or wallet required" }); return; }
+      if (!solanaPublicKeyLike(mtarget) && !mIsRh) { sendWebJson(request, response, 400, { ok: false, error: domainTarget ? "that .sol domain could not be resolved" : "coin, wallet, or .sol domain required" }); return; }
       let map;
       try {
         // HARD 14s timeout so a slow chain read can never hang the request into a client "failed to load"
         // (mobile browsers bail fast, and Render 504s an idle socket). On timeout we return a clean retryable
         // message instead of a dead connection.
         map = await Promise.race([
-          (mwallet && !mmint && !mIsRh) ? buildWalletMap(mtarget, mmode) : buildSubjectMap(mtarget, mmode),
+          (mwallet && !mmint && !mIsRh) ? buildWalletMap(mtarget, domainTarget && mmode === "bags" ? "funds" : mmode) : buildSubjectMap(mtarget, mmode),
           new Promise((_, rej) => setTimeout(() => rej(new Error("__map_timeout__")), 14_000)),
         ]);
       } catch (e) {
@@ -7602,15 +7605,18 @@ async function handleWebApiRequest(request, response, requestUrl) {
       // nothing (not a token AND no nodes, e.g. an empty wallet) is a real miss.
       const hasNodes = map && Array.isArray(map.nodes) && map.nodes.length;
       if (!map || (!map.isToken && !hasNodes)) { sendWebJson(request, response, 200, { ok: false, error: "no map data yet — paste a coin CA or wallet address" }); return; }
+      if (map && domainTarget) { map.domain = rawTarget; map.subject = rawTarget; }
       sendWebJson(request, response, 200, { ok: true, map });
       return;
     }
     // 🗺️ MAP IMAGE (public) — the branded PNG (og:image, X/TG share card, no-JS fallback).
     if (request.method === "GET" && pathname === "/api/map/img") {
       const gmint = String(requestUrl.searchParams.get("ca") || requestUrl.searchParams.get("mint") || "").trim();
-      const gwallet = String(requestUrl.searchParams.get("wallet") || "").trim();
-      const gmode = requestUrl.searchParams.get("mode") === "network" ? "network" : "bags";
-      const gtarget = gmint || gwallet;
+      const gwallet = String(requestUrl.searchParams.get("wallet") || requestUrl.searchParams.get("domain") || "").trim();
+      const requestedMode = String(requestUrl.searchParams.get("mode") || "").toLowerCase();
+      const gmode = requestedMode === "network" ? "network" : requestedMode === "funds" ? "funds" : "bags";
+      const rawTarget = gmint || gwallet;
+      const gtarget = /^[a-z0-9][a-z0-9._-]{0,58}\.sol$/i.test(rawTarget) ? await resolveSolDomainToAddress(rawTarget).catch(() => null) : rawTarget;
       if (!solanaPublicKeyLike(gtarget) && !/^0x[0-9a-fA-F]{40}$/.test(gtarget)) { sendWebJson(request, response, 400, { ok: false, error: "ca or wallet required" }); return; }
       try {
         const { png } = await renderSubjectMapPng(gtarget, gmode);
@@ -7687,9 +7693,14 @@ async function handleWebApiRequest(request, response, requestUrl) {
     // OR an AIRDROPPER WALLET (owner pasted a wallet → resolve to the coins it airdropped, map the biggest).
     // `dev` = optional airdropper override (the coin selector passes it so each coin is scanned from that sender).
     if (request.method === "GET" && pathname === "/api/airdrop") {
-      const am = String(requestUrl.searchParams.get("ca") || requestUrl.searchParams.get("mint") || "").trim();
+      const rawAirdropTarget = String(requestUrl.searchParams.get("ca") || requestUrl.searchParams.get("mint") || requestUrl.searchParams.get("wallet") || "").trim();
+      const domainTarget = /^[a-z0-9][a-z0-9._-]{0,58}\.sol$/i.test(rawAirdropTarget);
+      const am = domainTarget ? await resolveSolDomainToAddress(rawAirdropTarget).catch(() => null) : rawAirdropTarget;
       const devParam = String(requestUrl.searchParams.get("dev") || "").trim();
-      if (!solanaPublicKeyLike(am)) { sendWebJson(request, response, 400, { ok: false, error: "ca required" }); return; }
+      if (/^0x[0-9a-fA-F]{40}$/.test(String(am || ""))) {
+        sendWebJson(request, response, 200, { ok: false, redirect: `/map?ca=${encodeURIComponent(am)}`, error: "Robinhood Chain opens in the holder / fund-flow map" }); return;
+      }
+      if (!solanaPublicKeyLike(am)) { sendWebJson(request, response, 400, { ok: false, error: domainTarget ? "that .sol domain could not be resolved" : "coin, wallet, or .sol domain required" }); return; }
       try {
         const resolved = await Promise.race([
           (async () => {
@@ -14331,7 +14342,7 @@ async function handleMessage(message, userId) {
     return;
   }
 
-  const mapCommand = parseCommandWithArgument(text, ["map", "holders", "bubblemap", "kolmap", "holdermap"]);
+  const mapCommand = parseCommandWithArgument(text, ["map", "holders", "bubblemap", "kolmap", "holdermap", "fundmap", "funds", "flow"]);
   if (mapCommand) {
     await handleTelegramMapCommand(chatId, message, mapCommand.argument);
     return;
@@ -14847,12 +14858,12 @@ async function handleMessage(message, userId) {
   // /narrative — hot rotating meta; /grad — coins closest to graduating.
   if (parseCommandWithArgument(text, ["narrative", "meta"])) { const v = narrativeRadarView(); await sayHtml(chatId, v.text, v.markup); return; }
   if (parseCommandWithArgument(text, ["grad", "graduation", "gauntlet"])) { const v = await graduationGauntletView(); await sayHtml(chatId, v.text, v.markup); return; }
-  // 💰 /airdrop <ca> — map a coin's airdrop: who the dev fed + who still diamond-hands the bag.
+  // 💰 /airdrop <coin/wallet/.sol/RH> — coin distributions or a wallet's public fund flow.
   { const ad = parseCommandWithArgument(text, ["airdrop", "drop", "bags"]);
     if (ad) {
-      const ca = String(ad.argument || "").trim().replace(/^\$/, "");
-      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(ca)) { await sayHtml(chatId, "💰 <b>Airdrop map</b>\nUsage: <code>/airdrop &lt;coin CA&gt;</code> — I'll show who the dev fed, how big each bag was, and who's still holding."); return; }
-      await sendAirdropCard(chatId, ca); return;
+      const target = String(ad.argument || "").trim().replace(/^\$/, "");
+      if (!target) { await sayHtml(chatId, "💰 <b>Airdrop + Fund Map</b>\nUsage: <code>/airdrop &lt;coin CA, wallet, .sol, or Robinhood 0x&gt;</code> — coins show distribution; wallets show who funded them and where funds/tokens went."); return; }
+      await sendAirdropSubjectCard(chatId, target); return;
     } }
   // /copy — mirror a proven room trader; /launchroom — the dev war room.
   if (parseCommandWithArgument(text, ["copy", "mirror"])) { const v = await copyMenuView(chatId, userId); await sayHtml(chatId, v.text, v.markup); return; }
@@ -32611,7 +32622,9 @@ function isLikelySolMint(s) {
 }
 
 // Resolve a cashtag ("$OGRE") to its token mint so a ticker posts the SAME scan card as a CA.
-// DexScreener symbol search → the highest-liquidity Solana pair whose base symbol matches.
+// A ticker is ambiguous: dozens of clones can share it. Merge exact-symbol search + live trending
+// sources, rank real activity, then require a SlimeShield pass before returning one contract.
+// Pasted CAs never use this resolver; resolveScanTargetFromText intentionally handles them first.
 const cashtagMintCache = new Map();
 function tokenSearchRows(data) {
   const rows = [];
@@ -32633,43 +32646,128 @@ function tokenSearchMint(row = {}) {
 function tokenSearchLiquidity(row = {}) {
   return firstMeaningfulNumber(row.liquidityUsd, row.liquidity?.usd, row.liquidity, row.token?.liquidityUsd, row.token?.liquidity?.usd, row.pool?.liquidity?.usd, row.market?.liquidityUsd) || 0;
 }
+function tokenSearchVolume24h(row = {}) {
+  return firstMeaningfulNumber(row.volume24hUsd, row.volume24h, row.volume?.h24, row.volume?.["24h"], row.token?.volume24hUsd, row.market?.volume24hUsd) || 0;
+}
+function tokenSearchMarketCap(row = {}) {
+  return firstMeaningfulNumber(row.marketCapUsd, row.marketCap, row.fdv, row.token?.marketCapUsd, row.token?.marketCap, row.market?.marketCapUsd) || 0;
+}
+function tokenSearchHolders(row = {}) {
+  return firstMeaningfulNumber(row.holders, row.holderCount, row.holders_count, row.token?.holders, row.token?.holderCount) || 0;
+}
+function tickerCandidateScore(candidate = {}) {
+  const log = (value) => Math.log10(1 + Math.max(0, Number(value) || 0));
+  const sources = candidate.sources instanceof Set ? candidate.sources.size : 0;
+  const thinPenalty = Number(candidate.liquidityUsd || 0) < 800 ? 28 : 0;
+  return Number(candidate.trendBoost || 0)
+    + log(candidate.liquidityUsd) * 18
+    + log(candidate.volume24h) * 14
+    + log(candidate.marketCap) * 4
+    + log(candidate.holders) * 5
+    + sources * 8
+    - thinPenalty;
+}
+function scanRecommendationBlocked(row, shield) {
+  if (!row?.tokenMint || !shield) return true;
+  if (hasHardBlockedLivePairRisk(row) || slimeShieldHasHardDanger(shield)) return true;
+  const factors = Array.isArray(shield.factors) ? shield.factors : [];
+  const riskText = [
+    shield.verdict,
+    shield.summary,
+    shield.risk,
+    ...factors.flatMap((factor) => [factor?.key, factor?.label, factor?.message])
+  ].filter(Boolean).join(" ");
+  return String(shield.verdict || "").toUpperCase() === "AVOID"
+    || /honeypot|honey\s*pot|cannot sell|can't sell|sell blocked|blacklist|mint authority|freeze authority|liquidity (?:pulled|drained)|pool drained|rugged|scam/i.test(riskText);
+}
 async function resolveCashtagToMint(symbol) {
   const q = String(symbol || "").replace(/^\$/, "").trim();
   if (q.length < 2) return null;
   const key = q.toLowerCase();
   const cached = cashtagMintCache.get(key);
-  // Successful symbols are stable enough for a minute. Provider failures are not: a null result used to
-  // suppress every retry for a full minute, which made a valid $ticker feel randomly unsupported.
-  if (cached && Date.now() - cached.at < (cached.mint ? 60_000 : 10_000)) return cached.mint;
-  let mint = null;
-  // 1) Solana Tracker search FIRST — it's keyed + paid, so it isn't silently 429'd on Render's shared
-  // IP the way DexScreener's public /search is (that throttle is why "$ticker" often scanned nothing).
-  if (CONFIG.solanaTrackerApiKey) {
-    try {
-      const d = await solanaTrackerJson(`/search?query=${encodeURIComponent(q)}`, { cacheTtlMs: 60_000, timeoutMs: 6000 }).catch(() => null);
-      const rows = tokenSearchRows(d);
-      // EXACT ticker match ONLY (never resolve "$gm"/"$lol" to a random token). Pick the deepest-liquidity one.
-      const exact = rows.filter((r) => String(tokenSearchSymbol(r)).toLowerCase() === key && tokenSearchMint(r));
-      const pick = exact.sort((a, b) => tokenSearchLiquidity(b) - tokenSearchLiquidity(a))[0];
-      mint = tokenSearchMint(pick);
-    } catch { mint = null; }
+  // Trend membership changes quickly, so successful ticker choices get a short cache. A failed safety
+  // lookup retries even sooner instead of making the ticker look unsupported for a full minute.
+  if (cached && Date.now() - cached.at < (cached.mint ? 30_000 : 6_000)) return cached.mint;
+
+  const [trackerData, dexData, moralisCoins, geckoTrending] = await Promise.all([
+    CONFIG.solanaTrackerApiKey
+      ? scanFastTimeout(solanaTrackerJson(`/search?query=${encodeURIComponent(q)}`, { cacheTtlMs: 30_000, timeoutMs: 2_200 }), 2_300, null)
+      : Promise.resolve(null),
+    scanFastTimeout(fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { timeoutMs: 2_200 }), 2_300, null),
+    scanFastTimeout(fetchMoralisTrendingCoins({ ttlMs: 15_000 }), 2_300, []),
+    scanFastTimeout(fetchGeckoPools("trending", { ttlMs: 15_000, pages: 2, timeoutMs: 2_000 }), 2_300, [])
+  ]);
+
+  const candidates = new Map();
+  const add = ({ mint, ticker, liquidityUsd = 0, volume24h = 0, marketCap = 0, holders = 0, trendBoost = 0, source = "search", row = null }) => {
+    const cleanMint = String(mint || "").trim();
+    if (!isLikelySolMint(cleanMint) || String(ticker || "").replace(/^\$+/, "").toLowerCase() !== key) return;
+    const prev = candidates.get(cleanMint) || {
+      mint: cleanMint, symbol: q.toUpperCase(), liquidityUsd: 0, volume24h: 0, marketCap: 0,
+      holders: 0, trendBoost: 0, sources: new Set(), row: { tokenMint: cleanMint, symbol: q.toUpperCase() }
+    };
+    prev.liquidityUsd = Math.max(prev.liquidityUsd, Number(liquidityUsd) || 0);
+    prev.volume24h = Math.max(prev.volume24h, Number(volume24h) || 0);
+    prev.marketCap = Math.max(prev.marketCap, Number(marketCap) || 0);
+    prev.holders = Math.max(prev.holders, Number(holders) || 0);
+    prev.trendBoost = Math.max(prev.trendBoost, Number(trendBoost) || 0);
+    prev.sources.add(source);
+    prev.row = {
+      ...prev.row,
+      ...(row && typeof row === "object" ? row : {}),
+      tokenMint: cleanMint,
+      symbol: firstString(row?.symbol, row?.profile?.symbol, row?.metadata?.symbol, ticker, prev.symbol),
+      liquidityUsd: Math.max(prev.liquidityUsd, Number(row?.liquidityUsd) || 0),
+      volumeH24: Math.max(prev.volume24h, Number(row?.volumeH24) || 0),
+      marketCap: Math.max(prev.marketCap, Number(row?.marketCap) || 0)
+    };
+    candidates.set(cleanMint, prev);
+  };
+
+  for (const row of tokenSearchRows(trackerData)) add({
+    mint: tokenSearchMint(row), ticker: tokenSearchSymbol(row), liquidityUsd: tokenSearchLiquidity(row),
+    volume24h: tokenSearchVolume24h(row), marketCap: tokenSearchMarketCap(row), holders: tokenSearchHolders(row),
+    source: "solana-tracker", row
+  });
+  for (const pair of (Array.isArray(dexData?.pairs) ? dexData.pairs : [])) {
+    if (String(pair.chainId || "").toLowerCase() !== "solana") continue;
+    add({
+      mint: pair.baseToken?.address, ticker: pair.baseToken?.symbol, liquidityUsd: pair.liquidity?.usd,
+      volume24h: pair.volume?.h24, marketCap: firstMeaningfulNumber(pair.marketCap, pair.fdv),
+      trendBoost: Number(pair.boosts?.active || 0) > 0 ? 18 : 0, source: "dexscreener",
+      row: livePairCandidateToRow({ tokenMint: pair.baseToken?.address, source: "dexscreener", profile: { ...pair, symbol: pair.baseToken?.symbol, name: pair.baseToken?.name } })
+    });
   }
-  // 2) DexScreener fallback — exact ticker, best real liquidity. Relaxed floor (was $2k) so fresh/thin
-  // pump coins still resolve, but still exact-match-only so casual chatter never posts a fake card.
-  if (!mint) {
-    try {
-      const d = await fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { timeoutMs: 6000 }).catch(() => null);
-      const pairs = Array.isArray(d?.pairs) ? d.pairs : [];
-      const exact = pairs.filter((p) => String(p.chainId) === "solana" && String(p.baseToken?.symbol || "").toLowerCase() === key)
-        .sort((a, b) => (Number(b.liquidity?.usd) || 0) - (Number(a.liquidity?.usd) || 0));   // deepest liquidity first
-      // Prefer a pair over the liq floor, but NEVER drop every match — a real ticker with thin liq (or a
-      // DexScreener that only lists a low-liq pool) must still resolve. Take the best-liquidity exact match;
-      // the >=800 floor is only a tie-breaker preference now (was a hard filter → "$ticker resolved nothing").
-      const pick = exact.find((p) => (Number(p.liquidity?.usd) || 0) >= 800) || exact[0];
-      mint = pick?.baseToken?.address || null;
-    } catch { mint = null; }
-  }
+  (Array.isArray(moralisCoins) ? moralisCoins : []).forEach((coin, index) => add({
+    mint: coin.tokenAddress, ticker: coin.symbol, liquidityUsd: coin.liquidityUsd,
+    volume24h: coin.totalVolume?.["24h"], marketCap: coin.marketCap, holders: coin.holders,
+    trendBoost: Math.max(45, 190 - index * 3), source: "moralis-trending",
+    row: livePairCandidateToRow(moralisTrendingToCandidate(coin))
+  }));
+  (Array.isArray(geckoTrending) ? geckoTrending : []).forEach((candidate, index) => {
+    const profile = candidate?.profile || candidate?.metadata || {};
+    add({
+      mint: candidate?.tokenMint, ticker: profile.symbol, liquidityUsd: profile.liquidityUsd || profile.liquidity?.usd,
+      volume24h: profile.volume?.h24, marketCap: firstMeaningfulNumber(profile.marketCap, profile.fdv),
+      trendBoost: Math.max(35, 165 - index * 3), source: "gecko-trending",
+      row: livePairCandidateToRow(candidate)
+    });
+  });
+
+  const ranked = [...candidates.values()]
+    .map((candidate) => ({ ...candidate, score: tickerCandidateScore(candidate) }))
+    .filter((candidate) => !hasHardBlockedLivePairRisk(candidate.row))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 4);
+  // Check the best exact matches in parallel: bounded safety keeps X/TG replies quick, while fail-closed
+  // behavior prevents a provider timeout from silently promoting an unchecked clone or honeypot.
+  const screened = await Promise.all(ranked.map(async (candidate) => {
+    const shield = await scanFastTimeout(webSlimeShield(candidate.mint), 2_500, null);
+    return { candidate, shield };
+  }));
+  const mint = screened.find(({ candidate, shield }) => !scanRecommendationBlocked(candidate.row, shield))?.candidate?.mint || null;
   cashtagMintCache.set(key, { at: Date.now(), mint });
+  if (cashtagMintCache.size > 300) cashtagMintCache.delete(cashtagMintCache.keys().next().value);
   return mint;
 }
 const rhTickerTargetCache = new Map();
@@ -33905,6 +34003,7 @@ async function scanAirdropperCoins(devWallet, maxTx = 80, deadlineMs = 11000) {
 
 // WALLET map: bags = tokens currently held (ST portfolio); network = tokens recently traded (ST trades).
 async function buildWalletMap(wallet, mode = "bags") {
+  if (mode === "funds") return buildSolanaWalletFundMap(wallet);
   const idx = await mapKolIdentityIndex().catch(() => new Map());
   const id = mapResolveIdentity(wallet, idx);
   let rows = [];
@@ -33948,6 +34047,188 @@ async function buildWalletMap(wallet, mode = "bags") {
   ];
   const subj = (id.isKol && id.twitter) ? `@${id.twitter}` : shortMint(wallet);
   return { kind: "wallet", subject: String(subj).slice(0, 12), subtitle: mode === "network" ? "trading network" : "bags held", wallet, mode, stats, nodes };
+}
+
+// 💸 WALLET FUND FLOW — public on-chain transfers only. Shows who funded a wallet, who it funded,
+// and the SOL / token rails used. Helius parses the recent signatures in one request when configured;
+// free parsed-RPC reads are the bounded fallback. Short cache keeps repeat web/TG drills instant.
+const walletFundMapCache = new Map();
+function walletFundMapKey(chain, wallet) { return `${chain}:${String(wallet || "").toLowerCase()}`; }
+function walletFundFlowCollector(subject) {
+  const flows = new Map();
+  const add = ({ from, to, native = 0, nativeSymbol = "SOL", mint = "", symbol = "", tokenAmount = 0, at = 0, tx = "" }) => {
+    const src = String(from || "").trim(), dst = String(to || "").trim();
+    if (!src || !dst || src.toLowerCase() === dst.toLowerCase()) return;
+    const me = String(subject || "").toLowerCase();
+    const direction = src.toLowerCase() === me ? "out" : (dst.toLowerCase() === me ? "in" : "");
+    if (!direction) return;
+    const counterparty = direction === "out" ? dst : src;
+    const key = counterparty.toLowerCase();
+    const row = flows.get(key) || {
+      wallet: counterparty, nativeIn: 0, nativeOut: 0, tokenIn: 0, tokenOut: 0,
+      txs: new Set(), assets: new Map(), latestAt: 0, directions: new Set()
+    };
+    if (direction === "out") { row.nativeOut += Number(native) || 0; row.tokenOut += tokenAmount ? 1 : 0; }
+    else { row.nativeIn += Number(native) || 0; row.tokenIn += tokenAmount ? 1 : 0; }
+    row.directions.add(direction);
+    if (tx) row.txs.add(tx);
+    row.latestAt = Math.max(row.latestAt, Number(at) || 0);
+    if (mint || symbol) {
+      const assetKey = String(mint || symbol).toLowerCase();
+      const asset = row.assets.get(assetKey) || { mint: String(mint || ""), symbol: String(symbol || "") || shortMint(mint), in: 0, out: 0 };
+      asset[direction] += Number(tokenAmount) || 0;
+      row.assets.set(assetKey, asset);
+    }
+    row.nativeSymbol = nativeSymbol;
+    flows.set(key, row);
+  };
+  return { flows, add };
+}
+async function fundFlowRowsToMap(wallet, flows, { chain = "solana", subject = "", domain = "" } = {}) {
+  // Identity decoration is optional; never make a public fund map wait on a cold leaderboard pull.
+  const idx = chain === "solana" ? await scanFastTimeout(mapKolIdentityIndex(), 1_200, new Map()) : new Map();
+  const rows = [...flows.values()].map((row) => {
+    const txCount = Math.max(1, row.txs.size);
+    const nativeTotal = row.nativeIn + row.nativeOut;
+    const activity = Math.log10(1 + nativeTotal * 100) * 4 + txCount + row.tokenIn + row.tokenOut;
+    return { ...row, txCount, nativeTotal, activity };
+  }).sort((a, b) => b.activity - a.activity).slice(0, 60);
+  const maxActivity = rows.reduce((m, row) => Math.max(m, row.activity), 0) || 1;
+  const nodes = await Promise.all(rows.map(async (row, i) => {
+    const id = chain === "solana" ? mapResolveIdentity(row.wallet, idx) : { isKol: false, name: shortMint(row.wallet), twitter: "", avatarUrl: null };
+    const face = id.avatarUrl ? null : await mapAnonFace(row.wallet).catch(() => null);
+    const nativeSymbol = row.nativeSymbol || (chain === "robinhood" ? "ETH" : "SOL");
+    const parts = [];
+    if (row.nativeOut > 0) parts.push(`sent ${row.nativeOut.toFixed(row.nativeOut >= 10 ? 1 : 3).replace(/\.0+$/, "")} ${nativeSymbol}`);
+    if (row.nativeIn > 0) parts.push(`received ${row.nativeIn.toFixed(row.nativeIn >= 10 ? 1 : 3).replace(/\.0+$/, "")} ${nativeSymbol}`);
+    if (row.tokenOut) parts.push(`${row.tokenOut} token send${row.tokenOut === 1 ? "" : "s"}`);
+    if (row.tokenIn) parts.push(`${row.tokenIn} token receive${row.tokenIn === 1 ? "" : "s"}`);
+    const direction = row.directions.size > 1 ? "both" : (row.directions.has("out") ? "out" : "in");
+    return {
+      i, wallet: row.wallet, isKol: id.isKol, name: id.name || shortMint(row.wallet), twitter: id.twitter,
+      avatarUrl: id.avatarUrl, faceUrl: face?.url || null, faceFile: face?.file || null,
+      weight: Math.max(0.08, Math.min(1, row.activity / maxActivity)),
+      state: direction === "both" ? "both" : direction === "out" ? "funded" : "funder",
+      direction, txCount: row.txCount, nativeIn: row.nativeIn, nativeOut: row.nativeOut,
+      tokenIn: row.tokenIn, tokenOut: row.tokenOut, flowLabel: parts.join(" · ") || `${row.txCount} transfer${row.txCount === 1 ? "" : "s"}`,
+      label: i < 10 ? `${direction === "in" ? "←" : direction === "out" ? "→" : "↔"} ${id.name || shortMint(row.wallet)}` : null,
+      assets: [...row.assets.values()].sort((a, b) => (b.in + b.out) - (a.in + a.out)).slice(0, 8),
+      solscanUrl: chain === "solana" ? `https://solscan.io/account/${row.wallet}` : `https://robinhoodchain.blockscout.com/address/${row.wallet}`
+    };
+  }));
+  const sent = rows.filter((row) => row.directions.has("out")).length;
+  const received = rows.filter((row) => row.directions.has("in")).length;
+  const nativeOut = rows.reduce((sum, row) => sum + row.nativeOut, 0);
+  const nativeIn = rows.reduce((sum, row) => sum + row.nativeIn, 0);
+  const nativeSymbol = chain === "robinhood" ? "ETH" : "SOL";
+  const label = subject || domain || shortMint(wallet);
+  return {
+    kind: "wallet", chain, subject: String(label).slice(0, 28), subtitle: "fund flow · arrows show money direction",
+    wallet, domain: domain || null, mode: "funds", stats: [
+      { label: "FUNDED", value: String(sent), sub: "wallets sent to" },
+      { label: "FUNDERS", value: String(received), sub: "wallets received from" },
+      { label: `${nativeSymbol} OUT`, value: nativeOut > 0 ? nativeOut.toFixed(nativeOut >= 10 ? 1 : 3).replace(/\.0+$/, "") : "0" },
+      { label: `${nativeSymbol} IN`, value: nativeIn > 0 ? nativeIn.toFixed(nativeIn >= 10 ? 1 : 3).replace(/\.0+$/, "") : "0" },
+      { label: "TRANSFERS", value: String(rows.reduce((sum, row) => sum + row.txCount, 0)) }
+    ], nodes
+  };
+}
+function parsedSolFundTransfers(tx, wallet, add) {
+  const msg = tx?.transaction?.message || {};
+  const keyOf = (entry) => String(typeof entry === "string" ? entry : (entry?.pubkey || ""));
+  const keys = Array.isArray(msg.accountKeys) ? msg.accountKeys.map(keyOf) : [];
+  const tokenOwner = new Map();
+  for (const balance of [...(tx?.meta?.preTokenBalances || []), ...(tx?.meta?.postTokenBalances || [])]) {
+    const account = keys[Number(balance?.accountIndex)];
+    if (account && balance?.owner) tokenOwner.set(account, String(balance.owner));
+  }
+  const instructions = [...(msg.instructions || []), ...(tx?.meta?.innerInstructions || []).flatMap((group) => group?.instructions || [])];
+  for (const instruction of instructions) {
+    const parsed = instruction?.parsed, info = parsed?.info || {};
+    if (instruction?.program === "system" && parsed?.type === "transfer") {
+      add({ from: info.source, to: info.destination, native: (Number(info.lamports) || 0) / 1e9, at: Number(tx?.blockTime || 0) * 1000, tx: String(tx?.transaction?.signatures?.[0] || "") });
+    } else if (instruction?.program === "spl-token" && /transfer/i.test(String(parsed?.type || ""))) {
+      const from = String(info.authority || tokenOwner.get(String(info.source || "")) || "");
+      const to = String(tokenOwner.get(String(info.destination || "")) || info.destinationOwner || "");
+      const amt = Number(info.tokenAmount?.uiAmount ?? info.tokenAmount?.uiAmountString ?? 0) || 0;
+      add({ from, to, mint: info.mint || "", tokenAmount: amt || 1, at: Number(tx?.blockTime || 0) * 1000, tx: String(tx?.transaction?.signatures?.[0] || "") });
+    }
+  }
+}
+async function buildSolanaWalletFundMap(wallet) {
+  const w = String(wallet || "").trim();
+  if (!solanaPublicKeyLike(w)) return null;
+  const cacheKey = walletFundMapKey("solana", w), cached = walletFundMapCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < 3 * 60_000) return cached.map;
+  const { flows, add } = walletFundFlowCollector(w);
+  // Independent decoration/history work starts together, keeping a cold map comfortably inside the API's
+  // 14-second request ceiling instead of stacking signature + parser + funder + SNS latency.
+  const domainPromise = resolveSolWalletDomain(w).catch(() => null);
+  let firstFunderPromise = Promise.resolve(walletFunderCache.get(w) || walletObs.get(w)?.funder || null);
+  if (!walletFunderCache.has(w) && !walletObs.get(w)?.funder && funderBudgetOk()) {
+    funderUsedToday += 1;
+    firstFunderPromise = scanFastTimeout(lookupWalletFunder(w), 2_500, null);
+  }
+  const sigRows = await scanFastTimeout(rpcRead("fund-map: signatures", (c) => c.getSignaturesForAddress(new PublicKey(w), { limit: 60 }), { retries: 0 }), 3_200, []);
+  const signatures = (Array.isArray(sigRows) ? sigRows : []).map((row) => row.signature).filter(Boolean).slice(0, 60);
+  let parsed = [];
+  if (CONFIG.heliusApiKey && signatures.length) {
+    parsed = await scanFastTimeout(fetch(`https://api.helius.xyz/v0/transactions?api-key=${CONFIG.heliusApiKey}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ transactions: signatures }), signal: AbortSignal.timeout(5_000)
+    }).then((response) => response.ok ? response.json() : []), 5_300, []);
+    for (const tx of Array.isArray(parsed) ? parsed : []) {
+      const at = Number(tx?.timestamp || 0) * 1000, signature = String(tx?.signature || "");
+      for (const transfer of (tx?.nativeTransfers || [])) add({ from: transfer.fromUserAccount, to: transfer.toUserAccount, native: (Number(transfer.amount) || 0) / 1e9, at, tx: signature });
+      for (const transfer of (tx?.tokenTransfers || [])) add({ from: transfer.fromUserAccount, to: transfer.toUserAccount, mint: transfer.mint, symbol: transfer.symbol, tokenAmount: Number(transfer.tokenAmount) || 1, at, tx: signature });
+    }
+  }
+  if (!flows.size && signatures.length) {
+    const fallback = await Promise.all(signatures.slice(0, 24).map((signature) => scanFastTimeout(
+      rpcRead("fund-map: tx", (c) => c.getParsedTransaction(signature, { maxSupportedTransactionVersion: 0 }), { retries: 0 }), 2_800, null
+    )));
+    for (const tx of fallback) if (tx) parsedSolFundTransfers(tx, w, add);
+  }
+  // Include the original seed funder even if it sits outside the recent activity window.
+  const firstFunder = await firstFunderPromise;
+  if (firstFunder) add({ from: firstFunder, to: w, nativeSymbol: "SOL", tx: "first-funder" });
+  const domain = await domainPromise;
+  const map = await fundFlowRowsToMap(w, flows, { chain: "solana", subject: domain || shortMint(w), domain: domain || "" });
+  walletFundMapCache.set(cacheKey, { at: Date.now(), map });
+  if (walletFundMapCache.size > 300) walletFundMapCache.delete(walletFundMapCache.keys().next().value);
+  return map;
+}
+
+async function buildRhWalletFundMap(wallet) {
+  const w = String(wallet || "").trim().toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(w)) return null;
+  const cacheKey = walletFundMapKey("robinhood", w), cached = walletFundMapCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < 3 * 60_000) return cached.map;
+  const { flows, add } = walletFundFlowCollector(w);
+  const base = `https://robinhoodchain.blockscout.com/api/v2/addresses/${w}`;
+  const [txData, tokenData] = await Promise.all([
+    scanFastTimeout(fetchJson(`${base}/transactions`, { headers: { accept: "application/json" }, timeoutMs: 5_000 }), 5_200, null),
+    scanFastTimeout(fetchJson(`${base}/token-transfers`, { headers: { accept: "application/json" }, timeoutMs: 5_000 }), 5_200, null)
+  ]);
+  for (const tx of (Array.isArray(txData?.items) ? txData.items : [])) {
+    const from = firstString(tx?.from?.hash, tx?.from_hash), to = firstString(tx?.to?.hash, tx?.to_hash);
+    const eth = Number(tx?.value) > 0 ? Number(tx.value) / 1e18 : 0;
+    add({ from, to, native: eth, nativeSymbol: "ETH", at: Date.parse(tx?.timestamp || "") || 0, tx: firstString(tx?.hash, tx?.transaction_hash) });
+  }
+  for (const transfer of (Array.isArray(tokenData?.items) ? tokenData.items : [])) {
+    const from = firstString(transfer?.from?.hash, transfer?.from_hash), to = firstString(transfer?.to?.hash, transfer?.to_hash);
+    const decimals = Number(transfer?.token?.decimals ?? transfer?.total?.decimals) || 0;
+    const raw = Number(firstString(transfer?.total?.value, transfer?.value, transfer?.amount)) || 0;
+    add({
+      from, to, mint: firstString(transfer?.token?.address, transfer?.token?.address_hash),
+      symbol: firstString(transfer?.token?.symbol, transfer?.token?.name), tokenAmount: decimals ? raw / (10 ** decimals) : (raw || 1),
+      nativeSymbol: "ETH", at: Date.parse(transfer?.timestamp || "") || 0,
+      tx: firstString(transfer?.transaction_hash, transfer?.tx_hash)
+    });
+  }
+  const map = await fundFlowRowsToMap(w, flows, { chain: "robinhood", subject: shortMint(w) });
+  walletFundMapCache.set(cacheKey, { at: Date.now(), map });
+  if (walletFundMapCache.size > 300) walletFundMapCache.delete(walletFundMapCache.keys().next().value);
+  return map;
 }
 
 // 🕸️ CLUSTERS + CONNECTIONS (Bubblemaps-style) — group the top holders by shared on-chain FUNDER (reusing the
@@ -34114,10 +34395,12 @@ async function buildRhTokenHolderMap(address) {
 async function buildSubjectMap(target, mode = "bags") {
   // Robinhood Chain coin (0x…) → RH holder map; it isn't a base58 SOL mint/wallet so the SOL paths skip it.
   if (/^0x[0-9a-fA-F]{40}$/.test(String(target || "").trim())) {
+    if (mode === "funds") return buildRhWalletFundMap(target);
     const rh = await buildRhTokenHolderMap(target).catch(() => null);
     if (rh && rh.isToken) return rh;
-    return null;   // an unknown 0x with no holders → no map (there's no RH wallet-bag map yet)
+    return buildRhWalletFundMap(target); // EOA wallet: show its native/token fund flow.
   }
+  if (mode === "funds") return buildSolanaWalletFundMap(target);
   const tok = await buildTokenHolderMap(target).catch(() => null);
   if (tok && tok.isToken) return tok;
   return buildWalletMap(target, mode);
@@ -34227,7 +34510,12 @@ function mapCardKeyboard(map) {
   const webQ = map.mint ? `ca=${map.mint}` : `wallet=${map.wallet}`;
   rows.push([{ text: "🌐 Open interactive map", url: `https://www.slimewire.org/map?${webQ}` }]);
   if (map.kind === "wallet") {
-    rows.push([{ text: map.mode === "network" ? "💰 Show bags" : "🕸️ Show trading network", callback_data: `map:${map.wallet}:${map.mode === "network" ? "bags" : "network"}` }]);
+    rows.push([
+      { text: "💰 Bags", callback_data: `map:${map.wallet}:bags` },
+      { text: "🕸 Trades", callback_data: `map:${map.wallet}:network` },
+      { text: "💸 Fund Flow", callback_data: `map:${map.wallet}:funds` }
+    ]);
+    if (map.chain === "solana") rows.push([{ text: "🪂 Airdrops sent", url: `https://www.slimewire.org/airdrop?ca=${encodeURIComponent(map.wallet)}` }]);
   }
   if (map.mint) rows.push([{ text: "🔎 Scan", callback_data: `scan:refresh:${map.mint}` }, { text: "⚡ Quick Buy", callback_data: `qbp:${map.mint}` }]);
   return { inline_keyboard: rows };
@@ -34239,23 +34527,26 @@ async function sendMapCard(chatId, target, mode = "bags") {
   const webQ = map.mint ? `ca=${map.mint}` : `wallet=${map.wallet}`;
   const cap = map.kind === "token"
     ? `🗺️ <b>${escapeTelegramHtml(map.subject)}</b> holder map${kols && Number(kols.value) > 0 ? ` — <b>${kols.value}</b> known KOLs holding` : ""}.\n<i>Tap a KOL below to see their bags.</i>`
-    : `🗺️ <b>${escapeTelegramHtml(map.subject)}</b> ${map.mode === "network" ? "trading network" : "bags held"}.\n<a href="https://www.slimewire.org/map?${webQ}">Open the interactive map →</a>`;
+    : `🗺️ <b>${escapeTelegramHtml(map.subject)}</b> ${map.mode === "funds" ? "fund flow — incoming funders, outgoing funded wallets, and token sends" : map.mode === "network" ? "trading network" : "bags held"}.\n<a href="https://www.slimewire.org/map?${webQ}${map.mode === "funds" ? "&amp;mode=funds" : ""}">Open the interactive map →</a>`;
   await sendPhoto(chatId, "slimewire-map.png", png, cap, mapCardKeyboard(map), "HTML").catch(async () => {
     await sayHtml(chatId, cap, mapCardKeyboard(map)).catch(() => {});
   });
 }
 async function handleTelegramMapCommand(chatId, message, argument) {
   const arg = String(argument || "");
-  const target = (arg.match(/0x[0-9a-fA-F]{40}/) || [])[0] || (arg.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/) || [])[0] || "";
-  if (!target) { await say(chatId, "Usage: /map <coin CA or wallet> — I'll draw the holder / bag bubble map (Solana or Robinhood 0x…)."); return; }
+  const domain = (arg.match(/\b[a-z0-9][a-z0-9._-]{0,58}\.sol\b/i) || [])[0] || "";
+  let target = (arg.match(/0x[0-9a-fA-F]{40}/) || [])[0] || (arg.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/) || [])[0] || "";
+  if (!target && domain) target = await resolveSolDomainToAddress(domain).catch(() => null);
+  if (!target) { await say(chatId, "Usage: /map <coin CA, wallet, or .sol> — use /fundmap <wallet> for incoming/outgoing SOL, tokens, and funded wallets (Solana or Robinhood 0x…)."); return; }
   if (tgCommandOnCooldown(chatId, "map", 6000)) return;
-  await sendMapCard(chatId, target, "bags");
+  const requestedFunds = /^\/(?:fundmap|funds|flow)(?:@\w+)?\b/i.test(String(message?.text || "")) || Boolean(domain);
+  await sendMapCard(chatId, target, requestedFunds ? "funds" : "bags");
 }
 async function handleMapCallback(query, userId) {
   const parts = String(query.data || "").split(":");   // map : <addr> [: mode]
   const target = parts[1];
-  const mode = parts[2] === "network" ? "network" : "bags";
-  if (!target || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(target)) return false;
+  const mode = parts[2] === "network" ? "network" : parts[2] === "funds" ? "funds" : "bags";
+  if (!target || (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(target) && !/^0x[0-9a-fA-F]{40}$/.test(target))) return false;
   const chatId = query.message?.chat?.id;
   await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "🗺️ Drawing map…" }).catch(() => {});
   await sendMapCard(chatId, target, mode).catch(() => {});
@@ -34291,6 +34582,23 @@ async function sendAirdropCard(chatId, mint) {
     [{ text: "⚡ Trade", callback_data: `qbp:${mint}` }, { text: "🔄 Refresh", callback_data: `drop:${mint}` }],
   ] };
   await sayHtml(chatId, lines, kb).catch(() => {});
+}
+
+async function sendAirdropSubjectCard(chatId, input) {
+  const raw = String(input || "").trim();
+  const domain = (/^[a-z0-9][a-z0-9._-]{0,58}\.sol$/i.test(raw) ? raw : "");
+  const target = domain ? await resolveSolDomainToAddress(domain).catch(() => null) : raw;
+  if (!target || (!solanaPublicKeyLike(target) && !/^0x[0-9a-fA-F]{40}$/.test(target))) {
+    await sayHtml(chatId, `Couldn't resolve <b>${escapeTelegramHtml(raw)}</b>. Send a coin CA, wallet, .sol domain, or Robinhood 0x address.`);
+    return;
+  }
+  if (/^0x[0-9a-fA-F]{40}$/.test(target)) {
+    await sendMapCard(chatId, target, "bags");
+    return;
+  }
+  const isToken = await scanFastTimeout(isSolMintAddress(target), 3_000, false);
+  if (isToken) await sendAirdropCard(chatId, target);
+  else await sendMapCard(chatId, target, "funds");
 }
 
 // ============ 🐦 X (Twitter) CA REPLY BOT — reply to @mentions with a branded SlimeWire scan ============
@@ -41027,17 +41335,7 @@ async function telegramAlphaRows(chatId) {
 }
 
 function telegramRecommendationBlocked(row, shield) {
-  if (!row?.tokenMint || !shield) return true;
-  if (hasHardBlockedLivePairRisk(row) || slimeShieldHasHardDanger(shield)) return true;
-  const factors = Array.isArray(shield.factors) ? shield.factors : [];
-  const riskText = [
-    shield.verdict,
-    shield.summary,
-    shield.risk,
-    ...factors.flatMap((factor) => [factor?.key, factor?.label, factor?.message])
-  ].filter(Boolean).join(" ");
-  return String(shield.verdict || "").toUpperCase() === "AVOID"
-    || /honeypot|honey\s*pot|cannot sell|can't sell|sell blocked|blacklist|mint authority|freeze authority|liquidity (?:pulled|drained)|pool drained|rugged|scam/i.test(riskText);
+  return scanRecommendationBlocked(row, shield);
 }
 
 async function telegramSafetyScreenTrendingRows(rows, limit = 3) {

@@ -27,6 +27,9 @@ const STATE_COLOR = {
   sold:  { fill: "#e2564b", ring: "#7a1010" }, // dumped — red
   whale: { fill: "#ffcf4d", ring: "#8a6410" }, // biggest bags — gold
   new:   { fill: "#4dd6ff", ring: "#0c5a7a" }, // fresh in — cyan
+  funded:{ fill: "#8dff6a", ring: "#1d8f32" }, // wallet sent funds out — green
+  funder:{ fill: "#4dd6ff", ring: "#15718f" }, // wallet sent funds in — cyan
+  both:  { fill: "#ffcf4d", ring: "#9a7115" }, // two-way flow — gold
 };
 
 // Lay out nodes with the GOLDEN ANGLE (sunflower) so consecutive-by-size nodes land ~137° apart — the biggest
@@ -106,6 +109,7 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
   const cls = (clusters || []).filter((c) => Array.isArray(c.members) && c.members.length >= 2)
     .map((c, k) => ({ ...c, color: CLUSTER_COLORS[k % CLUSTER_COLORS.length], letter: String.fromCharCode(65 + k) }));
   const useClusters = cls.length > 0;
+  const fundMode = nodes.some((node) => node?.direction);
   const placed = useClusters ? layoutClustered(nodes, cls, cx, cy, 130, rMax) : layout(nodes, cx, cy, 130, rMax);
   const posByI = new Map(placed.map((p) => [p.i, p]));
 
@@ -124,13 +128,19 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
   // hub spokes when clustering to keep the fund-flow readable instead of a spider web.
   const clusteredSet = new Set();
   if (useClusters) cls.forEach((c) => (c.members || []).forEach((mi) => clusteredSet.add(mi)));
-  const spokes = placed.map((p) =>
-    (useClusters && clusteredSet.has(p.i)) ? "" :
-    `<line x1="${cx}" y1="${cy}" x2="${p.x.toFixed(1)}" y2="${p.y.toFixed(1)}" stroke="#3a7d49" stroke-width="${(0.6 + p.size / 28).toFixed(2)}" stroke-opacity="${useClusters ? "0.32" : "0.5"}"/>`
-  ).join("");
+  const spokes = placed.map((p) => {
+    if (useClusters && clusteredSet.has(p.i)) return "";
+    if (fundMode) {
+      const color = (STATE_COLOR[p.state] || STATE_COLOR.hold).fill;
+      if (p.direction === "in") return arrowSvg(p.x, p.y, cx, cy, color, 1.8, 62);
+      if (p.direction === "both") return arrowSvg(cx, cy, p.x, p.y, color, 1.8, p.size) + arrowSvg(p.x, p.y, cx, cy, color, 1.1, 62, "4 3");
+      return arrowSvg(cx, cy, p.x, p.y, color, 1.8, p.size);
+    }
+    return `<line x1="${cx}" y1="${cy}" x2="${p.x.toFixed(1)}" y2="${p.y.toFixed(1)}" stroke="#3a7d49" stroke-width="${(0.6 + p.size / 28).toFixed(2)}" stroke-opacity="${useClusters ? "0.32" : "0.5"}"/>`;
+  }).join("");
 
   // Nodes — glossy gradient "spheres" with a soft glow + specular highlight (premium, not flat circles).
-  const GRAD = { hold: "gHold", sold: "gSold", whale: "gWhale", new: "gNew" };
+  const GRAD = { hold: "gHold", sold: "gSold", whale: "gWhale", new: "gNew", funded: "gHold", funder: "gNew", both: "gWhale" };
   const nodeEls = placed.map((p) => {
     const c = STATE_COLOR[p.state] || STATE_COLOR.hold;
     const g = GRAD[p.state] || "gHold";
@@ -307,9 +317,13 @@ export function buildMapSvg({ subject = "$SLIME", subtitle = "top holders", stat
 
   // Legend + wordmark
   const legend = `<g font-family="Arial, sans-serif" font-size="12" font-weight="700">
-    <circle cx="34" cy="${H - 30}" r="6" fill="#5be36a"/><text x="46" y="${H - 26}" fill="#9fe0ab">holding</text>
+    ${fundMode
+      ? `<circle cx="34" cy="${H - 30}" r="6" fill="#4dd6ff"/><text x="46" y="${H - 26}" fill="#9fe0ab">funded this wallet</text>
+    <circle cx="178" cy="${H - 30}" r="6" fill="#8dff6a"/><text x="190" y="${H - 26}" fill="#9fe0ab">wallet funded</text>
+    <circle cx="300" cy="${H - 30}" r="6" fill="#ffcf4d"/><text x="312" y="${H - 26}" fill="#9fe0ab">both ways</text>`
+      : `<circle cx="34" cy="${H - 30}" r="6" fill="#5be36a"/><text x="46" y="${H - 26}" fill="#9fe0ab">holding</text>
     <circle cx="132" cy="${H - 30}" r="6" fill="#e2564b"/><text x="144" y="${H - 26}" fill="#9fe0ab">sold</text>
-    <circle cx="214" cy="${H - 30}" r="6" fill="#ffcf4d"/><text x="226" y="${H - 26}" fill="#9fe0ab">whale</text>
+    <circle cx="214" cy="${H - 30}" r="6" fill="#ffcf4d"/><text x="226" y="${H - 26}" fill="#9fe0ab">whale</text>`}
   </g>
   <g>
     <rect x="${W - 236}" y="${H - 44}" width="206" height="30" rx="15" fill="#04120a" fill-opacity="0.7" stroke="#5be36a" stroke-opacity="0.6"/>
