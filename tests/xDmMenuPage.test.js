@@ -227,6 +227,9 @@ test("X DM uses short branded chart and Trade Pad redirects", () => {
   assert.match(server, /xQuickSynced/);
   assert.match(server, /tgExecuteQuickBuyPreset\(userId, rec\.mint/);
   assert.match(server, /const X_DM_SHORT_LINK_TTL_MS = 24 \* 60 \* 60_000/);
+  assert.match(functionBody(server, "xDmShortLinkExpiresAt"), /X_DM_SHORT_LINK_TTL_MS - X_DM_LEGACY_SHORT_LINK_TTL_MS/);
+  assert.match(functionBody(server, "xDmShortLinkDestination"), /effectiveExpiresAt/);
+  assert.match(functionBody(server, "xDmCreateShortLink"), /ttlVersion: 2/);
   const redirects = fs.readFileSync(new URL("../web/public/_redirects", import.meta.url), "utf8");
   assert.match(redirects, /\/x\/\*\s+https:\/\/ogrevolbot\.onrender\.com\/x\/:splat\s+302/);
 });

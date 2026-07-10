@@ -34927,7 +34927,7 @@ function xDmPruneState(s, now = Date.now()) {
   for (const [id, rec] of Object.entries(s.failures || {})) if (now - Number(rec?.lastAt || 0) > 3 * 86_400_000) delete s.failures[id];
   for (const [sender, rec] of Object.entries(s.executing || {})) if (Number(rec?.expiresAt || 0) < now) delete s.executing[sender];
   for (const [id, rec] of Object.entries(s.usedBootstraps || {})) { const exp = (rec && typeof rec === "object") ? Number(rec.exp || 0) : Number(rec || 0); if (exp < now) delete s.usedBootstraps[id]; }  // handles both legacy number + {exp,count}
-  for (const [id, rec] of Object.entries(s.shortLinks || {})) if (!rec || Number(rec.expiresAt || 0) < now) delete s.shortLinks[id];
+  for (const [id, rec] of Object.entries(s.shortLinks || {})) if (!rec || xDmShortLinkExpiresAt(rec) < now) delete s.shortLinks[id];
   const shortLinkRows = Object.entries(s.shortLinks || {}).sort((a, b) => Number(a[1]?.expiresAt || 0) - Number(b[1]?.expiresAt || 0));
   for (let i = 0; i < Math.max(0, shortLinkRows.length - 2_000); i++) delete s.shortLinks[shortLinkRows[i][0]];
   for (const [id, rec] of Object.entries(s.outbox || {})) {
@@ -35035,6 +35035,14 @@ function xDmMenuUrl(state, senderId, mint, slot = "") {
 // X users often return to a DM hours later. Keep the redirect usable for one day (the signed Trade Pad
 // bootstrap is independently scoped and also capped at 24h; every money action still requires YES in X).
 const X_DM_SHORT_LINK_TTL_MS = 24 * 60 * 60_000;
+const X_DM_LEGACY_SHORT_LINK_TTL_MS = 20 * 60_000;
+function xDmShortLinkExpiresAt(rec) {
+  const stored = Number(rec?.expiresAt || 0);
+  if (!(stored > 0)) return 0;
+  // Links already sitting in an X DM were saved with the old 20-minute expiry and no version marker.
+  // Honor them for 24h from their original creation so today's broken www links start working after deploy.
+  return Number(rec?.ttlVersion || 0) >= 2 ? stored : stored + (X_DM_SHORT_LINK_TTL_MS - X_DM_LEGACY_SHORT_LINK_TTL_MS);
+}
 function xDmPortalOrigin() {
   return String(CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/+$/, "");
 }
@@ -35059,6 +35067,7 @@ function xDmCreateShortLink(state, senderId, mint, slot = "", requireLinked = fa
     linkVersion: String(linked?.linkedAt || ""),
     mint: cleanMint,
     slot: String(slot || ""),
+    ttlVersion: 2,
     expiresAt: Date.now() + X_DM_SHORT_LINK_TTL_MS
   };
   return id;
@@ -35073,13 +35082,14 @@ async function xDmShortLinkDestination(id, action) {
   const changed = xDmPruneState(state);
   const rec = state.shortLinks?.[String(id || "").toLowerCase()];
   if (changed) await writeXDmState(state).catch(() => {});
-  if (!rec || Number(rec.expiresAt || 0) <= Date.now()) return fallback;
+  const effectiveExpiresAt = xDmShortLinkExpiresAt(rec);
+  if (!rec || effectiveExpiresAt <= Date.now()) return fallback;
   if (action === "chart") {
     return `${xDmPortalOrigin()}/terminal/chart?token=${encodeURIComponent(rec.mint)}&source=x-dm`;
   }
   const linked = state.links?.[String(rec.senderId || "")];
   if (!rec.userId || !linked || String(linked.userId) !== String(rec.userId) || String(linked.linkedAt || "") !== String(rec.linkVersion || "")) return fallback;
-  const ttlMs = Math.max(1_000, Math.min(X_DM_MENU_TTL_MS, Number(rec.expiresAt) - Date.now()));
+  const ttlMs = Math.max(1_000, Math.min(X_DM_MENU_TTL_MS, effectiveExpiresAt - Date.now()));
   const token = signXDmMenuToken(CONFIG.appSecret, {
     senderId: String(rec.senderId),
     userId: String(rec.userId),
