@@ -951,7 +951,15 @@ test("KOL Call Feed is source-consented, admin-selected, deduped, and posts one 
   assert.match(functionBody(serverSource, "handleGroupBotCommand"), /kolsource\|callsource/);
   assert.match(functionBody(serverSource, "handleGroupBotCommand"), /kollfeed/);
   assert.match(functionBody(serverSource, "handleGroupBotCommand"), /kolfeed-command:\$\{message\.message_id\}/);
-  assert.match(functionBody(serverSource, "applyKolFeedSourceInput"), /resolveKolSourceReference/);
+  const input = functionBody(serverSource, "applyKolFeedSourceInput");
+  assert.match(input, /resolveKolSourceReference/);
+  assert.match(input, /Anonymous group admins/);
+  assert.match(input, /Private invite links/);
+  assert.match(functionBody(serverSource, "handleGroupBotCallback"), /gb:kol:add[\s\S]*sendMessage[\s\S]*promptMsgId/);
+  assert.match(functionBody(serverSource, "clearKolFeedInputPrompt"), /deleteMessage/);
+  const resolver = functionBody(serverSource, "resolveKolSourceReference");
+  assert.match(resolver, /publicLink/);
+  assert.match(resolver, /telegram/);
 });
 
 test("Shield folds into Rose: scam/ghost/impersonator/auto-whitelist (all off by default)", () => {

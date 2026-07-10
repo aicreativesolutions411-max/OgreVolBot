@@ -42540,9 +42540,13 @@ async function setKolCallFeedEnabled(chatId, on) {
 async function resolveKolSourceReference(message, raw = "") {
   const forwarded = telegramForwardedChannel(message);
   if (forwarded) return forwarded;
-  const value = String(raw || "").trim();
+  const value = String(raw || "").trim().replace(/^<|>$/g, "");
   if (!value) return null;
-  const chatRef = /^@?[A-Za-z0-9_]{5,32}$/.test(value) ? (value.startsWith("@") ? value : `@${value}`) : (/^-?\d+$/.test(value) ? value : "");
+  // Accept the formats admins naturally paste from Telegram: @username, bare username,
+  // t.me/username[/post], telegram.me/username, or the private-channel numeric source code.
+  const publicLink = value.match(/^(?:https?:\/\/)?(?:www\.)?(?:t|telegram)\.me\/(?:s\/)?([A-Za-z0-9_]{5,32})(?:\/\d+)?(?:[/?#].*)?$/i);
+  const username = publicLink?.[1] || (/^@?([A-Za-z0-9_]{5,32})$/.exec(value)?.[1] || "");
+  const chatRef = username ? `@${username}` : (/^-?\d+$/.test(value) ? value : "");
   if (!chatRef) return null;
   const chat = await telegram("getChat", { chat_id: chatRef }).catch(() => null);
   if (!chat?.id || chat.type !== "channel") return null;
@@ -42871,7 +42875,8 @@ function groupBotModuleView(module, entry) {
         "",
         ...sourceLines,
         "",
-        "Add a source by tapping below and forwarding one of its posts, or use <code>/kolsource add @channel</code>. The source must first add SlimeWireBot as an admin and post <code>/kolfeed on</code>.",
+        "Add a source by tapping below, then send <code>@channel</code>, its <code>t.me/channel</code> link, or forward one of its posts. Private channels can use the source code shown by <code>/kolfeed on</code>.",
+        "The source must first add SlimeWireBot as an admin and post <code>/kolfeed on</code>.",
         "",
         "Private/protected channels still get attribution on the card. Duplicate posts are ignored; each target is capped at 10 calls/hour.",
       ].join("\n"),
@@ -42949,23 +42954,59 @@ async function groupBotRenderModule(chatId, module, messageId) {
 // track, welcome, rules, antiflood, whitelist). key = `${chatId}:${userId}`.
 const gbInputPending = new Map();
 const kolFeedInputPending = new Map();
+async function clearKolFeedInputPrompt(chatId, pending) {
+  if (!pending?.promptMsgId) return;
+  await telegram("deleteMessage", { chat_id: chatId, message_id: pending.promptMsgId }).catch(() => {});
+}
 async function applyKolFeedSourceInput(message, userId) {
   const chatId = message?.chat?.id;
   const key = `${chatId}:${userId}`;
-  const pending = kolFeedInputPending.get(key);
+  let pendingKey = key;
+  let pending = kolFeedInputPending.get(key);
+  // Anonymous group admins are delivered by Telegram under a sender-chat identity, while callback
+  // queries use their real user id. Recover the one fresh pending setup for this group in that case.
+  const anonymousAdmin = String(message?.sender_chat?.id || "") === String(chatId)
+    || Number(message?.from?.id) === 1087968824; // Telegram's GroupAnonymousBot id
+  if (!pending && anonymousAdmin) {
+    const prefix = `${chatId}:`;
+    const match = [...kolFeedInputPending.entries()].find(([candidateKey, candidate]) => candidateKey.startsWith(prefix) && Date.now() - candidate.at <= 3 * 60_000);
+    if (match) { pendingKey = match[0]; pending = match[1]; }
+  }
   if (!pending) return false;
-  if (Date.now() - pending.at > 3 * 60_000) { kolFeedInputPending.delete(key); return false; }
+  if (Date.now() - pending.at > 3 * 60_000) {
+    kolFeedInputPending.delete(pendingKey);
+    await clearKolFeedInputPrompt(chatId, pending);
+    return false;
+  }
   const raw = String(message?.text || message?.caption || "").trim();
+  if (/^\/cancel$/i.test(raw)) {
+    kolFeedInputPending.delete(pendingKey);
+    await clearKolFeedInputPrompt(chatId, pending);
+    await say(chatId, "KOL source setup canceled.").catch(() => {});
+    return true;
+  }
   const source = await resolveKolSourceReference(message, raw).catch(() => null);
   if (!source) {
-    // Keep waiting when the next message was unrelated. A clear @username that fails gets a useful error.
-    if (/^@?[A-Za-z0-9_]{5,32}$/.test(raw)) {
-      await say(chatId, "I couldn't resolve that source channel. Forward one of its posts here, or send its public @channel username.").catch(() => {});
+    const looksAttempted = Boolean(message?.forward_origin || message?.forward_from_chat || message?.reply_to_message?.forward_origin || message?.reply_to_message?.forward_from_chat)
+      || /^@?[A-Za-z0-9_]{5,32}$/.test(raw)
+      || /^(?:https?:\/\/)?(?:www\.)?(?:t|telegram)\.me\//i.test(raw)
+      || /^-?\d+$/.test(raw);
+    // Do not trap unrelated group chatter, but never silently discard something that looks like a source.
+    if (looksAttempted) {
+      await sayHtml(chatId, [
+        "I couldn't resolve that source channel.",
+        "",
+        "Send its public <code>@username</code> or <code>t.me/channel</code> link, forward a channel post, or use the numeric source code printed by <code>/kolfeed on</code>.",
+        "Private invite links such as <code>t.me/+...</code> cannot be resolved by Telegram bots; forward a post or use the source code instead.",
+        "",
+        "I'm still waiting. Send another source or <code>/cancel</code>.",
+      ].join("\n")).catch(() => {});
       return true;
     }
     return false;
   }
-  kolFeedInputPending.delete(key);
+  kolFeedInputPending.delete(pendingKey);
+  await clearKolFeedInputPrompt(chatId, pending);
   const result = await addKolCallFeedSource(chatId, source);
   if (!result.ok) {
     await say(chatId, result.error).catch(() => {});
@@ -43140,7 +43181,7 @@ async function handleGroupBotCommand(message, userId) {
           : escapeTelegramHtml(result.error)).catch(() => {});
       } else {
         kolFeedInputPending.set(`${chatId}:${userId}`, { at: Date.now(), setupMsgId: null });
-        await sayHtml(chatId, "➕ <b>Add a KOL source</b>\n\nForward one post from the source channel here within 3 minutes, or send its public <code>@channel</code> username.\n\nThe source must first add SlimeWireBot as an admin and post <code>/kolfeed on</code>.").catch(() => {});
+        await sayHtml(chatId, "➕ <b>Add a KOL source</b>\n\nWithin 3 minutes, send its public <code>@channel</code> username, a <code>t.me/channel</code> link, forward one of its posts, or send its private source code.\n\nThe source must first add SlimeWireBot as an admin and post <code>/kolfeed on</code>. Send <code>/cancel</code> to stop.").catch(() => {});
       }
       return true;
     }
@@ -43352,8 +43393,17 @@ async function handleGroupBotCallback(query, userId) {
     return true;
   }
   if (data === "gb:kol:add") {
-    kolFeedInputPending.set(`${chatId}:${userId}`, { at: Date.now(), setupMsgId: messageId });
-    await telegram("answerCallbackQuery", { callback_query_id: query.id, show_alert: true, text: "Forward a post from the source channel here within 3 minutes, or send its public @channel username. The source must first run /kolfeed on." }).catch(() => {});
+    const prompt = await telegram("sendMessage", {
+      chat_id: chatId,
+      text: "➕ <b>Add a KOL source</b>\n\nWithin 3 minutes, send <code>@channel</code>, a <code>t.me/channel</code> link, forward one of its posts, or send its private source code.\n\nThe source must first add SlimeWireBot as an admin and post <code>/kolfeed on</code>. Send <code>/cancel</code> to stop.",
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+    }).catch(() => null);
+    kolFeedInputPending.set(`${chatId}:${userId}`, {
+      at: Date.now(),
+      setupMsgId: messageId,
+      promptMsgId: prompt?.result?.message_id || prompt?.message_id || null,
+    });
     return true;
   }
   const kolRemove = data.match(/^gb:kol:rm:(all|-?\d+)$/);
