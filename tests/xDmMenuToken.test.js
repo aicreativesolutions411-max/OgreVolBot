@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import {
   signXDmMenuToken,
   verifyXDmMenuToken,
+  bootstrapExchangeDecision,
+  X_DM_BOOTSTRAP_MAX_EXCHANGES,
   X_DM_MENU_MAX_TTL_MS
 } from "../src/lib/xDmMenuToken.js";
 
@@ -38,4 +40,24 @@ test("X DM menu token TTL is bounded and missing scope is rejected", () => {
   assert.notEqual(verifyXDmMenuToken(SECRET, token, { now: 1_000 + X_DM_MENU_MAX_TTL_MS }), null);
   assert.equal(verifyXDmMenuToken(SECRET, token, { now: 1_001 + X_DM_MENU_MAX_TTL_MS }), null);
   assert.throws(() => signXDmMenuToken(SECRET, { senderId: "123", userId: "", mint: PAYLOAD.mint }), /Missing X DM menu token scope/);
+});
+
+test("bootstrap link is re-exchangeable within its TTL (fixes X in-app browser reloads) but bounded", () => {
+  const exp = 60_000;
+  // A fresh link exchanges successfully and records count=1.
+  let d = bootstrapExchangeDecision(undefined, exp, { now: 1_000 });
+  assert.equal(d.allowed, true);
+  assert.deepEqual(d.record, { exp, count: 1 });
+  // The SAME link re-exchanges (X in-app browser lost its saved session on reopen) — must NOT hard-fail.
+  d = bootstrapExchangeDecision(d.record, exp, { now: 2_000 });
+  assert.equal(d.allowed, true);
+  assert.equal(d.record.count, 2);
+  // A legacy stored number (old single-use marker, still in the future) counts as one prior use, not blocked.
+  d = bootstrapExchangeDecision(9_999_999, exp, { now: 3_000 });
+  assert.equal(d.allowed, true);
+  assert.equal(d.record.count, 2);
+  // Bounded: after the cap, a leaked link can't be farmed into unlimited sessions.
+  d = bootstrapExchangeDecision({ exp, count: X_DM_BOOTSTRAP_MAX_EXCHANGES }, exp, { now: 4_000 });
+  assert.equal(d.allowed, false);
+  assert.equal(d.record.count, X_DM_BOOTSTRAP_MAX_EXCHANGES);
 });

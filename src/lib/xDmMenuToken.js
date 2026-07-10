@@ -35,6 +35,24 @@ export function signXDmMenuToken(secret, payload, options = {}) {
   return `${body}.${signature(secret, body)}`;
 }
 
+// Decide whether a (validated) bootstrap link may be exchanged for a scoped session RIGHT NOW, given how
+// many times it's already been exchanged. The link is NOT strictly single-use: X's in-app browser has
+// ephemeral storage and X/link scanners/redirects/reloads load the URL more than once, so single-use made
+// the user's real open fail. It IS still bounded — the signed short TTL is the security boundary, and a
+// leaked link can't be farmed into unlimited sessions (capped per bootstrap). `prior` is the stored record
+// ({exp,count} or a legacy number/undefined). Returns { allowed, record } — `record` is what to store back.
+export const X_DM_BOOTSTRAP_MAX_EXCHANGES = 8;
+export function bootstrapExchangeDecision(prior, exp, options = {}) {
+  const now = Number(options.now) || Date.now();
+  const max = Number(options.max) || X_DM_BOOTSTRAP_MAX_EXCHANGES;
+  const expMs = Number(exp) || now;
+  let priorCount = 0;
+  if (prior && typeof prior === "object") priorCount = Number(prior.count || 0);
+  else if (Number(prior) >= now) priorCount = 1;                // legacy: a stored future-timestamp = used once
+  if (priorCount >= max) return { allowed: false, record: { exp: expMs, count: priorCount } };
+  return { allowed: true, record: { exp: expMs, count: priorCount + 1 } };
+}
+
 export function verifyXDmMenuToken(secret, token, options = {}) {
   const parts = String(token || "").split(".");
   if (parts.length !== 2 || !parts[0] || !parts[1]) return null;

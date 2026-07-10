@@ -16,14 +16,20 @@ const scanCache = new Map();   // addrLc → { at, v }
 const scanInflight = new Map();
 
 async function bsFetch(path, timeoutMs = 8000) {
-  const ctl = new AbortController();
-  const t = setTimeout(() => { try { ctl.abort(); } catch { /* noop */ } }, timeoutMs);
-  try {
-    const res = await fetch(`${BLOCKSCOUT}${path}`, { signal: ctl.signal, headers: { accept: "application/json" } });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch { return null; }
-  finally { clearTimeout(t); }
+  // One retry on 429/5xx after a short pause — this instance's background sweeps also hit Blockscout, so a
+  // wallet scan can land mid-burst; a single retry turns "card full of zeros" into a normal read.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const ctl = new AbortController();
+    const t = setTimeout(() => { try { ctl.abort(); } catch { /* noop */ } }, timeoutMs);
+    try {
+      const res = await fetch(`${BLOCKSCOUT}${path}`, { signal: ctl.signal, headers: { accept: "application/json", "user-agent": "SlimeWire/1.0" } });
+      if (res.ok) return await res.json();
+      if ((res.status === 429 || res.status >= 500) && attempt === 0) { await new Promise((r) => setTimeout(r, 900)); continue; }
+      return null;
+    } catch { if (attempt === 0) { await new Promise((r) => setTimeout(r, 500)); continue; } return null; }
+    finally { clearTimeout(t); }
+  }
+  return null;
 }
 // Paginate a Blockscout list endpoint up to `maxPages` (Blockscout returns ~50/page + next_page_params).
 async function bsPaged(base, { maxPages = 4, timeoutMs = 8000 } = {}) {

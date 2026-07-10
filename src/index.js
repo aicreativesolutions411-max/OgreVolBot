@@ -77,7 +77,7 @@ import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
 import { xConfigured, xSearchMentions, xReply, xPost, xSearchQuery, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode, xAuthReport } from "./lib/xClient.js";
 import { xDmAuthMode, xDmConfigured, xDmFetchEvents, xDmOwnUserId as xDmResolvedOwnUserId, xDmSendText } from "./lib/xDmClient.js";
 import { isStaleXDmMoneyEvent, parseXDmBuySlotCommand, parseXDmSellSlotCommand, validateXDmBuyAmount, xDmEventTimestampMs, X_DM_BUY_LIMITS, X_DM_SELL_PERCENTAGES } from "./lib/xDmFlow.js";
-import { signXDmMenuToken, verifyXDmMenuToken } from "./lib/xDmMenuToken.js";
+import { signXDmMenuToken, verifyXDmMenuToken, bootstrapExchangeDecision } from "./lib/xDmMenuToken.js";
 import { createXDmPadSession, pruneXDmPadSessions, resolveXDmPadSession, revokeXDmPadSession, revokeXDmPadSessionsForSender } from "./lib/xDmPadSession.js";
 import { renderXScanCard } from "./lib/xCard.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
@@ -34016,7 +34016,7 @@ function xDmPruneState(s, now = Date.now()) {
   for (const [sender, ctx] of Object.entries(s.contexts || {})) if (now - Number(ctx?.updatedAt || 0) > 7 * 86_400_000) delete s.contexts[sender];
   for (const [id, rec] of Object.entries(s.failures || {})) if (now - Number(rec?.lastAt || 0) > 3 * 86_400_000) delete s.failures[id];
   for (const [sender, rec] of Object.entries(s.executing || {})) if (Number(rec?.expiresAt || 0) < now) delete s.executing[sender];
-  for (const [id, expiresAt] of Object.entries(s.usedBootstraps || {})) if (Number(expiresAt || 0) < now) delete s.usedBootstraps[id];
+  for (const [id, rec] of Object.entries(s.usedBootstraps || {})) { const exp = (rec && typeof rec === "object") ? Number(rec.exp || 0) : Number(rec || 0); if (exp < now) delete s.usedBootstraps[id]; }  // handles both legacy number + {exp,count}
   for (const [id, rec] of Object.entries(s.outbox || {})) {
     if (!rec || Number(rec.expiresAt || 0) < now || !String(rec.senderId || "") || !Array.isArray(rec.chunks)) delete s.outbox[id];
   }
@@ -34459,11 +34459,17 @@ async function xDmPadAccess(body, state, action = "view") {
   if (bootstrap) {
     if (action !== "view") xDmMenuFail("The signed X link can only open Trade Pad. Use its private session for every action.", 401);
     if (!xDmPadLinkValid(state, bootstrap)) xDmMenuFail("This X account is no longer linked. Run /xlink in Telegram again.", 401);
+    // The bootstrap link is EXCHANGEABLE WHILE VALID (signed + 15-min TTL + scoped to sender/mint/linkVersion),
+    // NOT strictly single-use. X's in-app browser has ephemeral storage, and X/link scanners / redirects /
+    // reloads routinely load the URL more than once — strict single-use made the user's real open fail with
+    // "already opened" (the reliability bug). The signed short TTL is the security boundary; each exchange mints
+    // one scoped session, bounded by the per-sender session cap (8) + pruning. We still cap re-exchanges per
+    // bootstrap so a leaked link can't be farmed into unlimited sessions within its TTL.
+    if (!state.usedBootstraps || typeof state.usedBootstraps !== "object") state.usedBootstraps = {};
     const bootstrapId = crypto.createHash("sha256").update(`${bootstrap.senderId}:${bootstrap.nonce}`).digest("hex");
-    if (Number(state.usedBootstraps?.[bootstrapId] || 0) >= Date.now()) {
-      xDmMenuFail("This one-time Trade Pad link was already opened. Use the active page or request a fresh link in X.", 401);
-    }
-    state.usedBootstraps[bootstrapId] = Number(bootstrap.exp || Date.now() + X_DM_MENU_TTL_MS);
+    const decision = bootstrapExchangeDecision(state.usedBootstraps[bootstrapId], Number(bootstrap.exp || Date.now() + X_DM_MENU_TTL_MS));
+    if (!decision.allowed) xDmMenuFail("This Trade Pad link has been opened too many times. Send a coin number in X for a fresh link.", 401);
+    state.usedBootstraps[bootstrapId] = decision.record;
     const created = createXDmPadSession(state, bootstrap);
     return {
       payload: xDmPadPayloadFromSession(created.record),
@@ -36195,23 +36201,42 @@ async function isSolMintAddress(addr) {
     const info = await rpcRead("addr-kind", (conn) => conn.getAccountInfo(new PublicKey(addr), "confirmed"), { timeoutMs: 4500 });
     const owner = info && info.owner ? info.owner.toBase58() : "";
     mint = owner === TOKEN_PROGRAM_ID.toBase58() || owner === "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";  // SPL + Token-2022
-  } catch (error) { throw error; }
+  } catch (error) {
+    // A classify failure must NEVER break routing: rethrow so the CALLER's default applies (coin path —
+    // the legacy behavior). Never cache a guess. (A prior version threw AND callers had no logging, which
+    // silently sent real wallets to the coin card.)
+    console.warn(`[walletscan] isSolMintAddress(${shortMint(addr)}) RPC failed: ${String(error?.message || error).slice(0, 120)} — caller default applies`);
+    throw error;
+  }
   _addrKindCache.set(addr, { at: Date.now(), mint });
   if (_addrKindCache.size > 1000) _addrKindCache.delete(_addrKindCache.keys().next().value);
   return mint;
 }
-// Is a 0x address a CONTRACT (token) vs an EOA (wallet)? Empty eth_getCode = EOA = wallet. Cached.
+// Is a 0x address a CONTRACT (token) vs an EOA (wallet)? Blockscout `is_contract` is the PRIMARY source —
+// one reliable GET (verified live for both an EOA and a token) — because the RH RPC is slow/flaky from
+// Render and an error here used to silently misroute real wallets to the coin card. eth_getCode is the
+// fallback. Only a CONFIRMED answer is cached.
 const _rhKindCache = new Map();
 async function isRhContract(addr) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return false;
   const c = _rhKindCache.get(addr.toLowerCase());
   if (c && Date.now() - c.at < 10 * 60_000) return c.contract;
-  let contract = false;
+  let contract = null;
   try {
-    const provider = new ethers.JsonRpcProvider(CONFIG.rhChainRpcUrl, RH_CHAIN_ID, { staticNetwork: true });
-    const code = await provider.getCode(addr);
-    contract = !!code && code !== "0x" && code.length > 2;
-  } catch (error) { throw error; }
+    const ctl = new AbortController(); const t = setTimeout(() => { try { ctl.abort(); } catch { /* */ } }, 6000);
+    const res = await fetch(`https://robinhoodchain.blockscout.com/api/v2/addresses/${addr}`, { signal: ctl.signal, headers: { accept: "application/json" } }).finally(() => clearTimeout(t));
+    if (res.ok) { const d = await res.json(); if (typeof d.is_contract === "boolean") contract = d.is_contract; }
+  } catch { /* fall through to RPC */ }
+  if (contract == null) {
+    try {
+      const provider = new ethers.JsonRpcProvider(CONFIG.rhChainRpcUrl, RH_CHAIN_ID, { staticNetwork: true });
+      const code = await Promise.race([provider.getCode(addr), new Promise((_, rej) => setTimeout(() => rej(new Error("getCode timeout")), 6000))]);
+      contract = !!code && code !== "0x" && code.length > 2;
+    } catch (error) {
+      console.warn(`[walletscan] isRhContract(${addr.slice(0, 10)}…) both sources failed: ${String(error?.message || error).slice(0, 120)} — caller default applies`);
+      throw error;                                     // caller's default (coin path) applies; nothing cached
+    }
+  }
   _rhKindCache.set(addr.toLowerCase(), { at: Date.now(), contract });
   if (_rhKindCache.size > 1000) _rhKindCache.delete(_rhKindCache.keys().next().value);
   return contract;
@@ -36260,7 +36285,10 @@ function formatWalletScanCard(s) {
   return lines.join("\n");
 }
 async function sendWalletScanCard(chatId, address) {
-  const s = await getWalletScan(address).catch(() => null);
+  const _t0 = Date.now();
+  const s = await getWalletScan(address).catch((e) => { console.warn(`[walletscan] getWalletScan(${String(address).slice(0, 10)}…) THREW: ${String(e?.message || e).slice(0, 140)}`); return null; });
+  // FLIGHT RECORDER — one line per scan so "wallet shows nothing" is diagnosable from Render logs.
+  try { console.log(`[walletscan] ${String(address).slice(0, 10)}… chain=${s?.chain || "?"} ok=${Boolean(s?.ok)} pnl=${s ? Math.round(s.totalPnlUsd || 0) : "-"} value=${s ? Math.round(s.totalValueUsd || 0) : "-"} trades=${s?.tradeCount ?? "-"} holdings=${s?.holdings?.length ?? "-"} in ${Date.now() - _t0}ms`); } catch { /* best-effort */ }
   if (!s || !s.ok) { await say(chatId, "👛 Couldn't read that wallet right now — paste a valid Solana or Robinhood (0x…) wallet address."); return; }
   const kb = { inline_keyboard: [[
     { text: "🔎 Explorer", url: s.explorer },
