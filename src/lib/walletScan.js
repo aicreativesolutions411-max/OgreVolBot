@@ -122,14 +122,20 @@ async function rhWalletScanCore(address, { rpcUrl, ttlMs = 90_000, maxHoldingsPr
 
   // Robinhood Blockscout's v2 per-address history currently returns intermittent HTTP 500s. The indexed
   // account API stays live when block bounds are explicit, so wallet Bags/Trades use it directly.
-  const [ethUsd, ethBalRaw, curTokens, xfers, txs, itxs] = await Promise.all([
+  const [ethUsd, ethBalRaw, curTokensRaw, xfersRaw, txsRaw, itxsRaw] = await Promise.all([
     rhEthUsd().catch(() => 0),
     bsAccount(a, "balance").catch(() => null),
-    bsAccount(a, "tokenlist").catch(() => []),
-    bsAccount(a, "tokentx").catch(() => []),
-    bsAccount(a, "txlist").catch(() => []),
-    bsAccount(a, "txlistinternal").catch(() => []),
+    bsAccount(a, "tokenlist").catch(() => null),
+    bsAccount(a, "tokentx").catch(() => null),
+    bsAccount(a, "txlist").catch(() => null),
+    bsAccount(a, "txlistinternal").catch(() => null),
   ]);
+  const curTokens = Array.isArray(curTokensRaw) ? curTokensRaw : [];
+  const xfers = Array.isArray(xfersRaw) ? xfersRaw : [];
+  const txs = Array.isArray(txsRaw) ? txsRaw : [];
+  const itxs = Array.isArray(itxsRaw) ? itxsRaw : [];
+  const hasPnl = Array.isArray(xfersRaw);
+  const historyIncomplete = !Array.isArray(txsRaw) || !Array.isArray(itxsRaw);
   const eth = Number(ethUsd) || 0;
   const ethBalance = ethBalRaw ? wei(ethBalRaw?.coin_balance ?? ethBalRaw) : 0;
 
@@ -246,7 +252,10 @@ async function rhWalletScanCore(address, { rpcUrl, ttlMs = 90_000, maxHoldingsPr
     tokensTraded: tok.size,
     holdings: holdings.slice(0, 12),
     trades: tradeRows.slice(0, 24),
-    partial: xfers.length >= 250 || txs.length >= 250 || itxs.length >= 250 || priceCandidates.length > priceCap,
+    hasPnl,
+    pnlPartial: hasPnl && (historyIncomplete || xfers.length >= 250 || txs.length >= 250 || itxs.length >= 250),
+    pnlSource: hasPnl ? "Robinhood Chain history" : null,
+    partial: historyIncomplete || xfers.length >= 250 || txs.length >= 250 || itxs.length >= 250 || priceCandidates.length > priceCap,
     explorer: `https://robinhoodchain.blockscout.com/address/${a}`,
   };
   scanCache.set(key, { at: Date.now(), v });

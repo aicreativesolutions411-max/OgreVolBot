@@ -72,6 +72,7 @@ import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVan
 import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, evmWalletFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenInfo, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
 import { getNoxaScan, fetchNoxaFeed, fetchPoolBuys, NOXA_RH } from "./lib/noxaLaunchpad.js";
 import { rhWalletScan } from "./lib/walletScan.js";
+import { finiteWalletNumber, normalizeSolWalletPnlSummary, normalizeSolWalletPositions } from "./lib/solWalletPnl.js";
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp, listCharacterFiles, characterPfpCount, makeCharacterPfp } from "./lib/pfp.js";
 import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
 import { xConfigured, xSearchMentions, xReply, xPost, xSearchQuery, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode, xAuthReport } from "./lib/xClient.js";
@@ -5587,8 +5588,8 @@ function loadConfig() {
     kolUseSolanaTrackerFallback,
     telegramBotUsername: normalizeTelegramUsername(process.env.TELEGRAM_BOT_USERNAME || ""),
     webPortalUrl: (process.env.WEB_PORTAL_URL || "").replace(/\/$/, ""),
-    // X DM short links MUST hit this Node service first. www.slimewire.org is the static Pages frontend;
-    // sending /x/<id> there silently opens Trending and never reaches xDmShortLinkDestination.
+    // Kept for legacy links already sent from the backend host. New X DMs use the public SlimeWire domain;
+    // its /x/* redirect reaches this service without exposing onrender.com in the conversation.
     xDmRedirectOrigin: (
       process.env.X_DM_REDIRECT_ORIGIN
       || (renderExternalHostname ? `https://${renderExternalHostname}` : "")
@@ -35033,7 +35034,7 @@ function readXDmMenuToken(token) {
 }
 function xDmMenuUrl(state, senderId, mint, slot = "") {
   const id = xDmCreateShortLink(state, senderId, mint, slot, true);
-  return id ? `${xDmRedirectOrigin()}/x/${id}/trade` : "";
+  return id ? `${xDmPortalOrigin()}/x/${id}/trade` : "";
 }
 // X users often return to a DM hours later. Keep the redirect usable for one day (the signed Trade Pad
 // bootstrap is independently scoped and also capped at 24h; every money action still requires YES in X).
@@ -35077,7 +35078,7 @@ function xDmCreateShortLink(state, senderId, mint, slot = "", requireLinked = fa
 }
 function xDmShortChartUrl(state, senderId, mint, slot = "") {
   const id = xDmCreateShortLink(state, senderId, mint, slot, false);
-  return id ? `${xDmRedirectOrigin()}/x/${id}/chart` : xDmTokenUrl(mint);
+  return id ? `${xDmPortalOrigin()}/x/${id}/chart` : xDmTokenUrl(mint);
 }
 async function xDmShortLinkDestination(id, action) {
   const fallback = action === "chart" ? `${xDmPortalOrigin()}/terminal` : `${xDmPortalOrigin()}/x-dm-menu`;
@@ -35129,13 +35130,14 @@ function xDmSlotMenuText(state, senderId, slot, linked = false) {
   const mint = xDmResolveRecentTarget(state, senderId, slot);
   if (!mint) return "That coin slot is empty. Paste one or more CAs first.";
   const tradeSupported = xDmTradeSupportedMint(mint);
-  const chartUrl = xDmShortChartUrl(state, senderId, mint, slot);
-  const menuUrl = linked ? xDmMenuUrl(state, senderId, mint, slot) : "";
+  // One URL per DM. X occasionally created a dead second t.co entity when two freshly generated links were
+  // sent together. The linked Trade Pad already contains Chart + Full Terminal, so a second chart URL was
+  // redundant as well as unreliable.
+  const primaryUrl = linked ? xDmMenuUrl(state, senderId, mint, slot) : xDmShortChartUrl(state, senderId, mint, slot);
   return [
     `Coin #${slot}: ${shortMint(mint)}`,
     "",
-    `📈 OPEN CHART + BUY/SELL PANEL\n${chartUrl}`,
-    menuUrl ? `⚡ OPEN X TRADE PAD\n${menuUrl}` : "",
+    `${linked ? "⚡ OPEN SLIMEWIRE CHART + TRADE PAD" : "📈 OPEN SLIMEWIRE CHART"}\n${primaryUrl}`,
     linked && tradeSupported ? `Quick buy with saved preset: BUY ${slot}\nSell 50%: SELL ${slot} 50\nYou approve with YES before anything sends.` : `Reply: chart ${slot} | rug ${slot} | map ${slot}`,
     linked && !tradeSupported ? "Text buy/sell commands are Solana-only; open Trade Pad for Robinhood Chain trading." : "",
     !linked ? "Connect trading: https://www.slimewire.org/x-terminal" : ""
@@ -36173,8 +36175,7 @@ async function xDmHandleEvent(event, state) {
     xDmRememberTargets(state, senderId, targetList.length ? targetList : [target]);
     const slots = xDmTokenSlotsText(state, senderId, Boolean(linked));
     const saveLine = targetList.length > 1 ? `Saved ${targetList.length} new coin slots. Scanned #1.` : "Saved coin slot #1.";
-    const chartUrl = xDmShortChartUrl(state, senderId, target, 1);
-    const menuUrl = linked ? xDmMenuUrl(state, senderId, target, 1) : "";
+    const primaryUrl = linked ? xDmMenuUrl(state, senderId, target, 1) : xDmShortChartUrl(state, senderId, target, 1);
     // A deep scan can wait on several public providers. Never leave the user's pasted CA looking ignored and
     // never let one slow scan freeze the self-scheduling DM poller behind it. Acknowledge only when it is slow,
     // then cap the read; chart/Trade Pad links still return even when market enrichment is warming.
@@ -36190,8 +36191,7 @@ async function xDmHandleEvent(event, state) {
     }
     const body = reply?.text || `Scanned ${shortMint(target)}. Market details are still warming; the live chart is ready.`;
     const links = [
-      `📈 OPEN CHART + BUY/SELL PANEL\n${chartUrl}`,
-      menuUrl ? `⚡ OPEN X TRADE PAD\n${menuUrl}` : "",
+      `${linked ? "⚡ OPEN SLIMEWIRE CHART + TRADE PAD" : "📈 OPEN SLIMEWIRE CHART"}\n${primaryUrl}`,
       !linked ? "Connect X trading: https://www.slimewire.org/x-terminal" : ""
     ].filter(Boolean).join("\n\n");
     return await xDmSend(senderId, `${saveLine}\n\n${body}\n\n${links}${slots ? `\n\n${slots}` : ""}\n\n${xDmActionHints(state, senderId, Boolean(linked))}`, state);
@@ -36221,9 +36221,8 @@ async function xDmHandleEvent(event, state) {
     if (!target) return await xDmSend(senderId, "That coin slot is empty. Paste one or more CAs first.", state);
     const kind = targetIntent[1].toLowerCase();
     const reply = await buildXReply(target, kind === "chart" ? "chart" : kind === "map" ? "map" : kind === "rug" || kind === "safe" ? "rug" : intent, event.id).catch(() => null);
-    const chartUrl = xDmShortChartUrl(state, senderId, target, targetIntent[2]);
     const menuUrl = xDmMenuUrl(state, senderId, target, targetIntent[2]);
-    return await xDmSend(senderId, `${reply?.text || `Scanned ${shortMint(target)}`}\n\n📈 OPEN CHART + BUY/SELL PANEL\n${chartUrl}\n\n⚡ OPEN X TRADE PAD\n${menuUrl}\n\n${xDmActionHints(state, senderId, true)}`, state);
+    return await xDmSend(senderId, `${reply?.text || `Scanned ${shortMint(target)}`}\n\n⚡ OPEN SLIMEWIRE CHART + TRADE PAD\n${menuUrl}\n\n${xDmActionHints(state, senderId, true)}`, state);
   }
   const buySlot = parseXDmBuySlotCommand(text);
   if (buySlot) {
@@ -37293,33 +37292,50 @@ async function solWalletScan(wallet) {
   const c = solWalletScanCache.get(key);
   if (c && Date.now() - c.at < 90_000) return c.v;
   const solUsd = (await getSolUsdPrice().catch(() => 0)) || 0;
-  const [holdings, pnlRaw, domain] = await Promise.all([
+  const [holdings, pnlRaw, positionsRaw, domain, solLamports] = await Promise.all([
     fetchWalletHoldings(wallet).catch(() => ({ tokens: [], total: 0 })),
-    (CONFIG.solanaTrackerApiKey ? solanaTrackerJson(`/pnl/${encodeURIComponent(wallet)}`, { cacheTtlMs: 90_000, timeoutMs: 9000 }).catch(() => null) : Promise.resolve(null)),
+    (CONFIG.solanaTrackerApiKey ? solanaTrackerJson(`/v2/pnl/wallets/${encodeURIComponent(wallet)}`, { cacheTtlMs: 90_000, timeoutMs: 6500 }).catch(() => null) : Promise.resolve(null)),
+    (CONFIG.solanaTrackerApiKey ? solanaTrackerJson(`/v2/pnl/wallets/${encodeURIComponent(wallet)}/positions?sort=value&direction=desc&limit=12&filter=holding`, { cacheTtlMs: 90_000, timeoutMs: 6500 }).catch(() => null) : Promise.resolve(null)),
     resolveSolWalletDomain(wallet).catch(() => null),
+    rpcRead("wallet-scan: balance", (conn) => conn.getBalance(new PublicKey(wallet), "confirmed"), { timeoutMs: 4500, retries: 0 }).catch(() => null),
   ]);
-  // ST /pnl shape (defensive — the API nests the summary under a few possible keys).
-  const sum = pnlRaw?.summary || pnlRaw?.stats || pnlRaw || {};
-  const num = (...v) => { for (const x of v) { const n = Number(x); if (Number.isFinite(n)) return n; } return null; };
-  const realizedUsd = num(sum.realized, sum.realizedUsd, sum.realized_usd);
-  const unrealizedUsd = num(sum.unrealized, sum.unrealizedUsd, sum.unrealized_usd);
-  const totalPnlUsd = num(sum.total, sum.totalUsd, sum.pnl) ?? ((realizedUsd || 0) + (unrealizedUsd || 0));
-  let winRate = num(sum.winPercentage, sum.winRate, sum.win_rate, sum.winrate);
-  if (winRate != null && winRate > 0 && winRate <= 1) winRate = winRate * 100;
-  const wins = num(sum.totalWins, sum.wins), losses = num(sum.totalLosses, sum.losses);
-  const holdingsList = (holdings.tokens || []).map((t) => ({ addr: t.mint, sym: t.sym || t.symbol || "", qty: 0, valueUsd: Number(t.val) || 0, costUsd: 0, pnlUsd: 0 })).filter((h) => h.valueUsd > 0.5).slice(0, 12);
+  const pnl = normalizeSolWalletPnlSummary(pnlRaw);
+  const positionRows = normalizeSolWalletPositions(positionsRaw);
+  const positionMints = new Set(positionRows.map((row) => String(row.addr || "").toLowerCase()).filter(Boolean));
+  // PnL v2 positions carry the cost basis and open/realized PnL that the old portfolio endpoint lacks.
+  // Append non-traded/airdropped holdings so a complete wallet never looks empty just because it has no cost basis.
+  const holdingsList = [
+    ...positionRows,
+    ...(holdings.tokens || []).filter((token) => !positionMints.has(String(token.mint || "").toLowerCase())).map((token) => ({
+      addr: token.mint, sym: token.sym || token.symbol || "", name: token.name || "",
+      qty: null, valueUsd: Number(token.val) || 0, costUsd: null,
+      realizedUsd: null, unrealizedUsd: null, pnlUsd: null, totalPnlUsd: null,
+    })),
+  ].filter((row) => (Number(row.valueUsd) || 0) > 0.5 || row.costUsd != null)
+    .sort((a, b) => (Number(b.valueUsd) || 0) - (Number(a.valueUsd) || 0)).slice(0, 12);
+  const solBalance = solLamports == null ? null : Number(solLamports) / LAMPORTS_PER_SOL;
+  const holdingsTotalUsd = finiteWalletNumber(holdings.total);
+  const tokenValueUsd = holdingsTotalUsd > 0 ? holdingsTotalUsd : (pnl.openValueUsd || 0);
+  const solBalanceUsd = solBalance == null ? null : solBalance * solUsd;
   const v = {
     ok: true, address: wallet, chain: "solana",
     domain: domain || null,
     solPrice: solUsd,
-    realizedUsd: realizedUsd || 0, unrealizedUsd: unrealizedUsd || 0, totalPnlUsd: totalPnlUsd || 0,
-    holdingsValueUsd: Number(holdings.total) || 0, totalValueUsd: Number(holdings.total) || 0,
-    winRate: winRate != null ? Math.round(winRate) : null,
-    wins: wins || 0, losses: losses || 0,
-    tradeCount: num(sum.totalTrades, sum.trades, sum.tradeCount) || 0,
-    tokensTraded: holdingsList.length,
+    solBalance, solBalanceUsd,
+    realizedUsd: pnl.realizedUsd, unrealizedUsd: pnl.unrealizedUsd, totalPnlUsd: pnl.totalPnlUsd,
+    investedUsd: pnl.investedUsd, proceedsUsd: pnl.proceedsUsd,
+    openCostUsd: pnl.openCostUsd, openValueUsd: pnl.openValueUsd,
+    holdingsValueUsd: tokenValueUsd, totalValueUsd: tokenValueUsd + (solBalanceUsd || 0),
+    winRate: pnl.winRate != null ? Math.round(pnl.winRate * 10) / 10 : null,
+    wins: pnl.wins, losses: pnl.losses,
+    tradeCount: pnl.tradeCount,
+    buys: pnl.buys, sells: pnl.sells,
+    tokensTraded: pnl.tokensTraded,
     holdings: holdingsList,
-    hasPnl: pnlRaw != null && (realizedUsd != null || totalPnlUsd != null),
+    hasPnl: pnl.available,
+    pnlPartial: Boolean(pnl.available && !positionsRaw),
+    pnlSource: pnl.available ? "Solana Tracker PnL v2" : null,
+    providerUpdatedAt: pnlRaw?.updatedAt || null,
     explorer: `https://solscan.io/account/${wallet}`,
   };
   solWalletScanCache.set(key, { at: Date.now(), v });
@@ -37392,34 +37408,53 @@ function formatWalletScanCard(s) {
   const rh = s.chain === "robinhood";
   const fmt = (v) => scanFmtMoney(Math.abs(Number(v) || 0));
   const signed = (v) => { const n = Number(v) || 0; return `${n >= 0 ? "🟢 +" : "🔴 −"}${fmt(n)}`; };
+  const amount = (v) => v == null || !Number.isFinite(Number(v)) ? "—" : fmt(v);
   const short = `${s.address.slice(0, rh ? 6 : 4)}…${s.address.slice(-4)}`;
   const rail = rh ? "🪶 Robinhood Chain" : "◎ Solana";
   const label = s.domain ? `<b>${esc(s.domain)}</b> <code>${esc(short)}</code>` : `<b>Wallet</b> <code>${esc(short)}</code>`;
   const lines = [
     `👛 ${label} · <i>${rail}</i>`,
-    "",
-    "💰 <b>PnL</b>",
-    `├ Total   <b>${signed(s.totalPnlUsd)}</b>`,
-    `├ Realized <b>${signed(s.realizedUsd)}</b>`,
-    `└ Open    <b>${signed(s.unrealizedUsd)}</b>`,
   ];
+  lines.push("", `💰 <b>PnL${s.pnlPartial ? " (partial)" : ""}</b>`);
+  if (s.hasPnl) {
+    lines.push(
+      `├ Total   <b>${signed(s.totalPnlUsd)}</b>`,
+      `├ Realized <b>${signed(s.realizedUsd)}</b>`,
+      `└ Open    <b>${signed(s.unrealizedUsd)}</b>`,
+    );
+    const flow = [];
+    if (s.investedUsd != null) flow.push(`Invested <b>${amount(s.investedUsd)}</b>`);
+    if (s.proceedsUsd != null) flow.push(`Proceeds <b>${amount(s.proceedsUsd)}</b>`);
+    if (flow.length) lines.push(flow.join("  ·  "));
+  } else {
+    lines.push("└ <b>Unavailable right now</b> — holdings are still shown below.");
+  }
   const wl = [];
-  if (s.winRate != null) wl.push(`🎯 Win rate <b>${s.winRate}%</b>${(s.wins || s.losses) ? ` (${s.wins}W/${s.losses}L)` : ""}`);
-  if (s.tradeCount) wl.push(`🔁 Trades <b>${s.tradeCount}</b>`);
-  if (s.tokensTraded) wl.push(`🪙 Tokens <b>${s.tokensTraded}</b>`);
+  if (s.winRate != null) wl.push(`🎯 Win rate <b>${s.winRate}%</b>${(s.wins != null || s.losses != null) ? ` (${s.wins || 0}W/${s.losses || 0}L)` : ""}`);
+  if (s.tradeCount != null) wl.push(`🔁 Trades <b>${s.tradeCount}</b>`);
+  if (s.tokensTraded != null) wl.push(`🪙 Tokens <b>${s.tokensTraded}</b>`);
   if (wl.length) { lines.push("", wl.join("  ·  ")); }
+  if (s.buys != null || s.sells != null) lines.push(`🟢 Buys <b>${s.buys || 0}</b>  ·  🔴 Sells <b>${s.sells || 0}</b>`);
   lines.push("", "🏦 <b>Portfolio</b>", `├ Holdings <b>${fmt(s.holdingsValueUsd)}</b>`);
   if (rh && s.ethBalance != null) lines.push(`├ ETH <b>${Number(s.ethBalance).toFixed(4)}</b> (${fmt(s.ethBalanceUsd)})`);
+  if (!rh && s.solBalance != null) lines.push(`├ SOL <b>${Number(s.solBalance).toFixed(4)}</b> (${fmt(s.solBalanceUsd)})`);
   lines.push(`└ Total value <b>${fmt(s.totalValueUsd)}</b>`);
   if (s.holdings && s.holdings.length) {
     lines.push("", "📊 <b>Top holdings</b>");
     for (const h of s.holdings.slice(0, 6)) {
-      const pnlBit = h.costUsd > 0 ? ` · ${signed(h.pnlUsd)}` : "";
-      lines.push(`├ <b>$${esc((h.sym || "?").slice(0, 10))}</b> ${fmt(h.valueUsd)}${pnlBit}`);
+      const valueBit = h.unpriced ? "unpriced" : fmt(h.valueUsd);
+      const pnlBit = h.pnlUsd != null ? ` · Open ${signed(h.pnlUsd)}` : "";
+      lines.push(`├ <b>$${esc((h.sym || "?").slice(0, 10))}</b> ${valueBit}${pnlBit}`);
+      const detail = [];
+      if (h.qty != null && Number(h.qty) > 0) detail.push(`Qty ${walletMapQty(h.qty)}`);
+      if (h.costUsd != null) detail.push(`Cost ${fmt(h.costUsd)}`);
+      if (h.realizedUsd != null) detail.push(`Realized ${signed(h.realizedUsd)}`);
+      if (detail.length) lines.push(`│  ${detail.join(" · ")}`);
     }
   }
-  if (s.partial) lines.push("", "<i>⚠️ Long history — older trades may be truncated.</i>");
-  if (rh && !s.tradeCount) lines.push("", "<i>Note: no swap history found — PnL needs on-chain trades.</i>");
+  if (s.partial || s.pnlPartial) lines.push("", "<i>⚠️ Partial history/price coverage — totals may omit older or unpriced activity.</i>");
+  if (!s.hasPnl) lines.push("", "<i>⚠️ PnL source did not answer; this card does not fake missing data as $0.</i>");
+  else if (rh && !s.tradeCount) lines.push("", "<i>Note: no native-ETH swap history was found for this wallet.</i>");
   lines.push(`\n<a href="${esc(s.explorer)}">🔎 Explorer</a>`);
   return lines.join("\n");
 }
@@ -37431,7 +37466,7 @@ async function sendWalletScanCard(chatId, address) {
   const _t0 = Date.now();
   const s = await getWalletScan(address).catch((e) => { console.warn(`[walletscan] getWalletScan(${String(address).slice(0, 10)}…) THREW: ${String(e?.message || e).slice(0, 140)}`); return null; });
   // FLIGHT RECORDER — one line per scan so "wallet shows nothing" is diagnosable from Render logs.
-  try { console.log(`[walletscan] ${String(address).slice(0, 10)}… chain=${s?.chain || "?"} ok=${Boolean(s?.ok)} pnl=${s ? Math.round(s.totalPnlUsd || 0) : "-"} value=${s ? Math.round(s.totalValueUsd || 0) : "-"} trades=${s?.tradeCount ?? "-"} holdings=${s?.holdings?.length ?? "-"} in ${Date.now() - _t0}ms`); } catch { /* best-effort */ }
+  try { console.log(`[walletscan] ${String(address).slice(0, 10)}… chain=${s?.chain || "?"} ok=${Boolean(s?.ok)} pnl=${s?.hasPnl ? Math.round(s.totalPnlUsd || 0) : "unavailable"} partial=${Boolean(s?.pnlPartial || s?.partial)} value=${s ? Math.round(s.totalValueUsd || 0) : "-"} trades=${s?.tradeCount ?? "-"} holdings=${s?.holdings?.length ?? "-"} in ${Date.now() - _t0}ms`); } catch { /* best-effort */ }
   if (!s || !s.ok) { await say(chatId, "👛 Couldn't read that wallet right now — paste a valid Solana or Robinhood (0x…) wallet address."); return; }
   const kb = { inline_keyboard: [
     [
@@ -37441,7 +37476,17 @@ async function sendWalletScanCard(chatId, address) {
     // 🤖 Copy Trade — SOL (Solana Tracker signals) AND Robinhood (custodial RH trading). Opens a settings popup.
     [{ text: "🤖 Copy Trade this wallet", callback_data: `ct:open:${address}` }],
   ] };
-  await sayHtml(chatId, formatWalletScanCard(s), kb).catch(() => {});
+  const card = formatWalletScanCard(s);
+  await sayHtml(chatId, card, kb).catch(async (error) => {
+    console.warn(`[walletscan] Telegram HTML post failed: ${String(error?.message || error).slice(0, 160)} — sending plain fallback`);
+    const plain = card.replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+    await telegram("sendMessage", {
+      chat_id: chatId,
+      text: plain.slice(0, 3900),
+      disable_web_page_preview: true,
+      reply_markup: kb,
+    }).catch((fallbackError) => console.warn(`[walletscan] Telegram fallback failed: ${String(fallbackError?.message || fallbackError).slice(0, 160)}`));
+  });
 }
 // Dispatch a mention to the right card based on what they asked. `variant` (tweet id) seeds the wording + art.
 async function buildXReply(mint, intent = "scan", variant) {

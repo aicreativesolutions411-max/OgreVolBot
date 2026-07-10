@@ -2150,7 +2150,7 @@ test("X DM terminal: link from Telegram, scan/settings/buy/sell over official DM
   assert.match(serverSource, /SELL 1 50 sells 50%/);
   assert.match(serverSource, /Saved \$\{targetList\.length\} new coin slots\. Scanned #1/);
   assert.match(serverSource, /Reply with a coin number for its chart, Trade Pad, and quick actions/);
-  assert.match(serverSource, /OPEN X TRADE PAD/);
+  assert.match(serverSource, /OPEN SLIMEWIRE CHART \+ TRADE PAD/);
   assert.match(serverSource, /\/x-dm-menu\?t=\$\{encodeURIComponent\(token\)\}/);
   assert.match(serverSource, /signXDmMenuToken\(CONFIG\.appSecret/);
   assert.match(serverSource, /verifyXDmMenuToken\(CONFIG\.appSecret/);
