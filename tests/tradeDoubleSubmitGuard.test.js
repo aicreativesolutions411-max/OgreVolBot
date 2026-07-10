@@ -930,7 +930,10 @@ test("KOL Call Feed is source-consented, admin-selected, deduped, forwarded, and
   assert.match(dispatch, /source\?\.optedIn/);
   assert.match(dispatch, /claimKolCallFeedPost/);
   assert.match(dispatch, /cfg\.on && cfg\.sources\.some/);
+  assert.match(dispatch, /const primaryMint = targets\[0\]/);
+  assert.doesNotMatch(dispatch, /for \(const mint of targets\)/);
   const forward = functionBody(serverSource, "forwardKolCallToTarget");
+  assert.match(forward, /kolCallDeliveryGuard/);
   assert.match(forward, /telegram\("forwardMessage"/);
   assert.match(forward, /handleTelegramLookCommand\(targetChatId, post, mint, \{ skipCooldown: true \}\)/);
   const targets = functionBody(serverSource, "kolCallPostTargets");

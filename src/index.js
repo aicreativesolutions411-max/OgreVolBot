@@ -42568,11 +42568,11 @@ function kolCallFeedRateAllowed(chatId, maxPerHour = 10) {
 async function kolCallPostTargets(post) {
   const text = String(post?.text || post?.caption || "").trim();
   const urls = telegramPostEntityUrls(post);
-  let targets = await resolveExplicitScanTargetsFromText(text, urls, 2).catch(() => []);
+  let targets = await resolveExplicitScanTargetsFromText(text, urls, 1).catch(() => []);
   // A ticker alone is ambiguous in normal channel chatter. Accept it as a call only alongside clear
   // call language/emoji, while a CA or coin link always qualifies immediately.
   if (!targets.length && extractCashtags(text).length && /\b(call|called|buy|entry|ape|gem|send|moon|watch|chart|contract|ca)\b|[🚨🔥🚀]/i.test(text)) {
-    targets = await resolveAllScanTargetsFromText(text, urls, 2, { allowBareTickerHints: false }).catch(() => []);
+    targets = await resolveAllScanTargetsFromText(text, urls, 1, { allowBareTickerHints: false }).catch(() => []);
   }
   const valid = [];
   for (const target of targets) {
@@ -42580,10 +42580,21 @@ async function kolCallPostTargets(post) {
       if (await isRhContract(target).catch(() => false)) valid.push(target);
     } else if (isLikelySolMint(target) && await isSolMintAddress(target).catch(() => true)) valid.push(target);
   }
-  return [...new Set(valid.map(String))].slice(0, 2);
+  // One channel post is one call. Picking the first valid coin prevents the original post being
+  // forwarded again when its caption contains both a CA and another market/link address.
+  return [...new Set(valid.map(String))].slice(0, 1);
 }
+const kolCallDeliveryGuard = new Map();
 async function forwardKolCallToTarget(targetChatId, source, post, mint) {
   const sourceId = String(source.id);
+  const deliveryKey = `${targetChatId}:${sourceId}:${post.message_id}`;
+  const prior = Number(kolCallDeliveryGuard.get(deliveryKey) || 0);
+  if (prior && Date.now() - prior < 24 * 60 * 60_000) return false;
+  kolCallDeliveryGuard.set(deliveryKey, Date.now());
+  if (kolCallDeliveryGuard.size > 2000) {
+    const cutoff = Date.now() - 24 * 60 * 60_000;
+    for (const [key, at] of kolCallDeliveryGuard) if (at < cutoff) kolCallDeliveryGuard.delete(key);
+  }
   let forwarded = null;
   try {
     forwarded = await telegram("forwardMessage", { chat_id: targetChatId, from_chat_id: sourceId, message_id: post.message_id, disable_notification: false });
@@ -42599,6 +42610,7 @@ async function forwardKolCallToTarget(targetChatId, source, post, mint) {
   // Use the original source post as caller context, while sending the scan into the subscribed target.
   // Persistent message dedupe makes bypassing the normal chat cooldown safe here.
   await handleTelegramLookCommand(targetChatId, post, mint, { skipCooldown: true }).catch(() => {});
+  return true;
 }
 async function handleKolSourceChannelPost(post) {
   const sourceId = String(post?.chat?.id || "");
@@ -42615,9 +42627,10 @@ async function handleKolSourceChannelPost(post) {
     const cfg = kolCallFeedConfig(entry);
     return cfg.on && cfg.sources.some((item) => item.id === sourceId);
   });
+  const primaryMint = targets[0];
   for (const [chatId] of destinations) {
     if (!kolCallFeedRateAllowed(chatId, 10)) continue;
-    for (const mint of targets) await forwardKolCallToTarget(chatId, source, post, mint);
+    await forwardKolCallToTarget(chatId, source, post, primaryMint);
   }
   await rememberKolSourceChannel(post.chat, { optedIn: true, botAdmin: true, lastCallAt: Date.now(), lastMessageId: post.message_id }).catch(() => {});
   return true;
