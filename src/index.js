@@ -7593,7 +7593,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
         // (mobile browsers bail fast, and Render 504s an idle socket). On timeout we return a clean retryable
         // message instead of a dead connection.
         map = await Promise.race([
-          (mwallet && !mmint && !mIsRh) ? buildWalletMap(mtarget, domainTarget && mmode === "bags" ? "funds" : mmode) : buildSubjectMap(mtarget, mmode),
+          (mwallet && !mmint)
+            ? (mIsRh ? buildRhWalletMap(mtarget, mmode) : buildWalletMap(mtarget, domainTarget && mmode === "bags" ? "funds" : mmode))
+            : buildSubjectMap(mtarget, mmode),
           new Promise((_, rej) => setTimeout(() => rej(new Error("__map_timeout__")), 14_000)),
         ]);
       } catch (e) {
@@ -7619,7 +7621,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const gtarget = /^[a-z0-9][a-z0-9._-]{0,58}\.sol$/i.test(rawTarget) ? await resolveSolDomainToAddress(rawTarget).catch(() => null) : rawTarget;
       if (!solanaPublicKeyLike(gtarget) && !/^0x[0-9a-fA-F]{40}$/.test(gtarget)) { sendWebJson(request, response, 400, { ok: false, error: "ca or wallet required" }); return; }
       try {
-        const { png } = await renderSubjectMapPng(gtarget, gmode);
+        const { png } = await renderSubjectMapPng(gtarget, gmode, { forceWallet: Boolean(gwallet) });
         if (!png) { sendWebJson(request, response, 404, { ok: false, error: "no map" }); return; }
         response.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "public, max-age=180" });
         response.end(png);
@@ -34058,10 +34060,32 @@ async function scanAirdropperCoins(devWallet, maxTx = 80, deadlineMs = 11000) {
   return list;
 }
 
-// WALLET map: bags = tokens currently held (ST portfolio); network = tokens recently traded (ST trades).
+function walletMapNumber(...values) {
+  for (const value of values) {
+    if (value == null || value === "") continue;
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return 0;
+}
+function walletMapQty(value) {
+  const n = Number(value) || 0;
+  if (!(n > 0)) return "";
+  if (n >= 1e9) return `${(n / 1e9).toFixed(n >= 1e10 ? 0 : 1).replace(/\.0$/, "")}B`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e8 ? 0 : 1).replace(/\.0$/, "")}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e5 ? 0 : 1).replace(/\.0$/, "")}K`;
+  return n >= 10 ? n.toFixed(1).replace(/\.0$/, "") : n.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+}
+function walletMapSigned(value) {
+  const n = Number(value) || 0;
+  return `${n >= 0 ? "+" : "−"}${fmtMc(Math.abs(n))}`;
+}
+
+// WALLET map: Bags = current holdings; Trades = recent bought/sold coins. Keep the token address and
+// direction on every row so the Telegram/site buttons drill into the coin instead of reopening a wallet.
 async function buildWalletMap(wallet, mode = "bags") {
   if (mode === "funds") return buildSolanaWalletFundMap(wallet);
-  const idx = await mapKolIdentityIndex().catch(() => new Map());
+  const idx = await scanFastTimeout(mapKolIdentityIndex(), 1_200, new Map());
   const id = mapResolveIdentity(wallet, idx);
   let rows = [];
   try {
@@ -34070,40 +34094,70 @@ async function buildWalletMap(wallet, mode = "bags") {
       const trades = (d && (d.trades || d.items)) || [];
       const byTok = new Map();
       for (const t of trades) {
-        const tk = t.token || t; const sym = tk.symbol || tk.ticker || shortMint(tk.mint || tk.address || t.mint || "");
-        const v = Number(t.volume || t.amountUsd || t.valueUsd || 0) || 1;
-        byTok.set(sym, (byTok.get(sym) || 0) + v);
+        const from = t.from || t.input || t.inputToken || {};
+        const to = t.to || t.output || t.outputToken || {};
+        const fromMint = firstString(from.address, from.mint, t.fromMint, t.inputMint);
+        const toMint = firstString(to.address, to.mint, t.toMint, t.outputMint);
+        const explicit = String(t.type || t.side || t.action || t.transactionType || "").toLowerCase();
+        const isBuy = (toMint && toMint !== SOL_MINT) || /buy|swap.?in/.test(explicit);
+        const isSell = (fromMint && fromMint !== SOL_MINT) || /sell|swap.?out/.test(explicit);
+        const tk = isBuy ? to : (isSell ? from : (t.token || t));
+        const mint = firstString(tk.address, tk.mint, t.mint, isBuy ? toMint : fromMint);
+        const sym = String(firstString(tk.symbol, tk.ticker, t.symbol) || shortMint(mint)).replace(/^\$+/, "").slice(0, 14);
+        if (!mint && !sym) continue;
+        const qty = walletMapNumber(tk.amount, tk.uiAmount, tk.quantity, t.amount, t.tokenAmount);
+        let v = walletMapNumber(t.volumeUsd, t.amountUsd, t.valueUsd, t.usdValue, t.volume?.usd, tk.valueUsd, tk.usdValue);
+        if (!(v > 0)) v = qty * walletMapNumber(tk.priceUsd, tk.price, t.priceUsd);
+        const key = String(mint || sym).toLowerCase();
+        const row = byTok.get(key) || { mint, sym, val: 0, qty: 0, buys: 0, sells: 0, count: 0 };
+        row.val += Math.max(0, v); row.qty += Math.max(0, qty); row.count += 1;
+        if (isBuy && !isSell) row.buys += 1;
+        else if (isSell && !isBuy) row.sells += 1;
+        else if (/buy/.test(explicit)) row.buys += 1;
+        else if (/sell/.test(explicit)) row.sells += 1;
+        byTok.set(key, row);
       }
-      rows = [...byTok.entries()].map(([sym, val]) => ({ sym, val }));
+      rows = [...byTok.values()];
     } else {
       const d = await solanaTrackerJson(`/wallet/${encodeURIComponent(wallet)}`, { cacheTtlMs: 4 * 60_000, timeoutMs: 9000 });
       const toks = (d && (d.tokens || d.holdings || d.assets)) || [];
       rows = toks.map((t) => {
         const tk = t.token || t;
         const sym = tk.symbol || tk.ticker || shortMint(tk.mint || tk.address || "");
-        const val = Number(t.value || t.valueUsd || t.usdValue || (t.balance && t.price ? t.balance * t.price : 0)) || 0;
-        return { sym, val, mint: tk.mint || tk.address || "" };
+        const qty = walletMapNumber(t.balance, t.uiAmount, t.amount, t.quantity, tk.balance, tk.uiAmount);
+        const val = walletMapNumber(t.value, t.valueUsd, t.usdValue, t.usd, qty * walletMapNumber(t.price, t.priceUsd, tk.price, tk.priceUsd));
+        const pnlUsd = walletMapNumber(t.pnlUsd, t.unrealizedPnlUsd, t.unrealized, t.pnl?.usd);
+        return { sym, val, qty, pnlUsd, mint: tk.mint || tk.address || "", image: firstString(tk.image, tk.logo, tk.icon, tk.imageUrl) };
       });
     }
   } catch { rows = []; }
-  rows = rows.filter((r) => r.val > 0).sort((a, b) => b.val - a.val).slice(0, 40);
+  rows = rows.filter((r) => mode === "network" ? (r.count > 0 || r.val > 0) : r.val > 0)
+    .sort((a, b) => (b.val - a.val) || ((b.count || 0) - (a.count || 0))).slice(0, 40);
   const maxVal = rows.reduce((m, r) => Math.max(m, r.val), 0) || 1;
   const totalVal = rows.reduce((s, r) => s + r.val, 0);
-  const nodes = rows.map((r, i) => ({
-    i, weight: Math.max(0.05, Math.min(1, r.val / maxVal)),
-    state: i === 0 ? "whale" : "hold",
-    label: i < 6 ? `$${r.sym} · ${fmtMc(r.val)}` : null,
-    name: r.sym, avatarUrl: null, mint: r.mint || "",
-  }));
+  const totalBuys = rows.reduce((s, r) => s + (r.buys || 0), 0), totalSells = rows.reduce((s, r) => s + (r.sells || 0), 0);
+  const nodes = rows.map((r, i) => {
+    const details = mode === "network"
+      ? [`${r.buys || 0} buy${r.buys === 1 ? "" : "s"}`, `${r.sells || 0} sell${r.sells === 1 ? "" : "s"}`, r.val > 0 ? `${fmtMc(r.val)} volume` : `${r.count || 0} swaps`]
+      : [fmtMc(r.val), r.qty > 0 ? `${walletMapQty(r.qty)} tokens` : "", r.pnlUsd ? `${walletMapSigned(r.pnlUsd)} open PnL` : ""].filter(Boolean);
+    return {
+      i, weight: Math.max(0.05, Math.min(1, mode === "network" && !(r.val > 0) ? (r.count || 1) / Math.max(1, rows[0]?.count || 1) : r.val / maxVal)),
+      state: i === 0 ? "whale" : (mode === "network" && r.sells > r.buys ? "sold" : mode === "network" && r.buys > 0 ? "new" : "hold"),
+      label: i < 6 ? `$${r.sym} · ${r.val > 0 ? fmtMc(r.val) : `${r.count || 0} swaps`}` : null,
+      name: r.sym, avatarUrl: r.image || null, mint: r.mint || "", valueUsd: r.val || 0, qty: r.qty || 0,
+      buys: r.buys || 0, sells: r.sells || 0, tradeCount: r.count || 0, pnlUsd: r.pnlUsd || 0,
+      flowLabel: details.join(" · "),
+    };
+  });
   const stats = [
     { label: mode === "network" ? "TRADED" : "TOKENS", value: String(rows.length) },
     { label: mode === "network" ? "VOLUME" : "PORTFOLIO", value: totalVal ? fmtMc(totalVal) : "—" },
-    { label: id.isKol ? "KOL" : "WALLET", value: id.isKol ? "✓ verified" : "unlabeled" },
-    { label: "TOP BAG", value: rows[0] ? fmtMc(rows[0].val) : "—" },
-    { label: "MODE", value: mode === "network" ? "NETWORK" : "BAGS" },
+    { label: mode === "network" ? "BUYS / SELLS" : (id.isKol ? "KOL" : "WALLET"), value: mode === "network" ? `${totalBuys} / ${totalSells}` : (id.isKol ? "✓ verified" : "unlabeled") },
+    { label: mode === "network" ? "TOP MARKET" : "TOP BAG", value: rows[0] ? (rows[0].val > 0 ? fmtMc(rows[0].val) : `$${rows[0].sym}`) : "—" },
+    { label: "CHAIN", value: "SOLANA" },
   ];
   const subj = (id.isKol && id.twitter) ? `@${id.twitter}` : shortMint(wallet);
-  return { kind: "wallet", subject: String(subj).slice(0, 12), subtitle: mode === "network" ? "trading network" : "bags held", wallet, mode, stats, nodes };
+  return { kind: "wallet", chain: "solana", subject: String(subj).slice(0, 12), subtitle: mode === "network" ? "recent coins traded · buys, sells and volume" : "current bags · value, quantity and open PnL", wallet, mode, stats, nodes };
 }
 
 // 💸 WALLET FUND FLOW — public on-chain transfers only. Shows who funded a wallet, who it funded,
@@ -34296,6 +34350,70 @@ async function buildRhWalletFundMap(wallet) {
   return map;
 }
 
+// Robinhood wallet Bags/Trades are real wallet modes, not aliases for Fund Flow. The wallet scan rebuilds
+// holdings and swap direction from Blockscout's indexed account history, then this adapter gives the map,
+// Telegram card and web sidebar the same shape as Solana.
+async function buildRhWalletMap(wallet, mode = "bags") {
+  if (mode === "funds") return buildRhWalletFundMap(wallet);
+  const w = String(wallet || "").trim().toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(w)) return null;
+  const scan = await rhWalletScan(w, { rpcUrl: CONFIG.rhChainRpcUrl }).catch(() => null);
+  if (!scan) return { kind: "wallet", chain: "robinhood", subject: shortMint(w), wallet: w, mode, stats: [], nodes: [] };
+  let rows;
+  if (mode === "network") {
+    rows = (scan.trades || []).map((trade) => ({
+      mint: String(trade.addr || "").toLowerCase(), sym: String(trade.sym || shortMint(trade.addr)).replace(/^\$+/, "").slice(0, 14),
+      val: Number(trade.volumeUsd) || 0, buys: Number(trade.buys) || 0, sells: Number(trade.sells) || 0,
+      qty: (Number(trade.boughtQty) || 0) + (Number(trade.soldQty) || 0), pnlUsd: Number(trade.realizedUsd) || 0,
+      spentUsd: Number(trade.spentUsd) || 0, receivedUsd: Number(trade.receivedUsd) || 0,
+    })).filter((row) => row.buys > 0 || row.sells > 0 || row.val > 0)
+      .sort((a, b) => (b.val - a.val) || ((b.buys + b.sells) - (a.buys + a.sells))).slice(0, 40);
+  } else {
+    rows = (scan.holdings || []).map((holding) => ({
+      mint: String(holding.addr || "").toLowerCase(), sym: String(holding.sym || shortMint(holding.addr)).replace(/^\$+/, "").slice(0, 14),
+      val: Number(holding.valueUsd) || 0, qty: Number(holding.qty) || 0, pnlUsd: Number(holding.pnlUsd) || 0,
+    })).filter((row) => row.val > 0 || row.qty > 0).sort((a, b) => b.val - a.val).slice(0, 40);
+    if (Number(scan.ethBalance) > 0) rows.push({ mint: "", sym: "ETH", val: Number(scan.ethBalanceUsd) || 0, qty: Number(scan.ethBalance) || 0, pnlUsd: 0, native: true });
+    rows.sort((a, b) => b.val - a.val);
+  }
+  const maxValue = rows.reduce((m, row) => Math.max(m, row.val || 0, mode === "network" ? (row.buys + row.sells) : 0), 0) || 1;
+  const nodes = rows.map((row, i) => {
+    const details = mode === "network"
+      ? [`${row.buys} buy${row.buys === 1 ? "" : "s"}`, `${row.sells} sell${row.sells === 1 ? "" : "s"}`, row.val > 0 ? `${fmtMc(row.val)} volume` : "", row.pnlUsd ? `${walletMapSigned(row.pnlUsd)} realized` : ""].filter(Boolean)
+      : [row.val > 0 ? fmtMc(row.val) : "unpriced", row.qty > 0 ? `${walletMapQty(row.qty)} ${row.native ? "ETH" : "tokens"}` : "", row.pnlUsd ? `${walletMapSigned(row.pnlUsd)} open PnL` : ""].filter(Boolean);
+    const activity = mode === "network" ? (row.val || row.buys + row.sells) : (row.val || (1 / (i + 1)));
+    return {
+      i, mint: row.mint, name: row.sym, avatarUrl: null,
+      weight: Math.max(0.05, Math.min(1, activity / maxValue)),
+      state: i === 0 ? "whale" : (mode === "network" && row.sells > row.buys ? "sold" : mode === "network" && row.buys > 0 ? "new" : "hold"),
+      label: i < 6 ? `$${row.sym} · ${row.val > 0 ? fmtMc(row.val) : (mode === "network" ? `${row.buys + row.sells} swaps` : `${walletMapQty(row.qty)} tokens`)}` : null,
+      valueUsd: row.val, qty: row.qty, buys: row.buys || 0, sells: row.sells || 0, pnlUsd: row.pnlUsd || 0,
+      flowLabel: details.join(" · "),
+      explorerUrl: row.mint ? `https://robinhoodchain.blockscout.com/token/${row.mint}` : `https://robinhoodchain.blockscout.com/address/${w}`,
+    };
+  });
+  const buys = rows.reduce((sum, row) => sum + (row.buys || 0), 0), sells = rows.reduce((sum, row) => sum + (row.sells || 0), 0);
+  const volume = rows.reduce((sum, row) => sum + (row.val || 0), 0);
+  const stats = mode === "network" ? [
+    { label: "TRADED", value: String(rows.length) },
+    { label: "VOLUME", value: volume > 0 ? fmtMc(volume) : "—" },
+    { label: "BUYS / SELLS", value: `${buys} / ${sells}` },
+    { label: "REALIZED", value: walletMapSigned(scan.realizedUsd) },
+    { label: "CHAIN", value: "ROBINHOOD" },
+  ] : [
+    { label: "ASSETS", value: String(rows.length) },
+    { label: "PORTFOLIO", value: Number(scan.totalValueUsd) > 0 ? fmtMc(scan.totalValueUsd) : "—" },
+    { label: "ETH", value: `${Number(scan.ethBalance || 0).toFixed(4)}` },
+    { label: "OPEN PNL", value: walletMapSigned(scan.unrealizedUsd) },
+    { label: "CHAIN", value: "ROBINHOOD" },
+  ];
+  return {
+    kind: "wallet", chain: "robinhood", subject: shortMint(w), wallet: w, mode, stats, nodes,
+    subtitle: mode === "network" ? "recent coins traded · buys, sells, volume and realized PnL" : "current bags · value, quantity and open PnL",
+    partial: Boolean(scan.partial), explorer: scan.explorer,
+  };
+}
+
 // 🕸️ CLUSTERS + CONNECTIONS (Bubblemaps-style) — group the top holders by shared on-chain FUNDER (reusing the
 // autopilot's funding-graph: lookupWalletFunder + walletObs.funder). Wallets funded by the same source are one
 // actor → a cluster; we draw connection edges between them + sum their $/%. BUDGET-GATED (funder lookups are the
@@ -34461,9 +34579,10 @@ async function buildSubjectMap(target, mode = "bags") {
   // Robinhood Chain coin (0x…) → RH holder map; it isn't a base58 SOL mint/wallet so the SOL paths skip it.
   if (/^0x[0-9a-fA-F]{40}$/.test(String(target || "").trim())) {
     if (mode === "funds") return buildRhWalletFundMap(target);
+    if (mode === "network") return buildRhWalletMap(target, mode);
     const rh = await buildRhTokenHolderMap(target).catch(() => null);
     if (rh && rh.isToken) return rh;
-    return buildRhWalletFundMap(target); // EOA wallet: show its native/token fund flow.
+    return buildRhWalletMap(target, mode); // EOA wallet: real holdings/trades, never a disguised fund map.
   }
   if (mode === "funds") return buildSolanaWalletFundMap(target);
   const tok = await buildTokenHolderMap(target).catch(() => null);
@@ -34472,11 +34591,14 @@ async function buildSubjectMap(target, mode = "bags") {
 }
 
 // Render a map subject to a PNG (short-cached so repeat tags of the same coin don't re-pull/re-render).
-async function renderSubjectMapPng(target, mode = "bags") {
-  const key = `${target}:${mode}`;
+async function renderSubjectMapPng(target, mode = "bags", options = {}) {
+  const forceWallet = Boolean(options.forceWallet);
+  const key = `${target}:${mode}:${forceWallet ? "wallet" : "auto"}`;
   const cached = mapRenderCache.get(key);
   if (cached && Date.now() - cached.at < MAP_RENDER_TTL) return { png: cached.png, map: cached.map };
-  const map = await buildSubjectMap(target, mode);
+  const map = forceWallet
+    ? (/^0x[0-9a-fA-F]{40}$/.test(String(target || "").trim()) ? await buildRhWalletMap(target, mode) : await buildWalletMap(target, mode))
+    : await buildSubjectMap(target, mode);
   if (!map || !map.nodes || !map.nodes.length) return { png: null, map: null };
   const { renderSlimeMapPng } = await import("./lib/slimeMapRender.mjs");
   const bgPath = await premiumMapBg(`${map.subject}${map.mint || map.wallet || ""}`);
@@ -34570,29 +34692,45 @@ function mapCardKeyboard(map) {
   const rows = [];
   const drill = (map.nodes || []).filter((n) => n.wallet && n.label).slice(0, 4);
   for (let i = 0; i < drill.length; i += 2) {
-    rows.push(drill.slice(i, i + 2).map((n) => ({ text: `🔍 ${String(n.name || "wallet").replace(/^@?/, "@")}`.slice(0, 22), callback_data: `map:${n.wallet}` })));
+    rows.push(drill.slice(i, i + 2).map((n) => ({ text: `🔍 ${String(n.name || "wallet").replace(/^@?/, "@")}`.slice(0, 22), callback_data: `mapw:${n.wallet}:bags` })));
   }
   const webQ = map.mint ? `ca=${map.mint}` : `wallet=${map.wallet}`;
-  rows.push([{ text: "🌐 Open interactive map", url: `https://www.slimewire.org/map?${webQ}` }]);
+  rows.push([{ text: "🌐 Open interactive map", url: `https://www.slimewire.org/map?${webQ}${map.kind === "wallet" ? `&mode=${map.mode || "bags"}` : ""}` }]);
   if (map.kind === "wallet") {
     rows.push([
-      { text: "💰 Bags", callback_data: `map:${map.wallet}:bags` },
-      { text: "🕸 Trades", callback_data: `map:${map.wallet}:network` },
-      { text: "💸 Fund Flow", callback_data: `map:${map.wallet}:funds` }
+      { text: "💰 Bags", callback_data: `mapw:${map.wallet}:bags` },
+      { text: "🕸 Trades", callback_data: `mapw:${map.wallet}:network` },
+      { text: "💸 Fund Flow", callback_data: `mapw:${map.wallet}:funds` }
     ]);
     if (map.chain === "solana") rows.push([{ text: "🪂 Airdrops sent", url: `https://www.slimewire.org/airdrop?ca=${encodeURIComponent(map.wallet)}` }]);
   }
   if (map.mint) rows.push([{ text: "🔎 Scan", callback_data: `scan:refresh:${map.mint}` }, { text: "⚡ Quick Buy", callback_data: `qbp:${map.mint}` }]);
   return { inline_keyboard: rows };
 }
-async function sendMapCard(chatId, target, mode = "bags") {
-  const { png, map } = await renderSubjectMapPng(target, mode).catch(() => ({ png: null, map: null }));
+function mapTelegramDetailLines(map) {
+  if (!map || map.kind !== "wallet") return "";
+  const nodes = (map.nodes || []).slice(0, 4);
+  if (!nodes.length) return "\n\n<i>No indexed activity found in the recent public history.</i>";
+  const title = map.mode === "funds" ? "Top fund connections" : map.mode === "network" ? "Recent traded coins" : "Top current bags";
+  const lines = nodes.map((node) => {
+    if (map.mode === "funds") {
+      const arrow = node.direction === "in" ? "←" : node.direction === "out" ? "→" : "↔";
+      return `${arrow} <code>${escapeTelegramHtml(String(node.name || shortMint(node.wallet)).slice(0, 18))}</code> — ${escapeTelegramHtml(String(node.flowLabel || `${node.txCount || 1} transfers`).slice(0, 72))}`;
+    }
+    const symbol = escapeTelegramHtml(String(node.name || shortMint(node.mint)).replace(/^\$+/, "").slice(0, 14));
+    return `• <b>$${symbol}</b> — ${escapeTelegramHtml(String(node.flowLabel || (node.valueUsd > 0 ? fmtMc(node.valueUsd) : "public activity")).slice(0, 72))}`;
+  });
+  return `\n\n<b>${title}</b>\n${lines.join("\n")}`;
+}
+async function sendMapCard(chatId, target, mode = "bags", options = {}) {
+  const { png, map } = await renderSubjectMapPng(target, mode, options).catch(() => ({ png: null, map: null }));
   if (!png || !map) { await say(chatId, "Couldn't build a map for that yet — give me a coin CA or an active wallet."); return; }
   const kols = map.stats.find((s) => s.label === "KOLS IN");
   const webQ = map.mint ? `ca=${map.mint}` : `wallet=${map.wallet}`;
+  const chain = map.chain === "robinhood" ? "Robinhood Chain" : "Solana";
   const cap = map.kind === "token"
     ? `🗺️ <b>${escapeTelegramHtml(map.subject)}</b> holder map${kols && Number(kols.value) > 0 ? ` — <b>${kols.value}</b> known KOLs holding` : ""}.\n<i>Tap a KOL below to see their bags.</i>`
-    : `🗺️ <b>${escapeTelegramHtml(map.subject)}</b> ${map.mode === "funds" ? "fund flow — incoming funders, outgoing funded wallets, and token sends" : map.mode === "network" ? "trading network" : "bags held"}.\n<a href="https://www.slimewire.org/map?${webQ}${map.mode === "funds" ? "&amp;mode=funds" : ""}">Open the interactive map →</a>`;
+    : `🗺️ <b>${escapeTelegramHtml(map.subject)}</b> · <i>${chain}</i>\n${map.mode === "funds" ? "Fund flow — incoming funders, outgoing funded wallets, native value and token sends." : map.mode === "network" ? "Trades — recent coins, buy/sell counts, volume and PnL where available." : "Bags — current holdings, value, quantity and open PnL where available."}${mapTelegramDetailLines(map)}\n\n<a href="https://www.slimewire.org/map?${webQ}&amp;mode=${map.mode || "bags"}">Open the interactive map →</a>`;
   await sendPhoto(chatId, "slimewire-map.png", png, cap, mapCardKeyboard(map), "HTML").catch(async () => {
     await sayHtml(chatId, cap, mapCardKeyboard(map)).catch(() => {});
   });
@@ -34605,16 +34743,17 @@ async function handleTelegramMapCommand(chatId, message, argument) {
   if (!target) { await say(chatId, "Usage: /map <coin CA, wallet, or .sol> — use /fundmap <wallet> for incoming/outgoing SOL, tokens, and funded wallets (Solana or Robinhood 0x…)."); return; }
   if (tgCommandOnCooldown(chatId, "map", 6000)) return;
   const requestedFunds = /^\/(?:fundmap|funds|flow)(?:@\w+)?\b/i.test(String(message?.text || "")) || Boolean(domain);
-  await sendMapCard(chatId, target, requestedFunds ? "funds" : "bags");
+  await sendMapCard(chatId, target, requestedFunds ? "funds" : "bags", { forceWallet: requestedFunds });
 }
 async function handleMapCallback(query, userId) {
-  const parts = String(query.data || "").split(":");   // map : <addr> [: mode]
+  const parts = String(query.data || "").split(":");   // map/mapw : <addr> [: mode]
+  if (parts[0] !== "map" && parts[0] !== "mapw") return false;
   const target = parts[1];
   const mode = parts[2] === "network" ? "network" : parts[2] === "funds" ? "funds" : "bags";
   if (!target || (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(target) && !/^0x[0-9a-fA-F]{40}$/.test(target))) return false;
   const chatId = query.message?.chat?.id;
   await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "🗺️ Drawing map…" }).catch(() => {});
-  await sendMapCard(chatId, target, mode).catch(() => {});
+  await sendMapCard(chatId, target, mode, { forceWallet: parts[0] === "mapw" }).catch(() => {});
   return true;
 }
 // 💰 AIRDROP callback + card — who the dev fed, how big, and who's still diamond-handing the bag.

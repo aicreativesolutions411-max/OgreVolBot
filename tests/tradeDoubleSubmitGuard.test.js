@@ -2344,6 +2344,8 @@ test("KOL/wallet map: on-chain holders + ST identity, X 'map' intent + wallet ta
 test("Airdrop and wallet maps trace Solana/.sol and Robinhood fund flows on web + Telegram", () => {
   const solFunds = functionBody(serverSource, "buildSolanaWalletFundMap");
   const rhFunds = functionBody(serverSource, "buildRhWalletFundMap");
+  const rhWallet = functionBody(serverSource, "buildRhWalletMap");
+  const solWallet = functionBody(serverSource, "buildWalletMap");
   const flowMap = functionBody(serverSource, "fundFlowRowsToMap");
   assert.match(solFunds, /getSignaturesForAddress/);
   assert.match(solFunds, /v0\/addresses\/\$\{encodeURIComponent\(w\)\}\/transactions/);
@@ -2353,6 +2355,12 @@ test("Airdrop and wallet maps trace Solana/.sol and Robinhood fund flows on web 
   assert.match(rhFunds, /robinhoodchain\.blockscout\.com/);
   assert.match(rhFunds, /action=tokentx/);
   assert.match(rhFunds, /startblock=0&endblock=999999999/);
+  assert.match(rhWallet, /rhWalletScan/);
+  assert.match(rhWallet, /scan\.holdings/);
+  assert.match(rhWallet, /scan\.trades/);
+  assert.match(rhWallet, /BUYS \/ SELLS/);
+  assert.match(solWallet, /recent coins traded/);
+  assert.match(solWallet, /flowLabel/);
   assert.match(flowMap, /mode: "funds"/);
   assert.match(flowMap, /FUNDED/);
   assert.match(flowMap, /FUNDERS/);
@@ -2363,12 +2371,23 @@ test("Airdrop and wallet maps trace Solana/.sol and Robinhood fund flows on web 
   assert.match(serverSource, /"fundmap", "funds", "flow"/);
   assert.match(functionBody(serverSource, "handleTelegramMapCommand"), /resolveSolDomainToAddress/);
   assert.match(functionBody(serverSource, "handleMapCallback"), /parts\[2\] === "funds"/);
+  assert.match(functionBody(serverSource, "handleMapCallback"), /forceWallet: parts\[0\] === "mapw"/);
+  assert.match(functionBody(serverSource, "mapTelegramDetailLines"), /Recent traded coins/);
+  assert.match(functionBody(serverSource, "mapTelegramDetailLines"), /Top current bags/);
+  assert.match(functionBody(serverSource, "sendMapCard"), /mapTelegramDetailLines\(map\)/);
   assert.match(functionBody(serverSource, "sendAirdropSubjectCard"), /sendMapCard\(chatId, target, "funds"\)/);
+  const walletScan = fs.readFileSync(new URL("../src/lib/walletScan.js", import.meta.url), "utf8");
+  assert.match(walletScan, /bsAccount\(a, "tokenlist"\)/);
+  assert.match(walletScan, /bsAccount\(a, "tokentx"\)/);
+  assert.match(walletScan, /trades: tradeRows\.slice/);
   const mapHtml = fs.readFileSync(new URL("../web/public/map.html", import.meta.url), "utf8");
   assert.match(mapHtml, /\.sol domain, or Robinhood 0x/);
   assert.match(mapHtml, /data-m="funds"/);
   assert.match(mapHtml, /n\.direction==='in'/);
   assert.match(mapHtml, /flowLabel/);
+  assert.match(mapHtml, /Recent traded coins/);
+  assert.match(mapHtml, /Current bags/);
+  assert.match(mapHtml, /map\.kind==='token'\|\|funds\?'wallet':'coin'/);
   const dropHtml = fs.readFileSync(new URL("../web/public/airdrop.html", import.meta.url), "utf8");
   assert.match(dropHtml, /Fund Map/);
   assert.match(dropHtml, /mode=funds/);
