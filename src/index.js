@@ -32247,7 +32247,7 @@ async function handleTelegramApeCommand(chatId) {
       const scan = await webSniperScan(`tg:${chatId}:ape-${mode}`, mode);
       for (const row of (scan?.rows || []).slice(0, 4)) {
         const result = await webSlimeShield(row.tokenMint).catch(() => null);
-        if (String(result?.verdict || "").toUpperCase() === "AVOID") continue;
+        if (telegramRecommendationBlocked(row, result)) continue;
         pick = row;
         shield = result;
         break;
@@ -40993,23 +40993,71 @@ async function handleTelegramLookCommand(chatId, message, argument) {
 // /alpha: current top picks. Falls through scanner modes and finally the live feed so
 // it ALWAYS returns candidates - an empty alpha reply teaches people to stop asking.
 async function telegramAlphaRows(chatId) {
-  for (const mode of ["safe", "fast", "moonshot"]) {
+  const sources = [
+    {
+      label: "live trending · safety-screened",
+      load: () => webLivePairs(`tg:${chatId}:trending`, "dexTrending", { sort: "best" })
+    },
+    {
+      label: "live surging · safety-screened",
+      load: () => webLivePairs(`tg:${chatId}:surging`, "gtSurging", { sort: "best" })
+    },
+    ...["safe", "fast", "moonshot"].map((mode) => ({
+      label: `${mode} scanner · safety-screened`,
+      load: () => webSniperScan(`tg:${chatId}:${mode}`, mode)
+    }))
+  ];
+  for (const source of sources) {
     try {
-      const scan = await webSniperScan(`tg:${chatId}:${mode}`, mode);
-      const rows = (scan?.rows || []).filter((row) => row.tokenMint);
-      if (rows.length) return { rows: rows.slice(0, 3), source: `${mode} scanner` };
+      const feed = await source.load();
+      const rows = await telegramSafetyScreenTrendingRows(feed?.rows || [], 3);
+      if (rows.length) return { rows, source: source.label };
     } catch {
-      // try the next mode
+      // try the next independent source
     }
   }
   try {
     const feed = await webLivePairs(`tg:${chatId}`, "live", { sort: "best" });
-    const rows = (feed?.rows || []).filter((row) => row.tokenMint);
-    if (rows.length) return { rows: rows.slice(0, 3), source: "live feed" };
+    const rows = await telegramSafetyScreenTrendingRows(feed?.rows || [], 3);
+    if (rows.length) return { rows, source: "live feed · safety-screened" };
   } catch {
     // degraded reply below
   }
   return { rows: [], source: "" };
+}
+
+function telegramRecommendationBlocked(row, shield) {
+  if (!row?.tokenMint || !shield) return true;
+  if (hasHardBlockedLivePairRisk(row) || slimeShieldHasHardDanger(shield)) return true;
+  const factors = Array.isArray(shield.factors) ? shield.factors : [];
+  const riskText = [
+    shield.verdict,
+    shield.summary,
+    shield.risk,
+    ...factors.flatMap((factor) => [factor?.key, factor?.label, factor?.message])
+  ].filter(Boolean).join(" ");
+  return String(shield.verdict || "").toUpperCase() === "AVOID"
+    || /honeypot|honey\s*pot|cannot sell|can't sell|sell blocked|blacklist|mint authority|freeze authority|liquidity (?:pulled|drained)|pool drained|rugged|scam/i.test(riskText);
+}
+
+async function telegramSafetyScreenTrendingRows(rows, limit = 3) {
+  const unique = [];
+  const seen = new Set();
+  for (const row of rows || []) {
+    const mint = String(row?.tokenMint || "").trim();
+    if (!mint || seen.has(mint) || hasHardBlockedLivePairRisk(row)) continue;
+    seen.add(mint);
+    unique.push(row);
+    if (unique.length >= 12) break;
+  }
+  const checked = await Promise.all(unique.map(async (row) => {
+    const shield = await scanFastTimeout(webSlimeShield(row.tokenMint), 1_800, null);
+    return { row, shield };
+  }));
+  return checked
+    .filter(({ row, shield }) => !telegramRecommendationBlocked(row, shield))
+    .slice(0, Math.max(1, Number(limit) || 3))
+    .map(({ row, shield }) => ({ ...row, telegramShield: shield }));
 }
 
 async function handleTelegramAlphaCommand(chatId, message) {
@@ -41027,7 +41075,9 @@ async function handleTelegramAlphaCommand(chatId, message) {
     const symbol = escapeTelegramHtml(row.symbol || shortMint(row.tokenMint));
     const stats = [row.marketCapLabel ? `MC ${row.marketCapLabel}` : "", row.liquidityLabel ? `Liq ${row.liquidityLabel}` : "", row.pairAgeLabel || ""].filter(Boolean).map(escapeTelegramHtml).join(" | ");
     const links = slimewireTokenLinks(row.tokenMint);
-    return `${index + 1}. <a href="${links.site}"><b>$${symbol}</b></a>${stats ? ` - ${stats}` : ""}\n<code>${escapeTelegramHtml(row.tokenMint)}</code>`;
+    const verdict = String(row.telegramShield?.verdict || "").toUpperCase();
+    const shield = verdict ? ` · Shield ${escapeTelegramHtml(verdict)}` : "";
+    return `${index + 1}. <a href="${links.site}"><b>$${symbol}</b></a>${stats ? ` - ${stats}` : ""}${shield}\n<code>${escapeTelegramHtml(row.tokenMint)}</code>`;
   });
   const keyboard = {
     inline_keyboard: [
@@ -43229,6 +43279,7 @@ function pvpArenaView(entry, chatId) {
     [{ text: "⚔️ Join the arena", callback_data: "pvp:join" }, { text: "🚪 Leave", callback_data: "pvp:leave" }],
     [{ text: "🏆 Leaderboard", callback_data: "room:pnl" }, { text: "📈 Perps (DM)", callback_data: "pvp:perps" }],
     [{ text: on ? "🔴 Turn feed OFF (admin)" : "🟢 Turn feed ON (admin)", callback_data: on ? "pvp:off" : "pvp:on" }],
+    [{ text: "✅ Done / Close", callback_data: "pvp:done" }],
   ] };
   return { text, kb };
 }
@@ -43311,7 +43362,7 @@ async function pvpPerpsView(userId) {
     [10, 25, 50, 100].map((u) => pick(cfg.usd, u, `$${u}`, `pvp:pu:${u}`)).concat([{ text: "✏️", callback_data: "pvp:pux" }]),
     [{ text: `🚀 Open ${cfg.side === "long" ? "LONG" : "SHORT"} ${cfg.asset} $${cfg.usd} @ ${cfg.lev}x`, callback_data: "pvp:popen" }],
     ...(acct && acct.positions.length ? [acct.positions.slice(0, 3).map((p) => ({ text: `✖ Close ${p.coin}`, callback_data: `pvp:pclose:${p.coin}` }))] : []),
-    [{ text: "🔄 Refresh", callback_data: "pvp:perps" }],
+    [{ text: "🔄 Refresh", callback_data: "pvp:perps" }, { text: "✅ Done", callback_data: "pvp:done" }],
   ] };
   return { text: lines.join("\n"), kb };
 }
@@ -43346,6 +43397,15 @@ async function handlePvpCallback(query, userId) {
   const ack = (t, alert) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: Boolean(alert) } : {}) }).catch(() => {});
   const from = query.from || {};
   const displayName = [from.first_name, from.last_name].filter(Boolean).join(" ") || from.username || "trader";
+  if (data === "pvp:done") {
+    pvpPerpPending.delete(String(userId));
+    const removed = await telegram("deleteMessage", { chat_id: chatId, message_id: messageId }).then(() => true).catch(() => false);
+    if (!removed) {
+      await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } }).catch(() => {});
+    }
+    await ack("Closed.");
+    return true;
+  }
   if (data === "pvp:join" || data === "pvp:leave") {
     if (inDm) { await ack("Use this in a group — PvP is a room sport."); return true; }
     const e = await pvpSetMember(chatId, userId, displayName, data === "pvp:join");

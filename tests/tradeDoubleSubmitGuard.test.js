@@ -2180,6 +2180,23 @@ test("X DM terminal: link from Telegram, scan/settings/buy/sell over official DM
   assert.doesNotMatch(serverSource, /setInterval\(\(\) => \{ void xDmPollTick\(\);/);
 });
 
+test("Telegram trending picks fail closed on honeypots and PvP menus can be dismissed", () => {
+  const alphaRows = functionBody(serverSource, "telegramAlphaRows");
+  const safety = functionBody(serverSource, "telegramRecommendationBlocked");
+  const pvpView = functionBody(serverSource, "pvpArenaView");
+  const pvpCallback = functionBody(serverSource, "handlePvpCallback");
+  assert.match(alphaRows, /"dexTrending"/);
+  assert.match(alphaRows, /telegramSafetyScreenTrendingRows/);
+  assert.match(safety, /hasHardBlockedLivePairRisk/);
+  assert.match(safety, /slimeShieldHasHardDanger/);
+  assert.match(safety, /honeypot\|honey\\s\*pot/);
+  assert.match(pvpView, /pvp:done/);
+  assert.match(serverSource, /text: "✅ Done", callback_data: "pvp:done"/);
+  assert.match(pvpCallback, /data === "pvp:done"/);
+  assert.match(pvpCallback, /deleteMessage/);
+  assert.match(pvpCallback, /editMessageReplyMarkup/);
+});
+
 test("X growth engine: broadcast-gated proactive posts + receipts + KOL responder + scorecard, tracking always on", () => {
   const xclientSource = fs.readFileSync(new URL("../src/lib/xClient.js", import.meta.url), "utf8");
   // xClient gained a general poster (standalone + quote-tweet) and a general search — receipts/first-responder need them
