@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <title>SlimeWire X DM Trade Pad</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #040704;
+      --panel: #0a100b;
+      --panel-2: #0d160f;
+      --green: #72ff23;
+      --green-soft: #baff82;
+      --text: #efffe9;
+      --muted: #97aa94;
+      --border: rgba(114, 255, 35, .19);
+      --border-strong: rgba(114, 255, 35, .42);
+      --danger: #ff9b9b;
+      --danger-bg: rgba(255, 92, 92, .08);
+      --success-bg: rgba(114, 255, 35, .09);
+      --shadow: 0 24px 70px rgba(0, 0, 0, .42);
+    }
+
+    * { box-sizing: border-box; }
+
+    html { min-height: 100%; background: var(--bg); }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      padding: max(18px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+      background:
+        radial-gradient(700px 360px at 50% -100px, rgba(114, 255, 35, .15), transparent 70%),
+        linear-gradient(180deg, #050805 0%, var(--bg) 100%);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button, input { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    [hidden] { display: none !important; }
+
+    .shell { width: min(100%, 620px); margin: 0 auto; }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .wordmark {
+      color: var(--text);
+      font-size: 18px;
+      font-weight: 950;
+      letter-spacing: -.035em;
+      text-decoration: none;
+    }
+
+    .wordmark span { color: var(--green); }
+
+    .live {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--green-soft);
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+
+    .live::before {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 13px rgba(114, 255, 35, .9);
+      content: "";
+    }
+
+    .hero { margin: 0 0 18px; }
+    .eyebrow { margin: 0 0 7px; color: var(--green); font-size: 12px; font-weight: 900; letter-spacing: .11em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(29px, 9vw, 42px); line-height: 1.06; letter-spacing: -.045em; }
+    .hero p { margin: 10px 0 0; color: var(--muted); font-size: 14px; }
+
+    .card {
+      margin-top: 12px;
+      padding: 17px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      background: linear-gradient(180deg, rgba(114, 255, 35, .035), transparent 78%), var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .token-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .label { display: block; margin-bottom: 5px; color: var(--muted); font-size: 11px; font-weight: 900; letter-spacing: .09em; text-transform: uppercase; }
+    .token-title { margin: 0; font-size: 21px; line-height: 1.15; letter-spacing: -.025em; }
+
+    .chain {
+      flex: 0 0 auto;
+      padding: 5px 8px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--green-soft);
+      background: rgba(114, 255, 35, .05);
+      font-size: 11px;
+      font-weight: 900;
+    }
+
+    .ca-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: center;
+      margin-top: 14px;
+      padding: 10px 10px 10px 12px;
+      border: 1px solid rgba(114, 255, 35, .1);
+      border-radius: 12px;
+      background: rgba(0, 0, 0, .2);
+    }
+
+    .ca {
+      min-width: 0;
+      overflow: hidden;
+      color: #dfffd5;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .expiry { margin: 8px 2px 0; color: #71806f; font-size: 11px; }
+
+    .copy {
+      min-height: 36px;
+      padding: 0 11px;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      color: var(--green-soft);
+      background: rgba(114, 255, 35, .055);
+      font-size: 12px;
+      font-weight: 900;
+      cursor: pointer;
+    }
+
+    .facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+    .fact { min-width: 0; padding: 10px; border-radius: 11px; background: rgba(255, 255, 255, .025); }
+    .fact b { display: block; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+
+    .card-title { margin: 0; font-size: 18px; letter-spacing: -.02em; }
+    .card-copy { margin: 5px 0 15px; color: var(--muted); font-size: 13px; }
+
+    .button-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+
+    .action, .secondary, .link-button {
+      min-height: 50px;
+      border: 1px solid var(--border-strong);
+      border-radius: 12px;
+      color: #061004;
+      background: linear-gradient(180deg, #c6ff91, var(--green));
+      font-weight: 950;
+      cursor: pointer;
+      transition: transform .12s ease, filter .12s ease, opacity .12s ease;
+    }
+
+    .action:active, .secondary:active, .link-button:active, .copy:active { transform: translateY(1px); }
+    button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid rgba(186, 255, 130, .42); outline-offset: 2px; }
+    button:disabled, input:disabled { cursor: wait; opacity: .48; }
+
+    .action small { display: block; margin-top: 1px; font-size: 10px; font-weight: 800; opacity: .65; }
+
+    .sell-button {
+      color: var(--text);
+      background: rgba(114, 255, 35, .065);
+      border-color: var(--border);
+    }
+
+    .custom-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px; margin-top: 10px; }
+
+    .amount-wrap { position: relative; }
+    .amount-wrap input {
+      width: 100%;
+      min-height: 50px;
+      padding: 0 56px 0 13px;
+      border: 1px solid rgba(114, 255, 35, .2);
+      border-radius: 12px;
+      color: var(--text);
+      background: rgba(0, 0, 0, .25);
+      appearance: textfield;
+    }
+
+    .amount-wrap span { position: absolute; top: 50%; right: 13px; color: var(--muted); font-size: 12px; font-weight: 900; transform: translateY(-50%); }
+    .secondary { min-width: 92px; padding: 0 16px; color: var(--green-soft); background: rgba(114, 255, 35, .055); }
+
+    .notice {
+      margin-top: 12px;
+      padding: 13px 14px;
+      border: 1px solid rgba(255, 255, 255, .08);
+      border-radius: 12px;
+      color: #c6d2c2;
+      background: rgba(255, 255, 255, .025);
+      font-size: 12px;
+    }
+
+    .notice b { color: var(--text); }
+
+    .links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 12px; }
+    .link-button { display: grid; min-height: 48px; place-items: center; color: var(--green-soft); background: rgba(114, 255, 35, .045); text-decoration: none; }
+
+    .status {
+      margin-top: 12px;
+      padding: 14px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      color: #dfffd5;
+      background: rgba(114, 255, 35, .055);
+      font-size: 13px;
+    }
+
+    .status.loading::before {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      margin-right: 9px;
+      border: 2px solid rgba(114, 255, 35, .3);
+      border-top-color: var(--green);
+      border-radius: 50%;
+      vertical-align: -1px;
+      animation: spin .75s linear infinite;
+      content: "";
+    }
+
+    .status.error { border-color: rgba(255, 123, 123, .3); color: var(--danger); background: var(--danger-bg); }
+    .status.success { border-color: var(--border-strong); color: var(--text); background: var(--success-bg); }
+    .status.success strong { display: block; margin-bottom: 3px; color: var(--green-soft); font-size: 15px; }
+
+    .recovery { margin-top: 12px; color: var(--muted); font-size: 13px; text-align: center; }
+    .recovery a { color: var(--green-soft); font-weight: 850; }
+    .foot { margin: 18px 4px 0; color: #71806f; font-size: 11px; text-align: center; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    @media (min-width: 520px) {
+      body { padding-top: max(30px, env(safe-area-inset-top)); }
+      .card { padding: 20px; }
+      .facts { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .button-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+    }
+  </style>
+  <script>
+    (function () {
+      var token = new URL(window.location.href).searchParams.get("t") || "";
+      Object.defineProperty(window, "__SLIME_X_DM_TOKEN__", { value: token, configurable: true });
+      try { window.history.replaceState(null, "", window.location.pathname + window.location.hash); } catch (_) {}
+    }());
+  </script>
+</head>
+<body>
+  <main class="shell">
+    <div class="brand">
+      <a class="wordmark" href="/" aria-label="SlimeWire home"><span>SLIME</span>WIRE</a>
+      <span class="live">X DM secure link</span>
+    </div>
+
+    <header class="hero">
+      <p class="eyebrow">Mobile Trade Pad</p>
+      <h1>Tap here. Confirm in X.</h1>
+      <p>Choose a buy or sell amount below. This page only stages the order; your final <b>YES</b> or <b>NO</b> happens in your X DM.</p>
+    </header>
+
+    <div id="status" class="status loading" role="status" aria-live="polite">Opening your private Trade Pad...</div>
+
+    <div id="errorRecovery" class="recovery" hidden>
+      Open your newest Trade Pad link from the SlimeWire bot in <a href="https://x.com/messages" target="_blank" rel="noopener noreferrer">X DMs</a>.
+    </div>
+
+    <div id="pad" hidden>
+      <section class="card" aria-labelledby="tokenHeading">
+        <div class="token-head">
+          <div>
+            <span class="label">Selected token</span>
+            <h2 class="token-title" id="tokenHeading">Solana token</h2>
+          </div>
+          <span class="chain" id="chainBadge">SOLANA</span>
+        </div>
+
+        <div class="ca-row">
+          <span class="ca" id="mintText" title=""></span>
+          <button class="copy" id="copyMint" type="button">Copy CA</button>
+        </div>
+        <p class="expiry" id="expiryText" hidden></p>
+
+        <div class="facts" aria-label="Trading settings">
+          <div class="fact"><span class="label">Quick buy</span><b id="quickFact">--</b></div>
+          <div class="fact"><span class="label">Slippage</span><b id="slippageFact">--</b></div>
+          <div class="fact"><span class="label">Take profit</span><b id="tpFact">--</b></div>
+          <div class="fact"><span class="label">Stop loss</span><b id="slFact">--</b></div>
+        </div>
+      </section>
+
+      <section class="card trade-actions" aria-labelledby="buyHeading">
+        <h2 class="card-title" id="buyHeading">Stage a buy</h2>
+        <p class="card-copy">Pick a SOL amount. Nothing is bought until you return to X and reply YES.</p>
+        <div class="button-grid" id="buyPresets"></div>
+
+        <form class="custom-form" id="customBuyForm" novalidate>
+          <label class="amount-wrap">
+            <span class="label" hidden>Custom SOL amount</span>
+            <input id="customAmount" type="number" min="0.001" max="50" step="0.001" inputmode="decimal" autocomplete="off" placeholder="Custom amount" aria-label="Custom buy amount in SOL">
+            <span aria-hidden="true">SOL</span>
+          </label>
+          <button class="secondary" type="submit">Stage</button>
+        </form>
+      </section>
+
+      <section class="card trade-actions" aria-labelledby="sellHeading">
+        <h2 class="card-title" id="sellHeading">Stage a sell</h2>
+        <p class="card-copy">Choose how much of this token position to sell. Final confirmation still happens in X.</p>
+        <div class="button-grid" id="sellPresets">
+          <button class="action sell-button" type="button" data-sell="25">25%</button>
+          <button class="action sell-button" type="button" data-sell="50">50%</button>
+          <button class="action sell-button" type="button" data-sell="75">75%</button>
+          <button class="action sell-button" type="button" data-sell="100">100%</button>
+        </div>
+      </section>
+
+      <div class="notice"><b>No trade runs on this page.</b> After staging, return to the same X conversation and reply YES to execute or NO to cancel. Never enter a seed phrase or private key.</div>
+
+      <nav class="links" aria-label="Token tools">
+        <a class="link-button" id="chartLink" href="#" target="_blank" rel="noopener noreferrer">Open chart</a>
+        <a class="link-button" id="terminalLink" href="/terminal" target="_blank" rel="noopener noreferrer">Full terminal</a>
+      </nav>
+    </div>
+
+    <p class="foot">Private links expire. SlimeWire will always ask before a trade is sent.</p>
+  </main>
+
+  <script>
+    (function () {
+      "use strict";
+
+      var signedToken = window.__SLIME_X_DM_TOKEN__ || "";
+      try { delete window.__SLIME_X_DM_TOKEN__; } catch (_) {}
+
+      var statusEl = document.getElementById("status");
+      var recoveryEl = document.getElementById("errorRecovery");
+      var padEl = document.getElementById("pad");
+      var mint = "";
+      var busy = false;
+
+      function cleanNumber(value) {
+        var number = Number(value);
+        return Number.isFinite(number) ? number : 0;
+      }
+
+      function amountText(value) {
+        return cleanNumber(value).toLocaleString(undefined, { maximumFractionDigits: 6 });
+      }
+
+      function settingText(value, prefix, suffix) {
+        var number = cleanNumber(value);
+        return number > 0 ? (prefix || "") + amountText(number) + (suffix || "") : "Off";
+      }
+
+      function safeUrl(value, fallback) {
+        try {
+          var url = new URL(String(value || fallback || ""), window.location.origin);
+          if (url.protocol !== "https:" && url.origin !== window.location.origin) return "";
+          return url.href;
+        } catch (_) {
+          return "";
+        }
+      }
+
+      function setStatus(message, type, heading) {
+        statusEl.className = "status" + (type ? " " + type : "");
+        statusEl.replaceChildren();
+        if (heading) {
+          var strong = document.createElement("strong");
+          strong.textContent = heading;
+          statusEl.appendChild(strong);
+        }
+        statusEl.appendChild(document.createTextNode(message));
+        statusEl.setAttribute("role", type === "error" ? "alert" : "status");
+      }
+
+      function friendlyError(error) {
+        var message = String(error && error.message || "Could not open this Trade Pad.");
+        if (/abort/i.test(message)) return "The request timed out. Open the latest link from your X DM and try again.";
+        return message.length > 180 ? "Could not open this Trade Pad. Request a fresh link in X DM." : message;
+      }
+
+      async function post(body) {
+        var controller = new AbortController();
+        var timeout = window.setTimeout(function () { controller.abort(); }, 15000);
+        try {
+          var response = await fetch("/api/x-dm/menu", {
+            method: "POST",
+            credentials: "same-origin",
+            cache: "no-store",
+            referrerPolicy: "no-referrer",
+            headers: { "Accept": "application/json", "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+            signal: controller.signal
+          });
+          var data = await response.json().catch(function () { return {}; });
+          if (!response.ok || data.ok === false) throw new Error(data.error || "This private link is invalid or expired.");
+          return data;
+        } finally {
+          window.clearTimeout(timeout);
+        }
+      }
+
+      function allControls() {
+        return document.querySelectorAll(".trade-actions button, .trade-actions input");
+      }
+
+      function setBusy(value, lock) {
+        busy = value;
+        allControls().forEach(function (control) { control.disabled = Boolean(value || lock); });
+      }
+
+      function renderBuyButtons(quickAmount, hasValidQuickAmount) {
+        var host = document.getElementById("buyPresets");
+        var values = hasValidQuickAmount ? [quickAmount, 0.05, 0.1, 0.25, 0.5] : [0.05, 0.1, 0.25, 0.5];
+        var seen = Object.create(null);
+        host.replaceChildren();
+        values.forEach(function (raw, index) {
+          var amount = cleanNumber(raw);
+          var key = amount.toFixed(9);
+          if (amount <= 0 || seen[key]) return;
+          seen[key] = true;
+          var button = document.createElement("button");
+          button.className = "action";
+          button.type = "button";
+          button.dataset.buy = String(amount);
+          button.textContent = amountText(amount) + " SOL";
+          if (index === 0 && hasValidQuickAmount) {
+            var tag = document.createElement("small");
+            tag.textContent = "YOUR QUICK BUY";
+            button.appendChild(tag);
+          }
+          host.appendChild(button);
+        });
+      }
+
+      function renderMenu(payload) {
+        var menu = payload.menu || payload.data && payload.data.menu || payload.data || payload;
+        mint = String(menu.mint || "").trim();
+        var tradingSupported = menu.isSolana !== false;
+        var shortMint = String(menu.shortMint || (mint.length > 14 ? mint.slice(0, 7) + "..." + mint.slice(-6) : mint) || "Token");
+        var quickAmount = cleanNumber(menu.quickAmount);
+        var hasValidQuickAmount = quickAmount >= 0.001 && quickAmount <= 50;
+
+        document.getElementById("tokenHeading").textContent = shortMint;
+        document.getElementById("chainBadge").textContent = menu.isSolana === false ? "TOKEN" : "SOLANA";
+        document.getElementById("mintText").textContent = mint || "Contract unavailable";
+        document.getElementById("mintText").title = mint;
+        document.getElementById("copyMint").disabled = !mint;
+        var expiresAt = new Date(menu.expiresAt || "");
+        var expiryEl = document.getElementById("expiryText");
+        if (Number.isFinite(expiresAt.getTime())) {
+          expiryEl.textContent = "Private link expires " + expiresAt.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) + ".";
+          expiryEl.hidden = false;
+        }
+        document.getElementById("quickFact").textContent = hasValidQuickAmount ? amountText(quickAmount) + " SOL" : "Set 0.001-50";
+        document.getElementById("slippageFact").textContent = settingText(menu.slippagePct, "", "%");
+        document.getElementById("tpFact").textContent = settingText(menu.takeProfitPct, "+", "%");
+        document.getElementById("slFact").textContent = settingText(menu.stopLossPct, "-", "%");
+
+        renderBuyButtons(quickAmount, hasValidQuickAmount);
+
+        var chartFallback = mint ? "https://dexscreener.com/solana/" + encodeURIComponent(mint) : "/terminal";
+        document.getElementById("chartLink").href = safeUrl(menu.chartUrl, chartFallback) || "/terminal";
+        document.getElementById("terminalLink").href = safeUrl(menu.terminalUrl, "/terminal") || "/terminal";
+
+        padEl.hidden = false;
+        recoveryEl.hidden = true;
+        if (!tradingSupported) {
+          setBusy(false, true);
+          setStatus("X DM trading is Solana-only right now. The chart and full terminal links are still available.", "");
+        } else {
+          setStatus("Ready. Choose an amount below; no trade runs until you confirm in X.", "");
+        }
+      }
+
+      async function stage(action, value) {
+        if (busy) return;
+        var body = { token: signedToken };
+        var summary;
+        if (action === "prepare_buy") {
+          var amount = cleanNumber(value);
+          if (amount < 0.001 || amount > 50) {
+            setStatus("Enter a custom amount from 0.001 to 50 SOL.", "error");
+            document.getElementById("customAmount").focus();
+            return;
+          }
+          body.action = action;
+          body.amountSol = amount;
+          summary = "Buy " + amountText(amount) + " SOL";
+        } else {
+          var percent = Math.round(cleanNumber(value));
+          if (![25, 50, 75, 100].includes(percent)) return;
+          body.action = "prepare_sell";
+          body.percent = percent;
+          summary = "Sell " + percent + "%";
+        }
+
+        setBusy(true, false);
+        setStatus("Staging " + summary + "...", "loading");
+        try {
+          var data = await post(body);
+          if (data.staged !== true) throw new Error(data.error || "The trade could not be staged.");
+          setBusy(false, true);
+          var detail = String(data.message || summary + " is waiting in your X DM.");
+          setStatus(detail + " No trade has run yet. Return to X and reply YES to execute or NO to cancel.", "success", "Trade staged - confirm in X");
+          statusEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        } catch (error) {
+          setBusy(false, false);
+          setStatus(friendlyError(error) + " No trade ran.", "error");
+        }
+      }
+
+      document.getElementById("buyPresets").addEventListener("click", function (event) {
+        var button = event.target.closest("button[data-buy]");
+        if (button) stage("prepare_buy", button.dataset.buy);
+      });
+
+      document.getElementById("sellPresets").addEventListener("click", function (event) {
+        var button = event.target.closest("button[data-sell]");
+        if (button) stage("prepare_sell", button.dataset.sell);
+      });
+
+      document.getElementById("customBuyForm").addEventListener("submit", function (event) {
+        event.preventDefault();
+        stage("prepare_buy", document.getElementById("customAmount").value);
+      });
+
+      document.getElementById("copyMint").addEventListener("click", async function () {
+        if (!mint) return;
+        var button = this;
+        try {
+          await navigator.clipboard.writeText(mint);
+          button.textContent = "Copied";
+        } catch (_) {
+          var selection = window.getSelection();
+          var range = document.createRange();
+          range.selectNodeContents(document.getElementById("mintText"));
+          selection.removeAllRanges();
+          selection.addRange(range);
+          button.textContent = "CA selected";
+        }
+        window.setTimeout(function () { button.textContent = "Copy CA"; }, 1600);
+      });
+
+      async function boot() {
+        if (!signedToken) {
+          setStatus("This Trade Pad link is missing or incomplete.", "error");
+          recoveryEl.hidden = false;
+          return;
+        }
+        try {
+          var payload = await post({ token: signedToken, action: "view" });
+          renderMenu(payload);
+        } catch (error) {
+          setStatus(friendlyError(error), "error");
+          recoveryEl.hidden = false;
+        }
+      }
+
+      boot();
+    }());
+  </script>
+</body>
+</html>

@@ -2112,19 +2112,47 @@ test("X DM terminal: link from Telegram, scan/settings/buy/sell over official DM
   assert.match(serverSource, /buy 1 \| buy 1 0\.1/);
   assert.match(serverSource, /sell 1 50/);
   assert.match(serverSource, /Saved \$\{targetList\.length\} new coin slots\. Scanned #1/);
-  assert.match(serverSource, /Actions: buy 1 \| buy 1 0\.1 \| sell 1 50/);
+  assert.match(serverSource, /send 1 for tap menu/);
+  assert.match(serverSource, /Open Trade Pad \(real buttons\)/);
+  assert.match(serverSource, /signXDmMenuToken\(CONFIG\.appSecret/);
+  assert.match(serverSource, /verifyXDmMenuToken\(CONFIG\.appSecret/);
+  assert.match(serverSource, /pathname === "\/api\/x-dm\/menu"/);
+  assert.match(serverSource, /action !== "prepare_buy" && action !== "prepare_sell"/);
+  assert.match(serverSource, /nothing has traded yet/i);
   assert.doesNotMatch(functionBody(serverSource, "xDmHelpText"), /Reply menu:|Buy last coin|Sell help/);
-  assert.match(serverSource, /const buySlot = text\.match/);
-  assert.match(serverSource, /const sellSlot = text\.match/);
+  assert.match(serverSource, /parseXDmBuySlotCommand\(text\)/);
+  assert.match(serverSource, /parseXDmSellSlotCommand\(text\)/);
   assert.match(serverSource, /const buyAmountLast = text\.match/);
   assert.match(serverSource, /const sellLastPct = text\.match/);
   assert.match(serverSource, /Reply YES to send\./);
   assert.match(serverSource, /Reply NO to cancel\./);
-  assert.match(serverSource, /\^\(yes\|y\|ok\|confirm\|send\|ape\)\$/);
+  assert.match(serverSource, /\^\(yes\|y\|confirm\)\$/);
   assert.match(serverSource, /\^\(no\|n\|cancel\|stop\)\$/);
+  assert.match(serverSource, /Only YES, YES <confirm ID>, or NO is accepted/);
+  assert.match(serverSource, /ignored stale money event/);
+  assert.match(serverSource, /linked SlimeWire account changed/);
+  assert.match(serverSource, /Coin slots are 1-6/);
+  const xDmHandler = functionBody(serverSource, "xDmHandleEvent");
+  assert.ok(
+    xDmHandler.indexOf("const invalidBareBuySlot") < xDmHandler.indexOf("const buyAmountLast"),
+    "an out-of-range bare integer must be rejected before the legacy latest-coin amount grammar"
+  );
+  const xDmConfirm = functionBody(serverSource, "xDmConfirmPending");
+  assert.match(xDmConfirm, /Number\(rec\.expiresAt\) <= Date\.now\(\)/);
+  assert.match(xDmConfirm, /String\(currentLink\.userId\) !== String\(rec\.userId\)/);
+  assert.match(xDmConfirm, /xDmEventTimestampMs\(event\)/);
+  assert.match(xDmConfirm, /eventAt < pendingAt/);
+  assert.match(xDmConfirm, /bareApproval && \(!eventAt \|\| !pendingAt\)/);
+  assert.match(functionBody(serverSource, "xDmStartPending"), /payload\.createdAt = Date\.now\(\)/);
+  assert.match(xDmHandler, /xDmConfirmPending\(state, senderId, text, event\)/);
+  assert.match(xDmHandler, /arrived before this confirmation was staged/);
+  assert.match(xDmHandler, /delete state\.pending\[senderId\]/);
   assert.doesNotMatch(functionBody(serverSource, "xDmHelpText"), /bundle \/ volume \/ launch/);
   assert.match(serverSource, /tgExecuteQuickBuy\(userId, rec\.mint, rec\.amountSol/);
-  assert.match(serverSource, /tgExecuteQuickSell\(userId, rec\.mint, rec\.percent\)/);
+  assert.match(serverSource, /tgExecuteQuickSell\(userId, rec\.mint, rec\.percent, \{ idempotencyKey:/);
+  assert.match(serverSource, /state\.seen\[event\.id\] = Date\.now\(\)/);
+  assert.match(serverSource, /state\.failures\[event\.id\]/);
+  assert.match(serverSource, /if \(result\?\.ok === false\) throw/);
   assert.match(serverSource, /setInterval\(\(\) => \{ void xDmPollTick\(\); \}, xDmPollMs\)/);
 });
 

@@ -75,6 +75,8 @@ import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availableP
 import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
 import { xConfigured, xSearchMentions, xReply, xPost, xSearchQuery, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode, xAuthReport } from "./lib/xClient.js";
 import { xDmAuthMode, xDmConfigured, xDmFetchEvents, xDmOwnUserId as xDmResolvedOwnUserId, xDmSendText } from "./lib/xDmClient.js";
+import { isStaleXDmMoneyEvent, parseXDmBuySlotCommand, parseXDmSellSlotCommand, validateXDmBuyAmount, xDmEventTimestampMs, X_DM_BUY_LIMITS, X_DM_SELL_PERCENTAGES } from "./lib/xDmFlow.js";
+import { signXDmMenuToken, verifyXDmMenuToken } from "./lib/xDmMenuToken.js";
 import { renderXScanCard } from "./lib/xCard.js";
 // NOTE: the Meteora DBC SDK is heavy + dark — it's dynamic-import()ed only inside webLaunchMeteoraDbc
 // so it never loads at boot or on the hot path until someone actually launches on the Meteora rail.
@@ -6613,6 +6615,10 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "x-terminal.html");
       return;
     }
+    if (request.method === "GET" && (requestUrl.pathname === "/x-menu" || requestUrl.pathname === "/x-dm-menu")) {
+      await serveStaticHtmlPage(response, "x-dm-menu.html", "no-store, max-age=0");
+      return;
+    }
     if (request.method === "GET" && requestUrl.pathname === "/is-slimewire-legit") {
       await serveStaticHtmlPage(response, "is-slimewire-legit.html");
       return;
@@ -7500,6 +7506,19 @@ async function handleWebApiRequest(request, response, requestUrl) {
         socials: brandSocialLinks(),
         features: ["wallets", "balances", "positions", "pnl", "sniper-scan", "kol-tracker", "one-wallet-trade", "volume-plans", "bundle", "launch-watch", "launch-coin"]
       });
+      return;
+    }
+
+    // Signed X DM Trade Pad. The token is short-lived and scoped to one linked
+    // X sender + SlimeWire user + coin. GETs never trade; this POST either reads
+    // the menu or stages a pending order that still requires YES inside X.
+    if (request.method === "POST" && pathname === "/api/x-dm/menu") {
+      try {
+        const body = await readJsonRequestBody(request, 8_000);
+        sendWebJson(request, response, 200, await xDmMenuApi(body));
+      } catch (error) {
+        sendWebJson(request, response, error?.statusCode || 400, { ok: false, error: friendlyError(error) });
+      }
       return;
     }
 
@@ -33591,15 +33610,25 @@ async function readXDmState() {
   if (!s.codes || typeof s.codes !== "object") s.codes = {};       // short code -> { userId, expiresAt }
   if (!s.pending || typeof s.pending !== "object") s.pending = {}; // xSenderId -> trade confirm payload
   if (!s.contexts || typeof s.contexts !== "object") s.contexts = {}; // xSenderId -> recent token slots
+  if (!s.failures || typeof s.failures !== "object") s.failures = {}; // event id -> retry/backoff metadata
   xDmStateCache = s; return s;
 }
-async function writeXDmState(s) { xDmStateCache = s; await writeJsonFile(xDmStateFile(), s).catch(() => {}); }
+async function writeXDmState(s) {
+  xDmStateCache = s;
+  try {
+    await writeJsonFile(xDmStateFile(), s);
+  } catch (error) {
+    console.log(`[xdm] state write failed: ${String(error?.message || error).slice(0, 160)}`);
+    throw error;
+  }
+}
 function xDmPruneState(s, now = Date.now()) {
   for (const [id, ts] of Object.entries(s.seen || {})) if (now - Number(ts || 0) > 3 * 86_400_000) delete s.seen[id];
   for (const [id, ts] of Object.entries(s.ignored || {})) if (now - Number(ts || 0) > 3 * 86_400_000) delete s.ignored[id];
   for (const [code, rec] of Object.entries(s.codes || {})) if (Number(rec?.expiresAt || 0) < now) delete s.codes[code];
   for (const [sender, rec] of Object.entries(s.pending || {})) if (Number(rec?.expiresAt || 0) < now) delete s.pending[sender];
   for (const [sender, ctx] of Object.entries(s.contexts || {})) if (now - Number(ctx?.updatedAt || 0) > 7 * 86_400_000) delete s.contexts[sender];
+  for (const [id, rec] of Object.entries(s.failures || {})) if (now - Number(rec?.lastAt || 0) > 3 * 86_400_000) delete s.failures[id];
 }
 function xDmNewLinkCode(state, userId) {
   xDmPruneState(state);
@@ -33663,6 +33692,35 @@ function xDmResolveRecentTarget(state, senderId, value) {
   if (!n) return "";
   return xDmRecentTargets(state, senderId)[n - 1] || "";
 }
+const X_DM_MENU_TTL_MS = 15 * 60_000;
+function xDmMenuToken(state, senderId, mint, slot = "") {
+  const linked = state?.links?.[String(senderId)];
+  const cleanMint = String(mint || "").trim();
+  if (!linked?.userId || !cleanMint) return "";
+  return signXDmMenuToken(CONFIG.appSecret, {
+    senderId: String(senderId),
+    userId: String(linked.userId),
+    mint: cleanMint,
+    slot: String(slot || "")
+  }, { ttlMs: X_DM_MENU_TTL_MS });
+}
+function readXDmMenuToken(token) {
+  const payload = verifyXDmMenuToken(CONFIG.appSecret, token);
+  if (!payload) return null;
+  if (!payload.senderId || !payload.userId || !payload.mint || !payload.nonce) return null;
+  const mint = String(payload.mint).trim();
+  if (!solanaPublicKeyLike(mint) && !/^0x[0-9a-f]{40}$/i.test(mint)) return null;
+  return { ...payload, senderId: String(payload.senderId), userId: String(payload.userId), mint };
+}
+function xDmMenuUrl(state, senderId, mint, slot = "") {
+  const token = xDmMenuToken(state, senderId, mint, slot);
+  if (!token) return "";
+  const origin = String(CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/+$/, "");
+  return `${origin}/x-menu?t=${encodeURIComponent(token)}`;
+}
+function xDmTradeSupportedMint(mint) {
+  return solanaPublicKeyLike(String(mint || "").trim());
+}
 function xDmTokenSlotsText(state, senderId, linked = false) {
   const rows = xDmRecentTargets(state, senderId);
   if (!rows.length) return "";
@@ -33670,30 +33728,36 @@ function xDmTokenSlotsText(state, senderId, linked = false) {
     "Coin slots:",
     ...rows.map((mint, i) => {
       const slot = i + 1;
-      const trade = linked ? ` | buy ${slot} | sell ${slot} 50` : "";
+      const trade = linked && xDmTradeSupportedMint(mint) ? ` | buy ${slot} | sell ${slot} 50` : "";
       return `${slot}. ${shortMint(mint)}\n   chart ${slot} | rug ${slot} | map ${slot}${trade}`;
-    })
-  ].join("\n");
+    }),
+    linked ? "Reply with a coin number to open its tap menu." : ""
+  ].filter(Boolean).join("\n");
 }
 function xDmActionHints(state, senderId, linked = false) {
   const hasCoins = xDmRecentTargets(state, senderId).length > 0;
   if (!hasCoins) return "Next: paste one or more CAs.";
   return linked
-    ? "Actions: buy 1 | buy 1 0.1 | sell 1 50 | chart 1 | rug 1 | map 1"
+    ? "Actions: send 1 for tap menu | buy 1 | buy 1 0.1 | sell 1 50 | chart 1 | rug 1 | map 1"
     : "Actions: chart 1 | rug 1 | map 1. Link in Telegram to buy/sell.";
 }
 function xDmSlotMenuText(state, senderId, slot, linked = false) {
   const mint = xDmResolveRecentTarget(state, senderId, slot);
   if (!mint) return "That coin slot is empty. Paste one or more CAs first.";
+  const tradeSupported = xDmTradeSupportedMint(mint);
+  const menuUrl = linked ? xDmMenuUrl(state, senderId, mint, slot) : "";
   return [
     `Coin #${slot}: ${shortMint(mint)}`,
     xDmTokenUrl(mint),
     "",
-    linked
+    linked && tradeSupported
       ? `Reply: buy ${slot} | buy ${slot} 0.1 | sell ${slot} 50 | chart ${slot} | rug ${slot} | map ${slot}`
       : `Reply: chart ${slot} | rug ${slot} | map ${slot}`,
-    linked ? "Money actions ask for YES or NO before sending." : "To trade, link X DM from Telegram with /xlink."
-  ].join("\n");
+    menuUrl ? `Open Trade Pad (real buttons):\n${menuUrl}` : "",
+    linked && tradeSupported ? "A button only stages the trade. YES or NO in X is still required." : "",
+    linked && !tradeSupported ? "X DM trading is Solana-only right now; this contract stays scan-only." : "",
+    !linked ? "To trade, link X DM from Telegram with /xlink." : ""
+  ].filter(Boolean).join("\n");
 }
 function xDmTradeConfirmText(rec, slot = "") {
   const isSell = rec?.action === "sell";
@@ -33703,12 +33767,15 @@ function xDmTradeConfirmText(rec, slot = "") {
   return [
     `${side} ${amount}`,
     `${slotText}${shortMint(rec?.mint)}`,
+    `CA: ${rec?.mint}`,
+    `Confirm ID: ${rec?.id || ""}`,
     "",
     "Reply YES to send.",
+    rec?.id ? `Or reply YES ${rec.id}.` : "",
     "Reply NO to cancel.",
     "Expires in 2 minutes.",
     xDmTokenUrl(rec?.mint)
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 function xDmHelpText(linked = false, state = null, senderId = "") {
   return [
@@ -33726,7 +33793,8 @@ function xDmHelpText(linked = false, state = null, senderId = "") {
     xDmTokenSlotsText(state, senderId, linked),
     "",
     xDmActionHints(state, senderId, linked),
-    linked ? "Money actions ask for yes/no before they run." : "To trade here, DM: link <code> after /xlink in Telegram.",
+    linked ? "For real buttons, send a coin number (1-6), then tap Open Trade Pad." : "",
+    linked ? "Money actions ask for yes/no before they run." : "To trade here, run /xlink in Telegram, then DM: link CODE",
     "No seed phrases. Wallet-confirmed / managed-wallet only."
   ].join("\n");
 }
@@ -33805,27 +33873,141 @@ function xDmParseSet(text) {
   if (Number.isFinite(slip) && slip > 0) return { kind: "slippage", value: slip * 100 };
   return null;
 }
+function xDmMenuFail(message, statusCode = 400) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  throw error;
+}
+async function xDmMenuApi(body = {}) {
+  const payload = readXDmMenuToken(body.token);
+  if (!payload) xDmMenuFail("This Trade Pad link expired or is invalid. Send the coin number in X for a fresh one.", 401);
+  const state = await readXDmState();
+  xDmPruneState(state);
+  const linked = state.links[payload.senderId];
+  if (!linked || String(linked.userId) !== payload.userId) {
+    xDmMenuFail("This X account is no longer linked. Run /xlink in Telegram again.", 401);
+  }
+  const prefs = userBuyPrefs(await readBuyPrefs(), payload.userId);
+  const menu = {
+    mint: payload.mint,
+    shortMint: shortMint(payload.mint),
+    slot: payload.slot || "",
+    isSolana: xDmTradeSupportedMint(payload.mint),
+    quickAmount: Number(prefs.quickAmount) || 0.1,
+    takeProfitPct: Number(prefs.takeProfitPct) || 0,
+    stopLossPct: Number(prefs.stopLossPct) || 0,
+    slippagePct: (Number(prefs.slippageBps) || 0) / 100,
+    expiresAt: Number(payload.exp) || 0,
+    chartUrl: xDmTokenUrl(payload.mint),
+    terminalUrl: `https://www.slimewire.org/terminal/chart?token=${encodeURIComponent(payload.mint)}&source=x-dm-menu`,
+    fullScanUrl: `https://www.slimewire.org/t?ca=${encodeURIComponent(payload.mint)}&source=x-dm-menu`
+  };
+  const action = String(body.action || "view").trim().toLowerCase();
+  if (!action || action === "view") return { ok: true, menu };
+  if (!menu.isSolana) xDmMenuFail("Trading from X is Solana-only right now. Scan and chart still work.", 400);
+  if (action !== "prepare_buy" && action !== "prepare_sell") xDmMenuFail("Unsupported Trade Pad action.", 400);
+
+  return await LockService.withLock(`x-dm-menu:${payload.senderId}`, 10_000, async () => {
+    const freshState = await readXDmState();
+    xDmPruneState(freshState);
+    const freshLink = freshState.links[payload.senderId];
+    if (!freshLink || String(freshLink.userId) !== payload.userId) {
+      xDmMenuFail("This X account is no longer linked. Run /xlink in Telegram again.", 401);
+    }
+    if (freshState.pending[payload.senderId]) {
+      xDmMenuFail("A trade confirmation is already waiting in X. Reply YES or NO there before staging another order.", 409);
+    }
+    let rec;
+    if (action === "prepare_buy") {
+      const amountSol = validateXDmBuyAmount(body.amountSol);
+      if (amountSol === null) {
+        xDmMenuFail(`Buy amount must be ${X_DM_BUY_LIMITS.minSol}-${X_DM_BUY_LIMITS.maxSol} SOL.`);
+      }
+      rec = { action: "buy", userId: payload.userId, amountSol, mint: payload.mint, source: "x-dm-menu" };
+    } else {
+      const percent = Number(body.percent);
+      if (!X_DM_SELL_PERCENTAGES.includes(percent)) xDmMenuFail("Sell amount must be 25%, 50%, 75%, or 100%.");
+      rec = { action: "sell", userId: payload.userId, percent, mint: payload.mint, source: "x-dm-menu" };
+    }
+    xDmStartPending(freshState, payload.senderId, rec);
+    await writeXDmState(freshState);
+    const sent = await xDmSend(payload.senderId, [
+      "Trade Pad request staged — nothing has traded yet.",
+      "",
+      xDmTradeConfirmText(rec, payload.slot)
+    ].join("\n"), freshState);
+    if (!sent?.ok) {
+      if (freshState.pending[payload.senderId]?.id === rec.id) delete freshState.pending[payload.senderId];
+      await writeXDmState(freshState);
+      xDmMenuFail("I could not send the confirmation to X. No trade ran; reopen the menu and try again.", 502);
+    }
+    await audit("x_dm_menu_trade_staged", {
+      userId: payload.userId,
+      action: rec.action,
+      tokenMint: payload.mint,
+      amountSol: rec.amountSol || null,
+      percent: rec.percent || null,
+      confirmId: rec.id
+    }).catch(() => {});
+    return {
+      ok: true,
+      staged: true,
+      menu,
+      confirmId: rec.id,
+      message: "Confirmation sent to your X DM. Reply YES to send or NO to cancel. Nothing has traded yet."
+    };
+  }, () => xDmMenuFail("Another Trade Pad request is already being staged. Wait a moment and try again.", 409));
+}
 function xDmStartPending(state, senderId, payload) {
   const id = crypto.randomBytes(3).toString("hex").toUpperCase();
-  state.pending[String(senderId)] = { ...payload, id, expiresAt: Date.now() + 2 * 60_000 };
-  return id;
+  // Use the server staging time, not the initiating event time. That prevents
+  // an old queued BUY + YES pair from self-executing after a poll outage.
+  payload.createdAt = Date.now();
+  payload.id = id;
+  payload.expiresAt = payload.createdAt + 2 * 60_000;
+  state.pending[String(senderId)] = { ...payload };
+  return state.pending[String(senderId)];
 }
-async function xDmConfirmPending(state, senderId, raw) {
+async function xDmConfirmPending(state, senderId, raw, event = null) {
   const rec = state.pending[String(senderId)];
   if (!rec) return null;
   const text = String(raw || "").trim();
-  const code = (text.match(/\bconfirm\s+([a-f0-9]{6})\b/i) || [])[1]?.toUpperCase();
-  if (/^(no|n|cancel|stop)$/i.test(text)) {
+  if (!Number.isFinite(Number(rec.expiresAt)) || Number(rec.expiresAt) <= Date.now()) {
+    delete state.pending[String(senderId)];
+    return { expired: true, rec };
+  }
+  const currentLink = state.links[String(senderId)];
+  if (!currentLink || String(currentLink.userId) !== String(rec.userId)) {
+    delete state.pending[String(senderId)];
+    return { invalidLink: true, rec };
+  }
+  const code = (text.match(/^(?:yes|y|confirm)\s+([a-f0-9]{6})$/i) || [])[1]?.toUpperCase();
+  const bareApproval = /^(yes|y|confirm)$/i.test(text);
+  const cancellation = /^(no|n|cancel|stop)$/i.test(text);
+  const confirmationLike = bareApproval || cancellation || Boolean(code);
+  const eventAt = confirmationLike ? xDmEventTimestampMs(event) : 0;
+  const pendingAt = Number(rec.createdAt) || 0;
+  if (confirmationLike && eventAt && pendingAt && eventAt < pendingAt) {
+    return { precedesPending: true, rec };
+  }
+  if (bareApproval && (!eventAt || !pendingAt)) {
+    return { requireCode: true, rec };
+  }
+  if (cancellation) {
     delete state.pending[String(senderId)];
     return { cancelled: true, rec };
   }
-  if (/^(yes|y|ok|confirm|send|ape)$/i.test(text) || (code && code === String(rec.id || "").toUpperCase())) {
+  if (bareApproval || (code && code === String(rec.id || "").toUpperCase())) {
     delete state.pending[String(senderId)];
     return rec;
   }
   return null;
 }
 async function xDmHandleTradeConfirm(senderId, rec, state) {
+  const currentLink = state.links[String(senderId)];
+  if (!currentLink || String(currentLink.userId) !== String(rec.userId)) {
+    return await xDmSend(senderId, "This trade was canceled because the linked SlimeWire account changed. Run /xlink in Telegram again.", state);
+  }
   const userId = rec.userId;
   if (rec.action === "buy") {
     const r = await tgExecuteQuickBuy(userId, rec.mint, rec.amountSol, { idempotencyParts: ["x-dm", rec.id] });
@@ -33835,7 +34017,7 @@ async function xDmHandleTradeConfirm(senderId, rec, state) {
     return await xDmSend(senderId, `Bought ${rec.amountSol} SOL of ${shortMint(rec.mint)}. Receipt + sell controls sent to Telegram.\n${xDmTokenUrl(rec.mint)}`, state);
   }
   if (rec.action === "sell") {
-    const r = await tgExecuteQuickSell(userId, rec.mint, rec.percent);
+    const r = await tgExecuteQuickSell(userId, rec.mint, rec.percent, { idempotencyKey: `x-dm:${rec.id}` });
     if (r.needWallet) return await xDmSend(senderId, "Create/fund a SlimeWire wallet first: open Telegram /start or https://www.slimewire.org/terminal?tab=wallets", state);
     if (!r.ok) return await xDmSend(senderId, `Sell did not land: ${r.why || "try again"}`, state);
     await tgQuickSellReceipt(userId, rec.mint, r).catch(() => {});
@@ -33849,19 +34031,45 @@ async function xDmHandleEvent(event, state) {
   if (!senderId || (ownId && senderId === ownId)) return;
   const text = String(event.text || "").trim();
   if (!text) return;
+  if (isStaleXDmMoneyEvent(event, text)) {
+    console.log(`[xdm] ignored stale money event ${String(event.id || "unknown").slice(0, 40)}`);
+    return { ok: true, staleTrade: true };
+  }
   const lower = text.toLowerCase();
   const linked = state.links[senderId] || null;
   if (/^link\s+[a-f0-9]{6}\b/i.test(text)) {
     const code = (text.match(/^link\s+([a-f0-9]{6})\b/i) || [])[1].toUpperCase();
     const rec = state.codes[code];
     if (!rec || Number(rec.expiresAt || 0) < Date.now()) return await xDmSend(senderId, "That link code expired. Open Telegram and send /xlink for a fresh one.", state);
+    delete state.pending[senderId];
     state.links[senderId] = { userId: String(rec.userId), linkedAt: new Date().toISOString() };
     delete state.codes[code];
     return await xDmSend(senderId, "Linked.\n\n" + xDmHelpText(true, state, senderId), state);
   }
-  const pending = await xDmConfirmPending(state, senderId, text);
+  const pendingBefore = state.pending[senderId] || null;
+  const pending = await xDmConfirmPending(state, senderId, text, event);
   if (pending?.cancelled) return await xDmSend(senderId, "Canceled. No trade sent.", state);
-  if (pending) return await xDmHandleTradeConfirm(senderId, pending, state);
+  if (pending?.expired) return await xDmSend(senderId, "That trade confirmation expired. No trade was sent; stage it again if you still want it.", state);
+  if (pending?.invalidLink) return await xDmSend(senderId, "That trade was canceled because the linked SlimeWire account changed. Run /xlink in Telegram again.", state);
+  if (pending?.precedesPending) {
+    console.log(`[xdm] ignored confirmation ${String(event.id || "unknown").slice(0, 40)} that predates pending ${String(pending.rec?.id || "unknown")}`);
+    return await xDmSend(senderId, `That reply arrived before this confirmation was staged, so it was ignored. Reply YES ${pending.rec.id} now to confirm, or NO to cancel.`, state);
+  }
+  if (pending?.requireCode) return await xDmSend(senderId, `For safety, reply YES ${pending.rec.id} to confirm this trade, or NO to cancel.`, state);
+  if (pending) {
+    // Persist the consumed confirmation before touching money. If the process
+    // restarts during execution, this DM cannot replay the same sell.
+    await writeXDmState(state);
+    return await xDmHandleTradeConfirm(senderId, pending, state);
+  }
+  if (pendingBefore) {
+    return await xDmSend(senderId, [
+      "A trade is waiting for confirmation.",
+      "Only YES, YES <confirm ID>, or NO is accepted until it expires.",
+      "",
+      xDmTradeConfirmText(pendingBefore)
+    ].join("\n"), state);
+  }
   if (/^(help|menu|start)\b/i.test(lower)) return await xDmSend(senderId, xDmHelpText(Boolean(linked), state, senderId), state);
   const intent = xIntentFromText(text);
   const explicitScan = /^(scan|chart|rug|safe|map)\b/i.test(lower);
@@ -33880,7 +34088,9 @@ async function xDmHandleEvent(event, state) {
     const body = reply?.text || `Scanned ${shortMint(target)}`;
     const slots = xDmTokenSlotsText(state, senderId, Boolean(linked));
     const saveLine = targetList.length > 1 ? `Saved ${targetList.length} new coin slots. Scanned #1.` : "Saved coin slot #1.";
-    return await xDmSend(senderId, `${saveLine}\n\n${body}\n${xDmTokenUrl(target)}${slots ? `\n\n${slots}` : ""}\n\n${xDmActionHints(state, senderId, Boolean(linked))}`, state);
+    const menuUrl = linked ? xDmMenuUrl(state, senderId, target, 1) : "";
+    const menuLine = menuUrl ? `\n\nOpen Trade Pad (real buttons):\n${menuUrl}` : "";
+    return await xDmSend(senderId, `${saveLine}\n\n${body}\n${xDmTokenUrl(target)}${menuLine}${slots ? `\n\n${slots}` : ""}\n\n${xDmActionHints(state, senderId, Boolean(linked))}`, state);
   }
   const slotOnly = text.match(/^([1-6])$/)?.[1];
   if (slotOnly) return await xDmSend(senderId, xDmSlotMenuText(state, senderId, slotOnly, Boolean(linked)), state);
@@ -33895,6 +34105,9 @@ async function xDmHandleEvent(event, state) {
   if (/^set\b/i.test(lower)) {
     const edit = xDmParseSet(text);
     if (!edit) return await xDmSend(senderId, "Try: set amount 0.1 / set tp 25 / set sl 8 / set slippage 5", state);
+    if (edit.kind === "amount" && validateXDmBuyAmount(edit.value) === null) {
+      return await xDmSend(senderId, `X DM buy amounts must be ${X_DM_BUY_LIMITS.minSol}-${X_DM_BUY_LIMITS.maxSol} SOL.`, state);
+    }
     await setBuyPref(userId, edit.kind, edit.value);
     return await xDmSend(senderId, "Saved.\n\n" + await xDmFormatSettings(userId), state);
   }
@@ -33904,43 +34117,56 @@ async function xDmHandleEvent(event, state) {
     if (!target) return await xDmSend(senderId, "That coin slot is empty. Paste one or more CAs first.", state);
     const kind = targetIntent[1].toLowerCase();
     const reply = await buildXReply(target, kind === "chart" ? "chart" : kind === "map" ? "map" : kind === "rug" || kind === "safe" ? "rug" : intent, event.id).catch(() => null);
-    return await xDmSend(senderId, `${reply?.text || `Scanned ${shortMint(target)}`}\n${xDmTokenUrl(target)}\n\n${xDmActionHints(state, senderId, true)}`, state);
+    const menuUrl = xDmMenuUrl(state, senderId, target, targetIntent[2]);
+    return await xDmSend(senderId, `${reply?.text || `Scanned ${shortMint(target)}`}\n${xDmTokenUrl(target)}${menuUrl ? `\n\nOpen Trade Pad (real buttons):\n${menuUrl}` : ""}\n\n${xDmActionHints(state, senderId, true)}`, state);
   }
-  const buySlot = text.match(/^(?:buy|ape)\s+(?:(\d*\.?\d+)\s+)?([1-6])(?:\s+(\d*\.?\d+))?$/i);
+  const buySlot = parseXDmBuySlotCommand(text);
   if (buySlot) {
-    const mint = xDmResolveRecentTarget(state, senderId, buySlot[2]);
+    if (buySlot.error) return await xDmSend(senderId, buySlot.error, state);
+    const mint = xDmResolveRecentTarget(state, senderId, buySlot.slot);
     if (!mint) return await xDmSend(senderId, "That coin slot is empty. Paste one or more CAs first.", state);
+    if (!xDmTradeSupportedMint(mint)) return await xDmSend(senderId, "X DM trading is Solana-only right now. This contract can still be scanned and charted.", state);
     const prefs = userBuyPrefs(await readBuyPrefs(), userId);
-    const amountSol = Math.max(0.001, Math.min(50, Number(buySlot[1] || buySlot[3] || prefs.quickAmount) || prefs.quickAmount || 0.1));
+    const amountSol = validateXDmBuyAmount(buySlot.amountSol ?? prefs.quickAmount);
+    if (amountSol === null) return await xDmSend(senderId, `X DM buy amounts must be ${X_DM_BUY_LIMITS.minSol}-${X_DM_BUY_LIMITS.maxSol} SOL. Update with: set amount 0.1`, state);
     const rec = { action: "buy", userId, amountSol, mint };
     xDmStartPending(state, senderId, rec);
-    return await xDmSend(senderId, xDmTradeConfirmText(rec, buySlot[2]), state);
+    return await xDmSend(senderId, xDmTradeConfirmText(rec, buySlot.slot), state);
   }
   const buyLast = text.match(/^(?:buy|ape)$/i);
   if (buyLast) {
     const mint = xDmRecentTargets(state, senderId)[0] || "";
     if (!mint) return await xDmSend(senderId, "Paste a CA first, then say buy or buy 1.", state);
+    if (!xDmTradeSupportedMint(mint)) return await xDmSend(senderId, "X DM trading is Solana-only right now. This contract can still be scanned and charted.", state);
     const prefs = userBuyPrefs(await readBuyPrefs(), userId);
-    const rec = { action: "buy", userId, amountSol: prefs.quickAmount, mint };
+    const amountSol = validateXDmBuyAmount(prefs.quickAmount);
+    if (amountSol === null) return await xDmSend(senderId, `X DM buy amounts must be ${X_DM_BUY_LIMITS.minSol}-${X_DM_BUY_LIMITS.maxSol} SOL. Update with: set amount 0.1`, state);
+    const rec = { action: "buy", userId, amountSol, mint };
     xDmStartPending(state, senderId, rec);
     return await xDmSend(senderId, xDmTradeConfirmText(rec), state);
+  }
+  const invalidBareBuySlot = text.match(/^(?:buy|ape)\s+([0-9]+)$/i);
+  if (invalidBareBuySlot) {
+    return await xDmSend(senderId, "Coin slots are 1-6. To buy an integer SOL amount of the latest coin, include SOL (for example: buy 7 SOL).", state);
   }
   const buyAmountLast = text.match(/^(?:buy|ape)\s+([0-9]*\.[0-9]+|[0-9]+(?:\.[0-9]+)?)\s*(?:sol)?$/i);
   if (buyAmountLast && !/^(?:buy|ape)\s+[1-6]$/i.test(text)) {
     const mint = xDmRecentTargets(state, senderId)[0] || "";
     if (!mint) return await xDmSend(senderId, "Paste a CA first, then say buy 0.1 or buy 1 0.1.", state);
-    const amountSol = Math.max(0.001, Math.min(50, Number(buyAmountLast[1]) || 0.1));
+    if (!xDmTradeSupportedMint(mint)) return await xDmSend(senderId, "X DM trading is Solana-only right now. This contract can still be scanned and charted.", state);
+    const amountSol = validateXDmBuyAmount(buyAmountLast[1]);
+    if (amountSol === null) return await xDmSend(senderId, `Buy amount must be ${X_DM_BUY_LIMITS.minSol}-${X_DM_BUY_LIMITS.maxSol} SOL.`, state);
     const rec = { action: "buy", userId, amountSol, mint };
     xDmStartPending(state, senderId, rec);
     return await xDmSend(senderId, xDmTradeConfirmText(rec), state);
   }
-  const sellSlot = text.match(/^sell\s+([1-6])\s+(25|50|75|100)%?$/i) || text.match(/^sell\s+(25|50|75|100)%?\s+([1-6])$/i);
+  const sellSlot = parseXDmSellSlotCommand(text);
   if (sellSlot) {
-    const slot = sellSlot[2] && Number(sellSlot[2]) <= 6 ? sellSlot[2] : sellSlot[1];
-    const pct = sellSlot[2] && Number(sellSlot[2]) <= 6 ? sellSlot[1] : sellSlot[2];
+    const slot = sellSlot.slot;
     const mint = xDmResolveRecentTarget(state, senderId, slot);
     if (!mint) return await xDmSend(senderId, "That coin slot is empty. Paste one or more CAs first.", state);
-    const percent = Number(pct);
+    if (!xDmTradeSupportedMint(mint)) return await xDmSend(senderId, "X DM trading is Solana-only right now. This contract can still be scanned and charted.", state);
+    const percent = sellSlot.percent;
     const rec = { action: "sell", userId, percent, mint };
     xDmStartPending(state, senderId, rec);
     return await xDmSend(senderId, xDmTradeConfirmText(rec, slot), state);
@@ -33949,6 +34175,7 @@ async function xDmHandleEvent(event, state) {
   if (sellLastPct) {
     const mint = xDmRecentTargets(state, senderId)[0] || "";
     if (!mint) return await xDmSend(senderId, "Paste a CA first, then use sell 50 or sell 1 50.", state);
+    if (!xDmTradeSupportedMint(mint)) return await xDmSend(senderId, "X DM trading is Solana-only right now. This contract can still be scanned and charted.", state);
     const percent = Number(sellLastPct[1]);
     const rec = { action: "sell", userId, percent, mint };
     xDmStartPending(state, senderId, rec);
@@ -33956,8 +34183,10 @@ async function xDmHandleEvent(event, state) {
   }
   const buyMatch = text.match(/\bbuy\s+([0-9]*\.?[0-9]+)\s+(?:sol\s+)?([1-9A-HJ-NP-Za-km-z]{32,48}|0x[0-9a-fA-F]{40})/i);
   if (buyMatch) {
-    const amountSol = Math.max(0.001, Math.min(50, Number(buyMatch[1]) || 0));
+    const amountSol = validateXDmBuyAmount(buyMatch[1]);
+    if (amountSol === null) return await xDmSend(senderId, `Buy amount must be ${X_DM_BUY_LIMITS.minSol}-${X_DM_BUY_LIMITS.maxSol} SOL.`, state);
     const mint = buyMatch[2];
+    if (!xDmTradeSupportedMint(mint)) return await xDmSend(senderId, "X DM trading is Solana-only right now. This contract can still be scanned and charted.", state);
     xDmRememberTargets(state, senderId, [mint]);
     const rec = { action: "buy", userId, amountSol, mint };
     xDmStartPending(state, senderId, rec);
@@ -33967,6 +34196,7 @@ async function xDmHandleEvent(event, state) {
   if (sellMatch) {
     const percent = Number(sellMatch[1]);
     const mint = sellMatch[2];
+    if (!xDmTradeSupportedMint(mint)) return await xDmSend(senderId, "X DM trading is Solana-only right now. This contract can still be scanned and charted.", state);
     xDmRememberTargets(state, senderId, [mint]);
     const rec = { action: "sell", userId, percent, mint };
     xDmStartPending(state, senderId, rec);
@@ -33989,16 +34219,34 @@ async function xDmPollTick() {
     const events = await xDmFetchEvents({ maxResults: Number(process.env.X_DM_FETCH_LIMIT || 50) });
     events.sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
     let handled = 0;
+    let failed = 0;
     for (const event of events) {
       if (state.seen[event.id] || state.ignored[event.id]) continue;
-      state.seen[event.id] = Date.now();
-      await xDmHandleEvent(event, state).catch((e) => console.log(`[xdm] event ${event.id} failed: ${String(e?.message || e).slice(0, 120)}`));
-      handled++;
+      const previousFailure = state.failures[event.id];
+      if (Number(previousFailure?.nextRetryAt || 0) > Date.now()) continue;
+      try {
+        const result = await xDmHandleEvent(event, state);
+        if (result?.ok === false) throw new Error(result.error || result.reason || "X DM reply failed");
+        state.seen[event.id] = Date.now();
+        delete state.failures[event.id];
+        handled++;
+      } catch (error) {
+        const attempts = Math.max(0, Number(previousFailure?.attempts || 0)) + 1;
+        const retryMs = Math.min(5 * 60_000, 15_000 * (2 ** Math.min(5, attempts - 1)));
+        state.failures[event.id] = {
+          attempts,
+          lastAt: Date.now(),
+          nextRetryAt: Date.now() + retryMs,
+          error: String(error?.message || error).slice(0, 160)
+        };
+        failed++;
+        console.log(`[xdm] event ${event.id} failed (attempt ${attempts}, retry ${Math.ceil(retryMs / 1000)}s): ${String(error?.message || error).slice(0, 120)}`);
+      }
       await writeXDmState(state);
     }
     if (handled) console.log(`[xdm] handled ${handled} DM event(s)`);
     await writeXDmState(state);
-    return { checked: events.length, handled };
+    return { checked: events.length, handled, failed };
   } catch (e) {
     console.log(`[xdm] poll failed: ${String(e?.message || e).slice(0, 160)}`);
     return { error: String(e?.message || e).slice(0, 160) };
@@ -34010,15 +34258,21 @@ async function handleXDmStatusCommand(chatId, message, userId) {
   if (!isPrivateChat(message.chat)) { await say(chatId, "Open the bot in DM to manage X DM terminal."); return true; }
   const state = await readXDmState();
   const linked = Object.values(state.links || {}).filter((link) => String(link.userId) === String(userId)).length;
+  const authMode = xDmAuthMode();
+  const authNote = authMode === "official-oauth2"
+    ? "Official DM API is active. The token needs dm.read + dm.write + users.read scopes."
+    : authMode === "cookies"
+      ? "Compatibility mode is active. Move to official OAuth for the most durable DM delivery."
+      : "Set X_DM_OAUTH2_TOKEN on Render to turn on official X DMs.";
   await sayHtml(chatId, [
     "🐦 <b>X DM Terminal</b>",
     `Enabled: <b>${xDmTerminalEnabled() ? "ON" : "off"}</b>`,
-    `Auth: <b>${escapeTelegramHtml(xDmAuthMode())}</b>`,
+    `Auth: <b>${escapeTelegramHtml(authMode)}</b>`,
     `Your linked X sender(s): <b>${linked}</b>`,
     "",
     "User flow: <code>/xlink</code> → DM <code>link CODE</code> to X → use <code>help</code> in X DM.",
     "",
-    xDmConfigured() ? "If DMs are not moving, confirm X_DM_ENABLED=true and the token has dm.read + dm.write scopes." : "Set X_DM_OAUTH2_TOKEN on Render to turn on official X DMs."
+    authNote
   ].join("\n"));
   return true;
 }
@@ -37787,7 +38041,7 @@ async function applyTgQuickBuyInput(message, userId) {
 // ⚡ In-DM one-tap SELL — sells `pct`% of a mint across ALL the user's SlimeWire wallets that hold it,
 // straight from Telegram (no site redirect). Mirrors tgExecuteQuickBuy: own wallets, own pre-authorized
 // action, idempotent per 15s bucket so a double-tap can't double-sell. Advisory nothing — the user tapped.
-async function tgExecuteQuickSell(userId, mint, pct) {
+async function tgExecuteQuickSell(userId, mint, pct, { idempotencyKey = "" } = {}) {
   try {
     const st = await readState().catch(() => null);
     if (st && st.paused) return { ok: false, why: "trading is paused right now" };
@@ -37810,7 +38064,9 @@ async function tgExecuteQuickSell(userId, mint, pct) {
     }
     let soldLamports = 0n, ok = 0, fails = 0;
     for (const w of holders) {
-      const attemptId = `${mint}:${pct}:${w.publicKey}:${Math.floor(Date.now() / 15000)}`;
+      const attemptId = idempotencyKey
+        ? `${idempotencyKey}:${mint}:${pct}:${w.publicKey}`
+        : `${mint}:${pct}:${w.publicKey}:${Math.floor(Date.now() / 15000)}`;
       try {
         const r = await runIdempotentMoneyOp("tg-quick-sell", userId, attemptId,
           () => sellTokenFromWallet(w, mint, pct, slippageBps, { userId, priority: true }));
@@ -40534,8 +40790,13 @@ function startGroupBuyBot() {
   const xPollMs = Math.max(15_000, Number(process.env.X_REPLY_POLL_MS || 30_000));
   setTimeout(() => { void xReplyPollTick(); }, 10_000);
   setInterval(() => { void xReplyPollTick(); }, xPollMs);
-  // 🐦💬 X DM terminal — official X DM API, dark until X_DM_OAUTH2_TOKEN (+ dm.read/dm.write scopes) exists.
-  const xDmPollMs = Math.max(15_000, Number(process.env.X_DM_POLL_MS || 30_000));
+  // 🐦💬 X DM terminal. Official DM reads are limited to 15 requests / 15 min,
+  // so OAuth mode stays above one minute. Cookie compatibility keeps its old
+  // cadence until the Activity webhook/XChat transport replaces polling.
+  const xDmOfficial = xDmAuthMode() === "official-oauth2";
+  const xDmPollDefaultMs = xDmOfficial ? 65_000 : 30_000;
+  const xDmPollMinMs = xDmOfficial ? 65_000 : 15_000;
+  const xDmPollMs = Math.max(xDmPollMinMs, Number(process.env.X_DM_POLL_MS || xDmPollDefaultMs));
   setTimeout(() => { void xDmPollTick(); }, 15_000);
   setInterval(() => { void xDmPollTick(); }, xDmPollMs);
   // 🐦🔥 X GROWTH ENGINE tickers — all internally gated by XBOT_BROADCAST + per-feature flags (default OFF),

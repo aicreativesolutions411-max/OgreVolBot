@@ -23,9 +23,17 @@ export function xDmAuthMode() {
   return dmToken() ? "official-oauth2" : xCookieDmConfigured() ? "cookies" : "none";
 }
 
+let ownUserCache = { id: "", at: 0 };
 export async function xDmOwnUserId() {
   const envId = clean(process.env.X_DM_OWN_USER_ID || "");
   if (envId) return envId;
+  if (dmToken()) {
+    if (ownUserCache.id && Date.now() - ownUserCache.at < 60 * 60_000) return ownUserCache.id;
+    const json = await xDmRequest("/users/me", { method: "GET" });
+    const id = clean(json?.data?.id || "");
+    if (id) ownUserCache = { id, at: Date.now() };
+    return id;
+  }
   return await xCookieDmOwnUserId().catch(() => "");
 }
 
