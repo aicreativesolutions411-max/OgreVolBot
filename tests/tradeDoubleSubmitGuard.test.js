@@ -944,7 +944,7 @@ test("KOL Call Feed watches public sources, is admin-selected, deduped, and post
   assert.match(forward, /handleTelegramLookCommand\(targetChatId, post, mint, \{ skipCooldown: true, contextHtml \}\)/);
   const textPost = functionBody(serverSource, "sendKolTextPostToTarget");
   assert.match(textPost, /KOL Post:/);
-  assert.match(textPost, /No CA, coin link or \$ticker/);
+  assert.doesNotMatch(textPost, /No CA, coin link or \$ticker/);
   assert.match(textPost, /kolCallDeliveryGuard/);
   const targets = functionBody(serverSource, "kolCallPostTargets");
   assert.match(targets, /resolveExplicitScanTargetsFromText/);

@@ -42713,7 +42713,6 @@ async function sendKolTextPostToTarget(targetChatId, source, post) {
   await sayHtml(targetChatId, [
     sourceLine,
     excerpt ? `<blockquote>${escapeTelegramHtml(excerpt)}</blockquote>` : "",
-    "<i>No CA, coin link or $ticker was identifiable, so no scan was attached.</i>",
   ].filter(Boolean).join("\n")).catch(() => {});
   return true;
 }
