@@ -4988,7 +4988,9 @@ function loadConfig() {
   }
 
   const feeWallet = process.env.FEE_WALLET || "AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV";
-  const bundleFeeBps = Number.parseInt(process.env.TRADE_FEE_BPS || process.env.BUNDLE_FEE_BPS || "65", 10);
+  // Spot platform fee — owner's PvP fee breakdown (2026-07-10): SPOT 0.5% per execution (50 bps).
+  // TRADE_FEE_BPS on Render still overrides; the default changed 65 → 50 to match the published pricing.
+  const bundleFeeBps = Number.parseInt(process.env.TRADE_FEE_BPS || process.env.BUNDLE_FEE_BPS || "50", 10);
   const referralFeeBps = Number.parseInt(process.env.REFERRAL_FEE_BPS || "15", 10);
   // Connected-wallet (Phantom/Solflare) trade fee via Jupiter's referral fee,
   // embedded in the swap the user signs. OFF until BOTH are configured:
@@ -43003,6 +43005,40 @@ async function applyCopyCfgInput(message, userId) {
 // SAME derived EVM wallet as Robinhood Chain, funded by USDC on Arbitrum. Feature key: "pvp" (off by default).
 const pvpPerpCfg = new Map();        // userId -> { asset, side, lev, usd, at }
 const pvpPerpPending = new Map();    // userId -> { at } (custom $ size typed next)
+// 💸 PvP fee model (owner): FUTURES 0.05% per execution (open AND close), SPOT 0.5% per execution
+// (spot rides the standard platform fee — CONFIG.bundleFeeBps — taken on every buy/sell already),
+// subscription FREE. The perp fee is auto-CONVERTED to SOL at the live price and sent from the user's
+// custodial SOL wallet to the FEE WALLET on each execution. Best-effort: a fee transfer that can't land
+// (no SOL for rent/fee) never blocks or reverses the trade — it's logged + audited instead.
+const PVP_PERP_FEE_BPS = Math.max(0, Number.parseInt(process.env.PVP_PERP_FEE_BPS || "5", 10));   // 5 bps = 0.05%
+function pvpPerpFeePctLabel() { return (PVP_PERP_FEE_BPS / 100).toFixed(2).replace(/0+$/, "").replace(/\.$/, ""); }
+function pvpSpotFeePctLabel() { return ((CONFIG.bundleFeeBps || 0) / 100).toFixed(2).replace(/0+$/, "").replace(/\.$/, ""); }
+async function pvpChargePerpFeeSol(userId, notionalUsd, label = "perp") {
+  try {
+    if (!(PVP_PERP_FEE_BPS > 0) || !CONFIG.feeWallet) return null;
+    const feeUsd = (Number(notionalUsd) || 0) * PVP_PERP_FEE_BPS / 10_000;
+    const solUsd = (await getSolUsdPrice().catch(() => 0)) || 0;
+    if (!(feeUsd > 0) || !(solUsd > 0)) return null;
+    const lamports = Math.round((feeUsd / solUsd) * 1e9);
+    if (lamports < 5_000) return null;                      // dust — cheaper to skip than to pay tx fees on it
+    const wallets = walletsForOwner(await readWalletStore(), userId);
+    if (!wallets.length) return null;
+    const keypair = decryptWallet(wallets[0]);
+    const tx = new Transaction().add(SystemProgram.transfer({
+      fromPubkey: keypair.publicKey,
+      toPubkey: new PublicKey(CONFIG.feeWallet),
+      lamports,
+    }));
+    const signature = await sendLegacyTransaction(tx, [keypair]);
+    invalidateWalletReadCache(wallets[0].publicKey);
+    await audit("pvp_perp_fee", { userId, label, notionalUsd: Number(notionalUsd) || 0, feeUsd, lamports, signature }).catch(() => {});
+    return { lamports, feeUsd, signature };
+  } catch (error) {
+    console.warn(`[pvp] perp fee (${label}) skipped for ${userId}: ${String(error?.message || error).slice(0, 120)}`);
+    await audit("pvp_perp_fee_skipped", { userId, label, notionalUsd: Number(notionalUsd) || 0, error: String(error?.message || error).slice(0, 160) }).catch(() => {});
+    return null;
+  }
+}
 const _pvpFeedSeen = new Map();      // `${chatId}:${sig}` -> at (broadcast dedup)
 function pvpMembers(entry) { return (entry && entry.pvp && entry.pvp.members) || {}; }
 async function pvpSetMember(chatId, userId, name, on) {
@@ -43028,6 +43064,8 @@ function pvpArenaView(entry, chatId) {
     `⚔️ In the arena: <b>${Object.keys(members).length}</b>${names.length ? ` — ${names.join(", ")}` : ""}`,
     "",
     "How it works: Join → trade normally from your own SlimeWire wallet (paste a CA, ⚡ quick buy, copy trade…) → the room sees your entries live and can copy or fade you. Skill talks, PnL walks — settle it on the 🏆 board.",
+    "",
+    `💸 <b>Fees</b>: futures <b>${pvpPerpFeePctLabel()}%</b> per execution · spot <b>${pvpSpotFeePctLabel()}%</b> per execution · <b>free</b> to use, no subscription.`,
   ].join("\n");
   const kb = { inline_keyboard: [
     [{ text: "⚔️ Join the arena", callback_data: "pvp:join" }, { text: "🚪 Leave", callback_data: "pvp:leave" }],
@@ -43103,6 +43141,7 @@ async function pvpPerpsView(userId) {
     lines.push("", `⚠️ <b>No margin yet.</b> Deposit <b>USDC on Arbitrum</b> to your trading address and Hyperliquid credits it:\n<code>${evm.address}</code>`);
   }
   lines.push("", `🎯 Order: <b>${cfg.side === "long" ? "🟢 LONG" : "🔴 SHORT"} ${cfg.asset}</b> · size <b>$${cfg.usd}</b> · <b>${cfg.lev}x</b> (margin ≈ $${(cfg.usd / cfg.lev).toFixed(2)})`);
+  lines.push(`💸 Fee: <b>${pvpPerpFeePctLabel()}%</b> per execution, auto-converted to SOL.`);
   const pick = (cur, val, label, cb) => ({ text: `${String(cur) === String(val) ? "✅ " : ""}${label}`, callback_data: cb });
   const kb = { inline_keyboard: [
     HL_PVP_ASSETS.map((a) => pick(cfg.asset, a, a, `pvp:pa:${a}`)),
@@ -43179,10 +43218,12 @@ async function handlePvpCallback(query, userId) {
       if (!wallets.length) throw new Error("Create a wallet first (/wallets).");
       const evm = evmWalletFromSolana(decryptWallet(wallets[0]).secretKey);
       const r = await hlMarketOpen({ privateKey: evm.privateKey, coin: cfg.asset, isBuy: cfg.side === "long", notionalUsd: cfg.usd, leverage: cfg.lev });
+      const fee = await pvpChargePerpFeeSol(userId, r.notionalUsd, "open");
       await sayHtml(userId, [
         `✅ <b>${r.isBuy ? "🟢 LONG" : "🔴 SHORT"} ${escapeTelegramHtml(r.coin)}</b> opened`,
         `├ Size <b>${r.size} ${escapeTelegramHtml(r.coin)}</b> ($${r.notionalUsd.toFixed(2)}) @ <b>${r.avgPx}</b>`,
-        `└ Leverage <b>${r.leverage}x</b>`,
+        `├ Leverage <b>${r.leverage}x</b>`,
+        `└ Fee ${fee ? `<b>${(fee.lamports / 1e9).toFixed(6)} ◎</b> (${pvpPerpFeePctLabel()}%)` : `${pvpPerpFeePctLabel()}% (deferred)`}`,
       ].join("\n")).catch(() => {});
       await pvpRenderPerps(userId, messageId);
     } catch (error) { await ack(friendlyError(error), true); }
@@ -43196,7 +43237,8 @@ async function handlePvpCallback(query, userId) {
       if (!wallets.length) throw new Error("No wallet.");
       const evm = evmWalletFromSolana(decryptWallet(wallets[0]).secretKey);
       const r = await hlMarketClose({ privateKey: evm.privateKey, address: evm.address, coin: mPc[1] });
-      await sayHtml(userId, `✅ Closed <b>${r.wasLong ? "LONG" : "SHORT"} ${escapeTelegramHtml(r.coin)}</b> (${r.closedSize} @ ${r.avgPx}) · uPnL at close ${r.unrealizedPnl >= 0 ? "🟢 +" : "🔴 −"}$${Math.abs(r.unrealizedPnl).toFixed(2)}`).catch(() => {});
+      const closeFee = await pvpChargePerpFeeSol(userId, (Number(r.closedSize) || 0) * (Number(r.avgPx) || 0), "close");
+      await sayHtml(userId, `✅ Closed <b>${r.wasLong ? "LONG" : "SHORT"} ${escapeTelegramHtml(r.coin)}</b> (${r.closedSize} @ ${r.avgPx}) · uPnL at close ${r.unrealizedPnl >= 0 ? "🟢 +" : "🔴 −"}$${Math.abs(r.unrealizedPnl).toFixed(2)}${closeFee ? ` · fee ${(closeFee.lamports / 1e9).toFixed(6)} ◎` : ""}`).catch(() => {});
       await pvpRenderPerps(userId, messageId);
     } catch (error) { await ack(friendlyError(error), true); }
     return true;
