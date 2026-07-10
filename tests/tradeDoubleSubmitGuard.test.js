@@ -1094,7 +1094,8 @@ test("⚡ Quick Buy (preset) + ⚙️ in-group Preset editor: buy your preset + 
   assert.match(setp, /kind === "sl"/);
   // Quick Buy preset: buys the tapper's amount then arms their TP/SL via the site auto-exit engine.
   const exec = functionBody(serverSource, "tgExecuteQuickBuyPreset");
-  assert.match(exec, /tgExecuteQuickBuy\(userId, mint, prefs\.quickAmount/);
+  assert.match(exec, /amountSol = .*prefs\.quickAmount/);
+  assert.match(exec, /tgExecuteQuickBuy\(userId, mint, amountSol/);
   assert.match(exec, /idempotencyParts/);
   assert.match(exec, /webCreateSingleTradeAutoExitPlan\(userId, r\.wallet, mint/);
   // Routed: qbp: (buy) + pe: (editor) both dispatched.
@@ -2121,16 +2122,16 @@ test("X DM terminal: link from Telegram, scan/settings/buy/sell over official DM
   assert.match(serverSource, /function xDmResolveRecentTarget/);
   assert.match(serverSource, /function xDmSlotMenuText/);
   assert.match(serverSource, /function xDmTradeConfirmText/);
-  assert.match(serverSource, /Paste a CA or 0x contract\. Multiple CAs become coin slots\./);
-  assert.match(serverSource, /Coin actions:/);
+  assert.match(serverSource, /I return a chart and private Trade Pad\. Multiple CAs become coin slots\./);
+  assert.match(serverSource, /Fast X DM trading after setup:/);
   assert.match(serverSource, /Menu words: positions \| wallet \| settings/);
   assert.match(serverSource, /Coin slots:/);
   assert.match(serverSource, /chart 1 \| rug 1 \| map 1/);
-  assert.match(serverSource, /buy 1 \| buy 1 0\.1/);
-  assert.match(serverSource, /sell 1 50/);
+  assert.match(serverSource, /BUY 1 uses your saved amount and exit preset/);
+  assert.match(serverSource, /SELL 1 50 sells 50%/);
   assert.match(serverSource, /Saved \$\{targetList\.length\} new coin slots\. Scanned #1/);
-  assert.match(serverSource, /send 1 for tap menu/);
-  assert.match(serverSource, /Open Trade Pad \(real buttons\)/);
+  assert.match(serverSource, /Reply with a coin number for its chart, Trade Pad, and quick actions/);
+  assert.match(serverSource, /OPEN X TRADE PAD/);
   assert.match(serverSource, /\/x-dm-menu\?t=\$\{encodeURIComponent\(token\)\}/);
   assert.match(serverSource, /signXDmMenuToken\(CONFIG\.appSecret/);
   assert.match(serverSource, /verifyXDmMenuToken\(CONFIG\.appSecret/);
@@ -2169,7 +2170,7 @@ test("X DM terminal: link from Telegram, scan/settings/buy/sell over official DM
   assert.match(xDmHandler, /arrived before this confirmation was staged/);
   assert.match(xDmHandler, /delete state\.pending\[senderId\]/);
   assert.doesNotMatch(functionBody(serverSource, "xDmHelpText"), /bundle \/ volume \/ launch/);
-  assert.match(serverSource, /tgExecuteQuickBuy\(userId, rec\.mint, rec\.amountSol/);
+  assert.match(serverSource, /tgExecuteQuickBuyPreset\(userId, rec\.mint, \{ amountSol: rec\.amountSol/);
   assert.match(serverSource, /tgExecuteQuickSell\(userId, rec\.mint, rec\.percent, \{ idempotencyKey:/);
   assert.match(serverSource, /state\.seen\[event\.id\] = Date\.now\(\)/);
   assert.match(serverSource, /state\.failures\[event\.id\]/);

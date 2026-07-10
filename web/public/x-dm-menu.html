@@ -1575,7 +1575,9 @@
           fillPresetSelect(document.getElementById("bundlePreset"), "bundle", selectedBundlePresetId, true);
           fillPresetSelect(document.getElementById("copyPreset"), "trade", selectedTradePresetId, true);
           fillPresetSelect(document.getElementById("launchPreset"), "trade", selectedTradePresetId, true);
-          setStatus("Preset saved", "This setup will be ready in future Trade Pad sessions.", "", false);
+          setStatus("Preset saved", data.xQuickSynced
+            ? "Saved for future Trade Pads. X DM quick buys now use this amount, TP/SL, and slippage."
+            : "This setup will be ready in future Trade Pad sessions.", "", false);
         } catch (error) {
           setBusy(false);
           setStatus("Preset was not saved", friendlyError(error), "error", false);

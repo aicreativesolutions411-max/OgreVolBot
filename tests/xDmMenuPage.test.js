@@ -207,3 +207,18 @@ test("X Terminal can create a web-account link and open the X DM composer", () =
   assert.match(terminalPage, /localStorage\.getItem\("ogreWebToken"\)/);
   assert.match(terminalPage, /"Authorization":"Bearer "\+webToken/);
 });
+
+test("X DM uses short branded chart and Trade Pad redirects", () => {
+  const menuUrl = functionBody(server, "xDmMenuUrl");
+  const destination = functionBody(server, "xDmShortLinkDestination");
+  assert.match(menuUrl, /\/x\/\$\{id\}\/trade/);
+  assert.doesNotMatch(menuUrl, /x-dm-menu\?t=/);
+  assert.match(server, /\/\^\\\/x\\\/\(\[a-f0-9\]\{12\}\)\\\/\(chart\|trade\)\$\/i/);
+  assert.match(destination, /terminal\/chart\?token=/);
+  assert.match(destination, /x-dm-menu\?t=/);
+  assert.match(server, /OPEN CHART \+ BUY\/SELL PANEL/);
+  assert.match(server, /OPEN X TRADE PAD/);
+  assert.match(server, /BUY 1 uses your saved preset/);
+  assert.match(server, /xQuickSynced/);
+  assert.match(server, /tgExecuteQuickBuyPreset\(userId, rec\.mint/);
+});

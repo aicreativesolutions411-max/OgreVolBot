@@ -6616,6 +6616,17 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "x-solana-scan-replies.html");
       return;
     }
+    const xDmShortMatch = requestUrl.pathname.match(/^\/x\/([a-f0-9]{12})\/(chart|trade)$/i);
+    if ((request.method === "GET" || request.method === "HEAD") && xDmShortMatch) {
+      const destination = await xDmShortLinkDestination(xDmShortMatch[1], xDmShortMatch[2]);
+      response.writeHead(302, {
+        Location: destination,
+        "Cache-Control": "no-store, max-age=0",
+        ...webCorsHeaders(request)
+      });
+      response.end();
+      return;
+    }
     if (request.method === "GET" && requestUrl.pathname === "/x-terminal") {
       await serveStaticHtmlPage(response, "x-terminal.html");
       return;
@@ -34367,6 +34378,7 @@ async function readXDmState() {
   if (!s.failures || typeof s.failures !== "object") s.failures = {}; // event id -> retry/backoff metadata
   if (!s.menuSessions || typeof s.menuSessions !== "object") s.menuSessions = {}; // hashed scoped Trade Pad sessions
   if (!s.usedBootstraps || typeof s.usedBootstraps !== "object") s.usedBootstraps = {}; // one-time signed handoff nonces
+  if (!s.shortLinks || typeof s.shortLinks !== "object") s.shortLinks = {}; // short X-safe chart/Trade Pad redirects
   if (!s.executing || typeof s.executing !== "object") s.executing = {}; // xSenderId -> confirmed money action in flight
   if (!s.outbox || typeof s.outbox !== "object") s.outbox = {}; // durable trade receipts waiting for X delivery
   xDmStateCache = s; return s;
@@ -34386,7 +34398,7 @@ async function writeXDmState(s) {
   }
 }
 function xDmPruneState(s, now = Date.now()) {
-  const sizeBefore = [s.seen, s.ignored, s.codes, s.pending, s.contexts, s.failures, s.executing, s.outbox, s.menuSessions, s.usedBootstraps]
+  const sizeBefore = [s.seen, s.ignored, s.codes, s.pending, s.contexts, s.failures, s.executing, s.outbox, s.menuSessions, s.usedBootstraps, s.shortLinks]
     .reduce((sum, value) => sum + Object.keys(value || {}).length, 0);
   for (const [id, ts] of Object.entries(s.seen || {})) if (now - Number(ts || 0) > 3 * 86_400_000) delete s.seen[id];
   for (const [id, ts] of Object.entries(s.ignored || {})) if (now - Number(ts || 0) > 3 * 86_400_000) delete s.ignored[id];
@@ -34396,6 +34408,9 @@ function xDmPruneState(s, now = Date.now()) {
   for (const [id, rec] of Object.entries(s.failures || {})) if (now - Number(rec?.lastAt || 0) > 3 * 86_400_000) delete s.failures[id];
   for (const [sender, rec] of Object.entries(s.executing || {})) if (Number(rec?.expiresAt || 0) < now) delete s.executing[sender];
   for (const [id, rec] of Object.entries(s.usedBootstraps || {})) { const exp = (rec && typeof rec === "object") ? Number(rec.exp || 0) : Number(rec || 0); if (exp < now) delete s.usedBootstraps[id]; }  // handles both legacy number + {exp,count}
+  for (const [id, rec] of Object.entries(s.shortLinks || {})) if (!rec || Number(rec.expiresAt || 0) < now) delete s.shortLinks[id];
+  const shortLinkRows = Object.entries(s.shortLinks || {}).sort((a, b) => Number(a[1]?.expiresAt || 0) - Number(b[1]?.expiresAt || 0));
+  for (let i = 0; i < Math.max(0, shortLinkRows.length - 2_000); i++) delete s.shortLinks[shortLinkRows[i][0]];
   for (const [id, rec] of Object.entries(s.outbox || {})) {
     if (!rec || Number(rec.expiresAt || 0) < now || !String(rec.senderId || "") || !Array.isArray(rec.chunks)) delete s.outbox[id];
   }
@@ -34404,7 +34419,7 @@ function xDmPruneState(s, now = Date.now()) {
     const link = s.links?.[String(session?.senderId || "")];
     if (!link || String(link.userId) !== String(session?.userId || "")) delete s.menuSessions[hash];
   }
-  const sizeAfter = [s.seen, s.ignored, s.codes, s.pending, s.contexts, s.failures, s.executing, s.outbox, s.menuSessions, s.usedBootstraps]
+  const sizeAfter = [s.seen, s.ignored, s.codes, s.pending, s.contexts, s.failures, s.executing, s.outbox, s.menuSessions, s.usedBootstraps, s.shortLinks]
     .reduce((sum, value) => sum + Object.keys(value || {}).length, 0);
   return sizeAfter !== sizeBefore;
 }
@@ -34486,18 +34501,6 @@ function xDmResolveRecentTarget(state, senderId, value) {
   return xDmRecentTargets(state, senderId)[n - 1] || "";
 }
 const X_DM_MENU_TTL_MS = 24 * 60 * 60_000;
-function xDmMenuToken(state, senderId, mint, slot = "") {
-  const linked = state?.links?.[String(senderId)];
-  const cleanMint = String(mint || "").trim();
-  if (!linked?.userId || !cleanMint) return "";
-  return signXDmMenuToken(CONFIG.appSecret, {
-    senderId: String(senderId),
-    userId: String(linked.userId),
-    linkVersion: String(linked.linkedAt || ""),
-    mint: cleanMint,
-    slot: String(slot || "")
-  }, { ttlMs: X_DM_MENU_TTL_MS });
-}
 function readXDmMenuToken(token) {
   const payload = verifyXDmMenuToken(CONFIG.appSecret, token);
   if (!payload) return null;
@@ -34507,12 +34510,60 @@ function readXDmMenuToken(token) {
   return { ...payload, senderId: String(payload.senderId), userId: String(payload.userId), mint };
 }
 function xDmMenuUrl(state, senderId, mint, slot = "") {
-  const token = xDmMenuToken(state, senderId, mint, slot);
-  if (!token) return "";
-  const origin = String(CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/+$/, "");
-  // Keep the signed handoff on the canonical page. `/x-menu` is a lightweight
-  // query-preserving redirect for old links and bookmarks.
-  return `${origin}/x-dm-menu?t=${encodeURIComponent(token)}`;
+  const id = xDmCreateShortLink(state, senderId, mint, slot, true);
+  return id ? `${xDmPortalOrigin()}/x/${id}/trade` : "";
+}
+const X_DM_SHORT_LINK_TTL_MS = 20 * 60_000;
+function xDmPortalOrigin() {
+  return String(CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/+$/, "");
+}
+function xDmCreateShortLink(state, senderId, mint, slot = "", requireLinked = false) {
+  const cleanMint = String(mint || "").trim();
+  const sender = String(senderId || "");
+  const linked = state?.links?.[sender] || null;
+  if (!state || !sender || !cleanMint || (requireLinked && !linked?.userId)) return "";
+  if (!state.shortLinks || typeof state.shortLinks !== "object") state.shortLinks = {};
+  xDmPruneState(state);
+  let id = "";
+  for (let i = 0; i < 8; i++) {
+    id = crypto.randomBytes(6).toString("hex");
+    if (!state.shortLinks[id]) break;
+  }
+  state.shortLinks[id] = {
+    senderId: sender,
+    userId: String(linked?.userId || ""),
+    linkVersion: String(linked?.linkedAt || ""),
+    mint: cleanMint,
+    slot: String(slot || ""),
+    expiresAt: Date.now() + X_DM_SHORT_LINK_TTL_MS
+  };
+  return id;
+}
+function xDmShortChartUrl(state, senderId, mint, slot = "") {
+  const id = xDmCreateShortLink(state, senderId, mint, slot, false);
+  return id ? `${xDmPortalOrigin()}/x/${id}/chart` : xDmTokenUrl(mint);
+}
+async function xDmShortLinkDestination(id, action) {
+  const fallback = action === "chart" ? `${xDmPortalOrigin()}/terminal` : `${xDmPortalOrigin()}/x-dm-menu`;
+  const state = await readXDmState();
+  const changed = xDmPruneState(state);
+  const rec = state.shortLinks?.[String(id || "").toLowerCase()];
+  if (changed) await writeXDmState(state).catch(() => {});
+  if (!rec || Number(rec.expiresAt || 0) <= Date.now()) return fallback;
+  if (action === "chart") {
+    return `${xDmPortalOrigin()}/terminal/chart?token=${encodeURIComponent(rec.mint)}&source=x-dm`;
+  }
+  const linked = state.links?.[String(rec.senderId || "")];
+  if (!rec.userId || !linked || String(linked.userId) !== String(rec.userId) || String(linked.linkedAt || "") !== String(rec.linkVersion || "")) return fallback;
+  const ttlMs = Math.max(1_000, Math.min(X_DM_MENU_TTL_MS, Number(rec.expiresAt) - Date.now()));
+  const token = signXDmMenuToken(CONFIG.appSecret, {
+    senderId: String(rec.senderId),
+    userId: String(rec.userId),
+    linkVersion: String(rec.linkVersion),
+    mint: String(rec.mint),
+    slot: String(rec.slot || "")
+  }, { ttlMs });
+  return `${xDmPortalOrigin()}/x-dm-menu?t=${encodeURIComponent(token)}`;
 }
 function xDmTradeSupportedMint(mint) {
   return solanaPublicKeyLike(String(mint || "").trim());
@@ -34527,32 +34578,30 @@ function xDmTokenSlotsText(state, senderId, linked = false) {
       const trade = linked && xDmTradeSupportedMint(mint) ? ` | buy ${slot} | sell ${slot} 50` : "";
       return `${slot}. ${shortMint(mint)}\n   chart ${slot} | rug ${slot} | map ${slot}${trade}`;
     }),
-    linked ? "Reply with a coin number to open its tap menu." : ""
+    linked ? "Reply with a coin number for its chart, Trade Pad, and quick actions." : ""
   ].filter(Boolean).join("\n");
 }
 function xDmActionHints(state, senderId, linked = false) {
   const hasCoins = xDmRecentTargets(state, senderId).length > 0;
   if (!hasCoins) return "Next: paste one or more CAs.";
   return linked
-    ? "Actions: send 1 for tap menu | buy 1 | buy 1 0.1 | sell 1 50 | chart 1 | rug 1 | map 1"
-    : "Actions: chart 1 | rug 1 | map 1. Link in Telegram to buy/sell.";
+    ? "DM shortcuts: BUY 1 uses your saved preset | SELL 1 50 sells 50% | SETTINGS | POSITIONS"
+    : "Research: chart 1 | rug 1 | map 1. Connect X trading on slimewire.org/x-terminal.";
 }
 function xDmSlotMenuText(state, senderId, slot, linked = false) {
   const mint = xDmResolveRecentTarget(state, senderId, slot);
   if (!mint) return "That coin slot is empty. Paste one or more CAs first.";
   const tradeSupported = xDmTradeSupportedMint(mint);
+  const chartUrl = xDmShortChartUrl(state, senderId, mint, slot);
   const menuUrl = linked ? xDmMenuUrl(state, senderId, mint, slot) : "";
   return [
     `Coin #${slot}: ${shortMint(mint)}`,
-    xDmTokenUrl(mint),
     "",
-    linked && tradeSupported
-      ? `Reply: buy ${slot} | buy ${slot} 0.1 | sell ${slot} 50 | chart ${slot} | rug ${slot} | map ${slot}`
-      : `Reply: chart ${slot} | rug ${slot} | map ${slot}`,
-    menuUrl ? `Open Trade Pad (real buttons):\n${menuUrl}` : "",
-    linked && tradeSupported ? "A button only stages the trade. YES or NO in X is still required." : "",
+    `📈 OPEN CHART + BUY/SELL PANEL\n${chartUrl}`,
+    menuUrl ? `⚡ OPEN X TRADE PAD\n${menuUrl}` : "",
+    linked && tradeSupported ? `Quick buy with saved preset: BUY ${slot}\nSell 50%: SELL ${slot} 50\nYou approve with YES before anything sends.` : `Reply: chart ${slot} | rug ${slot} | map ${slot}`,
     linked && !tradeSupported ? "Text buy/sell commands are Solana-only; open Trade Pad for Robinhood Chain trading." : "",
-    !linked ? "To trade, link X DM from Telegram with /xlink." : ""
+    !linked ? "Connect trading: https://www.slimewire.org/x-terminal" : ""
   ].filter(Boolean).join("\n");
 }
 function xDmTradeSummary(rec = {}) {
@@ -34601,19 +34650,20 @@ function xDmHelpText(linked = false, state = null, senderId = "") {
   return [
     "SlimeWire X DM Terminal",
     "",
-    "Paste a CA or 0x contract. Multiple CAs become coin slots.",
+    "Paste a CA or 0x contract. I return a chart and private Trade Pad. Multiple CAs become coin slots.",
     "",
     "Menu words: positions | wallet | settings",
     "",
-    "Coin actions:",
-    "chart 1 | rug 1 | map 1",
-    "buy 1 | buy 1 0.1",
-    "sell 1 50",
-    "set amount 0.1 / set tp 25 / set sl 8 / set slippage 5",
+    "Fast X DM trading after setup:",
+    "BUY 1 uses your saved amount and exit preset",
+    "BUY 1 0.1 overrides only the SOL amount",
+    "SELL 1 50 sells 50%",
+    "SETTINGS shows or changes amount, TP, SL, and slippage",
+    "Research: chart 1 | rug 1 | map 1",
     xDmTokenSlotsText(state, senderId, linked),
     "",
     xDmActionHints(state, senderId, linked),
-    linked ? "For real buttons, send a coin number (1-6), then tap Open Trade Pad." : "",
+    linked ? "Send a coin number (1-6) for its Chart and Trade Pad links." : "",
     linked ? "Money actions ask for yes/no before they run." : "To trade here, open https://www.slimewire.org/x-terminal and connect X, or run /xlink in Telegram.",
     "No seed phrases. Wallet-confirmed / managed-wallet only."
   ].join("\n");
@@ -35071,13 +35121,24 @@ async function xDmMenuApi(body = {}) {
   }
 
   if (action === "save_preset") {
+    const presetType = String(body.type || "trade").trim().toLowerCase();
+    const presetAction = String(body.presetAction || "save").trim().toLowerCase();
     const result = await updateWebPreset(payload.userId, {
-      type: String(body.type || "trade"),
-      action: String(body.presetAction || "save"),
+      type: presetType,
+      action: presetAction,
       id: body.id,
       preset: body.preset || {}
     });
-    return xDmPadEnvelope(access, { saved: true, presets: result.presets });
+    let xQuickSynced = false;
+    if (presetType === "trade" && presetAction !== "delete") {
+      const quick = normalizeWebPreset("trade", body.preset || {}, { keepId: true });
+      await setBuyPref(payload.userId, "amount", quick.amountSol);
+      await setBuyPref(payload.userId, "tp", quick.takeProfitPct);
+      await setBuyPref(payload.userId, "sl", quick.stopLossPct);
+      await setBuyPref(payload.userId, "slippage", quick.slippageBps);
+      xQuickSynced = true;
+    }
+    return xDmPadEnvelope(access, { saved: true, presets: result.presets, xQuickSynced });
   }
 
   if (action === "create_wallet") {
@@ -35275,11 +35336,12 @@ async function xDmHandleTradeConfirm(senderId, rec, state) {
   const attemptId = `x-dm-${rec.id}`;
   try {
     if (rec.action === "buy" && rec.source !== "x-dm-menu") {
-      const r = await tgExecuteQuickBuy(userId, rec.mint, rec.amountSol, { idempotencyParts: ["x-dm", rec.id] });
+      const r = await tgExecuteQuickBuyPreset(userId, rec.mint, { amountSol: rec.amountSol, idempotencyParts: ["x-dm", rec.id] });
       if (r.needWallet) return await xDmSendReceipt(senderId, "Create/fund a SlimeWire wallet first: open Telegram /start or https://www.slimewire.org/terminal?tab=wallets", state);
       if (!r.ok) return await xDmSendReceipt(senderId, `Buy did not land: ${r.why || "try again"}`, state);
       await quickBuySendReceipt(userId, rec.mint, rec.amountSol, r.result).catch(() => {});
-      return await xDmSendReceipt(senderId, `Bought ${rec.amountSol} SOL of ${shortMint(rec.mint)}. Receipt + sell controls sent to Telegram.\n${xDmTokenUrl(rec.mint)}`, state);
+      const exitLine = r.armed ? ` Saved exits armed: TP +${r.armed.tp || 0}% / SL -${r.armed.sl || 0}%.` : "";
+      return await xDmSendReceipt(senderId, `Bought ${rec.amountSol} SOL of ${shortMint(rec.mint)}.${exitLine} Receipt + sell controls sent to Telegram.\n${xDmTokenUrl(rec.mint)}`, state);
     }
     if (rec.action === "sell" && rec.source !== "x-dm-menu") {
       const r = await tgExecuteQuickSell(userId, rec.mint, rec.percent, { idempotencyKey: `x-dm:${rec.id}` });
@@ -35576,9 +35638,14 @@ async function xDmHandleEvent(event, state) {
     const body = reply?.text || `Scanned ${shortMint(target)}`;
     const slots = xDmTokenSlotsText(state, senderId, Boolean(linked));
     const saveLine = targetList.length > 1 ? `Saved ${targetList.length} new coin slots. Scanned #1.` : "Saved coin slot #1.";
+    const chartUrl = xDmShortChartUrl(state, senderId, target, 1);
     const menuUrl = linked ? xDmMenuUrl(state, senderId, target, 1) : "";
-    const menuLine = menuUrl ? `\n\nOpen Trade Pad (real buttons):\n${menuUrl}` : "";
-    return await xDmSend(senderId, `${saveLine}\n\n${body}\n${xDmTokenUrl(target)}${menuLine}${slots ? `\n\n${slots}` : ""}\n\n${xDmActionHints(state, senderId, Boolean(linked))}`, state);
+    const links = [
+      `📈 OPEN CHART + BUY/SELL PANEL\n${chartUrl}`,
+      menuUrl ? `⚡ OPEN X TRADE PAD\n${menuUrl}` : "",
+      !linked ? "Connect X trading: https://www.slimewire.org/x-terminal" : ""
+    ].filter(Boolean).join("\n\n");
+    return await xDmSend(senderId, `${saveLine}\n\n${body}\n\n${links}${slots ? `\n\n${slots}` : ""}\n\n${xDmActionHints(state, senderId, Boolean(linked))}`, state);
   }
   const slotOnly = text.match(/^([1-6])$/)?.[1];
   if (slotOnly) return await xDmSend(senderId, xDmSlotMenuText(state, senderId, slotOnly, Boolean(linked)), state);
@@ -35605,8 +35672,9 @@ async function xDmHandleEvent(event, state) {
     if (!target) return await xDmSend(senderId, "That coin slot is empty. Paste one or more CAs first.", state);
     const kind = targetIntent[1].toLowerCase();
     const reply = await buildXReply(target, kind === "chart" ? "chart" : kind === "map" ? "map" : kind === "rug" || kind === "safe" ? "rug" : intent, event.id).catch(() => null);
+    const chartUrl = xDmShortChartUrl(state, senderId, target, targetIntent[2]);
     const menuUrl = xDmMenuUrl(state, senderId, target, targetIntent[2]);
-    return await xDmSend(senderId, `${reply?.text || `Scanned ${shortMint(target)}`}\n${xDmTokenUrl(target)}${menuUrl ? `\n\nOpen Trade Pad (real buttons):\n${menuUrl}` : ""}\n\n${xDmActionHints(state, senderId, true)}`, state);
+    return await xDmSend(senderId, `${reply?.text || `Scanned ${shortMint(target)}`}\n\n📈 OPEN CHART + BUY/SELL PANEL\n${chartUrl}\n\n⚡ OPEN X TRADE PAD\n${menuUrl}\n\n${xDmActionHints(state, senderId, true)}`, state);
   }
   const buySlot = parseXDmBuySlotCommand(text);
   if (buySlot) {
@@ -39769,15 +39837,18 @@ async function handleRhQuickTradeCallback(query, userId) {
 // ⚡ QUICK BUY (preset) — one tap on any group/scan card buys the tapper's saved preset amount from
 // their own wallet AND arms their saved take-profit / stop-loss, all without leaving the group. Reuses
 // the idempotent own-wallet buy (tgExecuteQuickBuy) + the site's auto-exit engine.
-async function tgExecuteQuickBuyPreset(userId, mint) {
+async function tgExecuteQuickBuyPreset(userId, mint, options = {}) {
   const prefs = userBuyPrefs(await readBuyPrefs(), userId);
-  const r = await tgExecuteQuickBuy(userId, mint, prefs.quickAmount, { idempotencyParts: [`tp${prefs.takeProfitPct || 0}`, `sl${prefs.stopLossPct || 0}`, "preset"] });
-  if (!r.ok) return { ...r, amt: prefs.quickAmount };
+  const requestedAmount = Number(options.amountSol);
+  const amountSol = Number.isFinite(requestedAmount) && requestedAmount > 0 ? requestedAmount : prefs.quickAmount;
+  const extraParts = Array.isArray(options.idempotencyParts) ? options.idempotencyParts : [];
+  const r = await tgExecuteQuickBuy(userId, mint, amountSol, { idempotencyParts: [`tp${prefs.takeProfitPct || 0}`, `sl${prefs.stopLossPct || 0}`, "preset", ...extraParts] });
+  if (!r.ok) return { ...r, amt: amountSol };
   let armed = null;
   if ((prefs.takeProfitPct > 0 || prefs.stopLossPct > 0) && r.result && r.wallet) {
     try {
       const buyResult = {
-        amountLamports: String(r.result.amountLamports || solToLamports(prefs.quickAmount)),
+        amountLamports: String(r.result.amountLamports || solToLamports(amountSol)),
         swapLamports: r.result.swapLamports,
         feeLamports: r.result.feeLamports,
         tokenDeltaAmount: r.result.tokenDeltaAmount,
@@ -39792,7 +39863,7 @@ async function tgExecuteQuickBuyPreset(userId, mint) {
       armed = { tp: prefs.takeProfitPct, sl: prefs.stopLossPct };
     } catch (_) { armed = null; }
   }
-  return { ...r, amt: prefs.quickAmount, armed };
+  return { ...r, amt: amountSol, armed };
 }
 async function handleQuickBuyPresetCallback(query, userId) {
   const data = String(query?.data || ""); if (!data.startsWith("qbp:")) return false;
