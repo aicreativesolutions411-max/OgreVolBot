@@ -273,6 +273,8 @@ services:
         sync: false
       - key: WEB_PORTAL_URL
         value: https://www.slimewire.org
+      - key: X_DM_REDIRECT_ORIGIN
+        value: https://ogrevolbot.onrender.com
       - key: WEB_ALLOWED_ORIGIN
         value: https://www.slimewire.org,https://slimewire.org,https://ogrevolbot.pages.dev,https://*.ogrevolbot.pages.dev
       - key: WEB_SESSION_TTL_HOURS

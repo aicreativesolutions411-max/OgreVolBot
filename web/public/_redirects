@@ -8,6 +8,9 @@
 /reference      /old.html              200
 /archive        /old.html              200
 /r/*            /?ref=:splat           302
+# X/t.co links created before the backend-host fix still point at www.slimewire.org/x/.... Forward them
+# to the Node service that owns the private lookup and signed Trade Pad handoff instead of SPA-falling home.
+/x/*            https://ogrevolbot.onrender.com/x/:splat  302
 /launch-coin    /#launch               302
 /terminal       /index.html            200
 /terminal/*     /index.html            200

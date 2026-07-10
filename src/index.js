@@ -5587,6 +5587,13 @@ function loadConfig() {
     kolUseSolanaTrackerFallback,
     telegramBotUsername: normalizeTelegramUsername(process.env.TELEGRAM_BOT_USERNAME || ""),
     webPortalUrl: (process.env.WEB_PORTAL_URL || "").replace(/\/$/, ""),
+    // X DM short links MUST hit this Node service first. www.slimewire.org is the static Pages frontend;
+    // sending /x/<id> there silently opens Trending and never reaches xDmShortLinkDestination.
+    xDmRedirectOrigin: (
+      process.env.X_DM_REDIRECT_ORIGIN
+      || (renderExternalHostname ? `https://${renderExternalHostname}` : "")
+      || "https://ogrevolbot.onrender.com"
+    ).replace(/\/+$/, ""),
     webAllowedOrigin: process.env.WEB_ALLOWED_ORIGIN || "*",
     webSessionTtlHours,
     resendApiKey: process.env.RESEND_API_KEY || "",
@@ -35023,11 +35030,16 @@ function readXDmMenuToken(token) {
 }
 function xDmMenuUrl(state, senderId, mint, slot = "") {
   const id = xDmCreateShortLink(state, senderId, mint, slot, true);
-  return id ? `${xDmPortalOrigin()}/x/${id}/trade` : "";
+  return id ? `${xDmRedirectOrigin()}/x/${id}/trade` : "";
 }
-const X_DM_SHORT_LINK_TTL_MS = 20 * 60_000;
+// X users often return to a DM hours later. Keep the redirect usable for one day (the signed Trade Pad
+// bootstrap is independently scoped and also capped at 24h; every money action still requires YES in X).
+const X_DM_SHORT_LINK_TTL_MS = 24 * 60 * 60_000;
 function xDmPortalOrigin() {
   return String(CONFIG.webPortalUrl || "https://www.slimewire.org").replace(/\/+$/, "");
+}
+function xDmRedirectOrigin() {
+  return String(CONFIG.xDmRedirectOrigin || "https://ogrevolbot.onrender.com").replace(/\/+$/, "");
 }
 function xDmCreateShortLink(state, senderId, mint, slot = "", requireLinked = false) {
   const cleanMint = String(mint || "").trim();
@@ -35053,7 +35065,7 @@ function xDmCreateShortLink(state, senderId, mint, slot = "", requireLinked = fa
 }
 function xDmShortChartUrl(state, senderId, mint, slot = "") {
   const id = xDmCreateShortLink(state, senderId, mint, slot, false);
-  return id ? `${xDmPortalOrigin()}/x/${id}/chart` : xDmTokenUrl(mint);
+  return id ? `${xDmRedirectOrigin()}/x/${id}/chart` : xDmTokenUrl(mint);
 }
 async function xDmShortLinkDestination(id, action) {
   const fallback = action === "chart" ? `${xDmPortalOrigin()}/terminal` : `${xDmPortalOrigin()}/x-dm-menu`;
