@@ -29,6 +29,8 @@ test("web flow resolves a coin, creates the kit and polls payment status", () =>
   assert.match(page, /Coin address or link/);
   assert.match(page, /recovery inbox/);
   assert.match(page, /setInterval\(\(\)=>status\(d\.id,true\),15000\)/);
+  assert.match(page, /OGRE_PORTAL_CONFIG/);
+  assert.match(page, /fetch\(API_BASE\+url/);
 });
 
 test("no-proof kit stays explicitly community-run and never collects X credentials", () => {

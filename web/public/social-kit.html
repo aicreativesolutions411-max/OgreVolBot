@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#071008">
   <title>Coin Social Kit · SlimeWire</title>
   <link rel="icon" href="/assets/slimewire/png/slimewire-mark.png">
+  <script src="/config.js"></script>
   <style>
     :root{--g:#76ff35;--g2:#c4ff72;--bg:#050805;--panel:rgba(9,17,10,.92);--line:rgba(129,255,62,.17);--muted:#91a98d;--text:#f0fff1;--bad:#ff7171;--warn:#ffd76a}
     *{box-sizing:border-box}html{background:#040604}body{margin:0;min-height:100vh;color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:linear-gradient(rgba(4,8,4,.84),rgba(4,8,4,.96)),url('/assets/slimewire/auto/login-hero.jpg') center top/cover fixed no-repeat}
@@ -45,10 +46,11 @@
 <script>
 (() => {
   const $=s=>document.querySelector(s), token=()=>localStorage.getItem('ogreWebToken')||'';
+  const API_BASE=String((window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||'https://ogrevolbot.onrender.com').replace(/\/+$/,'');
   let resolved=null, poll=null;
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const headers=()=>({'Content-Type':'application/json',...(token()?{'Authorization':'Bearer '+token()}:{})});
-  async function api(url,opt={}){const r=await fetch(url,{...opt,headers:{...headers(),...(opt.headers||{})},credentials:'same-origin'});let d={};try{d=await r.json()}catch{}if(!r.ok)throw new Error(d.error||'Request failed.');return d}
+  async function api(url,opt={}){const r=await fetch(API_BASE+url,{...opt,headers:{...headers(),...(opt.headers||{})}});let d={};try{d=await r.json()}catch{}if(!r.ok)throw new Error(d.error||'Request failed.');return d}
   function message(text,bad=false){const e=$('#msg');e.textContent=text;e.className='msg on '+(bad?'err':'ok')}
   function busy(on){$('#resolve').disabled=on;$('#create').disabled=on}
   function showToken(t){resolved=t;$('#preview').classList.add('on');$('#tokenName').textContent=`${t.name} ($${t.symbol}) · ${t.chain}`;$('#tokenCa').textContent=t.ca;$('#pfp').src=t.imageUrl||'/assets/slimewire/png/slimewire-mark.png'}
