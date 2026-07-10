@@ -14191,6 +14191,13 @@ async function handleMessage(message, userId) {
   const text = (message.text || "").trim();
   const session = sessions.get(chatId);
 
+  // Keep one active raid visible without littering the room: every fifth real group post replaces
+  // the old live card with a fresh copy at the bottom and pins that newest copy.
+  const hasGroupPost = Boolean(text || message.caption || message.photo || message.video || message.animation || message.document || message.sticker);
+  if (!isPrivateChat(message.chat) && message.message_id && hasGroupPost) {
+    void maybeResurfaceActiveRaid(chatId, message.message_id).catch(() => {});
+  }
+
   // All-in-one group bot: /settings + module toggles (/buybot|raid|rose|scan on|off). Group-only,
   // admin-gated; returns false (no-op) for DMs and non-matching text, so existing flows are untouched.
   if (await handleGroupBotCommand(message, userId).catch(() => false)) return;
@@ -42320,7 +42327,7 @@ async function handleTelegramRaidCommand(chatId, message, argument) {
   const rest = arg.replace(url, " ");
   const symMatch = rest.match(/\$?([A-Za-z][A-Za-z0-9_]{1,11})\b/);
   const symbol = symMatch ? symMatch[1] : "";
-  const nums = (rest.match(/\d{1,7}/g) || []).map(Number).filter((n) => n > 0);
+  const nums = (rest.match(/\d{1,7}/g) || []).map(Number).filter(Number.isFinite);
   // No goals typed → open the interactive tap-to-set menu (the "fill out + submit" flow).
   if (!nums.length) {
     const cfg = raidConfig(await getGroupBotEntry(chatId).catch(() => null));
@@ -42335,7 +42342,7 @@ async function handleTelegramRaidCommand(chatId, message, argument) {
   // Goals typed → start immediately (power path).
   const targets = nums.length >= 4
     ? { likes: nums[0], rts: nums[1], replies: nums[2], bookmarks: nums[3] }
-    : nums.length === 3 ? { likes: nums[0], rts: nums[1], replies: nums[2], bookmarks: Math.max(1, Math.ceil(nums[0] / 10)) }
+    : nums.length === 3 ? { likes: nums[0], rts: nums[1], replies: nums[2], bookmarks: 0 }
     : nums.length === 2 ? { likes: nums[0], rts: nums[1], replies: Math.max(1, Math.ceil(nums[0] / 8)), bookmarks: Math.max(1, Math.ceil(nums[0] / 10)) }
     : { likes: nums[0], rts: Math.max(1, Math.ceil(nums[0] / 4)), replies: Math.max(1, Math.ceil(nums[0] / 8)), bookmarks: Math.max(1, Math.ceil(nums[0] / 10)) };
   await startRaidFromDraft(chatId, { tid, url, symbol, by, targets, durationMin: 120 });
@@ -42854,7 +42861,7 @@ async function pollPublicKolSources() {
     kolPublicPollRunning = false;
   }
 }
-const RAID_DEFAULT_PRESET = { targets: { likes: 100, rts: 25, replies: 10, bookmarks: 10 }, durationMin: 120 };
+const RAID_DEFAULT_PRESET = { targets: { likes: 8, rts: 4, replies: 4, bookmarks: 0 }, durationMin: 120 };
 function cleanRaidTargets(targets = {}) {
   const clamp = (v) => Math.max(0, Math.min(1_000_000, Math.round(Number(v) || 0)));
   return { likes: clamp(targets.likes), rts: clamp(targets.rts), replies: clamp(targets.replies), bookmarks: clamp(targets.bookmarks) };
@@ -43061,7 +43068,7 @@ function groupBotModuleView(module, entry) {
         "Start a raid with <code>/raid &lt;X post link&gt;</code> → tap the goals → 🚀. Set custom art below (separate from the Buy Bot's).",
         "",
         `Default preset: <b>${escapeTelegramHtml(raidPresetLabel(rc))}</b>`,
-        "Fast save: <code>/raidpreset 5 5 5 5 60</code> = likes RT replies bookmarks duration."
+        "Fast save: <code>/raidpreset 8 4 4 0 60</code> = likes RT replies bookmarks duration."
       ].join("\n"),
       markup: { inline_keyboard: [
         [toggleBtn("raid", "Raid Bot")],
@@ -43448,7 +43455,7 @@ async function handleGroupBotCommand(message, userId) {
     const nums = (rp[1] || "").match(/\d{1,7}/g)?.map(Number).filter((n) => Number.isFinite(n) && n >= 0) || [];
     if (!nums.length) {
       const cfg = raidConfig(await getGroupBotEntry(chatId).catch(() => null));
-      await sayHtml(chatId, `⚔️ Raid default is <b>${escapeTelegramHtml(raidPresetLabel(cfg))}</b>.\nSet it with <code>/raidpreset 5 5 5 5 60</code> (likes RT replies bookmarks duration-min).`);
+      await sayHtml(chatId, `⚔️ Raid default is <b>${escapeTelegramHtml(raidPresetLabel(cfg))}</b>.\nSet it with <code>/raidpreset 8 4 4 0 60</code> (likes RT replies bookmarks duration-min).`);
       return true;
     }
     const targets = {
@@ -49303,7 +49310,7 @@ function raidSetupCard(d) {
       `👉 <a href="${escapeTelegramHtml(d.url)}">The post you're raiding</a>`
     ].join("\n"),
     markup: { inline_keyboard: [
-      [{ text: "⚡ 5 each", callback_data: "rd:p:five" }, { text: "⭐ Use Default", callback_data: "rd:p:def" }],
+      [{ text: "⚡ 8 Likes · 4 RT · 4 Replies", callback_data: "rd:p:quick" }, { text: "⭐ Use Default", callback_data: "rd:p:def" }],
       [{ text: `❤️ Likes: ${v(d.targets.likes)}`, callback_data: "rd:c:likes" }, { text: `🔁 RT: ${v(d.targets.rts)}`, callback_data: "rd:c:rts" }],
       [{ text: `💬 Replies: ${v(d.targets.replies)}`, callback_data: "rd:c:replies" }, { text: `🔖 Bookmarks: ${v(d.targets.bookmarks)}`, callback_data: "rd:c:bm" }],
       [{ text: `🕐 Duration: ${Number(d.durationMin) || 120}m`, callback_data: "rd:c:dur" }],
@@ -49350,6 +49357,8 @@ async function startRaidFromDraft(chatId, d) {
   const sent = await sendGroupAlertMedia(chatId, media, card.text, card.markup);
   if (sent && sent.result && sent.result.message_id) {
     await attachRaidTgCard(res.tid, { url: res.url || d.url, symbol: res.symbol || d.symbol, targets: d.targets, startedAt, durationMs, ref: { chatId, messageId: sent.result.message_id, hasMedia: sent.hasMedia }, eng: { likes: res.likes, rts: res.rts, replies: res.replies, bookmarks: res.bookmarks || 0 } });
+    const pinned = await telegram("pinChatMessage", { chat_id: chatId, message_id: sent.result.message_id, disable_notification: true }).then(() => true).catch(() => false);
+    if (!pinned) await say(chatId, "Raid started, but I need the group’s Pin Messages permission to keep it pinned.").catch(() => {});
   }
 }
 // Route raid-setup CALLBACKS (rd:*) — the tap-to-configure menu. Returns true if handled.
@@ -49371,8 +49380,8 @@ async function handleRaidSetupCallback(query, userId) {
   }
   if (data.startsWith("rd:p:")) {
     const action = data.slice(5);
-    if (action === "five") {
-      d.targets = { likes: 5, rts: 5, replies: 5, bookmarks: 5 };
+    if (action === "quick" || action === "five") {
+      d.targets = { likes: 8, rts: 4, replies: 4, bookmarks: 0 };
       d.durationMin = Math.max(1, Number(d.durationMin) || 60);
     } else if (action === "def") {
       const cfg = raidConfig(await getGroupBotEntry(chatId).catch(() => null));
@@ -49439,7 +49448,7 @@ async function attachRaidTgCard(tid, { url, symbol, targets, ref, eng, startedAt
     if (durationMs) c.durationMs = durationMs;
     if (eng) { c.likes = Number(eng.likes) || 0; c.rts = Number(eng.rts) || 0; c.replies = Number(eng.replies) || 0; c.bookmarks = Number(eng.bookmarks) || 0; }
     c.refs = (c.refs || []).filter((r) => String(r.chatId) !== String(ref.chatId));
-    c.refs.push({ chatId: String(ref.chatId), messageId: ref.messageId, hasMedia: !!ref.hasMedia });
+    c.refs.push({ chatId: String(ref.chatId), messageId: ref.messageId, hasMedia: !!ref.hasMedia, postsSinceRefresh: 0 });
     c.done = false; c.lastCard = ""; // re-arm so the new card edits at least once
     // bound the store: keep the 120 most recent cards
     const ids = Object.keys(s.cards);
@@ -49465,6 +49474,65 @@ async function updateRaidTgCard(tid, { likes, rts, replies, bookmarks, lastCard,
     await writeJsonFile(raidTgPath(), s);
   }).catch(() => {});
 }
+
+async function claimRaidGroupResurface(chatId, incomingMessageId) {
+  return withFileLock(raidTgPath(), async () => {
+    const s = await readRaidTg();
+    const candidates = Object.values(s.cards || {})
+      .filter((card) => !card.done && Array.isArray(card.refs) && card.refs.some((ref) => String(ref.chatId) === String(chatId)))
+      .sort((a, b) => Number(b.startedAt || Date.parse(b.at || 0) || 0) - Number(a.startedAt || Date.parse(a.at || 0) || 0));
+    const card = candidates[0];
+    if (!card) return null;
+    const ref = card.refs.find((item) => String(item.chatId) === String(chatId));
+    if (!ref || Number(incomingMessageId) <= Number(ref.messageId)) return null;
+    ref.postsSinceRefresh = Math.max(0, Number(ref.postsSinceRefresh) || 0) + 1;
+    const due = ref.postsSinceRefresh >= 5;
+    if (due) ref.postsSinceRefresh = 0;
+    await writeJsonFile(raidTgPath(), s);
+    return due ? { card: { ...card, refs: undefined }, ref: { ...ref } } : null;
+  }).catch(() => null);
+}
+
+async function maybeResurfaceActiveRaid(chatId, incomingMessageId) {
+  const job = await claimRaidGroupResurface(chatId, incomingMessageId);
+  if (!job) return false;
+  const c = job.card;
+  const live = buildRaidProgressCard({
+    tid: c.tid, symbol: c.symbol, targets: c.targets, likes: c.likes, rts: c.rts,
+    replies: c.replies, bookmarks: c.bookmarks, views: c.views, url: c.url,
+    startedAt: c.startedAt, durationMs: c.durationMs
+  });
+  if (live.done) {
+    await updateRaidTgCard(c.tid, { lastCard: live.text, done: true });
+    await telegram("unpinChatMessage", { chat_id: chatId, message_id: job.ref.messageId }).catch(() => {});
+    return false;
+  }
+  const copied = await telegram("copyMessage", {
+    chat_id: chatId,
+    from_chat_id: chatId,
+    message_id: job.ref.messageId,
+    disable_notification: true,
+    reply_markup: live.markup
+  }).catch(() => null);
+  if (!copied?.message_id) return false;
+  try {
+    if (job.ref.hasMedia) {
+      await telegram("editMessageCaption", { chat_id: chatId, message_id: copied.message_id, caption: live.text, parse_mode: "HTML", reply_markup: live.markup });
+    } else {
+      await telegram("editMessageText", { chat_id: chatId, message_id: copied.message_id, text: live.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: live.markup });
+    }
+  } catch { /* the copied card is still usable even if Telegram says it was not modified */ }
+  await attachRaidTgCard(c.tid, {
+    url: c.url, symbol: c.symbol, targets: c.targets, startedAt: c.startedAt, durationMs: c.durationMs,
+    ref: { chatId, messageId: copied.message_id, hasMedia: job.ref.hasMedia },
+    eng: { likes: c.likes, rts: c.rts, replies: c.replies, bookmarks: c.bookmarks }
+  });
+  await telegram("pinChatMessage", { chat_id: chatId, message_id: copied.message_id, disable_notification: true }).catch(() => {});
+  await telegram("unpinChatMessage", { chat_id: chatId, message_id: job.ref.messageId }).catch(() => {});
+  await telegram("deleteMessage", { chat_id: chatId, message_id: job.ref.messageId }).catch(() => {});
+  return true;
+}
+
 // Interval loop: pull fresh engagement for every active raid card and edit its TG message(s).
 let _raidTgRefreshing = false;
 async function refreshRaidTgCards() {
@@ -49492,6 +49560,9 @@ async function refreshRaidTgCards() {
           // "message is not modified" is benign (keep the ref); a genuinely gone message / kicked bot drops it.
           if (!/not modified/i.test(m) && /not found|to edit not found|message_id_invalid|chat not found|bot was kicked|forbidden|blocked/i.test(m)) dead.push(ref.messageId);
         }
+      }
+      if (card.done) {
+        for (const ref of c.refs) await telegram("unpinChatMessage", { chat_id: ref.chatId, message_id: ref.messageId }).catch(() => {});
       }
       await updateRaidTgCard(c.tid, { likes, rts, replies, bookmarks, lastCard: card.text, done: card.done, dropRefMessageIds: dead });
     }

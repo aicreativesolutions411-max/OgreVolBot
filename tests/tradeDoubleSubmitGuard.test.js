@@ -893,8 +893,9 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
   assert.match(serverSource, /function raidConfig\(/);
   assert.match(serverSource, /async function setRaidConfig\(/);
   assert.match(serverSource, /\/raidpreset/);
-  assert.match(serverSource, /callback_data: "rd:p:five"/);
+  assert.match(serverSource, /callback_data: "rd:p:quick"/);
   assert.match(serverSource, /callback_data: "rd:p:save"/);
+  assert.match(serverSource, /const RAID_DEFAULT_PRESET = \{ targets: \{ likes: 8, rts: 4, replies: 4, bookmarks: 0 \}/);
   // Callback asks via a POPUP (no chat message -> no flood), not a ladder.
   const cb = functionBody(serverSource, "handleRaidSetupCallback");
   assert.match(cb, /show_alert: true/);
@@ -906,6 +907,16 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
   // Duration is minutes now.
   assert.match(serverSource, /durationMin/);
   assert.match(functionBody(serverSource, "raidSetupCard"), /Duration: \$\{Number\(d\.durationMin\)/);
+  // A live raid is pinned, and every fifth newer group post replaces it at the bottom without
+  // leaving duplicate cards behind. Completion unpins it.
+  assert.match(functionBody(serverSource, "startRaidFromDraft"), /pinChatMessage/);
+  assert.match(functionBody(serverSource, "claimRaidGroupResurface"), /postsSinceRefresh >= 5/);
+  const resurface = functionBody(serverSource, "maybeResurfaceActiveRaid");
+  assert.match(resurface, /copyMessage/);
+  assert.match(resurface, /pinChatMessage/);
+  assert.match(resurface, /unpinChatMessage/);
+  assert.match(resurface, /deleteMessage/);
+  assert.match(functionBody(serverSource, "handleMessage"), /maybeResurfaceActiveRaid\(chatId, message\.message_id\)/);
 });
 
 // ---- Settings hub (multi-level menu) + Shield (in Rose) + separate raid media ----
