@@ -72,6 +72,7 @@ import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVan
 import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, evmWalletFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenInfo, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
 import { getNoxaScan, fetchNoxaFeed, fetchPoolBuys, NOXA_RH } from "./lib/noxaLaunchpad.js";
 import { rhWalletScan } from "./lib/walletScan.js";
+import { classifyRhAddress } from "./lib/rhAddressKind.js";
 import { finiteWalletNumber, normalizeSolWalletPnlSummary, normalizeSolWalletPositions } from "./lib/solWalletPnl.js";
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp, listCharacterFiles, characterPfpCount, makeCharacterPfp } from "./lib/pfp.js";
 import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
@@ -14233,8 +14234,8 @@ async function handleMessage(message, userId) {
       // A Robinhood Chain contract (0x…40-hex) anywhere in chat = auto RH scan card (same Scan toggle).
       const rhCaTok = /^0x[0-9a-fA-F]{40}$/.test(String(explicitTarget)) ? String(explicitTarget) : ((rawGroupText.match(/^0x[0-9a-fA-F]{40}$/) || [])[0] || "");
       if (rhCaTok) {
-        // A plain WALLET (EOA) pasted → 👛 wallet scan, NOT a coin scan / buy-bot lock. Contract → coin path.
-        if (!(await isRhContract(rhCaTok).catch(() => true))) {
+        // EOA or smart wallet → 👛 wallet scan, NOT a coin scan / buy-bot lock. ERC-20 → coin path.
+        if (!(await isRhContract(rhCaTok).catch(() => false))) {
           const gbW = await getGroupBotEntry(chatId).catch(() => null);
           if (!gbW || groupBotFeatureOn(gbW, "scan")) await sendWalletScanCard(chatId, rhCaTok).catch(() => {});
           return;
@@ -14299,9 +14300,9 @@ async function handleMessage(message, userId) {
     // site, so there's no DM buy panel — the card carries the ⚡ Trade link). Same "just paste a CA" reflex.
     const rhDm = /^0x[0-9a-fA-F]{40}$/.test(String(dmTarget)) ? String(dmTarget) : ((caTokDm.match(/^0x[0-9a-fA-F]{40}$/) || [])[0] || "");
     if (rhDm) {
-      // A CONTRACT (token) → coin scan card; an EOA → 👛 wallet scan (stats · PnL · holdings). On any classify
-      // error default to the coin card so nothing regresses.
-      if (await isRhContract(rhDm).catch(() => true)) await sendRhScanCard(chatId, rhDm);
+      // An ERC-20 → coin scan card; an EOA/smart wallet → 👛 wallet scan (stats · PnL · holdings). On any classify
+      // error defaults to the wallet card: it is read-only and safer than presenting an unknown address as a coin.
+      if (await isRhContract(rhDm).catch(() => false)) await sendRhScanCard(chatId, rhDm);
       else await sendWalletScanCard(chatId, rhDm);
       return;
     }
@@ -37366,31 +37367,20 @@ async function isSolMintAddress(addr) {
   if (_addrKindCache.size > 1000) _addrKindCache.delete(_addrKindCache.keys().next().value);
   return mint;
 }
-// Is a 0x address a CONTRACT (token) vs an EOA (wallet)? Blockscout `is_contract` is the PRIMARY source —
-// one reliable GET (verified live for both an EOA and a token) — because the RH RPC is slow/flaky from
-// Render and an error here used to silently misroute real wallets to the coin card. eth_getCode is the
-// fallback. Only a CONFIRMED answer is cached.
+// Is a 0x address an ERC-20 TOKEN vs a wallet? Do not equate bytecode with a coin: smart-contract wallets
+// also have code. Blockscout token metadata and batched ERC-20 RPC probes race each other; provider failure
+// defaults to the read-only wallet card, never a misleading coin/trade card. Only confirmed answers cache.
 const _rhKindCache = new Map();
 async function isRhContract(addr) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return false;
   const c = _rhKindCache.get(addr.toLowerCase());
   if (c && Date.now() - c.at < 10 * 60_000) return c.contract;
-  let contract = null;
-  try {
-    const ctl = new AbortController(); const t = setTimeout(() => { try { ctl.abort(); } catch { /* */ } }, 6000);
-    const res = await fetch(`https://robinhoodchain.blockscout.com/api/v2/addresses/${addr}`, { signal: ctl.signal, headers: { accept: "application/json" } }).finally(() => clearTimeout(t));
-    if (res.ok) { const d = await res.json(); if (typeof d.is_contract === "boolean") contract = d.is_contract; }
-  } catch { /* fall through to RPC */ }
-  if (contract == null) {
-    try {
-      const provider = new ethers.JsonRpcProvider(CONFIG.rhChainRpcUrl, RH_CHAIN_ID, { staticNetwork: true });
-      const code = await Promise.race([provider.getCode(addr), new Promise((_, rej) => setTimeout(() => rej(new Error("getCode timeout")), 6000))]);
-      contract = !!code && code !== "0x" && code.length > 2;
-    } catch (error) {
-      console.warn(`[walletscan] isRhContract(${addr.slice(0, 10)}…) both sources failed: ${String(error?.message || error).slice(0, 120)} — caller default applies`);
-      throw error;                                     // caller's default (coin path) applies; nothing cached
-    }
+  const kind = await classifyRhAddress(addr, { rpcUrl: CONFIG.rhChainRpcUrl, fallbackRpcUrl: NOXA_RH.rpcUrl, timeoutMs: 5_500 });
+  if (kind.isToken == null) {
+    console.warn(`[walletscan] isRhContract(${addr.slice(0, 10)}…) classification unavailable — defaulting to wallet card`);
+    return false;
   }
+  const contract = Boolean(kind.isToken);
   _rhKindCache.set(addr.toLowerCase(), { at: Date.now(), contract });
   if (_rhKindCache.size > 1000) _rhKindCache.delete(_rhKindCache.keys().next().value);
   return contract;
