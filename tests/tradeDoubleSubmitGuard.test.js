@@ -895,7 +895,7 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
   assert.match(serverSource, /\/raidpreset/);
   assert.match(serverSource, /callback_data: "rd:p:quick"/);
   assert.match(serverSource, /callback_data: "rd:p:save"/);
-  assert.match(serverSource, /const RAID_DEFAULT_PRESET = \{ targets: \{ likes: 8, rts: 4, replies: 4, bookmarks: 0 \}/);
+  assert.match(serverSource, /const RAID_DEFAULT_PRESET = \{ targets: \{ likes: 10, rts: 5, replies: 5, bookmarks: 1 \}/);
   // Callback asks via a POPUP (no chat message -> no flood), not a ladder.
   const cb = functionBody(serverSource, "handleRaidSetupCallback");
   assert.match(cb, /show_alert: true/);
@@ -917,6 +917,11 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
   assert.match(resurface, /unpinChatMessage/);
   assert.match(resurface, /deleteMessage/);
   assert.match(functionBody(serverSource, "handleMessage"), /maybeResurfaceActiveRaid\(chatId, message\.message_id\)/);
+  const cancel = functionBody(serverSource, "cancelActiveRaidForChat");
+  assert.match(cancel, /card\.refs = card\.refs\.filter/);
+  assert.match(cancel, /Raid cancelled/);
+  assert.match(cancel, /unpinChatMessage/);
+  assert.match(functionBody(serverSource, "handleGroupBotCommand"), /cancelActiveRaidForChat\(chatId\)/);
 });
 
 // ---- Settings hub (multi-level menu) + Shield (in Rose) + separate raid media ----

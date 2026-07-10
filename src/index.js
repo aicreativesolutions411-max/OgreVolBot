@@ -14194,7 +14194,7 @@ async function handleMessage(message, userId) {
   // Keep one active raid visible without littering the room: every fifth real group post replaces
   // the old live card with a fresh copy at the bottom and pins that newest copy.
   const hasGroupPost = Boolean(text || message.caption || message.photo || message.video || message.animation || message.document || message.sticker);
-  if (!isPrivateChat(message.chat) && message.message_id && hasGroupPost) {
+  if (!isPrivateChat(message.chat) && message.message_id && hasGroupPost && !text.startsWith("/")) {
     void maybeResurfaceActiveRaid(chatId, message.message_id).catch(() => {});
   }
 
@@ -42861,7 +42861,7 @@ async function pollPublicKolSources() {
     kolPublicPollRunning = false;
   }
 }
-const RAID_DEFAULT_PRESET = { targets: { likes: 8, rts: 4, replies: 4, bookmarks: 0 }, durationMin: 120 };
+const RAID_DEFAULT_PRESET = { targets: { likes: 10, rts: 5, replies: 5, bookmarks: 1 }, durationMin: 120 };
 function cleanRaidTargets(targets = {}) {
   const clamp = (v) => Math.max(0, Math.min(1_000_000, Math.round(Number(v) || 0)));
   return { likes: clamp(targets.likes), rts: clamp(targets.rts), replies: clamp(targets.replies), bookmarks: clamp(targets.bookmarks) };
@@ -43068,7 +43068,7 @@ function groupBotModuleView(module, entry) {
         "Start a raid with <code>/raid &lt;X post link&gt;</code> → tap the goals → 🚀. Set custom art below (separate from the Buy Bot's).",
         "",
         `Default preset: <b>${escapeTelegramHtml(raidPresetLabel(rc))}</b>`,
-        "Fast save: <code>/raidpreset 8 4 4 0 60</code> = likes RT replies bookmarks duration."
+        "Fast save: <code>/raidpreset 10 5 5 1 60</code> = likes RT replies bookmarks duration."
       ].join("\n"),
       markup: { inline_keyboard: [
         [toggleBtn("raid", "Raid Bot")],
@@ -43321,7 +43321,7 @@ function groupBotHelpText() {
     "• <code>/minbuy &lt;SOL&gt;</code> — only show buys ≥ that size (0 = show all)",
     "• <code>/setbuyemoji 🐸 0.1</code> — pick the emoji + how many show per buy (one per 0.1 SOL here)",
     "",
-    "⚔️ <b>Raid Bot</b> — <code>/raid &lt;X post link&gt;</code> → <b>setup menu</b> (tap likes/RT/reply/bookmark goals + duration, then 🚀 Start). Live card with <b>per-goal progress bars</b> (▰▰▱), overall %, 👀 views, countdown, a 🔄 Refresh button, and <b>RAID SMASHED</b> 🔥 / <b>Raid Ended</b>.",
+    "⚔️ <b>Raid Bot</b> — <code>/raid &lt;X post link&gt;</code> → setup menu → 🚀 Start. Defaults to 10 likes · 5 RT · 5 replies · 1 bookmark, pins while live, and resurfaces every 5 posts. Admins can stop it with <code>/cancel raid</code>.",
     "🔍 <b>Scan Bot</b> — paste any CA → instant scan card with Quick-Buy",
     "",
     "📣 <b>KOL Call Feed</b> — permission-based channel calls shown as one attributed SlimeWire scan",
@@ -43386,6 +43386,13 @@ async function handleGroupBotCommand(message, userId) {
   const text = String(message.text || message.caption || "").trim();
   // /help — clean command guide (anyone can read it).
   if (/^\/help(?:@\w+)?\b/i.test(text)) { await sayHtml(chat.id, groupBotHelpText()); return true; }
+  if (/^\/cancel(?:@\w+)?\s+raid\s*$/i.test(text)) {
+    const chatId = chat.id;
+    if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only group admins can cancel an active raid."); return true; }
+    const result = await cancelActiveRaidForChat(chatId);
+    await say(chatId, result.cancelled ? "🛑 Active raid cancelled and unpinned." : result.draftCancelled ? "🛑 Raid setup cancelled." : "There is no active raid to cancel.");
+    return true;
+  }
   // Target-group KOL feed controls. Public sources need no source-side command.
   const kf = text.match(/^\/(kolfeed|kollfeed|callfeed|kolcalls|kolsource|callsource)(?:@\w+)?(?:\s+(on|off|list|add|remove))?(?:\s+(\S+))?\s*$/i);
   if (kf) {
@@ -43455,7 +43462,7 @@ async function handleGroupBotCommand(message, userId) {
     const nums = (rp[1] || "").match(/\d{1,7}/g)?.map(Number).filter((n) => Number.isFinite(n) && n >= 0) || [];
     if (!nums.length) {
       const cfg = raidConfig(await getGroupBotEntry(chatId).catch(() => null));
-      await sayHtml(chatId, `⚔️ Raid default is <b>${escapeTelegramHtml(raidPresetLabel(cfg))}</b>.\nSet it with <code>/raidpreset 8 4 4 0 60</code> (likes RT replies bookmarks duration-min).`);
+      await sayHtml(chatId, `⚔️ Raid default is <b>${escapeTelegramHtml(raidPresetLabel(cfg))}</b>.\nSet it with <code>/raidpreset 10 5 5 1 60</code> (likes RT replies bookmarks duration-min).`);
       return true;
     }
     const targets = {
@@ -49310,7 +49317,7 @@ function raidSetupCard(d) {
       `👉 <a href="${escapeTelegramHtml(d.url)}">The post you're raiding</a>`
     ].join("\n"),
     markup: { inline_keyboard: [
-      [{ text: "⚡ 8 Likes · 4 RT · 4 Replies", callback_data: "rd:p:quick" }, { text: "⭐ Use Default", callback_data: "rd:p:def" }],
+      [{ text: "⚡ 10 Likes · 5 RT · 5 Replies", callback_data: "rd:p:quick" }, { text: "⭐ Use Default", callback_data: "rd:p:def" }],
       [{ text: `❤️ Likes: ${v(d.targets.likes)}`, callback_data: "rd:c:likes" }, { text: `🔁 RT: ${v(d.targets.rts)}`, callback_data: "rd:c:rts" }],
       [{ text: `💬 Replies: ${v(d.targets.replies)}`, callback_data: "rd:c:replies" }, { text: `🔖 Bookmarks: ${v(d.targets.bookmarks)}`, callback_data: "rd:c:bm" }],
       [{ text: `🕐 Duration: ${Number(d.durationMin) || 120}m`, callback_data: "rd:c:dur" }],
@@ -49381,7 +49388,7 @@ async function handleRaidSetupCallback(query, userId) {
   if (data.startsWith("rd:p:")) {
     const action = data.slice(5);
     if (action === "quick" || action === "five") {
-      d.targets = { likes: 8, rts: 4, replies: 4, bookmarks: 0 };
+      d.targets = { likes: 10, rts: 5, replies: 5, bookmarks: 1 };
       d.durationMin = Math.max(1, Number(d.durationMin) || 60);
     } else if (action === "def") {
       const cfg = raidConfig(await getGroupBotEntry(chatId).catch(() => null));
@@ -49473,6 +49480,40 @@ async function updateRaidTgCard(tid, { likes, rts, replies, bookmarks, lastCard,
     if (Array.isArray(dropRefMessageIds) && dropRefMessageIds.length) c.refs = (c.refs || []).filter((r) => !dropRefMessageIds.includes(r.messageId));
     await writeJsonFile(raidTgPath(), s);
   }).catch(() => {});
+}
+
+async function cancelActiveRaidForChat(chatId) {
+  let draftCancelled = false;
+  for (const key of [...raidDrafts.keys()]) {
+    if (key.startsWith(`${chatId}:`)) { raidDrafts.delete(key); draftCancelled = true; }
+  }
+  for (const key of [...raidInputPending.keys()]) {
+    if (key.startsWith(`${chatId}:`)) raidInputPending.delete(key);
+  }
+  const cancelled = await withFileLock(raidTgPath(), async () => {
+    const s = await readRaidTg();
+    const candidates = Object.values(s.cards || {})
+      .filter((card) => !card.done && Array.isArray(card.refs) && card.refs.some((ref) => String(ref.chatId) === String(chatId)))
+      .sort((a, b) => Number(b.startedAt || Date.parse(b.at || 0) || 0) - Number(a.startedAt || Date.parse(a.at || 0) || 0));
+    const card = candidates[0];
+    if (!card) return null;
+    const ref = card.refs.find((item) => String(item.chatId) === String(chatId));
+    card.refs = card.refs.filter((item) => String(item.chatId) !== String(chatId));
+    if (!card.refs.length) card.done = true;
+    await writeJsonFile(raidTgPath(), s);
+    return ref ? { tid: card.tid, url: card.url, ref: { ...ref } } : null;
+  }).catch(() => null);
+  if (!cancelled) return { cancelled: false, draftCancelled };
+  const text = `🛑 <b>Raid cancelled</b>${cancelled.url ? `\n<a href="${escapeTelegramHtml(cancelled.url)}">View the X post</a>` : ""}`;
+  try {
+    if (cancelled.ref.hasMedia) {
+      await telegram("editMessageCaption", { chat_id: chatId, message_id: cancelled.ref.messageId, caption: text, parse_mode: "HTML", reply_markup: { inline_keyboard: [] } });
+    } else {
+      await telegram("editMessageText", { chat_id: chatId, message_id: cancelled.ref.messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: { inline_keyboard: [] } });
+    }
+  } catch {}
+  await telegram("unpinChatMessage", { chat_id: chatId, message_id: cancelled.ref.messageId }).catch(() => {});
+  return { cancelled: true, draftCancelled };
 }
 
 async function claimRaidGroupResurface(chatId, incomingMessageId) {
