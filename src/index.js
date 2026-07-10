@@ -42578,9 +42578,9 @@ async function kolCallPostTargets(post) {
   const text = String(post?.text || post?.caption || "").trim();
   const urls = telegramPostEntityUrls(post);
   let targets = await resolveExplicitScanTargetsFromText(text, urls, 1).catch(() => []);
-  // A ticker alone is ambiguous in normal channel chatter. Accept it as a call only alongside clear
-  // call language/emoji, while a CA or coin link always qualifies immediately.
-  if (!targets.length && extractCashtags(text).length && /\b(call|called|buy|entry|ape|gem|send|moon|watch|chart|contract|ca)\b|[🚨🔥🚀]/i.test(text)) {
+  // A selected KOL's $ticker is intentional enough to resolve even when their whole post is only
+  // "$TICKER". Plain untagged words stay text-only so we never attach a guessed/wrong coin scan.
+  if (!targets.length && extractCashtags(text).length) {
     targets = await resolveAllScanTargetsFromText(text, urls, 1, { allowBareTickerHints: false }).catch(() => []);
   }
   const valid = [];
@@ -42622,6 +42622,33 @@ async function sendKolCallCardToTarget(targetChatId, source, post, mint) {
   await handleTelegramLookCommand(targetChatId, post, mint, { skipCooldown: true, contextHtml }).catch(() => {});
   return true;
 }
+async function sendKolTextPostToTarget(targetChatId, source, post) {
+  const sourceId = String(source.id);
+  const deliveryKey = `${targetChatId}:${sourceId}:${post.message_id}`;
+  const prior = Number(kolCallDeliveryGuard.get(deliveryKey) || 0);
+  if (prior && Date.now() - prior < 24 * 60 * 60_000) return false;
+  kolCallDeliveryGuard.set(deliveryKey, Date.now());
+  if (kolCallDeliveryGuard.size > 2000) {
+    const cutoff = Date.now() - 24 * 60 * 60_000;
+    for (const [key, at] of kolCallDeliveryGuard) if (at < cutoff) kolCallDeliveryGuard.delete(key);
+  }
+  const publicUrl = source.username ? `https://t.me/${source.username}/${post.message_id}` : "";
+  const label = escapeTelegramHtml(source.title || source.username || sourceId);
+  const sourceLine = publicUrl
+    ? `📣 <b>KOL Post:</b> <a href="${publicUrl}">${label} · original post</a>`
+    : `📣 <b>KOL Post:</b> ${label}`;
+  const excerpt = String(post?.text || post?.caption || "")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 1200);
+  await sayHtml(targetChatId, [
+    sourceLine,
+    excerpt ? `<blockquote>${escapeTelegramHtml(excerpt)}</blockquote>` : "",
+    "<i>No CA, coin link or $ticker was identifiable, so no scan was attached.</i>",
+  ].filter(Boolean).join("\n")).catch(() => {});
+  return true;
+}
 async function handleKolSourceChannelPost(post) {
   const sourceId = String(post?.chat?.id || "");
   if (!sourceId || !post?.message_id) return false;
@@ -42635,9 +42662,10 @@ async function handleKolSourceChannelPost(post) {
     title: String(registered?.title || post.chat?.title || post.chat?.username || sourceId).slice(0, 80),
     username: String(registered?.username || post.chat?.username || "").replace(/^@/, "").slice(0, 64),
   };
-  const targets = await kolCallPostTargets(post);
-  if (!targets.length) return false;
+  const hasText = String(post?.text || post?.caption || "").trim().length >= 2;
+  if (!hasText) return false;
   if (!(await claimKolCallFeedPost(sourceId, post.message_id))) return true;
+  const targets = await kolCallPostTargets(post);
   const latestStore = await readGroupBot();
   const destinations = Object.entries(latestStore.groups || {}).filter(([chatId, entry]) => {
     if (String(chatId) === sourceId) return false;
@@ -42647,7 +42675,8 @@ async function handleKolSourceChannelPost(post) {
   const primaryMint = targets[0];
   for (const [chatId] of destinations) {
     if (!kolCallFeedRateAllowed(chatId, 10)) continue;
-    await sendKolCallCardToTarget(chatId, source, post, primaryMint);
+    if (primaryMint) await sendKolCallCardToTarget(chatId, source, post, primaryMint);
+    else await sendKolTextPostToTarget(chatId, source, post);
   }
   await rememberKolSourceChannel(post.chat, {
     botAdmin: post?._publicPreview ? Boolean(registered?.botAdmin) : true,
@@ -42739,10 +42768,14 @@ async function pollPublicKolSources() {
       if (!prior) {
         // First observation is a baseline, never a historical-post flood.
         store.kolPublicCursor[String(source.id)] = newest;
+        store.kolCallSeen = store.kolCallSeen && typeof store.kolCallSeen === "object" ? store.kolCallSeen : {};
+        store.kolCallSeen[`${source.id}:${newest}`] = store.kolCallSeen[`${source.id}:${newest}`] || Date.now();
         cursorChanged = true;
         continue;
       }
-      const fresh = posts.filter((post) => post.message_id > prior).slice(-5);
+      // Include the cursor post once: older code advanced its cursor even when a text-only post was
+      // skipped. The persistent claim guard makes this a no-op for anything already delivered.
+      const fresh = posts.filter((post) => post.message_id >= prior).slice(-5);
       for (const post of fresh) await handleKolSourceChannelPost(post).catch(() => {});
       if (newest > prior) {
         store.kolPublicCursor[String(source.id)] = newest;
@@ -42990,7 +43023,7 @@ function groupBotModuleView(module, entry) {
         "📣 <b>KOL Call Feed</b>",
         kc.on ? "Status: <b>🟢 ON</b>" : "Status: <b>⚪ off</b>",
         "",
-        "Choose public KOL channels. When one posts a real coin call, SlimeWire sends one clean scan card with channel attribution and an original-post link.",
+        "Choose public KOL channels. Every new text post is delivered once. If it contains a CA, coin link or $ticker, SlimeWire attaches the full scan in that same message.",
         "",
         ...sourceLines,
         "",

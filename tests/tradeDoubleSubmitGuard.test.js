@@ -933,6 +933,7 @@ test("KOL Call Feed watches public sources, is admin-selected, deduped, and post
   assert.match(dispatch, /claimKolCallFeedPost/);
   assert.match(dispatch, /cfg\.on && cfg\.sources\.some/);
   assert.match(dispatch, /const primaryMint = targets\[0\]/);
+  assert.match(dispatch, /sendKolTextPostToTarget/);
   assert.doesNotMatch(dispatch, /for \(const mint of targets\)/);
   const forward = functionBody(serverSource, "sendKolCallCardToTarget");
   assert.match(forward, /kolCallDeliveryGuard/);
@@ -941,8 +942,13 @@ test("KOL Call Feed watches public sources, is admin-selected, deduped, and post
   assert.match(forward, /postExcerpt/);
   assert.match(forward, /<blockquote>/);
   assert.match(forward, /handleTelegramLookCommand\(targetChatId, post, mint, \{ skipCooldown: true, contextHtml \}\)/);
+  const textPost = functionBody(serverSource, "sendKolTextPostToTarget");
+  assert.match(textPost, /KOL Post:/);
+  assert.match(textPost, /No CA, coin link or \$ticker/);
+  assert.match(textPost, /kolCallDeliveryGuard/);
   const targets = functionBody(serverSource, "kolCallPostTargets");
   assert.match(targets, /resolveExplicitScanTargetsFromText/);
+  assert.match(targets, /A selected KOL's \$ticker/);
   assert.match(targets, /isRhContract/);
   assert.match(targets, /isSolMintAddress/);
   const menu = functionBody(serverSource, "groupBotModuleView");
