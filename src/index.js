@@ -36015,6 +36015,35 @@ async function rhScanLogo(info = {}) {
   }
   return null;
 }
+// All-time-high for a Robinhood coin — no provider gives ATH, so read the pool's DAILY OHLCV from
+// GeckoTerminal (which DOES index the `robinhood` network) and take the max high. Cached 15min. Returns
+// the ATH price in USD, or null. Finds the deepest pool for the token when no pool hint is passed.
+const rhAthCache = new Map();
+async function rhTokenAthUsd(address, poolHint = "") {
+  const key = String(address || "").toLowerCase();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(key)) return null;
+  const c = rhAthCache.get(key);
+  if (c && Date.now() - c.at < 15 * 60_000) return c.ath;
+  let pool = String(poolHint || "").toLowerCase();
+  let ath = null;
+  try {
+    if (!/^0x[0-9a-fA-F]{40}$/.test(pool)) {
+      const pj = await fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${key}/pools?page=1`, { timeoutMs: 5000 }).catch(() => null);
+      const pools = (pj?.data || []).slice().sort((x, y) => (Number(y.attributes?.reserve_in_usd) || 0) - (Number(x.attributes?.reserve_in_usd) || 0));
+      pool = String(pools[0]?.attributes?.address || String(pools[0]?.id || "").replace(/^robinhood_/, "")).toLowerCase();
+    }
+    if (/^0x[0-9a-fA-F]{40}$/.test(pool)) {
+      const oj = await fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/pools/${pool}/ohlcv/day?limit=1000&currency=usd`, { timeoutMs: 6000 }).catch(() => null);
+      let hi = 0;
+      for (const row of (oj?.data?.attributes?.ohlcv_list || [])) { const h = Number(row?.[2]); if (Number.isFinite(h) && h > hi) hi = h; }
+      if (hi > 0) ath = hi;
+    }
+  } catch { /* best-effort */ }
+  rhAthCache.set(key, { at: Date.now(), ath });
+  if (rhAthCache.size > 300) rhAthCache.delete(rhAthCache.keys().next().value);
+  return ath;
+}
+
 async function gatherRhScan(address) {
   const a = String(address || "").trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return null;
@@ -36066,8 +36095,17 @@ async function gatherRhScan(address) {
     if (chainCreated) rhCreatedCache.set(key, chainCreated);
   }
   if (!(priceUsd > 0)) scheduleRhPriceFill([{ address: a, priceUsd: 0 }]);
+  // ATH (GeckoTerminal OHLCV, robinhood network) — real all-time-high price → ATH market cap + how far off it.
+  const athPriceUsd = await rhPromiseTimeout(rhTokenAthUsd(a, pair?.pairAddress || noxa?.pool || ""), 5000, null);
+  const athMc = (athPriceUsd > 0 && supply > 0)
+    ? Number(athPriceUsd) * Number(supply)
+    : (athPriceUsd > 0 && priceUsd > 0 && mc > 0 ? mc * (Number(athPriceUsd) / Number(priceUsd)) : 0);
+  const fromAthPct = (athPriceUsd > 0 && priceUsd > 0) ? (Number(priceUsd) / Number(athPriceUsd) - 1) * 100 : null;
   const v = {
     address: a, chain: "robinhood",
+    athPriceUsd: Number(athPriceUsd) || 0,
+    athMc: Number(athMc) || 0,
+    fromAthPct: Number.isFinite(fromAthPct) ? fromAthPct : null,
     symbol: String(firstString(pair?.baseToken?.symbol, feed?.symbol, noxa?.symbol) || "").replace(/^\$+/, "").slice(0, 16),
     name: String(firstString(pair?.baseToken?.name, feed?.name, noxa?.name) || "").slice(0, 40),
     priceUsd: Number(priceUsd) || 0,
@@ -36168,6 +36206,7 @@ function formatRhScanCard(info) {
     "📊 <b>Stats</b>",
     `├ USD  <b>${price}</b> (${ch.title} ${chText})`,
     `├ MC   <b>${info.mc > 0 ? scanFmtMoney(info.mc) : "n/a"}</b>`,
+    ...(info.athMc > 0 ? [`├ ATH  <b>${scanFmtMoney(info.athMc)}</b>${info.fromAthPct != null && info.fromAthPct < -1 ? ` <i>(${Math.round(info.fromAthPct)}% from ATH)</i>` : (info.fromAthPct != null && info.fromAthPct >= -1 ? " <i>(at ATH)</i>" : "")}`] : []),
     `├ Vol  <b>${vol.value > 0 ? scanFmtMoney(vol.value) : "n/a"}</b>${vol.title ? ` <i>${vol.title.toLowerCase()}</i>` : ""}`,
     `├ Holders <b>${info.holders > 0 ? scanFmtSupply(info.holders) : "n/a"}</b>`,
     `└ Liq  <b>${info.liq > 0 ? scanFmtMoney(info.liq) : "n/a"}</b>`,
