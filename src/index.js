@@ -34890,6 +34890,7 @@ async function readXDmState() {
   let s = null; try { s = await readJson(xDmStateFile()); } catch { s = null; }
   if (!s || typeof s !== "object") s = {};
   if (!s.seen || typeof s.seen !== "object") s.seen = {};
+  if (!s.replied || typeof s.replied !== "object") s.replied = {}; // incoming event id -> confirmed reply accepted by X
   if (!s.ignored || typeof s.ignored !== "object") s.ignored = {};
   if (!s.links || typeof s.links !== "object") s.links = {};       // xSenderId -> { userId, linkedAt }
   if (!s.codes || typeof s.codes !== "object") s.codes = {};       // short code -> { userId, expiresAt }
@@ -34918,9 +34919,10 @@ async function writeXDmState(s) {
   }
 }
 function xDmPruneState(s, now = Date.now()) {
-  const sizeBefore = [s.seen, s.ignored, s.codes, s.pending, s.contexts, s.failures, s.executing, s.outbox, s.menuSessions, s.usedBootstraps, s.shortLinks]
+  const sizeBefore = [s.seen, s.replied, s.ignored, s.codes, s.pending, s.contexts, s.failures, s.executing, s.outbox, s.menuSessions, s.usedBootstraps, s.shortLinks]
     .reduce((sum, value) => sum + Object.keys(value || {}).length, 0);
   for (const [id, ts] of Object.entries(s.seen || {})) if (now - Number(ts || 0) > 3 * 86_400_000) delete s.seen[id];
+  for (const [id, ts] of Object.entries(s.replied || {})) if (now - Number(ts || 0) > 3 * 86_400_000) delete s.replied[id];
   for (const [id, ts] of Object.entries(s.ignored || {})) if (now - Number(ts || 0) > 3 * 86_400_000) delete s.ignored[id];
   for (const [code, rec] of Object.entries(s.codes || {})) if (Number(rec?.expiresAt || 0) < now) delete s.codes[code];
   for (const [sender, rec] of Object.entries(s.pending || {})) if (Number(rec?.expiresAt || 0) < now) delete s.pending[sender];
@@ -34939,7 +34941,7 @@ function xDmPruneState(s, now = Date.now()) {
     const link = s.links?.[String(session?.senderId || "")];
     if (!link || String(link.userId) !== String(session?.userId || "")) delete s.menuSessions[hash];
   }
-  const sizeAfter = [s.seen, s.ignored, s.codes, s.pending, s.contexts, s.failures, s.executing, s.outbox, s.menuSessions, s.usedBootstraps, s.shortLinks]
+  const sizeAfter = [s.seen, s.replied, s.ignored, s.codes, s.pending, s.contexts, s.failures, s.executing, s.outbox, s.menuSessions, s.usedBootstraps, s.shortLinks]
     .reduce((sum, value) => sum + Object.keys(value || {}).length, 0);
   return sizeAfter !== sizeBefore;
 }
@@ -36337,7 +36339,16 @@ async function xDmPollTick() {
     let failed = 0;
     let oldestFreshLagMs = 0;
     for (const event of events) {
-      if (state.seen[event.id] || state.ignored[event.id]) continue;
+      // Recovery for the exact failure seen live: a recent pasted CA was persisted as seen, but no delivered
+      // reply marker exists. Replay only a read-only bare CA from the last 30 minutes—never commands, YES/NO,
+      // buys, sells, settings, or old history. Once X accepts the reply, `replied` makes it one-shot.
+      const seenAt = Number(state.seen[event.id] || 0);
+      const recentUnrepliedBareCa = seenAt > 0
+        && !state.replied[event.id]
+        && Date.now() - seenAt < 30 * 60_000
+        && xDmParseTargets(String(event.text || "")).length > 0
+        && !/\b(buy|sell|yes|no|confirm|positions?|wallets?|settings?|presets?|bundle|volume|launch|copy|set)\b/i.test(String(event.text || ""));
+      if ((state.seen[event.id] && !recentUnrepliedBareCa) || state.ignored[event.id]) continue;
       const previousFailure = state.failures[event.id];
       if (Number(previousFailure?.nextRetryAt || 0) > Date.now()) continue;
       const eventAt = xDmEventTimestampMs(event);
@@ -36346,6 +36357,7 @@ async function xDmPollTick() {
         const result = await xDmHandleEvent(event, state);
         if (result?.ok === false) throw new Error(result.error || result.reason || "X DM reply failed");
         state.seen[event.id] = Date.now();
+        if (result?.ok === true) state.replied[event.id] = Date.now();
         delete state.failures[event.id];
         stateDirty = true;
         handled++;

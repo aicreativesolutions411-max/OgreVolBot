@@ -50,5 +50,9 @@ test("X DM pasted CAs acknowledge slow scans and cannot stall the inbox poller",
   assert.match(handle, /scanFastTimeout\(replyWork, 11_500, null\)/);
   assert.match(handle, /Market details are still warming; the live chart is ready/);
   assert.match(poll, /\[xdm\] poll ok checked=/);
+  assert.match(poll, /recentUnrepliedBareCa/);
+  assert.match(poll, /Date\.now\(\) - seenAt < 30 \* 60_000/);
+  assert.match(poll, /!state\.replied\[event\.id\]/);
+  assert.match(poll, /state\.replied\[event\.id\] = Date\.now\(\)/);
   assert.match(xClient, /inbox_initial_state\.json[\s\S]*\$\{DM_QUERY\}&_\=\$\{Date\.now\(\)\}/);
 });
