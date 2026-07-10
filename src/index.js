@@ -7568,14 +7568,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const mwallet = String(requestUrl.searchParams.get("wallet") || "").trim();
       const mmode = requestUrl.searchParams.get("mode") === "network" ? "network" : "bags";
       const mtarget = mmint || mwallet;
-      if (!solanaPublicKeyLike(mtarget)) { sendWebJson(request, response, 400, { ok: false, error: "ca or wallet required" }); return; }
+      const mIsRh = /^0x[0-9a-fA-F]{40}$/.test(mtarget);
+      if (!solanaPublicKeyLike(mtarget) && !mIsRh) { sendWebJson(request, response, 400, { ok: false, error: "ca or wallet required" }); return; }
       let map;
       try {
         // HARD 14s timeout so a slow chain read can never hang the request into a client "failed to load"
         // (mobile browsers bail fast, and Render 504s an idle socket). On timeout we return a clean retryable
         // message instead of a dead connection.
         map = await Promise.race([
-          (mwallet && !mmint) ? buildWalletMap(mtarget, mmode) : buildSubjectMap(mtarget, mmode),
+          (mwallet && !mmint && !mIsRh) ? buildWalletMap(mtarget, mmode) : buildSubjectMap(mtarget, mmode),
           new Promise((_, rej) => setTimeout(() => rej(new Error("__map_timeout__")), 14_000)),
         ]);
       } catch (e) {
@@ -7596,7 +7597,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const gwallet = String(requestUrl.searchParams.get("wallet") || "").trim();
       const gmode = requestUrl.searchParams.get("mode") === "network" ? "network" : "bags";
       const gtarget = gmint || gwallet;
-      if (!solanaPublicKeyLike(gtarget)) { sendWebJson(request, response, 400, { ok: false, error: "ca or wallet required" }); return; }
+      if (!solanaPublicKeyLike(gtarget) && !/^0x[0-9a-fA-F]{40}$/.test(gtarget)) { sendWebJson(request, response, 400, { ok: false, error: "ca or wallet required" }); return; }
       try {
         const { png } = await renderSubjectMapPng(gtarget, gmode);
         if (!png) { sendWebJson(request, response, 404, { ok: false, error: "no map" }); return; }
@@ -33957,7 +33958,72 @@ async function mapComputeClusters(mint, nodes) {
 
 // Decide token vs wallet by METADATA (buildTokenHolderMap sets isToken from pump/dex meta) — NOT by holder
 // count, so a real coin whose holder read is slow is never mis-read as a wallet.
+// 🪶 Robinhood-Chain holder bubble map — same card shape as the SOL token map (buildTokenHolderMap), fed by
+// Blockscout token holders + gatherRhScan market data. RH has no KOL identity index, so every holder is an
+// anon slime face. Returns the same {kind,isToken,mint,subject,stats,nodes,coinLogo} the renderer expects.
+async function buildRhTokenHolderMap(address) {
+  const addr = String(address || "").trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return null;
+  const [info, data, tokRes] = await Promise.all([
+    gatherRhScan(addr).catch(() => null),
+    fetchJson(`https://robinhoodchain.blockscout.com/api/v2/tokens/${addr}/holders`, { headers: { accept: "application/json" }, timeoutMs: 8000 }).catch(() => null),
+    fetchJson(`https://robinhoodchain.blockscout.com/api/v2/tokens/${addr}`, { headers: { accept: "application/json" }, timeoutMs: 6000 }).catch(() => null),
+  ]);
+  const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
+  const poolAddr = String(info?.pairAddress || "").toLowerCase();
+  const DEAD = new Set(["0x0000000000000000000000000000000000000000", "0x000000000000000000000000000000000000dead"]);
+  const toBig = (v) => { const s = String(v || "0"); return /^\d+$/.test(s) ? BigInt(s) : 0n; };
+  // pct from RAW value ÷ RAW total_supply — decimals cancel, so no per-item decimals guessing.
+  let rows = items.map((item) => ({
+    wallet: String(firstString(item?.address?.hash, item?.address_hash, item?.holder?.hash, item?.holder, item?.address) || "").toLowerCase(),
+    raw: toBig(firstString(item?.value, item?.balance, item?.token_balance, item?.total?.value)),
+  })).filter((r) => /^0x[0-9a-fA-F]{40}$/.test(r.wallet) && r.raw > 0n && r.wallet !== poolAddr && !DEAD.has(r.wallet));
+  if (!rows.length) return { kind: "token", mint: addr, isToken: false, nodes: [] };
+  const supplyRaw = toBig(tokRes?.total_supply);
+  const denomBig = supplyRaw > 0n ? supplyRaw : (rows.reduce((s, r) => s + r.raw, 0n) || 1n);
+  rows = rows.map((r) => ({ wallet: r.wallet, pct: Number((r.raw * 1_000_000n) / denomBig) / 10_000 }))
+    .sort((a, b) => b.pct - a.pct).slice(0, 100);
+  const mc = Number(info?.mc) || 0, liq = Number(info?.liq) || 0;
+  const maxPct = rows.reduce((m, h) => Math.max(m, h.pct || 0), 0) || 1;
+  const nodes = await Promise.all(rows.map(async (h, i) => {
+    const isWhale = (h.pct || 0) >= Math.max(1, maxPct * 0.5) || (i === 0 && (h.pct || 0) > 0);
+    const usd = mc ? ((h.pct || 0) / 100) * mc : 0;
+    const face = await mapAnonFace(h.wallet).catch(() => null);
+    const label = (i < 3 && usd > 0) ? `${fmtMc(usd)} · ${(h.pct || 0).toFixed(1)}%` : null;
+    return {
+      i, wallet: h.wallet, isKol: false, name: "", twitter: "",
+      weight: Math.max(0.05, Math.min(1, (h.pct || 0) / maxPct)),
+      state: isWhale ? "whale" : "hold", label, pct: h.pct || 0, usd,
+      avatarUrl: null, faceUrl: face ? face.url : null, faceFile: face ? face.file : null,
+    };
+  }));
+  const top10 = rows.slice(0, 10).reduce((s, h) => s + (h.pct || 0), 0);
+  const shown = nodes.length;
+  const holderCount = Math.max(Number(info?.holders) || 0, shown);
+  const sym = String(info?.symbol || shortMint(addr)).replace(/^\$+/, "").slice(0, 11);
+  const ageLabel = info?.createdAt > 0 ? xAgeLabel(Math.max(0, Date.now() - Number(info.createdAt))) : "—";
+  const stats = [
+    { label: "MARKET CAP", value: mc ? fmtMc(mc) : "—" },
+    { label: "LIQUIDITY", value: liq ? fmtMc(liq) : "—" },
+    { label: "AGE", value: ageLabel },
+    { label: "1H", value: Number.isFinite(info?.ch1) ? `${info.ch1 >= 0 ? "+" : ""}${Math.round(info.ch1)}%` : "—" },
+    { label: "HOLDERS", value: holderCount ? fmtHolderCount(holderCount) : "—" },
+    { label: "TOP 10", value: top10 > 0 ? `${Math.round(top10)}%` : "—" },
+  ];
+  return {
+    kind: "token", isToken: true, mint: addr, chain: "robinhood", mc, liq, ch1: Number(info?.ch1) || null,
+    subject: `$${sym}`, ticker: sym, coinLogo: info?.imageUrl || "",
+    subtitle: holderCount > shown ? `${fmtHolderCount(holderCount)} holders · top ${shown} shown` : `${shown} holders`,
+    holderCount, kolsIn: 0, stats, nodes,
+  };
+}
 async function buildSubjectMap(target, mode = "bags") {
+  // Robinhood Chain coin (0x…) → RH holder map; it isn't a base58 SOL mint/wallet so the SOL paths skip it.
+  if (/^0x[0-9a-fA-F]{40}$/.test(String(target || "").trim())) {
+    const rh = await buildRhTokenHolderMap(target).catch(() => null);
+    if (rh && rh.isToken) return rh;
+    return null;   // an unknown 0x with no holders → no map (there's no RH wallet-bag map yet)
+  }
   const tok = await buildTokenHolderMap(target).catch(() => null);
   if (tok && tok.isToken) return tok;
   return buildWalletMap(target, mode);
@@ -33976,7 +34042,7 @@ async function renderSubjectMapPng(target, mode = "bags") {
   // x pic"). Best-effort + hard 12s cap so a slow funder scan never stalls the X reply — no clusters just
   // renders the plain radial map. Uses the cluster cache, so a coin already mapped on-site is instant here.
   let clusters = [], clusterEdges = [];
-  if (map.kind === "token" && map.mint) {
+  if (map.kind === "token" && map.mint && map.chain !== "robinhood") {   // funder-cluster scan is Solana-only
     try {
       const gr = await Promise.race([
         mapComputeClusters(map.mint, map.nodes),
@@ -34028,7 +34094,7 @@ async function buildXMapReply(target, variant, mode = "bags") {
   // For a COIN: reply with BOTH the holder bubble map AND the airdrop map (owner: "sends the coins airdrop map
   // shot and the bubble map with mc etc"). Airdrop is best-effort — if it can't build, we still send the map.
   const media = [png];
-  if (map.kind === "token" && map.mint) {
+  if (map.kind === "token" && map.mint && map.chain !== "robinhood") {   // airdrop map is Solana-only
     // Pass what the holder map already resolved so the airdrop builder can't mis-judge "not a token" (the
     // silent airdrop-map miss on non-pump coins). Log any remaining skip — never fail invisibly again.
     const drop = await renderAirdropMapPng(map.mint, { isToken: true, sym: map.ticker, mc: map.mc, liq: map.liq, ch1: map.ch1 })
@@ -34085,8 +34151,9 @@ async function sendMapCard(chatId, target, mode = "bags") {
   });
 }
 async function handleTelegramMapCommand(chatId, message, argument) {
-  const target = (String(argument || "").match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/) || [])[0] || "";
-  if (!target) { await say(chatId, "Usage: /map <coin CA or wallet> — I'll draw the holder / bag bubble map."); return; }
+  const arg = String(argument || "");
+  const target = (arg.match(/0x[0-9a-fA-F]{40}/) || [])[0] || (arg.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/) || [])[0] || "";
+  if (!target) { await say(chatId, "Usage: /map <coin CA or wallet> — I'll draw the holder / bag bubble map (Solana or Robinhood 0x…)."); return; }
   if (tgCommandOnCooldown(chatId, "map", 6000)) return;
   await sendMapCard(chatId, target, "bags");
 }
@@ -36644,8 +36711,11 @@ async function sendWalletScanCard(chatId, address) {
 }
 // Dispatch a mention to the right card based on what they asked. `variant` (tweet id) seeds the wording + art.
 async function buildXReply(mint, intent = "scan", variant) {
-  // Robinhood Chain coin (0x…) → RH scan card (falls back to text if its render fails).
-  if (/^0x[0-9a-fA-F]{40}$/.test(String(mint || ""))) return await buildXRhReply(mint, variant);
+  // Robinhood Chain coin (0x…) → RH scan card, or the RH holder bubble map when they asked for a map.
+  if (/^0x[0-9a-fA-F]{40}$/.test(String(mint || ""))) {
+    if (intent === "map") return (await buildXMapReply(mint, variant).catch(() => null)) || await buildXRhReply(mint, variant);
+    return await buildXRhReply(mint, variant);
+  }
   if (intent === "map") return (await buildXMapReply(mint, variant).catch(() => null)) || await buildXScanReply(mint, variant);
   if (intent === "chart") return await buildXChartReply(mint, variant);
   if (intent === "rug") return await buildXRugReply(mint, variant);
