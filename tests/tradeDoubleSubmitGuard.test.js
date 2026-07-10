@@ -921,14 +921,15 @@ test("settings menu is multi-level: home -> per-bot sub-menus, clickable toggles
   assert.match(serverSource, /if \(await applyGbInput\(message, userId\)/); // wired into the router
 });
 
-test("KOL Call Feed is source-consented, admin-selected, deduped, and posts one combined scan", () => {
+test("KOL Call Feed watches public sources, is admin-selected, deduped, and posts one combined scan", () => {
   assert.match(serverSource, /allowed_updates: \["message", "callback_query", "inline_query", "channel_post"/);
   const channel = functionBody(serverSource, "handleChannelPostCommands");
   assert.match(channel, /setKolSourceOptIn\(post\.chat, action === "on"\)/);
   assert.match(channel, /handleKolSourceChannelPost\(post\)/);
   assert.match(channel, /kolfeed-command:\$\{post\.message_id\}/);
   const dispatch = functionBody(serverSource, "handleKolSourceChannelPost");
-  assert.match(dispatch, /source\?\.optedIn/);
+  assert.match(dispatch, /registered\?\.feedDisabled/);
+  assert.match(dispatch, /_publicPreview/);
   assert.match(dispatch, /claimKolCallFeedPost/);
   assert.match(dispatch, /cfg\.on && cfg\.sources\.some/);
   assert.match(dispatch, /const primaryMint = targets\[0\]/);
@@ -937,6 +938,8 @@ test("KOL Call Feed is source-consented, admin-selected, deduped, and posts one 
   assert.match(forward, /kolCallDeliveryGuard/);
   assert.doesNotMatch(forward, /telegram\("forwardMessage"/);
   assert.match(forward, /original post/);
+  assert.match(forward, /postExcerpt/);
+  assert.match(forward, /<blockquote>/);
   assert.match(forward, /handleTelegramLookCommand\(targetChatId, post, mint, \{ skipCooldown: true, contextHtml \}\)/);
   const targets = functionBody(serverSource, "kolCallPostTargets");
   assert.match(targets, /resolveExplicitScanTargetsFromText/);
@@ -955,11 +958,18 @@ test("KOL Call Feed is source-consented, admin-selected, deduped, and posts one 
   assert.match(input, /resolveKolSourceReference/);
   assert.match(input, /Anonymous group admins/);
   assert.match(input, /Private invite links/);
+  assert.match(input, /kolfeed-input:\$\{message\.message_id\}/);
   assert.match(functionBody(serverSource, "handleGroupBotCallback"), /gb:kol:add[\s\S]*sendMessage[\s\S]*promptMsgId/);
   assert.match(functionBody(serverSource, "clearKolFeedInputPrompt"), /deleteMessage/);
   const resolver = functionBody(serverSource, "resolveKolSourceReference");
   assert.match(resolver, /publicLink/);
   assert.match(resolver, /telegram/);
+  const publicPoll = functionBody(serverSource, "pollPublicKolSources");
+  assert.match(publicPoll, /https:\/\/t\.me\/s\//);
+  assert.match(publicPoll, /Math\.min\(10, all\.length\)/);
+  assert.match(publicPoll, /First observation is a baseline/);
+  assert.match(publicPoll, /slice\(-5\)/);
+  assert.match(functionBody(serverSource, "parseTelegramPublicPreview"), /tgme_widget_message_wrap/);
 });
 
 test("Shield folds into Rose: scam/ghost/impersonator/auto-whitelist (all off by default)", () => {

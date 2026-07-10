@@ -5888,7 +5888,7 @@ async function registerTelegramBotCommands() {
     { command: "proof", description: "Live engine track record + proof wall" },
     { command: "mywins", description: "on/off - post YOUR TP wins in this chat" },
     { command: "slimewire", description: "on/off - engine alerts in this chat (admins)" },
-    { command: "kolfeed", description: "Manage opted-in KOL call sources (admins)" }
+    { command: "kolfeed", description: "Manage public KOL call sources (admins)" }
   ];
   const dmCommands = [
     ...groupCommands,
@@ -42298,7 +42298,7 @@ async function handleChannelPostCommands(post) {
     } else {
       const store = await readGroupBot();
       const source = store.kolSources?.[String(chatId)];
-      await sayHtml(chatId, `📣 KOL Call Feed source is <b>${source?.optedIn ? "ON" : "off"}</b>.\nUse <code>/kolfeed on</code> to let subscribed groups receive calls, or <code>/kolfeed off</code> to revoke it.`).catch(() => {});
+      await sayHtml(chatId, `📣 KOL Call Feed source is <b>${source?.feedDisabled ? "paused" : "active"}</b>.\nBeing a channel admin is enough for SlimeWireBot to read new posts—no opt-in command is required. Use <code>/kolfeed off</code> only if you want to pause this source.`).catch(() => {});
     }
     return;
   }
@@ -42365,11 +42365,10 @@ async function handleBotChatMembershipUpdate(memberUpdate) {
     return;
   }
   if (!["member", "administrator"].includes(status)) return;
-  // Channels: admin is the ONLY way a bot can post, and only the channel owner can
-  // grant it - that promotion IS the opt-in. Auto-arm, no /slimewire needed, so the
-  // bot scales across many channels with zero per-channel env config.
+  // When installed in a channel, admin access provides the real-time channel_post path. Public KOL
+  // sources can also be watched without installation through their bounded public-preview poller.
   if (chat.type === "channel" && status === "administrator") {
-    await rememberKolSourceChannel(chat, { botAdmin: true }).catch(() => {});
+    await rememberKolSourceChannel(chat, { botAdmin: true, feedDisabled: false }).catch(() => {});
     let alreadyArmed = false;
     await withFileLock(telegramGroupsPath(), async () => {
       const store = await readTelegramGroups();
@@ -42394,7 +42393,7 @@ async function handleBotChatMembershipUpdate(memberUpdate) {
         "",
         "Rate-capped so it never floods. Post /slimewire off here to stop. Track record: slimewire.org/proof",
         "",
-        "Want groups to receive this channel's own coin calls? Post /kolfeed on. Revoke anytime with /kolfeed off."
+        "Want groups to receive this channel's own coin calls? They can add its @username or t.me link. /kolfeed off pauses syndication."
       ].join("\n"));
     }
     return;
@@ -42433,9 +42432,9 @@ function defaultGroupBotEntry() { return { features: { buybot: false, raid: fals
 async function getGroupBotEntry(chatId) { return (await readGroupBot()).groups[String(chatId)] || null; }
 function groupBotFeatureOn(entry, key) { return Boolean(entry && entry.features && entry.features[key]); }
 
-// Permission-based KOL Call Feed. A source channel must explicitly opt in while the bot is an admin;
-// target groups then choose which opted-in channels they want. The target keeps a small source snapshot
-// so its settings menu stays readable even if Telegram temporarily cannot resolve the source username.
+// KOL Call Feed. Target-group admins choose public sources by username/link/forward. Public channels are
+// watched through Telegram's preview page; channels where the bot is admin also arrive as channel_post.
+// The target keeps a small source snapshot so its menu survives temporary Telegram resolution failures.
 function kolCallFeedConfig(entry) {
   const raw = entry?.kolCallFeed && typeof entry.kolCallFeed === "object" ? entry.kolCallFeed : {};
   const seen = new Set();
@@ -42490,24 +42489,27 @@ async function rememberKolSourceChannel(chat, patch = {}) {
   return store.kolSources[key];
 }
 async function setKolSourceOptIn(chat, on) {
-  return rememberKolSourceChannel(chat, { optedIn: Boolean(on), botAdmin: Boolean(on), optedInAt: on ? Date.now() : 0 });
+  // /kolfeed is now an optional source-side pause switch. Adding the bot as a channel admin is
+  // sufficient to stream posts; no separate opt-in command is required.
+  return rememberKolSourceChannel(chat, { optedIn: Boolean(on), feedDisabled: !on, botAdmin: true, optedInAt: on ? Date.now() : 0 });
 }
 async function addKolCallFeedSource(chatId, source) {
   const store = await readGroupBot();
   store.kolSources = store.kolSources && typeof store.kolSources === "object" ? store.kolSources : {};
   const sourceId = String(source?.id || "");
   const registered = store.kolSources[sourceId];
-  if (!registered?.optedIn || !registered?.botAdmin) {
-    return { ok: false, error: "That channel has not opted in yet. Add SlimeWireBot as a channel admin, then post /kolfeed on inside the source channel." };
-  }
+  if (!sourceId) return { ok: false, error: "I couldn't identify that source channel." };
   const key = String(chatId);
   const entry = store.groups[key] || defaultGroupBotEntry();
   const cfg = kolCallFeedConfig(entry);
   const record = {
     id: sourceId,
-    title: String(registered.title || source.title || sourceId).slice(0, 80),
-    username: String(registered.username || source.username || "").replace(/^@/, "").slice(0, 64),
+    title: String(registered?.title || source.title || sourceId).slice(0, 80),
+    username: String(registered?.username || source.username || "").replace(/^@/, "").slice(0, 64),
   };
+  // Save public/forwarded references immediately. Telegram will start delivering channel_post updates
+  // automatically once SlimeWireBot is an admin in that source channel.
+  store.kolSources[sourceId] = { ...(registered || {}), ...record, addedAt: registered?.addedAt || Date.now(), updatedAt: Date.now() };
   cfg.sources = [...cfg.sources.filter((item) => item.id !== sourceId), record].slice(0, 20);
   entry.features = { ...(entry.features || {}), kolfeed: true };
   entry.kolCallFeed = { ...cfg, on: true, sources: cfg.sources };
@@ -42604,9 +42606,17 @@ async function sendKolCallCardToTarget(targetChatId, source, post, mint) {
   }
   const publicUrl = source.username ? `https://t.me/${source.username}/${post.message_id}` : "";
   const label = escapeTelegramHtml(source.title || source.username || sourceId);
-  const contextHtml = publicUrl
+  const sourceLine = publicUrl
     ? `📣 <b>KOL Call:</b> <a href="${publicUrl}">${label} · original post</a>`
     : `📣 <b>KOL Call:</b> ${label}`;
+  const postExcerpt = String(post?.text || post?.caption || "")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 320);
+  const contextHtml = postExcerpt
+    ? `${sourceLine}\n<blockquote>${escapeTelegramHtml(postExcerpt)}</blockquote>`
+    : sourceLine;
   // One source post produces ONE combined scan card. The source attribution/original link is embedded
   // inside the card instead of forwarding the post as a separate Telegram message.
   await handleTelegramLookCommand(targetChatId, post, mint, { skipCooldown: true, contextHtml }).catch(() => {});
@@ -42616,8 +42626,15 @@ async function handleKolSourceChannelPost(post) {
   const sourceId = String(post?.chat?.id || "");
   if (!sourceId || !post?.message_id) return false;
   const store = await readGroupBot();
-  const source = store.kolSources?.[sourceId];
-  if (!source?.optedIn || !source?.botAdmin) return false;
+  const registered = store.kolSources?.[sourceId];
+  if (registered?.feedDisabled) return false;
+  // Receiving a channel_post itself proves the bot currently has channel access. This avoids a
+  // separate /kolfeed on handshake while retaining /kolfeed off as an optional owner pause.
+  const source = {
+    id: sourceId,
+    title: String(registered?.title || post.chat?.title || post.chat?.username || sourceId).slice(0, 80),
+    username: String(registered?.username || post.chat?.username || "").replace(/^@/, "").slice(0, 64),
+  };
   const targets = await kolCallPostTargets(post);
   if (!targets.length) return false;
   if (!(await claimKolCallFeedPost(sourceId, post.message_id))) return true;
@@ -42632,8 +42649,110 @@ async function handleKolSourceChannelPost(post) {
     if (!kolCallFeedRateAllowed(chatId, 10)) continue;
     await sendKolCallCardToTarget(chatId, source, post, primaryMint);
   }
-  await rememberKolSourceChannel(post.chat, { optedIn: true, botAdmin: true, lastCallAt: Date.now(), lastMessageId: post.message_id }).catch(() => {});
+  await rememberKolSourceChannel(post.chat, {
+    botAdmin: post?._publicPreview ? Boolean(registered?.botAdmin) : true,
+    lastCallAt: Date.now(),
+    lastMessageId: post.message_id,
+  }).catch(() => {});
   return true;
+}
+
+function decodeTelegramPreviewHtml(value = "") {
+  const named = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+  return String(value)
+    .replace(/<br\s*\/?\s*>/gi, "\n")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (all, entity) => {
+      const key = String(entity).toLowerCase();
+      if (key.startsWith("#x")) return String.fromCodePoint(Number.parseInt(key.slice(2), 16) || 32);
+      if (key.startsWith("#")) return String.fromCodePoint(Number.parseInt(key.slice(1), 10) || 32);
+      return named[key] || all;
+    })
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function parseTelegramPublicPreview(html, source) {
+  const chunks = String(html || "").split(/<div\s+class="tgme_widget_message_wrap[^>]*>/i).slice(1);
+  const posts = [];
+  for (const chunk of chunks) {
+    const dataPost = chunk.match(/\bdata-post="([A-Za-z0-9_]{5,32})\/(\d+)"/i);
+    if (!dataPost) continue;
+    const messageId = Number(dataPost[2]);
+    if (!Number.isSafeInteger(messageId) || messageId <= 0) continue;
+    const textHtml = chunk.match(/<div\s+class="[^"]*tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)<\/div>/i)?.[1] || "";
+    const urls = [...chunk.matchAll(/\bhref="(https?:\/\/[^"#]+(?:#[^"]*)?)"/gi)]
+      .map((match) => decodeTelegramPreviewHtml(match[1]))
+      .filter((url) => !/^https?:\/\/t\.me\/(?:s\/)?[A-Za-z0-9_]+\/?\d*$/i.test(url))
+      .slice(0, 12);
+    const text = [decodeTelegramPreviewHtml(textHtml), ...urls].filter(Boolean).join("\n").slice(0, 8000);
+    posts.push({
+      message_id: messageId,
+      text,
+      chat: { id: String(source.id), type: "channel", title: source.title, username: source.username },
+      _publicPreview: true,
+    });
+  }
+  return posts.sort((a, b) => a.message_id - b.message_id);
+}
+
+let kolPublicPollRunning = false;
+let kolPublicPollCursor = 0;
+async function pollPublicKolSources() {
+  if (kolPublicPollRunning) return;
+  kolPublicPollRunning = true;
+  try {
+    const store = await readGroupBot();
+    const sourceMap = new Map();
+    for (const entry of Object.values(store.groups || {})) {
+      const cfg = kolCallFeedConfig(entry);
+      if (!cfg.on) continue;
+      for (const source of cfg.sources) {
+        if (/^[A-Za-z0-9_]{5,32}$/.test(source.username || "")) sourceMap.set(String(source.id), source);
+      }
+    }
+    const all = [...sourceMap.values()];
+    if (!all.length) return;
+    // One shared watcher, not one poller per group/user. Rotate through at most 10 public sources per
+    // minute and process at most five new posts per source to keep network and scan load bounded.
+    const limit = Math.min(10, all.length);
+    const batch = Array.from({ length: limit }, (_, index) => all[(kolPublicPollCursor + index) % all.length]);
+    kolPublicPollCursor = (kolPublicPollCursor + limit) % all.length;
+    store.kolPublicCursor = store.kolPublicCursor && typeof store.kolPublicCursor === "object" ? store.kolPublicCursor : {};
+    let cursorChanged = false;
+    for (const source of batch) {
+      let html = "";
+      try {
+        const response = await fetch(`https://t.me/s/${encodeURIComponent(source.username)}`, {
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; SlimeWireBot/1.0; +https://www.slimewire.org)" },
+          signal: AbortSignal.timeout(8_000),
+        });
+        if (!response.ok) continue;
+        html = (await response.text()).slice(0, 750_000);
+      } catch { continue; }
+      const posts = parseTelegramPublicPreview(html, source);
+      if (!posts.length) continue;
+      const newest = posts[posts.length - 1].message_id;
+      const prior = Number(store.kolPublicCursor[String(source.id)] || 0);
+      if (!prior) {
+        // First observation is a baseline, never a historical-post flood.
+        store.kolPublicCursor[String(source.id)] = newest;
+        cursorChanged = true;
+        continue;
+      }
+      const fresh = posts.filter((post) => post.message_id > prior).slice(-5);
+      for (const post of fresh) await handleKolSourceChannelPost(post).catch(() => {});
+      if (newest > prior) {
+        store.kolPublicCursor[String(source.id)] = newest;
+        cursorChanged = true;
+      }
+    }
+    if (cursorChanged) await writeGroupBot(store);
+  } finally {
+    kolPublicPollRunning = false;
+  }
 }
 const RAID_DEFAULT_PRESET = { targets: { likes: 100, rts: 25, replies: 10, bookmarks: 10 }, durationMin: 120 };
 function cleanRaidTargets(targets = {}) {
@@ -42732,7 +42851,7 @@ function groupBotMenuText(entry) {
     `⚔️ <b>Raid Bot</b> — ${st("raid")} · live X-raid cards`,
     `🛡️ <b>Rose & Shield</b> — ${st("rose")} · moderation + anti-scam protection`,
     `🔍 <b>Scan Bot</b> — ${st("scan")} · CA / $ticker → scan card`,
-    `📣 <b>KOL Call Feed</b> — ${st("kolfeed")} · opted-in channel calls → one attributed scan card`,
+    `📣 <b>KOL Call Feed</b> — ${st("kolfeed")} · watched channel calls → one attributed scan card`,
     `📣 <b>SlimeWire Alerts</b> — auto plays every 15 min + fresh launches, TP/SL fires, KOL copies &amp; 2x receipts (capped a few/hr)`,
     `📦 <b>Alert Packs</b> — one-tap quiet scanner, launch room, proof room, or all-quiet presets`,
     "",
@@ -42871,12 +42990,12 @@ function groupBotModuleView(module, entry) {
         "📣 <b>KOL Call Feed</b>",
         kc.on ? "Status: <b>🟢 ON</b>" : "Status: <b>⚪ off</b>",
         "",
-        "Choose opted-in KOL channels. When one posts a real coin call, SlimeWire sends one clean scan card with channel attribution and an original-post link when available.",
+        "Choose public KOL channels. When one posts a real coin call, SlimeWire sends one clean scan card with channel attribution and an original-post link.",
         "",
         ...sourceLines,
         "",
-        "Add a source by tapping below, then send <code>@channel</code>, its <code>t.me/channel</code> link, or forward one of its posts. Private channels can use the source code shown by <code>/kolfeed on</code>.",
-        "The source must first add SlimeWireBot as an admin and post <code>/kolfeed on</code>.",
+        "Add a source by tapping below, then send <code>@channel</code>, its <code>t.me/channel</code> link, or forward one of its posts. You can remove it here anytime.",
+        "Public channels need no opt-in and the bot does not need to be inside them. Private/protected channels require SlimeWireBot as an admin or a manually forwarded post.",
         "",
         "Private/protected channels still get attribution on the card. Duplicate posts are ignored; each target is capped at 10 calls/hour.",
       ].join("\n"),
@@ -42986,18 +43105,22 @@ async function applyKolFeedSourceInput(message, userId) {
     return true;
   }
   const source = await resolveKolSourceReference(message, raw).catch(() => null);
+  const looksAttempted = Boolean(message?.forward_origin || message?.forward_from_chat || message?.reply_to_message?.forward_origin || message?.reply_to_message?.forward_from_chat)
+    || /^@?[A-Za-z0-9_]{5,32}$/.test(raw)
+    || /^(?:https?:\/\/)?(?:www\.)?(?:t|telegram)\.me\//i.test(raw)
+    || /^-?\d+$/.test(raw);
+  // A Telegram webhook retry can race the first handler before it clears the pending entry. Claim the
+  // exact input message before emitting either an error or success response so it can answer only once.
+  if ((source || looksAttempted) && message?.message_id
+      && tgCommandOnCooldown(chatId, `kolfeed-input:${message.message_id}`, 10 * 60_000)) return true;
   if (!source) {
-    const looksAttempted = Boolean(message?.forward_origin || message?.forward_from_chat || message?.reply_to_message?.forward_origin || message?.reply_to_message?.forward_from_chat)
-      || /^@?[A-Za-z0-9_]{5,32}$/.test(raw)
-      || /^(?:https?:\/\/)?(?:www\.)?(?:t|telegram)\.me\//i.test(raw)
-      || /^-?\d+$/.test(raw);
     // Do not trap unrelated group chatter, but never silently discard something that looks like a source.
     if (looksAttempted) {
       await sayHtml(chatId, [
         "I couldn't resolve that source channel.",
         "",
-        "Send its public <code>@username</code> or <code>t.me/channel</code> link, forward a channel post, or use the numeric source code printed by <code>/kolfeed on</code>.",
-        "Private invite links such as <code>t.me/+...</code> cannot be resolved by Telegram bots; forward a post or use the source code instead.",
+        "Send its public <code>@username</code> or <code>t.me/channel</code> link, or forward a channel post.",
+        "Private invite links such as <code>t.me/+...</code> cannot be watched publicly; add SlimeWireBot to that channel or forward its calls manually.",
         "",
         "I'm still waiting. Send another source or <code>/cancel</code>.",
       ].join("\n")).catch(() => {});
@@ -43011,7 +43134,7 @@ async function applyKolFeedSourceInput(message, userId) {
   if (!result.ok) {
     await say(chatId, result.error).catch(() => {});
   } else {
-    await sayHtml(chatId, `🟢 Added <b>${escapeTelegramHtml(result.source.title)}</b> to this group's KOL Call Feed.`).catch(() => {});
+    await sayHtml(chatId, `🟢 Added <b>${escapeTelegramHtml(result.source.title)}</b>. Public posts are now watched automatically; use the Remove button anytime.`).catch(() => {});
   }
   if (pending.setupMsgId) await groupBotRenderModule(chatId, "kol", pending.setupMsgId).catch(() => {});
   return true;
@@ -43156,7 +43279,7 @@ async function handleGroupBotCommand(message, userId) {
   const text = String(message.text || message.caption || "").trim();
   // /help — clean command guide (anyone can read it).
   if (/^\/help(?:@\w+)?\b/i.test(text)) { await sayHtml(chat.id, groupBotHelpText()); return true; }
-  // Target-group KOL feed controls. Source channels separately consent with /kolfeed on.
+  // Target-group KOL feed controls. Public sources need no source-side command.
   const kf = text.match(/^\/(kolfeed|kollfeed|callfeed|kolcalls|kolsource|callsource)(?:@\w+)?(?:\s+(on|off|list|add|remove))?(?:\s+(\S+))?\s*$/i);
   if (kf) {
     const chatId = chat.id;
@@ -43181,7 +43304,7 @@ async function handleGroupBotCommand(message, userId) {
           : escapeTelegramHtml(result.error)).catch(() => {});
       } else {
         kolFeedInputPending.set(`${chatId}:${userId}`, { at: Date.now(), setupMsgId: null });
-        await sayHtml(chatId, "➕ <b>Add a KOL source</b>\n\nWithin 3 minutes, send its public <code>@channel</code> username, a <code>t.me/channel</code> link, forward one of its posts, or send its private source code.\n\nThe source must first add SlimeWireBot as an admin and post <code>/kolfeed on</code>. Send <code>/cancel</code> to stop.").catch(() => {});
+        await sayHtml(chatId, "➕ <b>Add a KOL source</b>\n\nWithin 3 minutes, send its public <code>@channel</code> username, a <code>t.me/channel</code> link, or forward one of its posts.\n\nPublic channels are watched automatically with no opt-in. Private/protected channels require SlimeWireBot as an admin or manual forwarding. Send <code>/cancel</code> to stop.").catch(() => {});
       }
       return true;
     }
@@ -43395,7 +43518,7 @@ async function handleGroupBotCallback(query, userId) {
   if (data === "gb:kol:add") {
     const prompt = await telegram("sendMessage", {
       chat_id: chatId,
-      text: "➕ <b>Add a KOL source</b>\n\nWithin 3 minutes, send <code>@channel</code>, a <code>t.me/channel</code> link, forward one of its posts, or send its private source code.\n\nThe source must first add SlimeWireBot as an admin and post <code>/kolfeed on</code>. Send <code>/cancel</code> to stop.",
+      text: "➕ <b>Add a KOL source</b>\n\nWithin 3 minutes, send <code>@channel</code>, a <code>t.me/channel</code> link, or forward one of its posts.\n\nPublic channels are watched automatically with no opt-in. Private/protected channels require SlimeWireBot as an admin or manual forwarding. Send <code>/cancel</code> to stop.",
       parse_mode: "HTML",
       disable_web_page_preview: true,
     }).catch(() => null);
@@ -43853,6 +43976,8 @@ function startGroupBuyBot() {
   setInterval(() => { void pollTrackedWallets(); }, 30_000); // Cielo-style smart-money wallet alerts
   setInterval(() => { void pollAlphaRadar(); }, 60_000);     // network-backed long-term-runner alerts (opt-in)
   setInterval(() => { void pollExitRadar(); }, 60_000);      // 🚪 Exit Radar — take-profit pings on your own bags (opt-in)
+  setTimeout(() => { void pollPublicKolSources(); }, 15_000);
+  setInterval(() => { void pollPublicKolSources(); }, 60_000); // public KOL channels: one bounded shared watcher
   // 🎯 Top Plays ("SlimeWire plays") DM poller DISABLED for now — skewed toward frequent short-term/rug
   // pops; Alpha Radar (network-backed top wallets) + wallet tracking replace it. Re-enable to restore.
   // setInterval(() => { void pollPlaysSignal(); }, 5 * 60_000);
