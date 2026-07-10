@@ -37221,7 +37221,7 @@ function formatRhScanCard(info) {
     `<a href="https://www.slimewire.org/#rhtrade/${esc(a)}">⚡ Trade $${esc(sym)} on SlimeWire</a> — Robinhood Chain`,
   ].filter((l) => l !== "").join("\n");
 }
-async function sendRhScanCard(chatId, address) {
+async function sendRhScanCard(chatId, address, options = {}) {
   const info = await gatherRhScan(address).catch(() => null);
   if (!info) {
     await say(chatId, "🪶 Couldn't pull that Robinhood coin yet — paste a valid Robinhood Chain contract (0x…).");
@@ -37229,7 +37229,7 @@ async function sendRhScanCard(chatId, address) {
   }
   if (!info.symbol) info.symbol = shortMint(address).replace(/[^\w]/g, "").slice(0, 10) || "RH";
   if (!info.name) info.name = "Robinhood token";
-  const text = formatRhScanCard(info);
+  const text = [String(options.contextHtml || "").trim(), formatRhScanCard(info)].filter(Boolean).join("\n\n");
   const kb = { inline_keyboard: [
     [{ text: `⚡ Trade $${(info.symbol || "coin").slice(0, 12)}`, url: `https://www.slimewire.org/#rhtrade/${address}` }, { text: "🔎 Blockscout", url: info.explorer }],
   ] };
@@ -41642,7 +41642,7 @@ async function handleTelegramLookCommand(chatId, message, argument, options = {}
   // One resolver for CA, Dex/Pump links, $tickers, bare scan tickers, and Robinhood Chain 0x contracts.
   const target = await resolveScanTargetFromText(argument).catch(() => null);
   const rhAddr = /^0x[0-9a-fA-F]{40}$/.test(String(target || "")) ? String(target) : "";
-  if (rhAddr) { if (!options.skipCooldown && tgCommandOnCooldown(chatId, `look:${rhAddr.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return; await sendRhScanCard(chatId, rhAddr); return; }
+  if (rhAddr) { if (!options.skipCooldown && tgCommandOnCooldown(chatId, `look:${rhAddr.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return; await sendRhScanCard(chatId, rhAddr, options); return; }
   const mint = isLikelySolMint(target) ? String(target) : "";
   if (!mint) {
     await say(chatId, "Usage: /look <token CA> — Solana mint OR Robinhood Chain 0x… address. I'll run a SlimeShield read with chart + quick-buy.");
@@ -41672,7 +41672,7 @@ async function handleTelegramLookCommand(chatId, message, argument, options = {}
   // this exact chat never did. Empty only when nobody anywhere has called the coin.
   const callerLine = await buildScanCallerFooter(message?.chat?.id, mint, curMc, message).catch(() => "");
   const matchLine = tickerTruthLine(tickerSymbol, mint);
-  const scanContextLine = [matchLine, callerLine].filter(Boolean).join("\n");
+  const scanContextLine = [String(options.contextHtml || "").trim(), matchLine, callerLine].filter(Boolean).join("\n");
   let text = null;
   if (scan && (scan.meta || scan.bonding || scan.shield || scan.rug || scan.onchain)) {
     try { text = formatSlimeScanCard({ mint, ...scan, callerLine: scanContextLine }); } catch { text = null; }
@@ -42284,13 +42284,13 @@ async function handleChannelPostCommands(post) {
     await handleKolSourceChannelPost(post);
     return;
   }
-  const kolFeed = text.match(/^\/(?:kolfeed|callfeed|kolcalls)(?:@\w+)?(?:\s+(on|off|status))?\s*$/i);
+  const kolFeed = text.match(/^\/(?:kolfeed|kollfeed|callfeed|kolcalls)(?:@\w+)?(?:\s+(on|off|status))?\s*$/i);
   if (kolFeed) {
     const action = String(kolFeed[1] || "status").toLowerCase();
     if (action === "on" || action === "off") {
       const source = await setKolSourceOptIn(post.chat, action === "on");
       await sayHtml(chatId, action === "on"
-        ? `🟢 <b>KOL Call Feed source enabled</b>\n\nGroups may now subscribe to <b>${escapeTelegramHtml(source?.title || post.chat.title || "this channel")}</b>. New posts containing a real CA/coin link—or a clear $ticker call—will be forwarded with a SlimeWire scan.\n\nPrivate-channel source code: <code>${escapeTelegramHtml(String(chatId))}</code>\nA target admin can use <code>/kolsource add ${escapeTelegramHtml(String(chatId))}</code>.\n\nUse <code>/kolfeed off</code> anytime to revoke access.`
+        ? `🟢 <b>KOL Call Feed source enabled</b>\n\nGroups may now subscribe to <b>${escapeTelegramHtml(source?.title || post.chat.title || "this channel")}</b>. New posts containing a real CA/coin link—or a clear $ticker call—will produce one attributed SlimeWire scan card.\n\nPrivate-channel source code: <code>${escapeTelegramHtml(String(chatId))}</code>\nA target admin can use <code>/kolsource add ${escapeTelegramHtml(String(chatId))}</code>.\n\nUse <code>/kolfeed off</code> anytime to revoke access.`
         : "⚪ <b>KOL Call Feed source disabled</b>\n\nNo new calls from this channel will be syndicated.").catch(() => {});
     } else {
       const store = await readGroupBot();
@@ -42585,7 +42585,7 @@ async function kolCallPostTargets(post) {
   return [...new Set(valid.map(String))].slice(0, 1);
 }
 const kolCallDeliveryGuard = new Map();
-async function forwardKolCallToTarget(targetChatId, source, post, mint) {
+async function sendKolCallCardToTarget(targetChatId, source, post, mint) {
   const sourceId = String(source.id);
   const deliveryKey = `${targetChatId}:${sourceId}:${post.message_id}`;
   const prior = Number(kolCallDeliveryGuard.get(deliveryKey) || 0);
@@ -42595,21 +42595,14 @@ async function forwardKolCallToTarget(targetChatId, source, post, mint) {
     const cutoff = Date.now() - 24 * 60 * 60_000;
     for (const [key, at] of kolCallDeliveryGuard) if (at < cutoff) kolCallDeliveryGuard.delete(key);
   }
-  let forwarded = null;
-  try {
-    forwarded = await telegram("forwardMessage", { chat_id: targetChatId, from_chat_id: sourceId, message_id: post.message_id, disable_notification: false });
-  } catch { /* protected/private forwarding falls back to an attributed source line */ }
-  if (!forwarded) {
-    const publicUrl = source.username ? `https://t.me/${source.username}/${post.message_id}` : "";
-    const label = escapeTelegramHtml(source.title || source.username || sourceId);
-    const line = publicUrl
-      ? `📣 <b>New KOL call from <a href="${publicUrl}">${label}</a></b>`
-      : `📣 <b>New KOL call from ${label}</b>\n<i>The source channel protects forwarding; SlimeWire still attached the verified scan.</i>`;
-    await sayHtml(targetChatId, line).catch(() => {});
-  }
-  // Use the original source post as caller context, while sending the scan into the subscribed target.
-  // Persistent message dedupe makes bypassing the normal chat cooldown safe here.
-  await handleTelegramLookCommand(targetChatId, post, mint, { skipCooldown: true }).catch(() => {});
+  const publicUrl = source.username ? `https://t.me/${source.username}/${post.message_id}` : "";
+  const label = escapeTelegramHtml(source.title || source.username || sourceId);
+  const contextHtml = publicUrl
+    ? `📣 <b>KOL Call:</b> <a href="${publicUrl}">${label} · original post</a>`
+    : `📣 <b>KOL Call:</b> ${label}`;
+  // One source post produces ONE combined scan card. The source attribution/original link is embedded
+  // inside the card instead of forwarding the post as a separate Telegram message.
+  await handleTelegramLookCommand(targetChatId, post, mint, { skipCooldown: true, contextHtml }).catch(() => {});
   return true;
 }
 async function handleKolSourceChannelPost(post) {
@@ -42630,7 +42623,7 @@ async function handleKolSourceChannelPost(post) {
   const primaryMint = targets[0];
   for (const [chatId] of destinations) {
     if (!kolCallFeedRateAllowed(chatId, 10)) continue;
-    await forwardKolCallToTarget(chatId, source, post, primaryMint);
+    await sendKolCallCardToTarget(chatId, source, post, primaryMint);
   }
   await rememberKolSourceChannel(post.chat, { optedIn: true, botAdmin: true, lastCallAt: Date.now(), lastMessageId: post.message_id }).catch(() => {});
   return true;
@@ -42732,7 +42725,7 @@ function groupBotMenuText(entry) {
     `⚔️ <b>Raid Bot</b> — ${st("raid")} · live X-raid cards`,
     `🛡️ <b>Rose & Shield</b> — ${st("rose")} · moderation + anti-scam protection`,
     `🔍 <b>Scan Bot</b> — ${st("scan")} · CA / $ticker → scan card`,
-    `📣 <b>KOL Call Feed</b> — ${st("kolfeed")} · opted-in channel calls → forwarded post + scan`,
+    `📣 <b>KOL Call Feed</b> — ${st("kolfeed")} · opted-in channel calls → one attributed scan card`,
     `📣 <b>SlimeWire Alerts</b> — auto plays every 15 min + fresh launches, TP/SL fires, KOL copies &amp; 2x receipts (capped a few/hr)`,
     `📦 <b>Alert Packs</b> — one-tap quiet scanner, launch room, proof room, or all-quiet presets`,
     "",
@@ -42871,13 +42864,13 @@ function groupBotModuleView(module, entry) {
         "📣 <b>KOL Call Feed</b>",
         kc.on ? "Status: <b>🟢 ON</b>" : "Status: <b>⚪ off</b>",
         "",
-        "Choose opted-in KOL channels. When one posts a real coin call, SlimeWire forwards the original post with attribution and follows it with the full scan.",
+        "Choose opted-in KOL channels. When one posts a real coin call, SlimeWire sends one clean scan card with channel attribution and an original-post link when available.",
         "",
         ...sourceLines,
         "",
         "Add a source by tapping below and forwarding one of its posts, or use <code>/kolsource add @channel</code>. The source must first add SlimeWireBot as an admin and post <code>/kolfeed on</code>.",
         "",
-        "Protected-forward channels still get an attributed call notice and scan. Duplicate posts are ignored; each target is capped at 10 calls/hour.",
+        "Private/protected channels still get attribution on the card. Duplicate posts are ignored; each target is capped at 10 calls/hour.",
       ].join("\n"),
       markup: { inline_keyboard: [
         [{ text: kc.on ? "🟢 Feed is ON — tap to pause" : "⚪ Feed is off — tap to enable", callback_data: "gb:kol:toggle" }],
@@ -43057,7 +43050,7 @@ function groupBotHelpText() {
     "⚔️ <b>Raid Bot</b> — <code>/raid &lt;X post link&gt;</code> → <b>setup menu</b> (tap likes/RT/reply/bookmark goals + duration, then 🚀 Start). Live card with <b>per-goal progress bars</b> (▰▰▱), overall %, 👀 views, countdown, a 🔄 Refresh button, and <b>RAID SMASHED</b> 🔥 / <b>Raid Ended</b>.",
     "🔍 <b>Scan Bot</b> — paste any CA → instant scan card with Quick-Buy",
     "",
-    "📣 <b>KOL Call Feed</b> — permission-based channel calls forwarded with SlimeWire scans",
+    "📣 <b>KOL Call Feed</b> — permission-based channel calls shown as one attributed SlimeWire scan",
     "• <code>/kolfeed</code> — open this group's source menu",
     "• <code>/kolsource add @channel</code> — subscribe this group (admin only)",
     "• Source setup: add SlimeWireBot as channel admin, then post <code>/kolfeed on</code> there",
@@ -43120,7 +43113,7 @@ async function handleGroupBotCommand(message, userId) {
   // /help — clean command guide (anyone can read it).
   if (/^\/help(?:@\w+)?\b/i.test(text)) { await sayHtml(chat.id, groupBotHelpText()); return true; }
   // Target-group KOL feed controls. Source channels separately consent with /kolfeed on.
-  const kf = text.match(/^\/(kolfeed|callfeed|kolcalls|kolsource|callsource)(?:@\w+)?(?:\s+(on|off|list|add|remove))?(?:\s+(\S+))?\s*$/i);
+  const kf = text.match(/^\/(kolfeed|kollfeed|callfeed|kolcalls|kolsource|callsource)(?:@\w+)?(?:\s+(on|off|list|add|remove))?(?:\s+(\S+))?\s*$/i);
   if (kf) {
     const chatId = chat.id;
     if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only group admins can change the KOL Call Feed."); return true; }
@@ -43137,7 +43130,7 @@ async function handleGroupBotCommand(message, userId) {
       if (source) {
         const result = await addKolCallFeedSource(chatId, source);
         await sayHtml(chatId, result.ok
-          ? `🟢 Added <b>${escapeTelegramHtml(result.source.title)}</b>. New calls will be forwarded here with a scan.`
+          ? `🟢 Added <b>${escapeTelegramHtml(result.source.title)}</b>. New calls will arrive as one attributed scan card.`
           : escapeTelegramHtml(result.error)).catch(() => {});
       } else {
         kolFeedInputPending.set(`${chatId}:${userId}`, { at: Date.now(), setupMsgId: null });

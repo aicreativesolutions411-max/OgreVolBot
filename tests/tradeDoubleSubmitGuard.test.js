@@ -921,7 +921,7 @@ test("settings menu is multi-level: home -> per-bot sub-menus, clickable toggles
   assert.match(serverSource, /if \(await applyGbInput\(message, userId\)/); // wired into the router
 });
 
-test("KOL Call Feed is source-consented, admin-selected, deduped, forwarded, and scanned", () => {
+test("KOL Call Feed is source-consented, admin-selected, deduped, and posts one combined scan", () => {
   assert.match(serverSource, /allowed_updates: \["message", "callback_query", "inline_query", "channel_post"/);
   const channel = functionBody(serverSource, "handleChannelPostCommands");
   assert.match(channel, /setKolSourceOptIn\(post\.chat, action === "on"\)/);
@@ -932,10 +932,11 @@ test("KOL Call Feed is source-consented, admin-selected, deduped, forwarded, and
   assert.match(dispatch, /cfg\.on && cfg\.sources\.some/);
   assert.match(dispatch, /const primaryMint = targets\[0\]/);
   assert.doesNotMatch(dispatch, /for \(const mint of targets\)/);
-  const forward = functionBody(serverSource, "forwardKolCallToTarget");
+  const forward = functionBody(serverSource, "sendKolCallCardToTarget");
   assert.match(forward, /kolCallDeliveryGuard/);
-  assert.match(forward, /telegram\("forwardMessage"/);
-  assert.match(forward, /handleTelegramLookCommand\(targetChatId, post, mint, \{ skipCooldown: true \}\)/);
+  assert.doesNotMatch(forward, /telegram\("forwardMessage"/);
+  assert.match(forward, /original post/);
+  assert.match(forward, /handleTelegramLookCommand\(targetChatId, post, mint, \{ skipCooldown: true, contextHtml \}\)/);
   const targets = functionBody(serverSource, "kolCallPostTargets");
   assert.match(targets, /resolveExplicitScanTargetsFromText/);
   assert.match(targets, /isRhContract/);
@@ -947,6 +948,7 @@ test("KOL Call Feed is source-consented, admin-selected, deduped, forwarded, and
   assert.match(callback, /gb:kol:add/);
   assert.match(callback, /gb:kol:rm:/);
   assert.match(functionBody(serverSource, "handleGroupBotCommand"), /kolsource\|callsource/);
+  assert.match(functionBody(serverSource, "handleGroupBotCommand"), /kollfeed/);
   assert.match(functionBody(serverSource, "applyKolFeedSourceInput"), /resolveKolSourceReference/);
 });
 
