@@ -14247,6 +14247,20 @@ async function handleMessage(message, userId) {
     }
   }
 
+  // A .sol / SNS name (e.g. moonpies.sol) → resolve to its owner wallet and run the 👛 wallet scan.
+  // Names aren't valid mints/coins so they'd otherwise fall through and do nothing.
+  const solDomainMatch = /^\$?([a-z0-9][a-z0-9._-]{0,58}\.sol)$/i.exec(text);
+  if (solDomainMatch && !text.startsWith("/")) {
+    if (!isPrivateChat(message.chat)) {
+      const gbDom = await getGroupBotEntry(chatId).catch(() => null);
+      if (gbDom && !groupBotFeatureOn(gbDom, "scan")) return; // Scan off in this group
+    }
+    const resolvedDom = await resolveSolDomainToAddress(solDomainMatch[1]).catch(() => null);
+    if (resolvedDom) { await sendWalletScanCard(chatId, resolvedDom); return; }
+    if (isPrivateChat(message.chat)) { await sayHtml(chatId, `Couldn't resolve <b>${escapeTelegramHtml(solDomainMatch[1])}</b> — that .sol name may not be registered yet.`).catch(() => {}); return; }
+    return;
+  }
+
   // A pasted X/tweet link → embed the full post (image/video + text) in chat. NEVER for command
   // messages (so "/raid <link>" reaches the raid handler instead of just embedding the tweet). In
   // groups it's a Scan-bot feature: only when the message is basically just the link AND Scan is on
@@ -36248,6 +36262,31 @@ async function resolveSolWalletDomain(wallet) {
   _solDomainCache.set(wallet, { at: Date.now(), name });
   if (_solDomainCache.size > 500) _solDomainCache.delete(_solDomainCache.keys().next().value);
   return name;
+}
+
+// Forward-resolve a .sol / SNS name to its OWNER wallet (so a posted "moonpies.sol" scans the wallet).
+// FREE Bonfida SNS proxy. Cached 10min incl. null. Returns a base58 address or null.
+const _solDomainFwdCache = new Map();
+async function resolveSolDomainToAddress(name) {
+  const label = String(name || "").trim().replace(/\.sol$/i, "").toLowerCase();
+  if (!/^[a-z0-9._-]{1,60}$/.test(label)) return null;
+  const cached = _solDomainFwdCache.get(label);
+  if (cached && Date.now() - cached.at < 10 * 60_000) return cached.addr;
+  let addr = null;
+  try {
+    const ctl = new AbortController(); const t = setTimeout(() => { try { ctl.abort(); } catch { /* */ } }, 4000);
+    const res = await fetch(`https://sns-sdk-proxy.bonfida.workers.dev/resolve/${encodeURIComponent(label)}`, { signal: ctl.signal, headers: { accept: "application/json" } }).finally(() => clearTimeout(t));
+    if (res.ok) {
+      const d = await res.json();
+      if (d?.s === "ok") {
+        const owner = typeof d.result === "string" ? d.result : (d.result?.owner || d.result?.address);
+        if (owner && solanaPublicKeyLike(String(owner))) addr = String(owner);
+      }
+    }
+  } catch { /* best-effort */ }
+  _solDomainFwdCache.set(label, { at: Date.now(), addr });
+  if (_solDomainFwdCache.size > 500) _solDomainFwdCache.delete(_solDomainFwdCache.keys().next().value);
+  return addr;
 }
 
 const solWalletScanCache = new Map();
