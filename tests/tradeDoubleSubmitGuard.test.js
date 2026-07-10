@@ -2313,11 +2313,13 @@ test("Airdrop and wallet maps trace Solana/.sol and Robinhood fund flows on web 
   const rhFunds = functionBody(serverSource, "buildRhWalletFundMap");
   const flowMap = functionBody(serverSource, "fundFlowRowsToMap");
   assert.match(solFunds, /getSignaturesForAddress/);
+  assert.match(solFunds, /v0\/addresses\/\$\{encodeURIComponent\(w\)\}\/transactions/);
   assert.match(solFunds, /nativeTransfers/);
   assert.match(solFunds, /tokenTransfers/);
   assert.match(solFunds, /lookupWalletFunder/);
   assert.match(rhFunds, /robinhoodchain\.blockscout\.com/);
-  assert.match(rhFunds, /token-transfers/);
+  assert.match(rhFunds, /action=tokentx/);
+  assert.match(rhFunds, /startblock=0&endblock=999999999/);
   assert.match(flowMap, /mode: "funds"/);
   assert.match(flowMap, /FUNDED/);
   assert.match(flowMap, /FUNDERS/);

@@ -34159,28 +34159,33 @@ async function buildSolanaWalletFundMap(wallet) {
   const w = String(wallet || "").trim();
   if (!solanaPublicKeyLike(w)) return null;
   const cacheKey = walletFundMapKey("solana", w), cached = walletFundMapCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < 3 * 60_000) return cached.map;
+  if (cached && Date.now() - cached.at < (cached.map?.nodes?.length ? 3 * 60_000 : 8_000)) return cached.map;
   const { flows, add } = walletFundFlowCollector(w);
   // Independent decoration/history work starts together, keeping a cold map comfortably inside the API's
   // 14-second request ceiling instead of stacking signature + parser + funder + SNS latency.
-  const domainPromise = resolveSolWalletDomain(w).catch(() => null);
+  const domainPromise = scanFastTimeout(resolveSolWalletDomain(w), 1_400, null);
   let firstFunderPromise = Promise.resolve(walletFunderCache.get(w) || walletObs.get(w)?.funder || null);
   if (!walletFunderCache.has(w) && !walletObs.get(w)?.funder && funderBudgetOk()) {
     funderUsedToday += 1;
     firstFunderPromise = scanFastTimeout(lookupWalletFunder(w), 2_500, null);
   }
-  const sigRows = await scanFastTimeout(rpcRead("fund-map: signatures", (c) => c.getSignaturesForAddress(new PublicKey(w), { limit: 60 }), { retries: 0 }), 3_200, []);
-  const signatures = (Array.isArray(sigRows) ? sigRows : []).map((row) => row.signature).filter(Boolean).slice(0, 60);
   let parsed = [];
-  if (CONFIG.heliusApiKey && signatures.length) {
-    parsed = await scanFastTimeout(fetch(`https://api.helius.xyz/v0/transactions?api-key=${CONFIG.heliusApiKey}`, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ transactions: signatures }), signal: AbortSignal.timeout(5_000)
-    }).then((response) => response.ok ? response.json() : []), 5_300, []);
+  // Helius' address-history endpoint is the fast primary: unlike getSignaturesForAddress on a busy shared
+  // RPC, it returns parsed native + token transfers in one request and does not make the page wait twice.
+  if (CONFIG.heliusApiKey) {
+    parsed = await scanFastTimeout(fetch(`https://api.helius.xyz/v0/addresses/${encodeURIComponent(w)}/transactions?api-key=${encodeURIComponent(CONFIG.heliusApiKey)}&limit=60`, {
+      headers: { accept: "application/json" }, signal: AbortSignal.timeout(5_500)
+    }).then((response) => response.ok ? response.json() : []), 5_800, []);
     for (const tx of Array.isArray(parsed) ? parsed : []) {
       const at = Number(tx?.timestamp || 0) * 1000, signature = String(tx?.signature || "");
       for (const transfer of (tx?.nativeTransfers || [])) add({ from: transfer.fromUserAccount, to: transfer.toUserAccount, native: (Number(transfer.amount) || 0) / 1e9, at, tx: signature });
       for (const transfer of (tx?.tokenTransfers || [])) add({ from: transfer.fromUserAccount, to: transfer.toUserAccount, mint: transfer.mint, symbol: transfer.symbol, tokenAmount: Number(transfer.tokenAmount) || 1, at, tx: signature });
     }
+  }
+  let signatures = [];
+  if (!flows.size) {
+    const sigRows = await scanFastTimeout(rpcRead("fund-map: signatures", (c) => c.getSignaturesForAddress(new PublicKey(w), { limit: 40 }), { retries: 0 }), 3_200, []);
+    signatures = (Array.isArray(sigRows) ? sigRows : []).map((row) => row.signature).filter(Boolean).slice(0, 40);
   }
   if (!flows.size && signatures.length) {
     const fallback = await Promise.all(signatures.slice(0, 24).map((signature) => scanFastTimeout(
@@ -34202,27 +34207,30 @@ async function buildRhWalletFundMap(wallet) {
   const w = String(wallet || "").trim().toLowerCase();
   if (!/^0x[0-9a-f]{40}$/.test(w)) return null;
   const cacheKey = walletFundMapKey("robinhood", w), cached = walletFundMapCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < 3 * 60_000) return cached.map;
+  if (cached && Date.now() - cached.at < (cached.map?.nodes?.length ? 3 * 60_000 : 8_000)) return cached.map;
   const { flows, add } = walletFundFlowCollector(w);
-  const base = `https://robinhoodchain.blockscout.com/api/v2/addresses/${w}`;
+  // Blockscout's v2 per-address history intermittently returns an empty 500 on Robinhood Chain. Its v1
+  // account index is stable when start/end blocks are explicit, so use that for both native + token flow.
+  const base = "https://robinhoodchain.blockscout.com/api";
   const [txData, tokenData] = await Promise.all([
-    scanFastTimeout(fetchJson(`${base}/transactions`, { headers: { accept: "application/json" }, timeoutMs: 5_000 }), 5_200, null),
-    scanFastTimeout(fetchJson(`${base}/token-transfers`, { headers: { accept: "application/json" }, timeoutMs: 5_000 }), 5_200, null)
+    scanFastTimeout(fetchJson(`${base}?module=account&action=txlist&address=${w}&startblock=0&endblock=999999999&sort=desc`, { headers: { accept: "application/json" }, timeoutMs: 5_000 }), 5_200, null),
+    scanFastTimeout(fetchJson(`${base}?module=account&action=tokentx&address=${w}&startblock=0&endblock=999999999&sort=desc`, { headers: { accept: "application/json" }, timeoutMs: 5_000 }), 5_200, null)
   ]);
-  for (const tx of (Array.isArray(txData?.items) ? txData.items : [])) {
+  for (const tx of (Array.isArray(txData?.result) ? txData.result : [])) {
     const from = firstString(tx?.from?.hash, tx?.from_hash), to = firstString(tx?.to?.hash, tx?.to_hash);
     const eth = Number(tx?.value) > 0 ? Number(tx.value) / 1e18 : 0;
-    add({ from, to, native: eth, nativeSymbol: "ETH", at: Date.parse(tx?.timestamp || "") || 0, tx: firstString(tx?.hash, tx?.transaction_hash) });
+    add({ from: from || tx?.from, to: to || tx?.to, native: eth, nativeSymbol: "ETH", at: (Number(tx?.timeStamp) || 0) * 1000, tx: firstString(tx?.hash, tx?.transaction_hash) });
   }
-  for (const transfer of (Array.isArray(tokenData?.items) ? tokenData.items : [])) {
+  for (const transfer of (Array.isArray(tokenData?.result) ? tokenData.result : [])) {
     const from = firstString(transfer?.from?.hash, transfer?.from_hash), to = firstString(transfer?.to?.hash, transfer?.to_hash);
-    const decimals = Number(transfer?.token?.decimals ?? transfer?.total?.decimals) || 0;
-    const raw = Number(firstString(transfer?.total?.value, transfer?.value, transfer?.amount)) || 0;
+    const decimals = Number(transfer?.tokenDecimal ?? transfer?.token?.decimals ?? transfer?.total?.decimals) || 0;
+    const raw = Number(firstString(transfer?.value, transfer?.total?.value, transfer?.amount)) || 0;
     add({
-      from, to, mint: firstString(transfer?.token?.address, transfer?.token?.address_hash),
-      symbol: firstString(transfer?.token?.symbol, transfer?.token?.name), tokenAmount: decimals ? raw / (10 ** decimals) : (raw || 1),
-      nativeSymbol: "ETH", at: Date.parse(transfer?.timestamp || "") || 0,
-      tx: firstString(transfer?.transaction_hash, transfer?.tx_hash)
+      from: from || transfer?.from, to: to || transfer?.to,
+      mint: firstString(transfer?.contractAddress, transfer?.token?.address, transfer?.token?.address_hash),
+      symbol: firstString(transfer?.tokenSymbol, transfer?.tokenName, transfer?.token?.symbol, transfer?.token?.name), tokenAmount: decimals ? raw / (10 ** decimals) : (raw || 1),
+      nativeSymbol: "ETH", at: (Number(transfer?.timeStamp) || 0) * 1000,
+      tx: firstString(transfer?.hash, transfer?.transaction_hash, transfer?.tx_hash)
     });
   }
   const map = await fundFlowRowsToMap(w, flows, { chain: "robinhood", subject: shortMint(w) });
