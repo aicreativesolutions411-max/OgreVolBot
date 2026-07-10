@@ -13561,6 +13561,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("drop:")) {
     if (await handleAirdropCallback(query, userId).catch(() => false)) return;
   }
+  // 🧬 Ticker Truth (tm:<symbol>) — show why one CA won over same-ticker clones.
+  if (String(query.data || "").startsWith("tm:")) {
+    if (await handleTickerTruthCallback(query).catch(() => false)) return;
+  }
   // 🔴 One-tap sell (qs:*) — sell 25/50/100% of a coin from the tapper's own wallets, in-DM.
   if (String(query.data || "").startsWith("qs:")) {
     if (await handleQuickSellCallback(query, userId).catch(() => false)) return;
@@ -14337,7 +14341,7 @@ async function handleMessage(message, userId) {
   const cashtag = /^\$([A-Za-z][A-Za-z0-9._]{1,19})$/.exec(text.trim());
   if (cashtag) {
     const mint = await resolveTickerToScanTarget(cashtag[1]).catch(() => null);
-    if (mint) await handleTelegramLookCommand(chatId, message, mint);
+    if (mint) await handleTelegramLookCommand(chatId, message, mint, { tickerSymbol: cashtag[1] });
     else if (isPrivateChat(message.chat)) await say(chatId, `Couldn't find a token for $${escapeTelegramHtml(cashtag[1])}. Paste its contract address (CA) and I'll pull the card.`);
     return;
   }
@@ -32626,6 +32630,7 @@ function isLikelySolMint(s) {
 // sources, rank real activity, then require a SlimeShield pass before returning one contract.
 // Pasted CAs never use this resolver; resolveScanTargetFromText intentionally handles them first.
 const cashtagMintCache = new Map();
+const tickerResolutionMetaCache = new Map(); // symbol -> transparent safe exact-match comparison (5 min)
 function tokenSearchRows(data) {
   const rows = [];
   const addRows = (value) => {
@@ -32650,7 +32655,11 @@ function tokenSearchVolume24h(row = {}) {
   return firstMeaningfulNumber(row.volume24hUsd, row.volume24h, row.volume?.h24, row.volume?.["24h"], row.token?.volume24hUsd, row.market?.volume24hUsd) || 0;
 }
 function tokenSearchMarketCap(row = {}) {
-  return firstMeaningfulNumber(row.marketCapUsd, row.marketCap, row.fdv, row.token?.marketCapUsd, row.token?.marketCap, row.market?.marketCapUsd) || 0;
+  return firstMeaningfulNumber(
+    row.marketCapUsd, row.marketCapUSD, row.marketCap, row.market_cap, row.market_cap_usd,
+    row.usd_market_cap, row.fdv, row.fdvUsd, row.token?.marketCapUsd, row.token?.marketCap,
+    row.token?.market_cap, row.market?.marketCapUsd, row.market?.marketCap, row.pool?.marketCapUsd
+  ) || 0;
 }
 function tokenSearchHolders(row = {}) {
   return firstMeaningfulNumber(row.holders, row.holderCount, row.holders_count, row.token?.holders, row.token?.holderCount) || 0;
@@ -32658,14 +32667,29 @@ function tokenSearchHolders(row = {}) {
 function tickerCandidateScore(candidate = {}) {
   const log = (value) => Math.log10(1 + Math.max(0, Number(value) || 0));
   const sources = candidate.sources instanceof Set ? candidate.sources.size : 0;
-  const thinPenalty = Number(candidate.liquidityUsd || 0) < 800 ? 28 : 0;
+  const liquidity = Number(candidate.liquidityUsd || 0);
+  const marketCap = Number(candidate.marketCap || 0);
+  const thinPenalty = liquidity < 800 ? 52 : liquidity < 2_000 ? 22 : 0;
+  const microCapPenalty = marketCap > 0 && marketCap < 5_000 ? 42 : 0;
   return Number(candidate.trendBoost || 0)
-    + log(candidate.liquidityUsd) * 18
-    + log(candidate.volume24h) * 14
-    + log(candidate.marketCap) * 4
-    + log(candidate.holders) * 5
+    + log(liquidity) * 30
+    + log(candidate.volume24h) * 22
+    + log(marketCap) * 18
+    + log(candidate.holders) * 7
     + sources * 8
-    - thinPenalty;
+    - thinPenalty
+    - microCapPenalty;
+}
+function tickerCandidateDominance(candidate, maxima = {}) {
+  const relative = (value, max) => max > 0 ? Math.sqrt(Math.max(0, Number(value) || 0) / max) : 0;
+  return relative(candidate.marketCap, maxima.marketCap) * 60
+    + relative(candidate.liquidityUsd, maxima.liquidityUsd) * 70
+    + relative(candidate.volume24h, maxima.volume24h) * 50;
+}
+function fmtTickerMarketUsd(value) {
+  const n = Number(value) || 0;
+  if (!n) return "n/a";
+  return fmtMc(n);
 }
 function scanRecommendationBlocked(row, shield) {
   if (!row?.tokenMint || !shield) return true;
@@ -32734,14 +32758,14 @@ async function resolveCashtagToMint(symbol) {
     add({
       mint: pair.baseToken?.address, ticker: pair.baseToken?.symbol, liquidityUsd: pair.liquidity?.usd,
       volume24h: pair.volume?.h24, marketCap: firstMeaningfulNumber(pair.marketCap, pair.fdv),
-      trendBoost: Number(pair.boosts?.active || 0) > 0 ? 18 : 0, source: "dexscreener",
+      trendBoost: Number(pair.boosts?.active || 0) > 0 ? 10 : 0, source: "dexscreener",
       row: livePairCandidateToRow({ tokenMint: pair.baseToken?.address, source: "dexscreener", profile: { ...pair, symbol: pair.baseToken?.symbol, name: pair.baseToken?.name } })
     });
   }
   (Array.isArray(moralisCoins) ? moralisCoins : []).forEach((coin, index) => add({
     mint: coin.tokenAddress, ticker: coin.symbol, liquidityUsd: coin.liquidityUsd,
     volume24h: coin.totalVolume?.["24h"], marketCap: coin.marketCap, holders: coin.holders,
-    trendBoost: Math.max(45, 190 - index * 3), source: "moralis-trending",
+    trendBoost: Math.max(12, 55 - index * 0.6), source: "moralis-trending",
     row: livePairCandidateToRow(moralisTrendingToCandidate(coin))
   }));
   (Array.isArray(geckoTrending) ? geckoTrending : []).forEach((candidate, index) => {
@@ -32749,23 +32773,56 @@ async function resolveCashtagToMint(symbol) {
     add({
       mint: candidate?.tokenMint, ticker: profile.symbol, liquidityUsd: profile.liquidityUsd || profile.liquidity?.usd,
       volume24h: profile.volume?.h24, marketCap: firstMeaningfulNumber(profile.marketCap, profile.fdv),
-      trendBoost: Math.max(35, 165 - index * 3), source: "gecko-trending",
+      trendBoost: Math.max(10, 48 - index * 0.7), source: "gecko-trending",
       row: livePairCandidateToRow(candidate)
     });
   });
 
-  const ranked = [...candidates.values()]
-    .map((candidate) => ({ ...candidate, score: tickerCandidateScore(candidate) }))
+  const allCandidates = [...candidates.values()];
+  const maxima = {
+    marketCap: Math.max(0, ...allCandidates.map((candidate) => Number(candidate.marketCap) || 0)),
+    liquidityUsd: Math.max(0, ...allCandidates.map((candidate) => Number(candidate.liquidityUsd) || 0)),
+    volume24h: Math.max(0, ...allCandidates.map((candidate) => Number(candidate.volume24h) || 0))
+  };
+  // If an established exact-symbol market exists, a microscopic clone must prove meaningful liquidity or
+  // volume to stay eligible. Merely appearing near the top of one trend API can no longer make a $2K clone
+  // beat the real $500K market with the same ticker.
+  const marketCandidates = maxima.marketCap >= 50_000
+    ? allCandidates.filter((candidate) =>
+      Number(candidate.marketCap || 0) >= maxima.marketCap * 0.05
+      || Number(candidate.liquidityUsd || 0) >= maxima.liquidityUsd * 0.10
+      || Number(candidate.volume24h || 0) >= maxima.volume24h * 0.25)
+    : allCandidates;
+  const ranked = marketCandidates
+    .map((candidate) => ({
+      ...candidate,
+      dominance: tickerCandidateDominance(candidate, maxima),
+      score: tickerCandidateScore(candidate) + tickerCandidateDominance(candidate, maxima)
+    }))
     .filter((candidate) => !hasHardBlockedLivePairRisk(candidate.row))
     .sort((a, b) => b.score - a.score)
-    .slice(0, 4);
+    .slice(0, 6);
   // Check the best exact matches in parallel: bounded safety keeps X/TG replies quick, while fail-closed
   // behavior prevents a provider timeout from silently promoting an unchecked clone or honeypot.
   const screened = await Promise.all(ranked.map(async (candidate) => {
     const shield = await scanFastTimeout(webSlimeShield(candidate.mint), 2_500, null);
     return { candidate, shield };
   }));
-  const mint = screened.find(({ candidate, shield }) => !scanRecommendationBlocked(candidate.row, shield))?.candidate?.mint || null;
+  const safe = screened
+    .filter(({ candidate, shield }) => !scanRecommendationBlocked(candidate.row, shield))
+    .map(({ candidate, shield }) => ({ ...candidate, shield }))
+    .sort((a, b) => b.score - a.score);
+  const mint = safe[0]?.mint || null;
+  tickerResolutionMetaCache.set(key, {
+    at: Date.now(), symbol: q.toUpperCase(), selectedMint: mint, exactMatches: allCandidates.length,
+    candidates: safe.slice(0, 5).map((candidate) => ({
+      mint: candidate.mint, marketCap: candidate.marketCap, liquidityUsd: candidate.liquidityUsd,
+      volume24h: candidate.volume24h, holders: candidate.holders, score: candidate.score,
+      sources: [...candidate.sources], verdict: String(candidate.shield?.verdict || "").toUpperCase()
+    }))
+  });
+  if (tickerResolutionMetaCache.size > 300) tickerResolutionMetaCache.delete(tickerResolutionMetaCache.keys().next().value);
+  if (safe[0]) console.log(`[ticker] $${q.toUpperCase()} picked ${shortMint(safe[0].mint)} mc=${Math.round(safe[0].marketCap || 0)} liq=${Math.round(safe[0].liquidityUsd || 0)} vol24=${Math.round(safe[0].volume24h || 0)} safe=${safe.length}/${allCandidates.length}`);
   cashtagMintCache.set(key, { at: Date.now(), mint });
   if (cashtagMintCache.size > 300) cashtagMintCache.delete(cashtagMintCache.keys().next().value);
   return mint;
@@ -38197,13 +38254,13 @@ function xDegenSignoff(tone, seed) {
 
 // Compact bottom row: just Menu + Quick Buy + Refresh (3 small buttons, not bulky).
 // Menu opens user-friendly submenus; Quick Buy deep-links the CA prefilled to the site.
-function slimeScanKeyboard(mint) {
+function slimeScanKeyboard(mint, tickerSymbol = "") {
   const links = slimewireTokenLinks(mint);
   // ONE clean Buy button. The old 0.5/1/5/custom amount buttons all just opened the site's 1-click
   // buy (Telegram URL buttons can't execute a swap in-chat — wallet actions are DM/site-only for
   // safety), so four near-identical redirects were clutter. The site's quick-buy lets you pick the
   // amount there. Buy → Chart on top, then the Menu / Refresh controls.
-  return { inline_keyboard: [
+  const rows = [
     // ⚡ ONE-CLICK: tap = instant buy from your OWN SlimeWire bot wallet using YOUR saved preset (amount +
     // TP/SL), no site redirect, no DM needed. ⚙️ Preset edits that amount/TP/SL right here in chat.
     [
@@ -38228,7 +38285,55 @@ function slimeScanKeyboard(mint) {
     [
       { text: "🔄 Refresh", callback_data: `scan:refresh:${mint}` }
     ]
-  ] };
+  ];
+  const symbol = String(tickerSymbol || "").replace(/^\$+/, "").trim().toUpperCase();
+  const meta = tickerResolutionMetaCache.get(symbol.toLowerCase());
+  if (symbol && meta && Date.now() - meta.at < 5 * 60_000 && Number(meta.exactMatches) > 1) {
+    rows.splice(4, 0, [{ text: `🧬 Ticker Truth · ${meta.exactMatches} matches`, callback_data: `tm:${symbol.slice(0, 20)}` }]);
+  }
+  return { inline_keyboard: rows };
+}
+
+function tickerTruthLine(symbol, mint) {
+  const key = String(symbol || "").replace(/^\$+/, "").trim().toLowerCase();
+  const meta = tickerResolutionMetaCache.get(key);
+  if (!meta || Date.now() - meta.at >= 5 * 60_000 || String(meta.selectedMint) !== String(mint)) return "";
+  const picked = (meta.candidates || []).find((candidate) => candidate.mint === mint) || meta.candidates?.[0];
+  if (!picked) return "";
+  return `🧬 <b>Ticker Truth:</b> strongest safe market of ${meta.exactMatches} exact $${escapeTelegramHtml(meta.symbol)} contracts · MC <b>${escapeTelegramHtml(fmtTickerMarketUsd(picked.marketCap))}</b>`;
+}
+
+async function handleTickerTruthCallback(query) {
+  const symbol = String(query?.data || "").slice(3).replace(/^\$+/, "").trim().toUpperCase();
+  if (!/^[A-Z][A-Z0-9._]{1,19}$/.test(symbol)) return false;
+  let meta = tickerResolutionMetaCache.get(symbol.toLowerCase());
+  if (!meta || Date.now() - meta.at >= 5 * 60_000) {
+    await resolveCashtagToMint(symbol).catch(() => null);
+    meta = tickerResolutionMetaCache.get(symbol.toLowerCase());
+  }
+  const chatId = query?.message?.chat?.id;
+  if (!chatId || !meta?.candidates?.length) {
+    if (chatId) await say(chatId, `No fresh safe exact-match comparison is available for $${symbol} yet. Try posting the ticker again.`);
+    return true;
+  }
+  const lines = [
+    `🧬 <b>Ticker Truth · $${escapeTelegramHtml(symbol)}</b>`,
+    `<i>${meta.exactMatches} exact-symbol contracts found. Unsafe/unchecked matches are omitted.</i>`,
+    ""
+  ];
+  for (let index = 0; index < meta.candidates.length; index++) {
+    const candidate = meta.candidates[index];
+    const selected = candidate.mint === meta.selectedMint;
+    const sources = (candidate.sources || []).filter((source) => /trending|dexscreener|tracker/i.test(source)).map((source) => source.replace(/-/g, " ")).slice(0, 2).join(" + ");
+    lines.push(`${selected ? "✅ <b>SELECTED</b>" : `${index + 1}. alternative`} · MC <b>${escapeTelegramHtml(fmtTickerMarketUsd(candidate.marketCap))}</b> · Liq ${escapeTelegramHtml(fmtTickerMarketUsd(candidate.liquidityUsd))} · 24h ${escapeTelegramHtml(fmtTickerMarketUsd(candidate.volume24h))}${sources ? `\n${escapeTelegramHtml(sources)}` : ""}\n<code>${escapeTelegramHtml(candidate.mint)}</code>`);
+  }
+  lines.push("", "<i>Selection favors the dominant real market plus live activity—not simply whichever tiny clone appears first in one trend feed.</i>");
+  const keyboard = { inline_keyboard: meta.candidates.slice(0, 4).map((candidate, index) => [{
+    text: `${candidate.mint === meta.selectedMint ? "✅" : "📊"} ${index + 1} · MC ${fmtTickerMarketUsd(candidate.marketCap)}`,
+    url: slimewireTokenLinks(candidate.mint).site
+  }]) };
+  await sayHtml(chatId, lines.join("\n"), keyboard);
+  return true;
 }
 
 // Submenu: tidy categories. Each opens a small list of links (all loaded with the CA).
@@ -41243,7 +41348,7 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
 
 // /look <CA>: instant SlimeShield read with trade links - the group-native version of
 // pasting a CA into Slime Scope.
-async function handleTelegramLookCommand(chatId, message, argument) {
+async function handleTelegramLookCommand(chatId, message, argument, options = {}) {
   // One resolver for CA, Dex/Pump links, $tickers, bare scan tickers, and Robinhood Chain 0x contracts.
   const target = await resolveScanTargetFromText(argument).catch(() => null);
   const rhAddr = /^0x[0-9a-fA-F]{40}$/.test(String(target || "")) ? String(target) : "";
@@ -41256,6 +41361,8 @@ async function handleTelegramLookCommand(chatId, message, argument) {
   // Deduplicate only the SAME token. A busy group may paste several different CAs within 20 seconds;
   // the old chat-wide cooldown silently discarded all but the first and looked like a broken scanner.
   if (tgCommandOnCooldown(chatId, `look:${mint.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return;
+  const tickerSymbol = String(options.tickerSymbol || extractCashtags(String(argument || ""))[0] || "").replace(/^\$+/, "").trim().toUpperCase();
+  const keyboard = slimeScanKeyboard(mint, tickerSymbol);
   void telegram("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {});
   // Clean OgreScanBot-style scan card: stats + audit + socials + a prefilled
   // "Buy on SlimeWire" button. The all-in-one funnel — scan in any channel, buy on the site.
@@ -41274,12 +41381,14 @@ async function handleTelegramLookCommand(chatId, message, argument) {
   // caller of this mint across the whole warehouse, so it surfaces who called it first even when
   // this exact chat never did. Empty only when nobody anywhere has called the coin.
   const callerLine = await buildScanCallerFooter(message?.chat?.id, mint, curMc, message).catch(() => "");
+  const matchLine = tickerTruthLine(tickerSymbol, mint);
+  const scanContextLine = [matchLine, callerLine].filter(Boolean).join("\n");
   let text = null;
   if (scan && (scan.meta || scan.bonding || scan.shield || scan.rug || scan.onchain)) {
-    try { text = formatSlimeScanCard({ mint, ...scan, callerLine }); } catch { text = null; }
+    try { text = formatSlimeScanCard({ mint, ...scan, callerLine: scanContextLine }); } catch { text = null; }
   }
   if (!text) {
-    await sayHtml(chatId, `Could not pull a clean read on <code>${escapeTelegramHtml(mint)}</code> right now. Links below.`, slimeScanKeyboard(mint));
+    await sayHtml(chatId, `Could not pull a clean read on <code>${escapeTelegramHtml(mint)}</code> right now. Links below.`, keyboard);
     return;
   }
   // Picture at the top: token image from Dexscreener, falling back to pump.fun metadata.
@@ -41294,16 +41403,16 @@ async function handleTelegramLookCommand(chatId, message, argument) {
     // silently fell to text-only whenever Telegram couldn't fetch/decode the coin's image. URL is the fallback.
     const logoBuf = await scanFastTimeout(xCoinLogo(scan, mint), Number(process.env.TG_SCAN_LOGO_TIMEOUT_MS || 1_400), null);
     if (logoBuf) {
-      try { await sendPhoto(chatId, "scan.png", logoBuf, text, slimeScanKeyboard(mint), "HTML"); return; }
+      try { await sendPhoto(chatId, "scan.png", logoBuf, text, keyboard, "HTML"); return; }
       catch { /* fall through to URL, then text */ }
     }
     const img = scanImageUrlFromScan(scan);
     if (img && /^true$/i.test(String(process.env.TG_SCAN_RAW_IMAGE_FALLBACK || ""))) {
-      try { await telegram("sendPhoto", { chat_id: chatId, photo: img, caption: text, parse_mode: "HTML", reply_markup: slimeScanKeyboard(mint) }); return; }
+      try { await telegram("sendPhoto", { chat_id: chatId, photo: img, caption: text, parse_mode: "HTML", reply_markup: keyboard }); return; }
       catch { /* fall back to the text card */ }
     }
   }
-  await sayHtml(chatId, text, slimeScanKeyboard(mint));
+  await sayHtml(chatId, text, keyboard);
 }
 
 // /alpha: current top picks. Falls through scanner modes and finally the live feed so

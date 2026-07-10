@@ -2062,9 +2062,15 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(cashtag, /fetchGeckoPools\("trending"/);            // independent public trending source
   assert.match(cashtag, /String\(ticker \|\| ""\).*toLowerCase\(\) !== key/); // exact ticker matches only
   assert.match(cashtag, /tickerCandidateScore/);
+  assert.match(cashtag, /tickerCandidateDominance/);
+  assert.match(cashtag, /maxima\.marketCap >= 50_000/);
+  assert.match(cashtag, /maxima\.marketCap \* 0\.05/);
+  assert.match(cashtag, /maxima\.liquidityUsd \* 0\.10/);
   assert.match(cashtag, /webSlimeShield/);                           // every returned ticker contract is safety-screened
   assert.match(cashtag, /scanRecommendationBlocked/);
-  assert.match(cashtag, /const mint = screened\.find/);             // fail closed if every candidate is dangerous/unchecked
+  assert.match(cashtag, /const safe = screened/);
+  assert.match(cashtag, /const mint = safe\[0\]\?\.mint \|\| null/); // fail closed if every candidate is dangerous/unchecked
+  assert.match(cashtag, /tickerResolutionMetaCache\.set/);
 
   const ticker = functionBody(serverSource, "resolveTickerToScanTarget");
   assert.doesNotMatch(ticker, /Promise\.all/);                       // Solana tickers do not wait on the slower RH fallback
@@ -2210,6 +2216,33 @@ test("Telegram trending picks fail closed on honeypots and PvP menus can be dism
   assert.match(pvpCallback, /data === "pvp:done"/);
   assert.match(pvpCallback, /deleteMessage/);
   assert.match(pvpCallback, /editMessageReplyMarkup/);
+});
+
+test("Ticker Truth favors the dominant safe market and explains same-symbol clones", () => {
+  const score = functionBody(serverSource, "tickerCandidateScore");
+  const dominance = functionBody(serverSource, "tickerCandidateDominance");
+  const truth = functionBody(serverSource, "handleTickerTruthCallback");
+  const look = functionBody(serverSource, "handleTelegramLookCommand");
+  const keyboard = functionBody(serverSource, "slimeScanKeyboard");
+  assert.match(score, /log\(liquidity\) \* 30/);
+  assert.match(score, /log\(marketCap\) \* 18/);
+  assert.match(score, /microCapPenalty/);
+  assert.match(dominance, /maxima\.marketCap\) \* 60/);
+  assert.match(dominance, /maxima\.liquidityUsd\) \* 70/);
+  assert.match(truth, /exact-symbol contracts found/);
+  assert.match(truth, /Unsafe\/unchecked matches are omitted/);
+  assert.match(truth, /dominant real market plus live activity/);
+  assert.match(look, /tickerTruthLine/);
+  assert.match(keyboard, /Ticker Truth/);
+  assert.match(serverSource, /startsWith\("tm:"\)/);
+  const scoreFn = new Function("candidate", score);
+  const dominanceFn = new Function("candidate", "maxima", dominance);
+  const established = { marketCap: 509_000, liquidityUsd: 52_000, volume24h: 140_000, holders: 1_100, trendBoost: 0, sources: new Set(["dexscreener"]) };
+  const tinyTrendClone = { marketCap: 2_000, liquidityUsd: 1_200, volume24h: 18_000, holders: 90, trendBoost: 55, sources: new Set(["moralis-trending"]) };
+  const maxima = { marketCap: established.marketCap, liquidityUsd: established.liquidityUsd, volume24h: established.volume24h };
+  const establishedScore = scoreFn(established) + dominanceFn(established, maxima);
+  const cloneScore = scoreFn(tinyTrendClone) + dominanceFn(tinyTrendClone, maxima);
+  assert.ok(establishedScore > cloneScore + 100, `dominant $509K market must decisively beat a $2K trend-feed clone (${establishedScore} vs ${cloneScore})`);
 });
 
 test("X growth engine: broadcast-gated proactive posts + receipts + KOL responder + scorecard, tracking always on", () => {
