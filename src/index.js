@@ -74,6 +74,7 @@ import { getNoxaScan, fetchNoxaFeed, fetchPoolBuys, NOXA_RH } from "./lib/noxaLa
 import { rhWalletScan } from "./lib/walletScan.js";
 import { classifyRhAddress } from "./lib/rhAddressKind.js";
 import { finiteWalletNumber, normalizeSolWalletPnlSummary, normalizeSolWalletPositions } from "./lib/solWalletPnl.js";
+import { aggregateDexPairActivity, volumeFallbackFromOhlcv } from "./lib/scanActivity.js";
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp, listCharacterFiles, characterPfpCount, makeCharacterPfp } from "./lib/pfp.js";
 import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
 import { xConfigured, xSearchMentions, xReply, xPost, xSearchQuery, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode, xAuthReport } from "./lib/xClient.js";
@@ -32371,6 +32372,12 @@ function scanBestVolumeWindow(...sources) {
     const value = scanActivityNumber(...sources.map((source) => read(source, key)));
     if (Number.isFinite(Number(value)) && Number(value) > 0) return { value: Number(value), label };
   }
+  const recent = scanActivityNumber(...sources.flatMap((source) => [
+    source?.volumeRecentUsd,
+    source?.recentVolumeUsd,
+    source?.tradeTapeVolumeUsd,
+  ]));
+  if (Number.isFinite(Number(recent)) && Number(recent) > 0) return { value: Number(recent), label: "RECENT" };
   return { value: 0, label: "" };
 }
 function scanBestPriceChange(windowKey, ...sources) {
@@ -33263,6 +33270,17 @@ async function gatherSlimeScan(mint, options = {}) {
   ]);
   const best = bestDexPairForToken(mint, pairs);
   let meta = mergeTokenMarketMetadata(mergeTokenMarketMetadata(best ? metadataFromDexPair(mint, best) : null, geckoMeta), cachedMarketMeta);
+  const dexActivity = aggregateDexPairActivity(mint, pairs);
+  if (dexActivity.volume || dexActivity.txns) {
+    // Price/liquidity come from the deepest sane pool, while volume and transaction counts span every
+    // unique pool trading this token. This prevents an inactive deepest pool from blanking an otherwise
+    // busy coin on Telegram and X cards.
+    meta = {
+      ...(meta || {}),
+      ...(dexActivity.volume ? { volume: { ...((meta && meta.volume) || {}), ...dexActivity.volume } } : {}),
+      ...(dexActivity.txns ? { txns: { ...((meta && meta.txns) || {}), ...dexActivity.txns } } : {}),
+    };
+  }
   if (stMarket) {
     // Carry EVERYTHING ST returns — it's the keyed source that still answers when the free sources
     // (DexScreener/Gecko) rate-limit Render's shared IP. Shapes mirror DexScreener's ({priceChange:{h1}},
@@ -33289,6 +33307,21 @@ async function gatherSlimeScan(mint, options = {}) {
   // case it wasn't pump-style yet has no Dex MC, grab it now so MC/price/LP never read blank.
   let bonding = pumpMeta;
   if (!bonding && (!meta || !meta.marketCap)) bonding = await scanFastTimeout(getPumpFunTokenMetadata(mint, { timeoutMs: 1_800 }), 2_000, null);
+  // Last independent activity source: Gecko hourly OHLCV contains USD volume even when its token/pool
+  // metadata omits `volume_usd`. Fresh pump coins fall back to the real in-memory trade tape and are
+  // explicitly labelled RECENT rather than being passed off as 24-hour volume.
+  if (!(scanBestVolumeWindow(meta, bonding, best).value > 0)) {
+    const ohlcvPayload = await scanFastTimeout(webOhlcvPayload(mint, "1h"), 2_800, null);
+    const ohlcvVolume = volumeFallbackFromOhlcv(ohlcvPayload || {});
+    if (ohlcvVolume) {
+      meta = {
+        ...(meta || {}),
+        ...(ohlcvVolume.volume ? { volume: { ...((meta && meta.volume) || {}), ...ohlcvVolume.volume } } : {}),
+        ...(ohlcvVolume.volumeRecentUsd ? { volumeRecentUsd: ohlcvVolume.volumeRecentUsd } : {}),
+        volumeSource: ohlcvVolume.source,
+      };
+    }
+  }
   const ath = parseTokenAth(athRaw, supply);
   // Free on-chain fill so the Security block is never blank when RugCheck is rate-limited / unindexed.
   // The security fill and metadata fallback are independent. Running them together removes up to 1.7s
@@ -36740,13 +36773,12 @@ async function buildXScanReply(mint, variant) {
   const changeTone = Number.isFinite(ch1) ? (ch1 >= 0 ? "up" : "down") : "";
   const vol = stats.vol;
   const volumeLabel = vol.value > 0 ? `${scanFmtMoney(vol.value)}${vol.label ? " " + vol.label : ""}` : "n/a";
-  const volLabel = vol.value > 0 ? `Vol ${volumeLabel}` : null;
   const holderLabel = stats.holders > 0 ? scanFmtSupply(stats.holders) : "n/a";
   const v = makeXVary(variant || symbol || mint);
   const toneEmoji = tone === "danger" ? v.danger : tone === "warn" ? v.warn : v.ok;
   const text = [
     `$${symbol || "coin"}${name ? v.sep + name : ""}`,
-    [`MC ${mcLabel}`, `Liq ${liqLabel}`, volLabel, stats.holders > 0 ? `Holders ${holderLabel}` : null, `Age ${ageLabel}`, hasCh1 ? `1H ${changeLabel}` : null, rail].filter(Boolean).join(v.sep),
+    [`MC ${mcLabel}`, `Liq ${liqLabel}`, `Vol ${volumeLabel}`, `Holders ${holderLabel}`, `Age ${ageLabel}`, `1H ${changeLabel}`, rail].join(v.sep),
     `${toneEmoji} ${verdict}`,
     v.cta
   ].join("\n").slice(0, 279);
@@ -37123,7 +37155,7 @@ async function buildXRhReply(address, variant) {
   const toneEmoji = tone === "danger" ? v.danger : tone === "warn" ? v.warn : v.ok;
   const text = [
     `$${info.symbol || "coin"}${info.name ? v.sep + info.name : ""} 🪶`,
-    [`MC ${mcLabel}`, `Liq ${liqLabel}`, vol.value > 0 ? `Vol ${volLabel}` : null, info.holders > 0 ? `Holders ${holdersLabel}` : null, hasChange ? `${ch.title} ${changeLabel}` : null, "Robinhood Chain"].filter(Boolean).join(v.sep),
+    [`MC ${mcLabel}`, `Liq ${liqLabel}`, `Vol ${volLabel}`, `Holders ${holdersLabel}`, `${ch.title} ${changeLabel}`, "Robinhood Chain"].join(v.sep),
     `${toneEmoji} ${verdict}`,
     v.cta,
   ].join("\n").slice(0, 279);
@@ -41563,7 +41595,7 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
     `├ MC   <b>${scanFmtMoney(mc)}</b>`,
     `├ Vol  <b>${scanFmtMoney(vol.value)}</b>${vol.label ? ` <i>${vol.label}</i>` : ""}`,
     `├ LP   <b>${scanFmtMoney(liq)}</b>`,
-    supply ? `├ Sup  <b>${scanFmtSupply(supply)}</b>` : null,
+    `├ Sup  <b>${supply ? scanFmtSupply(supply) : "n/a"}</b>`,
     `${showAth ? "├" : "└"} 1H   <b>${scanFmtPct(ch1)}</b>  🟢 ${buys1}  🔴 ${sells1}`,
     showAth ? `└ ATH  <b>${scanFmtMoney(ath.mc)}</b>${athTail}` : null,
     "",
