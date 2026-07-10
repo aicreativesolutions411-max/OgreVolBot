@@ -921,6 +921,32 @@ test("settings menu is multi-level: home -> per-bot sub-menus, clickable toggles
   assert.match(serverSource, /if \(await applyGbInput\(message, userId\)/); // wired into the router
 });
 
+test("KOL Call Feed is source-consented, admin-selected, deduped, forwarded, and scanned", () => {
+  assert.match(serverSource, /allowed_updates: \["message", "callback_query", "inline_query", "channel_post"/);
+  const channel = functionBody(serverSource, "handleChannelPostCommands");
+  assert.match(channel, /setKolSourceOptIn\(post\.chat, action === "on"\)/);
+  assert.match(channel, /handleKolSourceChannelPost\(post\)/);
+  const dispatch = functionBody(serverSource, "handleKolSourceChannelPost");
+  assert.match(dispatch, /source\?\.optedIn/);
+  assert.match(dispatch, /claimKolCallFeedPost/);
+  assert.match(dispatch, /cfg\.on && cfg\.sources\.some/);
+  const forward = functionBody(serverSource, "forwardKolCallToTarget");
+  assert.match(forward, /telegram\("forwardMessage"/);
+  assert.match(forward, /handleTelegramLookCommand\(targetChatId, post, mint, \{ skipCooldown: true \}\)/);
+  const targets = functionBody(serverSource, "kolCallPostTargets");
+  assert.match(targets, /resolveExplicitScanTargetsFromText/);
+  assert.match(targets, /isRhContract/);
+  assert.match(targets, /isSolMintAddress/);
+  const menu = functionBody(serverSource, "groupBotModuleView");
+  assert.match(menu, /module === "kol"/);
+  assert.match(menu, /Add source channel/);
+  const callback = functionBody(serverSource, "handleGroupBotCallback");
+  assert.match(callback, /gb:kol:add/);
+  assert.match(callback, /gb:kol:rm:/);
+  assert.match(functionBody(serverSource, "handleGroupBotCommand"), /kolsource\|callsource/);
+  assert.match(functionBody(serverSource, "applyKolFeedSourceInput"), /resolveKolSourceReference/);
+});
+
 test("Shield folds into Rose: scam/ghost/impersonator/auto-whitelist (all off by default)", () => {
   const d = functionBody(serverSource, "roseDefaults");
   assert.match(d, /deleteScam: false/);

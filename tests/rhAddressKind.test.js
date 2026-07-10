@@ -51,10 +51,25 @@ test("fresh ERC-20 is recognized from RPC before Blockscout indexes it", async (
   });
 });
 
+test("slower Blockscout ERC-20 evidence beats a fast smart-wallet RPC guess", async () => {
+  const fetchImpl = async (url) => {
+    if (String(url).includes("blockscout")) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return response(200, { type: "ERC-20", symbol: "SLIME" });
+    }
+    return response(200, [
+      { id: 1, result: "0x6001600055" }, { id: 2, error: { code: 3 } },
+      { id: 3, error: { code: 3 } }, { id: 4, error: { code: 3 } },
+    ]);
+  };
+  assert.deepEqual(await classifyRhAddress(ADDRESS, { fetchImpl, rpcUrl: "https://rpc.test", fallbackRpcUrl: "", timeoutMs: 100 }), {
+    isToken: true, source: "blockscout-token",
+  });
+});
+
 test("unavailable providers return unknown instead of guessing coin", async () => {
   const fetchImpl = async () => { throw new Error("offline"); };
   assert.deepEqual(await classifyRhAddress(ADDRESS, { fetchImpl, rpcUrl: "https://rpc.test" }), {
     isToken: null, source: "unavailable",
   });
 });
-

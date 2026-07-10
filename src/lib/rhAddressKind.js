@@ -77,10 +77,23 @@ export async function classifyRhAddress(address, options = {}) {
     blockscoutTokenProbe(clean, fetchImpl, timeoutMs),
     ...rpcUrls.map((url) => rpcTokenProbe(clean, url, fetchImpl, timeoutMs)),
   ];
-  try {
-    return await Promise.any(probes);
-  } catch {
-    return { isToken: null, source: "unavailable" };
-  }
+  // A positive ERC-20 answer is authoritative and may return immediately. A negative RPC answer must
+  // wait for the other probes: Promise.any used to let a fast "smart wallet" guess beat Blockscout's
+  // slightly slower ERC-20 metadata, routing real Robinhood coins into the wallet scanner.
+  return await new Promise((resolve) => {
+    let pending = probes.length;
+    const negatives = [];
+    let done = false;
+    const finishOne = (value = null) => {
+      if (done) return;
+      if (value?.isToken === true) { done = true; resolve(value); return; }
+      if (value?.isToken === false) negatives.push(value);
+      pending -= 1;
+      if (pending > 0) return;
+      done = true;
+      // An EOA bytecode answer is stronger than the smart-contract-wallet fallback.
+      resolve(negatives.find((row) => row.source === "rpc-eoa") || negatives[0] || { isToken: null, source: "unavailable" });
+    };
+    for (const probe of probes) probe.then(finishOne).catch(() => finishOne(null));
+  });
 }
-

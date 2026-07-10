@@ -5887,7 +5887,8 @@ async function registerTelegramBotCommands() {
     { command: "receipts", description: "SlimeShield rug-call receipts + hit rate" },
     { command: "proof", description: "Live engine track record + proof wall" },
     { command: "mywins", description: "on/off - post YOUR TP wins in this chat" },
-    { command: "slimewire", description: "on/off - engine alerts in this chat (admins)" }
+    { command: "slimewire", description: "on/off - engine alerts in this chat (admins)" },
+    { command: "kolfeed", description: "Manage opted-in KOL call sources (admins)" }
   ];
   const dmCommands = [
     ...groupCommands,
@@ -13440,7 +13441,7 @@ async function sendLoop() {
       const result = await telegram("getUpdates", {
         offset,
         timeout: 30,
-        allowed_updates: ["message", "callback_query", "inline_query", "my_chat_member", "chat_member"]
+        allowed_updates: ["message", "callback_query", "inline_query", "channel_post", "my_chat_member", "chat_member"]
       });
 
       for (const update of result) {
@@ -14160,6 +14161,9 @@ async function handleMessage(message, userId) {
   // All-in-one group bot: /settings + module toggles (/buybot|raid|rose|scan on|off). Group-only,
   // admin-gated; returns false (no-op) for DMs and non-matching text, so existing flows are untouched.
   if (await handleGroupBotCommand(message, userId).catch(() => false)) return;
+  // KOL feed setup accepts a forwarded channel post (including photo/video posts with no text), so it
+  // must run before the normal text/media gates.
+  if (await applyKolFeedSourceInput(message, userId).catch(() => false)) return;
   // Referral contest commands (/referral, /reflink, /refboard).
   if (await handleReferralCommand(message, userId).catch(() => false)) return;
   // Rose Manager (when on): new-member welcome, anti-links, and moderation commands. Runs before
@@ -41638,7 +41642,7 @@ async function handleTelegramLookCommand(chatId, message, argument, options = {}
   // One resolver for CA, Dex/Pump links, $tickers, bare scan tickers, and Robinhood Chain 0x contracts.
   const target = await resolveScanTargetFromText(argument).catch(() => null);
   const rhAddr = /^0x[0-9a-fA-F]{40}$/.test(String(target || "")) ? String(target) : "";
-  if (rhAddr) { if (tgCommandOnCooldown(chatId, `look:${rhAddr.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return; await sendRhScanCard(chatId, rhAddr); return; }
+  if (rhAddr) { if (!options.skipCooldown && tgCommandOnCooldown(chatId, `look:${rhAddr.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return; await sendRhScanCard(chatId, rhAddr); return; }
   const mint = isLikelySolMint(target) ? String(target) : "";
   if (!mint) {
     await say(chatId, "Usage: /look <token CA> — Solana mint OR Robinhood Chain 0x… address. I'll run a SlimeShield read with chart + quick-buy.");
@@ -41646,7 +41650,7 @@ async function handleTelegramLookCommand(chatId, message, argument, options = {}
   }
   // Deduplicate only the SAME token. A busy group may paste several different CAs within 20 seconds;
   // the old chat-wide cooldown silently discarded all but the first and looked like a broken scanner.
-  if (tgCommandOnCooldown(chatId, `look:${mint.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return;
+  if (!options.skipCooldown && tgCommandOnCooldown(chatId, `look:${mint.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return;
   const tickerSymbol = String(options.tickerSymbol || extractCashtags(String(argument || ""))[0] || "").replace(/^\$+/, "").trim().toUpperCase();
   const keyboard = slimeScanKeyboard(mint, tickerSymbol);
   void telegram("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {});
@@ -42269,12 +42273,32 @@ async function handleTelegramRaidCommand(chatId, message, argument) {
   await startRaidFromDraft(chatId, { tid, url, symbol, by, targets, durationMin: 120 });
 }
 
-// Channels: only /look, /alpha, /slimewire - posts have no from user, admin implied.
+// Channels: commands have admin implied. Normal posts also feed the permission-based KOL syndicator
+// when this source channel explicitly enabled /kolfeed on.
 async function handleChannelPostCommands(post) {
   const chatId = post?.chat?.id;
-  const text = String(post?.text || "").trim();
-  if (!chatId || !text.startsWith("/")) return;
+  const text = String(post?.text || post?.caption || "").trim();
+  if (!chatId) return;
   registerTelegramGroup(post.chat);
+  if (!text.startsWith("/")) {
+    await handleKolSourceChannelPost(post);
+    return;
+  }
+  const kolFeed = text.match(/^\/(?:kolfeed|callfeed|kolcalls)(?:@\w+)?(?:\s+(on|off|status))?\s*$/i);
+  if (kolFeed) {
+    const action = String(kolFeed[1] || "status").toLowerCase();
+    if (action === "on" || action === "off") {
+      const source = await setKolSourceOptIn(post.chat, action === "on");
+      await sayHtml(chatId, action === "on"
+        ? `🟢 <b>KOL Call Feed source enabled</b>\n\nGroups may now subscribe to <b>${escapeTelegramHtml(source?.title || post.chat.title || "this channel")}</b>. New posts containing a real CA/coin link—or a clear $ticker call—will be forwarded with a SlimeWire scan.\n\nPrivate-channel source code: <code>${escapeTelegramHtml(String(chatId))}</code>\nA target admin can use <code>/kolsource add ${escapeTelegramHtml(String(chatId))}</code>.\n\nUse <code>/kolfeed off</code> anytime to revoke access.`
+        : "⚪ <b>KOL Call Feed source disabled</b>\n\nNo new calls from this channel will be syndicated.").catch(() => {});
+    } else {
+      const store = await readGroupBot();
+      const source = store.kolSources?.[String(chatId)];
+      await sayHtml(chatId, `📣 KOL Call Feed source is <b>${source?.optedIn ? "ON" : "off"}</b>.\nUse <code>/kolfeed on</code> to let subscribed groups receive calls, or <code>/kolfeed off</code> to revoke it.`).catch(() => {});
+    }
+    return;
+  }
   const lookCommand = parseCommandWithArgument(text, ["look", "scan", "scan_ca", "check"]);
   if (lookCommand) {
     await handleTelegramLookCommand(chatId, post, lookCommand.argument);
@@ -42325,6 +42349,7 @@ async function handleBotChatMembershipUpdate(memberUpdate) {
   const status = memberUpdate?.new_chat_member?.status || "";
   if (!chat?.id || isPrivateChat(chat)) return;
   if (["left", "kicked"].includes(status)) {
+    if (chat.type === "channel") await rememberKolSourceChannel(chat, { botAdmin: false, optedIn: false, optedInAt: 0 }).catch(() => {});
     // Bot removed - disarm so bridges stop trying to post into a dead chat.
     await withFileLock(telegramGroupsPath(), async () => {
       const store = await readTelegramGroups();
@@ -42341,6 +42366,7 @@ async function handleBotChatMembershipUpdate(memberUpdate) {
   // grant it - that promotion IS the opt-in. Auto-arm, no /slimewire needed, so the
   // bot scales across many channels with zero per-channel env config.
   if (chat.type === "channel" && status === "administrator") {
+    await rememberKolSourceChannel(chat, { botAdmin: true }).catch(() => {});
     let alreadyArmed = false;
     await withFileLock(telegramGroupsPath(), async () => {
       const store = await readTelegramGroups();
@@ -42363,7 +42389,9 @@ async function handleBotChatMembershipUpdate(memberUpdate) {
         "- TP/SL fires and KOL copy receipts",
         "- 2x \"Called it\" receipts when drops hit",
         "",
-        "Rate-capped so it never floods. Post /slimewire off here to stop. Track record: slimewire.org/proof"
+        "Rate-capped so it never floods. Post /slimewire off here to stop. Track record: slimewire.org/proof",
+        "",
+        "Want groups to receive this channel's own coin calls? Post /kolfeed on. Revoke anytime with /kolfeed off."
       ].join("\n"));
     }
     return;
@@ -42398,9 +42426,202 @@ async function readGroupBot() {
 async function writeGroupBot(store) { groupBotCache = store; try { await writeJsonFile(GROUP_BOT_FILE, store); } catch {} }
 // Scan defaults ON — auto-reading a pasted CA / $ticker is the bot's core, benign, user-triggered value
 // (cooldown-gated, never floods). Buy/Raid/Rose stay OFF (those auto-post / moderate, so opt-in).
-function defaultGroupBotEntry() { return { features: { buybot: false, raid: false, rose: false, scan: true }, token: null, addedAt: new Date().toISOString() }; }
+function defaultGroupBotEntry() { return { features: { buybot: false, raid: false, rose: false, scan: true, kolfeed: false }, token: null, addedAt: new Date().toISOString() }; }
 async function getGroupBotEntry(chatId) { return (await readGroupBot()).groups[String(chatId)] || null; }
 function groupBotFeatureOn(entry, key) { return Boolean(entry && entry.features && entry.features[key]); }
+
+// Permission-based KOL Call Feed. A source channel must explicitly opt in while the bot is an admin;
+// target groups then choose which opted-in channels they want. The target keeps a small source snapshot
+// so its settings menu stays readable even if Telegram temporarily cannot resolve the source username.
+function kolCallFeedConfig(entry) {
+  const raw = entry?.kolCallFeed && typeof entry.kolCallFeed === "object" ? entry.kolCallFeed : {};
+  const seen = new Set();
+  const sources = (Array.isArray(raw.sources) ? raw.sources : []).map((source) => {
+    const id = String(source?.id || source?.chatId || "").trim();
+    if (!/^-?\d+$/.test(id) || seen.has(id)) return null;
+    seen.add(id);
+    return {
+      id,
+      title: String(source?.title || source?.username || id).slice(0, 80),
+      username: String(source?.username || "").replace(/^@/, "").slice(0, 64),
+    };
+  }).filter(Boolean).slice(0, 20);
+  return { on: Boolean(entry?.features?.kolfeed ?? raw.on), sources };
+}
+function telegramForwardedChannel(message) {
+  const candidates = [message, message?.reply_to_message].filter(Boolean);
+  for (const item of candidates) {
+    const origin = item?.forward_origin;
+    const chat = origin?.type === "channel" ? origin.chat : item?.forward_from_chat;
+    if (chat?.id && chat?.type === "channel") {
+      return { id: String(chat.id), title: String(chat.title || chat.username || chat.id).slice(0, 80), username: String(chat.username || "").replace(/^@/, "").slice(0, 64) };
+    }
+  }
+  return null;
+}
+function telegramPostEntityUrls(message) {
+  const text = String(message?.text || message?.caption || "");
+  const entities = [...(message?.entities || []), ...(message?.caption_entities || [])];
+  const urls = [];
+  for (const entity of entities) {
+    if (entity?.type === "text_link" && entity.url) urls.push(String(entity.url));
+    else if (entity?.type === "url") urls.push(text.slice(Number(entity.offset) || 0, (Number(entity.offset) || 0) + (Number(entity.length) || 0)));
+  }
+  return [...new Set(urls.filter(Boolean))];
+}
+async function rememberKolSourceChannel(chat, patch = {}) {
+  if (!chat?.id || chat.type !== "channel") return null;
+  const store = await readGroupBot();
+  store.kolSources = store.kolSources && typeof store.kolSources === "object" ? store.kolSources : {};
+  const key = String(chat.id);
+  const current = store.kolSources[key] || {};
+  store.kolSources[key] = {
+    ...current,
+    id: key,
+    title: String(chat.title || current.title || chat.username || key).slice(0, 80),
+    username: String(chat.username || current.username || "").replace(/^@/, "").slice(0, 64),
+    ...patch,
+    updatedAt: Date.now(),
+  };
+  await writeGroupBot(store);
+  return store.kolSources[key];
+}
+async function setKolSourceOptIn(chat, on) {
+  return rememberKolSourceChannel(chat, { optedIn: Boolean(on), botAdmin: Boolean(on), optedInAt: on ? Date.now() : 0 });
+}
+async function addKolCallFeedSource(chatId, source) {
+  const store = await readGroupBot();
+  store.kolSources = store.kolSources && typeof store.kolSources === "object" ? store.kolSources : {};
+  const sourceId = String(source?.id || "");
+  const registered = store.kolSources[sourceId];
+  if (!registered?.optedIn || !registered?.botAdmin) {
+    return { ok: false, error: "That channel has not opted in yet. Add SlimeWireBot as a channel admin, then post /kolfeed on inside the source channel." };
+  }
+  const key = String(chatId);
+  const entry = store.groups[key] || defaultGroupBotEntry();
+  const cfg = kolCallFeedConfig(entry);
+  const record = {
+    id: sourceId,
+    title: String(registered.title || source.title || sourceId).slice(0, 80),
+    username: String(registered.username || source.username || "").replace(/^@/, "").slice(0, 64),
+  };
+  cfg.sources = [...cfg.sources.filter((item) => item.id !== sourceId), record].slice(0, 20);
+  entry.features = { ...(entry.features || {}), kolfeed: true };
+  entry.kolCallFeed = { ...cfg, on: true, sources: cfg.sources };
+  store.groups[key] = entry;
+  await writeGroupBot(store);
+  return { ok: true, source: record, entry };
+}
+async function removeKolCallFeedSource(chatId, sourceId) {
+  const store = await readGroupBot();
+  const key = String(chatId);
+  const entry = store.groups[key] || defaultGroupBotEntry();
+  const cfg = kolCallFeedConfig(entry);
+  cfg.sources = sourceId === "all" ? [] : cfg.sources.filter((source) => source.id !== String(sourceId));
+  entry.kolCallFeed = { ...cfg, sources: cfg.sources };
+  store.groups[key] = entry;
+  await writeGroupBot(store);
+  return entry;
+}
+async function setKolCallFeedEnabled(chatId, on) {
+  const store = await readGroupBot();
+  const key = String(chatId);
+  const entry = store.groups[key] || defaultGroupBotEntry();
+  entry.features = { ...(entry.features || {}), kolfeed: Boolean(on) };
+  entry.kolCallFeed = { ...kolCallFeedConfig(entry), on: Boolean(on) };
+  store.groups[key] = entry;
+  await writeGroupBot(store);
+  return entry;
+}
+
+async function resolveKolSourceReference(message, raw = "") {
+  const forwarded = telegramForwardedChannel(message);
+  if (forwarded) return forwarded;
+  const value = String(raw || "").trim();
+  if (!value) return null;
+  const chatRef = /^@?[A-Za-z0-9_]{5,32}$/.test(value) ? (value.startsWith("@") ? value : `@${value}`) : (/^-?\d+$/.test(value) ? value : "");
+  if (!chatRef) return null;
+  const chat = await telegram("getChat", { chat_id: chatRef }).catch(() => null);
+  if (!chat?.id || chat.type !== "channel") return null;
+  return { id: String(chat.id), title: String(chat.title || chat.username || chat.id).slice(0, 80), username: String(chat.username || "").replace(/^@/, "").slice(0, 64) };
+}
+async function claimKolCallFeedPost(sourceId, messageId) {
+  const store = await readGroupBot();
+  store.kolCallSeen = store.kolCallSeen && typeof store.kolCallSeen === "object" ? store.kolCallSeen : {};
+  const key = `${sourceId}:${messageId}`;
+  if (store.kolCallSeen[key]) return false;
+  store.kolCallSeen[key] = Date.now();
+  const keys = Object.keys(store.kolCallSeen);
+  if (keys.length > 1200) {
+    keys.sort((a, b) => Number(store.kolCallSeen[a]) - Number(store.kolCallSeen[b])).slice(0, keys.length - 900).forEach((old) => delete store.kolCallSeen[old]);
+  }
+  await writeGroupBot(store);
+  return true;
+}
+const kolCallFeedRate = new Map();
+function kolCallFeedRateAllowed(chatId, maxPerHour = 10) {
+  const key = String(chatId), now = Date.now(), cutoff = now - 60 * 60_000;
+  const recent = (kolCallFeedRate.get(key) || []).filter((at) => at > cutoff);
+  if (recent.length >= maxPerHour) { kolCallFeedRate.set(key, recent); return false; }
+  recent.push(now); kolCallFeedRate.set(key, recent); return true;
+}
+async function kolCallPostTargets(post) {
+  const text = String(post?.text || post?.caption || "").trim();
+  const urls = telegramPostEntityUrls(post);
+  let targets = await resolveExplicitScanTargetsFromText(text, urls, 2).catch(() => []);
+  // A ticker alone is ambiguous in normal channel chatter. Accept it as a call only alongside clear
+  // call language/emoji, while a CA or coin link always qualifies immediately.
+  if (!targets.length && extractCashtags(text).length && /\b(call|called|buy|entry|ape|gem|send|moon|watch|chart|contract|ca)\b|[🚨🔥🚀]/i.test(text)) {
+    targets = await resolveAllScanTargetsFromText(text, urls, 2, { allowBareTickerHints: false }).catch(() => []);
+  }
+  const valid = [];
+  for (const target of targets) {
+    if (/^0x[0-9a-fA-F]{40}$/.test(target)) {
+      if (await isRhContract(target).catch(() => false)) valid.push(target);
+    } else if (isLikelySolMint(target) && await isSolMintAddress(target).catch(() => true)) valid.push(target);
+  }
+  return [...new Set(valid.map(String))].slice(0, 2);
+}
+async function forwardKolCallToTarget(targetChatId, source, post, mint) {
+  const sourceId = String(source.id);
+  let forwarded = null;
+  try {
+    forwarded = await telegram("forwardMessage", { chat_id: targetChatId, from_chat_id: sourceId, message_id: post.message_id, disable_notification: false });
+  } catch { /* protected/private forwarding falls back to an attributed source line */ }
+  if (!forwarded) {
+    const publicUrl = source.username ? `https://t.me/${source.username}/${post.message_id}` : "";
+    const label = escapeTelegramHtml(source.title || source.username || sourceId);
+    const line = publicUrl
+      ? `📣 <b>New KOL call from <a href="${publicUrl}">${label}</a></b>`
+      : `📣 <b>New KOL call from ${label}</b>\n<i>The source channel protects forwarding; SlimeWire still attached the verified scan.</i>`;
+    await sayHtml(targetChatId, line).catch(() => {});
+  }
+  // Use the original source post as caller context, while sending the scan into the subscribed target.
+  // Persistent message dedupe makes bypassing the normal chat cooldown safe here.
+  await handleTelegramLookCommand(targetChatId, post, mint, { skipCooldown: true }).catch(() => {});
+}
+async function handleKolSourceChannelPost(post) {
+  const sourceId = String(post?.chat?.id || "");
+  if (!sourceId || !post?.message_id) return false;
+  const store = await readGroupBot();
+  const source = store.kolSources?.[sourceId];
+  if (!source?.optedIn || !source?.botAdmin) return false;
+  const targets = await kolCallPostTargets(post);
+  if (!targets.length) return false;
+  if (!(await claimKolCallFeedPost(sourceId, post.message_id))) return true;
+  const latestStore = await readGroupBot();
+  const destinations = Object.entries(latestStore.groups || {}).filter(([chatId, entry]) => {
+    if (String(chatId) === sourceId) return false;
+    const cfg = kolCallFeedConfig(entry);
+    return cfg.on && cfg.sources.some((item) => item.id === sourceId);
+  });
+  for (const [chatId] of destinations) {
+    if (!kolCallFeedRateAllowed(chatId, 10)) continue;
+    for (const mint of targets) await forwardKolCallToTarget(chatId, source, post, mint);
+  }
+  await rememberKolSourceChannel(post.chat, { optedIn: true, botAdmin: true, lastCallAt: Date.now(), lastMessageId: post.message_id }).catch(() => {});
+  return true;
+}
 const RAID_DEFAULT_PRESET = { targets: { likes: 100, rts: 25, replies: 10, bookmarks: 10 }, durationMin: 120 };
 function cleanRaidTargets(targets = {}) {
   const clamp = (v) => Math.max(0, Math.min(1_000_000, Math.round(Number(v) || 0)));
@@ -42480,6 +42701,7 @@ function groupBotMenuMarkup(entry, alertsOn = false) {
   return { inline_keyboard: [
     [{ text: `${dot("buybot")} Buy Bot`, callback_data: "gb:m:buy" }, { text: `${dot("raid")} Raid Bot`, callback_data: "gb:m:raid" }],
     [{ text: `${dot("rose")} Rose & Shield`, callback_data: "gb:m:rose" }, { text: `${dot("scan")} Scan Bot`, callback_data: "gb:m:scan" }],
+    [{ text: `${dot("kolfeed")} 📣 KOL Call Feed`, callback_data: "gb:m:kol" }],
     [{ text: "🎯 Trench Tools", callback_data: "gb:m:trench" }],
     [{ text: "📦 Alert Packs", callback_data: "gb:m:packs" }, { text: `${alertsOn ? "🟢" : "⚪"} 📣 Alerts`, callback_data: "gb:alerts" }],
     [{ text: `${refOn} 🎟️ Referral Contest`, callback_data: "gb:m:ref" }],
@@ -42497,6 +42719,7 @@ function groupBotMenuText(entry) {
     `⚔️ <b>Raid Bot</b> — ${st("raid")} · live X-raid cards`,
     `🛡️ <b>Rose & Shield</b> — ${st("rose")} · moderation + anti-scam protection`,
     `🔍 <b>Scan Bot</b> — ${st("scan")} · CA / $ticker → scan card`,
+    `📣 <b>KOL Call Feed</b> — ${st("kolfeed")} · opted-in channel calls → forwarded post + scan`,
     `📣 <b>SlimeWire Alerts</b> — auto plays every 15 min + fresh launches, TP/SL fires, KOL copies &amp; 2x receipts (capped a few/hr)`,
     `📦 <b>Alert Packs</b> — one-tap quiet scanner, launch room, proof room, or all-quiet presets`,
     "",
@@ -42621,6 +42844,37 @@ function groupBotModuleView(module, entry) {
       markup: { inline_keyboard: [[toggleBtn("scan", "Scan Bot")], gbBackRow()] }
     };
   }
+  if (module === "kol") {
+    const kc = kolCallFeedConfig(e);
+    const sourceLines = kc.sources.length
+      ? kc.sources.map((source, index) => `${index + 1}. <b>${escapeTelegramHtml(source.title)}</b>${source.username ? ` · @${escapeTelegramHtml(source.username)}` : ""}`)
+      : ["No source channels added yet."];
+    const sourceButtons = kc.sources.map((source) => ([{
+      text: `✖ Remove ${String(source.title || source.username || source.id).slice(0, 24)}`,
+      callback_data: `gb:kol:rm:${source.id}`,
+    }]));
+    return {
+      text: [
+        "📣 <b>KOL Call Feed</b>",
+        kc.on ? "Status: <b>🟢 ON</b>" : "Status: <b>⚪ off</b>",
+        "",
+        "Choose opted-in KOL channels. When one posts a real coin call, SlimeWire forwards the original post with attribution and follows it with the full scan.",
+        "",
+        ...sourceLines,
+        "",
+        "Add a source by tapping below and forwarding one of its posts, or use <code>/kolsource add @channel</code>. The source must first add SlimeWireBot as an admin and post <code>/kolfeed on</code>.",
+        "",
+        "Protected-forward channels still get an attributed call notice and scan. Duplicate posts are ignored; each target is capped at 10 calls/hour.",
+      ].join("\n"),
+      markup: { inline_keyboard: [
+        [{ text: kc.on ? "🟢 Feed is ON — tap to pause" : "⚪ Feed is off — tap to enable", callback_data: "gb:kol:toggle" }],
+        [{ text: "➕ Add source channel", callback_data: "gb:kol:add" }],
+        ...sourceButtons,
+        ...(kc.sources.length > 1 ? [[{ text: "🗑 Remove all sources", callback_data: "gb:kol:rm:all" }]] : []),
+        gbBackRow(),
+      ] },
+    };
+  }
   if (module === "ref") {
     const rc = referralConfig(e);
     const top = Object.entries(rc.counts || {}).sort((a, b) => b[1] - a[1])[0];
@@ -42685,6 +42939,33 @@ async function groupBotRenderModule(chatId, module, messageId) {
 // Typed-input capture for menu settings that need a value (emoji, message, minbuy,
 // track, welcome, rules, antiflood, whitelist). key = `${chatId}:${userId}`.
 const gbInputPending = new Map();
+const kolFeedInputPending = new Map();
+async function applyKolFeedSourceInput(message, userId) {
+  const chatId = message?.chat?.id;
+  const key = `${chatId}:${userId}`;
+  const pending = kolFeedInputPending.get(key);
+  if (!pending) return false;
+  if (Date.now() - pending.at > 3 * 60_000) { kolFeedInputPending.delete(key); return false; }
+  const raw = String(message?.text || message?.caption || "").trim();
+  const source = await resolveKolSourceReference(message, raw).catch(() => null);
+  if (!source) {
+    // Keep waiting when the next message was unrelated. A clear @username that fails gets a useful error.
+    if (/^@?[A-Za-z0-9_]{5,32}$/.test(raw)) {
+      await say(chatId, "I couldn't resolve that source channel. Forward one of its posts here, or send its public @channel username.").catch(() => {});
+      return true;
+    }
+    return false;
+  }
+  kolFeedInputPending.delete(key);
+  const result = await addKolCallFeedSource(chatId, source);
+  if (!result.ok) {
+    await say(chatId, result.error).catch(() => {});
+  } else {
+    await sayHtml(chatId, `🟢 Added <b>${escapeTelegramHtml(result.source.title)}</b> to this group's KOL Call Feed.`).catch(() => {});
+  }
+  if (pending.setupMsgId) await groupBotRenderModule(chatId, "kol", pending.setupMsgId).catch(() => {});
+  return true;
+}
 const GB_INPUT_PROMPT = {
   buyemoji: "Send the emoji + optional SOL-per-emoji, e.g.  🐸 0.1",
   message: "Send the custom header line for buy/raid posts (or 'off' to clear)",
@@ -42763,6 +43044,11 @@ function groupBotHelpText() {
     "⚔️ <b>Raid Bot</b> — <code>/raid &lt;X post link&gt;</code> → <b>setup menu</b> (tap likes/RT/reply/bookmark goals + duration, then 🚀 Start). Live card with <b>per-goal progress bars</b> (▰▰▱), overall %, 👀 views, countdown, a 🔄 Refresh button, and <b>RAID SMASHED</b> 🔥 / <b>Raid Ended</b>.",
     "🔍 <b>Scan Bot</b> — paste any CA → instant scan card with Quick-Buy",
     "",
+    "📣 <b>KOL Call Feed</b> — permission-based channel calls forwarded with SlimeWire scans",
+    "• <code>/kolfeed</code> — open this group's source menu",
+    "• <code>/kolsource add @channel</code> — subscribe this group (admin only)",
+    "• Source setup: add SlimeWireBot as channel admin, then post <code>/kolfeed on</code> there",
+    "",
     "🎨 <b>Customize the look</b>",
     "• <code>/setmedia</code> — buy art: reply to a photo/video, or <code>/setmedia &lt;url&gt;</code> (default = coin image; <code>off</code> to reset)",
     "• <code>/setraidmedia</code> — separate art for raid posts (same usage)",
@@ -42820,6 +43106,45 @@ async function handleGroupBotCommand(message, userId) {
   const text = String(message.text || message.caption || "").trim();
   // /help — clean command guide (anyone can read it).
   if (/^\/help(?:@\w+)?\b/i.test(text)) { await sayHtml(chat.id, groupBotHelpText()); return true; }
+  // Target-group KOL feed controls. Source channels separately consent with /kolfeed on.
+  const kf = text.match(/^\/(kolfeed|callfeed|kolcalls|kolsource|callsource)(?:@\w+)?(?:\s+(on|off|list|add|remove))?(?:\s+(\S+))?\s*$/i);
+  if (kf) {
+    const chatId = chat.id;
+    if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only group admins can change the KOL Call Feed."); return true; }
+    const command = String(kf[1] || "").toLowerCase();
+    const action = String(kf[2] || (/(?:kolsource|callsource)/.test(command) ? "add" : "list")).toLowerCase();
+    const value = String(kf[3] || "").trim();
+    if (action === "on" || action === "off") {
+      await setKolCallFeedEnabled(chatId, action === "on");
+      await sayHtml(chatId, `📣 KOL Call Feed is now <b>${action === "on" ? "ON" : "off"}</b>.`).catch(() => {});
+      return true;
+    }
+    if (action === "add") {
+      const source = await resolveKolSourceReference(message, value).catch(() => null);
+      if (source) {
+        const result = await addKolCallFeedSource(chatId, source);
+        await sayHtml(chatId, result.ok
+          ? `🟢 Added <b>${escapeTelegramHtml(result.source.title)}</b>. New calls will be forwarded here with a scan.`
+          : escapeTelegramHtml(result.error)).catch(() => {});
+      } else {
+        kolFeedInputPending.set(`${chatId}:${userId}`, { at: Date.now(), setupMsgId: null });
+        await sayHtml(chatId, "➕ <b>Add a KOL source</b>\n\nForward one post from the source channel here within 3 minutes, or send its public <code>@channel</code> username.\n\nThe source must first add SlimeWireBot as an admin and post <code>/kolfeed on</code>.").catch(() => {});
+      }
+      return true;
+    }
+    if (action === "remove") {
+      const cfg = kolCallFeedConfig(await getGroupBotEntry(chatId));
+      const clean = value.replace(/^@/, "").toLowerCase();
+      const source = value.toLowerCase() === "all" ? { id: "all" } : cfg.sources.find((item) => item.id === value || item.username.toLowerCase() === clean);
+      if (!source) await say(chatId, "Source not found. Open /kolfeed and tap the channel's Remove button.").catch(() => {});
+      else { await removeKolCallFeedSource(chatId, source.id); await say(chatId, source.id === "all" ? "Removed all KOL Call Feed sources." : `Removed ${source.title}.`).catch(() => {}); }
+      return true;
+    }
+    const entry = (await getGroupBotEntry(chatId)) || defaultGroupBotEntry();
+    const view = groupBotModuleView("kol", entry);
+    await sayHtml(chatId, view.text, view.markup).catch(() => {});
+    return true;
+  }
   // /setraidmedia — custom picture/video for RAID posts only (separate from the buy art). Admin only.
   const srm = text.match(/^\/setraidmedia(?:@\w+)?(?:\s+(\S+))?\b/i);
   if (srm) {
@@ -43007,7 +43332,26 @@ async function handleGroupBotCallback(query, userId) {
     await telegram("answerCallbackQuery", { callback_query_id: query.id, show_alert: true, text: cur ? "SlimeWire alerts OFF here." : "🟢 SlimeWire Alerts ON — this chat now gets 🐸 plays every 15 min, fresh launches, TP/SL fires, KOL copies & 2x receipts. Capped at a few posts/hour." }).catch(() => {});
     return true;
   }
-  const mm = data.match(/^gb:m:(buy|raid|rose|scan|ref)$/);
+  if (data === "gb:kol:toggle") {
+    const cfg = kolCallFeedConfig(await getGroupBotEntry(chatId));
+    await setKolCallFeedEnabled(chatId, !cfg.on);
+    await groupBotRenderModule(chatId, "kol", messageId);
+    await ack(cfg.on ? "KOL Call Feed paused" : "KOL Call Feed enabled");
+    return true;
+  }
+  if (data === "gb:kol:add") {
+    kolFeedInputPending.set(`${chatId}:${userId}`, { at: Date.now(), setupMsgId: messageId });
+    await telegram("answerCallbackQuery", { callback_query_id: query.id, show_alert: true, text: "Forward a post from the source channel here within 3 minutes, or send its public @channel username. The source must first run /kolfeed on." }).catch(() => {});
+    return true;
+  }
+  const kolRemove = data.match(/^gb:kol:rm:(all|-?\d+)$/);
+  if (kolRemove) {
+    await removeKolCallFeedSource(chatId, kolRemove[1]);
+    await groupBotRenderModule(chatId, "kol", messageId);
+    await ack(kolRemove[1] === "all" ? "All sources removed" : "Source removed");
+    return true;
+  }
+  const mm = data.match(/^gb:m:(buy|raid|rose|scan|ref)$/) || data.match(/^gb:m:(kol)$/);
   if (mm) { await groupBotRenderModule(chatId, mm[1], messageId); await ack(); return true; }
   // Entry verification toggles (whales / web) — not rose fields, so handled separately.
   if (data === "gb:wv:web") {
