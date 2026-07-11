@@ -3840,6 +3840,7 @@ const madeOnSolCache = new Map();
 const heliusDasAssetCache = new Map();
 const swampNftWalletCache = new Map();
 const webLoginAttemptLimits = new Map();
+const launchOsCreateLimits = new Map();
 const webSummaryCache = new Map();
 let redisKvClientPromise = null;
 let redisKvClient = null;
@@ -6786,7 +6787,7 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "social-kit.html", "no-store, max-age=0");
       return;
     }
-    if (request.method === "GET" && ["/launch-os", "/launch-automation", "/launch-command"].includes(requestUrl.pathname)) {
+    if (request.method === "GET" && (["/launch-os", "/launch-automation", "/launch-command"].includes(requestUrl.pathname) || requestUrl.pathname.startsWith("/launch-os/edit/"))) {
       await serveStaticHtmlPage(response, "launch-os.html", "no-store, max-age=0");
       return;
     }
@@ -9129,6 +9130,33 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/launch-os/create") {
+      assertLaunchOsCreateAllowed(request);
+      const body = await readJsonRequestBody(request);
+      const result = await createPublicLaunchOsProject(body);
+      sendWebJson(request, response, 200, { ok: true, project: result.project, editKey: result.editKey });
+      return;
+    }
+    if (request.method === "GET" && pathname.startsWith("/api/launch-os/edit/")) {
+      const slug = decodeURIComponent(pathname.slice("/api/launch-os/edit/".length));
+      const project = await requireLaunchOsEditor(slug, launchOsEditorKeyFromRequest(request));
+      sendWebJson(request, response, 200, { ok: true, project: clientLaunchOsProject(project) });
+      return;
+    }
+    if (request.method === "POST" && pathname.startsWith("/api/launch-os/edit/")) {
+      const slug = decodeURIComponent(pathname.slice("/api/launch-os/edit/".length));
+      const body = await readJsonRequestBody(request);
+      const project = await updatePublicLaunchOsProject(slug, launchOsEditorKeyFromRequest(request), body);
+      sendWebJson(request, response, 200, { ok: true, project });
+      return;
+    }
+    if (request.method === "GET" && pathname.startsWith("/api/launch-os/live/")) {
+      const slug = decodeURIComponent(pathname.slice("/api/launch-os/live/".length));
+      const project = await requireLaunchOsEditor(slug, launchOsEditorKeyFromRequest(request));
+      sendWebJson(request, response, 200, { ok: true, live: await launchOsLiveStatus(project), project: clientLaunchOsProject(project) });
+      return;
+    }
+
     const auth = await authenticateWebRequest(request);
 
     if (request.method === "GET" && pathname === "/api/web/launch-os/projects") {
@@ -11156,7 +11184,7 @@ function webCorsHeaders(request) {
   return {
     "Access-Control-Allow-Origin": allowOrigin || "*",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Ogre-Session",
+    "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Ogre-Session,X-Launch-Edit-Key",
     "Access-Control-Expose-Headers": "X-Ogre-Filename",
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin"
@@ -42556,14 +42584,14 @@ async function connectLaunchOsTelegramGroup(setupCode, userId, chat) {
   let project = null;
   await mutateLaunchOs((store) => {
     project = Object.values(store.projects).find((item) => String(item.setupCode || "").toLowerCase() === code) || null;
-    if (!project || String(project.userId) !== String(userId)) return;
+    if (!project || (project.userId && String(project.userId) !== String(userId))) return;
     project.telegram = project.telegram || { groups: [] };
     project.telegram.groups = (project.telegram.groups || []).filter((group) => String(group.chatId) !== String(chat.id));
     project.telegram.groups.push({ chatId: String(chat.id), title: launchOsCleanText(chat.title || "Telegram group", 80), username: launchOsCleanText(chat.username || "", 64), connectedAt: new Date().toISOString() });
     if (chat.username) project.links.telegram = `https://t.me/${String(chat.username).replace(/^@/, "")}`;
     project.updatedAt = new Date().toISOString();
   });
-  if (!project || String(project.userId) !== String(userId)) return null;
+  if (!project || (project.userId && String(project.userId) !== String(userId))) return null;
   const store = await readGroupBot();
   const key = String(chat.id);
   const entry = store.groups[key] || defaultGroupBotEntry();
@@ -56807,6 +56835,36 @@ function launchOsCleanText(value, max = 500) {
   return String(value || "").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "").trim().slice(0, max);
 }
 
+function assertLaunchOsCreateAllowed(request) {
+  const key = webClientKey(request);
+  const now = Date.now();
+  const windowMs = 60 * 60 * 1000;
+  const record = launchOsCreateLimits.get(key) || { count: 0, resetAt: now + windowMs };
+  if (record.resetAt <= now) { record.count = 0; record.resetAt = now + windowMs; }
+  record.count += 1;
+  launchOsCreateLimits.set(key, record);
+  if (launchOsCreateLimits.size > 5_000) {
+    for (const [client, row] of launchOsCreateLimits) if (row.resetAt <= now) launchOsCreateLimits.delete(client);
+  }
+  if (record.count > 12) throw Object.assign(new Error("Too many Launch Passports created. Wait a little and try again."), { statusCode: 429 });
+}
+
+function launchOsEditorKeyFromRequest(request) {
+  const value = request.headers["x-launch-edit-key"];
+  return Array.isArray(value) ? String(value[0] || "") : String(value || "");
+}
+
+function launchOsEditorMatches(project, editKey) {
+  if (!project?.editorKeyHash || !/^[a-f0-9]{48}$/i.test(String(editKey || ""))) return false;
+  return constantTimeStringEquals(project.editorKeyHash, hashWebSecret(String(editKey)));
+}
+
+async function requireLaunchOsEditor(slug, editKey) {
+  const project = await launchOsProjectBySlug(slug);
+  if (!launchOsEditorMatches(project, editKey)) throw Object.assign(new Error("Private edit link is invalid or incomplete."), { statusCode: 404 });
+  return project;
+}
+
 function launchOsSetupUrl(project) {
   const base = telegramStartGroupLink(`launchos_${project.setupCode}`);
   return base ? `${base}&admin=change_info+delete_messages+restrict_members+invite_users+pin_messages+manage_video_chats` : "";
@@ -56891,17 +56949,18 @@ async function launchOsProjectBySlug(slug) {
   return Object.values(store.projects).find((project) => String(project.slug || "").toLowerCase() === wanted) || null;
 }
 
-async function createLaunchOsProject(userId, body = {}) {
+async function createLaunchOsProject(userId, body = {}, options = {}) {
   const token = await resolveSocialKitToken(body.input);
   const mode = String(body.mode || "official").toLowerCase() === "cto" ? "cto" : "official";
   const store = await readLaunchOs();
-  const existing = Object.values(store.projects).find((project) => String(project.userId) === String(userId) && String(project.token?.ca || "").toLowerCase() === token.ca.toLowerCase());
+  const existing = userId ? Object.values(store.projects).find((project) => String(project.userId) === String(userId) && String(project.token?.ca || "").toLowerCase() === token.ca.toLowerCase()) : null;
   if (existing) return clientLaunchOsProject(existing);
   const id = crypto.randomBytes(6).toString("hex");
   const slug = `${socialKitSlug(token.name || token.symbol)}-${id.slice(0, 6)}`;
   const publicUrl = `https://www.slimewire.org/launch-hq/${slug}`;
   const project = {
     id, slug, setupCode: crypto.randomBytes(5).toString("hex"), userId: String(userId), mode,
+    editorKeyHash: options.editorKeyHash || "",
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), publicUrl, token,
     officialClaim: false,
     brand: {
@@ -56918,36 +56977,55 @@ async function createLaunchOsProject(userId, body = {}) {
   return clientLaunchOsProject(project);
 }
 
+async function createPublicLaunchOsProject(body = {}) {
+  const editKey = crypto.randomBytes(24).toString("hex");
+  const project = await createLaunchOsProject("", body, { editorKeyHash: hashWebSecret(editKey) });
+  return { project, editKey };
+}
+
+function applyLaunchOsUpdate(project, body = {}) {
+  if (body.mode != null) project.mode = String(body.mode).toLowerCase() === "cto" ? "cto" : "official";
+  if (body.officialClaim != null) project.officialClaim = Boolean(body.officialClaim);
+  const brand = body.brand && typeof body.brand === "object" ? body.brand : {};
+  project.brand = project.brand || {};
+  if (brand.tagline != null) project.brand.tagline = launchOsCleanText(brand.tagline, 120);
+  if (brand.description != null) project.brand.description = launchOsCleanText(brand.description, 700);
+  if (brand.voice != null) project.brand.voice = ["meme-native", "clean", "chaotic", "premium"].includes(String(brand.voice)) ? String(brand.voice) : "meme-native";
+  if (brand.primaryColor != null && /^#[0-9a-f]{6}$/i.test(String(brand.primaryColor))) project.brand.primaryColor = String(brand.primaryColor);
+  project.links = project.links || {};
+  for (const key of ["x", "telegram", "website", "discord", "farcaster"]) {
+    if (body.links?.[key] != null) project.links[key] = socialKitPublicUrl(body.links[key]);
+  }
+  project.content = project.content || {};
+  for (const key of ["launchPost", "pinnedPost", "telegramWelcome", "milestonePost", "emergencyPost"]) {
+    if (body.content?.[key] != null) project.content[key] = launchOsCleanText(body.content[key], 1200);
+  }
+  project.listing = project.listing || {};
+  if (body.listing?.notes != null) project.listing.notes = launchOsCleanText(body.listing.notes, 1200);
+  if (body.listing?.dexPaid != null) project.listing.dexPaid = Boolean(body.listing.dexPaid);
+  if (body.listing?.coinGeckoSubmitted != null) project.listing.coinGeckoSubmitted = Boolean(body.listing.coinGeckoSubmitted);
+  project.crisis = project.crisis || { active: false, message: "" };
+  if (body.crisis?.active != null) project.crisis.active = Boolean(body.crisis.active);
+  if (body.crisis?.message != null) project.crisis.message = launchOsCleanText(body.crisis.message, 500);
+  project.updatedAt = new Date().toISOString();
+  return project;
+}
+
 async function updateLaunchOsProject(userId, body = {}) {
   const id = String(body.id || "");
   return mutateLaunchOs((store) => {
     const project = store.projects[id];
     if (!project || String(project.userId) !== String(userId)) throw Object.assign(new Error("Launch OS project not found."), { statusCode: 404 });
-    if (body.mode != null) project.mode = String(body.mode).toLowerCase() === "cto" ? "cto" : "official";
-    if (body.officialClaim != null) project.officialClaim = Boolean(body.officialClaim);
-    const brand = body.brand && typeof body.brand === "object" ? body.brand : {};
-    project.brand = project.brand || {};
-    if (brand.tagline != null) project.brand.tagline = launchOsCleanText(brand.tagline, 120);
-    if (brand.description != null) project.brand.description = launchOsCleanText(brand.description, 700);
-    if (brand.voice != null) project.brand.voice = ["meme-native", "clean", "chaotic", "premium"].includes(String(brand.voice)) ? String(brand.voice) : "meme-native";
-    if (brand.primaryColor != null && /^#[0-9a-f]{6}$/i.test(String(brand.primaryColor))) project.brand.primaryColor = String(brand.primaryColor);
-    project.links = project.links || {};
-    for (const key of ["x", "telegram", "website", "discord", "farcaster"]) {
-      if (body.links?.[key] != null) project.links[key] = socialKitPublicUrl(body.links[key]);
-    }
-    project.content = project.content || {};
-    for (const key of ["launchPost", "pinnedPost", "telegramWelcome", "milestonePost", "emergencyPost"]) {
-      if (body.content?.[key] != null) project.content[key] = launchOsCleanText(body.content[key], 1200);
-    }
-    project.listing = project.listing || {};
-    if (body.listing?.notes != null) project.listing.notes = launchOsCleanText(body.listing.notes, 1200);
-    if (body.listing?.dexPaid != null) project.listing.dexPaid = Boolean(body.listing.dexPaid);
-    if (body.listing?.coinGeckoSubmitted != null) project.listing.coinGeckoSubmitted = Boolean(body.listing.coinGeckoSubmitted);
-    project.crisis = project.crisis || { active: false, message: "" };
-    if (body.crisis?.active != null) project.crisis.active = Boolean(body.crisis.active);
-    if (body.crisis?.message != null) project.crisis.message = launchOsCleanText(body.crisis.message, 500);
-    project.updatedAt = new Date().toISOString();
-    return clientLaunchOsProject(project);
+    return clientLaunchOsProject(applyLaunchOsUpdate(project, body));
+  });
+}
+
+async function updatePublicLaunchOsProject(slug, editKey, body = {}) {
+  const wanted = String(slug || "").trim().toLowerCase();
+  return mutateLaunchOs((store) => {
+    const project = Object.values(store.projects).find((item) => String(item.slug || "").toLowerCase() === wanted);
+    if (!launchOsEditorMatches(project, editKey)) throw Object.assign(new Error("Private edit link is invalid or incomplete."), { statusCode: 404 });
+    return clientLaunchOsProject(applyLaunchOsUpdate(project, body));
   });
 }
 

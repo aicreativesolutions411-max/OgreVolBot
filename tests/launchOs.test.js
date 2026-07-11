@@ -38,9 +38,32 @@ test("Launch OS exposes an authenticated project workspace and a sanitized publi
   assert.doesNotMatch(publicProject, /setupCode|userId/);
 });
 
+test("Launch OS standalone editor needs no terminal login and protects edits with a private capability key", () => {
+  const publicCreate = serverSource.indexOf('pathname === "/api/launch-os/create"');
+  const authGate = serverSource.indexOf("const auth = await authenticateWebRequest(request)", publicCreate);
+  assert.ok(publicCreate > 0 && authGate > publicCreate, "standalone creation must run before the terminal auth gate");
+  assert.match(serverSource, /pathname\.startsWith\("\/api\/launch-os\/edit\/"\)/);
+  assert.match(serverSource, /pathname\.startsWith\("\/api\/launch-os\/live\/"\)/);
+  assert.match(serverSource, /X-Launch-Edit-Key/);
+  assert.match(serverSource, /function createPublicLaunchOsProject[\s\S]{0,350}randomBytes\(24\)/);
+  assert.match(serverSource, /function createPublicLaunchOsProject[\s\S]{0,350}hashWebSecret\(editKey\)/);
+  assert.match(functionBody(serverSource, "launchOsEditorMatches"), /constantTimeStringEquals/);
+  assert.match(functionBody(serverSource, "assertLaunchOsCreateAllowed"), /record\.count > 12/);
+  assert.doesNotMatch(functionBody(serverSource, "clientLaunchOsProject"), /editorKeyHash|setupCode|userId/);
+
+  assert.match(dashboard, /No terminal login or wallet connection required/);
+  assert.match(dashboard, /slimeLaunchOsEdits/);
+  assert.match(dashboard, /\/api\/launch-os\/create/);
+  assert.match(dashboard, /\/api\/launch-os\/edit\//);
+  assert.match(dashboard, /\/api\/launch-os\/live\//);
+  assert.match(dashboard, /Copy private edit link/);
+  assert.doesNotMatch(dashboard, /ogreWebToken|\/api\/web\/launch-os/);
+});
+
 test("Launch OS Telegram deep link configures the full group stack only for an admin owner", () => {
   const connect = functionBody(serverSource, "connectLaunchOsTelegramGroup");
   assert.match(connect, /String\(project\.userId\) !== String\(userId\)/);
+  assert.match(connect, /project\.userId &&/);
   assert.match(connect, /buybot: true, raid: true, rose: true, scan: true/);
   assert.match(connect, /RAID_DEFAULT_PRESET\.targets/);
   assert.match(connect, /telegramWelcome/);
@@ -56,9 +79,9 @@ test("Launch OS dashboard, public HQ and guide keep every launch workflow organi
   for (const label of ["Overview", "Brand Kit", "Telegram", "Website", "Listings", "Content", "Command", "Safety"]) {
     assert.match(dashboard, new RegExp(label));
   }
-  assert.match(dashboard, /\/api\/web\/launch-os\/create/);
-  assert.match(dashboard, /\/api\/web\/launch-os\/update/);
-  assert.match(dashboard, /\/api\/web\/launch-os\/live/);
+  assert.match(dashboard, /\/api\/launch-os\/create/);
+  assert.match(dashboard, /\/api\/launch-os\/edit\//);
+  assert.match(dashboard, /\/api\/launch-os\/live\//);
   assert.match(dashboard, /assets\/slimewire\/launch\/hero\.png/);
   assert.match(dashboard, /assets\/slimewire\/png\/slimewire-mark\.png/);
   assert.match(publicHq, /\/api\/launch-os\/public\//);
