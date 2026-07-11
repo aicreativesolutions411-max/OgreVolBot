@@ -123,13 +123,14 @@ export async function readNoxaMarkets(entries, { rpcUrl, ethUsd } = {}) {
     calls.push({ target: e.pool, iface: POOL, fn: "slot0" });
     calls.push({ target: e.pool, iface: POOL, fn: "token0" });
     calls.push({ target: weth, iface: ERC20, fn: "balanceOf", args: [e.pool] });
+    calls.push({ target: e.token, iface: ERC20, fn: "balanceOf", args: [e.pool] });
   }
   let r = [];
   try { r = await multicall(provider, calls); } catch { return []; }
   const out = [];
   for (let i = 0; i < entries.length; i++) {
-    const b = i * 7;
-    const name = r[b], symbol = r[b + 1], decRaw = r[b + 2], supplyRaw = r[b + 3], slot0 = r[b + 4], token0 = r[b + 5], wethBalRaw = r[b + 6];
+    const b = i * 8;
+    const name = r[b], symbol = r[b + 1], decRaw = r[b + 2], supplyRaw = r[b + 3], slot0 = r[b + 4], token0 = r[b + 5], wethBalRaw = r[b + 6], tokenBalRaw = r[b + 7];
     if (slot0 == null || supplyRaw == null) continue;   // pool/token unreadable → skip
     const dec = Number(decRaw ?? 18);
     const wethIsToken0 = token0 && String(token0).toLowerCase() === weth.toLowerCase();
@@ -137,7 +138,12 @@ export async function readNoxaMarkets(entries, { rpcUrl, ethUsd } = {}) {
     const priceWeth = coinPriceInWeth(sqrt, dec, wethIsToken0);
     const supply = Number(ethers.formatUnits(supplyRaw, dec));
     const wethReserve = wethBalRaw != null ? Number(ethers.formatUnits(wethBalRaw, 18)) : 0;
+    const tokenReserve = tokenBalRaw != null ? Number(ethers.formatUnits(tokenBalRaw, dec)) : 0;
     const priceUsd = priceWeth * eth;
+    // Total current pool TVL, not merely the WETH side. In an active V3 range
+    // the two reserve values are often close, so the old one-sided figure
+    // appeared almost exactly half of the liquidity shown by market trackers.
+    const liquidityUsd = wethReserve * eth + tokenReserve * priceUsd;
     out.push({
       ...entries[i],
       positionId: entries[i].positionId != null ? String(entries[i].positionId) : "",   // ethers BigInt → string (JSON.stringify throws on BigInt)
@@ -145,8 +151,8 @@ export async function readNoxaMarkets(entries, { rpcUrl, ethUsd } = {}) {
       name: String(name || ""), symbol: String(symbol || "").replace(/^\$+/, "").slice(0, 16), decimals: dec,
       supply, priceUsd, priceWeth,
       mc: priceUsd > 0 ? priceUsd * supply : 0,
-      liq: wethReserve * eth,                 // the ETH side locked in the pool (single-sided V3)
-      wethReserve, isWethPair: !!wethIsToken0 || (entries[i].pairToken || "").toLowerCase() === weth.toLowerCase(),
+      liq: liquidityUsd,
+      wethReserve, tokenReserve, isWethPair: !!wethIsToken0 || (entries[i].pairToken || "").toLowerCase() === weth.toLowerCase(),
       explorer: `https://robinhoodchain.blockscout.com/token/${entries[i].token}`,
       noxaUrl: `${NOXA_RH.site}/token/${entries[i].token}`,
     });

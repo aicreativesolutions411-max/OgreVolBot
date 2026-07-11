@@ -17,6 +17,7 @@ import fs from "node:fs";
 
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const vanityMintSource = fs.readFileSync(new URL("../src/lib/vanityMint.js", import.meta.url), "utf8");
+const noxaSource = fs.readFileSync(new URL("../src/lib/noxaLaunchpad.js", import.meta.url), "utf8");
 const ggSource = fs.readFileSync(new URL("../web/public/gg.html", import.meta.url), "utf8");
 const indexSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
 const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
@@ -854,6 +855,11 @@ test("Robinhood buy cards keep complete market rows during intermittent scan gap
   assert.match(buy, /MC <b>\$\{info\?\.mc > 0 \? fmtUsd0\(info\.mc\) : "n\/a"\}/);
   assert.match(buy, /Liq \$\{info\?\.liq > 0/);
   assert.match(buy, /Vol \$\{info\?\.vol24 > 0/);
+  const noxaMarkets = functionBody(noxaSource, "readNoxaMarkets");
+  assert.match(noxaMarkets, /target: e\.token[\s\S]*fn: "balanceOf"[\s\S]*args: \[e\.pool\]/);
+  assert.match(noxaMarkets, /tokenReserve \* priceUsd/);
+  assert.match(noxaMarkets, /wethReserve \* eth \+ tokenReserve \* priceUsd/);
+  assert.doesNotMatch(noxaMarkets, /liq: wethReserve \* eth[,\s]/);
 });
 
 test("Raid bot: clean card + overall progress bar + goal-to-go + views + Refresh", () => {
