@@ -1006,6 +1006,17 @@ test("group admins can call admins or recently seen members without flooding", (
   assert.match(serverSource, /group-mentions\.json/);
 });
 
+test("core group mute commands work even when Rose is off", () => {
+  const group = functionBody(serverSource, "handleGroupBotCommand");
+  assert.match(group, /\(mute\|unmute\|tmute\)/);
+  assert.match(group, /reply_to_message\?\.from/);
+  assert.match(group, /I won't mute another group admin/);
+  assert.match(group, /restrictChatMember/);
+  assert.match(group, /ROSE_MUTE_PERMS/);
+  assert.match(group, /ROSE_UNMUTE_PERMS/);
+  assert.match(group, /roseParseDuration/);
+});
+
 test("KOL Call Feed watches public sources, is admin-selected, deduped, and posts one combined scan", () => {
   assert.match(serverSource, /allowed_updates: \["message", "callback_query", "inline_query", "channel_post"/);
   const channel = functionBody(serverSource, "handleChannelPostCommands");

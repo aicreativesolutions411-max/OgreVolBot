@@ -44341,6 +44341,7 @@ function groupBotHelpText() {
     "• <b>Alert Packs</b> in settings — Quiet Scanner, Launch Room, Proof Room, or All Quiet presets",
     "• <code>#admin</code> / <code>@admin</code> — call every Telegram admin",
     "• <code>#all</code> / <code>@all</code> — call known group members from SlimeWire activity and joins (admin-only)",
+    "• Reply with <code>/mute</code>, <code>/tmute 30m</code>, or <code>/unmute</code> — core admin moderation (works even when Rose is off)",
     "",
     "🟢 <b>Buy Bot</b> — posts every buy with a <b>whale-tier badge</b> (🦐🐟🐬🐋🔱), 🌟 new-holder flag, bonding %, MC·Liq·Vol, DEX-paid + Quick-Buy",
     "• <code>/track &lt;CA&gt;</code> — set the coin to watch (or just paste a CA once)",
@@ -44410,6 +44411,30 @@ async function handleGroupBotCommand(message, userId) {
   const chat = message?.chat;
   if (!chat || isPrivateChat(chat)) return false;
   const text = String(message.text || message.caption || "").trim();
+  const muteCommand = /^\/(mute|unmute|tmute)(?:@\w+)?(?:\s+(\S+))?\s*$/i.exec(text);
+  if (muteCommand) {
+    const chatId = chat.id;
+    if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only group admins can mute members."); return true; }
+    const target = message.reply_to_message?.from;
+    if (!target?.id || target.is_bot) { await say(chatId, "Reply to a member's message with /mute, /tmute 30m, or /unmute."); return true; }
+    if (await isGroupBotAdmin(chatId, target.id).catch(() => false)) { await say(chatId, "I won't mute another group admin."); return true; }
+    const action = muteCommand[1].toLowerCase();
+    const durationMs = action === "tmute" ? roseParseDuration(muteCommand[2]) : 0;
+    if (action === "tmute" && !durationMs) { await say(chatId, "Usage: reply to a member with /tmute 30m (or 2h / 1d)."); return true; }
+    const name = target.username ? `@${target.username}` : (target.first_name || "member");
+    try {
+      if (action === "unmute") {
+        await telegram("restrictChatMember", { chat_id: chatId, user_id: target.id, permissions: ROSE_UNMUTE_PERMS });
+        await say(chatId, `🔊 Unmuted ${name}.`);
+      } else {
+        await telegram("restrictChatMember", { chat_id: chatId, user_id: target.id, permissions: ROSE_MUTE_PERMS, ...(durationMs ? { until_date: Math.floor((Date.now() + durationMs) / 1000) } : {}) });
+        await say(chatId, durationMs ? `🔇 Muted ${name} for ${roseHumanDuration(durationMs)}.` : `🔇 Muted ${name}.`);
+      }
+    } catch {
+      await say(chatId, "Couldn't mute that member. Make sure SlimeWire is an admin with Restrict Members permission.");
+    }
+    return true;
+  }
   const launchOsStart = /^\/start(?:@\w+)?\s+launchos_([a-f0-9]{10})$/i.exec(text);
   if (launchOsStart) {
     const chatId = chat.id;
