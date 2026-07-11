@@ -70,12 +70,12 @@ test("published coin sites include live market, chart, lore, gallery, buy flow, 
 
 test("structured copy generation is prompt-aware, bounded, and safely falls back", () => {
   assert.match(server, /async function launchOsGenerateStructuredCopy/);
-  assert.match(server, /gemini-2\.5-flash-lite/);
+  assert.match(server, /gemini-flash-lite-latest/);
   assert.match(server, /responseMimeType: "application\/json"/);
   assert.match(server, /copyPromptHash/);
   assert.match(server, /heroPromptDesktop/);
   assert.match(server, /heroPromptMobile/);
-  assert.match(server, /textProvider = generated \? "gemini-2\.5-flash-lite" : "local"/);
+  assert.match(server, /saved\.site\.textProvider = generated \? textProvider : "local"/);
 });
 
 test("coin sites charge $10 in SOL, support one-time admin codes, and retain a private owner editor", () => {

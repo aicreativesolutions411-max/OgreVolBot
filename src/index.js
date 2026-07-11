@@ -57132,9 +57132,10 @@ async function launchOsGenerateStructuredCopy(project) {
   const promptHash = hashWebSecret(JSON.stringify({ ca: project.token?.ca, direction, mode: project.mode })).slice(0, 24);
   if (project.site?.copyPromptHash === promptHash) return project;
   let generated = null;
+  let textProvider = "local";
   const apiKey = String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "").trim();
   if (apiKey) {
-    const model = String(process.env.GEMINI_SITE_TEXT_MODEL || "gemini-2.5-flash-lite").trim();
+    const model = String(process.env.GEMINI_SITE_TEXT_MODEL || "gemini-flash-lite-latest").trim();
     const requestPrompt = [
       "Create an original professional memecoin website content system. Return JSON only.",
       `Token: ${project.token?.name} ($${project.token?.symbol})`, `Chain: ${project.token?.chain}`, `CA: ${project.token?.ca}`,
@@ -57161,7 +57162,7 @@ async function launchOsGenerateStructuredCopy(project) {
     if (response?.ok) {
       const data = await response.json().catch(() => ({}));
       const text = (data?.candidates || []).flatMap((candidate) => candidate?.content?.parts || []).map((part) => part?.text || "").join("");
-      try { generated = JSON.parse(text); } catch { generated = null; }
+      try { generated = JSON.parse(text); textProvider = model; } catch { generated = null; }
     }
   }
   const fallback = launchOsCreativeCopy(project.token, direction, project.mode);
@@ -57179,7 +57180,7 @@ async function launchOsGenerateStructuredCopy(project) {
     };
     if (/^#[0-9a-f]{6}$/i.test(String(generated?.accent || ""))) saved.site.accent = generated.accent;
     saved.site.copyVoice = generated ? "gemini" : fallback.voice;
-    saved.site.textProvider = generated ? "gemini-2.5-flash-lite" : "local";
+    saved.site.textProvider = generated ? textProvider : "local";
     saved.site.copyPromptHash = promptHash;
     saved.updatedAt = new Date().toISOString();
     return clientLaunchOsProject(saved);
