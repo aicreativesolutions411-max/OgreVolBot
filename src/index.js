@@ -32866,6 +32866,40 @@ async function telegramGroupAdmins(chatId) {
   }));
 }
 
+function groupMentionStoredUser(id, row = {}) {
+  const rawName = String(row.username || row.name || row.callerName || "").trim();
+  const username = rawName.startsWith("@") ? rawName.slice(1) : String(row.username || "");
+  return { id: String(id || ""), username, firstName: rawName.replace(/^@/, "") || "member", lastSeenAt: Number(row.lastSeenAt || row.at || row.firstAt || 0) };
+}
+
+async function groupMentionKnownMembers(chatId) {
+  const key = String(chatId);
+  const users = [];
+  const [mentions, karma, calls, snipes, rooms, groupEntry] = await Promise.all([
+    readGroupMentions().catch(() => ({ groups: {} })),
+    readGroupKarma().catch(() => ({ groups: {} })),
+    readTelegramCalls().catch(() => ({ calls: {} })),
+    readCommunitySnipe().catch(() => ({ snipes: {} })),
+    readRoomBoard().catch(() => ({ rooms: {} })),
+    getGroupBotEntry(chatId).catch(() => null)
+  ]);
+  for (const row of Object.values(mentions.groups?.[key]?.members || {})) users.push(groupMentionStoredUser(row.id, row));
+  for (const [id, row] of Object.entries(karma.groups?.[key] || {})) users.push(groupMentionStoredUser(id, row));
+  for (const row of Object.values(calls.calls || {})) {
+    if (String(row.chatId) === key && row.callerId) users.push(groupMentionStoredUser(row.callerId, row));
+  }
+  for (const [id, row] of Object.entries(snipes.snipes?.[key]?.members || {})) users.push(groupMentionStoredUser(id, row));
+  for (const [id, row] of Object.entries(rooms.rooms?.[key]?.members || {})) users.push(groupMentionStoredUser(id, row));
+  for (const [id, row] of Object.entries(groupEntry?.pvp?.members || {})) users.push(groupMentionStoredUser(id, row));
+  const referral = referralConfig(groupEntry);
+  const referralIds = new Set([
+    ...Object.keys(referral.counts || {}), ...Object.keys(referral.links || {}),
+    ...Object.keys(referral.credited || {}), ...Object.values(referral.credited || {}).map(String)
+  ]);
+  for (const id of referralIds) users.push(groupMentionStoredUser(id));
+  return users;
+}
+
 async function sendGroupMentionChunks(chatId, users, label, note = "") {
   const unique = [];
   const ids = new Set();
@@ -32910,7 +32944,6 @@ async function handleGroupMentionCall(message, userId) {
   }
   const mode = /admin/i.test(match[1]) ? "admin" : "all";
   if (tgCommandOnCooldown(chatId, `mention-${mode}`, mode === "all" ? 120_000 : 60_000)) {
-    await say(chatId, `${mode === "all" ? "Everyone" : "Admin"} mentions are cooling down to protect the group from spam.`);
     return true;
   }
   const admins = await telegramGroupAdmins(chatId);
@@ -32918,8 +32951,12 @@ async function handleGroupMentionCall(message, userId) {
     await sendGroupMentionChunks(chatId, admins, "Admins called", match[2] || "");
     return true;
   }
-  const store = await readGroupMentions();
-  const known = Object.values(store.groups?.[String(chatId)]?.members || {});
+  const known = await groupMentionKnownMembers(chatId);
+  const adminIds = new Set(admins.map((user) => String(user.id)));
+  if (!known.some((user) => !adminIds.has(String(user.id)))) {
+    await say(chatId, "I haven't learned any regular members in this group yet. Telegram does not give bots a full member list; members are added automatically when they speak or join.");
+    return true;
+  }
   await sendGroupMentionChunks(chatId, [...known, ...admins], "Everyone called", match[2] || "");
   return true;
 }
@@ -44303,7 +44340,7 @@ function groupBotHelpText() {
     "• <code>/buybot on</code> · <code>/raid on</code> · <code>/scan on</code> · <code>/rose on</code> — or just flip them in the menu",
     "• <b>Alert Packs</b> in settings — Quiet Scanner, Launch Room, Proof Room, or All Quiet presets",
     "• <code>#admin</code> / <code>@admin</code> — call every Telegram admin",
-    "• <code>#all</code> / <code>@all</code> — call recently seen group members (admin-only, flood-protected)",
+    "• <code>#all</code> / <code>@all</code> — call known group members from SlimeWire activity and joins (admin-only)",
     "",
     "🟢 <b>Buy Bot</b> — posts every buy with a <b>whale-tier badge</b> (🦐🐟🐬🐋🔱), 🌟 new-holder flag, bonding %, MC·Liq·Vol, DEX-paid + Quick-Buy",
     "• <code>/track &lt;CA&gt;</code> — set the coin to watch (or just paste a CA once)",
@@ -46204,6 +46241,9 @@ async function referralGetOrCreateLink(chatId, userId) {
 async function handleChatMemberUpdate(cm) {
   const chatId = cm?.chat?.id; if (!chatId) return;
   const newStatus = cm?.new_chat_member?.status || "", oldStatus = cm?.old_chat_member?.status || "";
+  const member = cm?.new_chat_member?.user || cm?.old_chat_member?.user;
+  if (["member", "administrator", "creator", "restricted"].includes(newStatus)) await rememberGroupMentionMember(chatId, member).catch(() => {});
+  if (["left", "kicked"].includes(newStatus) && member?.id) await forgetGroupMentionMember(chatId, member.id).catch(() => {});
   if (newStatus !== "member" || ["member", "administrator", "creator", "restricted"].includes(oldStatus)) return; // only true new joins
   const entry = await getGroupBotEntry(chatId).catch(() => null);
   const cfg = referralConfig(entry);

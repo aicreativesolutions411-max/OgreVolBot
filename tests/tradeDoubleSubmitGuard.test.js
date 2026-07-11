@@ -990,7 +990,15 @@ test("group admins can call admins or recently seen members without flooding", (
   assert.match(call, /isGroupBotAdmin/);
   assert.match(call, /mention-\$\{mode\}/);
   assert.match(call, /120_000/);
+  assert.doesNotMatch(call, /mentions are cooling down/);
+  assert.match(call, /groupMentionKnownMembers/);
   assert.match(functionBody(serverSource, "telegramGroupAdmins"), /getChatAdministrators/);
+  const known = functionBody(serverSource, "groupMentionKnownMembers");
+  assert.match(known, /readGroupKarma/);
+  assert.match(known, /readTelegramCalls/);
+  assert.match(known, /readCommunitySnipe/);
+  assert.match(known, /readRoomBoard/);
+  assert.match(functionBody(serverSource, "handleChatMemberUpdate"), /rememberGroupMentionMember/);
   assert.match(functionBody(serverSource, "sendGroupMentionChunks"), /slice\(0, 200\)/);
   assert.match(functionBody(serverSource, "sendGroupMentionChunks"), /current\.length >= 40/);
   assert.match(serverSource, /group-mentions\.json/);
