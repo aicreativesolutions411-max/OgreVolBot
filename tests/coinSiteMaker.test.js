@@ -17,6 +17,9 @@ test("coin site maker creates editable, published sites from the standalone CA f
   assert.match(server, /function launchOsSiteForClient/);
   assert.match(server, /function launchOsFallbackArtData/);
   assert.match(server, /async function generateLaunchOsFreeMedia/);
+  assert.match(server, /async function launchOsTrustedTokenImageBuffer/);
+  assert.match(server, /dexscreener\.com[\s\S]*arweave\.net[\s\S]*ipfs\.io/);
+  assert.match(server, /generateLaunchOsFreeMedia\(project, tokenArt\)/);
   assert.match(server, /function launchOsCreativeCopy/);
   assert.match(server, /freeArtGenerated/);
   assert.match(server, /legacyHero[\s\S]*slimewire\\\/launch\\\/hero/);

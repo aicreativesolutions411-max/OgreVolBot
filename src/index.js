@@ -56961,6 +56961,23 @@ async function generateLaunchOsFreeMedia(project, sourceBuffer) {
   return { heroUrl, galleryUrl };
 }
 
+async function launchOsTrustedTokenImageBuffer(value) {
+  let parsed;
+  try { parsed = new URL(String(value || "")); } catch { return null; }
+  if (parsed.protocol !== "https:") return null;
+  const host = parsed.hostname.toLowerCase();
+  const allowed = ["dexscreener.com", "arweave.net", "ipfs.io", "cf-ipfs.com", "pinata.cloud", "filebase.io", "pbs.twimg.com"];
+  if (!allowed.some((domain) => host === domain || host.endsWith(`.${domain}`))) return null;
+  const response = await fetch(parsed.href, { headers: { Accept: "image/png,image/jpeg,image/webp,image/*" }, signal: AbortSignal.timeout(8_000) }).catch(() => null);
+  if (!response?.ok) return null;
+  const declared = Number(response.headers.get("content-length")) || 0;
+  if (declared > 8_000_000) return null;
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.length < 200 || buffer.length > 8_000_000) return null;
+  await sharp(buffer).metadata();
+  return buffer;
+}
+
 function assertLaunchOsCreateAllowed(request) {
   const key = webClientKey(request);
   const now = Date.now();
@@ -57184,7 +57201,8 @@ async function createLaunchOsProject(userId, body = {}, options = {}) {
   };
   project.site = launchOsDefaultSite(token, publicUrl, mode);
   await mutateLaunchOs((current) => { current.projects[id] = project; });
-  await generateLaunchOsFreeMedia(project, null).catch(() => {});
+  const tokenArt = await launchOsTrustedTokenImageBuffer(token.imageUrl).catch(() => null);
+  await generateLaunchOsFreeMedia(project, tokenArt).catch(() => {});
   return clientLaunchOsProject(await getLaunchOsProjectForUser(userId, id));
 }
 
