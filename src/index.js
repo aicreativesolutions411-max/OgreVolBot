@@ -6786,6 +6786,18 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "social-kit.html", "no-store, max-age=0");
       return;
     }
+    if (request.method === "GET" && ["/launch-os", "/launch-automation", "/launch-command"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "launch-os.html", "no-store, max-age=0");
+      return;
+    }
+    if (request.method === "GET" && ["/launch-os-guide", "/launch-guide"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "launch-os-guide.html", "no-store, max-age=0");
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname.startsWith("/launch-hq/")) {
+      await serveStaticHtmlPage(response, "launch-hq.html", "no-store, max-age=0");
+      return;
+    }
     if (request.method === "GET" && ["/install", "/download", "/app", "/get", "/getapp"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "install.html");
       return;
@@ -9109,7 +9121,35 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname.startsWith("/api/launch-os/public/")) {
+      const slug = decodeURIComponent(pathname.slice("/api/launch-os/public/".length));
+      const project = await launchOsProjectBySlug(slug);
+      if (!project) { sendWebJson(request, response, 404, { ok: false, error: "Launch HQ not found." }); return; }
+      sendWebJson(request, response, 200, { ok: true, project: publicLaunchOsProject(project) });
+      return;
+    }
+
     const auth = await authenticateWebRequest(request);
+
+    if (request.method === "GET" && pathname === "/api/web/launch-os/projects") {
+      sendWebJson(request, response, 200, { ok: true, projects: await launchOsProjectsForUser(auth.userId) });
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/launch-os/create") {
+      const body = await readJsonRequestBody(request);
+      sendWebJson(request, response, 200, { ok: true, project: await createLaunchOsProject(auth.userId, body) });
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/launch-os/update") {
+      const body = await readJsonRequestBody(request);
+      sendWebJson(request, response, 200, { ok: true, project: await updateLaunchOsProject(auth.userId, body) });
+      return;
+    }
+    if (request.method === "GET" && pathname === "/api/web/launch-os/live") {
+      const project = await getLaunchOsProjectForUser(auth.userId, requestUrl.searchParams.get("id"));
+      sendWebJson(request, response, 200, { ok: true, live: await launchOsLiveStatus(project), project: clientLaunchOsProject(project) });
+      return;
+    }
 
     if (request.method === "POST" && pathname === "/api/web/social-kit/resolve") {
       const body = await readJsonRequestBody(request);
@@ -13382,6 +13422,10 @@ function webAuthPath() {
 
 function socialKitsPath() {
   return path.join(CONFIG.dataDir, "social-kits.json");
+}
+
+function launchOsPath() {
+  return path.join(CONFIG.dataDir, "launch-os.json");
 }
 
 function lockInEventsPath() {
@@ -42507,6 +42551,33 @@ function defaultGroupBotEntry() { return { features: { buybot: false, raid: fals
 async function getGroupBotEntry(chatId) { return (await readGroupBot()).groups[String(chatId)] || null; }
 function groupBotFeatureOn(entry, key) { return Boolean(entry && entry.features && entry.features[key]); }
 
+async function connectLaunchOsTelegramGroup(setupCode, userId, chat) {
+  const code = String(setupCode || "").toLowerCase();
+  let project = null;
+  await mutateLaunchOs((store) => {
+    project = Object.values(store.projects).find((item) => String(item.setupCode || "").toLowerCase() === code) || null;
+    if (!project || String(project.userId) !== String(userId)) return;
+    project.telegram = project.telegram || { groups: [] };
+    project.telegram.groups = (project.telegram.groups || []).filter((group) => String(group.chatId) !== String(chat.id));
+    project.telegram.groups.push({ chatId: String(chat.id), title: launchOsCleanText(chat.title || "Telegram group", 80), username: launchOsCleanText(chat.username || "", 64), connectedAt: new Date().toISOString() });
+    if (chat.username) project.links.telegram = `https://t.me/${String(chat.username).replace(/^@/, "")}`;
+    project.updatedAt = new Date().toISOString();
+  });
+  if (!project || String(project.userId) !== String(userId)) return null;
+  const store = await readGroupBot();
+  const key = String(chat.id);
+  const entry = store.groups[key] || defaultGroupBotEntry();
+  entry.title = launchOsCleanText(chat.title || entry.title || "", 80);
+  entry.token = project.token.ca;
+  entry.launchOsId = project.id;
+  entry.features = { ...(entry.features || {}), buybot: true, raid: true, rose: true, scan: true };
+  entry.raidConfig = { targets: { ...RAID_DEFAULT_PRESET.targets }, durationMin: RAID_DEFAULT_PRESET.durationMin };
+  entry.rose = { ...(entry.rose || {}), welcome: project.content?.telegramWelcome || entry.rose?.welcome || null };
+  store.groups[key] = entry;
+  await writeGroupBot(store);
+  return project;
+}
+
 // KOL Call Feed. Target-group admins choose public sources by username/link/forward. Public channels are
 // watched through Telegram's preview page; channels where the bot is admin also arrive as channel_post.
 // The target keeps a small source snapshot so its menu survives temporary Telegram resolution failures.
@@ -43384,6 +43455,22 @@ async function handleGroupBotCommand(message, userId) {
   const chat = message?.chat;
   if (!chat || isPrivateChat(chat)) return false;
   const text = String(message.text || message.caption || "").trim();
+  const launchOsStart = /^\/start(?:@\w+)?\s+launchos_([a-f0-9]{10})$/i.exec(text);
+  if (launchOsStart) {
+    const chatId = chat.id;
+    if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only the project owner/group admin can run Launch OS setup."); return true; }
+    const project = await connectLaunchOsTelegramGroup(launchOsStart[1], userId, chat);
+    if (!project) { await say(chatId, "That Launch OS setup link is invalid or belongs to a different SlimeWire account."); return true; }
+    await sayHtml(chatId, [
+      `🟢 <b>${escapeTelegramHtml(project.token.name)} Launch OS connected</b>`,
+      `CA: <code>${escapeTelegramHtml(project.token.ca)}</code>`,
+      "",
+      "Buy Bot, Raid Bot, Rose and Scan Bot are enabled. Raid defaults and the welcome message are loaded.",
+      `<a href="${escapeTelegramHtml(project.publicUrl)}">Open the public Launch HQ</a>`
+    ].join("\n"));
+    await groupBotPostSetup(chatId, await getGroupBotEntry(chatId)).catch(() => {});
+    return true;
+  }
   // /help — clean command guide (anyone can read it).
   if (/^\/help(?:@\w+)?\b/i.test(text)) { await sayHtml(chat.id, groupBotHelpText()); return true; }
   if (/^\/cancel(?:@\w+)?\s+raid\s*$/i.test(text)) {
@@ -56698,6 +56785,187 @@ function publicSocialKitDraft(draft) {
     email: draft.status === "unlocked" ? draft.email : "", emailStatus: draft.emailStatus, emailError: draft.emailError || "",
     emailConfigured: socialKitEmailConfigured(), createdAt: draft.createdAt,
   };
+}
+
+async function readLaunchOs() {
+  const value = await readJson(launchOsPath()).catch(() => null);
+  return value && typeof value === "object" && value.projects && typeof value.projects === "object"
+    ? value
+    : { projects: {} };
+}
+
+async function mutateLaunchOs(fn) {
+  return LockService.withLock("launch-os-store", 10_000, async () => {
+    const store = await readLaunchOs();
+    const result = await fn(store);
+    await writeJsonFile(launchOsPath(), store);
+    return result;
+  });
+}
+
+function launchOsCleanText(value, max = 500) {
+  return String(value || "").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "").trim().slice(0, max);
+}
+
+function launchOsSetupUrl(project) {
+  const base = telegramStartGroupLink(`launchos_${project.setupCode}`);
+  return base ? `${base}&admin=change_info+delete_messages+restrict_members+invite_users+pin_messages+manage_video_chats` : "";
+}
+
+function launchOsDefaultContent(token, publicUrl) {
+  const symbol = String(token.symbol || "COIN").replace(/^\$+/, "");
+  return {
+    launchPost: `Meet $${symbol}.\n\nCA: ${token.ca}\n\nLive chart, safety read and community tools: ${publicUrl}`,
+    pinnedPost: `$${symbol} official launch hub\n\nCA: ${token.ca}\nWebsite: ${publicUrl}\n\nVerify every link and never share a seed phrase.`,
+    telegramWelcome: `Welcome to the $${symbol} community. Verify the CA before trading: ${token.ca}`,
+    milestonePost: `$${symbol} just crossed a new community milestone. Track the live market and holders: ${publicUrl}`,
+    emergencyPost: `SECURITY NOTICE for $${symbol}: use only the verified links at ${publicUrl}. Do not trust DMs or send funds to unlisted addresses.`,
+  };
+}
+
+function launchOsReadiness(project) {
+  const links = project.links || {};
+  const groups = Array.isArray(project.telegram?.groups) ? project.telegram.groups : [];
+  const steps = [
+    { id: "identity", label: "Token identity", done: Boolean(project.token?.ca && project.token?.symbol), detail: "Name, ticker, CA and chain" },
+    { id: "brand", label: "Brand kit", done: Boolean(project.token?.imageUrl && project.brand?.tagline), detail: "PFP, banner direction and tagline" },
+    { id: "story", label: "Story", done: Boolean(project.brand?.description), detail: "Description and community voice" },
+    { id: "site", label: "Launch HQ", done: Boolean(project.publicUrl), detail: "Public SlimeWire project page" },
+    { id: "telegram", label: "Telegram", done: groups.length > 0, detail: groups.length ? `${groups.length} group${groups.length === 1 ? "" : "s"} configured` : "Add the bot to a group" },
+    { id: "x", label: "X account", done: Boolean(links.x), detail: links.x ? "Profile linked" : "Create or connect an existing account" },
+    { id: "links", label: "Official links", done: Boolean(links.x && (links.telegram || groups.length) && (links.website || project.publicUrl)), detail: "X, Telegram and website are consistent" },
+    { id: "trust", label: project.mode === "official" ? "Official claim" : "CTO disclosure", done: project.mode !== "official" || Boolean(project.officialClaim), detail: project.mode === "official" ? "Optional deployer-wallet signature" : "Clearly marked community takeover" },
+    { id: "content", label: "Launch content", done: Boolean(project.content?.launchPost && project.content?.pinnedPost), detail: "Launch, pinned and emergency copy" },
+  ];
+  const complete = steps.filter((step) => step.done).length;
+  return { score: Math.round((complete / steps.length) * 100), complete, total: steps.length, steps };
+}
+
+function launchOsLinkAudit(project) {
+  const rows = [
+    ["X", project.links?.x], ["Telegram", project.links?.telegram], ["Website", project.links?.website || project.publicUrl],
+    ["Discord", project.links?.discord], ["Farcaster", project.links?.farcaster]
+  ];
+  return rows.filter(([, value]) => value).map(([label, value]) => ({
+    label, url: socialKitPublicUrl(value), ok: Boolean(socialKitPublicUrl(value)),
+    note: socialKitPublicUrl(value) ? "Valid HTTPS destination" : "Invalid or unsafe URL"
+  }));
+}
+
+function clientLaunchOsProject(project) {
+  if (!project) return null;
+  return {
+    id: project.id, slug: project.slug, mode: project.mode, publicUrl: project.publicUrl,
+    token: project.token, brand: project.brand, links: project.links, content: project.content,
+    listing: project.listing || {}, crisis: project.crisis || { active: false, message: "" },
+    officialClaim: Boolean(project.officialClaim), telegram: project.telegram || { groups: [] },
+    telegramSetupUrl: launchOsSetupUrl(project), readiness: launchOsReadiness(project),
+    linkAudit: launchOsLinkAudit(project), createdAt: project.createdAt, updatedAt: project.updatedAt
+  };
+}
+
+function publicLaunchOsProject(project) {
+  const value = clientLaunchOsProject(project);
+  if (!value) return null;
+  delete value.telegramSetupUrl;
+  value.telegram = { groupCount: Array.isArray(project.telegram?.groups) ? project.telegram.groups.length : 0 };
+  return value;
+}
+
+async function launchOsProjectsForUser(userId) {
+  const store = await readLaunchOs();
+  return Object.values(store.projects).filter((project) => String(project.userId) === String(userId))
+    .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || 0) - Date.parse(a.updatedAt || a.createdAt || 0))
+    .map(clientLaunchOsProject);
+}
+
+async function getLaunchOsProjectForUser(userId, id) {
+  const project = (await readLaunchOs()).projects[String(id || "")];
+  if (!project || String(project.userId) !== String(userId)) throw Object.assign(new Error("Launch OS project not found."), { statusCode: 404 });
+  return project;
+}
+
+async function launchOsProjectBySlug(slug) {
+  const wanted = String(slug || "").trim().toLowerCase();
+  const store = await readLaunchOs();
+  return Object.values(store.projects).find((project) => String(project.slug || "").toLowerCase() === wanted) || null;
+}
+
+async function createLaunchOsProject(userId, body = {}) {
+  const token = await resolveSocialKitToken(body.input);
+  const mode = String(body.mode || "official").toLowerCase() === "cto" ? "cto" : "official";
+  const store = await readLaunchOs();
+  const existing = Object.values(store.projects).find((project) => String(project.userId) === String(userId) && String(project.token?.ca || "").toLowerCase() === token.ca.toLowerCase());
+  if (existing) return clientLaunchOsProject(existing);
+  const id = crypto.randomBytes(6).toString("hex");
+  const slug = `${socialKitSlug(token.name || token.symbol)}-${id.slice(0, 6)}`;
+  const publicUrl = `https://www.slimewire.org/launch-hq/${slug}`;
+  const project = {
+    id, slug, setupCode: crypto.randomBytes(5).toString("hex"), userId: String(userId), mode,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), publicUrl, token,
+    officialClaim: false,
+    brand: {
+      tagline: `${token.name}: built by the community, tracked in public.`,
+      description: launchOsCleanText(token.description || `${token.name} is a community-driven ${token.chain === "robinhood" ? "Robinhood Chain" : "Solana"} coin.`),
+      voice: "meme-native", primaryColor: "#76ff35"
+    },
+    links: { x: token.twitterUrl || "", telegram: token.telegramUrl || "", website: token.websiteUrl || publicUrl, discord: "", farcaster: "" },
+    content: launchOsDefaultContent(token, publicUrl),
+    telegram: { groups: [] }, listing: { notes: "", dexPaid: false, coinGeckoSubmitted: false },
+    crisis: { active: false, message: "" }
+  };
+  await mutateLaunchOs((current) => { current.projects[id] = project; });
+  return clientLaunchOsProject(project);
+}
+
+async function updateLaunchOsProject(userId, body = {}) {
+  const id = String(body.id || "");
+  return mutateLaunchOs((store) => {
+    const project = store.projects[id];
+    if (!project || String(project.userId) !== String(userId)) throw Object.assign(new Error("Launch OS project not found."), { statusCode: 404 });
+    if (body.mode != null) project.mode = String(body.mode).toLowerCase() === "cto" ? "cto" : "official";
+    if (body.officialClaim != null) project.officialClaim = Boolean(body.officialClaim);
+    const brand = body.brand && typeof body.brand === "object" ? body.brand : {};
+    project.brand = project.brand || {};
+    if (brand.tagline != null) project.brand.tagline = launchOsCleanText(brand.tagline, 120);
+    if (brand.description != null) project.brand.description = launchOsCleanText(brand.description, 700);
+    if (brand.voice != null) project.brand.voice = ["meme-native", "clean", "chaotic", "premium"].includes(String(brand.voice)) ? String(brand.voice) : "meme-native";
+    if (brand.primaryColor != null && /^#[0-9a-f]{6}$/i.test(String(brand.primaryColor))) project.brand.primaryColor = String(brand.primaryColor);
+    project.links = project.links || {};
+    for (const key of ["x", "telegram", "website", "discord", "farcaster"]) {
+      if (body.links?.[key] != null) project.links[key] = socialKitPublicUrl(body.links[key]);
+    }
+    project.content = project.content || {};
+    for (const key of ["launchPost", "pinnedPost", "telegramWelcome", "milestonePost", "emergencyPost"]) {
+      if (body.content?.[key] != null) project.content[key] = launchOsCleanText(body.content[key], 1200);
+    }
+    project.listing = project.listing || {};
+    if (body.listing?.notes != null) project.listing.notes = launchOsCleanText(body.listing.notes, 1200);
+    if (body.listing?.dexPaid != null) project.listing.dexPaid = Boolean(body.listing.dexPaid);
+    if (body.listing?.coinGeckoSubmitted != null) project.listing.coinGeckoSubmitted = Boolean(body.listing.coinGeckoSubmitted);
+    project.crisis = project.crisis || { active: false, message: "" };
+    if (body.crisis?.active != null) project.crisis.active = Boolean(body.crisis.active);
+    if (body.crisis?.message != null) project.crisis.message = launchOsCleanText(body.crisis.message, 500);
+    project.updatedAt = new Date().toISOString();
+    return clientLaunchOsProject(project);
+  });
+}
+
+async function launchOsLiveStatus(project) {
+  const token = project.token || {};
+  let row = {};
+  if (token.chain === "robinhood") {
+    const info = await gatherRhScan(token.ca).catch(() => null);
+    row = info ? { priceUsd: info.priceUsd, marketCap: info.mc, liquidityUsd: info.liq, volume24h: info.vol24, holders: info.holders, change24h: info.ch24, source: info.source } : {};
+  } else {
+    const info = await getDexTokenMetadata(token.ca, { timeoutMs: 4_000 }).catch(() => null);
+    row = info ? {
+      priceUsd: firstMeaningfulNumber(info.priceUsd, info.price), marketCap: firstMeaningfulNumber(info.marketCap, info.fdv),
+      liquidityUsd: firstMeaningfulNumber(info.liquidityUsd), volume24h: firstMeaningfulNumber(info.volume?.h24, info.volume24h),
+      holders: firstMeaningfulNumber(info.holders), change24h: firstMeaningfulNumber(info.priceChange?.h24), source: info.source || info.metadataSourceUsed
+    } : {};
+  }
+  return { ...row, readiness: launchOsReadiness(project), linkAudit: launchOsLinkAudit(project), checkedAt: new Date().toISOString() };
 }
 
 async function webWalletRows(userId) {
