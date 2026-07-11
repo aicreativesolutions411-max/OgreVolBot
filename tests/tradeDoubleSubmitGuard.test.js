@@ -856,10 +856,10 @@ test("Robinhood buy cards keep complete market rows during intermittent scan gap
   assert.match(buy, /Vol \$\{info\?\.vol24 > 0/);
 });
 
-test("Raid bot: clean card (no colour squares / bars) + goal-to-go + views + Refresh", () => {
+test("Raid bot: clean card + overall progress bar + goal-to-go + views + Refresh", () => {
   const card = functionBody(serverSource, "buildRaidProgressCard");
   assert.match(card, /to go/);                                  // "X to go" per metric
-  assert.doesNotMatch(card, /raidBar\(/);                       // progress bar removed
+  assert.match(card, /raidBar\(overall\)/);                    // one overall progress bar
   assert.doesNotMatch(card, /🟩|🟨|🟥/);                        // colour squares removed
   assert.match(card, /views/);                                  // 👀 views line
   assert.match(card, /callback_data:\s*"rr:"/);                // Refresh button
@@ -943,7 +943,10 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
   assert.match(serverSource, /async function startNextQueuedRaidForChat\(/);
   assert.match(functionBody(serverSource, "readRaidTg"), /s\.queues/);
   assert.match(functionBody(serverSource, "queueRaidBehindActive"), /queue\.push/);
-  assert.match(functionBody(serverSource, "queueRaidBehindActive"), /slice\(0, 20\)/);
+  assert.match(serverSource, /const RAID_QUEUE_MAX = 10/);
+  assert.match(functionBody(serverSource, "queueRaidBehindActive"), /slice\(0, RAID_QUEUE_MAX\)/);
+  assert.match(functionBody(serverSource, "handleMessage"), /handleTelegramNextRaidCommand\(chatId, message, userId/);
+  assert.match(functionBody(serverSource, "handleTelegramNextRaidCommand"), /\/next &lt;X post link&gt;/);
   assert.match(functionBody(serverSource, "startNextQueuedRaidForChat"), /queue\.shift/);
   assert.match(functionBody(serverSource, "refreshRaidTgCards"), /startNextQueuedRaidForChat/);
   assert.match(functionBody(serverSource, "refreshRaidTgCards"), /Object\.keys\(queuedState\.queues/);

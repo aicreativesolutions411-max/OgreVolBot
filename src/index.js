@@ -14772,6 +14772,11 @@ async function handleMessage(message, userId) {
     await handleTelegramMyWinsToggle(chatId, message, userId, myWins.argument);
     return;
   }
+  const nextRaidCommand = parseCommandWithArgument(text, ["next"]);
+  if (nextRaidCommand) {
+    await handleTelegramNextRaidCommand(chatId, message, userId, nextRaidCommand.argument);
+    return;
+  }
   const raidCommand = parseCommandWithArgument(text, ["raid"]);
   if (raidCommand) {
     // RAID BOT module: in a configured group, require the Raid toggle on (off by default). Legacy
@@ -43085,9 +43090,10 @@ async function handleTelegramRaidCommand(chatId, message, argument) {
       "⚔️ <b>/raid &lt;X post link&gt;</b>",
       "",
       "Drop the post link and I open a <b>setup menu</b> — tap to set how many <b>likes, retweets, replies &amp; bookmarks</b> to hit and a duration, then 🚀 Start.",
-      "The posted card then <b>updates itself live</b> as the swamp raids (real counts, no API key, no cost) — each goal flips 🟥→🟨→🟩, and it shows <b>RAID SMASHED</b> when they're all hit (or <b>Raid Ended</b> when time's up).",
+      "The posted card <b>updates itself live</b> with a progress bar, real counts, and how many actions remain. It shows <b>RAID SMASHED</b> when every goal is hit (or <b>Raid Ended</b> when time's up).",
       "",
       "Power users: <code>/raid &lt;link&gt; $SYM 500 150 80 50</code> = 500 likes · 150 RT · 80 replies · 50 bookmarks (skips the menu).",
+      "Queue the next post: <code>/next &lt;X post link&gt;</code> (up to 10 waiting).",
       "Board: <a href=\"https://www.slimewire.org/raids\">slimewire.org/raids</a>"
     ].join("\n"));
     return;
@@ -43116,6 +43122,51 @@ async function handleTelegramRaidCommand(chatId, message, argument) {
     : nums.length === 2 ? { likes: nums[0], rts: nums[1], replies: Math.max(1, Math.ceil(nums[0] / 8)), bookmarks: Math.max(1, Math.ceil(nums[0] / 10)) }
     : { likes: nums[0], rts: Math.max(1, Math.ceil(nums[0] / 4)), replies: Math.max(1, Math.ceil(nums[0] / 8)), bookmarks: Math.max(1, Math.ceil(nums[0] / 10)) };
   await startRaidFromDraft(chatId, { tid, url, symbol, by, targets, durationMin: 5 });
+}
+
+async function handleTelegramNextRaidCommand(chatId, message, userId, argument) {
+  if (tgCommandOnCooldown(chatId, "raid-next", 1200)) return;
+  if (isPrivateChat(message?.chat)) {
+    await say(chatId, "/next works inside a Telegram group so SlimeWire can hand raids off automatically.");
+    return;
+  }
+  if (!(await isGroupBotAdmin(chatId, userId, message))) {
+    await say(chatId, "Only group admins can add raids to the queue.");
+    return;
+  }
+  const entry = await getGroupBotEntry(chatId).catch(() => null);
+  if (entry && !groupBotFeatureOn(entry, "raid")) {
+    await say(chatId, "Raid Bot is off here. Turn it on with /raid on, then use /next <X post link>.");
+    return;
+  }
+  const arg = String(argument || "").trim();
+  const url = (arg.match(/https?:\/\/\S+/) || [])[0] || "";
+  const tid = parseTweetId(url);
+  if (!tid) {
+    const status = await raidQueueStatus(chatId);
+    const queued = status.queue.length
+      ? status.queue.map((item, index) => `${index + 1}. <a href="${escapeTelegramHtml(item.url)}">${escapeTelegramHtml(item.symbol ? "$" + item.symbol : "X post")}</a>`).join("\n")
+      : "Queue is empty.";
+    await sayHtml(chatId, [
+      "⏭ <b>Raid queue</b>",
+      status.active ? "A raid is live now. Queued posts start automatically when it ends." : "No raid is live. Your next valid post starts immediately.",
+      `<b>${status.queue.length}/${RAID_QUEUE_MAX}</b> waiting`,
+      "",
+      queued,
+      "",
+      "Add one: <code>/next &lt;X post link&gt;</code>"
+    ].join("\n"));
+    return;
+  }
+  const rest = arg.replace(url, " ");
+  const symMatch = rest.match(/\$?([A-Za-z][A-Za-z0-9_]{1,11})\b/);
+  const from = message?.from || {};
+  const by = "@" + String(from.username || from.first_name || "anon").replace(/[^A-Za-z0-9_]/g, "").slice(0, 24);
+  const cfg = raidConfig(entry);
+  await startRaidFromDraft(chatId, {
+    tid, url, symbol: symMatch ? symMatch[1] : "", by,
+    targets: { ...cfg.targets }, durationMin: cfg.durationMin
+  });
 }
 
 // Channels: commands have admin implied. Normal posts also feed the permission-based KOL syndicator
@@ -43869,7 +43920,7 @@ function groupBotModuleView(module, entry) {
         "Start a raid with <code>/raid &lt;X post link&gt;</code> → tap the goals → 🚀. Set custom art below (separate from the Buy Bot's).",
         "",
         `Default preset: <b>${escapeTelegramHtml(raidPresetLabel(rc))}</b>`,
-        "Fast save: <code>/raidpreset 10 5 5 1 5</code> = likes RT replies bookmarks duration. Queued raids start automatically."
+        "Fast save: <code>/raidpreset 10 5 5 1 5</code> = likes RT replies bookmarks duration. Add up to 10 with <code>/next &lt;link&gt;</code>; queued raids start automatically."
       ].join("\n"),
       markup: { inline_keyboard: [
         [toggleBtn("raid", "Raid Bot")],
@@ -44122,7 +44173,7 @@ function groupBotHelpText() {
     "• <code>/minbuy &lt;SOL&gt;</code> — only show buys ≥ that size (0 = show all)",
     "• <code>/setbuyemoji 🐸 0.1</code> — pick the emoji + how many show per buy (one per 0.1 SOL here)",
     "",
-    "⚔️ <b>Raid Bot</b> — <code>/raid &lt;X post link&gt;</code> → setup menu → 🚀 Start. Defaults to 10 likes · 5 RT · 5 replies · 1 bookmark · 5 minutes, pins while live, resurfaces every 5 posts, and queues extra raids. Admins can stop it with <code>/cancel raid</code>.",
+    "⚔️ <b>Raid Bot</b> — <code>/raid &lt;X post link&gt;</code> → setup menu → 🚀 Start. Line up the next 10 with <code>/next &lt;X post link&gt;</code>; each starts automatically when the live raid ends. Use <code>/next</code> to view the queue or <code>/cancel raid</code> to stop the live raid.",
     "🔍 <b>Scan Bot</b> — paste any CA → instant scan card with Quick-Buy",
     "",
     "📣 <b>KOL Call Feed</b> — permission-based channel calls shown as one attributed SlimeWire scan",
@@ -50048,14 +50099,14 @@ async function submitRaidPost(body = {}) {
 
 // ---- RAIDAR-STYLE LIVE RAID CARDS (Telegram) ----------------------------------------------
 // /raid <link> opens an interactive SETUP menu (tap to set likes/RT/reply/bookmark goals + a
-// duration, then Start). The posted card then EDITS ITSELF as engagement climbs: a colored status
-// box per metric (🟩 hit / 🟨 partial / 🟥 none) with N | target [%], a live countdown, and
+// duration, then Start). The posted card then EDITS ITSELF as engagement climbs: one overall
+// progress bar plus clean N / target rows, a live countdown, and
 // "RAID SMASHED" when every goal is hit or "Raid Ended — Time limit reached!" when the timer runs
 // out. Counts come from the free fxtwitter mirror (no X API key, no cost). State lives in
 // raid-tg.json (separate from the leaderboard's raid-posts.json so the board refresh never clobbers
 // the live message refs).
 function raidDurStr(ms) { ms = Math.max(0, Number(ms) || 0); const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000); return h > 0 ? (h + "h" + (m > 0 ? " " + m + "m" : "")) : (m + "m"); }
-function raidBar(pct) { const seg = 10; const f = Math.max(0, Math.min(seg, Math.round((Number(pct) || 0) / 100 * seg))); return "▰".repeat(f) + "▱".repeat(seg - f); }
+function raidBar(pct) { const seg = 10; const f = Math.max(0, Math.min(seg, Math.round((Number(pct) || 0) / 100 * seg))); return "█".repeat(f) + "░".repeat(seg - f); }
 function raidCompact(n) { n = Number(n) || 0; return n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(n); }
 function buildRaidProgressCard(p) {
   const sym = p.symbol ? "$" + String(p.symbol).replace(/[^A-Za-z0-9_]/g, "").slice(0, 12) + " " : "";
@@ -50072,7 +50123,7 @@ function buildRaidProgressCard(p) {
   const elapsed = startedAt ? Date.now() - startedAt : 0;
   const timedOut = Boolean(startedAt && durationMs && elapsed >= durationMs);
   let allHit = hasTargets, pctSum = 0;
-  // Plain, uncluttered rows — no colour squares, no progress bar. Just the goal
+  // Plain, uncluttered rows — no per-metric colour squares. Just the goal
   // and how many are left, e.g. "❤️ Likes  1 / 5  ·  4 to go".
   const rows = (hasTargets ? active : defs).map((d) => {
     if (d.tgt > 0) {
@@ -50084,18 +50135,19 @@ function buildRaidProgressCard(p) {
     return `${d.emoji} <b>${d.label}</b> ${d.cur.toLocaleString()}`;
   });
   const overall = hasTargets ? Math.round((pctSum / active.length) * 100) : 0;
+  const progressLine = hasTargets ? `Progress <code>${raidBar(overall)}</code> <b>${overall}%</b>` : "";
   const done = allHit || timedOut; // stop editing once smashed or timed out
   const header = allHit
     ? `🔥🔥 <b>${sym}RAID SMASHED!</b> 🔥🔥`
     : timedOut
       ? "⚠️ <b>Raid Ended — Time limit reached!</b>"
-      : `⚔️ <b>${sym}RAID is LIVE</b>${hasTargets ? `  ·  <b>${overall}%</b>` : ""}`;
+      : `⚔️ <b>${sym}RAID is LIVE</b>`;
   const durLine = (startedAt && durationMs)
     ? (done ? `🕐 Duration: ${raidDurStr(durationMs)}` : `⏳ Ends in <b>${raidDurStr(Math.max(0, durationMs - elapsed))}</b>`)
     : "";
   const viewsLine = Number(p.views) > 0 ? `👀 ${raidCompact(p.views)} views` : "";
   const lines = [
-    header, "",
+    header, progressLine, "",
     ...rows,
     viewsLine ? "\n" + viewsLine : "",
     "",
@@ -50148,6 +50200,7 @@ const raidDrafts = new Map(); // `${chatId}:${messageId}` -> draft {tid,url,symb
 // next message (a number) in that chat. key = `${chatId}:${userId}`.
 const raidInputPending = new Map();
 const raidExpiryTimers = new Map(); // `${chatId}:${tid}` -> hard timeout, independent of X refresh
+const RAID_QUEUE_MAX = 10;
 const RAID_FIELD_META = {
   likes: { label: "❤️ Likes", eg: 25 },
   rts: { label: "🔁 Retweets", eg: 25 },
@@ -50222,10 +50275,12 @@ async function startRaidFromDraft(chatId, d, { fromQueue = false } = {}) {
     const queued = await queueRaidBehindActive(chatId, d);
     if (queued.queued) {
       await sayHtml(chatId, queued.full
-        ? "⏳ The raid queue is full (20). Let one finish or use <code>/cancel raid</code>."
+        ? `⏳ The raid queue is full (${RAID_QUEUE_MAX}). Let one finish or use <code>/cancel raid</code>.`
+        : queued.active
+        ? "⚔️ That post is already the live raid."
         : queued.duplicate
         ? `⏳ That post is already <b>#${queued.position}</b> in the raid queue.`
-        : `⏳ <b>Raid queued · #${queued.position}</b>\nIt starts automatically when the live raid is completed or its timer ends.`).catch(() => {});
+        : `⏳ <b>Raid queued · #${queued.position} of ${RAID_QUEUE_MAX}</b>\nIt starts automatically when the live raid is completed or its timer ends.`).catch(() => {});
       return { queued: true, position: queued.position };
     }
   }
@@ -50325,6 +50380,10 @@ async function readRaidTg() {
   if (!s || typeof s !== "object") s = {};
   if (!s.cards || typeof s.cards !== "object") s.cards = {};
   if (!s.queues || typeof s.queues !== "object") s.queues = {};
+  for (const [chatId, queue] of Object.entries(s.queues)) {
+    if (!Array.isArray(queue) || !queue.length) delete s.queues[chatId];
+    else s.queues[chatId] = queue.slice(0, RAID_QUEUE_MAX);
+  }
   return s;
 }
 
@@ -50338,22 +50397,30 @@ function raidCardIsActiveForQueue(card, chatId) {
 async function queueRaidBehindActive(chatId, draft) {
   return withFileLock(raidTgPath(), async () => {
     const s = await readRaidTg();
-    const active = Object.values(s.cards).some((card) => raidCardIsActiveForQueue(card, chatId));
+    const active = Object.values(s.cards).find((card) => raidCardIsActiveForQueue(card, chatId));
     if (!active) return { queued: false, position: 0, duplicate: false };
+    if (String(active.tid) === String(draft.tid)) return { queued: true, position: 0, duplicate: true, active: true };
     const key = String(chatId);
     const queue = Array.isArray(s.queues[key]) ? s.queues[key] : [];
     const existing = queue.findIndex((item) => String(item.tid) === String(draft.tid));
     if (existing >= 0) return { queued: true, position: existing + 1, duplicate: true };
-    if (queue.length >= 20) return { queued: true, position: queue.length, duplicate: false, full: true };
+    if (queue.length >= RAID_QUEUE_MAX) return { queued: true, position: queue.length, duplicate: false, full: true };
     queue.push({
       tid: String(draft.tid), url: String(draft.url || "").slice(0, 300), symbol: String(draft.symbol || "").slice(0, 12),
       by: String(draft.by || "anon").slice(0, 30), targets: cleanRaidTargets(draft.targets),
       durationMin: Math.max(1, Math.min(24 * 60, Math.round(Number(draft.durationMin) || 5))), queuedAt: Date.now()
     });
-    s.queues[key] = queue.slice(0, 20);
+    s.queues[key] = queue.slice(0, RAID_QUEUE_MAX);
     await writeJsonFile(raidTgPath(), s);
     return { queued: true, position: s.queues[key].length, duplicate: false };
   }).catch(() => ({ queued: false, position: 0, duplicate: false }));
+}
+
+async function raidQueueStatus(chatId) {
+  const s = await readRaidTg();
+  const active = Object.values(s.cards).some((card) => raidCardIsActiveForQueue(card, chatId));
+  const queue = Array.isArray(s.queues[String(chatId)]) ? s.queues[String(chatId)].slice(0, RAID_QUEUE_MAX) : [];
+  return { active, queue };
 }
 
 async function startNextQueuedRaidForChat(chatId) {
