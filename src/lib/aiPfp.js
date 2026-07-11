@@ -15,13 +15,18 @@ function cloudflareAiConfig() {
     token: String(process.env.CLOUDFLARE_AI_TOKEN || process.env.CLOUDFLARE_API_TOKEN || "").trim()
   };
 }
+function cloudflareSiteImageModel() {
+  const fallback = "@cf/black-forest-labs/flux-2-klein-4b";
+  const value = String(process.env.CLOUDFLARE_SITE_IMAGE_MODEL || fallback).trim();
+  return /^@cf\/[a-z0-9._-]+\/[a-z0-9._-]+$/i.test(value) ? value : fallback;
+}
 export function aiSiteArtConfigured() {
   const cf = cloudflareAiConfig();
   return Boolean((cf.accountId && cf.token) || geminiKey() || aiPfpConfigured());
 }
 export function aiSiteArtProvider() {
   const cf = cloudflareAiConfig();
-  if (cf.accountId && cf.token) return "cloudflare-flux-2-dev";
+  if (cf.accountId && cf.token) return `cloudflare-${cloudflareSiteImageModel().split("/").pop()}`;
   if (geminiKey()) return "gemini-2.5-flash-image";
   if (aiPfpConfigured()) return "fal";
   return "local";
@@ -88,7 +93,7 @@ export async function aiSiteArt({ imageDataUrl, prompt = "", format = "hero" }) 
     form.append("guidance", "4");
     form.append("width", format === "mobile" ? "768" : format === "gallery" ? "1024" : "1536");
     form.append("height", format === "mobile" ? "1344" : format === "gallery" ? "1024" : "864");
-    const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(cf.accountId)}/ai/run/@cf/black-forest-labs/flux-2-dev`, {
+    const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(cf.accountId)}/ai/run/${cloudflareSiteImageModel()}`, {
       method: "POST", headers: { Authorization: `Bearer ${cf.token}` }, body: form,
       signal: AbortSignal.timeout ? AbortSignal.timeout(120_000) : undefined
     });

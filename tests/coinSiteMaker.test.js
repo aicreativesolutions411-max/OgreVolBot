@@ -40,7 +40,8 @@ test("maker offers three curated systems, direct preview, uploads, AI art, and o
   assert.match(maker, /\/api\/launch-os\/ai\//);
   assert.match(ai, /export async function aiSiteArt/);
   assert.match(ai, /export function aiSiteArtConfigured/);
-  assert.match(ai, /cloudflare-flux-2-dev/);
+  assert.match(ai, /flux-2-klein-4b/);
+  assert.match(ai, /CLOUDFLARE_SITE_IMAGE_MODEL/);
   assert.match(ai, /gemini-2\.5-flash-image/);
   assert.match(ai, /input_image_0/);
   assert.match(ai, /aspectRatio: format === "mobile" \? "9:16"/);
