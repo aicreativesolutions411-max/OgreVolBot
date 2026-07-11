@@ -6,6 +6,7 @@ const server = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf
 const maker = fs.readFileSync(new URL("../web/public/site-maker.html", import.meta.url), "utf8");
 const coin = fs.readFileSync(new URL("../web/public/coin-site.html", import.meta.url), "utf8");
 const dashboard = fs.readFileSync(new URL("../web/public/partner-rewards.html", import.meta.url), "utf8");
+const redirects = fs.readFileSync(new URL("../web/public/_redirects", import.meta.url), "utf8");
 
 test("partner rewards use the existing 0.15% allocation inside the 0.50% fee", () => {
   assert.match(server, /const bundleFeeBps = 50/);
@@ -44,4 +45,6 @@ test("Site Maker, coin sites, Telegram, and public receipts expose the partner p
   assert.match(dashboard, /Developer payout/);
   assert.match(server, /\/api\/partner-rewards\//);
   assert.match(server, /partner_\$\{program\.code\}/);
+  assert.match(redirects, /\/rewards\/\*\s+\/partner-rewards\.html\s+200/);
+  assert.match(redirects, /\/ca\/\*\s+\/coin-site\.html\s+200/);
 });

@@ -11,6 +11,12 @@
 # X/t.co links created before the backend-host fix still point at www.slimewire.org/x/.... Forward them
 # to the Node service that owns the private lookup and signed Trade Pad handoff instead of SPA-falling home.
 /x/*            https://ogrevolbot.onrender.com/x/:splat  302
+# Dynamic generated-site and rewards slugs must resolve to their dedicated
+# static shells on slimewire.org. The browser keeps the original pathname, so
+# each shell can read the slug and fetch live data from the backend.
+/ca/*           /coin-site.html        200
+/coin/*         /coin-site.html        200
+/rewards/*      /partner-rewards.html  200
 /launch-coin    /#launch               302
 /terminal       /index.html            200
 /terminal/*     /index.html            200
