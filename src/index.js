@@ -56912,6 +56912,55 @@ function launchOsCleanText(value, max = 500) {
   return String(value || "").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "").trim().slice(0, max);
 }
 
+function launchOsArtIdentity(token = {}) {
+  const symbol = String(token.symbol || "COIN").replace(/^\$+/, "").slice(0, 14);
+  const name = String(token.name || symbol).slice(0, 48);
+  const digest = crypto.createHash("sha256").update(String(token.ca || `${name}:${symbol}`)).digest();
+  const hue = digest[0] % 360;
+  const accent = `hsl(${hue} 92% 56%)`;
+  const accent2 = `hsl(${(hue + 72 + digest[1] % 80) % 360} 88% 58%)`;
+  const xml = (value) => String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[char]));
+  return { symbol, name, accent, accent2, xml };
+}
+
+function launchOsFallbackArtData(token = {}, square = false) {
+  const { symbol, name, accent, accent2, xml } = launchOsArtIdentity(token);
+  const width = square ? 1200 : 1800, height = square ? 1200 : 1000;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><defs><radialGradient id="g" cx="68%" cy="35%"><stop stop-color="${accent}" stop-opacity=".72"/><stop offset=".48" stop-color="${accent2}" stop-opacity=".22"/><stop offset="1" stop-color="#050705"/></radialGradient><filter id="b"><feGaussianBlur stdDeviation="46"/></filter></defs><rect width="100%" height="100%" fill="#050705"/><rect width="100%" height="100%" fill="url(#g)"/><circle cx="${square ? 850 : 1320}" cy="${square ? 350 : 350}" r="310" fill="none" stroke="${accent}" stroke-opacity=".42" stroke-width="3"/><circle cx="${square ? 850 : 1320}" cy="${square ? 350 : 350}" r="220" fill="${accent2}" fill-opacity=".16" filter="url(#b)"/><path d="M-40 ${height * .78} Q ${width * .28} ${height * .42} ${width * .55} ${height * .74} T ${width + 40} ${height * .48}" fill="none" stroke="${accent}" stroke-opacity=".28" stroke-width="4"/><text x="${square ? 72 : 105}" y="${square ? 865 : 720}" fill="#fff" fill-opacity=".11" font-family="Arial Black,Arial" font-size="${square ? 190 : 250}" font-weight="900">$${xml(symbol)}</text><text x="${square ? 78 : 115}" y="${square ? 1010 : 860}" fill="#fff" fill-opacity=".72" font-family="Arial, sans-serif" font-size="${square ? 48 : 56}" font-weight="700" letter-spacing="8">${xml(name.toUpperCase())}</text></svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+async function generateLaunchOsFreeMedia(project, sourceBuffer) {
+  const dir = path.join(launchOsMediaDir(), project.slug);
+  await fs.mkdir(dir, { recursive: true });
+  const heroBase = Buffer.from(decodeURIComponent(launchOsFallbackArtData(project.token).split(",")[1]));
+  const galleryBase = Buffer.from(decodeURIComponent(launchOsFallbackArtData(project.token, true).split(",")[1]));
+  const stamp = `${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
+  const composites = [];
+  let mascot = null;
+  if (sourceBuffer) {
+    const mask = Buffer.from('<svg width="760" height="760"><rect width="760" height="760" rx="110" fill="white"/></svg>');
+    mascot = await sharp(sourceBuffer).rotate().resize(760, 760, { fit: "cover", position: "attention" }).composite([{ input: mask, blend: "dest-in" }]).png().toBuffer();
+    composites.push({ input: mascot, left: 930, top: 120 });
+  }
+  const hero = await sharp(heroBase).composite(composites).png({ quality: 92 }).toBuffer();
+  const gallery = await sharp(galleryBase).composite(mascot ? [{ input: await sharp(mascot).resize(820, 820).png().toBuffer(), left: 190, top: 110 }] : []).png({ quality: 92 }).toBuffer();
+  const heroName = `free-hero-${stamp}.png`, galleryName = `free-gallery-${stamp}.png`;
+  await Promise.all([fs.writeFile(path.join(dir, heroName), hero), fs.writeFile(path.join(dir, galleryName), gallery)]);
+  const heroUrl = `/api/launch-os/media/${encodeURIComponent(project.slug)}/${encodeURIComponent(heroName)}`;
+  const galleryUrl = `/api/launch-os/media/${encodeURIComponent(project.slug)}/${encodeURIComponent(galleryName)}`;
+  await mutateLaunchOs((store) => {
+    const saved = store.projects[project.id]; if (!saved) return;
+    saved.site = saved.site || launchOsDefaultSite(saved.token, saved.publicUrl, saved.mode);
+    saved.site.media = saved.site.media || { pfp: "", hero: "", gallery: [] };
+    saved.site.media.hero = heroUrl;
+    saved.site.media.gallery = [galleryUrl, ...(saved.site.media.gallery || []).filter((item) => item !== galleryUrl)].slice(0, 12);
+    saved.site.freeArtGenerated = true;
+    saved.updatedAt = new Date().toISOString();
+  });
+  return { heroUrl, galleryUrl };
+}
+
 function assertLaunchOsCreateAllowed(request) {
   const key = webClientKey(request);
   const now = Date.now();
@@ -56969,7 +57018,53 @@ function launchOsDefaultSite(token, publicUrl, mode = "official") {
     lore: `${description}\n\n$${symbol} is built around a simple idea: make the identity unmistakable, keep the contract verifiable and give the community one home for every official link and market signal.`.slice(0, 2400),
     roadmap: ["Launch the signal", "Grow the community", "Take over the timeline"],
     sections: { market: true, lore: true, gallery: true, howToBuy: true, roadmap: true, socials: true, memeMaker: true },
-    media: { pfp: token.imageUrl || "", hero: token.imageUrl || "", gallery: token.imageUrl ? [token.imageUrl] : [] }, publicUrl
+    media: {
+      pfp: token.imageUrl || launchOsFallbackArtData(token, true),
+      hero: token.imageUrl || launchOsFallbackArtData(token),
+      gallery: token.imageUrl ? [token.imageUrl] : []
+    }, publicUrl
+  };
+}
+
+function launchOsCreativeCopy(token, direction = "", mode = "official") {
+  const name = String(token.name || token.symbol || "This coin");
+  const symbol = String(token.symbol || "COIN").replace(/^\$+/, "");
+  const chain = token.chain === "robinhood" ? "Robinhood Chain" : "Solana";
+  const cue = String(direction || "").toLowerCase();
+  const voice = /luxury|premium|clean|editorial|fashion/.test(cue) ? "premium"
+    : /cute|fun|friendly|cartoon/.test(cue) ? "playful"
+    : /cyber|neon|future|tech/.test(cue) ? "future"
+    : /rebel|menace|chaos|wild|dark|degen/.test(cue) ? "rebel" : "signal";
+  const headlines = {
+    premium: `${name}. The new standard.`, playful: `${name}. Cute face. Serious signal.`,
+    future: `${name}. Signal from the future.`, rebel: `${name}. Not here to behave.`,
+    signal: `${name}. Built to own the timeline.`
+  };
+  const descriptions = {
+    premium: `A refined home for $${symbol} on ${chain}—live markets, verified links and a brand designed to feel established from day one.`,
+    playful: `$${symbol} brings a recognizable character and an easy-to-join community to ${chain}, backed by live data and verified links.`,
+    future: `$${symbol} is a live community signal on ${chain}: real-time market intelligence, verified links and a world built around the token.`,
+    rebel: `$${symbol} is the ${chain} outsider built to take over feeds, rally the community and keep every official signal in one place.`,
+    signal: `${mode === "cto" ? "The community takeover" : "The official home"} of $${symbol} on ${chain}—live market intelligence, verified links and the full story in one world.`
+  };
+  return { headline: headlines[voice], subhead: descriptions[voice], voice };
+}
+
+function launchOsSiteForClient(project) {
+  const defaults = launchOsDefaultSite(project.token, project.publicUrl, project.mode);
+  const site = project.site && typeof project.site === "object" ? project.site : {};
+  const media = site.media && typeof site.media === "object" ? site.media : {};
+  const legacyPfp = /\/assets\/slimewire\/png\/slimewire-mark\.png$/i.test(String(media.pfp || "")) ? "" : media.pfp;
+  const legacyHero = /\/assets\/slimewire\/launch\/hero\.png$/i.test(String(media.hero || "")) ? "" : media.hero;
+  return {
+    ...defaults, ...site,
+    sections: { ...defaults.sections, ...(site.sections || {}) },
+    media: {
+      ...defaults.media, ...media,
+      pfp: firstString(legacyPfp, project.token?.imageUrl, defaults.media.pfp),
+      hero: firstString(legacyHero, project.token?.imageUrl, defaults.media.hero),
+      gallery: Array.isArray(media.gallery) ? media.gallery.filter(Boolean).slice(0, 12) : defaults.media.gallery
+    }
   };
 }
 
@@ -56991,6 +57086,7 @@ async function saveLaunchOsMedia(project, body = {}) {
     else saved.site.media[kind] = url;
     saved.updatedAt = new Date().toISOString();
   });
+  if (kind === "pfp") await generateLaunchOsFreeMedia(project, src);
   return { url, kind, project: clientLaunchOsProject(await getLaunchOsProjectForUser(project.userId, project.id).catch(async () => (await readLaunchOs()).projects[project.id])) };
 }
 
@@ -57027,7 +57123,7 @@ function clientLaunchOsProject(project) {
   if (!project) return null;
   return {
     id: project.id, slug: project.slug, mode: project.mode, publicUrl: project.publicUrl,
-    token: project.token, brand: project.brand, links: project.links, content: project.content, site: project.site || launchOsDefaultSite(project.token, project.publicUrl, project.mode),
+    token: project.token, brand: project.brand, links: project.links, content: project.content, site: launchOsSiteForClient(project),
     listing: project.listing || {}, crisis: project.crisis || { active: false, message: "" },
     officialClaim: Boolean(project.officialClaim), telegram: project.telegram || { groups: [] },
     telegramSetupUrl: launchOsSetupUrl(project), readiness: launchOsReadiness(project),
@@ -57088,7 +57184,8 @@ async function createLaunchOsProject(userId, body = {}, options = {}) {
   };
   project.site = launchOsDefaultSite(token, publicUrl, mode);
   await mutateLaunchOs((current) => { current.projects[id] = project; });
-  return clientLaunchOsProject(project);
+  await generateLaunchOsFreeMedia(project, null).catch(() => {});
+  return clientLaunchOsProject(await getLaunchOsProjectForUser(userId, id));
 }
 
 async function createPublicLaunchOsProject(body = {}) {
@@ -57124,9 +57221,16 @@ function applyLaunchOsUpdate(project, body = {}) {
   const site = body.site && typeof body.site === "object" ? body.site : null;
   if (site) {
     project.site = project.site || launchOsDefaultSite(project.token, project.publicUrl, project.mode);
+    const firstCreativeDirection = !project.site.prompt && launchOsCleanText(site.prompt, 500);
     if (["cinematic", "terminal", "editorial"].includes(String(site.template))) project.site.template = String(site.template);
     if (/^#[0-9a-f]{6}$/i.test(String(site.accent || ""))) project.site.accent = String(site.accent);
     for (const key of ["prompt", "headline", "subhead", "lore"]) if (site[key] != null) project.site[key] = launchOsCleanText(site[key], key === "lore" ? 2400 : 500);
+    if (firstCreativeDirection) {
+      const copy = launchOsCreativeCopy(project.token, firstCreativeDirection, project.mode);
+      project.site.headline = copy.headline;
+      project.site.subhead = copy.subhead;
+      project.site.copyVoice = copy.voice;
+    }
     if (Array.isArray(site.roadmap)) project.site.roadmap = site.roadmap.slice(0, 6).map((x) => launchOsCleanText(x, 180)).filter(Boolean);
     if (site.sections && typeof site.sections === "object") {
       project.site.sections = project.site.sections || {};

@@ -14,6 +14,13 @@ test("coin site maker creates editable, published sites from the standalone CA f
   assert.match(server, /pathname\.startsWith\("\/api\/launch-os\/media\/"\)/);
   assert.match(server, /pathname\.startsWith\("\/api\/launch-os\/ai\/"\)/);
   assert.match(server, /function launchOsDefaultSite/);
+  assert.match(server, /function launchOsSiteForClient/);
+  assert.match(server, /function launchOsFallbackArtData/);
+  assert.match(server, /async function generateLaunchOsFreeMedia/);
+  assert.match(server, /function launchOsCreativeCopy/);
+  assert.match(server, /freeArtGenerated/);
+  assert.match(server, /legacyHero[\s\S]*slimewire\\\/launch\\\/hero/);
+  assert.match(server, /kind === "pfp"[\s\S]*generateLaunchOsFreeMedia\(project, src\)/);
   assert.match(server, /slimewire-site-engine-v2/);
   assert.match(server, /function saveLaunchOsMedia/);
   assert.match(server, /editorial.*terminal|terminal.*editorial/);
@@ -32,6 +39,8 @@ test("maker offers three curated systems, direct preview, uploads, AI art, and o
   }
   assert.match(maker, /REAL GENERATION ENGINE/);
   assert.match(maker, /fal\.ai generates custom hero/);
+  assert.match(maker, /FREE CUSTOM BRAND ENGINE/);
+  assert.match(maker, /coin-specific art and copy for free/);
 });
 
 test("published coin sites include live market, chart, lore, gallery, buy flow, roadmap, socials and meme studio", () => {
@@ -42,6 +51,7 @@ test("published coin sites include live market, chart, lore, gallery, buy flow, 
   assert.match(site, /canvas id="meme"/);
   assert.match(site, /location\.search/);
   assert.match(site, /siteHeroDrift/);
+  assert.match(site, /SLIMEWIRE • BUILDING THE WORLD/);
   assert.match(site, /LIVE • VERIFIED CA • COMMUNITY/);
 });
 
