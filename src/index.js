@@ -43276,8 +43276,8 @@ async function handleTelegramNextRaidCommand(chatId, message, userId, argument) 
   const arg = String(argument || "").trim();
   const url = (arg.match(/https?:\/\/\S+/) || [])[0] || "";
   const tid = parseTweetId(url);
+  const status = await raidQueueStatus(chatId);
   if (!tid) {
-    const status = await raidQueueStatus(chatId);
     const queued = status.queue.length
       ? status.queue.map((item, index) => `${index + 1}. <a href="${escapeTelegramHtml(item.url)}">${escapeTelegramHtml(item.symbol ? "$" + item.symbol : "X post")}</a>`).join("\n")
       : "Queue is empty.";
@@ -43297,9 +43297,10 @@ async function handleTelegramNextRaidCommand(chatId, message, userId, argument) 
   const from = message?.from || {};
   const by = "@" + String(from.username || from.first_name || "anon").replace(/[^A-Za-z0-9_]/g, "").slice(0, 24);
   const cfg = raidConfig(entry);
+  const inherited = status.activeRaid || { targets: cfg.targets, durationMin: cfg.durationMin };
   await startRaidFromDraft(chatId, {
     tid, url, symbol: symMatch ? symMatch[1] : "", by,
-    targets: { ...cfg.targets }, durationMin: cfg.durationMin
+    targets: { ...inherited.targets }, durationMin: inherited.durationMin
   });
 }
 
@@ -50518,7 +50519,12 @@ async function readRaidTg() {
   if (!s.queues || typeof s.queues !== "object") s.queues = {};
   for (const [chatId, queue] of Object.entries(s.queues)) {
     if (!Array.isArray(queue) || !queue.length) delete s.queues[chatId];
-    else s.queues[chatId] = queue.slice(0, RAID_QUEUE_MAX);
+    else {
+      const active = Object.values(s.cards).find((card) => raidCardIsActiveForQueue(card, chatId));
+      const ref = active?.refs?.find((item) => String(item.chatId) === String(chatId));
+      const activeDurationMin = Math.max(1, Math.round(Number(ref?.durationMs || active?.durationMs || 0) / 60_000));
+      s.queues[chatId] = queue.slice(0, RAID_QUEUE_MAX).map((item) => active ? { ...item, durationMin: activeDurationMin } : item);
+    }
   }
   return s;
 }
@@ -50554,9 +50560,14 @@ async function queueRaidBehindActive(chatId, draft) {
 
 async function raidQueueStatus(chatId) {
   const s = await readRaidTg();
-  const active = Object.values(s.cards).some((card) => raidCardIsActiveForQueue(card, chatId));
+  const activeCard = Object.values(s.cards).find((card) => raidCardIsActiveForQueue(card, chatId));
+  const ref = activeCard?.refs?.find((item) => String(item.chatId) === String(chatId));
+  const activeRaid = activeCard ? {
+    targets: cleanRaidTargets(activeCard.targets),
+    durationMin: Math.max(1, Math.round(Number(ref?.durationMs || activeCard.durationMs || 5 * 60_000) / 60_000))
+  } : null;
   const queue = Array.isArray(s.queues[String(chatId)]) ? s.queues[String(chatId)].slice(0, RAID_QUEUE_MAX) : [];
-  return { active, queue };
+  return { active: Boolean(activeCard), activeRaid, queue };
 }
 
 async function startNextQueuedRaidForChat(chatId) {

@@ -947,6 +947,9 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
   assert.match(functionBody(serverSource, "queueRaidBehindActive"), /slice\(0, RAID_QUEUE_MAX\)/);
   assert.match(functionBody(serverSource, "handleMessage"), /handleTelegramNextRaidCommand\(chatId, message, userId/);
   assert.match(functionBody(serverSource, "handleTelegramNextRaidCommand"), /\/next &lt;X post link&gt;/);
+  assert.match(functionBody(serverSource, "handleTelegramNextRaidCommand"), /status\.activeRaid/);
+  assert.match(functionBody(serverSource, "raidQueueStatus"), /ref\?\.durationMs/);
+  assert.match(functionBody(serverSource, "readRaidTg"), /durationMin: activeDurationMin/);
   assert.match(functionBody(serverSource, "startNextQueuedRaidForChat"), /queue\.shift/);
   assert.match(functionBody(serverSource, "refreshRaidTgCards"), /startNextQueuedRaidForChat/);
   assert.match(functionBody(serverSource, "refreshRaidTgCards"), /Object\.keys\(queuedState\.queues/);
