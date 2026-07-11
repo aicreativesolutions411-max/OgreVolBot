@@ -948,6 +948,18 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
   assert.match(functionBody(serverSource, "refreshRaidTgCards"), /startNextQueuedRaidForChat/);
   assert.match(functionBody(serverSource, "refreshRaidTgCards"), /Object\.keys\(queuedState\.queues/);
   assert.match(functionBody(serverSource, "cancelActiveRaidForChat"), /startNextQueuedRaidForChat/);
+  // Five minutes is a real hard stop independent of the slower X engagement refresh.
+  assert.match(serverSource, /const raidExpiryTimers = new Map\(\)/);
+  assert.match(functionBody(serverSource, "startRaidFromDraft"), /scheduleRaidHardExpiry\(chatId, res\.tid, startedAt, durationMs\)/);
+  assert.match(functionBody(serverSource, "scheduleRaidHardExpiry"), /finishExpiredRaidForChat/);
+  const expiry = functionBody(serverSource, "finishExpiredRaidForChat");
+  assert.match(expiry, /card\.refs = card\.refs\.filter/);
+  assert.match(expiry, /unpinChatMessage/);
+  assert.match(expiry, /startNextQueuedRaidForChat/);
+  assert.match(expiry, /Raid time is up/);
+  assert.match(expiry, /Time for the next raid/);
+  assert.match(functionBody(serverSource, "refreshRaidTgCards"), /Hard-stop recovery[\s\S]*finishExpiredRaidForChat[\s\S]*fetchXEngagement/);
+  assert.match(functionBody(serverSource, "attachRaidTgCard"), /startedAt: Number\(startedAt\)[\s\S]*durationMs: Number\(durationMs\)/);
 });
 
 // ---- Settings hub (multi-level menu) + Shield (in Rose) + separate raid media ----

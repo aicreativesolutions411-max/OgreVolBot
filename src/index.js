@@ -49585,6 +49585,7 @@ const raidDrafts = new Map(); // `${chatId}:${messageId}` -> draft {tid,url,symb
 // Pending typed-input: after a metric button is tapped, we wait for that admin's
 // next message (a number) in that chat. key = `${chatId}:${userId}`.
 const raidInputPending = new Map();
+const raidExpiryTimers = new Map(); // `${chatId}:${tid}` -> hard timeout, independent of X refresh
 const RAID_FIELD_META = {
   likes: { label: "❤️ Likes", eg: 25 },
   rts: { label: "🔁 Retweets", eg: 25 },
@@ -49593,6 +49594,19 @@ const RAID_FIELD_META = {
   dur: { label: "🕐 Duration (minutes)", eg: 5 },
 };
 function raidDraftKey(chatId, msgId) { return String(chatId) + ":" + String(msgId); }
+function raidExpiryKey(chatId, tid) { return `${chatId}:${tid}`; }
+function scheduleRaidHardExpiry(chatId, tid, startedAt, durationMs) {
+  const key = raidExpiryKey(chatId, tid);
+  const old = raidExpiryTimers.get(key);
+  if (old) clearTimeout(old);
+  const delay = Math.max(0, Number(startedAt) + Number(durationMs) - Date.now());
+  const timer = setTimeout(() => {
+    raidExpiryTimers.delete(key);
+    void finishExpiredRaidForChat(tid, chatId, startedAt).catch(() => {});
+  }, Math.min(delay, 2_147_000_000));
+  if (typeof timer.unref === "function") timer.unref();
+  raidExpiryTimers.set(key, timer);
+}
 function raidSetupCard(d) {
   const sym = d.symbol ? "$" + escapeTelegramHtml(d.symbol) + " " : "";
   const v = (n) => (Number(n) > 0 ? n : "—");
@@ -49668,6 +49682,7 @@ async function startRaidFromDraft(chatId, d, { fromQueue = false } = {}) {
   const sent = await sendGroupAlertMedia(chatId, media, card.text, card.markup);
   if (sent && sent.result && sent.result.message_id) {
     await attachRaidTgCard(res.tid, { url: res.url || d.url, symbol: res.symbol || d.symbol, targets: d.targets, startedAt, durationMs, ref: { chatId, messageId: sent.result.message_id, hasMedia: sent.hasMedia }, eng: { likes: res.likes, rts: res.rts, replies: res.replies, bookmarks: res.bookmarks || 0 } });
+    scheduleRaidHardExpiry(chatId, res.tid, startedAt, durationMs);
     const pinned = await telegram("pinChatMessage", { chat_id: chatId, message_id: sent.result.message_id, disable_notification: true }).then(() => true).catch(() => false);
     if (!pinned) await say(chatId, "Raid started, but I need the group’s Pin Messages permission to keep it pinned.").catch(() => {});
   } else {
@@ -49752,8 +49767,10 @@ async function readRaidTg() {
 }
 
 function raidCardIsActiveForQueue(card, chatId) {
-  if (!card || card.done || !Array.isArray(card.refs) || !card.refs.some((ref) => String(ref.chatId) === String(chatId))) return false;
-  return !buildRaidProgressCard(card).done;
+  if (!card || card.done || !Array.isArray(card.refs)) return false;
+  const ref = card.refs.find((item) => String(item.chatId) === String(chatId));
+  if (!ref) return false;
+  return !buildRaidProgressCard({ ...card, startedAt: Number(ref.startedAt) || card.startedAt, durationMs: Number(ref.durationMs) || card.durationMs }).done;
 }
 
 async function queueRaidBehindActive(chatId, draft) {
@@ -49807,7 +49824,7 @@ async function attachRaidTgCard(tid, { url, symbol, targets, ref, eng, startedAt
     if (durationMs) c.durationMs = durationMs;
     if (eng) { c.likes = Number(eng.likes) || 0; c.rts = Number(eng.rts) || 0; c.replies = Number(eng.replies) || 0; c.bookmarks = Number(eng.bookmarks) || 0; }
     c.refs = (c.refs || []).filter((r) => String(r.chatId) !== String(ref.chatId));
-    c.refs.push({ chatId: String(ref.chatId), messageId: ref.messageId, hasMedia: !!ref.hasMedia, postsSinceRefresh: 0 });
+    c.refs.push({ chatId: String(ref.chatId), messageId: ref.messageId, hasMedia: !!ref.hasMedia, postsSinceRefresh: 0, startedAt: Number(startedAt) || Date.now(), durationMs: Number(durationMs) || 5 * 60_000 });
     c.done = false; c.lastCard = ""; // re-arm so the new card edits at least once
     // bound the store: keep the 120 most recent cards
     const ids = Object.keys(s.cards);
@@ -49834,6 +49851,43 @@ async function updateRaidTgCard(tid, { likes, rts, replies, bookmarks, lastCard,
   }).catch(() => {});
 }
 
+async function finishExpiredRaidForChat(tid, chatId, expectedStartedAt = 0) {
+  const expired = await withFileLock(raidTgPath(), async () => {
+    const s = await readRaidTg();
+    const card = s.cards[String(tid)];
+    if (!card || card.done || !Array.isArray(card.refs)) return null;
+    const ref = card.refs.find((item) => String(item.chatId) === String(chatId));
+    if (!ref) return null;
+    const startedAt = Number(ref.startedAt) || Number(card.startedAt) || 0;
+    const durationMs = Number(ref.durationMs) || Number(card.durationMs) || 5 * 60_000;
+    if (expectedStartedAt && startedAt !== Number(expectedStartedAt)) return null; // stale timer after a replacement raid
+    if (!startedAt || Date.now() < startedAt + durationMs) return null;
+    card.refs = card.refs.filter((item) => String(item.chatId) !== String(chatId));
+    if (!card.refs.length) card.done = true;
+    card.endedAt = new Date().toISOString();
+    await writeJsonFile(raidTgPath(), s);
+    return { card: { ...card, refs: undefined }, ref: { ...ref }, startedAt, durationMs };
+  }).catch(() => null);
+  if (!expired) return { expired: false, nextStarted: false };
+
+  const c = expired.card;
+  const finalCard = buildRaidProgressCard({
+    tid: c.tid, symbol: c.symbol, targets: c.targets, likes: c.likes, rts: c.rts,
+    replies: c.replies, bookmarks: c.bookmarks, views: c.views, url: c.url,
+    startedAt: expired.startedAt, durationMs: expired.durationMs
+  });
+  try {
+    if (expired.ref.hasMedia) await telegram("editMessageCaption", { chat_id: chatId, message_id: expired.ref.messageId, caption: finalCard.text, parse_mode: "HTML", reply_markup: finalCard.markup });
+    else await telegram("editMessageText", { chat_id: chatId, message_id: expired.ref.messageId, text: finalCard.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: finalCard.markup });
+  } catch { /* the hard stop and queue handoff still happen if the old card was deleted */ }
+  await telegram("unpinChatMessage", { chat_id: chatId, message_id: expired.ref.messageId }).catch(() => {});
+  const nextStarted = await startNextQueuedRaidForChat(chatId).catch(() => false);
+  if (!nextStarted) {
+    await sayHtml(chatId, "⏭ <b>Raid time is up.</b> Time for the next raid — send <code>/raid &lt;X post link&gt;</code> when ready.").catch(() => {});
+  }
+  return { expired: true, nextStarted };
+}
+
 async function cancelActiveRaidForChat(chatId) {
   let draftCancelled = false;
   for (const key of [...raidDrafts.keys()]) {
@@ -49856,6 +49910,8 @@ async function cancelActiveRaidForChat(chatId) {
     return ref ? { tid: card.tid, url: card.url, ref: { ...ref } } : null;
   }).catch(() => null);
   if (!cancelled) return { cancelled: false, draftCancelled };
+  const expiryKey = raidExpiryKey(chatId, cancelled.tid);
+  if (raidExpiryTimers.has(expiryKey)) { clearTimeout(raidExpiryTimers.get(expiryKey)); raidExpiryTimers.delete(expiryKey); }
   const text = `🛑 <b>Raid cancelled</b>${cancelled.url ? `\n<a href="${escapeTelegramHtml(cancelled.url)}">View the X post</a>` : ""}`;
   try {
     if (cancelled.ref.hasMedia) {
@@ -49934,7 +49990,19 @@ async function refreshRaidTgCards() {
   if (_raidTgRefreshing) return;
   _raidTgRefreshing = true;
   try {
-    const s = await readRaidTg();
+    let s = await readRaidTg();
+    // Hard-stop recovery runs before any X request. This closes expired raids even when X is slow,
+    // and re-arms precise timers after a Render restart.
+    const now = Date.now();
+    for (const c of Object.values(s.cards || {}).filter((item) => !item.done && Array.isArray(item.refs))) {
+      for (const ref of c.refs) {
+        const startedAt = Number(ref.startedAt) || Number(c.startedAt) || 0;
+        const durationMs = Number(ref.durationMs) || Number(c.durationMs) || 5 * 60_000;
+        if (startedAt && now >= startedAt + durationMs) await finishExpiredRaidForChat(c.tid, ref.chatId, startedAt).catch(() => {});
+        else if (startedAt && !raidExpiryTimers.has(raidExpiryKey(ref.chatId, c.tid))) scheduleRaidHardExpiry(ref.chatId, c.tid, startedAt, durationMs);
+      }
+    }
+    s = await readRaidTg();
     const cards = Object.values(s.cards || {}).filter((c) => Array.isArray(c.refs) && c.refs.length && !c.done);
     for (const c of cards) {
       const eng = await fetchXEngagement(c.tid).catch(() => null);
