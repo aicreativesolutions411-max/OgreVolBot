@@ -908,6 +908,9 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
   assert.match(serverSource, /callback_data: "rd:p:quick"/);
   assert.match(serverSource, /callback_data: "rd:p:save"/);
   assert.match(serverSource, /const RAID_DEFAULT_PRESET = \{ targets: \{ likes: 10, rts: 5, replies: 5, bookmarks: 1 \}/);
+  assert.match(serverSource, /RAID_DEFAULT_PRESET = \{[\s\S]*durationMin: 5/);
+  assert.match(functionBody(serverSource, "raidConfig"), /Number\(saved\.durationMin\) === 120 \? 5/);
+  assert.match(functionBody(serverSource, "setRaidConfig"), /version: 2/);
   // Callback asks via a POPUP (no chat message -> no flood), not a ladder.
   const cb = functionBody(serverSource, "handleRaidSetupCallback");
   assert.match(cb, /show_alert: true/);
@@ -934,6 +937,17 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
   assert.match(cancel, /Raid cancelled/);
   assert.match(cancel, /unpinChatMessage/);
   assert.match(functionBody(serverSource, "handleGroupBotCommand"), /cancelActiveRaidForChat\(chatId\)/);
+  // One active raid per group; later raids persist in FIFO order and auto-start on completion,
+  // timeout, refresh completion, resurface completion, or /cancel raid.
+  assert.match(serverSource, /async function queueRaidBehindActive\(/);
+  assert.match(serverSource, /async function startNextQueuedRaidForChat\(/);
+  assert.match(functionBody(serverSource, "readRaidTg"), /s\.queues/);
+  assert.match(functionBody(serverSource, "queueRaidBehindActive"), /queue\.push/);
+  assert.match(functionBody(serverSource, "queueRaidBehindActive"), /slice\(0, 20\)/);
+  assert.match(functionBody(serverSource, "startNextQueuedRaidForChat"), /queue\.shift/);
+  assert.match(functionBody(serverSource, "refreshRaidTgCards"), /startNextQueuedRaidForChat/);
+  assert.match(functionBody(serverSource, "refreshRaidTgCards"), /Object\.keys\(queuedState\.queues/);
+  assert.match(functionBody(serverSource, "cancelActiveRaidForChat"), /startNextQueuedRaidForChat/);
 });
 
 // ---- Settings hub (multi-level menu) + Shield (in Rose) + separate raid media ----
