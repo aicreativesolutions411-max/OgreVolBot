@@ -51,6 +51,20 @@ test("fresh ERC-20 is recognized from RPC before Blockscout indexes it", async (
   });
 });
 
+test("DexScreener coin evidence wins when Robinhood RPC and Blockscout are incomplete", async () => {
+  const fetchImpl = async (url) => {
+    if (String(url).includes("dexscreener")) return response(200, { pairs: [{ chainId: "robinhood", baseToken: { address: ADDRESS } }] });
+    if (String(url).includes("blockscout")) return response(404, {});
+    return response(200, [
+      { id: 1, result: "0x6001600055" }, { id: 2, error: { code: 3 } },
+      { id: 3, error: { code: 3 } }, { id: 4, error: { code: 3 } },
+    ]);
+  };
+  assert.deepEqual(await classifyRhAddress(ADDRESS, { fetchImpl, rpcUrl: "https://rpc.test" }), {
+    isToken: true, source: "dexscreener-token",
+  });
+});
+
 test("slower Blockscout ERC-20 evidence beats a fast smart-wallet RPC guess", async () => {
   const fetchImpl = async (url) => {
     if (String(url).includes("blockscout")) {

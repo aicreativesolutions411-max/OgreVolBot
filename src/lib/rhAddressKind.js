@@ -27,6 +27,26 @@ async function blockscoutTokenProbe(address, fetchImpl, timeoutMs) {
   }
 }
 
+async function dexScreenerTokenProbe(address, fetchImpl, timeoutMs) {
+  const timer = withTimeout(timeoutMs);
+  try {
+    const response = await fetchImpl(`https://api.dexscreener.com/latest/dex/tokens/${address}`, {
+      signal: timer.signal,
+      headers: { accept: "application/json", "user-agent": "SlimeWire/1.0" },
+    });
+    if (!response.ok) throw new Error(`DexScreener token ${response.status}`);
+    const data = await response.json();
+    const match = (Array.isArray(data?.pairs) ? data.pairs : []).some((pair) => {
+      if (String(pair?.chainId || "").toLowerCase() !== "robinhood") return false;
+      return [pair?.baseToken?.address, pair?.quoteToken?.address].some((value) => String(value || "").toLowerCase() === address.toLowerCase());
+    });
+    if (match) return { isToken: true, source: "dexscreener-token" };
+    throw new Error("not indexed as a Robinhood token");
+  } finally {
+    timer.done();
+  }
+}
+
 async function rpcTokenProbe(address, rpcUrl, fetchImpl, timeoutMs) {
   if (!rpcUrl) throw new Error("missing Robinhood RPC");
   const timer = withTimeout(timeoutMs);
@@ -75,6 +95,7 @@ export async function classifyRhAddress(address, options = {}) {
   ].filter(Boolean))];
   const probes = [
     blockscoutTokenProbe(clean, fetchImpl, timeoutMs),
+    dexScreenerTokenProbe(clean, fetchImpl, timeoutMs),
     ...rpcUrls.map((url) => rpcTokenProbe(clean, url, fetchImpl, timeoutMs)),
   ];
   // A positive ERC-20 answer is authoritative and may return immediately. A negative RPC answer must
