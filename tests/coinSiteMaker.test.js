@@ -14,6 +14,7 @@ test("coin site maker creates editable, published sites from the standalone CA f
   assert.match(server, /pathname\.startsWith\("\/api\/launch-os\/media\/"\)/);
   assert.match(server, /pathname\.startsWith\("\/api\/launch-os\/ai\/"\)/);
   assert.match(server, /function launchOsDefaultSite/);
+  assert.match(server, /slimewire-site-engine-v2/);
   assert.match(server, /function saveLaunchOsMedia/);
   assert.match(server, /editorial.*terminal|terminal.*editorial/);
 });
@@ -26,6 +27,11 @@ test("maker offers three curated systems, direct preview, uploads, AI art, and o
   assert.match(maker, /\/api\/launch-os\/ai\//);
   assert.match(ai, /export async function aiSiteArt/);
   assert.match(ai, /ultra-wide website hero artwork/);
+  for (const section of ["market", "lore", "gallery", "howToBuy", "roadmap", "socials", "memeMaker"]) {
+    assert.match(maker, new RegExp(`id="sec-${section}"`), `${section} must exist before the first save`);
+  }
+  assert.match(maker, /REAL GENERATION ENGINE/);
+  assert.match(maker, /fal\.ai generates custom hero/);
 });
 
 test("published coin sites include live market, chart, lore, gallery, buy flow, roadmap, socials and meme studio", () => {
@@ -35,6 +41,19 @@ test("published coin sites include live market, chart, lore, gallery, buy flow, 
   assert.match(site, /mobileBuy/);
   assert.match(site, /canvas id="meme"/);
   assert.match(site, /location\.search/);
+  assert.match(site, /siteHeroDrift/);
+  assert.match(site, /LIVE • VERIFIED CA • COMMUNITY/);
+});
+
+test("site generation resolves both Solana and Robinhood Chain contracts", () => {
+  const start = server.indexOf("async function resolveSocialKitToken");
+  const body = server.slice(start, start + 2600);
+  assert.match(body, /\^0x\[0-9a-fA-F\]\{40\}\$/);
+  assert.match(body, /gatherRhScan\(target\)/);
+  assert.match(body, /chain: "robinhood"/);
+  assert.match(body, /isLikelySolMint\(target\)/);
+  assert.match(body, /getDexTokenMetadata\(target/);
+  assert.match(body, /chain: "solana"/);
 });
 
 test("site maker is discoverable from both web shells", () => {

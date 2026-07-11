@@ -56961,10 +56961,12 @@ function launchOsDefaultContent(token, publicUrl) {
 function launchOsDefaultSite(token, publicUrl, mode = "official") {
   const symbol = String(token.symbol || "COIN").replace(/^\$+/, "");
   const chain = token.chain === "robinhood" ? "Robinhood Chain" : "Solana";
+  const description = launchOsCleanText(token.description || `${token.name} is a community-powered memecoin built on ${chain}.`, 1800);
   return {
-    template: "cinematic", accent: "#b7ff00", prompt: "", headline: `${token.name}. Born for ${chain}.`,
-    subhead: `${mode === "cto" ? "The community takeover" : "The official home"} of $${symbol}. Live market data, lore and community in one place.`,
-    lore: launchOsCleanText(token.description || `${token.name} is a community-powered memecoin built on ${chain}.`, 1800),
+    engine: "slimewire-site-engine-v2", generatedAt: new Date().toISOString(),
+    template: "cinematic", accent: "#b7ff00", prompt: "", headline: `${token.name}. Built to own the timeline.`,
+    subhead: `${mode === "cto" ? "The community takeover" : "The official home"} of $${symbol} on ${chain}—live market intelligence, verified links and the full story in one world.`,
+    lore: `${description}\n\n$${symbol} is built around a simple idea: make the identity unmistakable, keep the contract verifiable and give the community one home for every official link and market signal.`.slice(0, 2400),
     roadmap: ["Launch the signal", "Grow the community", "Take over the timeline"],
     sections: { market: true, lore: true, gallery: true, howToBuy: true, roadmap: true, socials: true, memeMaker: true },
     media: { pfp: token.imageUrl || "", hero: token.imageUrl || "", gallery: token.imageUrl ? [token.imageUrl] : [] }, publicUrl
