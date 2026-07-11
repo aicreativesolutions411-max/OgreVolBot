@@ -4949,6 +4949,7 @@ async function main() {
     console.log("Autopilot STOPPED (AUTOPILOT_ENABLED=false) — Ogre A.I. tick off, no auto-trading.");
   }
   startHolderRewardAutoClaimRunner();
+  startPartnerRewardRunner();
   startDevObservatory(); // brain/dev-rep one-time loads + the Launch Sniper warmer always run; its credit-burning pollers are gated inside on CONFIG.autopilotEnabled
   startGroupBuyBot();
   startSubscriptionWatcher();
@@ -4993,17 +4994,17 @@ function loadConfig() {
   }
 
   const feeWallet = process.env.FEE_WALLET || "AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV";
-  // Spot platform fee — owner's PvP fee breakdown (2026-07-10): SPOT 0.5% per execution (50 bps).
-  // TRADE_FEE_BPS on Render still overrides; the default changed 65 → 50 to match the published pricing.
-  const bundleFeeBps = Number.parseInt(process.env.TRADE_FEE_BPS || process.env.BUNDLE_FEE_BPS || "50", 10);
-  const referralFeeBps = Number.parseInt(process.env.REFERRAL_FEE_BPS || "15", 10);
+  // Public pricing contract: SPOT is always 0.50% per execution. The 0.15%
+  // reward allocation is inside that fee and goes to one referral OR one
+  // active coin partner; it can never stack or increase the trader's fee.
+  const bundleFeeBps = 50;
+  const referralFeeBps = 15;
   // Connected-wallet (Phantom/Solflare) trade fee via Jupiter's referral fee,
-  // embedded in the swap the user signs. OFF until BOTH are configured:
-  // CONNECTED_TRADE_FEE_BPS (>0) and JUPITER_REFERRAL_ACCOUNT (a Jupiter
-  // referral account set up in the Jupiter referral dashboard). Test with a
-  // tiny trade before enabling; a bad referral account can reject orders.
-  const connectedTradeFeeBps = Math.max(0, Math.min(255, Number.parseInt(process.env.CONNECTED_TRADE_FEE_BPS || "0", 10) || 0));
+  // embedded in the swap the user signs. It uses the same fixed 0.50% whenever
+  // JUPITER_REFERRAL_ACCOUNT is configured; otherwise connected-wallet fees
+  // stay off because Jupiter has nowhere valid to route them.
   const jupiterReferralAccount = String(process.env.JUPITER_REFERRAL_ACCOUNT || "").trim();
+  const connectedTradeFeeBps = jupiterReferralAccount ? bundleFeeBps : 0;
   const tradingSpeedPreset = parseTradingSpeedPreset(process.env.TRADING_SPEED_PRESET || "balanced");
   const speedDefaults = tradingSpeedDefaults(tradingSpeedPreset);
   const bundleConcurrency = Number.parseInt(process.env.BUNDLE_CONCURRENCY || String(speedDefaults.bundleConcurrency), 10);
@@ -6798,6 +6799,10 @@ function startHealthServer() {
     }
     if (request.method === "GET" && ["/site-maker", "/coin-site-maker", "/website-maker"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "site-maker.html", "no-store, max-age=0");
+      return;
+    }
+    if (request.method === "GET" && (requestUrl.pathname === "/rewards" || requestUrl.pathname.startsWith("/rewards/"))) {
+      await serveStaticHtmlPage(response, "partner-rewards.html", "no-store, max-age=0");
       return;
     }
     if (request.method === "GET" && (requestUrl.pathname === "/coin-site" || requestUrl.pathname.startsWith("/coin/") || requestUrl.pathname.startsWith("/ca/"))) {
@@ -9177,6 +9182,24 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const project = await coinSitePaymentStatus(slug, editKey);
       const stored = await requireLaunchOsEditor(slug, editKey);
       sendWebJson(request, response, 200, { ok: true, project, telegramDelivery: coinSiteTelegramDeliveryForEditor(stored) });
+      return;
+    }
+    if (request.method === "GET" && pathname.startsWith("/api/partner-rewards/")) {
+      const wanted = decodeURIComponent(pathname.slice("/api/partner-rewards/".length)).trim().toLowerCase();
+      const store = await readPartnerRewards();
+      const program = Object.values(store.programs).find((row) =>
+        String(row.code || "").toLowerCase() === wanted ||
+        String(row.token?.ca || "").toLowerCase() === wanted ||
+        String(row.projectId || "").toLowerCase() === wanted
+      );
+      if (!program || program.status !== "active") { sendWebJson(request, response, 404, { ok: false, error: "Community Rewards program not found." }); return; }
+      const receipts = store.receipts.filter((row) => row.programId === program.id).slice(-30).reverse().map((row) => ({
+        id: row.id, type: row.type, at: row.at,
+        sol: row.lamports ? referralSolString(row.lamports) : "",
+        signature: row.signature || "",
+        signatures: Array.isArray(row.signatures) ? row.signatures.slice(0, 8) : []
+      }));
+      sendWebJson(request, response, 200, { ok: true, program: partnerProgramPublic(program), receipts });
       return;
     }
     if (request.method === "POST" && pathname.startsWith("/api/launch-os/edit/")) {
@@ -13435,6 +13458,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(tradeHistoryPath(), { trades: [] });
   await writeJsonIfMissing(pumpLaunchAttemptsPath(), { attempts: [] });
   await writeJsonIfMissing(holderRewardsPath(), { seen: {} });
+  await writeJsonIfMissing(partnerRewardsPath(), { programs: {}, tokenIndex: {}, receipts: [], processedFees: {} });
   await writeJsonIfMissing(rhGuardsPath(), { guards: [] });
   await writeJsonIfMissing(rhAutoBundlesPath(), { bundles: [] });
   await writeJsonIfMissing(webAuthPath(), { codes: [], sessions: [] });
@@ -13536,6 +13560,10 @@ function pumpLaunchAttemptsPath() {
 
 function holderRewardsPath() {
   return path.join(CONFIG.dataDir, "holder-rewards.json");
+}
+
+function partnerRewardsPath() {
+  return path.join(CONFIG.dataDir, "partner-rewards.json");
 }
 
 function swampLeaderboardPath() {
@@ -14422,6 +14450,42 @@ async function handleMessage(message, userId) {
       else await sendCoinSiteEditLinkDm(claimed.project, claimed.editKey, chatId);
       return;
     }
+    const partnerStart = /^\/start(?:@\w+)?\s+partner_([A-Za-z0-9-]{2,24})$/i.exec(text);
+    if (partnerStart) {
+      const store = await readPartnerRewards();
+      const program = Object.values(store.programs).find((row) => String(row.code || "").toLowerCase() === partnerStart[1].toLowerCase() && row.status === "active");
+      if (!program) await say(chatId, "That Community Rewards link is no longer active.");
+      else {
+        const pub = partnerProgramPublic(program);
+        await sayHtml(chatId, [
+          `<b>${escapeTelegramHtml(program.token?.name || program.token?.symbol || "Coin")} Community Rewards</b>`,
+          "",
+          "Every SlimeWire trade stays at 0.50% total.",
+          "Developer - <b>50% of community rewards</b>",
+          "Top holders - <b>50% of community rewards</b>",
+          "",
+          "Holder rewards use 24-hour eligibility and square-root weighting so one whale cannot take the pool."
+        ].join("\n"), { inline_keyboard: [[{ text: "Trade this coin", url: pub.tradeUrl }], [{ text: "Live rewards + receipts", url: `https://www.slimewire.org/rewards/${encodeURIComponent(program.code)}` }]] });
+      }
+      return;
+    }
+  }
+
+  const partnerCommand = /^\/(?:partner|rewards)(?:@\w+)?(?:\s+(.+))?$/i.exec(text);
+  if (partnerCommand) {
+    const wanted = String(partnerCommand[1] || "").trim().toLowerCase();
+    if (!wanted) {
+      await sayHtml(chatId, "<b>Community Rewards</b>\n\nSend <code>/rewards COIN_CA</code> to open its live developer + holder rewards dashboard.");
+      return;
+    }
+    const store = await readPartnerRewards();
+    const program = Object.values(store.programs).find((row) => row.status === "active" && [row.code, row.token?.ca, row.token?.symbol].some((value) => String(value || "").toLowerCase() === wanted));
+    if (!program) await say(chatId, "No active SlimeWire Community Rewards program was found for that coin yet.");
+    else {
+      const pub = partnerProgramPublic(program);
+      await sayHtml(chatId, `<b>${escapeTelegramHtml(program.token?.name || program.token?.symbol)} Community Rewards</b>\n\nDeveloper <b>50%</b> - Top holders <b>50%</b>\n${escapeTelegramHtml(pub.stats.rewardSol)} SOL accrued across ${pub.stats.tradeCount} SlimeWire trade${pub.stats.tradeCount === 1 ? "" : "s"}.`, { inline_keyboard: [[{ text: "Rewards + receipts", url: `https://www.slimewire.org/rewards/${encodeURIComponent(program.code)}` }], [{ text: "Trade", url: pub.tradeUrl }]] });
+    }
+    return;
   }
 
   // Owner/admin-only one-time Social Kit passes. These commands work only in the bot DM so codes
@@ -17030,7 +17094,7 @@ async function batchBuyFlow(chatId, session) {
       });
       let feeStatus = "";
       try {
-        const feeSignature = await collectSolFee(keypair, feeLamports);
+        const feeSignature = await collectSolFee(keypair, feeLamports, { userId: session.userId, tokenMint: session.data.tokenMint, chain: "solana" });
         feeStatus = feeSignature ? `, fee tx ${feeSignature}` : "";
       } catch (feeError) {
         feeStatus = `, fee failed - ${formatError(feeError)}`;
@@ -17111,7 +17175,7 @@ async function batchSellFlow(chatId, session) {
       const feeLamports = calculateFeeLamports(outputLamports);
       let feeStatus = "";
       try {
-        const feeSignature = await collectSolFee(keypair, feeLamports);
+        const feeSignature = await collectSolFee(keypair, feeLamports, { userId: session.userId, tokenMint: session.data.tokenMint, chain: "solana" });
         feeStatus = feeSignature ? `, fee tx ${feeSignature}` : "";
       } catch (feeError) {
         feeStatus = `, fee failed - ${formatError(feeError)}`;
@@ -18028,7 +18092,7 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, o
 
   let feeStatus = "";
   try {
-    const feeSignature = await collectSolFee(keypair, feeLamports, { userId: options.userId });
+    const feeSignature = await collectSolFee(keypair, feeLamports, { userId: options.userId, tokenMint, chain: "solana" });
     feeStatus = feeSignature ? `, fee tx ${feeSignature}` : "";
   } catch (feeError) {
     feeStatus = `, fee failed - ${formatError(feeError)}`;
@@ -18143,7 +18207,7 @@ async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps,
   let feeStatus = "";
 
   try {
-    const feeSignature = await collectSolFee(keypair, feeLamports, { userId: options.userId });
+    const feeSignature = await collectSolFee(keypair, feeLamports, { userId: options.userId, tokenMint, chain: "solana" });
     feeStatus = feeSignature ? `, fee tx ${feeSignature}` : "";
   } catch (feeError) {
     feeStatus = `, fee failed - ${formatError(feeError)}`;
@@ -23462,7 +23526,7 @@ async function collectSolFee(signer, feeLamports, options = {}) {
   if (!feeLamports) return null;
   const feeAmount = BigInt(feeLamports);
   if (feeAmount <= 0n) return null;
-  const targets = await referralFeeTargets(options.userId, feeAmount);
+  const targets = await referralFeeTargets(options.userId, feeAmount, options);
   const ownerLamports = Number(targets.ownerLamports);
   const referralLamports = Number(targets.referralLamports);
 
@@ -23504,7 +23568,378 @@ async function collectSolFee(signer, feeLamports, options = {}) {
       error: friendlyError(error)
     }));
   }
+  if (targets.partnerProgramId && referralLamports > 0) {
+    await recordPartnerRewardFee({
+      programId: targets.partnerProgramId,
+      chain: "solana",
+      token: options.tokenMint || "",
+      amount: referralLamports,
+      grossFee: feeAmount.toString(),
+      signature,
+      userId: options.userId || ""
+    }).catch((error) => audit("partner_reward_record_failed", {
+      programId: targets.partnerProgramId,
+      signature,
+      error: friendlyError(error)
+    }));
+  }
   return signature;
+}
+
+const PARTNER_REWARD_OWNER = "__partner_reward_vaults__";
+const PARTNER_DEV_SHARE_BPS = 5_000;
+const PARTNER_HOLDER_SHARE_BPS = 5_000;
+const PARTNER_SNAPSHOT_MS = 6 * 60 * 60 * 1000;
+const PARTNER_SETTLEMENT_MS = 24 * 60 * 60 * 1000;
+
+function partnerTokenKey(chain, token) {
+  return `${String(chain || "solana").toLowerCase()}:${String(token || "").trim().toLowerCase()}`;
+}
+
+function normalizePartnerRewardStore(value) {
+  const store = value && typeof value === "object" ? value : {};
+  return {
+    ...store,
+    programs: store.programs && typeof store.programs === "object" ? store.programs : {},
+    tokenIndex: store.tokenIndex && typeof store.tokenIndex === "object" ? store.tokenIndex : {},
+    receipts: Array.isArray(store.receipts) ? store.receipts : [],
+    processedFees: store.processedFees && typeof store.processedFees === "object" ? store.processedFees : {}
+  };
+}
+
+let partnerRewardsCache = null;
+let partnerRewardsCacheAt = 0;
+async function readPartnerRewards(options = {}) {
+  if (!options.fresh && partnerRewardsCache && Date.now() - partnerRewardsCacheAt < 5_000) return partnerRewardsCache;
+  const store = normalizePartnerRewardStore(await readJson(partnerRewardsPath()).catch(() => null));
+  partnerRewardsCache = store;
+  partnerRewardsCacheAt = Date.now();
+  return store;
+}
+
+async function mutatePartnerRewards(fn) {
+  return LockService.withLock("partner-reward-store", 15_000, async () => {
+    const store = normalizePartnerRewardStore(await readJson(partnerRewardsPath()).catch(() => null));
+    const result = await fn(store);
+    await writeJsonFile(partnerRewardsPath(), store);
+    partnerRewardsCache = store;
+    partnerRewardsCacheAt = Date.now();
+    return result;
+  });
+}
+
+function partnerProgramPublic(program) {
+  if (!program) return null;
+  const pendingDev = BigInt(program.devPendingLamports || "0");
+  const pendingHolders = BigInt(program.holderPendingLamports || "0");
+  const total = BigInt(program.totalRewardLamports || "0");
+  return {
+    id: program.id,
+    code: program.code,
+    status: program.status,
+    token: program.token,
+    publicUrl: program.publicUrl || "",
+    tradeUrl: `https://www.slimewire.org/gg?ca=${encodeURIComponent(program.token?.ca || "")}&partner=${encodeURIComponent(program.code || "")}`,
+    telegramUrl: telegramStartLink(`partner_${program.code}`),
+    allocation: { developerPct: 50, holdersPct: 50, totalTradeFeePct: 0.5 },
+    policy: program.policy,
+    stats: {
+      attributedVolumeUsd: Number(program.attributedVolumeUsd || 0),
+      rewardSol: referralSolString(total.toString()),
+      developerPendingSol: referralSolString(pendingDev.toString()),
+      holdersPendingSol: referralSolString(pendingHolders.toString()),
+      developerPaidSol: referralSolString(program.devPaidLamports || "0"),
+      holdersPaidSol: referralSolString(program.holderPaidLamports || "0"),
+      tradeCount: Number(program.tradeCount || 0),
+      nextSnapshotAt: program.nextSnapshotAt || "",
+      nextSettlementAt: program.nextSettlementAt || ""
+    },
+    updatedAt: program.updatedAt || program.createdAt || ""
+  };
+}
+
+async function partnerProgramByToken(token, chain = "") {
+  const raw = String(token || "").trim();
+  if (!raw) return null;
+  const store = await readPartnerRewards();
+  const chains = chain ? [chain] : ["solana", "robinhood"];
+  for (const rail of chains) {
+    const id = store.tokenIndex[partnerTokenKey(rail, raw)];
+    const program = id ? store.programs[id] : null;
+    if (program?.status === "active") return program;
+  }
+  return null;
+}
+
+async function ensurePartnerProgramForProject(project, payoutWallet = "") {
+  if (!project?.id || !project?.token?.ca || project.payment?.status !== "unlocked") return null;
+  const payout = String(payoutWallet || project.partner?.payoutWallet || "").trim();
+  try { new PublicKey(payout); } catch { return null; }
+  const key = partnerTokenKey(project.token.chain, project.token.ca);
+  const current = await readPartnerRewards();
+  const currentId = current.tokenIndex[key];
+  if (currentId && current.programs[currentId]) {
+    return mutatePartnerRewards((store) => {
+      const row = store.programs[currentId];
+      row.devPayoutWallet = payout;
+      row.status = "active";
+      row.publicUrl = project.publicUrl;
+      row.updatedAt = new Date().toISOString();
+      return row;
+    });
+  }
+  const id = `partner-${project.id}`;
+  const vault = await mutateWalletStore((walletStore) => {
+    const existing = walletStore.wallets.find((row) => row.ownerId === PARTNER_REWARD_OWNER && row.label === id);
+    if (existing) return existing;
+    const row = walletRecord(id, Keypair.generate(), PARTNER_REWARD_OWNER);
+    walletStore.wallets.push(row);
+    return row;
+  });
+  const secret = decryptWallet(vault).secretKey;
+  const now = new Date().toISOString();
+  const program = {
+    id,
+    code: socialKitSlug(project.token.symbol || project.token.name || project.id).toUpperCase().slice(0, 16),
+    projectId: project.id,
+    status: "active",
+    token: project.token,
+    publicUrl: project.publicUrl,
+    devPayoutWallet: payout,
+    vaultSolWallet: vault.publicKey,
+    vaultRhWallet: evmAddressFromSolana(secret),
+    devPendingLamports: "0",
+    holderPendingLamports: "0",
+    devPaidLamports: "0",
+    holderPaidLamports: "0",
+    totalRewardLamports: "0",
+    tradeCount: 0,
+    attributedVolumeUsd: 0,
+    policy: {
+      maxRecipients: 100,
+      minHoldHours: 24,
+      minSnapshots: 2,
+      weighting: "sqrt_balance",
+      maxWalletPoolPct: 5,
+      snapshotEveryHours: 6,
+      settlementEveryHours: 24
+    },
+    nextSnapshotAt: new Date(Date.now() + PARTNER_SNAPSHOT_MS).toISOString(),
+    nextSettlementAt: new Date(Date.now() + PARTNER_SETTLEMENT_MS).toISOString(),
+    createdAt: now,
+    updatedAt: now
+  };
+  return mutatePartnerRewards((store) => {
+    if (store.tokenIndex[key] && store.programs[store.tokenIndex[key]]) return store.programs[store.tokenIndex[key]];
+    let code = program.code || "PARTNER";
+    const codes = new Set(Object.values(store.programs).map((row) => String(row.code || "").toUpperCase()));
+    if (codes.has(code)) code = `${code.slice(0, 11)}-${project.id.slice(0, 4).toUpperCase()}`;
+    program.code = code;
+    store.programs[id] = program;
+    store.tokenIndex[key] = id;
+    return program;
+  });
+}
+
+async function recordPartnerRewardFee({ programId, chain, token, amount, grossFee, signature, userId }) {
+  const reward = BigInt(amount || 0);
+  if (!programId || !signature || reward <= 0n) return false;
+  return mutatePartnerRewards((store) => {
+    if (store.processedFees[signature]) return false;
+    const row = store.programs[programId];
+    if (!row || row.status !== "active") return false;
+    const holderBase = (reward * BigInt(PARTNER_HOLDER_SHARE_BPS)) / 10_000n;
+    const devBase = (reward * BigInt(PARTNER_DEV_SHARE_BPS)) / 10_000n;
+    const dev = devBase + (reward - devBase - holderBase);
+    const holders = holderBase;
+    row.devPendingLamports = (BigInt(row.devPendingLamports || "0") + dev).toString();
+    row.holderPendingLamports = (BigInt(row.holderPendingLamports || "0") + holders).toString();
+    row.totalRewardLamports = (BigInt(row.totalRewardLamports || "0") + reward).toString();
+    row.tradeCount = Number(row.tradeCount || 0) + 1;
+    row.updatedAt = new Date().toISOString();
+    store.processedFees[signature] = { programId, chain, token, rewardLamports: reward.toString(), grossFee: String(grossFee || "0"), userId: String(userId || ""), at: row.updatedAt };
+    const keys = Object.keys(store.processedFees);
+    if (keys.length > 20_000) for (const old of keys.slice(0, keys.length - 15_000)) delete store.processedFees[old];
+    return true;
+  });
+}
+
+async function recordPartnerRhFee({ programId, token, rewardWei, grossFeeWei, signature, userId }) {
+  const reward = BigInt(rewardWei || 0);
+  if (!programId || !signature || reward <= 0n) return false;
+  return mutatePartnerRewards((store) => {
+    if (store.processedFees[signature]) return false;
+    const row = store.programs[programId];
+    if (!row || row.status !== "active") return false;
+    row.rhPendingWei = (BigInt(row.rhPendingWei || "0") + reward).toString();
+    row.tradeCount = Number(row.tradeCount || 0) + 1;
+    row.updatedAt = new Date().toISOString();
+    store.processedFees[signature] = { programId, chain: "robinhood", token, rewardWei: reward.toString(), grossFeeWei: String(grossFeeWei || "0"), userId: String(userId || ""), at: row.updatedAt };
+    return true;
+  });
+}
+
+async function partnerVaultRecord(program) {
+  return (await readWalletStore()).wallets.find((row) => row.ownerId === PARTNER_REWARD_OWNER && row.label === program.id) || null;
+}
+
+async function snapshotPartnerProgram(program) {
+  const now = Date.now();
+  const policy = {
+    enabled: true,
+    shareBps: 10_000,
+    minTokens: 0,
+    minHoldHours: 24,
+    minSnapshots: 2,
+    maxRecipients: 100,
+    weighting: "sqrt_balance",
+    maxWalletPoolPct: 5,
+    excludedWallets: [program.devPayoutWallet, program.vaultSolWallet]
+  };
+  const recipients = program.token?.chain === "robinhood"
+    ? await rhHolderRewardRecipients(program.token.ca, policy, program.vaultRhWallet).catch(() => [])
+    : await solanaHolderRewardRecipients(program.token.ca, policy, program.vaultSolWallet).catch(() => []);
+  await mutatePartnerRewards((store) => {
+    const row = store.programs[program.id];
+    if (!row) return;
+    row.lastSnapshotAt = new Date(now).toISOString();
+    row.nextSnapshotAt = new Date(now + PARTNER_SNAPSHOT_MS).toISOString();
+    row.eligibleHolderCount = recipients.length;
+    row.snapshotWallets = recipients.slice(0, 100).map((item) => ({ wallet: item.wallet, amount: item.amount, weight: item.weight }));
+    row.updatedAt = row.lastSnapshotAt;
+  });
+  return recipients;
+}
+
+async function bridgePartnerRhRewards(program, vault) {
+  const pendingWei = BigInt(program.rhPendingWei || "0");
+  if (pendingWei <= 0n) return null;
+  const holderWei = (pendingWei * BigInt(PARTNER_HOLDER_SHARE_BPS)) / 10_000n;
+  const devBaseWei = (pendingWei * BigInt(PARTNER_DEV_SHARE_BPS)) / 10_000n;
+  const devWei = devBaseWei + (pendingWei - devBaseWei - holderWei);
+  const secretKey = decryptWallet(vault).secretKey;
+  const holderResult = holderWei > 0n ? await distributeRhHolderRewards({
+    signerSecretKey: secretKey,
+    tokenAddress: program.token.ca,
+    totalWei: holderWei,
+    payerAddress: program.vaultRhWallet,
+    policy: {
+      enabled: true, shareBps: 10_000, minTokens: 0, minHoldHours: 24, minSnapshots: 2,
+      maxRecipients: 100, weighting: "sqrt_balance", maxWalletPoolPct: 5,
+      excludedWallets: [program.vaultRhWallet]
+    }
+  }).catch(() => null) : null;
+  const holderPaidWei = BigInt(holderResult?.paidWei || 0);
+  if (holderPaidWei > 0n) {
+    await mutatePartnerRewards((store) => {
+      const row = store.programs[program.id];
+      if (!row) return;
+      row.rhPendingWei = (BigInt(row.rhPendingWei || "0") - holderPaidWei).toString();
+      row.rhHolderPaidWei = (BigInt(row.rhHolderPaidWei || "0") + holderPaidWei).toString();
+      store.receipts.push({ id: crypto.randomBytes(6).toString("hex"), programId: row.id, at: new Date().toISOString(), type: "holders_rh", wei: holderPaidWei.toString(), signatures: holderResult.txHashes || [] });
+    });
+  }
+  const ethAmount = `${devWei / 10n ** 18n}.${(devWei % 10n ** 18n).toString().padStart(18, "0")}`;
+  const result = await rhBridgeEthToSol({
+    solanaSecretKey: secretKey,
+    solRecipient: program.vaultSolWallet,
+    amountEth: ethAmount,
+    rpcUrl: CONFIG.rhChainRpcUrl
+  }).catch(() => null);
+  const outLamports = result?.outSol ? BigInt(Math.max(0, Math.round(Number(result.outSol) * LAMPORTS_PER_SOL))) : 0n;
+  if (!result?.hashes?.length || outLamports <= 0n) return null;
+  const sentParts = String(result.sentEth || "0").split(".");
+  const sentWei = BigInt((sentParts[0] || "0").replace(/\D/g, "") || "0") * 10n ** 18n
+    + BigInt(String(sentParts[1] || "").replace(/\D/g, "").padEnd(18, "0").slice(0, 18) || "0");
+  await mutatePartnerRewards((store) => {
+    const row = store.programs[program.id];
+    if (!row) return;
+    row.devPendingLamports = (BigInt(row.devPendingLamports || "0") + outLamports).toString();
+    row.totalRewardLamports = (BigInt(row.totalRewardLamports || "0") + outLamports).toString();
+    row.rhPendingWei = (BigInt(row.rhPendingWei || "0") - sentWei).toString();
+    row.lastRhBridgeAt = new Date().toISOString();
+    row.lastRhBridgeHashes = result.hashes;
+  });
+  return result;
+}
+
+async function settlePartnerProgram(program) {
+  return LockService.withLock(`partner-settle:${program.id}`, 120_000, async () => {
+    const vault = await partnerVaultRecord(program);
+    if (!vault) return { skipped: "vault_missing" };
+    await bridgePartnerRhRewards(program, vault).catch(() => null);
+    program = (await readPartnerRewards()).programs[program.id] || program;
+    const signer = decryptWallet(vault);
+    const balance = BigInt(await getSolBalanceCached(signer.publicKey, { force: true }).catch(() => 0));
+    const reserve = 3_000_000n;
+    let spendable = balance > reserve ? balance - reserve : 0n;
+    let devPending = BigInt(program.devPendingLamports || "0");
+    let holderPending = BigInt(program.holderPendingLamports || "0");
+    const receipts = [];
+    if (devPending >= 500_000n && spendable >= devPending) {
+      const tx = new Transaction().add(SystemProgram.transfer({ fromPubkey: signer.publicKey, toPubkey: new PublicKey(program.devPayoutWallet), lamports: Number(devPending) }));
+      const signature = await sendLegacyTransaction(tx, [signer]);
+      receipts.push({ type: "developer", lamports: devPending.toString(), signature });
+      spendable -= devPending;
+    } else devPending = 0n;
+    let holderPaid = 0n;
+    let holderResult = null;
+    if (holderPending >= 5_000_000n && spendable >= holderPending) {
+      holderResult = await distributeSolHolderRewards({
+        signer,
+        tokenMint: program.token.ca,
+        totalLamports: holderPending,
+        policy: {
+          enabled: true, shareBps: 10_000, minTokens: 0, minHoldHours: 24, minSnapshots: 2,
+          maxRecipients: 100, weighting: "sqrt_balance", maxWalletPoolPct: 5,
+          excludedWallets: [program.devPayoutWallet, program.vaultSolWallet]
+        }
+      }).catch(() => null);
+      holderPaid = BigInt(holderResult?.paidLamports || 0);
+      if (holderPaid > 0n) receipts.push({ type: "holders", lamports: holderPaid.toString(), signatures: holderResult.signatures || [] });
+    }
+    const now = new Date().toISOString();
+    await mutatePartnerRewards((store) => {
+      const row = store.programs[program.id];
+      if (!row) return;
+      if (devPending > 0n) {
+        row.devPendingLamports = (BigInt(row.devPendingLamports || "0") - devPending).toString();
+        row.devPaidLamports = (BigInt(row.devPaidLamports || "0") + devPending).toString();
+      }
+      if (holderPaid > 0n) {
+        row.holderPendingLamports = (BigInt(row.holderPendingLamports || "0") - holderPaid).toString();
+        row.holderPaidLamports = (BigInt(row.holderPaidLamports || "0") + holderPaid).toString();
+      }
+      row.lastSettlementAt = now;
+      row.nextSettlementAt = new Date(Date.now() + PARTNER_SETTLEMENT_MS).toISOString();
+      row.updatedAt = now;
+      for (const receipt of receipts) store.receipts.push({ id: crypto.randomBytes(6).toString("hex"), programId: row.id, at: now, ...receipt });
+      if (store.receipts.length > 2_000) store.receipts = store.receipts.slice(-1_500);
+    });
+    return { receipts, holderResult };
+  });
+}
+
+let partnerRewardRunnerBusy = false;
+function startPartnerRewardRunner() {
+  const tick = () => void processPartnerRewards().catch((error) => console.warn(`[partner-rewards] ${friendlyError(error)}`));
+  setTimeout(tick, 75_000);
+  setInterval(tick, 15 * 60 * 1000);
+}
+
+async function processPartnerRewards() {
+  if (partnerRewardRunnerBusy) return;
+  partnerRewardRunnerBusy = true;
+  try {
+    const programs = Object.values((await readPartnerRewards()).programs).filter((row) => row.status === "active");
+    const now = Date.now();
+    for (const program of programs.slice(0, 20)) {
+      if (!program.nextSnapshotAt || Date.parse(program.nextSnapshotAt) <= now) await snapshotPartnerProgram(program);
+      if (!program.nextSettlementAt || Date.parse(program.nextSettlementAt) <= now) await settlePartnerProgram(program);
+    }
+  } finally {
+    partnerRewardRunnerBusy = false;
+  }
 }
 
 // Up to 4 payout wallets each with a weight (%). Returns null when there's no valid split (so callers
@@ -23569,6 +24004,10 @@ function normalizeHolderRewardPolicy(raw = {}) {
     minTokens,
     minHoldHours,
     maxRecipients,
+    minSnapshots: Math.max(1, Math.min(12, Math.round(Number(source.minSnapshots || 1)))),
+    weighting: source.weighting === "sqrt_balance" ? "sqrt_balance" : "equal",
+    maxWalletPoolPct: Math.max(0, Math.min(100, Number(source.maxWalletPoolPct || 0))),
+    excludedWallets: Array.isArray(source.excludedWallets) ? source.excludedWallets.slice(0, 50) : [],
     basis: "creator_fees"
   };
 }
@@ -23633,14 +24072,44 @@ function splitBigIntByWeights(total, rows) {
   return parts;
 }
 
+function splitBigIntByWeightsCapped(total, rows, maxPct = 100) {
+  const amount = BigInt(total || 0);
+  if (amount <= 0n || !Array.isArray(rows) || !rows.length) return [];
+  const feasiblePct = Math.max(Number(maxPct || 100), 100 / rows.length);
+  const cap = (amount * BigInt(Math.max(1, Math.floor(feasiblePct * 10_000)))) / 1_000_000n;
+  const weights = rows.map((row) => BigInt(Math.max(1, Math.round(Number(row.weight || 1) * 1_000_000))));
+  const values = rows.map(() => 0n);
+  let remaining = amount;
+  let active = rows.map((_, index) => index);
+  while (remaining > 0n && active.length) {
+    const weightSum = active.reduce((sum, index) => sum + weights[index], 0n);
+    let assigned = 0n;
+    const next = [];
+    active.forEach((index, position) => {
+      const proposed = position === active.length - 1 ? remaining - assigned : (remaining * weights[index]) / weightSum;
+      const room = cap > values[index] ? cap - values[index] : 0n;
+      const value = proposed > room ? room : proposed;
+      values[index] += value;
+      assigned += value;
+      if (values[index] < cap) next.push(index);
+    });
+    if (assigned <= 0n) break;
+    remaining -= assigned;
+    active = next;
+  }
+  if (remaining > 0n) values[values.length - 1] += remaining;
+  return rows.map((row, index) => ({ ...row, value: values[index] }));
+}
+
 function holderRewardSeenKey(chain, token) {
   return `${String(chain || "").toLowerCase()}:${String(token || "").toLowerCase()}`;
 }
 
 async function markAndSelectHolderRewardRecipients({ chain, token, rows, policy, payer }) {
+  const excluded = new Set([String(payer || "").toLowerCase(), ...(Array.isArray(policy?.excludedWallets) ? policy.excludedWallets.map((v) => String(v || "").toLowerCase()) : [])].filter(Boolean));
   const clean = (Array.isArray(rows) ? rows : [])
     .map((r) => ({ wallet: String(r.wallet || r.address || "").trim(), amount: Number(r.amount || 0) }))
-    .filter((r) => r.wallet && r.amount >= Number(policy.minTokens || 0) && String(r.wallet).toLowerCase() !== String(payer || "").toLowerCase());
+    .filter((r) => r.wallet && r.amount >= Number(policy.minTokens || 0) && !excluded.has(String(r.wallet).toLowerCase()));
   if (!clean.length) return [];
   const key = holderRewardSeenKey(chain, token);
   const now = Date.now();
@@ -23652,8 +24121,16 @@ async function markAndSelectHolderRewardRecipients({ chain, token, rows, policy,
     const seen = store.seen[key];
     for (const r of clean) {
       const w = r.wallet.toLowerCase();
-      if (!seen[w]) seen[w] = now;
-      r.firstSeenAt = Number(seen[w]) || now;
+      const prior = seen[w];
+      const row = prior && typeof prior === "object"
+        ? prior
+        : { firstSeenAt: Number(prior) || now, snapshots: prior ? 1 : 0, lastSeenAt: 0 };
+      if (!row.lastSeenAt || now - Number(row.lastSeenAt) >= Math.min(PARTNER_SNAPSHOT_MS, 60 * 60 * 1000)) row.snapshots = Number(row.snapshots || 0) + 1;
+      row.lastSeenAt = now;
+      row.lastBalance = r.amount;
+      seen[w] = row;
+      r.firstSeenAt = Number(row.firstSeenAt) || now;
+      r.snapshots = Number(row.snapshots || 0);
     }
     const maxKeys = 6000;
     const all = Object.keys(store.seen);
@@ -23666,11 +24143,12 @@ async function markAndSelectHolderRewardRecipients({ chain, token, rows, policy,
     }
     await writeJsonFile(holderRewardsPath(), store);
     const minMs = Math.max(0, Number(policy.minHoldHours || 0)) * 60 * 60 * 1000;
+    const minSnapshots = Math.max(1, Number(policy.minSnapshots || 1));
     eligible = clean
-      .filter((r) => minMs <= 0 || now - Number(r.firstSeenAt || now) >= minMs)
+      .filter((r) => (minMs <= 0 || now - Number(r.firstSeenAt || now) >= minMs) && Number(r.snapshots || 0) >= minSnapshots)
       .sort((a, b) => b.amount - a.amount)
       .slice(0, Math.max(1, Math.min(100, Number(policy.maxRecipients || 100))))
-      .map((r) => ({ ...r, weight: 1 }));
+      .map((r) => ({ ...r, weight: policy.weighting === "sqrt_balance" ? Math.sqrt(Math.max(0, r.amount)) : 1 }));
   });
   return eligible;
 }
@@ -23714,7 +24192,9 @@ async function distributeSolHolderRewards({ signer, tokenMint, policy, totalLamp
   const rewardLamports = (total * BigInt(normalized.shareBps)) / 10_000n;
   if (rewardLamports < 5000n) return { paidLamports: 0n, count: 0, signature: "", reason: "dust" };
   const recipients = await solanaHolderRewardRecipients(tokenMint, normalized, signer.publicKey.toBase58()).catch(() => []);
-  const parts = splitBigIntByWeights(rewardLamports, recipients).filter((p) => p.value >= 5000n);
+  const parts = (normalized.maxWalletPoolPct
+    ? splitBigIntByWeightsCapped(rewardLamports, recipients, normalized.maxWalletPoolPct)
+    : splitBigIntByWeights(rewardLamports, recipients)).filter((p) => p.value >= 5000n);
   if (!parts.length) return { paidLamports: 0n, count: 0, signature: "", reason: "no_eligible_holders" };
   let paidLamports = 0n;
   const signatures = [];
@@ -23742,7 +24222,9 @@ async function distributeRhHolderRewards({ signerSecretKey, tokenAddress, policy
   const rewardWei = (total * BigInt(normalized.shareBps)) / 10_000n;
   if (rewardWei < 1_000_000_000_000n) return { paidWei: 0n, count: 0, txHashes: [], reason: "dust" };
   const recipients = await rhHolderRewardRecipients(tokenAddress, normalized, payerAddress).catch(() => []);
-  const parts = splitBigIntByWeights(rewardWei, recipients).filter((p) => p.value >= 1_000_000_000_000n);
+  const parts = (normalized.maxWalletPoolPct
+    ? splitBigIntByWeightsCapped(rewardWei, recipients, normalized.maxWalletPoolPct)
+    : splitBigIntByWeights(rewardWei, recipients)).filter((p) => p.value >= 1_000_000_000_000n);
   const txHashes = [];
   let paidWei = 0n;
   for (const p of parts) {
@@ -23847,12 +24329,28 @@ async function processHolderRewardAutoClaims() {
   }
 }
 
-async function referralFeeTargets(userId, feeLamports) {
+async function referralFeeTargets(userId, feeLamports, options = {}) {
   const total = BigInt(feeLamports);
-  const fallback = { ownerLamports: total, referralLamports: 0n, referralWallet: "", referralSplits: [], referrerUserId: "" };
-  if (!userId || CONFIG.bundleFeeBps <= 0 || CONFIG.referralFeeBps <= 0) return fallback;
+  const fallback = { ownerLamports: total, referralLamports: 0n, referralWallet: "", referralSplits: [], referrerUserId: "", partnerProgramId: "" };
+  if (CONFIG.bundleFeeBps <= 0 || CONFIG.referralFeeBps <= 0) return fallback;
 
   try {
+    // A registered coin partner owns the existing 0.15% reward allocation for
+    // that coin. It replaces (never stacks with) the ordinary referral share.
+    const partner = await partnerProgramByToken(options.tokenMint, options.chain || "solana");
+    if (partner?.vaultSolWallet && partner.vaultSolWallet !== CONFIG.feeWallet) {
+      new PublicKey(partner.vaultSolWallet);
+      const referralLamports = (total * BigInt(CONFIG.referralFeeBps)) / BigInt(CONFIG.bundleFeeBps);
+      if (referralLamports > 0n && referralLamports < total) return {
+        ownerLamports: total - referralLamports,
+        referralLamports,
+        referralSplits: [{ wallet: partner.vaultSolWallet, lamports: referralLamports }],
+        referralWallet: partner.vaultSolWallet,
+        referrerUserId: "",
+        partnerProgramId: partner.id
+      };
+    }
+    if (!userId) return fallback;
     const store = await readWebAuthStore();
     const profile = store.profiles[String(userId)] || {};
     const referrer = profile.referredByUserId ? store.profiles[String(profile.referredByUserId)] : null;
@@ -31785,6 +32283,8 @@ function defaultJsonForPath(filePath) {
       return { trades: [] };
     case "holder-rewards.json":
       return { seen: {} };
+    case "partner-rewards.json":
+      return { programs: {}, tokenIndex: {}, receipts: [], processedFees: {} };
     case "web-auth.json":
       return { codes: [], sessions: [], profiles: {}, browserTradeOrders: [], sessionWalletOrders: [] };
     case "lock-in-events.json":
@@ -40480,7 +40980,7 @@ async function fireCommunitySnipeThroneBundle(chatId, mint, orderedMembers, wall
       try { invalidateWalletReadCache(b.wallet.publicKey); } catch (_) {}
       // Collect the platform fee for this landed co-entry buy (carved above). Best-effort, exactly like the
       // normal buy path — this is what was missing before (bundle buys paid no fee at all).
-      try { await collectSolFee(b.keypair, b.feeLamports, { userId: b.userId }); } catch (_) {}
+      try { await collectSolFee(b.keypair, b.feeLamports, { userId: b.userId, tokenMint: mint, chain: "solana" }); } catch (_) {}
       results.push({ nameTag: b.nameTag, ok: true, sol: Number(b.m.amountSol) || 0, bundled: bundleLanded });
       recordTradeEvents([{ userId: b.userId, type: "buy", source: "community-snipe", tokenMint: mint, walletLabel: b.wallet.label, walletPublicKey: b.wallet.publicKey, solLamportsSpent: String(b.lamports), signature: b.signature }]).catch(() => {});
       if (Number(b.m.tpPct) > 0 || Number(b.m.slPct) > 0) {
@@ -50704,9 +51204,19 @@ async function webRhTradeCore(userId, body = {}, internal = {}) {
   // Skim the fee to the platform's RH fee account (converted to SOL at the fee wallet by the sweep).
   // Best-effort: the user's trade is already done — a failed skim logs, never throws.
   let feeTxHash = "";
+  let partnerFeeTxHash = "";
   if (feeWei > 0n) {
     try {
-      feeTxHash = await rhTransferEth(keypair.secretKey, rhFeeEvmWallet(CONFIG.appSecret, CONFIG.rhChainRpcUrl).address, feeWei, CONFIG.rhChainRpcUrl);
+      const partner = await partnerProgramByToken(tokenAddress, "robinhood");
+      const partnerWei = partner && CONFIG.bundleFeeBps > 0
+        ? (feeWei * BigInt(CONFIG.referralFeeBps)) / BigInt(CONFIG.bundleFeeBps)
+        : 0n;
+      const ownerWei = feeWei - partnerWei;
+      if (ownerWei > 0n) feeTxHash = await rhTransferEth(keypair.secretKey, rhFeeEvmWallet(CONFIG.appSecret, CONFIG.rhChainRpcUrl).address, ownerWei, CONFIG.rhChainRpcUrl);
+      if (partnerWei > 0n && partner?.vaultRhWallet) {
+        partnerFeeTxHash = await rhTransferEth(keypair.secretKey, partner.vaultRhWallet, partnerWei, CONFIG.rhChainRpcUrl);
+        await recordPartnerRhFee({ programId: partner.id, token: tokenAddress, rewardWei: partnerWei, grossFeeWei: feeWei, signature: partnerFeeTxHash, userId });
+      }
     } catch (error) {
       await audit("web_rh_fee_skim_failed", { userId, side, tokenAddress, feeWei: feeWei.toString(), error: friendlyError(error) }).catch(() => {});
     }
@@ -50778,7 +51288,7 @@ async function webRhTradeCore(userId, body = {}, internal = {}) {
   ]);
   let recordError = "";
   try {
-    await audit("web_rh_trade", { userId, wallet: wallet.publicKey, evmAddress, side, tokenAddress, txHashes: hashes, out: quote.outFormatted, impact: quote.impactPercent, feeWei: feeWei.toString(), feeTxHash, creatorFeeTxHash, holderRewardTxHashes, holderRewardCount, solFunding });
+    await audit("web_rh_trade", { userId, wallet: wallet.publicKey, evmAddress, side, tokenAddress, txHashes: hashes, out: quote.outFormatted, impact: quote.impactPercent, feeWei: feeWei.toString(), feeTxHash, partnerFeeTxHash, creatorFeeTxHash, holderRewardTxHashes, holderRewardCount, solFunding });
   } catch (error) {
     // The chain transaction already landed. Never turn a delayed audit write
     // into a failed response that invites the user to submit the trade again.
@@ -57488,6 +57998,7 @@ function clientLaunchOsProject(project) {
     payment, published: payment.status === "unlocked",
     listing: project.listing || {}, crisis: project.crisis || { active: false, message: "" },
     officialClaim: Boolean(project.officialClaim), telegram: project.telegram || { groups: [] },
+    partner: project.partner || { enabled: false, status: "not_configured", payoutWallet: "" },
     telegramSetupUrl: launchOsSetupUrl(project), readiness: launchOsReadiness(project),
     linkAudit: launchOsLinkAudit(project), createdAt: project.createdAt, updatedAt: project.updatedAt
   };
@@ -57591,8 +58102,18 @@ async function createLaunchOsProject(userId, body = {}, options = {}) {
     links: { x: token.twitterUrl || "", telegram: token.telegramUrl || "", website: token.websiteUrl || publicUrl, discord: "", farcaster: "" },
     content: launchOsDefaultContent(token, publicUrl),
     telegram: { groups: [] }, listing: { notes: "", dexPaid: false, coinGeckoSubmitted: false },
-    crisis: { active: false, message: "" }
+    crisis: { active: false, message: "" },
+    partner: { enabled: false, status: "not_configured", payoutWallet: "" }
   };
+  const requestedPayout = String(body.partnerPayoutWallet || "").trim();
+  if (requestedPayout) {
+    try {
+      new PublicKey(requestedPayout);
+      project.partner = { enabled: true, status: waived ? "activating" : "awaiting_publish", payoutWallet: requestedPayout };
+    } catch {
+      throw Object.assign(new Error("Enter a valid Solana payout wallet for Community Rewards."), { statusCode: 400 });
+    }
+  }
   project.payment = {
     status: waived ? "unlocked" : "awaiting_payment", waived, code: waived ? code : "",
     priceUsd: COIN_SITE_PRICE_USD, priceSol, depositAddress, createdAt: new Date().toISOString()
@@ -57618,7 +58139,36 @@ async function createLaunchOsProject(userId, body = {}, options = {}) {
   });
   const tokenArt = await launchOsTrustedTokenImageBuffer(token.imageUrl).catch(() => null);
   await generateLaunchOsFreeMedia(project, tokenArt).catch(() => {});
+  if (waived && project.partner?.enabled) await syncLaunchOsPartner(project.id).catch(() => {});
   return clientLaunchOsProject(await getLaunchOsProjectForUser(userId, id));
+}
+
+async function syncLaunchOsPartner(projectId) {
+  const stored = (await readLaunchOs()).projects[String(projectId || "")];
+  if (!stored?.partner?.enabled || stored.payment?.status !== "unlocked") return null;
+  const program = await ensurePartnerProgramForProject(stored, stored.partner.payoutWallet);
+  if (!program) return null;
+  await mutateLaunchOs((store) => {
+    const row = store.projects[stored.id];
+    if (!row) return;
+    row.partner = { ...row.partner, enabled: true, status: "active", programId: program.id, code: program.code, dashboardUrl: `${row.publicUrl}#rewards` };
+    row.updatedAt = new Date().toISOString();
+  });
+  const latest = (await readLaunchOs()).projects[stored.id];
+  const notifyChatId = latest?.editDelivery?.deliveredChatId;
+  if (notifyChatId && !latest.partner?.notifiedAt) {
+    const dashboardUrl = `https://www.slimewire.org/rewards/${encodeURIComponent(program.code)}`;
+    try {
+      await sayHtml(notifyChatId, [
+        `<b>${escapeTelegramHtml(stored.token?.name || stored.token?.symbol)} Community Rewards is live</b>`,
+        "",
+        "Developer <b>50%</b> Â· Top holders <b>50%</b>",
+        "The total SlimeWire trade fee remains 0.50%. Share the links below with your community."
+      ].join("\n"), { inline_keyboard: [[{ text: "Live rewards dashboard", url: dashboardUrl }], [{ text: "Partner trade link", url: partnerProgramPublic(program).tradeUrl }]] });
+      await mutateLaunchOs((store) => { if (store.projects[stored.id]?.partner) store.projects[stored.id].partner.notifiedAt = new Date().toISOString(); });
+    } catch { /* owner can still open the dashboard from Site Maker */ }
+  }
+  return program;
 }
 
 async function coinSitePaymentStatus(slug, editKey) {
@@ -57648,6 +58198,10 @@ async function coinSitePaymentStatus(slug, editKey) {
         });
       } catch { /* payment stays unlocked; retry treasury sweep on the next check */ }
     }
+  }
+  if (project.payment?.status === "unlocked" && project.partner?.enabled && project.partner?.status !== "active") {
+    await syncLaunchOsPartner(project.id).catch(() => {});
+    project = await requireLaunchOsEditor(slug, editKey);
   }
   return clientLaunchOsProject(project);
 }
@@ -57781,6 +58335,17 @@ function applyLaunchOsUpdate(project, body = {}) {
   project.crisis = project.crisis || { active: false, message: "" };
   if (body.crisis?.active != null) project.crisis.active = Boolean(body.crisis.active);
   if (body.crisis?.message != null) project.crisis.message = launchOsCleanText(body.crisis.message, 500);
+  if (body.partner && typeof body.partner === "object") {
+    const payout = String(body.partner.payoutWallet || "").trim();
+    project.partner = project.partner || { enabled: false, status: "not_configured", payoutWallet: "" };
+    if (payout) {
+      try { new PublicKey(payout); }
+      catch { throw Object.assign(new Error("Enter a valid Solana payout wallet for Community Rewards."), { statusCode: 400 }); }
+      project.partner.payoutWallet = payout;
+    }
+    if (body.partner.enabled != null) project.partner.enabled = Boolean(body.partner.enabled && project.partner.payoutWallet);
+    if (project.partner.enabled && project.partner.status !== "active") project.partner.status = project.payment?.status === "unlocked" ? "activating" : "awaiting_publish";
+  }
   const site = body.site && typeof body.site === "object" ? body.site : null;
   if (site) {
     project.site = project.site || launchOsDefaultSite(project.token, project.publicUrl, project.mode);
@@ -57815,11 +58380,13 @@ async function updateLaunchOsProject(userId, body = {}) {
 
 async function updatePublicLaunchOsProject(slug, editKey, body = {}) {
   const wanted = String(slug || "").trim().toLowerCase();
-  return mutateLaunchOs((store) => {
+  const updated = await mutateLaunchOs((store) => {
     const project = Object.values(store.projects).find((item) => String(item.slug || "").toLowerCase() === wanted);
     if (!launchOsEditorMatches(project, editKey)) throw Object.assign(new Error("Private edit link is invalid or incomplete."), { statusCode: 404 });
     return clientLaunchOsProject(applyLaunchOsUpdate(project, body));
   });
+  if (updated.partner?.enabled && updated.payment?.status === "unlocked") await syncLaunchOsPartner(updated.id).catch(() => {});
+  return clientLaunchOsProject((await readLaunchOs()).projects[updated.id]);
 }
 
 async function launchOsLiveStatus(project) {

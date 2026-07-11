@@ -369,6 +369,11 @@
             <small style="display:block;color:var(--m);margin-top:6px">You must have started the SlimeWire bot once, or we’ll give you a one-tap button to do it.</small>
           </div>
           <div class="field">
+            <label>Community Rewards payout wallet (optional)</label>
+            <input id="partnerPayoutWallet" class="input" placeholder="Your Solana wallet" autocomplete="off" />
+            <small style="display:block;color:var(--m);margin-top:6px">Turn this site into a revenue hub. Trades stay 0.50% total; community rewards split 50% to the developer and 50% to eligible top holders.</small>
+          </div>
+          <div class="field">
             <label>Creative direction (optional)</label
             ><textarea
               id="prompt"
@@ -528,6 +533,18 @@
               >
             </div>
           </div>
+          <div class="group" id="partnerPanel">
+            <div class="badge">COMMUNITY REWARDS</div>
+            <h3 style="margin:10px 0 5px">Make every trade benefit the coin</h3>
+            <p class="msg">No added fee. The total stays 0.50%. The community allocation is divided equally between the developer and eligible holders.</p>
+            <div class="field">
+              <label>Developer payout wallet (Solana)</label>
+              <input id="editPartnerWallet" class="input" placeholder="Solana payout wallet" />
+            </div>
+            <label style="display:flex;gap:9px;align-items:center;border:1px solid #425642;padding:12px;border-radius:12px;cursor:pointer"><input id="partnerEnabled" type="checkbox" style="width:auto" /> Enable Community Rewards</label>
+            <div class="actions" style="margin-top:9px"><a id="partnerDashboard" class="btn primary" target="_blank" hidden>Open live rewards dashboard</a></div>
+            <p id="partnerState" class="msg"></p>
+          </div>
           <div id="studioMsg" class="msg" aria-live="polite"></div>
           <div class="group">
             <label>Permanent site link</label>
@@ -626,6 +643,9 @@
           sections.forEach(
             (x) => (p.site.sections[x] = $(`#sec-${x}`).checked),
           );
+          p.partner = p.partner || {};
+          p.partner.enabled = Boolean($("#partnerEnabled").checked);
+          p.partner.payoutWallet = $("#editPartnerWallet").value.trim();
         }
         function renderTelegramDelivery() {
           const box = $("#telegramDelivery"), d = telegramDelivery || {};
@@ -646,6 +666,16 @@
           $("#subhead").value = p.site.subhead || "";
           $("#lore").value = p.site.lore || "";
           $("#aiPrompt").value = p.site.prompt || "";
+          $("#editPartnerWallet").value = p.partner?.payoutWallet || "";
+          $("#partnerEnabled").checked = Boolean(p.partner?.enabled);
+          $("#partnerState").textContent = p.partner?.status === "active"
+            ? "✓ Active — developer and holder rewards accrue automatically from SlimeWire trades."
+            : p.partner?.enabled ? "Activates automatically as soon as this site is published." : "Optional. Add a payout wallet and enable it when ready.";
+          const partnerDashboard = $("#partnerDashboard");
+          if (p.partner?.code) {
+            partnerDashboard.href = `/rewards/${encodeURIComponent(p.partner.code)}`;
+            partnerDashboard.hidden = false;
+          } else partnerDashboard.hidden = true;
           $("#checks").innerHTML = sections
             .map(
               (x) =>
@@ -731,7 +761,7 @@
             const d = await api("/api/launch-os/edit/" + p.slug, {
               method: "POST",
               key,
-              body: JSON.stringify({ site: p.site }),
+              body: JSON.stringify({ site: p.site, partner: p.partner }),
             });
             p = d.project;
             $("#frame").src = previewUrl();
@@ -764,6 +794,7 @@
                 mode: "official",
                 code: $("#siteCode").value,
                 telegramUsername: tgUsername,
+                partnerPayoutWallet: $("#partnerPayoutWallet").value.trim(),
               }),
             });
             p = d.project;
