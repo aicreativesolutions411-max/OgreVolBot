@@ -57,6 +57,7 @@ test("Launch OS standalone editor needs no terminal login and protects edits wit
   assert.match(dashboard, /\/api\/launch-os\/edit\//);
   assert.match(dashboard, /\/api\/launch-os\/live\//);
   assert.match(dashboard, /Copy private edit link/);
+  assert.match(dashboard, /\/launch-os\?project=/);
   assert.doesNotMatch(dashboard, /ogreWebToken|\/api\/web\/launch-os/);
 });
 
