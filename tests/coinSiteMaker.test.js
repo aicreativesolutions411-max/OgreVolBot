@@ -114,6 +114,7 @@ test("coin sites charge $10 in SOL, support one-time admin codes, and retain a p
   assert.match(server, /\/ca\/\$\{encodeURIComponent\(publicSlug\)\}/);
   assert.match(server, /project\.publicSlug/);
   assert.match(site, /location\.pathname\.split\("\/ca\/"\)/);
+  assert.match(site, /`\/ca\/\$\{encodeURIComponent\(__coinProject\)\}`/);
   assert.doesNotMatch(server, /payment: project\.payment/);
 });
 
@@ -133,5 +134,7 @@ test("site maker is discoverable from both web shells", () => {
     const html = fs.readFileSync(new URL(`../web/public/${file}`, import.meta.url), "utf8");
     assert.match(html, /AI Coin Site Maker/);
     assert.match(html, /url:"\/site-maker"/);
+    assert.match(html, /location\.pathname\.match\(\/\^\\\/ca\\\//);
+    assert.match(html, /location\.replace\(`\/coin-site\?project=/);
   }
 });
