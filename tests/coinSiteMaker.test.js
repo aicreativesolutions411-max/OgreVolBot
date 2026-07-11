@@ -157,5 +157,9 @@ test("site maker is discoverable from both web shells", () => {
     assert.match(html, /url:"\/site-maker"/);
     assert.match(html, /location\.pathname\.match\(\/\^\\\/ca\\\//);
     assert.match(html, /location\.replace\(`\/coin-site\?project=/);
+    assert.match(html, /aria-label="Search coins or paste contract address"/);
+    assert.match(html, /placeholder="Search coin \/ paste CA"/);
+    assert.match(html, /\.searchbox\{display:flex;width:132px/);
+    assert.doesNotMatch(html, /id="pasteCa"/);
   }
 });

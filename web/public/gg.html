@@ -88,9 +88,8 @@
   .navdrop .dropmenu a{display:block;padding:10px 12px;border-radius:8px;font-size:13px;color:var(--text);white-space:nowrap}
   .navdrop .dropmenu a:hover{background:var(--green-dim);color:var(--green)}
   .topctrls{display:flex;align-items:center;gap:9px;flex:0 0 auto}
-  .pastebtn,.searchbox,.walletpill,.iconbtn{height:34px;border:1px solid var(--border);border-radius:10px;background:rgba(8,13,9,.7);display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12px}
-  .pastebtn{padding:0 12px}.pastebtn:hover{color:var(--text);border-color:rgba(137,255,67,.3)}
-  .searchbox{padding:0 11px;width:210px}
+  .searchbox,.walletpill,.iconbtn{height:34px;border:1px solid var(--border);border-radius:10px;background:rgba(8,13,9,.7);display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12px}
+  .searchbox{padding:0 10px;width:clamp(140px,18vw,210px)}
   .searchbox input{flex:1;background:none;border:none;outline:none;color:var(--text);font-size:12px}
   .searchbox kbd{font-size:10px;border:1px solid var(--border);border-radius:5px;padding:1px 5px;color:var(--muted)}
   .walletpill{padding:0 12px;gap:8px;cursor:pointer}
@@ -420,11 +419,12 @@
   @media(max-width:820px){
     :root{--botnav:58px}
     nav.mainnav{display:none}
-    .searchbox{display:none}
+    .searchbox{display:flex;width:132px;min-width:0;padding:0 8px}
+    .searchbox kbd{display:none}
+    .searchbox input{min-width:0;font-size:11px}
+    .brand span{display:none}
     /* Slim the header so it never overflows a phone (was 434px on a 375px screen, which crowded
        the ★ watchlist button against the wallet pill and pushed the "?" help icon off-screen). */
-    .pastebtn .pblbl{display:none}
-    .pastebtn{padding:0 10px}
     .topctrls{gap:6px}
     .topbar{gap:8px;padding:0 10px}
     .subbar{height:42px}
@@ -510,8 +510,7 @@
       </div>
     </nav>
     <div class="topctrls">
-      <button class="pastebtn" id="pasteCa">📋<span class="pblbl"> Paste CA</span></button>
-      <label class="searchbox"><span>🔍</span><input id="search" placeholder="Search name or CA…"><kbd>/</kbd></label>
+      <label class="searchbox" title="Search a coin or paste its contract address"><span>🔍</span><input id="search" aria-label="Search coins or paste contract address" placeholder="Search coin / paste CA"><kbd>/</kbd></label>
       <button class="iconbtn watchbtn" id="watchBtn" title="Watchlist — your saved coins">★</button>
       <div class="walletpill" id="walletPill" title="Wallet"><span class="dot off"></span><b id="solBal">Connect</b></div>
       <button class="iconbtn clipbtn" id="clipFarmBtn" data-icon="1" title="Clip farm — record a shareable SlimeWire clip (works on phone too)">🎬</button>
@@ -4265,7 +4264,6 @@
     if(m){go("trade",m[0]);return true;}
     return false;
   }
-  $("#pasteCa").onclick=async()=>{try{const t=await navigator.clipboard.readText();if(!tryOpenCa(t))toast("No contract address on clipboard",true);}catch(e){toast("Paste a CA in the search box",true);}};
   $("#search").addEventListener("input",e=>{const v=e.target.value.trim();state.searchTerm=v;if(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v)||/^0x[0-9a-fA-F]{40}$/.test(v))return;if(state.route!=="trending")go("trending");else applyTrendingFilter();});
   $("#search").addEventListener("keydown",e=>{if(e.key==="Enter"){if(tryOpenCa(e.target.value)){e.target.value="";state.searchTerm="";applyTrendingFilter&&applyTrendingFilter();}}});
   document.addEventListener("keydown",e=>{if(e.key==="/"&&document.activeElement.tagName!=="INPUT"){e.preventDefault();$("#search").focus();}});
