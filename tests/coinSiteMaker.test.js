@@ -119,6 +119,13 @@ test("coin sites charge $10 in SOL, support one-time admin codes, and retain a p
   assert.match(maker, /id="telegramUsername"/);
   assert.match(maker, /keeps your edit link safe/);
   assert.match(maker, /telegramUsername: tgUsername/);
+  assert.match(maker, /crypto\?\.randomUUID/);
+  assert.match(maker, /requestId/);
+  assert.match(maker, /\[502, 503, 504\]\.includes/);
+  assert.match(maker, /Nothing was charged/);
+  assert.match(maker, /d\.message \|\| d\.error/);
+  assert.match(server, /createRequestId: options\.createRequestId/);
+  assert.match(server, /launchOsEditorMatches\(existing, recoveredKey\)/);
   assert.match(maker, /Open bot \+ save edit link/);
   assert.match(maker, /Payment is tracked automatically every 15 seconds/);
   assert.match(maker, /setInterval[\s\S]*15000/);

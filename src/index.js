@@ -58221,6 +58221,7 @@ async function createLaunchOsProject(userId, body = {}, options = {}) {
   const project = {
     id, slug, publicSlug, setupCode: crypto.randomBytes(5).toString("hex"), userId: String(userId), mode,
     editorKeyHash: options.editorKeyHash || "",
+    createRequestId: options.createRequestId || "",
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), publicUrl, token,
     officialClaim: false,
     brand: {
@@ -58434,8 +58435,20 @@ async function prepareCoinSiteTelegramDelivery(projectId, editKey, rawUsername) 
 }
 
 async function createPublicLaunchOsProject(body = {}) {
+  const requestId = /^[A-Za-z0-9_-]{16,80}$/.test(String(body.requestId || "")) ? String(body.requestId) : "";
+  if (requestId) {
+    const existing = Object.values((await readLaunchOs()).projects || {}).find((row) => row.createRequestId === requestId);
+    if (existing?.editDelivery?.editKeySecret) {
+      try {
+        const recoveredKey = decryptSecretBuffer(existing.editDelivery.editKeySecret).toString("utf8");
+        if (launchOsEditorMatches(existing, recoveredKey)) {
+          return { project: clientLaunchOsProject(existing), editKey: recoveredKey, telegramDelivery: coinSiteTelegramDeliveryForEditor(existing) };
+        }
+      } catch { /* a malformed retry record falls through to a normal create */ }
+    }
+  }
   const editKey = crypto.randomBytes(24).toString("hex");
-  const project = await createLaunchOsProject("", body, { editorKeyHash: hashWebSecret(editKey) });
+  const project = await createLaunchOsProject("", body, { editorKeyHash: hashWebSecret(editKey), createRequestId: requestId });
   const telegramDelivery = await prepareCoinSiteTelegramDelivery(project.id, editKey, body.telegramUsername);
   return { project, editKey, telegramDelivery };
 }

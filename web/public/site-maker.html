@@ -604,17 +604,34 @@
           "memeMaker",
         ];
         async function api(path, opt = {}) {
-          const r = await fetch(API + path, {
-              ...opt,
-              headers: {
-                "Content-Type": "application/json",
-                ...(opt.key ? { "X-Launch-Edit-Key": opt.key } : {}),
-                ...(opt.headers || {}),
-              },
-            }),
-            d = await r.json().catch(() => ({}));
-          if (!r.ok) throw Error(d.error || "Request failed");
-          return d;
+          const retryableCreate = path === "/api/launch-os/create" && /"requestId"\s*:/.test(String(opt.body || ""));
+          const delays = retryableCreate ? [0, 1500, 3000, 6000, 10000] : [0];
+          let lastError = null;
+          for (let attempt = 0; attempt < delays.length; attempt += 1) {
+            if (delays[attempt]) await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+            try {
+              const r = await fetch(API + path, {
+                ...opt,
+                headers: {
+                  "Content-Type": "application/json",
+                  ...(opt.key ? { "X-Launch-Edit-Key": opt.key } : {}),
+                  ...(opt.headers || {}),
+                },
+              });
+              const raw = await r.text();
+              let d = {};
+              try { d = raw ? JSON.parse(raw) : {}; } catch { d = {}; }
+              if (r.ok) return d;
+              lastError = new Error(d.message || d.error || ([502, 503, 504].includes(r.status)
+                ? "SlimeWire Site Maker is reconnecting after an update. Nothing was charged. Please try again in 30 seconds."
+                : `Site Maker request failed (${r.status}).`));
+              if (!retryableCreate || ![502, 503, 504].includes(r.status)) throw lastError;
+            } catch (error) {
+              lastError = error;
+              if (!retryableCreate || (error?.message && !/fetch|network|reconnecting/i.test(error.message))) throw error;
+            }
+          }
+          throw lastError || new Error("Site Maker could not connect. Nothing was charged. Please try again in 30 seconds.");
         }
         const read = (f) =>
           new Promise((res, rej) => {
@@ -811,6 +828,7 @@
           b.disabled = true;
           b.textContent = "Building the world…";
           try {
+            const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
             const d = await api("/api/launch-os/create", {
               method: "POST",
               body: JSON.stringify({
@@ -819,6 +837,7 @@
                 code: $("#siteCode").value,
                 telegramUsername: tgUsername,
                 partnerPayoutWallet: $("#partnerPayoutWallet").value.trim(),
+                requestId,
               }),
             });
             p = d.project;
