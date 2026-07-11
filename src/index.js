@@ -13461,6 +13461,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(pumpLaunchAttemptsPath(), { attempts: [] });
   await writeJsonIfMissing(holderRewardsPath(), { seen: {} });
   await writeJsonIfMissing(partnerRewardsPath(), { programs: {}, tokenIndex: {}, receipts: [], processedFees: {} });
+  await writeJsonIfMissing(groupMentionsPath(), { groups: {} });
   await writeJsonIfMissing(rhGuardsPath(), { guards: [] });
   await writeJsonIfMissing(rhAutoBundlesPath(), { bundles: [] });
   await writeJsonIfMissing(webAuthPath(), { codes: [], sessions: [] });
@@ -14395,6 +14396,16 @@ async function handleMessage(message, userId) {
   const chatId = message.chat.id;
   const text = (message.text || "").trim();
   const session = sessions.get(chatId);
+
+  if (!isPrivateChat(message.chat)) {
+    registerTelegramGroup(message.chat);
+    if (message.from && !message.from.is_bot) void rememberGroupMentionMember(chatId, message.from).catch(() => {});
+    for (const member of (Array.isArray(message.new_chat_members) ? message.new_chat_members : [])) {
+      if (member && !member.is_bot) void rememberGroupMentionMember(chatId, member).catch(() => {});
+    }
+    if (message.left_chat_member?.id) void forgetGroupMentionMember(chatId, message.left_chat_member.id).catch(() => {});
+    if (await handleGroupMentionCall(message, userId).catch(() => false)) return;
+  }
 
   // Keep one active raid visible without littering the room: every fifth real group post replaces
   // the old live card with a fresh copy at the bottom and pins that newest copy.
@@ -32358,6 +32369,8 @@ function defaultJsonForPath(filePath) {
       return { events: [] };
     case "telegram-groups.json":
       return { groups: {} };
+    case "group-mentions.json":
+      return { groups: {} };
     case "alpha-calls.json":
     case "call-board.json":
       return { calls: [] };
@@ -32788,6 +32801,127 @@ async function runCallerIntelTick() {
 
 function telegramGroupsPath() {
   return path.join(CONFIG.dataDir, "telegram-groups.json");
+}
+
+function groupMentionsPath() {
+  return path.join(CONFIG.dataDir, "group-mentions.json");
+}
+
+async function readGroupMentions() {
+  const store = await readJson(groupMentionsPath()).catch(() => ({ groups: {} }));
+  if (!store.groups || typeof store.groups !== "object") store.groups = {};
+  return store;
+}
+
+const groupMentionSeen = new Map();
+async function rememberGroupMentionMember(chatId, user) {
+  if (!chatId || !user?.id || user.is_bot) return;
+  const username = String(user.username || "").replace(/^@+/, "").replace(/[^A-Za-z0-9_]/g, "").slice(0, 32);
+  const firstName = String(user.first_name || user.last_name || username || "member").slice(0, 80);
+  const key = `${chatId}:${user.id}`;
+  const signature = `${username}|${firstName}`;
+  const seen = groupMentionSeen.get(key);
+  if (seen?.signature === signature && Date.now() - seen.at < 60 * 60_000) return;
+  await withFileLock(groupMentionsPath(), async () => {
+    const store = await readGroupMentions();
+    const groupKey = String(chatId);
+    const group = store.groups[groupKey] && typeof store.groups[groupKey] === "object" ? store.groups[groupKey] : { members: {} };
+    if (!group.members || typeof group.members !== "object") group.members = {};
+    group.members[String(user.id)] = { id: String(user.id), username, firstName, lastSeenAt: Date.now() };
+    const ids = Object.keys(group.members);
+    if (ids.length > 1_000) {
+      ids.sort((a, b) => Number(group.members[b]?.lastSeenAt || 0) - Number(group.members[a]?.lastSeenAt || 0));
+      for (const staleId of ids.slice(1_000)) delete group.members[staleId];
+    }
+    store.groups[groupKey] = group;
+    await writeJsonFile(groupMentionsPath(), store);
+  });
+  groupMentionSeen.set(key, { signature, at: Date.now() });
+}
+
+async function forgetGroupMentionMember(chatId, userId) {
+  groupMentionSeen.delete(`${chatId}:${userId}`);
+  await withFileLock(groupMentionsPath(), async () => {
+    const store = await readGroupMentions();
+    const members = store.groups?.[String(chatId)]?.members;
+    if (!members?.[String(userId)]) return;
+    delete members[String(userId)];
+    await writeJsonFile(groupMentionsPath(), store);
+  });
+}
+
+function groupMentionHtml(user) {
+  const username = String(user?.username || "").replace(/^@+/, "").replace(/[^A-Za-z0-9_]/g, "").slice(0, 32);
+  if (username) return `@${escapeTelegramHtml(username)}`;
+  const id = String(user?.id || "").replace(/\D/g, "");
+  if (!id) return "";
+  return `<a href="tg://user?id=${id}">${escapeTelegramHtml(String(user?.firstName || user?.first_name || "member").slice(0, 80))}</a>`;
+}
+
+async function telegramGroupAdmins(chatId) {
+  const result = await telegram("getChatAdministrators", { chat_id: chatId }).catch(() => []);
+  const rows = Array.isArray(result) ? result : (Array.isArray(result?.result) ? result.result : []);
+  return rows.map((row) => row?.user).filter((user) => user?.id && !user.is_bot).map((user) => ({
+    id: String(user.id), username: String(user.username || ""), firstName: String(user.first_name || user.last_name || "admin")
+  }));
+}
+
+async function sendGroupMentionChunks(chatId, users, label, note = "") {
+  const unique = [];
+  const ids = new Set();
+  for (const user of users) {
+    const id = String(user?.id || "");
+    if (!id || ids.has(id)) continue;
+    const mention = groupMentionHtml(user);
+    if (!mention) continue;
+    ids.add(id); unique.push({ ...user, mention });
+  }
+  unique.sort((a, b) => Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0));
+  const limited = unique.slice(0, 200);
+  if (!limited.length) { await say(chatId, `No ${label.toLowerCase()} are available to mention yet.`); return 0; }
+  const chunks = [];
+  let current = [];
+  let length = 0;
+  for (const user of limited) {
+    if (current.length >= 40 || length + user.mention.length + 2 > 3_200) { chunks.push(current); current = []; length = 0; }
+    current.push(user.mention); length += user.mention.length + 2;
+  }
+  if (current.length) chunks.push(current);
+  for (let index = 0; index < chunks.length; index += 1) {
+    const header = index === 0
+      ? `📣 <b>${escapeTelegramHtml(label)}</b>${note ? `\n${escapeTelegramHtml(note)}` : ""}\n\n`
+      : `📣 <b>${escapeTelegramHtml(label)} · ${index + 1}/${chunks.length}</b>\n\n`;
+    await sayHtml(chatId, header + chunks[index].join("  ")).catch(() => {});
+  }
+  if (unique.length > limited.length) await say(chatId, `Mentioned the 200 most recently seen members. ${unique.length - limited.length} older members were skipped to protect the group from flooding.`);
+  return limited.length;
+}
+
+async function handleGroupMentionCall(message, userId) {
+  const chat = message?.chat;
+  if (!chat || isPrivateChat(chat)) return false;
+  const text = String(message.text || message.caption || "").trim();
+  const match = /^(?:#|@)(admin|admins|all|everyone)(?:\s+([\s\S]{1,500}))?\s*$/i.exec(text);
+  if (!match) return false;
+  const chatId = chat.id;
+  if (!(await isGroupBotAdmin(chatId, userId, message))) {
+    await say(chatId, "Only group admins can call group-wide mentions.");
+    return true;
+  }
+  const mode = /admin/i.test(match[1]) ? "admin" : "all";
+  if (tgCommandOnCooldown(chatId, `mention-${mode}`, mode === "all" ? 120_000 : 60_000)) {
+    await say(chatId, `${mode === "all" ? "Everyone" : "Admin"} mentions are cooling down to protect the group from spam.`);
+    return true;
+  }
+  const admins = await telegramGroupAdmins(chatId);
+  if (mode === "admin") {
+    await sendGroupMentionChunks(chatId, admins, "Admins called", match[2] || "");
+    return true;
+  }
+  const store = await readGroupMentions();
+  const known = Object.values(store.groups?.[String(chatId)]?.members || {});
+  await sendGroupMentionChunks(chatId, [...known, ...admins], "Everyone called", match[2] || "");
+  return true;
 }
 
 async function readTelegramGroups() {
@@ -44167,6 +44301,8 @@ function groupBotHelpText() {
     "• <code>/settings</code> — open the menu: tap a bot → its sub-menu of toggles + options (all clickable, no typing needed)",
     "• <code>/buybot on</code> · <code>/raid on</code> · <code>/scan on</code> · <code>/rose on</code> — or just flip them in the menu",
     "• <b>Alert Packs</b> in settings — Quiet Scanner, Launch Room, Proof Room, or All Quiet presets",
+    "• <code>#admin</code> / <code>@admin</code> — call every Telegram admin",
+    "• <code>#all</code> / <code>@all</code> — call recently seen group members (admin-only, flood-protected)",
     "",
     "🟢 <b>Buy Bot</b> — posts every buy with a <b>whale-tier badge</b> (🦐🐟🐬🐋🔱), 🌟 new-holder flag, bonding %, MC·Liq·Vol, DEX-paid + Quick-Buy",
     "• <code>/track &lt;CA&gt;</code> — set the coin to watch (or just paste a CA once)",

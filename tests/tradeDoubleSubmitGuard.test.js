@@ -978,6 +978,21 @@ test("settings menu is multi-level: home -> per-bot sub-menus, clickable toggles
   assert.match(serverSource, /if \(await applyGbInput\(message, userId\)/); // wired into the router
 });
 
+test("group admins can call admins or recently seen members without flooding", () => {
+  assert.match(serverSource, /async function handleGroupMentionCall\(/);
+  assert.match(functionBody(serverSource, "handleMessage"), /rememberGroupMentionMember/);
+  assert.match(functionBody(serverSource, "handleMessage"), /handleGroupMentionCall\(message, userId\)/);
+  const call = functionBody(serverSource, "handleGroupMentionCall");
+  assert.match(call, /admin\|admins\|all\|everyone/);
+  assert.match(call, /isGroupBotAdmin/);
+  assert.match(call, /mention-\$\{mode\}/);
+  assert.match(call, /120_000/);
+  assert.match(functionBody(serverSource, "telegramGroupAdmins"), /getChatAdministrators/);
+  assert.match(functionBody(serverSource, "sendGroupMentionChunks"), /slice\(0, 200\)/);
+  assert.match(functionBody(serverSource, "sendGroupMentionChunks"), /current\.length >= 40/);
+  assert.match(serverSource, /group-mentions\.json/);
+});
+
 test("KOL Call Feed watches public sources, is admin-selected, deduped, and posts one combined scan", () => {
   assert.match(serverSource, /allowed_updates: \["message", "callback_query", "inline_query", "channel_post"/);
   const channel = functionBody(serverSource, "handleChannelPostCommands");
