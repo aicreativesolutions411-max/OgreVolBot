@@ -925,6 +925,8 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
   // A live raid is pinned, and every fifth newer group post replaces it at the bottom without
   // leaving duplicate cards behind. Completion unpins it.
   assert.match(functionBody(serverSource, "startRaidFromDraft"), /pinChatMessage/);
+  assert.match(functionBody(serverSource, "startRaidFromDraft"), /unpinOtherRaidCardsForChat\(chatId, sent\.result\.message_id\)/);
+  assert.match(functionBody(serverSource, "unpinOtherRaidCardsForChat"), /unpinChatMessage/);
   assert.match(functionBody(serverSource, "claimRaidGroupResurface"), /postsSinceRefresh >= 5/);
   const resurface = functionBody(serverSource, "maybeResurfaceActiveRaid");
   assert.match(resurface, /copyMessage/);

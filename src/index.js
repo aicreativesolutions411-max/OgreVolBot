@@ -50477,6 +50477,7 @@ async function startRaidFromDraft(chatId, d, { fromQueue = false } = {}) {
   if (sent && sent.result && sent.result.message_id) {
     await attachRaidTgCard(res.tid, { url: res.url || d.url, symbol: res.symbol || d.symbol, targets: d.targets, startedAt, durationMs, ref: { chatId, messageId: sent.result.message_id, hasMedia: sent.hasMedia }, eng: { likes: res.likes, rts: res.rts, replies: res.replies, bookmarks: res.bookmarks || 0 } });
     scheduleRaidHardExpiry(chatId, res.tid, startedAt, durationMs);
+    await unpinOtherRaidCardsForChat(chatId, sent.result.message_id);
     const pinned = await telegram("pinChatMessage", { chat_id: chatId, message_id: sent.result.message_id, disable_notification: true }).then(() => true).catch(() => false);
     if (!pinned) await say(chatId, "Raid started, but I need the group’s Pin Messages permission to keep it pinned.").catch(() => {});
   } else {
@@ -50567,6 +50568,19 @@ async function readRaidTg() {
     }
   }
   return s;
+}
+
+async function unpinOtherRaidCardsForChat(chatId, keepMessageId) {
+  const store = await readRaidTg().catch(() => ({ cards: {} }));
+  const oldMessageIds = [];
+  for (const card of Object.values(store.cards || {})) {
+    for (const ref of (Array.isArray(card?.refs) ? card.refs : [])) {
+      if (String(ref.chatId) === String(chatId) && String(ref.messageId) !== String(keepMessageId)) oldMessageIds.push(ref.messageId);
+    }
+  }
+  const unique = [...new Set(oldMessageIds)].slice(-20);
+  for (const messageId of unique) await telegram("unpinChatMessage", { chat_id: chatId, message_id: messageId }).catch(() => {});
+  return unique.length;
 }
 
 function raidCardIsActiveForQueue(card, chatId) {
