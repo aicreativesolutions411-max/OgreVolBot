@@ -931,7 +931,12 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
   assert.match(functionBody(serverSource, "raidSetupCard"), /Duration: \$\{Number\(d\.durationMin\)/);
   const raidHandler = functionBody(serverSource, "handleTelegramRaidCommand");
   assert.match(raidHandler, /setup card send failed/);
-  assert.match(raidHandler, /Check that I can send messages/);
+  assert.match(raidHandler, /Send Messages and Pin Messages/);
+  assert.match(raidHandler, /message_thread_id: messageThreadId/); // forum-topic commands answer in the same topic
+  const alertSender = functionBody(serverSource, "sendGroupAlertMedia");
+  assert.match(serverSource, /async function sendGroupAlertMedia\([^\n]+messageThreadId = null/);
+  assert.match(alertSender, /message_thread_id: messageThreadId/);
+  assert.match(alertSender, /return \{ result: null, hasMedia: false, error \}/); // retain Telegram's real blocker
   const tweetParser = functionBody(serverSource, "parseTweetId");
   assert.match(tweetParser, /fxtwitter\|vxtwitter\|fixupx/);
   assert.match(tweetParser, /status\\\/\(\\d\+\)/);
@@ -942,15 +947,18 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
   // A live raid is pinned, and every fifth newer group post replaces it at the bottom without
   // leaving duplicate cards behind. Completion unpins it.
   assert.match(functionBody(serverSource, "startRaidFromDraft"), /pinChatMessage/);
+  assert.match(functionBody(serverSource, "startRaidFromDraft"), /messageThreadId: d\.messageThreadId/);
+  assert.match(functionBody(serverSource, "queueRaidBehindActive"), /messageThreadId: Number\(draft\.messageThreadId\)/);
   assert.match(functionBody(serverSource, "startRaidFromDraft"), /unpinOtherRaidCardsForChat\(chatId, sent\.result\.message_id\)/);
   assert.match(functionBody(serverSource, "unpinOtherRaidCardsForChat"), /unpinChatMessage/);
   assert.match(functionBody(serverSource, "claimRaidGroupResurface"), /postsSinceRefresh >= 5/);
   const resurface = functionBody(serverSource, "maybeResurfaceActiveRaid");
   assert.match(resurface, /copyMessage/);
+  assert.match(resurface, /message_thread_id: job\.ref\.messageThreadId/);
   assert.match(resurface, /pinChatMessage/);
   assert.match(resurface, /unpinChatMessage/);
   assert.match(resurface, /deleteMessage/);
-  assert.match(functionBody(serverSource, "handleMessage"), /maybeResurfaceActiveRaid\(chatId, message\.message_id\)/);
+  assert.match(functionBody(serverSource, "handleMessage"), /maybeResurfaceActiveRaid\(chatId, message\.message_id, message\.message_thread_id\)/);
   const cancel = functionBody(serverSource, "cancelActiveRaidForChat");
   assert.match(cancel, /card\.refs = card\.refs\.filter/);
   assert.match(cancel, /Raid cancelled/);

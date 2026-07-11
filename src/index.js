@@ -14468,7 +14468,7 @@ async function handleMessage(message, userId) {
   // the old live card with a fresh copy at the bottom and pins that newest copy.
   const hasGroupPost = Boolean(text || message.caption || message.photo || message.video || message.animation || message.document || message.sticker);
   if (!isPrivateChat(message.chat) && message.message_id && hasGroupPost && !text.startsWith("/")) {
-    void maybeResurfaceActiveRaid(chatId, message.message_id).catch(() => {});
+    void maybeResurfaceActiveRaid(chatId, message.message_id, message.message_thread_id).catch(() => {});
   }
 
   // All-in-one group bot: /settings + module toggles (/buybot|raid|rose|scan on|off). Group-only,
@@ -43461,12 +43461,20 @@ async function handleTelegramProofCommand(chatId) {
 async function handleTelegramRaidCommand(chatId, message, argument) {
   if (tgCommandOnCooldown(chatId, "raid", 4000)) return;
   const arg = String(argument || "").trim();
+  const messageThreadId = Number.isInteger(Number(message?.message_thread_id)) && Number(message.message_thread_id) > 0
+    ? Number(message.message_thread_id) : null;
+  console.info(`[raid] command chat=${chatId} type=${message?.chat?.type || "unknown"} thread=${messageThreadId || 0} hasArg=${arg ? 1 : 0}`);
   const from = message?.from || {};
   const by = "@" + String(from.username || from.first_name || "anon").replace(/[^A-Za-z0-9_]/g, "").slice(0, 24);
   const url = (arg.match(/https?:\/\/\S+/) || [])[0] || arg;
   const tid = parseTweetId(url);
   if (!arg || !tid) {
-    await sayHtml(chatId, [
+    await telegram("sendMessage", {
+      chat_id: chatId,
+      ...(messageThreadId ? { message_thread_id: messageThreadId } : {}),
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+      text: [
       "⚔️ <b>/raid &lt;X post link&gt;</b>",
       "",
       "Drop the post link and I open a <b>setup menu</b> — tap to set how many <b>likes, retweets, replies &amp; bookmarks</b> to hit and a duration, then 🚀 Start.",
@@ -43475,7 +43483,8 @@ async function handleTelegramRaidCommand(chatId, message, argument) {
       "Power users: <code>/raid &lt;link&gt; $SYM 500 150 80 50</code> = 500 likes · 150 RT · 80 replies · 50 bookmarks (skips the menu).",
       "Queue the next post: <code>/next &lt;X post link&gt;</code> (up to 10 waiting).",
       "Board: <a href=\"https://www.slimewire.org/raids\">slimewire.org/raids</a>"
-    ].join("\n"));
+      ].join("\n")
+    }).catch((error) => console.warn(`[raid] help send failed chat=${chatId} thread=${messageThreadId || 0}: ${friendlyError(error)}`));
     return;
   }
   // Parse: optional $TICKER + up to 4 numeric goals (likes / retweets / replies / bookmarks).
@@ -43487,13 +43496,17 @@ async function handleTelegramRaidCommand(chatId, message, argument) {
   // No goals typed → open the interactive tap-to-set menu (the "fill out + submit" flow).
   if (!nums.length) {
     const cfg = raidConfig(await getGroupBotEntry(chatId).catch(() => null));
-    const d = { tid, url, symbol, by, targets: { ...cfg.targets }, durationMin: cfg.durationMin, savedPresetLabel: raidPresetLabel(cfg), at: Date.now() };
+    const d = { tid, url, symbol, by, targets: { ...cfg.targets }, durationMin: cfg.durationMin, messageThreadId, savedPresetLabel: raidPresetLabel(cfg), at: Date.now() };
     const card = raidSetupCard(d);
-    const sent = await sendGroupAlertMedia(chatId, null, card.text, card.markup);
+    const sent = await sendGroupAlertMedia(chatId, null, card.text, card.markup, { messageThreadId });
     if (sent?.result?.message_id) raidDrafts.set(raidDraftKey(chatId, sent.result.message_id), d);
     else {
-      console.warn(`[raid] setup card send failed chat=${chatId}`);
-      await say(chatId, "Couldn't open the raid setup menu. Check that I can send messages in this group, then try again.").catch(() => {});
+      console.warn(`[raid] setup card send failed chat=${chatId} thread=${messageThreadId || 0}: ${friendlyError(sent?.error)}`);
+      await telegram("sendMessage", {
+        chat_id: chatId,
+        ...(messageThreadId ? { message_thread_id: messageThreadId } : {}),
+        text: "Couldn't open the raid setup menu. Make me an admin with Send Messages and Pin Messages, then try again."
+      }).catch(() => {});
     }
     // GC stale drafts so the map can't grow unbounded.
     if (raidDrafts.size > 200) { const cutoff = Date.now() - 3600_000; for (const [k, v] of raidDrafts) if ((v.at || 0) < cutoff) raidDrafts.delete(k); }
@@ -43505,7 +43518,7 @@ async function handleTelegramRaidCommand(chatId, message, argument) {
     : nums.length === 3 ? { likes: nums[0], rts: nums[1], replies: nums[2], bookmarks: 0 }
     : nums.length === 2 ? { likes: nums[0], rts: nums[1], replies: Math.max(1, Math.ceil(nums[0] / 8)), bookmarks: Math.max(1, Math.ceil(nums[0] / 10)) }
     : { likes: nums[0], rts: Math.max(1, Math.ceil(nums[0] / 4)), replies: Math.max(1, Math.ceil(nums[0] / 8)), bookmarks: Math.max(1, Math.ceil(nums[0] / 10)) };
-  await startRaidFromDraft(chatId, { tid, url, symbol, by, targets, durationMin: 5 });
+  await startRaidFromDraft(chatId, { tid, url, symbol, by, targets, durationMin: 5, messageThreadId });
 }
 
 async function handleTelegramNextRaidCommand(chatId, message, userId, argument) {
@@ -43548,9 +43561,11 @@ async function handleTelegramNextRaidCommand(chatId, message, userId, argument) 
   const by = "@" + String(from.username || from.first_name || "anon").replace(/[^A-Za-z0-9_]/g, "").slice(0, 24);
   const cfg = raidConfig(entry);
   const inherited = status.activeRaid || { targets: cfg.targets, durationMin: cfg.durationMin };
+  const messageThreadId = Number.isInteger(Number(message?.message_thread_id)) && Number(message.message_thread_id) > 0
+    ? Number(message.message_thread_id) : null;
   await startRaidFromDraft(chatId, {
     tid, url, symbol: symMatch ? symMatch[1] : "", by,
-    targets: { ...inherited.targets }, durationMin: inherited.durationMin
+    targets: { ...inherited.targets }, durationMin: inherited.durationMin, messageThreadId
   });
 }
 
@@ -45040,18 +45055,22 @@ async function resolveGroupTokenImage(mint) {
 }
 // Send a group alert with a picture/video when one is set, else plain text. `media` = {type,value}
 // where value is a TG file_id (admin-uploaded) or a URL. Caption carries the HTML card.
-async function sendGroupAlertMedia(chatId, media, caption, markup) {
+async function sendGroupAlertMedia(chatId, media, caption, markup, { messageThreadId = null } = {}) {
   // Returns { result, hasMedia } so callers that need the message_id (live raid cards) can edit it
   // later. hasMedia tells the editor whether to use editMessageCaption (photo/video) or
   // editMessageText. Existing callers that ignore the return value are unaffected.
   if (media && media.value) {
     const isVid = media.type === "video";
-    const payload = { chat_id: chatId, caption, parse_mode: "HTML", reply_markup: markup };
+    const payload = { chat_id: chatId, ...(messageThreadId ? { message_thread_id: messageThreadId } : {}), caption, parse_mode: "HTML", reply_markup: markup };
     payload[isVid ? "video" : "photo"] = media.value;
     try { const r = await telegram(isVid ? "sendVideo" : "sendPhoto", payload); return { result: r, hasMedia: true }; } catch {}
   }
-  const r = await telegram("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: markup || undefined }).catch(() => null);
-  return { result: r, hasMedia: false };
+  try {
+    const r = await telegram("sendMessage", { chat_id: chatId, ...(messageThreadId ? { message_thread_id: messageThreadId } : {}), text: caption, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: markup || undefined });
+    return { result: r, hasMedia: false, error: null };
+  } catch (error) {
+    return { result: null, hasMedia: false, error };
+  }
 }
 // Per-group buy/raid media override: e.customMedia {type,value} (admin /setmedia) or the coin's own
 // metadata image. Custom text header from e.customText (/setmessage).
@@ -50695,19 +50714,29 @@ async function startRaidFromDraft(chatId, d, { fromQueue = false } = {}) {
   if (!fromQueue) {
     const queued = await queueRaidBehindActive(chatId, d);
     if (queued.queued) {
-      await sayHtml(chatId, queued.full
+      const queuedText = queued.full
         ? `⏳ The raid queue is full (${RAID_QUEUE_MAX}). Let one finish or use <code>/cancel raid</code>.`
         : queued.active
         ? "⚔️ That post is already the live raid."
         : queued.duplicate
         ? `⏳ That post is already <b>#${queued.position}</b> in the raid queue.`
-        : `⏳ <b>Raid queued · #${queued.position} of ${RAID_QUEUE_MAX}</b>\nIt starts automatically when the live raid is completed or its timer ends.`).catch(() => {});
+        : `⏳ <b>Raid queued · #${queued.position} of ${RAID_QUEUE_MAX}</b>\nIt starts automatically when the live raid is completed or its timer ends.`;
+      await telegram("sendMessage", {
+        chat_id: chatId,
+        ...(d.messageThreadId ? { message_thread_id: d.messageThreadId } : {}),
+        text: queuedText,
+        parse_mode: "HTML"
+      }).catch(() => {});
       return { queued: true, position: queued.position };
     }
   }
   const res = await submitRaidPost({ url: d.url, by: d.by, symbol: d.symbol, targets: d.targets });
   if (!res.ok) {
-    await say(chatId, "Couldn't start that raid — send a valid X post link.");
+    await telegram("sendMessage", {
+      chat_id: chatId,
+      ...(d.messageThreadId ? { message_thread_id: d.messageThreadId } : {}),
+      text: "Couldn't start that raid — send a valid X post link."
+    }).catch(() => {});
     if (fromQueue) await startNextQueuedRaidForChat(chatId).catch(() => false);
     return { started: false };
   }
@@ -50717,15 +50746,24 @@ async function startRaidFromDraft(chatId, d, { fromQueue = false } = {}) {
   // Raid uses its OWN art (raidMedia) if set, else falls back to the buy art (customMedia).
   const media = (ge && ge.raidMedia && ge.raidMedia.value) ? ge.raidMedia
     : (ge && ge.customMedia && ge.customMedia.value) ? ge.customMedia : null;
-  const sent = await sendGroupAlertMedia(chatId, media, card.text, card.markup);
+  const sent = await sendGroupAlertMedia(chatId, media, card.text, card.markup, { messageThreadId: d.messageThreadId });
   if (sent && sent.result && sent.result.message_id) {
-    await attachRaidTgCard(res.tid, { url: res.url || d.url, symbol: res.symbol || d.symbol, targets: d.targets, startedAt, durationMs, ref: { chatId, messageId: sent.result.message_id, hasMedia: sent.hasMedia }, eng: { likes: res.likes, rts: res.rts, replies: res.replies, bookmarks: res.bookmarks || 0 } });
+    await attachRaidTgCard(res.tid, { url: res.url || d.url, symbol: res.symbol || d.symbol, targets: d.targets, startedAt, durationMs, ref: { chatId, messageId: sent.result.message_id, hasMedia: sent.hasMedia, messageThreadId: d.messageThreadId || null }, eng: { likes: res.likes, rts: res.rts, replies: res.replies, bookmarks: res.bookmarks || 0 } });
     scheduleRaidHardExpiry(chatId, res.tid, startedAt, durationMs);
     await unpinOtherRaidCardsForChat(chatId, sent.result.message_id);
     const pinned = await telegram("pinChatMessage", { chat_id: chatId, message_id: sent.result.message_id, disable_notification: true }).then(() => true).catch(() => false);
-    if (!pinned) await say(chatId, "Raid started, but I need the group’s Pin Messages permission to keep it pinned.").catch(() => {});
+    if (!pinned) await telegram("sendMessage", {
+      chat_id: chatId,
+      ...(d.messageThreadId ? { message_thread_id: d.messageThreadId } : {}),
+      text: "Raid started, but I need the group's Pin Messages permission to keep it pinned."
+    }).catch(() => {});
   } else {
-    await say(chatId, "Couldn't post that raid card. I'll move to the next queued raid.").catch(() => {});
+    console.warn(`[raid] live card send failed chat=${chatId} thread=${d.messageThreadId || 0}: ${friendlyError(sent?.error)}`);
+    await telegram("sendMessage", {
+      chat_id: chatId,
+      ...(d.messageThreadId ? { message_thread_id: d.messageThreadId } : {}),
+      text: "Couldn't post that raid card. Check my Send Messages permission; I'll move to the next queued raid."
+    }).catch(() => {});
     if (fromQueue) setTimeout(() => { void startNextQueuedRaidForChat(chatId); }, 0);
     return { started: false };
   }
@@ -50851,7 +50889,9 @@ async function queueRaidBehindActive(chatId, draft) {
     queue.push({
       tid: String(draft.tid), url: String(draft.url || "").slice(0, 300), symbol: String(draft.symbol || "").slice(0, 12),
       by: String(draft.by || "anon").slice(0, 30), targets: cleanRaidTargets(draft.targets),
-      durationMin: Math.max(1, Math.min(24 * 60, Math.round(Number(draft.durationMin) || 5))), queuedAt: Date.now()
+      durationMin: Math.max(1, Math.min(24 * 60, Math.round(Number(draft.durationMin) || 5))),
+      messageThreadId: Number(draft.messageThreadId) > 0 ? Number(draft.messageThreadId) : null,
+      queuedAt: Date.now()
     });
     s.queues[key] = queue.slice(0, RAID_QUEUE_MAX);
     await writeJsonFile(raidTgPath(), s);
@@ -50901,7 +50941,7 @@ async function attachRaidTgCard(tid, { url, symbol, targets, ref, eng, startedAt
     if (durationMs) c.durationMs = durationMs;
     if (eng) { c.likes = Number(eng.likes) || 0; c.rts = Number(eng.rts) || 0; c.replies = Number(eng.replies) || 0; c.bookmarks = Number(eng.bookmarks) || 0; }
     c.refs = (c.refs || []).filter((r) => String(r.chatId) !== String(ref.chatId));
-    c.refs.push({ chatId: String(ref.chatId), messageId: ref.messageId, hasMedia: !!ref.hasMedia, postsSinceRefresh: 0, startedAt: Number(startedAt) || Date.now(), durationMs: Number(durationMs) || 5 * 60_000 });
+    c.refs.push({ chatId: String(ref.chatId), messageId: ref.messageId, hasMedia: !!ref.hasMedia, messageThreadId: Number(ref.messageThreadId) > 0 ? Number(ref.messageThreadId) : null, postsSinceRefresh: 0, startedAt: Number(startedAt) || Date.now(), durationMs: Number(durationMs) || 5 * 60_000 });
     c.done = false; c.lastCard = ""; // re-arm so the new card edits at least once
     // bound the store: keep the 120 most recent cards
     const ids = Object.keys(s.cards);
@@ -50960,7 +51000,11 @@ async function finishExpiredRaidForChat(tid, chatId, expectedStartedAt = 0) {
   await telegram("unpinChatMessage", { chat_id: chatId, message_id: expired.ref.messageId }).catch(() => {});
   const nextStarted = await startNextQueuedRaidForChat(chatId).catch(() => false);
   if (!nextStarted) {
-    await sayHtml(chatId, "⏭ <b>Raid time is up.</b> Time for the next raid — send <code>/raid &lt;X post link&gt;</code> when ready.").catch(() => {});
+    await telegram("sendMessage", {
+      chat_id: chatId,
+      ...(expired.ref.messageThreadId ? { message_thread_id: expired.ref.messageThreadId } : {}),
+      text: "⏭ Raid time is up. Time for the next raid — send /raid <X post link> when ready."
+    }).catch(() => {});
   }
   return { expired: true, nextStarted };
 }
@@ -51002,7 +51046,7 @@ async function cancelActiveRaidForChat(chatId) {
   return { cancelled: true, draftCancelled, nextStarted };
 }
 
-async function claimRaidGroupResurface(chatId, incomingMessageId) {
+async function claimRaidGroupResurface(chatId, incomingMessageId, incomingMessageThreadId = null) {
   return withFileLock(raidTgPath(), async () => {
     const s = await readRaidTg();
     const candidates = Object.values(s.cards || {})
@@ -51010,7 +51054,9 @@ async function claimRaidGroupResurface(chatId, incomingMessageId) {
       .sort((a, b) => Number(b.startedAt || Date.parse(b.at || 0) || 0) - Number(a.startedAt || Date.parse(a.at || 0) || 0));
     const card = candidates[0];
     if (!card) return null;
-    const ref = card.refs.find((item) => String(item.chatId) === String(chatId));
+    const wantedThreadId = Number(incomingMessageThreadId) > 0 ? Number(incomingMessageThreadId) : null;
+    const ref = card.refs.find((item) => String(item.chatId) === String(chatId)
+      && (Number(item.messageThreadId) > 0 ? Number(item.messageThreadId) : null) === wantedThreadId);
     if (!ref || Number(incomingMessageId) <= Number(ref.messageId)) return null;
     ref.postsSinceRefresh = Math.max(0, Number(ref.postsSinceRefresh) || 0) + 1;
     const due = ref.postsSinceRefresh >= 5;
@@ -51020,8 +51066,8 @@ async function claimRaidGroupResurface(chatId, incomingMessageId) {
   }).catch(() => null);
 }
 
-async function maybeResurfaceActiveRaid(chatId, incomingMessageId) {
-  const job = await claimRaidGroupResurface(chatId, incomingMessageId);
+async function maybeResurfaceActiveRaid(chatId, incomingMessageId, incomingMessageThreadId = null) {
+  const job = await claimRaidGroupResurface(chatId, incomingMessageId, incomingMessageThreadId);
   if (!job) return false;
   const c = job.card;
   const live = buildRaidProgressCard({
@@ -51037,6 +51083,7 @@ async function maybeResurfaceActiveRaid(chatId, incomingMessageId) {
   }
   const copied = await telegram("copyMessage", {
     chat_id: chatId,
+    ...(job.ref.messageThreadId ? { message_thread_id: job.ref.messageThreadId } : {}),
     from_chat_id: chatId,
     message_id: job.ref.messageId,
     disable_notification: true,
@@ -51052,7 +51099,7 @@ async function maybeResurfaceActiveRaid(chatId, incomingMessageId) {
   } catch { /* the copied card is still usable even if Telegram says it was not modified */ }
   await attachRaidTgCard(c.tid, {
     url: c.url, symbol: c.symbol, targets: c.targets, startedAt: c.startedAt, durationMs: c.durationMs,
-    ref: { chatId, messageId: copied.message_id, hasMedia: job.ref.hasMedia },
+    ref: { chatId, messageId: copied.message_id, hasMedia: job.ref.hasMedia, messageThreadId: job.ref.messageThreadId || null },
     eng: { likes: c.likes, rts: c.rts, replies: c.replies, bookmarks: c.bookmarks }
   });
   await telegram("pinChatMessage", { chat_id: chatId, message_id: copied.message_id, disable_notification: true }).catch(() => {});
