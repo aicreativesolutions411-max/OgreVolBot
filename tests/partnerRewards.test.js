@@ -49,7 +49,7 @@ test("Cash Cow adds a holder-only 0.15% surcharge while preserving the 0.50% pla
   assert.match(distribute, /recipients: paidRecipients/);
   assert.match(dashboard, /100% of the extra reward goes to eligible holders/);
   assert.match(server, /serveStaticHtmlPage\(response, "cashcow\.html"/);
-  assert.match(redirects, /\/cashcow\s+\/cashcow\.html\s+200/);
+  assert.doesNotMatch(redirects, /\/cashcow\s+\/cashcow\.html\s+200/);
   assert.match(cashCow, /THE FIRST CTO ON ROBINHOOD CHAIN/);
   assert.match(cashCow, /0\.50%[\s\S]*\+0\.15%[\s\S]*0\.65%/);
   assert.match(cashCow, /\/api\/partner-rewards\/CASHCOW/);
