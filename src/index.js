@@ -9162,19 +9162,21 @@ async function handleWebApiRequest(request, response, requestUrl) {
       assertLaunchOsCreateAllowed(request);
       const body = await readJsonRequestBody(request);
       const result = await createPublicLaunchOsProject(body);
-      sendWebJson(request, response, 200, { ok: true, project: result.project, editKey: result.editKey });
+      sendWebJson(request, response, 200, { ok: true, project: result.project, editKey: result.editKey, telegramDelivery: result.telegramDelivery });
       return;
     }
     if (request.method === "GET" && pathname.startsWith("/api/launch-os/edit/")) {
       const slug = decodeURIComponent(pathname.slice("/api/launch-os/edit/".length));
       const project = await requireLaunchOsEditor(slug, launchOsEditorKeyFromRequest(request));
-      sendWebJson(request, response, 200, { ok: true, project: clientLaunchOsProject(project) });
+      sendWebJson(request, response, 200, { ok: true, project: clientLaunchOsProject(project), telegramDelivery: coinSiteTelegramDeliveryForEditor(project) });
       return;
     }
     if (request.method === "GET" && pathname.startsWith("/api/launch-os/payment/")) {
       const slug = decodeURIComponent(pathname.slice("/api/launch-os/payment/".length));
-      const project = await coinSitePaymentStatus(slug, launchOsEditorKeyFromRequest(request));
-      sendWebJson(request, response, 200, { ok: true, project });
+      const editKey = launchOsEditorKeyFromRequest(request);
+      const project = await coinSitePaymentStatus(slug, editKey);
+      const stored = await requireLaunchOsEditor(slug, editKey);
+      sendWebJson(request, response, 200, { ok: true, project, telegramDelivery: coinSiteTelegramDeliveryForEditor(stored) });
       return;
     }
     if (request.method === "POST" && pathname.startsWith("/api/launch-os/edit/")) {
@@ -14408,6 +14410,19 @@ async function handleMessage(message, userId) {
   }
 
   if (!text) return;
+
+  // Remember DM usernames so Site Maker can deliver a private owner link immediately next time.
+  // A first-time user can claim the same link through the one-tap /start handoff returned by the site.
+  if (isPrivateChat(message.chat)) {
+    await rememberCoinSiteTelegramUser(message.from, userId).catch(() => {});
+    const siteEditStart = /^\/start(?:@\w+)?\s+siteedit_([A-Za-z0-9_-]{16,48})$/i.exec(text);
+    if (siteEditStart) {
+      const claimed = await claimCoinSiteEditLink(siteEditStart[1], userId).catch(() => null);
+      if (!claimed) await say(chatId, "That Site Maker save link is invalid or has already been claimed by another Telegram account.");
+      else await sendCoinSiteEditLinkDm(claimed.project, claimed.editKey, chatId);
+      return;
+    }
+  }
 
   // Owner/admin-only one-time Social Kit passes. These commands work only in the bot DM so codes
   // cannot accidentally be exposed in a group. A consumed code can never be reused.
@@ -57050,8 +57065,12 @@ function publicSocialKitDraft(draft) {
 async function readLaunchOs() {
   const value = await readJson(launchOsPath()).catch(() => null);
   return value && typeof value === "object" && value.projects && typeof value.projects === "object"
-    ? { ...value, codes: value.codes && typeof value.codes === "object" ? value.codes : {} }
-    : { projects: {}, codes: {} };
+    ? {
+        ...value,
+        codes: value.codes && typeof value.codes === "object" ? value.codes : {},
+        telegramUsers: value.telegramUsers && typeof value.telegramUsers === "object" ? value.telegramUsers : {}
+      }
+    : { projects: {}, codes: {}, telegramUsers: {} };
 }
 
 async function mutateLaunchOs(fn) {
@@ -57565,10 +57584,109 @@ async function coinSitePaymentStatus(slug, editKey) {
   return clientLaunchOsProject(project);
 }
 
+function normalizeCoinSiteTelegramUsername(value = "") {
+  const clean = String(value || "").trim().replace(/^@+/, "");
+  return /^[A-Za-z0-9_]{5,32}$/.test(clean) ? clean.toLowerCase() : "";
+}
+
+async function rememberCoinSiteTelegramUser(from, userId) {
+  const username = normalizeCoinSiteTelegramUsername(from?.username);
+  if (!username || !userId) return false;
+  const current = (await readLaunchOs()).telegramUsers?.[username];
+  if (String(current?.chatId || "") === String(userId)) return true;
+  await mutateLaunchOs((store) => {
+    store.telegramUsers = store.telegramUsers || {};
+    store.telegramUsers[username] = {
+      chatId: String(userId), username: String(from.username || username),
+      firstName: launchOsCleanText(from?.first_name || "", 80), updatedAt: new Date().toISOString()
+    };
+  });
+  return true;
+}
+
+function coinSiteOwnerEditUrl(project, editKey) {
+  return `https://www.slimewire.org/site-maker?project=${encodeURIComponent(project.slug)}#edit=${encodeURIComponent(editKey)}`;
+}
+
+function coinSiteTelegramDeliveryForEditor(project) {
+  const row = project?.editDelivery || {};
+  let claimCode = "";
+  try { claimCode = row.claimSecret ? decryptSecretBuffer(row.claimSecret).toString("utf8") : ""; } catch { claimCode = ""; }
+  return {
+    status: row.deliveredAt ? "sent" : claimCode ? "needs_start" : "not_requested",
+    username: row.requestedUsername ? `@${row.requestedUsername}` : "",
+    botUrl: claimCode ? telegramStartLink(`siteedit_${claimCode}`) : "",
+    deliveredAt: row.deliveredAt || ""
+  };
+}
+
+async function sendCoinSiteEditLinkDm(project, editKey, chatId) {
+  const editUrl = coinSiteOwnerEditUrl(project, editKey);
+  await sayHtml(chatId, [
+    `🔐 <b>${escapeTelegramHtml(project.token?.name || "Coin")} Site Maker owner link</b>`,
+    "",
+    "Keep this DM. It lets you update the site text, images and generated art anytime.",
+    `<a href="${escapeTelegramHtml(editUrl)}">Open private site editor</a>`,
+    "",
+    "Never share this owner link publicly."
+  ].join("\n"), { inline_keyboard: [[{ text: "✏️ Open Site Editor", url: editUrl }], [{ text: "🌐 Open Coin Site", url: project.publicUrl }]] });
+  await mutateLaunchOs((store) => {
+    const saved = store.projects[project.id];
+    if (!saved?.editDelivery) return;
+    saved.editDelivery.deliveredAt = new Date().toISOString();
+    saved.editDelivery.deliveredChatId = String(chatId);
+  });
+  return true;
+}
+
+async function claimCoinSiteEditLink(claimCode, chatId) {
+  const claimHash = hashWebSecret(String(claimCode || ""));
+  return mutateLaunchOs((store) => {
+    const project = Object.values(store.projects).find((item) => item.editDelivery?.claimHash === claimHash);
+    if (!project?.editDelivery?.editKeySecret) return null;
+    const deliveredChatId = String(project.editDelivery.deliveredChatId || "");
+    if (deliveredChatId && deliveredChatId !== String(chatId)) return null;
+    let editKey = "";
+    try { editKey = decryptSecretBuffer(project.editDelivery.editKeySecret).toString("utf8"); } catch { return null; }
+    return { project, editKey };
+  });
+}
+
+async function prepareCoinSiteTelegramDelivery(projectId, editKey, rawUsername) {
+  const requestedUsername = normalizeCoinSiteTelegramUsername(rawUsername);
+  if (!requestedUsername) return { status: "not_requested", username: "", botUrl: "", deliveredAt: "" };
+  const claimCode = crypto.randomBytes(18).toString("base64url");
+  const project = await mutateLaunchOs((store) => {
+    const saved = store.projects[projectId];
+    if (!saved) return null;
+    saved.editDelivery = {
+      requestedUsername, claimHash: hashWebSecret(claimCode),
+      claimSecret: encryptSecret(Buffer.from(claimCode, "utf8")),
+      editKeySecret: encryptSecret(Buffer.from(editKey, "utf8")),
+      createdAt: new Date().toISOString(), deliveredAt: "", deliveredChatId: ""
+    };
+    return saved;
+  });
+  if (!project) return { status: "not_requested", username: `@${requestedUsername}`, botUrl: "", deliveredAt: "" };
+  const known = (await readLaunchOs()).telegramUsers?.[requestedUsername];
+  if (known?.chatId) {
+    try {
+      const currentChat = await telegram("getChat", { chat_id: known.chatId });
+      if (normalizeCoinSiteTelegramUsername(currentChat?.username) === requestedUsername) {
+        await sendCoinSiteEditLinkDm(project, editKey, known.chatId);
+        const refreshed = (await readLaunchOs()).projects[project.id];
+        return coinSiteTelegramDeliveryForEditor(refreshed);
+      }
+    } catch { /* user may have blocked the bot; the start link remains available */ }
+  }
+  return coinSiteTelegramDeliveryForEditor(project);
+}
+
 async function createPublicLaunchOsProject(body = {}) {
   const editKey = crypto.randomBytes(24).toString("hex");
   const project = await createLaunchOsProject("", body, { editorKeyHash: hashWebSecret(editKey) });
-  return { project, editKey };
+  const telegramDelivery = await prepareCoinSiteTelegramDelivery(project.id, editKey, body.telegramUsername);
+  return { project, editKey, telegramDelivery };
 }
 
 function applyLaunchOsUpdate(project, body = {}) {
@@ -69582,18 +69700,20 @@ function encryptSecret(secret) {
   };
 }
 
+function decryptSecretBuffer(secret) {
+  const salt = Buffer.from(secret.salt, "base64");
+  const iv = Buffer.from(secret.iv, "base64");
+  const tag = Buffer.from(secret.tag, "base64");
+  const data = Buffer.from(secret.data, "base64");
+  const key = crypto.scryptSync(CONFIG.appSecret, salt, 32);
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(data), decipher.final()]);
+}
+
 function decryptWallet(wallet) {
   try {
-    const secret = wallet.secret;
-    const salt = Buffer.from(secret.salt, "base64");
-    const iv = Buffer.from(secret.iv, "base64");
-    const tag = Buffer.from(secret.tag, "base64");
-    const data = Buffer.from(secret.data, "base64");
-    const key = crypto.scryptSync(CONFIG.appSecret, salt, 32);
-    const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
-    decipher.setAuthTag(tag);
-    const decrypted = Buffer.concat([decipher.update(data), decipher.final()]);
-    return Keypair.fromSecretKey(decrypted);
+    return Keypair.fromSecretKey(decryptSecretBuffer(wallet.secret));
   } catch {
     throw new Error("Wallet key could not be decrypted. Use the exact same APP_SECRET that created the wallets/backups, then restore or export keys.");
   }

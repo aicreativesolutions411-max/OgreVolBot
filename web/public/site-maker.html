@@ -364,6 +364,11 @@
             />
           </div>
           <div class="field">
+            <label>Telegram username — keeps your edit link safe</label>
+            <input id="telegramUsername" class="input" placeholder="@yourusername" autocomplete="off" />
+            <small style="display:block;color:var(--m);margin-top:6px">You must have started the SlimeWire bot once, or we’ll give you a one-tap button to do it.</small>
+          </div>
+          <div class="field">
             <label>Creative direction (optional)</label
             ><textarea
               id="prompt"
@@ -418,6 +423,7 @@
               >Open coin site</a
             ><button id="copyEdit" class="btn">Copy edit link</button>
           </div>
+          <div id="telegramDelivery" class="payment"></div>
           <div id="payment" class="payment"></div>
           <div class="group">
             <div class="field">
@@ -557,7 +563,9 @@
         let tpl = "cinematic",
           p = null,
           key = "",
-          starter = "";
+          starter = "",
+          telegramDelivery = null,
+          paymentTimer = null;
         const sections = [
           "market",
           "lore",
@@ -619,6 +627,16 @@
             (x) => (p.site.sections[x] = $(`#sec-${x}`).checked),
           );
         }
+        function renderTelegramDelivery() {
+          const box = $("#telegramDelivery"), d = telegramDelivery || {};
+          if (!d.username && !d.botUrl) { box.classList.remove("on"); box.innerHTML = ""; return; }
+          box.classList.add("on");
+          if (d.status === "sent") {
+            box.innerHTML = `<b style="color:var(--g)">✓ Private edit link sent to ${d.username || "Telegram"}</b><br>Keep that bot DM and reopen the editor anytime to change text or images.`;
+            return;
+          }
+          box.innerHTML = `<b>Save your private editor in Telegram</b><br>Telegram requires you to start the bot before it can DM you.${d.botUrl ? `<div class="actions" style="margin-top:9px"><a class="btn primary" href="${d.botUrl}" target="_blank">Open bot + save edit link</a></div>` : ""}`;
+        }
         function fill() {
           p.site = p.site || {};
           $("#coinName").textContent = `${p.token.name} · $${p.token.symbol}`;
@@ -645,7 +663,26 @@
           $("#intro").style.display = "none";
           $("#studio").classList.add("on");
           $("#save").hidden = false;
+          renderTelegramDelivery();
           renderPayment();
+        }
+        function beginPaymentTracking() {
+          clearInterval(paymentTimer);
+          if (!p || p.payment?.status === "unlocked") return;
+          paymentTimer = setInterval(async () => {
+            try {
+              const d = await api("/api/launch-os/payment/" + p.slug, { key });
+              p = d.project;
+              telegramDelivery = d.telegramDelivery || telegramDelivery;
+              renderTelegramDelivery();
+              if (p.published) {
+                clearInterval(paymentTimer);
+                $("#studioMsg").textContent = `✓ Payment received. Site published live at ${p.publicUrl.replace(/^https?:\/\//, "")}`;
+                $("#frame").src = previewUrl();
+              }
+              renderPayment();
+            } catch { /* keep the preview open and retry while this page is active */ }
+          }, 15000);
         }
         function renderPayment() {
           const box = $("#payment"),
@@ -658,10 +695,12 @@
             $("#openSite").textContent = "Open published site";
             $("#save").textContent = "Save + publish";
             $("#publishState").textContent = "LIVE — changes publish to this link when you save.";
+            clearInterval(paymentTimer);
             return;
           }
           box.classList.add("on");
-          box.innerHTML = `<b>Unlock this complete site for $${Number(pay.priceUsd || 10).toFixed(0)}</b><br>Send exactly <b>${Number(pay.priceSol || 0).toFixed(6)} SOL</b> to:<code>${pay.depositAddress || ""}</code><div class="actions"><button id="copyPay" class="btn">Copy address</button><button id="checkPay" class="btn primary">Check payment</button></div><div id="payMsg" class="msg">Your owner editor stays saved while payment confirms.</div>`;
+          const solUri = `solana:${pay.depositAddress || ""}?amount=${Number(pay.priceSol || 0).toFixed(6)}`;
+          box.innerHTML = `<b>1. Preview is ready — pay only when you like it.</b><br><br><b>2. Send exactly ${Number(pay.priceSol || 0).toFixed(6)} SOL</b> to publish:<code>${pay.depositAddress || ""}</code><div class="actions"><button id="copyPay" class="btn">Copy SOL address</button><a class="btn" href="${solUri}">Open SOL wallet</a><button id="checkPay" class="btn primary">Check now</button></div><div id="payMsg" class="msg">3. Payment is tracked automatically every 15 seconds. Once detected, this preview becomes the live site.</div>`;
           $("#openSite").textContent = "Open owner preview";
           $("#save").textContent = "Save preview";
           $("#publishState").textContent = "UNPUBLISHED PREVIEW — unlock with payment or an admin code to make this the live site.";
@@ -672,12 +711,15 @@
             try {
               const d = await api("/api/launch-os/payment/" + p.slug, { key });
               p = d.project;
+              telegramDelivery = d.telegramDelivery || telegramDelivery;
+              renderTelegramDelivery();
               renderPayment();
               $("#frame").src = previewUrl();
             } catch (e) {
               $("#payMsg").textContent = e.message;
             }
           };
+          beginPaymentTracking();
         }
         async function save() {
           const button = $("#save");
@@ -706,6 +748,12 @@
         }
         $("#build").onclick = async () => {
           const b = $("#build");
+          const tgUsername = $("#telegramUsername").value.trim().replace(/^@+/, "");
+          if (!/^[A-Za-z0-9_]{5,32}$/.test(tgUsername)) {
+            $("#msg").textContent = "Enter your Telegram username so the bot can permanently save your private edit link.";
+            $("#telegramUsername").focus();
+            return;
+          }
           b.disabled = true;
           b.textContent = "Building the world…";
           try {
@@ -715,10 +763,12 @@
                 input: $("#ca").value,
                 mode: "official",
                 code: $("#siteCode").value,
+                telegramUsername: tgUsername,
               }),
             });
             p = d.project;
             key = d.editKey;
+            telegramDelivery = d.telegramDelivery || null;
             p.site.template = tpl;
             p.site.prompt = $("#prompt").value;
             remember();
@@ -813,6 +863,7 @@
           api("/api/launch-os/edit/" + q, { key })
             .then((d) => {
               p = d.project;
+              telegramDelivery = d.telegramDelivery || telegramDelivery;
               fill();
             })
             .catch(() => {});
