@@ -33294,7 +33294,7 @@ function slimewireTokenLinks(tokenMint) {
 // HTML sender for rich group/channel replies: clickable pair names, tap-to-copy CAs.
 // A specific tweet link (x.com / twitter.com /<user>/status/<id>) — vs a search/intent/profile
 // URL. Only a real post should unfurl into the embedded tweet; everything else stays clean.
-const TWEET_LINK_RE = /https?:\/\/(?:www\.|mobile\.)?(?:x|twitter|fxtwitter|vxtwitter|fixupx)\.com\/(?:[^/?#\s]+\/)*status\/(\d+)/i;
+const TWEET_LINK_RE = /https?:\/\/(?:www\.|mobile\.)?(?:x|twitter|fxtwitter|vxtwitter|fixupx)\.com\/((?:[^/?#\s]+\/)*)status\/(\d+)/i;
 function hasTweetPost(text) { return TWEET_LINK_RE.test(String(text || "")); }
 // Twitter blocks Telegram's link-preview crawler, so a raw x.com link unfurls with NO media.
 // fxtwitter mirrors the post with proper OG tags, so Telegram shows the full post — image/
@@ -33306,7 +33306,9 @@ function embedTweetLinks(text) {
 function parseTweetUrl(url) {
   const m = String(url || "").match(TWEET_LINK_RE);
   if (!m) return null;
-  return { user: m[1], id: m[2], original: `https://x.com/${m[1]}/status/${m[2]}`, embed: `https://fxtwitter.com/${m[1]}/status/${m[2]}` };
+  const route = String(m[1] || "i/").replace(/\/+$/, "");
+  const user = route.split("/")[0] || "i";
+  return { user, id: m[2], original: `https://x.com/${route}/status/${m[2]}`, embed: `https://fxtwitter.com/${route}/status/${m[2]}` };
 }
 // Post an X tweet INTO chat with its image/video + text. We FETCH the tweet from the fxtwitter
 // API and send the actual media (sendVideo/sendPhoto) + text + a "See full post on X" button —

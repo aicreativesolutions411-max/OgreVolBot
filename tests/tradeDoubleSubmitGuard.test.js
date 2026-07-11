@@ -1767,6 +1767,9 @@ test("group karma stays off the hot path (cheap regex gate) + /stats reuses call
 
 // ---- X-post preview resilience: independent mirror fallback (fxtwitter IP-block → still shows media) ----
 test("postXPost pulls tweet media from multiple mirrors before the bare-link fallback", () => {
+  const parseTweet = functionBody(serverSource, "parseTweetUrl");
+  assert.match(parseTweet, /const route = String\(m\[1\]/);
+  assert.match(parseTweet, /id: m\[2\]/);                 // route capture must not displace the tweet id
   const fetchTweet = functionBody(serverSource, "fetchTweetData");
   assert.match(fetchTweet, /api\.fxtwitter\.com/);
   assert.match(fetchTweet, /api\.fixupx\.com/);
