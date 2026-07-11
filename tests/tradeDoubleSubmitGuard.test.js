@@ -1001,8 +1001,17 @@ test("group admins can call admins or recently seen members without flooding", (
   assert.match(known, /readCommunitySnipe/);
   assert.match(known, /readRoomBoard/);
   assert.match(functionBody(serverSource, "handleChatMemberUpdate"), /rememberGroupMentionMember/);
-  assert.match(functionBody(serverSource, "sendGroupMentionChunks"), /slice\(0, 200\)/);
-  assert.match(functionBody(serverSource, "sendGroupMentionChunks"), /current\.length >= 40/);
+  const sendAll = functionBody(serverSource, "sendGroupMentionChunks");
+  assert.match(sendAll, /slice\(0, 200\)/);
+  assert.match(sendAll, /index \+= 10/); // small batches keep every Telegram mention active
+  assert.match(sendAll, /sendGroupMentionEntityBatch/);
+  const entityBatch = functionBody(serverSource, "sendGroupMentionEntityBatch");
+  assert.match(entityBatch, /type = "mention"/);
+  assert.match(entityBatch, /type = "text_mention"/);
+  assert.match(entityBatch, /entities/);
+  assert.match(serverSource, /"message_reaction"/);
+  assert.match(functionBody(serverSource, "handleUpdate"), /update\.message_reaction/);
+  assert.match(functionBody(serverSource, "handleCallback"), /rememberGroupMentionMember/);
   assert.match(serverSource, /group-mentions\.json/);
 });
 

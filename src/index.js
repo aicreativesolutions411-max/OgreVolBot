@@ -5874,7 +5874,7 @@ async function setupWebhook(options = {}) {
       // channels need it. my_chat_member: fires when the bot is added, for the welcome.
       // chat_member: referral contests attribute a join to the inviter's unique invite link.
       // inline_query: read-only token explainer cards users can insert from any chat.
-      allowed_updates: ["message", "callback_query", "inline_query", "channel_post", "my_chat_member", "chat_member"],
+      allowed_updates: ["message", "callback_query", "inline_query", "channel_post", "my_chat_member", "chat_member", "message_reaction"],
       drop_pending_updates: false
     });
   } catch (error) {
@@ -13680,7 +13680,7 @@ async function sendLoop() {
       const result = await telegram("getUpdates", {
         offset,
         timeout: 30,
-        allowed_updates: ["message", "callback_query", "inline_query", "channel_post", "my_chat_member", "chat_member"]
+        allowed_updates: ["message", "callback_query", "inline_query", "channel_post", "my_chat_member", "chat_member", "message_reaction"]
       });
 
       for (const update of result) {
@@ -13707,6 +13707,15 @@ async function handleUpdate(update) {
     await handleChatMemberUpdate(update.chat_member).catch((error) => {
       console.warn(`[tg] chat_member failed: ${error && error.message}`);
     });
+    return;
+  }
+  // Reactions reveal active members who may never post text. Keep them in the
+  // learned roster so #all can call more than just speakers and admins.
+  if (update.message_reaction) {
+    const reaction = update.message_reaction;
+    if (reaction.chat?.id && !isPrivateChat(reaction.chat) && reaction.user?.id && !reaction.user.is_bot) {
+      await rememberGroupMentionMember(reaction.chat.id, reaction.user).catch(() => {});
+    }
     return;
   }
   // Channels never emit "message" - posts arrive as channel_post with no from user.
@@ -13742,6 +13751,9 @@ async function handleCallback(query, userId) {
   const chatId = query.message.chat.id;
   const chat = query.message.chat;
   const messageId = query.message?.message_id;
+  if (!isPrivateChat(chat) && query.from && !query.from.is_bot) {
+    void rememberGroupMentionMember(chatId, query.from).catch(() => {});
+  }
   void telegram("answerCallbackQuery", { callback_query_id: query.id }).catch(() => {});
 
   // All-in-one group bot: module toggle buttons (gb:*) are handled here first.
@@ -14400,6 +14412,14 @@ async function handleMessage(message, userId) {
   if (!isPrivateChat(message.chat)) {
     registerTelegramGroup(message.chat);
     if (message.from && !message.from.is_bot) void rememberGroupMentionMember(chatId, message.from).catch(() => {});
+    if (message.reply_to_message?.from && !message.reply_to_message.from.is_bot) {
+      void rememberGroupMentionMember(chatId, message.reply_to_message.from).catch(() => {});
+    }
+    for (const entity of [...(message.entities || []), ...(message.caption_entities || [])]) {
+      if (entity?.type === "text_mention" && entity.user && !entity.user.is_bot) {
+        void rememberGroupMentionMember(chatId, entity.user).catch(() => {});
+      }
+    }
     for (const member of (Array.isArray(message.new_chat_members) ? message.new_chat_members : [])) {
       if (member && !member.is_bot) void rememberGroupMentionMember(chatId, member).catch(() => {});
     }
@@ -32900,35 +32920,64 @@ async function groupMentionKnownMembers(chatId) {
   return users;
 }
 
+async function sendGroupMentionEntityBatch(chatId, users, label, note, index, total) {
+  let text = index === 0
+    ? `📣 ${label}${note ? `\n${note}` : ""}\n\n`
+    : `📣 ${label} · ${index + 1}/${total}\n\n`;
+  const entities = [];
+  for (const user of users) {
+    const offset = Buffer.byteLength(text, "utf16le") / 2;
+    text += `${user.mention}  `;
+    const entity = { offset, length: Buffer.byteLength(user.mention, "utf16le") / 2 };
+    if (user.username) entity.type = "mention";
+    else {
+      entity.type = "text_mention";
+      entity.user = {
+        id: Number(user.id),
+        is_bot: false,
+        first_name: String(user.firstName || user.first_name || "member").slice(0, 80)
+      };
+    }
+    entities.push(entity);
+  }
+  return telegram("sendMessage", {
+    chat_id: chatId,
+    text: text.trimEnd(),
+    entities,
+    disable_web_page_preview: true
+  });
+}
+
 async function sendGroupMentionChunks(chatId, users, label, note = "") {
   const unique = [];
   const ids = new Set();
   for (const user of users) {
     const id = String(user?.id || "");
     if (!id || ids.has(id)) continue;
-    const mention = groupMentionHtml(user);
+    const username = String(user?.username || "").replace(/^@+/, "").replace(/[^A-Za-z0-9_]/g, "").slice(0, 32);
+    const mention = username ? `@${username}` : String(user?.firstName || user?.first_name || "member").slice(0, 80);
     if (!mention) continue;
-    ids.add(id); unique.push({ ...user, mention });
+    ids.add(id); unique.push({ ...user, id, username, mention });
   }
   unique.sort((a, b) => Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0));
   const limited = unique.slice(0, 200);
   if (!limited.length) { await say(chatId, `No ${label.toLowerCase()} are available to mention yet.`); return 0; }
   const chunks = [];
-  let current = [];
-  let length = 0;
-  for (const user of limited) {
-    if (current.length >= 40 || length + user.mention.length + 2 > 3_200) { chunks.push(current); current = []; length = 0; }
-    current.push(user.mention); length += user.mention.length + 2;
-  }
-  if (current.length) chunks.push(current);
+  for (let index = 0; index < limited.length; index += 10) chunks.push(limited.slice(index, index + 10));
+  let delivered = 0;
+  let failed = 0;
   for (let index = 0; index < chunks.length; index += 1) {
-    const header = index === 0
-      ? `📣 <b>${escapeTelegramHtml(label)}</b>${note ? `\n${escapeTelegramHtml(note)}` : ""}\n\n`
-      : `📣 <b>${escapeTelegramHtml(label)} · ${index + 1}/${chunks.length}</b>\n\n`;
-    await sayHtml(chatId, header + chunks[index].join("  ")).catch(() => {});
+    try {
+      await sendGroupMentionEntityBatch(chatId, chunks[index], `${label} (${limited.length})`, note, index, chunks.length);
+      delivered += chunks[index].length;
+    } catch (error) {
+      failed += chunks[index].length;
+      console.warn(`[tg] group mention batch ${index + 1}/${chunks.length} failed: ${friendlyError(error)}`);
+    }
   }
   if (unique.length > limited.length) await say(chatId, `Mentioned the 200 most recently seen members. ${unique.length - limited.length} older members were skipped to protect the group from flooding.`);
-  return limited.length;
+  if (failed) await say(chatId, `Called ${delivered} members. Telegram rejected ${failed} mentions; try #all again in a moment.`);
+  return delivered;
 }
 
 async function handleGroupMentionCall(message, userId) {
