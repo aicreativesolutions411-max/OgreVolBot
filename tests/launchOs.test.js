@@ -51,7 +51,7 @@ test("Launch OS standalone editor needs no terminal login and protects edits wit
   assert.match(functionBody(serverSource, "assertLaunchOsCreateAllowed"), /record\.count > 12/);
   assert.doesNotMatch(functionBody(serverSource, "clientLaunchOsProject"), /editorKeyHash|setupCode|userId/);
 
-  assert.match(dashboard, /No terminal login or wallet connection required/);
+  assert.match(dashboard, /No account, wallet connection or setup form required/);
   assert.match(dashboard, /slimeLaunchOsEdits/);
   assert.match(dashboard, /\/api\/launch-os\/create/);
   assert.match(dashboard, /\/api\/launch-os\/edit\//);
@@ -77,9 +77,13 @@ test("Launch OS Telegram deep link configures the full group stack only for an a
 });
 
 test("Launch OS dashboard, public HQ and guide keep every launch workflow organized", () => {
-  for (const label of ["Overview", "Brand Kit", "Telegram", "Website", "Listings", "Content", "Command", "Safety"]) {
+  for (const label of ["Built For You", "Brand Assets", "Install TG", "Public Site", "Listing Pack", "X \\+ Content", "Live Tools", "Edit \\+ Safety"]) {
     assert.match(dashboard, new RegExp(label));
   }
+  assert.match(dashboard, /AUTOMATION COMPLETE/);
+  assert.match(dashboard, /Download complete launch pack/);
+  assert.match(dashboard, /Finished X \+ community package/);
+  assert.doesNotMatch(dashboard, /Readiness checklist/);
   assert.match(dashboard, /\/api\/launch-os\/create/);
   assert.match(dashboard, /\/api\/launch-os\/edit\//);
   assert.match(dashboard, /\/api\/launch-os\/live\//);
