@@ -4994,9 +4994,9 @@ function loadConfig() {
   }
 
   const feeWallet = process.env.FEE_WALLET || "AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV";
-  // Public pricing contract: SPOT is always 0.50% per execution. The 0.15%
-  // reward allocation is inside that fee and goes to one referral OR one
-  // active coin partner; it can never stack or increase the trader's fee.
+  // Default SPOT pricing is 0.50% per execution. Its normal 0.15% reward
+  // allocation stays inside that fee. Explicit token-scoped policies may add
+  // a disclosed surcharge (Cash Cow adds 0.15% for holders, totaling 0.65%).
   const bundleFeeBps = 50;
   const referralFeeBps = 15;
   // Connected-wallet (Phantom/Solflare) trade fee via Jupiter's referral fee,
@@ -6803,6 +6803,10 @@ function startHealthServer() {
     }
     if (request.method === "GET" && (requestUrl.pathname === "/rewards" || requestUrl.pathname.startsWith("/rewards/"))) {
       await serveStaticHtmlPage(response, "partner-rewards.html", "no-store, max-age=0");
+      return;
+    }
+    if (request.method === "GET" && ["/cashcow", "/cash-cow", "/cashcow-rewards"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "cashcow.html", "no-store, max-age=0");
       return;
     }
     if (request.method === "GET" && (requestUrl.pathname === "/coin-site" || requestUrl.pathname.startsWith("/coin/") || requestUrl.pathname.startsWith("/ca/"))) {
@@ -9189,6 +9193,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
     if (request.method === "GET" && pathname.startsWith("/api/partner-rewards/")) {
       const wanted = decodeURIComponent(pathname.slice("/api/partner-rewards/".length)).trim().toLowerCase();
+      if (wanted === "cashcow" || wanted === CASH_COW_RH_TOKEN) await ensureCashCowRewardsProgram();
       const store = await readPartnerRewards();
       const program = Object.values(store.programs).find((row) =>
         String(row.code || "").toLowerCase() === wanted ||
@@ -14509,12 +14514,16 @@ async function handleMessage(message, userId) {
       if (!program) await say(chatId, "That Community Rewards link is no longer active.");
       else {
         const pub = partnerProgramPublic(program);
+        const allocation = pub.allocation || {};
+        const feeLine = allocation.holderRewardFeePct > 0
+          ? `Trade fee: <b>${allocation.totalTradeFeePct.toFixed(2)}%</b> total (${allocation.platformFeePct.toFixed(2)}% SlimeWire + ${allocation.holderRewardFeePct.toFixed(2)}% holders).`
+          : `Every SlimeWire trade stays at <b>${allocation.totalTradeFeePct.toFixed(2)}%</b> total.`;
         await sayHtml(chatId, [
           `<b>${escapeTelegramHtml(program.token?.name || program.token?.symbol || "Coin")} Community Rewards</b>`,
           "",
-          "Every SlimeWire trade stays at 0.50% total.",
-          "Developer - <b>50% of community rewards</b>",
-          "Top holders - <b>50% of community rewards</b>",
+          feeLine,
+          `Developer - <b>${allocation.developerPct.toFixed(0)}% of community rewards</b>`,
+          `Top holders - <b>${allocation.holdersPct.toFixed(0)}% of community rewards</b>`,
           "",
           "Holder rewards use 24-hour eligibility and square-root weighting so one whale cannot take the pool."
         ].join("\n"), { inline_keyboard: [[{ text: "Trade this coin", url: pub.tradeUrl }], [{ text: "Live rewards + receipts", url: `https://www.slimewire.org/rewards/${encodeURIComponent(program.code)}` }]] });
@@ -14530,12 +14539,14 @@ async function handleMessage(message, userId) {
       await sayHtml(chatId, "<b>Community Rewards</b>\n\nSend <code>/rewards COIN_CA</code> to open its live developer + holder rewards dashboard.");
       return;
     }
+    if (wanted === "cashcow" || wanted === CASH_COW_RH_TOKEN) await ensureCashCowRewardsProgram();
     const store = await readPartnerRewards();
     const program = Object.values(store.programs).find((row) => row.status === "active" && [row.code, row.token?.ca, row.token?.symbol].some((value) => String(value || "").toLowerCase() === wanted));
     if (!program) await say(chatId, "No active SlimeWire Community Rewards program was found for that coin yet.");
     else {
       const pub = partnerProgramPublic(program);
-      await sayHtml(chatId, `<b>${escapeTelegramHtml(program.token?.name || program.token?.symbol)} Community Rewards</b>\n\nDeveloper <b>50%</b> - Top holders <b>50%</b>\n${escapeTelegramHtml(pub.stats.rewardSol)} SOL accrued across ${pub.stats.tradeCount} SlimeWire trade${pub.stats.tradeCount === 1 ? "" : "s"}.`, { inline_keyboard: [[{ text: "Rewards + receipts", url: `https://www.slimewire.org/rewards/${encodeURIComponent(program.code)}` }], [{ text: "Trade", url: pub.tradeUrl }]] });
+      const accrued = program.token?.chain === "robinhood" ? `${pub.stats.holderPendingEth} ETH pending for holders` : `${pub.stats.rewardSol} SOL accrued`;
+      await sayHtml(chatId, `<b>${escapeTelegramHtml(program.token?.name || program.token?.symbol)} Community Rewards</b>\n\nDeveloper <b>${pub.allocation.developerPct.toFixed(0)}%</b> - Top holders <b>${pub.allocation.holdersPct.toFixed(0)}%</b>\nTotal trade fee <b>${pub.allocation.totalTradeFeePct.toFixed(2)}%</b>.\n${escapeTelegramHtml(accrued)} across ${pub.stats.tradeCount} SlimeWire trade${pub.stats.tradeCount === 1 ? "" : "s"}.`, { inline_keyboard: [[{ text: "Rewards + receipts", url: `https://www.slimewire.org/rewards/${encodeURIComponent(program.code)}` }], [{ text: "Trade", url: pub.tradeUrl }]] });
     }
     return;
   }
@@ -23648,6 +23659,23 @@ const PARTNER_DEV_SHARE_BPS = 5_000;
 const PARTNER_HOLDER_SHARE_BPS = 5_000;
 const PARTNER_SNAPSHOT_MS = 6 * 60 * 60 * 1000;
 const PARTNER_SETTLEMENT_MS = 24 * 60 * 60 * 1000;
+const CASH_COW_RH_TOKEN = "0x4ad72e468e38ec204c605f2e058d61e4d79e2ceb";
+const CASH_COW_REWARD_BPS = 15;
+
+function partnerHolderShareBps(program) {
+  return Math.max(0, Math.min(10_000, Number(program?.allocation?.holderShareBps ?? PARTNER_HOLDER_SHARE_BPS) || 0));
+}
+
+function partnerDevShareBps(program) {
+  return Math.max(0, 10_000 - partnerHolderShareBps(program));
+}
+
+function partnerTradeFeePolicy(program) {
+  const baseBps = Math.max(0, Number(program?.feePolicy?.baseBps ?? CONFIG.bundleFeeBps) || 0);
+  const rewardBps = Math.max(0, Number(program?.feePolicy?.rewardBps ?? CONFIG.referralFeeBps) || 0);
+  const surcharge = program?.feePolicy?.mode === "surcharge";
+  return { baseBps, rewardBps, totalBps: surcharge ? baseBps + rewardBps : baseBps, surcharge };
+}
 
 function partnerTokenKey(chain, token) {
   return `${String(chain || "solana").toLowerCase()}:${String(token || "").trim().toLowerCase()}`;
@@ -23689,6 +23717,9 @@ function partnerProgramPublic(program) {
   if (!program) return null;
   const pendingHolders = BigInt(program.holderPendingLamports || "0");
   const total = BigInt(program.totalRewardLamports || "0");
+  const holderShareBps = partnerHolderShareBps(program);
+  const devShareBps = partnerDevShareBps(program);
+  const feePolicy = partnerTradeFeePolicy(program);
   return {
     id: program.id,
     code: program.code,
@@ -23697,7 +23728,13 @@ function partnerProgramPublic(program) {
     publicUrl: program.publicUrl || "",
     tradeUrl: `https://www.slimewire.org/gg?ca=${encodeURIComponent(program.token?.ca || "")}&partner=${encodeURIComponent(program.code || "")}`,
     telegramUrl: telegramStartLink(`partner_${program.code}`),
-    allocation: { developerPct: 50, holdersPct: 50, totalTradeFeePct: 0.5 },
+    allocation: {
+      developerPct: devShareBps / 100,
+      holdersPct: holderShareBps / 100,
+      platformFeePct: feePolicy.baseBps / 100,
+      holderRewardFeePct: feePolicy.surcharge ? feePolicy.rewardBps / 100 : 0,
+      totalTradeFeePct: feePolicy.totalBps / 100
+    },
     policy: program.policy,
     stats: {
       attributedVolumeUsd: Number(program.attributedVolumeUsd || 0),
@@ -23705,7 +23742,7 @@ function partnerProgramPublic(program) {
       holdersPendingSol: referralSolString(pendingHolders.toString()),
       holdersPaidSol: referralSolString(program.holderPaidLamports || "0"),
       holderPoolSol: referralSolString((pendingHolders + BigInt(program.holderPaidLamports || "0")).toString()),
-      holderPendingEth: formatTokenUnits((BigInt(program.rhPendingWei || "0") * 5_000n / 10_000n).toString(), 18),
+      holderPendingEth: formatTokenUnits((BigInt(program.rhPendingWei || "0") * BigInt(holderShareBps) / 10_000n).toString(), 18),
       holdersPaidEth: formatTokenUnits(program.rhHolderPaidWei || "0", 18),
       eligibleHolderCount: Number(program.eligibleHolderCount || 0),
       tradeCount: Number(program.tradeCount || 0),
@@ -23736,7 +23773,7 @@ function partnerHolderPublic(program, store, wallet) {
   if (!valid) return { wallet, valid: false, eligible: false, message: `Enter a valid ${chain === "robinhood" ? "Robinhood Chain" : "Solana"} wallet.` };
   const snapshot = Array.isArray(program.snapshotWallets) ? program.snapshotWallets : [];
   const pool = chain === "robinhood"
-    ? (BigInt(program.rhPendingWei || "0") * BigInt(PARTNER_HOLDER_SHARE_BPS)) / 10_000n
+    ? (BigInt(program.rhPendingWei || "0") * BigInt(partnerHolderShareBps(program))) / 10_000n
     : BigInt(program.holderPendingLamports || "0");
   const projected = splitBigIntByWeightsCapped(pool, snapshot, Number(program.policy?.maxWalletPoolPct || 5));
   const index = snapshot.findIndex((row) => partnerWalletMatches(chain, row.wallet, wallet));
@@ -23775,9 +23812,70 @@ async function partnerProgramAdminForProject(project) {
   };
 }
 
+async function ensureCashCowRewardsProgram() {
+  const key = partnerTokenKey("robinhood", CASH_COW_RH_TOKEN);
+  const current = await readPartnerRewards({ fresh: true });
+  const currentId = current.tokenIndex[key];
+  const existing = currentId ? current.programs[currentId] : null;
+  if (existing?.vaultRhWallet) {
+    if (existing.status === "active" && partnerHolderShareBps(existing) === 10_000
+      && existing.feePolicy?.mode === "surcharge" && Number(existing.feePolicy?.rewardBps) === CASH_COW_REWARD_BPS) return existing;
+    return mutatePartnerRewards((store) => {
+      const row = store.programs[currentId];
+      row.status = "active";
+      row.code = "CASHCOW";
+      row.token = { ...(row.token || {}), ca: CASH_COW_RH_TOKEN, chain: "robinhood", name: "Cash Cow", symbol: "CASHCOW", imageUrl: "https://www.slimewire.org/assets/cashcow/cashcow-holders-meme.webp" };
+      row.publicUrl = "https://www.slimewire.org/cashcow";
+      row.allocation = { holderShareBps: 10_000, developerShareBps: 0 };
+      row.feePolicy = { mode: "surcharge", baseBps: CONFIG.bundleFeeBps, rewardBps: CASH_COW_REWARD_BPS, totalBps: CONFIG.bundleFeeBps + CASH_COW_REWARD_BPS };
+      row.policy = { ...(row.policy || {}), maxRecipients: 100, snapshotEveryHours: 6, settlementEveryHours: 24 };
+      row.updatedAt = new Date().toISOString();
+      return row;
+    });
+  }
+  const id = existing?.id || "partner-cash-cow-holders";
+  const vault = await mutateWalletStore((walletStore) => {
+    const found = walletStore.wallets.find((row) => row.ownerId === PARTNER_REWARD_OWNER && row.label === id);
+    if (found) return found;
+    const row = walletRecord(id, Keypair.generate(), PARTNER_REWARD_OWNER);
+    walletStore.wallets.push(row);
+    return row;
+  });
+  const secret = decryptWallet(vault).secretKey;
+  const now = new Date().toISOString();
+  return mutatePartnerRewards((store) => {
+    const row = store.programs[id] || {
+      id, code: "CASHCOW", projectId: "", createdAt: now,
+      devPendingLamports: "0", holderPendingLamports: "0", devPaidLamports: "0", holderPaidLamports: "0",
+      totalRewardLamports: "0", rhPendingWei: "0", rhHolderPaidWei: "0", tradeCount: 0, attributedVolumeUsd: 0
+    };
+    row.status = "active";
+    row.token = { ca: CASH_COW_RH_TOKEN, chain: "robinhood", name: "Cash Cow", symbol: "CASHCOW", imageUrl: "https://www.slimewire.org/assets/cashcow/cashcow-holders-meme.webp" };
+    row.publicUrl = "https://www.slimewire.org/cashcow";
+    row.vaultSolWallet = vault.publicKey;
+    row.vaultRhWallet = evmAddressFromSolana(secret);
+    row.devPayoutWallet = "";
+    row.allocation = { holderShareBps: 10_000, developerShareBps: 0 };
+    row.feePolicy = { mode: "surcharge", baseBps: CONFIG.bundleFeeBps, rewardBps: CASH_COW_REWARD_BPS, totalBps: CONFIG.bundleFeeBps + CASH_COW_REWARD_BPS };
+    row.policy = {
+      maxRecipients: 100, minHoldHours: 24, minSnapshots: 2, weighting: "sqrt_balance", maxWalletPoolPct: 5,
+      snapshotEveryHours: 6, settlementEveryHours: 24
+    };
+    row.nextSnapshotAt = row.nextSnapshotAt || now;
+    row.nextSettlementAt = row.nextSettlementAt || new Date(Date.now() + PARTNER_SETTLEMENT_MS).toISOString();
+    row.updatedAt = now;
+    store.programs[id] = row;
+    store.tokenIndex[key] = id;
+    return row;
+  });
+}
+
 async function partnerProgramByToken(token, chain = "") {
   const raw = String(token || "").trim();
   if (!raw) return null;
+  if ((!chain || String(chain).toLowerCase() === "robinhood") && raw.toLowerCase() === CASH_COW_RH_TOKEN) {
+    await ensureCashCowRewardsProgram();
+  }
   const store = await readPartnerRewards();
   const chains = chain ? [chain] : ["solana", "robinhood"];
   for (const rail of chains) {
@@ -23931,8 +24029,10 @@ async function snapshotPartnerProgram(program) {
 async function bridgePartnerRhRewards(program, vault) {
   const pendingWei = BigInt(program.rhPendingWei || "0");
   if (pendingWei <= 0n) return null;
-  const holderWei = (pendingWei * BigInt(PARTNER_HOLDER_SHARE_BPS)) / 10_000n;
-  const devBaseWei = (pendingWei * BigInt(PARTNER_DEV_SHARE_BPS)) / 10_000n;
+  const holderShareBps = partnerHolderShareBps(program);
+  const devShareBps = partnerDevShareBps(program);
+  const holderWei = (pendingWei * BigInt(holderShareBps)) / 10_000n;
+  const devBaseWei = (pendingWei * BigInt(devShareBps)) / 10_000n;
   const devWei = devBaseWei + (pendingWei - devBaseWei - holderWei);
   const secretKey = decryptWallet(vault).secretKey;
   const holderResult = holderWei > 0n ? await distributeRhHolderRewards({
@@ -23956,6 +24056,7 @@ async function bridgePartnerRhRewards(program, vault) {
       store.receipts.push({ id: crypto.randomBytes(6).toString("hex"), programId: row.id, at: new Date().toISOString(), type: "holders_rh", wei: holderPaidWei.toString(), signatures: holderResult.txHashes || [], recipients: holderResult.recipients || [] });
     });
   }
+  if (devWei <= 0n) return { holdersOnly: true, holderPaidWei: holderPaidWei.toString() };
   const ethAmount = `${devWei / 10n ** 18n}.${(devWei % 10n ** 18n).toString().padStart(18, "0")}`;
   const result = await rhBridgeEthToSol({
     solanaSecretKey: secretKey,
@@ -24048,6 +24149,7 @@ async function processPartnerRewards() {
   if (partnerRewardRunnerBusy) return;
   partnerRewardRunnerBusy = true;
   try {
+    await ensureCashCowRewardsProgram();
     const programs = Object.values((await readPartnerRewards()).programs).filter((row) => row.status === "active");
     const now = Date.now();
     for (const program of programs.slice(0, 20)) {
@@ -24288,17 +24390,33 @@ async function solanaHolderRewardRecipients(tokenMint, policy, payer) {
 async function rhHolderRewardRecipients(tokenAddress, policy, payer) {
   const addr = String(tokenAddress || "").trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return [];
-  const data = await fetchJson(`https://robinhoodchain.blockscout.com/api/v2/tokens/${addr}/holders`, {
-    headers: { accept: "application/json" },
-    timeoutMs: 6000
-  }).catch(() => null);
-  const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
+  const items = [];
+  let cursor = null;
+  const seenCursors = new Set();
+  while (items.length < 150) {
+    const url = new URL(`https://robinhoodchain.blockscout.com/api/v2/tokens/${addr}/holders`);
+    for (const [key, value] of Object.entries(cursor || {})) {
+      if (value !== null && value !== undefined && typeof value !== "object") url.searchParams.set(key, String(value));
+    }
+    const data = await fetchJson(url.href, { headers: { accept: "application/json" }, timeoutMs: 6000 }).catch(() => null);
+    const page = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
+    if (!page.length) break;
+    items.push(...page);
+    cursor = data?.next_page_params && typeof data.next_page_params === "object" ? data.next_page_params : null;
+    const cursorKey = JSON.stringify(cursor || {});
+    if (!cursor || seenCursors.has(cursorKey)) break;
+    seenCursors.add(cursorKey);
+  }
   const rows = items.map((item) => {
-    const wallet = firstString(item?.address?.hash, item?.address_hash, item?.holder?.hash, item?.holder, item?.address);
+    const wallet = firstString(item?.address?.hash, item?.address_hash?.hash, item?.address_hash, item?.holder?.hash, item?.holder, item?.address);
     const decimals = firstMeaningfulNumber(item?.token?.decimals, item?.decimals, 18) || 18;
     const raw = firstString(item?.value, item?.balance, item?.token_balance, item?.total?.value);
-    return { wallet, amount: holderRewardRawTokenAmountToUi(raw, decimals) };
-  }).filter((r) => /^0x[0-9a-fA-F]{40}$/.test(r.wallet));
+    const isContract = Boolean(item?.address?.is_contract ?? item?.address_hash?.is_contract ?? item?.is_contract);
+    return { wallet, amount: holderRewardRawTokenAmountToUi(raw, decimals), isContract };
+  }).filter((r) => /^0x[0-9a-fA-F]{40}$/.test(r.wallet)
+    && !/^0x0{40}$/i.test(r.wallet)
+    && r.wallet.toLowerCase() !== addr.toLowerCase()
+    && !r.isContract).slice(0, 100);
   return markAndSelectHolderRewardRecipients({ chain: "robinhood", token: addr, rows, policy, payer });
 }
 
@@ -24343,17 +24461,21 @@ async function distributeRhHolderRewards({ signerSecretKey, tokenAddress, policy
     ? splitBigIntByWeightsCapped(rewardWei, recipients, normalized.maxWalletPoolPct)
     : splitBigIntByWeights(rewardWei, recipients)).filter((p) => p.value >= 1_000_000_000_000n);
   const txHashes = [];
+  const paidRecipients = [];
   let paidWei = 0n;
   for (const p of parts) {
     try {
       const txHash = await rhTransferEth(signerSecretKey, p.wallet, p.value, CONFIG.rhChainRpcUrl);
-      if (txHash) txHashes.push(txHash);
-      paidWei += p.value;
+      if (txHash) {
+        txHashes.push(txHash);
+        paidRecipients.push({ wallet: p.wallet, wei: p.value.toString(), signature: txHash });
+        paidWei += p.value;
+      }
     } catch (error) {
       await audit("web_rh_holder_reward_failed", { tokenAddress, wallet: p.wallet, wei: p.value.toString(), error: friendlyError(error) }).catch(() => {});
     }
   }
-  return { paidWei, count: txHashes.length, txHashes, recipients: parts.map((p) => ({ wallet: p.wallet, wei: p.value.toString() })) };
+  return { paidWei, count: txHashes.length, txHashes, recipients: paidRecipients };
 }
 
 let holderRewardsAutoClaimBusy = false;
@@ -51610,19 +51732,26 @@ async function webRhTradeCore(userId, body = {}, internal = {}) {
     const e = new Error("side must be buy or sell.");
     e.statusCode = 400; throw e;
   }
-  // Platform fee — SAME bps as Solana trades. Buys: fee comes off the ETH going in (user pays the
-  // entered amount total, like Solana buys). Sells: fee comes off the ETH proceeds.
-  const feeBps = BigInt(Math.max(0, CONFIG.bundleFeeBps || 0));
+  // Normal RH trades use the same 0.50% as Solana. A token-scoped surcharge
+  // policy may add holder rewards on top (Cash Cow is 0.50% + 0.15%).
+  const partner = await partnerProgramByToken(tokenAddress, "robinhood");
+  const feePolicy = partnerTradeFeePolicy(partner);
+  const feeBps = BigInt(Math.max(0, feePolicy.totalBps));
   let feeWei = 0n;
+  let grossFeeBasisWei = 0n;
   if (side === "buy" && feeBps > 0n) {
-    feeWei = (amountRaw * feeBps) / 10_000n;
+    grossFeeBasisWei = amountRaw;
+    feeWei = (grossFeeBasisWei * feeBps) / 10_000n;
     amountRaw -= feeWei; // swap the remainder
   }
   const quote = await relayQuoteRhSwap({ address: evmAddress, fromCurrency, toCurrency, amountRaw });
   const { hashes } = await rhExecuteEvmSteps(keypair.secretKey, quote.txs, CONFIG.rhChainRpcUrl);
   if (side === "sell" && feeBps > 0n) {
     const outEth = Number(quote.outFormatted || 0);
-    if (outEth > 0) feeWei = (BigInt(Math.round(outEth * 1e9)) * 10n ** 9n * feeBps) / 10_000n;
+    if (outEth > 0) {
+      grossFeeBasisWei = BigInt(Math.round(outEth * 1e9)) * 10n ** 9n;
+      feeWei = (grossFeeBasisWei * feeBps) / 10_000n;
+    }
   }
   // Skim the fee to the platform's RH fee account (converted to SOL at the fee wallet by the sweep).
   // Best-effort: the user's trade is already done — a failed skim logs, never throws.
@@ -51630,16 +51759,17 @@ async function webRhTradeCore(userId, body = {}, internal = {}) {
   let partnerFeeTxHash = "";
   if (feeWei > 0n) {
     try {
-      const partner = await partnerProgramByToken(tokenAddress, "robinhood");
-      const partnerWei = partner && CONFIG.bundleFeeBps > 0
-        ? (feeWei * BigInt(CONFIG.referralFeeBps)) / BigInt(CONFIG.bundleFeeBps)
+      const partnerWei = partner && feePolicy.rewardBps > 0
+        ? feePolicy.surcharge
+          ? (grossFeeBasisWei * BigInt(feePolicy.rewardBps)) / 10_000n
+          : (feeWei * BigInt(feePolicy.rewardBps)) / BigInt(Math.max(1, feePolicy.baseBps))
         : 0n;
       const ownerWei = feeWei - partnerWei;
-      if (ownerWei > 0n) feeTxHash = await rhTransferEth(keypair.secretKey, rhFeeEvmWallet(CONFIG.appSecret, CONFIG.rhChainRpcUrl).address, ownerWei, CONFIG.rhChainRpcUrl);
       if (partnerWei > 0n && partner?.vaultRhWallet) {
         partnerFeeTxHash = await rhTransferEth(keypair.secretKey, partner.vaultRhWallet, partnerWei, CONFIG.rhChainRpcUrl);
         await recordPartnerRhFee({ programId: partner.id, token: tokenAddress, rewardWei: partnerWei, grossFeeWei: feeWei, signature: partnerFeeTxHash, userId });
       }
+      if (ownerWei > 0n) feeTxHash = await rhTransferEth(keypair.secretKey, rhFeeEvmWallet(CONFIG.appSecret, CONFIG.rhChainRpcUrl).address, ownerWei, CONFIG.rhChainRpcUrl);
     } catch (error) {
       await audit("web_rh_fee_skim_failed", { userId, side, tokenAddress, feeWei: feeWei.toString(), error: friendlyError(error) }).catch(() => {});
     }

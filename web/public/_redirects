@@ -17,6 +17,9 @@
 /ca/*           /coin-site.html        200
 /coin/*         /coin-site.html        200
 /rewards/*      /partner-rewards.html  200
+/cashcow        /cashcow.html          200
+/cash-cow       /cashcow.html          200
+/cashcow-rewards /cashcow.html         200
 /launch-coin    /#launch               302
 /terminal       /index.html            200
 /terminal/*     /index.html            200

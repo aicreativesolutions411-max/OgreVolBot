@@ -6,6 +6,7 @@ const server = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf
 const maker = fs.readFileSync(new URL("../web/public/site-maker.html", import.meta.url), "utf8");
 const coin = fs.readFileSync(new URL("../web/public/coin-site.html", import.meta.url), "utf8");
 const dashboard = fs.readFileSync(new URL("../web/public/partner-rewards.html", import.meta.url), "utf8");
+const cashCow = fs.readFileSync(new URL("../web/public/cashcow.html", import.meta.url), "utf8");
 const redirects = fs.readFileSync(new URL("../web/public/_redirects", import.meta.url), "utf8");
 
 test("partner rewards use the existing 0.15% allocation inside the 0.50% fee", () => {
@@ -16,6 +17,46 @@ test("partner rewards use the existing 0.15% allocation inside the 0.50% fee", (
   assert.match(server, /total \* BigInt\(CONFIG\.referralFeeBps\)[\s\S]{0,120}BigInt\(CONFIG\.bundleFeeBps\)/);
   assert.match(server, /PARTNER_DEV_SHARE_BPS = 5_000/);
   assert.match(server, /PARTNER_HOLDER_SHARE_BPS = 5_000/);
+});
+
+test("Cash Cow adds a holder-only 0.15% surcharge while preserving the 0.50% platform fee", () => {
+  assert.match(server, /CASH_COW_RH_TOKEN = "0x4ad72e468e38ec204c605f2e058d61e4d79e2ceb"/);
+  assert.match(server, /CASH_COW_REWARD_BPS = 15/);
+  const ensure = server.slice(server.indexOf("async function ensureCashCowRewardsProgram"), server.indexOf("async function partnerProgramByToken"));
+  assert.match(ensure, /holderShareBps: 10_000/);
+  assert.match(ensure, /developerShareBps: 0/);
+  assert.match(ensure, /mode: "surcharge"/);
+  assert.match(ensure, /baseBps: CONFIG\.bundleFeeBps/);
+  assert.match(ensure, /rewardBps: CASH_COW_REWARD_BPS/);
+  assert.match(ensure, /maxRecipients: 100/);
+  const holders = server.slice(server.indexOf("async function rhHolderRewardRecipients"), server.indexOf("async function distributeSolHolderRewards"));
+  assert.match(holders, /next_page_params/);
+  assert.match(holders, /while \(items\.length < 150\)/);
+  assert.match(holders, /address_hash\?\.hash/);
+  assert.match(holders, /!r\.isContract/);
+  assert.match(holders, /slice\(0, 100\)/);
+  const tradeStart = server.indexOf("async function webRhTradeCore");
+  const tradeEnd = server.indexOf("function scheduleRhFeeSweep", tradeStart);
+  const trade = server.slice(tradeStart, tradeEnd);
+  assert.match(trade, /feePolicy\.surcharge/);
+  assert.match(trade, /grossFeeBasisWei \* BigInt\(feePolicy\.rewardBps\)/);
+  assert.match(trade, /const ownerWei = feeWei - partnerWei/);
+  assert.ok(trade.indexOf("partnerFeeTxHash = await rhTransferEth") < trade.indexOf("feeTxHash = await rhTransferEth"));
+  assert.match(server, /await ensureCashCowRewardsProgram\(\);[\s\S]{0,160}const programs/);
+  const distribute = server.slice(server.indexOf("async function distributeRhHolderRewards"), server.indexOf("let holderRewardsAutoClaimBusy"));
+  assert.match(distribute, /const paidRecipients = \[\]/);
+  assert.match(distribute, /paidRecipients\.push\(\{ wallet: p\.wallet, wei: p\.value\.toString\(\), signature: txHash \}\)/);
+  assert.match(distribute, /recipients: paidRecipients/);
+  assert.match(dashboard, /100% of the extra reward goes to eligible holders/);
+  assert.match(server, /serveStaticHtmlPage\(response, "cashcow\.html"/);
+  assert.match(redirects, /\/cashcow\s+\/cashcow\.html\s+200/);
+  assert.match(cashCow, /THE FIRST CTO ON ROBINHOOD CHAIN/);
+  assert.match(cashCow, /0\.50%[\s\S]*\+0\.15%[\s\S]*0\.65%/);
+  assert.match(cashCow, /\/api\/partner-rewards\/CASHCOW/);
+  assert.match(cashCow, /CHECK EARNINGS/);
+  assert.match(cashCow, /cashcow-rewards-hero\.webp/);
+  assert.match(cashCow, /cashcow-holders-meme\.webp/);
+  assert.match(cashCow, /cashcow-first-cto-meme\.webp/);
 });
 
 test("coin-aware fee plumbing covers Telegram, managed-wallet, bundle, and RH trades", () => {

@@ -372,9 +372,10 @@ test("Robinhood coins are tradeable in-app (Relay swap, gas-estimated, idempoten
   }
 });
 
-test("RH trading fees: same bps as Solana, skimmed in ETH, auto-converted to SOL at FEE_WALLET", () => {
+test("RH trading fees: normal coins match Solana, token rewards are scoped, and platform fees sweep to SOL", () => {
   const trade = functionBody(serverSource, "webRhTradeCore");
-  assert.match(trade, /CONFIG\.bundleFeeBps/);               // SAME fee rate as Solana trades
+  assert.match(trade, /partnerTradeFeePolicy\(partner\)/);
+  assert.match(trade, /feePolicy\.totalBps/);
   assert.match(trade, /amountRaw -= feeWei/);                // buys: fee off the ETH going in
   assert.match(trade, /rhTransferEth/);                      // skim to the platform RH fee account
   assert.match(trade, /rhFeeEvmWallet/);
