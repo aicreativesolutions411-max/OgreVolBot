@@ -9147,7 +9147,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const slug = decodeURIComponent(pathname.slice("/api/coin-site/".length));
       const project = await launchOsProjectBySlug(slug);
       if (!project) { sendWebJson(request, response, 404, { ok: false, error: "Coin site not found." }); return; }
-      sendWebJson(request, response, 200, { ok: true, project: publicLaunchOsProject(project), live: await launchOsLiveStatus(project) });
+      // The generated site itself must stay available even when a live market
+      // provider is warming up or temporarily unavailable.
+      const live = await launchOsLiveStatus(project).catch(() => ({ checkedAt: new Date().toISOString() }));
+      sendWebJson(request, response, 200, { ok: true, project: publicLaunchOsProject(project), live });
       return;
     }
     if (request.method === "GET" && pathname.startsWith("/api/launch-os/media/")) {
@@ -9237,8 +9240,12 @@ async function handleWebApiRequest(request, response, requestUrl) {
       }
       let source = String(body.imageDataUrl || "");
       if (!decodePfpImageDataUrl(source)) {
-        const referenceUrl = firstString(launchOsSiteForClient(project)?.media?.pfp, project.token?.imageUrl);
-        const reference = await launchOsTrustedTokenImageBuffer(referenceUrl).catch(() => null);
+        const media = launchOsSiteForClient(project)?.media || {};
+        let reference = null;
+        for (const referenceUrl of [media.pfp, project.token?.imageUrl, media.gallery?.[0], media.hero, media.mobileHero]) {
+          reference = await launchOsTrustedTokenImageBuffer(referenceUrl).catch(() => null);
+          if (reference) break;
+        }
         if (reference) source = `data:image/png;base64,${(await sharp(reference).rotate().png().toBuffer()).toString("base64")}`;
       }
       if (!decodePfpImageDataUrl(source)) { sendWebJson(request, response, 400, { ok: false, error: "Upload a valid PFP first, then generate the art set." }); return; }
@@ -9260,11 +9267,23 @@ async function handleWebApiRequest(request, response, requestUrl) {
           ["gallery", "gallery", "Scene four: the exact referenced identity fills about 50% of the frame in a distinct low-angle action pose or dynamic dimensional logo treatment; motion, community energy and dramatic lighting."],
           ["gallery", "gallery", "Scene five: the exact referenced identity fills about 45% of the frame in a new iconic campaign pose or premium material variation; different composition, wardrobe treatment and lighting; supporting world details only."]
         ];
+        const outputs = new Array(specs.length);
+        let nextSpec = 0;
+        const worker = async () => {
+          while (nextSpec < specs.length) {
+            const position = nextSpec++;
+            const [kind, artFormat, direction] = specs[position];
+            outputs[position] = await make(kind, artFormat, direction);
+          }
+        };
+        // Two bounded workers keep the complete set below browser/proxy request
+        // timeouts without hammering the image provider.
+        await Promise.all([worker(), worker()]);
         const galleryUrls = [];
-        for (const [kind, artFormat, direction] of specs) {
-          const saved = await make(kind, artFormat, direction);
+        for (let index = 0; index < outputs.length; index += 1) {
+          const saved = outputs[index];
           result = saved; generated += 1;
-          if (kind === "gallery") galleryUrls.push(saved.url);
+          if (specs[index][0] === "gallery") galleryUrls.push(saved.url);
         }
         await mutateLaunchOs((store) => {
           const saved = store.projects[project.id];
@@ -58354,7 +58373,13 @@ async function saveLaunchOsMedia(project, body = {}) {
     else saved.site.media[kind] = url;
     saved.updatedAt = new Date().toISOString();
   });
-  if (kind === "pfp") await generateLaunchOsFreeMedia(project, src);
+  if (kind === "pfp") {
+    try { await generateLaunchOsFreeMedia(project, src); }
+    catch (error) {
+      console.warn(`[site-maker] uploaded PFP saved but free art composition failed: ${friendlyError(error)}`);
+      await generateLaunchOsFreeMedia(project, null);
+    }
+  }
   return { url, kind, project: clientLaunchOsProject(await getLaunchOsProjectForUser(project.userId, project.id).catch(async () => (await readLaunchOs()).projects[project.id])) };
 }
 
@@ -58430,11 +58455,35 @@ async function getLaunchOsProjectForUser(userId, id) {
 }
 
 async function launchOsProjectBySlug(slug) {
-  const wanted = String(slug || "").trim().toLowerCase();
+  const raw = String(slug || "").trim();
+  let wanted = raw.toLowerCase();
+  try {
+    const parsed = new URL(raw);
+    wanted = decodeURIComponent(parsed.pathname.split("/").filter(Boolean).pop() || "").toLowerCase();
+  } catch {
+    let decoded = raw;
+    try { decoded = decodeURIComponent(raw); } catch { /* keep the literal identifier */ }
+    wanted = decoded.replace(/^\/+|\/+$/g, "").split("/").pop().toLowerCase();
+  }
   const store = await readLaunchOs();
-  return Object.values(store.projects).find((project) =>
-    String(project.slug || "").toLowerCase() === wanted || String(project.publicSlug || "").toLowerCase() === wanted
+  let project = Object.values(store.projects).find((project) =>
+    String(project.slug || "").toLowerCase() === wanted ||
+    String(project.publicSlug || "").toLowerCase() === wanted ||
+    String(project.token?.ca || "").toLowerCase() === wanted
   ) || null;
+  // Repair sites created by the old editor bug that retained the payout wallet
+  // but accidentally saved the rewards toggle as off during first publish.
+  if (project?.payment?.status === "unlocked" && project.partner?.payoutWallet && project.partner?.status !== "active") {
+    await mutateLaunchOs((current) => {
+      const saved = current.projects[project.id];
+      if (!saved?.partner?.payoutWallet) return;
+      saved.partner.enabled = true;
+      saved.partner.status = "activating";
+    });
+    await syncLaunchOsPartner(project.id).catch(() => {});
+    project = (await readLaunchOs()).projects[project.id] || project;
+  }
+  return project;
 }
 
 function launchOsPublicSlug(store, token, excludeId = "") {
@@ -58543,7 +58592,13 @@ async function createLaunchOsProject(userId, body = {}, options = {}) {
     current.projects[id] = project;
   });
   const tokenArt = await launchOsTrustedTokenImageBuffer(token.imageUrl).catch(() => null);
-  await generateLaunchOsFreeMedia(project, tokenArt).catch(() => {});
+  try {
+    await generateLaunchOsFreeMedia(project, tokenArt);
+  } catch (error) {
+    // A malformed remote token image must never prevent the built-in brand art.
+    if (tokenArt) await generateLaunchOsFreeMedia(project, null);
+    else throw error;
+  }
   if (waived && project.partner?.enabled) await syncLaunchOsPartner(project.id).catch(() => {});
   return clientLaunchOsProject(await getLaunchOsProjectForUser(userId, id));
 }
@@ -58710,6 +58765,12 @@ async function prepareCoinSiteTelegramDelivery(projectId, editKey, rawUsername) 
 }
 
 async function createPublicLaunchOsProject(body = {}) {
+  const payoutWallet = String(body.partnerPayoutWallet || "").trim();
+  if (!payoutWallet) {
+    throw Object.assign(new Error("Enter a Solana developer payout wallet. Community Rewards is included with every published coin site."), { statusCode: 400 });
+  }
+  try { new PublicKey(payoutWallet); }
+  catch { throw Object.assign(new Error("Enter a valid Solana payout wallet for Community Rewards."), { statusCode: 400 }); }
   const requestId = /^[A-Za-z0-9_-]{16,80}$/.test(String(body.requestId || "")) ? String(body.requestId) : "";
   if (requestId) {
     const existing = Object.values((await readLaunchOs()).projects || {}).find((row) => row.createRequestId === requestId);
@@ -58760,7 +58821,9 @@ function applyLaunchOsUpdate(project, body = {}) {
       catch { throw Object.assign(new Error("Enter a valid Solana payout wallet for Community Rewards."), { statusCode: 400 }); }
       project.partner.payoutWallet = payout;
     }
-    if (body.partner.enabled != null) project.partner.enabled = Boolean(body.partner.enabled && project.partner.payoutWallet);
+    // Coin sites always participate once a valid payout wallet exists. The editor
+    // cannot accidentally switch rewards off while saving unrelated site changes.
+    project.partner.enabled = Boolean(project.partner.payoutWallet);
     if (project.partner.enabled && project.partner.status !== "active") project.partner.status = project.payment?.status === "unlocked" ? "activating" : "awaiting_publish";
   }
   const site = body.site && typeof body.site === "object" ? body.site : null;

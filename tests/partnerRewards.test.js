@@ -39,6 +39,8 @@ test("holder policy is daily, snapshot-gated, sqrt-weighted, capped, and bounded
 test("Site Maker, coin sites, Telegram, and public receipts expose the partner program", () => {
   assert.match(maker, /Community Rewards payout wallet/);
   assert.match(maker, /partnerPayoutWallet/);
+  assert.match(maker, /Community Rewards automatically enabled/);
+  assert.match(maker, /p\.partner\.enabled = Boolean\(p\.partner\.payoutWallet\)/);
   assert.match(coin, /COMMUNITY REWARDS/);
   assert.match(coin, /\/rewards\/\$\{encodeURIComponent\(p\.partner\.code\)\}/);
   assert.match(dashboard, /PUBLIC HOLDER PROOF/);

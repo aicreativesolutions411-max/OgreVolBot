@@ -369,9 +369,9 @@
             <small style="display:block;color:var(--m);margin-top:6px">You must have started the SlimeWire bot once, or we’ll give you a one-tap button to do it.</small>
           </div>
           <div class="field">
-            <label>Community Rewards payout wallet (optional)</label>
-            <input id="partnerPayoutWallet" class="input" placeholder="Your Solana wallet" autocomplete="off" />
-            <small style="display:block;color:var(--m);margin-top:6px">Turn this site into a revenue hub. Trades stay 0.50% total; community rewards split 50% to the developer and 50% to eligible top holders.</small>
+            <label>Community Rewards payout wallet (required)</label>
+            <input id="partnerPayoutWallet" class="input" placeholder="Your Solana wallet" autocomplete="off" required />
+            <small style="display:block;color:var(--m);margin-top:6px">Community Rewards turns on automatically when the site publishes. Trades stay 0.50% total; rewards split 50% to the developer and 50% to eligible top holders.</small>
           </div>
           <div class="field">
             <label>Creative direction (optional)</label
@@ -541,7 +541,7 @@
               <label>Developer payout wallet (Solana)</label>
               <input id="editPartnerWallet" class="input" placeholder="Solana payout wallet" />
             </div>
-            <label style="display:flex;gap:9px;align-items:center;border:1px solid #425642;padding:12px;border-radius:12px;cursor:pointer"><input id="partnerEnabled" type="checkbox" style="width:auto" /> Enable Community Rewards</label>
+            <label style="display:flex;gap:9px;align-items:center;border:1px solid #425642;padding:12px;border-radius:12px"><input id="partnerEnabled" type="checkbox" style="width:auto" checked disabled /> Community Rewards automatically enabled</label>
             <div class="actions" style="margin-top:9px"><a id="partnerDashboard" class="btn primary" target="_blank" hidden>Open live rewards dashboard</a></div>
             <p id="partnerState" class="msg"></p>
             <div id="partnerAdmin" hidden style="margin-top:14px;padding:16px;border:1px solid #425642;border-radius:14px;background:#080c09">
@@ -672,8 +672,8 @@
             (x) => (p.site.sections[x] = $(`#sec-${x}`).checked),
           );
           p.partner = p.partner || {};
-          p.partner.enabled = Boolean($("#partnerEnabled").checked);
           p.partner.payoutWallet = $("#editPartnerWallet").value.trim();
+          p.partner.enabled = Boolean(p.partner.payoutWallet);
         }
         function renderTelegramDelivery() {
           const box = $("#telegramDelivery"), d = telegramDelivery || {};
@@ -825,6 +825,12 @@
             $("#telegramUsername").focus();
             return;
           }
+          const payoutWallet = $("#partnerPayoutWallet").value.trim();
+          if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(payoutWallet)) {
+            $("#msg").textContent = "Enter a valid Solana developer payout wallet. Community Rewards activates automatically when the site publishes.";
+            $("#partnerPayoutWallet").focus();
+            return;
+          }
           b.disabled = true;
           b.textContent = "Building the world…";
           try {
@@ -836,7 +842,7 @@
                 mode: "official",
                 code: $("#siteCode").value,
                 telegramUsername: tgUsername,
-                partnerPayoutWallet: $("#partnerPayoutWallet").value.trim(),
+                partnerPayoutWallet: payoutWallet,
                 requestId,
               }),
             });
@@ -846,6 +852,9 @@
             p.site.template = tpl;
             p.site.prompt = $("#prompt").value;
             remember();
+            fill();
+            $("#template").value = tpl;
+            $("#aiPrompt").value = $("#prompt").value;
             await save();
             if (starter) await upload("pfp", starter);
             history.replaceState({}, "", `/site-maker?project=${p.slug}`);
@@ -903,8 +912,8 @@
           const buttons = [$("#aiSet"), $("#aiHero"), $("#aiGallery")];
           buttons.forEach((button) => { button.disabled = true; button.classList.add("busy"); });
           const started = Date.now(), label = format === "set" ? "five distinct site images" : format === "hero" ? "desktop and mobile heroes" : "a gallery scene";
-          $("#studioMsg").textContent = `Cloudflare is generating ${label}… 0s`;
-          const ticker = setInterval(() => { $("#studioMsg").textContent = `Cloudflare is generating ${label}… ${Math.round((Date.now() - started) / 1000)}s`; }, 1000);
+          $("#studioMsg").textContent = `AI is generating ${label}… 0s`;
+          const ticker = setInterval(() => { $("#studioMsg").textContent = `AI is generating ${label}… ${Math.round((Date.now() - started) / 1000)}s`; }, 1000);
           try {
             const d = await api("/api/launch-os/ai/" + p.slug, {
               method: "POST", key,

@@ -716,7 +716,7 @@
             window.OGRE_PORTAL_CONFIG?.apiBase ||
               "https://ogrevolbot.onrender.com",
           ).replace(/\/+$/, ""),
-          slug = location.pathname.split("/ca/")[1]?.split("/")[0] || location.pathname.split("/coin/")[1]?.split("/")[0];
+          slug = __coinProject || location.pathname.split("/ca/")[1]?.split("/")[0] || location.pathname.split("/coin/")[1]?.split("/")[0];
         let p, l;
         function link(label, url) {
           return url
@@ -804,19 +804,27 @@
             };
           }
         }
-        fetch(`${API}/api/coin-site/${encodeURIComponent(slug)}`)
-          .then((r) => r.json())
-          .then((d) => {
-            if (!d.ok) throw Error();
-            p = d.project;
-            l = d.live || {};
-            render();
-          })
-          .catch(
-            () =>
-              ($("#app").innerHTML =
-                '<div style="padding:20vh;text-align:center"><h1>Site not found.</h1></div>'),
-          );
+        async function loadPublishedSite(attempt = 0) {
+          if (!slug) throw Object.assign(new Error("missing site"), { notFound: true });
+          const response = await fetch(`${API}/api/coin-site/${encodeURIComponent(slug)}`, { cache: "no-store" });
+          const data = await response.json().catch(() => ({}));
+          if (response.status === 404) throw Object.assign(new Error(data.error || "Site not found."), { notFound: true });
+          if (!response.ok || !data.ok || !data.project) {
+            if (attempt < 3) {
+              await new Promise((resolve) => setTimeout(resolve, 800 * (attempt + 1)));
+              return loadPublishedSite(attempt + 1);
+            }
+            throw new Error(data.error || "The site is reconnecting.");
+          }
+          p = data.project;
+          l = data.live || {};
+          render();
+        }
+        loadPublishedSite().catch((error) => {
+          $("#app").innerHTML = error.notFound
+            ? '<div style="padding:20vh;text-align:center"><h1>Site not found.</h1></div>'
+            : '<div style="padding:20vh 20px;text-align:center"><h1>Site is reconnecting.</h1><p>Please refresh in a moment.</p><button class="button primary" onclick="location.reload()">TRY AGAIN</button></div>';
+        });
       })();
     </script>
   </body>

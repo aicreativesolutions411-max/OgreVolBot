@@ -62,7 +62,7 @@ test("maker offers three curated systems, direct preview, uploads, AI art, and o
   assert.match(maker, /same recognizable PFP character or logo/);
   assert.match(maker, /referenceType: \$\("#referenceType"\)\.value/);
   assert.match(maker, /format === "set"/);
-  assert.match(maker, /Cloudflare is generating/);
+  assert.match(maker, /AI is generating/);
   assert.match(maker, /slotUpload/);
   assert.match(maker, /slimewire-site-image-edit/);
   assert.match(maker, /UNPUBLISHED PREVIEW/);
@@ -135,6 +135,11 @@ test("coin sites charge $10 in SOL, support one-time admin codes, and retain a p
   assert.match(server, /function launchOsPublicSlug/);
   assert.match(server, /\/ca\/\$\{encodeURIComponent\(publicSlug\)\}/);
   assert.match(server, /project\.publicSlug/);
+  assert.match(server, /project\.token\?\.ca/);
+  assert.match(server, /launchOsLiveStatus\(project\)\.catch/);
+  assert.match(site, /__coinProject \|\| location\.pathname/);
+  assert.match(site, /loadPublishedSite\(attempt = 0\)/);
+  assert.match(site, /attempt < 3/);
   assert.match(server, /siteedit_\(\[A-Za-z0-9_-\]\{16,48\}\)/);
   assert.match(server, /function coinSiteTelegramDeliveryForEditor/);
   assert.match(server, /async function prepareCoinSiteTelegramDelivery/);
@@ -144,6 +149,19 @@ test("coin sites charge $10 in SOL, support one-time admin codes, and retain a p
   assert.match(site, /location\.pathname\.split\("\/ca\/"\)/);
   assert.match(site, /`\/ca\/\$\{encodeURIComponent\(__coinProject\)\}`/);
   assert.doesNotMatch(server, /payment: project\.payment/);
+});
+
+test("Site Maker auto-enables rewards and generates art without first-save races", () => {
+  assert.match(maker, /Community Rewards payout wallet \(required\)/);
+  assert.match(maker, /Community Rewards automatically enabled/);
+  assert.match(maker, /p\.partner\.enabled = Boolean\(p\.partner\.payoutWallet\)/);
+  assert.match(maker, /remember\(\);[\s\S]{0,80}fill\(\);[\s\S]{0,140}await save\(\)/);
+  assert.match(server, /Community Rewards is included with every published coin site/);
+  assert.match(server, /project\.partner\.enabled = Boolean\(project\.partner\.payoutWallet\)/);
+  assert.match(server, /old editor bug[\s\S]{0,500}syncLaunchOsPartner/);
+  assert.match(server, /if \(tokenArt\) await generateLaunchOsFreeMedia\(project, null\)/);
+  assert.match(server, /await Promise\.all\(\[worker\(\), worker\(\)\]\)/);
+  assert.match(server, /media\.gallery\?\.\[0\][\s\S]{0,200}launchOsTrustedTokenImageBuffer/);
 });
 
 test("site generation resolves both Solana and Robinhood Chain contracts", () => {
