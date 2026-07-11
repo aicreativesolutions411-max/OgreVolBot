@@ -54,6 +54,7 @@ test("published coin sites include live market, chart, lore, gallery, buy flow, 
   assert.match(site, /canvas id="meme"/);
   assert.match(site, /location\.search/);
   assert.match(site, /siteHeroDrift/);
+  assert.match(site, /body\.cinematic \.hero[\s\S]*place-items:center start/);
   assert.match(site, /SLIMEWIRE • BUILDING THE WORLD/);
   assert.match(site, /LIVE • VERIFIED CA • COMMUNITY/);
 });
