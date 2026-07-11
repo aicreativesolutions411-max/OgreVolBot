@@ -844,6 +844,18 @@ test("Buy bot (SpyDefi parity): whale-tier badge + new-holder flag + volume", ()
   assert.match(buy, /bonding\?\.graduated \|\| bonding\?\.isGraduated \|\| \(bondPct != null && bondPct >= 100\)/);
 });
 
+test("Robinhood buy cards keep complete market rows during intermittent scan gaps", () => {
+  const merge = functionBody(serverSource, "mergeRhGroupBuyInfo");
+  const buy = functionBody(serverSource, "postGroupBuyRh");
+  assert.match(serverSource, /const rhGroupBuyLastGood = new Map\(\)/);
+  assert.match(merge, /priceUsd[\s\S]*mc[\s\S]*liq[\s\S]*vol24/);
+  assert.match(buy, /mergeRhGroupBuyInfo\(freshInfo, rhGroupBuyLastGood\.get/);
+  assert.match(buy, /Price <b>\$\{priceUsd > 0 \? fmtPx\(priceUsd\) : "n\/a"\}/);
+  assert.match(buy, /MC <b>\$\{info\?\.mc > 0 \? fmtUsd0\(info\.mc\) : "n\/a"\}/);
+  assert.match(buy, /Liq \$\{info\?\.liq > 0/);
+  assert.match(buy, /Vol \$\{info\?\.vol24 > 0/);
+});
+
 test("Raid bot: clean card (no colour squares / bars) + goal-to-go + views + Refresh", () => {
   const card = functionBody(serverSource, "buildRaidProgressCard");
   assert.match(card, /to go/);                                  // "X to go" per metric

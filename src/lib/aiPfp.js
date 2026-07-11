@@ -49,3 +49,25 @@ export async function aiSlimePfp({ imageDataUrl, styleId }) {
   if (buf.length < 200) throw new Error("AI image was empty.");
   return buf;
 }
+
+export async function aiSiteArt({ imageDataUrl, prompt = "", format = "hero" }) {
+  if (!aiPfpConfigured()) return null;
+  const shape = format === "gallery" ? "square editorial campaign artwork" : "cinematic ultra-wide website hero artwork with clear negative space for headline text";
+  const safePrompt = String(prompt || "").replace(/[\u0000-\u001f]/g, " ").trim().slice(0, 700);
+  const fullPrompt = `Using the supplied coin mascot as the exact main character reference, create ${shape}. ${safePrompt || "Build a bold, premium memecoin world around this character."} Preserve the mascot identity, colors and recognizable face. Professional art direction, cohesive lighting, rich environmental detail, sharp high-end commercial finish. No text, no logos, no watermarks.`;
+  const res = await fetch(`https://fal.run/${falModel()}`, {
+    method: "POST",
+    headers: { Authorization: `Key ${String(process.env.FAL_KEY).trim()}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt: fullPrompt, image_urls: [imageDataUrl], image_url: imageDataUrl, num_images: 1, output_format: "png" }),
+    signal: AbortSignal.timeout ? AbortSignal.timeout(90_000) : undefined
+  });
+  if (!res.ok) throw Object.assign(new Error(`AI site art failed (${res.status}).`), { statusCode: res.status === 401 ? 401 : 502 });
+  const data = await res.json().catch(() => ({}));
+  const url = data?.images?.[0]?.url || data?.image?.url || (Array.isArray(data?.output) ? data.output[0] : null) || data?.url;
+  if (!url) throw new Error("AI site art returned no image.");
+  const img = await fetch(url, { signal: AbortSignal.timeout ? AbortSignal.timeout(30_000) : undefined });
+  if (!img.ok) throw new Error("Couldn't fetch the generated site art.");
+  const buf = Buffer.from(await img.arrayBuffer());
+  if (buf.length < 200) throw new Error("Generated site art was empty.");
+  return buf;
+}

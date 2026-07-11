@@ -77,6 +77,7 @@ import { finiteWalletNumber, normalizeSolWalletPnlSummary, normalizeSolWalletPos
 import { aggregateDexPairActivity, volumeFallbackFromOhlcv } from "./lib/scanActivity.js";
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp, listCharacterFiles, characterPfpCount, makeCharacterPfp } from "./lib/pfp.js";
 import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
+import { aiSiteArt } from "./lib/aiPfp.js";
 import { xConfigured, xSearchMentions, xReply, xPost, xSearchQuery, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode, xAuthReport } from "./lib/xClient.js";
 import { xDmAuthMode, xDmConfigured, xDmFetchEvents, xDmOwnUserId as xDmResolvedOwnUserId, xDmSendText } from "./lib/xDmClient.js";
 import { isStaleXDmMoneyEvent, parseXDmBuySlotCommand, parseXDmSellSlotCommand, validateXDmBuyAmount, xDmEventTimestampMs, X_DM_BUY_LIMITS, X_DM_SELL_PERCENTAGES } from "./lib/xDmFlow.js";
@@ -6795,6 +6796,14 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "launch-os-guide.html", "no-store, max-age=0");
       return;
     }
+    if (request.method === "GET" && ["/site-maker", "/coin-site-maker", "/website-maker"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "site-maker.html", "no-store, max-age=0");
+      return;
+    }
+    if (request.method === "GET" && (requestUrl.pathname === "/coin-site" || requestUrl.pathname.startsWith("/coin/"))) {
+      await serveStaticHtmlPage(response, "coin-site.html", "no-store, max-age=0");
+      return;
+    }
     if (request.method === "GET" && requestUrl.pathname.startsWith("/launch-hq/")) {
       await serveStaticHtmlPage(response, "launch-hq.html", "no-store, max-age=0");
       return;
@@ -9129,6 +9138,25 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, { ok: true, project: publicLaunchOsProject(project) });
       return;
     }
+    if (request.method === "GET" && pathname.startsWith("/api/coin-site/")) {
+      const slug = decodeURIComponent(pathname.slice("/api/coin-site/".length));
+      const project = await launchOsProjectBySlug(slug);
+      if (!project) { sendWebJson(request, response, 404, { ok: false, error: "Coin site not found." }); return; }
+      sendWebJson(request, response, 200, { ok: true, project: publicLaunchOsProject(project), live: await launchOsLiveStatus(project) });
+      return;
+    }
+    if (request.method === "GET" && pathname.startsWith("/api/launch-os/media/")) {
+      const parts = pathname.slice("/api/launch-os/media/".length).split("/");
+      const slug = launchOsCleanText(decodeURIComponent(parts[0] || ""), 80);
+      const name = launchOsCleanText(decodeURIComponent(parts[1] || ""), 100);
+      if (!/^[a-z0-9-]+$/i.test(slug) || !/^[a-z0-9_-]+\.(png|jpg|webp)$/i.test(name)) { response.writeHead(404); response.end(); return; }
+      try {
+        const file = await fs.readFile(path.join(launchOsMediaDir(), slug, name));
+        const type = name.endsWith(".png") ? "image/png" : name.endsWith(".webp") ? "image/webp" : "image/jpeg";
+        response.writeHead(200, { "Content-Type": type, "Cache-Control": "public, max-age=31536000, immutable", ...webCorsHeaders(request) }); response.end(file);
+      } catch { response.writeHead(404); response.end(); }
+      return;
+    }
 
     if (request.method === "POST" && pathname === "/api/launch-os/create") {
       assertLaunchOsCreateAllowed(request);
@@ -9154,6 +9182,28 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const slug = decodeURIComponent(pathname.slice("/api/launch-os/live/".length));
       const project = await requireLaunchOsEditor(slug, launchOsEditorKeyFromRequest(request));
       sendWebJson(request, response, 200, { ok: true, live: await launchOsLiveStatus(project), project: clientLaunchOsProject(project) });
+      return;
+    }
+    if (request.method === "POST" && pathname.startsWith("/api/launch-os/media/")) {
+      const slug = decodeURIComponent(pathname.slice("/api/launch-os/media/".length));
+      const body = await readJsonRequestBody(request, 12_000_000);
+      const project = await requireLaunchOsEditor(slug, launchOsEditorKeyFromRequest(request));
+      const result = await saveLaunchOsMedia(project, body);
+      sendWebJson(request, response, 200, { ok: true, ...result });
+      return;
+    }
+    if (request.method === "POST" && pathname.startsWith("/api/launch-os/ai/")) {
+      if (!aiPfpConfigured()) { sendWebJson(request, response, 503, { ok: false, error: "AI art generation is not enabled yet." }); return; }
+      if (!aiPfpRateOk()) { sendWebJson(request, response, 429, { ok: false, error: "AI art is busy. Try again shortly." }); return; }
+      const slug = decodeURIComponent(pathname.slice("/api/launch-os/ai/".length));
+      const body = await readJsonRequestBody(request, 12_000_000);
+      const project = await requireLaunchOsEditor(slug, launchOsEditorKeyFromRequest(request));
+      const source = String(body.imageDataUrl || "");
+      if (!decodePfpImageDataUrl(source)) { sendWebJson(request, response, 400, { ok: false, error: "Upload a valid PFP first." }); return; }
+      const art = await aiSiteArt({ imageDataUrl: source, prompt: body.prompt, format: body.format });
+      const dataUrl = `data:image/png;base64,${art.toString("base64")}`;
+      const result = await saveLaunchOsMedia(project, { kind: body.format === "gallery" ? "gallery" : "hero", dataUrl });
+      sendWebJson(request, response, 200, { ok: true, ...result });
       return;
     }
 
@@ -13455,6 +13505,7 @@ function socialKitsPath() {
 function launchOsPath() {
   return path.join(CONFIG.dataDir, "launch-os.json");
 }
+function launchOsMediaDir() { return path.join(CONFIG.dataDir, "launch-os-media"); }
 
 function lockInEventsPath() {
   return path.join(CONFIG.dataDir, "lock-in-events.json");
@@ -43982,11 +44033,37 @@ async function postGroupBuy(mint, { solAmount = 0, usdAmount = 0, tokens = 0, pr
 // pool's Swap logs on-chain (free RPC, no API) and post the SAME SpyDefi-style per-buy card — ETH units,
 // Blockscout links, one-tap trade on the site's RH view. ----
 const rhGroupBuyState = new Map();   // tokenLc → { pool, lastBlock, at }
+// Buy events arrive from the chain independently of market-data APIs. A short DexScreener/
+// Blockscout timeout must not make a later card lose fields that an earlier card already had.
+// Keep the last complete values per coin and merge them field-by-field into each fresh scan.
+const rhGroupBuyLastGood = new Map(); // tokenLc → { at, info }
+function mergeRhGroupBuyInfo(current, previous) {
+  const fresh = current && typeof current === "object" ? current : {};
+  const prior = previous && typeof previous === "object" ? previous : {};
+  const merged = { ...prior, ...fresh };
+  for (const key of ["priceUsd", "mc", "liq", "vol1", "vol24", "holders", "supply", "createdAt", "athPriceUsd", "athMc"]) {
+    if (!(Number(fresh[key]) > 0) && Number(prior[key]) > 0) merged[key] = Number(prior[key]);
+  }
+  for (const key of ["ch1", "ch24", "fromAthPct"]) {
+    if (!Number.isFinite(Number(fresh[key])) && Number.isFinite(Number(prior[key]))) merged[key] = Number(prior[key]);
+  }
+  for (const key of ["symbol", "name", "pairAddress", "imageUrl", "localImagePath", "iconUrl", "twitterUrl", "telegramUrl", "websiteUrl", "explorer", "source", "noxaUrl"]) {
+    if (!String(fresh[key] || "").trim() && String(prior[key] || "").trim()) merged[key] = prior[key];
+  }
+  if (!fresh.safety && prior.safety) merged.safety = prior.safety;
+  return merged;
+}
 async function postGroupBuyRh(address, { ethAmount = 0, tokens = 0, trader = "", tx = "" } = {}) {
   const store = await readGroupBot();
   const targets = Object.entries(store.groups || {}).filter(([, e]) => groupBotFeatureOn(e, "buybot") && String(e.token || "").toLowerCase() === address.toLowerCase());
   if (!targets.length) return;
-  const info = await gatherRhScan(address).catch(() => null);
+  const infoKey = String(address || "").toLowerCase();
+  const freshInfo = await gatherRhScan(address).catch(() => null);
+  const info = mergeRhGroupBuyInfo(freshInfo, rhGroupBuyLastGood.get(infoKey)?.info);
+  if (freshInfo || Object.keys(info).length) {
+    rhGroupBuyLastGood.set(infoKey, { at: Date.now(), info });
+    if (rhGroupBuyLastGood.size > 300) rhGroupBuyLastGood.delete(rhGroupBuyLastGood.keys().next().value);
+  }
   const symClean = (String(info?.symbol || "").replace(/[<>&]/g, "")) || shortMint(address);
   const priceUsd = Number(info?.priceUsd) || 0;
   const usdAmount = tokens > 0 && priceUsd > 0 ? tokens * priceUsd : 0;
@@ -44031,8 +44108,8 @@ async function postGroupBuyRh(address, { ethAmount = 0, tokens = 0, trader = "",
       tokens > 0
         ? `🪙 Got <b>${fmtTok(tokens)}</b> $${escapeTelegramHtml(symClean)}${txLink ? ` · <a href="${txLink}">Tx</a>` : ""}`
         : (txLink ? `🧾 <a href="${txLink}">View Tx</a>` : ""),
-      priceUsd > 0 ? `🏷 Price <b>${fmtPx(priceUsd)}</b>${Number.isFinite(info?.ch24) ? ` · ${info.ch24 >= 0 ? "🟢 +" : "🔴 "}${Math.round(info.ch24)}% 24h` : ""}` : "",
-      (info?.mc > 0 || info?.liq > 0) ? `〽️ MC <b>${fmtUsd0(info.mc)}</b>${info.liq > 0 ? ` · Liq ${fmtUsd0(info.liq)}` : ""}${info.vol24 > 0 ? ` · Vol ${fmtUsd0(info.vol24)}` : ""}` : "",
+      `🏷 Price <b>${priceUsd > 0 ? fmtPx(priceUsd) : "n/a"}</b>${Number.isFinite(info?.ch24) ? ` · ${info.ch24 >= 0 ? "🟢 +" : "🔴 "}${Math.round(info.ch24)}% 24h` : " · 24h n/a"}`,
+      `〽️ MC <b>${info?.mc > 0 ? fmtUsd0(info.mc) : "n/a"}</b> · Liq ${info?.liq > 0 ? fmtUsd0(info.liq) : "n/a"} · Vol ${info?.vol24 > 0 ? fmtUsd0(info.vol24) : "n/a"}`,
       holderLine,
     ].filter(Boolean);
     if (e.customText) lines.unshift(`<b>${escapeTelegramHtml(String(e.customText).slice(0, 160))}</b>`);
@@ -56881,6 +56958,40 @@ function launchOsDefaultContent(token, publicUrl) {
   };
 }
 
+function launchOsDefaultSite(token, publicUrl, mode = "official") {
+  const symbol = String(token.symbol || "COIN").replace(/^\$+/, "");
+  const chain = token.chain === "robinhood" ? "Robinhood Chain" : "Solana";
+  return {
+    template: "cinematic", accent: "#b7ff00", prompt: "", headline: `${token.name}. Born for ${chain}.`,
+    subhead: `${mode === "cto" ? "The community takeover" : "The official home"} of $${symbol}. Live market data, lore and community in one place.`,
+    lore: launchOsCleanText(token.description || `${token.name} is a community-powered memecoin built on ${chain}.`, 1800),
+    roadmap: ["Launch the signal", "Grow the community", "Take over the timeline"],
+    sections: { market: true, lore: true, gallery: true, howToBuy: true, roadmap: true, socials: true, memeMaker: true },
+    media: { pfp: token.imageUrl || "", hero: token.imageUrl || "", gallery: token.imageUrl ? [token.imageUrl] : [] }, publicUrl
+  };
+}
+
+async function saveLaunchOsMedia(project, body = {}) {
+  const src = decodePfpImageDataUrl(body.dataUrl);
+  if (!src) throw Object.assign(new Error("Use a PNG, JPG or WebP image under 8MB."), { statusCode: 400 });
+  const kind = ["pfp", "hero", "gallery"].includes(String(body.kind)) ? String(body.kind) : "gallery";
+  const dir = path.join(launchOsMediaDir(), project.slug);
+  await fs.mkdir(dir, { recursive: true });
+  const name = `${kind}-${Date.now()}-${crypto.randomBytes(3).toString("hex")}.png`;
+  const output = await sharp(src).rotate().resize(kind === "hero" ? 1800 : 1200, kind === "hero" ? 1000 : 1200, { fit: "cover", position: "attention" }).png({ quality: 92 }).toBuffer();
+  await fs.writeFile(path.join(dir, name), output);
+  const url = `/api/launch-os/media/${encodeURIComponent(project.slug)}/${encodeURIComponent(name)}`;
+  await mutateLaunchOs((store) => {
+    const saved = store.projects[project.id]; if (!saved) return;
+    saved.site = saved.site || launchOsDefaultSite(saved.token, saved.publicUrl, saved.mode);
+    saved.site.media = saved.site.media || { pfp: "", hero: "", gallery: [] };
+    if (kind === "gallery") saved.site.media.gallery = [...(saved.site.media.gallery || []), url].slice(-12);
+    else saved.site.media[kind] = url;
+    saved.updatedAt = new Date().toISOString();
+  });
+  return { url, kind, project: clientLaunchOsProject(await getLaunchOsProjectForUser(project.userId, project.id).catch(async () => (await readLaunchOs()).projects[project.id])) };
+}
+
 function launchOsReadiness(project) {
   const links = project.links || {};
   const groups = Array.isArray(project.telegram?.groups) ? project.telegram.groups : [];
@@ -56914,7 +57025,7 @@ function clientLaunchOsProject(project) {
   if (!project) return null;
   return {
     id: project.id, slug: project.slug, mode: project.mode, publicUrl: project.publicUrl,
-    token: project.token, brand: project.brand, links: project.links, content: project.content,
+    token: project.token, brand: project.brand, links: project.links, content: project.content, site: project.site || launchOsDefaultSite(project.token, project.publicUrl, project.mode),
     listing: project.listing || {}, crisis: project.crisis || { active: false, message: "" },
     officialClaim: Boolean(project.officialClaim), telegram: project.telegram || { groups: [] },
     telegramSetupUrl: launchOsSetupUrl(project), readiness: launchOsReadiness(project),
@@ -56957,7 +57068,7 @@ async function createLaunchOsProject(userId, body = {}, options = {}) {
   if (existing) return clientLaunchOsProject(existing);
   const id = crypto.randomBytes(6).toString("hex");
   const slug = `${socialKitSlug(token.name || token.symbol)}-${id.slice(0, 6)}`;
-  const publicUrl = `https://www.slimewire.org/launch-hq/${slug}`;
+  const publicUrl = `https://www.slimewire.org/coin-site?project=${encodeURIComponent(slug)}`;
   const project = {
     id, slug, setupCode: crypto.randomBytes(5).toString("hex"), userId: String(userId), mode,
     editorKeyHash: options.editorKeyHash || "",
@@ -56973,6 +57084,7 @@ async function createLaunchOsProject(userId, body = {}, options = {}) {
     telegram: { groups: [] }, listing: { notes: "", dexPaid: false, coinGeckoSubmitted: false },
     crisis: { active: false, message: "" }
   };
+  project.site = launchOsDefaultSite(token, publicUrl, mode);
   await mutateLaunchOs((current) => { current.projects[id] = project; });
   return clientLaunchOsProject(project);
 }
@@ -57007,6 +57119,18 @@ function applyLaunchOsUpdate(project, body = {}) {
   project.crisis = project.crisis || { active: false, message: "" };
   if (body.crisis?.active != null) project.crisis.active = Boolean(body.crisis.active);
   if (body.crisis?.message != null) project.crisis.message = launchOsCleanText(body.crisis.message, 500);
+  const site = body.site && typeof body.site === "object" ? body.site : null;
+  if (site) {
+    project.site = project.site || launchOsDefaultSite(project.token, project.publicUrl, project.mode);
+    if (["cinematic", "terminal", "editorial"].includes(String(site.template))) project.site.template = String(site.template);
+    if (/^#[0-9a-f]{6}$/i.test(String(site.accent || ""))) project.site.accent = String(site.accent);
+    for (const key of ["prompt", "headline", "subhead", "lore"]) if (site[key] != null) project.site[key] = launchOsCleanText(site[key], key === "lore" ? 2400 : 500);
+    if (Array.isArray(site.roadmap)) project.site.roadmap = site.roadmap.slice(0, 6).map((x) => launchOsCleanText(x, 180)).filter(Boolean);
+    if (site.sections && typeof site.sections === "object") {
+      project.site.sections = project.site.sections || {};
+      for (const key of ["market", "lore", "gallery", "howToBuy", "roadmap", "socials", "memeMaker"]) if (site.sections[key] != null) project.site.sections[key] = Boolean(site.sections[key]);
+    }
+  }
   project.updatedAt = new Date().toISOString();
   return project;
 }
