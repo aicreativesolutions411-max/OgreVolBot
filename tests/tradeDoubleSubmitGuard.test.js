@@ -929,6 +929,16 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
   // Duration is minutes now.
   assert.match(serverSource, /durationMin/);
   assert.match(functionBody(serverSource, "raidSetupCard"), /Duration: \$\{Number\(d\.durationMin\)/);
+  const raidHandler = functionBody(serverSource, "handleTelegramRaidCommand");
+  assert.match(raidHandler, /setup card send failed/);
+  assert.match(raidHandler, /Check that I can send messages/);
+  const tweetParser = functionBody(serverSource, "parseTweetId");
+  assert.match(tweetParser, /fxtwitter\|vxtwitter\|fixupx/);
+  assert.match(tweetParser, /status\\\/\(\\d\+\)/);
+  const groupCommand = functionBody(serverSource, "handleGroupBotCommand");
+  assert.match(groupCommand, /cmd === "raid" && !arg/);
+  const messageHandler = functionBody(serverSource, "handleMessage");
+  assert.match(messageHandler, /setGroupBotFeature\(chatId, "raid", true\)/);
   // A live raid is pinned, and every fifth newer group post replaces it at the bottom without
   // leaving duplicate cards behind. Completion unpins it.
   assert.match(functionBody(serverSource, "startRaidFromDraft"), /pinChatMessage/);
@@ -1031,6 +1041,20 @@ test("core group mute commands work even when Rose is off", () => {
   assert.match(group, /ROSE_MUTE_PERMS/);
   assert.match(group, /ROSE_UNMUTE_PERMS/);
   assert.match(group, /roseParseDuration/);
+});
+
+test("owner growth stats track web, Telegram, wallets, groups, and generated sites", () => {
+  assert.match(serverSource, /function growthStatsPath\(/);
+  assert.match(serverSource, /async function recordTelegramGrowthUser\(/);
+  assert.match(serverSource, /async function platformGrowthSnapshot\(/);
+  assert.match(serverSource, /async function handlePlatformGrowthCommand\(/);
+  assert.match(functionBody(serverSource, "handleMessage"), /adminstats[\s\S]*platformstats/);
+  assert.match(functionBody(serverSource, "handleMessage"), /That command is for SlimeWire admins/);
+  assert.match(functionBody(serverSource, "handleMessage"), /platform totals stay private/);
+  assert.match(functionBody(serverSource, "walletRecord"), /createdAt: new Date\(\)\.toISOString\(\)/);
+  const snapshot = functionBody(serverSource, "platformGrowthSnapshot");
+  for (const source of ["readWebAuthStore", "readWalletStore", "readTelegramGroups", "readLaunchOs", "readGrowthStats"]) assert.match(snapshot, new RegExp(source));
+  assert.match(functionBody(serverSource, "handlePlatformGrowthCommand"), /SlimeWire Growth/);
 });
 
 test("KOL Call Feed watches public sources, is admin-selected, deduped, and posts one combined scan", () => {

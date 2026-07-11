@@ -13609,6 +13609,10 @@ function socialKitsPath() {
   return path.join(CONFIG.dataDir, "social-kits.json");
 }
 
+function growthStatsPath() {
+  return path.join(CONFIG.dataDir, "growth-stats.json");
+}
+
 function launchOsPath() {
   return path.join(CONFIG.dataDir, "launch-os.json");
 }
@@ -14432,6 +14436,15 @@ async function handleMessage(message, userId) {
   const chatId = message.chat.id;
   const text = (message.text || "").trim();
   const session = sessions.get(chatId);
+  void recordTelegramGrowthUser(userId).catch(() => {});
+
+  const growthCommand = parseCommandWithArgument(text, ["adminstats", "growth", "platformstats"]);
+  if (growthCommand) {
+    if (!isAdmin(userId)) { await say(chatId, "That command is for SlimeWire admins."); return; }
+    if (!isPrivateChat(message.chat)) { await say(chatId, "Open my DM and send /adminstats so platform totals stay private."); return; }
+    await handlePlatformGrowthCommand(chatId);
+    return;
+  }
 
   if (!isPrivateChat(message.chat)) {
     registerTelegramGroup(message.chat);
@@ -14842,11 +14855,15 @@ async function handleMessage(message, userId) {
   if (raidCommand) {
     // RAID BOT module: in a configured group, require the Raid toggle on (off by default). Legacy
     // groups (no entry) and DMs work as before. The raid post already carries the SlimeWire link.
-    if (!isPrivateChat(message.chat)) {
+    if (!isPrivateChat(message.chat) && String(raidCommand.argument || "").trim()) {
       const e = await getGroupBotEntry(chatId).catch(() => null);
       if (e && !groupBotFeatureOn(e, "raid")) {
-        await say(chatId, "⚔️ Raid Bot is off here. An admin can turn it on: send /raid on (or open /settings).");
-        return;
+        if (await isGroupBotAdmin(chatId, userId, message).catch(() => false)) {
+          await setGroupBotFeature(chatId, "raid", true);
+        } else {
+          await say(chatId, "Raid Bot is off here. A group admin can turn it on with /raid on.");
+          return;
+        }
       }
     }
     await handleTelegramRaidCommand(chatId, message, raidCommand.argument);
@@ -33277,7 +33294,7 @@ function slimewireTokenLinks(tokenMint) {
 // HTML sender for rich group/channel replies: clickable pair names, tap-to-copy CAs.
 // A specific tweet link (x.com / twitter.com /<user>/status/<id>) — vs a search/intent/profile
 // URL. Only a real post should unfurl into the embedded tweet; everything else stays clean.
-const TWEET_LINK_RE = /https?:\/\/(?:www\.)?(?:x|twitter|fxtwitter|vxtwitter|fixupx)\.com\/([A-Za-z0-9_]+)\/status\/(\d+)/i;
+const TWEET_LINK_RE = /https?:\/\/(?:www\.|mobile\.)?(?:x|twitter|fxtwitter|vxtwitter|fixupx)\.com\/(?:[^/?#\s]+\/)*status\/(\d+)/i;
 function hasTweetPost(text) { return TWEET_LINK_RE.test(String(text || "")); }
 // Twitter blocks Telegram's link-preview crawler, so a raw x.com link unfurls with NO media.
 // fxtwitter mirrors the post with proper OG tags, so Telegram shows the full post — image/
@@ -43471,7 +43488,11 @@ async function handleTelegramRaidCommand(chatId, message, argument) {
     const d = { tid, url, symbol, by, targets: { ...cfg.targets }, durationMin: cfg.durationMin, savedPresetLabel: raidPresetLabel(cfg), at: Date.now() };
     const card = raidSetupCard(d);
     const sent = await sendGroupAlertMedia(chatId, null, card.text, card.markup);
-    if (sent && sent.result && sent.result.message_id) raidDrafts.set(raidDraftKey(chatId, sent.result.message_id), d);
+    if (sent?.result?.message_id) raidDrafts.set(raidDraftKey(chatId, sent.result.message_id), d);
+    else {
+      console.warn(`[raid] setup card send failed chat=${chatId}`);
+      await say(chatId, "Couldn't open the raid setup menu. Check that I can send messages in this group, then try again.").catch(() => {});
+    }
     // GC stale drafts so the map can't grow unbounded.
     if (raidDrafts.size > 200) { const cutoff = Date.now() - 3600_000; for (const [k, v] of raidDrafts) if ((v.at || 0) < cutoff) raidDrafts.delete(k); }
     return;
@@ -44813,6 +44834,9 @@ async function handleGroupBotCommand(message, userId) {
   if (!m) return false;
   const cmd = m[1].toLowerCase();
   const arg = (m[2] || "").toLowerCase();
+  // Bare /raid belongs to the raid handler so it always opens raid help.
+  // /raid on and /raid off remain admin-only module toggles here.
+  if (cmd === "raid" && !arg) return false;
   const chatId = chat.id;
   if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only group admins can change the bot's settings."); return true; }
   if (cmd === "settings") { await groupBotPostSetup(chatId); return true; }
@@ -50405,7 +50429,10 @@ async function refreshPresaleChain(maxAgeMs = 90_000) {
 // --- Raid posts: /raid in Telegram registers an X post, ranked by likes+RTs ---
 function raidPostsPath() { return path.join(CONFIG.dataDir, "raid-posts.json"); }
 async function readRaidPosts() { const s = await readJson(raidPostsPath()); if (!Array.isArray(s.posts)) s.posts = []; return s; }
-function parseTweetId(url) { const m = /(?:x\.com|twitter\.com)\/[^/]+\/status\/(\d+)/i.exec(String(url || "")); return m ? m[1] : null; }
+function parseTweetId(url) {
+  const m = /(?:www\.|mobile\.)?(?:x|twitter|fxtwitter|vxtwitter|fixupx)\.com\/(?:[^/?#\s]+\/)*status\/(\d+)/i.exec(String(url || ""));
+  return m ? m[1] : null;
+}
 async function fetchXEngagement(tweetId) {
   if (!tweetId) return null;
   // PREFERRED: official X API, but ONLY if a bearer token is configured (most accurate, has
@@ -50716,7 +50743,10 @@ async function handleRaidSetupCallback(query, userId) {
     if (!(d.targets.likes || d.targets.rts || d.targets.replies || d.targets.bookmarks)) { try { await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "Set at least one goal first.", show_alert: true }); } catch {} return true; }
     raidDrafts.delete(key);
     try { await telegram("deleteMessage", { chat_id: chatId, message_id: msgId }); } catch {}
-    await startRaidFromDraft(chatId, d).catch(() => {});
+    await startRaidFromDraft(chatId, d).catch(async (error) => {
+      console.warn(`[raid] start failed chat=${chatId}: ${friendlyError(error)}`);
+      await say(chatId, "Couldn't start the raid. Check my Send Messages and Pin Messages permissions, then run /raid with the link again.").catch(() => {});
+    });
     return true;
   }
   if (data.startsWith("rd:p:")) {
@@ -52503,6 +52533,104 @@ async function readWebAuthStore() {
   if (!Array.isArray(store.browserTradeOrders)) store.browserTradeOrders = [];
   if (!Array.isArray(store.sessionWalletOrders)) store.sessionWalletOrders = [];
   return store;
+}
+
+async function readGrowthStats() {
+  const store = await readJson(growthStatsPath()).catch(() => ({ telegramUsers: {}, days: {} }));
+  if (!store.telegramUsers || typeof store.telegramUsers !== "object") store.telegramUsers = {};
+  if (!store.days || typeof store.days !== "object") store.days = {};
+  return store;
+}
+
+const growthTelegramProcessSeen = new Set();
+async function recordTelegramGrowthUser(userId) {
+  const raw = String(userId || "");
+  if (!raw) return;
+  const day = new Date().toISOString().slice(0, 10);
+  const userHash = hashWebSecret(`growth:telegram:${raw}`).slice(0, 24);
+  const processKey = `${day}:${userHash}`;
+  if (growthTelegramProcessSeen.has(processKey)) return;
+  await withFileLock(growthStatsPath(), async () => {
+    const store = await readGrowthStats();
+    const isNew = !store.telegramUsers[userHash];
+    if (isNew) store.telegramUsers[userHash] = { firstSeenDay: day };
+    const row = store.days[day] && typeof store.days[day] === "object" ? store.days[day] : { telegramNew: 0, telegramActive: {} };
+    if (!row.telegramActive || typeof row.telegramActive !== "object") row.telegramActive = {};
+    row.telegramActive[userHash] = 1;
+    if (isNew) row.telegramNew = Number(row.telegramNew || 0) + 1;
+    store.days[day] = row;
+    const keep = Object.keys(store.days).sort().slice(-120);
+    for (const key of Object.keys(store.days)) if (!keep.includes(key)) delete store.days[key];
+    await writeJsonFile(growthStatsPath(), store);
+  });
+  growthTelegramProcessSeen.add(processKey);
+}
+
+function growthDateCount(rows, field, sinceMs) {
+  return rows.filter((row) => {
+    const at = Date.parse(row?.[field] || "");
+    return at > 0 && at >= sinceMs;
+  }).length;
+}
+
+async function platformGrowthSnapshot() {
+  const now = Date.now(), today = new Date().toISOString().slice(0, 10);
+  const todayStart = Date.parse(`${today}T00:00:00.000Z`), weekStart = now - 7 * 24 * 60 * 60 * 1000;
+  const [auth, walletStore, telegramGroups, launches, growth, mentions] = await Promise.all([
+    readWebAuthStore(), readWalletStore(), readTelegramGroups(), readLaunchOs(), readGrowthStats(), readGroupMentions()
+  ]);
+  const profiles = Object.values(auth.profiles || {}), wallets = (walletStore.wallets || []).filter((row) => {
+    const owner = String(row?.ownerId || "");
+    return owner && !owner.startsWith("__");
+  });
+  const groups = Object.values(telegramGroups.groups || {}), sites = Object.values(launches.projects || {});
+  const knownTelegram = new Set(Object.keys(growth.telegramUsers || {}));
+  for (const group of Object.values(mentions.groups || {})) {
+    for (const id of Object.keys(group?.members || {})) knownTelegram.add(hashWebSecret(`growth:telegram:${id}`).slice(0, 24));
+  }
+  for (const wallet of wallets) {
+    const owner = String(wallet.ownerId || "");
+    if (/^\d+$/.test(owner)) knownTelegram.add(hashWebSecret(`growth:telegram:${owner}`).slice(0, 24));
+  }
+  const todayGrowth = growth.days?.[today] || {}, recentDays = Object.entries(growth.days || {}).filter(([day]) => Date.parse(`${day}T00:00:00.000Z`) >= weekStart);
+  const activeWeek = new Set();
+  for (const [, row] of recentDays) for (const hash of Object.keys(row?.telegramActive || {})) activeWeek.add(hash);
+  const activeWebToday = new Set((auth.sessions || []).filter((row) => Date.parse(row.lastUsedAt || row.createdAt || "") >= todayStart).map((row) => String(row.userId))).size;
+  return {
+    today: {
+      webAccounts: growthDateCount(profiles, "createdAt", todayStart), webActive: activeWebToday,
+      telegramNew: Number(todayGrowth.telegramNew || 0), telegramActive: Object.keys(todayGrowth.telegramActive || {}).length,
+      wallets: growthDateCount(wallets, "createdAt", todayStart), groups: growthDateCount(groups, "addedAt", todayStart), sites: growthDateCount(sites, "createdAt", todayStart)
+    },
+    week: {
+      webAccounts: growthDateCount(profiles, "createdAt", weekStart), telegramNew: recentDays.reduce((sum, [, row]) => sum + Number(row?.telegramNew || 0), 0),
+      telegramActive: activeWeek.size, wallets: growthDateCount(wallets, "createdAt", weekStart), groups: growthDateCount(groups, "addedAt", weekStart), sites: growthDateCount(sites, "createdAt", weekStart)
+    },
+    total: { webAccounts: profiles.length, telegramKnown: knownTelegram.size, wallets: wallets.length, groups: groups.length, sites: sites.length }
+  };
+}
+
+async function handlePlatformGrowthCommand(chatId) {
+  const s = await platformGrowthSnapshot();
+  await sayHtml(chatId, [
+    "📊 <b>SlimeWire Growth</b> · UTC",
+    "",
+    "<b>Today</b>",
+    `🌐 Web accounts <b>+${s.today.webAccounts}</b> · active <b>${s.today.webActive}</b>`,
+    `✈️ Telegram people <b>+${s.today.telegramNew}</b> · active <b>${s.today.telegramActive}</b>`,
+    `👛 Wallets created <b>${s.today.wallets}</b> · sites <b>${s.today.sites}</b> · groups <b>${s.today.groups}</b>`,
+    "",
+    "<b>Last 7 days</b>",
+    `🌐 Web accounts <b>+${s.week.webAccounts}</b>`,
+    `✈️ Telegram people <b>+${s.week.telegramNew}</b> · active <b>${s.week.telegramActive}</b>`,
+    `👛 Wallets created <b>${s.week.wallets}</b> · sites <b>${s.week.sites}</b> · groups <b>${s.week.groups}</b>`,
+    "",
+    "<b>Totals</b>",
+    `Web accounts <b>${s.total.webAccounts}</b> · known Telegram people <b>${s.total.telegramKnown}</b>`,
+    `User wallets <b>${s.total.wallets}</b> · groups <b>${s.total.groups}</b> · generated sites <b>${s.total.sites}</b>`,
+    "",
+    "<i>Daily Telegram and wallet creation tracking starts with this release; totals include existing records.</i>"
+  ].join("\n"));
 }
 
 async function writeWebAuthStore(store) {
@@ -70917,6 +71045,7 @@ function walletRecord(label, keypair, ownerId) {
     ownerId,
     label,
     publicKey: keypair.publicKey.toBase58(),
+    createdAt: new Date().toISOString(),
     secret: encryptSecret(Buffer.from(keypair.secretKey))
   };
 }
