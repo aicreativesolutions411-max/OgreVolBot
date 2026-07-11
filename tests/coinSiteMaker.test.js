@@ -23,6 +23,8 @@ test("coin site maker creates editable, published sites from the standalone CA f
   assert.match(server, /function launchOsCreativeCopy/);
   assert.match(server, /freeArtGenerated/);
   assert.match(server, /legacyHero[\s\S]*slimewire\\\/launch\\\/hero/);
+  assert.match(server, /publicMedia[\s\S]*CONFIG\.xDmRedirectOrigin/);
+  assert.match(server, /gallery:[\s\S]*\.map\(publicMedia\)/);
   assert.match(server, /kind === "pfp"[\s\S]*generateLaunchOsFreeMedia\(project, src\)/);
   assert.match(server, /slimewire-site-engine-v2/);
   assert.match(server, /function saveLaunchOsMedia/);

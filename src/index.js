@@ -57073,14 +57073,17 @@ function launchOsSiteForClient(project) {
   const media = site.media && typeof site.media === "object" ? site.media : {};
   const legacyPfp = /\/assets\/slimewire\/png\/slimewire-mark\.png$/i.test(String(media.pfp || "")) ? "" : media.pfp;
   const legacyHero = /\/assets\/slimewire\/launch\/hero\.png$/i.test(String(media.hero || "")) ? "" : media.hero;
+  const publicMedia = (value) => String(value || "").startsWith("/api/launch-os/media/")
+    ? `${String(CONFIG.xDmRedirectOrigin || "https://ogrevolbot.onrender.com").replace(/\/+$/, "")}${value}`
+    : value;
   return {
     ...defaults, ...site,
     sections: { ...defaults.sections, ...(site.sections || {}) },
     media: {
       ...defaults.media, ...media,
-      pfp: firstString(legacyPfp, project.token?.imageUrl, defaults.media.pfp),
-      hero: firstString(legacyHero, project.token?.imageUrl, defaults.media.hero),
-      gallery: Array.isArray(media.gallery) ? media.gallery.filter(Boolean).slice(0, 12) : defaults.media.gallery
+      pfp: publicMedia(firstString(legacyPfp, project.token?.imageUrl, defaults.media.pfp)),
+      hero: publicMedia(firstString(legacyHero, project.token?.imageUrl, defaults.media.hero)),
+      gallery: (Array.isArray(media.gallery) ? media.gallery.filter(Boolean).slice(0, 12) : defaults.media.gallery).map(publicMedia)
     }
   };
 }
