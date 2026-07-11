@@ -9216,21 +9216,22 @@ async function handleWebApiRequest(request, response, requestUrl) {
       }
       if (!decodePfpImageDataUrl(source)) { sendWebJson(request, response, 400, { ok: false, error: "Upload a valid PFP first, then generate the art set." }); return; }
       const format = body.format === "set" ? "set" : body.format === "gallery" ? "gallery" : "hero";
+      const referenceType = ["character", "logo"].includes(String(body.referenceType)) ? String(body.referenceType) : "auto";
       const basePrompt = launchOsCleanText(body.prompt || project.site?.prompt || "", 900);
       const brandContext = launchOsCleanText(`Website headline: ${project.site?.headline || ""}. Story: ${project.site?.subhead || ""} ${project.site?.lore || ""}`, 700);
       const make = async (kind, artFormat, direction) => {
-        const art = await aiSiteArt({ imageDataUrl: source, prompt: launchOsCleanText(`${basePrompt}. ${brandContext}. ${direction}`, 900), format: artFormat });
+        const art = await aiSiteArt({ imageDataUrl: source, prompt: launchOsCleanText(`${basePrompt}. ${brandContext}. ${direction}`, 900), format: artFormat, referenceType });
         return saveLaunchOsMedia(project, { kind, dataUrl: `data:image/png;base64,${art.toString("base64")}` });
       };
       let result;
       let generated = 0;
       if (format === "set") {
         const specs = [
-          ["hero", "hero", "Scene one: cinematic wide establishing shot; mascot on the right; expansive branded world; dramatic environmental storytelling."],
-          ["mobileHero", "mobile", "Scene two: distinctly different vertical composition and camera angle; mascot in motion; clean headline-safe space; mobile-first depth."],
-          ["gallery", "gallery", "Scene three: premium close character portrait; controlled studio lighting; graphic editorial backdrop; intimate expression."],
-          ["gallery", "gallery", "Scene four: energetic low-angle action scene; large environment; movement and community energy; different pose and lighting."],
-          ["gallery", "gallery", "Scene five: atmospheric world-detail campaign image; mascot smaller in frame; iconic objects and setting; clearly different composition."]
+          ["hero", "hero", "Scene one: the exact referenced identity occupies at least 40% of the canvas on the right in a confident three-quarter pose; cinematic wide world; face or symbol fully readable; headline-safe space on the left."],
+          ["mobileHero", "mobile", "Scene two: the exact referenced identity occupies the upper 55% of the vertical canvas in a new energetic pose and camera angle; recognizable face or symbol fully visible; clean mobile headline space below."],
+          ["gallery", "gallery", "Scene three: tight premium close-up variation of the exact referenced identity filling about 70% of the frame; new expression or dimensional treatment; controlled studio lighting; minimal editorial backdrop."],
+          ["gallery", "gallery", "Scene four: the exact referenced identity fills about 50% of the frame in a distinct low-angle action pose or dynamic dimensional logo treatment; motion, community energy and dramatic lighting."],
+          ["gallery", "gallery", "Scene five: the exact referenced identity fills about 45% of the frame in a new iconic campaign pose or premium material variation; different composition, wardrobe treatment and lighting; supporting world details only."]
         ];
         const galleryUrls = [];
         for (const [kind, artFormat, direction] of specs) {

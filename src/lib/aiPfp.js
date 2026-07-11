@@ -16,7 +16,7 @@ function cloudflareAiConfig() {
   };
 }
 function cloudflareSiteImageModel() {
-  const fallback = "@cf/black-forest-labs/flux-2-klein-4b";
+  const fallback = "@cf/black-forest-labs/flux-2-klein-9b";
   const value = String(process.env.CLOUDFLARE_SITE_IMAGE_MODEL || fallback).trim();
   return /^@cf\/[a-z0-9._-]+\/[a-z0-9._-]+$/i.test(value) ? value : fallback;
 }
@@ -73,24 +73,32 @@ export async function aiSlimePfp({ imageDataUrl, styleId }) {
   return buf;
 }
 
-export async function aiSiteArt({ imageDataUrl, prompt = "", format = "hero" }) {
+export async function aiSiteArt({ imageDataUrl, prompt = "", format = "hero", referenceType = "auto" }) {
   if (!aiSiteArtConfigured()) return null;
   const shape = format === "gallery" ? "square editorial campaign artwork"
     : format === "mobile" ? "portrait mobile website hero artwork, subject in the upper half with clean negative space below for headline text"
     : "cinematic ultra-wide website hero artwork, subject on the right with clear negative space on the left for headline text";
   const safePrompt = String(prompt || "").replace(/[\u0000-\u001f]/g, " ").trim().slice(0, 700);
-  const fullPrompt = `Using the supplied coin mascot as the exact main character reference, create ${shape}. ${safePrompt || "Build a bold, premium memecoin world around this character."} Preserve the mascot identity, colors and recognizable face. Professional art direction, cohesive lighting, rich environmental detail, sharp high-end commercial finish. No text, no logos, no watermarks.`;
+  const mode = ["character", "logo"].includes(String(referenceType)) ? String(referenceType) : "auto";
+  const identityRule = mode === "character"
+    ? "Image 0 and image 1 show the SAME immutable mascot identity. Recreate that exact character as the clear foreground subject: same species, face, eyes, colors, markings, silhouette and signature accessories. New pose, expression, camera angle and clothing are allowed, but never replace, omit or redesign the character."
+    : mode === "logo"
+      ? "Image 0 and image 1 show the SAME immutable logo identity. Keep its exact symbol, silhouette, color relationships and recognizable geometry as the clear foreground subject. Create dimensional, material, lighting and perspective variations of that same mark; do not invent a person, animal or unrelated mascot."
+      : "Image 0 and image 1 are the immutable identity references. If they show a mascot, recreate that exact character with the same species, face, eyes, colors, markings, silhouette and signature accessories. If they show a logo or emblem, preserve that exact recognizable symbol and do not invent a person or animal. The referenced subject must be large, obvious and central to the image—not omitted, replaced or reduced to background decoration.";
+  const fullPrompt = `${identityRule} Create ${shape}. ${safePrompt || "Build a bold, premium memecoin world around the referenced subject."} Change the pose, expression, action, camera angle, wardrobe treatment and scene while keeping one unmistakably consistent coin identity. Professional art direction, cohesive lighting, rich environmental detail, sharp high-end commercial finish. No captions, no watermarks, no unrelated words or unrelated brand marks. Preserve any logo that belongs to the reference identity.`;
   const cf = cloudflareAiConfig();
   if (cf.accountId && cf.token) {
     const match = /^data:([^;,]+);base64,(.+)$/s.exec(String(imageDataUrl || ""));
     if (!match) throw new Error("A valid reference image is required.");
     const source = Buffer.from(match[2], "base64");
-    const ref = await (await import("sharp")).default(source).resize(512, 512, { fit: "cover", position: "attention" }).png().toBuffer();
+    const sharp = (await import("sharp")).default;
+    const ref = await sharp(source).rotate().resize(480, 480, { fit: "contain", position: "attention", background: { r: 16, g: 16, b: 16, alpha: 1 } }).png().toBuffer();
+    const detailRef = await sharp(source).rotate().resize(480, 480, { fit: "cover", position: "attention" }).png().toBuffer();
     const form = new FormData();
     form.append("prompt", fullPrompt);
     form.append("input_image_0", new Blob([ref], { type: "image/png" }), "reference.png");
-    form.append("steps", "20");
-    form.append("guidance", "4");
+    form.append("input_image_1", new Blob([detailRef], { type: "image/png" }), "reference-detail.png");
+    form.append("guidance", "6");
     form.append("width", format === "mobile" ? "768" : format === "gallery" ? "1024" : "1536");
     form.append("height", format === "mobile" ? "1344" : format === "gallery" ? "1024" : "864");
     const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(cf.accountId)}/ai/run/${cloudflareSiteImageModel()}`, {

@@ -13,7 +13,7 @@
             const note = badge.nextElementSibling;
             if (note)
               note.textContent =
-                "Built-in generation creates coin-specific art and copy for free. fal.ai is an optional upgrade for additional AI scenes.";
+                "Cloudflare reference generation keeps the uploaded character or logo recognizable across every scene.";
           }
       });
     </script>
@@ -481,11 +481,20 @@
               ></textarea>
             </div>
             <div class="actions">
+              <div class="field" style="width: 100%">
+                <label for="referenceType">Reference type</label>
+                <select id="referenceType" class="input">
+                  <option value="auto">Auto-detect mascot or logo</option>
+                  <option value="character">Character / mascot</option>
+                  <option value="logo">Logo / emblem</option>
+                </select>
+              </div>
               <button id="aiSet" class="btn primary" style="width: 100%">
                 ✨ Generate Complete Art Set</button
               ><button id="aiHero" class="btn">Generate desktop + mobile</button
               ><button id="aiGallery" class="btn">Generate gallery art</button>
             </div>
+            <p class="msg"><b>Identity mode:</b> creates different versions of the same recognizable PFP character or logo—not empty backgrounds.</p>
             <p class="msg">One click replaces the hero set and gallery with five different, style-matched images. Allow about 30–60 seconds.</p>
           </div>
           <div class="group">
@@ -775,7 +784,7 @@
           try {
             const d = await api("/api/launch-os/ai/" + p.slug, {
               method: "POST", key,
-              body: JSON.stringify({ imageDataUrl: starter && starter.startsWith("data:") ? starter : "", prompt: $("#aiPrompt").value, format }),
+              body: JSON.stringify({ imageDataUrl: starter && starter.startsWith("data:") ? starter : "", prompt: $("#aiPrompt").value, referenceType: $("#referenceType").value, format }),
             });
             p = d.project;
             fill();

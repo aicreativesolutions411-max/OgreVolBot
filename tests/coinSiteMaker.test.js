@@ -40,20 +40,27 @@ test("maker offers three curated systems, direct preview, uploads, AI art, and o
   assert.match(maker, /\/api\/launch-os\/ai\//);
   assert.match(ai, /export async function aiSiteArt/);
   assert.match(ai, /export function aiSiteArtConfigured/);
-  assert.match(ai, /flux-2-klein-4b/);
+  assert.match(ai, /flux-2-klein-9b/);
   assert.match(ai, /CLOUDFLARE_SITE_IMAGE_MODEL/);
   assert.match(ai, /gemini-2\.5-flash-image/);
   assert.match(ai, /input_image_0/);
+  assert.match(ai, /input_image_1/);
+  assert.match(ai, /immutable mascot identity/);
+  assert.match(ai, /immutable logo identity/);
+  assert.match(ai, /fit: "contain"/);
+  assert.doesNotMatch(ai, /No text, no logos/);
   assert.match(ai, /aspectRatio: format === "mobile" \? "9:16"/);
   assert.match(ai, /ultra-wide website hero artwork/);
   for (const section of ["market", "lore", "gallery", "howToBuy", "roadmap", "socials", "memeMaker"]) {
     assert.match(maker, new RegExp(`id="sec-${section}"`), `${section} must exist before the first save`);
   }
   assert.match(maker, /REAL GENERATION ENGINE/);
-  assert.match(maker, /fal\.ai is an optional upgrade/);
+  assert.match(maker, /Cloudflare reference generation keeps the uploaded character or logo recognizable/);
   assert.match(maker, /FREE CUSTOM BRAND ENGINE/);
-  assert.match(maker, /coin-specific art and copy for free/);
   assert.match(maker, /Generate Complete Art Set/);
+  assert.match(maker, /Reference type/);
+  assert.match(maker, /same recognizable PFP character or logo/);
+  assert.match(maker, /referenceType: \$\("#referenceType"\)\.value/);
   assert.match(maker, /format === "set"/);
   assert.match(maker, /Cloudflare is generating/);
   assert.match(maker, /slotUpload/);
@@ -62,6 +69,7 @@ test("maker offers three curated systems, direct preview, uploads, AI art, and o
   assert.match(maker, /Published live at/);
   assert.match(server, /body\.format === "set"/);
   assert.match(server, /Scene one:[\s\S]*Scene five:/);
+  assert.match(server, /occupies at least 40%[\s\S]*filling about 70%[\s\S]*fills about 45%/);
   assert.match(server, /galleryIndex/);
   assert.match(server, /launchOsTrustedTokenImageBuffer\(referenceUrl\)/);
 });
