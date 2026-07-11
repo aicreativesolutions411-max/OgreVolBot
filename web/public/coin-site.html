@@ -716,7 +716,7 @@
             window.OGRE_PORTAL_CONFIG?.apiBase ||
               "https://ogrevolbot.onrender.com",
           ).replace(/\/+$/, ""),
-          slug = location.pathname.split("/coin/")[1]?.split("/")[0];
+          slug = location.pathname.split("/ca/")[1]?.split("/")[0] || location.pathname.split("/coin/")[1]?.split("/")[0];
         let p, l;
         function link(label, url) {
           return url

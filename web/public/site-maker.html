@@ -514,12 +514,20 @@
             </div>
           </div>
           <div id="studioMsg" class="msg" aria-live="polite"></div>
+          <div class="group">
+            <label>Permanent site link</label>
+            <a id="publicUrl" class="input" href="#" target="_blank" style="display:block;overflow-wrap:anywhere"></a>
+            <div class="actions" style="margin-top:8px">
+              <button id="copyPublicUrl" class="btn" type="button">Copy site link</button>
+            </div>
+            <p id="publishState" class="msg" aria-live="polite"></p>
+          </div>
           <input id="slotUpload" type="file" accept="image/png,image/jpeg,image/webp" hidden />
         </aside>
         <div class="preview"><iframe id="frame"></iframe></div>
       </section>
     </main>
-    <button id="save" class="btn primary save" hidden>Save + Publish</button>
+    <button id="save" class="btn primary save" hidden>Save changes</button>
     <script>
       addEventListener("DOMContentLoaded", () => {
         const f = document.getElementById("frame");
@@ -618,6 +626,12 @@
             )
             .join("");
           $("#openSite").href = p.publicUrl;
+          $("#publicUrl").href = p.publicUrl;
+          $("#publicUrl").textContent = p.publicUrl.replace(/^https?:\/\//, "");
+          $("#copyPublicUrl").onclick = async () => {
+            await navigator.clipboard.writeText(p.publicUrl);
+            $("#publishState").textContent = "Site link copied.";
+          };
           $("#frame").src = previewUrl();
           $("#intro").style.display = "none";
           $("#studio").classList.add("on");
@@ -633,11 +647,15 @@
               ? '<b style="color:var(--g)">✓ Site publishing unlocked</b><br>Keep the private edit link to change this site anytime.'
               : "";
             $("#openSite").textContent = "Open published site";
+            $("#save").textContent = "Save + publish";
+            $("#publishState").textContent = "LIVE — changes publish to this link when you save.";
             return;
           }
           box.classList.add("on");
           box.innerHTML = `<b>Unlock this complete site for $${Number(pay.priceUsd || 10).toFixed(0)}</b><br>Send exactly <b>${Number(pay.priceSol || 0).toFixed(6)} SOL</b> to:<code>${pay.depositAddress || ""}</code><div class="actions"><button id="copyPay" class="btn">Copy address</button><button id="checkPay" class="btn primary">Check payment</button></div><div id="payMsg" class="msg">Your owner editor stays saved while payment confirms.</div>`;
           $("#openSite").textContent = "Open owner preview";
+          $("#save").textContent = "Save preview";
+          $("#publishState").textContent = "UNPUBLISHED PREVIEW — unlock with payment or an admin code to make this the live site.";
           $("#copyPay").onclick = () =>
             navigator.clipboard.writeText(pay.depositAddress || "");
           $("#checkPay").onclick = async () => {
@@ -653,17 +671,29 @@
           };
         }
         async function save() {
-          sync();
-          const d = await api("/api/launch-os/edit/" + p.slug, {
-            method: "POST",
-            key,
-            body: JSON.stringify({ site: p.site }),
-          });
-          p = d.project;
-          $("#frame").src = previewUrl();
-          $("#studioMsg").textContent = p.published
-            ? "Saved and published."
-            : "Saved to owner preview. Unlock payment to publish.";
+          const button = $("#save");
+          const original = button.textContent;
+          button.disabled = true;
+          button.textContent = "Saving…";
+          try {
+            sync();
+            const d = await api("/api/launch-os/edit/" + p.slug, {
+              method: "POST",
+              key,
+              body: JSON.stringify({ site: p.site }),
+            });
+            p = d.project;
+            $("#frame").src = previewUrl();
+            $("#studioMsg").textContent = p.published
+              ? `✓ Published live at ${p.publicUrl.replace(/^https?:\/\//, "")}`
+              : "✓ Preview saved. It is not public yet—complete the unlock above to publish.";
+            renderPayment();
+          } catch (error) {
+            $("#studioMsg").textContent = `Save failed: ${error.message}`;
+          } finally {
+            button.disabled = false;
+            if (!p) button.textContent = original;
+          }
         }
         $("#build").onclick = async () => {
           const b = $("#build");

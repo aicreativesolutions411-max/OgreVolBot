@@ -6800,7 +6800,7 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "site-maker.html", "no-store, max-age=0");
       return;
     }
-    if (request.method === "GET" && (requestUrl.pathname === "/coin-site" || requestUrl.pathname.startsWith("/coin/"))) {
+    if (request.method === "GET" && (requestUrl.pathname === "/coin-site" || requestUrl.pathname.startsWith("/coin/") || requestUrl.pathname.startsWith("/ca/"))) {
       await serveStaticHtmlPage(response, "coin-site.html", "no-store, max-age=0");
       return;
     }
@@ -57429,7 +57429,25 @@ async function getLaunchOsProjectForUser(userId, id) {
 async function launchOsProjectBySlug(slug) {
   const wanted = String(slug || "").trim().toLowerCase();
   const store = await readLaunchOs();
-  return Object.values(store.projects).find((project) => String(project.slug || "").toLowerCase() === wanted) || null;
+  return Object.values(store.projects).find((project) =>
+    String(project.slug || "").toLowerCase() === wanted || String(project.publicSlug || "").toLowerCase() === wanted
+  ) || null;
+}
+
+function launchOsPublicSlug(store, token, excludeId = "") {
+  const base = socialKitSlug(token?.symbol || token?.name || "coin").slice(0, 48) || "coin";
+  const used = new Set(Object.values(store?.projects || {})
+    .filter((project) => String(project.id) !== String(excludeId))
+    .map((project) => String(project.publicSlug || "").trim().toLowerCase())
+    .filter(Boolean));
+  if (!used.has(base)) return base;
+  let number = 2;
+  while (used.has(`${base}-${number}`)) number += 1;
+  return `${base}-${number}`;
+}
+
+function launchOsPublicSiteUrl(publicSlug) {
+  return `https://www.slimewire.org/ca/${encodeURIComponent(publicSlug)}`;
 }
 
 async function createLaunchOsProject(userId, body = {}, options = {}) {
@@ -57437,10 +57455,25 @@ async function createLaunchOsProject(userId, body = {}, options = {}) {
   const mode = String(body.mode || "official").toLowerCase() === "cto" ? "cto" : "official";
   const store = await readLaunchOs();
   const existing = userId ? Object.values(store.projects).find((project) => String(project.userId) === String(userId) && String(project.token?.ca || "").toLowerCase() === token.ca.toLowerCase()) : null;
-  if (existing) return clientLaunchOsProject(existing);
+  if (existing) {
+    if (!existing.publicSlug || !String(existing.publicUrl || "").includes("/ca/")) {
+      const migrated = await mutateLaunchOs((current) => {
+        const saved = current.projects[existing.id];
+        if (!saved.publicSlug) saved.publicSlug = launchOsPublicSlug(current, saved.token, saved.id);
+        const oldUrl = saved.publicUrl;
+        saved.publicUrl = launchOsPublicSiteUrl(saved.publicSlug);
+        if (!saved.links?.website || saved.links.website === oldUrl || /\/coin-site\?project=/i.test(saved.links.website)) saved.links.website = saved.publicUrl;
+        saved.updatedAt = new Date().toISOString();
+        return saved;
+      });
+      return clientLaunchOsProject(migrated);
+    }
+    return clientLaunchOsProject(existing);
+  }
   const id = crypto.randomBytes(6).toString("hex");
   const slug = `${socialKitSlug(token.name || token.symbol)}-${id.slice(0, 6)}`;
-  const publicUrl = `https://www.slimewire.org/coin-site?project=${encodeURIComponent(slug)}`;
+  const publicSlug = launchOsPublicSlug(store, token);
+  const publicUrl = launchOsPublicSiteUrl(publicSlug);
   const code = String(body.code || "").trim().toUpperCase();
   const solUsd = await getSolUsdPrice({ timeoutMs: 2_500 }).catch(() => 0);
   if (!(solUsd > 0)) throw Object.assign(new Error("SOL/USD price is temporarily unavailable. Try again shortly."), { statusCode: 503 });
@@ -57458,7 +57491,7 @@ async function createLaunchOsProject(userId, body = {}, options = {}) {
   }
   const priceSol = Math.ceil((COIN_SITE_PRICE_USD / solUsd) * 1_000_000) / 1_000_000;
   const project = {
-    id, slug, setupCode: crypto.randomBytes(5).toString("hex"), userId: String(userId), mode,
+    id, slug, publicSlug, setupCode: crypto.randomBytes(5).toString("hex"), userId: String(userId), mode,
     editorKeyHash: options.editorKeyHash || "",
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), publicUrl, token,
     officialClaim: false,
@@ -57478,6 +57511,16 @@ async function createLaunchOsProject(userId, body = {}, options = {}) {
   };
   project.site = launchOsDefaultSite(token, publicUrl, mode);
   await mutateLaunchOs((current) => {
+    const availablePublicSlug = launchOsPublicSlug(current, project.token, project.id);
+    if (availablePublicSlug !== project.publicSlug) {
+      const oldUrl = project.publicUrl;
+      project.publicSlug = availablePublicSlug;
+      project.publicUrl = launchOsPublicSiteUrl(availablePublicSlug);
+      if (project.links?.website === oldUrl) project.links.website = project.publicUrl;
+      for (const key of Object.keys(project.content || {})) {
+        project.content[key] = String(project.content[key] || "").split(oldUrl).join(project.publicUrl);
+      }
+    }
     if (waived) {
       const row = current.codes[code];
       if (!row || row.usedAt || row.revokedAt) throw Object.assign(new Error("That free code was already used."), { statusCode: 409 });

@@ -33,7 +33,7 @@ test("coin site maker creates editable, published sites from the standalone CA f
 });
 
 test("maker offers three curated systems, direct preview, uploads, AI art, and optional sections", () => {
-  for (const text of ["Cinematic", "Degen Terminal", "Clean Editorial", "Generate Complete Website", "Generate Complete Art Set", "Add gallery artwork", "Save \\+ Publish"]) assert.match(maker, new RegExp(text));
+  for (const text of ["Cinematic", "Degen Terminal", "Clean Editorial", "Generate Complete Website", "Generate Complete Art Set", "Add gallery artwork", "Permanent site link", "Save changes"]) assert.match(maker, new RegExp(text));
   assert.match(maker, /<iframe id="frame"/);
   assert.match(maker, /X-Launch-Edit-Key/);
   assert.match(maker, /\/api\/launch-os\/media\//);
@@ -58,6 +58,8 @@ test("maker offers three curated systems, direct preview, uploads, AI art, and o
   assert.match(maker, /Cloudflare is generating/);
   assert.match(maker, /slotUpload/);
   assert.match(maker, /slimewire-site-image-edit/);
+  assert.match(maker, /UNPUBLISHED PREVIEW/);
+  assert.match(maker, /Published live at/);
   assert.match(server, /body\.format === "set"/);
   assert.match(server, /Scene one:[\s\S]*Scene five:/);
   assert.match(server, /galleryIndex/);
@@ -108,6 +110,10 @@ test("coin sites charge $10 in SOL, support one-time admin codes, and retain a p
   assert.match(maker, /Copy edit link/);
   assert.match(site, /UNPUBLISHED UNTIL \$10 UNLOCK/);
   assert.match(server, /published: payment\.status === "unlocked"/);
+  assert.match(server, /function launchOsPublicSlug/);
+  assert.match(server, /\/ca\/\$\{encodeURIComponent\(publicSlug\)\}/);
+  assert.match(server, /project\.publicSlug/);
+  assert.match(site, /location\.pathname\.split\("\/ca\/"\)/);
   assert.doesNotMatch(server, /payment: project\.payment/);
 });
 
