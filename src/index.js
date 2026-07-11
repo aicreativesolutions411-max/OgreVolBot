@@ -77,7 +77,7 @@ import { finiteWalletNumber, normalizeSolWalletPnlSummary, normalizeSolWalletPos
 import { aggregateDexPairActivity, volumeFallbackFromOhlcv } from "./lib/scanActivity.js";
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp, listCharacterFiles, characterPfpCount, makeCharacterPfp } from "./lib/pfp.js";
 import { aiPfpConfigured, aiPfpStyles, aiSlimePfp } from "./lib/aiPfp.js";
-import { aiSiteArt } from "./lib/aiPfp.js";
+import { aiSiteArt, aiSiteArtConfigured, aiSiteArtProvider } from "./lib/aiPfp.js";
 import { xConfigured, xSearchMentions, xReply, xPost, xSearchQuery, xWhoAmI, xHandle, xGetTweet, xLastAuthError, xAuthMode, xAuthReport } from "./lib/xClient.js";
 import { xDmAuthMode, xDmConfigured, xDmFetchEvents, xDmOwnUserId as xDmResolvedOwnUserId, xDmSendText } from "./lib/xDmClient.js";
 import { isStaleXDmMoneyEvent, parseXDmBuySlotCommand, parseXDmSellSlotCommand, validateXDmBuyAmount, xDmEventTimestampMs, X_DM_BUY_LIMITS, X_DM_SELL_PERCENTAGES } from "./lib/xDmFlow.js";
@@ -9171,10 +9171,17 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, { ok: true, project: clientLaunchOsProject(project) });
       return;
     }
+    if (request.method === "GET" && pathname.startsWith("/api/launch-os/payment/")) {
+      const slug = decodeURIComponent(pathname.slice("/api/launch-os/payment/".length));
+      const project = await coinSitePaymentStatus(slug, launchOsEditorKeyFromRequest(request));
+      sendWebJson(request, response, 200, { ok: true, project });
+      return;
+    }
     if (request.method === "POST" && pathname.startsWith("/api/launch-os/edit/")) {
       const slug = decodeURIComponent(pathname.slice("/api/launch-os/edit/".length));
       const body = await readJsonRequestBody(request);
-      const project = await updatePublicLaunchOsProject(slug, launchOsEditorKeyFromRequest(request), body);
+      let project = await updatePublicLaunchOsProject(slug, launchOsEditorKeyFromRequest(request), body);
+      project = await launchOsGenerateStructuredCopy(project).catch(() => project);
       sendWebJson(request, response, 200, { ok: true, project });
       return;
     }
@@ -9193,17 +9200,28 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
     if (request.method === "POST" && pathname.startsWith("/api/launch-os/ai/")) {
-      if (!aiPfpConfigured()) { sendWebJson(request, response, 503, { ok: false, error: "AI art generation is not enabled yet." }); return; }
+      if (!aiSiteArtConfigured()) { sendWebJson(request, response, 503, { ok: false, error: "Provider art is not enabled yet. The free local brand engine is still active." }); return; }
       if (!aiPfpRateOk()) { sendWebJson(request, response, 429, { ok: false, error: "AI art is busy. Try again shortly." }); return; }
       const slug = decodeURIComponent(pathname.slice("/api/launch-os/ai/".length));
       const body = await readJsonRequestBody(request, 12_000_000);
       const project = await requireLaunchOsEditor(slug, launchOsEditorKeyFromRequest(request));
+      if ((project.payment?.status || "unlocked") !== "unlocked") {
+        sendWebJson(request, response, 402, { ok: false, error: "Unlock this site before generating provider artwork." }); return;
+      }
       const source = String(body.imageDataUrl || "");
       if (!decodePfpImageDataUrl(source)) { sendWebJson(request, response, 400, { ok: false, error: "Upload a valid PFP first." }); return; }
-      const art = await aiSiteArt({ imageDataUrl: source, prompt: body.prompt, format: body.format });
+      const format = body.format === "gallery" ? "gallery" : "hero";
+      const basePrompt = launchOsCleanText(body.prompt || project.site?.prompt || "", 900);
+      const art = await aiSiteArt({ imageDataUrl: source, prompt: project.site?.artPrompts?.[format === "gallery" ? "gallery" : "desktop"] || basePrompt, format });
       const dataUrl = `data:image/png;base64,${art.toString("base64")}`;
-      const result = await saveLaunchOsMedia(project, { kind: body.format === "gallery" ? "gallery" : "hero", dataUrl });
-      sendWebJson(request, response, 200, { ok: true, ...result });
+      const result = await saveLaunchOsMedia(project, { kind: format, dataUrl });
+      if (format === "hero") {
+        const mobile = await aiSiteArt({ imageDataUrl: source, prompt: project.site?.artPrompts?.mobile || basePrompt, format: "mobile" });
+        const mobileResult = await saveLaunchOsMedia(project, { kind: "mobileHero", dataUrl: `data:image/png;base64,${mobile.toString("base64")}` });
+        result.project = mobileResult.project;
+      }
+      await mutateLaunchOs((store) => { const saved = store.projects[project.id]; if (saved?.site) saved.site.imageProvider = aiSiteArtProvider(); });
+      sendWebJson(request, response, 200, { ok: true, ...result, provider: aiSiteArtProvider() });
       return;
     }
 
@@ -14391,6 +14409,26 @@ async function handleMessage(message, userId) {
     }
     const revoked = await revokeSocialKitCode(socialRevokeCommand[1]);
     await say(chatId, revoked ? "Code revoked." : "That code was not found or was already used.");
+    return;
+  }
+
+  const siteCodeCommand = /^\/(?:sitecode|webcode)(?:@\w+)?(?:\s+(\d+))?$/i.exec(text);
+  const siteCodesCommand = /^\/(?:sitecodes|webcodes)(?:@\w+)?$/i.test(text);
+  const siteRevokeCommand = /^\/(?:siterevoke|webrevoke)(?:@\w+)?\s+(\S+)$/i.exec(text);
+  if (isPrivateChat(message.chat) && (siteCodeCommand || siteCodesCommand || siteRevokeCommand)) {
+    if (!isAdmin(userId)) { await say(chatId, "That command is for SlimeWire admins."); return; }
+    if (siteCodeCommand) {
+      const codes = await createCoinSiteCodes(siteCodeCommand[1] || 1, userId);
+      await sayHtml(chatId, [`🎟 <b>${codes.length} one-time Coin Site code${codes.length === 1 ? "" : "s"}</b>`, "", ...codes.map((code) => `<code>${escapeTelegramHtml(code)}</code>`), "", "Each code unlocks one $10 generated site and is burned on use."].join("\n"));
+      return;
+    }
+    if (siteCodesCommand) {
+      const rows = (await listCoinSiteCodes()).slice(0, 30);
+      await sayHtml(chatId, rows.length ? ["🎟 <b>Recent Coin Site codes</b>", "", ...rows.map((row) => `${row.usedAt ? "✅ used" : row.revokedAt ? "🚫 revoked" : "🟢 ready"} · <code>${escapeTelegramHtml(row.code)}</code>`)].join("\n") : "No Coin Site codes yet. Use /sitecode 5 to make five.");
+      return;
+    }
+    const revoked = await revokeCoinSiteCode(siteRevokeCommand[1]);
+    await say(chatId, revoked ? "Site code revoked." : "That code was not found or was already used.");
     return;
   }
 
@@ -56895,8 +56933,8 @@ function publicSocialKitDraft(draft) {
 async function readLaunchOs() {
   const value = await readJson(launchOsPath()).catch(() => null);
   return value && typeof value === "object" && value.projects && typeof value.projects === "object"
-    ? value
-    : { projects: {} };
+    ? { ...value, codes: value.codes && typeof value.codes === "object" ? value.codes : {} }
+    : { projects: {}, codes: {} };
 }
 
 async function mutateLaunchOs(fn) {
@@ -56906,6 +56944,27 @@ async function mutateLaunchOs(fn) {
     await writeJsonFile(launchOsPath(), store);
     return result;
   });
+}
+
+const COIN_SITE_PRICE_USD = 10;
+const COIN_SITE_DEPOSIT_OWNER = "__coin_site_deposits__";
+function coinSiteCodeValue() { return `SITE-${crypto.randomBytes(4).toString("hex").toUpperCase()}`; }
+async function createCoinSiteCodes(count = 1, createdBy = "") {
+  const amount = Math.max(1, Math.min(25, Math.round(Number(count) || 1)));
+  return mutateLaunchOs((store) => {
+    const codes = [];
+    while (codes.length < amount) {
+      const code = coinSiteCodeValue(); if (store.codes[code]) continue;
+      store.codes[code] = { code, createdAt: new Date().toISOString(), createdBy: String(createdBy), usedAt: null, usedBy: null, projectId: null, revokedAt: null };
+      codes.push(code);
+    }
+    return codes;
+  });
+}
+async function listCoinSiteCodes() { return Object.values((await readLaunchOs()).codes || {}).sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0)); }
+async function revokeCoinSiteCode(raw = "") {
+  const code = String(raw).trim().toUpperCase();
+  return mutateLaunchOs((store) => { const row = store.codes[code]; if (!row || row.usedAt) return false; row.revokedAt = new Date().toISOString(); return true; });
 }
 
 function launchOsCleanText(value, max = 500) {
@@ -57038,6 +57097,7 @@ function launchOsDefaultSite(token, publicUrl, mode = "official") {
     media: {
       pfp: token.imageUrl || launchOsFallbackArtData(token, true),
       hero: token.imageUrl || launchOsFallbackArtData(token),
+      mobileHero: token.imageUrl || launchOsFallbackArtData(token, true),
       gallery: token.imageUrl ? [token.imageUrl] : []
     }, publicUrl
   };
@@ -57067,6 +57127,65 @@ function launchOsCreativeCopy(token, direction = "", mode = "official") {
   return { headline: headlines[voice], subhead: descriptions[voice], voice };
 }
 
+async function launchOsGenerateStructuredCopy(project) {
+  const direction = launchOsCleanText(project.site?.prompt || "", 700);
+  const promptHash = hashWebSecret(JSON.stringify({ ca: project.token?.ca, direction, mode: project.mode })).slice(0, 24);
+  if (project.site?.copyPromptHash === promptHash) return project;
+  let generated = null;
+  const apiKey = String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "").trim();
+  if (apiKey) {
+    const model = String(process.env.GEMINI_SITE_TEXT_MODEL || "gemini-2.5-flash-lite").trim();
+    const requestPrompt = [
+      "Create an original professional memecoin website content system. Return JSON only.",
+      `Token: ${project.token?.name} ($${project.token?.symbol})`, `Chain: ${project.token?.chain}`, `CA: ${project.token?.ca}`,
+      `Existing metadata: ${project.token?.description || "none"}`, `Creative direction: ${direction || "premium, memorable and community-first"}`,
+      "Write distinctive copy grounded only in these inputs. Do not invent partnerships, utility, returns, audits or guarantees.",
+      "Headline maximum 9 words. Subhead maximum 32 words. Lore 2-4 short paragraphs. Roadmap exactly 3 concise phases.",
+      "Also create desktop, mobile and square image prompts that preserve the supplied mascot, contain no text, and reserve safe space for HTML copy."
+    ].join("\n");
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      method: "POST", headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: requestPrompt }] }],
+        generationConfig: {
+          temperature: 0.9, responseMimeType: "application/json",
+          responseSchema: { type: "OBJECT", required: ["headline", "subhead", "lore", "roadmap", "heroPromptDesktop", "heroPromptMobile", "galleryPrompt"], properties: {
+            headline: { type: "STRING" }, subhead: { type: "STRING" }, lore: { type: "STRING" },
+            roadmap: { type: "ARRAY", items: { type: "STRING" }, minItems: 3, maxItems: 3 },
+            heroPromptDesktop: { type: "STRING" }, heroPromptMobile: { type: "STRING" }, galleryPrompt: { type: "STRING" },
+            accent: { type: "STRING" }
+          } }
+        }
+      }), signal: AbortSignal.timeout ? AbortSignal.timeout(25_000) : undefined
+    }).catch(() => null);
+    if (response?.ok) {
+      const data = await response.json().catch(() => ({}));
+      const text = (data?.candidates || []).flatMap((candidate) => candidate?.content?.parts || []).map((part) => part?.text || "").join("");
+      try { generated = JSON.parse(text); } catch { generated = null; }
+    }
+  }
+  const fallback = launchOsCreativeCopy(project.token, direction, project.mode);
+  return mutateLaunchOs((store) => {
+    const saved = store.projects[project.id]; if (!saved) return project;
+    saved.site = saved.site || launchOsDefaultSite(saved.token, saved.publicUrl, saved.mode);
+    saved.site.headline = launchOsCleanText(generated?.headline || fallback.headline, 140);
+    saved.site.subhead = launchOsCleanText(generated?.subhead || fallback.subhead, 360);
+    if (generated?.lore) saved.site.lore = launchOsCleanText(generated.lore, 2400);
+    if (Array.isArray(generated?.roadmap)) saved.site.roadmap = generated.roadmap.slice(0, 3).map((item) => launchOsCleanText(item, 180)).filter(Boolean);
+    saved.site.artPrompts = {
+      desktop: launchOsCleanText(generated?.heroPromptDesktop || direction, 900),
+      mobile: launchOsCleanText(generated?.heroPromptMobile || direction, 900),
+      gallery: launchOsCleanText(generated?.galleryPrompt || direction, 900)
+    };
+    if (/^#[0-9a-f]{6}$/i.test(String(generated?.accent || ""))) saved.site.accent = generated.accent;
+    saved.site.copyVoice = generated ? "gemini" : fallback.voice;
+    saved.site.textProvider = generated ? "gemini-2.5-flash-lite" : "local";
+    saved.site.copyPromptHash = promptHash;
+    saved.updatedAt = new Date().toISOString();
+    return clientLaunchOsProject(saved);
+  });
+}
+
 function launchOsSiteForClient(project) {
   const defaults = launchOsDefaultSite(project.token, project.publicUrl, project.mode);
   const site = project.site && typeof project.site === "object" ? project.site : {};
@@ -57083,6 +57202,7 @@ function launchOsSiteForClient(project) {
       ...defaults.media, ...media,
       pfp: publicMedia(firstString(legacyPfp, project.token?.imageUrl, defaults.media.pfp)),
       hero: publicMedia(firstString(legacyHero, project.token?.imageUrl, defaults.media.hero)),
+      mobileHero: publicMedia(firstString(media.mobileHero, project.token?.imageUrl, defaults.media.mobileHero)),
       gallery: (Array.isArray(media.gallery) ? media.gallery.filter(Boolean).slice(0, 12) : defaults.media.gallery).map(publicMedia)
     }
   };
@@ -57091,11 +57211,13 @@ function launchOsSiteForClient(project) {
 async function saveLaunchOsMedia(project, body = {}) {
   const src = decodePfpImageDataUrl(body.dataUrl);
   if (!src) throw Object.assign(new Error("Use a PNG, JPG or WebP image under 8MB."), { statusCode: 400 });
-  const kind = ["pfp", "hero", "gallery"].includes(String(body.kind)) ? String(body.kind) : "gallery";
+  const kind = ["pfp", "hero", "mobileHero", "gallery"].includes(String(body.kind)) ? String(body.kind) : "gallery";
   const dir = path.join(launchOsMediaDir(), project.slug);
   await fs.mkdir(dir, { recursive: true });
   const name = `${kind}-${Date.now()}-${crypto.randomBytes(3).toString("hex")}.png`;
-  const output = await sharp(src).rotate().resize(kind === "hero" ? 1800 : 1200, kind === "hero" ? 1000 : 1200, { fit: "cover", position: "attention" }).png({ quality: 92 }).toBuffer();
+  const width = kind === "hero" ? 1800 : kind === "mobileHero" ? 900 : 1200;
+  const height = kind === "hero" ? 1000 : kind === "mobileHero" ? 1200 : 1200;
+  const output = await sharp(src).rotate().resize(width, height, { fit: "cover", position: "attention" }).png({ quality: 92 }).toBuffer();
   await fs.writeFile(path.join(dir, name), output);
   const url = `/api/launch-os/media/${encodeURIComponent(project.slug)}/${encodeURIComponent(name)}`;
   await mutateLaunchOs((store) => {
@@ -57141,9 +57263,17 @@ function launchOsLinkAudit(project) {
 
 function clientLaunchOsProject(project) {
   if (!project) return null;
+  const sourcePayment = project.payment || { status: "unlocked", waived: true, legacy: true, priceUsd: COIN_SITE_PRICE_USD, priceSol: 0, depositAddress: "" };
+  const payment = {
+    status: sourcePayment.status === "awaiting_payment" ? "awaiting_payment" : "unlocked",
+    waived: Boolean(sourcePayment.waived), legacy: Boolean(sourcePayment.legacy),
+    priceUsd: Number(sourcePayment.priceUsd || COIN_SITE_PRICE_USD), priceSol: Number(sourcePayment.priceSol || 0),
+    depositAddress: String(sourcePayment.depositAddress || ""), paidAt: sourcePayment.paidAt || ""
+  };
   return {
     id: project.id, slug: project.slug, mode: project.mode, publicUrl: project.publicUrl,
     token: project.token, brand: project.brand, links: project.links, content: project.content, site: launchOsSiteForClient(project),
+    payment, published: payment.status === "unlocked",
     listing: project.listing || {}, crisis: project.crisis || { active: false, message: "" },
     officialClaim: Boolean(project.officialClaim), telegram: project.telegram || { groups: [] },
     telegramSetupUrl: launchOsSetupUrl(project), readiness: launchOsReadiness(project),
@@ -57187,6 +57317,22 @@ async function createLaunchOsProject(userId, body = {}, options = {}) {
   const id = crypto.randomBytes(6).toString("hex");
   const slug = `${socialKitSlug(token.name || token.symbol)}-${id.slice(0, 6)}`;
   const publicUrl = `https://www.slimewire.org/coin-site?project=${encodeURIComponent(slug)}`;
+  const code = String(body.code || "").trim().toUpperCase();
+  const solUsd = await getSolUsdPrice({ timeoutMs: 2_500 }).catch(() => 0);
+  if (!(solUsd > 0)) throw Object.assign(new Error("SOL/USD price is temporarily unavailable. Try again shortly."), { statusCode: 503 });
+  const codeRow = code ? store.codes?.[code] : null;
+  const waived = Boolean(codeRow && !codeRow.usedAt && !codeRow.revokedAt);
+  if (code && !waived) throw Object.assign(new Error("That free code is invalid, used or revoked."), { statusCode: 400 });
+  let depositAddress = "";
+  if (!waived) {
+    const wallet = await mutateWalletStore((walletStore) => {
+      const kp = Keypair.generate();
+      const row = walletRecord(`coinsite:${id}`, kp, COIN_SITE_DEPOSIT_OWNER);
+      walletStore.wallets.push(row); return row;
+    });
+    depositAddress = wallet.publicKey;
+  }
+  const priceSol = Math.ceil((COIN_SITE_PRICE_USD / solUsd) * 1_000_000) / 1_000_000;
   const project = {
     id, slug, setupCode: crypto.randomBytes(5).toString("hex"), userId: String(userId), mode,
     editorKeyHash: options.editorKeyHash || "",
@@ -57202,11 +57348,53 @@ async function createLaunchOsProject(userId, body = {}, options = {}) {
     telegram: { groups: [] }, listing: { notes: "", dexPaid: false, coinGeckoSubmitted: false },
     crisis: { active: false, message: "" }
   };
+  project.payment = {
+    status: waived ? "unlocked" : "awaiting_payment", waived, code: waived ? code : "",
+    priceUsd: COIN_SITE_PRICE_USD, priceSol, depositAddress, createdAt: new Date().toISOString()
+  };
   project.site = launchOsDefaultSite(token, publicUrl, mode);
-  await mutateLaunchOs((current) => { current.projects[id] = project; });
+  await mutateLaunchOs((current) => {
+    if (waived) {
+      const row = current.codes[code];
+      if (!row || row.usedAt || row.revokedAt) throw Object.assign(new Error("That free code was already used."), { statusCode: 409 });
+      row.usedAt = new Date().toISOString(); row.usedBy = String(userId || "public"); row.projectId = id;
+    }
+    current.projects[id] = project;
+  });
   const tokenArt = await launchOsTrustedTokenImageBuffer(token.imageUrl).catch(() => null);
   await generateLaunchOsFreeMedia(project, tokenArt).catch(() => {});
   return clientLaunchOsProject(await getLaunchOsProjectForUser(userId, id));
+}
+
+async function coinSitePaymentStatus(slug, editKey) {
+  let project = await requireLaunchOsEditor(slug, editKey);
+  const payment = project.payment;
+  if (!payment) return clientLaunchOsProject(project);
+  if (payment.status === "awaiting_payment" && payment.depositAddress) {
+    await LockService.withLock(`coin-site-payment:${project.id}`, 15_000, async () => {
+      const current = await requireLaunchOsEditor(slug, editKey);
+      if (current.payment?.status !== "awaiting_payment") return;
+      const lamports = Number(await getSolBalanceCached(new PublicKey(current.payment.depositAddress), { force: true }).catch(() => 0));
+      if (lamports < Math.round(Number(current.payment.priceSol) * 0.98 * 1e9)) return;
+      await mutateLaunchOs((store) => {
+        const row = store.projects[current.id];
+        row.payment.status = "unlocked"; row.payment.paidAt = new Date().toISOString(); row.payment.paidLamports = lamports;
+      });
+    });
+    project = await requireLaunchOsEditor(slug, editKey);
+  }
+  if (project.payment?.status === "unlocked" && project.payment.depositAddress && !project.payment.sweptAt) {
+    const wallet = (await readWalletStore()).wallets.find((row) => row.ownerId === COIN_SITE_DEPOSIT_OWNER && row.label === `coinsite:${project.id}`);
+    if (wallet) {
+      try {
+        const sweep = await drainSolFromWallet(decryptWallet(wallet), new PublicKey(CONFIG.feeWallet));
+        if (sweep?.signature) project = await mutateLaunchOs((store) => {
+          const row = store.projects[project.id]; row.payment.sweptAt = new Date().toISOString(); row.payment.sweepSignature = sweep.signature; return row;
+        });
+      } catch { /* payment stays unlocked; retry treasury sweep on the next check */ }
+    }
+  }
+  return clientLaunchOsProject(project);
 }
 
 async function createPublicLaunchOsProject(body = {}) {

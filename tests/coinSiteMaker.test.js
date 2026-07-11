@@ -13,6 +13,7 @@ test("coin site maker creates editable, published sites from the standalone CA f
   assert.match(server, /pathname\.startsWith\("\/api\/coin-site\/"\)/);
   assert.match(server, /pathname\.startsWith\("\/api\/launch-os\/media\/"\)/);
   assert.match(server, /pathname\.startsWith\("\/api\/launch-os\/ai\/"\)/);
+  assert.match(server, /launchOsGenerateStructuredCopy\(project\)/);
   assert.match(server, /function launchOsDefaultSite/);
   assert.match(server, /function launchOsSiteForClient/);
   assert.match(server, /function launchOsFallbackArtData/);
@@ -38,12 +39,17 @@ test("maker offers three curated systems, direct preview, uploads, AI art, and o
   assert.match(maker, /\/api\/launch-os\/media\//);
   assert.match(maker, /\/api\/launch-os\/ai\//);
   assert.match(ai, /export async function aiSiteArt/);
+  assert.match(ai, /export function aiSiteArtConfigured/);
+  assert.match(ai, /cloudflare-flux-2-dev/);
+  assert.match(ai, /gemini-2\.5-flash-image/);
+  assert.match(ai, /input_image_0/);
+  assert.match(ai, /aspectRatio: format === "mobile" \? "9:16"/);
   assert.match(ai, /ultra-wide website hero artwork/);
   for (const section of ["market", "lore", "gallery", "howToBuy", "roadmap", "socials", "memeMaker"]) {
     assert.match(maker, new RegExp(`id="sec-${section}"`), `${section} must exist before the first save`);
   }
   assert.match(maker, /REAL GENERATION ENGINE/);
-  assert.match(maker, /fal\.ai generates custom hero/);
+  assert.match(maker, /fal\.ai is an optional upgrade/);
   assert.match(maker, /FREE CUSTOM BRAND ENGINE/);
   assert.match(maker, /coin-specific art and copy for free/);
 });
@@ -56,9 +62,40 @@ test("published coin sites include live market, chart, lore, gallery, buy flow, 
   assert.match(site, /canvas id="meme"/);
   assert.match(site, /location\.search/);
   assert.match(site, /siteHeroDrift/);
-  assert.match(site, /body\.cinematic \.hero[\s\S]*place-items:center start/);
-  assert.match(site, /SLIMEWIRE • BUILDING THE WORLD/);
-  assert.match(site, /LIVE • VERIFIED CA • COMMUNITY/);
+  assert.match(site, /body\.cinematic \.hero[\s\S]*place-items:\s*center start/);
+  assert.match(site, /SLIMEWIRE .* BUILDING THE WORLD/);
+  assert.match(site, /media\?\.mobileHero/);
+  assert.match(site, /LIVE .* VERIFIED CA .* COMMUNITY/);
+});
+
+test("structured copy generation is prompt-aware, bounded, and safely falls back", () => {
+  assert.match(server, /async function launchOsGenerateStructuredCopy/);
+  assert.match(server, /gemini-2\.5-flash-lite/);
+  assert.match(server, /responseMimeType: "application\/json"/);
+  assert.match(server, /copyPromptHash/);
+  assert.match(server, /heroPromptDesktop/);
+  assert.match(server, /heroPromptMobile/);
+  assert.match(server, /textProvider = generated \? "gemini-2\.5-flash-lite" : "local"/);
+});
+
+test("coin sites charge $10 in SOL, support one-time admin codes, and retain a private owner editor", () => {
+  assert.match(server, /const COIN_SITE_PRICE_USD = 10/);
+  assert.match(server, /walletRecord\(`coinsite:\$\{id\}`/);
+  assert.match(server, /COIN_SITE_DEPOSIT_OWNER/);
+  assert.match(server, /coin-site-payment:\$\{project\.id\}/);
+  assert.match(server, /drainSolFromWallet[\s\S]*CONFIG\.feeWallet/);
+  assert.match(server, /\/\(\?:sitecode\|webcode\)/);
+  assert.match(server, /\/\(\?:sitecodes\|webcodes\)/);
+  assert.match(server, /\/\(\?:siterevoke\|webrevoke\)/);
+  assert.match(server, /pathname\.startsWith\("\/api\/launch-os\/payment\/"\)/);
+  assert.match(maker, /Admin free code \(optional\)/);
+  assert.match(maker, /Public price: \$10 in SOL/);
+  assert.match(maker, /Check payment/);
+  assert.match(maker, /\/api\/launch-os\/payment\//);
+  assert.match(maker, /Copy edit link/);
+  assert.match(site, /UNPUBLISHED UNTIL \$10 UNLOCK/);
+  assert.match(server, /published: payment\.status === "unlocked"/);
+  assert.doesNotMatch(server, /payment: project\.payment/);
 });
 
 test("site generation resolves both Solana and Robinhood Chain contracts", () => {

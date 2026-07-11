@@ -8,6 +8,24 @@
 
 export function aiPfpConfigured() { return Boolean((process.env.FAL_KEY || "").trim()); }
 function falModel() { return String(process.env.FAL_PFP_MODEL || "fal-ai/nano-banana/edit").trim(); }
+function geminiKey() { return String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "").trim(); }
+function cloudflareAiConfig() {
+  return {
+    accountId: String(process.env.CLOUDFLARE_ACCOUNT_ID || "").trim(),
+    token: String(process.env.CLOUDFLARE_AI_TOKEN || process.env.CLOUDFLARE_API_TOKEN || "").trim()
+  };
+}
+export function aiSiteArtConfigured() {
+  const cf = cloudflareAiConfig();
+  return Boolean((cf.accountId && cf.token) || geminiKey() || aiPfpConfigured());
+}
+export function aiSiteArtProvider() {
+  const cf = cloudflareAiConfig();
+  if (cf.accountId && cf.token) return "cloudflare-flux-2-dev";
+  if (geminiKey()) return "gemini-2.5-flash-image";
+  if (aiPfpConfigured()) return "fal";
+  return "local";
+}
 
 // Rotating slime styles — "lots of options", each a distinct look. Prompt is written for image-EDIT
 // models: keep the person's pose/likeness, repaint them as the slime creature.
@@ -51,10 +69,54 @@ export async function aiSlimePfp({ imageDataUrl, styleId }) {
 }
 
 export async function aiSiteArt({ imageDataUrl, prompt = "", format = "hero" }) {
-  if (!aiPfpConfigured()) return null;
-  const shape = format === "gallery" ? "square editorial campaign artwork" : "cinematic ultra-wide website hero artwork with clear negative space for headline text";
+  if (!aiSiteArtConfigured()) return null;
+  const shape = format === "gallery" ? "square editorial campaign artwork"
+    : format === "mobile" ? "portrait mobile website hero artwork, subject in the upper half with clean negative space below for headline text"
+    : "cinematic ultra-wide website hero artwork, subject on the right with clear negative space on the left for headline text";
   const safePrompt = String(prompt || "").replace(/[\u0000-\u001f]/g, " ").trim().slice(0, 700);
   const fullPrompt = `Using the supplied coin mascot as the exact main character reference, create ${shape}. ${safePrompt || "Build a bold, premium memecoin world around this character."} Preserve the mascot identity, colors and recognizable face. Professional art direction, cohesive lighting, rich environmental detail, sharp high-end commercial finish. No text, no logos, no watermarks.`;
+  const cf = cloudflareAiConfig();
+  if (cf.accountId && cf.token) {
+    const match = /^data:([^;,]+);base64,(.+)$/s.exec(String(imageDataUrl || ""));
+    if (!match) throw new Error("A valid reference image is required.");
+    const source = Buffer.from(match[2], "base64");
+    const ref = await (await import("sharp")).default(source).resize(512, 512, { fit: "cover", position: "attention" }).png().toBuffer();
+    const form = new FormData();
+    form.append("prompt", fullPrompt);
+    form.append("input_image_0", new Blob([ref], { type: "image/png" }), "reference.png");
+    form.append("steps", "20");
+    form.append("guidance", "4");
+    form.append("width", format === "mobile" ? "768" : format === "gallery" ? "1024" : "1536");
+    form.append("height", format === "mobile" ? "1344" : format === "gallery" ? "1024" : "864");
+    const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(cf.accountId)}/ai/run/@cf/black-forest-labs/flux-2-dev`, {
+      method: "POST", headers: { Authorization: `Bearer ${cf.token}` }, body: form,
+      signal: AbortSignal.timeout ? AbortSignal.timeout(120_000) : undefined
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.success === false) throw Object.assign(new Error(`Cloudflare image generation failed (${response.status}).`), { statusCode: response.status === 401 || response.status === 403 ? 401 : 502 });
+    const encoded = data?.result?.image || data?.image;
+    if (!encoded) throw new Error("Cloudflare returned no generated image.");
+    return Buffer.from(encoded, "base64");
+  }
+  if (geminiKey()) {
+    const match = /^data:([^;,]+);base64,(.+)$/s.exec(String(imageDataUrl || ""));
+    if (!match) throw new Error("A valid reference image is required.");
+    const model = String(process.env.GEMINI_SITE_IMAGE_MODEL || "gemini-2.5-flash-image").trim();
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      method: "POST",
+      headers: { "x-goog-api-key": geminiKey(), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: fullPrompt }, { inlineData: { mimeType: match[1], data: match[2] } }] }],
+        generationConfig: { responseModalities: ["TEXT", "IMAGE"], imageConfig: { aspectRatio: format === "mobile" ? "9:16" : format === "gallery" ? "1:1" : "16:9" } }
+      }),
+      signal: AbortSignal.timeout ? AbortSignal.timeout(120_000) : undefined
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw Object.assign(new Error(`Gemini image generation failed (${response.status}).`), { statusCode: response.status === 401 || response.status === 403 ? 401 : 502 });
+    const imagePart = (data?.candidates || []).flatMap((candidate) => candidate?.content?.parts || []).find((part) => part?.inlineData?.data);
+    if (!imagePart?.inlineData?.data) throw new Error("Gemini returned no generated image.");
+    return Buffer.from(imagePart.inlineData.data, "base64");
+  }
   const res = await fetch(`https://fal.run/${falModel()}`, {
     method: "POST",
     headers: { Authorization: `Key ${String(process.env.FAL_KEY).trim()}`, "Content-Type": "application/json" },
