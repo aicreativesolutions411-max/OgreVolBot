@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Coin Site Maker · SlimeWire</title>
+    <link rel="icon" type="image/svg+xml" href="/assets/slimewire/svg/slimewire-mark.svg" />
     <script src="/config.js"></script>
     <script>
       addEventListener("DOMContentLoaded", () => {
@@ -139,7 +140,7 @@
       }
       .templates {
         display: grid;
-        grid-template-columns: repeat(3, 1fr);
+        grid-template-columns: repeat(2, 1fr);
         gap: 8px;
       }
       .tpl {
@@ -339,7 +340,7 @@
   <body>
     <header class="top">
       <a class="brand" href="/"
-        ><img src="/assets/slimewire/png/slimewire-mark.png" />SLIMEWIRE SITE
+        ><img src="/assets/slimewire/svg/slimewire-mark.svg" />SLIMEWIRE SITE
         FORGE</a
       ><span>CA → premium live coin site</span>
     </header>
@@ -350,8 +351,8 @@
           <h1>Your coin.<br /><span class="green">A real world.</span></h1>
           <p>
             Paste a CA, upload a mascot and describe the energy. SlimeWire
-            builds a cinematic, responsive website with live markets, chart,
-            lore, gallery, meme studio, roadmap, socials and buy flow.
+            builds a premium responsive website, a complete visual world and
+            automatic holder rewards with live earnings and receipts.
           </p>
         </div>
         <div class="form">
@@ -371,7 +372,7 @@
           <div class="field">
             <label>Community Rewards payout wallet (required)</label>
             <input id="partnerPayoutWallet" class="input" placeholder="Your Solana wallet" autocomplete="off" required />
-            <small style="display:block;color:var(--m);margin-top:6px">Community Rewards turns on automatically when the site publishes. Trades stay 0.50% total; rewards split 50% to the developer and 50% to eligible top holders.</small>
+            <small style="display:block;color:var(--m);margin-top:6px">Community Rewards turns on automatically when the site publishes. Holder rewards, private developer earnings and public receipts are set up for you.</small>
           </div>
           <div class="field">
             <label>Creative direction (optional)</label
@@ -384,7 +385,10 @@
           <div class="field">
             <label>Visual system</label>
             <div class="templates">
-              <button class="tpl on" data-t="cinematic">
+              <button class="tpl on" data-t="signature">
+                <b>Signature Rewards</b
+                ><small>Premium world + live holder counter</small></button
+              ><button class="tpl" data-t="cinematic">
                 <b>Cinematic</b
                 ><small>Full-bleed character world</small></button
               ><button class="tpl" data-t="terminal">
@@ -434,6 +438,7 @@
             <div class="field">
               <label>Template</label
               ><select id="template" class="input">
+                <option value="signature">Signature Rewards</option>
                 <option value="cinematic">Cinematic Character</option>
                 <option value="terminal">Degen Terminal</option>
                 <option value="editorial">Clean Editorial</option>
@@ -505,7 +510,7 @@
               ><button id="aiHero" class="btn">Generate desktop + mobile</button
               ><button id="aiGallery" class="btn">Generate gallery art</button>
             </div>
-            <p class="msg"><b>Identity mode:</b> creates different versions of the same recognizable PFP character or logo—not empty backgrounds.</p>
+            <p class="msg"><b>Signature sites:</b> the complete five-image premium art set generates automatically after publishing. Identity mode keeps the same recognizable PFP character or logo—not empty backgrounds.</p>
             <p class="msg">One click replaces the hero set and gallery with five different, style-matched images. Allow about 30–60 seconds.</p>
           </div>
           <div class="group">
@@ -536,7 +541,7 @@
           <div class="group" id="partnerPanel">
             <div class="badge">COMMUNITY REWARDS</div>
             <h3 style="margin:10px 0 5px">Make every trade benefit the coin</h3>
-            <p class="msg">No added fee. The total stays 0.50%. The community allocation is divided equally between the developer and eligible holders.</p>
+            <p class="msg">Publishing automatically creates the coin's reward program, live holder counter and public payout receipts. Developer earnings stay private in this editor.</p>
             <div class="field">
               <label>Developer payout wallet (Solana)</label>
               <input id="editPartnerWallet" class="input" placeholder="Solana payout wallet" />
@@ -587,13 +592,14 @@
             window.OGRE_PORTAL_CONFIG?.apiBase ||
               "https://ogrevolbot.onrender.com",
           ).replace(/\/+$/, "");
-        let tpl = "cinematic",
+        let tpl = "signature",
           p = null,
           key = "",
           starter = "",
           telegramDelivery = null,
           partnerAdmin = null,
-          paymentTimer = null;
+          paymentTimer = null,
+          autoArtBusy = false;
         const sections = [
           "market",
           "lore",
@@ -699,7 +705,7 @@
         function fill() {
           p.site = p.site || {};
           $("#coinName").textContent = `${p.token.name} · $${p.token.symbol}`;
-          $("#template").value = p.site.template || "cinematic";
+          $("#template").value = p.site.template || "signature";
           $("#accent").value = p.site.accent || "#b7ff00";
           $("#headline").value = p.site.headline || "";
           $("#subhead").value = p.site.subhead || "";
@@ -735,6 +741,7 @@
           renderTelegramDelivery();
           renderPartnerAdmin();
           renderPayment();
+          setTimeout(() => maybeGeneratePremiumArt(), 0);
         }
         function beginPaymentTracking() {
           clearInterval(paymentTimer);
@@ -766,6 +773,7 @@
             $("#save").textContent = "Save + publish";
             $("#publishState").textContent = "LIVE — changes publish to this link when you save.";
             clearInterval(paymentTimer);
+            if (p?.published) setTimeout(() => maybeGeneratePremiumArt(), 0);
             return;
           }
           box.classList.add("on");
@@ -926,6 +934,13 @@
             clearInterval(ticker);
             buttons.forEach((button) => { button.disabled = false; button.classList.remove("busy"); });
           }
+        }
+        async function maybeGeneratePremiumArt() {
+          if (autoArtBusy || !p?.published || p.site?.template !== "signature" || p.site?.imageProvider) return;
+          autoArtBusy = true;
+          try { await gen("set"); }
+          catch (error) { $("#studioMsg").textContent = `Site is live. Premium art can be retried here: ${error.message}`; }
+          finally { autoArtBusy = false; }
         }
         $("#aiSet").onclick = () =>
           gen("set").catch((e) => ($("#studioMsg").textContent = e.message));

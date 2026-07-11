@@ -85,6 +85,8 @@ test("Site Maker, coin sites, Telegram, and public receipts expose the partner p
   assert.match(maker, /Community Rewards automatically enabled/);
   assert.match(maker, /p\.partner\.enabled = Boolean\(p\.partner\.payoutWallet\)/);
   assert.match(coin, /COMMUNITY REWARDS/);
+  assert.match(coin, /LIVE HOLDER REWARDS GENERATED/);
+  assert.doesNotMatch(coin, /Every SlimeWire trade keeps the same 0\.50% total fee/);
   assert.match(coin, /\/rewards\/\$\{encodeURIComponent\(p\.partner\.code\)\}/);
   assert.match(dashboard, /PUBLIC HOLDER PROOF/);
   assert.match(dashboard, /MY HOLDER REWARDS/);

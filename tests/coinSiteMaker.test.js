@@ -32,8 +32,8 @@ test("coin site maker creates editable, published sites from the standalone CA f
   assert.match(server, /editorial.*terminal|terminal.*editorial/);
 });
 
-test("maker offers three curated systems, direct preview, uploads, AI art, and optional sections", () => {
-  for (const text of ["Cinematic", "Degen Terminal", "Clean Editorial", "Generate Complete Website", "Generate Complete Art Set", "Add gallery artwork", "Permanent site link", "Save changes"]) assert.match(maker, new RegExp(text));
+test("maker offers four curated systems, direct preview, uploads, AI art, and optional sections", () => {
+  for (const text of ["Signature Rewards", "Cinematic", "Degen Terminal", "Clean Editorial", "Generate Complete Website", "Generate Complete Art Set", "Add gallery artwork", "Permanent site link", "Save changes"]) assert.match(maker, new RegExp(text));
   assert.match(maker, /<iframe id="frame"/);
   assert.match(maker, /X-Launch-Edit-Key/);
   assert.match(maker, /\/api\/launch-os\/media\//);
@@ -83,6 +83,10 @@ test("published coin sites include live market, chart, lore, gallery, buy flow, 
   assert.match(site, /location\.search/);
   assert.match(site, /siteHeroDrift/);
   assert.match(site, /body\.cinematic \.hero[\s\S]*place-items:\s*center start/);
+  assert.match(site, /body\.signature \.hero[\s\S]*place-items:\s*center start/);
+  assert.match(site, /LIVE HOLDER REWARDS GENERATED/);
+  assert.match(site, /holderRewardCounter/);
+  assert.match(site, /holderPendingEth[\s\S]*holdersPaidEth/);
   assert.match(site, /SLIMEWIRE .* BUILDING THE WORLD/);
   assert.match(site, /media\?\.mobileHero/);
   assert.match(site, /LIVE .* VERIFIED CA .* COMMUNITY/);
@@ -156,6 +160,8 @@ test("Site Maker auto-enables rewards and generates art without first-save races
   assert.match(maker, /Community Rewards automatically enabled/);
   assert.match(maker, /p\.partner\.enabled = Boolean\(p\.partner\.payoutWallet\)/);
   assert.match(maker, /remember\(\);[\s\S]{0,80}fill\(\);[\s\S]{0,140}await save\(\)/);
+  assert.match(maker, /p\.site\?\.template !== "signature"/);
+  assert.match(maker, /await gen\("set"\)/);
   assert.match(server, /Community Rewards is included with every published coin site/);
   assert.match(server, /project\.partner\.enabled = Boolean\(project\.partner\.payoutWallet\)/);
   assert.match(server, /old editor bug[\s\S]{0,500}syncLaunchOsPartner/);
@@ -178,7 +184,7 @@ test("site generation resolves both Solana and Robinhood Chain contracts", () =>
 test("site maker is discoverable from both web shells", () => {
   for (const file of ["index.html", "gg.html"]) {
     const html = fs.readFileSync(new URL(`../web/public/${file}`, import.meta.url), "utf8");
-    assert.match(html, /AI Coin Site Maker/);
+    assert.match(html, /Create a Site With Us/);
     assert.match(html, /url:"\/site-maker"/);
     assert.match(html, /location\.pathname\.match\(\/\^\\\/ca\\\//);
     assert.match(html, /location\.replace\(`\/coin-site\?project=/);

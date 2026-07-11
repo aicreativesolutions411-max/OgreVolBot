@@ -122,6 +122,64 @@
           justify-content: center;
         }
       }
+      body.signature {
+        --bg: #030604;
+        --panel: linear-gradient(145deg, color-mix(in srgb, var(--a) 6%, #080e09), #080e09);
+      }
+      body.signature .nav {
+        background: #030604d9;
+        backdrop-filter: blur(18px);
+      }
+      body.signature .hero {
+        min-height: 780px;
+        place-items: center start;
+        text-align: left;
+      }
+      body.signature .hero:before {
+        background: linear-gradient(90deg, #030604f7 2%, #030604d9 32%, #03060420 68%, #03060470), linear-gradient(0deg, #030604 0, transparent 34%);
+      }
+      body.signature .heroInner {
+        width: min(720px, 58vw);
+        max-width: none;
+        padding-left: 6vw;
+      }
+      body.signature .hero h1 {
+        font-size: clamp(64px, 8vw, 124px);
+        line-height: .84;
+        letter-spacing: -.065em;
+      }
+      body.signature .hero p,
+      body.signature .ca { margin-left: 0; }
+      body.signature .actions { justify-content: flex-start; }
+      body.signature .marquee { border-color: color-mix(in srgb, var(--a) 30%, transparent); }
+      .rewardCounter {
+        text-align: center;
+        padding: 54px 25px;
+        border: 1px solid color-mix(in srgb, var(--a) 36%, transparent);
+        border-radius: 24px;
+        background: radial-gradient(circle at 50% 0, color-mix(in srgb, var(--a) 16%, transparent), #080e09 58%);
+        box-shadow: 0 0 90px color-mix(in srgb, var(--a) 10%, transparent);
+      }
+      .rewardCounter b {
+        display: block;
+        margin: 16px 0 11px;
+        color: var(--a);
+        font-size: clamp(48px, 8vw, 94px);
+        line-height: 1;
+        letter-spacing: -.06em;
+        overflow-wrap: anywhere;
+        text-shadow: 0 0 35px color-mix(in srgb, var(--a) 32%, transparent);
+      }
+      .rewardCounter small { color: var(--mut); }
+      @media (max-width: 760px) {
+        body.signature .hero { place-items: center; text-align: center; }
+        body.signature .hero:before { background: linear-gradient(0deg, #030604 5%, #0306049c 62%, #0003); }
+        body.signature .heroInner { width: 100%; padding: 100px 25px 35px; }
+        body.signature .hero h1 { font-size: 62px; }
+        body.signature .hero p,
+        body.signature .ca { margin-left: auto; }
+        body.signature .actions { justify-content: center; }
+      }
       #app:empty:before {
         content: "SLIMEWIRE • BUILDING THE WORLD";
         position: fixed;
@@ -729,6 +787,7 @@
             sec = s.sections || {},
             t = p.token,
             chain = t.chain === "robinhood" ? "Robinhood Chain" : "Solana",
+            rewardUnit = t.chain === "robinhood" ? "ETH" : "SOL",
             rewards = p.partner?.status === "active" && p.partner?.code ? `/rewards/${encodeURIComponent(p.partner.code)}` : "",
             buy = `https://www.slimewire.org/t?ca=${encodeURIComponent(t.ca)}${p.partner?.code ? `&partner=${encodeURIComponent(p.partner.code)}` : ""}`,
             hero =
@@ -750,7 +809,18 @@
               ? `https://dexscreener.com/robinhood/${t.ca}?embed=1&theme=dark&trades=0&info=1`
               : `https://dexscreener.com/solana/${t.ca}?embed=1&theme=dark&trades=0&info=1`;
           $("#app").innerHTML =
-            `<nav class="nav"><a class="logo" href="#top"><img src="${esc(m.pfp || t.imageUrl)}">$${esc(t.symbol)}</a><div class="links"><a href="#story">Lore</a><a href="#market">Market</a>${rewards ? `<a href="${rewards}">Rewards</a>` : ""}<a href="#gallery">Gallery</a><a href="#buy">How to buy</a><a class="cta" href="${buy}">Buy $${esc(t.symbol)}</a></div></nav><header id="top" class="hero" style="background-image:url('${esc(hero)}')"><div class="heroInner"><div class="eyebrow">THE ${esc(chain.toUpperCase())} ORIGINAL</div><h1>${esc(s.headline || t.name)}</h1><p>${esc(s.subhead || t.description)}</p><div class="actions"><a class="button primary" href="${buy}">BUY $${esc(t.symbol)}</a><a class="button" href="#market">LIVE CHART</a>${rewards ? `<a class="button" href="${rewards}">COMMUNITY REWARDS</a>` : ""}</div><div class="ca" data-copy="${esc(t.ca)}">CA · ${esc(t.ca)} · TAP TO COPY</div></div></header><div class="marquee">$${esc(t.symbol)} • ${esc(t.name)} • LIVE ON ${esc(chain)} • $${esc(t.symbol)} • ${esc(t.name)} • COMMUNITY OWNED •</div>${sec.market !== false ? `<section id="market" class="section"><div class="eyebrow">LIVE MARKET</div><h2>The ticker.</h2><div class="stats"><div class="stat"><span>Market cap</span><b>${money(l.marketCap)}</b></div><div class="stat"><span>Liquidity</span><b>${money(l.liquidityUsd)}</b></div><div class="stat"><span>24h volume</span><b>${money(l.volume24h)}</b></div><div class="stat"><span>Holders</span><b>${Number(l.holders || 0).toLocaleString() || "—"}</b></div></div><div class="chart" style="margin-top:18px"><iframe src="${chart}"></iframe></div></section>` : ""}${rewards ? `<section class="section"><div class="eyebrow">COMMUNITY REWARDS</div><h2>Trade. Build. Share.</h2><div class="lead">Every SlimeWire trade keeps the same 0.50% total fee. The community allocation is split <b>50% to the developer</b> and <b>50% to eligible top holders</b>.</div><div class="actions"><a class="button primary" href="${rewards}">VIEW LIVE REWARDS + RECEIPTS</a></div></section>` : ""}${sec.lore !== false ? `<section id="story" class="section"><div class="eyebrow">THE STORY</div><h2>The lore.</h2><div class="lead">${esc(s.lore || t.description).replace(/\n/g, "<br>")}</div></section>` : ""}${sec.gallery !== false && gallery.length ? `<section id="gallery" class="section"><div class="eyebrow">VISUAL ARCHIVE</div><h2>The gallery.</h2><div class="gallery">${gallery.map((x) => `<img src="${esc(x)}">`).join("")}</div></section>` : ""}${sec.howToBuy !== false ? `<section id="buy" class="section"><div class="eyebrow">JOIN THE MOVEMENT</div><h2>How to buy.</h2><div class="steps"><div class="step"><i>01</i><h3>Load a wallet</h3><p>Use a wallet compatible with ${esc(chain)} and keep the recovery phrase private.</p></div><div class="step"><i>02</i><h3>Get ${t.chain === "robinhood" ? "ETH" : "SOL"}</h3><p>Fund the wallet and leave a little for network fees.</p></div><div class="step"><i>03</i><h3>Swap for $${esc(t.symbol)}</h3><p>Open the verified trade link, confirm the exact CA and swap.</p></div></div></section>` : ""}${sec.roadmap !== false ? `<section class="section"><div class="eyebrow">THE ROUTE</div><h2>Roadmap.</h2><div class="road">${(s.roadmap || []).map((x, i) => `<div class="step"><i>0${i + 1}</i><h3>${esc(x)}</h3></div>`).join("")}</div></section>` : ""}${sec.memeMaker !== false ? `<section class="section"><div class="eyebrow">COMMUNITY STUDIO</div><h2>Meme factory.</h2><div class="meme"><canvas id="meme" width="1000" height="1000"></canvas><div><input id="topText" value="BUY THE DIP"><input id="bottomText" value="$${esc(t.symbol)} SENDS"><button id="dl" class="button primary">DOWNLOAD MEME</button></div></div></section>` : ""}${sec.socials !== false ? `<section class="section"><div class="eyebrow">COMMUNITY</div><h2>Join the signal.</h2><div class="socials">${link("X", p.links.x)}${link("TELEGRAM", p.links.telegram)}${rewards ? link("REWARDS", rewards) : ""}${link("LIVE CHART", chart.replace("?embed=1&theme=dark&trades=0&info=1", ""))}</div></section>` : ""}<footer class="footer"><img src="${esc(m.pfp || t.imageUrl)}"><h2>$${esc(t.symbol)}</h2><p>Memecoins are volatile and have no guaranteed value. Verify the contract and do your own research.</p></footer><a class="cta mobileBuy" href="${buy}">BUY $${esc(t.symbol)}</a>`;
+            `<nav class="nav"><a class="logo" href="#top"><img src="${esc(m.pfp || t.imageUrl)}">$${esc(t.symbol)}</a><div class="links"><a href="#story">Lore</a><a href="#market">Market</a>${rewards ? `<a href="#rewards">Rewards</a>` : ""}<a href="#gallery">Gallery</a><a href="#buy">How to buy</a><a class="cta" href="${buy}">Buy $${esc(t.symbol)}</a></div></nav><header id="top" class="hero" style="background-image:url('${esc(hero)}')"><div class="heroInner"><div class="eyebrow">THE ${esc(chain.toUpperCase())} ORIGINAL</div><h1>${esc(s.headline || t.name)}</h1><p>${esc(s.subhead || t.description)}</p><div class="actions"><a class="button primary" href="${buy}">BUY $${esc(t.symbol)}</a><a class="button" href="#market">LIVE CHART</a>${rewards ? `<a class="button" href="#rewards">COMMUNITY REWARDS</a>` : ""}</div><div class="ca" data-copy="${esc(t.ca)}">CA · ${esc(t.ca)} · TAP TO COPY</div></div></header><div class="marquee">$${esc(t.symbol)} • ${esc(t.name)} • LIVE ON ${esc(chain)} • $${esc(t.symbol)} • ${esc(t.name)} • COMMUNITY OWNED •</div>${sec.market !== false ? `<section id="market" class="section"><div class="eyebrow">LIVE MARKET</div><h2>The ticker.</h2><div class="stats"><div class="stat"><span>Market cap</span><b>${money(l.marketCap)}</b></div><div class="stat"><span>Liquidity</span><b>${money(l.liquidityUsd)}</b></div><div class="stat"><span>24h volume</span><b>${money(l.volume24h)}</b></div><div class="stat"><span>Holders</span><b>${Number(l.holders || 0).toLocaleString() || "—"}</b></div></div><div class="chart" style="margin-top:18px"><iframe src="${chart}"></iframe></div></section>` : ""}${rewards ? `<section id="rewards" class="section"><div class="rewardCounter"><div class="eyebrow">LIVE HOLDER REWARDS GENERATED</div><b id="holderRewardCounter">-- ${rewardUnit}</b><small>Updated from the reward vault · eligible payouts are automatic</small><div class="actions"><a class="button primary" href="${rewards}">VIEW EARNINGS + RECEIPTS</a></div></div></section>` : ""}${sec.lore !== false ? `<section id="story" class="section"><div class="eyebrow">THE STORY</div><h2>The lore.</h2><div class="lead">${esc(s.lore || t.description).replace(/\n/g, "<br>")}</div></section>` : ""}${sec.gallery !== false && gallery.length ? `<section id="gallery" class="section"><div class="eyebrow">VISUAL ARCHIVE</div><h2>The gallery.</h2><div class="gallery">${gallery.map((x) => `<img src="${esc(x)}">`).join("")}</div></section>` : ""}${sec.howToBuy !== false ? `<section id="buy" class="section"><div class="eyebrow">JOIN THE MOVEMENT</div><h2>How to buy.</h2><div class="steps"><div class="step"><i>01</i><h3>Load a wallet</h3><p>Use a wallet compatible with ${esc(chain)} and keep the recovery phrase private.</p></div><div class="step"><i>02</i><h3>Get ${t.chain === "robinhood" ? "ETH" : "SOL"}</h3><p>Fund the wallet and leave a little for network fees.</p></div><div class="step"><i>03</i><h3>Swap for $${esc(t.symbol)}</h3><p>Open the verified trade link, confirm the exact CA and swap.</p></div></div></section>` : ""}${sec.roadmap !== false ? `<section class="section"><div class="eyebrow">THE ROUTE</div><h2>Roadmap.</h2><div class="road">${(s.roadmap || []).map((x, i) => `<div class="step"><i>0${i + 1}</i><h3>${esc(x)}</h3></div>`).join("")}</div></section>` : ""}${sec.memeMaker !== false ? `<section class="section"><div class="eyebrow">COMMUNITY STUDIO</div><h2>Meme factory.</h2><div class="meme"><canvas id="meme" width="1000" height="1000"></canvas><div><input id="topText" value="BUY THE DIP"><input id="bottomText" value="$${esc(t.symbol)} SENDS"><button id="dl" class="button primary">DOWNLOAD MEME</button></div></div></section>` : ""}${sec.socials !== false ? `<section class="section"><div class="eyebrow">COMMUNITY</div><h2>Join the signal.</h2><div class="socials">${link("X", p.links.x)}${link("TELEGRAM", p.links.telegram)}${rewards ? link("REWARDS", rewards) : ""}${link("LIVE CHART", chart.replace("?embed=1&theme=dark&trades=0&info=1", ""))}</div></section>` : ""}<footer class="footer"><img src="${esc(m.pfp || t.imageUrl)}"><h2>$${esc(t.symbol)}</h2><p>Memecoins are volatile and have no guaranteed value. Verify the contract and do your own research.</p><p><a href="/site-maker">Create a premium coin site with SlimeWire</a></p></footer><a class="cta mobileBuy" href="${buy}">BUY $${esc(t.symbol)}</a>`;
+          if (rewards) {
+            fetch(`${API}/api/partner-rewards/${encodeURIComponent(p.partner.code)}`, { cache: "no-store" })
+              .then((response) => response.ok ? response.json() : null)
+              .then((data) => {
+                const stats = data?.program?.stats || {}, pending = Number(t.chain === "robinhood" ? stats.holderPendingEth : stats.holderPendingSol) || 0,
+                  paid = Number(t.chain === "robinhood" ? stats.holdersPaidEth : stats.holdersPaidSol) || 0,
+                  total = (pending + paid).toFixed(6).replace(/0+$/, "").replace(/\.$/, "") || "0",
+                  counter = document.querySelector("#holderRewardCounter");
+                if (counter) counter.textContent = `${total} ${rewardUnit}`;
+              }).catch(() => {});
+          }
           if (__coinEditor) {
             const heroNode = document.querySelector(".hero");
             if (heroNode) heroNode.dataset.editKind = matchMedia("(max-width:760px)").matches ? "mobileHero" : "hero";
