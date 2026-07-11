@@ -9173,7 +9173,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "GET" && pathname.startsWith("/api/launch-os/edit/")) {
       const slug = decodeURIComponent(pathname.slice("/api/launch-os/edit/".length));
       const project = await requireLaunchOsEditor(slug, launchOsEditorKeyFromRequest(request));
-      sendWebJson(request, response, 200, { ok: true, project: clientLaunchOsProject(project), telegramDelivery: coinSiteTelegramDeliveryForEditor(project) });
+      sendWebJson(request, response, 200, { ok: true, project: clientLaunchOsProject(project), partnerAdmin: await partnerProgramAdminForProject(project), telegramDelivery: coinSiteTelegramDeliveryForEditor(project) });
       return;
     }
     if (request.method === "GET" && pathname.startsWith("/api/launch-os/payment/")) {
@@ -9193,13 +9193,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
         String(row.projectId || "").toLowerCase() === wanted
       );
       if (!program || program.status !== "active") { sendWebJson(request, response, 404, { ok: false, error: "Community Rewards program not found." }); return; }
-      const receipts = store.receipts.filter((row) => row.programId === program.id).slice(-30).reverse().map((row) => ({
+      const receipts = store.receipts.filter((row) => row.programId === program.id && String(row.type || "").includes("holder")).slice(-30).reverse().map((row) => ({
         id: row.id, type: row.type, at: row.at,
         sol: row.lamports ? referralSolString(row.lamports) : "",
+        eth: row.wei ? formatTokenUnits(row.wei, 18) : "",
         signature: row.signature || "",
         signatures: Array.isArray(row.signatures) ? row.signatures.slice(0, 8) : []
       }));
-      sendWebJson(request, response, 200, { ok: true, program: partnerProgramPublic(program), receipts });
+      const wallet = String(requestUrl.searchParams.get("wallet") || "").trim().slice(0, 128);
+      sendWebJson(request, response, 200, { ok: true, program: partnerProgramPublic(program), receipts, holder: wallet ? partnerHolderPublic(program, store, wallet) : null });
       return;
     }
     if (request.method === "POST" && pathname.startsWith("/api/launch-os/edit/")) {
@@ -9207,7 +9209,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const body = await readJsonRequestBody(request);
       let project = await updatePublicLaunchOsProject(slug, launchOsEditorKeyFromRequest(request), body);
       project = await launchOsGenerateStructuredCopy(project).catch(() => project);
-      sendWebJson(request, response, 200, { ok: true, project });
+      sendWebJson(request, response, 200, { ok: true, project, partnerAdmin: await partnerProgramAdminForProject(project) });
       return;
     }
     if (request.method === "GET" && pathname.startsWith("/api/launch-os/live/")) {
@@ -23630,7 +23632,6 @@ async function mutatePartnerRewards(fn) {
 
 function partnerProgramPublic(program) {
   if (!program) return null;
-  const pendingDev = BigInt(program.devPendingLamports || "0");
   const pendingHolders = BigInt(program.holderPendingLamports || "0");
   const total = BigInt(program.totalRewardLamports || "0");
   return {
@@ -23646,15 +23647,76 @@ function partnerProgramPublic(program) {
     stats: {
       attributedVolumeUsd: Number(program.attributedVolumeUsd || 0),
       rewardSol: referralSolString(total.toString()),
-      developerPendingSol: referralSolString(pendingDev.toString()),
       holdersPendingSol: referralSolString(pendingHolders.toString()),
-      developerPaidSol: referralSolString(program.devPaidLamports || "0"),
       holdersPaidSol: referralSolString(program.holderPaidLamports || "0"),
+      holderPoolSol: referralSolString((pendingHolders + BigInt(program.holderPaidLamports || "0")).toString()),
+      holderPendingEth: formatTokenUnits((BigInt(program.rhPendingWei || "0") * 5_000n / 10_000n).toString(), 18),
+      holdersPaidEth: formatTokenUnits(program.rhHolderPaidWei || "0", 18),
+      eligibleHolderCount: Number(program.eligibleHolderCount || 0),
       tradeCount: Number(program.tradeCount || 0),
       nextSnapshotAt: program.nextSnapshotAt || "",
       nextSettlementAt: program.nextSettlementAt || ""
     },
     updatedAt: program.updatedAt || program.createdAt || ""
+  };
+}
+
+function formatTokenUnits(raw, decimals = 18, precision = 6) {
+  const value = BigInt(raw || "0");
+  const base = 10n ** BigInt(decimals);
+  const whole = value / base;
+  const fraction = (value % base).toString().padStart(decimals, "0").slice(0, precision).replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : String(whole);
+}
+
+function partnerWalletMatches(chain, a, b) {
+  return chain === "robinhood"
+    ? String(a || "").toLowerCase() === String(b || "").toLowerCase()
+    : String(a || "") === String(b || "");
+}
+
+function partnerHolderPublic(program, store, wallet) {
+  const chain = program.token?.chain === "robinhood" ? "robinhood" : "solana";
+  const valid = chain === "robinhood" ? /^0x[0-9a-f]{40}$/i.test(wallet) : (() => { try { new PublicKey(wallet); return true; } catch { return false; } })();
+  if (!valid) return { wallet, valid: false, eligible: false, message: `Enter a valid ${chain === "robinhood" ? "Robinhood Chain" : "Solana"} wallet.` };
+  const snapshot = Array.isArray(program.snapshotWallets) ? program.snapshotWallets : [];
+  const pool = chain === "robinhood"
+    ? (BigInt(program.rhPendingWei || "0") * BigInt(PARTNER_HOLDER_SHARE_BPS)) / 10_000n
+    : BigInt(program.holderPendingLamports || "0");
+  const projected = splitBigIntByWeightsCapped(pool, snapshot, Number(program.policy?.maxWalletPoolPct || 5));
+  const index = snapshot.findIndex((row) => partnerWalletMatches(chain, row.wallet, wallet));
+  const projectedRow = projected.find((row) => partnerWalletMatches(chain, row.wallet, wallet));
+  let paid = 0n;
+  for (const receipt of store.receipts.filter((row) => row.programId === program.id && String(row.type || "").includes("holder"))) {
+    for (const recipient of (Array.isArray(receipt.recipients) ? receipt.recipients : [])) {
+      if (partnerWalletMatches(chain, recipient.wallet, wallet)) paid += BigInt(chain === "robinhood" ? recipient.wei || "0" : recipient.lamports || "0");
+    }
+  }
+  const unit = chain === "robinhood" ? "ETH" : "SOL";
+  const format = (amount) => chain === "robinhood" ? formatTokenUnits(amount.toString(), 18) : referralSolString(amount.toString());
+  return {
+    wallet, valid: true, eligible: index >= 0, rank: index >= 0 ? index + 1 : null,
+    eligibleHolderCount: snapshot.length, projectedAmount: format(BigInt(projectedRow?.value || 0)),
+    paidAmount: format(paid), unit, nextSnapshotAt: program.nextSnapshotAt || "", nextSettlementAt: program.nextSettlementAt || ""
+  };
+}
+
+async function partnerProgramAdminForProject(project) {
+  if (!project?.id) return null;
+  const store = await readPartnerRewards();
+  const program = Object.values(store.programs).find((row) => row.projectId === project.id && row.status === "active");
+  if (!program) return null;
+  return {
+    stats: {
+      developerPendingSol: referralSolString(program.devPendingLamports || "0"),
+      developerPaidSol: referralSolString(program.devPaidLamports || "0"),
+      attributedVolumeUsd: Number(program.attributedVolumeUsd || 0),
+      lastSettlementAt: program.lastSettlementAt || "",
+      nextSettlementAt: program.nextSettlementAt || ""
+    },
+    receipts: store.receipts.filter((row) => row.programId === program.id && row.type === "developer").slice(-12).reverse().map((row) => ({
+      id: row.id, at: row.at, sol: referralSolString(row.lamports || "0"), signature: row.signature || ""
+    }))
   };
 }
 
@@ -23836,7 +23898,7 @@ async function bridgePartnerRhRewards(program, vault) {
       if (!row) return;
       row.rhPendingWei = (BigInt(row.rhPendingWei || "0") - holderPaidWei).toString();
       row.rhHolderPaidWei = (BigInt(row.rhHolderPaidWei || "0") + holderPaidWei).toString();
-      store.receipts.push({ id: crypto.randomBytes(6).toString("hex"), programId: row.id, at: new Date().toISOString(), type: "holders_rh", wei: holderPaidWei.toString(), signatures: holderResult.txHashes || [] });
+      store.receipts.push({ id: crypto.randomBytes(6).toString("hex"), programId: row.id, at: new Date().toISOString(), type: "holders_rh", wei: holderPaidWei.toString(), signatures: holderResult.txHashes || [], recipients: holderResult.recipients || [] });
     });
   }
   const ethAmount = `${devWei / 10n ** 18n}.${(devWei % 10n ** 18n).toString().padStart(18, "0")}`;
@@ -23896,7 +23958,7 @@ async function settlePartnerProgram(program) {
         }
       }).catch(() => null);
       holderPaid = BigInt(holderResult?.paidLamports || 0);
-      if (holderPaid > 0n) receipts.push({ type: "holders", lamports: holderPaid.toString(), signatures: holderResult.signatures || [] });
+      if (holderPaid > 0n) receipts.push({ type: "holders", lamports: holderPaid.toString(), signatures: holderResult.signatures || [], recipients: holderResult.recipients || [] });
     }
     const now = new Date().toISOString();
     await mutatePartnerRewards((store) => {

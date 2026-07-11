@@ -41,8 +41,12 @@ test("Site Maker, coin sites, Telegram, and public receipts expose the partner p
   assert.match(maker, /partnerPayoutWallet/);
   assert.match(coin, /COMMUNITY REWARDS/);
   assert.match(coin, /\/rewards\/\$\{encodeURIComponent\(p\.partner\.code\)\}/);
-  assert.match(dashboard, /PUBLIC PROOF/);
-  assert.match(dashboard, /Developer payout/);
+  assert.match(dashboard, /PUBLIC HOLDER PROOF/);
+  assert.match(dashboard, /MY HOLDER REWARDS/);
+  assert.doesNotMatch(dashboard, /Developer paid/);
+  assert.match(maker, /PRIVATE DEVELOPER VIEW/);
+  assert.match(server, /partnerHolderPublic\(program, store, wallet\)/);
+  assert.match(server, /partnerProgramAdminForProject\(project\)/);
   assert.match(server, /\/api\/partner-rewards\//);
   assert.match(server, /partner_\$\{program\.code\}/);
   assert.match(redirects, /\/rewards\/\*\s+\/partner-rewards\.html\s+200/);

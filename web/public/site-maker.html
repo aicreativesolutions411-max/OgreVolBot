@@ -544,6 +544,16 @@
             <label style="display:flex;gap:9px;align-items:center;border:1px solid #425642;padding:12px;border-radius:12px;cursor:pointer"><input id="partnerEnabled" type="checkbox" style="width:auto" /> Enable Community Rewards</label>
             <div class="actions" style="margin-top:9px"><a id="partnerDashboard" class="btn primary" target="_blank" hidden>Open live rewards dashboard</a></div>
             <p id="partnerState" class="msg"></p>
+            <div id="partnerAdmin" hidden style="margin-top:14px;padding:16px;border:1px solid #425642;border-radius:14px;background:#080c09">
+              <div class="badge">PRIVATE DEVELOPER VIEW</div>
+              <h3 style="margin:10px 0 4px">Your developer rewards</h3>
+              <p class="msg">Only available through this private Site Maker editor.</p>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:10px">
+                <div style="padding:12px;border-radius:11px;background:#040704"><small style="color:var(--m)">READY FOR SETTLEMENT</small><b id="devPending" style="display:block;font-size:20px;margin-top:5px;color:var(--g)">0 SOL</b></div>
+                <div style="padding:12px;border-radius:11px;background:#040704"><small style="color:var(--m)">TOTAL PAID TO YOU</small><b id="devPaid" style="display:block;font-size:20px;margin-top:5px">0 SOL</b></div>
+              </div>
+              <div id="devReceipts" class="msg" style="margin-top:12px"></div>
+            </div>
           </div>
           <div id="studioMsg" class="msg" aria-live="polite"></div>
           <div class="group">
@@ -582,6 +592,7 @@
           key = "",
           starter = "",
           telegramDelivery = null,
+          partnerAdmin = null,
           paymentTimer = null;
         const sections = [
           "market",
@@ -657,6 +668,17 @@
           }
           box.innerHTML = `<b>Save your private editor in Telegram</b><br>Telegram requires you to start the bot before it can DM you.${d.botUrl ? `<div class="actions" style="margin-top:9px"><a class="btn primary" href="${d.botUrl}" target="_blank">Open bot + save edit link</a></div>` : ""}`;
         }
+        const safe = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+        function renderPartnerAdmin() {
+          const box = $("#partnerAdmin"), admin = partnerAdmin;
+          box.hidden = !admin;
+          if (!admin) return;
+          $("#devPending").textContent = `${admin.stats?.developerPendingSol || "0"} SOL`;
+          $("#devPaid").textContent = `${admin.stats?.developerPaidSol || "0"} SOL`;
+          $("#devReceipts").innerHTML = admin.receipts?.length
+            ? `<b>Recent private payout receipts</b>${admin.receipts.map((r) => `<div style="padding:9px 0;border-top:1px solid #314031;margin-top:8px">${safe(r.sol)} SOL | ${new Date(r.at).toLocaleString()}${r.signature ? ` | <a href="https://solscan.io/tx/${encodeURIComponent(r.signature)}" target="_blank" rel="noopener" style="color:var(--g)">View transaction</a>` : ""}</div>`).join("")}`
+            : "Your first private developer payout receipt will appear here after settlement.";
+        }
         function fill() {
           p.site = p.site || {};
           $("#coinName").textContent = `${p.token.name} · $${p.token.symbol}`;
@@ -694,6 +716,7 @@
           $("#studio").classList.add("on");
           $("#save").hidden = false;
           renderTelegramDelivery();
+          renderPartnerAdmin();
           renderPayment();
         }
         function beginPaymentTracking() {
@@ -764,6 +787,7 @@
               body: JSON.stringify({ site: p.site, partner: p.partner }),
             });
             p = d.project;
+            partnerAdmin = d.partnerAdmin || partnerAdmin;
             $("#frame").src = previewUrl();
             $("#studioMsg").textContent = p.published
               ? `✓ Published live at ${p.publicUrl.replace(/^https?:\/\//, "")}`
@@ -894,6 +918,7 @@
           api("/api/launch-os/edit/" + q, { key })
             .then((d) => {
               p = d.project;
+              partnerAdmin = d.partnerAdmin || null;
               telegramDelivery = d.telegramDelivery || telegramDelivery;
               fill();
             })
