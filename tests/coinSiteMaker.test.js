@@ -33,7 +33,7 @@ test("coin site maker creates editable, published sites from the standalone CA f
 });
 
 test("maker offers three curated systems, direct preview, uploads, AI art, and optional sections", () => {
-  for (const text of ["Cinematic", "Degen Terminal", "Clean Editorial", "Generate Complete Website", "Generate AI hero", "Add gallery artwork", "Save \\+ Publish"]) assert.match(maker, new RegExp(text));
+  for (const text of ["Cinematic", "Degen Terminal", "Clean Editorial", "Generate Complete Website", "Generate Complete Art Set", "Add gallery artwork", "Save \\+ Publish"]) assert.match(maker, new RegExp(text));
   assert.match(maker, /<iframe id="frame"/);
   assert.match(maker, /X-Launch-Edit-Key/);
   assert.match(maker, /\/api\/launch-os\/media\//);
@@ -53,6 +53,15 @@ test("maker offers three curated systems, direct preview, uploads, AI art, and o
   assert.match(maker, /fal\.ai is an optional upgrade/);
   assert.match(maker, /FREE CUSTOM BRAND ENGINE/);
   assert.match(maker, /coin-specific art and copy for free/);
+  assert.match(maker, /Generate Complete Art Set/);
+  assert.match(maker, /format === "set"/);
+  assert.match(maker, /Cloudflare is generating/);
+  assert.match(maker, /slotUpload/);
+  assert.match(maker, /slimewire-site-image-edit/);
+  assert.match(server, /body\.format === "set"/);
+  assert.match(server, /Scene one:[\s\S]*Scene five:/);
+  assert.match(server, /galleryIndex/);
+  assert.match(server, /launchOsTrustedTokenImageBuffer\(referenceUrl\)/);
 });
 
 test("published coin sites include live market, chart, lore, gallery, buy flow, roadmap, socials and meme studio", () => {
@@ -67,6 +76,9 @@ test("published coin sites include live market, chart, lore, gallery, buy flow, 
   assert.match(site, /SLIMEWIRE .* BUILDING THE WORLD/);
   assert.match(site, /media\?\.mobileHero/);
   assert.match(site, /LIVE .* VERIFIED CA .* COMMUNITY/);
+  assert.match(site, /CLICK ANY OUTLINED IMAGE TO REPLACE IT/);
+  assert.match(site, /slimewire-site-image-edit/);
+  assert.match(site, /data-edit-kind/);
 });
 
 test("structured copy generation is prompt-aware, bounded, and safely falls back", () => {

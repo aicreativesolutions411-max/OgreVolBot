@@ -7,7 +7,9 @@
     <title>Coin Site</title>
     <script src="/config.js"></script>
     <script>
-      const __coinProject = new URLSearchParams(location.search).get("project");
+      const __coinParams = new URLSearchParams(location.search);
+      const __coinProject = __coinParams.get("project");
+      const __coinEditor = __coinParams.get("editor") === "1" && window.parent !== window;
       if (__coinProject) {
         history.replaceState(
           {},
@@ -77,6 +79,9 @@
         box-shadow: 0 12px 60px #000;
         white-space: nowrap;
       }
+      .editHint { position: fixed; z-index: 120; top: 82px; left: 50%; transform: translateX(-50%); padding: 10px 15px; border: 1px solid #b7ff0088; border-radius: 999px; background: #050705ee; color: #efffe8; font: 900 10px ui-monospace, monospace; letter-spacing: .08em; box-shadow: 0 12px 45px #000; pointer-events: none; }
+      body.visualEditing [data-edit-kind] { cursor: pointer !important; outline: 2px dashed #b7ff00aa; outline-offset: -3px; transition: outline-color .2s, filter .2s; }
+      body.visualEditing [data-edit-kind]:hover { outline-color: #fff; filter: brightness(1.12); }
       body.cinematic .hero {
         place-items: center start;
         text-align: left;
@@ -737,7 +742,7 @@
             "--a",
             s.accent || "#b7ff00",
           );
-          document.body.className = s.template || "cinematic";
+          document.body.className = `${s.template || "cinematic"}${__coinEditor ? " visualEditing" : ""}`;
           document.title = `${t.name} · $${t.symbol}`;
           const chart =
             t.chain === "robinhood"
@@ -745,6 +750,24 @@
               : `https://dexscreener.com/solana/${t.ca}?embed=1&theme=dark&trades=0&info=1`;
           $("#app").innerHTML =
             `<nav class="nav"><a class="logo" href="#top"><img src="${esc(m.pfp || t.imageUrl)}">$${esc(t.symbol)}</a><div class="links"><a href="#story">Lore</a><a href="#market">Market</a><a href="#gallery">Gallery</a><a href="#buy">How to buy</a><a class="cta" href="${buy}">Buy $${esc(t.symbol)}</a></div></nav><header id="top" class="hero" style="background-image:url('${esc(hero)}')"><div class="heroInner"><div class="eyebrow">THE ${esc(chain.toUpperCase())} ORIGINAL</div><h1>${esc(s.headline || t.name)}</h1><p>${esc(s.subhead || t.description)}</p><div class="actions"><a class="button primary" href="${buy}">BUY $${esc(t.symbol)}</a><a class="button" href="#market">LIVE CHART</a></div><div class="ca" data-copy="${esc(t.ca)}">CA · ${esc(t.ca)} · TAP TO COPY</div></div></header><div class="marquee">$${esc(t.symbol)} • ${esc(t.name)} • LIVE ON ${esc(chain)} • $${esc(t.symbol)} • ${esc(t.name)} • COMMUNITY OWNED •</div>${sec.market !== false ? `<section id="market" class="section"><div class="eyebrow">LIVE MARKET</div><h2>The ticker.</h2><div class="stats"><div class="stat"><span>Market cap</span><b>${money(l.marketCap)}</b></div><div class="stat"><span>Liquidity</span><b>${money(l.liquidityUsd)}</b></div><div class="stat"><span>24h volume</span><b>${money(l.volume24h)}</b></div><div class="stat"><span>Holders</span><b>${Number(l.holders || 0).toLocaleString() || "—"}</b></div></div><div class="chart" style="margin-top:18px"><iframe src="${chart}"></iframe></div></section>` : ""}${sec.lore !== false ? `<section id="story" class="section"><div class="eyebrow">THE STORY</div><h2>The lore.</h2><div class="lead">${esc(s.lore || t.description).replace(/\n/g, "<br>")}</div></section>` : ""}${sec.gallery !== false && gallery.length ? `<section id="gallery" class="section"><div class="eyebrow">VISUAL ARCHIVE</div><h2>The gallery.</h2><div class="gallery">${gallery.map((x) => `<img src="${esc(x)}">`).join("")}</div></section>` : ""}${sec.howToBuy !== false ? `<section id="buy" class="section"><div class="eyebrow">JOIN THE MOVEMENT</div><h2>How to buy.</h2><div class="steps"><div class="step"><i>01</i><h3>Load a wallet</h3><p>Use a wallet compatible with ${esc(chain)} and keep the recovery phrase private.</p></div><div class="step"><i>02</i><h3>Get ${t.chain === "robinhood" ? "ETH" : "SOL"}</h3><p>Fund the wallet and leave a little for network fees.</p></div><div class="step"><i>03</i><h3>Swap for $${esc(t.symbol)}</h3><p>Open the verified trade link, confirm the exact CA and swap.</p></div></div></section>` : ""}${sec.roadmap !== false ? `<section class="section"><div class="eyebrow">THE ROUTE</div><h2>Roadmap.</h2><div class="road">${(s.roadmap || []).map((x, i) => `<div class="step"><i>0${i + 1}</i><h3>${esc(x)}</h3></div>`).join("")}</div></section>` : ""}${sec.memeMaker !== false ? `<section class="section"><div class="eyebrow">COMMUNITY STUDIO</div><h2>Meme factory.</h2><div class="meme"><canvas id="meme" width="1000" height="1000"></canvas><div><input id="topText" value="BUY THE DIP"><input id="bottomText" value="$${esc(t.symbol)} SENDS"><button id="dl" class="button primary">DOWNLOAD MEME</button></div></div></section>` : ""}${sec.socials !== false ? `<section class="section"><div class="eyebrow">COMMUNITY</div><h2>Join the signal.</h2><div class="socials">${link("X", p.links.x)}${link("TELEGRAM", p.links.telegram)}${link("LIVE CHART", chart.replace("?embed=1&theme=dark&trades=0&info=1", ""))}</div></section>` : ""}<footer class="footer"><img src="${esc(m.pfp || t.imageUrl)}"><h2>$${esc(t.symbol)}</h2><p>Memecoins are volatile and have no guaranteed value. Verify the contract and do your own research.</p></footer><a class="cta mobileBuy" href="${buy}">BUY $${esc(t.symbol)}</a>`;
+          if (__coinEditor) {
+            const heroNode = document.querySelector(".hero");
+            if (heroNode) heroNode.dataset.editKind = matchMedia("(max-width:760px)").matches ? "mobileHero" : "hero";
+            document.querySelectorAll(".logo img,.footer img").forEach((node) => { node.dataset.editKind = "pfp"; });
+            const galleryNodes = [...document.querySelectorAll(".gallery img")], galleryCount = (m.gallery || []).length;
+            galleryNodes.forEach((node, index) => {
+              node.dataset.editKind = index < galleryCount ? "gallery" : "pfp";
+              if (index < galleryCount) node.dataset.galleryIndex = String(index);
+            });
+            const hint = document.createElement("div");
+            hint.className = "editHint"; hint.textContent = "CLICK ANY OUTLINED IMAGE TO REPLACE IT"; document.body.appendChild(hint);
+            $("#app").addEventListener("click", (event) => {
+              const target = event.target.closest?.("[data-edit-kind]");
+              if (!target) return;
+              event.preventDefault(); event.stopPropagation();
+              parent.postMessage({ type: "slimewire-site-image-edit", kind: target.dataset.editKind, galleryIndex: Number(target.dataset.galleryIndex) }, location.origin);
+            }, true);
+          }
           document.querySelector("[data-copy]").onclick = () =>
             navigator.clipboard.writeText(t.ca);
           if (sec.memeMaker !== false) {

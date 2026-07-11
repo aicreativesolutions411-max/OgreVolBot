@@ -9208,20 +9208,51 @@ async function handleWebApiRequest(request, response, requestUrl) {
       if ((project.payment?.status || "unlocked") !== "unlocked") {
         sendWebJson(request, response, 402, { ok: false, error: "Unlock this site before generating provider artwork." }); return;
       }
-      const source = String(body.imageDataUrl || "");
-      if (!decodePfpImageDataUrl(source)) { sendWebJson(request, response, 400, { ok: false, error: "Upload a valid PFP first." }); return; }
-      const format = body.format === "gallery" ? "gallery" : "hero";
+      let source = String(body.imageDataUrl || "");
+      if (!decodePfpImageDataUrl(source)) {
+        const referenceUrl = firstString(launchOsSiteForClient(project)?.media?.pfp, project.token?.imageUrl);
+        const reference = await launchOsTrustedTokenImageBuffer(referenceUrl).catch(() => null);
+        if (reference) source = `data:image/png;base64,${(await sharp(reference).rotate().png().toBuffer()).toString("base64")}`;
+      }
+      if (!decodePfpImageDataUrl(source)) { sendWebJson(request, response, 400, { ok: false, error: "Upload a valid PFP first, then generate the art set." }); return; }
+      const format = body.format === "set" ? "set" : body.format === "gallery" ? "gallery" : "hero";
       const basePrompt = launchOsCleanText(body.prompt || project.site?.prompt || "", 900);
-      const art = await aiSiteArt({ imageDataUrl: source, prompt: project.site?.artPrompts?.[format === "gallery" ? "gallery" : "desktop"] || basePrompt, format });
-      const dataUrl = `data:image/png;base64,${art.toString("base64")}`;
-      const result = await saveLaunchOsMedia(project, { kind: format, dataUrl });
-      if (format === "hero") {
-        const mobile = await aiSiteArt({ imageDataUrl: source, prompt: project.site?.artPrompts?.mobile || basePrompt, format: "mobile" });
-        const mobileResult = await saveLaunchOsMedia(project, { kind: "mobileHero", dataUrl: `data:image/png;base64,${mobile.toString("base64")}` });
+      const brandContext = launchOsCleanText(`Website headline: ${project.site?.headline || ""}. Story: ${project.site?.subhead || ""} ${project.site?.lore || ""}`, 700);
+      const make = async (kind, artFormat, direction) => {
+        const art = await aiSiteArt({ imageDataUrl: source, prompt: launchOsCleanText(`${basePrompt}. ${brandContext}. ${direction}`, 900), format: artFormat });
+        return saveLaunchOsMedia(project, { kind, dataUrl: `data:image/png;base64,${art.toString("base64")}` });
+      };
+      let result;
+      let generated = 0;
+      if (format === "set") {
+        const specs = [
+          ["hero", "hero", "Scene one: cinematic wide establishing shot; mascot on the right; expansive branded world; dramatic environmental storytelling."],
+          ["mobileHero", "mobile", "Scene two: distinctly different vertical composition and camera angle; mascot in motion; clean headline-safe space; mobile-first depth."],
+          ["gallery", "gallery", "Scene three: premium close character portrait; controlled studio lighting; graphic editorial backdrop; intimate expression."],
+          ["gallery", "gallery", "Scene four: energetic low-angle action scene; large environment; movement and community energy; different pose and lighting."],
+          ["gallery", "gallery", "Scene five: atmospheric world-detail campaign image; mascot smaller in frame; iconic objects and setting; clearly different composition."]
+        ];
+        const galleryUrls = [];
+        for (const [kind, artFormat, direction] of specs) {
+          const saved = await make(kind, artFormat, direction);
+          result = saved; generated += 1;
+          if (kind === "gallery") galleryUrls.push(saved.url);
+        }
+        await mutateLaunchOs((store) => {
+          const saved = store.projects[project.id];
+          if (saved?.site?.media && galleryUrls.length) saved.site.media.gallery = galleryUrls;
+          if (saved?.site) saved.site.imageProvider = aiSiteArtProvider();
+        });
+        result.project = clientLaunchOsProject(await requireLaunchOsEditor(slug, launchOsEditorKeyFromRequest(request)));
+      } else if (format === "hero") {
+        result = await make("hero", "hero", project.site?.artPrompts?.desktop || "Cinematic desktop establishing scene."); generated += 1;
+        const mobileResult = await make("mobileHero", "mobile", project.site?.artPrompts?.mobile || "Distinct mobile scene and camera angle."); generated += 1;
         result.project = mobileResult.project;
+      } else {
+        result = await make("gallery", "gallery", project.site?.artPrompts?.gallery || "Distinct editorial gallery scene."); generated += 1;
       }
       await mutateLaunchOs((store) => { const saved = store.projects[project.id]; if (saved?.site) saved.site.imageProvider = aiSiteArtProvider(); });
-      sendWebJson(request, response, 200, { ok: true, ...result, provider: aiSiteArtProvider() });
+      sendWebJson(request, response, 200, { ok: true, ...result, generated, provider: aiSiteArtProvider() });
       return;
     }
 
@@ -57110,7 +57141,8 @@ async function launchOsTrustedTokenImageBuffer(value) {
   try { parsed = new URL(String(value || "")); } catch { return null; }
   if (parsed.protocol !== "https:") return null;
   const host = parsed.hostname.toLowerCase();
-  const allowed = ["dexscreener.com", "arweave.net", "ipfs.io", "cf-ipfs.com", "pinata.cloud", "filebase.io", "pbs.twimg.com"];
+  const ownMediaHost = (() => { try { return new URL(String(CONFIG.xDmRedirectOrigin || "https://ogrevolbot.onrender.com")).hostname.toLowerCase(); } catch { return "ogrevolbot.onrender.com"; } })();
+  const allowed = ["dexscreener.com", "arweave.net", "ipfs.io", "cf-ipfs.com", "pinata.cloud", "filebase.io", "pbs.twimg.com", ownMediaHost];
   if (!allowed.some((domain) => host === domain || host.endsWith(`.${domain}`))) return null;
   const response = await fetch(parsed.href, { headers: { Accept: "image/png,image/jpeg,image/webp,image/*" }, signal: AbortSignal.timeout(8_000) }).catch(() => null);
   if (!response?.ok) return null;
@@ -57310,7 +57342,13 @@ async function saveLaunchOsMedia(project, body = {}) {
     const saved = store.projects[project.id]; if (!saved) return;
     saved.site = saved.site || launchOsDefaultSite(saved.token, saved.publicUrl, saved.mode);
     saved.site.media = saved.site.media || { pfp: "", hero: "", gallery: [] };
-    if (kind === "gallery") saved.site.media.gallery = [...(saved.site.media.gallery || []), url].slice(-12);
+    if (kind === "gallery") {
+      const gallery = [...(saved.site.media.gallery || [])];
+      const galleryIndex = Number(body.galleryIndex);
+      if (Number.isInteger(galleryIndex) && galleryIndex >= 0 && galleryIndex < gallery.length) gallery[galleryIndex] = url;
+      else gallery.push(url);
+      saved.site.media.gallery = gallery.slice(-12);
+    }
     else saved.site.media[kind] = url;
     saved.updatedAt = new Date().toISOString();
   });

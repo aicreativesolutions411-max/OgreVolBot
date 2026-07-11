@@ -177,6 +177,9 @@
         color: #071000;
         border: 0;
       }
+      .btn:disabled { opacity: 0.48; cursor: wait; }
+      .btn.busy { animation: forgePulse 0.9s ease-in-out infinite alternate; }
+      @keyframes forgePulse { to { box-shadow: 0 0 30px #b7ff0066; } }
       .btn.full {
         width: 100%;
         padding: 16px;
@@ -451,6 +454,11 @@
                 type="file"
                 accept="image/*" /></label
             ><label class="upload" style="margin-top: 8px"
+              >Upload mobile hero<input
+                id="mobileHero"
+                type="file"
+                accept="image/png,image/jpeg,image/webp" /></label
+            ><label class="upload" style="margin-top: 8px"
               >Add gallery artwork<input
                 id="gallery"
                 type="file"
@@ -461,8 +469,8 @@
           <div class="group">
             <div class="badge">REAL GENERATION ENGINE</div>
             <p class="msg">
-              SlimeWire composes the responsive site; fal.ai generates custom
-              hero and gallery artwork from the coin PFP.
+              Cloudflare creates distinct desktop, mobile and gallery scenes
+              from the coin PFP and your website story.
             </p>
             <div class="field">
               <label>AI art direction</label
@@ -473,9 +481,12 @@
               ></textarea>
             </div>
             <div class="actions">
-              <button id="aiHero" class="btn primary">Generate AI hero</button
+              <button id="aiSet" class="btn primary" style="width: 100%">
+                ✨ Generate Complete Art Set</button
+              ><button id="aiHero" class="btn">Generate desktop + mobile</button
               ><button id="aiGallery" class="btn">Generate gallery art</button>
             </div>
+            <p class="msg">One click replaces the hero set and gallery with five different, style-matched images. Allow about 30–60 seconds.</p>
           </div>
           <div class="group">
             <label>Visible sections</label>
@@ -502,7 +513,8 @@
               >
             </div>
           </div>
-          <div id="studioMsg" class="msg"></div>
+          <div id="studioMsg" class="msg" aria-live="polite"></div>
+          <input id="slotUpload" type="file" accept="image/png,image/jpeg,image/webp" hidden />
         </aside>
         <div class="preview"><iframe id="frame"></iframe></div>
       </section>
@@ -576,6 +588,9 @@
         function remember() {
           localStorage.setItem("coinSite:" + p.slug, key);
         }
+        function previewUrl() {
+          return `/coin-site?project=${encodeURIComponent(p.slug)}&editor=1&v=${Date.now()}`;
+        }
         function sync() {
           p.site.template = $("#template").value;
           p.site.accent = $("#accent").value;
@@ -603,7 +618,7 @@
             )
             .join("");
           $("#openSite").href = p.publicUrl;
-          $("#frame").src = `/coin/${p.slug}?v=${Date.now()}`;
+          $("#frame").src = previewUrl();
           $("#intro").style.display = "none";
           $("#studio").classList.add("on");
           $("#save").hidden = false;
@@ -631,7 +646,7 @@
               const d = await api("/api/launch-os/payment/" + p.slug, { key });
               p = d.project;
               renderPayment();
-              $("#frame").src = `/coin/${p.slug}?v=${Date.now()}`;
+              $("#frame").src = previewUrl();
             } catch (e) {
               $("#payMsg").textContent = e.message;
             }
@@ -645,7 +660,7 @@
             body: JSON.stringify({ site: p.site }),
           });
           p = d.project;
-          $("#frame").src = `/coin/${p.slug}?v=${Date.now()}`;
+          $("#frame").src = previewUrl();
           $("#studioMsg").textContent = p.published
             ? "Saved and published."
             : "Saved to owner preview. Unlock payment to publish.";
@@ -679,48 +694,69 @@
             b.textContent = "Generate Complete Website";
           }
         };
-        async function upload(kind, data) {
+        async function upload(kind, data, extra = {}) {
           const d = await api("/api/launch-os/media/" + p.slug, {
             method: "POST",
             key,
-            body: JSON.stringify({ kind, dataUrl: data }),
+            body: JSON.stringify({ kind, dataUrl: data, ...extra }),
           });
           p = d.project;
           fill();
+          return d;
         }
-        for (const id of ["pfp", "hero"])
+        async function uploadWithStatus(kind, file, extra = {}) {
+          if (!file) return;
+          $("#studioMsg").textContent = `Uploading ${kind === "gallery" ? "gallery image" : kind}…`;
+          try {
+            await upload(kind, await read(file), extra);
+            $("#studioMsg").textContent = "Image replaced and saved.";
+          } catch (e) { $("#studioMsg").textContent = e.message; }
+        }
+        for (const id of ["pfp", "hero", "mobileHero"])
           $("#" + id).onchange = async (e) => {
-            if (e.target.files[0])
-              await upload(id, await read(e.target.files[0]));
+            await uploadWithStatus(id, e.target.files[0]);
+            e.target.value = "";
           };
         $("#gallery").onchange = async (e) => {
-          for (const f of [...e.target.files].slice(0, 8))
-            await upload("gallery", await read(f));
+          for (const f of [...e.target.files].slice(0, 8)) await uploadWithStatus("gallery", f);
+          e.target.value = "";
+        };
+        let pendingSlot = null;
+        addEventListener("message", (event) => {
+          if (event.origin !== location.origin || event.source !== $("#frame").contentWindow) return;
+          if (event.data?.type !== "slimewire-site-image-edit") return;
+          pendingSlot = { kind: event.data.kind, galleryIndex: Number(event.data.galleryIndex) };
+          $("#studioMsg").textContent = `Choose a replacement for ${pendingSlot.kind === "gallery" ? `gallery image ${pendingSlot.galleryIndex + 1}` : pendingSlot.kind}.`;
+          $("#slotUpload").click();
+        });
+        $("#slotUpload").onchange = async (event) => {
+          const slot = pendingSlot, file = event.target.files[0];
+          pendingSlot = null; event.target.value = "";
+          if (!slot || !file) return;
+          await uploadWithStatus(slot.kind, file, slot.kind === "gallery" ? { galleryIndex: slot.galleryIndex } : {});
         };
         async function gen(format) {
-          const src = starter || p.site.media?.pfp || p.token.imageUrl;
-          if (!src || !src.startsWith("data:")) {
-            const r = await fetch(src);
-            starter = await new Promise((res) => {
-              const fr = new FileReader();
-              fr.onload = () => res(fr.result);
-              fr.readAsDataURL(r.blob());
+          if (!p?.published) throw Error("Unlock the $10 site or use an admin code before generating provider artwork.");
+          const buttons = [$("#aiSet"), $("#aiHero"), $("#aiGallery")];
+          buttons.forEach((button) => { button.disabled = true; button.classList.add("busy"); });
+          const started = Date.now(), label = format === "set" ? "five distinct site images" : format === "hero" ? "desktop and mobile heroes" : "a gallery scene";
+          $("#studioMsg").textContent = `Cloudflare is generating ${label}… 0s`;
+          const ticker = setInterval(() => { $("#studioMsg").textContent = `Cloudflare is generating ${label}… ${Math.round((Date.now() - started) / 1000)}s`; }, 1000);
+          try {
+            const d = await api("/api/launch-os/ai/" + p.slug, {
+              method: "POST", key,
+              body: JSON.stringify({ imageDataUrl: starter && starter.startsWith("data:") ? starter : "", prompt: $("#aiPrompt").value, format }),
             });
+            p = d.project;
+            fill();
+            $("#studioMsg").textContent = `✓ ${d.generated || 1} unique image${Number(d.generated || 1) === 1 ? "" : "s"} generated with ${d.provider || "Cloudflare"}.`;
+          } finally {
+            clearInterval(ticker);
+            buttons.forEach((button) => { button.disabled = false; button.classList.remove("busy"); });
           }
-          $("#studioMsg").textContent = "Generating premium artwork…";
-          const d = await api("/api/launch-os/ai/" + p.slug, {
-            method: "POST",
-            key,
-            body: JSON.stringify({
-              imageDataUrl: starter,
-              prompt: $("#aiPrompt").value,
-              format,
-            }),
-          });
-          p = d.project;
-          fill();
-          $("#studioMsg").textContent = "Artwork generated and published.";
         }
+        $("#aiSet").onclick = () =>
+          gen("set").catch((e) => ($("#studioMsg").textContent = e.message));
         $("#aiHero").onclick = () =>
           gen("hero").catch((e) => ($("#studioMsg").textContent = e.message));
         $("#aiGallery").onclick = () =>
