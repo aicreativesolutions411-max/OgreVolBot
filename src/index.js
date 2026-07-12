@@ -32441,7 +32441,8 @@ function fetchJsonErrorMessage(data, text, status) {
 }
 
 async function fetchJson(url, init = {}) {
-  const { timeoutMs, ...fetchInit } = init || {};
+  const { timeoutMs, maxBytes: configuredMaxBytes, ...fetchInit } = init || {};
+  const maxBytes = Math.max(64_000, Math.min(32_000_000, Number(configuredMaxBytes) || 8_000_000));
   let timeout = null;
   let controller = null;
 
@@ -32452,8 +32453,34 @@ async function fetchJson(url, init = {}) {
   }
 
   let response;
+  let text = "";
   try {
     response = await fetch(url, fetchInit);
+    const declaredBytes = Number(response.headers.get("content-length") || 0);
+    if (declaredBytes > maxBytes) {
+      try { await response.body?.cancel(); } catch { /* noop */ }
+      throw new Error(`Provider response exceeded ${Math.round(maxBytes / 1_000_000)} MB limit`);
+    }
+    if (response.body?.getReader) {
+      const reader = response.body.getReader();
+      const chunks = [];
+      let received = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        received += value.length;
+        if (received > maxBytes) {
+          try { await reader.cancel(); } catch { /* noop */ }
+          try { controller?.abort(); } catch { /* noop */ }
+          throw new Error(`Provider response exceeded ${Math.round(maxBytes / 1_000_000)} MB limit`);
+        }
+        chunks.push(value);
+      }
+      text = Buffer.concat(chunks, received).toString("utf8");
+    } else {
+      text = await response.text();
+      if (Buffer.byteLength(text, "utf8") > maxBytes) throw new Error(`Provider response exceeded ${Math.round(maxBytes / 1_000_000)} MB limit`);
+    }
   } catch (error) {
     if (error?.name === "AbortError") {
       throw new Error(`Request timed out after ${timeoutMs}ms`);
@@ -32463,7 +32490,6 @@ async function fetchJson(url, init = {}) {
     if (timeout) clearTimeout(timeout);
   }
 
-  const text = await response.text();
   let data = {};
 
   if (text) {
@@ -34496,7 +34522,9 @@ async function enrichScanSecurityOnchain(mint, rug, bonding) {
   if (out.top10Pct == null || out.holderCount == null || out.devSold == null) {
     try {
       const creator = String(bonding?.creator || bonding?.creatorWallet || bonding?.dev || bonding?.deployer || "").trim();
-      const dist = await computeOnchainDistribution({ mint, creatorWallet: creator, rpcRead, withHolderCount: out.holderCount == null });
+      // Never enumerate every SPL token account through web3.js here. Popular or malformed RPC
+      // responses can exceed 100 MB and multiply in memory while JSON is parsed.
+      const dist = await computeOnchainDistribution({ mint, creatorWallet: creator, rpcRead, withHolderCount: false });
       if (dist && dist.onchainLoaded) {
         if (Number.isFinite(dist.top10Percent)) filled.top10Pct = dist.top10Percent;
         if (Number.isFinite(dist.topHolderPercent)) filled.topHolders = [dist.topHolderPercent];

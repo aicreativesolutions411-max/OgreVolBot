@@ -1840,6 +1840,15 @@ test("scan Security fills from our own RPC when RugCheck returns null (no more n
   assert.match(functionBody(serverSource, "fetchRugcheckFull"), /authoritiesKnown: true/);
 });
 
+test("provider JSON and fast holder reads stay memory bounded", () => {
+  const fetcher = functionBody(serverSource, "fetchJson");
+  assert.match(fetcher, /configuredMaxBytes/);
+  assert.match(fetcher, /response\.body\?\.getReader/);
+  assert.match(fetcher, /Provider response exceeded/);
+  const enrich = functionBody(serverSource, "enrichScanSecurityOnchain");
+  assert.match(enrich, /computeOnchainDistribution\(\{ mint, creatorWallet: creator, rpcRead, withHolderCount: false \}\)/);
+});
+
 // ---- Alpha Radar: "is a big network behind this coin?" (long-term-runner oriented, read-only) ----
 test("computeNetworkBacking reuses the observatory's winner/operator/cluster signals", () => {
   const fn = functionBody(serverSource, "computeNetworkBacking");
