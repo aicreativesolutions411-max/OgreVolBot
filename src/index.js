@@ -3794,15 +3794,19 @@ const mintProgramCache = new Map();
 const dexMetadataCache = new Map();
 const tokenImageResponseCache = new Map();
 const tokenImageFailureCache = new Map();
+const tokenImageFetchInFlight = new Map();
 const TOKEN_IMAGE_RESPONSE_CACHE_TTL_MS = 30 * 60 * 1000;
 const TOKEN_IMAGE_RESPONSE_STALE_TTL_MS = 6 * 60 * 60 * 1000;
 const TOKEN_IMAGE_FAILURE_TTL_MS = 10 * 1000;
-const TOKEN_IMAGE_RESPONSE_CACHE_MAX = 500;
+// 160 normalized 96px thumbnails stays comfortably memory-bounded while covering the visible feeds.
+const TOKEN_IMAGE_RESPONSE_CACHE_MAX = 160;
 const tokenAvatarCache = new Map();
 const tokenAvatarLookupInFlight = new Map();
 const tokenAvatarLookupQueue = new Map();
 const TOKEN_AVATAR_SUCCESS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const TOKEN_AVATAR_FAIL_TTL_MS = 12 * 60 * 60 * 1000;
+// New launches commonly publish metadata seconds after the pair. Retry misses after one minute instead
+// of preserving that normal indexing delay for twelve hours; successful artwork remains sticky for 30 days.
+const TOKEN_AVATAR_FAIL_TTL_MS = 60 * 1000;
 const TOKEN_AVATAR_LOOKUP_CONCURRENCY = 5;
 const slimeShieldCache = new Map();
 const SLIMESHIELD_CACHE_TTL_MS = 45 * 1000;
@@ -11258,7 +11262,14 @@ async function sendWebTokenImage(request, response, requestUrl) {
     }
   }
 
-  const avatar = await tokenAvatarForMint(mint, { schedule: true }).catch(() => tokenAvatarRecord(mint, { state: "pending" }));
+  let avatar = await tokenAvatarForMint(mint, { schedule: true }).catch(() => tokenAvatarRecord(mint, { state: "pending" }));
+  // A feed row can beat its background metadata lookup by a few milliseconds. Give an already-running
+  // lookup one short chance to finish instead of returning a cacheable 404 that leaves a broken avatar.
+  const avatarLookup = tokenAvatarLookupInFlight.get(cacheKey);
+  if (avatar?.state === "pending" && avatarLookup) {
+    await Promise.race([avatarLookup.catch(() => null), sleep(900)]);
+    avatar = tokenAvatarMemoryRecord(mint) || avatar;
+  }
   const imageCandidate = avatar?.state === "ready"
     ? imageUriGatewayCandidates(avatar.avatarUrl).find((candidate) => /^https:\/\//i.test(candidate))
     : "";
@@ -11273,9 +11284,30 @@ async function sendWebTokenImage(request, response, requestUrl) {
     return;
   }
 
-  // Resolved avatar (e.g. pump.fun IPFS) is ready -> 302 redirect to it. Far faster
-  // than proxying bytes through our dyno (no 2.5s fetch, no timeout failures) and the
-  // browser + gateway cache it. This is what makes coin images show up instantly.
+  // Normalize the remote art once into a tiny cached PNG. Direct Pinata/IPFS URLs were the main source of
+  // half-loaded feeds. The shared fetcher tries alternate gateways inside one deadline; single-flight
+  // prevents duplicate work when many rows paint together.
+  let imageFetch = tokenImageFetchInFlight.get(cacheKey);
+  if (!imageFetch && tokenImageFetchInFlight.size < 12) {
+    imageFetch = (async () => {
+      const { fetchLogoBuffer } = await import("./lib/slimeMapRender.mjs");
+      const buffer = await fetchLogoBuffer(avatar.avatarUrl, 96, 2_600).catch(() => null);
+      if (!buffer) return null;
+      const value = { buffer, contentType: "image/png", cachedAt: Date.now() };
+      tokenImageResponseCache.set(cacheKey, value);
+      tokenImageFailureCache.delete(cacheKey);
+      pruneTokenImageResponseCache();
+      return value;
+    })().finally(() => tokenImageFetchInFlight.delete(cacheKey));
+    tokenImageFetchInFlight.set(cacheKey, imageFetch);
+  }
+  const normalizedImage = imageFetch ? await imageFetch : null;
+  if (normalizedImage) {
+    sendCachedWebTokenImage(request, response, normalizedImage, "MISS");
+    return;
+  }
+
+  // Preserve a direct fallback for unusual formats the normalizer cannot decode.
   response.writeHead(302, {
     "Location": imageCandidate,
     "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
@@ -51814,19 +51846,23 @@ async function rhLaunchMetaByAddress() {
 
 const rhFeedArtworkCache = new Map();
 async function enrichRhFeedArtwork(rows = []) {
-  const targets = rows.filter((row) => row?.address && !row.imageUrl && !row.iconUrl).slice(0, 20);
+  const targets = rows.filter((row) => row?.address && !row.imageUrl && !row.iconUrl).slice(0, 50);
   const missing = [];
   for (const row of targets) {
     const key = String(row.address).toLowerCase(), cached = rhFeedArtworkCache.get(key);
-    if (cached && Date.now() - cached.at < (cached.imageUrl ? 30 * 60_000 : 5 * 60_000)) {
+    if (cached && Date.now() - cached.at < (cached.imageUrl ? 30 * 60_000 : 45_000)) {
       if (cached.imageUrl) row.imageUrl = cached.imageUrl;
     } else missing.push(row);
   }
   if (missing.length) {
-    const addresses = missing.map((row) => row.address).join(",");
-    const pairs = await fetchJson(`https://api.dexscreener.com/tokens/v1/robinhood/${addresses}`, {
-      headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" }, timeoutMs: 2_200
-    }).catch(() => []);
+    // Dex accepts bounded address batches. Two small requests cover the whole visible feed in about one RTT.
+    const chunks = [];
+    for (let index = 0; index < missing.length; index += 25) chunks.push(missing.slice(index, index + 25));
+    const pairGroups = await Promise.all(chunks.map((chunk) => fetchJson(
+      `https://api.dexscreener.com/tokens/v1/robinhood/${chunk.map((row) => row.address).join(",")}`,
+      { headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" }, timeoutMs: 1_800 }
+    ).catch(() => [])));
+    const pairs = pairGroups.flatMap((group) => Array.isArray(group) ? group : []);
     const byToken = new Map();
     for (const pair of Array.isArray(pairs) ? pairs : []) {
       const key = String(pair?.baseToken?.address || "").toLowerCase();
@@ -51875,7 +51911,7 @@ async function webRhPairs(category = "trending") {
     }
     scheduleRhSafetyFill(rows);
     const visible = rows.slice(0, 60);
-    void enrichRhFeedArtwork(visible).catch(() => {});
+    await enrichRhFeedArtwork(visible).catch(() => visible);
     return visible;
   }
   const [tokens, meta] = await Promise.all([rhFeedTokens(), rhLaunchMetaByAddress()]);
@@ -51888,6 +51924,9 @@ async function webRhPairs(category = "trending") {
       explorer: rhExplorerToken(t.address)
     };
   });
+  // Start artwork immediately and overlap it with safety/age/price work. Awaiting before JSON serialization
+  // fixes the old race where enrichment mutated the rows only after the response had already been sent.
+  const artworkPromise = enrichRhFeedArtwork(rows).catch(() => rows);
   // Attach the cached server-side safety verdict to EVERY row (all tabs show the 🛡/✅/⚠️/⛔ badge).
   for (const r of rows) { const s = rhSafetyFeedCache.get(r.address.toLowerCase()); if (s) r.safety = s.verdict; }
   if (cat === "safe") {
@@ -51901,10 +51940,15 @@ async function webRhPairs(category = "trending") {
       .sort((a, b) => (b.safety === "verified" ? 1 : 0) - (a.safety === "verified" ? 1 : 0)
         || (b.volume24hUsd || 0) - (a.volume24hUsd || 0) || (b.marketCapUsd || 0) - (a.marketCapUsd || 0) || b.holders - a.holders);
   } else if (cat === "new") {
-    // Resolve creation times for the youngest-looking slice only (bounded work per request; cached forever).
+    // Never block the feed on dozens of explorer creation-time reads. Show the activity-ordered universe
+    // immediately, merge permanent cached ages, and let the existing bounded filler improve later refreshes.
     const slice = rows.slice(0, 60);
-    await Promise.all(slice.map(async (r) => { r.createdAt = await rhTokenCreationTime(r.address); }));
-    rows = slice.filter((r) => r.createdAt).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+    for (const r of slice) {
+      const cachedCreatedAt = rhCreatedCache.get(r.address.toLowerCase());
+      if (cachedCreatedAt) r.createdAt = cachedCreatedAt;
+    }
+    scheduleRhCreatedFill(slice);
+    rows = slice.sort((a, b) => Date.parse(b.createdAt || b.lastActiveAt || 0) - Date.parse(a.createdAt || a.lastActiveAt || 0));
   } else {
     rows.sort((a, b) => (b.volume24hUsd || 0) - (a.volume24hUsd || 0) || (b.marketCapUsd || 0) - (a.marketCapUsd || 0) || b.holders - a.holders);
   }
@@ -51926,7 +51970,8 @@ async function webRhPairs(category = "trending") {
     }
   }
   scheduleRhPriceFill(rows);
-  void enrichRhFeedArtwork(rows).catch(() => {});
+  await artworkPromise;
+  await enrichRhFeedArtwork(rows).catch(() => rows);
   return rows;
 }
 

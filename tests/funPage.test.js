@@ -12,7 +12,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.match(server, /requestUrl\.pathname === "\/fun"[\s\S]{0,300}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
-  assert.match(html, /<script defer src="\/fun\.js\?v=9"><\/script>/);
+  assert.match(html, /<script defer src="\/fun\.js\?v=10"><\/script>/);
 });
 
 test("/fun keeps the reference layout clean while carrying SlimeWire features", () => {
@@ -67,11 +67,20 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(server, /token-pairs\/v1\/robinhood/);
   assert.match(server, /const meta = await getDexTokenMetadata\(mint/);
   assert.match(server, /enrichRhFeedArtwork/);
-  assert.match(server, /void enrichRhFeedArtwork\(rows\)\.catch/);
+  assert.match(server, /const artworkPromise = enrichRhFeedArtwork\(rows\)/);
+  assert.match(server, /await artworkPromise/);
   assert.match(server, /token-pairs\/v1\/robinhood/);
   assert.match(js, /\/api\/web\/token-image\?mint=/);
-  assert.match(js, /data-image-retries/);
-  assert.match(js, /retries < 3/);
+  assert.match(js, /resolvedCoinImages: new Map/);
+  assert.match(js, /state\.resolvedCoinImages\.set/);
+  assert.match(js, /background-image:url\('\$\{mascot\(key\)\}'\)/);
+  assert.match(css, /\.coin-avatar,\.coin-identity img\{background-position:center/);
+  assert.match(js, /gateway\\\.pinata/);
+  assert.doesNotMatch(js, /retries < 3/);
+  assert.match(server, /fetchLogoBuffer\(avatar\.avatarUrl, 96, 2_600\)/);
+  assert.match(server, /tokenImageFetchInFlight\.size < 12/);
+  assert.match(server, /TOKEN_IMAGE_RESPONSE_CACHE_MAX = 160/);
+  assert.match(server, /TOKEN_AVATAR_FAIL_TTL_MS = 60 \* 1000/);
   assert.match(js, /const detailPromise = request\(path\)/);
   assert.ok(js.indexOf("const searchResult = await request") < js.indexOf("const detailResult = await detailPromise"));
 });
@@ -115,7 +124,10 @@ test("/fun live feeds reject stale responses and refresh only the visible view",
   assert.match(js, /sortAndDedupeFeed/);
   assert.match(js, /hydrateMissingCoinArt/);
   assert.match(js, /const sol = await solPromise;[\s\S]{0,220}renderCoinList\(\);[\s\S]{0,120}const rh = await rhPromise/);
-  assert.match(server, /tokens\/v1\/robinhood\/\$\{addresses\}/);
+  assert.match(server, /chunks\.map\(\(chunk\) => fetchJson/);
+  assert.match(server, /\.slice\(0, 50\)/);
+  assert.match(server, /Never block the feed on dozens of explorer creation-time reads/);
+  assert.doesNotMatch(server, /await Promise\.all\(slice\.map\(async \(r\) => \{ r\.createdAt = await rhTokenCreationTime/);
 });
 
 test("/fun has editable presets, tracked calls, and informational profile follows", () => {

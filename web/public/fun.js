@@ -43,6 +43,7 @@
     feedRequestVersion: 0,
     feedTimer: null,
     imageHydrateVersion: 0,
+    resolvedCoinImages: new Map(),
     quickBuyKey: ""
   };
 
@@ -83,16 +84,25 @@
     return url;
   }
   function directCoinImage(coin) { return normalizeImageUrl(coin?.imageUrl || coin?.avatarUrl || coin?.imageUri || coin?.iconUrl || coin?.logoUrl || coin?.meta?.imageUrl || coin?.metadata?.image || coin?.image); }
+  function coinProxyImage(coin) {
+    const key = coinKey(coin);
+    return key && coin?.chain !== "robinhood" ? `${API_BASE}/api/web/token-image?mint=${encodeURIComponent(key)}` : "";
+  }
   function coinImage(coin) {
     const key = coinKey(coin);
+    const remembered = key ? state.resolvedCoinImages.get(key.toLowerCase()) : "";
+    if (remembered) return remembered;
     const direct = directCoinImage(coin);
+    const proxy = coinProxyImage(coin);
+    // IPFS gateways are much more reliable through the bounded server proxy, which can try alternates.
+    if (direct && !/(?:ipfs\/|gateway\.pinata\.cloud|ipfs\.io)/i.test(direct)) return direct;
+    if (proxy) return proxy;
     if (direct) return direct;
-    if (key && coin?.chain !== "robinhood") return `${API_BASE}/api/web/token-image?mint=${encodeURIComponent(key)}`;
     return mascot(key);
   }
   function coinImageAttrs(coin) {
-    const key = coinKey(coin), proxy = key && coin?.chain !== "robinhood" ? `${API_BASE}/api/web/token-image?mint=${encodeURIComponent(key)}` : "";
-    return `src="${escapeHtml(coinImage(coin))}" data-token-image data-chain="${coin?.chain === "robinhood" ? "rh" : "sol"}" data-proxy-image="${escapeHtml(proxy)}" data-image-retries="0"`;
+    const key = coinKey(coin), proxy = coinProxyImage(coin), direct = directCoinImage(coin);
+    return `src="${escapeHtml(coinImage(coin))}" data-token-image data-coin-image-key="${escapeHtml(key.toLowerCase())}" data-chain="${coin?.chain === "robinhood" ? "rh" : "sol"}" data-direct-image="${escapeHtml(direct)}" data-proxy-image="${escapeHtml(proxy)}"`;
   }
   function attemptId(prefix = "fun") { return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`; }
   function toast(message, error = false) { const node = $("[data-toast]"); node.textContent = message; node.className = `toast show${error ? " error" : ""}`; clearTimeout(node._timer); node._timer = setTimeout(() => node.className = "toast", 3600); }
@@ -233,15 +243,9 @@
     scheduleFeedRefresh();
   }
   async function hydrateMissingCoinArt(version) {
-    const missing = state.rows.filter((row) => !directCoinImage(row)).slice(0, 12);
-    if (!missing.length) return;
-    const hydrateVersion = ++state.imageHydrateVersion;
-    for (let index = 0; index < missing.length; index += 4) await Promise.all(missing.slice(index, index + 4).map(async (row) => {
-        const key = coinKey(row), result = await request(`/api/web/token-search?q=${encodeURIComponent(key)}`, { timeout: 5000 });
-        const match = result.ok ? (result.data?.matches || []).find((item) => coinKey(item).toLowerCase() === key.toLowerCase()) : null;
-        const imageUrl = directCoinImage(match); if (imageUrl) row.imageUrl = imageUrl;
-      }));
-    if (version === state.feedRequestVersion && hydrateVersion === state.imageHydrateVersion) renderCoinList();
+    // Feed endpoints already queue metadata hydration. Avoid the former 12 expensive token-search calls;
+    // the next silent refresh merges the cache while each image independently uses its fast proxy fallback.
+    state.imageHydrateVersion = version;
   }
   function hydrateSelectedFromFeed() {
     if (state.view !== "coin" || !state.selected) return;
@@ -256,7 +260,7 @@
     const key = coinKey(coin), chain = coin.chain === "robinhood" ? "rh" : "sol";
     const change = Number(coin.change), changeClass = Number.isFinite(change) ? (change >= 0 ? "up" : "down") : "";
     return `<button class="coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="${chain}">
-      <span class="coin-avatar"><img ${coinImageAttrs(coin)} alt="" loading="${index < 10 ? "eager" : "lazy"}" decoding="async" referrerpolicy="no-referrer"><i class="chain-badge ${chain}">${chain === "rh" ? "RH" : "SOL"}</i></span>
+      <span class="coin-avatar" style="background-image:url('${mascot(key)}')"><img ${coinImageAttrs(coin)} alt="" loading="${index < 10 ? "eager" : "lazy"}" decoding="async" referrerpolicy="no-referrer"><i class="chain-badge ${chain}">${chain === "rh" ? "RH" : "SOL"}</i></span>
       <span class="coin-info"><span class="coin-title"><b>${escapeHtml(coin.symbol || short(key))}</b><span>${escapeHtml(coin.name || "")}</span>${coin.live ? '<i class="live-tag">LIVE</i>' : ""}</span><span class="coin-meta"><i>${escapeHtml(coin.age || "new")}</i><i>Vol ${escapeHtml(coin.volume > 0 ? formatUsd(coin.volume) : (coin.volumeLabel || "checking"))}</i><i class="${changeClass}">${escapeHtml(formatPct(change))}</i></span></span>
       <span class="coin-value"><b>${escapeHtml(formatUsd(coin.marketCap))}</b><span>MARKET CAP</span></span>
     </button>`;
@@ -325,7 +329,7 @@
   }
   function renderCoinShell() {
     const coin = state.selected || {}, key = coinKey(coin), chain = coin.chain === "robinhood" ? "rh" : "sol";
-    $("[data-coin-mini]").innerHTML = `<div class="coin-identity"><img ${coinImageAttrs(coin)} alt="" decoding="async" referrerpolicy="no-referrer"><div><b>${escapeHtml(coin.symbol || short(key))}</b><span>${chain === "rh" ? "Robinhood Chain" : "Solana"} · ${escapeHtml(short(key))}</span></div></div><div class="coin-head-quote"><b>${formatUsd(coin.marketCap || coin.mc)}</b><span class="${Number(coin.change) >= 0 ? "up" : "down"}">${formatPct(coin.change)} · 1H</span></div>`;
+    $("[data-coin-mini]").innerHTML = `<div class="coin-identity"><img ${coinImageAttrs(coin)} style="background-image:url('${mascot(key)}')" alt="" decoding="async" referrerpolicy="no-referrer"><div><b>${escapeHtml(coin.symbol || short(key))}</b><span>${chain === "rh" ? "Robinhood Chain" : "Solana"} · ${escapeHtml(short(key))}</span></div></div><div class="coin-head-quote"><b>${formatUsd(coin.marketCap || coin.mc)}</b><span class="${Number(coin.change) >= 0 ? "up" : "down"}">${formatPct(coin.change)} · 1H</span></div>`;
     $("[data-coin-stats]").innerHTML = `<div><span>Market cap</span><b>${formatUsd(coin.marketCap || coin.mc)}</b></div><div><span>Liquidity</span><b>${formatUsd(coin.liquidity || coin.liq || coin.liquidityUsd)}</b></div><div><span>Holders</span><b>${Number(coin.holders || coin.holderCount) > 0 ? Number(coin.holders || coin.holderCount).toLocaleString() : "checking"}</b></div><div><span>Volume</span><b>${coin.volume > 0 ? formatUsd(coin.volume) : escapeHtml(coin.volumeLabel || "checking")}</b></div>`;
     renderChart();
     renderQuickTrade();
@@ -879,14 +883,21 @@
   document.addEventListener("error", (event) => {
     const image = event.target;
     if (!(image instanceof HTMLImageElement) || !image.matches("[data-token-image]")) return;
-    const retries = Number(image.dataset.imageRetries || 0), proxy = image.dataset.proxyImage || "";
-    if (proxy && !image.src.startsWith(proxy)) { image.src = proxy; return; }
-    if (image.dataset.chain === "sol" && proxy && retries < 3) {
-      image.dataset.imageRetries = String(retries + 1);
-      setTimeout(() => { if (image.isConnected) image.src = `${image.src.split("&retry=")[0]}&retry=${Date.now()}`; }, 2600);
-      return;
+    const proxy = image.dataset.proxyImage || "", direct = image.dataset.directImage || "";
+    const current = image.currentSrc || image.src || "";
+    if (proxy && !current.startsWith(proxy)) { image.src = proxy; return; }
+    if (direct && !current.startsWith(direct) && !/(?:ipfs\/|gateway\.pinata\.cloud|ipfs\.io)/i.test(direct)) { image.src = direct; return; }
+    image.removeAttribute("data-token-image");
+    image.src = mascot(image.dataset.coinImageKey || image.closest("[data-open-coin]")?.dataset.openCoin || state.selected && coinKey(state.selected));
+  }, true);
+  document.addEventListener("load", (event) => {
+    const image = event.target;
+    if (!(image instanceof HTMLImageElement) || !image.matches("[data-token-image]")) return;
+    const key = image.dataset.coinImageKey || "";
+    if (key && image.naturalWidth > 1 && !/token-mascot-|slimewire-mark/.test(image.currentSrc || image.src)) {
+      state.resolvedCoinImages.set(key, image.currentSrc || image.src);
+      if (state.resolvedCoinImages.size > 200) state.resolvedCoinImages.delete(state.resolvedCoinImages.keys().next().value);
     }
-    image.removeAttribute("data-token-image"); image.src = mascot(image.closest("[data-open-coin]")?.dataset.openCoin || state.selected && coinKey(state.selected));
   }, true);
 
   $("[data-search-input]").addEventListener("input", (event) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => runSearch(event.target.value), 280); });

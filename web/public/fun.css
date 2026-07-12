@@ -16,6 +16,9 @@
 @media(min-width:760px){body{background:#010201}.fun-app{max-width:520px;margin:0 auto;min-height:100vh;border-left:1px solid #172017;border-right:1px solid #172017;box-shadow:0 0 80px rgba(0,0,0,.65)}.fun-header,.bottom-nav,.trade-dock{left:50%;right:auto;width:520px;transform:translateX(-50%)}.search-sheet,.bottom-sheet{max-width:520px;margin:0 auto}.pulse-card{min-height:210px}.chart-card{height:478px}.chart-frame{height:423px}}
 @media(max-width:360px){.pulse-card h1{font-size:27px}.pulse-orb{opacity:.7}.tool-grid{grid-template-columns:repeat(2,1fr)}}
 
+/* Keep a deterministic slime face visible underneath metadata art while remote/CDN bytes resolve. */
+.coin-avatar,.coin-identity img{background-position:center;background-size:cover;background-repeat:no-repeat}
+
 /* Fun v2: faster coin trading and a cleaner branded home. */
 .pulse-card{min-height:205px;padding:23px 19px 18px;background:linear-gradient(90deg,rgba(2,6,2,.98) 0%,rgba(2,7,3,.88) 44%,rgba(2,7,3,.10) 78%),url('/assets/slimewire/fun-hero-v3.webp') 61% center/cover no-repeat}
 .pulse-card:after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,transparent 55%,rgba(2,6,2,.78))}
