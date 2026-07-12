@@ -29149,9 +29149,9 @@ async function sendCryptoChart(chatId, id, symbol, tf, messageId = null) {
   } catch { if (!messageId) await say(chatId, `${title}\nhttps://www.tradingview.com/chart/?symbol=${symbol}USD`); return false; }
 }
 
-async function fetchGeckoOhlcv(mint, tfKey) {
+async function fetchGeckoOhlcv(mint, tfKey, options = {}) {
   const tf = OHLCV_TIMEFRAMES[tfKey] || OHLCV_TIMEFRAMES["1m"];
-  const pool = await resolveGeckoPoolForMint(mint);
+  const pool = String(options.poolAddress || "").replace(/^solana_/, "") || await resolveGeckoPoolForMint(mint);
   if (!pool) return { candles: [], poolAddress: null };
   const data = await fetchJson(
     `https://api.geckoterminal.com/api/v2/networks/solana/pools/${encodeURIComponent(pool)}/ohlcv/${tf.path}?aggregate=${tf.aggregate}&limit=300&currency=usd&token=base`,
@@ -29203,13 +29203,13 @@ function synthCandlesFromPumpTrades(mint, tfKey) {
   return [...buckets.values()].sort((a, b) => a.t - b.t);
 }
 
-async function webOhlcvPayload(mint, tfKey) {
+async function webOhlcvPayload(mint, tfKey, options = {}) {
   const cacheKey = `${mint}:${tfKey}`;
   const cached = geckoOhlcvCache.get(cacheKey);
   if (cached && Date.now() - cached.at < 12_000) return cached.payload;
 
   pumpPortalStream.watchMint(mint); // start collecting live ticks either way
-  let { candles, poolAddress } = await fetchGeckoOhlcv(mint, tfKey);
+  let { candles, poolAddress } = await fetchGeckoOhlcv(mint, tfKey, options);
   let source = candles.length ? "geckoterminal" : "";
   if (!candles.length) {
     candles = synthCandlesFromPumpTrades(mint, tfKey);
@@ -32810,7 +32810,10 @@ function scheduleTelegramCallsFlush() {
 async function recordTelegramCall(message, mint, mcUsd) {
   try {
     const chatId = message?.chat?.id;
-    if (!chatId || isPrivateChat(message.chat) || !solanaPublicKeyLike(mint)) return null;
+    const rawMint = String(mint || "").trim();
+    const trackedMint = /^0x[0-9a-fA-F]{40}$/.test(rawMint) ? rawMint.toLowerCase() : rawMint;
+    if (!chatId || isPrivateChat(message.chat) || !(solanaPublicKeyLike(trackedMint) || /^0x[0-9a-f]{40}$/.test(trackedMint))) return null;
+    mint = trackedMint;
     const store = await readTelegramCalls();
     const key = `${chatId}:${mint}`;
     const nowMs = Date.now();
@@ -34545,7 +34548,10 @@ async function gatherSlimeScan(mint, options = {}) {
   // metadata omits `volume_usd`. Fresh pump coins fall back to the real in-memory trade tape and are
   // explicitly labelled RECENT rather than being passed off as 24-hour volume.
   if (!(scanBestVolumeWindow(meta, bonding, best).value > 0)) {
-    const ohlcvPayload = await scanFastTimeout(webOhlcvPayload(mint, "1h"), 2_800, null);
+    // Reuse the pool already discovered by the parallel metadata/Dex reads. That skips another token-pool
+    // lookup and gives the OHLCV request enough time to finish on Render's occasionally slow shared egress.
+    const poolAddress = firstString(geckoMeta?.pairAddress, best?.pairAddress);
+    const ohlcvPayload = await scanFastTimeout(webOhlcvPayload(mint, "1h", { poolAddress }), 4_800, null);
     const ohlcvVolume = volumeFallbackFromOhlcv(ohlcvPayload || {});
     if (ohlcvVolume) {
       meta = {
@@ -38143,6 +38149,7 @@ async function buildXRugReply(mint, variant) {
 // rhHoneypotCheck (sell-trap/honeypot safety). Bonk/pump/etc. are Solana mints and flow through the normal
 // scan already; this fills the ONE gap: RH coins were unscan-able (0x didn't match a Solana mint).
 const rhScanCache = new Map();
+const rhVolumeCache = new Map();
 function rhPromiseTimeout(promise, ms = 3500, fallback = null) {
   return Promise.race([
     Promise.resolve(promise).catch(() => fallback),
@@ -38278,6 +38285,35 @@ async function rhTokenAthUsd(address, poolHint = "") {
   return ath;
 }
 
+// Robinhood volume fallback: DexScreener occasionally returns a token with price/liquidity but no activity.
+// GeckoTerminal's hourly OHLCV gives an independent exact USD-volume read. Keep the last good value through
+// short provider gaps so repeat scans do not flicker back to n/a.
+async function rhTokenVolumeFallback(address, poolHint = "") {
+  const key = String(address || "").toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(key)) return null;
+  const cached = rhVolumeCache.get(key);
+  if (cached && Date.now() - cached.at < 2 * 60_000) return cached.value;
+  let pool = String(poolHint || "").toLowerCase();
+  try {
+    if (!/^0x[0-9a-f]{40}$/.test(pool)) {
+      const pj = await fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${key}/pools?page=1`, { timeoutMs: 5000 }).catch(() => null);
+      const pools = (pj?.data || []).slice().sort((x, y) => (Number(y.attributes?.reserve_in_usd) || 0) - (Number(x.attributes?.reserve_in_usd) || 0));
+      pool = String(pools[0]?.attributes?.address || String(pools[0]?.id || "").replace(/^robinhood_/, "")).toLowerCase();
+    }
+    if (/^0x[0-9a-f]{40}$/.test(pool)) {
+      const oj = await fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/pools/${pool}/ohlcv/hour?aggregate=1&limit=24&currency=usd`, { timeoutMs: 6000 }).catch(() => null);
+      const candles = (oj?.data?.attributes?.ohlcv_list || []).map((row) => ({ t: Number(row?.[0]) || 0, v: Number(row?.[5]) || 0 }));
+      const value = volumeFallbackFromOhlcv({ source: "geckoterminal", candles });
+      if (value?.volume?.h24 > 0 || value?.volume?.h1 > 0) {
+        rhVolumeCache.set(key, { at: Date.now(), value });
+        if (rhVolumeCache.size > 300) rhVolumeCache.delete(rhVolumeCache.keys().next().value);
+        return value;
+      }
+    }
+  } catch { /* best-effort */ }
+  return cached && Date.now() - cached.at < 15 * 60_000 ? cached.value : null;
+}
+
 async function gatherRhScan(address) {
   const a = String(address || "").trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return null;
@@ -38293,6 +38329,7 @@ async function gatherRhScan(address) {
   ]);
   const pairs = (dsRes?.pairs || []).filter((p) => String(p.chainId || "").toLowerCase() === "robinhood");
   const pair = pairs.sort((x, y) => (Number(y.liquidity?.usd) || 0) - (Number(x.liquidity?.usd) || 0))[0] || null;
+  const dexActivity = aggregateDexPairActivity(a, pairs);
   const listFeed = (Array.isArray(feedRows) ? feedRows : []).find((t) => String(t.address || "").toLowerCase() === key) || null;
   const feed = mergeRhTokenRows(normalizeRhBlockscoutToken(directToken), listFeed);
   const launchMeta = launchMap && typeof launchMap.get === "function" ? launchMap.get(key) : null;
@@ -38317,8 +38354,13 @@ async function gatherRhScan(address) {
     priceUsd && supply ? Number(priceUsd) * Number(supply) : null
   ) || 0;
   const liq = firstMeaningfulNumber(pair?.liquidity?.usd, feed?.liquidityUsd, noxa?.liq) || 0;
-  const vol1 = firstMeaningfulNumber(pair?.volume?.h1, pair?.volume?.["1h"], feed?.volume1hUsd, feed?.volumeH1Usd, noxa?.volume1hUsd, noxa?.volumeH1Usd) || 0;
-  const vol24 = firstMeaningfulNumber(pair?.volume?.h24, pair?.volume?.["24h"], feed?.volume24hUsd, feed?.volume_24h, noxa?.volume24hUsd, noxa?.volumeH24Usd) || 0;
+  let vol1 = firstMeaningfulNumber(dexActivity.volume?.h1, pair?.volume?.h1, pair?.volume?.["1h"], feed?.volume1hUsd, feed?.volumeH1Usd, noxa?.volume1hUsd, noxa?.volumeH1Usd) || 0;
+  let vol24 = firstMeaningfulNumber(dexActivity.volume?.h24, pair?.volume?.h24, pair?.volume?.["24h"], feed?.volume24hUsd, feed?.volume_24h, noxa?.volume24hUsd, noxa?.volumeH24Usd) || 0;
+  if (!(vol1 > 0) && !(vol24 > 0)) {
+    const fallbackVolume = await rhPromiseTimeout(rhTokenVolumeFallback(a, pair?.pairAddress || noxa?.pool || ""), 6500, null);
+    vol1 = firstMeaningfulNumber(fallbackVolume?.volume?.h1) || 0;
+    vol24 = firstMeaningfulNumber(fallbackVolume?.volume?.h24) || 0;
+  }
   const ch1 = firstMeaningfulNumber(pair?.priceChange?.h1, pair?.priceChange?.["1h"], feed?.priceChange1h, feed?.priceChangeH1, noxa?.ch1, noxa?.priceChange1h);
   const ch24 = firstMeaningfulNumber(pair?.priceChange?.h24, pair?.priceChange?.["24h"], feed?.priceChange24h, feed?.priceChangeH24, noxa?.ch24, noxa?.priceChange24h);
   const holders = firstMeaningfulNumber(pair?.holders, feed?.holders, feed?.holders_count, saf?.holders, noxa?.holders) || 0;
@@ -38459,7 +38501,10 @@ async function sendRhScanCard(chatId, address, options = {}) {
   }
   if (!info.symbol) info.symbol = shortMint(address).replace(/[^\w]/g, "").slice(0, 10) || "RH";
   if (!info.name) info.name = "Robinhood token";
-  const text = [String(options.contextHtml || "").trim(), formatRhScanCard(info)].filter(Boolean).join("\n\n");
+  const message = options.message || null;
+  if (message?.chat && !isPrivateChat(message.chat)) await recordTelegramCall(message, address, info.mc).catch(() => {});
+  const callerLine = await buildScanCallerFooter(chatId, address, info.mc, message).catch(() => "");
+  const text = [String(options.contextHtml || "").trim(), formatRhScanCard(info), callerLine].filter(Boolean).join("\n\n");
   const kb = { inline_keyboard: [
     [{ text: `⚡ Trade $${(info.symbol || "coin").slice(0, 12)}`, url: `https://www.slimewire.org/#rhtrade/${address}` }, { text: "🔎 Blockscout", url: info.explorer }],
   ] };
@@ -38487,7 +38532,9 @@ async function sendRhScanCard(chatId, address, options = {}) {
       seed: info.symbol || address
     });
   } catch { /* text-only */ }
-  if (png) await sendPhoto(chatId, "rh-scan.png", png, text.slice(0, 1024), kb, "HTML").catch(async () => { await sayHtml(chatId, text, kb).catch(() => {}); });
+  // Telegram applies the caption limit after HTML entity parsing; slicing the raw HTML could cut off the
+  // caller footer (or split a link tag). Let Telegram accept the complete compact card, then fall back to text.
+  if (png) await sendPhoto(chatId, "rh-scan.png", png, text, kb, "HTML").catch(async () => { await sayHtml(chatId, text, kb).catch(() => {}); });
   else await sayHtml(chatId, text, kb).catch(() => {});
 }
 
@@ -42533,6 +42580,7 @@ async function applyLimitOrderInput(message, userId) {
 async function buildScanCallerFooter(chatId, mint, currentMc, message) {
   try {
     if (!mint) return "";
+    mint = /^0x[0-9a-fA-F]{40}$/.test(String(mint)) ? String(mint).toLowerCase() : String(mint);
     const store = await readTelegramCalls();
     if (!store.calls) return "";
     const mc = Number(currentMc) || 0;
@@ -42551,7 +42599,8 @@ async function buildScanCallerFooter(chatId, mint, currentMc, message) {
     let rec = null, bestPeak = 0;
     for (const k in store.calls) {
       const r = store.calls[k];
-      if (!r || r.mint !== mint) continue;
+      const recordMint = /^0x[0-9a-fA-F]{40}$/.test(String(r?.mint || "")) ? String(r.mint).toLowerCase() : String(r?.mint || "");
+      if (!r || recordMint !== mint) continue;
       if (Number(r.peakMc) > bestPeak) bestPeak = Number(r.peakMc) || 0;
       if (!rec || (Number(r.firstAt) || 0) < (Number(rec.firstAt) || 0)) rec = r;
     }
@@ -42872,7 +42921,7 @@ async function handleTelegramLookCommand(chatId, message, argument, options = {}
   // One resolver for CA, Dex/Pump links, $tickers, bare scan tickers, and Robinhood Chain 0x contracts.
   const target = await resolveScanTargetFromText(argument).catch(() => null);
   const rhAddr = /^0x[0-9a-fA-F]{40}$/.test(String(target || "")) ? String(target) : "";
-  if (rhAddr) { if (!options.skipCooldown && tgCommandOnCooldown(chatId, `look:${rhAddr.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return; await sendRhScanCard(chatId, rhAddr, options); return; }
+  if (rhAddr) { if (!options.skipCooldown && tgCommandOnCooldown(chatId, `look:${rhAddr.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return; await sendRhScanCard(chatId, rhAddr, { ...options, message }); return; }
   const mint = isLikelySolMint(target) ? String(target) : "";
   if (!mint) {
     await say(chatId, "Usage: /look <token CA> — Solana mint OR Robinhood Chain 0x… address. I'll run a SlimeShield read with chart + quick-buy.");

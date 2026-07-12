@@ -2215,10 +2215,17 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "gatherRhScan"), /rhFeedTokens\(\)/);
   assert.match(functionBody(serverSource, "gatherRhScan"), /rhLaunchMetaByAddress\(\)/);
   assert.match(functionBody(serverSource, "gatherRhScan"), /holders/);
+  assert.match(functionBody(serverSource, "gatherRhScan"), /aggregateDexPairActivity\(a, pairs\)/);
+  assert.match(functionBody(serverSource, "gatherRhScan"), /rhTokenVolumeFallback/);
+  assert.match(functionBody(serverSource, "rhTokenVolumeFallback"), /ohlcv\/hour/);
+  assert.match(functionBody(serverSource, "gatherSlimeScan"), /webOhlcvPayload\(mint, "1h", \{ poolAddress \}\)/);
   assert.match(functionBody(serverSource, "buildXRhReply"), /rhVolumeInfo\(info\)/);
   assert.match(functionBody(serverSource, "buildXRhReply"), /holderLabel: holdersLabel/);
   assert.match(functionBody(serverSource, "buildXRhReply"), /changeTitle: ch\.title/);
   assert.match(functionBody(serverSource, "sendRhScanCard"), /rhScanLogo\(info\)/);
+  assert.match(functionBody(serverSource, "recordTelegramCall"), /\^0x\[0-9a-fA-F\]\{40\}\$/);
+  assert.match(functionBody(serverSource, "sendRhScanCard"), /recordTelegramCall\(message, address, info\.mc\)/);
+  assert.match(functionBody(serverSource, "sendRhScanCard"), /buildScanCallerFooter\(chatId, address, info\.mc, message\)/);
   assert.match(functionBody(serverSource, "xReplyPollTick"), /xIntentFromText\(m\.text\)/); // intent routed at reply time
   // ANTI-SPAM: reply text carries NO raw URL (X folds link-replies from cold accounts); the card image
   // already shows slimewire.org. Seeded per-tweet variation (wording + card art) beats X's near-duplicate
