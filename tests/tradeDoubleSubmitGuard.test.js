@@ -910,6 +910,26 @@ test("buy bot posts only real per-buy cards — no 'Buys rolling in' aggregate",
   assert.doesNotMatch(serverSource, /Buys rolling in/);            // the card text is gone entirely
 });
 
+test("min buy zero keeps every observed Solana and Robinhood buy in an ordered Telegram queue", () => {
+  const solPoll = functionBody(serverSource, "pollGroupBuyTrades");
+  const rhPoll = functionBody(serverSource, "rhGroupBuyTick");
+  const solPost = functionBody(serverSource, "postGroupBuy");
+  const rhPost = functionBody(serverSource, "postGroupBuyRh");
+  const queue = functionBody(serverSource, "drainGroupBuyAlertQueue");
+  assert.match(solPoll, /trades\?limit=100/);
+  assert.match(solPoll, /fresh\.reverse\(\)/);
+  assert.doesNotMatch(solPoll, /posted >= 6|slice\(0, 6\)|mints\.slice\(0, 30\)/);
+  assert.match(solPoll, /mints\.slice\(i, i \+ 30\)/);
+  assert.doesNotMatch(rhPoll, /slice\(0, 6\)/);
+  assert.match(solPost, /min > 0 && solAmount < min/);
+  assert.match(rhPost, /min > 0 && ethAmount < min/);
+  assert.match(solPost, /queueGroupBuyAlert/);
+  assert.match(rhPost, /queueGroupBuyAlert/);
+  assert.match(functionBody(serverSource, "groupBuyAlertRetryMs"), /retry after/);
+  assert.match(queue, /sleep\(1_100\)/);
+  assert.match(rhPost, /const funUrl = slimewireTokenLinks\(address\)\.site/);
+});
+
 test("scan catches real pasted CAs in text without sentence false-positives", () => {
   assert.match(serverSource, /function isLikelySolMint\(/);
   assert.match(functionBody(serverSource, "isLikelySolMint"), /toBytes\(\)\.length === 32/);

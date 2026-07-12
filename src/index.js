@@ -45524,6 +45524,47 @@ async function sendGroupAlertMedia(chatId, media, caption, markup, { messageThre
     return { result: null, hasMedia: false, error };
   }
 }
+
+// Buy bursts must not race Telegram or disappear behind a per-poll cap. Queue each group's
+// cards in arrival order and retry Telegram's transient/rate-limit responses. The first card
+// sends immediately; spacing only applies while a burst is waiting.
+const groupBuyAlertQueues = new Map();
+function groupBuyAlertRetryMs(error) {
+  const message = String(error?.message || error || "");
+  const retryAfter = message.match(/retry after\s+(\d+)/i);
+  if (retryAfter) return Math.max(1_000, Math.min(60_000, Number(retryAfter[1]) * 1_000));
+  return /429|too many requests|rate limit|timeout|timed out|fetch failed|temporar|502|503|504/i.test(message) ? 1_500 : 0;
+}
+async function drainGroupBuyAlertQueue(chatId) {
+  const key = String(chatId), state = groupBuyAlertQueues.get(key);
+  if (!state || state.running) return;
+  state.running = true;
+  try {
+    while (state.items.length) {
+      const item = state.items[0];
+      const sent = await sendGroupAlertMedia(chatId, item.media, item.caption, item.markup, item.options);
+      if (sent?.result) {
+        state.items.shift();
+        if (state.items.length) await sleep(1_100);
+        continue;
+      }
+      item.attempts = (item.attempts || 0) + 1;
+      const retryMs = groupBuyAlertRetryMs(sent?.error);
+      if (!retryMs || item.attempts >= 4) { state.items.shift(); continue; }
+      await sleep(retryMs);
+    }
+  } finally {
+    state.running = false;
+    if (!state.items.length) groupBuyAlertQueues.delete(key);
+    else void drainGroupBuyAlertQueue(chatId);
+  }
+}
+function queueGroupBuyAlert(chatId, media, caption, markup, options = {}) {
+  const key = String(chatId), state = groupBuyAlertQueues.get(key) || { items: [], running: false };
+  state.items.push({ media, caption, markup, options, attempts: 0 });
+  groupBuyAlertQueues.set(key, state);
+  void drainGroupBuyAlertQueue(chatId);
+}
 // Per-group buy/raid media override: e.customMedia {type,value} (admin /setmedia) or the coin's own
 // metadata image. Custom text header from e.customText (/setmessage).
 function groupAlertMediaFor(entry, fallbackImageUrl) {
@@ -45613,7 +45654,7 @@ async function postGroupBuy(mint, { solAmount = 0, usdAmount = 0, tokens = 0, pr
     }
     if (e.customText) lines.unshift(`<b>${escapeTelegramHtml(String(e.customText).slice(0, 160))}</b>`);
     lines.push(`<a href="${slimewireTokenLinks(mint).site}">slimewire.org · chart, trade &amp; tools</a>`);
-    await sendGroupAlertMedia(chatId, groupAlertMediaFor(e, defImg), lines.join("\n"), groupBuyMarkup(mint));
+    queueGroupBuyAlert(chatId, groupAlertMediaFor(e, defImg), lines.join("\n"), groupBuyMarkup(mint));
   }
   groupBuyLastAlertAt.set(mint, Date.now());
 }
@@ -45662,6 +45703,7 @@ async function postGroupBuyRh(address, { ethAmount = 0, tokens = 0, trader = "",
   const fmtUsd0 = (v) => "$" + Math.round(Number(v) || 0).toLocaleString();
   const fmtPx = (v) => { v = Number(v) || 0; return v >= 1 ? "$" + v.toFixed(3) : v >= 0.001 ? "$" + v.toFixed(5) : "$" + v.toPrecision(3); };
   const fmtTok = (v) => { v = Number(v) || 0; return v >= 1e6 ? (v / 1e6).toFixed(2) + "M" : v >= 1e3 ? (v / 1e3).toFixed(1) + "K" : Math.round(v).toLocaleString(); };
+  const funUrl = slimewireTokenLinks(address).site;
   const markup = compactTradeCardKeyboard(address, "b");
   for (const [chatId, e] of targets) {
     const min = Number(e.minBuySol) || 0;                       // /minbuy = min in the chain's native coin (ETH here)
@@ -45700,7 +45742,7 @@ async function postGroupBuyRh(address, { ethAmount = 0, tokens = 0, trader = "",
       `<a href="${funUrl}">slimewire.org · chart, trade &amp; tools</a>`,
     ].filter(Boolean);
     if (e.customText) lines.unshift(`<b>${escapeTelegramHtml(String(e.customText).slice(0, 160))}</b>`);
-    await sendGroupAlertMedia(chatId, groupAlertMediaFor(e, info?.imageUrl || ""), lines.join("\n"), markup);
+    queueGroupBuyAlert(chatId, groupAlertMediaFor(e, info?.imageUrl || ""), lines.join("\n"), markup);
   }
 }
 // Watcher tick: for every group-tracked 0x coin, resolve its pool once (DexScreener pair or NOXA pool via
@@ -45728,7 +45770,7 @@ async function rhGroupBuyTick() {
       const first = !(st.lastBlock > 0);
       st.lastBlock = res.toBlock;
       if (first) continue;                                      // baseline pass — never replay pre-existing buys
-      for (const b of res.buys.slice(0, 6)) {                   // burst cap: max 6 cards per tick per coin
+      for (const b of res.buys) {
         await postGroupBuyRh(addr, { ethAmount: b.ethAmount, tokens: b.tokens, trader: b.trader, tx: b.tx }).catch(() => {});
       }
     }
@@ -45815,7 +45857,7 @@ async function pollGroupBuyBots() {
 // TRUE PER-BUY (free, works server-side): Pump's swap-api v2 trades feed returns real per-trade
 // data across ALL DEXes (type/amountSol/userAddress/priceUsd/tx) — the replacement for the dead
 // PumpPortal trade socket. Poll each group's token, alert on every NEW buy (admin min-buy filter
-// applies), capped per poll so a hot coin can't flood the chat. Also feeds the early-buyer flywheel.
+// applies). Observed buys are queued per group so bursts remain ordered instead of being capped.
 const groupBuySeenTx = new Map();
 async function pollGroupBuyTrades() {
   try {
@@ -45823,10 +45865,15 @@ async function pollGroupBuyTrades() {
     const mints = [];
     for (const e of Object.values(store.groups || {})) { if (groupBotFeatureOn(e, "buybot") && e.token && !mints.includes(e.token)) mints.push(e.token); }
     if (!mints.length) return;
-    const pairs = await fetchDexScreenerTokenPairsBatch(mints.slice(0, 30)).catch(() => []);
-    for (const mint of mints.slice(0, 30)) {
+    // DexScreener accepts at most 30 addresses per request. Chunk the metadata reads, but
+    // never let that provider limit prevent the 31st+ configured Buy Bot coin from polling.
+    const pairs = [];
+    for (let i = 0; i < mints.length; i += 30) {
+      pairs.push(...await fetchDexScreenerTokenPairsBatch(mints.slice(i, i + 30)).catch(() => []));
+    }
+    for (const mint of mints) {
       let j = null;
-      try { j = await fetch(`https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=40`, { headers: { accept: "application/json" } }).then((r) => r.ok ? r.json() : null); } catch {}
+      try { j = await fetch(`https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=100`, { headers: { accept: "application/json" } }).then((r) => r.ok ? r.json() : null); } catch {}
       const trades = (j && Array.isArray(j.trades)) ? j.trades : [];
       if (!trades.length) continue;
       const seen = groupBuySeenTx.get(mint) || new Set();
@@ -45846,16 +45893,14 @@ async function pollGroupBuyTrades() {
       }
       if (seen.size > 400) { const arr = [...seen]; groupBuySeenTx.set(mint, new Set(arr.slice(arr.length - 300))); } else groupBuySeenTx.set(mint, seen);
       if (firstPoll) continue; // baseline only — don't alert on the backfill
-      fresh.sort((a, b) => (Number(b.amountSol) || 0) - (Number(a.amountSol) || 0));
-      let posted = 0;
-      for (const t of fresh) {
+      // The feed is newest-first. Send oldest-first so a burst reads naturally and every observed
+      // buy is queued; min-buy filtering remains per group inside postGroupBuy.
+      for (const t of fresh.reverse()) {
         const trader = String(t.userAddress || "");
         if (trader) { try { recordEarlyBuyer(mint, { side: "buy", trader }); } catch {} }
-        if (posted >= 6) continue; // flood cap per poll (largest first); min-buy filter still applies in postGroupBuy
         await postGroupBuy(mint, { solAmount: Number(t.amountSol) || 0, usdAmount: Number(t.amountUsd) || 0, tokens: Number(t.baseAmount) || 0, priceUsd: Number(t.priceUsd) || 0, mcUsd, liqUsd, vol24, change24, trader, sym, tx: String(t.tx || "") });
-        posted += 1;
       }
-      if (posted) groupBuyLastAlertAt.set(mint, Date.now());
+      if (fresh.length) groupBuyLastAlertAt.set(mint, Date.now());
     }
   } catch {}
 }
