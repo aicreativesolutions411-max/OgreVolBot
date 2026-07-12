@@ -7,12 +7,27 @@ const html = fs.readFileSync(new URL("../web/public/fun.html", import.meta.url),
 const css = fs.readFileSync(new URL("../web/public/fun.css", import.meta.url), "utf8");
 const js = fs.readFileSync(new URL("../web/public/fun.js", import.meta.url), "utf8");
 const redirects = fs.readFileSync(new URL("../web/public/_redirects", import.meta.url), "utf8");
+const manifest = JSON.parse(fs.readFileSync(new URL("../web/public/fun-manifest.webmanifest", import.meta.url), "utf8"));
+const funWorker = fs.readFileSync(new URL("../web/public/fun-sw.js", import.meta.url), "utf8");
 
 test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL support", () => {
   assert.match(server, /requestUrl\.pathname === "\/fun"[\s\S]{0,300}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
-  assert.match(html, /<script defer src="\/fun\.js\?v=13"><\/script>/);
+  assert.match(html, /<script defer src="\/fun\.js\?v=14"><\/script>/);
+});
+
+test("/fun is installable as a separate PWA with a dedicated-origin escape", () => {
+  assert.equal(manifest.id, "/slimewire-fun-app");
+  assert.equal(manifest.start_url, "/fun/?src=slimewire-fun-pwa");
+  assert.equal(manifest.scope, "/fun/");
+  assert.match(html, /fun-manifest\.webmanifest\?v=1/);
+  assert.match(js, /beforeinstallprompt/);
+  assert.match(js, /ogrevolbot\.onrender\.com\/fun\/\?install=1/);
+  assert.match(js, /Install Fun/);
+  assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/" \}\)/);
+  assert.match(funWorker, /slimewire-fun-v1/);
+  assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
 
 test("/fun keeps the reference layout clean while carrying SlimeWire features", () => {

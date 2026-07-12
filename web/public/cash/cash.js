@@ -266,6 +266,8 @@
   function openInstallGuide() {
     const ios = /iphone|ipad|ipod/i.test(navigator.userAgent || "");
     const embedded = runningStandalone();
+    const dedicated = location.hostname === "ogrevolbot.onrender.com";
+    $("openInstallBrowserBtn").textContent = dedicated ? "Install SlimeCash" : "Open separate install page";
     $("installSteps").innerHTML = (embedded ? (ios ? [
       "1. SlimeCash is open inside the SlimeWire app right now.",
       "2. Copy the install link below, then choose Open in Safari from your app menu.",
@@ -274,7 +276,15 @@
       "1. SlimeCash is open inside the SlimeWire app right now.",
       "2. Tap Open install page in browser below.",
       "3. In Chrome, choose Install app for a separate SlimeCash icon."
-    ]) : ios ? [
+    ]) : dedicated && ios ? [
+      "1. You are on the separate SlimeCash install origin.",
+      "2. Tap Share in Safari, then Add to Home Screen.",
+      "3. Confirm Add for its own SlimeCash icon."
+    ] : dedicated ? [
+      "1. Tap Install SlimeCash below.",
+      "2. Confirm the browser install prompt.",
+      "3. SlimeCash appears as a separate app from SlimeWire."
+    ] : ios ? [
       "1. Tap the Share button in Safari.",
       "2. Choose Add to Home Screen.",
       "3. Tap Add — the separate SlimeCash app appears with its green dollar icon."
@@ -299,9 +309,14 @@
   }
 
   function openInstallPageInBrowser() {
-    const url = "https://www.slimewire.org/cash/?install=1";
+    const dedicatedHost = "ogrevolbot.onrender.com";
+    if (location.hostname === dedicatedHost) {
+      installCashApp();
+      return;
+    }
+    const url = `https://${dedicatedHost}/cash/?install=1`;
     if (/android/i.test(navigator.userAgent || "")) {
-      location.href = "intent://www.slimewire.org/cash/?install=1#Intent;scheme=https;package=com.android.chrome;end";
+      location.href = `intent://${dedicatedHost}/cash/?install=1#Intent;scheme=https;package=com.android.chrome;end`;
       return;
     }
     if (runningStandalone()) {
@@ -823,6 +838,7 @@
     window.addEventListener("beforeinstallprompt", (event) => {
       event.preventDefault();
       state.deferredInstall = event;
+      if (new URLSearchParams(location.search).get("install") === "1") $("openInstallBrowserBtn").textContent = "Install SlimeCash";
     });
     window.addEventListener("appinstalled", () => {
       state.deferredInstall = null;
@@ -862,6 +878,7 @@
     const tab = params.get("tab");
     if (tab && ["home", "send", "terminal", "more"].includes(tab)) switchTab(tab);
     if (params.get("sheet") === "addcash" && ready) openAddCash();
+    if (params.get("install") === "1") setTimeout(openInstallGuide, 450);
     if (params.get("onramp") === "return" && ready) {
       toast("Checking for your Coinbase deposit…");
       let checks = 0;

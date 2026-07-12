@@ -47,7 +47,8 @@
     resolvedCoinImages: new Map(),
     quickBuyKey: "",
     quickAmount: "0.1",
-    quickPanel: "trade"
+    quickPanel: "trade",
+    deferredInstall: null
   };
 
   function escapeHtml(value) {
@@ -548,7 +549,7 @@
     try {
       const key = await request("/api/web/push/key");
       if (!key.ok || !key.data?.enabled || !key.data.publicKey) { toast("Push alerts are not configured yet.", true); return; }
-      const registration = await navigator.serviceWorker.register("/sw.js"); await navigator.serviceWorker.ready;
+      const registration = await navigator.serviceWorker.register("/fun-sw.js", { scope: "/fun/" }); await navigator.serviceWorker.ready;
       if (await Notification.requestPermission() !== "granted") { toast("Notification permission was not granted.", true); return; }
       const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(key.data.publicKey) });
       const result = await post("/api/web/push/subscribe", { subscription: subscription.toJSON() });
@@ -594,6 +595,35 @@
 
   function openSheet(html) { $("[data-sheet-content]").innerHTML = html; $("[data-sheet-overlay]").hidden = false; }
   function closeSheet() { clearTimeout(state.volumePoll); state.volumePoll = null; $("[data-sheet-overlay]").hidden = true; $("[data-sheet-content]").innerHTML = ""; }
+  function runningStandalone() { return window.matchMedia?.("(display-mode: standalone)")?.matches || navigator.standalone === true; }
+  function funInstallOrigin() { return "https://ogrevolbot.onrender.com/fun/?install=1"; }
+  function showFunInstallGuide() {
+    const dedicated = location.hostname === "ogrevolbot.onrender.com";
+    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent || "");
+    const steps = dedicated
+      ? (ios
+        ? ["Tap Share in Safari.", "Choose Add to Home Screen.", "Confirm Add for a separate SlimeWire Fun icon."]
+        : ["Tap Install SlimeWire Fun below.", "Confirm the browser prompt.", "Fun appears separately from the main SlimeWire app."])
+      : ["Open the separate install page below.", "Your browser will leave the main SlimeWire app origin.", "Install SlimeWire Fun there for its own app icon."];
+    openSheet(`<div class="sheet-title"><img src="/assets/slimewire/png/slimewire-mark.png" alt=""><div><h2>Install SlimeWire Fun</h2><p>Keep this fast layout as its own app.</p></div></div><div class="read-card"><h3>Separate app install</h3>${steps.map((step, index) => `<p>${index + 1}. ${escapeHtml(step)}</p>`).join("")}</div><button class="submit-trade" type="button" data-install-fun>${dedicated ? "Install SlimeWire Fun" : "Open separate install page"}</button><p class="fineprint">Browsers always require your confirmation; a website cannot silently force an install.</p>`);
+  }
+  async function openFunInstall() {
+    if (state.deferredInstall) {
+      const promptEvent = state.deferredInstall;
+      state.deferredInstall = null;
+      await promptEvent.prompt();
+      const choice = await promptEvent.userChoice.catch(() => null);
+      if (choice?.outcome === "accepted") { toast("SlimeWire Fun installed"); closeSheet(); }
+      return;
+    }
+    if (location.hostname !== "ogrevolbot.onrender.com") {
+      if (/android/i.test(navigator.userAgent || "")) location.href = "intent://ogrevolbot.onrender.com/fun/?install=1#Intent;scheme=https;package=com.android.chrome;end";
+      else window.open(funInstallOrigin(), "_blank", "noopener");
+      return;
+    }
+    showFunInstallGuide();
+    toast(runningStandalone() ? "Fun is already open as an app" : "Use your browser menu if the prompt is not ready");
+  }
   function toolCard(icon, label, note, action, attr = "data-tool-action") { return `<button class="tool-card" type="button" ${attr}="${escapeHtml(action)}"><img src="${TOOL_ICONS}${escapeHtml(icon)}.png" alt=""><b>${escapeHtml(label)}</b><span>${escapeHtml(note)}</span></button>`; }
   async function openTools(global = false) {
     const coin = state.selected || {}, key = coinKey(coin), creator = key && state.launches.some((launch) => String(launch.mint || launch.tokenAddress || "").toLowerCase() === key.toLowerCase());
@@ -608,6 +638,7 @@
       ${toolCard("snipe", "Launch sniper", "Watch deployers", "sniper")}
       ${toolCard("launch", "Launch", "Solana or Robinhood", "launch")}
       ${toolCard("pnl", "Full portfolio", "PnL and receipts", "portfolio")}
+      ${global ? toolCard("wallet", "Install Fun", "Separate mobile app", "install") : ""}
       ${creator && coin.chain === "robinhood" ? toolCard("health", "Creator liquidity", "Your launched coin", "liquidity") : ""}
     </div><p class="fineprint">Trading automation continues server-side after this page closes. Creator liquidity appears only for coins tied to your launch history.</p>`);
   }
@@ -867,6 +898,7 @@
     if (action === "volume") { openVolumeSheet(); return; }
     if (action === "watch") { ensureAccount().then((ready) => ready ? post("/api/web/watchlist", { tokenMint: key, action: "add", symbol: coin.symbol || "", name: coin.name || "", imageUrl: coin.imageUrl || "" }) : { ok: false }).then((result) => toast(result.ok ? "Saved to Watchlist" : "Could not save coin", !result.ok)); closeSheet(); return; }
     if (action === "telegram") { window.open(`https://t.me/${window.OGRE_PORTAL_CONFIG?.telegramBotUsername || "SlimeWiredBot"}?start=scan_${encodeURIComponent(key)}`, "_blank", "noopener"); return; }
+    if (action === "install") { openFunInstall(); return; }
     const routes = { copy: "copy", sniper: "sniper", launch: "launch" };
     if (routes[action]) location.href = `/#${routes[action]}`;
   }
@@ -896,6 +928,7 @@
     const profile = event.target.closest("[data-profile]"); if (profile) { state.profileTab = profile.dataset.profile; $$("[data-profile]").forEach((button) => button.classList.toggle("active", button === profile)); loadWalletView(); return; }
     if (event.target.closest("[data-open-tools]")) { await loadCreatedCoinsSilently(); openTools(false); return; }
     if (event.target.closest("[data-open-global-tools]")) { openTools(true); return; }
+    if (event.target.closest("[data-install-fun]")) { await openFunInstall(); return; }
     if (event.target.closest("[data-manage-presets]")) { await openPresetManager(); return; }
     if (event.target.closest("[data-save-trade-preset]")) { await saveTradePreset(); return; }
     const usePreset = event.target.closest("[data-use-trade-preset]"); if (usePreset) { state.activePresetId = usePreset.dataset.useTradePreset; localStorage.setItem(ACTIVE_PRESET_KEY, state.activePresetId); renderQuickTrade(); toast("Preset active"); await openPresetManager(); return; }
@@ -985,18 +1018,33 @@
   window.addEventListener("hashchange", () => { const match = location.hash.match(/^#coin\/(.+)$/); if (match) openCoin(decodeURIComponent(match[1])); });
   async function loadCreatedCoinsSilently() { if (!state.token || state.launches.length) return; const result = await request("/api/web/launches"); if (result.ok) state.launches = result.data?.coins || []; }
 
+  window.addEventListener("beforeinstallprompt", (event) => {
+    event.preventDefault();
+    state.deferredInstall = event;
+    if (new URLSearchParams(location.search).get("install") === "1") showFunInstallGuide();
+  });
+  window.addEventListener("appinstalled", () => {
+    state.deferredInstall = null;
+    toast("SlimeWire Fun installed");
+    closeSheet();
+  });
+
   async function init() {
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/fun-sw.js", { scope: "/fun/" }).catch(() => {});
     paintWalletPill();
     if (!IS_QUICK_ROUTE) loadFeed();
     if (state.token) Promise.all([loadMe(), loadWallets(), loadPositions(), loadPresets(), loadCreatedCoinsSilently()]).then(() => { if (state.view === "coin") renderQuickTrade(); if (state.view === "quick") renderQuickRoute(); }).catch(() => {});
+    const routeParams = new URLSearchParams(location.search);
     if (IS_QUICK_ROUTE) {
       setView("quick", { hideNav: true });
       renderQuickRoute();
-      const params = new URLSearchParams(location.search), ca = params.get("ca") || params.get("token") || "";
+      const ca = routeParams.get("ca") || routeParams.get("token") || "";
       if (ca) void loadQuickTarget(ca);
     } else {
       const match = location.hash.match(/^#coin\/(.+)$/); if (match) openCoin(decodeURIComponent(match[1]));
+      if (routeParams.get("tab") === "wallet") setView("wallet");
     }
+    if (routeParams.get("install") === "1") setTimeout(showFunInstallGuide, 350);
   }
   $("[data-quick-paste-form]")?.addEventListener("submit", (event) => { event.preventDefault(); void loadQuickTarget($("[data-quick-ca]")?.value); });
   $("[data-quick-clipboard]")?.addEventListener("click", async () => { try { const text = await navigator.clipboard.readText(); if ($("[data-quick-ca]")) $("[data-quick-ca]").value = text; await loadQuickTarget(text); } catch { $("[data-quick-ca]")?.focus(); toast("Paste into the field, then tap Load.", true); } });
