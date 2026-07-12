@@ -34127,6 +34127,18 @@ function tickerCandidateDominance(candidate, maxima = {}) {
     + relative(candidate.liquidityUsd, maxima.liquidityUsd) * 70
     + relative(candidate.volume24h, maxima.volume24h) * 50;
 }
+// Prefer the exact-symbol market that leads in MC AND real 24h volume together. A clone cannot
+// win merely by printing one noisy metric: the geometric/minimum terms reward balanced strength.
+function tickerMarketLeadership(candidate, maxima = {}) {
+  const ratio = (value, max) => max > 0 ? Math.max(0, Math.min(1, (Number(value) || 0) / max)) : 0;
+  const mc = ratio(candidate.marketCap, maxima.marketCap);
+  const vol = ratio(candidate.volume24h, maxima.volume24h);
+  return Math.sqrt(mc * vol) * 220 + Math.min(mc, vol) * 140 + mc * 20 + vol * 30;
+}
+function tickerMarketRowStrength(marketCap, volume24h, liquidityUsd) {
+  const mc = Math.max(0, Number(marketCap) || 0), vol = Math.max(0, Number(volume24h) || 0), liq = Math.max(0, Number(liquidityUsd) || 0);
+  return Math.sqrt(mc * vol) + Math.min(mc, vol) + liq * 0.25;
+}
 function fmtTickerMarketUsd(value) {
   const n = Number(value) || 0;
   if (!n) return "n/a";
@@ -34238,7 +34250,8 @@ async function resolveCashtagToMint(symbol) {
     .map((candidate) => ({
       ...candidate,
       dominance: tickerCandidateDominance(candidate, maxima),
-      score: tickerCandidateScore(candidate) + tickerCandidateDominance(candidate, maxima)
+      leadership: tickerMarketLeadership(candidate, maxima),
+      score: tickerCandidateScore(candidate) + tickerCandidateDominance(candidate, maxima) + tickerMarketLeadership(candidate, maxima)
     }))
     .filter((candidate) => !hasHardBlockedLivePairRisk(candidate.row))
     .sort((a, b) => b.score - a.score)
@@ -34269,13 +34282,13 @@ async function resolveCashtagToMint(symbol) {
   return mint;
 }
 const rhTickerTargetCache = new Map();
-async function resolveRhTickerToAddress(symbol) {
+async function resolveRhTickerCandidate(symbol) {
   const q = String(symbol || "").replace(/^\$|^#/, "").trim();
   if (q.length < 2) return null;
   const key = q.toLowerCase();
   const cached = rhTickerTargetCache.get(key);
-  if (cached && Date.now() - cached.at < (cached.address ? 60_000 : 10_000)) return cached.address;
-  const candidates = [];
+  if (cached && Date.now() - cached.at < (cached.candidate ? 30_000 : 8_000)) return cached.candidate;
+  const candidates = new Map();
   const add = (address, row = {}, source = "") => {
     const a = String(address || "").trim();
     if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return;
@@ -34285,33 +34298,69 @@ async function resolveRhTickerToAddress(symbol) {
     const vol = firstMeaningfulNumber(row.volume24hUsd, row.volume?.h24, row.volume?.["24h"], row.vol24) || 0;
     const mc = firstMeaningfulNumber(row.marketCapUsd, row.marketCap, row.fdv, row.mc) || 0;
     const holders = firstMeaningfulNumber(row.holders, row.holders_count) || 0;
-    candidates.push({ address: a, source, score: liq * 8 + vol + mc * 0.04 + holders * 50 });
-  };
-  try {
-    const d = await fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { timeoutMs: 4500 }).catch(() => null);
-    for (const p of Array.isArray(d?.pairs) ? d.pairs : []) {
-      if (String(p.chainId || "").toLowerCase() !== "robinhood") continue;
-      add(p.baseToken?.address, p, "dexscreener");
+    const id = a.toLowerCase();
+    const prev = candidates.get(id) || { address: a, symbol: q.toUpperCase(), liquidityUsd: 0, volume24h: 0, marketCap: 0, holders: 0, trendBoost: 0, marketStrength: 0, sources: new Set() };
+    const marketStrength = tickerMarketRowStrength(mc, vol, liq);
+    if (marketStrength >= prev.marketStrength) {
+      prev.liquidityUsd = liq || prev.liquidityUsd;
+      prev.volume24h = vol || prev.volume24h;
+      prev.marketCap = mc || prev.marketCap;
+      prev.marketStrength = marketStrength;
     }
-  } catch { /* keep feed fallback */ }
-  try {
-    const feed = await Promise.race([rhFeedTokens().catch(() => []), new Promise((resolve) => setTimeout(() => resolve([]), 3500))]);
-    for (const row of Array.isArray(feed) ? feed : []) add(row.address, row, row.source || "blockscout");
-  } catch { /* no RH ticker hit */ }
-  const pick = candidates.sort((a, b) => b.score - a.score)[0] || null;
-  const address = pick?.address || null;
-  rhTickerTargetCache.set(key, { at: Date.now(), address });
+    prev.holders = Math.max(prev.holders, holders);
+    prev.trendBoost = Math.max(prev.trendBoost, /feed|trending/i.test(source) ? 12 : 0);
+    prev.sources.add(source || "robinhood");
+    candidates.set(id, prev);
+  };
+  const [dexData, feed] = await Promise.all([
+    scanFastTimeout(fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { timeoutMs: 2_400 }), 2_500, null),
+    scanFastTimeout(rhFeedTokens().catch(() => []), 2_500, [])
+  ]);
+  for (const pair of Array.isArray(dexData?.pairs) ? dexData.pairs : []) {
+    if (String(pair.chainId || "").toLowerCase() === "robinhood") add(pair.baseToken?.address, pair, "dexscreener");
+  }
+  for (const row of Array.isArray(feed) ? feed : []) add(row.address, row, row.source || "robinhood-feed");
+  const all = [...candidates.values()];
+  const maxima = {
+    marketCap: Math.max(0, ...all.map((candidate) => candidate.marketCap)),
+    liquidityUsd: Math.max(0, ...all.map((candidate) => candidate.liquidityUsd)),
+    volume24h: Math.max(0, ...all.map((candidate) => candidate.volume24h))
+  };
+  const ranked = all.map((candidate) => ({
+    ...candidate,
+    leadership: tickerMarketLeadership(candidate, maxima),
+    score: tickerCandidateScore(candidate) + tickerCandidateDominance(candidate, maxima) + tickerMarketLeadership(candidate, maxima)
+  })).sort((a, b) => b.score - a.score);
+  const checked = await Promise.all(ranked.slice(0, 6).map(async (candidate) => ({ candidate, isContract: await isRhContract(candidate.address).catch(() => false) })));
+  const pick = checked.find((row) => row.isContract)?.candidate || null;
+  rhTickerTargetCache.set(key, { at: Date.now(), candidate: pick });
   if (rhTickerTargetCache.size > 300) rhTickerTargetCache.delete(rhTickerTargetCache.keys().next().value);
-  return address;
+  return pick;
+}
+async function resolveRhTickerToAddress(symbol) {
+  return (await resolveRhTickerCandidate(symbol))?.address || null;
 }
 async function resolveTickerToScanTarget(symbol) {
   const q = String(symbol || "").replace(/^\$|^#/, "").trim();
   if (q.length < 2) return null;
-  // Solana is the overwhelmingly common path. Waiting for the parallel Robinhood feed added up to
-  // 3.5s to every successful Solana ticker even when Solana Tracker answered immediately.
-  const sol = await resolveCashtagToMint(q).catch(() => null);
-  if (sol) return sol;
-  return await resolveRhTickerToAddress(q).catch(() => null);
+  // Resolve both chains inside the same bounded window, then compare their selected exact-symbol
+  // markets by balanced MC + 24h volume. This lets a real Robinhood market beat a weak Sol clone.
+  const [sol, rh] = await Promise.all([
+    resolveCashtagToMint(q).catch(() => null),
+    resolveRhTickerCandidate(q).catch(() => null)
+  ]);
+  if (!sol) return rh?.address || null;
+  if (!rh) return sol;
+  const solMeta = tickerResolutionMetaCache.get(q.toLowerCase());
+  const solCandidate = (solMeta?.candidates || []).find((candidate) => candidate.mint === sol) || { marketCap: 0, volume24h: 0, liquidityUsd: 0 };
+  const maxima = {
+    marketCap: Math.max(Number(solCandidate.marketCap) || 0, Number(rh.marketCap) || 0),
+    liquidityUsd: Math.max(Number(solCandidate.liquidityUsd) || 0, Number(rh.liquidityUsd) || 0),
+    volume24h: Math.max(Number(solCandidate.volume24h) || 0, Number(rh.volume24h) || 0)
+  };
+  const solLeadership = tickerMarketLeadership(solCandidate, maxima);
+  const rhLeadership = tickerMarketLeadership(rh, maxima);
+  return rhLeadership > solLeadership ? rh.address : sol;
 }
 const BARE_TICKER_STOPWORDS = new Set([
   "scan", "check", "look", "chart", "rug", "safe", "safety", "ca", "cas", "contract", "token", "coin", "coins",
@@ -40241,7 +40290,17 @@ function tickerTruthLine(symbol, mint) {
   if (!meta || Date.now() - meta.at >= 5 * 60_000 || String(meta.selectedMint) !== String(mint)) return "";
   const picked = (meta.candidates || []).find((candidate) => candidate.mint === mint) || meta.candidates?.[0];
   if (!picked) return "";
-  return `🧬 <b>Ticker Truth:</b> strongest safe market of ${meta.exactMatches} exact $${escapeTelegramHtml(meta.symbol)} contracts · MC <b>${escapeTelegramHtml(fmtTickerMarketUsd(picked.marketCap))}</b>`;
+  return `🧬 <b>Ticker Truth:</b> strongest safe market of ${meta.exactMatches} exact $${escapeTelegramHtml(meta.symbol)} contracts · MC <b>${escapeTelegramHtml(fmtTickerMarketUsd(picked.marketCap))}</b> · Vol <b>${escapeTelegramHtml(fmtTickerMarketUsd(picked.volume24h))}</b>`;
+}
+
+function tickerScanSelectionLine(symbol, target) {
+  const key = String(symbol || "").replace(/^\$+/, "").trim().toLowerCase();
+  if (!key) return "";
+  if (!/^0x[0-9a-fA-F]{40}$/.test(String(target || ""))) return tickerTruthLine(symbol, target);
+  const cached = rhTickerTargetCache.get(key);
+  const candidate = cached && Date.now() - Number(cached.at || 0) < 5 * 60_000 ? cached.candidate : null;
+  if (!candidate || candidate.address.toLowerCase() !== String(target).toLowerCase()) return "";
+  return `🧬 <b>Ticker match:</b> strongest Robinhood $${escapeTelegramHtml(String(symbol).toUpperCase())} market by MC + 24h volume · MC <b>${escapeTelegramHtml(fmtTickerMarketUsd(candidate.marketCap))}</b> · Vol <b>${escapeTelegramHtml(fmtTickerMarketUsd(candidate.volume24h))}</b>`;
 }
 
 async function handleTickerTruthCallback(query) {
@@ -43303,10 +43362,13 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
 async function handleTelegramLookCommand(chatId, message, argument, options = {}) {
   // One resolver for CA, Dex/Pump links, $tickers, bare scan tickers, and Robinhood Chain 0x contracts.
   const target = await resolveScanTargetFromText(argument).catch(() => null);
+  const tickerSymbol = String(options.tickerSymbol || extractCashtags(String(argument || ""))[0] || "").replace(/^\$+/, "").trim().toUpperCase();
   const rhAddr = /^0x[0-9a-fA-F]{40}$/.test(String(target || "")) ? String(target) : "";
   if (rhAddr) {
     if (!options.skipCooldown && tgCommandOnCooldown(chatId, `look:${rhAddr.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return;
-    if (await isRhContract(rhAddr).catch(() => false)) await sendRhScanCard(chatId, rhAddr, { ...options, message });
+    const tickerLine = tickerScanSelectionLine(tickerSymbol, rhAddr);
+    const contextHtml = [String(options.contextHtml || "").trim(), tickerLine].filter(Boolean).join("\n");
+    if (await isRhContract(rhAddr).catch(() => false)) await sendRhScanCard(chatId, rhAddr, { ...options, contextHtml, message });
     else await sendWalletScanCard(chatId, rhAddr);
     return;
   }
@@ -43318,7 +43380,6 @@ async function handleTelegramLookCommand(chatId, message, argument, options = {}
   // Deduplicate only the SAME token. A busy group may paste several different CAs within 20 seconds;
   // the old chat-wide cooldown silently discarded all but the first and looked like a broken scanner.
   if (!options.skipCooldown && tgCommandOnCooldown(chatId, `look:${mint.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return;
-  const tickerSymbol = String(options.tickerSymbol || extractCashtags(String(argument || ""))[0] || "").replace(/^\$+/, "").trim().toUpperCase();
   const keyboard = slimeScanKeyboard(mint, tickerSymbol);
   void telegram("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {});
   // Clean OgreScanBot-style scan card: stats + audit + socials + a prefilled
@@ -43338,7 +43399,7 @@ async function handleTelegramLookCommand(chatId, message, argument, options = {}
   // caller of this mint across the whole warehouse, so it surfaces who called it first even when
   // this exact chat never did. Empty only when nobody anywhere has called the coin.
   const callerLine = await buildScanCallerFooter(message?.chat?.id, mint, curMc, message).catch(() => "");
-  const matchLine = tickerTruthLine(tickerSymbol, mint);
+  const matchLine = tickerScanSelectionLine(tickerSymbol, mint);
   const scanContextLine = [String(options.contextHtml || "").trim(), matchLine, callerLine].filter(Boolean).join("\n");
   let text = null;
   if (scan && (scan.meta || scan.bonding || scan.shield || scan.rug || scan.onchain)) {

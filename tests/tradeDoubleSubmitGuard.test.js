@@ -2392,6 +2392,7 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(cashtag, /String\(ticker \|\| ""\).*toLowerCase\(\) !== key/); // exact ticker matches only
   assert.match(cashtag, /tickerCandidateScore/);
   assert.match(cashtag, /tickerCandidateDominance/);
+  assert.match(cashtag, /tickerMarketLeadership/);
   assert.match(cashtag, /maxima\.marketCap >= 50_000/);
   assert.match(cashtag, /maxima\.marketCap \* 0\.05/);
   assert.match(cashtag, /maxima\.liquidityUsd \* 0\.10/);
@@ -2402,8 +2403,14 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(cashtag, /tickerResolutionMetaCache\.set/);
 
   const ticker = functionBody(serverSource, "resolveTickerToScanTarget");
-  assert.doesNotMatch(ticker, /Promise\.all/);                       // Solana tickers do not wait on the slower RH fallback
-  assert.match(ticker, /if \(sol\) return sol/);
+  assert.match(ticker, /Promise\.all/);                             // both chains resolve inside one bounded window
+  assert.match(ticker, /resolveRhTickerCandidate/);
+  assert.match(ticker, /rhLeadership > solLeadership/);             // stronger RH market can beat a weak Sol clone
+  const rhTicker = functionBody(serverSource, "resolveRhTickerCandidate");
+  assert.match(rhTicker, /chainId \|\| ""\).*=== "robinhood"/);
+  assert.match(rhTicker, /tickerMarketLeadership/);
+  assert.match(rhTicker, /tickerMarketRowStrength/);                 // one real pair supplies MC+volume; no cross-pair Frankenstein maxima
+  assert.match(rhTicker, /await isRhContract\(candidate\.address\)/); // ticker must resolve to a coin, never a wallet
 
   const xLogo = functionBody(serverSource, "xCoinLogoLive");
   assert.match(xLogo, /Number\(budgetMs\) \|\| 3_500/); // a cold PFP host cannot consume the whole reply budget
@@ -2550,6 +2557,7 @@ test("Telegram trending picks fail closed on honeypots and PvP menus can be dism
 test("Ticker Truth favors the dominant safe market and explains same-symbol clones", () => {
   const score = functionBody(serverSource, "tickerCandidateScore");
   const dominance = functionBody(serverSource, "tickerCandidateDominance");
+  const leadership = functionBody(serverSource, "tickerMarketLeadership");
   const truth = functionBody(serverSource, "handleTickerTruthCallback");
   const look = functionBody(serverSource, "handleTelegramLookCommand");
   const keyboard = functionBody(serverSource, "scanResearchKeyboard");
@@ -2560,10 +2568,12 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(score, /microCapPenalty/);
   assert.match(dominance, /maxima\.marketCap\) \* 60/);
   assert.match(dominance, /maxima\.liquidityUsd\) \* 70/);
+  assert.match(leadership, /Math\.sqrt\(mc \* vol\) \* 220/);
+  assert.match(leadership, /Math\.min\(mc, vol\) \* 140/);
   assert.match(truth, /exact-symbol contracts found/);
   assert.match(truth, /Unsafe\/unchecked matches are omitted/);
   assert.match(truth, /dominant real market plus live activity/);
-  assert.match(look, /tickerTruthLine/);
+  assert.match(look, /tickerScanSelectionLine/);
   assert.match(keyboard, /Ticker Truth/);
   assert.match(keyboard, /Holder Map/);
   assert.match(keyboard, /Airdrop/);
@@ -2574,12 +2584,19 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(serverSource, /startsWith\("tm:"\)/);
   const scoreFn = new Function("candidate", score);
   const dominanceFn = new Function("candidate", "maxima", dominance);
+  const leadershipFn = new Function("candidate", "maxima", leadership);
   const established = { marketCap: 509_000, liquidityUsd: 52_000, volume24h: 140_000, holders: 1_100, trendBoost: 0, sources: new Set(["dexscreener"]) };
   const tinyTrendClone = { marketCap: 2_000, liquidityUsd: 1_200, volume24h: 18_000, holders: 90, trendBoost: 55, sources: new Set(["moralis-trending"]) };
   const maxima = { marketCap: established.marketCap, liquidityUsd: established.liquidityUsd, volume24h: established.volume24h };
-  const establishedScore = scoreFn(established) + dominanceFn(established, maxima);
-  const cloneScore = scoreFn(tinyTrendClone) + dominanceFn(tinyTrendClone, maxima);
+  const establishedScore = scoreFn(established) + dominanceFn(established, maxima) + leadershipFn(established, maxima);
+  const cloneScore = scoreFn(tinyTrendClone) + dominanceFn(tinyTrendClone, maxima) + leadershipFn(tinyTrendClone, maxima);
   assert.ok(establishedScore > cloneScore + 100, `dominant $509K market must decisively beat a $2K trend-feed clone (${establishedScore} vs ${cloneScore})`);
+  const oneMetricOnly = { marketCap: 1_000_000, volume24h: 10_000 };
+  const balancedLeader = { marketCap: 500_000, volume24h: 500_000 };
+  const balancedMaxima = { marketCap: 1_000_000, volume24h: 500_000 };
+  assert.ok(leadershipFn(balancedLeader, balancedMaxima) > leadershipFn(oneMetricOnly, balancedMaxima), "a coin strong in both MC and volume must beat a one-metric spike");
+  assert.match(functionBody(serverSource, "tickerScanSelectionLine"), /strongest Robinhood/);
+  assert.match(functionBody(serverSource, "tickerTruthLine"), /Vol/);
 });
 
 test("X growth engine: broadcast-gated proactive posts + receipts + KOL responder + scorecard, tracking always on", () => {
