@@ -51807,7 +51807,9 @@ async function webRhPairs(category = "trending") {
       const s = rhSafetyFeedCache.get(r.address.toLowerCase()); if (s) r.safety = s.verdict;
     }
     scheduleRhSafetyFill(rows);
-    return enrichRhFeedArtwork(rows.slice(0, 60));
+    const visible = rows.slice(0, 60);
+    void enrichRhFeedArtwork(visible).catch(() => {});
+    return visible;
   }
   const [tokens, meta] = await Promise.all([rhFeedTokens(), rhLaunchMetaByAddress()]);
   let rows = tokens.map((t) => {
@@ -51857,7 +51859,8 @@ async function webRhPairs(category = "trending") {
     }
   }
   scheduleRhPriceFill(rows);
-  return enrichRhFeedArtwork(rows);
+  void enrichRhFeedArtwork(rows).catch(() => {});
+  return rows;
 }
 
 // Public per-token image for coins launched through the site (img tags can't send a Bearer token).

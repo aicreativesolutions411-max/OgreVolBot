@@ -12,7 +12,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.match(server, /requestUrl\.pathname === "\/fun"[\s\S]{0,300}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
-  assert.match(html, /<script defer src="\/fun\.js\?v=3"><\/script>/);
+  assert.match(html, /<script defer src="\/fun\.js\?v=4"><\/script>/);
 });
 
 test("/fun keeps the reference layout clean while carrying SlimeWire features", () => {
@@ -66,10 +66,13 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(server, /token-pairs\/v1\/robinhood/);
   assert.match(server, /const meta = await getDexTokenMetadata\(mint/);
   assert.match(server, /enrichRhFeedArtwork/);
+  assert.match(server, /void enrichRhFeedArtwork\(rows\)\.catch/);
   assert.match(server, /token-pairs\/v1\/robinhood/);
   assert.match(js, /\/api\/web\/token-image\?mint=/);
   assert.match(js, /data-image-retries/);
   assert.match(js, /retries < 3/);
+  assert.match(js, /const detailPromise = request\(path\)/);
+  assert.ok(js.indexOf("const searchResult = await request") < js.indexOf("const detailResult = await detailPromise"));
 });
 
 test("coin setup exposes fast buys, ladder exits, one-wallet RH trades, and the full volume engine", () => {

@@ -240,11 +240,9 @@
     renderCoinShell();
     history.replaceState(null, "", `#coin/${encodeURIComponent(key)}`);
     const path = chain === "robinhood" ? `/api/web/rh/token?address=${encodeURIComponent(key)}` : `/api/web/token-read?mint=${encodeURIComponent(key)}`;
-    const [detailResult, , searchResult] = await Promise.all([
-      request(path),
-      loadPositions(),
-      request(`/api/web/token-search?q=${encodeURIComponent(key)}`)
-    ]);
+    const detailPromise = request(path);
+    void loadPositions().then(() => { if (state.view === "coin" && coinKey(state.selected).toLowerCase() === String(key).toLowerCase()) renderPositionCard(); });
+    const searchResult = await request(`/api/web/token-search?q=${encodeURIComponent(key)}`);
     const searchMatch = searchResult.ok
       ? (searchResult.data?.matches || []).find((row) => coinKey(row).toLowerCase() === String(key).toLowerCase())
       : null;
@@ -256,6 +254,7 @@
       addRecent(coin);
       renderCoinShell();
     }
+    const detailResult = await detailPromise;
     if (detailResult.ok && detailResult.data?.ok) {
       const raw = detailResult.data.coin || detailResult.data;
       coin = chain === "robinhood" ? normalizeRh({ ...coin, ...raw, address: raw.address || key, marketCapUsd: raw.mc || raw.marketCapUsd, volume24hUsd: raw.vol24 || raw.volume24hUsd, priceChange1h: raw.ch1, createdAt: raw.createdAt }) : normalizeSol({ ...coin, ...raw, tokenMint: key, marketCap: raw.marketCapUsd, volumeH24: raw.volumeH24, h1: raw.changeH1 });
