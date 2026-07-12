@@ -150,6 +150,8 @@ test("/fun has editable presets, tracked calls, and informational profile follow
 
 test("/quick preloads social coins and keeps wallet setup inside the fast trade flow", () => {
   assert.match(server, /requestUrl\.pathname === "\/quick"[\s\S]{0,240}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
+  assert.match(redirects, /^\/quick\s+\/fun\.html\s+200$/m);
+  assert.match(redirects, /^\/quick\/\*\s+\/fun\.html\s+200$/m);
   for (const marker of ["data-view=\"quick\"", "data-quick-paste-form", "data-quick-route-content", "data-quick-clipboard"]) assert.match(html, new RegExp(marker));
   assert.match(js, /IS_QUICK_ROUTE/);
   assert.match(js, /new URLSearchParams\(location\.search\)/);

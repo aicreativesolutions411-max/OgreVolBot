@@ -18,6 +18,8 @@
 /coin/*         /coin-site.html        200
 /rewards/*      /partner-rewards.html  200
 /launch-coin    /#launch               302
+/quick          /fun.html              200
+/quick/*        /fun.html              200
 /terminal       /index.html            200
 /terminal/*     /index.html            200
 /portal         /index.html            200
