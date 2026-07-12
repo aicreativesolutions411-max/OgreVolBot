@@ -43628,6 +43628,25 @@ async function handleChannelPostCommands(post) {
     await handleTelegramKolsCommand(chatId);
     return;
   }
+  // Telegram delivers commands posted as a channel identity through `channel_post`, not the normal
+  // group `message` path. Channels are admin-only posting surfaces, so admin permission is implied.
+  // Route raids here too; otherwise the visible /raid post simply sits there with no response.
+  const nextRaidCommand = parseCommandWithArgument(text, ["next"]);
+  if (nextRaidCommand) {
+    const entry = await getGroupBotEntry(chatId).catch(() => null);
+    if (entry && !groupBotFeatureOn(entry, "raid")) await setGroupBotFeature(chatId, "raid", true);
+    await handleTelegramNextRaidCommand(chatId, post, 0, nextRaidCommand.argument);
+    return;
+  }
+  const raidCommand = parseCommandWithArgument(text, ["raid"]);
+  if (raidCommand) {
+    const entry = await getGroupBotEntry(chatId).catch(() => null);
+    if (String(raidCommand.argument || "").trim() && entry && !groupBotFeatureOn(entry, "raid")) {
+      await setGroupBotFeature(chatId, "raid", true);
+    }
+    await handleTelegramRaidCommand(chatId, post, raidCommand.argument);
+    return;
+  }
   const toggle = parseCommandWithArgument(text, ["slimewire", "slimewire_alerts"])
     || (/^slimewire(?:\s+alerts)?\s+(on|off|enable|disable|start|stop)$/i.exec(text) ? { argument: RegExp.$1 } : null);
   if (toggle) {
@@ -46805,6 +46824,10 @@ async function handleGroupRose(message, userId) {
 
   const text = String(message.text || message.caption || "").trim();
   const hasContent = Boolean(message.text || message.caption || message.photo || message.sticker || message.animation || message.video || message.document);
+  // Raid commands contain an X link by design. They must reach Raid Bot even when this room has
+  // Rose anti-links, antiflood, scam deletion, or a custom "raid" filter enabled. The raid handler
+  // applies its own module/admin/queue checks; moderation must never silently eat the command first.
+  if (/^\/(?:raid|next)(?:@\w+)?(?:\s|$)/i.test(text)) return false;
   const isAdmin = await isGroupBotAdmin(chatId, userId, message);
 
   // 🛡️ SHIELD — protection layer (each sub-option off by default, admins exempt).

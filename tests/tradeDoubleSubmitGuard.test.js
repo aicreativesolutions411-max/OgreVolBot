@@ -827,6 +827,7 @@ test("Rose (MissRose parity): captcha verify, fillings, timed mutes, notes, filt
   assert.match(functionBody(serverSource, "roseFill"), /chatname\|title/); // {chatname}/{title} filling
   assert.match(serverSource, /function roseParseDuration\(/);
   const rose = functionBody(serverSource, "handleGroupRose");
+  assert.match(rose, /\^\\\/\(\?:raid\|next\)/); // X-link raid commands bypass Rose anti-links/filters
   for (const cmd of ["captcha", "tmute", "tban", "antiflood", "setwarnlimit", "setwarnmode", "save", "filter", "report", "purge", "pin"]) {
     assert.ok(rose.includes(`"${cmd}"`) || rose.includes(`'${cmd}'`) || rose.includes(cmd), `Rose must handle /${cmd}`);
   }
@@ -944,6 +945,10 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
   assert.match(groupCommand, /cmd === "raid" && !arg/);
   const messageHandler = functionBody(serverSource, "handleMessage");
   assert.match(messageHandler, /setGroupBotFeature\(chatId, "raid", true\)/);
+  const channelHandler = functionBody(serverSource, "handleChannelPostCommands");
+  assert.match(channelHandler, /parseCommandWithArgument\(text, \["raid"\]\)/);
+  assert.match(channelHandler, /handleTelegramRaidCommand\(chatId, post/); // posting as a channel still starts raids
+  assert.match(channelHandler, /handleTelegramNextRaidCommand\(chatId, post/);
   // A live raid is pinned, and every fifth newer group post replaces it at the bottom without
   // leaving duplicate cards behind. Completion unpins it.
   assert.match(functionBody(serverSource, "startRaidFromDraft"), /pinChatMessage/);
