@@ -895,6 +895,7 @@ test("buy card Chart/Buy open the NEW terminal (not old chart-lab / /t)", () => 
   assert.match(mk, /url: links\.site\b/);       // Chart -> SlimeWire chart site
   assert.match(mk, /callback_data: `qbp:\$\{mint\}`/);  // ⚡ Quick Buy (your preset) IS the buy
   assert.match(mk, /callback_data: "pe:open"/);         // ⚙️ Preset editor next to it
+  assert.match(mk, /inline_keyboard: \[compactRow\]/); // one tight Chart + Quick Buy + Preset row
   assert.doesNotMatch(mk, /chart-lab\?ca=/);    // old chart-page URL gone
   assert.doesNotMatch(mk, /url: groupBuyQuickBuyUrl/); // old /t redirect gone
 });
@@ -1640,6 +1641,11 @@ test("scan card = ⚡ Quick Buy (preset) + ⚙️ Preset editor + limit + chart 
   assert.match(serverSource, /async function funnelNoWallet/);
   assert.match(functionBody(serverSource, "funnelNoWallet"), /callback_data: "create_wallets"/);
   assert.match(functionBody(serverSource, "handleQuickBuyCallback"), /noWalletAckText\(await funnelNoWallet\(userId\)\)/);
+  assert.match(functionBody(serverSource, "handleQuickBuyPresetCallback"), /noWalletAckText\(await funnelNoWallet\(userId\)\)/);
+  assert.match(functionBody(serverSource, "postGroupBuy"), /slimewire\.org · chart, trade &amp; tools/);
+  const rhBuy = functionBody(serverSource, "postGroupBuyRh");
+  assert.match(rhBuy, /callback_data: `rqbp:\$\{address\}`/);
+  assert.match(rhBuy, /slimewire\.org · chart, trade &amp; tools/);
 });
 for (const [label, source] of [["gg.html", ggSource], ["index.html", indexSource]]) {
   test(`POS deep-link opens the 1-click buy preloaded with the amount (${label})`, () => {

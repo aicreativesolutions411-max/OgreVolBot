@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+  <meta name="theme-color" content="#050805">
+  <title>SlimeWire Fun — Mobile Coin Terminal</title>
+  <meta name="description" content="A clean mobile-first SlimeWire terminal for Solana and Robinhood Chain coins, wallets, positions, charts, safety, and trading tools.">
+  <link rel="icon" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="stylesheet" href="/fun.css?v=1">
+  <script src="/config.js"></script>
+  <script defer src="/fun.js?v=1"></script>
+</head>
+<body>
+  <div class="fun-app" id="funApp">
+    <header class="fun-header">
+      <button class="brand" type="button" data-nav="home" aria-label="SlimeWire Fun home">
+        <img src="/assets/slimewire/png/slimewire-mark.png" alt="">
+        <span>SLIMEWIRE</span><b>FUN</b>
+      </button>
+      <div class="header-actions">
+        <button class="icon-btn" type="button" data-open-search aria-label="Search coins">⌕</button>
+        <button class="wallet-pill" type="button" data-nav="wallet"><span class="status-dot"></span><span data-wallet-balance>Connect</span></button>
+      </div>
+    </header>
+
+    <main class="fun-main">
+      <section class="fun-view active" data-view="home" aria-label="Coin feed">
+        <div class="pulse-card">
+          <div><span class="eyebrow">LIVE ACROSS TWO CHAINS</span><h1>Find the move.<br><em>Trade the read.</em></h1></div>
+          <div class="pulse-orb"><span></span><i></i></div>
+          <p>Fast feeds, honest risk context, and your complete trade setup without leaving the coin.</p>
+        </div>
+        <div class="chain-switch" role="tablist" aria-label="Chain filter">
+          <button class="active" type="button" data-chain="all">All</button>
+          <button type="button" data-chain="solana"><span class="chain-dot sol"></span> Solana</button>
+          <button type="button" data-chain="robinhood"><span class="chain-dot rh"></span> Robinhood</button>
+        </div>
+        <div class="feed-head"><div><h2>Coins</h2><p data-feed-note>Live movers ranked by signal</p></div><button class="text-btn" type="button" data-refresh-feed>Refresh</button></div>
+        <div class="feed-tabs" role="tablist" aria-label="Coin categories">
+          <button class="active" type="button" data-feed="movers">Movers</button>
+          <button type="button" data-feed="new">New</button>
+          <button type="button" data-feed="soon">Soon</button>
+          <button type="button" data-feed="graduated">Graduated</button>
+        </div>
+        <div class="coin-list" data-coin-list><div class="skeleton-list"></div></div>
+      </section>
+
+      <section class="fun-view" data-view="leaders" aria-label="Caller leaderboard">
+        <div class="section-title"><span class="eyebrow">PROOF, NOT NOISE</span><h1>Top callers</h1><p>Tracked calls ranked from public SlimeWire receipts.</p></div>
+        <div class="leader-hero" data-leader-hero></div>
+        <div class="segmented"><button class="active" type="button">Weekly</button><button type="button">All time</button></div>
+        <div class="leader-list" data-leader-list><div class="skeleton-list"></div></div>
+      </section>
+
+      <section class="fun-view" data-view="wallet" aria-label="Wallet profile">
+        <div class="wallet-hero" data-wallet-hero></div>
+        <div class="wallet-actions"><button class="primary" type="button" data-deposit>Deposit</button><button type="button" data-receive>Receive</button></div>
+        <div class="profile-tabs" role="tablist"><button class="active" type="button" data-profile="positions">Positions</button><button type="button" data-profile="activity">Activity</button><button type="button" data-profile="created">Created</button></div>
+        <div data-profile-panel><div class="skeleton-list"></div></div>
+      </section>
+
+      <section class="fun-view coin-view" data-view="coin" aria-label="Coin details">
+        <div class="coin-topbar"><button class="icon-btn" type="button" data-coin-back aria-label="Back">‹</button><div class="coin-mini" data-coin-mini></div><button class="icon-btn" type="button" data-copy-coin aria-label="Copy contract">⧉</button></div>
+        <div class="chart-card"><div class="chart-toolbar"><div class="timeframes"><button type="button">1m</button><button type="button">5m</button><button class="active" type="button">15m</button><button type="button">1h</button></div><button class="price-alert" type="button" data-price-alert>＋ Alert</button></div><div class="chart-frame" data-chart-frame><div class="chart-loader"><span></span><p>Loading live chart</p></div></div></div>
+        <div class="coin-stats" data-coin-stats></div>
+        <div class="position-card" data-position-card></div>
+        <div class="detail-tabs" role="tablist"><button class="active" type="button" data-detail="signal">Signal</button><button type="button" data-detail="holders">Holders</button><button type="button" data-detail="about">About</button></div>
+        <div class="detail-panel" data-detail-panel></div>
+        <div class="coin-spacer"></div>
+        <div class="trade-dock"><button class="tools-trigger" type="button" data-open-tools>＋ Tools</button><button class="buy" type="button" data-open-trade="buy">Buy</button><button class="sell" type="button" data-open-trade="sell">Sell</button></div>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Primary navigation">
+      <button class="active" type="button" data-nav="home"><span>◉</span><b>Explore</b></button>
+      <button type="button" data-open-search><span>⌕</span><b>Search</b></button>
+      <button type="button" data-nav="leaders"><span>♛</span><b>Callers</b></button>
+      <button type="button" data-nav="wallet"><span>▣</span><b>Wallet</b></button>
+      <button class="more" type="button" data-open-global-tools><span>＋</span><b>Tools</b></button>
+    </nav>
+  </div>
+
+  <div class="overlay" data-search-overlay hidden>
+    <div class="search-sheet">
+      <div class="search-row"><button class="icon-btn" type="button" data-close-search aria-label="Close search">‹</button><label><span>⌕</span><input type="search" data-search-input aria-label="Search coins" placeholder="Search ticker, name, Solana or 0x CA" autocomplete="off"></label></div>
+      <div class="search-content" data-search-content></div>
+    </div>
+  </div>
+
+  <div class="overlay bottom-sheet-wrap" data-sheet-overlay hidden>
+    <button class="sheet-backdrop" type="button" data-close-sheet aria-label="Close"></button>
+    <div class="bottom-sheet" role="dialog" aria-modal="true"><div class="sheet-grab"></div><div data-sheet-content></div></div>
+  </div>
+  <div class="toast" data-toast></div>
+</body>
+</html>

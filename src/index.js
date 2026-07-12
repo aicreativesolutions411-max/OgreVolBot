@@ -6839,6 +6839,10 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "chart-lab.html");
       return;
     }
+    if (request.method === "GET" && (requestUrl.pathname === "/fun" || requestUrl.pathname === "/fun.html" || requestUrl.pathname.startsWith("/fun/"))) {
+      await serveStaticHtmlPage(response, "fun.html", "no-store, max-age=0");
+      return;
+    }
     if (request.method === "GET" && ["/gg", "/terminal-pro", "/pro-terminal", "/gg.html"].includes(requestUrl.pathname)) {
       // No-store during the active build-out so testers always get the latest /gg (its chart/
       // tools/wallet code changes constantly). Switch back to a normal cache once it stabilizes.
@@ -9110,6 +9114,18 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, { ok: true, rows: await webRhPairs(requestUrl.searchParams.get("category") || "trending") });
       return;
     }
+    if (request.method === "GET" && pathname === "/api/web/rh/token") {
+      const address = String(requestUrl.searchParams.get("address") || requestUrl.searchParams.get("token") || "").trim();
+      if (!/^0x[0-9a-fA-F]{40}$/.test(address)) { sendWebJson(request, response, 400, { ok: false, error: "Invalid token address." }); return; }
+      const coin = await gatherRhScan(address).catch(() => null);
+      sendCachedWebJson(request, response, coin ? 200 : 404, coin ? { ok: true, coin } : { ok: false, error: "Robinhood coin not found." }, "public, max-age=20, stale-while-revalidate=120");
+      return;
+    }
+    if (request.method === "GET" && pathname === "/api/web/token-search") {
+      const query = requestUrl.searchParams.get("q") || requestUrl.searchParams.get("query") || "";
+      sendWebJson(request, response, 200, { ok: true, ...await webTokenSearch(query) });
+      return;
+    }
     // Pre-buy honeypot/safety scan (public — read-only chain analysis, no wallet needed).
     if (request.method === "GET" && pathname === "/api/web/rh/safety") {
       const tok = String(requestUrl.searchParams.get("token") || "").trim();
@@ -10694,15 +10710,6 @@ async function handleWebApiRequest(request, response, requestUrl) {
         ok: true,
         autopilot: ogreAutopilotStatusView(next),
         limits: OGRE_AUTOPILOT_LIMITS
-      });
-      return;
-    }
-
-    if (request.method === "GET" && pathname === "/api/web/token-search") {
-      const query = requestUrl.searchParams.get("q") || requestUrl.searchParams.get("query") || "";
-      sendWebJson(request, response, 200, {
-        ok: true,
-        ...await webTokenSearch(query)
       });
       return;
     }
@@ -13828,8 +13835,8 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("qb:")) {
     if (await handleQuickBuyCallback(query, userId).catch(() => false)) return;
   }
-  // 🪶⚡ Robinhood one-tap trade (rqb:/rqs:) — SOL-funded buy or % sell on an RH coin, own wallet.
-  if (String(query.data || "").startsWith("rqb:") || String(query.data || "").startsWith("rqs:")) {
+  // 🪶⚡ Robinhood one-tap trade (rqbp:/rqb:/rqs:) — preset/fixed SOL buy or % sell, own wallet.
+  if (["rqbp:", "rqb:", "rqs:"].some((prefix) => String(query.data || "").startsWith(prefix))) {
     if (await handleRhQuickTradeCallback(query, userId).catch(() => false)) return;
   }
   // ⚡ Quick Buy PRESET (qbp:<mint>) — buys the tapper's saved preset amount + arms their TP/SL.
@@ -29249,6 +29256,10 @@ async function webTokenSearch(rawQuery = "") {
   const cleaned = String(rawQuery || "").trim().replace(/^\$+/, "").trim();
   if (!cleaned) return { query: "", matches: [] };
 
+  if (/^0x[0-9a-fA-F]{40}$/.test(cleaned)) {
+    return { query: cleaned, matches: [{ tokenMint: cleaned, address: cleaned, chain: "robinhood", symbol: "", name: "", source: "address" }] };
+  }
+
   // Already a valid mint -> return it directly, no lookup needed.
   try {
     const mint = parsePublicKey(cleaned).toBase58();
@@ -29262,15 +29273,17 @@ async function webTokenSearch(rawQuery = "") {
     headers,
     timeoutMs: 4_000
   }).catch(() => null);
-  const pairs = arrayFromApiData(data, ["pairs"]).filter((pair) => String(pair?.chainId || "").toLowerCase() === "solana");
+  const pairs = arrayFromApiData(data, ["pairs"]).filter((pair) => ["solana", "robinhood"].includes(String(pair?.chainId || "").toLowerCase()));
   const q = cleaned.toLowerCase();
   const seen = new Set();
   const matches = [];
   for (const pair of pairs) {
     const base = pair?.baseToken || {};
     const mint = String(base.address || "").trim();
-    if (!mint || seen.has(mint)) continue;
-    seen.add(mint);
+    const chain = String(pair?.chainId || "solana").toLowerCase();
+    const key = `${chain}:${mint.toLowerCase()}`;
+    if (!mint || seen.has(key)) continue;
+    seen.add(key);
     const symbol = String(base.symbol || "");
     const name = String(base.name || "");
     const sym = symbol.toLowerCase();
@@ -29287,7 +29300,7 @@ async function webTokenSearch(rawQuery = "") {
     if (!score) continue; // no symbol/name relevance
     score += Math.min(220, Math.log10(Math.max(1, liquidityUsd)) * 32);
     score += Math.min(140, Math.log10(Math.max(1, volumeUsd)) * 20);
-    matches.push({ tokenMint: mint, symbol, name, liquidityUsd, volumeUsd, score: Math.round(score) });
+    matches.push({ tokenMint: mint, address: mint, chain, symbol, name, liquidityUsd, volumeUsd, score: Math.round(score), imageUrl: pair?.info?.imageUrl || "" });
   }
   matches.sort((a, b) => b.score - a.score);
   return { query: cleaned, matches: matches.slice(0, 8) };
@@ -41778,17 +41791,18 @@ async function handleQuickBuyCallback(query, userId) {
 async function handleRhQuickTradeCallback(query, userId) {
   const data = String(query?.data || "");
   const ack = (t, alert) => telegram("answerCallbackQuery", { callback_query_id: query.id, ...(t ? { text: t, show_alert: Boolean(alert) } : {}) }).catch(() => {});
+  const mPreset = data.match(/^rqbp:(0x[0-9a-fA-F]{40})$/);
   const mBuy = data.match(/^rqb:([\d.]+):(0x[0-9a-fA-F]{40})$/);
   const mSell = data.match(/^rqs:(\d{1,3}):(0x[0-9a-fA-F]{40})$/);
-  if (!mBuy && !mSell) { await ack(); return true; }
+  if (!mPreset && !mBuy && !mSell) { await ack(); return true; }
   if (!walletsForOwner(await readWalletStore(), userId).length) { await ack(noWalletAckText(await funnelNoWallet(userId)), true); return true; }
-  const tokenAddress = (mBuy || mSell)[2];
+  const tokenAddress = mPreset ? mPreset[1] : (mBuy || mSell)[2];
   const sellKb = { inline_keyboard: [
     [{ text: "💸 Sell 50%", callback_data: `rqs:50:${tokenAddress}` }, { text: "💸 Sell 100%", callback_data: `rqs:100:${tokenAddress}` }],
     [{ text: "🔄 Buy again", callback_data: `rqb:0.05:${tokenAddress}` }],
   ] };
-  if (mBuy) {
-    const amt = Number(mBuy[1]);
+  if (mPreset || mBuy) {
+    const amt = mPreset ? userBuyPrefs(await readBuyPrefs(), userId).quickAmount : Number(mBuy[1]);
     await ack("🪶 Buying on Robinhood Chain — takes ~30s, receipt lands in your DM…", true);
     try {
       const r = await webRhTrade(userId, {
@@ -45081,22 +45095,18 @@ const groupBuyLastAlertAt = new Map(); // mint -> ts (shared so the socket + the
 const groupBuyHolders = new Map();     // mint -> Set(trader) so the buy card can flag "🌟 New holder" vs "➕ added" (SpyDefi-style)
 // Buttons under a buy card: Chart · Buy · Vote (the reference's clickable row), then a socials row
 // (TG / X / Web) built from the coin's real metadata when present.
-const groupBuyMarkup = (mint, socials = {}) => {
+const groupBuyMarkup = (mint) => {
   // Chart + Buy point at the NEW terminal (the ?token= deep-link opens the coin's
   // chart+buy view), matching the scan card — not the old chart-lab / /t layout.
   const links = slimewireTokenLinks(mint);
   // ⚡ ONE-CLICK: tap = instant buy from your own SlimeWire bot wallet using YOUR saved preset (amount +
   // TP/SL); no wallet → /start funnel. ⚙️ Preset edits that amount/TP/SL right here in the group — no DM.
-  const qbRow = [
+  const compactRow = [
+    { text: "📊 Chart", url: links.site },
     { text: "⚡ Quick Buy", callback_data: `qbp:${mint}` },
     { text: "⚙️ Preset", callback_data: "pe:open" }
   ];
-  // Buy = the ⚡ one-click row (own wallet). Chart just opens the SlimeWire site. No "Buy on site" /
-  // Vote / TG clutter — the group IS the coin's TG, and the ⚡ buttons are the buy.
-  const infoRow = [{ text: "📊 Chart", url: links.site }];
-  if (socials.x) infoRow.push({ text: "𝕏", url: socials.x });
-  if (socials.web) infoRow.push({ text: "🌐 Web", url: socials.web });
-  return { inline_keyboard: [qbRow, infoRow] };
+  return { inline_keyboard: [compactRow] };
 };
 function buyBondingBar(pct, n = 12) { pct = Math.max(0, Math.min(100, Number(pct) || 0)); const f = Math.round(pct / 100 * n); return "▰".repeat(f) + "▱".repeat(Math.max(0, n - f)); }
 // Buy cards reuse the full scan (bonding %, socials, MC, DEX-paid, image) — cached 30s so a burst of
@@ -45228,7 +45238,8 @@ async function postGroupBuy(mint, { solAmount = 0, usdAmount = 0, tokens = 0, pr
       ].filter(Boolean);
     }
     if (e.customText) lines.unshift(`<b>${escapeTelegramHtml(String(e.customText).slice(0, 160))}</b>`);
-    await sendGroupAlertMedia(chatId, groupAlertMediaFor(e, defImg), lines.join("\n"), groupBuyMarkup(mint, socials));
+    lines.push(`<a href="${slimewireTokenLinks(mint).site}">slimewire.org · chart, trade &amp; tools</a>`);
+    await sendGroupAlertMedia(chatId, groupAlertMediaFor(e, defImg), lines.join("\n"), groupBuyMarkup(mint));
   }
   groupBuyLastAlertAt.set(mint, Date.now());
 }
@@ -45277,10 +45288,12 @@ async function postGroupBuyRh(address, { ethAmount = 0, tokens = 0, trader = "",
   const fmtUsd0 = (v) => "$" + Math.round(Number(v) || 0).toLocaleString();
   const fmtPx = (v) => { v = Number(v) || 0; return v >= 1 ? "$" + v.toFixed(3) : v >= 0.001 ? "$" + v.toFixed(5) : "$" + v.toPrecision(3); };
   const fmtTok = (v) => { v = Number(v) || 0; return v >= 1e6 ? (v / 1e6).toFixed(2) + "M" : v >= 1e3 ? (v / 1e3).toFixed(1) + "K" : Math.round(v).toLocaleString(); };
-  const markup = { inline_keyboard: [
-    [{ text: "⚡ Trade on SlimeWire", url: `https://www.slimewire.org/#rhtrade/${address}` }],
-    [{ text: "📊 Chart", url: `https://www.slimewire.org/#rhtrade/${address}` }, ...(info?.twitterUrl ? [{ text: "𝕏", url: info.twitterUrl }] : []), ...(info?.websiteUrl ? [{ text: "🌐 Web", url: info.websiteUrl }] : [])],
-  ] };
+  const funUrl = `https://www.slimewire.org/fun#coin/${address}`;
+  const markup = { inline_keyboard: [[
+    { text: "📊 Chart", url: funUrl },
+    { text: "⚡ Quick Buy", callback_data: `rqbp:${address}` },
+    { text: "⚙️ Preset", callback_data: "pe:open" },
+  ]] };
   for (const [chatId, e] of targets) {
     const min = Number(e.minBuySol) || 0;                       // /minbuy = min in the chain's native coin (ETH here)
     if (min > 0 && ethAmount < min) continue;
@@ -45315,6 +45328,7 @@ async function postGroupBuyRh(address, { ethAmount = 0, tokens = 0, trader = "",
       `🏷 Price <b>${priceUsd > 0 ? fmtPx(priceUsd) : "n/a"}</b>${Number.isFinite(info?.ch24) ? ` · ${info.ch24 >= 0 ? "🟢 +" : "🔴 "}${Math.round(info.ch24)}% 24h` : " · 24h n/a"}`,
       `〽️ MC <b>${info?.mc > 0 ? fmtUsd0(info.mc) : "n/a"}</b> · Liq ${info?.liq > 0 ? fmtUsd0(info.liq) : "n/a"} · Vol ${info?.vol24 > 0 ? fmtUsd0(info.vol24) : "n/a"}`,
       holderLine,
+      `<a href="${funUrl}">slimewire.org · chart, trade &amp; tools</a>`,
     ].filter(Boolean);
     if (e.customText) lines.unshift(`<b>${escapeTelegramHtml(String(e.customText).slice(0, 160))}</b>`);
     await sendGroupAlertMedia(chatId, groupAlertMediaFor(e, info?.imageUrl || ""), lines.join("\n"), markup);
@@ -59144,6 +59158,8 @@ async function prepareCoinSiteTelegramDelivery(projectId, editKey, rawUsername) 
 }
 
 async function createPublicLaunchOsProject(body = {}) {
+  const editKey = crypto.randomBytes(24).toString("hex");
+  const editorKeyHash = hashWebSecret(editKey);
   const payoutWallet = String(body.partnerPayoutWallet || "").trim();
   if (!payoutWallet) {
     throw Object.assign(new Error("Enter a Solana developer payout wallet. Community Rewards is included with every published coin site."), { statusCode: 400 });
@@ -59162,8 +59178,7 @@ async function createPublicLaunchOsProject(body = {}) {
       } catch { /* a malformed retry record falls through to a normal create */ }
     }
   }
-  const editKey = crypto.randomBytes(24).toString("hex");
-  const project = await createLaunchOsProject("", body, { editorKeyHash: hashWebSecret(editKey), createRequestId: requestId });
+  const project = await createLaunchOsProject("", body, { editorKeyHash, createRequestId: requestId });
   const telegramDelivery = await prepareCoinSiteTelegramDelivery(project.id, editKey, body.telegramUsername);
   return { project, editKey, telegramDelivery };
 }
