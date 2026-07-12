@@ -3,6 +3,8 @@ import crypto from "node:crypto";
 export const SOLANA_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 export const COINBASE_ONRAMP_HOST = "api.cdp.coinbase.com";
 export const COINBASE_ONRAMP_PATH = "/platform/v2/onramp/sessions";
+export const COINBASE_ONRAMP_TOKEN_HOST = "api.developer.coinbase.com";
+export const COINBASE_ONRAMP_TOKEN_PATH = "/onramp/v1/token";
 
 function base64Url(value) {
   return Buffer.from(value).toString("base64url");
@@ -102,14 +104,60 @@ export function normalizeCoinbasePaymentAmount(value) {
   return amount.toFixed(2);
 }
 
+function coinbaseProviderError(response, data = {}) {
+  const providerMessage = [
+    data?.message,
+    data?.error_description,
+    typeof data?.error === "string" ? data.error : data?.error?.message
+  ].find((value) => typeof value === "string" && value.trim());
+  const providerCode = String(data?.code || data?.error?.code || "").trim();
+  const statusText = response.status ? `HTTP ${response.status}${providerCode ? `, ${providerCode}` : ""}` : "provider error";
+  const error = new Error(providerMessage || `Coinbase rejected the funding session (${statusText}).`);
+  error.statusCode = response.status >= 400 && response.status < 500 ? 400 : 502;
+  return error;
+}
+
+async function createCoinbaseHostedTokenSession({ keyId, keySecret, destinationAddress, purchaseCurrency, paymentAmount, redirectUrl, clientIp, partnerUserRef, fetchImpl }) {
+  const body = {
+    addresses: [{ address: String(destinationAddress || "").trim(), blockchains: ["solana"] }],
+    assets: [purchaseCurrency],
+    clientIp: String(clientIp || "").trim()
+  };
+  const token = createCoinbaseCdpJwt({
+    keyId,
+    keySecret,
+    host: COINBASE_ONRAMP_TOKEN_HOST,
+    path: COINBASE_ONRAMP_TOKEN_PATH
+  });
+  const response = await fetchImpl(`https://${COINBASE_ONRAMP_TOKEN_HOST}${COINBASE_ONRAMP_TOKEN_PATH}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(12_000)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data?.token) throw coinbaseProviderError(response, data);
+
+  const url = new URL("https://pay.coinbase.com/buy/select-asset");
+  url.searchParams.set("sessionToken", data.token);
+  if (String(partnerUserRef || "").trim()) url.searchParams.set("partnerUserRef", String(partnerUserRef).trim().slice(0, 50));
+  if (String(redirectUrl || "").trim()) url.searchParams.set("redirectUrl", String(redirectUrl).trim());
+  url.searchParams.set("defaultNetwork", "solana");
+  url.searchParams.set("defaultAsset", purchaseCurrency);
+  url.searchParams.set("presetFiatAmount", paymentAmount);
+  url.searchParams.set("fiatCurrency", "USD");
+  return { onrampUrl: url.toString(), quote: null, asset: purchaseCurrency };
+}
+
 export async function createCoinbaseOnrampSession({ keyId, keySecret, destinationAddress, asset = "USDC", paymentAmount, redirectUrl, clientIp, partnerUserRef, fetchImpl = fetch } = {}) {
   const purchaseCurrency = String(asset || "USDC").trim().toUpperCase();
   if (!new Set(["USDC", "SOL"]).has(purchaseCurrency)) throw new Error("Coinbase funding supports USDC or SOL.");
+  const normalizedPaymentAmount = normalizeCoinbasePaymentAmount(paymentAmount);
   const body = {
     purchaseCurrency,
     destinationNetwork: "solana",
     destinationAddress: String(destinationAddress || "").trim(),
-    paymentAmount: normalizeCoinbasePaymentAmount(paymentAmount),
+    paymentAmount: normalizedPaymentAmount,
     paymentCurrency: "USD",
     redirectUrl: String(redirectUrl || "").trim(),
     clientIp: String(clientIp || "").trim(),
@@ -124,16 +172,20 @@ export async function createCoinbaseOnrampSession({ keyId, keySecret, destinatio
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || !data?.session?.onrampUrl) {
-    const providerMessage = [
-      data?.message,
-      data?.error_description,
-      typeof data?.error === "string" ? data.error : data?.error?.message
-    ].find((value) => typeof value === "string" && value.trim());
-    const providerCode = String(data?.code || data?.error?.code || "").trim();
-    const statusText = response.status ? `HTTP ${response.status}${providerCode ? `, ${providerCode}` : ""}` : "provider error";
-    const error = new Error(providerMessage || `Coinbase rejected the funding session (${statusText}).`);
-    error.statusCode = response.status >= 400 && response.status < 500 ? 400 : 502;
-    throw error;
+    if (response.status === 404) {
+      return createCoinbaseHostedTokenSession({
+        keyId,
+        keySecret,
+        destinationAddress,
+        purchaseCurrency,
+        paymentAmount: normalizedPaymentAmount,
+        redirectUrl,
+        clientIp,
+        partnerUserRef,
+        fetchImpl
+      });
+    }
+    throw coinbaseProviderError(response, data);
   }
   return { onrampUrl: data.session.onrampUrl, quote: data.quote || null, asset: purchaseCurrency };
 }

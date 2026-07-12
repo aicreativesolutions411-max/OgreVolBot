@@ -71,6 +71,37 @@ test("Coinbase session request is Solana-only, preloaded, and returns only the h
   assert.equal(result.onrampUrl, "https://pay.coinbase.com/buy?sessionToken=one-use");
 });
 
+test("Coinbase hosted funding falls back to the documented v1 token flow when v2 is unavailable", async () => {
+  const { privateKey } = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const requests = [];
+  const result = await createCoinbaseOnrampSession({
+    keyId: "organizations/test/apiKeys/key",
+    keySecret: privateKey.export({ type: "pkcs8", format: "pem" }),
+    destinationAddress: "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+    asset: "USDC",
+    paymentAmount: "25",
+    redirectUrl: "https://www.slimewire.org/cash/?onramp=return",
+    clientIp: "192.0.2.1",
+    partnerUserRef: "slimecash-test",
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options, body: JSON.parse(options.body) });
+      if (url.includes("/platform/v2/")) return { ok: false, status: 404, json: async () => ({}) };
+      return { ok: true, status: 200, json: async () => ({ token: "one-use-v1" }) };
+    }
+  });
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].url, "https://api.developer.coinbase.com/onramp/v1/token");
+  assert.deepEqual(requests[1].body.addresses, [{ address: "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN", blockchains: ["solana"] }]);
+  assert.deepEqual(requests[1].body.assets, ["USDC"]);
+  assert.equal(requests[1].body.clientIp, "192.0.2.1");
+  const hostedUrl = new URL(result.onrampUrl);
+  assert.equal(hostedUrl.origin, "https://pay.coinbase.com");
+  assert.equal(hostedUrl.searchParams.get("sessionToken"), "one-use-v1");
+  assert.equal(hostedUrl.searchParams.get("defaultNetwork"), "solana");
+  assert.equal(hostedUrl.searchParams.get("defaultAsset"), "USDC");
+  assert.equal(hostedUrl.searchParams.get("presetFiatAmount"), "25.00");
+});
+
 test("Coinbase session failures preserve a safe provider status for setup diagnostics", async () => {
   const { privateKey } = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
   await assert.rejects(() => createCoinbaseOnrampSession({
