@@ -6,8 +6,8 @@
 <title>SlimeCash — money for the trenches</title>
 <meta name="description" content="SlimeCash: send, receive, and swap coins with your $handle. Money for the trenches.">
 <meta name="theme-color" content="#050705">
-<meta name="slimecash-build" content="4">
-<link rel="manifest" href="/cash/manifest.webmanifest?v=4">
+<meta name="slimecash-build" content="5">
+<link rel="manifest" href="/cash/manifest.webmanifest?v=5">
 <link rel="icon" type="image/png" sizes="64x64" href="/cash/icons/favicon-64.png">
 <link rel="apple-touch-icon" href="/cash/icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -17,7 +17,7 @@
 <meta property="og:title" content="SlimeCash">
 <meta property="og:description" content="Money for the trenches. Send, receive, and swap coins with your $handle.">
 <meta property="og:image" content="https://www.slimewire.org/cash/icons/icon-512.png">
-<link rel="stylesheet" href="/cash/cash.css?v=4">
+<link rel="stylesheet" href="/cash/cash.css?v=5">
 </head>
 <body>
 <div id="splash" class="splash">
@@ -42,7 +42,7 @@
     <div class="action-row">
       <button id="addCashBtn" class="btn primary" type="button">Add cash</button>
       <button id="sendQuickBtn" class="btn ghost" type="button">Send</button>
-      <a class="btn ghost" href="/fun" id="swapLink">Swap</a>
+      <button id="receiveBtn" class="btn ghost" type="button">Receive</button>
     </div>
     <div class="cash-card" id="payCard">
       <img src="/cash/img/card.webp" alt="" class="cash-card-art">
@@ -58,6 +58,10 @@
   <!-- SEND TAB -->
   <section id="view-send" class="view" hidden>
     <div class="section-title">Send</div>
+    <div class="asset-switch" aria-label="Asset to send">
+      <button class="guide-pill active" data-send-asset="USDC" type="button">USDC cash</button>
+      <button class="guide-pill" data-send-asset="SOL" type="button">SOL</button>
+    </div>
     <label class="field-label" for="sendTo">To — $handle or wallet address</label>
     <div class="field-wrap">
       <input id="sendTo" class="field" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="$frankie or 7xKq…">
@@ -99,6 +103,7 @@
       <button class="more-item" id="copyAddressBtn" type="button">Copy wallet address</button>
       <button class="more-item" id="backupBtn" type="button">Back up account + wallets</button>
       <button class="more-item" id="restoreBtn" type="button">Restore account</button>
+      <button class="more-item" id="spendBtn" type="button">Pay in stores</button>
       <button class="more-item" id="installBtn" type="button">Install SlimeCash app</button>
       <a class="more-item" href="/gg" target="_blank" rel="noopener">Open full SlimeWire site ↗</a>
       <button class="more-item danger" id="signOutBtn" type="button">Sign out</button>
@@ -136,7 +141,20 @@
   <div class="sheet">
     <button class="sheet-close" data-close="addcash" type="button" aria-label="Close">×</button>
     <div class="sheet-title">Add cash</div>
-    <p class="sheet-copy">Buy SOL or USDC in an app you already use, send it to your address below, and it lands here automatically.</p>
+    <p class="sheet-copy">Choose cash or SOL. Your address is preloaded when Coinbase quick funding is connected.</p>
+    <div class="asset-switch">
+      <button class="guide-pill active" data-deposit-asset="USDC" type="button">USDC cash</button>
+      <button class="guide-pill" data-deposit-asset="SOL" type="button">SOL</button>
+      <span class="network-chip">Solana network</span>
+    </div>
+    <div class="fund-amounts">
+      <button class="amount-chip" data-fund-amount="25" type="button">$25</button>
+      <button class="amount-chip active" data-fund-amount="50" type="button">$50</button>
+      <button class="amount-chip" data-fund-amount="100" type="button">$100</button>
+      <input id="fundAmount" class="field fund-custom" type="number" inputmode="decimal" min="5" max="2500" step="1" value="50" aria-label="Funding amount">
+    </div>
+    <button id="coinbaseFundBtn" class="btn primary block" type="button">Buy with Coinbase</button>
+    <div id="fundingStatus" class="status"></div>
     <div class="app-guide">
       <button class="guide-pill" data-guide="phantom" type="button">Phantom</button>
       <button class="guide-pill" data-guide="coinbase" type="button">Coinbase</button>
@@ -144,9 +162,52 @@
       <button class="guide-pill" data-guide="other" type="button">Other wallet</button>
     </div>
     <div id="guideSteps" class="guide-steps"></div>
+    <a id="openProviderBtn" class="btn ghost block" href="https://phantom.app/" target="_blank" rel="noopener">Open Phantom</a>
     <div class="qr-wrap"><canvas id="depositQr" width="220" height="220"></canvas></div>
     <button id="copyDepositBtn" class="address-pill" type="button"><span id="depositAddress">…</span><span class="copy-tag">copy</span></button>
+    <a id="openDepositWallet" class="btn ghost block" href="#">Open payment request</a>
     <div id="depositWatch" class="status">Watching for your deposit…</div>
+  </div>
+</div>
+
+<!-- RECEIVE / REQUEST SHEET -->
+<div id="receive" class="sheet-backdrop" hidden>
+  <div class="sheet">
+    <button class="sheet-close" data-close="receive" type="button" aria-label="Close">×</button>
+    <div class="sheet-title">Receive</div>
+    <p class="sheet-copy">Share your address, or request an exact amount through Solana Pay.</p>
+    <div class="asset-switch">
+      <button class="guide-pill active" data-receive-asset="USDC" type="button">USDC cash</button>
+      <button class="guide-pill" data-receive-asset="SOL" type="button">SOL</button>
+      <span class="network-chip">Solana network</span>
+    </div>
+    <label class="field-label" for="receiveAmount">Request amount (optional)</label>
+    <input id="receiveAmount" class="field" type="number" inputmode="decimal" min="0" step="any" placeholder="25.00">
+    <div class="qr-wrap"><canvas id="receiveQr" width="220" height="220"></canvas></div>
+    <button id="copyReceiveBtn" class="address-pill" type="button"><span id="receiveAddress">…</span><span class="copy-tag">copy</span></button>
+    <a id="openReceiveWallet" class="btn primary block" href="#">Open in a Solana wallet</a>
+    <button id="shareReceiveBtn" class="btn ghost block" type="button">Share request</button>
+    <div id="receiveStatus" class="status">USDC arrives as digital dollars. Keep a little SOL for future network fees.</div>
+  </div>
+</div>
+
+<!-- STORE SPEND SHEET -->
+<div id="spend" class="sheet-backdrop" hidden>
+  <div class="sheet">
+    <button class="sheet-close" data-close="spend" type="button" aria-label="Close">×</button>
+    <div class="sheet-title">Pay in stores</div>
+    <div class="spend-option">
+      <b>Solana Pay</b>
+      <span>Pay USDC directly at merchants displaying a Solana Pay QR. This is crypto checkout, not every NFC terminal.</span>
+      <button id="openReceiveFromSpend" class="btn ghost block" type="button">Create a USDC request</button>
+    </div>
+    <div class="spend-option">
+      <b>Fund a tap-to-pay card</b>
+      <span>Eligible users can send USDC to their own Coinbase account, choose USDC for Coinbase Card, then add that card to Apple Pay or Google Pay.</span>
+      <button id="fundCardBtn" class="btn primary block" type="button">Fund my Coinbase Card</button>
+      <a class="btn ghost block" href="https://www.coinbase.com/card" target="_blank" rel="noopener">Open Coinbase Card</a>
+    </div>
+    <div class="status">A SlimeCash-branded tap card needs issuer approval. Bridge + Stripe and Rain are the provider-ready paths; cardholder verification still applies.</div>
   </div>
 </div>
 
@@ -198,11 +259,12 @@
     <div class="sheet-title center">Install SlimeCash</div>
     <p class="sheet-copy center">SlimeCash installs as its own app with its own green dollar icon. It stays separate from SlimeWire on your home screen while securely sharing the same account and wallets.</p>
     <div id="installSteps" class="guide-steps"></div>
+    <button id="openInstallBrowserBtn" class="btn ghost block" type="button">Open install page in browser</button>
     <button class="btn primary block" data-close="installguide" type="button">Got it</button>
   </div>
 </div>
 
 <div id="toast" class="toast" hidden></div>
-<script src="/cash/cash.js?v=4"></script>
+<script src="/cash/cash.js?v=5"></script>
 </body>
 </html>

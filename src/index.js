@@ -110,6 +110,12 @@ import * as callerIntel from "./lib/callerIntel.js";
 import { computeCalibration as computeAutopilotCalibration, computeCalibrationByMode, modeScorecard } from "./lib/selfCalibration.js";
 import { r2PutObject, r2Configured } from "./lib/r2.js";
 import {
+  SOLANA_USDC_MINT,
+  createCoinbaseOnrampSession,
+  parseCashDecimalToRaw,
+  rawCashAmountToUi
+} from "./lib/cashPayments.js";
+import {
   appendLimited,
   compareBigInt,
   dexScreenerUrl,
@@ -5455,6 +5461,10 @@ function loadConfig() {
     heliusWebhookId: String(process.env.HELIUS_WEBHOOK_ID || "").trim(),
     heliusWebhookSecret: String(process.env.HELIUS_WEBHOOK_SECRET || "").trim(),
     appSecret: secret,
+    coinbaseCdpKeyId: String(process.env.COINBASE_CDP_KEY_ID || process.env.CDP_API_KEY_ID || "").trim(),
+    coinbaseCdpKeySecret: String(process.env.COINBASE_CDP_KEY_SECRET || process.env.CDP_API_KEY_SECRET || "").trim(),
+    coinbaseHeadlessOnrampEnabled: parseBoolean(process.env.COINBASE_HEADLESS_ONRAMP_ENABLED || "false"),
+    cashPublicOrigin: String(process.env.CASH_PUBLIC_ORIGIN || "https://www.slimewire.org").trim().replace(/\/+$/, ""),
     dataDir: path.resolve(process.cwd(), process.env.DATA_DIR || path.join(__dirname, "..", "data")),
     allowEphemeralStorage: parseBoolean(process.env.ALLOW_EPHEMERAL_STORAGE || "false"),
     autoSendRecoveryKeyFile: parseBoolean(process.env.AUTO_SEND_RECOVERY_KEY_FILE || "true"),
@@ -9375,6 +9385,62 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/cash/assets") {
+      try {
+        sendWebJson(request, response, 200, { ok: true, ...(await webCashAssets(auth.userId)) });
+      } catch (error) {
+        sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) });
+      }
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/cash/funding") {
+      const coinbaseConfigured = Boolean(CONFIG.coinbaseCdpKeyId && CONFIG.coinbaseCdpKeySecret);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        network: "solana",
+        assets: ["USDC", "SOL"],
+        providers: {
+          coinbase: { integrated: coinbaseConfigured, url: "https://www.coinbase.com/buy" },
+          phantom: { integrated: false, url: "https://phantom.app/" },
+          robinhood: { integrated: false, url: "https://robinhood.com/crypto/SOL" }
+        },
+        headlessApplePay: {
+          enabled: coinbaseConfigured && CONFIG.coinbaseHeadlessOnrampEnabled,
+          status: CONFIG.coinbaseHeadlessOnrampEnabled ? "provider_configured" : "approval_required"
+        }
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/cash/onramp-session") {
+      const body = await readJsonRequestBody(request);
+      try {
+        if (!CONFIG.coinbaseCdpKeyId || !CONFIG.coinbaseCdpKeySecret) {
+          const error = new Error("Coinbase quick funding is awaiting provider setup. Use Copy address and open Coinbase for now.");
+          error.statusCode = 503;
+          throw error;
+        }
+        const wallet = await cashPrimaryWallet(auth.userId);
+        if (!wallet) throw new Error("Create your SlimeCash wallet first.");
+        const result = await createCoinbaseOnrampSession({
+          keyId: CONFIG.coinbaseCdpKeyId,
+          keySecret: CONFIG.coinbaseCdpKeySecret,
+          destinationAddress: wallet.publicKey,
+          asset: body.asset,
+          paymentAmount: body.paymentAmount,
+          redirectUrl: `${CONFIG.cashPublicOrigin}/cash/?onramp=return`,
+          clientIp: webClientKey(request),
+          partnerUserRef: `slimecash-${hashWebSecret(auth.userId).slice(0, 32)}`
+        });
+        await audit("cash_onramp_session", { userId: auth.userId, asset: result.asset, wallet: wallet.publicKey });
+        sendWebJson(request, response, 200, { ok: true, ...result, address: wallet.publicKey });
+      } catch (error) {
+        sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) });
+      }
+      return;
+    }
+
     // SlimeCash: claim (or change) the account's $handle.
     if (request.method === "POST" && pathname === "/api/web/cash/handle") {
       const body = await readJsonRequestBody(request);
@@ -9405,7 +9471,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "POST" && pathname === "/api/web/cash/send") {
       const body = await readJsonRequestBody(request);
       try {
-        const result = await webCashSendSol(auth.userId, body);
+        const result = await webCashSend(auth.userId, body);
         sendWebJson(request, response, 200, { ok: true, ...result });
       } catch (error) {
         sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) });
@@ -67309,11 +67375,44 @@ async function webSplitCreatorFeesCore(userId, body = {}) {
 // Fee is charged silently (owner call 2026-07-10, same rule as PvP perp fees).
 // RH-chain trades already charge this policy in ETH and auto-sweep to the same
 // SOL fee wallet via rhSweepFeesToSol.
-async function webCashSendSol(userId, body = {}) {
+async function webCashAssets(userId) {
+  const store = await readWalletStore();
+  const owned = walletsForOwner(store, userId);
+  const wallet = owned.find((row) => !row.volumeBot && !row.ephemeral && !row.sessionWallet);
+  if (!wallet) {
+    const error = new Error("Create your SlimeCash wallet first.");
+    error.statusCode = 404;
+    throw error;
+  }
+  const walletIndex = owned.indexOf(wallet) + 1;
+  const owner = new PublicKey(wallet.publicKey);
+  const [lamports, lookup] = await Promise.all([
+    getSolBalanceCached(owner, { force: false }),
+    getOwnedTokenAccountsWithWarningsCached(owner, { force: false })
+  ]);
+  const usdc = aggregateTokenAccountsForMint(lookup.accounts || [], SOLANA_USDC_MINT);
+  return {
+    wallet: { index: walletIndex, address: wallet.publicKey, label: wallet.label },
+    assets: {
+      SOL: { rawAmount: String(lamports), uiAmount: String(lamportsToSol(lamports)), decimals: 9 },
+      USDC: { mint: SOLANA_USDC_MINT, rawAmount: String(usdc?.rawAmount || 0n), uiAmount: usdc?.uiAmount || "0", decimals: 6 }
+    },
+    warnings: lookup.warnings || []
+  };
+}
+
+async function webCashSend(userId, body = {}) {
   return runIdempotentMoneyOp("cash-send", userId,
     firstString(body.sendAttemptId, body.tradeAttemptId, body.clientRequestId),
-    () => webCashSendSolCore(userId, body),
+    () => webCashSendCore(userId, body),
     { busyMessage: "This send is already submitting - SlimeCash won't send it twice." });
+}
+
+async function webCashSendCore(userId, body = {}) {
+  const asset = String(body.asset || (body.amountSol ? "SOL" : "USDC")).trim().toUpperCase();
+  if (asset === "SOL") return webCashSendSolCore(userId, body);
+  if (asset === "USDC") return webCashSendUsdcCore(userId, body);
+  throw new Error("Choose USDC or SOL.");
 }
 
 async function webCashSendSolCore(userId, body = {}) {
@@ -67367,8 +67466,100 @@ async function webCashSendSolCore(userId, body = {}) {
   await audit("cash_send", { userId, walletIndex, destination: destination.toBase58(), amountSol: lamportsToSol(amountLamports), feeLamports, signature });
   return {
     action: "cash-send",
+    asset: "SOL",
     source: webWalletRef(wallet),
     amountSol: lamportsToSol(amountLamports),
+    destination: destination.toBase58(),
+    signature
+  };
+}
+
+async function webCashSendUsdcCore(userId, body = {}) {
+  const store = await readWalletStore();
+  const walletIndex = parseWebWalletIndex(body.fromWalletIndex || body.walletIndex);
+  const wallet = { ...getWalletAt(store, walletIndex, userId), webIndex: walletIndex };
+  const destinations = splitWebDestinationList(body.destination || body.destinations);
+  if (destinations.length !== 1) throw new Error("SlimeCash sends go to exactly one destination.");
+  const destination = destinations[0];
+  const keypair = decryptWallet(wallet);
+  if (keypair.publicKey.equals(destination)) throw new Error("That destination is this wallet.");
+
+  const amountRaw = parseCashDecimalToRaw(body.amount ?? body.amountUsdc, 6, "USDC amount");
+  let feeRaw = (amountRaw * BigInt(CONFIG.bundleFeeBps)) / 10_000n;
+  if (feeRaw < 5_000n || !CONFIG.feeWallet) feeRaw = 0n;
+  const requiredRaw = amountRaw + feeRaw;
+  const mint = new PublicKey(SOLANA_USDC_MINT);
+  const lookup = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey, { force: true });
+  const matching = (lookup.accounts || [])
+    .filter((account) => account.mint === SOLANA_USDC_MINT && account.rawAmount > 0n)
+    .sort((left, right) => compareBigInt(right.rawAmount, left.rawAmount));
+  const totalRaw = matching.reduce((sum, account) => sum + account.rawAmount, 0n);
+  if (totalRaw < requiredRaw) {
+    throw new Error(`Not enough USDC. You have $${rawCashAmountToUi(totalRaw, 6)} and this send needs $${rawCashAmountToUi(requiredRaw, 6)} including the app fee.`);
+  }
+  const sourceAccounts = matching.slice(0, 4);
+  if (sourceAccounts.reduce((sum, account) => sum + account.rawAmount, 0n) < requiredRaw) {
+    throw new Error("Your USDC is split across too many token accounts. Sweep it into one wallet first, then retry.");
+  }
+
+  const tokenProgramId = new PublicKey(sourceAccounts[0]?.tokenProgramId || TOKEN_PROGRAM_ID);
+  const destinationAta = getAssociatedTokenAddress(mint, destination, tokenProgramId);
+  const feeOwner = feeRaw > 0n ? new PublicKey(CONFIG.feeWallet) : null;
+  const feeAta = feeOwner ? getAssociatedTokenAddress(mint, feeOwner, tokenProgramId) : null;
+  const tx = new Transaction();
+  const [destinationInfo, feeInfo] = await Promise.all([
+    rpcWithRetry("check cash destination USDC account", () => connection.getAccountInfo(destinationAta, "confirmed")),
+    feeAta && !feeAta.equals(destinationAta)
+      ? rpcWithRetry("check cash fee USDC account", () => connection.getAccountInfo(feeAta, "confirmed"))
+      : Promise.resolve(null)
+  ]);
+  let missingAtas = 0;
+  if (!destinationInfo) {
+    tx.add(createAssociatedTokenAccountInstruction(keypair.publicKey, destinationAta, destination, mint, tokenProgramId));
+    missingAtas += 1;
+  }
+  if (feeAta && !feeAta.equals(destinationAta) && !feeInfo) {
+    tx.add(createAssociatedTokenAccountInstruction(keypair.publicKey, feeAta, feeOwner, mint, tokenProgramId));
+    missingAtas += 1;
+  }
+  const solBalance = await getSolBalanceCached(keypair.publicKey, { force: true });
+  const estimatedNetworkLamports = 15_000 + missingAtas * 2_100_000;
+  if (solBalance < estimatedNetworkLamports) {
+    throw new Error(`USDC sends need a little SOL for network${missingAtas ? " and token-account rent" : ""}. Add about ${lamportsToSol(estimatedNetworkLamports)} SOL, then retry.`);
+  }
+
+  const sources = sourceAccounts.map((account) => ({ ...account, remaining: account.rawAmount }));
+  const addTransfers = (targetAta, requestedRaw) => {
+    let remaining = requestedRaw;
+    for (const account of sources) {
+      if (remaining <= 0n) break;
+      const raw = account.remaining < remaining ? account.remaining : remaining;
+      if (raw <= 0n) continue;
+      tx.add(createTransferCheckedInstruction(new PublicKey(account.pubkey), mint, targetAta, keypair.publicKey, raw, 6, [], tokenProgramId));
+      account.remaining -= raw;
+      remaining -= raw;
+    }
+    if (remaining > 0n) throw new Error("USDC balance changed before the send could be built. Refresh and retry.");
+  };
+  if (feeAta?.equals(destinationAta)) addTransfers(destinationAta, requiredRaw);
+  else {
+    addTransfers(destinationAta, amountRaw);
+    if (feeAta && feeRaw > 0n) addTransfers(feeAta, feeRaw);
+  }
+
+  const signature = await sendLegacyTransaction(tx, [keypair]);
+  invalidateWalletReadCache(wallet.publicKey);
+  invalidateWalletReadCache(destination.toBase58());
+  if (feeOwner) invalidateWalletReadCache(feeOwner.toBase58());
+  const amountUsdc = rawCashAmountToUi(amountRaw, 6);
+  const feeUsdc = rawCashAmountToUi(feeRaw, 6);
+  await audit("cash_send", { userId, walletIndex, asset: "USDC", destination: destination.toBase58(), amountUsdc, feeUsdc, signature });
+  return {
+    action: "cash-send",
+    asset: "USDC",
+    source: webWalletRef(wallet),
+    amountUsdc,
+    feeUsdc,
     destination: destination.toBase58(),
     signature
   };

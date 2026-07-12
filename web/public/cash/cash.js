@@ -16,12 +16,18 @@
     token: localStorage.getItem(TOKEN_KEY) || "",
     wallet: null,          // { index, publicKey }
     lamports: null,
+    usdcRaw: null,
+    usdc: 0,
     tokens: [],
     solUsd: 0,
     tokenUsd: {},          // mint -> priceUsd
     handle: "",
     displayHandle: "",
     amountUnit: "USD",
+    sendAsset: "USDC",
+    depositAsset: "USDC",
+    receiveAsset: "USDC",
+    funding: null,
     resolved: null,        // { address, handle } for send target
     depositTimer: null,
     deferredInstall: null,
@@ -249,13 +255,26 @@
     openSheet("recovery");
   }
 
-  function cashAppInstalled() {
+  function runningStandalone() {
     return window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator.standalone === true;
+  }
+
+  function cashAppInstalled() {
+    return runningStandalone() && new URLSearchParams(location.search).get("src") === "slimecash-pwa";
   }
 
   function openInstallGuide() {
     const ios = /iphone|ipad|ipod/i.test(navigator.userAgent || "");
-    $("installSteps").innerHTML = (ios ? [
+    const embedded = runningStandalone();
+    $("installSteps").innerHTML = (embedded ? (ios ? [
+      "1. SlimeCash is open inside the SlimeWire app right now.",
+      "2. Copy the install link below, then choose Open in Safari from your app menu.",
+      "3. In Safari, Share → Add to Home Screen for a separate SlimeCash icon."
+    ] : [
+      "1. SlimeCash is open inside the SlimeWire app right now.",
+      "2. Tap Open install page in browser below.",
+      "3. In Chrome, choose Install app for a separate SlimeCash icon."
+    ]) : ios ? [
       "1. Tap the Share button in Safari.",
       "2. Choose Add to Home Screen.",
       "3. Tap Add — the separate SlimeCash app appears with its green dollar icon."
@@ -277,6 +296,20 @@
       if (choice?.outcome === "accepted") { toast("SlimeCash installed"); return; }
     }
     openInstallGuide();
+  }
+
+  function openInstallPageInBrowser() {
+    const url = "https://www.slimewire.org/cash/?install=1";
+    if (/android/i.test(navigator.userAgent || "")) {
+      location.href = "intent://www.slimewire.org/cash/?install=1#Intent;scheme=https;package=com.android.chrome;end";
+      return;
+    }
+    if (runningStandalone()) {
+      copyText(url);
+      toast("Install link copied — use Open in Safari/Chrome from your app menu");
+      return;
+    }
+    window.open(url, "_blank", "noopener");
   }
 
   async function restoreCashAccount() {
@@ -373,42 +406,43 @@
   /* ---------------- balance ---------------- */
   async function refreshBalance({ silent = false } = {}) {
     if (!state.token) return;
-    const result = await get("/api/web/balances");
+    const result = await get("/api/web/cash/assets");
     if (result.status === 401) { setToken(""); showOnboard(); return; }
     if (!result.ok) { if (!silent) toast(result.data.error || "Could not load balance.", true); return; }
-    const rows = (result.data.balances || []).filter((row) => !row.volumeBot);
-    const row = rows.find((item) => item.publicKey === state.wallet?.publicKey) || rows[0];
-    if (!row) return;
-    const previous = state.lamports;
-    state.lamports = Number(row.lamports || 0);
-    state.tokens = row.tokens || [];
-    await refreshTokenPrices(state.tokens.map((token) => token.mint));
+    const previousSol = state.lamports;
+    const previousUsdc = state.usdcRaw;
+    state.lamports = Number(result.data.assets?.SOL?.rawAmount || 0);
+    state.usdcRaw = Number(result.data.assets?.USDC?.rawAmount || 0);
+    state.usdc = Number(result.data.assets?.USDC?.uiAmount || 0);
+    if (result.data.wallet?.address) state.wallet = { index: result.data.wallet.index, publicKey: result.data.wallet.address };
     renderBalance();
-    // Deposit detection: any SOL increase while we're watching = money arrived.
-    if (previous !== null && state.lamports > previous + 10000) {
-      const gainedSol = (state.lamports - previous) / 1e9;
+    if (previousUsdc !== null && state.usdcRaw > previousUsdc) {
+      const gainedUsdc = (state.usdcRaw - previousUsdc) / 1e6;
+      addActivity({ type: "in", title: "USDC arrived", sub: "Digital dollars landed on Solana", amountUsd: gainedUsdc, at: Date.now() });
+      toast(`+$${gainedUsdc.toFixed(2)} USDC added — ready to use`);
+      $("depositWatch").textContent = `+$${gainedUsdc.toFixed(2)} USDC received`;
+      $("depositWatch").className = "status ok";
+      renderActivity();
+    }
+    if (previousSol !== null && state.lamports > previousSol + 10000) {
+      const gainedSol = (state.lamports - previousSol) / 1e9;
       addActivity({ type: "in", title: "Deposit arrived", sub: "SOL landed in your wallet", amountUsd: gainedSol * state.solUsd, at: Date.now() });
       toast(`+${formatUsd(gainedSol * state.solUsd)} added — ready to use`);
+      $("depositWatch").textContent = `+${gainedSol.toFixed(4)} SOL received`;
+      $("depositWatch").className = "status ok";
       renderActivity();
     }
   }
 
   function totalUsd() {
     const sol = (state.lamports || 0) / 1e9;
-    let total = sol * state.solUsd;
-    for (const token of state.tokens) {
-      const price = state.tokenUsd[token.mint];
-      if (price) total += Number(token.uiAmount || 0) * price;
-    }
-    return total;
+    return state.usdc + sol * state.solUsd;
   }
 
   function renderBalance() {
     const sol = (state.lamports || 0) / 1e9;
     $("balanceUsd").textContent = formatUsd(totalUsd());
-    const pricedCoins = state.tokens.filter((token) => state.tokenUsd[token.mint]).length;
-    const extra = state.tokens.length ? ` · ${state.tokens.length} coin${state.tokens.length === 1 ? "" : "s"}${pricedCoins < state.tokens.length ? " (some unpriced)" : ""}` : "";
-    $("balanceSub").textContent = `${sol.toFixed(4)} SOL${extra}`;
+    $("balanceSub").textContent = `$${state.usdc.toFixed(2)} USDC · ${sol.toFixed(4)} SOL`;
   }
 
   /* ---------------- activity (device-local) ---------------- */
@@ -513,9 +547,29 @@
     return state.solUsd > 0 ? raw / state.solUsd : 0;
   }
 
+  function sendUsdValue() {
+    const raw = Number($("sendAmount").value || 0);
+    if (!(raw > 0)) return 0;
+    return state.sendAsset === "USDC" ? raw : amountToSol() * state.solUsd;
+  }
+
+  function selectSendAsset(asset) {
+    state.sendAsset = asset === "SOL" ? "SOL" : "USDC";
+    document.querySelectorAll("[data-send-asset]").forEach((button) => button.classList.toggle("active", button.dataset.sendAsset === state.sendAsset));
+    $("amountUnit").textContent = state.sendAsset === "USDC" ? "USDC" : state.amountUnit;
+    $("amountUnit").disabled = state.sendAsset === "USDC";
+    $("sendAmount").placeholder = state.sendAsset === "USDC" ? "0.00" : "0.00";
+    renderAmountAlt();
+  }
+
   function renderAmountAlt() {
-    const sol = amountToSol();
     const alt = $("amountAlt");
+    if (state.sendAsset === "USDC") {
+      const amount = Number($("sendAmount").value || 0);
+      alt.textContent = amount > 0 ? `$${amount.toFixed(2)} digital dollars on Solana` : "";
+      return;
+    }
+    const sol = amountToSol();
     if (!(sol > 0)) { alt.textContent = ""; return; }
     alt.textContent = state.amountUnit === "USD"
       ? `≈ ${sol.toFixed(4)} SOL`
@@ -525,20 +579,24 @@
   async function submitSend() {
     const target = state.resolved;
     const sol = amountToSol();
+    const usdc = Number($("sendAmount").value || 0);
+    const amount = state.sendAsset === "USDC" ? usdc : sol;
     const status = $("sendStatus");
     if (!target) { status.textContent = "Pick who you're sending to first."; status.className = "status bad"; return; }
-    if (!(sol > 0)) { status.textContent = "Enter an amount."; status.className = "status bad"; return; }
+    if (!(amount > 0)) { status.textContent = "Enter an amount."; status.className = "status bad"; return; }
     const to = target.handle ? `$${target.handle}` : shortAddress(target.address);
+    const amountText = state.sendAsset === "USDC" ? `$${usdc.toFixed(2)} USDC` : `${sol.toFixed(4)} SOL (${formatUsd(sol * state.solUsd)})`;
     $("confirmSummary").innerHTML =
-      `Send <b>${formatUsd(sol * state.solUsd)}</b> (${sol.toFixed(4)} SOL)<br>` +
+      `Send <b>${amountText}</b><br>` +
       `to <b>${escapeHtml(to)}</b><br>` +
-      `<span style="color:var(--dim);font-size:12px">arrives on-chain in seconds · network fee ~0.000005 SOL</span>`;
+      `<span style="color:var(--dim);font-size:12px">Solana network · 0.5% app fee · ${state.sendAsset === "USDC" ? "a little SOL is needed for network fees" : "network fee ~0.000005 SOL"}</span>`;
     openSheet("confirm");
   }
 
   async function confirmSend() {
     const target = state.resolved;
     const sol = amountToSol();
+    const usdc = Number($("sendAmount").value || 0);
     const note = $("sendNote").value.trim();
     const button = $("confirmSendBtn");
     button.disabled = true;
@@ -546,7 +604,8 @@
     const result = await post("/api/web/cash/send", {
       fromWalletIndex: state.wallet?.index || 1,
       destination: target.address,
-      amountSol: String(sol),
+      asset: state.sendAsset,
+      ...(state.sendAsset === "USDC" ? { amount: String(usdc) } : { amountSol: String(sol) }),
       sendAttemptId: crypto.randomUUID()
     });
     button.disabled = false;
@@ -554,7 +613,7 @@
     if (result.ok) {
       closeSheet("confirm");
       const to = target.handle ? `$${target.handle}` : shortAddress(target.address);
-      addActivity({ type: "out", title: `To ${to}`, sub: note || "sent", amountUsd: sol * state.solUsd, at: Date.now() });
+      addActivity({ type: "out", title: `To ${to}`, sub: note || `${state.sendAsset} sent`, amountUsd: sendUsdValue(), at: Date.now() });
       renderActivity();
       $("sendStatus").textContent = `Sent. Signature ${String(result.data.signature || "").slice(0, 8)}…`;
       $("sendStatus").className = "status ok";
@@ -573,11 +632,59 @@
 
   /* ---------------- add cash ---------------- */
   const GUIDES = {
-    phantom: ["1. Open Phantom and buy SOL with card or Apple Pay", "2. Tap Send → paste your address below", "3. It lands here in seconds"],
-    coinbase: ["1. In Coinbase, buy SOL (or USDC on Solana)", "2. Tap Send → paste your address below", "3. Pick the Solana network — that part matters"],
-    robinhood: ["1. In Robinhood, buy SOL", "2. Crypto → SOL → Send → paste your address", "3. Confirm — it lands here in minutes"],
-    other: ["Send SOL or any Solana token to your address below from any wallet or exchange.", "Always choose the Solana network."]
+    phantom: ["1. Open Phantom and choose Send", "2. Paste your SlimeCash address", "3. Choose the same asset shown above on Solana"],
+    coinbase: ["1. Use Buy with Coinbase above for a preloaded checkout", "2. Or copy this address into Coinbase Send", "3. Choose the Solana network — that part matters"],
+    robinhood: ["1. Open Robinhood Crypto and choose Send", "2. Paste your SlimeCash address", "3. Send SOL on Solana; asset availability can vary"],
+    other: ["Send the selected asset to your address below from any compatible wallet or exchange.", "Always choose the Solana network."]
   };
+
+  function solanaPayUrl(address, asset = "USDC", amount = "", message = "") {
+    const params = new URLSearchParams();
+    if (Number(amount) > 0) params.set("amount", String(Number(amount)));
+    if (asset === "USDC") params.set("spl-token", USDC_MINT);
+    params.set("label", state.displayHandle ? `$${state.displayHandle} on SlimeCash` : "SlimeCash");
+    if (message) params.set("message", message.slice(0, 80));
+    return `solana:${address}?${params.toString()}`;
+  }
+
+  function selectDepositAsset(asset) {
+    state.depositAsset = asset === "SOL" ? "SOL" : "USDC";
+    document.querySelectorAll("[data-deposit-asset]").forEach((button) => button.classList.toggle("active", button.dataset.depositAsset === state.depositAsset));
+    if (state.wallet) $("openDepositWallet").href = solanaPayUrl(state.wallet.publicKey, state.depositAsset);
+    $("depositWatch").textContent = `Watching ${state.depositAsset} on Solana…`;
+    $("depositWatch").className = "status";
+  }
+
+  async function refreshFundingConfig() {
+    if (state.funding) return state.funding;
+    const result = await get("/api/web/cash/funding");
+    if (result.ok) state.funding = result.data;
+    return state.funding;
+  }
+
+  async function startCoinbaseFunding() {
+    const amount = Number($("fundAmount").value || 0);
+    const button = $("coinbaseFundBtn");
+    const status = $("fundingStatus");
+    if (!(amount >= 5 && amount <= 2500)) {
+      status.textContent = "Choose an amount from $5 to $2,500.";
+      status.className = "status bad";
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "Opening Coinbase…";
+    const result = await post("/api/web/cash/onramp-session", { asset: state.depositAsset, paymentAmount: amount });
+    button.disabled = false;
+    button.textContent = "Buy with Coinbase";
+    if (result.ok && /^https:\/\/pay\.coinbase\.com\//i.test(result.data.onrampUrl || "")) {
+      location.assign(result.data.onrampUrl);
+      return;
+    }
+    await copyText(state.wallet.publicKey);
+    status.textContent = result.data.error || "Address copied. Coinbase opens next; choose Solana when sending.";
+    status.className = "status bad";
+    window.open(state.funding?.providers?.coinbase?.url || "https://www.coinbase.com/buy", "_blank", "noopener");
+  }
 
   function openAddCash() {
     if (!state.wallet) { toast("Wallet still setting up — try again in a second.", true); return; }
@@ -585,9 +692,18 @@
     selectGuide(guide);
     $("depositAddress").textContent = state.wallet.publicKey;
     QR.draw($("depositQr"), state.wallet.publicKey);
+    selectDepositAsset(state.depositAsset);
+    refreshFundingConfig().then((funding) => {
+      const integrated = Boolean(funding?.providers?.coinbase?.integrated);
+      $("fundingStatus").textContent = integrated
+        ? "Coinbase checkout is connected. Card, bank, Apple Pay, and limits depend on your Coinbase region/account."
+        : "Coinbase quick funding is provider-ready; until credentials are enabled, your address is copied for the normal Coinbase send flow.";
+      $("fundingStatus").className = "status";
+    });
     openSheet("addcash");
     stopDepositWatch();
-    state.depositTimer = setInterval(() => refreshBalance({ silent: true }), 15000);
+    refreshBalance({ silent: true });
+    state.depositTimer = setInterval(() => refreshBalance({ silent: true }), 5000);
   }
 
   function stopDepositWatch() {
@@ -596,8 +712,48 @@
 
   function selectGuide(key) {
     localStorage.setItem(GUIDE_KEY, key);
-    document.querySelectorAll(".guide-pill").forEach((pill) => pill.classList.toggle("active", pill.dataset.guide === key));
+    document.querySelectorAll("[data-guide]").forEach((pill) => pill.classList.toggle("active", pill.dataset.guide === key));
     $("guideSteps").innerHTML = (GUIDES[key] || GUIDES.other).map((step) => `<div>${escapeHtml(step)}</div>`).join("");
+    const provider = $("openProviderBtn");
+    const rows = {
+      phantom: ["Open Phantom", state.funding?.providers?.phantom?.url || "https://phantom.app/"],
+      coinbase: ["Open Coinbase", state.funding?.providers?.coinbase?.url || "https://www.coinbase.com/buy"],
+      robinhood: ["Open Robinhood", state.funding?.providers?.robinhood?.url || "https://robinhood.com/crypto/SOL"],
+      other: ["Open Solana Pay request", state.wallet ? solanaPayUrl(state.wallet.publicKey, state.depositAsset) : "#"]
+    };
+    const selected = rows[key] || rows.other;
+    provider.textContent = selected[0];
+    provider.href = selected[1];
+  }
+
+  function receiveRequestUrl() {
+    return solanaPayUrl(state.wallet.publicKey, state.receiveAsset, $("receiveAmount").value, "SlimeCash payment request");
+  }
+
+  function renderReceiveRequest() {
+    if (!state.wallet) return;
+    document.querySelectorAll("[data-receive-asset]").forEach((button) => button.classList.toggle("active", button.dataset.receiveAsset === state.receiveAsset));
+    $("receiveAddress").textContent = state.wallet.publicKey;
+    QR.draw($("receiveQr"), state.wallet.publicKey);
+    $("openReceiveWallet").href = receiveRequestUrl();
+    $("receiveStatus").textContent = state.receiveAsset === "USDC"
+      ? "USDC arrives as digital dollars. The QR is your Solana address; the button includes the exact USDC request."
+      : "SOL arrives on Solana. The button includes the requested amount when entered.";
+  }
+
+  function openReceive() {
+    if (!state.wallet) { toast("Wallet still setting up — try again in a second.", true); return; }
+    renderReceiveRequest();
+    openSheet("receive");
+  }
+
+  async function shareReceive() {
+    const url = receiveRequestUrl();
+    const text = `${state.receiveAsset} payment request${Number($("receiveAmount").value) > 0 ? ` for ${$("receiveAmount").value} ${state.receiveAsset}` : ""}`;
+    if (navigator.share) {
+      try { await navigator.share({ title: "SlimeCash request", text, url }); return; } catch { /* copy fallback */ }
+    }
+    copyText(url);
   }
 
   /* ---------------- pay page ---------------- */
@@ -698,6 +854,7 @@
       refreshProfile();
       refreshBalance();
     }
+    selectSendAsset("USDC");
 
     // Deep links: ?pay=handle opens a pay page, ?tab= / ?sheet= from app shortcuts.
     const pay = params.get("pay");
@@ -705,6 +862,15 @@
     const tab = params.get("tab");
     if (tab && ["home", "send", "terminal", "more"].includes(tab)) switchTab(tab);
     if (params.get("sheet") === "addcash" && ready) openAddCash();
+    if (params.get("onramp") === "return" && ready) {
+      toast("Checking for your Coinbase deposit…");
+      let checks = 0;
+      const timer = setInterval(() => {
+        refreshBalance({ silent: true });
+        checks += 1;
+        if (checks >= 18) clearInterval(timer);
+      }, 5000);
+    }
 
     setInterval(() => { refreshSolPrice(); refreshBalance({ silent: true }); }, 60000);
   }
@@ -714,16 +880,32 @@
     const close = event.target.closest("[data-close]");
     if (close) closeSheet(close.dataset.close);
     const pill = event.target.closest(".guide-pill");
-    if (pill) selectGuide(pill.dataset.guide);
+    if (pill?.dataset.guide) selectGuide(pill.dataset.guide);
+    if (pill?.dataset.sendAsset) selectSendAsset(pill.dataset.sendAsset);
+    if (pill?.dataset.depositAsset) selectDepositAsset(pill.dataset.depositAsset);
+    if (pill?.dataset.receiveAsset) {
+      state.receiveAsset = pill.dataset.receiveAsset === "SOL" ? "SOL" : "USDC";
+      renderReceiveRequest();
+    }
+    const amountChip = event.target.closest("[data-fund-amount]");
+    if (amountChip) {
+      $("fundAmount").value = amountChip.dataset.fundAmount;
+      document.querySelectorAll("[data-fund-amount]").forEach((button) => button.classList.toggle("active", button === amountChip));
+    }
     const tabButton = event.target.closest(".tab");
     if (tabButton) switchTab(tabButton.dataset.tab);
   });
 
   $("addCashBtn").addEventListener("click", openAddCash);
+  $("receiveBtn").addEventListener("click", openReceive);
   $("sendQuickBtn").addEventListener("click", () => switchTab("send"));
   $("sendBtn").addEventListener("click", submitSend);
   $("confirmSendBtn").addEventListener("click", confirmSend);
   $("copyDepositBtn").addEventListener("click", () => state.wallet && copyText(state.wallet.publicKey));
+  $("coinbaseFundBtn").addEventListener("click", startCoinbaseFunding);
+  $("copyReceiveBtn").addEventListener("click", () => state.wallet && copyText(state.wallet.publicKey));
+  $("shareReceiveBtn").addEventListener("click", shareReceive);
+  $("receiveAmount").addEventListener("input", renderReceiveRequest);
   $("copyAddressBtn").addEventListener("click", () => state.wallet && copyText(state.wallet.publicKey));
   $("avatarBtn").addEventListener("click", () => switchTab("more"));
 
@@ -742,6 +924,7 @@
   });
   $("sendAmount").addEventListener("input", renderAmountAlt);
   $("amountUnit").addEventListener("click", () => {
+    if (state.sendAsset === "USDC") return;
     state.amountUnit = state.amountUnit === "USD" ? "SOL" : "USD";
     $("amountUnit").textContent = state.amountUnit;
     renderAmountAlt();
@@ -807,6 +990,17 @@
   });
 
   $("restoreBtn").addEventListener("click", openRecovery);
+  $("spendBtn").addEventListener("click", () => openSheet("spend"));
+  $("openReceiveFromSpend").addEventListener("click", () => { closeSheet("spend"); state.receiveAsset = "USDC"; openReceive(); });
+  $("fundCardBtn").addEventListener("click", () => {
+    closeSheet("spend");
+    switchTab("send");
+    selectSendAsset("USDC");
+    $("sendTo").value = "";
+    $("resolveHint").textContent = "In Coinbase: Receive → USDC → Solana. Paste that exact address here, then send a small test first.";
+    $("resolveHint").className = "field-hint ok";
+    $("sendTo").focus();
+  });
   $("recoveryBtn").addEventListener("click", restoreCashAccount);
   $("recoveryFile").addEventListener("change", () => {
     const file = $("recoveryFile").files?.[0];
@@ -826,6 +1020,7 @@
 
   $("installBtn").addEventListener("click", installCashApp);
   $("installOnboardBtn").addEventListener("click", installCashApp);
+  $("openInstallBrowserBtn").addEventListener("click", openInstallPageInBrowser);
 
   $("signOutBtn").addEventListener("click", () => {
     if (!confirm("Sign out? Make sure your SlimeCash recovery backup is saved first.")) return;

@@ -279,6 +279,14 @@ services:
         value: https://www.slimewire.org,https://slimewire.org,https://ogrevolbot.pages.dev,https://*.ogrevolbot.pages.dev
       - key: WEB_SESSION_TTL_HOURS
         value: 720
+      - key: CASH_PUBLIC_ORIGIN
+        value: https://www.slimewire.org
+      - key: COINBASE_CDP_KEY_ID
+        sync: false
+      - key: COINBASE_CDP_KEY_SECRET
+        sync: false
+      - key: COINBASE_HEADLESS_ONRAMP_ENABLED
+        value: false
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM

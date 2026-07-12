@@ -1,11 +1,12 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import test from "node:test";
 
 const server = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const cash = fs.readFileSync(new URL("../web/public/cash/cash.js", import.meta.url), "utf8");
 const html = fs.readFileSync(new URL("../web/public/cash/index.html", import.meta.url), "utf8");
-const worker = fs.readFileSync(new URL("../web/public/cash/sw.js", import.meta.url), "utf8");
+const manifest = JSON.parse(fs.readFileSync(new URL("../web/public/cash/manifest.webmanifest", import.meta.url), "utf8"));
+const sw = fs.readFileSync(new URL("../web/public/cash/sw.js", import.meta.url), "utf8");
 
 test("SlimeCash calls the Render API instead of the static-site HTML fallback", () => {
   assert.match(cash, /const API_BASE/);
@@ -34,12 +35,12 @@ test("SlimeCash automatically downloads account and wallet recovery material", (
 });
 
 test("SlimeCash service worker prefers the current deploy and retains offline fallback", () => {
-  assert.match(worker, /slimecash-v4/);
-  assert.match(html, /cash\.js\?v=4/);
-  assert.match(html, /cash\.css\?v=4/);
-  assert.match(worker, /const fetched = fetch/);
-  assert.match(worker, /return fetched/);
-  assert.match(worker, /catch\(\(\) => cached\)/);
+  assert.match(sw, /slimecash-v5/);
+  assert.match(html, /cash\.js\?v=5/);
+  assert.match(html, /cash\.css\?v=5/);
+  assert.match(sw, /const fetched = fetch/);
+  assert.match(sw, /return fetched/);
+  assert.match(sw, /catch\(\(\) => cached\)/);
 });
 
 test("SlimeCash exposes its own install flow even when the native prompt is unavailable", () => {
@@ -49,4 +50,29 @@ test("SlimeCash exposes its own install flow even when the native prompt is unav
   assert.match(cash, /beforeinstallprompt/);
   assert.match(cash, /Add to Home Screen/);
   assert.match(cash, /Install app or Add to Home screen/);
+});
+
+test("SlimeCash exposes explicit cash assets and routes sends through the idempotent asset dispatcher", () => {
+  assert.match(server, /pathname === "\/api\/web\/cash\/assets"/);
+  assert.match(server, /const result = await webCashSend\(auth\.userId, body\)/);
+  assert.match(server, /runIdempotentMoneyOp\("cash-send"/);
+  assert.match(server, /async function webCashSendUsdcCore/);
+  assert.match(server, /createTransferCheckedInstruction/);
+});
+
+test("USDC funding and sending stay explicit in the SlimeCash client", () => {
+  assert.match(cash, /get\("\/api\/web\/cash\/assets"\)/);
+  assert.match(cash, /post\("\/api\/web\/cash\/onramp-session"/);
+  assert.match(cash, /asset: state\.sendAsset/);
+  assert.match(html, /data-send-asset="USDC"/);
+  assert.match(html, /id="fundCardBtn"/);
+});
+
+test("SlimeCash uses a separate PWA identity and a synchronized v5 shell", () => {
+  assert.equal(manifest.id, "/slimecash-app");
+  assert.equal(manifest.start_url, "/cash/?src=slimecash-pwa");
+  assert.equal(manifest.scope, "/cash/");
+  assert.match(html, /slimecash-build" content="5"/);
+  assert.match(sw, /slimecash-v5/);
+  assert.match(cash, /intent:\/\/www\.slimewire\.org\/cash/);
 });
