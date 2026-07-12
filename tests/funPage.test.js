@@ -12,7 +12,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.match(server, /requestUrl\.pathname === "\/fun"[\s\S]{0,300}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
-  assert.match(html, /<script defer src="\/fun\.js\?v=8"><\/script>/);
+  assert.match(html, /<script defer src="\/fun\.js\?v=9"><\/script>/);
 });
 
 test("/fun keeps the reference layout clean while carrying SlimeWire features", () => {
@@ -97,6 +97,16 @@ test("coin setup exposes fast buys, ladder exits, one-wallet RH trades, and the 
   assert.match(js, /\/api\/web\/rh\/fund-with-sol/);
 });
 
+test("balanced pro chart keeps core stats visible and adds working chart/transaction controls", () => {
+  for (const marker of ['data-chart-interval="1"', 'data-chart-interval="5"', 'data-chart-interval="15"', 'data-chart-interval="60"', 'data-chart-mode="chart"', 'data-chart-mode="transactions"']) assert.match(html, new RegExp(marker));
+  assert.match(css, /\.chart-card\{height:418px/);
+  assert.match(css, /grid-template-columns:repeat\(4,1fr\)/);
+  for (const label of ["Market cap", "Liquidity", "Holders", "Volume"]) assert.match(js, new RegExp(`>${label}<`));
+  assert.match(js, /trades=\$\{trades\}/);
+  assert.match(js, /interval=\$\{state\.chartInterval\}/);
+  assert.match(js, /frame\.dataset\.src === src/);
+});
+
 test("/fun live feeds reject stale responses and refresh only the visible view", () => {
   assert.match(js, /feedRequestVersion/);
   assert.match(js, /version !== state\.feedRequestVersion/);
@@ -124,7 +134,7 @@ test("wallet manager can create, restore, export, select, and safely remove wall
   for (const marker of ["data-manage-wallets", "data-wallet-backup-file", "data-select-wallet", "data-remove-wallet", "data-rename-wallet"]) assert.match(html + js, new RegExp(marker));
 });
 
-test("generated hero art is optimized and referenced from the v2 banner", () => {
-  assert.match(css, /fun-hero-v2\.webp/);
-  assert.ok(fs.statSync(new URL("../web/public/assets/slimewire/fun-hero-v2.webp", import.meta.url)).size < 100_000);
+test("selected degen hero art is optimized and referenced from the v3 banner", () => {
+  assert.match(css, /fun-hero-v3\.webp/);
+  assert.ok(fs.statSync(new URL("../web/public/assets/slimewire/fun-hero-v3.webp", import.meta.url)).size < 100_000);
 });

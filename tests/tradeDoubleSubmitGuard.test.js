@@ -1823,6 +1823,8 @@ test("scan Security fills from our own RPC when RugCheck returns null (no more n
   assert.match(scan, /scanFastTimeout\(getGeckoTerminalTokenMetadata\(mint, \{ timeoutMs: 3_000 \}\)/); // market fallback for n/a LP/MC/1H stays, but it cannot stall TG/X replies
   assert.match(scan, /scanCachedMarketMeta\(mint\)/); // local/sticky cache fills MC/LIQ/VOL/1H when public APIs blank
   assert.match(scan, /mergeTokenMarketMetadata/);
+  assert.match(scan, /const chartRescue = await scanFastTimeout\(buildChartData\(mint, "5m"\), 7_000, null\)/);
+  assert.match(scan, /source: "chart-rescue"/);
   const enrich = functionBody(serverSource, "enrichScanSecurityOnchain");
   assert.match(enrich, /getParsedAccountInfo/);                 // mint/freeze authority = ground truth
   assert.match(enrich, /computeOnchainDistribution\(/);          // concentration + holders + dev
@@ -1838,6 +1840,19 @@ test("scan Security fills from our own RPC when RugCheck returns null (no more n
   assert.match(card, /authKnown \? \(rug\.mintAuthority \? "🔴 active" : "🟢 none"\)/);
   // RugCheck marks its authority read as definitive so its null == revoked
   assert.match(functionBody(serverSource, "fetchRugcheckFull"), /authoritiesKnown: true/);
+});
+
+test("Robinhood address routing proves wallet versus ERC-20 before scan and tracking", () => {
+  const look = functionBody(serverSource, "handleTelegramLookCommand");
+  assert.match(look, /await isRhContract\(rhAddr\)/);
+  assert.match(look, /else await sendWalletScanCard\(chatId, rhAddr\)/);
+  const xReply = functionBody(serverSource, "buildXReply");
+  assert.match(xReply, /const token = await isRhContract/);
+  assert.match(xReply, /if \(!token\) return await buildXMapReply/);
+  const rhScan = functionBody(serverSource, "gatherRhScan");
+  assert.match(rhScan, /if \(!\(await isRhContract\(a\)/);
+  assert.match(serverSource, /addressKind: "wallet", chain: "robinhood", matches: \[\]/);
+  assert.match(serverSource, /That 0x address is a Robinhood wallet, not an ERC-20 coin contract/);
 });
 
 test("provider JSON and fast holder reads stay memory bounded", () => {

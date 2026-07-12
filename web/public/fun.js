@@ -29,6 +29,8 @@
     previousView: "home",
     profileTab: "positions",
     detailTab: "setup",
+    chartInterval: "15",
+    chartMode: "chart",
     coinCalls: [],
     positions: [],
     launches: [],
@@ -158,10 +160,10 @@
   }
 
   function normalizeSol(row) {
-    return { ...row, chain: "solana", address: row.tokenMint, marketCap: Number(row.marketCap || row.marketCapUsd || row.fdv || 0), volume: Number(row.volumeH1 || row.volumeH24 || row.volume5m || 0), volumeLabel: row.volumeLabel || row.volumeH1Label || row.volume5mLabel || "checking", change: Number(row.m5 ?? row.h1 ?? row.priceChange?.h1), age: ageLabel(row), imageUrl: row.imageUrl || row.avatarUrl || row.imageUri || row.logoUrl || row.meta?.imageUrl || row.metadata?.image || "" };
+    return { ...row, chain: "solana", address: row.tokenMint, marketCap: Number(row.marketCap || row.marketCapUsd || row.fdv || 0), liquidity: Number(row.liquidityUsd || row.liquidity?.usd || row.reserveUsd || 0), holders: Number(row.holderCount || row.holders || row.holdersCount || 0), volume: Number(row.volumeH1 || row.volumeH24 || row.volume5m || 0), volumeLabel: row.volumeLabel || row.volumeH1Label || row.volume5mLabel || "checking", change: Number(row.m5 ?? row.h1 ?? row.priceChange?.h1), age: ageLabel(row), imageUrl: row.imageUrl || row.avatarUrl || row.imageUri || row.logoUrl || row.meta?.imageUrl || row.metadata?.image || "" };
   }
   function normalizeRh(row) {
-    return { ...row, chain: "robinhood", tokenMint: row.address, marketCap: Number(row.marketCapUsd || row.mc || 0), volume: Number(row.volume24hUsd || row.vol24 || row.vol1 || 0), volumeLabel: row.volumeLabel || row.volume24hLabel || (Number(row.volume24hUsd || row.vol24 || row.vol1 || 0) > 0 ? "" : "checking"), change: Number(row.priceChange1h ?? row.ch1 ?? row.priceChange24h ?? row.ch24), age: ageLabel(row), imageUrl: row.imageUrl || row.localImagePath || row.iconUrl || row.imageUri || row.logoUrl || row.metadata?.image || "" };
+    return { ...row, chain: "robinhood", tokenMint: row.address, marketCap: Number(row.marketCapUsd || row.mc || 0), liquidity: Number(row.liquidityUsd || row.liq || row.liquidity?.usd || 0), holders: Number(row.holderCount || row.holders || row.holdersCount || 0), volume: Number(row.volume24hUsd || row.vol24 || row.vol1 || 0), volumeLabel: row.volumeLabel || row.volume24hLabel || (Number(row.volume24hUsd || row.vol24 || row.vol1 || 0) > 0 ? "" : "checking"), change: Number(row.priceChange1h ?? row.ch1 ?? row.priceChange24h ?? row.ch24), age: ageLabel(row), imageUrl: row.imageUrl || row.localImagePath || row.iconUrl || row.imageUri || row.logoUrl || row.metadata?.image || "" };
   }
   const FEED_CONFIG = {
     movers: { bucket: "live", sort: "best", rh: "trending", note: "Live movers ranked by signal" },
@@ -290,6 +292,8 @@
     state.selectedDetail = null;
     state.coinCalls = [];
     state.detailTab = "setup";
+    state.chartInterval = "15";
+    state.chartMode = "chart";
     addRecent(coin);
     setView("coin", { hideNav: false });
     renderCoinShell();
@@ -321,8 +325,8 @@
   }
   function renderCoinShell() {
     const coin = state.selected || {}, key = coinKey(coin), chain = coin.chain === "robinhood" ? "rh" : "sol";
-    $("[data-coin-mini]").innerHTML = `<img ${coinImageAttrs(coin)} alt="" decoding="async" referrerpolicy="no-referrer"><div><b>${escapeHtml(coin.symbol || short(key))}</b><span>${chain === "rh" ? "Robinhood Chain" : "Solana"} · ${escapeHtml(short(key))}</span></div>`;
-    $("[data-coin-stats]").innerHTML = `<div><span>Market cap</span><b>${formatUsd(coin.marketCap || coin.mc)}</b></div><div><span>Volume</span><b>${coin.volume > 0 ? formatUsd(coin.volume) : escapeHtml(coin.volumeLabel || "checking")}</b></div><div><span>1H change</span><b class="${Number(coin.change) >= 0 ? "up" : "down"}">${formatPct(coin.change)}</b></div>`;
+    $("[data-coin-mini]").innerHTML = `<div class="coin-identity"><img ${coinImageAttrs(coin)} alt="" decoding="async" referrerpolicy="no-referrer"><div><b>${escapeHtml(coin.symbol || short(key))}</b><span>${chain === "rh" ? "Robinhood Chain" : "Solana"} · ${escapeHtml(short(key))}</span></div></div><div class="coin-head-quote"><b>${formatUsd(coin.marketCap || coin.mc)}</b><span class="${Number(coin.change) >= 0 ? "up" : "down"}">${formatPct(coin.change)} · 1H</span></div>`;
+    $("[data-coin-stats]").innerHTML = `<div><span>Market cap</span><b>${formatUsd(coin.marketCap || coin.mc)}</b></div><div><span>Liquidity</span><b>${formatUsd(coin.liquidity || coin.liq || coin.liquidityUsd)}</b></div><div><span>Holders</span><b>${Number(coin.holders || coin.holderCount) > 0 ? Number(coin.holders || coin.holderCount).toLocaleString() : "checking"}</b></div><div><span>Volume</span><b>${coin.volume > 0 ? formatUsd(coin.volume) : escapeHtml(coin.volumeLabel || "checking")}</b></div>`;
     renderChart();
     renderQuickTrade();
     renderPositionCard();
@@ -330,10 +334,15 @@
   }
   function renderChart() {
     const coin = state.selected || {}, key = coinKey(coin), frame = $("[data-chart-frame]");
+    const trades = state.chartMode === "transactions" ? 1 : 0;
     const src = coin.chain === "robinhood"
-      ? `https://dexscreener.com/robinhood/${encodeURIComponent(coin.pairAddress || key)}?embed=1&theme=dark&trades=0&info=0&chartLeftToolbar=0&interval=15`
-      : `https://dexscreener.com/solana/${encodeURIComponent(coin.pairAddress || key)}?embed=1&theme=dark&trades=0&info=0&chartLeftToolbar=0&interval=15`;
-    frame.innerHTML = `<div class="chart-loader"><span></span><p>Loading live chart</p></div><iframe src="${src}" title="${escapeHtml(coin.symbol || "coin")} chart" loading="eager" onload="this.previousElementSibling?.remove()"></iframe>`;
+      ? `https://dexscreener.com/robinhood/${encodeURIComponent(coin.pairAddress || key)}?embed=1&theme=dark&trades=${trades}&info=0&chartLeftToolbar=0&interval=${state.chartInterval}`
+      : `https://dexscreener.com/solana/${encodeURIComponent(coin.pairAddress || key)}?embed=1&theme=dark&trades=${trades}&info=0&chartLeftToolbar=0&interval=${state.chartInterval}`;
+    $$("[data-chart-interval]").forEach((button) => button.classList.toggle("active", button.dataset.chartInterval === state.chartInterval));
+    $$("[data-chart-mode]").forEach((button) => button.classList.toggle("active", button.dataset.chartMode === state.chartMode));
+    if (frame.dataset.src === src && frame.querySelector("iframe")) return;
+    frame.dataset.src = src;
+    frame.innerHTML = `<div class="chart-loader"><span></span><p>Loading ${state.chartMode === "transactions" ? "transactions" : "live chart"}</p></div><iframe src="${src}" title="${escapeHtml(coin.symbol || "coin")} ${state.chartMode}" loading="eager" onload="this.previousElementSibling?.remove()"></iframe>`;
   }
   async function loadPositions() {
     if (!state.token) return [];
@@ -804,6 +813,8 @@
     if (event.target.closest("[data-coin-back]")) { history.replaceState(null, "", "#"); setView(state.previousView || "home"); return; }
     if (event.target.closest("[data-copy-coin]")) { navigator.clipboard?.writeText(coinKey(state.selected)); toast("Contract copied"); return; }
     const detail = event.target.closest("[data-detail]"); if (detail) { state.detailTab = detail.dataset.detail; $$("[data-detail]").forEach((button) => button.classList.toggle("active", button === detail)); renderDetailPanel(); return; }
+    const chartInterval = event.target.closest("[data-chart-interval]"); if (chartInterval) { state.chartInterval = chartInterval.dataset.chartInterval || "15"; renderChart(); return; }
+    const chartMode = event.target.closest("[data-chart-mode]"); if (chartMode) { state.chartMode = chartMode.dataset.chartMode || "chart"; renderChart(); return; }
     const postCallButton = event.target.closest("[data-post-call]"); if (postCallButton) { await postCoinCall(postCallButton.dataset.postCall, postCallButton); return; }
     const openTrader = event.target.closest("[data-open-trader]"); if (openTrader) { await openTraderProfile(openTrader.dataset.openTrader); return; }
     const followTrader = event.target.closest("[data-follow-trader]"); if (followTrader) { await toggleTraderFollow(followTrader); return; }

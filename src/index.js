@@ -29275,6 +29275,7 @@ async function webTokenSearch(rawQuery = "") {
   const headers = { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" };
 
   if (/^0x[0-9a-fA-F]{40}$/.test(cleaned)) {
+    if (!(await isRhContract(cleaned).catch(() => false))) return { query: cleaned, addressKind: "wallet", chain: "robinhood", matches: [] };
     const pairs = await fetchJson(`https://api.dexscreener.com/token-pairs/v1/robinhood/${encodeURIComponent(cleaned)}`, {
       headers,
       timeoutMs: 2_500
@@ -34680,6 +34681,29 @@ async function gatherSlimeScan(mint, options = {}) {
       priceUsd: onchain.priceUsd,
     });
   }
+  // LAST-CHANCE MARKET RESCUE: provider rate limits can occasionally return identity/security while every
+  // market field is blank. Reuse the chart pipeline only in that degraded case; it has independent keyed
+  // candles plus Dex/Pump fallbacks and a short cache. Real values are merged, never fabricated.
+  const preRescue = scanMarketStatsFromSources({ meta, bonding, best, rug: rugFilled, supply, mint });
+  const hasCoreMarket = preRescue.mc > 0 || preRescue.liq > 0 || preRescue.vol?.value > 0
+    || preRescue.holders > 0 || firstMeaningfulNumber(meta?.priceUsd, bonding?.priceUsd, best?.priceUsd) > 0;
+  if (!hasCoreMarket) {
+    const chartRescue = await scanFastTimeout(buildChartData(mint, "5m"), 7_000, null);
+    if (chartRescue && (chartRescue.mc > 0 || chartRescue.liq > 0 || chartRescue.vol24 > 0 || chartRescue.priceUsd > 0 || chartRescue.holders > 0)) {
+      meta = mergeTokenMarketMetadata(meta, {
+        source: "chart-rescue",
+        symbol: chartRescue.symbol,
+        name: chartRescue.name,
+        marketCap: chartRescue.mc,
+        liquidityUsd: chartRescue.liq,
+        priceUsd: chartRescue.priceUsd,
+        holderCount: chartRescue.holders,
+        volume: chartRescue.vol24 > 0 ? { h24: chartRescue.vol24 } : null,
+        priceChange: Number.isFinite(chartRescue.change24h) ? { h24: chartRescue.change24h } : null,
+        txns: (chartRescue.buys24 > 0 || chartRescue.sells24 > 0) ? { h24: { buys: chartRescue.buys24 || 0, sells: chartRescue.sells24 || 0 } } : null,
+      });
+    }
+  }
   return { best, meta, rug: rugFilled, shield, bonding, dexPaid, supply, ath, onchain };
   })();
 
@@ -38412,6 +38436,7 @@ async function rhTokenVolumeFallback(address, poolHint = "") {
 async function gatherRhScan(address) {
   const a = String(address || "").trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return null;
+  if (!(await isRhContract(a).catch(() => false))) return null;
   const key = a.toLowerCase();
   const cached = rhScanCache.get(key);
   if (cached && Date.now() - cached.at < 60_000) return cached.v;
@@ -38902,8 +38927,10 @@ async function sendWalletScanCard(chatId, address) {
 }
 // Dispatch a mention to the right card based on what they asked. `variant` (tweet id) seeds the wording + art.
 async function buildXReply(mint, intent = "scan", variant) {
-  // Robinhood Chain coin (0x…) → RH scan card, or the RH holder bubble map when they asked for a map.
+  // A Robinhood 0x value may be an EOA, smart wallet, or ERC-20. Only confirmed ERC-20s get coin cards.
   if (/^0x[0-9a-fA-F]{40}$/.test(String(mint || ""))) {
+    const token = await isRhContract(String(mint)).catch(() => false);
+    if (!token) return await buildXMapReply(mint, variant).catch(() => null);
     if (intent === "map") return (await buildXMapReply(mint, variant).catch(() => null)) || await buildXRhReply(mint, variant);
     return await buildXRhReply(mint, variant);
   }
@@ -43017,7 +43044,12 @@ async function handleTelegramLookCommand(chatId, message, argument, options = {}
   // One resolver for CA, Dex/Pump links, $tickers, bare scan tickers, and Robinhood Chain 0x contracts.
   const target = await resolveScanTargetFromText(argument).catch(() => null);
   const rhAddr = /^0x[0-9a-fA-F]{40}$/.test(String(target || "")) ? String(target) : "";
-  if (rhAddr) { if (!options.skipCooldown && tgCommandOnCooldown(chatId, `look:${rhAddr.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return; await sendRhScanCard(chatId, rhAddr, { ...options, message }); return; }
+  if (rhAddr) {
+    if (!options.skipCooldown && tgCommandOnCooldown(chatId, `look:${rhAddr.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return;
+    if (await isRhContract(rhAddr).catch(() => false)) await sendRhScanCard(chatId, rhAddr, { ...options, message });
+    else await sendWalletScanCard(chatId, rhAddr);
+    return;
+  }
   const mint = isLikelySolMint(target) ? String(target) : "";
   if (!mint) {
     await say(chatId, "Usage: /look <token CA> — Solana mint OR Robinhood Chain 0x… address. I'll run a SlimeShield read with chart + quick-buy.");
@@ -44696,7 +44728,14 @@ async function applyGbInput(message, userId) {
     case "buyemoji": { const p = raw.split(/\s+/); e.buyEmoji = p[0].slice(0, 8); if (p[1] && Number(p[1]) > 0) e.buyEmojiStep = Math.max(0.01, Math.min(10, Number(p[1]))); break; }
     case "message": e.customText = off ? "" : raw.slice(0, 160); break;
     case "minbuy": e.minBuySol = Math.max(0, Number(raw) || 0); break;
-    case "track": if (solanaPublicKeyLike(raw) || /^0x[0-9a-fA-F]{40}$/.test(raw)) { e.token = raw; e.features = e.features || {}; e.features.buybot = true; } break;   // Solana mint OR Robinhood 0x coin
+    case "track": {
+      if (/^0x[0-9a-fA-F]{40}$/.test(raw) && !(await isRhContract(raw).catch(() => false))) {
+        await say(chatId, "That Robinhood address is a wallet, not a coin contract, so Buy Bot did not track it.");
+      } else if (solanaPublicKeyLike(raw) || /^0x[0-9a-fA-F]{40}$/.test(raw)) {
+        e.token = raw; e.features = e.features || {}; e.features.buybot = true;
+      }
+      break;
+    }
     case "welcome": setRose({ welcome: off ? null : raw.slice(0, 3500) }); break;
     case "rules": setRose({ rules: off ? null : raw.slice(0, 3500) }); break;
     case "antiflood": setRose({ antiflood: Math.max(0, Math.min(50, parseInt(raw, 10) || 0)) }); break;
@@ -44977,6 +45016,7 @@ async function handleGroupBotCommand(message, userId) {
     const ca = tk[1] || "";
     const isRh = /^0x[0-9a-fA-F]{40}$/.test(ca);
     if (!ca || (!isRh && !solanaPublicKeyLike(ca))) { const e = await getGroupBotEntry(chatId); await say(chatId, e?.token ? `Buy Bot is tracking ${shortMint(e.token)}. Change it with /track <CA>.` : "Usage: /track <CA> — sets the coin the Buy Bot watches (Solana mint or Robinhood 0x…)."); return true; }
+    if (isRh && !(await isRhContract(ca).catch(() => false))) { await say(chatId, "That 0x address is a Robinhood wallet, not an ERC-20 coin contract. Paste the coin contract instead."); return true; }
     const store = await readGroupBot(); const k = String(chatId); const e = store.groups[k] || defaultGroupBotEntry(); e.token = ca; e.features = e.features || {}; e.features.buybot = true; store.groups[k] = e; await writeGroupBot(store);
     await say(chatId, `🟢 Buy Bot now tracking ${escapeTelegramHtml(ca.slice(0, isRh ? 6 : 4))}…${escapeTelegramHtml(ca.slice(-4))}${isRh ? " 🪶 (Robinhood Chain)" : ""} — I'll post every buy here. Floor it with /minbuy <${isRh ? "ETH" : "SOL"}>.`);
     try { await buyWsSync(); } catch {}
