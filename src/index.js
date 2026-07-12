@@ -40198,13 +40198,21 @@ function slimeScanKeyboard(mint, tickerSymbol = "") {
 function compactTradeCardKeyboard(target, source = "s") {
   const links = slimewireTokenLinks(target);
   const src = source === "b" ? "b" : "s";
-  return { inline_keyboard: [
+  const rows = [
     [
       { text: "⚡ TG Quick Buy", callback_data: `buyopen:${src}:${target}` },
       { text: "🌐 Web Quick Buy", url: links.quick }
-    ],
-    [{ text: "📂 More", callback_data: `btm:${src}:${target}` }]
-  ] };
+    ]
+  ];
+  if (src === "b") {
+    const dexUrl = /^0x[0-9a-fA-F]{40}$/.test(target)
+      ? `https://dexscreener.com/robinhood/${target}`
+      : dexScreenerUrl(target);
+    rows.push([{ text: "📊 Dex Chart", url: dexUrl }, { text: "📂 More", callback_data: `btm:${src}:${target}` }]);
+  } else {
+    rows.push([{ text: "📂 More", callback_data: `btm:${src}:${target}` }]);
+  }
+  return { inline_keyboard: rows };
 }
 
 function compactCardMoreKeyboard(target, source = "s") {
