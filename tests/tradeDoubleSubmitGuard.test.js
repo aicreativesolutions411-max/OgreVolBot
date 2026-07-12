@@ -831,6 +831,9 @@ test("Rose (MissRose parity): captcha verify, fillings, timed mutes, notes, filt
   for (const cmd of ["captcha", "tmute", "tban", "antiflood", "setwarnlimit", "setwarnmode", "save", "filter", "report", "purge", "pin"]) {
     assert.ok(rose.includes(`"${cmd}"`) || rose.includes(`'${cmd}'`) || rose.includes(cmd), `Rose must handle /${cmd}`);
   }
+  assert.match(rose, /name === "rmfilter"/);
+  assert.match(rose, /name === "clearfilters"/);
+  assert.match(rose, /setGroupRose\(chatId, \{ filters: \{\} \}\)/);
   // Full mute perm set (not just can_send_messages) so newer Bot API actually mutes.
   assert.match(serverSource, /ROSE_MUTE_PERMS\s*=\s*\{[^}]*can_send_polls:\s*false/);
 });
@@ -886,18 +889,19 @@ test("Raid bot: clean card + overall progress bar + goal-to-go + views + Refresh
 });
 
 // ---- TG bot polish: buy links, no aggregate card, strict scan, raid typed input ----
-test("buy card Chart/Buy open the NEW terminal (not old chart-lab / /t)", () => {
+test("buy cards use the compact TG/Web/More keyboard", () => {
   // groupBuyMarkup is an arrow const, so slice its region directly.
   const i = serverSource.indexOf("const groupBuyMarkup =");
   assert.notEqual(i, -1, "groupBuyMarkup missing");
   const mk = serverSource.slice(i, i + 1100);
-  assert.match(mk, /slimewireTokenLinks\(mint\)/);
-  assert.match(mk, /url: links\.site\b/);       // Chart -> SlimeWire chart site
-  assert.match(mk, /callback_data: `qbp:\$\{mint\}`/);  // ⚡ Quick Buy (your preset) IS the buy
-  assert.match(mk, /callback_data: "pe:open"/);         // ⚙️ Preset editor next to it
-  assert.match(mk, /inline_keyboard: \[compactRow\]/); // one tight Chart + Quick Buy + Preset row
+  assert.match(mk, /compactTradeCardKeyboard\(mint, "b"\)/);
   assert.doesNotMatch(mk, /chart-lab\?ca=/);    // old chart-page URL gone
   assert.doesNotMatch(mk, /url: groupBuyQuickBuyUrl/); // old /t redirect gone
+  const compact = functionBody(serverSource, "compactTradeCardKeyboard");
+  assert.match(compact, /TG Quick Buy/);
+  assert.match(compact, /Web Quick Buy/);
+  assert.match(compact, /callback_data: `buyopen:\$\{src\}:/);
+  assert.match(compact, /callback_data: `btm:\$\{src\}:/);
 });
 
 test("buy bot posts only real per-buy cards — no 'Buys rolling in' aggregate", () => {
@@ -1277,7 +1281,8 @@ test("⚡ one-click group buy fires from the tapper's OWN wallet, idempotent, re
   assert.match(cb, /quickBuySendReceipt\(userId, mint, amt, r\.result\)/);       // receipt to DM (userId), never the group; now carries live buy result
   assert.match(cb, /noWalletAckText\(await funnelNoWallet\(userId\)\)/);        // no-wallet → DM a Create-Wallet button + guide
   // ⚡ Quick Buy (preset) button on the group scan card + qb: routing (DM receipt) + custom input wired
-  assert.match(functionBody(serverSource, "slimeScanKeyboard"), /callback_data: `qbp:\$\{mint\}`/);
+  assert.match(functionBody(serverSource, "slimeScanKeyboard"), /compactTradeCardKeyboard\(mint, "s"\)/);
+  assert.match(functionBody(serverSource, "telegramQuickBuyPanelKeyboard"), /callback_data: `qbp:\$\{target\}`/);
   assert.match(serverSource, /startsWith\("qb:"\)/);
   assert.match(serverSource, /applyTgQuickBuyInput\(message, userId\)/);
 });
@@ -1442,7 +1447,7 @@ test("⏰ Limit orders: MC-triggered buy/sell, own-wallet, idempotent-claim, pau
   assert.match(serverSource, /applyLimitOrderInput\(message, userId\)/);
   assert.match(serverSource, /\(orders\|limit\|dca\)/);                              // /orders /limit /dca command
   assert.match(functionBody(serverSource, "quickBuyReceiptKeyboard"), /callback_data: `lo:new:\$\{mint\}`/);
-  assert.match(functionBody(serverSource, "slimeScanKeyboard"), /callback_data: `lo:new:\$\{mint\}`/);
+  assert.match(functionBody(serverSource, "compactCardCategoryKeyboard"), /callback_data: `lo:new:\$\{target\}`/);
   // MC parser is fat-finger-safe (bare small number → $k, k/m suffix honored)
   assert.match(functionBody(serverSource, "parseMcInput"), /m\[2\] === "m"/);
 });
@@ -1621,22 +1626,24 @@ test("OCR image scan: cloud-offloaded, concurrency-capped, gated, delete-only", 
 
 // ---- Scan card buy row: ONE clean Buy button (the 0.5/1/5/custom amount buttons all just opened
 // the site, so they were consolidated). The &amount= deep-link helper still exists for the web preload.
-test("scan card = ⚡ Quick Buy (preset) + ⚙️ Preset editor + limit + chart (no site-Buy clutter)", () => {
+test("Sol/RH scan and buy-bot cards share TG Buy, Web Buy, and categorized More", () => {
   const kb = functionBody(serverSource, "slimeScanKeyboard");
-  // ⚡ Quick Buy executes an in-wallet buy of YOUR preset via the qbp: callback (NOT URL redirects).
-  assert.match(kb, /callback_data: `qbp:\$\{mint\}`/);
-  assert.match(kb, /callback_data: "pe:open"/);                 // ⚙️ Preset — edit amount/TP/SL in chat
-  assert.doesNotMatch(kb, /Buy on site/);                       // removed — ⚡ is the buy
-  assert.match(kb, /text: "📈 Chart", url: links\.site/);       // Chart just opens the site
-  // buy-bot card: no Vote / Buy-on-site / TG clutter (group IS the coin's TG), just ⚡ Quick Buy + ⚙️ Preset + Chart (+socials)
+  assert.match(kb, /compactTradeCardKeyboard\(mint, "s"\)/);
   const gbi = serverSource.indexOf("const groupBuyMarkup =");
   const gb = serverSource.slice(gbi, gbi + 1300);
-  assert.match(gb, /callback_data: `qbp:\$\{mint\}`/);          // ⚡ Quick Buy (preset)
-  assert.match(gb, /callback_data: "pe:open"/);                 // ⚙️ Preset editor
+  assert.match(gb, /compactTradeCardKeyboard\(mint, "b"\)/);
   assert.doesNotMatch(gb, /Vote", url/);            // 👍 Vote button gone
-  assert.doesNotMatch(gb, /url: links\.siteBuy/);   // Buy-on-site button gone
   assert.doesNotMatch(gb, /TG", url: socials\.tg/); // ✈️ TG button gone
-  assert.match(gb, /text: "📊 Chart", url: links\.site/);
+  const compact = functionBody(serverSource, "compactTradeCardKeyboard");
+  assert.match(compact, /TG Quick Buy/);
+  assert.match(compact, /Web Quick Buy/);
+  assert.match(compact, /📂 More/);
+  const more = functionBody(serverSource, "compactCardMoreKeyboard");
+  for (const label of ["Charts & Market", "Research", "Security", "Trade Tools"]) assert.match(more, new RegExp(label));
+  const category = functionBody(serverSource, "compactCardCategoryKeyboard");
+  assert.match(category, /Set Buy Preset/);
+  assert.match(category, /Limit \/ TP-SL/);
+  assert.match(category, /robinhoodchain\.blockscout\.com/);
   // no-wallet funnel: tapping ⚡ with no wallet DMs a Create-Wallet button + tells you where to look
   assert.match(serverSource, /async function funnelNoWallet/);
   assert.match(functionBody(serverSource, "funnelNoWallet"), /callback_data: "create_wallets"/);
@@ -1644,7 +1651,8 @@ test("scan card = ⚡ Quick Buy (preset) + ⚙️ Preset editor + limit + chart 
   assert.match(functionBody(serverSource, "handleQuickBuyPresetCallback"), /noWalletAckText\(await funnelNoWallet\(userId\)\)/);
   assert.match(functionBody(serverSource, "postGroupBuy"), /slimewire\.org · chart, trade &amp; tools/);
   const rhBuy = functionBody(serverSource, "postGroupBuyRh");
-  assert.match(rhBuy, /callback_data: `rqbp:\$\{address\}`/);
+  assert.match(rhBuy, /compactTradeCardKeyboard\(address, "b"\)/);
+  assert.match(functionBody(serverSource, "sendRhScanCard"), /compactTradeCardKeyboard\(address, "s"\)/);
   assert.match(rhBuy, /slimewire\.org · chart, trade &amp; tools/);
 });
 
@@ -1653,7 +1661,8 @@ test("Telegram /buy prioritizes the card coin and posts a compact TG/Web chooser
   const resolver = functionBody(serverSource, "telegramQuickTradeTarget");
   assert.match(resolver, /reply_to_message/);
   assert.match(resolver, /reply_markup\?\.inline_keyboard/);
-  assert.match(resolver, /qbp\|rqbp\|dmscan\|buyopen/);
+  assert.match(resolver, /qbp\|rqbp\|dmscan/);
+  assert.match(resolver, /buyopen/);
   assert.match(resolver, /\[\?&\]\(\?:ca\|token\)/);
   assert.match(resolver, /buttonHints/);
   assert.match(resolver, /authoritative/);
@@ -1666,7 +1675,7 @@ test("Telegram /buy prioritizes the card coin and posts a compact TG/Web chooser
   assert.match(panel, /links\.quick/);
   assert.doesNotMatch(panel, /sendGroupAlertMedia|gatherRhScan|alphaRadarFetchMc/);
   const open = functionBody(serverSource, "handleTelegramQuickBuyOpenCallback");
-  assert.match(open, /editMessageText/);
+  assert.match(open, /editMessageReplyMarkup/);
   assert.match(open, /telegramQuickBuyPanelKeyboard/);
   assert.match(open, /Choose buy amount/);
   assert.match(serverSource, /startsWith\("buyopen:"\)/);
@@ -2524,7 +2533,8 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   const truth = functionBody(serverSource, "handleTickerTruthCallback");
   const look = functionBody(serverSource, "handleTelegramLookCommand");
   const keyboard = functionBody(serverSource, "scanResearchKeyboard");
-  const mainKeyboard = functionBody(serverSource, "slimeScanKeyboard");
+  const mainKeyboard = functionBody(serverSource, "compactTradeCardKeyboard");
+  const moreKeyboard = functionBody(serverSource, "compactCardMoreKeyboard");
   assert.match(score, /log\(liquidity\) \* 30/);
   assert.match(score, /log\(marketCap\) \* 18/);
   assert.match(score, /microCapPenalty/);
@@ -2539,7 +2549,7 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(keyboard, /Airdrop/);
   assert.match(keyboard, /Explain inline/);
   assert.match(keyboard, /Receipts/);
-  assert.match(mainKeyboard, /🗂 Research/);
+  assert.match(moreKeyboard, /Research/);
   assert.doesNotMatch(mainKeyboard, /Holder Map|Airdrop|Explain inline|Receipts|Ticker Truth/);
   assert.match(serverSource, /startsWith\("tm:"\)/);
   const scoreFn = new Function("candidate", score);

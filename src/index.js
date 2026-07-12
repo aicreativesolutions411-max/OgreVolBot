@@ -207,7 +207,8 @@ const backupConnection = (sendFailoverEnabled && sendFallbackRpcUrl && sendFallb
   ? (CONFIG.readRpcUrl && sendFallbackRpcUrl === CONFIG.readRpcUrl ? readConnection : new Connection(sendFallbackRpcUrl, "confirmed"))
   : null;
 if (backupConnection && backupConnection !== connection) {
-  console.info(`[rpc] send failover -> ${sendFallbackRpcUrl.replace(/\/\/.*@/, "//")} (re-broadcasts the SAME signed tx on a transient primary failure)`);
+  const sendFallbackRpcLabel = (() => { try { return new URL(sendFallbackRpcUrl).host; } catch { return "configured provider"; } })();
+  console.info(`[rpc] send failover -> ${sendFallbackRpcLabel} (re-broadcasts the SAME signed tx on a transient primary failure)`);
 }
 // A primary send error worth failing over on: the PRIMARY RPC is the problem (rate-limit,
 // timeout, network, unavailable), NOT the transaction. Never fail over on errors that mean
@@ -13916,6 +13917,10 @@ async function handleCallback(query, userId) {
   // 🐦 X reply approval (xr:*) — owner one-tap post/skip a drafted X reply.
   if (String(query.data || "").startsWith("xr:")) {
     if (await handleXReplyCallback(query, userId).catch(() => false)) return;
+  }
+  // Compact scan/buy-card folders: keep the card in place while opening categories.
+  if (["btm:", "btc:", "btb:", "btf:"].some((prefix) => String(query.data || "").startsWith(prefix))) {
+    if (await handleCompactCardMenuCallback(query, userId).catch(() => false)) return;
   }
   // Compact /buy card -> expand the amount choices in the same Telegram message.
   if (String(query.data || "").startsWith("buyopen:")) {
@@ -35752,7 +35757,8 @@ async function telegramQuickTradeTarget(message, argument = "") {
   const textHints = [String(reply.caption || ""), String(reply.text || "")];
   const decodeHint = (raw) => { try { return decodeURIComponent(raw); } catch { return raw; } };
   const structuredPatterns = [
-    /(?:qbp|rqbp|dmscan|buyopen):((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))/i,
+    /(?:qbp|rqbp|dmscan):((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))/i,
+    /buyopen:(?:[sb]:)?((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))/i,
     /[?&](?:ca|token)=((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))/i,
     /#coin\/((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))/i,
     /(?:^|\b)(?:CA|MINT|TOKEN)(?:\s+(?:ADDRESS|CONTRACT))?\s*[:|·-]?\s*((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))/i
@@ -35824,18 +35830,23 @@ async function sendTelegramQuickBuyPanel(chatId, userId, message, argument = "")
 }
 
 async function handleTelegramQuickBuyOpenCallback(query, userId) {
-  const match = String(query?.data || "").match(/^buyopen:((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))$/i);
+  const match = String(query?.data || "").match(/^buyopen:(?:([sb]):)?((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))$/i);
   if (!match) return false;
-  const target = match[1], chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  const source = match[1] === "b" ? "b" : "s", target = match[2], chatId = query.message?.chat?.id, messageId = query.message?.message_id;
   const keyboard = await telegramQuickBuyPanelKeyboard(target, userId);
-  keyboard.inline_keyboard.push([{ text: "🌐 Open Web Buy", url: slimewireTokenLinks(target).quick }]);
+  keyboard.inline_keyboard.push([
+    { text: "🌐 Web Quick Buy", url: slimewireTokenLinks(target).quick },
+    { text: "📂 More", callback_data: `btm:${source}:${target}` }
+  ]);
   const text = [
     "⚡ <b>Choose buy amount</b>",
     `CA: <code>${escapeTelegramHtml(target)}</code>`,
     "<i>Tap once to buy from your SlimeWire wallet.</i>"
   ].join("\n");
   if (chatId && messageId) {
-    const edited = await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: keyboard }).catch(() => null);
+    // Works for both photo captions and text cards: keep the original card visible and
+    // expand only the controls underneath it.
+    const edited = await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: keyboard }).catch(() => null);
     if (edited) return true;
   }
   if (chatId) await sayHtml(chatId, text, keyboard).catch(() => {});
@@ -38811,9 +38822,7 @@ async function sendRhScanCard(chatId, address, options = {}) {
   if (message?.chat && !isPrivateChat(message.chat)) await recordTelegramCall(message, address, info.mc).catch(() => {});
   const callerLine = await buildScanCallerFooter(chatId, address, info.mc, message).catch(() => "");
   const text = [String(options.contextHtml || "").trim(), formatRhScanCard(info), callerLine].filter(Boolean).join("\n\n");
-  const kb = { inline_keyboard: [
-    [{ text: `⚡ Trade $${(info.symbol || "coin").slice(0, 12)}`, url: `https://www.slimewire.org/#rhtrade/${address}` }, { text: "🔎 Blockscout", url: info.explorer }],
-  ] };
+  const kb = compactTradeCardKeyboard(address, "s");
   let png = null;
   try { const b = (await rhScanLogo(info).catch(() => null)) || await xFallbackLogoBuffer(info.symbol || shortMint(address), address);
     const { verdict, tone } = rhVerdictTone(info.safety);
@@ -40127,31 +40136,90 @@ function tickerTruthMetaForMint(mint) {
 // Keep the main scan trade-focused. Research/proof tools live in one folder so a normal CA scan does not
 // produce a wall of Telegram buttons; the folder only edits this message's keyboard, never posts a new card.
 function slimeScanKeyboard(mint, tickerSymbol = "") {
-  const links = slimewireTokenLinks(mint);
-  // ONE clean Buy button. The old 0.5/1/5/custom amount buttons all just opened the site's 1-click
-  // buy (Telegram URL buttons can't execute a swap in-chat — wallet actions are DM/site-only for
-  // safety), so four near-identical redirects were clutter. The site's quick-buy lets you pick the
-  // amount there. Buy → Chart on top, then the Menu / Refresh controls.
+  return compactTradeCardKeyboard(mint, "s");
+}
+
+// One shared top-level keyboard for Sol/RH scan cards and buy-bot alerts.
+function compactTradeCardKeyboard(target, source = "s") {
+  const links = slimewireTokenLinks(target);
+  const src = source === "b" ? "b" : "s";
+  return { inline_keyboard: [
+    [
+      { text: "⚡ TG Quick Buy", callback_data: `buyopen:${src}:${target}` },
+      { text: "🌐 Web Quick Buy", url: links.quick }
+    ],
+    [{ text: "📂 More", callback_data: `btm:${src}:${target}` }]
+  ] };
+}
+
+function compactCardMoreKeyboard(target, source = "s") {
+  const src = source === "b" ? "b" : "s";
   const rows = [
-    // ⚡ ONE-CLICK: tap = instant buy from your OWN SlimeWire bot wallet using YOUR saved preset (amount +
-    // TP/SL), no site redirect, no DM needed. ⚙️ Preset edits that amount/TP/SL right here in chat.
-    [
-      { text: "⚡ Quick Buy", callback_data: `qbp:${mint}` },
-      { text: "⚙️ Preset", callback_data: "pe:open" }
-    ],
-    [
-      { text: "⏰ Limit", callback_data: `lo:new:${mint}` },
-      { text: "📈 Chart", url: links.site }
-    ],
-    [
-      { text: "🗂 Research", callback_data: `scan:research:${mint}` },
-      { text: "📊 More", callback_data: `scan:menu:${mint}` }
-    ],
-    [
-      { text: "🔄 Refresh", callback_data: `scan:refresh:${mint}` }
-    ]
+    [{ text: "📈 Charts & Market", callback_data: `btc:${src}:c:${target}` }, { text: "🔬 Research", callback_data: `btc:${src}:r:${target}` }],
+    [{ text: "🛡 Security", callback_data: `btc:${src}:s:${target}` }, { text: "⚙️ Trade Tools", callback_data: `btc:${src}:t:${target}` }]
   ];
+  if (src === "s") rows.push([{ text: "🔄 Refresh", callback_data: `btf:${src}:${target}` }]);
+  rows.push([{ text: "⬅ Back to card", callback_data: `btb:${src}:${target}` }]);
   return { inline_keyboard: rows };
+}
+
+function compactCardCategoryKeyboard(target, source, category) {
+  const src = source === "b" ? "b" : "s", rh = /^0x[0-9a-fA-F]{40}$/.test(target);
+  const links = slimewireTokenLinks(target);
+  const rowsByCategory = {
+    c: rh ? [
+      [{ text: "🟢 SlimeWire Chart", url: links.site }, { text: "Dexscreener", url: `https://dexscreener.com/robinhood/${target}` }],
+      [{ text: "🔎 Blockscout", url: `https://robinhoodchain.blockscout.com/token/${target}` }]
+    ] : [
+      [{ text: "🟢 SlimeWire Chart", url: links.site }, { text: "Dexscreener", url: dexScreenerUrl(target) }],
+      [{ text: "GeckoTerminal", url: `https://www.geckoterminal.com/solana/tokens/${target}` }, { text: "Birdeye", url: `https://birdeye.so/token/${target}?chain=solana` }]
+    ],
+    r: [
+      [{ text: "🗺️ Holder Map", callback_data: `map:${target}` }, ...(rh ? [] : [{ text: "💰 Airdrop", callback_data: `drop:${target}` }])],
+      [{ text: "🔎 Full Scan", callback_data: `dmscan:${target}` }, { text: "🧾 Receipts", url: links.receipts }]
+    ],
+    s: rh ? [
+      [{ text: "🛡 Refresh safety scan", callback_data: `dmscan:${target}` }, { text: "Blockscout", url: `https://robinhoodchain.blockscout.com/token/${target}` }]
+    ] : [
+      [{ text: "🔬 Rugcheck", url: `https://rugcheck.xyz/tokens/${target}` }, { text: "🫧 Bubblemaps", url: `https://app.bubblemaps.io/sol/token/${target}` }],
+      [{ text: "Solscan", url: `https://solscan.io/token/${target}` }, { text: "🧾 Proof Wall", url: links.proof }]
+    ],
+    t: [
+      [{ text: "⚙️ Set Buy Preset", callback_data: "pe:open" }, { text: "💰 Positions", callback_data: "positions_overview" }],
+      ...(rh ? [] : [[{ text: "⏰ Limit / TP-SL", callback_data: `lo:new:${target}` }]]),
+      [{ text: "🌐 Web Quick Buy", url: links.quick }]
+    ]
+  };
+  const rows = (rowsByCategory[category] || []).map((row) => row.filter(Boolean));
+  rows.push([{ text: "⬅ Back to More", callback_data: `btm:${src}:${target}` }]);
+  return { inline_keyboard: rows };
+}
+
+async function handleCompactCardMenuCallback(query) {
+  const data = String(query?.data || ""), chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  if (!chatId || !messageId) return false;
+  const targetPattern = "((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))";
+  let match = data.match(new RegExp(`^btm:([sb]):${targetPattern}$`, "i"));
+  if (match) { await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: compactCardMoreKeyboard(match[2], match[1]) }).catch(() => {}); return true; }
+  match = data.match(new RegExp(`^btc:([sb]):([crst]):${targetPattern}$`, "i"));
+  if (match) { await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: compactCardCategoryKeyboard(match[3], match[1], match[2]) }).catch(() => {}); return true; }
+  match = data.match(new RegExp(`^btb:([sb]):${targetPattern}$`, "i"));
+  if (match) { await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: compactTradeCardKeyboard(match[2], match[1]) }).catch(() => {}); return true; }
+  match = data.match(new RegExp(`^btf:s:${targetPattern}$`, "i"));
+  if (match) {
+    const target = match[1], isPhoto = Boolean(query.message?.photo);
+    if (!/^0x/i.test(target)) await rebuildScanCardInPlace(chatId, messageId, target, isPhoto).catch(() => {});
+    else {
+      const info = await gatherRhScan(target).catch(() => null);
+      if (info) {
+        const body = formatRhScanCard(info);
+        if (isPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: messageId, caption: body, parse_mode: "HTML", reply_markup: compactTradeCardKeyboard(target, "s") }).catch(() => {});
+        else await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: body, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: compactTradeCardKeyboard(target, "s") }).catch(() => {});
+      }
+    }
+    return true;
+  }
+  return false;
 }
 
 function scanResearchKeyboard(mint) {
@@ -45412,17 +45480,7 @@ const groupBuyHolders = new Map();     // mint -> Set(trader) so the buy card ca
 // Buttons under a buy card: Chart · Buy · Vote (the reference's clickable row), then a socials row
 // (TG / X / Web) built from the coin's real metadata when present.
 const groupBuyMarkup = (mint) => {
-  // Chart + Buy point at the NEW terminal (the ?token= deep-link opens the coin's
-  // chart+buy view), matching the scan card — not the old chart-lab / /t layout.
-  const links = slimewireTokenLinks(mint);
-  // ⚡ ONE-CLICK: tap = instant buy from your own SlimeWire bot wallet using YOUR saved preset (amount +
-  // TP/SL); no wallet → /start funnel. ⚙️ Preset edits that amount/TP/SL right here in the group — no DM.
-  const compactRow = [
-    { text: "📊 Chart", url: links.site },
-    { text: "⚡ Quick Buy", callback_data: `qbp:${mint}` },
-    { text: "⚙️ Preset", callback_data: "pe:open" }
-  ];
-  return { inline_keyboard: [compactRow] };
+  return compactTradeCardKeyboard(mint, "b");
 };
 function buyBondingBar(pct, n = 12) { pct = Math.max(0, Math.min(100, Number(pct) || 0)); const f = Math.round(pct / 100 * n); return "▰".repeat(f) + "▱".repeat(Math.max(0, n - f)); }
 // Buy cards reuse the full scan (bonding %, socials, MC, DEX-paid, image) — cached 30s so a burst of
@@ -45604,12 +45662,7 @@ async function postGroupBuyRh(address, { ethAmount = 0, tokens = 0, trader = "",
   const fmtUsd0 = (v) => "$" + Math.round(Number(v) || 0).toLocaleString();
   const fmtPx = (v) => { v = Number(v) || 0; return v >= 1 ? "$" + v.toFixed(3) : v >= 0.001 ? "$" + v.toFixed(5) : "$" + v.toPrecision(3); };
   const fmtTok = (v) => { v = Number(v) || 0; return v >= 1e6 ? (v / 1e6).toFixed(2) + "M" : v >= 1e3 ? (v / 1e3).toFixed(1) + "K" : Math.round(v).toLocaleString(); };
-  const funUrl = `https://www.slimewire.org/fun#coin/${address}`;
-  const markup = { inline_keyboard: [[
-    { text: "📊 Chart", url: funUrl },
-    { text: "⚡ Quick Buy", callback_data: `rqbp:${address}` },
-    { text: "⚙️ Preset", callback_data: "pe:open" },
-  ]] };
+  const markup = compactTradeCardKeyboard(address, "b");
   for (const [chatId, e] of targets) {
     const min = Number(e.minBuySol) || 0;                       // /minbuy = min in the chain's native coin (ETH here)
     if (min > 0 && ethAmount < min) continue;
@@ -47273,7 +47326,7 @@ async function handleGroupRose(message, userId) {
     return true;
   }
 
-  const cmd = text.match(/^\/(rules|setrules|welcome|setwelcome|goodbye|setgoodbye|antilinks|captcha|cleanservice|deletescam|deletedaccounts|antiimpersonator|knownscammers|ocrscan|autowhitelist|warn|warnings|clearwarns|resetwarns|setwarnlimit|setwarnmode|mute|tmute|unmute|kick|ban|tban|unban|antiflood|save|get|notes|clear|delnote|filter|filters|stop|delfilter|report|admins|purge|del|pin|unpin)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
+  const cmd = text.match(/^\/(rules|setrules|welcome|setwelcome|goodbye|setgoodbye|antilinks|captcha|cleanservice|deletescam|deletedaccounts|antiimpersonator|knownscammers|ocrscan|autowhitelist|warn|warnings|clearwarns|resetwarns|setwarnlimit|setwarnmode|mute|tmute|unmute|kick|ban|tban|unban|antiflood|save|get|notes|clear|delnote|filter|filters|stop|delfilter|rmfilter|clearfilters|report|admins|purge|del|pin|unpin)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
   // Non-command: #note fetch + auto-filters (everyone).
   if (!cmd) {
     const noteHash = text.match(/^#([A-Za-z0-9_]{1,32})$/);
@@ -47330,8 +47383,9 @@ async function handleGroupRose(message, userId) {
   if (name === "save") { const nm = (words[0] || "").toLowerCase(); const body = arg.slice((words[0] || "").length).trim() || (message.reply_to_message ? String(message.reply_to_message.text || message.reply_to_message.caption || "") : ""); if (!nm || !body) { await say(chatId, "Usage: /save <name> <text>  (or reply to a message with /save <name>)"); return true; } const notes = { ...(cfg.notes || {}) }; notes[nm] = body.slice(0, 3500); await setGroupRose(chatId, { notes }); await say(chatId, `📝 Saved note #${nm}. Fetch with #${nm} or /get ${nm}.`); return true; }
   if (name === "clear" || name === "delnote") { const nm = (words[0] || "").toLowerCase(); const notes = { ...(cfg.notes || {}) }; if (notes[nm]) { delete notes[nm]; await setGroupRose(chatId, { notes }); await say(chatId, `Deleted note #${nm}.`); } else await say(chatId, `No note "${escapeTelegramHtml(nm)}".`); return true; }
   if (name === "filter") { const trig = (words[0] || "").toLowerCase(); const reply = arg.slice((words[0] || "").length).trim() || (message.reply_to_message ? String(message.reply_to_message.text || message.reply_to_message.caption || "") : ""); if (!trig || !reply) { await say(chatId, "Usage: /filter <word> <reply>  (or reply to a message with /filter <word>)"); return true; } const filters = { ...(cfg.filters || {}) }; filters[trig] = reply.slice(0, 3500); await setGroupRose(chatId, { filters }); await say(chatId, `🔁 Filter set: "${escapeTelegramHtml(trig)}" → auto-reply.`); return true; }
-  if (name === "filters") { const ks = Object.keys(cfg.filters || {}); await sayHtml(chatId, ks.length ? "🔁 <b>Filters:</b> " + ks.map((k) => escapeTelegramHtml(k)).join(", ") : "No filters. Admins: /filter <word> <reply>."); return true; }
-  if (name === "stop" || name === "delfilter") { const trig = (words[0] || "").toLowerCase(); const filters = { ...(cfg.filters || {}) }; if (filters[trig]) { delete filters[trig]; await setGroupRose(chatId, { filters }); await say(chatId, `Removed filter "${escapeTelegramHtml(trig)}".`); } else await say(chatId, `No filter "${escapeTelegramHtml(trig)}".`); return true; }
+  if (name === "filters") { const ks = Object.keys(cfg.filters || {}); await sayHtml(chatId, ks.length ? "🔁 <b>Filters:</b> " + ks.map((k) => escapeTelegramHtml(k)).join(", ") + "\nRemove one: <code>/rmfilter word</code> · Remove all: <code>/clearfilters</code>" : "No filters. Admins: /filter <word> <reply>."); return true; }
+  if (name === "stop" || name === "delfilter" || name === "rmfilter") { const trig = (words[0] || "").toLowerCase(); if (!trig) { await say(chatId, "Usage: /rmfilter <word>"); return true; } const filters = { ...(cfg.filters || {}) }; if (filters[trig]) { delete filters[trig]; await setGroupRose(chatId, { filters }); await say(chatId, `Removed filter "${escapeTelegramHtml(trig)}".`); } else await say(chatId, `No filter "${escapeTelegramHtml(trig)}".`); return true; }
+  if (name === "clearfilters") { const count = Object.keys(cfg.filters || {}).length; await setGroupRose(chatId, { filters: {} }); await say(chatId, count ? `Removed all ${count} filters.` : "No filters to remove."); return true; }
 
   // Purge / pin (act on the replied message, no target user needed).
   if (name === "purge") {
