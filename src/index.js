@@ -13917,6 +13917,10 @@ async function handleCallback(query, userId) {
   if (String(query.data || "").startsWith("xr:")) {
     if (await handleXReplyCallback(query, userId).catch(() => false)) return;
   }
+  // Compact /buy card -> expand the amount choices in the same Telegram message.
+  if (String(query.data || "").startsWith("buyopen:")) {
+    if (await handleTelegramQuickBuyOpenCallback(query, userId).catch(() => false)) return;
+  }
   // ⚡ One-click buy (qb:*) — instant buy from the tapper's own SlimeWire wallet, from any group card.
   if (String(query.data || "").startsWith("qb:")) {
     if (await handleQuickBuyCallback(query, userId).catch(() => false)) return;
@@ -35739,25 +35743,41 @@ async function fundFlowRowsToMap(wallet, flows, { chain = "solana", subject = ""
 
 async function telegramQuickTradeTarget(message, argument = "") {
   const reply = message?.reply_to_message || {};
-  const hints = [String(argument || ""), String(reply.text || ""), String(reply.caption || "")];
+  const buttonHints = [];
   for (const row of reply?.reply_markup?.inline_keyboard || []) {
-    for (const button of row || []) hints.push(String(button?.url || ""), String(button?.callback_data || ""));
+    for (const button of row || []) buttonHints.push(String(button?.callback_data || ""), String(button?.url || ""));
   }
-  for (const raw of hints.filter(Boolean)) {
-    let text = raw;
-    try { text = decodeURIComponent(raw); } catch { /* keep the raw hint */ }
-    const structured = [
-      /(?:qbp|rqbp|dmscan):((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))/i,
-      /[?&](?:ca|token)=((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))/i,
-      /#coin\/((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))/i
-    ].map((pattern) => text.match(pattern)?.[1]).find(Boolean);
-    let target = structured || await resolveScanTargetFromText(text).catch(() => null);
-    target = String(target || "").trim();
-    if (/^0x[0-9a-fA-F]{40}$/.test(target)) {
-      if (await isRhContract(target).catch(() => false)) return target;
-      continue;
-    }
-    if (isLikelySolMint(target) && await isSolMintAddress(target).catch(() => true)) return target;
+  const textHints = [String(reply.caption || ""), String(reply.text || "")];
+  const decodeHint = (raw) => { try { return decodeURIComponent(raw); } catch { return raw; } };
+  const structuredPatterns = [
+    /(?:qbp|rqbp|dmscan|buyopen):((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))/i,
+    /[?&](?:ca|token)=((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))/i,
+    /#coin\/((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))/i,
+    /(?:^|\b)(?:CA|MINT|TOKEN)(?:\s+(?:ADDRESS|CONTRACT))?\s*[:|·-]?\s*((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))/i
+  ];
+  const validate = async (value, trusted = false) => {
+    const target = String(value || "").trim();
+    if (/^0x[0-9a-fA-F]{40}$/.test(target)) return await isRhContract(target).catch(() => false) ? target : "";
+    if (!isLikelySolMint(target)) return "";
+    if (trusted) return target;
+    return await isSolMintAddress(target).catch(() => false) ? target : "";
+  };
+  // Bot callback data and explicit CA labels are authoritative. Inspect all of them before
+  // generic caption text, which can also contain buyer/dev wallet addresses.
+  for (const raw of [String(argument || ""), ...buttonHints, ...textHints].filter(Boolean)) {
+    const text = decodeHint(raw);
+    const structured = structuredPatterns.map((pattern) => text.match(pattern)?.[1]).find(Boolean);
+    if (!structured) continue;
+    const target = await validate(structured, /(?:qbp|rqbp|dmscan|buyopen):/i.test(text));
+    if (target) return target;
+  }
+  // A direct `/buy <CA>` is next. Free-form reply text is last so a visible wallet can never
+  // outrank the coin encoded in the scan card's buttons.
+  for (const raw of [String(argument || ""), ...textHints].filter(Boolean)) {
+    const text = decodeHint(raw);
+    const resolved = await resolveScanTargetFromText(text).catch(() => null);
+    const target = await validate(resolved);
+    if (target) return target;
   }
   return "";
 }
@@ -35790,31 +35810,33 @@ async function sendTelegramQuickBuyPanel(chatId, userId, message, argument = "")
     await say(chatId, "Reply to a SlimeWire scan or buy alert with /buy—or send /buy <coin CA>.");
     return false;
   }
-  const isRobinhood = /^0x[0-9a-fA-F]{40}$/.test(target);
-  const [info, keyboard] = await Promise.all([
-    isRobinhood ? gatherRhScan(target).catch(() => null) : alphaRadarFetchMc(target).catch(() => null),
-    telegramQuickBuyPanelKeyboard(target, userId)
-  ]);
-  const imageUrl = isRobinhood
-    ? firstString(info?.imageUrl, info?.iconUrl)
-    : await resolveGroupTokenImage(target).catch(() => "");
-  const symbol = firstString(info?.symbol, info?.sym);
-  const mc = firstMeaningfulNumber(info?.mc, info?.marketCap, info?.marketCapUsd);
-  const liq = firstMeaningfulNumber(info?.liq, info?.liquidity, info?.liquidityUsd);
-  const volume = firstMeaningfulNumber(info?.vol1, info?.volumeH1, info?.volume, info?.vol24, info?.volume24hUsd);
-  const stats = [
-    mc > 0 ? `MC <b>${fmtMc(mc)}</b>` : "",
-    liq > 0 ? `Liq <b>${fmtMc(liq)}</b>` : "",
-    volume > 0 ? `Vol <b>${fmtMc(volume)}</b>` : ""
-  ].filter(Boolean).join(" · ");
-  const caption = [
-    `🟢 <b>SLIMEWIRE BUY${symbol ? ` · $${escapeTelegramHtml(String(symbol).replace(/^\$+/, ""))}` : ""}</b>`,
-    `<code>${escapeTelegramHtml(target)}</code>`,
-    stats,
-    `<i>${isRobinhood ? "Robinhood Chain · funded with SOL" : "Solana"} · tap an amount to buy instantly</i>`
-  ].filter(Boolean).join("\n");
-  const sent = await sendGroupAlertMedia(chatId, imageUrl ? { type: "photo", value: imageUrl } : null, caption, keyboard);
-  if (!sent?.result) await sayHtml(chatId, caption, keyboard);
+  const links = slimewireTokenLinks(target);
+  await sayHtml(chatId, [
+    "⚡ <b>Buy this coin</b>",
+    `CA: <code>${escapeTelegramHtml(target)}</code>`
+  ].join("\n"), { inline_keyboard: [[
+    { text: "⚡ TG Buy", callback_data: `buyopen:${target}` },
+    { text: "🌐 Web Buy", url: links.quick }
+  ]] });
+  return true;
+}
+
+async function handleTelegramQuickBuyOpenCallback(query, userId) {
+  const match = String(query?.data || "").match(/^buyopen:((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))$/i);
+  if (!match) return false;
+  const target = match[1], chatId = query.message?.chat?.id, messageId = query.message?.message_id;
+  const keyboard = await telegramQuickBuyPanelKeyboard(target, userId);
+  keyboard.inline_keyboard.push([{ text: "🌐 Open Web Buy", url: slimewireTokenLinks(target).quick }]);
+  const text = [
+    "⚡ <b>Choose buy amount</b>",
+    `CA: <code>${escapeTelegramHtml(target)}</code>`,
+    "<i>Tap once to buy from your SlimeWire wallet.</i>"
+  ].join("\n");
+  if (chatId && messageId) {
+    const edited = await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: keyboard }).catch(() => null);
+    if (edited) return true;
+  }
+  if (chatId) await sayHtml(chatId, text, keyboard).catch(() => {});
   return true;
 }
 function parsedSolFundTransfers(tx, wallet, add) {
