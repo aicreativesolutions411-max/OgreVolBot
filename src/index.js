@@ -6852,6 +6852,11 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "fun.html", "no-store, max-age=0");
       return;
     }
+    if (request.method === "GET" && (requestUrl.pathname === "/cash" || requestUrl.pathname === "/cash/")) {
+      // SlimeCash installable PWA shell (assets under /cash/* serve as static files).
+      await serveStaticHtmlPage(response, "cash/index.html", "no-store, max-age=0");
+      return;
+    }
     if (request.method === "GET" && ["/gg", "/terminal-pro", "/pro-terminal", "/gg.html"].includes(requestUrl.pathname)) {
       // No-store during the active build-out so testers always get the latest /gg (its chart/
       // tools/wallet code changes constantly). Switch back to a normal cache once it stabilizes.
@@ -9337,7 +9342,36 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    // SlimeCash: public $handle -> wallet-address lookup (read-only, no funds movement).
+    if (request.method === "GET" && pathname === "/api/web/cash/resolve") {
+      try {
+        const resolved = await resolveCashHandle(requestUrl.searchParams.get("handle"));
+        sendWebJson(request, response, 200, { ok: true, ...resolved });
+      } catch (error) {
+        sendWebJson(request, response, error.statusCode || 404, { ok: false, error: friendlyError(error) });
+      }
+      return;
+    }
+
     const auth = await authenticateWebRequest(request);
+
+    // SlimeCash: the caller's own handle + primary wallet address.
+    if (request.method === "GET" && pathname === "/api/web/cash/me") {
+      sendWebJson(request, response, 200, { ok: true, ...(await cashProfileSummary(auth.userId)) });
+      return;
+    }
+
+    // SlimeCash: claim (or change) the account's $handle.
+    if (request.method === "POST" && pathname === "/api/web/cash/handle") {
+      const body = await readJsonRequestBody(request);
+      try {
+        const result = await claimCashHandle(auth.userId, body.handle);
+        sendWebJson(request, response, 200, { ok: true, ...result });
+      } catch (error) {
+        sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) });
+      }
+      return;
+    }
 
     if (request.method === "GET" && pathname === "/api/web/launch-os/projects") {
       sendWebJson(request, response, 200, { ok: true, projects: await launchOsProjectsForUser(auth.userId) });
@@ -34289,6 +34323,33 @@ async function resolveCashtagToMint(symbol) {
   return mint;
 }
 const rhTickerTargetCache = new Map();
+async function rhTickerDirectMarket(address, timeoutMs = 2_400) {
+  const a = String(address || "").toLowerCase();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return null;
+  const [dexData, geckoData] = await Promise.all([
+    scanFastTimeout(fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${a}`, { timeoutMs }), timeoutMs + 100, null),
+    scanFastTimeout(fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${a}/pools?page=1`, { timeoutMs }), timeoutMs + 100, null)
+  ]);
+  const rows = [];
+  for (const pair of Array.isArray(dexData?.pairs) ? dexData.pairs : []) {
+    if (String(pair.chainId || "").toLowerCase() !== "robinhood") continue;
+    rows.push({
+      marketCap: firstMeaningfulNumber(pair.marketCap, pair.fdv) || 0,
+      volume24h: firstMeaningfulNumber(pair.volume?.h24) || 0,
+      liquidityUsd: firstMeaningfulNumber(pair.liquidity?.usd) || 0,
+      source: "dexscreener-token"
+    });
+  }
+  for (const pool of Array.isArray(geckoData?.data) ? geckoData.data : []) {
+    rows.push({
+      marketCap: firstMeaningfulNumber(pool?.attributes?.market_cap_usd, pool?.attributes?.fdv_usd) || 0,
+      volume24h: firstMeaningfulNumber(pool?.attributes?.volume_usd?.h24) || 0,
+      liquidityUsd: firstMeaningfulNumber(pool?.attributes?.reserve_in_usd) || 0,
+      source: "geckoterminal-token"
+    });
+  }
+  return rows.sort((x, y) => tickerMarketRowStrength(y.marketCap, y.volume24h, y.liquidityUsd) - tickerMarketRowStrength(x.marketCap, x.volume24h, x.liquidityUsd))[0] || null;
+}
 async function resolveRhTickerCandidate(symbol, options = {}) {
   const q = String(symbol || "").replace(/^\$|^#/, "").trim();
   if (q.length < 2) return null;
@@ -34360,6 +34421,21 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
   const providersAvailable = Boolean(dexData || geckoData);
   const feed = (candidates.size || providersAvailable) ? [] : await scanFastTimeout(rhFeedTokens().catch(() => []), 1_800, []);
   for (const row of Array.isArray(feed) ? feed : []) add(row.address, row, row.source || "robinhood-feed");
+  // Blockscout/feed rows sometimes identify the correct token but carry null market fields. Hydrate
+  // the highest-holder exact matches through per-token pool endpoints, then rank real numbers.
+  if (candidates.size && ![...candidates.values()].some((candidate) => candidate.marketCap > 0 && candidate.volume24h > 0)) {
+    const probes = [...candidates.values()].sort((a, b) => b.holders - a.holders).slice(0, 4);
+    const hydrated = await Promise.all(probes.map(async (candidate) => ({ candidate, market: await rhTickerDirectMarket(candidate.address, Number(options.providerTimeoutMs) || 2_400).catch(() => null) })));
+    for (const { candidate, market } of hydrated) {
+      if (!market) continue;
+      candidate.marketCap = Number(market.marketCap) || candidate.marketCap;
+      candidate.volume24h = Number(market.volume24h) || candidate.volume24h;
+      candidate.liquidityUsd = Number(market.liquidityUsd) || candidate.liquidityUsd;
+      candidate.marketStrength = tickerMarketRowStrength(candidate.marketCap, candidate.volume24h, candidate.liquidityUsd);
+      candidate.dexPair = true;
+      candidate.sources.add(market.source);
+    }
+  }
   const all = [...candidates.values()];
   const maxima = {
     marketCap: Math.max(0, ...all.map((candidate) => candidate.marketCap)),
@@ -34380,7 +34456,7 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
     pick.solDexCandidate = solDexCandidate;
     if (pick.dexPair) _rhKindCache.set(pick.address.toLowerCase(), { at: Date.now(), contract: true });
   }
-  const lookupComplete = Boolean(dexData || geckoData || (Array.isArray(feed) && feed.length));
+  const lookupComplete = Boolean(dexData || geckoData || (pick && (pick.marketCap > 0 || pick.volume24h > 0)));
   rhTickerTargetCache.set(key, { at: Date.now(), candidate: pick, lookupComplete });
   if (rhTickerTargetCache.size > 300) rhTickerTargetCache.delete(rhTickerTargetCache.keys().next().value);
   return pick;
@@ -34412,6 +34488,11 @@ async function resolveTickerToScanTarget(symbol) {
     // a confident-looking scan of a tiny Sol clone; a later retry will use the short negative cache.
     if (rhLookup?.lookupComplete === false && Number(solCandidate?.marketCap || 0) < 20_000) return null;
     return sol;
+  }
+  if (rhLookup?.lookupComplete === false && Number(rh.marketCap || 0) <= 0 && Number(rh.volume24h || 0) <= 0) {
+    const solMeta = tickerResolutionMetaCache.get(q.toLowerCase());
+    const uncertainSol = (solMeta?.candidates || []).find((candidate) => candidate.mint === sol) || null;
+    if (Number(uncertainSol?.marketCap || 0) < 20_000) return null;
   }
   const solMeta = tickerResolutionMetaCache.get(q.toLowerCase());
   const solCandidate = (solMeta?.candidates || []).find((candidate) => candidate.mint === sol) || { marketCap: 0, volume24h: 0, liquidityUsd: 0 };
@@ -57590,6 +57671,85 @@ async function sendWebLoginCode(chatId, userId, messageId = null) {
       [{ text: "Main Menu", callback_data: "main_menu" }]
     ]
   });
+}
+
+// ---------------------------------------------------------------------------
+// SlimeCash $handles - a public username that resolves to the account's primary
+// wallet address (Cash App cashtag spec: 1-20 alphanumerics, at least one letter,
+// case-insensitive uniqueness with display-only casing).
+// ---------------------------------------------------------------------------
+function normalizeCashHandle(value) {
+  const handle = String(value || "").trim().replace(/^\$+/, "").toLowerCase();
+  if (!/^[a-z0-9]{1,20}$/.test(handle) || !/[a-z]/.test(handle)) {
+    const error = new Error("Handles are 1-20 letters and numbers with at least one letter.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return handle;
+}
+
+async function cashPrimaryWallet(userId) {
+  const store = await readWalletStore();
+  const wallets = walletsForOwner(store, userId).filter((wallet) => !wallet.volumeBot && !wallet.ephemeral && !wallet.sessionWallet);
+  return wallets[0] || null;
+}
+
+async function claimCashHandle(userId, rawHandle) {
+  const handle = normalizeCashHandle(rawHandle);
+  const display = String(rawHandle || "").trim().replace(/^\$+/, "");
+  let claimed = null;
+  await LockService.withLock("web-auth-store", 10_000, async () => {
+    const store = await readWebAuthStore();
+    const profile = store.profiles?.[userId];
+    if (!profile) {
+      const error = new Error("Account not found.");
+      error.statusCode = 404;
+      throw error;
+    }
+    const taken = Object.entries(store.profiles).some(([ownerId, entry]) => entry?.cashHandle === handle && String(ownerId) !== String(userId));
+    if (taken) {
+      const error = new Error("That $handle is taken. Try another.");
+      error.statusCode = 409;
+      throw error;
+    }
+    profile.cashHandle = handle;
+    profile.cashHandleDisplay = display;
+    profile.cashHandleClaimedAt = profile.cashHandleClaimedAt || new Date().toISOString();
+    await writeWebAuthStore(store);
+    claimed = { handle, displayHandle: display };
+  });
+  await audit("cash_handle_claim", { userId, handle });
+  return claimed;
+}
+
+async function resolveCashHandle(rawHandle) {
+  const handle = normalizeCashHandle(rawHandle);
+  const store = await readWebAuthStore();
+  const entry = Object.entries(store.profiles || {}).find(([, profile]) => profile?.cashHandle === handle);
+  if (!entry) {
+    const error = new Error("No SlimeCash user with that $handle.");
+    error.statusCode = 404;
+    throw error;
+  }
+  const [ownerId, profile] = entry;
+  const wallet = await cashPrimaryWallet(ownerId);
+  if (!wallet) {
+    const error = new Error("That user has no wallet yet.");
+    error.statusCode = 404;
+    throw error;
+  }
+  return { handle, displayHandle: profile.cashHandleDisplay || handle, address: wallet.publicKey };
+}
+
+async function cashProfileSummary(userId) {
+  const store = await readWebAuthStore();
+  const profile = store.profiles?.[userId] || {};
+  const wallet = await cashPrimaryWallet(userId);
+  return {
+    handle: profile.cashHandle || "",
+    displayHandle: profile.cashHandleDisplay || profile.cashHandle || "",
+    address: wallet?.publicKey || ""
+  };
 }
 
 async function webUserSummary(userId) {

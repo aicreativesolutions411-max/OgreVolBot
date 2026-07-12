@@ -2423,7 +2423,14 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(rhTicker, /const \[dexData, geckoData\] = await Promise\.all/);
   assert.match(rhTicker, /providerTimeoutMs\) \|\| 1_800/);
   assert.match(rhTicker, /candidates\.size \|\| providersAvailable/); // healthy indexed lookup never waits on the heavier RH feed
+  assert.match(rhTicker, /rhTickerDirectMarket/);                   // zero-metric feed matches hydrate by token address
+  assert.match(rhTicker, /sort\(\(a, b\) => b\.holders - a\.holders\)\.slice\(0, 4\)/);
+  assert.match(rhTicker, /pick\.marketCap > 0 \|\| pick\.volume24h > 0/); // an address-only row is not a completed market lookup
   assert.match(rhTicker, /_rhKindCache\.set/);                      // later scan skips duplicate wallet-vs-token RPC work
+  const directRh = functionBody(serverSource, "rhTickerDirectMarket");
+  assert.match(directRh, /latest\/dex\/tokens/);
+  assert.match(directRh, /networks\/robinhood\/tokens/);
+  assert.match(directRh, /tickerMarketRowStrength/);
 
   const xLogo = functionBody(serverSource, "xCoinLogoLive");
   assert.match(xLogo, /Number\(budgetMs\) \|\| 3_500/); // a cold PFP host cannot consume the whole reply budget
