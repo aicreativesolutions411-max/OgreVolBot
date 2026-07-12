@@ -34139,6 +34139,13 @@ function tickerMarketRowStrength(marketCap, volume24h, liquidityUsd) {
   const mc = Math.max(0, Number(marketCap) || 0), vol = Math.max(0, Number(volume24h) || 0), liq = Math.max(0, Number(liquidityUsd) || 0);
   return Math.sqrt(mc * vol) + Math.min(mc, vol) + liq * 0.25;
 }
+function tickerRhClearlyDominates(rh, sol = null) {
+  const rhMc = Number(rh?.marketCap) || 0, rhVol = Number(rh?.volume24h) || 0;
+  const solMc = Number(sol?.marketCap) || 0, solVol = Number(sol?.volume24h) || 0;
+  return rh?.dexPair === true
+    && rhMc >= Math.max(20_000, solMc * 2)
+    && rhVol >= Math.max(20_000, solVol * 2);
+}
 function fmtTickerMarketUsd(value) {
   const n = Number(value) || 0;
   if (!n) return "n/a";
@@ -34289,6 +34296,7 @@ async function resolveRhTickerCandidate(symbol) {
   const cached = rhTickerTargetCache.get(key);
   if (cached && Date.now() - cached.at < (cached.candidate ? 30_000 : 8_000)) return cached.candidate;
   const candidates = new Map();
+  let solDexCandidate = null;
   const add = (address, row = {}, source = "") => {
     const a = String(address || "").trim();
     if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return;
@@ -34313,13 +34321,20 @@ async function resolveRhTickerCandidate(symbol) {
     prev.sources.add(source || "robinhood");
     candidates.set(id, prev);
   };
-  const [dexData, feed] = await Promise.all([
-    scanFastTimeout(fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { timeoutMs: 2_400 }), 2_500, null),
-    scanFastTimeout(rhFeedTokens().catch(() => []), 2_500, [])
-  ]);
+  // Dex search is the fast path and already covers both chains. Only wait on the heavier RH feed
+  // when Dex has no exact Robinhood market; a healthy Dex hit should never inherit the feed timeout.
+  const dexData = await scanFastTimeout(fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { timeoutMs: 1_300 }), 1_400, null);
   for (const pair of Array.isArray(dexData?.pairs) ? dexData.pairs : []) {
-    if (String(pair.chainId || "").toLowerCase() === "robinhood") add(pair.baseToken?.address, pair, "dexscreener");
+    const chain = String(pair.chainId || "").toLowerCase();
+    const exact = String(pair.baseToken?.symbol || "").replace(/^\$+/, "").toLowerCase() === key;
+    if (!exact) continue;
+    if (chain === "robinhood") add(pair.baseToken?.address, pair, "dexscreener");
+    if (chain === "solana" && isLikelySolMint(pair.baseToken?.address)) {
+      const candidate = { marketCap: firstMeaningfulNumber(pair.marketCap, pair.fdv) || 0, volume24h: firstMeaningfulNumber(pair.volume?.h24) || 0, liquidityUsd: firstMeaningfulNumber(pair.liquidity?.usd) || 0 };
+      if (!solDexCandidate || tickerMarketRowStrength(candidate.marketCap, candidate.volume24h, candidate.liquidityUsd) > tickerMarketRowStrength(solDexCandidate.marketCap, solDexCandidate.volume24h, solDexCandidate.liquidityUsd)) solDexCandidate = candidate;
+    }
   }
+  const feed = candidates.size ? [] : await scanFastTimeout(rhFeedTokens().catch(() => []), 1_800, []);
   for (const row of Array.isArray(feed) ? feed : []) add(row.address, row, row.source || "robinhood-feed");
   const all = [...candidates.values()];
   const maxima = {
@@ -34337,6 +34352,10 @@ async function resolveRhTickerCandidate(symbol) {
     isContract: candidate.dexPair || await scanFastTimeout(isRhContract(candidate.address), 2_000, false).catch(() => false)
   })));
   const pick = checked.find((row) => row.isContract)?.candidate || null;
+  if (pick) {
+    pick.solDexCandidate = solDexCandidate;
+    if (pick.dexPair) _rhKindCache.set(pick.address.toLowerCase(), { at: Date.now(), contract: true });
+  }
   rhTickerTargetCache.set(key, { at: Date.now(), candidate: pick });
   if (rhTickerTargetCache.size > 300) rhTickerTargetCache.delete(rhTickerTargetCache.keys().next().value);
   return pick;
@@ -34349,10 +34368,12 @@ async function resolveTickerToScanTarget(symbol) {
   if (q.length < 2) return null;
   // Resolve both chains inside the same bounded window, then compare their selected exact-symbol
   // markets by balanced MC + 24h volume. This lets a real Robinhood market beat a weak Sol clone.
-  const [sol, rh] = await Promise.all([
-    resolveCashtagToMint(q).catch(() => null),
-    resolveRhTickerCandidate(q).catch(() => null)
-  ]);
+  const solPromise = resolveCashtagToMint(q).catch(() => null);
+  const rh = await resolveRhTickerCandidate(q).catch(() => null);
+  // A Dex-proven RH market leading the exact Sol match by 2x in BOTH MC and volume is decisive.
+  // Return it immediately while the deeper Sol safety lookup finishes harmlessly in the background.
+  if (tickerRhClearlyDominates(rh, rh?.solDexCandidate)) return rh.address;
+  const sol = await solPromise;
   if (!sol) return rh?.address || null;
   if (!rh) return sol;
   const solMeta = tickerResolutionMetaCache.get(q.toLowerCase());
@@ -38866,6 +38887,33 @@ function formatRhScanCard(info) {
   ].filter((l) => l !== "").join("\n");
 }
 async function sendRhScanCard(chatId, address, options = {}) {
+  const fastCandidate = rhTickerCandidateForTarget(options.tickerSymbol, address);
+  const cachedScan = rhScanCache.get(String(address || "").toLowerCase());
+  if (fastCandidate && !(cachedScan && Date.now() - Number(cachedScan.at || 0) < 60_000)) {
+    const quickInfo = {
+      address, chain: "robinhood", symbol: fastCandidate.symbol || options.tickerSymbol || "RH",
+      name: fastCandidate.name || fastCandidate.symbol || options.tickerSymbol || "Robinhood token",
+      priceUsd: 0, mc: Number(fastCandidate.marketCap) || 0, liq: Number(fastCandidate.liquidityUsd) || 0,
+      vol1: 0, vol24: Number(fastCandidate.volume24h) || 0, holders: Number(fastCandidate.holders) || 0,
+      ch1: null, ch24: null, createdAt: 0, safety: null, source: "dexscreener",
+      explorer: `https://robinhoodchain.blockscout.com/token/${address}`
+    };
+    const quickText = [String(options.contextHtml || "").trim(), formatRhScanCard(quickInfo), "⏳ <i>Loading full safety, holders, ATH and socials…</i>"].filter(Boolean).join("\n\n");
+    const kb = compactTradeCardKeyboard(address, "s");
+    const sent = await telegram("sendMessage", { chat_id: chatId, text: quickText, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb }).catch(() => null);
+    if (sent?.message_id) {
+      void (async () => {
+        const info = await gatherRhScan(address).catch(() => null);
+        if (!info) return;
+        const message = options.message || null;
+        if (message?.chat && !isPrivateChat(message.chat)) await recordTelegramCall(message, address, info.mc).catch(() => {});
+        const callerLine = await buildScanCallerFooter(chatId, address, info.mc, message).catch(() => "");
+        const fullText = [String(options.contextHtml || "").trim(), formatRhScanCard(info), callerLine].filter(Boolean).join("\n\n");
+        await telegram("editMessageText", { chat_id: chatId, message_id: sent.message_id, text: fullText, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb }).catch(() => {});
+      })().catch(() => {});
+      return;
+    }
+  }
   const info = await gatherRhScan(address).catch(() => null);
   if (!info) {
     await say(chatId, "🪶 Couldn't pull that Robinhood coin yet — paste a valid Robinhood Chain contract (0x…).");
@@ -40311,10 +40359,17 @@ function tickerScanSelectionLine(symbol, target) {
   const key = String(symbol || "").replace(/^\$+/, "").trim().toLowerCase();
   if (!key) return "";
   if (!/^0x[0-9a-fA-F]{40}$/.test(String(target || ""))) return tickerTruthLine(symbol, target);
+  const candidate = rhTickerCandidateForTarget(symbol, target);
+  if (!candidate) return "";
+  return `🧬 <b>Ticker match:</b> strongest Robinhood $${escapeTelegramHtml(String(symbol).toUpperCase())} market by MC + 24h volume · MC <b>${escapeTelegramHtml(fmtTickerMarketUsd(candidate.marketCap))}</b> · Vol <b>${escapeTelegramHtml(fmtTickerMarketUsd(candidate.volume24h))}</b>`;
+}
+
+function rhTickerCandidateForTarget(symbol, target) {
+  const key = String(symbol || "").replace(/^\$+/, "").trim().toLowerCase();
+  if (!key || !/^0x[0-9a-fA-F]{40}$/.test(String(target || ""))) return null;
   const cached = rhTickerTargetCache.get(key);
   const candidate = cached && Date.now() - Number(cached.at || 0) < 5 * 60_000 ? cached.candidate : null;
-  if (!candidate || candidate.address.toLowerCase() !== String(target).toLowerCase()) return "";
-  return `🧬 <b>Ticker match:</b> strongest Robinhood $${escapeTelegramHtml(String(symbol).toUpperCase())} market by MC + 24h volume · MC <b>${escapeTelegramHtml(fmtTickerMarketUsd(candidate.marketCap))}</b> · Vol <b>${escapeTelegramHtml(fmtTickerMarketUsd(candidate.volume24h))}</b>`;
+  return candidate && candidate.address.toLowerCase() === String(target).toLowerCase() ? candidate : null;
 }
 
 async function handleTickerTruthCallback(query) {
@@ -43376,7 +43431,7 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
 async function handleTelegramLookCommand(chatId, message, argument, options = {}) {
   // One resolver for CA, Dex/Pump links, $tickers, bare scan tickers, and Robinhood Chain 0x contracts.
   const target = await resolveScanTargetFromText(argument).catch(() => null);
-  const tickerSymbol = String(options.tickerSymbol || extractCashtags(String(argument || ""))[0] || "").replace(/^\$+/, "").trim().toUpperCase();
+  const tickerSymbol = String(options.tickerSymbol || extractCashtags(String(argument || ""))[0] || extractBareTickerHints(String(argument || ""))[0] || "").replace(/^\$+/, "").trim().toUpperCase();
   const rhAddr = /^0x[0-9a-fA-F]{40}$/.test(String(target || "")) ? String(target) : "";
   if (rhAddr) {
     if (!options.skipCooldown && tgCommandOnCooldown(chatId, `look:${rhAddr.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return;

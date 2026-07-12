@@ -2407,15 +2407,19 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(cashtag, /tickerResolutionMetaCache\.set/);
 
   const ticker = functionBody(serverSource, "resolveTickerToScanTarget");
-  assert.match(ticker, /Promise\.all/);                             // both chains resolve inside one bounded window
+  assert.match(ticker, /const solPromise = resolveCashtagToMint/);  // deep Sol work starts concurrently
   assert.match(ticker, /resolveRhTickerCandidate/);
+  assert.match(ticker, /tickerRhClearlyDominates/);                 // decisive RH market returns without waiting for Sol safety
   assert.match(ticker, /rhLeadership > solLeadership/);             // stronger RH market can beat a weak Sol clone
   const rhTicker = functionBody(serverSource, "resolveRhTickerCandidate");
-  assert.match(rhTicker, /chainId \|\| ""\).*=== "robinhood"/);
+  assert.match(rhTicker, /if \(chain === "robinhood"\)/);
   assert.match(rhTicker, /tickerMarketLeadership/);
   assert.match(rhTicker, /tickerMarketRowStrength/);                 // one real pair supplies MC+volume; no cross-pair Frankenstein maxima
   assert.match(rhTicker, /candidate\.dexPair \|\| await scanFastTimeout\(isRhContract/); // a live pair proves token; feed-only addresses still classify
   assert.match(rhTicker, /source === "dexscreener"/);
+  assert.match(rhTicker, /timeoutMs: 1_300/);
+  assert.match(rhTicker, /candidates\.size \? \[\] : await/);       // healthy Dex hit never waits on the heavier RH feed
+  assert.match(rhTicker, /_rhKindCache\.set/);                      // later scan skips duplicate wallet-vs-token RPC work
 
   const xLogo = functionBody(serverSource, "xCoinLogoLive");
   assert.match(xLogo, /Number\(budgetMs\) \|\| 3_500/); // a cold PFP host cannot consume the whole reply budget
@@ -2606,6 +2610,11 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.ok(leadershipFn(noxaRh, noxaMaxima) > leadershipFn(noxaSolClone, noxaMaxima) * 20, "$NOXA must resolve to its dominant Robinhood market, never the tiny Sol clone");
   assert.match(functionBody(serverSource, "tickerScanSelectionLine"), /strongest Robinhood/);
   assert.match(functionBody(serverSource, "tickerTruthLine"), /Vol/);
+  const rhSend = functionBody(serverSource, "sendRhScanCard");
+  assert.match(rhSend, /rhTickerCandidateForTarget/);
+  assert.match(rhSend, /Loading full safety, holders, ATH and socials/);
+  assert.ok(rhSend.indexOf('telegram("sendMessage"') < rhSend.indexOf("await gatherRhScan(address)"), "RH ticker card must post before the full scan finishes");
+  assert.match(rhSend, /editMessageText/);                           // same card enriches in place
 });
 
 test("X growth engine: broadcast-gated proactive posts + receipts + KOL responder + scorecard, tracking always on", () => {
