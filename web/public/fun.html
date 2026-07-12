@@ -8,9 +8,9 @@
   <meta name="description" content="A clean mobile-first SlimeWire terminal for Solana and Robinhood Chain coins, wallets, positions, charts, safety, and trading tools.">
   <link rel="icon" href="/icons/icon-192.png">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-  <link rel="stylesheet" href="/fun.css?v=3">
+  <link rel="stylesheet" href="/fun.css?v=4">
   <script src="/config.js"></script>
-  <script defer src="/fun.js?v=4"></script>
+  <script defer src="/fun.js?v=8"></script>
 </head>
 <body>
   <div class="fun-app" id="funApp">
@@ -41,7 +41,7 @@
           <button class="active" type="button" data-feed="movers">Movers</button>
           <button type="button" data-feed="new">New</button>
           <button type="button" data-feed="soon">Soon</button>
-          <button type="button" data-feed="graduated">Graduated</button>
+          <button type="button" data-feed="graduated">Established</button>
         </div>
         <div class="coin-list" data-coin-list><div class="skeleton-list"></div></div>
       </section>
@@ -56,7 +56,7 @@
       <section class="fun-view" data-view="wallet" aria-label="Wallet profile">
         <div class="wallet-hero" data-wallet-hero></div>
         <div class="wallet-actions"><button class="primary" type="button" data-deposit>Deposit</button><button type="button" data-receive>Receive</button><button type="button" data-manage-wallets>Manage</button></div>
-        <div class="profile-tabs" role="tablist"><button class="active" type="button" data-profile="positions">Positions</button><button type="button" data-profile="activity">Activity</button><button type="button" data-profile="created">Created</button></div>
+        <div class="profile-tabs" role="tablist"><button class="active" type="button" data-profile="positions">Positions</button><button type="button" data-profile="activity">Activity</button><button type="button" data-profile="created">Created</button><button type="button" data-profile="social">Profile</button></div>
         <div data-profile-panel><div class="skeleton-list"></div></div>
       </section>
 
@@ -66,7 +66,7 @@
         <div class="coin-stats" data-coin-stats></div>
         <div class="quick-trade-card" data-quick-trade></div>
         <div class="position-card" data-position-card></div>
-        <div class="detail-tabs" role="tablist"><button class="active" type="button" data-detail="setup">Trade setup</button><button type="button" data-detail="holders">Holders</button><button type="button" data-detail="about">About</button></div>
+        <div class="detail-tabs" role="tablist"><button class="active" type="button" data-detail="setup">Trade setup</button><button type="button" data-detail="calls">Calls</button><button type="button" data-detail="holders">Holders</button><button type="button" data-detail="about">About</button></div>
         <div class="detail-panel" data-detail-panel></div>
         <div class="coin-spacer"></div>
         <div class="trade-dock"><button class="tools-trigger" type="button" data-open-tools>＋ Tools</button><button class="buy" type="button" data-open-trade="buy">Buy</button><button class="sell" type="button" data-open-trade="sell">Sell</button></div>

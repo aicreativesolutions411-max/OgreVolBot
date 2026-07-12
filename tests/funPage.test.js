@@ -12,7 +12,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.match(server, /requestUrl\.pathname === "\/fun"[\s\S]{0,300}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
-  assert.match(html, /<script defer src="\/fun\.js\?v=4"><\/script>/);
+  assert.match(html, /<script defer src="\/fun\.js\?v=8"><\/script>/);
 });
 
 test("/fun keeps the reference layout clean while carrying SlimeWire features", () => {
@@ -39,7 +39,7 @@ test("/fun reuses authenticated money APIs with idempotency and lazy user action
   assert.match(js, /\/api\/web\/positions\/arm-exits/);
   assert.match(js, /\/api\/web\/rh\/guards/);
   assert.match(js, /\/api\/web\/rh\/bridge-to-sol/);
-  assert.match(js, /if \(state\.token\) Promise\.all\(\[loadWallets\(\), loadPositions\(\), loadPresets\(\), loadCreatedCoinsSilently\(\)\]\)/);
+  assert.match(js, /if \(state\.token\) Promise\.all\(\[loadMe\(\), loadWallets\(\), loadPositions\(\), loadPresets\(\), loadCreatedCoinsSilently\(\)\]\)/);
   assert.doesNotMatch(js, /const accountReady = await ensureAccount\(\)/);
 });
 
@@ -84,6 +84,9 @@ test("coin setup exposes fast buys, ladder exits, one-wallet RH trades, and the 
   assert.match(js, /payCurrency = "SOL"/);
   assert.match(js, /Convert received ETH back to SOL automatically/);
   assert.match(js, /amounts = \["0\.1", "0\.5", "1"\]/);
+  assert.match(js, /async function executeFunQuickBuy/);
+  assert.match(js, /data-custom-quick-amount/);
+  assert.match(js, /slippageBps: preset\?\.slippageBps \|\| "400"/);
   assert.match(js, /data-manage-presets/);
   assert.match(js, /\/api\/web\/presets/);
   assert.match(js, /action === "volume"[\s\S]{0,80}openVolumeSheet/);
@@ -92,6 +95,28 @@ test("coin setup exposes fast buys, ladder exits, one-wallet RH trades, and the 
   assert.match(js, /\/api\/web\/wallets\/sweep-background/);
   assert.match(js, /\/api\/web\/rh\/volume\/start/);
   assert.match(js, /\/api\/web\/rh\/fund-with-sol/);
+});
+
+test("/fun live feeds reject stale responses and refresh only the visible view", () => {
+  assert.match(js, /feedRequestVersion/);
+  assert.match(js, /version !== state\.feedRequestVersion/);
+  assert.match(js, /document\.hidden \|\| state\.view !== "home"/);
+  assert.match(js, /document\.addEventListener\("visibilitychange"/);
+  assert.match(js, /sortAndDedupeFeed/);
+  assert.match(js, /hydrateMissingCoinArt/);
+  assert.match(js, /const sol = await solPromise;[\s\S]{0,220}renderCoinList\(\);[\s\S]{0,120}const rh = await rhPromise/);
+  assert.match(server, /tokens\/v1\/robinhood\/\$\{addresses\}/);
+});
+
+test("/fun has editable presets, tracked calls, and informational profile follows", () => {
+  assert.match(server, /savedPresetId/);
+  assert.match(server, /defaultIds\.has\(rawId\)[\s\S]{0,100}hiddenWebPresetIds/);
+  assert.match(html, /data-detail="calls"/);
+  assert.match(js, /\/api\/web\/calls/);
+  assert.match(js, /\/api\/web\/profile\/public/);
+  assert.match(js, /\/api\/web\/profile\/follow/);
+  assert.match(server, /notifyProfileTradeFollowers\(insertedEvents\)/);
+  assert.match(server, /Trade alert only — nothing was copied/);
 });
 
 test("wallet manager can create, restore, export, select, and safely remove wallets", () => {

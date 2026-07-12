@@ -9114,6 +9114,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, { ok: true, rows: await webRhPairs(requestUrl.searchParams.get("category") || "trending") });
       return;
     }
+    if (request.method === "GET" && pathname === "/api/web/profile/public") {
+      sendCachedWebJson(request, response, 200, { ok: true, profile: await webPublicTraderProfile(requestUrl.searchParams.get("username") || "") }, "public, max-age=20, stale-while-revalidate=60");
+      return;
+    }
     if (request.method === "GET" && pathname === "/api/web/rh/token") {
       const address = String(requestUrl.searchParams.get("address") || requestUrl.searchParams.get("token") || "").trim();
       if (!/^0x[0-9a-fA-F]{40}$/.test(address)) { sendWebJson(request, response, 400, { ok: false, error: "Invalid token address." }); return; }
@@ -9387,6 +9391,17 @@ async function handleWebApiRequest(request, response, requestUrl) {
         ok: true,
         user: await webUserSummary(auth.userId)
       });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/profile/follows") {
+      sendWebJson(request, response, 200, { ok: true, follows: await webProfileFollows(auth.userId) });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/profile/follow") {
+      const body = await readJsonRequestBody(request);
+      sendWebJson(request, response, 200, { ok: true, ...await updateWebProfileFollow(auth.userId, body) });
       return;
     }
 
@@ -9795,6 +9810,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         presets: result.presets,
+        savedPresetId: result.savedPresetId,
         user: await webUserSummary(auth.userId)
       });
       return;
@@ -47553,14 +47569,13 @@ async function webPostBoardCall(userId, body = {}) {
 }
 
 async function webBoardCallsForMint(tokenMint = "") {
-  const store = await readCallBoard();
+  const [store, authStore] = await Promise.all([readCallBoard(), readWebAuthStore()]);
   const mint = String(tokenMint || "").trim();
   const scoped = mint ? store.calls.filter((call) => call.mint === mint) : store.calls;
-  const rows = scoped.slice(-30).reverse().map((call) => ({
-    ...call,
-    userId: undefined,
-    reputation: callerReputation(store.calls, call.handle)
-  }));
+  const rows = scoped.slice(-30).reverse().map((call) => {
+    const profile = authStore.profiles?.[String(call.userId)];
+    return { ...call, userId: undefined, profileSlug: profile?.showOnTraderBoard ? profile.username || "" : "", reputation: callerReputation(store.calls, call.handle) };
+  });
   const handles = [...new Set(store.calls.map((call) => call.handle))];
   const topCallers = handles
     .map((handle) => ({ handle, ...callerReputation(store.calls, handle) }))
@@ -51760,22 +51775,30 @@ async function rhLaunchMetaByAddress() {
 const rhFeedArtworkCache = new Map();
 async function enrichRhFeedArtwork(rows = []) {
   const targets = rows.filter((row) => row?.address && !row.imageUrl && !row.iconUrl).slice(0, 20);
-  await runWithConcurrency(targets, 8, async (row) => {
+  const missing = [];
+  for (const row of targets) {
     const key = String(row.address).toLowerCase(), cached = rhFeedArtworkCache.get(key);
     if (cached && Date.now() - cached.at < (cached.imageUrl ? 30 * 60_000 : 5 * 60_000)) {
       if (cached.imageUrl) row.imageUrl = cached.imageUrl;
-      return;
-    }
-    const pairs = await fetchJson(`https://api.dexscreener.com/token-pairs/v1/robinhood/${encodeURIComponent(row.address)}`, {
-      headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
-      timeoutMs: 1_800
+    } else missing.push(row);
+  }
+  if (missing.length) {
+    const addresses = missing.map((row) => row.address).join(",");
+    const pairs = await fetchJson(`https://api.dexscreener.com/tokens/v1/robinhood/${addresses}`, {
+      headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" }, timeoutMs: 2_200
     }).catch(() => []);
-    const best = (Array.isArray(pairs) ? pairs : []).filter((pair) => pair?.info?.imageUrl)
-      .sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0))[0];
-    const imageUrl = String(best?.info?.imageUrl || "");
-    rhFeedArtworkCache.set(key, { at: Date.now(), imageUrl });
-    if (imageUrl) row.imageUrl = imageUrl;
-  });
+    const byToken = new Map();
+    for (const pair of Array.isArray(pairs) ? pairs : []) {
+      const key = String(pair?.baseToken?.address || "").toLowerCase();
+      if (!key || !pair?.info?.imageUrl) continue;
+      const previous = byToken.get(key);
+      if (!previous || Number(pair?.liquidity?.usd || 0) > Number(previous?.liquidity?.usd || 0)) byToken.set(key, pair);
+    }
+    for (const row of missing) {
+      const key = String(row.address).toLowerCase(), imageUrl = String(byToken.get(key)?.info?.imageUrl || "");
+      rhFeedArtworkCache.set(key, { at: Date.now(), imageUrl }); if (imageUrl) row.imageUrl = imageUrl;
+    }
+  }
   if (rhFeedArtworkCache.size > 1_000) {
     const oldest = [...rhFeedArtworkCache.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, 200);
     for (const [key] of oldest) rhFeedArtworkCache.delete(key);
@@ -52113,15 +52136,18 @@ async function webRhTradeCore(userId, body = {}, internal = {}) {
   }
   // 🥊 PvP live feed: Robinhood trades count too — post to the trader's arena groups. Direct call
   // (not recordTradeEvents) so 0x rows never pollute the SOL trade history / PnL boards.
-  void pvpBroadcastTradeEvents([{
+  const rhTradeEvent = {
     userId,
     type: side,
     tokenMint: tokenAddress,
+    walletPublicKey: wallet.publicKey,
     signature: hashes[hashes.length - 1],
     symbol: side === "buy" ? String(quote.outSymbol || "") : "",
     rhEthAmount: side === "buy" ? Number(amountRaw) / 1e18 : Number(quote.outFormatted || 0),
     ...(solFunding ? { solLamportsSpent: String(solToLamports(solFunding.amountSol)) } : {}),
-  }]).catch(() => {});
+  };
+  void pvpBroadcastTradeEvents([rhTradeEvent]).catch(() => {});
+  void notifyProfileTradeFollowers([{ id: `rh-${hashes[hashes.length - 1]}`, ...rhTradeEvent }]).catch(() => {});
   return {
     ok: true,
     side,
@@ -52720,6 +52746,7 @@ async function recordTradeEvents(events) {
   }));
   // Lock the read-modify-write (was racy → lost/duplicated trades) and skip any event whose on-chain
   // trade is already recorded, so `received`/`spent` can't be double-counted.
+  const insertedEvents = [];
   await withFileLock(tradeHistoryPath(), async () => {
     const store = await readTradeHistory();
     const seen = new Set(store.trades.map(tradeEventDedupeKey).filter(Boolean));
@@ -52727,7 +52754,9 @@ async function recordTradeEvents(events) {
       const key = tradeEventDedupeKey(event);
       if (key && seen.has(key)) continue;
       if (key) seen.add(key);
-      store.trades.push({ id: crypto.randomUUID(), timestamp: new Date().toISOString(), ...event });
+      const inserted = { id: crypto.randomUUID(), timestamp: new Date().toISOString(), ...event };
+      store.trades.push(inserted);
+      insertedEvents.push(inserted);
     }
     await writeJsonFile(tradeHistoryPath(), store);
   });
@@ -52735,6 +52764,7 @@ async function recordTradeEvents(events) {
   void maybeCopyRoomConsensus(events).catch(() => {});   // 🤝 Copy room consensus: mirror when ≥2 board traders agree
   void maybeCreditReferralConversion(events).catch(() => {});   // 🎟️ credit a site-referred user's first trade to their TG inviter
   void pvpBroadcastTradeEvents(events).catch(() => {});   // 🥊 PvP live feed: post members' trades to their arena groups
+  void notifyProfileTradeFollowers(insertedEvents).catch(() => {}); // alerts only; never copies a trade
 
   const hasWebBuyNeedingGuard = events.some((event) => (
     event?.type === "buy"
@@ -52986,6 +53016,10 @@ function ensureWebProfileDefaults(store, userId) {
   }
   if (!Array.isArray(profile.traderBoardWalletPublicKeys)) {
     profile.traderBoardWalletPublicKeys = [];
+    changed = true;
+  }
+  if (!Array.isArray(profile.followingProfileIds)) {
+    profile.followingProfileIds = [];
     changed = true;
   }
   if (profile.referralPayoutWallet === undefined) {
@@ -57694,6 +57728,7 @@ async function updateWebPreset(userId, body = {}) {
       ? uniqueStrings(existing.hiddenWebPresetIds.map(String))
       : [];
     let next = current;
+    let savedPresetId = "";
     if (action === "delete") {
       const id = String(body.id || "").trim();
       if (defaultIds.has(id)) {
@@ -57705,6 +57740,8 @@ async function updateWebPreset(userId, body = {}) {
       const rawPreset = body.preset || body;
       const rawId = String(rawPreset.id || "").trim();
       const preset = normalizeWebPreset(type, rawPreset, { keepId: Boolean(rawId && !defaultIds.has(rawId)) });
+      savedPresetId = preset.id;
+      if (defaultIds.has(rawId)) hiddenWebPresetIds = uniqueStrings([...hiddenWebPresetIds, rawId]);
       const existingIndex = current.findIndex((item) => item.id === preset.id);
       next = existingIndex >= 0
         ? current.map((item, index) => (index === existingIndex ? preset : item))
@@ -57717,10 +57754,10 @@ async function updateWebPreset(userId, body = {}) {
       updatedAt: new Date().toISOString()
     };
     store.profiles[key] = profile;
-    return { count: next.length };
+    return { count: next.length, savedPresetId };
   });
   await audit("web_preset_update", { userId, type, action, count: result.count }).catch(() => {});
-  return { presets: await webPresetRows(userId) };
+  return { presets: await webPresetRows(userId), savedPresetId: result.savedPresetId || "" };
 }
 
 function normalizeWebPresetType(value) {
@@ -58097,6 +58134,73 @@ async function loungeMod(userId, action, payload = {}) {
     result = { role: loungeRole(s, userId), messages: s.messages.slice(-150), mods: s.mods };
   });
   return result;
+}
+
+function publicProfileByUsername(store, username) {
+  const wanted = String(username || "").trim().replace(/^@/, "").toLowerCase();
+  if (!wanted) return null;
+  for (const [userId, profile] of Object.entries(store.profiles || {})) {
+    if (profile?.showOnTraderBoard && String(profile.usernameNormalized || profile.username || "").toLowerCase() === wanted) return { userId, profile };
+  }
+  return null;
+}
+
+async function webPublicTraderProfile(username) {
+  const [store, traders, calls] = await Promise.all([readWebAuthStore(), webSlimewireTraders(), readCallBoard()]);
+  const found = publicProfileByUsername(store, username);
+  if (!found) { const error = new Error("Public trader profile not found."); error.statusCode = 404; throw error; }
+  const trader = traders.find((row) => row.userId === found.userId) || {};
+  const followerCount = Object.values(store.profiles || {}).filter((profile) => Array.isArray(profile?.followingProfileIds) && profile.followingProfileIds.includes(found.userId)).length;
+  return {
+    username: found.profile.username || "",
+    name: found.profile.username || found.profile.xHandle || "SlimeWire trader",
+    xHandle: found.profile.xHandle || "",
+    avatar: found.profile.avatarDataUrl || found.profile.avatarUrl || "",
+    followerCount,
+    stats: { realizedLabel: trader.realizedLabel || "building", roiLabel: trader.roiLabel || "n/a", trades: trader.trades || 0, buys: trader.buys || 0, sells: trader.sells || 0 },
+    calls: calls.calls.filter((call) => call.userId === found.userId).slice(-20).reverse().map(({ userId, ...call }) => call)
+  };
+}
+
+async function webProfileFollows(userId) {
+  const store = await readWebAuthStore(), profile = store.profiles?.[String(userId)] || {};
+  return (Array.isArray(profile.followingProfileIds) ? profile.followingProfileIds : []).map((id) => {
+    const target = store.profiles?.[id];
+    return target?.showOnTraderBoard ? { username: target.username || "", name: target.username || target.xHandle || "Trader", avatar: target.avatarDataUrl || target.avatarUrl || "" } : null;
+  }).filter(Boolean);
+}
+
+async function updateWebProfileFollow(userId, body = {}) {
+  const result = await mutateWebAuthStore((store) => {
+    const target = publicProfileByUsername(store, body.username);
+    if (!target) { const error = new Error("Public trader profile not found."); error.statusCode = 404; throw error; }
+    if (target.userId === String(userId)) { const error = new Error("You cannot follow your own profile."); error.statusCode = 400; throw error; }
+    const { profile } = ensureWebProfileDefaults(store, userId);
+    const current = new Set(profile.followingProfileIds || []);
+    if (body.follow === false) current.delete(target.userId); else current.add(target.userId);
+    if (current.size > 100) { const error = new Error("You can follow up to 100 traders."); error.statusCode = 400; throw error; }
+    profile.followingProfileIds = [...current]; profile.updatedAt = new Date().toISOString(); store.profiles[String(userId)] = profile;
+    return { following: current.has(target.userId), username: target.profile.username || "" };
+  });
+  return { ...result, follows: await webProfileFollows(userId) };
+}
+
+async function notifyProfileTradeFollowers(events = []) {
+  const eligible = events.filter((event) => event?.userId && event?.tokenMint && ["buy", "sell"].includes(String(event.type || "").toLowerCase()));
+  if (!eligible.length) return;
+  const store = await readWebAuthStore();
+  const jobs = [];
+  for (const event of eligible) {
+    const traderId = String(event.userId), trader = store.profiles?.[traderId];
+    if (!trader?.showOnTraderBoard) continue;
+    if (trader.traderBoardWalletMode === "manual" && !(trader.traderBoardWalletPublicKeys || []).map(String).includes(String(event.walletPublicKey || ""))) continue;
+    const name = trader.username || trader.xHandle || "A trader you follow", side = String(event.type).toLowerCase();
+    for (const [followerId, follower] of Object.entries(store.profiles || {})) {
+      if (!(follower.followingProfileIds || []).includes(traderId)) continue;
+      jobs.push(sendWebPushToUser(followerId, { title: `${name} ${side === "buy" ? "bought" : "sold"} ${event.symbol ? `$${event.symbol}` : "a coin"}`, body: "Trade alert only — nothing was copied.", tag: `profile-trade-${event.id || event.signature || Date.now()}`, url: `/fun#coin/${encodeURIComponent(event.tokenMint)}` }));
+    }
+  }
+  await Promise.allSettled(jobs);
 }
 
 async function webSlimewireTraders() {
@@ -63772,10 +63876,9 @@ function imageUriGatewayCandidates(uri) {
   const cid = cidFromIpfsUri(clean);
   if (!cid) return [clean].filter(Boolean);
   return [...new Set([
-    /^ipfs:\/\//i.test(clean) ? "" : clean,
     `https://gateway.pinata.cloud/ipfs/${cid}`,
     `https://ipfs.io/ipfs/${cid}`,
-    `https://cloudflare-ipfs.com/ipfs/${cid}`
+    /^ipfs:\/\//i.test(clean) || /(?:cf-ipfs\.com|cloudflare-ipfs\.com)/i.test(clean) ? "" : clean
   ].filter(Boolean))];
 }
 

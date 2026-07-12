@@ -29,6 +29,7 @@
     previousView: "home",
     profileTab: "positions",
     detailTab: "setup",
+    coinCalls: [],
     positions: [],
     launches: [],
     tradeBusy: false,
@@ -36,7 +37,11 @@
     activePresetId: localStorage.getItem(ACTIVE_PRESET_KEY) || "",
     volumePoll: null,
     recents: readLocal(RECENTS_KEY, []),
-    feedCache: new Map()
+    feedCache: new Map(),
+    feedRequestVersion: 0,
+    feedTimer: null,
+    imageHydrateVersion: 0,
+    quickBuyKey: ""
   };
 
   function escapeHtml(value) {
@@ -112,6 +117,7 @@
   }
   function post(path, body) { return request(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) }); }
   function setToken(token) { state.token = token || ""; if (token) localStorage.setItem(TOKEN_KEY, token); else localStorage.removeItem(TOKEN_KEY); }
+  async function loadMe() { if (!state.token) return null; const result = await request("/api/web/me", { noRetry: true }); if (result.ok) state.user = result.data?.user || null; return state.user; }
 
   async function ensureAccount() {
     if (state.token) {
@@ -163,30 +169,77 @@
     soon: { bucket: "live", sort: "best", cat: "graduating", rh: "new", note: "Coins approaching their next market stage" },
     graduated: { bucket: "graduated", sort: "best", cat: "graduated", rh: "safe", note: "Established pools with active trading" }
   };
-  async function fetchSolFeed(config) {
+  async function fetchSolFeed(config, force = false) {
     const query = new URLSearchParams({ bucket: config.bucket, sort: config.sort }); if (config.cat) query.set("cat", config.cat);
+    if (force) query.set("force", "true");
     const result = await request(`/api/web/live-pairs?${query}`);
     return result.ok ? (result.data?.livePairs?.rows || []).map(normalizeSol) : [];
   }
   async function fetchRhFeed(config) {
-    const result = await request(`/api/web/rh/pairs?category=${encodeURIComponent(config.rh || "trending")}`);
+    const result = await request(`/api/web/rh/pairs?category=${encodeURIComponent(config.rh || "trending")}`, { timeout: 5000 });
     return result.ok ? (result.data?.rows || []).map(normalizeRh) : [];
   }
-  async function loadFeed(force = false) {
+  function sortAndDedupeFeed(rows, feed) {
+    const unique = [...new Map(rows.filter((row) => coinKey(row)).map((row) => [coinKey(row).toLowerCase(), row])).values()];
+    const feedAge = (row) => {
+      const label = String(row.age || "").toLowerCase();
+      if (label === "new") return 0;
+      const match = label.match(/^(\d+)(s|m|h|d)$/);
+      if (match) return Number(match[1]) * ({ s: 1, m: 60, h: 3600, d: 86400 }[match[2]] || 1);
+      const seconds = Number(row.pairAgeSeconds);
+      if (Number.isFinite(seconds) && seconds > 0) return seconds;
+      const created = Date.parse(row.createdAt || "");
+      return Number.isFinite(created) ? Math.max(0, (Date.now() - created) / 1000) : Infinity;
+    };
+    return unique.sort(feed === "new"
+      ? (a, b) => feedAge(a) - feedAge(b)
+      : (a, b) => (b.marketCap || 0) - (a.marketCap || 0));
+  }
+  function scheduleFeedRefresh(delay = state.chain === "solana" ? 8000 : 12000) {
+    clearTimeout(state.feedTimer);
+    if (document.hidden || state.view !== "home") return;
+    state.feedTimer = setTimeout(async () => {
+      if (document.hidden || state.view !== "home") return;
+      try { await loadFeed(true, { silent: true }); }
+      finally { scheduleFeedRefresh(); }
+    }, delay);
+  }
+  async function loadFeed(force = false, options = {}) {
+    const version = ++state.feedRequestVersion, selectedChain = state.chain, selectedFeed = state.feed;
     const config = FEED_CONFIG[state.feed] || FEED_CONFIG.movers;
     const cacheKey = `${state.chain}:${state.feed}`;
     const cached = state.feedCache.get(cacheKey);
-    if (!force && cached && Date.now() - cached.at < 15_000) { state.rows = cached.rows; hydrateSelectedFromFeed(); renderCoinList(); return; }
-    $("[data-coin-list]").innerHTML = '<div class="skeleton-list"></div>';
+    if (!force && cached && Date.now() - cached.at < 15_000) { state.rows = cached.rows; hydrateSelectedFromFeed(); renderCoinList(); scheduleFeedRefresh(); return; }
+    if (!options.silent && !state.rows.length) $("[data-coin-list]").innerHTML = '<div class="skeleton-list"></div>';
     $("[data-feed-note]").textContent = config.note;
     let rows = [];
-    if (state.chain === "solana") rows = await fetchSolFeed(config);
-    else if (state.chain === "robinhood") rows = await fetchRhFeed(config);
-    else { const [sol, rh] = await Promise.all([fetchSolFeed(config), fetchRhFeed(config)]); rows = [...sol.slice(0, 24), ...rh.slice(0, 16)].sort((a, b) => (b.marketCap || 0) - (a.marketCap || 0)); }
-    state.rows = rows;
-    state.feedCache.set(cacheKey, { at: Date.now(), rows });
+    if (selectedChain === "solana") rows = await fetchSolFeed(config, force && !options.silent);
+    else if (selectedChain === "robinhood") rows = await fetchRhFeed(config);
+    else {
+      const solPromise = fetchSolFeed(config, force && !options.silent), rhPromise = fetchRhFeed(config);
+      const sol = await solPromise;
+      if (version !== state.feedRequestVersion || selectedChain !== state.chain || selectedFeed !== state.feed) return;
+      state.rows = sortAndDedupeFeed(sol, selectedFeed); renderCoinList(); void hydrateMissingCoinArt(version);
+      const rh = await rhPromise; rows = [...sol.slice(0, 32), ...rh.slice(0, 24)];
+    }
+    if (version !== state.feedRequestVersion || selectedChain !== state.chain || selectedFeed !== state.feed) return;
+    state.rows = sortAndDedupeFeed(rows, selectedFeed);
+    state.feedCache.set(cacheKey, { at: Date.now(), rows: state.rows });
     hydrateSelectedFromFeed();
     renderCoinList();
+    void hydrateMissingCoinArt(version);
+    scheduleFeedRefresh();
+  }
+  async function hydrateMissingCoinArt(version) {
+    const missing = state.rows.filter((row) => !directCoinImage(row)).slice(0, 12);
+    if (!missing.length) return;
+    const hydrateVersion = ++state.imageHydrateVersion;
+    for (let index = 0; index < missing.length; index += 4) await Promise.all(missing.slice(index, index + 4).map(async (row) => {
+        const key = coinKey(row), result = await request(`/api/web/token-search?q=${encodeURIComponent(key)}`, { timeout: 5000 });
+        const match = result.ok ? (result.data?.matches || []).find((item) => coinKey(item).toLowerCase() === key.toLowerCase()) : null;
+        const imageUrl = directCoinImage(match); if (imageUrl) row.imageUrl = imageUrl;
+      }));
+    if (version === state.feedRequestVersion && hydrateVersion === state.imageHydrateVersion) renderCoinList();
   }
   function hydrateSelectedFromFeed() {
     if (state.view !== "coin" || !state.selected) return;
@@ -197,11 +250,11 @@
     addRecent(state.selected);
     renderCoinShell();
   }
-  function coinRowHtml(coin) {
+  function coinRowHtml(coin, index = 0) {
     const key = coinKey(coin), chain = coin.chain === "robinhood" ? "rh" : "sol";
     const change = Number(coin.change), changeClass = Number.isFinite(change) ? (change >= 0 ? "up" : "down") : "";
     return `<button class="coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="${chain}">
-      <span class="coin-avatar"><img ${coinImageAttrs(coin)} alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"><i class="chain-badge ${chain}">${chain === "rh" ? "RH" : "SOL"}</i></span>
+      <span class="coin-avatar"><img ${coinImageAttrs(coin)} alt="" loading="${index < 10 ? "eager" : "lazy"}" decoding="async" referrerpolicy="no-referrer"><i class="chain-badge ${chain}">${chain === "rh" ? "RH" : "SOL"}</i></span>
       <span class="coin-info"><span class="coin-title"><b>${escapeHtml(coin.symbol || short(key))}</b><span>${escapeHtml(coin.name || "")}</span>${coin.live ? '<i class="live-tag">LIVE</i>' : ""}</span><span class="coin-meta"><i>${escapeHtml(coin.age || "new")}</i><i>Vol ${escapeHtml(coin.volume > 0 ? formatUsd(coin.volume) : (coin.volumeLabel || "checking"))}</i><i class="${changeClass}">${escapeHtml(formatPct(change))}</i></span></span>
       <span class="coin-value"><b>${escapeHtml(formatUsd(coin.marketCap))}</b><span>MARKET CAP</span></span>
     </button>`;
@@ -215,6 +268,7 @@
   function setView(view, options = {}) {
     if (view !== state.view) state.previousView = state.view === "coin" ? state.previousView : state.view;
     state.view = view;
+    if (view !== "home") clearTimeout(state.feedTimer);
     $$("[data-view]").forEach((node) => node.classList.toggle("active", node.dataset.view === view));
     $$("[data-nav]").forEach((node) => node.classList.toggle("active", node.dataset.nav === view || (view === "coin" && node.dataset.nav === "home")));
     $(".fun-header").style.display = view === "coin" ? "none" : "flex";
@@ -234,6 +288,7 @@
     let coin = state.rows.find((row) => coinKey(row).toLowerCase() === String(key).toLowerCase()) || { address: key, tokenMint: key, chain };
     state.selected = coin;
     state.selectedDetail = null;
+    state.coinCalls = [];
     state.detailTab = "setup";
     addRecent(coin);
     setView("coin", { hideNav: false });
@@ -290,7 +345,8 @@
   function renderQuickTrade() {
     const wallet = activeWallet(), amounts = ["0.1", "0.5", "1"], preset = activePreset();
     const balance = wallet ? `${Number(wallet.sol || 0).toFixed(4)} SOL` : "Connect wallet";
-    $("[data-quick-trade]").innerHTML = `<div class="quick-wallet-line"><span>Available <b>${escapeHtml(balance)}</b></span><button type="button" data-nav="wallet">${wallet ? escapeHtml(wallet.label || "Wallet") : "Set up"} ›</button></div><div class="quick-buy-row">${amounts.map((amount) => `<button type="button" data-quick-buy="${amount}">${amount} SOL</button>`).join("")}</div><button class="preset-strip" type="button" data-manage-presets><span>${preset ? `Preset · ${escapeHtml(preset.name)}` : "Preset · Manual"}</span><b>${preset ? `${escapeHtml(preset.takeProfitPct || "off")}% TP · ${escapeHtml(preset.stopLossPct || "off")}% SL` : "Add or edit ›"}</b></button>`;
+    const presetChips = state.presets.trade.slice(0, 4).map((item) => `<button type="button" class="preset-chip ${item.id === state.activePresetId ? "active" : ""}" data-activate-preset="${escapeHtml(item.id)}">${escapeHtml(item.name)}</button>`).join("");
+    $("[data-quick-trade]").innerHTML = `<div class="quick-wallet-line"><span>Available <b>${escapeHtml(balance)}</b></span><button type="button" data-nav="wallet">${wallet ? escapeHtml(wallet.label || "Wallet") : "Set up"} ›</button></div><div class="quick-buy-row">${amounts.map((amount) => `<button type="button" data-quick-buy="${amount}">${amount} SOL</button>`).join("")}</div><div class="quick-custom"><input data-custom-quick-amount inputmode="decimal" placeholder="Custom SOL" aria-label="Custom SOL amount"><button type="button" data-custom-quick-buy>Buy</button></div>${presetChips ? `<div class="preset-chips"><button type="button" class="preset-chip ${preset ? "" : "active"}" data-activate-preset="">Manual</button>${presetChips}</div>` : ""}<button class="preset-strip" type="button" data-manage-presets><span>${preset ? `Preset · ${escapeHtml(preset.name)}` : "Preset · Manual"}</span><b>${preset ? `${escapeHtml(preset.takeProfitPct || "off")}% TP · ${escapeHtml(preset.stopLossPct || "off")}% SL` : "Add or edit ›"}</b></button>`;
   }
   function renderPositionCard() {
     const position = currentPosition(), card = $("[data-position-card]");
@@ -301,6 +357,7 @@
   }
   function renderDetailPanel() {
     const coin = state.selected || {}, detail = state.selectedDetail || {}, panel = $("[data-detail-panel]");
+    if (state.detailTab === "calls") { renderCoinCalls(); return; }
     if (state.detailTab === "holders") {
       const holders = Number(coin.holders || detail.holders || detail.rugcheck?.holders || 0);
       panel.innerHTML = `<div class="read-card"><h3>Holder read</h3><p>${holders > 0 ? `${holders.toLocaleString()} holders are currently visible.` : "Holder count is not available from the current source yet."} Open the wallet map for distribution and connected-wallet context.</p><div class="factor-list"><span>${holders > 0 ? `${holders.toLocaleString()} holders` : "count pending"}</span><span>on-chain view</span></div></div><button class="tool-card" type="button" data-link-tool="map"><b>Open wallet map</b><span>Distribution, clusters, and fund paths</span></button>`;
@@ -318,35 +375,102 @@
       <button class="strategy-card" type="button" data-trade-strategy="runner"><b>Let it run</b><span>${rh ? "TP +100% · SL -20%" : "Trailing 20% · break-even"}</span></button>
     </div><p class="fineprint">SlimeShield safety remains in Tools. Presets never bypass trade review or honeypot protection.</p>`;
   }
+  async function renderCoinCalls(force = false) {
+    const panel = $("[data-detail-panel]"), coin = state.selected || {}, key = coinKey(coin);
+    if (coin.chain === "robinhood") { panel.innerHTML = `<div class="read-card"><h3>Robinhood calls are next</h3><p>Public calls currently use verified Solana market-cap snapshots. Robinhood support will appear only when it can use the same honest tracking.</p></div>`; return; }
+    if (!state.coinCalls.length || force) panel.innerHTML = '<div class="skeleton-list" style="height:120px"></div>';
+    const result = await request(`/api/web/calls?mint=${encodeURIComponent(key)}`);
+    if (state.detailTab !== "calls" || coinKey(state.selected).toLowerCase() !== key.toLowerCase()) return;
+    state.coinCalls = result.ok ? (result.data?.calls || []) : [];
+    const rows = state.coinCalls.map((call) => `<div class="call-row"><img class="slime-pfp" src="${slimePfp(call.handle)}" alt=""><div><b>${call.profileSlug ? `<button type="button" data-open-trader="${escapeHtml(call.profileSlug)}">${escapeHtml(call.handle || "caller")}</button>` : escapeHtml(call.handle || "caller")} · ${escapeHtml(String(call.side || "call").toUpperCase())}</b><span>Called at ${escapeHtml(formatUsd(call.entryMcUsd))} · ${escapeHtml(call.outcome || call.status || "open")}</span>${call.note ? `<p>${escapeHtml(call.note)}</p>` : ""}</div></div>`).join("");
+    panel.innerHTML = `<div class="read-card"><h3>Call it at market cap</h3><p>Your entry market cap is captured by the server. Calls become public proof—not a copy trade.</p><div class="call-actions">${["bullish", "bearish", "warning", "question"].map((side) => `<button type="button" data-post-call="${side}">${side}</button>`).join("")}</div></div>${rows || emptyState("No calls yet", "Be first to leave a tracked call on this coin.")}`;
+  }
+  async function postCoinCall(side, button) {
+    if (!(await ensureAccount())) { toast("Sign in to post a call.", true); return; }
+    button.disabled = true;
+    try {
+      const result = await post("/api/web/calls", { tokenMint: coinKey(state.selected), side, source: "fun" });
+      if (result.ok && result.data?.ok) { toast(`Called ${side} at current market cap`); state.coinCalls = []; await renderCoinCalls(true); }
+      else toast(result.data?.error || result.data?.message || "Could not post call", true);
+    } finally { button.disabled = false; }
+  }
 
   async function loadLeaders() {
     const hero = $("[data-leader-hero]"), list = $("[data-leader-list]");
     hero.innerHTML = '<div class="skeleton-list" style="height:160px"></div>'; list.innerHTML = '<div class="skeleton-list"></div>';
-    const result = await request("/api/web/proof");
-    const leaders = result.ok ? (result.data?.topCallers || []) : [];
-    if (!leaders.length) { hero.innerHTML = emptyState("Caller proof is warming", "Check again after tracked calls resolve."); list.innerHTML = ""; return; }
+    const [result, socialResult] = await Promise.all([request("/api/web/proof"), request("/api/web/slimewire-traders")]);
+    const leaders = result.ok ? (result.data?.topCallers || []) : [], social = socialResult.ok ? (socialResult.data?.traders || []) : [];
+    if (!leaders.length && !social.length) { hero.innerHTML = emptyState("Caller proof is warming", "Check again after tracked calls resolve."); list.innerHTML = ""; return; }
+    if (!leaders.length) { const firstSocial = social[0]; hero.innerHTML = `<button class="leader-card" type="button" data-open-trader="${escapeHtml(firstSocial.username)}"><div class="leader-name"><img class="slime-pfp" src="${escapeHtml(firstSocial.avatar || slimePfp(firstSocial.username))}" alt=""><div><h3>${escapeHtml(firstSocial.name)}</h3><p>${escapeHtml(firstSocial.trades || 0)} public trades · follow alerts only</p></div></div><div class="leader-score">${escapeHtml(firstSocial.roiLabel || "building")}<small>public profile</small></div></button>`; list.innerHTML = social.slice(1).map(traderRowHtml).join(""); return; }
     const first = leaders[0], name = first.name || first.callerName || first.id || "Top caller";
     hero.innerHTML = `<div class="leader-card"><div class="leader-name"><img class="slime-pfp" src="${slimePfp(name)}" alt=""><div><h3>${escapeHtml(name)}</h3><p>${escapeHtml(first.calls || first.resolved || 0)} tracked calls · public receipts</p></div></div><div class="leader-score">${Math.round(Number(first.smoothedHitRate || first.hitRate || 0) * 100)}% <small>verified hit rate</small></div></div>`;
-    list.innerHTML = leaders.slice(1, 11).map((leader, index) => { const n = leader.name || leader.callerName || leader.id || `Caller ${index + 2}`; return `<div class="leader-row"><span class="leader-rank">${index + 2}</span><img class="slime-pfp" src="${slimePfp(n)}" alt=""><div class="leader-copy"><b>${escapeHtml(n)}</b><span>${escapeHtml(leader.calls || leader.resolved || 0)} resolved · best ${escapeHtml(leader.bestPeakX || "—")}x</span></div><div class="leader-hit">${Math.round(Number(leader.smoothedHitRate || leader.hitRate || 0) * 100)}%<small>hit rate</small></div></div>`; }).join("");
+    list.innerHTML = `${social.length ? `<div class="read-card"><h3>Trader profiles</h3><p>Follow activity alerts without copy trading.</p></div>${social.map(traderRowHtml).join("")}` : ""}${leaders.slice(1, 11).map((leader, index) => { const n = leader.name || leader.callerName || leader.id || `Caller ${index + 2}`; return `<div class="leader-row"><span class="leader-rank">${index + 2}</span><img class="slime-pfp" src="${slimePfp(n)}" alt=""><div class="leader-copy"><b>${escapeHtml(n)}</b><span>${escapeHtml(leader.calls || leader.resolved || 0)} resolved · best ${escapeHtml(leader.bestPeakX || "—")}x</span></div><div class="leader-hit">${Math.round(Number(leader.smoothedHitRate || leader.hitRate || 0) * 100)}%<small>hit rate</small></div></div>`; }).join("")}`;
+  }
+  function traderRowHtml(trader) { return `<button class="leader-row" type="button" data-open-trader="${escapeHtml(trader.username || "")}"><span class="leader-rank">◎</span><img class="slime-pfp" src="${escapeHtml(trader.avatar || slimePfp(trader.username || trader.name))}" alt=""><div class="leader-copy"><b>${escapeHtml(trader.name || trader.username)}</b><span>${escapeHtml(trader.trades || 0)} trades · ${escapeHtml(trader.realizedLabel || "building")}</span></div><div class="leader-hit">${escapeHtml(trader.roiLabel || "n/a")}<small>ROI</small></div></button>`; }
+  async function openTraderProfile(username) {
+    const result = await request(`/api/web/profile/public?username=${encodeURIComponent(username)}`);
+    if (!result.ok || !result.data?.profile) { toast("Profile is not available.", true); return; }
+    const profile = result.data.profile, follows = state.token ? await request("/api/web/profile/follows") : null;
+    const following = (follows?.data?.follows || []).some((item) => item.username === profile.username);
+    openSheet(`<div class="sheet-title"><img src="${escapeHtml(profile.avatar || slimePfp(profile.username))}" alt=""><div><h2>@${escapeHtml(profile.username)}</h2><p>${escapeHtml(profile.followerCount || 0)} followers · ${escapeHtml(profile.stats.trades || 0)} public trades</p></div></div><div class="read-card"><h3>${escapeHtml(profile.stats.realizedLabel || "Building record")}</h3><p>${escapeHtml(profile.stats.roiLabel || "n/a")} ROI · ${escapeHtml(profile.stats.buys || 0)} buys · ${escapeHtml(profile.stats.sells || 0)} sells</p></div><button class="submit-trade" type="button" data-follow-trader="${escapeHtml(profile.username)}" data-following="${following ? "true" : "false"}">${following ? "Unfollow trade alerts" : "Follow trade alerts"}</button><p class="fineprint">Alerts only—following never trades for you.</p>`);
+  }
+  async function toggleTraderFollow(button) {
+    if (!(await ensureAccount())) return;
+    const follow = button.dataset.following !== "true", result = await post("/api/web/profile/follow", { username: button.dataset.followTrader, follow });
+    if (result.ok && result.data?.ok) { toast(follow ? "Trade alerts followed" : "Trade alerts unfollowed"); await openTraderProfile(button.dataset.followTrader); }
+    else toast(result.data?.error || "Could not update follow", true);
   }
 
   async function loadWalletView() {
     const panel = $("[data-profile-panel]");
     if (state.token) await Promise.all([loadWallets(), loadPositions()]);
     renderWalletHero();
+    if (!state.token && state.profileTab === "social") { renderSocialProfile(); return; }
     if (!state.token) {
       panel.innerHTML = emptyState("Your mobile wallet starts here", "Tap Deposit or Receive when you are ready. SlimeWire creates the account only when you use it.");
       return;
     }
     if (state.profileTab === "positions") renderWalletPositions();
     else if (state.profileTab === "activity") loadWalletActivity();
-    else loadCreatedCoins();
+    else if (state.profileTab === "created") loadCreatedCoins();
+    else renderSocialProfile();
     if (!state.wallets.length) panel.innerHTML = emptyState("Your mobile wallet starts here", "Create a managed SlimeWire wallet to trade and keep server-side exits working while the app is closed.");
   }
   function renderWalletHero() {
     const wallet = activeWallet(), hero = $("[data-wallet-hero]");
     if (!wallet) { hero.innerHTML = `<img class="wallet-pfp" src="${slimePfp("guest")}" alt=""><h1>Slime guest</h1><p>No wallet created yet</p><div class="wallet-total">Ready when you are</div>`; return; }
     hero.innerHTML = `<img class="wallet-pfp" src="${slimePfp(wallet.publicKey)}" alt=""><h1>${escapeHtml(wallet.label || "Slime wallet")}</h1><p>${escapeHtml(short(wallet.publicKey))}</p><div class="wallet-total">◎ ${Number(wallet.sol || 0).toFixed(4)} available</div>`;
+  }
+  function renderSocialProfile() {
+    const panel = $("[data-profile-panel]"), user = state.user || {};
+    panel.innerHTML = `<div class="read-card"><h3>Your public trader profile</h3><p>Choose a username, publish your opted-in trade record, and let people follow alerts. Following never places or copies a trade.</p></div><div class="preset-editor"><div class="field"><label>Username</label><input data-profile-username value="${escapeHtml(user.username || "")}" maxlength="24" placeholder="slimetrader"></div><div class="field"><label>${user.hasPasswordLogin ? "New password (required to change username)" : "Password"}</label><input type="password" data-profile-password autocomplete="new-password" placeholder="8+ characters"></div><label class="check-row"><input type="checkbox" data-profile-public ${user.showOnTraderBoard ? "checked" : ""}> Show my opted-in trading profile publicly</label><button class="submit-trade" type="button" data-save-social-profile>Save profile</button><button class="recovery-button" type="button" data-enable-push>Enable trade alerts on this device</button><p class="fineprint" data-social-status>Profile alerts are informational only. SlimeWire will never auto-buy from a follow.</p></div>`;
+  }
+  async function saveSocialProfile(button) {
+    if (!(await ensureAccount())) return;
+    const username = String($("[data-profile-username]")?.value || "").trim(), password = String($("[data-profile-password]")?.value || "");
+    if (!username || password.length < 8) { toast("Add a username and password of at least 8 characters.", true); return; }
+    button.disabled = true;
+    try {
+      const credentials = await post("/api/web/profile/credentials", { username, password });
+      if (!credentials.ok || !credentials.data?.ok) { toast(credentials.data?.error || "Could not save profile", true); return; }
+      const visibility = await post("/api/web/profile/referral", { showOnTraderBoard: Boolean($("[data-profile-public]")?.checked), traderBoardWalletMode: "all" });
+      if (!visibility.ok || !visibility.data?.ok) { toast(visibility.data?.error || "Could not publish profile", true); return; }
+      state.user = visibility.data.user || credentials.data.user || state.user; toast("Trader profile saved"); renderSocialProfile();
+    } finally { button.disabled = false; }
+  }
+  function urlBase64ToUint8Array(value) { const padding = "=".repeat((4 - value.length % 4) % 4), raw = atob((value + padding).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from([...raw].map((char) => char.charCodeAt(0))); }
+  async function enableFunPush(button) {
+    if (!(await ensureAccount())) return;
+    button.disabled = true;
+    try {
+      const key = await request("/api/web/push/key");
+      if (!key.ok || !key.data?.enabled || !key.data.publicKey) { toast("Push alerts are not configured yet.", true); return; }
+      const registration = await navigator.serviceWorker.register("/sw.js"); await navigator.serviceWorker.ready;
+      if (await Notification.requestPermission() !== "granted") { toast("Notification permission was not granted.", true); return; }
+      const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(key.data.publicKey) });
+      const result = await post("/api/web/push/subscribe", { subscription: subscription.toJSON() });
+      toast(result.ok ? "Trade alerts enabled on this device" : "Could not enable alerts", !result.ok);
+    } finally { button.disabled = false; }
   }
   function renderWalletPositions() {
     const panel = $("[data-profile-panel]");
@@ -413,7 +537,7 @@
   }
   function presetTradeOptions(preset = {}) {
     const ladder = Array.isArray(preset.takeProfitLadder) ? preset.takeProfitLadder : [];
-    return { amount: preset.amountSol || "0.1", tp: preset.takeProfitPct || "", sl: preset.stopLossPct || "", ladder: ladder.length ? "custom" : "", customLadder: ladder, presetId: preset.id || "" };
+    return { amount: preset.amountSol || "0.1", tp: preset.takeProfitPct || "", sl: preset.stopLossPct || "", slip: preset.slippageBps || "400", ladder: ladder.length ? "custom" : "", customLadder: ladder, presetId: preset.id || "" };
   }
   function presetSummary(preset) {
     const ladder = Array.isArray(preset.takeProfitLadder) && preset.takeProfitLadder.length;
@@ -435,7 +559,7 @@
     const preset = { id: $("[data-preset-id]")?.value || "", name, amountSol, takeProfitPct: $("[data-preset-tp]")?.value || "", stopLossPct: $("[data-preset-sl]")?.value || "", slippageBps: $("[data-preset-slip]")?.value || "400", sellPercent: "100", sellDelay: "off", walletIndex: String(state.activeWallet || 1), takeProfitLadder: targets.slice(0, 3).map((pct, index) => ({ pct, sellPercent: sells[index] > 0 ? sells[index] : Math.floor(100 / targets.length) })) };
     const result = await post("/api/web/presets", { type: "trade", action: "save", preset });
     if (!result.ok || !result.data?.ok) { toast(result.data?.error || "Could not save preset", true); return; }
-    state.presets = result.data.presets; const saved = state.presets.trade.find((item) => item.id === preset.id) || state.presets.trade.find((item) => item.name === name); if (saved) { state.activePresetId = saved.id; localStorage.setItem(ACTIVE_PRESET_KEY, saved.id); }
+    state.presets = result.data.presets; const saved = state.presets.trade.find((item) => item.id === result.data.savedPresetId); if (saved) { state.activePresetId = saved.id; localStorage.setItem(ACTIVE_PRESET_KEY, saved.id); }
     toast(preset.id ? "Preset updated" : "Preset saved"); renderQuickTrade(); await openPresetManager();
   }
   function openTradeSheet(side = "buy", preset = {}) {
@@ -512,18 +636,43 @@
     state.activeWallet = state.wallets[0]?.index || null; paintWalletPill(); renderWalletHero(); toast("Wallet backed up and removed"); await openWalletManager();
   }
   async function ensureTradeReady() { if (!(await ensureAccount())) return false; if (!state.wallets.length) await loadWallets(); if (!state.wallets.length) { closeSheet(); setView("wallet"); toast("Create a wallet first.", true); return false; } await ensureAutomation(); return true; }
+  async function executeFunQuickBuy(button, rawAmount) {
+    const amount = String(rawAmount || "").trim(), coin = state.selected || {}, key = coinKey(coin), preset = activePreset();
+    if (!(Number(amount) > 0) || !key) { toast("Enter a valid SOL amount.", true); return; }
+    const lockKey = `${key.toLowerCase()}:${state.activeWallet || "wallet"}`;
+    if (state.quickBuyKey || state.tradeBusy) return;
+    state.quickBuyKey = lockKey; state.tradeBusy = true; button.disabled = true; const oldText = button.textContent; button.textContent = "Buying…";
+    try {
+      if (!(await ensureTradeReady())) return;
+      const walletIndex = Number(state.activeWallet), rh = coin.chain === "robinhood", tp = preset?.takeProfitPct || "", sl = preset?.stopLossPct || "";
+      let result;
+      if (rh) {
+        result = await post("/api/web/rh/trade", { walletIndex, side: "buy", tokenAddress: key, payCurrency: "SOL", amountSol: amount, tradeAttemptId: attemptId("fun-quick-rh") });
+        if (result.ok && result.data?.ok && (Number(tp) > 0 || Number(sl) > 0)) await post("/api/web/rh/guards", { walletIndex, tokenAddress: key, symbol: coin.symbol || "", takeProfitPct: tp, stopLossPct: sl, sellPercent: "100", entryPriceUsd: coin.priceUsd || 0 });
+      } else {
+        const ladder = Array.isArray(preset?.takeProfitLadder) ? preset.takeProfitLadder : [];
+        const body = { tokenMint: key, walletIndex, amountSol: amount, slippageBps: preset?.slippageBps || "400", tradeAttemptId: attemptId("fun-quick-sol") };
+        if (tp || sl || ladder.length) Object.assign(body, { autoExit: true, takeProfitPct: tp, stopLossPct: sl, sellPercent: preset?.sellPercent || "100", sellDelay: preset?.sellDelay || "off", takeProfitLadder: ladder });
+        else body.disableAutoExit = true;
+        result = await post("/api/web/trade/buy", body);
+      }
+      if (result.ok && result.data?.ok) { toast(`Bought ${coin.symbol || "coin"} · ${amount} SOL`); setTimeout(async () => { await Promise.all([loadWallets(true), loadPositions()]); renderCoinShell(); }, 1600); }
+      else toast(result.data?.message || result.data?.error || "Quick buy failed", true);
+    } finally { state.quickBuyKey = ""; state.tradeBusy = false; button.disabled = false; button.textContent = oldText; }
+  }
   async function submitTrade(button) {
-    if (state.tradeBusy || !(await ensureTradeReady())) return;
     const side = button.dataset.side, coin = state.selected || {}, key = coinKey(coin), walletIndex = Number($("[data-trade-wallet]")?.value || state.activeWallet), rh = coin.chain === "robinhood";
+    if (state.tradeBusy) return;
     state.tradeBusy = true; button.disabled = true; button.textContent = "Submitting…";
     let result, cashoutWarning = false;
     try {
+      if (!(await ensureTradeReady())) return;
       if (rh) {
         const body = { walletIndex, side, tokenAddress: key, tradeAttemptId: attemptId("fun-rh") };
         if (side === "buy") { body.payCurrency = "SOL"; body.amountSol = $("[data-trade-amount]").value; }
         else body.percent = $("[data-trade-percent]").value;
         result = await post("/api/web/rh/trade", body);
-        if (result.ok && side === "buy" && (Number($("[data-trade-tp]")?.value) > 0 || Number($("[data-trade-sl]")?.value) > 0)) await post("/api/web/rh/guards", { walletIndex, tokenAddress: key, symbol: coin.symbol || "", takeProfitPct: $("[data-trade-tp]").value, stopLossPct: $("[data-trade-sl]").value, sellPercent: "100", entryPriceUsd: coin.priceUsd || 0 });
+        if (result.ok && result.data?.ok && side === "buy" && (Number($("[data-trade-tp]")?.value) > 0 || Number($("[data-trade-sl]")?.value) > 0)) await post("/api/web/rh/guards", { walletIndex, tokenAddress: key, symbol: coin.symbol || "", takeProfitPct: $("[data-trade-tp]").value, stopLossPct: $("[data-trade-sl]").value, sellPercent: "100", entryPriceUsd: coin.priceUsd || 0 });
         if (result.ok && result.data?.ok && side === "sell" && $("[data-rh-cashout]")?.checked) {
           const cashout = await post("/api/web/rh/bridge-to-sol", { walletIndex, amountEth: "all", tradeAttemptId: attemptId("fun-rh-cashout") });
           if (!cashout.ok || !cashout.data?.ok) cashoutWarning = true;
@@ -655,6 +804,9 @@
     if (event.target.closest("[data-coin-back]")) { history.replaceState(null, "", "#"); setView(state.previousView || "home"); return; }
     if (event.target.closest("[data-copy-coin]")) { navigator.clipboard?.writeText(coinKey(state.selected)); toast("Contract copied"); return; }
     const detail = event.target.closest("[data-detail]"); if (detail) { state.detailTab = detail.dataset.detail; $$("[data-detail]").forEach((button) => button.classList.toggle("active", button === detail)); renderDetailPanel(); return; }
+    const postCallButton = event.target.closest("[data-post-call]"); if (postCallButton) { await postCoinCall(postCallButton.dataset.postCall, postCallButton); return; }
+    const openTrader = event.target.closest("[data-open-trader]"); if (openTrader) { await openTraderProfile(openTrader.dataset.openTrader); return; }
+    const followTrader = event.target.closest("[data-follow-trader]"); if (followTrader) { await toggleTraderFollow(followTrader); return; }
     const profile = event.target.closest("[data-profile]"); if (profile) { state.profileTab = profile.dataset.profile; $$("[data-profile]").forEach((button) => button.classList.toggle("active", button === profile)); loadWalletView(); return; }
     if (event.target.closest("[data-open-tools]")) { await loadCreatedCoinsSilently(); openTools(false); return; }
     if (event.target.closest("[data-open-global-tools]")) { openTools(true); return; }
@@ -663,7 +815,9 @@
     const usePreset = event.target.closest("[data-use-trade-preset]"); if (usePreset) { state.activePresetId = usePreset.dataset.useTradePreset; localStorage.setItem(ACTIVE_PRESET_KEY, state.activePresetId); renderQuickTrade(); toast("Preset active"); await openPresetManager(); return; }
     const editPreset = event.target.closest("[data-edit-trade-preset]"); if (editPreset) { await openPresetManager(editPreset.dataset.editTradePreset); return; }
     const deletePreset = event.target.closest("[data-delete-trade-preset]"); if (deletePreset) { const id = deletePreset.dataset.deleteTradePreset; const result = await post("/api/web/presets", { type: "trade", action: "delete", id, preset: { id } }); if (result.ok && result.data?.ok) { state.presets = result.data.presets; if (state.activePresetId === id) { state.activePresetId = ""; localStorage.removeItem(ACTIVE_PRESET_KEY); } renderQuickTrade(); toast("Preset removed"); await openPresetManager(); } else toast(result.data?.error || "Could not remove preset", true); return; }
-    const quickBuy = event.target.closest("[data-quick-buy]"); if (quickBuy) { if (!state.wallets.length) await loadWallets(); openTradeSheet("buy", { amount: quickBuy.dataset.quickBuy }); return; }
+    const activatePreset = event.target.closest("[data-activate-preset]"); if (activatePreset) { state.activePresetId = activatePreset.dataset.activatePreset || ""; if (state.activePresetId) localStorage.setItem(ACTIVE_PRESET_KEY, state.activePresetId); else localStorage.removeItem(ACTIVE_PRESET_KEY); renderQuickTrade(); toast(state.activePresetId ? "Preset active" : "Manual buys active"); return; }
+    const quickBuy = event.target.closest("[data-quick-buy]"); if (quickBuy) { await executeFunQuickBuy(quickBuy, quickBuy.dataset.quickBuy); return; }
+    const customQuickBuy = event.target.closest("[data-custom-quick-buy]"); if (customQuickBuy) { await executeFunQuickBuy(customQuickBuy, $("[data-custom-quick-amount]")?.value); return; }
     const strategy = event.target.closest("[data-trade-strategy]"); if (strategy) { if (!state.wallets.length) await loadWallets(); openTradeSheet("buy", tradeStrategyPreset(strategy.dataset.tradeStrategy, state.selected?.chain === "robinhood")); return; }
     const trade = event.target.closest("[data-open-trade]"); if (trade) { if (!state.wallets.length) await loadWallets(); openTradeSheet(trade.dataset.openTrade); return; }
     const side = event.target.closest("[data-sheet-side]"); if (side) { openTradeSheet(side.dataset.sheetSide); return; }
@@ -677,6 +831,8 @@
     const quickChain = event.target.closest("[data-search-chain]"); if (quickChain) { closeSearch(); state.chain = quickChain.dataset.searchChain; $$("[data-chain]").forEach((button) => button.classList.toggle("active", button.dataset.chain === state.chain)); setView("home"); loadFeed(true); return; }
     if (event.target.closest("[data-deposit]") || event.target.closest("[data-receive]")) { walletReceive(); return; }
     if (event.target.closest("[data-manage-wallets]")) { await openWalletManager(); return; }
+    const saveProfile = event.target.closest("[data-save-social-profile]"); if (saveProfile) { await saveSocialProfile(saveProfile); return; }
+    const enablePush = event.target.closest("[data-enable-push]"); if (enablePush) { await enableFunPush(enablePush); return; }
     if (event.target.closest("[data-create-wallet]")) { if (await createWallet()) await openWalletManager(); return; }
     if (event.target.closest("[data-export-wallets]")) { await exportWallets(); return; }
     if (event.target.closest("[data-restore-wallet]")) { await restoreWallet(); return; }
@@ -700,6 +856,14 @@
     reader.onerror = () => { if (status) status.textContent = "Could not read that file. Paste the backup text instead."; };
     reader.readAsText(file);
   });
+  document.addEventListener("keydown", async (event) => {
+    if (event.key !== "Enter" || !event.target.matches("[data-custom-quick-amount]")) return;
+    event.preventDefault(); const button = $("[data-custom-quick-buy]"); if (button) await executeFunQuickBuy(button, event.target.value);
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) clearTimeout(state.feedTimer);
+    else if (state.view === "home") { void loadFeed(true, { silent: true }); scheduleFeedRefresh(); }
+  });
 
   document.addEventListener("error", (event) => {
     const image = event.target;
@@ -721,7 +885,7 @@
   async function init() {
     paintWalletPill();
     loadFeed();
-    if (state.token) Promise.all([loadWallets(), loadPositions(), loadPresets(), loadCreatedCoinsSilently()]).then(() => { if (state.view === "coin") renderQuickTrade(); }).catch(() => {});
+    if (state.token) Promise.all([loadMe(), loadWallets(), loadPositions(), loadPresets(), loadCreatedCoinsSilently()]).then(() => { if (state.view === "coin") renderQuickTrade(); }).catch(() => {});
     const match = location.hash.match(/^#coin\/(.+)$/); if (match) openCoin(decodeURIComponent(match[1]));
   }
   init();
