@@ -1,0 +1,46 @@
+/* SlimeCash service worker — cache-first app shell, network-only for APIs. */
+const CACHE = "slimecash-v1";
+const SHELL = [
+  "/cash/",
+  "/cash/index.html",
+  "/cash/cash.css",
+  "/cash/cash.js",
+  "/cash/manifest.webmanifest",
+  "/cash/img/splash.webp",
+  "/cash/img/card.webp",
+  "/cash/img/ogre.webp",
+  "/cash/img/coin.webp",
+  "/cash/icons/icon-192.png"
+];
+
+self.addEventListener("install", (event) => {
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))))
+      .then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener("fetch", (event) => {
+  const url = new URL(event.request.url);
+  if (event.request.method !== "GET") return;
+  // Money/data endpoints must never come from cache.
+  if (url.pathname.startsWith("/api/") || url.origin !== self.location.origin) return;
+  if (!url.pathname.startsWith("/cash")) return;
+  event.respondWith(
+    caches.match(event.request, { ignoreSearch: url.pathname === "/cash/" || url.pathname === "/cash/index.html" }).then((cached) => {
+      const fetched = fetch(event.request).then((response) => {
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE).then((cache) => cache.put(event.request, copy)).catch(() => {});
+        }
+        return response;
+      }).catch(() => cached);
+      return cached || fetched;
+    })
+  );
+});

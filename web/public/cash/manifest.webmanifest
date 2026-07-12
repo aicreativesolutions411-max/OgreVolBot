@@ -1,0 +1,21 @@
+{
+  "name": "SlimeCash",
+  "short_name": "SlimeCash",
+  "description": "Money for the trenches. Send, receive, and swap coins with your $handle.",
+  "id": "/cash/",
+  "start_url": "/cash/?src=pwa",
+  "scope": "/cash/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#050705",
+  "theme_color": "#050705",
+  "icons": [
+    { "src": "/cash/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/cash/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/cash/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Send", "url": "/cash/?tab=send", "icons": [{ "src": "/cash/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Add cash", "url": "/cash/?sheet=addcash", "icons": [{ "src": "/cash/icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

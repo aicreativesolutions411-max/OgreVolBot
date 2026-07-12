@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SlimeCash — money for the trenches</title>
+<meta name="description" content="SlimeCash: send, receive, and swap coins with your $handle. Money for the trenches.">
+<meta name="theme-color" content="#050705">
+<link rel="manifest" href="/cash/manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="64x64" href="/cash/icons/favicon-64.png">
+<link rel="apple-touch-icon" href="/cash/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SlimeCash">
+<meta property="og:title" content="SlimeCash">
+<meta property="og:description" content="Money for the trenches. Send, receive, and swap coins with your $handle.">
+<meta property="og:image" content="https://www.slimewire.org/cash/icons/icon-512.png">
+<link rel="stylesheet" href="/cash/cash.css">
+</head>
+<body>
+<div id="splash" class="splash">
+  <img src="/cash/img/splash.webp" alt="" class="splash-art">
+  <div class="splash-brand"><span class="w1">Slime</span><span class="w2">Cash</span></div>
+  <div class="splash-tag">money for the trenches</div>
+</div>
+
+<main id="app" class="app" hidden>
+  <header class="topbar">
+    <div class="brand"><span class="w1">Slime</span><span class="w2">Cash</span></div>
+    <button id="avatarBtn" class="avatar" type="button" aria-label="Profile"></button>
+  </header>
+
+  <!-- CASH TAB -->
+  <section id="view-home" class="view">
+    <div class="balance-block">
+      <div class="balance-label">CASH BALANCE</div>
+      <div id="balanceUsd" class="balance-usd">$0.00</div>
+      <div id="balanceSub" class="balance-sub">loading…</div>
+    </div>
+    <div class="action-row">
+      <button id="addCashBtn" class="btn primary" type="button">Add cash</button>
+      <button id="sendQuickBtn" class="btn ghost" type="button">Send</button>
+      <a class="btn ghost" href="/fun" id="swapLink">Swap</a>
+    </div>
+    <div class="cash-card" id="payCard">
+      <img src="/cash/img/card.webp" alt="" class="cash-card-art">
+      <div class="cash-card-meta">
+        <div id="cardHandle" class="cash-card-handle">claim your $handle</div>
+        <div id="cardLink" class="cash-card-link">tap to set up your pay page</div>
+      </div>
+    </div>
+    <div class="section-label">ACTIVITY</div>
+    <div id="activityList" class="activity"></div>
+  </section>
+
+  <!-- SEND TAB -->
+  <section id="view-send" class="view" hidden>
+    <div class="section-title">Send</div>
+    <label class="field-label" for="sendTo">To — $handle or wallet address</label>
+    <div class="field-wrap">
+      <input id="sendTo" class="field" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="$frankie or 7xKq…">
+      <div id="resolveHint" class="field-hint"></div>
+    </div>
+    <label class="field-label" for="sendAmount">Amount</label>
+    <div class="amount-wrap">
+      <input id="sendAmount" class="field amount" type="number" inputmode="decimal" min="0" step="any" placeholder="0.00">
+      <button id="amountUnit" class="unit-toggle" type="button">USD</button>
+    </div>
+    <div id="amountAlt" class="field-hint"></div>
+    <label class="field-label" for="sendNote">Note (saved on your device)</label>
+    <input id="sendNote" class="field" type="text" maxlength="80" placeholder="pizza money">
+    <button id="sendBtn" class="btn primary block" type="button">Review send</button>
+    <div id="sendStatus" class="status"></div>
+  </section>
+
+  <!-- TERMINAL TAB -->
+  <section id="view-terminal" class="view view-terminal" hidden>
+    <div class="terminal-bar">
+      <span>SlimeWire terminal</span>
+      <a href="/fun" target="_blank" rel="noopener">Open full ↗</a>
+    </div>
+    <iframe id="terminalFrame" title="SlimeWire terminal" loading="lazy"></iframe>
+  </section>
+
+  <!-- MORE TAB -->
+  <section id="view-more" class="view" hidden>
+    <div class="section-title">Profile</div>
+    <div class="profile-head">
+      <img src="/cash/img/ogre.webp" alt="" class="profile-pic">
+      <div>
+        <div id="moreHandle" class="profile-handle">no $handle yet</div>
+        <div id="moreAddress" class="profile-address"></div>
+      </div>
+    </div>
+    <div class="more-list">
+      <button class="more-item" id="claimHandleBtn" type="button">Claim / change $handle</button>
+      <button class="more-item" id="copyAddressBtn" type="button">Copy wallet address</button>
+      <button class="more-item" id="backupBtn" type="button">Back up account key</button>
+      <button class="more-item" id="restoreBtn" type="button">Restore from account key</button>
+      <button class="more-item" id="installBtn" type="button" hidden>Install SlimeCash on this device</button>
+      <a class="more-item" href="/gg" target="_blank" rel="noopener">Open full SlimeWire site ↗</a>
+      <button class="more-item danger" id="signOutBtn" type="button">Sign out</button>
+    </div>
+    <div class="fineprint">SlimeCash wallets are SlimeWire wallets — same account works on the site, the terminal, and the Telegram bot. Your account key is the only way back in: back it up.</div>
+  </section>
+
+  <nav class="tabbar">
+    <button class="tab active" data-tab="home" type="button"><span class="tab-ico">$</span>Cash</button>
+    <button class="tab" data-tab="send" type="button"><span class="tab-ico">➤</span>Send</button>
+    <button class="tab" data-tab="terminal" type="button"><span class="tab-ico">📈</span>Terminal</button>
+    <button class="tab" data-tab="more" type="button"><span class="tab-ico">≡</span>More</button>
+  </nav>
+</main>
+
+<!-- ONBOARDING -->
+<div id="onboard" class="sheet-backdrop" hidden>
+  <div class="sheet">
+    <div class="sheet-title">Pick your $handle</div>
+    <p class="sheet-copy">It's your username and your pay link. No email, no seed phrase — your wallet is created automatically.</p>
+    <div class="handle-wrap">
+      <span class="handle-dollar">$</span>
+      <input id="handleInput" class="field handle-field" type="text" maxlength="20" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="greengoblin">
+    </div>
+    <div id="handleHint" class="field-hint">1–20 letters and numbers, at least one letter</div>
+    <button id="claimBtn" class="btn primary block" type="button">Claim it</button>
+    <button id="skipHandleBtn" class="btn ghost block" type="button">Skip for now</button>
+    <button id="onboardRestoreBtn" class="btn ghost block" type="button">I have an account key</button>
+  </div>
+</div>
+
+<!-- ADD CASH SHEET -->
+<div id="addcash" class="sheet-backdrop" hidden>
+  <div class="sheet">
+    <button class="sheet-close" data-close="addcash" type="button" aria-label="Close">×</button>
+    <div class="sheet-title">Add cash</div>
+    <p class="sheet-copy">Buy SOL or USDC in an app you already use, send it to your address below, and it lands here automatically.</p>
+    <div class="app-guide">
+      <button class="guide-pill" data-guide="phantom" type="button">Phantom</button>
+      <button class="guide-pill" data-guide="coinbase" type="button">Coinbase</button>
+      <button class="guide-pill" data-guide="robinhood" type="button">Robinhood</button>
+      <button class="guide-pill" data-guide="other" type="button">Other wallet</button>
+    </div>
+    <div id="guideSteps" class="guide-steps"></div>
+    <div class="qr-wrap"><canvas id="depositQr" width="220" height="220"></canvas></div>
+    <button id="copyDepositBtn" class="address-pill" type="button"><span id="depositAddress">…</span><span class="copy-tag">copy</span></button>
+    <div id="depositWatch" class="status">Watching for your deposit…</div>
+  </div>
+</div>
+
+<!-- SEND CONFIRM SHEET -->
+<div id="confirm" class="sheet-backdrop" hidden>
+  <div class="sheet">
+    <button class="sheet-close" data-close="confirm" type="button" aria-label="Close">×</button>
+    <div class="sheet-title">Confirm send</div>
+    <div id="confirmSummary" class="confirm-summary"></div>
+    <button id="confirmSendBtn" class="btn primary block" type="button">Send it</button>
+    <button class="btn ghost block" data-close="confirm" type="button">Cancel</button>
+  </div>
+</div>
+
+<!-- PAY PAGE (?pay=handle) -->
+<div id="paypage" class="sheet-backdrop" hidden>
+  <div class="sheet">
+    <button class="sheet-close" data-close="paypage" type="button" aria-label="Close">×</button>
+    <img src="/cash/img/ogre.webp" alt="" class="profile-pic center">
+    <div id="payHandle" class="sheet-title center">$…</div>
+    <p class="sheet-copy center">Pay them on SlimeCash</p>
+    <div class="qr-wrap"><canvas id="payQr" width="220" height="220"></canvas></div>
+    <button id="payAddressBtn" class="address-pill" type="button"><span id="payAddress">…</span><span class="copy-tag">copy</span></button>
+    <button id="payNowBtn" class="btn primary block" type="button">Send from my SlimeCash</button>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/cash/cash.js"></script>
+</body>
+</html>

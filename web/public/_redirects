@@ -20,6 +20,10 @@
 /launch-coin    /#launch               302
 /quick          /fun.html              200
 /quick/*        /fun.html              200
+# SlimeCash installable PWA lives in its own /cash/ folder (own manifest + service
+# worker scope so it installs as a separate app). Assets under /cash/* are real
+# files and serve directly — only the bare path needs the shell rewrite.
+/cash           /cash/index.html       200
 /terminal       /index.html            200
 /terminal/*     /index.html            200
 /portal         /index.html            200
