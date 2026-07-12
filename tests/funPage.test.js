@@ -39,7 +39,7 @@ test("/fun reuses authenticated money APIs with idempotency and lazy user action
   assert.match(js, /\/api\/web\/positions\/arm-exits/);
   assert.match(js, /\/api\/web\/rh\/guards/);
   assert.match(js, /\/api\/web\/rh\/bridge-to-sol/);
-  assert.match(js, /if \(state\.token\) Promise\.all\(\[loadWallets\(\), loadPositions\(\), loadCreatedCoinsSilently\(\)\]\)/);
+  assert.match(js, /if \(state\.token\) Promise\.all\(\[loadWallets\(\), loadPositions\(\), loadPresets\(\), loadCreatedCoinsSilently\(\)\]\)/);
   assert.doesNotMatch(js, /const accountReady = await ensureAccount\(\)/);
 });
 
@@ -65,6 +65,9 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(js, /request\(`\/api\/web\/token-search\?q=\$\{encodeURIComponent\(key\)\}`\)/);
   assert.match(server, /token-pairs\/v1\/robinhood/);
   assert.match(server, /const meta = await getDexTokenMetadata\(mint/);
+  assert.match(js, /\/api\/web\/token-image\?mint=/);
+  assert.match(js, /data-image-retries/);
+  assert.match(js, /retries < 3/);
 });
 
 test("coin setup exposes fast buys, ladder exits, one-wallet RH trades, and the full volume engine", () => {
@@ -74,12 +77,20 @@ test("coin setup exposes fast buys, ladder exits, one-wallet RH trades, and the 
   assert.match(js, /data-ladder-preset="smart"/);
   assert.match(js, /payCurrency = "SOL"/);
   assert.match(js, /Convert received ETH back to SOL automatically/);
-  assert.match(js, /action === "volume"[\s\S]{0,180}#rhtrade[\s\S]{0,120}#volume/);
+  assert.match(js, /amounts = \["0\.1", "0\.5", "1"\]/);
+  assert.match(js, /data-manage-presets/);
+  assert.match(js, /\/api\/web\/presets/);
+  assert.match(js, /action === "volume"[\s\S]{0,80}openVolumeSheet/);
+  assert.match(js, /\/api\/web\/volume-bot\/start/);
+  assert.match(js, /\/api\/web\/volume-bot\/stop/);
+  assert.match(js, /\/api\/web\/wallets\/sweep-background/);
+  assert.match(js, /\/api\/web\/rh\/volume\/start/);
+  assert.match(js, /\/api\/web\/rh\/fund-with-sol/);
 });
 
 test("wallet manager can create, restore, export, select, and safely remove wallets", () => {
-  for (const path of ["/api/web/wallets/create", "/api/web/wallets/restore", "/api/web/wallets/import", "/api/web/wallets/export", "/api/web/wallets/remove"]) assert.match(js, new RegExp(path.replaceAll("/", "\\/")));
-  for (const marker of ["data-manage-wallets", "data-wallet-backup-file", "data-select-wallet", "data-remove-wallet"]) assert.match(html + js, new RegExp(marker));
+  for (const path of ["/api/web/wallets/create", "/api/web/wallets/restore", "/api/web/wallets/import", "/api/web/wallets/export", "/api/web/wallets/remove", "/api/web/wallets/rename"]) assert.match(js, new RegExp(path.replaceAll("/", "\\/")));
+  for (const marker of ["data-manage-wallets", "data-wallet-backup-file", "data-select-wallet", "data-remove-wallet", "data-rename-wallet"]) assert.match(html + js, new RegExp(marker));
 });
 
 test("generated hero art is optimized and referenced from the v2 banner", () => {

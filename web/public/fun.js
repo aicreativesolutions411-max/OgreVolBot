@@ -6,6 +6,7 @@
   const API_BASE = window.OGRE_PORTAL_CONFIG?.apiBase || "https://ogrevolbot.onrender.com";
   const TOKEN_KEY = "ogreWebToken";
   const RECENTS_KEY = "slimewireFunRecents";
+  const ACTIVE_PRESET_KEY = "slimewireFunTradePreset";
   const TOKEN_FALLBACK = "/assets/slimewire/png/slimewire-mark.png";
   const SLIME_PFPS = [
     "f_f648203a.png", "f_cc8f54e4.png", "f_c9dc667d.png", "f_c4f3d050.png", "f_c20374ef.png",
@@ -31,6 +32,9 @@
     positions: [],
     launches: [],
     tradeBusy: false,
+    presets: { trade: [], bundle: [] },
+    activePresetId: localStorage.getItem(ACTIVE_PRESET_KEY) || "",
+    volumePoll: null,
     recents: readLocal(RECENTS_KEY, []),
     feedCache: new Map()
   };
@@ -65,7 +69,24 @@
   function coinKey(coin) { return String(coin?.address || coin?.tokenMint || "").trim(); }
   function mascot() { return TOKEN_FALLBACK; }
   function slimePfp(value) { return `/pfp/mapfaces/${SLIME_PFPS[hashCode(value) % SLIME_PFPS.length]}`; }
-  function coinImage(coin) { return coin?.imageUrl || coin?.avatarUrl || coin?.imageUri || coin?.iconUrl || coin?.logoUrl || coin?.meta?.imageUrl || coin?.metadata?.image || coin?.image || TOKEN_FALLBACK; }
+  function normalizeImageUrl(value) {
+    const url = String(value || "").trim();
+    if (url.startsWith("ipfs://")) return `https://ipfs.io/ipfs/${url.slice(7).replace(/^ipfs\//, "")}`;
+    if (url.startsWith("/api/")) return `${API_BASE}${url}`;
+    return url;
+  }
+  function directCoinImage(coin) { return normalizeImageUrl(coin?.imageUrl || coin?.avatarUrl || coin?.imageUri || coin?.iconUrl || coin?.logoUrl || coin?.meta?.imageUrl || coin?.metadata?.image || coin?.image); }
+  function coinImage(coin) {
+    const key = coinKey(coin);
+    const direct = directCoinImage(coin);
+    if (direct) return direct;
+    if (key && coin?.chain !== "robinhood") return `${API_BASE}/api/web/token-image?mint=${encodeURIComponent(key)}`;
+    return TOKEN_FALLBACK;
+  }
+  function coinImageAttrs(coin) {
+    const key = coinKey(coin), proxy = key && coin?.chain !== "robinhood" ? `${API_BASE}/api/web/token-image?mint=${encodeURIComponent(key)}` : "";
+    return `src="${escapeHtml(coinImage(coin))}" data-token-image data-chain="${coin?.chain === "robinhood" ? "rh" : "sol"}" data-proxy-image="${escapeHtml(proxy)}" data-image-retries="0"`;
+  }
   function attemptId(prefix = "fun") { return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`; }
   function toast(message, error = false) { const node = $("[data-toast]"); node.textContent = message; node.className = `toast show${error ? " error" : ""}`; clearTimeout(node._timer); node._timer = setTimeout(() => node.className = "toast", 3600); }
 
@@ -114,6 +135,14 @@
     }
     return state.wallets;
   }
+  async function loadPresets() {
+    if (!state.token) return state.presets;
+    const result = await request("/api/web/presets");
+    if (result.ok && result.data?.ok) state.presets = result.data.presets || { trade: [], bundle: [] };
+    if (!state.presets.trade.some((preset) => preset.id === state.activePresetId)) state.activePresetId = "";
+    return state.presets;
+  }
+  function activePreset() { return state.presets.trade.find((preset) => preset.id === state.activePresetId) || null; }
   function activeWallet() { return state.wallets.find((wallet) => wallet.index === state.activeWallet) || state.wallets[0] || null; }
   function paintWalletPill() {
     const pill = $(".wallet-pill"), label = $("[data-wallet-balance]");
@@ -172,7 +201,7 @@
     const key = coinKey(coin), chain = coin.chain === "robinhood" ? "rh" : "sol";
     const change = Number(coin.change), changeClass = Number.isFinite(change) ? (change >= 0 ? "up" : "down") : "";
     return `<button class="coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="${chain}">
-      <span class="coin-avatar"><img src="${escapeHtml(coinImage(coin))}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='${mascot(key)}'"><i class="chain-badge ${chain}">${chain === "rh" ? "RH" : "SOL"}</i></span>
+      <span class="coin-avatar"><img ${coinImageAttrs(coin)} alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"><i class="chain-badge ${chain}">${chain === "rh" ? "RH" : "SOL"}</i></span>
       <span class="coin-info"><span class="coin-title"><b>${escapeHtml(coin.symbol || short(key))}</b><span>${escapeHtml(coin.name || "")}</span>${coin.live ? '<i class="live-tag">LIVE</i>' : ""}</span><span class="coin-meta"><i>${escapeHtml(coin.age || "new")}</i><i>Vol ${escapeHtml(coin.volume > 0 ? formatUsd(coin.volume) : (coin.volumeLabel || "checking"))}</i><i class="${changeClass}">${escapeHtml(formatPct(change))}</i></span></span>
       <span class="coin-value"><b>${escapeHtml(formatUsd(coin.marketCap))}</b><span>MARKET CAP</span></span>
     </button>`;
@@ -238,7 +267,7 @@
   }
   function renderCoinShell() {
     const coin = state.selected || {}, key = coinKey(coin), chain = coin.chain === "robinhood" ? "rh" : "sol";
-    $("[data-coin-mini]").innerHTML = `<img src="${escapeHtml(coinImage(coin))}" alt="" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='${mascot(key)}'"><div><b>${escapeHtml(coin.symbol || short(key))}</b><span>${chain === "rh" ? "Robinhood Chain" : "Solana"} · ${escapeHtml(short(key))}</span></div>`;
+    $("[data-coin-mini]").innerHTML = `<img ${coinImageAttrs(coin)} alt="" decoding="async" referrerpolicy="no-referrer"><div><b>${escapeHtml(coin.symbol || short(key))}</b><span>${chain === "rh" ? "Robinhood Chain" : "Solana"} · ${escapeHtml(short(key))}</span></div>`;
     $("[data-coin-stats]").innerHTML = `<div><span>Market cap</span><b>${formatUsd(coin.marketCap || coin.mc)}</b></div><div><span>Volume</span><b>${coin.volume > 0 ? formatUsd(coin.volume) : escapeHtml(coin.volumeLabel || "checking")}</b></div><div><span>1H change</span><b class="${Number(coin.change) >= 0 ? "up" : "down"}">${formatPct(coin.change)}</b></div>`;
     renderChart();
     renderQuickTrade();
@@ -260,10 +289,9 @@
   }
   function currentPosition() { const key = coinKey(state.selected); return state.positions.find((position) => String(position.tokenMint || "").toLowerCase() === key.toLowerCase()) || null; }
   function renderQuickTrade() {
-    const coin = state.selected || {}, wallet = activeWallet(), rh = coin.chain === "robinhood";
-    const amounts = rh ? ["0.01", "0.025", "0.05"] : ["0.05", "0.1", "0.5"];
+    const wallet = activeWallet(), amounts = ["0.1", "0.5", "1"], preset = activePreset();
     const balance = wallet ? `${Number(wallet.sol || 0).toFixed(4)} SOL` : "Connect wallet";
-    $("[data-quick-trade]").innerHTML = `<div class="quick-wallet-line"><span>Available <b>${escapeHtml(balance)}</b></span><button type="button" data-nav="wallet">${wallet ? escapeHtml(wallet.label || "Wallet") : "Set up"} ›</button></div><div class="quick-buy-row">${amounts.map((amount) => `<button type="button" data-quick-buy="${amount}">${amount} SOL</button>`).join("")}</div>`;
+    $("[data-quick-trade]").innerHTML = `<div class="quick-wallet-line"><span>Available <b>${escapeHtml(balance)}</b></span><button type="button" data-nav="wallet">${wallet ? escapeHtml(wallet.label || "Wallet") : "Set up"} ›</button></div><div class="quick-buy-row">${amounts.map((amount) => `<button type="button" data-quick-buy="${amount}">${amount} SOL</button>`).join("")}</div><button class="preset-strip" type="button" data-manage-presets><span>${preset ? `Preset · ${escapeHtml(preset.name)}` : "Preset · Manual"}</span><b>${preset ? `${escapeHtml(preset.takeProfitPct || "off")}% TP · ${escapeHtml(preset.stopLossPct || "off")}% SL` : "Add or edit ›"}</b></button>`;
   }
   function renderPositionCard() {
     const position = currentPosition(), card = $("[data-position-card]");
@@ -359,7 +387,7 @@
   }
 
   function openSheet(html) { $("[data-sheet-content]").innerHTML = html; $("[data-sheet-overlay]").hidden = false; }
-  function closeSheet() { $("[data-sheet-overlay]").hidden = true; $("[data-sheet-content]").innerHTML = ""; }
+  function closeSheet() { clearTimeout(state.volumePoll); state.volumePoll = null; $("[data-sheet-overlay]").hidden = true; $("[data-sheet-content]").innerHTML = ""; }
   function toolCard(icon, label, note, action, attr = "data-tool-action") { return `<button class="tool-card" type="button" ${attr}="${escapeHtml(action)}"><img src="${TOOL_ICONS}${escapeHtml(icon)}.png" alt=""><b>${escapeHtml(label)}</b><span>${escapeHtml(note)}</span></button>`; }
   async function openTools(global = false) {
     const coin = state.selected || {}, key = coinKey(coin), creator = key && state.launches.some((launch) => String(launch.mint || launch.tokenAddress || "").toLowerCase() === key.toLowerCase());
@@ -384,8 +412,36 @@
     if (name === "runner") return rh ? { tp: "100", sl: "20" } : { sl: "20", trail: "20", trailArm: "25", be: true };
     return {};
   }
+  function presetTradeOptions(preset = {}) {
+    const ladder = Array.isArray(preset.takeProfitLadder) ? preset.takeProfitLadder : [];
+    return { amount: preset.amountSol || "0.1", tp: preset.takeProfitPct || "", sl: preset.stopLossPct || "", ladder: ladder.length ? "custom" : "", customLadder: ladder, presetId: preset.id || "" };
+  }
+  function presetSummary(preset) {
+    const ladder = Array.isArray(preset.takeProfitLadder) && preset.takeProfitLadder.length;
+    return `${preset.amountSol || "0.1"} SOL · ${ladder ? `${preset.takeProfitLadder.length}-step ladder` : `TP ${preset.takeProfitPct || "off"}%`} · SL ${preset.stopLossPct || "off"}%`;
+  }
+  async function openPresetManager(editId = "") {
+    if (!(await ensureAccount())) { toast("Could not open presets.", true); return; }
+    await loadPresets();
+    const editing = state.presets.trade.find((preset) => preset.id === editId) || {};
+    const rows = state.presets.trade.length ? state.presets.trade.map((preset) => `<div class="preset-manage-row ${preset.id === state.activePresetId ? "active" : ""}"><div><b>${escapeHtml(preset.name || "Trade preset")}${preset.id === state.activePresetId ? " · Active" : ""}</b><span>${escapeHtml(presetSummary(preset))}</span></div><div><button type="button" data-use-trade-preset="${escapeHtml(preset.id)}">Use</button><button type="button" data-edit-trade-preset="${escapeHtml(preset.id)}">Edit</button><button class="danger" type="button" data-delete-trade-preset="${escapeHtml(preset.id)}">×</button></div></div>`).join("") : '<div class="read-card"><h3>No saved presets</h3><p>Create one below for fast chart trading.</p></div>';
+    const ladder = Array.isArray(editing.takeProfitLadder) ? editing.takeProfitLadder : [];
+    openSheet(`<div class="sheet-title"><img src="/assets/slimewire/png/slimewire-mark.png" alt=""><div><h2>Quick-buy presets</h2><p>Add, edit, and switch without leaving the chart</p></div></div><div class="preset-manager-list">${rows}</div><div class="preset-editor"><input type="hidden" data-preset-id value="${escapeHtml(editing.id || "")}"><div class="field"><label>Name</label><input data-preset-name value="${escapeHtml(editing.name || "")}" placeholder="Fast scalp"></div><div class="field-row"><div class="field"><label>Buy SOL</label><input data-preset-amount inputmode="decimal" value="${escapeHtml(editing.amountSol || "0.1")}"></div><div class="field"><label>Slippage bps</label><input data-preset-slip inputmode="numeric" value="${escapeHtml(editing.slippageBps || "400")}"></div></div><div class="field-row"><div class="field"><label>Take profit %</label><input data-preset-tp inputmode="decimal" value="${escapeHtml(editing.takeProfitPct || "25")}"></div><div class="field"><label>Stop loss %</label><input data-preset-sl inputmode="decimal" value="${escapeHtml(editing.stopLossPct || "10")}"></div></div><details ${ladder.length ? "open" : ""}><summary>Optional profit ladder</summary><div class="field-row"><div class="field"><label>Targets %</label><input data-preset-ladder-targets value="${escapeHtml(ladder.map((stage) => stage.pct).join(", "))}" placeholder="50, 100, 200"></div><div class="field"><label>Sell % each</label><input data-preset-ladder-sells value="${escapeHtml(ladder.map((stage) => stage.sellPercent).join(", "))}" placeholder="25, 25, 25"></div></div></details><button class="submit-trade" type="button" data-save-trade-preset>${editing.id ? "Update preset" : "Save preset"}</button></div>`);
+  }
+  async function saveTradePreset() {
+    const name = String($("[data-preset-name]")?.value || "").trim(), amountSol = String($("[data-preset-amount]")?.value || "").trim();
+    if (!name || !(Number(amountSol) > 0)) { toast("Add a name and valid SOL amount.", true); return; }
+    const targets = String($("[data-preset-ladder-targets]")?.value || "").split(",").map(Number).filter((value) => value > 0);
+    const sells = String($("[data-preset-ladder-sells]")?.value || "").split(",").map(Number);
+    const preset = { id: $("[data-preset-id]")?.value || "", name, amountSol, takeProfitPct: $("[data-preset-tp]")?.value || "", stopLossPct: $("[data-preset-sl]")?.value || "", slippageBps: $("[data-preset-slip]")?.value || "400", sellPercent: "100", sellDelay: "off", walletIndex: String(state.activeWallet || 1), takeProfitLadder: targets.slice(0, 3).map((pct, index) => ({ pct, sellPercent: sells[index] > 0 ? sells[index] : Math.floor(100 / targets.length) })) };
+    const result = await post("/api/web/presets", { type: "trade", action: "save", preset });
+    if (!result.ok || !result.data?.ok) { toast(result.data?.error || "Could not save preset", true); return; }
+    state.presets = result.data.presets; const saved = state.presets.trade.find((item) => item.id === preset.id) || state.presets.trade.find((item) => item.name === name); if (saved) { state.activePresetId = saved.id; localStorage.setItem(ACTIVE_PRESET_KEY, saved.id); }
+    toast(preset.id ? "Preset updated" : "Preset saved"); renderQuickTrade(); await openPresetManager();
+  }
   function openTradeSheet(side = "buy", preset = {}) {
     const coin = state.selected || {}, rh = coin.chain === "robinhood", key = coinKey(coin), wallet = activeWallet();
+    if (side === "buy" && activePreset()) preset = { ...presetTradeOptions(activePreset()), ...preset };
     const amount = preset.amount || (rh ? "0.05" : "0.1"), tp = preset.tp || "", sl = preset.sl || "";
     const wallets = state.wallets.length ? state.wallets.map((item) => `<option value="${item.index}" ${item.index === state.activeWallet ? "selected" : ""}>${escapeHtml(item.label || `Wallet ${item.index}`)} · ${Number(item.sol || 0).toFixed(3)} SOL</option>`).join("") : '<option value="">Create a wallet first</option>';
     const buyFields = `<div class="field"><label>${rh ? "Spend SOL · auto-converts for Robinhood" : "Buy amount · SOL"}</label><input data-trade-amount inputmode="decimal" value="${escapeHtml(amount)}" aria-label="Trade amount"><div class="amount-chips">${(rh ? ["0.01", "0.025", "0.05", "0.1"] : ["0.05", "0.1", "0.25", "0.5"]).map((value) => `<button type="button" data-amount-chip="${value}">${value}</button>`).join("")}</div></div>
@@ -413,8 +469,15 @@
   function downloadWalletFiles(downloads = {}) { for (const item of [downloads.encryptedBackup, downloads.recoveryKeys].filter((entry) => entry?.text)) downloadText(item.filename, item.text); }
   async function openWalletManager() {
     if (state.token) await loadWallets();
-    const rows = state.wallets.length ? state.wallets.map((wallet) => `<div class="wallet-manage-row"><div><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${wallet.index === state.activeWallet ? " · Active" : ""}</b><span>${escapeHtml(short(wallet.publicKey))} · ${Number(wallet.sol || 0).toFixed(4)} SOL</span></div><div><button type="button" data-select-wallet="${wallet.index}">Use</button> <button class="danger" type="button" data-remove-wallet="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button></div></div>`).join("") : '<div class="read-card"><h3>No wallet loaded</h3><p>Create a new wallet or restore one from a saved backup. Backup files download automatically.</p></div>';
+    const rows = state.wallets.length ? state.wallets.map((wallet) => `<div class="wallet-manage-row"><div><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${wallet.index === state.activeWallet ? " · Active" : ""}</b><span>${escapeHtml(short(wallet.publicKey))} · ${Number(wallet.sol || 0).toFixed(4)} SOL</span><span class="wallet-rename"><input data-wallet-rename-input="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40"><button type="button" data-rename-wallet="${wallet.index}">Rename</button></span></div><div><button type="button" data-select-wallet="${wallet.index}">Use</button> <button class="danger" type="button" data-remove-wallet="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button></div></div>`).join("") : '<div class="read-card"><h3>No wallet loaded</h3><p>Create a new wallet or restore one from a saved backup. Backup files download automatically.</p></div>';
     openSheet(`<div class="sheet-title"><img src="${slimePfp(activeWallet()?.publicKey || "wallet-manager")}" alt=""><div><h2>Wallet manager</h2><p>One SOL wallet trades both supported chains</p></div></div><div class="wallet-manager-list">${rows}</div><div class="wallet-manager-actions"><button type="button" data-create-wallet>+ Add wallet</button><button type="button" data-export-wallets ${state.wallets.length ? "" : "disabled"}>Download backups</button></div><div class="wallet-restore-box"><label class="file-button">Choose backup file<input type="file" data-wallet-backup-file accept=".txt,.json,application/json,text/plain" hidden></label><textarea data-wallet-backup-text placeholder="Or paste an encrypted backup, recovery file, or private key"></textarea><button class="submit-trade" type="button" data-restore-wallet>Restore / import wallet</button><p class="wallet-manager-status" data-wallet-manager-status></p></div><p class="fineprint">Each Solana wallet deterministically controls its Robinhood address. Buy with SOL; SlimeWire converts automatically. Keep both downloaded backup files private.</p>`);
+  }
+  async function renameWallet(index) {
+    const label = String($(`[data-wallet-rename-input="${index}"]`)?.value || "").trim();
+    if (!label) { toast("Enter a wallet name.", true); return; }
+    const result = await post("/api/web/wallets/rename", { walletIndex: Number(index), label });
+    if (!result.ok || !result.data?.ok) { toast(result.data?.error || "Could not rename wallet", true); return; }
+    state.wallets = result.data.wallets || state.wallets; paintWalletPill(); renderWalletHero(); toast("Wallet renamed"); await openWalletManager();
   }
   async function exportWallets() {
     const status = $("[data-wallet-manager-status]"); if (status) status.textContent = "Building backup files…";
@@ -471,7 +534,7 @@
         if (side === "buy") {
           body.amountSol = $("[data-trade-amount]").value;
           const tp = $("[data-trade-tp]")?.value || "", sl = $("[data-trade-sl]")?.value || "", trail = $("[data-trade-trail]")?.value || "", ladder = $("[data-trade-ladder]")?.value || "";
-          if (tp || sl || Number(trail) > 0 || ladder) { body.autoExit = true; body.takeProfitPct = tp; body.stopLossPct = sl; body.sellPercent = "100"; body.sellDelay = "off"; if (ladder === "smart") body.takeProfitLadder = [{ pct: 50, sellPercent: 25 }, { pct: 100, sellPercent: 25 }, { pct: 200, sellPercent: 25 }]; if (ladder === "fast") body.takeProfitLadder = [{ pct: 25, sellPercent: 40 }, { pct: 50, sellPercent: 35 }, { pct: 100, sellPercent: 25 }]; if (Number(trail) > 0) { body.trailingStopPct = trail; body.trailingActivatePct = $("[data-trade-trail-arm]")?.value || ""; } if ($("[data-trade-be]")?.checked) body.breakEvenAfterTp1 = true; }
+          if (tp || sl || Number(trail) > 0 || ladder) { body.autoExit = true; body.takeProfitPct = tp; body.stopLossPct = sl; body.sellPercent = "100"; body.sellDelay = "off"; if (ladder === "custom") body.takeProfitLadder = activePreset()?.takeProfitLadder || []; if (ladder === "smart") body.takeProfitLadder = [{ pct: 50, sellPercent: 25 }, { pct: 100, sellPercent: 25 }, { pct: 200, sellPercent: 25 }]; if (ladder === "fast") body.takeProfitLadder = [{ pct: 25, sellPercent: 40 }, { pct: 50, sellPercent: 35 }, { pct: 100, sellPercent: 25 }]; if (Number(trail) > 0) { body.trailingStopPct = trail; body.trailingActivatePct = $("[data-trade-trail-arm]")?.value || ""; } if ($("[data-trade-be]")?.checked) body.breakEvenAfterTp1 = true; }
           else body.disableAutoExit = true;
         } else body.percent = $("[data-trade-percent]").value;
         result = await post(`/api/web/trade/${side}`, body);
@@ -489,16 +552,90 @@
     if (result.ok && result.data?.ok) { toast("TP/SL armed on the server"); closeSheet(); } else toast(result.data?.message || result.data?.error || "Could not arm exits", true);
   }
 
+  function volumeWalletOptions() { return state.wallets.map((wallet) => `<option value="${wallet.index}" ${wallet.index === state.activeWallet ? "selected" : ""}>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)} · ${Number(wallet.sol || 0).toFixed(3)} SOL</option>`).join(""); }
+  async function openVolumeSheet() {
+    if (!(await ensureAccount())) { toast("Connect a wallet to configure volume.", true); return; }
+    await loadWallets();
+    if (!state.wallets.length) { await openWalletManager(); return; }
+    const coin = state.selected || {}, key = coinKey(coin), rh = coin.chain === "robinhood" || isRh(key);
+    if (rh) {
+      openSheet(`<div class="sheet-title"><img ${coinImageAttrs(coin)} alt=""><div><h2>Robinhood volume</h2><p>Native controls · ${escapeHtml(coin.symbol || short(key))}</p></div></div><div class="read-card"><h3>Round-trip engine</h3><p>Fund the derived Robinhood wallet from SOL, then run randomized rounds. Stop waits for the current action to finish.</p></div><div class="field"><label>Token contract</label><input data-volume-token value="${escapeHtml(key)}"></div><div class="field"><label>Wallet</label><select data-volume-wallet>${volumeWalletOptions()}</select></div><div class="field-row"><div class="field"><label>Fund from SOL first</label><input data-rh-volume-fund inputmode="decimal" value="0" placeholder="0.2"></div><div class="field"><label>Rounds</label><input data-volume-rounds inputmode="numeric" value="3"></div></div><div class="field-row"><div class="field"><label>Min ETH trade</label><input data-volume-min inputmode="decimal" value="0.002"></div><div class="field"><label>Max ETH trade</label><input data-volume-max inputmode="decimal" value="0.01"></div></div><div class="volume-actions"><button class="submit-trade" type="button" data-start-volume>Start</button><button type="button" data-stop-volume>Stop</button></div><div data-volume-status class="volume-status">Checking status…</div><p class="fineprint">Robinhood rounds use the selected derived wallet. SOL funding is converted automatically before the run when entered.</p>`);
+    } else {
+      openSheet(`<div class="sheet-title"><img ${coinImageAttrs(coin)} alt=""><div><h2>Rolling wallet volume</h2><p>Fresh ghost wallets · offset sells · automatic sweep</p></div></div><div class="read-card"><h3>Natural cadence controls</h3><p>Buys and sells use different points in the rolling wallet pool, varied sizes, and the selected pattern. It keeps running server-side.</p></div><div class="field"><label>Token contract</label><input data-volume-token value="${escapeHtml(key)}" placeholder="Solana contract address"></div><div class="field"><label>Fund from wallet</label><select data-volume-wallet>${volumeWalletOptions()}</select></div><div class="field-row"><div class="field"><label>Min buy SOL</label><input data-volume-min inputmode="decimal" value="0.012"></div><div class="field"><label>Max buy SOL</label><input data-volume-max inputmode="decimal" value="0.03"></div></div><div class="field-row"><div class="field"><label>Cadence</label><select data-volume-speed><option value="20">Calm</option><option value="8" selected>Natural</option><option value="3">Fast</option></select></div><div class="field"><label>Pattern</label><select data-volume-pattern><option value="organic" selected>Organic mix</option><option value="waves">Waves</option><option value="steady">Steady</option><option value="ladder">Uptrend bias</option></select></div></div><label class="check-row"><input type="checkbox" data-volume-keep-dust checked> Leave one small token residue in each retired wallet</label><label class="check-row"><input type="checkbox" data-volume-offset checked> Offset sells to older wallets</label><div class="volume-actions"><button class="submit-trade" type="button" data-start-volume>Start</button><button type="button" data-stop-volume>Stop & sweep</button></div><button class="recovery-button" type="button" data-sweep-volume>Sweep any stranded ghost wallets</button><div data-volume-status class="volume-status">Checking status…</div><p class="fineprint">Wallet addresses cannot be burned. Empty ghost wallets are drained, removed from your list, and retired automatically. Keeping residue intentionally preserves a tiny token balance.</p>`);
+    }
+    pollFunVolume(rh);
+  }
+  function volumeStatusHtml(rows = []) {
+    if (!rows.length) return "No active run.";
+    return rows.slice(0, 3).map((bot) => { const stats = bot.stats || {}, running = !["done", "stopped"].includes(bot.stage) && bot.status !== "completed"; return `<div class="volume-run"><b>${escapeHtml(bot.shortMint || short(bot.tokenMint))}<span>${escapeHtml(running ? bot.stage || "running" : "complete")}</span></b><p>Buys ${Number(stats.buys || 0)} · sells ${Number(stats.sells || 0)} · volume ${Number(stats.volumeSol || 0).toFixed(3)} SOL${Number(stats.sweptSol || 0) ? ` · swept ${Number(stats.sweptSol).toFixed(3)}` : ""}</p>${(bot.log || []).slice(0, 4).map((row) => `<small>${escapeHtml(typeof row === "string" ? row : row.message || "")}</small>`).join("")}</div>`; }).join("");
+  }
+  async function pollFunVolume(rh) {
+    clearTimeout(state.volumePoll);
+    const status = $("[data-volume-status]"); if (!status) return;
+    const result = await request(rh ? "/api/web/rh/volume/status" : "/api/web/volume-bot");
+    if (status && result.ok) status.innerHTML = rh ? (result.data?.status === "idle" ? "No active run." : `<div class="volume-run"><b>${escapeHtml(result.data?.status || "running")}</b><p>Round ${Number(result.data?.done || 0)} / ${Number(result.data?.rounds || 0)}</p>${(result.data?.trades || []).slice(-4).reverse().map((trade) => `<small>${trade.ok ? `Wallet ${trade.walletIndex} · ${escapeHtml(trade.amountEth)} ETH` : escapeHtml(trade.error || "Trade failed")}</small>`).join("")}</div>`) : volumeStatusHtml(result.data?.bots || []);
+    if ($("[data-volume-status]")) state.volumePoll = setTimeout(() => pollFunVolume(rh), 4000);
+  }
+  async function startFunVolume(button) {
+    if (!(await ensureTradeReady())) return;
+    const token = String($("[data-volume-token]")?.value || "").trim(), rh = isRh(token), walletIndex = Number($("[data-volume-wallet]")?.value || state.activeWallet), min = $("[data-volume-min]")?.value || "", max = $("[data-volume-max]")?.value || "";
+    if (!token || !(Number(min) > 0) || !(Number(max) >= Number(min))) { toast("Check the contract and min/max size.", true); return; }
+    button.disabled = true; button.textContent = "Starting…";
+    let result;
+    if (rh) {
+      const fundSol = Number($("[data-rh-volume-fund]")?.value || 0);
+      if (fundSol > 0) {
+        const funded = await post("/api/web/rh/fund-with-sol", { walletIndex, amountSol: String(fundSol), tradeAttemptId: attemptId("fun-rh-volume-fund") });
+        if (!funded.ok || !funded.data?.ok) { button.disabled = false; button.textContent = "Start"; toast(funded.data?.error || "SOL funding failed", true); return; }
+      }
+      result = await post("/api/web/rh/volume/start", { tokenAddress: token, walletIndexes: [walletIndex], rounds: $("[data-volume-rounds]")?.value || "3", minEth: min, maxEth: max });
+    } else {
+      const pattern = $("[data-volume-pattern]")?.value || "organic", delaySecs = $("[data-volume-speed]")?.value || "8";
+      result = await post("/api/web/volume-bot/start", { tokenMint: token, sourceWalletIndex: walletIndex, rollingWallets: true, buyAmountSol: String((Number(min) + Number(max)) / 2), minBuyAmountSol: min, maxBuyAmountSol: max, poolSize: "3", maxRounds: "250", sellPercent: "100", buyBias: pattern === "ladder" ? "75" : "55", delaySecs, slippageBps: 600, sweepBack: true, keepDust: Boolean($("[data-volume-keep-dust]")?.checked), offsetSell: Boolean($("[data-volume-offset]")?.checked), staggerPattern: pattern, tradeAttemptId: attemptId("fun-volume") });
+    }
+    button.disabled = false; button.textContent = "Start";
+    if (result.ok && result.data?.ok) { toast("Volume run started"); pollFunVolume(rh); } else toast(result.data?.error || result.data?.message || "Could not start volume", true);
+  }
+  async function stopFunVolume() {
+    const token = String($("[data-volume-token]")?.value || "").trim(), rh = isRh(token);
+    if (rh) await post("/api/web/rh/volume/stop", {});
+    else { const current = await request("/api/web/volume-bot"), run = (current.data?.bots || []).find((bot) => bot.status !== "completed" && !["done", "stopped"].includes(bot.stage)); if (!run) { toast("No active run.", true); return; } await post("/api/web/volume-bot/stop", { planId: run.id }); }
+    toast(rh ? "Stopping after the current action" : "Stopping, draining, and sweeping back"); pollFunVolume(rh);
+  }
+  async function sweepFunVolume() { const result = await post("/api/web/wallets/sweep-background", {}); toast(result.ok && result.data?.ok ? (result.data.summary || "Background wallets swept") : (result.data?.error || "Sweep failed"), !(result.ok && result.data?.ok)); pollFunVolume(false); }
+  async function openBundleSheet() {
+    if (!(await ensureAccount())) return;
+    await loadWallets();
+    const coin = state.selected || {}, key = coinKey(coin), rh = coin.chain === "robinhood";
+    if (!key) { closeSheet(); openSearch(); toast("Choose a coin for the bundle."); return; }
+    const checks = state.wallets.map((wallet) => `<label class="check-row"><input type="checkbox" data-bundle-wallet value="${wallet.index}" ${wallet.index === state.activeWallet ? "checked" : ""}> ${escapeHtml(wallet.label || `Wallet ${wallet.index}`)} · ${Number(wallet.sol || 0).toFixed(3)} SOL</label>`).join("");
+    openSheet(`<div class="sheet-title"><img ${coinImageAttrs(coin)} alt=""><div><h2>Bundle entry</h2><p>${escapeHtml(coin.symbol || short(key))} · native ${rh ? "Robinhood" : "Solana"} controls</p></div></div><div class="read-card"><h3>Choose wallets</h3><p>Each checked wallet submits its own entry. Review the total before starting.</p></div><div class="bundle-wallets">${checks}</div>${rh ? '<div class="field-row"><div class="field"><label>Min ETH</label><input data-bundle-min value="0.002"></div><div class="field"><label>Max ETH</label><input data-bundle-max value="0.01"></div></div>' : '<div class="field"><label>SOL per wallet</label><input data-bundle-amount value="0.1" inputmode="decimal"></div>'}<button class="submit-trade" type="button" data-submit-bundle>Submit bundle</button><p class="fineprint">Bundle entries use your managed wallets and existing backend protections. They do not require the classic layout.</p>`);
+  }
+  async function submitFunBundle(button) {
+    if (!(await ensureTradeReady())) return;
+    const coin = state.selected || {}, key = coinKey(coin), walletIndexes = $$('[data-bundle-wallet]:checked').map((input) => Number(input.value));
+    if (!walletIndexes.length) { toast("Choose at least one wallet.", true); return; }
+    button.disabled = true; button.textContent = "Submitting…";
+    const result = coin.chain === "robinhood"
+      ? await post("/api/web/rh/bundle", { tokenAddress: key, walletIndexes, minEth: $("[data-bundle-min]")?.value, maxEth: $("[data-bundle-max]")?.value, tradeAttemptId: attemptId("fun-rh-bundle") })
+      : await post("/api/web/bundle/buy", { tokenMint: key, walletIndexes, amountSol: $("[data-bundle-amount]")?.value, slippageBps: 600, tradeAttemptId: attemptId("fun-bundle") });
+    button.disabled = false; button.textContent = "Submit bundle";
+    if (result.ok && result.data?.ok) { toast("Bundle submitted"); closeSheet(); } else toast(result.data?.error || result.data?.message || "Bundle failed", true);
+  }
+
   function handleTool(action) {
     const coin = state.selected || {}, key = coinKey(coin);
     if (action === "exits") { openExitSheet(); return; }
     if (action === "map") { location.href = `/map?target=${encodeURIComponent(key)}`; return; }
     if (action === "safety") { const shield = state.selectedDetail?.shield || state.selectedDetail?.safety || coin.safety || {}; openSheet(`<div class="sheet-title"><img src="${escapeHtml(coinImage(coin))}" alt=""><div><h2>SlimeShield safety</h2><p>${escapeHtml(coin.symbol || short(key))}</p></div></div><div class="read-card"><h3>${escapeHtml(String(shield.verdict || "Live safety read").toUpperCase())}${Number.isFinite(Number(shield.score)) ? ` · ${Math.round(Number(shield.score))}/100` : ""}</h3><p>${escapeHtml(shield.summary || "Safety data is still resolving. Trading protection and honeypot checks remain active.")}</p></div>`); return; }
+    if (action === "swap") { if (key) openTradeSheet("buy"); else { closeSheet(); openSearch(); } return; }
+    if (action === "bundle") { openBundleSheet(); return; }
+    if (action === "portfolio") { closeSheet(); state.profileTab = "positions"; setView("wallet"); return; }
     if (action === "liquidity") { location.href = `/#rhtrade/${encodeURIComponent(key)}`; return; }
-    if (action === "volume") { location.href = coin.chain === "robinhood" ? `/#rhtrade/${encodeURIComponent(key)}` : "/#volume"; return; }
+    if (action === "volume") { openVolumeSheet(); return; }
     if (action === "watch") { ensureAccount().then((ready) => ready ? post("/api/web/watchlist", { tokenMint: key, action: "add", symbol: coin.symbol || "", name: coin.name || "", imageUrl: coin.imageUrl || "" }) : { ok: false }).then((result) => toast(result.ok ? "Saved to Watchlist" : "Could not save coin", !result.ok)); closeSheet(); return; }
     if (action === "telegram") { window.open(`https://t.me/${window.OGRE_PORTAL_CONFIG?.telegramBotUsername || "SlimeWiredBot"}?start=scan_${encodeURIComponent(key)}`, "_blank", "noopener"); return; }
-    const routes = { swap: "swap", bundle: "bundle", copy: "copy", sniper: "sniper", launch: "launch", portfolio: "portfolio" };
+    const routes = { copy: "copy", sniper: "sniper", launch: "launch" };
     if (routes[action]) location.href = `/#${routes[action]}`;
   }
   function walletReceive() {
@@ -522,6 +659,11 @@
     const profile = event.target.closest("[data-profile]"); if (profile) { state.profileTab = profile.dataset.profile; $$("[data-profile]").forEach((button) => button.classList.toggle("active", button === profile)); loadWalletView(); return; }
     if (event.target.closest("[data-open-tools]")) { await loadCreatedCoinsSilently(); openTools(false); return; }
     if (event.target.closest("[data-open-global-tools]")) { openTools(true); return; }
+    if (event.target.closest("[data-manage-presets]")) { await openPresetManager(); return; }
+    if (event.target.closest("[data-save-trade-preset]")) { await saveTradePreset(); return; }
+    const usePreset = event.target.closest("[data-use-trade-preset]"); if (usePreset) { state.activePresetId = usePreset.dataset.useTradePreset; localStorage.setItem(ACTIVE_PRESET_KEY, state.activePresetId); renderQuickTrade(); toast("Preset active"); await openPresetManager(); return; }
+    const editPreset = event.target.closest("[data-edit-trade-preset]"); if (editPreset) { await openPresetManager(editPreset.dataset.editTradePreset); return; }
+    const deletePreset = event.target.closest("[data-delete-trade-preset]"); if (deletePreset) { const id = deletePreset.dataset.deleteTradePreset; const result = await post("/api/web/presets", { type: "trade", action: "delete", id, preset: { id } }); if (result.ok && result.data?.ok) { state.presets = result.data.presets; if (state.activePresetId === id) { state.activePresetId = ""; localStorage.removeItem(ACTIVE_PRESET_KEY); } renderQuickTrade(); toast("Preset removed"); await openPresetManager(); } else toast(result.data?.error || "Could not remove preset", true); return; }
     const quickBuy = event.target.closest("[data-quick-buy]"); if (quickBuy) { if (!state.wallets.length) await loadWallets(); openTradeSheet("buy", { amount: quickBuy.dataset.quickBuy }); return; }
     const strategy = event.target.closest("[data-trade-strategy]"); if (strategy) { if (!state.wallets.length) await loadWallets(); openTradeSheet("buy", tradeStrategyPreset(strategy.dataset.tradeStrategy, state.selected?.chain === "robinhood")); return; }
     const trade = event.target.closest("[data-open-trade]"); if (trade) { if (!state.wallets.length) await loadWallets(); openTradeSheet(trade.dataset.openTrade); return; }
@@ -541,6 +683,11 @@
     if (event.target.closest("[data-restore-wallet]")) { await restoreWallet(); return; }
     const remove = event.target.closest("[data-remove-wallet]"); if (remove) { await removeWallet(remove.dataset.removeWallet, remove.dataset.walletKey); return; }
     const select = event.target.closest("[data-select-wallet]"); if (select) { state.activeWallet = Number(select.dataset.selectWallet); paintWalletPill(); renderWalletHero(); renderQuickTrade(); await openWalletManager(); return; }
+    const rename = event.target.closest("[data-rename-wallet]"); if (rename) { await renameWallet(rename.dataset.renameWallet); return; }
+    const startVolume = event.target.closest("[data-start-volume]"); if (startVolume) { await startFunVolume(startVolume); return; }
+    if (event.target.closest("[data-stop-volume]")) { await stopFunVolume(); return; }
+    if (event.target.closest("[data-sweep-volume]")) { await sweepFunVolume(); return; }
+    const submitBundle = event.target.closest("[data-submit-bundle]"); if (submitBundle) { await submitFunBundle(submitBundle); return; }
     if (event.target.closest("[data-copy-wallet]")) { const wallet = activeWallet(); if (wallet) { await navigator.clipboard?.writeText(wallet.publicKey); toast("Wallet address copied"); } return; }
     if (event.target.closest("[data-price-alert]")) { openSheet(`<div class="sheet-title"><img src="${escapeHtml(coinImage(state.selected || {}))}" alt=""><div><h2>Coin alerts</h2><p>Keep the chart clean and send alerts where they matter.</p></div></div><div class="tool-grid">${toolCard("watchlist", "Watch coin", "Save to your list", "watch")}${toolCard("warning", "Telegram alert", "Open SlimeWiredBot", "telegram")}</div>`); return; }
   });
@@ -555,6 +702,19 @@
     reader.readAsText(file);
   });
 
+  document.addEventListener("error", (event) => {
+    const image = event.target;
+    if (!(image instanceof HTMLImageElement) || !image.matches("[data-token-image]")) return;
+    const retries = Number(image.dataset.imageRetries || 0), proxy = image.dataset.proxyImage || "";
+    if (proxy && !image.src.startsWith(proxy)) { image.src = proxy; return; }
+    if (image.dataset.chain === "sol" && proxy && retries < 3) {
+      image.dataset.imageRetries = String(retries + 1);
+      setTimeout(() => { if (image.isConnected) image.src = `${image.src.split("&retry=")[0]}&retry=${Date.now()}`; }, 2600);
+      return;
+    }
+    image.removeAttribute("data-token-image"); image.src = TOKEN_FALLBACK;
+  }, true);
+
   $("[data-search-input]").addEventListener("input", (event) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => runSearch(event.target.value), 280); });
   window.addEventListener("hashchange", () => { const match = location.hash.match(/^#coin\/(.+)$/); if (match) openCoin(decodeURIComponent(match[1])); });
   async function loadCreatedCoinsSilently() { if (!state.token || state.launches.length) return; const result = await request("/api/web/launches"); if (result.ok) state.launches = result.data?.coins || []; }
@@ -562,7 +722,7 @@
   async function init() {
     paintWalletPill();
     loadFeed();
-    if (state.token) Promise.all([loadWallets(), loadPositions(), loadCreatedCoinsSilently()]).catch(() => {});
+    if (state.token) Promise.all([loadWallets(), loadPositions(), loadPresets(), loadCreatedCoinsSilently()]).then(() => { if (state.view === "coin") renderQuickTrade(); }).catch(() => {});
     const match = location.hash.match(/^#coin\/(.+)$/); if (match) openCoin(decodeURIComponent(match[1]));
   }
   init();
