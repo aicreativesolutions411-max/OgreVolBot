@@ -1,10 +1,10 @@
-/* SlimeCash service worker — cache-first app shell, network-only for APIs. */
-const CACHE = "slimecash-v1";
+/* SlimeCash service worker — fresh-first app shell, network-only for APIs. */
+const CACHE = "slimecash-v3";
 const SHELL = [
   "/cash/",
   "/cash/index.html",
-  "/cash/cash.css",
-  "/cash/cash.js",
+  "/cash/cash.css?v=3",
+  "/cash/cash.js?v=3",
   "/cash/manifest.webmanifest",
   "/cash/img/splash.webp",
   "/cash/img/card.webp",
@@ -40,7 +40,9 @@ self.addEventListener("fetch", (event) => {
         }
         return response;
       }).catch(() => cached);
-      return cached || fetched;
+      // Prefer the current deploy so installed PWAs do not stay pinned to an
+      // older Cash script. The cache remains the offline fallback.
+      return fetched;
     })
   );
 });

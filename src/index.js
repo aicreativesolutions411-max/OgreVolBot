@@ -9353,6 +9353,20 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    // SlimeCash: exchange a durable recovery key (or an unexpired legacy
+    // session key) for a fresh web session. This must stay before the normal
+    // web-auth gate because it is the way back into the account.
+    if (request.method === "POST" && pathname === "/api/web/cash/recover") {
+      const body = await readJsonRequestBody(request);
+      try {
+        const recovered = await recoverCashAccount(body.key || body.recoveryKey || body.backupText);
+        sendWebJson(request, response, 200, { ok: true, ...recovered });
+      } catch (error) {
+        sendWebJson(request, response, error.statusCode || 401, { ok: false, error: friendlyError(error) });
+      }
+      return;
+    }
+
     const auth = await authenticateWebRequest(request);
 
     // SlimeCash: the caller's own handle + primary wallet address.
@@ -9367,6 +9381,19 @@ async function handleWebApiRequest(request, response, requestUrl) {
       try {
         const result = await claimCashHandle(auth.userId, body.handle);
         sendWebJson(request, response, 200, { ok: true, ...result });
+      } catch (error) {
+        sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) });
+      }
+      return;
+    }
+
+    // SlimeCash: make a durable account-recovery file. Wallet private-key
+    // backups remain separate; this file restores the account, $handle,
+    // settings, and the server-side wallet list on a new device.
+    if (request.method === "POST" && pathname === "/api/web/cash/account-backup") {
+      try {
+        const accountBackup = await createCashAccountBackup(auth.userId);
+        sendWebJson(request, response, 200, { ok: true, accountBackup });
       } catch (error) {
         sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) });
       }
@@ -53447,6 +53474,7 @@ async function readWebAuthStore() {
   if (!Array.isArray(store.codes)) store.codes = [];
   if (!Array.isArray(store.sessions)) store.sessions = [];
   if (!store.profiles || typeof store.profiles !== "object") store.profiles = {};
+  if (!store.cashRecoveryIndex || typeof store.cashRecoveryIndex !== "object" || Array.isArray(store.cashRecoveryIndex)) store.cashRecoveryIndex = {};
   if (!store.mobileWalletConnects || typeof store.mobileWalletConnects !== "object") store.mobileWalletConnects = {};
   if (!Array.isArray(store.browserTradeOrders)) store.browserTradeOrders = [];
   if (!Array.isArray(store.sessionWalletOrders)) store.sessionWalletOrders = [];
@@ -57762,6 +57790,160 @@ async function cashProfileSummary(userId) {
     handle: profile.cashHandle || "",
     displayHandle: profile.cashHandleDisplay || profile.cashHandle || "",
     address: wallet?.publicKey || ""
+  };
+}
+
+function cashRecoveryKeyFromText(value) {
+  const text = String(value || "").trim();
+  const embedded = text.match(/\bsc_[A-Za-z0-9_-]{32,}\b/);
+  return embedded ? embedded[0] : (/^[A-Za-z0-9_-]{32,160}$/.test(text) ? text : "");
+}
+
+function normalizeCashRecoveryKeys(profile = {}) {
+  const rows = Array.isArray(profile.cashRecoveryKeys) ? profile.cashRecoveryKeys : [];
+  const normalized = rows
+    .filter((row) => row && /^[a-f0-9]{64}$/i.test(String(row.hash || "")))
+    .map((row) => ({
+      hash: String(row.hash).toLowerCase(),
+      createdAt: String(row.createdAt || ""),
+      lastUsedAt: String(row.lastUsedAt || "")
+    }));
+  if (/^[a-f0-9]{64}$/i.test(String(profile.cashRecoveryKeyHash || ""))) {
+    normalized.push({
+      hash: String(profile.cashRecoveryKeyHash).toLowerCase(),
+      createdAt: String(profile.cashRecoveryKeyCreatedAt || ""),
+      lastUsedAt: ""
+    });
+  }
+  return normalized.filter((row, index, all) => all.findIndex((item) => item.hash === row.hash) === index);
+}
+
+async function createCashAccountBackup(userId) {
+  const recoveryKey = `sc_${crypto.randomBytes(32).toString("base64url")}`;
+  const recoveryHash = hashWebSecret(recoveryKey);
+  const createdAt = new Date().toISOString();
+  let profileSnapshot = null;
+
+  await mutateWebAuthStore((store) => {
+    const profile = store.profiles?.[userId];
+    if (!profile) {
+      const error = new Error("Account not found.");
+      error.statusCode = 404;
+      throw error;
+    }
+    const previous = normalizeCashRecoveryKeys(profile);
+    const nextKeys = [
+      { hash: recoveryHash, createdAt, lastUsedAt: "" },
+      ...previous.filter((row) => row.hash !== recoveryHash)
+    ].slice(0, 5);
+    profile.cashRecoveryKeys = nextKeys;
+    for (const row of previous) {
+      if (!nextKeys.some((item) => item.hash === row.hash) && store.cashRecoveryIndex?.[row.hash] === String(userId)) {
+        delete store.cashRecoveryIndex[row.hash];
+      }
+    }
+    store.cashRecoveryIndex[recoveryHash] = String(userId);
+    delete profile.cashRecoveryKeyHash;
+    delete profile.cashRecoveryKeyCreatedAt;
+    profile.cashAccountBackedUpAt = createdAt;
+    profile.updatedAt = createdAt;
+    profileSnapshot = {
+      username: String(profile.username || ""),
+      handle: String(profile.cashHandle || ""),
+      displayHandle: String(profile.cashHandleDisplay || profile.cashHandle || "")
+    };
+  });
+
+  const wallets = (await webWalletRows(userId)).filter((wallet) => !wallet.volumeBot && !wallet.sessionWallet);
+  const handleLabel = profileSnapshot?.handle ? `-${sanitizeFilenamePart(profileSnapshot.handle)}` : "";
+  const filename = `slimecash-account${handleLabel}-${createdAt.replace(/[:.]/g, "-")}.txt`;
+  const walletLines = wallets.length
+    ? wallets.map((wallet) => `- ${wallet.label || "Wallet"}: ${wallet.publicKey}`).join("\n")
+    : "- No managed wallets yet";
+  const text = [
+    "SLIMECASH ACCOUNT RECOVERY",
+    "===========================",
+    `Created: ${createdAt}`,
+    `Recovery key: ${recoveryKey}`,
+    `Handle: ${profileSnapshot?.displayHandle ? `$${profileSnapshot.displayHandle}` : "not claimed"}`,
+    `Username: ${profileSnapshot?.username || "not set"}`,
+    "",
+    "PUBLIC WALLET LIST (addresses only — private-key backups are separate)",
+    walletLines,
+    "",
+    "HOW TO RESTORE",
+    "Open https://www.slimewire.org/cash/ and tap 'I have a recovery key'.",
+    "Choose this file or paste the recovery key. A fresh session opens the same account, handle, settings, and saved wallets.",
+    "",
+    "KEEP THIS PRIVATE. Anyone with this recovery key can open your SlimeCash account.",
+    "Keep the automatically downloaded encrypted wallet backup and recovery-key file too; those protect the wallet funds if the service data is ever lost."
+  ].join("\n");
+
+  await audit("cash_account_backup_created", { userId, walletCount: wallets.length }).catch(() => {});
+  return { filename, text, createdAt, walletCount: wallets.length };
+}
+
+async function recoverCashAccount(rawKey) {
+  const recoveryKey = cashRecoveryKeyFromText(rawKey);
+  if (!recoveryKey) {
+    const error = new Error("That recovery key or backup file is not valid.");
+    error.statusCode = 401;
+    throw error;
+  }
+
+  const keyHash = hashWebSecret(recoveryKey);
+  const store = await readWebAuthStore();
+  const now = Date.now();
+  let userId = "";
+  let permanent = false;
+
+  const indexedUserId = String(store.cashRecoveryIndex?.[keyHash] || "");
+  if (indexedUserId && normalizeCashRecoveryKeys(store.profiles?.[indexedUserId]).some((row) => row.hash === keyHash)) {
+    userId = indexedUserId;
+    permanent = true;
+  } else {
+    // Migration path for recovery files created before the O(1) index existed.
+    for (const [candidateUserId, profile] of Object.entries(store.profiles || {})) {
+      if (normalizeCashRecoveryKeys(profile).some((row) => row.hash === keyHash)) {
+        userId = candidateUserId;
+        permanent = true;
+        break;
+      }
+    }
+  }
+
+  // Compatibility for the first SlimeCash release: its "account key" was the
+  // 30-day session token itself. Accept it while it is still valid and mint a
+  // fresh session; the user can then download a permanent recovery file.
+  if (!userId) {
+    const legacySession = (store.sessions || []).find((session) => session.tokenHash === keyHash && Date.parse(session.expiresAt || "") > now);
+    if (legacySession) userId = String(legacySession.userId || "");
+  }
+
+  if (!userId) {
+    const error = new Error("That recovery key is not valid. Choose the full SlimeCash account backup file or paste its recovery key.");
+    error.statusCode = 401;
+    throw error;
+  }
+
+  if (permanent) {
+    await mutateWebAuthStore((fresh) => {
+      const profile = fresh.profiles?.[userId];
+      if (!profile) return;
+      profile.cashRecoveryKeys = normalizeCashRecoveryKeys(profile).map((row) => row.hash === keyHash
+        ? { ...row, lastUsedAt: new Date().toISOString() }
+        : row);
+      fresh.cashRecoveryIndex[keyHash] = String(userId);
+    });
+  }
+
+  const session = await issueWebSessionForExistingUser(userId, userId);
+  await audit("cash_account_recovered", { userId, permanent }).catch(() => {});
+  return {
+    token: session.token,
+    expiresAt: session.expiresAt,
+    legacyKey: !permanent,
+    profile: await cashProfileSummary(userId)
   };
 }
 

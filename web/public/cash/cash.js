@@ -7,6 +7,8 @@
   const TOKEN_KEY = "ogreWebToken";
   const ACTIVITY_KEY = "slimecashActivity";
   const GUIDE_KEY = "slimecashGuide";
+  const API_BASE = (window.OGRE_PORTAL_CONFIG && window.OGRE_PORTAL_CONFIG.apiBase)
+    || (/^(?:www\.)?slimewire\.org$/i.test(location.hostname) ? "https://ogrevolbot.onrender.com" : "");
   const WSOL_MINT = "So11111111111111111111111111111111111111112";
   const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
@@ -183,7 +185,11 @@
     const headers = { "Content-Type": "application/json" };
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
     try {
-      const response = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+      const response = await fetch(`${API_BASE}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+      const isJson = /application\/json/i.test(response.headers.get("content-type") || "");
+      if (!isJson) {
+        return { ok: false, status: response.status, data: { error: "SlimeCash could not reach the account service. Try again." } };
+      }
       const data = await response.json().catch(() => ({}));
       return { ok: response.ok && data.ok !== false, status: response.status, data };
     } catch {
@@ -198,10 +204,84 @@
     if (token) localStorage.setItem(TOKEN_KEY, token); else localStorage.removeItem(TOKEN_KEY);
   }
 
+  function downloadText(filename, text) {
+    if (!text) return;
+    try {
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename || "slimecash-backup.txt";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
+    } catch { toast("Backup is ready, but the download was blocked. Tap Back up account in Profile.", true); }
+  }
+
+  function downloadWalletFiles(downloads) {
+    if (downloads?.encryptedBackup?.text) downloadText(downloads.encryptedBackup.filename, downloads.encryptedBackup.text);
+    if (downloads?.recoveryKeys?.text) downloadText(downloads.recoveryKeys.filename, downloads.recoveryKeys.text);
+  }
+
+  async function backupCashAccount({ includeWallets = false, quiet = false } = {}) {
+    if (!state.token) return false;
+    const account = await post("/api/web/cash/account-backup", {});
+    if (!account.ok || !account.data.accountBackup?.text) {
+      if (!quiet) toast(account.data.error || "Could not prepare the account backup.", true);
+      return false;
+    }
+    downloadText(account.data.accountBackup.filename, account.data.accountBackup.text);
+
+    if (includeWallets) {
+      const wallets = await post("/api/web/wallets/export", {});
+      if (wallets.ok) downloadWalletFiles(wallets.data.backup?.downloads);
+      else if (!quiet) toast(wallets.data.error || "Account saved, but wallet backup failed.", true);
+    }
+    if (!quiet) toast(includeWallets ? "Account + wallet backups downloaded" : "Account recovery backup downloaded");
+    return true;
+  }
+
+  function openRecovery() {
+    $("recoveryText").value = "";
+    $("recoveryStatus").textContent = "";
+    $("recoveryStatus").className = "status";
+    openSheet("recovery");
+  }
+
+  async function restoreCashAccount() {
+    const value = $("recoveryText").value.trim();
+    const status = $("recoveryStatus");
+    const button = $("recoveryBtn");
+    if (!value) {
+      status.textContent = "Choose your SlimeCash account backup or paste the recovery key.";
+      status.className = "status bad";
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "Restoring…";
+    const result = await post("/api/web/cash/recover", { key: value });
+    button.disabled = false;
+    button.textContent = "Restore account";
+    if (!result.ok || !result.data.token) {
+      status.textContent = result.data.error || "That recovery key could not be restored.";
+      status.className = "status bad";
+      return;
+    }
+    setToken(result.data.token);
+    sessionStorage.setItem("slimecashRecovered", result.data.legacyKey
+      ? "Account restored. Download the new permanent recovery backup from Profile."
+      : "Account restored — your handle and wallets are back.");
+    location.reload();
+  }
+
   async function ensureAccount() {
     if (state.token) return true;
     const result = await post("/api/web/signup", {});
-    if (result.ok && result.data.token) { setToken(result.data.token); return true; }
+    if (result.ok && result.data.token) {
+      setToken(result.data.token);
+      return true;
+    }
     toast(result.data.error || "Could not create your account.", true);
     return false;
   }
@@ -214,8 +294,14 @@
     if (!rows.length) {
       const created = await post("/api/web/wallets/create", { label: "SlimeCash", count: 1 });
       if (!created.ok) { toast(created.data.error || "Could not create a wallet.", true); return null; }
-      result = await get("/api/web/wallets");
-      rows = (result.data.wallets || []).filter((row) => !row.volumeBot && !row.sessionWallet);
+      downloadWalletFiles(created.data.downloads);
+      // The create response already has the new wallet. Paint immediately
+      // instead of waiting on another wallet-store + balance round trip.
+      rows = (created.data.wallets || []).filter((row) => !row.volumeBot && !row.sessionWallet);
+      if (!rows.length) {
+        result = await get("/api/web/wallets");
+        rows = (result.data.wallets || []).filter((row) => !row.volumeBot && !row.sessionWallet);
+      }
     }
     if (!rows.length) return null;
     state.wallet = { index: rows[0].index, publicKey: rows[0].publicKey };
@@ -567,6 +653,12 @@
     $("app").hidden = false;
     renderActivity();
 
+    const recoveredMessage = sessionStorage.getItem("slimecashRecovered");
+    if (recoveredMessage) {
+      sessionStorage.removeItem("slimecashRecovered");
+      setTimeout(() => toast(recoveredMessage), 450);
+    }
+
     if (!ready) {
       showOnboard();
     } else {
@@ -624,16 +716,25 @@
 
   $("claimBtn").addEventListener("click", async () => {
     const button = $("claimBtn");
+    const requestedHandle = $("handleInput").value.trim().replace(/^\$+/, "");
+    if (!/^[a-z0-9]{1,20}$/i.test(requestedHandle) || !/[a-z]/i.test(requestedHandle)) {
+      $("handleHint").textContent = "Use 1–20 letters and numbers with at least one letter.";
+      $("handleHint").className = "field-hint bad";
+      return;
+    }
     button.disabled = true;
     button.textContent = "Claiming…";
     const ok = await ensureAccount() && await ensureWallet();
     if (!ok) { button.disabled = false; button.textContent = "Claim it"; return; }
-    const result = await claimHandle($("handleInput").value);
+    const result = await claimHandle(requestedHandle);
     button.disabled = false;
     button.textContent = "Claim it";
     if (result.ok) {
+      const backedUp = await backupCashAccount({ quiet: true });
       $("onboard").hidden = true;
-      toast(`You're $${state.displayHandle} 🤝`);
+      toast(backedUp
+        ? `You're $${state.displayHandle} — account + wallet backups downloaded`
+        : `You're $${state.displayHandle}. Open Profile to download your account backup.`, !backedUp);
       refreshBalance();
       renderProfile();
     } else {
@@ -643,33 +744,51 @@
   });
 
   $("skipHandleBtn").addEventListener("click", async () => {
+    const button = $("skipHandleBtn");
+    button.disabled = true;
+    button.textContent = "Setting up…";
     if (await ensureAccount() && await ensureWallet()) {
+      const backedUp = await backupCashAccount({ quiet: true });
       $("onboard").hidden = true;
       refreshBalance();
       renderProfile();
+      toast(backedUp
+        ? "Ready — account + wallet backups downloaded"
+        : "Ready. Open Profile to download your account backup.", !backedUp);
     }
+    button.disabled = false;
+    button.textContent = "Skip for now";
   });
 
-  $("onboardRestoreBtn").addEventListener("click", () => {
-    const key = prompt("Paste your SlimeCash account key:");
-    if (!key) return;
-    setToken(key.trim());
-    location.reload();
-  });
+  $("onboardRestoreBtn").addEventListener("click", openRecovery);
 
   $("claimHandleBtn").addEventListener("click", () => { $("onboard").hidden = false; });
 
-  $("backupBtn").addEventListener("click", () => {
-    if (!state.token) return;
-    copyText(state.token);
-    toast("Account key copied. Save it somewhere safe — it signs you in for ~30 days. For a permanent backup, export your wallet on the full site.");
+  $("backupBtn").addEventListener("click", async () => {
+    const button = $("backupBtn");
+    button.disabled = true;
+    button.textContent = "Preparing backups…";
+    await backupCashAccount({ includeWallets: true });
+    button.disabled = false;
+    button.textContent = "Back up account + wallets";
   });
 
-  $("restoreBtn").addEventListener("click", () => {
-    const key = prompt("Paste your SlimeCash account key:");
-    if (!key) return;
-    setToken(key.trim());
-    location.reload();
+  $("restoreBtn").addEventListener("click", openRecovery);
+  $("recoveryBtn").addEventListener("click", restoreCashAccount);
+  $("recoveryFile").addEventListener("change", () => {
+    const file = $("recoveryFile").files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      $("recoveryText").value = String(reader.result || "").trim();
+      $("recoveryStatus").textContent = `${file.name} loaded — tap Restore account.`;
+      $("recoveryStatus").className = "status ok";
+    };
+    reader.onerror = () => {
+      $("recoveryStatus").textContent = "Could not read that file. Paste the recovery key instead.";
+      $("recoveryStatus").className = "status bad";
+    };
+    reader.readAsText(file);
   });
 
   $("installBtn").addEventListener("click", async () => {
@@ -681,7 +800,7 @@
   });
 
   $("signOutBtn").addEventListener("click", () => {
-    if (!confirm("Sign out? Make sure your account key is backed up first — it's the only way back into this account.")) return;
+    if (!confirm("Sign out? Make sure your SlimeCash recovery backup is saved first.")) return;
     setToken("");
     location.reload();
   });

@@ -78,6 +78,9 @@ a { color: var(--mint); text-decoration: none; }
 .btn.primary { background: var(--green); border-color: var(--green); color: var(--green-deep); }
 .btn.ghost { background: var(--soft); }
 .btn.block { display: block; width: 100%; margin-top: 12px; }
+.recovery-file { cursor: pointer; }
+.recovery-file input { display: none; }
+.recovery-text { min-height: 112px; resize: vertical; padding: 12px 14px; line-height: 1.45; }
 
 /* Pay card */
 .cash-card {

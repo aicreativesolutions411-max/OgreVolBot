@@ -16,7 +16,7 @@
 <meta property="og:title" content="SlimeCash">
 <meta property="og:description" content="Money for the trenches. Send, receive, and swap coins with your $handle.">
 <meta property="og:image" content="https://www.slimewire.org/cash/icons/icon-512.png">
-<link rel="stylesheet" href="/cash/cash.css">
+<link rel="stylesheet" href="/cash/cash.css?v=3">
 </head>
 <body>
 <div id="splash" class="splash">
@@ -96,13 +96,13 @@
     <div class="more-list">
       <button class="more-item" id="claimHandleBtn" type="button">Claim / change $handle</button>
       <button class="more-item" id="copyAddressBtn" type="button">Copy wallet address</button>
-      <button class="more-item" id="backupBtn" type="button">Back up account key</button>
-      <button class="more-item" id="restoreBtn" type="button">Restore from account key</button>
+      <button class="more-item" id="backupBtn" type="button">Back up account + wallets</button>
+      <button class="more-item" id="restoreBtn" type="button">Restore account</button>
       <button class="more-item" id="installBtn" type="button" hidden>Install SlimeCash on this device</button>
       <a class="more-item" href="/gg" target="_blank" rel="noopener">Open full SlimeWire site ↗</a>
       <button class="more-item danger" id="signOutBtn" type="button">Sign out</button>
     </div>
-    <div class="fineprint">SlimeCash wallets are SlimeWire wallets — same account works on the site, the terminal, and the Telegram bot. Your account key is the only way back in: back it up.</div>
+    <div class="fineprint">SlimeCash wallets are SlimeWire wallets — the same account works on the site, terminal, and Telegram bot. Your permanent recovery file restores the account; the separate wallet files protect the funds.</div>
   </section>
 
   <nav class="tabbar">
@@ -117,7 +117,7 @@
 <div id="onboard" class="sheet-backdrop" hidden>
   <div class="sheet">
     <div class="sheet-title">Pick your $handle</div>
-    <p class="sheet-copy">It's your username and your pay link. No email, no seed phrase — your wallet is created automatically.</p>
+    <p class="sheet-copy">It's your username and pay link. Your wallet is created automatically, and account + wallet recovery files download during setup.</p>
     <div class="handle-wrap">
       <span class="handle-dollar">$</span>
       <input id="handleInput" class="field handle-field" type="text" maxlength="20" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="greengoblin">
@@ -125,7 +125,7 @@
     <div id="handleHint" class="field-hint">1–20 letters and numbers, at least one letter</div>
     <button id="claimBtn" class="btn primary block" type="button">Claim it</button>
     <button id="skipHandleBtn" class="btn ghost block" type="button">Skip for now</button>
-    <button id="onboardRestoreBtn" class="btn ghost block" type="button">I have an account key</button>
+    <button id="onboardRestoreBtn" class="btn ghost block" type="button">I have a recovery key</button>
   </div>
 </div>
 
@@ -172,7 +172,23 @@
   </div>
 </div>
 
+<!-- ACCOUNT RECOVERY -->
+<div id="recovery" class="sheet-backdrop" hidden>
+  <div class="sheet">
+    <button class="sheet-close" data-close="recovery" type="button" aria-label="Close">×</button>
+    <div class="sheet-title">Restore SlimeCash</div>
+    <p class="sheet-copy">Choose your <b>slimecash-account</b> backup file or paste its recovery key. Older account keys still work while their original session is valid.</p>
+    <label class="btn ghost block recovery-file">Choose account backup
+      <input id="recoveryFile" type="file" accept=".txt,.json,text/plain,application/json">
+    </label>
+    <label class="field-label" for="recoveryText">Recovery key or backup contents</label>
+    <textarea id="recoveryText" class="field recovery-text" rows="5" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="sc_… or paste the full account backup"></textarea>
+    <div id="recoveryStatus" class="status"></div>
+    <button id="recoveryBtn" class="btn primary block" type="button">Restore account</button>
+  </div>
+</div>
+
 <div id="toast" class="toast" hidden></div>
-<script src="/cash/cash.js"></script>
+<script src="/cash/cash.js?v=3"></script>
 </body>
 </html>
