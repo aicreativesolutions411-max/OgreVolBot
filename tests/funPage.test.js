@@ -12,7 +12,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.match(server, /requestUrl\.pathname === "\/fun"[\s\S]{0,300}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
-  assert.match(html, /<script defer src="\/fun\.js\?v=12"><\/script>/);
+  assert.match(html, /<script defer src="\/fun\.js\?v=13"><\/script>/);
 });
 
 test("/fun keeps the reference layout clean while carrying SlimeWire features", () => {
@@ -162,6 +162,9 @@ test("/quick preloads social coins and keeps wallet setup inside the fast trade 
   assert.match(js, /data-quick-wallet-select/);
   assert.match(js, /data-quick-panel/);
   assert.match(js, /quick-inline-chart/);
+  assert.match(js, /quick-bottom-dock/);
+  assert.match(js, /Bundle Buy/);
+  assert.match(css, /High-fidelity quick-buy states/);
   assert.doesNotMatch(js, /class="quick-secondary"><a href="\/fun#coin/);
   assert.match(js, /Connect \/ restore/);
   assert.match(js, /Your coin stays selected/);
