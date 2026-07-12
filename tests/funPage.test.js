@@ -52,6 +52,7 @@ test("unified search and Robinhood detail support the two-chain mobile experienc
   assert.match(js, /\/api\/web\/token-search\?q=/);
   assert.match(js, /\/api\/web\/rh\/token\?address=/);
   assert.match(js, /\/api\/web\/token-read\?mint=/);
+  assert.match(server, /rhListTokens\(1\)[\s\S]{0,120}rhRecentActiveTokens\(1\)/);
 });
 
 test("coin art stays metadata-first while wallet identities use slime PFPs", () => {

@@ -51611,8 +51611,12 @@ async function rhFeedTokens() {
   if (Date.now() - rhFeedCache.at < 45_000 && rhFeedCache.tokens.length) return rhFeedCache.tokens;
   // Base = full universe once warm (else the fast top-by-holders path), PLUS the time-ordered transfers
   // feed for brand-new launches. Dedupe by address.
-  const base = rhUniverseCache.items.length ? rhUniverseCache.items : await rhListTokens(5).catch(() => []);
-  const byActivity = await rhRecentActiveTokens(3).catch(() => []);
+  // Cold start must paint quickly: one holders page + one activity page in parallel is enough
+  // for the first screen. The full 45-page universe continues warming in the background.
+  const [base, byActivity] = await Promise.all([
+    rhUniverseCache.items.length ? Promise.resolve(rhUniverseCache.items) : rhListTokens(1).catch(() => []),
+    rhRecentActiveTokens(1).catch(() => [])
+  ]);
   const scam = rhScamCache.set;
   const merged = new Map();
   for (const t of [...base, ...byActivity]) {
