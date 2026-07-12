@@ -70,3 +70,18 @@ test("Coinbase session request is Solana-only, preloaded, and returns only the h
   assert.match(request.options.headers.Authorization, /^Bearer /);
   assert.equal(result.onrampUrl, "https://pay.coinbase.com/buy?sessionToken=one-use");
 });
+
+test("Coinbase session failures preserve a safe provider status for setup diagnostics", async () => {
+  const { privateKey } = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+  await assert.rejects(() => createCoinbaseOnrampSession({
+    keyId: "organizations/test/apiKeys/key",
+    keySecret: privateKey.export({ type: "pkcs8", format: "pem" }),
+    destinationAddress: "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+    asset: "USDC",
+    paymentAmount: "10",
+    redirectUrl: "https://www.slimewire.org/cash/",
+    clientIp: "127.0.0.1",
+    partnerUserRef: "slimecash-test",
+    fetchImpl: async () => ({ ok: false, status: 403, json: async () => ({}) })
+  }), /HTTP 403/);
+});

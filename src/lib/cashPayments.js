@@ -124,7 +124,14 @@ export async function createCoinbaseOnrampSession({ keyId, keySecret, destinatio
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || !data?.session?.onrampUrl) {
-    const error = new Error(data?.message || data?.error || "Coinbase could not start funding right now.");
+    const providerMessage = [
+      data?.message,
+      data?.error_description,
+      typeof data?.error === "string" ? data.error : data?.error?.message
+    ].find((value) => typeof value === "string" && value.trim());
+    const providerCode = String(data?.code || data?.error?.code || "").trim();
+    const statusText = response.status ? `HTTP ${response.status}${providerCode ? `, ${providerCode}` : ""}` : "provider error";
+    const error = new Error(providerMessage || `Coinbase rejected the funding session (${statusText}).`);
     error.statusCode = response.status >= 400 && response.status < 500 ? 400 : 502;
     throw error;
   }
