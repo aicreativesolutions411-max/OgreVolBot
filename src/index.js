@@ -15231,7 +15231,7 @@ async function handleMessage(message, userId) {
   const quickBuyCommand = /^\/buy(?:@[A-Za-z0-9_]+)?(?:\s+(.+))?$/i.exec(text);
   if (quickBuyCommand) {
     if (!isPrivateChat(message.chat)) {
-      await sendTelegramQuickTradeLink(chatId, message, quickBuyCommand[1] || "");
+      await sendTelegramQuickBuyPanel(chatId, userId, message, quickBuyCommand[1] || "");
       return;
     }
     if (quickBuyCommand[1] || message.reply_to_message) {
@@ -35762,18 +35762,59 @@ async function telegramQuickTradeTarget(message, argument = "") {
   return "";
 }
 
-async function sendTelegramQuickTradeLink(chatId, message, argument = "") {
+async function telegramQuickBuyPanelKeyboard(target, userId) {
+  const links = slimewireTokenLinks(target);
+  if (/^0x[0-9a-fA-F]{40}$/.test(target)) {
+    return { inline_keyboard: [
+      [
+        { text: "⚡ 0.1◎", callback_data: `rqb:0.1:${target}` },
+        { text: "⚡ 0.5◎", callback_data: `rqb:0.5:${target}` },
+        { text: "⚡ 1◎", callback_data: `rqb:1:${target}` }
+      ],
+      [{ text: "🎯 Buy preset", callback_data: `rqbp:${target}` }, { text: "⚙️ Edit preset", callback_data: "pe:open" }],
+      [{ text: "🔎 Full scan", callback_data: `dmscan:${target}` }, { text: "📈 Chart", url: links.site }]
+    ] };
+  }
+  const { presets, custom } = userBuyPrefs(await readBuyPrefs(), userId);
+  const amounts = [...presets.slice(0, 3), custom].filter((value, index, list) => Number(value) > 0 && list.indexOf(value) === index).slice(0, 4);
+  return { inline_keyboard: [
+    amounts.map((amount) => ({ text: `⚡ ${amount}◎`, callback_data: `qb:${amount}:${target}` })),
+    [{ text: "🎯 Buy preset + TP/SL", callback_data: `qbp:${target}` }, { text: "⚙️ Edit preset", callback_data: "pe:open" }],
+    [{ text: "🔎 Full scan", callback_data: `dmscan:${target}` }, { text: "📈 Chart", url: links.site }]
+  ] };
+}
+
+async function sendTelegramQuickBuyPanel(chatId, userId, message, argument = "") {
   const target = await telegramQuickTradeTarget(message, argument);
   if (!target) {
     await say(chatId, "Reply to a SlimeWire scan or buy alert with /buy—or send /buy <coin CA>.");
     return false;
   }
-  const links = slimewireTokenLinks(target);
-  await sayHtml(chatId, [
-    "⚡ <b>Quick Trade ready</b>",
-    `<code>${escapeTelegramHtml(shortMint(target))}</code>`,
-    "<i>Opens privately with the coin preloaded. Create, restore, fund, or choose a wallet there.</i>"
-  ].join("\n"), { inline_keyboard: [[{ text: "⚡ Open Quick Trade", url: links.quick }], [{ text: "📈 Full chart", url: links.site }]] });
+  const isRobinhood = /^0x[0-9a-fA-F]{40}$/.test(target);
+  const [info, keyboard] = await Promise.all([
+    isRobinhood ? gatherRhScan(target).catch(() => null) : alphaRadarFetchMc(target).catch(() => null),
+    telegramQuickBuyPanelKeyboard(target, userId)
+  ]);
+  const imageUrl = isRobinhood
+    ? firstString(info?.imageUrl, info?.iconUrl)
+    : await resolveGroupTokenImage(target).catch(() => "");
+  const symbol = firstString(info?.symbol, info?.sym);
+  const mc = firstMeaningfulNumber(info?.mc, info?.marketCap, info?.marketCapUsd);
+  const liq = firstMeaningfulNumber(info?.liq, info?.liquidity, info?.liquidityUsd);
+  const volume = firstMeaningfulNumber(info?.vol1, info?.volumeH1, info?.volume, info?.vol24, info?.volume24hUsd);
+  const stats = [
+    mc > 0 ? `MC <b>${fmtMc(mc)}</b>` : "",
+    liq > 0 ? `Liq <b>${fmtMc(liq)}</b>` : "",
+    volume > 0 ? `Vol <b>${fmtMc(volume)}</b>` : ""
+  ].filter(Boolean).join(" · ");
+  const caption = [
+    `🟢 <b>SLIMEWIRE BUY${symbol ? ` · $${escapeTelegramHtml(String(symbol).replace(/^\$+/, ""))}` : ""}</b>`,
+    `<code>${escapeTelegramHtml(target)}</code>`,
+    stats,
+    `<i>${isRobinhood ? "Robinhood Chain · funded with SOL" : "Solana"} · tap an amount to buy instantly</i>`
+  ].filter(Boolean).join("\n");
+  const sent = await sendGroupAlertMedia(chatId, imageUrl ? { type: "photo", value: imageUrl } : null, caption, keyboard);
+  if (!sent?.result) await sayHtml(chatId, caption, keyboard);
   return true;
 }
 function parsedSolFundTransfers(tx, wallet, add) {

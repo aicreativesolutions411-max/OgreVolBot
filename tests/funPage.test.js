@@ -158,6 +158,9 @@ test("/quick preloads social coins and keeps wallet setup inside the fast trade 
   assert.match(js, /data-quick-review/);
   assert.match(js, /data-quick-bundle/);
   assert.match(js, /data-quick-wallet-select/);
+  assert.match(js, /data-quick-panel/);
+  assert.match(js, /quick-inline-chart/);
+  assert.doesNotMatch(js, /class="quick-secondary"><a href="\/fun#coin/);
   assert.match(js, /Connect \/ restore/);
   assert.match(js, /Your coin stays selected/);
 });

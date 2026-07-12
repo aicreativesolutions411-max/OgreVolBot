@@ -1648,17 +1648,25 @@ test("scan card = ⚡ Quick Buy (preset) + ⚙️ Preset editor + limit + chart 
   assert.match(rhBuy, /slimewire\.org · chart, trade &amp; tools/);
 });
 
-test("Telegram /buy replies turn scan and buy cards into preloaded private quick-trade links", () => {
+test("Telegram /buy replies turn scan and buy cards into an in-chat quick-buy panel", () => {
   assert.match(serverSource, /async function telegramQuickTradeTarget/);
   const resolver = functionBody(serverSource, "telegramQuickTradeTarget");
   assert.match(resolver, /reply_to_message/);
   assert.match(resolver, /reply_markup\?\.inline_keyboard/);
   assert.match(resolver, /qbp\|rqbp\|dmscan/);
   assert.match(resolver, /\[\?&\]\(\?:ca\|token\)/);
-  assert.match(functionBody(serverSource, "sendTelegramQuickTradeLink"), /Open Quick Trade/);
-  assert.match(functionBody(serverSource, "sendTelegramQuickTradeLink"), /links\.quick/);
+  const panel = functionBody(serverSource, "sendTelegramQuickBuyPanel");
+  assert.match(panel, /sendGroupAlertMedia/);
+  assert.match(panel, /SLIMEWIRE BUY/);
+  assert.doesNotMatch(panel, /links\.quick|Open Quick Trade/);
+  const keyboard = functionBody(serverSource, "telegramQuickBuyPanelKeyboard");
+  assert.match(keyboard, /callback_data: `qb:/);
+  assert.match(keyboard, /callback_data: `qbp:/);
+  assert.match(keyboard, /callback_data: `rqb:/);
+  assert.match(keyboard, /callback_data: `rqbp:/);
+  assert.match(keyboard, /Full scan/);
   assert.match(serverSource, /const quickBuyCommand = \/\^\\\/buy/);
-  assert.match(serverSource, /sendTelegramQuickTradeLink\(chatId, message, quickBuyCommand\[1\]/);
+  assert.match(serverSource, /sendTelegramQuickBuyPanel\(chatId, userId, message, quickBuyCommand\[1\]/);
   assert.match(functionBody(serverSource, "slimewireTokenLinks"), /\/quick\?ca=/);
 });
 
