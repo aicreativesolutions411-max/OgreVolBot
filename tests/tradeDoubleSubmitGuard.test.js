@@ -2410,15 +2410,19 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(ticker, /const solPromise = resolveCashtagToMint/);  // deep Sol work starts concurrently
   assert.match(ticker, /resolveRhTickerCandidate/);
   assert.match(ticker, /tickerRhClearlyDominates/);                 // decisive RH market returns without waiting for Sol safety
+  assert.match(ticker, /providerTimeoutMs: 3_200/);                 // both fast indexes unavailable -> one bounded retry
+  assert.match(ticker, /lookupComplete === false.*marketCap/s);     // uncertainty never promotes a micro Sol clone
   assert.match(ticker, /rhLeadership > solLeadership/);             // stronger RH market can beat a weak Sol clone
   const rhTicker = functionBody(serverSource, "resolveRhTickerCandidate");
   assert.match(rhTicker, /if \(chain === "robinhood"\)/);
   assert.match(rhTicker, /tickerMarketLeadership/);
   assert.match(rhTicker, /tickerMarketRowStrength/);                 // one real pair supplies MC+volume; no cross-pair Frankenstein maxima
   assert.match(rhTicker, /candidate\.dexPair \|\| await scanFastTimeout\(isRhContract/); // a live pair proves token; feed-only addresses still classify
-  assert.match(rhTicker, /source === "dexscreener"/);
-  assert.match(rhTicker, /timeoutMs: 1_300/);
-  assert.match(rhTicker, /candidates\.size \? \[\] : await/);       // healthy Dex hit never waits on the heavier RH feed
+  assert.match(rhTicker, /dexscreener\|geckoterminal/);
+  assert.match(rhTicker, /api\.geckoterminal\.com\/api\/v2\/search\/pools/);
+  assert.match(rhTicker, /const \[dexData, geckoData\] = await Promise\.all/);
+  assert.match(rhTicker, /providerTimeoutMs\) \|\| 1_800/);
+  assert.match(rhTicker, /candidates\.size \|\| providersAvailable/); // healthy indexed lookup never waits on the heavier RH feed
   assert.match(rhTicker, /_rhKindCache\.set/);                      // later scan skips duplicate wallet-vs-token RPC work
 
   const xLogo = functionBody(serverSource, "xCoinLogoLive");

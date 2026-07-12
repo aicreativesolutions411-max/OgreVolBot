@@ -34289,12 +34289,12 @@ async function resolveCashtagToMint(symbol) {
   return mint;
 }
 const rhTickerTargetCache = new Map();
-async function resolveRhTickerCandidate(symbol) {
+async function resolveRhTickerCandidate(symbol, options = {}) {
   const q = String(symbol || "").replace(/^\$|^#/, "").trim();
   if (q.length < 2) return null;
   const key = q.toLowerCase();
   const cached = rhTickerTargetCache.get(key);
-  if (cached && Date.now() - cached.at < (cached.candidate ? 30_000 : 8_000)) return cached.candidate;
+  if (!options.force && cached && Date.now() - cached.at < (cached.candidate ? 30_000 : 8_000)) return cached.candidate;
   const candidates = new Map();
   let solDexCandidate = null;
   const add = (address, row = {}, source = "") => {
@@ -34317,13 +34317,17 @@ async function resolveRhTickerCandidate(symbol) {
     }
     prev.holders = Math.max(prev.holders, holders);
     prev.trendBoost = Math.max(prev.trendBoost, /feed|trending/i.test(source) ? 12 : 0);
-    if (source === "dexscreener") prev.dexPair = true; // baseToken on a live pair is already contract proof
+    if (/dexscreener|geckoterminal/.test(source)) prev.dexPair = true; // baseToken on a live pair is already contract proof
     prev.sources.add(source || "robinhood");
     candidates.set(id, prev);
   };
-  // Dex search is the fast path and already covers both chains. Only wait on the heavier RH feed
-  // when Dex has no exact Robinhood market; a healthy Dex hit should never inherit the feed timeout.
-  const dexData = await scanFastTimeout(fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { timeoutMs: 1_300 }), 1_400, null);
+  // Two independent fast pool indexes prevent one transient provider miss from silently promoting a
+  // same-symbol Sol clone. Both normally answer in under a second; the longer deadline is retry-only.
+  const providerTimeoutMs = Number(options.providerTimeoutMs) || 1_800;
+  const [dexData, geckoData] = await Promise.all([
+    scanFastTimeout(fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { timeoutMs: providerTimeoutMs }), providerTimeoutMs + 100, null),
+    scanFastTimeout(fetchJson(`https://api.geckoterminal.com/api/v2/search/pools?query=${encodeURIComponent(q)}`, { timeoutMs: providerTimeoutMs }), providerTimeoutMs + 100, null)
+  ]);
   for (const pair of Array.isArray(dexData?.pairs) ? dexData.pairs : []) {
     const chain = String(pair.chainId || "").toLowerCase();
     const exact = String(pair.baseToken?.symbol || "").replace(/^\$+/, "").toLowerCase() === key;
@@ -34334,7 +34338,27 @@ async function resolveRhTickerCandidate(symbol) {
       if (!solDexCandidate || tickerMarketRowStrength(candidate.marketCap, candidate.volume24h, candidate.liquidityUsd) > tickerMarketRowStrength(solDexCandidate.marketCap, solDexCandidate.volume24h, solDexCandidate.liquidityUsd)) solDexCandidate = candidate;
     }
   }
-  const feed = candidates.size ? [] : await scanFastTimeout(rhFeedTokens().catch(() => []), 1_800, []);
+  for (const pool of Array.isArray(geckoData?.data) ? geckoData.data : []) {
+    const baseId = String(pool?.relationships?.base_token?.data?.id || "");
+    const splitAt = baseId.indexOf("_");
+    const network = splitAt > 0 ? baseId.slice(0, splitAt).toLowerCase() : "";
+    const address = splitAt > 0 ? baseId.slice(splitAt + 1) : "";
+    const ticker = String(pool?.attributes?.name || "").split("/")[0].trim();
+    if (ticker.replace(/^\$+/, "").toLowerCase() !== key) continue;
+    const row = {
+      symbol: ticker,
+      liquidityUsd: pool?.attributes?.reserve_in_usd,
+      volume24hUsd: pool?.attributes?.volume_usd?.h24,
+      marketCapUsd: firstMeaningfulNumber(pool?.attributes?.market_cap_usd, pool?.attributes?.fdv_usd)
+    };
+    if (network === "robinhood") add(address, row, "geckoterminal");
+    if (network === "solana" && isLikelySolMint(address)) {
+      const candidate = { marketCap: Number(row.marketCapUsd) || 0, volume24h: Number(row.volume24hUsd) || 0, liquidityUsd: Number(row.liquidityUsd) || 0 };
+      if (!solDexCandidate || tickerMarketRowStrength(candidate.marketCap, candidate.volume24h, candidate.liquidityUsd) > tickerMarketRowStrength(solDexCandidate.marketCap, solDexCandidate.volume24h, solDexCandidate.liquidityUsd)) solDexCandidate = candidate;
+    }
+  }
+  const providersAvailable = Boolean(dexData || geckoData);
+  const feed = (candidates.size || providersAvailable) ? [] : await scanFastTimeout(rhFeedTokens().catch(() => []), 1_800, []);
   for (const row of Array.isArray(feed) ? feed : []) add(row.address, row, row.source || "robinhood-feed");
   const all = [...candidates.values()];
   const maxima = {
@@ -34356,7 +34380,8 @@ async function resolveRhTickerCandidate(symbol) {
     pick.solDexCandidate = solDexCandidate;
     if (pick.dexPair) _rhKindCache.set(pick.address.toLowerCase(), { at: Date.now(), contract: true });
   }
-  rhTickerTargetCache.set(key, { at: Date.now(), candidate: pick });
+  const lookupComplete = Boolean(dexData || geckoData || (Array.isArray(feed) && feed.length));
+  rhTickerTargetCache.set(key, { at: Date.now(), candidate: pick, lookupComplete });
   if (rhTickerTargetCache.size > 300) rhTickerTargetCache.delete(rhTickerTargetCache.keys().next().value);
   return pick;
 }
@@ -34369,13 +34394,25 @@ async function resolveTickerToScanTarget(symbol) {
   // Resolve both chains inside the same bounded window, then compare their selected exact-symbol
   // markets by balanced MC + 24h volume. This lets a real Robinhood market beat a weak Sol clone.
   const solPromise = resolveCashtagToMint(q).catch(() => null);
-  const rh = await resolveRhTickerCandidate(q).catch(() => null);
+  let rh = await resolveRhTickerCandidate(q).catch(() => null);
+  let rhLookup = rhTickerTargetCache.get(q.toLowerCase());
+  if (!rh && rhLookup?.lookupComplete === false) {
+    rh = await resolveRhTickerCandidate(q, { force: true, providerTimeoutMs: 3_200 }).catch(() => null);
+    rhLookup = rhTickerTargetCache.get(q.toLowerCase());
+  }
   // A Dex-proven RH market leading the exact Sol match by 2x in BOTH MC and volume is decisive.
   // Return it immediately while the deeper Sol safety lookup finishes harmlessly in the background.
   if (tickerRhClearlyDominates(rh, rh?.solDexCandidate)) return rh.address;
   const sol = await solPromise;
   if (!sol) return rh?.address || null;
-  if (!rh) return sol;
+  if (!rh) {
+    const solMeta = tickerResolutionMetaCache.get(q.toLowerCase());
+    const solCandidate = (solMeta?.candidates || []).find((candidate) => candidate.mint === sol) || null;
+    // Provider uncertainty is not evidence that RH has no market. Never turn that uncertainty into
+    // a confident-looking scan of a tiny Sol clone; a later retry will use the short negative cache.
+    if (rhLookup?.lookupComplete === false && Number(solCandidate?.marketCap || 0) < 20_000) return null;
+    return sol;
+  }
   const solMeta = tickerResolutionMetaCache.get(q.toLowerCase());
   const solCandidate = (solMeta?.candidates || []).find((candidate) => candidate.mint === sol) || { marketCap: 0, volume24h: 0, liquidityUsd: 0 };
   const maxima = {
