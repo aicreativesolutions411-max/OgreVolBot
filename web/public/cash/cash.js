@@ -249,6 +249,36 @@
     openSheet("recovery");
   }
 
+  function cashAppInstalled() {
+    return window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator.standalone === true;
+  }
+
+  function openInstallGuide() {
+    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent || "");
+    $("installSteps").innerHTML = (ios ? [
+      "1. Tap the Share button in Safari.",
+      "2. Choose Add to Home Screen.",
+      "3. Tap Add — the separate SlimeCash app appears with its green dollar icon."
+    ] : [
+      "1. Open your browser menu (⋮).",
+      "2. Tap Install app or Add to Home screen.",
+      "3. Confirm Install — SlimeCash opens as its own app."
+    ]).map((step) => `<div>${escapeHtml(step)}</div>`).join("");
+    openSheet("installguide");
+  }
+
+  async function installCashApp() {
+    if (cashAppInstalled()) { toast("SlimeCash is already installed"); return; }
+    if (state.deferredInstall) {
+      const promptEvent = state.deferredInstall;
+      state.deferredInstall = null;
+      await promptEvent.prompt();
+      const choice = await promptEvent.userChoice.catch(() => null);
+      if (choice?.outcome === "accepted") { toast("SlimeCash installed"); return; }
+    }
+    openInstallGuide();
+  }
+
   async function restoreCashAccount() {
     const value = $("recoveryText").value.trim();
     const status = $("recoveryStatus");
@@ -637,7 +667,10 @@
     window.addEventListener("beforeinstallprompt", (event) => {
       event.preventDefault();
       state.deferredInstall = event;
-      $("installBtn").hidden = false;
+    });
+    window.addEventListener("appinstalled", () => {
+      state.deferredInstall = null;
+      toast("SlimeCash installed — look for the green dollar icon");
     });
 
     await refreshSolPrice();
@@ -791,13 +824,8 @@
     reader.readAsText(file);
   });
 
-  $("installBtn").addEventListener("click", async () => {
-    if (state.deferredInstall) {
-      state.deferredInstall.prompt();
-      state.deferredInstall = null;
-      $("installBtn").hidden = true;
-    }
-  });
+  $("installBtn").addEventListener("click", installCashApp);
+  $("installOnboardBtn").addEventListener("click", installCashApp);
 
   $("signOutBtn").addEventListener("click", () => {
     if (!confirm("Sign out? Make sure your SlimeCash recovery backup is saved first.")) return;

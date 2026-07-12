@@ -6,8 +6,8 @@
 <title>SlimeCash — money for the trenches</title>
 <meta name="description" content="SlimeCash: send, receive, and swap coins with your $handle. Money for the trenches.">
 <meta name="theme-color" content="#050705">
-<meta name="slimecash-build" content="3">
-<link rel="manifest" href="/cash/manifest.webmanifest">
+<meta name="slimecash-build" content="4">
+<link rel="manifest" href="/cash/manifest.webmanifest?v=4">
 <link rel="icon" type="image/png" sizes="64x64" href="/cash/icons/favicon-64.png">
 <link rel="apple-touch-icon" href="/cash/icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -17,7 +17,7 @@
 <meta property="og:title" content="SlimeCash">
 <meta property="og:description" content="Money for the trenches. Send, receive, and swap coins with your $handle.">
 <meta property="og:image" content="https://www.slimewire.org/cash/icons/icon-512.png">
-<link rel="stylesheet" href="/cash/cash.css?v=3">
+<link rel="stylesheet" href="/cash/cash.css?v=4">
 </head>
 <body>
 <div id="splash" class="splash">
@@ -99,7 +99,7 @@
       <button class="more-item" id="copyAddressBtn" type="button">Copy wallet address</button>
       <button class="more-item" id="backupBtn" type="button">Back up account + wallets</button>
       <button class="more-item" id="restoreBtn" type="button">Restore account</button>
-      <button class="more-item" id="installBtn" type="button" hidden>Install SlimeCash on this device</button>
+      <button class="more-item" id="installBtn" type="button">Install SlimeCash app</button>
       <a class="more-item" href="/gg" target="_blank" rel="noopener">Open full SlimeWire site ↗</a>
       <button class="more-item danger" id="signOutBtn" type="button">Sign out</button>
     </div>
@@ -127,6 +127,7 @@
     <button id="claimBtn" class="btn primary block" type="button">Claim it</button>
     <button id="skipHandleBtn" class="btn ghost block" type="button">Skip for now</button>
     <button id="onboardRestoreBtn" class="btn ghost block" type="button">I have a recovery key</button>
+    <button id="installOnboardBtn" class="btn ghost block" type="button">Install SlimeCash app</button>
   </div>
 </div>
 
@@ -189,7 +190,19 @@
   </div>
 </div>
 
+<!-- INSTALL GUIDE -->
+<div id="installguide" class="sheet-backdrop" hidden>
+  <div class="sheet">
+    <button class="sheet-close" data-close="installguide" type="button" aria-label="Close">×</button>
+    <img src="/cash/icons/icon-192.png" alt="SlimeCash app icon" class="install-app-icon">
+    <div class="sheet-title center">Install SlimeCash</div>
+    <p class="sheet-copy center">SlimeCash installs as its own app with its own green dollar icon. It stays separate from SlimeWire on your home screen while securely sharing the same account and wallets.</p>
+    <div id="installSteps" class="guide-steps"></div>
+    <button class="btn primary block" data-close="installguide" type="button">Got it</button>
+  </div>
+</div>
+
 <div id="toast" class="toast" hidden></div>
-<script src="/cash/cash.js?v=3"></script>
+<script src="/cash/cash.js?v=4"></script>
 </body>
 </html>

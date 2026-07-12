@@ -34,10 +34,19 @@ test("SlimeCash automatically downloads account and wallet recovery material", (
 });
 
 test("SlimeCash service worker prefers the current deploy and retains offline fallback", () => {
-  assert.match(worker, /slimecash-v3/);
-  assert.match(html, /cash\.js\?v=3/);
-  assert.match(html, /cash\.css\?v=3/);
+  assert.match(worker, /slimecash-v4/);
+  assert.match(html, /cash\.js\?v=4/);
+  assert.match(html, /cash\.css\?v=4/);
   assert.match(worker, /const fetched = fetch/);
   assert.match(worker, /return fetched/);
   assert.match(worker, /catch\(\(\) => cached\)/);
+});
+
+test("SlimeCash exposes its own install flow even when the native prompt is unavailable", () => {
+  assert.match(html, /Install SlimeCash app/);
+  assert.match(html, /SlimeCash installs as its own app/);
+  assert.match(cash, /async function installCashApp/);
+  assert.match(cash, /beforeinstallprompt/);
+  assert.match(cash, /Add to Home Screen/);
+  assert.match(cash, /Install app or Add to Home screen/);
 });

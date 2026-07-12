@@ -1920,7 +1920,7 @@ test("Robinhood address routing proves wallet versus ERC-20 before scan and trac
   const xReply = functionBody(serverSource, "buildXReply");
   assert.match(xReply, /const token = await isRhContract/);
   assert.match(xReply, /if \(!token\) return await buildXMapReply/);
-  const rhScan = functionBody(serverSource, "gatherRhScan");
+  const rhScan = functionBody(serverSource, "gatherRhScanUncollapsed");
   assert.match(rhScan, /if \(!\(await isRhContract\(a\)/);
   assert.match(serverSource, /addressKind: "wallet", chain: "robinhood", matches: \[\]/);
   assert.match(serverSource, /That 0x address is a Robinhood wallet, not an ERC-20 coin contract/);
@@ -2323,17 +2323,17 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "handleXScanCommand"), /allowBareTickerHints: false/);
   assert.match(functionBody(serverSource, "xReplyPollTick"), /no CA\/wallet found yet/);
   assert.match(functionBody(serverSource, "gatherSlimeScan"), /fetchSolanaTrackerTokenReport\(mint, \{ timeoutMs: 3_000 \}\)/);
-  assert.match(functionBody(serverSource, "gatherRhScan"), /rhFeedTokens\(\)/);
-  assert.match(functionBody(serverSource, "gatherRhScan"), /rhLaunchMetaByAddress\(\)/);
-  assert.match(functionBody(serverSource, "gatherRhScan"), /holders/);
-  assert.match(functionBody(serverSource, "gatherRhScan"), /aggregateDexPairActivity\(a, pairs\)/);
-  assert.match(functionBody(serverSource, "gatherRhScan"), /rhTokenVolumeFallback/);
+  assert.match(functionBody(serverSource, "gatherRhScanUncollapsed"), /rhFeedTokens\(\)/);
+  assert.match(functionBody(serverSource, "gatherRhScanUncollapsed"), /rhLaunchMetaByAddress\(\)/);
+  assert.match(functionBody(serverSource, "gatherRhScanUncollapsed"), /holders/);
+  assert.match(functionBody(serverSource, "gatherRhScanUncollapsed"), /aggregateDexPairActivity\(a, pairs\)/);
+  assert.match(functionBody(serverSource, "gatherRhScanUncollapsed"), /rhTokenVolumeFallback/);
   assert.match(functionBody(serverSource, "rhTokenVolumeFallback"), /ohlcv\/hour/);
   assert.match(functionBody(serverSource, "gatherSlimeScan"), /webOhlcvPayload\(mint, "1h", \{ poolAddress \}\)/);
   assert.match(functionBody(serverSource, "buildXRhReply"), /rhVolumeInfo\(info\)/);
   assert.match(functionBody(serverSource, "buildXRhReply"), /holderLabel: holdersLabel/);
   assert.match(functionBody(serverSource, "buildXRhReply"), /changeTitle: ch\.title/);
-  assert.match(functionBody(serverSource, "sendRhScanCard"), /rhScanLogo\(info\)/);
+  assert.match(functionBody(serverSource, "renderRhScanCardPng"), /rhScanLogo\(info\)/);
   assert.match(functionBody(serverSource, "recordTelegramCall"), /\^0x\[0-9a-fA-F\]\{40\}\$/);
   assert.match(functionBody(serverSource, "sendRhScanCard"), /recordTelegramCall\(message, address, info\.mc\)/);
   assert.match(functionBody(serverSource, "sendRhScanCard"), /buildScanCallerFooter\(chatId, address, info\.mc, message\)/);
@@ -2624,8 +2624,22 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   const rhSend = functionBody(serverSource, "sendRhScanCard");
   assert.match(rhSend, /rhTickerCandidateForTarget/);
   assert.match(rhSend, /Loading full safety, holders, ATH and socials/);
-  assert.ok(rhSend.indexOf('telegram("sendMessage"') < rhSend.indexOf("await gatherRhScan(address)"), "RH ticker card must post before the full scan finishes");
-  assert.match(rhSend, /editMessageText/);                           // same card enriches in place
+  assert.match(rhSend, /sendPhoto\(chatId, "rh-scan\.png", quickPng/); // first RH card has a circular-PFP media shell
+  assert.match(rhSend, /editMessagePhotoBuffer/);                    // same card upgrades to the real PFP + full facts
+  assert.match(rhSend, /if \(!\(cachedScan/);                        // raw 0x CAs get the progressive path too
+  assert.match(rhSend, /symbol: loaded\.symbol \|\| fastCandidate/); // ticker identity survives a thin full refresh
+  const rhPairTarget = functionBody(serverSource, "rhPairTargetToken");
+  assert.match(rhPairTarget, /quote\.address/);                       // requested quote-side coins never inherit the base coin identity
+  const rhGather = functionBody(serverSource, "gatherRhScanUncollapsed");
+  assert.match(rhGather, /pairTarget\.isBase \? pair\?\.priceUsd : null/);
+  assert.match(rhGather, /rhScanLastGood/);                           // intermittent providers cannot erase known-good facts
+  assert.match(functionBody(serverSource, "gatherRhScan"), /rhScanInFlight/); // simultaneous scans share one provider job
+  assert.doesNotMatch(functionBody(serverSource, "mergeRhTokenRows"), /lastActiveAt/); // activity time is not coin age
+  const solLook = functionBody(serverSource, "handleTelegramLookCommand");
+  assert.match(solLook, /TG_SCAN_FIRST_RESPONSE_MS/);
+  assert.match(solLook, /deliverTelegramSolScan/);
+  assert.match(solLook, /scanMarketStatsFromSources/);                // caller MC matches the card's selected market
+  assert.match(functionBody(serverSource, "renderSolScanCardPng"), /xFallbackLogoBuffer/); // every Sol card gets a circular PFP shell
 });
 
 test("X growth engine: broadcast-gated proactive posts + receipts + KOL responder + scorecard, tracking always on", () => {

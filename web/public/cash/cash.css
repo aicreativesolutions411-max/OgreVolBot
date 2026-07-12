@@ -81,6 +81,7 @@ a { color: var(--mint); text-decoration: none; }
 .recovery-file { cursor: pointer; }
 .recovery-file input { display: none; }
 .recovery-text { min-height: 112px; resize: vertical; padding: 12px 14px; line-height: 1.45; }
+.install-app-icon { display: block; width: 88px; height: 88px; margin: 2px auto 14px; border-radius: 22px; box-shadow: 0 12px 34px rgba(84, 224, 0, 0.22); }
 
 /* Pay card */
 .cash-card {
