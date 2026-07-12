@@ -34299,7 +34299,7 @@ async function resolveRhTickerCandidate(symbol) {
     const mc = firstMeaningfulNumber(row.marketCapUsd, row.marketCap, row.fdv, row.mc) || 0;
     const holders = firstMeaningfulNumber(row.holders, row.holders_count) || 0;
     const id = a.toLowerCase();
-    const prev = candidates.get(id) || { address: a, symbol: q.toUpperCase(), liquidityUsd: 0, volume24h: 0, marketCap: 0, holders: 0, trendBoost: 0, marketStrength: 0, sources: new Set() };
+    const prev = candidates.get(id) || { address: a, symbol: q.toUpperCase(), liquidityUsd: 0, volume24h: 0, marketCap: 0, holders: 0, trendBoost: 0, marketStrength: 0, dexPair: false, sources: new Set() };
     const marketStrength = tickerMarketRowStrength(mc, vol, liq);
     if (marketStrength >= prev.marketStrength) {
       prev.liquidityUsd = liq || prev.liquidityUsd;
@@ -34309,6 +34309,7 @@ async function resolveRhTickerCandidate(symbol) {
     }
     prev.holders = Math.max(prev.holders, holders);
     prev.trendBoost = Math.max(prev.trendBoost, /feed|trending/i.test(source) ? 12 : 0);
+    if (source === "dexscreener") prev.dexPair = true; // baseToken on a live pair is already contract proof
     prev.sources.add(source || "robinhood");
     candidates.set(id, prev);
   };
@@ -34331,7 +34332,10 @@ async function resolveRhTickerCandidate(symbol) {
     leadership: tickerMarketLeadership(candidate, maxima),
     score: tickerCandidateScore(candidate) + tickerCandidateDominance(candidate, maxima) + tickerMarketLeadership(candidate, maxima)
   })).sort((a, b) => b.score - a.score);
-  const checked = await Promise.all(ranked.slice(0, 6).map(async (candidate) => ({ candidate, isContract: await isRhContract(candidate.address).catch(() => false) })));
+  const checked = await Promise.all(ranked.slice(0, 6).map(async (candidate) => ({
+    candidate,
+    isContract: candidate.dexPair || await scanFastTimeout(isRhContract(candidate.address), 2_000, false).catch(() => false)
+  })));
   const pick = checked.find((row) => row.isContract)?.candidate || null;
   rhTickerTargetCache.set(key, { at: Date.now(), candidate: pick });
   if (rhTickerTargetCache.size > 300) rhTickerTargetCache.delete(rhTickerTargetCache.keys().next().value);
@@ -34360,7 +34364,9 @@ async function resolveTickerToScanTarget(symbol) {
   };
   const solLeadership = tickerMarketLeadership(solCandidate, maxima);
   const rhLeadership = tickerMarketLeadership(rh, maxima);
-  return rhLeadership > solLeadership ? rh.address : sol;
+  const picked = rhLeadership > solLeadership ? rh.address : sol;
+  console.info(`[ticker] $${q.toUpperCase()} cross-chain picked ${picked === rh.address ? "robinhood" : "solana"} · sol mc=${Math.round(solCandidate.marketCap || 0)} vol=${Math.round(solCandidate.volume24h || 0)} · rh mc=${Math.round(rh.marketCap || 0)} vol=${Math.round(rh.volume24h || 0)}`);
+  return picked;
 }
 const BARE_TICKER_STOPWORDS = new Set([
   "scan", "check", "look", "chart", "rug", "safe", "safety", "ca", "cas", "contract", "token", "coin", "coins",

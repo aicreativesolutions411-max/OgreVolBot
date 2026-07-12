@@ -2410,7 +2410,8 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(rhTicker, /chainId \|\| ""\).*=== "robinhood"/);
   assert.match(rhTicker, /tickerMarketLeadership/);
   assert.match(rhTicker, /tickerMarketRowStrength/);                 // one real pair supplies MC+volume; no cross-pair Frankenstein maxima
-  assert.match(rhTicker, /await isRhContract\(candidate\.address\)/); // ticker must resolve to a coin, never a wallet
+  assert.match(rhTicker, /candidate\.dexPair \|\| await scanFastTimeout\(isRhContract/); // a live pair proves token; feed-only addresses still classify
+  assert.match(rhTicker, /source === "dexscreener"/);
 
   const xLogo = functionBody(serverSource, "xCoinLogoLive");
   assert.match(xLogo, /Number\(budgetMs\) \|\| 3_500/); // a cold PFP host cannot consume the whole reply budget
@@ -2595,6 +2596,10 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   const balancedLeader = { marketCap: 500_000, volume24h: 500_000 };
   const balancedMaxima = { marketCap: 1_000_000, volume24h: 500_000 };
   assert.ok(leadershipFn(balancedLeader, balancedMaxima) > leadershipFn(oneMetricOnly, balancedMaxima), "a coin strong in both MC and volume must beat a one-metric spike");
+  const noxaRh = { marketCap: 603_000, volume24h: 2_870_000 };
+  const noxaSolClone = { marketCap: 4_200, volume24h: 165 };
+  const noxaMaxima = { marketCap: noxaRh.marketCap, volume24h: noxaRh.volume24h };
+  assert.ok(leadershipFn(noxaRh, noxaMaxima) > leadershipFn(noxaSolClone, noxaMaxima) * 20, "$NOXA must resolve to its dominant Robinhood market, never the tiny Sol clone");
   assert.match(functionBody(serverSource, "tickerScanSelectionLine"), /strongest Robinhood/);
   assert.match(functionBody(serverSource, "tickerTruthLine"), /Vol/);
 });
