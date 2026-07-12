@@ -29256,19 +29256,57 @@ async function webTokenSearch(rawQuery = "") {
   const cleaned = String(rawQuery || "").trim().replace(/^\$+/, "").trim();
   if (!cleaned) return { query: "", matches: [] };
 
+  const headers = { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" };
+
   if (/^0x[0-9a-fA-F]{40}$/.test(cleaned)) {
-    return { query: cleaned, matches: [{ tokenMint: cleaned, address: cleaned, chain: "robinhood", symbol: "", name: "", source: "address" }] };
+    const pairs = await fetchJson(`https://api.dexscreener.com/token-pairs/v1/robinhood/${encodeURIComponent(cleaned)}`, {
+      headers,
+      timeoutMs: 2_500
+    }).catch(() => []);
+    const best = (Array.isArray(pairs) ? pairs : [])
+      .sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0))[0];
+    const base = best?.baseToken || {};
+    return { query: cleaned, matches: [{
+      tokenMint: cleaned,
+      address: cleaned,
+      chain: "robinhood",
+      symbol: String(base.symbol || ""),
+      name: String(base.name || ""),
+      imageUrl: String(best?.info?.imageUrl || ""),
+      pairAddress: String(best?.pairAddress || ""),
+      marketCapUsd: Number(best?.marketCap || best?.fdv || 0),
+      volume24hUsd: Number(best?.volume?.h24 || 0),
+      priceChange1h: Number(best?.priceChange?.h1),
+      source: best ? "dexscreener" : "address"
+    }] };
   }
 
-  // Already a valid mint -> return it directly, no lookup needed.
+  // Raw contract links still need identity and artwork so a directly opened
+  // chart never has to settle for a generated avatar.
   try {
     const mint = parsePublicKey(cleaned).toBase58();
-    return { query: cleaned, matches: [{ tokenMint: mint, symbol: "", name: "", source: "mint" }] };
+    const meta = await getDexTokenMetadata(mint, {
+      metadataTimeoutMs: 1_500,
+      imageTimeoutMs: 1_500,
+      geckoTimeoutMs: 1_500
+    }).catch(() => ({}));
+    return { query: cleaned, matches: [{
+      tokenMint: mint,
+      address: mint,
+      chain: "solana",
+      symbol: firstString(meta.symbol),
+      name: firstString(meta.name),
+      imageUrl: firstString(meta.imageUrl, meta.imageUri),
+      pairAddress: firstString(meta.pairAddress),
+      marketCap: firstMeaningfulNumber(meta.marketCap, meta.marketCapUsd, meta.fdv) || 0,
+      volumeH24: firstMeaningfulNumber(meta.volume?.h24, meta.volume24hUsd) || 0,
+      h1: firstNumber(meta.priceChange?.h1, meta.changeH1),
+      source: meta.metadataSourceUsed || meta.source || "mint"
+    }] };
   } catch {
     // not a mint; fall through to ticker/name search
   }
 
-  const headers = { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" };
   const data = await fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(cleaned)}`, {
     headers,
     timeoutMs: 4_000

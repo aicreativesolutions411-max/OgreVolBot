@@ -61,6 +61,10 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.doesNotMatch(js, /token-mascots\/token-mascot-/);
   assert.match(html, /assets\/slimewire\/png\/slimewire-mark\.png/);
   assert.doesNotMatch(js, /pfp\/characters/);
+  assert.match(js, /hydrateSelectedFromFeed\(\)/);
+  assert.match(js, /request\(`\/api\/web\/token-search\?q=\$\{encodeURIComponent\(key\)\}`\)/);
+  assert.match(server, /token-pairs\/v1\/robinhood/);
+  assert.match(server, /const meta = await getDexTokenMetadata\(mint/);
 });
 
 test("coin setup exposes fast buys, ladder exits, one-wallet RH trades, and the full volume engine", () => {

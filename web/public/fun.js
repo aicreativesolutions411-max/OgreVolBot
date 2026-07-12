@@ -147,7 +147,7 @@
     const config = FEED_CONFIG[state.feed] || FEED_CONFIG.movers;
     const cacheKey = `${state.chain}:${state.feed}`;
     const cached = state.feedCache.get(cacheKey);
-    if (!force && cached && Date.now() - cached.at < 15_000) { state.rows = cached.rows; renderCoinList(); return; }
+    if (!force && cached && Date.now() - cached.at < 15_000) { state.rows = cached.rows; hydrateSelectedFromFeed(); renderCoinList(); return; }
     $("[data-coin-list]").innerHTML = '<div class="skeleton-list"></div>';
     $("[data-feed-note]").textContent = config.note;
     let rows = [];
@@ -156,7 +156,17 @@
     else { const [sol, rh] = await Promise.all([fetchSolFeed(config), fetchRhFeed(config)]); rows = [...sol.slice(0, 24), ...rh.slice(0, 16)].sort((a, b) => (b.marketCap || 0) - (a.marketCap || 0)); }
     state.rows = rows;
     state.feedCache.set(cacheKey, { at: Date.now(), rows });
+    hydrateSelectedFromFeed();
     renderCoinList();
+  }
+  function hydrateSelectedFromFeed() {
+    if (state.view !== "coin" || !state.selected) return;
+    const key = coinKey(state.selected).toLowerCase();
+    const match = state.rows.find((row) => coinKey(row).toLowerCase() === key);
+    if (!match) return;
+    state.selected = { ...state.selected, ...match };
+    addRecent(state.selected);
+    renderCoinShell();
   }
   function coinRowHtml(coin) {
     const key = coinKey(coin), chain = coin.chain === "robinhood" ? "rh" : "sol";
@@ -201,7 +211,22 @@
     renderCoinShell();
     history.replaceState(null, "", `#coin/${encodeURIComponent(key)}`);
     const path = chain === "robinhood" ? `/api/web/rh/token?address=${encodeURIComponent(key)}` : `/api/web/token-read?mint=${encodeURIComponent(key)}`;
-    const [detailResult] = await Promise.all([request(path), loadPositions()]);
+    const [detailResult, , searchResult] = await Promise.all([
+      request(path),
+      loadPositions(),
+      request(`/api/web/token-search?q=${encodeURIComponent(key)}`)
+    ]);
+    const searchMatch = searchResult.ok
+      ? (searchResult.data?.matches || []).find((row) => coinKey(row).toLowerCase() === String(key).toLowerCase())
+      : null;
+    if (searchMatch) {
+      coin = chain === "robinhood"
+        ? normalizeRh({ ...coin, ...searchMatch, address: searchMatch.address || key })
+        : normalizeSol({ ...coin, ...searchMatch, tokenMint: key });
+      state.selected = coin;
+      addRecent(coin);
+      renderCoinShell();
+    }
     if (detailResult.ok && detailResult.data?.ok) {
       const raw = detailResult.data.coin || detailResult.data;
       coin = chain === "robinhood" ? normalizeRh({ ...coin, ...raw, address: raw.address || key, marketCapUsd: raw.mc || raw.marketCapUsd, volume24hUsd: raw.vol24 || raw.volume24hUsd, priceChange1h: raw.ch1, createdAt: raw.createdAt }) : normalizeSol({ ...coin, ...raw, tokenMint: key, marketCap: raw.marketCapUsd, volumeH24: raw.volumeH24, h1: raw.changeH1 });
