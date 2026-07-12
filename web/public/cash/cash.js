@@ -427,7 +427,7 @@
     const button = $("confirmSendBtn");
     button.disabled = true;
     button.textContent = "Sending…";
-    const result = await post("/api/web/wallets/send-sol", {
+    const result = await post("/api/web/cash/send", {
       fromWalletIndex: state.wallet?.index || 1,
       destination: target.address,
       amountSol: String(sol),

@@ -9373,6 +9373,19 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    // SlimeCash: P2P send. Same 0.5% fee as site trades (TRADE_FEE_BPS), collected
+    // atomically in the send transaction to CONFIG.feeWallet.
+    if (request.method === "POST" && pathname === "/api/web/cash/send") {
+      const body = await readJsonRequestBody(request);
+      try {
+        const result = await webCashSendSol(auth.userId, body);
+        sendWebJson(request, response, 200, { ok: true, ...result });
+      } catch (error) {
+        sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) });
+      }
+      return;
+    }
+
     if (request.method === "GET" && pathname === "/api/web/launch-os/projects") {
       sendWebJson(request, response, 200, { ok: true, projects: await launchOsProjectsForUser(auth.userId) });
       return;
@@ -66911,6 +66924,78 @@ async function webSplitCreatorFeesCore(userId, body = {}) {
 // Idempotency wrapper — a retry/double-submit carrying the same attemptId must NOT send the SOL twice.
 // This is a FIXED-amount transfer (unlike a sweep, which self-limits), so without this a network retry
 // or double-click was a clean double-spend to the destination.
+// SlimeCash P2P send: single destination, and the site-wide trade fee
+// (CONFIG.bundleFeeBps, 0.5%) rides the SAME transaction as a surcharge to
+// CONFIG.feeWallet - recipient gets the full entered amount, fee lands
+// atomically with the send (no fee on failed sends, no send without fee).
+// Fee is charged silently (owner call 2026-07-10, same rule as PvP perp fees).
+// RH-chain trades already charge this policy in ETH and auto-sweep to the same
+// SOL fee wallet via rhSweepFeesToSol.
+async function webCashSendSol(userId, body = {}) {
+  return runIdempotentMoneyOp("cash-send", userId,
+    firstString(body.sendAttemptId, body.tradeAttemptId, body.clientRequestId),
+    () => webCashSendSolCore(userId, body),
+    { busyMessage: "This send is already submitting - SlimeCash won't send it twice." });
+}
+
+async function webCashSendSolCore(userId, body = {}) {
+  const store = await readWalletStore();
+  const walletIndex = parseWebWalletIndex(body.fromWalletIndex || body.walletIndex);
+  const wallet = {
+    ...getWalletAt(store, walletIndex, userId),
+    webIndex: walletIndex
+  };
+  const destinations = splitWebDestinationList(body.destination || body.destinations);
+  if (destinations.length !== 1) {
+    throw new Error("SlimeCash sends go to exactly one destination.");
+  }
+  const destination = destinations[0];
+  const keypair = decryptWallet(wallet);
+  if (keypair.publicKey.equals(destination)) {
+    throw new Error("That destination is this wallet.");
+  }
+
+  const amountLamports = solToLamports(parsePositiveNumber(String(body.amountSol || "")));
+  if (amountLamports <= 0) {
+    throw new Error("Enter an amount greater than zero.");
+  }
+  // Same 0.5% as site trades; dust fees are skipped (same threshold as PvP fees).
+  let feeLamports = Math.floor(amountLamports * CONFIG.bundleFeeBps / 10_000);
+  if (feeLamports < 5_000 || !CONFIG.feeWallet) feeLamports = 0;
+
+  const balance = await getSolBalanceCached(keypair.publicKey, { force: true });
+  const requiredLamports = amountLamports + feeLamports + 10_000 + CONFIG.buyReserveLamports;
+  if (balance < requiredLamports) {
+    throw new Error(`Not enough SOL for this send. You have ${lamportsToSol(balance)} SOL and it needs ${lamportsToSol(requiredLamports)} SOL including network costs.`);
+  }
+
+  await assertDestinationCanReceiveSol(destination, amountLamports);
+  const tx = new Transaction().add(SystemProgram.transfer({
+    fromPubkey: keypair.publicKey,
+    toPubkey: destination,
+    lamports: amountLamports
+  }));
+  if (feeLamports > 0) {
+    tx.add(SystemProgram.transfer({
+      fromPubkey: keypair.publicKey,
+      toPubkey: new PublicKey(CONFIG.feeWallet),
+      lamports: feeLamports
+    }));
+  }
+
+  const signature = await sendLegacyTransaction(tx, [keypair]);
+  invalidateWalletReadCache(wallet.publicKey);
+  invalidateWalletReadCache(destination.toBase58());
+  await audit("cash_send", { userId, walletIndex, destination: destination.toBase58(), amountSol: lamportsToSol(amountLamports), feeLamports, signature });
+  return {
+    action: "cash-send",
+    source: webWalletRef(wallet),
+    amountSol: lamportsToSol(amountLamports),
+    destination: destination.toBase58(),
+    signature
+  };
+}
+
 async function webSendSolMany(userId, body = {}) {
   return runIdempotentMoneyOp("web-send-sol", userId,
     firstString(body.tradeAttemptId, body.sendAttemptId, body.clientRequestId),
