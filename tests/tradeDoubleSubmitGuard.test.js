@@ -1678,7 +1678,7 @@ test("Telegram /buy prioritizes the card coin and posts a compact TG/Web chooser
   assert.match(keyboard, /Full scan/);
   assert.match(serverSource, /const quickBuyCommand = \/\^\\\/buy/);
   assert.match(serverSource, /sendTelegramQuickBuyPanel\(chatId, userId, message, quickBuyCommand\[1\]/);
-  assert.match(functionBody(serverSource, "slimewireTokenLinks"), /\/quick\?ca=/);
+  assert.match(functionBody(serverSource, "slimewireTokenLinks"), /\/fun\?quick=1&ca=/);
 });
 
 for (const [label, source] of [["gg.html", ggSource], ["index.html", indexSource]]) {

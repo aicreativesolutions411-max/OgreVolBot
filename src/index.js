@@ -33457,7 +33457,9 @@ function slimewireTokenLinks(tokenMint) {
   return {
     site: `${siteBase}/terminal/chart?token=${encodeURIComponent(tokenMint)}&source=telegram`,
     siteBuy: `${siteBase}/terminal/chart?token=${encodeURIComponent(tokenMint)}&source=telegram&buy=1`,
-    quick: `${siteBase}/quick?ca=${encodeURIComponent(tokenMint)}&source=telegram`,
+    // `/fun?quick=1` is an existing static-host route, so Telegram never falls through
+    // Cloudflare's unknown-path SPA handler while the cleaner `/quick` alias propagates.
+    quick: `${siteBase}/fun?quick=1&ca=${encodeURIComponent(tokenMint)}&source=telegram`,
     tokenPage,
     receipts,
     dex: dexScreenerUrl(tokenMint),
