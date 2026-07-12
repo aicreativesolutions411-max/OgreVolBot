@@ -12,7 +12,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.match(server, /requestUrl\.pathname === "\/fun"[\s\S]{0,300}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
-  assert.match(html, /<script defer src="\/fun\.js\?v=1"><\/script>/);
+  assert.match(html, /<script defer src="\/fun\.js\?v=2"><\/script>/);
 });
 
 test("/fun keeps the reference layout clean while carrying SlimeWire features", () => {
@@ -22,6 +22,7 @@ test("/fun keeps the reference layout clean while carrying SlimeWire features", 
   assert.match(js, /TP \/ SL/);
   assert.match(js, /trailingStopPct/);
   assert.match(js, /breakEvenAfterTp1/);
+  assert.match(js, /takeProfitLadder/);
   assert.match(js, /payCurrency/);
   assert.match(js, /Robinhood Chain/);
   assert.match(js, /coin\.volumeLabel \|\| "checking"/);
@@ -37,6 +38,7 @@ test("/fun reuses authenticated money APIs with idempotency and lazy user action
   assert.match(js, /async function submitTrade/);
   assert.match(js, /\/api\/web\/positions\/arm-exits/);
   assert.match(js, /\/api\/web\/rh\/guards/);
+  assert.match(js, /\/api\/web\/rh\/bridge-to-sol/);
   assert.match(js, /if \(state\.token\) Promise\.all\(\[loadWallets\(\), loadPositions\(\), loadCreatedCoinsSilently\(\)\]\)/);
   assert.doesNotMatch(js, /const accountReady = await ensureAccount\(\)/);
 });
@@ -52,9 +54,31 @@ test("unified search and Robinhood detail support the two-chain mobile experienc
   assert.match(js, /\/api\/web\/token-read\?mint=/);
 });
 
-test("mobile avatars use lightweight established SlimeWire assets", () => {
+test("coin art stays metadata-first while wallet identities use slime PFPs", () => {
   assert.match(js, /\/pfp\/mapfaces\//);
-  assert.match(js, /token-mascots\/token-mascot-/);
+  assert.match(js, /coin\?\.metadata\?\.image/);
+  assert.match(js, /row\.imageUri \|\| row\.logoUrl \|\| row\.meta\?\.imageUrl \|\| row\.metadata\?\.image/);
+  assert.doesNotMatch(js, /token-mascots\/token-mascot-/);
   assert.match(html, /assets\/slimewire\/png\/slimewire-mark\.png/);
   assert.doesNotMatch(js, /pfp\/characters/);
+});
+
+test("coin setup exposes fast buys, ladder exits, one-wallet RH trades, and the full volume engine", () => {
+  assert.match(html, /data-quick-trade/);
+  assert.match(html, /data-detail="setup">Trade setup/);
+  assert.match(js, /data-trade-strategy="ladder"/);
+  assert.match(js, /data-ladder-preset="smart"/);
+  assert.match(js, /payCurrency = "SOL"/);
+  assert.match(js, /Convert received ETH back to SOL automatically/);
+  assert.match(js, /action === "volume"[\s\S]{0,180}#rhtrade[\s\S]{0,120}#volume/);
+});
+
+test("wallet manager can create, restore, export, select, and safely remove wallets", () => {
+  for (const path of ["/api/web/wallets/create", "/api/web/wallets/restore", "/api/web/wallets/import", "/api/web/wallets/export", "/api/web/wallets/remove"]) assert.match(js, new RegExp(path.replaceAll("/", "\\/")));
+  for (const marker of ["data-manage-wallets", "data-wallet-backup-file", "data-select-wallet", "data-remove-wallet"]) assert.match(html + js, new RegExp(marker));
+});
+
+test("generated hero art is optimized and referenced from the v2 banner", () => {
+  assert.match(css, /fun-hero-v2\.webp/);
+  assert.ok(fs.statSync(new URL("../web/public/assets/slimewire/fun-hero-v2.webp", import.meta.url)).size < 100_000);
 });
