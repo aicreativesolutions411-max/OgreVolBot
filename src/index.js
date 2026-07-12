@@ -51725,6 +51725,32 @@ async function rhLaunchMetaByAddress() {
   return map;
 }
 
+const rhFeedArtworkCache = new Map();
+async function enrichRhFeedArtwork(rows = []) {
+  const targets = rows.filter((row) => row?.address && !row.imageUrl && !row.iconUrl).slice(0, 20);
+  await runWithConcurrency(targets, 8, async (row) => {
+    const key = String(row.address).toLowerCase(), cached = rhFeedArtworkCache.get(key);
+    if (cached && Date.now() - cached.at < (cached.imageUrl ? 30 * 60_000 : 5 * 60_000)) {
+      if (cached.imageUrl) row.imageUrl = cached.imageUrl;
+      return;
+    }
+    const pairs = await fetchJson(`https://api.dexscreener.com/token-pairs/v1/robinhood/${encodeURIComponent(row.address)}`, {
+      headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
+      timeoutMs: 1_800
+    }).catch(() => []);
+    const best = (Array.isArray(pairs) ? pairs : []).filter((pair) => pair?.info?.imageUrl)
+      .sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0))[0];
+    const imageUrl = String(best?.info?.imageUrl || "");
+    rhFeedArtworkCache.set(key, { at: Date.now(), imageUrl });
+    if (imageUrl) row.imageUrl = imageUrl;
+  });
+  if (rhFeedArtworkCache.size > 1_000) {
+    const oldest = [...rhFeedArtworkCache.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, 200);
+    for (const [key] of oldest) rhFeedArtworkCache.delete(key);
+  }
+  return rows;
+}
+
 async function webRhPairs(category = "trending") {
   const cat = String(category || "trending").toLowerCase();
   // SLIMEHOOD — coins launched THROUGH SlimeWire on Robinhood Chain (from our launch store, so even a
@@ -51753,7 +51779,7 @@ async function webRhPairs(category = "trending") {
       const s = rhSafetyFeedCache.get(r.address.toLowerCase()); if (s) r.safety = s.verdict;
     }
     scheduleRhSafetyFill(rows);
-    return rows.slice(0, 60);
+    return enrichRhFeedArtwork(rows.slice(0, 60));
   }
   const [tokens, meta] = await Promise.all([rhFeedTokens(), rhLaunchMetaByAddress()]);
   let rows = tokens.map((t) => {
@@ -51803,7 +51829,7 @@ async function webRhPairs(category = "trending") {
     }
   }
   scheduleRhPriceFill(rows);
-  return rows;
+  return enrichRhFeedArtwork(rows);
 }
 
 // Public per-token image for coins launched through the site (img tags can't send a Bearer token).

@@ -67,7 +67,7 @@
   }
   function isRh(value) { return /^0x[0-9a-fA-F]{40}$/.test(String(value || "").trim()); }
   function coinKey(coin) { return String(coin?.address || coin?.tokenMint || "").trim(); }
-  function mascot() { return TOKEN_FALLBACK; }
+  function mascot(value) { return value ? `/assets/slimewire/png/token-mascots/token-mascot-${(hashCode(value) % 5) + 1}.png` : TOKEN_FALLBACK; }
   function slimePfp(value) { return `/pfp/mapfaces/${SLIME_PFPS[hashCode(value) % SLIME_PFPS.length]}`; }
   function normalizeImageUrl(value) {
     const url = String(value || "").trim();
@@ -81,7 +81,7 @@
     const direct = directCoinImage(coin);
     if (direct) return direct;
     if (key && coin?.chain !== "robinhood") return `${API_BASE}/api/web/token-image?mint=${encodeURIComponent(key)}`;
-    return TOKEN_FALLBACK;
+    return mascot(key);
   }
   function coinImageAttrs(coin) {
     const key = coinKey(coin), proxy = key && coin?.chain !== "robinhood" ? `${API_BASE}/api/web/token-image?mint=${encodeURIComponent(key)}` : "";
@@ -712,7 +712,7 @@
       setTimeout(() => { if (image.isConnected) image.src = `${image.src.split("&retry=")[0]}&retry=${Date.now()}`; }, 2600);
       return;
     }
-    image.removeAttribute("data-token-image"); image.src = TOKEN_FALLBACK;
+    image.removeAttribute("data-token-image"); image.src = mascot(image.closest("[data-open-coin]")?.dataset.openCoin || state.selected && coinKey(state.selected));
   }, true);
 
   $("[data-search-input]").addEventListener("input", (event) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => runSearch(event.target.value), 280); });

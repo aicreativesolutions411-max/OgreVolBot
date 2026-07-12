@@ -58,13 +58,15 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(js, /\/pfp\/mapfaces\//);
   assert.match(js, /coin\?\.metadata\?\.image/);
   assert.match(js, /row\.imageUri \|\| row\.logoUrl \|\| row\.meta\?\.imageUrl \|\| row\.metadata\?\.image/);
-  assert.doesNotMatch(js, /token-mascots\/token-mascot-/);
+  assert.match(js, /token-mascots\/token-mascot-/);
   assert.match(html, /assets\/slimewire\/png\/slimewire-mark\.png/);
   assert.doesNotMatch(js, /pfp\/characters/);
   assert.match(js, /hydrateSelectedFromFeed\(\)/);
   assert.match(js, /request\(`\/api\/web\/token-search\?q=\$\{encodeURIComponent\(key\)\}`\)/);
   assert.match(server, /token-pairs\/v1\/robinhood/);
   assert.match(server, /const meta = await getDexTokenMetadata\(mint/);
+  assert.match(server, /enrichRhFeedArtwork/);
+  assert.match(server, /token-pairs\/v1\/robinhood/);
   assert.match(js, /\/api\/web\/token-image\?mint=/);
   assert.match(js, /data-image-retries/);
   assert.match(js, /retries < 3/);
