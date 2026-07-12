@@ -12,7 +12,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.match(server, /requestUrl\.pathname === "\/fun"[\s\S]{0,300}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
-  assert.match(html, /<script defer src="\/fun\.js\?v=10"><\/script>/);
+  assert.match(html, /<script defer src="\/fun\.js\?v=11"><\/script>/);
 });
 
 test("/fun keeps the reference layout clean while carrying SlimeWire features", () => {
@@ -60,6 +60,8 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(js, /coin\?\.metadata\?\.image/);
   assert.match(js, /row\.imageUri \|\| row\.logoUrl \|\| row\.meta\?\.imageUrl \|\| row\.metadata\?\.image/);
   assert.match(js, /token-mascots\/token-mascot-/);
+  assert.match(js, /function coinBadge/);
+  assert.match(js, /data-coin-symbol/);
   assert.match(html, /assets\/slimewire\/png\/slimewire-mark\.png/);
   assert.doesNotMatch(js, /pfp\/characters/);
   assert.match(js, /hydrateSelectedFromFeed\(\)/);
@@ -67,13 +69,15 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(server, /token-pairs\/v1\/robinhood/);
   assert.match(server, /const meta = await getDexTokenMetadata\(mint/);
   assert.match(server, /enrichRhFeedArtwork/);
+  assert.match(server, /RH_NOXA_PUBLIC_API/);
+  assert.match(server, /rhNoxaArtworkMap/);
   assert.match(server, /const artworkPromise = enrichRhFeedArtwork\(rows\)/);
   assert.match(server, /await artworkPromise/);
   assert.match(server, /token-pairs\/v1\/robinhood/);
   assert.match(js, /\/api\/web\/token-image\?mint=/);
   assert.match(js, /resolvedCoinImages: new Map/);
   assert.match(js, /state\.resolvedCoinImages\.set/);
-  assert.match(js, /background-image:url\('\$\{mascot\(key\)\}'\)/);
+  assert.match(js, /background-image:url\('\$\{coinBadge\(coin\)\}'\)/);
   assert.match(css, /\.coin-avatar,\.coin-identity img\{background-position:center/);
   assert.match(js, /gateway\\\.pinata/);
   assert.doesNotMatch(js, /retries < 3/);
@@ -127,6 +131,9 @@ test("/fun live feeds reject stale responses and refresh only the visible view",
   assert.match(server, /chunks\.map\(\(chunk\) => fetchJson/);
   assert.match(server, /\.slice\(0, 50\)/);
   assert.match(server, /Never block the feed on dozens of explorer creation-time reads/);
+  assert.match(js, /Number\(row\.marketCap\) >= 17_000 && Number\(row\.marketCap\) <= 40_000/);
+  assert.match(js, /rh: "soon"/);
+  assert.match(server, /cat === "soon"/);
   assert.doesNotMatch(server, /await Promise\.all\(slice\.map\(async \(r\) => \{ r\.createdAt = await rhTokenCreationTime/);
 });
 
@@ -139,6 +146,20 @@ test("/fun has editable presets, tracked calls, and informational profile follow
   assert.match(js, /\/api\/web\/profile\/follow/);
   assert.match(server, /notifyProfileTradeFollowers\(insertedEvents\)/);
   assert.match(server, /Trade alert only — nothing was copied/);
+});
+
+test("/quick preloads social coins and keeps wallet setup inside the fast trade flow", () => {
+  assert.match(server, /requestUrl\.pathname === "\/quick"[\s\S]{0,240}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
+  for (const marker of ["data-view=\"quick\"", "data-quick-paste-form", "data-quick-route-content", "data-quick-clipboard"]) assert.match(html, new RegExp(marker));
+  assert.match(js, /IS_QUICK_ROUTE/);
+  assert.match(js, /new URLSearchParams\(location\.search\)/);
+  assert.match(js, /\/quick\?ca=\$\{encodeURIComponent\(key\)\}/);
+  assert.match(js, /data-quick-select-amount/);
+  assert.match(js, /data-quick-review/);
+  assert.match(js, /data-quick-bundle/);
+  assert.match(js, /data-quick-wallet-select/);
+  assert.match(js, /Connect \/ restore/);
+  assert.match(js, /Your coin stays selected/);
 });
 
 test("wallet manager can create, restore, export, select, and safely remove wallets", () => {

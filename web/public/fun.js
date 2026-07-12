@@ -15,6 +15,7 @@
     "f_378c4265.png", "f_31afd7c0.png", "f_19d62e28.png", "f_18b229f8.png", "f_03966060.png"
   ];
   const TOOL_ICONS = "/assets/slimewire/png/icons/";
+  const IS_QUICK_ROUTE = /^\/quick(?:\.html)?\/?$/i.test(location.pathname) || new URLSearchParams(location.search).get("quick") === "1";
   const state = {
     token: localStorage.getItem(TOKEN_KEY) || "",
     user: null,
@@ -44,7 +45,8 @@
     feedTimer: null,
     imageHydrateVersion: 0,
     resolvedCoinImages: new Map(),
-    quickBuyKey: ""
+    quickBuyKey: "",
+    quickAmount: "0.1"
   };
 
   function escapeHtml(value) {
@@ -76,6 +78,13 @@
   function isRh(value) { return /^0x[0-9a-fA-F]{40}$/.test(String(value || "").trim()); }
   function coinKey(coin) { return String(coin?.address || coin?.tokenMint || "").trim(); }
   function mascot(value) { return value ? `/assets/slimewire/png/token-mascots/token-mascot-${(hashCode(value) % 5) + 1}.png` : TOKEN_FALLBACK; }
+  function coinBadge(coin = {}) {
+    const key = coinKey(coin), raw = String(coin.symbol || coin.name || "?").replace(/^\$+/, "").trim();
+    const label = (raw.match(/[a-z0-9]/gi) || ["?"]).slice(0, 2).join("").toUpperCase();
+    const hue = hashCode(key || raw) % 360;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="hsl(${hue} 72% 34%)"/><stop offset="1" stop-color="hsl(${(hue + 42) % 360} 75% 12%)"/></linearGradient></defs><rect width="96" height="96" rx="22" fill="url(#g)"/><circle cx="76" cy="20" r="18" fill="#8bff38" opacity=".16"/><text x="48" y="59" text-anchor="middle" fill="#f5ffe9" font-family="Arial,sans-serif" font-size="31" font-weight="800">${label}</text></svg>`;
+    return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+  }
   function slimePfp(value) { return `/pfp/mapfaces/${SLIME_PFPS[hashCode(value) % SLIME_PFPS.length]}`; }
   function normalizeImageUrl(value) {
     const url = String(value || "").trim();
@@ -86,7 +95,7 @@
   function directCoinImage(coin) { return normalizeImageUrl(coin?.imageUrl || coin?.avatarUrl || coin?.imageUri || coin?.iconUrl || coin?.logoUrl || coin?.meta?.imageUrl || coin?.metadata?.image || coin?.image); }
   function coinProxyImage(coin) {
     const key = coinKey(coin);
-    return key && coin?.chain !== "robinhood" ? `${API_BASE}/api/web/token-image?mint=${encodeURIComponent(key)}` : "";
+    return key ? `${API_BASE}/api/web/token-image?mint=${encodeURIComponent(key)}` : "";
   }
   function coinImage(coin) {
     const key = coinKey(coin);
@@ -98,11 +107,11 @@
     if (direct && !/(?:ipfs\/|gateway\.pinata\.cloud|ipfs\.io)/i.test(direct)) return direct;
     if (proxy) return proxy;
     if (direct) return direct;
-    return mascot(key);
+    return coinBadge(coin);
   }
   function coinImageAttrs(coin) {
     const key = coinKey(coin), proxy = coinProxyImage(coin), direct = directCoinImage(coin);
-    return `src="${escapeHtml(coinImage(coin))}" data-token-image data-coin-image-key="${escapeHtml(key.toLowerCase())}" data-chain="${coin?.chain === "robinhood" ? "rh" : "sol"}" data-direct-image="${escapeHtml(direct)}" data-proxy-image="${escapeHtml(proxy)}"`;
+    return `src="${escapeHtml(coinImage(coin))}" data-token-image data-coin-image-key="${escapeHtml(key.toLowerCase())}" data-coin-symbol="${escapeHtml(coin.symbol || coin.name || "?")}" data-chain="${coin?.chain === "robinhood" ? "rh" : "sol"}" data-direct-image="${escapeHtml(direct)}" data-proxy-image="${escapeHtml(proxy)}"`;
   }
   function attemptId(prefix = "fun") { return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`; }
   function toast(message, error = false) { const node = $("[data-toast]"); node.textContent = message; node.className = `toast show${error ? " error" : ""}`; clearTimeout(node._timer); node._timer = setTimeout(() => node.className = "toast", 3600); }
@@ -178,7 +187,7 @@
   const FEED_CONFIG = {
     movers: { bucket: "live", sort: "best", rh: "trending", note: "Live movers ranked by signal" },
     new: { bucket: "live", sort: "fresh", rh: "new", note: "Fresh launches across both chains" },
-    soon: { bucket: "live", sort: "best", cat: "graduating", rh: "new", note: "Coins approaching their next market stage" },
+    soon: { bucket: "live", sort: "best", cat: "graduating", rh: "soon", note: "$17K–$40K market cap across both chains" },
     graduated: { bucket: "graduated", sort: "best", cat: "graduated", rh: "safe", note: "Established pools with active trading" }
   };
   async function fetchSolFeed(config, force = false) {
@@ -192,7 +201,10 @@
     return result.ok ? (result.data?.rows || []).map(normalizeRh) : [];
   }
   function sortAndDedupeFeed(rows, feed) {
-    const unique = [...new Map(rows.filter((row) => coinKey(row)).map((row) => [coinKey(row).toLowerCase(), row])).values()];
+    const visible = feed === "soon"
+      ? rows.filter((row) => Number(row.marketCap) >= 17_000 && Number(row.marketCap) <= 40_000)
+      : rows;
+    const unique = [...new Map(visible.filter((row) => coinKey(row)).map((row) => [coinKey(row).toLowerCase(), row])).values()];
     const feedAge = (row) => {
       const label = String(row.age || "").toLowerCase();
       if (label === "new") return 0;
@@ -260,7 +272,7 @@
     const key = coinKey(coin), chain = coin.chain === "robinhood" ? "rh" : "sol";
     const change = Number(coin.change), changeClass = Number.isFinite(change) ? (change >= 0 ? "up" : "down") : "";
     return `<button class="coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="${chain}">
-      <span class="coin-avatar" style="background-image:url('${mascot(key)}')"><img ${coinImageAttrs(coin)} alt="" loading="${index < 10 ? "eager" : "lazy"}" decoding="async" referrerpolicy="no-referrer"><i class="chain-badge ${chain}">${chain === "rh" ? "RH" : "SOL"}</i></span>
+      <span class="coin-avatar" style="background-image:url('${coinBadge(coin)}')"><img ${coinImageAttrs(coin)} alt="" loading="${index < 10 ? "eager" : "lazy"}" decoding="async" referrerpolicy="no-referrer"><i class="chain-badge ${chain}">${chain === "rh" ? "RH" : "SOL"}</i></span>
       <span class="coin-info"><span class="coin-title"><b>${escapeHtml(coin.symbol || short(key))}</b><span>${escapeHtml(coin.name || "")}</span>${coin.live ? '<i class="live-tag">LIVE</i>' : ""}</span><span class="coin-meta"><i>${escapeHtml(coin.age || "new")}</i><i>Vol ${escapeHtml(coin.volume > 0 ? formatUsd(coin.volume) : (coin.volumeLabel || "checking"))}</i><i class="${changeClass}">${escapeHtml(formatPct(change))}</i></span></span>
       <span class="coin-value"><b>${escapeHtml(formatUsd(coin.marketCap))}</b><span>MARKET CAP</span></span>
     </button>`;
@@ -277,7 +289,7 @@
     if (view !== "home") clearTimeout(state.feedTimer);
     $$("[data-view]").forEach((node) => node.classList.toggle("active", node.dataset.view === view));
     $$("[data-nav]").forEach((node) => node.classList.toggle("active", node.dataset.nav === view || (view === "coin" && node.dataset.nav === "home")));
-    $(".fun-header").style.display = view === "coin" ? "none" : "flex";
+    $(".fun-header").style.display = ["coin", "quick"].includes(view) ? "none" : "flex";
     $(".bottom-nav").style.display = options.hideNav ? "none" : "grid";
     window.scrollTo({ top: 0, behavior: "instant" });
     if (view === "home") loadFeed();
@@ -289,7 +301,7 @@
     state.recents = [{ key, chain: coin.chain, symbol: coin.symbol || short(key), name: coin.name || "", imageUrl: coin.imageUrl || "" }, ...state.recents.filter((item) => item.key.toLowerCase() !== key.toLowerCase())].slice(0, 8);
     saveLocal(RECENTS_KEY, state.recents);
   }
-  async function openCoin(key, chainHint = "") {
+  async function openCoin(key, chainHint = "", options = {}) {
     const chain = chainHint === "rh" || isRh(key) ? "robinhood" : "solana";
     let coin = state.rows.find((row) => coinKey(row).toLowerCase() === String(key).toLowerCase()) || { address: key, tokenMint: key, chain };
     state.selected = coin;
@@ -299,9 +311,10 @@
     state.chartInterval = "15";
     state.chartMode = "chart";
     addRecent(coin);
-    setView("coin", { hideNav: false });
-    renderCoinShell();
-    history.replaceState(null, "", `#coin/${encodeURIComponent(key)}`);
+    const quick = Boolean(options.quick || IS_QUICK_ROUTE);
+    setView(quick ? "quick" : "coin", { hideNav: quick });
+    if (quick) renderQuickRoute(); else renderCoinShell();
+    history.replaceState(null, "", quick ? `/quick?ca=${encodeURIComponent(key)}` : `#coin/${encodeURIComponent(key)}`);
     const path = chain === "robinhood" ? `/api/web/rh/token?address=${encodeURIComponent(key)}` : `/api/web/token-read?mint=${encodeURIComponent(key)}`;
     const detailPromise = request(path);
     void loadPositions().then(() => { if (state.view === "coin" && coinKey(state.selected).toLowerCase() === String(key).toLowerCase()) renderPositionCard(); });
@@ -315,7 +328,7 @@
         : normalizeSol({ ...coin, ...searchMatch, tokenMint: key });
       state.selected = coin;
       addRecent(coin);
-      renderCoinShell();
+      if (quick) renderQuickRoute(); else renderCoinShell();
     }
     const detailResult = await detailPromise;
     if (detailResult.ok && detailResult.data?.ok) {
@@ -324,12 +337,54 @@
       state.selected = coin;
       state.selectedDetail = raw;
       addRecent(coin);
-      renderCoinShell();
-    } else renderDetailPanel();
+      if (quick) renderQuickRoute(); else renderCoinShell();
+    } else if (quick) renderQuickRoute(); else renderDetailPanel();
+  }
+
+  function quickSafetyLabel(coin = {}) {
+    const verdict = String(coin.safety?.verdict || coin.shield?.verdict || state.selectedDetail?.safety?.verdict || state.selectedDetail?.shield?.verdict || "").toLowerCase();
+    if (["verified", "ok", "safe", "pass"].includes(verdict)) return { text: verdict === "verified" ? "Contract verified" : "Checks clear", pending: false };
+    if (["block", "danger", "honeypot"].includes(verdict)) return { text: "High-risk contract", pending: true };
+    if (verdict === "warn") return { text: "Review warnings", pending: true };
+    return { text: "Checks loading", pending: true };
+  }
+
+  function quickWalletPanel() {
+    const wallet = activeWallet();
+    if (!wallet) return `<div class="quick-wallet-card"><div class="quick-wallet-title"><b>Set up a wallet</b><span>Your coin stays selected</span></div><div class="quick-wallet-actions"><button class="primary" type="button" data-create-wallet>Create</button><button type="button" data-manage-wallets>Connect / restore</button><button type="button" data-manage-wallets>Import</button></div><p class="quick-wallet-note">Create a new SlimeWire wallet or restore an existing backup/private key. You can add and rename multiple wallets, then fund one manually with SOL.</p></div>`;
+    const options = state.wallets.map((item) => `<option value="${item.index}" ${item.index === state.activeWallet ? "selected" : ""}>${escapeHtml(item.label || `Wallet ${item.index}`)} · ${Number(item.sol || 0).toFixed(4)} SOL</option>`).join("");
+    return `<div class="quick-wallet-card"><div class="quick-wallet-title"><b>Trade wallet</b><span>${state.wallets.length} wallet${state.wallets.length === 1 ? "" : "s"} loaded</span></div><select data-quick-wallet-select>${options}</select><div class="quick-wallet-actions"><button class="primary" type="button" data-receive>Fund</button><button type="button" data-manage-wallets>Manage wallets</button><button type="button" data-create-wallet>+ Add wallet</button></div><p class="quick-wallet-note">One SOL wallet trades both chains. Robinhood buys convert from SOL automatically.</p></div>`;
+  }
+
+  function renderQuickRoute() {
+    const content = $("[data-quick-route-content]"), walletPill = $(".quick-wallet-pill"), input = $("[data-quick-ca]");
+    if (!content) return;
+    const wallet = activeWallet();
+    if (walletPill) walletPill.textContent = wallet ? `${wallet.label || "Wallet"} · ${Number(wallet.sol || 0).toFixed(3)} SOL` : "Connect wallet";
+    const coin = state.selected, key = coinKey(coin);
+    if (input && key && input.value !== key) input.value = key;
+    if (!key) {
+      content.innerHTML = `<div class="quick-route-empty"><img src="/assets/slimewire/png/slimewire-mark.png" alt=""><b>Paste a coin to begin</b><p>Quick amounts, presets, bundle entry, and wallet setup will appear here.</p></div>${quickWalletPanel()}`;
+      return;
+    }
+    const chain = coin.chain === "robinhood" ? "rh" : "sol", safety = quickSafetyLabel(coin), preset = activePreset();
+    const change = Number(coin.change), amount = state.quickAmount || "0.1";
+    content.innerHTML = `<article class="quick-token-card"><div class="quick-token-head"><span class="coin-avatar" style="background-image:url('${coinBadge(coin)}')"><img ${coinImageAttrs(coin)} alt=""><i class="chain-badge ${chain}">${chain === "rh" ? "RH" : "SOL"}</i></span><div class="quick-token-name"><b>${escapeHtml(coin.symbol || short(key))}</b><span>${chain === "rh" ? "Robinhood Chain" : "Solana"} · ${escapeHtml(short(key))}</span></div><span class="quick-safety ${safety.pending ? "pending" : ""}">${escapeHtml(safety.text)}</span></div><div class="quick-market-grid"><div><b>${escapeHtml(formatUsd(coin.marketCap || coin.mc))}</b><span>MC</span></div><div><b>${escapeHtml(formatUsd(coin.liquidity || coin.liq || coin.liquidityUsd))}</b><span>Liquidity</span></div><div><b>${escapeHtml(coin.volume > 0 ? formatUsd(coin.volume) : (coin.volumeLabel || "checking"))}</b><span>Volume</span></div><div><b class="${Number.isFinite(change) ? (change >= 0 ? "up" : "down") : ""}">${escapeHtml(formatPct(change))}</b><span>1H</span></div></div><div class="quick-action-body"><div class="quick-amounts">${["0.1", "0.5", "1"].map((value) => `<button class="${amount === value ? "active" : ""}" type="button" data-quick-select-amount="${value}">${value} SOL</button>`).join("")}<button class="${!["0.1", "0.5", "1"].includes(amount) ? "active" : ""}" type="button" data-quick-custom-focus>Custom</button></div><div class="quick-custom-row"><input data-quick-custom-amount inputmode="decimal" value="${!["0.1", "0.5", "1"].includes(amount) ? escapeHtml(amount) : ""}" placeholder="Custom SOL amount"><button type="button" data-quick-set-custom>Use</button></div><button class="quick-preset-line" type="button" data-manage-presets><span>${preset ? escapeHtml(preset.name) : "Manual preset"}</span><b>${preset ? `+${escapeHtml(preset.takeProfitPct || "off")}% TP · -${escapeHtml(preset.stopLossPct || "off")}% SL` : "Add TP / SL ›"}</b></button><div class="quick-secondary"><a href="/fun#coin/${encodeURIComponent(key)}">Chart</a><button type="button" data-quick-bundle>Bundle</button><button type="button" data-manage-wallets>Wallets</button></div><button class="quick-review" type="button" data-quick-review ${wallet ? "" : "disabled"}>${wallet ? `Review ${escapeHtml(amount)} SOL buy` : "Set up wallet to trade"}</button></div></article>${quickWalletPanel()}`;
+  }
+
+  async function loadQuickTarget(raw = "") {
+    const value = String(raw || "").trim();
+    if (!value) { toast("Paste a contract address or token link.", true); return; }
+    const direct = value.match(/0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44}/)?.[0] || "";
+    if (direct) { await openCoin(direct, isRh(direct) ? "rh" : "sol", { quick: true }); return; }
+    const result = await request(`/api/web/token-search?q=${encodeURIComponent(value)}`);
+    const match = result.ok ? result.data?.matches?.[0] : null;
+    if (!match || !coinKey(match)) { toast("Could not find a coin in that text or link.", true); return; }
+    await openCoin(coinKey(match), match.chain === "robinhood" ? "rh" : "sol", { quick: true });
   }
   function renderCoinShell() {
     const coin = state.selected || {}, key = coinKey(coin), chain = coin.chain === "robinhood" ? "rh" : "sol";
-    $("[data-coin-mini]").innerHTML = `<div class="coin-identity"><img ${coinImageAttrs(coin)} style="background-image:url('${mascot(key)}')" alt="" decoding="async" referrerpolicy="no-referrer"><div><b>${escapeHtml(coin.symbol || short(key))}</b><span>${chain === "rh" ? "Robinhood Chain" : "Solana"} · ${escapeHtml(short(key))}</span></div></div><div class="coin-head-quote"><b>${formatUsd(coin.marketCap || coin.mc)}</b><span class="${Number(coin.change) >= 0 ? "up" : "down"}">${formatPct(coin.change)} · 1H</span></div>`;
+    $("[data-coin-mini]").innerHTML = `<div class="coin-identity"><img ${coinImageAttrs(coin)} style="background-image:url('${coinBadge(coin)}')" alt="" decoding="async" referrerpolicy="no-referrer"><div><b>${escapeHtml(coin.symbol || short(key))}</b><span>${chain === "rh" ? "Robinhood Chain" : "Solana"} · ${escapeHtml(short(key))}</span></div></div><div class="coin-head-quote"><b>${formatUsd(coin.marketCap || coin.mc)}</b><span class="${Number(coin.change) >= 0 ? "up" : "down"}">${formatPct(coin.change)} · 1H</span></div>`;
     $("[data-coin-stats]").innerHTML = `<div><span>Market cap</span><b>${formatUsd(coin.marketCap || coin.mc)}</b></div><div><span>Liquidity</span><b>${formatUsd(coin.liquidity || coin.liq || coin.liquidityUsd)}</b></div><div><span>Holders</span><b>${Number(coin.holders || coin.holderCount) > 0 ? Number(coin.holders || coin.holderCount).toLocaleString() : "checking"}</b></div><div><span>Volume</span><b>${coin.volume > 0 ? formatUsd(coin.volume) : escapeHtml(coin.volumeLabel || "checking")}</b></div>`;
     renderChart();
     renderQuickTrade();
@@ -599,7 +654,7 @@
     if (!result.ok || !result.data?.ok) { toast(result.data?.message || result.data?.error || "Wallet creation failed", true); return false; }
     const downloads = result.data.downloads || {};
     for (const item of [downloads.encryptedBackup, downloads.recoveryKeys].filter(Boolean)) downloadText(item.filename, item.text);
-    await loadWallets(true); renderWalletHero(); renderWalletPositions(); toast("Wallet created. Backups downloaded—store them safely."); return true;
+    await loadWallets(true); renderWalletHero(); renderWalletPositions(); if (state.view === "quick") renderQuickRoute(); toast("Wallet created. Backups downloaded—store them safely."); return true;
   }
   function downloadText(filename, text) { const blob = new Blob([text], { type: "text/plain" }), url = URL.createObjectURL(blob), link = document.createElement("a"); link.href = url; link.download = filename || "slimewire-backup.txt"; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000); }
   function downloadWalletFiles(downloads = {}) { for (const item of [downloads.encryptedBackup, downloads.recoveryKeys].filter((entry) => entry?.text)) downloadText(item.filename, item.text); }
@@ -636,7 +691,8 @@
     }
     if (result.ok && restored > 0) {
       downloadWalletFiles(result.data?.restore?.downloads || result.data?.imported?.downloads);
-      await loadWallets(true); renderWalletHero(); renderWalletPositions(); toast("Wallet restored"); await openWalletManager();
+      await loadWallets(true); renderWalletHero(); renderWalletPositions(); toast("Wallet restored");
+      if (state.view === "quick") { closeSheet(); renderQuickRoute(); } else await openWalletManager();
     } else if (status) status.textContent = result.data?.error || `No wallet was restored${before ? ". Existing wallets are unchanged." : "."}`;
   }
   async function removeWallet(index, publicKey) {
@@ -846,13 +902,18 @@
     const quickChain = event.target.closest("[data-search-chain]"); if (quickChain) { closeSearch(); state.chain = quickChain.dataset.searchChain; $$("[data-chain]").forEach((button) => button.classList.toggle("active", button.dataset.chain === state.chain)); setView("home"); loadFeed(true); return; }
     if (event.target.closest("[data-deposit]") || event.target.closest("[data-receive]")) { walletReceive(); return; }
     if (event.target.closest("[data-manage-wallets]")) { await openWalletManager(); return; }
+    const quickAmount = event.target.closest("[data-quick-select-amount]"); if (quickAmount) { state.quickAmount = quickAmount.dataset.quickSelectAmount || "0.1"; renderQuickRoute(); return; }
+    if (event.target.closest("[data-quick-custom-focus]")) { $("[data-quick-custom-amount]")?.focus(); return; }
+    if (event.target.closest("[data-quick-set-custom]")) { const amount = String($("[data-quick-custom-amount]")?.value || "").trim(); if (!(Number(amount) > 0)) { toast("Enter a valid SOL amount.", true); return; } state.quickAmount = amount; renderQuickRoute(); return; }
+    if (event.target.closest("[data-quick-review]")) { if (!activeWallet()) { await openWalletManager(); return; } openTradeSheet("buy", { amount: state.quickAmount || "0.1" }); return; }
+    if (event.target.closest("[data-quick-bundle]")) { await openBundleSheet(); return; }
     const saveProfile = event.target.closest("[data-save-social-profile]"); if (saveProfile) { await saveSocialProfile(saveProfile); return; }
     const enablePush = event.target.closest("[data-enable-push]"); if (enablePush) { await enableFunPush(enablePush); return; }
-    if (event.target.closest("[data-create-wallet]")) { if (await createWallet()) await openWalletManager(); return; }
+    if (event.target.closest("[data-create-wallet]")) { if (await createWallet()) { if (state.view === "quick") { closeSheet(); renderQuickRoute(); } else await openWalletManager(); } return; }
     if (event.target.closest("[data-export-wallets]")) { await exportWallets(); return; }
     if (event.target.closest("[data-restore-wallet]")) { await restoreWallet(); return; }
     const remove = event.target.closest("[data-remove-wallet]"); if (remove) { await removeWallet(remove.dataset.removeWallet, remove.dataset.walletKey); return; }
-    const select = event.target.closest("[data-select-wallet]"); if (select) { state.activeWallet = Number(select.dataset.selectWallet); paintWalletPill(); renderWalletHero(); renderQuickTrade(); await openWalletManager(); return; }
+    const select = event.target.closest("[data-select-wallet]"); if (select) { state.activeWallet = Number(select.dataset.selectWallet); paintWalletPill(); renderWalletHero(); renderQuickTrade(); if (state.view === "quick") renderQuickRoute(); await openWalletManager(); return; }
     const rename = event.target.closest("[data-rename-wallet]"); if (rename) { await renameWallet(rename.dataset.renameWallet); return; }
     const startVolume = event.target.closest("[data-start-volume]"); if (startVolume) { await startFunVolume(startVolume); return; }
     if (event.target.closest("[data-stop-volume]")) { await stopFunVolume(); return; }
@@ -863,6 +924,7 @@
   });
 
   document.addEventListener("change", (event) => {
+    if (event.target.matches("[data-quick-wallet-select]")) { state.activeWallet = Number(event.target.value); paintWalletPill(); renderQuickRoute(); return; }
     if (!event.target.matches("[data-wallet-backup-file]")) return;
     const file = event.target.files?.[0], textarea = $("[data-wallet-backup-text]"), status = $("[data-wallet-manager-status]");
     if (!file || !textarea) return;
@@ -888,7 +950,10 @@
     if (proxy && !current.startsWith(proxy)) { image.src = proxy; return; }
     if (direct && !current.startsWith(direct) && !/(?:ipfs\/|gateway\.pinata\.cloud|ipfs\.io)/i.test(direct)) { image.src = direct; return; }
     image.removeAttribute("data-token-image");
-    image.src = mascot(image.dataset.coinImageKey || image.closest("[data-open-coin]")?.dataset.openCoin || state.selected && coinKey(state.selected));
+    image.src = coinBadge({
+      address: image.dataset.coinImageKey || image.closest("[data-open-coin]")?.dataset.openCoin || state.selected && coinKey(state.selected),
+      symbol: image.dataset.coinSymbol || state.selected?.symbol || "?"
+    });
   }, true);
   document.addEventListener("load", (event) => {
     const image = event.target;
@@ -906,9 +971,18 @@
 
   async function init() {
     paintWalletPill();
-    loadFeed();
-    if (state.token) Promise.all([loadMe(), loadWallets(), loadPositions(), loadPresets(), loadCreatedCoinsSilently()]).then(() => { if (state.view === "coin") renderQuickTrade(); }).catch(() => {});
-    const match = location.hash.match(/^#coin\/(.+)$/); if (match) openCoin(decodeURIComponent(match[1]));
+    if (!IS_QUICK_ROUTE) loadFeed();
+    if (state.token) Promise.all([loadMe(), loadWallets(), loadPositions(), loadPresets(), loadCreatedCoinsSilently()]).then(() => { if (state.view === "coin") renderQuickTrade(); if (state.view === "quick") renderQuickRoute(); }).catch(() => {});
+    if (IS_QUICK_ROUTE) {
+      setView("quick", { hideNav: true });
+      renderQuickRoute();
+      const params = new URLSearchParams(location.search), ca = params.get("ca") || params.get("token") || "";
+      if (ca) void loadQuickTarget(ca);
+    } else {
+      const match = location.hash.match(/^#coin\/(.+)$/); if (match) openCoin(decodeURIComponent(match[1]));
+    }
   }
+  $("[data-quick-paste-form]")?.addEventListener("submit", (event) => { event.preventDefault(); void loadQuickTarget($("[data-quick-ca]")?.value); });
+  $("[data-quick-clipboard]")?.addEventListener("click", async () => { try { const text = await navigator.clipboard.readText(); if ($("[data-quick-ca]")) $("[data-quick-ca]").value = text; await loadQuickTarget(text); } catch { $("[data-quick-ca]")?.focus(); toast("Paste into the field, then tap Load.", true); } });
   init();
 })();

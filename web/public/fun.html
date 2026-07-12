@@ -8,9 +8,9 @@
   <meta name="description" content="A clean mobile-first SlimeWire terminal for Solana and Robinhood Chain coins, wallets, positions, charts, safety, and trading tools.">
   <link rel="icon" href="/icons/icon-192.png">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-  <link rel="stylesheet" href="/fun.css?v=6">
+  <link rel="stylesheet" href="/fun.css?v=7">
   <script src="/config.js"></script>
-  <script defer src="/fun.js?v=10"></script>
+  <script defer src="/fun.js?v=11"></script>
 </head>
 <body>
   <div class="fun-app" id="funApp">
@@ -58,6 +58,20 @@
         <div class="wallet-actions"><button class="primary" type="button" data-deposit>Deposit</button><button type="button" data-receive>Receive</button><button type="button" data-manage-wallets>Manage</button></div>
         <div class="profile-tabs" role="tablist"><button class="active" type="button" data-profile="positions">Positions</button><button type="button" data-profile="activity">Activity</button><button type="button" data-profile="created">Created</button><button type="button" data-profile="social">Profile</button></div>
         <div data-profile-panel><div class="skeleton-list"></div></div>
+      </section>
+
+      <section class="fun-view quick-view" data-view="quick" aria-label="Quick trade">
+        <header class="quick-header">
+          <a class="brand" href="/fun" aria-label="SlimeWire Fun home"><img src="/assets/slimewire/png/slimewire-mark.png" alt=""><span>SLIMEWIRE</span><b>FUN</b></a>
+          <button class="quick-wallet-pill" type="button" data-manage-wallets>Connect wallet</button>
+        </header>
+        <div class="quick-route-intro"><span class="eyebrow">SOCIAL TO TRADE IN SECONDS</span><h1>Quick <em>Trade</em></h1><p>Paste a Solana or Robinhood contract—or open a preloaded link from Telegram.</p></div>
+        <form class="quick-paste-card" data-quick-paste-form>
+          <label for="quickCa">Paste contract or token link</label>
+          <div><input id="quickCa" data-quick-ca autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Solana CA, Robinhood 0x, or token URL"><button type="submit">Load</button></div>
+          <button class="quick-clipboard" type="button" data-quick-clipboard>Paste from clipboard</button>
+        </form>
+        <div class="quick-route-content" data-quick-route-content></div>
       </section>
 
       <section class="fun-view coin-view" data-view="coin" aria-label="Coin details">

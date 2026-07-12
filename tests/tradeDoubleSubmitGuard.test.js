@@ -1647,6 +1647,21 @@ test("scan card = ⚡ Quick Buy (preset) + ⚙️ Preset editor + limit + chart 
   assert.match(rhBuy, /callback_data: `rqbp:\$\{address\}`/);
   assert.match(rhBuy, /slimewire\.org · chart, trade &amp; tools/);
 });
+
+test("Telegram /buy replies turn scan and buy cards into preloaded private quick-trade links", () => {
+  assert.match(serverSource, /async function telegramQuickTradeTarget/);
+  const resolver = functionBody(serverSource, "telegramQuickTradeTarget");
+  assert.match(resolver, /reply_to_message/);
+  assert.match(resolver, /reply_markup\?\.inline_keyboard/);
+  assert.match(resolver, /qbp\|rqbp\|dmscan/);
+  assert.match(resolver, /\[\?&\]\(\?:ca\|token\)/);
+  assert.match(functionBody(serverSource, "sendTelegramQuickTradeLink"), /Open Quick Trade/);
+  assert.match(functionBody(serverSource, "sendTelegramQuickTradeLink"), /links\.quick/);
+  assert.match(serverSource, /const quickBuyCommand = \/\^\\\/buy/);
+  assert.match(serverSource, /sendTelegramQuickTradeLink\(chatId, message, quickBuyCommand\[1\]/);
+  assert.match(functionBody(serverSource, "slimewireTokenLinks"), /\/quick\?ca=/);
+});
+
 for (const [label, source] of [["gg.html", ggSource], ["index.html", indexSource]]) {
   test(`POS deep-link opens the 1-click buy preloaded with the amount (${label})`, () => {
     assert.match(source, /searchParams\.get\("buy"\)==="1"/);
@@ -1712,6 +1727,7 @@ test("/leaderboard ranks callers by window; /wins keeps the coin hall of fame", 
   // four windows, driven off the caller-intel warehouse filtered by firstAt
   const view = functionBody(serverSource, "buildCallerLeaderboardView");
   assert.match(view, /callerIntel\.buildLeaderboards\(scoped, \{ minResolved/);
+  assert.match(view, /String\(c\.chatId\) === String\(chatId\)/);
   assert.match(view, /Number\(c\.firstAt\) >= cutoff/);
   assert.match(serverSource, /function bestCallerLeaderboardCall/);
   assert.match(view, /topByCaller/);
@@ -1720,6 +1736,9 @@ test("/leaderboard ranks callers by window; /wins keeps the coin hall of fame", 
   for (const k of ["today", "1w", "1m", "6m"]) assert.ok(serverSource.includes(`key: "${k}"`), `window ${k}`);
   // window buttons routed in the callback dispatcher, editing in place
   assert.match(serverSource, /query\.data\?\.startsWith\("clb:"\)/);
+  assert.match(serverSource, /buildCallerLeaderboardView\(win, chatId\)/);
+  assert.match(serverSource, /buildCallerLeaderboardView\("1w", chatId\)/);
+  assert.doesNotMatch(serverSource, /buildCallerLeaderboardView\((?:win|"1w")\)(?!,)/);
   assert.match(serverSource, /callback_data: `clb:\$\{w\.key\}`/);
 });
 
@@ -2266,6 +2285,12 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "recordTelegramCall"), /\^0x\[0-9a-fA-F\]\{40\}\$/);
   assert.match(functionBody(serverSource, "sendRhScanCard"), /recordTelegramCall\(message, address, info\.mc\)/);
   assert.match(functionBody(serverSource, "sendRhScanCard"), /buildScanCallerFooter\(chatId, address, info\.mc, message\)/);
+  assert.match(functionBody(serverSource, "recordTelegramCall"), /channelUsername = message\.sender_chat\?\.username \|\| message\.chat\?\.username/);
+  assert.match(functionBody(serverSource, "recordTelegramCall"), /if \(!\(Number\(rec\.entryMc\) > 0\)\) rec\.entryMc = mc/);
+  const callerFooter = functionBody(serverSource, "buildScanCallerFooter");
+  assert.match(callerFooter, /at \$\{scanFmtMoney\(entry\)\} MC/);
+  assert.match(callerFooter, /pct >= 0 \? "🟢" : "🔴"/);
+  assert.match(callerFooter, /move pending/);
   assert.match(functionBody(serverSource, "xReplyPollTick"), /xIntentFromText\(m\.text\)/); // intent routed at reply time
   // ANTI-SPAM: reply text carries NO raw URL (X folds link-replies from cold accounts); the card image
   // already shows slimewire.org. Seeded per-tweet variation (wording + card art) beats X's near-duplicate

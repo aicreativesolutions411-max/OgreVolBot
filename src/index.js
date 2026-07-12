@@ -6847,6 +6847,10 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "fun.html", "no-store, max-age=0");
       return;
     }
+    if (request.method === "GET" && (requestUrl.pathname === "/quick" || requestUrl.pathname === "/quick.html" || requestUrl.pathname.startsWith("/quick/"))) {
+      await serveStaticHtmlPage(response, "fun.html", "no-store, max-age=0");
+      return;
+    }
     if (request.method === "GET" && ["/gg", "/terminal-pro", "/pro-terminal", "/gg.html"].includes(requestUrl.pathname)) {
       // No-store during the active build-out so testers always get the latest /gg (its chart/
       // tools/wallet code changes constantly). Switch back to a normal cache once it stabilizes.
@@ -11114,6 +11118,40 @@ async function resolveTokenAvatarRecord(mint = "", row = {}) {
     return tokenAvatarRecord(mint, { avatarUrl: direct, source: row.source || "row", state: "ready" });
   }
 
+  if (/^0x[0-9a-fA-F]{40}$/.test(String(mint || "").trim())) {
+    const address = String(mint).trim();
+    const [dexResult, noxaMeta, geckoResult] = await Promise.all([
+      fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${address}`, { timeoutMs: 1_500 }).catch(() => null),
+      getNoxaRhTokenMetadata(address, { timeoutMs: 1_400 }).catch(() => ({})),
+      fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${address}/info`, { timeoutMs: 1_400 }).catch(() => null)
+    ]);
+    const dexPairs = (dexResult?.pairs || []).filter((pair) => String(pair?.chainId || "").toLowerCase() === "robinhood");
+    const dexPair = dexPairs.sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0))[0] || null;
+    const gecko = geckoResult?.data?.attributes || {};
+    const avatarUrl = normalizeTokenAvatarUrl(firstString(
+      noxaMeta.imageUrl,
+      dexPair?.info?.imageUrl,
+      gecko.image_url,
+      gecko.imageUrl
+    ));
+    const socials = Array.isArray(dexPair?.info?.socials) ? dexPair.info.socials : [];
+    const websites = Array.isArray(dexPair?.info?.websites) ? dexPair.info.websites : [];
+    if (avatarUrl) return tokenAvatarRecord(address, {
+      avatarUrl,
+      source: noxaMeta.imageUrl ? "noxa" : (dexPair?.info?.imageUrl ? "dex" : "geckoterminal"),
+      state: "ready",
+      twitterUrl: firstString((socials.find((item) => /twitter|x/i.test(item?.type || item?.label || "")) || {}).url),
+      telegramUrl: firstString((socials.find((item) => /telegram|tg/i.test(item?.type || item?.label || "")) || {}).url),
+      websiteUrl: firstString(websites[0]?.url)
+    });
+    return tokenAvatarRecord(address, {
+      avatarUrl: "",
+      source: "robinhood-metadata",
+      state: "missing",
+      failureReason: "No exact-address Robinhood artwork was published"
+    });
+  }
+
   const [pumpMeta, dexMeta, heliusMeta] = await Promise.all([
     // 3.5s (not 1.5s): pump.fun is reachable from Render but SLOW on the shared IP — at 1.5s it
     // timed out, so the image fell back to Helius and the SOCIALS (only pump has them this early)
@@ -14002,7 +14040,7 @@ async function handleCallback(query, userId) {
   // /leaderboard time-window buttons (clb:today|1w|1m|6m) — re-filter the caller board in place.
   if (query.data?.startsWith("clb:") && messageId) {
     const win = String(query.data).split(":")[1] || "1w";
-    const view = await buildCallerLeaderboardView(win);
+    const view = await buildCallerLeaderboardView(win, chatId);
     await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: view.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: view.markup }).catch(() => {});
     return;
   }
@@ -15190,10 +15228,15 @@ async function handleMessage(message, userId) {
     return;
   }
 
-  if (text === "/buy") {
+  const quickBuyCommand = /^\/buy(?:@[A-Za-z0-9_]+)?(?:\s+(.+))?$/i.exec(text);
+  if (quickBuyCommand) {
     if (!isPrivateChat(message.chat)) {
-      await say(chatId, "Open this bot in DM to buy.");
+      await sendTelegramQuickTradeLink(chatId, message, quickBuyCommand[1] || "");
       return;
+    }
+    if (quickBuyCommand[1] || message.reply_to_message) {
+      const target = await telegramQuickTradeTarget(message, quickBuyCommand[1] || "");
+      if (target) { await sendDmBuyPanel(chatId, userId, target); return; }
     }
     sessions.set(chatId, { step: "trade_buy_wallet", userId, data: { tradeMode: "single" } });
     await say(chatId, await walletPrompt(userId, "Choose one wallet to buy from. Send the wallet number."));
@@ -32947,8 +32990,10 @@ async function recordTelegramCall(message, mint, mcUsd) {
     const caller = message.from || {};
     // Channel posts carry NO `from` (Telegram makes them anonymous to the channel), so fall back to
     // the channel/group title — "called in <Channel>" beats a useless "anon".
+    const channelUsername = message.sender_chat?.username || message.chat?.username || "";
     const callerName = caller.username
       ? `@${caller.username}`
+      : channelUsername ? `@${channelUsername}`
       : ([caller.first_name, caller.last_name].filter(Boolean).join(" ")
          || (message.chat && message.chat.title ? String(message.chat.title).slice(0, 40) : null)
          || String(caller.id || "anon"));
@@ -32963,6 +33008,9 @@ async function recordTelegramCall(message, mint, mcUsd) {
       roomMaybeVerifyCall(rec, chatId, mint);   // skin-in-the-game: verify the caller actually holds it (opt-in)
       console.info(JSON.stringify({ event: "tg_call_recorded", chat: rec.chatTitle, caller: callerName, mint, entryMc: mc }));
     } else if (mc > 0) {
+      // Some Robinhood providers briefly return no MC on a coin's first scan. Preserve the original caller
+      // and time, but anchor the call at the first real MC instead of leaving entry/performance blank forever.
+      if (!(Number(rec.entryMc) > 0)) rec.entryMc = mc;
       rec.lastMc = mc; rec.lastAt = nowMs;
       if (mc > (rec.peakMc || 0)) rec.peakMc = mc;
     }
@@ -33405,6 +33453,7 @@ function slimewireTokenLinks(tokenMint) {
   return {
     site: `${siteBase}/terminal/chart?token=${encodeURIComponent(tokenMint)}&source=telegram`,
     siteBuy: `${siteBase}/terminal/chart?token=${encodeURIComponent(tokenMint)}&source=telegram&buy=1`,
+    quick: `${siteBase}/quick?ca=${encodeURIComponent(tokenMint)}&source=telegram`,
     tokenPage,
     receipts,
     dex: dexScreenerUrl(tokenMint),
@@ -35686,6 +35735,46 @@ async function fundFlowRowsToMap(wallet, flows, { chain = "solana", subject = ""
       { label: "TRANSFERS", value: String(rows.reduce((sum, row) => sum + row.txCount, 0)) }
     ], nodes
   };
+}
+
+async function telegramQuickTradeTarget(message, argument = "") {
+  const reply = message?.reply_to_message || {};
+  const hints = [String(argument || ""), String(reply.text || ""), String(reply.caption || "")];
+  for (const row of reply?.reply_markup?.inline_keyboard || []) {
+    for (const button of row || []) hints.push(String(button?.url || ""), String(button?.callback_data || ""));
+  }
+  for (const raw of hints.filter(Boolean)) {
+    let text = raw;
+    try { text = decodeURIComponent(raw); } catch { /* keep the raw hint */ }
+    const structured = [
+      /(?:qbp|rqbp|dmscan):((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))/i,
+      /[?&](?:ca|token)=((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))/i,
+      /#coin\/((?:0x[0-9a-fA-F]{40})|(?:[1-9A-HJ-NP-Za-km-z]{32,44}))/i
+    ].map((pattern) => text.match(pattern)?.[1]).find(Boolean);
+    let target = structured || await resolveScanTargetFromText(text).catch(() => null);
+    target = String(target || "").trim();
+    if (/^0x[0-9a-fA-F]{40}$/.test(target)) {
+      if (await isRhContract(target).catch(() => false)) return target;
+      continue;
+    }
+    if (isLikelySolMint(target) && await isSolMintAddress(target).catch(() => true)) return target;
+  }
+  return "";
+}
+
+async function sendTelegramQuickTradeLink(chatId, message, argument = "") {
+  const target = await telegramQuickTradeTarget(message, argument);
+  if (!target) {
+    await say(chatId, "Reply to a SlimeWire scan or buy alert with /buy—or send /buy <coin CA>.");
+    return false;
+  }
+  const links = slimewireTokenLinks(target);
+  await sayHtml(chatId, [
+    "⚡ <b>Quick Trade ready</b>",
+    `<code>${escapeTelegramHtml(shortMint(target))}</code>`,
+    "<i>Opens privately with the coin preloaded. Create, restore, fund, or choose a wallet there.</i>"
+  ].join("\n"), { inline_keyboard: [[{ text: "⚡ Open Quick Trade", url: links.quick }], [{ text: "📈 Full chart", url: links.site }]] });
+  return true;
 }
 function parsedSolFundTransfers(tx, wallet, add) {
   const msg = tx?.transaction?.message || {};
@@ -42747,7 +42836,10 @@ async function buildScanCallerFooter(chatId, mint, currentMc, message) {
     if (!here && message && !isPrivateChat(message.chat)) {
       here = await recordTelegramCall(message, mint, mc).catch(() => null);
     }
-    if (here && mc > 0) { here.lastMc = mc; here.lastAt = Date.now(); if (mc > (here.peakMc || 0)) here.peakMc = mc; scheduleTelegramCallsFlush(); }
+    if (here && mc > 0) {
+      if (!(Number(here.entryMc) > 0)) here.entryMc = mc;
+      here.lastMc = mc; here.lastAt = Date.now(); if (mc > (here.peakMc || 0)) here.peakMc = mc; scheduleTelegramCallsFlush();
+    }
     // The footer shows the EARLIEST caller of this mint ANYWHERE in the warehouse (not just this
     // chat) — so it appears in DM and on $ticker looks too, surfacing who really called it first
     // and where. Also track the best peak across every channel that called it.
@@ -42756,6 +42848,9 @@ async function buildScanCallerFooter(chatId, mint, currentMc, message) {
       const r = store.calls[k];
       const recordMint = /^0x[0-9a-fA-F]{40}$/.test(String(r?.mint || "")) ? String(r.mint).toLowerCase() : String(r?.mint || "");
       if (!r || recordMint !== mint) continue;
+      // Repair older RH calls that were recorded during an all-N/A market response. The first later scan
+      // with a real MC becomes their honest measurable baseline; caller identity/timestamp never changes.
+      if (mc > 0 && !(Number(r.entryMc) > 0)) { r.entryMc = mc; r.lastMc = mc; r.lastAt = Date.now(); scheduleTelegramCallsFlush(); }
       if (Number(r.peakMc) > bestPeak) bestPeak = Number(r.peakMc) || 0;
       if (!rec || (Number(r.firstAt) || 0) < (Number(rec.firstAt) || 0)) rec = r;
     }
@@ -42764,14 +42859,14 @@ async function buildScanCallerFooter(chatId, mint, currentMc, message) {
     const ago = alphaAgeLabel(Math.max(0, Date.now() - Number(rec.firstAt || Date.now())));
     // Scanner-bot footer the user asked for: WHO first called it · the MC then · the move since
     // (green/red %), plus the peak if it ran. e.g. "📣 First called by @x at $12k · 🟢 +340% · 2h ago".
-    const atMc = entry > 0 ? ` at ${scanFmtMoney(entry)}` : "";
+    const atMc = entry > 0 ? ` at ${scanFmtMoney(entry)} MC` : " at MC pending";
     // Live MC to measure the move: prefer the current scan's MC, else the freshest stored value.
     const liveMc = mc > 0 ? mc : (Number(rec.lastMc) || 0);
     let bracket = "";
     if (entry > 0 && liveMc > 0) {
       const pct = Math.round((liveMc / entry - 1) * 100);
       bracket = ` · ${pct >= 0 ? "🟢" : "🔴"} ${pct >= 0 ? "+" : ""}${pct}%`;
-    }
+    } else bracket = " · move pending";
     const peakX = entry > 0 ? bestPeak / entry : 0;
     const peakStr = peakX >= 2 ? ` · peak +${Math.round((peakX - 1) * 100)}%` : "";
     // Name the room it was first called in when that's somewhere other than here (informative in DM).
@@ -43497,13 +43592,15 @@ function bestCallerLeaderboardCall(calls, caller) {
     .filter((call) => call._px > 0)
     .sort((a, b) => b._px - a._px || Number(b.firstAt || 0) - Number(a.firstAt || 0))[0] || null;
 }
-async function buildCallerLeaderboardView(win) {
+async function buildCallerLeaderboardView(win, chatId) {
   const w = CALLER_LB_WINDOWS.find((x) => x.key === win) || CALLER_LB_WINDOWS[1];
-  let callers = [], scoped = [];
+  let callers = [], scoped = [], roomTitle = "this channel";
   try {
     const store = await readTelegramCalls();
     const cutoff = Date.now() - w.ms;
-    scoped = Object.values(store.calls || {}).filter((c) => Number(c.firstAt) >= cutoff);
+    const channelCalls = Object.values(store.calls || {}).filter((c) => String(c.chatId) === String(chatId));
+    roomTitle = String(channelCalls.find((c) => c.chatTitle)?.chatTitle || "this channel").slice(0, 36);
+    scoped = channelCalls.filter((c) => Number(c.firstAt) >= cutoff);
     const boards = callerIntel.buildLeaderboards(scoped, { minResolved: w.minResolved });
     callers = (boards.callers || []).slice(0, 10);
   } catch {}
@@ -43525,7 +43622,7 @@ async function buildCallerLeaderboardView(win) {
     } catch {}
   }
   const medal = (i) => (i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `<b>${i + 1}.</b>`);
-  const header = `🏆 <b>Top Callers · ${w.label}</b>`;
+  const header = `🏆 <b>Top Callers · ${escapeTelegramHtml(roomTitle)} · ${w.label}</b>`;
   if (!callers.length) {
     return {
       text: [header, "", "No caller has enough <b>resolved</b> calls in this window yet. Try a longer window — or keep dropping <code>$tickers</code> and contract addresses in your groups; the swamp scores every call.", "", "<i>A call resolves once it 2x's (win) or fades out — then it counts here.</i>"].join("\n"),
@@ -43548,7 +43645,7 @@ async function buildCallerLeaderboardView(win) {
 }
 async function handleTelegramCallerLeaderboardCommand(chatId, win = "1w") {
   if (tgCommandOnCooldown(chatId, "callerlb", TG_ALPHA_COOLDOWN_MS)) return;
-  const view = await buildCallerLeaderboardView(win);
+  const view = await buildCallerLeaderboardView(win, chatId);
   await sayHtml(chatId, view.text, view.markup);
 }
 
@@ -45129,7 +45226,7 @@ async function handleGroupBotCallback(query, userId) {
     if (target === "snipe") { const s = (await readCommunitySnipe()).snipes[String(chatId)]; view = { text: communitySnipeStatusText(s), markup: communitySnipeCardMarkup(s) }; }
     else if (target === "room") view = await roomPnlView(chatId);
     else if (target === "signals") view = await signalsMenu(chatId, userId, isPrivateChat(query.message?.chat));
-    else if (target === "lb") view = await buildCallerLeaderboardView("1w");
+    else if (target === "lb") view = await buildCallerLeaderboardView("1w", chatId);
     else if (target === "narrative") view = narrativeRadarView();
     else if (target === "grad") view = await graduationGauntletView();
     else if (target === "copy") view = await copyMenuView(chatId, userId);
@@ -51844,7 +51941,46 @@ async function rhLaunchMetaByAddress() {
   return map;
 }
 
+const RH_NOXA_PUBLIC_API = "https://awk00kk00gskkw0o8kc488kg.notoriouslywrong.com";
 const rhFeedArtworkCache = new Map();
+let rhNoxaArtworkSnapshot = { at: 0, byToken: new Map() };
+let rhNoxaArtworkInFlight = null;
+
+async function getNoxaRhTokenMetadata(address, options = {}) {
+  const token = await fetchJson(`${RH_NOXA_PUBLIC_API}/v1/robinhood/token/${encodeURIComponent(address)}`, {
+    headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
+    timeoutMs: options.timeoutMs || 1_500
+  });
+  return {
+    address: firstString(token?.address, address),
+    imageUrl: firstString(token?.logo, token?.imageUrl, token?.image),
+    twitterUrl: firstString(token?.twitter),
+    telegramUrl: firstString(token?.telegram),
+    websiteUrl: firstString(token?.website)
+  };
+}
+
+async function rhNoxaArtworkMap() {
+  if (Date.now() - rhNoxaArtworkSnapshot.at < 60_000) return rhNoxaArtworkSnapshot.byToken;
+  if (rhNoxaArtworkInFlight) return rhNoxaArtworkInFlight;
+  rhNoxaArtworkInFlight = (async () => {
+    const result = await fetchJson(`${RH_NOXA_PUBLIC_API}/v1/robinhood/tokens?limit=100&hasImage=true`, {
+      headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
+      timeoutMs: 1_500
+    }).catch(() => null);
+    const byToken = new Map();
+    for (const token of Array.isArray(result?.tokens) ? result.tokens : []) {
+      const key = String(token?.address || "").toLowerCase();
+      const imageUrl = firstString(token?.logo, token?.imageUrl, token?.image);
+      if (key && imageUrl) byToken.set(key, imageUrl);
+    }
+    if (byToken.size) rhNoxaArtworkSnapshot = { at: Date.now(), byToken };
+    else rhNoxaArtworkSnapshot.at = Date.now();
+    return rhNoxaArtworkSnapshot.byToken;
+  })().finally(() => { rhNoxaArtworkInFlight = null; });
+  return rhNoxaArtworkInFlight;
+}
+
 async function enrichRhFeedArtwork(rows = []) {
   const targets = rows.filter((row) => row?.address && !row.imageUrl && !row.iconUrl).slice(0, 50);
   const missing = [];
@@ -51858,10 +51994,13 @@ async function enrichRhFeedArtwork(rows = []) {
     // Dex accepts bounded address batches. Two small requests cover the whole visible feed in about one RTT.
     const chunks = [];
     for (let index = 0; index < missing.length; index += 25) chunks.push(missing.slice(index, index + 25));
-    const pairGroups = await Promise.all(chunks.map((chunk) => fetchJson(
-      `https://api.dexscreener.com/tokens/v1/robinhood/${chunk.map((row) => row.address).join(",")}`,
-      { headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" }, timeoutMs: 1_800 }
-    ).catch(() => [])));
+    const [pairGroups, noxaArtwork] = await Promise.all([
+      Promise.all(chunks.map((chunk) => fetchJson(
+        `https://api.dexscreener.com/tokens/v1/robinhood/${chunk.map((row) => row.address).join(",")}`,
+        { headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" }, timeoutMs: 1_800 }
+      ).catch(() => []))),
+      rhNoxaArtworkMap().catch(() => new Map())
+    ]);
     const pairs = pairGroups.flatMap((group) => Array.isArray(group) ? group : []);
     const byToken = new Map();
     for (const pair of Array.isArray(pairs) ? pairs : []) {
@@ -51871,7 +52010,8 @@ async function enrichRhFeedArtwork(rows = []) {
       if (!previous || Number(pair?.liquidity?.usd || 0) > Number(previous?.liquidity?.usd || 0)) byToken.set(key, pair);
     }
     for (const row of missing) {
-      const key = String(row.address).toLowerCase(), imageUrl = String(byToken.get(key)?.info?.imageUrl || "");
+      const key = String(row.address).toLowerCase();
+      const imageUrl = firstString(byToken.get(key)?.info?.imageUrl, noxaArtwork.get(key));
       rhFeedArtworkCache.set(key, { at: Date.now(), imageUrl }); if (imageUrl) row.imageUrl = imageUrl;
     }
   }
@@ -51939,6 +52079,10 @@ async function webRhPairs(category = "trending") {
       .filter((r) => r.safety === "ok" || r.safety === "verified")
       .sort((a, b) => (b.safety === "verified" ? 1 : 0) - (a.safety === "verified" ? 1 : 0)
         || (b.volume24hUsd || 0) - (a.volume24hUsd || 0) || (b.marketCapUsd || 0) - (a.marketCapUsd || 0) || b.holders - a.holders);
+  } else if (cat === "soon") {
+    rows = rows
+      .filter((row) => Number(row.marketCapUsd || 0) >= 17_000 && Number(row.marketCapUsd || 0) <= 40_000)
+      .sort((a, b) => Number(b.marketCapUsd || 0) - Number(a.marketCapUsd || 0));
   } else if (cat === "new") {
     // Never block the feed on dozens of explorer creation-time reads. Show the activity-ordered universe
     // immediately, merge permanent cached ages, and let the existing bounded filler improve later refreshes.
