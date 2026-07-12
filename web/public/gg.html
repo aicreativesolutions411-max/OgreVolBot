@@ -1732,14 +1732,12 @@
         '<div style="display:flex;gap:6px">'+[25,50,75,100].map(p=>'<button class="wbtn ghost" style="flex:1;padding:9px 4px;font-size:13px" onclick="GG.rhSell(\''+esc(address)+'\','+p+')">'+p+'%</button>').join("")+'</div></div>'+
         '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:12px 0 6px">🛠 Robinhood tools</div>'+
         '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">'+
-          '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhAddLiquidity(\''+esc(address)+'\')">💧 Add liquidity</button>'+
           '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhGuardModal(\''+esc(address)+'\')">🎯 TP / SL</button>'+
           '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhBundleModal(\''+esc(address)+'\')">📦 Bundle buy</button>'+
           '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhVolumeModal(\''+esc(address)+'\')">🔁 Volume bot</button>'+
         '</div>'+
         '<p class="wnote" style="margin:10px 0 14px">Trades run from your active wallet. Use Robinhood ETH for max speed, or SOL auto-fund when you only have SOL. Standard SlimeWire trade fee applies, same as Solana.</p>'+
       '</div></div>';
-    const rhBlink=$("#rhSafety");if(rhBlink){const h=document.createElement("div");h.innerHTML=blinkLinksHtml(address,r);if(h.firstElementChild)rhBlink.insertAdjacentElement("afterend",h.firstElementChild);}
     const pe=$("#rhPayEth");if(pe)pe.onclick=()=>{state.rhPayAsset="eth";renderRhTrade();};
     const ps=$("#rhPaySol");if(ps)ps.onclick=()=>{state.rhPayAsset="sol";renderRhTrade();};
     const buyLabel=Array.from(document.querySelectorAll("#v-rhtrade span")).find(s=>String(s.textContent||"").trim()==="Buy (ETH)");
@@ -2590,7 +2588,6 @@
         '<button class="tradefab" id="tradeFab" onclick="GG.flipTrade()" aria-label="Flip between bigger chart and bigger buy panel">💰 Buy</button>'+
       '</div>';
     wireTradePanel(mint,r);updateWselLine();paintPresetSel();wireCtab();loadTradePnl(mint);loadTradeStats(mint);
-    const blSec=$("#secbox");if(blSec){const h=document.createElement("div");h.innerHTML=blinkLinksHtml(mint,r);if(h.firstElementChild)blSec.insertAdjacentElement("afterend",h.firstElementChild);}
     const mb=$("#ctMoreBtn");if(mb)mb.onclick=(e)=>{e.stopPropagation();mb.parentNode.classList.toggle("open");};
     if(state.token&&!(state.presets.trade||[]).length){loadPresets().then(()=>{if(state.route==="trade")paintPresetSel();});}
     if(!r){const rows=await fetchPairs(tabById("best"));r=rows.find(x=>x.tokenMint===mint)||null;if(r&&state.route==="trade"){state.tradeRow=r;$("#thead").innerHTML=theadHtml(r);fillPerf(r);}}

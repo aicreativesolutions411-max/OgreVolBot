@@ -864,6 +864,16 @@ test("Robinhood buy cards keep complete market rows during intermittent scan gap
   assert.doesNotMatch(noxaMarkets, /liq: wethReserve \* eth[,\s]/);
 });
 
+test("coin charts stay trader-focused while Robinhood liquidity remains creator-only", () => {
+  for (const src of [ggSource, indexSource]) {
+    assert.doesNotMatch(functionBody(src, "renderTrade"), /blinkLinksHtml/);
+    const rhChart = functionBody(src, "renderRhTrade");
+    assert.doesNotMatch(rhChart, /blinkLinksHtml/);
+    assert.doesNotMatch(rhChart, /rhAddLiquidity/);
+    assert.match(src, /Make it buyable[^<]*[—-] add liquidity/);
+  }
+});
+
 test("Raid bot: clean card + overall progress bar + goal-to-go + views + Refresh", () => {
   const card = functionBody(serverSource, "buildRaidProgressCard");
   assert.match(card, /to go/);                                  // "X to go" per metric
