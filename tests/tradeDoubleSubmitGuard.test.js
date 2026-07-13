@@ -1933,6 +1933,8 @@ test("Robinhood address routing proves wallet versus ERC-20 before scan and trac
   assert.match(proof, /await Promise\.all/);
   assert.match(proof, /rhPromiseTimeout\(isRhContract\(a\)/); // RPC and chain-index proof run together, so their timeouts never stack
   assert.match(proof, /rhTokenInfo\(a\)/); // Blockscout exact token record rescues transient RPC bytecode misses
+  assert.match(proof, /api\/v2\/tokens\?q=\$\{encodeURIComponent\(a\)\}&type=ERC-20/); // Render can reach the address-search index when the exact-record route stalls
+  assert.match(proof, /rowAddress\.toLowerCase\(\) === key/); // never accept a fuzzy address result as token proof
   assert.match(proof, /normalizeRhBlockscoutToken/);
   assert.match(serverSource, /addressKind: "wallet", chain: "robinhood", matches: \[\]/);
   assert.match(serverSource, /That 0x address is a Robinhood wallet, not an ERC-20 coin contract/);

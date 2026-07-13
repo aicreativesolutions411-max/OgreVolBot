@@ -39212,10 +39212,20 @@ async function rhTokenContractProof(address, timeoutMs = 7_000) {
   // Run both proofs together. Waiting for a flaky public RPC bytecode read before asking Blockscout made
   // a valid token take the sum of both timeouts and occasionally miss Telegram's scan window entirely.
   // The chain explorer's exact ERC-20 record is sufficient proof and normally returns much faster.
-  const [rpcContract, token] = await Promise.all([
+  const [rpcContract, directToken, indexedData] = await Promise.all([
     rhPromiseTimeout(isRhContract(a), Math.min(timeoutMs, 4_000), false),
     rhPromiseTimeout(rhTokenInfo(a), timeoutMs, null),
+    rhPromiseTimeout(fetchJson(`https://robinhoodchain.blockscout.com/api/v2/tokens?q=${encodeURIComponent(a)}&type=ERC-20`, {
+      headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
+      timeoutMs: Math.min(timeoutMs, 4_500),
+      maxBytes: 500_000,
+    }), Math.min(timeoutMs, 4_500), null),
   ]);
+  const indexedToken = (Array.isArray(indexedData?.items) ? indexedData.items : []).find((row) => {
+    const rowAddress = firstString(row?.address_hash, row?.address);
+    return rowAddress.toLowerCase() === key && /^ERC-20$/i.test(String(row?.type || row?.token_type || ""));
+  }) || null;
+  const token = directToken || indexedToken;
   const normalized = normalizeRhBlockscoutToken(token);
   const blockscoutContract = Boolean(normalized?.symbol && normalized?.address?.toLowerCase() === key);
   const contract = Boolean(rpcContract || blockscoutContract);
