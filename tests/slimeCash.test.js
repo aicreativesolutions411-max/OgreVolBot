@@ -48,9 +48,9 @@ test("SlimeCash automatically downloads account and wallet recovery material", (
 });
 
 test("SlimeCash service worker prefers the current deploy and retains offline fallback", () => {
-  assert.match(sw, /slimecash-v7/);
-  assert.match(html, /cash\.js\?v=7/);
-  assert.match(html, /cash\.css\?v=7/);
+  assert.match(sw, /slimecash-v10/);
+  assert.match(html, /cash\.js\?v=10/);
+  assert.match(html, /cash\.css\?v=10/);
   assert.match(sw, /const fetched = fetch/);
   assert.match(sw, /return fetched/);
   assert.match(sw, /catch\(\(\) => cached\)/);
@@ -69,7 +69,8 @@ test("SlimeCash exposes explicit cash assets and routes sends through the idempo
   assert.match(server, /pathname === "\/api\/web\/cash\/assets"/);
   assert.match(server, /const result = await webCashSend\(auth\.userId, body\)/);
   assert.match(server, /runIdempotentMoneyOp\("cash-send"/);
-  assert.match(server, /async function webCashSendUsdcCore/);
+  assert.match(server, /async function webCashSendCore/);
+  assert.match(server, /async function webCashSendStableCore/);
   assert.match(server, /createTransferCheckedInstruction/);
 });
 
@@ -81,12 +82,12 @@ test("USDC funding and sending stay explicit in the SlimeCash client", () => {
   assert.match(html, /id="fundCardBtn"/);
 });
 
-test("SlimeCash uses a separate PWA identity and a synchronized v7 shell", () => {
+test("SlimeCash uses a separate PWA identity and a synchronized v10 shell", () => {
   assert.equal(manifest.id, "/slimecash-app");
   assert.equal(manifest.start_url, "/cash/?src=slimecash-pwa");
   assert.equal(manifest.scope, "/cash/");
-  assert.match(html, /slimecash-build" content="7"/);
-  assert.match(sw, /slimecash-v7/);
+  assert.match(html, /slimecash-build" content="10"/);
+  assert.match(sw, /slimecash-v10/);
   assert.match(cash, /dedicatedHost = "app\.slimewire\.org"/);
   assert.match(cash, /intent:\/\/\$\{dedicatedHost\}\/cash/);
 });

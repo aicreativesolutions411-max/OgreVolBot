@@ -1770,7 +1770,7 @@ for (const [label, source] of [["gg.html", ggSource], ["index.html", indexSource
   });
 }
 
-// ---- /leaderboard: top-10 best CALLERS with today/1w/1m/6m window buttons ----
+// ---- /leaderboard: channel-only caller board + group stats + top calls ----
 test("/leaderboard ranks callers by window; /wins keeps the coin hall of fame", () => {
   // command split: leaderboard/callers -> caller board; halloffame/hof/wins -> coin wins
   assert.match(serverSource, /parseCommandWithArgument\(text, \["leaderboard", "lb", "callers", "topcallers"\]\)/);
@@ -1783,14 +1783,20 @@ test("/leaderboard ranks callers by window; /wins keeps the coin hall of fame", 
   assert.match(view, /Number\(c\.firstAt\) >= cutoff/);
   assert.match(serverSource, /function bestCallerLeaderboardCall/);
   assert.match(view, /topByCaller/);
-  assert.match(view, /fetchDexScreenerTokenPairsBatch\(missingSymbols/);
-  assert.match(view, /top <a href/);
-  for (const k of ["today", "1w", "1m", "6m"]) assert.ok(serverSource.includes(`key: "${k}"`), `window ${k}`);
+  assert.match(view, /hydrateCallerLeaderboardSymbols/);
+  assert.match(view, /Group Stats/);
+  assert.match(view, /Top Calls/);
+  assert.match(view, /callerLeaderboardPoints/);
+  assert.match(view, /Stats are isolated to this group/);
+  const pointsFn = new Function("caller", functionBody(serverSource, "callerLeaderboardPoints"));
+  assert.ok(pointsFn({ score: 0.8, resolved: 20 }) > pointsFn({ score: 0.4, resolved: 2 }), "proven high-quality callers must earn more points");
+  assert.ok(pointsFn({ score: 2, resolved: 100 }) <= 10, "display points stay capped at 10");
+  for (const k of ["today", "1w", "14d", "1m", "6m"]) assert.ok(serverSource.includes(`key: "${k}"`), `window ${k}`);
   // window buttons routed in the callback dispatcher, editing in place
   assert.match(serverSource, /query\.data\?\.startsWith\("clb:"\)/);
   assert.match(serverSource, /buildCallerLeaderboardView\(win, chatId\)/);
-  assert.match(serverSource, /buildCallerLeaderboardView\("1w", chatId\)/);
-  assert.doesNotMatch(serverSource, /buildCallerLeaderboardView\((?:win|"1w")\)(?!,)/);
+  assert.match(serverSource, /buildCallerLeaderboardView\("14d", chatId\)/);
+  assert.doesNotMatch(serverSource, /buildCallerLeaderboardView\((?:win|"14d")\)(?!,)/);
   assert.match(serverSource, /callback_data: `clb:\$\{w\.key\}`/);
 });
 
@@ -2335,7 +2341,7 @@ test("X reply bot: cookie-auth client, mention→scan reply, assist/auto + throt
   assert.match(functionBody(serverSource, "buildXRhReply"), /changeTitle: ch\.title/);
   assert.match(functionBody(serverSource, "renderRhScanCardPng"), /rhScanLogo\(info\)/);
   assert.match(functionBody(serverSource, "recordTelegramCall"), /\^0x\[0-9a-fA-F\]\{40\}\$/);
-  assert.match(functionBody(serverSource, "sendRhScanCard"), /recordTelegramCall\(message, address, info\.mc\)/);
+  assert.match(functionBody(serverSource, "sendRhScanCard"), /recordTelegramCall\(message, address, info\.mc, info\.symbol\)/);
   assert.match(functionBody(serverSource, "sendRhScanCard"), /buildScanCallerFooter\(chatId, address, info\.mc, message\)/);
   assert.match(functionBody(serverSource, "recordTelegramCall"), /channelUsername = message\.sender_chat\?\.username \|\| message\.chat\?\.username/);
   assert.match(functionBody(serverSource, "recordTelegramCall"), /if \(!\(Number\(rec\.entryMc\) > 0\)\) rec\.entryMc = mc/);
@@ -2379,6 +2385,8 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(scan, /SCAN_SWR_TTL_MS/);                      // recent scans render now and refresh in background
   assert.match(scan, /backgroundRefreshing: true/);
   assert.match(scan, /SCAN_STALE_TTL_MS/);                    // transient provider blanks keep last-good data
+  assert.match(scan, /slimeScanHasMarketEvidence/);           // identity-only/all-n-a reads never poison the fresh cache
+  assert.match(scan, /const marketReady =/);
 
   const resolvePair = functionBody(serverSource, "resolveDexPairToMint");
   assert.match(resolvePair, /cached\.mint \? 5 \* 60_000 : 10_000/); // a temporary miss is never sticky for 5 minutes
@@ -2422,7 +2430,10 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(rhTicker, /api\.geckoterminal\.com\/api\/v2\/search\/pools/);
   assert.match(rhTicker, /const \[dexData, geckoData\] = await Promise\.all/);
   assert.match(rhTicker, /providerTimeoutMs\) \|\| 1_800/);
-  assert.match(rhTicker, /candidates\.size \|\| providersAvailable/); // healthy indexed lookup never waits on the heavier RH feed
+  assert.match(rhTicker, /const feedPromise = scanFastTimeout/);       // chain-native fallback starts beside the fast indexes
+  assert.match(rhTicker, /const shouldReadFeed = Boolean\(options\.includeFeed\) \|\| !indexedStrong/); // weak/empty indexed matches cannot suppress the feed
+  assert.match(rhTicker, /indexedResponseComplete/);                  // `{pairs:null}` is not mistaken for a completed lookup
+  assert.match(rhTicker, /solDexCandidate/);                          // the independent query can repair a missed dominant Sol result too
   assert.match(rhTicker, /rhTickerDirectMarket/);                   // zero-metric feed matches hydrate by token address
   assert.match(rhTicker, /sort\(\(a, b\) => b\.holders - a\.holders\)\.slice\(0, 4\)/);
   assert.match(rhTicker, /pick\.marketCap > 0 \|\| pick\.volume24h > 0/); // an address-only row is not a completed market lookup
@@ -2448,6 +2459,9 @@ test("Telegram scan throttling is per token and partial reads still render", () 
 
   const messageRouter = functionBody(serverSource, "handleMessage");
   assert.doesNotMatch(messageRouter, /tgCommandOnCooldown\(chatId, "cashtag"/); // handler owns the per-token cooldown
+  assert.match(messageRouter, /Matching the strongest exact/);                  // slow resolution gets an immediate visible acknowledgement
+  assert.match(messageRouter, /Couldn't verify a strong exact market/);         // groups never fail silently on an unresolved ticker
+  assert.match(functionBody(serverSource, "telegram"), /TELEGRAM_API_TIMEOUT_MS/); // Telegram calls cannot hang forever
 });
 
 test("X mention parsing and retry failures cannot starve newer scans", () => {
@@ -2627,7 +2641,8 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(rhSend, /sendPhoto\(chatId, "rh-scan\.png", quickPng/); // first RH card has a circular-PFP media shell
   assert.match(rhSend, /editMessagePhotoBuffer/);                    // same card upgrades to the real PFP + full facts
   assert.match(rhSend, /if \(!\(cachedScan/);                        // raw 0x CAs get the progressive path too
-  assert.match(rhSend, /symbol: loaded\.symbol \|\| fastCandidate/); // ticker identity survives a thin full refresh
+  assert.match(rhSend, /mergeRhScanWithTickerCandidate/);             // ticker market facts survive a thin full refresh
+  assert.match(rhSend, /quick RH photo failed/);                       // media failure falls straight through to a text card
   const rhPairTarget = functionBody(serverSource, "rhPairTargetToken");
   assert.match(rhPairTarget, /quote\.address/);                       // requested quote-side coins never inherit the base coin identity
   const rhGather = functionBody(serverSource, "gatherRhScanUncollapsed");
@@ -2641,8 +2656,8 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(rhGather, /else \{\s*rhScanCache\.delete\(key\)/);     // an all-n/a miss cannot poison the next scan, even for five seconds
   assert.match(rhGather, /rhScanLastGood/);                           // intermittent providers cannot erase known-good facts
   assert.match(functionBody(serverSource, "gatherRhScan"), /rhScanInFlight/); // simultaneous scans share one provider job
-  assert.match(rhSend, /!rhScanHasMarketEvidence\(loaded\)/);         // keep the progressive warning instead of presenting n/a as a completed scan
-  assert.match(rhSend, /Object\.assign\(quickInfo, loaded/);           // partial Blockscout identity/holders replace the generic $RH placeholder
+  assert.match(rhSend, /!rhScanHasMarketEvidence\(mergedLoaded\)/);   // keep the progressive warning instead of presenting n/a as a completed scan
+  assert.match(rhSend, /Object\.assign\(quickInfo, mergedLoaded\)/);  // partial Blockscout identity/holders replace the generic $RH placeholder
   assert.match(rhSend, /\[4_000, 8_000, 15_000, 30_000\]/);           // new pools auto-refresh the same Telegram card through index lag
   assert.match(rhSend, /rhScanCache\.delete/);                         // each bounded retry bypasses the short negative cache
   const geckoPool = new Function("firstString", "firstMeaningfulNumber", "rhFiniteNumber", `return function(data, address) {${functionBody(serverSource, "rhGeckoPoolForToken")}}`)(

@@ -14311,9 +14311,9 @@ async function handleCallback(query, userId) {
     return;
   }
 
-  // /leaderboard time-window buttons (clb:today|1w|1m|6m) — re-filter the caller board in place.
+  // /leaderboard time-window buttons — re-filter this channel's caller board in place.
   if (query.data?.startsWith("clb:") && messageId) {
-    const win = String(query.data).split(":")[1] || "1w";
+    const win = String(query.data).split(":")[1] || "14d";
     const view = await buildCallerLeaderboardView(win, chatId);
     await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: view.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: view.markup }).catch(() => {});
     return;
@@ -15146,9 +15146,46 @@ async function handleMessage(message, userId) {
   // (records the channel call too, via the look handler). Works in groups + DM.
   const cashtag = /^\$([A-Za-z][A-Za-z0-9._]{1,19})$/.exec(text.trim());
   if (cashtag) {
-    const mint = await resolveTickerToScanTarget(cashtag[1]).catch(() => null);
-    if (mint) await handleTelegramLookCommand(chatId, message, mint, { tickerSymbol: cashtag[1] });
-    else if (isPrivateChat(message.chat)) await say(chatId, `Couldn't find a token for $${escapeTelegramHtml(cashtag[1])}. Paste its contract address (CA) and I'll pull the card.`);
+    const symbol = cashtag[1].toUpperCase();
+    const startedAt = Date.now();
+    let resolved = false;
+    let progressTask = null;
+    const progressTimer = setTimeout(() => {
+      if (resolved) return;
+      progressTask = telegram("sendMessage", {
+        chat_id: chatId,
+        text: `🔎 Matching the strongest exact <b>$${escapeTelegramHtml(symbol)}</b> market across Solana + Robinhood…`,
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }).catch(() => null);
+    }, 850);
+    try {
+      const target = await resolveTickerToScanTarget(symbol).catch((error) => {
+        console.warn(`[ticker] $${symbol} resolve failed: ${friendlyError(error)}`);
+        return null;
+      });
+      resolved = true;
+      clearTimeout(progressTimer);
+      const progress = progressTask ? await progressTask : null;
+      if (target) {
+        console.info(`[ticker] $${symbol} resolved ${/^0x/.test(target) ? "robinhood" : "solana"} ${shortMint(target)} in ${Date.now() - startedAt}ms`);
+        await handleTelegramLookCommand(chatId, message, target, { tickerSymbol: symbol });
+        if (progress?.message_id) void telegram("deleteMessage", { chat_id: chatId, message_id: progress.message_id }).catch(() => {});
+      } else {
+        const failed = `Couldn't verify a strong exact market for <b>$${escapeTelegramHtml(symbol)}</b> yet. Try again in a few seconds or paste the coin CA.`;
+        if (progress?.message_id) {
+          await telegram("editMessageText", { chat_id: chatId, message_id: progress.message_id, text: failed, parse_mode: "HTML", disable_web_page_preview: true }).catch(() => sayHtml(chatId, failed));
+        } else await sayHtml(chatId, failed);
+      }
+    } catch (error) {
+      resolved = true;
+      clearTimeout(progressTimer);
+      console.warn(`[ticker] $${symbol} delivery failed: ${friendlyError(error)}`);
+      const progress = progressTask ? await progressTask : null;
+      const failed = `Scan delivery hit a temporary problem for <b>$${escapeTelegramHtml(symbol)}</b>. Try it once more or paste the CA.`;
+      if (progress?.message_id) await telegram("editMessageText", { chat_id: chatId, message_id: progress.message_id, text: failed, parse_mode: "HTML" }).catch(() => {});
+      else await sayHtml(chatId, failed).catch(() => {});
+    }
     return;
   }
 
@@ -32508,7 +32545,10 @@ async function telegram(method, payload = {}) {
   return fetchJson(`https://api.telegram.org/bot${CONFIG.telegramToken}/${method}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    timeoutMs: method === "getUpdates"
+      ? Math.max(35_000, Number(process.env.TELEGRAM_POLL_TIMEOUT_MS || 40_000))
+      : Math.max(3_000, Number(process.env.TELEGRAM_API_TIMEOUT_MS || 12_000))
   }).then((response) => {
     if (!response.ok) {
       throw new Error(response.description || `Telegram ${method} failed`);
@@ -32544,7 +32584,8 @@ async function sendPhoto(chatId, filename, buffer, caption = "", replyMarkup = n
 
   const data = await fetchJson(`https://api.telegram.org/bot${CONFIG.telegramToken}/sendPhoto`, {
     method: "POST",
-    body: form
+    body: form,
+    timeoutMs: Math.max(5_000, Number(process.env.TELEGRAM_MEDIA_TIMEOUT_MS || 15_000))
   });
 
   if (!data.ok) {
@@ -33252,7 +33293,7 @@ function scheduleTelegramCallsFlush() {
   }, 5000);
   if (telegramCallsFlushTimer.unref) telegramCallsFlushTimer.unref();
 }
-async function recordTelegramCall(message, mint, mcUsd) {
+async function recordTelegramCall(message, mint, mcUsd, symbol = "") {
   try {
     const chatId = message?.chat?.id;
     const rawMint = String(mint || "").trim();
@@ -33280,6 +33321,7 @@ async function recordTelegramCall(message, mint, mcUsd) {
       rec = {
         mint, chatId: String(chatId), chatTitle: String(message.chat.title || "").slice(0, 80),
         callerId: caller.id || null, callerName,
+        symbol: String(symbol || "").replace(/^\$+/, "").slice(0, 18),
         entryMc: mc, firstAt: firstAtMs, peakMc: mc, lastMc: mc, lastAt: nowMs
       };
       store.calls[key] = rec;
@@ -33292,6 +33334,7 @@ async function recordTelegramCall(message, mint, mcUsd) {
       rec.lastMc = mc; rec.lastAt = nowMs;
       if (mc > (rec.peakMc || 0)) rec.peakMc = mc;
     }
+    if (!rec.symbol && symbol) rec.symbol = String(symbol).replace(/^\$+/, "").slice(0, 18);
     const keys = Object.keys(store.calls);
     if (keys.length > 6000) {
       const drop = keys.sort((a, b) => (store.calls[a].firstAt || 0) - (store.calls[b].firstAt || 0)).slice(0, keys.length - 6000);
@@ -34622,6 +34665,15 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
   // Two independent fast pool indexes prevent one transient provider miss from silently promoting a
   // same-symbol Sol clone. Both normally answer in under a second; the longer deadline is retry-only.
   const providerTimeoutMs = Number(options.providerTimeoutMs) || 1_800;
+  // Start the chain-native feed at the same time as the fast indexes. We normally do not await it
+  // when Dex/Gecko already found a strong exact market, but it is ready (or nearly ready) when either
+  // index returns a partial/empty payload. Previously any truthy provider response -- even
+  // `{ pairs: null }` -- suppressed this fallback and let an unrelated tiny Sol clone win.
+  const feedPromise = scanFastTimeout(
+    rhFeedTokens().catch(() => null),
+    Math.max(1_900, providerTimeoutMs + 350),
+    null
+  );
   const [dexData, geckoData] = await Promise.all([
     scanFastTimeout(fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { timeoutMs: providerTimeoutMs }), providerTimeoutMs + 100, null),
     scanFastTimeout(fetchJson(`https://api.geckoterminal.com/api/v2/search/pools?query=${encodeURIComponent(q)}`, { timeoutMs: providerTimeoutMs }), providerTimeoutMs + 100, null)
@@ -34632,7 +34684,15 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
     if (!exact) continue;
     if (chain === "robinhood") add(pair.baseToken?.address, pair, "dexscreener");
     if (chain === "solana" && isLikelySolMint(pair.baseToken?.address)) {
-      const candidate = { marketCap: firstMeaningfulNumber(pair.marketCap, pair.fdv) || 0, volume24h: firstMeaningfulNumber(pair.volume?.h24) || 0, liquidityUsd: firstMeaningfulNumber(pair.liquidity?.usd) || 0 };
+      const candidate = {
+        address: pair.baseToken?.address,
+        symbol: pair.baseToken?.symbol,
+        name: pair.baseToken?.name,
+        marketCap: firstMeaningfulNumber(pair.marketCap, pair.fdv) || 0,
+        volume24h: firstMeaningfulNumber(pair.volume?.h24) || 0,
+        liquidityUsd: firstMeaningfulNumber(pair.liquidity?.usd) || 0,
+        row: livePairCandidateToRow({ tokenMint: pair.baseToken?.address, source: "dexscreener", profile: { ...pair, symbol: pair.baseToken?.symbol, name: pair.baseToken?.name } })
+      };
       if (!solDexCandidate || tickerMarketRowStrength(candidate.marketCap, candidate.volume24h, candidate.liquidityUsd) > tickerMarketRowStrength(solDexCandidate.marketCap, solDexCandidate.volume24h, solDexCandidate.liquidityUsd)) solDexCandidate = candidate;
     }
   }
@@ -34651,12 +34711,25 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
     };
     if (network === "robinhood") add(address, row, "geckoterminal");
     if (network === "solana" && isLikelySolMint(address)) {
-      const candidate = { marketCap: Number(row.marketCapUsd) || 0, volume24h: Number(row.volume24hUsd) || 0, liquidityUsd: Number(row.liquidityUsd) || 0 };
+      const candidate = {
+        address,
+        symbol: ticker,
+        name: ticker,
+        marketCap: Number(row.marketCapUsd) || 0,
+        volume24h: Number(row.volume24hUsd) || 0,
+        liquidityUsd: Number(row.liquidityUsd) || 0,
+        row: { tokenMint: address, symbol: ticker, marketCap: Number(row.marketCapUsd) || 0, volumeH24: Number(row.volume24hUsd) || 0, liquidityUsd: Number(row.liquidityUsd) || 0 }
+      };
       if (!solDexCandidate || tickerMarketRowStrength(candidate.marketCap, candidate.volume24h, candidate.liquidityUsd) > tickerMarketRowStrength(solDexCandidate.marketCap, solDexCandidate.volume24h, solDexCandidate.liquidityUsd)) solDexCandidate = candidate;
     }
   }
-  const providersAvailable = Boolean(dexData || geckoData);
-  const feed = (candidates.size || providersAvailable) ? [] : await scanFastTimeout(rhFeedTokens().catch(() => []), 1_800, []);
+  const indexedStrong = [...candidates.values()].some((candidate) =>
+    Number(candidate.marketCap) >= 50_000 && Number(candidate.volume24h) >= 20_000
+  );
+  // An exact match that is absent or weak in one search result is exactly when the chain-native feed
+  // matters. Await the already-running request; do not confuse "provider answered" with "lookup done".
+  const shouldReadFeed = Boolean(options.includeFeed) || !indexedStrong;
+  const feed = shouldReadFeed ? await feedPromise : [];
   for (const row of Array.isArray(feed) ? feed : []) add(row.address, row, row.source || "robinhood-feed");
   // Blockscout/feed rows sometimes identify the correct token but carry null market fields. Hydrate
   // the highest-holder exact matches through per-token pool endpoints, then rank real numbers.
@@ -34693,13 +34766,69 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
     pick.solDexCandidate = solDexCandidate;
     if (pick.dexPair) _rhKindCache.set(pick.address.toLowerCase(), { at: Date.now(), contract: true });
   }
-  const lookupComplete = Boolean(dexData || geckoData || (pick && (pick.marketCap > 0 || pick.volume24h > 0)));
-  rhTickerTargetCache.set(key, { at: Date.now(), candidate: pick, lookupComplete });
+  const indexedResponseComplete = Array.isArray(dexData?.pairs) || Array.isArray(geckoData?.data);
+  const feedResponseComplete = !shouldReadFeed || Array.isArray(feed);
+  const lookupComplete = Boolean(
+    (pick && (pick.marketCap > 0 || pick.volume24h > 0))
+    || (indexedResponseComplete && feedResponseComplete)
+  );
+  rhTickerTargetCache.set(key, { at: Date.now(), candidate: pick, solDexCandidate, lookupComplete });
   if (rhTickerTargetCache.size > 300) rhTickerTargetCache.delete(rhTickerTargetCache.keys().next().value);
+  if (!pick) {
+    console.warn(`[ticker] $${q.toUpperCase()} Robinhood miss · dex=${Array.isArray(dexData?.pairs) ? dexData.pairs.length : "err"} gecko=${Array.isArray(geckoData?.data) ? geckoData.data.length : "err"} feed=${Array.isArray(feed) ? feed.length : "err"} complete=${lookupComplete}`);
+  }
   return pick;
 }
 async function resolveRhTickerToAddress(symbol) {
   return (await resolveRhTickerCandidate(symbol))?.address || null;
+}
+async function reconcileIndexedSolTickerCandidate(symbol, selectedMint, indexedCandidate) {
+  const key = String(symbol || "").replace(/^\$|^#/, "").trim().toLowerCase();
+  const indexedMint = String(indexedCandidate?.address || "").trim();
+  if (!key || !isLikelySolMint(indexedMint) || indexedMint === String(selectedMint || "")) {
+    return { mint: selectedMint || null, dominantIndexed: false, promoted: false };
+  }
+  const meta = tickerResolutionMetaCache.get(key);
+  const selected = (meta?.candidates || []).find((candidate) => candidate.mint === selectedMint) || null;
+  const indexedStrength = tickerMarketRowStrength(indexedCandidate.marketCap, indexedCandidate.volume24h, indexedCandidate.liquidityUsd);
+  const selectedStrength = tickerMarketRowStrength(selected?.marketCap, selected?.volume24h, selected?.liquidityUsd);
+  const dominantIndexed = indexedStrength > Math.max(20_000, selectedStrength * 2)
+    && Number(indexedCandidate.marketCap || 0) >= Math.max(20_000, Number(selected?.marketCap || 0) * 1.5)
+    && Number(indexedCandidate.volume24h || 0) >= Math.max(20_000, Number(selected?.volume24h || 0) * 1.5);
+  if (!dominantIndexed) return { mint: selectedMint || null, dominantIndexed: false, promoted: false };
+
+  // The RH resolver queried independent exact-symbol indexes in parallel. If those indexes found a
+  // dramatically stronger Sol market that the Sol request missed, safety-check that address directly.
+  // Never substitute the tiny clone when the dominant exact market is unsafe or could not be checked.
+  const row = indexedCandidate.row || {
+    tokenMint: indexedMint,
+    symbol: String(indexedCandidate.symbol || symbol || "").replace(/^\$+/, ""),
+    marketCap: Number(indexedCandidate.marketCap) || 0,
+    liquidityUsd: Number(indexedCandidate.liquidityUsd) || 0,
+    volumeH24: Number(indexedCandidate.volume24h) || 0
+  };
+  const shield = await scanFastTimeout(webSlimeShield(indexedMint), 2_500, null);
+  if (scanRecommendationBlocked(row, shield)) {
+    console.warn(`[ticker] $${String(symbol).toUpperCase()} suppressed weaker Sol clone because dominant indexed market could not pass safety`);
+    return { mint: null, dominantIndexed: true, promoted: false };
+  }
+  const promoted = {
+    mint: indexedMint,
+    marketCap: Number(indexedCandidate.marketCap) || 0,
+    liquidityUsd: Number(indexedCandidate.liquidityUsd) || 0,
+    volume24h: Number(indexedCandidate.volume24h) || 0,
+    holders: 0,
+    score: tickerCandidateScore({ ...indexedCandidate, sources: new Set(["cross-index"]) }),
+    sources: ["cross-index"],
+    verdict: String(shield?.verdict || "").toUpperCase()
+  };
+  if (meta) {
+    const candidates = [promoted, ...(meta.candidates || []).filter((candidate) => candidate.mint !== indexedMint)].slice(0, 5);
+    tickerResolutionMetaCache.set(key, { ...meta, at: Date.now(), selectedMint: indexedMint, candidates });
+  }
+  cashtagMintCache.set(key, { at: Date.now(), mint: indexedMint });
+  console.info(`[ticker] $${String(symbol).toUpperCase()} promoted independent Sol index winner ${shortMint(indexedMint)} mc=${Math.round(promoted.marketCap)} vol24=${Math.round(promoted.volume24h)}`);
+  return { mint: indexedMint, dominantIndexed: true, promoted: true };
 }
 async function resolveTickerToScanTarget(symbol) {
   const q = String(symbol || "").replace(/^\$|^#/, "").trim();
@@ -34716,7 +34845,12 @@ async function resolveTickerToScanTarget(symbol) {
   // A Dex-proven RH market leading the exact Sol match by 2x in BOTH MC and volume is decisive.
   // Return it immediately while the deeper Sol safety lookup finishes harmlessly in the background.
   if (tickerRhClearlyDominates(rh, rh?.solDexCandidate)) return rh.address;
-  const sol = await solPromise;
+  let sol = await solPromise;
+  const indexedSol = rh?.solDexCandidate || rhLookup?.solDexCandidate || null;
+  if (indexedSol) {
+    const reconciled = await reconcileIndexedSolTickerCandidate(q, sol, indexedSol).catch(() => ({ mint: sol }));
+    sol = reconciled.mint || null;
+  }
   if (!sol) return rh?.address || null;
   if (!rh) {
     const solMeta = tickerResolutionMetaCache.get(q.toLowerCase());
@@ -35085,6 +35219,21 @@ async function enrichScanSecurityOnchain(mint, rug, bonding) {
 // populated seconds earlier.
 const slimeScanCache = new Map();
 const slimeScanInFlight = new Map();
+function slimeScanHasMarketEvidence(scan, mint = "") {
+  if (!scan) return false;
+  const stats = scanMarketStatsFromSources({
+    meta: scan.meta,
+    bonding: scan.bonding,
+    best: scan.best,
+    rug: scan.rug,
+    supply: scan.supply,
+    mint
+  });
+  return Number(stats?.mc) > 0
+    || Number(stats?.liq) > 0
+    || Number(stats?.vol?.value) > 0
+    || firstMeaningfulNumber(scan?.meta?.priceUsd, scan?.bonding?.priceUsd, scan?.best?.priceUsd) > 0;
+}
 async function gatherSlimeScan(mint, options = {}) {
   const cleanMint = String(mint || "").trim();
   if (!isLikelySolMint(cleanMint)) return null;
@@ -35232,11 +35381,14 @@ async function gatherSlimeScan(mint, options = {}) {
 
   const managed = refresh.then((scan) => {
     const useful = Boolean(scan && (scan.meta || scan.bonding || scan.shield || scan.rug || scan.onchain || scan.best));
-    if (useful) {
+    const marketReady = useful && slimeScanHasMarketEvidence(scan, cleanMint);
+    if (marketReady) {
       slimeScanCache.set(cleanMint, { at: Date.now(), scan });
       if (slimeScanCache.size > 500) slimeScanCache.delete(slimeScanCache.keys().next().value);
       return scan;
     }
+    // Identity/security-only responses still render, but are never promoted to a 20-second "fresh"
+    // result. The next retry must hit providers again instead of repeating an all-n/a market card.
     if (cached && now - cached.at < staleTtlMs) return { ...cached.scan, stale: true, staleReason: "provider-refresh-empty" };
     return scan;
   }).catch((error) => {
@@ -38936,6 +39088,20 @@ function rhScanIdentityRemember(key, v = {}) {
 function rhScanHasMarketEvidence(value = {}) {
   return [value.priceUsd, value.mc, value.liq, value.vol1, value.vol24].some((field) => Number(field) > 0);
 }
+function mergeRhScanWithTickerCandidate(value = {}, candidate = null, address = "") {
+  const merged = { ...(value || {}) };
+  merged.address = firstString(merged.address, address, candidate?.address);
+  merged.chain = "robinhood";
+  merged.symbol = firstString(merged.symbol, candidate?.symbol);
+  merged.name = firstString(merged.name, candidate?.name, candidate?.symbol);
+  merged.imageUrl = firstString(merged.imageUrl, candidate?.imageUrl);
+  if (!(Number(merged.mc) > 0)) merged.mc = Number(candidate?.marketCap) || 0;
+  if (!(Number(merged.liq) > 0)) merged.liq = Number(candidate?.liquidityUsd) || 0;
+  if (!(Number(merged.vol24) > 0)) merged.vol24 = Number(candidate?.volume24h) || 0;
+  if (!(Number(merged.holders) > 0)) merged.holders = Number(candidate?.holders) || 0;
+  if (!merged.explorer && merged.address) merged.explorer = `https://robinhoodchain.blockscout.com/token/${merged.address}`;
+  return merged;
+}
 function rhScanCacheTtl(value = {}) {
   return rhScanHasMarketEvidence(value) ? 60_000 : 5_000;
 }
@@ -39491,22 +39657,31 @@ async function sendRhScanCard(chatId, address, options = {}) {
     const quickText = [String(options.contextHtml || "").trim(), formatRhScanCard(quickInfo), "⏳ <i>Loading full safety, holders, ATH and socials…</i>"].filter(Boolean).join("\n\n");
     const kb = compactTradeCardKeyboard(address, "s");
     const quickPng = await renderRhScanCardPng(quickInfo, `quick:${address}`).catch(() => null);
-    const sent = quickPng
-      ? await sendPhoto(chatId, "rh-scan.png", quickPng, quickText, kb, "HTML").catch(() => null)
-      : await telegram("sendMessage", { chat_id: chatId, text: quickText, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb }).catch(() => null);
-    const quickHasPhoto = Boolean(quickPng && sent?.message_id);
+    let sent = null;
+    let quickHasPhoto = false;
+    if (quickPng) {
+      try {
+        sent = await sendPhoto(chatId, "rh-scan.png", quickPng, quickText, kb, "HTML");
+        quickHasPhoto = Boolean(sent?.message_id);
+      } catch (error) {
+        console.warn(`[tg-scan] quick RH photo failed ${address.slice(0, 10)}…: ${friendlyError(error)}`);
+      }
+    }
+    if (!sent) {
+      sent = await telegram("sendMessage", { chat_id: chatId, text: quickText, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb }).catch((error) => {
+        console.warn(`[tg-scan] quick RH text failed ${address.slice(0, 10)}…: ${friendlyError(error)}`);
+        return null;
+      });
+    }
     if (sent?.message_id) {
       void (async () => {
         const loaded = await fullScanPromise;
-        if (!loaded || !rhScanHasMarketEvidence(loaded)) {
+        const mergedLoaded = mergeRhScanWithTickerCandidate(loaded || {}, fastCandidate, address);
+        if (!loaded || !rhScanHasMarketEvidence(mergedLoaded)) {
           const message = options.message || null;
           // Keep Blockscout identity/holder data instead of reverting a valid
           // just-launched coin to the generic $RH all-n/a placeholder.
-          if (loaded) Object.assign(quickInfo, loaded, {
-            symbol: loaded.symbol || quickInfo.symbol,
-            name: loaded.name || quickInfo.name,
-            imageUrl: loaded.imageUrl || quickInfo.imageUrl
-          });
+          if (loaded) Object.assign(quickInfo, mergedLoaded);
           const callerLine = await buildScanCallerFooter(chatId, address, Number(loaded?.mc || quickInfo.mc || 0), message).catch(() => "");
           const failedText = [String(options.contextHtml || "").trim(), formatRhScanCard(quickInfo), callerLine, "⚠️ <i>Deep providers are still catching up — tap Refresh in More.</i>"].filter(Boolean).join("\n\n");
           if (quickHasPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: sent.message_id, caption: failedText, parse_mode: "HTML", reply_markup: kb }).catch(() => {});
@@ -39519,13 +39694,9 @@ async function sendRhScanCard(chatId, address, options = {}) {
             rhScanCache.delete(String(address || "").toLowerCase());
             const retry = await gatherRhScan(address).catch(() => null);
             if (!retry) continue;
-            Object.assign(quickInfo, retry, {
-              symbol: retry.symbol || quickInfo.symbol,
-              name: retry.name || quickInfo.name,
-              imageUrl: retry.imageUrl || quickInfo.imageUrl
-            });
+            Object.assign(quickInfo, mergeRhScanWithTickerCandidate(retry, fastCandidate, address));
             if (!rhScanHasMarketEvidence(quickInfo)) continue;
-            if (message?.chat && !isPrivateChat(message.chat)) await recordTelegramCall(message, address, quickInfo.mc).catch(() => {});
+            if (message?.chat && !isPrivateChat(message.chat)) await recordTelegramCall(message, address, quickInfo.mc, quickInfo.symbol).catch(() => {});
             const retryCaller = await buildScanCallerFooter(chatId, address, quickInfo.mc, message).catch(() => "");
             const retryText = [String(options.contextHtml || "").trim(), formatRhScanCard(quickInfo), retryCaller].filter(Boolean).join("\n\n");
             const retryPng = await renderRhScanCardPng(quickInfo, quickInfo.symbol || address).catch(() => null);
@@ -39536,31 +39707,29 @@ async function sendRhScanCard(chatId, address, options = {}) {
           }
           return;
         }
-        const info = {
-          ...loaded,
-          symbol: loaded.symbol || fastCandidate?.symbol || options.tickerSymbol || "RH",
-          name: loaded.name || fastCandidate?.name || fastCandidate?.symbol || options.tickerSymbol || "Robinhood token",
-          imageUrl: loaded.imageUrl || fastCandidate?.imageUrl || ""
-        };
+        const info = mergeRhScanWithTickerCandidate(loaded, fastCandidate, address);
+        info.symbol = info.symbol || options.tickerSymbol || "RH";
+        info.name = info.name || options.tickerSymbol || "Robinhood token";
         const message = options.message || null;
-        if (message?.chat && !isPrivateChat(message.chat)) await recordTelegramCall(message, address, info.mc).catch(() => {});
+        if (message?.chat && !isPrivateChat(message.chat)) await recordTelegramCall(message, address, info.mc, info.symbol).catch(() => {});
         const callerLine = await buildScanCallerFooter(chatId, address, info.mc, message).catch(() => "");
         const fullText = [String(options.contextHtml || "").trim(), formatRhScanCard(info), callerLine].filter(Boolean).join("\n\n");
         const fullPng = await renderRhScanCardPng(info, info.symbol || address).catch(() => null);
         if (quickHasPhoto && fullPng) await editMessagePhotoBuffer(chatId, sent.message_id, fullPng, fullText, kb).catch(() => {});
         else if (quickHasPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: sent.message_id, caption: fullText, parse_mode: "HTML", reply_markup: kb }).catch(() => {});
         else await telegram("editMessageText", { chat_id: chatId, message_id: sent.message_id, text: fullText, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb }).catch(() => {});
-      })().catch(() => {});
+      })().catch((error) => console.warn(`[tg-scan] RH background upgrade failed ${address.slice(0, 10)}…: ${friendlyError(error)}`));
       return;
     }
   }
-  const info = await fullScanPromise;
+  const loadedInfo = await fullScanPromise;
+  const info = loadedInfo ? mergeRhScanWithTickerCandidate(loadedInfo, fastCandidate, address) : null;
   if (!info) {
     await say(chatId, "🪶 Couldn't pull that Robinhood coin yet — paste a valid Robinhood Chain contract (0x…).");
     return;
   }
   const message = options.message || null;
-  if (message?.chat && !isPrivateChat(message.chat)) await recordTelegramCall(message, address, info.mc).catch(() => {});
+  if (message?.chat && !isPrivateChat(message.chat)) await recordTelegramCall(message, address, info.mc, info.symbol).catch(() => {});
   const callerLine = await buildScanCallerFooter(chatId, address, info.mc, message).catch(() => "");
   const text = [String(options.contextHtml || "").trim(), formatRhScanCard(info), callerLine].filter(Boolean).join("\n\n");
   const kb = compactTradeCardKeyboard(address, "s");
@@ -44081,7 +44250,7 @@ async function deliverTelegramSolScan({ chatId, message, mint, tickerSymbol = ""
   const stats = scan ? scanMarketStatsFromSources({ meta: scan.meta, bonding: scan.bonding, best: scan.best, rug: scan.rug, supply: scan.supply, mint }) : null;
   const curMc = Number(stats?.mc) || 0;
   const inChannel = Boolean(message?.chat && !isPrivateChat(message.chat));
-  if (inChannel) await recordTelegramCall(message, mint, curMc).catch(() => {});
+  if (inChannel) await recordTelegramCall(message, mint, curMc, firstString(scan?.meta?.symbol, scan?.bonding?.symbol, tickerSymbol)).catch(() => {});
   const callerLine = await buildScanCallerFooter(message?.chat?.id, mint, curMc, message).catch(() => "");
   const matchLine = tickerScanSelectionLine(tickerSymbol, mint);
   const scanContextLine = [String(contextHtml || "").trim(), matchLine, callerLine].filter(Boolean).join("\n");
@@ -44118,6 +44287,7 @@ async function deliverTelegramSolScan({ chatId, message, mint, tickerSymbol = ""
 // /look <CA>: instant SlimeShield read with trade links - the group-native version of
 // pasting a CA into Slime Scope.
 async function handleTelegramLookCommand(chatId, message, argument, options = {}) {
+  void telegram("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {});
   // One resolver for CA, Dex/Pump links, $tickers, bare scan tickers, and Robinhood Chain 0x contracts.
   const target = await resolveScanTargetFromText(argument).catch(() => null);
   const tickerSymbol = String(options.tickerSymbol || extractCashtags(String(argument || ""))[0] || extractBareTickerHints(String(argument || ""))[0] || "").replace(/^\$+/, "").trim().toUpperCase();
@@ -44126,24 +44296,25 @@ async function handleTelegramLookCommand(chatId, message, argument, options = {}
     if (!options.skipCooldown && tgCommandOnCooldown(chatId, `look:${rhAddr.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return;
     const tickerLine = tickerScanSelectionLine(tickerSymbol, rhAddr);
     const contextHtml = [String(options.contextHtml || "").trim(), tickerLine].filter(Boolean).join("\n");
-    if (await isRhContract(rhAddr).catch(() => false)) await sendRhScanCard(chatId, rhAddr, { ...options, contextHtml, message });
+    const provenTickerCoin = Boolean(rhTickerCandidateForTarget(tickerSymbol, rhAddr)?.dexPair);
+    if (provenTickerCoin || await isRhContract(rhAddr).catch(() => false)) await sendRhScanCard(chatId, rhAddr, { ...options, contextHtml, message });
     else await sendWalletScanCard(chatId, rhAddr);
     return;
   }
   const mint = isLikelySolMint(target) ? String(target) : "";
   if (!mint) {
-    await say(chatId, "Usage: /look <token CA> — Solana mint OR Robinhood Chain 0x… address. I'll run a SlimeShield read with chart + quick-buy.");
+    if (tickerSymbol) await sayHtml(chatId, `Couldn't verify a strong exact market for <b>$${escapeTelegramHtml(tickerSymbol)}</b> yet. Try again in a few seconds or paste the coin CA.`);
+    else await say(chatId, "Usage: /look <token CA> — Solana mint OR Robinhood Chain 0x… address. I'll run a SlimeShield read with chart + quick-buy.");
     return;
   }
   // Deduplicate only the SAME token. A busy group may paste several different CAs within 20 seconds;
   // the old chat-wide cooldown silently discarded all but the first and looked like a broken scanner.
   if (!options.skipCooldown && tgCommandOnCooldown(chatId, `look:${mint.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return;
   const keyboard = slimeScanKeyboard(mint, tickerSymbol);
-  void telegram("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {});
   // Clean OgreScanBot-style scan card: stats + audit + socials + a prefilled
   // "Buy on SlimeWire" button. The all-in-one funnel — scan in any channel, buy on the site.
   const inChannelArrival = Boolean(message?.chat && !isPrivateChat(message.chat));
-  if (inChannelArrival) await recordTelegramCall(message, mint, 0).catch(() => {});
+  if (inChannelArrival) await recordTelegramCall(message, mint, 0, tickerSymbol).catch(() => {});
   const scanPromise = gatherSlimeScan(mint).catch(() => null);
   const firstScan = await Promise.race([
     scanPromise.then((value) => ({ value })),
@@ -44158,12 +44329,44 @@ async function handleTelegramLookCommand(chatId, message, argument, options = {}
       `<code>${escapeTelegramHtml(mint)}</code>`,
       "⏳ <i>Loading live market, safety, holders, volume and ATH…</i>"
     ].filter(Boolean).join("\n");
-    const sent = quickPng ? await sendPhoto(chatId, "scan.png", quickPng, quickText, keyboard, "HTML").catch(() => null) : null;
+    let sent = null;
+    let quickHasPhoto = false;
+    if (quickPng) {
+      try {
+        sent = await sendPhoto(chatId, "scan.png", quickPng, quickText, keyboard, "HTML");
+        quickHasPhoto = Boolean(sent?.message_id);
+      } catch (error) {
+        console.warn(`[tg-scan] quick Sol photo failed ${shortMint(mint)}: ${friendlyError(error)}`);
+      }
+    }
+    // A Telegram media rejection must never look like a dead scanner. Post the same quick card as
+    // text immediately, then upgrade that exact message when the full provider fan-out completes.
+    if (!sent) {
+      sent = await telegram("sendMessage", {
+        chat_id: chatId,
+        text: quickText,
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+        reply_markup: keyboard
+      }).catch((error) => {
+        console.warn(`[tg-scan] quick Sol text failed ${shortMint(mint)}: ${friendlyError(error)}`);
+        return null;
+      });
+    }
     if (sent?.message_id) {
       void (async () => {
-        const loaded = await scanPromise;
-        await deliverTelegramSolScan({ chatId, message, mint, tickerSymbol, contextHtml: options.contextHtml, keyboard, scan: loaded, messageId: sent.message_id, isPhoto: true });
-      })().catch(() => {});
+        let loaded = await scanPromise;
+        await deliverTelegramSolScan({ chatId, message, mint, tickerSymbol, contextHtml: options.contextHtml, keyboard, scan: loaded, messageId: sent.message_id, isPhoto: quickHasPhoto });
+        if (slimeScanHasMarketEvidence(loaded, mint)) return;
+        // Newly indexed pools and brief rate limits should heal the same card without another paste.
+        for (const waitMs of [4_000, 12_000]) {
+          await sleep(waitMs);
+          loaded = await gatherSlimeScan(mint, { force: true }).catch(() => null);
+          if (!slimeScanHasMarketEvidence(loaded, mint)) continue;
+          await deliverTelegramSolScan({ chatId, message, mint, tickerSymbol, contextHtml: options.contextHtml, keyboard, scan: loaded, messageId: sent.message_id, isPhoto: quickHasPhoto });
+          return;
+        }
+      })().catch((error) => console.warn(`[tg-scan] Sol background upgrade failed ${shortMint(mint)}: ${friendlyError(error)}`));
       return;
     }
   }
@@ -44173,7 +44376,7 @@ async function handleTelegramLookCommand(chatId, message, argument, options = {}
   const inChannel = Boolean(message && message.chat && !isPrivateChat(message.chat));
   const liveStats = scan ? scanMarketStatsFromSources({ meta: scan.meta, bonding: scan.bonding, best: scan.best, rug: scan.rug, supply: scan.supply, mint }) : null;
   const curMc = Number(liveStats?.mc) || 0;
-  if (inChannel) await recordTelegramCall(message, mint, curMc).catch(() => {});
+  if (inChannel) await recordTelegramCall(message, mint, curMc, firstString(scan?.meta?.symbol, scan?.bonding?.symbol, tickerSymbol)).catch(() => {});
   // Footer is built ALWAYS now (DM + $ticker too): buildScanCallerFooter looks up the earliest
   // caller of this mint across the whole warehouse, so it surfaces who called it first even when
   // this exact chat never did. Empty only when nobody anywhere has called the coin.
@@ -44462,7 +44665,7 @@ function kolCallerCardKeyboard(rows = []) {
   const symbol = String(top.symbol || shortMint(top.tokenMint)).replace(/^\$+/, "").slice(0, 16);
   return { inline_keyboard: [
     [{ text: "📈 Top Chart", url: links.site }, { text: "⚡ Buy on Site", url: links.siteBuy }],
-    [{ text: "💬 Explain inline", switch_inline_query_current_chat: top.tokenMint }, { text: "🏆 Top Callers", callback_data: "clb:1w" }],
+    [{ text: "💬 Explain inline", switch_inline_query_current_chat: top.tokenMint }, { text: "🏆 Top Callers", callback_data: "clb:14d" }],
     [{ text: "🐋 KOL Tracker", url: slimewirePublicUrl("/terminal", { tab: "kol", source: "telegram" }) }, { text: "Post to X", url: xPostIntentUrl({
       text: `KOL caller card: tracked wallets are moving on $${symbol}. Verifying on SlimeWire.`,
       url: links.tokenPage,
@@ -44533,10 +44736,11 @@ async function handleTelegramLeaderboardCommand(chatId) {
 // (win-rate × size on their RESOLVED calls). The window buttons re-filter the same board in place.
 // Thin windows need fewer resolved calls to rank so "Today" isn't perpetually empty.
 const CALLER_LB_WINDOWS = [
-  { key: "today", label: "Today", ms: 24 * 60 * 60 * 1000, minResolved: 1 },
-  { key: "1w", label: "1 Week", ms: 7 * 24 * 60 * 60 * 1000, minResolved: 2 },
-  { key: "1m", label: "1 Month", ms: 30 * 24 * 60 * 60 * 1000, minResolved: 3 },
-  { key: "6m", label: "6 Months", ms: 180 * 24 * 60 * 60 * 1000, minResolved: 3 }
+  { key: "today", label: "24H", ms: 24 * 60 * 60 * 1000, minResolved: 1 },
+  { key: "1w", label: "7D", ms: 7 * 24 * 60 * 60 * 1000, minResolved: 1 },
+  { key: "14d", label: "14D", ms: 14 * 24 * 60 * 60 * 1000, minResolved: 1 },
+  { key: "1m", label: "30D", ms: 30 * 24 * 60 * 60 * 1000, minResolved: 2 },
+  { key: "6m", label: "6M", ms: 180 * 24 * 60 * 60 * 1000, minResolved: 3 }
 ];
 function callerLeaderboardKeyboard(activeKey) {
   const proofUrl = slimewirePublicUrl("/proof", { source: "telegram", board: "callers" });
@@ -44565,8 +44769,41 @@ function bestCallerLeaderboardCall(calls, caller) {
     .filter((call) => call._px > 0)
     .sort((a, b) => b._px - a._px || Number(b.firstAt || 0) - Number(a.firstAt || 0))[0] || null;
 }
+function callerLeaderboardPoints(caller = {}) {
+  const confidence = Math.min(2, Math.max(0, Number(caller.resolved) || 0) * 0.1);
+  const points = Math.min(10, Math.max(0, Number(caller.score) || 0) * 8 + confidence);
+  return Math.round(points * 4) / 4;
+}
+async function hydrateCallerLeaderboardSymbols(calls = []) {
+  const missing = calls.filter((call) => call?.mint && !call.symbol).slice(0, 20);
+  if (!missing.length) return calls;
+  const sol = [...new Set(missing.filter((call) => isLikelySolMint(call.mint)).map((call) => call.mint))];
+  const rh = [...new Set(missing.filter((call) => /^0x[0-9a-fA-F]{40}$/.test(call.mint)).map((call) => call.mint))];
+  const [solPairs, rhPairs] = await Promise.all([
+    sol.length ? fetchDexScreenerTokenPairsBatch(sol, { timeoutMs: 2_800 }).catch(() => []) : Promise.resolve([]),
+    rh.length ? fetchJson(`https://api.dexscreener.com/tokens/v1/robinhood/${rh.map(encodeURIComponent).join(",")}`, {
+      headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" }, timeoutMs: 2_800
+    }).catch(() => []) : Promise.resolve([])
+  ]);
+  const allPairs = [...(Array.isArray(solPairs) ? solPairs : []), ...(Array.isArray(rhPairs) ? rhPairs : [])];
+  for (const call of missing) {
+    const target = String(call.mint).toLowerCase();
+    const matches = allPairs.filter((pair) =>
+      String(pair?.baseToken?.address || "").toLowerCase() === target
+      || String(pair?.quoteToken?.address || "").toLowerCase() === target
+    );
+    const best = matches.sort(compareDexPairsForSniper)[0] || null;
+    const token = String(best?.baseToken?.address || "").toLowerCase() === target ? best?.baseToken : best?.quoteToken;
+    if (token?.symbol) call.symbol = String(token.symbol).replace(/^\$+/, "").slice(0, 18);
+    if (!call.symbol && /^0x/.test(target)) {
+      const identity = await rhScanIdentityGet(target).catch(() => null);
+      if (identity?.symbol) call.symbol = String(identity.symbol).replace(/^\$+/, "").slice(0, 18);
+    }
+  }
+  return calls;
+}
 async function buildCallerLeaderboardView(win, chatId) {
-  const w = CALLER_LB_WINDOWS.find((x) => x.key === win) || CALLER_LB_WINDOWS[1];
+  const w = CALLER_LB_WINDOWS.find((x) => x.key === win) || CALLER_LB_WINDOWS[2];
   let callers = [], scoped = [], roomTitle = "this channel";
   try {
     const store = await readTelegramCalls();
@@ -44575,48 +44812,69 @@ async function buildCallerLeaderboardView(win, chatId) {
     roomTitle = String(channelCalls.find((c) => c.chatTitle)?.chatTitle || "this channel").slice(0, 36);
     scoped = channelCalls.filter((c) => Number(c.firstAt) >= cutoff);
     const boards = callerIntel.buildLeaderboards(scoped, { minResolved: w.minResolved });
-    callers = (boards.callers || []).slice(0, 10);
+    callers = (boards.callers || []).slice(0, 5);
   } catch {}
   const topByCaller = new Map();
   for (const c of callers) {
     const top = bestCallerLeaderboardCall(scoped, c);
     if (top) topByCaller.set(String(c.id), top);
   }
-  const missingSymbols = [...new Set([...topByCaller.values()].filter((c) => c.mint && !c.symbol).map((c) => c.mint))].slice(0, 10);
-  if (missingSymbols.length) {
-    try {
-      const pairs = await fetchDexScreenerTokenPairsBatch(missingSymbols, { timeoutMs: 3200 }).catch(() => []);
-      for (const top of topByCaller.values()) {
-        if (top.symbol || !top.mint) continue;
-        const best = bestDexPairForToken(top.mint, (pairs || []).filter((p) => pairMatchesToken(p, top.mint)));
-        const sym = best?.baseToken?.symbol || best?.quoteToken?.symbol || "";
-        if (sym) top.symbol = String(sym).slice(0, 18);
-      }
-    } catch {}
-  }
+  const resolvedCalls = scoped.filter((call) => call.status === "resolved");
+  const topCalls = resolvedCalls
+    .map((call) => ({ ...call, _px: Number(call.peakX) || callerIntel.peakMultiple(call) || 0 }))
+    .filter((call) => call._px >= 2)
+    .sort((a, b) => b._px - a._px || Number(b.firstAt || 0) - Number(a.firstAt || 0))
+    .slice(0, 10);
+  await hydrateCallerLeaderboardSymbols([...topByCaller.values(), ...topCalls]).catch(() => {});
   const medal = (i) => (i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `<b>${i + 1}.</b>`);
-  const header = `🏆 <b>Top Callers · ${escapeTelegramHtml(roomTitle)} · ${w.label}</b>`;
-  if (!callers.length) {
+  const header = `🏆 <b>Leaderboard · ${escapeTelegramHtml(roomTitle)}</b>`;
+  if (!scoped.length) {
     return {
-      text: [header, "", "No caller has enough <b>resolved</b> calls in this window yet. Try a longer window — or keep dropping <code>$tickers</code> and contract addresses in your groups; the swamp scores every call.", "", "<i>A call resolves once it 2x's (win) or fades out — then it counts here.</i>"].join("\n"),
+      text: [header, "", `No calls in the last <b>${w.label}</b> yet. Drop a <code>$ticker</code> or CA; SlimeWire records the first caller and tracks the result for this group.`].join("\n"),
       markup: callerLeaderboardKeyboard(w.key)
     };
   }
-  const lines = callers.map((c, i) => {
-    const hit = Math.round((c.smoothedHitRate || 0) * 100);
+  const callerLines = callers.slice(0, 3).map((c, i) => {
     const name = escapeTelegramHtml(String(c.name || "anon").slice(0, 22));
-    const top = topByCaller.get(String(c.id));
-    const topCoin = top && top.mint
-      ? ` · top <a href="${slimewireTokenLinks(top.mint).site}"><b>$${escapeTelegramHtml(String(top.symbol || shortMint(top.mint)).slice(0, 14))}</b></a> <b>${Math.round((top._px || 0) * 100) / 100}x</b>`
-      : (Number(c.bestPeakX) >= 2 ? ` · best <b>${c.bestPeakX}x</b>` : "");
-    return `${medal(i)} <b>${name}</b> — ${hit}% hit · ${c.wins}W/${c.losses}L · avg <b>${c.avgPeakX}x</b>${topCoin}`;
+    return `${medal(i)} <b>${name}</b> <b>[${callerLeaderboardPoints(c).toFixed(2).replace(/0$/, "")} pts]</b>`;
   });
+  const wins = resolvedCalls.filter((call) => call.outcome === "won").length;
+  const peakValues = resolvedCalls.map((call) => Number(call.peakX) || callerIntel.peakMultiple(call) || 0).filter((value) => value > 0).sort((a, b) => a - b);
+  const medianPeak = peakValues.length ? peakValues[Math.floor((peakValues.length - 1) / 2)] : 0;
+  const avgPeak = peakValues.length ? peakValues.reduce((sum, value) => sum + value, 0) / peakValues.length : 0;
+  const hitRate = resolvedCalls.length ? Math.round((wins / resolvedCalls.length) * 100) : 0;
+  const topCallLines = topCalls.map((call, index) => {
+    const chain = /^0x/i.test(call.mint) ? "🪶" : "◎";
+    const symbol = escapeTelegramHtml(String(call.symbol || shortMint(call.mint)).slice(0, 16));
+    const caller = escapeTelegramHtml(String(call.callerName || "anon").slice(0, 20));
+    const multiple = Math.round(call._px * 10) / 10;
+    return `${index + 1}. ${chain} <a href="${slimewireTokenLinks(call.mint).site}"><b>$${symbol}</b></a> · ${caller} <b>[${multiple}x]</b>`;
+  });
+  const text = [
+    header,
+    "",
+    "👑 <b>Top Callers</b>",
+    ...(callerLines.length ? callerLines : ["<i>Calls are still resolving — rankings appear as outcomes land.</i>"]),
+    "",
+    "📊 <b>Group Stats</b>",
+    `├ Period   <b>${w.label}</b>`,
+    `├ Calls    <b>${scoped.length}</b>`,
+    `├ Resolved <b>${resolvedCalls.length}</b>`,
+    `├ Hit Rate <b>${hitRate}%</b>`,
+    `├ Median Peak <b>${medianPeak > 0 ? `${Math.round(medianPeak * 10) / 10}x` : "pending"}</b>`,
+    `└ Avg Peak <b>${avgPeak > 0 ? `${Math.round(avgPeak * 10) / 10}x` : "pending"}</b>`,
+    "",
+    "🚀 <b>Top Calls</b>",
+    ...(topCallLines.length ? topCallLines : ["<i>No 2x calls in this period yet.</i>"]),
+    "",
+    "<i>First caller per coin wins the record. Stats are isolated to this group.</i>"
+  ].join("\n");
   return {
-    text: [header, ...lines, "", `<i>Ranked by win-rate × size on ${w.label.toLowerCase()}'s resolved calls. Drop a $ticker or CA in chat — the swamp tracks who's really printing.</i>`].join("\n"),
+    text,
     markup: callerLeaderboardKeyboard(w.key)
   };
 }
-async function handleTelegramCallerLeaderboardCommand(chatId, win = "1w") {
+async function handleTelegramCallerLeaderboardCommand(chatId, win = "14d") {
   if (tgCommandOnCooldown(chatId, "callerlb", TG_ALPHA_COOLDOWN_MS)) return;
   const view = await buildCallerLeaderboardView(win, chatId);
   await sayHtml(chatId, view.text, view.markup);
@@ -44709,7 +44967,7 @@ async function handleGroupStatsCommand(chatId) {
   }
   if (!topCallers.length && !karma.length) lines.push("", "<i>Drop $tickers/CAs and thank helpful members — stats fill in as the group gets active.</i>");
   lines.push("", `<i>Full board: /leaderboard · your rep: /rep</i>`);
-  await sayHtml(chatId, lines.join("\n"), { inline_keyboard: [[{ text: "🏆 Top callers", callback_data: "clb:1w" }]] });
+  await sayHtml(chatId, lines.join("\n"), { inline_keyboard: [[{ text: "🏆 Top callers", callback_data: "clb:14d" }]] });
 }
 
 async function handleTelegramProofCommand(chatId) {
@@ -46199,7 +46457,7 @@ async function handleGroupBotCallback(query, userId) {
     if (target === "snipe") { const s = (await readCommunitySnipe()).snipes[String(chatId)]; view = { text: communitySnipeStatusText(s), markup: communitySnipeCardMarkup(s) }; }
     else if (target === "room") view = await roomPnlView(chatId);
     else if (target === "signals") view = await signalsMenu(chatId, userId, isPrivateChat(query.message?.chat));
-    else if (target === "lb") view = await buildCallerLeaderboardView("1w", chatId);
+    else if (target === "lb") view = await buildCallerLeaderboardView("14d", chatId);
     else if (target === "narrative") view = narrativeRadarView();
     else if (target === "grad") view = await graduationGauntletView();
     else if (target === "copy") view = await copyMenuView(chatId, userId);
