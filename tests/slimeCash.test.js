@@ -23,6 +23,11 @@ test("the generated portal config rewrites a Render environment URL to the brand
   assert.doesNotMatch(buildWeb, /RENDER_EXTERNAL_URL/);
 });
 
+test("standalone app manifests are served with the PWA manifest content type", () => {
+  assert.match(server, /"\.webmanifest": "application\/manifest\+json; charset=utf-8"/);
+  assert.match(server, /STATIC_COMPRESSIBLE_RE = \/\\\.\(\?:js\|css\|html\|svg\|json\|webmanifest\|map\)\$\/i/);
+});
+
 test("SlimeCash recovery is durable and remains compatible with first-release account keys", () => {
   assert.match(server, /function cashRecoveryKeyFromText/);
   assert.match(server, /sc_\$\{crypto\.randomBytes\(32\)/);

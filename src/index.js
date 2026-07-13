@@ -10944,7 +10944,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
 // Compress text assets (js/css/html/svg/json) once per build and keep the result
 // in memory keyed by mtime+size, so we never re-compress per request or block the
 // event loop. The portal bundle and override CSS are large and very compressible.
-const STATIC_COMPRESSIBLE_RE = /\.(?:js|css|html|svg|json|map)$/i;
+const STATIC_COMPRESSIBLE_RE = /\.(?:js|css|html|svg|json|webmanifest|map)$/i;
 const staticAssetCompressionCache = new Map();
 
 function pickStaticEncoding(acceptEncoding = "") {
@@ -11549,6 +11549,7 @@ function webContentType(filePath) {
     ".js": "text/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".json": "application/json; charset=utf-8",
+    ".webmanifest": "application/manifest+json; charset=utf-8",
     ".png": "image/png",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
