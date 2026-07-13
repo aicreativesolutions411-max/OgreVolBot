@@ -14,7 +14,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.match(server, /requestUrl\.pathname === "\/fun"[\s\S]{0,300}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
-  assert.match(html, /<script defer src="\/fun\.js\?v=16"><\/script>/);
+  assert.match(html, /<script defer src="\/fun\.js\?v=17"><\/script>/);
 });
 
 test("/fun is installable as a separate PWA with a dedicated-origin escape", () => {
@@ -26,7 +26,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install Fun/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v3/);
+  assert.match(funWorker, /slimewire-fun-v4/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -94,6 +94,8 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(server, /await artworkPromise/);
   assert.match(server, /token-pairs\/v1\/robinhood/);
   assert.match(js, /\/api\/web\/token-image\?mint=/);
+  assert.match(js, /\/api\/web\/token-avatar\?mint=/);
+  assert.match(js, /resolvedCoinImageFromMetadata/);
   assert.match(js, /resolvedCoinImages: new Map/);
   assert.match(js, /state\.resolvedCoinImages\.set/);
   assert.match(js, /background-image:url\('\$\{coinBadge\(coin\)\}'\)/);
@@ -105,6 +107,9 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(server, /tokenImageFetchInFlight\.size < 12/);
   assert.match(server, /TOKEN_IMAGE_RESPONSE_CACHE_MAX = 160/);
   assert.match(server, /TOKEN_AVATAR_FAIL_TTL_MS = 60 \* 1000/);
+  assert.match(server, /rhScanIdentityMapLoad\(\)/);
+  assert.match(server, /scheduleTokenAvatarLookup\(row\.address, row\)/);
+  assert.match(server, /!row\.imageUrl && row\.iconUrl/);
   assert.match(js, /const detailPromise = request\(path\)/);
   assert.ok(js.indexOf("const searchResult = await request") < js.indexOf("const detailResult = await detailPromise"));
 });

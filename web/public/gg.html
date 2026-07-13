@@ -575,8 +575,15 @@
   // often stall the feed), so route them through images.weserv.nl — free, CORS-OK, edge-cached, resized
   // to a tiny webp thumbnail. Our own assets + data URLs pass straight through. Load eagerly (not lazy)
   // so the visible rows paint their picture immediately instead of waiting to scroll into view.
-  function coinImgSrc(u,sz){u=String(u||"");if(!u||u.startsWith("data:")||u.charAt(0)==="/"||u.indexOf("slimewire")>-1)return u;const s=sz||64;return"https://images.weserv.nl/?url="+encodeURIComponent(u.replace(/^https?:\/\//,""))+"&w="+s+"&h="+s+"&fit=cover&output=webp&q=80";}
-  function avImg(r,cls){const raw=av(r);const ph="/assets/slimewire/png/slimewire-mark.png?v=logo4";const u=coinImgSrc(raw)||raw||ph;return'<img class="'+cls+'" loading="eager" decoding="async" src="'+esc(u)+'" data-raw="'+esc(raw||"")+'" onerror="GG.avFallback(this)">';}
+  function avatarSourceCandidates(u){
+    u=String(u||"").trim();if(!u)return[];
+    const m=u.match(/(?:ipfs:\/\/|\/(?:ipfs)\/)([A-Za-z0-9][A-Za-z0-9._\/-]*)/i);
+    if(!m)return[u];
+    const cid=m[1].replace(/^ipfs\//i,"");
+    return["https://ipfs.io/ipfs/"+cid,"https://gateway.pinata.cloud/ipfs/"+cid,"https://dweb.link/ipfs/"+cid];
+  }
+  function coinImgSrc(u,sz){u=String(u||"");if(!u||u.startsWith("data:")||u.charAt(0)==="/"||u.indexOf("slimewire")>-1)return u;const source=avatarSourceCandidates(u)[0]||u,s=sz||64;return"https://images.weserv.nl/?url="+encodeURIComponent(source.replace(/^https?:\/\//,""))+"&w="+s+"&h="+s+"&fit=cover&output=webp&q=80";}
+  function avImg(r,cls){const raw=av(r),mint=String((r&&(r.tokenMint||r.mint||r.address))||"");const ph="/assets/slimewire/png/slimewire-mark.png?v=logo4",candidates=avatarSourceCandidates(raw);const u=coinImgSrc(raw)||raw||ph;return'<img class="'+cls+'" loading="eager" decoding="async" src="'+esc(u)+'" data-raw="'+esc(raw||"")+'" data-avatar-mint="'+esc(mint)+'" data-avatar-candidates="'+esc(candidates.join("|"))+'" onerror="GG.avFallback(this)">';}
   function toast(msg,err){const t=$("#toast");t.textContent=msg;t.className="toast show"+(err?" err":"");clearTimeout(t._t);t._t=setTimeout(()=>t.className="toast",3400);}
   function copy(text){navigator.clipboard?.writeText(text).then(()=>toast("Copied "+short(text))).catch(()=>{});}
   async function getJson(url,opts){try{const r=await fetch(url,opts);let d=null;try{d=await r.json();}catch(e){}return{ok:r.ok,status:r.status,d};}catch(e){return{ok:false,status:0,d:null};}}
@@ -4311,8 +4318,8 @@
     star:(m)=>{const r=(state.rows||[]).find(x=>x.tokenMint===m)||(state.watchRows||[]).find(x=>x.tokenMint===m)||{tokenMint:m};toggleStar(r);},
     enableAlerts:async()=>{const ok=await ensurePushSubscribed();toast(ok?"🔔 Alerts on — you'll get pinged":"Couldn't enable alerts (check browser permission)",!ok);if(state.route==="wallet")renderWallet();},
     shareRef:(link)=>{const t="I'm trading Solana memecoins on SlimeWire — fast terminal, 1-tap snipes, KOL copy. Join with my link:";window.open("https://x.com/intent/tweet?text="+encodeURIComponent(t)+"&url="+encodeURIComponent(link),"_blank","noopener");},
-    // Coin-image fallback: if the fast proxy thumbnail fails, try the raw URL once, then the logo.
-    avFallback:(img)=>{const ph="/assets/slimewire/png/slimewire-mark.png?v=logo4";const raw=img.getAttribute("data-raw")||"";if(raw&&!img.dataset.fb&&img.src.indexOf("weserv")>-1){img.dataset.fb="1";img.src=raw;}else{img.onerror=null;img.src=ph;}},
+    // Coin-image fallback: shared metadata proxy, then multiple live IPFS gateways, then the logo.
+    avFallback:(img)=>{const ph="/assets/slimewire/png/slimewire-mark.png?v=logo4",mint=img.dataset.avatarMint||"",candidates=(img.dataset.avatarCandidates||"").split("|").filter(Boolean);let step=Number(img.dataset.avatarStep||0);if(step===0&&mint){img.dataset.avatarStep="1";img.src="/api/web/token-image?mint="+encodeURIComponent(mint);return;}const index=step===0?0:step-1;if(index<candidates.length){img.dataset.avatarStep=String(step+1);img.src=candidates[index];return;}img.onerror=null;img.src=ph;},
     removeWalletPrompt:(i)=>{const w=state.wallets.find(x=>x.index===i);if(w)removeWalletModal(w);},
     refreshPos:refreshPositionsNow,
     copyBlink,shareBlink,copyReceipt,shareReceipt,saveScanReceipt,scoutOpen,scoutRemove,kolCallerCard,copyLaunchBoss,openMuckMap,copyPassport};

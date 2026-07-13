@@ -11427,6 +11427,28 @@ async function resolveTokenAvatarRecord(mint = "", row = {}) {
 
   if (/^0x[0-9a-fA-F]{40}$/.test(String(mint || "").trim())) {
     const address = String(mint).trim();
+    // Reuse exact-address artwork already learned by scans/feed hydration before spending another
+    // round trip on public indexes. This durable cache is shared by Telegram, Fun, and the main site.
+    const addressKey = address.toLowerCase();
+    const [rememberedIdentity, feedArtwork] = await Promise.all([
+      rhScanIdentityGet(addressKey).catch(() => null),
+      Promise.resolve(rhFeedArtworkCache.get(addressKey) || null)
+    ]);
+    const feedToken = (rhFeedCache.tokens || []).find((token) => String(token?.address || "").toLowerCase() === addressKey);
+    const rememberedAvatarUrl = normalizeTokenAvatarUrl(firstString(
+      rememberedIdentity?.imageUrl,
+      feedArtwork?.imageUrl,
+      feedToken?.imageUrl,
+      feedToken?.iconUrl
+    ));
+    if (rememberedAvatarUrl) return tokenAvatarRecord(address, {
+      avatarUrl: rememberedAvatarUrl,
+      source: rememberedIdentity?.imageUrl ? "robinhood-scan-cache" : feedArtwork?.imageUrl ? "robinhood-feed-cache" : "blockscout",
+      state: "ready",
+      twitterUrl: firstString(rememberedIdentity?.twitterUrl),
+      telegramUrl: firstString(rememberedIdentity?.telegramUrl),
+      websiteUrl: firstString(rememberedIdentity?.websiteUrl)
+    });
     const [dexResult, noxaMeta, geckoResult, blockscoutMeta, bankrArtwork] = await Promise.all([
       fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${address}`, { timeoutMs: 1_500 }).catch(() => null),
       getNoxaRhTokenMetadata(address, { timeoutMs: 1_400 }).catch(() => ({})),
@@ -53757,9 +53779,21 @@ async function enrichRhFeedArtwork(rows = []) {
   // `iconUrl` is only the explorer's optional fallback. Keep searching for address-verified market
   // artwork whenever `imageUrl` is empty so an explorer placeholder cannot block the real coin PFP.
   const targets = rows.filter((row) => row?.address && !row.imageUrl).slice(0, 50);
+  const persistedIdentity = await rhScanIdentityMapLoad().catch(() => new Map());
   const missing = [];
   for (const row of targets) {
-    const key = String(row.address).toLowerCase(), cached = rhFeedArtworkCache.get(key);
+    const key = String(row.address).toLowerCase();
+    const remembered = tokenAvatarMemoryRecord(key);
+    const rememberedUrl = normalizeTokenAvatarUrl(firstString(
+      remembered?.state === "ready" ? remembered.avatarUrl : "",
+      persistedIdentity.get(key)?.imageUrl
+    ));
+    if (rememberedUrl) {
+      row.imageUrl = rememberedUrl;
+      rhFeedArtworkCache.set(key, { at: Date.now(), imageUrl: rememberedUrl });
+      continue;
+    }
+    const cached = rhFeedArtworkCache.get(key);
     if (cached && Date.now() - cached.at < (cached.imageUrl ? 30 * 60_000 : 45_000)) {
       if (cached.imageUrl) row.imageUrl = cached.imageUrl;
     } else missing.push(row);
@@ -53789,11 +53823,17 @@ async function enrichRhFeedArtwork(rows = []) {
       const imageUrl = normalizeTokenAvatarUrl(firstString(
         byToken.get(key)?.info?.imageUrl,
         noxaArtwork.get(key),
-        bankrArtwork.get(key)?.imageUrl
+        bankrArtwork.get(key)?.imageUrl,
+        persistedIdentity.get(key)?.imageUrl,
+        row.iconUrl
       ));
       rhFeedArtworkCache.set(key, { at: Date.now(), imageUrl }); if (imageUrl) row.imageUrl = imageUrl;
+      if (!imageUrl) scheduleTokenAvatarLookup(row.address, row);
     }
   }
+  // Blockscout icon_url is contract-address keyed metadata. It is a valid final exact-token fallback,
+  // and copying it into imageUrl keeps every site surface on the same field after deeper lookups miss.
+  for (const row of rows) if (!row.imageUrl && row.iconUrl) row.imageUrl = normalizeTokenAvatarUrl(row.iconUrl);
   if (rhFeedArtworkCache.size > 1_000) {
     const oldest = [...rhFeedArtworkCache.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, 200);
     for (const [key] of oldest) rhFeedArtworkCache.delete(key);

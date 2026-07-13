@@ -113,6 +113,21 @@
     const key = coinKey(coin), proxy = coinProxyImage(coin), direct = directCoinImage(coin);
     return `src="${escapeHtml(coinImage(coin))}" data-token-image data-coin-image-key="${escapeHtml(key.toLowerCase())}" data-coin-symbol="${escapeHtml(coin.symbol || coin.name || "?")}" data-chain="${coin?.chain === "robinhood" ? "rh" : "sol"}" data-direct-image="${escapeHtml(direct)}" data-proxy-image="${escapeHtml(proxy)}"`;
   }
+  async function resolvedCoinImageFromMetadata(image) {
+    const key = image?.dataset?.coinImageKey || "";
+    if (!key || image.dataset.coinImageResolving === "1") return "";
+    image.dataset.coinImageResolving = "1";
+    try {
+      const result = await request(`/api/web/token-avatar?mint=${encodeURIComponent(key)}`, { timeout: 5_000, noRetry: true });
+      const avatar = result.data?.avatar;
+      const url = avatar?.state === "ready" ? normalizeImageUrl(avatar.avatarUrl) : "";
+      if (url) {
+        state.resolvedCoinImages.set(key.toLowerCase(), url);
+        return url;
+      }
+    } finally { delete image.dataset.coinImageResolving; }
+    return "";
+  }
   function attemptId(prefix = "fun") { return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`; }
   function toast(message, error = false) { const node = $("[data-toast]"); node.textContent = message; node.className = `toast show${error ? " error" : ""}`; clearTimeout(node._timer); node._timer = setTimeout(() => node.className = "toast", 3600); }
 
@@ -990,12 +1005,14 @@
     else if (state.view === "home") { void loadFeed(true, { silent: true }); scheduleFeedRefresh(); }
   });
 
-  document.addEventListener("error", (event) => {
+  document.addEventListener("error", async (event) => {
     const image = event.target;
     if (!(image instanceof HTMLImageElement) || !image.matches("[data-token-image]")) return;
     const proxy = image.dataset.proxyImage || "";
     const current = image.currentSrc || image.src || "";
     if (proxy && !current.startsWith(proxy)) { image.src = proxy; return; }
+    const resolved = await resolvedCoinImageFromMetadata(image).catch(() => "");
+    if (resolved && resolved !== current) { image.src = resolved; return; }
     const retry = Number(image.dataset.coinImageRetry || 0);
     if (proxy && current.startsWith(proxy) && retry < 2) {
       image.dataset.coinImageRetry = String(retry + 1);

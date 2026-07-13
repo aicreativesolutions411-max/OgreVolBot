@@ -426,6 +426,10 @@ test("RH rows: quick-buy stays in frame on mobile + fresh coins always get MC (i
     assert.match(src, /\/api\/web\/token-image\?mint=/);
     assert.match(src, /token-mascots\/token-mascot-/);
     assert.match(src, /rhAvatar\(r,30\)/);
+    assert.match(src, /function avatarSourceCandidates/);
+    assert.match(src, /gateway\.pinata\.cloud\/ipfs/);
+    assert.match(src, /dweb\.link\/ipfs/);
+    assert.match(src, /data-avatar-mint/);
   }
   // Server: pool-implied price fallback (tiny quote x on-chain supply) fills MC for unindexed coins.
   assert.match(serverSource, /scheduleRhPriceFill/);
