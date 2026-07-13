@@ -402,6 +402,32 @@ test("Telegram Robinhood quick trades use the funded/holding wallet and keep a d
   assert.match(fund, /assertFrozenManagedWallet/);
 });
 
+test("Telegram Buy is CA-first and scan/buy cards recover explicit 24h volume", () => {
+  const callback = functionBody(serverSource, "handleCallback");
+  assert.match(callback, /case "trade_buy":[\s\S]*step: "dm_buy_ca"/);
+  const flow = functionBody(serverSource, "continueFlow");
+  assert.match(flow, /case "dm_buy_ca":[\s\S]*resolveScanTargetFromText/);
+  assert.match(flow, /sendDmCaBuyPanel/);
+  const panel = functionBody(serverSource, "sendDmCaBuyPanel");
+  assert.match(panel, /telegramQuickBuyPanelKeyboard/);
+  assert.match(panel, /24h Vol/);
+  assert.doesNotMatch(panel, /shield|verdict|scam/i); // Buy choice stays a buy panel, not a scan verdict
+
+  const gather = functionBody(serverSource, "gatherSlimeScan");
+  assert.match(gather, /scanVolumeWindowValue\("h24", meta, bonding, best\)/);
+  const stats = functionBody(serverSource, "scanMarketStatsFromSources");
+  assert.match(stats, /volume24h: Number\(volume24h\)/);
+  const solCard = functionBody(serverSource, "formatSlimeScanCard");
+  assert.match(solCard, /volume24h > 0[\s\S]*<i>24h<\/i>/);
+  const solBuyCard = functionBody(serverSource, "postGroupBuy");
+  assert.match(solBuyCard, /cardVol24/);
+  assert.match(solBuyCard, /24h Vol/);
+  const rhVolume = functionBody(serverSource, "rhVolumeInfo");
+  assert.match(rhVolume, /info\.vol24/);
+  assert.doesNotMatch(rhVolume, /info\.vol1/);
+  assert.match(functionBody(serverSource, "postGroupBuyRh"), /24h Vol/);
+});
+
 test("RH trading fees: normal coins match Solana, token rewards are scoped, and platform fees sweep to SOL", () => {
   const trade = functionBody(serverSource, "webRhTradeCore");
   assert.match(trade, /partnerTradeFeePolicy\(partner\)/);
@@ -883,7 +909,7 @@ test("Buy bot (SpyDefi parity): whale-tier badge + new-holder flag + volume", ()
   assert.match(buy, /MEGA BUY|WHALE|DOLPHIN|FISH|SHRIMP/);        // whale tiers by USD size
   assert.match(buy, /New holder!/);                              // first-seen buyer flag
   assert.match(buy, /groupBuyHolders/);                          // per-token seen-buyer set
-  assert.match(buy, /Vol \$\{?|· Vol /);                         // volume shown on the MC line
+  assert.match(buy, /24h Vol/);                                 // explicit 24-hour volume shown on the MC line
   // Bonded coins show "✅ Bonded" — detection uses pump metadata's own graduated
   // flag (+bondPct>=100), not just meta.graduated (false for PumpSwap graduations).
   assert.match(buy, /✅ <b>Bonded<\/b>/);
@@ -897,9 +923,9 @@ test("Robinhood buy cards keep complete market rows during intermittent scan gap
   assert.match(merge, /priceUsd[\s\S]*mc[\s\S]*liq[\s\S]*vol24/);
   assert.match(buy, /mergeRhGroupBuyInfo\(freshInfo, rhGroupBuyLastGood\.get/);
   assert.match(buy, /Price <b>\$\{priceUsd > 0 \? fmtPx\(priceUsd\) : "n\/a"\}/);
-  assert.match(buy, /MC <b>\$\{info\?\.mc > 0 \? fmtUsd0\(info\.mc\) : "n\/a"\}/);
-  assert.match(buy, /Liq \$\{info\?\.liq > 0/);
-  assert.match(buy, /Vol \$\{info\?\.vol24 > 0/);
+  assert.match(buy, /MC <b>\$\{info\?\.mc > 0 \? fmtUsd0\(info\.mc\) : "checking"\}/);
+  assert.match(buy, /Liq <b>\$\{info\?\.liq > 0/);
+  assert.match(buy, /24h Vol <b>\$\{info\?\.vol24 > 0/);
   const noxaMarkets = functionBody(noxaSource, "readNoxaMarkets");
   assert.match(noxaMarkets, /target: e\.token[\s\S]*fn: "balanceOf"[\s\S]*args: \[e\.pool\]/);
   assert.match(noxaMarkets, /tokenReserve \* priceUsd/);
@@ -1954,7 +1980,7 @@ test("scan Security fills from our own RPC when RugCheck returns null (no more n
   // card shows n/a (not a false "revoked") when authority state was never actually read
   const card = functionBody(serverSource, "formatSlimeScanCard");
   assert.match(card, /scanMarketStatsFromSources\(\{ meta, bonding, best, rug, supply, mint \}\)/);
-  assert.match(card, /const \{ vol, ch24, ch1, buys1, sells1 \} = stats/);
+  assert.match(card, /const \{ volume24h, ch24, ch1, buys1, sells1 \} = stats/);
   assert.match(card, /const authKnown = Boolean\(rug && rug\.authoritiesKnown\)/);
   assert.match(card, /authKnown \? \(rug\.mintAuthority \? "🔴 active" : "🟢 none"\)/);
   // RugCheck marks its authority read as definitive so its null == revoked

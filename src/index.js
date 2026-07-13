@@ -14809,8 +14809,8 @@ async function handleCallback(query, userId) {
       await say(chatId, "Send the token mint address you want to sell from all selected wallets.");
       break;
     case "trade_buy":
-      sessions.set(chatId, { step: "trade_buy_wallet", userId, data: { tradeMode: "single" } });
-      await say(chatId, await walletPrompt(userId, "Choose one wallet to buy from. Send the wallet number."));
+      sessions.set(chatId, { step: "dm_buy_ca", userId, data: { tradeMode: "quick" } });
+      await sayHtml(chatId, "⚡ <b>Quick Buy</b>\n\nPaste the coin CA. I’ll open the buy amounts directly—no scan card in between.");
       break;
     case "trade_sell":
       sessions.set(chatId, { step: "trade_sell_wallet", userId, data: { tradeMode: "single" } });
@@ -15686,8 +15686,8 @@ async function handleMessage(message, userId) {
       const target = await telegramQuickTradeTarget(message, quickBuyCommand[1] || "");
       if (target) { await sendDmBuyPanel(chatId, userId, target); return; }
     }
-    sessions.set(chatId, { step: "trade_buy_wallet", userId, data: { tradeMode: "single" } });
-    await say(chatId, await walletPrompt(userId, "Choose one wallet to buy from. Send the wallet number."));
+    sessions.set(chatId, { step: "dm_buy_ca", userId, data: { tradeMode: "quick" } });
+    await sayHtml(chatId, "⚡ <b>Quick Buy</b>\n\nPaste the coin CA. I’ll open the buy amounts directly—no scan card in between.");
     return;
   }
 
@@ -16282,6 +16282,19 @@ async function continueFlow(chatId, text, session) {
         const wallet = await setSingleWalletSelection(session, text);
         session.step = "trade_buy_token";
         await say(chatId, withBrandFooter(`Selected wallet: ${wallet.label}\n${wallet.publicKey}\n\nSend the token mint address to buy.`));
+        break;
+      }
+      case "dm_buy_ca": {
+        const target = await resolveScanTargetFromText(text).catch(() => null);
+        const rh = /^0x[0-9a-fA-F]{40}$/.test(String(target || ""));
+        if (rh) {
+          const proof = await rhTokenContractProof(target);
+          if (!proof.contract) throw new Error("That Robinhood address is a wallet, not a coin contract. Paste the coin CA.");
+        } else if (!isLikelySolMint(target) || !(await isSolMintAddress(target).catch(() => true))) {
+          throw new Error("That is not a coin CA. Paste a Solana mint or Robinhood 0x token contract.");
+        }
+        clearSession(chatId);
+        await sendDmCaBuyPanel(chatId, session.userId, target);
         break;
       }
       case "kol_trade_wallet": {
@@ -34326,11 +34339,14 @@ function scanFlatWindowNumber(source, prefixes, key) {
   }
   return scanActivityNumber(...values);
 }
-function scanBestVolumeWindow(...sources) {
-  const read = (source, key) => scanActivityNumber(
+function scanVolumeWindowValue(key, ...sources) {
+  const read = (source) => scanActivityNumber(
     scanNestedWindowNumber(source, ["volume", "volumeUsd", "volumeUSD", "volume_usd", "volumes"], key),
     scanFlatWindowNumber(source, ["volume", "volumeUsd", "volumeUSD", "volume_usd"], key)
   );
+  return Number(scanActivityNumber(...sources.map((source) => read(source)))) || 0;
+}
+function scanBestVolumeWindow(...sources) {
   const windows = [
     ["24H", "h24"],
     ["6H", "h6"],
@@ -34338,7 +34354,7 @@ function scanBestVolumeWindow(...sources) {
     ["5M", "m5"]
   ];
   for (const [label, key] of windows) {
-    const value = scanActivityNumber(...sources.map((source) => read(source, key)));
+    const value = scanVolumeWindowValue(key, ...sources);
     if (Number.isFinite(Number(value)) && Number(value) > 0) return { value: Number(value), label };
   }
   const recent = scanActivityNumber(...sources.flatMap((source) => [
@@ -34425,6 +34441,7 @@ function scanMarketStatsFromSources({ meta = null, bonding = null, best = null, 
   const pumpLiq = firstMeaningfulNumber(scanSourceLiquidity(bonding), scanPumpVirtualLiquidity(bonding));
   const dexLiq = firstMeaningfulNumber(scanSourceLiquidity(best), scanSourceLiquidity(meta));
   const vol = scanBestVolumeWindow(...sources);
+  let volume24h = scanVolumeWindowValue("h24", ...sources);
   const ch24 = scanBestPriceChange("h24", ...sources);
   let ch1 = scanBestPriceChange("h1", ...sources);
   const buys1 = Number(scanBestTxnCount("buys", "h1", ...sources)) || 0;
@@ -34464,8 +34481,10 @@ function scanMarketStatsFromSources({ meta = null, bonding = null, best = null, 
         if (!(liq > 0) && lg.liq > 0) liq = lg.liq;
         if (!Number.isFinite(ch1) && Number.isFinite(lg.ch1)) ch1 = lg.ch1;
         if (!(volObj && volObj.value > 0) && lg.vol && lg.vol.value > 0) volObj = lg.vol;
+        if (!(volume24h > 0) && String(lg.vol?.label || "").toUpperCase() === "24H") volume24h = Number(lg.vol.value) || 0;
       }
     }
+    if (volume24h > 0) volObj = { value: volume24h, label: "24H" };
     rememberMeta(mint, { mc, liq, ch1, vol: volObj, holders, createdAt, sym: firstString(meta?.symbol, bonding?.symbol) });
   }
   return {
@@ -34474,6 +34493,7 @@ function scanMarketStatsFromSources({ meta = null, bonding = null, best = null, 
     mc: mc || 0,
     liq: liq || 0,
     vol: volObj,
+    volume24h: Number(volume24h) || 0,
     ch24,
     ch1,
     buys1,
@@ -35731,7 +35751,9 @@ async function gatherSlimeScan(mint, options = {}) {
   // Last independent activity source: Gecko hourly OHLCV contains USD volume even when its token/pool
   // metadata omits `volume_usd`. Fresh pump coins fall back to the real in-memory trade tape and are
   // explicitly labelled RECENT rather than being passed off as 24-hour volume.
-  if (!(scanBestVolumeWindow(meta, bonding, best).value > 0)) {
+  // Recover 24-hour volume specifically. Previously any 1H/5M value skipped this fallback, so cards
+  // sometimes showed a short window—or n/a—even though Gecko's 24 hourly candles were available.
+  if (!(scanVolumeWindowValue("h24", meta, bonding, best) > 0)) {
     // Reuse the pool already discovered by the parallel metadata/Dex reads. That skips another token-pool
     // lookup and gives the OHLCV request enough time to finish on Render's occasionally slow shared egress.
     const poolAddress = firstString(geckoMeta?.pairAddress, best?.pairAddress);
@@ -39643,11 +39665,9 @@ function rhChangeInfo(info = {}) {
   return { value: null, title: "1H" };
 }
 function rhVolumeInfo(info = {}) {
-  const v1 = Number(info.vol1);
-  if (Number.isFinite(v1) && v1 > 0) return { value: v1, title: "1H" };
   const v24 = Number(info.vol24);
   if (Number.isFinite(v24) && v24 > 0) return { value: v24, title: "24H" };
-  return { value: 0, title: "" };
+  return { value: 0, title: "24H" };
 }
 function rhLocalImageUrl(address, launchMeta = null) {
   return launchMeta && launchMeta.hasImage ? `/api/web/rh/token-image/${address}` : "";
@@ -40082,7 +40102,7 @@ function formatRhScanCard(info) {
     `├ USD  <b>${price}</b> (${ch.title} ${chText})`,
     `├ MC   <b>${info.mc > 0 ? scanFmtMoney(info.mc) : "n/a"}</b>`,
     ...(info.athMc > 0 ? [`├ ATH  <b>${scanFmtMoney(info.athMc)}</b>${info.fromAthPct != null && info.fromAthPct < -1 ? ` <i>(${Math.round(info.fromAthPct)}% from ATH)</i>` : (info.fromAthPct != null && info.fromAthPct >= -1 ? " <i>(at ATH)</i>" : "")}`] : []),
-    `├ Vol  <b>${vol.value > 0 ? scanFmtMoney(vol.value) : "n/a"}</b>${vol.title ? ` <i>${vol.title.toLowerCase()}</i>` : ""}`,
+    `├ Vol  <b>${vol.value > 0 ? scanFmtMoney(vol.value) : "checking"}</b> <i>24h</i>`,
     `├ Holders <b>${info.holders > 0 ? scanFmtSupply(info.holders) : "n/a"}</b>`,
     `└ Liq  <b>${info.liq > 0 ? scanFmtMoney(info.liq) : "n/a"}</b>`,
     "",
@@ -43632,6 +43652,38 @@ async function handleRhQuickTradeCallback(query, userId) {
   return true;
 }
 
+// Main-menu Buy and /buy-without-an-argument are CA-first. They intentionally open a trade panel,
+// not a SlimeShield verdict: the user already chose Buy and should never be bounced into a scam card.
+// Both chains share the same compact amount/preset controls used under scan and buy-bot cards.
+async function sendDmCaBuyPanel(chatId, userId, target) {
+  const rh = /^0x[0-9a-fA-F]{40}$/.test(String(target || ""));
+  let symbol = shortMint(target), mc = 0, liq = 0, volume24h = 0;
+  if (rh) {
+    const info = await scanFastTimeout(gatherRhScan(target), 6_000, null);
+    symbol = firstString(info?.symbol, symbol);
+    mc = Number(info?.mc) || 0;
+    liq = Number(info?.liq) || 0;
+    volume24h = Number(info?.vol24) || 0;
+  } else {
+    const scan = await scanFastTimeout(gatherSlimeScan(target), 6_000, null);
+    symbol = firstString(scan?.meta?.symbol, scan?.bonding?.symbol, symbol);
+    const stats = scan ? scanMarketStatsFromSources({ meta: scan.meta, bonding: scan.bonding, best: scan.best, rug: scan.rug, supply: scan.supply, mint: target }) : null;
+    mc = Number(stats?.mc) || 0;
+    liq = Number(stats?.liq) || 0;
+    volume24h = scanVolumeWindowValue("h24", scan?.meta, scan?.bonding, scan?.best);
+  }
+  const keyboard = await telegramQuickBuyPanelKeyboard(target, userId);
+  keyboard.inline_keyboard.push([{ text: "🌐 Web Quick Buy", url: slimewireTokenLinks(target).quick }]);
+  const market = [mc > 0 ? `MC <b>${scanFmtMoney(mc)}</b>` : "", liq > 0 ? `Liq <b>${scanFmtMoney(liq)}</b>` : "", `24h Vol <b>${volume24h > 0 ? scanFmtMoney(volume24h) : "checking"}</b>`].filter(Boolean).join(" · ");
+  await sayHtml(chatId, [
+    `⚡ <b>Buy $${escapeTelegramHtml(String(symbol).replace(/^\$+/, ""))}</b>${rh ? " · Robinhood Chain" : ""}`,
+    `<code>${escapeTelegramHtml(target)}</code>`,
+    market,
+    "",
+    "<i>Tap an amount once to buy from your SlimeWire wallet.</i>"
+  ].join("\n"), keyboard);
+}
+
 // Telegram has no wallet selector on a compact scan card. Prefer Wallet 1 when it can cover the buy,
 // otherwise transparently use the user's best-funded normal wallet. Never route a personal quick buy
 // through an internal volume/ghost wallet.
@@ -44695,7 +44747,7 @@ async function renderSolScanCardPng(scan = {}, mint, seed = "") {
     liqLabel: stats.liq > 0 ? scanFmtMoney(stats.liq) : "—",
     ageLabel: createdAt > 0 ? xAgeLabel(Date.now() - createdAt) : "checking",
     railLabel: rail,
-    volumeLabel: stats.vol?.value > 0 ? `${scanFmtMoney(stats.vol.value)}${stats.vol.label ? " " + stats.vol.label : ""}` : "checking",
+    volumeLabel: stats.volume24h > 0 ? `${scanFmtMoney(stats.volume24h)} 24H` : "checking 24H",
     holderLabel: stats.holders > 0 ? scanFmtSupply(stats.holders) : "checking",
     verdict,
     verdictTone: tone,
@@ -44728,7 +44780,7 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
   const pick = (pumpVal, dexVal) => onCurve ? firstMeaningfulNumber(pumpVal, dexVal) : firstMeaningfulNumber(dexVal, pumpVal);
   const mc = stats.mc;
   const liq = stats.liq;
-  const { vol, ch24, ch1, buys1, sells1 } = stats;
+  const { volume24h, ch24, ch1, buys1, sells1 } = stats;
   const price = scanFmtPriceSub(pick(Number(bonding?.priceUsd), Number(best?.priceUsd || meta?.priceUsd)) || (mc && supply ? mc / supply : 0));
   // ATH (real, from SolanaTracker) — only shown when genuinely at/above the current MC.
   const showAth = ath && Number(ath.mc) > 0 && Number(ath.mc) >= mc * 0.999;
@@ -44784,7 +44836,7 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
     `📊 <b>Stats</b>`,
     `├ USD  <b>${price}</b> (${scanFmtPct(ch24)})`,
     `├ MC   <b>${scanFmtMoney(mc)}</b>`,
-    `├ Vol  <b>${scanFmtMoney(vol.value)}</b>${vol.label ? ` <i>${vol.label}</i>` : ""}`,
+    `├ Vol  <b>${volume24h > 0 ? scanFmtMoney(volume24h) : "checking"}</b> <i>24h</i>`,
     `├ LP   <b>${scanFmtMoney(liq)}</b>`,
     `├ Sup  <b>${supply ? scanFmtSupply(supply) : "n/a"}</b>`,
     `${showAth ? "├" : "└"} 1H   <b>${scanFmtPct(ch1)}</b>  🟢 ${buys1}  🔴 ${sells1}`,
@@ -47264,6 +47316,8 @@ async function postGroupBuy(mint, { solAmount = 0, usdAmount = 0, tokens = 0, pr
   const onCurve = !bonded && bondPct != null && bondPct > 0 && bondPct < 100;
   const mc = (onCurve ? firstMeaningfulNumber(bonding?.marketCap, meta?.marketCap ?? meta?.fdv) : firstMeaningfulNumber(meta?.marketCap ?? meta?.fdv, bonding?.marketCap)) || mcUsd || 0;
   const liq = firstMeaningfulNumber(meta?.liquidityUsd, bonding?.liquidityUsd) || liqUsd || 0;
+  const scanVol24 = scanVolumeWindowValue("h24", meta, bonding, scan?.best);
+  const cardVol24 = firstMeaningfulNumber(vol24, scanVol24) || 0;
   const ch = (change24 != null && isFinite(change24)) ? change24 : (meta?.priceChange?.h24 ?? null);
   const socials = { tg: meta?.telegramUrl || "", x: meta?.twitterUrl || "", web: meta?.websiteUrl || "" };
   const botAt = CONFIG.telegramBotUsername ? "@" + CONFIG.telegramBotUsername : "SlimeWire";
@@ -47314,7 +47368,7 @@ async function postGroupBuy(mint, { solAmount = 0, usdAmount = 0, tokens = 0, pr
           ? `🪙 Got <b>${fmtTok(tokens)}</b> $${escapeTelegramHtml(symClean)}${txLink ? ` · <a href="${txLink}">Tx</a>` : ""}`
           : (txLink ? `🧾 <a href="${txLink}">View Tx</a>` : ""),
         priceUsd > 0 ? `🏷 Price <b>${fmtPx(priceUsd)}</b>${ch != null && isFinite(ch) ? ` · ${ch >= 0 ? "🟢 +" : "🔴 "}${Math.round(ch)}% 24h` : ""}` : "",
-        (mc > 0 || liq > 0) ? `〽️ MC <b>${fmtUsd0(mc)}</b>${liq > 0 ? ` · Liq ${fmtUsd0(liq)}` : ""}${vol24 > 0 ? ` · Vol ${fmtUsd0(vol24)}` : ""}` : "",
+        `〽️ MC <b>${mc > 0 ? fmtUsd0(mc) : "checking"}</b> · Liq <b>${liq > 0 ? fmtUsd0(liq) : "checking"}</b> · 24h Vol <b>${cardVol24 > 0 ? fmtUsd0(cardVol24) : "checking"}</b>`,
         holderLine,
         dexPaid === true ? "🐸 <b>DEX PAID</b>" : ""
       ].filter(Boolean);
@@ -47404,7 +47458,7 @@ async function postGroupBuyRh(address, { ethAmount = 0, tokens = 0, trader = "",
         ? `🪙 Got <b>${fmtTok(tokens)}</b> $${escapeTelegramHtml(symClean)}${txLink ? ` · <a href="${txLink}">Tx</a>` : ""}`
         : (txLink ? `🧾 <a href="${txLink}">View Tx</a>` : ""),
       `🏷 Price <b>${priceUsd > 0 ? fmtPx(priceUsd) : "n/a"}</b>${Number.isFinite(info?.ch24) ? ` · ${info.ch24 >= 0 ? "🟢 +" : "🔴 "}${Math.round(info.ch24)}% 24h` : " · 24h n/a"}`,
-      `〽️ MC <b>${info?.mc > 0 ? fmtUsd0(info.mc) : "n/a"}</b> · Liq ${info?.liq > 0 ? fmtUsd0(info.liq) : "n/a"} · Vol ${info?.vol24 > 0 ? fmtUsd0(info.vol24) : "n/a"}`,
+      `〽️ MC <b>${info?.mc > 0 ? fmtUsd0(info.mc) : "checking"}</b> · Liq <b>${info?.liq > 0 ? fmtUsd0(info.liq) : "checking"}</b> · 24h Vol <b>${info?.vol24 > 0 ? fmtUsd0(info.vol24) : "checking"}</b>`,
       holderLine,
       `<a href="${funUrl}">slimewire.org · chart, trade &amp; tools</a>`,
     ].filter(Boolean);
