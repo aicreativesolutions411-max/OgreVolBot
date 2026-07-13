@@ -1,11 +1,11 @@
 /* SlimeCash service worker — fresh-first app shell, network-only for APIs. */
-const CACHE = "slimecash-v8";
+const CACHE = "slimecash-v9";
 const SHELL = [
   "/cash/",
   "/cash/index.html",
-  "/cash/cash.css?v=8",
-  "/cash/cash.js?v=8",
-  "/cash/manifest.webmanifest?v=8",
+  "/cash/cash.css?v=9",
+  "/cash/cash.js?v=9",
+  "/cash/manifest.webmanifest?v=9",
   "/assets/slimewire/fun-app-icon-192.png",
   "/cash/img/splash.webp",
   "/cash/img/card.webp",

@@ -6,8 +6,8 @@
 <title>SlimeCash — money for the trenches</title>
 <meta name="description" content="SlimeCash: send, receive, and swap coins with your $handle. Money for the trenches.">
 <meta name="theme-color" content="#050705">
-<meta name="slimecash-build" content="8">
-<link rel="manifest" href="/cash/manifest.webmanifest?v=8">
+<meta name="slimecash-build" content="9">
+<link rel="manifest" href="/cash/manifest.webmanifest?v=9">
 <link rel="icon" type="image/png" sizes="64x64" href="/cash/icons/favicon-64.png">
 <link rel="apple-touch-icon" href="/cash/icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -17,7 +17,7 @@
 <meta property="og:title" content="SlimeCash">
 <meta property="og:description" content="Money for the trenches. Send, receive, and swap coins with your $handle.">
 <meta property="og:image" content="https://www.slimewire.org/cash/icons/icon-512.png">
-<link rel="stylesheet" href="/cash/cash.css?v=8">
+<link rel="stylesheet" href="/cash/cash.css?v=9">
 </head>
 <body>
 <div id="splash" class="splash">
@@ -44,6 +44,15 @@
       <button id="sendQuickBtn" class="btn ghost" type="button">Send</button>
       <button id="receiveBtn" class="btn ghost" type="button">Receive</button>
       <button id="convertBtn" class="btn ghost" type="button">Convert</button>
+    </div>
+    <div id="pendingFund" class="pending-fund" hidden>
+      <div class="pending-ico" id="pendingFundIcon">⏳</div>
+      <div class="pending-main">
+        <div id="pendingFundTitle" class="pending-title">Waiting for your deposit…</div>
+        <div id="pendingFundSub" class="activity-sub">We watch the chain and ping you the moment it lands.</div>
+      </div>
+      <button id="pendingFundAction" class="pending-action" type="button" hidden>Convert</button>
+      <button id="pendingFundClose" class="pending-close" type="button" aria-label="Dismiss">×</button>
     </div>
     <div class="cash-card" id="payCard">
       <img src="/cash/img/card.webp" alt="" class="cash-card-art">
@@ -452,6 +461,6 @@
 </div>
 
 <div id="toast" class="toast" hidden></div>
-<script src="/cash/cash.js?v=8"></script>
+<script src="/cash/cash.js?v=9"></script>
 </body>
 </html>

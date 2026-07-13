@@ -7,6 +7,7 @@
   const TOKEN_KEY = "ogreWebToken";
   const ACTIVITY_KEY = "slimecashActivity";
   const GUIDE_KEY = "slimecashGuide";
+  const PENDING_FUND_KEY = "slimecashPendingFund";
   const CONTACTS_KEY = "slimecashContacts";
   const SECURITY_KEY = "slimecashSecurity";
   const NOTIFICATIONS_KEY = "slimecashNotifications";
@@ -460,6 +461,7 @@
       $("depositWatch").className = "status ok";
       notifyIncoming("USDC received", `+$${gainedUsdc.toFixed(2)} arrived in SlimeCash`);
       renderActivity();
+      pendingFundArrived("USDC");
     }
     if (previousPyusd !== null && state.pyusdRaw > previousPyusd) {
       const gainedPyusd = (state.pyusdRaw - previousPyusd) / 1e6;
@@ -469,6 +471,7 @@
       $("depositWatch").className = "status ok";
       notifyIncoming("PYUSD received", `+$${gainedPyusd.toFixed(2)} arrived in SlimeCash`);
       renderActivity();
+      pendingFundArrived("PYUSD");
       setTimeout(() => toast("Tap Convert to turn PYUSD into SOL for trading"), 3600);
     }
     if (previousSol !== null && state.lamports > previousSol + 10000) {
@@ -479,6 +482,7 @@
       $("depositWatch").className = "status ok";
       notifyIncoming("SOL received", `+${gainedSol.toFixed(4)} SOL arrived in SlimeCash`);
       renderActivity();
+      pendingFundArrived("SOL");
     }
   }
 
@@ -730,8 +734,8 @@
 
   /* ---------------- add cash ---------------- */
   const GUIDES = {
-    venmo: ["1. In Venmo: Me tab → Crypto → PYUSD (PayPal USD)", "2. Buy any amount — Venmo charges no PYUSD fees", "3. Transfer → Send to a wallet → paste your address below", "4. IMPORTANT: pick the SOLANA network, then confirm"],
-    paypal: ["1. In PayPal: Finances → Crypto → PYUSD", "2. Buy any amount — no PayPal fee on PYUSD", "3. Transfer → Send → External wallet → paste your address below", "4. IMPORTANT: pick the SOLANA network, then confirm"],
+    venmo: ["1. Tap the green button — your address is copied and Venmo opens", "2. In Venmo: Me tab → Crypto → PYUSD → Buy your amount (no Venmo fees)", "3. Transfer → Send to a wallet → PASTE (already copied) → pick SOLANA → confirm", "4. Come back — the tracker below pings you when it lands"],
+    paypal: ["1. Tap the green button — your address is copied and PayPal opens", "2. In PayPal: Finances → Crypto → PYUSD → Buy your amount (no fee)", "3. Transfer → Send → External wallet → PASTE → pick SOLANA → confirm", "4. Come back — the tracker below pings you when it lands"],
     phantom: ["1. Tap Open in Phantom — SlimeCash opens inside Phantom's browser", "2. Use Phantom's own Buy for card or Apple Pay checkout", "3. Send the SOL or USDC to your SlimeCash address below", "No Phantom? Get it at phantom.com first."],
     coinbase: ["1. Use Buy with Coinbase above for a preloaded checkout", "2. Or copy this address into Coinbase Send", "3. Choose the Solana network — that part matters"],
     robinhood: ["1. Open Robinhood Crypto and choose Send", "2. Paste your SlimeCash address", "3. Send SOL on Solana; asset availability can vary"],
@@ -775,12 +779,17 @@
       ? `To ${shortAddress(state.wallet.publicKey)} on Solana`
       : "Solana wallet loading…";
     const pyusdMode = state.depositAsset === "PYUSD";
-    $("coinbaseFundBtn").disabled = pyusdMode;
-    $("coinbaseFundBtn").textContent = pyusdMode
-      ? "PYUSD comes from Venmo or PayPal — see steps below"
-      : (validAmount
+    $("coinbaseFundBtn").disabled = false;
+    if (pyusdMode) {
+      const providerName = ["venmo", "paypal"].includes(activeGuideKey()) ? HANDOFF_PROVIDERS[activeGuideKey()].name : "Venmo";
+      $("coinbaseFundBtn").textContent = validAmount
+        ? `Copy address & open ${providerName} · $${amount.toFixed(amount % 1 ? 2 : 0)}`
+        : `Copy address & open ${providerName}`;
+    } else {
+      $("coinbaseFundBtn").textContent = validAmount
         ? `Continue to Coinbase · $${amount.toFixed(amount % 1 ? 2 : 0)} ${state.depositAsset}`
-        : "Continue to Coinbase");
+        : "Continue to Coinbase";
+    }
   }
 
   async function refreshFundingConfig() {
@@ -791,7 +800,11 @@
   }
 
   async function startCoinbaseFunding() {
-    if (state.depositAsset === "PYUSD") { toast("PYUSD comes from Venmo or PayPal — follow the steps below."); return; }
+    if (state.depositAsset === "PYUSD") {
+      const key = ["venmo", "paypal"].includes(activeGuideKey()) ? activeGuideKey() : "venmo";
+      providerHandoff(key);
+      return;
+    }
     const amount = Number($("fundAmount").value || 0);
     const button = $("coinbaseFundBtn");
     const status = $("fundingStatus");
@@ -820,6 +833,73 @@
     }
     status.textContent = result.data.error || "Coinbase could not prepare this checkout. Your SlimeCash wallet was not changed.";
     status.className = "status bad";
+  }
+
+  /* ------- smart provider handoff + live deposit tracker ------- */
+  function readPendingFund() {
+    try {
+      const row = JSON.parse(localStorage.getItem(PENDING_FUND_KEY) || "null");
+      if (!row || Date.now() - Number(row.at || 0) > 6 * 60 * 60 * 1000) return null;
+      return row;
+    } catch { return null; }
+  }
+  function savePendingFund(row) {
+    localStorage.setItem(PENDING_FUND_KEY, JSON.stringify(row));
+    renderPendingFund();
+  }
+  function clearPendingFund() {
+    localStorage.removeItem(PENDING_FUND_KEY);
+    renderPendingFund();
+  }
+  function renderPendingFund() {
+    const card = $("pendingFund");
+    const pending = readPendingFund();
+    if (!pending) { card.hidden = true; return; }
+    card.hidden = false;
+    if (pending.arrived) {
+      card.classList.add("arrived");
+      $("pendingFundIcon").textContent = "✅";
+      $("pendingFundTitle").textContent = `${pending.amount ? `$${Number(pending.amount).toFixed(2)} ` : ""}${pending.asset} landed`;
+      $("pendingFundSub").textContent = pending.asset === "PYUSD" ? "Convert it to SOL to trade coins." : "Ready to use.";
+      $("pendingFundAction").hidden = pending.asset !== "PYUSD";
+    } else {
+      card.classList.remove("arrived");
+      $("pendingFundIcon").textContent = "⏳";
+      $("pendingFundTitle").textContent = `Waiting for ${pending.amount ? `your $${Number(pending.amount).toFixed(2)} ` : "your "}${pending.asset} from ${pending.providerName}`;
+      $("pendingFundSub").textContent = "We watch the chain and ping you the moment it lands.";
+      $("pendingFundAction").hidden = true;
+    }
+  }
+  function pendingFundArrived(asset) {
+    const pending = readPendingFund();
+    if (!pending || pending.arrived || pending.asset !== asset) return;
+    savePendingFund({ ...pending, arrived: true });
+  }
+  const HANDOFF_PROVIDERS = {
+    venmo: { name: "Venmo", url: () => state.funding?.providers?.venmo?.url || "https://venmo.com" },
+    paypal: { name: "PayPal", url: () => state.funding?.providers?.paypal?.url || "https://www.paypal.com/us/digital-wallet/manage-money/crypto" },
+    phantom: { name: "Phantom", url: () => phantomBrowseUrl() },
+    coinbase: { name: "Coinbase", url: () => state.funding?.providers?.coinbase?.url || "https://www.coinbase.com/buy" },
+    robinhood: { name: "Robinhood", url: () => state.funding?.providers?.robinhood?.url || "https://robinhood.com/crypto/SOL" }
+  };
+  function activeGuideKey() {
+    return document.querySelector("[data-guide].active")?.dataset.guide || (state.depositAsset === "PYUSD" ? "venmo" : "phantom");
+  }
+  // One tap: copy the address, remember what we're waiting for, open the provider app.
+  function providerHandoff(guideKey) {
+    const provider = HANDOFF_PROVIDERS[guideKey] || HANDOFF_PROVIDERS.venmo;
+    if (state.wallet) copyText(state.wallet.publicKey);
+    const amount = Number($("fundAmount")?.value || 0);
+    savePendingFund({
+      asset: state.depositAsset,
+      amount: amount >= 1 && amount <= 25000 ? amount : 0,
+      provider: guideKey,
+      providerName: provider.name,
+      at: Date.now()
+    });
+    $("depositWatch").textContent = `Address copied — paste it in ${provider.name}. Watching the chain…`;
+    $("depositWatch").className = "status ok";
+    window.open(provider.url(), "_blank", "noopener");
   }
 
   function openAddCash() {
@@ -1139,6 +1219,11 @@
     setTimeout(() => { $("splash").hidden = true; }, 400);
     $("app").hidden = false;
     renderActivity();
+    renderPendingFund();
+    if (readPendingFund() && !readPendingFund().arrived) {
+      stopDepositWatch();
+      state.depositTimer = setInterval(() => refreshBalance({ silent: true }), 8000);
+    }
 
     const recoveredMessage = sessionStorage.getItem("slimecashRecovered");
     if (recoveredMessage) {
@@ -1452,6 +1537,26 @@
       if (state.convertTo === state.convertFrom) state.convertFrom = state.convertTo === "SOL" ? "PYUSD" : "SOL";
       renderConvert();
     }
+  });
+
+  $("openProviderBtn").addEventListener("click", () => {
+    if (state.wallet) copyText(state.wallet.publicKey);
+    const key = activeGuideKey();
+    if (HANDOFF_PROVIDERS[key]) {
+      const amount = Number($("fundAmount")?.value || 0);
+      savePendingFund({
+        asset: state.depositAsset,
+        amount: amount >= 1 && amount <= 25000 ? amount : 0,
+        provider: key,
+        providerName: HANDOFF_PROVIDERS[key].name,
+        at: Date.now()
+      });
+    }
+  });
+  $("pendingFundClose").addEventListener("click", clearPendingFund);
+  $("pendingFundAction").addEventListener("click", () => {
+    clearPendingFund();
+    openConvert();
   });
 
   $("cashOutBtn").addEventListener("click", () => openSheet("cashout"));

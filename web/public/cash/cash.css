@@ -333,3 +333,21 @@ a { color: var(--mint); text-decoration: none; }
 /* Convert */
 .action-row-4 { grid-template-columns: repeat(4, 1fr); }
 .action-row-4 .btn { padding: 13px 4px; font-size: 13px; }
+
+/* Pending deposit tracker */
+.pending-fund {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 12px; padding: 11px 12px;
+  background: var(--soft); border: 1px solid var(--line); border-radius: 14px;
+}
+.pending-fund.arrived { border-color: var(--green); }
+.pending-ico { font-size: 18px; flex: none; animation: pendingPulse 1.6s ease-in-out infinite; }
+.pending-fund.arrived .pending-ico { animation: none; }
+@keyframes pendingPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.pending-main { flex: 1; min-width: 0; }
+.pending-title { font-size: 13px; font-weight: 600; color: var(--ink); }
+.pending-action {
+  background: var(--green); color: var(--green-deep);
+  border-radius: 10px; padding: 8px 12px; font-weight: 650; font-size: 12px; flex: none;
+}
+.pending-close { color: var(--muted); font-size: 18px; padding: 2px 6px; flex: none; }
