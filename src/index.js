@@ -39161,6 +39161,13 @@ async function gatherRhScanUncollapsed(address) {
   // already used but scan cards never did (why cards kept showing no pfp or socials).
   const noxaMetaPromise = getNoxaRhTokenMetadata(a, { timeoutMs: 4_500 }).catch(() => null);
   const geckoInfoPromise = fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${a}/info`, { timeoutMs: 3_500 }).catch(() => null);
+  // DexScreener's tokens/v1 endpoint carries info.imageUrl/socials for Robinhood pairs that
+  // the older latest/dex/tokens response omits - it's what the feed's artwork enricher uses,
+  // and it is the one identity source proven reliable from this server's IP.
+  const dsTokenV1Promise = fetchJson(`https://api.dexscreener.com/tokens/v1/robinhood/${a}`, {
+    headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
+    timeoutMs: 3_000
+  }).catch(() => null);
   const [dsRes, geckoRes, saf, feedRows, directToken, launchMap] = await Promise.all([
     fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${a}`, { timeoutMs: 3500 }).catch(() => null),
     fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${a}/pools?page=1`, { timeoutMs: 3500 }).catch(() => null),
@@ -39296,15 +39303,21 @@ async function gatherRhScanUncollapsed(address) {
     }
   }
   if (!v.imageUrl || (!v.twitterUrl && !v.telegramUrl && !v.websiteUrl)) {
-    const [noxaMeta, geckoInfo] = await Promise.all([
+    const [dsV1, noxaMeta, geckoInfo] = await Promise.all([
+      rhPromiseTimeout(dsTokenV1Promise, 3_000, null),
       rhPromiseTimeout(noxaMetaPromise, 4_500, null),
       rhPromiseTimeout(geckoInfoPromise, 3_500, null)
     ]);
+    const v1Pairs = (Array.isArray(dsV1) ? dsV1 : []).filter((p) => String(p?.baseToken?.address || "").toLowerCase() === key);
+    const v1Best = v1Pairs.sort((x, y) => Number(y?.liquidity?.usd || 0) - Number(x?.liquidity?.usd || 0))[0] || null;
+    const v1Socials = Array.isArray(v1Best?.info?.socials) ? v1Best.info.socials : [];
+    const v1Websites = Array.isArray(v1Best?.info?.websites) ? v1Best.info.websites : [];
     const geckoAttr = geckoInfo?.data?.attributes || {};
-    if (!v.imageUrl) v.imageUrl = firstString(noxaMeta?.imageUrl, geckoAttr.image_url, geckoAttr.imageUrl);
-    if (!v.twitterUrl) v.twitterUrl = firstString(noxaMeta?.twitterUrl, normalizeSocialLink(geckoAttr.twitter_handle, "twitter"));
-    if (!v.telegramUrl) v.telegramUrl = firstString(noxaMeta?.telegramUrl, normalizeSocialLink(geckoAttr.telegram_handle, "telegram"));
-    if (!v.websiteUrl) v.websiteUrl = firstString(noxaMeta?.websiteUrl, normalizeSocialLink(Array.isArray(geckoAttr.websites) ? geckoAttr.websites[0] : "", "website"));
+    if (!v.imageUrl) v.imageUrl = firstString(v1Best?.info?.imageUrl, noxaMeta?.imageUrl, geckoAttr.image_url, geckoAttr.imageUrl);
+    if (!v.twitterUrl) v.twitterUrl = firstString((v1Socials.find((s) => /twitter|x/i.test(s.type || s.label || "")) || {}).url, noxaMeta?.twitterUrl, normalizeSocialLink(geckoAttr.twitter_handle, "twitter"));
+    if (!v.telegramUrl) v.telegramUrl = firstString((v1Socials.find((s) => /telegram|tg/i.test(s.type || s.label || "")) || {}).url, noxaMeta?.telegramUrl, normalizeSocialLink(geckoAttr.telegram_handle, "telegram"));
+    if (!v.websiteUrl) v.websiteUrl = firstString(v1Websites[0]?.url, noxaMeta?.websiteUrl, normalizeSocialLink(Array.isArray(geckoAttr.websites) ? geckoAttr.websites[0] : "", "website"));
+    if (!v.pairAddress && v1Best?.pairAddress) v.pairAddress = v1Best.pairAddress;
   }
   rhScanIdentityRemember(key, v);
   if (rhScanHasMarketEvidence(v)) {
