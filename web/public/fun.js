@@ -3,7 +3,7 @@
 (() => {
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-  const API_BASE = window.OGRE_PORTAL_CONFIG?.apiBase || "https://ogrevolbot.onrender.com";
+  const API_BASE = window.OGRE_PORTAL_CONFIG?.apiBase || "https://app.slimewire.org";
   const TOKEN_KEY = "ogreWebToken";
   const RECENTS_KEY = "slimewireFunRecents";
   const ACTIVE_PRESET_KEY = "slimewireFunTradePreset";

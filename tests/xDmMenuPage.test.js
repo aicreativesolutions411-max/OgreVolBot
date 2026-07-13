@@ -49,10 +49,11 @@ test("X Trade Pad loads its configured API origin under a restrictive CSP", () =
   assert.match(page, /name=["']robots["'] content=["']noindex,nofollow,noarchive,nosnippet["']/);
   assert.match(page, /name=["']referrer["'] content=["']no-referrer["']/);
   assert.match(page, /connect-src[^;]*'self'/i);
-  assert.match(page, /connect-src[^;]*https:\/\/ogrevolbot\.onrender\.com/i);
+  assert.match(page, /connect-src[^;]*https:\/\/app\.slimewire\.org/i);
   assert.match(page, /<script[^>]+src=["']\/config\.js["']/i);
   assert.match(page, /OGRE_PORTAL_CONFIG/);
-  assert.match(page, /https:\/\/ogrevolbot\.onrender\.com/);
+  assert.match(page, /https:\/\/app\.slimewire\.org/);
+  assert.doesNotMatch(page, /onrender\.com/i);
   assert.match(page, /fetch\((?:API_URL|API_BASE\s*\+|apiUrl\()/);
   assert.doesNotMatch(page, /fetch\(["']\/api\/x-dm\/menu["']/);
 });
@@ -231,5 +232,6 @@ test("X DM uses short branded chart and Trade Pad redirects", () => {
   assert.match(functionBody(server, "xDmShortLinkDestination"), /effectiveExpiresAt/);
   assert.match(functionBody(server, "xDmCreateShortLink"), /ttlVersion: 2/);
   const redirects = fs.readFileSync(new URL("../web/public/_redirects", import.meta.url), "utf8");
-  assert.match(redirects, /\/x\/\*\s+https:\/\/ogrevolbot\.onrender\.com\/x\/:splat\s+302/);
+  assert.match(redirects, /\/x\/\*\s+https:\/\/app\.slimewire\.org\/x\/:splat\s+302/);
+  assert.doesNotMatch(redirects, /onrender\.com/i);
 });

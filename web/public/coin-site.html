@@ -30,7 +30,7 @@
         if (!__coinProject) return;
         const api = String(
           window.OGRE_PORTAL_CONFIG?.apiBase ||
-            "https://ogrevolbot.onrender.com",
+            "https://app.slimewire.org",
         ).replace(/\/+$/, "");
         fetch(`${api}/api/coin-site/${encodeURIComponent(__coinProject)}`)
           .then((r) => r.json())
@@ -772,7 +772,7 @@
           },
           API = String(
             window.OGRE_PORTAL_CONFIG?.apiBase ||
-              "https://ogrevolbot.onrender.com",
+              "https://app.slimewire.org",
           ).replace(/\/+$/, ""),
           slug = __coinProject || location.pathname.split("/ca/")[1]?.split("/")[0] || location.pathname.split("/coin/")[1]?.split("/")[0];
         let p, l;

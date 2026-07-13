@@ -46,7 +46,7 @@
 <script>
 (() => {
   const $=s=>document.querySelector(s), token=()=>localStorage.getItem('ogreWebToken')||'';
-  const API_BASE=String((window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||'https://ogrevolbot.onrender.com').replace(/\/+$/,'');
+  const API_BASE=String((window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||'https://app.slimewire.org').replace(/\/+$/,'');
   let resolved=null, poll=null;
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const headers=()=>({'Content-Type':'application/json',...(token()?{'Authorization':'Bearer '+token()}:{})});

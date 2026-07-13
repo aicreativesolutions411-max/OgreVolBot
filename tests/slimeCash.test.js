@@ -8,9 +8,10 @@ const html = fs.readFileSync(new URL("../web/public/cash/index.html", import.met
 const manifest = JSON.parse(fs.readFileSync(new URL("../web/public/cash/manifest.webmanifest", import.meta.url), "utf8"));
 const sw = fs.readFileSync(new URL("../web/public/cash/sw.js", import.meta.url), "utf8");
 
-test("SlimeCash calls the Render API instead of the static-site HTML fallback", () => {
+test("SlimeCash calls the branded API origin instead of exposing the hosting provider", () => {
   assert.match(cash, /const API_BASE/);
-  assert.match(cash, /https:\/\/ogrevolbot\.onrender\.com/);
+  assert.match(cash, /https:\/\/app\.slimewire\.org/);
+  assert.doesNotMatch(cash, /onrender\.com/i);
   assert.match(cash, /fetch\(`\$\{API_BASE\}\$\{path\}`/);
   assert.match(cash, /application\\\/json/);
 });

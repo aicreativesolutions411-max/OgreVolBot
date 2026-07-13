@@ -69,7 +69,7 @@
     <script>
       (async () => {
         const config = window.OGRE_PORTAL_CONFIG || {};
-        const apiBase = String(config.apiBase || "https://ogrevolbot.onrender.com").replace(/\/$/, "");
+        const apiBase = String(config.apiBase || "https://app.slimewire.org").replace(/\/$/, "");
         const botLink = document.querySelector("[data-bot-link]");
         if (config.telegramBotUsername && botLink) {
           botLink.href = "https://t.me/" + encodeURIComponent(config.telegramBotUsername);

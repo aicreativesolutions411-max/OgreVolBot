@@ -174,7 +174,7 @@
 "use strict";
 (function(){
 const $=(s)=>document.querySelector(s), $$=(s)=>[...document.querySelectorAll(s)];
-const API = (location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1") ? "" : "https://ogrevolbot.onrender.com";
+const API = (location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1") ? "" : "https://app.slimewire.org";
 const SITE="https://www.slimewire.org";
 const KEY="slimewireSwamp";
 const store=(()=>{ try{ return JSON.parse(localStorage.getItem(KEY)||"{}"); }catch{ return {}; } })();

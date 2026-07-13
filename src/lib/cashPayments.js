@@ -105,11 +105,14 @@ export function normalizeCoinbasePaymentAmount(value) {
 }
 
 function coinbaseProviderError(response, data = {}) {
-  const providerMessage = [
+  const rawProviderMessage = [
     data?.message,
     data?.error_description,
     typeof data?.error === "string" ? data.error : data?.error?.message
   ].find((value) => typeof value === "string" && value.trim());
+  const providerMessage = /(?:cloud project id|mongo:|no documents in result|failed to find app)/i.test(String(rawProviderMessage || ""))
+    ? "Coinbase checkout is awaiting Onramp app approval. No funds were moved."
+    : rawProviderMessage;
   const providerCode = String(data?.code || data?.error?.code || "").trim();
   const statusText = response.status ? `HTTP ${response.status}${providerCode ? `, ${providerCode}` : ""}` : "provider error";
   const error = new Error(providerMessage || `Coinbase rejected the funding session (${statusText}).`);

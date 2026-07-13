@@ -25,14 +25,14 @@ const SHOW_STAGED_PERPS_NAV = false;
 const perpsProvider = createPerpsProvider(ogreTekConfig);
 const configuredApiBase = String(config.apiBase || "").trim().replace(/\/+$/, "");
 const sameOriginApiBase = window.location.origin.replace(/\/+$/, "");
-const defaultRenderApiBase = "https://ogrevolbot.onrender.com";
+const defaultApiBase = "https://app.slimewire.org";
 const shareSiteUrl = String(config.shareUrl || config.siteUrl || "https://www.slimewire.org").trim() || "https://www.slimewire.org";
 const apiCandidates = [
   configuredApiBase,
   window.location.hostname.endsWith("onrender.com") ? sameOriginApiBase : "",
-  defaultRenderApiBase
+  defaultApiBase
 ].filter(Boolean);
-let apiBase = apiCandidates[0] || defaultRenderApiBase;
+let apiBase = apiCandidates[0] || defaultApiBase;
 const API_CONNECT_TIMEOUT_MS = 60_000;
 const WALLET_REFRESH_TIMEOUT_MS = 15_000;
 const POSITIONS_REFRESH_TIMEOUT_MS = 10_000;

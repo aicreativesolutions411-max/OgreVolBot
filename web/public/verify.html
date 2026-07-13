@@ -47,7 +47,7 @@
 const $ = (id) => document.getElementById(id);
 // The verify page is served from the static site (www), but /api/ only lives on the
 // backend — so calls go to the absolute API origin (same pattern as raids.html).
-const API = (location.hostname.includes("onrender.com") || location.hostname === "localhost" || location.hostname === "127.0.0.1") ? "" : "https://ogrevolbot.onrender.com";
+const API = (location.hostname.includes("onrender.com") || location.hostname === "localhost" || location.hostname === "127.0.0.1") ? "" : "https://app.slimewire.org";
 const params = new URL(location.href).searchParams;
 const token = params.get("t") || "";
 function decodeToken(t){ try{ const b=t.split(".")[0]; return JSON.parse(atob(b.replace(/-/g,"+").replace(/_/g,"/"))); }catch{ return null; } }

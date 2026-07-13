@@ -594,7 +594,7 @@ function resize(){ DPR=Math.min(2,window.devicePixelRatio||1); W=window.innerWid
 window.addEventListener("resize",resize); resize();
 
 /* ---- API base: static host serves SPA for /api/*, so hit the Node origin ---- */
-const API = (window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||((location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1") ? "" : "https://ogrevolbot.onrender.com");
+const API = (window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||((location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1") ? "" : "https://app.slimewire.org");
 const SITE = "https://www.slimewire.org";
 
 /* ---- save (shared with terminal: store.dex feeds Swamp Worth) ---- */

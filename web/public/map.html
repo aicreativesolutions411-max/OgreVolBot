@@ -117,7 +117,7 @@
 <script>
 // Static host (slimewire.org) doesn't proxy /api/* → a relative fetch returns index.html and res.json()
 // threw ("network dropped"). Hit the Render ORIGIN absolutely (CORS open), like the main terminal.
-const API_BASE=(window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||'https://ogrevolbot.onrender.com';
+const API_BASE=(window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||'https://app.slimewire.org';
 const COL={hold:{f:'#5be36a',r:'#0c7a2a'},sold:{f:'#e2564b',r:'#7a1010'},whale:{f:'#ffcf4d',r:'#8a6410'},new:{f:'#4dd6ff',r:'#0c5a7a'},funded:{f:'#8dff6a',r:'#1d8f32'},funder:{f:'#4dd6ff',r:'#15718f'},both:{f:'#ffcf4d',r:'#9a7115'}};
 const stage=document.getElementById('stage'),tip=document.getElementById('tip'),overlay=document.getElementById('overlay');
 let crumbs=[],refreshTimer=null,sim=null,zoomB=null,clusterHulls=null;

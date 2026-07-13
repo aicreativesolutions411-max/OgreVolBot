@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://images.weserv.nl" crossorigin>
 <link rel="preconnect" href="https://api.dexscreener.com" crossorigin>
 <link rel="preconnect" href="https://dexscreener.com" crossorigin>
-<link rel="preconnect" href="https://ogrevolbot.onrender.com" crossorigin>
+<link rel="preconnect" href="https://app.slimewire.org" crossorigin>
 <meta name="description" content="SlimeWire is an all-in-one Solana memecoin terminal & Telegram trading bot: one-click trading of fresh pump.fun launches, trending pairs, a rug-check scanner, copy trading, a volume bot, and launchpad — free wallet, no sign-up.">
 <meta name="keywords" content="solana telegram bot, solana trading bot, pump.fun bot, memecoin terminal, solana volume bot, copy trading bot, rug checker, telegram trading bot">
 <link rel="canonical" href="https://www.slimewire.org/">
@@ -583,7 +583,7 @@
   function downloadText(filename,text){try{const b=new Blob([text],{type:"text/plain"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download=filename||"backup.txt";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),3000);}catch(e){}}
 
   // ---------- API + auth ----------
-  const API_BASE=(window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||"https://ogrevolbot.onrender.com";
+  const API_BASE=(window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||"https://app.slimewire.org";
   const TOKEN_KEY="ogreWebToken"; // shared with the main SlimeWire app (same origin)
   const SCOUT_QUEUE_KEY="ggSwampScoutQueue";
   const ALERT_RULE_KEY="ggSwampAlertRules";

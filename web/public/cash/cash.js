@@ -8,7 +8,7 @@
   const ACTIVITY_KEY = "slimecashActivity";
   const GUIDE_KEY = "slimecashGuide";
   const API_BASE = (window.OGRE_PORTAL_CONFIG && window.OGRE_PORTAL_CONFIG.apiBase)
-    || (/^(?:www\.)?slimewire\.org$/i.test(location.hostname) ? "https://ogrevolbot.onrender.com" : "");
+    || (/^(?:www\.)?slimewire\.org$/i.test(location.hostname) ? "https://app.slimewire.org" : "");
   const WSOL_MINT = "So11111111111111111111111111111111111111112";
   const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 

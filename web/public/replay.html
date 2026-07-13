@@ -46,7 +46,7 @@
 <script>
 "use strict";
 (function(){
-const API=(location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1")?"":"https://ogrevolbot.onrender.com";
+const API=(location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1")?"":"https://app.slimewire.org";
 const SITE="https://www.slimewire.org";
 const num=(v)=>{const n=Number(v);return isFinite(n)?n:0;};
 function fmt(n){n=num(n);if(n>=1e6)return"$"+(n/1e6).toFixed(1)+"M";if(n>=1e3)return"$"+(n/1e3).toFixed(0)+"k";return"$"+n.toFixed(0);}

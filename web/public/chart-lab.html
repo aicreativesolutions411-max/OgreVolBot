@@ -146,7 +146,7 @@
   // Use the app's resolved base (passed as &api=) , else same-origin when already on onrender, else
   // the known Render origin. CORS on /api/chart already allows slimewire.org.
   var API=(function(){ var q=QP.get('api'); if(q){ try{ return decodeURIComponent(q).replace(/\/+$/,''); }catch(e){} }
-    return location.hostname.indexOf('onrender.com')>=0 ? '' : 'https://ogrevolbot.onrender.com'; })();
+    return location.hostname.indexOf('onrender.com')>=0 ? '' : 'https://app.slimewire.org'; })();
   if(EMBED&&document.body)document.body.classList.add('embed');
   var LWC=window.LightweightCharts;
   var mcScale=0, dexStats=null, dexPair=null, realPrice=null, chg24=null, haveCandles=false;

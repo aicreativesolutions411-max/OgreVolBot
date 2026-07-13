@@ -17,7 +17,7 @@
 </div>
 <script>
 (() => {
-  const $=s=>document.querySelector(s), API=String(window.OGRE_PORTAL_CONFIG?.apiBase||'https://ogrevolbot.onrender.com').replace(/\/+$/,'');
+  const $=s=>document.querySelector(s), API=String(window.OGRE_PORTAL_CONFIG?.apiBase||'https://app.slimewire.org').replace(/\/+$/,'');
   const BOT=window.OGRE_PORTAL_CONFIG?.telegramBotUsername||'SlimeWiredBot';
   let projects=[],p=null,tab='overview',live={},saveTimer=null,editKeys={};
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

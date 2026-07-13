@@ -90,7 +90,7 @@
     <script>
       (async () => {
         const config = window.OGRE_PORTAL_CONFIG || {};
-        const apiBase = String(config.apiBase || "https://ogrevolbot.onrender.com").replace(/\/$/, "");
+        const apiBase = String(config.apiBase || "https://app.slimewire.org").replace(/\/$/, "");
         const mint = (new URLSearchParams(window.location.search).get("ca") || new URLSearchParams(window.location.search).get("token") || "").replace(/[^A-HJ-NP-Za-km-z1-9]/g, "").slice(0, 48);
         const esc = (value) => String(value ?? "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
         if (!mint) {

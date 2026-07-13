@@ -186,7 +186,7 @@
 (function(){
 /* ============================ boot / dom ============================ */
 const $=(id)=>document.getElementById(id);
-const API = (window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||((location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1") ? "" : "https://ogrevolbot.onrender.com");
+const API = (window.OGRE_PORTAL_CONFIG&&window.OGRE_PORTAL_CONFIG.apiBase)||((location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1") ? "" : "https://app.slimewire.org");
 const cv=$("cv"), ctx=cv.getContext("2d");
 let W=0,H=0,DPR=1;
 function resize(){

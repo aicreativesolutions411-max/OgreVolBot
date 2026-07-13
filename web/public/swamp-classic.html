@@ -478,7 +478,7 @@
     <script>
     (() => {
       const config = window.OGRE_PORTAL_CONFIG || {};
-      const apiBase = String(config.apiBase || "https://ogrevolbot.onrender.com").replace(/\/$/, "");
+      const apiBase = String(config.apiBase || "https://app.slimewire.org").replace(/\/$/, "");
       const $ = (s) => document.querySelector(s);
       const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 

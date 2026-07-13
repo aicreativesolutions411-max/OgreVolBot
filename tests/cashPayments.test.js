@@ -119,3 +119,27 @@ test("Coinbase session failures preserve a safe provider status for setup diagno
     fetchImpl: async () => ({ ok: false, status: 403, json: async () => ({}) })
   }), /HTTP 403/);
 });
+
+test("Coinbase setup failures never expose internal cloud project identifiers", async () => {
+  const { privateKey } = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+  let calls = 0;
+  await assert.rejects(() => createCoinbaseOnrampSession({
+    keyId: "organizations/test/apiKeys/key",
+    keySecret: privateKey.export({ type: "pkcs8", format: "pem" }),
+    destinationAddress: "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN",
+    asset: "USDC",
+    paymentAmount: "10",
+    redirectUrl: "https://app.slimewire.org/cash/",
+    clientIp: "192.0.2.1",
+    partnerUserRef: "slimecash-test",
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) return { ok: false, status: 404, json: async () => ({}) };
+      return { ok: false, status: 404, json: async () => ({ message: "NotFound: failed to find app with cloud project id private-id: mongo: no documents in result" }) };
+    }
+  }), (error) => {
+    assert.match(error.message, /awaiting Onramp app approval/);
+    assert.doesNotMatch(error.message, /cloud project id|private-id|mongo/i);
+    return true;
+  });
+});

@@ -29,7 +29,7 @@
 (function(){
   const target = document.getElementById("proofSnapshot");
   const esc = (value) => String(value == null ? "" : value).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
-  const endpoints = ["/api/web/proof", "https://ogrevolbot.onrender.com/api/web/proof"];
+  const endpoints = ["/api/web/proof", "https://app.slimewire.org/api/web/proof"];
   async function load(){
     for (const endpoint of endpoints) {
       try {

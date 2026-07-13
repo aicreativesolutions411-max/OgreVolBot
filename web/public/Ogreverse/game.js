@@ -35,7 +35,7 @@
   // multiplayer + account endpoints live on the backend, so resolve them to the backend origin
   // (CORS-enabled below). When served from the backend itself, stay same-origin (relative).
   const OGV_ON_BACKEND = (typeof location !== "undefined" && /ogrevolbot\.onrender\.com$/i.test(location.host || ""));
-  const OGV_API_BASE = OGV_ON_BACKEND ? OGV_BASE : `https://ogrevolbot.onrender.com${OGV_BASE || "/Ogreverse"}`;
+  const OGV_API_BASE = OGV_ON_BACKEND ? OGV_BASE : `https://app.slimewire.org${OGV_BASE || "/Ogreverse"}`;
   function apiUrl(p) { return `${OGV_API_BASE}${p}`; }
 
   const TYPES = [
