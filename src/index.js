@@ -11427,29 +11427,47 @@ async function resolveTokenAvatarRecord(mint = "", row = {}) {
 
   if (/^0x[0-9a-fA-F]{40}$/.test(String(mint || "").trim())) {
     const address = String(mint).trim();
-    const [dexResult, noxaMeta, geckoResult] = await Promise.all([
+    const [dexResult, noxaMeta, geckoResult, blockscoutMeta, bankrArtwork] = await Promise.all([
       fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${address}`, { timeoutMs: 1_500 }).catch(() => null),
       getNoxaRhTokenMetadata(address, { timeoutMs: 1_400 }).catch(() => ({})),
-      fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${address}/info`, { timeoutMs: 1_400 }).catch(() => null)
+      fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${address}/info`, { timeoutMs: 1_400 }).catch(() => null),
+      fetchJson(`https://robinhoodchain.blockscout.com/api/v2/tokens/${address}`, { timeoutMs: 1_400 }).catch(() => null),
+      rhBankrArtworkMap().catch(() => new Map())
     ]);
     const dexPairs = (dexResult?.pairs || []).filter((pair) => String(pair?.chainId || "").toLowerCase() === "robinhood");
     const dexPair = dexPairs.sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0))[0] || null;
     const gecko = geckoResult?.data?.attributes || {};
+    const bankr = bankrArtwork.get(address.toLowerCase()) || {};
     const avatarUrl = normalizeTokenAvatarUrl(firstString(
       noxaMeta.imageUrl,
       dexPair?.info?.imageUrl,
+      bankr.imageUrl,
       gecko.image_url,
-      gecko.imageUrl
+      gecko.imageUrl,
+      blockscoutMeta?.icon_url
     ));
     const socials = Array.isArray(dexPair?.info?.socials) ? dexPair.info.socials : [];
     const websites = Array.isArray(dexPair?.info?.websites) ? dexPair.info.websites : [];
     if (avatarUrl) return tokenAvatarRecord(address, {
       avatarUrl,
-      source: noxaMeta.imageUrl ? "noxa" : (dexPair?.info?.imageUrl ? "dex" : "geckoterminal"),
+      source: noxaMeta.imageUrl ? "noxa"
+        : dexPair?.info?.imageUrl ? "dex"
+          : bankr.imageUrl ? "bankr"
+            : firstString(gecko.image_url, gecko.imageUrl) ? "geckoterminal" : "blockscout",
       state: "ready",
       twitterUrl: firstString((socials.find((item) => /twitter|x/i.test(item?.type || item?.label || "")) || {}).url),
       telegramUrl: firstString((socials.find((item) => /telegram|tg/i.test(item?.type || item?.label || "")) || {}).url),
-      websiteUrl: firstString(websites[0]?.url)
+      websiteUrl: firstString(websites[0]?.url, bankr.websiteUrl)
+    });
+    const launchMetadata = await getRhOnchainLaunchMetadata(address, bankr.metadataUri).catch(() => ({}));
+    const launchAvatarUrl = normalizeTokenAvatarUrl(launchMetadata.imageUrl);
+    if (launchAvatarUrl) return tokenAvatarRecord(address, {
+      avatarUrl: launchAvatarUrl,
+      source: "robinhood-onchain-metadata",
+      state: "ready",
+      twitterUrl: firstString(launchMetadata.twitterUrl, bankr.twitterUrl),
+      telegramUrl: firstString(launchMetadata.telegramUrl),
+      websiteUrl: firstString(launchMetadata.websiteUrl, bankr.websiteUrl)
     });
     return tokenAvatarRecord(address, {
       avatarUrl: "",
@@ -15230,11 +15248,15 @@ async function handleMessage(message, userId) {
     }
   }
 
-  // Cashtag like "$OGRE" → resolve the ticker to its token and post the SAME scan card as a CA
-  // (records the channel call too, via the look handler). Works in groups + DM.
-  const cashtag = /^\$([A-Za-z][A-Za-z0-9._]{1,19})$/.exec(text.trim());
+  // A cashtag anywhere in normal text ("watching $OGRE here") resolves to the same scan card as a CA.
+  // Slash commands keep their own argument parser, and a group's Scan toggle stays authoritative.
+  const cashtag = !text.trim().startsWith("/") ? extractCashtags(text.trim())[0] : "";
   if (cashtag) {
-    const symbol = cashtag[1].toUpperCase();
+    if (!isPrivateChat(message.chat)) {
+      const gbTicker = await getGroupBotEntry(chatId).catch(() => null);
+      if (gbTicker && !groupBotFeatureOn(gbTicker, "scan")) return;
+    }
+    const symbol = String(cashtag).replace(/^\$+/, "").toUpperCase();
     const startedAt = Date.now();
     let resolved = false;
     let progressTask = null;
@@ -53514,6 +53536,9 @@ const RH_NOXA_PUBLIC_API = "https://awk00kk00gskkw0o8kc488kg.notoriouslywrong.co
 const rhFeedArtworkCache = new Map();
 let rhNoxaArtworkSnapshot = { at: 0, byToken: new Map() };
 let rhNoxaArtworkInFlight = null;
+let rhBankrArtworkSnapshot = { at: 0, byToken: new Map() };
+let rhBankrArtworkInFlight = null;
+const rhOnchainMetadataCache = new Map();
 
 async function getNoxaRhTokenMetadata(address, options = {}) {
   const token = await fetchJson(`${RH_NOXA_PUBLIC_API}/v1/robinhood/token/${encodeURIComponent(address)}`, {
@@ -53550,8 +53575,103 @@ async function rhNoxaArtworkMap() {
   return rhNoxaArtworkInFlight;
 }
 
+// Bankr exposes the metadata attached to its newest Robinhood launches. Reading this public index is
+// both faster and more exact than a ticker search: every image is keyed by the 0x contract address.
+async function rhBankrArtworkMap() {
+  if (Date.now() - rhBankrArtworkSnapshot.at < 60_000) return rhBankrArtworkSnapshot.byToken;
+  if (rhBankrArtworkInFlight) return rhBankrArtworkInFlight;
+  rhBankrArtworkInFlight = (async () => {
+    const result = await fetchJson("https://api.bankr.bot/token-launches", {
+      headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
+      timeoutMs: 1_500
+    }).catch(() => null);
+    const byToken = new Map();
+    for (const launch of Array.isArray(result?.launches) ? result.launches : []) {
+      if (String(launch?.chain || "").toLowerCase() !== "robinhood") continue;
+      const key = String(launch?.tokenAddress || "").toLowerCase();
+      if (!/^0x[0-9a-f]{40}$/.test(key)) continue;
+      byToken.set(key, {
+        imageUrl: firstString(launch?.imageUri, launch?.imageUrl, launch?.image),
+        metadataUri: firstString(launch?.metadataUri, launch?.metadata_uri),
+        twitterUrl: firstString(launch?.tweetUrl),
+        websiteUrl: firstString(launch?.websiteUrl)
+      });
+    }
+    if (byToken.size) rhBankrArtworkSnapshot = { at: Date.now(), byToken };
+    else rhBankrArtworkSnapshot.at = Date.now();
+    return rhBankrArtworkSnapshot.byToken;
+  })().finally(() => { rhBankrArtworkInFlight = null; });
+  return rhBankrArtworkInFlight;
+}
+
+function rhMetadataUriFromEncodedCall(value = "") {
+  const hex = String(value || "").replace(/^0x/i, "");
+  if (!hex || hex.length % 2 || !/^[0-9a-f]+$/i.test(hex)) return "";
+  const decoded = Buffer.from(hex, "hex").toString("utf8");
+  return firstString((decoded.match(/ipfs:\/\/[A-Za-z0-9][A-Za-z0-9._\/-]{20,350}/i) || [])[0]);
+}
+
+async function rhMetadataDocument(metadataUri = "") {
+  for (const candidate of metadataUriGatewayCandidates(metadataUri)) {
+    try {
+      const metadata = await fetchJson(candidate, {
+        headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
+        timeoutMs: 1_500
+      });
+      if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) continue;
+      return {
+        imageUrl: firstString(metadata.image, metadata.imageUrl, metadata.image_url, metadata.logo, metadata.logoURI),
+        twitterUrl: normalizeSocialLink(firstString(metadata.twitter, metadata.x, metadata.twitterUrl, metadata.twitter_url), "twitter"),
+        telegramUrl: normalizeSocialLink(firstString(metadata.telegram, metadata.telegramUrl, metadata.telegram_url), "telegram"),
+        websiteUrl: normalizeSocialLink(firstString(metadata.website, metadata.websiteUrl, metadata.website_url, metadata.external_url), "website")
+      };
+    } catch { /* try the next public gateway */ }
+  }
+  return {};
+}
+
+// Some Robinhood launchers store the token's metadata URI only in their factory initializer. When the
+// usual indexes have no logo, recover that exact URI from the creation transaction instead of guessing
+// by ticker. This path is bounded, cached, and only runs after the fast providers miss.
+async function getRhOnchainLaunchMetadata(address = "", knownMetadataUri = "") {
+  const key = String(address || "").trim().toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(key)) return {};
+  const cached = rhOnchainMetadataCache.get(key);
+  if (cached && Date.now() - cached.at < (cached.imageUrl ? 30 * 24 * 60 * 60_000 : 60 * 60_000)) return cached;
+  let metadataUri = String(knownMetadataUri || "").trim();
+  if (!metadataUri) {
+    const creation = await fetchJson(
+      `https://robinhoodchain.blockscout.com/api?module=contract&action=getcontractcreation&contractaddresses=${encodeURIComponent(key)}`,
+      { headers: { "Accept": "application/json" }, timeoutMs: 1_500 }
+    ).catch(() => null);
+    const txHash = firstString(Array.isArray(creation?.result) ? creation.result[0]?.txHash : "");
+    if (txHash) {
+      const transaction = await fetchJson(`https://robinhoodchain.blockscout.com/api/v2/transactions/${encodeURIComponent(txHash)}`, {
+        headers: { "Accept": "application/json" }, timeoutMs: 1_500
+      }).catch(() => null);
+      const callData = firstString(
+        ...(Array.isArray(transaction?.decoded_input?.parameters)
+          ? transaction.decoded_input.parameters.filter((item) => item?.name === "data" || item?.type === "bytes").map((item) => item?.value)
+          : []),
+        transaction?.input
+      );
+      metadataUri = rhMetadataUriFromEncodedCall(callData);
+    }
+  }
+  const metadata = metadataUri ? await rhMetadataDocument(metadataUri) : {};
+  const value = { at: Date.now(), metadataUri, ...metadata };
+  rhOnchainMetadataCache.set(key, value);
+  if (rhOnchainMetadataCache.size > 750) {
+    const oldest = [...rhOnchainMetadataCache.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, 150);
+    for (const [oldKey] of oldest) rhOnchainMetadataCache.delete(oldKey);
+  }
+  return value;
+}
+
 async function enrichRhFeedArtwork(rows = []) {
-  const targets = rows.filter((row) => row?.address && !row.imageUrl && !row.iconUrl).slice(0, 50);
+  // `iconUrl` is only the explorer's optional fallback. Keep searching for address-verified market
+  // artwork whenever `imageUrl` is empty so an explorer placeholder cannot block the real coin PFP.
+  const targets = rows.filter((row) => row?.address && !row.imageUrl).slice(0, 50);
   const missing = [];
   for (const row of targets) {
     const key = String(row.address).toLowerCase(), cached = rhFeedArtworkCache.get(key);
@@ -53563,12 +53683,13 @@ async function enrichRhFeedArtwork(rows = []) {
     // Dex accepts bounded address batches. Two small requests cover the whole visible feed in about one RTT.
     const chunks = [];
     for (let index = 0; index < missing.length; index += 25) chunks.push(missing.slice(index, index + 25));
-    const [pairGroups, noxaArtwork] = await Promise.all([
+    const [pairGroups, noxaArtwork, bankrArtwork] = await Promise.all([
       Promise.all(chunks.map((chunk) => fetchJson(
         `https://api.dexscreener.com/tokens/v1/robinhood/${chunk.map((row) => row.address).join(",")}`,
         { headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" }, timeoutMs: 1_800 }
       ).catch(() => []))),
-      rhNoxaArtworkMap().catch(() => new Map())
+      rhNoxaArtworkMap().catch(() => new Map()),
+      rhBankrArtworkMap().catch(() => new Map())
     ]);
     const pairs = pairGroups.flatMap((group) => Array.isArray(group) ? group : []);
     const byToken = new Map();
@@ -53580,7 +53701,11 @@ async function enrichRhFeedArtwork(rows = []) {
     }
     for (const row of missing) {
       const key = String(row.address).toLowerCase();
-      const imageUrl = firstString(byToken.get(key)?.info?.imageUrl, noxaArtwork.get(key));
+      const imageUrl = normalizeTokenAvatarUrl(firstString(
+        byToken.get(key)?.info?.imageUrl,
+        noxaArtwork.get(key),
+        bankrArtwork.get(key)?.imageUrl
+      ));
       rhFeedArtworkCache.set(key, { at: Date.now(), imageUrl }); if (imageUrl) row.imageUrl = imageUrl;
     }
   }
@@ -53629,7 +53754,7 @@ async function webRhPairs(category = "trending") {
     return {
       ...t,
       ...(m ? { slimewire: true, description: m.description, website: m.website, x: m.x, telegram: m.telegram, holderRewards: m.holderRewards } : {}),
-      imageUrl: (m && m.hasImage) ? `/api/web/rh/token-image/${t.address}` : (t.iconUrl || ""),
+      imageUrl: (m && m.hasImage) ? `/api/web/rh/token-image/${t.address}` : "",
       explorer: rhExplorerToken(t.address)
     };
   });

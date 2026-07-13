@@ -22,6 +22,10 @@ const ggSource = fs.readFileSync(new URL("../web/public/gg.html", import.meta.ur
 const indexSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
 const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
 
+test("main website mirrors stay identical", () => {
+  assert.equal(indexSource, ggSource, "index.html and gg.html drifted; shared site fixes must ship together");
+});
+
 function functionBody(source, name) {
   const syncMatch = new RegExp(`function\\s+${name}\\s*\\(`).exec(source);
   const asyncMatch = new RegExp(`async\\s+function\\s+${name}\\s*\\(`).exec(source);
@@ -416,8 +420,11 @@ test("RH rows: quick-buy stays in frame on mobile + fresh coins always get MC (i
     assert.match(src, /no pool yet/);                          // honest empty-state on rows
     // Full-coverage enrichment: DexScreener caps 30 addrs/call — the board must CHUNK through all rows.
     assert.match(src, /chunks\.push\(addrs\.slice\(i,i\+30\)\)/);
-    // Letter-tile avatar fallback: no RH coin ever renders without a "pfp".
+    // One shared exact-address proxy + branded image fallback: no RH surface renders a blank/letter tile.
     assert.match(src, /function rhAvTileHtml/);
+    assert.match(src, /function rhAvatarFail/);
+    assert.match(src, /\/api\/web\/token-image\?mint=/);
+    assert.match(src, /token-mascots\/token-mascot-/);
     assert.match(src, /rhAvatar\(r,30\)/);
   }
   // Server: pool-implied price fallback (tiny quote x on-chain supply) fills MC for unindexed coins.
@@ -2481,6 +2488,8 @@ test("Telegram scan throttling is per token and partial reads still render", () 
 
   const messageRouter = functionBody(serverSource, "handleMessage");
   assert.doesNotMatch(messageRouter, /tgCommandOnCooldown\(chatId, "cashtag"/); // handler owns the per-token cooldown
+  assert.match(messageRouter, /const cashtag = !text\.trim\(\)\.startsWith\("\/"\) \? extractCashtags\(text\.trim\(\)\)\[0\]/); // $ticker inside a sentence still scans
+  assert.match(messageRouter, /gbTicker[\s\S]{0,160}groupBotFeatureOn\(gbTicker, "scan"\)/); // Scan-off groups stay quiet
   assert.match(messageRouter, /Matching the strongest exact/);                  // slow resolution gets an immediate visible acknowledgement
   assert.match(messageRouter, /Couldn't verify a strong exact market/);         // groups never fail silently on an unresolved ticker
   assert.match(functionBody(serverSource, "telegram"), /TELEGRAM_API_TIMEOUT_MS/); // Telegram calls cannot hang forever

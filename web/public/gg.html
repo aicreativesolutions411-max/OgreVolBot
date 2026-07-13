@@ -1637,17 +1637,29 @@
     }
   }
   function rhQuickEth(){const v=Number(localStorage.getItem("ggRhQuick")||"0.005");return isFinite(v)&&v>0?String(v):"0.005";}
-  // Coin avatar with a deterministic letter-tile fallback — a row should never look half-rendered just
-  // because a brand-new coin has no image indexed anywhere yet (same polish as the Solana pair cells).
+  // Exact-contract artwork first; branded image fallback second. Every surface uses this resolver.
   function rhAvatar(r,size,radius){
     size=size||26;radius=radius==null?"50%":radius;
-    if(r&&r.imageUrl)return '<img src="'+esc(r.imageUrl)+'" style="width:'+size+'px;height:'+size+'px;border-radius:'+radius+';object-fit:cover;flex:0 0 auto" onerror="this.outerHTML=GG.rhAvTile(\''+esc((r.symbol||"?").slice(0,2))+'\','+size+',\''+radius+'\')">';
-    return rhAvTileHtml((r&&r.symbol)||"?",size,radius);
+    const address=String((r&&r.address)||"");
+    const image=String((r&&(r.imageUrl||r.iconUrl))||"");
+    const proxy=/^0x[0-9a-fA-F]{40}$/.test(address)?'/api/web/token-image?mint='+encodeURIComponent(address):'';
+    if(image||proxy)return '<img src="'+esc(image||proxy)+'" data-rh-proxy="'+esc(proxy)+'" data-rh-symbol="'+esc((r&&r.symbol)||"?")+'" data-rh-key="'+esc(address||((r&&r.symbol)||"?"))+'" data-rh-size="'+size+'" data-rh-radius="'+esc(radius)+'" style="width:'+size+'px;height:'+size+'px;border-radius:'+radius+';object-fit:cover;flex:0 0 auto" onerror="GG.rhAvatarFail(this)">';
+    return rhAvTileHtml((r&&r.symbol)||"?",size,radius,address);
   }
-  function rhAvTileHtml(sym,size,radius){
-    const s=String(sym||"?").slice(0,2).toUpperCase();
-    let h=0;for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))%360;
-    return '<span style="width:'+size+'px;height:'+size+'px;border-radius:'+radius+';flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;font-size:'+Math.round(size*0.38)+'px;font-weight:800;color:#08130a;background:hsl('+h+',55%,62%)">'+esc(s)+'</span>';
+  function rhAvatarFail(img){
+    const proxy=img.dataset.rhProxy||"",attempt=Number(img.dataset.rhAttempt||0);
+    if(proxy&&attempt<2){
+      img.dataset.rhAttempt=String(attempt+1);img.src=rhFallbackAvatarSrc(img.dataset.rhKey||img.dataset.rhSymbol);
+      setTimeout(()=>{if(img.isConnected)img.src=proxy+(proxy.includes("?")?"&":"?")+"retry="+(attempt+1);},1800+attempt*1200);return;
+    }
+    img.outerHTML=rhAvTileHtml(img.dataset.rhSymbol||"?",Number(img.dataset.rhSize)||26,img.dataset.rhRadius||"50%",img.dataset.rhKey||"");
+  }
+  function rhFallbackAvatarSrc(key){
+    const s=String(key||"token");let h=0;for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;
+    return '/assets/slimewire/png/token-mascots/token-mascot-'+((h%5)+1)+'.png';
+  }
+  function rhAvTileHtml(sym,size,radius,key){
+    return '<img src="'+rhFallbackAvatarSrc(key||sym)+'" alt="" style="width:'+size+'px;height:'+size+'px;border-radius:'+radius+';object-fit:cover;flex:0 0 auto">';
   }
   async function rhEnrichRows(rows){
     try{
@@ -1664,7 +1676,7 @@
         if(o.price>0)r.priceUsd=o.price;if(o.mc>0)r.marketCapUsd=o.mc;if(o.liq>0)r.liquidityUsd=o.liq;if(o.v24>0)r.volume24hUsd=o.v24;
         if(Number.isFinite(o.m5))r.m5=o.m5;if(o.pair)r.pairAddress=o.pair;
         if(o.sym&&!r.symbol)r.symbol=o.sym;if(o.name&&!r.name)r.name=o.name;   // pasted-fresh RH coin: fill ticker/name so the page isn't "?"
-        if(o.img&&!r.slimewire&&!r.imageUrl)r.imageUrl=o.img;   // registry PFP wins for our launches
+        if(o.img&&!r.imageUrl)r.imageUrl=o.img;   // a stored SlimeWire image is already present and still wins
         if(o.tw&&!r.x)r.x=o.tw;if(o.tg&&!r.telegram)r.telegram=o.tg;if(o.web&&!r.website)r.website=o.web;
       }
       return changed;
@@ -3133,7 +3145,7 @@
         const o=byLc[String(t.address).toLowerCase()]||{};
         const val=o.price>0?o.price*Number(t.uiAmount||0):null;
         const img=o.img||t.iconUrl||"";
-        return '<tr onclick="GG.rhTrade(\''+esc(t.address)+'\')"><td class="l"><div style="display:flex;align-items:center;gap:8px">'+rhAvatar({imageUrl:img,symbol:t.symbol},22)+'<div><b style="font-size:12px">'+esc(t.symbol||"?")+'</b><div class="mut" style="font-size:10px">'+esc(t.name||"")+'</div></div></div></td>'+
+        return '<tr onclick="GG.rhTrade(\''+esc(t.address)+'\')"><td class="l"><div style="display:flex;align-items:center;gap:8px">'+rhAvatar({address:t.address,imageUrl:img,symbol:t.symbol},22)+'<div><b style="font-size:12px">'+esc(t.symbol||"?")+'</b><div class="mut" style="font-size:10px">'+esc(t.name||"")+'</div></div></div></td>'+
           '<td class="mut">'+Number(t.uiAmount||0).toLocaleString(undefined,{maximumFractionDigits:2})+'</td>'+
           '<td>'+(val!=null?fmtUsd(val):"—")+'</td>'+
           '<td><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap"><button class="buybtn sm" title="Auto-sell at a target / floor" onclick="event.stopPropagation();GG.rhGuardModal(\''+esc(t.address)+'\')">🎯</button>'+[25,50,75,100].map(p=>'<button class="buybtn sm"'+(p===100?' style="background:linear-gradient(180deg,#ff8b8b,var(--red));color:#1a0606"':'')+' onclick="event.stopPropagation();GG.rhSellPos(\''+esc(t.address)+'\','+p+')">'+(p===100?'All':p+'%')+'</button>').join("")+'</div></td></tr>';
@@ -4287,7 +4299,7 @@
     escrowModal,renderEscrow,escrowFinalize,escrowRefund,launchesModal,claimFees,toast,
     launchRh:()=>{state.launchRail="robinhood";state.launchTab="coin";go("launch");},
     rhTrade:(a)=>rhTradeModal(a),rhBuy:(a,amt)=>rhBuyAmount(a,amt),rhBuyAmount:(a,amt)=>rhBuyAmount(a,amt),rhSell:(a,p)=>rhTrade(a,"sell",{percent:p}),rhQuick:(a)=>rhBuyAmount(a,rhQuickEth()),
-    rhSellPos:async(a,p)=>{await rhTrade(a,"sell",{percent:p});loadRhPositions();},rhAvTile:(s,z,r)=>rhAvTileHtml(s,z,r),rhPresetModal:()=>rhPresetModal(),
+    rhSellPos:async(a,p)=>{await rhTrade(a,"sell",{percent:p});loadRhPositions();},rhAvTile:(s,z,r,k)=>rhAvTileHtml(s,z,r,k),rhAvatarFail:(img)=>rhAvatarFail(img),rhPresetModal:()=>rhPresetModal(),
     rhGuardModal:(a)=>rhGuardModal(a),rhGuardCancel:(id,a)=>rhGuardCancel(id,a),rhBundleModal:(a)=>rhBundleModal(a),rhVolumeModal:(a)=>rhVolumeModal(a),
     rhAutoBundleModal:(a)=>rhAutoBundleModal(a),rhAutoBundleCancel:(id,a)=>rhAutoBundleCancel(id,a),rhAddLiquidity:(a,w)=>rhAddLiquidityModal(a,w),
     flipTrade:()=>{const t=document.querySelector('#v-trade .trade');if(!t)return;const next=t.getAttribute('data-focus')==='buy'?'chart':'buy';t.setAttribute('data-focus',next);const fab=document.getElementById('tradeFab');if(fab)fab.innerHTML=next==='buy'?'📈 Chart':'💰 Buy';const side=t.querySelector('.tradeSide'),v=document.getElementById('v-trade');if(next==='buy'&&side)side.scrollIntoView({behavior:'smooth',block:'start'});else if(v)v.scrollTo({top:0,behavior:'smooth'});},

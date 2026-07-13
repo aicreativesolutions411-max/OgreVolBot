@@ -14,7 +14,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.match(server, /requestUrl\.pathname === "\/fun"[\s\S]{0,300}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
-  assert.match(html, /<script defer src="\/fun\.js\?v=15"><\/script>/);
+  assert.match(html, /<script defer src="\/fun\.js\?v=16"><\/script>/);
 });
 
 test("/fun is installable as a separate PWA with a dedicated-origin escape", () => {
@@ -26,7 +26,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install Fun/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v2/);
+  assert.match(funWorker, /slimewire-fun-v3/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -87,6 +87,9 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(server, /enrichRhFeedArtwork/);
   assert.match(server, /RH_NOXA_PUBLIC_API/);
   assert.match(server, /rhNoxaArtworkMap/);
+  assert.match(server, /rhBankrArtworkMap/);
+  assert.match(server, /getRhOnchainLaunchMetadata/);
+  assert.match(server, /row\?\.address && !row\.imageUrl/);
   assert.match(server, /const artworkPromise = enrichRhFeedArtwork\(rows\)/);
   assert.match(server, /await artworkPromise/);
   assert.match(server, /token-pairs\/v1\/robinhood/);
@@ -94,6 +97,7 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(js, /resolvedCoinImages: new Map/);
   assert.match(js, /state\.resolvedCoinImages\.set/);
   assert.match(js, /background-image:url\('\$\{coinBadge\(coin\)\}'\)/);
+  assert.match(js, /return mascot\(coinKey\(coin\)/);
   assert.match(css, /\.coin-avatar,\.coin-identity img\{background-position:center/);
   assert.match(js, /gateway\\\.pinata/);
   assert.doesNotMatch(js, /retries < 3/);

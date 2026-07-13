@@ -81,11 +81,9 @@
   function coinKey(coin) { return String(coin?.address || coin?.tokenMint || "").trim(); }
   function mascot(value) { return value ? `/assets/slimewire/png/token-mascots/token-mascot-${(hashCode(value) % 5) + 1}.png` : TOKEN_FALLBACK; }
   function coinBadge(coin = {}) {
-    const key = coinKey(coin), raw = String(coin.symbol || coin.name || "?").replace(/^\$+/, "").trim();
-    const label = (raw.match(/[a-z0-9]/gi) || ["?"]).slice(0, 2).join("").toUpperCase();
-    const hue = hashCode(key || raw) % 360;
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="hsl(${hue} 72% 34%)"/><stop offset="1" stop-color="hsl(${(hue + 42) % 360} 75% 12%)"/></linearGradient></defs><rect width="96" height="96" rx="22" fill="url(#g)"/><circle cx="76" cy="20" r="18" fill="#8bff38" opacity=".16"/><text x="48" y="59" text-anchor="middle" fill="#f5ffe9" font-family="Arial,sans-serif" font-size="31" font-weight="800">${label}</text></svg>`;
-    return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+    // Always paint a real image while exact metadata is resolving. Letter tiles looked like missing
+    // artwork; the branded token mascot makes every row complete without pretending it is coin metadata.
+    return mascot(coinKey(coin) || coin.symbol || coin.name || "token");
   }
   function slimePfp(value) { return `/pfp/mapfaces/${SLIME_PFPS[hashCode(value) % SLIME_PFPS.length]}`; }
   function normalizeImageUrl(value) {
@@ -995,10 +993,19 @@
   document.addEventListener("error", (event) => {
     const image = event.target;
     if (!(image instanceof HTMLImageElement) || !image.matches("[data-token-image]")) return;
-    const proxy = image.dataset.proxyImage || "", direct = image.dataset.directImage || "";
+    const proxy = image.dataset.proxyImage || "";
     const current = image.currentSrc || image.src || "";
     if (proxy && !current.startsWith(proxy)) { image.src = proxy; return; }
-    if (direct && !current.startsWith(direct) && !/(?:ipfs\/|gateway\.pinata\.cloud|ipfs\.io)/i.test(direct)) { image.src = direct; return; }
+    const retry = Number(image.dataset.coinImageRetry || 0);
+    if (proxy && current.startsWith(proxy) && retry < 2) {
+      image.dataset.coinImageRetry = String(retry + 1);
+      image.src = coinBadge({ address: image.dataset.coinImageKey, symbol: image.dataset.coinSymbol });
+      setTimeout(() => {
+        if (!image.isConnected || !image.matches("[data-token-image]")) return;
+        image.src = `${proxy}${proxy.includes("?") ? "&" : "?"}retry=${retry + 1}`;
+      }, 1_800 + retry * 1_200);
+      return;
+    }
     image.removeAttribute("data-token-image");
     image.src = coinBadge({
       address: image.dataset.coinImageKey || image.closest("[data-open-coin]")?.dataset.openCoin || state.selected && coinKey(state.selected),
