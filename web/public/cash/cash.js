@@ -785,10 +785,12 @@
       $("coinbaseFundBtn").textContent = validAmount
         ? `Copy address & open ${providerName} · $${amount.toFixed(amount % 1 ? 2 : 0)}`
         : `Copy address & open ${providerName}`;
-    } else {
+    } else if (state.funding?.providers?.coinbase?.integrated) {
       $("coinbaseFundBtn").textContent = validAmount
-        ? `Continue to Coinbase · $${amount.toFixed(amount % 1 ? 2 : 0)} ${state.depositAsset}`
-        : "Continue to Coinbase";
+        ? `Pay with card or Apple Pay · $${amount.toFixed(amount % 1 ? 2 : 0)}`
+        : "Pay with card or Apple Pay";
+    } else {
+      $("coinbaseFundBtn").textContent = "Turn on 1-tap card funding";
     }
   }
 
@@ -815,10 +817,7 @@
     }
     const funding = await refreshFundingConfig();
     if (!funding?.providers?.coinbase?.integrated) {
-      await copyText(state.wallet?.publicKey || "");
-      $("fundingStatus").textContent = "Address copied. In Coinbase choose Send, select the same asset, and use the Solana network.";
-      $("fundingStatus").className = "status ok";
-      window.open(funding?.providers?.coinbase?.url || "https://www.coinbase.com/buy", "_blank", "noopener");
+      openSheet("cardsetup");
       return;
     }
     button.disabled = true;

@@ -6,8 +6,8 @@
 <title>SlimeCash — money for the trenches</title>
 <meta name="description" content="SlimeCash: send, receive, and swap coins with your $handle. Money for the trenches.">
 <meta name="theme-color" content="#050705">
-<meta name="slimecash-build" content="9">
-<link rel="manifest" href="/cash/manifest.webmanifest?v=9">
+<meta name="slimecash-build" content="10">
+<link rel="manifest" href="/cash/manifest.webmanifest?v=10">
 <link rel="icon" type="image/png" sizes="64x64" href="/cash/icons/favicon-64.png">
 <link rel="apple-touch-icon" href="/cash/icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -17,7 +17,7 @@
 <meta property="og:title" content="SlimeCash">
 <meta property="og:description" content="Money for the trenches. Send, receive, and swap coins with your $handle.">
 <meta property="og:image" content="https://www.slimewire.org/cash/icons/icon-512.png">
-<link rel="stylesheet" href="/cash/cash.css?v=9">
+<link rel="stylesheet" href="/cash/cash.css?v=10">
 </head>
 <body>
 <div id="splash" class="splash">
@@ -406,6 +406,24 @@
   </div>
 </div>
 
+<!-- CARD SETUP SHEET (owner enables 1-tap card funding) -->
+<div id="cardsetup" class="sheet-backdrop" hidden>
+  <div class="sheet">
+    <button class="sheet-close" data-close="cardsetup" type="button" aria-label="Close">×</button>
+    <div class="sheet-title">Turn on 1-tap card funding</div>
+    <p class="sheet-copy">The instant "type an amount, pay with card or Apple Pay, done" button is built in — it just needs a free Coinbase developer key. Individuals qualify; no company needed. About 5 minutes, one time.</p>
+    <div class="guide-steps">
+      <div>1. Open the Coinbase Developer Platform and sign in with your normal Coinbase account</div>
+      <div>2. Create a project → API Keys → create a Secret API Key (Ed25519). Copy the Key ID and the Key Secret</div>
+      <div>3. In Render → this service → Environment, add:<br><b>COINBASE_CDP_KEY_ID</b> = your key id<br><b>COINBASE_CDP_KEY_SECRET</b> = your key secret</div>
+      <div>4. Save — Render redeploys, and this button becomes instant card funding for everyone</div>
+    </div>
+    <a class="btn primary block" href="https://portal.cdp.coinbase.com/" target="_blank" rel="noopener">Open Coinbase Developer Platform</a>
+    <a class="btn ghost block" href="https://dashboard.render.com/" target="_blank" rel="noopener">Open Render dashboard</a>
+    <div class="fineprint">Until then, use Venmo, Coinbase, or another wallet below — your address is copied for you and the tracker pings you when funds land.</div>
+  </div>
+</div>
+
 <!-- CONVERT SHEET -->
 <div id="convert" class="sheet-backdrop" hidden>
   <div class="sheet">
@@ -461,6 +479,6 @@
 </div>
 
 <div id="toast" class="toast" hidden></div>
-<script src="/cash/cash.js?v=9"></script>
+<script src="/cash/cash.js?v=10"></script>
 </body>
 </html>
