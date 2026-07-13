@@ -35,9 +35,9 @@ test("SlimeCash automatically downloads account and wallet recovery material", (
 });
 
 test("SlimeCash service worker prefers the current deploy and retains offline fallback", () => {
-  assert.match(sw, /slimecash-v6/);
-  assert.match(html, /cash\.js\?v=6/);
-  assert.match(html, /cash\.css\?v=6/);
+  assert.match(sw, /slimecash-v7/);
+  assert.match(html, /cash\.js\?v=7/);
+  assert.match(html, /cash\.css\?v=7/);
   assert.match(sw, /const fetched = fetch/);
   assert.match(sw, /return fetched/);
   assert.match(sw, /catch\(\(\) => cached\)/);
@@ -68,12 +68,12 @@ test("USDC funding and sending stay explicit in the SlimeCash client", () => {
   assert.match(html, /id="fundCardBtn"/);
 });
 
-test("SlimeCash uses a separate PWA identity and a synchronized v6 shell", () => {
+test("SlimeCash uses a separate PWA identity and a synchronized v7 shell", () => {
   assert.equal(manifest.id, "/slimecash-app");
   assert.equal(manifest.start_url, "/cash/?src=slimecash-pwa");
   assert.equal(manifest.scope, "/cash/");
-  assert.match(html, /slimecash-build" content="6"/);
-  assert.match(sw, /slimecash-v6/);
-  assert.match(cash, /dedicatedHost = "ogrevolbot\.onrender\.com"/);
+  assert.match(html, /slimecash-build" content="7"/);
+  assert.match(sw, /slimecash-v7/);
+  assert.match(cash, /dedicatedHost = "app\.slimewire\.org"/);
   assert.match(cash, /intent:\/\/\$\{dedicatedHost\}\/cash/);
 });

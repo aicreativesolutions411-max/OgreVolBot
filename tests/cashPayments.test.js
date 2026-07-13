@@ -67,6 +67,7 @@ test("Coinbase session request is Solana-only, preloaded, and returns only the h
   assert.equal(request.body.destinationNetwork, "solana");
   assert.equal(request.body.purchaseCurrency, "USDC");
   assert.equal(request.body.paymentAmount, "50.00");
+  assert.equal(request.body.paymentMethod, "CARD");
   assert.match(request.options.headers.Authorization, /^Bearer /);
   assert.equal(result.onrampUrl, "https://pay.coinbase.com/buy?sessionToken=one-use");
 });
@@ -100,6 +101,8 @@ test("Coinbase hosted funding falls back to the documented v1 token flow when v2
   assert.equal(hostedUrl.searchParams.get("defaultNetwork"), "solana");
   assert.equal(hostedUrl.searchParams.get("defaultAsset"), "USDC");
   assert.equal(hostedUrl.searchParams.get("presetFiatAmount"), "25.00");
+  assert.equal(hostedUrl.searchParams.get("defaultExperience"), "buy");
+  assert.equal(hostedUrl.searchParams.get("defaultPaymentMethod"), "CARD");
 });
 
 test("Coinbase session failures preserve a safe provider status for setup diagnostics", async () => {

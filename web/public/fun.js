@@ -596,9 +596,10 @@
   function openSheet(html) { $("[data-sheet-content]").innerHTML = html; $("[data-sheet-overlay]").hidden = false; }
   function closeSheet() { clearTimeout(state.volumePoll); state.volumePoll = null; $("[data-sheet-overlay]").hidden = true; $("[data-sheet-content]").innerHTML = ""; }
   function runningStandalone() { return window.matchMedia?.("(display-mode: standalone)")?.matches || navigator.standalone === true; }
-  function funInstallOrigin() { return "https://ogrevolbot.onrender.com/fun/?install=1"; }
+  const FUN_INSTALL_HOST = "app.slimewire.org";
+  function funInstallOrigin() { return `https://${FUN_INSTALL_HOST}/fun/?install=1`; }
   function showFunInstallGuide() {
-    const dedicated = location.hostname === "ogrevolbot.onrender.com";
+    const dedicated = location.hostname === FUN_INSTALL_HOST;
     const ios = /iphone|ipad|ipod/i.test(navigator.userAgent || "");
     const steps = dedicated
       ? (ios
@@ -616,8 +617,8 @@
       if (choice?.outcome === "accepted") { toast("SlimeWire Fun installed"); closeSheet(); }
       return;
     }
-    if (location.hostname !== "ogrevolbot.onrender.com") {
-      if (/android/i.test(navigator.userAgent || "")) location.href = "intent://ogrevolbot.onrender.com/fun/?install=1#Intent;scheme=https;package=com.android.chrome;end";
+    if (location.hostname !== FUN_INSTALL_HOST) {
+      if (/android/i.test(navigator.userAgent || "")) location.href = `intent://${FUN_INSTALL_HOST}/fun/?install=1#Intent;scheme=https;package=com.android.chrome;end`;
       else window.open(funInstallOrigin(), "_blank", "noopener");
       return;
     }

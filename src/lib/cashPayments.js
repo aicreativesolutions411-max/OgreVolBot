@@ -145,6 +145,8 @@ async function createCoinbaseHostedTokenSession({ keyId, keySecret, destinationA
   url.searchParams.set("defaultNetwork", "solana");
   url.searchParams.set("defaultAsset", purchaseCurrency);
   url.searchParams.set("presetFiatAmount", paymentAmount);
+  url.searchParams.set("defaultExperience", "buy");
+  url.searchParams.set("defaultPaymentMethod", "CARD");
   url.searchParams.set("fiatCurrency", "USD");
   return { onrampUrl: url.toString(), quote: null, asset: purchaseCurrency };
 }
@@ -159,6 +161,7 @@ export async function createCoinbaseOnrampSession({ keyId, keySecret, destinatio
     destinationAddress: String(destinationAddress || "").trim(),
     paymentAmount: normalizedPaymentAmount,
     paymentCurrency: "USD",
+    paymentMethod: "CARD",
     redirectUrl: String(redirectUrl || "").trim(),
     clientIp: String(clientIp || "").trim(),
     partnerUserRef: String(partnerUserRef || "").trim()

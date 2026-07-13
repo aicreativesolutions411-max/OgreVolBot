@@ -6,8 +6,8 @@
 <title>SlimeCash — money for the trenches</title>
 <meta name="description" content="SlimeCash: send, receive, and swap coins with your $handle. Money for the trenches.">
 <meta name="theme-color" content="#050705">
-<meta name="slimecash-build" content="6">
-<link rel="manifest" href="/cash/manifest.webmanifest?v=6">
+<meta name="slimecash-build" content="7">
+<link rel="manifest" href="/cash/manifest.webmanifest?v=7">
 <link rel="icon" type="image/png" sizes="64x64" href="/cash/icons/favicon-64.png">
 <link rel="apple-touch-icon" href="/cash/icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -17,7 +17,7 @@
 <meta property="og:title" content="SlimeCash">
 <meta property="og:description" content="Money for the trenches. Send, receive, and swap coins with your $handle.">
 <meta property="og:image" content="https://www.slimewire.org/cash/icons/icon-512.png">
-<link rel="stylesheet" href="/cash/cash.css?v=6">
+<link rel="stylesheet" href="/cash/cash.css?v=7">
 </head>
 <body>
 <div id="splash" class="splash">
@@ -153,7 +153,11 @@
       <button class="amount-chip" data-fund-amount="100" type="button">$100</button>
       <input id="fundAmount" class="field fund-custom" type="number" inputmode="decimal" min="5" max="2500" step="1" value="50" aria-label="Funding amount">
     </div>
-    <button id="coinbaseFundBtn" class="btn primary block" type="button">Buy with Coinbase</button>
+    <div class="funding-preview">
+      <img src="/assets/slimewire/fun-app-icon-192.png" alt="SlimeCash trader">
+      <div><span>SlimeCash checkout</span><b id="fundingPreviewTitle">$50.00 USDC</b><small id="fundingPreviewDestination">Solana wallet loading…</small></div>
+    </div>
+    <button id="coinbaseFundBtn" class="btn primary block" type="button">Continue to Coinbase · $50 USDC</button>
     <div id="fundingStatus" class="status"></div>
     <div class="app-guide">
       <button class="guide-pill" data-guide="phantom" type="button">Phantom</button>
@@ -265,6 +269,6 @@
 </div>
 
 <div id="toast" class="toast" hidden></div>
-<script src="/cash/cash.js?v=6"></script>
+<script src="/cash/cash.js?v=7"></script>
 </body>
 </html>

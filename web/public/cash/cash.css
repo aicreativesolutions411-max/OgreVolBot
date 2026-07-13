@@ -225,6 +225,16 @@ a { color: var(--mint); text-decoration: none; }
 }
 .amount-chip.active { border-color: var(--green); color: var(--green); }
 .fund-custom { padding: 8px 9px; min-width: 0; font-size: 13px; }
+.funding-preview {
+  display: flex; align-items: center; gap: 11px; margin: 10px 0;
+  border: 1px solid rgba(119,255,78,.2); border-radius: 14px;
+  padding: 9px 11px; background: linear-gradient(135deg, rgba(119,255,78,.09), rgba(5,8,5,.72));
+}
+.funding-preview img { width: 48px; height: 48px; border-radius: 13px; object-fit: cover; flex: none; }
+.funding-preview div { display: grid; min-width: 0; gap: 1px; }
+.funding-preview span { color: var(--green); font-size: 10px; text-transform: uppercase; letter-spacing: .55px; }
+.funding-preview b { color: var(--mint); font-size: 15px; }
+.funding-preview small { color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .guide-steps { font-size: 12px; color: var(--ink); line-height: 1.9; min-height: 66px; margin-bottom: 8px; }
 .qr-wrap { display: flex; justify-content: center; padding: 8px 0 12px; }
 #depositQr, #payQr, #receiveQr { background: #fff; border-radius: 12px; padding: 0; }

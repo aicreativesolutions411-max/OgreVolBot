@@ -1,14 +1,14 @@
 /* SlimeWire Fun: separate PWA shell and push worker. */
-const FUN_CACHE = "slimewire-fun-v1";
+const FUN_CACHE = "slimewire-fun-v2";
 const FUN_SHELL = [
   "/fun/",
   "/fun.html",
   "/fun.css?v=9",
-  "/fun.js?v=14",
-  "/fun-manifest.webmanifest?v=1",
+  "/fun.js?v=15",
+  "/fun-manifest.webmanifest?v=2",
   "/config.js",
-  "/icons/icon-192.png",
-  "/assets/slimewire/png/slimewire-mark.png"
+  "/assets/slimewire/fun-app-icon-192.png",
+  "/assets/slimewire/fun-app-icon-512.png"
 ];
 
 self.addEventListener("install", (event) => {
@@ -42,7 +42,7 @@ self.addEventListener("push", (event) => {
   event.waitUntil(self.registration.showNotification(payload.title || "SlimeWire Fun", {
     body: payload.body || "",
     tag: payload.tag || "slimewire-fun",
-    icon: "/icons/icon-192.png",
+    icon: "/assets/slimewire/fun-app-icon-192.png",
     badge: "/assets/slimewire/png/slimewire-mark.png",
     data: { url: payload.url || "/fun/" },
     renotify: true

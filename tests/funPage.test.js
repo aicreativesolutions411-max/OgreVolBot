@@ -14,19 +14,20 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.match(server, /requestUrl\.pathname === "\/fun"[\s\S]{0,300}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
-  assert.match(html, /<script defer src="\/fun\.js\?v=14"><\/script>/);
+  assert.match(html, /<script defer src="\/fun\.js\?v=15"><\/script>/);
 });
 
 test("/fun is installable as a separate PWA with a dedicated-origin escape", () => {
   assert.equal(manifest.id, "/slimewire-fun-app");
   assert.equal(manifest.start_url, "/fun/?src=slimewire-fun-pwa");
   assert.equal(manifest.scope, "/fun/");
-  assert.match(html, /fun-manifest\.webmanifest\?v=1/);
+  assert.match(html, /fun-manifest\.webmanifest\?v=2/);
   assert.match(js, /beforeinstallprompt/);
-  assert.match(js, /ogrevolbot\.onrender\.com\/fun\/\?install=1/);
+  assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install Fun/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v1/);
+  assert.match(funWorker, /slimewire-fun-v2/);
+  assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
 

@@ -14,11 +14,12 @@
   "prefer_related_applications": false,
   "launch_handler": { "client_mode": "navigate-new" },
   "icons": [
-    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "/assets/slimewire/png/slimewire-mark.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+    { "src": "/assets/slimewire/fun-app-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/slimewire/fun-app-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/slimewire/fun-app-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
   "shortcuts": [
-    { "name": "Quick Buy", "url": "/fun/?quick=1", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] },
-    { "name": "Wallet", "url": "/fun/?tab=wallet", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] }
+    { "name": "Quick Buy", "url": "/fun/?quick=1", "icons": [{ "src": "/assets/slimewire/fun-app-icon-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "Wallet", "url": "/fun/?tab=wallet", "icons": [{ "src": "/assets/slimewire/fun-app-icon-192.png", "sizes": "192x192", "type": "image/png" }] }
   ]
 }

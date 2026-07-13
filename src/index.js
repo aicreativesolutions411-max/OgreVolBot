@@ -9423,13 +9423,17 @@ async function handleWebApiRequest(request, response, requestUrl) {
         }
         const wallet = await cashPrimaryWallet(auth.userId);
         if (!wallet) throw new Error("Create your SlimeCash wallet first.");
+        const requestHost = String(request.headers.host || "").toLowerCase().split(":")[0];
+        const cashRedirectOrigin = requestHost === "app.slimewire.org"
+          ? "https://app.slimewire.org"
+          : CONFIG.cashPublicOrigin;
         const result = await createCoinbaseOnrampSession({
           keyId: CONFIG.coinbaseCdpKeyId,
           keySecret: CONFIG.coinbaseCdpKeySecret,
           destinationAddress: wallet.publicKey,
           asset: body.asset,
           paymentAmount: body.paymentAmount,
-          redirectUrl: `${CONFIG.cashPublicOrigin}/cash/?onramp=return`,
+          redirectUrl: `${cashRedirectOrigin}/cash/?onramp=return`,
           clientIp: webClientKey(request),
           partnerUserRef: `slimecash-${hashWebSecret(auth.userId).slice(0, 32)}`
         });

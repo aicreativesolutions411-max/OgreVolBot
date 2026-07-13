@@ -266,7 +266,7 @@
   function openInstallGuide() {
     const ios = /iphone|ipad|ipod/i.test(navigator.userAgent || "");
     const embedded = runningStandalone();
-    const dedicated = location.hostname === "ogrevolbot.onrender.com";
+    const dedicated = location.hostname === "app.slimewire.org";
     $("openInstallBrowserBtn").textContent = dedicated ? "Install SlimeCash" : "Open separate install page";
     $("installSteps").innerHTML = (embedded ? (ios ? [
       "1. SlimeCash is open inside the SlimeWire app right now.",
@@ -309,7 +309,7 @@
   }
 
   function openInstallPageInBrowser() {
-    const dedicatedHost = "ogrevolbot.onrender.com";
+    const dedicatedHost = "app.slimewire.org";
     if (location.hostname === dedicatedHost) {
       installCashApp();
       return;
@@ -668,6 +668,19 @@
     if (state.wallet) $("openDepositWallet").href = solanaPayUrl(state.wallet.publicKey, state.depositAsset);
     $("depositWatch").textContent = `Watching ${state.depositAsset} on Solana…`;
     $("depositWatch").className = "status";
+    renderFundingPreview();
+  }
+
+  function renderFundingPreview() {
+    const amount = Number($("fundAmount")?.value || 0);
+    const validAmount = amount >= 5 && amount <= 2500;
+    $("fundingPreviewTitle").textContent = validAmount ? `$${amount.toFixed(2)} ${state.depositAsset}` : state.depositAsset;
+    $("fundingPreviewDestination").textContent = state.wallet
+      ? `To ${shortAddress(state.wallet.publicKey)} on Solana`
+      : "Solana wallet loading…";
+    $("coinbaseFundBtn").textContent = validAmount
+      ? `Continue to Coinbase · $${amount.toFixed(amount % 1 ? 2 : 0)} ${state.depositAsset}`
+      : "Continue to Coinbase";
   }
 
   async function refreshFundingConfig() {
@@ -690,15 +703,14 @@
     button.textContent = "Opening Coinbase…";
     const result = await post("/api/web/cash/onramp-session", { asset: state.depositAsset, paymentAmount: amount });
     button.disabled = false;
-    button.textContent = "Buy with Coinbase";
+    renderFundingPreview();
     if (result.ok && /^https:\/\/pay\.coinbase\.com\//i.test(result.data.onrampUrl || "")) {
+      sessionStorage.setItem("slimecashPendingOnramp", JSON.stringify({ amount, asset: state.depositAsset, startedAt: Date.now() }));
       location.assign(result.data.onrampUrl);
       return;
     }
-    await copyText(state.wallet.publicKey);
-    status.textContent = result.data.error || "Address copied. Coinbase opens next; choose Solana when sending.";
+    status.textContent = result.data.error || "Coinbase could not prepare this checkout. Your SlimeCash wallet was not changed.";
     status.className = "status bad";
-    window.open(state.funding?.providers?.coinbase?.url || "https://www.coinbase.com/buy", "_blank", "noopener");
   }
 
   function openAddCash() {
@@ -880,7 +892,12 @@
     if (params.get("sheet") === "addcash" && ready) openAddCash();
     if (params.get("install") === "1") setTimeout(openInstallGuide, 450);
     if (params.get("onramp") === "return" && ready) {
-      toast("Checking for your Coinbase deposit…");
+      let pending = null;
+      try { pending = JSON.parse(sessionStorage.getItem("slimecashPendingOnramp") || "null"); } catch {}
+      sessionStorage.removeItem("slimecashPendingOnramp");
+      toast(pending?.amount
+        ? `Back in SlimeCash · checking for $${Number(pending.amount).toFixed(2)} ${pending.asset || "USDC"}…`
+        : "Back in SlimeCash · checking for your Coinbase deposit…");
       let checks = 0;
       const timer = setInterval(() => {
         refreshBalance({ silent: true });
@@ -908,6 +925,7 @@
     if (amountChip) {
       $("fundAmount").value = amountChip.dataset.fundAmount;
       document.querySelectorAll("[data-fund-amount]").forEach((button) => button.classList.toggle("active", button === amountChip));
+      renderFundingPreview();
     }
     const tabButton = event.target.closest(".tab");
     if (tabButton) switchTab(tabButton.dataset.tab);
@@ -923,6 +941,10 @@
   $("copyReceiveBtn").addEventListener("click", () => state.wallet && copyText(state.wallet.publicKey));
   $("shareReceiveBtn").addEventListener("click", shareReceive);
   $("receiveAmount").addEventListener("input", renderReceiveRequest);
+  $("fundAmount").addEventListener("input", () => {
+    document.querySelectorAll("[data-fund-amount]").forEach((button) => button.classList.toggle("active", Number(button.dataset.fundAmount) === Number($("fundAmount").value)));
+    renderFundingPreview();
+  });
   $("copyAddressBtn").addEventListener("click", () => state.wallet && copyText(state.wallet.publicKey));
   $("avatarBtn").addEventListener("click", () => switchTab("more"));
 
