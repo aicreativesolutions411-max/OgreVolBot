@@ -20,10 +20,13 @@ test("cash decimal parsing is exact and rejects ambiguous precision", () => {
 
 test("Solana Pay USDC requests use the canonical mint and user units", () => {
   const recipient = "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN";
-  const url = new URL(buildSolanaPayUrl({ recipient, asset: "USDC", amount: "0.01", label: "SlimeCash" }));
+  const reference = "Vote111111111111111111111111111111111111111";
+  const url = new URL(buildSolanaPayUrl({ recipient, asset: "USDC", amount: "0.01", label: "SlimeCash", reference }));
   assert.equal(url.protocol, "solana:");
   assert.equal(url.searchParams.get("amount"), "0.01");
   assert.equal(url.searchParams.get("spl-token"), SOLANA_USDC_MINT);
+  assert.equal(url.searchParams.get("reference"), reference);
+  assert.throws(() => buildSolanaPayUrl({ recipient, reference: "not-a-key" }), /Invalid Solana Pay reference/);
 });
 
 test("Coinbase CDP JWT binds method, host, and path and verifies with ES256", () => {

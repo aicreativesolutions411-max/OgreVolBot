@@ -111,6 +111,7 @@ import { computeCalibration as computeAutopilotCalibration, computeCalibrationBy
 import { r2PutObject, r2Configured } from "./lib/r2.js";
 import {
   SOLANA_USDC_MINT,
+  buildSolanaPayUrl,
   createCoinbaseOnrampSession,
   parseCashDecimalToRaw,
   rawCashAmountToUi
@@ -9377,6 +9378,18 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    // Public request view contains only the payment terms and an opaque id. It
+    // never exposes the owner account, sessions, contacts, or recovery data.
+    if (request.method === "GET" && pathname === "/api/web/cash/request") {
+      try {
+        const row = await getPublicCashRequest(requestUrl.searchParams.get("id"), requestUrl.searchParams.get("token"));
+        sendWebJson(request, response, 200, { ok: true, request: row });
+      } catch (error) {
+        sendWebJson(request, response, error.statusCode || 404, { ok: false, error: friendlyError(error) });
+      }
+      return;
+    }
+
     const auth = await authenticateWebRequest(request);
 
     // SlimeCash: the caller's own handle + primary wallet address.
@@ -9394,6 +9407,86 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && (pathname === "/api/web/cash/history" || pathname === "/api/web/cash/activity")) {
+      const limit = Math.max(1, Math.min(100, Number(requestUrl.searchParams.get("limit")) || 60));
+      sendWebJson(request, response, 200, { ok: true, history: await cashHistoryForUser(auth.userId, limit) });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/cash/contacts") {
+      sendWebJson(request, response, 200, { ok: true, contacts: await cashContactsForUser(auth.userId) });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/cash/contacts") {
+      const body = await readJsonRequestBody(request);
+      try {
+        sendWebJson(request, response, 200, { ok: true, contact: await saveCashContact(auth.userId, body) });
+      } catch (error) {
+        sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) });
+      }
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/cash/requests") {
+      const limit = Math.max(1, Math.min(100, Number(requestUrl.searchParams.get("limit")) || 30));
+      sendWebJson(request, response, 200, { ok: true, requests: await cashRequestsForUser(auth.userId, limit) });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/cash/requests") {
+      const body = await readJsonRequestBody(request);
+      try {
+        sendWebJson(request, response, 200, { ok: true, request: await createCashRequest(auth.userId, body) });
+      } catch (error) {
+        sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) });
+      }
+      return;
+    }
+
+    const cashRequestMatch = /^\/api\/web\/cash\/requests\/([A-Za-z0-9_-]{8,80})$/.exec(pathname);
+    if (request.method === "GET" && cashRequestMatch) {
+      try {
+        const row = await cashRequestForOwner(auth.userId, cashRequestMatch[1], { verify: true });
+        sendWebJson(request, response, 200, { ok: true, request: row });
+      } catch (error) {
+        sendWebJson(request, response, error.statusCode || 404, { ok: false, error: friendlyError(error) });
+      }
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/cash/notifications") {
+      sendWebJson(request, response, 200, { ok: true, preferences: (await cashSettingsForUser(auth.userId)).notifications });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/cash/notifications") {
+      const body = await readJsonRequestBody(request);
+      sendWebJson(request, response, 200, { ok: true, preferences: await updateCashNotifications(auth.userId, body) });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/cash/security") {
+      sendWebJson(request, response, 200, { ok: true, security: clientCashSecurity(await cashSettingsForUser(auth.userId)) });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/cash/security") {
+      const body = await readJsonRequestBody(request);
+      try {
+        sendWebJson(request, response, 200, { ok: true, security: clientCashSecurity(await updateCashSecurity(auth.userId, body)) });
+      } catch (error) {
+        sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) });
+      }
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/cash/security/revoke-sessions") {
+      const revoked = await revokeOtherCashSessions(auth.userId, auth.tokenHash);
+      sendWebJson(request, response, 200, { ok: true, revoked });
+      return;
+    }
+
     if (request.method === "GET" && pathname === "/api/web/cash/funding") {
       const coinbaseConfigured = Boolean(CONFIG.coinbaseCdpKeyId && CONFIG.coinbaseCdpKeySecret);
       sendWebJson(request, response, 200, {
@@ -9408,6 +9501,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
         headlessApplePay: {
           enabled: coinbaseConfigured && CONFIG.coinbaseHeadlessOnrampEnabled,
           status: CONFIG.coinbaseHeadlessOnrampEnabled ? "provider_configured" : "approval_required"
+        },
+        programs: {
+          directDeposit: { enabled: false, status: "partner_and_compliance_approval_required", candidates: ["Bridge", "Stripe"] },
+          card: { enabled: false, status: "issuer_and_compliance_approval_required", candidates: ["Bridge", "Rain", "Stripe Issuing"] },
+          tapToPay: { enabled: false, status: "issued_card_and_wallet_provisioning_required", candidates: ["Apple Pay", "Google Wallet"] }
         }
       });
       return;
@@ -13728,6 +13826,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(rhGuardsPath(), { guards: [] });
   await writeJsonIfMissing(rhAutoBundlesPath(), { bundles: [] });
   await writeJsonIfMissing(webAuthPath(), { codes: [], sessions: [] });
+  await writeJsonIfMissing(slimeCashPath(), defaultSlimeCashStore());
   await writeJsonIfMissing(lockInEventsPath(), { events: [] });
   await writeJsonIfMissing(terminalFeedEventsPath(), { events: [] });
   await writeJsonIfMissing(performanceEventsPath(), { events: [] });
@@ -13842,6 +13941,10 @@ function pumpLaunchHostedMetadataRoot() {
 
 function webAuthPath() {
   return path.join(CONFIG.dataDir, "web-auth.json");
+}
+
+function slimeCashPath() {
+  return path.join(CONFIG.dataDir, "slimecash.json");
 }
 
 function socialKitsPath() {
@@ -32866,6 +32969,8 @@ function defaultJsonForPath(filePath) {
       return { programs: {}, tokenIndex: {}, receipts: [], processedFees: {} };
     case "web-auth.json":
       return { codes: [], sessions: [], profiles: {}, browserTradeOrders: [], sessionWalletOrders: [] };
+    case "slimecash.json":
+      return defaultSlimeCashStore();
     case "lock-in-events.json":
       return { events: [] };
     case "telegram-groups.json":
@@ -39048,8 +39153,8 @@ async function gatherRhScanUncollapsed(address) {
   const socials = pairTarget.isBase && Array.isArray(pair?.info?.socials) ? pair.info.socials : [];
   const website = pairTarget.isBase ? ((Array.isArray(pair?.info?.websites) ? pair.info.websites : [])[0]?.url || "") : "";
   const supply = firstMeaningfulNumber(feed?.totalSupplyUi, noxa?.supply);
-  const priceUsd = firstMeaningfulNumber(pairTarget.isBase ? pair?.priceUsd : null, gecko?.priceUsd, feed?.priceUsd, cachedPrice?.priceUsd, noxa?.priceUsd);
-  const mc = firstMeaningfulNumber(
+  let priceUsd = firstMeaningfulNumber(pairTarget.isBase ? pair?.priceUsd : null, gecko?.priceUsd, feed?.priceUsd, cachedPrice?.priceUsd, noxa?.priceUsd);
+  let mc = firstMeaningfulNumber(
     pairTarget.isBase ? pair?.marketCap : null,
     pairTarget.isBase ? pair?.fdv : null,
     gecko?.marketCapUsd,
@@ -39057,21 +39162,30 @@ async function gatherRhScanUncollapsed(address) {
     noxa?.mc,
     priceUsd && supply ? Number(priceUsd) * Number(supply) : null
   ) || 0;
-  const liq = firstMeaningfulNumber(pair?.liquidity?.usd, gecko?.liquidityUsd, feed?.liquidityUsd, noxa?.liq) || 0;
+  let liq = firstMeaningfulNumber(pair?.liquidity?.usd, gecko?.liquidityUsd, feed?.liquidityUsd, noxa?.liq) || 0;
   let vol1 = firstMeaningfulNumber(dexActivity.volume?.h1, pair?.volume?.h1, pair?.volume?.["1h"], gecko?.volume1hUsd, feed?.volume1hUsd, feed?.volumeH1Usd, noxa?.volume1hUsd, noxa?.volumeH1Usd) || 0;
   let vol24 = firstMeaningfulNumber(dexActivity.volume?.h24, pair?.volume?.h24, pair?.volume?.["24h"], gecko?.volume24hUsd, feed?.volume24hUsd, feed?.volume_24h, noxa?.volume24hUsd, noxa?.volumeH24Usd) || 0;
   const ch1 = firstMeaningfulNumber(pairTarget.isBase ? pair?.priceChange?.h1 : null, pairTarget.isBase ? pair?.priceChange?.["1h"] : null, gecko?.priceChange1h, feed?.priceChange1h, feed?.priceChangeH1, noxa?.ch1, noxa?.priceChange1h);
   const ch24 = firstMeaningfulNumber(pairTarget.isBase ? pair?.priceChange?.h24 : null, pairTarget.isBase ? pair?.priceChange?.["24h"] : null, gecko?.priceChange24h, feed?.priceChange24h, feed?.priceChangeH24, noxa?.ch24, noxa?.priceChange24h);
   const holders = firstMeaningfulNumber(pair?.holders, feed?.holders, feed?.holders_count, saf?.holders, noxa?.holders) || 0;
   let createdAt = rhMs(pair?.pairCreatedAt) || rhMs(gecko?.createdAt) || rhMs(feed?.createdAt) || rhMs(cachedCreatedAt) || 0;
-  if (!(priceUsd > 0)) scheduleRhPriceFill([{ address: a, priceUsd: 0 }]);
   // ATH (GeckoTerminal OHLCV, robinhood network) — real all-time-high price → ATH market cap + how far off it.
   const poolHint = pair?.pairAddress || gecko?.pairAddress || noxa?.pool || "";
-  const [fallbackVolume, chainCreated, athPriceUsd] = await Promise.all([
+  const [fallbackVolume, chainCreated, athPriceUsd, impliedPrice] = await Promise.all([
     (!(vol1 > 0) || !(vol24 > 0)) ? rhPromiseTimeout(rhTokenVolumeFallback(a, poolHint), 5500, null) : Promise.resolve(null),
     !(createdAt > 0) ? rhPromiseTimeout(rhTokenCreationTime(a), 2200, "") : Promise.resolve(""),
-    rhPromiseTimeout(rhTokenAthUsd(a, poolHint), 4500, null)
+    rhPromiseTimeout(rhTokenAthUsd(a, poolHint), 4500, null),
+    !(priceUsd > 0)
+      ? rhPromiseTimeout(rhImpliedPriceUsd(a, rhFeeEvmWallet(CONFIG.appSecret, CONFIG.rhChainRpcUrl).address), 2500, null)
+      : Promise.resolve(null)
   ]);
+  if (!(priceUsd > 0) && Number(impliedPrice?.priceUsd) > 0) {
+    priceUsd = Number(impliedPrice.priceUsd);
+    rhPriceCache.set(key, { priceUsd, liquidityUsd: Number(impliedPrice.liquidityUsd) || 0, at: Date.now() });
+    if (!(mc > 0) && supply > 0) mc = priceUsd * supply;
+    if (!(liq > 0) && Number(impliedPrice.liquidityUsd) > 0) liq = Number(impliedPrice.liquidityUsd);
+  }
+  if (!(priceUsd > 0)) scheduleRhPriceFill([{ address: a, priceUsd: 0 }]);
   if (!(vol1 > 0)) vol1 = firstMeaningfulNumber(fallbackVolume?.volume?.h1) || 0;
   if (!(vol24 > 0)) vol24 = firstMeaningfulNumber(fallbackVolume?.volume?.h24) || 0;
   if (!(createdAt > 0)) {
@@ -39137,9 +39251,11 @@ async function gatherRhScanUncollapsed(address) {
   if (rhScanHasMarketEvidence(v)) {
     rhScanLastGood.set(key, { at: Date.now(), v });
     if (rhScanLastGood.size > 300) rhScanLastGood.delete(rhScanLastGood.keys().next().value);
+    rhScanCache.set(key, { at: Date.now(), v });
+    if (rhScanCache.size > 200) rhScanCache.delete(rhScanCache.keys().next().value);
+  } else {
+    rhScanCache.delete(key);
   }
-  rhScanCache.set(key, { at: Date.now(), v });
-  if (rhScanCache.size > 200) rhScanCache.delete(rhScanCache.keys().next().value);
   return v;
 }
 // RH verdict → the same tone model the Solana card uses (danger/warn/ok) so the card art + wording match.
@@ -39295,10 +39411,40 @@ async function sendRhScanCard(chatId, address, options = {}) {
         const loaded = await fullScanPromise;
         if (!loaded || !rhScanHasMarketEvidence(loaded)) {
           const message = options.message || null;
+          // Keep Blockscout identity/holder data instead of reverting a valid
+          // just-launched coin to the generic $RH all-n/a placeholder.
+          if (loaded) Object.assign(quickInfo, loaded, {
+            symbol: loaded.symbol || quickInfo.symbol,
+            name: loaded.name || quickInfo.name,
+            imageUrl: loaded.imageUrl || quickInfo.imageUrl
+          });
           const callerLine = await buildScanCallerFooter(chatId, address, Number(loaded?.mc || quickInfo.mc || 0), message).catch(() => "");
           const failedText = [String(options.contextHtml || "").trim(), formatRhScanCard(quickInfo), callerLine, "⚠️ <i>Deep providers are still catching up — tap Refresh in More.</i>"].filter(Boolean).join("\n\n");
           if (quickHasPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: sent.message_id, caption: failedText, parse_mode: "HTML", reply_markup: kb }).catch(() => {});
           else await telegram("editMessageText", { chat_id: chatId, message_id: sent.message_id, text: failedText, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb }).catch(() => {});
+          // Brand-new RH pools often reach the public indexes seconds after the
+          // contract itself. Re-check this same Telegram card for up to one minute
+          // so the user never needs to paste the address again.
+          for (const waitMs of [4_000, 8_000, 15_000, 30_000]) {
+            await sleep(waitMs);
+            rhScanCache.delete(String(address || "").toLowerCase());
+            const retry = await gatherRhScan(address).catch(() => null);
+            if (!retry) continue;
+            Object.assign(quickInfo, retry, {
+              symbol: retry.symbol || quickInfo.symbol,
+              name: retry.name || quickInfo.name,
+              imageUrl: retry.imageUrl || quickInfo.imageUrl
+            });
+            if (!rhScanHasMarketEvidence(quickInfo)) continue;
+            if (message?.chat && !isPrivateChat(message.chat)) await recordTelegramCall(message, address, quickInfo.mc).catch(() => {});
+            const retryCaller = await buildScanCallerFooter(chatId, address, quickInfo.mc, message).catch(() => "");
+            const retryText = [String(options.contextHtml || "").trim(), formatRhScanCard(quickInfo), retryCaller].filter(Boolean).join("\n\n");
+            const retryPng = await renderRhScanCardPng(quickInfo, quickInfo.symbol || address).catch(() => null);
+            if (quickHasPhoto && retryPng) await editMessagePhotoBuffer(chatId, sent.message_id, retryPng, retryText, kb).catch(() => {});
+            else if (quickHasPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: sent.message_id, caption: retryText, parse_mode: "HTML", reply_markup: kb }).catch(() => {});
+            else await telegram("editMessageText", { chat_id: chatId, message_id: sent.message_id, text: retryText, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb }).catch(() => {});
+            return;
+          }
           return;
         }
         const info = {
@@ -53792,6 +53938,7 @@ async function readWebAuthStore() {
   if (!Array.isArray(store.sessions)) store.sessions = [];
   if (!store.profiles || typeof store.profiles !== "object") store.profiles = {};
   if (!store.cashRecoveryIndex || typeof store.cashRecoveryIndex !== "object" || Array.isArray(store.cashRecoveryIndex)) store.cashRecoveryIndex = {};
+  if (!store.cashHandleHistory || typeof store.cashHandleHistory !== "object" || Array.isArray(store.cashHandleHistory)) store.cashHandleHistory = {};
   if (!store.mobileWalletConnects || typeof store.mobileWalletConnects !== "object") store.mobileWalletConnects = {};
   if (!Array.isArray(store.browserTradeOrders)) store.browserTradeOrders = [];
   if (!Array.isArray(store.sessionWalletOrders)) store.sessionWalletOrders = [];
@@ -58055,26 +58202,34 @@ async function cashPrimaryWallet(userId) {
 async function claimCashHandle(userId, rawHandle) {
   const handle = normalizeCashHandle(rawHandle);
   const display = String(rawHandle || "").trim().replace(/^\$+/, "");
-  let claimed = null;
-  await LockService.withLock("web-auth-store", 10_000, async () => {
-    const store = await readWebAuthStore();
+  const claimed = await mutateWebAuthStore((store) => {
     const profile = store.profiles?.[userId];
     if (!profile) {
       const error = new Error("Account not found.");
       error.statusCode = 404;
       throw error;
     }
-    const taken = Object.entries(store.profiles).some(([ownerId, entry]) => entry?.cashHandle === handle && String(ownerId) !== String(userId));
+    const historical = store.cashHandleHistory?.[handle];
+    const taken = Object.entries(store.profiles).some(([ownerId, entry]) => entry?.cashHandle === handle && String(ownerId) !== String(userId))
+      || (historical && String(historical.ownerId) !== String(userId) && Date.parse(historical.expiresAt || "") > Date.now());
     if (taken) {
       const error = new Error("That $handle is taken. Try another.");
       error.statusCode = 409;
       throw error;
     }
+    const oldHandle = String(profile.cashHandle || "");
+    if (oldHandle && oldHandle !== handle) {
+      store.cashHandleHistory[oldHandle] = {
+        ownerId: String(userId),
+        displayHandle: profile.cashHandleDisplay || oldHandle,
+        changedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60_000).toISOString()
+      };
+    }
     profile.cashHandle = handle;
     profile.cashHandleDisplay = display;
     profile.cashHandleClaimedAt = profile.cashHandleClaimedAt || new Date().toISOString();
-    await writeWebAuthStore(store);
-    claimed = { handle, displayHandle: display };
+    return { handle, displayHandle: display };
   });
   await audit("cash_handle_claim", { userId, handle });
   return claimed;
@@ -58083,7 +58238,18 @@ async function claimCashHandle(userId, rawHandle) {
 async function resolveCashHandle(rawHandle) {
   const handle = normalizeCashHandle(rawHandle);
   const store = await readWebAuthStore();
-  const entry = Object.entries(store.profiles || {}).find(([, profile]) => profile?.cashHandle === handle);
+  let entry = Object.entries(store.profiles || {}).find(([, profile]) => profile?.cashHandle === handle);
+  let redirectedFrom = "";
+  if (!entry) {
+    const historical = store.cashHandleHistory?.[handle];
+    if (historical && Date.parse(historical.expiresAt || "") > Date.now()) {
+      const profile = store.profiles?.[historical.ownerId];
+      if (profile) {
+        entry = [String(historical.ownerId), profile];
+        redirectedFrom = handle;
+      }
+    }
+  }
   if (!entry) {
     const error = new Error("No SlimeCash user with that $handle.");
     error.statusCode = 404;
@@ -58096,7 +58262,7 @@ async function resolveCashHandle(rawHandle) {
     error.statusCode = 404;
     throw error;
   }
-  return { handle, displayHandle: profile.cashHandleDisplay || handle, address: wallet.publicKey };
+  return { handle: profile.cashHandle || handle, displayHandle: profile.cashHandleDisplay || handle, address: wallet.publicKey, redirectedFrom };
 }
 
 async function cashProfileSummary(userId) {
@@ -58108,6 +58274,423 @@ async function cashProfileSummary(userId) {
     displayHandle: profile.cashHandleDisplay || profile.cashHandle || "",
     address: wallet?.publicKey || ""
   };
+}
+
+function defaultSlimeCashStore() {
+  return {
+    version: 1,
+    receipts: [],
+    requests: {},
+    contacts: {},
+    settings: {},
+    signatureIndex: {},
+    attemptIndex: {}
+  };
+}
+
+async function readSlimeCashStore() {
+  const store = await readJson(slimeCashPath());
+  if (!Array.isArray(store.receipts)) store.receipts = [];
+  for (const key of ["requests", "contacts", "settings", "signatureIndex", "attemptIndex"]) {
+    if (!store[key] || typeof store[key] !== "object" || Array.isArray(store[key])) store[key] = {};
+  }
+  return store;
+}
+
+async function mutateSlimeCashStore(fn) {
+  return withFileLock(slimeCashPath(), async () => {
+    const store = await readSlimeCashStore();
+    const result = await fn(store);
+    await writeJsonFile(slimeCashPath(), store);
+    return result;
+  });
+}
+
+function cashUserSettings(store, userId) {
+  const key = String(userId);
+  const row = store.settings[key] && typeof store.settings[key] === "object" ? store.settings[key] : {};
+  row.notifications = row.notifications && typeof row.notifications === "object" ? row.notifications : { app: false, telegram: false, large: true };
+  row.security = row.security && typeof row.security === "object" ? row.security : {
+    dailyLimit: 0,
+    confirmNewRecipient: true,
+    pinRecord: "",
+    failedAttempts: 0,
+    lockedUntil: ""
+  };
+  store.settings[key] = row;
+  return row;
+}
+
+async function cashSettingsForUser(userId) {
+  const store = await readSlimeCashStore();
+  return cashUserSettings(store, userId);
+}
+
+function clientCashSecurity(settings = {}) {
+  const security = settings.security || {};
+  return {
+    dailyLimit: Number(security.dailyLimit || 0),
+    confirmNewRecipient: security.confirmNewRecipient !== false,
+    pinEnabled: Boolean(security.pinRecord),
+    lockedUntil: Date.parse(security.lockedUntil || "") > Date.now() ? security.lockedUntil : ""
+  };
+}
+
+function cashScrypt(value, salt) {
+  return new Promise((resolve, reject) => crypto.scrypt(String(value), salt, 32, (error, derived) => error ? reject(error) : resolve(derived)));
+}
+
+async function hashCashPin(pin) {
+  if (!/^\d{4,8}$/.test(String(pin || ""))) {
+    const error = new Error("Use a 4-8 digit spend PIN.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const salt = crypto.randomBytes(16);
+  const derived = await cashScrypt(pin, salt);
+  return `scrypt$${salt.toString("base64url")}$${derived.toString("base64url")}`;
+}
+
+async function verifyCashPin(pin, record) {
+  const match = /^scrypt\$([^$]+)\$([^$]+)$/.exec(String(record || ""));
+  if (!match || !/^\d{4,8}$/.test(String(pin || ""))) return false;
+  const expected = Buffer.from(match[2], "base64url");
+  const actual = await cashScrypt(pin, Buffer.from(match[1], "base64url"));
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
+async function updateCashNotifications(userId, body = {}) {
+  return mutateSlimeCashStore((store) => {
+    const settings = cashUserSettings(store, userId);
+    settings.notifications = {
+      app: Boolean(body.app),
+      telegram: Boolean(body.telegram),
+      large: body.large !== false
+    };
+    settings.updatedAt = new Date().toISOString();
+    return { ...settings.notifications };
+  });
+}
+
+async function updateCashSecurity(userId, body = {}) {
+  const dailyLimit = Number(body.dailyLimit || 0);
+  if (!Number.isFinite(dailyLimit) || dailyLimit < 0 || dailyLimit > 1_000_000) {
+    const error = new Error("Daily limit must be between $0 and $1,000,000. Use 0 for no limit.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const pinRecord = String(body.pin || "").trim() ? await hashCashPin(body.pin) : "";
+  return mutateSlimeCashStore((store) => {
+    const settings = cashUserSettings(store, userId);
+    settings.security.dailyLimit = Math.round(dailyLimit * 100) / 100;
+    settings.security.confirmNewRecipient = body.confirmNewRecipient !== false;
+    if (pinRecord) {
+      settings.security.pinRecord = pinRecord;
+      settings.security.pinSetAt = new Date().toISOString();
+      settings.security.failedAttempts = 0;
+      settings.security.lockedUntil = "";
+    }
+    settings.updatedAt = new Date().toISOString();
+    return settings;
+  });
+}
+
+async function revokeOtherCashSessions(userId, currentTokenHash) {
+  return mutateWebAuthStore((store) => {
+    const before = store.sessions.length;
+    store.sessions = store.sessions.filter((row) => String(row.userId) !== String(userId) || row.tokenHash === currentTokenHash);
+    return Math.max(0, before - store.sessions.length);
+  });
+}
+
+function normalizeCashContactName(value) {
+  const name = String(value || "").trim().replace(/^\$+/, "").slice(0, 32);
+  if (!name) throw new Error("Enter a contact name.");
+  return name;
+}
+
+async function cashContactsForUser(userId) {
+  const store = await readSlimeCashStore();
+  return Array.isArray(store.contacts[String(userId)]) ? store.contacts[String(userId)] : [];
+}
+
+async function saveCashContact(userId, body = {}) {
+  const name = normalizeCashContactName(body.name || body.handle);
+  let address = String(body.address || "").trim();
+  let handle = String(body.handle || "").trim().replace(/^\$+/, "");
+  if (!address && handle) {
+    const resolved = await resolveCashHandle(handle);
+    address = resolved.address;
+    handle = resolved.displayHandle || handle;
+  }
+  address = new PublicKey(address).toBase58();
+  return mutateSlimeCashStore((store) => {
+    const key = String(userId);
+    const rows = Array.isArray(store.contacts[key]) ? store.contacts[key] : [];
+    const now = new Date().toISOString();
+    const existing = rows.find((row) => row.address === address);
+    const contact = {
+      id: existing?.id || `contact_${crypto.randomBytes(8).toString("hex")}`,
+      name,
+      handle,
+      address,
+      favorite: body.favorite !== false,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
+    };
+    store.contacts[key] = [contact, ...rows.filter((row) => row.address !== address)].slice(0, 100);
+    return contact;
+  });
+}
+
+function clientCashReceipt(row, userId) {
+  const outgoing = String(row.senderUserId) === String(userId);
+  const amount = row.asset === "SOL" ? row.amountSol : row.amountUsdc;
+  return {
+    id: row.id,
+    createdAt: row.confirmedAt || row.createdAt,
+    confirmedAt: row.confirmedAt || row.createdAt,
+    direction: outgoing ? "out" : "in",
+    type: outgoing ? "sent" : "received",
+    asset: row.asset,
+    amount,
+    amountSol: row.amountSol,
+    amountUsdc: row.amountUsdc,
+    amountUsd: row.amountUsd,
+    signature: row.signature,
+    status: row.status || "confirmed",
+    title: outgoing ? "Sent" : "Received",
+    counterpartyLabel: outgoing ? (row.recipientLabel || row.destination) : (row.senderLabel || row.senderAddress),
+    destination: row.destination,
+    note: row.note || "",
+    explorerUrl: row.signature ? `https://solscan.io/tx/${row.signature}` : ""
+  };
+}
+
+async function cashHistoryForUser(userId, limit = 60) {
+  const store = await readSlimeCashStore();
+  return store.receipts
+    .filter((row) => String(row.senderUserId) === String(userId) || String(row.recipientUserId) === String(userId))
+    .sort((a, b) => Date.parse(b.confirmedAt || b.createdAt || "") - Date.parse(a.confirmedAt || a.createdAt || ""))
+    .slice(0, limit)
+    .map((row) => clientCashReceipt(row, userId));
+}
+
+function cashPublicOrigin() {
+  return String(CONFIG.cashPublicOrigin || "https://app.slimewire.org").replace(/\/$/, "");
+}
+
+function clientCashRequest(row, { includeToken = false } = {}) {
+  let privateShareUrl = "";
+  if (includeToken) {
+    try {
+      const token = row.publicTokenSecret ? decryptSecretBuffer(row.publicTokenSecret).toString("utf8") : "";
+      if (token) privateShareUrl = `${cashPublicOrigin()}/cash/?request=${encodeURIComponent(row.id)}&token=${encodeURIComponent(token)}`;
+    } catch {}
+    if (!privateShareUrl && row.shareUrl) privateShareUrl = row.shareUrl;
+  }
+  return {
+    id: row.id,
+    asset: row.asset,
+    amount: row.amount,
+    note: row.note,
+    label: row.label,
+    status: row.status,
+    createdAt: row.createdAt,
+    expiresAt: row.expiresAt,
+    paidAt: row.paidAt || "",
+    signature: row.signature || "",
+    recipientAddress: row.recipientAddress,
+    uri: row.uri,
+    solanaPayUrl: row.uri,
+    qrData: row.uri,
+    shareUrl: privateShareUrl
+  };
+}
+
+async function createCashRequest(userId, body = {}) {
+  const wallet = await cashPrimaryWallet(userId);
+  if (!wallet) {
+    const error = new Error("Create your SlimeCash wallet first.");
+    error.statusCode = 404;
+    throw error;
+  }
+  const asset = String(body.asset || "USDC").toUpperCase();
+  if (!new Set(["USDC", "SOL"]).has(asset)) throw new Error("Choose USDC or SOL.");
+  const decimals = asset === "USDC" ? 6 : 9;
+  const rawAmount = parseCashDecimalToRaw(body.amount, decimals, `${asset} amount`);
+  const amount = rawCashAmountToUi(rawAmount, decimals);
+  const id = `req_${crypto.randomBytes(12).toString("base64url")}`;
+  const publicToken = crypto.randomBytes(18).toString("base64url");
+  const reference = Keypair.generate().publicKey.toBase58();
+  const note = String(body.note || "SlimeCash payment request").trim().slice(0, 80);
+  const profile = await cashProfileSummary(userId);
+  const label = profile.displayHandle ? `$${profile.displayHandle} on SlimeCash` : "SlimeCash";
+  const uri = buildSolanaPayUrl({ recipient: wallet.publicKey, asset, amount, label, message: note, reference });
+  const createdAt = new Date().toISOString();
+  const durationMs = Math.max(15 * 60_000, Math.min(7 * 24 * 60 * 60_000, Number(body.expiresInMs) || 24 * 60 * 60_000));
+  const row = {
+    id,
+    ownerUserId: String(userId),
+    recipientAddress: wallet.publicKey,
+    asset,
+    decimals,
+    rawAmount: String(rawAmount),
+    amount,
+    note,
+    label,
+    reference,
+    publicTokenHash: hashWebSecret(`cash-request:${publicToken}`),
+    publicTokenSecret: encryptSecret(Buffer.from(publicToken)),
+    uri,
+    status: "pending",
+    createdAt,
+    expiresAt: new Date(Date.now() + durationMs).toISOString()
+  };
+  await mutateSlimeCashStore((store) => { store.requests[id] = row; });
+  await audit("cash_request_created", { userId, id, asset, amount }).catch(() => {});
+  return clientCashRequest(row, { includeToken: true });
+}
+
+async function cashRequestsForUser(userId, limit = 30) {
+  const store = await readSlimeCashStore();
+  return Object.values(store.requests)
+    .filter((row) => String(row.ownerUserId) === String(userId))
+    .sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""))
+    .slice(0, limit)
+    .map((row) => clientCashRequest(row, { includeToken: true }));
+}
+
+async function getPublicCashRequest(id, token) {
+  const store = await readSlimeCashStore();
+  let row = store.requests[String(id || "")];
+  const validToken = row && token && hashWebSecret(`cash-request:${token}`) === row.publicTokenHash;
+  if (!row || !validToken) {
+    const error = new Error("That payment request is not available.");
+    error.statusCode = 404;
+    throw error;
+  }
+  row = await verifyCashRequestPayment(row);
+  return clientCashRequest(row, { includeToken: true });
+}
+
+function cashTransactionInstructions(tx) {
+  const outer = tx?.transaction?.message?.instructions || [];
+  const inner = (tx?.meta?.innerInstructions || []).flatMap((row) => row.instructions || []);
+  return [...outer, ...inner];
+}
+
+function cashRequestPaidByTransaction(row, tx) {
+  if (!tx || tx.meta?.err) return false;
+  const keys = (tx.transaction?.message?.accountKeys || []).map((entry) => String(entry?.pubkey || entry));
+  if (!keys.includes(row.reference)) return false;
+  const wantedRaw = BigInt(row.rawAmount);
+  if (row.asset === "SOL") {
+    return cashTransactionInstructions(tx).some((instruction) => {
+      const info = instruction?.parsed?.info;
+      return instruction?.parsed?.type === "transfer"
+        && String(info?.destination || "") === row.recipientAddress
+        && BigInt(info?.lamports || 0) === wantedRaw;
+    });
+  }
+  const before = new Map();
+  for (const balance of tx.meta?.preTokenBalances || []) {
+    if (balance.owner === row.recipientAddress && balance.mint === SOLANA_USDC_MINT) before.set(balance.accountIndex, BigInt(balance.uiTokenAmount?.amount || 0));
+  }
+  let gained = 0n;
+  for (const balance of tx.meta?.postTokenBalances || []) {
+    if (balance.owner !== row.recipientAddress || balance.mint !== SOLANA_USDC_MINT) continue;
+    gained += BigInt(balance.uiTokenAmount?.amount || 0) - (before.get(balance.accountIndex) || 0n);
+  }
+  return gained === wantedRaw;
+}
+
+async function verifyCashRequestPayment(row) {
+  if (row.status !== "pending") return row;
+  if (Date.parse(row.expiresAt || "") <= Date.now()) {
+    await mutateSlimeCashStore((store) => { if (store.requests[row.id]?.status === "pending") store.requests[row.id].status = "expired"; });
+    return { ...row, status: "expired" };
+  }
+  const signatures = await rhPromiseTimeout(
+    rpcRead("cash request signatures", (client) => client.getSignaturesForAddress(new PublicKey(row.reference), { limit: 12 }), { retries: 0 }),
+    4_000,
+    []
+  ).catch(() => []);
+  for (const item of signatures || []) {
+    if (item.err) continue;
+    const tx = await rhPromiseTimeout(
+      rpcRead("cash request transaction", (client) => client.getParsedTransaction(item.signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 }), { retries: 0 }),
+      4_000,
+      null
+    ).catch(() => null);
+    if (!cashRequestPaidByTransaction(row, tx)) continue;
+    let paid = null;
+    await mutateSlimeCashStore((store) => {
+      const fresh = store.requests[row.id];
+      if (!fresh || fresh.status !== "pending") { paid = fresh; return; }
+      fresh.status = "paid";
+      fresh.signature = item.signature;
+      fresh.paidAt = new Date((item.blockTime || Math.floor(Date.now() / 1000)) * 1000).toISOString();
+      fresh.slot = item.slot || null;
+      const receipt = {
+        id: `receipt_${crypto.randomBytes(12).toString("base64url")}`,
+        signature: item.signature,
+        status: "confirmed",
+        asset: fresh.asset,
+        amountSol: fresh.asset === "SOL" ? fresh.amount : undefined,
+        amountUsdc: fresh.asset === "USDC" ? fresh.amount : undefined,
+        amountUsd: fresh.asset === "USDC" ? fresh.amount : undefined,
+        senderUserId: "",
+        recipientUserId: fresh.ownerUserId,
+        destination: fresh.recipientAddress,
+        note: fresh.note,
+        requestId: fresh.id,
+        createdAt: fresh.createdAt,
+        confirmedAt: fresh.paidAt
+      };
+      if (!store.signatureIndex[item.signature]) {
+        store.receipts.push(receipt);
+        store.signatureIndex[item.signature] = receipt.id;
+      }
+      paid = fresh;
+    });
+    if (paid) {
+      void notifyCashRequestPaid(paid).catch(() => {});
+      return paid;
+    }
+  }
+  return row;
+}
+
+async function notifyCashRequestPaid(row) {
+  const settings = await cashSettingsForUser(row.ownerUserId);
+  if (settings.notifications?.app) {
+    await sendWebPushToUser(row.ownerUserId, {
+      title: "SlimeCash payment received",
+      body: `${row.amount} ${row.asset} confirmed on Solana.`,
+      tag: `cash-request-${row.id}`,
+      url: "/cash/"
+    });
+  }
+  if (settings.notifications?.telegram) {
+    const links = await readTelegramLinks().catch(() => ({ links: {} }));
+    const chatId = links.links?.[String(row.ownerUserId)];
+    if (chatId) {
+      await say(chatId, `SlimeCash payment received: ${row.amount} ${row.asset} confirmed on Solana. Open slimewire.org/cash for the receipt.`).catch(() => {});
+    }
+  }
+}
+
+async function cashRequestForOwner(userId, id, { verify = false } = {}) {
+  const store = await readSlimeCashStore();
+  let row = store.requests[String(id || "")];
+  if (!row || String(row.ownerUserId) !== String(userId)) {
+    const error = new Error("Payment request not found.");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (verify) row = await verifyCashRequestPayment(row);
+  return clientCashRequest(row, { includeToken: true });
 }
 
 function cashRecoveryKeyFromText(value) {
@@ -67459,15 +68042,164 @@ async function webCashAssets(userId) {
 async function webCashSend(userId, body = {}) {
   return runIdempotentMoneyOp("cash-send", userId,
     firstString(body.sendAttemptId, body.tradeAttemptId, body.clientRequestId),
-    () => webCashSendCore(userId, body),
+    () => withFileLock(`cash-spend:${userId}`, async () => {
+      const attemptId = firstString(body.sendAttemptId, body.tradeAttemptId, body.clientRequestId);
+      if (!attemptId) {
+        const error = new Error("Refresh SlimeCash and retry so this send has a safety id.");
+        error.statusCode = 400;
+        throw error;
+      }
+      const existingStore = await readSlimeCashStore();
+      const existingId = existingStore.attemptIndex[`${userId}:${attemptId}`];
+      const existing = existingId && existingStore.receipts.find((row) => row.id === existingId);
+      if (existing?.signature) return cashSendResultFromReceipt(existing);
+      const amountUsd = await enforceCashSpendSecurity(userId, body, existingStore);
+      const result = await webCashSendCore(userId, body);
+      await recordCashSendReceipt(userId, body, result, amountUsd, attemptId);
+      return result;
+    }),
     { busyMessage: "This send is already submitting - SlimeCash won't send it twice." });
+}
+
+function cashSendResultFromReceipt(row) {
+  return {
+    action: "cash-send",
+    asset: row.asset,
+    amountSol: row.amountSol,
+    amountUsdc: row.amountUsdc,
+    feeSol: row.feeSol,
+    feeUsdc: row.feeUsdc,
+    destination: row.destination,
+    signature: row.signature,
+    replayed: true
+  };
+}
+
+async function enforceCashSpendSecurity(userId, body, store = null) {
+  const current = store || await readSlimeCashStore();
+  const settings = cashUserSettings(current, userId);
+  const security = settings.security || {};
+  const now = Date.now();
+  if (Date.parse(security.lockedUntil || "") > now) {
+    const error = new Error("Spend PIN is temporarily locked after repeated attempts. Try again later.");
+    error.statusCode = 429;
+    throw error;
+  }
+  if (security.pinRecord) {
+    const valid = await verifyCashPin(body.spendPin || body.pin, security.pinRecord);
+    await mutateSlimeCashStore((fresh) => {
+      const freshSecurity = cashUserSettings(fresh, userId).security;
+      if (valid) {
+        freshSecurity.failedAttempts = 0;
+        freshSecurity.lockedUntil = "";
+      } else {
+        freshSecurity.failedAttempts = Number(freshSecurity.failedAttempts || 0) + 1;
+        if (freshSecurity.failedAttempts >= 5) {
+          freshSecurity.lockedUntil = new Date(Date.now() + 15 * 60_000).toISOString();
+          freshSecurity.failedAttempts = 0;
+        }
+      }
+    });
+    if (!valid) {
+      const error = new Error("Enter your correct spend PIN.");
+      error.statusCode = 401;
+      throw error;
+    }
+  }
+  const asset = String(body.asset || "USDC").toUpperCase();
+  let amountUsd = 0;
+  if (asset === "USDC") amountUsd = Number(rawCashAmountToUi(parseCashDecimalToRaw(body.amount ?? body.amountUsdc, 6), 6));
+  else {
+    const amountSol = Number(body.amountSol ?? body.amount);
+    const solUsd = await getSolUsdPrice({ timeoutMs: 2_000 }).catch(() => 0);
+    if (Number(security.dailyLimit || 0) > 0 && !(solUsd > 0)) {
+      const error = new Error("SOL price is temporarily unavailable, so the daily spend limit cannot be verified. Retry shortly.");
+      error.statusCode = 503;
+      throw error;
+    }
+    amountUsd = amountSol * (solUsd || 0);
+  }
+  const limit = Number(security.dailyLimit || 0);
+  if (limit > 0) {
+    const today = new Date().toISOString().slice(0, 10);
+    const used = current.receipts
+      .filter((row) => String(row.senderUserId) === String(userId) && String(row.confirmedAt || row.createdAt || "").slice(0, 10) === today && row.status === "confirmed")
+      .reduce((sum, row) => sum + Number(row.amountUsd || 0), 0);
+    if (used + amountUsd > limit + 0.000001) {
+      const error = new Error(`This send would exceed your $${limit.toFixed(2)} daily SlimeCash limit.`);
+      error.statusCode = 409;
+      throw error;
+    }
+  }
+  return Number.isFinite(amountUsd) ? Math.round(amountUsd * 100) / 100 : 0;
+}
+
+async function recordCashSendReceipt(userId, body, result, amountUsd, attemptId) {
+  const wallets = await readWalletStore();
+  const recipientWallet = (wallets.wallets || []).find((row) => row.publicKey === result.destination && row.ownerId && !String(row.ownerId).startsWith("__"));
+  const note = String(body.note || "").trim().slice(0, 80);
+  const row = {
+    id: `receipt_${crypto.randomBytes(12).toString("base64url")}`,
+    attemptId,
+    signature: result.signature,
+    status: "confirmed",
+    asset: result.asset,
+    amountSol: result.amountSol,
+    amountUsdc: result.amountUsdc,
+    feeSol: result.feeSol,
+    feeUsdc: result.feeUsdc,
+    amountUsd,
+    senderUserId: String(userId),
+    recipientUserId: recipientWallet ? String(recipientWallet.ownerId) : "",
+    senderAddress: result.source?.address || "",
+    destination: result.destination,
+    recipientLabel: String(body.recipientLabel || body.handle || "").slice(0, 32),
+    note,
+    requestId: String(body.requestId || ""),
+    createdAt: new Date().toISOString(),
+    confirmedAt: new Date().toISOString()
+  };
+  await mutateSlimeCashStore((store) => {
+    const key = `${userId}:${attemptId}`;
+    if (store.attemptIndex[key] || store.signatureIndex[row.signature]) return;
+    store.receipts.push(row);
+    store.attemptIndex[key] = row.id;
+    store.signatureIndex[row.signature] = row.id;
+    const request = row.requestId && store.requests[row.requestId];
+    if (request?.status === "pending" && request.recipientAddress === row.destination && request.asset === row.asset) {
+      request.status = "paid";
+      request.signature = row.signature;
+      request.paidAt = row.confirmedAt;
+    }
+  });
+  if (row.requestId) {
+    const fresh = (await readSlimeCashStore()).requests[row.requestId];
+    if (fresh?.status === "paid") void notifyCashRequestPaid(fresh).catch(() => {});
+  }
 }
 
 async function webCashSendCore(userId, body = {}) {
   const asset = String(body.asset || (body.amountSol ? "SOL" : "USDC")).trim().toUpperCase();
-  if (asset === "SOL") return webCashSendSolCore(userId, body);
-  if (asset === "USDC") return webCashSendUsdcCore(userId, body);
+  const requestContext = await cashSendRequestContext(body, asset);
+  const sendBody = requestContext ? { ...body, cashReference: requestContext.reference } : body;
+  if (asset === "SOL") return webCashSendSolCore(userId, sendBody);
+  if (asset === "USDC") return webCashSendUsdcCore(userId, sendBody);
   throw new Error("Choose USDC or SOL.");
+}
+
+async function cashSendRequestContext(body, asset) {
+  const requestId = String(body.requestId || "").trim();
+  if (!requestId) return null;
+  const store = await readSlimeCashStore();
+  const row = store.requests[requestId];
+  if (!row || row.status !== "pending" || Date.parse(row.expiresAt || "") <= Date.now()) throw new Error("That payment request is no longer pending.");
+  const destination = splitWebDestinationList(body.destination || body.destinations)[0]?.toBase58();
+  if (destination !== row.recipientAddress || asset !== row.asset) throw new Error("The send no longer matches that payment request.");
+  const raw = asset === "USDC"
+    ? parseCashDecimalToRaw(body.amount ?? body.amountUsdc, 6)
+    : BigInt(solToLamports(parsePositiveNumber(String(body.amountSol || ""))));
+  if (raw !== BigInt(row.rawAmount)) throw new Error("The amount no longer matches that payment request.");
+  return row;
 }
 
 async function webCashSendSolCore(userId, body = {}) {
@@ -67507,6 +68239,7 @@ async function webCashSendSolCore(userId, body = {}) {
     toPubkey: destination,
     lamports: amountLamports
   }));
+  if (body.cashReference) tx.instructions[0].keys.push({ pubkey: new PublicKey(body.cashReference), isSigner: false, isWritable: false });
   if (feeLamports > 0) {
     tx.add(SystemProgram.transfer({
       fromPubkey: keypair.publicKey,
@@ -67524,6 +68257,7 @@ async function webCashSendSolCore(userId, body = {}) {
     asset: "SOL",
     source: webWalletRef(wallet),
     amountSol: lamportsToSol(amountLamports),
+    feeSol: lamportsToSol(feeLamports),
     destination: destination.toBase58(),
     signature
   };
@@ -67584,13 +68318,19 @@ async function webCashSendUsdcCore(userId, body = {}) {
   }
 
   const sources = sourceAccounts.map((account) => ({ ...account, remaining: account.rawAmount }));
+  let referenceAttached = false;
   const addTransfers = (targetAta, requestedRaw) => {
     let remaining = requestedRaw;
     for (const account of sources) {
       if (remaining <= 0n) break;
       const raw = account.remaining < remaining ? account.remaining : remaining;
       if (raw <= 0n) continue;
-      tx.add(createTransferCheckedInstruction(new PublicKey(account.pubkey), mint, targetAta, keypair.publicKey, raw, 6, [], tokenProgramId));
+      const instruction = createTransferCheckedInstruction(new PublicKey(account.pubkey), mint, targetAta, keypair.publicKey, raw, 6, [], tokenProgramId);
+      if (body.cashReference && !referenceAttached) {
+        instruction.keys.push({ pubkey: new PublicKey(body.cashReference), isSigner: false, isWritable: false });
+        referenceAttached = true;
+      }
+      tx.add(instruction);
       account.remaining -= raw;
       remaining -= raw;
     }

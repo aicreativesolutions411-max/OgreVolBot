@@ -18,6 +18,7 @@
   ],
   "shortcuts": [
     { "name": "Send", "url": "/cash/?tab=send", "icons": [{ "src": "/cash/icons/icon-192.png", "sizes": "192x192" }] },
-    { "name": "Add cash", "url": "/cash/?sheet=addcash", "icons": [{ "src": "/cash/icons/icon-192.png", "sizes": "192x192" }] }
+    { "name": "Add cash", "url": "/cash/?sheet=addcash", "icons": [{ "src": "/cash/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Receive", "url": "/cash/?sheet=receive", "icons": [{ "src": "/cash/icons/icon-192.png", "sizes": "192x192" }] }
   ]
 }

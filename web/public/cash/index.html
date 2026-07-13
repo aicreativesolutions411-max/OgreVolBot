@@ -51,7 +51,7 @@
         <div id="cardLink" class="cash-card-link">tap to set up your pay page</div>
       </div>
     </div>
-    <div class="section-label">ACTIVITY</div>
+    <div class="section-head"><div class="section-label">ACTIVITY</div><button id="activityAllBtn" class="text-action" type="button">View all</button></div>
     <div id="activityList" class="activity"></div>
   </section>
 
@@ -73,7 +73,7 @@
       <button id="amountUnit" class="unit-toggle" type="button">USD</button>
     </div>
     <div id="amountAlt" class="field-hint"></div>
-    <label class="field-label" for="sendNote">Note (saved on your device)</label>
+    <label class="field-label" for="sendNote">Note (saved with your private receipt)</label>
     <input id="sendNote" class="field" type="text" maxlength="80" placeholder="pizza money">
     <button id="sendBtn" class="btn primary block" type="button">Review send</button>
     <div id="sendStatus" class="status"></div>
@@ -103,8 +103,14 @@
       <button class="more-item" id="copyAddressBtn" type="button">Copy wallet address</button>
       <button class="more-item" id="backupBtn" type="button">Back up account + wallets</button>
       <button class="more-item" id="restoreBtn" type="button">Restore account</button>
+      <button class="more-item" id="contactsBtn" type="button">Contacts & favorites</button>
+      <button class="more-item" id="requestsBtn" type="button">Payment requests</button>
+      <button class="more-item" id="notificationsBtn" type="button">Incoming alerts</button>
+      <button class="more-item" id="securityBtn" type="button">Security & spending limits</button>
+      <button class="more-item" id="verifyBackupBtn" type="button">Verify recovery backup</button>
       <button class="more-item" id="spendBtn" type="button">Pay in stores</button>
       <button class="more-item" id="installBtn" type="button">Install SlimeCash app</button>
+      <button class="more-item" id="trustBtn" type="button">Trust, fees &amp; provider status</button>
       <a class="more-item" href="/gg" target="_blank" rel="noopener">Open full SlimeWire site ↗</a>
       <button class="more-item danger" id="signOutBtn" type="button">Sign out</button>
     </div>
@@ -191,7 +197,96 @@
     <button id="copyReceiveBtn" class="address-pill" type="button"><span id="receiveAddress">…</span><span class="copy-tag">copy</span></button>
     <a id="openReceiveWallet" class="btn primary block" href="#">Open in a Solana wallet</a>
     <button id="shareReceiveBtn" class="btn ghost block" type="button">Share request</button>
+    <button id="trackRequestBtn" class="btn ghost block" type="button">Create tracked request</button>
     <div id="receiveStatus" class="status">USDC arrives as digital dollars. Keep a little SOL for future network fees.</div>
+  </div>
+</div>
+
+<!-- ACTIVITY + RECEIPT -->
+<div id="activitysheet" class="sheet-backdrop" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="activityTitle">
+    <button class="sheet-close" data-close="activitysheet" type="button" aria-label="Close">×</button>
+    <div id="activityTitle" class="sheet-title">Activity</div>
+    <p class="sheet-copy">Confirmed account history appears on every device. Device-only entries remain visible while history sync is unavailable.</p>
+    <div id="activityFullList" class="activity"><div class="activity-empty">Loading activity…</div></div>
+    <button id="activityRefreshBtn" class="btn ghost block" type="button">Refresh</button>
+  </div>
+</div>
+<div id="receipt" class="sheet-backdrop" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="receiptTitle">
+    <button class="sheet-close" data-close="receipt" type="button" aria-label="Close">×</button>
+    <div id="receiptTitle" class="sheet-title">Payment receipt</div>
+    <div id="receiptBody" class="receipt-card"></div>
+    <a id="receiptExplorer" class="btn primary block" href="#" target="_blank" rel="noopener">View on Solana</a>
+    <button id="shareReceiptBtn" class="btn ghost block" type="button">Share receipt</button>
+  </div>
+</div>
+
+<!-- CONTACTS -->
+<div id="contacts" class="sheet-backdrop" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="contactsTitle">
+    <button class="sheet-close" data-close="contacts" type="button" aria-label="Close">×</button>
+    <div id="contactsTitle" class="sheet-title">Contacts & favorites</div>
+    <p class="sheet-copy">Save trusted $handles or Solana addresses. Always verify a first payment.</p>
+    <input id="contactName" class="field" maxlength="32" placeholder="Name or $handle">
+    <input id="contactAddress" class="field stacked-field" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Solana address">
+    <button id="saveContactBtn" class="btn primary block" type="button">Save contact</button>
+    <div id="contactStatus" class="status"></div>
+    <div id="contactList" class="compact-list"></div>
+  </div>
+</div>
+
+<!-- PAYMENT REQUESTS -->
+<div id="requests" class="sheet-backdrop" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="requestsTitle">
+    <button class="sheet-close" data-close="requests" type="button" aria-label="Close">×</button>
+    <div id="requestsTitle" class="sheet-title">Payment requests</div>
+    <p class="sheet-copy">Tracked requests confirm the exact asset, amount, and on-chain payment. Ordinary receive links still work when tracking is unavailable.</p>
+    <div id="requestList" class="compact-list"><div class="activity-empty">No tracked requests yet.</div></div>
+    <button id="newRequestBtn" class="btn primary block" type="button">New request</button>
+  </div>
+</div>
+
+<!-- NOTIFICATIONS -->
+<div id="notifications" class="sheet-backdrop" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="notificationsTitle">
+    <button class="sheet-close" data-close="notifications" type="button" aria-label="Close">×</button>
+    <div id="notificationsTitle" class="sheet-title">Incoming alerts</div>
+    <p class="sheet-copy">Only confirmed payments trigger alerts. SlimeCash never asks for a seed phrase in a notification.</p>
+    <label class="toggle-row"><span><b>App notifications</b><small>Incoming USDC, SOL, and request status</small></span><input id="notifyApp" type="checkbox"></label>
+    <label class="toggle-row"><span><b>Telegram receipts</b><small>Available after linking SlimeWiredBot</small></span><input id="notifyTelegram" type="checkbox"></label>
+    <label class="toggle-row"><span><b>Large-send warning</b><small>Extra warning before sends above your limit</small></span><input id="notifyLarge" type="checkbox" checked></label>
+    <button id="saveNotificationsBtn" class="btn primary block" type="button">Save alerts</button>
+    <div id="notificationStatus" class="status"></div>
+  </div>
+</div>
+
+<!-- SECURITY -->
+<div id="security" class="sheet-backdrop" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="securityTitle">
+    <button class="sheet-close" data-close="security" type="button" aria-label="Close">×</button>
+    <div id="securityTitle" class="sheet-title">Security & limits</div>
+    <p class="sheet-copy">Set your preferred spend PIN and limits. They become enforcement controls when supported by your account service; until then SlimeCash labels them as device-only warnings.</p>
+    <label class="field-label" for="spendPin">Spend PIN</label>
+    <input id="spendPin" class="field" type="password" inputmode="numeric" maxlength="8" autocomplete="new-password" placeholder="4–8 digits">
+    <label class="field-label" for="dailyLimit">Daily send warning</label>
+    <div class="amount-wrap"><input id="dailyLimit" class="field amount small-amount" type="number" inputmode="decimal" min="0" placeholder="250"><span class="unit-static">USD</span></div>
+    <label class="toggle-row"><span><b>Confirm new recipients</b><small>Keep the full address visible before sending</small></span><input id="confirmNewRecipient" type="checkbox" checked></label>
+    <button id="saveSecurityBtn" class="btn primary block" type="button">Save security</button>
+    <button id="revokeSessionsBtn" class="btn danger-outline block" type="button">Sign out other sessions</button>
+    <div id="securityStatus" class="status"></div>
+  </div>
+</div>
+
+<!-- VERIFY BACKUP -->
+<div id="verifybackup" class="sheet-backdrop" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="verifyTitle">
+    <button class="sheet-close" data-close="verifybackup" type="button" aria-label="Close">×</button>
+    <div id="verifyTitle" class="sheet-title">Verify recovery backup</div>
+    <p class="sheet-copy">This check reads the file on your device and does not replace your account. Verify both the SlimeCash account file and separate wallet recovery file.</p>
+    <label class="btn ghost block recovery-file">Choose backup to verify<input id="verifyBackupFile" type="file" accept=".txt,.json,text/plain,application/json"></label>
+    <div id="verifyBackupStatus" class="verification-box">No file checked yet.</div>
+    <button id="downloadFreshBackupBtn" class="btn primary block" type="button">Download fresh backups</button>
   </div>
 </div>
 
@@ -201,17 +296,39 @@
     <button class="sheet-close" data-close="spend" type="button" aria-label="Close">×</button>
     <div class="sheet-title">Pay in stores</div>
     <div class="spend-option">
-      <b>Solana Pay</b>
+      <div class="option-title"><b>Solana Pay</b><span class="availability live">Live</span></div>
       <span>Pay USDC directly at merchants displaying a Solana Pay QR. This is crypto checkout, not every NFC terminal.</span>
       <button id="openReceiveFromSpend" class="btn ghost block" type="button">Create a USDC request</button>
     </div>
     <div class="spend-option">
-      <b>Fund a tap-to-pay card</b>
+      <div class="option-title"><b>Coinbase Card</b><span class="availability provider">Provider account</span></div>
       <span>Eligible users can send USDC to their own Coinbase account, choose USDC for Coinbase Card, then add that card to Apple Pay or Google Pay.</span>
       <button id="fundCardBtn" class="btn primary block" type="button">Fund my Coinbase Card</button>
       <a class="btn ghost block" href="https://www.coinbase.com/card" target="_blank" rel="noopener">Open Coinbase Card</a>
     </div>
-    <div class="status">A SlimeCash-branded tap card needs issuer approval. Bridge + Stripe and Rain are the provider-ready paths; cardholder verification still applies.</div>
+    <div class="spend-option gated-option">
+      <div class="option-title"><b>SlimeCash card + tap</b><span class="availability gated">Issuer required</span></div>
+      <span>A branded card, Apple Pay, Google Pay, and universal NFC need an approved issuing partner and identity verification.</span>
+      <button class="btn ghost block" type="button" disabled>Not available yet</button>
+    </div>
+    <div class="spend-option gated-option">
+      <div class="option-title"><b>Bank transfer</b><span class="availability gated">Bank partner required</span></div>
+      <span>ACH deposits, withdrawals, account numbers, and cash-out require regulated bank and identity-verification partners.</span>
+      <button class="btn ghost block" type="button" disabled>Not available yet</button>
+    </div>
+    <div class="status">SlimeCash will never pretend crypto checkout works at every terminal. Provider eligibility, fees, and verification are handled by the named provider.</div>
+  </div>
+</div>
+
+<!-- TRUST / PROVIDER STATUS -->
+<div id="trust" class="sheet-backdrop" hidden>
+  <div class="sheet">
+    <button class="sheet-close" data-close="trust" type="button" aria-label="Close">×</button>
+    <div class="sheet-title">Trust &amp; provider status</div>
+    <p class="sheet-copy">SlimeCash is a self-custodial interface for a user-controlled Solana wallet. It is not a bank account, and USDC is not cash or an FDIC-insured deposit.</p>
+    <div class="receipt-card"><b>Live</b><br>SOL and canonical Solana USDC sends, exact tracked requests, private receipts, encrypted wallet recovery, spend PINs, and daily limits.<br><br><b>Fee</b><br>SlimeCash sends add a 0.5% application fee. Solana network costs and possible token-account rent are separate.<br><br><b>Coinbase hosted</b><br>Coinbase controls verification, payment methods, regions, pricing, and limits. SlimeCash never asks for Coinbase credentials.<br><br><b>Approval required</b><br>Direct deposit, a SlimeCash card, and Apple Pay or Google Wallet are not live. They require a regulated partner, issuer/bank, user verification, disputes, and wallet-tokenization approval.</div>
+    <p class="fineprint">Never share a seed phrase, private key, recovery key, or spend PIN. Blockchain transfers are generally irreversible—verify the full recipient.</p>
+    <button class="btn primary block" data-close="trust" type="button">Got it</button>
   </div>
 </div>
 
@@ -221,6 +338,10 @@
     <button class="sheet-close" data-close="confirm" type="button" aria-label="Close">×</button>
     <div class="sheet-title">Confirm send</div>
     <div id="confirmSummary" class="confirm-summary"></div>
+    <div id="confirmPinWrap" hidden>
+      <label class="field-label" for="confirmSpendPin">Spend PIN</label>
+      <input id="confirmSpendPin" class="field" type="password" inputmode="numeric" maxlength="8" autocomplete="one-time-code" placeholder="4–8 digits">
+    </div>
     <button id="confirmSendBtn" class="btn primary block" type="button">Send it</button>
     <button class="btn ghost block" data-close="confirm" type="button">Cancel</button>
   </div>

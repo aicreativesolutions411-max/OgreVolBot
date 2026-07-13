@@ -90,3 +90,23 @@ test("SlimeCash uses a separate PWA identity and a synchronized v7 shell", () =>
   assert.match(cash, /dedicatedHost = "app\.slimewire\.org"/);
   assert.match(cash, /intent:\/\/\$\{dedicatedHost\}\/cash/);
 });
+
+test("SlimeCash receipts, requests, contacts, and spend controls are server-backed", () => {
+  assert.match(server, /function defaultSlimeCashStore/);
+  assert.match(server, /slimecash\.json/);
+  assert.match(server, /async function mutateSlimeCashStore/);
+  assert.match(server, /pathname === "\/api\/web\/cash\/history"/);
+  assert.match(server, /pathname === "\/api\/web\/cash\/contacts"/);
+  assert.match(server, /pathname === "\/api\/web\/cash\/requests"/);
+  assert.match(server, /pathname === "\/api\/web\/cash\/notifications"/);
+  assert.match(server, /pathname === "\/api\/web\/cash\/security"/);
+  assert.match(server, /async function verifyCashRequestPayment/);
+  assert.match(server, /cashRequestPaidByTransaction/);
+  assert.match(server, /crypto\.timingSafeEqual/);
+  assert.match(server, /15 \* 60_000/);
+  assert.match(cash, /pendingSendAttemptId/);
+  assert.match(cash, /confirmSpendPin/);
+  assert.match(cash, /pendingRequestId/);
+  assert.match(html, /Trust, fees &amp; provider status/);
+  assert.match(html, /Approval required/);
+});

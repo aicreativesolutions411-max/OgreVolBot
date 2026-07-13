@@ -7,6 +7,10 @@
   const TOKEN_KEY = "ogreWebToken";
   const ACTIVITY_KEY = "slimecashActivity";
   const GUIDE_KEY = "slimecashGuide";
+  const CONTACTS_KEY = "slimecashContacts";
+  const SECURITY_KEY = "slimecashSecurity";
+  const NOTIFICATIONS_KEY = "slimecashNotifications";
+  const REQUESTS_KEY = "slimecashRequests";
   const API_BASE = (window.OGRE_PORTAL_CONFIG && window.OGRE_PORTAL_CONFIG.apiBase)
     || (/^(?:www\.)?slimewire\.org$/i.test(location.hostname) ? "https://app.slimewire.org" : "");
   const WSOL_MINT = "So11111111111111111111111111111111111111112";
@@ -30,6 +34,13 @@
     funding: null,
     resolved: null,        // { address, handle } for send target
     depositTimer: null,
+    requestTimer: null,
+    activity: [],
+    selectedReceipt: null,
+    securitySupported: false,
+    cashSecurity: null,
+    pendingSendAttemptId: "",
+    pendingRequestId: "",
     deferredInstall: null,
     terminalLoaded: false
   };
@@ -191,7 +202,9 @@
     const headers = { "Content-Type": "application/json" };
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
     try {
-      const response = await fetch(`${API_BASE}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), method === "GET" ? 12_000 : 35_000);
+      const response = await fetch(`${API_BASE}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: controller.signal }).finally(() => clearTimeout(timer));
       const isJson = /application\/json/i.test(response.headers.get("content-type") || "");
       if (!isJson) {
         return { ok: false, status: response.status, data: { error: "SlimeCash could not reach the account service. Try again." } };
@@ -437,6 +450,7 @@
       toast(`+$${gainedUsdc.toFixed(2)} USDC added — ready to use`);
       $("depositWatch").textContent = `+$${gainedUsdc.toFixed(2)} USDC received`;
       $("depositWatch").className = "status ok";
+      notifyIncoming("USDC received", `+$${gainedUsdc.toFixed(2)} arrived in SlimeCash`);
       renderActivity();
     }
     if (previousSol !== null && state.lamports > previousSol + 10000) {
@@ -445,6 +459,7 @@
       toast(`+${formatUsd(gainedSol * state.solUsd)} added — ready to use`);
       $("depositWatch").textContent = `+${gainedSol.toFixed(4)} SOL received`;
       $("depositWatch").className = "status ok";
+      notifyIncoming("SOL received", `+${gainedSol.toFixed(4)} SOL arrived in SlimeCash`);
       renderActivity();
     }
   }
@@ -469,28 +484,55 @@
     list.unshift(entry);
     localStorage.setItem(ACTIVITY_KEY, JSON.stringify(list.slice(0, 40)));
   }
-  function renderActivity() {
-    const list = readActivity();
-    const host = $("activityList");
-    if (!list.length) {
-      host.innerHTML = `<div class="activity-empty">Nothing yet. Add cash or send something slimy.</div>`;
-      return;
-    }
-    host.innerHTML = list.map((entry) => {
+  function normalizedActivity(entry = {}, index = 0) {
+    const signature = String(entry.signature || entry.tx || entry.transactionSignature || "");
+    const asset = String(entry.asset || (entry.amountUsdc ? "USDC" : "SOL")).toUpperCase();
+    const incoming = entry.type === "in" || entry.direction === "in" || entry.direction === "incoming";
+    const amount = Number(entry.amountUsd ?? entry.usdAmount ?? entry.amountUsdc ?? (asset === "USDC" ? entry.amount : 0)) || 0;
+    return { ...entry, id: String(entry.id || signature || `local-${entry.at || index}-${index}`), at: entry.at || entry.createdAt || entry.confirmedAt || Date.now(), type: incoming ? "in" : "out", asset, signature, amountUsd: amount,
+      title: entry.title || (incoming ? `${asset} received` : `${asset} sent`),
+      sub: entry.sub || entry.counterpartyLabel || entry.handle || (signature ? `${signature.slice(0, 8)}…` : "device activity") };
+  }
+
+  function activityRowsHtml(list, limit = 0) {
+    const rows = limit ? list.slice(0, limit) : list;
+    if (!rows.length) return `<div class="activity-empty">Nothing yet. Add cash or send something slimy.</div>`;
+    return rows.map((raw, index) => {
+      const entry = normalizedActivity(raw, index);
       const date = new Date(entry.at);
-      const when = date.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " +
-        date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-      const cls = entry.type === "in" ? "in" : "";
-      const sign = entry.type === "in" ? "+" : "-";
-      return `<div class="activity-row">
-        <div class="activity-ico">${entry.type === "in" ? "↓" : "➤"}</div>
-        <div class="activity-main">
-          <div class="activity-title">${escapeHtml(entry.title)}</div>
-          <div class="activity-sub">${escapeHtml(entry.sub || "")} · ${when}</div>
-        </div>
-        <div class="activity-amt ${cls}">${sign}${formatUsd(Math.abs(entry.amountUsd || 0))}</div>
-      </div>`;
+      const when = date.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+      return `<div class="activity-row" data-receipt="${escapeHtml(entry.id)}"><div class="activity-ico">${entry.type === "in" ? "↓" : "➤"}</div><div class="activity-main"><div class="activity-title">${escapeHtml(entry.title)}</div><div class="activity-sub">${escapeHtml(entry.sub || "")} · ${when}</div></div><div class="activity-amt ${entry.type === "in" ? "in" : ""}">${entry.type === "in" ? "+" : "-"}${formatUsd(Math.abs(entry.amountUsd || 0))}</div></div>`;
     }).join("");
+  }
+
+  function renderActivity() {
+    const list = state.activity.length ? state.activity : readActivity().map(normalizedActivity);
+    state.activity = list;
+    $("activityList").innerHTML = activityRowsHtml(list, 6);
+  }
+
+  async function loadCashHistory({ open = false } = {}) {
+    if (open) { openSheet("activitysheet"); $("activityFullList").innerHTML = `<div class="activity-empty">Syncing confirmed activity…</div>`; }
+    const result = await get("/api/web/cash/history?limit=60");
+    const remote = result.ok ? (result.data.history || result.data.activity || result.data.rows || []) : [];
+    const merged = [...remote.map(normalizedActivity), ...readActivity().map(normalizedActivity)]
+      .filter((entry, index, all) => all.findIndex((item) => item.id === entry.id) === index)
+      .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+    state.activity = merged; renderActivity();
+    if (open) {
+      $("activityFullList").innerHTML = activityRowsHtml(merged);
+      if (!result.ok) $("activityFullList").insertAdjacentHTML("afterbegin", `<div class="status">Confirmed history is not available yet. Showing this device's activity.</div>`);
+    }
+  }
+
+  function openReceipt(id) {
+    const entry = state.activity.find((item) => String(item.id) === String(id));
+    if (!entry) return;
+    state.selectedReceipt = entry;
+    $("receiptBody").innerHTML = `<div class="receipt-status">${escapeHtml(entry.status || (entry.signature ? "Confirmed" : "Saved on this device"))}</div><div class="receipt-line"><span>Amount</span><b>${entry.type === "in" ? "+" : "-"}${formatUsd(Math.abs(entry.amountUsd || 0))} ${escapeHtml(entry.asset || "")}</b></div><div class="receipt-line"><span>Type</span><b>${entry.type === "in" ? "Received" : "Sent"}</b></div><div class="receipt-line"><span>Details</span><b>${escapeHtml(entry.title || entry.sub || "Payment")}</b></div><div class="receipt-line"><span>Date</span><b>${new Date(entry.at).toLocaleString()}</b></div>${entry.signature ? `<div class="receipt-line"><span>Signature</span><b>${escapeHtml(entry.signature.slice(0, 12))}…${escapeHtml(entry.signature.slice(-8))}</b></div>` : ""}`;
+    $("receiptExplorer").hidden = !entry.signature;
+    $("receiptExplorer").href = entry.explorerUrl || `https://solscan.io/tx/${encodeURIComponent(entry.signature)}`;
+    openSheet("receipt");
   }
 
   /* ---------------- handle / profile ---------------- */
@@ -592,6 +634,7 @@
   }
 
   async function submitSend() {
+    if (!navigator.onLine) { $("sendStatus").textContent = "You are offline. Reconnect before reviewing a send."; $("sendStatus").className = "status bad"; return; }
     const target = state.resolved;
     const sol = amountToSol();
     const usdc = Number($("sendAmount").value || 0);
@@ -599,20 +642,34 @@
     const status = $("sendStatus");
     if (!target) { status.textContent = "Pick who you're sending to first."; status.className = "status bad"; return; }
     if (!(amount > 0)) { status.textContent = "Enter an amount."; status.className = "status bad"; return; }
+    if (!state.cashSecurity) {
+      const securityResult = await get("/api/web/cash/security");
+      if (securityResult.ok) state.cashSecurity = securityResult.data.security || securityResult.data;
+    }
     const to = target.handle ? `$${target.handle}` : shortAddress(target.address);
     const amountText = state.sendAsset === "USDC" ? `$${usdc.toFixed(2)} USDC` : `${sol.toFixed(4)} SOL (${formatUsd(sol * state.solUsd)})`;
     $("confirmSummary").innerHTML =
       `Send <b>${amountText}</b><br>` +
       `to <b>${escapeHtml(to)}</b><br>` +
       `<span style="color:var(--dim);font-size:12px">Solana network · 0.5% app fee · ${state.sendAsset === "USDC" ? "a little SOL is needed for network fees" : "network fee ~0.000005 SOL"}</span>`;
+    $("confirmPinWrap").hidden = !state.cashSecurity?.pinEnabled;
+    $("confirmSpendPin").value = "";
+    state.pendingSendAttemptId = crypto.randomUUID();
     openSheet("confirm");
   }
 
   async function confirmSend() {
+    if (!navigator.onLine) { closeSheet("confirm"); toast("Reconnect before sending", true); return; }
     const target = state.resolved;
     const sol = amountToSol();
     const usdc = Number($("sendAmount").value || 0);
     const note = $("sendNote").value.trim();
+    const spendPin = $("confirmSpendPin").value.trim();
+    if (state.cashSecurity?.pinEnabled && !/^\d{4,8}$/.test(spendPin)) {
+      toast("Enter your spend PIN", true);
+      $("confirmSpendPin").focus();
+      return;
+    }
     const button = $("confirmSendBtn");
     button.disabled = true;
     button.textContent = "Sending…";
@@ -621,19 +678,27 @@
       destination: target.address,
       asset: state.sendAsset,
       ...(state.sendAsset === "USDC" ? { amount: String(usdc) } : { amountSol: String(sol) }),
-      sendAttemptId: crypto.randomUUID()
+      note,
+      recipientLabel: target.handle ? `$${target.handle}` : "",
+      ...(spendPin ? { spendPin } : {}),
+      ...(state.pendingRequestId ? { requestId: state.pendingRequestId } : {}),
+      sendAttemptId: state.pendingSendAttemptId || crypto.randomUUID()
     });
     button.disabled = false;
     button.textContent = "Send it";
     if (result.ok) {
       closeSheet("confirm");
       const to = target.handle ? `$${target.handle}` : shortAddress(target.address);
-      addActivity({ type: "out", title: `To ${to}`, sub: note || `${state.sendAsset} sent`, amountUsd: sendUsdValue(), at: Date.now() });
+      addActivity({ type: "out", title: `To ${to}`, sub: note || `${state.sendAsset} sent`, asset: state.sendAsset, amountUsd: sendUsdValue(), signature: result.data.signature || "", at: Date.now() });
+      state.activity = [];
       renderActivity();
       $("sendStatus").textContent = `Sent. Signature ${String(result.data.signature || "").slice(0, 8)}…`;
       $("sendStatus").className = "status ok";
       $("sendAmount").value = "";
       $("sendNote").value = "";
+      $("confirmSpendPin").value = "";
+      state.pendingSendAttemptId = "";
+      state.pendingRequestId = "";
       toast("Sent 🤝");
       refreshBalance({ silent: true });
       switchTab("home");
@@ -669,6 +734,8 @@
     $("depositWatch").textContent = `Watching ${state.depositAsset} on Solana…`;
     $("depositWatch").className = "status";
     renderFundingPreview();
+    const activeGuide = document.querySelector("[data-guide].active")?.dataset.guide;
+    if (activeGuide) selectGuide(activeGuide);
   }
 
   function renderFundingPreview() {
@@ -697,6 +764,14 @@
     if (!(amount >= 5 && amount <= 2500)) {
       status.textContent = "Choose an amount from $5 to $2,500.";
       status.className = "status bad";
+      return;
+    }
+    const funding = await refreshFundingConfig();
+    if (!funding?.providers?.coinbase?.integrated) {
+      await copyText(state.wallet?.publicKey || "");
+      $("fundingStatus").textContent = "Address copied. In Coinbase choose Send, select the same asset, and use the Solana network.";
+      $("fundingStatus").className = "status ok";
+      window.open(funding?.providers?.coinbase?.url || "https://www.coinbase.com/buy", "_blank", "noopener");
       return;
     }
     button.disabled = true;
@@ -800,6 +875,150 @@
     openSheet("paypage");
   }
 
+  async function openTrackedPayPage(id, token) {
+    const result = await get(`/api/web/cash/request?id=${encodeURIComponent(id)}&token=${encodeURIComponent(token || "")}`);
+    const request = result.data?.request;
+    if (!result.ok || !request?.recipientAddress) { toast(result.data.error || "That payment request is not available.", true); return; }
+    $("payHandle").textContent = request.label || "SlimeCash request";
+    $("payAddress").textContent = request.recipientAddress;
+    QR.draw($("payQr"), request.uri || request.recipientAddress);
+    $("payAddressBtn").onclick = () => copyText(request.recipientAddress);
+    $("payNowBtn").textContent = request.status === "pending" ? `Pay ${request.amount} ${request.asset}` : `Request ${request.status}`;
+    $("payNowBtn").disabled = request.status !== "pending";
+    $("payNowBtn").onclick = () => {
+      closeSheet("paypage");
+      switchTab("send");
+      state.resolved = { address: request.recipientAddress, handle: "" };
+      state.pendingRequestId = request.id;
+      $("sendTo").value = request.recipientAddress;
+      selectSendAsset(request.asset);
+      if (request.asset === "SOL") state.amountUnit = "SOL";
+      $("sendAmount").value = request.amount;
+      renderAmountAlt();
+    };
+    openSheet("paypage");
+  }
+
+  /* ---------------- contacts / requests / preferences ---------------- */
+  function readLocalJson(key, fallback) { try { return JSON.parse(localStorage.getItem(key) || "null") ?? fallback; } catch { return fallback; } }
+  function writeLocalJson(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
+
+  async function loadContacts() {
+    openSheet("contacts");
+    const result = await get("/api/web/cash/contacts");
+    const rows = result.ok ? (result.data.contacts || []) : readLocalJson(CONTACTS_KEY, []);
+    $("contactList").innerHTML = rows.length ? rows.map((contact, index) => `<div class="compact-row"><span class="favorite-dot">★</span><div class="compact-row-main"><b>${escapeHtml(contact.name || contact.handle || "Contact")}</b><span>${escapeHtml(shortAddress(contact.address || ""))}</span></div><button class="compact-row-action" data-pay-contact="${index}" data-contact-address="${escapeHtml(contact.address || "")}" data-contact-name="${escapeHtml(contact.handle || contact.name || "")}" type="button">Pay</button></div>`).join("") : `<div class="activity-empty">No favorites yet.</div>`;
+  }
+
+  async function saveContact() {
+    const name = $("contactName").value.trim().replace(/^\$+/, "");
+    const address = $("contactAddress").value.trim();
+    if (!name || !isLikelyAddress(address)) { $("contactStatus").textContent = "Enter a name and valid Solana address."; $("contactStatus").className = "status bad"; return; }
+    const result = await post("/api/web/cash/contacts", { name, address, favorite: true });
+    if (!result.ok) {
+      const rows = readLocalJson(CONTACTS_KEY, []).filter((row) => row.address !== address);
+      rows.unshift({ name, address, favorite: true }); writeLocalJson(CONTACTS_KEY, rows.slice(0, 40));
+      $("contactStatus").textContent = "Saved on this device. Account sync is not available yet.";
+    } else $("contactStatus").textContent = "Contact saved to your account.";
+    $("contactStatus").className = "status ok"; $("contactName").value = ""; $("contactAddress").value = ""; loadContacts();
+  }
+
+  function localRequests() { return readLocalJson(REQUESTS_KEY, []); }
+  function renderRequests(rows = localRequests()) {
+    $("requestList").innerHTML = rows.length ? rows.map((request) => `<div class="compact-row"><span class="favorite-dot">$</span><div class="compact-row-main"><b>${escapeHtml(request.amount ? `${request.amount} ${request.asset || "USDC"}` : request.asset || "Payment request")}</b><span class="${request.status === "paid" ? "request-paid" : "request-pending"}">${escapeHtml(request.status || "pending")} · ${new Date(request.createdAt || Date.now()).toLocaleDateString()}</span></div>${request.shareUrl || request.uri ? `<button class="compact-row-action" data-share-request="${escapeHtml(request.id || "")}" type="button">Share</button>` : ""}</div>`).join("") : `<div class="activity-empty">No tracked requests yet.</div>`;
+  }
+
+  async function loadRequests() {
+    openSheet("requests"); renderRequests();
+    const result = await get("/api/web/cash/requests?limit=30");
+    if (result.ok) { const rows = result.data.requests || result.data.rows || []; writeLocalJson(REQUESTS_KEY, rows); renderRequests(rows); }
+  }
+
+  async function createTrackedRequest() {
+    if (!state.wallet) return;
+    const amount = $("receiveAmount").value.trim();
+    if (!(Number(amount) > 0)) { $("receiveStatus").textContent = "Enter an exact amount to track this request."; $("receiveStatus").className = "status bad"; return; }
+    const result = await post("/api/web/cash/requests", { asset: state.receiveAsset, amount, note: "SlimeCash payment request" });
+    if (!result.ok) {
+      const fallback = { id: crypto.randomUUID(), asset: state.receiveAsset, amount, uri: receiveRequestUrl(), shareUrl: receiveRequestUrl(), status: "untracked", createdAt: Date.now() };
+      const rows = [fallback, ...localRequests()].slice(0, 30); writeLocalJson(REQUESTS_KEY, rows);
+      $("receiveStatus").textContent = "Request link created. Automatic payment confirmation is not available yet."; $("receiveStatus").className = "status";
+      return;
+    }
+    const request = result.data.request || result.data;
+    const rows = [request, ...localRequests().filter((row) => row.id !== request.id)].slice(0, 30); writeLocalJson(REQUESTS_KEY, rows);
+    const qrValue = request.qrData || request.uri || request.solanaPayUrl;
+    const exactQr = qrValue ? QR.draw($("receiveQr"), qrValue) : false;
+    if (!exactQr) QR.draw($("receiveQr"), state.wallet.publicKey);
+    $("openReceiveWallet").href = request.uri || request.solanaPayUrl || receiveRequestUrl();
+    $("receiveStatus").textContent = exactQr ? "Tracked request is live · waiting for confirmation…" : "Tracked request is live. Use Open in wallet or Share for the exact amount; the QR shows your address."; $("receiveStatus").className = "status";
+    clearInterval(state.requestTimer);
+    if (request.id) state.requestTimer = setInterval(async () => {
+      const status = await get(`/api/web/cash/requests/${encodeURIComponent(request.id)}`);
+      if (!status.ok) return;
+      const updated = status.data.request || status.data;
+      if (updated.status === "paid" || updated.status === "confirmed") {
+        clearInterval(state.requestTimer); state.requestTimer = null;
+        $("receiveStatus").textContent = "Payment confirmed on Solana."; $("receiveStatus").className = "status ok";
+        toast("Payment received"); loadCashHistory();
+      }
+    }, 5000);
+  }
+
+  async function openNotifications() {
+    openSheet("notifications");
+    const local = readLocalJson(NOTIFICATIONS_KEY, { app: false, telegram: false, large: true });
+    const result = await get("/api/web/cash/notifications"); const prefs = result.ok ? (result.data.preferences || result.data) : local;
+    $("notifyApp").checked = Boolean(prefs.app); $("notifyTelegram").checked = Boolean(prefs.telegram); $("notifyLarge").checked = prefs.large !== false;
+  }
+
+  function notifyIncoming(title, body) {
+    const prefs = readLocalJson(NOTIFICATIONS_KEY, {});
+    if (!prefs.app || !("Notification" in window) || Notification.permission !== "granted" || document.visibilityState === "visible") return;
+    try { new Notification(title, { body, icon: "/cash/icons/icon-192.png", tag: "slimecash-incoming" }); } catch {}
+  }
+
+  async function saveNotifications() {
+    const prefs = { app: $("notifyApp").checked, telegram: $("notifyTelegram").checked, large: $("notifyLarge").checked };
+    if (prefs.app && "Notification" in window && Notification.permission !== "granted") prefs.app = (await Notification.requestPermission()) === "granted";
+    writeLocalJson(NOTIFICATIONS_KEY, prefs);
+    const result = await post("/api/web/cash/notifications", prefs);
+    $("notificationStatus").textContent = result.ok ? "Alerts saved to your account." : "App preferences saved on this device. Server alerts are not available yet."; $("notificationStatus").className = "status ok";
+  }
+
+  async function openSecurity() {
+    openSheet("security"); const local = readLocalJson(SECURITY_KEY, { dailyLimit: 250, confirmNewRecipient: true });
+    const result = await get("/api/web/cash/security"); state.securitySupported = result.ok; const settings = result.ok ? (result.data.security || result.data) : local;
+    if (result.ok) state.cashSecurity = settings;
+    $("dailyLimit").value = Number(settings.dailyLimit || 0) || ""; $("confirmNewRecipient").checked = settings.confirmNewRecipient !== false; $("spendPin").value = "";
+  }
+
+  async function saveSecurity() {
+    const pin = $("spendPin").value.trim(), settings = { dailyLimit: Number($("dailyLimit").value || 0), confirmNewRecipient: $("confirmNewRecipient").checked };
+    if (pin && !/^\d{4,8}$/.test(pin)) { $("securityStatus").textContent = "Use a 4–8 digit spend PIN."; $("securityStatus").className = "status bad"; return; }
+    writeLocalJson(SECURITY_KEY, settings);
+    const result = state.securitySupported ? await post("/api/web/cash/security", { ...settings, ...(pin ? { pin } : {}) }) : { ok: false };
+    if (result.ok) state.cashSecurity = result.data.security || result.data;
+    $("securityStatus").textContent = result.ok ? "Security settings saved." : "Warning preferences saved on this device. The PIN was not uploaded or enabled because server enforcement is not available yet."; $("securityStatus").className = "status ok"; $("spendPin").value = "";
+  }
+
+  async function revokeOtherSessions() {
+    if (!confirm("Sign out every other SlimeCash and SlimeWire web session?")) return;
+    const result = state.securitySupported ? await post("/api/web/cash/security/revoke-sessions", { keepCurrent: true }) : { ok: false };
+    $("securityStatus").textContent = result.ok ? "Other sessions signed out." : "Session controls are not available yet. Change your account password or recovery key if you suspect access."; $("securityStatus").className = result.ok ? "status ok" : "status bad";
+  }
+
+  function verifyBackupFile(file) {
+    const output = $("verifyBackupStatus"); if (!file) return;
+    const reader = new FileReader(); reader.onload = async () => {
+      const text = String(reader.result || "").trim();
+      const localLooksValid = /\bsc_[A-Za-z0-9_-]{32,}\b/.test(text) || /SLIMECASH|recovery|secretKey|encrypted/i.test(text);
+      if (!localLooksValid) { output.textContent = "This does not look like a SlimeCash account or wallet recovery file."; output.className = "verification-box bad"; return; }
+      output.textContent = "File structure looks valid. This check stayed on your device and did not upload the recovery material. Keep the older backup until you have verified both account and wallet files.";
+      output.className = "verification-box ok";
+    }; reader.onerror = () => { output.textContent = "Could not read that file."; output.className = "verification-box bad"; }; reader.readAsText(file);
+  }
+
   /* ---------------- ui plumbing ---------------- */
   function switchTab(tab) {
     document.querySelectorAll(".tab").forEach((button) => button.classList.toggle("active", button.dataset.tab === tab));
@@ -813,10 +1032,15 @@
     if (tab !== "home") stopDepositWatch();
   }
 
-  function openSheet(id) { $(id).hidden = false; }
+  function openSheet(id) {
+    const backdrop = $(id); backdrop.hidden = false; document.body.style.overflow = "hidden";
+    setTimeout(() => backdrop.querySelector("button, input, a, textarea")?.focus(), 0);
+  }
   function closeSheet(id) {
     $(id).hidden = true;
     if (id === "addcash") stopDepositWatch();
+    if (id === "receive" && state.requestTimer) { clearInterval(state.requestTimer); state.requestTimer = null; }
+    if (![...document.querySelectorAll(".sheet-backdrop")].some((node) => !node.hidden)) document.body.style.overflow = "";
   }
 
   function showOnboard() { $("onboard").hidden = false; }
@@ -847,6 +1071,12 @@
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/cash/sw.js").catch(() => {});
     }
+    const paintOnlineState = () => {
+      let banner = document.getElementById("offlineBanner");
+      if (navigator.onLine) { banner?.remove(); return; }
+      if (!banner) { banner = document.createElement("div"); banner.id = "offlineBanner"; banner.className = "offline-banner"; banner.textContent = "Offline · balances may be old and sends are disabled"; document.body.prepend(banner); }
+    };
+    window.addEventListener("online", paintOnlineState); window.addEventListener("offline", paintOnlineState); paintOnlineState();
     window.addEventListener("beforeinstallprompt", (event) => {
       event.preventDefault();
       state.deferredInstall = event;
@@ -881,15 +1111,19 @@
     } else {
       refreshProfile();
       refreshBalance();
+      loadCashHistory();
     }
     selectSendAsset("USDC");
 
     // Deep links: ?pay=handle opens a pay page, ?tab= / ?sheet= from app shortcuts.
     const pay = params.get("pay");
     if (pay) openPayPage(pay.replace(/^\$/, ""));
+    const requestId = params.get("request");
+    if (requestId) openTrackedPayPage(requestId, params.get("token"));
     const tab = params.get("tab");
     if (tab && ["home", "send", "terminal", "more"].includes(tab)) switchTab(tab);
     if (params.get("sheet") === "addcash" && ready) openAddCash();
+    if (params.get("sheet") === "receive" && ready) openReceive();
     if (params.get("install") === "1") setTimeout(openInstallGuide, 450);
     if (params.get("onramp") === "return" && ready) {
       let pending = null;
@@ -929,10 +1163,35 @@
     }
     const tabButton = event.target.closest(".tab");
     if (tabButton) switchTab(tabButton.dataset.tab);
+    const receipt = event.target.closest("[data-receipt]");
+    if (receipt) openReceipt(receipt.dataset.receipt);
+    const payContact = event.target.closest("[data-pay-contact]");
+    if (payContact) {
+      closeSheet("contacts"); switchTab("send"); $("sendTo").value = payContact.dataset.contactAddress || payContact.dataset.contactName || ""; resolveTarget($("sendTo").value);
+    }
+    const shareRequest = event.target.closest("[data-share-request]");
+    if (shareRequest) {
+      const request = localRequests().find((row) => String(row.id) === String(shareRequest.dataset.shareRequest));
+      if (request?.shareUrl || request?.uri) copyText(request.shareUrl || request.uri);
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const open = [...document.querySelectorAll(".sheet-backdrop")].reverse().find((node) => !node.hidden && node.id !== "onboard");
+    if (open) closeSheet(open.id);
   });
 
   $("addCashBtn").addEventListener("click", openAddCash);
   $("receiveBtn").addEventListener("click", openReceive);
+  $("activityAllBtn").addEventListener("click", () => loadCashHistory({ open: true }));
+  $("activityRefreshBtn").addEventListener("click", () => loadCashHistory({ open: true }));
+  $("shareReceiptBtn").addEventListener("click", async () => {
+    const entry = state.selectedReceipt; if (!entry) return;
+    const url = entry.signature ? `https://solscan.io/tx/${entry.signature}` : "";
+    if (navigator.share) { try { await navigator.share({ title: "SlimeCash receipt", text: `${entry.title} · ${formatUsd(Math.abs(entry.amountUsd || 0))}`, url }); return; } catch {} }
+    copyText(url || `${entry.title} · ${formatUsd(Math.abs(entry.amountUsd || 0))}`);
+  });
   $("sendQuickBtn").addEventListener("click", () => switchTab("send"));
   $("sendBtn").addEventListener("click", submitSend);
   $("confirmSendBtn").addEventListener("click", confirmSend);
@@ -940,6 +1199,7 @@
   $("coinbaseFundBtn").addEventListener("click", startCoinbaseFunding);
   $("copyReceiveBtn").addEventListener("click", () => state.wallet && copyText(state.wallet.publicKey));
   $("shareReceiveBtn").addEventListener("click", shareReceive);
+  $("trackRequestBtn").addEventListener("click", createTrackedRequest);
   $("receiveAmount").addEventListener("input", renderReceiveRequest);
   $("fundAmount").addEventListener("input", () => {
     document.querySelectorAll("[data-fund-amount]").forEach((button) => button.classList.toggle("active", Number(button.dataset.fundAmount) === Number($("fundAmount").value)));
@@ -958,6 +1218,7 @@
   });
 
   $("sendTo").addEventListener("input", (event) => {
+    state.pendingRequestId = "";
     clearTimeout(resolveTimer);
     resolveTimer = setTimeout(() => resolveTarget(event.target.value), 350);
   });
@@ -1029,7 +1290,20 @@
   });
 
   $("restoreBtn").addEventListener("click", openRecovery);
+  $("contactsBtn").addEventListener("click", loadContacts);
+  $("saveContactBtn").addEventListener("click", saveContact);
+  $("requestsBtn").addEventListener("click", loadRequests);
+  $("newRequestBtn").addEventListener("click", () => { closeSheet("requests"); openReceive(); });
+  $("notificationsBtn").addEventListener("click", openNotifications);
+  $("saveNotificationsBtn").addEventListener("click", saveNotifications);
+  $("securityBtn").addEventListener("click", openSecurity);
+  $("saveSecurityBtn").addEventListener("click", saveSecurity);
+  $("revokeSessionsBtn").addEventListener("click", revokeOtherSessions);
+  $("verifyBackupBtn").addEventListener("click", () => openSheet("verifybackup"));
+  $("verifyBackupFile").addEventListener("change", () => verifyBackupFile($("verifyBackupFile").files?.[0]));
+  $("downloadFreshBackupBtn").addEventListener("click", () => backupCashAccount({ includeWallets: true }));
   $("spendBtn").addEventListener("click", () => openSheet("spend"));
+  $("trustBtn").addEventListener("click", () => openSheet("trust"));
   $("openReceiveFromSpend").addEventListener("click", () => { closeSheet("spend"); state.receiveAsset = "USDC"; openReceive(); });
   $("fundCardBtn").addEventListener("click", () => {
     closeSheet("spend");

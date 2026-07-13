@@ -2636,9 +2636,15 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(rhGather, /const noxaPromise/);                         // NOXA's slower exact factory read starts concurrently, not after the fast providers already timed out
   assert.match(rhGather, /rhScanCacheTtl\(cached\.v\)/);              // transient empty results retry in seconds instead of poisoning scans for a minute
   assert.match(rhGather, /if \(rhScanHasMarketEvidence\(v\)\)/);      // never promote an all-zero transient response to last-good
+  assert.match(rhGather, /rhImpliedPriceUsd/);                         // non-NOXA fresh pools get a direct implied-price read while indexes catch up
+  assert.match(rhGather, /mc = priceUsd \* supply/);                  // implied price restores market cap from the real token supply
+  assert.match(rhGather, /else \{\s*rhScanCache\.delete\(key\)/);     // an all-n/a miss cannot poison the next scan, even for five seconds
   assert.match(rhGather, /rhScanLastGood/);                           // intermittent providers cannot erase known-good facts
   assert.match(functionBody(serverSource, "gatherRhScan"), /rhScanInFlight/); // simultaneous scans share one provider job
   assert.match(rhSend, /!rhScanHasMarketEvidence\(loaded\)/);         // keep the progressive warning instead of presenting n/a as a completed scan
+  assert.match(rhSend, /Object\.assign\(quickInfo, loaded/);           // partial Blockscout identity/holders replace the generic $RH placeholder
+  assert.match(rhSend, /\[4_000, 8_000, 15_000, 30_000\]/);           // new pools auto-refresh the same Telegram card through index lag
+  assert.match(rhSend, /rhScanCache\.delete/);                         // each bounded retry bypasses the short negative cache
   const geckoPool = new Function("firstString", "firstMeaningfulNumber", "rhFiniteNumber", `return function(data, address) {${functionBody(serverSource, "rhGeckoPoolForToken")}}`)(
     (...values) => String(values.find((value) => String(value || "").trim()) || ""),
     (...values) => values.map(Number).find((value) => Number.isFinite(value) && value !== 0) ?? null,

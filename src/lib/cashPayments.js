@@ -36,7 +36,7 @@ export function rawCashAmountToUi(rawAmount, decimals) {
   return fraction ? `${whole}.${fraction}` : String(whole);
 }
 
-export function buildSolanaPayUrl({ recipient, asset = "USDC", amount = "", label = "SlimeCash", message = "" } = {}) {
+export function buildSolanaPayUrl({ recipient, asset = "USDC", amount = "", label = "SlimeCash", message = "", reference = "" } = {}) {
   const address = String(recipient || "").trim();
   if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)) throw new Error("Invalid Solana recipient.");
   const normalizedAsset = String(asset || "USDC").trim().toUpperCase();
@@ -48,6 +48,11 @@ export function buildSolanaPayUrl({ recipient, asset = "USDC", amount = "", labe
     params.set("amount", rawCashAmountToUi(raw, decimals));
   }
   if (normalizedAsset === "USDC") params.set("spl-token", SOLANA_USDC_MINT);
+  if (String(reference || "").trim()) {
+    const referenceAddress = String(reference).trim();
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(referenceAddress)) throw new Error("Invalid Solana Pay reference.");
+    params.set("reference", referenceAddress);
+  }
   if (String(label || "").trim()) params.set("label", String(label).trim().slice(0, 48));
   if (String(message || "").trim()) params.set("message", String(message).trim().slice(0, 80));
   const query = params.toString();
