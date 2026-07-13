@@ -1935,6 +1935,9 @@ test("Robinhood address routing proves wallet versus ERC-20 before scan and trac
   assert.match(proof, /rhTokenInfo\(a\)/); // Blockscout exact token record rescues transient RPC bytecode misses
   assert.match(proof, /api\/v2\/tokens\?q=\$\{encodeURIComponent\(a\)\}&type=ERC-20/); // Render can reach the address-search index when the exact-record route stalls
   assert.match(proof, /rowAddress\.toLowerCase\(\) === key/); // never accept a fuzzy address result as token proof
+  assert.match(proof, /api\.dexscreener\.com\/tokens\/v1\/robinhood/); // exact market identity remains a third independent proof if both chain gateways blink
+  assert.match(proof, /baseToken\?\.address, pair\?\.quoteToken\?\.address/);
+  assert.match(proof, /rpcContract \|\| blockscoutContract \|\| marketContract/);
   assert.match(proof, /normalizeRhBlockscoutToken/);
   assert.match(serverSource, /addressKind: "wallet", chain: "robinhood", matches: \[\]/);
   assert.match(serverSource, /That 0x address is a Robinhood wallet, not an ERC-20 coin contract/);

@@ -39212,13 +39212,18 @@ async function rhTokenContractProof(address, timeoutMs = 7_000) {
   // Run both proofs together. Waiting for a flaky public RPC bytecode read before asking Blockscout made
   // a valid token take the sum of both timeouts and occasionally miss Telegram's scan window entirely.
   // The chain explorer's exact ERC-20 record is sufficient proof and normally returns much faster.
-  const [rpcContract, directToken, indexedData] = await Promise.all([
+  const [rpcContract, directToken, indexedData, dexRows] = await Promise.all([
     rhPromiseTimeout(isRhContract(a), Math.min(timeoutMs, 4_000), false),
     rhPromiseTimeout(rhTokenInfo(a), timeoutMs, null),
     rhPromiseTimeout(fetchJson(`https://robinhoodchain.blockscout.com/api/v2/tokens?q=${encodeURIComponent(a)}&type=ERC-20`, {
       headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
       timeoutMs: Math.min(timeoutMs, 4_500),
       maxBytes: 500_000,
+    }), Math.min(timeoutMs, 4_500), null),
+    rhPromiseTimeout(fetchJson(`https://api.dexscreener.com/tokens/v1/robinhood/${a}`, {
+      headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
+      timeoutMs: Math.min(timeoutMs, 4_500),
+      maxBytes: 1_000_000,
     }), Math.min(timeoutMs, 4_500), null),
   ]);
   const indexedToken = (Array.isArray(indexedData?.items) ? indexedData.items : []).find((row) => {
@@ -39228,7 +39233,13 @@ async function rhTokenContractProof(address, timeoutMs = 7_000) {
   const token = directToken || indexedToken;
   const normalized = normalizeRhBlockscoutToken(token);
   const blockscoutContract = Boolean(normalized?.symbol && normalized?.address?.toLowerCase() === key);
-  const contract = Boolean(rpcContract || blockscoutContract);
+  const dexPair = (Array.isArray(dexRows) ? dexRows : []).find((pair) => {
+    if (String(pair?.chainId || "").toLowerCase() !== "robinhood") return false;
+    return [pair?.baseToken?.address, pair?.quoteToken?.address].some((value) => String(value || "").toLowerCase() === key);
+  });
+  const dexToken = [dexPair?.baseToken, dexPair?.quoteToken].find((row) => String(row?.address || "").toLowerCase() === key);
+  const marketContract = Boolean(dexToken?.symbol);
+  const contract = Boolean(rpcContract || blockscoutContract || marketContract);
   if (contract) _rhKindCache.set(key, { at: Date.now(), contract: true });
   return { contract, token };
 }
