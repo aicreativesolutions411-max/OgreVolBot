@@ -34805,7 +34805,7 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
   const pick = checked.find((row) => row.isContract)?.candidate || null;
   if (pick) {
     pick.solDexCandidate = solDexCandidate;
-    if (pick.dexPair) _rhKindCache.set(pick.address.toLowerCase(), { at: Date.now(), contract: true });
+    if (pick.contractProof || pick.dexPair) _rhKindCache.set(pick.address.toLowerCase(), { at: Date.now(), contract: true });
   }
   // Only the chain-native exact-symbol search can make an authoritative RH no-match. Broad DEX search
   // arrays are frequently partial on Render's shared IP, so their mere presence is not "complete".
@@ -39205,6 +39205,17 @@ function normalizeRhBlockscoutToken(row = {}) {
     source: "blockscout",
   };
 }
+async function rhTokenContractProof(address, timeoutMs = 3_500) {
+  const a = String(address || "").trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return { contract: false, token: null };
+  const key = a.toLowerCase();
+  if (await isRhContract(a).catch(() => false)) return { contract: true, token: null };
+  const token = await rhPromiseTimeout(rhTokenInfo(a), timeoutMs, null);
+  const normalized = normalizeRhBlockscoutToken(token);
+  const contract = Boolean(normalized?.symbol && normalized?.address?.toLowerCase() === key);
+  if (contract) _rhKindCache.set(key, { at: Date.now(), contract: true });
+  return { contract, token };
+}
 function mergeRhTokenRows(...rows) {
   const clean = rows.filter(Boolean);
   if (!clean.length) return null;
@@ -39382,8 +39393,13 @@ async function rhTokenVolumeFallback(address, poolHint = "") {
 async function gatherRhScanUncollapsed(address) {
   const a = String(address || "").trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return null;
-  if (!(await isRhContract(a).catch(() => false))) return null;
   const key = a.toLowerCase();
+  // The RH public RPC occasionally times out or returns an empty bytecode read for real ERC-20s. Do not
+  // misroute a Blockscout-indexed token as a wallet: its exact `/tokens/:address` record is independent
+  // contract proof and also gives us symbol/name/holders for the first card.
+  const contractProof = await rhTokenContractProof(a);
+  if (!contractProof.contract) return null;
+  const directTokenProof = contractProof.token;
   const cached = rhScanCache.get(key);
   if (cached && Date.now() - cached.at < rhScanCacheTtl(cached.v)) return cached.v;
   // Start the exact NOXA factory read immediately instead of waiting for DexScreener to fail first.
@@ -39410,7 +39426,7 @@ async function gatherRhScanUncollapsed(address) {
     fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${a}/pools?page=1`, { timeoutMs: 6_500 }).catch(() => null),
     rhPromiseTimeout(rhHoneypotCheck(a, CONFIG.rhChainRpcUrl), 3000, null),
     rhPromiseTimeout(rhFeedTokens(), 2500, []),
-    rhPromiseTimeout(rhTokenInfo(a), 2500, null),
+    directTokenProof ? Promise.resolve(directTokenProof) : rhPromiseTimeout(rhTokenInfo(a), 3_500, null),
     rhPromiseTimeout(rhLaunchMetaByAddress(), 1500, new Map()),
   ]);
   const pairs = [...(Array.isArray(dsRes?.pairs) ? dsRes.pairs : []), ...(Array.isArray(dsV1) ? dsV1 : [])]
@@ -40067,8 +40083,8 @@ async function sendWalletScanCard(chatId, address) {
 async function buildXReply(mint, intent = "scan", variant) {
   // A Robinhood 0x value may be an EOA, smart wallet, or ERC-20. Only confirmed ERC-20s get coin cards.
   if (/^0x[0-9a-fA-F]{40}$/.test(String(mint || ""))) {
-    const token = await isRhContract(String(mint)).catch(() => false);
-    if (!token) return await buildXMapReply(mint, variant).catch(() => null);
+    const token = await rhTokenContractProof(String(mint));
+    if (!token.contract) return await buildXMapReply(mint, variant).catch(() => null);
     if (intent === "map") return (await buildXMapReply(mint, variant).catch(() => null)) || await buildXRhReply(mint, variant);
     return await buildXRhReply(mint, variant);
   }
@@ -44353,7 +44369,8 @@ async function handleTelegramLookCommand(chatId, message, argument, options = {}
     const tickerLine = tickerScanSelectionLine(tickerSymbol, rhAddr);
     const contextHtml = [String(options.contextHtml || "").trim(), tickerLine].filter(Boolean).join("\n");
     const provenTickerCoin = Boolean(rhTickerCandidateForTarget(tickerSymbol, rhAddr)?.contractProof);
-    if (provenTickerCoin || await isRhContract(rhAddr).catch(() => false)) await sendRhScanCard(chatId, rhAddr, { ...options, contextHtml, message });
+    const tokenProof = provenTickerCoin ? { contract: true } : await rhTokenContractProof(rhAddr);
+    if (tokenProof.contract) await sendRhScanCard(chatId, rhAddr, { ...options, contextHtml, message });
     else await sendWalletScanCard(chatId, rhAddr);
     return;
   }

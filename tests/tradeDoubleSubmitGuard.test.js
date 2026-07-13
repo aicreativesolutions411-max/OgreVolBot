@@ -1921,13 +1921,18 @@ test("scan Security fills from our own RPC when RugCheck returns null (no more n
 
 test("Robinhood address routing proves wallet versus ERC-20 before scan and tracking", () => {
   const look = functionBody(serverSource, "handleTelegramLookCommand");
-  assert.match(look, /await isRhContract\(rhAddr\)/);
+  assert.match(look, /await rhTokenContractProof\(rhAddr\)/);
   assert.match(look, /else await sendWalletScanCard\(chatId, rhAddr\)/);
   const xReply = functionBody(serverSource, "buildXReply");
-  assert.match(xReply, /const token = await isRhContract/);
-  assert.match(xReply, /if \(!token\) return await buildXMapReply/);
+  assert.match(xReply, /const token = await rhTokenContractProof/);
+  assert.match(xReply, /if \(!token\.contract\) return await buildXMapReply/);
   const rhScan = functionBody(serverSource, "gatherRhScanUncollapsed");
-  assert.match(rhScan, /if \(!\(await isRhContract\(a\)/);
+  assert.match(rhScan, /const contractProof = await rhTokenContractProof\(a\)/);
+  assert.match(rhScan, /if \(!contractProof\.contract\) return null/);
+  const proof = functionBody(serverSource, "rhTokenContractProof");
+  assert.match(proof, /await isRhContract\(a\)/);
+  assert.match(proof, /rhTokenInfo\(a\)/); // Blockscout exact token record rescues transient RPC bytecode misses
+  assert.match(proof, /normalizeRhBlockscoutToken/);
   assert.match(serverSource, /addressKind: "wallet", chain: "robinhood", matches: \[\]/);
   assert.match(serverSource, /That 0x address is a Robinhood wallet, not an ERC-20 coin contract/);
 });
