@@ -110,6 +110,7 @@ import * as callerIntel from "./lib/callerIntel.js";
 import { computeCalibration as computeAutopilotCalibration, computeCalibrationByMode, modeScorecard } from "./lib/selfCalibration.js";
 import { r2PutObject, r2Configured } from "./lib/r2.js";
 import {
+  SOLANA_PYUSD_MINT,
   SOLANA_USDC_MINT,
   buildSolanaPayUrl,
   createCoinbaseOnrampSession,
@@ -9492,11 +9493,14 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         network: "solana",
-        assets: ["USDC", "SOL"],
+        assets: ["USDC", "SOL", "PYUSD"],
         providers: {
           coinbase: { integrated: coinbaseConfigured, url: "https://www.coinbase.com/buy" },
           phantom: { integrated: false, url: "https://phantom.app/" },
-          robinhood: { integrated: false, url: "https://robinhood.com/crypto/SOL" }
+          robinhood: { integrated: false, url: "https://robinhood.com/crypto/SOL" },
+          venmo: { integrated: false, url: "https://venmo.com" },
+          paypal: { integrated: false, url: "https://www.paypal.com/us/digital-wallet/manage-money/crypto" },
+          peer: { integrated: false, experimental: true, url: "https://www.peer.xyz" }
         },
         headlessApplePay: {
           enabled: coinbaseConfigured && CONFIG.coinbaseHeadlessOnrampEnabled,
@@ -68101,11 +68105,13 @@ async function webCashAssets(userId) {
     getOwnedTokenAccountsWithWarningsCached(owner, { force: false })
   ]);
   const usdc = aggregateTokenAccountsForMint(lookup.accounts || [], SOLANA_USDC_MINT);
+  const pyusd = aggregateTokenAccountsForMint(lookup.accounts || [], SOLANA_PYUSD_MINT);
   return {
     wallet: { index: walletIndex, address: wallet.publicKey, label: wallet.label },
     assets: {
       SOL: { rawAmount: String(lamports), uiAmount: String(lamportsToSol(lamports)), decimals: 9 },
-      USDC: { mint: SOLANA_USDC_MINT, rawAmount: String(usdc?.rawAmount || 0n), uiAmount: usdc?.uiAmount || "0", decimals: 6 }
+      USDC: { mint: SOLANA_USDC_MINT, rawAmount: String(usdc?.rawAmount || 0n), uiAmount: usdc?.uiAmount || "0", decimals: 6 },
+      PYUSD: { mint: SOLANA_PYUSD_MINT, rawAmount: String(pyusd?.rawAmount || 0n), uiAmount: pyusd?.uiAmount || "0", decimals: 6 }
     },
     warnings: lookup.warnings || []
   };
@@ -68180,7 +68186,7 @@ async function enforceCashSpendSecurity(userId, body, store = null) {
   }
   const asset = String(body.asset || "USDC").toUpperCase();
   let amountUsd = 0;
-  if (asset === "USDC") amountUsd = Number(rawCashAmountToUi(parseCashDecimalToRaw(body.amount ?? body.amountUsdc, 6), 6));
+  if (asset === "USDC" || asset === "PYUSD") amountUsd = Number(rawCashAmountToUi(parseCashDecimalToRaw(body.amount ?? body.amountUsdc, 6), 6));
   else {
     const amountSol = Number(body.amountSol ?? body.amount);
     const solUsd = await getSolUsdPrice({ timeoutMs: 2_000 }).catch(() => 0);
@@ -68255,8 +68261,9 @@ async function webCashSendCore(userId, body = {}) {
   const requestContext = await cashSendRequestContext(body, asset);
   const sendBody = requestContext ? { ...body, cashReference: requestContext.reference } : body;
   if (asset === "SOL") return webCashSendSolCore(userId, sendBody);
-  if (asset === "USDC") return webCashSendUsdcCore(userId, sendBody);
-  throw new Error("Choose USDC or SOL.");
+  if (asset === "USDC") return webCashSendStableCore(userId, sendBody, { asset: "USDC", mint: SOLANA_USDC_MINT });
+  if (asset === "PYUSD") return webCashSendStableCore(userId, sendBody, { asset: "PYUSD", mint: SOLANA_PYUSD_MINT });
+  throw new Error("Choose USDC, PYUSD, or SOL.");
 }
 
 async function cashSendRequestContext(body, asset) {
@@ -68267,7 +68274,7 @@ async function cashSendRequestContext(body, asset) {
   if (!row || row.status !== "pending" || Date.parse(row.expiresAt || "") <= Date.now()) throw new Error("That payment request is no longer pending.");
   const destination = splitWebDestinationList(body.destination || body.destinations)[0]?.toBase58();
   if (destination !== row.recipientAddress || asset !== row.asset) throw new Error("The send no longer matches that payment request.");
-  const raw = asset === "USDC"
+  const raw = asset !== "SOL"
     ? parseCashDecimalToRaw(body.amount ?? body.amountUsdc, 6)
     : BigInt(solToLamports(parsePositiveNumber(String(body.amountSol || ""))));
   if (raw !== BigInt(row.rawAmount)) throw new Error("The amount no longer matches that payment request.");
@@ -68335,7 +68342,11 @@ async function webCashSendSolCore(userId, body = {}) {
   };
 }
 
-async function webCashSendUsdcCore(userId, body = {}) {
+// One send path for every dollar-pegged SPL asset SlimeCash holds. USDC is classic
+// SPL; PYUSD is Token-2022 - the token program is derived from the source account and
+// ATAs are created with that same program, so both work through this single core.
+async function webCashSendStableCore(userId, body = {}, stable = { asset: "USDC", mint: SOLANA_USDC_MINT }) {
+  const assetName = stable.asset;
   const store = await readWalletStore();
   const walletIndex = parseWebWalletIndex(body.fromWalletIndex || body.walletIndex);
   const wallet = { ...getWalletAt(store, walletIndex, userId), webIndex: walletIndex };
@@ -68345,22 +68356,22 @@ async function webCashSendUsdcCore(userId, body = {}) {
   const keypair = decryptWallet(wallet);
   if (keypair.publicKey.equals(destination)) throw new Error("That destination is this wallet.");
 
-  const amountRaw = parseCashDecimalToRaw(body.amount ?? body.amountUsdc, 6, "USDC amount");
+  const amountRaw = parseCashDecimalToRaw(body.amount ?? body.amountUsdc, 6, `${assetName} amount`);
   let feeRaw = (amountRaw * BigInt(CONFIG.bundleFeeBps)) / 10_000n;
   if (feeRaw < 5_000n || !CONFIG.feeWallet) feeRaw = 0n;
   const requiredRaw = amountRaw + feeRaw;
-  const mint = new PublicKey(SOLANA_USDC_MINT);
+  const mint = new PublicKey(stable.mint);
   const lookup = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey, { force: true });
   const matching = (lookup.accounts || [])
-    .filter((account) => account.mint === SOLANA_USDC_MINT && account.rawAmount > 0n)
+    .filter((account) => account.mint === stable.mint && account.rawAmount > 0n)
     .sort((left, right) => compareBigInt(right.rawAmount, left.rawAmount));
   const totalRaw = matching.reduce((sum, account) => sum + account.rawAmount, 0n);
   if (totalRaw < requiredRaw) {
-    throw new Error(`Not enough USDC. You have $${rawCashAmountToUi(totalRaw, 6)} and this send needs $${rawCashAmountToUi(requiredRaw, 6)} including the app fee.`);
+    throw new Error(`Not enough ${assetName}. You have $${rawCashAmountToUi(totalRaw, 6)} and this send needs $${rawCashAmountToUi(requiredRaw, 6)} including the app fee.`);
   }
   const sourceAccounts = matching.slice(0, 4);
   if (sourceAccounts.reduce((sum, account) => sum + account.rawAmount, 0n) < requiredRaw) {
-    throw new Error("Your USDC is split across too many token accounts. Sweep it into one wallet first, then retry.");
+    throw new Error(`Your ${assetName} is split across too many token accounts. Sweep it into one wallet first, then retry.`);
   }
 
   const tokenProgramId = new PublicKey(sourceAccounts[0]?.tokenProgramId || TOKEN_PROGRAM_ID);
@@ -68369,9 +68380,9 @@ async function webCashSendUsdcCore(userId, body = {}) {
   const feeAta = feeOwner ? getAssociatedTokenAddress(mint, feeOwner, tokenProgramId) : null;
   const tx = new Transaction();
   const [destinationInfo, feeInfo] = await Promise.all([
-    rpcWithRetry("check cash destination USDC account", () => connection.getAccountInfo(destinationAta, "confirmed")),
+    rpcWithRetry(`check cash destination ${assetName} account`, () => connection.getAccountInfo(destinationAta, "confirmed")),
     feeAta && !feeAta.equals(destinationAta)
-      ? rpcWithRetry("check cash fee USDC account", () => connection.getAccountInfo(feeAta, "confirmed"))
+      ? rpcWithRetry(`check cash fee ${assetName} account`, () => connection.getAccountInfo(feeAta, "confirmed"))
       : Promise.resolve(null)
   ]);
   let missingAtas = 0;
@@ -68386,7 +68397,7 @@ async function webCashSendUsdcCore(userId, body = {}) {
   const solBalance = await getSolBalanceCached(keypair.publicKey, { force: true });
   const estimatedNetworkLamports = 15_000 + missingAtas * 2_100_000;
   if (solBalance < estimatedNetworkLamports) {
-    throw new Error(`USDC sends need a little SOL for network${missingAtas ? " and token-account rent" : ""}. Add about ${lamportsToSol(estimatedNetworkLamports)} SOL, then retry.`);
+    throw new Error(`${assetName} sends need a little SOL for network${missingAtas ? " and token-account rent" : ""}. Add about ${lamportsToSol(estimatedNetworkLamports)} SOL, then retry.`);
   }
 
   const sources = sourceAccounts.map((account) => ({ ...account, remaining: account.rawAmount }));
@@ -68406,7 +68417,7 @@ async function webCashSendUsdcCore(userId, body = {}) {
       account.remaining -= raw;
       remaining -= raw;
     }
-    if (remaining > 0n) throw new Error("USDC balance changed before the send could be built. Refresh and retry.");
+    if (remaining > 0n) throw new Error(`${assetName} balance changed before the send could be built. Refresh and retry.`);
   };
   if (feeAta?.equals(destinationAta)) addTransfers(destinationAta, requiredRaw);
   else {
@@ -68420,10 +68431,10 @@ async function webCashSendUsdcCore(userId, body = {}) {
   if (feeOwner) invalidateWalletReadCache(feeOwner.toBase58());
   const amountUsdc = rawCashAmountToUi(amountRaw, 6);
   const feeUsdc = rawCashAmountToUi(feeRaw, 6);
-  await audit("cash_send", { userId, walletIndex, asset: "USDC", destination: destination.toBase58(), amountUsdc, feeUsdc, signature });
+  await audit("cash_send", { userId, walletIndex, asset: assetName, destination: destination.toBase58(), amountUsdc, feeUsdc, signature });
   return {
     action: "cash-send",
-    asset: "USDC",
+    asset: assetName,
     source: webWalletRef(wallet),
     amountUsdc,
     feeUsdc,

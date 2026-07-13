@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 
 export const SOLANA_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+// PayPal USD on Solana - Token-2022 asset; the free Venmo/PayPal funding + cash-out rail.
+export const SOLANA_PYUSD_MINT = "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo";
 export const COINBASE_ONRAMP_HOST = "api.cdp.coinbase.com";
 export const COINBASE_ONRAMP_PATH = "/platform/v2/onramp/sessions";
 export const COINBASE_ONRAMP_TOKEN_HOST = "api.developer.coinbase.com";
@@ -40,14 +42,15 @@ export function buildSolanaPayUrl({ recipient, asset = "USDC", amount = "", labe
   const address = String(recipient || "").trim();
   if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)) throw new Error("Invalid Solana recipient.");
   const normalizedAsset = String(asset || "USDC").trim().toUpperCase();
-  if (!new Set(["USDC", "SOL"]).has(normalizedAsset)) throw new Error("Choose USDC or SOL.");
+  if (!new Set(["USDC", "SOL", "PYUSD"]).has(normalizedAsset)) throw new Error("Choose USDC, PYUSD, or SOL.");
   const params = new URLSearchParams();
   if (String(amount || "").trim()) {
-    const decimals = normalizedAsset === "USDC" ? 6 : 9;
+    const decimals = normalizedAsset === "SOL" ? 9 : 6;
     const raw = parseCashDecimalToRaw(amount, decimals);
     params.set("amount", rawCashAmountToUi(raw, decimals));
   }
   if (normalizedAsset === "USDC") params.set("spl-token", SOLANA_USDC_MINT);
+  if (normalizedAsset === "PYUSD") params.set("spl-token", SOLANA_PYUSD_MINT);
   if (String(reference || "").trim()) {
     const referenceAddress = String(reference).trim();
     if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(referenceAddress)) throw new Error("Invalid Solana Pay reference.");

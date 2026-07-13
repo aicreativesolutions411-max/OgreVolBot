@@ -6,8 +6,8 @@
 <title>SlimeCash — money for the trenches</title>
 <meta name="description" content="SlimeCash: send, receive, and swap coins with your $handle. Money for the trenches.">
 <meta name="theme-color" content="#050705">
-<meta name="slimecash-build" content="7">
-<link rel="manifest" href="/cash/manifest.webmanifest?v=7">
+<meta name="slimecash-build" content="8">
+<link rel="manifest" href="/cash/manifest.webmanifest?v=8">
 <link rel="icon" type="image/png" sizes="64x64" href="/cash/icons/favicon-64.png">
 <link rel="apple-touch-icon" href="/cash/icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -17,7 +17,7 @@
 <meta property="og:title" content="SlimeCash">
 <meta property="og:description" content="Money for the trenches. Send, receive, and swap coins with your $handle.">
 <meta property="og:image" content="https://www.slimewire.org/cash/icons/icon-512.png">
-<link rel="stylesheet" href="/cash/cash.css?v=7">
+<link rel="stylesheet" href="/cash/cash.css?v=8">
 </head>
 <body>
 <div id="splash" class="splash">
@@ -60,6 +60,7 @@
     <div class="section-title">Send</div>
     <div class="asset-switch" aria-label="Asset to send">
       <button class="guide-pill active" data-send-asset="USDC" type="button">USDC cash</button>
+      <button class="guide-pill" data-send-asset="PYUSD" type="button">PYUSD</button>
       <button class="guide-pill" data-send-asset="SOL" type="button">SOL</button>
     </div>
     <label class="field-label" for="sendTo">To — $handle or wallet address</label>
@@ -105,6 +106,7 @@
       <button class="more-item" id="restoreBtn" type="button">Restore account</button>
       <button class="more-item" id="contactsBtn" type="button">Contacts & favorites</button>
       <button class="more-item" id="requestsBtn" type="button">Payment requests</button>
+      <button class="more-item" id="cashOutBtn" type="button">Cash out to bank</button>
       <button class="more-item" id="notificationsBtn" type="button">Incoming alerts</button>
       <button class="more-item" id="securityBtn" type="button">Security & spending limits</button>
       <button class="more-item" id="verifyBackupBtn" type="button">Verify recovery backup</button>
@@ -150,6 +152,7 @@
     <p class="sheet-copy">Choose cash or SOL. Your address is preloaded when Coinbase quick funding is connected.</p>
     <div class="asset-switch">
       <button class="guide-pill active" data-deposit-asset="USDC" type="button">USDC cash</button>
+      <button class="guide-pill" data-deposit-asset="PYUSD" type="button">PYUSD</button>
       <button class="guide-pill" data-deposit-asset="SOL" type="button">SOL</button>
       <span class="network-chip">Solana network</span>
     </div>
@@ -166,10 +169,13 @@
     <button id="coinbaseFundBtn" class="btn primary block" type="button">Continue to Coinbase · $50 USDC</button>
     <div id="fundingStatus" class="status"></div>
     <div class="app-guide">
+      <button class="guide-pill" data-guide="venmo" type="button">Venmo</button>
+      <button class="guide-pill" data-guide="paypal" type="button">PayPal</button>
       <button class="guide-pill" data-guide="phantom" type="button">Phantom</button>
       <button class="guide-pill" data-guide="coinbase" type="button">Coinbase</button>
       <button class="guide-pill" data-guide="robinhood" type="button">Robinhood</button>
       <button class="guide-pill" data-guide="other" type="button">Other wallet</button>
+      <button class="guide-pill" data-guide="peer" type="button">Peer ⚠</button>
     </div>
     <div id="guideSteps" class="guide-steps"></div>
     <a id="openProviderBtn" class="btn ghost block" href="https://phantom.app/" target="_blank" rel="noopener">Open Phantom</a>
@@ -188,6 +194,7 @@
     <p class="sheet-copy">Share your address, or request an exact amount through Solana Pay.</p>
     <div class="asset-switch">
       <button class="guide-pill active" data-receive-asset="USDC" type="button">USDC cash</button>
+      <button class="guide-pill" data-receive-asset="PYUSD" type="button">PYUSD</button>
       <button class="guide-pill" data-receive-asset="SOL" type="button">SOL</button>
       <span class="network-chip">Solana network</span>
     </div>
@@ -389,7 +396,31 @@
   </div>
 </div>
 
+<!-- CASH OUT SHEET -->
+<div id="cashout" class="sheet-backdrop" hidden>
+  <div class="sheet">
+    <button class="sheet-close" data-close="cashout" type="button" aria-label="Close">×</button>
+    <div class="sheet-title">Cash out</div>
+    <p class="sheet-copy">SlimeCash never touches your bank — you send dollars to an app you already use and cash out there.</p>
+    <div class="guide-steps">
+      <div><b>Venmo / PayPal (PYUSD)</b> — free 1:1 dollars</div>
+      <div>1. In Venmo or PayPal open Crypto → PYUSD → Receive and copy its address</div>
+      <div>2. Tap below and paste that address</div>
+      <div>3. Back in Venmo/PayPal: sell PYUSD (no fee) → transfer to bank</div>
+    </div>
+    <button id="cashOutPyusdBtn" class="btn primary block" type="button">Send PYUSD to my Venmo/PayPal</button>
+    <div class="guide-steps" style="margin-top:14px">
+      <div><b>Coinbase</b> — works with USDC or SOL</div>
+      <div>1. In Coinbase tap Receive, pick USDC on the SOLANA network, copy the address</div>
+      <div>2. Tap below and paste it</div>
+      <div>3. Sell in Coinbase → withdraw to your bank</div>
+    </div>
+    <button id="cashOutUsdcBtn" class="btn ghost block" type="button">Send USDC to my Coinbase</button>
+    <div class="fineprint">Always double-check the receiving app shows the Solana network. Sends carry the standard 0.5% app fee.</div>
+  </div>
+</div>
+
 <div id="toast" class="toast" hidden></div>
-<script src="/cash/cash.js?v=7"></script>
+<script src="/cash/cash.js?v=8"></script>
 </body>
 </html>

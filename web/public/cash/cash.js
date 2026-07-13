@@ -15,6 +15,7 @@
     || (/^(?:www\.)?slimewire\.org$/i.test(location.hostname) ? "https://app.slimewire.org" : "");
   const WSOL_MINT = "So11111111111111111111111111111111111111112";
   const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const PYUSD_MINT = "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo";   // PayPal USD on Solana (Token-2022)
 
   const state = {
     token: localStorage.getItem(TOKEN_KEY) || "",
@@ -22,6 +23,8 @@
     lamports: null,
     usdcRaw: null,
     usdc: 0,
+    pyusdRaw: null,
+    pyusd: 0,
     tokens: [],
     solUsd: 0,
     tokenUsd: {},          // mint -> priceUsd
@@ -439,9 +442,12 @@
     if (!result.ok) { if (!silent) toast(result.data.error || "Could not load balance.", true); return; }
     const previousSol = state.lamports;
     const previousUsdc = state.usdcRaw;
+    const previousPyusd = state.pyusdRaw;
     state.lamports = Number(result.data.assets?.SOL?.rawAmount || 0);
     state.usdcRaw = Number(result.data.assets?.USDC?.rawAmount || 0);
     state.usdc = Number(result.data.assets?.USDC?.uiAmount || 0);
+    state.pyusdRaw = Number(result.data.assets?.PYUSD?.rawAmount || 0);
+    state.pyusd = Number(result.data.assets?.PYUSD?.uiAmount || 0);
     if (result.data.wallet?.address) state.wallet = { index: result.data.wallet.index, publicKey: result.data.wallet.address };
     renderBalance();
     if (previousUsdc !== null && state.usdcRaw > previousUsdc) {
@@ -451,6 +457,15 @@
       $("depositWatch").textContent = `+$${gainedUsdc.toFixed(2)} USDC received`;
       $("depositWatch").className = "status ok";
       notifyIncoming("USDC received", `+$${gainedUsdc.toFixed(2)} arrived in SlimeCash`);
+      renderActivity();
+    }
+    if (previousPyusd !== null && state.pyusdRaw > previousPyusd) {
+      const gainedPyusd = (state.pyusdRaw - previousPyusd) / 1e6;
+      addActivity({ type: "in", title: "PYUSD arrived", sub: "Dollars landed from Venmo/PayPal", asset: "PYUSD", amountUsd: gainedPyusd, at: Date.now() });
+      toast(`+$${gainedPyusd.toFixed(2)} PYUSD added — ready to use`);
+      $("depositWatch").textContent = `+$${gainedPyusd.toFixed(2)} PYUSD received`;
+      $("depositWatch").className = "status ok";
+      notifyIncoming("PYUSD received", `+$${gainedPyusd.toFixed(2)} arrived in SlimeCash`);
       renderActivity();
     }
     if (previousSol !== null && state.lamports > previousSol + 10000) {
@@ -466,13 +481,13 @@
 
   function totalUsd() {
     const sol = (state.lamports || 0) / 1e9;
-    return state.usdc + sol * state.solUsd;
+    return state.usdc + state.pyusd + sol * state.solUsd;
   }
 
   function renderBalance() {
     const sol = (state.lamports || 0) / 1e9;
     $("balanceUsd").textContent = formatUsd(totalUsd());
-    $("balanceSub").textContent = `$${state.usdc.toFixed(2)} USDC · ${sol.toFixed(4)} SOL`;
+    $("balanceSub").textContent = `$${state.usdc.toFixed(2)} USDC${state.pyusd > 0 ? ` · $${state.pyusd.toFixed(2)} PYUSD` : ""} · ${sol.toFixed(4)} SOL`;
   }
 
   /* ---------------- activity (device-local) ---------------- */
@@ -607,23 +622,23 @@
   function sendUsdValue() {
     const raw = Number($("sendAmount").value || 0);
     if (!(raw > 0)) return 0;
-    return state.sendAsset === "USDC" ? raw : amountToSol() * state.solUsd;
+    return state.sendAsset !== "SOL" ? raw : amountToSol() * state.solUsd;
   }
 
   function selectSendAsset(asset) {
-    state.sendAsset = asset === "SOL" ? "SOL" : "USDC";
+    state.sendAsset = ["SOL", "PYUSD"].includes(asset) ? asset : "USDC";
     document.querySelectorAll("[data-send-asset]").forEach((button) => button.classList.toggle("active", button.dataset.sendAsset === state.sendAsset));
-    $("amountUnit").textContent = state.sendAsset === "USDC" ? "USDC" : state.amountUnit;
-    $("amountUnit").disabled = state.sendAsset === "USDC";
-    $("sendAmount").placeholder = state.sendAsset === "USDC" ? "0.00" : "0.00";
+    $("amountUnit").textContent = state.sendAsset !== "SOL" ? state.sendAsset : state.amountUnit;
+    $("amountUnit").disabled = state.sendAsset !== "SOL";
+    $("sendAmount").placeholder = "0.00";
     renderAmountAlt();
   }
 
   function renderAmountAlt() {
     const alt = $("amountAlt");
-    if (state.sendAsset === "USDC") {
+    if (state.sendAsset !== "SOL") {
       const amount = Number($("sendAmount").value || 0);
-      alt.textContent = amount > 0 ? `$${amount.toFixed(2)} digital dollars on Solana` : "";
+      alt.textContent = amount > 0 ? `$${amount.toFixed(2)} ${state.sendAsset} on Solana` : "";
       return;
     }
     const sol = amountToSol();
@@ -638,7 +653,7 @@
     const target = state.resolved;
     const sol = amountToSol();
     const usdc = Number($("sendAmount").value || 0);
-    const amount = state.sendAsset === "USDC" ? usdc : sol;
+    const amount = state.sendAsset !== "SOL" ? usdc : sol;
     const status = $("sendStatus");
     if (!target) { status.textContent = "Pick who you're sending to first."; status.className = "status bad"; return; }
     if (!(amount > 0)) { status.textContent = "Enter an amount."; status.className = "status bad"; return; }
@@ -647,11 +662,11 @@
       if (securityResult.ok) state.cashSecurity = securityResult.data.security || securityResult.data;
     }
     const to = target.handle ? `$${target.handle}` : shortAddress(target.address);
-    const amountText = state.sendAsset === "USDC" ? `$${usdc.toFixed(2)} USDC` : `${sol.toFixed(4)} SOL (${formatUsd(sol * state.solUsd)})`;
+    const amountText = state.sendAsset !== "SOL" ? `$${usdc.toFixed(2)} ${state.sendAsset}` : `${sol.toFixed(4)} SOL (${formatUsd(sol * state.solUsd)})`;
     $("confirmSummary").innerHTML =
       `Send <b>${amountText}</b><br>` +
       `to <b>${escapeHtml(to)}</b><br>` +
-      `<span style="color:var(--dim);font-size:12px">Solana network · 0.5% app fee · ${state.sendAsset === "USDC" ? "a little SOL is needed for network fees" : "network fee ~0.000005 SOL"}</span>`;
+      `<span style="color:var(--dim);font-size:12px">Solana network · 0.5% app fee · ${state.sendAsset !== "SOL" ? "a little SOL is needed for network fees" : "network fee ~0.000005 SOL"}</span>`;
     $("confirmPinWrap").hidden = !state.cashSecurity?.pinEnabled;
     $("confirmSpendPin").value = "";
     state.pendingSendAttemptId = crypto.randomUUID();
@@ -677,7 +692,7 @@
       fromWalletIndex: state.wallet?.index || 1,
       destination: target.address,
       asset: state.sendAsset,
-      ...(state.sendAsset === "USDC" ? { amount: String(usdc) } : { amountSol: String(sol) }),
+      ...(state.sendAsset !== "SOL" ? { amount: String(usdc) } : { amountSol: String(sol) }),
       note,
       recipientLabel: target.handle ? `$${target.handle}` : "",
       ...(spendPin ? { spendPin } : {}),
@@ -712,23 +727,34 @@
 
   /* ---------------- add cash ---------------- */
   const GUIDES = {
-    phantom: ["1. Open Phantom and choose Send", "2. Paste your SlimeCash address", "3. Choose the same asset shown above on Solana"],
+    venmo: ["1. In Venmo: Me tab → Crypto → PYUSD (PayPal USD)", "2. Buy any amount — Venmo charges no PYUSD fees", "3. Transfer → Send to a wallet → paste your address below", "4. IMPORTANT: pick the SOLANA network, then confirm"],
+    paypal: ["1. In PayPal: Finances → Crypto → PYUSD", "2. Buy any amount — no PayPal fee on PYUSD", "3. Transfer → Send → External wallet → paste your address below", "4. IMPORTANT: pick the SOLANA network, then confirm"],
+    phantom: ["1. Tap Open in Phantom — SlimeCash opens inside Phantom's browser", "2. Use Phantom's own Buy for card or Apple Pay checkout", "3. Send the SOL or USDC to your SlimeCash address below", "No Phantom? Get it at phantom.com first."],
     coinbase: ["1. Use Buy with Coinbase above for a preloaded checkout", "2. Or copy this address into Coinbase Send", "3. Choose the Solana network — that part matters"],
     robinhood: ["1. Open Robinhood Crypto and choose Send", "2. Paste your SlimeCash address", "3. Send SOL on Solana; asset availability can vary"],
+    peer: ["Peer (ZKP2P) is a permissionless P2P onramp: you pay a market maker on Venmo/Wise and escrow releases USDC.", "Experimental — capped amounts, fills can take minutes, settles on Base (bridge to Solana after).", "Power users only; start small."],
     other: ["Send the selected asset to your address below from any compatible wallet or exchange.", "Always choose the Solana network."]
   };
+
+  // Keyless Phantom rail: opens SlimeCash inside Phantom's in-app browser, where the user
+  // can use Phantom's native Buy (their KYC, their onramp) and send straight back here.
+  function phantomBrowseUrl() {
+    const target = `${location.origin}/cash/?src=phantom`;
+    return `https://phantom.app/ul/browse/${encodeURIComponent(target)}?ref=${encodeURIComponent(location.origin)}`;
+  }
 
   function solanaPayUrl(address, asset = "USDC", amount = "", message = "") {
     const params = new URLSearchParams();
     if (Number(amount) > 0) params.set("amount", String(Number(amount)));
     if (asset === "USDC") params.set("spl-token", USDC_MINT);
+    if (asset === "PYUSD") params.set("spl-token", PYUSD_MINT);
     params.set("label", state.displayHandle ? `$${state.displayHandle} on SlimeCash` : "SlimeCash");
     if (message) params.set("message", message.slice(0, 80));
     return `solana:${address}?${params.toString()}`;
   }
 
   function selectDepositAsset(asset) {
-    state.depositAsset = asset === "SOL" ? "SOL" : "USDC";
+    state.depositAsset = ["SOL", "PYUSD"].includes(asset) ? asset : "USDC";
     document.querySelectorAll("[data-deposit-asset]").forEach((button) => button.classList.toggle("active", button.dataset.depositAsset === state.depositAsset));
     if (state.wallet) $("openDepositWallet").href = solanaPayUrl(state.wallet.publicKey, state.depositAsset);
     $("depositWatch").textContent = `Watching ${state.depositAsset} on Solana…`;
@@ -745,9 +771,13 @@
     $("fundingPreviewDestination").textContent = state.wallet
       ? `To ${shortAddress(state.wallet.publicKey)} on Solana`
       : "Solana wallet loading…";
-    $("coinbaseFundBtn").textContent = validAmount
-      ? `Continue to Coinbase · $${amount.toFixed(amount % 1 ? 2 : 0)} ${state.depositAsset}`
-      : "Continue to Coinbase";
+    const pyusdMode = state.depositAsset === "PYUSD";
+    $("coinbaseFundBtn").disabled = pyusdMode;
+    $("coinbaseFundBtn").textContent = pyusdMode
+      ? "PYUSD comes from Venmo or PayPal — see steps below"
+      : (validAmount
+        ? `Continue to Coinbase · $${amount.toFixed(amount % 1 ? 2 : 0)} ${state.depositAsset}`
+        : "Continue to Coinbase");
   }
 
   async function refreshFundingConfig() {
@@ -758,6 +788,7 @@
   }
 
   async function startCoinbaseFunding() {
+    if (state.depositAsset === "PYUSD") { toast("PYUSD comes from Venmo or PayPal — follow the steps below."); return; }
     const amount = Number($("fundAmount").value || 0);
     const button = $("coinbaseFundBtn");
     const status = $("fundingStatus");
@@ -818,11 +849,17 @@
     $("guideSteps").innerHTML = (GUIDES[key] || GUIDES.other).map((step) => `<div>${escapeHtml(step)}</div>`).join("");
     const provider = $("openProviderBtn");
     const rows = {
-      phantom: ["Open Phantom", state.funding?.providers?.phantom?.url || "https://phantom.app/"],
+      venmo: ["Open Venmo", state.funding?.providers?.venmo?.url || "https://venmo.com"],
+      paypal: ["Open PayPal crypto", state.funding?.providers?.paypal?.url || "https://www.paypal.com/us/digital-wallet/manage-money/crypto"],
+      phantom: ["Open in Phantom", phantomBrowseUrl()],
       coinbase: ["Open Coinbase", state.funding?.providers?.coinbase?.url || "https://www.coinbase.com/buy"],
       robinhood: ["Open Robinhood", state.funding?.providers?.robinhood?.url || "https://robinhood.com/crypto/SOL"],
+      peer: ["Open Peer (experimental)", state.funding?.providers?.peer?.url || "https://www.peer.xyz"],
       other: ["Open Solana Pay request", state.wallet ? solanaPayUrl(state.wallet.publicKey, state.depositAsset) : "#"]
     };
+    // Venmo/PayPal deliver PYUSD; the other rails deliver USDC/SOL. Keep the asset toggle in sync.
+    if (["venmo", "paypal"].includes(key) && state.depositAsset !== "PYUSD") selectDepositAsset("PYUSD");
+    else if (!["venmo", "paypal", "other"].includes(key) && state.depositAsset === "PYUSD") selectDepositAsset("USDC");
     const selected = rows[key] || rows.other;
     provider.textContent = selected[0];
     provider.href = selected[1];
@@ -838,9 +875,9 @@
     $("receiveAddress").textContent = state.wallet.publicKey;
     QR.draw($("receiveQr"), state.wallet.publicKey);
     $("openReceiveWallet").href = receiveRequestUrl();
-    $("receiveStatus").textContent = state.receiveAsset === "USDC"
-      ? "USDC arrives as digital dollars. The QR is your Solana address; the button includes the exact USDC request."
-      : "SOL arrives on Solana. The button includes the requested amount when entered.";
+    $("receiveStatus").textContent = state.receiveAsset === "SOL"
+      ? "SOL arrives on Solana. The button includes the requested amount when entered."
+      : `${state.receiveAsset} arrives as digital dollars. The QR is your Solana address; the button includes the exact ${state.receiveAsset} request.`;
   }
 
   function openReceive() {
@@ -1152,7 +1189,7 @@
     if (pill?.dataset.sendAsset) selectSendAsset(pill.dataset.sendAsset);
     if (pill?.dataset.depositAsset) selectDepositAsset(pill.dataset.depositAsset);
     if (pill?.dataset.receiveAsset) {
-      state.receiveAsset = pill.dataset.receiveAsset === "SOL" ? "SOL" : "USDC";
+      state.receiveAsset = ["SOL", "PYUSD"].includes(pill.dataset.receiveAsset) ? pill.dataset.receiveAsset : "USDC";
       renderReceiveRequest();
     }
     const amountChip = event.target.closest("[data-fund-amount]");
@@ -1335,6 +1372,21 @@
   $("installOnboardBtn").addEventListener("click", installCashApp);
   $("openInstallBrowserBtn").addEventListener("click", openInstallPageInBrowser);
 
+  $("cashOutBtn").addEventListener("click", () => openSheet("cashout"));
+  $("cashOutPyusdBtn").addEventListener("click", () => {
+    closeSheet("cashout");
+    switchTab("send");
+    selectSendAsset("PYUSD");
+    $("sendTo").focus();
+    toast("Paste your Venmo/PayPal PYUSD deposit address (Solana network)");
+  });
+  $("cashOutUsdcBtn").addEventListener("click", () => {
+    closeSheet("cashout");
+    switchTab("send");
+    selectSendAsset("USDC");
+    $("sendTo").focus();
+    toast("Paste your Coinbase USDC deposit address (Solana network)");
+  });
   $("signOutBtn").addEventListener("click", () => {
     if (!confirm("Sign out? Make sure your SlimeCash recovery backup is saved first.")) return;
     setToken("");
