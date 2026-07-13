@@ -32,6 +32,44 @@ test("worker tick defaults remain backward compatible", () => {
   });
 });
 
+test("data worker can never claim trade or portfolio tasks", () => {
+  const flags = workerTickTaskFlags({
+    taskSet: "data",
+    runTradePlans: true,
+    runPortfolioExits: true,
+    runWebExitGuards: true,
+    runTimedTradePlans: true
+  }, {
+    workerTickRunTradePlans: true,
+    taskSet: "data"
+  });
+
+  assert.deepEqual(flags, {
+    portfolioExits: false,
+    webExitGuards: false,
+    tradePlans: false
+  });
+});
+
+test("broad trade tick can run portfolio fallback without duplicating the fast plan loop", () => {
+  const flags = workerTickTaskFlags({
+    taskSet: "trade",
+    runTradePlans: false,
+    runPortfolioExits: true,
+    runWebExitGuards: false,
+    runTimedTradePlans: false
+  }, {
+    workerTickRunTradePlans: true,
+    taskSet: "trade"
+  });
+
+  assert.deepEqual(flags, {
+    portfolioExits: true,
+    webExitGuards: false,
+    tradePlans: false
+  });
+});
+
 test("periodic task only runs when its interval is due", () => {
   assert.equal(duePeriodicTask(10_000, 0, 30_000), true);
   assert.equal(duePeriodicTask(10_000, 9_000, 30_000), false);

@@ -20,31 +20,40 @@ console.log(`Worker service role: ${CONFIG.serviceRole}. RUN_WORKER=${CONFIG.run
 if (CONFIG.tickUrls.length > 1) {
   console.log(`Worker fallback tick URLs: ${CONFIG.tickUrls.slice(1).join(", ")}`);
 }
-console.log(`Worker interval: ${CONFIG.intervalMs}ms. Task set: ${CONFIG.taskSet}. Feeds: ${CONFIG.warmFeeds ? "on" : "off"}. Display cache: ${CONFIG.warmDisplayCaches ? "on" : "off"}. Trade plans: ${CONFIG.runTradePlans ? "on" : "off"}. Fast TP/SL: ${CONFIG.fastTpSlEnabled ? "on" : "off"}.`);
-if (CONFIG.fastTpSlEnabled && CONFIG.taskSet === "all") {
+console.log(`Worker interval: ${CONFIG.intervalMs}ms. Task set: ${CONFIG.taskSet}. Feeds: ${CONFIG.warmFeeds ? "on" : "off"}. RH snapshots: ${CONFIG.warmRhPairs ? "on" : "off"}. Display cache: ${CONFIG.warmDisplayCaches ? "on" : "off"}. Trade plans: ${CONFIG.runTradePlans ? "on" : "off"}. Fast TP/SL: ${CONFIG.fastTpSlEnabled ? "on" : "off"}.`);
+if (CONFIG.fastTpSlEnabled && CONFIG.taskSet === "trade") {
   console.log(`Fast TP/SL worker interval: ${CONFIG.tradePlanIntervalMs}ms.`);
   console.log(`Broad portfolio TP/SL fallback interval: ${CONFIG.portfolioExitIntervalMs}ms.`);
 }
 
 setTimeout(() => void workerHealthProbe(), 250);
-setTimeout(() => void tick(), 500);
-setInterval(() => void tick(), CONFIG.intervalMs);
-if (CONFIG.fastTpSlEnabled && CONFIG.taskSet === "all") {
-  setTimeout(() => void tradePlanTick(), 1000);
-  setInterval(() => void tradePlanTick(), CONFIG.tradePlanIntervalMs);
+startSerialLoop(tick, 500, CONFIG.intervalMs);
+if (CONFIG.fastTpSlEnabled && CONFIG.taskSet === "trade") {
+  startSerialLoop(tradePlanTick, 1000, CONFIG.tradePlanIntervalMs);
+}
+
+function startSerialLoop(task, initialDelayMs, idleDelayMs) {
+  const run = async () => {
+    try {
+      await task();
+    } finally {
+      setTimeout(run, idleDelayMs);
+    }
+  };
+  setTimeout(run, initialDelayMs);
 }
 
 function loadWorkerConfig() {
   const baseUrl = (process.env.WORKER_TICK_BASE_URL || process.env.TELEGRAM_WEBHOOK_URL || process.env.KEEPALIVE_URL || "").replace(/\/$/, "");
   const tickUrl = process.env.WORKER_TICK_URL || (baseUrl ? `${baseUrl}/api/internal/worker/tick` : "");
   const secret = process.env.WORKER_SECRET || "";
-  const intervalMs = clampInteger(process.env.WORKER_TICK_INTERVAL_MS, 15_000, 5_000, 120_000);
-  const tradePlanIntervalMs = clampInteger(process.env.WORKER_TRADE_PLAN_INTERVAL_MS, 1_500, 750, 30_000);
+  const taskSet = normalizeWorkerTaskSet(process.env.WORKER_TASK_SET || "trade");
+  const intervalMs = clampInteger(process.env.WORKER_TICK_INTERVAL_MS, taskSet === "data" ? 20_000 : 15_000, 5_000, 120_000);
+  const tradePlanIntervalMs = clampInteger(process.env.WORKER_TRADE_PLAN_INTERVAL_MS, 4_000, 1_500, 30_000);
   const portfolioExitIntervalMs = clampInteger(process.env.WORKER_PORTFOLIO_EXIT_INTERVAL_MS, 30_000, 5_000, 300_000);
   const timeoutMs = clampInteger(process.env.WORKER_TICK_TIMEOUT_MS, 20_000, 5_000, 120_000);
   const buckets = normalizeList(process.env.WORKER_TICK_BUCKETS || "live,under1h,under3h,under1d");
   const sorts = normalizeList(process.env.WORKER_TICK_SORTS || "best,newest");
-  const taskSet = normalizeWorkerTaskSet(process.env.WORKER_TASK_SET || "all");
   const runTradePlansEnabled = parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true");
   const serviceRole = normalizeServiceRole(process.env.SERVICE_ROLE || process.env.RENDER_SERVICE_ROLE || "worker");
   const workerDisabled = parseBoolean(process.env.WORKER_DISABLED || "false");
@@ -72,11 +81,12 @@ function loadWorkerConfig() {
     portfolioExitIntervalMs,
     timeoutMs,
     taskSet,
-    runTradePlans: taskSet === "wallets" ? false : runTradePlansEnabled,
-    fastTpSlEnabled: taskSet === "wallets" ? false : parseBoolean(process.env.WORKER_FAST_TP_SL_ENABLED || "true"),
-    runDcaPlans: taskSet === "wallets" ? false : parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true"),
-    warmFeeds: taskSet === "wallets" ? false : parseBoolean(process.env.WORKER_TICK_WARM_FEEDS || "true"),
-    warmDisplayCaches: parseBoolean(process.env.WORKER_TICK_WARM_DISPLAY_CACHES || "true"),
+    runTradePlans: taskSet === "trade" && runTradePlansEnabled,
+    fastTpSlEnabled: taskSet === "trade" && parseBoolean(process.env.WORKER_FAST_TP_SL_ENABLED || "true"),
+    runDcaPlans: taskSet === "trade" && parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true"),
+    warmFeeds: taskSet === "data" && parseBoolean(process.env.WORKER_TICK_WARM_FEEDS || "true"),
+    warmRhPairs: taskSet === "data" && parseBoolean(process.env.WORKER_TICK_WARM_RH_PAIRS || "true"),
+    warmDisplayCaches: taskSet === "data" && parseBoolean(process.env.WORKER_TICK_WARM_DISPLAY_CACHES || "true"),
     displayCacheUserLimit: clampInteger(process.env.WORKER_DISPLAY_CACHE_USER_LIMIT, 8, 0, 50),
     buckets,
     sorts,
@@ -122,7 +132,7 @@ async function workerHealthProbe() {
 }
 
 async function tradePlanTick() {
-  if (CONFIG.taskSet === "wallets") {
+  if (CONFIG.taskSet !== "trade") {
     return;
   }
   if (activeTradePlanTick) {
@@ -224,13 +234,14 @@ async function tick() {
         },
         body: JSON.stringify({
           taskSet: CONFIG.taskSet,
-          runTradePlans: CONFIG.taskSet === "all" ? CONFIG.runTradePlans : false,
-          forceTradePlans: CONFIG.taskSet === "all" ? CONFIG.runTradePlans : false,
-          runPortfolioExits: CONFIG.taskSet === "all" ? runPortfolioExits : false,
+          runTradePlans: CONFIG.taskSet === "trade" ? CONFIG.runTradePlans && !CONFIG.fastTpSlEnabled : false,
+          forceTradePlans: CONFIG.taskSet === "trade" ? CONFIG.runTradePlans : false,
+          runPortfolioExits: CONFIG.taskSet === "trade" ? runPortfolioExits : false,
           runWebExitGuards: CONFIG.runTradePlans && !CONFIG.fastTpSlEnabled,
           runTimedTradePlans: CONFIG.runTradePlans && !CONFIG.fastTpSlEnabled,
-          runDcaPlans: CONFIG.taskSet === "all" ? CONFIG.runDcaPlans : false,
-          warmLivePairs: CONFIG.taskSet === "all" ? CONFIG.warmFeeds : false,
+          runDcaPlans: CONFIG.taskSet === "trade" ? CONFIG.runDcaPlans : false,
+          warmLivePairs: CONFIG.taskSet === "data" ? CONFIG.warmFeeds : false,
+          warmRhPairs: CONFIG.taskSet === "data" ? CONFIG.warmRhPairs : false,
           warmDisplayCaches: CONFIG.warmDisplayCaches,
           displayCacheUserLimit: CONFIG.displayCacheUserLimit,
           buckets: CONFIG.buckets,
@@ -273,12 +284,17 @@ async function tick() {
       const feedSummary = Array.isArray(feeds)
         ? feeds.map((item) => `${item.bucket}/${item.sort}:${item.rows}`).join(" ")
         : "feeds:n/a";
+      const rhPairs = data?.rhPairs?.value?.warmed || data?.rhPairs?.warmed || [];
+      const rhSummary = Array.isArray(rhPairs) && rhPairs.length
+        ? `RH ${rhPairs.map((item) => `${item.category}:${item.rows}`).join(" ")}`
+        : "RH skipped";
       const displayCaches = data?.displayCaches?.value || data?.displayCaches || {};
       const displayCacheSummary = displayCaches?.skipped
         ? "display-cache skipped"
         : `display-cache users:${displayCaches.users ?? 0} provider:${displayCaches.provider || "memory"}`;
       const fallbackNote = lastFailure ? ` Recovered after ${lastFailure}.` : "";
-      console.log(`Worker tick ${tickCount} ok in ${Date.now() - startedAt}ms. ${guardSummary}. ${tradePlanSummary}. ${portfolioSummary}. ${feedSummary}. ${displayCacheSummary}${fallbackNote}`);
+      const yieldNote = data?.yielded ? ` yielded:${data.yieldReason || "interactive-priority"}.` : "";
+      console.log(`Worker tick ${tickCount} ok in ${Date.now() - startedAt}ms. role:${CONFIG.taskSet}.${yieldNote} ${guardSummary}. ${tradePlanSummary}. ${portfolioSummary}. ${feedSummary}. ${rhSummary}. ${displayCacheSummary}${fallbackNote}`);
       return;
     }
   } catch (error) {
@@ -390,5 +406,6 @@ function normalizeList(value) {
 }
 
 function normalizeWorkerTaskSet(value = "all") {
-  return String(value || "all").trim().toLowerCase() === "wallets" ? "wallets" : "all";
+  const normalized = String(value || "trade").trim().toLowerCase();
+  return ["data", "wallets", "cache", "feeds"].includes(normalized) ? "data" : "trade";
 }

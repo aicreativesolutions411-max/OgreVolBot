@@ -157,6 +157,12 @@ test("backend worker warms display caches and keeps TP/SL DB-backed", () => {
   assert.match(workerSource, /SERVICE_ROLE=web or WORKER_DISABLED=true/);
   assert.match(workerSource, /Display cache: \$/);
   assert.match(workerSource, /tradePlanTick/);
+  assert.match(workerSource, /startSerialLoop/);
+  assert.doesNotMatch(workerSource, /setInterval\(\(\) => void tradePlanTick/);
+  assert.match(workerSource, /taskSet === "trade"/);
+  assert.match(workerSource, /taskSet === "data"/);
+  assert.match(serverSource, /workerRoleHeartbeatFresh\("trade"/);
+  assert.match(serverSource, /trade_worker_healthy/);
 });
 
 test("worker refresh jobs use short cache locks and dedupe without making Redis trade source of truth", () => {
@@ -170,10 +176,24 @@ test("worker refresh jobs use short cache locks and dedupe without making Redis 
   assert.match(functionBodyFromSource(serverSource, "redisKv"), /connectTimeout: CONFIG\.cacheConnectTimeoutMs/);
   assert.match(functionBodyFromSource(serverSource, "redisKv"), /kvCircuitOpenUntil = Date\.now\(\) \+ CONFIG\.cacheCircuitBreakerMs/);
   assert.match(serverSource, /display_cache_lock_active/);
+  assert.match(serverSource, /worker-task:\$\{name\}/);
+  assert.match(serverSource, /worker_task_lease_active/);
+  assert.match(serverSource, /interactive_request_priority/);
   assert.doesNotMatch(functionBodyFromSource(serverSource, "recordTpSlWorkerEvent"), /cacheSetJson|redisKv|restKvCommand/);
   assert.match(debugWorkerHealthSource, /WORKER HEALTH DEBUG/);
   assert.match(debugWorkerHealthSource, /startupReconcileRanAt/);
   assert.match(debugWorkerHealthSource, /workerDisplayCacheLock/);
+});
+
+test("second worker owns read-only Solana, Robinhood, and account snapshot warming", () => {
+  assert.match(serverSource, /async function warmWorkerRhPairFeeds/);
+  assert.match(serverSource, /result\.rhPairs = await runWorkerTask\("rhPairs"/);
+  assert.match(serverSource, /async function cachedWebRhPairs/);
+  assert.match(serverSource, /rh-pairs-refresh:/);
+  assert.match(serverSource, /rh-token-snapshot:/);
+  assert.match(serverSource, /cacheSetJson\(rhScanSharedKey/);
+  assert.match(workerSource, /warmRhPairs: CONFIG\.taskSet === "data"/);
+  assert.match(workerSource, /role:\$\{CONFIG\.taskSet\}/);
 });
 
 test("TP/SL sell reliability retries PumpPortal pools and reconciles missing token balances", () => {

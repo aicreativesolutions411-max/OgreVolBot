@@ -5759,6 +5759,37 @@ function webCriticalTpSlSafetyRunnerEnabled() {
   return CONFIG.serviceRole === "web" && !CONFIG.webInternalTpSlRunnersEnabled;
 }
 
+const workerRoleHeartbeatMemory = new Map();
+function workerRoleHeartbeatKey(taskSet = "trade") {
+  return externalCacheKey(`worker-heartbeat:${normalizeWorkerTaskSet(taskSet)}`, "global");
+}
+async function recordWorkerRoleHeartbeat(taskSet = "trade", phase = "heartbeat", detail = {}) {
+  const role = normalizeWorkerTaskSet(taskSet);
+  const heartbeat = {
+    role,
+    phase: String(phase || "heartbeat").slice(0, 40),
+    at: new Date().toISOString(),
+    durationMs: Number.isFinite(Number(detail.durationMs)) ? Math.max(0, Math.round(Number(detail.durationMs))) : 0,
+    deployId: process.env.RENDER_GIT_COMMIT || ""
+  };
+  workerRoleHeartbeatMemory.set(role, heartbeat);
+  await cacheSetJson(workerRoleHeartbeatKey(role), heartbeat, 90_000).catch(() => false);
+  return heartbeat;
+}
+async function workerRoleHeartbeat(taskSet = "trade") {
+  const role = normalizeWorkerTaskSet(taskSet);
+  const memory = workerRoleHeartbeatMemory.get(role);
+  if (memory && Date.now() - Date.parse(memory.at || 0) < 90_000) return memory;
+  const shared = await cacheGetJson(workerRoleHeartbeatKey(role)).catch(() => null);
+  if (shared?.at) workerRoleHeartbeatMemory.set(role, shared);
+  return shared || null;
+}
+async function workerRoleHeartbeatFresh(taskSet = "trade", maxAgeMs = 15_000) {
+  const heartbeat = await workerRoleHeartbeat(taskSet);
+  const ageMs = heartbeat?.at ? Date.now() - Date.parse(heartbeat.at) : Number.POSITIVE_INFINITY;
+  return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= maxAgeMs;
+}
+
 function startWebCriticalTpSlSafetyRunner() {
   if (!webCriticalTpSlSafetyRunnerEnabled()) return;
   const intervalMs = Math.max(1_000, Math.min(2_500, CONFIG.stopLossCheckIntervalMs || 2_000));
@@ -5793,6 +5824,9 @@ async function runWebCriticalTpSlSafetyTick(reason = "interval") {
     const active = await activeWebCriticalTpSlWork();
     if (!active.activeGuards && !active.activePlans) {
       return { skipped: true, reason: "no_active_tp_sl_work", ...active };
+    }
+    if (await workerRoleHeartbeatFresh("trade", 15_000)) {
+      return { skipped: true, reason: "trade_worker_healthy", ...active };
     }
     const result = { reason, ...active };
     if (active.activeGuards) {
@@ -6001,11 +6035,24 @@ function proxyOgreverse(request, response, requestUrl) {
   request.pipe(proxyReq);
 }
 
+let lastInteractiveRequestAt = 0;
+function noteInteractiveRequest(request, requestUrl) {
+  const pathname = String(requestUrl?.pathname || "");
+  if (/^\/(?:api\/internal|api\/worker|internal\/worker|worker\/)/.test(pathname)) return;
+  const method = String(request?.method || "GET").toUpperCase();
+  const directRead = /^\/api\/(?:chart|map|web\/(?:rh\/token|scan|quick|trade))/.test(pathname);
+  if ((method !== "GET" && method !== "HEAD" && method !== "OPTIONS") || directRead) lastInteractiveRequestAt = Date.now();
+}
+function interactiveRequestPressure(maxAgeMs = 1_500) {
+  return lastInteractiveRequestAt > 0 && Date.now() - lastInteractiveRequestAt <= maxAgeMs;
+}
+
 function startHealthServer() {
   if (!CONFIG.port) return;
 
   const server = http.createServer(async (request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
+    noteInteractiveRequest(request, requestUrl);
     if (requestUrl.pathname === "/Ogreverse" || requestUrl.pathname.startsWith("/Ogreverse/")) {
       return proxyOgreverse(request, response, requestUrl);
     }
@@ -9137,7 +9184,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     // Robinhood Chain coin feed (public, like /api/web/pairs) + the launched-coin PFPs (img tags can't
     // send a Bearer token, and the images are public by nature — they're the coin's face).
     if (request.method === "GET" && pathname === "/api/web/rh/pairs") {
-      sendWebJson(request, response, 200, { ok: true, rows: await webRhPairs(requestUrl.searchParams.get("category") || "trending") });
+      sendWebJson(request, response, 200, { ok: true, rows: await cachedWebRhPairs(requestUrl.searchParams.get("category") || "trending") });
       return;
     }
     if (request.method === "GET" && pathname === "/api/web/profile/public") {
@@ -13357,6 +13404,7 @@ function handleInternalWorkerHealth(request, response) {
     devInfoEnabled: Boolean(CONFIG.devInfoEnabled),
     devInfoStats: { ...devInfoStats },
     activeCacheLocks: activeCacheLockSnapshot(),
+    workerHeartbeats: Object.fromEntries(workerRoleHeartbeatMemory),
     rpcProviderName: CONFIG.rpcProviderName,
     rpcUrlHost: CONFIG.rpcUrlHost,
     readRpcProviderName: CONFIG.readRpcProviderName || CONFIG.rpcProviderName,
@@ -13394,22 +13442,28 @@ function constantTimeStringEquals(a, b) {
   }
 }
 
-function normalizeWorkerTaskSet(value = "all") {
-  return String(value || "all").trim().toLowerCase() === "wallets" ? "wallets" : "all";
+function normalizeWorkerTaskSet(value = "trade") {
+  const normalized = String(value || "trade").trim().toLowerCase();
+  return ["data", "wallets", "cache", "feeds"].includes(normalized) ? "data" : "trade";
 }
 
+let lastDataWorkerFullRunAt = 0;
 async function runInternalWorkerTick(body = {}) {
-  const taskSet = normalizeWorkerTaskSet(body.taskSet || "all");
-  const includeTradeTasks = taskSet === "all";
+  const taskSet = normalizeWorkerTaskSet(body.taskSet || "trade");
+  const includeTradeTasks = taskSet === "trade";
+  const includeDataTasks = taskSet === "data";
   const startedAt = Date.now();
-  await recordTpSlWorkerHeartbeat("worker_tick_started", {
-    requested: {
-      taskSet,
-      runTradePlans: body.runTradePlans !== false,
-      runWebExitGuards: body.runWebExitGuards !== false,
-      runPortfolioExits: body.runPortfolioExits !== false
-    }
-  }).catch(() => {});
+  await recordWorkerRoleHeartbeat(taskSet, "started").catch(() => {});
+  if (includeTradeTasks) {
+    await recordTpSlWorkerHeartbeat("worker_tick_started", {
+      requested: {
+        taskSet,
+        runTradePlans: body.runTradePlans !== false,
+        runWebExitGuards: body.runWebExitGuards !== false,
+        runPortfolioExits: body.runPortfolioExits !== false
+      }
+    }).catch(() => {});
+  }
   const result = {
     ranAt: new Date(startedAt).toISOString(),
     taskSet,
@@ -13418,8 +13472,17 @@ async function runInternalWorkerTick(body = {}) {
     tradePlans: { skipped: true },
     dcaPlans: { skipped: true },
     feeds: { skipped: true },
+    rhPairs: { skipped: true },
     displayCaches: { skipped: true }
   };
+  if (includeDataTasks && interactiveRequestPressure(1_500) && Date.now() - lastDataWorkerFullRunAt < 45_000) {
+    result.yielded = true;
+    result.yieldReason = "interactive_request_priority";
+    result.durationMs = Date.now() - startedAt;
+    await recordWorkerRoleHeartbeat(taskSet, "yielded", result).catch(() => {});
+    return result;
+  }
+  if (includeDataTasks) lastDataWorkerFullRunAt = Date.now();
 
   const tradeTaskFlags = workerTickTaskFlags(body, {
     workerTickRunTradePlans: CONFIG.workerTickRunTradePlans,
@@ -13429,55 +13492,67 @@ async function runInternalWorkerTick(body = {}) {
   if (includeTradeTasks && tradeTaskFlags.webExitGuards) {
     result.webExitGuards = await runWorkerTask("webExitGuards", () => processWebExitGuards({
       forcePriceCheck: body.forceTradePlans !== false
-    }));
+    }), { leaseMs: 20_000 });
   }
 
   if (includeTradeTasks && tradeTaskFlags.tradePlans) {
     result.tradePlans = await runWorkerTask("tradePlans", () => processTradePlans({
       forcePriceCheck: body.forceTradePlans !== false
-    }));
+    }), { leaseMs: 20_000 });
   }
 
   if (includeTradeTasks && tradeTaskFlags.portfolioExits) {
     result.portfolioExits = await runWorkerTask("portfolioExits", () => processWebPortfolioExits({
       forcePriceCheck: body.forceTradePlans !== false
-    }));
+    }), { leaseMs: 45_000 });
   }
 
   if (includeTradeTasks && CONFIG.workerTickRunDcaPlans && body.runDcaPlans !== false) {
-    result.dcaPlans = await runWorkerTask("dcaPlans", () => processDcaPlans());
+    result.dcaPlans = await runWorkerTask("dcaPlans", () => processDcaPlans(), { leaseMs: 30_000 });
   }
 
-  if (includeTradeTasks && CONFIG.workerTickWarmFeeds && body.warmLivePairs !== false) {
-    result.feeds = await runWorkerTask("feeds", () => warmWorkerLivePairFeeds(body));
+  if (includeDataTasks && CONFIG.workerTickWarmFeeds && body.warmLivePairs !== false) {
+    result.feeds = await runWorkerTask("feeds", () => warmWorkerLivePairFeeds(body), { leaseMs: 45_000 });
   }
 
-  if (CONFIG.workerTickWarmDisplayCaches && body.warmDisplayCaches !== false) {
-    result.displayCaches = await runWorkerTask("displayCaches", () => warmWorkerDisplayCaches(body));
+  if (includeDataTasks && body.warmRhPairs !== false) {
+    result.rhPairs = await runWorkerTask("rhPairs", () => warmWorkerRhPairFeeds(body), { leaseMs: 45_000 });
+  }
+
+  if (includeDataTasks && CONFIG.workerTickWarmDisplayCaches && body.warmDisplayCaches !== false) {
+    result.displayCaches = await runWorkerTask("displayCaches", () => warmWorkerDisplayCaches(body), { leaseMs: 45_000 });
   }
 
   result.durationMs = Date.now() - startedAt;
-  await recordTpSlWorkerHeartbeat("worker_tick_completed", result).catch(() => {});
+  await recordWorkerRoleHeartbeat(taskSet, "completed", result).catch(() => {});
+  if (includeTradeTasks) await recordTpSlWorkerHeartbeat("worker_tick_completed", result).catch(() => {});
   return result;
 }
 
-async function runWorkerTask(name, fn) {
+async function runWorkerTask(name, fn, options = {}) {
   const startedAt = Date.now();
-  try {
-    const value = await fn();
-    return {
-      ok: true,
-      durationMs: Date.now() - startedAt,
-      value: value && typeof value === "object" ? value : undefined
-    };
-  } catch (error) {
-    console.warn(`Worker ${name} tick failed: ${error.message}`);
-    return {
-      ok: false,
-      durationMs: Date.now() - startedAt,
-      error: error.message
-    };
-  }
+  return LockService.withLock(`worker-task:${name}`, options.leaseMs || 30_000, async () => {
+    try {
+      const value = await fn();
+      return {
+        ok: true,
+        durationMs: Date.now() - startedAt,
+        value: value && typeof value === "object" ? value : undefined
+      };
+    } catch (error) {
+      console.warn(`Worker ${name} tick failed: ${error.message}`);
+      return {
+        ok: false,
+        durationMs: Date.now() - startedAt,
+        error: error.message
+      };
+    }
+  }, {
+    ok: true,
+    skipped: true,
+    reason: "worker_task_lease_active",
+    durationMs: Date.now() - startedAt
+  });
 }
 
 async function warmWorkerLivePairFeeds(body = {}) {
@@ -13502,6 +13577,19 @@ async function warmWorkerLivePairFeeds(body = {}) {
     }
   }
 
+  return { warmed };
+}
+
+async function warmWorkerRhPairFeeds(body = {}) {
+  const categories = normalizeWorkerList(body.rhCategories, ["trending", "new", "soon"])
+    .map((value) => String(value || "trending").trim().toLowerCase())
+    .filter((value, index, list) => ["trending", "new", "soon", "safe", "slimewire"].includes(value) && list.indexOf(value) === index)
+    .slice(0, 5);
+  const warmed = [];
+  for (const category of categories) {
+    const rows = await cachedWebRhPairs(category, { force: Boolean(body.forceFeeds), background: true });
+    warmed.push({ category, rows: Array.isArray(rows) ? rows.length : 0 });
+  }
   return { warmed };
 }
 
@@ -39105,6 +39193,9 @@ const rhScanInFlight = new Map();
 const rhScanLastGood = new Map();
 const rhScanLogoCache = new Map();
 const rhVolumeCache = new Map();
+function rhScanSharedKey(address = "") {
+  return externalCacheKey(`rh-token-snapshot:${String(address || "").toLowerCase()}`, "global");
+}
 // Scan identity (pfp + socials) survives restarts on disk: rhScanLastGood is in-memory
 // only, so every deploy wiped the pfp/links off previously-scanned Robinhood coins.
 const RH_SCAN_IDENTITY_FIELDS = ["symbol", "name", "imageUrl", "iconUrl", "twitterUrl", "telegramUrl", "websiteUrl", "pairAddress", "createdAt", "noxaUrl"];
@@ -39610,6 +39701,7 @@ async function gatherRhScanUncollapsed(address) {
     if (rhScanLastGood.size > 300) rhScanLastGood.delete(rhScanLastGood.keys().next().value);
     rhScanCache.set(key, { at: Date.now(), v });
     if (rhScanCache.size > 200) rhScanCache.delete(rhScanCache.keys().next().value);
+    void cacheSetJson(rhScanSharedKey(key), { at: Date.now(), v }, 15 * 60_000).catch(() => false);
   } else {
     rhScanCache.delete(key);
   }
@@ -39621,6 +39713,15 @@ async function gatherRhScan(address) {
   if (!/^0x[0-9a-f]{40}$/.test(key)) return null;
   const cached = rhScanCache.get(key);
   if (cached && Date.now() - cached.at < rhScanCacheTtl(cached.v)) return cached.v;
+  const shared = await cacheGetJson(rhScanSharedKey(key)).catch(() => null);
+  if (shared?.v && rhScanHasMarketEvidence(shared.v)) {
+    const sharedAt = Number(shared.at || 0);
+    rhScanLastGood.set(key, { at: sharedAt || Date.now(), v: shared.v });
+    if (Date.now() - sharedAt < 60_000) {
+      rhScanCache.set(key, { at: sharedAt, v: shared.v });
+      return shared.v;
+    }
+  }
   const pending = rhScanInFlight.get(key);
   if (pending) return pending;
   const task = gatherRhScanUncollapsed(address).finally(() => {
@@ -53124,6 +53225,43 @@ function scheduleRhScamSet() {
 }
 
 let rhFeedCache = { at: 0, tokens: [] };
+const rhPairsSharedMemory = new Map();
+function rhPairsSharedKey(category = "trending") {
+  const cat = String(category || "trending").trim().toLowerCase().replace(/[^a-z]/g, "").slice(0, 20) || "trending";
+  return externalCacheKey(`rh-pairs:${cat}`, "global");
+}
+async function refreshSharedRhPairs(category = "trending") {
+  const cat = String(category || "trending").trim().toLowerCase();
+  return LockService.withLock(`rh-pairs-refresh:${cat}`, 35_000, async () => {
+    const rows = await webRhPairs(cat);
+    const envelope = displayCacheEnvelope(rows, Date.now());
+    rhPairsSharedMemory.set(cat, envelope);
+    await cacheSetJson(rhPairsSharedKey(cat), envelope, 5 * 60_000).catch(() => false);
+    return envelope;
+  }, null);
+}
+async function cachedWebRhPairs(category = "trending", options = {}) {
+  const cat = String(category || "trending").trim().toLowerCase();
+  const now = Date.now();
+  const freshMs = 15_000;
+  const staleMs = 5 * 60_000;
+  let envelope = rhPairsSharedMemory.get(cat) || null;
+  if (!options.force && envelope?.value && now - Number(envelope.cachedAt || 0) <= freshMs) return envelope.value;
+  if (!envelope?.value) {
+    envelope = await cacheGetJson(rhPairsSharedKey(cat)).catch(() => null);
+    if (envelope?.value) rhPairsSharedMemory.set(cat, envelope);
+  }
+  const ageMs = envelope?.value ? now - Number(envelope.cachedAt || 0) : Number.POSITIVE_INFINITY;
+  if (!options.force && envelope?.value && ageMs <= freshMs) return envelope.value;
+  if (!options.force && envelope?.value && ageMs <= staleMs) {
+    void refreshSharedRhPairs(cat).catch(() => null);
+    return envelope.value;
+  }
+  const refreshed = await refreshSharedRhPairs(cat);
+  if (refreshed?.value) return refreshed.value;
+  if (envelope?.value) return envelope.value;
+  return webRhPairs(cat);
+}
 // 🚀 NOXA fresh-launch feed — read straight off NOXA's launchpad on-chain (the fresh coins DexScreener +
 // Blockscout's holder feed miss). Background-cached like the universe so it never blocks the board, and
 // never throws from the timer (a bad RPC sweep must not crash the money service — see rh-safety notes).

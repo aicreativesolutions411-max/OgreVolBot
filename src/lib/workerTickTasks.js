@@ -1,17 +1,22 @@
 export function workerTickTaskFlags(body = {}, config = {}) {
-  const taskSet = String(config.taskSet || body.taskSet || "all").trim().toLowerCase() === "wallets" ? "wallets" : "all";
+  const requestedRole = String(config.taskSet || body.taskSet || "trade").trim().toLowerCase();
+  const taskSet = ["data", "wallets", "cache", "feeds"].includes(requestedRole) ? "data" : "trade";
   const tradePlansEnabled = config.workerTickRunTradePlans !== false;
-  const runTradePlansRequested = body.runTradePlans !== false && taskSet === "all";
-  const enabled = tradePlansEnabled && runTradePlansRequested;
+  const tradeRole = taskSet === "trade";
 
   return {
-    portfolioExits: enabled
+    portfolioExits: tradePlansEnabled
+      && tradeRole
       && body.runPortfolioExits !== false
       && body.portfolioExits !== false,
-    webExitGuards: enabled
+    webExitGuards: tradePlansEnabled
+      && tradeRole
+      && body.runTradePlans !== false
       && body.runWebExitGuards !== false
       && body.webExitGuards !== false,
-    tradePlans: enabled
+    tradePlans: tradePlansEnabled
+      && tradeRole
+      && body.runTradePlans !== false
       && body.runTimedTradePlans !== false
       && body.tradePlans !== false
   };

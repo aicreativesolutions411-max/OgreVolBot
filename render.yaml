@@ -339,6 +339,8 @@ services:
         value: true
       - key: WORKER_DISABLED
         value: false
+      - key: WORKER_TASK_SET
+        value: trade
       - key: HELIUS_RPC_URL
         sync: false
       - key: HELIUS_WS_URL
@@ -386,7 +388,7 @@ services:
       - key: WORKER_TICK_INTERVAL_MS
         value: 15000
       - key: WORKER_TRADE_PLAN_INTERVAL_MS
-        value: 1500
+        value: 4000
       - key: WORKER_FAST_TP_SL_ENABLED
         value: true
       - key: WORKER_TICK_TIMEOUT_MS
@@ -398,9 +400,9 @@ services:
       - key: WORKER_TICK_RUN_DCA_PLANS
         value: true
       - key: WORKER_TICK_WARM_FEEDS
-        value: true
+        value: false
       - key: WORKER_TICK_WARM_DISPLAY_CACHES
-        value: true
+        value: false
       - key: WORKER_DISPLAY_CACHE_USER_LIMIT
         value: 8
       - key: WORKER_TICK_BUCKETS
@@ -427,7 +429,7 @@ services:
       - key: WORKER_DISABLED
         value: false
       - key: WORKER_TASK_SET
-        value: wallets
+        value: data
       - key: RPC_RPS_LIMIT
         value: 40
       - key: DAS_RPS_LIMIT
@@ -475,7 +477,9 @@ services:
       - key: WORKER_TICK_RUN_DCA_PLANS
         value: false
       - key: WORKER_TICK_WARM_FEEDS
-        value: false
+        value: true
+      - key: WORKER_TICK_WARM_RH_PAIRS
+        value: true
       - key: WORKER_TICK_WARM_DISPLAY_CACHES
         value: true
       - key: WORKER_FAST_TP_SL_ENABLED
