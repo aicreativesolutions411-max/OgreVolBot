@@ -39212,7 +39212,7 @@ async function rhTokenContractProof(address, timeoutMs = 7_000) {
   // Run both proofs together. Waiting for a flaky public RPC bytecode read before asking Blockscout made
   // a valid token take the sum of both timeouts and occasionally miss Telegram's scan window entirely.
   // The chain explorer's exact ERC-20 record is sufficient proof and normally returns much faster.
-  const [rpcContract, directToken, indexedData, dexRows] = await Promise.all([
+  const [rpcContract, directToken, indexedData, dexRows, noxa] = await Promise.all([
     rhPromiseTimeout(isRhContract(a), Math.min(timeoutMs, 4_000), false),
     rhPromiseTimeout(rhTokenInfo(a), timeoutMs, null),
     rhPromiseTimeout(fetchJson(`https://robinhoodchain.blockscout.com/api/v2/tokens?q=${encodeURIComponent(a)}&type=ERC-20`, {
@@ -39225,6 +39225,7 @@ async function rhTokenContractProof(address, timeoutMs = 7_000) {
       timeoutMs: Math.min(timeoutMs, 4_500),
       maxBytes: 1_000_000,
     }), Math.min(timeoutMs, 4_500), null),
+    rhPromiseTimeout(noxaScanFast(a, Math.min(timeoutMs, 6_000)), Math.min(timeoutMs, 6_000), null),
   ]);
   const indexedToken = (Array.isArray(indexedData?.items) ? indexedData.items : []).find((row) => {
     const rowAddress = firstString(row?.address_hash, row?.address);
@@ -39239,9 +39240,10 @@ async function rhTokenContractProof(address, timeoutMs = 7_000) {
   });
   const dexToken = [dexPair?.baseToken, dexPair?.quoteToken].find((row) => String(row?.address || "").toLowerCase() === key);
   const marketContract = Boolean(dexToken?.symbol);
-  const contract = Boolean(rpcContract || blockscoutContract || marketContract);
+  const noxaContract = Boolean(String(noxa?.token || "").toLowerCase() === key && noxa?.symbol);
+  const contract = Boolean(rpcContract || blockscoutContract || marketContract || noxaContract);
   if (contract) _rhKindCache.set(key, { at: Date.now(), contract: true });
-  return { contract, token };
+  return { contract, token, noxa };
 }
 function mergeRhTokenRows(...rows) {
   const clean = rows.filter(Boolean);
@@ -39433,7 +39435,9 @@ async function gatherRhScanUncollapsed(address) {
   // Some valid launches take several seconds through the public RH RPC; the Telegram quick card is
   // already visible while this full enrichment runs, so a consistent 10s budget is preferable to
   // completing the card with an all-n/a result and caching that transient miss.
-  const noxaPromise = rhPromiseTimeout(noxaScanFast(a, 10_000), 10_000, null);
+  const noxaPromise = contractProof.noxa
+    ? Promise.resolve(contractProof.noxa)
+    : rhPromiseTimeout(noxaScanFast(a, 10_000), 10_000, null);
   // Identity (logo + socials) runs in PARALLEL with the market reads. DexScreener's info
   // block only exists for enhanced listings - most Robinhood coins publish their pfp and
   // links on NOXA's metadata API / GeckoTerminal token info, which the site avatar path
