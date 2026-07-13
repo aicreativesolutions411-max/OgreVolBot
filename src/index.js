@@ -34579,12 +34579,42 @@ function tickerRhCandidateHasActiveMarket(candidate = {}) {
   const liquidityUsd = Math.max(0, Number(candidate.liquidityUsd) || 0);
   return volume24h >= 1_000 || (marketCap >= 20_000 && liquidityUsd >= 2_000);
 }
+function tickerRhActivityLeader(candidates = []) {
+  const ranked = candidates
+    .filter((candidate) => Number(candidate?.activityUniqueTx || 0) >= 5
+      && Number(candidate?.activityAgeSeconds ?? Number.POSITIVE_INFINITY) <= 3_600
+      && Number(candidate?.activityPerMinute || 0) >= 0.25)
+    .sort((a, b) => Number(b.activityScore || 0) - Number(a.activityScore || 0));
+  const top = ranked[0] || null, runner = ranked[1] || null;
+  if (!top) return null;
+  // One recent contract doing sustained real transfers is enough. With multiple active clones, demand
+  // a decisive velocity + score gap so an airdrop burst cannot win merely from holder count.
+  if (!runner) return Number(top.activityPerMinute || 0) >= 1 ? top : null;
+  const rateLead = Number(top.activityPerMinute || 0) >= Math.max(
+    Number(runner.activityPerMinute || 0) * 2.5,
+    Number(runner.activityPerMinute || 0) + 1
+  );
+  const scoreLead = Number(top.activityScore || 0) >= Number(runner.activityScore || 0) + 25;
+  return rateLead && scoreLead ? top : null;
+}
 function tickerRhSelectCheckedCandidate(checked = []) {
   const verified = checked.filter((row) => row?.isContract && row?.candidate);
   const active = verified.find((row) => tickerRhCandidateHasActiveMarket(row.candidate));
+  const activityLeader = tickerRhActivityLeader(verified.map((row) => row.candidate));
+  const activityCanOverridePartialMarket = activityLeader && active
+    && String(activityLeader.address || "").toLowerCase() !== String(active.candidate?.address || "").toLowerCase()
+    && Number(activityLeader.activityPerMinute || 0) >= 20
+    && Number(active.candidate?.marketCap || 0) < 100_000;
+  if (activityLeader && (!active
+    || String(activityLeader.address || "").toLowerCase() === String(active.candidate?.address || "").toLowerCase()
+    || activityCanOverridePartialMarket)) {
+    activityLeader.activityProof = true;
+    return activityLeader;
+  }
   if (active) return active.candidate;
   // A unique just-launched contract can legitimately predate public pool indexes. With multiple exact
-  // contracts, however, identity/holder count alone is not enough evidence to choose one.
+  // contracts, however, identity/holder count alone is not enough evidence to choose one. The activity
+  // path above is the provider-independent proof for that case.
   return verified.length === 1 ? verified[0].candidate : null;
 }
 function tickerRhClearlyDominates(rh, sol = null) {
@@ -34601,7 +34631,14 @@ function tickerRhClearlyDominates(rh, sol = null) {
     && Number(rh?.exactMatches || 1) === 1
     && solMc < 50_000
     && solVol < 100_000;
-  return marketDominates || holderDominatesDust;
+  const activityDominatesDust = rh?.contractProof === true
+    && rh?.activityProof === true
+    && Number(rh?.activityUniqueTx || 0) >= 5
+    && Number(rh?.activityAgeSeconds ?? Number.POSITIVE_INFINITY) <= 3_600
+    && Number(rh?.activityPerMinute || 0) >= 0.25
+    && solMc < 50_000
+    && solVol < 100_000;
+  return marketDominates || holderDominatesDust || activityDominatesDust;
 }
 function fmtTickerMarketUsd(value) {
   const n = Number(value) || 0;
@@ -34801,6 +34838,31 @@ async function rhTickerDirectMarket(address, timeoutMs = 2_400) {
   }
   return rows.sort((x, y) => tickerMarketRowStrength(y.marketCap, y.volume24h, y.liquidityUsd) - tickerMarketRowStrength(x.marketCap, x.volume24h, x.liquidityUsd))[0] || null;
 }
+async function rhTickerBlockscoutActivity(address, timeoutMs = 1_800) {
+  const a = String(address || "").trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return null;
+  const data = await fetchJson(`https://robinhoodchain.blockscout.com/api/v2/tokens/${encodeURIComponent(a)}/transfers`, {
+    headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
+    timeoutMs,
+    maxBytes: 1_500_000
+  }).catch(() => null);
+  const items = Array.isArray(data?.items) ? data.items.slice(0, 50) : [];
+  if (!items.length) return null;
+  const times = items.map((item) => Date.parse(item?.timestamp || "")).filter(Number.isFinite).sort((a, b) => b - a);
+  if (!times.length) return null;
+  const newestAt = times[0], oldestAt = times[times.length - 1];
+  const spanMinutes = Math.max(1 / 60, (newestAt - oldestAt) / 60_000);
+  const activityPerMinute = items.length / spanMinutes;
+  const activityAgeSeconds = Math.max(0, (Date.now() - newestAt) / 1_000);
+  const activityUniqueTx = new Set(items.map((item) => String(item?.transaction_hash || "")).filter(Boolean)).size;
+  const contractTouches = items.filter((item) => item?.from?.is_contract === true || item?.to?.is_contract === true).length;
+  const contractRatio = contractTouches / items.length;
+  const activityScore = Math.log1p(activityPerMinute) * 50
+    + Math.log1p(activityUniqueTx) * 10
+    + contractRatio * 15
+    - Math.min(100, activityAgeSeconds / 180);
+  return { activityPerMinute, activityAgeSeconds, activityUniqueTx, activityScore, contractRatio };
+}
 async function rhTickerBatchMarkets(addresses = [], timeoutMs = 2_000) {
   const clean = [...new Set(addresses
     .map((value) => String(value || "").trim())
@@ -34922,12 +34984,29 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
   // of those addresses in one DexScreener batch request. This closes the transient-search hole where a
   // holder-airdropped clone could beat the real high-volume market simply because broad search was partial.
   if (candidates.size) {
-    const batchPairs = await scanFastTimeout(
-      rhTickerBatchMarkets([...candidates.keys()], Math.max(1_800, providerTimeoutMs)),
-      Math.max(1_900, providerTimeoutMs + 100),
-      []
-    );
+    const needsActivityProof = candidates.size > 1 && ![...candidates.values()].some(tickerRhCandidateHasActiveMarket);
+    const activityTargets = needsActivityProof
+      ? [...candidates.values()].sort((a, b) => b.holders - a.holders).slice(0, 4)
+      : [];
+    // Race the exact-address DEX batch with chain-native activity. During a DEX outage this costs one
+    // bounded Blockscout round trip, not a second serial stage, and it avoids the old 12-call fan-out.
+    const [batchPairs, activityRows] = await Promise.all([
+      scanFastTimeout(
+        rhTickerBatchMarkets([...candidates.keys()], Math.max(1_800, providerTimeoutMs)),
+        Math.max(1_900, providerTimeoutMs + 100),
+        []
+      ),
+      Promise.all(activityTargets.map(async (candidate) => ({
+        candidate,
+        activity: await scanFastTimeout(
+          rhTickerBlockscoutActivity(candidate.address, Math.max(3_500, providerTimeoutMs)),
+          Math.max(3_650, providerTimeoutMs + 150),
+          null
+        ).catch(() => null)
+      })))
+    ]);
     for (const pair of Array.isArray(batchPairs) ? batchPairs : []) add(pair.baseToken?.address, pair, "dexscreener-batch");
+    for (const { candidate, activity } of activityRows) if (activity) Object.assign(candidate, activity);
   }
   // The full feed is a heavy universe read. Blockscout exact search is cheaper and more reliable for
   // ticker lookup, so only touch the feed if all three exact indexes found nothing.
@@ -34939,7 +35018,10 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
   // Blockscout/feed rows sometimes identify the correct token but carry null market fields. Hydrate
   // the highest-holder exact matches through per-token pool endpoints, then rank real numbers.
   if (candidates.size) {
-    const probes = [...candidates.values()]
+    const activityLeader = tickerRhActivityLeader([...candidates.values()]);
+    // A decisive chain-native activity leader is already enough to select the right contract. Do not
+    // launch another 12 DEX calls during the same provider outage; the progressive scan hydrates facts.
+    const probes = activityLeader ? [] : [...candidates.values()]
       .filter((candidate) => !tickerRhCandidateHasActiveMarket(candidate))
       .sort((a, b) => b.holders - a.holders)
       .slice(0, 4);
@@ -34981,6 +35063,7 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
   const feedResponseComplete = !shouldReadFeed || Array.isArray(feed);
   const lookupComplete = Boolean(
     (pick && (pick.marketCap > 0 || pick.volume24h > 0))
+    || pick?.activityProof === true
     || (indexedResponseComplete && feedResponseComplete && all.length === 0)
   );
   rhTickerTargetCache.set(key, { at: Date.now(), candidate: pick, solDexCandidate, lookupComplete });
@@ -48090,7 +48173,9 @@ async function setGroupRose(chatId, patch) {
   return e.rose;
 }
 function roseConfig(entry) { return { ...roseDefaults(), ...((entry && entry.rose) || {}) }; }
-const ROSE_LINK_RE = /(https?:\/\/|t\.me\/|@[A-Za-z0-9_]{4,}|[a-z0-9-]+\.(?:com|org|io|xyz|fun|net|gg|app|co|me)\b)/i;
+// @username is a Telegram mention, not a link. Anti-links must let members tag admins/users while
+// still blocking actual t.me invites, URLs, and bare domains.
+const ROSE_LINK_RE = /(https?:\/\/|t\.me\/|[a-z0-9-]+\.(?:com|org|io|xyz|fun|net|gg|app|co|me)\b)/i;
 // Full mute / restore permission sets (newer Bot API needs the granular flags, not just can_send_messages).
 const ROSE_MUTE_PERMS = { can_send_messages: false, can_send_audios: false, can_send_documents: false, can_send_photos: false, can_send_videos: false, can_send_video_notes: false, can_send_voice_notes: false, can_send_polls: false, can_send_other_messages: false, can_add_web_page_previews: false, can_change_info: false, can_invite_users: false, can_pin_messages: false };
 const ROSE_UNMUTE_PERMS = { can_send_messages: true, can_send_audios: true, can_send_documents: true, can_send_photos: true, can_send_videos: true, can_send_video_notes: true, can_send_voice_notes: true, can_send_polls: true, can_send_other_messages: true, can_add_web_page_previews: true, can_invite_users: true };

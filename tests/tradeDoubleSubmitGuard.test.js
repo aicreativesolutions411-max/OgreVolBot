@@ -841,6 +841,9 @@ test("Rose (MissRose parity): captcha verify, fillings, timed mutes, notes, filt
   assert.match(rose, /name === "rmfilter"/);
   assert.match(rose, /name === "clearfilters"/);
   assert.match(rose, /setGroupRose\(chatId, \{ filters: \{\} \}\)/);
+  const roseLinkRule = serverSource.match(/const ROSE_LINK_RE = [^\r\n]+/)?.[0] || "";
+  assert.match(roseLinkRule, /t\\\.me/);                    // real Telegram invite links remain blocked
+  assert.doesNotMatch(roseLinkRule, /@\[A-Za-z0-9_/);       // @admin/@user mentions are not links
   // Full mute perm set (not just can_send_messages) so newer Bot API actually mutes.
   assert.match(serverSource, /ROSE_MUTE_PERMS\s*=\s*\{[^}]*can_send_polls:\s*false/);
 });
@@ -2458,6 +2461,8 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(rhTicker, /solDexCandidate/);                          // the independent query can repair a missed dominant Sol result too
   assert.match(rhTicker, /rhTickerDirectMarket/);                   // zero-metric feed matches hydrate by token address
   assert.match(rhTicker, /rhTickerBatchMarkets/);                   // one exact-address batch repairs partial broad search
+  assert.match(rhTicker, /rhTickerBlockscoutActivity/);             // exact transfer velocity survives DEX provider outages
+  assert.match(rhTicker, /const activityLeader = tickerRhActivityLeader/);
   assert.match(rhTicker, /filter\(\(candidate\) => !tickerRhCandidateHasActiveMarket\(candidate\)\)/);
   assert.match(rhTicker, /sort\(\(a, b\) => b\.holders - a\.holders\)[\s\S]*slice\(0, 4\)/);
   assert.match(rhTicker, /tickerRhSelectCheckedCandidate/);         // multiple identity-only clones fail closed
@@ -2652,7 +2657,8 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   const leadershipFn = new Function("candidate", "maxima", leadership);
   const rhDominatesFn = new Function("rh", "sol", functionBody(serverSource, "tickerRhClearlyDominates"));
   const rhActiveFn = new Function("candidate", functionBody(serverSource, "tickerRhCandidateHasActiveMarket"));
-  const rhSelectFn = new Function("tickerRhCandidateHasActiveMarket", "checked", functionBody(serverSource, "tickerRhSelectCheckedCandidate")).bind(null, rhActiveFn);
+  const rhActivityFn = new Function("candidates", functionBody(serverSource, "tickerRhActivityLeader"));
+  const rhSelectFn = new Function("tickerRhCandidateHasActiveMarket", "tickerRhActivityLeader", "checked", functionBody(serverSource, "tickerRhSelectCheckedCandidate")).bind(null, rhActiveFn, rhActivityFn);
   const established = { marketCap: 509_000, liquidityUsd: 52_000, volume24h: 140_000, holders: 1_100, trendBoost: 0, sources: new Set(["dexscreener"]) };
   const tinyTrendClone = { marketCap: 2_000, liquidityUsd: 1_200, volume24h: 18_000, holders: 90, trendBoost: 55, sources: new Set(["moralis-trending"]) };
   const maxima = { marketCap: established.marketCap, liquidityUsd: established.liquidityUsd, volume24h: established.volume24h };
@@ -2673,7 +2679,14 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   const cashcowReal = { address: "0x4ad72e468e38ec204c605f2e058d61e4d79e2ceb", marketCap: 54_833, volume24h: 106_224, liquidityUsd: 21_595 };
   const cashcowNoVolume = { address: "0xff3a8aadd2c6bdb380b2c2e752daf445e2151b09", marketCap: 1_221, volume24h: 0, liquidityUsd: 1_707, holders: 6_961 };
   assert.equal(rhSelectFn([{ candidate: cashcowNoVolume, isContract: true }, { candidate: cashcowReal, isContract: true }]).address, cashcowReal.address, "active CASHCOW market must beat the no-volume holder clone");
-  assert.equal(rhSelectFn([{ candidate: cashcowNoVolume, isContract: true }, { candidate: { ...cashcowReal, marketCap: 0, volume24h: 0, liquidityUsd: 0 }, isContract: true }]), null, "ambiguous multi-clone lookup must fail closed when every market provider misses");
+  const trashReal = { address: "0xbe4f4bc2ecdca72a6e0d9c963ad71a5869a9fa65", holders: 2_987, activityPerMinute: 600, activityAgeSeconds: 2, activityUniqueTx: 28, activityScore: 350, contractProof: true };
+  const trashClone = { address: "0xeb195e198104ffcb8163676758871c83bee7bf5e", holders: 527, activityPerMinute: 66, activityAgeSeconds: 1_800, activityUniqueTx: 35, activityScore: 210, contractProof: true };
+  assert.equal(rhSelectFn([{ candidate: trashClone, isContract: true }, { candidate: trashReal, isContract: true }]).address, trashReal.address, "TRASH must use the decisive chain-native activity leader when DEX providers time out");
+  assert.equal(rhSelectFn([{ candidate: { ...trashClone, marketCap: 31_000, volume24h: 80_000 }, isContract: true }, { candidate: trashReal, isContract: true }]).address, trashReal.address, "a partial weak clone market response must not beat TRASH's overwhelming chain activity");
+  assert.equal(rhDominatesFn({ ...trashReal, activityProof: true, exactMatches: 25 }, { marketCap: 4_563, volume24h: 0 }), true, "active RH TRASH must beat the dust Sol clone selected during the same outage");
+  const ambiguousA = { address: "0x1111111111111111111111111111111111111111", activityPerMinute: 8, activityAgeSeconds: 30, activityUniqueTx: 10, activityScore: 120 };
+  const ambiguousB = { address: "0x2222222222222222222222222222222222222222", activityPerMinute: 7, activityAgeSeconds: 40, activityUniqueTx: 9, activityScore: 115 };
+  assert.equal(rhSelectFn([{ candidate: ambiguousA, isContract: true }, { candidate: ambiguousB, isContract: true }]), null, "similar active clones remain ambiguous instead of being guessed");
   assert.match(functionBody(serverSource, "tickerScanSelectionLine"), /strongest Robinhood/);
   assert.match(functionBody(serverSource, "tickerTruthLine"), /Vol/);
   const rhSend = functionBody(serverSource, "sendRhScanCard");
