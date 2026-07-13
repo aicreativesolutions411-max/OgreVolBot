@@ -38883,6 +38883,39 @@ const rhScanInFlight = new Map();
 const rhScanLastGood = new Map();
 const rhScanLogoCache = new Map();
 const rhVolumeCache = new Map();
+// Scan identity (pfp + socials) survives restarts on disk: rhScanLastGood is in-memory
+// only, so every deploy wiped the pfp/links off previously-scanned Robinhood coins.
+const RH_SCAN_IDENTITY_FIELDS = ["symbol", "name", "imageUrl", "iconUrl", "twitterUrl", "telegramUrl", "websiteUrl", "pairAddress", "createdAt", "noxaUrl"];
+const rhScanIdentityFile = () => path.join(CONFIG.dataDir, "rh-scan-identity.json");
+let rhScanIdentityStore = null;
+let rhScanIdentityWriteTimer = null;
+async function rhScanIdentityMapLoad() {
+  if (rhScanIdentityStore) return rhScanIdentityStore;
+  let parsed = {};
+  try { parsed = JSON.parse(await fs.readFile(rhScanIdentityFile(), "utf8")) || {}; } catch { /* first run - start fresh */ }
+  rhScanIdentityStore = new Map(Object.entries(parsed.tokens || {}));
+  return rhScanIdentityStore;
+}
+async function rhScanIdentityGet(key) {
+  const map = await rhScanIdentityMapLoad().catch(() => null);
+  return map ? map.get(String(key).toLowerCase()) || null : null;
+}
+function rhScanIdentityRemember(key, v = {}) {
+  if (!rhScanIdentityStore) return;                        // rhScanIdentityGet loads it first in the scan flow
+  const record = {};
+  for (const field of RH_SCAN_IDENTITY_FIELDS) if (v[field]) record[field] = v[field];
+  if (!record.imageUrl && !record.twitterUrl && !record.websiteUrl && !record.telegramUrl) return;
+  const k = String(key).toLowerCase();
+  const existing = rhScanIdentityStore.get(k) || {};
+  rhScanIdentityStore.set(k, { ...existing, ...record, at: Date.now() });
+  while (rhScanIdentityStore.size > 3000) rhScanIdentityStore.delete(rhScanIdentityStore.keys().next().value);
+  if (rhScanIdentityWriteTimer) return;                    // debounced atomic write
+  rhScanIdentityWriteTimer = setTimeout(() => {
+    rhScanIdentityWriteTimer = null;
+    writeJsonFile(rhScanIdentityFile(), { tokens: Object.fromEntries(rhScanIdentityStore) }).catch(() => {});
+  }, 5_000);
+  if (rhScanIdentityWriteTimer.unref) rhScanIdentityWriteTimer.unref();
+}
 function rhScanHasMarketEvidence(value = {}) {
   return [value.priceUsd, value.mc, value.liq, value.vol1, value.vol24].some((field) => Number(field) > 0);
 }
@@ -39122,6 +39155,12 @@ async function gatherRhScanUncollapsed(address) {
   // already visible while this full enrichment runs, so a consistent 10s budget is preferable to
   // completing the card with an all-n/a result and caching that transient miss.
   const noxaPromise = rhPromiseTimeout(noxaScanFast(a, 10_000), 10_000, null);
+  // Identity (logo + socials) runs in PARALLEL with the market reads. DexScreener's info
+  // block only exists for enhanced listings - most Robinhood coins publish their pfp and
+  // links on NOXA's metadata API / GeckoTerminal token info, which the site avatar path
+  // already used but scan cards never did (why cards kept showing no pfp or socials).
+  const noxaMetaPromise = getNoxaRhTokenMetadata(a, { timeoutMs: 4_500 }).catch(() => null);
+  const geckoInfoPromise = fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${a}/info`, { timeoutMs: 3_500 }).catch(() => null);
   const [dsRes, geckoRes, saf, feedRows, directToken, launchMap] = await Promise.all([
     fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${a}`, { timeoutMs: 3500 }).catch(() => null),
     fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${a}/pools?page=1`, { timeoutMs: 3500 }).catch(() => null),
@@ -39248,6 +39287,26 @@ async function gatherRhScanUncollapsed(address) {
       }
     }
   }
+  // Restart-proof identity backfill, then top up whatever is STILL missing from the
+  // identity fetches started above (they have been running this whole time).
+  const storedIdentity = await rhScanIdentityGet(key);
+  if (storedIdentity) {
+    for (const field of RH_SCAN_IDENTITY_FIELDS) {
+      if (!v[field] && storedIdentity[field]) v[field] = storedIdentity[field];
+    }
+  }
+  if (!v.imageUrl || (!v.twitterUrl && !v.telegramUrl && !v.websiteUrl)) {
+    const [noxaMeta, geckoInfo] = await Promise.all([
+      rhPromiseTimeout(noxaMetaPromise, 4_500, null),
+      rhPromiseTimeout(geckoInfoPromise, 3_500, null)
+    ]);
+    const geckoAttr = geckoInfo?.data?.attributes || {};
+    if (!v.imageUrl) v.imageUrl = firstString(noxaMeta?.imageUrl, geckoAttr.image_url, geckoAttr.imageUrl);
+    if (!v.twitterUrl) v.twitterUrl = firstString(noxaMeta?.twitterUrl, normalizeSocialLink(geckoAttr.twitter_handle, "twitter"));
+    if (!v.telegramUrl) v.telegramUrl = firstString(noxaMeta?.telegramUrl, normalizeSocialLink(geckoAttr.telegram_handle, "telegram"));
+    if (!v.websiteUrl) v.websiteUrl = firstString(noxaMeta?.websiteUrl, normalizeSocialLink(Array.isArray(geckoAttr.websites) ? geckoAttr.websites[0] : "", "website"));
+  }
+  rhScanIdentityRemember(key, v);
   if (rhScanHasMarketEvidence(v)) {
     rhScanLastGood.set(key, { at: Date.now(), v });
     if (rhScanLastGood.size > 300) rhScanLastGood.delete(rhScanLastGood.keys().next().value);
