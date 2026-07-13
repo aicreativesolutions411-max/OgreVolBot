@@ -2632,8 +2632,27 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(rhPairTarget, /quote\.address/);                       // requested quote-side coins never inherit the base coin identity
   const rhGather = functionBody(serverSource, "gatherRhScanUncollapsed");
   assert.match(rhGather, /pairTarget\.isBase \? pair\?\.priceUsd : null/);
+  assert.match(rhGather, /api\.geckoterminal\.com\/api\/v2\/networks\/robinhood\/tokens/); // independent market fallback prevents an all-n/a card when Dex/Blockscout blink
+  assert.match(rhGather, /const noxaPromise/);                         // NOXA's slower exact factory read starts concurrently, not after the fast providers already timed out
+  assert.match(rhGather, /rhScanCacheTtl\(cached\.v\)/);              // transient empty results retry in seconds instead of poisoning scans for a minute
+  assert.match(rhGather, /if \(rhScanHasMarketEvidence\(v\)\)/);      // never promote an all-zero transient response to last-good
   assert.match(rhGather, /rhScanLastGood/);                           // intermittent providers cannot erase known-good facts
   assert.match(functionBody(serverSource, "gatherRhScan"), /rhScanInFlight/); // simultaneous scans share one provider job
+  assert.match(rhSend, /!rhScanHasMarketEvidence\(loaded\)/);         // keep the progressive warning instead of presenting n/a as a completed scan
+  const geckoPool = new Function("firstString", "firstMeaningfulNumber", "rhFiniteNumber", `return function(data, address) {${functionBody(serverSource, "rhGeckoPoolForToken")}}`)(
+    (...values) => String(values.find((value) => String(value || "").trim()) || ""),
+    (...values) => values.map(Number).find((value) => Number.isFinite(value) && value !== 0) ?? null,
+    (value) => Number.isFinite(Number(value)) ? Number(value) : null
+  );
+  const geckoNoxa = geckoPool({ data: [{
+    id: "robinhood_0x121adf3c5fb72be4dfc19d2921c0adbac40614cc",
+    relationships: { base_token: { data: { id: "robinhood_0x39e0d9057bd9039cd14590f54de20b9d3457c56e" } }, quote_token: { data: { id: "robinhood_0x0bd7d308f8e1639fab988df18a8011f41eacad73" } } },
+    attributes: { address: "0x121adf3c5fb72be4dfc19d2921c0adbac40614cc", base_token_price_usd: "0.00092", fdv_usd: "920000", reserve_in_usd: "94000", volume_usd: { h1: "101000", h24: "3090000" }, price_change_percentage: { h1: "63.8", h24: "501" }, pool_created_at: "2026-06-29T08:33:50Z" }
+  }] }, "0x39e0d9057bd9039cd14590f54de20b9d3457c56e");
+  assert.deepEqual({ mc: geckoNoxa.marketCapUsd, liq: geckoNoxa.liquidityUsd, vol: geckoNoxa.volume24hUsd, age: geckoNoxa.createdAt }, { mc: 920000, liq: 94000, vol: 3090000, age: "2026-06-29T08:33:50Z" });
+  const marketEvidence = new Function("value", functionBody(serverSource, "rhScanHasMarketEvidence"));
+  assert.equal(marketEvidence({ priceUsd: 0, mc: 0, liq: 0, vol1: 0, vol24: 0 }), false);
+  assert.equal(marketEvidence({ mc: 750_000 }), true);
   assert.doesNotMatch(functionBody(serverSource, "mergeRhTokenRows"), /lastActiveAt/); // activity time is not coin age
   const solLook = functionBody(serverSource, "handleTelegramLookCommand");
   assert.match(solLook, /TG_SCAN_FIRST_RESPONSE_MS/);

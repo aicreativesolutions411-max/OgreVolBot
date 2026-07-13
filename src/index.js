@@ -38778,6 +38778,12 @@ const rhScanInFlight = new Map();
 const rhScanLastGood = new Map();
 const rhScanLogoCache = new Map();
 const rhVolumeCache = new Map();
+function rhScanHasMarketEvidence(value = {}) {
+  return [value.priceUsd, value.mc, value.liq, value.vol1, value.vol24].some((field) => Number(field) > 0);
+}
+function rhScanCacheTtl(value = {}) {
+  return rhScanHasMarketEvidence(value) ? 60_000 : 5_000;
+}
 function rhPromiseTimeout(promise, ms = 3500, fallback = null) {
   return Promise.race([
     Promise.resolve(promise).catch(() => fallback),
@@ -38939,6 +38945,37 @@ function rhPairTargetToken(pair = {}, address = "") {
   return { token: {}, isBase: false, matched: false };
 }
 
+function rhGeckoPoolForToken(data = {}, address = "") {
+  const target = String(address || "").toLowerCase();
+  const addressFromId = (value) => {
+    const id = String(value || "");
+    const splitAt = id.indexOf("_");
+    return (splitAt >= 0 ? id.slice(splitAt + 1) : id).toLowerCase();
+  };
+  const rows = [];
+  for (const pool of Array.isArray(data?.data) ? data.data : []) {
+    const base = addressFromId(pool?.relationships?.base_token?.data?.id);
+    const quote = addressFromId(pool?.relationships?.quote_token?.data?.id);
+    const isBase = base === target;
+    const isQuote = quote === target;
+    if (!isBase && !isQuote) continue;
+    const attr = pool?.attributes || {};
+    const pairAddress = firstString(attr.address, addressFromId(pool?.id));
+    rows.push({
+      pairAddress,
+      priceUsd: firstMeaningfulNumber(isBase ? attr.base_token_price_usd : attr.quote_token_price_usd, attr.token_price_usd),
+      marketCapUsd: isBase ? firstMeaningfulNumber(attr.market_cap_usd, attr.fdv_usd) : null,
+      liquidityUsd: firstMeaningfulNumber(attr.reserve_in_usd),
+      volume1hUsd: firstMeaningfulNumber(attr.volume_usd?.h1),
+      volume24hUsd: firstMeaningfulNumber(attr.volume_usd?.h24),
+      priceChange1h: rhFiniteNumber(attr.price_change_percentage?.h1),
+      priceChange24h: rhFiniteNumber(attr.price_change_percentage?.h24),
+      createdAt: firstString(attr.pool_created_at),
+    });
+  }
+  return rows.sort((x, y) => Number(y.liquidityUsd || 0) - Number(x.liquidityUsd || 0))[0] || null;
+}
+
 // Robinhood volume fallback: DexScreener occasionally returns a token with price/liquidity but no activity.
 // GeckoTerminal's hourly OHLCV gives an independent exact USD-volume read. Keep the last good value through
 // short provider gaps so repeat scans do not flicker back to n/a.
@@ -38974,9 +39011,15 @@ async function gatherRhScanUncollapsed(address) {
   if (!(await isRhContract(a).catch(() => false))) return null;
   const key = a.toLowerCase();
   const cached = rhScanCache.get(key);
-  if (cached && Date.now() - cached.at < 60_000) return cached.v;
-  const [dsRes, saf, feedRows, directToken, launchMap] = await Promise.all([
+  if (cached && Date.now() - cached.at < rhScanCacheTtl(cached.v)) return cached.v;
+  // Start the exact NOXA factory read immediately instead of waiting for DexScreener to fail first.
+  // Some valid launches take several seconds through the public RH RPC; the Telegram quick card is
+  // already visible while this full enrichment runs, so a consistent 10s budget is preferable to
+  // completing the card with an all-n/a result and caching that transient miss.
+  const noxaPromise = rhPromiseTimeout(noxaScanFast(a, 10_000), 10_000, null);
+  const [dsRes, geckoRes, saf, feedRows, directToken, launchMap] = await Promise.all([
     fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${a}`, { timeoutMs: 3500 }).catch(() => null),
+    fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${a}/pools?page=1`, { timeoutMs: 3500 }).catch(() => null),
     rhPromiseTimeout(rhHoneypotCheck(a, CONFIG.rhChainRpcUrl), 3000, null),
     rhPromiseTimeout(rhFeedTokens(), 2500, []),
     rhPromiseTimeout(rhTokenInfo(a), 2500, null),
@@ -38986,6 +39029,7 @@ async function gatherRhScanUncollapsed(address) {
   const pair = pairs.sort((x, y) => (Number(y.liquidity?.usd) || 0) - (Number(x.liquidity?.usd) || 0))[0] || null;
   const pairTarget = rhPairTargetToken(pair, a);
   const pairToken = pairTarget.token || {};
+  const gecko = rhGeckoPoolForToken(geckoRes, a);
   const dexActivity = aggregateDexPairActivity(a, pairs);
   const listFeed = (Array.isArray(feedRows) ? feedRows : []).find((t) => String(t.address || "").toLowerCase() === key) || null;
   const feed = mergeRhTokenRows(normalizeRhBlockscoutToken(directToken), listFeed);
@@ -38996,31 +39040,33 @@ async function gatherRhScanUncollapsed(address) {
   // NOXA FALLBACK: DexScreener indexes almost no RH pairs. When it has nothing (or no price) for this
   // coin, read it straight off NOXA's launchpad on-chain (fresh pre-DexScreener launches) so the scan
   // still shows real MC/liq/price instead of "n/a". Only pay for the on-chain read when DexScreener whiffs.
-  let noxa = null;
-  if (!pair || !(Number(pair.priceUsd) > 0) || !(Number(pair?.liquidity?.usd) > 0)) {
-    noxa = await rhPromiseTimeout(noxaScanFast(a), 3200, null);
+  let noxa = noxaFromFeedCache(a);
+  if (!noxa && (!(Number(pairTarget.isBase ? pair?.priceUsd : 0) > 0) || !(Number(pair?.liquidity?.usd) > 0))
+      && (!(Number(gecko?.priceUsd) > 0) || !(Number(gecko?.liquidityUsd) > 0))) {
+    noxa = await noxaPromise;
   }
   const socials = pairTarget.isBase && Array.isArray(pair?.info?.socials) ? pair.info.socials : [];
   const website = pairTarget.isBase ? ((Array.isArray(pair?.info?.websites) ? pair.info.websites : [])[0]?.url || "") : "";
   const supply = firstMeaningfulNumber(feed?.totalSupplyUi, noxa?.supply);
-  const priceUsd = firstMeaningfulNumber(pairTarget.isBase ? pair?.priceUsd : null, feed?.priceUsd, cachedPrice?.priceUsd, noxa?.priceUsd);
+  const priceUsd = firstMeaningfulNumber(pairTarget.isBase ? pair?.priceUsd : null, gecko?.priceUsd, feed?.priceUsd, cachedPrice?.priceUsd, noxa?.priceUsd);
   const mc = firstMeaningfulNumber(
     pairTarget.isBase ? pair?.marketCap : null,
     pairTarget.isBase ? pair?.fdv : null,
+    gecko?.marketCapUsd,
     feed?.marketCapUsd,
     noxa?.mc,
     priceUsd && supply ? Number(priceUsd) * Number(supply) : null
   ) || 0;
-  const liq = firstMeaningfulNumber(pair?.liquidity?.usd, feed?.liquidityUsd, noxa?.liq) || 0;
-  let vol1 = firstMeaningfulNumber(dexActivity.volume?.h1, pair?.volume?.h1, pair?.volume?.["1h"], feed?.volume1hUsd, feed?.volumeH1Usd, noxa?.volume1hUsd, noxa?.volumeH1Usd) || 0;
-  let vol24 = firstMeaningfulNumber(dexActivity.volume?.h24, pair?.volume?.h24, pair?.volume?.["24h"], feed?.volume24hUsd, feed?.volume_24h, noxa?.volume24hUsd, noxa?.volumeH24Usd) || 0;
-  const ch1 = firstMeaningfulNumber(pairTarget.isBase ? pair?.priceChange?.h1 : null, pairTarget.isBase ? pair?.priceChange?.["1h"] : null, feed?.priceChange1h, feed?.priceChangeH1, noxa?.ch1, noxa?.priceChange1h);
-  const ch24 = firstMeaningfulNumber(pairTarget.isBase ? pair?.priceChange?.h24 : null, pairTarget.isBase ? pair?.priceChange?.["24h"] : null, feed?.priceChange24h, feed?.priceChangeH24, noxa?.ch24, noxa?.priceChange24h);
+  const liq = firstMeaningfulNumber(pair?.liquidity?.usd, gecko?.liquidityUsd, feed?.liquidityUsd, noxa?.liq) || 0;
+  let vol1 = firstMeaningfulNumber(dexActivity.volume?.h1, pair?.volume?.h1, pair?.volume?.["1h"], gecko?.volume1hUsd, feed?.volume1hUsd, feed?.volumeH1Usd, noxa?.volume1hUsd, noxa?.volumeH1Usd) || 0;
+  let vol24 = firstMeaningfulNumber(dexActivity.volume?.h24, pair?.volume?.h24, pair?.volume?.["24h"], gecko?.volume24hUsd, feed?.volume24hUsd, feed?.volume_24h, noxa?.volume24hUsd, noxa?.volumeH24Usd) || 0;
+  const ch1 = firstMeaningfulNumber(pairTarget.isBase ? pair?.priceChange?.h1 : null, pairTarget.isBase ? pair?.priceChange?.["1h"] : null, gecko?.priceChange1h, feed?.priceChange1h, feed?.priceChangeH1, noxa?.ch1, noxa?.priceChange1h);
+  const ch24 = firstMeaningfulNumber(pairTarget.isBase ? pair?.priceChange?.h24 : null, pairTarget.isBase ? pair?.priceChange?.["24h"] : null, gecko?.priceChange24h, feed?.priceChange24h, feed?.priceChangeH24, noxa?.ch24, noxa?.priceChange24h);
   const holders = firstMeaningfulNumber(pair?.holders, feed?.holders, feed?.holders_count, saf?.holders, noxa?.holders) || 0;
-  let createdAt = rhMs(pair?.pairCreatedAt) || rhMs(feed?.createdAt) || rhMs(cachedCreatedAt) || 0;
+  let createdAt = rhMs(pair?.pairCreatedAt) || rhMs(gecko?.createdAt) || rhMs(feed?.createdAt) || rhMs(cachedCreatedAt) || 0;
   if (!(priceUsd > 0)) scheduleRhPriceFill([{ address: a, priceUsd: 0 }]);
   // ATH (GeckoTerminal OHLCV, robinhood network) — real all-time-high price → ATH market cap + how far off it.
-  const poolHint = pair?.pairAddress || noxa?.pool || "";
+  const poolHint = pair?.pairAddress || gecko?.pairAddress || noxa?.pool || "";
   const [fallbackVolume, chainCreated, athPriceUsd] = await Promise.all([
     (!(vol1 > 0) || !(vol24 > 0)) ? rhPromiseTimeout(rhTokenVolumeFallback(a, poolHint), 5500, null) : Promise.resolve(null),
     !(createdAt > 0) ? rhPromiseTimeout(rhTokenCreationTime(a), 2200, "") : Promise.resolve(""),
@@ -39052,7 +39098,7 @@ async function gatherRhScanUncollapsed(address) {
     ch24: rhFiniteNumber(ch24),
     holders,
     supply: Number(supply) || 0,
-    pairAddress: pair?.pairAddress || noxa?.pool || "",
+    pairAddress: pair?.pairAddress || gecko?.pairAddress || noxa?.pool || "",
     createdAt,
     imageUrl: firstString(
       pairTarget.isBase ? pair?.info?.imageUrl : "",
@@ -39067,7 +39113,7 @@ async function gatherRhScanUncollapsed(address) {
     websiteUrl: firstString(website, normalizeSocialLink(launchMeta?.website, "website")),
     safety: saf,   // { verdict: safe|warn|danger|unknown, reasons:[] }
     explorer: `https://robinhoodchain.blockscout.com/token/${a}`,
-    source: pair ? "dexscreener" : (noxa ? "noxa" : (feed ? "blockscout" : "")),
+    source: pair ? "dexscreener" : (gecko ? "geckoterminal" : (noxa ? "noxa" : (feed ? "blockscout" : ""))),
     noxaUrl: noxa ? noxa.noxaUrl : "",
   };
   const previous = rhScanLastGood.get(key);
@@ -39088,8 +39134,10 @@ async function gatherRhScanUncollapsed(address) {
       }
     }
   }
-  rhScanLastGood.set(key, { at: Date.now(), v });
-  if (rhScanLastGood.size > 300) rhScanLastGood.delete(rhScanLastGood.keys().next().value);
+  if (rhScanHasMarketEvidence(v)) {
+    rhScanLastGood.set(key, { at: Date.now(), v });
+    if (rhScanLastGood.size > 300) rhScanLastGood.delete(rhScanLastGood.keys().next().value);
+  }
   rhScanCache.set(key, { at: Date.now(), v });
   if (rhScanCache.size > 200) rhScanCache.delete(rhScanCache.keys().next().value);
   return v;
@@ -39099,7 +39147,7 @@ async function gatherRhScan(address) {
   const key = String(address || "").trim().toLowerCase();
   if (!/^0x[0-9a-f]{40}$/.test(key)) return null;
   const cached = rhScanCache.get(key);
-  if (cached && Date.now() - cached.at < 60_000) return cached.v;
+  if (cached && Date.now() - cached.at < rhScanCacheTtl(cached.v)) return cached.v;
   const pending = rhScanInFlight.get(key);
   if (pending) return pending;
   const task = gatherRhScanUncollapsed(address).finally(() => {
@@ -39225,7 +39273,7 @@ async function sendRhScanCard(chatId, address, options = {}) {
   const fastCandidate = rhTickerCandidateForTarget(options.tickerSymbol, address);
   const cachedScan = rhScanCache.get(String(address || "").toLowerCase());
   const fullScanPromise = gatherRhScan(address).catch(() => null);
-  if (!(cachedScan && Date.now() - Number(cachedScan.at || 0) < 60_000)) {
+  if (!(cachedScan && Date.now() - Number(cachedScan.at || 0) < rhScanCacheTtl(cachedScan.v))) {
     const quickInfo = {
       address, chain: "robinhood", symbol: fastCandidate?.symbol || options.tickerSymbol || "RH",
       name: fastCandidate?.name || fastCandidate?.symbol || options.tickerSymbol || "Robinhood token",
@@ -39245,8 +39293,10 @@ async function sendRhScanCard(chatId, address, options = {}) {
     if (sent?.message_id) {
       void (async () => {
         const loaded = await fullScanPromise;
-        if (!loaded) {
-          const failedText = [String(options.contextHtml || "").trim(), formatRhScanCard(quickInfo), "⚠️ <i>Deep providers are still catching up — tap Refresh in More.</i>"].filter(Boolean).join("\n\n");
+        if (!loaded || !rhScanHasMarketEvidence(loaded)) {
+          const message = options.message || null;
+          const callerLine = await buildScanCallerFooter(chatId, address, Number(loaded?.mc || quickInfo.mc || 0), message).catch(() => "");
+          const failedText = [String(options.contextHtml || "").trim(), formatRhScanCard(quickInfo), callerLine, "⚠️ <i>Deep providers are still catching up — tap Refresh in More.</i>"].filter(Boolean).join("\n\n");
           if (quickHasPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: sent.message_id, caption: failedText, parse_mode: "HTML", reply_markup: kb }).catch(() => {});
           else await telegram("editMessageText", { chat_id: chatId, message_id: sent.message_id, text: failedText, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb }).catch(() => {});
           return;
