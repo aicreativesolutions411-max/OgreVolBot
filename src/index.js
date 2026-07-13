@@ -9574,6 +9574,19 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     // SlimeCash: P2P send. Same 0.5% fee as site trades (TRADE_FEE_BPS), collected
     // atomically in the send transaction to CONFIG.feeWallet.
+
+    // SlimeCash: convert between the app's core assets (SOL/USDC/PYUSD) through
+    // Jupiter — this is how Venmo-funded PYUSD becomes tradable SOL in one tap.
+    if (request.method === "POST" && pathname === "/api/web/cash/convert") {
+      const body = await readJsonRequestBody(request);
+      try {
+        const result = await webCashConvert(auth.userId, body);
+        sendWebJson(request, response, 200, { ok: true, ...result });
+      } catch (error) {
+        sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) });
+      }
+      return;
+    }
     if (request.method === "POST" && pathname === "/api/web/cash/send") {
       const body = await readJsonRequestBody(request);
       try {
@@ -68339,6 +68352,124 @@ async function webCashSendSolCore(userId, body = {}) {
     feeSol: lamportsToSol(feeLamports),
     destination: destination.toBase58(),
     signature
+  };
+}
+
+const CASH_CONVERT_ASSETS = {
+  SOL: { mint: SOL_MINT, decimals: 9 },
+  USDC: { mint: SOLANA_USDC_MINT, decimals: 6 },
+  PYUSD: { mint: SOLANA_PYUSD_MINT, decimals: 6 }
+};
+
+async function webCashConvert(userId, body = {}) {
+  return runIdempotentMoneyOp("cash-convert", userId,
+    firstString(body.convertAttemptId, body.sendAttemptId, body.clientRequestId),
+    () => webCashConvertCore(userId, body),
+    { busyMessage: "This convert is already running - SlimeCash won't run it twice." });
+}
+
+// Jupiter swap between SlimeCash's core assets. Fee: when JUPITER_REFERRAL_ACCOUNT is
+// configured the standard 0.5% is embedded in the route (collected by Jupiter referral,
+// same pot as connected-wallet trades); otherwise a best-effort SOL fee goes to
+// CONFIG.feeWallet after the swap (PvP fee pattern - never blocks or reverses the swap).
+async function webCashConvertCore(userId, body = {}) {
+  const from = String(body.from || "").trim().toUpperCase();
+  const to = String(body.to || "").trim().toUpperCase();
+  const fromSpec = CASH_CONVERT_ASSETS[from];
+  const toSpec = CASH_CONVERT_ASSETS[to];
+  if (!fromSpec || !toSpec || from === to) throw new Error("Pick two different assets from SOL, USDC, and PYUSD.");
+  const wallet = await cashPrimaryWallet(userId);
+  if (!wallet) {
+    const error = new Error("Create your SlimeCash wallet first.");
+    error.statusCode = 404;
+    throw error;
+  }
+  const keypair = decryptWallet(wallet);
+  const amountRaw = from === "SOL"
+    ? BigInt(solToLamports(parsePositiveNumber(String(body.amount ?? body.amountSol ?? ""))))
+    : parseCashDecimalToRaw(body.amount ?? body.amountUsdc, 6, `${from} amount`);
+  if (amountRaw <= 0n) throw new Error("Enter an amount greater than zero.");
+
+  const solBalance = await getSolBalanceCached(keypair.publicKey, { force: true });
+  if (from === "SOL") {
+    const required = Number(amountRaw) + 25_000 + CONFIG.buyReserveLamports;
+    if (solBalance < required) {
+      throw new Error(`Not enough SOL. You have ${lamportsToSol(solBalance)} SOL and this convert needs ${lamportsToSol(required)} including network costs.`);
+    }
+  } else {
+    const lookup = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey, { force: true });
+    const total = (lookup.accounts || []).filter((account) => account.mint === fromSpec.mint).reduce((sum, account) => sum + account.rawAmount, 0n);
+    if (total < amountRaw) {
+      throw new Error(`Not enough ${from}. You have $${rawCashAmountToUi(total, 6)} and tried to convert $${rawCashAmountToUi(amountRaw, 6)}.`);
+    }
+    if (solBalance < 25_000) throw new Error("Converts need a little SOL for network fees. Add about 0.001 SOL first.");
+  }
+
+  const referralAccount = CONFIG.connectedTradeFeeBps > 0 ? CONFIG.jupiterReferralAccount : "";
+  const prebuiltOrder = referralAccount
+    ? await createJupiterOrder({
+        taker: keypair.publicKey,
+        inputMint: fromSpec.mint,
+        outputMint: toSpec.mint,
+        amount: String(amountRaw),
+        slippageBps: 100,
+        referralAccount,
+        referralFee: CONFIG.bundleFeeBps
+      }).catch(() => null)
+    : null;
+  const swap = await executeJupiterSwap({
+    signer: keypair,
+    inputMint: fromSpec.mint,
+    outputMint: toSpec.mint,
+    amount: String(amountRaw),
+    slippageBps: 100,
+    prebuiltOrder
+  });
+
+  let feeMode = referralAccount && prebuiltOrder ? "referral" : "none";
+  if (feeMode === "none" && CONFIG.feeWallet) {
+    try {
+      let feeUsd = 0;
+      if (from === "SOL") {
+        const solUsd = (await getSolUsdPrice({ timeoutMs: 2_000 }).catch(() => 0)) || 0;
+        feeUsd = (Number(amountRaw) / 1e9) * solUsd * CONFIG.bundleFeeBps / 10_000;
+      } else {
+        feeUsd = Number(rawCashAmountToUi(amountRaw, 6)) * CONFIG.bundleFeeBps / 10_000;
+      }
+      const solUsd = (await getSolUsdPrice({ timeoutMs: 2_000 }).catch(() => 0)) || 0;
+      const feeLamports = solUsd > 0 ? Math.round((feeUsd / solUsd) * 1e9) : 0;
+      if (feeLamports >= 5_000) {
+        const feeTx = new Transaction().add(SystemProgram.transfer({
+          fromPubkey: keypair.publicKey,
+          toPubkey: new PublicKey(CONFIG.feeWallet),
+          lamports: feeLamports
+        }));
+        await sendLegacyTransaction(feeTx, [keypair]);
+        feeMode = "sol";
+      }
+    } catch { /* best-effort - the convert itself already landed */ }
+  }
+
+  invalidateWalletReadCache(wallet.publicKey);
+  await audit("cash_convert", {
+    userId,
+    from,
+    to,
+    amount: from === "SOL" ? lamportsToSol(Number(amountRaw)) : rawCashAmountToUi(amountRaw, 6),
+    outputAmount: String(swap.outputAmount || ""),
+    feeMode,
+    signature: swap.signature
+  });
+  return {
+    action: "cash-convert",
+    from,
+    to,
+    amount: from === "SOL" ? lamportsToSol(Number(amountRaw)) : rawCashAmountToUi(amountRaw, 6),
+    outputAmount: String(swap.outputAmount || ""),
+    outputUi: toSpec.decimals === 9
+      ? lamportsToSol(Number(swap.outputAmount || 0))
+      : rawCashAmountToUi(BigInt(swap.outputAmount || 0), 6),
+    signature: swap.signature
   };
 }
 

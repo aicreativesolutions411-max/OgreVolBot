@@ -329,3 +329,7 @@ a { color: var(--mint); text-decoration: none; }
   max-width: 88vw; text-align: center;
 }
 .toast.bad { border-color: var(--red); color: var(--red); }
+
+/* Convert */
+.action-row-4 { grid-template-columns: repeat(4, 1fr); }
+.action-row-4 .btn { padding: 13px 4px; font-size: 13px; }

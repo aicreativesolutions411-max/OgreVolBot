@@ -39,10 +39,11 @@
       <div id="balanceUsd" class="balance-usd">$0.00</div>
       <div id="balanceSub" class="balance-sub">loading…</div>
     </div>
-    <div class="action-row">
+    <div class="action-row action-row-4">
       <button id="addCashBtn" class="btn primary" type="button">Add cash</button>
       <button id="sendQuickBtn" class="btn ghost" type="button">Send</button>
       <button id="receiveBtn" class="btn ghost" type="button">Receive</button>
+      <button id="convertBtn" class="btn ghost" type="button">Convert</button>
     </div>
     <div class="cash-card" id="payCard">
       <img src="/cash/img/card.webp" alt="" class="cash-card-art">
@@ -393,6 +394,36 @@
     <div id="installSteps" class="guide-steps"></div>
     <button id="openInstallBrowserBtn" class="btn ghost block" type="button">Open install page in browser</button>
     <button class="btn primary block" data-close="installguide" type="button">Got it</button>
+  </div>
+</div>
+
+<!-- CONVERT SHEET -->
+<div id="convert" class="sheet-backdrop" hidden>
+  <div class="sheet">
+    <button class="sheet-close" data-close="convert" type="button" aria-label="Close">×</button>
+    <div class="sheet-title">Convert</div>
+    <p class="sheet-copy">Swap between your dollars and SOL instantly. Turn Venmo PYUSD into SOL to trade coins, or park profits back in dollars.</p>
+    <label class="field-label">From</label>
+    <div class="asset-switch">
+      <button class="guide-pill active" data-convert-from="PYUSD" type="button">PYUSD</button>
+      <button class="guide-pill" data-convert-from="USDC" type="button">USDC</button>
+      <button class="guide-pill" data-convert-from="SOL" type="button">SOL</button>
+    </div>
+    <label class="field-label">To</label>
+    <div class="asset-switch">
+      <button class="guide-pill active" data-convert-to="SOL" type="button">SOL</button>
+      <button class="guide-pill" data-convert-to="USDC" type="button">USDC</button>
+      <button class="guide-pill" data-convert-to="PYUSD" type="button">PYUSD</button>
+    </div>
+    <label class="field-label" for="convertAmount">Amount</label>
+    <div class="amount-wrap">
+      <input id="convertAmount" class="field amount" type="number" inputmode="decimal" min="0" step="any" placeholder="0.00">
+      <button id="convertMaxBtn" class="unit-toggle" type="button">MAX</button>
+    </div>
+    <div id="convertHint" class="field-hint"></div>
+    <button id="convertGoBtn" class="btn primary block" type="button">Convert</button>
+    <div id="convertStatus" class="status"></div>
+    <a class="more-item" href="/fun" target="_blank" rel="noopener" style="border-bottom:0; margin-top:6px">Want memecoins? Open the Terminal ↗</a>
   </div>
 </div>
 

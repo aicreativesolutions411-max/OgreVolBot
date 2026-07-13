@@ -25,6 +25,8 @@
     usdc: 0,
     pyusdRaw: null,
     pyusd: 0,
+    convertFrom: "PYUSD",
+    convertTo: "SOL",
     tokens: [],
     solUsd: 0,
     tokenUsd: {},          // mint -> priceUsd
@@ -467,6 +469,7 @@
       $("depositWatch").className = "status ok";
       notifyIncoming("PYUSD received", `+$${gainedPyusd.toFixed(2)} arrived in SlimeCash`);
       renderActivity();
+      setTimeout(() => toast("Tap Convert to turn PYUSD into SOL for trading"), 3600);
     }
     if (previousSol !== null && state.lamports > previousSol + 10000) {
       const gainedSol = (state.lamports - previousSol) / 1e9;
@@ -1371,6 +1374,85 @@
   $("installBtn").addEventListener("click", installCashApp);
   $("installOnboardBtn").addEventListener("click", installCashApp);
   $("openInstallBrowserBtn").addEventListener("click", openInstallPageInBrowser);
+
+  /* ---------------- convert (Jupiter swap between core assets) ---------------- */
+  function convertBalances() {
+    return {
+      PYUSD: state.pyusd,
+      USDC: state.usdc,
+      SOL: Math.max(0, (state.lamports || 0) / 1e9 - 0.004)
+    };
+  }
+  function renderConvert() {
+    document.querySelectorAll("[data-convert-from]").forEach((pill) => pill.classList.toggle("active", pill.dataset.convertFrom === state.convertFrom));
+    document.querySelectorAll("[data-convert-to]").forEach((pill) => pill.classList.toggle("active", pill.dataset.convertTo === state.convertTo));
+    const balance = convertBalances()[state.convertFrom] || 0;
+    const shown = state.convertFrom === "SOL" ? balance.toFixed(4) : balance.toFixed(2);
+    $("convertHint").textContent = `Available: ${state.convertFrom === "SOL" ? `${shown} SOL` : `$${shown} ${state.convertFrom}`}`;
+    $("convertHint").className = "field-hint";
+    $("convertGoBtn").textContent = `Convert ${state.convertFrom} → ${state.convertTo}`;
+  }
+  function openConvert() {
+    if (!state.wallet) { toast("Wallet still setting up — try again in a second.", true); return; }
+    if (state.pyusd > 0.01) { state.convertFrom = "PYUSD"; state.convertTo = "SOL"; }
+    renderConvert();
+    $("convertStatus").textContent = "";
+    $("convertStatus").className = "status";
+    openSheet("convert");
+  }
+  async function runConvert() {
+    const amount = Number($("convertAmount").value || 0);
+    const status = $("convertStatus");
+    if (!(amount > 0)) { status.textContent = "Enter an amount."; status.className = "status bad"; return; }
+    if (state.convertFrom === state.convertTo) { status.textContent = "Pick two different assets."; status.className = "status bad"; return; }
+    const button = $("convertGoBtn");
+    button.disabled = true;
+    button.textContent = "Converting…";
+    const result = await post("/api/web/cash/convert", {
+      from: state.convertFrom,
+      to: state.convertTo,
+      amount: String(amount),
+      convertAttemptId: crypto.randomUUID()
+    });
+    button.disabled = false;
+    renderConvert();
+    if (result.ok) {
+      const outText = result.data.outputUi
+        ? (result.data.to === "SOL" ? `${Number(result.data.outputUi).toFixed(4)} SOL` : `$${Number(result.data.outputUi).toFixed(2)} ${result.data.to}`)
+        : result.data.to;
+      status.textContent = `Converted — you got ${outText}.`;
+      status.className = "status ok";
+      addActivity({ type: "in", title: `Converted to ${result.data.to}`, sub: `${result.data.from} → ${result.data.to}`, asset: result.data.to, amountUsd: state.convertFrom === "SOL" ? amount * state.solUsd : amount, signature: result.data.signature || "", at: Date.now() });
+      state.activity = [];
+      renderActivity();
+      $("convertAmount").value = "";
+      toast(`Converted 🤝 ${outText}`);
+      refreshBalance({ silent: true });
+    } else {
+      status.textContent = result.data.error || "Convert failed.";
+      status.className = "status bad";
+    }
+  }
+  $("convertBtn").addEventListener("click", openConvert);
+  $("convertGoBtn").addEventListener("click", runConvert);
+  $("convertMaxBtn").addEventListener("click", () => {
+    const balance = convertBalances()[state.convertFrom] || 0;
+    $("convertAmount").value = state.convertFrom === "SOL" ? balance.toFixed(4) : balance.toFixed(2);
+  });
+  document.addEventListener("click", (event) => {
+    const fromPill = event.target.closest("[data-convert-from]");
+    if (fromPill) {
+      state.convertFrom = fromPill.dataset.convertFrom;
+      if (state.convertTo === state.convertFrom) state.convertTo = state.convertFrom === "SOL" ? "USDC" : "SOL";
+      renderConvert();
+    }
+    const toPill = event.target.closest("[data-convert-to]");
+    if (toPill) {
+      state.convertTo = toPill.dataset.convertTo;
+      if (state.convertTo === state.convertFrom) state.convertFrom = state.convertTo === "SOL" ? "PYUSD" : "SOL";
+      renderConvert();
+    }
+  });
 
   $("cashOutBtn").addEventListener("click", () => openSheet("cashout"));
   $("cashOutPyusdBtn").addEventListener("click", () => {
