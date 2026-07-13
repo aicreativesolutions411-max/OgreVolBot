@@ -1988,6 +1988,15 @@ test("scan Security fills from our own RPC when RugCheck returns null (no more n
 });
 
 test("Robinhood address routing proves wallet versus ERC-20 before scan and tracking", () => {
+  assert.match(serverSource, /import \{ resolveRhPoolToken, rhResolvedPoolHints \} from "\.\/lib\/rhPoolResolver\.js"/);
+  assert.match(functionBody(serverSource, "resolveScanTargetFromText"), /resolveRhPoolToken\(evm\[0\]\)/);
+  assert.match(functionBody(serverSource, "resolveExplicitScanTargetsFromText"), /resolveRhPoolToken\(m\)/);
+  assert.match(functionBody(serverSource, "resolveAllScanTargetsFromText"), /resolveRhPoolToken\(m\)/);
+  assert.match(functionBody(serverSource, "gatherRhScan"), /resolveRhPoolToken\(address\)/);
+  assert.match(functionBody(serverSource, "sendRhScanCard"), /address = await resolveRhPoolToken\(address\)/);
+  assert.match(functionBody(serverSource, "mergedDexMetadataForToken"), /filter\(\(pair\) => pairMatchesToken\(pair, tokenMint\)\)/);
+  assert.match(functionBody(serverSource, "mergedDexMetadataForToken"), /dexPairCompleteness/);
+  assert.match(functionBody(serverSource, "gatherSlimeScan"), /mergedDexMetadataForToken\(mint, pairs, best\)/);
   const look = functionBody(serverSource, "handleTelegramLookCommand");
   assert.match(look, /await rhTokenContractProof\(rhAddr\)/);
   assert.match(look, /else await sendWalletScanCard\(chatId, rhAddr\)/);
@@ -1995,6 +2004,10 @@ test("Robinhood address routing proves wallet versus ERC-20 before scan and trac
   assert.match(xReply, /const token = await rhTokenContractProof/);
   assert.match(xReply, /if \(!token\.contract\) return await buildXMapReply/);
   const rhScan = functionBody(serverSource, "gatherRhScanUncollapsed");
+  assert.match(rhScan, /const poolHints = rhResolvedPoolHints\(a\)/);
+  assert.match(rhScan, /hintedPairsPromise/);
+  assert.match(rhScan, /mergedDexMetadataForToken\(a, pairs, pair\)/);
+  assert.match(rhScan, /aggregateDexPairActivity\(a, pairs\)/);
   assert.match(rhScan, /const contractProof = await rhTokenContractProof\(a\)/);
   assert.match(rhScan, /if \(!contractProof\.contract\) return null/);
   const proof = functionBody(serverSource, "rhTokenContractProof");

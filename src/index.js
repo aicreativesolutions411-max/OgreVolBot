@@ -69,10 +69,11 @@ import {
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVanityPoolFile, keypairToPoolEntry, poolEntryToKeypair, matchesVanity } from "./lib/vanityMint.js";
-import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, evmWalletFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenInfo, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
+import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, evmWalletFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenInfo, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, rhTokenContractUri, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
 import { getNoxaScan, fetchNoxaFeed, fetchPoolBuys, NOXA_RH } from "./lib/noxaLaunchpad.js";
 import { rhWalletScan } from "./lib/walletScan.js";
 import { classifyRhAddress } from "./lib/rhAddressKind.js";
+import { resolveRhPoolToken, rhResolvedPoolHints } from "./lib/rhPoolResolver.js";
 import { finiteWalletNumber, normalizeSolWalletPnlSummary, normalizeSolWalletPositions } from "./lib/solWalletPnl.js";
 import { aggregateDexPairActivity, volumeFallbackFromOhlcv } from "./lib/scanActivity.js";
 import { renderAllSlimewirePfps, makeSlimewirePfp, availableFrames as availablePfpFrames, PFP_FRAMES, renderSlimeStudioGallery, slimeStudioComboCount, makeSlimeStudioPfp, listCharacterFiles, characterPfpCount, makeCharacterPfp } from "./lib/pfp.js";
@@ -11449,12 +11450,13 @@ async function resolveTokenAvatarRecord(mint = "", row = {}) {
       telegramUrl: firstString(rememberedIdentity?.telegramUrl),
       websiteUrl: firstString(rememberedIdentity?.websiteUrl)
     });
-    const [dexResult, noxaMeta, geckoResult, blockscoutMeta, bankrArtwork] = await Promise.all([
+    const [dexResult, noxaMeta, geckoResult, blockscoutMeta, bankrArtwork, launchMetadata] = await Promise.all([
       fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${address}`, { timeoutMs: 1_500 }).catch(() => null),
       getNoxaRhTokenMetadata(address, { timeoutMs: 1_400 }).catch(() => ({})),
       fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${address}/info`, { timeoutMs: 1_400 }).catch(() => null),
       fetchJson(`https://robinhoodchain.blockscout.com/api/v2/tokens/${address}`, { timeoutMs: 1_400 }).catch(() => null),
-      rhBankrArtworkMap().catch(() => new Map())
+      rhBankrArtworkMap().catch(() => new Map()),
+      getRhOnchainLaunchMetadata(address).catch(() => ({}))
     ]);
     const dexPairs = (dexResult?.pairs || []).filter((pair) => String(pair?.chainId || "").toLowerCase() === "robinhood");
     const dexPair = dexPairs.sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0))[0] || null;
@@ -11464,6 +11466,7 @@ async function resolveTokenAvatarRecord(mint = "", row = {}) {
       noxaMeta.imageUrl,
       dexPair?.info?.imageUrl,
       bankr.imageUrl,
+      launchMetadata.imageUrl,
       gecko.image_url,
       gecko.imageUrl,
       blockscoutMeta?.icon_url
@@ -11475,21 +11478,12 @@ async function resolveTokenAvatarRecord(mint = "", row = {}) {
       source: noxaMeta.imageUrl ? "noxa"
         : dexPair?.info?.imageUrl ? "dex"
           : bankr.imageUrl ? "bankr"
+            : launchMetadata.imageUrl ? "robinhood-contract-metadata"
             : firstString(gecko.image_url, gecko.imageUrl) ? "geckoterminal" : "blockscout",
       state: "ready",
-      twitterUrl: firstString((socials.find((item) => /twitter|x/i.test(item?.type || item?.label || "")) || {}).url),
-      telegramUrl: firstString((socials.find((item) => /telegram|tg/i.test(item?.type || item?.label || "")) || {}).url),
-      websiteUrl: firstString(websites[0]?.url, bankr.websiteUrl)
-    });
-    const launchMetadata = await getRhOnchainLaunchMetadata(address, bankr.metadataUri).catch(() => ({}));
-    const launchAvatarUrl = normalizeTokenAvatarUrl(launchMetadata.imageUrl);
-    if (launchAvatarUrl) return tokenAvatarRecord(address, {
-      avatarUrl: launchAvatarUrl,
-      source: "robinhood-onchain-metadata",
-      state: "ready",
-      twitterUrl: firstString(launchMetadata.twitterUrl, bankr.twitterUrl),
-      telegramUrl: firstString(launchMetadata.telegramUrl),
-      websiteUrl: firstString(launchMetadata.websiteUrl, bankr.websiteUrl)
+      twitterUrl: firstString((socials.find((item) => /twitter|x/i.test(item?.type || item?.label || "")) || {}).url, launchMetadata.twitterUrl, bankr.twitterUrl),
+      telegramUrl: firstString((socials.find((item) => /telegram|tg/i.test(item?.type || item?.label || "")) || {}).url, launchMetadata.telegramUrl),
+      websiteUrl: firstString(websites[0]?.url, bankr.websiteUrl, launchMetadata.websiteUrl)
     });
     return tokenAvatarRecord(address, {
       avatarUrl: "",
@@ -11584,9 +11578,11 @@ async function sendWebTokenAvatar(request, response, requestUrl) {
     requestUrl.searchParams.get("tokenMint")
   );
   const avatar = await tokenAvatarForMint(mint);
+  const ready = avatar?.state === "ready" && avatar?.avatarUrl;
   response.writeHead(200, {
     "Content-Type": "application/json",
-    "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
+    // Never preserve normal metadata warm-up as a day-long missing PFP in a browser or CDN.
+    "Cache-Control": ready ? "public, max-age=86400, stale-while-revalidate=604800" : "no-store, max-age=0",
     ...webCorsHeaders(request)
   });
   response.end(JSON.stringify({ ok: true, avatar }));
@@ -11606,10 +11602,45 @@ function sendCachedWebTokenImage(request, response, cachedImage, cacheStatus = "
 function sendWebTokenImageUnavailable(request, response, status = 404, reason = "Token image unavailable") {
   response.writeHead(status, {
     "Content-Type": "text/plain; charset=utf-8",
-    "Cache-Control": "public, max-age=30, stale-while-revalidate=120",
+    // A metadata lookup may finish seconds later; never let an intermediary pin the temporary 404.
+    "Cache-Control": "no-store, max-age=0",
     ...webCorsHeaders(request)
   });
   response.end(reason);
+}
+
+async function fetchRawTokenImageBuffer(imageUrl = "", timeoutMs = 2_400) {
+  const candidates = imageUriGatewayCandidates(imageUrl).sort((left, right) => {
+    const rank = (value) => /\/\/ipfs\.io\//i.test(value) ? 0 : /gateway\.pinata\.cloud/i.test(value) ? 1 : 2;
+    return rank(left) - rank(right);
+  });
+  const deadline = Date.now() + Math.max(500, Number(timeoutMs) || 2_400);
+  for (const candidate of candidates) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), remainingMs);
+    try {
+      const remote = await fetch(candidate, {
+        signal: controller.signal,
+        redirect: "follow",
+        headers: {
+          "Accept": "image/avif,image/webp,image/png,image/jpeg,image/gif,image/*;q=0.8",
+          "User-Agent": "Mozilla/5.0 SlimeWire/1.0"
+        }
+      });
+      if (!remote.ok) continue;
+      const contentType = String(remote.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+      const contentLength = Number(remote.headers.get("content-length") || 0);
+      if (!/^image\/(?:avif|webp|png|jpe?g|gif|svg\+xml)$/.test(contentType)) continue;
+      if (contentLength > 1_000_000) continue;
+      const buffer = Buffer.from(await remote.arrayBuffer());
+      if (buffer.length < 80 || buffer.length > 1_000_000) continue;
+      return { buffer, contentType, cachedAt: Date.now() };
+    } catch { /* try the next exact-IPFS gateway */ }
+    finally { clearTimeout(timer); }
+  }
+  return null;
 }
 
 async function sendWebTokenImage(request, response, requestUrl) {
@@ -11675,6 +11706,16 @@ async function sendWebTokenImage(request, response, requestUrl) {
   let imageFetch = tokenImageFetchInFlight.get(cacheKey);
   if (!imageFetch && tokenImageFetchInFlight.size < 12) {
     imageFetch = (async () => {
+      // Robinhood contract metadata commonly points to AVIF that browsers decode but this host's
+      // libvips build cannot. Serve a verified, size-capped raw IPFS image first in that case.
+      const ipfsArtwork = /(?:ipfs:\/\/|\/ipfs\/)/i.test(String(avatar.avatarUrl || ""));
+      const raw = ipfsArtwork ? await fetchRawTokenImageBuffer(avatar.avatarUrl, 2_400) : null;
+      if (raw) {
+        if (raw.buffer.length <= 128 * 1024) tokenImageResponseCache.set(cacheKey, raw);
+        tokenImageFailureCache.delete(cacheKey);
+        pruneTokenImageResponseCache();
+        return raw;
+      }
       const { fetchLogoBuffer } = await import("./lib/slimeMapRender.mjs");
       const buffer = await fetchLogoBuffer(avatar.avatarUrl, 96, 2_600).catch(() => null);
       if (!buffer) return null;
@@ -28583,7 +28624,12 @@ function bestDexPairForToken(tokenMint, pairs) {
 }
 
 function pairMatchesToken(pair, tokenMint) {
-  return pair?.baseToken?.address === tokenMint || pair?.quoteToken?.address === tokenMint;
+  const target = String(tokenMint || "");
+  const addresses = [String(pair?.baseToken?.address || ""), String(pair?.quoteToken?.address || "")];
+  if (addresses.includes(target)) return true;
+  // EVM addresses are case-insensitive; Solana base58 mints are not.
+  return /^0x[0-9a-fA-F]{40}$/.test(target)
+    && addresses.some((address) => address.toLowerCase() === target.toLowerCase());
 }
 
 function compareDexPairsForSniper(a, b) {
@@ -28593,7 +28639,8 @@ function compareDexPairsForSniper(a, b) {
 }
 
 function metadataFromDexPair(tokenMint, best = null) {
-  const token = best?.baseToken?.address === tokenMint ? best.baseToken : best?.quoteToken || best?.baseToken || {};
+  const baseMatches = String(best?.baseToken?.address || "").toLowerCase() === String(tokenMint || "").toLowerCase();
+  const token = baseMatches ? best?.baseToken : best?.quoteToken || best?.baseToken || {};
   const links = dexPairLinks(best);
   const dexId = firstString(best?.dexId, best?.dexName);
   const pairAddress = firstString(best?.pairAddress, best?.address);
@@ -28629,6 +28676,7 @@ function metadataFromDexPair(tokenMint, best = null) {
       token.marketCapUsd,
       token.fdv
     ),
+    priceUsd: firstMeaningfulNumber(best?.priceUsd, best?.price_usd, token?.priceUsd),
     fdv: firstNumber(best?.fdv),
     priceChange: best?.priceChange || null,
     liquidityUsd: firstNumber(best?.liquidity?.usd),
@@ -28680,6 +28728,37 @@ function mergeTokenMarketMetadata(primary = null, fallback = null) {
     volume: Object.keys(volume).length ? volume : null,
     txns: Object.keys(txns).length ? txns : null,
   };
+}
+
+function dexPairCompleteness(pair = {}) {
+  let score = 0;
+  if (firstMeaningfulNumber(pair?.priceUsd, pair?.price_usd)) score += 8;
+  if (firstMeaningfulNumber(pair?.marketCap, pair?.fdv)) score += 8;
+  if (firstMeaningfulNumber(pair?.liquidity?.usd)) score += 7;
+  if (firstMeaningfulNumber(pair?.volume?.h24, pair?.volume?.["24h"])) score += 6;
+  if (firstMeaningfulNumber(pair?.volume?.h1, pair?.volume?.["1h"])) score += 4;
+  if (Number.isFinite(Number(pair?.priceChange?.h1)) || Number.isFinite(Number(pair?.priceChange?.h24))) score += 4;
+  if (pair?.txns?.h1 || pair?.txns?.h24) score += 3;
+  if (firstString(pair?.info?.imageUrl, pair?.baseToken?.imageUrl, pair?.quoteToken?.imageUrl)) score += 3;
+  if ((pair?.info?.socials || []).length || (pair?.info?.websites || []).length) score += 2;
+  if (firstMeaningfulNumber(pair?.pairCreatedAt, pair?.createdAt)) score += 2;
+  return score;
+}
+
+// Anchor price and liquidity to the deepest sane pool, then fill only missing
+// fields from every other exact-token pool in completeness order. A tiny but
+// decorated pool cannot replace the real market, and an incomplete deep pool
+// cannot leave otherwise available card fields blank.
+function mergedDexMetadataForToken(tokenMint, pairs = [], preferredPair = null) {
+  const matching = (Array.isArray(pairs) ? pairs : []).filter((pair) => pairMatchesToken(pair, tokenMint));
+  const primary = preferredPair || bestDexPairForToken(tokenMint, matching);
+  let merged = primary ? metadataFromDexPair(tokenMint, primary) : null;
+  const fallbacks = matching
+    .filter((pair) => pair !== primary)
+    .sort((left, right) => dexPairCompleteness(right) - dexPairCompleteness(left)
+      || compareDexPairsForSniper(left, right));
+  for (const pair of fallbacks) merged = mergeTokenMarketMetadata(merged, metadataFromDexPair(tokenMint, pair));
+  return merged;
 }
 
 function dexPairLinks(pair = null) {
@@ -35380,7 +35459,7 @@ async function resolveScanTargetFromText(text, urls = [], options = {}) {
   const blob = [String(text || ""), ...(Array.isArray(urls) ? urls : [])].join(" ");
   // 0) Robinhood Chain coin (EVM 0x…40-hex) — returned as-is; buildXReply routes it to the RH scan card.
   const evm = blob.match(/0x[0-9a-fA-F]{40}/);
-  if (evm) return evm[0];
+  if (evm) return await resolveRhPoolToken(evm[0]).catch(() => evm[0]);
   // 1) DexScreener link → pair→mint (must run BEFORE the generic base58 grab, which would keep the pair addr)
   const consumedPairs = new Set();
   const ds = blob.match(/dexscreener\.com\/solana\/([1-9A-HJ-NP-Za-km-z]{32,44})/i);
@@ -35412,7 +35491,7 @@ async function resolveExplicitScanTargetsFromText(text, urls = [], cap = 4) {
     if (v && !seen.has(k)) { seen.add(k); out.push(v); }
   };
   for (const m of (blob.match(/0x[0-9a-fA-F]{40}/g) || [])) {
-    add(m);
+    add(await resolveRhPoolToken(m).catch(() => m));
     if (out.length >= cap) return out.slice(0, cap);
   }
   const consumedPairs = new Set();
@@ -35442,7 +35521,10 @@ async function resolveAllScanTargetsFromText(text, urls = [], cap = 4, options =
   const seen = new Set();
   const add = (v) => { const k = String(v || "").toLowerCase(); if (v && !seen.has(k)) { seen.add(k); out.push(v); } };
   // 0) Robinhood Chain coins (EVM 0x…40-hex) — all of them
-  for (const m of (blob.match(/0x[0-9a-fA-F]{40}/g) || [])) add(m);
+  for (const m of (blob.match(/0x[0-9a-fA-F]{40}/g) || [])) {
+    add(await resolveRhPoolToken(m).catch(() => m));
+    if (out.length >= cap) return out.slice(0, cap);
+  }
   // 1) DexScreener links → pair→mint (before the generic base58 grab). The raw PAIR address from the URL
   //    is CONSUMED — it must never also count as a "second coin" in the bare-mint pass below (live bug:
   //    a tag with one DS link produced two replies — the real coin + a junk 2-holder card for its pair).
@@ -35710,7 +35792,7 @@ async function gatherSlimeScan(mint, options = {}) {
     (CONFIG.solanaTrackerApiKey ? scanFastTimeout(fetchSolanaTrackerTokenReport(mint, { timeoutMs: 3_000 }), 3_200, null) : Promise.resolve(null))
   ]);
   const best = bestDexPairForToken(mint, pairs);
-  let meta = mergeTokenMarketMetadata(mergeTokenMarketMetadata(best ? metadataFromDexPair(mint, best) : null, geckoMeta), cachedMarketMeta);
+  let meta = mergeTokenMarketMetadata(mergeTokenMarketMetadata(mergedDexMetadataForToken(mint, pairs, best), geckoMeta), cachedMarketMeta);
   const dexActivity = aggregateDexPairActivity(mint, pairs);
   if (dexActivity.volume || dexActivity.txns) {
     // Price/liquidity come from the deepest sane pool, while volume and transaction counts span every
@@ -39837,19 +39919,34 @@ async function gatherRhScanUncollapsed(address) {
     headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
     timeoutMs: 6_500
   }).catch(() => null);
-  const [dsRes, dsV1, geckoRes, saf, feedRows, directToken, launchMap] = await Promise.all([
+  // If this scan began from a pasted LP address, the pool resolver may already
+  // have the exact market row that proved pool -> token. Reuse it instead of
+  // throwing away good price/MC/liq/volume and depending on a second token-wide
+  // lookup from Render's shared IP. Retry the exact pool route concurrently when
+  // the resolver used its on-chain fallback and only retained the pool address.
+  const poolHints = rhResolvedPoolHints(a);
+  const hintedPairsPromise = Promise.all(poolHints.slice(0, 4).map(async (hint) => {
+    if (hint?.pair && typeof hint.pair === "object") return hint.pair;
+    const direct = await fetchJson(`https://api.dexscreener.com/latest/dex/pairs/robinhood/${hint.poolAddress}`, { timeoutMs: 4_000 }).catch(() => null);
+    return (Array.isArray(direct?.pairs) ? direct.pairs : (direct?.pair ? [direct.pair] : []))
+      .find((row) => String(row?.pairAddress || "").toLowerCase() === String(hint.poolAddress || "").toLowerCase()) || null;
+  })).then((rows) => rows.filter(Boolean));
+  const [dsRes, dsV1, hintedPairs, geckoRes, saf, feedRows, directToken, launchMap] = await Promise.all([
     fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${a}`, { timeoutMs: 6_500 }).catch(() => null),
     rhPromiseTimeout(dsTokenV1Promise, 6_500, null),
+    rhPromiseTimeout(hintedPairsPromise, 4_200, []),
     fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${a}/pools?page=1`, { timeoutMs: 6_500 }).catch(() => null),
     rhPromiseTimeout(rhHoneypotCheck(a, CONFIG.rhChainRpcUrl), 3000, null),
     rhPromiseTimeout(rhFeedTokens(), 2500, []),
     directTokenProof ? Promise.resolve(directTokenProof) : rhPromiseTimeout(rhTokenInfo(a), 3_500, null),
     rhPromiseTimeout(rhLaunchMetaByAddress(), 1500, new Map()),
   ]);
-  const pairs = [...(Array.isArray(dsRes?.pairs) ? dsRes.pairs : []), ...(Array.isArray(dsV1) ? dsV1 : [])]
+  const pairs = [...(Array.isArray(dsRes?.pairs) ? dsRes.pairs : []), ...(Array.isArray(dsV1) ? dsV1 : []), ...(Array.isArray(hintedPairs) ? hintedPairs : [])]
     .filter((p) => String(p.chainId || "").toLowerCase() === "robinhood")
+    .filter((p) => pairMatchesToken(p, a))
     .filter((p, index, all) => index === all.findIndex((row) => String(row?.pairAddress || "").toLowerCase() === String(p?.pairAddress || "").toLowerCase()));
-  const pair = pairs.sort((x, y) => (Number(y.liquidity?.usd) || 0) - (Number(x.liquidity?.usd) || 0))[0] || null;
+  const pair = bestDexPairForToken(a, pairs);
+  const pairMetadata = mergedDexMetadataForToken(a, pairs, pair) || {};
   const pairTarget = rhPairTargetToken(pair, a);
   const pairToken = pairTarget.token || {};
   const gecko = rhGeckoPoolForToken(geckoRes, a);
@@ -39869,22 +39966,23 @@ async function gatherRhScanUncollapsed(address) {
     noxa = await noxaPromise;
   }
   const socials = pairTarget.isBase && Array.isArray(pair?.info?.socials) ? pair.info.socials : [];
-  const website = pairTarget.isBase ? ((Array.isArray(pair?.info?.websites) ? pair.info.websites : [])[0]?.url || "") : "";
+  const website = firstString(pairMetadata.websiteUrl, pairTarget.isBase ? ((Array.isArray(pair?.info?.websites) ? pair.info.websites : [])[0]?.url || "") : "");
   const supply = firstMeaningfulNumber(feed?.totalSupplyUi, noxa?.supply);
-  let priceUsd = firstMeaningfulNumber(pairTarget.isBase ? pair?.priceUsd : null, gecko?.priceUsd, feed?.priceUsd, cachedPrice?.priceUsd, noxa?.priceUsd);
+  let priceUsd = firstMeaningfulNumber(pairTarget.isBase ? pair?.priceUsd : null, pairMetadata.priceUsd, gecko?.priceUsd, feed?.priceUsd, cachedPrice?.priceUsd, noxa?.priceUsd);
   let mc = firstMeaningfulNumber(
     pairTarget.isBase ? pair?.marketCap : null,
     pairTarget.isBase ? pair?.fdv : null,
+    pairMetadata.marketCap,
     gecko?.marketCapUsd,
     feed?.marketCapUsd,
     noxa?.mc,
     priceUsd && supply ? Number(priceUsd) * Number(supply) : null
   ) || 0;
-  let liq = firstMeaningfulNumber(pair?.liquidity?.usd, gecko?.liquidityUsd, feed?.liquidityUsd, noxa?.liq) || 0;
+  let liq = firstMeaningfulNumber(pair?.liquidity?.usd, pairMetadata.liquidityUsd, gecko?.liquidityUsd, feed?.liquidityUsd, noxa?.liq) || 0;
   let vol1 = firstMeaningfulNumber(dexActivity.volume?.h1, pair?.volume?.h1, pair?.volume?.["1h"], gecko?.volume1hUsd, feed?.volume1hUsd, feed?.volumeH1Usd, noxa?.volume1hUsd, noxa?.volumeH1Usd) || 0;
   let vol24 = firstMeaningfulNumber(dexActivity.volume?.h24, pair?.volume?.h24, pair?.volume?.["24h"], gecko?.volume24hUsd, feed?.volume24hUsd, feed?.volume_24h, noxa?.volume24hUsd, noxa?.volumeH24Usd) || 0;
-  const ch1 = firstMeaningfulNumber(pairTarget.isBase ? pair?.priceChange?.h1 : null, pairTarget.isBase ? pair?.priceChange?.["1h"] : null, gecko?.priceChange1h, feed?.priceChange1h, feed?.priceChangeH1, noxa?.ch1, noxa?.priceChange1h);
-  const ch24 = firstMeaningfulNumber(pairTarget.isBase ? pair?.priceChange?.h24 : null, pairTarget.isBase ? pair?.priceChange?.["24h"] : null, gecko?.priceChange24h, feed?.priceChange24h, feed?.priceChangeH24, noxa?.ch24, noxa?.priceChange24h);
+  const ch1 = firstMeaningfulNumber(pairTarget.isBase ? pair?.priceChange?.h1 : null, pairTarget.isBase ? pair?.priceChange?.["1h"] : null, pairMetadata.priceChange?.h1, gecko?.priceChange1h, feed?.priceChange1h, feed?.priceChangeH1, noxa?.ch1, noxa?.priceChange1h);
+  const ch24 = firstMeaningfulNumber(pairTarget.isBase ? pair?.priceChange?.h24 : null, pairTarget.isBase ? pair?.priceChange?.["24h"] : null, pairMetadata.priceChange?.h24, gecko?.priceChange24h, feed?.priceChange24h, feed?.priceChangeH24, noxa?.ch24, noxa?.priceChange24h);
   const holders = firstMeaningfulNumber(pair?.holders, feed?.holders, feed?.holders_count, saf?.holders, noxa?.holders) || 0;
   let createdAt = rhMs(pair?.pairCreatedAt) || rhMs(gecko?.createdAt) || rhMs(feed?.createdAt) || rhMs(cachedCreatedAt) || 0;
   // ATH (GeckoTerminal OHLCV, robinhood network) — real all-time-high price → ATH market cap + how far off it.
@@ -39919,8 +40017,8 @@ async function gatherRhScanUncollapsed(address) {
     athPriceUsd: Number(athPriceUsd) || 0,
     athMc: Number(athMc) || 0,
     fromAthPct: Number.isFinite(fromAthPct) ? fromAthPct : null,
-    symbol: String(firstString(pairToken?.symbol, feed?.symbol, noxa?.symbol) || "").replace(/^\$+/, "").slice(0, 16),
-    name: String(firstString(pairToken?.name, feed?.name, noxa?.name) || "").slice(0, 40),
+    symbol: String(firstString(pairToken?.symbol, pairMetadata.symbol, feed?.symbol, noxa?.symbol) || "").replace(/^\$+/, "").slice(0, 16),
+    name: String(firstString(pairToken?.name, pairMetadata.name, feed?.name, noxa?.name) || "").slice(0, 40),
     priceUsd: Number(priceUsd) || 0,
     mc,
     liq,
@@ -39934,14 +40032,15 @@ async function gatherRhScanUncollapsed(address) {
     createdAt,
     imageUrl: firstString(
       pairTarget.isBase ? pair?.info?.imageUrl : "",
+      pairMetadata.imageUrl,
       pairToken?.imageUrl, pairToken?.logoURI, pairToken?.logo,
       rhLocalImageUrl(a, launchMeta), warmedArt?.imageUrl,
       feed?.imageUrl, feed?.iconUrl, noxa?.imageUrl, noxa?.iconUrl
     ),
     localImagePath: rhLocalImageUrl(a, launchMeta) ? rhTokenImagePath(a) : "",
     iconUrl: firstString(feed?.iconUrl),
-    twitterUrl: firstString((socials.find((s) => /twitter|x/i.test(s.type || s.label || "")) || {}).url, normalizeSocialLink(launchMeta?.x, "twitter")),
-    telegramUrl: firstString((socials.find((s) => /telegram|tg/i.test(s.type || s.label || "")) || {}).url, normalizeSocialLink(launchMeta?.telegram, "telegram")),
+    twitterUrl: firstString(pairMetadata.twitterUrl, (socials.find((s) => /twitter|x/i.test(s.type || s.label || "")) || {}).url, normalizeSocialLink(launchMeta?.x, "twitter")),
+    telegramUrl: firstString(pairMetadata.telegramUrl, (socials.find((s) => /telegram|tg/i.test(s.type || s.label || "")) || {}).url, normalizeSocialLink(launchMeta?.telegram, "telegram")),
     websiteUrl: firstString(website, normalizeSocialLink(launchMeta?.website, "website")),
     safety: saf,   // { verdict: safe|warn|danger|unknown, reasons:[] }
     explorer: `https://robinhoodchain.blockscout.com/token/${a}`,
@@ -40004,7 +40103,10 @@ async function gatherRhScanUncollapsed(address) {
 }
 // RH verdict → the same tone model the Solana card uses (danger/warn/ok) so the card art + wording match.
 async function gatherRhScan(address) {
-  const key = String(address || "").trim().toLowerCase();
+  // Shared guard for web/X/refresh callbacks that can bypass the text parser.
+  // A pool's UNI-V2 wrapper must never be scanned as the promoted coin.
+  const resolvedAddress = await resolveRhPoolToken(address).catch(() => String(address || "").trim());
+  const key = String(resolvedAddress || "").trim().toLowerCase();
   if (!/^0x[0-9a-f]{40}$/.test(key)) return null;
   const cached = rhScanCache.get(key);
   if (cached && Date.now() - cached.at < rhScanCacheTtl(cached.v)) return cached.v;
@@ -40019,7 +40121,7 @@ async function gatherRhScan(address) {
   }
   const pending = rhScanInFlight.get(key);
   if (pending) return pending;
-  const task = gatherRhScanUncollapsed(address).finally(() => {
+  const task = gatherRhScanUncollapsed(resolvedAddress).finally(() => {
     if (rhScanInFlight.get(key) === task) rhScanInFlight.delete(key);
   });
   rhScanInFlight.set(key, task);
@@ -40078,8 +40180,8 @@ function formatRhScanCard(info) {
   const a = info.address;
   const sym = (info.symbol || shortMint(a)).slice(0, 18);
   const name = (info.name || sym).slice(0, 40);
-  const age = info.createdAt > 0 ? scanFmtAge(info.createdAt) : "age n/a";
-  const price = info.priceUsd > 0 ? scanFmtPriceSub(info.priceUsd) : "n/a";
+  const age = info.createdAt > 0 ? scanFmtAge(info.createdAt) : "age checking";
+  const price = info.priceUsd > 0 ? scanFmtPriceSub(info.priceUsd) : "checking";
   const ch = rhChangeInfo(info);
   const chText = Number.isFinite(ch.value) ? `${ch.value >= 0 ? "+" : ""}${ch.value.toFixed(1)}%` : "n/a";
   const vol = rhVolumeInfo(info);
@@ -40100,11 +40202,11 @@ function formatRhScanCard(info) {
     "",
     "📊 <b>Stats</b>",
     `├ USD  <b>${price}</b> (${ch.title} ${chText})`,
-    `├ MC   <b>${info.mc > 0 ? scanFmtMoney(info.mc) : "n/a"}</b>`,
+    `├ MC   <b>${info.mc > 0 ? scanFmtMoney(info.mc) : "checking"}</b>`,
     ...(info.athMc > 0 ? [`├ ATH  <b>${scanFmtMoney(info.athMc)}</b>${info.fromAthPct != null && info.fromAthPct < -1 ? ` <i>(${Math.round(info.fromAthPct)}% from ATH)</i>` : (info.fromAthPct != null && info.fromAthPct >= -1 ? " <i>(at ATH)</i>" : "")}`] : []),
     `├ Vol  <b>${vol.value > 0 ? scanFmtMoney(vol.value) : "checking"}</b> <i>24h</i>`,
-    `├ Holders <b>${info.holders > 0 ? scanFmtSupply(info.holders) : "n/a"}</b>`,
-    `└ Liq  <b>${info.liq > 0 ? scanFmtMoney(info.liq) : "n/a"}</b>`,
+    `├ Holders <b>${info.holders > 0 ? scanFmtSupply(info.holders) : "checking"}</b>`,
+    `└ Liq  <b>${info.liq > 0 ? scanFmtMoney(info.liq) : "checking"}</b>`,
     "",
     `🛡 <b>Safety</b>`,
     `└ ${safeLine}${reasons ? "\n" + reasons : ""}`,
@@ -40147,6 +40249,9 @@ async function renderRhScanCardPng(info, seed = "") {
   }
 }
 async function sendRhScanCard(chatId, address, options = {}) {
+  // Resolve before making the quick card/keyboard so caller tracking and every
+  // buy/chart link also carry the actual token rather than the LP address.
+  address = await resolveRhPoolToken(address).catch(() => String(address || "").trim());
   const fastCandidate = rhTickerCandidateForTarget(options.tickerSymbol, address);
   const cachedScan = rhScanCache.get(String(address || "").toLowerCase());
   const fullScanPromise = gatherRhScan(address).catch(() => null);
@@ -44781,7 +44886,8 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
   const mc = stats.mc;
   const liq = stats.liq;
   const { volume24h, ch24, ch1, buys1, sells1 } = stats;
-  const price = scanFmtPriceSub(pick(Number(bonding?.priceUsd), Number(best?.priceUsd || meta?.priceUsd)) || (mc && supply ? mc / supply : 0));
+  const priceValue = pick(Number(bonding?.priceUsd), Number(best?.priceUsd || meta?.priceUsd)) || (mc && supply ? mc / supply : 0);
+  const price = priceValue > 0 ? scanFmtPriceSub(priceValue) : "checking";
   // ATH (real, from SolanaTracker) — only shown when genuinely at/above the current MC.
   const showAth = ath && Number(ath.mc) > 0 && Number(ath.mc) >= mc * 0.999;
   let athTail = "";
@@ -44835,10 +44941,10 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
     "",
     `📊 <b>Stats</b>`,
     `├ USD  <b>${price}</b> (${scanFmtPct(ch24)})`,
-    `├ MC   <b>${scanFmtMoney(mc)}</b>`,
+    `├ MC   <b>${mc > 0 ? scanFmtMoney(mc) : "checking"}</b>`,
     `├ Vol  <b>${volume24h > 0 ? scanFmtMoney(volume24h) : "checking"}</b> <i>24h</i>`,
-    `├ LP   <b>${scanFmtMoney(liq)}</b>`,
-    `├ Sup  <b>${supply ? scanFmtSupply(supply) : "n/a"}</b>`,
+    `├ LP   <b>${liq > 0 ? scanFmtMoney(liq) : "checking"}</b>`,
+    `├ Sup  <b>${supply ? scanFmtSupply(supply) : "checking"}</b>`,
     `${showAth ? "├" : "└"} 1H   <b>${scanFmtPct(ch1)}</b>  🟢 ${buys1}  🔴 ${sells1}`,
     showAth ? `└ ATH  <b>${scanFmtMoney(ath.mc)}</b>${athTail}` : null,
     "",
@@ -53945,7 +54051,11 @@ function rhMetadataUriFromEncodedCall(value = "") {
 }
 
 async function rhMetadataDocument(metadataUri = "") {
-  for (const candidate of metadataUriGatewayCandidates(metadataUri)) {
+  const candidates = metadataUriGatewayCandidates(metadataUri).sort((left, right) => {
+    const rank = (value) => /\/\/ipfs\.io\//i.test(value) ? 0 : /gateway\.pinata\.cloud/i.test(value) ? 1 : 2;
+    return rank(left) - rank(right);
+  });
+  for (const candidate of candidates) {
     try {
       const metadata = await fetchJson(candidate, {
         headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
@@ -53970,8 +54080,15 @@ async function getRhOnchainLaunchMetadata(address = "", knownMetadataUri = "") {
   const key = String(address || "").trim().toLowerCase();
   if (!/^0x[0-9a-f]{40}$/.test(key)) return {};
   const cached = rhOnchainMetadataCache.get(key);
-  if (cached && Date.now() - cached.at < (cached.imageUrl ? 30 * 24 * 60 * 60_000 : 60 * 60_000)) return cached;
+  // Successful immutable artwork is sticky; image-less metadata is retried quickly because launchers
+  // can publish/update contractURI shortly after the pair first appears.
+  if (cached && Date.now() - cached.at < (cached.imageUrl ? 30 * 24 * 60 * 60_000 : 60_000)) return cached;
   let metadataUri = String(knownMetadataUri || "").trim();
+  if (!metadataUri) {
+    // DropERC20 clones publish their exact PFP metadata here. This survives missing DexScreener,
+    // Blockscout and launcher indexes and avoids ever matching artwork by a duplicate ticker.
+    metadataUri = await rhTokenContractUri(key, CONFIG.rhChainRpcUrl, 1_800).catch(() => "");
+  }
   if (!metadataUri) {
     const creation = await fetchJson(
       `https://robinhoodchain.blockscout.com/api?module=contract&action=getcontractcreation&contractaddresses=${encodeURIComponent(key)}`,

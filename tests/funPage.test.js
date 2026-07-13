@@ -9,12 +9,13 @@ const js = fs.readFileSync(new URL("../web/public/fun.js", import.meta.url), "ut
 const redirects = fs.readFileSync(new URL("../web/public/_redirects", import.meta.url), "utf8");
 const manifest = JSON.parse(fs.readFileSync(new URL("../web/public/fun-manifest.webmanifest", import.meta.url), "utf8"));
 const funWorker = fs.readFileSync(new URL("../web/public/fun-sw.js", import.meta.url), "utf8");
+const rhChain = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
 
 test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL support", () => {
   assert.match(server, /requestUrl\.pathname === "\/fun"[\s\S]{0,300}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
-  assert.match(html, /<script defer src="\/fun\.js\?v=17"><\/script>/);
+  assert.match(html, /<script defer src="\/fun\.js\?v=18"><\/script>/);
 });
 
 test("/fun is installable as a separate PWA with a dedicated-origin escape", () => {
@@ -26,7 +27,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install Fun/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v4/);
+  assert.match(funWorker, /slimewire-fun-v5/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -89,6 +90,10 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(server, /rhNoxaArtworkMap/);
   assert.match(server, /rhBankrArtworkMap/);
   assert.match(server, /getRhOnchainLaunchMetadata/);
+  assert.match(server, /rhTokenContractUri/);
+  assert.match(rhChain, /export async function rhTokenContractUri[\s\S]{0,500}contract\.contractURI\(\)/);
+  assert.match(server, /ready \? "public, max-age=86400, stale-while-revalidate=604800" : "no-store, max-age=0"/);
+  assert.match(server, /function sendWebTokenImageUnavailable[\s\S]{0,260}"Cache-Control": "no-store, max-age=0"/);
   assert.match(server, /row\?\.address && !row\.imageUrl/);
   assert.match(server, /const artworkPromise = enrichRhFeedArtwork\(rows\)/);
   assert.match(server, /await artworkPromise/);
@@ -104,9 +109,12 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(js, /gateway\\\.pinata/);
   assert.doesNotMatch(js, /retries < 3/);
   assert.match(server, /fetchLogoBuffer\(avatar\.avatarUrl, 96, 2_600\)/);
+  assert.match(server, /fetchRawTokenImageBuffer\(avatar\.avatarUrl, 2_400\)/);
+  assert.match(server, /raw\.buffer\.length <= 128 \* 1024/);
   assert.match(server, /tokenImageFetchInFlight\.size < 12/);
   assert.match(server, /TOKEN_IMAGE_RESPONSE_CACHE_MAX = 160/);
   assert.match(server, /TOKEN_AVATAR_FAIL_TTL_MS = 60 \* 1000/);
+  assert.match(server, /cached\.imageUrl \? 30 \* 24 \* 60 \* 60_000 : 60_000/);
   assert.match(server, /rhScanIdentityMapLoad\(\)/);
   assert.match(server, /scheduleTokenAvatarLookup\(row\.address, row\)/);
   assert.match(server, /!row\.imageUrl && row\.iconUrl/);

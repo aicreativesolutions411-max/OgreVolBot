@@ -60,6 +60,27 @@ export async function rhEthBalance(address, rpcUrl) {
   return { wei: wei.toString(), eth: ethers.formatEther(wei) };
 }
 
+// Robinhood launcher tokens are EIP-1167 clones whose exact artwork metadata is exposed by
+// DropERC20.contractURI(). Market/explorer indexes often omit that image, especially for new coins,
+// so this address-keyed on-chain read is the authoritative fallback for site and Telegram PFPs.
+export async function rhTokenContractUri(address, rpcUrl, timeoutMs = 2_000) {
+  const token = ethers.getAddress(String(address || "").trim());
+  const contract = new ethers.Contract(token, ["function contractURI() view returns (string)"], rhProvider(rpcUrl));
+  let timeout;
+  try {
+    const uri = await Promise.race([
+      contract.contractURI(),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("Robinhood contract metadata timed out")), Math.max(500, Number(timeoutMs) || 2_000));
+      })
+    ]);
+    const clean = String(uri || "").trim();
+    return /^(?:ipfs|https?):\/\//i.test(clean) ? clean.slice(0, 1_000) : "";
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export function rhExplorerAddress(address) { return `${RH_EXPLORER}/address/${address}`; }
 export function rhExplorerToken(address) { return `${RH_EXPLORER}/token/${address}`; }
 export function rhExplorerTx(hash) { return `${RH_EXPLORER}/tx/${hash}`; }

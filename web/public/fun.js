@@ -118,9 +118,10 @@
     if (!key || image.dataset.coinImageResolving === "1") return "";
     image.dataset.coinImageResolving = "1";
     try {
-      const result = await request(`/api/web/token-avatar?mint=${encodeURIComponent(key)}`, { timeout: 5_000, noRetry: true });
+      // Versioned URL evicts any old CDN/browser response that cached a normal pending lookup.
+      const result = await request(`/api/web/token-avatar?mint=${encodeURIComponent(key)}&v=2`, { timeout: 5_000, noRetry: true });
       const avatar = result.data?.avatar;
-      const url = avatar?.state === "ready" ? normalizeImageUrl(avatar.avatarUrl) : "";
+      const url = avatar?.state === "ready" ? normalizeImageUrl(image.dataset.proxyImage || avatar.avatarUrl) : "";
       if (url) {
         state.resolvedCoinImages.set(key.toLowerCase(), url);
         return url;
