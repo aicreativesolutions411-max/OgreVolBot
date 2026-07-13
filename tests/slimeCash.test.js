@@ -7,6 +7,7 @@ const cash = fs.readFileSync(new URL("../web/public/cash/cash.js", import.meta.u
 const html = fs.readFileSync(new URL("../web/public/cash/index.html", import.meta.url), "utf8");
 const manifest = JSON.parse(fs.readFileSync(new URL("../web/public/cash/manifest.webmanifest", import.meta.url), "utf8"));
 const sw = fs.readFileSync(new URL("../web/public/cash/sw.js", import.meta.url), "utf8");
+const buildWeb = fs.readFileSync(new URL("../scripts/build-web.js", import.meta.url), "utf8");
 
 test("SlimeCash calls the branded API origin instead of exposing the hosting provider", () => {
   assert.match(cash, /const API_BASE/);
@@ -14,6 +15,12 @@ test("SlimeCash calls the branded API origin instead of exposing the hosting pro
   assert.doesNotMatch(cash, /onrender\.com/i);
   assert.match(cash, /fetch\(`\$\{API_BASE\}\$\{path\}`/);
   assert.match(cash, /application\\\/json/);
+});
+
+test("the generated portal config rewrites a Render environment URL to the branded API", () => {
+  assert.match(buildWeb, /const brandedApiBase = "https:\/\/app\.slimewire\.org"/);
+  assert.match(buildWeb, /\.onrender\\\.com/);
+  assert.doesNotMatch(buildWeb, /RENDER_EXTERNAL_URL/);
 });
 
 test("SlimeCash recovery is durable and remains compatible with first-release account keys", () => {
