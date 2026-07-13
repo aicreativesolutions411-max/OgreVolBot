@@ -1057,6 +1057,8 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
 test("settings menu is multi-level: home -> per-bot sub-menus, clickable toggles + typed inputs", () => {
   assert.match(serverSource, /function groupBotModuleView\(/);
   assert.match(serverSource, /async function groupBotRenderModule\(/);
+  const command = functionBody(serverSource, "handleGroupBotCommand");
+  assert.match(command, /group-settings-command:\$\{message\.message_id\}/); // one menu per Telegram update
   const cb = functionBody(serverSource, "handleGroupBotCallback");
   assert.match(cb, /gb:m:\(buy\|raid\|rose\|scan/);   // open a module sub-menu
   assert.match(cb, /gb:tog:/);                          // flip a rose/shield boolean

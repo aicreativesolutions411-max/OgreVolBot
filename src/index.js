@@ -24217,6 +24217,7 @@ const PARTNER_DEV_SHARE_BPS = 5_000;
 const PARTNER_HOLDER_SHARE_BPS = 5_000;
 const PARTNER_SNAPSHOT_MS = 6 * 60 * 60 * 1000;
 const PARTNER_SETTLEMENT_MS = 24 * 60 * 60 * 1000;
+const PARTNER_HOLDER_ELIGIBILITY_VERSION = 2;
 const CASH_COW_RH_TOKEN = "0x4ad72e468e38ec204c605f2e058d61e4d79e2ceb";
 const CASH_COW_REWARD_BPS = 15;
 
@@ -24377,16 +24378,20 @@ async function ensureCashCowRewardsProgram() {
   const existing = currentId ? current.programs[currentId] : null;
   if (existing?.vaultRhWallet) {
     if (existing.status === "active" && partnerHolderShareBps(existing) === 10_000
-      && existing.feePolicy?.mode === "surcharge" && Number(existing.feePolicy?.rewardBps) === CASH_COW_REWARD_BPS) return existing;
+      && existing.feePolicy?.mode === "surcharge" && Number(existing.feePolicy?.rewardBps) === CASH_COW_REWARD_BPS
+      && Number(existing.holderEligibilityVersion || 0) === PARTNER_HOLDER_ELIGIBILITY_VERSION) return existing;
     return mutatePartnerRewards((store) => {
       const row = store.programs[currentId];
+      const eligibilityUpgrade = Number(row.holderEligibilityVersion || 0) !== PARTNER_HOLDER_ELIGIBILITY_VERSION;
       row.status = "active";
       row.code = "CASHCOW";
       row.token = { ...(row.token || {}), ca: CASH_COW_RH_TOKEN, chain: "robinhood", name: "Cash Cow", symbol: "CASHCOW", imageUrl: "https://www.slimewire.org/assets/cashcow/cashcow-holders-meme.webp" };
       row.publicUrl = "https://www.slimewire.org/cashcow";
       row.allocation = { holderShareBps: 10_000, developerShareBps: 0 };
       row.feePolicy = { mode: "surcharge", baseBps: CONFIG.bundleFeeBps, rewardBps: CASH_COW_REWARD_BPS, totalBps: CONFIG.bundleFeeBps + CASH_COW_REWARD_BPS };
-      row.policy = { ...(row.policy || {}), maxRecipients: 100, snapshotEveryHours: 6, settlementEveryHours: 24 };
+      row.policy = { ...(row.policy || {}), maxRecipients: 100, minHoldHours: 24, minSnapshots: 2, weighting: "sqrt_balance", maxWalletPoolPct: 5, snapshotEveryHours: 6, settlementEveryHours: 24 };
+      row.holderEligibilityVersion = PARTNER_HOLDER_ELIGIBILITY_VERSION;
+      if (eligibilityUpgrade) row.nextSnapshotAt = new Date().toISOString();
       row.updatedAt = new Date().toISOString();
       return row;
     });
@@ -24415,6 +24420,7 @@ async function ensureCashCowRewardsProgram() {
     row.devPayoutWallet = "";
     row.allocation = { holderShareBps: 10_000, developerShareBps: 0 };
     row.feePolicy = { mode: "surcharge", baseBps: CONFIG.bundleFeeBps, rewardBps: CASH_COW_REWARD_BPS, totalBps: CONFIG.bundleFeeBps + CASH_COW_REWARD_BPS };
+    row.holderEligibilityVersion = PARTNER_HOLDER_ELIGIBILITY_VERSION;
     row.policy = {
       maxRecipients: 100, minHoldHours: 24, minSnapshots: 2, weighting: "sqrt_balance", maxWalletPoolPct: 5,
       snapshotEveryHours: 6, settlementEveryHours: 24
@@ -24567,11 +24573,20 @@ async function snapshotPartnerProgram(program) {
     maxRecipients: 100,
     weighting: "sqrt_balance",
     maxWalletPoolPct: 5,
+    backfillHistory: program.token?.chain === "robinhood",
     excludedWallets: [program.devPayoutWallet, program.vaultSolWallet]
   };
-  const recipients = program.token?.chain === "robinhood"
-    ? await rhHolderRewardRecipients(program.token.ca, policy, program.vaultRhWallet).catch(() => [])
-    : await solanaHolderRewardRecipients(program.token.ca, policy, program.vaultSolWallet).catch(() => []);
+  let recipients;
+  try {
+    recipients = program.token?.chain === "robinhood"
+      ? await rhHolderRewardRecipients(program.token.ca, policy, program.vaultRhWallet)
+      : await solanaHolderRewardRecipients(program.token.ca, policy, program.vaultSolWallet);
+  } catch (error) {
+    // A provider timeout is not an empty holder set. Preserve the last good snapshot and try again
+    // soon instead of replacing a real eligible-holder count with zero.
+    await audit("partner_holder_snapshot_failed", { programId: program.id, token: program.token?.ca || "", error: friendlyError(error) }).catch(() => {});
+    return { preserved: true, error: friendlyError(error) };
+  }
   await mutatePartnerRewards((store) => {
     const row = store.programs[program.id];
     if (!row) return;
@@ -24885,7 +24900,7 @@ function holderRewardSeenKey(chain, token) {
 async function markAndSelectHolderRewardRecipients({ chain, token, rows, policy, payer }) {
   const excluded = new Set([String(payer || "").toLowerCase(), ...(Array.isArray(policy?.excludedWallets) ? policy.excludedWallets.map((v) => String(v || "").toLowerCase()) : [])].filter(Boolean));
   const clean = (Array.isArray(rows) ? rows : [])
-    .map((r) => ({ wallet: String(r.wallet || r.address || "").trim(), amount: Number(r.amount || 0) }))
+    .map((r) => ({ ...r, wallet: String(r.wallet || r.address || "").trim(), amount: Number(r.amount || 0) }))
     .filter((r) => r.wallet && r.amount >= Number(policy.minTokens || 0) && !excluded.has(String(r.wallet).toLowerCase()));
   if (!clean.length) return [];
   const key = holderRewardSeenKey(chain, token);
@@ -24901,7 +24916,9 @@ async function markAndSelectHolderRewardRecipients({ chain, token, rows, policy,
       const prior = seen[w];
       const row = prior && typeof prior === "object"
         ? prior
-        : { firstSeenAt: Number(prior) || now, snapshots: prior ? 1 : 0, lastSeenAt: 0 };
+        : { firstSeenAt: Number(prior) || Number(r.historyFirstSeenAt) || now, snapshots: prior ? 1 : 0, lastSeenAt: 0 };
+      if (Number(r.historyFirstSeenAt) > 0) row.firstSeenAt = Math.min(Number(row.firstSeenAt) || now, Number(r.historyFirstSeenAt));
+      if (Number(r.historyBackfilledAt) > 0) row.historyBackfilledAt = Number(r.historyBackfilledAt);
       if (!row.lastSeenAt || now - Number(row.lastSeenAt) >= Math.min(PARTNER_SNAPSHOT_MS, 60 * 60 * 1000)) row.snapshots = Number(row.snapshots || 0) + 1;
       row.lastSeenAt = now;
       row.lastBalance = r.amount;
@@ -24945,6 +24962,68 @@ async function solanaHolderRewardRecipients(tokenMint, policy, payer) {
   return markAndSelectHolderRewardRecipients({ chain: "solana", token: mintPk.toBase58(), rows, policy, payer });
 }
 
+async function rhHolderContinuousSince(tokenAddress, holder) {
+  const token = String(tokenAddress || "").toLowerCase();
+  const wallet = String(holder?.wallet || "").toLowerCase();
+  let balance = BigInt(String(holder?.balanceRaw || "0").replace(/[^\d]/g, "") || "0");
+  let cursor = null;
+  let oldestAt = 0;
+  const seenCursors = new Set();
+  // Address history is token-filtered and normally only a handful of rows. Four pages bound the
+  // one-time migration while still proving at least 24 hours of continuous ownership for active wallets.
+  for (let pageIndex = 0; pageIndex < 4; pageIndex += 1) {
+    const url = new URL(`https://robinhoodchain.blockscout.com/api/v2/addresses/${wallet}/token-transfers`);
+    url.searchParams.set("token", tokenAddress);
+    for (const [key, value] of Object.entries(cursor || {})) {
+      if (value !== null && value !== undefined && typeof value !== "object") url.searchParams.set(key, String(value));
+    }
+    const data = await fetchJson(url.href, { headers: { accept: "application/json" }, timeoutMs: 8000 });
+    if (!data || (!Array.isArray(data?.items) && !Array.isArray(data))) throw new Error("Robinhood holder history returned an invalid response.");
+    const items = Array.isArray(data?.items) ? data.items : data;
+    for (const item of items) {
+      const itemToken = firstString(item?.token?.address_hash, item?.token?.address).toLowerCase();
+      if (itemToken && itemToken !== token) continue;
+      const from = firstString(item?.from?.hash, item?.from).toLowerCase();
+      const to = firstString(item?.to?.hash, item?.to).toLowerCase();
+      if (from === wallet && to === wallet) continue;
+      const amount = BigInt(String(firstString(item?.total?.value, item?.value, item?.amount) || "0").replace(/[^\d]/g, "") || "0");
+      const at = Date.parse(firstString(item?.timestamp, item?.block_timestamp, item?.time)) || 0;
+      if (at) oldestAt = !oldestAt ? at : Math.min(oldestAt, at);
+      if (to === wallet) {
+        const previous = balance - amount;
+        if (previous <= 0n) return { firstSeenAt: at || oldestAt, checkedAt: Date.now() };
+        balance = previous;
+      } else if (from === wallet) {
+        balance += amount;
+      }
+    }
+    cursor = data?.next_page_params && typeof data.next_page_params === "object" ? data.next_page_params : null;
+    const cursorKey = JSON.stringify(cursor || {});
+    if (!cursor || seenCursors.has(cursorKey)) break;
+    seenCursors.add(cursorKey);
+  }
+  // If the position predates the bounded history window, the oldest inspected timestamp is a safe,
+  // conservative lower bound: reversing every newer transfer proved the balance stayed above zero.
+  return { firstSeenAt: oldestAt, checkedAt: Date.now() };
+}
+
+async function rhBackfillHolderHistory(tokenAddress, rows) {
+  const key = holderRewardSeenKey("robinhood", tokenAddress);
+  const store = await readJson(holderRewardsPath()).catch(() => ({ seen: {} }));
+  const known = store?.seen?.[key] && typeof store.seen[key] === "object" ? store.seen[key] : {};
+  const pending = (Array.isArray(rows) ? rows : []).filter((row) => {
+    const prior = known[String(row.wallet || "").toLowerCase()];
+    return !(prior && typeof prior === "object" && Number(prior.historyBackfilledAt) > 0);
+  });
+  await runWithConcurrency(pending, 8, async (row) => {
+    const history = await rhHolderContinuousSince(tokenAddress, row).catch(() => null);
+    if (!history) return;
+    row.historyFirstSeenAt = Number(history.firstSeenAt) || 0;
+    row.historyBackfilledAt = Number(history.checkedAt) || Date.now();
+  });
+  return rows;
+}
+
 async function rhHolderRewardRecipients(tokenAddress, policy, payer) {
   const addr = String(tokenAddress || "").trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return [];
@@ -24956,8 +25035,9 @@ async function rhHolderRewardRecipients(tokenAddress, policy, payer) {
     for (const [key, value] of Object.entries(cursor || {})) {
       if (value !== null && value !== undefined && typeof value !== "object") url.searchParams.set(key, String(value));
     }
-    const data = await fetchJson(url.href, { headers: { accept: "application/json" }, timeoutMs: 6000 }).catch(() => null);
-    const page = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
+    const data = await fetchJson(url.href, { headers: { accept: "application/json" }, timeoutMs: 8000 });
+    if (!data || (!Array.isArray(data?.items) && !Array.isArray(data))) throw new Error("Robinhood holder provider returned an invalid response.");
+    const page = Array.isArray(data?.items) ? data.items : data;
     if (!page.length) break;
     items.push(...page);
     cursor = data?.next_page_params && typeof data.next_page_params === "object" ? data.next_page_params : null;
@@ -24970,11 +25050,16 @@ async function rhHolderRewardRecipients(tokenAddress, policy, payer) {
     const decimals = firstMeaningfulNumber(item?.token?.decimals, item?.decimals, 18) || 18;
     const raw = firstString(item?.value, item?.balance, item?.token_balance, item?.total?.value);
     const isContract = Boolean(item?.address?.is_contract ?? item?.address_hash?.is_contract ?? item?.is_contract);
-    return { wallet, amount: holderRewardRawTokenAmountToUi(raw, decimals), isContract };
+    const proxyType = firstString(item?.address?.proxy_type, item?.address_hash?.proxy_type, item?.proxy_type).toLowerCase();
+    return { wallet, amount: holderRewardRawTokenAmountToUi(raw, decimals), balanceRaw: String(raw || "0"), isContract, proxyType };
   }).filter((r) => /^0x[0-9a-fA-F]{40}$/.test(r.wallet)
     && !/^0x0{40}$/i.test(r.wallet)
+    && !/^0x0{36}dead$/i.test(r.wallet)
     && r.wallet.toLowerCase() !== addr.toLowerCase()
-    && !r.isContract).slice(0, 100);
+    // EIP-7702 delegated accounts are user wallets even though explorers report contract code.
+    && (!r.isContract || r.proxyType === "eip7702")).slice(0, 100);
+  // Historical backfill belongs to the scheduled snapshot, never the user's trade request path.
+  if (policy?.backfillHistory) await rhBackfillHolderHistory(addr, rows);
   return markAndSelectHolderRewardRecipients({ chain: "robinhood", token: addr, rows, policy, payer });
 }
 
@@ -46816,6 +46901,11 @@ async function handleGroupBotCommand(message, userId) {
   // /raid on and /raid off remain admin-only module toggles here.
   if (cmd === "raid" && !arg) return false;
   const chatId = chat.id;
+  // Telegram can retry the same webhook update while the first request is still finishing. Claim the
+  // exact /settings message before posting its menu so one admin command can never create two cards.
+  // A later /settings command has a different message_id and still opens a fresh menu normally.
+  if (cmd === "settings" && message?.message_id
+      && tgCommandOnCooldown(chatId, `group-settings-command:${message.message_id}`, 10 * 60_000)) return true;
   if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only group admins can change the bot's settings."); return true; }
   if (cmd === "settings") { await groupBotPostSetup(chatId); return true; }
   if (arg === "on" || arg === "off") {
