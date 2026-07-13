@@ -1930,7 +1930,8 @@ test("Robinhood address routing proves wallet versus ERC-20 before scan and trac
   assert.match(rhScan, /const contractProof = await rhTokenContractProof\(a\)/);
   assert.match(rhScan, /if \(!contractProof\.contract\) return null/);
   const proof = functionBody(serverSource, "rhTokenContractProof");
-  assert.match(proof, /await isRhContract\(a\)/);
+  assert.match(proof, /await Promise\.all/);
+  assert.match(proof, /rhPromiseTimeout\(isRhContract\(a\)/); // RPC and chain-index proof run together, so their timeouts never stack
   assert.match(proof, /rhTokenInfo\(a\)/); // Blockscout exact token record rescues transient RPC bytecode misses
   assert.match(proof, /normalizeRhBlockscoutToken/);
   assert.match(serverSource, /addressKind: "wallet", chain: "robinhood", matches: \[\]/);

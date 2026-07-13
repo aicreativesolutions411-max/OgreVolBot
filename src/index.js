@@ -39205,14 +39205,20 @@ function normalizeRhBlockscoutToken(row = {}) {
     source: "blockscout",
   };
 }
-async function rhTokenContractProof(address, timeoutMs = 3_500) {
+async function rhTokenContractProof(address, timeoutMs = 7_000) {
   const a = String(address || "").trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return { contract: false, token: null };
   const key = a.toLowerCase();
-  if (await isRhContract(a).catch(() => false)) return { contract: true, token: null };
-  const token = await rhPromiseTimeout(rhTokenInfo(a), timeoutMs, null);
+  // Run both proofs together. Waiting for a flaky public RPC bytecode read before asking Blockscout made
+  // a valid token take the sum of both timeouts and occasionally miss Telegram's scan window entirely.
+  // The chain explorer's exact ERC-20 record is sufficient proof and normally returns much faster.
+  const [rpcContract, token] = await Promise.all([
+    rhPromiseTimeout(isRhContract(a), Math.min(timeoutMs, 4_000), false),
+    rhPromiseTimeout(rhTokenInfo(a), timeoutMs, null),
+  ]);
   const normalized = normalizeRhBlockscoutToken(token);
-  const contract = Boolean(normalized?.symbol && normalized?.address?.toLowerCase() === key);
+  const blockscoutContract = Boolean(normalized?.symbol && normalized?.address?.toLowerCase() === key);
+  const contract = Boolean(rpcContract || blockscoutContract);
   if (contract) _rhKindCache.set(key, { at: Date.now(), contract: true });
   return { contract, token };
 }
