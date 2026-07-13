@@ -39589,8 +39589,7 @@ async function gatherRhScanUncollapsed(address) {
     }
   }
   if (!v.imageUrl || (!v.twitterUrl && !v.telegramUrl && !v.websiteUrl)) {
-    const [dsV1, noxaMeta, geckoInfo] = await Promise.all([
-      Promise.resolve(dsV1),
+    const [noxaMeta, geckoInfo] = await Promise.all([
       rhPromiseTimeout(noxaMetaPromise, 4_500, null),
       rhPromiseTimeout(geckoInfoPromise, 6_500, null)
     ]);

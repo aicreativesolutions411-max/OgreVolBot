@@ -2669,6 +2669,7 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(rhGather, /api\.geckoterminal\.com\/api\/v2\/networks\/robinhood\/tokens/); // independent market fallback prevents an all-n/a card when Dex/Blockscout blink
   assert.match(rhGather, /const noxaPromise/);                         // NOXA's slower exact factory read starts concurrently, not after the fast providers already timed out
   assert.match(rhGather, /Array\.isArray\(dsV1\)/);                   // direct Dex token route contributes market data, not only artwork
+  assert.doesNotMatch(rhGather, /const \[dsV1,/);                    // do not shadow dsV1 and trigger a TDZ ReferenceError during identity enrichment
   assert.match(rhGather, /rhScanCacheTtl\(cached\.v\)/);              // transient empty results retry in seconds instead of poisoning scans for a minute
   assert.match(rhGather, /if \(rhScanHasMarketEvidence\(v\)\)/);      // never promote an all-zero transient response to last-good
   assert.match(rhGather, /rhImpliedPriceUsd/);                         // non-NOXA fresh pools get a direct implied-price read while indexes catch up
