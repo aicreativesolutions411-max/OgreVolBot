@@ -2418,21 +2418,23 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(ticker, /const solPromise = resolveCashtagToMint/);  // deep Sol work starts concurrently
   assert.match(ticker, /resolveRhTickerCandidate/);
   assert.match(ticker, /tickerRhClearlyDominates/);                 // decisive RH market returns without waiting for Sol safety
-  assert.match(ticker, /providerTimeoutMs: 3_200/);                 // both fast indexes unavailable -> one bounded retry
+  assert.match(ticker, /providerTimeoutMs: 4_000/);                 // weak Sol dust gets one bounded chain-native retry
+  assert.match(ticker, /weakSol.*marketCap.*50_000.*volume24h.*100_000/s);
   assert.match(ticker, /lookupComplete === false.*marketCap/s);     // uncertainty never promotes a micro Sol clone
   assert.match(ticker, /rhLeadership > solLeadership/);             // stronger RH market can beat a weak Sol clone
   const rhTicker = functionBody(serverSource, "resolveRhTickerCandidate");
   assert.match(rhTicker, /if \(chain === "robinhood"\)/);
   assert.match(rhTicker, /tickerMarketLeadership/);
   assert.match(rhTicker, /tickerMarketRowStrength/);                 // one real pair supplies MC+volume; no cross-pair Frankenstein maxima
-  assert.match(rhTicker, /candidate\.dexPair \|\| await scanFastTimeout\(isRhContract/); // a live pair proves token; feed-only addresses still classify
+  assert.match(rhTicker, /candidate\.contractProof \|\| candidate\.dexPair \|\| await scanFastTimeout\(isRhContract/); // exact chain index/live pair proves token
   assert.match(rhTicker, /dexscreener\|geckoterminal/);
   assert.match(rhTicker, /api\.geckoterminal\.com\/api\/v2\/search\/pools/);
-  assert.match(rhTicker, /const \[dexData, geckoData\] = await Promise\.all/);
+  assert.match(rhTicker, /const \[dexData, geckoData, blockscoutRows\] = await Promise\.all/);
   assert.match(rhTicker, /providerTimeoutMs\) \|\| 1_800/);
-  assert.match(rhTicker, /const feedPromise = scanFastTimeout/);       // chain-native fallback starts beside the fast indexes
-  assert.match(rhTicker, /const shouldReadFeed = Boolean\(options\.includeFeed\) \|\| !indexedStrong/); // weak/empty indexed matches cannot suppress the feed
-  assert.match(rhTicker, /indexedResponseComplete/);                  // `{pairs:null}` is not mistaken for a completed lookup
+  assert.match(rhTicker, /rhTickerBlockscoutSearch/);                  // exact chain-native ticker lookup survives DEX index gaps
+  assert.match(rhTicker, /rhTickerSymbolIndex/);                       // positive identity remains hot across provider blinks
+  assert.match(rhTicker, /const shouldReadFeed = Boolean\(options\.includeFeed\) \|\| candidates\.size === 0/); // heavy universe only runs as last resort
+  assert.match(rhTicker, /const indexedResponseComplete = Array\.isArray\(blockscoutRows\)/); // broad DEX arrays are not authoritative RH no-matches
   assert.match(rhTicker, /solDexCandidate/);                          // the independent query can repair a missed dominant Sol result too
   assert.match(rhTicker, /rhTickerDirectMarket/);                   // zero-metric feed matches hydrate by token address
   assert.match(rhTicker, /sort\(\(a, b\) => b\.holders - a\.holders\)\.slice\(0, 4\)/);
@@ -2440,6 +2442,7 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(rhTicker, /_rhKindCache\.set/);                      // later scan skips duplicate wallet-vs-token RPC work
   const directRh = functionBody(serverSource, "rhTickerDirectMarket");
   assert.match(directRh, /latest\/dex\/tokens/);
+  assert.match(directRh, /tokens\/v1\/robinhood/);
   assert.match(directRh, /networks\/robinhood\/tokens/);
   assert.match(directRh, /tickerMarketRowStrength/);
 
@@ -2619,6 +2622,7 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   const scoreFn = new Function("candidate", score);
   const dominanceFn = new Function("candidate", "maxima", dominance);
   const leadershipFn = new Function("candidate", "maxima", leadership);
+  const rhDominatesFn = new Function("rh", "sol", functionBody(serverSource, "tickerRhClearlyDominates"));
   const established = { marketCap: 509_000, liquidityUsd: 52_000, volume24h: 140_000, holders: 1_100, trendBoost: 0, sources: new Set(["dexscreener"]) };
   const tinyTrendClone = { marketCap: 2_000, liquidityUsd: 1_200, volume24h: 18_000, holders: 90, trendBoost: 55, sources: new Set(["moralis-trending"]) };
   const maxima = { marketCap: established.marketCap, liquidityUsd: established.liquidityUsd, volume24h: established.volume24h };
@@ -2633,6 +2637,8 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   const noxaSolClone = { marketCap: 4_200, volume24h: 165 };
   const noxaMaxima = { marketCap: noxaRh.marketCap, volume24h: noxaRh.volume24h };
   assert.ok(leadershipFn(noxaRh, noxaMaxima) > leadershipFn(noxaSolClone, noxaMaxima) * 20, "$NOXA must resolve to its dominant Robinhood market, never the tiny Sol clone");
+  assert.equal(rhDominatesFn({ contractProof: true, holders: 2376 }, { marketCap: 4_200, volume24h: 165 }), true, "chain-native holder proof must beat a dust Sol clone while market indexes catch up");
+  assert.equal(rhDominatesFn({ contractProof: true, holders: 2376 }, { marketCap: 500_000, volume24h: 2_000_000 }), false, "identity alone must never displace a strong Sol market");
   assert.match(functionBody(serverSource, "tickerScanSelectionLine"), /strongest Robinhood/);
   assert.match(functionBody(serverSource, "tickerTruthLine"), /Vol/);
   const rhSend = functionBody(serverSource, "sendRhScanCard");
@@ -2649,6 +2655,7 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(rhGather, /pairTarget\.isBase \? pair\?\.priceUsd : null/);
   assert.match(rhGather, /api\.geckoterminal\.com\/api\/v2\/networks\/robinhood\/tokens/); // independent market fallback prevents an all-n/a card when Dex/Blockscout blink
   assert.match(rhGather, /const noxaPromise/);                         // NOXA's slower exact factory read starts concurrently, not after the fast providers already timed out
+  assert.match(rhGather, /Array\.isArray\(dsV1\)/);                   // direct Dex token route contributes market data, not only artwork
   assert.match(rhGather, /rhScanCacheTtl\(cached\.v\)/);              // transient empty results retry in seconds instead of poisoning scans for a minute
   assert.match(rhGather, /if \(rhScanHasMarketEvidence\(v\)\)/);      // never promote an all-zero transient response to last-good
   assert.match(rhGather, /rhImpliedPriceUsd/);                         // non-NOXA fresh pools get a direct implied-price read while indexes catch up

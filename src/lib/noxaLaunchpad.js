@@ -240,7 +240,9 @@ export async function getNoxaScan(tokenAddress, { rpcUrl, ethUsd } = {}) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return null;
   const key = addr.toLowerCase();
   const hit = scanCache.get(key);
-  if (hit && Date.now() - hit.at < 45_000) return hit.v;
+  // A public-RPC miss is transient. Keep successful reads warm, but never let one timeout make a valid
+  // NOXA coin look nonexistent for 45 seconds across every scan request.
+  if (hit && Date.now() - hit.at < (hit.v ? 45_000 : 2_000)) return hit.v;
   const provider = noxaProvider(rpcUrl);
   const token = ethers.getAddress(addr);
   let info = null;

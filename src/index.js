@@ -34454,9 +34454,17 @@ function tickerMarketRowStrength(marketCap, volume24h, liquidityUsd) {
 function tickerRhClearlyDominates(rh, sol = null) {
   const rhMc = Number(rh?.marketCap) || 0, rhVol = Number(rh?.volume24h) || 0;
   const solMc = Number(sol?.marketCap) || 0, solVol = Number(sol?.volume24h) || 0;
-  return rh?.dexPair === true
+  const marketDominates = rh?.dexPair === true
     && rhMc >= Math.max(20_000, solMc * 2)
     && rhVol >= Math.max(20_000, solVol * 2);
+  // Blockscout's chain-native token search remains available when shared-IP market indexes time out.
+  // A well-held RH contract should beat a tiny same-symbol Sol clone even before its pool metrics arrive.
+  // Keep this bounded to weak Sol markets so a real, liquid Sol coin is never displaced by identity alone.
+  const holderDominatesDust = rh?.contractProof === true
+    && Number(rh?.holders || 0) >= 100
+    && solMc < 50_000
+    && solVol < 100_000;
+  return marketDominates || holderDominatesDust;
 }
 function fmtTickerMarketUsd(value) {
   const n = Number(value) || 0;
@@ -34601,11 +34609,29 @@ async function resolveCashtagToMint(symbol) {
   return mint;
 }
 const rhTickerTargetCache = new Map();
+const rhTickerSymbolIndex = new Map();
+async function rhTickerBlockscoutSearch(symbol, timeoutMs = 2_000) {
+  const q = String(symbol || "").replace(/^\$|^#/, "").trim();
+  if (q.length < 2) return null;
+  const data = await fetchJson(`https://robinhoodchain.blockscout.com/api/v2/tokens?q=${encodeURIComponent(q)}&type=ERC-20`, {
+    headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
+    timeoutMs,
+    maxBytes: 2_000_000
+  }).catch(() => null);
+  if (!Array.isArray(data?.items)) return null;
+  return data.items.filter((row) =>
+    String(row?.symbol || "").replace(/^\$+/, "").toLowerCase() === q.toLowerCase()
+    && /^0x[0-9a-fA-F]{40}$/.test(String(row?.address_hash || row?.address || ""))
+  );
+}
 async function rhTickerDirectMarket(address, timeoutMs = 2_400) {
   const a = String(address || "").toLowerCase();
   if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return null;
-  const [dexData, geckoData] = await Promise.all([
+  const [dexData, dexV1Data, geckoData] = await Promise.all([
     scanFastTimeout(fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${a}`, { timeoutMs }), timeoutMs + 100, null),
+    scanFastTimeout(fetchJson(`https://api.dexscreener.com/tokens/v1/robinhood/${a}`, {
+      headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" }, timeoutMs
+    }), timeoutMs + 100, null),
     scanFastTimeout(fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${a}/pools?page=1`, { timeoutMs }), timeoutMs + 100, null)
   ]);
   const rows = [];
@@ -34616,6 +34642,16 @@ async function rhTickerDirectMarket(address, timeoutMs = 2_400) {
       volume24h: firstMeaningfulNumber(pair.volume?.h24) || 0,
       liquidityUsd: firstMeaningfulNumber(pair.liquidity?.usd) || 0,
       source: "dexscreener-token"
+    });
+  }
+  for (const pair of Array.isArray(dexV1Data) ? dexV1Data : []) {
+    if (String(pair.chainId || "").toLowerCase() !== "robinhood") continue;
+    if (String(pair.baseToken?.address || "").toLowerCase() !== a) continue;
+    rows.push({
+      marketCap: firstMeaningfulNumber(pair.marketCap, pair.fdv) || 0,
+      volume24h: firstMeaningfulNumber(pair.volume?.h24) || 0,
+      liquidityUsd: firstMeaningfulNumber(pair.liquidity?.usd) || 0,
+      source: "dexscreener-v1"
     });
   }
   for (const pool of Array.isArray(geckoData?.data) ? geckoData.data : []) {
@@ -34633,7 +34669,7 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
   if (q.length < 2) return null;
   const key = q.toLowerCase();
   const cached = rhTickerTargetCache.get(key);
-  if (!options.force && cached && Date.now() - cached.at < (cached.candidate ? 30_000 : 8_000)) return cached.candidate;
+  if (!options.force && cached && Date.now() - cached.at < (cached.candidate ? 120_000 : 1_500)) return cached.candidate;
   const candidates = new Map();
   let solDexCandidate = null;
   const add = (address, row = {}, source = "") => {
@@ -34646,7 +34682,7 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
     const mc = firstMeaningfulNumber(row.marketCapUsd, row.marketCap, row.fdv, row.mc) || 0;
     const holders = firstMeaningfulNumber(row.holders, row.holders_count) || 0;
     const id = a.toLowerCase();
-    const prev = candidates.get(id) || { address: a, symbol: q.toUpperCase(), name: "", imageUrl: "", liquidityUsd: 0, volume24h: 0, marketCap: 0, holders: 0, trendBoost: 0, marketStrength: 0, dexPair: false, sources: new Set() };
+    const prev = candidates.get(id) || { address: a, symbol: q.toUpperCase(), name: "", imageUrl: "", liquidityUsd: 0, volume24h: 0, marketCap: 0, holders: 0, trendBoost: 0, marketStrength: 0, dexPair: false, contractProof: false, sources: new Set() };
     const marketStrength = tickerMarketRowStrength(mc, vol, liq);
     if (marketStrength >= prev.marketStrength) {
       prev.liquidityUsd = liq || prev.liquidityUsd;
@@ -34659,25 +34695,31 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
     prev.imageUrl = firstString(prev.imageUrl, row.imageUrl, row.iconUrl, row.logoUrl, row.info?.imageUrl, row.attributes?.image_url);
     prev.trendBoost = Math.max(prev.trendBoost, /feed|trending/i.test(source) ? 12 : 0);
     if (/dexscreener|geckoterminal/.test(source)) prev.dexPair = true; // baseToken on a live pair is already contract proof
+    if (/blockscout|dexscreener|geckoterminal|feed/.test(source)) prev.contractProof = true;
     prev.sources.add(source || "robinhood");
     candidates.set(id, prev);
   };
   // Two independent fast pool indexes prevent one transient provider miss from silently promoting a
   // same-symbol Sol clone. Both normally answer in under a second; the longer deadline is retry-only.
   const providerTimeoutMs = Number(options.providerTimeoutMs) || 1_800;
-  // Start the chain-native feed at the same time as the fast indexes. We normally do not await it
-  // when Dex/Gecko already found a strong exact market, but it is ready (or nearly ready) when either
-  // index returns a partial/empty payload. Previously any truthy provider response -- even
-  // `{ pairs: null }` -- suppressed this fallback and let an unrelated tiny Sol clone win.
-  const feedPromise = scanFastTimeout(
-    rhFeedTokens().catch(() => null),
-    Math.max(1_900, providerTimeoutMs + 350),
-    null
-  );
-  const [dexData, geckoData] = await Promise.all([
+  const known = rhTickerSymbolIndex.get(key);
+  if (known && Date.now() - known.at < 60 * 60_000) {
+    for (const row of known.rows || []) add(row.address, row, "blockscout-index");
+  }
+  const [dexData, geckoData, blockscoutRows] = await Promise.all([
     scanFastTimeout(fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { timeoutMs: providerTimeoutMs }), providerTimeoutMs + 100, null),
-    scanFastTimeout(fetchJson(`https://api.geckoterminal.com/api/v2/search/pools?query=${encodeURIComponent(q)}`, { timeoutMs: providerTimeoutMs }), providerTimeoutMs + 100, null)
+    scanFastTimeout(fetchJson(`https://api.geckoterminal.com/api/v2/search/pools?query=${encodeURIComponent(q)}`, { timeoutMs: providerTimeoutMs }), providerTimeoutMs + 100, null),
+    scanFastTimeout(rhTickerBlockscoutSearch(q, Math.max(1_500, providerTimeoutMs)), providerTimeoutMs + 150, null)
   ]);
+  if (Array.isArray(blockscoutRows)) {
+    const indexed = blockscoutRows.map((raw) => {
+      const row = normalizeRhBlockscoutToken(raw);
+      return row ? { ...row, address: row.address, marketCapUsd: row.marketCapUsd, volume24hUsd: row.volume24hUsd } : null;
+    }).filter(Boolean);
+    rhTickerSymbolIndex.set(key, { at: Date.now(), rows: indexed.slice(0, 20) });
+    if (rhTickerSymbolIndex.size > 500) rhTickerSymbolIndex.delete(rhTickerSymbolIndex.keys().next().value);
+    for (const row of indexed) add(row.address, row, "blockscout-search");
+  }
   for (const pair of Array.isArray(dexData?.pairs) ? dexData.pairs : []) {
     const chain = String(pair.chainId || "").toLowerCase();
     const exact = String(pair.baseToken?.symbol || "").replace(/^\$+/, "").toLowerCase() === key;
@@ -34723,13 +34765,12 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
       if (!solDexCandidate || tickerMarketRowStrength(candidate.marketCap, candidate.volume24h, candidate.liquidityUsd) > tickerMarketRowStrength(solDexCandidate.marketCap, solDexCandidate.volume24h, solDexCandidate.liquidityUsd)) solDexCandidate = candidate;
     }
   }
-  const indexedStrong = [...candidates.values()].some((candidate) =>
-    Number(candidate.marketCap) >= 50_000 && Number(candidate.volume24h) >= 20_000
-  );
-  // An exact match that is absent or weak in one search result is exactly when the chain-native feed
-  // matters. Await the already-running request; do not confuse "provider answered" with "lookup done".
-  const shouldReadFeed = Boolean(options.includeFeed) || !indexedStrong;
-  const feed = shouldReadFeed ? await feedPromise : [];
+  // The full feed is a heavy universe read. Blockscout exact search is cheaper and more reliable for
+  // ticker lookup, so only touch the feed if all three exact indexes found nothing.
+  const shouldReadFeed = Boolean(options.includeFeed) || candidates.size === 0;
+  const feed = shouldReadFeed
+    ? await scanFastTimeout(rhFeedTokens().catch(() => null), Math.max(1_900, providerTimeoutMs + 350), null)
+    : [];
   for (const row of Array.isArray(feed) ? feed : []) add(row.address, row, row.source || "robinhood-feed");
   // Blockscout/feed rows sometimes identify the correct token but carry null market fields. Hydrate
   // the highest-holder exact matches through per-token pool endpoints, then rank real numbers.
@@ -34759,14 +34800,16 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
   })).sort((a, b) => b.score - a.score);
   const checked = await Promise.all(ranked.slice(0, 6).map(async (candidate) => ({
     candidate,
-    isContract: candidate.dexPair || await scanFastTimeout(isRhContract(candidate.address), 2_000, false).catch(() => false)
+    isContract: candidate.contractProof || candidate.dexPair || await scanFastTimeout(isRhContract(candidate.address), 2_000, false).catch(() => false)
   })));
   const pick = checked.find((row) => row.isContract)?.candidate || null;
   if (pick) {
     pick.solDexCandidate = solDexCandidate;
     if (pick.dexPair) _rhKindCache.set(pick.address.toLowerCase(), { at: Date.now(), contract: true });
   }
-  const indexedResponseComplete = Array.isArray(dexData?.pairs) || Array.isArray(geckoData?.data);
+  // Only the chain-native exact-symbol search can make an authoritative RH no-match. Broad DEX search
+  // arrays are frequently partial on Render's shared IP, so their mere presence is not "complete".
+  const indexedResponseComplete = Array.isArray(blockscoutRows);
   const feedResponseComplete = !shouldReadFeed || Array.isArray(feed);
   const lookupComplete = Boolean(
     (pick && (pick.marketCap > 0 || pick.volume24h > 0))
@@ -34775,7 +34818,9 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
   rhTickerTargetCache.set(key, { at: Date.now(), candidate: pick, solDexCandidate, lookupComplete });
   if (rhTickerTargetCache.size > 300) rhTickerTargetCache.delete(rhTickerTargetCache.keys().next().value);
   if (!pick) {
-    console.warn(`[ticker] $${q.toUpperCase()} Robinhood miss · dex=${Array.isArray(dexData?.pairs) ? dexData.pairs.length : "err"} gecko=${Array.isArray(geckoData?.data) ? geckoData.data.length : "err"} feed=${Array.isArray(feed) ? feed.length : "err"} complete=${lookupComplete}`);
+    console.warn(`[ticker] $${q.toUpperCase()} Robinhood miss · dex=${Array.isArray(dexData?.pairs) ? dexData.pairs.length : "err"} gecko=${Array.isArray(geckoData?.data) ? geckoData.data.length : "err"} blockscout=${Array.isArray(blockscoutRows) ? blockscoutRows.length : "err"} feed=${Array.isArray(feed) ? feed.length : "err"} complete=${lookupComplete}`);
+  } else {
+    console.info(`[ticker] $${q.toUpperCase()} RH candidate ${shortMint(pick.address)} mc=${Math.round(pick.marketCap || 0)} vol24=${Math.round(pick.volume24h || 0)} holders=${Math.round(pick.holders || 0)} sources=${[...pick.sources].join(",")}`);
   }
   return pick;
 }
@@ -34838,14 +34883,22 @@ async function resolveTickerToScanTarget(symbol) {
   const solPromise = resolveCashtagToMint(q).catch(() => null);
   let rh = await resolveRhTickerCandidate(q).catch(() => null);
   let rhLookup = rhTickerTargetCache.get(q.toLowerCase());
-  if (!rh && rhLookup?.lookupComplete === false) {
-    rh = await resolveRhTickerCandidate(q, { force: true, providerTimeoutMs: 3_200 }).catch(() => null);
-    rhLookup = rhTickerTargetCache.get(q.toLowerCase());
-  }
   // A Dex-proven RH market leading the exact Sol match by 2x in BOTH MC and volume is decisive.
   // Return it immediately while the deeper Sol safety lookup finishes harmlessly in the background.
   if (tickerRhClearlyDominates(rh, rh?.solDexCandidate)) return rh.address;
   let sol = await solPromise;
+  // If the first RH lookup missed while Sol only found dust, spend one longer retry on the chain-native
+  // index before returning or suppressing. This path is rare for normal Sol tickers and fixes transient
+  // Blockscout/Dex timeouts without adding latency to healthy lookups.
+  if (!rh) {
+    const solMetaBeforeRetry = tickerResolutionMetaCache.get(q.toLowerCase());
+    const weakSol = (solMetaBeforeRetry?.candidates || []).find((candidate) => candidate.mint === sol) || null;
+    if (!sol || (Number(weakSol?.marketCap || 0) < 50_000 && Number(weakSol?.volume24h || 0) < 100_000)) {
+      rh = await resolveRhTickerCandidate(q, { force: true, providerTimeoutMs: 4_000 }).catch(() => null);
+      rhLookup = rhTickerTargetCache.get(q.toLowerCase());
+      if (tickerRhClearlyDominates(rh, rh?.solDexCandidate || weakSol)) return rh.address;
+    }
+  }
   const indexedSol = rh?.solDexCandidate || rhLookup?.solDexCandidate || null;
   if (indexedSol) {
     const reconciled = await reconcileIndexedSolTickerCandidate(q, sol, indexedSol).catch(() => ({ mint: sol }));
@@ -39343,23 +39396,26 @@ async function gatherRhScanUncollapsed(address) {
   // links on NOXA's metadata API / GeckoTerminal token info, which the site avatar path
   // already used but scan cards never did (why cards kept showing no pfp or socials).
   const noxaMetaPromise = getNoxaRhTokenMetadata(a, { timeoutMs: 4_500 }).catch(() => null);
-  const geckoInfoPromise = fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${a}/info`, { timeoutMs: 3_500 }).catch(() => null);
+  const geckoInfoPromise = fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${a}/info`, { timeoutMs: 6_500 }).catch(() => null);
   // DexScreener's tokens/v1 endpoint carries info.imageUrl/socials for Robinhood pairs that
   // the older latest/dex/tokens response omits - it's what the feed's artwork enricher uses,
   // and it is the one identity source proven reliable from this server's IP.
   const dsTokenV1Promise = fetchJson(`https://api.dexscreener.com/tokens/v1/robinhood/${a}`, {
     headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
-    timeoutMs: 3_000
+    timeoutMs: 6_500
   }).catch(() => null);
-  const [dsRes, geckoRes, saf, feedRows, directToken, launchMap] = await Promise.all([
-    fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${a}`, { timeoutMs: 3500 }).catch(() => null),
-    fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${a}/pools?page=1`, { timeoutMs: 3500 }).catch(() => null),
+  const [dsRes, dsV1, geckoRes, saf, feedRows, directToken, launchMap] = await Promise.all([
+    fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${a}`, { timeoutMs: 6_500 }).catch(() => null),
+    rhPromiseTimeout(dsTokenV1Promise, 6_500, null),
+    fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${a}/pools?page=1`, { timeoutMs: 6_500 }).catch(() => null),
     rhPromiseTimeout(rhHoneypotCheck(a, CONFIG.rhChainRpcUrl), 3000, null),
     rhPromiseTimeout(rhFeedTokens(), 2500, []),
     rhPromiseTimeout(rhTokenInfo(a), 2500, null),
     rhPromiseTimeout(rhLaunchMetaByAddress(), 1500, new Map()),
   ]);
-  const pairs = (dsRes?.pairs || []).filter((p) => String(p.chainId || "").toLowerCase() === "robinhood");
+  const pairs = [...(Array.isArray(dsRes?.pairs) ? dsRes.pairs : []), ...(Array.isArray(dsV1) ? dsV1 : [])]
+    .filter((p) => String(p.chainId || "").toLowerCase() === "robinhood")
+    .filter((p, index, all) => index === all.findIndex((row) => String(row?.pairAddress || "").toLowerCase() === String(p?.pairAddress || "").toLowerCase()));
   const pair = pairs.sort((x, y) => (Number(y.liquidity?.usd) || 0) - (Number(x.liquidity?.usd) || 0))[0] || null;
   const pairTarget = rhPairTargetToken(pair, a);
   const pairToken = pairTarget.token || {};
@@ -39487,9 +39543,9 @@ async function gatherRhScanUncollapsed(address) {
   }
   if (!v.imageUrl || (!v.twitterUrl && !v.telegramUrl && !v.websiteUrl)) {
     const [dsV1, noxaMeta, geckoInfo] = await Promise.all([
-      rhPromiseTimeout(dsTokenV1Promise, 3_000, null),
+      Promise.resolve(dsV1),
       rhPromiseTimeout(noxaMetaPromise, 4_500, null),
-      rhPromiseTimeout(geckoInfoPromise, 3_500, null)
+      rhPromiseTimeout(geckoInfoPromise, 6_500, null)
     ]);
     const v1Pairs = (Array.isArray(dsV1) ? dsV1 : []).filter((p) => String(p?.baseToken?.address || "").toLowerCase() === key);
     const v1Best = v1Pairs.sort((x, y) => Number(y?.liquidity?.usd || 0) - Number(x?.liquidity?.usd || 0))[0] || null;
@@ -44296,7 +44352,7 @@ async function handleTelegramLookCommand(chatId, message, argument, options = {}
     if (!options.skipCooldown && tgCommandOnCooldown(chatId, `look:${rhAddr.toLowerCase()}`, TG_LOOK_COOLDOWN_MS)) return;
     const tickerLine = tickerScanSelectionLine(tickerSymbol, rhAddr);
     const contextHtml = [String(options.contextHtml || "").trim(), tickerLine].filter(Boolean).join("\n");
-    const provenTickerCoin = Boolean(rhTickerCandidateForTarget(tickerSymbol, rhAddr)?.dexPair);
+    const provenTickerCoin = Boolean(rhTickerCandidateForTarget(tickerSymbol, rhAddr)?.contractProof);
     if (provenTickerCoin || await isRhContract(rhAddr).catch(() => false)) await sendRhScanCard(chatId, rhAddr, { ...options, contextHtml, message });
     else await sendWalletScanCard(chatId, rhAddr);
     return;
