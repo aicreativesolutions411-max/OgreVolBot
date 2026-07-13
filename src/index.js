@@ -14269,7 +14269,12 @@ async function handleCallback(query, userId) {
   if (!isPrivateChat(chat) && query.from && !query.from.is_bot) {
     void rememberGroupMentionMember(chatId, query.from).catch(() => {});
   }
-  void telegram("answerCallbackQuery", { callback_query_id: query.id }).catch(() => {});
+  // Most callbacks get an eager blank acknowledgement so Telegram stops its spinner immediately.
+  // Robinhood trades own their acknowledgement because the useful "bridging / buying" notice must
+  // remain visible; Telegram silently ignores a second answer after this blank one.
+  const callbackData = String(query.data || "");
+  const callbackOwnsAck = ["rqbp:", "rqb:", "rqs:"].some((prefix) => callbackData.startsWith(prefix));
+  if (!callbackOwnsAck) void telegram("answerCallbackQuery", { callback_query_id: query.id }).catch(() => {});
 
   // All-in-one group bot: module toggle buttons (gb:*) are handled here first.
   if (String(query.data || "").startsWith("gb:")) {
@@ -43560,38 +43565,115 @@ async function handleRhQuickTradeCallback(query, userId) {
   ] };
   if (mPreset || mBuy) {
     const amt = mPreset ? userBuyPrefs(await readBuyPrefs(), userId).quickAmount : Number(mBuy[1]);
-    await ack("🪶 Buying on Robinhood Chain — takes ~30s, receipt lands in your DM…", true);
+    await ack("Buying with SOL now. The bridge + trade can take 30–90 seconds; progress is in your DM.", true);
+    let selected = null;
+    let progress = null;
     try {
+      selected = await selectTgRhSolWallet(userId, amt);
+      const walletLabel = escapeTelegramHtml(selected.wallet.label || `Wallet ${selected.walletIndex}`);
+      progress = await telegram("sendMessage", {
+        chat_id: userId,
+        text: [
+          "🪶 <b>Robinhood buy started</b>",
+          `├ Using <b>${walletLabel}</b>`,
+          `├ Converting <b>${amt} SOL</b> to Robinhood ETH`,
+          `└ Then buying <code>${escapeTelegramHtml(shortMint(tokenAddress))}</code>`,
+          "",
+          "<i>Usually 30–90 seconds. Please don't tap Buy again.</i>"
+        ].join("\n"),
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      }).catch(() => null);
+      const callbackAttempt = crypto.createHash("sha256").update(String(query.id || crypto.randomUUID())).digest("hex").slice(0, 20);
       const r = await webRhTrade(userId, {
-        walletIndex: "1", side: "buy", tokenAddress, amountSol: amt, payCurrency: "sol",
-        tradeAttemptId: `tg-rqb-${userId}-${tokenAddress.toLowerCase()}-${amt}-${Math.floor(Date.now() / 30_000)}`,
+        walletIndex: String(selected.walletIndex), walletPublicKey: selected.wallet.publicKey,
+        side: "buy", tokenAddress, amountSol: amt, payCurrency: "sol",
+        tradeAttemptId: `tg-rqb-${userId}-${callbackAttempt}`,
       });
-      await sayHtml(userId, [
+      const successText = [
         `🪶 ✅ <b>Bought ${escapeTelegramHtml(String(r.outSymbol || shortMint(tokenAddress)).slice(0, 12))}</b> with <b>${amt} ◎</b>`,
+        `├ Wallet: <b>${walletLabel}</b>`,
         `├ Got <b>${escapeTelegramHtml(String(r.outFormatted || "?"))}</b> · now holding ${escapeTelegramHtml(String(r.tokenBalance ?? "?"))}`,
         `└ <a href="${r.explorerTx}">tx on Blockscout</a>`,
-      ].join("\n"), sellKb).catch(() => {});
+      ].join("\n");
+      if (progress?.message_id) {
+        await telegram("editMessageText", { chat_id: userId, message_id: progress.message_id, text: successText, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: sellKb }).catch(() => sayHtml(userId, successText, sellKb));
+      } else await sayHtml(userId, successText, sellKb).catch(() => {});
     } catch (error) {
-      await sayHtml(userId, `🪶 Buy didn't land: ${escapeTelegramHtml(friendlyError(error))}`).catch(() => {});
+      const failedText = `🪶 <b>Buy didn't land</b>\n${escapeTelegramHtml(friendlyError(error))}`;
+      await audit("tg_rh_quick_buy_failed", { userId, tokenAddress, walletIndex: selected?.walletIndex || null, amountSol: amt, error: friendlyError(error) }).catch(() => {});
+      if (progress?.message_id) {
+        await telegram("editMessageText", { chat_id: userId, message_id: progress.message_id, text: failedText, parse_mode: "HTML", disable_web_page_preview: true }).catch(() => sayHtml(userId, failedText));
+      } else await sayHtml(userId, failedText).catch(() => {});
     }
     return true;
   }
   const pct = Math.min(100, Math.max(1, Number(mSell[1])));
-  await ack(`🪶 Selling ${pct}% — receipt lands in your DM…`, true);
+  await ack(`Selling ${pct}% now; receipt will land in your DM.`, true);
+  let selected = null;
   try {
+    selected = await selectTgRhTokenWallet(userId, tokenAddress);
+    const callbackAttempt = crypto.createHash("sha256").update(String(query.id || crypto.randomUUID())).digest("hex").slice(0, 20);
     const r = await webRhTrade(userId, {
-      walletIndex: "1", side: "sell", tokenAddress, percent: pct,
-      tradeAttemptId: `tg-rqs-${userId}-${tokenAddress.toLowerCase()}-${pct}-${Math.floor(Date.now() / 30_000)}`,
+      walletIndex: String(selected.walletIndex), walletPublicKey: selected.wallet.publicKey,
+      side: "sell", tokenAddress, percent: pct,
+      tradeAttemptId: `tg-rqs-${userId}-${callbackAttempt}`,
     });
     await sayHtml(userId, [
       `🪶 ✅ <b>Sold ${pct}%</b> of <code>${escapeTelegramHtml(shortMint(tokenAddress))}</code>`,
+      `├ Wallet: <b>${escapeTelegramHtml(selected.wallet.label || `Wallet ${selected.walletIndex}`)}</b>`,
       `├ Received <b>${escapeTelegramHtml(String(r.outFormatted || "?"))} ${escapeTelegramHtml(String(r.outSymbol || "ETH"))}</b>`,
       `└ <a href="${r.explorerTx}">tx on Blockscout</a>`,
     ].join("\n"), pct < 100 ? sellKb : undefined).catch(() => {});
   } catch (error) {
+    await audit("tg_rh_quick_sell_failed", { userId, tokenAddress, walletIndex: selected?.walletIndex || null, percent: pct, error: friendlyError(error) }).catch(() => {});
     await sayHtml(userId, `🪶 Sell didn't land: ${escapeTelegramHtml(friendlyError(error))}`).catch(() => {});
   }
   return true;
+}
+
+// Telegram has no wallet selector on a compact scan card. Prefer Wallet 1 when it can cover the buy,
+// otherwise transparently use the user's best-funded normal wallet. Never route a personal quick buy
+// through an internal volume/ghost wallet.
+async function selectTgRhSolWallet(userId, amountSol) {
+  const store = await readWalletStore();
+  const owned = walletsForOwner(store, userId);
+  const visible = owned.map((wallet, index) => ({ wallet, walletIndex: index + 1 }))
+    .filter(({ wallet }) => !wallet.volumeBot && !wallet.ephemeral);
+  const candidates = visible.length ? visible : owned.map((wallet, index) => ({ wallet, walletIndex: index + 1 }));
+  if (!candidates.length) throw new Error("Create a SlimeWire wallet first.");
+  const requiredLamports = solToLamports(Number(amountSol)) + 2_500_000;
+  const readBalance = async (entry) => ({
+    ...entry,
+    balanceLamports: Number(await getSolBalanceCached(new PublicKey(entry.wallet.publicKey), { force: true }).catch(() => 0))
+  });
+  const first = await readBalance(candidates[0]);
+  if (first.balanceLamports >= requiredLamports) return first;
+  const rest = await runWithConcurrency(candidates.slice(1), 4, readBalance);
+  const best = [first, ...rest].sort((a, b) => b.balanceLamports - a.balanceLamports)[0];
+  if (best?.balanceLamports >= requiredLamports) return best;
+  throw new Error(`Your best-funded wallet has ${lamportsToSol(best?.balanceLamports || 0)} SOL. Buying ${amountSol} SOL needs about 0.0025 SOL extra for network fees.`);
+}
+
+// A buy may have used Wallet 2+ (because that is where the SOL was), so receipt sell buttons locate
+// the wallet that really holds the token instead of incorrectly trying Wallet 1 again.
+async function selectTgRhTokenWallet(userId, tokenAddress) {
+  const store = await readWalletStore();
+  const owned = walletsForOwner(store, userId);
+  const visible = owned.map((wallet, index) => ({ wallet, walletIndex: index + 1 }))
+    .filter(({ wallet }) => !wallet.volumeBot && !wallet.ephemeral);
+  const candidates = visible.length ? visible : owned.map((wallet, index) => ({ wallet, walletIndex: index + 1 }));
+  const balances = await runWithConcurrency(candidates, 4, async (entry) => {
+    try {
+      const keypair = decryptWallet(entry.wallet);
+      const evmAddress = evmAddressFromSolana(keypair.secretKey);
+      const balance = await rhErc20Balance(tokenAddress, evmAddress, CONFIG.rhChainRpcUrl);
+      return { ...entry, tokenRaw: BigInt(balance.raw || 0) };
+    } catch { return { ...entry, tokenRaw: 0n }; }
+  });
+  const best = balances.sort((a, b) => (a.tokenRaw === b.tokenRaw ? 0 : a.tokenRaw > b.tokenRaw ? -1 : 1))[0];
+  if (!best || best.tokenRaw <= 0n) throw new Error("None of your SlimeWire wallets holds this Robinhood coin.");
+  return best;
 }
 // ⚡ QUICK BUY (preset) — one tap on any group/scan card buys the tapper's saved preset amount from
 // their own wallet AND arms their saved take-profit / stop-loss, all without leaving the group. Reuses
@@ -54107,6 +54189,7 @@ async function webRhTradeCore(userId, body = {}, internal = {}) {
         : crypto.randomUUID();
       const funding = await webRhFundWithSol(userId, {
         walletIndex: body.walletIndex,
+        walletPublicKey: wallet.publicKey,
         amountSol,
         tradeAttemptId: fundingAttemptId
       });
@@ -54664,7 +54747,11 @@ async function webRhFundWithSol(userId, body = {}) {
 }
 async function webRhFundWithSolCore(userId, body = {}) {
   const store = await readWalletStore();
-  const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
+  const wallet = assertFrozenManagedWallet(
+    getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId),
+    body.walletPublicKey,
+    "Robinhood funding swap"
+  );
   const keypair = decryptWallet(wallet);
   const amountSol = Number(body.amountSol || 0);
   if (!Number.isFinite(amountSol) || amountSol < 0.005 || amountSol > 5) {

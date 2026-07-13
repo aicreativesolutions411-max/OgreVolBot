@@ -376,6 +376,32 @@ test("Robinhood coins are tradeable in-app (Relay swap, gas-estimated, idempoten
   }
 });
 
+test("Telegram Robinhood quick trades use the funded/holding wallet and keep a durable receipt", () => {
+  const callback = functionBody(serverSource, "handleRhQuickTradeCallback");
+  assert.match(callback, /selectTgRhSolWallet\(userId, amt\)/);
+  assert.match(callback, /walletIndex: String\(selected\.walletIndex\), walletPublicKey: selected\.wallet\.publicKey/);
+  assert.match(callback, /selectTgRhTokenWallet\(userId, tokenAddress\)/);
+  assert.match(callback, /telegram\("editMessageText"/);             // slow bridge progress becomes the receipt
+  assert.match(callback, /createHash\("sha256"\)[\s\S]*query\.id/); // one Telegram tap = one stable attempt
+  assert.doesNotMatch(callback, /walletIndex:\s*"1"/);               // never silently force Wallet 1
+
+  const funded = functionBody(serverSource, "selectTgRhSolWallet");
+  assert.match(funded, /!wallet\.volumeBot && !wallet\.ephemeral/);   // don't spend from ghost wallets
+  assert.match(funded, /2_500_000/);                                  // bridge amount plus Solana fees
+  assert.match(funded, /runWithConcurrency/);                          // bounded lookup across multiple wallets
+
+  const holding = functionBody(serverSource, "selectTgRhTokenWallet");
+  assert.match(holding, /rhErc20Balance/);
+  assert.match(holding, /tokenRaw/);
+
+  const route = functionBody(serverSource, "handleCallback");
+  assert.match(route, /callbackOwnsAck[\s\S]*"rqbp:"[\s\S]*"rqb:"[\s\S]*"rqs:"/);
+  const trade = functionBody(serverSource, "webRhTradeCore");
+  assert.match(trade, /walletPublicKey: wallet\.publicKey/);          // freeze wallet through the SOL bridge
+  const fund = functionBody(serverSource, "webRhFundWithSolCore");
+  assert.match(fund, /assertFrozenManagedWallet/);
+});
+
 test("RH trading fees: normal coins match Solana, token rewards are scoped, and platform fees sweep to SOL", () => {
   const trade = functionBody(serverSource, "webRhTradeCore");
   assert.match(trade, /partnerTradeFeePolicy\(partner\)/);
