@@ -2450,7 +2450,10 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(rhTicker, /const indexedResponseComplete = Array\.isArray\(blockscoutRows\)/); // broad DEX arrays are not authoritative RH no-matches
   assert.match(rhTicker, /solDexCandidate/);                          // the independent query can repair a missed dominant Sol result too
   assert.match(rhTicker, /rhTickerDirectMarket/);                   // zero-metric feed matches hydrate by token address
-  assert.match(rhTicker, /sort\(\(a, b\) => b\.holders - a\.holders\)\.slice\(0, 4\)/);
+  assert.match(rhTicker, /rhTickerBatchMarkets/);                   // one exact-address batch repairs partial broad search
+  assert.match(rhTicker, /filter\(\(candidate\) => !tickerRhCandidateHasActiveMarket\(candidate\)\)/);
+  assert.match(rhTicker, /sort\(\(a, b\) => b\.holders - a\.holders\)[\s\S]*slice\(0, 4\)/);
+  assert.match(rhTicker, /tickerRhSelectCheckedCandidate/);         // multiple identity-only clones fail closed
   assert.match(rhTicker, /pick\.marketCap > 0 \|\| pick\.volume24h > 0/); // an address-only row is not a completed market lookup
   assert.match(rhTicker, /_rhKindCache\.set/);                      // later scan skips duplicate wallet-vs-token RPC work
   const directRh = functionBody(serverSource, "rhTickerDirectMarket");
@@ -2458,6 +2461,9 @@ test("shared scan pipeline stays fast and resilient across Telegram, X, and repe
   assert.match(directRh, /tokens\/v1\/robinhood/);
   assert.match(directRh, /networks\/robinhood\/tokens/);
   assert.match(directRh, /tickerMarketRowStrength/);
+  const batchRh = functionBody(serverSource, "rhTickerBatchMarkets");
+  assert.match(batchRh, /tokens\/v1\/robinhood/);
+  assert.match(batchRh, /slice\(0, 25\)/);
 
   const xLogo = functionBody(serverSource, "xCoinLogoLive");
   assert.match(xLogo, /Number\(budgetMs\) \|\| 3_500/); // a cold PFP host cannot consume the whole reply budget
@@ -2636,6 +2642,8 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   const dominanceFn = new Function("candidate", "maxima", dominance);
   const leadershipFn = new Function("candidate", "maxima", leadership);
   const rhDominatesFn = new Function("rh", "sol", functionBody(serverSource, "tickerRhClearlyDominates"));
+  const rhActiveFn = new Function("candidate", functionBody(serverSource, "tickerRhCandidateHasActiveMarket"));
+  const rhSelectFn = new Function("tickerRhCandidateHasActiveMarket", "checked", functionBody(serverSource, "tickerRhSelectCheckedCandidate")).bind(null, rhActiveFn);
   const established = { marketCap: 509_000, liquidityUsd: 52_000, volume24h: 140_000, holders: 1_100, trendBoost: 0, sources: new Set(["dexscreener"]) };
   const tinyTrendClone = { marketCap: 2_000, liquidityUsd: 1_200, volume24h: 18_000, holders: 90, trendBoost: 55, sources: new Set(["moralis-trending"]) };
   const maxima = { marketCap: established.marketCap, liquidityUsd: established.liquidityUsd, volume24h: established.volume24h };
@@ -2651,13 +2659,18 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   const noxaMaxima = { marketCap: noxaRh.marketCap, volume24h: noxaRh.volume24h };
   assert.ok(leadershipFn(noxaRh, noxaMaxima) > leadershipFn(noxaSolClone, noxaMaxima) * 20, "$NOXA must resolve to its dominant Robinhood market, never the tiny Sol clone");
   assert.equal(rhDominatesFn({ contractProof: true, holders: 2376 }, { marketCap: 4_200, volume24h: 165 }), true, "chain-native holder proof must beat a dust Sol clone while market indexes catch up");
+  assert.equal(rhDominatesFn({ contractProof: true, holders: 6961, exactMatches: 20 }, { marketCap: 2_950, volume24h: 297 }), false, "holder-airdropped CASHCOW clone cannot dominate when many exact RH contracts exist");
   assert.equal(rhDominatesFn({ contractProof: true, holders: 2376 }, { marketCap: 500_000, volume24h: 2_000_000 }), false, "identity alone must never displace a strong Sol market");
+  const cashcowReal = { address: "0x4ad72e468e38ec204c605f2e058d61e4d79e2ceb", marketCap: 54_833, volume24h: 106_224, liquidityUsd: 21_595 };
+  const cashcowNoVolume = { address: "0xff3a8aadd2c6bdb380b2c2e752daf445e2151b09", marketCap: 1_221, volume24h: 0, liquidityUsd: 1_707, holders: 6_961 };
+  assert.equal(rhSelectFn([{ candidate: cashcowNoVolume, isContract: true }, { candidate: cashcowReal, isContract: true }]).address, cashcowReal.address, "active CASHCOW market must beat the no-volume holder clone");
+  assert.equal(rhSelectFn([{ candidate: cashcowNoVolume, isContract: true }, { candidate: { ...cashcowReal, marketCap: 0, volume24h: 0, liquidityUsd: 0 }, isContract: true }]), null, "ambiguous multi-clone lookup must fail closed when every market provider misses");
   assert.match(functionBody(serverSource, "tickerScanSelectionLine"), /strongest Robinhood/);
   assert.match(functionBody(serverSource, "tickerTruthLine"), /Vol/);
   const rhSend = functionBody(serverSource, "sendRhScanCard");
   assert.match(rhSend, /rhTickerCandidateForTarget/);
   assert.match(rhSend, /Loading full safety, holders, ATH and socials/);
-  assert.match(rhSend, /sendPhoto\(chatId, "rh-scan\.png", quickPng/); // first RH card has a circular-PFP media shell
+  assert.match(rhSend, /sendPhoto\(chatId, "rh-scan\.jpg", quickPng/); // compressed circular-PFP card avoids Telegram upload timeout
   assert.match(rhSend, /editMessagePhotoBuffer/);                    // same card upgrades to the real PFP + full facts
   assert.match(rhSend, /if \(!\(cachedScan/);                        // raw 0x CAs get the progressive path too
   assert.match(rhSend, /mergeRhScanWithTickerCandidate/);             // ticker market facts survive a thin full refresh
@@ -2681,6 +2694,8 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(rhSend, /Object\.assign\(quickInfo, mergedLoaded\)/);  // partial Blockscout identity/holders replace the generic $RH placeholder
   assert.match(rhSend, /\[4_000, 8_000, 15_000, 30_000\]/);           // new pools auto-refresh the same Telegram card through index lag
   assert.match(rhSend, /rhScanCache\.delete/);                         // each bounded retry bypasses the short negative cache
+  assert.match(functionBody(serverSource, "renderRhScanCardPng"), /jpeg\(\{ quality: 88/); // high-grain PNG is compressed before TG upload
+  assert.match(functionBody(serverSource, "sendPhoto"), /telegramPhotoUpload/);              // MIME/extension match JPEG bytes
   const geckoPool = new Function("firstString", "firstMeaningfulNumber", "rhFiniteNumber", `return function(data, address) {${functionBody(serverSource, "rhGeckoPoolForToken")}}`)(
     (...values) => String(values.find((value) => String(value || "").trim()) || ""),
     (...values) => values.map(Number).find((value) => Number.isFinite(value) && value !== 0) ?? null,

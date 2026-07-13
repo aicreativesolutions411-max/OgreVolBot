@@ -32662,10 +32662,21 @@ async function sendDocument(chatId, filename, text) {
   return data.result;
 }
 
+function telegramPhotoUpload(buffer, filename = "photo.png") {
+  const bytes = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
+  const jpeg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const webp = bytes.length >= 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP";
+  const ext = jpeg ? ".jpg" : webp ? ".webp" : ".png";
+  const mime = jpeg ? "image/jpeg" : webp ? "image/webp" : "image/png";
+  const base = String(filename || "photo").replace(/\.(?:png|jpe?g|webp)$/i, "");
+  return { bytes, filename: `${base}${ext}`, mime };
+}
+
 async function sendPhoto(chatId, filename, buffer, caption = "", replyMarkup = null, parseMode = null) {
+  const upload = telegramPhotoUpload(buffer, filename);
   const form = new FormData();
   form.append("chat_id", String(chatId));
-  form.append("photo", new Blob([buffer], { type: "image/png" }), filename);
+  form.append("photo", new Blob([upload.bytes], { type: upload.mime }), upload.filename);
   if (caption) form.append("caption", caption);
   if (parseMode) form.append("parse_mode", parseMode);
   if (replyMarkup) form.append("reply_markup", JSON.stringify(replyMarkup));
@@ -32785,11 +32796,12 @@ async function pfpFrameButtons(activeId, ownerId) {
 }
 const PFP_TG_CAPTION = "🐸 <b>Your SlimeWire PFP</b>\nTap a style below, then save the image and set it as your profile pic.";
 async function editMessagePhotoBuffer(chatId, messageId, buffer, caption, replyMarkup) {
+  const upload = telegramPhotoUpload(buffer, "slimewire-card.png");
   const form = new FormData();
   form.append("chat_id", String(chatId));
   form.append("message_id", String(messageId));
   form.append("media", JSON.stringify({ type: "photo", media: "attach://pfp", caption, parse_mode: "HTML" }));
-  form.append("pfp", new Blob([buffer], { type: "image/png" }), "slimewire-pfp.png");
+  form.append("pfp", new Blob([upload.bytes], { type: upload.mime }), upload.filename);
   if (replyMarkup) form.append("reply_markup", JSON.stringify(replyMarkup));
   const data = await fetchJson(`https://api.telegram.org/bot${CONFIG.telegramToken}/editMessageMedia`, { method: "POST", body: form });
   if (!data.ok) throw new Error(data.description || "editMessageMedia failed");
@@ -34539,6 +34551,20 @@ function tickerMarketRowStrength(marketCap, volume24h, liquidityUsd) {
   const mc = Math.max(0, Number(marketCap) || 0), vol = Math.max(0, Number(volume24h) || 0), liq = Math.max(0, Number(liquidityUsd) || 0);
   return Math.sqrt(mc * vol) + Math.min(mc, vol) + liq * 0.25;
 }
+function tickerRhCandidateHasActiveMarket(candidate = {}) {
+  const marketCap = Math.max(0, Number(candidate.marketCap) || 0);
+  const volume24h = Math.max(0, Number(candidate.volume24h) || 0);
+  const liquidityUsd = Math.max(0, Number(candidate.liquidityUsd) || 0);
+  return volume24h >= 1_000 || (marketCap >= 20_000 && liquidityUsd >= 2_000);
+}
+function tickerRhSelectCheckedCandidate(checked = []) {
+  const verified = checked.filter((row) => row?.isContract && row?.candidate);
+  const active = verified.find((row) => tickerRhCandidateHasActiveMarket(row.candidate));
+  if (active) return active.candidate;
+  // A unique just-launched contract can legitimately predate public pool indexes. With multiple exact
+  // contracts, however, identity/holder count alone is not enough evidence to choose one.
+  return verified.length === 1 ? verified[0].candidate : null;
+}
 function tickerRhClearlyDominates(rh, sol = null) {
   const rhMc = Number(rh?.marketCap) || 0, rhVol = Number(rh?.volume24h) || 0;
   const solMc = Number(sol?.marketCap) || 0, solVol = Number(sol?.volume24h) || 0;
@@ -34550,6 +34576,7 @@ function tickerRhClearlyDominates(rh, sol = null) {
   // Keep this bounded to weak Sol markets so a real, liquid Sol coin is never displaced by identity alone.
   const holderDominatesDust = rh?.contractProof === true
     && Number(rh?.holders || 0) >= 100
+    && Number(rh?.exactMatches || 1) === 1
     && solMc < 50_000
     && solVol < 100_000;
   return marketDominates || holderDominatesDust;
@@ -34752,6 +34779,22 @@ async function rhTickerDirectMarket(address, timeoutMs = 2_400) {
   }
   return rows.sort((x, y) => tickerMarketRowStrength(y.marketCap, y.volume24h, y.liquidityUsd) - tickerMarketRowStrength(x.marketCap, x.volume24h, x.liquidityUsd))[0] || null;
 }
+async function rhTickerBatchMarkets(addresses = [], timeoutMs = 2_000) {
+  const clean = [...new Set(addresses
+    .map((value) => String(value || "").trim())
+    .filter((value) => /^0x[0-9a-fA-F]{40}$/.test(value))
+    .map((value) => value.toLowerCase()))].slice(0, 25);
+  if (!clean.length) return [];
+  const data = await fetchJson(`https://api.dexscreener.com/tokens/v1/robinhood/${clean.join(",")}`, {
+    headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
+    timeoutMs,
+    maxBytes: 2_000_000
+  }).catch(() => null);
+  return (Array.isArray(data) ? data : []).filter((pair) => {
+    const address = String(pair?.baseToken?.address || "").toLowerCase();
+    return clean.includes(address) && String(pair?.chainId || "").toLowerCase() === "robinhood";
+  });
+}
 async function resolveRhTickerCandidate(symbol, options = {}) {
   const q = String(symbol || "").replace(/^\$|^#/, "").trim();
   if (q.length < 2) return null;
@@ -34853,6 +34896,17 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
       if (!solDexCandidate || tickerMarketRowStrength(candidate.marketCap, candidate.volume24h, candidate.liquidityUsd) > tickerMarketRowStrength(solDexCandidate.marketCap, solDexCandidate.volume24h, solDexCandidate.liquidityUsd)) solDexCandidate = candidate;
     }
   }
+  // Exact Blockscout search gives us every same-symbol contract but usually no pool metrics. Hydrate all
+  // of those addresses in one DexScreener batch request. This closes the transient-search hole where a
+  // holder-airdropped clone could beat the real high-volume market simply because broad search was partial.
+  if (candidates.size) {
+    const batchPairs = await scanFastTimeout(
+      rhTickerBatchMarkets([...candidates.keys()], Math.max(1_800, providerTimeoutMs)),
+      Math.max(1_900, providerTimeoutMs + 100),
+      []
+    );
+    for (const pair of Array.isArray(batchPairs) ? batchPairs : []) add(pair.baseToken?.address, pair, "dexscreener-batch");
+  }
   // The full feed is a heavy universe read. Blockscout exact search is cheaper and more reliable for
   // ticker lookup, so only touch the feed if all three exact indexes found nothing.
   const shouldReadFeed = Boolean(options.includeFeed) || candidates.size === 0;
@@ -34862,8 +34916,11 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
   for (const row of Array.isArray(feed) ? feed : []) add(row.address, row, row.source || "robinhood-feed");
   // Blockscout/feed rows sometimes identify the correct token but carry null market fields. Hydrate
   // the highest-holder exact matches through per-token pool endpoints, then rank real numbers.
-  if (candidates.size && ![...candidates.values()].some((candidate) => candidate.marketCap > 0 && candidate.volume24h > 0)) {
-    const probes = [...candidates.values()].sort((a, b) => b.holders - a.holders).slice(0, 4);
+  if (candidates.size) {
+    const probes = [...candidates.values()]
+      .filter((candidate) => !tickerRhCandidateHasActiveMarket(candidate))
+      .sort((a, b) => b.holders - a.holders)
+      .slice(0, 4);
     const hydrated = await Promise.all(probes.map(async (candidate) => ({ candidate, market: await rhTickerDirectMarket(candidate.address, Number(options.providerTimeoutMs) || 2_400).catch(() => null) })));
     for (const { candidate, market } of hydrated) {
       if (!market) continue;
@@ -34876,6 +34933,7 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
     }
   }
   const all = [...candidates.values()];
+  for (const candidate of all) candidate.exactMatches = all.length;
   const maxima = {
     marketCap: Math.max(0, ...all.map((candidate) => candidate.marketCap)),
     liquidityUsd: Math.max(0, ...all.map((candidate) => candidate.liquidityUsd)),
@@ -34890,7 +34948,7 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
     candidate,
     isContract: candidate.contractProof || candidate.dexPair || await scanFastTimeout(isRhContract(candidate.address), 2_000, false).catch(() => false)
   })));
-  const pick = checked.find((row) => row.isContract)?.candidate || null;
+  const pick = tickerRhSelectCheckedCandidate(checked);
   if (pick) {
     pick.solDexCandidate = solDexCandidate;
     if (pick.contractProof || pick.dexPair) _rhKindCache.set(pick.address.toLowerCase(), { at: Date.now(), contract: true });
@@ -34901,7 +34959,7 @@ async function resolveRhTickerCandidate(symbol, options = {}) {
   const feedResponseComplete = !shouldReadFeed || Array.isArray(feed);
   const lookupComplete = Boolean(
     (pick && (pick.marketCap > 0 || pick.volume24h > 0))
-    || (indexedResponseComplete && feedResponseComplete)
+    || (indexedResponseComplete && feedResponseComplete && all.length === 0)
   );
   rhTickerTargetCache.set(key, { at: Date.now(), candidate: pick, solDexCandidate, lookupComplete });
   if (rhTickerTargetCache.size > 300) rhTickerTargetCache.delete(rhTickerTargetCache.keys().next().value);
@@ -39824,7 +39882,7 @@ async function renderRhScanCardPng(info, seed = "") {
   const { verdict, tone } = rhVerdictTone(info?.safety);
   const vol = rhVolumeInfo(info);
   const ch = rhChangeInfo(info);
-  return renderXScanCard({
+  const card = await renderXScanCard({
     symbol: info?.symbol || "RH",
     name: info?.name || "Robinhood token",
     mcLabel: info?.mc > 0 ? scanFmtMoney(info.mc) : "—",
@@ -39842,6 +39900,14 @@ async function renderRhScanCardPng(info, seed = "") {
     bgDir: X_CARD_BG_DIR,
     seed: seed || info?.symbol || address
   });
+  // The full-resolution PNG includes intentional film grain and can be several megabytes. Telegram media
+  // uploads occasionally timed out at 15s and forced a text-only scan. A high-quality JPEG preserves the
+  // coin PFP/card appearance at a fraction of the size, making the photo path reliably fast.
+  try {
+    return await sharp(card).jpeg({ quality: 88, chromaSubsampling: "4:4:4", mozjpeg: true }).toBuffer();
+  } catch {
+    return card;
+  }
 }
 async function sendRhScanCard(chatId, address, options = {}) {
   const fastCandidate = rhTickerCandidateForTarget(options.tickerSymbol, address);
@@ -39864,7 +39930,7 @@ async function sendRhScanCard(chatId, address, options = {}) {
     let quickHasPhoto = false;
     if (quickPng) {
       try {
-        sent = await sendPhoto(chatId, "rh-scan.png", quickPng, quickText, kb, "HTML");
+        sent = await sendPhoto(chatId, "rh-scan.jpg", quickPng, quickText, kb, "HTML");
         quickHasPhoto = Boolean(sent?.message_id);
       } catch (error) {
         console.warn(`[tg-scan] quick RH photo failed ${address.slice(0, 10)}…: ${friendlyError(error)}`);
@@ -39939,7 +40005,7 @@ async function sendRhScanCard(chatId, address, options = {}) {
   const png = await renderRhScanCardPng(info, info.symbol || address).catch(() => null);
   // Telegram applies the caption limit after HTML entity parsing; slicing the raw HTML could cut off the
   // caller footer (or split a link tag). Let Telegram accept the complete compact card, then fall back to text.
-  if (png) await sendPhoto(chatId, "rh-scan.png", png, text, kb, "HTML").catch(async () => { await sayHtml(chatId, text, kb).catch(() => {}); });
+  if (png) await sendPhoto(chatId, "rh-scan.jpg", png, text, kb, "HTML").catch(async () => { await sayHtml(chatId, text, kb).catch(() => {}); });
   else await sayHtml(chatId, text, kb).catch(() => {});
 }
 
