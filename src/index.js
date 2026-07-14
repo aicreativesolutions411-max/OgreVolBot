@@ -9199,6 +9199,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendCachedWebJson(request, response, 200, { ok: true, profile: await webPublicTraderProfile(requestUrl.searchParams.get("username") || "") }, "public, max-age=20, stale-while-revalidate=60");
       return;
     }
+    if (request.method === "GET" && pathname === "/api/web/profile/search") {
+      sendCachedWebJson(request, response, 200, { ok: true, traders: await webSearchPublicTraders(requestUrl.searchParams.get("q") || "") }, "public, max-age=10, stale-while-revalidate=30");
+      return;
+    }
     if (request.method === "GET" && pathname === "/api/web/rh/token") {
       const address = String(requestUrl.searchParams.get("address") || requestUrl.searchParams.get("token") || "").trim();
       if (!/^0x[0-9a-fA-F]{40}$/.test(address)) { sendWebJson(request, response, 400, { ok: false, error: "Invalid token address." }); return; }
@@ -61649,6 +61653,38 @@ async function webPublicTraderProfile(username) {
     stats: { realizedLabel: trader.realizedLabel || "building", roiLabel: trader.roiLabel || "n/a", trades: trader.trades || 0, buys: trader.buys || 0, sells: trader.sells || 0 },
     calls: calls.calls.filter((call) => call.userId === found.userId).slice(-20).reverse().map(({ userId, ...call }) => call)
   };
+}
+
+async function webSearchPublicTraders(query) {
+  const wanted = String(query || "").trim().replace(/^@+/, "").replace(/[^a-z0-9_.-]/gi, "").toLowerCase().slice(0, 24);
+  if (!wanted) return [];
+  const [store, ranked] = await Promise.all([readWebAuthStore(), webSlimewireTraders()]);
+  const rankedByUserId = new Map(ranked.map((row) => [String(row.userId), row]));
+  const followerCounts = new Map();
+  for (const profile of Object.values(store.profiles || {})) {
+    for (const followedId of Array.isArray(profile?.followingProfileIds) ? profile.followingProfileIds : []) {
+      followerCounts.set(String(followedId), (followerCounts.get(String(followedId)) || 0) + 1);
+    }
+  }
+  return Object.entries(store.profiles || {})
+    .filter(([, profile]) => profile?.showOnTraderBoard && String(profile.usernameNormalized || profile.username || "").toLowerCase().includes(wanted))
+    .map(([userId, profile]) => {
+      const stats = rankedByUserId.get(String(userId)) || {};
+      return {
+        username: profile.username || "",
+        name: profile.username || profile.xHandle || "SlimeWire trader",
+        avatar: profile.avatarDataUrl || profile.avatarUrl || "",
+        followerCount: followerCounts.get(String(userId)) || 0,
+        trades: stats.trades || 0,
+        realizedLabel: stats.realizedLabel || "building",
+        roiLabel: stats.roiLabel || "n/a"
+      };
+    })
+    .sort((a, b) => {
+      const aName = String(a.username || "").toLowerCase(), bName = String(b.username || "").toLowerCase();
+      return Number(bName.startsWith(wanted)) - Number(aName.startsWith(wanted)) || Number(b.followerCount || 0) - Number(a.followerCount || 0) || aName.localeCompare(bName);
+    })
+    .slice(0, 20);
 }
 
 async function webProfileFollows(userId) {

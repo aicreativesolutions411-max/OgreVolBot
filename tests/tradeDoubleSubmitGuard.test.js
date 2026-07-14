@@ -858,6 +858,21 @@ test("Fun profile clearly exposes naming, creation, and login recovery", () => {
   assert.match(fun, /location\.origin/);
 });
 
+test("Fun Discover supports public username search and a saved Following tab", () => {
+  const fun = fs.readFileSync(new URL("../web/public/fun.js", import.meta.url), "utf8");
+  const html = fs.readFileSync(new URL("../web/public/fun.html", import.meta.url), "utf8");
+  assert.match(serverSource, /\/api\/web\/profile\/search/);
+  assert.match(serverSource, /async function webSearchPublicTraders\(query\)/);
+  assert.match(serverSource, /profile\?\.showOnTraderBoard/);
+  assert.match(html, /data-trader-search/);
+  assert.match(html, /data-leader-tab="top">Top traders/);
+  assert.match(html, /data-leader-tab="following">Following/);
+  assert.match(fun, /async function searchTraders\(rawQuery\)/);
+  assert.match(fun, /\/api\/web\/profile\/follows/);
+  assert.match(fun, /data-follow-trader/);
+  assert.match(fun, /Following sends alerts only/);
+});
+
 test("creator fee claims auto-run only after new Pump volume, and wallet choice follows Cash to Fun", () => {
   assert.match(serverSource, /function startCreatorFeeAutoClaimRunner\(\)/);
   const auto = functionBody(serverSource, "processCreatorFeeAutoClaims");

@@ -32,6 +32,8 @@
     view: "home",
     previousView: "home",
     profileTab: "positions",
+    leaderTab: "top",
+    traderSearch: "",
     detailTab: "setup",
     chartInterval: "15",
     chartMode: "chart",
@@ -553,6 +555,18 @@
   async function loadLeaders() {
     const hero = $("[data-leader-hero]"), list = $("[data-leader-list]");
     hero.innerHTML = '<div class="skeleton-list" style="height:160px"></div>'; list.innerHTML = '<div class="skeleton-list"></div>';
+    if (state.leaderTab === "following") {
+      if (!state.token) {
+        hero.innerHTML = emptyState("Your followed traders live here", "Create a profile or log in, then follow any public username.");
+        list.innerHTML = '<button class="submit-trade discover-login" type="button" data-nav="wallet">Open Profile</button>';
+        return;
+      }
+      const result = await request("/api/web/profile/follows");
+      const follows = result.ok ? (result.data?.follows || []) : [];
+      hero.innerHTML = `<div class="read-card discover-summary"><span>FOLLOWING</span><h3>${follows.length} trader${follows.length === 1 ? "" : "s"}</h3><p>Open a profile for public proof, or unfollow directly from this list.</p></div>`;
+      list.innerHTML = follows.length ? follows.map((trader) => traderActionRowHtml(trader, true)).join("") : emptyState("No followed traders yet", "Search a username above or explore Top traders.");
+      return;
+    }
     const [result, socialResult] = await Promise.all([request("/api/web/proof"), request("/api/web/slimewire-traders")]);
     const leaders = result.ok ? (result.data?.topCallers || []) : [], social = socialResult.ok ? (socialResult.data?.traders || []) : [];
     if (!leaders.length && !social.length) { hero.innerHTML = emptyState("Caller proof is warming", "Check again after tracked calls resolve."); list.innerHTML = ""; return; }
@@ -562,6 +576,22 @@
     list.innerHTML = `${social.length ? `<div class="read-card"><h3>Trader profiles</h3><p>Follow activity alerts without copy trading.</p></div>${social.map(traderRowHtml).join("")}` : ""}${leaders.slice(1, 11).map((leader, index) => { const n = leader.name || leader.callerName || leader.id || `Caller ${index + 2}`; return `<div class="leader-row"><span class="leader-rank">${index + 2}</span><img class="slime-pfp" src="${slimePfp(n)}" alt=""><div class="leader-copy"><b>${escapeHtml(n)}</b><span>${escapeHtml(leader.calls || leader.resolved || 0)} resolved · best ${escapeHtml(leader.bestPeakX || "—")}x</span></div><div class="leader-hit">${Math.round(Number(leader.smoothedHitRate || leader.hitRate || 0) * 100)}%<small>hit rate</small></div></div>`; }).join("")}`;
   }
   function traderRowHtml(trader) { return `<button class="leader-row" type="button" data-open-trader="${escapeHtml(trader.username || "")}"><span class="leader-rank">◎</span><img class="slime-pfp" src="${escapeHtml(trader.avatar || slimePfp(trader.username || trader.name))}" alt=""><div class="leader-copy"><b>${escapeHtml(trader.name || trader.username)}</b><span>${escapeHtml(trader.trades || 0)} trades · ${escapeHtml(trader.realizedLabel || "building")}</span></div><div class="leader-hit">${escapeHtml(trader.roiLabel || "n/a")}<small>ROI</small></div></button>`; }
+  function traderActionRowHtml(trader, following = false) {
+    const username = trader.username || "", detail = trader.trades != null ? `${trader.trades || 0} trades · ${trader.realizedLabel || "building"}` : trader.followerCount != null ? `${trader.followerCount || 0} followers · public profile` : "Public trader profile";
+    return `<div class="trader-result"><button class="trader-result-main" type="button" data-open-trader="${escapeHtml(username)}"><img class="slime-pfp" src="${escapeHtml(trader.avatar || slimePfp(username || trader.name))}" alt=""><span><b>@${escapeHtml(username)}</b><small>${escapeHtml(detail)}</small></span></button><button class="follow-chip ${following ? "following" : ""}" type="button" data-follow-trader="${escapeHtml(username)}" data-following="${following ? "true" : "false"}">${following ? "Following" : "Follow"}</button></div>`;
+  }
+  async function searchTraders(rawQuery) {
+    const query = String(rawQuery || "").trim().replace(/^@+/, "");
+    if (!query) { state.traderSearch = ""; state.leaderTab = "top"; syncLeaderTabs(); await loadLeaders(); return; }
+    state.traderSearch = query; state.leaderTab = "search"; syncLeaderTabs();
+    const hero = $("[data-leader-hero]"), list = $("[data-leader-list]");
+    hero.innerHTML = '<div class="skeleton-list" style="height:100px"></div>'; list.innerHTML = '<div class="skeleton-list"></div>';
+    const [result, followResult] = await Promise.all([request(`/api/web/profile/search?q=${encodeURIComponent(query)}`), state.token ? request("/api/web/profile/follows") : Promise.resolve(null)]);
+    const traders = result.ok ? (result.data?.traders || []) : [], followed = new Set((followResult?.data?.follows || []).map((item) => String(item.username || "").toLowerCase()));
+    hero.innerHTML = `<div class="read-card discover-summary"><span>USERNAME SEARCH</span><h3>${traders.length ? `${traders.length} result${traders.length === 1 ? "" : "s"}` : "No public match"}</h3><p>${traders.length ? `Profiles matching @${escapeHtml(query)}. Following sends alerts only.` : `Try the trader's exact SlimeWire username.`}</p></div>`;
+    list.innerHTML = traders.length ? traders.map((trader) => traderActionRowHtml(trader, followed.has(String(trader.username || "").toLowerCase()))).join("") : emptyState("No trader found", "Only public SlimeWire profiles appear in username search.");
+  }
+  function syncLeaderTabs() { $$('[data-leader-tab]').forEach((button) => button.classList.toggle("active", button.dataset.leaderTab === state.leaderTab)); }
   async function openTraderProfile(username) {
     const result = await request(`/api/web/profile/public?username=${encodeURIComponent(username)}`);
     if (!result.ok || !result.data?.profile) { toast("Profile is not available.", true); return; }
@@ -572,7 +602,12 @@
   async function toggleTraderFollow(button) {
     if (!(await ensureAccount())) return;
     const follow = button.dataset.following !== "true", result = await post("/api/web/profile/follow", { username: button.dataset.followTrader, follow });
-    if (result.ok && result.data?.ok) { toast(follow ? "Trade alerts followed" : "Trade alerts unfollowed"); await openTraderProfile(button.dataset.followTrader); }
+    if (result.ok && result.data?.ok) {
+      toast(follow ? "Trade alerts followed" : "Trade alerts unfollowed");
+      if (button.closest("[data-sheet-content]")) await openTraderProfile(button.dataset.followTrader);
+      else if (state.leaderTab === "following") await loadLeaders();
+      else { button.dataset.following = follow ? "true" : "false"; button.textContent = follow ? "Following" : "Follow"; button.classList.toggle("following", follow); }
+    }
     else toast(result.data?.error || "Could not update follow", true);
   }
 
@@ -1042,6 +1077,7 @@
     const coinButton = event.target.closest("[data-open-coin]"); if (coinButton) { closeSearch(); closeSheet(); await openCoin(coinButton.dataset.openCoin, coinButton.dataset.chainKind); return; }
     const chainButton = event.target.closest("[data-chain]"); if (chainButton) { state.chain = chainButton.dataset.chain; $$("[data-chain]").forEach((button) => button.classList.toggle("active", button.dataset.chain === state.chain)); loadFeed(true); return; }
     const feedButton = event.target.closest("[data-feed]"); if (feedButton) { state.feed = feedButton.dataset.feed; $$("[data-feed]").forEach((button) => button.classList.toggle("active", button === feedButton)); loadFeed(); return; }
+    const leaderTab = event.target.closest("[data-leader-tab]"); if (leaderTab) { state.leaderTab = leaderTab.dataset.leaderTab || "top"; state.traderSearch = ""; const input = $("[data-trader-search]"); if (input) input.value = ""; syncLeaderTabs(); await loadLeaders(); return; }
     if (event.target.closest("[data-refresh-feed]")) { loadFeed(true); return; }
     if (event.target.closest("[data-coin-back]")) { history.replaceState(null, "", "#"); setView(state.previousView || "home"); return; }
     if (event.target.closest("[data-copy-coin]")) { navigator.clipboard?.writeText(coinKey(state.selected)); toast("Contract copied"); return; }
@@ -1159,6 +1195,7 @@
   }, true);
 
   $("[data-search-input]").addEventListener("input", (event) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => runSearch(event.target.value), 280); });
+  $("[data-trader-search-form]")?.addEventListener("submit", (event) => { event.preventDefault(); void searchTraders($("[data-trader-search]")?.value); });
   window.addEventListener("hashchange", () => { const match = location.hash.match(/^#coin\/(.+)$/); if (match) openCoin(decodeURIComponent(match[1])); });
   async function loadCreatedCoinsSilently() { if (!state.token || state.launches.length) return; const result = await request("/api/web/launches"); if (result.ok) state.launches = result.data?.coins || []; }
 
