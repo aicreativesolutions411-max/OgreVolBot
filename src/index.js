@@ -54889,11 +54889,15 @@ async function webRhArmAutoBundle(userId, body = {}) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(tokenAddress)) { const e = new Error("Invalid token address."); e.statusCode = 400; throw e; }
   const indexes = (Array.isArray(body.walletIndexes) ? body.walletIndexes : []).map((v) => Number.parseInt(v, 10)).filter((n) => Number.isInteger(n) && n >= 1);
   if (!indexes.length || indexes.length > 20) { const e = new Error("Pick 1-20 wallets."); e.statusCode = 400; throw e; }
-  const minEth = Number(body.minEth || 0), maxEth = Number(body.maxEth || 0);
-  if (!(minEth > 0) || !(maxEth >= minEth) || maxEth > 0.5) { const e = new Error("Buy range must be 0 < min ≤ max ≤ 0.5 ETH."); e.statusCode = 400; throw e; }
+  const solFunded = body.minSol != null || body.maxSol != null || ["sol", "solana"].includes(String(body.payCurrency || body.payWith || "").toLowerCase());
+  const minAmount = Number(solFunded ? body.minSol : body.minEth || 0);
+  const maxAmount = Number(solFunded ? body.maxSol : body.maxEth || 0);
+  const maxAllowed = solFunded ? 5 : 0.5;
+  const unit = solFunded ? "SOL" : "ETH";
+  if (!(minAmount > 0) || !(maxAmount >= minAmount) || maxAmount > maxAllowed) { const e = new Error(`Buy range must be 0 < min ≤ max ≤ ${maxAllowed} ${unit}.`); e.statusCode = 400; throw e; }
   const store = await readRhAutoBundles();
   store.bundles = store.bundles.filter((b) => !(b.status === "armed" && b.userId === userId && b.tokenAddress.toLowerCase() === tokenAddress.toLowerCase()));
-  const bundle = { id: crypto.randomUUID(), userId, tokenAddress, walletIndexes: indexes, minEth, maxEth, symbol: String(body.symbol || "").slice(0, 16), status: "armed", createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 86_400_000).toISOString() };
+  const bundle = { id: crypto.randomUUID(), userId, tokenAddress, walletIndexes: indexes, fundingAsset: solFunded ? "sol" : "eth", ...(solFunded ? { minSol: minAmount, maxSol: maxAmount } : { minEth: minAmount, maxEth: maxAmount }), symbol: String(body.symbol || "").slice(0, 16), status: "armed", createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 86_400_000).toISOString() };
   store.bundles.push(bundle);
   store.bundles = store.bundles.slice(-200);
   await writeRhAutoBundles(store);
@@ -54924,7 +54928,13 @@ async function rhAutoBundleTick(probe) {
     b.status = "firing"; changed = true;
     await writeRhAutoBundles(store); // persist BEFORE the slow bundle so a restart can't double-fire
     try {
-      const result = await webRhBundleCore(b.userId, { tokenAddress: b.tokenAddress, walletIndexes: b.walletIndexes, minEth: b.minEth, maxEth: b.maxEth });
+      const result = await webRhBundleCore(b.userId, {
+        tokenAddress: b.tokenAddress,
+        walletIndexes: b.walletIndexes,
+        ...(b.fundingAsset === "sol" || b.minSol != null
+          ? { payCurrency: "SOL", minSol: b.minSol, maxSol: b.maxSol }
+          : { minEth: b.minEth, maxEth: b.maxEth })
+      });
       b.status = "fired"; b.firedAt = new Date().toISOString(); b.result = result.summary;
       await audit("web_rh_autobundle_fired", { userId: b.userId, tokenAddress: b.tokenAddress, summary: result.summary });
     } catch (error) {
@@ -55047,17 +55057,21 @@ async function webRhBundleCore(userId, body = {}) {
   const walletStore = await readWalletStore();
   const selectedWallets = webSelectedWallets(walletStore, userId, body.walletIndexes, "", { walletPublicKeys: body.walletPublicKeys });
   const indexes = selectedWallets.map((wallet) => Number(wallet.webIndex));
-  const minEth = Number(body.minEth || 0), maxEth = Number(body.maxEth || 0);
-  if (!(minEth > 0) || !(maxEth >= minEth) || maxEth > 0.5) { const e = new Error("Buy range must be 0 < min ≤ max ≤ 0.5 ETH."); e.statusCode = 400; throw e; }
+  const solFunded = body.minSol != null || body.maxSol != null || ["sol", "solana"].includes(String(body.payCurrency || body.payWith || "").toLowerCase());
+  const minAmount = Number(solFunded ? body.minSol : body.minEth || 0);
+  const maxAmount = Number(solFunded ? body.maxSol : body.maxEth || 0);
+  const maxAllowed = solFunded ? 5 : 0.5;
+  const unit = solFunded ? "SOL" : "ETH";
+  if (!(minAmount > 0) || !(maxAmount >= minAmount) || maxAmount > maxAllowed) { const e = new Error(`Buy range must be 0 < min ≤ max ≤ ${maxAllowed} ${unit}.`); e.statusCode = 400; throw e; }
   const rows = [];
   for (const wallet of selectedWallets) {
     const idx = Number(wallet.webIndex);
-    const amountEth = (minEth + Math.random() * (maxEth - minEth)).toFixed(6);
+    const amount = (minAmount + Math.random() * (maxAmount - minAmount)).toFixed(6);
     try {
-      const r = await webRhTradeCore(userId, { walletIndex: String(idx), walletPublicKey: wallet.publicKey, side: "buy", tokenAddress, amountEth });
-      rows.push({ walletIndex: idx, walletPublicKey: wallet.publicKey, ok: true, amountEth, out: r.outFormatted, tx: r.txHashes[r.txHashes.length - 1] });
+      const r = await webRhTradeCore(userId, { walletIndex: String(idx), walletPublicKey: wallet.publicKey, side: "buy", tokenAddress, ...(solFunded ? { payCurrency: "SOL", amountSol: amount } : { amountEth: amount }) });
+      rows.push({ walletIndex: idx, walletPublicKey: wallet.publicKey, ok: true, ...(solFunded ? { amountSol: amount } : { amountEth: amount }), out: r.outFormatted, tx: r.txHashes[r.txHashes.length - 1] });
     } catch (error) {
-      rows.push({ walletIndex: idx, walletPublicKey: wallet.publicKey, ok: false, amountEth, error: friendlyError(error).slice(0, 160) });
+      rows.push({ walletIndex: idx, walletPublicKey: wallet.publicKey, ok: false, ...(solFunded ? { amountSol: amount } : { amountEth: amount }), error: friendlyError(error).slice(0, 160) });
     }
     await new Promise((resolve) => setTimeout(resolve, 400 + Math.random() * 1_800)); // human-ish gaps
   }
@@ -55234,8 +55248,9 @@ async function webLaunchRhCoinCore(userId, body = {}) {
   const attemptId = firstString(body.launchAttemptId, body.tradeAttemptId) || crypto.randomUUID();
   const evmAddress = evmAddressFromSolana(keypair.secretKey);
   let launchFunding = null;
-  const fundWithSol = parseOptionalBoolean(body.fundRhWithSol ?? body.fundWithSol, false)
-    || ["sol", "solana"].includes(String(firstString(body.launchFunding, body.payCurrency, body.payWith) || "").toLowerCase());
+  // Robinhood Chain needs native gas internally, but launchers only manage SOL. The server bridges the
+  // small required amount automatically when the derived Robinhood wallet is short.
+  const fundWithSol = true;
   if (fundWithSol) {
     const amountSol = Number(firstString(body.fundSolAmount, body.rhFundSolAmount, body.amountSol) || "0.01");
     if (!Number.isFinite(amountSol) || amountSol < 0.005 || amountSol > 5) {
@@ -55322,15 +55337,43 @@ async function webRhCreatePool(userId, body = {}) {
       const store = await readWalletStore();
       const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
       const keypair = decryptWallet(wallet);
+      const evmAddress = evmAddressFromSolana(keypair.secretKey);
+      let ethAmount = body.ethAmount;
+      let solFunding = null;
+      const solFunded = body.amountSol != null || ["sol", "solana"].includes(String(body.payCurrency || body.payWith || "").toLowerCase());
+      if (solFunded) {
+        const amountSol = Number(body.amountSol || 0);
+        if (!Number.isFinite(amountSol) || amountSol < 0.005 || amountSol > 5) {
+          const e = new Error("Enter a SOL liquidity amount between 0.005 and 5.");
+          e.statusCode = 400; throw e;
+        }
+        const beforeEth = await rhEthBalance(evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ eth: "0" }));
+        const funding = await webRhFundWithSol(userId, {
+          walletIndex: body.walletIndex,
+          walletPublicKey: wallet.publicKey,
+          amountSol,
+          tradeAttemptId: `${firstString(body.poolAttemptId, body.clientRequestId) || crypto.randomUUID()}-rh-pool-fund`
+        });
+        const quotedEth = Number(funding?.quotedEth || 0);
+        const targetEth = Number(beforeEth.eth || 0) + Math.max(0.00001, quotedEth * 0.86);
+        const afterEth = await waitForRhEthBalanceAtLeast(evmAddress, targetEth, 45_000);
+        const spendableEth = Math.max(0, Number(afterEth.eth || 0) - 0.00035);
+        ethAmount = Math.min(spendableEth, quotedEth > 0 ? quotedEth * 0.94 : spendableEth);
+        solFunding = { amountSol, quotedEth: funding?.quotedEth || "", relayStatus: funding?.relayStatus || "", requestId: funding?.requestId || "" };
+        if (!(Number(ethAmount) >= 0.00001)) {
+          const e = new Error("SOL was converted, but the Robinhood network funds are not ready yet. Wait a few seconds and try again.");
+          e.statusCode = 425; throw e;
+        }
+      }
       const res = await rhCreatePoolAndSeed({
         solanaSecretKey: keypair.secretKey,
         tokenAddress: String(body.tokenAddress || ""),
-        ethAmount: body.ethAmount,
+        ethAmount,
         tokenAmount: body.tokenAmount,
         rpcUrl: CONFIG.rhChainRpcUrl,
       });
       await audit("web_rh_create_pool", { userId, wallet: wallet.publicKey, token: res.tokenAddress, pool: res.pool, tx: res.txHash, ethSeeded: res.ethSeeded, tokenSeeded: res.tokenSeeded });
-      return { ...res, chainId: RH_CHAIN_ID };
+      return { ...res, chainId: RH_CHAIN_ID, solFunding };
     },
     { busyMessage: "A pool seed for this coin is already in flight — give it a moment." });
 }

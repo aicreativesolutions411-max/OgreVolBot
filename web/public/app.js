@@ -8518,7 +8518,7 @@ function walletOptionsHtml(selectedIndex = "") {
     const balance = state.balances.find((row) => Number(row.index) === Number(wallet.index));
     const sol = balance?.sol !== null && balance?.sol !== undefined ? `${Number(balance.sol).toFixed(4)} SOL` : "balance loading";
     const sessionLabel = wallet.sessionWallet ? " Session" : "";
-    return `<option value="${wallet.index}" ${String(wallet.index) === String(selectedIndex || "") ? "selected" : ""}>${wallet.index}. ${escapeHtml(wallet.label)}${sessionLabel} - ${sol} / RH ETH</option>`;
+    return `<option value="${wallet.index}" ${String(wallet.index) === String(selectedIndex || "") ? "selected" : ""}>${wallet.index}. ${escapeHtml(wallet.label)}${sessionLabel} - ${sol} SOL · both chains</option>`;
   }).join("");
   if (connectedOption || managedOptions) return `${connectedOption}${managedOptions}`;
   return `<option value="">No wallet connected</option>`;

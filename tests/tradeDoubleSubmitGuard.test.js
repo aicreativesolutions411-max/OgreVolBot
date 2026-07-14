@@ -364,7 +364,7 @@ test("Robinhood Chain: cash ETH back out to SOL (reverse Relay bridge, idempoten
   }
 });
 
-test("Robinhood coins are tradeable in-app (Relay swap, gas-estimated, idempotent) + funded from Swap", () => {
+test("Robinhood coins are tradeable in-app with SOL-first automatic network conversion", () => {
   // Server: buy/sell endpoint routed through Relay same-chain swaps; sells execute approve+swap in order.
   assert.match(serverSource, /pathname === "\/api\/web\/rh\/trade"/);
   assert.match(functionBody(serverSource, "webRhTrade"), /runIdempotentMoneyOp\("web-rh-trade"/);
@@ -385,7 +385,9 @@ test("Robinhood coins are tradeable in-app (Relay swap, gas-estimated, idempoten
     assert.match(src, /\/api\/web\/rh\/trade/);
     assert.match(src, /GG\.rhBuy/);
     assert.match(src, /GG\.rhSell/);
-    assert.match(src, /Get Robinhood Chain ETH/);            // Swap page section
+    assert.match(src, /One balance, both chains/);           // no manual network-funding section
+    assert.match(src, /body\.payCurrency="SOL";body\.amountSol/);
+    assert.doesNotMatch(src, /Get Robinhood Chain ETH/);
     assert.match(src, /rhWalSel/);                           // per-wallet ETH accounts in the fold
     // Confident launch copy — no "first"/"no launchpad exists" framing.
     assert.doesNotMatch(src, /no launchpad exists (on it|here)/i);
@@ -704,8 +706,10 @@ test("RH feed: full coverage (holders + activity sources) + Safe tab of proven-s
     assert.match(src, /function renderSlimeHood/);
     assert.match(src, /category=slimewire/);
     assert.match(src, /SlimeHood/);
-    // Robinhood dev/bundle tab is ETH-aware (no SOL fields under the Robinhood rail).
+    // Robinhood dev/bundle tab is SOL-first; network conversion is hidden behind the server.
     assert.match(src, /lcDevRhNote/);
+    assert.match(src, /Min buy \(SOL\)/);
+    assert.match(src, /payCurrency:"SOL",minSol/);
   }
   // "Make it buyable" — create + seed a Uniswap V3 pool so a launched coin can be bought. Gas-estimated
   // first (a bad setup reverts in simulation, costs nothing).
@@ -714,6 +718,8 @@ test("RH feed: full coverage (holders + activity sources) + Safe tab of proven-s
   assert.match(functionBody(rhLib, "rhCreatePoolAndSeed"), /estimateGas/);
   assert.match(serverSource, /pathname === "\/api\/web\/rh\/create-pool"/);
   assert.match(serverSource, /rhCreatePoolAndSeed/);
+  assert.match(functionBody(serverSource, "webRhCreatePool"), /webRhFundWithSol/);
+  assert.match(functionBody(serverSource, "webRhBundleCore"), /payCurrency: "SOL"/);
   for (const src of [ggSource, indexSource]) {
     assert.match(src, /function rhAddLiquidityModal/);
     assert.match(src, /\/api\/web\/rh\/create-pool/);
@@ -802,6 +808,11 @@ test("launch UI is Pump-simple: Pump + Robinhood only, three clean tabs, dormant
     assert.doesNotMatch(render, /Chat &amp; Live|Presale escrow|Mayhem/);
     assert.match(render, /Coin image/);
     assert.match(render, /Banner/);
+    assert.match(render, /Robinhood Chain · pay with SOL/);
+    assert.match(src, /Pay only with SOL/);
+    assert.doesNotMatch(render, /lcRhFundSol|Min buy \(ETH\)|Max buy \(ETH\)/);
+    const tools = src.slice(src.indexOf("const TOOLS=["), src.indexOf("function toolLinkHtml"));
+    for (const hiddenTool of ["Launch OS — complete coin operation", "Create a Site With Us", "Coin Social Kit", "Telegram Mini App Muck Map"]) assert.doesNotMatch(tools, new RegExp(hiddenTool));
   }
 });
 
