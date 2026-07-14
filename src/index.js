@@ -39788,11 +39788,22 @@ async function buildXRugReply(mint, variant) {
 // scan already; this fills the ONE gap: RH coins were unscan-able (0x didn't match a Solana mint).
 const rhScanCache = new Map();
 const rhScanInFlight = new Map();
+const rhSafetyInFlight = new Map();
 const rhScanLastGood = new Map();
 const rhScanLogoCache = new Map();
 const rhVolumeCache = new Map();
 function rhScanSharedKey(address = "") {
   return externalCacheKey(`rh-token-snapshot:${String(address || "").toLowerCase()}`, "global");
+}
+function rhScanSafety(address) {
+  const key = String(address || "").toLowerCase();
+  const pending = rhSafetyInFlight.get(key);
+  if (pending) return pending;
+  const task = Promise.resolve(rhHoneypotCheck(address, CONFIG.rhChainRpcUrl)).finally(() => {
+    if (rhSafetyInFlight.get(key) === task) rhSafetyInFlight.delete(key);
+  });
+  rhSafetyInFlight.set(key, task);
+  return task;
 }
 // Scan identity (pfp + socials) survives restarts on disk: rhScanLastGood is in-memory
 // only, so every deploy wiped the pfp/links off previously-scanned Robinhood coins.
@@ -39830,6 +39841,21 @@ function rhScanIdentityRemember(key, v = {}) {
 function rhScanHasMarketEvidence(value = {}) {
   return [value.priceUsd, value.mc, value.liq, value.vol1, value.vol24].some((field) => Number(field) > 0);
 }
+function rhScanMissingCardFields(value = {}) {
+  const missing = [];
+  if (!(Number(value.priceUsd) > 0)) missing.push("price");
+  if (!(Number(value.mc) > 0)) missing.push("market cap");
+  if (!(Number(value.liq) > 0)) missing.push("liquidity");
+  if (!(Number(value.vol24) > 0)) missing.push("24h volume");
+  if (!(Number(value.holders) > 0)) missing.push("holders");
+  if (!(Number(value.createdAt) > 0)) missing.push("age");
+  if (!Number.isFinite(rhFiniteNumber(value.ch1)) && !Number.isFinite(rhFiniteNumber(value.ch24))) missing.push("price change");
+  if (!new Set(["verified", "ok", "safe", "warn", "block"]).has(String(value.safety?.verdict || "").toLowerCase())) missing.push("safety");
+  return missing;
+}
+function rhScanCardComplete(value = {}) {
+  return rhScanMissingCardFields(value).length === 0;
+}
 function mergeRhScanWithTickerCandidate(value = {}, candidate = null, address = "") {
   const merged = { ...(value || {}) };
   merged.address = firstString(merged.address, address, candidate?.address);
@@ -39845,7 +39871,7 @@ function mergeRhScanWithTickerCandidate(value = {}, candidate = null, address = 
   return merged;
 }
 function rhScanCacheTtl(value = {}) {
-  return rhScanHasMarketEvidence(value) ? 60_000 : 5_000;
+  return rhScanCardComplete(value) ? 60_000 : 5_000;
 }
 function rhPromiseTimeout(promise, ms = 3500, fallback = null) {
   return Promise.race([
@@ -40155,7 +40181,9 @@ async function gatherRhScanUncollapsed(address) {
     rhPromiseTimeout(dsTokenV1Promise, 6_500, null),
     rhPromiseTimeout(hintedPairsPromise, 4_200, []),
     fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${a}/pools?page=1`, { timeoutMs: 6_500 }).catch(() => null),
-    rhPromiseTimeout(rhHoneypotCheck(a, CONFIG.rhChainRpcUrl), 3000, null),
+    // The safety read checks real holder transfers and deployer history. Three seconds routinely cut it
+    // off mid-scan and left otherwise complete Telegram cards at "Scan inconclusive" forever.
+    rhPromiseTimeout(rhScanSafety(a), 12_000, null),
     rhPromiseTimeout(rhFeedTokens(), 2500, []),
     directTokenProof ? Promise.resolve(directTokenProof) : rhPromiseTimeout(rhTokenInfo(a), 3_500, null),
     rhPromiseTimeout(rhLaunchMetaByAddress(), 1500, new Map()),
@@ -40333,7 +40361,9 @@ async function gatherRhScan(address) {
   if (shared?.v && rhScanHasMarketEvidence(shared.v)) {
     const sharedAt = Number(shared.at || 0);
     rhScanLastGood.set(key, { at: sharedAt || Date.now(), v: shared.v });
-    if (Date.now() - sharedAt < 60_000) {
+    // A fresh shared snapshot is not necessarily a full scan. Feed/API callers can warm only MC or
+    // holders first; returning that partial snapshot here is what froze Telegram cards on "checking".
+    if (rhScanCardComplete(shared.v) && Date.now() - sharedAt < 60_000) {
       rhScanCache.set(key, { at: sharedAt, v: shared.v });
       return shared.v;
     }
@@ -40394,18 +40424,19 @@ async function buildXRhReply(address, variant) {
 }
 // 🪶 TG scan card for a Robinhood coin — same OgreScan look as the Solana card, RH-flavored (chain, safety,
 // Blockscout, one-tap trade on the site's RH view). Used by /look + a pasted 0x address + $ticker that resolves EVM.
-function formatRhScanCard(info) {
+function formatRhScanCard(info, options = {}) {
   const esc = escapeTelegramHtml;
   const a = info.address;
   const sym = (info.symbol || shortMint(a)).slice(0, 18);
   const name = (info.name || sym).slice(0, 40);
-  const age = info.createdAt > 0 ? scanFmtAge(info.createdAt) : "age checking";
-  const price = info.priceUsd > 0 ? scanFmtPriceSub(info.priceUsd) : "checking";
+  const missingLabel = options.pending === false ? "unavailable" : "checking";
+  const age = info.createdAt > 0 ? scanFmtAge(info.createdAt) : `age ${missingLabel}`;
+  const price = info.priceUsd > 0 ? scanFmtPriceSub(info.priceUsd) : missingLabel;
   const ch = rhChangeInfo(info);
   const chText = Number.isFinite(ch.value) ? `${ch.value >= 0 ? "+" : ""}${ch.value.toFixed(1)}%` : "n/a";
   const vol = rhVolumeInfo(info);
   const vd = String(info.safety?.verdict || "unknown").toLowerCase();
-  const safeLine = (vd === "block" || info.safety?.honeypot === true) ? "🔴 <b>Honeypot / sell-trap risk</b>" : vd === "warn" ? "⚠️ <b>Some risk — DYOR</b>" : vd === "verified" ? "🟢 <b>Fixed-supply contract verified · pool risk remains</b>" : vd === "ok" ? "🟢 <b>No sell traps found</b>" : "⚪ <b>Scan inconclusive</b>";
+  const safeLine = (vd === "block" || info.safety?.honeypot === true) ? "🔴 <b>Honeypot / sell-trap risk</b>" : vd === "warn" ? "⚠️ <b>Some risk — DYOR</b>" : vd === "verified" ? "🟢 <b>Fixed-supply contract verified · pool risk remains</b>" : (vd === "ok" || vd === "safe") ? "🟢 <b>No sell traps found</b>" : options.pending === false ? "⚪ <b>Safety data unavailable</b>" : "⏳ <b>Safety scan running</b>";
   const reasons = Array.isArray(info.safety?.reasons) ? info.safety.reasons.slice(0, 2).map((r) => "  • " + esc(String(r))).join("\n") : "";
   const soc = [];
   if (info.twitterUrl) soc.push(`<a href="${esc(info.twitterUrl)}">𝕏</a>`);
@@ -40421,11 +40452,11 @@ function formatRhScanCard(info) {
     "",
     "📊 <b>Stats</b>",
     `├ USD  <b>${price}</b> (${ch.title} ${chText})`,
-    `├ MC   <b>${info.mc > 0 ? scanFmtMoney(info.mc) : "checking"}</b>`,
+    `├ MC   <b>${info.mc > 0 ? scanFmtMoney(info.mc) : missingLabel}</b>`,
     ...(info.athMc > 0 ? [`├ ATH  <b>${scanFmtMoney(info.athMc)}</b>${info.fromAthPct != null && info.fromAthPct < -1 ? ` <i>(${Math.round(info.fromAthPct)}% from ATH)</i>` : (info.fromAthPct != null && info.fromAthPct >= -1 ? " <i>(at ATH)</i>" : "")}`] : []),
-    `├ Vol  <b>${vol.value > 0 ? scanFmtMoney(vol.value) : "checking"}</b> <i>24h</i>`,
-    `├ Holders <b>${info.holders > 0 ? scanFmtSupply(info.holders) : "checking"}</b>`,
-    `└ Liq  <b>${info.liq > 0 ? scanFmtMoney(info.liq) : "checking"}</b>`,
+    `├ Vol  <b>${vol.value > 0 ? scanFmtMoney(vol.value) : missingLabel}</b> <i>24h</i>`,
+    `├ Holders <b>${info.holders > 0 ? scanFmtSupply(info.holders) : missingLabel}</b>`,
+    `└ Liq  <b>${info.liq > 0 ? scanFmtMoney(info.liq) : missingLabel}</b>`,
     "",
     `🛡 <b>Safety</b>`,
     `└ ${safeLine}${reasons ? "\n" + reasons : ""}`,
@@ -40433,8 +40464,9 @@ function formatRhScanCard(info) {
     `<a href="https://www.slimewire.org/#rhtrade/${esc(a)}">⚡ Trade $${esc(sym)} on SlimeWire</a> — Robinhood Chain`,
   ].filter((l) => l !== "").join("\n");
 }
-async function renderRhScanCardPng(info, seed = "") {
+async function renderRhScanCardPng(info, seed = "", options = {}) {
   const address = info?.address || seed;
+  const missingLabel = options.pending === false ? "n/a" : "checking";
   const liveLogo = await scanFastTimeout(rhScanLogo(info), 1_200, null);
   const logo = liveLogo || await xFallbackLogoBuffer(info?.symbol || shortMint(address), seed || address);
   const { verdict, tone } = rhVerdictTone(info?.safety);
@@ -40444,14 +40476,14 @@ async function renderRhScanCardPng(info, seed = "") {
     symbol: info?.symbol || "RH",
     name: info?.name || "Robinhood token",
     mcLabel: info?.mc > 0 ? scanFmtMoney(info.mc) : "—",
-    liqLabel: info?.liq > 0 ? scanFmtMoney(info.liq) : "—",
-    ageLabel: info?.createdAt > 0 ? xAgeLabel(Date.now() - info.createdAt) : "checking",
+    liqLabel: info?.liq > 0 ? scanFmtMoney(info.liq) : missingLabel,
+    ageLabel: info?.createdAt > 0 ? xAgeLabel(Date.now() - info.createdAt) : missingLabel,
     railLabel: "Robinhood",
-    volumeLabel: vol.value > 0 ? `${scanFmtMoney(vol.value)}${vol.title ? " " + vol.title : ""}` : "checking",
-    holderLabel: info?.holders > 0 ? scanFmtSupply(info.holders) : "checking",
+    volumeLabel: vol.value > 0 ? `${scanFmtMoney(vol.value)}${vol.title ? " " + vol.title : ""}` : missingLabel,
+    holderLabel: info?.holders > 0 ? scanFmtSupply(info.holders) : missingLabel,
     verdict,
     verdictTone: tone,
-    changeLabel: Number.isFinite(ch.value) ? `${ch.value >= 0 ? "+" : ""}${ch.value.toFixed(1)}%` : "checking",
+    changeLabel: Number.isFinite(ch.value) ? `${ch.value >= 0 ? "+" : ""}${ch.value.toFixed(1)}%` : missingLabel,
     changeTone: Number.isFinite(ch.value) ? (ch.value >= 0 ? "up" : "down") : "",
     changeTitle: ch.title,
     logoBuffer: logo,
@@ -40467,6 +40499,26 @@ async function renderRhScanCardPng(info, seed = "") {
     return card;
   }
 }
+async function editRhScanTelegramCard(chatId, messageId, { hasPhoto = false, png = null, text = "", replyMarkup = null } = {}) {
+  if (hasPhoto && png) {
+    try {
+      await editMessagePhotoBuffer(chatId, messageId, png, text, replyMarkup);
+      return true;
+    } catch (error) {
+      // Media replacement is the least reliable Telegram edit. The caption still has to advance from
+      // the quick placeholders even when Telegram rejects a replacement image upload.
+      console.warn(`[tg-scan] RH media edit failed; trying caption ${messageId}: ${friendlyError(error)}`);
+    }
+  }
+  try {
+    if (hasPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: messageId, caption: text, parse_mode: "HTML", reply_markup: replyMarkup });
+    else await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: replyMarkup });
+    return true;
+  } catch (error) {
+    console.warn(`[tg-scan] RH ${hasPhoto ? "caption" : "text"} edit failed ${messageId}: ${friendlyError(error)}`);
+    return false;
+  }
+}
 async function sendRhScanCard(chatId, address, options = {}) {
   // Resolve before making the quick card/keyboard so caller tracking and every
   // buy/chart link also carry the actual token rather than the LP address.
@@ -40474,19 +40526,21 @@ async function sendRhScanCard(chatId, address, options = {}) {
   const fastCandidate = rhTickerCandidateForTarget(options.tickerSymbol, address);
   const cachedScan = rhScanCache.get(String(address || "").toLowerCase());
   const fullScanPromise = gatherRhScan(address).catch(() => null);
-  if (!(cachedScan && Date.now() - Number(cachedScan.at || 0) < rhScanCacheTtl(cachedScan.v))) {
-    const quickInfo = {
+  const cachedComplete = Boolean(cachedScan && rhScanCardComplete(cachedScan.v) && Date.now() - Number(cachedScan.at || 0) < rhScanCacheTtl(cachedScan.v));
+  if (!cachedComplete) {
+    const quickInfo = mergeRhScanWithTickerCandidate({
       address, chain: "robinhood", symbol: fastCandidate?.symbol || options.tickerSymbol || "RH",
       name: fastCandidate?.name || fastCandidate?.symbol || options.tickerSymbol || "Robinhood token",
       priceUsd: 0, mc: Number(fastCandidate?.marketCap) || 0, liq: Number(fastCandidate?.liquidityUsd) || 0,
       vol1: 0, vol24: Number(fastCandidate?.volume24h) || 0, holders: Number(fastCandidate?.holders) || 0,
       ch1: null, ch24: null, createdAt: 0, safety: null, source: "dexscreener",
       imageUrl: fastCandidate?.imageUrl || "", iconUrl: "", localImagePath: "",
-      explorer: `https://robinhoodchain.blockscout.com/token/${address}`
-    };
+      explorer: `https://robinhoodchain.blockscout.com/token/${address}`,
+      ...(cachedScan?.v || {})
+    }, fastCandidate, address);
     const quickText = [String(options.contextHtml || "").trim(), formatRhScanCard(quickInfo), "⏳ <i>Loading full safety, holders, ATH and socials…</i>"].filter(Boolean).join("\n\n");
     const kb = compactTradeCardKeyboard(address, "s");
-    const quickPng = await renderRhScanCardPng(quickInfo, `quick:${address}`).catch(() => null);
+    const quickPng = await renderRhScanCardPng(quickInfo, `quick:${address}`, { pending: true }).catch(() => null);
     let sent = null;
     let quickHasPhoto = false;
     if (quickPng) {
@@ -40507,15 +40561,15 @@ async function sendRhScanCard(chatId, address, options = {}) {
       void (async () => {
         const loaded = await fullScanPromise;
         const mergedLoaded = mergeRhScanWithTickerCandidate(loaded || {}, fastCandidate, address);
-        if (!loaded || !rhScanHasMarketEvidence(mergedLoaded)) {
-          const message = options.message || null;
+        const message = options.message || null;
+        if (loaded) Object.assign(quickInfo, mergedLoaded);
+        if (!loaded || !rhScanCardComplete(quickInfo)) {
           // Keep Blockscout identity/holder data instead of reverting a valid
           // just-launched coin to the generic $RH all-n/a placeholder.
-          if (loaded) Object.assign(quickInfo, mergedLoaded);
           const callerLine = await buildScanCallerFooter(chatId, address, Number(loaded?.mc || quickInfo.mc || 0), message).catch(() => "");
-          const failedText = [String(options.contextHtml || "").trim(), formatRhScanCard(quickInfo), callerLine, "⚠️ <i>Deep providers are still catching up — tap Refresh in More.</i>"].filter(Boolean).join("\n\n");
-          if (quickHasPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: sent.message_id, caption: failedText, parse_mode: "HTML", reply_markup: kb }).catch(() => {});
-          else await telegram("editMessageText", { chat_id: chatId, message_id: sent.message_id, text: failedText, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb }).catch(() => {});
+          const pendingFields = rhScanMissingCardFields(quickInfo);
+          const failedText = [String(options.contextHtml || "").trim(), formatRhScanCard(quickInfo, { pending: true }), callerLine, `⏳ <i>Finishing ${escapeTelegramHtml(pendingFields.join(", ") || "live data")}…</i>`].filter(Boolean).join("\n\n");
+          await editRhScanTelegramCard(chatId, sent.message_id, { hasPhoto: quickHasPhoto, text: failedText, replyMarkup: kb });
           // Brand-new RH pools often reach the public indexes seconds after the
           // contract itself. Re-check this same Telegram card for up to one minute
           // so the user never needs to paste the address again.
@@ -40525,29 +40579,30 @@ async function sendRhScanCard(chatId, address, options = {}) {
             const retry = await gatherRhScan(address).catch(() => null);
             if (!retry) continue;
             Object.assign(quickInfo, mergeRhScanWithTickerCandidate(retry, fastCandidate, address));
-            if (!rhScanHasMarketEvidence(quickInfo)) continue;
-            if (message?.chat && !isPrivateChat(message.chat)) await recordTelegramCall(message, address, quickInfo.mc, quickInfo.symbol).catch(() => {});
+            const complete = rhScanCardComplete(quickInfo);
+            if (complete && message?.chat && !isPrivateChat(message.chat)) await recordTelegramCall(message, address, quickInfo.mc, quickInfo.symbol).catch(() => {});
             const retryCaller = await buildScanCallerFooter(chatId, address, quickInfo.mc, message).catch(() => "");
-            const retryText = [String(options.contextHtml || "").trim(), formatRhScanCard(quickInfo), retryCaller].filter(Boolean).join("\n\n");
-            const retryPng = await renderRhScanCardPng(quickInfo, quickInfo.symbol || address).catch(() => null);
-            if (quickHasPhoto && retryPng) await editMessagePhotoBuffer(chatId, sent.message_id, retryPng, retryText, kb).catch(() => {});
-            else if (quickHasPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: sent.message_id, caption: retryText, parse_mode: "HTML", reply_markup: kb }).catch(() => {});
-            else await telegram("editMessageText", { chat_id: chatId, message_id: sent.message_id, text: retryText, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb }).catch(() => {});
-            return;
+            const remaining = rhScanMissingCardFields(quickInfo);
+            const retryText = [String(options.contextHtml || "").trim(), formatRhScanCard(quickInfo, { pending: !complete }), retryCaller, complete ? "" : `⏳ <i>Still finishing ${escapeTelegramHtml(remaining.join(", "))}…</i>`].filter(Boolean).join("\n\n");
+            const retryPng = await renderRhScanCardPng(quickInfo, quickInfo.symbol || address, { pending: !complete }).catch(() => null);
+            await editRhScanTelegramCard(chatId, sent.message_id, { hasPhoto: quickHasPhoto, png: retryPng, text: retryText, replyMarkup: kb });
+            if (complete) return;
           }
+          const finalCaller = await buildScanCallerFooter(chatId, address, quickInfo.mc, message).catch(() => "");
+          const unavailable = rhScanMissingCardFields(quickInfo);
+          const finalText = [String(options.contextHtml || "").trim(), formatRhScanCard(quickInfo, { pending: false }), finalCaller, `⚠️ <i>Live providers did not return: ${escapeTelegramHtml(unavailable.join(", ") || "remaining data")}. Refresh retries all sources.</i>`].filter(Boolean).join("\n\n");
+          const finalPng = await renderRhScanCardPng(quickInfo, quickInfo.symbol || address, { pending: false }).catch(() => null);
+          await editRhScanTelegramCard(chatId, sent.message_id, { hasPhoto: quickHasPhoto, png: finalPng, text: finalText, replyMarkup: kb });
           return;
         }
         const info = mergeRhScanWithTickerCandidate(loaded, fastCandidate, address);
         info.symbol = info.symbol || options.tickerSymbol || "RH";
         info.name = info.name || options.tickerSymbol || "Robinhood token";
-        const message = options.message || null;
         if (message?.chat && !isPrivateChat(message.chat)) await recordTelegramCall(message, address, info.mc, info.symbol).catch(() => {});
         const callerLine = await buildScanCallerFooter(chatId, address, info.mc, message).catch(() => "");
         const fullText = [String(options.contextHtml || "").trim(), formatRhScanCard(info), callerLine].filter(Boolean).join("\n\n");
         const fullPng = await renderRhScanCardPng(info, info.symbol || address).catch(() => null);
-        if (quickHasPhoto && fullPng) await editMessagePhotoBuffer(chatId, sent.message_id, fullPng, fullText, kb).catch(() => {});
-        else if (quickHasPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: sent.message_id, caption: fullText, parse_mode: "HTML", reply_markup: kb }).catch(() => {});
-        else await telegram("editMessageText", { chat_id: chatId, message_id: sent.message_id, text: fullText, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb }).catch(() => {});
+        await editRhScanTelegramCard(chatId, sent.message_id, { hasPhoto: quickHasPhoto, png: fullPng, text: fullText, replyMarkup: kb });
       })().catch((error) => console.warn(`[tg-scan] RH background upgrade failed ${address.slice(0, 10)}…: ${friendlyError(error)}`));
       return;
     }
@@ -41935,11 +41990,13 @@ async function handleCompactCardMenuCallback(query) {
     const target = match[1], isPhoto = Boolean(query.message?.photo);
     if (!/^0x/i.test(target)) await rebuildScanCardInPlace(chatId, messageId, target, isPhoto).catch(() => {});
     else {
+      rhScanCache.delete(String(target).toLowerCase());
       const info = await gatherRhScan(target).catch(() => null);
       if (info) {
-        const body = formatRhScanCard(info);
-        if (isPhoto) await telegram("editMessageCaption", { chat_id: chatId, message_id: messageId, caption: body, parse_mode: "HTML", reply_markup: compactTradeCardKeyboard(target, "s") }).catch(() => {});
-        else await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: body, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: compactTradeCardKeyboard(target, "s") }).catch(() => {});
+        const complete = rhScanCardComplete(info), missing = rhScanMissingCardFields(info);
+        const body = [formatRhScanCard(info, { pending: false }), complete ? "" : `⚠️ <i>Live providers did not return: ${escapeTelegramHtml(missing.join(", "))}.</i>`].filter(Boolean).join("\n\n");
+        const png = await renderRhScanCardPng(info, info.symbol || target, { pending: false }).catch(() => null);
+        await editRhScanTelegramCard(chatId, messageId, { hasPhoto: isPhoto, png, text: body, replyMarkup: compactTradeCardKeyboard(target, "s") });
       }
     }
     return true;

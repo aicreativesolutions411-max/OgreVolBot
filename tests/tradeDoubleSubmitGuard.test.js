@@ -2883,8 +2883,8 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(rhSend, /rhTickerCandidateForTarget/);
   assert.match(rhSend, /Loading full safety, holders, ATH and socials/);
   assert.match(rhSend, /sendPhoto\(chatId, "rh-scan\.jpg", quickPng/); // compressed circular-PFP card avoids Telegram upload timeout
-  assert.match(rhSend, /editMessagePhotoBuffer/);                    // same card upgrades to the real PFP + full facts
-  assert.match(rhSend, /if \(!\(cachedScan/);                        // raw 0x CAs get the progressive path too
+  assert.match(rhSend, /editRhScanTelegramCard/);                    // same card upgrades even when Telegram rejects a media replacement
+  assert.match(rhSend, /const cachedComplete = Boolean/);            // only a complete cached card can skip progressive enrichment
   assert.match(rhSend, /mergeRhScanWithTickerCandidate/);             // ticker market facts survive a thin full refresh
   assert.match(rhSend, /quick RH photo failed/);                       // media failure falls straight through to a text card
   const rhPairTarget = functionBody(serverSource, "rhPairTargetToken");
@@ -2893,6 +2893,8 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(rhGather, /pairTarget\.isBase \? pair\?\.priceUsd : null/);
   assert.match(rhGather, /api\.geckoterminal\.com\/api\/v2\/networks\/robinhood\/tokens/); // independent market fallback prevents an all-n/a card when Dex/Blockscout blink
   assert.match(rhGather, /const noxaPromise/);                         // NOXA's slower exact factory read starts concurrently, not after the fast providers already timed out
+  assert.match(rhGather, /rhScanSafety\(a\)/);                       // the longer safety pass is shared instead of duplicated across retries
+  assert.match(functionBody(serverSource, "rhScanSafety"), /rhSafetyInFlight/);
   assert.match(rhGather, /Array\.isArray\(dsV1\)/);                   // direct Dex token route contributes market data, not only artwork
   assert.doesNotMatch(rhGather, /const \[dsV1,/);                    // do not shadow dsV1 and trigger a TDZ ReferenceError during identity enrichment
   assert.match(rhGather, /rhScanCacheTtl\(cached\.v\)/);              // transient empty results retry in seconds instead of poisoning scans for a minute
@@ -2901,11 +2903,17 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(rhGather, /mc = priceUsd \* supply/);                  // implied price restores market cap from the real token supply
   assert.match(rhGather, /else \{\s*rhScanCache\.delete\(key\)/);     // an all-n/a miss cannot poison the next scan, even for five seconds
   assert.match(rhGather, /rhScanLastGood/);                           // intermittent providers cannot erase known-good facts
-  assert.match(functionBody(serverSource, "gatherRhScan"), /rhScanInFlight/); // simultaneous scans share one provider job
-  assert.match(rhSend, /!rhScanHasMarketEvidence\(mergedLoaded\)/);   // keep the progressive warning instead of presenting n/a as a completed scan
+  const sharedGather = functionBody(serverSource, "gatherRhScan");
+  assert.match(sharedGather, /rhScanInFlight/);                       // simultaneous scans share one provider job
+  assert.match(sharedGather, /rhScanCardComplete\(shared\.v\)/);     // MC-only shared cache entries cannot freeze the full scan
+  assert.match(rhSend, /!rhScanCardComplete\(quickInfo\)/);          // any missing full-card field keeps the background upgrade alive
   assert.match(rhSend, /Object\.assign\(quickInfo, mergedLoaded\)/);  // partial Blockscout identity/holders replace the generic $RH placeholder
   assert.match(rhSend, /\[4_000, 8_000, 15_000, 30_000\]/);           // new pools auto-refresh the same Telegram card through index lag
   assert.match(rhSend, /rhScanCache\.delete/);                         // each bounded retry bypasses the short negative cache
+  assert.match(rhSend, /Live providers did not return/);              // exhausted retries end honestly instead of saying "checking" forever
+  const rhEdit = functionBody(serverSource, "editRhScanTelegramCard");
+  assert.match(rhEdit, /editMessagePhotoBuffer/);
+  assert.match(rhEdit, /editMessageCaption/);                          // failed image edits still replace the caption's placeholders
   assert.match(functionBody(serverSource, "renderRhScanCardPng"), /jpeg\(\{ quality: 88/); // high-grain PNG is compressed before TG upload
   assert.match(functionBody(serverSource, "sendPhoto"), /telegramPhotoUpload/);              // MIME/extension match JPEG bytes
   const geckoPool = new Function("firstString", "firstMeaningfulNumber", "rhFiniteNumber", `return function(data, address) {${functionBody(serverSource, "rhGeckoPoolForToken")}}`)(
@@ -2922,6 +2930,12 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   const marketEvidence = new Function("value", functionBody(serverSource, "rhScanHasMarketEvidence"));
   assert.equal(marketEvidence({ priceUsd: 0, mc: 0, liq: 0, vol1: 0, vol24: 0 }), false);
   assert.equal(marketEvidence({ mc: 750_000 }), true);
+  const missingRhFields = new Function("rhFiniteNumber", `return function(value) {${functionBody(serverSource, "rhScanMissingCardFields")}}`)(
+    (value) => value === null || value === undefined || value === "" ? null : (Number.isFinite(Number(value)) ? Number(value) : null)
+  );
+  const rhCardComplete = new Function("rhScanMissingCardFields", `return function(value) {${functionBody(serverSource, "rhScanCardComplete")}}`)(missingRhFields);
+  assert.equal(rhCardComplete({ mc: 750_000 }), false, "market cap alone is never a completed scan");
+  assert.equal(rhCardComplete({ priceUsd: .001, mc: 750_000, liq: 80_000, vol24: 400_000, holders: 390, createdAt: Date.now() - 60_000, ch1: 2.5, safety: { verdict: "ok" } }), true);
   assert.doesNotMatch(functionBody(serverSource, "mergeRhTokenRows"), /lastActiveAt/); // activity time is not coin age
   const solLook = functionBody(serverSource, "handleTelegramLookCommand");
   assert.match(solLook, /TG_SCAN_FIRST_RESPONSE_MS/);
