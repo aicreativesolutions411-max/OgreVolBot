@@ -58694,6 +58694,7 @@ function devInfoMarketContextFromRow(row = {}, mint = "") {
     poolPercent: firstMeaningfulNumber(row.poolPercent),
     solanaTrackerLoaded: Boolean(row.solanaTrackerLoaded),
     onchainHoldersLoaded: Boolean(row.onchainHoldersLoaded),
+    authoritiesLoaded: Boolean(row.authoritiesLoaded || row.heliusDasSource || row.solanaTrackerLoaded || row.mintAuthority || row.freezeAuthority),
     heliusDasIndexedAt: firstString(row.heliusDasIndexedAt),
     pairCreatedAt: Number.isFinite(pairCreatedAt) ? pairCreatedAt : null,
     pairAgeMinutes: Number.isFinite(pairAgeMinutes) ? pairAgeMinutes : null,
@@ -58794,6 +58795,7 @@ async function hydrateMarketRowFromPublicSources(mint = "", row = null, reason =
     updateAuthority: firstString(baseRow.updateAuthority, heliusMeta.updateAuthority, heliusMeta.metadataAuthority),
     mintAuthority: firstString(baseRow.mintAuthority, heliusMeta.mintAuthority, st.mintAuthority),
     freezeAuthority: firstString(baseRow.freezeAuthority, heliusMeta.freezeAuthority, st.freezeAuthority),
+    authoritiesLoaded: Boolean(baseRow.authoritiesLoaded || heliusMeta.source || st.ok),
     // Solana Tracker on-chain risk/holder/LP data (real values that fill the Dev Info + SlimeShield void).
     topHolderPercent: firstMeaningfulNumber(baseRow.topHolderPercent, st.topHolderPercent),
     snipersPercent: firstMeaningfulNumber(baseRow.snipersPercent, st.snipersPercent),

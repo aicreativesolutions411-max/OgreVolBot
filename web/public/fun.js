@@ -361,7 +361,9 @@
   }
   function addRecent(coin) {
     const key = coinKey(coin); if (!key) return;
-    state.recents = [{ key, chain: coin.chain, symbol: coin.symbol || short(key), name: coin.name || "", imageUrl: coin.imageUrl || "" }, ...state.recents.filter((item) => item.key.toLowerCase() !== key.toLowerCase())].slice(0, 8);
+    const old = state.recents.find((item) => item.key.toLowerCase() === key.toLowerCase()) || {};
+    const recent = { ...old, key, chain: coin.chain || old.chain, symbol: (coin.symbol && coin.symbol !== short(key)) ? coin.symbol : (old.symbol || short(key)), name: coin.name || old.name || "", imageUrl: coin.imageUrl || coin.avatarUrl || old.imageUrl || "", marketCap: Number(coin.marketCap || coin.mc) || old.marketCap || null, marketCapLabel: coin.marketCapLabel || old.marketCapLabel || "", liquidityUsd: Number(coin.liquidityUsd || coin.liquidity || coin.liq) || old.liquidityUsd || null, liquidityLabel: coin.liquidityLabel || old.liquidityLabel || "" };
+    state.recents = [recent, ...state.recents.filter((item) => item.key.toLowerCase() !== key.toLowerCase())].slice(0, 8);
     saveLocal(RECENTS_KEY, state.recents);
   }
   async function openCoin(key, chainHint = "", options = {}) {
@@ -742,7 +744,7 @@
   function closeSearch() { $("[data-search-overlay]").hidden = true; $("[data-search-input]").value = ""; }
   function renderSearchHome() {
     const content = $("[data-search-content]");
-    content.innerHTML = `<h3>Recent searches</h3><div class="recent-chips">${state.recents.length ? state.recents.map((item) => `<button type="button" data-open-coin="${escapeHtml(item.key)}" data-chain-kind="${item.chain === "robinhood" ? "rh" : "sol"}">${escapeHtml(item.symbol || short(item.key))}</button>`).join("") : '<span style="color:var(--muted);font-size:11px">Your recent coins stay on this device.</span>'}</div><h3 style="margin-top:24px">Quick routes</h3><div class="tool-grid"><button class="tool-card" type="button" data-search-chain="solana"><b>Solana movers</b><span>Live market feed</span></button><button class="tool-card" type="button" data-search-chain="robinhood"><b>Robinhood</b><span>New chain coins</span></button><button class="tool-card" type="button" data-nav="leaders"><b>Discover traders</b><span>Follow alerts · public proof</span></button></div>`;
+    content.innerHTML = `<h3>Recent searches</h3><div class="recent-list">${state.recents.length ? state.recents.map((item) => { const rh = item.chain === "robinhood", mc = item.marketCapLabel || formatUsd(item.marketCap); return `<button type="button" data-open-coin="${escapeHtml(item.key)}" data-chain-kind="${rh ? "rh" : "sol"}"><span class="recent-avatar"><img src="${escapeHtml(item.imageUrl || mascot(item.key))}" alt=""><i class="chain-badge ${rh ? "rh" : "sol"}">${rh ? "RH" : "SOL"}</i></span><span><b>${escapeHtml(item.symbol || short(item.key))}</b><small>${escapeHtml((item.name ? `${item.name} · ` : "") + short(item.key))}</small></span><em>${mc !== "—" ? `MC ${escapeHtml(mc)}` : "recent"}</em></button>`; }).join("") : '<span style="color:var(--muted);font-size:11px">Your recent coins stay on this device.</span>'}</div><h3 style="margin-top:24px">Quick routes</h3><div class="tool-grid"><button class="tool-card" type="button" data-search-chain="solana"><b>Solana movers</b><span>Live market feed</span></button><button class="tool-card" type="button" data-search-chain="robinhood"><b>Robinhood</b><span>New chain coins</span></button><button class="tool-card" type="button" data-nav="leaders"><b>Discover traders</b><span>Follow alerts · public proof</span></button></div>`;
   }
   let searchTimer = null;
   async function runSearch(query) {

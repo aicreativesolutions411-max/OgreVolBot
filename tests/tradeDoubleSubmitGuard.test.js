@@ -32,7 +32,28 @@ test("Trade opens the focused cross-chain search with shared recent coins", () =
   assert.match(ggSource, /Search ticker, name, Solana or 0x CA/);
   assert.match(ggSource, /document\.querySelectorAll\("\[data-trade-entry\]"\)\.forEach\(b=>b\.onclick=openTradeSearch\)/);
   assert.match(ggSource, /<span>Recent searches<\/span>/);
+  assert.match(ggSource, /function openTradeSearchRow\(row\)/);
+  assert.match(ggSource, /state\._nextTradeFocus="buy"/);
+  assert.match(ggSource, /data-focus="'\+\(buyFirst\?'buy':'chart'\)\+'"/);
+  assert.doesNotMatch(functionBody(ggSource, "openCoinRoute"), /_nextTradeFocus/, "Market rows should stay chart-first");
+  assert.match(ggSource, /marketCapLabel:row\.marketCapLabel/);
+  assert.match(ggSource, /rememberTradeRecent\(r\);const th=/);
   assert.doesNotMatch(ggSource, /Fees before trading/);
+});
+
+test("unknown market and security fields stay honest while details hydrate", () => {
+  assert.match(ggSource, /Feed live · details updating/);
+  assert.match(ggSource, /if\(buys==null&&sells==null\)return'<span class="mut">checking<\/span>'/);
+  assert.match(ggSource, /const holdersReady=secHoldersReady\(s\)/);
+  assert.match(ggSource, /holdersReady&&score!=null/);
+  assert.match(ggSource, /const shownVerdict=hardDanger\?verdict:\(holdersReady\?\(verdict\|\|"Risk checked"\):"Risk checking"\)/);
+  assert.match(serverSource, /authoritiesLoaded: Boolean\(baseRow\.authoritiesLoaded \|\| heliusMeta\.source \|\| st\.ok\)/);
+});
+
+test("first-visit market orientation stays a compact action strip", () => {
+  assert.match(ggSource, /Trade Solana \+ Robinhood coins/);
+  assert.match(ggSource, /Every advanced tool stays one tap away/);
+  assert.doesNotMatch(ggSource, /Find it\. Trade it\./);
 });
 
 test("profile login, referral tracking, and Robinhood artwork stay complete", () => {
