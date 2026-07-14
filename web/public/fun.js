@@ -23,6 +23,7 @@
     token: localStorage.getItem(TOKEN_KEY) || "",
     user: null,
     wallets: [],
+    solUsd: 0,
     activeWallet: Number(localStorage.getItem(ACTIVE_WALLET_KEY)) || null,
     chain: FROM_CASH ? "solana" : "all",
     feed: FROM_CASH ? "new" : "movers",
@@ -179,6 +180,7 @@
     const result = await request(`/api/web/balances${force ? "?force=true" : ""}`);
     if (result.ok && result.data?.ok) {
       state.wallets = result.data.balances || [];
+      state.solUsd = Math.max(0, Number(result.data.solUsd) || state.solUsd || 0);
       if (!state.activeWallet || !state.wallets.some((wallet) => wallet.index === state.activeWallet)) state.activeWallet = state.wallets[0]?.index || null;
       if (state.activeWallet) localStorage.setItem(ACTIVE_WALLET_KEY, String(state.activeWallet));
       paintWalletPill();
@@ -212,6 +214,14 @@
     if (amount >= 10) return amount.toFixed(2);
     return amount.toFixed(3);
   }
+  function formatWalletUsd(value) {
+    if (value == null || !Number.isFinite(Number(value))) return "—";
+    const amount = Math.max(0, Number(value));
+    if (amount >= 1000000) return `$${(amount / 1000000).toFixed(amount >= 10000000 ? 0 : 1)}M`;
+    if (amount >= 100000) return `$${Math.round(amount / 1000)}K`;
+    if (amount >= 1000) return `$${(amount / 1000).toFixed(1)}K`;
+    return `$${amount.toFixed(2)}`;
+  }
   function paintWalletPill() {
     const pill = $(".wallet-pill"), label = $("[data-wallet-balance]");
     const wallet = activeWallet();
@@ -221,8 +231,7 @@
       label.innerHTML = `<b>${state.token ? "+ Wallet" : "Connect"}</b><small>WALLET</small>`;
       return;
     }
-    const { totalSol } = portfolioSolTotal();
-    label.innerHTML = `<b>${compactSol(totalSol)} SOL</b><small>SOL + COINS</small>`;
+    label.innerHTML = `<b>${compactSol(wallet.sol)} SOL</b><small>AVAILABLE</small>`;
   }
 
   function renderCashHandoff() {
@@ -243,7 +252,9 @@
       return;
     }
     const sol = Number(wallet.sol || 0);
-    target.innerHTML = `<section class="readiness-card ready"><div><span>WALLET READY</span><h2>${sol > 0 ? `${sol.toFixed(3)} SOL ready` : "Add SOL to trade"}</h2><p>${sol > 0 ? "Pick a coin and choose your amount." : "Fund from SlimeCash or send SOL to this wallet."}</p></div><div class="readiness-steps"><b class="done">OK <i>Wallet</i></b><b class="done">OK <i>Backup</i></b><b>${sol > 0 ? "OK" : "3"} <i>${sol > 0 ? "Funded" : "Add SOL"}</i></b></div><button type="button" data-open-cash>${sol > 0 ? "Open SlimeCash" : "Fund in SlimeCash"}</button></section>`;
+    const { totalSol } = portfolioSolTotal();
+    const totalUsd = state.solUsd > 0 ? totalSol * state.solUsd : null;
+    target.innerHTML = `<section class="readiness-card ready"><div class="readiness-summary"><div><span>WALLET READY</span><h2>${sol > 0 ? `${sol.toFixed(3)} SOL ready` : "Add SOL to trade"}</h2><p>${sol > 0 ? "Pick a coin and choose your amount." : "Fund from SlimeCash or send SOL to this wallet."}</p></div><div class="wallet-cash-total"><span>TOTAL VALUE</span><b>${formatWalletUsd(totalUsd)}</b><small>SOL + COINS</small></div></div><div class="readiness-steps"><b class="done">OK <i>Wallet</i></b><b class="done">OK <i>Backup</i></b><b>${sol > 0 ? "OK" : "3"} <i>${sol > 0 ? "Funded" : "Add SOL"}</i></b></div><button type="button" data-open-cash>${sol > 0 ? "Open SlimeCash" : "Fund in SlimeCash"}</button></section>`;
   }
 
   function normalizeSol(row) {
@@ -510,6 +521,7 @@
     const result = await request("/api/web/positions?fast=true");
     if (result.ok && result.data?.ok) state.positions = result.data.positions || [];
     paintWalletPill();
+    renderHomeReadiness();
     return state.positions;
   }
   function currentPosition() { const key = coinKey(state.selected); return state.positions.find((position) => String(position.tokenMint || "").toLowerCase() === key.toLowerCase()) || null; }

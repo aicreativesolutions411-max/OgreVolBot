@@ -54,9 +54,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=15/);
-  assert.match(funWorker, /slimewire-fun-v13/);
-  assert.match(funWorker, /fun\.css\?v=15/);
+  assert.match(html, /fun\.css\?v=16/);
+  assert.match(funWorker, /slimewire-fun-v14/);
+  assert.match(funWorker, /fun\.css\?v=16/);
 });
 
 test("/fun keeps the wallet funding card compact and scannable", () => {
@@ -65,17 +65,22 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Fund from SlimeCash or send SOL to this wallet\."/);
-  assert.match(html, /fun\.js\?v=26/);
-  assert.match(funWorker, /fun\.js\?v=26/);
+  assert.match(html, /fun\.js\?v=27/);
+  assert.match(funWorker, /fun\.js\?v=27/);
 });
 
-test("/fun header shows a compact SOL-equivalent total for cash and coin holdings", () => {
+test("/fun keeps SOL in the header and shows SOL plus coins as cash in the funding card", () => {
   assert.match(html, /class="wallet-pill-copy" data-wallet-balance/);
   assert.match(js, /function portfolioSolTotal\(\)/);
   assert.match(js, /position\.estimatedValueSol/);
   assert.match(js, /totalSol: liquidSol \+ coinsSol/);
-  assert.match(js, /SOL \+ COINS/);
-  assert.match(js, /async function loadPositions\(\)[\s\S]{0,300}paintWalletPill\(\)/);
+  assert.match(js, /compactSol\(wallet\.sol\)/);
+  assert.match(js, /<small>AVAILABLE<\/small>/);
+  assert.match(js, /const totalUsd = state\.solUsd > 0 \? totalSol \* state\.solUsd : null/);
+  assert.match(js, /class="wallet-cash-total"[\s\S]{0,180}TOTAL VALUE[\s\S]{0,180}SOL \+ COINS/);
+  assert.match(css, /\.readiness-summary\{display:grid;grid-template-columns:minmax\(0,1fr\) auto/);
+  assert.match(server, /getSolUsdPrice\(\{ timeoutMs: 1_800 \}\)[\s\S]{0,200}return \{ balances, connectedWallet, solUsd \}/);
+  assert.match(js, /async function loadPositions\(\)[\s\S]{0,350}paintWalletPill\(\);[\s\S]{0,80}renderHomeReadiness\(\)/);
 });
 
 test("/fun reuses authenticated money APIs with idempotency and lazy user actions", () => {

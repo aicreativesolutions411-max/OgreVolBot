@@ -10877,11 +10877,12 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "GET" && pathname === "/api/web/balances") {
       const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
       const summary = await cachedWebSummary("web:balances", auth.userId, { force }, force ? 0 : Math.min(CONFIG.displayCacheFreshMs, 1_000), async () => {
-        const [balances, connectedWallet] = await Promise.all([
+        const [balances, connectedWallet, solUsd] = await Promise.all([
           webBalanceRows(auth.userId, { force }),
-          webConnectedWalletBalance(auth.userId, { force })
+          webConnectedWalletBalance(auth.userId, { force }),
+          getSolUsdPrice({ timeoutMs: 1_800 }).catch(() => Number(solUsdPriceCache?.value) || 0)
         ]);
-        return { balances, connectedWallet };
+        return { balances, connectedWallet, solUsd };
       });
       sendWebJson(request, response, 200, {
         ok: true,
