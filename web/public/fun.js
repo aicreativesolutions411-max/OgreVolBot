@@ -221,7 +221,7 @@
       return;
     }
     const sol = Number(wallet.sol || 0);
-    target.innerHTML = `<section class="readiness-card ready"><div><span>TRADE WALLET READY</span><h2>${sol > 0 ? `${sol.toFixed(3)} SOL available` : "Add SOL to start trading"}</h2><p>${sol > 0 ? "Pick a coin, choose an amount, then review every trade before it is sent." : "Fund from SlimeCash or send SOL to your wallet. Your keys and recovery backups stay important."}</p></div><div class="readiness-steps"><b class="done">OK <i>Wallet</i></b><b class="done">OK <i>Backup</i></b><b>${sol > 0 ? "OK" : "3"} <i>${sol > 0 ? "Funded" : "Fund wallet"}</i></b></div><button type="button" data-open-cash>${sol > 0 ? "Open SlimeCash" : "Fund in SlimeCash"}</button></section>`;
+    target.innerHTML = `<section class="readiness-card ready"><div><span>WALLET READY</span><h2>${sol > 0 ? `${sol.toFixed(3)} SOL ready` : "Add SOL to trade"}</h2><p>${sol > 0 ? "Pick a coin and choose your amount." : "Fund from SlimeCash or send SOL to this wallet."}</p></div><div class="readiness-steps"><b class="done">OK <i>Wallet</i></b><b class="done">OK <i>Backup</i></b><b>${sol > 0 ? "OK" : "3"} <i>${sol > 0 ? "Funded" : "Add SOL"}</i></b></div><button type="button" data-open-cash>${sol > 0 ? "Open SlimeCash" : "Fund in SlimeCash"}</button></section>`;
   }
 
   function normalizeSol(row) {

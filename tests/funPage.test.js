@@ -48,6 +48,27 @@ test("/fun keeps the reference layout clean while carrying SlimeWire features", 
   assert.doesNotMatch(html, /community chat/i);
 });
 
+test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
+  assert.match(html, /class="cash-handoff" data-cash-handoff hidden/);
+  assert.match(css, /\.cash-handoff\[hidden\]\{display:none\}/);
+  assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
+  assert.match(js, /handoff\.hidden = !FROM_CASH/);
+  assert.match(js, /SLIMECASH TO FUN/);
+  assert.match(html, /fun\.css\?v=14/);
+  assert.match(funWorker, /slimewire-fun-v12/);
+  assert.match(funWorker, /fun\.css\?v=14/);
+});
+
+test("/fun keeps the wallet funding card compact and scannable", () => {
+  assert.match(css, /\[data-home-readiness\] \.readiness-card\{gap:9px/);
+  assert.match(css, /grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
+  assert.match(js, /<span>WALLET READY<\/span>/);
+  assert.match(js, /"Add SOL to trade"/);
+  assert.match(js, /"Fund from SlimeCash or send SOL to this wallet\."/);
+  assert.match(html, /fun\.js\?v=25/);
+  assert.match(funWorker, /fun\.js\?v=25/);
+});
+
 test("/fun reuses authenticated money APIs with idempotency and lazy user actions", () => {
   assert.match(js, /const TOKEN_KEY = "ogreWebToken"/);
   assert.match(js, /headers\.Authorization = `Bearer \$\{state\.token\}`/);
