@@ -816,6 +816,48 @@ test("launch UI is Pump-simple: Pump + Robinhood only, three clean tabs, dormant
   }
 });
 
+test("launch dev + bundle presets support shared and per-wallet ladders end to end", () => {
+  for (const src of [ggSource, indexSource]) {
+    assert.match(src, /function lcReadExitStrategy\(pfx\)/);
+    assert.match(src, /Smart ladder/);
+    assert.match(src, /Fast ladder/);
+    assert.match(src, /Custom ladder/);
+    assert.match(src, /Same settings for every wallet/);
+    assert.match(src, /Set each wallet/);
+    assert.match(src, /data-lc-bundle-pick/);
+    assert.match(src, /body\.devExitStrategy=lcReadExitStrategy\("lcDev"\)/);
+    assert.match(src, /walletConfigs:configs/);
+    assert.match(src, /takeProfitLadder/);
+  }
+  const plans = functionBody(serverSource, "pumpLaunchBundlePlans");
+  assert.match(plans, /bundle\.walletConfigs/);
+  assert.match(plans, /config\.amountSol \?\? bundle\.amountSol/);
+  assert.match(plans, /pumpLaunchExitStrategy\(config, sharedExit\)/);
+  const fallback = functionBody(serverSource, "firePostLaunchBuysServerSide");
+  assert.match(fallback, /groupPumpLaunchPlans\(bundlePlans\)/);
+  assert.match(fallback, /plan\.amountSol/);
+  const atomic = functionBody(serverSource, "webLaunchPumpJitoBundle");
+  assert.match(atomic, /amount: bundlePlan\.amountSol/);
+  assert.match(atomic, /walletIndexes: group\.plans\.map/);
+  assert.match(atomic, /overflowBundlePlans/);
+  const standard = functionBody(serverSource, "webLaunchPumpPortalLocal");
+  assert.match(standard, /firePostLaunchBuysServerSide/);
+  assert.match(standard, /postLaunchBuys/);
+});
+
+test("Fun profile clearly exposes naming, creation, and login recovery", () => {
+  const fun = fs.readFileSync(new URL("../web/public/fun.js", import.meta.url), "utf8");
+  assert.match(fun, /Choose your profile name and login/);
+  assert.match(fun, /Create profile login/);
+  assert.match(fun, /Already have a profile\? Log in/);
+  assert.match(fun, /data-fun-account="create"/);
+  assert.match(fun, /data-fun-account="login"/);
+  assert.match(fun, /\/api\/web\/profile\/credentials/);
+  assert.match(fun, /\/api\/web\/password-login/);
+  assert.match(fun, /Could not reach SlimeWire/);
+  assert.match(fun, /location\.origin/);
+});
+
 test("creator fee claims auto-run only after new Pump volume, and wallet choice follows Cash to Fun", () => {
   assert.match(serverSource, /function startCreatorFeeAutoClaimRunner\(\)/);
   const auto = functionBody(serverSource, "processCreatorFeeAutoClaims");

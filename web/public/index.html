@@ -3905,6 +3905,36 @@
   }
   function lcWireHolderRewards(pfx){const cb=$("#"+pfx+"HolderRewards"),box=$("#"+pfx+"HolderRewardsFields");if(!cb||!box)return;const sync=()=>{box.style.display=cb.checked?"":"none";};cb.onchange=sync;sync();}
   function lcReadHolderRewards(pfx){const cb=$("#"+pfx+"HolderRewards");if(!cb||!cb.checked)return{enabled:false};return{enabled:true,shareBps:Number(($("#"+pfx+"HolderRewardShare")||{}).value||5000),minTokens:Number((($("#"+pfx+"HolderRewardMinTokens")||{}).value||"3000000").replace(/,/g,""))||3000000,minHoldHours:Number(($("#"+pfx+"HolderRewardMinHours")||{}).value||4)||4,maxRecipients:Number(($("#"+pfx+"HolderRewardMax")||{}).value||100)||100};}
+  function lcExitPresetOptions(){return '<option value="balanced">Balanced · TP +40% / SL -8%</option><option value="smart">Smart ladder · +50 / +120 / +300</option><option value="fast">Fast ladder · +25 / +50 / +100</option><option value="custom">Custom ladder</option>';}
+  function lcExitStrategyHtml(pfx,label){return '<div class="field lc-exit-strategy" data-lc-strategy="'+pfx+'"><label>'+esc(label||"Exit preset")+'</label><select id="'+pfx+'Preset">'+lcExitPresetOptions()+'</select><div id="'+pfx+'Custom" class="feebox" style="display:none;margin-top:7px"><div class="field"><label>Stop loss (%)</label><input id="'+pfx+'Sl" inputmode="decimal" value="10"></div><div class="mut" style="font-size:10px;margin:1px 0 6px">Each target sells part of that wallet\'s position.</div><div class="field row2"><div><label>Target 1 / sell %</label><div style="display:flex;gap:6px"><input id="'+pfx+'Tp1" inputmode="decimal" value="50"><input id="'+pfx+'Sell1" inputmode="decimal" value="40"></div></div><div><label>Target 2 / sell %</label><div style="display:flex;gap:6px"><input id="'+pfx+'Tp2" inputmode="decimal" value="120"><input id="'+pfx+'Sell2" inputmode="decimal" value="35"></div></div><div><label>Target 3 / sell %</label><div style="display:flex;gap:6px"><input id="'+pfx+'Tp3" inputmode="decimal" value="300"><input id="'+pfx+'Sell3" inputmode="decimal" value="25"></div></div></div></div></div>';}
+  function lcReadExitStrategy(pfx){
+    const preset=String(($("#"+pfx+"Preset")||{}).value||"balanced");
+    if(preset==="smart")return{preset,takeProfitPct:"50",stopLossPct:"12",takeProfitLadder:[{pct:50,sellPercent:40},{pct:120,sellPercent:35},{pct:300,sellPercent:25}],breakEvenAfterTp1:true};
+    if(preset==="fast")return{preset,takeProfitPct:"25",stopLossPct:"10",takeProfitLadder:[{pct:25,sellPercent:40},{pct:50,sellPercent:35},{pct:100,sellPercent:25}],breakEvenAfterTp1:true};
+    if(preset==="custom"){
+      const ladder=[1,2,3].map(i=>({pct:Number(($("#"+pfx+"Tp"+i)||{}).value||0),sellPercent:Number(($("#"+pfx+"Sell"+i)||{}).value||0)})).filter(x=>x.pct>0&&x.sellPercent>0);
+      return{preset,takeProfitPct:String((ladder[0]&&ladder[0].pct)||40),stopLossPct:String(Number(($("#"+pfx+"Sl")||{}).value||10)),takeProfitLadder:ladder,breakEvenAfterTp1:true};
+    }
+    return{preset:"balanced",takeProfitPct:"40",stopLossPct:"8",takeProfitLadder:[],breakEvenAfterTp1:false};
+  }
+  function lcBundleWalletRowsHtml(){
+    const wallets=state.wallets||[];
+    if(!wallets.length)return '<div class="lcnote">Create and fund another wallet in Wallet before adding bundle buys.</div>';
+    return wallets.map(w=>{const idx=String(w.index),pfx="lcBw"+idx;return '<div class="lc-bundle-wallet" data-lc-wallet-row="'+esc(idx)+'"><label class="lcheck"><input type="checkbox" id="lcBwUse'+esc(idx)+'" data-lc-bundle-pick="'+esc(idx)+'" checked> <span><b>'+esc(w.label||("Wallet "+idx))+'</b> · ◎'+Number(w.sol||0).toFixed(3)+'</span></label><details class="launch-advanced" data-lc-wallet-config="'+esc(idx)+'" style="display:none"><summary>Wallet settings</summary><div><div class="field"><label>Buy amount (SOL)</label><input id="'+pfx+'Amount" inputmode="decimal" value="0.05"></div>'+lcExitStrategyHtml(pfx,"Exit preset")+'</div></details></div>';}).join("");
+  }
+  function lcSyncLaunchStrategies(){
+    document.querySelectorAll('#v-launch [data-lc-strategy]').forEach(box=>{const pfx=box.dataset.lcStrategy,sel=$("#"+pfx+"Preset"),custom=$("#"+pfx+"Custom");if(custom)custom.style.display=sel&&sel.value==="custom"?"":"none";});
+    const enabled=!!($("#lcBundleWallets")&&$("#lcBundleWallets").checked),setup=$("#lcBundleSetup");if(setup)setup.style.display=enabled?"":"none";
+    const mode=String(($("#lcBundleMode")||{}).value||"same"),shared=$("#lcBundleShared"),per=$("#lcBundlePer");if(shared)shared.style.display=mode==="same"?"":"none";if(per)per.style.display="";
+    const devIdx=String(($("#lcDevWallet")||{}).value||state.activeWallet||"");
+    document.querySelectorAll('#v-launch [data-lc-wallet-row]').forEach(row=>{const idx=String(row.dataset.lcWalletRow),isDev=idx===devIdx,pick=row.querySelector('[data-lc-bundle-pick]'),cfg=row.querySelector('[data-lc-wallet-config]');row.style.display=isDev?"none":"";if(cfg)cfg.style.display=!isDev&&mode==="wallet"&&pick&&pick.checked?"":"none";});
+  }
+  function lcWireLaunchStrategies(){
+    document.querySelectorAll('#v-launch [data-lc-strategy] select').forEach(sel=>sel.onchange=lcSyncLaunchStrategies);
+    const bw=$("#lcBundleWallets"),mode=$("#lcBundleMode");if(bw)bw.onchange=lcSyncLaunchStrategies;if(mode)mode.onchange=lcSyncLaunchStrategies;
+    document.querySelectorAll('#v-launch [data-lc-bundle-pick]').forEach(cb=>cb.onchange=lcSyncLaunchStrategies);
+    lcSyncLaunchStrategies();
+  }
   async function pollLaunchProgress(aid,btn){
     const out=$("#lcOut");let tries=0;
     const tick=async()=>{
@@ -3994,8 +4024,7 @@
     if(state.launchBanner&&$("#lcBannerPrev"))$("#lcBannerPrev").innerHTML='<img src="'+state.launchBanner.dataUrl+'" style="height:40px;border-radius:10px;object-fit:cover;border:1px solid var(--border)">';
     // Re-apply the show/hide that depends on restored checkbox state (promoter rows, bundle amount).
     const pm=$("#lcPromo");if(pm){const e=$("#lcPromoRows"),pp=$("#lcPayPromo");if(e)e.style.display=pm.checked?"":"none";if(pp)pp.style.display=pm.checked?"":"none";}
-    lcWireHolderRewards("lc");lcWireHolderRewards("lcRh");
-    const bw=$("#lcBundleWallets");if(bw){const on=bw.checked;["lcBundleAmtWrap","lcBundleNote"].forEach(id=>{const e=$("#"+id);if(e)e.style.display=on?"":"none";});}}
+    lcWireHolderRewards("lc");lcWireHolderRewards("lcRh");lcWireLaunchStrategies();}
   async function renderLaunch(){
     setActiveView("v-launch");subbarTool("🚀 Launch a Coin");if(state.token)await refreshWallets();if(state.route!=="launch")return;
     const tab=["coin","social","dev"].includes(state.launchTab)?state.launchTab:"coin";const mint=state.launchedMint||"";const rail=["pump","robinhood"].includes(state.launchRail)?state.launchRail:"pump";
@@ -4025,10 +4054,10 @@
         '<div id="lcDevSol">'+
         '<div class="launch-summary"><span class="mark">✓</span><div><b>Creator fees are automatic.</b><br><span class="mut">The selected wallet is assigned as creator and SlimeWire automatically claims eligible Pump fees after trading activity.</span></div></div>'+
         '<div class="field"><label>Dev buy (SOL) <span style="text-transform:none">(optional)</span></label><input id="lcDevBuy" inputmode="decimal" placeholder="0.1"><span class="mut" style="font-size:10px">Your first position in the coin. Leave blank to launch without buying.</span></div>'+
+        lcExitStrategyHtml("lcDev","Dev wallet exit preset")+
         '<label class="lcheck"><input type="checkbox" id="lcBundle" checked> <span><b>Bundle my dev buy with launch</b> — it lands with the create transaction. If the Jito bundle does not land, SlimeWire retries and falls back to an immediate standard launch + buy.</span></label>'+
         '<label class="lcheck"><input type="checkbox" id="lcBundleWallets"> <span><b>Buy from my other wallets too</b> — use funded wallets for first-block buys.</span></label>'+
-        '<div class="field row2" id="lcBundleAmtWrap" style="display:none"><div><label>Bundle wallets</label><input id="lcBundleCount" inputmode="numeric" placeholder="all"></div><div><label>Buy per wallet (SOL)</label><input id="lcBundleAmt" inputmode="decimal" placeholder="0.05"></div></div>'+
-        '<div class="lcnote" id="lcBundleNote" style="display:none">Bundle buys use your other managed wallets. Add or fund wallets in Wallet before launch.</div>'+
+        '<div id="lcBundleSetup" class="feebox" style="display:none;margin-top:8px"><div class="field"><label>Bundle strategy</label><select id="lcBundleMode"><option value="same">Same settings for every wallet</option><option value="wallet">Set each wallet</option></select></div><div id="lcBundleShared"><div class="field"><label>Buy per wallet (SOL)</label><input id="lcBundleSharedAmount" inputmode="decimal" value="0.05"></div>'+lcExitStrategyHtml("lcBundleSharedExit","Exit preset for every wallet")+'</div><div class="mut" style="font-size:10px;margin:8px 0 4px">Choose bundle wallets</div><div id="lcBundlePer">'+lcBundleWalletRowsHtml()+'</div><div class="lcnote" style="margin-top:8px">Only selected managed wallets buy. Atomic launches use up to the available Jito transaction slots; the safe fallback buys the rest immediately after launch.</div></div>'+
         '<details class="launch-advanced"><summary>Advanced</summary><div><div class="field"><label>Slippage (bps)</label><input id="lcSlip" inputmode="numeric" value="300"></div></div></details>'+
         '</div>'+
       '</div>'+
@@ -4053,11 +4082,11 @@
       const p=$("#"+prevId);if(p)p.innerHTML='<img src="'+dataUrl+'" style="height:'+(big?"40":"64")+'px;'+(big?"":"width:64px;")+'border-radius:10px;object-fit:cover;border:1px solid var(--border)">';};
     $("#lcImg").onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchImg","lcImgPrev",false);
     const lb=$("#lcBanner");if(lb)lb.onchange=(e)=>readImg(e.target.files&&e.target.files[0],"launchBanner","lcBannerPrev",true);
-    const bw=$("#lcBundleWallets");if(bw)bw.onchange=()=>{const on=bw.checked;["lcBundleAmtWrap","lcBundleNote"].forEach(id=>{const e=$("#"+id);if(e)e.style.display=on?"":"none";});};
+    lcWireLaunchStrategies();
     const pm=$("#lcPromo");if(pm)pm.onchange=()=>{const e=$("#lcPromoRows"),pp=$("#lcPayPromo");if(e)e.style.display=pm.checked?"":"none";if(pp)pp.style.display=pm.checked?"":"none";};
     lcWireHolderRewards("lc");lcWireHolderRewards("lcRh");
     const pp=$("#lcPayPromo");if(pp)pp.onclick=()=>payPromotersModal();
-    const dwSel=$("#lcDevWallet");if(dwSel)dwSel.onchange=()=>refreshRhSetup();   // RH address is per-wallet
+    const dwSel=$("#lcDevWallet");if(dwSel)dwSel.onchange=()=>{refreshRhSetup();lcSyncLaunchStrategies();};   // RH address + bundle list are per-wallet
     lcWireChat();
     // Persist every edit so navigating away (Wallet/dev wallet) and back keeps text + images. One
     // delegated handler on the container survives innerHTML swaps and never double-binds (property, not addEventListener).
@@ -4125,15 +4154,14 @@
       if(state.launchRail==="meteora"&&$("#lcCustomCurve")&&$("#lcCustomCurve").checked){body.customCurve=true;body.customInitialMcap=String(($("#lcCustomInit")&&$("#lcCustomInit").value)||"5000");body.customMigrationMcap=String(($("#lcCustomMig")&&$("#lcCustomMig").value)||"69000");}
       if(state.launchImg){body.imageDataUrl=state.launchImg.dataUrl;body.imageName=state.launchImg.name;body.imageType=state.launchImg.type;}
       if(state.launchBanner){body.bannerDataUrl=state.launchBanner.dataUrl;body.bannerName=state.launchBanner.name;body.bannerType=state.launchBanner.type;}
-      const dev=Number(($("#lcDevBuy")&&$("#lcDevBuy").value.trim())||"0");if(dev>0){body.devBuyEnabled=true;body.devBuySol=String(dev);body.bundleDevBuy=!!($("#lcBundle")&&$("#lcBundle").checked);body.antiSnipe=body.bundleDevBuy;}
+      const dev=Number(($("#lcDevBuy")&&$("#lcDevBuy").value.trim())||"0");if(dev>0){body.devBuyEnabled=true;body.devBuySol=String(dev);body.bundleDevBuy=!!($("#lcBundle")&&$("#lcBundle").checked);body.antiSnipe=body.bundleDevBuy;body.devExitStrategy=lcReadExitStrategy("lcDev");Object.assign(body,body.devExitStrategy);}
       // Multi-wallet launch bundle (matches the old "bundle" action): first-block buys across the user's
       // OTHER funded wallets, landed atomically with the create when the Jito bundle env is enabled.
-      const bAmt=Number(($("#lcBundleAmt")&&$("#lcBundleAmt").value.trim())||"0");
-      if($("#lcBundleWallets")&&$("#lcBundleWallets").checked&&bAmt>0){
-        let others=(state.wallets||[]).map(w=>w.index).filter(i=>String(i)!==devIdx);
-        const cnt=parseInt(($("#lcBundleCount")&&$("#lcBundleCount").value.trim())||"",10); // blank = all
-        if(Number.isFinite(cnt)&&cnt>0)others=others.slice(0,cnt);
-        if(others.length){body.action="bundle";body.bundleBuy={walletIndexes:others,amountSol:String(bAmt),slippageBps:body.slippageBps};}
+      if($("#lcBundleWallets")&&$("#lcBundleWallets").checked){
+        const mode=String(($("#lcBundleMode")||{}).value||"same"),sharedStrategy=lcReadExitStrategy("lcBundleSharedExit"),sharedAmount=String(($("#lcBundleSharedAmount")||{}).value||"0.05");
+        const configs=[...document.querySelectorAll('#v-launch [data-lc-bundle-pick]:checked')].map(cb=>String(cb.dataset.lcBundlePick)).filter(i=>i!==devIdx).map(i=>{const pfx="lcBw"+i;return{walletIndex:i,amountSol:mode==="same"?sharedAmount:String(($("#"+pfx+"Amount")||{}).value||"0"),...(mode==="same"?sharedStrategy:lcReadExitStrategy(pfx))};}).filter(x=>Number(x.amountSol)>0);
+        const others=configs.map(x=>x.walletIndex),bAmt=configs.length?configs[0].amountSol:"0";
+        if(others.length){body.action="bundle";body.bundleBuy={walletIndexes:others,amountSol:String(bAmt),slippageBps:body.slippageBps,strategyMode:mode,exitStrategy:mode==="same"?sharedStrategy:null,walletConfigs:configs};}
         else toast("Add more wallets (Wallet tab) to bundle-buy from — launching without it.",true);
       }
       const {ok,status,d}=await jpost("/api/web/launch/coin",body);

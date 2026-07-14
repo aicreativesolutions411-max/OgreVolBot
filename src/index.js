@@ -67952,18 +67952,61 @@ async function sendPumpTradeTx(tx, keypair, label, opts = {}) {
 // Buy buttons - so the buys execute in PARALLEL and the launch sheet's TP/SL/
 // timer arm in the same call. If the plan path can't run (e.g. automation
 // permission missing) it degrades to raw PumpPortal buys so SOL still deploys.
+function pumpLaunchExitStrategy(input = {}, fallback = {}) {
+  const source = input && typeof input === "object" ? input : {};
+  const base = fallback && typeof fallback === "object" ? fallback : {};
+  const ladder = Array.isArray(source.takeProfitLadder)
+    ? source.takeProfitLadder
+    : (Array.isArray(base.takeProfitLadder) ? base.takeProfitLadder : []);
+  return {
+    takeProfitPct: firstString(source.takeProfitPct, base.takeProfitPct, ladder[0]?.pct, "40"),
+    stopLossPct: firstString(source.stopLossPct, base.stopLossPct, "8"),
+    takeProfitLadder: ladder,
+    breakEvenAfterTp1: source.breakEvenAfterTp1 ?? base.breakEvenAfterTp1 ?? false,
+    trailingStopPct: firstString(source.trailingStopPct, base.trailingStopPct, "0"),
+    trailingActivatePct: firstString(source.trailingActivatePct, base.trailingActivatePct, "0"),
+    sellDelay: firstString(source.sellDelay, base.sellDelay, "off"),
+    sellPercent: firstString(source.sellPercent, base.sellPercent, "100")
+  };
+}
+
+function pumpLaunchBundlePlans(bundle = {}, wallets = [], body = {}) {
+  const configs = Array.isArray(bundle.walletConfigs) ? bundle.walletConfigs : [];
+  const sharedExit = pumpLaunchExitStrategy(bundle.exitStrategy || {}, body);
+  return wallets.map((wallet) => {
+    const config = configs.find((row) => (
+      String(row?.walletIndex || "") === String(wallet.webIndex || "")
+      || (row?.walletPublicKey && String(row.walletPublicKey) === String(wallet.publicKey))
+    )) || {};
+    return {
+      wallet,
+      amountSol: Math.max(0, Number(config.amountSol ?? bundle.amountSol) || 0),
+      exitStrategy: pumpLaunchExitStrategy(config, sharedExit)
+    };
+  }).filter((plan) => plan.amountSol > 0);
+}
+
+function groupPumpLaunchPlans(plans = [], includeAmount = true) {
+  const groups = new Map();
+  for (const plan of plans) {
+    const key = JSON.stringify({ amountSol: includeAmount ? plan.amountSol : null, exitStrategy: plan.exitStrategy });
+    if (!groups.has(key)) groups.set(key, { amountSol: plan.amountSol, exitStrategy: plan.exitStrategy, plans: [] });
+    groups.get(key).plans.push(plan);
+  }
+  return [...groups.values()];
+}
+
 async function firePostLaunchBuysServerSide({ mint, body, devWallet, devKeypair, devBuySol, bundleWallets, bundleAmountSol, slippagePct, launchAttemptId, userId }) {
   const outcome = { dev: false, wallets: 0, planned: false };
-  const exitFields = {
+  const exitFields = (strategy) => ({
     tokenMint: mint,
-    takeProfitPct: body.takeProfitPct,
-    stopLossPct: body.stopLossPct,
-    sellDelay: body.sellDelay,
-    sellPercent: body.sellPercent || "100",
+    ...strategy,
     slippageBps: Math.max(Number(body.slippageBps) || 300, 1_000),
     loopCount: "1",
     loopDelay: "0"
-  };
+  });
+  const devExitStrategy = pumpLaunchExitStrategy(body.devExitStrategy || {}, body);
+  const bundlePlans = pumpLaunchBundlePlans(body.bundleBuy || { amountSol: bundleAmountSol }, bundleWallets, body);
   const rawBuy = async (keypair, amountSol, label) => {
     const action = {
       publicKey: keypair.publicKey.toBase58(), action: "buy", mint,
@@ -67977,8 +68020,8 @@ async function firePostLaunchBuysServerSide({ mint, body, devWallet, devKeypair,
     invalidateWalletReadCache(keypair.publicKey.toBase58());
     logPumpLaunchEvent("pump_launch_fallback_buy", { launchAttemptId, userId, mint, label, amountSol, txSignature: signature, managed: false });
   };
-  const planBuy = async (wallets, amountSol, label) => {
-    await webCreateManagedBuyPlan(userId, wallets, { ...exitFields, amountSol: String(amountSol) }, {
+  const planBuy = async (wallets, amountSol, label, strategy) => {
+    await webCreateManagedBuyPlan(userId, wallets, { ...exitFields(strategy), amountSol: String(amountSol) }, {
       source: "pump_launch_first_buys",
       label,
       auditType: "web_pump_launch_first_buys",
@@ -67993,7 +68036,7 @@ async function firePostLaunchBuysServerSide({ mint, body, devWallet, devKeypair,
   const devTask = async () => {
     if (!(devBuySol > 0 && devWallet)) return;
     try {
-      await planBuy([devWallet], devBuySol, "Launch dev buy");
+      await planBuy([devWallet], devBuySol, "Launch dev buy", devExitStrategy);
       outcome.dev = true;
       outcome.planned = true;
     } catch (error) {
@@ -68007,22 +68050,25 @@ async function firePostLaunchBuysServerSide({ mint, body, devWallet, devKeypair,
     }
   };
   const bundleTask = async () => {
-    if (!(bundleWallets.length && bundleAmountSol > 0)) return;
-    try {
-      await planBuy(bundleWallets, bundleAmountSol, "Launch bundle buys");
-      outcome.wallets = bundleWallets.length;
-      outcome.planned = true;
-    } catch (error) {
-      logPumpLaunchEvent("pump_launch_fallback_plan_failed", { launchAttemptId, userId, mint, label: "bundle", errorMessage: String(error.message || "").slice(0, 200) });
-      await Promise.all(bundleWallets.map(async (wallet) => {
-        try {
-          await rawBuy(decryptWallet(wallet), bundleAmountSol, shortMint(wallet.publicKey));
-          outcome.wallets += 1;
-        } catch (rawError) {
-          logPumpLaunchEvent("pump_launch_fallback_buy_failed", { launchAttemptId, userId, mint, label: shortMint(wallet.publicKey), errorMessage: String(rawError.message || "").slice(0, 200) });
-        }
-      }));
-    }
+    if (!bundlePlans.length) return;
+    await Promise.all(groupPumpLaunchPlans(bundlePlans).map(async (group, groupIndex) => {
+      const wallets = group.plans.map((plan) => plan.wallet);
+      try {
+        await planBuy(wallets, group.amountSol, `Launch bundle buys ${groupIndex + 1}`, group.exitStrategy);
+        outcome.wallets += wallets.length;
+        outcome.planned = true;
+      } catch (error) {
+        logPumpLaunchEvent("pump_launch_fallback_plan_failed", { launchAttemptId, userId, mint, label: `bundle-${groupIndex + 1}`, errorMessage: String(error.message || "").slice(0, 200) });
+        await Promise.all(group.plans.map(async (plan) => {
+          try {
+            await rawBuy(decryptWallet(plan.wallet), plan.amountSol, shortMint(plan.wallet.publicKey));
+            outcome.wallets += 1;
+          } catch (rawError) {
+            logPumpLaunchEvent("pump_launch_fallback_buy_failed", { launchAttemptId, userId, mint, label: shortMint(plan.wallet.publicKey), errorMessage: String(rawError.message || "").slice(0, 200) });
+          }
+        }));
+      }
+    }));
   };
   // Dev buy + every bundle wallet fire AT THE SAME TIME the create lands - the
   // dev buy used to finish (21s) before bundle buys even started, so bundle
@@ -68068,9 +68114,12 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
     bundleWallets = webSelectedWallets(store, userId, bundle.walletIndexes, bundle.walletGroup)
       .filter((wallet) => wallet.publicKey && wallet.publicKey !== devSelection.wallet.publicKey);
   }
+  const requestedBundlePlans = pumpLaunchBundlePlans(bundle, bundleWallets, body);
   // Jito bundles allow at most 5 transactions: create + dev buy + remaining wallet buys.
   const reserved = 1 + (devBuySol > 0 ? 1 : 0);
-  bundleWallets = bundleWallets.slice(0, Math.max(0, 5 - reserved));
+  let bundlePlans = requestedBundlePlans.slice(0, Math.max(0, 5 - reserved));
+  const overflowBundlePlans = requestedBundlePlans.slice(Math.max(0, 5 - reserved));
+  bundleWallets = bundlePlans.map((plan) => plan.wallet);
 
   // Pre-flight balances: ONE underfunded wallet makes an all-or-none bundle
   // unincludable at any tip. Check everything and name the exact problem first.
@@ -68082,30 +68131,30 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
     error.statusCode = 400;
     throw error;
   }
-  if (bundleWallets.length && bundleAmountSol > 0) {
-    const perWalletNeedsSol = bundleAmountSol * 1.02 + 0.0045;
-    const needLamports = Math.ceil(perWalletNeedsSol * 1e9);
+  if (bundlePlans.length) {
     const checked = [];
     const skipped = [];
-    for (const wallet of bundleWallets) {
-      const balance = await rpcWithRetry("read bundle wallet balance", () => connection.getBalance(new PublicKey(wallet.publicKey), "confirmed"), CONFIG.rpcRetries).catch(() => 0);
-      if (balance < needLamports) skipped.push({ wallet, balance });
-      else checked.push(wallet);
+    for (const plan of bundlePlans) {
+      const needSol = plan.amountSol * 1.02 + 0.0045;
+      const balance = await rpcWithRetry("read bundle wallet balance", () => connection.getBalance(new PublicKey(plan.wallet.publicKey), "confirmed"), CONFIG.rpcRetries).catch(() => 0);
+      if (balance < Math.ceil(needSol * 1e9)) skipped.push({ ...plan, balance, needSol });
+      else checked.push(plan);
     }
     // Skip an underfunded wallet instead of aborting the launch - the funded
     // wallets (and the dev buy) still go. Only fail if NOTHING can buy.
     if (skipped.length) {
       logPumpLaunchEvent("pump_launch_bundle_wallet_skipped", {
         launchAttemptId: basePayload.clientRequestId, userId,
-        skipped: skipped.map((item) => `${shortMint(item.wallet.publicKey)}:${(item.balance / 1e9).toFixed(4)}`)
+        skipped: skipped.map((item) => `${shortMint(item.wallet.publicKey)}:${(item.balance / 1e9).toFixed(4)}/${item.needSol.toFixed(4)}`)
       });
     }
     if (!checked.length && devBuySol <= 0) {
-      const error = new Error(`Every bundle wallet is underfunded - each needs ~${perWalletNeedsSol.toFixed(4)} SOL for a ${bundleAmountSol} SOL buy. Fund them or lower the buy amount. Nothing was spent.`);
+      const error = new Error("Every first-block bundle wallet is underfunded for its selected buy amount. Fund them or lower the wallet amounts. Nothing was spent.");
       error.statusCode = 400;
       throw error;
     }
-    bundleWallets = checked;
+    bundlePlans = checked;
+    bundleWallets = checked.map((plan) => plan.wallet);
   }
 
   const metadata = await uploadPumpLaunchMetadata(basePayload);
@@ -68129,10 +68178,10 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
       signers: [devKeypair]
     });
   }
-  for (const wallet of bundleWallets) {
-    const keypair = decryptWallet(wallet);
+  for (const bundlePlan of bundlePlans) {
+    const keypair = decryptWallet(bundlePlan.wallet);
     plan.push({
-      action: { publicKey: keypair.publicKey.toBase58(), action: "buy", mint, denominatedInSol: "true", amount: bundleAmountSol, slippage: slippagePct, priorityFee: 0, pool: "pump" },
+      action: { publicKey: keypair.publicKey.toBase58(), action: "buy", mint, denominatedInSol: "true", amount: bundlePlan.amountSol, slippage: slippagePct, priorityFee: 0, pool: "pump" },
       signers: [keypair]
     });
   }
@@ -68246,14 +68295,7 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
     // bundle wallet buy itself - instant, no client follow-ups to stall on.
     const fallback = await webLaunchPumpPortalLocal(userId, body, basePayload);
     const fallbackMint = String(fallback?.tokenMint || fallback?.mint || "");
-    let buys = { dev: false, wallets: 0 };
-    if (fallbackMint) {
-      buys = await firePostLaunchBuysServerSide({
-        mint: fallbackMint, body, devWallet: devSelection.wallet, devKeypair, devBuySol,
-        bundleWallets, bundleAmountSol, slippagePct,
-        launchAttemptId: basePayload.clientRequestId, userId
-      }).catch(() => ({ dev: false, wallets: 0, planned: false }));
-    }
+    const buys = fallback?.postLaunchBuys || { dev: false, wallets: 0, planned: false };
     // bundled:true tells the client the buys are DONE - it must not re-run them.
     return {
       ...fallback,
@@ -68268,23 +68310,37 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
   logPumpLaunchEvent("pump_launch_jito_bundle_landed", {
     launchAttemptId: basePayload.clientRequestId, userId, mint, bundleId, txCount: plan.length
   });
-  // The in-block buys exist but carry no exit plans - auto-arm them with the
-  // launch sheet's TP/SL/timer. Presets set = protection on, zero user steps.
+  // The in-block buys exist but carry no exit plans - auto-arm each strategy
+  // group separately so per-wallet ladders remain exactly as selected.
   let atomicExitsArmed = false;
   try {
-    await webArmExitsForExistingPositions(userId, {
-      tokenMint: mint,
-      takeProfitPct: body.takeProfitPct,
-      stopLossPct: body.stopLossPct,
-      sellDelay: body.sellDelay,
-      sellPercent: body.sellPercent || "100",
-      slippageBps: Math.max(Number(body.slippageBps) || 300, 1_000),
-      source: "pump_launch_atomic_arm"
-    });
-    atomicExitsArmed = true;
+    const atomicPlans = [
+      ...(devBuySol > 0 ? [{ wallet: devSelection.wallet, amountSol: devBuySol, exitStrategy: pumpLaunchExitStrategy(body.devExitStrategy || {}, body) }] : []),
+      ...bundlePlans
+    ];
+    for (const group of groupPumpLaunchPlans(atomicPlans, false)) {
+      await webArmExitsForExistingPositions(userId, {
+        tokenMint: mint,
+        ...group.exitStrategy,
+        walletIndexes: group.plans.map((entry) => entry.wallet.webIndex),
+        slippageBps: Math.max(Number(body.slippageBps) || 300, 1_000),
+        source: "pump_launch_atomic_arm"
+      });
+    }
+    atomicExitsArmed = atomicPlans.length > 0;
     logPumpLaunchEvent("pump_launch_atomic_exits_armed", { launchAttemptId: basePayload.clientRequestId, userId, mint });
   } catch (error) {
     logPumpLaunchEvent("pump_launch_atomic_exits_arm_failed", { launchAttemptId: basePayload.clientRequestId, userId, mint, errorMessage: String(error.message || "").slice(0, 200) });
+  }
+  // Wallets beyond Jito's five-transaction limit buy immediately after the
+  // atomic launch, with their own selected amounts and exit ladders.
+  let overflowBuys = { wallets: 0, planned: false };
+  if (overflowBundlePlans.length) {
+    overflowBuys = await firePostLaunchBuysServerSide({
+      mint, body, devWallet: devSelection.wallet, devKeypair, devBuySol: 0,
+      bundleWallets: overflowBundlePlans.map((entry) => entry.wallet), bundleAmountSol, slippagePct,
+      launchAttemptId: basePayload.clientRequestId, userId
+    }).catch(() => ({ wallets: 0, planned: false }));
   }
   // Ledger entry: this is what powers the /t "LAUNCHED ON SLIMEWIRE" badge and
   // the milestone auto-posts - bundled launches were invisible to both.
@@ -68304,7 +68360,7 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
   }).catch((error) => console.warn(`[pump-launch] bundle ledger write failed: ${error.message}`));
   return {
     status: PUMP_LAUNCH_STATUS.COMPLETE, tokenMint: mint, mint, bundleId, bundled: true,
-    bundledWalletCount: bundleWallets.length, devBuyIncluded: devBuySol > 0,
+    bundledWalletCount: bundleWallets.length + Number(overflowBuys.wallets || 0), devBuyIncluded: devBuySol > 0,
     exitsArmed: atomicExitsArmed,
     provider: "jito-bundle", metadataUri: metadata.uri
   };
@@ -68548,7 +68604,7 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
     log: logPumpLaunchEvent
   });
 
-  const launchResult = await service.launch({
+  let launchResult = await service.launch({
     launchAttemptId: basePayload.clientRequestId,
     userId,
     wallet: creatorWallet,
@@ -68563,6 +68619,33 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
       pool: railToPumpPortalPool(basePayload?.rail)
     }
   });
+  if (String(launchResult?.status || "").toUpperCase() === "COMPLETE" && launchResult.tokenMint) {
+    const bundle = body.bundleBuy || {};
+    let bundleWallets = [];
+    if (Number(bundle.amountSol) > 0 && (bundle.walletIndexes || bundle.walletGroup)) {
+      bundleWallets = webSelectedWallets(store, userId, bundle.walletIndexes, bundle.walletGroup)
+        .filter((wallet) => wallet.publicKey && wallet.publicKey !== creatorWallet.publicKey);
+    }
+    const postLaunchBuys = await firePostLaunchBuysServerSide({
+      mint: launchResult.tokenMint,
+      body,
+      devWallet: creatorWallet,
+      devKeypair: creatorKeypair,
+      devBuySol: Math.max(0, Number(basePayload.devBuy?.amountSol) || 0),
+      bundleWallets,
+      bundleAmountSol: Math.max(0, Number(bundle.amountSol) || 0),
+      slippagePct: Math.min(99, Math.max(Number(basePayload.slippageBps) || 300, 1_000) / 100),
+      launchAttemptId: basePayload.clientRequestId,
+      userId
+    }).catch(() => ({ dev: false, wallets: 0, planned: false }));
+    launchResult = {
+      ...launchResult,
+      bundled: true,
+      devBuyIncluded: postLaunchBuys.dev,
+      bundledWalletCount: postLaunchBuys.wallets,
+      postLaunchBuys
+    };
+  }
   if (String(launchResult?.status || "").toUpperCase() === "COMPLETE" && launchResult.tokenMint) {
     const sym = escapeTelegramHtml(basePayload.symbol || basePayload.name || "???");
     const launchText = buildLaunchAnnounceCaption(sym, launchResult.tokenMint);
