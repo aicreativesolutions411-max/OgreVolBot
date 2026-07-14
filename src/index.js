@@ -4963,6 +4963,7 @@ async function main() {
     console.log("Autopilot STOPPED (AUTOPILOT_ENABLED=false) — Ogre A.I. tick off, no auto-trading.");
   }
   startHolderRewardAutoClaimRunner();
+  startCreatorFeeAutoClaimRunner();
   startPartnerRewardRunner();
   startDevObservatory(); // brain/dev-rep one-time loads + the Launch Sniper warmer always run; its credit-burning pollers are gated inside on CONFIG.autopilotEnabled
   startGroupBuyBot();
@@ -5098,13 +5099,16 @@ function loadConfig() {
   const rhChainRpcUrl = (process.env.RH_CHAIN_RPC_URL || RH_DEFAULT_RPC).trim();
   // RH trading fees accrue in ETH and auto-convert to SOL at FEE_WALLET once the pot clears this.
   const rhFeeSweepMinEth = Math.max(0.0005, Number.parseFloat(process.env.RH_FEE_SWEEP_MIN_ETH || "0.002") || 0.002);
-  // RH creator fee: a launcher can opt in (checkbox) to earn this % of every trade of their coin THAT
-  // GOES THROUGH SLIMEWIRE — collected at the venue (like pump.fun's fee), paid to their wallet, and
+  // RH creator fee: every SlimeWire launcher earns this % of trades of their coin THAT GO THROUGH
+  // SLIMEWIRE — collected at the venue (like pump.fun's fee), paid to their wallet automatically, and
   // NEVER baked into the token (so the coin stays ✅ Verified-safe). 100 bps = 1%, matching pump's fee.
   const rhCreatorFeeBps = Math.max(0, Math.min(300, Number.parseInt(process.env.RH_CREATOR_FEE_BPS || "100", 10) || 100));
   const holderRewardsAutoClaimEnabled = parseBoolean(process.env.HOLDER_REWARDS_AUTO_CLAIM_ENABLED || "true");
   const holderRewardsAutoClaimIntervalMs = Math.max(60_000, Math.min(60 * 60_000, Number.parseInt(process.env.HOLDER_REWARDS_AUTO_CLAIM_INTERVAL_MS || "300000", 10) || 300_000));
   const holderRewardsAutoClaimMaxPerTick = Math.max(1, Math.min(20, Number.parseInt(process.env.HOLDER_REWARDS_AUTO_CLAIM_MAX_PER_TICK || "4", 10) || 4));
+  const creatorFeesAutoClaimEnabled = parseBoolean(process.env.CREATOR_FEES_AUTO_CLAIM_ENABLED || "true");
+  const creatorFeesAutoClaimIntervalMs = Math.max(60 * 60_000, Math.min(24 * 60 * 60_000, Number.parseInt(process.env.CREATOR_FEES_AUTO_CLAIM_INTERVAL_MS || "21600000", 10) || 21_600_000));
+  const creatorFeesAutoClaimMinVolumeSol = Math.max(0.1, Math.min(100, Number.parseFloat(process.env.CREATOR_FEES_AUTO_CLAIM_MIN_VOLUME_SOL || "0.5") || 0.5));
   const pumpLaunchJitoUrl = (process.env.PUMP_LAUNCH_JITO_URL || "https://mainnet.block-engine.jito.wtf/api/v1/bundles").trim();
   const pumpLaunchJitoTipSol = Math.max(0.00001, Number.parseFloat(process.env.PUMP_LAUNCH_JITO_TIP_SOL || "0.001") || 0.001);
   // TRADE JITO — route pump buys/sells through a Jito bundle (swap tx + a tiny tip tx) for FAST,
@@ -5523,6 +5527,9 @@ function loadConfig() {
     holderRewardsAutoClaimEnabled,
     holderRewardsAutoClaimIntervalMs,
     holderRewardsAutoClaimMaxPerTick,
+    creatorFeesAutoClaimEnabled,
+    creatorFeesAutoClaimIntervalMs,
+    creatorFeesAutoClaimMinVolumeSol,
     pumpLaunchJitoUrl,
     pumpLaunchJitoTipSol,
     tradeJitoBundle,
@@ -25293,6 +25300,125 @@ async function processHolderRewardAutoClaims() {
     return { ok: true, results };
   } finally {
     holderRewardsAutoClaimBusy = false;
+  }
+}
+
+// Pump creator fees accrue on-chain and require a claim transaction. Run that claim in the background,
+// but only after the launch has accumulated meaningful NEW trade volume. The marker + pending-volume
+// fields prevent an inactive coin from paying a network fee over and over for an empty claim.
+let creatorFeesAutoClaimBusy = false;
+function startCreatorFeeAutoClaimRunner() {
+  if (!CONFIG.creatorFeesAutoClaimEnabled) {
+    console.log("Creator fee auto-claim disabled.");
+    return;
+  }
+  const tick = () => {
+    void processCreatorFeeAutoClaims().catch((error) => {
+      console.warn(`[creator-fees] auto-claim tick failed: ${friendlyError(error)}`);
+    });
+  };
+  setTimeout(tick, 75_000);
+  setInterval(tick, Math.min(CONFIG.creatorFeesAutoClaimIntervalMs, 5 * 60_000));
+}
+
+async function pumpCreatorFeeTradeDelta(mint, lastTradeId = "") {
+  const response = await fetch(`https://swap-api.pump.fun/v2/coins/${encodeURIComponent(mint)}/trades?limit=100`, {
+    headers: { accept: "application/json" },
+    signal: AbortSignal.timeout(7_000)
+  });
+  if (!response.ok) throw new Error(`pump trade activity returned ${response.status}`);
+  const data = await response.json();
+  const trades = Array.isArray(data?.trades) ? data.trades : [];
+  const newestTradeId = firstString(trades[0]?.tx, trades[0]?.slotIndexId);
+  let volumeSol = 0;
+  for (const trade of trades) {
+    const id = firstString(trade?.tx, trade?.slotIndexId);
+    if (lastTradeId && id === lastTradeId) break;
+    volumeSol += Math.max(0, firstMeaningfulNumber(trade?.amountSol, trade?.quoteAmount, trade?.solAmount) || 0);
+  }
+  return { newestTradeId, volumeSol };
+}
+
+async function processCreatorFeeAutoClaims() {
+  if (creatorFeesAutoClaimBusy) return { ok: true, skipped: "busy" };
+  creatorFeesAutoClaimBusy = true;
+  try {
+    const [launchStore, walletStore] = await Promise.all([
+      readPumpLaunchAttempts().catch(() => ({ attempts: [] })),
+      readWalletStore()
+    ]);
+    const now = Date.now();
+    const claimedWallets = new Set();
+    const results = [];
+    for (const attempt of (launchStore.attempts || []).slice().reverse()) {
+      if (results.length >= CONFIG.holderRewardsAutoClaimMaxPerTick) break;
+      if (String(attempt.rail || "pump").toLowerCase() !== "pump") continue;
+      if (launchHolderRewardsFromAttempt(attempt).enabled) continue; // the holder-reward runner owns these claims
+      const status = String(attempt.status || "").toLowerCase();
+      if (status && !["complete", "confirmed", "submitted", "launched"].includes(status)) continue;
+      const mint = firstString(attempt.mintPublicKey, attempt.tokenMint, attempt.mint);
+      const userId = String(attempt.userId || "");
+      const walletKey = String(attempt.devWalletPublicKey || "");
+      const id = String(attempt.id || attempt.launchAttemptId || "");
+      if (!mint || !userId || !walletKey || !id) continue;
+      const groupKey = `${userId}:${walletKey}`;
+      if (claimedWallets.has(groupKey)) continue;
+      const lastClaimAt = Date.parse(firstString(attempt.creatorFeesAutoClaimAt) || "") || 0;
+      if (lastClaimAt && now - lastClaimAt < CONFIG.creatorFeesAutoClaimIntervalMs) continue;
+      const lastCheckedAt = Date.parse(firstString(attempt.creatorFeesAutoClaimCheckedAt) || "") || 0;
+      if (lastCheckedAt && now - lastCheckedAt < 5 * 60_000) continue;
+      const wallets = walletsForOwner(walletStore, userId);
+      const walletIndex = wallets.findIndex((wallet) => wallet.publicKey === walletKey) + 1;
+      if (!walletIndex) {
+        await upsertPumpLaunchAttempt({ id, creatorFeesAutoClaimCheckedAt: new Date().toISOString(), creatorFeesAutoClaimStatus: "creator_wallet_missing" });
+        continue;
+      }
+      let activity;
+      try {
+        activity = await pumpCreatorFeeTradeDelta(mint, firstString(attempt.creatorFeesAutoClaimLastTradeId));
+      } catch (error) {
+        await upsertPumpLaunchAttempt({ id, creatorFeesAutoClaimCheckedAt: new Date().toISOString(), creatorFeesAutoClaimStatus: "activity_unavailable", creatorFeesAutoClaimError: friendlyError(error).slice(0, 180) });
+        continue;
+      }
+      const pendingVolumeSol = Math.max(0, Number(attempt.creatorFeesAutoClaimPendingVolumeSol || 0)) + activity.volumeSol;
+      const checkedAt = new Date().toISOString();
+      if (pendingVolumeSol < CONFIG.creatorFeesAutoClaimMinVolumeSol) {
+        await upsertPumpLaunchAttempt({ id, creatorFeesAutoClaimCheckedAt: checkedAt, creatorFeesAutoClaimLastTradeId: activity.newestTradeId || attempt.creatorFeesAutoClaimLastTradeId || "", creatorFeesAutoClaimPendingVolumeSol: pendingVolumeSol, creatorFeesAutoClaimStatus: "watching" });
+        continue;
+      }
+      try {
+        const claim = await webClaimCreatorFeesCore(userId, { walletIndex, rail: "pump", autoClaim: true });
+        await upsertPumpLaunchAttempt({
+          id,
+          creatorFeesAutoClaimAt: new Date().toISOString(),
+          creatorFeesAutoClaimCheckedAt: checkedAt,
+          creatorFeesAutoClaimLastTradeId: activity.newestTradeId || attempt.creatorFeesAutoClaimLastTradeId || "",
+          creatorFeesAutoClaimPendingVolumeSol: 0,
+          creatorFeesAutoClaimStatus: "claimed",
+          creatorFeesAutoClaimSignature: claim?.signature || "",
+          creatorFeesAutoClaimSol: Number(claim?.claimedSol || 0)
+        });
+        claimedWallets.add(groupKey);
+        results.push({ id, mint, status: "claimed", claimedSol: Number(claim?.claimedSol || 0) });
+      } catch (error) {
+        const message = friendlyError(error).slice(0, 220);
+        const empty = /nothing to claim|no fees|rejected the claim/i.test(message);
+        await upsertPumpLaunchAttempt({
+          id,
+          creatorFeesAutoClaimAt: empty ? new Date().toISOString() : attempt.creatorFeesAutoClaimAt || "",
+          creatorFeesAutoClaimCheckedAt: checkedAt,
+          creatorFeesAutoClaimLastTradeId: activity.newestTradeId || attempt.creatorFeesAutoClaimLastTradeId || "",
+          creatorFeesAutoClaimPendingVolumeSol: empty ? 0 : pendingVolumeSol,
+          creatorFeesAutoClaimStatus: empty ? "nothing_to_claim" : "failed",
+          creatorFeesAutoClaimError: message
+        });
+        results.push({ id, mint, status: empty ? "nothing_to_claim" : "failed", error: message });
+      }
+    }
+    if (results.length) await audit("creator_fees_auto_claim_tick", { count: results.length, results }).catch(() => {});
+    return { ok: true, results };
+  } finally {
+    creatorFeesAutoClaimBusy = false;
   }
 }
 
@@ -55149,11 +55275,11 @@ async function webLaunchRhCoinCore(userId, body = {}) {
   // collected keyed by token address — the RH feed + coin rows read it back (like wallets/DEXes keep
   // their own address->logo registries on other chains).
   const hasImage = await saveRhTokenImage(result.tokenAddress, body.imageDataUrl).catch(() => false);
-  // Creator-fee opt-in (pump-style, venue-side): if checked, the creator earns rhCreatorFeeBps of every
-  // trade of this coin THROUGH SLIMEWIRE, paid in ETH to the dev wallet's EVM address. Stored on the coin,
+  // Creator fees (pump-style, venue-side): the creator earns rhCreatorFeeBps of every trade of this coin
+  // THROUGH SLIMEWIRE, paid in ETH to the dev wallet's EVM address. Stored on the coin,
   // NOT baked into the token — so the coin stays ✅ Verified. Recipient = deployer (the dev wallet).
   const holderRewards = launchHolderRewardsFromBody(body);
-  const creatorFeeEnabled = parseBoolean(body.creatorFeeEnabled) || holderRewards.enabled;
+  const creatorFeeEnabled = true;
   await upsertPumpLaunchAttempt({
     id: attemptId,
     userId,

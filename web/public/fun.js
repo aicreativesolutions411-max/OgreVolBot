@@ -7,6 +7,7 @@
   const TOKEN_KEY = "ogreWebToken";
   const RECENTS_KEY = "slimewireFunRecents";
   const ACTIVE_PRESET_KEY = "slimewireFunTradePreset";
+  const ACTIVE_WALLET_KEY = "slimecashActiveWalletIndex";
   const TOKEN_FALLBACK = "/assets/slimewire/png/slimewire-mark.png";
   const SLIME_PFPS = [
     "f_f648203a.png", "f_cc8f54e4.png", "f_c9dc667d.png", "f_c4f3d050.png", "f_c20374ef.png",
@@ -22,7 +23,7 @@
     token: localStorage.getItem(TOKEN_KEY) || "",
     user: null,
     wallets: [],
-    activeWallet: null,
+    activeWallet: Number(localStorage.getItem(ACTIVE_WALLET_KEY)) || null,
     chain: FROM_CASH ? "solana" : "all",
     feed: FROM_CASH ? "new" : "movers",
     rows: [],
@@ -177,6 +178,7 @@
     if (result.ok && result.data?.ok) {
       state.wallets = result.data.balances || [];
       if (!state.activeWallet || !state.wallets.some((wallet) => wallet.index === state.activeWallet)) state.activeWallet = state.wallets[0]?.index || null;
+      if (state.activeWallet) localStorage.setItem(ACTIVE_WALLET_KEY, String(state.activeWallet));
       paintWalletPill();
       renderCashHandoff();
       renderHomeReadiness();
@@ -861,7 +863,7 @@
     if (!result.ok || !result.data?.ok) { toast(result.data?.error || "Could not remove wallet", true); return; }
     downloadWalletFiles(result.data.removed?.downloads);
     if (Array.isArray(result.data.removed?.wallets)) state.wallets = result.data.removed.wallets; else await loadWallets(true);
-    state.activeWallet = state.wallets[0]?.index || null; paintWalletPill(); renderWalletHero(); toast("Wallet backed up and removed"); await openWalletManager();
+    state.activeWallet = state.wallets[0]?.index || null;if(state.activeWallet)localStorage.setItem(ACTIVE_WALLET_KEY,String(state.activeWallet));else localStorage.removeItem(ACTIVE_WALLET_KEY); paintWalletPill(); renderWalletHero(); toast("Wallet backed up and removed"); await openWalletManager();
   }
   async function ensureTradeReady() { if (!(await ensureAccount())) return false; if (!state.wallets.length) await loadWallets(); if (!state.wallets.length) { closeSheet(); setView("wallet"); toast("Create a wallet first.", true); return false; } await ensureAutomation(); return true; }
   async function executeFunQuickBuy(button, rawAmount) {
@@ -1082,7 +1084,7 @@
     if (event.target.closest("[data-export-wallets]")) { await exportWallets(); return; }
     if (event.target.closest("[data-restore-wallet]")) { await restoreWallet(); return; }
     const remove = event.target.closest("[data-remove-wallet]"); if (remove) { await removeWallet(remove.dataset.removeWallet, remove.dataset.walletKey); return; }
-    const select = event.target.closest("[data-select-wallet]"); if (select) { state.activeWallet = Number(select.dataset.selectWallet); paintWalletPill(); renderWalletHero(); renderQuickTrade(); if (state.view === "quick") renderQuickRoute(); await openWalletManager(); return; }
+    const select = event.target.closest("[data-select-wallet]"); if (select) { state.activeWallet = Number(select.dataset.selectWallet);localStorage.setItem(ACTIVE_WALLET_KEY,String(state.activeWallet)); paintWalletPill(); renderWalletHero(); renderQuickTrade(); if (state.view === "quick") renderQuickRoute(); await openWalletManager(); return; }
     const rename = event.target.closest("[data-rename-wallet]"); if (rename) { await renameWallet(rename.dataset.renameWallet); return; }
     const startVolume = event.target.closest("[data-start-volume]"); if (startVolume) { await startFunVolume(startVolume); return; }
     if (event.target.closest("[data-stop-volume]")) { await stopFunVolume(); return; }
@@ -1093,7 +1095,7 @@
   });
 
   document.addEventListener("change", (event) => {
-    if (event.target.matches("[data-quick-wallet-select]")) { state.activeWallet = Number(event.target.value); paintWalletPill(); renderQuickRoute(); return; }
+    if (event.target.matches("[data-quick-wallet-select]")) { state.activeWallet = Number(event.target.value);localStorage.setItem(ACTIVE_WALLET_KEY,String(state.activeWallet)); paintWalletPill(); renderQuickRoute(); return; }
     if (!event.target.matches("[data-wallet-backup-file]")) return;
     const file = event.target.files?.[0], textarea = $("[data-wallet-backup-text]"), status = $("[data-wallet-manager-status]");
     if (!file || !textarea) return;

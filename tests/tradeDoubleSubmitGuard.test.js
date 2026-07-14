@@ -564,7 +564,8 @@ test("RH: auto-bundle-when-pool-opens + coin age everywhere + 75% sells", () => 
   assert.match(functionBody(serverSource, "webRhPairs"), /rhCreatedCache/);
   for (const src of [ggSource, indexSource]) {
     assert.match(src, /function rhAutoBundleModal/);
-    assert.match(src, /Auto-bundle when it gets a pool/);
+    assert.match(functionBody(src, "renderLaunch"), /lcRhAutoBundle/);
+    assert.match(functionBody(src, "renderLaunch"), /\/api\/web\/rh\/auto-bundle/);
     assert.match(src, /\[25,50,75,100\]/);                     // 75% sell added
     assert.match(src, /Age <b>/);                              // age in the coin-screen stats
     assert.match(src, /⏱/);                                    // age chip on rows
@@ -752,8 +753,8 @@ test("RH verified-safe tier: exact-bytecode match to our no-rug contract = the o
   }
 });
 
-test("RH creator fee: pump-style venue-side, opt-in, paid to creator, NOT baked into the token", () => {
-  // Launch stores the opt-in + recipient (the deployer wallet); it is NOT put in the token contract.
+test("RH creator fee: pump-style venue-side, automatic at launch, NOT baked into the token", () => {
+  // Launch stores the enabled fee + recipient (the deployer wallet); it is NOT put in the token contract.
   const launch = functionBody(serverSource, "webLaunchRhCoinCore");
   assert.match(launch, /creatorFeeEnabled/);
   assert.match(launch, /rhCreatorFeeRecipient: creatorFeeEnabled \? result\.deployer/);
@@ -768,9 +769,10 @@ test("RH creator fee: pump-style venue-side, opt-in, paid to creator, NOT baked 
   assert.match(sol, /balanceOf\[to\] \+= value;/);          // recipient gets the full amount, untaxed
   assert.doesNotMatch(sol, /feeBps|_fee|taxRate|reflectionRate/);
   for (const src of [ggSource, indexSource]) {
-    assert.match(src, /lcRhCreatorFee/);
-    assert.match(src, /Earn creator fees/);
-    assert.match(src, /creatorFeeEnabled:/);
+    const render = functionBody(src, "renderLaunch");
+    assert.doesNotMatch(render, /lcRhCreatorFee/);
+    assert.match(render, /creatorFeeEnabled:true/);
+    assert.match(render, /Creator fees are automatic/);
   }
 });
 
@@ -788,6 +790,31 @@ test("launch form survives navigation + warns on no dev buy", () => {
     assert.match(src, /function confirmModal\(/);
     assert.match(src, /No dev buy set/);
   }
+});
+
+test("launch UI is Pump-simple: Pump + Robinhood only, three clean tabs, dormant tools stay off-page", () => {
+  for (const src of [ggSource, indexSource]) {
+    const render = functionBody(src, "renderLaunch");
+    assert.match(render, /tb\("coin","Coin"\)\+tb\("social","Socials"\)\+tb\("dev","Dev &amp; Bundle"\)/);
+    assert.match(render, /data-rail="pump"/);
+    assert.match(render, /data-rail="robinhood"/);
+    assert.doesNotMatch(render, /data-rail="bonk"|data-rail="meteora"/);
+    assert.doesNotMatch(render, /Chat &amp; Live|Presale escrow|Mayhem/);
+    assert.match(render, /Coin image/);
+    assert.match(render, /Banner/);
+  }
+});
+
+test("creator fee claims auto-run only after new Pump volume, and wallet choice follows Cash to Fun", () => {
+  assert.match(serverSource, /function startCreatorFeeAutoClaimRunner\(\)/);
+  const auto = functionBody(serverSource, "processCreatorFeeAutoClaims");
+  assert.match(auto, /pumpCreatorFeeTradeDelta/);
+  assert.match(auto, /creatorFeesAutoClaimPendingVolumeSol/);
+  assert.match(auto, /CONFIG\.creatorFeesAutoClaimMinVolumeSol/);
+  assert.match(auto, /webClaimCreatorFeesCore/);
+  assert.match(auto, /claimedWallets/);
+  const fun = fs.readFileSync(new URL("../web/public/fun.js", import.meta.url), "utf8");
+  for (const src of [fun, ggSource, indexSource]) assert.match(src, /slimecashActiveWalletIndex/);
 });
 
 test("wallet sweep drains regardless of session-funding (no 'fund your session' gate)", () => {
@@ -864,8 +891,8 @@ test("presale escrow is fully GATED behind PRESALE_ESCROW_ENABLED (custody stays
 });
 
 for (const [label, source] of [["gg.html", ggSource], ["index.html", indexSource]]) {
-  test(`presale escrow UI is wired to the gated escrow endpoints (${label})`, () => {
-    assert.match(source, /onclick="GG\.escrowModal\(\)"/);          // entry point on the Launch page
+  test(`presale escrow is hidden from launch but its gated implementation is preserved (${label})`, () => {
+    assert.doesNotMatch(functionBody(source, "renderLaunch"), /GG\.escrowModal/);
     assert.match(source, /escrowModal,renderEscrow,escrowFinalize,escrowRefund,/); // exposed on GG
     assert.match(source, /\/api\/web\/presale\/escrow\/create/);
     assert.match(source, /\/api\/web\/presale\/escrow\/finalize/);
@@ -956,7 +983,7 @@ test("coin charts stay trader-focused while Robinhood liquidity remains creator-
     const rhChart = functionBody(src, "renderRhTrade");
     assert.doesNotMatch(rhChart, /blinkLinksHtml/);
     assert.doesNotMatch(rhChart, /rhAddLiquidity/);
-    assert.match(src, /Make it buyable[^<]*[—-] add liquidity/);
+    assert.match(functionBody(src, "renderLaunch"), />Open trading</);
   }
 });
 
