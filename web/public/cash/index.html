@@ -6,8 +6,8 @@
 <title>SlimeCash — money for the trenches</title>
 <meta name="description" content="SlimeCash: send, receive, and swap coins with your $handle. Money for the trenches.">
 <meta name="theme-color" content="#050705">
-<meta name="slimecash-build" content="10">
-<link rel="manifest" href="/cash/manifest.webmanifest?v=10">
+<meta name="slimecash-build" content="12">
+<link rel="manifest" href="/cash/manifest.webmanifest?v=11">
 <link rel="icon" type="image/png" sizes="64x64" href="/cash/icons/favicon-64.png">
 <link rel="apple-touch-icon" href="/cash/icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -17,7 +17,7 @@
 <meta property="og:title" content="SlimeCash">
 <meta property="og:description" content="Money for the trenches. Send, receive, and swap coins with your $handle.">
 <meta property="og:image" content="https://www.slimewire.org/cash/icons/icon-512.png">
-<link rel="stylesheet" href="/cash/cash.css?v=10">
+<link rel="stylesheet" href="/cash/cash.css?v=11">
 </head>
 <body>
 <div id="splash" class="splash">
@@ -94,7 +94,7 @@
   <section id="view-terminal" class="view view-terminal" hidden>
     <div class="terminal-bar">
       <span>SlimeWire terminal</span>
-      <a href="/fun" target="_blank" rel="noopener">Open full ↗</a>
+      <a href="/fun?from=cash">Open full ↗</a>
     </div>
     <iframe id="terminalFrame" title="SlimeWire terminal" loading="lazy"></iframe>
   </section>
@@ -112,6 +112,7 @@
     <div class="more-list">
       <button class="more-item" id="claimHandleBtn" type="button">Claim / change $handle</button>
       <button class="more-item" id="copyAddressBtn" type="button">Copy wallet address</button>
+      <button class="more-item" id="inviteBtn" type="button">Invite &amp; earn 💸</button>
       <button class="more-item" id="backupBtn" type="button">Back up account + wallets</button>
       <button class="more-item" id="restoreBtn" type="button">Restore account</button>
       <button class="more-item" id="contactsBtn" type="button">Contacts & favorites</button>
@@ -450,7 +451,24 @@
     <div id="convertHint" class="field-hint"></div>
     <button id="convertGoBtn" class="btn primary block" type="button">Convert</button>
     <div id="convertStatus" class="status"></div>
-    <a class="more-item" href="/fun" target="_blank" rel="noopener" style="border-bottom:0; margin-top:6px">Want memecoins? Open the Terminal ↗</a>
+    <a class="more-item" href="/fun?from=cash" style="border-bottom:0; margin-top:6px">Want memecoins? Open the Terminal ↗</a>
+  </div>
+</div>
+
+<!-- INVITE & EARN SHEET -->
+<div id="invite" class="sheet-backdrop" hidden>
+  <div class="sheet">
+    <button class="sheet-close" data-close="invite" type="button" aria-label="Close">×</button>
+    <div class="sheet-title">Invite &amp; earn</div>
+    <p class="sheet-copy">Share your link. When friends you invite trade, <b>you earn a cut of their fees</b> — paid straight to your wallet, automatically, forever. No setup.</p>
+    <div class="funding-preview" style="margin-bottom:12px">
+      <img src="/cash/img/coin.webp" alt="">
+      <div><span>Invites earning for you</span><b id="inviteCount">0 friends</b><small id="inviteEarned">Earnings land in your wallet</small></div>
+    </div>
+    <div class="qr-wrap"><canvas id="inviteQr" width="200" height="200"></canvas></div>
+    <button id="inviteCopyBtn" class="address-pill" type="button"><span id="inviteLink">…</span><span class="copy-tag">copy</span></button>
+    <button id="inviteShareBtn" class="btn primary block" type="button">Share my invite link</button>
+    <div class="fineprint">Your friends get the same great app. You get a slice of every trade they make — it just shows up.</div>
   </div>
 </div>
 
@@ -479,6 +497,6 @@
 </div>
 
 <div id="toast" class="toast" hidden></div>
-<script src="/cash/cash.js?v=10"></script>
+<script src="/cash/cash.js?v=12"></script>
 </body>
 </html>

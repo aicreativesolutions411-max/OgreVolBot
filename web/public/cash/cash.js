@@ -563,7 +563,25 @@
     if (!result.ok) return;
     state.handle = result.data.handle || "";
     state.displayHandle = result.data.displayHandle || state.handle;
+    state.referralLink = result.data.referralLink || `${location.origin}/cash/`;
+    state.referralInvites = Number(result.data.referralInvites || 0);
     renderProfile();
+  }
+
+  function openInvite() {
+    const link = state.referralLink || `${location.origin}/cash/`;
+    const invites = Number(state.referralInvites || 0);
+    $("inviteLink").textContent = link;
+    $("inviteCount").textContent = invites === 1 ? "1 friend" : `${invites} friends`;
+    QR.draw($("inviteQr"), link);
+    openSheet("invite");
+  }
+  async function shareInvite() {
+    const link = state.referralLink || `${location.origin}/cash/`;
+    const text = "Trade coins and cash out with me on SlimeCash 🐸";
+    if (navigator.share) { try { await navigator.share({ title: "SlimeCash", text, url: link }); return; } catch { /* fell through */ } }
+    copyText(link);
+    toast("Invite link copied — share it anywhere");
   }
 
   function renderProfile() {
@@ -1140,13 +1158,13 @@
 
   /* ---------------- ui plumbing ---------------- */
   function switchTab(tab) {
+    if (tab === "terminal") {
+      location.assign("/fun?from=cash");
+      return;
+    }
     document.querySelectorAll(".tab").forEach((button) => button.classList.toggle("active", button.dataset.tab === tab));
     for (const view of ["home", "send", "terminal", "more"]) {
       $(`view-${view}`).hidden = view !== tab;
-    }
-    if (tab === "terminal" && !state.terminalLoaded) {
-      $("terminalFrame").src = "/fun";
-      state.terminalLoaded = true;
     }
     if (tab !== "home") stopDepositWatch();
   }
@@ -1518,6 +1536,9 @@
     }
   }
   $("convertBtn").addEventListener("click", openConvert);
+  $("inviteBtn").addEventListener("click", openInvite);
+  $("inviteCopyBtn").addEventListener("click", () => copyText(state.referralLink || `${location.origin}/cash/`));
+  $("inviteShareBtn").addEventListener("click", shareInvite);
   $("convertGoBtn").addEventListener("click", runConvert);
   $("convertMaxBtn").addEventListener("click", () => {
     const balance = convertBalances()[state.convertFrom] || 0;

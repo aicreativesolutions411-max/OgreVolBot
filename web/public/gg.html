@@ -3408,7 +3408,7 @@
           '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 7px">Your X handle</div>'+
           '<div class="field"><div style="display:flex;gap:8px"><input id="xHandle" value="'+esc(xh)+'" placeholder="@yourhandle" maxlength="30" style="flex:1"><button class="wbtn ghost" id="saveX" style="flex:0 0 auto">Save</button></div></div>'+
           '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 7px">Referral</div>'+
-          '<p class="wnote" style="margin:0 0 12px">Share your link, set a custom code, and choose where your referral earnings get paid.</p>'+
+          '<p class="wnote" style="margin:0 0 12px"><b>Invite friends and earn.</b> When someone you invite trades, you earn a cut of their fees — paid to your wallet automatically, forever. Set a payout wallet below only if you want it somewhere other than your main wallet.</p>'+
           '<div class="field"><label>Your referral link</label><div class="walletrow" style="margin:0"><div class="info" style="min-width:0"><div class="addr">'+esc(u.referralLink||"create a wallet first")+(u.referralLink?'<button onclick="GG.copy(\''+esc(u.referralLink)+'\')" title="Copy link">⧉</button>':'')+'</div></div>'+(u.referralLink?'<button class="wbtn ghost" style="margin-left:10px;padding:9px 12px" onclick="GG.shareRef(\''+esc(u.referralLink)+'\')">Share on 𝕏</button>':'')+'</div></div>'+
           '<div class="field" style="margin-top:12px"><label>Custom referral code</label><input id="refCode" value="'+esc(u.referralCode||"")+'" placeholder="YOURCODE" maxlength="32"></div>'+
           '<button class="wbtn" id="saveRefCode">Save code</button>'+

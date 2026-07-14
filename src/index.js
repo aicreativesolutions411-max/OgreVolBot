@@ -9595,6 +9595,22 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    // Admin: growth funnel readout (wallet -> funded -> first trade -> second trade).
+    if (request.method === "GET" && pathname === "/api/web/admin/funnel") {
+      if (!isAdmin(auth.userId)) { sendWebJson(request, response, 403, { ok: false, error: "Admins only." }); return; }
+      const store = await readFunnel();
+      const rows = Object.values(store.users || {});
+      const within7d = (a, b) => a && b && (Date.parse(b) - Date.parse(a)) <= 7 * 86_400_000;
+      sendWebJson(request, response, 200, { ok: true, summary: {
+        walletsCreated: rows.length,
+        funded: rows.filter((r) => r.fundedAt).length,
+        firstTrade: rows.filter((r) => r.firstTradeAt).length,
+        secondTrade: rows.filter((r) => r.secondTradeAt).length,
+        secondTradeWithin7d: rows.filter((r) => within7d(r.firstTradeAt, r.secondTradeAt)).length
+      } });
+      return;
+    }
+
     // SlimeCash: claim (or change) the account's $handle.
     if (request.method === "POST" && pathname === "/api/web/cash/handle") {
       const body = await readJsonRequestBody(request);
@@ -10222,6 +10238,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "POST" && pathname === "/api/web/wallets/create") {
       const body = await readJsonRequestBody(request);
       const result = await createWebWalletSet(auth.userId, body);
+      void recordFunnelMilestone(auth.userId, { walletCreatedAt: new Date().toISOString() });
       sendWebJson(request, response, 200, {
         ok: true,
         ...result
@@ -25296,8 +25313,15 @@ async function referralFeeTargets(userId, feeLamports, options = {}) {
     const profile = store.profiles[String(userId)] || {};
     const referrer = profile.referredByUserId ? store.profiles[String(profile.referredByUserId)] : null;
     // Up to 4 split wallets if configured; else the single payout wallet (identical to before).
+    // Auto-enroll: if the inviter never set a payout wallet, pay their share to their
+    // own primary SlimeWire wallet. This is what makes "invite a friend and earn on
+    // their fees" work for everyone with no setup, on every surface (TG, fun, site).
+    const autoWallet = referrer
+      ? ((await cashPrimaryWallet(String(profile.referredByUserId)).catch(() => null))?.publicKey || "")
+      : "";
     const split = normalizeReferralPayoutSplit(referrer?.referralPayoutSplit)
-      || (referrer?.referralPayoutWallet ? [{ wallet: referrer.referralPayoutWallet, pct: 100 }] : null);
+      || (referrer?.referralPayoutWallet ? [{ wallet: referrer.referralPayoutWallet, pct: 100 }] : null)
+      || (autoWallet ? [{ wallet: autoWallet, pct: 100 }] : null);
     if (!split) return fallback;
     const validSplit = split.filter((s) => s.wallet && s.wallet !== CONFIG.feeWallet);
     if (!validSplit.length) return fallback;
@@ -48888,7 +48912,7 @@ async function handleReferralCommand(message, userId) {
       await sayHtml(chatId, `🎟️ <b>Your referral link</b>${reward ? ` · 🏆 <b>${escapeTelegramHtml(reward)}</b>` : ""}\n\n🌐 <b>Site link</b> (they make a wallet + trade on slimewire.org → counts for you):\n${escapeTelegramHtml(site)}\n\n<i>(I couldn't make a TG invite link — make me an admin with 'Invite users via link' to also count group joins.)</i>`, keyboard);
       return true;
     }
-    await sayHtml(chatId, `🎟️ <b>Your referral link</b>${reward ? ` · 🏆 <b>${escapeTelegramHtml(reward)}</b>` : ""}\n\n👥 <b>Group invite</b> (new members who join count):\n${escapeTelegramHtml(link)}\n\n🌐 <b>Site link</b> (friends who trade on slimewire.org count too):\n${escapeTelegramHtml(site)}\n\nShare either. Standings: <code>/refboard</code>.`, keyboard);
+    await sayHtml(chatId, `🎟️ <b>Your referral link</b>${reward ? ` · 🏆 <b>${escapeTelegramHtml(reward)}</b>` : ""}\n\n👥 <b>Group invite</b> (new members who join count):\n${escapeTelegramHtml(link)}\n\n🌐 <b>Site link</b> (friends who trade on slimewire.org count too):\n${escapeTelegramHtml(site)}\n\n💸 <b>You earn on their fees.</b> Whenever someone you invite trades, a cut of their fee lands in your wallet — automatically, forever.\n\nShare either. Standings: <code>/refboard</code>.`, keyboard);
     return true;
   }
   // /referral … (admin only)
@@ -55120,6 +55144,48 @@ async function webRhCreatePool(userId, body = {}) {
     { busyMessage: "A pool seed for this coin is already in flight — give it a moment." });
 }
 
+// ---------------------------------------------------------------------------
+// Growth funnel: per-user milestones (wallet_created -> funded -> first_trade ->
+// second_trade). Emitted from hooks we already run, so no extra RPC/balance polling.
+// ---------------------------------------------------------------------------
+function funnelPath() { return path.join(CONFIG.dataDir, "funnel-events.json"); }
+async function readFunnel() {
+  try {
+    const store = JSON.parse(await fs.readFile(funnelPath(), "utf8"));
+    if (!store.users || typeof store.users !== "object") store.users = {};
+    return store;
+  } catch { return { users: {} }; }
+}
+async function recordFunnelMilestone(userId, patch = {}) {
+  const key = String(userId || "");
+  if (!key) return;
+  try {
+    await withFileLock(funnelPath(), async () => {
+      const store = await readFunnel();
+      const row = store.users[key] || {};
+      let changed = false;
+      for (const [field, value] of Object.entries(patch)) {
+        if (field === "trade") continue;
+        if (!row[field] && value) { row[field] = value; changed = true; }
+      }
+      if (patch.trade) {
+        row.tradeCount = Number(row.tradeCount || 0) + 1;
+        const now = new Date().toISOString();
+        if (!row.firstTradeAt) row.firstTradeAt = now;
+        else if (!row.secondTradeAt) row.secondTradeAt = now;
+        if (!row.fundedAt) row.fundedAt = now;   // a trade proves the wallet was funded
+        changed = true;
+      }
+      if (changed) {
+        row.updatedAt = new Date().toISOString();
+        store.users[key] = row;
+        await writeJsonFile(funnelPath(), store);
+      }
+    });
+  } catch { /* funnel telemetry must never break a trade or funding path */ }
+}
+function recordFunnelTrade(userId) { return recordFunnelMilestone(userId, { trade: true }); }
+
 async function recordTradeEvents(events) {
   if (!events.length) return;
   for (const event of events) {
@@ -55159,6 +55225,7 @@ async function recordTradeEvents(events) {
   void maybeCopyRoomBest(events).catch(() => {});   // 🪞 Copy-the-room's-best: mirror a followed trader's buy
   void maybeCopyRoomConsensus(events).catch(() => {});   // 🤝 Copy room consensus: mirror when ≥2 board traders agree
   void maybeCreditReferralConversion(events).catch(() => {});   // 🎟️ credit a site-referred user's first trade to their TG inviter
+  for (const funnelEvent of events) if (funnelEvent?.userId) void recordFunnelTrade(String(funnelEvent.userId)); // 📊 growth funnel
   void pvpBroadcastTradeEvents(events).catch(() => {});   // 🥊 PvP live feed: post members' trades to their arena groups
   void notifyProfileTradeFollowers(insertedEvents).catch(() => {}); // alerts only; never copies a trade
 
@@ -59561,10 +59628,15 @@ async function cashProfileSummary(userId) {
   const store = await readWebAuthStore();
   const profile = store.profiles?.[userId] || {};
   const wallet = await cashPrimaryWallet(userId);
+  const stats = normalizeReferralStats(profile.referralStats || {});
   return {
     handle: profile.cashHandle || "",
     displayHandle: profile.cashHandleDisplay || profile.cashHandle || "",
-    address: wallet?.publicKey || ""
+    address: wallet?.publicKey || "",
+    referralLink: profile.referralCode ? webReferralLink(profile.referralCode) : "",
+    referralCode: profile.referralCode || "",
+    referralInvites: Array.isArray(stats.referrals) ? stats.referrals.length : 0,
+    referralEarnedSol: stats.totalSol || "0"
   };
 }
 
@@ -69322,6 +69394,9 @@ async function webCashAssets(userId) {
   ]);
   const usdc = aggregateTokenAccountsForMint(lookup.accounts || [], SOLANA_USDC_MINT);
   const pyusd = aggregateTokenAccountsForMint(lookup.accounts || [], SOLANA_PYUSD_MINT);
+  if (Number(lamports) > 0 || (usdc?.rawAmount || 0n) > 0n || (pyusd?.rawAmount || 0n) > 0n) {
+    void recordFunnelMilestone(userId, { fundedAt: new Date().toISOString() });
+  }
   return {
     wallet: { index: walletIndex, address: wallet.publicKey, label: wallet.label },
     assets: {

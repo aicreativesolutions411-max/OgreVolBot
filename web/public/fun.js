@@ -16,13 +16,15 @@
   ];
   const TOOL_ICONS = "/assets/slimewire/png/icons/";
   const IS_QUICK_ROUTE = /^\/quick(?:\.html)?\/?$/i.test(location.pathname) || new URLSearchParams(location.search).get("quick") === "1";
+  const ROUTE_PARAMS = new URLSearchParams(location.search);
+  const FROM_CASH = ROUTE_PARAMS.get("from") === "cash";
   const state = {
     token: localStorage.getItem(TOKEN_KEY) || "",
     user: null,
     wallets: [],
     activeWallet: null,
-    chain: "all",
-    feed: "movers",
+    chain: FROM_CASH ? "solana" : "all",
+    feed: FROM_CASH ? "new" : "movers",
     rows: [],
     selected: null,
     selectedDetail: null,
@@ -175,6 +177,8 @@
       state.wallets = result.data.balances || [];
       if (!state.activeWallet || !state.wallets.some((wallet) => wallet.index === state.activeWallet)) state.activeWallet = state.wallets[0]?.index || null;
       paintWalletPill();
+      renderCashHandoff();
+      renderHomeReadiness();
     }
     return state.wallets;
   }
@@ -192,6 +196,27 @@
     const wallet = activeWallet();
     pill?.classList.toggle("ready", Boolean(wallet));
     if (label) label.textContent = wallet ? `◎ ${Number(wallet.sol || 0).toFixed(3)}` : (state.token ? "+ Wallet" : "Connect");
+  }
+
+  function renderCashHandoff() {
+    const handoff = $("[data-cash-handoff]");
+    if (!handoff) return;
+    handoff.hidden = !FROM_CASH;
+    if (!FROM_CASH) return;
+    const wallet = activeWallet();
+    handoff.innerHTML = `<div><span>SLIMECASH TO FUN</span><b>${wallet ? `${Number(wallet.sol || 0).toFixed(3)} SOL ready to trade` : "Your wallet is ready when you are"}</b></div><button type="button" data-open-search>Paste a CA</button>`;
+  }
+
+  function renderHomeReadiness() {
+    const target = $("[data-home-readiness]");
+    if (!target) return;
+    const wallet = activeWallet();
+    if (!wallet) {
+      target.innerHTML = `<section class="readiness-card"><div><span>START HERE</span><h2>Trade in three clean steps.</h2><p>Create a wallet, save its backup, then add SOL. Your first coin stays selected while you set up.</p></div><div class="readiness-steps"><b>1 <i>Create wallet</i></b><b>2 <i>Save backup</i></b><b>3 <i>Fund with SOL</i></b></div><button type="button" data-create-wallet>Create my trade wallet</button></section>`;
+      return;
+    }
+    const sol = Number(wallet.sol || 0);
+    target.innerHTML = `<section class="readiness-card ready"><div><span>TRADE WALLET READY</span><h2>${sol > 0 ? `${sol.toFixed(3)} SOL available` : "Add SOL to start trading"}</h2><p>${sol > 0 ? "Pick a coin, choose an amount, then review every trade before it is sent." : "Fund from SlimeCash or send SOL to your wallet. Your keys and recovery backups stay important."}</p></div><div class="readiness-steps"><b class="done">OK <i>Wallet</i></b><b class="done">OK <i>Backup</i></b><b>${sol > 0 ? "OK" : "3"} <i>${sol > 0 ? "Funded" : "Fund wallet"}</i></b></div><button type="button" data-open-cash>${sol > 0 ? "Open SlimeCash" : "Fund in SlimeCash"}</button></section>`;
   }
 
   function normalizeSol(row) {
@@ -221,6 +246,17 @@
       ? rows.filter((row) => Number(row.marketCap) >= 17_000 && Number(row.marketCap) <= 40_000)
       : rows;
     const unique = [...new Map(visible.filter((row) => coinKey(row)).map((row) => [coinKey(row).toLowerCase(), row])).values()];
+    // Fresh sources often emit clusters of look-alike launches. Keep the first
+    // source-ranked instance in the compact feed; contract search stays complete.
+    const seenLaunchNames = new Set();
+    const uncluttered = unique.filter((row) => {
+      if (row.chain !== "solana" || feed !== "new") return true;
+      const label = `${row.symbol || ""}|${row.name || ""}`.toLowerCase().replace(/[^a-z0-9]+/g, "");
+      if (!label) return true;
+      if (seenLaunchNames.has(label)) return false;
+      seenLaunchNames.add(label);
+      return true;
+    });
     const feedAge = (row) => {
       const label = String(row.age || "").toLowerCase();
       if (label === "new") return 0;
@@ -231,7 +267,7 @@
       const created = Date.parse(row.createdAt || "");
       return Number.isFinite(created) ? Math.max(0, (Date.now() - created) / 1000) : Infinity;
     };
-    return unique.sort(feed === "new"
+    return uncluttered.sort(feed === "new"
       ? (a, b) => feedAge(a) - feedAge(b)
       : (a, b) => (b.marketCap || 0) - (a.marketCap || 0));
   }
@@ -295,7 +331,12 @@
   }
   function renderCoinList() {
     const container = $("[data-coin-list]");
-    container.innerHTML = state.rows.length ? state.rows.slice(0, 50).map(coinRowHtml).join("") : emptyState("No coins in this view", "Try another chain or category.");
+    if (!state.rows.length) { container.innerHTML = emptyState("No coins in this view", "Try another chain or category."); return; }
+    if (state.chain !== "all") { container.innerHTML = state.rows.slice(0, 18).map(coinRowHtml).join(""); return; }
+    const sol = state.rows.filter((row) => row.chain === "solana").slice(0, 7);
+    const rh = state.rows.filter((row) => row.chain === "robinhood").slice(0, 7);
+    const shelf = (title, note, rows) => rows.length ? `<section class="market-shelf"><div><h3>${title}</h3><p>${note}</p></div>${rows.map(coinRowHtml).join("")}</section>` : "";
+    container.innerHTML = `${shelf("Fresh Solana", "Early launches with live on-chain context", sol)}${shelf("Robinhood movers", "Established movement on Robinhood Chain", rh)}`;
   }
   function emptyState(title, body) { return `<div class="empty-state"><img src="/assets/slimewire/png/slimewire-mark.png" alt=""><b>${escapeHtml(title)}</b><span>${escapeHtml(body || "")}</span></div>`; }
 
@@ -418,6 +459,7 @@
     $("[data-coin-stats]").innerHTML = `<div><span>Market cap</span><b>${formatUsd(coin.marketCap || coin.mc)}</b></div><div><span>Liquidity</span><b>${formatUsd(coin.liquidity || coin.liq || coin.liquidityUsd)}</b></div><div><span>Holders</span><b>${Number(coin.holders || coin.holderCount) > 0 ? Number(coin.holders || coin.holderCount).toLocaleString() : "checking"}</b></div><div><span>Volume</span><b>${coin.volume > 0 ? formatUsd(coin.volume) : escapeHtml(coin.volumeLabel || "checking")}</b></div>`;
     renderChart();
     renderQuickTrade();
+    renderSlimeRadar();
     renderPositionCard();
     renderDetailPanel();
   }
@@ -444,7 +486,19 @@
     const wallet = activeWallet(), amounts = ["0.1", "0.5", "1"], preset = activePreset();
     const balance = wallet ? `${Number(wallet.sol || 0).toFixed(4)} SOL` : "Connect wallet";
     const presetChips = state.presets.trade.slice(0, 4).map((item) => `<button type="button" class="preset-chip ${item.id === state.activePresetId ? "active" : ""}" data-activate-preset="${escapeHtml(item.id)}">${escapeHtml(item.name)}</button>`).join("");
-    $("[data-quick-trade]").innerHTML = `<div class="quick-wallet-line"><span>Available <b>${escapeHtml(balance)}</b></span><button type="button" data-nav="wallet">${wallet ? escapeHtml(wallet.label || "Wallet") : "Set up"} ›</button></div><div class="quick-buy-row">${amounts.map((amount) => `<button type="button" data-quick-buy="${amount}">${amount} SOL</button>`).join("")}</div><div class="quick-custom"><input data-custom-quick-amount inputmode="decimal" placeholder="Custom SOL" aria-label="Custom SOL amount"><button type="button" data-custom-quick-buy>Buy</button></div>${presetChips ? `<div class="preset-chips"><button type="button" class="preset-chip ${preset ? "" : "active"}" data-activate-preset="">Manual</button>${presetChips}</div>` : ""}<button class="preset-strip" type="button" data-manage-presets><span>${preset ? `Preset · ${escapeHtml(preset.name)}` : "Preset · Manual"}</span><b>${preset ? `${escapeHtml(preset.takeProfitPct || "off")}% TP · ${escapeHtml(preset.stopLossPct || "off")}% SL` : "Add or edit ›"}</b></button>`;
+    $("[data-quick-trade]").innerHTML = `<div class="quick-wallet-line"><span>Available <b>${escapeHtml(balance)}</b></span><button type="button" data-nav="wallet">${wallet ? escapeHtml(wallet.label || "Wallet") : "Set up"} ›</button></div><div class="quick-buy-row">${amounts.map((amount) => `<button type="button" data-review-buy="${amount}">Review ${amount} SOL</button>`).join("")}</div><div class="quick-custom"><input data-custom-review-amount inputmode="decimal" placeholder="Custom SOL" aria-label="Custom SOL amount"><button type="button" data-custom-review-buy>Review</button></div>${presetChips ? `<div class="preset-chips"><button type="button" class="preset-chip ${preset ? "" : "active"}" data-activate-preset="">Manual</button>${presetChips}</div>` : ""}<button class="preset-strip" type="button" data-manage-presets><span>${preset ? `Preset · ${escapeHtml(preset.name)}` : "Preset · Manual"}</span><b>${preset ? `${escapeHtml(preset.takeProfitPct || "off")}% TP · ${escapeHtml(preset.stopLossPct || "off")}% SL` : "Add or edit ›"}</b></button>`;
+  }
+  function renderSlimeRadar() {
+    const radar = $("[data-slime-radar]");
+    if (!radar) return;
+    const coin = state.selected || {}, detail = state.selectedDetail || {};
+    const age = ageLabel(coin);
+    const liquidity = Number(coin.liquidity || coin.liq || coin.liquidityUsd || 0);
+    const volume = Number(coin.volume || coin.volumeH1 || coin.volumeH24 || 0);
+    const holders = Number(coin.holders || detail.holders || detail.rugcheck?.holders || 0);
+    const fresh = /^(?:\d+s|[1-9]\d?m)$/.test(age);
+    const signals = [fresh ? `Fresh · ${age}` : `Age · ${age}`, liquidity ? `Liquidity ${formatUsd(liquidity)}` : "Liquidity pending", volume ? `Volume ${formatUsd(volume)}` : "Volume pending", holders ? `${holders.toLocaleString()} holders` : "Holder count pending"];
+    radar.innerHTML = `<div><span>SLIMERADAR</span><h3>Why this is on your screen</h3><p>${fresh ? "New activity is being watched. Inspect the contract before acting." : "Live market context, not a trade recommendation."}</p><div class="factor-list">${signals.map((signal) => `<b>${escapeHtml(signal)}</b>`).join("")}</div></div><button type="button" data-link-tool="safety">Risk read</button>`;
   }
   function renderPositionCard() {
     const position = currentPosition(), card = $("[data-position-card]");
@@ -541,7 +595,7 @@
   }
   function renderSocialProfile() {
     const panel = $("[data-profile-panel]"), user = state.user || {};
-    panel.innerHTML = `<div class="read-card"><h3>Your public trader profile</h3><p>Choose a username, publish your opted-in trade record, and let people follow alerts. Following never places or copies a trade.</p></div><div class="preset-editor"><div class="field"><label>Username</label><input data-profile-username value="${escapeHtml(user.username || "")}" maxlength="24" placeholder="slimetrader"></div><div class="field"><label>${user.hasPasswordLogin ? "New password (required to change username)" : "Password"}</label><input type="password" data-profile-password autocomplete="new-password" placeholder="8+ characters"></div><label class="check-row"><input type="checkbox" data-profile-public ${user.showOnTraderBoard ? "checked" : ""}> Show my opted-in trading profile publicly</label><button class="submit-trade" type="button" data-save-social-profile>Save profile</button><button class="recovery-button" type="button" data-enable-push>Enable trade alerts on this device</button><p class="fineprint" data-social-status>Profile alerts are informational only. SlimeWire will never auto-buy from a follow.</p></div>`;
+    panel.innerHTML = `<div class="read-card"><h3>Invite &amp; earn 💸</h3><p>Invite friends — when they trade, <b>you earn a cut of their fees</b>, paid to your wallet automatically, forever. Your link:</p><div class="field"><input readonly value="${escapeHtml(user.referralLink || location.origin)}"></div><button class="submit-trade" type="button" data-copy-invite>Copy invite link</button></div><div class="read-card"><h3>Your public trader profile</h3><p>Choose a username, publish your opted-in trade record, and let people follow alerts. Following never places or copies a trade.</p></div><div class="preset-editor"><div class="field"><label>Username</label><input data-profile-username value="${escapeHtml(user.username || "")}" maxlength="24" placeholder="slimetrader"></div><div class="field"><label>${user.hasPasswordLogin ? "New password (required to change username)" : "Password"}</label><input type="password" data-profile-password autocomplete="new-password" placeholder="8+ characters"></div><label class="check-row"><input type="checkbox" data-profile-public ${user.showOnTraderBoard ? "checked" : ""}> Show my opted-in trading profile publicly</label><button class="submit-trade" type="button" data-save-social-profile>Save profile</button><button class="recovery-button" type="button" data-enable-push>Enable trade alerts on this device</button><p class="fineprint" data-social-status>Profile alerts are informational only. SlimeWire will never auto-buy from a follow.</p></div>`;
   }
   async function saveSocialProfile(button) {
     if (!(await ensureAccount())) return;
@@ -950,8 +1004,8 @@
     const editPreset = event.target.closest("[data-edit-trade-preset]"); if (editPreset) { await openPresetManager(editPreset.dataset.editTradePreset); return; }
     const deletePreset = event.target.closest("[data-delete-trade-preset]"); if (deletePreset) { const id = deletePreset.dataset.deleteTradePreset; const result = await post("/api/web/presets", { type: "trade", action: "delete", id, preset: { id } }); if (result.ok && result.data?.ok) { state.presets = result.data.presets; if (state.activePresetId === id) { state.activePresetId = ""; localStorage.removeItem(ACTIVE_PRESET_KEY); } renderQuickTrade(); toast("Preset removed"); await openPresetManager(); } else toast(result.data?.error || "Could not remove preset", true); return; }
     const activatePreset = event.target.closest("[data-activate-preset]"); if (activatePreset) { state.activePresetId = activatePreset.dataset.activatePreset || ""; if (state.activePresetId) localStorage.setItem(ACTIVE_PRESET_KEY, state.activePresetId); else localStorage.removeItem(ACTIVE_PRESET_KEY); renderQuickTrade(); toast(state.activePresetId ? "Preset active" : "Manual buys active"); return; }
-    const quickBuy = event.target.closest("[data-quick-buy]"); if (quickBuy) { await executeFunQuickBuy(quickBuy, quickBuy.dataset.quickBuy); return; }
-    const customQuickBuy = event.target.closest("[data-custom-quick-buy]"); if (customQuickBuy) { await executeFunQuickBuy(customQuickBuy, $("[data-custom-quick-amount]")?.value); return; }
+    const reviewBuy = event.target.closest("[data-review-buy]"); if (reviewBuy) { if (!state.wallets.length) await loadWallets(); openTradeSheet("buy", { amount: reviewBuy.dataset.reviewBuy }); return; }
+    const customReviewBuy = event.target.closest("[data-custom-review-buy]"); if (customReviewBuy) { const amount = String($("[data-custom-review-amount]")?.value || "").trim(); if (!(Number(amount) > 0)) { toast("Enter a valid SOL amount.", true); return; } if (!state.wallets.length) await loadWallets(); openTradeSheet("buy", { amount }); return; }
     const strategy = event.target.closest("[data-trade-strategy]"); if (strategy) { if (!state.wallets.length) await loadWallets(); openTradeSheet("buy", tradeStrategyPreset(strategy.dataset.tradeStrategy, state.selected?.chain === "robinhood")); return; }
     const trade = event.target.closest("[data-open-trade]"); if (trade) { if (!state.wallets.length) await loadWallets(); openTradeSheet(trade.dataset.openTrade); return; }
     const side = event.target.closest("[data-sheet-side]"); if (side) { openTradeSheet(side.dataset.sheetSide); return; }
@@ -964,6 +1018,7 @@
     const linkTool = event.target.closest("[data-link-tool]"); if (linkTool) { handleTool(linkTool.dataset.linkTool); return; }
     const quickChain = event.target.closest("[data-search-chain]"); if (quickChain) { closeSearch(); state.chain = quickChain.dataset.searchChain; $$("[data-chain]").forEach((button) => button.classList.toggle("active", button.dataset.chain === state.chain)); setView("home"); loadFeed(true); return; }
     if (event.target.closest("[data-deposit]") || event.target.closest("[data-receive]")) { walletReceive(); return; }
+    if (event.target.closest("[data-open-cash]")) { location.assign("/cash?sheet=addcash"); return; }
     if (event.target.closest("[data-manage-wallets]")) { await openWalletManager(); return; }
     const quickPanel = event.target.closest("[data-quick-panel]"); if (quickPanel) { state.quickPanel = quickPanel.dataset.quickPanel || "trade"; renderQuickRoute(); return; }
     const quickAmount = event.target.closest("[data-quick-select-amount]"); if (quickAmount) { state.quickAmount = quickAmount.dataset.quickSelectAmount || "0.1"; renderQuickRoute(); return; }
@@ -971,6 +1026,7 @@
     if (event.target.closest("[data-quick-set-custom]")) { const amount = String($("[data-quick-custom-amount]")?.value || "").trim(); if (!(Number(amount) > 0)) { toast("Enter a valid SOL amount.", true); return; } state.quickAmount = amount; renderQuickRoute(); return; }
     if (event.target.closest("[data-quick-review]")) { if (!activeWallet()) { await openWalletManager(); return; } openTradeSheet("buy", { amount: state.quickAmount || "0.1" }); return; }
     if (event.target.closest("[data-quick-bundle]")) { await openBundleSheet(); return; }
+    const copyInvite = event.target.closest("[data-copy-invite]"); if (copyInvite) { const link = state.user?.referralLink || location.origin; if (navigator.share) { try { await navigator.share({ title: "SlimeWire", text: "Trade coins with me on SlimeWire", url: link }); return; } catch { /* fell through to copy */ } } navigator.clipboard?.writeText(link).then(() => toast("Invite link copied"), () => toast("Could not copy", true)); return; }
     const saveProfile = event.target.closest("[data-save-social-profile]"); if (saveProfile) { await saveSocialProfile(saveProfile); return; }
     const enablePush = event.target.closest("[data-enable-push]"); if (enablePush) { await enableFunPush(enablePush); return; }
     if (event.target.closest("[data-create-wallet]")) { if (await createWallet()) { if (state.view === "quick") { closeSheet(); renderQuickRoute(); } else await openWalletManager(); } return; }
@@ -998,8 +1054,8 @@
     reader.readAsText(file);
   });
   document.addEventListener("keydown", async (event) => {
-    if (event.key !== "Enter" || !event.target.matches("[data-custom-quick-amount]")) return;
-    event.preventDefault(); const button = $("[data-custom-quick-buy]"); if (button) await executeFunQuickBuy(button, event.target.value);
+    if (event.key !== "Enter" || !event.target.matches("[data-custom-review-amount]")) return;
+    event.preventDefault(); const amount = String(event.target.value || "").trim(); if (Number(amount) > 0) openTradeSheet("buy", { amount });
   });
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) clearTimeout(state.feedTimer);
@@ -1058,8 +1114,12 @@
   async function init() {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/fun-sw.js", { scope: "/fun/" }).catch(() => {});
     paintWalletPill();
+    renderCashHandoff();
+    renderHomeReadiness();
+    $$('[data-chain]').forEach((button) => button.classList.toggle("active", button.dataset.chain === state.chain));
+    $$('[data-feed]').forEach((button) => button.classList.toggle("active", button.dataset.feed === state.feed));
     if (!IS_QUICK_ROUTE) loadFeed();
-    if (state.token) Promise.all([loadMe(), loadWallets(), loadPositions(), loadPresets(), loadCreatedCoinsSilently()]).then(() => { if (state.view === "coin") renderQuickTrade(); if (state.view === "quick") renderQuickRoute(); }).catch(() => {});
+    if (state.token) Promise.all([loadMe(), loadWallets(), loadPositions(), loadPresets(), loadCreatedCoinsSilently()]).then(() => { renderCashHandoff(); renderHomeReadiness(); if (state.view === "coin") renderQuickTrade(); if (state.view === "quick") renderQuickRoute(); }).catch(() => {});
     const routeParams = new URLSearchParams(location.search);
     if (IS_QUICK_ROUTE) {
       setView("quick", { hideNav: true });
