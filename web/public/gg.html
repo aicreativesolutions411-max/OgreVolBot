@@ -601,7 +601,12 @@
   function pctNum(v){if(v&&typeof v==="object")v=v.priceChange??v.h1??v.m5??0;v=Number(v);return isFinite(v)?v:null;}
   function pctHtml(v){const p=pctNum(v);if(p==null)return'<span class="chg mut">—</span>';const cls=p>=0?"up":"down";return'<span class="chg '+cls+'">'+(p>=0?"+":"")+p.toFixed(1)+'%</span>';}
   function ageLabel(r){if(r.pairAgeLabel)return r.pairAgeLabel;let s=Number(r.pairAgeSeconds);if(!isFinite(s)&&isFinite(Number(r.pairAgeMinutes)))s=Number(r.pairAgeMinutes)*60;if(!isFinite(s))return"";if(s<60)return Math.round(s)+"s";if(s<3600)return Math.round(s/60)+"m";if(s<86400)return Math.round(s/3600)+"h";return Math.round(s/86400)+"d";}
-  function av(r){return r.imageUrl||r.avatarUrl||"";}
+  // Sticky pfp cache: once we've seen a coin's image, keep rendering it even on a feed
+  // refresh cycle whose raw row hasn't been re-enriched yet — kills the "picture loads then
+  // reverts to the default logo" flicker (worst on Robinhood coins, enriched client-side).
+  const IMG_CACHE={};
+  function imgKey(r){return String((r&&(r.tokenMint||r.mint||r.address))||"").toLowerCase();}
+  function av(r){const k=imgKey(r),u=(r&&(r.imageUrl||r.avatarUrl))||"";if(u&&k)IMG_CACHE[k]=u;return u||(k&&IMG_CACHE[k])||"";}
   // Coin PFPs must show INSTANTLY. Raw pump/ipfs/arweave image URLs are slow (gateway round-trips that
   // often stall the feed), so route them through images.weserv.nl — free, CORS-OK, edge-cached, resized
   // to a tiny webp thumbnail. Our own assets + data URLs pass straight through. Load eagerly (not lazy)
@@ -1734,14 +1739,18 @@
   function rhAvatar(r,size,radius){
     size=size||26;radius=radius==null?"50%":radius;
     const address=String((r&&r.address)||"");
-    const image=String((r&&(r.imageUrl||r.iconUrl))||"");
+    const ck=imgKey(r)||String(address||"").toLowerCase();let image=String((r&&(r.imageUrl||r.iconUrl))||"");if(image&&ck)IMG_CACHE[ck]=image;if(!image&&ck)image=IMG_CACHE[ck]||"";
     const proxy=/^0x[0-9a-fA-F]{40}$/.test(address)?'/api/web/token-image?mint='+encodeURIComponent(address):'';
     if(image||proxy){const fallback=rhFallbackAvatarSrc(address||((r&&r.symbol)||"?"));return '<span class="rh-avatar-shell" style="display:block;width:'+size+'px;height:'+size+'px;border-radius:'+radius+';overflow:hidden;flex:0 0 auto;background:#101810 url(\''+esc(fallback)+'\') center/cover no-repeat"><img src="'+esc(image||proxy)+'" data-rh-proxy="'+esc(proxy)+'" data-rh-symbol="'+esc((r&&r.symbol)||"?")+'" data-rh-key="'+esc(address||((r&&r.symbol)||"?"))+'" style="display:block;width:100%;height:100%;object-fit:cover" onerror="GG.rhAvatarFail(this)"></span>';}
     return rhAvTileHtml((r&&r.symbol)||"?",size,radius,address);
   }
   function rhAvatarFail(img){
     const proxy=img.dataset.rhProxy||"",attempt=Number(img.dataset.rhAttempt||0);
+    if(!img.dataset.rhOrig){const s=String(img.getAttribute("src")||"");if(s&&!s.includes("/api/web/token-image"))img.dataset.rhOrig=s;}
     if(proxy&&attempt<1&&!String(img.src||"").includes("/api/web/token-image")){img.dataset.rhAttempt="1";img.src=proxy;return;}
+    // Not loaded yet: keep the mascot showing, but re-pull the real image after ~1.5s
+    // (CDNs/enrichment often land a beat late) before finally settling on the mascot.
+    if(attempt<2){img.dataset.rhAttempt="2";const o=img.dataset.rhOrig||"";if(o){setTimeout(()=>{if(img&&img.isConnected)img.src=coinImgSrc(o)||o;},1500);return;}}
     img.remove();
   }
   function rhFallbackAvatarSrc(key){
@@ -4426,7 +4435,11 @@
     enableAlerts:async()=>{const ok=await ensurePushSubscribed();toast(ok?"🔔 Alerts on — you'll get pinged":"Couldn't enable alerts (check browser permission)",!ok);if(state.route==="wallet")renderWallet();},
     shareRef:(link)=>{const t="I'm trading Solana memecoins on SlimeWire — fast terminal, 1-tap snipes, KOL copy. Join with my link:";window.open("https://x.com/intent/tweet?text="+encodeURIComponent(t)+"&url="+encodeURIComponent(link),"_blank","noopener");},
     // Coin-image fallback: shared metadata proxy, then multiple live IPFS gateways, then the logo.
-    avFallback:(img)=>{const ph="/assets/slimewire/png/slimewire-mark.png?v=logo4",mint=img.dataset.avatarMint||"",candidates=(img.dataset.avatarCandidates||"").split("|").filter(Boolean);let step=Number(img.dataset.avatarStep||0);if(step===0&&mint){img.dataset.avatarStep="1";img.src="/api/web/token-image?mint="+encodeURIComponent(mint);return;}const index=step===0?0:step-1;if(index<candidates.length){img.dataset.avatarStep=String(step+1);img.src=candidates[index];return;}img.onerror=null;img.src=ph;},
+    avFallback:(img)=>{const ph="/assets/slimewire/png/slimewire-mark.png?v=logo4",mint=img.dataset.avatarMint||"",raw=img.dataset.raw||"",candidates=(img.dataset.avatarCandidates||"").split("|").filter(Boolean);let step=Number(img.dataset.avatarStep||0);if(step===0&&mint){img.dataset.avatarStep="1";img.src="/api/web/token-image?mint="+encodeURIComponent(mint);return;}const index=step===0?0:step-1;if(index<candidates.length){img.dataset.avatarStep=String(step+1);img.src=candidates[index];return;}
+      // Everything failed for now: show the logo, but re-pull the real image once after ~1.5s
+      // (Robinhood CDNs + client-side enrichment often land a beat late) before settling.
+      if(raw&&!img.dataset.avLate){img.dataset.avLate="1";img.onerror=null;img.src=ph;setTimeout(()=>{if(img&&img.isConnected){img.onerror=()=>{img.onerror=null;img.src=ph;};img.src=coinImgSrc(raw)||raw;}},1500);return;}
+      img.onerror=null;img.src=ph;},
     removeWalletPrompt:(i)=>{const w=state.wallets.find(x=>x.index===i);if(w)removeWalletModal(w);},
     refreshPos:refreshPositionsNow,
     copyBlink,shareBlink,copyReceipt,shareReceipt,saveScanReceipt,scoutOpen,scoutRemove,kolCallerCard,copyLaunchBoss,openMuckMap,copyPassport};
