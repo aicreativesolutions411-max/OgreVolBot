@@ -2895,6 +2895,8 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(rhGather, /const noxaPromise/);                         // NOXA's slower exact factory read starts concurrently, not after the fast providers already timed out
   assert.match(rhGather, /rhScanSafety\(a\)/);                       // the longer safety pass is shared instead of duplicated across retries
   assert.match(functionBody(serverSource, "rhScanSafety"), /rhSafetyInFlight/);
+  assert.match(functionBody(serverSource, "rhTokenContractProof"), /dexRows: Array\.isArray\(dexRows\)/); // reuse the exact Dex response that proved the contract
+  assert.match(rhGather, /proofDexRows\.length \? Promise\.resolve\(proofDexRows\)/); // never discard it and make a flaky duplicate request
   assert.match(rhGather, /Array\.isArray\(dsV1\)/);                   // direct Dex token route contributes market data, not only artwork
   assert.doesNotMatch(rhGather, /const \[dsV1,/);                    // do not shadow dsV1 and trigger a TDZ ReferenceError during identity enrichment
   assert.match(rhGather, /rhScanCacheTtl\(cached\.v\)/);              // transient empty results retry in seconds instead of poisoning scans for a minute
@@ -2911,6 +2913,7 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
   assert.match(rhSend, /\[4_000, 8_000, 15_000, 30_000\]/);           // new pools auto-refresh the same Telegram card through index lag
   assert.match(rhSend, /rhScanCache\.delete/);                         // each bounded retry bypasses the short negative cache
   assert.match(rhSend, /Live providers did not return/);              // exhausted retries end honestly instead of saying "checking" forever
+  assert.match(rhSend, /await sleep\(5_000\)/);                       // a settling pass refreshes late PFP + provider fields on the same card
   const rhEdit = functionBody(serverSource, "editRhScanTelegramCard");
   assert.match(rhEdit, /editMessagePhotoBuffer/);
   assert.match(rhEdit, /editMessageCaption/);                          // failed image edits still replace the caption's placeholders
@@ -2934,8 +2937,11 @@ test("Ticker Truth favors the dominant safe market and explains same-symbol clon
     (value) => value === null || value === undefined || value === "" ? null : (Number.isFinite(Number(value)) ? Number(value) : null)
   );
   const rhCardComplete = new Function("rhScanMissingCardFields", `return function(value) {${functionBody(serverSource, "rhScanCardComplete")}}`)(missingRhFields);
+  const rhCoreComplete = new Function("rhScanMissingCardFields", `return function(value) {${functionBody(serverSource, "rhScanCoreComplete")}}`)(missingRhFields);
   assert.equal(rhCardComplete({ mc: 750_000 }), false, "market cap alone is never a completed scan");
-  assert.equal(rhCardComplete({ priceUsd: .001, mc: 750_000, liq: 80_000, vol24: 400_000, holders: 390, createdAt: Date.now() - 60_000, ch1: 2.5, safety: { verdict: "ok" } }), true);
+  assert.equal(rhCardComplete({ priceUsd: .001, mc: 750_000, liq: 80_000, vol24: 400_000, holders: 390, createdAt: Date.now() - 60_000, ch1: 2.5, safety: { verdict: "ok" }, imageUrl: "https://cdn.example/coin.png" }), true);
+  assert.equal(rhCardComplete({ priceUsd: .001, mc: 750_000, liq: 80_000, vol24: 400_000, holders: 390, createdAt: Date.now() - 60_000, ch1: 2.5, safety: { verdict: "ok" } }), false, "the branded fallback must not count as the coin's real PFP");
+  assert.equal(rhCoreComplete({ priceUsd: .001, mc: 750_000, liq: 80_000, vol24: 400_000, holders: 390, createdAt: Date.now() - 60_000, ch1: 2.5, safety: { verdict: "ok" } }), true, "web reads can cache complete facts while Telegram keeps looking for the real PFP");
   assert.doesNotMatch(functionBody(serverSource, "mergeRhTokenRows"), /lastActiveAt/); // activity time is not coin age
   const solLook = functionBody(serverSource, "handleTelegramLookCommand");
   assert.match(solLook, /TG_SCAN_FIRST_RESPONSE_MS/);

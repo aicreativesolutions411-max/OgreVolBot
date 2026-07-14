@@ -39851,10 +39851,14 @@ function rhScanMissingCardFields(value = {}) {
   if (!(Number(value.createdAt) > 0)) missing.push("age");
   if (!Number.isFinite(rhFiniteNumber(value.ch1)) && !Number.isFinite(rhFiniteNumber(value.ch24))) missing.push("price change");
   if (!new Set(["verified", "ok", "safe", "warn", "block"]).has(String(value.safety?.verdict || "").toLowerCase())) missing.push("safety");
+  if (![value.imageUrl, value.iconUrl, value.logoUrl, value.metaImageUrl, value.localImagePath].some((field) => String(field || "").trim())) missing.push("coin image");
   return missing;
 }
 function rhScanCardComplete(value = {}) {
   return rhScanMissingCardFields(value).length === 0;
+}
+function rhScanCoreComplete(value = {}) {
+  return rhScanMissingCardFields(value).every((field) => field === "coin image");
 }
 function mergeRhScanWithTickerCandidate(value = {}, candidate = null, address = "") {
   const merged = { ...(value || {}) };
@@ -39871,7 +39875,9 @@ function mergeRhScanWithTickerCandidate(value = {}, candidate = null, address = 
   return merged;
 }
 function rhScanCacheTtl(value = {}) {
-  return rhScanCardComplete(value) ? 60_000 : 5_000;
+  // Do not hammer every provider for an image-less coin on ordinary web/feed reads. Telegram's card
+  // upgrader explicitly clears this cache while it keeps looking for the real PFP.
+  return rhScanCoreComplete(value) ? 60_000 : 5_000;
 }
 function rhPromiseTimeout(promise, ms = 3500, fallback = null) {
   return Promise.race([
@@ -39958,7 +39964,10 @@ async function rhTokenContractProof(address, timeoutMs = 7_000) {
   const noxaContract = Boolean(String(noxa?.token || "").toLowerCase() === key && noxa?.symbol);
   const contract = Boolean(rpcContract || blockscoutContract || marketContract || noxaContract);
   if (contract) _rhKindCache.set(key, { at: Date.now(), contract: true });
-  return { contract, token, noxa };
+  // Keep the exact Dex rows that already proved the contract. The full scan used to throw these away
+  // and immediately request the same endpoint again; that duplicate call is intermittently throttled
+  // from Render and was the reason a refresh could regress from full liquidity/volume back to zero.
+  return { contract, token, noxa, dexRows: Array.isArray(dexRows) ? dexRows : [] };
 }
 function mergeRhTokenRows(...rows) {
   const clean = rows.filter(Boolean);
@@ -40160,7 +40169,8 @@ async function gatherRhScanUncollapsed(address) {
   // DexScreener's tokens/v1 endpoint carries info.imageUrl/socials for Robinhood pairs that
   // the older latest/dex/tokens response omits - it's what the feed's artwork enricher uses,
   // and it is the one identity source proven reliable from this server's IP.
-  const dsTokenV1Promise = fetchJson(`https://api.dexscreener.com/tokens/v1/robinhood/${a}`, {
+  const proofDexRows = Array.isArray(contractProof.dexRows) ? contractProof.dexRows : [];
+  const dsTokenV1Promise = proofDexRows.length ? Promise.resolve(proofDexRows) : fetchJson(`https://api.dexscreener.com/tokens/v1/robinhood/${a}`, {
     headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
     timeoutMs: 6_500
   }).catch(() => null);
@@ -40297,7 +40307,9 @@ async function gatherRhScanUncollapsed(address) {
   const previous = rhScanLastGood.get(key);
   if (previous) {
     const identityFresh = Date.now() - previous.at < 24 * 60 * 60_000;
-    const marketFresh = Date.now() - previous.at < 10 * 60_000;
+    // Keep the last verified market slots for one hour while a live refresh is running. A transient
+    // provider throttle must never erase liquidity/volume from a card that already proved them.
+    const marketFresh = Date.now() - previous.at < 60 * 60_000;
     if (identityFresh) {
       for (const field of ["symbol", "name", "imageUrl", "localImagePath", "iconUrl", "twitterUrl", "telegramUrl", "websiteUrl", "pairAddress", "createdAt", "explorer", "noxaUrl"]) {
         if (!v[field] && previous.v[field]) v[field] = previous.v[field];
@@ -40342,7 +40354,7 @@ async function gatherRhScanUncollapsed(address) {
     if (rhScanLastGood.size > 300) rhScanLastGood.delete(rhScanLastGood.keys().next().value);
     rhScanCache.set(key, { at: Date.now(), v });
     if (rhScanCache.size > 200) rhScanCache.delete(rhScanCache.keys().next().value);
-    void cacheSetJson(rhScanSharedKey(key), { at: Date.now(), v }, 15 * 60_000).catch(() => false);
+    void cacheSetJson(rhScanSharedKey(key), { at: Date.now(), v }, 60 * 60_000).catch(() => false);
   } else {
     rhScanCache.delete(key);
   }
@@ -40505,6 +40517,7 @@ async function editRhScanTelegramCard(chatId, messageId, { hasPhoto = false, png
       await editMessagePhotoBuffer(chatId, messageId, png, text, replyMarkup);
       return true;
     } catch (error) {
+      if (/message is not modified/i.test(friendlyError(error))) return true;
       // Media replacement is the least reliable Telegram edit. The caption still has to advance from
       // the quick placeholders even when Telegram rejects a replacement image upload.
       console.warn(`[tg-scan] RH media edit failed; trying caption ${messageId}: ${friendlyError(error)}`);
@@ -40515,6 +40528,7 @@ async function editRhScanTelegramCard(chatId, messageId, { hasPhoto = false, png
     else await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: replyMarkup });
     return true;
   } catch (error) {
+    if (/message is not modified/i.test(friendlyError(error))) return true;
     console.warn(`[tg-scan] RH ${hasPhoto ? "caption" : "text"} edit failed ${messageId}: ${friendlyError(error)}`);
     return false;
   }
@@ -40603,6 +40617,20 @@ async function sendRhScanCard(chatId, address, options = {}) {
         const fullText = [String(options.contextHtml || "").trim(), formatRhScanCard(info), callerLine].filter(Boolean).join("\n\n");
         const fullPng = await renderRhScanCardPng(info, info.symbol || address).catch(() => null);
         await editRhScanTelegramCard(chatId, sent.message_id, { hasPhoto: quickHasPhoto, png: fullPng, text: fullText, replyMarkup: kb });
+        // One settling pass a few seconds later catches late PFP/metadata propagation and any market
+        // provider that completed just behind the first full response. It edits this same card—no spam.
+        await sleep(5_000);
+        rhScanCache.delete(String(address || "").toLowerCase());
+        const settled = await gatherRhScan(address).catch(() => null);
+        if (settled) {
+          const settledInfo = mergeRhScanWithTickerCandidate(settled, fastCandidate, address);
+          const settledCaller = await buildScanCallerFooter(chatId, address, settledInfo.mc, message).catch(() => "");
+          const settledComplete = rhScanCardComplete(settledInfo);
+          const settledMissing = rhScanMissingCardFields(settledInfo);
+          const settledText = [String(options.contextHtml || "").trim(), formatRhScanCard(settledInfo, { pending: !settledComplete }), settledCaller, settledComplete ? "" : `⏳ <i>Still finishing ${escapeTelegramHtml(settledMissing.join(", "))}…</i>`].filter(Boolean).join("\n\n");
+          const settledPng = await renderRhScanCardPng(settledInfo, settledInfo.symbol || address, { pending: !settledComplete }).catch(() => null);
+          await editRhScanTelegramCard(chatId, sent.message_id, { hasPhoto: quickHasPhoto, png: settledPng, text: settledText, replyMarkup: kb });
+        }
       })().catch((error) => console.warn(`[tg-scan] RH background upgrade failed ${address.slice(0, 10)}…: ${friendlyError(error)}`));
       return;
     }
