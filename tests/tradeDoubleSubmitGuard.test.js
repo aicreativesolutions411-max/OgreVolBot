@@ -1173,8 +1173,15 @@ test("owner growth stats track web, Telegram, wallets, groups, and generated sit
   assert.match(functionBody(serverSource, "handleMessage"), /platform totals stay private/);
   assert.match(functionBody(serverSource, "walletRecord"), /createdAt: new Date\(\)\.toISOString\(\)/);
   const snapshot = functionBody(serverSource, "platformGrowthSnapshot");
-  for (const source of ["readWebAuthStore", "readWalletStore", "readTelegramGroups", "readLaunchOs", "readGrowthStats"]) assert.match(snapshot, new RegExp(source));
-  assert.match(functionBody(serverSource, "handlePlatformGrowthCommand"), /SlimeWire Growth/);
+  for (const source of ["readWebAuthStore", "readWalletStore", "readTelegramGroups", "readLaunchOs", "readGrowthStats", "readTradeHistory"]) assert.match(snapshot, new RegExp(source));
+  assert.match(serverSource, /function tradeUsageStats\(/);
+  assert.match(serverSource, /function countTradedWallets\(/);
+  const growth = functionBody(serverSource, "handlePlatformGrowthCommand");
+  assert.match(growth, /SlimeWire Growth/);
+  assert.match(growth, /traded wallets/);
+  assert.match(growth, /completed buys\/sells/);
+  assert.match(growth, /Trading users/);
+  assert.match(growth, /bot groups/);
 });
 
 test("KOL Call Feed watches public sources, is admin-selected, deduped, and posts one combined scan", () => {

@@ -55235,11 +55235,34 @@ function growthDateCount(rows, field, sinceMs) {
   }).length;
 }
 
+// A created wallet is not the same thing as an activated trader. These counts use
+// only successfully-recorded buy/sell events, never a panel open, quote, or failed order.
+function tradeUsageStats(trades, sinceMs = 0) {
+  const wallets = new Set();
+  const users = new Set();
+  let executedTrades = 0;
+  for (const trade of Array.isArray(trades) ? trades : []) {
+    if (!trade || !["buy", "sell"].includes(String(trade.type || "").toLowerCase())) continue;
+    const at = Date.parse(trade.timestamp || trade.tradedAt || trade.createdAt || "");
+    if (sinceMs && (!at || at < sinceMs)) continue;
+    const wallet = String(trade.walletPublicKey || trade.wallet || "").trim();
+    if (wallet) wallets.add(wallet);
+    const userId = String(trade.userId || "").trim();
+    if (userId && !userId.startsWith("__")) users.add(userId);
+    executedTrades += 1;
+  }
+  return { wallets: wallets.size, users: users.size, trades: executedTrades };
+}
+
+function countTradedWallets(trades, sinceMs = 0) {
+  return tradeUsageStats(trades, sinceMs).wallets;
+}
+
 async function platformGrowthSnapshot() {
   const now = Date.now(), today = new Date().toISOString().slice(0, 10);
   const todayStart = Date.parse(`${today}T00:00:00.000Z`), weekStart = now - 7 * 24 * 60 * 60 * 1000;
-  const [auth, walletStore, telegramGroups, launches, growth, mentions] = await Promise.all([
-    readWebAuthStore(), readWalletStore(), readTelegramGroups(), readLaunchOs(), readGrowthStats(), readGroupMentions()
+  const [auth, walletStore, telegramGroups, launches, growth, mentions, tradeHistory] = await Promise.all([
+    readWebAuthStore(), readWalletStore(), readTelegramGroups(), readLaunchOs(), readGrowthStats(), readGroupMentions(), readTradeHistory()
   ]);
   const profiles = Object.values(auth.profiles || {}), wallets = (walletStore.wallets || []).filter((row) => {
     const owner = String(row?.ownerId || "");
@@ -55258,17 +55281,30 @@ async function platformGrowthSnapshot() {
   const activeWeek = new Set();
   for (const [, row] of recentDays) for (const hash of Object.keys(row?.telegramActive || {})) activeWeek.add(hash);
   const activeWebToday = new Set((auth.sessions || []).filter((row) => Date.parse(row.lastUsedAt || row.createdAt || "") >= todayStart).map((row) => String(row.userId))).size;
+  const tradeUsage = {
+    today: tradeUsageStats(tradeHistory.trades, todayStart),
+    week: tradeUsageStats(tradeHistory.trades, weekStart),
+    total: tradeUsageStats(tradeHistory.trades)
+  };
   return {
     today: {
       webAccounts: growthDateCount(profiles, "createdAt", todayStart), webActive: activeWebToday,
       telegramNew: Number(todayGrowth.telegramNew || 0), telegramActive: Object.keys(todayGrowth.telegramActive || {}).length,
-      wallets: growthDateCount(wallets, "createdAt", todayStart), groups: growthDateCount(groups, "addedAt", todayStart), sites: growthDateCount(sites, "createdAt", todayStart)
+      wallets: growthDateCount(wallets, "createdAt", todayStart), tradedWallets: tradeUsage.today.wallets,
+      tradingUsers: tradeUsage.today.users, executedTrades: tradeUsage.today.trades,
+      groups: growthDateCount(groups, "addedAt", todayStart), sites: growthDateCount(sites, "createdAt", todayStart)
     },
     week: {
       webAccounts: growthDateCount(profiles, "createdAt", weekStart), telegramNew: recentDays.reduce((sum, [, row]) => sum + Number(row?.telegramNew || 0), 0),
-      telegramActive: activeWeek.size, wallets: growthDateCount(wallets, "createdAt", weekStart), groups: growthDateCount(groups, "addedAt", weekStart), sites: growthDateCount(sites, "createdAt", weekStart)
+      telegramActive: activeWeek.size, wallets: growthDateCount(wallets, "createdAt", weekStart), tradedWallets: tradeUsage.week.wallets,
+      tradingUsers: tradeUsage.week.users, executedTrades: tradeUsage.week.trades,
+      groups: growthDateCount(groups, "addedAt", weekStart), sites: growthDateCount(sites, "createdAt", weekStart)
     },
-    total: { webAccounts: profiles.length, telegramKnown: knownTelegram.size, wallets: wallets.length, groups: groups.length, sites: sites.length }
+    total: {
+      webAccounts: profiles.length, telegramKnown: knownTelegram.size, wallets: wallets.length,
+      tradedWallets: tradeUsage.total.wallets, tradingUsers: tradeUsage.total.users, executedTrades: tradeUsage.total.trades,
+      groups: groups.length, sites: sites.length
+    }
   };
 }
 
@@ -55280,16 +55316,20 @@ async function handlePlatformGrowthCommand(chatId) {
     "<b>Today</b>",
     `🌐 Web accounts <b>+${s.today.webAccounts}</b> · active <b>${s.today.webActive}</b>`,
     `✈️ Telegram people <b>+${s.today.telegramNew}</b> · active <b>${s.today.telegramActive}</b>`,
-    `👛 Wallets created <b>${s.today.wallets}</b> · sites <b>${s.today.sites}</b> · groups <b>${s.today.groups}</b>`,
+    `👛 Wallets created <b>${s.today.wallets}</b> · traded <b>${s.today.tradedWallets}</b> · groups added <b>${s.today.groups}</b>`,
+    `Traders <b>${s.today.tradingUsers}</b> · completed buys/sells <b>${s.today.executedTrades}</b>`,
     "",
     "<b>Last 7 days</b>",
     `🌐 Web accounts <b>+${s.week.webAccounts}</b>`,
     `✈️ Telegram people <b>+${s.week.telegramNew}</b> · active <b>${s.week.telegramActive}</b>`,
-    `👛 Wallets created <b>${s.week.wallets}</b> · sites <b>${s.week.sites}</b> · groups <b>${s.week.groups}</b>`,
+    `👛 Wallets created <b>${s.week.wallets}</b> · traded <b>${s.week.tradedWallets}</b> · groups added <b>${s.week.groups}</b>`,
+    `Traders <b>${s.week.tradingUsers}</b> · completed buys/sells <b>${s.week.executedTrades}</b>`,
     "",
     "<b>Totals</b>",
     `Web accounts <b>${s.total.webAccounts}</b> · known Telegram people <b>${s.total.telegramKnown}</b>`,
-    `User wallets <b>${s.total.wallets}</b> · groups <b>${s.total.groups}</b> · generated sites <b>${s.total.sites}</b>`,
+    `User wallets <b>${s.total.wallets}</b> · traded wallets <b>${s.total.tradedWallets}</b> · bot groups <b>${s.total.groups}</b>`,
+    `Trading users <b>${s.total.tradingUsers}</b> · completed buys/sells <b>${s.total.executedTrades}</b>`,
+    `Generated sites <b>${s.total.sites}</b>`,
     "",
     "<i>Daily Telegram and wallet creation tracking starts with this release; totals include existing records.</i>"
   ].join("\n"));
