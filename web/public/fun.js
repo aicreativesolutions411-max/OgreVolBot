@@ -196,11 +196,33 @@
   }
   function activePreset() { return state.presets.trade.find((preset) => preset.id === state.activePresetId) || null; }
   function activeWallet() { return state.wallets.find((wallet) => wallet.index === state.activeWallet) || state.wallets[0] || null; }
+  function portfolioSolTotal() {
+    const liquidSol = state.wallets.reduce((sum, wallet) => sum + Math.max(0, Number(wallet.sol) || 0), 0);
+    const coinsSol = state.positions.reduce((sum, position) => {
+      const value = Number(position.estimatedValueSol);
+      return sum + (Number.isFinite(value) && value > 0 ? value : 0);
+    }, 0);
+    return { liquidSol, coinsSol, totalSol: liquidSol + coinsSol };
+  }
+  function compactSol(value) {
+    const amount = Math.max(0, Number(value) || 0);
+    if (amount >= 1000000) return `${(amount / 1000000).toFixed(amount >= 10000000 ? 0 : 1)}M`;
+    if (amount >= 1000) return `${(amount / 1000).toFixed(amount >= 10000 ? 0 : 1)}K`;
+    if (amount >= 100) return amount.toFixed(1);
+    if (amount >= 10) return amount.toFixed(2);
+    return amount.toFixed(3);
+  }
   function paintWalletPill() {
     const pill = $(".wallet-pill"), label = $("[data-wallet-balance]");
     const wallet = activeWallet();
     pill?.classList.toggle("ready", Boolean(wallet));
-    if (label) label.textContent = wallet ? `◎ ${Number(wallet.sol || 0).toFixed(3)}` : (state.token ? "+ Wallet" : "Connect");
+    if (!label) return;
+    if (!wallet) {
+      label.innerHTML = `<b>${state.token ? "+ Wallet" : "Connect"}</b><small>WALLET</small>`;
+      return;
+    }
+    const { totalSol } = portfolioSolTotal();
+    label.innerHTML = `<b>${compactSol(totalSol)} SOL</b><small>SOL + COINS</small>`;
   }
 
   function renderCashHandoff() {
@@ -487,6 +509,7 @@
     if (!state.token) return [];
     const result = await request("/api/web/positions?fast=true");
     if (result.ok && result.data?.ok) state.positions = result.data.positions || [];
+    paintWalletPill();
     return state.positions;
   }
   function currentPosition() { const key = coinKey(state.selected); return state.positions.find((position) => String(position.tokenMint || "").toLowerCase() === key.toLowerCase()) || null; }

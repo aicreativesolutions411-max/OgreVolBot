@@ -54,9 +54,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=14/);
-  assert.match(funWorker, /slimewire-fun-v12/);
-  assert.match(funWorker, /fun\.css\?v=14/);
+  assert.match(html, /fun\.css\?v=15/);
+  assert.match(funWorker, /slimewire-fun-v13/);
+  assert.match(funWorker, /fun\.css\?v=15/);
 });
 
 test("/fun keeps the wallet funding card compact and scannable", () => {
@@ -65,8 +65,17 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Fund from SlimeCash or send SOL to this wallet\."/);
-  assert.match(html, /fun\.js\?v=25/);
-  assert.match(funWorker, /fun\.js\?v=25/);
+  assert.match(html, /fun\.js\?v=26/);
+  assert.match(funWorker, /fun\.js\?v=26/);
+});
+
+test("/fun header shows a compact SOL-equivalent total for cash and coin holdings", () => {
+  assert.match(html, /class="wallet-pill-copy" data-wallet-balance/);
+  assert.match(js, /function portfolioSolTotal\(\)/);
+  assert.match(js, /position\.estimatedValueSol/);
+  assert.match(js, /totalSol: liquidSol \+ coinsSol/);
+  assert.match(js, /SOL \+ COINS/);
+  assert.match(js, /async function loadPositions\(\)[\s\S]{0,300}paintWalletPill\(\)/);
 });
 
 test("/fun reuses authenticated money APIs with idempotency and lazy user actions", () => {
