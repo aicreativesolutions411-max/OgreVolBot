@@ -847,9 +847,9 @@ test("launch dev + bundle presets support shared and per-wallet ladders end to e
 
 test("Fun profile clearly exposes naming, creation, and login recovery", () => {
   const fun = fs.readFileSync(new URL("../web/public/fun.js", import.meta.url), "utf8");
-  assert.match(fun, /Choose your profile name and login/);
-  assert.match(fun, /Create profile login/);
-  assert.match(fun, /Already have a profile\? Log in/);
+  assert.match(fun, /Create a profile or log in/);
+  assert.match(fun, /data-save-social-profile>Create profile/);
+  assert.match(fun, /data-fun-account="login">Log in/);
   assert.match(fun, /data-fun-account="create"/);
   assert.match(fun, /data-fun-account="login"/);
   assert.match(fun, /\/api\/web\/profile\/credentials/);
