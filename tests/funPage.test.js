@@ -15,7 +15,9 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.match(server, /requestUrl\.pathname === "\/fun"[\s\S]{0,300}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
-  assert.match(html, /<script defer src="\/fun\.js\?v=18"><\/script>/);
+  const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
+  assert.ok(scriptVersion, "SlimeWire Go should publish a versioned app script");
+  assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
 test("/fun is installable as a separate PWA with a dedicated-origin escape", () => {
@@ -25,9 +27,9 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(html, /fun-manifest\.webmanifest\?v=2/);
   assert.match(js, /beforeinstallprompt/);
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
-  assert.match(js, /Install Fun/);
+  assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v5/);
+  assert.match(funWorker, /slimewire-fun-v\d+/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -131,7 +133,7 @@ test("coin setup exposes fast buys, ladder exits, one-wallet RH trades, and the 
   assert.match(js, /Convert received ETH back to SOL automatically/);
   assert.match(js, /amounts = \["0\.1", "0\.5", "1"\]/);
   assert.match(js, /async function executeFunQuickBuy/);
-  assert.match(js, /data-custom-quick-amount/);
+  assert.match(js, /data-quick-custom-amount/);
   assert.match(js, /slippageBps: preset\?\.slippageBps \|\| "400"/);
   assert.match(js, /data-manage-presets/);
   assert.match(js, /\/api\/web\/presets/);

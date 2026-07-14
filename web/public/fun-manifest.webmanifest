@@ -1,7 +1,7 @@
 {
   "id": "/slimewire-fun-app",
-  "name": "SlimeWire Fun",
-  "short_name": "SlimeWire Fun",
+  "name": "SlimeWire Go",
+  "short_name": "SlimeWire Go",
   "description": "Fast Solana and Robinhood coin discovery, charts, wallets, and trading tools.",
   "start_url": "/fun/?src=slimewire-fun-pwa",
   "scope": "/fun/",

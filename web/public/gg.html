@@ -18,22 +18,22 @@
 <link rel="preconnect" href="https://api.dexscreener.com" crossorigin>
 <link rel="preconnect" href="https://dexscreener.com" crossorigin>
 <link rel="preconnect" href="https://app.slimewire.org" crossorigin>
-<meta name="description" content="SlimeWire is an all-in-one Solana memecoin terminal & Telegram trading bot: one-click trading of fresh pump.fun launches, trending pairs, a rug-check scanner, copy trading, a volume bot, and launchpad — free wallet, no sign-up.">
-<meta name="keywords" content="solana telegram bot, solana trading bot, pump.fun bot, memecoin terminal, solana volume bot, copy trading bot, rug checker, telegram trading bot">
+<meta name="description" content="SlimeWire is a clear Solana and Robinhood Chain trading workspace for live markets, token research, user-controlled wallets, trader proof, automation, and launches.">
+<meta name="keywords" content="solana trading terminal, robinhood chain trading, pump.fun terminal, memecoin research, copy trading, rug checker, telegram trading bot">
 <link rel="canonical" href="https://www.slimewire.org/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="SlimeWire">
 <meta property="og:title" content="SlimeWire — Solana Memecoin Terminal & Telegram Trading Bot">
-<meta property="og:description" content="One-click Solana memecoin trading: fresh pump.fun launches, trending pairs, rug scanner, copy trading, volume bot + an all-in-one Telegram bot. Free wallet, no sign-up.">
+<meta property="og:description" content="Find the move, verify the risk, and trade with control across Solana and Robinhood Chain.">
 <meta property="og:url" content="https://www.slimewire.org/">
 <meta property="og:image" content="https://www.slimewire.org/assets/slimewire/auto/login-hero.jpg">
 <meta property="og:image:width" content="1600">
 <meta property="og:image:height" content="893">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="SlimeWire — Solana Memecoin Terminal & Telegram Trading Bot">
-<meta name="twitter:description" content="One-click Solana memecoin trading: fresh launches, rug scanner, copy trading, volume bot + an all-in-one Telegram bot. Free wallet, no sign-up.">
+<meta name="twitter:description" content="Find the move, verify the risk, and trade with control across Solana and Robinhood Chain.">
 <meta name="twitter:image" content="https://www.slimewire.org/assets/slimewire/auto/login-hero.jpg">
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://www.slimewire.org/#org","name":"SlimeWire","url":"https://www.slimewire.org/","logo":"https://www.slimewire.org/assets/slimewire/png/slimewire-mark.png","sameAs":["https://t.me/SlimeWiredBot"]},{"@type":"WebSite","@id":"https://www.slimewire.org/#site","url":"https://www.slimewire.org/","name":"SlimeWire","publisher":{"@id":"https://www.slimewire.org/#org"}},{"@type":"SoftwareApplication","name":"SlimeWire — Solana Memecoin Terminal & Telegram Trading Bot","operatingSystem":"Web, Telegram, iOS, Android","applicationCategory":"FinanceApplication","url":"https://www.slimewire.org/","description":"All-in-one Solana memecoin terminal and Telegram trading bot: one-click trading of fresh pump.fun launches, trending pairs, rug-check scanner, copy trading, volume bot, and launchpad.","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://www.slimewire.org/#org","name":"SlimeWire","url":"https://www.slimewire.org/","logo":"https://www.slimewire.org/assets/slimewire/png/slimewire-mark.png","sameAs":["https://t.me/SlimeWiredBot"]},{"@type":"WebSite","@id":"https://www.slimewire.org/#site","url":"https://www.slimewire.org/","name":"SlimeWire","publisher":{"@id":"https://www.slimewire.org/#org"}},{"@type":"SoftwareApplication","name":"SlimeWire Trading Workspace","operatingSystem":"Web, Telegram, iOS, Android","applicationCategory":"FinanceApplication","url":"https://www.slimewire.org/","description":"A Solana and Robinhood Chain trading workspace for live markets, token research, user-controlled wallets, trader proof, automation, and launches.","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}]}</script>
 <link rel="icon" type="image/png" href="/assets/slimewire/png/slimewire-mark.png?v=logo4">
 <!-- Installable PWA: the NEW terminal IS the app (manifest start_url="/"). -->
 <link rel="manifest" href="/manifest.json">
@@ -390,6 +390,12 @@
   .statusbar .s.live .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 7px var(--green)}
   .statusbar a:hover{color:var(--green)}
   .statusbar .right{margin-left:auto;display:flex;align-items:center;gap:16px}.statusbar .px{font-family:var(--mono);color:var(--text)}
+  .statusbar .s.delayed{color:#ffd66b}.statusbar .s.delayed .dot{background:#ffd66b;box-shadow:0 0 7px rgba(255,214,107,.6)}
+  .orientation{margin:12px 12px 4px;padding:18px 20px;border:1px solid rgba(137,255,67,.2);border-radius:16px;background:linear-gradient(135deg,rgba(14,24,16,.96),rgba(7,12,9,.96));box-shadow:0 16px 40px rgba(0,0,0,.22)}
+  .orientation .eyebrow{display:block;color:var(--green);font-size:10px;font-weight:900;letter-spacing:.13em;text-transform:uppercase;margin-bottom:7px}
+  .orientation h2{font-size:clamp(20px,3vw,30px);line-height:1.08;margin:0 0 7px;letter-spacing:-.02em}.orientation p{max-width:720px;color:var(--muted);font-size:13px;line-height:1.5;margin:0}
+  .orientation .oa{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.orientation .oa button,.orientation .oa a{min-height:40px;border:1px solid var(--border2);border-radius:10px;padding:0 14px;display:inline-flex;align-items:center;justify-content:center;background:rgba(137,255,67,.05);color:var(--text);font-size:12px;font-weight:800;cursor:pointer}
+  .orientation .oa .primary{border-color:transparent;background:linear-gradient(180deg,#b6ff75,var(--green));color:#061006}.orientation .trustline{display:flex;gap:8px 14px;flex-wrap:wrap;margin-top:13px;font-size:10px;color:#9fb39f}.orientation .trustline a{color:#bfeab8;text-decoration:underline;text-underline-offset:3px}
 
   .loading,.msg{padding:40px;text-align:center;color:var(--muted)}
   .spin{display:inline-block;width:22px;height:22px;border:2px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:sp .7s linear infinite}
@@ -478,6 +484,7 @@
     .botnav button .i{font-size:18px;line-height:1}
     .botnav button.on{color:var(--green)}
     .statusbar .right span:last-child{display:none}
+    .orientation{margin:8px 8px 3px;padding:15px}.orientation .oa>*{flex:1 1 135px}.orientation .trustline{display:grid;grid-template-columns:1fr 1fr;gap:7px 12px}
     .wgrid{padding:12px}
   }
   @media(max-width:520px){
@@ -518,17 +525,17 @@
       <span><b>SLIMEWIRE</b><small>TERMINAL</small></span>
     </a>
     <nav class="mainnav" id="nav">
-      <a data-route="trending">Trending</a>
-      <a data-route="trenches">Trenches</a>
+      <a data-route="trending">Market</a>
+      <a data-trade-entry>Trade</a>
       <a data-route="portfolio">Portfolio</a>
-      <a data-route="wallet">Wallet</a>
+      <a data-route="copy">Traders</a>
       <div class="navdrop">
-        <button class="dropbtn">Tools ▾</button>
+        <button class="dropbtn">Automate ▾</button>
         <div class="dropmenu" id="toolsMenu"></div>
       </div>
     </nav>
     <div class="topctrls">
-      <label class="searchbox" title="Search a coin or paste its contract address"><span>🔍</span><input id="search" aria-label="Search coins or paste contract address" placeholder="Search coin / paste CA"><kbd>/</kbd></label>
+      <label class="searchbox" title="Search a token or paste its contract address"><span>🔍</span><input id="search" aria-label="Search token or paste contract address" placeholder="Search token or paste contract"><kbd>/</kbd></label>
       <button class="iconbtn watchbtn" id="watchBtn" title="Watchlist — your saved coins">★</button>
       <div class="walletpill" id="walletPill" title="Wallet"><span class="dot off"></span><b id="solBal">Connect</b></div>
       <button class="iconbtn clipbtn" id="clipFarmBtn" data-icon="1" title="Clip farm — record a shareable SlimeWire clip (works on phone too)">🎬</button>
@@ -555,7 +562,7 @@
   </main>
 
   <footer class="statusbar">
-    <span class="s live"><span class="dot"></span>Live</span>
+    <span class="s live" id="feedFreshness"><span class="dot"></span><span id="feedFreshnessText">Live data</span></span>
     <a href="/radar" target="_blank" rel="noopener noreferrer">Radar</a>
     <a href="/launch" target="_blank" rel="noopener noreferrer">Launch</a>
     <a href="/manual" target="_blank" rel="noopener noreferrer">Guide</a>
@@ -567,11 +574,11 @@
      breaks position:fixed pinning (the bar scrolled away with content, so you had to scroll to the very
      bottom to reach Tools). Kept here it pins to the viewport and stays on screen while the rest scrolls. -->
 <nav class="botnav" id="botnav">
-  <button data-route="trending"><span class="i">📈</span>Trending</button>
-  <button data-route="trenches"><span class="i">🪖</span>Trenches</button>
+  <button data-route="trending"><span class="i">📈</span>Market</button>
+  <button data-trade-entry><span class="i">⇄</span>Trade</button>
   <button data-route="portfolio"><span class="i">📊</span>Portfolio</button>
-  <button data-route="wallet"><span class="i">👛</span>Wallet</button>
-  <button data-tools><span class="i">🛠️</span>Tools</button>
+  <button data-route="copy"><span class="i">👥</span>Traders</button>
+  <button data-tools><span class="i">⚙</span>Automate</button>
 </nav>
 
 <div class="modal" id="modal"><div class="box" style="position:relative" id="modalBox"></div></div>
@@ -1081,7 +1088,7 @@
     {ic:"🔄",label:"Swap",route:"swap"},
     {ic:"📦",label:"Bundle Buy",route:"bundle"},
     {ic:"📈",label:"Volume Bot",route:"volume"},
-    {ic:"👥",label:"Copy / KOL Tracker",route:"copy"},
+    {ic:"👥",label:"Trader Tracker & Copy",route:"copy"},
     {ic:"🎯",label:"Wallet Launch Snipe",route:"walletLaunch"},
     {ic:"🎯",label:"Launch Snipe",route:"sniper"},
     {ic:"🚀",label:"Launch a Coin",route:"launch"},
@@ -1090,7 +1097,7 @@
   ];
   function toolLinkHtml(t,onclick){return t.route?'<a href="#'+t.route+'"'+(onclick?' onclick="'+onclick+'"':'')+'><span>'+t.ic+'</span>'+esc(t.label)+'</a>':'<a href="'+esc(t.url)+'" target="_blank" rel="noopener noreferrer"><span>'+t.ic+'</span>'+esc(t.label)+'</a>';}
   function openToolsSheet(){
-    openModal('<h3>🛠️ Tools</h3><div class="toolsheet">'+TOOLS.map(t=>toolLinkHtml(t,"GG.closeModal()")).join("")+'</div>');
+    openModal('<h3>⚙ Automate</h3><p class="sub mut">Advanced tools stay out of the way until you need them.</p><div class="toolsheet">'+TOOLS.map(t=>toolLinkHtml(t,"GG.closeModal()")).join("")+'</div>');
   }
   function removeWalletModal(w){
     openModal('<h3>🗑 Remove wallet</h3>'+
@@ -1268,6 +1275,7 @@
   function setNav(route){
     document.querySelectorAll("#nav a[data-route]").forEach(a=>a.classList.toggle("active",a.dataset.route===route));
     document.querySelectorAll("#botnav button[data-route]").forEach(b=>b.classList.toggle("on",b.dataset.route===route));
+    document.querySelectorAll("[data-trade-entry]").forEach(b=>b.classList.toggle(b.closest("#botnav")?"on":"active",route==="trade"||route==="rhtrade"));
   }
   function render(){
     const {route,arg}=parseHash();state.route=route;
@@ -1299,7 +1307,7 @@
   // ---------- subbars ----------
   function subbarTrending(){
     const sb=$("#subbar");sb.innerHTML="";
-    const h=el("h1");h.textContent="Trending";sb.appendChild(h);
+    const h=el("h1");h.textContent="Market";sb.appendChild(h);
     const tabs=el("div","tabs");
     TREND_TABS.forEach(t=>{const b=el("button");b.textContent=t.label;b.className=t.id===state.trendTab?"on":"";b.onclick=()=>{state.trendTab=t.id;render();};tabs.appendChild(b);});
     sb.appendChild(tabs);
@@ -1443,10 +1451,27 @@
   function applyTrendingFilter(){const tb=document.querySelector("#v-trending tbody");if(!tb)return;const rows=shownRows();
     if(rows.length&&syncTrendingTable(rows))return;                 // patch in place (no flicker)
     tb.innerHTML=rows.length?rows.map(rowHtml).join(""):'<tr><td colspan="7" class="msg">No match in this list.</td></tr>';}
+  const ORIENTATION_KEY="slimewireOrientationSeenV1";
+  function orientationHtml(){
+    try{if(localStorage.getItem(ORIENTATION_KEY)==="1")return"";}catch(e){}
+    return '<section class="orientation" id="orientation"><span class="eyebrow">Simple by default · powerful when opened</span><h2>Find the move. Verify the risk. Trade with control.</h2><p>Explore live Solana and Robinhood Chain tokens, understand why each one is moving, and set your exit before you enter.</p><div class="oa"><button class="primary" type="button" id="orientationExplore">Explore without a wallet</button><button type="button" id="orientationConnect">Connect to trade</button></div><div class="trustline"><a href="/how-it-works">How funds work</a><a href="/pricing">Fees before trading</a><a href="/data-freshness">Live data timestamps</a><span>Fast mode is optional</span></div></section>';
+  }
+  function wireOrientation(){
+    const card=$("#orientation");if(!card)return;
+    const dismiss=()=>{try{localStorage.setItem(ORIENTATION_KEY,"1");}catch(e){}card.remove();};
+    const explore=$("#orientationExplore");if(explore)explore.onclick=dismiss;
+    const connect=$("#orientationConnect");if(connect)connect.onclick=()=>{dismiss();go("wallet");};
+  }
+  function setFeedFreshness(connected){
+    const el=$("#feedFreshness"),txt=$("#feedFreshnessText");if(!el||!txt)return;
+    el.classList.toggle("live",Boolean(connected));el.classList.toggle("delayed",!connected);
+    txt.textContent=connected?"Live · updated now":"Delayed · retrying";
+  }
   async function renderTrending(){
     setActiveView("v-trending");subbarTrending();
     const view=$("#v-trending");
-    if(!view.querySelector("table"))view.innerHTML='<div class="loading"><span class="spin"></span></div>';
+    if(!view.querySelector("table"))view.innerHTML=orientationHtml()+'<div class="loading"><span class="spin"></span></div>';
+    wireOrientation();
     const isWatch=state.trendTab==="watch";
     let rows;
     if(isWatch){await loadWatch();rows=state.watchRows||[];}
@@ -1455,14 +1480,16 @@
     // A failed live fetch with no cached rows yet = "still connecting", NOT "feed empty" — don't blank
     // an already-populated table on a transient failure, and show an honest reconnecting note instead.
     const feedDown=!isWatch&&!lastPairsOk;
+    setFeedFreshness(!feedDown);
     if(feedDown&&!rows.length&&state.rows&&state.rows.length){
       state.pollT=setTimeout(()=>{if(state.route==="trending")renderTrending();},3000);return;
     }
     state.rows=rows;
     const shown=shownRows();
-    if(!rows.length)view.innerHTML='<div class="msg">'+(feedDown?'Reconnecting to the live feed… <span class="spin"></span>':(isWatch?"No saved coins yet — tap ☆ on any coin to add it here.":"No pairs in this view right now — try another tab."))+'</div>';
+    if(!rows.length)view.innerHTML=orientationHtml()+'<div class="msg">'+(feedDown?'Reconnecting to the live feed… <span class="spin"></span>':(isWatch?"No saved coins yet — tap ☆ on any coin to add it here.":"No pairs in this view right now — try another tab."))+'</div>';
     else if(shown.length&&syncTrendingTable(shown)){}              // same table already up → patch rows in place (no teardown/flicker)
-    else view.innerHTML='<table class="tbl"><thead><tr><th class="l">Pair</th><th>Market Cap</th><th class="hideMb">Liquidity</th><th>Volume</th><th class="hideMb">Txns</th><th class="hideMb">Token Info</th><th></th></tr></thead><tbody>'+(shown.length?shown.map(rowHtml).join(""):'<tr><td colspan="7" class="msg">No match in this list.</td></tr>')+'</tbody></table>';
+    else view.innerHTML=orientationHtml()+'<table class="tbl"><thead><tr><th class="l">Pair</th><th>Market Cap</th><th class="hideMb">Liquidity</th><th>Volume</th><th class="hideMb">Txns</th><th class="hideMb">Token Info</th><th></th></tr></thead><tbody>'+(shown.length?shown.map(rowHtml).join(""):'<tr><td colspan="7" class="msg">No match in this list.</td></tr>')+'</tbody></table>';
+    wireOrientation();
     void enrichSocials(rows);
     // Watchlist is static-ish — refresh it lazily (30s); live feeds stay snappy at 7s; retry fast when down.
     state.pollT=setTimeout(()=>{if(state.route==="trending")renderTrending();},feedDown?3000:(isWatch?30000:7000));
@@ -1787,11 +1814,11 @@
         '<div id="rhTmSellSec" style="display:none"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:10px 0 6px">Sell (% of your bag)</div>'+
         '<div style="display:flex;gap:6px">'+[25,50,75,100].map(p=>'<button class="wbtn ghost" style="flex:1;padding:9px 4px;font-size:13px" onclick="GG.rhSell(\''+esc(address)+'\','+p+')">'+p+'%</button>').join("")+'</div></div>'+
         '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:12px 0 6px">🛠 Robinhood tools</div>'+
-        '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">'+
-          '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhGuardModal(\''+esc(address)+'\')">🎯 TP / SL</button>'+
-          '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhBundleModal(\''+esc(address)+'\')">📦 Bundle buy</button>'+
-          '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhVolumeModal(\''+esc(address)+'\')">🔁 Volume bot</button>'+
-        '</div>'+
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">'+
+            '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhGuardModal(\''+esc(address)+'\')">🎯 TP / SL</button>'+
+            '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhBundleModal(\''+esc(address)+'\')">📦 Bundle buy</button>'+
+            '<button class="wbtn ghost" style="flex:1;min-width:110px;padding:8px 4px;font-size:12px" onclick="GG.rhVolumeModal(\''+esc(address)+'\')">🔁 Volume bot</button>'+
+          '</div>'+
         '<p class="wnote" style="margin:10px 0 14px">Trades run from your active wallet and use SOL. SlimeWire handles the Robinhood network side automatically. Standard SlimeWire trade fee applies.</p>'+
       '</div></div>';
     const pe=$("#rhPayEth");if(pe)pe.onclick=()=>{state.rhPayAsset="eth";renderRhTrade();};
@@ -4176,7 +4203,7 @@
   function subbarToolKol(){
     const sb=$("#subbar");sb.innerHTML="";
     const back=el("button","chip");back.textContent="← Back";back.onclick=()=>go("trending");sb.appendChild(back);
-    const h=el("h1");h.style.fontSize="15px";h.textContent="Copy / KOLs";sb.appendChild(h);
+    const h=el("h1");h.style.fontSize="15px";h.textContent="Traders & Copy";sb.appendChild(h);
     const tabs=el("div","tabs");
     [["hot","Hot"],["top","Top"],["consistent","Consistent"],["fresh","Fresh"]].forEach(([id,lab])=>{const b=el("button");b.textContent=lab;b.className=id===(state.kolMode||"hot")?"on":"";b.onclick=()=>{state.kolMode=id;renderCopy();};tabs.appendChild(b);});
     sb.appendChild(tabs);
@@ -4195,7 +4222,7 @@
       activeCopyWalletsHtml(copyWatches)+
       kolCallerCardsHtml()+
       swampScoutQueueHtml()+
-      '<div class="wbox" style="grid-column:1/-1"><h3 id="kolH">🔥 KOL Buys</h3><p class="sub" id="kolD">What known KOL wallets are buying right now.</p><div id="kolList"><div class="loading" style="padding:18px"><span class="spin"></span></div></div></div>'+
+      '<div class="wbox" style="grid-column:1/-1"><h3 id="kolH">🔥 Trader activity</h3><p class="sub" id="kolD">What tracked public wallets are buying right now.</p><div id="kolList"><div class="loading" style="padding:18px"><span class="spin"></span></div></div></div>'+
     '</div>';
     document.querySelectorAll("[data-copy-stop]").forEach(btn=>btn.onclick=()=>stopCopyWalletWatch(btn.getAttribute("data-copy-stop"),btn));
     wireSwampScoutQueue();
@@ -4273,13 +4300,13 @@
     const {d}=await api("/api/web/kol/scan?mode="+mode);
     if(state.route!=="copy")return;
     const sc=(d&&d.scan)||{};const rows=sc.rows||[];const kols=sc.kols||[];state._kols=kols; // cache for the profile modal
-    const h=$("#kolH"),dd=$("#kolD");if(h)h.textContent="🔥 "+(sc.label||"KOL Buys");if(dd)dd.textContent=sc.description||"";
+    const h=$("#kolH"),dd=$("#kolD");if(h)h.textContent="🔥 "+(sc.label||"Trader activity");if(dd)dd.textContent=sc.description||"";
     const list=$("#kolList");if(!list)return;
     let html="";
     // Known KOL WALLETS (Top / Consistent / Fresh modes fill scan.kols). Each is a tracked KOL with
     // win-rate / ROI / trade stats and a one-tap Copy that loads it into the Copy-any-wallet box.
     if(kols.length){
-      html+=kolSecLabel("Known KOL wallets");
+      html+=kolSecLabel("Tracked trader wallets");
       html+=kols.map(k=>{
         const win=(k.winRateLabel&&k.winRateLabel!=="n/a")?"win "+esc(k.winRateLabel):"";
         const sub=[win,(k.trades?esc(k.trades)+" trades":""),((k.realizedLabel&&k.realizedLabel!=="n/a")?esc(k.realizedLabel):"")].filter(Boolean).join(" · ");
@@ -4293,7 +4320,7 @@
     }
     // Coins KOLs are buying (Hot / Fresh modes fill scan.rows).
     if(rows.length){
-      html+=kolSecLabel("Coins KOLs are buying");
+      html+=kolSecLabel("Coins tracked traders are buying");
       html+=rows.map(r=>{
         const chg=pctNum(r.h1!=null?r.h1:r.m5);const ct=chg==null?"":((chg>=0?"+":"")+chg.toFixed(1)+"%");
         return '<div class="walletrow" style="cursor:pointer" onclick="GG.open(\''+esc(r.tokenMint)+'\')">'+
@@ -4305,7 +4332,7 @@
         '</div>';
       }).join("");
     }
-    list.innerHTML=html||'<p class="mut" style="font-size:12px">No KOL signals on this tab right now — try Hot / Top / Consistent / Fresh.</p>';
+    list.innerHTML=html||'<p class="mut" style="font-size:12px">No trader signals on this tab right now — try Hot / Top / Consistent / Fresh.</p>';
   }
 
   // ---------- sol price ----------
@@ -4337,6 +4364,7 @@
   document.addEventListener("keydown",e=>{if(e.key==="/"&&document.activeElement.tagName!=="INPUT"){e.preventDefault();$("#search").focus();}});
   document.querySelectorAll("#nav a[data-route]").forEach(a=>a.onclick=e=>{e.preventDefault();go(a.dataset.route);});
   document.querySelectorAll("#botnav button[data-route]").forEach(b=>b.onclick=()=>go(b.dataset.route));
+  document.querySelectorAll("[data-trade-entry]").forEach(b=>b.onclick=()=>{if(state.route!=="trending")go("trending");setTimeout(()=>{const s=$("#search");if(s){s.focus();s.select();toast("Search a token or paste its contract address");}},50);});
   document.querySelectorAll("#botnav button[data-tools]").forEach(b=>b.onclick=()=>openToolsSheet());
   $("#walletPill").onclick=()=>go("wallet");
   // ★ Watchlist — top-bar shortcut straight to your saved coins (also the ★ Watchlist tab on Trending).

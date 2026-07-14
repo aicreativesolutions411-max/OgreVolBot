@@ -1,10 +1,10 @@
-/* SlimeWire Fun: separate PWA shell and push worker. */
-const FUN_CACHE = "slimewire-fun-v10";
+/* SlimeWire Go: focused mobile PWA shell and push worker. */
+const FUN_CACHE = "slimewire-fun-v11";
 const FUN_SHELL = [
   "/fun/",
   "/fun.html",
   "/fun.css?v=13",
-  "/fun.js?v=23",
+  "/fun.js?v=24",
   "/fun-manifest.webmanifest?v=2",
   "/config.js",
   "/assets/slimewire/fun-app-icon-192.png",
@@ -39,7 +39,7 @@ self.addEventListener("push", (event) => {
   let payload = {};
   try { payload = event.data ? event.data.json() : {}; }
   catch { payload = { body: event.data ? event.data.text() : "" }; }
-  event.waitUntil(self.registration.showNotification(payload.title || "SlimeWire Fun", {
+  event.waitUntil(self.registration.showNotification(payload.title || "SlimeWire Go", {
     body: payload.body || "",
     tag: payload.tag || "slimewire-fun",
     icon: "/assets/slimewire/fun-app-icon-192.png",

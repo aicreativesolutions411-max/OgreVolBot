@@ -181,16 +181,15 @@ test("site generation resolves both Solana and Robinhood Chain contracts", () =>
   assert.match(body, /chain: "solana"/);
 });
 
-test("site maker is discoverable from both web shells", () => {
+test("retired site maker stays out of both web shells", () => {
   for (const file of ["index.html", "gg.html"]) {
     const html = fs.readFileSync(new URL(`../web/public/${file}`, import.meta.url), "utf8");
-    assert.match(html, /Create a Site With Us/);
-    assert.match(html, /url:"\/site-maker"/);
+    assert.doesNotMatch(html, /Create a Site With Us/);
+    assert.doesNotMatch(html, /url:"\/site-maker"/);
     assert.match(html, /location\.pathname\.match\(\/\^\\\/ca\\\//);
     assert.match(html, /location\.replace\(`\/coin-site\?project=/);
-    assert.match(html, /aria-label="Search coins or paste contract address"/);
-    assert.match(html, /placeholder="Search coin \/ paste CA"/);
-    assert.match(html, /\.searchbox\{display:flex;width:132px/);
+    assert.match(html, /aria-label="Search token or paste contract address"/);
+    assert.match(html, /placeholder="Search token or paste contract"/);
     assert.doesNotMatch(html, /id="pasteCa"/);
   }
 });

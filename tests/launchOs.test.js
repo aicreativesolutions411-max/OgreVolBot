@@ -96,10 +96,10 @@ test("Launch OS dashboard, public HQ and guide keep every launch workflow organi
   assert.match(guide, /Crisis/);
 });
 
-test("Launch OS is discoverable from both production web shells", () => {
+test("retired Launch OS stays out of both production web shells", () => {
   for (const file of ["index.html", "gg.html"]) {
     const source = fs.readFileSync(new URL(`../web/public/${file}`, import.meta.url), "utf8");
-    assert.match(source, /Launch OS — complete coin operation/);
-    assert.match(source, /url:"\/launch-os"/);
+    assert.doesNotMatch(source, /Launch OS — complete coin operation/);
+    assert.doesNotMatch(source, /url:"\/launch-os"/);
   }
 });

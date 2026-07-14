@@ -290,7 +290,7 @@
     const config = FEED_CONFIG[state.feed] || FEED_CONFIG.movers;
     const cacheKey = `${state.chain}:${state.feed}`;
     const cached = state.feedCache.get(cacheKey);
-    if (!force && cached && Date.now() - cached.at < 15_000) { state.rows = cached.rows; hydrateSelectedFromFeed(); renderCoinList(); scheduleFeedRefresh(); return; }
+    if (!force && cached && Date.now() - cached.at < 15_000) { state.rows = cached.rows; hydrateSelectedFromFeed(); renderCoinList(); $(`[data-feed-note]`).textContent = `${config.note} · updated ${Math.max(1, Math.round((Date.now() - cached.at) / 1000))}s ago`; scheduleFeedRefresh(); return; }
     if (!options.silent && !state.rows.length) $("[data-coin-list]").innerHTML = '<div class="skeleton-list"></div>';
     $("[data-feed-note]").textContent = config.note;
     let rows = [];
@@ -306,6 +306,7 @@
     if (version !== state.feedRequestVersion || selectedChain !== state.chain || selectedFeed !== state.feed) return;
     state.rows = sortAndDedupeFeed(rows, selectedFeed);
     state.feedCache.set(cacheKey, { at: Date.now(), rows: state.rows });
+    $(`[data-feed-note]`).textContent = `${config.note} · updated now`;
     hydrateSelectedFromFeed();
     renderCoinList();
     void hydrateMissingCoinArt(version);
@@ -763,10 +764,10 @@
     const ios = /iphone|ipad|ipod/i.test(navigator.userAgent || "");
     const steps = dedicated
       ? (ios
-        ? ["Tap Share in Safari.", "Choose Add to Home Screen.", "Confirm Add for a separate SlimeWire Fun icon."]
-        : ["Tap Install SlimeWire Fun below.", "Confirm the browser prompt.", "Fun appears separately from the main SlimeWire app."])
-      : ["Open the separate install page below.", "Your browser will leave the main SlimeWire app origin.", "Install SlimeWire Fun there for its own app icon."];
-    openSheet(`<div class="sheet-title"><img src="/assets/slimewire/png/slimewire-mark.png" alt=""><div><h2>Install SlimeWire Fun</h2><p>Keep this fast layout as its own app.</p></div></div><div class="read-card"><h3>Separate app install</h3>${steps.map((step, index) => `<p>${index + 1}. ${escapeHtml(step)}</p>`).join("")}</div><button class="submit-trade" type="button" data-install-fun>${dedicated ? "Install SlimeWire Fun" : "Open separate install page"}</button><p class="fineprint">Browsers always require your confirmation; a website cannot silently force an install.</p>`);
+        ? ["Tap Share in Safari.", "Choose Add to Home Screen.", "Confirm Add for a separate SlimeWire Go icon."]
+        : ["Tap Install SlimeWire Go below.", "Confirm the browser prompt.", "Go appears as the focused mobile SlimeWire app."])
+      : ["Open the mobile install page below.", "Your browser will open SlimeWire Go.", "Install it for a focused mobile trading layout."];
+    openSheet(`<div class="sheet-title"><img src="/assets/slimewire/png/slimewire-mark.png" alt=""><div><h2>Install SlimeWire Go</h2><p>Keep this focused mobile layout as its own app.</p></div></div><div class="read-card"><h3>Mobile app install</h3>${steps.map((step, index) => `<p>${index + 1}. ${escapeHtml(step)}</p>`).join("")}</div><button class="submit-trade" type="button" data-install-fun>${dedicated ? "Install SlimeWire Go" : "Open mobile install page"}</button><p class="fineprint">Browsers always require your confirmation; a website cannot silently force an install.</p>`);
   }
   async function openFunInstall() {
     if (state.deferredInstall) {
@@ -774,7 +775,7 @@
       state.deferredInstall = null;
       await promptEvent.prompt();
       const choice = await promptEvent.userChoice.catch(() => null);
-      if (choice?.outcome === "accepted") { toast("SlimeWire Fun installed"); closeSheet(); }
+      if (choice?.outcome === "accepted") { toast("SlimeWire Go installed"); closeSheet(); }
       return;
     }
     if (location.hostname !== FUN_INSTALL_HOST) {
@@ -783,23 +784,23 @@
       return;
     }
     showFunInstallGuide();
-    toast(runningStandalone() ? "Fun is already open as an app" : "Use your browser menu if the prompt is not ready");
+    toast(runningStandalone() ? "SlimeWire Go is already open as an app" : "Use your browser menu if the prompt is not ready");
   }
   function toolCard(icon, label, note, action, attr = "data-tool-action") { return `<button class="tool-card" type="button" ${attr}="${escapeHtml(action)}"><img src="${TOOL_ICONS}${escapeHtml(icon)}.png" alt=""><b>${escapeHtml(label)}</b><span>${escapeHtml(note)}</span></button>`; }
   async function openTools(global = false) {
     const coin = state.selected || {}, key = coinKey(coin), creator = key && state.launches.some((launch) => String(launch.mint || launch.tokenAddress || "").toLowerCase() === key.toLowerCase());
-    openSheet(`<div class="sheet-title"><img src="${global ? "/assets/slimewire/png/slimewire-mark.png" : escapeHtml(coinImage(coin))}" alt=""><div><h2>${global ? "SlimeWire tools" : `$${escapeHtml(coin.symbol || short(key))} tools`}</h2><p>Power when you need it. Clean chart when you do not.</p></div></div><div class="tool-grid">
+    openSheet(`<div class="sheet-title"><img src="${global ? "/assets/slimewire/png/slimewire-mark.png" : escapeHtml(coinImage(coin))}" alt=""><div><h2>${global ? "Automate" : `$${escapeHtml(coin.symbol || short(key))} tools`}</h2><p>Power when you need it. Clean chart when you do not.</p></div></div><div class="tool-grid">
       ${!global ? toolCard("positions", "TP / SL", "Server-side exits", "exits") : ""}
       ${!global ? toolCard("wallet", "Wallet map", "Holders and flows", "map") : ""}
       ${!global ? toolCard("warning", "Safety", "Full contract read", "safety") : ""}
       ${toolCard("trade", "Swap", "SOL and RH funding", "swap")}
-      ${toolCard("pnl", "Volume bot", "Open the full rolling-wallet engine", "volume")}
+      ${toolCard("pnl", "Volume bot", "Rolling-wallet controls", "volume")}
       ${toolCard("bundle", "Bundle", "Multi-wallet entry", "bundle")}
-      ${toolCard("kol", "Copy trade", "Follow a wallet", "copy")}
+      ${toolCard("kol", "Trader copy", "Follow a public wallet", "copy")}
       ${toolCard("snipe", "Launch sniper", "Watch deployers", "sniper")}
       ${toolCard("launch", "Launch", "Solana or Robinhood", "launch")}
       ${toolCard("pnl", "Full portfolio", "PnL and receipts", "portfolio")}
-      ${global ? toolCard("wallet", "Install Fun", "Separate mobile app", "install") : ""}
+      ${global ? toolCard("wallet", "Install SlimeWire Go", "Focused mobile layout", "install") : ""}
       ${creator && coin.chain === "robinhood" ? toolCard("health", "Creator liquidity", "Your launched coin", "liquidity") : ""}
     </div><p class="fineprint">Trading automation continues server-side after this page closes. Creator liquidity appears only for coins tied to your launch history.</p>`);
   }
@@ -857,7 +858,7 @@
   }
   async function createWallet() {
     if (!(await ensureAccount())) { toast("Could not start your account.", true); return false; }
-    const result = await post("/api/web/wallets/create", { label: "SlimeWire Fun", count: 1 });
+    const result = await post("/api/web/wallets/create", { label: "SlimeWire Go", count: 1 });
     if (!result.ok || !result.data?.ok) { toast(result.data?.message || result.data?.error || "Wallet creation failed", true); return false; }
     const downloads = result.data.downloads || {};
     for (const item of [downloads.encryptedBackup, downloads.recoveryKeys].filter(Boolean)) downloadText(item.filename, item.text);
@@ -1206,7 +1207,7 @@
   });
   window.addEventListener("appinstalled", () => {
     state.deferredInstall = null;
-    toast("SlimeWire Fun installed");
+    toast("SlimeWire Go installed");
     closeSheet();
   });
 
