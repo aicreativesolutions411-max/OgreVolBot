@@ -26,6 +26,23 @@ test("main website mirrors stay identical", () => {
   assert.equal(indexSource, ggSource, "index.html and gg.html drifted; shared site fixes must ship together");
 });
 
+test("profile login, referral tracking, and Robinhood artwork stay complete", () => {
+  assert.match(ggSource, /id="createAccountBtn"/);
+  assert.match(ggSource, /function createAccountModal\(/);
+  assert.match(ggSource, /d\.message\|\|d\.error/);
+  assert.doesNotMatch(ggSource, /d\.error\|\|d\.message/);
+  assert.match(ggSource, /function referralTrackerFoldHtml\(/);
+  assert.match(ggSource, /id="signOutBtn"/);
+  assert.match(ggSource, /class="rh-avatar-shell"/);
+  assert.match(serverSource, /async function webReferralTracker\(/);
+  assert.match(serverSource, /async function handlePlatformReferralCommand\(/);
+  assert.match(serverSource, /parseCommandWithArgument\(text, \["referrals", "referralstats"\]\)/);
+  const funSource = fs.readFileSync(new URL("../web/public/fun.js", import.meta.url), "utf8");
+  assert.match(funSource, /data-fun-account="create"/);
+  assert.match(funSource, /data-save-referral-payout/);
+  assert.match(funSource, /data-save-referral-code/);
+});
+
 function functionBody(source, name) {
   const syncMatch = new RegExp(`function\\s+${name}\\s*\\(`).exec(source);
   const asyncMatch = new RegExp(`async\\s+function\\s+${name}\\s*\\(`).exec(source);

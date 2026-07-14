@@ -155,6 +155,7 @@
     return result;
   }
   function post(path, body) { return request(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) }); }
+  function apiMessage(data, fallback) { return String(data?.message || data?.error || fallback || "Something went wrong."); }
   function setToken(token) { state.token = token || ""; if (token) localStorage.setItem(TOKEN_KEY, token); else localStorage.removeItem(TOKEN_KEY); }
   async function loadMe() { if (!state.token) return null; const result = await request("/api/web/me", { noRetry: true }); if (result.ok) state.user = result.data?.user || null; return state.user; }
 
@@ -586,7 +587,7 @@
     else if (state.profileTab === "activity") loadWalletActivity();
     else if (state.profileTab === "created") loadCreatedCoins();
     else renderSocialProfile();
-    if (!state.wallets.length) panel.innerHTML = emptyState("Your mobile wallet starts here", "Create a managed SlimeWire wallet to trade and keep server-side exits working while the app is closed.");
+    if (!state.wallets.length && state.profileTab !== "social") panel.innerHTML = emptyState("Your mobile wallet starts here", "Create a managed SlimeWire wallet to trade and keep server-side exits working while the app is closed.");
   }
   function renderWalletHero() {
     const wallet = activeWallet(), hero = $("[data-wallet-hero]");
@@ -595,20 +596,63 @@
   }
   function renderSocialProfile() {
     const panel = $("[data-profile-panel]"), user = state.user || {};
-    panel.innerHTML = `<div class="read-card"><h3>Invite &amp; earn 💸</h3><p>Invite friends — when they trade, <b>you earn a cut of their fees</b>, paid to your wallet automatically, forever. Your link:</p><div class="field"><input readonly value="${escapeHtml(user.referralLink || location.origin)}"></div><button class="submit-trade" type="button" data-copy-invite>Copy invite link</button></div><div class="read-card"><h3>Your public trader profile</h3><p>Choose a username, publish your opted-in trade record, and let people follow alerts. Following never places or copies a trade.</p></div><div class="preset-editor"><div class="field"><label>Username</label><input data-profile-username value="${escapeHtml(user.username || "")}" maxlength="24" placeholder="slimetrader"></div><div class="field"><label>${user.hasPasswordLogin ? "New password (required to change username)" : "Password"}</label><input type="password" data-profile-password autocomplete="new-password" placeholder="8+ characters"></div><label class="check-row"><input type="checkbox" data-profile-public ${user.showOnTraderBoard ? "checked" : ""}> Show my opted-in trading profile publicly</label><button class="submit-trade" type="button" data-save-social-profile>Save profile</button><button class="recovery-button" type="button" data-enable-push>Enable trade alerts on this device</button><p class="fineprint" data-social-status>Profile alerts are informational only. SlimeWire will never auto-buy from a follow.</p></div>`;
+    if (!state.token) {
+      panel.innerHTML = `<div class="read-card account-welcome"><span>YOUR SLIMEWIRE PROFILE</span><h3>Keep your wallets, referrals, and settings together.</h3><p>Create a profile for a clean login on any device, or log in to bring your account back.</p><div class="account-actions"><button class="submit-trade" type="button" data-fun-account="create">Create profile</button><button class="recovery-button" type="button" data-fun-account="login">Log in</button></div></div><p class="fineprint">You can still browse without an account. A wallet is only created when you ask for one.</p>`;
+      return;
+    }
+    const tracker = user.referralTracker || {}, rows = Array.isArray(tracker.rows) ? tracker.rows : [];
+    const trackerRows = rows.slice(0, 20).map((row) => `<div class="referral-row"><span><b>${escapeHtml(row.profileName || "Referral")}</b><small>${escapeHtml(row.shortWallet || "No wallet yet")} · ${Number(row.tradeCount || 0)} trades</small></span><strong>${escapeHtml(row.volumeSol || "0")} SOL<small>${escapeHtml(row.earnedSol || "0")} SOL earned</small></strong></div>`).join("");
+    const earnedSol = user.referralStats?.totalSol || "0";
+    panel.innerHTML = `<div class="read-card account-status"><span>ACCOUNT</span><h3>${escapeHtml(user.username ? `@${user.username}` : "Profile not named yet")}</h3><p>${user.hasPasswordLogin ? "Login protected · available on your other devices" : "Add a username and password so this profile can be recovered anywhere."}</p></div><div class="read-card"><h3>Invite &amp; earn 💸</h3><p>Choose a clean link ending, then share it. When invited traders trade, your referral earnings are tracked here.</p><div class="field referral-link-field"><label>Your link</label><input readonly value="${escapeHtml(user.referralLink || location.origin)}"></div><div class="field"><label>Custom link ending</label><input data-referral-code value="${escapeHtml(user.referralCode || "")}" maxlength="32" placeholder="YOURNAME"></div><div class="account-actions"><button class="submit-trade" type="button" data-save-referral-code>Save link</button><button class="recovery-button" type="button" data-copy-invite>Copy invite link</button></div></div><div class="referral-stats"><div><b>${Number(tracker.count || 0)}</b><span>Referrals</span></div><div><b>${Number(tracker.activeCount || 0)}</b><span>Active</span></div><div><b>${escapeHtml(tracker.volumeSol || "0")}</b><span>SOL volume</span></div><div><b>${escapeHtml(earnedSol)}</b><span>SOL earned</span></div></div><details class="profile-drawer"><summary>Referral tracker <span>${Number(tracker.count || 0)} users</span></summary><div class="profile-drawer-body">${trackerRows || '<p>No referrals yet. Your first signup will appear here even before they trade.</p>'}</div></details><details class="profile-drawer"><summary>Referral payout wallet <span>${user.referralPayoutWallet ? escapeHtml(short(user.referralPayoutWallet)) : "Set wallet"}</span></summary><div class="profile-drawer-body"><p>Your earned fees are paid to this Solana wallet. Leave it blank to use your main SlimeWire wallet.</p><div class="field"><label>Payout wallet</label><input data-referral-payout value="${escapeHtml(user.referralPayoutWallet || "")}" placeholder="Solana wallet address"></div><button class="submit-trade" type="button" data-save-referral-payout>Save payout wallet</button></div></details><div class="read-card"><h3>Your public trader profile</h3><p>Publish only your opted-in trade record and let people follow alerts. Following never places or copies a trade.</p></div><div class="preset-editor"><div class="field"><label>Username</label><input data-profile-username value="${escapeHtml(user.username || "")}" maxlength="24" placeholder="slimetrader"></div><div class="field"><label>${user.hasPasswordLogin ? "New password (only needed to change login)" : "Password"}</label><input type="password" data-profile-password autocomplete="new-password" placeholder="8+ characters"></div><label class="check-row"><input type="checkbox" data-profile-public ${user.showOnTraderBoard ? "checked" : ""}> Show my opted-in trading profile publicly</label><button class="submit-trade" type="button" data-save-social-profile>Save profile</button><button class="recovery-button" type="button" data-enable-push>Enable trade alerts on this device</button><button class="recovery-button danger-button" type="button" data-fun-sign-out>Sign out on this device</button><p class="fineprint" data-social-status>Profile alerts are informational only. SlimeWire will never auto-buy from a follow.</p></div>`;
   }
   async function saveSocialProfile(button) {
-    if (!(await ensureAccount())) return;
     const username = String($("[data-profile-username]")?.value || "").trim(), password = String($("[data-profile-password]")?.value || "");
-    if (!username || password.length < 8) { toast("Add a username and password of at least 8 characters.", true); return; }
+    if (!/^[a-z0-9][a-z0-9_.-]{2,23}$/i.test(username)) { toast("Username must be 3–24 letters, numbers, dots, dashes, or underscores.", true); return; }
+    const credentialsChanged = username.toLowerCase() !== String(state.user?.username || "").toLowerCase() || Boolean(password);
+    if (credentialsChanged && password.length < 8) { toast("Use a password of at least 8 characters to change your login.", true); return; }
     button.disabled = true;
     try {
-      const credentials = await post("/api/web/profile/credentials", { username, password });
-      if (!credentials.ok || !credentials.data?.ok) { toast(credentials.data?.error || "Could not save profile", true); return; }
+      let credentials = { data: { user: state.user } };
+      if (credentialsChanged) {
+        credentials = await post("/api/web/profile/credentials", { username, password });
+        if (!credentials.ok || !credentials.data?.ok) { toast(apiMessage(credentials.data, "Could not save profile"), true); return; }
+      }
       const visibility = await post("/api/web/profile/referral", { showOnTraderBoard: Boolean($("[data-profile-public]")?.checked), traderBoardWalletMode: "all" });
-      if (!visibility.ok || !visibility.data?.ok) { toast(visibility.data?.error || "Could not publish profile", true); return; }
+      if (!visibility.ok || !visibility.data?.ok) { toast(apiMessage(visibility.data, "Could not publish profile"), true); return; }
       state.user = visibility.data.user || credentials.data.user || state.user; toast("Trader profile saved"); renderSocialProfile();
     } finally { button.disabled = false; }
+  }
+  function openFunAccount(mode = "login") {
+    const create = mode === "create";
+    openSheet(`<div class="sheet-title"><img src="${slimePfp(create ? "create-profile" : "login-profile")}" alt=""><div><h2>${create ? "Create your profile" : "Welcome back"}</h2><p>${create ? "One login for wallets, referrals, and settings" : "Log in to restore your SlimeWire account"}</p></div></div><div class="field"><label>Username</label><input data-fun-account-user autocomplete="username" maxlength="24" autocapitalize="off" spellcheck="false" placeholder="slimetrader"></div><div class="field"><label>Password</label><input data-fun-account-pass type="password" autocomplete="${create ? "new-password" : "current-password"}" placeholder="8+ characters"></div><button class="submit-trade" type="button" data-submit-fun-account="${create ? "create" : "login"}">${create ? "Create profile" : "Log in"}</button><button class="recovery-button" type="button" data-fun-account="${create ? "login" : "create"}">${create ? "Already have one? Log in" : "New here? Create profile"}</button><p class="fineprint" data-fun-account-status>${create ? "Creating a profile does not create or fund a wallet." : "Use the same username and password you saved before."}</p>`);
+  }
+  async function submitFunAccount(button, mode) {
+    const username = String($("[data-fun-account-user]")?.value || "").trim(), password = String($("[data-fun-account-pass]")?.value || ""), status = $("[data-fun-account-status]");
+    if (!/^[a-z0-9][a-z0-9_.-]{2,23}$/i.test(username)) { status.textContent = "Username must be 3–24 letters, numbers, dots, dashes, or underscores."; return; }
+    if (password.length < 8) { status.textContent = "Password must be at least 8 characters."; return; }
+    button.disabled = true; button.textContent = mode === "create" ? "Creating…" : "Logging in…";
+    const result = await post(mode === "create" ? "/api/web/signup" : "/api/web/password-login", { username, password, ref: localStorage.getItem("ggRef") || "" });
+    if (!result.ok || !result.data?.ok || !result.data?.token) { status.textContent = apiMessage(result.data, mode === "create" ? "Could not create profile." : "Could not log in."); button.disabled = false; button.textContent = mode === "create" ? "Create profile" : "Log in"; return; }
+    setToken(result.data.token); state.user = result.data.user || null; closeSheet();
+    await Promise.all([loadMe(), loadWallets(), loadPresets(), loadPositions()]);
+    renderWalletHero(); renderSocialProfile(); paintWalletPill(); toast(mode === "create" ? "Profile created" : "Welcome back");
+  }
+  async function saveFunReferralCode(button) {
+    const code = String($("[data-referral-code]")?.value || "").trim();
+    if (!/^[a-z0-9][a-z0-9_-]{2,31}$/i.test(code)) { toast("Use 3–32 letters, numbers, dashes, or underscores.", true); return; }
+    button.disabled = true; button.textContent = "Saving…";
+    const result = await post("/api/web/profile/referral", { code });
+    button.disabled = false; button.textContent = "Save link";
+    if (!result.ok || !result.data?.ok) { toast(apiMessage(result.data, "Could not save that link"), true); return; }
+    state.user = result.data.user || state.user; renderSocialProfile(); toast("Referral link updated");
+  }
+  async function saveFunReferralPayout(button) {
+    const wallet = String($("[data-referral-payout]")?.value || "").trim();
+    button.disabled = true; button.textContent = "Saving…";
+    const result = await post("/api/web/profile/referral", wallet ? { wallet } : { clearPayout: true });
+    button.disabled = false; button.textContent = "Save payout wallet";
+    if (!result.ok || !result.data?.ok) { toast(apiMessage(result.data, "Could not save payout wallet"), true); return; }
+    state.user = result.data.user || state.user; renderSocialProfile(); toast(wallet ? "Payout wallet saved" : "Using your main wallet for payouts");
   }
   function urlBase64ToUint8Array(value) { const padding = "=".repeat((4 - value.length % 4) % 4), raw = atob((value + padding).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from([...raw].map((char) => char.charCodeAt(0))); }
   async function enableFunPush(button) {
@@ -1026,6 +1070,11 @@
     if (event.target.closest("[data-quick-set-custom]")) { const amount = String($("[data-quick-custom-amount]")?.value || "").trim(); if (!(Number(amount) > 0)) { toast("Enter a valid SOL amount.", true); return; } state.quickAmount = amount; renderQuickRoute(); return; }
     if (event.target.closest("[data-quick-review]")) { if (!activeWallet()) { await openWalletManager(); return; } openTradeSheet("buy", { amount: state.quickAmount || "0.1" }); return; }
     if (event.target.closest("[data-quick-bundle]")) { await openBundleSheet(); return; }
+    const accountMode = event.target.closest("[data-fun-account]"); if (accountMode) { openFunAccount(accountMode.dataset.funAccount || "login"); return; }
+    const submitAccount = event.target.closest("[data-submit-fun-account]"); if (submitAccount) { await submitFunAccount(submitAccount, submitAccount.dataset.submitFunAccount || "login"); return; }
+    const saveReferral = event.target.closest("[data-save-referral-code]"); if (saveReferral) { await saveFunReferralCode(saveReferral); return; }
+    const savePayout = event.target.closest("[data-save-referral-payout]"); if (savePayout) { await saveFunReferralPayout(savePayout); return; }
+    if (event.target.closest("[data-fun-sign-out]")) { if (confirm("Sign out on this device? Your wallets stay on your account.")) { setToken(""); state.user = null; state.wallets = []; state.positions = []; state.activeWallet = null; paintWalletPill(); renderWalletHero(); renderSocialProfile(); toast("Signed out"); } return; }
     const copyInvite = event.target.closest("[data-copy-invite]"); if (copyInvite) { const link = state.user?.referralLink || location.origin; if (navigator.share) { try { await navigator.share({ title: "SlimeWire", text: "Trade coins with me on SlimeWire", url: link }); return; } catch { /* fell through to copy */ } } navigator.clipboard?.writeText(link).then(() => toast("Invite link copied"), () => toast("Could not copy", true)); return; }
     const saveProfile = event.target.closest("[data-save-social-profile]"); if (saveProfile) { await saveSocialProfile(saveProfile); return; }
     const enablePush = event.target.closest("[data-enable-push]"); if (enablePush) { await enableFunPush(enablePush); return; }

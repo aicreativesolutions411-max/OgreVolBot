@@ -15005,6 +15005,13 @@ async function handleMessage(message, userId) {
     await handlePlatformGrowthCommand(chatId);
     return;
   }
+  const referralAdminCommand = parseCommandWithArgument(text, ["referrals", "referralstats"]);
+  if (referralAdminCommand) {
+    if (!isAdmin(userId)) { await say(chatId, "That command is for SlimeWire admins."); return; }
+    if (!isPrivateChat(message.chat)) { await say(chatId, "Open my DM and send /referrals so referral details stay private."); return; }
+    await handlePlatformReferralCommand(chatId);
+    return;
+  }
 
   if (!isPrivateChat(message.chat)) {
     registerTelegramGroup(message.chat);
@@ -25382,6 +25389,62 @@ function normalizeReferralStats(stats = {}) {
     lastSignature: stats.lastSignature || "",
     lastPaidAt: stats.lastPaidAt || "",
     referrals
+  };
+}
+
+async function webReferralTracker(userId) {
+  const authStore = await readWebAuthStore();
+  const ownerId = String(userId);
+  const ownerProfile = authStore.profiles?.[ownerId] || {};
+  const invited = Object.entries(authStore.profiles || {})
+    .filter(([childId, profile]) => childId !== ownerId && String(profile?.referredByUserId || "") === ownerId);
+  const earnings = new Map(normalizeReferralStats(ownerProfile.referralStats || {}).referrals
+    .map((row) => [String(row.userId), row]));
+  if (!invited.length) return { count: 0, activeCount: 0, tradeCount: 0, volumeSol: "0", rows: [] };
+  const invitedIds = new Set(invited.map(([id]) => id));
+
+  const [walletStore, tradeStore] = await Promise.all([
+    readWalletStore().catch(() => ({ wallets: [] })),
+    readTradeHistory().catch(() => ({ trades: [] }))
+  ]);
+  const tradeTotals = new Map();
+  for (const trade of tradeStore.trades || []) {
+    const childId = String(trade.userId || "");
+    if (!childId || !invitedIds.has(childId)) continue;
+    const current = tradeTotals.get(childId) || { count: 0, volume: 0n, lastTradeAt: "" };
+    current.count += 1;
+    current.volume += positiveBigIntOrZero(trade.solLamportsSpent) + positiveBigIntOrZero(trade.solLamportsReceived);
+    if (!current.lastTradeAt || Date.parse(trade.timestamp || "") > Date.parse(current.lastTradeAt)) current.lastTradeAt = trade.timestamp || "";
+    tradeTotals.set(childId, current);
+  }
+
+  let totalVolume = 0n;
+  let totalTrades = 0;
+  const rows = invited.map(([childId, profile], index) => {
+    const wallets = walletsForOwner(walletStore, childId).filter((wallet) => !wallet.volumeBot && !wallet.ephemeral);
+    const wallet = wallets[0]?.publicKey || profile.connectedWallet?.publicKey || "";
+    const totals = tradeTotals.get(childId) || { count: 0, volume: 0n, lastTradeAt: "" };
+    const earned = earnings.get(childId) || {};
+    totalVolume += totals.volume;
+    totalTrades += totals.count;
+    return {
+      profileName: profile.username || profile.cashHandleDisplay || profile.cashHandle || `Referral ${index + 1}`,
+      wallet,
+      shortWallet: wallet ? shortMint(wallet) : "No wallet yet",
+      walletCount: wallets.length,
+      tradeCount: totals.count,
+      volumeSol: referralSolString(totals.volume),
+      earnedSol: earned.sol || "0",
+      joinedAt: profile.createdAt || "",
+      lastTradeAt: totals.lastTradeAt || ""
+    };
+  }).sort((a, b) => Number(b.volumeSol) - Number(a.volumeSol));
+  return {
+    count: rows.length,
+    activeCount: rows.filter((row) => row.tradeCount > 0).length,
+    tradeCount: totalTrades,
+    volumeSol: referralSolString(totalVolume),
+    rows
   };
 }
 
@@ -55400,8 +55463,76 @@ async function handlePlatformGrowthCommand(chatId) {
     `Trading users <b>${s.total.tradingUsers}</b> · completed buys/sells <b>${s.total.executedTrades}</b>`,
     `Generated sites <b>${s.total.sites}</b>`,
     "",
-    "<i>Daily Telegram and wallet creation tracking starts with this release; totals include existing records.</i>"
+    "<i>Daily Telegram and wallet creation tracking starts with this release; totals include existing records.</i>",
+    "",
+    "Referral ledger: /referrals"
   ].join("\n"));
+}
+
+async function platformReferralSnapshot() {
+  const [authStore, tradeStore] = await Promise.all([
+    readWebAuthStore(),
+    readTradeHistory().catch(() => ({ trades: [] }))
+  ]);
+  const profiles = authStore.profiles || {};
+  const children = new Map();
+  for (const [childId, profile] of Object.entries(profiles)) {
+    const referrerId = String(profile?.referredByUserId || "");
+    if (!referrerId || referrerId === childId || !profiles[referrerId]) continue;
+    if (!children.has(referrerId)) children.set(referrerId, []);
+    children.get(referrerId).push(childId);
+  }
+  const tradeTotals = new Map();
+  for (const trade of tradeStore.trades || []) {
+    const childId = String(trade.userId || "");
+    if (!childId) continue;
+    const current = tradeTotals.get(childId) || { count: 0, volume: 0n };
+    current.count += 1;
+    current.volume += positiveBigIntOrZero(trade.solLamportsSpent) + positiveBigIntOrZero(trade.solLamportsReceived);
+    tradeTotals.set(childId, current);
+  }
+  let referralCount = 0, activeCount = 0, tradeCount = 0, volume = 0n, earned = 0n;
+  const rows = [...children.entries()].map(([referrerId, childIds]) => {
+    const profile = profiles[referrerId] || {};
+    let rowActive = 0, rowTrades = 0, rowVolume = 0n;
+    for (const childId of childIds) {
+      const totals = tradeTotals.get(childId) || { count: 0, volume: 0n };
+      if (totals.count) rowActive += 1;
+      rowTrades += totals.count;
+      rowVolume += totals.volume;
+    }
+    const rowEarned = positiveBigIntOrZero(profile.referralStats?.totalLamports);
+    referralCount += childIds.length; activeCount += rowActive; tradeCount += rowTrades; volume += rowVolume; earned += rowEarned;
+    return {
+      name: profile.username || profile.cashHandleDisplay || profile.cashHandle || shortMint(referrerId),
+      code: profile.referralCode || "",
+      count: childIds.length,
+      activeCount: rowActive,
+      tradeCount: rowTrades,
+      volumeSol: referralSolString(rowVolume),
+      earnedSol: referralSolString(rowEarned),
+      payoutWallet: profile.referralPayoutWallet || ""
+    };
+  }).sort((a, b) => b.count - a.count || Number(b.volumeSol) - Number(a.volumeSol));
+  return { referrers: rows.length, referralCount, activeCount, tradeCount, volumeSol: referralSolString(volume), earnedSol: referralSolString(earned), rows };
+}
+
+async function handlePlatformReferralCommand(chatId) {
+  const s = await platformReferralSnapshot();
+  const rows = s.rows.slice(0, 20).map((row, index) => {
+    const payout = row.payoutWallet ? ` · pay ${escapeTelegramHtml(shortMint(row.payoutWallet))}` : " · payout not set";
+    return `${index + 1}. <b>${escapeTelegramHtml(row.name)}</b> · /r/${escapeTelegramHtml(row.code || "unset")}\n   ${row.count} joined · ${row.activeCount} active · ${row.tradeCount} trades · ${escapeTelegramHtml(row.volumeSol)} SOL volume · ${escapeTelegramHtml(row.earnedSol)} SOL earned${payout}`;
+  });
+  await sayHtml(chatId, [
+    "👥 <b>SlimeWire Referral Ledger</b>",
+    "",
+    `Referrers <b>${s.referrers}</b> · users brought in <b>${s.referralCount}</b> · active <b>${s.activeCount}</b>`,
+    `Referred trades <b>${s.tradeCount}</b> · generated volume <b>${escapeTelegramHtml(s.volumeSol)} SOL</b>`,
+    `Referral fees earned <b>${escapeTelegramHtml(s.earnedSol)} SOL</b>`,
+    "",
+    ...(rows.length ? rows : ["No attributed referrals yet."]),
+    s.rows.length > 20 ? `\n<i>Showing top 20 of ${s.rows.length} referrers.</i>` : ""
+  ].filter(Boolean).join("\n"));
 }
 
 async function writeWebAuthStore(store) {
@@ -60218,8 +60349,11 @@ async function recoverCashAccount(rawKey) {
 }
 
 async function webUserSummary(userId) {
-  const wallets = await webWalletRows(userId);
-  const profile = await webProfileForUser(userId);
+  const [wallets, profile, referralTracker] = await Promise.all([
+    webWalletRows(userId),
+    webProfileForUser(userId),
+    webReferralTracker(userId)
+  ]);
   return {
     id: String(userId),
     isAdmin: isAdmin(userId),
@@ -60240,6 +60374,7 @@ async function webUserSummary(userId) {
     referralPayoutWallet: profile.referralPayoutWallet || "",
     referralPayoutSplit: Array.isArray(profile.referralPayoutSplit) ? profile.referralPayoutSplit : [],
     referralStats: normalizeReferralStats(profile.referralStats),
+    referralTracker,
     referredByCode: profile.referredByCode || "",
     showOnTraderBoard: Boolean(profile.showOnTraderBoard),
     traderBoardWalletMode: ["all", "manual"].includes(String(profile.traderBoardWalletMode || "")) ? profile.traderBoardWalletMode : "all",
