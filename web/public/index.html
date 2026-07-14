@@ -391,11 +391,11 @@
   .statusbar a:hover{color:var(--green)}
   .statusbar .right{margin-left:auto;display:flex;align-items:center;gap:16px}.statusbar .px{font-family:var(--mono);color:var(--text)}
   .statusbar .s.delayed{color:#ffd66b}.statusbar .s.delayed .dot{background:#ffd66b;box-shadow:0 0 7px rgba(255,214,107,.6)}
-  .orientation{margin:12px 12px 4px;padding:18px 20px;border:1px solid rgba(137,255,67,.2);border-radius:16px;background:linear-gradient(135deg,rgba(14,24,16,.96),rgba(7,12,9,.96));box-shadow:0 16px 40px rgba(0,0,0,.22)}
+  .orientation{margin:10px 12px 4px;padding:14px 16px;border:1px solid rgba(137,255,67,.2);border-radius:14px;background:linear-gradient(135deg,rgba(14,24,16,.96),rgba(7,12,9,.96));box-shadow:0 12px 30px rgba(0,0,0,.2)}
   .orientation .eyebrow{display:block;color:var(--green);font-size:10px;font-weight:900;letter-spacing:.13em;text-transform:uppercase;margin-bottom:7px}
-  .orientation h2{font-size:clamp(20px,3vw,30px);line-height:1.08;margin:0 0 7px;letter-spacing:-.02em}.orientation p{max-width:720px;color:var(--muted);font-size:13px;line-height:1.5;margin:0}
-  .orientation .oa{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.orientation .oa button,.orientation .oa a{min-height:40px;border:1px solid var(--border2);border-radius:10px;padding:0 14px;display:inline-flex;align-items:center;justify-content:center;background:rgba(137,255,67,.05);color:var(--text);font-size:12px;font-weight:800;cursor:pointer}
-  .orientation .oa .primary{border-color:transparent;background:linear-gradient(180deg,#b6ff75,var(--green));color:#061006}.orientation .trustline{display:flex;gap:8px 14px;flex-wrap:wrap;margin-top:13px;font-size:10px;color:#9fb39f}.orientation .trustline a{color:#bfeab8;text-decoration:underline;text-underline-offset:3px}
+  .orientation h2{font-size:clamp(19px,2.6vw,25px);line-height:1.08;margin:0 0 5px;letter-spacing:-.02em}.orientation p{max-width:620px;color:var(--muted);font-size:12px;line-height:1.4;margin:0}
+  .orientation .oa{display:flex;gap:8px;flex-wrap:wrap;margin-top:11px}.orientation .oa button{min-height:38px;border:1px solid var(--border2);border-radius:10px;padding:0 14px;display:inline-flex;align-items:center;justify-content:center;background:rgba(137,255,67,.05);color:var(--text);font-size:12px;font-weight:800;cursor:pointer}
+  .orientation .oa .primary{border-color:transparent;background:linear-gradient(180deg,#b6ff75,var(--green));color:#061006}
 
   .loading,.msg{padding:40px;text-align:center;color:var(--muted)}
   .spin{display:inline-block;width:22px;height:22px;border:2px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:sp .7s linear infinite}
@@ -415,6 +415,12 @@
   .toolsheet a{display:flex;align-items:center;gap:12px;padding:14px;border:1px solid var(--border);border-radius:12px;background:var(--row);font-size:14px;font-weight:600}
   .toolsheet a span{font-size:19px}
   .toolsheet a:hover{border-color:rgba(137,255,67,.34);color:var(--green)}
+  .trade-search{display:flex;align-items:center;gap:9px;height:46px;margin:14px 0 16px;padding:0 13px;border:1px solid rgba(137,255,67,.28);border-radius:13px;background:#071008}
+  .trade-search span{color:var(--green);font-size:18px}.trade-search input{width:100%;height:42px;border:0;outline:0;background:transparent;color:var(--text);font-size:14px}
+  .trade-search-section{margin-top:14px}.trade-search-section>span{display:block;margin:0 2px 8px;color:var(--muted);font-size:10px;font-weight:900;letter-spacing:.1em;text-transform:uppercase}
+  .trade-recents{display:flex;flex-wrap:wrap;gap:7px}.trade-recents button{min-height:36px;padding:0 12px;border:1px solid var(--border);border-radius:999px;background:var(--row);font-size:11px;font-weight:800}.trade-recents button:hover{border-color:var(--green);color:var(--green)}
+  .trade-search-results{display:flex;flex-direction:column;gap:7px}.trade-search-result{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;width:100%;padding:12px;border:1px solid var(--border2);border-radius:12px;background:var(--row);text-align:left}.trade-search-result:hover{border-color:rgba(137,255,67,.4);background:var(--row-hover)}
+  .trade-search-result b{display:block;font-size:13px}.trade-search-result small{display:block;margin-top:3px;color:var(--muted);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.trade-search-result em{color:var(--green);font-size:10px;font-style:normal;font-weight:900;text-transform:uppercase}
   /* launch tabs */
   .lcheck{display:flex;align-items:flex-start;gap:9px;font-size:12px;cursor:pointer;margin:2px 0 12px;color:var(--muted);line-height:1.4}
   .lcheck input{margin-top:2px;flex:0 0 auto}.lcheck b{color:var(--text)}
@@ -484,7 +490,7 @@
     .botnav button .i{font-size:18px;line-height:1}
     .botnav button.on{color:var(--green)}
     .statusbar .right span:last-child{display:none}
-    .orientation{margin:8px 8px 3px;padding:15px}.orientation .oa>*{flex:1 1 135px}.orientation .trustline{display:grid;grid-template-columns:1fr 1fr;gap:7px 12px}
+    .orientation{margin:7px 8px 3px;padding:13px}.orientation .oa>*{flex:1 1 135px}
     .wgrid{padding:12px}
   }
   @media(max-width:520px){
@@ -535,7 +541,7 @@
       </div>
     </nav>
     <div class="topctrls">
-      <label class="searchbox" title="Search a token or paste its contract address"><span>🔍</span><input id="search" aria-label="Search token or paste contract address" placeholder="Search token or paste contract"><kbd>/</kbd></label>
+      <label class="searchbox" title="Search a token or paste its contract address"><span>🔍</span><input id="search" aria-label="Search token or paste contract address" placeholder="Search or paste CA" readonly><kbd>/</kbd></label>
       <button class="iconbtn watchbtn" id="watchBtn" title="Watchlist — your saved coins">★</button>
       <div class="walletpill" id="walletPill" title="Wallet"><span class="dot off"></span><b id="solBal">Connect</b></div>
       <button class="iconbtn clipbtn" id="clipFarmBtn" data-icon="1" title="Clip farm — record a shareable SlimeWire clip (works on phone too)">🎬</button>
@@ -1083,6 +1089,16 @@
   // ---------- modal ----------
   function openModal(html){const m=$("#modal");$("#modalBox").innerHTML='<button class="x" onclick="GG.closeModal()">✕</button>'+html;m.classList.add("on");}
   function closeModal(){$("#modal").classList.remove("on");}
+  const TRADE_RECENTS_KEY="slimewireFunRecents";
+  let tradeSearchTimer=null,tradeSearchRows=[],tradeSearchSeq=0;
+  function readTradeRecents(){try{const rows=JSON.parse(localStorage.getItem(TRADE_RECENTS_KEY)||"[]");return Array.isArray(rows)?rows.slice(0,8):[];}catch(e){return[];}}
+  function tradeSearchKey(row){return String((row&&(row.address||row.tokenMint||row.mint||row.key))||"").trim();}
+  function rememberTradeRecent(row){const key=tradeSearchKey(row);if(!key)return;const chain=(String(row.chain||"").toLowerCase()==="robinhood"||isRobinhoodAddress(key))?"robinhood":"solana";const item={key,chain,symbol:row.symbol||short(key),name:row.name||"",imageUrl:row.imageUrl||row.avatarUrl||""};try{const next=[item,...readTradeRecents().filter(x=>String(x.key||"").toLowerCase()!==key.toLowerCase())].slice(0,8);localStorage.setItem(TRADE_RECENTS_KEY,JSON.stringify(next));}catch(e){}}
+  function tradeSearchResultHtml(row,index){const key=tradeSearchKey(row),chain=(String(row.chain||"").toLowerCase()==="robinhood"||isRobinhoodAddress(key))?"RH":"SOL";return '<button class="trade-search-result" type="button" data-trade-search-result="'+index+'"><span><b>'+esc(row.symbol?('$'+String(row.symbol).replace(/^\$+/,"")):(row.name||short(key)))+'</b><small>'+esc((row.name?row.name+' · ':"")+short(key))+'</small></span><em>'+chain+'</em></button>';}
+  function wireTradeSearchResults(){document.querySelectorAll("[data-trade-search-result]").forEach(btn=>btn.onclick=()=>{const row=tradeSearchRows[Number(btn.dataset.tradeSearchResult)];if(!row)return;const key=tradeSearchKey(row);rememberTradeRecent(row);closeModal();go(coinRouteName(key),key);});}
+  function renderTradeSearchHome(){const body=$("#tradeSearchBody");if(!body)return;tradeSearchRows=readTradeRecents();body.innerHTML='<div class="trade-search-section"><span>Recent searches</span><div class="trade-recents">'+(tradeSearchRows.length?tradeSearchRows.map((row,i)=>'<button type="button" data-trade-search-result="'+i+'">'+esc(row.symbol||short(tradeSearchKey(row)))+'</button>').join(""):'<small class="mut">Your recent coins will appear here.</small>')+'</div></div>';wireTradeSearchResults();}
+  async function runTradeSearch(value){const query=String(value||"").trim(),body=$("#tradeSearchBody");if(!body)return;if(!query){renderTradeSearchHome();return;}const direct=query.match(/0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44}/);const seq=++tradeSearchSeq;body.innerHTML='<div class="loading" style="padding:22px"><span class="spin sm"></span></div>';const {ok,d}=await api("/api/web/token-search?q="+encodeURIComponent(query));if(seq!==tradeSearchSeq||!$("#tradeSearchBody"))return;tradeSearchRows=(ok&&d)?(d.matches||[]):[];if(direct&&!tradeSearchRows.some(row=>tradeSearchKey(row).toLowerCase()===direct[0].toLowerCase()))tradeSearchRows.unshift({key:direct[0],symbol:short(direct[0]),chain:isRobinhoodAddress(direct[0])?"robinhood":"solana"});body.innerHTML=tradeSearchRows.length?'<div class="trade-search-section"><span>Results</span><div class="trade-search-results">'+tradeSearchRows.slice(0,12).map(tradeSearchResultHtml).join("")+'</div></div>':'<div class="msg" style="padding:24px">No match. Paste the full contract address.</div>';wireTradeSearchResults();}
+  function openTradeSearch(){openModal('<h3>Trade</h3><div class="trade-search"><span>⌕</span><input id="tradeSearchInput" type="search" autocomplete="off" placeholder="Search ticker, name, Solana or 0x CA" aria-label="Search coins"></div><div id="tradeSearchBody"></div>');renderTradeSearchHome();const input=$("#tradeSearchInput");if(input){input.oninput=()=>{clearTimeout(tradeSearchTimer);tradeSearchTimer=setTimeout(()=>runTradeSearch(input.value),250);};input.onkeydown=e=>{if(e.key!=="Enter")return;e.preventDefault();const direct=input.value.trim().match(/^(0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$/);if(direct){const row={key:direct[0],symbol:short(direct[0]),chain:isRobinhoodAddress(direct[0])?"robinhood":"solana"};rememberTradeRecent(row);closeModal();go(coinRouteName(direct[0]),direct[0]);}else if(tradeSearchRows[0]){const row=tradeSearchRows[0],key=tradeSearchKey(row);rememberTradeRecent(row);closeModal();go(coinRouteName(key),key);}};setTimeout(()=>input.focus(),30);}}
   const TOOLS=[
     {ic:"💬",label:"Lounge — community chat & voice",route:"lounge"},
     {ic:"🔄",label:"Swap",route:"swap"},
@@ -1269,7 +1285,7 @@
   function coinRouteName(v){return isRobinhoodAddress(v)?"rhtrade":"trade";}
   function coinRouteHash(v){const s=String(v||"").trim();return "#"+coinRouteName(s)+"/"+s;}
   function coinRouteUrl(v){return location.origin+"/gg"+coinRouteHash(v);}
-  function openCoinRoute(v){const s=String(v||"").trim();if(s)go(coinRouteName(s),s);}
+  function openCoinRoute(v){const s=String(v||"").trim();if(s){rememberTradeRecent({key:s,chain:isRobinhoodAddress(s)?"robinhood":"solana"});go(coinRouteName(s),s);}}
   window.addEventListener("hashchange",render);
   function setActiveView(id){document.querySelectorAll(".view").forEach(v=>v.classList.toggle("on",v.id===id));}
   function setNav(route){
@@ -1454,7 +1470,7 @@
   const ORIENTATION_KEY="slimewireOrientationSeenV1";
   function orientationHtml(){
     try{if(localStorage.getItem(ORIENTATION_KEY)==="1")return"";}catch(e){}
-    return '<section class="orientation" id="orientation"><span class="eyebrow">Simple by default · powerful when opened</span><h2>Find the move. Verify the risk. Trade with control.</h2><p>Explore live Solana and Robinhood Chain tokens, understand why each one is moving, and set your exit before you enter.</p><div class="oa"><button class="primary" type="button" id="orientationExplore">Explore without a wallet</button><button type="button" id="orientationConnect">Connect to trade</button></div><div class="trustline"><a href="/how-it-works">How funds work</a><a href="/pricing">Fees before trading</a><a href="/data-freshness">Live data timestamps</a><span>Fast mode is optional</span></div></section>';
+    return '<section class="orientation" id="orientation"><span class="eyebrow">Fast trading</span><h2>Find it. Trade it.</h2><p>Solana and Robinhood coins, with every advanced tool still one tap away.</p><div class="oa"><button class="primary" type="button" id="orientationExplore">Explore market</button><button type="button" id="orientationConnect">Connect wallet</button></div></section>';
   }
   function wireOrientation(){
     const card=$("#orientation");if(!card)return;
@@ -4361,10 +4377,11 @@
   }
   $("#search").addEventListener("input",e=>{const v=e.target.value.trim();state.searchTerm=v;if(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v)||/^0x[0-9a-fA-F]{40}$/.test(v))return;if(state.route!=="trending")go("trending");else applyTrendingFilter();});
   $("#search").addEventListener("keydown",e=>{if(e.key==="Enter"){if(tryOpenCa(e.target.value)){e.target.value="";state.searchTerm="";applyTrendingFilter&&applyTrendingFilter();}}});
-  document.addEventListener("keydown",e=>{if(e.key==="/"&&document.activeElement.tagName!=="INPUT"){e.preventDefault();$("#search").focus();}});
+  document.addEventListener("keydown",e=>{if(e.key==="/"&&document.activeElement.tagName!=="INPUT"){e.preventDefault();openTradeSearch();}});
   document.querySelectorAll("#nav a[data-route]").forEach(a=>a.onclick=e=>{e.preventDefault();go(a.dataset.route);});
   document.querySelectorAll("#botnav button[data-route]").forEach(b=>b.onclick=()=>go(b.dataset.route));
-  document.querySelectorAll("[data-trade-entry]").forEach(b=>b.onclick=()=>{if(state.route!=="trending")go("trending");setTimeout(()=>{const s=$("#search");if(s){s.focus();s.select();toast("Search a token or paste its contract address");}},50);});
+  document.querySelectorAll("[data-trade-entry]").forEach(b=>b.onclick=openTradeSearch);
+  $("#search").onclick=openTradeSearch;
   document.querySelectorAll("#botnav button[data-tools]").forEach(b=>b.onclick=()=>openToolsSheet());
   $("#walletPill").onclick=()=>go("wallet");
   // ★ Watchlist — top-bar shortcut straight to your saved coins (also the ★ Watchlist tab on Trending).

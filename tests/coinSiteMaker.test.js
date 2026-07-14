@@ -189,7 +189,7 @@ test("retired site maker stays out of both web shells", () => {
     assert.match(html, /location\.pathname\.match\(\/\^\\\/ca\\\//);
     assert.match(html, /location\.replace\(`\/coin-site\?project=/);
     assert.match(html, /aria-label="Search token or paste contract address"/);
-    assert.match(html, /placeholder="Search token or paste contract"/);
+    assert.match(html, /placeholder="Search or paste CA"/);
     assert.doesNotMatch(html, /id="pasteCa"/);
   }
 });

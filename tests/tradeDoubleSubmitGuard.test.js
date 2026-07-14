@@ -26,6 +26,15 @@ test("main website mirrors stay identical", () => {
   assert.equal(indexSource, ggSource, "index.html and gg.html drifted; shared site fixes must ship together");
 });
 
+test("Trade opens the focused cross-chain search with shared recent coins", () => {
+  assert.match(ggSource, /function openTradeSearch\(/);
+  assert.match(ggSource, /TRADE_RECENTS_KEY="slimewireFunRecents"/);
+  assert.match(ggSource, /Search ticker, name, Solana or 0x CA/);
+  assert.match(ggSource, /document\.querySelectorAll\("\[data-trade-entry\]"\)\.forEach\(b=>b\.onclick=openTradeSearch\)/);
+  assert.match(ggSource, /<span>Recent searches<\/span>/);
+  assert.doesNotMatch(ggSource, /Fees before trading/);
+});
+
 test("profile login, referral tracking, and Robinhood artwork stay complete", () => {
   assert.match(ggSource, /id="createAccountBtn"/);
   assert.match(ggSource, /function createAccountModal\(/);
