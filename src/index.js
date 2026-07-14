@@ -9449,7 +9449,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     if (request.method === "GET" && pathname === "/api/web/cash/assets") {
       try {
-        sendWebJson(request, response, 200, { ok: true, ...(await webCashAssets(auth.userId)) });
+        sendWebJson(request, response, 200, { ok: true, ...(await webCashAssets(auth.userId, {
+          walletIndex: requestUrl.searchParams.get("walletIndex")
+        })) });
       } catch (error) {
         sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) });
       }
@@ -59552,9 +59554,13 @@ function normalizeCashHandle(value) {
   return handle;
 }
 
-async function cashPrimaryWallet(userId) {
+async function cashPrimaryWallet(userId, walletIndex = null) {
   const store = await readWalletStore();
-  const wallets = walletsForOwner(store, userId).filter((wallet) => !wallet.volumeBot && !wallet.ephemeral && !wallet.sessionWallet);
+  const owned = walletsForOwner(store, userId);
+  const wallets = owned.filter((wallet) => !wallet.volumeBot && !wallet.ephemeral && !wallet.sessionWallet);
+  const requestedIndex = Number.parseInt(String(walletIndex || ""), 10);
+  const requested = Number.isInteger(requestedIndex) && requestedIndex > 0 ? owned[requestedIndex - 1] : null;
+  if (requested && wallets.some((wallet) => wallet.publicKey === requested.publicKey)) return requested;
   return wallets[0] || null;
 }
 
@@ -59873,7 +59879,7 @@ function clientCashRequest(row, { includeToken = false } = {}) {
 }
 
 async function createCashRequest(userId, body = {}) {
-  const wallet = await cashPrimaryWallet(userId);
+  const wallet = await cashPrimaryWallet(userId, body.walletIndex || body.fromWalletIndex);
   if (!wallet) {
     const error = new Error("Create your SlimeCash wallet first.");
     error.statusCode = 404;
@@ -63404,8 +63410,20 @@ async function removeWebWallets(userId, body = {}) {
         throw error;
       }
       return wallet;
-    });
+  });
   const selectedPublicKeys = new Set(selected.map((wallet) => wallet.publicKey));
+  const managedWallets = owned.filter((wallet) => !wallet.volumeBot && !wallet.ephemeral && !wallet.sessionWallet);
+  const mainWallet = managedWallets[0];
+  if (mainWallet && selectedPublicKeys.has(mainWallet.publicKey)) {
+    const error = new Error("Your Main wallet stays with your account. Choose another wallet to remove.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (managedWallets.length && !managedWallets.some((wallet) => !selectedPublicKeys.has(wallet.publicKey))) {
+    const error = new Error("Keep at least one wallet with your account.");
+    error.statusCode = 400;
+    throw error;
+  }
   const downloads = webBackupDownloadsForWallets(
     userId,
     selected,
@@ -69377,10 +69395,15 @@ async function webSplitCreatorFeesCore(userId, body = {}) {
 // Fee is charged silently (owner call 2026-07-10, same rule as PvP perp fees).
 // RH-chain trades already charge this policy in ETH and auto-sweep to the same
 // SOL fee wallet via rhSweepFeesToSol.
-async function webCashAssets(userId) {
+async function webCashAssets(userId, options = {}) {
   const store = await readWalletStore();
   const owned = walletsForOwner(store, userId);
-  const wallet = owned.find((row) => !row.volumeBot && !row.ephemeral && !row.sessionWallet);
+  const managedWallets = owned.filter((row) => !row.volumeBot && !row.ephemeral && !row.sessionWallet);
+  const requestedIndex = Number.parseInt(String(options.walletIndex || ""), 10);
+  const requested = Number.isInteger(requestedIndex) && requestedIndex > 0 ? owned[requestedIndex - 1] : null;
+  const wallet = requested && managedWallets.some((row) => row.publicKey === requested.publicKey)
+    ? requested
+    : managedWallets[0];
   if (!wallet) {
     const error = new Error("Create your SlimeCash wallet first.");
     error.statusCode = 404;
@@ -69656,7 +69679,7 @@ async function webCashConvertCore(userId, body = {}) {
   const fromSpec = CASH_CONVERT_ASSETS[from];
   const toSpec = CASH_CONVERT_ASSETS[to];
   if (!fromSpec || !toSpec || from === to) throw new Error("Pick two different assets from SOL, USDC, and PYUSD.");
-  const wallet = await cashPrimaryWallet(userId);
+  const wallet = await cashPrimaryWallet(userId, body.walletIndex || body.fromWalletIndex);
   if (!wallet) {
     const error = new Error("Create your SlimeCash wallet first.");
     error.statusCode = 404;

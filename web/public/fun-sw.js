@@ -1,10 +1,10 @@
 /* SlimeWire Fun: separate PWA shell and push worker. */
-const FUN_CACHE = "slimewire-fun-v6";
+const FUN_CACHE = "slimewire-fun-v7";
 const FUN_SHELL = [
   "/fun/",
   "/fun.html",
-  "/fun.css?v=10",
-  "/fun.js?v=19",
+  "/fun.css?v=11",
+  "/fun.js?v=20",
   "/fun-manifest.webmanifest?v=2",
   "/config.js",
   "/assets/slimewire/fun-app-icon-192.png",

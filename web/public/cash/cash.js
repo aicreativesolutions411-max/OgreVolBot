@@ -12,6 +12,7 @@
   const SECURITY_KEY = "slimecashSecurity";
   const NOTIFICATIONS_KEY = "slimecashNotifications";
   const REQUESTS_KEY = "slimecashRequests";
+  const ACTIVE_WALLET_KEY = "slimecashActiveWalletIndex";
   const API_BASE = (window.OGRE_PORTAL_CONFIG && window.OGRE_PORTAL_CONFIG.apiBase)
     || (/^(?:www\.)?slimewire\.org$/i.test(location.hostname) ? "https://app.slimewire.org" : "");
   const WSOL_MINT = "So11111111111111111111111111111111111111112";
@@ -20,7 +21,8 @@
 
   const state = {
     token: localStorage.getItem(TOKEN_KEY) || "",
-    wallet: null,          // { index, publicKey }
+    wallet: null,          // { index, publicKey, label }
+    wallets: [],
     lamports: null,
     usdcRaw: null,
     usdc: 0,
@@ -387,22 +389,99 @@
     let result = await get("/api/web/wallets");
     if (result.status === 401) { setToken(""); return null; }
     if (!result.ok) return null;
-    let rows = (result.data.wallets || []).filter((row) => !row.volumeBot && !row.sessionWallet);
+    let rows = (result.data.wallets || []).filter((row) => !row.volumeBot && !row.ephemeral && !row.sessionWallet);
     if (!rows.length) {
       const created = await post("/api/web/wallets/create", { label: "SlimeCash", count: 1 });
       if (!created.ok) { toast(created.data.error || "Could not create a wallet.", true); return null; }
       downloadWalletFiles(created.data.downloads);
       // The create response already has the new wallet. Paint immediately
       // instead of waiting on another wallet-store + balance round trip.
-      rows = (created.data.wallets || []).filter((row) => !row.volumeBot && !row.sessionWallet);
+      rows = (created.data.wallets || []).filter((row) => !row.volumeBot && !row.ephemeral && !row.sessionWallet);
       if (!rows.length) {
         result = await get("/api/web/wallets");
-        rows = (result.data.wallets || []).filter((row) => !row.volumeBot && !row.sessionWallet);
+        rows = (result.data.wallets || []).filter((row) => !row.volumeBot && !row.ephemeral && !row.sessionWallet);
       }
     }
     if (!rows.length) return null;
-    state.wallet = { index: rows[0].index, publicKey: rows[0].publicKey };
+    state.wallets = rows;
+    const savedIndex = Number(localStorage.getItem(ACTIVE_WALLET_KEY));
+    const selected = rows.find((row) => Number(row.index) === savedIndex) || rows[0];
+    state.wallet = { index: selected.index, publicKey: selected.publicKey, label: selected.label || "" };
     return state.wallet;
+  }
+
+  function renderCashWallets() {
+    const list = $("cashWalletList");
+    if (!list) return;
+    const mainIndex = Math.min(...state.wallets.map((wallet) => Number(wallet.index)));
+    list.innerHTML = state.wallets.map((wallet) => {
+      const main = Number(wallet.index) === mainIndex;
+      const active = Number(wallet.index) === Number(state.wallet?.index);
+      return `<div class="cash-wallet-row ${active ? "active" : ""}"><div class="cash-wallet-copy"><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${main ? " <em>Main</em>" : ""}${active ? " <em>Using</em>" : ""}</b><span>${escapeHtml(shortAddress(wallet.publicKey))}</span><input data-cash-wallet-name="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40" aria-label="Wallet name"></div><div class="cash-wallet-row-actions"><button type="button" data-cash-wallet-use="${wallet.index}">${active ? "Selected" : "Use"}</button><button type="button" data-cash-wallet-rename="${wallet.index}">Rename</button>${main ? '<button type="button" disabled title="Your Main wallet stays with your account">Main</button>' : `<button class="danger" type="button" data-cash-wallet-remove="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button>`}</div></div>`;
+    }).join("");
+  }
+
+  async function openCashWallets() {
+    if (!(await ensureWallet())) { toast("Could not load wallets.", true); return; }
+    renderCashWallets();
+    $("cashWalletStatus").textContent = "";
+    openSheet("wallets");
+  }
+
+  async function selectCashWallet(index) {
+    const wallet = state.wallets.find((item) => Number(item.index) === Number(index));
+    if (!wallet) return;
+    state.wallet = { index: wallet.index, publicKey: wallet.publicKey, label: wallet.label || "" };
+    localStorage.setItem(ACTIVE_WALLET_KEY, String(wallet.index));
+    state.lamports = state.usdcRaw = state.pyusdRaw = null;
+    await refreshBalance({ silent: true });
+    renderProfile();
+    renderCashWallets();
+    $("cashWalletStatus").textContent = `${wallet.label || `Wallet ${wallet.index}`} is now active.`;
+  }
+
+  async function renameCashWallet(index) {
+    const input = document.querySelector(`[data-cash-wallet-name="${index}"]`);
+    const label = String(input?.value || "").trim();
+    if (!label) { toast("Enter a wallet name.", true); return; }
+    const result = await post("/api/web/wallets/rename", { walletIndex: Number(index), label });
+    if (!result.ok || !result.data?.ok) { toast(result.data?.error || "Could not rename wallet.", true); return; }
+    await ensureWallet();
+    renderCashWallets();
+    renderProfile();
+    $("cashWalletStatus").textContent = "Wallet renamed.";
+  }
+
+  async function addCashWallet() {
+    const button = $("addCashWalletBtn");
+    button.disabled = true; button.textContent = "Adding…";
+    const result = await post("/api/web/wallets/create", { label: "SlimeCash wallet", count: 1 });
+    button.disabled = false; button.textContent = "Add wallet";
+    if (!result.ok || !result.data?.ok) { toast(result.data?.error || "Could not add wallet.", true); return; }
+    downloadWalletFiles(result.data.downloads);
+    const created = (result.data.wallets || []).at(-1);
+    if (created?.index) localStorage.setItem(ACTIVE_WALLET_KEY, String(created.index));
+    await ensureWallet();
+    await refreshBalance({ silent: true });
+    renderCashWallets();
+    renderProfile();
+    $("cashWalletStatus").textContent = "New wallet created and backups downloaded.";
+  }
+
+  async function removeCashWallet(index, publicKey) {
+    const mainIndex = Math.min(...state.wallets.map((wallet) => Number(wallet.index)));
+    if (Number(index) === mainIndex) { toast("Your Main wallet stays with your account.", true); return; }
+    const wallet = state.wallets.find((item) => Number(item.index) === Number(index));
+    if (!wallet || !confirm(`Back up and remove ${wallet.label || `Wallet ${index}`}? Its backup will download first; no funds move.`)) return;
+    const result = await post("/api/web/wallets/remove", { publicKeys: [publicKey] });
+    if (!result.ok || !result.data?.ok) { toast(result.data?.error || "Could not remove wallet.", true); return; }
+    downloadWalletFiles(result.data.removed?.downloads);
+    if (Number(state.wallet?.index) === Number(index)) localStorage.removeItem(ACTIVE_WALLET_KEY);
+    await ensureWallet();
+    await refreshBalance({ silent: true });
+    renderCashWallets();
+    renderProfile();
+    $("cashWalletStatus").textContent = "Wallet backed up and removed.";
   }
 
   /* ---------------- pricing (client-side DexScreener, same pattern as the terminal) ---------------- */
@@ -440,7 +519,8 @@
   /* ---------------- balance ---------------- */
   async function refreshBalance({ silent = false } = {}) {
     if (!state.token) return;
-    const result = await get("/api/web/cash/assets");
+    const walletIndex = state.wallet?.index ? `?walletIndex=${encodeURIComponent(state.wallet.index)}` : "";
+    const result = await get(`/api/web/cash/assets${walletIndex}`);
     if (result.status === 401) { setToken(""); showOnboard(); return; }
     if (!result.ok) { if (!silent) toast(result.data.error || "Could not load balance.", true); return; }
     const previousSol = state.lamports;
@@ -451,7 +531,7 @@
     state.usdc = Number(result.data.assets?.USDC?.uiAmount || 0);
     state.pyusdRaw = Number(result.data.assets?.PYUSD?.rawAmount || 0);
     state.pyusd = Number(result.data.assets?.PYUSD?.uiAmount || 0);
-    if (result.data.wallet?.address) state.wallet = { index: result.data.wallet.index, publicKey: result.data.wallet.address };
+    if (result.data.wallet?.address) state.wallet = { index: result.data.wallet.index, publicKey: result.data.wallet.address, label: result.data.wallet.label || "" };
     renderBalance();
     if (previousUsdc !== null && state.usdcRaw > previousUsdc) {
       const gainedUsdc = (state.usdcRaw - previousUsdc) / 1e6;
@@ -1075,7 +1155,7 @@
     if (!state.wallet) return;
     const amount = $("receiveAmount").value.trim();
     if (!(Number(amount) > 0)) { $("receiveStatus").textContent = "Enter an exact amount to track this request."; $("receiveStatus").className = "status bad"; return; }
-    const result = await post("/api/web/cash/requests", { asset: state.receiveAsset, amount, note: "SlimeCash payment request" });
+    const result = await post("/api/web/cash/requests", { walletIndex: state.wallet?.index || 1, asset: state.receiveAsset, amount, note: "SlimeCash payment request" });
     if (!result.ok) {
       const fallback = { id: crypto.randomUUID(), asset: state.receiveAsset, amount, uri: receiveRequestUrl(), shareUrl: receiveRequestUrl(), status: "untracked", createdAt: Date.now() };
       const rows = [fallback, ...localRequests()].slice(0, 30); writeLocalJson(REQUESTS_KEY, rows);
@@ -1348,6 +1428,22 @@
     renderFundingPreview();
   });
   $("copyAddressBtn").addEventListener("click", () => state.wallet && copyText(state.wallet.publicKey));
+  $("walletsBtn").addEventListener("click", openCashWallets);
+  $("addCashWalletBtn").addEventListener("click", addCashWallet);
+  $("backupCashWalletsBtn").addEventListener("click", async () => {
+    const button = $("backupCashWalletsBtn");
+    button.disabled = true; button.textContent = "Preparing…";
+    const backedUp = await backupCashAccount({ includeWallets: true, quiet: true });
+    button.disabled = false; button.textContent = "Back up wallets";
+    $("cashWalletStatus").textContent = backedUp ? "Account and wallet backups downloaded." : "Could not prepare backups.";
+  });
+  $("cashWalletList").addEventListener("click", (event) => {
+    const button = event.target.closest("button");
+    if (!button) return;
+    if (button.dataset.cashWalletUse) selectCashWallet(button.dataset.cashWalletUse);
+    if (button.dataset.cashWalletRename) renameCashWallet(button.dataset.cashWalletRename);
+    if (button.dataset.cashWalletRemove) removeCashWallet(button.dataset.cashWalletRemove, button.dataset.walletKey);
+  });
   $("avatarBtn").addEventListener("click", () => switchTab("more"));
 
   $("payCard").addEventListener("click", () => {
@@ -1511,6 +1607,7 @@
     button.disabled = true;
     button.textContent = "Converting…";
     const result = await post("/api/web/cash/convert", {
+      walletIndex: state.wallet?.index || 1,
       from: state.convertFrom,
       to: state.convertTo,
       amount: String(amount),
