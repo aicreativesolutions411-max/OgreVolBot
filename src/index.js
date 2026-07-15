@@ -142,6 +142,8 @@ import {
   devInfoSummaryFromResult
 } from "./lib/devInfo.js";
 import {
+  ComputeBudgetInstruction,
+  ComputeBudgetProgram,
   Connection,
   Keypair,
   LAMPORTS_PER_SOL,
@@ -63705,7 +63707,7 @@ function verifySessionWalletFundingTransaction(tx, order) {
   if (!tx?.feePayer?.equals(source)) {
     throw new Error("Wallet funding transaction has the wrong source wallet.");
   }
-  if (!Array.isArray(tx.instructions) || tx.instructions.length !== 1) {
+  if (!Array.isArray(tx.instructions) || tx.instructions.length < 1 || tx.instructions.length > 3) {
     throw new Error("Wallet funding transaction was changed. Start again.");
   }
   if (tx.recentBlockhash !== order.blockhash) {
@@ -63715,18 +63717,56 @@ function verifySessionWalletFundingTransaction(tx, order) {
   if (!signer?.signature) {
     throw new Error("Wallet funding transaction is missing the connected wallet signature.");
   }
-  const hasFundingTransfer = tx.instructions.some((instruction) => {
-    if (!instruction.programId.equals(SystemProgram.programId)) return false;
-    try {
-      const transfer = SystemInstruction.decodeTransfer(instruction);
-      return transfer.fromPubkey.equals(source)
-        && transfer.toPubkey.equals(destination)
-        && BigInt(transfer.lamports) === amountLamports;
-    } catch {
-      return false;
+  const transfers = [];
+  let computeUnitLimit = 200_000n;
+  let computeUnitPrice = 0n;
+  let sawComputeUnitLimit = false;
+  let sawComputeUnitPrice = false;
+  for (const instruction of tx.instructions) {
+    if (instruction.programId.equals(SystemProgram.programId)) {
+      try {
+        transfers.push(SystemInstruction.decodeTransfer(instruction));
+      } catch {
+        throw new Error("Wallet funding transaction was changed. Start again.");
+      }
+      continue;
     }
-  });
-  if (!hasFundingTransfer) {
+    if (!instruction.programId.equals(ComputeBudgetProgram.programId)) {
+      throw new Error("Wallet funding transaction was changed. Start again.");
+    }
+    let type = "";
+    try { type = ComputeBudgetInstruction.decodeInstructionType(instruction); }
+    catch { throw new Error("Wallet funding transaction was changed. Start again."); }
+    if (type === "SetComputeUnitLimit" && !sawComputeUnitLimit) {
+      const units = Number(ComputeBudgetInstruction.decodeSetComputeUnitLimit(instruction).units);
+      if (!Number.isInteger(units) || units < 1 || units > 1_400_000) {
+        throw new Error("Wallet funding priority fee settings are unsafe. Start again.");
+      }
+      computeUnitLimit = BigInt(units);
+      sawComputeUnitLimit = true;
+      continue;
+    }
+    if (type === "SetComputeUnitPrice" && !sawComputeUnitPrice) {
+      const microLamports = BigInt(ComputeBudgetInstruction.decodeSetComputeUnitPrice(instruction).microLamports);
+      if (microLamports < 0n) throw new Error("Wallet funding priority fee settings are unsafe. Start again.");
+      computeUnitPrice = microLamports;
+      sawComputeUnitPrice = true;
+      continue;
+    }
+    throw new Error("Wallet funding transaction was changed. Start again.");
+  }
+  const maxPriorityFeeLamports = 1_000_000n;
+  const priorityFeeLamports = (computeUnitLimit * computeUnitPrice + 999_999n) / 1_000_000n;
+  if (priorityFeeLamports > maxPriorityFeeLamports) {
+    throw new Error("Wallet funding priority fee settings are unsafe. Start again.");
+  }
+  if (transfers.length !== 1) {
+    throw new Error("Wallet funding transaction was changed. Start again.");
+  }
+  const transfer = transfers[0];
+  if (!transfer.fromPubkey.equals(source)
+      || !transfer.toPubkey.equals(destination)
+      || BigInt(transfer.lamports) !== amountLamports) {
     throw new Error("Wallet funding transaction does not match the approved amount.");
   }
 }

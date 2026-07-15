@@ -153,9 +153,11 @@ test("backend session wallets verify the funding transaction before becoming aut
   assert.match(functionBody(serverSource, "createWebSessionWalletOrder"), /SystemProgram\.transfer/);
   assert.match(functionBody(serverSource, "createWebSessionWalletOrder"), /serialize\(\{ requireAllSignatures: false, verifySignatures: false \}\)/);
   assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /feePayer/);
-  assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /tx\.instructions\.length !== 1/);
+  assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /ComputeBudgetInstruction\.decodeInstructionType/);
+  assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /maxPriorityFeeLamports/);
+  assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /transfers\.length !== 1/);
   assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /SystemInstruction\.decodeTransfer/);
-  assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /BigInt\(transfer\.lamports\) === amountLamports/);
+  assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /BigInt\(transfer\.lamports\) !== amountLamports/);
   assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /signature/);
   assert.match(functionBody(serverSource, "executeWebSessionWalletFunding"), /sendRawTransaction/);
   assert.match(functionBody(serverSource, "executeWebSessionWalletFunding"), /confirmTransaction/);

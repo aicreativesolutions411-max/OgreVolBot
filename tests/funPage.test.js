@@ -102,8 +102,10 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
   assert.match(server, /destinationPublicKey \|\| order\.sessionWalletPublicKey/);
   assert.match(server, /volumeBot: Boolean\(wallet\.volumeBot \|\| wallet\.ephemeral\)/);
   assert.match(js, /\.filter\(\(wallet\) => !wallet\.volumeBot\)/);
-  assert.match(server, /tx\.instructions\.length !== 1/);
-  assert.match(server, /BigInt\(transfer\.lamports\) === amountLamports/);
+  assert.match(server, /ComputeBudgetInstruction\.decodeInstructionType/);
+  assert.match(server, /priorityFeeLamports > maxPriorityFeeLamports/);
+  assert.match(server, /transfers\.length !== 1/);
+  assert.match(server, /BigInt\(transfer\.lamports\) !== amountLamports/);
 });
 
 test("/fun and SlimeCash share the mobile shell", () => {
