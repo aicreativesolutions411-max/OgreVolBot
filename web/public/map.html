@@ -140,33 +140,35 @@ function edgeX(s,t){const dx=(t.x||0)-(s.x||0),dy=(t.y||0)-(s.y||0),d=Math.hypot
 function edgeY(s,t){const dx=(t.x||0)-(s.x||0),dy=(t.y||0)-(s.y||0),d=Math.hypot(dx,dy)||1;return (t.y||0)-dy/d*((t.r||10)+4)}
 
 // _silent = a background auto-refresh: never flash the spinner and never replace a working map with an error.
-async function loadTarget(kind,id,mode,push,label,_retry,_silent){
-  if(!id)return; mode=mode||'bags'; if(!_silent)showLoading();
-  const q=kind==='coin'?('ca='+encodeURIComponent(id)):('wallet='+encodeURIComponent(id)+'&mode='+mode);
+async function loadTarget(kind,id,mode,push,label,_retry,_silent,chainHint){
+  if(!id)return; mode=mode||'bags'; chainHint=(chainHint==='ethereum'||/\.eth$/i.test(id))?'ethereum':''; if(chainHint)mode='funds'; if(!_silent)showLoading();
+  const chainQ=chainHint?'&chain=ethereum':'';
+  const q=(kind==='coin'?('ca='+encodeURIComponent(id)):('wallet='+encodeURIComponent(id)+'&mode='+mode))+chainQ;
   let j=null;
   try{
     const ctl=('AbortController'in window)?new AbortController():null; const to=ctl?setTimeout(()=>ctl.abort(),20000):0;
     const res=await fetch(API_BASE+'/api/map?'+q,ctl?{signal:ctl.signal}:{}); if(to)clearTimeout(to);
     j=await res.json();
   }catch(e){
-    if(!_retry){await new Promise(r=>setTimeout(r,1000));return loadTarget(kind,id,mode,push,label,true,_silent)}
-    if(!_silent)showError('the network dropped — tap Start over to retry'); scheduleRefresh(kind,id,mode); return;
+    if(!_retry){await new Promise(r=>setTimeout(r,1000));return loadTarget(kind,id,mode,push,label,true,_silent,chainHint)}
+    if(!_silent)showError('the network dropped — tap Start over to retry'); scheduleRefresh(kind,id,mode,chainHint); return;
   }
   if(!j||!j.ok||!j.map){
-    if(!_retry){await new Promise(r=>setTimeout(r,1000));return loadTarget(kind,id,mode,push,label,true,_silent)}
-    if(!_silent)showError((j&&j.error)||'no map data yet'); scheduleRefresh(kind,id,mode); return;
+    if(!_retry){await new Promise(r=>setTimeout(r,1000));return loadTarget(kind,id,mode,push,label,true,_silent,chainHint)}
+    if(!_silent)showError((j&&j.error)||'no map data yet'); scheduleRefresh(kind,id,mode,chainHint); return;
   }
-  if(push!==false)crumbs.push({kind,id,mode,label:label||j.map.subject});
-  else if(crumbs.length)crumbs[crumbs.length-1]={kind,id,mode,label:j.map.subject};
+  chainHint=j.map.chain==='ethereum'?'ethereum':chainHint;
+  if(push!==false)crumbs.push({kind,id,mode,label:label||j.map.subject,chainHint});
+  else if(crumbs.length)crumbs[crumbs.length-1]={kind,id,mode,label:j.map.subject,chainHint};
   // RENDER separate from fetch: a draw error (e.g. D3 missing) must NOT be reported as "chain is slow".
-  try{ render(j.map); }catch(e){ if(!_silent)showError('couldn’t draw the map (display error) — tap Start over'); try{console.error(e)}catch(_){} scheduleRefresh(kind,id,mode); return; }
-  scheduleRefresh(kind,id,mode);
-  history.replaceState(null,'',kind==='coin'?('/map?ca='+encodeURIComponent(id)+(mode==='funds'?'&mode=funds':'')):('/map?wallet='+encodeURIComponent(id)+'&mode='+mode));
+  try{ render(j.map); }catch(e){ if(!_silent)showError('couldn’t draw the map (display error) — tap Start over'); try{console.error(e)}catch(_){} scheduleRefresh(kind,id,mode,chainHint); return; }
+  scheduleRefresh(kind,id,mode,chainHint);
+  history.replaceState(null,'',kind==='coin'?('/map?ca='+encodeURIComponent(id)+(mode==='funds'?'&mode=funds':'')+chainQ):('/map?wallet='+encodeURIComponent(id)+'&mode='+mode+chainQ));
 }
-function scheduleRefresh(kind,id,mode){if(refreshTimer)clearTimeout(refreshTimer);refreshTimer=setTimeout(()=>loadTarget(kind,id,mode,false,null,false,true),30000)}
+function scheduleRefresh(kind,id,mode,chainHint){if(refreshTimer)clearTimeout(refreshTimer);refreshTimer=setTimeout(()=>loadTarget(kind,id,mode,false,null,false,true,chainHint),30000)}
 function showLoading(){overlay.className='';overlay.innerHTML='<div class="spin"></div><p>Reading the chain…</p>'}
 function showError(m){overlay.className='';overlay.innerHTML='<h1>🫥</h1><p>'+esc(m)+'</p><button class="ghost" onclick="location.href=\'/map\'">Start over</button>'}
-function drawCrumbs(){const el=document.getElementById('crumbs');el.innerHTML=crumbs.map((c,i)=>'<span class="c" data-i="'+i+'">'+(i===0?'🗺️ ':'')+esc(c.label)+'</span>').join('<span style="opacity:.5">›</span>');[...el.querySelectorAll('.c')].forEach(n=>n.onclick=()=>{const i=+n.dataset.i,c=crumbs[i];crumbs=crumbs.slice(0,i);loadTarget(c.kind,c.id,c.mode,true,c.label)})}
+function drawCrumbs(){const el=document.getElementById('crumbs');el.innerHTML=crumbs.map((c,i)=>'<span class="c" data-i="'+i+'">'+(i===0?'🗺️ ':'')+esc(c.label)+'</span>').join('<span style="opacity:.5">›</span>');[...el.querySelectorAll('.c')].forEach(n=>n.onclick=()=>{const i=+n.dataset.i,c=crumbs[i];crumbs=crumbs.slice(0,i);loadTarget(c.kind,c.id,c.mode,true,c.label,false,false,c.chainHint)})}
 function drawStats(map){
   const st=(map.stats||[]).slice();
   if(map&&map.kind==='token'&&!st.some(s=>s.label==='HOLDERS'))st.splice(Math.min(4,st.length),0,{label:'HOLDERS',value:String((map.nodes||[]).length||'--')});
@@ -223,14 +225,14 @@ function drawSide(map){
   const kl=document.getElementById('kolist');
   const shown=map.kind==='wallet'?(map.nodes||[]).slice(0,24):(kols.length?kols:rest);
   kl.innerHTML=shown.map(n=>row(n, map.kind==='token'||map.mode==='funds'?n.wallet:(n.mint||''))).join('')||'<div class="sub" style="color:var(--dim);font-size:12px">no indexed activity found yet</div>';
-  [...kl.querySelectorAll('.krow')].forEach(r=>r.onclick=()=>{const t=r.dataset.t;if(!(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t)||/^0x[0-9a-f]{40}$/i.test(t)))return;const funds=map.mode==='funds';loadTarget(map.kind==='token'||funds?'wallet':'coin',t,funds?'funds':'bags',true)});
+  [...kl.querySelectorAll('.krow')].forEach(r=>r.onclick=()=>{const t=r.dataset.t;if(!(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t)||/^0x[0-9a-f]{40}$/i.test(t)))return;const funds=map.mode==='funds';loadTarget(map.kind==='token'||funds?'wallet':'coin',t,funds?'funds':'bags',true,null,false,false,map.chain==='ethereum'?'ethereum':'')});
 }
 function fmt(n){n=+n||0;if(n>=1e9)return(n/1e9).toFixed(1)+'B';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(1)+'K';return Math.round(n)}
 function drawToggleFoot(map){
   const t=document.getElementById('toggle'),f=document.getElementById('foot');
   if(map.kind==='wallet'){
-    t.innerHTML='<button class="ghost" data-m="bags">💰 Bags</button><button class="ghost" data-m="network">🕸 Trades</button><button class="ghost" data-m="funds">💸 Fund flow</button>';
-    [...t.querySelectorAll('button')].forEach(b=>{if(b.dataset.m===map.mode)b.style.borderColor='var(--slime)';b.onclick=()=>loadTarget('wallet',map.wallet,b.dataset.m,false)});
+    t.innerHTML=map.chain==='ethereum'?'<button class="ghost" data-m="funds">💸 Ethereum fund flow</button>':'<button class="ghost" data-m="bags">💰 Bags</button><button class="ghost" data-m="network">🕸 Trades</button><button class="ghost" data-m="funds">💸 Fund flow</button>';
+    [...t.querySelectorAll('button')].forEach(b=>{if(b.dataset.m===map.mode)b.style.borderColor='var(--slime)';b.onclick=()=>loadTarget('wallet',map.domain||map.wallet,b.dataset.m,false,null,false,false,map.chain==='ethereum'?'ethereum':'')});
   }else t.innerHTML='';
   const L=[];if(map.mint){L.push('<a class="pill" href="https://www.slimewire.org/t?ca='+map.mint+'">⚡ Trade</a>');L.push('<a class="pill" href="'+API_BASE+'/api/map/img?ca='+map.mint+'">🖼 Card</a>')}f.innerHTML=L.join('');
 }
@@ -283,7 +285,7 @@ function render(map){
   // interactions
   node.on('mousemove',(ev,d)=>{const r=stage.getBoundingClientRect();tip.style.opacity=1;tip.style.left=(ev.clientX-r.left+14)+'px';tip.style.top=(ev.clientY-r.top+14)+'px';tip.innerHTML='<div class="n">'+esc(d.name||short(d.wallet)||'')+'</div><div class="s">'+(map.kind==='wallet'?esc(d.flowLabel||(map.mode==='funds'?'public transfer':'public activity')):(d.pct!=null?'holds '+(+d.pct).toFixed(2)+'%':'')+(d.usd?' · $'+fmt(d.usd):''))+(d.wallet?'<br>'+short(d.wallet):'')+'<br>tap to drill in →</div>'})
       .on('mouseleave',()=>tip.style.opacity=0)
-      .on('click',(ev,d)=>{tip.style.opacity=0;const funds=map.mode==='funds',tk=(map.kind==='token'||funds)?'wallet':'coin',ti=(map.kind==='token'||funds)?d.wallet:d.mint;if(ti&&(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(ti)||/^0x[0-9a-f]{40}$/i.test(ti)))loadTarget(tk,ti,funds?'funds':'bags',true,d.name)});
+      .on('click',(ev,d)=>{tip.style.opacity=0;const funds=map.mode==='funds',tk=(map.kind==='token'||funds)?'wallet':'coin',ti=(map.kind==='token'||funds)?d.wallet:d.mint;if(ti&&(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(ti)||/^0x[0-9a-f]{40}$/i.test(ti)))loadTarget(tk,ti,funds?'funds':'bags',true,d.name,false,false,map.chain==='ethereum'?'ethereum':'')});
   node.call(d3.drag().on('start',(ev,d)=>{if(!ev.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y}).on('drag',(ev,d)=>{d.fx=ev.x;d.fy=ev.y}).on('end',(ev,d)=>{if(!ev.active)sim.alphaTarget(0);d.fx=null;d.fy=null}));
   // force sim
   sim=d3.forceSimulation(all)
@@ -380,10 +382,10 @@ function openCluster(cl){
 }
 function closeDrill(){document.getElementById('drill').className=''}
 
-document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const v=document.getElementById('q').value.trim().replace(/^\$/,'');const sol=/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v),rh=/^0x[0-9a-f]{40}$/i.test(v),dom=/^[a-z0-9][a-z0-9._-]{0,62}\.(?:sol|eth)$/i.test(v);if(!sol&&!rh&&!dom){showError('paste a valid coin CA, wallet, .sol/.eth domain, or Robinhood 0x');return}crumbs=[];loadTarget(dom?'wallet':'coin',v,dom?'funds':'bags',true)});
-window.addEventListener('resize',()=>{const c=crumbs[crumbs.length-1];if(c)loadTarget(c.kind,c.id,c.mode,false)});
+document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const v=document.getElementById('q').value.trim().replace(/^\$/,'');const sol=/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v),rh=/^0x[0-9a-f]{40}$/i.test(v),dom=/^[a-z0-9][a-z0-9._-]{0,62}\.(?:sol|eth)$/i.test(v),eth=/\.eth$/i.test(v);if(!sol&&!rh&&!dom){showError('paste a valid coin CA, wallet, .sol/.eth domain, or Robinhood 0x');return}crumbs=[];loadTarget(dom?'wallet':'coin',v,dom?'funds':'bags',true,null,false,false,eth?'ethereum':'')});
+window.addEventListener('resize',()=>{const c=crumbs[crumbs.length-1];if(c)loadTarget(c.kind,c.id,c.mode,false,null,false,false,c.chainHint)});
 document.getElementById('drill').addEventListener('click',e=>{if(e.target.id==='drill')closeDrill()});
-(function init(){const u=new URL(location.href);const ca=u.searchParams.get('ca')||u.searchParams.get('mint'),w=u.searchParams.get('wallet')||u.searchParams.get('domain'),mode=u.searchParams.get('mode')==='network'?'network':u.searchParams.get('mode')==='funds'?'funds':'bags';if(ca)loadTarget('coin',ca,mode,true);else if(w)loadTarget('wallet',w,mode,true)})();
+(function init(){const u=new URL(location.href);const ca=u.searchParams.get('ca')||u.searchParams.get('mint'),w=u.searchParams.get('wallet')||u.searchParams.get('domain'),mode=u.searchParams.get('mode')==='network'?'network':u.searchParams.get('mode')==='funds'?'funds':'bags',chain=u.searchParams.get('chain')==='ethereum'?'ethereum':'';if(ca)loadTarget('coin',ca,mode,true,null,false,false,chain);else if(w)loadTarget('wallet',w,mode,true,null,false,false,chain||(/\.eth$/i.test(w)?'ethereum':''))})();
 </script>
 </body>
 </html>

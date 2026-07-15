@@ -3075,7 +3075,7 @@ test("KOL/wallet map: on-chain holders + ST identity, X 'map' intent + wallet ta
   assert.match(serverSource, /parseCommandWithArgument\(text, \["map", "holders"/);
   assert.match(serverSource, /async function handleMapCallback\(query, userId\)/);
   assert.match(functionBody(serverSource, "scanResearchKeyboard"), /🗺️ Holder Map/);
-  assert.match(serverSource, /\["map:", "mapw:"\][\s\S]{0,120}startsWith\(prefix\)/);
+  assert.match(serverSource, /\["map:", "mapw:", "mape:"\][\s\S]{0,120}startsWith\(prefix\)/);
   // web: public /api/map + /api/map/img BEFORE the auth gate, and /map page route
   const apiIdx = serverSource.indexOf('pathname === "/api/map"');
   const gateIdx = serverSource.indexOf("const auth = await authenticateWebRequest(request)");

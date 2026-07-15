@@ -73,6 +73,7 @@ import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, evmWalletFromSolana,
 import { getNoxaScan, fetchNoxaFeed, fetchPoolBuys, NOXA_RH } from "./lib/noxaLaunchpad.js";
 import { rhWalletScan } from "./lib/walletScan.js";
 import { ethDomainLike, resolveEthDomainToAddress } from "./lib/ensResolver.js";
+import { fetchEthereumFundFlows } from "./lib/ethereumFundMap.js";
 import { classifyRhAddress } from "./lib/rhAddressKind.js";
 import { resolveRhPoolToken, rhResolvedPoolHints } from "./lib/rhPoolResolver.js";
 import { finiteWalletNumber, normalizeSolWalletPnlSummary, normalizeSolWalletPositions } from "./lib/solWalletPnl.js";
@@ -7729,16 +7730,20 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const rawTarget = mmint || mwallet;
       const domainTarget = walletDomainLike(rawTarget);
       const mtarget = domainTarget ? await resolveWalletDomainToAddress(rawTarget).catch(() => null) : rawTarget;
-      const mIsRh = /^0x[0-9a-fA-F]{40}$/.test(mtarget);
-      if (!solanaPublicKeyLike(mtarget) && !mIsRh) { sendWebJson(request, response, 400, { ok: false, error: domainTarget ? "that wallet domain could not be resolved" : "coin, wallet, .sol, or .eth domain required" }); return; }
+      const mIsEvm = /^0x[0-9a-fA-F]{40}$/.test(mtarget);
+      const requestedChain = String(requestUrl.searchParams.get("chain") || "").toLowerCase();
+      const ethereumWallet = ethDomainLike(rawTarget) || requestedChain === "ethereum" || requestedChain === "eth";
+      if (!solanaPublicKeyLike(mtarget) && !mIsEvm) { sendWebJson(request, response, 400, { ok: false, error: domainTarget ? "that wallet domain could not be resolved" : "coin, wallet, .sol, or .eth domain required" }); return; }
       let map;
       try {
         // HARD 14s timeout so a slow chain read can never hang the request into a client "failed to load"
         // (mobile browsers bail fast, and Render 504s an idle socket). On timeout we return a clean retryable
         // message instead of a dead connection.
         map = await Promise.race([
-          (mwallet && !mmint)
-            ? (mIsRh ? buildRhWalletMap(mtarget, mmode) : buildWalletMap(mtarget, domainTarget && mmode === "bags" ? "funds" : mmode))
+          (mwallet && !mmint) || ethereumWallet
+            ? (ethereumWallet
+              ? buildEthereumWalletFundMap(mtarget, { domain: ethDomainLike(rawTarget) ? rawTarget : "" })
+              : (mIsEvm ? buildRhWalletMap(mtarget, mmode) : buildWalletMap(mtarget, domainTarget && mmode === "bags" ? "funds" : mmode)))
             : buildSubjectMap(mtarget, mmode),
           new Promise((_, rej) => setTimeout(() => rej(new Error("__map_timeout__")), 14_000)),
         ]);
@@ -7762,10 +7767,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const requestedMode = String(requestUrl.searchParams.get("mode") || "").toLowerCase();
       const gmode = requestedMode === "network" ? "network" : requestedMode === "funds" ? "funds" : "bags";
       const rawTarget = gmint || gwallet;
+      const ethereumWallet = ethDomainLike(rawTarget) || ["ethereum", "eth"].includes(String(requestUrl.searchParams.get("chain") || "").toLowerCase());
       const gtarget = walletDomainLike(rawTarget) ? await resolveWalletDomainToAddress(rawTarget).catch(() => null) : rawTarget;
       if (!solanaPublicKeyLike(gtarget) && !/^0x[0-9a-fA-F]{40}$/.test(gtarget)) { sendWebJson(request, response, 400, { ok: false, error: "ca or wallet required" }); return; }
       try {
-        const { png } = await renderSubjectMapPng(gtarget, gmode, { forceWallet: Boolean(gwallet) });
+        const { png } = await renderSubjectMapPng(gtarget, ethereumWallet ? "funds" : gmode, {
+          forceWallet: Boolean(gwallet) || ethereumWallet,
+          chainHint: ethereumWallet ? "ethereum" : "",
+          domain: ethDomainLike(rawTarget) ? rawTarget : ""
+        });
         if (!png) { sendWebJson(request, response, 404, { ok: false, error: "no map" }); return; }
         response.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "public, max-age=180" });
         response.end(png);
@@ -7844,7 +7854,14 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const am = domainTarget ? await resolveWalletDomainToAddress(rawAirdropTarget).catch(() => null) : rawAirdropTarget;
       const devParam = String(requestUrl.searchParams.get("dev") || "").trim();
       if (/^0x[0-9a-fA-F]{40}$/.test(String(am || ""))) {
-        sendWebJson(request, response, 200, { ok: false, redirect: `/map?ca=${encodeURIComponent(am)}`, error: "Robinhood Chain opens in the holder / fund-flow map" }); return;
+        const ethereumWallet = ethDomainLike(rawAirdropTarget);
+        sendWebJson(request, response, 200, {
+          ok: false,
+          redirect: ethereumWallet
+            ? `/map?wallet=${encodeURIComponent(rawAirdropTarget)}&mode=funds&chain=ethereum`
+            : `/map?ca=${encodeURIComponent(am)}`,
+          error: ethereumWallet ? "Ethereum domains open in the mainnet fund-flow map" : "Robinhood Chain opens in the holder / fund-flow map"
+        }); return;
       }
       if (!solanaPublicKeyLike(am)) { sendWebJson(request, response, 400, { ok: false, error: domainTarget ? "that wallet domain could not be resolved" : "coin, wallet, .sol, or .eth domain required" }); return; }
       try {
@@ -14566,8 +14583,8 @@ async function handleCallback(query, userId) {
     await handleTelegramLookCommand(chatId, query.message, String(query.data).slice(7)).catch(() => {});
     return;
   }
-  // 🗺️ Holder/wallet MAP (map/mapw:<addr>[:mode]) — token maps and wallet/fund-flow maps share one handler.
-  if (["map:", "mapw:"].some((prefix) => String(query.data || "").startsWith(prefix))) {
+  // 🗺️ Holder/wallet MAP (map/mapw/mape:<addr>[:mode]) — mape preserves Ethereum mainnet after ENS resolves.
+  if (["map:", "mapw:", "mape:"].some((prefix) => String(query.data || "").startsWith(prefix))) {
     if (await handleMapCallback(query, userId).catch(() => false)) return;
   }
   // 💰 AIRDROP map (drop:<mint>) — tap a coin's Airdrop button → who the dev fed + who still holds.
@@ -16084,11 +16101,11 @@ async function handleMessage(message, userId) {
   // /narrative — hot rotating meta; /grad — coins closest to graduating.
   if (parseCommandWithArgument(text, ["narrative", "meta"])) { const v = narrativeRadarView(); await sayHtml(chatId, v.text, v.markup); return; }
   if (parseCommandWithArgument(text, ["grad", "graduation", "gauntlet"])) { const v = await graduationGauntletView(); await sayHtml(chatId, v.text, v.markup); return; }
-  // 💰 /airdrop <coin/wallet/.sol/RH> — coin distributions or a wallet's public fund flow.
+  // 💰 /airdrop <coin/wallet/.sol/.eth/RH> — coin distributions or a wallet's public fund flow.
   { const ad = parseCommandWithArgument(text, ["airdrop", "drop", "bags"]);
     if (ad) {
       const target = String(ad.argument || "").trim().replace(/^\$/, "");
-      if (!target) { await sayHtml(chatId, "💰 <b>Airdrop + Fund Map</b>\nUsage: <code>/airdrop &lt;coin CA, wallet, .sol, or Robinhood 0x&gt;</code> — coins show distribution; wallets show who funded them and where funds/tokens went."); return; }
+      if (!target) { await sayHtml(chatId, "💰 <b>Airdrop + Fund Map</b>\nUsage: <code>/airdrop &lt;coin CA, wallet, .sol, .eth, or Robinhood 0x&gt;</code> — coins show distribution; wallets show who funded them and where funds/tokens went."); return; }
       await sendAirdropSubjectCard(chatId, target); return;
     } }
   // /copy — mirror a proven room trader; /launchroom — the dev war room.
@@ -37183,7 +37200,7 @@ async function fundFlowRowsToMap(wallet, flows, { chain = "solana", subject = ""
   const nodes = await Promise.all(rows.map(async (row, i) => {
     const id = chain === "solana" ? mapResolveIdentity(row.wallet, idx) : { isKol: false, name: shortMint(row.wallet), twitter: "", avatarUrl: null };
     const face = id.avatarUrl ? null : await mapAnonFace(row.wallet).catch(() => null);
-    const nativeSymbol = row.nativeSymbol || (chain === "robinhood" ? "ETH" : "SOL");
+    const nativeSymbol = row.nativeSymbol || (chain === "solana" ? "SOL" : "ETH");
     const parts = [];
     if (row.nativeOut > 0) parts.push(`sent ${row.nativeOut.toFixed(row.nativeOut >= 10 ? 1 : 3).replace(/\.0+$/, "")} ${nativeSymbol}`);
     if (row.nativeIn > 0) parts.push(`received ${row.nativeIn.toFixed(row.nativeIn >= 10 ? 1 : 3).replace(/\.0+$/, "")} ${nativeSymbol}`);
@@ -37199,17 +37216,27 @@ async function fundFlowRowsToMap(wallet, flows, { chain = "solana", subject = ""
       tokenIn: row.tokenIn, tokenOut: row.tokenOut, flowLabel: parts.join(" · ") || `${row.txCount} transfer${row.txCount === 1 ? "" : "s"}`,
       label: i < 10 ? `${direction === "in" ? "←" : direction === "out" ? "→" : "↔"} ${id.name || shortMint(row.wallet)}` : null,
       assets: [...row.assets.values()].sort((a, b) => (b.in + b.out) - (a.in + a.out)).slice(0, 8),
-      solscanUrl: chain === "solana" ? `https://solscan.io/account/${row.wallet}` : `https://robinhoodchain.blockscout.com/address/${row.wallet}`
+      explorerUrl: chain === "solana"
+        ? `https://solscan.io/account/${row.wallet}`
+        : chain === "ethereum"
+          ? `https://eth.blockscout.com/address/${row.wallet}`
+          : `https://robinhoodchain.blockscout.com/address/${row.wallet}`,
+      solscanUrl: chain === "solana"
+        ? `https://solscan.io/account/${row.wallet}`
+        : chain === "ethereum"
+          ? `https://eth.blockscout.com/address/${row.wallet}`
+          : `https://robinhoodchain.blockscout.com/address/${row.wallet}`
     };
   }));
   const sent = rows.filter((row) => row.directions.has("out")).length;
   const received = rows.filter((row) => row.directions.has("in")).length;
   const nativeOut = rows.reduce((sum, row) => sum + row.nativeOut, 0);
   const nativeIn = rows.reduce((sum, row) => sum + row.nativeIn, 0);
-  const nativeSymbol = chain === "robinhood" ? "ETH" : "SOL";
+  const nativeSymbol = chain === "solana" ? "SOL" : "ETH";
+  const chainLabel = chain === "ethereum" ? "Ethereum mainnet" : chain === "robinhood" ? "Robinhood Chain" : "Solana";
   const label = subject || domain || shortMint(wallet);
   return {
-    kind: "wallet", chain, subject: String(label).slice(0, 28), subtitle: "fund flow · arrows show money direction",
+    kind: "wallet", chain, subject: String(label).slice(0, 28), subtitle: `${chainLabel} fund flow · arrows show money direction`,
     wallet, domain: domain || null, mode: "funds", stats: [
       { label: "FUNDED", value: String(sent), sub: "wallets sent to" },
       { label: "FUNDERS", value: String(received), sub: "wallets received from" },
@@ -37428,6 +37455,37 @@ async function buildRhWalletFundMap(wallet) {
   walletFundMapCache.set(cacheKey, { at: Date.now(), map });
   if (walletFundMapCache.size > 300) walletFundMapCache.delete(walletFundMapCache.keys().next().value);
   return map;
+}
+
+// Ethereum mainnet gets an explicit path for ENS wallets. A resolved .eth address is still a normal 0x
+// address, so without this chain hint it would be indistinguishable from a Robinhood Chain wallet. Read the
+// three bounded Blockscout address feeds in parallel, normalize them into the shared flow collector, and keep
+// raw 0x behavior unchanged for the existing Robinhood features.
+function decorateEthereumFundMap(map, domain = "") {
+  if (!map) return map;
+  const displayDomain = ethDomainLike(domain) ? String(domain).trim().toLowerCase() : "";
+  return {
+    ...map,
+    subject: displayDomain || map.subject,
+    domain: displayDomain || null,
+    mode: "funds",
+    explorer: `https://eth.blockscout.com/address/${map.wallet}`
+  };
+}
+async function buildEthereumWalletFundMap(wallet, options = {}) {
+  const w = String(wallet || "").trim().toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(w)) return null;
+  const cacheKey = walletFundMapKey("ethereum", w), cached = walletFundMapCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < (cached.map?.nodes?.length ? 3 * 60_000 : 8_000)) {
+    return decorateEthereumFundMap(cached.map, options.domain);
+  }
+  const { flows, add } = walletFundFlowCollector(w);
+  const rows = await fetchEthereumFundFlows(w, { fetchJson, timeoutMs: 5_000 }).catch(() => []);
+  for (const row of rows) add(row);
+  const map = await fundFlowRowsToMap(w, flows, { chain: "ethereum", subject: shortMint(w) });
+  walletFundMapCache.set(cacheKey, { at: Date.now(), map });
+  if (walletFundMapCache.size > 300) walletFundMapCache.delete(walletFundMapCache.keys().next().value);
+  return decorateEthereumFundMap(map, options.domain);
 }
 
 // Robinhood wallet Bags/Trades are real wallet modes, not aliases for Fund Flow. The wallet scan rebuilds
@@ -37655,7 +37713,8 @@ async function buildRhTokenHolderMap(address) {
     holderCount, kolsIn: 0, stats, nodes,
   };
 }
-async function buildSubjectMap(target, mode = "bags") {
+async function buildSubjectMap(target, mode = "bags", options = {}) {
+  if (options.chainHint === "ethereum") return buildEthereumWalletFundMap(target, { domain: options.domain || "" });
   // Robinhood Chain coin (0x…) → RH holder map; it isn't a base58 SOL mint/wallet so the SOL paths skip it.
   if (/^0x[0-9a-fA-F]{40}$/.test(String(target || "").trim())) {
     if (mode === "funds") return buildRhWalletFundMap(target);
@@ -37673,12 +37732,17 @@ async function buildSubjectMap(target, mode = "bags") {
 // Render a map subject to a PNG (short-cached so repeat tags of the same coin don't re-pull/re-render).
 async function renderSubjectMapPng(target, mode = "bags", options = {}) {
   const forceWallet = Boolean(options.forceWallet);
-  const key = `${target}:${mode}:${forceWallet ? "wallet" : "auto"}`;
+  const chainHint = options.chainHint === "ethereum" ? "ethereum" : "";
+  const domain = ethDomainLike(options.domain) ? String(options.domain).trim().toLowerCase() : "";
+  if (chainHint) mode = "funds";
+  const key = `${target}:${mode}:${forceWallet ? "wallet" : "auto"}:${chainHint}:${domain}`;
   const cached = mapRenderCache.get(key);
   if (cached && Date.now() - cached.at < MAP_RENDER_TTL) return { png: cached.png, map: cached.map };
-  const map = forceWallet
-    ? (/^0x[0-9a-fA-F]{40}$/.test(String(target || "").trim()) ? await buildRhWalletMap(target, mode) : await buildWalletMap(target, mode))
-    : await buildSubjectMap(target, mode);
+  const map = chainHint
+    ? await buildEthereumWalletFundMap(target, { domain })
+    : forceWallet
+      ? (/^0x[0-9a-fA-F]{40}$/.test(String(target || "").trim()) ? await buildRhWalletMap(target, mode) : await buildWalletMap(target, mode))
+      : await buildSubjectMap(target, mode, options);
   if (!map || !map.nodes || !map.nodes.length) return { png: null, map: null };
   const { renderSlimeMapPng } = await import("./lib/slimeMapRender.mjs");
   const bgPath = await premiumMapBg(`${map.subject}${map.mint || map.wallet || ""}`);
@@ -37770,18 +37834,26 @@ async function buildXMapReply(target, variant, mode = "bags") {
 // map; plus a link to the fully-interactive web map, a bags/network toggle for wallets, and buy on coins.
 function mapCardKeyboard(map) {
   const rows = [];
+  const ethereum = map.chain === "ethereum";
+  const walletCallback = ethereum ? "mape" : "mapw";
   const drill = (map.nodes || []).filter((n) => n.wallet && n.label).slice(0, 4);
   for (let i = 0; i < drill.length; i += 2) {
-    rows.push(drill.slice(i, i + 2).map((n) => ({ text: `🔍 ${String(n.name || "wallet").replace(/^@?/, "@")}`.slice(0, 22), callback_data: `mapw:${n.wallet}:bags` })));
+    rows.push(drill.slice(i, i + 2).map((n) => ({
+      text: `🔍 ${String(n.name || "wallet").replace(/^@?/, "@")}`.slice(0, 22),
+      callback_data: `${walletCallback}:${n.wallet}:${ethereum ? "funds" : "bags"}`
+    })));
   }
-  const webQ = map.mint ? `ca=${map.mint}` : `wallet=${map.wallet}`;
-  rows.push([{ text: "🌐 Open interactive map", url: `https://www.slimewire.org/map?${webQ}${map.kind === "wallet" ? `&mode=${map.mode || "bags"}` : ""}` }]);
+  const webQ = map.mint ? `ca=${map.mint}` : `wallet=${encodeURIComponent(map.domain || map.wallet)}`;
+  const chainQ = ethereum ? "&chain=ethereum" : "";
+  rows.push([{ text: "🌐 Open interactive map", url: `https://www.slimewire.org/map?${webQ}${map.kind === "wallet" ? `&mode=${map.mode || "bags"}` : ""}${chainQ}` }]);
   if (map.kind === "wallet") {
-    rows.push([
-      { text: "💰 Bags", callback_data: `mapw:${map.wallet}:bags` },
-      { text: "🕸 Trades", callback_data: `mapw:${map.wallet}:network` },
-      { text: "💸 Fund Flow", callback_data: `mapw:${map.wallet}:funds` }
-    ]);
+    rows.push(ethereum
+      ? [{ text: "💸 Ethereum Fund Flow", callback_data: `mape:${map.wallet}:funds` }]
+      : [
+        { text: "💰 Bags", callback_data: `mapw:${map.wallet}:bags` },
+        { text: "🕸 Trades", callback_data: `mapw:${map.wallet}:network` },
+        { text: "💸 Fund Flow", callback_data: `mapw:${map.wallet}:funds` }
+      ]);
     if (map.chain === "solana") rows.push([{ text: "🪂 Airdrops sent", url: `https://www.slimewire.org/airdrop?ca=${encodeURIComponent(map.wallet)}` }]);
   }
   if (map.mint) rows.push([{ text: "🔎 Scan", callback_data: `scan:refresh:${map.mint}` }, { text: "⚡ Quick Buy", callback_data: `qbp:${map.mint}` }]);
@@ -37806,11 +37878,12 @@ async function sendMapCard(chatId, target, mode = "bags", options = {}) {
   const { png, map } = await renderSubjectMapPng(target, mode, options).catch(() => ({ png: null, map: null }));
   if (!png || !map) { await say(chatId, "Couldn't build a map for that yet — give me a coin CA or an active wallet."); return; }
   const kols = map.stats.find((s) => s.label === "KOLS IN");
-  const webQ = map.mint ? `ca=${map.mint}` : `wallet=${map.wallet}`;
-  const chain = map.chain === "robinhood" ? "Robinhood Chain" : "Solana";
+  const webQ = map.mint ? `ca=${map.mint}` : `wallet=${encodeURIComponent(map.domain || map.wallet)}`;
+  const chainQ = map.chain === "ethereum" ? "&amp;chain=ethereum" : "";
+  const chain = map.chain === "ethereum" ? "Ethereum Mainnet" : map.chain === "robinhood" ? "Robinhood Chain" : "Solana";
   const cap = map.kind === "token"
     ? `🗺️ <b>${escapeTelegramHtml(map.subject)}</b> holder map${kols && Number(kols.value) > 0 ? ` — <b>${kols.value}</b> known KOLs holding` : ""}.\n<i>Tap a KOL below to see their bags.</i>`
-    : `🗺️ <b>${escapeTelegramHtml(map.subject)}</b> · <i>${chain}</i>\n${map.mode === "funds" ? "Fund flow — incoming funders, outgoing funded wallets, native value and token sends." : map.mode === "network" ? "Trades — recent coins, buy/sell counts, volume and PnL where available." : "Bags — current holdings, value, quantity and open PnL where available."}${mapTelegramDetailLines(map)}\n\n<a href="https://www.slimewire.org/map?${webQ}&amp;mode=${map.mode || "bags"}">Open the interactive map →</a>`;
+    : `🗺️ <b>${escapeTelegramHtml(map.subject)}</b> · <i>${chain}</i>\n${map.mode === "funds" ? "Fund flow — incoming funders, outgoing funded wallets, native value and token sends." : map.mode === "network" ? "Trades — recent coins, buy/sell counts, volume and PnL where available." : "Bags — current holdings, value, quantity and open PnL where available."}${mapTelegramDetailLines(map)}\n\n<a href="https://www.slimewire.org/map?${webQ}&amp;mode=${map.mode || "bags"}${chainQ}">Open the interactive map →</a>`;
   await sendPhoto(chatId, "slimewire-map.png", png, cap, mapCardKeyboard(map), "HTML").catch(async () => {
     await sayHtml(chatId, cap, mapCardKeyboard(map)).catch(() => {});
   });
@@ -37823,17 +37896,25 @@ async function handleTelegramMapCommand(chatId, message, argument) {
   if (!target) { await say(chatId, "Usage: /map <coin CA, wallet, .sol, or .eth> — use /fundmap <wallet/domain> for incoming/outgoing SOL, ETH, tokens, and funded wallets."); return; }
   if (tgCommandOnCooldown(chatId, "map", 6000)) return;
   const requestedFunds = /^\/(?:fundmap|funds|flow)(?:@\w+)?\b/i.test(String(message?.text || "")) || Boolean(domain);
-  await sendMapCard(chatId, target, requestedFunds ? "funds" : "bags", { forceWallet: requestedFunds });
+  const ethereum = ethDomainLike(domain);
+  await sendMapCard(chatId, target, requestedFunds ? "funds" : "bags", {
+    forceWallet: requestedFunds,
+    chainHint: ethereum ? "ethereum" : "",
+    domain: ethereum ? domain : ""
+  });
 }
 async function handleMapCallback(query, userId) {
-  const parts = String(query.data || "").split(":");   // map/mapw : <addr> [: mode]
-  if (parts[0] !== "map" && parts[0] !== "mapw") return false;
+  const parts = String(query.data || "").split(":");   // map/mapw/mape : <addr> [: mode]
+  if (parts[0] !== "map" && parts[0] !== "mapw" && parts[0] !== "mape") return false;
   const target = parts[1];
   const mode = parts[2] === "network" ? "network" : parts[2] === "funds" ? "funds" : "bags";
   if (!target || (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(target) && !/^0x[0-9a-fA-F]{40}$/.test(target))) return false;
   const chatId = query.message?.chat?.id;
   await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "🗺️ Drawing map…" }).catch(() => {});
-  await sendMapCard(chatId, target, mode, { forceWallet: parts[0] === "mapw" }).catch(() => {});
+  await sendMapCard(chatId, target, parts[0] === "mape" ? "funds" : mode, {
+    forceWallet: parts[0] === "mapw" || parts[0] === "mape",
+    chainHint: parts[0] === "mape" ? "ethereum" : ""
+  }).catch(() => {});
   return true;
 }
 // 💰 AIRDROP callback + card — who the dev fed, how big, and who's still diamond-handing the bag.
@@ -37877,7 +37958,12 @@ async function sendAirdropSubjectCard(chatId, input) {
     return;
   }
   if (/^0x[0-9a-fA-F]{40}$/.test(target)) {
-    await sendMapCard(chatId, target, "bags");
+    const ethereum = ethDomainLike(domain);
+    await sendMapCard(chatId, target, ethereum ? "funds" : "bags", {
+      forceWallet: ethereum,
+      chainHint: ethereum ? "ethereum" : "",
+      domain: ethereum ? domain : ""
+    });
     return;
   }
   const isToken = await scanFastTimeout(isSolMintAddress(target), 3_000, false);
