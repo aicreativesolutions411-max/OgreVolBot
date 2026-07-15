@@ -60,6 +60,20 @@ test("SlimeCash service worker prefers the current deploy and retains offline fa
   assert.match(sw, /catch\(\(\) => cached\)/);
 });
 
+test("SlimeCash deploys its runtime as an integrity-checked content-addressed asset", () => {
+  assert.match(buildWeb, /createHash/);
+  assert.match(buildWeb, /cash\.\$\{cashScriptHash\}\.js/);
+  assert.match(buildWeb, /cashScriptIntegrity/);
+  assert.match(buildWeb, /attempts<15/);
+  assert.match(server, /fingerprintedBundle/);
+});
+
+test("SlimeCash event wiring only targets elements present in its HTML shell", () => {
+  const ids = new Set([...html.matchAll(/\bid=["']([^"']+)["']/g)].map((match) => match[1]));
+  const referencedIds = [...new Set([...cash.matchAll(/\$\(["']([A-Za-z][A-Za-z0-9_-]*)["']\)/g)].map((match) => match[1]))];
+  assert.deepEqual(referencedIds.filter((id) => !ids.has(id)), []);
+});
+
 test("SlimeCash exposes its own install flow even when the native prompt is unavailable", () => {
   assert.match(html, /Install SlimeCash app/);
   assert.match(html, /SlimeCash installs as its own app/);

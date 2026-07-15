@@ -1,6 +1,7 @@
 ﻿import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 
 import { transform } from "esbuild";
 
@@ -100,6 +101,63 @@ const featureFlags = {
 };
 const configSource = `window.OGRE_PORTAL_CONFIG = ${JSON.stringify({ apiBase, telegramBotUsername, portalUrl, pfpCdnBase, featureFlags, ogreTek, pumpLive }, null, 2)};\n`;
 await fs.writeFile(path.join(distDir, "config.js"), configSource, "utf8");
+
+// Render swaps instances while a deploy becomes live. A query-only version such
+// as cash.js?v=15 can briefly be requested from the previous instance, which
+// serves its old cash.js under the new URL and poisons the browser cache with a
+// mismatched HTML/JS pair. Ship the Cash entry under its content hash instead:
+// the previous instance can only return 404, and the small loader retries until
+// the new instance owns the request. SRI also prevents an incorrect response
+// from ever executing.
+const cashScriptPath = path.join(distDir, "cash", "cash.js");
+const cashScriptSource = await fs.readFile(cashScriptPath);
+const cashScriptHash = createHash("sha256").update(cashScriptSource).digest("hex").slice(0, 12);
+const cashScriptIntegrity = `sha384-${createHash("sha384").update(cashScriptSource).digest("base64")}`;
+const cashScriptFile = `cash.${cashScriptHash}.js`;
+const cashScriptUrl = `/cash/${cashScriptFile}`;
+await fs.writeFile(path.join(distDir, "cash", cashScriptFile), cashScriptSource);
+
+const cashLoader = `<script>
+(function(){
+  var attempts=0;
+  var source=${JSON.stringify(cashScriptUrl)};
+  var integrity=${JSON.stringify(cashScriptIntegrity)};
+  function loadCash(){
+    var script=document.createElement("script");
+    script.src=source+(attempts?"?retry="+Date.now():"");
+    script.integrity=integrity;
+    script.crossOrigin="anonymous";
+    script.dataset.cashEntry="";
+    script.onerror=function(){
+      script.remove();
+      attempts+=1;
+      var tag=document.querySelector(".splash-tag");
+      if(tag) tag.textContent=attempts<15?"updating SlimeCash...":"tap refresh to finish updating";
+      if(attempts<15) setTimeout(loadCash,Math.min(3000,500+(attempts*250)));
+    };
+    document.body.appendChild(script);
+  }
+  loadCash();
+})();
+</script>`;
+const cashIndexPath = path.join(distDir, "cash", "index.html");
+const cashIndexHtml = await fs.readFile(cashIndexPath, "utf8");
+await fs.writeFile(
+  cashIndexPath,
+  cashIndexHtml.replace(/<script src="\/cash\/cash\.js(?:\?v=[^"]*)?"><\/script>/, cashLoader),
+  "utf8"
+);
+
+const cashWorkerPath = path.join(distDir, "cash", "sw.js");
+const cashWorkerSource = await fs.readFile(cashWorkerPath, "utf8");
+await fs.writeFile(
+  cashWorkerPath,
+  cashWorkerSource
+    .replace(/const CACHE = "slimecash-[^"]+";/, `const CACHE = "slimecash-${cashScriptHash}";`)
+    .replace(/"\/cash\/cash\.js(?:\?v=[^"]*)?"/, JSON.stringify(cashScriptUrl)),
+  "utf8"
+);
+console.log(`Fingerprint Cash entry ${cashScriptFile}`);
 
 const indexPath = path.join(distDir, "index.html");
 const indexHtml = await fs.readFile(indexPath, "utf8");

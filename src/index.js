@@ -11222,10 +11222,11 @@ async function serveWebPortal(requestUrl, response, method = "GET", acceptEncodi
     // so a versioned request is safe to cache hard — a new deploy serves a brand-new URL, never stale.
     const versionedBundle = /(?:app\.js|styles\.css|slimewire-final-overrides\.css)$/i.test(target)
       && /[?&]v=/.test(requestUrl.search || "");
+    const fingerprintedBundle = /\.[a-f0-9]{12}\.(?:js|css)$/i.test(target);
     const revalidatingAsset = /\.(?:js|css)$/i.test(target);
     const cacheControl = noStoreAsset
       ? "no-store"
-      : immutableMedia || versionedBundle
+      : immutableMedia || versionedBundle || fingerprintedBundle
         ? "public, max-age=31536000, immutable"
         : revalidatingAsset
           ? "public, max-age=300, stale-while-revalidate=86400"
