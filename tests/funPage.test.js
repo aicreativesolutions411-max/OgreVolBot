@@ -84,10 +84,12 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
   assert.match(js, /\/api\/web\/wallet-funding\/execute/);
   assert.match(js, /startFunMobileExactFunding/);
   assert.match(js, /resumeFunMobileFunding/);
-  assert.match(js, /WalletFunding\.mobileSession\(kind\)/);
-  assert.match(js, /prepareFunMobileFundingOrder\(kind, session\.publicKey, amountSol, wallet\.index\)/);
-  assert.match(js, /WalletFunding\.startMobileSign\(kind/);
-  assert.doesNotMatch(js, /WalletFunding\.startSolanaPay/);
+  // Mobile funding uses a Solana Pay transfer URI (amount + recipient prefilled, no fragile
+  // encrypted deeplink round-trip); the balance-baseline watcher auto-credits on return.
+  assert.match(js, /function funSolanaPayUri/);
+  assert.match(js, /location\.href = funSolanaPayUri\(wallet\.publicKey, amountSol\)/);
+  assert.match(js, /saveLocal\(FUN_PENDING_FUND_KEY, \{ walletIndex: wallet\.index, amountSol, baselineSol/);
+  assert.match(js, /resumePendingFunFunding/);
   const startFundingBody = js.slice(js.indexOf("async function startWalletFunding"), js.indexOf("async function submitWalletFunding"));
   assert.doesNotMatch(startFundingBody, /location\.assign\(fundingWalletBrowseUrl/);
   assert.doesNotMatch(js, /event\.target\.closest\("\[data-deposit\]"\) \|\| event\.target\.closest\("\[data-receive\]"\)/);

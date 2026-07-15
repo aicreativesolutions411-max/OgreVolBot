@@ -999,6 +999,15 @@
     return pending;
   }
 
+  // Solana Pay SOL transfer URI for one-tap "Fund with wallet": amount + recipient prefilled,
+  // wallet-agnostic (Phantom, Solflare, Backpack register the solana: scheme on mobile).
+  function funSolanaPayUri(address, amountSol) {
+    const params = new URLSearchParams();
+    params.set("amount", String(Number(amountSol)));
+    params.set("label", "SlimeWire");
+    params.set("message", "Fund your SlimeWire trading wallet");
+    return `solana:${address}?${params.toString()}`;
+  }
   async function startFunMobileExactFunding(button, kind, amountSol) {
     const status = $("[data-funding-status]");
     const label = fundingProviderLabel(kind);
@@ -1023,28 +1032,14 @@
         });
         return true;
       }
-      const session = WalletFunding.mobileSession(kind);
-      if (!session) {
-        if (status) status.textContent = `Connect ${label} once. Your exact ${amountSol} SOL approval opens next.`;
-        closeSheet();
-        await WalletFunding.startMobileConnect(kind, {
-          amountSol,
-          walletIndex: wallet.index,
-          returnUrl: location.href
-        });
-        return true;
-      }
-      if (status) status.textContent = `Preparing exactly ${amountSol} SOL…`;
-      const order = await prepareFunMobileFundingOrder(kind, session.publicKey, amountSol, wallet.index);
-      if (status) status.textContent = `Opening ${label} to approve exactly ${amountSol} SOL…`;
+      // iOS / plain mobile browser: a Solana Pay transfer URI is the reliable path. One tap opens the
+      // wallet with the exact amount + destination address prefilled — no fragile encrypted round-trip
+      // to lose across the redirect. They approve, the SOL lands, and resumePendingFunFunding
+      // auto-detects the balance bump the moment they return (already wired to visibilitychange).
+      saveLocal(FUN_PENDING_FUND_KEY, { walletIndex: wallet.index, amountSol, baselineSol: Number(wallet.sol || 0), startedAt: Date.now() });
+      if (status) status.textContent = `Opening your wallet to approve ${amountSol} SOL…`;
       closeSheet();
-      await WalletFunding.startMobileSign(kind, {
-        transaction: order.transaction,
-        walletFundingAttemptId: order.walletFundingAttemptId,
-        amountSol,
-        walletIndex: order.walletIndex,
-        returnUrl: location.href
-      });
+      setTimeout(() => { location.href = funSolanaPayUri(wallet.publicKey, amountSol); }, 60);
       return true;
     } catch (error) {
       const message = error?.message || `Could not open ${label}.`;
