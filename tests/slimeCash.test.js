@@ -249,8 +249,10 @@ test("mobile Phantom funding connects once, preserves the preset, and returns si
   const started = await harness.api.startMobileConnect("phantom", { amountSol: "0.25", walletIndex: 2 });
   assert.equal(started, true);
   const connectUrl = new URL(harness.assignedUrl);
-  assert.equal(connectUrl.origin, "https://phantom.app");
-  assert.equal(connectUrl.pathname, "/ul/v1/connect");
+  assert.equal(connectUrl.protocol, "intent:");
+  assert.equal(connectUrl.hostname, "v1");
+  assert.equal(connectUrl.pathname, "/connect");
+  assert.match(connectUrl.hash, /scheme=phantom;package=app\.phantom/);
 
   const pending = JSON.parse(harness.values.get("slimewireMobileFundingPending:v2"));
   const phantomKeys = nacl.box.keyPair();
@@ -276,8 +278,9 @@ test("mobile Phantom funding connects once, preserves the preset, and returns si
     walletIndex: 2
   });
   const signUrl = new URL(harness.assignedUrl);
-  assert.equal(signUrl.pathname, "/ul/v1/signTransaction");
-  assert.notEqual(signUrl.pathname, "/ul/v1/signAndSendTransaction");
+  assert.equal(signUrl.protocol, "intent:");
+  assert.equal(signUrl.pathname, "/signTransaction");
+  assert.notEqual(signUrl.pathname, "/signAndSendTransaction");
 
   const encryptedRequest = bs58.decode(signUrl.searchParams.get("payload"));
   const requestNonce = bs58.decode(signUrl.searchParams.get("nonce"));

@@ -55,7 +55,7 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
   assert.match(html, /fun\.css\?v=19/);
-  assert.match(funWorker, /slimewire-fun-v19/);
+  assert.match(funWorker, /slimewire-fun-v20/);
   assert.match(funWorker, /fun\.css\?v=19/);
 });
 

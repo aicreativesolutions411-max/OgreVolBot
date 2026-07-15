@@ -91,7 +91,9 @@ test("Lock In click instrumentation and debug command are present without sensit
 
 test("mobile wallet options use per-wallet deeplink connect before fallback guidance", () => {
   assert.match(htmlSource, /vendor\/tweetnacl-fast\.min\.js/);
-  assert.match(appSource, /https:\/\/phantom\.app\/ul\/v1\/connect/);
+  assert.match(appSource, /phantom:\/\/v1\/connect/);
+  assert.match(appSource, /intent:\/\/\$\{target\}#Intent;scheme=phantom;package=app\.phantom/);
+  assert.doesNotMatch(functionBody("mobileWalletConnectBaseUrl"), /https:\/\/phantom\.app/);
   assert.match(appSource, /https:\/\/solflare\.com\/ul\/v1\/connect/);
   assert.match(appSource, /dapp_encryption_public_key/);
   assert.match(appSource, /redirect_link/);

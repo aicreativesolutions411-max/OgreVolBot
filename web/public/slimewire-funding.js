@@ -224,9 +224,20 @@
   }
 
   function mobileMethodUrl(kind, method) {
-    if (kind === "phantom") return `https://phantom.app/ul/v1/${method}`;
+    // Android can treat Phantom's HTTPS universal link as an ordinary website even when the app is
+    // installed. Phantom officially supports this custom protocol handler; it targets the app
+    // directly instead of relying on the user's Android "open supported links" setting.
+    if (kind === "phantom") return `phantom://v1/${method}`;
     if (kind === "solflare") return `https://solflare.com/ul/v1/${method}`;
     return "";
+  }
+
+  function mobileLaunchUrl(kind, methodUrl) {
+    if (kind !== "phantom" || !/Android/i.test(navigator.userAgent || "")) return methodUrl;
+    const parsed = new URL(methodUrl);
+    const target = `${parsed.host}${parsed.pathname}${parsed.search}`;
+    const fallback = encodeURIComponent("https://play.google.com/store/apps/details?id=app.phantom");
+    return `intent://${target}#Intent;scheme=phantom;package=app.phantom;S.browser_fallback_url=${fallback};end`;
   }
 
   function randomState(nacl) {
@@ -270,7 +281,7 @@
     url.searchParams.set("dapp_encryption_public_key", pending.dappEncryptionPublicKey);
     url.searchParams.set("redirect_link", mobileCallbackUrl(kind, "connect", stateId, returnHref));
     url.searchParams.set("cluster", "mainnet-beta");
-    location.assign(url.toString());
+    location.assign(mobileLaunchUrl(kind, url.toString()));
     return true;
   }
 
@@ -302,7 +313,7 @@
     url.searchParams.set("nonce", encrypted.nonce);
     url.searchParams.set("redirect_link", mobileCallbackUrl(kind, "sign", stateId, returnHref));
     url.searchParams.set("payload", encrypted.payload);
-    location.assign(url.toString());
+    location.assign(mobileLaunchUrl(kind, url.toString()));
     return true;
   }
 

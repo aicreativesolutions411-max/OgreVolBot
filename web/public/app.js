@@ -2399,9 +2399,17 @@ function mobileWalletProviderKeyParam(providerId = "") {
 }
 
 function mobileWalletConnectBaseUrl(providerId = "") {
-  if (providerId === "phantom") return "https://phantom.app/ul/v1/connect";
+  if (providerId === "phantom") return "phantom://v1/connect";
   if (providerId === "solflare") return "https://solflare.com/ul/v1/connect";
   return "";
+}
+
+function mobileWalletLaunchUrl(providerId = "", methodUrl = "") {
+  if (providerId !== "phantom" || !/Android/i.test(navigator.userAgent || "")) return methodUrl;
+  const parsed = new URL(methodUrl);
+  const target = `${parsed.host}${parsed.pathname}${parsed.search}`;
+  const fallback = encodeURIComponent("https://play.google.com/store/apps/details?id=app.phantom");
+  return `intent://${target}#Intent;scheme=phantom;package=app.phantom;S.browser_fallback_url=${fallback};end`;
 }
 
 function mobileWalletConnectUrl(providerId = "", pending = {}) {
@@ -2499,7 +2507,7 @@ async function startMobileWalletConnect(providerId = "", { returnPath = state.wa
     connectionFlow: "deeplink_connect",
     platform: mobileWalletPlatformLabel()
   });
-  window.location.assign(link);
+  window.location.assign(mobileWalletLaunchUrl(providerId, link));
   return true;
 }
 
