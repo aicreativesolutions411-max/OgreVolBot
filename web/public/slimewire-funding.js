@@ -255,19 +255,15 @@
   }
 
   function solanaPayLaunchUrl(kind, paymentUrl) {
-    if (!/Android/i.test(navigator.userAgent || "")) return paymentUrl;
-    const appPackage = kind === "phantom"
-      ? "app.phantom"
-      : kind === "solflare"
-        ? "com.solflare.mobile"
-        : "";
-    if (!appPackage) return paymentUrl;
-    const target = paymentUrl.slice("solana:".length);
-    // Solana Pay is a non-interactive transfer request: the selected wallet builds the exact SOL
-    // transfer and shows its native approval screen. No dapp connect or Play Store layer is needed.
-    // Keep the recipient in the opaque scheme-specific part. Putting a base58 address in a
-    // hierarchical URL host lets browsers lowercase it and can silently change the destination.
-    return `intent:${target}#Intent;scheme=solana;package=${appPackage};end`;
+    if (!["phantom", "solflare"].includes(kind)) return paymentUrl;
+    // Hand the complete opaque Solana Pay URI to Android/iOS unchanged. In particular, keep
+    // `amount` in the URI that reaches the wallet's Solana Pay activity so its review screen opens
+    // with both destination and amount prefilled. Wrapping this in a package-only Android intent
+    // can launch a wallet's generic home/send activity and silently drop the payment parameters.
+    // It can also turn the case-sensitive base58 recipient into a URL host. The OS may show its
+    // installed-wallet chooser when more than one Solana Pay wallet is available; that is safer
+    // than changing the recipient or opening an unpopulated send form.
+    return paymentUrl;
   }
 
   function startSolanaPay(kind, options = {}) {

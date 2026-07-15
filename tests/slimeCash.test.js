@@ -150,7 +150,7 @@ test("wallet approval helpers are shared by Cash and Fun", () => {
   assert.match(funding, /async function startMobileSign/);
   assert.match(funding, /async function consumeMobileCallback/);
   assert.match(funding, /function startSolanaPay/);
-  assert.match(funding, /scheme=solana;package=\$\{appPackage\}/);
+  assert.match(funding, /return paymentUrl/);
   assert.doesNotMatch(funding, /browser_fallback_url/);
   assert.match(funding, /mobileMethodUrl\(kind, "signTransaction"\)/);
   assert.match(funding, /slimewireMobileFundingSession:v2:/);
@@ -309,29 +309,25 @@ test("mobile Phantom funding connects once, preserves the preset, and returns si
   assert.deepEqual(Buffer.from(signed.signedTransaction, "base64"), Buffer.from(signedBytes));
 });
 
-test("mobile wallet funding opens one exact Solana Pay approval in the selected Android app", () => {
+test("mobile wallet funding passes one exact Solana Pay approval to the installed wallet", () => {
   const harness = fundingHarness();
   const recipient = "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN";
   const phantom = harness.api.startSolanaPay("phantom", {
     recipient,
-    amountSol: "0.25",
+    amountSol: ".2",
     label: "SlimeWire",
     message: "Fund my wallet"
   });
   const payment = new URL(phantom.paymentUrl);
-  const launch = new URL(harness.assignedUrl);
   assert.equal(payment.protocol, "solana:");
   assert.equal(payment.pathname, recipient);
-  assert.equal(payment.searchParams.get("amount"), "0.25");
+  assert.equal(payment.searchParams.get("amount"), "0.2");
   assert.equal(payment.searchParams.get("label"), "SlimeWire");
-  assert.equal(launch.protocol, "intent:");
-  assert.equal(launch.pathname, recipient);
-  assert.ok(phantom.launchUrl.startsWith(`intent:${recipient}?`));
-  assert.ok(phantom.launchUrl.includes(recipient));
-  assert.match(launch.hash, /scheme=solana;package=app\.phantom/);
-  assert.doesNotMatch(launch.hash, /browser_fallback_url|play\.google\.com/);
+  assert.equal(phantom.launchUrl, phantom.paymentUrl);
+  assert.equal(harness.assignedUrl, phantom.paymentUrl);
+  assert.match(phantom.launchUrl, new RegExp(`^solana:${recipient}\\?amount=0\\.2(?:&|$)`));
 
   const solflare = harness.api.startSolanaPay("solflare", { recipient, amountSol: "1" });
-  assert.ok(solflare.launchUrl.startsWith(`intent:${recipient}?`));
-  assert.match(new URL(solflare.launchUrl).hash, /scheme=solana;package=com\.solflare\.mobile/);
+  assert.equal(solflare.launchUrl, solflare.paymentUrl);
+  assert.equal(new URL(solflare.launchUrl).searchParams.get("amount"), "1");
 });
