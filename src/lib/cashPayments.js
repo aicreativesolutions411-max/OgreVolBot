@@ -3,10 +3,11 @@ import crypto from "node:crypto";
 export const SOLANA_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 // PayPal USD on Solana - Token-2022 asset; the free Venmo/PayPal funding + cash-out rail.
 export const SOLANA_PYUSD_MINT = "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo";
-export const COINBASE_ONRAMP_HOST = "api.cdp.coinbase.com";
-export const COINBASE_ONRAMP_PATH = "/platform/v2/onramp/sessions";
-export const COINBASE_ONRAMP_TOKEN_HOST = "api.developer.coinbase.com";
-export const COINBASE_ONRAMP_TOKEN_PATH = "/onramp/v1/token";
+// Coinbase's current hosted Onramp quickstart uses this token endpoint. Full
+// production limits still require Onramp onboarding, but trial-mode projects
+// can use the same flow without depending on the older v2 app-session route.
+export const COINBASE_ONRAMP_HOST = "api.developer.coinbase.com";
+export const COINBASE_ONRAMP_PATH = "/onramp/v1/token";
 
 function base64Url(value) {
   return Buffer.from(value).toString("base64url");
@@ -137,10 +138,10 @@ async function createCoinbaseHostedTokenSession({ keyId, keySecret, destinationA
   const token = createCoinbaseCdpJwt({
     keyId,
     keySecret,
-    host: COINBASE_ONRAMP_TOKEN_HOST,
-    path: COINBASE_ONRAMP_TOKEN_PATH
+    host: COINBASE_ONRAMP_HOST,
+    path: COINBASE_ONRAMP_PATH
   });
-  const response = await fetchImpl(`https://${COINBASE_ONRAMP_TOKEN_HOST}${COINBASE_ONRAMP_TOKEN_PATH}`, {
+  const response = await fetchImpl(`https://${COINBASE_ONRAMP_HOST}${COINBASE_ONRAMP_PATH}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -166,40 +167,15 @@ export async function createCoinbaseOnrampSession({ keyId, keySecret, destinatio
   const purchaseCurrency = String(asset || "USDC").trim().toUpperCase();
   if (!new Set(["USDC", "SOL"]).has(purchaseCurrency)) throw new Error("Coinbase funding supports USDC or SOL.");
   const normalizedPaymentAmount = normalizeCoinbasePaymentAmount(paymentAmount);
-  const body = {
+  return createCoinbaseHostedTokenSession({
+    keyId,
+    keySecret,
+    destinationAddress,
     purchaseCurrency,
-    destinationNetwork: "solana",
-    destinationAddress: String(destinationAddress || "").trim(),
     paymentAmount: normalizedPaymentAmount,
-    paymentCurrency: "USD",
-    paymentMethod: "CARD",
-    redirectUrl: String(redirectUrl || "").trim(),
-    clientIp: String(clientIp || "").trim(),
-    partnerUserRef: String(partnerUserRef || "").trim()
-  };
-  const token = createCoinbaseCdpJwt({ keyId, keySecret });
-  const response = await fetchImpl(`https://${COINBASE_ONRAMP_HOST}${COINBASE_ONRAMP_PATH}`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(12_000)
+    redirectUrl,
+    clientIp,
+    partnerUserRef,
+    fetchImpl
   });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data?.session?.onrampUrl) {
-    if (response.status === 404) {
-      return createCoinbaseHostedTokenSession({
-        keyId,
-        keySecret,
-        destinationAddress,
-        purchaseCurrency,
-        paymentAmount: normalizedPaymentAmount,
-        redirectUrl,
-        clientIp,
-        partnerUserRef,
-        fetchImpl
-      });
-    }
-    throw coinbaseProviderError(response, data);
-  }
-  return { onrampUrl: data.session.onrampUrl, quote: data.quote || null, asset: purchaseCurrency };
 }

@@ -6,7 +6,7 @@
 <title>SlimeCash — money for the trenches</title>
 <meta name="description" content="SlimeCash: send, receive, and swap coins with your $handle. Money for the trenches.">
 <meta name="theme-color" content="#050705">
-<meta name="slimecash-build" content="13">
+<meta name="slimecash-build" content="14">
 <link rel="manifest" href="/cash/manifest.webmanifest?v=11">
 <link rel="icon" type="image/png" sizes="64x64" href="/cash/icons/favicon-64.png">
 <link rel="apple-touch-icon" href="/cash/icons/apple-touch-icon.png">
@@ -17,7 +17,7 @@
 <meta property="og:title" content="SlimeCash">
 <meta property="og:description" content="Money for the trenches. Send, receive, and swap coins with your $handle.">
 <meta property="og:image" content="https://www.slimewire.org/cash/icons/icon-512.png">
-<link rel="stylesheet" href="/cash/cash.css?v=13">
+<link rel="stylesheet" href="/cash/cash.css?v=14">
 </head>
 <body>
 <div id="splash" class="splash">
@@ -45,6 +45,11 @@
       <button id="receiveBtn" class="btn ghost" type="button">Receive</button>
       <button id="convertBtn" class="btn ghost" type="button">Convert</button>
     </div>
+    <a class="suite-handoff" href="/fun?from=cash">
+      <img src="/assets/slimewire/png/slimewire-mark.png" alt="">
+      <span><b>Trade with this wallet</b><small>Open SlimeWire Go without signing in again</small></span>
+      <em>Open →</em>
+    </a>
     <div id="pendingFund" class="pending-fund" hidden>
       <div class="pending-ico" id="pendingFundIcon">⏳</div>
       <div class="pending-main">
@@ -69,8 +74,7 @@
   <section id="view-send" class="view" hidden>
     <div class="section-title">Send</div>
     <div class="asset-switch" aria-label="Asset to send">
-      <button class="guide-pill active" data-send-asset="USDC" type="button">USDC cash</button>
-      <button class="guide-pill" data-send-asset="PYUSD" type="button">PYUSD</button>
+      <button class="guide-pill active" data-send-asset="USDC" type="button">USD</button>
       <button class="guide-pill" data-send-asset="SOL" type="button">SOL</button>
     </div>
     <label class="field-label" for="sendTo">To — $handle or wallet address</label>
@@ -90,15 +94,6 @@
     <div id="sendStatus" class="status"></div>
   </section>
 
-  <!-- TERMINAL TAB -->
-  <section id="view-terminal" class="view view-terminal" hidden>
-    <div class="terminal-bar">
-      <span>SlimeWire terminal</span>
-      <a href="/fun?from=cash">Open full ↗</a>
-    </div>
-    <iframe id="terminalFrame" title="SlimeWire terminal" loading="lazy"></iframe>
-  </section>
-
   <!-- MORE TAB -->
   <section id="view-more" class="view" hidden>
     <div class="section-title">Profile</div>
@@ -109,7 +104,9 @@
         <div id="moreAddress" class="profile-address"></div>
       </div>
     </div>
+    <div class="account-summary" id="accountSummary"><b>SlimeWire account</b><span id="accountSummaryText">Not signed in</span></div>
     <div class="more-list">
+      <button class="more-item" id="accountAccessBtn" type="button">Account login &amp; profile</button>
       <button class="more-item" id="claimHandleBtn" type="button">Claim / change $handle</button>
       <button class="more-item" id="copyAddressBtn" type="button">Copy wallet address</button>
       <button class="more-item" id="walletsBtn" type="button">Manage wallets</button>
@@ -118,41 +115,53 @@
       <button class="more-item" id="restoreBtn" type="button">Restore account</button>
       <button class="more-item" id="contactsBtn" type="button">Contacts & favorites</button>
       <button class="more-item" id="requestsBtn" type="button">Payment requests</button>
-      <button class="more-item" id="cashOutBtn" type="button">Cash out to bank</button>
       <button class="more-item" id="notificationsBtn" type="button">Incoming alerts</button>
       <button class="more-item" id="securityBtn" type="button">Security & spending limits</button>
       <button class="more-item" id="verifyBackupBtn" type="button">Verify recovery backup</button>
-      <button class="more-item" id="spendBtn" type="button">Pay in stores</button>
       <button class="more-item" id="installBtn" type="button">Install SlimeCash app</button>
       <button class="more-item" id="trustBtn" type="button">Trust, fees &amp; provider status</button>
-      <a class="more-item" href="/gg" target="_blank" rel="noopener">Open full SlimeWire site ↗</a>
+      <a class="more-item" href="/fun?profile=1&amp;from=cash">Open SlimeWire profile &amp; trading →</a>
       <button class="more-item danger" id="signOutBtn" type="button">Sign out</button>
     </div>
-    <div class="fineprint">SlimeCash wallets are SlimeWire wallets — the same account works on the site, terminal, and Telegram bot. Your permanent recovery file restores the account; the separate wallet files protect the funds.</div>
+    <div class="fineprint">SlimeCash and SlimeWire Go use the same account and wallets. Your account backup restores the login; separate wallet backups protect access to funds.</div>
   </section>
 
   <nav class="tabbar">
     <button class="tab active" data-tab="home" type="button"><span class="tab-ico">$</span>Cash</button>
     <button class="tab" data-tab="send" type="button"><span class="tab-ico">➤</span>Send</button>
-    <button class="tab" data-tab="terminal" type="button"><span class="tab-ico">📈</span>Terminal</button>
-    <button class="tab" data-tab="more" type="button"><span class="tab-ico">≡</span>More</button>
+    <button class="tab" data-tab="trade" type="button"><span class="tab-ico">⇄</span>Trade</button>
+    <button class="tab" data-tab="more" type="button"><span class="tab-ico">◎</span>Profile</button>
   </nav>
 </main>
 
-<!-- ONBOARDING -->
+<!-- SHARED SLIMEWIRE ACCOUNT ACCESS -->
 <div id="onboard" class="sheet-backdrop" hidden>
   <div class="sheet">
-    <div class="sheet-title">Pick your $handle</div>
-    <p class="sheet-copy">It's your username and pay link. Your wallet is created automatically, and account + wallet recovery files download during setup.</p>
-    <div class="handle-wrap">
-      <span class="handle-dollar">$</span>
-      <input id="handleInput" class="field handle-field" type="text" maxlength="20" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="greengoblin">
-    </div>
-    <div id="handleHint" class="field-hint">1–20 letters and numbers, at least one letter</div>
-    <button id="claimBtn" class="btn primary block" type="button">Claim it</button>
-    <button id="skipHandleBtn" class="btn ghost block" type="button">Skip for now</button>
-    <button id="onboardRestoreBtn" class="btn ghost block" type="button">I have a recovery key</button>
+    <button class="sheet-close" data-close="onboard" type="button" aria-label="Close">×</button>
+    <div class="sheet-title">Your SlimeWire account</div>
+    <p class="sheet-copy">Use the same username, wallets, and profile on SlimeCash and SlimeWire Go.</p>
+    <label class="field-label" for="accountUsername">Username</label>
+    <input id="accountUsername" class="field" type="text" maxlength="24" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="greenogre">
+    <label class="field-label" for="accountPassword">Password</label>
+    <input id="accountPassword" class="field stacked-field" type="password" minlength="8" autocomplete="current-password" placeholder="8+ characters">
+    <div id="accountStatus" class="status"></div>
+    <button id="createAccountBtn" class="btn primary block" type="button">Create account</button>
+    <button id="loginAccountBtn" class="btn ghost block" type="button">Log in</button>
+    <button id="onboardRestoreBtn" class="btn ghost block" type="button">Restore account backup</button>
+    <button id="browseGuestBtn" class="text-action block" type="button">Browse without an account</button>
     <button id="installOnboardBtn" class="btn ghost block" type="button">Install SlimeCash app</button>
+  </div>
+</div>
+
+<!-- CASH HANDLE -->
+<div id="handlesheet" class="sheet-backdrop" hidden>
+  <div class="sheet">
+    <button class="sheet-close" data-close="handlesheet" type="button" aria-label="Close">×</button>
+    <div class="sheet-title">Choose your $handle</div>
+    <p class="sheet-copy">This becomes your simple SlimeCash pay link.</p>
+    <div class="handle-wrap"><span class="handle-dollar">$</span><input id="handleInput" class="field handle-field" type="text" maxlength="20" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="greengoblin"></div>
+    <div id="handleHint" class="field-hint">1–20 letters and numbers, at least one letter</div>
+    <button id="claimBtn" class="btn primary block" type="button">Save $handle</button>
   </div>
 </div>
 
@@ -160,12 +169,11 @@
 <div id="addcash" class="sheet-backdrop" hidden>
   <div class="sheet">
     <button class="sheet-close" data-close="addcash" type="button" aria-label="Close">×</button>
-    <div class="sheet-title">Add cash</div>
-    <p class="sheet-copy">Buy with a card or send crypto. Everything here lands on <b>Solana</b>.</p>
+    <div class="sheet-title">Add funds</div>
+    <p class="sheet-copy">Choose Coinbase for fiat checkout or approve one exact SOL transfer from your wallet.</p>
     <div class="fund-section-head"><span>What are you adding?</span><small>Solana network</small></div>
     <div class="asset-switch asset-cards">
-      <button class="guide-pill asset-card active" data-deposit-asset="USDC" type="button"><i class="cash-logo usdc" aria-hidden="true">$</i><span><b>USDC</b><small>Digital dollars</small></span></button>
-      <button class="guide-pill asset-card" data-deposit-asset="PYUSD" type="button"><i class="cash-logo pyusd" aria-hidden="true">P</i><span><b>PYUSD</b><small>PayPal USD</small></span></button>
+      <button class="guide-pill asset-card active" data-deposit-asset="USDC" type="button"><i class="cash-logo usdc" aria-hidden="true">$</i><span><b>USD</b><small>USDC on Solana</small></span></button>
       <button class="guide-pill asset-card" data-deposit-asset="SOL" type="button"><i class="cash-logo sol" aria-hidden="true"><em></em><em></em><em></em></i><span><b>SOL</b><small>Solana</small></span></button>
     </div>
     <div class="fund-section-head amount-head"><span>Choose amount</span><small>$5–$2,500</small></div>
@@ -180,26 +188,40 @@
       <div><span>You receive</span><b id="fundingPreviewTitle">$50.00 USDC</b><small id="fundingPreviewDestination">Solana wallet loading…</small></div>
       <span class="preview-check">✓</span>
     </div>
-    <button id="coinbaseFundBtn" class="btn primary block" type="button">Continue to Coinbase · $50 USDC</button>
-    <div class="funding-method-note">Card, bank, and Apple Pay through Coinbase</div>
+    <button id="coinbaseFundBtn" class="btn primary block" type="button">Continue to Coinbase · $50 USD</button>
+    <div class="funding-method-note">Coinbase account checkout · payment methods depend on your account and region</div>
     <div id="fundingStatus" class="status"></div>
     <div class="alternate-funding">
-      <div class="fund-section-head"><span>Other ways to add funds</span><small>Pick a provider</small></div>
+      <div class="fund-section-head"><span>Fund from a wallet</span><small>Approve SOL</small></div>
       <div class="app-guide provider-grid">
-        <button class="guide-pill provider-card" data-guide="phantom" type="button"><i class="provider-logo phantom">P</i><span>Phantom</span></button>
-        <button class="guide-pill provider-card" data-guide="coinbase" type="button"><i class="provider-logo coinbase">C</i><span>Coinbase</span></button>
-        <button class="guide-pill provider-card" data-guide="paypal" type="button"><i class="provider-logo paypal">P</i><span>PayPal</span></button>
-        <button class="guide-pill provider-card" data-guide="venmo" type="button"><i class="provider-logo venmo">V</i><span>Venmo</span></button>
-        <button class="guide-pill provider-card" data-guide="robinhood" type="button"><i class="provider-logo robinhood">R</i><span>Robinhood</span></button>
-        <button class="guide-pill provider-card" data-guide="other" type="button"><i class="provider-logo wallet">↗</i><span>Wallet</span></button>
+        <button class="guide-pill provider-card" data-fund-wallet="phantom" type="button"><i class="provider-logo phantom">P</i><span>Phantom</span></button>
+        <button class="guide-pill provider-card" data-fund-wallet="solflare" type="button"><i class="provider-logo solflare">S</i><span>Solflare</span></button>
+        <button class="guide-pill provider-card" data-fund-wallet="other" type="button"><i class="provider-logo wallet">↗</i><span>Other wallet</span></button>
       </div>
     </div>
-    <div id="guideSteps" class="guide-steps"></div>
-    <a id="openProviderBtn" class="btn ghost block" href="https://phantom.app/" target="_blank" rel="noopener">Open Phantom</a>
-    <div class="qr-wrap"><canvas id="depositQr" width="220" height="220"></canvas></div>
+    <div class="fund-section-head"><span>Manual transfer</span><small>Any Solana app</small></div>
     <button id="copyDepositBtn" class="address-pill" type="button"><span id="depositAddress">…</span><span class="copy-tag">copy</span></button>
-    <a id="openDepositWallet" class="btn ghost block" href="#">Open payment request</a>
-    <div id="depositWatch" class="status">Watching for your deposit…</div>
+    <div id="depositWatch" class="status">Create or select a wallet to see its funding address.</div>
+  </div>
+</div>
+
+<!-- CONNECTED WALLET FUNDING -->
+<div id="walletfunding" class="sheet-backdrop" hidden>
+  <div class="sheet">
+    <button class="sheet-close" data-close="walletfunding" type="button" aria-label="Close">×</button>
+    <div class="sheet-title" id="walletFundingTitle">Fund with wallet</div>
+    <p class="sheet-copy" id="walletFundingCopy">Approve one exact SOL transfer. SlimeWire never receives your connected wallet keys.</p>
+    <div class="account-summary"><b>Destination</b><span id="walletFundingDestination">Wallet will be created when you continue</span></div>
+    <label class="field-label" for="walletFundingAmount">SOL amount</label>
+    <input id="walletFundingAmount" class="field" type="number" inputmode="decimal" min="0.005" max="10" step="0.001" value="0.1">
+    <div class="fund-amounts sol-amounts">
+      <button class="amount-chip active" data-wallet-fund-amount="0.1" type="button">0.1</button>
+      <button class="amount-chip" data-wallet-fund-amount="0.25" type="button">0.25</button>
+      <button class="amount-chip" data-wallet-fund-amount="0.5" type="button">0.5</button>
+      <button class="amount-chip" data-wallet-fund-amount="1" type="button">1 SOL</button>
+    </div>
+    <button id="submitWalletFundingBtn" class="btn primary block" type="button">Review &amp; fund</button>
+    <div id="walletFundingStatus" class="status"></div>
   </div>
 </div>
 
@@ -210,8 +232,7 @@
     <div class="sheet-title">Receive</div>
     <p class="sheet-copy">Share your address, or request an exact amount through Solana Pay.</p>
     <div class="asset-switch">
-      <button class="guide-pill active" data-receive-asset="USDC" type="button">USDC cash</button>
-      <button class="guide-pill" data-receive-asset="PYUSD" type="button">PYUSD</button>
+      <button class="guide-pill active" data-receive-asset="USDC" type="button">USD</button>
       <button class="guide-pill" data-receive-asset="SOL" type="button">SOL</button>
       <span class="network-chip">Solana network</span>
     </div>
@@ -314,36 +335,6 @@
   </div>
 </div>
 
-<!-- STORE SPEND SHEET -->
-<div id="spend" class="sheet-backdrop" hidden>
-  <div class="sheet">
-    <button class="sheet-close" data-close="spend" type="button" aria-label="Close">×</button>
-    <div class="sheet-title">Pay in stores</div>
-    <div class="spend-option">
-      <div class="option-title"><b>Solana Pay</b><span class="availability live">Live</span></div>
-      <span>Pay USDC directly at merchants displaying a Solana Pay QR. This is crypto checkout, not every NFC terminal.</span>
-      <button id="openReceiveFromSpend" class="btn ghost block" type="button">Create a USDC request</button>
-    </div>
-    <div class="spend-option">
-      <div class="option-title"><b>Coinbase Card</b><span class="availability provider">Provider account</span></div>
-      <span>Eligible users can send USDC to their own Coinbase account, choose USDC for Coinbase Card, then add that card to Apple Pay or Google Pay.</span>
-      <button id="fundCardBtn" class="btn primary block" type="button">Fund my Coinbase Card</button>
-      <a class="btn ghost block" href="https://www.coinbase.com/card" target="_blank" rel="noopener">Open Coinbase Card</a>
-    </div>
-    <div class="spend-option gated-option">
-      <div class="option-title"><b>SlimeCash card + tap</b><span class="availability gated">Issuer required</span></div>
-      <span>A branded card, Apple Pay, Google Pay, and universal NFC need an approved issuing partner and identity verification.</span>
-      <button class="btn ghost block" type="button" disabled>Not available yet</button>
-    </div>
-    <div class="spend-option gated-option">
-      <div class="option-title"><b>Bank transfer</b><span class="availability gated">Bank partner required</span></div>
-      <span>ACH deposits, withdrawals, account numbers, and cash-out require regulated bank and identity-verification partners.</span>
-      <button class="btn ghost block" type="button" disabled>Not available yet</button>
-    </div>
-    <div class="status">SlimeCash will never pretend crypto checkout works at every terminal. Provider eligibility, fees, and verification are handled by the named provider.</div>
-  </div>
-</div>
-
 <!-- TRUST / PROVIDER STATUS -->
 <div id="trust" class="sheet-backdrop" hidden>
   <div class="sheet">
@@ -413,41 +404,21 @@
   </div>
 </div>
 
-<!-- CARD SETUP SHEET (owner enables 1-tap card funding) -->
-<div id="cardsetup" class="sheet-backdrop" hidden>
-  <div class="sheet">
-    <button class="sheet-close" data-close="cardsetup" type="button" aria-label="Close">×</button>
-    <div class="sheet-title">Turn on 1-tap card funding</div>
-    <p class="sheet-copy">The instant "type an amount, pay with card or Apple Pay, done" button is built in — it just needs a free Coinbase developer key. Individuals qualify; no company needed. About 5 minutes, one time.</p>
-    <div class="guide-steps">
-      <div>1. Open the Coinbase Developer Platform and sign in with your normal Coinbase account</div>
-      <div>2. Create a project → API Keys → create a Secret API Key (Ed25519). Copy the Key ID and the Key Secret</div>
-      <div>3. In Render → this service → Environment, add:<br><b>COINBASE_CDP_KEY_ID</b> = your key id<br><b>COINBASE_CDP_KEY_SECRET</b> = your key secret</div>
-      <div>4. Save — Render redeploys, and this button becomes instant card funding for everyone</div>
-    </div>
-    <a class="btn primary block" href="https://portal.cdp.coinbase.com/" target="_blank" rel="noopener">Open Coinbase Developer Platform</a>
-    <a class="btn ghost block" href="https://dashboard.render.com/" target="_blank" rel="noopener">Open Render dashboard</a>
-    <div class="fineprint">Until then, use Venmo, Coinbase, or another wallet below — your address is copied for you and the tracker pings you when funds land.</div>
-  </div>
-</div>
-
 <!-- CONVERT SHEET -->
 <div id="convert" class="sheet-backdrop" hidden>
   <div class="sheet">
     <button class="sheet-close" data-close="convert" type="button" aria-label="Close">×</button>
     <div class="sheet-title">Convert</div>
-    <p class="sheet-copy">Swap between your dollars and SOL instantly. Turn Venmo PYUSD into SOL to trade coins, or park profits back in dollars.</p>
+    <p class="sheet-copy">Swap between USD (USDC on Solana) and SOL, then use the same wallet in SlimeWire Go.</p>
     <label class="field-label">From</label>
     <div class="asset-switch">
-      <button class="guide-pill active" data-convert-from="PYUSD" type="button">PYUSD</button>
-      <button class="guide-pill" data-convert-from="USDC" type="button">USDC</button>
+      <button class="guide-pill active" data-convert-from="USDC" type="button">USD</button>
       <button class="guide-pill" data-convert-from="SOL" type="button">SOL</button>
     </div>
     <label class="field-label">To</label>
     <div class="asset-switch">
       <button class="guide-pill active" data-convert-to="SOL" type="button">SOL</button>
-      <button class="guide-pill" data-convert-to="USDC" type="button">USDC</button>
-      <button class="guide-pill" data-convert-to="PYUSD" type="button">PYUSD</button>
+      <button class="guide-pill" data-convert-to="USDC" type="button">USD</button>
     </div>
     <label class="field-label" for="convertAmount">Amount</label>
     <div class="amount-wrap">
@@ -457,7 +428,7 @@
     <div id="convertHint" class="field-hint"></div>
     <button id="convertGoBtn" class="btn primary block" type="button">Convert</button>
     <div id="convertStatus" class="status"></div>
-    <a class="more-item" href="/fun?from=cash" style="border-bottom:0; margin-top:6px">Want memecoins? Open the Terminal ↗</a>
+    <a class="more-item" href="/fun?from=cash" style="border-bottom:0; margin-top:6px">Want memecoins? Open SlimeWire Go →</a>
   </div>
 </div>
 
@@ -478,30 +449,6 @@
   </div>
 </div>
 
-<!-- CASH OUT SHEET -->
-<div id="cashout" class="sheet-backdrop" hidden>
-  <div class="sheet">
-    <button class="sheet-close" data-close="cashout" type="button" aria-label="Close">×</button>
-    <div class="sheet-title">Cash out</div>
-    <p class="sheet-copy">SlimeCash never touches your bank — you send dollars to an app you already use and cash out there.</p>
-    <div class="guide-steps">
-      <div><b>Venmo / PayPal (PYUSD)</b> — free 1:1 dollars</div>
-      <div>1. In Venmo or PayPal open Crypto → PYUSD → Receive and copy its address</div>
-      <div>2. Tap below and paste that address</div>
-      <div>3. Back in Venmo/PayPal: sell PYUSD (no fee) → transfer to bank</div>
-    </div>
-    <button id="cashOutPyusdBtn" class="btn primary block" type="button">Send PYUSD to my Venmo/PayPal</button>
-    <div class="guide-steps" style="margin-top:14px">
-      <div><b>Coinbase</b> — works with USDC or SOL</div>
-      <div>1. In Coinbase tap Receive, pick USDC on the SOLANA network, copy the address</div>
-      <div>2. Tap below and paste it</div>
-      <div>3. Sell in Coinbase → withdraw to your bank</div>
-    </div>
-    <button id="cashOutUsdcBtn" class="btn ghost block" type="button">Send USDC to my Coinbase</button>
-    <div class="fineprint">Always double-check the receiving app shows the Solana network. Sends carry the standard 0.5% app fee.</div>
-  </div>
-</div>
-
 <!-- WALLET MANAGER -->
 <div id="wallets" class="sheet-backdrop" hidden>
   <div class="sheet">
@@ -513,12 +460,21 @@
       <button id="addCashWalletBtn" class="btn primary" type="button">Add wallet</button>
       <button id="backupCashWalletsBtn" class="btn ghost" type="button">Back up wallets</button>
     </div>
+    <div class="wallet-import-box">
+      <b>Import wallet backup</b>
+      <p>Use a SlimeWire wallet backup here. Account backup files belong in Restore account.</p>
+      <label class="btn ghost block recovery-file">Choose wallet backup<input id="walletBackupFile" type="file" accept=".txt,.json,text/plain,application/json"></label>
+      <textarea id="walletBackupText" class="field recovery-text" rows="4" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Paste wallet backup or private key"></textarea>
+      <button id="importCashWalletBtn" class="btn ghost block" type="button">Import wallet</button>
+    </div>
     <div id="cashWalletStatus" class="status"></div>
     <p class="fineprint">Your Main wallet always stays with your account, so you can never remove every wallet by accident.</p>
   </div>
 </div>
 
 <div id="toast" class="toast" hidden></div>
-<script src="/cash/cash.js?v=13"></script>
+<script src="/config.js"></script>
+<script src="/slimewire-funding.js?v=1"></script>
+<script src="/cash/cash.js?v=14"></script>
 </body>
 </html>

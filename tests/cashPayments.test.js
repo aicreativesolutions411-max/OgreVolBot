@@ -41,7 +41,7 @@ test("Coinbase CDP JWT binds method, host, and path and verifies with ES256", ()
   const payload = JSON.parse(Buffer.from(encodedPayload, "base64url"));
   assert.equal(header.alg, "ES256");
   assert.equal(payload.exp - payload.nbf, 120);
-  assert.equal(payload.uri, "POST api.cdp.coinbase.com/platform/v2/onramp/sessions");
+  assert.equal(payload.uri, "POST api.developer.coinbase.com/onramp/v1/token");
   assert.equal(crypto.verify(
     "sha256",
     Buffer.from(`${encodedHeader}.${encodedPayload}`),
@@ -50,7 +50,7 @@ test("Coinbase CDP JWT binds method, host, and path and verifies with ES256", ()
   ), true);
 });
 
-test("Coinbase session request is Solana-only, preloaded, and returns only the hosted URL", async () => {
+test("Coinbase session uses the documented hosted v1 token flow and preloads Solana", async () => {
   const { privateKey } = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
   let request;
   const result = await createCoinbaseOnrampSession({
@@ -64,18 +64,21 @@ test("Coinbase session request is Solana-only, preloaded, and returns only the h
     partnerUserRef: "slimecash-test",
     fetchImpl: async (url, options) => {
       request = { url, options, body: JSON.parse(options.body) };
-      return { ok: true, status: 201, json: async () => ({ session: { onrampUrl: "https://pay.coinbase.com/buy?sessionToken=one-use" } }) };
+      return { ok: true, status: 200, json: async () => ({ token: "one-use" }) };
     }
   });
-  assert.equal(request.body.destinationNetwork, "solana");
-  assert.equal(request.body.purchaseCurrency, "USDC");
-  assert.equal(request.body.paymentAmount, "50.00");
-  assert.equal(request.body.paymentMethod, "CARD");
+  assert.equal(request.url, "https://api.developer.coinbase.com/onramp/v1/token");
+  assert.deepEqual(request.body.addresses, [{ address: "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN", blockchains: ["solana"] }]);
+  assert.deepEqual(request.body.assets, ["USDC"]);
+  assert.equal(request.body.clientIp, "127.0.0.1");
   assert.match(request.options.headers.Authorization, /^Bearer /);
-  assert.equal(result.onrampUrl, "https://pay.coinbase.com/buy?sessionToken=one-use");
+  const hostedUrl = new URL(result.onrampUrl);
+  assert.equal(hostedUrl.origin, "https://pay.coinbase.com");
+  assert.equal(hostedUrl.searchParams.get("sessionToken"), "one-use");
+  assert.equal(hostedUrl.searchParams.get("presetFiatAmount"), "50.00");
 });
 
-test("Coinbase hosted funding falls back to the documented v1 token flow when v2 is unavailable", async () => {
+test("Coinbase hosted funding uses one current API call and preserves preload parameters", async () => {
   const { privateKey } = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
   const requests = [];
   const result = await createCoinbaseOnrampSession({
@@ -89,15 +92,14 @@ test("Coinbase hosted funding falls back to the documented v1 token flow when v2
     partnerUserRef: "slimecash-test",
     fetchImpl: async (url, options) => {
       requests.push({ url, options, body: JSON.parse(options.body) });
-      if (url.includes("/platform/v2/")) return { ok: false, status: 404, json: async () => ({}) };
       return { ok: true, status: 200, json: async () => ({ token: "one-use-v1" }) };
     }
   });
-  assert.equal(requests.length, 2);
-  assert.equal(requests[1].url, "https://api.developer.coinbase.com/onramp/v1/token");
-  assert.deepEqual(requests[1].body.addresses, [{ address: "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN", blockchains: ["solana"] }]);
-  assert.deepEqual(requests[1].body.assets, ["USDC"]);
-  assert.equal(requests[1].body.clientIp, "192.0.2.1");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://api.developer.coinbase.com/onramp/v1/token");
+  assert.deepEqual(requests[0].body.addresses, [{ address: "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN", blockchains: ["solana"] }]);
+  assert.deepEqual(requests[0].body.assets, ["USDC"]);
+  assert.equal(requests[0].body.clientIp, "192.0.2.1");
   const hostedUrl = new URL(result.onrampUrl);
   assert.equal(hostedUrl.origin, "https://pay.coinbase.com");
   assert.equal(hostedUrl.searchParams.get("sessionToken"), "one-use-v1");
@@ -137,7 +139,6 @@ test("Coinbase setup failures never expose internal cloud project identifiers", 
     partnerUserRef: "slimecash-test",
     fetchImpl: async () => {
       calls += 1;
-      if (calls === 1) return { ok: false, status: 404, json: async () => ({}) };
       return { ok: false, status: 404, json: async () => ({ message: "NotFound: failed to find app with cloud project id private-id: mongo: no documents in result" }) };
     }
   }), (error) => {
@@ -145,4 +146,5 @@ test("Coinbase setup failures never expose internal cloud project identifiers", 
     assert.doesNotMatch(error.message, /cloud project id|private-id|mongo/i);
     return true;
   });
+  assert.equal(calls, 1);
 });

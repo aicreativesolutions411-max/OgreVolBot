@@ -308,7 +308,7 @@
     const sol = Number(wallet.sol || 0);
     const { totalSol } = portfolioSolTotal();
     const totalUsd = state.solUsd > 0 ? totalSol * state.solUsd : null;
-    target.innerHTML = `<section class="readiness-card ready"><div class="readiness-summary"><div><span>WALLET READY</span><h2>${sol > 0 ? `${sol.toFixed(3)} SOL ready` : "Add SOL to trade"}</h2><p>${sol > 0 ? "Pick a coin and choose your amount." : "Add SOL from Coinbase, Phantom, Solflare, or any wallet."}</p></div><div class="wallet-cash-total"><span>TOTAL VALUE</span><b>${formatWalletUsd(totalUsd)}</b><small>SOL + COINS</small></div></div><div class="readiness-steps"><b class="done">OK <i>Wallet</i></b><b class="done">OK <i>Backup</i></b><b>${sol > 0 ? "OK" : "3"} <i>${sol > 0 ? "Funded" : "Add SOL"}</i></b></div><button type="button" data-deposit>${sol > 0 ? "Add more SOL" : "Add SOL"}</button></section>`;
+    target.innerHTML = `<section class="readiness-card ready"><div class="readiness-summary"><div><span>WALLET READY</span><h2>${sol > 0 ? `${sol.toFixed(3)} SOL ready` : "Add SOL to trade"}</h2><p>${sol > 0 ? "Pick a coin and choose your amount." : "Add SOL from Phantom, Solflare, or another Solana wallet."}</p></div><div class="wallet-cash-total"><span>TOTAL VALUE</span><b>${formatWalletUsd(totalUsd)}</b><small>SOL + COINS</small></div></div><div class="readiness-steps"><b class="done">OK <i>Wallet</i></b><b class="done">OK <i>Backup</i></b><b>${sol > 0 ? "OK" : "3"} <i>${sol > 0 ? "Funded" : "Add SOL"}</i></b></div><button type="button" data-deposit>${sol > 0 ? "Add more SOL" : "Add SOL"}</button></section>`;
   }
 
   function normalizeSol(row) {
@@ -786,6 +786,7 @@
       if (credentialsChanged) {
         credentials = await post("/api/web/profile/credentials", { username, password });
         if (!credentials.ok || !credentials.data?.ok) { toast(apiMessage(credentials.data, "Could not save profile"), true); return; }
+        await downloadFunAccountBackup();
       }
       const visibility = await post("/api/web/profile/referral", { showOnTraderBoard: Boolean($("[data-profile-public]")?.checked), traderBoardWalletMode: "all" });
       if (!visibility.ok || !visibility.data?.ok) { toast(apiMessage(visibility.data, "Could not publish profile"), true); return; }
@@ -804,6 +805,7 @@
     const result = await post(mode === "create" ? "/api/web/signup" : "/api/web/password-login", { username, password, ref: localStorage.getItem("ggRef") || "" });
     if (!result.ok || !result.data?.ok || !result.data?.token) { status.textContent = result.status === 0 ? "Could not reach SlimeWire. Check your connection and try again." : apiMessage(result.data, mode === "create" ? "Could not create profile." : "Could not log in."); button.disabled = false; button.textContent = mode === "create" ? "Create profile" : "Log in"; return; }
     setToken(result.data.token); state.user = result.data.user || null; closeSheet();
+    if (mode === "create") await downloadFunAccountBackup();
     await Promise.all([loadMe(), loadWallets(), loadPresets(), loadPositions()]);
     renderWalletHero(); renderSocialProfile(); paintWalletPill(); toast(mode === "create" ? "Profile created" : "Welcome back");
   }
@@ -877,70 +879,41 @@
 
   function openSheet(html) { $("[data-sheet-content]").innerHTML = html; $("[data-sheet-overlay]").hidden = false; }
   function closeSheet() { clearTimeout(state.volumePoll); state.volumePoll = null; $("[data-sheet-overlay]").hidden = true; $("[data-sheet-content]").innerHTML = ""; }
-  function b64ToBytes(value) { const binary = atob(value); const bytes = new Uint8Array(binary.length); for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index); return bytes; }
-  function bytesToB64(value) { const bytes = value instanceof Uint8Array ? value : new Uint8Array(value); let binary = ""; for (let index = 0; index < bytes.length; index += 1) binary += String.fromCharCode(bytes[index]); return btoa(binary); }
-  let fundingWeb3Promise = null;
-  function loadFundingWeb3() {
-    if (window.solanaWeb3) return Promise.resolve(window.solanaWeb3);
-    if (fundingWeb3Promise) return fundingWeb3Promise;
-    fundingWeb3Promise = new Promise((resolve, reject) => {
-      const script = document.createElement("script");
-      script.src = "/vendor/solana-web3.iife.min.js";
-      script.onload = () => window.solanaWeb3 ? resolve(window.solanaWeb3) : reject(new Error("The Solana signing library did not load."));
-      script.onerror = () => reject(new Error("The Solana signing library could not load. Try again."));
-      document.head.appendChild(script);
-    });
-    return fundingWeb3Promise;
-  }
-  function fundingProvider(kind) {
-    if (kind === "phantom") {
-      const provider = window.phantom?.solana || (window.solana?.isPhantom ? window.solana : null);
-      return provider?.isPhantom ? provider : null;
-    }
-    if (kind === "solflare") return window.solflare && (window.solflare.isSolflare || typeof window.solflare.connect === "function") ? window.solflare : null;
-    return null;
-  }
-  function fundingProviderLabel(kind) { return kind === "solflare" ? "Solflare" : "Phantom"; }
-  function isMobileWalletPlatform() { return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "") || (/Macintosh/i.test(navigator.userAgent || "") && navigator.maxTouchPoints > 1); }
-  function fundingReturnUrl(kind) {
-    const url = new URL(location.href);
-    url.hash = "";
-    url.searchParams.set("fund", kind);
-    return url.toString();
-  }
-  function fundingWalletBrowseUrl(kind) {
-    const target = encodeURIComponent(fundingReturnUrl(kind));
-    const ref = encodeURIComponent(location.origin);
-    if (kind === "phantom") return `https://phantom.app/ul/browse/${target}?ref=${ref}`;
-    if (kind === "solflare") return `https://solflare.com/ul/v1/browse/${target}?ref=${ref}`;
-    return "";
-  }
+  const WalletFunding = window.SlimeWireFunding;
+  function fundingProvider(kind) { return WalletFunding?.provider(kind) || null; }
+  function fundingProviderLabel(kind) { return WalletFunding?.label(kind, fundingProvider(kind)) || "Solana wallet"; }
+  function isMobileWalletPlatform() { return Boolean(WalletFunding?.isMobile()); }
+  function fundingWalletBrowseUrl(kind) { return WalletFunding?.browseUrl(kind) || ""; }
   function openFundingSheet(note = "") {
     const wallet = activeWallet();
     const destination = wallet
       ? `<div class="fund-wallet-summary"><span>Funding</span><b>${escapeHtml(wallet.label || "SlimeWire wallet")}</b><small>${escapeHtml(short(wallet.publicKey))} · ${Number(wallet.sol || 0).toFixed(4)} SOL</small></div>`
       : `<div class="fund-wallet-summary"><span>New trading wallet</span><b>Created only when you continue</b><small>Your encrypted backup downloads during the funding setup.</small></div>`;
     openSheet(`<div class="sheet-title"><img src="/assets/slimewire/png/slimewire-mark.png" alt=""><div><h2>Add SOL</h2><p>Choose one funding source</p></div></div>${destination}${note ? `<p class="fund-note">${escapeHtml(note)}</p>` : ""}<div class="fund-source-grid">
-      <button type="button" data-fund-coinbase><i class="fund-provider-mark coinbase">C</i><b>Coinbase</b><span>Card, bank or Apple Pay</span></button>
+      <button type="button" data-fund-coinbase><i class="fund-provider-mark coinbase">C</i><b>Coinbase</b><span>Coinbase account checkout</span></button>
       <button type="button" data-fund-wallet="phantom"><img src="/assets/slimewire/clean-ui/wallet_icons/default/phantom.png" alt=""><b>Phantom</b><span>Connect and approve SOL</span></button>
       <button type="button" data-fund-wallet="solflare"><img src="/assets/slimewire/clean-ui/wallet_icons/default/solflare.png" alt=""><b>Solflare</b><span>Connect and approve SOL</span></button>
+      <button type="button" data-fund-wallet="other"><i class="fund-provider-mark copy">↗</i><b>Other wallet</b><span>Use an injected Solana wallet</span></button>
       <button type="button" data-fund-copy><i class="fund-provider-mark copy">⧉</i><b>${wallet ? "Copy address" : "Create & copy"}</b><span>Fund from anywhere else</span></button>
-    </div><p class="fineprint">Phantom and Solflare create one exact transfer for the amount you enter. You review and approve it in your wallet; SlimeWire never receives your wallet keys.</p>`);
+    </div><p class="fineprint">Wallet funding creates one exact transfer for the amount you enter. You review and approve it in your wallet; SlimeWire never receives your wallet keys.</p>`);
   }
   function openFundingAmountSheet(kind, publicKey) {
     const wallet = activeWallet();
     const label = fundingProviderLabel(kind);
-    openSheet(`<div class="sheet-title"><img src="/assets/slimewire/clean-ui/wallet_icons/default/${kind}.png" alt=""><div><h2>Fund with ${label}</h2><p>Connected ${escapeHtml(short(publicKey))}</p></div></div><div class="fund-wallet-summary"><span>Destination</span><b>${escapeHtml(wallet?.label || "New SlimeWire trading wallet")}</b><small>${wallet ? escapeHtml(short(wallet.publicKey)) : "Created and backed up after you continue"}</small></div><div class="field"><label>SOL amount</label><input data-fund-sol inputmode="decimal" value="0.1" aria-label="SOL funding amount"><div class="amount-chips">${["0.1", "0.25", "0.5", "1"].map((amount) => `<button type="button" data-fund-amount="${amount}">${amount}</button>`).join("")}</div></div><button class="submit-trade" type="button" data-submit-wallet-funding="${kind}">${wallet ? "Review & fund wallet" : "Create & fund wallet"}</button><button class="recovery-button" type="button" data-back-funding>Choose another method</button><p class="fund-note" data-funding-status>Next, approve exactly this SOL transfer in ${label}.</p>`);
+    const icon = kind === "other" ? "/assets/slimewire/png/slimewire-mark.png" : `/assets/slimewire/clean-ui/wallet_icons/default/${kind}.png`;
+    openSheet(`<div class="sheet-title"><img src="${icon}" alt=""><div><h2>Fund with ${label}</h2><p>Connected ${escapeHtml(short(publicKey))}</p></div></div><div class="fund-wallet-summary"><span>Destination</span><b>${escapeHtml(wallet?.label || "New SlimeWire trading wallet")}</b><small>${wallet ? escapeHtml(short(wallet.publicKey)) : "Created and backed up after you continue"}</small></div><div class="field"><label>SOL amount</label><input data-fund-sol inputmode="decimal" value="0.1" aria-label="SOL funding amount"><div class="amount-chips">${["0.1", "0.25", "0.5", "1"].map((amount) => `<button type="button" data-fund-amount="${amount}">${amount}</button>`).join("")}</div></div><button class="submit-trade" type="button" data-submit-wallet-funding="${kind}">${wallet ? "Review & fund wallet" : "Create & fund wallet"}</button><button class="recovery-button" type="button" data-back-funding>Choose another method</button><p class="fund-note" data-funding-status>Next, approve exactly this SOL transfer in ${label}.</p>`);
   }
   async function startWalletFunding(kind, button) {
-    if (!['phantom', 'solflare'].includes(kind)) return;
+    if (!["phantom", "solflare", "other"].includes(kind)) return;
     const label = fundingProviderLabel(kind);
     const provider = fundingProvider(kind);
     if (!provider) {
-      if (isMobileWalletPlatform()) {
+      if (isMobileWalletPlatform() && fundingWalletBrowseUrl(kind)) {
         location.assign(fundingWalletBrowseUrl(kind));
+      } else if (kind === "other") {
+        openFundingSheet("Open SlimeWire in your Solana wallet's browser, or use Copy address for a manual transfer.");
       } else {
-        window.open(kind === "phantom" ? "https://phantom.app/download" : "https://solflare.com/download", "_blank", "noopener");
+        window.open(WalletFunding?.installUrl(kind), "_blank", "noopener");
         toast(`${label} is not installed in this browser.`, true);
       }
       return;
@@ -993,10 +966,7 @@
       const order = created.data.order;
       button.textContent = `Approve in ${fundingProviderLabel(kind)}…`;
       if (status) status.textContent = `Approve ${amountSol} SOL in ${fundingProviderLabel(kind)}. Nothing else is requested.`;
-      const web3 = await loadFundingWeb3();
-      const transaction = web3.Transaction.from(b64ToBytes(order.transaction));
-      const signed = await provider.signTransaction(transaction);
-      const signedTransaction = bytesToB64((signed || transaction).serialize());
+      const signedTransaction = await WalletFunding.signSerialized(provider, order.transaction);
       button.textContent = "Confirming on-chain…";
       if (status) status.textContent = "Funding your SlimeWire wallet…";
       const attemptBody = { walletFundingAttemptId: order.walletFundingAttemptId, signedTransaction };
@@ -1070,7 +1040,10 @@
   function toolCard(icon, label, note, action, attr = "data-tool-action") { return `<button class="tool-card" type="button" ${attr}="${escapeHtml(action)}"><img src="${TOOL_ICONS}${escapeHtml(icon)}.png" alt=""><b>${escapeHtml(label)}</b><span>${escapeHtml(note)}</span></button>`; }
   async function openTools(global = false) {
     const coin = state.selected || {}, key = coinKey(coin), creator = key && state.launches.some((launch) => String(launch.mint || launch.tokenAddress || "").toLowerCase() === key.toLowerCase());
-    openSheet(`<div class="sheet-title"><img src="${global ? "/assets/slimewire/png/slimewire-mark.png" : escapeHtml(coinImage(coin))}" alt=""><div><h2>${global ? "Automate" : `$${escapeHtml(coin.symbol || short(key))} tools`}</h2><p>Power when you need it. Clean chart when you do not.</p></div></div><div class="tool-grid">
+    openSheet(`<div class="sheet-title"><img src="${global ? "/assets/slimewire/png/slimewire-mark.png" : escapeHtml(coinImage(coin))}" alt=""><div><h2>${global ? "More" : `$${escapeHtml(coin.symbol || short(key))} tools`}</h2><p>${global ? "Cash, profile, traders, and automation in one place." : "Power when you need it. Clean chart when you do not."}</p></div></div><div class="tool-grid">
+      ${global ? toolCard("wallet", "SlimeCash", "Send, receive, and fund", "cash") : ""}
+      ${global ? toolCard("kol", "Profile", "Account and social settings", "profile") : ""}
+      ${global ? toolCard("pnl", "Traders", "Calls and public proof", "traders") : ""}
       ${!global ? toolCard("positions", "TP / SL", "Server-side exits", "exits") : ""}
       ${!global ? toolCard("wallet", "Wallet map", "Holders and flows", "map") : ""}
       ${!global ? toolCard("warning", "Safety", "Full contract read", "safety") : ""}
@@ -1147,6 +1120,12 @@
   }
   function downloadText(filename, text) { const blob = new Blob([text], { type: "text/plain" }), url = URL.createObjectURL(blob), link = document.createElement("a"); link.href = url; link.download = filename || "slimewire-backup.txt"; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000); }
   function downloadWalletFiles(downloads = {}) { for (const item of [downloads.encryptedBackup, downloads.recoveryKeys].filter((entry) => entry?.text)) downloadText(item.filename, item.text); }
+  async function downloadFunAccountBackup() {
+    const result = await post("/api/web/cash/account-backup", {});
+    if (!result.ok || !result.data?.accountBackup?.text) return false;
+    downloadText(result.data.accountBackup.filename, result.data.accountBackup.text);
+    return true;
+  }
   async function openWalletManager() {
     if (state.token) await loadWallets();
     const rows = state.wallets.length ? state.wallets.map((wallet) => `<div class="wallet-manage-row"><div><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${wallet.index === state.activeWallet ? " · Active" : ""}</b><span>${escapeHtml(short(wallet.publicKey))} · ${Number(wallet.sol || 0).toFixed(4)} SOL</span><span class="wallet-rename"><input data-wallet-rename-input="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40"><button type="button" data-rename-wallet="${wallet.index}">Rename</button></span></div><div><button type="button" data-select-wallet="${wallet.index}">Use</button> <button class="danger" type="button" data-remove-wallet="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button></div></div>`).join("") : '<div class="read-card"><h3>No wallet loaded</h3><p>Create a new wallet or restore one from a saved backup. Backup files download automatically.</p></div>';
@@ -1336,6 +1315,9 @@
     if (action === "safety") { const shield = state.selectedDetail?.shield || state.selectedDetail?.safety || coin.safety || {}; openSheet(`<div class="sheet-title"><img src="${escapeHtml(coinImage(coin))}" alt=""><div><h2>SlimeShield safety</h2><p>${escapeHtml(coin.symbol || short(key))}</p></div></div><div class="read-card"><h3>${escapeHtml(String(shield.verdict || "Live safety read").toUpperCase())}${Number.isFinite(Number(shield.score)) ? ` · ${Math.round(Number(shield.score))}/100` : ""}</h3><p>${escapeHtml(shield.summary || "Safety data is still resolving. Trading protection and honeypot checks remain active.")}</p></div>`); return; }
     if (action === "swap") { if (key) openTradeSheet("buy"); else { closeSheet(); openSearch(); } return; }
     if (action === "bundle") { openBundleSheet(); return; }
+    if (action === "cash") { location.assign("/cash/?from=fun"); return; }
+    if (action === "profile") { closeSheet(); state.profileTab = "social"; $$('[data-profile]').forEach((button) => button.classList.toggle("active", button.dataset.profile === "social")); setView("wallet"); loadWalletView(); return; }
+    if (action === "traders") { closeSheet(); setView("leaders"); return; }
     if (action === "portfolio") { closeSheet(); state.profileTab = "positions"; setView("wallet"); return; }
     if (action === "liquidity") { location.href = `/#rhtrade/${encodeURIComponent(key)}`; return; }
     if (action === "volume") { openVolumeSheet(); return; }
@@ -1354,6 +1336,7 @@
   document.addEventListener("click", async (event) => {
     const nav = event.target.closest("[data-nav]"); if (nav) { closeSearch(); closeSheet(); setView(nav.dataset.nav); return; }
     if (event.target.closest("[data-open-search]")) { openSearch(); return; }
+    if (event.target.closest("[data-open-cash]")) { location.assign("/cash/?from=fun"); return; }
     if (event.target.closest("[data-close-search]")) { closeSearch(); return; }
     if (event.target.closest("[data-close-sheet]")) { closeSheet(); return; }
     if (event.target.closest("[data-wallet-entry]")) { if (state.token && !state.wallets.length) await loadWallets(); openFundingSheet(); return; }
@@ -1505,9 +1488,14 @@
     } else {
       const match = location.hash.match(/^#coin\/(.+)$/); if (match) openCoin(decodeURIComponent(match[1]));
       if (routeParams.get("tab") === "wallet") setView("wallet");
+      if (routeParams.get("profile") === "1") {
+        state.profileTab = "social";
+        $$('[data-profile]').forEach((button) => button.classList.toggle("active", button.dataset.profile === "social"));
+        setView("wallet");
+      }
     }
     const requestedFunding = String(routeParams.get("fund") || "").toLowerCase();
-    if (["phantom", "solflare"].includes(requestedFunding)) {
+    if (["phantom", "solflare", "other"].includes(requestedFunding)) {
       const cleanUrl = new URL(location.href);
       cleanUrl.searchParams.delete("fund");
       history.replaceState(null, "", cleanUrl.toString());

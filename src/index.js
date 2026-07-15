@@ -9556,14 +9556,13 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         network: "solana",
-        assets: ["USDC", "SOL", "PYUSD"],
+        assets: ["USDC", "SOL"],
         providers: {
           coinbase: { integrated: coinbaseConfigured, url: "https://www.coinbase.com/buy" },
-          phantom: { integrated: false, url: "https://phantom.app/" },
-          robinhood: { integrated: false, url: "https://robinhood.com/crypto/SOL" },
-          venmo: { integrated: false, url: "https://venmo.com" },
-          paypal: { integrated: false, url: "https://www.paypal.com/us/digital-wallet/manage-money/crypto" },
-          peer: { integrated: false, experimental: true, url: "https://www.peer.xyz" }
+          phantom: { integrated: true, mode: "wallet_approval" },
+          solflare: { integrated: true, mode: "wallet_approval" },
+          other: { integrated: true, mode: "injected_solana_wallet" },
+          manual: { integrated: true, mode: "copy_address" }
         },
         headlessApplePay: {
           enabled: coinbaseConfigured && CONFIG.coinbaseHeadlessOnrampEnabled,
@@ -63732,7 +63731,7 @@ async function createWebWalletFundingOrder(userId, body = {}) {
   const profile = await webProfileForUser(userId);
   const connected = profile.connectedWallet || {};
   if (!connected.publicKey) {
-    const error = new Error("Connect Phantom or Solflare before funding this wallet.");
+    const error = new Error("Connect a Solana wallet before funding this wallet.");
     error.statusCode = 400;
     throw error;
   }

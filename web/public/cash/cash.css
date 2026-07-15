@@ -354,3 +354,21 @@ a { color: var(--mint); text-decoration: none; }
   border-radius: 10px; padding: 8px 12px; font-weight: 650; font-size: 12px; flex: none;
 }
 .pending-close { color: var(--muted); font-size: 18px; padding: 2px 6px; flex: none; }
+
+/* Unified Cash / Go shell. */
+.text-action.block { display: block; width: 100%; text-align: center; padding: 13px; margin-top: 5px; }
+.suite-handoff { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 14px; background: linear-gradient(135deg, rgba(114,255,35,.11), var(--panel)); color: var(--ink); }
+.suite-handoff img { width: 34px; height: 34px; object-fit: contain; flex: none; }
+.suite-handoff span { display: grid; flex: 1; min-width: 0; }
+.suite-handoff b { font-size: 13px; }
+.suite-handoff small { color: var(--muted); font-size: 10px; }
+.suite-handoff em { color: var(--green); font-size: 11px; font-style: normal; font-weight: 700; }
+.account-summary { display: grid; gap: 2px; margin: 8px 0 12px; padding: 12px 13px; border: 1px solid var(--line); border-radius: 13px; background: var(--soft); }
+.account-summary b { color: var(--mint); font-size: 12px; }
+.account-summary span { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.asset-cards { grid-template-columns: repeat(2, 1fr); }
+.provider-logo.solflare { background: linear-gradient(135deg,#ff8d33,#4922c7); }
+.wallet-import-box { margin-top: 16px; padding-top: 15px; border-top: 1px solid var(--line-soft); }
+.wallet-import-box > b { color: var(--mint); font-size: 13px; }
+.wallet-import-box > p { color: var(--muted); font-size: 11px; margin: 3px 0 9px; }
+.sol-amounts { grid-template-columns: repeat(4, 1fr); }

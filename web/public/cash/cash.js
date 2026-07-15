@@ -6,7 +6,6 @@
 
   const TOKEN_KEY = "ogreWebToken";
   const ACTIVITY_KEY = "slimecashActivity";
-  const GUIDE_KEY = "slimecashGuide";
   const PENDING_FUND_KEY = "slimecashPendingFund";
   const CONTACTS_KEY = "slimecashContacts";
   const SECURITY_KEY = "slimecashSecurity";
@@ -17,18 +16,17 @@
     || (/^(?:www\.)?slimewire\.org$/i.test(location.hostname) ? "https://app.slimewire.org" : "");
   const WSOL_MINT = "So11111111111111111111111111111111111111112";
   const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-  const PYUSD_MINT = "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo";   // PayPal USD on Solana (Token-2022)
+  const WalletFunding = window.SlimeWireFunding;
 
   const state = {
     token: localStorage.getItem(TOKEN_KEY) || "",
+    account: null,
     wallet: null,          // { index, publicKey, label }
     wallets: [],
     lamports: null,
     usdcRaw: null,
     usdc: 0,
-    pyusdRaw: null,
-    pyusd: 0,
-    convertFrom: "PYUSD",
+    convertFrom: "USDC",
     convertTo: "SOL",
     tokens: [],
     solUsd: 0,
@@ -40,6 +38,8 @@
     depositAsset: "USDC",
     receiveAsset: "USDC",
     funding: null,
+    fundingKind: "",
+    fundingPublicKey: "",
     resolved: null,        // { address, handle } for send target
     depositTimer: null,
     requestTimer: null,
@@ -49,8 +49,7 @@
     cashSecurity: null,
     pendingSendAttemptId: "",
     pendingRequestId: "",
-    deferredInstall: null,
-    terminalLoaded: false
+    deferredInstall: null
   };
 
   const $ = (id) => document.getElementById(id);
@@ -211,7 +210,8 @@
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), method === "GET" ? 12_000 : 35_000);
+      const moneyTimeout = /\/(?:wallet-funding\/execute|cash\/(?:send|convert))$/.test(path) ? 75_000 : 35_000;
+      const timer = setTimeout(() => controller.abort(), method === "GET" ? 12_000 : moneyTimeout);
       const response = await fetch(`${API_BASE}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: controller.signal }).finally(() => clearTimeout(timer));
       const isJson = /application\/json/i.test(response.headers.get("content-type") || "");
       if (!isJson) {
@@ -357,6 +357,11 @@
       status.className = "status bad";
       return;
     }
+    if (/secretKey|private key|wallet backup|encryptedBackup|solflare-recovery/i.test(value) && !/\bsc_[A-Za-z0-9_-]{32,}\b/.test(value)) {
+      status.textContent = "That looks like a wallet backup, not an account backup. Open Profile → Manage wallets → Import wallet backup.";
+      status.className = "status bad";
+      return;
+    }
     button.disabled = true;
     button.textContent = "Restoring…";
     const result = await post("/api/web/cash/recover", { key: value });
@@ -374,24 +379,101 @@
     location.reload();
   }
 
-  async function ensureAccount() {
-    if (state.token) return true;
-    const result = await post("/api/web/signup", {});
-    if (result.ok && result.data.token) {
-      setToken(result.data.token);
-      return true;
+  async function loadAccount() {
+    if (!state.token) { state.account = null; renderProfile(); return null; }
+    const result = await get("/api/web/me");
+    if (result.status === 401) { setToken(""); state.account = null; return null; }
+    if (result.ok) state.account = result.data.user || result.data.me || null;
+    renderProfile();
+    return state.account;
+  }
+
+  function accountCredentials() {
+    return {
+      username: String($("accountUsername").value || "").trim(),
+      password: String($("accountPassword").value || "")
+    };
+  }
+
+  function validAccountCredentials(username, password) {
+    if (!/^[a-z0-9][a-z0-9_.-]{2,23}$/i.test(username)) return "Username must be 3–24 letters, numbers, dots, dashes, or underscores.";
+    if (password.length < 8) return "Password must be at least 8 characters.";
+    return "";
+  }
+
+  async function createOrSecureCashAccount() {
+    const { username, password } = accountCredentials();
+    const error = validAccountCredentials(username, password);
+    const status = $("accountStatus");
+    if (error) { status.textContent = error; status.className = "status bad"; return; }
+    const button = $("createAccountBtn");
+    button.disabled = true; button.textContent = state.token ? "Saving…" : "Creating…";
+    const body = { username, password, ref: localStorage.getItem("ggRef") || "" };
+    const result = state.token
+      ? await post("/api/web/profile/credentials", body)
+      : await post("/api/web/signup", body);
+    button.disabled = false;
+    if (!result.ok || (!state.token && !result.data.token)) {
+      button.textContent = state.token ? "Secure account" : "Create account";
+      status.textContent = result.data.error || result.data.message || "Could not save this account.";
+      status.className = "status bad";
+      return;
     }
-    toast(result.data.error || "Could not create your account.", true);
+    if (result.data.token) setToken(result.data.token);
+    state.account = result.data.user || state.account;
+    await loadAccount();
+    await ensureWallet({ create: false });
+    const backedUp = await backupCashAccount({ quiet: true });
+    closeSheet("onboard");
+    refreshProfile();
+    renderProfile();
+    toast(backedUp
+      ? `${state.account?.username ? `@${state.account.username}` : "Account"} saved · recovery backup downloaded`
+      : `${state.account?.username ? `@${state.account.username}` : "Account"} saved · download a recovery backup from Profile`, !backedUp);
+    resumeWalletFundingRoute();
+  }
+
+  async function loginCashAccount() {
+    const { username, password } = accountCredentials();
+    const error = validAccountCredentials(username, password);
+    const status = $("accountStatus");
+    if (error) { status.textContent = error; status.className = "status bad"; return; }
+    const button = $("loginAccountBtn");
+    button.disabled = true; button.textContent = "Logging in…";
+    const result = await post("/api/web/password-login", { username, password });
+    button.disabled = false; button.textContent = "Log in";
+    if (!result.ok || !result.data.token) {
+      status.textContent = result.data.error || result.data.message || "Username or password was not accepted.";
+      status.className = "status bad";
+      return;
+    }
+    setToken(result.data.token);
+    state.account = result.data.user || null;
+    localStorage.removeItem(ACTIVE_WALLET_KEY);
+    await loadAccount();
+    await ensureWallet({ create: false });
+    closeSheet("onboard");
+    refreshProfile();
+    refreshBalance();
+    loadCashHistory();
+    toast(`Welcome back${state.account?.username ? `, @${state.account.username}` : ""}`);
+    resumeWalletFundingRoute();
+  }
+
+  async function ensureAccount() {
+    if (state.token && (state.account || await loadAccount())) return true;
+    showOnboard();
     return false;
   }
 
-  async function ensureWallet() {
+  async function ensureWallet({ create = false, label = "SlimeCash" } = {}) {
+    if (!state.token) return null;
     let result = await get("/api/web/wallets");
     if (result.status === 401) { setToken(""); return null; }
     if (!result.ok) return null;
     let rows = (result.data.wallets || []).filter((row) => !row.volumeBot && !row.ephemeral && !row.sessionWallet);
-    if (!rows.length) {
-      const created = await post("/api/web/wallets/create", { label: "SlimeCash", count: 1 });
+    if (!rows.length && create) {
+      const created = await post("/api/web/wallets/create", { label, count: 1 });
       if (!created.ok) { toast(created.data.error || "Could not create a wallet.", true); return null; }
       downloadWalletFiles(created.data.downloads);
       // The create response already has the new wallet. Paint immediately
@@ -402,8 +484,8 @@
         rows = (result.data.wallets || []).filter((row) => !row.volumeBot && !row.ephemeral && !row.sessionWallet);
       }
     }
-    if (!rows.length) return null;
     state.wallets = rows;
+    if (!rows.length) { state.wallet = null; renderProfile(); return null; }
     const savedIndex = Number(localStorage.getItem(ACTIVE_WALLET_KEY));
     const selected = rows.find((row) => Number(row.index) === savedIndex) || rows[0];
     state.wallet = { index: selected.index, publicKey: selected.publicKey, label: selected.label || "" };
@@ -413,6 +495,10 @@
   function renderCashWallets() {
     const list = $("cashWalletList");
     if (!list) return;
+    if (!state.wallets.length) {
+      list.innerHTML = '<div class="activity-empty">No wallet on this account yet. Create one or import a wallet backup below.</div>';
+      return;
+    }
     const mainIndex = Math.min(...state.wallets.map((wallet) => Number(wallet.index)));
     list.innerHTML = state.wallets.map((wallet) => {
       const main = Number(wallet.index) === mainIndex;
@@ -422,7 +508,8 @@
   }
 
   async function openCashWallets() {
-    if (!(await ensureWallet())) { toast("Could not load wallets.", true); return; }
+    if (!(await ensureAccount())) return;
+    await ensureWallet({ create: false });
     renderCashWallets();
     $("cashWalletStatus").textContent = "";
     openSheet("wallets");
@@ -433,7 +520,7 @@
     if (!wallet) return;
     state.wallet = { index: wallet.index, publicKey: wallet.publicKey, label: wallet.label || "" };
     localStorage.setItem(ACTIVE_WALLET_KEY, String(wallet.index));
-    state.lamports = state.usdcRaw = state.pyusdRaw = null;
+    state.lamports = state.usdcRaw = null;
     await refreshBalance({ silent: true });
     renderProfile();
     renderCashWallets();
@@ -453,6 +540,7 @@
   }
 
   async function addCashWallet() {
+    if (!(await ensureAccount())) return;
     const button = $("addCashWalletBtn");
     button.disabled = true; button.textContent = "Adding…";
     const result = await post("/api/web/wallets/create", { label: "SlimeCash wallet", count: 1 });
@@ -466,6 +554,35 @@
     renderCashWallets();
     renderProfile();
     $("cashWalletStatus").textContent = "New wallet created and backups downloaded.";
+  }
+
+  async function importCashWallet() {
+    if (!(await ensureAccount())) return;
+    const text = String($("walletBackupText").value || "").trim();
+    const status = $("cashWalletStatus");
+    if (!text) { status.textContent = "Choose a wallet backup or paste its contents."; status.className = "status bad"; return; }
+    if (/\bsc_[A-Za-z0-9_-]{32,}\b/.test(text) && !/secretKey|private key|wallet|encrypted/i.test(text)) {
+      status.textContent = "That looks like an account backup. Use Restore account in Profile instead.";
+      status.className = "status bad";
+      return;
+    }
+    const button = $("importCashWalletBtn");
+    button.disabled = true; button.textContent = "Importing…";
+    let result = await post("/api/web/wallets/restore", { backupText: text });
+    if (!result.ok || !result.data?.ok) result = await post("/api/web/wallets/import", { secret: text, label: "Restored wallet" });
+    button.disabled = false; button.textContent = "Import wallet";
+    if (!result.ok || !result.data?.ok) {
+      status.textContent = result.data?.error || "That wallet backup could not be imported.";
+      status.className = "status bad";
+      return;
+    }
+    downloadWalletFiles(result.data.downloads || result.data.backup?.downloads);
+    $("walletBackupText").value = "";
+    await ensureWallet({ create: false });
+    await refreshBalance({ silent: true });
+    renderCashWallets(); renderProfile();
+    status.textContent = "Wallet imported and selected.";
+    status.className = "status ok";
   }
 
   async function removeCashWallet(index, publicKey) {
@@ -525,12 +642,9 @@
     if (!result.ok) { if (!silent) toast(result.data.error || "Could not load balance.", true); return; }
     const previousSol = state.lamports;
     const previousUsdc = state.usdcRaw;
-    const previousPyusd = state.pyusdRaw;
     state.lamports = Number(result.data.assets?.SOL?.rawAmount || 0);
     state.usdcRaw = Number(result.data.assets?.USDC?.rawAmount || 0);
     state.usdc = Number(result.data.assets?.USDC?.uiAmount || 0);
-    state.pyusdRaw = Number(result.data.assets?.PYUSD?.rawAmount || 0);
-    state.pyusd = Number(result.data.assets?.PYUSD?.uiAmount || 0);
     if (result.data.wallet?.address) state.wallet = { index: result.data.wallet.index, publicKey: result.data.wallet.address, label: result.data.wallet.label || "" };
     renderBalance();
     if (previousUsdc !== null && state.usdcRaw > previousUsdc) {
@@ -542,17 +656,6 @@
       notifyIncoming("USDC received", `+$${gainedUsdc.toFixed(2)} arrived in SlimeCash`);
       renderActivity();
       pendingFundArrived("USDC");
-    }
-    if (previousPyusd !== null && state.pyusdRaw > previousPyusd) {
-      const gainedPyusd = (state.pyusdRaw - previousPyusd) / 1e6;
-      addActivity({ type: "in", title: "PYUSD arrived", sub: "Dollars landed from Venmo/PayPal", asset: "PYUSD", amountUsd: gainedPyusd, at: Date.now() });
-      toast(`+$${gainedPyusd.toFixed(2)} PYUSD added — ready to use`);
-      $("depositWatch").textContent = `+$${gainedPyusd.toFixed(2)} PYUSD received`;
-      $("depositWatch").className = "status ok";
-      notifyIncoming("PYUSD received", `+$${gainedPyusd.toFixed(2)} arrived in SlimeCash`);
-      renderActivity();
-      pendingFundArrived("PYUSD");
-      setTimeout(() => toast("Tap Convert to turn PYUSD into SOL for trading"), 3600);
     }
     if (previousSol !== null && state.lamports > previousSol + 10000) {
       const gainedSol = (state.lamports - previousSol) / 1e9;
@@ -568,13 +671,13 @@
 
   function totalUsd() {
     const sol = (state.lamports || 0) / 1e9;
-    return state.usdc + state.pyusd + sol * state.solUsd;
+    return state.usdc + sol * state.solUsd;
   }
 
   function renderBalance() {
     const sol = (state.lamports || 0) / 1e9;
     $("balanceUsd").textContent = formatUsd(totalUsd());
-    $("balanceSub").textContent = `$${state.usdc.toFixed(2)} USDC${state.pyusd > 0 ? ` · $${state.pyusd.toFixed(2)} PYUSD` : ""} · ${sol.toFixed(4)} SOL`;
+    $("balanceSub").textContent = `$${state.usdc.toFixed(2)} USD · ${sol.toFixed(4)} SOL`;
   }
 
   /* ---------------- activity (device-local) ---------------- */
@@ -669,7 +772,14 @@
     $("cardHandle").textContent = has ? `$${state.displayHandle}` : "claim your $handle";
     $("cardLink").textContent = has ? `slimewire.org/cash/?pay=${state.handle} · tap to share` : "tap to set up your pay page";
     $("moreHandle").textContent = has ? `$${state.displayHandle}` : "no $handle yet";
-    $("moreAddress").textContent = state.wallet ? shortAddress(state.wallet.publicKey) : "";
+    $("moreAddress").textContent = state.wallet ? shortAddress(state.wallet.publicKey) : (state.token ? "No wallet yet" : "Sign in to sync wallets");
+    const username = String(state.account?.username || "");
+    $("accountSummaryText").textContent = username
+      ? `@${username} · shared with SlimeWire Go`
+      : (state.token ? "Guest session · add a username and password" : "Create an account or log in");
+    $("accountAccessBtn").textContent = username ? `Account: @${username}` : (state.token ? "Secure this account" : "Create account or log in");
+    $("createAccountBtn").textContent = state.token ? "Secure account" : "Create account";
+    $("signOutBtn").hidden = !state.token;
   }
 
   async function claimHandle(raw) {
@@ -731,9 +841,9 @@
   }
 
   function selectSendAsset(asset) {
-    state.sendAsset = ["SOL", "PYUSD"].includes(asset) ? asset : "USDC";
+    state.sendAsset = asset === "SOL" ? "SOL" : "USDC";
     document.querySelectorAll("[data-send-asset]").forEach((button) => button.classList.toggle("active", button.dataset.sendAsset === state.sendAsset));
-    $("amountUnit").textContent = state.sendAsset !== "SOL" ? state.sendAsset : state.amountUnit;
+    $("amountUnit").textContent = state.sendAsset !== "SOL" ? "USD" : state.amountUnit;
     $("amountUnit").disabled = state.sendAsset !== "SOL";
     $("sendAmount").placeholder = "0.00";
     renderAmountAlt();
@@ -743,7 +853,7 @@
     const alt = $("amountAlt");
     if (state.sendAsset !== "SOL") {
       const amount = Number($("sendAmount").value || 0);
-      alt.textContent = amount > 0 ? `$${amount.toFixed(2)} ${state.sendAsset} on Solana` : "";
+      alt.textContent = amount > 0 ? `$${amount.toFixed(2)} USD as USDC on Solana` : "";
       return;
     }
     const sol = amountToSol();
@@ -754,6 +864,8 @@
   }
 
   async function submitSend() {
+    if (!(await ensureAccount())) return;
+    if (!state.wallet && !(await ensureWallet({ create: true, label: "SlimeCash" }))) return;
     if (!navigator.onLine) { $("sendStatus").textContent = "You are offline. Reconnect before reviewing a send."; $("sendStatus").className = "status bad"; return; }
     const target = state.resolved;
     const sol = amountToSol();
@@ -831,64 +943,37 @@
   }
 
   /* ---------------- add cash ---------------- */
-  const GUIDES = {
-    venmo: ["1. Tap the green button — your address is copied and Venmo opens", "2. In Venmo: Me tab → Crypto → PYUSD → Buy your amount (no Venmo fees)", "3. Transfer → Send to a wallet → PASTE (already copied) → pick SOLANA → confirm", "4. Come back — the tracker below pings you when it lands"],
-    paypal: ["1. Tap the green button — your address is copied and PayPal opens", "2. In PayPal: Finances → Crypto → PYUSD → Buy your amount (no fee)", "3. Transfer → Send → External wallet → PASTE → pick SOLANA → confirm", "4. Come back — the tracker below pings you when it lands"],
-    phantom: ["1. Tap Open in Phantom — SlimeCash opens inside Phantom's browser", "2. Use Phantom's own Buy for card or Apple Pay checkout", "3. Send the SOL or USDC to your SlimeCash address below", "No Phantom? Get it at phantom.com first."],
-    coinbase: ["1. Use Buy with Coinbase above for a preloaded checkout", "2. Or copy this address into Coinbase Send", "3. Choose the Solana network — that part matters"],
-    robinhood: ["1. Open Robinhood Crypto and choose Send", "2. Paste your SlimeCash address", "3. Send SOL on Solana; asset availability can vary"],
-    peer: ["Peer (ZKP2P) is a permissionless P2P onramp: you pay a market maker on Venmo/Wise and escrow releases USDC.", "Experimental — capped amounts, fills can take minutes, settles on Base (bridge to Solana after).", "Power users only; start small."],
-    other: ["Send the selected asset to your address below from any compatible wallet or exchange.", "Always choose the Solana network."]
-  };
-
-  // Keyless Phantom rail: opens SlimeCash inside Phantom's in-app browser, where the user
-  // can use Phantom's native Buy (their KYC, their onramp) and send straight back here.
-  function phantomBrowseUrl() {
-    const target = `${location.origin}/cash/?src=phantom`;
-    return `https://phantom.app/ul/browse/${encodeURIComponent(target)}?ref=${encodeURIComponent(location.origin)}`;
-  }
-
   function solanaPayUrl(address, asset = "USDC", amount = "", message = "") {
     const params = new URLSearchParams();
     if (Number(amount) > 0) params.set("amount", String(Number(amount)));
     if (asset === "USDC") params.set("spl-token", USDC_MINT);
-    if (asset === "PYUSD") params.set("spl-token", PYUSD_MINT);
     params.set("label", state.displayHandle ? `$${state.displayHandle} on SlimeCash` : "SlimeCash");
     if (message) params.set("message", message.slice(0, 80));
     return `solana:${address}?${params.toString()}`;
   }
 
   function selectDepositAsset(asset) {
-    state.depositAsset = ["SOL", "PYUSD"].includes(asset) ? asset : "USDC";
+    state.depositAsset = asset === "SOL" ? "SOL" : "USDC";
     document.querySelectorAll("[data-deposit-asset]").forEach((button) => button.classList.toggle("active", button.dataset.depositAsset === state.depositAsset));
-    if (state.wallet) $("openDepositWallet").href = solanaPayUrl(state.wallet.publicKey, state.depositAsset);
-    $("depositWatch").textContent = `Watching ${state.depositAsset} on Solana…`;
+    $("depositWatch").textContent = state.wallet ? `Watching ${state.depositAsset === "USDC" ? "USD" : "SOL"} on Solana…` : "Create or select a wallet to see its funding address.";
     $("depositWatch").className = "status";
     renderFundingPreview();
-    const activeGuide = document.querySelector("[data-guide].active")?.dataset.guide;
-    if (activeGuide) selectGuide(activeGuide);
   }
 
   function renderFundingPreview() {
     const amount = Number($("fundAmount")?.value || 0);
     const validAmount = amount >= 5 && amount <= 2500;
-    $("fundingPreviewTitle").textContent = validAmount ? `$${amount.toFixed(2)} ${state.depositAsset}` : state.depositAsset;
+    const label = state.depositAsset === "USDC" ? "USD" : "SOL";
+    $("fundingPreviewTitle").textContent = validAmount ? `$${amount.toFixed(2)} ${label}` : label;
     $("fundingPreviewDestination").textContent = state.wallet
       ? `To ${shortAddress(state.wallet.publicKey)} on Solana`
-      : "Solana wallet loading…";
-    const pyusdMode = state.depositAsset === "PYUSD";
-    $("coinbaseFundBtn").disabled = false;
-    if (pyusdMode) {
-      const providerName = ["venmo", "paypal"].includes(activeGuideKey()) ? HANDOFF_PROVIDERS[activeGuideKey()].name : "Venmo";
+      : "Wallet is created only when you continue";
+    if (state.funding?.providers?.coinbase?.integrated) {
       $("coinbaseFundBtn").textContent = validAmount
-        ? `Copy address & open ${providerName} · $${amount.toFixed(amount % 1 ? 2 : 0)}`
-        : `Copy address & open ${providerName}`;
-    } else if (state.funding?.providers?.coinbase?.integrated) {
-      $("coinbaseFundBtn").textContent = validAmount
-        ? `Pay with card or Apple Pay · $${amount.toFixed(amount % 1 ? 2 : 0)}`
-        : "Pay with card or Apple Pay";
+        ? `Continue with Coinbase · $${amount.toFixed(amount % 1 ? 2 : 0)}`
+        : "Continue with Coinbase";
     } else {
-      $("coinbaseFundBtn").textContent = "Turn on 1-tap card funding";
+      $("coinbaseFundBtn").textContent = "Coinbase approval pending";
     }
   }
 
@@ -900,11 +985,7 @@
   }
 
   async function startCoinbaseFunding() {
-    if (state.depositAsset === "PYUSD") {
-      const key = ["venmo", "paypal"].includes(activeGuideKey()) ? activeGuideKey() : "venmo";
-      providerHandoff(key);
-      return;
-    }
+    if (!(await ensureAccount())) return;
     const amount = Number($("fundAmount").value || 0);
     const button = $("coinbaseFundBtn");
     const status = $("fundingStatus");
@@ -915,9 +996,11 @@
     }
     const funding = await refreshFundingConfig();
     if (!funding?.providers?.coinbase?.integrated) {
-      openSheet("cardsetup");
+      status.textContent = "Coinbase checkout is awaiting Onramp approval. Use Phantom, Solflare, another wallet, or copy your address for now.";
+      status.className = "status";
       return;
     }
+    if (!state.wallet && !(await ensureWallet({ create: true, label: "SlimeCash" }))) return;
     button.disabled = true;
     button.textContent = "Opening Coinbase…";
     const result = await post("/api/web/cash/onramp-session", { asset: state.depositAsset, paymentAmount: amount });
@@ -957,8 +1040,8 @@
       card.classList.add("arrived");
       $("pendingFundIcon").textContent = "✅";
       $("pendingFundTitle").textContent = `${pending.amount ? `$${Number(pending.amount).toFixed(2)} ` : ""}${pending.asset} landed`;
-      $("pendingFundSub").textContent = pending.asset === "PYUSD" ? "Convert it to SOL to trade coins." : "Ready to use.";
-      $("pendingFundAction").hidden = pending.asset !== "PYUSD";
+      $("pendingFundSub").textContent = "Ready to use in Cash or SlimeWire Go.";
+      $("pendingFundAction").hidden = true;
     } else {
       card.classList.remove("arrived");
       $("pendingFundIcon").textContent = "⏳";
@@ -972,77 +1055,118 @@
     if (!pending || pending.arrived || pending.asset !== asset) return;
     savePendingFund({ ...pending, arrived: true });
   }
-  const HANDOFF_PROVIDERS = {
-    venmo: { name: "Venmo", url: () => state.funding?.providers?.venmo?.url || "https://venmo.com" },
-    paypal: { name: "PayPal", url: () => state.funding?.providers?.paypal?.url || "https://www.paypal.com/us/digital-wallet/manage-money/crypto" },
-    phantom: { name: "Phantom", url: () => phantomBrowseUrl() },
-    coinbase: { name: "Coinbase", url: () => state.funding?.providers?.coinbase?.url || "https://www.coinbase.com/buy" },
-    robinhood: { name: "Robinhood", url: () => state.funding?.providers?.robinhood?.url || "https://robinhood.com/crypto/SOL" }
-  };
-  function activeGuideKey() {
-    return document.querySelector("[data-guide].active")?.dataset.guide || (state.depositAsset === "PYUSD" ? "venmo" : "phantom");
-  }
-  // One tap: copy the address, remember what we're waiting for, open the provider app.
-  function providerHandoff(guideKey) {
-    const provider = HANDOFF_PROVIDERS[guideKey] || HANDOFF_PROVIDERS.venmo;
-    if (state.wallet) copyText(state.wallet.publicKey);
-    const amount = Number($("fundAmount")?.value || 0);
-    savePendingFund({
-      asset: state.depositAsset,
-      amount: amount >= 1 && amount <= 25000 ? amount : 0,
-      provider: guideKey,
-      providerName: provider.name,
-      at: Date.now()
-    });
-    $("depositWatch").textContent = `Address copied — paste it in ${provider.name}. Watching the chain…`;
-    $("depositWatch").className = "status ok";
-    window.open(provider.url(), "_blank", "noopener");
+  function fundingProvider(kind) { return WalletFunding?.provider(kind) || null; }
+  function fundingProviderLabel(kind) { return WalletFunding?.label(kind, fundingProvider(kind)) || "Solana wallet"; }
+
+  async function startWalletFunding(kind, button) {
+    if (!["phantom", "solflare", "other"].includes(kind)) return;
+    if (!(await ensureAccount())) return;
+    const provider = fundingProvider(kind);
+    const label = fundingProviderLabel(kind);
+    if (!provider) {
+      const browse = WalletFunding?.browseUrl(kind);
+      if (WalletFunding?.isMobile() && browse) { location.assign(browse); return; }
+      if (kind === "other") {
+        $("fundingStatus").textContent = "Open SlimeCash inside your Solana wallet browser, or use Copy address for a manual transfer.";
+        $("fundingStatus").className = "status";
+      } else {
+        const install = WalletFunding?.installUrl(kind);
+        if (install) window.open(install, "_blank", "noopener");
+        toast(`${label} is not available in this browser.`, true);
+      }
+      return;
+    }
+    if (button) button.disabled = true;
+    try {
+      const connected = await provider.connect();
+      const publicKey = String(connected?.publicKey || provider.publicKey || "");
+      if (!publicKey) throw new Error(`Could not read your ${label} address.`);
+      const saved = await post("/api/web/profile/connected-wallet", { publicKey, provider: kind });
+      if (!saved.ok || !saved.data?.ok) throw new Error(saved.data?.error || `Could not connect ${label}.`);
+      state.fundingKind = kind;
+      state.fundingPublicKey = publicKey;
+      $("walletFundingTitle").textContent = `Fund with ${label}`;
+      $("walletFundingCopy").textContent = `Connected ${shortAddress(publicKey)}. Approve one exact SOL transfer in ${label}.`;
+      $("walletFundingDestination").textContent = state.wallet ? `${state.wallet.label || "SlimeCash wallet"} · ${shortAddress(state.wallet.publicKey)}` : "A new SlimeWire wallet will be created and backed up when you continue";
+      $("walletFundingStatus").textContent = "";
+      closeSheet("addcash");
+      openSheet("walletfunding");
+    } catch (error) {
+      toast(error?.message || `${label} connection was cancelled.`, true);
+    } finally {
+      if (button) button.disabled = false;
+    }
   }
 
-  function openAddCash() {
-    if (!state.wallet) { toast("Wallet still setting up — try again in a second.", true); return; }
-    const guide = localStorage.getItem(GUIDE_KEY) || "phantom";
-    selectGuide(guide);
+  async function submitWalletFunding() {
+    const amountSol = Number($("walletFundingAmount").value || 0);
+    const status = $("walletFundingStatus");
+    if (!Number.isFinite(amountSol) || amountSol < 0.005 || amountSol > 10) { status.textContent = "Enter 0.005 to 10 SOL."; status.className = "status bad"; return; }
+    const provider = fundingProvider(state.fundingKind);
+    if (!provider || typeof provider.signTransaction !== "function") { status.textContent = "Reopen this page in your Solana wallet and reconnect."; status.className = "status bad"; return; }
+    const publicKey = String(provider.publicKey || state.fundingPublicKey || "");
+    const button = $("submitWalletFundingBtn");
+    button.disabled = true;
+    try {
+      button.textContent = state.wallet ? "Preparing transfer…" : "Creating wallet…";
+      const saved = await post("/api/web/profile/connected-wallet", { publicKey, provider: state.fundingKind });
+      if (!saved.ok || !saved.data?.ok) throw new Error(saved.data?.error || "Could not verify the connected wallet.");
+      if (!state.wallet && !(await ensureWallet({ create: true, label: "SlimeCash" }))) throw new Error("Could not create the destination wallet.");
+      $("walletFundingDestination").textContent = `${state.wallet.label || "SlimeCash wallet"} · ${shortAddress(state.wallet.publicKey)}`;
+      const created = await post("/api/web/wallet-funding/create", { walletIndex: state.wallet.index, amountSol: String(amountSol) });
+      if (!created.ok || !created.data?.ok || !created.data?.order?.transaction) throw new Error(created.data?.error || "Could not prepare wallet funding.");
+      const order = created.data.order;
+      button.textContent = `Approve in ${fundingProviderLabel(state.fundingKind)}…`;
+      status.textContent = `Approve exactly ${amountSol} SOL. Nothing else is requested.`;
+      status.className = "status";
+      const signedTransaction = await WalletFunding.signSerialized(provider, order.transaction);
+      button.textContent = "Confirming on-chain…";
+      const executed = await post("/api/web/wallet-funding/execute", { walletFundingAttemptId: order.walletFundingAttemptId, signedTransaction });
+      if (!executed.ok || !executed.data?.ok) throw new Error(executed.data?.error || "Funding did not confirm. Check your wallet and try again.");
+      savePendingFund({ asset: "SOL", amount: 0, providerName: fundingProviderLabel(state.fundingKind), at: Date.now(), arrived: true });
+      closeSheet("walletfunding");
+      await refreshBalance({ silent: true });
+      renderProfile();
+      toast(`${amountSol} SOL funded successfully.`);
+    } catch (error) {
+      status.textContent = error?.message || "Funding failed. No extra transfer was sent.";
+      status.className = "status bad";
+    } finally {
+      button.disabled = false;
+      button.textContent = "Review & fund";
+    }
+  }
+
+  async function copyFundingAddress() {
+    if (!(await ensureAccount())) return;
+    if (!state.wallet && !(await ensureWallet({ create: true, label: "SlimeCash" }))) return;
     $("depositAddress").textContent = state.wallet.publicKey;
-    QR.draw($("depositQr"), state.wallet.publicKey);
+    copyText(state.wallet.publicKey);
+    $("depositWatch").textContent = "Address copied. Send only Solana assets to it.";
+    $("depositWatch").className = "status ok";
+  }
+
+  async function openAddCash() {
+    if (state.token) await ensureWallet({ create: false });
+    $("depositAddress").textContent = state.wallet?.publicKey || "Create or log in to get an address";
     selectDepositAsset(state.depositAsset);
     refreshFundingConfig().then((funding) => {
       const integrated = Boolean(funding?.providers?.coinbase?.integrated);
       $("fundingStatus").textContent = integrated
-        ? "Coinbase checkout is connected. Card, bank, Apple Pay, and limits depend on your Coinbase region/account."
-        : "Coinbase quick funding is provider-ready; until credentials are enabled, your address is copied for the normal Coinbase send flow.";
+        ? "Coinbase account checkout is connected. Available payment methods and limits depend on your Coinbase account and region."
+        : "Coinbase checkout is awaiting Onramp approval. Direct wallet funding is ready now.";
       $("fundingStatus").className = "status";
     });
     openSheet("addcash");
     stopDepositWatch();
-    refreshBalance({ silent: true });
-    state.depositTimer = setInterval(() => refreshBalance({ silent: true }), 5000);
+    if (state.wallet) {
+      refreshBalance({ silent: true });
+      state.depositTimer = setInterval(() => refreshBalance({ silent: true }), 5000);
+    }
   }
 
   function stopDepositWatch() {
     if (state.depositTimer) { clearInterval(state.depositTimer); state.depositTimer = null; }
-  }
-
-  function selectGuide(key) {
-    localStorage.setItem(GUIDE_KEY, key);
-    document.querySelectorAll("[data-guide]").forEach((pill) => pill.classList.toggle("active", pill.dataset.guide === key));
-    $("guideSteps").innerHTML = (GUIDES[key] || GUIDES.other).map((step) => `<div>${escapeHtml(step)}</div>`).join("");
-    const provider = $("openProviderBtn");
-    const rows = {
-      venmo: ["Open Venmo", state.funding?.providers?.venmo?.url || "https://venmo.com"],
-      paypal: ["Open PayPal crypto", state.funding?.providers?.paypal?.url || "https://www.paypal.com/us/digital-wallet/manage-money/crypto"],
-      phantom: ["Open in Phantom", phantomBrowseUrl()],
-      coinbase: ["Open Coinbase", state.funding?.providers?.coinbase?.url || "https://www.coinbase.com/buy"],
-      robinhood: ["Open Robinhood", state.funding?.providers?.robinhood?.url || "https://robinhood.com/crypto/SOL"],
-      peer: ["Open Peer (experimental)", state.funding?.providers?.peer?.url || "https://www.peer.xyz"],
-      other: ["Open Solana Pay request", state.wallet ? solanaPayUrl(state.wallet.publicKey, state.depositAsset) : "#"]
-    };
-    // Venmo/PayPal deliver PYUSD; the other rails deliver USDC/SOL. Keep the asset toggle in sync.
-    if (["venmo", "paypal"].includes(key) && state.depositAsset !== "PYUSD") selectDepositAsset("PYUSD");
-    else if (!["venmo", "paypal", "other"].includes(key) && state.depositAsset === "PYUSD") selectDepositAsset("USDC");
-    const selected = rows[key] || rows.other;
-    provider.textContent = selected[0];
-    provider.href = selected[1];
   }
 
   function receiveRequestUrl() {
@@ -1057,11 +1181,12 @@
     $("openReceiveWallet").href = receiveRequestUrl();
     $("receiveStatus").textContent = state.receiveAsset === "SOL"
       ? "SOL arrives on Solana. The button includes the requested amount when entered."
-      : `${state.receiveAsset} arrives as digital dollars. The QR is your Solana address; the button includes the exact ${state.receiveAsset} request.`;
+      : "USD arrives as USDC on Solana. The QR is your Solana address; the button includes the exact request.";
   }
 
-  function openReceive() {
-    if (!state.wallet) { toast("Wallet still setting up — try again in a second.", true); return; }
+  async function openReceive() {
+    if (!(await ensureAccount())) return;
+    if (!state.wallet && !(await ensureWallet({ create: true, label: "SlimeCash" }))) return;
     renderReceiveRequest();
     openSheet("receive");
   }
@@ -1238,29 +1363,50 @@
 
   /* ---------------- ui plumbing ---------------- */
   function switchTab(tab) {
-    if (tab === "terminal") {
+    if (tab === "trade") {
       location.assign("/fun?from=cash");
       return;
     }
     document.querySelectorAll(".tab").forEach((button) => button.classList.toggle("active", button.dataset.tab === tab));
-    for (const view of ["home", "send", "terminal", "more"]) {
+    for (const view of ["home", "send", "more"]) {
       $(`view-${view}`).hidden = view !== tab;
     }
+    if (tab === "more") { loadAccount(); refreshProfile(); }
     if (tab !== "home") stopDepositWatch();
   }
 
   function openSheet(id) {
-    const backdrop = $(id); backdrop.hidden = false; document.body.style.overflow = "hidden";
+    const backdrop = $(id); if (!backdrop) return; backdrop.hidden = false; document.body.style.overflow = "hidden";
     setTimeout(() => backdrop.querySelector("button, input, a, textarea")?.focus(), 0);
   }
   function closeSheet(id) {
-    $(id).hidden = true;
+    const sheet = $(id); if (!sheet) return; sheet.hidden = true;
     if (id === "addcash") stopDepositWatch();
     if (id === "receive" && state.requestTimer) { clearInterval(state.requestTimer); state.requestTimer = null; }
     if (![...document.querySelectorAll(".sheet-backdrop")].some((node) => !node.hidden)) document.body.style.overflow = "";
   }
 
-  function showOnboard() { $("onboard").hidden = false; }
+  function showOnboard() {
+    $("accountStatus").textContent = state.token
+      ? "Add login details to keep this account and its current wallets."
+      : "Create a new account or log in to the same one you use on SlimeWire Go.";
+    $("accountStatus").className = "status";
+    if (state.account?.username) $("accountUsername").value = state.account.username;
+    $("createAccountBtn").textContent = state.token ? "Secure account" : "Create account";
+    openSheet("onboard");
+  }
+
+  function resumeWalletFundingRoute() {
+    const kind = String(new URLSearchParams(location.search).get("fund") || "").toLowerCase();
+    if (!["phantom", "solflare", "other"].includes(kind) || !state.token) return;
+    const clean = new URL(location.href);
+    clean.searchParams.delete("fund");
+    history.replaceState(null, "", clean.toString());
+    setTimeout(async () => {
+      await openAddCash();
+      $("fundingStatus").textContent = `Back in ${fundingProviderLabel(kind)}. Tap ${fundingProviderLabel(kind)} below to connect and approve SOL.`;
+    }, 80);
+  }
 
   let toastTimer = null;
   function toast(message, bad = false) {
@@ -1304,17 +1450,18 @@
       toast("SlimeCash installed — look for the green dollar icon");
     });
 
-    await refreshSolPrice();
+    void refreshSolPrice();
 
-    let ready = false;
+    let signedIn = false;
     if (state.token) {
-      const wallet = await ensureWallet();
-      ready = Boolean(wallet);
+      signedIn = Boolean(await loadAccount());
+      if (signedIn) await ensureWallet({ create: false });
     }
 
     $("splash").classList.add("fade");
     setTimeout(() => { $("splash").hidden = true; }, 400);
     $("app").hidden = false;
+    renderProfile();
     renderActivity();
     renderPendingFund();
     if (readPendingFund() && !readPendingFund().arrived) {
@@ -1328,7 +1475,7 @@
       setTimeout(() => toast(recoveredMessage), 450);
     }
 
-    if (!ready) {
+    if (!signedIn) {
       showOnboard();
     } else {
       refreshProfile();
@@ -1343,11 +1490,12 @@
     const requestId = params.get("request");
     if (requestId) openTrackedPayPage(requestId, params.get("token"));
     const tab = params.get("tab");
-    if (tab && ["home", "send", "terminal", "more"].includes(tab)) switchTab(tab);
-    if (params.get("sheet") === "addcash" && ready) openAddCash();
-    if (params.get("sheet") === "receive" && ready) openReceive();
+    if (tab && ["home", "send", "trade", "more"].includes(tab)) switchTab(tab);
+    if (params.get("sheet") === "addcash") openAddCash();
+    if (params.get("sheet") === "receive" && signedIn) openReceive();
     if (params.get("install") === "1") setTimeout(openInstallGuide, 450);
-    if (params.get("onramp") === "return" && ready) {
+    if (signedIn) resumeWalletFundingRoute();
+    if (params.get("onramp") === "return" && signedIn) {
       let pending = null;
       try { pending = JSON.parse(sessionStorage.getItem("slimecashPendingOnramp") || "null"); } catch {}
       sessionStorage.removeItem("slimecashPendingOnramp");
@@ -1362,7 +1510,7 @@
       }, 5000);
     }
 
-    setInterval(() => { refreshSolPrice(); refreshBalance({ silent: true }); }, 60000);
+    setInterval(() => { refreshSolPrice(); if (state.token && state.wallet) refreshBalance({ silent: true }); }, 60000);
   }
 
   /* ---------------- events ---------------- */
@@ -1370,18 +1518,24 @@
     const close = event.target.closest("[data-close]");
     if (close) closeSheet(close.dataset.close);
     const pill = event.target.closest(".guide-pill");
-    if (pill?.dataset.guide) selectGuide(pill.dataset.guide);
     if (pill?.dataset.sendAsset) selectSendAsset(pill.dataset.sendAsset);
     if (pill?.dataset.depositAsset) selectDepositAsset(pill.dataset.depositAsset);
     if (pill?.dataset.receiveAsset) {
-      state.receiveAsset = ["SOL", "PYUSD"].includes(pill.dataset.receiveAsset) ? pill.dataset.receiveAsset : "USDC";
+      state.receiveAsset = pill.dataset.receiveAsset === "SOL" ? "SOL" : "USDC";
       renderReceiveRequest();
     }
+    const fundWallet = event.target.closest("[data-fund-wallet]");
+    if (fundWallet) startWalletFunding(fundWallet.dataset.fundWallet, fundWallet);
     const amountChip = event.target.closest("[data-fund-amount]");
     if (amountChip) {
       $("fundAmount").value = amountChip.dataset.fundAmount;
       document.querySelectorAll("[data-fund-amount]").forEach((button) => button.classList.toggle("active", button === amountChip));
       renderFundingPreview();
+    }
+    const walletAmount = event.target.closest("[data-wallet-fund-amount]");
+    if (walletAmount) {
+      $("walletFundingAmount").value = walletAmount.dataset.walletFundAmount;
+      document.querySelectorAll("[data-wallet-fund-amount]").forEach((button) => button.classList.toggle("active", button === walletAmount));
     }
     const tabButton = event.target.closest(".tab");
     if (tabButton) switchTab(tabButton.dataset.tab);
@@ -1417,8 +1571,9 @@
   $("sendQuickBtn").addEventListener("click", () => switchTab("send"));
   $("sendBtn").addEventListener("click", submitSend);
   $("confirmSendBtn").addEventListener("click", confirmSend);
-  $("copyDepositBtn").addEventListener("click", () => state.wallet && copyText(state.wallet.publicKey));
+  $("copyDepositBtn").addEventListener("click", copyFundingAddress);
   $("coinbaseFundBtn").addEventListener("click", startCoinbaseFunding);
+  $("submitWalletFundingBtn").addEventListener("click", submitWalletFunding);
   $("copyReceiveBtn").addEventListener("click", () => state.wallet && copyText(state.wallet.publicKey));
   $("shareReceiveBtn").addEventListener("click", shareReceive);
   $("trackRequestBtn").addEventListener("click", createTrackedRequest);
@@ -1427,9 +1582,22 @@
     document.querySelectorAll("[data-fund-amount]").forEach((button) => button.classList.toggle("active", Number(button.dataset.fundAmount) === Number($("fundAmount").value)));
     renderFundingPreview();
   });
-  $("copyAddressBtn").addEventListener("click", () => state.wallet && copyText(state.wallet.publicKey));
+  $("copyAddressBtn").addEventListener("click", async () => {
+    if (!(await ensureAccount())) return;
+    if (!state.wallet && !(await ensureWallet({ create: true, label: "SlimeCash" }))) return;
+    copyText(state.wallet.publicKey);
+  });
   $("walletsBtn").addEventListener("click", openCashWallets);
   $("addCashWalletBtn").addEventListener("click", addCashWallet);
+  $("importCashWalletBtn").addEventListener("click", importCashWallet);
+  $("walletBackupFile").addEventListener("change", () => {
+    const file = $("walletBackupFile").files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => { $("walletBackupText").value = String(reader.result || "").trim(); $("cashWalletStatus").textContent = `${file.name} loaded — tap Import wallet.`; $("cashWalletStatus").className = "status ok"; };
+    reader.onerror = () => { $("cashWalletStatus").textContent = "Could not read that wallet file."; $("cashWalletStatus").className = "status bad"; };
+    reader.readAsText(file);
+  });
   $("backupCashWalletsBtn").addEventListener("click", async () => {
     const button = $("backupCashWalletsBtn");
     button.disabled = true; button.textContent = "Preparing…";
@@ -1445,13 +1613,17 @@
     if (button.dataset.cashWalletRemove) removeCashWallet(button.dataset.cashWalletRemove, button.dataset.walletKey);
   });
   $("avatarBtn").addEventListener("click", () => switchTab("more"));
+  $("accountAccessBtn").addEventListener("click", showOnboard);
+  $("createAccountBtn").addEventListener("click", createOrSecureCashAccount);
+  $("loginAccountBtn").addEventListener("click", loginCashAccount);
+  $("browseGuestBtn").addEventListener("click", () => closeSheet("onboard"));
 
   $("payCard").addEventListener("click", () => {
     if (state.handle) {
       copyText(`${location.origin}/cash/?pay=${state.handle}`);
       toast("Pay link copied — share it anywhere");
     } else {
-      showOnboard();
+      if (state.token) openSheet("handlesheet"); else showOnboard();
     }
   });
 
@@ -1478,18 +1650,18 @@
     }
     button.disabled = true;
     button.textContent = "Claiming…";
-    const ok = await ensureAccount() && await ensureWallet();
-    if (!ok) { button.disabled = false; button.textContent = "Claim it"; return; }
+    const ok = await ensureAccount();
+    if (!ok) { button.disabled = false; button.textContent = "Save $handle"; return; }
     const result = await claimHandle(requestedHandle);
     button.disabled = false;
-    button.textContent = "Claim it";
+    button.textContent = "Save $handle";
     if (result.ok) {
       const backedUp = await backupCashAccount({ quiet: true });
-      $("onboard").hidden = true;
+      closeSheet("handlesheet");
       toast(backedUp
-        ? `You're $${state.displayHandle} — account + wallet backups downloaded`
+        ? `You're $${state.displayHandle} — account backup downloaded`
         : `You're $${state.displayHandle}. Open Profile to download your account backup.`, !backedUp);
-      refreshBalance();
+      if (state.wallet) refreshBalance();
       renderProfile();
     } else {
       $("handleHint").textContent = result.error;
@@ -1497,28 +1669,12 @@
     }
   });
 
-  $("skipHandleBtn").addEventListener("click", async () => {
-    const button = $("skipHandleBtn");
-    button.disabled = true;
-    button.textContent = "Setting up…";
-    if (await ensureAccount() && await ensureWallet()) {
-      const backedUp = await backupCashAccount({ quiet: true });
-      $("onboard").hidden = true;
-      refreshBalance();
-      renderProfile();
-      toast(backedUp
-        ? "Ready — account + wallet backups downloaded"
-        : "Ready. Open Profile to download your account backup.", !backedUp);
-    }
-    button.disabled = false;
-    button.textContent = "Skip for now";
-  });
-
   $("onboardRestoreBtn").addEventListener("click", openRecovery);
 
-  $("claimHandleBtn").addEventListener("click", () => { $("onboard").hidden = false; });
+  $("claimHandleBtn").addEventListener("click", async () => { if (await ensureAccount()) openSheet("handlesheet"); });
 
   $("backupBtn").addEventListener("click", async () => {
+    if (!(await ensureAccount())) return;
     const button = $("backupBtn");
     button.disabled = true;
     button.textContent = "Preparing backups…";
@@ -1540,18 +1696,7 @@
   $("verifyBackupBtn").addEventListener("click", () => openSheet("verifybackup"));
   $("verifyBackupFile").addEventListener("change", () => verifyBackupFile($("verifyBackupFile").files?.[0]));
   $("downloadFreshBackupBtn").addEventListener("click", () => backupCashAccount({ includeWallets: true }));
-  $("spendBtn").addEventListener("click", () => openSheet("spend"));
   $("trustBtn").addEventListener("click", () => openSheet("trust"));
-  $("openReceiveFromSpend").addEventListener("click", () => { closeSheet("spend"); state.receiveAsset = "USDC"; openReceive(); });
-  $("fundCardBtn").addEventListener("click", () => {
-    closeSheet("spend");
-    switchTab("send");
-    selectSendAsset("USDC");
-    $("sendTo").value = "";
-    $("resolveHint").textContent = "In Coinbase: Receive → USDC → Solana. Paste that exact address here, then send a small test first.";
-    $("resolveHint").className = "field-hint ok";
-    $("sendTo").focus();
-  });
   $("recoveryBtn").addEventListener("click", restoreCashAccount);
   $("recoveryFile").addEventListener("change", () => {
     const file = $("recoveryFile").files?.[0];
@@ -1576,7 +1721,6 @@
   /* ---------------- convert (Jupiter swap between core assets) ---------------- */
   function convertBalances() {
     return {
-      PYUSD: state.pyusd,
       USDC: state.usdc,
       SOL: Math.max(0, (state.lamports || 0) / 1e9 - 0.004)
     };
@@ -1586,13 +1730,13 @@
     document.querySelectorAll("[data-convert-to]").forEach((pill) => pill.classList.toggle("active", pill.dataset.convertTo === state.convertTo));
     const balance = convertBalances()[state.convertFrom] || 0;
     const shown = state.convertFrom === "SOL" ? balance.toFixed(4) : balance.toFixed(2);
-    $("convertHint").textContent = `Available: ${state.convertFrom === "SOL" ? `${shown} SOL` : `$${shown} ${state.convertFrom}`}`;
+    $("convertHint").textContent = `Available: ${state.convertFrom === "SOL" ? `${shown} SOL` : `$${shown} USD`}`;
     $("convertHint").className = "field-hint";
     $("convertGoBtn").textContent = `Convert ${state.convertFrom} → ${state.convertTo}`;
   }
-  function openConvert() {
-    if (!state.wallet) { toast("Wallet still setting up — try again in a second.", true); return; }
-    if (state.pyusd > 0.01) { state.convertFrom = "PYUSD"; state.convertTo = "SOL"; }
+  async function openConvert() {
+    if (!(await ensureAccount())) return;
+    if (!state.wallet && !(await ensureWallet({ create: true, label: "SlimeCash" }))) return;
     renderConvert();
     $("convertStatus").textContent = "";
     $("convertStatus").className = "status";
@@ -1651,49 +1795,22 @@
     const toPill = event.target.closest("[data-convert-to]");
     if (toPill) {
       state.convertTo = toPill.dataset.convertTo;
-      if (state.convertTo === state.convertFrom) state.convertFrom = state.convertTo === "SOL" ? "PYUSD" : "SOL";
+      if (state.convertTo === state.convertFrom) state.convertFrom = state.convertTo === "SOL" ? "USDC" : "SOL";
       renderConvert();
     }
   });
 
-  $("openProviderBtn").addEventListener("click", () => {
-    if (state.wallet) copyText(state.wallet.publicKey);
-    const key = activeGuideKey();
-    if (HANDOFF_PROVIDERS[key]) {
-      const amount = Number($("fundAmount")?.value || 0);
-      savePendingFund({
-        asset: state.depositAsset,
-        amount: amount >= 1 && amount <= 25000 ? amount : 0,
-        provider: key,
-        providerName: HANDOFF_PROVIDERS[key].name,
-        at: Date.now()
-      });
-    }
-  });
   $("pendingFundClose").addEventListener("click", clearPendingFund);
   $("pendingFundAction").addEventListener("click", () => {
     clearPendingFund();
     openConvert();
   });
 
-  $("cashOutBtn").addEventListener("click", () => openSheet("cashout"));
-  $("cashOutPyusdBtn").addEventListener("click", () => {
-    closeSheet("cashout");
-    switchTab("send");
-    selectSendAsset("PYUSD");
-    $("sendTo").focus();
-    toast("Paste your Venmo/PayPal PYUSD deposit address (Solana network)");
-  });
-  $("cashOutUsdcBtn").addEventListener("click", () => {
-    closeSheet("cashout");
-    switchTab("send");
-    selectSendAsset("USDC");
-    $("sendTo").focus();
-    toast("Paste your Coinbase USDC deposit address (Solana network)");
-  });
-  $("signOutBtn").addEventListener("click", () => {
+  $("signOutBtn").addEventListener("click", async () => {
     if (!confirm("Sign out? Make sure your SlimeCash recovery backup is saved first.")) return;
+    await post("/api/web/logout", {}).catch(() => null);
     setToken("");
+    localStorage.removeItem(ACTIVE_WALLET_KEY);
     location.reload();
   });
 

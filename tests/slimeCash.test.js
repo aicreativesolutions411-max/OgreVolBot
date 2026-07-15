@@ -8,6 +8,7 @@ const html = fs.readFileSync(new URL("../web/public/cash/index.html", import.met
 const manifest = JSON.parse(fs.readFileSync(new URL("../web/public/cash/manifest.webmanifest", import.meta.url), "utf8"));
 const sw = fs.readFileSync(new URL("../web/public/cash/sw.js", import.meta.url), "utf8");
 const buildWeb = fs.readFileSync(new URL("../scripts/build-web.js", import.meta.url), "utf8");
+const funding = fs.readFileSync(new URL("../web/public/slimewire-funding.js", import.meta.url), "utf8");
 
 test("SlimeCash calls the branded API origin instead of exposing the hosting provider", () => {
   assert.match(cash, /const API_BASE/);
@@ -35,13 +36,14 @@ test("SlimeCash recovery is durable and remains compatible with first-release ac
   assert.match(server, /async function recoverCashAccount/);
   assert.match(server, /legacySession/);
   assert.ok(server.indexOf('pathname === "/api/web/cash/recover"') < server.indexOf("const auth = await authenticateWebRequest(request)"));
-  assert.match(html, /I have a recovery key/);
+  assert.match(html, /Restore account backup/);
   assert.match(html, /Choose account backup/);
 });
 
 test("SlimeCash automatically downloads account and wallet recovery material", () => {
   assert.match(cash, /downloadWalletFiles\(created\.data\.downloads\)/);
   assert.match(cash, /post\("\/api\/web\/cash\/account-backup"/);
+  assert.match(cash, /recovery backup downloaded/);
   assert.match(cash, /post\("\/api\/web\/wallets\/export"/);
   assert.match(html, /Back up account \+ wallets/);
   assert.doesNotMatch(cash, /copyText\(state\.token\)/);
@@ -78,10 +80,44 @@ test("SlimeCash exposes explicit cash assets and routes sends through the idempo
 
 test("USDC funding and sending stay explicit in the SlimeCash client", () => {
   assert.match(cash, /get\(`\/api\/web\/cash\/assets\$\{walletIndex\}`\)/);
-  assert.match(cash, /post\("\/api\/web\/cash\/onramp-session"/);
   assert.match(cash, /asset: state\.sendAsset/);
   assert.match(html, /data-send-asset="USDC"/);
-  assert.match(html, /id="fundCardBtn"/);
+  assert.match(html, />USD</);
+});
+
+test("SlimeCash presents one clean USD and SOL wallet with Coinbase as its only fiat vendor", () => {
+  assert.match(html, /data-deposit-asset="USDC"/);
+  assert.match(html, /data-deposit-asset="SOL"/);
+  assert.match(html, /data-fund-wallet="phantom"/);
+  assert.match(html, /data-fund-wallet="solflare"/);
+  assert.match(html, /data-fund-wallet="other"/);
+  assert.match(html, /id="copyDepositBtn"/);
+  assert.match(html, /Coinbase/);
+  assert.match(cash, /Continue with Coinbase/);
+  assert.doesNotMatch(cash, /Pay with card or Apple Pay/);
+  assert.match(cash, /post\("\/api\/web\/cash\/onramp-session"/);
+  assert.doesNotMatch(html, /PYUSD|PayPal|Venmo|Robinhood/i);
+  assert.doesNotMatch(cash, /PYUSD_MINT|HANDOFF_PROVIDERS/);
+});
+
+test("Cash and Fun share one account login, recovery, wallet import, and navigation", () => {
+  assert.match(html, /Create account/);
+  assert.match(html, /Log in/);
+  assert.match(html, /Restore account backup/);
+  assert.match(html, /Import wallet backup/);
+  assert.match(html, /href="\/fun\?from=cash"/);
+  assert.match(cash, /post\("\/api\/web\/password-login"/);
+  assert.match(cash, /post\("\/api\/web\/profile\/credentials"/);
+  assert.match(cash, /post\("\/api\/web\/wallets\/restore"/);
+  assert.match(cash, /post\("\/api\/web\/wallet-funding\/create"/);
+  assert.match(cash, /post\("\/api\/web\/wallet-funding\/execute"/);
+});
+
+test("wallet approval helpers are shared by Cash and Fun", () => {
+  assert.match(html, /\/slimewire-funding\.js\?v=/);
+  assert.match(funding, /window\.SlimeWireFunding/);
+  assert.match(funding, /backpack|okxwallet|braveSolana/);
+  assert.match(funding, /solana-web3\.iife\.min\.js/);
 });
 
 test("SlimeCash uses a separate PWA identity and a synchronized shell", () => {
@@ -94,7 +130,7 @@ test("SlimeCash uses a separate PWA identity and a synchronized shell", () => {
   assert.match(cash, /intent:\/\/\$\{dedicatedHost\}\/cash/);
 });
 
-test("SlimeCash receipts, requests, contacts, and spend controls are server-backed", () => {
+test("SlimeCash receipts, requests, contacts, and security controls are server-backed", () => {
   assert.match(server, /function defaultSlimeCashStore/);
   assert.match(server, /slimecash\.json/);
   assert.match(server, /async function mutateSlimeCashStore/);
@@ -111,5 +147,4 @@ test("SlimeCash receipts, requests, contacts, and spend controls are server-back
   assert.match(cash, /confirmSpendPin/);
   assert.match(cash, /pendingRequestId/);
   assert.match(html, /Trust, fees &amp; provider status/);
-  assert.match(html, /Approval required/);
 });
