@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import vm from "node:vm";
+import bs58 from "bs58";
+import nacl from "tweetnacl";
 
 const server = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const cash = fs.readFileSync(new URL("../web/public/cash/cash.js", import.meta.url), "utf8");
@@ -140,6 +143,15 @@ test("wallet approval helpers are shared by Cash and Fun", () => {
   assert.match(funding, /window\.SlimeWireFunding/);
   assert.match(funding, /backpack|okxwallet|braveSolana/);
   assert.match(funding, /solana-web3\.iife\.min\.js/);
+  assert.match(funding, /tweetnacl-fast\.min\.js/);
+  assert.match(funding, /async function startMobileConnect/);
+  assert.match(funding, /async function startMobileSign/);
+  assert.match(funding, /async function consumeMobileCallback/);
+  assert.match(funding, /mobileMethodUrl\(kind, "signTransaction"\)/);
+  assert.match(funding, /slimewireMobileFundingSession:v2:/);
+  assert.match(cash, /startCashMobileFunding/);
+  assert.match(cash, /resumeCashMobileFunding/);
+  assert.match(cash, /WalletFunding\.startMobileSign/);
 });
 
 test("SlimeCash uses a separate PWA identity and a synchronized shell", () => {
@@ -169,4 +181,121 @@ test("SlimeCash receipts, requests, contacts, and security controls are server-b
   assert.match(cash, /confirmSpendPin/);
   assert.match(cash, /pendingRequestId/);
   assert.match(html, /Trust, fees &amp; provider status/);
+});
+
+function fundingHarness() {
+  const values = new Map();
+  let currentUrl = new URL("https://www.slimewire.org/cash/?sheet=addcash");
+  let assignedUrl = "";
+  const location = {
+    assign(value) { assignedUrl = String(value); currentUrl = new URL(value, currentUrl); }
+  };
+  for (const field of ["href", "origin", "search", "pathname", "hash"]) {
+    Object.defineProperty(location, field, {
+      get: () => currentUrl[field],
+      set: (value) => {
+        if (field === "href") currentUrl = new URL(value, currentUrl);
+        else currentUrl[field] = value;
+      }
+    });
+  }
+  const localStorage = {
+    getItem: (key) => values.has(key) ? values.get(key) : null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: (key) => values.delete(key)
+  };
+  const history = {
+    replaceState(_state, _title, value) { currentUrl = new URL(value, currentUrl); }
+  };
+  const document = {
+    querySelector: () => null,
+    createElement: () => ({ dataset: {}, addEventListener() {} }),
+    head: { appendChild() {} }
+  };
+  const window = { nacl, location, localStorage, history };
+  const context = vm.createContext({
+    window,
+    location,
+    localStorage,
+    history,
+    document,
+    navigator: { userAgent: "Mozilla/5.0 (Linux; Android 15) Mobile", maxTouchPoints: 5 },
+    URL,
+    URLSearchParams,
+    TextEncoder,
+    TextDecoder,
+    Uint8Array,
+    atob: (value) => Buffer.from(value, "base64").toString("binary"),
+    btoa: (value) => Buffer.from(value, "binary").toString("base64"),
+    console
+  });
+  vm.runInContext(funding, context, { filename: "slimewire-funding.js" });
+  return {
+    api: window.SlimeWireFunding,
+    values,
+    get assignedUrl() { return assignedUrl; },
+    navigate(value) { currentUrl = new URL(value, currentUrl); assignedUrl = ""; }
+  };
+}
+
+function encryptedFundingResponse(payload, sharedSecret) {
+  const nonce = nacl.randomBytes(nacl.box.nonceLength);
+  const data = nacl.box.after(new TextEncoder().encode(JSON.stringify(payload)), nonce, sharedSecret);
+  return { nonce: bs58.encode(nonce), data: bs58.encode(data) };
+}
+
+test("mobile Phantom funding connects once, preserves the preset, and returns signed bytes", async () => {
+  const harness = fundingHarness();
+  const started = await harness.api.startMobileConnect("phantom", { amountSol: "0.25", walletIndex: 2 });
+  assert.equal(started, true);
+  const connectUrl = new URL(harness.assignedUrl);
+  assert.equal(connectUrl.origin, "https://phantom.app");
+  assert.equal(connectUrl.pathname, "/ul/v1/connect");
+
+  const pending = JSON.parse(harness.values.get("slimewireMobileFundingPending:v2"));
+  const phantomKeys = nacl.box.keyPair();
+  const connectSharedSecret = nacl.box.before(bs58.decode(pending.dappEncryptionPublicKey), phantomKeys.secretKey);
+  const connectResponse = encryptedFundingResponse({ public_key: "7YWHMfk9JZe0LMxQ9rpBbmTFxkAKtTofMMKM6nHjU2ZB", session: "opaque-session" }, connectSharedSecret);
+  const connectCallback = new URL(connectUrl.searchParams.get("redirect_link"));
+  connectCallback.searchParams.set("phantom_encryption_public_key", bs58.encode(phantomKeys.publicKey));
+  connectCallback.searchParams.set("nonce", connectResponse.nonce);
+  connectCallback.searchParams.set("data", connectResponse.data);
+  harness.navigate(connectCallback);
+
+  const connected = await harness.api.consumeMobileCallback();
+  assert.equal(connected.stage, "connected");
+  assert.equal(connected.amountSol, "0.25");
+  assert.equal(connected.walletIndex, 2);
+  assert.equal(harness.api.mobileSession("phantom").session, "opaque-session");
+
+  const unsignedBytes = nacl.randomBytes(180);
+  await harness.api.startMobileSign("phantom", {
+    transaction: Buffer.from(unsignedBytes).toString("base64"),
+    walletFundingAttemptId: "wallet-funding-test",
+    amountSol: "0.25",
+    walletIndex: 2
+  });
+  const signUrl = new URL(harness.assignedUrl);
+  assert.equal(signUrl.pathname, "/ul/v1/signTransaction");
+  assert.notEqual(signUrl.pathname, "/ul/v1/signAndSendTransaction");
+
+  const encryptedRequest = bs58.decode(signUrl.searchParams.get("payload"));
+  const requestNonce = bs58.decode(signUrl.searchParams.get("nonce"));
+  const requestPayload = nacl.box.open.after(encryptedRequest, requestNonce, connectSharedSecret);
+  assert.ok(requestPayload);
+  const parsedRequest = JSON.parse(new TextDecoder().decode(requestPayload));
+  assert.equal(parsedRequest.session, "opaque-session");
+  assert.deepEqual(bs58.decode(parsedRequest.transaction), unsignedBytes);
+
+  const signedBytes = nacl.randomBytes(220);
+  const signResponse = encryptedFundingResponse({ transaction: bs58.encode(signedBytes) }, connectSharedSecret);
+  const signCallback = new URL(signUrl.searchParams.get("redirect_link"));
+  signCallback.searchParams.set("nonce", signResponse.nonce);
+  signCallback.searchParams.set("data", signResponse.data);
+  harness.navigate(signCallback);
+  const signed = await harness.api.consumeMobileCallback();
+  assert.equal(signed.stage, "signed");
+  assert.equal(signed.walletFundingAttemptId, "wallet-funding-test");
+  assert.equal(signed.amountSol, "0.25");
+  assert.deepEqual(Buffer.from(signed.signedTransaction, "base64"), Buffer.from(signedBytes));
 });

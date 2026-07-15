@@ -430,6 +430,7 @@
     toast(backedUp
       ? `${state.account?.username ? `@${state.account.username}` : "Account"} saved · recovery backup downloaded`
       : `${state.account?.username ? `@${state.account.username}` : "Account"} saved · download a recovery backup from Profile`, !backedUp);
+    await resumeCashMobileFunding();
     resumeWalletFundingRoute();
   }
 
@@ -457,6 +458,7 @@
     refreshBalance();
     loadCashHistory();
     toast(`Welcome back${state.account?.username ? `, @${state.account.username}` : ""}`);
+    await resumeCashMobileFunding();
     resumeWalletFundingRoute();
   }
 
@@ -1057,6 +1059,21 @@
   }
   function fundingProvider(kind) { return WalletFunding?.provider(kind) || null; }
   function fundingProviderLabel(kind) { return WalletFunding?.label(kind, fundingProvider(kind)) || "Solana wallet"; }
+  function showWalletFundingSheet(kind, publicKey = "", { mobile = false } = {}) {
+    const label = fundingProviderLabel(kind);
+    state.fundingKind = kind;
+    state.fundingPublicKey = publicKey;
+    $("walletFundingTitle").textContent = `Fund with ${label}`;
+    $("walletFundingCopy").textContent = publicKey
+      ? `Connected ${shortAddress(publicKey)}. Approve one exact SOL transfer in ${label}.`
+      : mobile
+        ? `${label} opens directly for approval. First use asks to connect once; later transfers go straight to approval.`
+        : `Connect ${label}, then approve one exact SOL transfer.`;
+    $("walletFundingDestination").textContent = state.wallet ? `${state.wallet.label || "SlimeCash wallet"} · ${shortAddress(state.wallet.publicKey)}` : "A new SlimeWire wallet will be created and backed up when you continue";
+    $("walletFundingStatus").textContent = "";
+    closeSheet("addcash");
+    openSheet("walletfunding");
+  }
 
   async function startWalletFunding(kind, button) {
     if (!["phantom", "solflare", "other"].includes(kind)) return;
@@ -1064,8 +1081,11 @@
     const provider = fundingProvider(kind);
     const label = fundingProviderLabel(kind);
     if (!provider) {
-      const browse = WalletFunding?.browseUrl(kind);
-      if (WalletFunding?.isMobile() && browse) { location.assign(browse); return; }
+      if (WalletFunding?.isMobile() && ["phantom", "solflare"].includes(kind)) {
+        const session = WalletFunding?.mobileSession(kind);
+        showWalletFundingSheet(kind, session?.publicKey || "", { mobile: true });
+        return;
+      }
       if (kind === "other") {
         $("fundingStatus").textContent = "Open SlimeCash inside your Solana wallet browser, or use Copy address for a manual transfer.";
         $("fundingStatus").className = "status";
@@ -1083,14 +1103,7 @@
       if (!publicKey) throw new Error(`Could not read your ${label} address.`);
       const saved = await post("/api/web/profile/connected-wallet", { publicKey, provider: kind });
       if (!saved.ok || !saved.data?.ok) throw new Error(saved.data?.error || `Could not connect ${label}.`);
-      state.fundingKind = kind;
-      state.fundingPublicKey = publicKey;
-      $("walletFundingTitle").textContent = `Fund with ${label}`;
-      $("walletFundingCopy").textContent = `Connected ${shortAddress(publicKey)}. Approve one exact SOL transfer in ${label}.`;
-      $("walletFundingDestination").textContent = state.wallet ? `${state.wallet.label || "SlimeCash wallet"} · ${shortAddress(state.wallet.publicKey)}` : "A new SlimeWire wallet will be created and backed up when you continue";
-      $("walletFundingStatus").textContent = "";
-      closeSheet("addcash");
-      openSheet("walletfunding");
+      showWalletFundingSheet(kind, publicKey);
     } catch (error) {
       toast(error?.message || `${label} connection was cancelled.`, true);
     } finally {
@@ -1103,7 +1116,15 @@
     const status = $("walletFundingStatus");
     if (!Number.isFinite(amountSol) || amountSol < 0.005 || amountSol > 10) { status.textContent = "Enter 0.005 to 10 SOL."; status.className = "status bad"; return; }
     const provider = fundingProvider(state.fundingKind);
-    if (!provider || typeof provider.signTransaction !== "function") { status.textContent = "Reopen this page in your Solana wallet and reconnect."; status.className = "status bad"; return; }
+    if (!provider || typeof provider.signTransaction !== "function") {
+      if (WalletFunding?.isMobile() && ["phantom", "solflare"].includes(state.fundingKind)) {
+        await startCashMobileFunding(state.fundingKind, amountSol, status, $("submitWalletFundingBtn"));
+        return;
+      }
+      status.textContent = "Reopen this page in your Solana wallet and reconnect.";
+      status.className = "status bad";
+      return;
+    }
     const publicKey = String(provider.publicKey || state.fundingPublicKey || "");
     const button = $("submitWalletFundingBtn");
     button.disabled = true;
@@ -1134,6 +1155,77 @@
     } finally {
       button.disabled = false;
       button.textContent = "Review & fund";
+    }
+  }
+
+  async function prepareCashMobileFundingOrder(kind, publicKey, amountSol, walletIndex = null) {
+    const saved = await post("/api/web/profile/connected-wallet", { publicKey, provider: kind });
+    if (!saved.ok || !saved.data?.ok) throw new Error(saved.data?.error || `Could not connect ${fundingProviderLabel(kind)}.`);
+    if (!state.wallet && !(await ensureWallet({ create: true, label: "SlimeCash" }))) throw new Error("Could not create the destination wallet.");
+    const chosenIndex = walletIndex !== null && walletIndex !== "" && Number.isFinite(Number(walletIndex)) ? Number(walletIndex) : Number(state.wallet.index);
+    const created = await post("/api/web/wallet-funding/create", { walletIndex: chosenIndex, amountSol: String(amountSol) });
+    if (!created.ok || !created.data?.ok || !created.data?.order?.transaction) throw new Error(created.data?.error || "Could not prepare wallet funding.");
+    return created.data.order;
+  }
+
+  async function startCashMobileFunding(kind, amountSol, status, button) {
+    const originalLabel = button?.textContent || "Review & fund";
+    if (button) { button.disabled = true; button.textContent = `Opening ${fundingProviderLabel(kind)}…`; }
+    try {
+      if (!(await ensureAccount())) throw new Error("Log in before funding this wallet.");
+      if (!state.wallet && !(await ensureWallet({ create: true, label: "SlimeCash" }))) throw new Error("Could not create the destination wallet.");
+      const session = WalletFunding?.mobileSession(kind);
+      status.textContent = session ? `Opening ${fundingProviderLabel(kind)} for one ${amountSol} SOL approval…` : `Connecting ${fundingProviderLabel(kind)} once. Your ${amountSol} SOL amount is saved for the next approval.`;
+      status.className = "status";
+      if (!session) {
+        const started = await WalletFunding?.startMobileConnect(kind, { amountSol, walletIndex: state.wallet.index, returnUrl: location.href });
+        if (!started) throw new Error(`${fundingProviderLabel(kind)} mobile connect is unavailable.`);
+        return;
+      }
+      const order = await prepareCashMobileFundingOrder(kind, session.publicKey, amountSol, state.wallet.index);
+      await WalletFunding.startMobileSign(kind, { transaction: order.transaction, walletFundingAttemptId: order.walletFundingAttemptId, amountSol, walletIndex: order.walletIndex, returnUrl: location.href });
+    } catch (error) {
+      status.textContent = error?.message || "Could not open the mobile wallet approval.";
+      status.className = "status bad";
+      if (button) { button.disabled = false; button.textContent = originalLabel; }
+    }
+  }
+
+  async function resumeCashMobileFunding() {
+    const result = await WalletFunding?.consumeMobileCallback?.();
+    if (!result) return false;
+    if (result.stage === "error") {
+      if (result.reconnect && result.amountSol) {
+        await WalletFunding.startMobileConnect(result.kind, { amountSol: result.amountSol, walletIndex: result.walletIndex, returnUrl: location.href });
+        return true;
+      }
+      await openAddCash();
+      $("fundingStatus").textContent = result.error || "Wallet approval could not be completed.";
+      $("fundingStatus").className = "status bad";
+      toast(result.error || "Wallet approval could not be completed.", true);
+      return true;
+    }
+    try {
+      if (!(await ensureAccount())) throw new Error("Your SlimeWire login expired. Log in and start funding again.");
+      if (!state.wallet && !(await ensureWallet({ create: true, label: "SlimeCash" }))) throw new Error("Could not restore the destination wallet.");
+      if (result.stage === "connected") {
+        const order = await prepareCashMobileFundingOrder(result.kind, result.publicKey, result.amountSol, result.walletIndex);
+        await WalletFunding.startMobileSign(result.kind, { transaction: order.transaction, walletFundingAttemptId: order.walletFundingAttemptId, amountSol: result.amountSol, walletIndex: order.walletIndex, returnUrl: location.href });
+        return true;
+      }
+      const executed = await post("/api/web/wallet-funding/execute", { walletFundingAttemptId: result.walletFundingAttemptId, signedTransaction: result.signedTransaction });
+      if (!executed.ok || !executed.data?.ok) throw new Error(executed.data?.error || "Funding did not confirm. Check your wallet and try again.");
+      savePendingFund({ asset: "SOL", amount: 0, providerName: fundingProviderLabel(result.kind), at: Date.now(), arrived: true });
+      await refreshBalance({ silent: true });
+      renderProfile();
+      toast(`${result.amountSol} SOL funded successfully.`);
+      return true;
+    } catch (error) {
+      await openAddCash();
+      $("fundingStatus").textContent = error?.message || "Funding failed. No extra transfer was sent.";
+      $("fundingStatus").className = "status bad";
+      toast(error?.message || "Funding failed. No extra transfer was sent.", true);
+      return true;
     }
   }
 
@@ -1494,7 +1586,10 @@
     if (params.get("sheet") === "addcash") openAddCash();
     if (params.get("sheet") === "receive" && signedIn) openReceive();
     if (params.get("install") === "1") setTimeout(openInstallGuide, 450);
-    if (signedIn) resumeWalletFundingRoute();
+    if (signedIn) {
+      await resumeCashMobileFunding();
+      resumeWalletFundingRoute();
+    }
     if (params.get("onramp") === "return" && signedIn) {
       let pending = null;
       try { pending = JSON.parse(sessionStorage.getItem("slimecashPendingOnramp") || "null"); } catch {}

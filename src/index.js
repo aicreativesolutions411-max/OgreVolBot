@@ -14491,7 +14491,7 @@ async function handleCallback(query, userId) {
   // Robinhood trades own their acknowledgement because the useful "bridging / buying" notice must
   // remain visible; Telegram silently ignores a second answer after this blank one.
   const callbackData = String(query.data || "");
-  const callbackOwnsAck = ["rqbp:", "rqb:", "rqs:"].some((prefix) => callbackData.startsWith(prefix));
+  const callbackOwnsAck = ["rqbp:", "rqb:", "rqs:", "rd:"].some((prefix) => callbackData.startsWith(prefix));
   if (!callbackOwnsAck) void telegram("answerCallbackQuery", { callback_query_id: query.id }).catch(() => {});
 
   // All-in-one group bot: module toggle buttons (gb:*) are handled here first.
@@ -46203,9 +46203,9 @@ async function handleTelegramRaidCommand(chatId, message, argument) {
   const symMatch = rest.match(/\$?([A-Za-z][A-Za-z0-9_]{1,11})\b/);
   const symbol = symMatch ? symMatch[1] : "";
   const nums = (rest.match(/\d{1,7}/g) || []).map(Number).filter(Number.isFinite);
+  const cfg = raidConfig(await getGroupBotEntry(chatId).catch(() => null));
   // No goals typed → open the interactive tap-to-set menu (the "fill out + submit" flow).
   if (!nums.length) {
-    const cfg = raidConfig(await getGroupBotEntry(chatId).catch(() => null));
     const d = { tid, url, symbol, by, targets: { ...cfg.targets }, durationMin: cfg.durationMin, messageThreadId, savedPresetLabel: raidPresetLabel(cfg), at: Date.now() };
     const card = raidSetupCard(d);
     const sent = await sendGroupAlertMedia(chatId, null, card.text, card.markup, { messageThreadId });
@@ -46228,7 +46228,7 @@ async function handleTelegramRaidCommand(chatId, message, argument) {
     : nums.length === 3 ? { likes: nums[0], rts: nums[1], replies: nums[2], bookmarks: 0 }
     : nums.length === 2 ? { likes: nums[0], rts: nums[1], replies: Math.max(1, Math.ceil(nums[0] / 8)), bookmarks: Math.max(1, Math.ceil(nums[0] / 10)) }
     : { likes: nums[0], rts: Math.max(1, Math.ceil(nums[0] / 4)), replies: Math.max(1, Math.ceil(nums[0] / 8)), bookmarks: Math.max(1, Math.ceil(nums[0] / 10)) };
-  await startRaidFromDraft(chatId, { tid, url, symbol, by, targets, durationMin: 5, messageThreadId });
+  await startRaidFromDraft(chatId, { tid, url, symbol, by, targets, durationMin: cfg.durationMin, messageThreadId });
 }
 
 async function handleTelegramNextRaidCommand(chatId, message, userId, argument) {
@@ -46450,7 +46450,15 @@ async function readGroupBot() {
   catch { groupBotCache = { groups: {} }; }
   return groupBotCache;
 }
-async function writeGroupBot(store) { groupBotCache = store; try { await writeJsonFile(GROUP_BOT_FILE, store); } catch {} }
+async function writeGroupBot(store) {
+  // Group settings are edited by commands, callbacks and background workers. Serialize writes so a
+  // preset cannot be overwritten by another setting update, and let disk errors reach the caller
+  // instead of falsely telling an admin that a setting was saved.
+  await withFileLock(GROUP_BOT_FILE, async () => {
+    await writeJsonFile(GROUP_BOT_FILE, store);
+    groupBotCache = store;
+  });
+}
 // Scan defaults ON — auto-reading a pasted CA / $ticker is the bot's core, benign, user-triggered value
 // (cooldown-gated, never floods). Buy/Raid/Rose stay OFF (those auto-post / moderate, so opt-in).
 function defaultGroupBotEntry() { return { features: { buybot: false, raid: false, rose: false, scan: true, kolfeed: false }, token: null, addedAt: new Date().toISOString() }; }
@@ -46477,7 +46485,7 @@ async function connectLaunchOsTelegramGroup(setupCode, userId, chat) {
   entry.token = project.token.ca;
   entry.launchOsId = project.id;
   entry.features = { ...(entry.features || {}), buybot: true, raid: true, rose: true, scan: true };
-  entry.raidConfig = { version: 2, targets: { ...RAID_DEFAULT_PRESET.targets }, durationMin: RAID_DEFAULT_PRESET.durationMin };
+  entry.raidConfig = { version: RAID_CONFIG_VERSION, targets: { ...RAID_DEFAULT_PRESET.targets }, durationMin: RAID_DEFAULT_PRESET.durationMin };
   entry.rose = { ...(entry.rose || {}), welcome: project.content?.telegramWelcome || entry.rose?.welcome || null };
   store.groups[key] = entry;
   await writeGroupBot(store);
@@ -46838,35 +46846,52 @@ async function pollPublicKolSources() {
     kolPublicPollRunning = false;
   }
 }
-const RAID_DEFAULT_PRESET = { targets: { likes: 10, rts: 5, replies: 5, bookmarks: 1 }, durationMin: 5 };
+const RAID_CONFIG_VERSION = 3;
+const RAID_DEFAULT_PRESET = { targets: { likes: 10, rts: 5, replies: 5, bookmarks: 1 }, durationMin: 15 };
 function cleanRaidTargets(targets = {}) {
   const clamp = (v) => Math.max(0, Math.min(1_000_000, Math.round(Number(v) || 0)));
   return { likes: clamp(targets.likes), rts: clamp(targets.rts), replies: clamp(targets.replies), bookmarks: clamp(targets.bookmarks) };
 }
+function cleanRaidDuration(value, fallback = RAID_DEFAULT_PRESET.durationMin) {
+  const parsed = Number(value);
+  const fallbackParsed = Number(fallback);
+  const duration = Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : (Number.isFinite(fallbackParsed) && fallbackParsed > 0 ? fallbackParsed : RAID_DEFAULT_PRESET.durationMin);
+  return Math.max(1, Math.min(24 * 60, Math.round(duration)));
+}
 function raidConfig(entry) {
   const saved = entry && entry.raidConfig && typeof entry.raidConfig === "object" ? entry.raidConfig : {};
-  // The old built-in default was 120m and was copied into many group records. Migrate only that
-  // unversioned legacy default to 5m; explicitly saved modern presets keep their chosen duration.
-  const savedDuration = !saved.version && Number(saved.durationMin) === 120 ? 5 : saved.durationMin;
+  const targets = cleanRaidTargets({ ...RAID_DEFAULT_PRESET.targets, ...(saved.targets || {}) });
+  const oldTargets = RAID_DEFAULT_PRESET.targets;
+  const matchesOldBuiltIn = Object.keys(oldTargets).every((key) => targets[key] === oldTargets[key]);
+  // Earlier releases copied either 120m or 5m plus the built-in 10/5/5/1 targets into group
+  // records. Upgrade only that recognizable old default; custom saved presets keep their duration.
+  const migrateOldDefault = Number(saved.version || 0) < RAID_CONFIG_VERSION
+    && matchesOldBuiltIn
+    && [5, 120].includes(Number(saved.durationMin));
+  const savedDuration = migrateOldDefault ? RAID_DEFAULT_PRESET.durationMin : saved.durationMin;
   return {
-    targets: cleanRaidTargets({ ...RAID_DEFAULT_PRESET.targets, ...(saved.targets || {}) }),
-    durationMin: Math.max(1, Math.min(24 * 60, Math.round(Number(savedDuration) || RAID_DEFAULT_PRESET.durationMin)))
+    targets,
+    durationMin: cleanRaidDuration(savedDuration)
   };
 }
 function raidPresetLabel(cfg) {
   const c = cfg?.targets ? cfg : raidConfig(null);
   const t = cleanRaidTargets(c.targets);
-  return `${t.likes}/${t.rts}/${t.replies}/${t.bookmarks} · ${Math.max(1, Number(c.durationMin) || 5)}m`;
+  return `${t.likes}/${t.rts}/${t.replies}/${t.bookmarks} · ${cleanRaidDuration(c.durationMin)}m`;
 }
 async function setRaidConfig(chatId, patch) {
   const store = await readGroupBot();
   const k = String(chatId);
   const e = store.groups[k] || defaultGroupBotEntry();
   const cur = raidConfig(e);
+  const targets = cleanRaidTargets({ ...cur.targets, ...(patch.targets || {}) });
+  if (!Object.values(targets).some((value) => value > 0)) throw new Error("Set at least one raid goal before saving the preset.");
   e.raidConfig = {
-    version: 2,
-    targets: cleanRaidTargets({ ...cur.targets, ...(patch.targets || {}) }),
-    durationMin: Math.max(1, Math.min(24 * 60, Math.round(Number(patch.durationMin ?? cur.durationMin) || cur.durationMin)))
+    version: RAID_CONFIG_VERSION,
+    targets,
+    durationMin: cleanRaidDuration(patch.durationMin, cur.durationMin)
   };
   store.groups[k] = e;
   await writeGroupBot(store);
@@ -47049,7 +47074,7 @@ function groupBotModuleView(module, entry) {
         "Start a raid with <code>/raid &lt;X post link&gt;</code> → tap the goals → 🚀. Set custom art below (separate from the Buy Bot's).",
         "",
         `Default preset: <b>${escapeTelegramHtml(raidPresetLabel(rc))}</b>`,
-        "Fast save: <code>/raidpreset 10 5 5 1 5</code> = likes RT replies bookmarks duration. Add up to 10 with <code>/next &lt;link&gt;</code>; queued raids start automatically."
+        "Fast save: <code>/raidpreset 10 5 5 1 15</code> = likes RT replies bookmarks duration. Add up to 10 with <code>/next &lt;link&gt;</code>; queued raids start automatically."
       ].join("\n"),
       markup: { inline_keyboard: [
         [toggleBtn("raid", "Raid Bot")],
@@ -47486,25 +47511,39 @@ async function handleGroupBotCommand(message, userId) {
     return true;
   }
   // /raidpreset [likes rts replies bookmarks durationMin] — save the default raid setup for this group.
-  const rp = text.match(/^\/raidpreset(?:@\w+)?(?:\s+([\d\s.]+))?\s*$/i);
+  const rp = text.match(/^\/raidpreset(?:@\w+)?(?:\s+([\s\S]+?))?\s*$/i);
   if (rp) {
     const chatId = chat.id;
     if (!(await isGroupBotAdmin(chatId, userId, message))) { await say(chatId, "Only group admins can set raid presets."); return true; }
-    const nums = (rp[1] || "").match(/\d{1,7}/g)?.map(Number).filter((n) => Number.isFinite(n) && n >= 0) || [];
-    if (!nums.length) {
+    const rawPreset = String(rp[1] || "").trim();
+    if (!rawPreset) {
       const cfg = raidConfig(await getGroupBotEntry(chatId).catch(() => null));
-      await sayHtml(chatId, `⚔️ Raid default is <b>${escapeTelegramHtml(raidPresetLabel(cfg))}</b>.\nSet it with <code>/raidpreset 10 5 5 1 5</code> (likes RT replies bookmarks duration-min).`);
+      await sayHtml(chatId, `⚔️ Raid default is <b>${escapeTelegramHtml(raidPresetLabel(cfg))}</b>.\nSet it with <code>/raidpreset 10 5 5 1 15</code> (likes RT replies bookmarks duration-min).`);
       return true;
     }
+    const parts = rawPreset.split(/\s+/);
+    if (parts.length !== 5 || parts.some((value) => !/^\d{1,7}$/.test(value))) {
+      await sayHtml(chatId, "Use five whole numbers: <code>/raidpreset 10 5 5 1 15</code> (likes RT replies bookmarks duration-min). Duration must be 1–1440 minutes.");
+      return true;
+    }
+    const nums = parts.map(Number);
     const targets = {
-      likes: nums[0] ?? 0,
-      rts: nums[1] ?? nums[0] ?? 0,
-      replies: nums[2] ?? nums[0] ?? 0,
-      bookmarks: nums[3] ?? nums[0] ?? 0
+      likes: nums[0],
+      rts: nums[1],
+      replies: nums[2],
+      bookmarks: nums[3]
     };
-    const durationMin = nums[4] || raidConfig(await getGroupBotEntry(chatId).catch(() => null)).durationMin;
-    const cfg = await setRaidConfig(chatId, { targets, durationMin });
-    await sayHtml(chatId, `⚔️ Raid default saved: <b>${escapeTelegramHtml(raidPresetLabel(cfg))}</b>.\nNew <code>/raid &lt;X link&gt;</code> menus start from this preset.`);
+    if (!Object.values(targets).some((value) => value > 0) || nums[4] < 1 || nums[4] > 24 * 60) {
+      await sayHtml(chatId, "Set at least one goal above 0 and use a duration from 1 to 1440 minutes. Example: <code>/raidpreset 10 5 5 1 15</code>.");
+      return true;
+    }
+    try {
+      const cfg = await setRaidConfig(chatId, { targets, durationMin: nums[4] });
+      await sayHtml(chatId, `⚔️ Raid default saved: <b>${escapeTelegramHtml(raidPresetLabel(cfg))}</b>.\nNew <code>/raid &lt;X link&gt;</code> menus start from this preset.`);
+    } catch (error) {
+      console.warn(`[raid] preset command save failed chat=${chatId}: ${friendlyError(error)}`);
+      await say(chatId, "Couldn't save that raid preset. Try again in a moment.").catch(() => {});
+    }
     return true;
   }
   // /setmedia — custom picture/video for this group's buy + raid posts (reply to a photo/video, paste
@@ -53426,7 +53465,7 @@ const RAID_FIELD_META = {
   rts: { label: "🔁 Retweets", eg: 25 },
   replies: { label: "💬 Replies", eg: 10 },
   bm: { label: "🔖 Bookmarks", eg: 10 },
-  dur: { label: "🕐 Duration (minutes)", eg: 5 },
+  dur: { label: "🕐 Duration (minutes)", eg: 15 },
 };
 function raidDraftKey(chatId, msgId) { return String(chatId) + ":" + String(msgId); }
 function raidExpiryKey(chatId, tid) { return `${chatId}:${tid}`; }
@@ -53455,14 +53494,25 @@ function raidSetupCard(d) {
       `👉 <a href="${escapeTelegramHtml(d.url)}">The post you're raiding</a>`
     ].join("\n"),
     markup: { inline_keyboard: [
-      [{ text: "⚡ 10 Likes · 5 RT · 5 Replies", callback_data: "rd:p:quick" }, { text: "⭐ Use Default", callback_data: "rd:p:def" }],
+      [{ text: "⚡ Quick 10/5/5 · 15m", callback_data: "rd:p:quick" }, { text: "⭐ Use Default", callback_data: "rd:p:def" }],
       [{ text: `❤️ Likes: ${v(d.targets.likes)}`, callback_data: "rd:c:likes" }, { text: `🔁 RT: ${v(d.targets.rts)}`, callback_data: "rd:c:rts" }],
       [{ text: `💬 Replies: ${v(d.targets.replies)}`, callback_data: "rd:c:replies" }, { text: `🔖 Bookmarks: ${v(d.targets.bookmarks)}`, callback_data: "rd:c:bm" }],
-      [{ text: `🕐 Duration: ${Number(d.durationMin) || 5}m`, callback_data: "rd:c:dur" }],
+      [{ text: `🕐 Duration: ${cleanRaidDuration(d.durationMin)}m`, callback_data: "rd:c:dur" }],
       [{ text: "💾 Save as Default", callback_data: "rd:p:save" }, { text: "↩ Reset", callback_data: "rd:p:reset" }],
       [{ text: "🚀 Start Raid", callback_data: "rd:go" }, { text: "✖ Cancel", callback_data: "rd:x" }]
     ] }
   };
+}
+async function renderRaidSetupCard(chatId, messageId, draft) {
+  const card = raidSetupCard(draft);
+  try {
+    await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: card.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: card.markup });
+  } catch (error) {
+    // Re-tapping an already-selected preset is still a successful action; Telegram rejects only the
+    // redundant edit. Any other error is real and must be surfaced to the admin.
+    if (!friendlyError(error).toLowerCase().includes("message is not modified")) throw error;
+  }
+  return card;
 }
 // Apply a typed number to a raid draft field, re-render the setup card. Returns
 // true when it consumed the message (an admin was mid-entry for a field).
@@ -53478,15 +53528,23 @@ async function applyRaidTypedInput(message, userId) {
   const n = Math.max(0, Math.min(1_000_000, parseInt(text, 10)));
   const d = raidDrafts.get(pend.draftKey);
   if (!d) { await say(chatId, "That raid setup expired — run /raid <link> again.").catch(() => {}); return true; }
-  if (pend.field === "dur") d.durationMin = Math.max(1, n || 5);
+  if (pend.field === "dur") d.durationMin = cleanRaidDuration(n);
   else if (pend.field === "bm") d.targets.bookmarks = n;
   else d.targets[pend.field] = n;
   raidDrafts.set(pend.draftKey, d);
   // Tidy: remove the prompt + the number the admin typed so the card stays clean.
   if (pend.promptMsgId) { try { await telegram("deleteMessage", { chat_id: chatId, message_id: pend.promptMsgId }); } catch {} }
   try { await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch {}
-  const card = raidSetupCard(d);
-  try { await telegram("editMessageText", { chat_id: chatId, message_id: pend.setupMsgId, text: card.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: card.markup }); } catch {}
+  try {
+    await renderRaidSetupCard(chatId, pend.setupMsgId, d);
+  } catch (error) {
+    console.warn(`[raid] typed setup render failed chat=${chatId}: ${friendlyError(error)}`);
+    await telegram("sendMessage", {
+      chat_id: chatId,
+      ...(d.messageThreadId ? { message_thread_id: d.messageThreadId } : {}),
+      text: "I saved that number, but couldn't refresh the setup card. Run /raid with the link again if the card stays stale."
+    }).catch(() => {});
+  }
   return true;
 }
 // Launch a configured raid: record it, post the live card, register the auto-updating message ref.
@@ -53521,7 +53579,7 @@ async function startRaidFromDraft(chatId, d, { fromQueue = false } = {}) {
     return { started: false };
   }
   const ge = await getGroupBotEntry(chatId).catch(() => null);
-  const startedAt = Date.now(), durationMs = Math.max(1, Number(d.durationMin) || 5) * 60_000;
+  const startedAt = Date.now(), durationMs = cleanRaidDuration(d.durationMin) * 60_000;
   const card = buildRaidProgressCard({ tid: res.tid, symbol: res.symbol || d.symbol, targets: d.targets, likes: res.likes, rts: res.rts, replies: res.replies, bookmarks: res.bookmarks || 0, url: res.url || d.url, startedAt, durationMs });
   // Raid uses its OWN art (raidMedia) if set, else falls back to the buy art (customMedia).
   const media = (ge && ge.raidMedia && ge.raidMedia.value) ? ge.raidMedia
@@ -53554,13 +53612,31 @@ async function handleRaidSetupCallback(query, userId) {
   const data = String(query?.data || "");
   if (!data.startsWith("rd:")) return false;
   const chatId = query.message?.chat?.id, msgId = query.message?.message_id;
+  const ack = (text = "", showAlert = false) => telegram("answerCallbackQuery", {
+    callback_query_id: query.id,
+    ...(text ? { text } : {}),
+    ...(showAlert ? { show_alert: true } : {})
+  }).catch(() => {});
   const key = raidDraftKey(chatId, msgId);
   const d = raidDrafts.get(key);
-  if (!d) { try { await telegram("editMessageText", { chat_id: chatId, message_id: msgId, text: "This raid setup expired — run /raid <link> again." }); } catch {} return true; }
-  if (!(await isGroupBotAdmin(chatId, userId, query.message).catch(() => false))) return true; // only admins configure (callback already answered)
-  if (data === "rd:x") { raidDrafts.delete(key); try { await telegram("editMessageText", { chat_id: chatId, message_id: msgId, text: "Raid setup cancelled." }); } catch {} return true; }
+  if (!d) {
+    try { await telegram("editMessageText", { chat_id: chatId, message_id: msgId, text: "This raid setup expired — run /raid <link> again." }); } catch {}
+    await ack("This raid setup expired. Run /raid with the link again.", true);
+    return true;
+  }
+  if (!(await isGroupBotAdmin(chatId, userId, query.message).catch(() => false))) {
+    await ack("Only group admins can change or start this raid.", true);
+    return true;
+  }
+  if (data === "rd:x") {
+    raidDrafts.delete(key);
+    try { await telegram("editMessageText", { chat_id: chatId, message_id: msgId, text: "Raid setup cancelled." }); } catch {}
+    await ack("Raid setup cancelled.");
+    return true;
+  }
   if (data === "rd:go") {
-    if (!(d.targets.likes || d.targets.rts || d.targets.replies || d.targets.bookmarks)) { try { await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "Set at least one goal first.", show_alert: true }); } catch {} return true; }
+    if (!(d.targets.likes || d.targets.rts || d.targets.replies || d.targets.bookmarks)) { await ack("Set at least one goal first.", true); return true; }
+    await ack("Starting raid…");
     raidDrafts.delete(key);
     try { await telegram("deleteMessage", { chat_id: chatId, message_id: msgId }); } catch {}
     await startRaidFromDraft(chatId, d).catch(async (error) => {
@@ -53571,49 +53647,56 @@ async function handleRaidSetupCallback(query, userId) {
   }
   if (data.startsWith("rd:p:")) {
     const action = data.slice(5);
-    if (action === "quick" || action === "five") {
-      d.targets = { likes: 10, rts: 5, replies: 5, bookmarks: 1 };
-      d.durationMin = Math.max(1, Number(d.durationMin) || 5);
-    } else if (action === "def") {
-      const cfg = raidConfig(await getGroupBotEntry(chatId).catch(() => null));
-      d.targets = { ...cfg.targets };
-      d.durationMin = cfg.durationMin;
-      d.savedPresetLabel = raidPresetLabel(cfg);
-    } else if (action === "reset") {
-      d.targets = { ...RAID_DEFAULT_PRESET.targets };
-      d.durationMin = RAID_DEFAULT_PRESET.durationMin;
-      d.savedPresetLabel = raidPresetLabel(RAID_DEFAULT_PRESET);
-    } else if (action === "save") {
-      const cfg = await setRaidConfig(chatId, { targets: d.targets, durationMin: d.durationMin });
-      d.savedPresetLabel = raidPresetLabel(cfg);
-      try { await telegram("answerCallbackQuery", { callback_query_id: query.id, text: `Default saved: ${raidPresetLabel(cfg)}` }); } catch {}
+    let notice = "Preset applied.";
+    try {
+      if (action === "quick" || action === "five") {
+        d.targets = { ...RAID_DEFAULT_PRESET.targets };
+        d.durationMin = RAID_DEFAULT_PRESET.durationMin;
+        notice = `Quick preset applied: ${raidPresetLabel(RAID_DEFAULT_PRESET)}`;
+      } else if (action === "def") {
+        const cfg = raidConfig(await getGroupBotEntry(chatId).catch(() => null));
+        d.targets = { ...cfg.targets };
+        d.durationMin = cfg.durationMin;
+        d.savedPresetLabel = raidPresetLabel(cfg);
+        notice = `Saved default applied: ${raidPresetLabel(cfg)}`;
+      } else if (action === "reset") {
+        d.targets = { ...RAID_DEFAULT_PRESET.targets };
+        d.durationMin = RAID_DEFAULT_PRESET.durationMin;
+        notice = `Reset to ${raidPresetLabel(RAID_DEFAULT_PRESET)}`;
+      } else if (action === "save") {
+        const cfg = await setRaidConfig(chatId, { targets: d.targets, durationMin: d.durationMin });
+        d.targets = { ...cfg.targets };
+        d.durationMin = cfg.durationMin;
+        d.savedPresetLabel = raidPresetLabel(cfg);
+        notice = `Default saved: ${raidPresetLabel(cfg)}`;
+      } else {
+        await ack("That preset is no longer available. Reopen /raid.", true);
+        return true;
+      }
+      d.at = Date.now();
+      raidDrafts.set(key, d);
+      await renderRaidSetupCard(chatId, msgId, d);
+      await ack(notice);
+    } catch (error) {
+      console.warn(`[raid] preset ${action || "unknown"} failed chat=${chatId}: ${friendlyError(error)}`);
+      await ack(action === "save" ? "Couldn't save that preset. Try again." : "Couldn't apply that preset. Reopen /raid and try again.", true);
     }
-    d.at = Date.now();
-    raidDrafts.set(key, d);
-    const card = raidSetupCard(d);
-    try { await telegram("editMessageText", { chat_id: chatId, message_id: msgId, text: card.text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: card.markup }); } catch {}
-    if (action !== "save") { try { await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "Preset applied." }); } catch {} }
     return true;
   }
   if (data.startsWith("rd:c:")) {
     const field = data.slice(5);
     const meta = RAID_FIELD_META[field];
-    if (!meta) return true;
+    if (!meta) { await ack("That raid field is no longer available. Reopen /raid.", true); return true; }
     // Ask via a POPUP (answerCallbackQuery show_alert) — NO chat message, so the
     // setup never floods the group. The admin's next number is captured + deleted
     // by applyRaidTypedInput. promptMsgId stays null (nothing to clean up).
     raidInputPending.set(String(chatId) + ":" + String(userId), {
       draftKey: key, field, setupMsgId: msgId, promptMsgId: null, at: Date.now(),
     });
-    try {
-      await telegram("answerCallbackQuery", {
-        callback_query_id: query.id,
-        show_alert: true,
-        text: `Reply with the number for ${meta.label.replace(/<[^>]+>/g, "")} (e.g. ${meta.eg})${field === "dur" ? "" : ". Send 0 to clear"}.`,
-      });
-    } catch {}
+    await ack(`Reply with the number for ${meta.label.replace(/<[^>]+>/g, "")} (e.g. ${meta.eg})${field === "dur" ? "" : ". Send 0 to clear"}.`, true);
     return true;
   }
+  await ack();
   return true;
 }
 function raidTgPath() { return path.join(CONFIG.dataDir, "raid-tg.json"); }
@@ -53669,7 +53752,7 @@ async function queueRaidBehindActive(chatId, draft) {
     queue.push({
       tid: String(draft.tid), url: String(draft.url || "").slice(0, 300), symbol: String(draft.symbol || "").slice(0, 12),
       by: String(draft.by || "anon").slice(0, 30), targets: cleanRaidTargets(draft.targets),
-      durationMin: Math.max(1, Math.min(24 * 60, Math.round(Number(draft.durationMin) || 5))),
+      durationMin: cleanRaidDuration(draft.durationMin),
       messageThreadId: Number(draft.messageThreadId) > 0 ? Number(draft.messageThreadId) : null,
       queuedAt: Date.now()
     });
@@ -53685,7 +53768,7 @@ async function raidQueueStatus(chatId) {
   const ref = activeCard?.refs?.find((item) => String(item.chatId) === String(chatId));
   const activeRaid = activeCard ? {
     targets: cleanRaidTargets(activeCard.targets),
-    durationMin: Math.max(1, Math.round(Number(ref?.durationMs || activeCard.durationMs || 5 * 60_000) / 60_000))
+    durationMin: cleanRaidDuration(Number(ref?.durationMs || activeCard.durationMs || RAID_DEFAULT_PRESET.durationMin * 60_000) / 60_000)
   } : null;
   const queue = Array.isArray(s.queues[String(chatId)]) ? s.queues[String(chatId)].slice(0, RAID_QUEUE_MAX) : [];
   return { active: Boolean(activeCard), activeRaid, queue };
@@ -53721,7 +53804,7 @@ async function attachRaidTgCard(tid, { url, symbol, targets, ref, eng, startedAt
     if (durationMs) c.durationMs = durationMs;
     if (eng) { c.likes = Number(eng.likes) || 0; c.rts = Number(eng.rts) || 0; c.replies = Number(eng.replies) || 0; c.bookmarks = Number(eng.bookmarks) || 0; }
     c.refs = (c.refs || []).filter((r) => String(r.chatId) !== String(ref.chatId));
-    c.refs.push({ chatId: String(ref.chatId), messageId: ref.messageId, hasMedia: !!ref.hasMedia, messageThreadId: Number(ref.messageThreadId) > 0 ? Number(ref.messageThreadId) : null, postsSinceRefresh: 0, startedAt: Number(startedAt) || Date.now(), durationMs: Number(durationMs) || 5 * 60_000 });
+    c.refs.push({ chatId: String(ref.chatId), messageId: ref.messageId, hasMedia: !!ref.hasMedia, messageThreadId: Number(ref.messageThreadId) > 0 ? Number(ref.messageThreadId) : null, postsSinceRefresh: 0, startedAt: Number(startedAt) || Date.now(), durationMs: Number(durationMs) || RAID_DEFAULT_PRESET.durationMin * 60_000 });
     c.done = false; c.lastCard = ""; // re-arm so the new card edits at least once
     // bound the store: keep the 120 most recent cards
     const ids = Object.keys(s.cards);
@@ -53756,7 +53839,7 @@ async function finishExpiredRaidForChat(tid, chatId, expectedStartedAt = 0) {
     const ref = card.refs.find((item) => String(item.chatId) === String(chatId));
     if (!ref) return null;
     const startedAt = Number(ref.startedAt) || Number(card.startedAt) || 0;
-    const durationMs = Number(ref.durationMs) || Number(card.durationMs) || 5 * 60_000;
+    const durationMs = Number(ref.durationMs) || Number(card.durationMs) || RAID_DEFAULT_PRESET.durationMin * 60_000;
     if (expectedStartedAt && startedAt !== Number(expectedStartedAt)) return null; // stale timer after a replacement raid
     if (!startedAt || Date.now() < startedAt + durationMs) return null;
     card.refs = card.refs.filter((item) => String(item.chatId) !== String(chatId));
@@ -53901,7 +53984,7 @@ async function refreshRaidTgCards() {
     for (const c of Object.values(s.cards || {}).filter((item) => !item.done && Array.isArray(item.refs))) {
       for (const ref of c.refs) {
         const startedAt = Number(ref.startedAt) || Number(c.startedAt) || 0;
-        const durationMs = Number(ref.durationMs) || Number(c.durationMs) || 5 * 60_000;
+        const durationMs = Number(ref.durationMs) || Number(c.durationMs) || RAID_DEFAULT_PRESET.durationMin * 60_000;
         if (startedAt && now >= startedAt + durationMs) await finishExpiredRaidForChat(c.tid, ref.chatId, startedAt).catch(() => {});
         else if (startedAt && !raidExpiryTimers.has(raidExpiryKey(ref.chatId, c.tid))) scheduleRaidHardExpiry(ref.chatId, c.tid, startedAt, durationMs);
       }

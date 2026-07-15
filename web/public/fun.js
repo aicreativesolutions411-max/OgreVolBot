@@ -901,15 +901,16 @@
     const wallet = activeWallet();
     const label = fundingProviderLabel(kind);
     const icon = kind === "other" ? "/assets/slimewire/png/slimewire-mark.png" : `/assets/slimewire/clean-ui/wallet_icons/default/${kind}.png`;
-    openSheet(`<div class="sheet-title"><img src="${icon}" alt=""><div><h2>Fund with ${label}</h2><p>Connected ${escapeHtml(short(publicKey))}</p></div></div><div class="fund-wallet-summary"><span>Destination</span><b>${escapeHtml(wallet?.label || "New SlimeWire trading wallet")}</b><small>${wallet ? escapeHtml(short(wallet.publicKey)) : "Created and backed up after you continue"}</small></div><div class="field"><label>SOL amount</label><input data-fund-sol inputmode="decimal" value="0.1" aria-label="SOL funding amount"><div class="amount-chips">${["0.1", "0.25", "0.5", "1"].map((amount) => `<button type="button" data-fund-amount="${amount}">${amount}</button>`).join("")}</div></div><button class="submit-trade" type="button" data-submit-wallet-funding="${kind}">${wallet ? "Review & fund wallet" : "Create & fund wallet"}</button><button class="recovery-button" type="button" data-back-funding>Choose another method</button><p class="fund-note" data-funding-status>Next, approve exactly this SOL transfer in ${label}.</p>`);
+    const connectionLine = publicKey ? `Connected ${escapeHtml(short(publicKey))}` : `${label} mobile approval`;
+    openSheet(`<div class="sheet-title"><img src="${icon}" alt=""><div><h2>Fund with ${label}</h2><p>${connectionLine}</p></div></div><div class="fund-wallet-summary"><span>Destination</span><b>${escapeHtml(wallet?.label || "New SlimeWire trading wallet")}</b><small>${wallet ? escapeHtml(short(wallet.publicKey)) : "Created and backed up after you continue"}</small></div><div class="field"><label>SOL amount</label><input data-fund-sol inputmode="decimal" value="0.1" aria-label="SOL funding amount"><div class="amount-chips">${["0.1", "0.25", "0.5", "1"].map((amount) => `<button type="button" data-fund-amount="${amount}">${amount}</button>`).join("")}</div></div><button class="submit-trade" type="button" data-submit-wallet-funding="${kind}">${wallet ? `Continue in ${label}` : "Create & fund wallet"}</button><button class="recovery-button" type="button" data-back-funding>Choose another method</button><p class="fund-note" data-funding-status>${publicKey ? `Next, approve exactly this SOL transfer in ${label}.` : `First use connects ${label} once; your selected amount carries into the transfer approval automatically.`}</p>`);
   }
   async function startWalletFunding(kind, button) {
     if (!["phantom", "solflare", "other"].includes(kind)) return;
     const label = fundingProviderLabel(kind);
     const provider = fundingProvider(kind);
     if (!provider) {
-      if (isMobileWalletPlatform() && fundingWalletBrowseUrl(kind)) {
-        location.assign(fundingWalletBrowseUrl(kind));
+      if (isMobileWalletPlatform() && ["phantom", "solflare"].includes(kind)) {
+        openFundingAmountSheet(kind, WalletFunding?.mobileSession(kind)?.publicKey || "");
       } else if (kind === "other") {
         openFundingSheet("Open SlimeWire in your Solana wallet's browser, or use Copy address for a manual transfer.");
       } else {
@@ -938,7 +939,14 @@
     const amountSol = Number($("[data-fund-sol]")?.value || 0);
     if (!Number.isFinite(amountSol) || amountSol < 0.005 || amountSol > 10) { toast("Enter 0.005 to 10 SOL.", true); return; }
     const provider = fundingProvider(kind);
-    if (!provider || typeof provider.signTransaction !== "function") { openFundingSheet(`Open this page in ${fundingProviderLabel(kind)} and reconnect.`); return; }
+    if (!provider || typeof provider.signTransaction !== "function") {
+      if (isMobileWalletPlatform() && ["phantom", "solflare"].includes(kind)) {
+        await startFunMobileFunding(button, kind, amountSol);
+        return;
+      }
+      openFundingSheet(`Open this page in ${fundingProviderLabel(kind)} and reconnect.`);
+      return;
+    }
     const publicKey = String(provider.publicKey || "");
     if (!publicKey) { await startWalletFunding(kind, button); return; }
     let wallet = activeWallet();
@@ -988,6 +996,91 @@
       toast(message, true);
       button.disabled = false;
       button.textContent = originalLabel;
+    }
+  }
+
+  async function ensureFunFundingWallet() {
+    let wallet = activeWallet();
+    if (wallet) return wallet;
+    if (!(await createWallet())) throw new Error("Could not create the destination wallet.");
+    wallet = activeWallet();
+    if (!wallet) throw new Error("Could not load the destination wallet.");
+    return wallet;
+  }
+
+  async function prepareFunMobileFundingOrder(kind, publicKey, amountSol, walletIndex = null) {
+    const saved = await post("/api/web/profile/connected-wallet", { publicKey, provider: kind });
+    if (!saved.ok || !saved.data?.ok) throw new Error(apiMessage(saved.data, `Could not connect ${fundingProviderLabel(kind)}.`));
+    const wallet = await ensureFunFundingWallet();
+    const chosenIndex = walletIndex !== null && walletIndex !== "" && Number.isFinite(Number(walletIndex)) ? Number(walletIndex) : Number(wallet.index);
+    const created = await post("/api/web/wallet-funding/create", { walletIndex: chosenIndex, amountSol: String(amountSol) });
+    if (!created.ok || !created.data?.ok || !created.data?.order?.transaction) throw new Error(apiMessage(created.data, "Could not prepare wallet funding."));
+    return created.data.order;
+  }
+
+  async function startFunMobileFunding(button, kind, amountSol) {
+    const originalLabel = button.textContent;
+    const status = $("[data-funding-status]");
+    button.disabled = true;
+    try {
+      if (!(await ensureAccount())) throw new Error("Could not start your SlimeWire account.");
+      const wallet = await ensureFunFundingWallet();
+      const session = WalletFunding?.mobileSession(kind);
+      button.textContent = `Opening ${fundingProviderLabel(kind)}…`;
+      if (status) status.textContent = session ? `Approve exactly ${amountSol} SOL in ${fundingProviderLabel(kind)}.` : `Connect ${fundingProviderLabel(kind)} once. Your ${amountSol} SOL amount will carry into the transfer approval.`;
+      if (!session) {
+        const started = await WalletFunding?.startMobileConnect(kind, { amountSol, walletIndex: wallet.index, returnUrl: location.href });
+        if (!started) throw new Error(`${fundingProviderLabel(kind)} mobile connect is unavailable.`);
+        return;
+      }
+      const order = await prepareFunMobileFundingOrder(kind, session.publicKey, amountSol, wallet.index);
+      await WalletFunding.startMobileSign(kind, { transaction: order.transaction, walletFundingAttemptId: order.walletFundingAttemptId, amountSol, walletIndex: order.walletIndex, returnUrl: location.href });
+    } catch (error) {
+      const message = error?.message || "Could not open the mobile wallet approval.";
+      if (status) status.textContent = message;
+      toast(message, true);
+      button.disabled = false;
+      button.textContent = originalLabel;
+    }
+  }
+
+  async function resumeFunMobileFunding() {
+    const result = await WalletFunding?.consumeMobileCallback?.();
+    if (!result) return false;
+    if (result.stage === "error") {
+      if (result.reconnect && result.amountSol) {
+        await WalletFunding.startMobileConnect(result.kind, { amountSol: result.amountSol, walletIndex: result.walletIndex, returnUrl: location.href });
+        return true;
+      }
+      openFundingSheet(result.error || "Wallet approval could not be completed.");
+      toast(result.error || "Wallet approval could not be completed.", true);
+      return true;
+    }
+    try {
+      if (!(await ensureAccount())) throw new Error("Your SlimeWire login expired. Log in and start funding again.");
+      await loadWallets();
+      await ensureFunFundingWallet();
+      if (result.stage === "connected") {
+        const order = await prepareFunMobileFundingOrder(result.kind, result.publicKey, result.amountSol, result.walletIndex);
+        await WalletFunding.startMobileSign(result.kind, { transaction: order.transaction, walletFundingAttemptId: order.walletFundingAttemptId, amountSol: result.amountSol, walletIndex: order.walletIndex, returnUrl: location.href });
+        return true;
+      }
+      const executed = await request("/api/web/wallet-funding/execute", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ walletFundingAttemptId: result.walletFundingAttemptId, signedTransaction: result.signedTransaction }), timeout: 70_000 });
+      if (!executed.ok || !executed.data?.ok) throw new Error(apiMessage(executed.data, "Funding did not confirm. Check your wallet and try again."));
+      if (result.walletIndex !== null && Number.isFinite(Number(result.walletIndex))) {
+        state.activeWallet = Number(result.walletIndex);
+        localStorage.setItem(ACTIVE_WALLET_KEY, String(result.walletIndex));
+      }
+      await loadWallets(true);
+      setView("wallet");
+      renderWalletHero();
+      renderWalletPositions();
+      toast(`${result.amountSol} SOL funded successfully.`);
+      return true;
+    } catch (error) {
+      openFundingSheet(error?.message || "Funding failed. No extra transfer was sent.");
+      toast(error?.message || "Funding failed. No extra transfer was sent.", true);
+      return true;
     }
   }
   async function copyFundingAddress() {
@@ -1480,6 +1573,7 @@
     if (!IS_QUICK_ROUTE) loadFeed();
     if (state.token) Promise.all([loadMe(), loadWallets(), loadPositions(), loadPresets(), loadCreatedCoinsSilently()]).then(() => { renderCashHandoff(); renderHomeReadiness(); if (state.view === "coin") renderQuickTrade(); if (state.view === "quick") renderQuickRoute(); }).catch(() => {});
     const routeParams = new URLSearchParams(location.search);
+    await resumeFunMobileFunding();
     if (IS_QUICK_ROUTE) {
       setView("quick", { hideNav: true });
       renderQuickRoute();

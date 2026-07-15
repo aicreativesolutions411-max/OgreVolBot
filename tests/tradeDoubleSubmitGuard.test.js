@@ -1167,21 +1167,30 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
   assert.match(serverSource, /callback_data: "rd:p:quick"/);
   assert.match(serverSource, /callback_data: "rd:p:save"/);
   assert.match(serverSource, /const RAID_DEFAULT_PRESET = \{ targets: \{ likes: 10, rts: 5, replies: 5, bookmarks: 1 \}/);
-  assert.match(serverSource, /RAID_DEFAULT_PRESET = \{[\s\S]*durationMin: 5/);
-  assert.match(functionBody(serverSource, "raidConfig"), /Number\(saved\.durationMin\) === 120 \? 5/);
-  assert.match(functionBody(serverSource, "setRaidConfig"), /version: 2/);
+  assert.match(serverSource, /RAID_DEFAULT_PRESET = \{[^\n]+durationMin: 15/);
+  assert.match(serverSource, /const RAID_CONFIG_VERSION = 3/);
+  assert.match(functionBody(serverSource, "raidConfig"), /\[5, 120\]\.includes\(Number\(saved\.durationMin\)\)/);
+  assert.match(functionBody(serverSource, "raidConfig"), /migrateOldDefault \? RAID_DEFAULT_PRESET\.durationMin/);
+  assert.match(functionBody(serverSource, "setRaidConfig"), /version: RAID_CONFIG_VERSION/);
+  assert.match(functionBody(serverSource, "writeGroupBot"), /withFileLock\(GROUP_BOT_FILE/);
+  assert.doesNotMatch(functionBody(serverSource, "writeGroupBot"), /catch\s*\{/);
   // Callback asks via a POPUP (no chat message -> no flood), not a ladder.
   const cb = functionBody(serverSource, "handleRaidSetupCallback");
   assert.match(cb, /show_alert: true/);
   assert.match(cb, /raidInputPending\.set\(/);
   assert.match(cb, /setRaidConfig\(chatId/);
+  assert.match(cb, /d\.durationMin = RAID_DEFAULT_PRESET\.durationMin/);
+  assert.match(cb, /await renderRaidSetupCard\(chatId, msgId, d\)/);
+  assert.match(cb, /await ack\(notice\)/);
+  assert.match(functionBody(serverSource, "handleCallback"), /"rd:"/); // raid callback owns its useful acknowledgement
   assert.doesNotMatch(serverSource, /raidLadderNext/);   // ladder removed
   // The admin's typed number is deleted so it doesn't flood the chat.
   assert.match(functionBody(serverSource, "applyRaidTypedInput"), /deleteMessage.*message\.message_id/);
   // Duration is minutes now.
   assert.match(serverSource, /durationMin/);
-  assert.match(functionBody(serverSource, "raidSetupCard"), /Duration: \$\{Number\(d\.durationMin\)/);
+  assert.match(functionBody(serverSource, "raidSetupCard"), /Duration: \$\{cleanRaidDuration\(d\.durationMin\)/);
   const raidHandler = functionBody(serverSource, "handleTelegramRaidCommand");
+  assert.match(raidHandler, /durationMin: cfg\.durationMin/); // typed-goal shortcut honors the group's preset too
   assert.match(raidHandler, /setup card send failed/);
   assert.match(raidHandler, /Send Messages and Pin Messages/);
   assert.match(raidHandler, /message_thread_id: messageThreadId/); // forum-topic commands answer in the same topic
@@ -1237,7 +1246,7 @@ test("raid setup: click a metric -> type the number; duration in minutes", () =>
   assert.match(functionBody(serverSource, "refreshRaidTgCards"), /startNextQueuedRaidForChat/);
   assert.match(functionBody(serverSource, "refreshRaidTgCards"), /Object\.keys\(queuedState\.queues/);
   assert.match(functionBody(serverSource, "cancelActiveRaidForChat"), /startNextQueuedRaidForChat/);
-  // Five minutes is a real hard stop independent of the slower X engagement refresh.
+  // The configured duration is a real hard stop independent of the slower X engagement refresh.
   assert.match(serverSource, /const raidExpiryTimers = new Map\(\)/);
   assert.match(functionBody(serverSource, "startRaidFromDraft"), /scheduleRaidHardExpiry\(chatId, res\.tid, startedAt, durationMs\)/);
   assert.match(functionBody(serverSource, "scheduleRaidHardExpiry"), /finishExpiredRaidForChat/);
