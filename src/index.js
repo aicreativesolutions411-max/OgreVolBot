@@ -10301,6 +10301,26 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/web/wallet-funding/create") {
+      const body = await readJsonRequestBody(request);
+      const result = await createWebWalletFundingOrder(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        ...result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/wallet-funding/execute") {
+      const body = await readJsonRequestBody(request);
+      const result = await executeWebWalletFunding(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        ...result
+      });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/wallets/restore") {
       const body = await readJsonRequestBody(request);
       const result = await restoreWebWalletBackup(auth.userId, body);
@@ -63541,7 +63561,7 @@ async function saveSessionWalletOrder(order) {
   });
 }
 
-async function takePendingSessionWalletOrder(userId, sessionWalletAttemptId) {
+async function takePendingSessionWalletOrder(userId, sessionWalletAttemptId, expectedKind = "session-wallet") {
   // Atomic pending→submitting flip (see takePendingBrowserTradeOrder for the why).
   const outcome = await mutateWebAuthStore((store) => {
     store.sessionWalletOrders = pruneSessionWalletOrders(store.sessionWalletOrders);
@@ -63550,6 +63570,8 @@ async function takePendingSessionWalletOrder(userId, sessionWalletAttemptId) {
       && String(item.userId || "") === String(userId || "")
     ));
     if (!order) return { error: { message: "Session wallet funding approval expired. Start a new session wallet.", status: 404 } };
+    const orderKind = String(order.orderKind || "session-wallet");
+    if (expectedKind && orderKind !== expectedKind) return { error: { message: "Wallet funding approval does not match this action. Start again.", status: 409 } };
     if (order.status !== "pending") return { error: { message: "This session wallet funding approval was already submitted.", status: 409 } };
     if (Date.parse(order.expiresAt || "") <= Date.now()) {
       order.status = "expired";
@@ -63578,30 +63600,30 @@ async function completePendingSessionWalletOrder(order, patch = {}) {
 function sessionWalletFundingAmountLamports(body = {}) {
   const amountSol = parsePositiveNumber(String(body.amountSol || "0.1"));
   if (amountSol < 0.005) {
-    throw new Error("Session wallet budget must be at least 0.005 SOL.");
+    throw new Error("Wallet funding must be at least 0.005 SOL.");
   }
   if (amountSol > 10) {
-    throw new Error("Session wallet budget is capped at 10 SOL per approval.");
+    throw new Error("Wallet funding is capped at 10 SOL per approval.");
   }
   return solToLamports(amountSol);
 }
 
 function verifySessionWalletFundingTransaction(tx, order) {
   const source = new PublicKey(order.sourcePublicKey);
-  const destination = new PublicKey(order.sessionWalletPublicKey);
+  const destination = new PublicKey(order.destinationPublicKey || order.sessionWalletPublicKey);
   const amountLamports = BigInt(order.amountLamports || 0);
   if (!tx?.feePayer?.equals(source)) {
-    throw new Error("Session wallet funding transaction has the wrong source wallet.");
+    throw new Error("Wallet funding transaction has the wrong source wallet.");
   }
   if (!Array.isArray(tx.instructions) || tx.instructions.length !== 1) {
-    throw new Error("Session wallet funding transaction was changed. Start a new session wallet.");
+    throw new Error("Wallet funding transaction was changed. Start again.");
   }
   if (tx.recentBlockhash !== order.blockhash) {
-    throw new Error("Session wallet funding approval expired. Start a new session wallet.");
+    throw new Error("Wallet funding approval expired. Start again.");
   }
   const signer = tx.signatures?.find((item) => item.publicKey?.equals?.(source));
   if (!signer?.signature) {
-    throw new Error("Session wallet funding transaction is missing the connected wallet signature.");
+    throw new Error("Wallet funding transaction is missing the connected wallet signature.");
   }
   const hasFundingTransfer = tx.instructions.some((instruction) => {
     if (!instruction.programId.equals(SystemProgram.programId)) return false;
@@ -63615,7 +63637,7 @@ function verifySessionWalletFundingTransaction(tx, order) {
     }
   });
   if (!hasFundingTransfer) {
-    throw new Error("Session wallet funding transaction does not match the approved budget.");
+    throw new Error("Wallet funding transaction does not match the approved amount.");
   }
 }
 
@@ -63660,6 +63682,7 @@ async function createWebSessionWalletOrder(userId, body = {}) {
   const sessionWalletAttemptId = `session-wallet-${crypto.randomUUID()}`;
   const pending = {
     sessionWalletAttemptId,
+    orderKind: "session-wallet",
     userId,
     status: "pending",
     provider: connected.provider || "Browser Wallet",
@@ -63703,6 +63726,155 @@ async function createWebSessionWalletOrder(userId, body = {}) {
       message: `Approve ${lamportsToSol(amountLamports)} SOL funding in ${pending.provider}.`
     }
   };
+}
+
+async function createWebWalletFundingOrder(userId, body = {}) {
+  const profile = await webProfileForUser(userId);
+  const connected = profile.connectedWallet || {};
+  if (!connected.publicKey) {
+    const error = new Error("Connect Phantom or Solflare before funding this wallet.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const sourcePublicKey = parsePublicKey(connected.publicKey);
+  const walletIndex = parseWebWalletIndex(body.walletIndex || body.index);
+  const walletStore = await readWalletStore();
+  const wallet = getWalletAt(walletStore, walletIndex, userId);
+  if (wallet.volumeBot || wallet.ephemeral) {
+    const error = new Error("Choose a normal trading wallet to fund.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const destinationPublicKey = parsePublicKey(wallet.publicKey);
+  if (sourcePublicKey.equals(destinationPublicKey)) {
+    const error = new Error("The connected wallet and destination wallet are the same.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const amountLamports = sessionWalletFundingAmountLamports(body);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString();
+  const latestBlockhash = await rpcWithRetry("get managed wallet funding blockhash", () => connection.getLatestBlockhash("confirmed"), CONFIG.rpcRetries, { priority: true });
+  const tx = new Transaction({
+    recentBlockhash: latestBlockhash.blockhash,
+    feePayer: sourcePublicKey
+  }).add(SystemProgram.transfer({
+    fromPubkey: sourcePublicKey,
+    toPubkey: destinationPublicKey,
+    lamports: amountLamports
+  }));
+  const walletFundingAttemptId = `wallet-funding-${crypto.randomUUID()}`;
+  const pending = {
+    sessionWalletAttemptId: walletFundingAttemptId,
+    orderKind: "wallet-funding",
+    userId,
+    status: "pending",
+    provider: connected.provider || "Browser Wallet",
+    sourcePublicKey: sourcePublicKey.toBase58(),
+    destinationPublicKey: destinationPublicKey.toBase58(),
+    walletIndex,
+    amountLamports: String(amountLamports),
+    blockhash: latestBlockhash.blockhash,
+    lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+    createdAt: now.toISOString(),
+    expiresAt
+  };
+  await saveSessionWalletOrder(pending);
+  await audit("web_wallet_funding_order", {
+    userId,
+    provider: pending.provider,
+    sourcePublicKey: pending.sourcePublicKey,
+    destinationPublicKey: pending.destinationPublicKey,
+    walletIndex,
+    amountSol: lamportsToSol(amountLamports)
+  });
+  return {
+    wallet: webWalletRowFromRecord(wallet, walletIndex),
+    wallets: await webWalletRows(userId),
+    order: {
+      walletFundingAttemptId,
+      provider: pending.provider,
+      sourcePublicKey: pending.sourcePublicKey,
+      destinationPublicKey: pending.destinationPublicKey,
+      walletIndex,
+      amountSol: lamportsToSol(amountLamports),
+      expiresAt,
+      transaction: tx.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64"),
+      message: `Approve ${lamportsToSol(amountLamports)} SOL funding in ${pending.provider}.`
+    }
+  };
+}
+
+async function executeWebWalletFunding(userId, body = {}) {
+  const walletFundingAttemptId = String(body.walletFundingAttemptId || "").trim();
+  if (!walletFundingAttemptId) {
+    const error = new Error("Missing wallet funding attempt ID.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const signedTransaction = String(body.signedTransaction || "").trim();
+  if (!/^[a-z0-9+/=]+$/i.test(signedTransaction) || signedTransaction.length < 100 || signedTransaction.length > 250_000) {
+    const error = new Error("Signed wallet funding transaction is missing or invalid.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const pending = await takePendingSessionWalletOrder(userId, walletFundingAttemptId, "wallet-funding");
+  try {
+    const tx = Transaction.from(Buffer.from(signedTransaction, "base64"));
+    verifySessionWalletFundingTransaction(tx, pending);
+    const signature = await rpcWithRetry("send managed wallet funding", () => connection.sendRawTransaction(tx.serialize(), {
+      skipPreflight: false,
+      maxRetries: 10
+    }), CONFIG.rpcRetries, { priority: true });
+    await rpcWithRetry("confirm managed wallet funding", () => connection.confirmTransaction({
+      signature,
+      blockhash: pending.blockhash,
+      lastValidBlockHeight: pending.lastValidBlockHeight
+    }, "confirmed"), CONFIG.rpcRetries, { priority: true });
+
+    const walletStore = await readWalletStore();
+    const wallet = walletsForOwner(walletStore, userId).find((item) => item.publicKey === pending.destinationPublicKey);
+    if (wallet) {
+      wallet.fundingSignature = signature;
+      wallet.fundingAmountLamports = pending.amountLamports;
+      if (wallet.sessionWallet) {
+        wallet.sessionStatus = "funded";
+        wallet.sessionFundedAt = new Date().toISOString();
+        wallet.sessionBudgetLamports = pending.amountLamports;
+      }
+      await writeWalletStore(walletStore);
+      invalidateWalletReadCache(wallet.publicKey);
+    }
+    invalidateWalletReadCache(pending.sourcePublicKey);
+    await completePendingSessionWalletOrder(pending, {
+      status: "complete",
+      signature,
+      completedAt: new Date().toISOString()
+    });
+    await audit("web_wallet_funded", {
+      userId,
+      sourcePublicKey: pending.sourcePublicKey,
+      destinationPublicKey: pending.destinationPublicKey,
+      walletIndex: pending.walletIndex,
+      amountSol: lamportsToSol(pending.amountLamports),
+      signature
+    });
+    void recordFunnelMilestone(userId, { fundedAt: new Date().toISOString() });
+    return {
+      signature,
+      wallet: wallet ? webWalletRowFromRecord(wallet, pending.walletIndex) : null,
+      wallets: await webWalletRows(userId),
+      message: `Wallet funded with ${lamportsToSol(pending.amountLamports)} SOL.`
+    };
+  } catch (error) {
+    await completePendingSessionWalletOrder(pending, {
+      status: "failed",
+      error: friendlyError(error),
+      failedAt: new Date().toISOString()
+    }).catch(() => {});
+    throw error;
+  }
 }
 
 async function executeWebSessionWalletFunding(userId, body = {}) {
@@ -70671,6 +70843,9 @@ async function webBalanceRows(userId, options = {}) {
       label: wallet.label,
       publicKey: wallet.publicKey,
       shortPublicKey: shortMint(wallet.publicKey),
+      sessionWallet: Boolean(wallet.sessionWallet),
+      sessionStatus: wallet.sessionStatus || "",
+      volumeBot: Boolean(wallet.volumeBot || wallet.ephemeral),
       sol: null,
       tokens: [],
       warnings: [],
