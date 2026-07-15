@@ -62,6 +62,7 @@
     quickBuyKey: "",
     quickAmount: "0.1",
     quickPanel: "trade",
+    pendingSolSend: null,
     deferredInstall: null
   };
 
@@ -213,7 +214,7 @@
     }
     return result;
   }
-  function post(path, body) { return request(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) }); }
+  function post(path, body, options = {}) { return request(path, { ...options, method: "POST", headers: { ...(options.headers || {}), "Content-Type": "application/json" }, body: JSON.stringify(body || {}) }); }
   function apiMessage(data, fallback) { return String(data?.message || data?.error || fallback || "Something went wrong."); }
   function setToken(token) { state.token = token || ""; if (token) localStorage.setItem(TOKEN_KEY, token); else localStorage.removeItem(TOKEN_KEY); }
   async function loadMe() { if (!state.token) return null; const result = await request("/api/web/me", { noRetry: true }); if (result.ok) state.user = result.data?.user || null; return state.user; }
@@ -844,6 +845,7 @@
   function renderWalletPositions() {
     const panel = $("[data-profile-panel]");
     panel.innerHTML = state.positions.length ? state.positions.map((position) => { const pnl = Number(position.openPnlSol), key = position.tokenMint; return `<button class="position-row coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="sol"><img src="${escapeHtml(position.imageUrl || mascot(key))}" alt=""><span><b>${escapeHtml(position.symbol || short(key))}</b><span>${Number(position.uiAmount || 0).toLocaleString()} tokens · ${escapeHtml(position.walletCount || 1)} wallet</span></span><strong class="position-pnl ${pnl >= 0 ? "up" : "down"}">${Number.isFinite(pnl) ? `${pnl >= 0 ? "+" : ""}${pnl.toFixed(4)}◎` : "—"}</strong></button>`; }).join("") : emptyState("No open positions", "Coins you buy through SlimeWire appear here.");
+    panel.insertAdjacentHTML("afterbegin", `<div class="position-actions"><button type="button" data-send-sol>Send SOL</button><button type="button" data-receive>Receive</button></div>`);
   }
   async function loadWalletActivity() {
     const panel = $("[data-profile-panel]"); panel.innerHTML = '<div class="skeleton-list"></div>';
@@ -1475,6 +1477,82 @@
     const routes = { copy: "copy", sniper: "sniper", launch: "launch" };
     if (routes[action]) location.href = `/#${routes[action]}`;
   }
+
+  async function openSendSolSheet() {
+    if (!(await ensureAccount())) { toast("Could not open your account.", true); return; }
+    await loadWallets(true);
+    const wallet = activeWallet();
+    if (!wallet) { openFundingSheet(); toast("Create or restore a wallet first.", true); return; }
+    state.pendingSolSend = null;
+    const walletOptions = state.wallets.map((item) => `<option value="${item.index}" ${item.index === wallet.index ? "selected" : ""}>${escapeHtml(item.label || `Wallet ${item.index}`)} · ${Number(item.sol || 0).toFixed(5)} SOL</option>`).join("");
+    openSheet(`<div class="sheet-title"><img src="${slimePfp(wallet.publicKey)}" alt=""><div><h2>Send SOL</h2><p>From a SlimeWire managed wallet</p></div></div>
+      <div class="field"><label>From</label><select data-send-sol-wallet>${walletOptions}</select></div>
+      <div class="field"><label>Destination</label><input data-send-sol-destination autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Solana wallet address"></div>
+      <div class="field"><label>Amount · SOL</label><input data-send-sol-amount inputmode="decimal" placeholder="0.1"><div class="amount-chips"><button type="button" data-send-sol-chip="0.1">0.1</button><button type="button" data-send-sol-chip="0.5">0.5</button><button type="button" data-send-sol-chip="1">1</button><button type="button" data-send-sol-all>All</button></div></div>
+      <div class="field"><label>Spend PIN · only if enabled</label><input data-send-sol-pin type="password" inputmode="numeric" autocomplete="off" placeholder="Optional"></div>
+      <button class="submit-trade" type="button" data-review-sol-send>Review send</button>
+      <p class="fineprint" data-send-sol-status>All drains the transferable balance after the exact network and app fees are calculated by the server.</p>`);
+  }
+
+  function selectFunSendAll() {
+    const walletIndex = Number($("[data-send-sol-wallet]")?.value || state.activeWallet);
+    const wallet = state.wallets.find((item) => Number(item.index) === walletIndex) || activeWallet();
+    if (!wallet || !(Number(wallet.sol) > 0)) { toast("This wallet has no SOL to send.", true); return; }
+    const input = $("[data-send-sol-amount]");
+    if (input) { input.value = Number(wallet.sol).toFixed(9).replace(/0+$/, "").replace(/\.$/, ""); input.dataset.sendAll = "true"; }
+    $$('[data-send-sol-all]').forEach((button) => button.classList.add("active"));
+    const status = $("[data-send-sol-status]");
+    if (status) status.textContent = "All available SOL selected. Final transferable amount is calculated at confirmation.";
+  }
+
+  function reviewFunSolSend() {
+    const destination = String($("[data-send-sol-destination]")?.value || "").trim();
+    const amountInput = $("[data-send-sol-amount]");
+    const amountSol = String(amountInput?.value || "").trim();
+    const sendAll = amountInput?.dataset.sendAll === "true";
+    const walletIndex = Number($("[data-send-sol-wallet]")?.value || state.activeWallet);
+    const spendPin = String($("[data-send-sol-pin]")?.value || "").trim();
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(destination)) { toast("Enter a valid Solana destination.", true); return; }
+    if (!sendAll && !(Number(amountSol) > 0)) { toast("Enter a SOL amount or choose All.", true); return; }
+    const wallet = state.wallets.find((item) => Number(item.index) === walletIndex);
+    if (!wallet) { toast("Choose a wallet.", true); return; }
+    state.pendingSolSend = { destination, amountSol, sendAll, walletIndex, spendPin, sendAttemptId: attemptId("fun-send-sol") };
+    openSheet(`<div class="sheet-title"><img src="${slimePfp(wallet.publicKey)}" alt=""><div><h2>Confirm send</h2><p>${escapeHtml(wallet.label || `Wallet ${walletIndex}`)}</p></div></div>
+      <div class="read-card"><h3>${sendAll ? "All available SOL" : `${escapeHtml(amountSol)} SOL`}</h3><p>To ${escapeHtml(short(destination))}</p></div>
+      <button class="submit-trade" type="button" data-confirm-sol-send>Send SOL</button>
+      <button class="sheet-secondary" type="button" data-send-sol>Edit</button>
+      <p class="fineprint">This is an on-chain transfer and cannot be reversed. All is fee-aware and drains the transferable balance.</p>`);
+  }
+
+  async function confirmFunSolSend(button) {
+    const pending = state.pendingSolSend;
+    if (!pending || button.disabled) return;
+    button.disabled = true;
+    button.textContent = "Sending…";
+    const result = await post("/api/web/cash/send", {
+      fromWalletIndex: pending.walletIndex,
+      destination: pending.destination,
+      asset: "SOL",
+      ...(pending.sendAll ? { sendAll: true } : { amountSol: pending.amountSol }),
+      ...(pending.spendPin ? { spendPin: pending.spendPin } : {}),
+      sendAttemptId: pending.sendAttemptId
+    }, { timeout: 75_000 });
+    if (!result.ok || !result.data?.ok) {
+      button.disabled = false;
+      button.textContent = "Send SOL";
+      toast(apiMessage(result.data, "SOL send failed."), true);
+      return;
+    }
+    const sent = Number(result.data.amountSol || 0);
+    state.pendingSolSend = null;
+    await loadWallets(true);
+    await loadPositions();
+    renderWalletHero();
+    renderWalletPositions();
+    closeSheet();
+    toast(sent > 0 ? `${sent.toFixed(6)} SOL sent` : "SOL sent");
+  }
+
   function walletReceive() {
     const wallet = activeWallet();
     if (!wallet) { openFundingSheet("Choose a funding source, or use Create & copy for a manual deposit address."); return; }
@@ -1489,6 +1567,11 @@
     if (event.target.closest("[data-close-sheet]")) { closeSheet(); return; }
     if (event.target.closest("[data-wallet-entry]")) { if (state.token) await loadWallets(true); openFundingSheet(); return; }
     if (event.target.closest("[data-deposit]")) { if (state.token) await loadWallets(true); openFundingSheet(); return; }
+    if (event.target.closest("[data-send-sol]")) { await openSendSolSheet(); return; }
+    if (event.target.closest("[data-send-sol-all]")) { selectFunSendAll(); return; }
+    const sendSolChip = event.target.closest("[data-send-sol-chip]"); if (sendSolChip) { const input = $("[data-send-sol-amount]"); if (input) { input.value = sendSolChip.dataset.sendSolChip; delete input.dataset.sendAll; } $$('[data-send-sol-all]').forEach((button) => button.classList.remove("active")); return; }
+    if (event.target.closest("[data-review-sol-send]")) { reviewFunSolSend(); return; }
+    const confirmSolSend = event.target.closest("[data-confirm-sol-send]"); if (confirmSolSend) { await confirmFunSolSend(confirmSolSend); return; }
     if (event.target.closest("[data-receive]")) { walletReceive(); return; }
     const fundCoinbase = event.target.closest("[data-fund-coinbase]"); if (fundCoinbase) { await startCoinbaseFunding(fundCoinbase); return; }
     const fundWallet = event.target.closest("[data-fund-wallet]"); if (fundWallet) { await startWalletFunding(fundWallet.dataset.fundWallet, fundWallet); return; }
@@ -1562,6 +1645,7 @@
 
   document.addEventListener("change", (event) => {
     if (event.target.matches("[data-quick-wallet-select]")) { state.activeWallet = Number(event.target.value);localStorage.setItem(ACTIVE_WALLET_KEY,String(state.activeWallet)); paintWalletPill(); renderQuickRoute(); return; }
+    if (event.target.matches("[data-send-sol-wallet]")) { const input = $("[data-send-sol-amount]"); if (input?.dataset.sendAll === "true") selectFunSendAll(); return; }
     if (!event.target.matches("[data-wallet-backup-file]")) return;
     const file = event.target.files?.[0], textarea = $("[data-wallet-backup-text]"), status = $("[data-wallet-manager-status]");
     if (!file || !textarea) return;

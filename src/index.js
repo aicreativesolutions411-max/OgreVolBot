@@ -27239,8 +27239,6 @@ async function showPositionCard(chatId, userId, mint, messageId = null) {
 async function buildPositionsOverview(userId, options = {}) {
   const store = await readWalletStore();
   const wallets = walletsForOwner(store, userId);
-  const profile = await webProfileForUser(userId).catch(() => null);
-  const connectedWalletPublicKey = profile?.connectedWallet?.publicKey || "";
   const history = await readTradeHistory();
   const positions = new Map();
 
@@ -27274,28 +27272,6 @@ async function buildPositionsOverview(userId, options = {}) {
       // Keep the positions page usable even if one wallet balance lookup is rate-limited.
     }
   });
-
-  if (connectedWalletPublicKey && !wallets.some((wallet) => wallet.publicKey === connectedWalletPublicKey)) {
-    try {
-      const owner = new PublicKey(connectedWalletPublicKey);
-      const { accounts } = await getOwnedTokenAccountsWithWarningsCached(owner, { force: Boolean(options.force), priority: Boolean(options.force) });
-      for (const account of accounts.filter((item) => item.rawAmount > 0n)) {
-        const position = ensurePosition(positions, account.mint);
-        position.rawAmount += account.rawAmount;
-        position.uiAmount += Number.parseFloat(account.uiAmount || "0") || 0;
-        position.wallets.add(connectedWalletPublicKey);
-        position.connectedWallet = true;
-        position.accounts.push({
-          walletPublicKey: connectedWalletPublicKey,
-          rawAmount: account.rawAmount,
-          decimals: account.decimals,
-          connectedWallet: true
-        });
-      }
-    } catch (error) {
-      // Browser wallet positions are view-only; keep managed wallet positions usable if the public wallet scan is delayed.
-    }
-  }
 
   const rows = [...positions.values()]
     .filter((position) => position.rawAmount > 0n)
@@ -70649,12 +70625,96 @@ async function webCashSend(userId, body = {}) {
       const existingId = existingStore.attemptIndex[`${userId}:${attemptId}`];
       const existing = existingId && existingStore.receipts.find((row) => row.id === existingId);
       if (existing?.signature) return cashSendResultFromReceipt(existing);
-      const amountUsd = await enforceCashSpendSecurity(userId, body, existingStore);
-      const result = await webCashSendCore(userId, body);
-      await recordCashSendReceipt(userId, body, result, amountUsd, attemptId);
+      const sendBody = await prepareCashSendBody(userId, body);
+      const amountUsd = await enforceCashSpendSecurity(userId, sendBody, existingStore);
+      const result = await webCashSendCore(userId, sendBody);
+      await recordCashSendReceipt(userId, sendBody, result, amountUsd, attemptId);
       return result;
     }),
     { busyMessage: "This send is already submitting - SlimeCash won't send it twice." });
+}
+
+function cashSendAllRequested(body = {}) {
+  return body.sendAll === true || String(body.sendAll || "").toLowerCase() === "true";
+}
+
+function cashSolAppFeeLamports(amountLamports) {
+  let feeLamports = Math.floor(Number(amountLamports || 0) * CONFIG.bundleFeeBps / 10_000);
+  if (feeLamports < 5_000 || !CONFIG.feeWallet) feeLamports = 0;
+  return feeLamports;
+}
+
+async function cashSendAllSolPlan(userId, body = {}) {
+  if (body.requestId) throw new Error("Payment requests use an exact amount, so All is not available for this send.");
+  const store = await readWalletStore();
+  const walletIndex = parseWebWalletIndex(body.fromWalletIndex || body.walletIndex);
+  const wallet = { ...getWalletAt(store, walletIndex, userId), webIndex: walletIndex };
+  const destinations = splitWebDestinationList(body.destination || body.destinations);
+  if (destinations.length !== 1) throw new Error("SlimeCash sends go to exactly one destination.");
+  const destination = destinations[0];
+  const keypair = decryptWallet(wallet);
+  if (keypair.publicKey.equals(destination)) throw new Error("That destination is this wallet.");
+
+  const balance = await getSolBalanceCached(keypair.publicKey, { force: true });
+  if (!(balance > 5_000)) throw new Error("Not enough SOL to send after network costs.");
+  const provisionalAmount = Math.max(1, balance - 5_000);
+  const includeAppFee = cashSolAppFeeLamports(provisionalAmount) > 0;
+  const feeProbe = new Transaction().add(SystemProgram.transfer({
+    fromPubkey: keypair.publicKey,
+    toPubkey: destination,
+    lamports: 1
+  }));
+  if (includeAppFee) {
+    feeProbe.add(SystemProgram.transfer({
+      fromPubkey: keypair.publicKey,
+      toPubkey: new PublicKey(CONFIG.feeWallet),
+      lamports: 1
+    }));
+  }
+  const latestBlockhash = await rpcWithRetry("get all-SOL send blockhash", () => connection.getLatestBlockhash("confirmed"));
+  feeProbe.recentBlockhash = latestBlockhash.blockhash;
+  feeProbe.feePayer = keypair.publicKey;
+  const networkFeeLamports = await estimateLegacyTransactionFee(feeProbe);
+  const spendable = balance - networkFeeLamports;
+  if (!(spendable > 0)) throw new Error("Not enough SOL to send after network costs.");
+
+  let low = 1;
+  let high = spendable;
+  let amountLamports = 0;
+  while (low <= high) {
+    const candidate = Math.floor((low + high) / 2);
+    const required = candidate + cashSolAppFeeLamports(candidate);
+    if (required <= spendable) {
+      amountLamports = candidate;
+      low = candidate + 1;
+    } else {
+      high = candidate - 1;
+    }
+  }
+  if (!(amountLamports > 0)) throw new Error("Not enough SOL to send after network costs.");
+  return {
+    walletIndex,
+    walletPublicKey: wallet.publicKey,
+    destination: destination.toBase58(),
+    balance,
+    amountLamports,
+    feeLamports: cashSolAppFeeLamports(amountLamports),
+    networkFeeLamports,
+    latestBlockhash
+  };
+}
+
+async function prepareCashSendBody(userId, body = {}) {
+  const asset = String(body.asset || (body.amountSol ? "SOL" : "USDC")).trim().toUpperCase();
+  if (asset !== "SOL" || !cashSendAllRequested(body)) return body;
+  const plan = await cashSendAllSolPlan(userId, body);
+  return {
+    ...body,
+    asset: "SOL",
+    sendAll: true,
+    amountSol: String(lamportsToSol(plan.amountLamports)),
+    _cashSendAllPlan: plan
+  };
 }
 
 function cashSendResultFromReceipt(row) {
@@ -70816,16 +70876,20 @@ async function webCashSendSolCore(userId, body = {}) {
     throw new Error("That destination is this wallet.");
   }
 
-  const amountLamports = solToLamports(parsePositiveNumber(String(body.amountSol || "")));
+  const sendAll = cashSendAllRequested(body);
+  const allPlan = sendAll ? (body._cashSendAllPlan || await cashSendAllSolPlan(userId, body)) : null;
+  const amountLamports = sendAll
+    ? Number(allPlan.amountLamports)
+    : solToLamports(parsePositiveNumber(String(body.amountSol || "")));
   if (amountLamports <= 0) {
     throw new Error("Enter an amount greater than zero.");
   }
   // Same 0.5% as site trades; dust fees are skipped (same threshold as PvP fees).
-  let feeLamports = Math.floor(amountLamports * CONFIG.bundleFeeBps / 10_000);
-  if (feeLamports < 5_000 || !CONFIG.feeWallet) feeLamports = 0;
+  const feeLamports = sendAll ? Number(allPlan.feeLamports) : cashSolAppFeeLamports(amountLamports);
 
   const balance = await getSolBalanceCached(keypair.publicKey, { force: true });
-  const requiredLamports = amountLamports + feeLamports + 10_000 + CONFIG.buyReserveLamports;
+  const networkFeeLamports = sendAll ? Number(allPlan.networkFeeLamports) : 10_000;
+  const requiredLamports = amountLamports + feeLamports + networkFeeLamports + (sendAll ? 0 : CONFIG.buyReserveLamports);
   if (balance < requiredLamports) {
     throw new Error(`Not enough SOL for this send. You have ${lamportsToSol(balance)} SOL and it needs ${lamportsToSol(requiredLamports)} SOL including network costs.`);
   }
@@ -70845,7 +70909,7 @@ async function webCashSendSolCore(userId, body = {}) {
     }));
   }
 
-  const signature = await sendLegacyTransaction(tx, [keypair]);
+  const signature = await sendLegacyTransaction(tx, [keypair], sendAll ? { latestBlockhash: allPlan.latestBlockhash } : {});
   invalidateWalletReadCache(wallet.publicKey);
   invalidateWalletReadCache(destination.toBase58());
   await audit("cash_send", { userId, walletIndex, destination: destination.toBase58(), amountSol: lamportsToSol(amountLamports), feeLamports, signature });

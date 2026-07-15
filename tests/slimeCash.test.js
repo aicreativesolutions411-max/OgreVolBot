@@ -102,6 +102,16 @@ test("USDC funding and sending stay explicit in the SlimeCash client", () => {
   assert.match(html, />USD</);
 });
 
+test("SlimeCash can send a fee-aware maximum SOL balance", () => {
+  assert.match(html, /id="sendAllBtn"[^>]*>All<\/button>/);
+  assert.match(cash, /function selectSendAll/);
+  assert.match(cash, /state\.sendAll \? \{ sendAll: true \}/);
+  assert.match(server, /async function cashSendAllSolPlan/);
+  assert.match(server, /estimateLegacyTransactionFee\(feeProbe\)/);
+  assert.match(server, /sendAll \? 0 : CONFIG\.buyReserveLamports/);
+  assert.match(server, /prepareCashSendBody\(userId, body\)/);
+});
+
 test("SlimeCash presents one clean USD and SOL wallet with Coinbase as its only fiat vendor", () => {
   assert.match(html, /data-deposit-asset="USDC"/);
   assert.match(html, /data-deposit-asset="SOL"/);

@@ -10,6 +10,7 @@ const redirects = fs.readFileSync(new URL("../web/public/_redirects", import.met
 const manifest = JSON.parse(fs.readFileSync(new URL("../web/public/fun-manifest.webmanifest", import.meta.url), "utf8"));
 const funWorker = fs.readFileSync(new URL("../web/public/fun-sw.js", import.meta.url), "utf8");
 const rhChain = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
+const terminalApp = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
 
 test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL support", () => {
   assert.match(server, /requestUrl\.pathname === "\/fun"[\s\S]{0,300}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
@@ -54,9 +55,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=20/);
-  assert.match(funWorker, /slimewire-fun-v24/);
-  assert.match(funWorker, /fun\.css\?v=20/);
+  assert.match(html, /fun\.css\?v=21/);
+  assert.match(funWorker, /slimewire-fun-v25/);
+  assert.match(funWorker, /fun\.css\?v=21/);
 });
 
 test("/fun keeps the wallet funding card compact and scannable", () => {
@@ -65,13 +66,13 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=35/);
-  assert.match(funWorker, /fun\.js\?v=35/);
+  assert.match(html, /fun\.js\?v=36/);
+  assert.match(funWorker, /fun\.js\?v=36/);
 });
 
 test("Connect and Deposit share one simple funding flow without surprise wallet downloads", () => {
   assert.match(html, /class="wallet-pill" type="button" data-wallet-entry/);
-  assert.match(html, /data-deposit>Deposit<\/button><button type="button" data-receive>Receive/);
+  assert.match(html, /data-deposit>Deposit<\/button><button type="button" data-send-sol>Send SOL<\/button><button type="button" data-receive>Receive/);
   assert.match(html, /class="quick-wallet-pill" type="button" data-wallet-entry/);
   for (const marker of ["data-fund-coinbase", 'data-fund-wallet="phantom"', 'data-fund-wallet="solflare"', "data-fund-copy", "data-fund-sol"]) assert.match(js, new RegExp(marker));
   assert.doesNotMatch(js, /data-fund-wallet="other"/);
@@ -110,6 +111,25 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
   assert.match(server, /priorityFeeLamports > maxPriorityFeeLamports/);
   assert.match(server, /transfers\.length !== 1/);
   assert.match(server, /BigInt\(transfer\.lamports\) !== amountLamports/);
+});
+
+test("connected funding wallets stay separate from managed positions", () => {
+  const serverPositions = server.slice(server.indexOf("async function buildPositionsOverview"), server.indexOf("async function estimatePositionValue"));
+  const clientPositions = terminalApp.slice(terminalApp.indexOf("function portfolioPositions"), terminalApp.indexOf("function portfolioRealizedPnlLabel"));
+  assert.doesNotMatch(serverPositions, /connectedWalletPublicKey|connectedWallet: true/);
+  assert.doesNotMatch(clientPositions, /connectedWalletTokenRows|connectedWalletBalance/);
+  assert.doesNotMatch(terminalApp, /function connectedWalletTokenRows/);
+  assert.match(terminalApp, /Funding wallet connected/);
+  assert.match(terminalApp, /never mixed into your SlimeWire portfolio/);
+});
+
+test("Fun exposes Send SOL and fee-aware All from wallet and positions", () => {
+  assert.match(html, /data-send-sol>Send SOL/);
+  assert.match(js, /function openSendSolSheet/);
+  assert.match(js, /data-send-sol-all/);
+  assert.match(js, /pending\.sendAll \? \{ sendAll: true \}/);
+  assert.match(js, /post\("\/api\/web\/cash\/send"/);
+  assert.match(js, /panel\.insertAdjacentHTML\("afterbegin"[^\n]*data-send-sol/);
 });
 
 test("/fun and SlimeCash share the mobile shell", () => {

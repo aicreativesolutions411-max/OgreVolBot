@@ -35,6 +35,7 @@
     displayHandle: "",
     amountUnit: "USD",
     sendAsset: "USDC",
+    sendAll: false,
     depositAsset: "USDC",
     receiveAsset: "USDC",
     funding: null,
@@ -856,10 +857,31 @@
 
   function selectSendAsset(asset) {
     state.sendAsset = asset === "SOL" ? "SOL" : "USDC";
+    state.sendAll = false;
     document.querySelectorAll("[data-send-asset]").forEach((button) => button.classList.toggle("active", button.dataset.sendAsset === state.sendAsset));
     $("amountUnit").textContent = state.sendAsset !== "SOL" ? "USD" : state.amountUnit;
     $("amountUnit").disabled = state.sendAsset !== "SOL";
     $("sendAmount").placeholder = "0.00";
+    $("sendAllBtn").hidden = state.sendAsset !== "SOL";
+    $("sendAllBtn").classList.remove("active");
+    renderAmountAlt();
+  }
+
+  function selectSendAll() {
+    if (state.sendAsset !== "SOL") return;
+    const balanceSol = Math.max(0, Number(state.lamports || 0) / 1e9);
+    if (!(balanceSol > 0)) {
+      $("sendStatus").textContent = "This wallet has no SOL to send.";
+      $("sendStatus").className = "status bad";
+      return;
+    }
+    state.sendAll = true;
+    state.amountUnit = "SOL";
+    $("amountUnit").textContent = "SOL";
+    $("sendAmount").value = balanceSol.toFixed(9).replace(/0+$/, "").replace(/\.$/, "");
+    $("sendAllBtn").classList.add("active");
+    $("sendStatus").textContent = "All available SOL selected. Network and app fees are calculated when you confirm.";
+    $("sendStatus").className = "status";
     renderAmountAlt();
   }
 
@@ -893,7 +915,7 @@
       if (securityResult.ok) state.cashSecurity = securityResult.data.security || securityResult.data;
     }
     const to = target.handle ? `$${target.handle}` : shortAddress(target.address);
-    const amountText = state.sendAsset !== "SOL" ? `$${usdc.toFixed(2)} ${state.sendAsset}` : `${sol.toFixed(4)} SOL (${formatUsd(sol * state.solUsd)})`;
+    const amountText = state.sendAsset !== "SOL" ? `$${usdc.toFixed(2)} ${state.sendAsset}` : state.sendAll ? "All available SOL" : `${sol.toFixed(4)} SOL (${formatUsd(sol * state.solUsd)})`;
     $("confirmSummary").innerHTML =
       `Send <b>${amountText}</b><br>` +
       `to <b>${escapeHtml(to)}</b><br>` +
@@ -923,7 +945,7 @@
       fromWalletIndex: state.wallet?.index || 1,
       destination: target.address,
       asset: state.sendAsset,
-      ...(state.sendAsset !== "SOL" ? { amount: String(usdc) } : { amountSol: String(sol) }),
+      ...(state.sendAsset !== "SOL" ? { amount: String(usdc) } : state.sendAll ? { sendAll: true } : { amountSol: String(sol) }),
       note,
       recipientLabel: target.handle ? `$${target.handle}` : "",
       ...(spendPin ? { spendPin } : {}),
@@ -941,6 +963,8 @@
       $("sendStatus").textContent = `Sent. Signature ${String(result.data.signature || "").slice(0, 8)}…`;
       $("sendStatus").className = "status ok";
       $("sendAmount").value = "";
+      state.sendAll = false;
+      $("sendAllBtn").classList.remove("active");
       $("sendNote").value = "";
       $("confirmSpendPin").value = "";
       state.pendingSendAttemptId = "";
@@ -1626,7 +1650,7 @@
       refreshBalance();
       loadCashHistory();
     }
-    selectSendAsset("USDC");
+    selectSendAsset(params.get("asset") === "SOL" ? "SOL" : "USDC");
 
     // Deep links: ?pay=handle opens a pay page, ?tab= / ?sheet= from app shortcuts.
     const pay = params.get("pay");
@@ -1778,7 +1802,12 @@
     clearTimeout(resolveTimer);
     resolveTimer = setTimeout(() => resolveTarget(event.target.value), 350);
   });
-  $("sendAmount").addEventListener("input", renderAmountAlt);
+  $("sendAmount").addEventListener("input", () => {
+    state.sendAll = false;
+    $("sendAllBtn").classList.remove("active");
+    renderAmountAlt();
+  });
+  $("sendAllBtn").addEventListener("click", selectSendAll);
   $("amountUnit").addEventListener("click", () => {
     if (state.sendAsset === "USDC") return;
     state.amountUnit = state.amountUnit === "USD" ? "SOL" : "USD";

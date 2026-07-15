@@ -140,6 +140,8 @@ a { color: var(--mint); text-decoration: none; }
   background: var(--soft); color: var(--mint);
   padding: 0 16px; font-weight: 650; font-size: 13px;
 }
+.all-toggle { color: var(--green); min-width: 58px; padding: 0 12px; }
+.all-toggle.active { background: var(--green); border-color: var(--green); color: var(--green-deep); }
 .status { font-size: 12px; color: var(--muted); margin-top: 12px; min-height: 16px; }
 .status.ok { color: var(--green); }
 .status.bad { color: var(--red); }

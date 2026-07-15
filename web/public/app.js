@@ -4345,13 +4345,8 @@ function managedSolTotal() {
   return state.balances.reduce((sum, row) => sum + Number(row.sol || 0), 0);
 }
 
-function connectedWalletSol() {
-  const sol = Number(state.connectedWalletBalance?.sol);
-  return Number.isFinite(sol) && sol > 0 ? sol : 0;
-}
-
 function totalSol() {
-  return managedSolTotal() + connectedWalletSol();
+  return managedSolTotal();
 }
 
 const POPULAR_SWAP_TOKENS = [
@@ -4488,42 +4483,10 @@ function swapRouteTokenMint(side = "buy") {
   return typed;
 }
 
-function connectedWalletTokenRows() {
-  const connected = state.connectedWalletBalance || state.user?.connectedWallet || null;
-  if (!connected?.publicKey) return [];
-  return (state.connectedWalletBalance?.tokens || []).filter((token) => token?.mint || token?.tokenMint).map((token) => {
-    const mint = String(token.mint || token.tokenMint || "").trim();
-    return {
-      tokenMint: mint,
-      shortMint: token.shortMint || shortAddress(mint),
-      symbol: token.symbol || token.shortMint || shortAddress(mint),
-      name: token.name || "",
-      imageUrl: token.imageUrl || token.imageUri || "",
-      imageUri: token.imageUri || token.imageUrl || "",
-      dexUrl: token.dexUrl || dexUrl(mint),
-      pumpUrl: pumpUrl(mint),
-      uiAmount: token.uiAmount ?? "held",
-      walletCount: 1,
-      buys: 0,
-      sells: 0,
-      spentSol: "0",
-      receivedSol: "0",
-      realizedSol: "+0",
-      estimatedValueSol: null,
-      openPnlSol: null,
-      openPnlPercent: null,
-      valuePending: false,
-      valueError: "",
-      viewOnly: true,
-      source: "connected-wallet"
-    };
-  });
-}
-
 function portfolioPositions() {
   const seen = new Set();
   const rows = [];
-  for (const row of [...(state.positions || []), ...connectedWalletTokenRows()]) {
+  for (const row of state.positions || []) {
     const mint = String(row?.tokenMint || row?.mint || "").trim();
     if (!mint || seen.has(mint)) continue;
     seen.add(mint);
@@ -4533,8 +4496,7 @@ function portfolioPositions() {
 }
 
 function portfolioWalletCount() {
-  const connected = state.connectedWalletBalance?.publicKey || state.user?.connectedWallet?.publicKey || "";
-  return state.wallets.length + (connected ? 1 : 0);
+  return state.wallets.length;
 }
 
 function portfolioRealizedPnlLabel() {
@@ -15923,28 +15885,12 @@ function sessionWalletCtaHtml() {
 function connectedWalletCardHtml() {
   const connected = state.connectedWalletBalance || state.user?.connectedWallet || null;
   if (!connected?.publicKey) return "";
-  const balance = state.connectedWalletBalance || {};
-  const sol = Number.isFinite(Number(balance.sol)) ? `${Number(balance.sol).toFixed(4)} SOL` : balance.error ? "Balance error" : "loading";
-  const tokenText = Number(balance.tokens?.length || 0) === 1 ? "1 token" : `${Number(balance.tokens?.length || 0)} tokens`;
-  const warningText = balance.warnings?.length ? ` | ${balance.warnings.length} warning(s)` : "";
-  const tokenRows = (balance.tokens || []).slice(0, 6).map((token) => `
-    <a href="${escapeHtml(token.dexUrl || dexUrl(token.mint))}" target="_blank" rel="noreferrer">
-      ${livePairAvatarHtml({ ...token, tokenMint: token.mint, symbol: token.symbol || token.shortMint, name: token.name || "" })}
-      <span>${escapeHtml(token.symbol || token.shortMint || shortAddress(token.mint))}: ${escapeHtml(token.uiAmount ?? "held")}</span>
-    </a>
-  `).join("");
   return `
-    <section class="connected-wallet-card portfolio-card">
+    <section class="connected-wallet-card">
       <div>
-        <h3>Portfolio</h3>
-        <p>${escapeHtml(connected.provider || balance.provider || "Solana Wallet")} ${escapeHtml(shortAddress(connected.publicKey))}</p>
-        <div class="portfolio-metrics">
-          <span><small>SOL</small><strong>${escapeHtml(sol)}</strong></span>
-          <span><small>Tokens</small><strong>${escapeHtml(tokenText)}</strong></span>
-          <span><small>Status</small><strong>${balance.error ? "Needs refresh" : "Synced"}</strong></span>
-        </div>
-        ${balance.error ? `<small>Check failed: ${escapeHtml(balance.error)}</small>` : ""}
-        ${tokenRows ? `<div class="connected-token-list">${tokenRows}</div>` : ""}
+        <h3>Funding wallet connected</h3>
+        <p>${escapeHtml(connected.provider || "Solana Wallet")} ${escapeHtml(shortAddress(connected.publicKey))}</p>
+        <small>This external wallet is only used to approve funding. Its balances and coins are never mixed into your SlimeWire portfolio.</small>
         ${sessionWalletCtaHtml()}
         <small>${state.walletFastApprovalsEnabled ? "Fast approvals are on for connected-wallet prompts." : "Fast approvals are off."}</small>
       </div>
@@ -15962,7 +15908,7 @@ function connectedWalletCardHtml() {
 }
 
 function walletBalanceSummaryHtml() {
-  const tokenTotal = state.balances.reduce((sum, row) => sum + Number(row.tokens?.length || 0), 0) + connectedWalletTokenRows().length;
+  const tokenTotal = state.balances.reduce((sum, row) => sum + Number(row.tokens?.length || 0), 0);
   const errorCount = state.balances.filter((row) => row.error).length;
   return `
     <section class="pnl-summary wallet-summary">
@@ -15993,6 +15939,7 @@ function positionsHtml() {
         <p>Only current token holdings show here. Use Refresh after buys, sells, or transfers.</p>
       </div>
       <button class="primary" data-refresh-all>Refresh Positions</button>
+      <a class="button" href="/cash/?tab=send&asset=SOL">Send SOL</a>
       <button data-scan-bags>🛡 Scan My Bags</button>
       <button data-tab="wallets">Wallet Balances</button>
       <button data-tab="pnl">PnL History</button>
