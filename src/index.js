@@ -14563,8 +14563,8 @@ async function handleCallback(query, userId) {
     await handleTelegramLookCommand(chatId, query.message, String(query.data).slice(7)).catch(() => {});
     return;
   }
-  // 🗺️ Holder/wallet MAP (map:<addr>[:mode]) — tap a coin's Map button or a KOL bubble to drill in.
-  if (String(query.data || "").startsWith("map:")) {
+  // 🗺️ Holder/wallet MAP (map/mapw:<addr>[:mode]) — token maps and wallet/fund-flow maps share one handler.
+  if (["map:", "mapw:"].some((prefix) => String(query.data || "").startsWith(prefix))) {
     if (await handleMapCallback(query, userId).catch(() => false)) return;
   }
   // 💰 AIRDROP map (drop:<mint>) — tap a coin's Airdrop button → who the dev fed + who still holds.

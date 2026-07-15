@@ -55,7 +55,7 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
   assert.match(html, /fun\.css\?v=20/);
-  assert.match(funWorker, /slimewire-fun-v22/);
+  assert.match(funWorker, /slimewire-fun-v23/);
   assert.match(funWorker, /fun\.css\?v=20/);
 });
 
@@ -65,8 +65,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=33/);
-  assert.match(funWorker, /fun\.js\?v=33/);
+  assert.match(html, /fun\.js\?v=34/);
+  assert.match(funWorker, /fun\.js\?v=34/);
 });
 
 test("Connect and Deposit share one simple funding flow without surprise wallet downloads", () => {
@@ -81,9 +81,12 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
   assert.match(js, /\/api\/web\/wallets\/create/);
   assert.match(js, /\/api\/web\/wallet-funding\/create/);
   assert.match(js, /\/api\/web\/wallet-funding\/execute/);
-  assert.match(js, /startFunSolanaPayFunding/);
+  assert.match(js, /startFunMobileExactFunding/);
   assert.match(js, /resumeFunMobileFunding/);
-  assert.match(js, /WalletFunding\.startSolanaPay/);
+  assert.match(js, /WalletFunding\.mobileSession\(kind\)/);
+  assert.match(js, /prepareFunMobileFundingOrder\(kind, session\.publicKey, amountSol, wallet\.index\)/);
+  assert.match(js, /WalletFunding\.startMobileSign\(kind/);
+  assert.doesNotMatch(js, /WalletFunding\.startSolanaPay/);
   const startFundingBody = js.slice(js.indexOf("async function startWalletFunding"), js.indexOf("async function submitWalletFunding"));
   assert.doesNotMatch(startFundingBody, /location\.assign\(fundingWalletBrowseUrl/);
   assert.doesNotMatch(js, /event\.target\.closest\("\[data-deposit\]"\) \|\| event\.target\.closest\("\[data-receive\]"\)/);

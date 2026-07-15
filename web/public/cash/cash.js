@@ -1094,7 +1094,7 @@
     const label = fundingProviderLabel(kind);
     if (!provider) {
       if (WalletFunding?.isMobile()) {
-        await startCashSolanaPayFunding(kind, amountSol, status, button);
+        await startCashMobileExactFunding(kind, amountSol, status, button);
         return;
       }
       status.textContent = `${label} is not connected here. Open SlimeCash on your phone or use Copy address.`;
@@ -1147,39 +1147,45 @@
     }
   }
 
-  async function startCashSolanaPayFunding(kind, amountSol, status, button) {
+  async function startCashMobileExactFunding(kind, amountSol, status, button) {
     const label = fundingProviderLabel(kind);
-    if (!WalletFunding?.startSolanaPay) throw new Error("Mobile wallet approval is still loading. Try again.");
     if (button) button.disabled = true;
     try {
-      if (state.lamports === null) await refreshBalance({ silent: true });
-      if (state.lamports === null) throw new Error("Could not verify the current wallet balance. Try again.");
-      status.textContent = `Opening ${label} for one ${amountSol} SOL approval…`;
-      status.className = "status wallet-fund-status";
+      if (!WalletFunding?.startMobileConnect || !WalletFunding?.startMobileSign || !WalletFunding?.mobileSession) {
+        throw new Error("Mobile wallet approval is still loading. Try again.");
+      }
       const wallet = state.wallet;
-      savePendingFund({
-        asset: "SOL",
-        amount: amountSol,
-        providerName: label,
-        walletIndex: wallet.index,
-        baselineRaw: Number(state.lamports || 0),
-        at: Date.now(),
-        arrived: false
-      });
+      if (!wallet) throw new Error("Could not load the destination wallet.");
+      const session = WalletFunding.mobileSession(kind);
+      if (!session) {
+        status.textContent = `Connect ${label} once. Your exact ${amountSol} SOL approval opens next.`;
+        status.className = "status wallet-fund-status";
+        closeSheet("addcash");
+        await WalletFunding.startMobileConnect(kind, {
+          amountSol,
+          walletIndex: wallet.index,
+          returnUrl: location.href
+        });
+        return true;
+      }
+      status.textContent = `Preparing exactly ${amountSol} SOL…`;
+      status.className = "status wallet-fund-status";
+      const order = await prepareCashMobileFundingOrder(kind, session.publicKey, amountSol, wallet.index);
+      status.textContent = `Opening ${label} to approve exactly ${amountSol} SOL…`;
       closeSheet("addcash");
-      stopDepositWatch();
-      state.depositTimer = setInterval(() => refreshBalance({ silent: true }), 3000);
-      WalletFunding.startSolanaPay(kind, {
-        recipient: wallet.publicKey,
+      await WalletFunding.startMobileSign(kind, {
+        transaction: order.transaction,
+        walletFundingAttemptId: order.walletFundingAttemptId,
         amountSol,
-        label: "SlimeWire",
-        message: `Fund ${wallet.label || "my SlimeWire wallet"}`
+        walletIndex: order.walletIndex,
+        returnUrl: location.href
       });
       return true;
     } catch (error) {
       await openAddCash();
-      status.textContent = error?.message || `Could not open ${label}.`;
-      status.className = "status bad wallet-fund-status";
+      const visibleStatus = $("walletFundingStatus");
+      visibleStatus.textContent = error?.message || `Could not open ${label}.`;
+      visibleStatus.className = "status bad wallet-fund-status";
       if (button) button.disabled = false;
       toast(error?.message || `Could not open ${label}.`, true);
       return false;
@@ -1205,8 +1211,8 @@
         return true;
       }
       await openAddCash();
-      $("fundingStatus").textContent = result.error || "Wallet approval could not be completed.";
-      $("fundingStatus").className = "status bad";
+      $("walletFundingStatus").textContent = result.error || "Wallet approval could not be completed.";
+      $("walletFundingStatus").className = "status bad wallet-fund-status";
       toast(result.error || "Wallet approval could not be completed.", true);
       return true;
     }
@@ -1220,15 +1226,16 @@
       }
       const executed = await post("/api/web/wallet-funding/execute", { walletFundingAttemptId: result.walletFundingAttemptId, signedTransaction: result.signedTransaction });
       if (!executed.ok || !executed.data?.ok) throw new Error(executed.data?.error || "Funding did not confirm. Check your wallet and try again.");
-      savePendingFund({ asset: "SOL", amount: 0, providerName: fundingProviderLabel(result.kind), at: Date.now(), arrived: true });
+      savePendingFund({ asset: "SOL", amount: Number(result.amountSol || 0), providerName: fundingProviderLabel(result.kind), walletIndex: result.walletIndex, at: Date.now(), arrived: true });
+      closeSheet("addcash");
       await refreshBalance({ silent: true });
       renderProfile();
       toast(`${result.amountSol} SOL funded successfully.`);
       return true;
     } catch (error) {
       await openAddCash();
-      $("fundingStatus").textContent = error?.message || "Funding failed. No extra transfer was sent.";
-      $("fundingStatus").className = "status bad";
+      $("walletFundingStatus").textContent = error?.message || "Funding failed. No extra transfer was sent.";
+      $("walletFundingStatus").className = "status bad wallet-fund-status";
       toast(error?.message || "Funding failed. No extra transfer was sent.", true);
       return true;
     }

@@ -3075,7 +3075,7 @@ test("KOL/wallet map: on-chain holders + ST identity, X 'map' intent + wallet ta
   assert.match(serverSource, /parseCommandWithArgument\(text, \["map", "holders"/);
   assert.match(serverSource, /async function handleMapCallback\(query, userId\)/);
   assert.match(functionBody(serverSource, "scanResearchKeyboard"), /🗺️ Holder Map/);
-  assert.match(serverSource, /startsWith\("map:"\)/);
+  assert.match(serverSource, /\["map:", "mapw:"\][\s\S]{0,120}startsWith\(prefix\)/);
   // web: public /api/map + /api/map/img BEFORE the auth gate, and /map page route
   const apiIdx = serverSource.indexOf('pathname === "/api/map"');
   const gateIdx = serverSource.indexOf("const auth = await authenticateWebRequest(request)");
@@ -3128,6 +3128,7 @@ test("Airdrop and wallet maps trace Solana/.sol and Robinhood fund flows on web 
   const walletCard = functionBody(serverSource, "sendWalletScanCard");
   assert.match(walletCard, /Fund Map/);
   assert.match(walletCard, /mapw:\$\{address\}:funds/);
+  assert.match(functionBody(serverSource, "handleMapCallback"), /parts\[0\] !== "mapw"/);
   assert.match(walletCard, /Airdrops Sent/);
   assert.match(walletCard, /airdrop\?ca=\$\{encodeURIComponent\(address\)\}/);
   const walletScan = fs.readFileSync(new URL("../src/lib/walletScan.js", import.meta.url), "utf8");

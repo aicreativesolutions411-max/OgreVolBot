@@ -910,7 +910,7 @@
     const provider = fundingProvider(kind);
     if (!provider) {
       if (isMobileWalletPlatform()) {
-        await startFunSolanaPayFunding(button, kind, amountSol);
+        await startFunMobileExactFunding(button, kind, amountSol);
         return;
       }
       if (status) status.textContent = `${label} is not connected here. Open SlimeWire on your phone or copy the wallet address.`;
@@ -997,31 +997,36 @@
     return pending;
   }
 
-  async function startFunSolanaPayFunding(button, kind, amountSol) {
+  async function startFunMobileExactFunding(button, kind, amountSol) {
     const status = $("[data-funding-status]");
     const label = fundingProviderLabel(kind);
     if (button) { button.disabled = true; button.classList.add("busy"); }
     try {
-      if (!WalletFunding?.startSolanaPay) throw new Error("Mobile wallet approval is still loading. Try again.");
-      let wallet = await ensureFunFundingWallet();
-      if (!Number.isFinite(Number(wallet.sol))) {
-        await loadWallets(true);
-        wallet = activeWallet() || wallet;
+      if (!WalletFunding?.startMobileConnect || !WalletFunding?.startMobileSign || !WalletFunding?.mobileSession) {
+        throw new Error("Mobile wallet approval is still loading. Try again.");
       }
-      saveLocal(FUN_PENDING_FUND_KEY, {
-        kind,
-        amountSol,
-        walletIndex: wallet.index,
-        baselineSol: Number(wallet.sol || 0),
-        startedAt: Date.now()
-      });
-      if (status) status.textContent = `Opening ${label} for one ${amountSol} SOL approval…`;
+      const wallet = await ensureFunFundingWallet();
+      const session = WalletFunding.mobileSession(kind);
+      if (!session) {
+        if (status) status.textContent = `Connect ${label} once. Your exact ${amountSol} SOL approval opens next.`;
+        closeSheet();
+        await WalletFunding.startMobileConnect(kind, {
+          amountSol,
+          walletIndex: wallet.index,
+          returnUrl: location.href
+        });
+        return true;
+      }
+      if (status) status.textContent = `Preparing exactly ${amountSol} SOL…`;
+      const order = await prepareFunMobileFundingOrder(kind, session.publicKey, amountSol, wallet.index);
+      if (status) status.textContent = `Opening ${label} to approve exactly ${amountSol} SOL…`;
       closeSheet();
-      WalletFunding.startSolanaPay(kind, {
-        recipient: wallet.publicKey,
+      await WalletFunding.startMobileSign(kind, {
+        transaction: order.transaction,
+        walletFundingAttemptId: order.walletFundingAttemptId,
         amountSol,
-        label: "SlimeWire",
-        message: `Fund ${wallet.label || "my SlimeWire wallet"}`
+        walletIndex: order.walletIndex,
+        returnUrl: location.href
       });
       return true;
     } catch (error) {

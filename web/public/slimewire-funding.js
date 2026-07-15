@@ -241,39 +241,6 @@
     return `intent://${target}#Intent;scheme=phantom;package=app.phantom;end`;
   }
 
-  function solanaPayUrl(recipient, amountSol, options = {}) {
-    const address = String(recipient || "").trim();
-    if (base58Decode(address).length !== 32) throw new Error("The SlimeWire funding address is invalid.");
-    const amount = Number(amountSol);
-    if (!Number.isFinite(amount) || amount <= 0) throw new Error("Enter a valid SOL amount.");
-    const normalizedAmount = amount.toFixed(9).replace(/0+$/, "").replace(/\.$/, "");
-    const params = new URLSearchParams();
-    params.set("amount", normalizedAmount);
-    params.set("label", String(options.label || "SlimeWire").slice(0, 48));
-    params.set("message", String(options.message || "Fund my SlimeWire wallet").slice(0, 80));
-    return `solana:${address}?${params.toString()}`;
-  }
-
-  function solanaPayLaunchUrl(kind, paymentUrl) {
-    if (!["phantom", "solflare"].includes(kind)) return paymentUrl;
-    // Hand the complete opaque Solana Pay URI to Android/iOS unchanged. In particular, keep
-    // `amount` in the URI that reaches the wallet's Solana Pay activity so its review screen opens
-    // with both destination and amount prefilled. Wrapping this in a package-only Android intent
-    // can launch a wallet's generic home/send activity and silently drop the payment parameters.
-    // It can also turn the case-sensitive base58 recipient into a URL host. The OS may show its
-    // installed-wallet chooser when more than one Solana Pay wallet is available; that is safer
-    // than changing the recipient or opening an unpopulated send form.
-    return paymentUrl;
-  }
-
-  function startSolanaPay(kind, options = {}) {
-    if (!["phantom", "solflare"].includes(kind)) throw new Error("Choose Phantom or Solflare.");
-    const paymentUrl = solanaPayUrl(options.recipient, options.amountSol, options);
-    const launchUrl = solanaPayLaunchUrl(kind, paymentUrl);
-    location.assign(launchUrl);
-    return { paymentUrl, launchUrl };
-  }
-
   function randomState(nacl) {
     return base58Encode(nacl.randomBytes(16));
   }
@@ -436,9 +403,6 @@
     loadNacl,
     mobileSession,
     clearMobileSession,
-    solanaPayUrl,
-    solanaPayLaunchUrl,
-    startSolanaPay,
     startMobileConnect,
     startMobileSign,
     consumeMobileCallback,
