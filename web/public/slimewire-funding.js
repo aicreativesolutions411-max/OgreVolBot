@@ -236,8 +236,46 @@
     if (kind !== "phantom" || !/Android/i.test(navigator.userAgent || "")) return methodUrl;
     const parsed = new URL(methodUrl);
     const target = `${parsed.host}${parsed.pathname}${parsed.search}`;
-    const fallback = encodeURIComponent("https://play.google.com/store/apps/details?id=app.phantom");
-    return `intent://${target}#Intent;scheme=phantom;package=app.phantom;S.browser_fallback_url=${fallback};end`;
+    // Keep an installed-wallet handoff installed-wallet-only. A Play Store fallback turns a normal
+    // approval into an unexpected storefront detour and can cover the PWA when the user returns.
+    return `intent://${target}#Intent;scheme=phantom;package=app.phantom;end`;
+  }
+
+  function solanaPayUrl(recipient, amountSol, options = {}) {
+    const address = String(recipient || "").trim();
+    if (base58Decode(address).length !== 32) throw new Error("The SlimeWire funding address is invalid.");
+    const amount = Number(amountSol);
+    if (!Number.isFinite(amount) || amount <= 0) throw new Error("Enter a valid SOL amount.");
+    const normalizedAmount = amount.toFixed(9).replace(/0+$/, "").replace(/\.$/, "");
+    const params = new URLSearchParams();
+    params.set("amount", normalizedAmount);
+    params.set("label", String(options.label || "SlimeWire").slice(0, 48));
+    params.set("message", String(options.message || "Fund my SlimeWire wallet").slice(0, 80));
+    return `solana:${address}?${params.toString()}`;
+  }
+
+  function solanaPayLaunchUrl(kind, paymentUrl) {
+    if (!/Android/i.test(navigator.userAgent || "")) return paymentUrl;
+    const appPackage = kind === "phantom"
+      ? "app.phantom"
+      : kind === "solflare"
+        ? "com.solflare.mobile"
+        : "";
+    if (!appPackage) return paymentUrl;
+    const target = paymentUrl.slice("solana:".length);
+    // Solana Pay is a non-interactive transfer request: the selected wallet builds the exact SOL
+    // transfer and shows its native approval screen. No dapp connect or Play Store layer is needed.
+    // Keep the recipient in the opaque scheme-specific part. Putting a base58 address in a
+    // hierarchical URL host lets browsers lowercase it and can silently change the destination.
+    return `intent:${target}#Intent;scheme=solana;package=${appPackage};end`;
+  }
+
+  function startSolanaPay(kind, options = {}) {
+    if (!["phantom", "solflare"].includes(kind)) throw new Error("Choose Phantom or Solflare.");
+    const paymentUrl = solanaPayUrl(options.recipient, options.amountSol, options);
+    const launchUrl = solanaPayLaunchUrl(kind, paymentUrl);
+    location.assign(launchUrl);
+    return { paymentUrl, launchUrl };
   }
 
   function randomState(nacl) {
@@ -402,6 +440,9 @@
     loadNacl,
     mobileSession,
     clearMobileSession,
+    solanaPayUrl,
+    solanaPayLaunchUrl,
+    startSolanaPay,
     startMobileConnect,
     startMobileSign,
     consumeMobileCallback,

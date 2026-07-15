@@ -6,7 +6,7 @@
 <title>SlimeCash — money for the trenches</title>
 <meta name="description" content="SlimeCash: send, receive, and swap coins with your $handle. Money for the trenches.">
 <meta name="theme-color" content="#050705">
-<meta name="slimecash-build" content="17">
+<meta name="slimecash-build" content="18">
 <link rel="manifest" href="/cash/manifest.webmanifest?v=11">
 <link rel="icon" type="image/png" sizes="64x64" href="/cash/icons/favicon-64.png">
 <link rel="apple-touch-icon" href="/cash/icons/apple-touch-icon.png">
@@ -17,7 +17,7 @@
 <meta property="og:title" content="SlimeCash">
 <meta property="og:description" content="Money for the trenches. Send, receive, and swap coins with your $handle.">
 <meta property="og:image" content="https://www.slimewire.org/cash/icons/icon-512.png">
-<link rel="stylesheet" href="/cash/cash.css?v=17">
+<link rel="stylesheet" href="/cash/cash.css?v=18">
 </head>
 <body>
 <div id="splash" class="splash">
@@ -192,36 +192,28 @@
     <div class="funding-method-note">Coinbase account checkout · payment methods depend on your account and region</div>
     <div id="fundingStatus" class="status"></div>
     <div class="alternate-funding">
-      <div class="fund-section-head"><span>Fund from a wallet</span><small>Approve SOL</small></div>
+      <div class="fund-section-head"><span>Fund from your wallet</span><small>One approval</small></div>
+      <div class="wallet-fund-inline">
+        <label class="field-label" for="walletFundingAmount">SOL amount</label>
+        <div class="wallet-fund-entry">
+          <div class="fund-amounts sol-amounts">
+            <button class="amount-chip active" data-wallet-fund-amount="0.1" type="button">0.1</button>
+            <button class="amount-chip" data-wallet-fund-amount="0.25" type="button">0.25</button>
+            <button class="amount-chip" data-wallet-fund-amount="0.5" type="button">0.5</button>
+            <button class="amount-chip" data-wallet-fund-amount="1" type="button">1 SOL</button>
+          </div>
+          <input id="walletFundingAmount" class="field wallet-fund-custom" type="number" inputmode="decimal" min="0.005" max="10" step="0.001" value="0.1" aria-label="SOL wallet funding amount">
+        </div>
+      </div>
       <div class="app-guide provider-grid">
         <button class="guide-pill provider-card" data-fund-wallet="phantom" type="button"><i class="provider-logo phantom">P</i><span>Phantom</span></button>
         <button class="guide-pill provider-card" data-fund-wallet="solflare" type="button"><i class="provider-logo solflare">S</i><span>Solflare</span></button>
-        <button class="guide-pill provider-card" data-fund-wallet="other" type="button"><i class="provider-logo wallet">↗</i><span>Other wallet</span></button>
       </div>
+      <div id="walletFundingStatus" class="status wallet-fund-status">Enter SOL, tap your wallet, then approve the exact transfer.</div>
     </div>
     <div class="fund-section-head"><span>Manual transfer</span><small>Any Solana app</small></div>
     <button id="copyDepositBtn" class="address-pill" type="button"><span id="depositAddress">…</span><span class="copy-tag">copy</span></button>
     <div id="depositWatch" class="status">Create or select a wallet to see its funding address.</div>
-  </div>
-</div>
-
-<!-- CONNECTED WALLET FUNDING -->
-<div id="walletfunding" class="sheet-backdrop" hidden>
-  <div class="sheet">
-    <button class="sheet-close" data-close="walletfunding" type="button" aria-label="Close">×</button>
-    <div class="sheet-title" id="walletFundingTitle">Fund with wallet</div>
-    <p class="sheet-copy" id="walletFundingCopy">Approve one exact SOL transfer. SlimeWire never receives your connected wallet keys.</p>
-    <div class="account-summary"><b>Destination</b><span id="walletFundingDestination">Wallet will be created when you continue</span></div>
-    <label class="field-label" for="walletFundingAmount">SOL amount</label>
-    <input id="walletFundingAmount" class="field" type="number" inputmode="decimal" min="0.005" max="10" step="0.001" value="0.1">
-    <div class="fund-amounts sol-amounts">
-      <button class="amount-chip active" data-wallet-fund-amount="0.1" type="button">0.1</button>
-      <button class="amount-chip" data-wallet-fund-amount="0.25" type="button">0.25</button>
-      <button class="amount-chip" data-wallet-fund-amount="0.5" type="button">0.5</button>
-      <button class="amount-chip" data-wallet-fund-amount="1" type="button">1 SOL</button>
-    </div>
-    <button id="submitWalletFundingBtn" class="btn primary block" type="button">Review &amp; fund</button>
-    <div id="walletFundingStatus" class="status"></div>
   </div>
 </div>
 
@@ -474,7 +466,7 @@
 
 <div id="toast" class="toast" hidden></div>
 <script src="/config.js"></script>
-<script src="/slimewire-funding.js?v=3"></script>
-<script src="/cash/cash.js?v=17"></script>
+<script src="/slimewire-funding.js?v=4"></script>
+<script src="/cash/cash.js?v=18"></script>
 </body>
 </html>

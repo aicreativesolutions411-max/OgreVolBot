@@ -107,7 +107,9 @@ test("SlimeCash presents one clean USD and SOL wallet with Coinbase as its only 
   assert.match(html, /data-deposit-asset="SOL"/);
   assert.match(html, /data-fund-wallet="phantom"/);
   assert.match(html, /data-fund-wallet="solflare"/);
-  assert.match(html, /data-fund-wallet="other"/);
+  assert.doesNotMatch(html, /data-fund-wallet="other"/);
+  assert.match(html, /id="walletFundingAmount"[\s\S]{0,900}data-fund-wallet="phantom"/);
+  assert.doesNotMatch(html, /id="walletfunding"/);
   assert.match(html, /id="copyDepositBtn"/);
   assert.match(html, /Coinbase/);
   assert.match(cash, /Continue with Coinbase/);
@@ -147,11 +149,14 @@ test("wallet approval helpers are shared by Cash and Fun", () => {
   assert.match(funding, /async function startMobileConnect/);
   assert.match(funding, /async function startMobileSign/);
   assert.match(funding, /async function consumeMobileCallback/);
+  assert.match(funding, /function startSolanaPay/);
+  assert.match(funding, /scheme=solana;package=\$\{appPackage\}/);
+  assert.doesNotMatch(funding, /browser_fallback_url/);
   assert.match(funding, /mobileMethodUrl\(kind, "signTransaction"\)/);
   assert.match(funding, /slimewireMobileFundingSession:v2:/);
-  assert.match(cash, /startCashMobileFunding/);
+  assert.match(cash, /startCashSolanaPayFunding/);
   assert.match(cash, /resumeCashMobileFunding/);
-  assert.match(cash, /WalletFunding\.startMobileSign/);
+  assert.match(cash, /WalletFunding\.startSolanaPay/);
 });
 
 test("SlimeCash uses a separate PWA identity and a synchronized shell", () => {
@@ -253,6 +258,7 @@ test("mobile Phantom funding connects once, preserves the preset, and returns si
   assert.equal(connectUrl.hostname, "v1");
   assert.equal(connectUrl.pathname, "/connect");
   assert.match(connectUrl.hash, /scheme=phantom;package=app\.phantom/);
+  assert.doesNotMatch(connectUrl.hash, /browser_fallback_url|play\.google\.com/);
 
   const pending = JSON.parse(harness.values.get("slimewireMobileFundingPending:v2"));
   const phantomKeys = nacl.box.keyPair();
@@ -301,4 +307,31 @@ test("mobile Phantom funding connects once, preserves the preset, and returns si
   assert.equal(signed.walletFundingAttemptId, "wallet-funding-test");
   assert.equal(signed.amountSol, "0.25");
   assert.deepEqual(Buffer.from(signed.signedTransaction, "base64"), Buffer.from(signedBytes));
+});
+
+test("mobile wallet funding opens one exact Solana Pay approval in the selected Android app", () => {
+  const harness = fundingHarness();
+  const recipient = "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN";
+  const phantom = harness.api.startSolanaPay("phantom", {
+    recipient,
+    amountSol: "0.25",
+    label: "SlimeWire",
+    message: "Fund my wallet"
+  });
+  const payment = new URL(phantom.paymentUrl);
+  const launch = new URL(harness.assignedUrl);
+  assert.equal(payment.protocol, "solana:");
+  assert.equal(payment.pathname, recipient);
+  assert.equal(payment.searchParams.get("amount"), "0.25");
+  assert.equal(payment.searchParams.get("label"), "SlimeWire");
+  assert.equal(launch.protocol, "intent:");
+  assert.equal(launch.pathname, recipient);
+  assert.ok(phantom.launchUrl.startsWith(`intent:${recipient}?`));
+  assert.ok(phantom.launchUrl.includes(recipient));
+  assert.match(launch.hash, /scheme=solana;package=app\.phantom/);
+  assert.doesNotMatch(launch.hash, /browser_fallback_url|play\.google\.com/);
+
+  const solflare = harness.api.startSolanaPay("solflare", { recipient, amountSol: "1" });
+  assert.ok(solflare.launchUrl.startsWith(`intent:${recipient}?`));
+  assert.match(new URL(solflare.launchUrl).hash, /scheme=solana;package=com\.solflare\.mobile/);
 });

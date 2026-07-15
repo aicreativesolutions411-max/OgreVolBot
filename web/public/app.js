@@ -2408,8 +2408,7 @@ function mobileWalletLaunchUrl(providerId = "", methodUrl = "") {
   if (providerId !== "phantom" || !/Android/i.test(navigator.userAgent || "")) return methodUrl;
   const parsed = new URL(methodUrl);
   const target = `${parsed.host}${parsed.pathname}${parsed.search}`;
-  const fallback = encodeURIComponent("https://play.google.com/store/apps/details?id=app.phantom");
-  return `intent://${target}#Intent;scheme=phantom;package=app.phantom;S.browser_fallback_url=${fallback};end`;
+  return `intent://${target}#Intent;scheme=phantom;package=app.phantom;end`;
 }
 
 function mobileWalletConnectUrl(providerId = "", pending = {}) {

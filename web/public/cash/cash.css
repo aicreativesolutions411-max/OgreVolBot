@@ -372,3 +372,13 @@ a { color: var(--mint); text-decoration: none; }
 .wallet-import-box > b { color: var(--mint); font-size: 13px; }
 .wallet-import-box > p { color: var(--muted); font-size: 11px; margin: 3px 0 9px; }
 .sol-amounts { grid-template-columns: repeat(4, 1fr); }
+.wallet-fund-inline { padding: 10px; border: 1px solid rgba(119,255,78,.13); border-radius: 13px; background: #091009; margin-bottom: 8px; }
+.wallet-fund-inline .field-label { margin: 0 0 7px; }
+.wallet-fund-entry { display: grid; grid-template-columns: minmax(0,1fr) 76px; gap: 7px; align-items: stretch; }
+.wallet-fund-entry .fund-amounts { margin: 0; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 5px; }
+.wallet-fund-entry .amount-chip { padding: 8px 2px; font-size: 9px; }
+.wallet-fund-custom { min-width: 0; margin: 0 !important; padding: 8px !important; text-align: center; }
+.alternate-funding .provider-grid { grid-template-columns: repeat(2,1fr); margin-bottom: 6px; }
+.alternate-funding .provider-card { gap: 7px; padding: 10px 5px; font-size: 11px; }
+.alternate-funding .provider-logo { width: 21px; height: 21px; }
+.wallet-fund-status { min-height: 17px; margin: 3px 2px 0; font-size: 9px; }

@@ -54,9 +54,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=19/);
-  assert.match(funWorker, /slimewire-fun-v20/);
-  assert.match(funWorker, /fun\.css\?v=19/);
+  assert.match(html, /fun\.css\?v=20/);
+  assert.match(funWorker, /slimewire-fun-v21/);
+  assert.match(funWorker, /fun\.css\?v=20/);
 });
 
 test("/fun keeps the wallet funding card compact and scannable", () => {
@@ -65,29 +65,31 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=32/);
-  assert.match(funWorker, /fun\.js\?v=32/);
+  assert.match(html, /fun\.js\?v=33/);
+  assert.match(funWorker, /fun\.js\?v=33/);
 });
 
 test("Connect and Deposit share one simple funding flow without surprise wallet downloads", () => {
   assert.match(html, /class="wallet-pill" type="button" data-wallet-entry/);
   assert.match(html, /data-deposit>Deposit<\/button><button type="button" data-receive>Receive/);
   assert.match(html, /class="quick-wallet-pill" type="button" data-wallet-entry/);
-  for (const marker of ["data-fund-coinbase", 'data-fund-wallet="phantom"', 'data-fund-wallet="solflare"', 'data-fund-wallet="other"', "data-fund-copy"]) assert.match(js, new RegExp(marker));
+  for (const marker of ["data-fund-coinbase", 'data-fund-wallet="phantom"', 'data-fund-wallet="solflare"', "data-fund-copy", "data-fund-sol"]) assert.match(js, new RegExp(marker));
+  assert.doesNotMatch(js, /data-fund-wallet="other"/);
   assert.match(js, /function openFundingSheet/);
   assert.match(html, /\/slimewire-funding\.js\?v=/);
   assert.match(js, /startCoinbaseFunding/);
   assert.match(js, /\/api\/web\/wallets\/create/);
   assert.match(js, /\/api\/web\/wallet-funding\/create/);
   assert.match(js, /\/api\/web\/wallet-funding\/execute/);
-  assert.match(js, /startFunMobileFunding/);
+  assert.match(js, /startFunSolanaPayFunding/);
   assert.match(js, /resumeFunMobileFunding/);
-  assert.match(js, /WalletFunding\.startMobileSign/);
+  assert.match(js, /WalletFunding\.startSolanaPay/);
   const startFundingBody = js.slice(js.indexOf("async function startWalletFunding"), js.indexOf("async function submitWalletFunding"));
   assert.doesNotMatch(startFundingBody, /location\.assign\(fundingWalletBrowseUrl/);
   assert.doesNotMatch(js, /event\.target\.closest\("\[data-deposit\]"\) \|\| event\.target\.closest\("\[data-receive\]"\)/);
-  const openFundingBody = js.slice(js.indexOf("function openFundingSheet"), js.indexOf("function openFundingAmountSheet"));
+  const openFundingBody = js.slice(js.indexOf("function openFundingSheet"), js.indexOf("async function startWalletFunding"));
   assert.doesNotMatch(openFundingBody, /createWallet\(|ensureAccount\(|downloadText\(/);
+  assert.doesNotMatch(js, /function openFundingAmountSheet/);
   const receiveBody = js.slice(js.indexOf("function walletReceive"), js.indexOf('document.addEventListener("click"'));
   assert.doesNotMatch(receiveBody, /createWallet\(/);
   assert.match(server, /pathname === "\/api\/web\/wallet-funding\/create"/);
