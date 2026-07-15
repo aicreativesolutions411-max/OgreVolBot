@@ -51,6 +51,8 @@
     feedTimer: null,
     imageHydrateVersion: 0,
     resolvedCoinImages: new Map(),
+    coinImageRetryTimers: new Map(),
+    coinImageRetryAttempts: new Map(),
     quickBuyKey: "",
     quickAmount: "0.1",
     quickPanel: "trade",
@@ -127,13 +129,60 @@
       // Versioned URL evicts any old CDN/browser response that cached a normal pending lookup.
       const result = await request(`/api/web/token-avatar?mint=${encodeURIComponent(key)}&v=2`, { timeout: 5_000, noRetry: true });
       const avatar = result.data?.avatar;
-      const url = avatar?.state === "ready" ? normalizeImageUrl(image.dataset.proxyImage || avatar.avatarUrl) : "";
-      if (url) {
-        state.resolvedCoinImages.set(key.toLowerCase(), url);
-        return url;
-      }
+      return avatar?.state === "ready" ? normalizeImageUrl(avatar.avatarUrl) : "";
     } finally { delete image.dataset.coinImageResolving; }
     return "";
+  }
+  function probeCoinImage(url) {
+    if (!url || /token-mascot-|slimewire-mark|\/pfp\//i.test(url)) return Promise.resolve("");
+    return new Promise((resolve) => {
+      const probe = new Image();
+      const timer = setTimeout(() => resolve(""), 5_000);
+      const finish = (value) => { clearTimeout(timer); resolve(value); };
+      probe.onload = () => finish(probe.naturalWidth > 1 ? url : "");
+      probe.onerror = () => finish("");
+      probe.referrerPolicy = "no-referrer";
+      probe.src = url;
+    });
+  }
+  async function workingCoinImage(image) {
+    const metadata = await resolvedCoinImageFromMetadata(image).catch(() => "");
+    const candidates = [...new Set([
+      normalizeImageUrl(image?.dataset?.directImage || ""),
+      metadata,
+      normalizeImageUrl(image?.dataset?.proxyImage || "")
+    ].filter(Boolean))];
+    const tested = await Promise.all(candidates.map(probeCoinImage));
+    return tested.find(Boolean) || "";
+  }
+  function rememberCoinImage(key, url) {
+    const normalizedKey = String(key || "").toLowerCase();
+    if (!normalizedKey || !url) return;
+    state.resolvedCoinImages.set(normalizedKey, url);
+    state.coinImageRetryAttempts.delete(normalizedKey);
+    const timer = state.coinImageRetryTimers.get(normalizedKey);
+    if (timer) clearTimeout(timer);
+    state.coinImageRetryTimers.delete(normalizedKey);
+    $$('[data-token-image]').filter((image) => image.dataset.coinImageKey === normalizedKey).forEach((image) => {
+      if ((image.currentSrc || image.src) !== url) image.src = url;
+    });
+    if (state.resolvedCoinImages.size > 200) state.resolvedCoinImages.delete(state.resolvedCoinImages.keys().next().value);
+  }
+  function scheduleCoinImageRetry(image) {
+    const key = String(image?.dataset?.coinImageKey || "").toLowerCase();
+    if (!key || state.resolvedCoinImages.has(key) || state.coinImageRetryTimers.has(key)) return;
+    const attempt = state.coinImageRetryAttempts.get(key) || 0;
+    const delay = [8_000, 15_000, 30_000, 60_000][Math.min(attempt, 3)];
+    state.coinImageRetryAttempts.set(key, attempt + 1);
+    const timer = setTimeout(async () => {
+      state.coinImageRetryTimers.delete(key);
+      const target = $$('[data-token-image]').find((candidate) => candidate.dataset.coinImageKey === key);
+      if (!target) return;
+      const resolved = await workingCoinImage(target);
+      if (resolved) rememberCoinImage(key, resolved);
+      else scheduleCoinImageRetry(target);
+    }, delay);
+    state.coinImageRetryTimers.set(key, timer);
   }
   function attemptId(prefix = "fun") { return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`; }
   function toast(message, error = false) { const node = $("[data-toast]"); node.textContent = message; node.className = `toast show${error ? " error" : ""}`; clearTimeout(node._timer); node._timer = setTimeout(() => node.className = "toast", 3600); }
@@ -498,7 +547,6 @@
     $("[data-coin-stats]").innerHTML = `<div><span>Market cap</span><b>${formatUsd(coin.marketCap || coin.mc)}</b></div><div><span>Liquidity</span><b>${formatUsd(coin.liquidity || coin.liq || coin.liquidityUsd)}</b></div><div><span>Holders</span><b>${Number(coin.holders || coin.holderCount) > 0 ? Number(coin.holders || coin.holderCount).toLocaleString() : "checking"}</b></div><div><span>Volume</span><b>${coin.volume > 0 ? formatUsd(coin.volume) : escapeHtml(coin.volumeLabel || "checking")}</b></div>`;
     renderChart();
     renderQuickTrade();
-    renderSlimeRadar();
     renderPositionCard();
     renderDetailPanel();
   }
@@ -528,18 +576,6 @@
     const balance = wallet ? `${Number(wallet.sol || 0).toFixed(4)} SOL` : "Connect wallet";
     const presetChips = state.presets.trade.slice(0, 4).map((item) => `<button type="button" class="preset-chip ${item.id === state.activePresetId ? "active" : ""}" data-activate-preset="${escapeHtml(item.id)}">${escapeHtml(item.name)}</button>`).join("");
     $("[data-quick-trade]").innerHTML = `<div class="quick-wallet-line"><span>Available <b>${escapeHtml(balance)}</b></span><button type="button" data-nav="wallet">${wallet ? escapeHtml(wallet.label || "Wallet") : "Set up"} ›</button></div><div class="quick-buy-row">${amounts.map((amount) => `<button type="button" data-review-buy="${amount}">Review ${amount} SOL</button>`).join("")}</div><div class="quick-custom"><input data-custom-review-amount inputmode="decimal" placeholder="Custom SOL" aria-label="Custom SOL amount"><button type="button" data-custom-review-buy>Review</button></div>${presetChips ? `<div class="preset-chips"><button type="button" class="preset-chip ${preset ? "" : "active"}" data-activate-preset="">Manual</button>${presetChips}</div>` : ""}<button class="preset-strip" type="button" data-manage-presets><span>${preset ? `Preset · ${escapeHtml(preset.name)}` : "Preset · Manual"}</span><b>${preset ? `${escapeHtml(preset.takeProfitPct || "off")}% TP · ${escapeHtml(preset.stopLossPct || "off")}% SL` : "Add or edit ›"}</b></button>`;
-  }
-  function renderSlimeRadar() {
-    const radar = $("[data-slime-radar]");
-    if (!radar) return;
-    const coin = state.selected || {}, detail = state.selectedDetail || {};
-    const age = ageLabel(coin);
-    const liquidity = Number(coin.liquidity || coin.liq || coin.liquidityUsd || 0);
-    const volume = Number(coin.volume || coin.volumeH1 || coin.volumeH24 || 0);
-    const holders = Number(coin.holders || detail.holders || detail.rugcheck?.holders || 0);
-    const fresh = /^(?:\d+s|[1-9]\d?m)$/.test(age);
-    const signals = [fresh ? `Fresh · ${age}` : `Age · ${age}`, liquidity ? `Liquidity ${formatUsd(liquidity)}` : "Liquidity pending", volume ? `Volume ${formatUsd(volume)}` : "Volume pending", holders ? `${holders.toLocaleString()} holders` : "Holder count pending"];
-    radar.innerHTML = `<div><span>SLIMERADAR</span><h3>Why this is on your screen</h3><p>${fresh ? "New activity is being watched. Inspect the contract before acting." : "Live market context, not a trade recommendation."}</p><div class="factor-list">${signals.map((signal) => `<b>${escapeHtml(signal)}</b>`).join("")}</div></div><button type="button" data-link-tool="safety">Risk read</button>`;
   }
   function renderPositionCard() {
     const position = currentPosition(), card = $("[data-position-card]");
@@ -1199,42 +1235,21 @@
   document.addEventListener("error", async (event) => {
     const image = event.target;
     if (!(image instanceof HTMLImageElement) || !image.matches("[data-token-image]")) return;
-    const proxy = image.dataset.proxyImage || "";
     const current = image.currentSrc || image.src || "";
-    if (proxy && !current.startsWith(proxy)) { image.src = proxy; return; }
-    const resolved = await resolvedCoinImageFromMetadata(image).catch(() => "");
-    if (resolved && resolved !== current) { image.src = resolved; return; }
-    const retry = Number(image.dataset.coinImageRetry || 0);
-    if (proxy && current.startsWith(proxy) && retry < 2) {
-      image.dataset.coinImageRetry = String(retry + 1);
-      image.src = coinBadge({ address: image.dataset.coinImageKey, symbol: image.dataset.coinSymbol });
-      setTimeout(() => {
-        if (!image.isConnected || !image.matches("[data-token-image]")) return;
-        const retryUrl = `${proxy}${proxy.includes("?") ? "&" : "?"}retry=${retry + 1}`;
-        const probe = new Image();
-        probe.onload = () => {
-          if (!image.isConnected || !image.matches("[data-token-image]")) return;
-          const key = image.dataset.coinImageKey || "";
-          if (key) state.resolvedCoinImages.set(key.toLowerCase(), retryUrl);
-          image.src = retryUrl;
-        };
-        probe.src = retryUrl;
-      }, 1_800 + retry * 1_200);
-      return;
-    }
-    image.removeAttribute("data-token-image");
+    const resolved = await workingCoinImage(image);
+    if (resolved && resolved !== current) { rememberCoinImage(image.dataset.coinImageKey, resolved); return; }
     image.src = coinBadge({
       address: image.dataset.coinImageKey || image.closest("[data-open-coin]")?.dataset.openCoin || state.selected && coinKey(state.selected),
       symbol: image.dataset.coinSymbol || state.selected?.symbol || "?"
     });
+    scheduleCoinImageRetry(image);
   }, true);
   document.addEventListener("load", (event) => {
     const image = event.target;
     if (!(image instanceof HTMLImageElement) || !image.matches("[data-token-image]")) return;
     const key = image.dataset.coinImageKey || "";
     if (key && image.naturalWidth > 1 && !/token-mascot-|slimewire-mark/.test(image.currentSrc || image.src)) {
-      state.resolvedCoinImages.set(key, image.currentSrc || image.src);
-      if (state.resolvedCoinImages.size > 200) state.resolvedCoinImages.delete(state.resolvedCoinImages.keys().next().value);
+      rememberCoinImage(key, image.currentSrc || image.src);
     }
   }, true);
 

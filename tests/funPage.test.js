@@ -55,7 +55,7 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
   assert.match(html, /fun\.css\?v=17/);
-  assert.match(funWorker, /slimewire-fun-v15/);
+  assert.match(funWorker, /slimewire-fun-v16/);
   assert.match(funWorker, /fun\.css\?v=17/);
 });
 
@@ -65,8 +65,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Fund from SlimeCash or send SOL to this wallet\."/);
-  assert.match(html, /fun\.js\?v=28/);
-  assert.match(funWorker, /fun\.js\?v=28/);
+  assert.match(html, /fun\.js\?v=29/);
+  assert.match(funWorker, /fun\.js\?v=29/);
 });
 
 test("/fun keeps SOL in the header and shows SOL plus coins as cash in the funding card", () => {
@@ -143,11 +143,17 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(js, /\/api\/web\/token-avatar\?mint=/);
   assert.match(js, /resolvedCoinImageFromMetadata/);
   assert.match(js, /resolvedCoinImages: new Map/);
+  assert.match(js, /coinImageRetryTimers: new Map/);
+  assert.match(js, /coinImageRetryAttempts: new Map/);
   assert.match(js, /state\.resolvedCoinImages\.set/);
+  assert.match(js, /function probeCoinImage\(url\)/);
+  assert.match(js, /async function workingCoinImage\(image\)/);
+  assert.match(js, /function scheduleCoinImageRetry\(image\)/);
+  assert.match(js, /\[8_000, 15_000, 30_000, 60_000\]/);
   assert.match(js, /const probe = new Image\(\)/);
   assert.match(js, /probe\.onload = \(\) =>/);
-  assert.match(js, /image\.src = retryUrl/);
-  assert.doesNotMatch(js, /setTimeout\(\(\) => \{[\s\S]{0,260}image\.src = `\$\{proxy\}/);
+  assert.doesNotMatch(js, /if \(proxy && !current\.startsWith\(proxy\)\) \{ image\.src = proxy/);
+  assert.doesNotMatch(js, /removeAttribute\("data-token-image"\)/);
   assert.match(js, /background-image:url\('\$\{coinBadge\(coin\)\}'\)/);
   assert.match(js, /return mascot\(coinKey\(coin\)/);
   assert.match(css, /\.coin-avatar,\.coin-identity img\{background-position:center/);
@@ -165,6 +171,14 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(server, /!row\.imageUrl && row\.iconUrl/);
   assert.match(js, /const detailPromise = request\(path\)/);
   assert.ok(js.indexOf("const searchResult = await request") < js.indexOf("const detailResult = await detailPromise"));
+});
+
+test("coin details omit the redundant risk strip while safety remains available in Tools", () => {
+  assert.doesNotMatch(html, /data-slime-radar/);
+  assert.doesNotMatch(js, /function renderSlimeRadar\(/);
+  assert.doesNotMatch(js, />Risk read</);
+  assert.match(js, /data-link-tool="safety"/);
+  assert.match(js, /SlimeShield safety/);
 });
 
 test("coin setup exposes fast buys, ladder exits, one-wallet RH trades, and the full volume engine", () => {
