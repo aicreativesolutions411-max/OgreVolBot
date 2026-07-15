@@ -74,6 +74,14 @@ function rawComputeBudgetInstruction(type, value = 0) {
   });
 }
 
+function lighthouseInstruction(source, marker = 1) {
+  return new TransactionInstruction({
+    programId: new PublicKey("L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95"),
+    keys: [{ pubkey: source.publicKey, isSigner: true, isWritable: true }],
+    data: Buffer.from([marker])
+  });
+}
+
 test("wallet funding orders predeclare safe fees so Phantom and Solflare can sign the same message", () => {
   const fixture = fundingFixture();
   const transaction = buildWalletFunding({
@@ -132,6 +140,92 @@ test("wallet funding accepts the current Solana loaded-account-data compute inst
   );
   const walletReturned = Transaction.from(sign(fixture.transaction, fixture.source).serialize());
   assert.doesNotThrow(() => verifyWalletFunding(walletReturned, fixture.order));
+});
+
+test("wallet funding accepts Phantom's appended Lighthouse guard", () => {
+  const fixture = fundingFixture();
+  fixture.transaction.add(
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 5_000 }),
+    SystemProgram.transfer({
+      fromPubkey: fixture.source.publicKey,
+      toPubkey: fixture.destination,
+      lamports: fixture.amountLamports
+    }),
+    lighthouseInstruction(fixture.source)
+  );
+  const walletReturned = Transaction.from(sign(fixture.transaction, fixture.source).serialize());
+  assert.doesNotThrow(() => verifyWalletFunding(walletReturned, fixture.order));
+});
+
+test("wallet funding accepts Solflare's bounded Lighthouse guards", () => {
+  const fixture = fundingFixture();
+  fixture.transaction.add(
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 5_000 }),
+    SystemProgram.transfer({
+      fromPubkey: fixture.source.publicKey,
+      toPubkey: fixture.destination,
+      lamports: fixture.amountLamports
+    }),
+    lighthouseInstruction(fixture.source, 1),
+    lighthouseInstruction(fixture.source, 2)
+  );
+  const walletReturned = Transaction.from(sign(fixture.transaction, fixture.source).serialize());
+  assert.doesNotThrow(() => verifyWalletFunding(walletReturned, fixture.order));
+});
+
+test("wallet funding rejects Lighthouse guards before the exact transfer or above the wallet bound", () => {
+  const before = fundingFixture();
+  before.transaction.add(
+    lighthouseInstruction(before.source),
+    SystemProgram.transfer({
+      fromPubkey: before.source.publicKey,
+      toPubkey: before.destination,
+      lamports: before.amountLamports
+    })
+  );
+  assert.throws(
+    () => verifyWalletFunding(sign(before.transaction, before.source), before.order),
+    (error) => error?.code === "WALLET_FUNDING_LIGHTHOUSE_LAYOUT"
+  );
+
+  const tooMany = fundingFixture();
+  tooMany.transaction.add(
+    SystemProgram.transfer({
+      fromPubkey: tooMany.source.publicKey,
+      toPubkey: tooMany.destination,
+      lamports: tooMany.amountLamports
+    }),
+    lighthouseInstruction(tooMany.source, 1),
+    lighthouseInstruction(tooMany.source, 2),
+    lighthouseInstruction(tooMany.source, 3),
+    lighthouseInstruction(tooMany.source, 4)
+  );
+  assert.throws(
+    () => verifyWalletFunding(sign(tooMany.transaction, tooMany.source), tooMany.order),
+    (error) => error?.code === "WALLET_FUNDING_LIGHTHOUSE_LAYOUT"
+  );
+});
+
+test("wallet funding still rejects an arbitrary appended program", () => {
+  const fixture = fundingFixture();
+  fixture.transaction.add(
+    SystemProgram.transfer({
+      fromPubkey: fixture.source.publicKey,
+      toPubkey: fixture.destination,
+      lamports: fixture.amountLamports
+    }),
+    new TransactionInstruction({
+      programId: Keypair.generate().publicKey,
+      keys: [],
+      data: Buffer.from([1])
+    })
+  );
+  assert.throws(
+    () => verifyWalletFunding(sign(fixture.transaction, fixture.source), fixture.order),
+    (error) => error?.code === "WALLET_FUNDING_PROGRAM"
+  );
 });
 
 test("wallet funding rejects unknown compute layouts with a diagnostic code", () => {

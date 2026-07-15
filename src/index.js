@@ -63834,6 +63834,12 @@ function verifySessionWalletFundingTransaction(tx, order) {
   };
   const source = new PublicKey(order.sourcePublicKey);
   const destination = new PublicKey(order.destinationPublicKey || order.sessionWalletPublicKey);
+  // Phantom and Solflare append Lighthouse guard instructions after the transfer on mainnet. These are
+  // wallet-generated anti-spoofing assertions: they make the transaction fail if its real state changes do
+  // not match the wallet preview. The program is immutable/audited and cannot replace our one exact System
+  // transfer. Keep the allowlist deliberately narrow and bounded (Phantom currently adds one; Solflare can
+  // add two; the upstream x402 verifier allows up to three for current wallet variants).
+  const lighthouseProgram = new PublicKey("L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95");
   const amountLamports = BigInt(order.amountLamports || 0);
   if (!tx?.feePayer?.equals(source)) {
     reject("SOURCE", "Wallet funding transaction has the wrong source wallet.");
@@ -63855,6 +63861,8 @@ function verifySessionWalletFundingTransaction(tx, order) {
 
   const transfers = [];
   const seenComputeTypes = new Set();
+  let lighthouseInstructions = 0;
+  let sawTransferInstruction = false;
   let computeUnitLimit = 1_400_000n;
   let computeUnitPrice = 0n;
   let legacyAdditionalFeeLamports = 0n;
@@ -63863,6 +63871,16 @@ function verifySessionWalletFundingTransaction(tx, order) {
     if (instruction.programId.equals(SystemProgram.programId)) {
       try { transfers.push(SystemInstruction.decodeTransfer(instruction)); }
       catch { reject("SYSTEM_INSTRUCTION", "Wallet funding transaction was changed. Start again."); }
+      sawTransferInstruction = true;
+      continue;
+    }
+    if (instruction.programId.equals(lighthouseProgram)) {
+      // A guard belongs after the value-moving instruction it protects. Never accept an unbounded chain of
+      // wallet-added calls even though the program itself is safe.
+      lighthouseInstructions += 1;
+      if (!sawTransferInstruction || lighthouseInstructions > 3) {
+        reject("LIGHTHOUSE_LAYOUT", "Wallet funding transaction was changed. Start again.");
+      }
       continue;
     }
     if (!instruction.programId.equals(ComputeBudgetProgram.programId)) {
@@ -63945,7 +63963,8 @@ function walletFundingTransactionShape(tx) {
   return tx.instructions.map((instruction) => {
     if (instruction.programId?.equals?.(SystemProgram.programId)) return "system";
     if (instruction.programId?.equals?.(ComputeBudgetProgram.programId)) return `compute:${Buffer.from(instruction.data || [])[0] ?? "empty"}`;
-    return "other";
+    const program = instruction.programId?.toBase58?.() || "other";
+    return `other:${String(program).slice(0, 12)}`;
   }).join(",").slice(0, 120);
 }
 
