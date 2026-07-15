@@ -17,7 +17,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.ok(scriptVersion, "SlimeWire Go should publish a versioned app script");
+  assert.equal(scriptVersion, "37", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -29,8 +29,8 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /beforeinstallprompt/);
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
-  assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v\d+/);
+  assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/", updateViaCache: "none" \}\)/);
+  assert.match(funWorker, /slimewire-fun-v26/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -56,7 +56,7 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
   assert.match(html, /fun\.css\?v=21/);
-  assert.match(funWorker, /slimewire-fun-v25/);
+  assert.match(funWorker, /slimewire-fun-v26/);
   assert.match(funWorker, /fun\.css\?v=21/);
 });
 
@@ -66,8 +66,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=36/);
-  assert.match(funWorker, /fun\.js\?v=36/);
+  assert.match(html, /fun\.js\?v=37/);
+  assert.match(funWorker, /fun\.js\?v=37/);
 });
 
 test("Connect and Deposit share one simple funding flow without surprise wallet downloads", () => {
@@ -77,19 +77,21 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
   for (const marker of ["data-fund-coinbase", 'data-fund-wallet="phantom"', 'data-fund-wallet="solflare"', "data-fund-copy", "data-fund-sol"]) assert.match(js, new RegExp(marker));
   assert.doesNotMatch(js, /data-fund-wallet="other"/);
   assert.match(js, /function openFundingSheet/);
-  assert.match(html, /\/slimewire-funding\.js\?v=/);
+  assert.match(html, /\/slimewire-funding\.js\?v=8/);
   assert.match(js, /startCoinbaseFunding/);
   assert.match(js, /\/api\/web\/wallets\/create/);
   assert.match(js, /\/api\/web\/wallet-funding\/create/);
   assert.match(js, /\/api\/web\/wallet-funding\/execute/);
   assert.match(js, /startFunMobileExactFunding/);
-  assert.match(js, /resumeFunMobileFunding/);
-  // Mobile funding uses a Solana Pay transfer URI (amount + recipient prefilled, no fragile
-  // encrypted deeplink round-trip); the balance-baseline watcher auto-credits on return.
-  assert.match(js, /function funSolanaPayUri/);
-  assert.match(js, /location\.href = funSolanaPayUri\(wallet\.publicKey, amountSol\)/);
-  assert.match(js, /saveLocal\(FUN_PENDING_FUND_KEY, \{ walletIndex: wallet\.index, amountSol, baselineSol/);
-  assert.match(js, /resumePendingFunFunding/);
+  const mobileLaunch = js.slice(js.indexOf("async function startFunMobileExactFunding"), js.indexOf("async function checkPendingFunFunding"));
+  const pendingCheck = js.slice(js.indexOf("async function checkPendingFunFunding"), js.indexOf("function resumePendingFunFunding"));
+  assert.match(mobileLaunch, /WalletFunding\.createSolanaPayReference\(\)/);
+  assert.match(mobileLaunch, /WalletFunding\.solanaPayTransferUrl\(\{/);
+  assert.match(mobileLaunch, /location\.assign\(payUri\)/);
+  assert.doesNotMatch(mobileLaunch, /setTimeout|baselineSol/);
+  assert.match(pendingCheck, /post\("\/api\/web\/wallet-funding\/status"/);
+  assert.match(pendingCheck, /if \(pending\.reference && pending\.walletIndex\)[\s\S]*return false;\s*}\s*await loadWallets/);
+  assert.doesNotMatch(js, /startMobileConnect|startMobileSign|consumeMobileCallback|mobileSession|authorizeAndSignMobile|supportsMwa|resumeFunMobileFunding/);
   const startFundingBody = js.slice(js.indexOf("async function startWalletFunding"), js.indexOf("async function submitWalletFunding"));
   assert.doesNotMatch(startFundingBody, /location\.assign\(fundingWalletBrowseUrl/);
   assert.doesNotMatch(js, /event\.target\.closest\("\[data-deposit\]"\) \|\| event\.target\.closest\("\[data-receive\]"\)/);
@@ -113,6 +115,16 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
   assert.match(server, /priorityFeeLamports > maxPriorityFeeLamports/);
   assert.match(server, /transfers\.length !== 1/);
   assert.match(server, /BigInt\(transfer\.lamports\) !== amountLamports/);
+});
+
+test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
+  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v26"/);
+  assert.match(funWorker, /\/slimewire-funding\.js\?v=8/);
+  assert.match(funWorker, /self\.skipWaiting\(\)/);
+  assert.match(funWorker, /self\.clients\.claim\(\)/);
+  assert.match(funWorker, /key\.startsWith\("slimewire-fun-"\) && key !== FUN_CACHE/);
+  assert.doesNotMatch(funWorker, /slimewire-mwa/i);
+  assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/", updateViaCache: "none" \}\)/);
 });
 
 test("connected funding wallets stay separate from managed positions", () => {

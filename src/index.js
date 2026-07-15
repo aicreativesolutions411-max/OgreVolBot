@@ -10322,6 +10322,24 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/web/wallet-funding/status") {
+      const body = await readJsonRequestBody(request);
+      try {
+        const walletIndexKey = String(body.walletIndex || "").slice(0, 8);
+        const amountKey = String(body.amountSol || "").slice(0, 24);
+        const referenceKey = String(body.reference || "").slice(0, 48);
+        const result = await withCacheDedupe(
+          `wallet-funding-status:${auth.userId}:${walletIndexKey}:${amountKey}:${referenceKey}`,
+          15_000,
+          () => verifySolanaPayWalletFunding(auth.userId, body)
+        );
+        sendWebJson(request, response, 200, { ok: true, ...result });
+      } catch (error) {
+        sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) });
+      }
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/wallet-funding/create") {
       const body = await readJsonRequestBody(request);
       const result = await createWebWalletFundingOrder(auth.userId, body);
@@ -11238,7 +11256,8 @@ async function serveWebPortal(requestUrl, response, method = "GET", acceptEncodi
     const fileName = path.basename(target);
     // index.html is the entry doc and config.js is regenerated per build without a cache-busting
     // query, so both must always be fetched fresh.
-    const noStoreAsset = target.endsWith("index.html") || fileName === "config.js";
+    const noStoreAsset = target.endsWith("index.html") || fileName === "config.js"
+      || fileName === "sw.js" || fileName === "fun-sw.js" || fileName === "slimewire-funding.js";
     const immutableMedia = /\.(?:mp4|png|jpe?g|svg|webp|ico)$/i.test(target);
     // build-web.js rewrites a fresh ?v=<buildId> onto app.js / styles.css / overrides every deploy,
     // so a versioned request is safe to cache hard — a new deploy serves a brand-new URL, never stale.
@@ -60325,10 +60344,17 @@ async function cashPrimaryWallet(userId, walletIndex = null) {
   const store = await readWalletStore();
   const owned = walletsForOwner(store, userId);
   const wallets = owned.filter((wallet) => !wallet.volumeBot && !wallet.ephemeral && !wallet.sessionWallet);
-  const requestedIndex = Number.parseInt(String(walletIndex || ""), 10);
-  const requested = Number.isInteger(requestedIndex) && requestedIndex > 0 ? owned[requestedIndex - 1] : null;
-  if (requested && wallets.some((wallet) => wallet.publicKey === requested.publicKey)) return requested;
-  return wallets[0] || null;
+  const hasRequestedIndex = walletIndex !== null && walletIndex !== undefined && String(walletIndex).trim() !== "";
+  if (hasRequestedIndex) {
+    const requestedIndex = Number.parseInt(String(walletIndex), 10);
+    if (!Number.isInteger(requestedIndex) || requestedIndex < 1) return null;
+    const requested = owned[requestedIndex - 1];
+    if (!requested || !wallets.some((wallet) => wallet.publicKey === requested.publicKey)) return null;
+    return { ...requested, index: requestedIndex };
+  }
+  const primary = wallets[0];
+  if (!primary) return null;
+  return { ...primary, index: owned.findIndex((wallet) => wallet.publicKey === primary.publicKey) + 1 };
 }
 
 async function claimCashHandle(userId, rawHandle) {
@@ -60418,6 +60444,7 @@ function defaultSlimeCashStore() {
     version: 1,
     receipts: [],
     requests: {},
+    walletFundingReceipts: {},
     contacts: {},
     settings: {},
     signatureIndex: {},
@@ -60428,7 +60455,7 @@ function defaultSlimeCashStore() {
 async function readSlimeCashStore() {
   const store = await readJson(slimeCashPath());
   if (!Array.isArray(store.receipts)) store.receipts = [];
-  for (const key of ["requests", "contacts", "settings", "signatureIndex", "attemptIndex"]) {
+  for (const key of ["requests", "walletFundingReceipts", "contacts", "settings", "signatureIndex", "attemptIndex"]) {
     if (!store[key] || typeof store[key] !== "object" || Array.isArray(store[key])) store[key] = {};
   }
   return store;
@@ -60725,7 +60752,8 @@ function cashRequestPaidByTransaction(row, tx) {
   if (row.asset === "SOL") {
     return cashTransactionInstructions(tx).some((instruction) => {
       const info = instruction?.parsed?.info;
-      return instruction?.parsed?.type === "transfer"
+      return instruction?.program === "system"
+        && instruction?.parsed?.type === "transfer"
         && String(info?.destination || "") === row.recipientAddress
         && BigInt(info?.lamports || 0) === wantedRaw;
     });
@@ -60797,6 +60825,161 @@ async function verifyCashRequestPayment(row) {
     }
   }
   return row;
+}
+
+async function walletFundingReferenceSignatures(referenceKey) {
+  const read = (client) => client.getSignaturesForAddress(referenceKey, { limit: 12 });
+  const primary = await rhPromiseTimeout(
+    rpcWithRetry("wallet funding primary reference signatures", () => read(connection), 0, { priority: true }),
+    4_000,
+    null
+  ).catch(() => null);
+  if (Array.isArray(primary) && primary.length) return primary;
+  if (readConnection === connection) return Array.isArray(primary) ? primary : [];
+  return rhPromiseTimeout(
+    rpcRead("wallet funding reference signatures", read, { retries: 0, priority: true }),
+    4_000,
+    []
+  ).catch(() => []);
+}
+
+async function walletFundingParsedTransaction(signature) {
+  const read = (client) => client.getParsedTransaction(signature, {
+    commitment: "confirmed",
+    maxSupportedTransactionVersion: 0
+  });
+  const primary = await rhPromiseTimeout(
+    rpcWithRetry("wallet funding primary reference transaction", () => read(connection), 0, { priority: true }),
+    4_000,
+    null
+  ).catch(() => null);
+  if (primary || readConnection === connection) return primary;
+  return rhPromiseTimeout(
+    rpcRead("wallet funding reference transaction", read, { retries: 0, priority: true }),
+    4_000,
+    null
+  ).catch(() => null);
+}
+
+async function verifySolanaPayWalletFunding(userId, body = {}) {
+  const wallet = await cashPrimaryWallet(userId, body.walletIndex);
+  if (!wallet) {
+    const error = new Error("Create your SlimeWire wallet before funding it.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const rawAmount = parseCashDecimalToRaw(body.amountSol, 9, "SOL amount");
+  const minimum = 5_000_000n;
+  const maximum = 10_000_000_000n;
+  if (rawAmount < minimum || rawAmount > maximum) {
+    const error = new Error("Enter 0.005 to 10 SOL.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  let reference;
+  try {
+    reference = new PublicKey(String(body.reference || "").trim()).toBase58();
+  } catch {
+    const error = new Error("That wallet funding reference is invalid. Start again.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const now = Date.now();
+  const startedAt = Number(body.startedAt || 0);
+  const clientTimeIsUsable = Number.isFinite(startedAt)
+    && startedAt >= now - 6 * 60 * 60_000
+    && startedAt <= now + 6 * 60 * 60_000;
+  const earliestMs = clientTimeIsUsable
+    ? Math.max(now - 6 * 60 * 60_000, Math.min(startedAt, now) - 2 * 60_000)
+    : now - 30 * 60_000;
+
+  const existingStore = await readSlimeCashStore();
+  const existing = existingStore.walletFundingReceipts?.[reference];
+  if (existing) {
+    if (String(existing.ownerUserId) !== String(userId)
+        || existing.destination !== wallet.publicKey
+        || String(existing.rawAmount || "") !== String(rawAmount)) {
+      const error = new Error("That wallet funding reference was already used. Start again.");
+      error.statusCode = 409;
+      throw error;
+    }
+    return {
+      confirmed: true,
+      signature: existing.signature,
+      confirmedAt: existing.confirmedAt,
+      walletIndex: wallet.index
+    };
+  }
+
+  const signatures = await walletFundingReferenceSignatures(new PublicKey(reference));
+  const requestRow = {
+    reference,
+    asset: "SOL",
+    rawAmount: String(rawAmount),
+    recipientAddress: wallet.publicKey
+  };
+
+  for (const item of signatures || []) {
+    if (item.err || (item.blockTime && item.blockTime * 1000 < earliestMs)) continue;
+    const tx = await walletFundingParsedTransaction(item.signature);
+    if (!cashRequestPaidByTransaction(requestRow, tx)) continue;
+
+    const confirmedAt = new Date((item.blockTime || Math.floor(Date.now() / 1000)) * 1000).toISOString();
+    const amountSol = rawCashAmountToUi(rawAmount, 9);
+    let receipt;
+    await mutateSlimeCashStore((store) => {
+      const prior = store.walletFundingReceipts[reference];
+      if (prior) {
+        receipt = prior;
+        return;
+      }
+      receipt = {
+        reference,
+        ownerUserId: String(userId),
+        walletIndex: Number(wallet.index),
+        destination: wallet.publicKey,
+        rawAmount: String(rawAmount),
+        amountSol,
+        signature: item.signature,
+        confirmedAt
+      };
+      store.walletFundingReceipts[reference] = receipt;
+      if (!store.signatureIndex[item.signature]) {
+        const cashReceipt = {
+          id: `receipt_${crypto.randomBytes(12).toString("base64url")}`,
+          signature: item.signature,
+          status: "confirmed",
+          asset: "SOL",
+          amountSol,
+          senderUserId: "",
+          recipientUserId: String(userId),
+          destination: wallet.publicKey,
+          note: "Funded from a Solana wallet",
+          createdAt: confirmedAt,
+          confirmedAt
+        };
+        store.receipts.push(cashReceipt);
+        store.signatureIndex[item.signature] = cashReceipt.id;
+      }
+    });
+    void audit("web_wallet_funding_confirmed", {
+      userId,
+      walletIndex: wallet.index,
+      signature: item.signature,
+      transport: "solana-pay"
+    }).catch(() => {});
+    return {
+      confirmed: true,
+      signature: receipt.signature,
+      confirmedAt: receipt.confirmedAt,
+      walletIndex: wallet.index
+    };
+  }
+
+  return { confirmed: false, signature: "", walletIndex: wallet.index };
 }
 
 async function notifyCashRequestPaid(row) {

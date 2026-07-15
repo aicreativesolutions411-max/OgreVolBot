@@ -6,7 +6,7 @@
 <title>SlimeCash — money for the trenches</title>
 <meta name="description" content="SlimeCash: send, receive, and swap coins with your $handle. Money for the trenches.">
 <meta name="theme-color" content="#050705">
-<meta name="slimecash-build" content="21">
+<meta name="slimecash-build" content="22">
 <link rel="manifest" href="/cash/manifest.webmanifest?v=11">
 <link rel="icon" type="image/png" sizes="64x64" href="/cash/icons/favicon-64.png">
 <link rel="apple-touch-icon" href="/cash/icons/apple-touch-icon.png">
@@ -17,7 +17,7 @@
 <meta property="og:title" content="SlimeCash">
 <meta property="og:description" content="Money for the trenches. Send, receive, and swap coins with your $handle.">
 <meta property="og:image" content="https://www.slimewire.org/cash/icons/icon-512.png">
-<link rel="stylesheet" href="/cash/cash.css?v=21">
+<link rel="stylesheet" href="/cash/cash.css?v=22">
 </head>
 <body>
 <div id="splash" class="splash">
@@ -171,7 +171,7 @@
   <div class="sheet">
     <button class="sheet-close" data-close="addcash" type="button" aria-label="Close">×</button>
     <div class="sheet-title">Add funds</div>
-    <p class="sheet-copy">Choose Coinbase for fiat checkout or approve one exact SOL transfer from your wallet.</p>
+    <p class="sheet-copy">Choose Coinbase for fiat checkout or open your wallet with the exact SOL amount prefilled.</p>
     <div class="fund-section-head"><span>What are you adding?</span><small>Solana network</small></div>
     <div class="asset-switch asset-cards">
       <button class="guide-pill asset-card active" data-deposit-asset="USDC" type="button"><i class="cash-logo usdc" aria-hidden="true">$</i><span><b>USD</b><small>USDC on Solana</small></span></button>
@@ -210,7 +210,7 @@
         <button class="guide-pill provider-card" data-fund-wallet="phantom" type="button"><i class="provider-logo phantom">P</i><span>Phantom</span></button>
         <button class="guide-pill provider-card" data-fund-wallet="solflare" type="button"><i class="provider-logo solflare">S</i><span>Solflare</span></button>
       </div>
-      <div id="walletFundingStatus" class="status wallet-fund-status">Enter SOL, tap your wallet, then approve the exact transfer.</div>
+      <div id="walletFundingStatus" class="status wallet-fund-status">The exact amount is prefilled. Approve in your wallet, then return here for automatic confirmation.</div>
     </div>
     <div class="fund-section-head"><span>Manual transfer</span><small>Any Solana app</small></div>
     <button id="copyDepositBtn" class="address-pill" type="button"><span id="depositAddress">…</span><span class="copy-tag">copy</span></button>
@@ -467,7 +467,7 @@
 
 <div id="toast" class="toast" hidden></div>
 <script src="/config.js"></script>
-<script src="/slimewire-funding.js?v=7"></script>
-<script src="/cash/cash.js?v=21"></script>
+<script src="/slimewire-funding.js?v=8"></script>
+<script src="/cash/cash.js?v=22"></script>
 </body>
 </html>

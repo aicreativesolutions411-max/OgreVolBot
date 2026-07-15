@@ -112,6 +112,8 @@ await fs.writeFile(path.join(distDir, "config.js"), configSource, "utf8");
 const cashScriptPath = path.join(distDir, "cash", "cash.js");
 const cashScriptSource = await fs.readFile(cashScriptPath);
 const cashScriptHash = createHash("sha256").update(cashScriptSource).digest("hex").slice(0, 12);
+const fundingScriptSource = await fs.readFile(path.join(distDir, "slimewire-funding.js"));
+const fundingScriptHash = createHash("sha256").update(fundingScriptSource).digest("hex").slice(0, 12);
 const cashScriptIntegrity = `sha384-${createHash("sha384").update(cashScriptSource).digest("base64")}`;
 const cashScriptFile = `cash.${cashScriptHash}.js`;
 const cashScriptUrl = `/cash/${cashScriptFile}`;
@@ -153,7 +155,7 @@ const cashWorkerSource = await fs.readFile(cashWorkerPath, "utf8");
 await fs.writeFile(
   cashWorkerPath,
   cashWorkerSource
-    .replace(/const CACHE = "slimecash-[^"]+";/, `const CACHE = "slimecash-${cashScriptHash}";`)
+    .replace(/const CACHE = "slimecash-[^"]+";/, `const CACHE = "slimecash-${cashScriptHash}-funding-${fundingScriptHash}";`)
     .replace(/"\/cash\/cash\.js(?:\?v=[^"]*)?"/, JSON.stringify(cashScriptUrl)),
   "utf8"
 );

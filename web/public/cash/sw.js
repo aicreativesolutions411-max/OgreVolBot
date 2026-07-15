@@ -1,12 +1,11 @@
 /* SlimeCash service worker — fresh-first app shell, network-only for APIs. */
-const CACHE = "slimecash-v23";
+const CACHE = "slimecash-v24";
 const SHELL = [
   "/cash/",
   "/cash/index.html",
-  "/cash/cash.css?v=21",
-  "/slimewire-funding.js?v=7",
-  "/vendor/slimewire-mwa.iife.min.js",
-  "/cash/cash.js?v=21",
+  "/cash/cash.css?v=22",
+  "/slimewire-funding.js?v=8",
+  "/cash/cash.js?v=22",
   "/cash/manifest.webmanifest?v=11",
   "/assets/slimewire/fun-app-icon-192.png",
   "/cash/img/splash.webp",
@@ -23,7 +22,7 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))))
+      .then((keys) => Promise.all(keys.filter((key) => key.startsWith("slimecash-") && key !== CACHE).map((key) => caches.delete(key))))
       .then(() => self.clients.claim())
   );
 });
@@ -33,7 +32,7 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   // Money/data endpoints must never come from cache.
   if (url.pathname.startsWith("/api/") || url.origin !== self.location.origin) return;
-  if (!url.pathname.startsWith("/cash") && url.pathname !== "/slimewire-funding.js" && url.pathname !== "/vendor/slimewire-mwa.iife.min.js") return;
+  if (!url.pathname.startsWith("/cash") && url.pathname !== "/slimewire-funding.js") return;
   event.respondWith(
     caches.match(event.request, { ignoreSearch: url.pathname === "/cash/" || url.pathname === "/cash/index.html" }).then((cached) => {
       const fetched = fetch(event.request).then((response) => {

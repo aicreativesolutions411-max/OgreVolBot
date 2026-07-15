@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
-import bs58 from "bs58";
-import nacl from "tweetnacl";
 
 const server = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const cash = fs.readFileSync(new URL("../web/public/cash/cash.js", import.meta.url), "utf8");
@@ -54,8 +52,8 @@ test("SlimeCash automatically downloads account and wallet recovery material", (
 
 test("SlimeCash service worker prefers the current deploy and retains offline fallback", () => {
   const build = html.match(/slimecash-build" content="(\d+)"/)?.[1];
-  assert.ok(build, "SlimeCash should publish a numeric build marker");
-  assert.match(sw, /slimecash-v\d+/);
+  assert.equal(build, "22", "SlimeCash should publish the current app build");
+  assert.match(sw, /const CACHE = "slimecash-v24"/);
   assert.match(html, new RegExp(`cash\\.js\\?v=${build}`));
   assert.match(html, new RegExp(`cash\\.css\\?v=${build}`));
   assert.match(sw, /const fetched = fetch/);
@@ -150,38 +148,56 @@ test("Cash and Fun share one account login, recovery, wallet import, and navigat
   assert.match(cash, /post\("\/api\/web\/wallet-funding\/execute"/);
 });
 
-test("wallet approval helpers are shared by Cash and Fun", () => {
-  assert.match(html, /\/slimewire-funding\.js\?v=/);
+test("Cash uses the shared exact Solana Pay helper without the legacy mobile handshake", () => {
+  assert.match(html, /\/slimewire-funding\.js\?v=8/);
   assert.match(funding, /window\.SlimeWireFunding/);
   assert.match(funding, /backpack|okxwallet|braveSolana/);
   assert.match(funding, /solana-web3\.iife\.min\.js/);
-  assert.match(funding, /tweetnacl-fast\.min\.js/);
-  assert.match(funding, /async function startMobileConnect/);
-  assert.match(funding, /async function startMobileSign/);
-  assert.match(funding, /async function consumeMobileCallback/);
-  assert.match(funding, /async function authorizeAndSignMobile/);
-  assert.match(funding, /slimewire-mwa\.iife\.min\.js/);
-  assert.ok(fs.existsSync(new URL("../web/public/vendor/slimewire-mwa.iife.min.js", import.meta.url)));
-  assert.doesNotMatch(funding, /function startSolanaPay/);
-  assert.doesNotMatch(funding, /browser_fallback_url/);
-  assert.match(funding, /mobileMethodUrl\(kind, "signTransaction"\)/);
-  assert.match(funding, /slimewireMobileFundingSession:v2:/);
-  assert.match(cash, /startCashMobileExactFunding/);
-  assert.match(cash, /resumeCashMobileFunding/);
-  assert.match(cash, /WalletFunding\.mobileSession\(kind\)/);
-  assert.match(cash, /prepareCashMobileFundingOrder\(kind, session\.publicKey, amountSol, wallet\.index\)/);
-  assert.match(cash, /WalletFunding\.startMobileSign\(kind/);
-  assert.match(cash, /WalletFunding\.supportsMwa\?\.\(\)/);
-  assert.match(cash, /WalletFunding\.authorizeAndSignMobile\(kind/);
-  assert.doesNotMatch(cash, /WalletFunding\.startSolanaPay/);
+  assert.match(funding, /function createSolanaPayReference/);
+  assert.match(funding, /function solanaPayTransferUrl/);
+  assert.match(funding, /createSolanaPayReference/);
+  assert.match(funding, /solanaPayTransferUrl/);
+  for (const removed of [
+    /startMobileConnect/,
+    /startMobileSign/,
+    /consumeMobileCallback/,
+    /mobileSession/,
+    /authorizeAndSignMobile/,
+    /supportsMwa/,
+    /slimewire-mwa/i,
+    /slimewireMobileFundingSession/,
+    /sw_fund_stage/,
+    /\/ul\/v1\/connect/
+  ]) assert.doesNotMatch(funding, removed);
+
+  const mobileLaunch = cash.slice(
+    cash.indexOf("async function startCashMobileExactFunding"),
+    cash.indexOf("async function copyFundingAddress")
+  );
+  const pendingCheck = cash.slice(
+    cash.indexOf("async function checkPendingCashFunding"),
+    cash.indexOf("function fundingProvider")
+  );
+  assert.match(mobileLaunch, /WalletFunding\.createSolanaPayReference\(\)/);
+  assert.match(mobileLaunch, /WalletFunding\.solanaPayTransferUrl\(\{/);
+  assert.match(mobileLaunch, /location\.assign\(payUri\)/);
+  assert.doesNotMatch(mobileLaunch, /setTimeout/);
+  assert.match(pendingCheck, /post\("\/api\/web\/wallet-funding\/status"/);
+  assert.match(cash, /&& !pendingSol\.reference/);
+  assert.match(cash, /if \(!pendingSol\?\.reference\) pendingFundArrived\("SOL"\)/);
+  assert.doesNotMatch(cash, /startMobileConnect|startMobileSign|consumeMobileCallback|mobileSession|authorizeAndSignMobile|supportsMwa|resumeCashMobileFunding/);
 });
 
 test("SlimeCash uses a separate PWA identity and a synchronized shell", () => {
   assert.equal(manifest.id, "/slimecash-app");
   assert.equal(manifest.start_url, "/cash/?src=slimecash-pwa");
   assert.equal(manifest.scope, "/cash/");
-  assert.match(html, /slimecash-build" content="\d+"/);
-  assert.match(sw, /slimecash-v\d+/);
+  assert.match(html, /slimecash-build" content="22"/);
+  assert.match(sw, /slimecash-v24/);
+  assert.match(sw, /\/slimewire-funding\.js\?v=8/);
+  assert.match(cash, /serviceWorker\.register\("\/cash\/sw\.js", \{ updateViaCache: "none" \}\)/);
+  assert.match(sw, /key\.startsWith\("slimecash-"\) && key !== CACHE/);
+  assert.doesNotMatch(sw, /keys\.filter\(\(key\) => key !== CACHE\)/);
   assert.match(cash, /dedicatedHost = "app\.slimewire\.org"/);
   assert.match(cash, /intent:\/\/\$\{dedicatedHost\}\/cash/);
 });
@@ -234,7 +250,7 @@ function fundingHarness() {
     createElement: () => ({ dataset: {}, addEventListener() {} }),
     head: { appendChild() {} }
   };
-  const window = { nacl, location, localStorage, history };
+  const window = { location, localStorage, history };
   const context = vm.createContext({
     window,
     location,
@@ -242,6 +258,7 @@ function fundingHarness() {
     history,
     document,
     navigator: { userAgent: "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/138.0.0.0 Mobile Safari/537.36", maxTouchPoints: 5 },
+    crypto: globalThis.crypto,
     URL,
     URLSearchParams,
     TextEncoder,
@@ -255,114 +272,53 @@ function fundingHarness() {
   return {
     api: window.SlimeWireFunding,
     values,
-    setMwa(value) { window.SlimeWireMwa = value; },
     get assignedUrl() { return assignedUrl; },
     navigate(value) { currentUrl = new URL(value, currentUrl); assignedUrl = ""; }
   };
 }
 
-function encryptedFundingResponse(payload, sharedSecret) {
-  const nonce = nacl.randomBytes(nacl.box.nonceLength);
-  const data = nacl.box.after(new TextEncoder().encode(JSON.stringify(payload)), nonce, sharedSecret);
-  return { nonce: bs58.encode(nonce), data: bs58.encode(data) };
-}
-
-test("Android Chrome funding authorizes and signs in one MWA activity", async () => {
+test("shared Solana Pay helper creates a unique exact-transfer URI", () => {
   const harness = fundingHarness();
-  let preparedFor = "";
-  let cachedAuthorization = null;
-  const mwa = {
-    async authorizeAndSign(options) {
-      cachedAuthorization = options.cachedAuthorization;
-      preparedFor = "7YttLkYvyNoCQMPdVduDpfpJ3KqVjhQKXvB6fYGhD55A";
-      const order = await options.prepareTransaction(preparedFor);
-      return {
-        publicKey: preparedFor,
-        order,
-        signedTransaction: "c2lnbmVk",
-        authorization: { authToken: "auth-1", walletUriBase: "phantom://mwa", publicKey: preparedFor }
-      };
-    }
-  };
-  // The helper's closure reads window.SlimeWireMwa.
-  harness.setMwa(mwa);
-  const result = await harness.api.authorizeAndSignMobile("phantom", {
-    prepareTransaction: async (publicKey) => ({ walletFundingAttemptId: "wf_1", walletIndex: 2, transaction: `tx:${publicKey}` })
-  });
-  assert.equal(result.signedTransaction, "c2lnbmVk");
-  assert.equal(preparedFor, result.publicKey);
-  assert.equal(cachedAuthorization, null);
+  const firstReference = harness.api.createSolanaPayReference();
+  const secondReference = harness.api.createSolanaPayReference();
+  assert.match(firstReference, /^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
+  assert.match(secondReference, /^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
+  assert.notEqual(firstReference, secondReference);
 
-  await harness.api.authorizeAndSignMobile("phantom", {
-    prepareTransaction: async () => ({ walletFundingAttemptId: "wf_2", walletIndex: 2, transaction: "tx2" })
-  });
-  assert.equal(cachedAuthorization.authToken, "auth-1");
-});
-
-test("mobile Phantom funding connects once, preserves the preset, and returns signed bytes", async () => {
-  const harness = fundingHarness();
-  const started = await harness.api.startMobileConnect("phantom", { amountSol: "0.25", walletIndex: 2 });
-  assert.equal(started, true);
-  const connectUrl = new URL(harness.assignedUrl);
-  assert.equal(connectUrl.protocol, "intent:");
-  assert.equal(connectUrl.hostname, "v1");
-  assert.equal(connectUrl.pathname, "/connect");
-  assert.match(connectUrl.hash, /scheme=phantom;package=app\.phantom/);
-  assert.doesNotMatch(connectUrl.hash, /browser_fallback_url|play\.google\.com/);
-
-  const pending = JSON.parse(harness.values.get("slimewireMobileFundingPending:v2"));
-  const phantomKeys = nacl.box.keyPair();
-  const connectSharedSecret = nacl.box.before(bs58.decode(pending.dappEncryptionPublicKey), phantomKeys.secretKey);
-  const connectResponse = encryptedFundingResponse({ public_key: "7YWHMfk9JZe0LMxQ9rpBbmTFxkAKtTofMMKM6nHjU2ZB", session: "opaque-session" }, connectSharedSecret);
-  const connectCallback = new URL(connectUrl.searchParams.get("redirect_link"));
-  connectCallback.searchParams.set("phantom_encryption_public_key", bs58.encode(phantomKeys.publicKey));
-  connectCallback.searchParams.set("nonce", connectResponse.nonce);
-  connectCallback.searchParams.set("data", connectResponse.data);
-  harness.navigate(connectCallback);
-
-  const connected = await harness.api.consumeMobileCallback();
-  assert.equal(connected.stage, "connected");
-  assert.equal(connected.amountSol, "0.25");
-  assert.equal(connected.walletIndex, 2);
-  assert.equal(harness.api.mobileSession("phantom").session, "opaque-session");
-
-  const unsignedBytes = nacl.randomBytes(180);
-  await harness.api.startMobileSign("phantom", {
-    transaction: Buffer.from(unsignedBytes).toString("base64"),
-    walletFundingAttemptId: "wallet-funding-test",
+  const recipient = "7YttLkYvyNoCQMPdVduDpfpJ3KqVjhQKXvB6fYGhD55A";
+  const uri = harness.api.solanaPayTransferUrl({
+    recipient,
     amountSol: "0.25",
-    walletIndex: 2
+    reference: firstReference,
+    label: "SlimeCash",
+    message: "Fund your SlimeCash wallet"
   });
-  const signUrl = new URL(harness.assignedUrl);
-  assert.equal(signUrl.protocol, "intent:");
-  assert.equal(signUrl.pathname, "/signTransaction");
-  assert.notEqual(signUrl.pathname, "/signAndSendTransaction");
-
-  const encryptedRequest = bs58.decode(signUrl.searchParams.get("payload"));
-  const requestNonce = bs58.decode(signUrl.searchParams.get("nonce"));
-  const requestPayload = nacl.box.open.after(encryptedRequest, requestNonce, connectSharedSecret);
-  assert.ok(requestPayload);
-  const parsedRequest = JSON.parse(new TextDecoder().decode(requestPayload));
-  assert.equal(parsedRequest.session, "opaque-session");
-  assert.deepEqual(bs58.decode(parsedRequest.transaction), unsignedBytes);
-
-  const signedBytes = nacl.randomBytes(220);
-  const signResponse = encryptedFundingResponse({ transaction: bs58.encode(signedBytes) }, connectSharedSecret);
-  const signCallback = new URL(signUrl.searchParams.get("redirect_link"));
-  signCallback.searchParams.set("nonce", signResponse.nonce);
-  signCallback.searchParams.set("data", signResponse.data);
-  harness.navigate(signCallback);
-  const signed = await harness.api.consumeMobileCallback();
-  assert.equal(signed.stage, "signed");
-  assert.equal(signed.walletFundingAttemptId, "wallet-funding-test");
-  assert.equal(signed.amountSol, "0.25");
-  assert.deepEqual(Buffer.from(signed.signedTransaction, "base64"), Buffer.from(signedBytes));
+  const parsed = new URL(uri);
+  assert.equal(parsed.protocol, "solana:");
+  assert.equal(parsed.pathname, recipient);
+  assert.equal(parsed.searchParams.get("amount"), "0.25");
+  assert.equal(parsed.searchParams.get("reference"), firstReference);
+  assert.equal(parsed.searchParams.get("label"), "SlimeCash");
+  assert.equal(parsed.searchParams.get("message"), "Fund your SlimeCash wallet");
+  assert.throws(
+    () => harness.api.solanaPayTransferUrl({ recipient, amountSol: "0.25", reference: "not-a-public-key" }),
+    /Reference must be a valid Solana public key/
+  );
+  assert.throws(
+    () => harness.api.solanaPayTransferUrl({ recipient, amountSol: "0.1234567891", reference: firstReference }),
+    /no more than 9 decimal places/
+  );
 });
 
-test("mobile app funding cannot fall back to a raw payment URI that loses the preset", () => {
-  assert.doesNotMatch(funding, /solanaPayLaunchUrl|startSolanaPay/);
-  assert.doesNotMatch(cash, /startSolanaPay|startCashSolanaPayFunding/);
-  assert.match(cash, /walletFundingAttemptId: order\.walletFundingAttemptId/);
-  assert.match(cash, /amountSol,/);
-  assert.match(cash, /signedTransaction: result\.signedTransaction/);
+test("mobile app funding verifies its unique reference instead of trusting a balance bump", () => {
+  assert.match(cash, /\/api\/web\/wallet-funding\/status/);
+  assert.match(cash, /reference/);
+  assert.match(cash, /amountSol/);
+  assert.match(cash, /&& !pendingSol\.reference/);
+  assert.doesNotMatch(cash, /startMobileConnect|startMobileSign|consumeMobileCallback|resumeCashMobileFunding/);
+  assert.match(server, /request\.method === "POST" && pathname === "\/api\/web\/wallet-funding\/status"/);
+  assert.match(server, /async function verifySolanaPayWalletFunding/);
+  assert.match(server, /walletFundingReferenceSignatures\(new PublicKey\(reference\)\)/);
+  assert.match(server, /cashRequestPaidByTransaction\(requestRow, tx\)/);
+  assert.match(server, /walletFundingReceipts\[reference\]/);
 });
