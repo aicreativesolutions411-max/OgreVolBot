@@ -156,7 +156,8 @@ test("backend session wallets verify the funding transaction before becoming aut
   assert.match(functionBody(serverSource, "buildWalletFundingTransaction"), /SystemProgram\.transfer/);
   assert.match(functionBody(serverSource, "createWebSessionWalletOrder"), /serialize\(\{ requireAllSignatures: false, verifySignatures: false \}\)/);
   assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /feePayer/);
-  assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /ComputeBudgetInstruction\.decodeInstructionType/);
+  assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /SetLoadedAccountsDataSizeLimit/);
+  assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /\[0, 1, 2, 3, 4\]\.includes\(type\)/);
   assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /maxPriorityFeeLamports/);
   assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /transfers\.length !== 1/);
   assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /SystemInstruction\.decodeTransfer/);

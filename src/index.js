@@ -144,7 +144,6 @@ import {
   devInfoSummaryFromResult
 } from "./lib/devInfo.js";
 import {
-  ComputeBudgetInstruction,
   ComputeBudgetProgram,
   Connection,
   Keypair,
@@ -15488,17 +15487,25 @@ async function handleMessage(message, userId) {
     }
   }
 
-  // A .sol / SNS name (e.g. moonpies.sol) → resolve to its owner wallet and run the 👛 wallet scan.
-  // Names aren't valid mints/coins so they'd otherwise fall through and do nothing.
-  const solDomainMatch = /^\$?([a-z0-9][a-z0-9._-]{0,58}\.sol)$/i.exec(text);
-  if (solDomainMatch && !text.startsWith("/")) {
+  // A bare .sol or .eth name is a wallet, not a ticker/coin. Resolve it before the cashtag path.
+  // Ethereum names open the fund map so posting "Moonpies.eth" works like /fundmap Moonpies.eth.
+  const walletDomainMatch = /^\$?([a-z0-9][a-z0-9._-]{0,62}\.(?:sol|eth))$/i.exec(text.trim());
+  if (walletDomainMatch && !text.trim().startsWith("/")) {
     if (!isPrivateChat(message.chat)) {
       const gbDom = await getGroupBotEntry(chatId).catch(() => null);
       if (gbDom && !groupBotFeatureOn(gbDom, "scan")) return; // Scan off in this group
     }
-    const resolvedDom = await resolveSolDomainToAddress(solDomainMatch[1]).catch(() => null);
-    if (resolvedDom) { await sendWalletScanCard(chatId, resolvedDom); return; }
-    if (isPrivateChat(message.chat)) { await sayHtml(chatId, `Couldn't resolve <b>${escapeTelegramHtml(solDomainMatch[1])}</b> — that .sol name may not be registered yet.`).catch(() => {}); return; }
+    const domain = walletDomainMatch[1].toLowerCase();
+    const resolvedDom = await resolveWalletDomainToAddress(domain).catch(() => null);
+    if (resolvedDom) {
+      if (ethDomainLike(domain)) {
+        await sendMapCard(chatId, resolvedDom, "funds", { forceWallet: true, chainHint: "ethereum", domain });
+      } else {
+        await sendWalletScanCard(chatId, resolvedDom);
+      }
+      return;
+    }
+    if (isPrivateChat(message.chat)) { await sayHtml(chatId, `Couldn't resolve <b>${escapeTelegramHtml(domain)}</b> — that wallet name may not be registered yet.`).catch(() => {}); return; }
     return;
   }
 
@@ -63819,107 +63826,133 @@ function buildWalletFundingTransaction(options) {
 }
 
 function verifySessionWalletFundingTransaction(tx, order) {
+  const reject = (code, message) => {
+    const error = new Error(message);
+    error.code = `WALLET_FUNDING_${code}`;
+    error.statusCode = 400;
+    throw error;
+  };
   const source = new PublicKey(order.sourcePublicKey);
   const destination = new PublicKey(order.destinationPublicKey || order.sessionWalletPublicKey);
   const amountLamports = BigInt(order.amountLamports || 0);
   if (!tx?.feePayer?.equals(source)) {
-    throw new Error("Wallet funding transaction has the wrong source wallet.");
+    reject("SOURCE", "Wallet funding transaction has the wrong source wallet.");
   }
-  if (!Array.isArray(tx.instructions) || tx.instructions.length < 1 || tx.instructions.length > 5) {
-    throw new Error("Wallet funding transaction was changed. Start again.");
+  // Wallets may append any of Solana's safe Compute Budget variants before signing. Validate those
+  // instructions by their on-chain byte layout instead of the older web3.js decoder, which does not
+  // recognize discriminator 4 (SetLoadedAccountsDataSizeLimit). The only value-moving instruction
+  // allowed remains one exact SystemProgram transfer to the chosen SlimeWire wallet.
+  if (!Array.isArray(tx.instructions) || tx.instructions.length < 1 || tx.instructions.length > 8) {
+    reject("INSTRUCTION_COUNT", "Wallet funding transaction was changed. Start again.");
   }
   if (tx.recentBlockhash !== order.blockhash) {
-    throw new Error("Wallet funding approval expired. Start again.");
+    reject("BLOCKHASH", "Wallet funding approval expired. Start again.");
   }
   const signer = tx.signatures?.find((item) => item.publicKey?.equals?.(source));
-  if (!signer?.signature) {
-    throw new Error("Wallet funding transaction is missing the connected wallet signature.");
+  if (!signer?.signature || !tx.verifySignatures()) {
+    reject("SIGNATURE", "Wallet funding transaction is missing a valid connected wallet signature.");
   }
+
   const transfers = [];
-  let computeUnitLimit = 200_000n;
+  const seenComputeTypes = new Set();
+  let computeUnitLimit = 1_400_000n;
   let computeUnitPrice = 0n;
   let legacyAdditionalFeeLamports = 0n;
-  let sawComputeUnitLimit = false;
-  let sawComputeUnitPrice = false;
   let sawLegacyRequestUnits = false;
-  let sawRequestHeapFrame = false;
   for (const instruction of tx.instructions) {
     if (instruction.programId.equals(SystemProgram.programId)) {
-      try {
-        transfers.push(SystemInstruction.decodeTransfer(instruction));
-      } catch {
-        throw new Error("Wallet funding transaction was changed. Start again.");
-      }
+      try { transfers.push(SystemInstruction.decodeTransfer(instruction)); }
+      catch { reject("SYSTEM_INSTRUCTION", "Wallet funding transaction was changed. Start again."); }
       continue;
     }
     if (!instruction.programId.equals(ComputeBudgetProgram.programId)) {
-      throw new Error("Wallet funding transaction was changed. Start again.");
+      reject("PROGRAM", "Wallet funding transaction was changed. Start again.");
     }
-    let type = "";
-    try { type = ComputeBudgetInstruction.decodeInstructionType(instruction); }
-    catch { throw new Error("Wallet funding transaction was changed. Start again."); }
-    if (type === "SetComputeUnitLimit" && !sawComputeUnitLimit && !sawLegacyRequestUnits) {
-      let units;
-      try { units = Number(ComputeBudgetInstruction.decodeSetComputeUnitLimit(instruction).units); }
-      catch { throw new Error("Wallet funding transaction was changed. Start again."); }
-      if (!Number.isInteger(units) || units < 1 || units > 1_400_000) {
-        throw new Error("Wallet funding priority fee settings are unsafe. Start again.");
+    if (instruction.keys?.length) {
+      reject("COMPUTE_ACCOUNTS", "Wallet funding transaction was changed. Start again.");
+    }
+    const data = Buffer.from(instruction.data || []);
+    const type = data[0];
+    const expectedLength = type === 0 || type === 3 ? 9 : 5;
+    if (![0, 1, 2, 3, 4].includes(type) || data.length !== expectedLength || seenComputeTypes.has(type)) {
+      reject("COMPUTE_LAYOUT", "Wallet funding transaction was changed. Start again.");
+    }
+    seenComputeTypes.add(type);
+
+    if (type === 0) { // Legacy RequestUnits(u32 units, u32 additional_fee)
+      if (seenComputeTypes.has(2) || seenComputeTypes.has(3)) {
+        reject("COMPUTE_DUPLICATE", "Wallet funding transaction was changed. Start again.");
       }
-      computeUnitLimit = BigInt(units);
-      sawComputeUnitLimit = true;
-      continue;
-    }
-    if (type === "SetComputeUnitPrice" && !sawComputeUnitPrice && !sawLegacyRequestUnits) {
-      let microLamports;
-      try { microLamports = BigInt(ComputeBudgetInstruction.decodeSetComputeUnitPrice(instruction).microLamports); }
-      catch { throw new Error("Wallet funding transaction was changed. Start again."); }
-      if (microLamports < 0n) throw new Error("Wallet funding priority fee settings are unsafe. Start again.");
-      computeUnitPrice = microLamports;
-      sawComputeUnitPrice = true;
-      continue;
-    }
-    if (type === "RequestUnits" && !sawLegacyRequestUnits && !sawComputeUnitLimit && !sawComputeUnitPrice) {
-      let request;
-      try { request = ComputeBudgetInstruction.decodeRequestUnits(instruction); }
-      catch { throw new Error("Wallet funding transaction was changed. Start again."); }
-      const units = Number(request.units);
-      const additionalFee = BigInt(request.additionalFee);
-      if (!Number.isInteger(units) || units < 1 || units > 1_400_000 || additionalFee < 0n) {
-        throw new Error("Wallet funding priority fee settings are unsafe. Start again.");
+      const units = data.readUInt32LE(1);
+      const additionalFee = BigInt(data.readUInt32LE(5));
+      if (units < 1 || units > 1_400_000) {
+        reject("COMPUTE_UNSAFE", "Wallet funding priority fee settings are unsafe. Start again.");
       }
       computeUnitLimit = BigInt(units);
       legacyAdditionalFeeLamports = additionalFee;
       sawLegacyRequestUnits = true;
       continue;
     }
-    if (type === "RequestHeapFrame" && !sawRequestHeapFrame) {
-      let bytes;
-      try { bytes = Number(ComputeBudgetInstruction.decodeRequestHeapFrame(instruction).bytes); }
-      catch { throw new Error("Wallet funding transaction was changed. Start again."); }
-      if (!Number.isInteger(bytes) || bytes < 1_024 || bytes > 262_144 || bytes % 1_024 !== 0) {
-        throw new Error("Wallet funding compute settings are unsafe. Start again.");
+    if ((type === 2 || type === 3) && sawLegacyRequestUnits) {
+      reject("COMPUTE_DUPLICATE", "Wallet funding transaction was changed. Start again.");
+    }
+    if (type === 1) { // RequestHeapFrame(u32 bytes)
+      const bytes = data.readUInt32LE(1);
+      if (bytes < 32_768 || bytes > 262_144 || bytes % 1_024 !== 0) {
+        reject("COMPUTE_UNSAFE", "Wallet funding compute settings are unsafe. Start again.");
       }
-      sawRequestHeapFrame = true;
       continue;
     }
-    throw new Error("Wallet funding transaction was changed. Start again.");
+    if (type === 2) { // SetComputeUnitLimit(u32 units)
+      const units = data.readUInt32LE(1);
+      if (units < 1 || units > 1_400_000) {
+        reject("COMPUTE_UNSAFE", "Wallet funding priority fee settings are unsafe. Start again.");
+      }
+      computeUnitLimit = BigInt(units);
+      continue;
+    }
+    if (type === 3) { // SetComputeUnitPrice(u64 micro-lamports)
+      computeUnitPrice = data.readBigUInt64LE(1);
+      continue;
+    }
+    // SetLoadedAccountsDataSizeLimit(u32 bytes) is safe and cannot move funds. Solana caps it at 64 MiB.
+    const loadedAccountsBytes = data.readUInt32LE(1);
+    if (loadedAccountsBytes < 1 || loadedAccountsBytes > 64 * 1024 * 1024) {
+      reject("COMPUTE_UNSAFE", "Wallet funding compute settings are unsafe. Start again.");
+    }
   }
+
   const maxPriorityFeeLamports = 1_000_000n;
   const priorityFeeLamports = sawLegacyRequestUnits
     ? legacyAdditionalFeeLamports
     : (computeUnitLimit * computeUnitPrice + 999_999n) / 1_000_000n;
   if (priorityFeeLamports > maxPriorityFeeLamports) {
-    throw new Error("Wallet funding priority fee settings are unsafe. Start again.");
+    reject("PRIORITY_FEE", "Wallet funding priority fee settings are unsafe. Start again.");
   }
   if (transfers.length !== 1) {
-    throw new Error("Wallet funding transaction was changed. Start again.");
+    reject("TRANSFER_COUNT", "Wallet funding transaction was changed. Start again.");
   }
   const transfer = transfers[0];
   if (!transfer.fromPubkey.equals(source)
       || !transfer.toPubkey.equals(destination)
       || BigInt(transfer.lamports) !== amountLamports) {
-    throw new Error("Wallet funding transaction does not match the approved amount.");
+    reject("TRANSFER", "Wallet funding transaction does not match the approved amount.");
   }
+}
+
+function walletFundingTransactionShape(tx) {
+  if (!Array.isArray(tx?.instructions)) return "unparsed";
+  return tx.instructions.map((instruction) => {
+    if (instruction.programId?.equals?.(SystemProgram.programId)) return "system";
+    if (instruction.programId?.equals?.(ComputeBudgetProgram.programId)) return `compute:${Buffer.from(instruction.data || [])[0] ?? "empty"}`;
+    return "other";
+  }).join(",").slice(0, 120);
+}
+
+function logWalletFundingFailure(pending, tx, error, stage) {
+  const provider = String(pending?.provider || "unknown").replace(/[^a-z0-9._ -]/gi, "").slice(0, 30) || "unknown";
+  const code = String(error?.code || error?.name || "UNKNOWN").replace(/[^A-Z0-9_]/gi, "_").slice(0, 48);
+  console.warn(`[wallet-funding] rejected kind=${pending?.orderKind || "unknown"} provider=${provider} stage=${stage} code=${code} shape=${walletFundingTransactionShape(tx)}`);
 }
 
 async function createWebSessionWalletOrder(userId, body = {}) {
@@ -64097,13 +64130,18 @@ async function executeWebWalletFunding(userId, body = {}) {
   }
 
   const pending = await takePendingSessionWalletOrder(userId, walletFundingAttemptId, "wallet-funding");
+  let tx;
+  let stage = "decode";
   try {
-    const tx = Transaction.from(Buffer.from(signedTransaction, "base64"));
+    tx = Transaction.from(Buffer.from(signedTransaction, "base64"));
+    stage = "verify";
     verifySessionWalletFundingTransaction(tx, pending);
+    stage = "broadcast";
     const signature = await rpcWithRetry("send managed wallet funding", () => connection.sendRawTransaction(tx.serialize(), {
       skipPreflight: false,
       maxRetries: 10
     }), CONFIG.rpcRetries, { priority: true });
+    stage = "confirm";
     await rpcWithRetry("confirm managed wallet funding", () => connection.confirmTransaction({
       signature,
       blockhash: pending.blockhash,
@@ -64145,6 +64183,7 @@ async function executeWebWalletFunding(userId, body = {}) {
       message: `Wallet funded with ${lamportsToSol(pending.amountLamports)} SOL.`
     };
   } catch (error) {
+    logWalletFundingFailure(pending, tx, error, stage);
     await completePendingSessionWalletOrder(pending, {
       status: "failed",
       error: friendlyError(error),
@@ -64170,13 +64209,17 @@ async function executeWebSessionWalletFunding(userId, body = {}) {
 
   const pending = await takePendingSessionWalletOrder(userId, sessionWalletAttemptId);
   let tx;
+  let stage = "decode";
   try {
     tx = Transaction.from(Buffer.from(signedTransaction, "base64"));
+    stage = "verify";
     verifySessionWalletFundingTransaction(tx, pending);
+    stage = "broadcast";
     const signature = await rpcWithRetry("send session wallet funding", () => connection.sendRawTransaction(tx.serialize(), {
       skipPreflight: false,
       maxRetries: 10
     }), CONFIG.rpcRetries, { priority: true });
+    stage = "confirm";
     await rpcWithRetry("confirm session wallet funding", () => connection.confirmTransaction({
       signature,
       blockhash: pending.blockhash,
@@ -64215,6 +64258,7 @@ async function executeWebSessionWalletFunding(userId, body = {}) {
       message: `Session wallet funded with ${lamportsToSol(pending.amountLamports)} SOL. It is now available for presets, Ogre A.I., TP/SL, timer exits, and sells.`
     };
   } catch (error) {
+    logWalletFundingFailure(pending, tx, error, stage);
     await completePendingSessionWalletOrder(pending, {
       status: "failed",
       error: friendlyError(error),

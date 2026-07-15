@@ -105,7 +105,8 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
   assert.match(server, /destinationPublicKey \|\| order\.sessionWalletPublicKey/);
   assert.match(server, /volumeBot: Boolean\(wallet\.volumeBot \|\| wallet\.ephemeral\)/);
   assert.match(js, /\.filter\(\(wallet\) => !wallet\.volumeBot\)/);
-  assert.match(server, /ComputeBudgetInstruction\.decodeInstructionType/);
+  assert.match(server, /SetLoadedAccountsDataSizeLimit/);
+  assert.match(server, /\[0, 1, 2, 3, 4\]\.includes\(type\)/);
   assert.match(server, /priorityFeeLamports > maxPriorityFeeLamports/);
   assert.match(server, /transfers\.length !== 1/);
   assert.match(server, /BigInt\(transfer\.lamports\) !== amountLamports/);

@@ -36,6 +36,8 @@ test("web and Telegram fund maps route .eth names through the shared resolver", 
   assert.match(server, /resolveWalletDomainToAddress\(rawTarget\)/);
   assert.match(server, /ethereumWallet[\s\S]{0,500}buildEthereumWalletFundMap\(mtarget/);
   assert.match(server, /chainHint: ethereum \? "ethereum" : ""/);
+  assert.match(server, /const walletDomainMatch =[^\n]+\(\?:sol\|eth\)/);
+  assert.match(server, /resolveWalletDomainToAddress\(domain\)[\s\S]{0,500}ethDomainLike\(domain\)[\s\S]{0,300}sendMapCard\(chatId, resolvedDom, "funds"/);
   assert.match(server, /callback_data: `mape:\$\{map\.wallet\}:funds`/);
   assert.match(server, /\(\?:sol\|eth\)/);
   assert.match(server, /callback_data: `mapw:\$\{address\}:funds`/);

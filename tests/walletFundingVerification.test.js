@@ -8,7 +8,8 @@ import {
   PublicKey,
   SystemInstruction,
   SystemProgram,
-  Transaction
+  Transaction,
+  TransactionInstruction
 } from "@solana/web3.js";
 
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
@@ -61,6 +62,18 @@ function sign(transaction, source) {
   return transaction;
 }
 
+function rawComputeBudgetInstruction(type, value = 0) {
+  const data = Buffer.alloc(type === 3 ? 9 : 5);
+  data.writeUInt8(type, 0);
+  if (type === 3) data.writeBigUInt64LE(BigInt(value), 1);
+  else data.writeUInt32LE(Number(value), 1);
+  return new TransactionInstruction({
+    programId: ComputeBudgetProgram.programId,
+    keys: [],
+    data
+  });
+}
+
 test("wallet funding orders predeclare safe fees so Phantom and Solflare can sign the same message", () => {
   const fixture = fundingFixture();
   const transaction = buildWalletFunding({
@@ -88,7 +101,8 @@ test("wallet funding accepts capped wallet-added compute budget instructions", (
       lamports: fixture.amountLamports
     })
   );
-  assert.doesNotThrow(() => verifyWalletFunding(sign(fixture.transaction, fixture.source), fixture.order));
+  const walletReturned = Transaction.from(sign(fixture.transaction, fixture.source).serialize());
+  assert.doesNotThrow(() => verifyWalletFunding(walletReturned, fixture.order));
 });
 
 test("wallet funding accepts Phantom's capped legacy combined compute budget instruction", () => {
@@ -102,6 +116,38 @@ test("wallet funding accepts Phantom's capped legacy combined compute budget ins
     })
   );
   assert.doesNotThrow(() => verifyWalletFunding(sign(fixture.transaction, fixture.source), fixture.order));
+});
+
+test("wallet funding accepts the current Solana loaded-account-data compute instruction", () => {
+  const fixture = fundingFixture();
+  fixture.transaction.add(
+    rawComputeBudgetInstruction(4, 64 * 1024 * 1024),
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 5_000 }),
+    SystemProgram.transfer({
+      fromPubkey: fixture.source.publicKey,
+      toPubkey: fixture.destination,
+      lamports: fixture.amountLamports
+    })
+  );
+  const walletReturned = Transaction.from(sign(fixture.transaction, fixture.source).serialize());
+  assert.doesNotThrow(() => verifyWalletFunding(walletReturned, fixture.order));
+});
+
+test("wallet funding rejects unknown compute layouts with a diagnostic code", () => {
+  const fixture = fundingFixture();
+  fixture.transaction.add(
+    rawComputeBudgetInstruction(5, 1),
+    SystemProgram.transfer({
+      fromPubkey: fixture.source.publicKey,
+      toPubkey: fixture.destination,
+      lamports: fixture.amountLamports
+    })
+  );
+  assert.throws(
+    () => verifyWalletFunding(sign(fixture.transaction, fixture.source), fixture.order),
+    (error) => error?.code === "WALLET_FUNDING_COMPUTE_LAYOUT" && /changed/i.test(error.message)
+  );
 });
 
 test("wallet funding still rejects an added transfer", () => {
