@@ -638,6 +638,18 @@
   // (wsrv edge-proxy → raw URL → multiple IPFS gateways → our backend resolver) and walk it on
   // each onerror, so a coin's pfp "always finds a way to pull" instead of falling to the logo.
   function imgWsrv(u,s){s=s||64;return"https://wsrv.nl/?url="+encodeURIComponent(String(u).replace(/^https?:\/\//,""))+"&w="+s+"&h="+s+"&fit=cover&output=webp&q=80";}
+  // Deterministic per-coin avatar (instant, zero network, never 404s): a unique color pair
+  // seeded by the address + the ticker's initials. Long-tail coins genuinely publish NO
+  // artwork anywhere (verified across DexScreener/Gecko/Blockscout), so instead of five
+  // repeating mascots, every coin gets its own professional letter tile — real art still
+  // replaces it the moment any source has it.
+  function letterAvatar(key,sym){
+    const s=String(key||sym||"?");let h=0;for(let i=0;i<s.length;i++)h=(h*33+s.charCodeAt(i))>>>0;
+    const hue=h%360,hue2=(hue+40+(h>>4)%80)%360;
+    const t=String(sym||"?").replace(/^\$+/,"").replace(/[^A-Za-z0-9]/g,"").slice(0,3).toUpperCase()||"?";
+    const svg='<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl('+hue+',60%,36%)"/><stop offset="1" stop-color="hsl('+hue2+',65%,20%)"/></linearGradient></defs><rect width="64" height="64" fill="url(#g)"/><text x="32" y="'+(t.length>2?40:42)+'" font-family="Arial,Helvetica,sans-serif" font-size="'+(t.length>2?19:24)+'" font-weight="700" fill="rgba(255,255,255,.93)" text-anchor="middle">'+t+'</text></svg>';
+    return 'data:image/svg+xml,'+encodeURIComponent(svg);
+  }
   function imgCascade(raw,mint,size){
     raw=String(raw||"").trim();const out=[],s=size||64;
     if(raw&&raw.charAt(0)!=="/"&&raw.indexOf("slimewire")<0&&!raw.startsWith("data:")){
@@ -662,7 +674,7 @@
     if(img.dataset.shell)img.remove();              // rh shell has a mascot background — reveal it
     else if(img.dataset.ph)img.src=img.dataset.ph;  // generic: settle on the local logo (never 404s)
   }
-  function avImg(r,cls){const raw=av(r),mint=String((r&&(r.tokenMint||r.mint||r.address))||"");const ph="/assets/slimewire/png/slimewire-mark.png?v=logo4",srcs=imgCascade(raw,mint,64),first=srcs[0]||ph;return'<img class="'+cls+'" loading="eager" decoding="async" src="'+esc(first)+'" data-raw="'+esc(raw||"")+'" data-avatar-mint="'+esc(mint)+'" data-srcs="'+esc(srcs.join("|"))+'" data-si="0" data-ph="'+esc(ph)+'" onerror="GG.imgNext(this)">';}
+  function avImg(r,cls){const raw=av(r),mint=String((r&&(r.tokenMint||r.mint||r.address))||"");const ph=letterAvatar(mint||raw||((r&&r.symbol)||"?"),(r&&r.symbol)||"?"),srcs=imgCascade(raw,mint,64),first=srcs[0]||ph;return'<img class="'+cls+'" loading="eager" decoding="async" src="'+esc(first)+'" data-raw="'+esc(raw||"")+'" data-avatar-mint="'+esc(mint)+'" data-srcs="'+esc(srcs.join("|"))+'" data-si="0" data-ph="'+esc(ph)+'" onerror="GG.imgNext(this)">';}
   function toast(msg,err){const t=$("#toast");t.textContent=msg;t.className="toast show"+(err?" err":"");clearTimeout(t._t);t._t=setTimeout(()=>t.className="toast",3400);}
   function copy(text){navigator.clipboard?.writeText(text).then(()=>toast("Copied "+short(text))).catch(()=>{});}
   async function getJson(url,opts){try{const r=await fetch(url,opts);let d=null;try{d=await r.json();}catch(e){}return{ok:r.ok,status:r.status,d};}catch(e){return{ok:false,status:0,d:null};}}
@@ -1454,7 +1466,7 @@
     set(".c-pair .meta",pairMetaInner(r));
     // pfp arrived late (feed had none, DexScreener filled it) → swap the placeholder src in, no full reload
     const img=tr.querySelector(".c-pair img.av");
-    if(img&&r.imageUrl&&img.getAttribute("data-raw")!==r.imageUrl&&/slimewire-mark/.test(img.getAttribute("src")||"")){
+    if(img&&r.imageUrl&&img.getAttribute("data-raw")!==r.imageUrl&&/slimewire-mark|^data:image\/svg/.test(img.getAttribute("src")||"")){
       img.src=coinImgSrc(r.imageUrl)||r.imageUrl;img.setAttribute("data-raw",r.imageUrl);
     }
   }
@@ -1784,7 +1796,7 @@
     const address=String((r&&r.address)||"");
     const ck=imgKey(r)||String(address||"").toLowerCase();let image=String((r&&(r.imageUrl||r.iconUrl))||"");if(image&&ck)IMG_CACHE[ck]=image;if(!image&&ck)image=IMG_CACHE[ck]||"";
     const mint=/^0x[0-9a-fA-F]{40}$/.test(address)?address:"";
-    const srcs=imgCascade(image,mint,size>40?96:64),mascot=rhFallbackAvatarSrc(address||((r&&r.symbol)||"?"));
+    const srcs=imgCascade(image,mint,size>40?96:64),mascot=rhFallbackAvatarSrc(address||((r&&r.symbol)||"?"),(r&&r.symbol)||"?");
     if(srcs.length){return '<span class="rh-avatar-shell" style="display:block;width:'+size+'px;height:'+size+'px;border-radius:'+radius+';overflow:hidden;flex:0 0 auto;background:#101810 url(\''+esc(mascot)+'\') center/cover no-repeat"><img src="'+esc(srcs[0])+'" data-srcs="'+esc(srcs.join("|"))+'" data-si="0" data-shell="1" data-ph="'+esc(mascot)+'" style="display:block;width:100%;height:100%;object-fit:cover" onerror="GG.imgNext(this)"></span>';}
     return rhAvTileHtml((r&&r.symbol)||"?",size,radius,address);
   }
@@ -1797,12 +1809,11 @@
     if(attempt<2){img.dataset.rhAttempt="2";const o=img.dataset.rhOrig||"";if(o){setTimeout(()=>{if(img&&img.isConnected)img.src=coinImgSrc(o)||o;},1500);return;}}
     img.remove();
   }
-  function rhFallbackAvatarSrc(key){
-    const s=String(key||"token");let h=0;for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;
-    return '/assets/slimewire/png/token-mascots/token-mascot-'+((h%5)+1)+'.png';
+  function rhFallbackAvatarSrc(key,sym){
+    return letterAvatar(key,sym||key);
   }
   function rhAvTileHtml(sym,size,radius,key){
-    return '<span class="rh-avatar-shell" aria-hidden="true" style="display:block;width:'+size+'px;height:'+size+'px;border-radius:'+radius+';flex:0 0 auto;background:#101810 url(\''+rhFallbackAvatarSrc(key||sym)+'\') center/cover no-repeat"></span>';
+    return '<span class="rh-avatar-shell" aria-hidden="true" style="display:block;width:'+size+'px;height:'+size+'px;border-radius:'+radius+';flex:0 0 auto;background:#101810 url(\''+rhFallbackAvatarSrc(key||sym,sym)+'\') center/cover no-repeat"></span>';
   }
   async function rhEnrichRows(rows){
     try{

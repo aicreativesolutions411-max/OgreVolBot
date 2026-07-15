@@ -525,7 +525,11 @@ test("RH rows: quick-buy stays in frame on mobile + fresh coins always get MC (i
     assert.match(src, /function rhAvTileHtml/);
     assert.match(src, /function rhAvatarFail/);
     assert.match(src, /\/api\/web\/token-image\?mint=/);
-    assert.match(src, /token-mascots\/token-mascot-/);
+    // Fallback avatars are now deterministic per-coin letter tiles (instant data-URI SVG,
+    // unique per address) instead of five repeating mascot PNGs — long-tail RH coins publish
+    // no artwork anywhere, so every coin still gets a distinct instant pfp.
+    assert.match(src, /function letterAvatar/);
+    assert.match(src, /data:image\/svg\+xml/);
     assert.match(src, /rhAvatar\(r,30\)/);
     assert.match(src, /function avatarSourceCandidates/);
     assert.match(src, /gateway\.pinata\.cloud\/ipfs/);
