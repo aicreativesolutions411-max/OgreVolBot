@@ -169,6 +169,19 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(server, /rhScanIdentityMapLoad\(\)/);
   assert.match(server, /scheduleTokenAvatarLookup\(row\.address, row\)/);
   assert.match(server, /!row\.imageUrl && row\.iconUrl/);
+  // Regression: visible RH rows resolve exact-address metadata client-side while the server proxy
+  // prioritizes the same request and waits long enough for contractURI/IPFS artwork.
+  assert.match(js, /api\.geckoterminal\.com\/api\/v2\/networks\/robinhood\/tokens\/\$\{encodeURIComponent\(key\)\}\/info/);
+  assert.match(js, /String\(metadata\.address \|\| ""\)\.toLowerCase\(\) !== key/);
+  assert.match(js, /state\.rhCoinImageMisses/);
+  assert.match(js, /rememberCoinImage\(key, working\)/);
+  assert.match(server, /TOKEN_AVATAR_PRIORITY_CONCURRENCY = 8/);
+  assert.match(server, /waitForTokenAvatarRecord\(mint, avatar, 5_500\)/);
+  assert.match(server, /getRhOnchainLaunchMetadata\(address\)[\s\S]{0,260}robinhood-contract-metadata/);
+  assert.match(server, /getRhOpenSeaArtwork\(address, 3_200\)/);
+  assert.match(server, /exactPrefix = `https:\/\/i2c\.seadn\.io\/robinhood\/\$\{key\}\//);
+  assert.match(server, /while \(bytes < 320_000\)/);
+  assert.match(server, /String\(row\?\.baseToken\?\.address \|\| ""\)\.toLowerCase\(\) === key/);
   assert.match(js, /const detailPromise = request\(path\)/);
   assert.ok(js.indexOf("const searchResult = await request") < js.indexOf("const detailResult = await detailPromise"));
 });

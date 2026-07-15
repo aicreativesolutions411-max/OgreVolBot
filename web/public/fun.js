@@ -56,6 +56,8 @@
     resolvedCoinImages: new Map(),
     coinImageRetryTimers: new Map(),
     coinImageRetryAttempts: new Map(),
+    rhCoinImageMisses: new Map(),
+    rhCoinImageInFlight: new Map(),
     quickBuyKey: "",
     quickAmount: "0.1",
     quickPanel: "trade",
@@ -130,7 +132,7 @@
     image.dataset.coinImageResolving = "1";
     try {
       // Versioned URL evicts any old CDN/browser response that cached a normal pending lookup.
-      const result = await request(`/api/web/token-avatar?mint=${encodeURIComponent(key)}&v=2`, { timeout: 5_000, noRetry: true });
+      const result = await request(`/api/web/token-avatar?mint=${encodeURIComponent(key)}&v=3`, { timeout: 7_500, noRetry: true });
       const avatar = result.data?.avatar;
       return avatar?.state === "ready" ? normalizeImageUrl(avatar.avatarUrl) : "";
     } finally { delete image.dataset.coinImageResolving; }
@@ -396,9 +398,54 @@
     scheduleFeedRefresh();
   }
   async function hydrateMissingCoinArt(version) {
-    // Feed endpoints already queue metadata hydration. Avoid the former 12 expensive token-search calls;
-    // the next silent refresh merges the cache while each image independently uses its fast proxy fallback.
     state.imageHydrateVersion = version;
+    // GeckoTerminal explicitly permits browser reads (CORS *) and indexes exact Robinhood contract
+    // metadata before several server-side feeds. Resolve only the rows actually painted on this device,
+    // with a bounded client-IP budget, then share the answer across every matching image in the page.
+    const visibleKeys = new Set($$('[data-token-image][data-chain="rh"]').map((image) => image.dataset.coinImageKey).filter(Boolean));
+    const rows = state.rows.filter((row) => {
+      const key = coinKey(row).toLowerCase();
+      const missedAt = state.rhCoinImageMisses.get(key) || 0;
+      return row.chain === "robinhood" && visibleKeys.has(key) && !directCoinImage(row)
+        && !state.resolvedCoinImages.has(key) && Date.now() - missedAt > 5 * 60_000;
+    }).slice(0, 12);
+    let cursor = 0;
+    const resolveOne = async (row) => {
+      const key = coinKey(row).toLowerCase();
+      if (!key || state.rhCoinImageInFlight.has(key)) return state.rhCoinImageInFlight.get(key) || "";
+      const task = (async () => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 4_000);
+        try {
+          const response = await fetch(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${encodeURIComponent(key)}/info`, {
+            signal: controller.signal,
+            headers: { "Accept": "application/json" }
+          });
+          if (!response.ok) return "";
+          const payload = await response.json();
+          const metadata = payload?.data?.attributes || {};
+          if (String(metadata.address || "").toLowerCase() !== key) return "";
+          const candidate = normalizeImageUrl(metadata.image_url || metadata.imageUrl || metadata.image?.large || metadata.image?.small || "");
+          const working = await probeCoinImage(candidate);
+          if (!working) return "";
+          row.imageUrl = working;
+          rememberCoinImage(key, working);
+          return working;
+        } catch { return ""; }
+        finally { clearTimeout(timer); }
+      })().finally(() => state.rhCoinImageInFlight.delete(key));
+      state.rhCoinImageInFlight.set(key, task);
+      const resolved = await task;
+      if (!resolved) state.rhCoinImageMisses.set(key, Date.now());
+      return resolved;
+    };
+    const workers = Array.from({ length: Math.min(4, rows.length) }, async () => {
+      while (cursor < rows.length && state.imageHydrateVersion === version) {
+        const row = rows[cursor++];
+        await resolveOne(row);
+      }
+    });
+    await Promise.all(workers);
   }
   function hydrateSelectedFromFeed() {
     if (state.view !== "coin" || !state.selected) return;

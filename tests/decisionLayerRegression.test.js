@@ -114,9 +114,13 @@ test("Live Pair avatars use stable cached src, lazy image loading, and broken-ur
   assert.match(rowAvatarSlice, /width="42" height="42"/);
   assert.match(rowAvatarSlice, /onerror="window\.__slimeAvatarLoadFailed/);
   assert.match(serverSource, /const TOKEN_AVATAR_LOOKUP_CONCURRENCY = 5/);
+  assert.match(serverSource, /const TOKEN_AVATAR_PRIORITY_CONCURRENCY = 8/);
   assert.match(serverSource, /const tokenAvatarLookupQueue = new Map\(\)/);
   assert.match(functionBody("scheduleTokenAvatarLookup", serverSource), /tokenAvatarLookupQueue\.set/);
-  assert.match(functionBody("pumpTokenAvatarLookupQueue", serverSource), /TOKEN_AVATAR_LOOKUP_CONCURRENCY - tokenAvatarLookupInFlight\.size/);
+  const avatarPump = functionBody("pumpTokenAvatarLookupQueue", serverSource);
+  assert.match(avatarPump, /Boolean\(right\[1\]\?\.priority\)/);
+  assert.match(avatarPump, /queued\?\.priority \? TOKEN_AVATAR_PRIORITY_CONCURRENCY : TOKEN_AVATAR_LOOKUP_CONCURRENCY/);
+  assert.match(avatarPump, /tokenAvatarLookupInFlight\.size >= concurrencyLimit/);
   assert.match(serverSource, /TOKEN_AVATAR_SUCCESS_TTL_MS = 30 \* 24 \* 60 \* 60 \* 1000/);
   assert.match(functionBody("sendWebTokenAvatar", serverSource), /stale-while-revalidate=604800/);
   assertNoHotExternalCalls(functionBody("tokenAvatarForMint", serverSource), "token avatar lookup request");

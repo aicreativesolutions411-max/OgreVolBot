@@ -3813,11 +3813,13 @@ const TOKEN_IMAGE_RESPONSE_CACHE_MAX = 160;
 const tokenAvatarCache = new Map();
 const tokenAvatarLookupInFlight = new Map();
 const tokenAvatarLookupQueue = new Map();
+const tokenAvatarPriorityInFlight = new Set();
 const TOKEN_AVATAR_SUCCESS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 // New launches commonly publish metadata seconds after the pair. Retry misses after one minute instead
 // of preserving that normal indexing delay for twelve hours; successful artwork remains sticky for 30 days.
 const TOKEN_AVATAR_FAIL_TTL_MS = 60 * 1000;
 const TOKEN_AVATAR_LOOKUP_CONCURRENCY = 5;
+const TOKEN_AVATAR_PRIORITY_CONCURRENCY = 8;
 const slimeShieldCache = new Map();
 const SLIMESHIELD_CACHE_TTL_MS = 45 * 1000;
 const replayBeforeBuyCache = new Map();
@@ -11415,12 +11417,16 @@ function tokenAvatarNeedsLookup(mint = "") {
 }
 
 function pumpTokenAvatarLookupQueue() {
-  if (tokenAvatarLookupInFlight.size >= TOKEN_AVATAR_LOOKUP_CONCURRENCY) return;
-  const slots = TOKEN_AVATAR_LOOKUP_CONCURRENCY - tokenAvatarLookupInFlight.size;
-  const pending = [...tokenAvatarLookupQueue.entries()].slice(0, slots);
+  if (!tokenAvatarLookupQueue.size) return;
+  const pending = [...tokenAvatarLookupQueue.entries()]
+    .sort((left, right) => Number(Boolean(right[1]?.priority)) - Number(Boolean(left[1]?.priority))
+      || Number(left[1]?.queuedAt || 0) - Number(right[1]?.queuedAt || 0));
   for (const [key, queued] of pending) {
+    const concurrencyLimit = queued?.priority ? TOKEN_AVATAR_PRIORITY_CONCURRENCY : TOKEN_AVATAR_LOOKUP_CONCURRENCY;
+    if (tokenAvatarLookupInFlight.size >= concurrencyLimit) continue;
     tokenAvatarLookupQueue.delete(key);
     if (!queued?.mint || tokenAvatarLookupInFlight.has(key) || !tokenAvatarNeedsLookup(queued.mint)) continue;
+    if (queued.priority) tokenAvatarPriorityInFlight.add(key);
     const promise = resolveTokenAvatarRecord(queued.mint, queued.row || {})
       .then((record) => rememberTokenAvatarRecord(record))
       .catch((error) => rememberTokenAvatarRecord({
@@ -11432,16 +11438,24 @@ function pumpTokenAvatarLookupQueue() {
       }))
       .finally(() => {
         tokenAvatarLookupInFlight.delete(key);
+        tokenAvatarPriorityInFlight.delete(key);
         pumpTokenAvatarLookupQueue();
       });
     tokenAvatarLookupInFlight.set(key, promise);
   }
 }
 
-function scheduleTokenAvatarLookup(mint = "", row = {}) {
+function scheduleTokenAvatarLookup(mint = "", row = {}, options = {}) {
   const key = String(mint || "").trim().toLowerCase();
-  if (!key || tokenAvatarLookupInFlight.has(key) || !tokenAvatarNeedsLookup(mint)) return;
-  tokenAvatarLookupQueue.set(key, { mint, row, queuedAt: Date.now() });
+  if (!key || !tokenAvatarNeedsLookup(mint)) return;
+  if (tokenAvatarLookupInFlight.has(key)) return;
+  const previous = tokenAvatarLookupQueue.get(key);
+  tokenAvatarLookupQueue.set(key, {
+    mint,
+    row: Object.keys(row || {}).length ? row : previous?.row || {},
+    queuedAt: previous?.queuedAt || Date.now(),
+    priority: Boolean(options.priority || previous?.priority)
+  });
   if (tokenAvatarLookupQueue.size > 250) {
     const oldest = [...tokenAvatarLookupQueue.entries()]
       .sort((a, b) => Number(a[1]?.queuedAt || 0) - Number(b[1]?.queuedAt || 0))
@@ -11449,6 +11463,64 @@ function scheduleTokenAvatarLookup(mint = "", row = {}) {
     for (const [oldKey] of oldest) tokenAvatarLookupQueue.delete(oldKey);
   }
   pumpTokenAvatarLookupQueue();
+}
+
+function rhTokenAvatarCandidate(address = "", fields = {}) {
+  const avatarUrl = normalizeTokenAvatarUrl(fields.avatarUrl || "");
+  if (!avatarUrl) return null;
+  return {
+    mint: address,
+    avatarUrl,
+    source: String(fields.source || "robinhood-metadata"),
+    state: "ready",
+    twitterUrl: firstString(fields.twitterUrl),
+    telegramUrl: firstString(fields.telegramUrl),
+    websiteUrl: firstString(fields.websiteUrl)
+  };
+}
+
+function rhExactDexAvatarCandidate(address = "", result = null, source = "dex") {
+  const key = String(address || "").trim().toLowerCase();
+  const rows = Array.isArray(result) ? result : (Array.isArray(result?.pairs) ? result.pairs : []);
+  const pair = rows
+    .filter((row) => !row?.chainId || String(row.chainId).toLowerCase() === "robinhood")
+    // Dex pair.info describes the base token. Never attach it to a requested quote-side address.
+    .filter((row) => String(row?.baseToken?.address || "").toLowerCase() === key)
+    .sort((left, right) => Number(right?.liquidity?.usd || 0) - Number(left?.liquidity?.usd || 0))[0] || null;
+  if (!pair) return null;
+  const socials = Array.isArray(pair?.info?.socials) ? pair.info.socials : [];
+  const websites = Array.isArray(pair?.info?.websites) ? pair.info.websites : [];
+  const twitterUrl = firstString((socials.find((item) => /twitter|x/i.test(item?.type || item?.label || "")) || {}).url);
+  const telegramUrl = firstString((socials.find((item) => /telegram|tg/i.test(item?.type || item?.label || "")) || {}).url);
+  const twitterHandle = twitterUrl.replace(/^https?:\/\/(?:www\.)?(?:x|twitter)\.com\//i, "").replace(/[/?].*$/, "").trim();
+  return rhTokenAvatarCandidate(address, {
+    avatarUrl: firstString(pair?.info?.imageUrl, twitterHandle ? `https://unavatar.io/x/${encodeURIComponent(twitterHandle)}?fallback=false` : ""),
+    source,
+    twitterUrl,
+    telegramUrl,
+    websiteUrl: firstString(websites[0]?.url)
+  });
+}
+
+async function firstReadyRhTokenAvatar(tasks = []) {
+  const pending = (Array.isArray(tasks) ? tasks : []).filter(Boolean);
+  if (!pending.length) return null;
+  return new Promise((resolve) => {
+    let open = pending.length;
+    let finished = false;
+    const settle = (candidate) => {
+      if (!finished && candidate?.avatarUrl) {
+        finished = true;
+        resolve(candidate);
+      }
+      open -= 1;
+      if (!finished && open <= 0) {
+        finished = true;
+        resolve(null);
+      }
+    };
+    for (const task of pending) Promise.resolve(task).then(settle, () => settle(null));
+  });
 }
 
 async function resolveTokenAvatarRecord(mint = "", row = {}) {
@@ -11481,51 +11553,67 @@ async function resolveTokenAvatarRecord(mint = "", row = {}) {
       telegramUrl: firstString(rememberedIdentity?.telegramUrl),
       websiteUrl: firstString(rememberedIdentity?.websiteUrl)
     });
-    const [dexV1Result, dexResult, noxaMeta, geckoResult, blockscoutMeta, bankrArtwork, launchMetadata] = await Promise.all([
-      fetchJson(`https://api.dexscreener.com/tokens/v1/robinhood/${address}`, { headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" }, timeoutMs: 1_600 }).catch(() => null),
-      fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${address}`, { timeoutMs: 1_500 }).catch(() => null),
-      getNoxaRhTokenMetadata(address, { timeoutMs: 1_400 }).catch(() => ({})),
-      fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${address}/info`, { timeoutMs: 1_400 }).catch(() => null),
-      fetchJson(`https://robinhoodchain.blockscout.com/api/v2/tokens/${address}`, { timeoutMs: 1_400 }).catch(() => null),
-      rhBankrArtworkMap().catch(() => new Map()),
-      getRhOnchainLaunchMetadata(address).catch(() => ({}))
+    // Resolve the first exact-address source that actually publishes artwork. The former Promise.all
+    // waited for every slow provider (including an on-chain creation fallback) before returning a
+    // Gecko/Dex image that was already ready, so the 900ms image proxy always emitted a temporary 404.
+    const fastAvatar = await firstReadyRhTokenAvatar([
+      fetchJson(`https://api.dexscreener.com/tokens/v1/robinhood/${address}`, {
+        headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" }, timeoutMs: 2_400
+      }).then((result) => rhExactDexAvatarCandidate(address, result, "dex-v1")).catch(() => null),
+      getRhOnchainLaunchMetadata(address).then((metadata) => rhTokenAvatarCandidate(address, {
+        avatarUrl: metadata.imageUrl,
+        source: "robinhood-contract-metadata",
+        twitterUrl: metadata.twitterUrl,
+        telegramUrl: metadata.telegramUrl,
+        websiteUrl: metadata.websiteUrl
+      })).catch(() => null),
+      getRhOpenSeaArtwork(address, 3_200)
+        .then((imageUrl) => rhTokenAvatarCandidate(address, { avatarUrl: imageUrl, source: "opensea-address-index" }))
+        .catch(() => null)
     ]);
-    const dexPairs = (dexResult?.pairs || []).filter((pair) => String(pair?.chainId || "").toLowerCase() === "robinhood");
-    const dexPair = dexPairs.sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0))[0] || null;
-    const dexV1Pair = (Array.isArray(dexV1Result) ? dexV1Result : [])
-      .filter((pair) => String(pair?.baseToken?.address || "").toLowerCase() === address.toLowerCase())
-      .sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0))[0] || null;
-    const gecko = geckoResult?.data?.attributes || {};
-    const bankr = bankrArtwork.get(address.toLowerCase()) || {};
-    const v1Socials = Array.isArray(dexV1Pair?.info?.socials) ? dexV1Pair.info.socials : [];
-    const twitterHandle = String((v1Socials.find((s) => /twitter|x/i.test(s?.type || s?.label || "")) || {}).url || "")
-      .replace(/^https?:\/\/(?:www\.)?(?:x|twitter)\.com\//i, "").replace(/[/?].*$/, "").trim();
-    const avatarUrl = normalizeTokenAvatarUrl(firstString(
-      dexV1Pair?.info?.imageUrl,
-      noxaMeta.imageUrl,
-      dexPair?.info?.imageUrl,
-      bankr.imageUrl,
-      launchMetadata.imageUrl,
-      gecko.image_url,
-      gecko.imageUrl,
-      blockscoutMeta?.icon_url,
-      twitterHandle ? `https://unavatar.io/x/${encodeURIComponent(twitterHandle)}?fallback=false` : ""
-    ));
-    const socials = v1Socials.length ? v1Socials : (Array.isArray(dexPair?.info?.socials) ? dexPair.info.socials : []);
-    const websites = Array.isArray(dexV1Pair?.info?.websites) ? dexV1Pair.info.websites : (Array.isArray(dexPair?.info?.websites) ? dexPair.info.websites : []);
-    if (avatarUrl) return tokenAvatarRecord(address, {
-      avatarUrl,
-      source: dexV1Pair?.info?.imageUrl ? "dex-v1"
-        : noxaMeta.imageUrl ? "noxa"
-        : dexPair?.info?.imageUrl ? "dex"
-          : bankr.imageUrl ? "bankr"
-            : launchMetadata.imageUrl ? "robinhood-contract-metadata"
-            : firstString(gecko.image_url, gecko.imageUrl) ? "geckoterminal" : "blockscout",
-      state: "ready",
-      twitterUrl: firstString((socials.find((item) => /twitter|x/i.test(item?.type || item?.label || "")) || {}).url, launchMetadata.twitterUrl, bankr.twitterUrl),
-      telegramUrl: firstString((socials.find((item) => /telegram|tg/i.test(item?.type || item?.label || "")) || {}).url, launchMetadata.telegramUrl),
-      websiteUrl: firstString(websites[0]?.url, bankr.websiteUrl, launchMetadata.websiteUrl)
-    });
+    if (fastAvatar) return tokenAvatarRecord(address, fastAvatar);
+
+    // Slow fallbacks only run when Dex, on-chain contract metadata, and OpenSea all lack a logo.
+    // Every candidate is still validated against this exact 0x address; ticker-only art is never used.
+    const fallbackAvatar = await firstReadyRhTokenAvatar([
+      fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${address}`, { timeoutMs: 2_200 })
+        .then((result) => rhExactDexAvatarCandidate(address, result, "dex"))
+        .catch(() => null),
+      getNoxaRhTokenMetadata(address, { timeoutMs: 1_800 }).then((metadata) => rhTokenAvatarCandidate(address, {
+        avatarUrl: metadata.imageUrl,
+        source: "noxa",
+        twitterUrl: metadata.twitterUrl,
+        telegramUrl: metadata.telegramUrl,
+        websiteUrl: metadata.websiteUrl
+      })).catch(() => null),
+      fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${address}/info`, { timeoutMs: 2_000 })
+        .then((result) => {
+          const metadata = result?.data?.attributes || {};
+          if (String(metadata.address || "").toLowerCase() !== addressKey) return null;
+          return rhTokenAvatarCandidate(address, {
+            avatarUrl: firstString(metadata.image_url, metadata.imageUrl, metadata.image?.large, metadata.image?.small),
+            source: "geckoterminal",
+            twitterUrl: normalizeSocialLink(metadata.twitter_handle, "twitter"),
+            telegramUrl: normalizeSocialLink(metadata.telegram_handle, "telegram"),
+            websiteUrl: normalizeSocialLink(Array.isArray(metadata.websites) ? metadata.websites[0] : "", "website")
+          });
+        }).catch(() => null),
+      fetchJson(`https://robinhoodchain.blockscout.com/api/v2/tokens/${address}`, { timeoutMs: 1_800 })
+        .then((metadata) => String(metadata?.address_hash || metadata?.address || address).toLowerCase() === addressKey
+          ? rhTokenAvatarCandidate(address, { avatarUrl: metadata?.icon_url, source: "blockscout" })
+          : null)
+        .catch(() => null),
+      rhBankrArtworkMap().then((artwork) => {
+        const metadata = artwork.get(addressKey) || {};
+        return rhTokenAvatarCandidate(address, {
+          avatarUrl: metadata.imageUrl,
+          source: "bankr",
+          twitterUrl: metadata.twitterUrl,
+          websiteUrl: metadata.websiteUrl
+        });
+      }).catch(() => null)
+    ]);
+    if (fallbackAvatar) return tokenAvatarRecord(address, fallbackAvatar);
     return tokenAvatarRecord(address, {
       avatarUrl: "",
       source: "robinhood-metadata",
@@ -11605,11 +11693,35 @@ async function tokenAvatarForMint(mint = "", options = {}) {
   if (cached) return cached;
   const external = await cacheGetJson(tokenAvatarExternalKey(key));
   if (external?.mint || external?.state) {
-    const record = rememberTokenAvatarRecord({ ...external, mint: external.mint || mint });
-    if (record) return record;
+    const externalRecord = tokenAvatarRecord(external.mint || mint, external);
+    if (externalRecord.state !== "pending") {
+      const record = rememberTokenAvatarRecord(externalRecord);
+      if (record) return record;
+    }
   }
-  if (options.schedule !== false) scheduleTokenAvatarLookup(mint);
+  if (options.schedule !== false) scheduleTokenAvatarLookup(mint, options.row || {}, { priority: options.priority });
   return tokenAvatarRecord(mint, { state: "pending" });
+}
+
+async function waitForTokenAvatarRecord(mint = "", initial = null, waitMs = 5_500) {
+  const key = String(mint || "").trim().toLowerCase();
+  if (!key || initial?.state === "ready" || initial?.state === "missing" || initial?.state === "failed") return initial;
+  scheduleTokenAvatarLookup(mint, {}, { priority: true });
+  const deadline = Date.now() + Math.max(250, Number(waitMs) || 5_500);
+  let current = initial || tokenAvatarRecord(mint, { state: "pending" });
+  while (Date.now() < deadline) {
+    const memory = tokenAvatarMemoryRecord(mint);
+    if (memory) {
+      current = memory;
+      if (memory.state !== "pending") return memory;
+    }
+    const lookup = tokenAvatarLookupInFlight.get(key);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    if (lookup) await Promise.race([lookup.catch(() => null), sleep(Math.min(350, remaining))]);
+    else await sleep(Math.min(100, remaining));
+  }
+  return tokenAvatarMemoryRecord(mint) || current;
 }
 
 async function sendWebTokenAvatar(request, response, requestUrl) {
@@ -11618,7 +11730,8 @@ async function sendWebTokenAvatar(request, response, requestUrl) {
     requestUrl.searchParams.get("token"),
     requestUrl.searchParams.get("tokenMint")
   );
-  const avatar = await tokenAvatarForMint(mint);
+  let avatar = await tokenAvatarForMint(mint, { priority: true });
+  if (avatar?.state === "pending") avatar = await waitForTokenAvatarRecord(mint, avatar, 5_500);
   const ready = avatar?.state === "ready" && avatar?.avatarUrl;
   response.writeHead(200, {
     "Content-Type": "application/json",
@@ -11709,7 +11822,7 @@ async function sendWebTokenImage(request, response, requestUrl) {
     const mem = tokenAvatarMemoryRecord(mint);
     if (mem && mem.state === "ready" && mem.avatarUrl) {
       tokenImageFailureCache.delete(cacheKey);
-    } else {
+    } else if (!tokenAvatarLookupInFlight.has(cacheKey) && !tokenAvatarLookupQueue.has(cacheKey)) {
       if (cachedImage) {
         sendCachedWebTokenImage(request, response, cachedImage, "STALE");
         return;
@@ -11719,14 +11832,10 @@ async function sendWebTokenImage(request, response, requestUrl) {
     }
   }
 
-  let avatar = await tokenAvatarForMint(mint, { schedule: true }).catch(() => tokenAvatarRecord(mint, { state: "pending" }));
-  // A feed row can beat its background metadata lookup by a few milliseconds. Give an already-running
-  // lookup one short chance to finish instead of returning a cacheable 404 that leaves a broken avatar.
-  const avatarLookup = tokenAvatarLookupInFlight.get(cacheKey);
-  if (avatar?.state === "pending" && avatarLookup) {
-    await Promise.race([avatarLookup.catch(() => null), sleep(900)]);
-    avatar = tokenAvatarMemoryRecord(mint) || avatar;
-  }
+  let avatar = await tokenAvatarForMint(mint, { schedule: true, priority: true }).catch(() => tokenAvatarRecord(mint, { state: "pending" }));
+  // Visible image requests jump ahead of background feed hydration and wait for the first exact-address
+  // provider. Most resolve in under two seconds; the bounded ceiling also covers IPFS contract metadata.
+  if (avatar?.state === "pending") avatar = await waitForTokenAvatarRecord(mint, avatar, 5_500);
   const imageCandidate = avatar?.state === "ready"
     ? imageUriGatewayCandidates(avatar.avatarUrl).find((candidate) => /^https:\/\//i.test(candidate))
     : "";
@@ -54293,6 +54402,68 @@ let rhNoxaArtworkInFlight = null;
 let rhBankrArtworkSnapshot = { at: 0, byToken: new Map() };
 let rhBankrArtworkInFlight = null;
 const rhOnchainMetadataCache = new Map();
+const rhOpenSeaArtworkCache = new Map();
+const rhOpenSeaArtworkInFlight = new Map();
+
+// OpenSea's public token page is one of the first address-indexed surfaces to retain Robinhood
+// artwork. Read only the bounded initial HTML stream and accept an image when the CDN path itself
+// contains the exact requested chain + contract. This fills real PFPs without a ticker guess and
+// without holding the page's full response in memory.
+async function getRhOpenSeaArtwork(address = "", timeoutMs = 3_200) {
+  const key = String(address || "").trim().toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(key)) return "";
+  const cached = rhOpenSeaArtworkCache.get(key);
+  if (cached && Date.now() - cached.at < (cached.imageUrl ? 30 * 24 * 60 * 60_000 : 5 * 60_000)) return cached.imageUrl;
+  if (rhOpenSeaArtworkInFlight.has(key)) return rhOpenSeaArtworkInFlight.get(key);
+  const task = (async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.max(1_000, Number(timeoutMs) || 3_200));
+    let imageUrl = "";
+    try {
+      const response = await fetch(`https://opensea.io/token/robinhood/${key}/liquidity`, {
+        signal: controller.signal,
+        redirect: "follow",
+        headers: {
+          "Accept": "text/html,application/xhtml+xml",
+          "User-Agent": "Mozilla/5.0 SlimeWire/1.0"
+        }
+      });
+      if (!response.ok || !response.body) return "";
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      const exactPrefix = `https://i2c.seadn.io/robinhood/${key}/`;
+      let html = "";
+      let bytes = 0;
+      while (bytes < 320_000) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        bytes += value?.byteLength || 0;
+        html += decoder.decode(value || new Uint8Array(), { stream: true });
+        const at = html.toLowerCase().indexOf(exactPrefix);
+        if (at >= 0) {
+          const raw = html.slice(at).match(/^https:\/\/i2c\.seadn\.io\/robinhood\/0x[0-9a-f]{40}\/[^\s"'<>\\]+/i)?.[0] || "";
+          imageUrl = normalizeTokenAvatarUrl(raw.replace(/&amp;/gi, "&"));
+          if (imageUrl) break;
+        }
+        if (html.length > 340_000) html = html.slice(-320_000);
+      }
+      try { await reader.cancel(); } catch { /* stream already ended */ }
+      return imageUrl;
+    } catch {
+      return "";
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+      rhOpenSeaArtworkCache.set(key, { at: Date.now(), imageUrl });
+      if (rhOpenSeaArtworkCache.size > 1_000) {
+        const oldest = [...rhOpenSeaArtworkCache.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, 200);
+        for (const [oldKey] of oldest) rhOpenSeaArtworkCache.delete(oldKey);
+      }
+    }
+  })().finally(() => rhOpenSeaArtworkInFlight.delete(key));
+  rhOpenSeaArtworkInFlight.set(key, task);
+  return task;
+}
 
 async function getNoxaRhTokenMetadata(address, options = {}) {
   const token = await fetchJson(`${RH_NOXA_PUBLIC_API}/v1/robinhood/token/${encodeURIComponent(address)}`, {
