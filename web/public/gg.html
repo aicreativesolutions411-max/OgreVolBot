@@ -8,6 +8,21 @@
     const match = location.pathname.match(/^\/ca\/([^/?#]+)/i);
     if (match) location.replace(`/coin-site?project=${encodeURIComponent(decodeURIComponent(match[1]))}`);
   })();
+  // Phones get the mobile terminal automatically: the desktop terminal is web-only, /fun is the
+  // mobile view. Runs before anything renders. Opt-outs: /?desktop=1 (remembered) — /fun links
+  // back with it. Tablets and desktops always stay here. Query + hash ride along so referral
+  // links (/?ref=CODE) and deep links keep working on /fun.
+  (() => {
+    try {
+      const q = new URLSearchParams(location.search);
+      if (q.get("desktop") === "1") { localStorage.setItem("swPreferDesktop", "1"); return; }
+      if (localStorage.getItem("swPreferDesktop") === "1") return;
+      if (window.top !== window.self) return;                       // never redirect when embedded
+      const phone = /Android.*Mobile|iPhone|iPod/i.test(navigator.userAgent)
+        || (Math.min(screen.width, screen.height) <= 760 && matchMedia("(pointer: coarse)").matches);
+      if (phone) location.replace("/fun" + location.search + (location.hash || ""));
+    } catch (e) { /* never block the page over the redirect */ }
+  })();
 </script>
 <meta http-equiv="Cache-Control" content="no-store, max-age=0">
 <title>SlimeWire — Solana Memecoin Terminal & Telegram Trading Bot</title>
