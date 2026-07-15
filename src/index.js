@@ -11481,7 +11481,8 @@ async function resolveTokenAvatarRecord(mint = "", row = {}) {
       telegramUrl: firstString(rememberedIdentity?.telegramUrl),
       websiteUrl: firstString(rememberedIdentity?.websiteUrl)
     });
-    const [dexResult, noxaMeta, geckoResult, blockscoutMeta, bankrArtwork, launchMetadata] = await Promise.all([
+    const [dexV1Result, dexResult, noxaMeta, geckoResult, blockscoutMeta, bankrArtwork, launchMetadata] = await Promise.all([
+      fetchJson(`https://api.dexscreener.com/tokens/v1/robinhood/${address}`, { headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" }, timeoutMs: 1_600 }).catch(() => null),
       fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${address}`, { timeoutMs: 1_500 }).catch(() => null),
       getNoxaRhTokenMetadata(address, { timeoutMs: 1_400 }).catch(() => ({})),
       fetchJson(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${address}/info`, { timeoutMs: 1_400 }).catch(() => null),
@@ -11491,22 +11492,31 @@ async function resolveTokenAvatarRecord(mint = "", row = {}) {
     ]);
     const dexPairs = (dexResult?.pairs || []).filter((pair) => String(pair?.chainId || "").toLowerCase() === "robinhood");
     const dexPair = dexPairs.sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0))[0] || null;
+    const dexV1Pair = (Array.isArray(dexV1Result) ? dexV1Result : [])
+      .filter((pair) => String(pair?.baseToken?.address || "").toLowerCase() === address.toLowerCase())
+      .sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0))[0] || null;
     const gecko = geckoResult?.data?.attributes || {};
     const bankr = bankrArtwork.get(address.toLowerCase()) || {};
+    const v1Socials = Array.isArray(dexV1Pair?.info?.socials) ? dexV1Pair.info.socials : [];
+    const twitterHandle = String((v1Socials.find((s) => /twitter|x/i.test(s?.type || s?.label || "")) || {}).url || "")
+      .replace(/^https?:\/\/(?:www\.)?(?:x|twitter)\.com\//i, "").replace(/[/?].*$/, "").trim();
     const avatarUrl = normalizeTokenAvatarUrl(firstString(
+      dexV1Pair?.info?.imageUrl,
       noxaMeta.imageUrl,
       dexPair?.info?.imageUrl,
       bankr.imageUrl,
       launchMetadata.imageUrl,
       gecko.image_url,
       gecko.imageUrl,
-      blockscoutMeta?.icon_url
+      blockscoutMeta?.icon_url,
+      twitterHandle ? `https://unavatar.io/x/${encodeURIComponent(twitterHandle)}?fallback=false` : ""
     ));
-    const socials = Array.isArray(dexPair?.info?.socials) ? dexPair.info.socials : [];
-    const websites = Array.isArray(dexPair?.info?.websites) ? dexPair.info.websites : [];
+    const socials = v1Socials.length ? v1Socials : (Array.isArray(dexPair?.info?.socials) ? dexPair.info.socials : []);
+    const websites = Array.isArray(dexV1Pair?.info?.websites) ? dexV1Pair.info.websites : (Array.isArray(dexPair?.info?.websites) ? dexPair.info.websites : []);
     if (avatarUrl) return tokenAvatarRecord(address, {
       avatarUrl,
-      source: noxaMeta.imageUrl ? "noxa"
+      source: dexV1Pair?.info?.imageUrl ? "dex-v1"
+        : noxaMeta.imageUrl ? "noxa"
         : dexPair?.info?.imageUrl ? "dex"
           : bankr.imageUrl ? "bankr"
             : launchMetadata.imageUrl ? "robinhood-contract-metadata"

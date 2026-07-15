@@ -619,7 +619,35 @@
     return["https://ipfs.io/ipfs/"+cid,"https://gateway.pinata.cloud/ipfs/"+cid,"https://dweb.link/ipfs/"+cid];
   }
   function coinImgSrc(u,sz){u=String(u||"");if(!u||u.startsWith("data:")||u.charAt(0)==="/"||u.indexOf("slimewire")>-1)return u;const source=avatarSourceCandidates(u)[0]||u,s=sz||64;return"https://images.weserv.nl/?url="+encodeURIComponent(source.replace(/^https?:\/\//,""))+"&w="+s+"&h="+s+"&fit=cover&output=webp&q=80";}
-  function avImg(r,cls){const raw=av(r),mint=String((r&&(r.tokenMint||r.mint||r.address))||"");const ph="/assets/slimewire/png/slimewire-mark.png?v=logo4",candidates=avatarSourceCandidates(raw);const u=coinImgSrc(raw)||raw||ph;return'<img class="'+cls+'" loading="eager" decoding="async" src="'+esc(u)+'" data-raw="'+esc(raw||"")+'" data-avatar-mint="'+esc(mint)+'" data-avatar-candidates="'+esc(candidates.join("|"))+'" onerror="GG.avFallback(this)">';}
+  // Resilient token-image loading: never trust one upstream. Build an ordered candidate list
+  // (wsrv edge-proxy → raw URL → multiple IPFS gateways → our backend resolver) and walk it on
+  // each onerror, so a coin's pfp "always finds a way to pull" instead of falling to the logo.
+  function imgWsrv(u,s){s=s||64;return"https://wsrv.nl/?url="+encodeURIComponent(String(u).replace(/^https?:\/\//,""))+"&w="+s+"&h="+s+"&fit=cover&output=webp&q=80";}
+  function imgCascade(raw,mint,size){
+    raw=String(raw||"").trim();const out=[],s=size||64;
+    if(raw&&raw.charAt(0)!=="/"&&raw.indexOf("slimewire")<0&&!raw.startsWith("data:")){
+      const ip=raw.match(/(?:ipfs:\/\/|\/ipfs\/)([A-Za-z0-9][\w.\/-]*)/i);
+      if(ip){const cid=ip[1].replace(/^ipfs\//i,"");["https://ipfs.io/ipfs/","https://dweb.link/ipfs/","https://w3s.link/ipfs/","https://nftstorage.link/ipfs/","https://gateway.pinata.cloud/ipfs/"].forEach(g=>out.push(imgWsrv(g+cid,s)));out.push("https://ipfs.io/ipfs/"+cid);}
+      else{out.push(imgWsrv(raw,s));out.push(raw);}   // wsrv first (edge-cached), raw second (some hosts wsrv rejects, e.g. postimg)
+    } else if(raw){out.push(raw);}
+    if(mint&&(/^0x[0-9a-fA-F]{40}$/.test(mint)||/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)))out.push("/api/web/token-image?mint="+encodeURIComponent(mint));
+    return out;
+  }
+  function imgNext(img){
+    const list=(img.dataset.srcs||"").split("|").filter(Boolean);
+    const i=Number(img.dataset.si||0)+1;
+    if(i<list.length){img.dataset.si=String(i);img.src=list[i];return;}
+    if(!img.dataset.retried&&list.length){          // exhausted once → wait, then re-run the whole cascade once
+      img.dataset.retried="1";
+      if(!img.dataset.shell&&img.dataset.ph)img.src=img.dataset.ph;
+      setTimeout(()=>{if(img&&img.isConnected){img.dataset.si="0";img.src=list[0];}},1600);
+      return;
+    }
+    img.onerror=null;
+    if(img.dataset.shell)img.remove();              // rh shell has a mascot background — reveal it
+    else if(img.dataset.ph)img.src=img.dataset.ph;  // generic: settle on the local logo (never 404s)
+  }
+  function avImg(r,cls){const raw=av(r),mint=String((r&&(r.tokenMint||r.mint||r.address))||"");const ph="/assets/slimewire/png/slimewire-mark.png?v=logo4",srcs=imgCascade(raw,mint,64),first=srcs[0]||ph;return'<img class="'+cls+'" loading="eager" decoding="async" src="'+esc(first)+'" data-raw="'+esc(raw||"")+'" data-avatar-mint="'+esc(mint)+'" data-srcs="'+esc(srcs.join("|"))+'" data-si="0" data-ph="'+esc(ph)+'" onerror="GG.imgNext(this)">';}
   function toast(msg,err){const t=$("#toast");t.textContent=msg;t.className="toast show"+(err?" err":"");clearTimeout(t._t);t._t=setTimeout(()=>t.className="toast",3400);}
   function copy(text){navigator.clipboard?.writeText(text).then(()=>toast("Copied "+short(text))).catch(()=>{});}
   async function getJson(url,opts){try{const r=await fetch(url,opts);let d=null;try{d=await r.json();}catch(e){}return{ok:r.ok,status:r.status,d};}catch(e){return{ok:false,status:0,d:null};}}
@@ -1740,8 +1768,9 @@
     size=size||26;radius=radius==null?"50%":radius;
     const address=String((r&&r.address)||"");
     const ck=imgKey(r)||String(address||"").toLowerCase();let image=String((r&&(r.imageUrl||r.iconUrl))||"");if(image&&ck)IMG_CACHE[ck]=image;if(!image&&ck)image=IMG_CACHE[ck]||"";
-    const proxy=/^0x[0-9a-fA-F]{40}$/.test(address)?'/api/web/token-image?mint='+encodeURIComponent(address):'';
-    if(image||proxy){const fallback=rhFallbackAvatarSrc(address||((r&&r.symbol)||"?"));return '<span class="rh-avatar-shell" style="display:block;width:'+size+'px;height:'+size+'px;border-radius:'+radius+';overflow:hidden;flex:0 0 auto;background:#101810 url(\''+esc(fallback)+'\') center/cover no-repeat"><img src="'+esc(image||proxy)+'" data-rh-proxy="'+esc(proxy)+'" data-rh-symbol="'+esc((r&&r.symbol)||"?")+'" data-rh-key="'+esc(address||((r&&r.symbol)||"?"))+'" style="display:block;width:100%;height:100%;object-fit:cover" onerror="GG.rhAvatarFail(this)"></span>';}
+    const mint=/^0x[0-9a-fA-F]{40}$/.test(address)?address:"";
+    const srcs=imgCascade(image,mint,size>40?96:64),mascot=rhFallbackAvatarSrc(address||((r&&r.symbol)||"?"));
+    if(srcs.length){return '<span class="rh-avatar-shell" style="display:block;width:'+size+'px;height:'+size+'px;border-radius:'+radius+';overflow:hidden;flex:0 0 auto;background:#101810 url(\''+esc(mascot)+'\') center/cover no-repeat"><img src="'+esc(srcs[0])+'" data-srcs="'+esc(srcs.join("|"))+'" data-si="0" data-shell="1" data-ph="'+esc(mascot)+'" style="display:block;width:100%;height:100%;object-fit:cover" onerror="GG.imgNext(this)"></span>';}
     return rhAvTileHtml((r&&r.symbol)||"?",size,radius,address);
   }
   function rhAvatarFail(img){
@@ -4422,7 +4451,7 @@
     escrowModal,renderEscrow,escrowFinalize,escrowRefund,launchesModal,claimFees,toast,
     launchRh:()=>{state.launchRail="robinhood";state.launchTab="coin";go("launch");},
     rhTrade:(a)=>rhTradeModal(a),rhBuy:(a,amt)=>rhBuyAmount(a,amt),rhBuyAmount:(a,amt)=>rhBuyAmount(a,amt),rhSell:(a,p)=>rhTrade(a,"sell",{percent:p}),rhQuick:(a)=>rhBuyAmount(a,rhQuickEth()),
-    rhSellPos:async(a,p)=>{await rhTrade(a,"sell",{percent:p});loadRhPositions();},rhAvTile:(s,z,r,k)=>rhAvTileHtml(s,z,r,k),rhAvatarFail:(img)=>rhAvatarFail(img),rhPresetModal:()=>rhPresetModal(),
+    rhSellPos:async(a,p)=>{await rhTrade(a,"sell",{percent:p});loadRhPositions();},rhAvTile:(s,z,r,k)=>rhAvTileHtml(s,z,r,k),rhAvatarFail:(img)=>imgNext(img),imgNext:(img)=>imgNext(img),rhPresetModal:()=>rhPresetModal(),
     rhGuardModal:(a)=>rhGuardModal(a),rhGuardCancel:(id,a)=>rhGuardCancel(id,a),rhBundleModal:(a)=>rhBundleModal(a),rhVolumeModal:(a)=>rhVolumeModal(a),
     rhAutoBundleModal:(a)=>rhAutoBundleModal(a),rhAutoBundleCancel:(id,a)=>rhAutoBundleCancel(id,a),rhAddLiquidity:(a,w)=>rhAddLiquidityModal(a,w),
     flipTrade:()=>{const t=document.querySelector('#v-trade .trade');if(!t)return;const next=t.getAttribute('data-focus')==='buy'?'chart':'buy';t.setAttribute('data-focus',next);const fab=document.getElementById('tradeFab');if(fab)fab.innerHTML=next==='buy'?'📈 Chart':'💰 Buy';const side=t.querySelector('.tradeSide'),v=document.getElementById('v-trade');if(next==='buy'&&side)side.scrollIntoView({behavior:'smooth',block:'start'});else if(v)v.scrollTo({top:0,behavior:'smooth'});},
@@ -4435,11 +4464,7 @@
     enableAlerts:async()=>{const ok=await ensurePushSubscribed();toast(ok?"🔔 Alerts on — you'll get pinged":"Couldn't enable alerts (check browser permission)",!ok);if(state.route==="wallet")renderWallet();},
     shareRef:(link)=>{const t="I'm trading Solana memecoins on SlimeWire — fast terminal, 1-tap snipes, KOL copy. Join with my link:";window.open("https://x.com/intent/tweet?text="+encodeURIComponent(t)+"&url="+encodeURIComponent(link),"_blank","noopener");},
     // Coin-image fallback: shared metadata proxy, then multiple live IPFS gateways, then the logo.
-    avFallback:(img)=>{const ph="/assets/slimewire/png/slimewire-mark.png?v=logo4",mint=img.dataset.avatarMint||"",raw=img.dataset.raw||"",candidates=(img.dataset.avatarCandidates||"").split("|").filter(Boolean);let step=Number(img.dataset.avatarStep||0);if(step===0&&mint){img.dataset.avatarStep="1";img.src="/api/web/token-image?mint="+encodeURIComponent(mint);return;}const index=step===0?0:step-1;if(index<candidates.length){img.dataset.avatarStep=String(step+1);img.src=candidates[index];return;}
-      // Everything failed for now: show the logo, but re-pull the real image once after ~1.5s
-      // (Robinhood CDNs + client-side enrichment often land a beat late) before settling.
-      if(raw&&!img.dataset.avLate){img.dataset.avLate="1";img.onerror=null;img.src=ph;setTimeout(()=>{if(img&&img.isConnected){img.onerror=()=>{img.onerror=null;img.src=ph;};img.src=coinImgSrc(raw)||raw;}},1500);return;}
-      img.onerror=null;img.src=ph;},
+    avFallback:(img)=>imgNext(img),
     removeWalletPrompt:(i)=>{const w=state.wallets.find(x=>x.index===i);if(w)removeWalletModal(w);},
     refreshPos:refreshPositionsNow,
     copyBlink,shareBlink,copyReceipt,shareReceipt,saveScanReceipt,scoutOpen,scoutRemove,kolCallerCard,copyLaunchBoss,openMuckMap,copyPassport};
