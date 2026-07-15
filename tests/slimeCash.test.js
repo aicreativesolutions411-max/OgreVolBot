@@ -114,6 +114,14 @@ test("SlimeCash presents one clean USD and SOL wallet with Coinbase as its only 
   assert.doesNotMatch(cash, /PYUSD_MINT|HANDOFF_PROVIDERS/);
 });
 
+test("Coinbase Onramp sessions are authenticated and CORS-limited to SlimeWire origins", () => {
+  assert.match(server, /CASH_ONRAMP_ALLOWED_ORIGINS = "https:\/\/slimewire\.org,https:\/\/www\.slimewire\.org,https:\/\/app\.slimewire\.org"/);
+  assert.match(server, /requestUrl\.pathname === "\/api\/web\/cash\/onramp-session"\s*\? CASH_ONRAMP_ALLOWED_ORIGINS/);
+  assert.match(server, /sendWebJson\(request, response, 200, \{ ok: true, \.\.\.result, address: wallet\.publicKey \}, CASH_ONRAMP_ALLOWED_ORIGINS\)/);
+  assert.match(server, /clientIp: webClientKey\(request\)/);
+  assert.match(server, /if \(allowOrigin\) headers\["Access-Control-Allow-Origin"\] = allowOrigin/);
+});
+
 test("Cash and Fun share one account login, recovery, wallet import, and navigation", () => {
   assert.match(html, /Create account/);
   assert.match(html, /Log in/);

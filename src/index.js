@@ -6068,7 +6068,10 @@ function startHealthServer() {
     }
 
     if (request.method === "OPTIONS" && requestUrl.pathname.startsWith("/api/")) {
-      response.writeHead(204, webCorsHeaders(request));
+      const corsOrigins = requestUrl.pathname === "/api/web/cash/onramp-session"
+        ? CASH_ONRAMP_ALLOWED_ORIGINS
+        : "";
+      response.writeHead(204, webCorsHeaders(request, corsOrigins));
       response.end();
       return;
     }
@@ -9602,9 +9605,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
           partnerUserRef: `slimecash-${hashWebSecret(auth.userId).slice(0, 32)}`
         });
         await audit("cash_onramp_session", { userId: auth.userId, asset: result.asset, wallet: wallet.publicKey });
-        sendWebJson(request, response, 200, { ok: true, ...result, address: wallet.publicKey });
+        sendWebJson(request, response, 200, { ok: true, ...result, address: wallet.publicKey }, CASH_ONRAMP_ALLOWED_ORIGINS);
       } catch (error) {
-        sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) });
+        sendWebJson(request, response, error.statusCode || 400, { ok: false, error: friendlyError(error) }, CASH_ONRAMP_ALLOWED_ORIGINS);
       }
       return;
     }
@@ -11974,24 +11977,28 @@ function webContentType(filePath) {
   return types[ext] || "application/octet-stream";
 }
 
-function webCorsHeaders(request) {
+const CASH_ONRAMP_ALLOWED_ORIGINS = "https://slimewire.org,https://www.slimewire.org,https://app.slimewire.org";
+
+function webCorsHeaders(request, allowedOverride = "") {
   const origin = request.headers.origin || "";
-  const allowed = CONFIG.webAllowedOrigin || "*";
+  const allowed = allowedOverride || CONFIG.webAllowedOrigin || "*";
   const allowedOrigins = allowed.split(",").map((item) => item.trim()).filter(Boolean);
   const portalOrigin = originFromUrl(CONFIG.webPortalUrl);
+  const strict = Boolean(allowedOverride);
   const allowOrigin = !origin
-    ? "*"
+    ? strict ? "" : "*"
     : allowedOrigins.includes("*") || allowedOrigins.some((allowedOrigin) => originMatchesAllowedOrigin(origin, allowedOrigin)) || (portalOrigin && originMatchesAllowedOrigin(origin, portalOrigin))
       ? origin
-      : portalOrigin || allowedOrigins[0] || "null";
-  return {
-    "Access-Control-Allow-Origin": allowOrigin || "*",
+      : strict ? "" : portalOrigin || allowedOrigins[0] || "null";
+  const headers = {
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Ogre-Session,X-Launch-Edit-Key",
     "Access-Control-Expose-Headers": "X-Ogre-Filename",
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin"
   };
+  if (allowOrigin) headers["Access-Control-Allow-Origin"] = allowOrigin;
+  return headers;
 }
 
 function originMatchesAllowedOrigin(origin, allowedOrigin) {
@@ -13574,11 +13581,11 @@ async function webOgreAgentReply(body = {}) {
     modelProvider: typeof modelResult === "object" ? String(modelResult?.provider || "") : ""
   };
 }
-function sendWebJson(request, response, status, data) {
+function sendWebJson(request, response, status, data, corsOrigins = "") {
   response.writeHead(status, {
     "Content-Type": "application/json",
     "Cache-Control": "no-store",
-    ...webCorsHeaders(request)
+    ...webCorsHeaders(request, corsOrigins)
   });
   response.end(JSON.stringify(data));
 }
