@@ -98,6 +98,9 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
   assert.match(server, /pathname === "\/api\/web\/wallet-funding\/create"/);
   assert.match(server, /pathname === "\/api\/web\/wallet-funding\/execute"/);
   assert.match(server, /async function createWebWalletFundingOrder/);
+  assert.match(server, /const tx = buildWalletFundingTransaction\(\{/);
+  assert.match(server, /ComputeBudgetProgram\.setComputeUnitLimit\(\{ units: 200_000 \}\)/);
+  assert.match(server, /ComputeBudgetProgram\.setComputeUnitPrice\(\{ microLamports: 5_000 \}\)/);
   assert.match(server, /async function executeWebWalletFunding/);
   assert.match(server, /destinationPublicKey \|\| order\.sessionWalletPublicKey/);
   assert.match(server, /volumeBot: Boolean\(wallet\.volumeBot \|\| wallet\.ephemeral\)/);

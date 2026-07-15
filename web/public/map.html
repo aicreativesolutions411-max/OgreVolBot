@@ -95,7 +95,7 @@
 <div id="app">
   <header>
     <div class="brand"><span class="dot"></span><b>Slime</b><span>Map</span></div>
-    <form id="f"><input id="q" placeholder="Coin CA, wallet, .sol domain, or Robinhood 0x…" autocomplete="off" spellcheck="false"/><button type="submit">Map it</button></form>
+    <form id="f"><input id="q" placeholder="Coin CA, wallet, .sol/.eth domain, or Robinhood 0x…" autocomplete="off" spellcheck="false"/><button type="submit">Map it</button></form>
   </header>
   <div id="crumbs"></div>
   <div id="stats"></div>
@@ -106,7 +106,7 @@
       <div class="toggle" id="toggle"></div>
       <div class="foot" id="foot"></div>
       <div class="wm">slimewire.org</div>
-      <div id="overlay"><h1>🗺️ SlimeMap</h1><p>Map coin holders or trace a wallet's public fund flow: who funded it, who it funded, SOL / ETH, and token sends. Supports Solana wallets, .sol domains, and Robinhood Chain.</p></div>
+      <div id="overlay"><h1>🗺️ SlimeMap</h1><p>Map coin holders or trace a wallet's public fund flow: who funded it, who it funded, SOL / ETH, and token sends. Supports Solana wallets, .sol and .eth domains, and Robinhood Chain.</p></div>
     </div>
     <div id="side"><div id="xray"></div><h3>On this coin</h3><div id="kolist"></div></div>
   </div>
@@ -380,7 +380,7 @@ function openCluster(cl){
 }
 function closeDrill(){document.getElementById('drill').className=''}
 
-document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const v=document.getElementById('q').value.trim().replace(/^\$/,'');const sol=/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v),rh=/^0x[0-9a-f]{40}$/i.test(v),dom=/^[a-z0-9][a-z0-9._-]{0,58}\.sol$/i.test(v);if(!sol&&!rh&&!dom){showError('paste a valid coin CA, wallet, .sol domain, or Robinhood 0x');return}crumbs=[];loadTarget(dom?'wallet':'coin',v,dom?'funds':'bags',true)});
+document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const v=document.getElementById('q').value.trim().replace(/^\$/,'');const sol=/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v),rh=/^0x[0-9a-f]{40}$/i.test(v),dom=/^[a-z0-9][a-z0-9._-]{0,62}\.(?:sol|eth)$/i.test(v);if(!sol&&!rh&&!dom){showError('paste a valid coin CA, wallet, .sol/.eth domain, or Robinhood 0x');return}crumbs=[];loadTarget(dom?'wallet':'coin',v,dom?'funds':'bags',true)});
 window.addEventListener('resize',()=>{const c=crumbs[crumbs.length-1];if(c)loadTarget(c.kind,c.id,c.mode,false)});
 document.getElementById('drill').addEventListener('click',e=>{if(e.target.id==='drill')closeDrill()});
 (function init(){const u=new URL(location.href);const ca=u.searchParams.get('ca')||u.searchParams.get('mint'),w=u.searchParams.get('wallet')||u.searchParams.get('domain'),mode=u.searchParams.get('mode')==='network'?'network':u.searchParams.get('mode')==='funds'?'funds':'bags';if(ca)loadTarget('coin',ca,mode,true);else if(w)loadTarget('wallet',w,mode,true)})();

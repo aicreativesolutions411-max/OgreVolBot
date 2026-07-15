@@ -35,6 +35,13 @@ const verifyWalletFunding = Function(
   `return (${extractedFunction("verifySessionWalletFundingTransaction")});`
 )(PublicKey, SystemInstruction, SystemProgram, ComputeBudgetInstruction, ComputeBudgetProgram);
 
+const buildWalletFunding = Function(
+  "Transaction",
+  "ComputeBudgetProgram",
+  "SystemProgram",
+  `return (${extractedFunction("buildWalletFundingTransaction")});`
+)(Transaction, ComputeBudgetProgram, SystemProgram);
+
 function fundingFixture({ amountLamports = 200_000_000n } = {}) {
   const source = Keypair.generate();
   const destination = Keypair.generate().publicKey;
@@ -54,11 +61,40 @@ function sign(transaction, source) {
   return transaction;
 }
 
+test("wallet funding orders predeclare safe fees so Phantom and Solflare can sign the same message", () => {
+  const fixture = fundingFixture();
+  const transaction = buildWalletFunding({
+    sourcePublicKey: fixture.source.publicKey,
+    destinationPublicKey: fixture.destination,
+    amountLamports: fixture.amountLamports,
+    blockhash: fixture.order.blockhash
+  });
+  assert.deepEqual(transaction.instructions.map((instruction) => (
+    instruction.programId.equals(ComputeBudgetProgram.programId)
+      ? ComputeBudgetInstruction.decodeInstructionType(instruction)
+      : "Transfer"
+  )), ["SetComputeUnitLimit", "SetComputeUnitPrice", "Transfer"]);
+  assert.doesNotThrow(() => verifyWalletFunding(sign(transaction, fixture.source), fixture.order));
+});
+
 test("wallet funding accepts capped wallet-added compute budget instructions", () => {
   const fixture = fundingFixture();
   fixture.transaction.add(
     ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
     ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 25_000 }),
+    SystemProgram.transfer({
+      fromPubkey: fixture.source.publicKey,
+      toPubkey: fixture.destination,
+      lamports: fixture.amountLamports
+    })
+  );
+  assert.doesNotThrow(() => verifyWalletFunding(sign(fixture.transaction, fixture.source), fixture.order));
+});
+
+test("wallet funding accepts Phantom's capped legacy combined compute budget instruction", () => {
+  const fixture = fundingFixture();
+  fixture.transaction.add(
+    ComputeBudgetProgram.requestUnits({ units: 200_000, additionalFee: 5_000 }),
     SystemProgram.transfer({
       fromPubkey: fixture.source.publicKey,
       toPubkey: fixture.destination,

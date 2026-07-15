@@ -3116,9 +3116,9 @@ test("Airdrop and wallet maps trace Solana/.sol and Robinhood fund flows on web 
   assert.match(functionBody(serverSource, "buildSubjectMap"), /buildRhWalletFundMap/);
   assert.match(functionBody(serverSource, "buildSubjectMap"), /buildSolanaWalletFundMap/);
   assert.match(serverSource, /requestUrl\.searchParams\.get\("domain"\)/);
-  assert.match(serverSource, /resolveSolDomainToAddress\(rawTarget\)/);
+  assert.match(serverSource, /resolveWalletDomainToAddress\(rawTarget\)/);
   assert.match(serverSource, /"fundmap", "funds", "flow"/);
-  assert.match(functionBody(serverSource, "handleTelegramMapCommand"), /resolveSolDomainToAddress/);
+  assert.match(functionBody(serverSource, "handleTelegramMapCommand"), /resolveWalletDomainToAddress/);
   assert.match(functionBody(serverSource, "handleMapCallback"), /parts\[2\] === "funds"/);
   assert.match(functionBody(serverSource, "handleMapCallback"), /forceWallet: parts\[0\] === "mapw"/);
   assert.match(functionBody(serverSource, "mapTelegramDetailLines"), /Recent traded coins/);
@@ -3137,7 +3137,7 @@ test("Airdrop and wallet maps trace Solana/.sol and Robinhood fund flows on web 
   assert.match(walletScan, /token-transfers/);
   assert.match(walletScan, /trades: tradeRows\.slice/);
   const mapHtml = fs.readFileSync(new URL("../web/public/map.html", import.meta.url), "utf8");
-  assert.match(mapHtml, /\.sol domain, or Robinhood 0x/);
+  assert.match(mapHtml, /\.sol\/\.eth domain, or Robinhood 0x/);
   assert.match(mapHtml, /data-m="funds"/);
   assert.match(mapHtml, /n\.direction==='in'/);
   assert.match(mapHtml, /flowLabel/);

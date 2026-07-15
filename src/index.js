@@ -72,6 +72,7 @@ import { createVanityPool, assertValidVanitySuffix, readVanityPoolFile, writeVan
 import { RH_CHAIN_ID, RH_DEFAULT_RPC, evmAddressFromSolana, evmWalletFromSolana, rhEthBalance, rhDeployToken, rhCreatePoolAndSeed, rhExplorerAddress, rhExplorerToken, rhListTokens, rhTokenInfo, rhRecentActiveTokens, rhScamTokenSet, rhTokenCreationTime, rhAddressTokens, rhTokenContractUri, relayQuoteSolToRhEth, relayCheckStatus, relayQuoteRhSwap, rhExecuteEvmSteps, rhErc20Balance, rhFeeEvmWallet, rhTransferEth, rhSweepFeesToSol, rhBridgeEthToSol, rhImpliedPriceUsd, rhHoneypotCheck, rhWalletTokenAudit } from "./lib/robinhoodChain.js";
 import { getNoxaScan, fetchNoxaFeed, fetchPoolBuys, NOXA_RH } from "./lib/noxaLaunchpad.js";
 import { rhWalletScan } from "./lib/walletScan.js";
+import { ethDomainLike, resolveEthDomainToAddress } from "./lib/ensResolver.js";
 import { classifyRhAddress } from "./lib/rhAddressKind.js";
 import { resolveRhPoolToken, rhResolvedPoolHints } from "./lib/rhPoolResolver.js";
 import { finiteWalletNumber, normalizeSolWalletPnlSummary, normalizeSolWalletPositions } from "./lib/solWalletPnl.js";
@@ -7726,10 +7727,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const requestedMode = String(requestUrl.searchParams.get("mode") || "").toLowerCase();
       const mmode = requestedMode === "network" ? "network" : requestedMode === "funds" ? "funds" : "bags";
       const rawTarget = mmint || mwallet;
-      const domainTarget = /^[a-z0-9][a-z0-9._-]{0,58}\.sol$/i.test(rawTarget);
-      const mtarget = domainTarget ? await resolveSolDomainToAddress(rawTarget).catch(() => null) : rawTarget;
+      const domainTarget = walletDomainLike(rawTarget);
+      const mtarget = domainTarget ? await resolveWalletDomainToAddress(rawTarget).catch(() => null) : rawTarget;
       const mIsRh = /^0x[0-9a-fA-F]{40}$/.test(mtarget);
-      if (!solanaPublicKeyLike(mtarget) && !mIsRh) { sendWebJson(request, response, 400, { ok: false, error: domainTarget ? "that .sol domain could not be resolved" : "coin, wallet, or .sol domain required" }); return; }
+      if (!solanaPublicKeyLike(mtarget) && !mIsRh) { sendWebJson(request, response, 400, { ok: false, error: domainTarget ? "that wallet domain could not be resolved" : "coin, wallet, .sol, or .eth domain required" }); return; }
       let map;
       try {
         // HARD 14s timeout so a slow chain read can never hang the request into a client "failed to load"
@@ -7761,7 +7762,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const requestedMode = String(requestUrl.searchParams.get("mode") || "").toLowerCase();
       const gmode = requestedMode === "network" ? "network" : requestedMode === "funds" ? "funds" : "bags";
       const rawTarget = gmint || gwallet;
-      const gtarget = /^[a-z0-9][a-z0-9._-]{0,58}\.sol$/i.test(rawTarget) ? await resolveSolDomainToAddress(rawTarget).catch(() => null) : rawTarget;
+      const gtarget = walletDomainLike(rawTarget) ? await resolveWalletDomainToAddress(rawTarget).catch(() => null) : rawTarget;
       if (!solanaPublicKeyLike(gtarget) && !/^0x[0-9a-fA-F]{40}$/.test(gtarget)) { sendWebJson(request, response, 400, { ok: false, error: "ca or wallet required" }); return; }
       try {
         const { png } = await renderSubjectMapPng(gtarget, gmode, { forceWallet: Boolean(gwallet) });
@@ -7839,13 +7840,13 @@ async function handleWebApiRequest(request, response, requestUrl) {
     // `dev` = optional airdropper override (the coin selector passes it so each coin is scanned from that sender).
     if (request.method === "GET" && pathname === "/api/airdrop") {
       const rawAirdropTarget = String(requestUrl.searchParams.get("ca") || requestUrl.searchParams.get("mint") || requestUrl.searchParams.get("wallet") || "").trim();
-      const domainTarget = /^[a-z0-9][a-z0-9._-]{0,58}\.sol$/i.test(rawAirdropTarget);
-      const am = domainTarget ? await resolveSolDomainToAddress(rawAirdropTarget).catch(() => null) : rawAirdropTarget;
+      const domainTarget = walletDomainLike(rawAirdropTarget);
+      const am = domainTarget ? await resolveWalletDomainToAddress(rawAirdropTarget).catch(() => null) : rawAirdropTarget;
       const devParam = String(requestUrl.searchParams.get("dev") || "").trim();
       if (/^0x[0-9a-fA-F]{40}$/.test(String(am || ""))) {
         sendWebJson(request, response, 200, { ok: false, redirect: `/map?ca=${encodeURIComponent(am)}`, error: "Robinhood Chain opens in the holder / fund-flow map" }); return;
       }
-      if (!solanaPublicKeyLike(am)) { sendWebJson(request, response, 400, { ok: false, error: domainTarget ? "that .sol domain could not be resolved" : "coin, wallet, or .sol domain required" }); return; }
+      if (!solanaPublicKeyLike(am)) { sendWebJson(request, response, 400, { ok: false, error: domainTarget ? "that wallet domain could not be resolved" : "coin, wallet, .sol, or .eth domain required" }); return; }
       try {
         const resolved = await Promise.race([
           (async () => {
@@ -37816,10 +37817,10 @@ async function sendMapCard(chatId, target, mode = "bags", options = {}) {
 }
 async function handleTelegramMapCommand(chatId, message, argument) {
   const arg = String(argument || "");
-  const domain = (arg.match(/\b[a-z0-9][a-z0-9._-]{0,58}\.sol\b/i) || [])[0] || "";
+  const domain = (arg.match(/\b[a-z0-9][a-z0-9._-]{0,62}\.(?:sol|eth)\b/i) || [])[0] || "";
   let target = (arg.match(/0x[0-9a-fA-F]{40}/) || [])[0] || (arg.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/) || [])[0] || "";
-  if (!target && domain) target = await resolveSolDomainToAddress(domain).catch(() => null);
-  if (!target) { await say(chatId, "Usage: /map <coin CA, wallet, or .sol> — use /fundmap <wallet> for incoming/outgoing SOL, tokens, and funded wallets (Solana or Robinhood 0x…)."); return; }
+  if (!target && domain) target = await resolveWalletDomainToAddress(domain).catch(() => null);
+  if (!target) { await say(chatId, "Usage: /map <coin CA, wallet, .sol, or .eth> — use /fundmap <wallet/domain> for incoming/outgoing SOL, ETH, tokens, and funded wallets."); return; }
   if (tgCommandOnCooldown(chatId, "map", 6000)) return;
   const requestedFunds = /^\/(?:fundmap|funds|flow)(?:@\w+)?\b/i.test(String(message?.text || "")) || Boolean(domain);
   await sendMapCard(chatId, target, requestedFunds ? "funds" : "bags", { forceWallet: requestedFunds });
@@ -37869,10 +37870,10 @@ async function sendAirdropCard(chatId, mint) {
 
 async function sendAirdropSubjectCard(chatId, input) {
   const raw = String(input || "").trim();
-  const domain = (/^[a-z0-9][a-z0-9._-]{0,58}\.sol$/i.test(raw) ? raw : "");
-  const target = domain ? await resolveSolDomainToAddress(domain).catch(() => null) : raw;
+  const domain = walletDomainLike(raw) ? raw : "";
+  const target = domain ? await resolveWalletDomainToAddress(domain).catch(() => null) : raw;
   if (!target || (!solanaPublicKeyLike(target) && !/^0x[0-9a-fA-F]{40}$/.test(target))) {
-    await sayHtml(chatId, `Couldn't resolve <b>${escapeTelegramHtml(raw)}</b>. Send a coin CA, wallet, .sol domain, or Robinhood 0x address.`);
+    await sayHtml(chatId, `Couldn't resolve <b>${escapeTelegramHtml(raw)}</b>. Send a coin CA, wallet, .sol/.eth domain, or Robinhood 0x address.`);
     return;
   }
   if (/^0x[0-9a-fA-F]{40}$/.test(target)) {
@@ -40871,6 +40872,18 @@ async function resolveSolDomainToAddress(name) {
   _solDomainFwdCache.set(label, { at: Date.now(), addr });
   if (_solDomainFwdCache.size > 500) _solDomainFwdCache.delete(_solDomainFwdCache.keys().next().value);
   return addr;
+}
+
+function walletDomainLike(value) {
+  return /^[a-z0-9][a-z0-9._-]{0,58}\.sol$/i.test(String(value || "").trim())
+    || ethDomainLike(value);
+}
+
+async function resolveWalletDomainToAddress(name) {
+  const value = String(name || "").trim();
+  if (/\.sol$/i.test(value)) return resolveSolDomainToAddress(value);
+  if (ethDomainLike(value)) return resolveEthDomainToAddress(value);
+  return null;
 }
 
 const solWalletScanCache = new Map();
@@ -63700,6 +63713,25 @@ function sessionWalletFundingAmountLamports(body = {}) {
   return solToLamports(amountSol);
 }
 
+function buildWalletFundingTransaction(options) {
+  const { sourcePublicKey, destinationPublicKey, amountLamports, blockhash } = options;
+  // Declare a small, bounded priority fee ourselves. Phantom only rewrites unsigned transactions
+  // that do not already contain compute-budget instructions, while Solflare signs this message as-is.
+  // Keeping the message stable makes the mobile app handoff deterministic for both wallets.
+  return new Transaction({
+    recentBlockhash: blockhash,
+    feePayer: sourcePublicKey
+  }).add(
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 5_000 }),
+    SystemProgram.transfer({
+      fromPubkey: sourcePublicKey,
+      toPubkey: destinationPublicKey,
+      lamports: amountLamports
+    })
+  );
+}
+
 function verifySessionWalletFundingTransaction(tx, order) {
   const source = new PublicKey(order.sourcePublicKey);
   const destination = new PublicKey(order.destinationPublicKey || order.sessionWalletPublicKey);
@@ -63707,7 +63739,7 @@ function verifySessionWalletFundingTransaction(tx, order) {
   if (!tx?.feePayer?.equals(source)) {
     throw new Error("Wallet funding transaction has the wrong source wallet.");
   }
-  if (!Array.isArray(tx.instructions) || tx.instructions.length < 1 || tx.instructions.length > 3) {
+  if (!Array.isArray(tx.instructions) || tx.instructions.length < 1 || tx.instructions.length > 5) {
     throw new Error("Wallet funding transaction was changed. Start again.");
   }
   if (tx.recentBlockhash !== order.blockhash) {
@@ -63720,8 +63752,11 @@ function verifySessionWalletFundingTransaction(tx, order) {
   const transfers = [];
   let computeUnitLimit = 200_000n;
   let computeUnitPrice = 0n;
+  let legacyAdditionalFeeLamports = 0n;
   let sawComputeUnitLimit = false;
   let sawComputeUnitPrice = false;
+  let sawLegacyRequestUnits = false;
+  let sawRequestHeapFrame = false;
   for (const instruction of tx.instructions) {
     if (instruction.programId.equals(SystemProgram.programId)) {
       try {
@@ -63737,8 +63772,10 @@ function verifySessionWalletFundingTransaction(tx, order) {
     let type = "";
     try { type = ComputeBudgetInstruction.decodeInstructionType(instruction); }
     catch { throw new Error("Wallet funding transaction was changed. Start again."); }
-    if (type === "SetComputeUnitLimit" && !sawComputeUnitLimit) {
-      const units = Number(ComputeBudgetInstruction.decodeSetComputeUnitLimit(instruction).units);
+    if (type === "SetComputeUnitLimit" && !sawComputeUnitLimit && !sawLegacyRequestUnits) {
+      let units;
+      try { units = Number(ComputeBudgetInstruction.decodeSetComputeUnitLimit(instruction).units); }
+      catch { throw new Error("Wallet funding transaction was changed. Start again."); }
       if (!Number.isInteger(units) || units < 1 || units > 1_400_000) {
         throw new Error("Wallet funding priority fee settings are unsafe. Start again.");
       }
@@ -63746,17 +63783,45 @@ function verifySessionWalletFundingTransaction(tx, order) {
       sawComputeUnitLimit = true;
       continue;
     }
-    if (type === "SetComputeUnitPrice" && !sawComputeUnitPrice) {
-      const microLamports = BigInt(ComputeBudgetInstruction.decodeSetComputeUnitPrice(instruction).microLamports);
+    if (type === "SetComputeUnitPrice" && !sawComputeUnitPrice && !sawLegacyRequestUnits) {
+      let microLamports;
+      try { microLamports = BigInt(ComputeBudgetInstruction.decodeSetComputeUnitPrice(instruction).microLamports); }
+      catch { throw new Error("Wallet funding transaction was changed. Start again."); }
       if (microLamports < 0n) throw new Error("Wallet funding priority fee settings are unsafe. Start again.");
       computeUnitPrice = microLamports;
       sawComputeUnitPrice = true;
       continue;
     }
+    if (type === "RequestUnits" && !sawLegacyRequestUnits && !sawComputeUnitLimit && !sawComputeUnitPrice) {
+      let request;
+      try { request = ComputeBudgetInstruction.decodeRequestUnits(instruction); }
+      catch { throw new Error("Wallet funding transaction was changed. Start again."); }
+      const units = Number(request.units);
+      const additionalFee = BigInt(request.additionalFee);
+      if (!Number.isInteger(units) || units < 1 || units > 1_400_000 || additionalFee < 0n) {
+        throw new Error("Wallet funding priority fee settings are unsafe. Start again.");
+      }
+      computeUnitLimit = BigInt(units);
+      legacyAdditionalFeeLamports = additionalFee;
+      sawLegacyRequestUnits = true;
+      continue;
+    }
+    if (type === "RequestHeapFrame" && !sawRequestHeapFrame) {
+      let bytes;
+      try { bytes = Number(ComputeBudgetInstruction.decodeRequestHeapFrame(instruction).bytes); }
+      catch { throw new Error("Wallet funding transaction was changed. Start again."); }
+      if (!Number.isInteger(bytes) || bytes < 1_024 || bytes > 262_144 || bytes % 1_024 !== 0) {
+        throw new Error("Wallet funding compute settings are unsafe. Start again.");
+      }
+      sawRequestHeapFrame = true;
+      continue;
+    }
     throw new Error("Wallet funding transaction was changed. Start again.");
   }
   const maxPriorityFeeLamports = 1_000_000n;
-  const priorityFeeLamports = (computeUnitLimit * computeUnitPrice + 999_999n) / 1_000_000n;
+  const priorityFeeLamports = sawLegacyRequestUnits
+    ? legacyAdditionalFeeLamports
+    : (computeUnitLimit * computeUnitPrice + 999_999n) / 1_000_000n;
   if (priorityFeeLamports > maxPriorityFeeLamports) {
     throw new Error("Wallet funding priority fee settings are unsafe. Start again.");
   }
@@ -63801,14 +63866,12 @@ async function createWebSessionWalletOrder(userId, body = {}) {
   await writeWalletStore(store);
 
   const latestBlockhash = await rpcWithRetry("get session wallet funding blockhash", () => connection.getLatestBlockhash("confirmed"), CONFIG.rpcRetries, { priority: true });
-  const tx = new Transaction({
-    recentBlockhash: latestBlockhash.blockhash,
-    feePayer: sourcePublicKey
-  }).add(SystemProgram.transfer({
-    fromPubkey: sourcePublicKey,
-    toPubkey: keypair.publicKey,
-    lamports: amountLamports
-  }));
+  const tx = buildWalletFundingTransaction({
+    sourcePublicKey,
+    destinationPublicKey: keypair.publicKey,
+    amountLamports,
+    blockhash: latestBlockhash.blockhash
+  });
   const sessionWalletAttemptId = `session-wallet-${crypto.randomUUID()}`;
   const pending = {
     sessionWalletAttemptId,
@@ -63885,14 +63948,12 @@ async function createWebWalletFundingOrder(userId, body = {}) {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString();
   const latestBlockhash = await rpcWithRetry("get managed wallet funding blockhash", () => connection.getLatestBlockhash("confirmed"), CONFIG.rpcRetries, { priority: true });
-  const tx = new Transaction({
-    recentBlockhash: latestBlockhash.blockhash,
-    feePayer: sourcePublicKey
-  }).add(SystemProgram.transfer({
-    fromPubkey: sourcePublicKey,
-    toPubkey: destinationPublicKey,
-    lamports: amountLamports
-  }));
+  const tx = buildWalletFundingTransaction({
+    sourcePublicKey,
+    destinationPublicKey,
+    amountLamports,
+    blockhash: latestBlockhash.blockhash
+  });
   const walletFundingAttemptId = `wallet-funding-${crypto.randomUUID()}`;
   const pending = {
     sessionWalletAttemptId: walletFundingAttemptId,

@@ -150,7 +150,10 @@ test("backend session wallets verify the funding transaction before becoming aut
   assert.match(functionBody(serverSource, "createWebSessionWalletOrder"), /profile\.connectedWallet/);
   assert.match(functionBody(serverSource, "createWebSessionWalletOrder"), /Keypair\.generate/);
   assert.match(functionBody(serverSource, "createWebSessionWalletOrder"), /sessionWallet: true/);
-  assert.match(functionBody(serverSource, "createWebSessionWalletOrder"), /SystemProgram\.transfer/);
+  assert.match(functionBody(serverSource, "createWebSessionWalletOrder"), /buildWalletFundingTransaction/);
+  assert.match(functionBody(serverSource, "buildWalletFundingTransaction"), /ComputeBudgetProgram\.setComputeUnitLimit/);
+  assert.match(functionBody(serverSource, "buildWalletFundingTransaction"), /ComputeBudgetProgram\.setComputeUnitPrice/);
+  assert.match(functionBody(serverSource, "buildWalletFundingTransaction"), /SystemProgram\.transfer/);
   assert.match(functionBody(serverSource, "createWebSessionWalletOrder"), /serialize\(\{ requireAllSignatures: false, verifySignatures: false \}\)/);
   assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /feePayer/);
   assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /ComputeBudgetInstruction\.decodeInstructionType/);
