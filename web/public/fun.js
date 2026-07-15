@@ -331,10 +331,8 @@
     else if (selectedChain === "robinhood") rows = await fetchRhFeed(config);
     else {
       const solPromise = fetchSolFeed(config, force && !options.silent), rhPromise = fetchRhFeed(config);
-      const sol = await solPromise;
-      if (version !== state.feedRequestVersion || selectedChain !== state.chain || selectedFeed !== state.feed) return;
-      state.rows = sortAndDedupeFeed(sol, selectedFeed); renderCoinList(); void hydrateMissingCoinArt(version);
-      const rh = await rhPromise; rows = [...sol.slice(0, 32), ...rh.slice(0, 24)];
+      const [sol, rh] = await Promise.all([solPromise, rhPromise]);
+      rows = [...sol.slice(0, 32), ...rh.slice(0, 24)];
     }
     if (version !== state.feedRequestVersion || selectedChain !== state.chain || selectedFeed !== state.feed) return;
     state.rows = sortAndDedupeFeed(rows, selectedFeed);
@@ -1212,7 +1210,15 @@
       image.src = coinBadge({ address: image.dataset.coinImageKey, symbol: image.dataset.coinSymbol });
       setTimeout(() => {
         if (!image.isConnected || !image.matches("[data-token-image]")) return;
-        image.src = `${proxy}${proxy.includes("?") ? "&" : "?"}retry=${retry + 1}`;
+        const retryUrl = `${proxy}${proxy.includes("?") ? "&" : "?"}retry=${retry + 1}`;
+        const probe = new Image();
+        probe.onload = () => {
+          if (!image.isConnected || !image.matches("[data-token-image]")) return;
+          const key = image.dataset.coinImageKey || "";
+          if (key) state.resolvedCoinImages.set(key.toLowerCase(), retryUrl);
+          image.src = retryUrl;
+        };
+        probe.src = retryUrl;
       }, 1_800 + retry * 1_200);
       return;
     }

@@ -54,9 +54,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=16/);
-  assert.match(funWorker, /slimewire-fun-v14/);
-  assert.match(funWorker, /fun\.css\?v=16/);
+  assert.match(html, /fun\.css\?v=17/);
+  assert.match(funWorker, /slimewire-fun-v15/);
+  assert.match(funWorker, /fun\.css\?v=17/);
 });
 
 test("/fun keeps the wallet funding card compact and scannable", () => {
@@ -65,8 +65,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Fund from SlimeCash or send SOL to this wallet\."/);
-  assert.match(html, /fun\.js\?v=27/);
-  assert.match(funWorker, /fun\.js\?v=27/);
+  assert.match(html, /fun\.js\?v=28/);
+  assert.match(funWorker, /fun\.js\?v=28/);
 });
 
 test("/fun keeps SOL in the header and shows SOL plus coins as cash in the funding card", () => {
@@ -144,6 +144,10 @@ test("coin art stays metadata-first while wallet identities use slime PFPs", () 
   assert.match(js, /resolvedCoinImageFromMetadata/);
   assert.match(js, /resolvedCoinImages: new Map/);
   assert.match(js, /state\.resolvedCoinImages\.set/);
+  assert.match(js, /const probe = new Image\(\)/);
+  assert.match(js, /probe\.onload = \(\) =>/);
+  assert.match(js, /image\.src = retryUrl/);
+  assert.doesNotMatch(js, /setTimeout\(\(\) => \{[\s\S]{0,260}image\.src = `\$\{proxy\}/);
   assert.match(js, /background-image:url\('\$\{coinBadge\(coin\)\}'\)/);
   assert.match(js, /return mascot\(coinKey\(coin\)/);
   assert.match(css, /\.coin-avatar,\.coin-identity img\{background-position:center/);
@@ -201,7 +205,8 @@ test("/fun live feeds reject stale responses and refresh only the visible view",
   assert.match(js, /document\.addEventListener\("visibilitychange"/);
   assert.match(js, /sortAndDedupeFeed/);
   assert.match(js, /hydrateMissingCoinArt/);
-  assert.match(js, /const sol = await solPromise;[\s\S]{0,220}renderCoinList\(\);[\s\S]{0,120}const rh = await rhPromise/);
+  assert.match(js, /const \[sol, rh\] = await Promise\.all\(\[solPromise, rhPromise\]\)/);
+  assert.doesNotMatch(js, /state\.rows = sortAndDedupeFeed\(sol, selectedFeed\); renderCoinList\(\)/);
   assert.match(server, /chunks\.map\(\(chunk\) => fetchJson/);
   assert.match(server, /\.slice\(0, 50\)/);
   assert.match(server, /Never block the feed on dozens of explorer creation-time reads/);
