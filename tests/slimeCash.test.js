@@ -149,6 +149,9 @@ test("wallet approval helpers are shared by Cash and Fun", () => {
   assert.match(funding, /async function startMobileConnect/);
   assert.match(funding, /async function startMobileSign/);
   assert.match(funding, /async function consumeMobileCallback/);
+  assert.match(funding, /async function authorizeAndSignMobile/);
+  assert.match(funding, /slimewire-mwa\.iife\.min\.js/);
+  assert.ok(fs.existsSync(new URL("../web/public/vendor/slimewire-mwa.iife.min.js", import.meta.url)));
   assert.doesNotMatch(funding, /function startSolanaPay/);
   assert.doesNotMatch(funding, /browser_fallback_url/);
   assert.match(funding, /mobileMethodUrl\(kind, "signTransaction"\)/);
@@ -158,6 +161,8 @@ test("wallet approval helpers are shared by Cash and Fun", () => {
   assert.match(cash, /WalletFunding\.mobileSession\(kind\)/);
   assert.match(cash, /prepareCashMobileFundingOrder\(kind, session\.publicKey, amountSol, wallet\.index\)/);
   assert.match(cash, /WalletFunding\.startMobileSign\(kind/);
+  assert.match(cash, /WalletFunding\.supportsMwa\?\.\(\)/);
+  assert.match(cash, /WalletFunding\.authorizeAndSignMobile\(kind/);
   assert.doesNotMatch(cash, /WalletFunding\.startSolanaPay/);
 });
 
@@ -226,7 +231,7 @@ function fundingHarness() {
     localStorage,
     history,
     document,
-    navigator: { userAgent: "Mozilla/5.0 (Linux; Android 15) Mobile", maxTouchPoints: 5 },
+    navigator: { userAgent: "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/138.0.0.0 Mobile Safari/537.36", maxTouchPoints: 5 },
     URL,
     URLSearchParams,
     TextEncoder,
@@ -240,6 +245,7 @@ function fundingHarness() {
   return {
     api: window.SlimeWireFunding,
     values,
+    setMwa(value) { window.SlimeWireMwa = value; },
     get assignedUrl() { return assignedUrl; },
     navigate(value) { currentUrl = new URL(value, currentUrl); assignedUrl = ""; }
   };
@@ -250,6 +256,38 @@ function encryptedFundingResponse(payload, sharedSecret) {
   const data = nacl.box.after(new TextEncoder().encode(JSON.stringify(payload)), nonce, sharedSecret);
   return { nonce: bs58.encode(nonce), data: bs58.encode(data) };
 }
+
+test("Android Chrome funding authorizes and signs in one MWA activity", async () => {
+  const harness = fundingHarness();
+  let preparedFor = "";
+  let cachedAuthorization = null;
+  const mwa = {
+    async authorizeAndSign(options) {
+      cachedAuthorization = options.cachedAuthorization;
+      preparedFor = "7YttLkYvyNoCQMPdVduDpfpJ3KqVjhQKXvB6fYGhD55A";
+      const order = await options.prepareTransaction(preparedFor);
+      return {
+        publicKey: preparedFor,
+        order,
+        signedTransaction: "c2lnbmVk",
+        authorization: { authToken: "auth-1", walletUriBase: "phantom://mwa", publicKey: preparedFor }
+      };
+    }
+  };
+  // The helper's closure reads window.SlimeWireMwa.
+  harness.setMwa(mwa);
+  const result = await harness.api.authorizeAndSignMobile("phantom", {
+    prepareTransaction: async (publicKey) => ({ walletFundingAttemptId: "wf_1", walletIndex: 2, transaction: `tx:${publicKey}` })
+  });
+  assert.equal(result.signedTransaction, "c2lnbmVk");
+  assert.equal(preparedFor, result.publicKey);
+  assert.equal(cachedAuthorization, null);
+
+  await harness.api.authorizeAndSignMobile("phantom", {
+    prepareTransaction: async () => ({ walletFundingAttemptId: "wf_2", walletIndex: 2, transaction: "tx2" })
+  });
+  assert.equal(cachedAuthorization.authToken, "auth-1");
+});
 
 test("mobile Phantom funding connects once, preserves the preset, and returns signed bytes", async () => {
   const harness = fundingHarness();

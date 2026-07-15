@@ -55,7 +55,7 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
   assert.match(html, /fun\.css\?v=20/);
-  assert.match(funWorker, /slimewire-fun-v23/);
+  assert.match(funWorker, /slimewire-fun-v24/);
   assert.match(funWorker, /fun\.css\?v=20/);
 });
 
@@ -65,8 +65,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=34/);
-  assert.match(funWorker, /fun\.js\?v=34/);
+  assert.match(html, /fun\.js\?v=35/);
+  assert.match(funWorker, /fun\.js\?v=35/);
 });
 
 test("Connect and Deposit share one simple funding flow without surprise wallet downloads", () => {

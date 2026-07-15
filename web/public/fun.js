@@ -1006,6 +1006,21 @@
         throw new Error("Mobile wallet approval is still loading. Try again.");
       }
       const wallet = await ensureFunFundingWallet();
+      if (WalletFunding.supportsMwa?.()) {
+        if (status) status.textContent = `Opening ${label} for one ${amountSol} SOL approval…`;
+        const approved = await WalletFunding.authorizeAndSignMobile(kind, {
+          prepareTransaction: (publicKey) => prepareFunMobileFundingOrder(kind, publicKey, amountSol, wallet.index)
+        });
+        if (status) status.textContent = "Confirming your deposit on Solana…";
+        await finishFunWalletFunding({
+          kind,
+          amountSol,
+          walletIndex: approved.order.walletIndex,
+          walletFundingAttemptId: approved.order.walletFundingAttemptId,
+          signedTransaction: approved.signedTransaction
+        });
+        return true;
+      }
       const session = WalletFunding.mobileSession(kind);
       if (!session) {
         if (status) status.textContent = `Connect ${label} once. Your exact ${amountSol} SOL approval opens next.`;
@@ -1071,6 +1086,29 @@
     return created.data.order;
   }
 
+  async function finishFunWalletFunding(result) {
+    const executed = await request("/api/web/wallet-funding/execute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        walletFundingAttemptId: result.walletFundingAttemptId,
+        signedTransaction: result.signedTransaction
+      }),
+      timeout: 70_000
+    });
+    if (!executed.ok || !executed.data?.ok) throw new Error(apiMessage(executed.data, "Funding did not confirm. Check your wallet and try again."));
+    if (result.walletIndex !== null && Number.isFinite(Number(result.walletIndex))) {
+      state.activeWallet = Number(result.walletIndex);
+      localStorage.setItem(ACTIVE_WALLET_KEY, String(result.walletIndex));
+    }
+    await loadWallets(true);
+    closeSheet();
+    setView("wallet");
+    renderWalletHero();
+    renderWalletPositions();
+    toast(`${result.amountSol} SOL funded successfully.`);
+  }
+
   async function resumeFunMobileFunding() {
     const result = await WalletFunding?.consumeMobileCallback?.();
     if (!result) return false;
@@ -1092,17 +1130,7 @@
         await WalletFunding.startMobileSign(result.kind, { transaction: order.transaction, walletFundingAttemptId: order.walletFundingAttemptId, amountSol: result.amountSol, walletIndex: order.walletIndex, returnUrl: location.href });
         return true;
       }
-      const executed = await request("/api/web/wallet-funding/execute", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ walletFundingAttemptId: result.walletFundingAttemptId, signedTransaction: result.signedTransaction }), timeout: 70_000 });
-      if (!executed.ok || !executed.data?.ok) throw new Error(apiMessage(executed.data, "Funding did not confirm. Check your wallet and try again."));
-      if (result.walletIndex !== null && Number.isFinite(Number(result.walletIndex))) {
-        state.activeWallet = Number(result.walletIndex);
-        localStorage.setItem(ACTIVE_WALLET_KEY, String(result.walletIndex));
-      }
-      await loadWallets(true);
-      setView("wallet");
-      renderWalletHero();
-      renderWalletPositions();
-      toast(`${result.amountSol} SOL funded successfully.`);
+      await finishFunWalletFunding(result);
       return true;
     } catch (error) {
       openFundingSheet(error?.message || "Funding failed. No extra transfer was sent.");

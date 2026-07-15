@@ -1156,6 +1156,22 @@
       }
       const wallet = state.wallet;
       if (!wallet) throw new Error("Could not load the destination wallet.");
+      if (WalletFunding.supportsMwa?.()) {
+        status.textContent = `Opening ${label} for one ${amountSol} SOL approval…`;
+        status.className = "status wallet-fund-status";
+        const approved = await WalletFunding.authorizeAndSignMobile(kind, {
+          prepareTransaction: (publicKey) => prepareCashMobileFundingOrder(kind, publicKey, amountSol, wallet.index)
+        });
+        status.textContent = "Confirming your deposit on Solana…";
+        await finishCashWalletFunding({
+          kind,
+          amountSol,
+          walletIndex: approved.order.walletIndex,
+          walletFundingAttemptId: approved.order.walletFundingAttemptId,
+          signedTransaction: approved.signedTransaction
+        });
+        return true;
+      }
       const session = WalletFunding.mobileSession(kind);
       if (!session) {
         status.textContent = `Connect ${label} once. Your exact ${amountSol} SOL approval opens next.`;
@@ -1202,6 +1218,26 @@
     return created.data.order;
   }
 
+  async function finishCashWalletFunding(result) {
+    const executed = await post("/api/web/wallet-funding/execute", {
+      walletFundingAttemptId: result.walletFundingAttemptId,
+      signedTransaction: result.signedTransaction
+    });
+    if (!executed.ok || !executed.data?.ok) throw new Error(executed.data?.error || "Funding did not confirm. Check your wallet and try again.");
+    savePendingFund({
+      asset: "SOL",
+      amount: Number(result.amountSol || 0),
+      providerName: fundingProviderLabel(result.kind),
+      walletIndex: result.walletIndex,
+      at: Date.now(),
+      arrived: true
+    });
+    closeSheet("addcash");
+    await refreshBalance({ silent: true });
+    renderProfile();
+    toast(`${result.amountSol} SOL funded successfully.`);
+  }
+
   async function resumeCashMobileFunding() {
     const result = await WalletFunding?.consumeMobileCallback?.();
     if (!result) return false;
@@ -1224,13 +1260,7 @@
         await WalletFunding.startMobileSign(result.kind, { transaction: order.transaction, walletFundingAttemptId: order.walletFundingAttemptId, amountSol: result.amountSol, walletIndex: order.walletIndex, returnUrl: location.href });
         return true;
       }
-      const executed = await post("/api/web/wallet-funding/execute", { walletFundingAttemptId: result.walletFundingAttemptId, signedTransaction: result.signedTransaction });
-      if (!executed.ok || !executed.data?.ok) throw new Error(executed.data?.error || "Funding did not confirm. Check your wallet and try again.");
-      savePendingFund({ asset: "SOL", amount: Number(result.amountSol || 0), providerName: fundingProviderLabel(result.kind), walletIndex: result.walletIndex, at: Date.now(), arrived: true });
-      closeSheet("addcash");
-      await refreshBalance({ silent: true });
-      renderProfile();
-      toast(`${result.amountSol} SOL funded successfully.`);
+      await finishCashWalletFunding(result);
       return true;
     } catch (error) {
       await openAddCash();

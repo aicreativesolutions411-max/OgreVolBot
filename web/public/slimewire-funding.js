@@ -6,6 +6,7 @@
   const BASE58_LOOKUP = new Map([...BASE58_ALPHABET].map((char, index) => [char, index]));
   const MOBILE_PENDING_KEY = "slimewireMobileFundingPending:v2";
   const MOBILE_SESSION_PREFIX = "slimewireMobileFundingSession:v2:";
+  const MWA_AUTHORIZATION_PREFIX = "slimewireMwaFundingAuthorization:v1:";
   const MOBILE_CALLBACK_KEYS = [
     "sw_fund_provider", "sw_fund_stage", "sw_fund_state", "nonce", "data", "errorCode", "errorMessage",
     "phantom_encryption_public_key", "solflare_encryption_public_key"
@@ -13,10 +14,19 @@
   const MOBILE_PENDING_MAX_AGE_MS = 20 * 60 * 1000;
   let web3Promise = null;
   let naclPromise = null;
+  let mwaPromise = null;
 
   function isMobile() {
     return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "")
       || (/Macintosh/i.test(navigator.userAgent || "") && navigator.maxTouchPoints > 1);
+  }
+
+  function supportsMwa() {
+    const ua = navigator.userAgent || "";
+    return Boolean(window.isSecureContext !== false
+      && /Android/i.test(ua)
+      && /Chrome\/[0-9]+/i.test(ua)
+      && !/(?:EdgA|OPR|SamsungBrowser|Firefox)\//i.test(ua));
   }
 
   function candidates() {
@@ -112,6 +122,18 @@
     return naclPromise;
   }
 
+  function loadMwa() {
+    if (window.SlimeWireMwa?.authorizeAndSign) return Promise.resolve(window.SlimeWireMwa);
+    if (!mwaPromise) mwaPromise = loadScript({
+      selector: "script[data-slimewire-mwa]",
+      src: "/vendor/slimewire-mwa.iife.min.js",
+      datasetKey: "slimewireMwa",
+      ready: () => window.SlimeWireMwa?.authorizeAndSign ? window.SlimeWireMwa : null,
+      errorMessage: "The installed-wallet approval helper could not load. Try again."
+    });
+    return mwaPromise;
+  }
+
   function b64ToBytes(value) {
     const binary = atob(String(value || ""));
     const bytes = new Uint8Array(binary.length);
@@ -188,6 +210,32 @@
 
   function clearMobileSession(kind) {
     try { localStorage.removeItem(`${MOBILE_SESSION_PREFIX}${kind}`); } catch {}
+  }
+
+  async function authorizeAndSignMobile(kind, options = {}) {
+    if (!supportsMwa()) throw new Error("One-tap installed-wallet approval is not supported in this browser.");
+    if (!["phantom", "solflare"].includes(kind)) throw new Error("Choose Phantom or Solflare.");
+    if (typeof options.prepareTransaction !== "function") throw new Error("The funding transaction could not be prepared.");
+    const mwa = await loadMwa();
+    const cacheKey = `${MWA_AUTHORIZATION_PREFIX}${kind}`;
+    const cachedAuthorization = readJsonStorage(cacheKey);
+    try {
+      const result = await mwa.authorizeAndSign({
+        cachedAuthorization,
+        prepareTransaction: options.prepareTransaction,
+      });
+      if (!result?.publicKey || !result?.order?.walletFundingAttemptId || !result?.signedTransaction) {
+        throw new Error("The wallet did not return a complete funding approval.");
+      }
+      if (result.authorization) writeJsonStorage(cacheKey, result.authorization);
+      return result;
+    } catch (error) {
+      const message = String(error?.message || "");
+      if (/authorization|auth token|account|invalid/i.test(message)) {
+        try { localStorage.removeItem(cacheKey); } catch {}
+      }
+      throw error;
+    }
   }
 
   function readMobilePending() { return readJsonStorage(MOBILE_PENDING_KEY); }
@@ -401,6 +449,9 @@
     installUrl,
     loadWeb3,
     loadNacl,
+    loadMwa,
+    supportsMwa,
+    authorizeAndSignMobile,
     mobileSession,
     clearMobileSession,
     startMobileConnect,
