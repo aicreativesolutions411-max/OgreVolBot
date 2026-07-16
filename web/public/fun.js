@@ -1020,12 +1020,26 @@
     if (!query.trim()) { renderSearchHome(); return; }
     content.innerHTML = '<div class="skeleton-list"></div>';
     const direct = /^(0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$/.test(query.trim());
-    let matches = direct ? null : await clientTokenSearch(query.trim());
-    if (!matches || !matches.length) {
+    // Merge BOTH sources in parallel: DexScreener direct (user IP) + backend (the Robinhood
+    // universe knows every RH coin by name, so partials like "cash" surface cashcow).
+    let matches = [];
+    if (direct) {
       const result = await request(`/api/web/token-search?q=${encodeURIComponent(query.trim())}`);
       matches = result.ok ? (result.data?.matches || []) : [];
+    } else {
+      const [client, server] = await Promise.all([
+        clientTokenSearch(query.trim()),
+        request(`/api/web/token-search?q=${encodeURIComponent(query.trim())}`).catch(() => ({ ok: false }))
+      ]);
+      const seenKeys = new Set();
+      for (const row of [...(client || []), ...((server?.ok && server.data?.matches) || [])]) {
+        const k = `${String(row.chain || "solana")}:${String(row.tokenMint || row.address || "").toLowerCase()}`;
+        if (!k.split(":")[1] || seenKeys.has(k)) continue;
+        seenKeys.add(k);
+        matches.push(row);
+      }
     }
-    matches = matches.slice().sort((a, b) => Number(b.liquidityUsd || 0) - Number(a.liquidityUsd || 0));
+    matches = matches.slice().sort((a, b) => Number(b.liquidityUsd || b.marketCapUsd || 0) - Number(a.liquidityUsd || a.marketCapUsd || 0));
     const rows = matches.map((row) => (row.chain === "robinhood" ? normalizeRh({ ...row, address: row.address || row.tokenMint }) : normalizeSol(row)));
     content.innerHTML = rows.length ? `<h3>Results · by liquidity</h3><div class="coin-list">${rows.map(coinRowHtml).join("")}</div>` : emptyState("No exact match", "Paste the full Solana or Robinhood contract address.");
   }

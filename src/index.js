@@ -30811,34 +30811,35 @@ async function webTokenSearch(rawQuery = "") {
     const volumeUsd = Number(pair?.volume?.h24 || 0);
     const relevant = sym.includes(q) || nm.includes(q) || (qn && (sym.includes(qn) || nmn.includes(qn)));
     if (!relevant) continue;
-    matches.push({ tokenMint: mint, address: mint, chain, symbol, name, liquidityUsd, volumeUsd, imageUrl: pair?.info?.imageUrl || "" });
+    matches.push({ tokenMint: mint, address: mint, chain, symbol, name, liquidityUsd, volumeUsd, marketCapUsd: Number(pair?.marketCap || pair?.fdv || 0), imageUrl: pair?.info?.imageUrl || "" });
   }
   // Owner call: results order is top liquidity -> lowest, always.
   matches.sort((a, b) => Number(b.liquidityUsd || 0) - Number(a.liquidityUsd || 0));
-  // DexScreener's search endpoint is often blocked from this host's IP. Robinhood coins
-  // live in our own warm universe cache, so name search must never come back empty for them.
-  if (!matches.length) {
-    try {
-      const rhRows = await rhPromiseTimeout(rhFeedTokens(), 2_500, []);
-      for (const row of (Array.isArray(rhRows) ? rhRows : [])) {
-        const sym = String(row.symbol || "").toLowerCase();
-        const nm = String(row.name || "").toLowerCase();
-        const nmn = nm.replace(/\s+/g, "");
-        if (!(sym.includes(q) || nm.includes(q) || (qn && (sym.includes(qn) || nmn.includes(qn))))) continue;
-        matches.push({
-          tokenMint: row.address, address: row.address, chain: "robinhood",
-          symbol: row.symbol || "", name: row.name || "",
-          liquidityUsd: Number(row.liquidityUsd || 0),
-          volumeUsd: Number(row.volume24hUsd || 0),
-          marketCapUsd: Number(row.marketCapUsd || 0),
-          imageUrl: row.iconUrl || ""
-        });
-        if (matches.length >= 8) break;
-      }
-      matches.sort((a, b) => Number(b.liquidityUsd || b.marketCapUsd || 0) - Number(a.liquidityUsd || a.marketCapUsd || 0));
-    } catch { /* best effort */ }
-  }
-  return { query: cleaned, matches: matches.slice(0, 8) };
+  // ALWAYS merge the local Robinhood universe: DexScreener's search has no prefix
+  // expansion ("cash" never returns cashcow) and is often blocked from this host's IP.
+  // Our warm cache knows every RH coin by name, so partials resolve from it.
+  try {
+    const rhRows = await rhPromiseTimeout(rhFeedTokens(), 2_500, []);
+    for (const row of (Array.isArray(rhRows) ? rhRows : [])) {
+      const sym = String(row.symbol || "").toLowerCase();
+      const nm = String(row.name || "").toLowerCase();
+      const nmn = nm.replace(/\s+/g, "");
+      if (!(sym.includes(q) || nm.includes(q) || (qn && (sym.includes(qn) || nmn.includes(qn))))) continue;
+      const key = `robinhood:${String(row.address || "").toLowerCase()}`;
+      if (!row.address || seen.has(key)) continue;
+      seen.add(key);
+      matches.push({
+        tokenMint: row.address, address: row.address, chain: "robinhood",
+        symbol: row.symbol || "", name: row.name || "",
+        liquidityUsd: Number(row.liquidityUsd || 0),
+        volumeUsd: Number(row.volume24hUsd || 0),
+        marketCapUsd: Number(row.marketCapUsd || 0),
+        imageUrl: row.iconUrl || ""
+      });
+    }
+  } catch { /* best effort */ }
+  matches.sort((a, b) => Number(b.liquidityUsd || b.marketCapUsd || 0) - Number(a.liquidityUsd || a.marketCapUsd || 0));
+  return { query: cleaned, matches: matches.slice(0, 12) };
 }
 
 function livePairCandidateCreatedAt(candidate) {
