@@ -15773,8 +15773,8 @@ function backgroundWalletsCtaHtml() {
   return `
     <section class="account-check-card background-wallets-card">
       <div>
-        <h3>Background volume wallets</h3>
-        <p>${n} temporary volume-bot wallet${n === 1 ? " is" : "s are"} running in the background, hidden from this list. They auto-return funds to your source wallet when a bot stops — if anything ever gets stuck, sweep them all back here.</p>
+        <h3>Background volume recovery</h3>
+        <p>${n} temporary volume-bot or recovery wallet${n === 1 ? " is" : "s are"} safely retained in the background. Sweep stops active activity, sells positions with a confirmed route, and returns recoverable SOL to your source wallet.</p>
       </div>
       <div class="card-actions">
         <button type="button" class="primary" data-sweep-background-wallets ${state.sweepBackgroundPending ? "disabled" : ""}>${state.sweepBackgroundPending ? "Sweeping..." : `Sweep ${n} background wallet${n === 1 ? "" : "s"}`}</button>

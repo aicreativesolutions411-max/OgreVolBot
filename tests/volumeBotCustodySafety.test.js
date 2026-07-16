@@ -113,6 +113,26 @@ test("rolling volume forces sells and can replenish cleanup gas", () => {
   assert.match(topUp, /volumeBotTransferSol\(source, record\.publicKey, needed\)/);
 });
 
+test("volume cleanup uses locked fallback exits and eventually releases a stuck run safely", () => {
+  const sell = functionBody("sellVolumeCleanupToken");
+  assert.match(sell, /withExitSellLock/);
+  assert.match(sell, /exitSlippageAttemptList\(baseSlippageBps, true\)/);
+  assert.match(sell, /priceExit: true/);
+  assert.match(sell, /error\?\.sellPreSubmit !== true/);
+
+  const cleanup = functionBody("cleanupVolumeBotWallet");
+  assert.match(cleanup, /runVolumeBotExternalAction/);
+  assert.match(cleanup, /cleanupAttemptsByWallet/);
+  assert.match(cleanup, /attempts >= 6/);
+  assert.match(cleanup, /retainVolumeWalletAndReturnExcessSol/);
+
+  const retain = functionBody("retainVolumeWalletAndReturnExcessSol");
+  assert.match(retain, /VOLUME_BOT_CLEANUP_GAS_LAMPORTS/);
+  assert.match(retain, /kind: "cleanup-excess-sol"/);
+  assert.match(retain, /retained: true/);
+  assert.doesNotMatch(retain, /pruneVolumeWallet/);
+});
+
 test("a proven-empty rolling sweep reconciles to completed before list or restart", () => {
   const reconcile = functionBody("reconcileFinishedRollingVolumeBots");
   assert.match(reconcile, /plan\.config\?\.rollingWallets/);

@@ -1944,7 +1944,7 @@
     if (!(result?.ok && result.data?.ok)) { toast(result?.data?.error || "Could not stop this run", true); return; }
     toast(rh ? "Stopping after the current action" : "Stopping, draining, and sweeping back"); pollFunVolume(rh);
   }
-  async function sweepFunVolume() { const result = await post("/api/web/wallets/sweep-background", {}); toast(result.ok && result.data?.ok ? (result.data.summary || "Background wallets swept") : (result.data?.error || "Sweep failed"), !(result.ok && result.data?.ok)); pollFunVolume(false); }
+  async function sweepFunVolume() { const result = await post("/api/web/wallets/sweep-background", {}, { timeout: 180_000, noRetry: true }); toast(result.ok && result.data?.ok ? (result.data.summary || "Background wallet recovery started") : (result.data?.error || "Sweep failed"), !(result.ok && result.data?.ok)); pollFunVolume(false); }
   async function openBundleSheet() {
     if (!(await ensureAccount())) return;
     await loadWallets();

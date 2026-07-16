@@ -161,16 +161,19 @@ test("the other money endpoints (send-sol, volume-bot, distribute) are idempoten
   assert.match(functionBody(serverSource, "webDistributeToFreshWallets"), /runIdempotentMoneyOp\("web-distribute", userId/);
 });
 
-test("volume recovery refuses a manual sweep while a bot can still mutate ghost wallets", () => {
+test("volume recovery queues active plans before touching ghost wallets", () => {
   const sweep = functionBody(serverSource, "webSweepBackgroundWallets");
-  const plansRead = sweep.indexOf("readTradePlans(");
+  const plansRead = sweep.indexOf("mutateTradePlans(");
   const walletsRead = sweep.indexOf("readWalletStore(");
 
-  assert.ok(plansRead >= 0, "background sweep must inspect the durable trade-plan store");
+  assert.ok(plansRead >= 0, "background sweep must atomically update the durable trade-plan store");
   assert.ok(walletsRead >= 0, "background sweep must inspect the user's wallet store");
-  assert.ok(plansRead < walletsRead, "active-run rejection must happen before any background-wallet hydration");
+  assert.ok(plansRead < walletsRead, "active recovery must be queued before any direct background-wallet hydration");
   assert.match(sweep, /web_volume_bot/);
-  assert.match(sweep, /(?:active volume|volume bot[^\n]{0,80}(?:running|stop)|stop[^\n]{0,80}volume)/i);
+  assert.match(sweep, /plan\.botStage = "sweeping"/);
+  assert.match(sweep, /keepDust: false, sweepBack: true/);
+  assert.match(sweep, /if \(queuedPlans\)/);
+  assert.match(sweep, /Recovery started/);
   assert.match(sweep, /Token scan pending; wallet and gas were retained/);
   assert.doesNotMatch(sweep, /getOwnedTokenAccountsWithWarningsCached\([^;]+\.catch\(\(\) => \(\{ accounts: \[\] \}\)\)/);
   assert.match(sweep, /remaining !== null && remaining <= 20_000/);
