@@ -9,19 +9,23 @@ const dashboard = fs.readFileSync(new URL("../web/public/partner-rewards.html", 
 const cashCow = fs.readFileSync(new URL("../web/public/cashcow.html", import.meta.url), "utf8");
 const redirects = fs.readFileSync(new URL("../web/public/_redirects", import.meta.url), "utf8");
 
-test("partner rewards use the existing 0.15% allocation inside the 0.50% fee", () => {
+test("every trade keeps 0.50% platform plus 0.15% Cash Cow, with referral 0.15% only when payable", () => {
   assert.match(server, /const bundleFeeBps = 50/);
   assert.match(server, /const referralFeeBps = 15/);
-  assert.match(server, /connectedTradeFeeBps = jupiterReferralAccount \? bundleFeeBps : 0/);
-  assert.match(server, /partnerProgramByToken\(options\.tokenMint/);
-  assert.match(server, /total \* BigInt\(CONFIG\.referralFeeBps\)[\s\S]{0,120}BigInt\(CONFIG\.bundleFeeBps\)/);
+  assert.match(server, /const cashCowTradeFeeBps = 15/);
+  assert.match(server, /const baseTradeFeeBps = bundleFeeBps \+ cashCowTradeFeeBps/);
+  assert.match(server, /connectedTradeFeeBps = jupiterReferralAccount \? baseTradeFeeBps : 0/);
+  assert.match(server, /calculateTradeFeeLamports\(amountLamports, session\.userId\)/);
+  assert.match(server, /totalFeeBps = CONFIG\.baseTradeFeeBps \+ await referralTradeSurchargeBps\(userId\)/);
+  assert.match(server, /const cashCow = await ensureCashCowRewardsProgram\(\)/);
+  assert.match(server, /ownerLamports: total - cashCowLamports - referralLamports/);
   assert.match(server, /PARTNER_DEV_SHARE_BPS = 5_000/);
   assert.match(server, /PARTNER_HOLDER_SHARE_BPS = 5_000/);
 });
 
-test("Cash Cow adds a holder-only 0.15% surcharge while preserving the 0.50% platform fee", () => {
+test("Cash Cow receives its holder-only 0.15% allocation across Solana and Robinhood trades", () => {
   assert.match(server, /CASH_COW_RH_TOKEN = "0x4ad72e468e38ec204c605f2e058d61e4d79e2ceb"/);
-  assert.match(server, /CASH_COW_REWARD_BPS = 15/);
+  assert.match(server, /CASH_COW_REWARD_BPS = CONFIG\.cashCowTradeFeeBps/);
   const ensure = server.slice(server.indexOf("async function ensureCashCowRewardsProgram"), server.indexOf("async function partnerProgramByToken"));
   assert.match(ensure, /holderShareBps: 10_000/);
   assert.match(ensure, /developerShareBps: 0/);
@@ -49,9 +53,9 @@ test("Cash Cow adds a holder-only 0.15% surcharge while preserving the 0.50% pla
   const tradeStart = server.indexOf("async function webRhTradeCore");
   const tradeEnd = server.indexOf("function scheduleRhFeeSweep", tradeStart);
   const trade = server.slice(tradeStart, tradeEnd);
-  assert.match(trade, /feePolicy\.surcharge/);
-  assert.match(trade, /grossFeeBasisWei \* BigInt\(feePolicy\.rewardBps\)/);
-  assert.match(trade, /const ownerWei = feeWei - partnerWei/);
+  assert.match(trade, /CONFIG\.baseTradeFeeBps \+ \(referralTarget \? CONFIG\.referralFeeBps : 0\)/);
+  assert.match(trade, /grossFeeBasisWei \* BigInt\(CONFIG\.cashCowTradeFeeBps\)/);
+  assert.match(trade, /const ownerWei = feeWei - partnerWei - referralWei/);
   assert.ok(trade.indexOf("partnerFeeTxHash = await rhTransferEth") < trade.indexOf("feeTxHash = await rhTransferEth"));
   assert.match(server, /await ensureCashCowRewardsProgram\(\);[\s\S]{0,160}const programs/);
   const distribute = server.slice(server.indexOf("async function distributeRhHolderRewards"), server.indexOf("let holderRewardsAutoClaimBusy"));
@@ -77,7 +81,7 @@ test("coin-aware fee plumbing covers Telegram, managed-wallet, bundle, and RH tr
   assert.match(server, /options\.userId, tokenMint, chain: "solana"/);
   assert.match(server, /b\.userId, tokenMint: mint, chain: "solana"/);
   assert.match(server, /recordPartnerRhFee/);
-  assert.match(server, /partner\.vaultRhWallet/);
+  assert.match(server, /cashCowProgram\.vaultRhWallet/);
 });
 
 test("holder policy is daily, snapshot-gated, sqrt-weighted, capped, and bounded to 100", () => {

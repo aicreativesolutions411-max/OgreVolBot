@@ -550,10 +550,11 @@ test("Telegram Buy is CA-first and scan/buy cards recover explicit 24h volume", 
   assert.match(functionBody(serverSource, "postGroupBuyRh"), /24h Vol/);
 });
 
-test("RH trading fees: normal coins match Solana, token rewards are scoped, and platform fees sweep to SOL", () => {
+test("RH trading fees match the global platform, Cash Cow, and optional referral split", () => {
   const trade = functionBody(serverSource, "webRhTradeCore");
-  assert.match(trade, /partnerTradeFeePolicy\(partner\)/);
-  assert.match(trade, /feePolicy\.totalBps/);
+  assert.match(trade, /CONFIG\.baseTradeFeeBps \+ \(referralTarget \? CONFIG\.referralFeeBps : 0\)/);
+  assert.match(trade, /CONFIG\.cashCowTradeFeeBps/);
+  assert.match(trade, /feeWei - partnerWei - referralWei/);
   assert.match(trade, /amountRaw -= feeWei/);                // buys: fee off the ETH going in
   assert.match(trade, /rhTransferEth/);                      // skim to the platform RH fee account
   assert.match(trade, /rhFeeEvmWallet/);
@@ -1851,8 +1852,8 @@ test("viral + onboarding: win-flex card, first-run wallet CTA, fee transparency,
   assert.match(functionBody(serverSource, "showMenu"), /walletsForOwner\(await readWalletStore\(\), userId\)\.length === 0/);
   assert.match(functionBody(serverSource, "showMenu"), /Create your free wallet/);
   // fee transparency in settings
-  assert.match(functionBody(serverSource, "dmSettingsMenu"), /CONFIG\.bundleFeeBps/);
-  assert.match(functionBody(serverSource, "dmSettingsMenu"), /Trade fee/);
+  assert.match(functionBody(serverSource, "dmSettingsMenu"), /CONFIG\.baseTradeFeeBps/);
+  assert.match(functionBody(serverSource, "dmSettingsMenu"), /Base trade fee/);
   // deposit view: QR of the (public) address + wired
   assert.match(serverSource, /async function showDepositView/);
   assert.match(functionBody(serverSource, "showDepositView"), /api\.qrserver\.com/);
@@ -1932,7 +1933,7 @@ test("🏆⚡ Throne Bundle: atomic Jito waves of 4 by opt-in order, safe RPC fa
   assert.match(fb, /runIdempotentMoneyOp\("community-snipe", userId, `\$\{chatId\}:\$\{mint\}`/); // idempotent → never double-buys
   assert.match(fb, /results\.push\(await autoBuyFallback\(/);
   // co-entry buys now PAY THE FEE: carve it out of the buy + collect it in a separate transfer after
-  assert.match(fb, /const feeLamports = calculateFeeLamports\(lamports\)/);
+  assert.match(fb, /calculateTradeFeeLamports\(lamports, userId\)/);
   assert.match(fb, /const swapLamports = lamports - feeLamports/);
   assert.match(fb, /collectSolFee\(b\.keypair, b\.feeLamports/);
   // fired only when throneBundle on, members sorted by opt-in time (first-opted-first)

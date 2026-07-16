@@ -5040,17 +5040,19 @@ function loadConfig() {
   }
 
   const feeWallet = process.env.FEE_WALLET || "AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV";
-  // Default SPOT pricing is 0.50% per execution. Its normal 0.15% reward
-  // allocation stays inside that fee. Explicit token-scoped policies may add
-  // a disclosed surcharge (Cash Cow adds 0.15% for holders, totaling 0.65%).
+  // SPOT pricing has three explicit, non-overlapping parts:
+  //   0.50% platform + 0.15% Cash Cow holder rewards on every trade;
+  //   a further 0.15% is charged only when that trader has a valid referrer.
   const bundleFeeBps = 50;
   const referralFeeBps = 15;
+  const cashCowTradeFeeBps = 15;
+  const baseTradeFeeBps = bundleFeeBps + cashCowTradeFeeBps;
   // Connected-wallet (Phantom/Solflare) trade fee via Jupiter's referral fee,
-  // embedded in the swap the user signs. It uses the same fixed 0.50% whenever
+  // embedded in the swap the user signs. It uses the same 0.65% base whenever
   // JUPITER_REFERRAL_ACCOUNT is configured; otherwise connected-wallet fees
   // stay off because Jupiter has nowhere valid to route them.
   const jupiterReferralAccount = String(process.env.JUPITER_REFERRAL_ACCOUNT || "").trim();
-  const connectedTradeFeeBps = jupiterReferralAccount ? bundleFeeBps : 0;
+  const connectedTradeFeeBps = jupiterReferralAccount ? baseTradeFeeBps : 0;
   const tradingSpeedPreset = parseTradingSpeedPreset(process.env.TRADING_SPEED_PRESET || "balanced");
   const speedDefaults = tradingSpeedDefaults(tradingSpeedPreset);
   const bundleConcurrency = Number.parseInt(process.env.BUNDLE_CONCURRENCY || String(speedDefaults.bundleConcurrency), 10);
@@ -5668,6 +5670,8 @@ function loadConfig() {
     tradingSpeedPreset,
     feeWallet,
     bundleFeeBps,
+    cashCowTradeFeeBps,
+    baseTradeFeeBps,
     connectedTradeFeeBps,
     jupiterReferralAccount,
     referralFeeBps,
@@ -18107,7 +18111,7 @@ async function batchBuyFlow(chatId, session) {
       const amountLamports = session.data.amountMode === "max"
         ? balance - CONFIG.buyReserveLamports
         : solToLamports(session.data.amountSol);
-      const feeLamports = calculateFeeLamports(amountLamports);
+      const { feeLamports, totalFeeBps } = await calculateTradeFeeLamports(amountLamports, session.userId);
       const swapLamports = amountLamports - feeLamports;
       const recommendedLamports = recommendedBuyFundingLamports(amountLamports);
 
@@ -18138,7 +18142,7 @@ async function batchBuyFlow(chatId, session) {
       });
       let feeStatus = "";
       try {
-        const feeSignature = await collectSolFee(keypair, feeLamports, { userId: session.userId, tokenMint: session.data.tokenMint, chain: "solana" });
+        const feeSignature = await collectSolFee(keypair, feeLamports, { userId: session.userId, tokenMint: session.data.tokenMint, chain: "solana", totalFeeBps });
         feeStatus = feeSignature ? `, fee tx ${feeSignature}` : "";
       } catch (feeError) {
         feeStatus = `, fee failed - ${formatError(feeError)}`;
@@ -18171,7 +18175,7 @@ async function batchBuyFlow(chatId, session) {
     amountMode: session.data.amountMode,
     amountSolPerWallet: session.data.amountSol ?? null,
     feeWallet: CONFIG.feeWallet,
-    feeBps: CONFIG.bundleFeeBps,
+    feeBps: CONFIG.baseTradeFeeBps,
     slippageBps: session.data.slippageBps,
     wallets: wallets.map(publicWallet),
     signatures: results
@@ -18216,10 +18220,10 @@ async function batchSellFlow(chatId, session) {
         slippageBps: session.data.slippageBps
       });
       const outputLamports = BigInt(result.outputAmount || 0);
-      const feeLamports = calculateFeeLamports(outputLamports);
+      const { feeLamports, totalFeeBps } = await calculateTradeFeeLamports(outputLamports, session.userId);
       let feeStatus = "";
       try {
-        const feeSignature = await collectSolFee(keypair, feeLamports, { userId: session.userId, tokenMint: session.data.tokenMint, chain: "solana" });
+        const feeSignature = await collectSolFee(keypair, feeLamports, { userId: session.userId, tokenMint: session.data.tokenMint, chain: "solana", totalFeeBps });
         feeStatus = feeSignature ? `, fee tx ${feeSignature}` : "";
       } catch (feeError) {
         feeStatus = `, fee failed - ${formatError(feeError)}`;
@@ -18257,7 +18261,7 @@ async function batchSellFlow(chatId, session) {
     tokenMint: session.data.tokenMint,
     percent: session.data.percent,
     feeWallet: CONFIG.feeWallet,
-    feeBps: CONFIG.bundleFeeBps,
+    feeBps: CONFIG.baseTradeFeeBps,
     slippageBps: session.data.slippageBps,
     wallets: wallets.map(publicWallet),
     signatures: results
@@ -18356,7 +18360,7 @@ async function sellAllTokensFlow(chatId, session) {
     destination: session.data.destination || null,
     sweepAfter: Boolean(session.data.sweepAfter),
     feeWallet: CONFIG.feeWallet,
-    feeBps: CONFIG.bundleFeeBps,
+    feeBps: CONFIG.baseTradeFeeBps,
     slippageBps: session.data.slippageBps,
     soldCount,
     skippedCount,
@@ -18729,7 +18733,7 @@ async function preflightSniperSelectedRoute(session) {
   const store = await readWalletStore();
   const selectedWallets = session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId));
   const amountLamports = solToLamports(session.data.amountSol);
-  const feeLamports = calculateFeeLamports(amountLamports);
+  const { feeLamports } = await calculateTradeFeeLamports(amountLamports, session.userId);
   const swapLamports = amountLamports - feeLamports;
   if (swapLamports <= 0) {
     return { ok: false, reason: "Amount is too small after the bot fee. Choose a bigger SOL amount." };
@@ -19036,7 +19040,7 @@ async function buyViaJupiterWithSafety(keypair, tokenMint, swapLamports, slippag
 async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, options = {}) {
   const keypair = decryptWallet(wallet);
   const balance = await getSolBalanceCached(keypair.publicKey, { force: true });
-  const feeLamports = calculateFeeLamports(amountLamports);
+  const { feeLamports, totalFeeBps } = await calculateTradeFeeLamports(amountLamports, options.userId);
   const swapLamports = amountLamports - feeLamports;
   const recommendedLamports = recommendedBuyFundingLamports(amountLamports);
 
@@ -19134,7 +19138,7 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, o
 
   let feeStatus = "";
   try {
-    const feeSignature = await collectSolFee(keypair, feeLamports, { userId: options.userId, tokenMint, chain: "solana" });
+    const feeSignature = await collectSolFee(keypair, feeLamports, { userId: options.userId, tokenMint, chain: "solana", totalFeeBps });
     feeStatus = feeSignature ? `, fee tx ${feeSignature}` : "";
   } catch (feeError) {
     feeStatus = `, fee failed - ${formatError(feeError)}`;
@@ -19245,11 +19249,11 @@ async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps,
   }
 
   const outputLamports = BigInt(result.outputAmount || 0);
-  const feeLamports = calculateFeeLamports(outputLamports);
+  const { feeLamports, totalFeeBps } = await calculateTradeFeeLamports(outputLamports, options.userId);
   let feeStatus = "";
 
   try {
-    const feeSignature = await collectSolFee(keypair, feeLamports, { userId: options.userId, tokenMint, chain: "solana" });
+    const feeSignature = await collectSolFee(keypair, feeLamports, { userId: options.userId, tokenMint, chain: "solana", totalFeeBps });
     feeStatus = feeSignature ? `, fee tx ${feeSignature}` : "";
   } catch (feeError) {
     feeStatus = `, fee failed - ${formatError(feeError)}`;
@@ -24637,6 +24641,7 @@ async function collectSolFee(signer, feeLamports, options = {}) {
   const targets = await referralFeeTargets(options.userId, feeAmount, options);
   const ownerLamports = Number(targets.ownerLamports);
   const referralLamports = Number(targets.referralLamports);
+  const cashCowLamports = Number(targets.cashCowLamports || 0n);
 
   const tx = new Transaction();
   if (ownerLamports > 0) {
@@ -24644,6 +24649,13 @@ async function collectSolFee(signer, feeLamports, options = {}) {
       fromPubkey: signer.publicKey,
       toPubkey: new PublicKey(CONFIG.feeWallet),
       lamports: ownerLamports
+    }));
+  }
+  if (cashCowLamports > 0 && targets.cashCowWallet) {
+    tx.add(SystemProgram.transfer({
+      fromPubkey: signer.publicKey,
+      toPubkey: new PublicKey(targets.cashCowWallet),
+      lamports: cashCowLamports
     }));
   }
   // One transfer per referral payout wallet (1 normally, up to 4 when a split is configured).
@@ -24676,12 +24688,12 @@ async function collectSolFee(signer, feeLamports, options = {}) {
       error: friendlyError(error)
     }));
   }
-  if (targets.partnerProgramId && referralLamports > 0) {
+  if (targets.partnerProgramId && cashCowLamports > 0) {
     await recordPartnerRewardFee({
       programId: targets.partnerProgramId,
       chain: "solana",
       token: options.tokenMint || "",
-      amount: referralLamports,
+      amount: cashCowLamports,
       grossFee: feeAmount.toString(),
       signature,
       userId: options.userId || ""
@@ -24701,7 +24713,7 @@ const PARTNER_SNAPSHOT_MS = 6 * 60 * 60 * 1000;
 const PARTNER_SETTLEMENT_MS = 24 * 60 * 60 * 1000;
 const PARTNER_HOLDER_ELIGIBILITY_VERSION = 2;
 const CASH_COW_RH_TOKEN = "0x4ad72e468e38ec204c605f2e058d61e4d79e2ceb";
-const CASH_COW_REWARD_BPS = 15;
+const CASH_COW_REWARD_BPS = CONFIG.cashCowTradeFeeBps;
 
 function partnerHolderShareBps(program) {
   return Math.max(0, Math.min(10_000, Number(program?.allocation?.holderShareBps ?? PARTNER_HOLDER_SHARE_BPS) || 0));
@@ -25812,28 +25824,68 @@ async function processCreatorFeeAutoClaims() {
   }
 }
 
+async function solReferralPayoutTarget(userId, referralLamports) {
+  if (!userId || BigInt(referralLamports || 0) <= 0n) return null;
+  try {
+    const store = await readWebAuthStore();
+    const profile = store.profiles[String(userId)] || {};
+    const referrerUserId = String(profile.referredByUserId || "");
+    const referrer = referrerUserId ? store.profiles[referrerUserId] : null;
+    if (!referrer) return null;
+    const autoWallet = (await cashPrimaryWallet(referrerUserId).catch(() => null))?.publicKey || "";
+    const split = normalizeReferralPayoutSplit(referrer.referralPayoutSplit)
+      || (referrer.referralPayoutWallet ? [{ wallet: referrer.referralPayoutWallet, pct: 100 }] : null)
+      || (autoWallet ? [{ wallet: autoWallet, pct: 100 }] : null);
+    if (!split) return null;
+    const validSplit = split.filter((part) => part.wallet && part.wallet !== CONFIG.feeWallet);
+    if (!validSplit.length) return null;
+    for (const part of validSplit) new PublicKey(part.wallet);
+    const referralSplits = splitReferralLamports(BigInt(referralLamports), validSplit).filter((part) => part.lamports > 0n);
+    if (!referralSplits.length) return null;
+    return {
+      referralLamports: BigInt(referralLamports),
+      referralSplits,
+      referralWallet: referralSplits[0].wallet,
+      referrerUserId
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function referralFeeTargets(userId, feeLamports, options = {}) {
   const total = BigInt(feeLamports);
-  const fallback = { ownerLamports: total, referralLamports: 0n, referralWallet: "", referralSplits: [], referrerUserId: "", partnerProgramId: "" };
-  if (CONFIG.bundleFeeBps <= 0 || CONFIG.referralFeeBps <= 0) return fallback;
+  const totalFeeBps = Math.max(CONFIG.baseTradeFeeBps, Number(options.totalFeeBps) || CONFIG.baseTradeFeeBps);
+  const fallback = {
+    ownerLamports: total,
+    cashCowLamports: 0n,
+    cashCowWallet: "",
+    referralLamports: 0n,
+    referralWallet: "",
+    referralSplits: [],
+    referrerUserId: "",
+    partnerProgramId: ""
+  };
+  if (CONFIG.baseTradeFeeBps <= 0 || CONFIG.cashCowTradeFeeBps <= 0) return fallback;
+  let baseTargets = fallback;
 
   try {
-    // A registered coin partner owns the existing 0.15% reward allocation for
-    // that coin. It replaces (never stacks with) the ordinary referral share.
-    const partner = await partnerProgramByToken(options.tokenMint, options.chain || "solana");
-    if (partner?.vaultSolWallet && partner.vaultSolWallet !== CONFIG.feeWallet) {
-      new PublicKey(partner.vaultSolWallet);
-      const referralLamports = (total * BigInt(CONFIG.referralFeeBps)) / BigInt(CONFIG.bundleFeeBps);
-      if (referralLamports > 0n && referralLamports < total) return {
-        ownerLamports: total - referralLamports,
-        referralLamports,
-        referralSplits: [{ wallet: partner.vaultSolWallet, lamports: referralLamports }],
-        referralWallet: partner.vaultSolWallet,
-        referrerUserId: "",
-        partnerProgramId: partner.id
-      };
-    }
-    if (!userId) return fallback;
+    // The supplied fee is the always-on 0.65% base. Preserve the full 0.50%
+    // platform share and route 0.15% to Cash Cow on every token and chain.
+    const cashCow = await ensureCashCowRewardsProgram();
+    const cashCowWallet = cashCow?.vaultSolWallet || "";
+    if (!cashCowWallet || cashCowWallet === CONFIG.feeWallet) return fallback;
+    new PublicKey(cashCowWallet);
+    const cashCowLamports = (total * BigInt(CONFIG.cashCowTradeFeeBps)) / BigInt(totalFeeBps);
+    baseTargets = {
+      ...fallback,
+      ownerLamports: total - cashCowLamports,
+      cashCowLamports,
+      cashCowWallet,
+      partnerProgramId: cashCow.id
+    };
+    const referralIncluded = totalFeeBps >= CONFIG.baseTradeFeeBps + CONFIG.referralFeeBps;
+    if (!userId || CONFIG.referralFeeBps <= 0 || !referralIncluded) return baseTargets;
     const store = await readWebAuthStore();
     const profile = store.profiles[String(userId)] || {};
     const referrer = profile.referredByUserId ? store.profiles[String(profile.referredByUserId)] : null;
@@ -25847,24 +25899,32 @@ async function referralFeeTargets(userId, feeLamports, options = {}) {
     const split = normalizeReferralPayoutSplit(referrer?.referralPayoutSplit)
       || (referrer?.referralPayoutWallet ? [{ wallet: referrer.referralPayoutWallet, pct: 100 }] : null)
       || (autoWallet ? [{ wallet: autoWallet, pct: 100 }] : null);
-    if (!split) return fallback;
+    if (!split) return baseTargets;
     const validSplit = split.filter((s) => s.wallet && s.wallet !== CONFIG.feeWallet);
-    if (!validSplit.length) return fallback;
+    if (!validSplit.length) return baseTargets;
     for (const s of validSplit) new PublicKey(s.wallet); // any invalid → throws → caught → fallback
-    const referralLamports = (total * BigInt(CONFIG.referralFeeBps)) / BigInt(CONFIG.bundleFeeBps);
-    if (referralLamports <= 0n || referralLamports >= total) return fallback;
+    const referralLamports = (total * BigInt(CONFIG.referralFeeBps)) / BigInt(totalFeeBps);
+    if (referralLamports <= 0n) return baseTargets;
     const referralSplits = splitReferralLamports(referralLamports, validSplit).filter((p) => p.lamports > 0n);
-    if (!referralSplits.length) return fallback;
+    if (!referralSplits.length) return baseTargets;
     return {
-      ownerLamports: total - referralLamports,
+      ...baseTargets,
+      ownerLamports: total - cashCowLamports - referralLamports,
       referralLamports,
       referralSplits,
       referralWallet: referralSplits[0].wallet,
       referrerUserId: String(profile.referredByUserId || "")
     };
   } catch {
-    return fallback;
+    return baseTargets;
   }
+}
+
+async function referralTradeSurchargeBps(userId) {
+  if (!userId || CONFIG.referralFeeBps <= 0) return 0;
+  return await solReferralPayoutTarget(userId, BigInt(CONFIG.referralFeeBps))
+    ? CONFIG.referralFeeBps
+    : 0;
 }
 
 function referralSolString(lamports) {
@@ -44278,11 +44338,11 @@ async function fireCommunitySnipeThroneBundle(chatId, mint, orderedMembers, wall
       // Carve the platform fee out of the co-entry buy (like every other buy in the app) so the fee is
       // always affordable and gets collected right after — the bundle no longer trades fee-free.
       const lamports = solToLamports(Number(m.amountSol) || 0);
-      const feeLamports = calculateFeeLamports(lamports);
+      const { feeLamports, totalFeeBps } = await calculateTradeFeeLamports(lamports, userId);
       const swapLamports = lamports - feeLamports;
       try {
         const b = await buildSignedPumpBuyTx(wallet, mint, swapLamports, slippageBps);
-        built.push({ userId, m, wallet, nameTag, lamports, feeLamports, ...b });
+        built.push({ userId, m, wallet, nameTag, lamports, feeLamports, totalFeeBps, ...b });
       } catch (e) {
         // Never signed anything → safe to auto-buy fresh instead of leaving them to buy by hand.
         results.push(await autoBuyFallback(userId, m, wallet, nameTag));
@@ -44322,7 +44382,7 @@ async function fireCommunitySnipeThroneBundle(chatId, mint, orderedMembers, wall
       try { invalidateWalletReadCache(b.wallet.publicKey); } catch (_) {}
       // Collect the platform fee for this landed co-entry buy (carved above). Best-effort, exactly like the
       // normal buy path — this is what was missing before (bundle buys paid no fee at all).
-      try { await collectSolFee(b.keypair, b.feeLamports, { userId: b.userId, tokenMint: mint, chain: "solana" }); } catch (_) {}
+      try { await collectSolFee(b.keypair, b.feeLamports, { userId: b.userId, tokenMint: mint, chain: "solana", totalFeeBps: b.totalFeeBps }); } catch (_) {}
       results.push({ nameTag: b.nameTag, ok: true, sol: Number(b.m.amountSol) || 0, bundled: bundleLanded });
       recordTradeEvents([{ userId: b.userId, type: "buy", source: "community-snipe", tokenMint: mint, walletLabel: b.wallet.label, walletPublicKey: b.wallet.publicKey, solLamportsSpent: String(b.lamports), signature: b.signature }]).catch(() => {});
       if (Number(b.m.tpPct) > 0 || Number(b.m.slPct) > 0) {
@@ -44447,9 +44507,9 @@ async function setBuyPref(userId, kind, value) {
 // ⚙️ TRADE SETTINGS hub (the recognized panel): buy presets + slippage, one clean place.
 const SLIP_TIERS = [300, 500, 1000, 1500, 2500];
 function dmSettingsMenu(prefs) {
-  const feePct = (CONFIG.bundleFeeBps / 100).toFixed(2).replace(/\.?0+$/, "");
+  const feePct = (CONFIG.baseTradeFeeBps / 100).toFixed(2).replace(/\.?0+$/, "");
   return {
-    text: ["⚙️ <b>Trade settings</b>", "", `⚡ Buy presets: <b>${prefs.presets[0]}◎ · ${prefs.presets[1]}◎ · ${prefs.presets[2]}◎</b>  (✏️ custom ${prefs.custom}◎)`, `🎚 Slippage: <b>${(prefs.slippageBps / 100).toFixed(prefs.slippageBps % 100 ? 1 : 0)}%</b>`, `💸 Trade fee: <b>${feePct}%</b> per buy/sell — that's it, no subscription.`, `🛡 <b>Sandwich-proof:</b> buys route through a Jito bundle (out of the mempool where MEV bots lurk) + a hard price-impact cap blocks buys that would cook you on an illiquid coin.`, `🎁 Invite friends → earn a rebate on their fees (Profile → Referral / <code>/reflink</code>).`, "", "<i>These apply to your ⚡ one-click buys everywhere. Same wallet + settings on slimewire.org via /web.</i>"].join("\n"),
+    text: ["⚙️ <b>Trade settings</b>", "", `⚡ Buy presets: <b>${prefs.presets[0]}◎ · ${prefs.presets[1]}◎ · ${prefs.presets[2]}◎</b>  (✏️ custom ${prefs.custom}◎)`, `🎚 Slippage: <b>${(prefs.slippageBps / 100).toFixed(prefs.slippageBps % 100 ? 1 : 0)}%</b>`, `💸 Base trade fee: <b>${feePct}%</b> per buy/sell (0.50% platform + 0.15% Cash Cow rewards).`, `🎁 Referred trades add 0.15% for the referrer. No referral means no referral surcharge.`, `🛡 <b>Sandwich-proof:</b> buys route through a Jito bundle (out of the mempool where MEV bots lurk) + a hard price-impact cap blocks buys that would cook you on an illiquid coin.`, `🎁 Invite friends → earn a rebate on their fees (Profile → Referral / <code>/reflink</code>).`, "", "<i>These apply to your ⚡ one-click buys everywhere. Same wallet + settings on slimewire.org via /web.</i>"].join("\n"),
     markup: { inline_keyboard: [
       [{ text: "🎚 Buy presets", callback_data: "bp:menu" }, { text: `⚡ Slippage: ${(prefs.slippageBps / 100).toFixed(prefs.slippageBps % 100 ? 1 : 0)}%`, callback_data: "st:slip" }],
       [{ text: "👛 Wallet", callback_data: "wallet_menu" }, { text: "🏠 Menu", callback_data: "main_menu" }]
@@ -49213,8 +49273,8 @@ async function applyCopyCfgInput(message, userId) {
 // SAME derived EVM wallet as Robinhood Chain, funded by USDC on Arbitrum. Feature key: "pvp" (off by default).
 const pvpPerpCfg = new Map();        // userId -> { asset, side, lev, usd, at }
 const pvpPerpPending = new Map();    // userId -> { at } (custom $ size typed next)
-// 💸 PvP fee model (owner): FUTURES 0.05% per execution (open AND close), SPOT 0.5% per execution
-// (spot rides the standard platform fee — CONFIG.bundleFeeBps — taken on every buy/sell already),
+// 💸 PvP fee model (owner): FUTURES 0.05% per execution (open AND close), SPOT uses the standard
+// trade fee (CONFIG.baseTradeFeeBps, plus a referral surcharge when applicable) on every buy/sell,
 // subscription FREE. The perp fee is auto-CONVERTED to SOL at the live price and sent from the user's
 // custodial SOL wallet to the FEE WALLET on each execution. Best-effort: a fee transfer that can't land
 // (no SOL for rent/fee) never blocks or reverses the trade — it's logged + audited instead.
@@ -55479,6 +55539,23 @@ function rhWeiFromEthNumber(amountEth) {
   return BigInt(Math.round(Number(amountEth) * 1e9)) * 10n ** 9n;
 }
 
+async function rhReferralTradeTarget(userId) {
+  if (!userId || CONFIG.referralFeeBps <= 0) return null;
+  try {
+    const authStore = await readWebAuthStore();
+    const profile = authStore.profiles[String(userId)] || {};
+    const referrerUserId = String(profile.referredByUserId || "");
+    if (!referrerUserId || !authStore.profiles[referrerUserId]) return null;
+    const wallet = await cashPrimaryWallet(referrerUserId).catch(() => null);
+    if (!wallet?.publicKey) return null;
+    const address = evmAddressFromSolana(decryptWallet(wallet).secretKey);
+    if (!/^0x[0-9a-fA-F]{40}$/.test(address)) return null;
+    return { referrerUserId, wallet: wallet.publicKey, address };
+  } catch {
+    return null;
+  }
+}
+
 async function waitForRhEthBalanceAtLeast(evmAddress, minEth, timeoutMs = 45_000) {
   const deadline = Date.now() + Math.max(3_000, Number(timeoutMs) || 45_000);
   let last = await rhEthBalance(evmAddress, CONFIG.rhChainRpcUrl).catch(() => ({ eth: "0", wei: "0" }));
@@ -55579,11 +55656,11 @@ async function webRhTradeCore(userId, body = {}, internal = {}) {
     const e = new Error("side must be buy or sell.");
     e.statusCode = 400; throw e;
   }
-  // Normal RH trades use the same 0.50% as Solana. A token-scoped surcharge
-  // policy may add holder rewards on top (Cash Cow is 0.50% + 0.15%).
-  const partner = await partnerProgramByToken(tokenAddress, "robinhood");
-  const feePolicy = partnerTradeFeePolicy(partner);
-  const feeBps = BigInt(Math.max(0, feePolicy.totalBps));
+  // Every RH trade mirrors Solana: 0.50% platform + 0.15% Cash Cow.
+  // A payable referral adds its own 0.15%; it never reduces either base share.
+  const cashCowProgram = await ensureCashCowRewardsProgram();
+  const referralTarget = await rhReferralTradeTarget(userId);
+  const feeBps = BigInt(CONFIG.baseTradeFeeBps + (referralTarget ? CONFIG.referralFeeBps : 0));
   let feeWei = 0n;
   let grossFeeBasisWei = 0n;
   if (side === "buy" && feeBps > 0n) {
@@ -55604,17 +55681,36 @@ async function webRhTradeCore(userId, body = {}, internal = {}) {
   // Best-effort: the user's trade is already done — a failed skim logs, never throws.
   let feeTxHash = "";
   let partnerFeeTxHash = "";
+  let referralFeeTxHash = "";
   if (feeWei > 0n) {
     try {
-      const partnerWei = partner && feePolicy.rewardBps > 0
-        ? feePolicy.surcharge
-          ? (grossFeeBasisWei * BigInt(feePolicy.rewardBps)) / 10_000n
-          : (feeWei * BigInt(feePolicy.rewardBps)) / BigInt(Math.max(1, feePolicy.baseBps))
+      const partnerWei = (grossFeeBasisWei * BigInt(CONFIG.cashCowTradeFeeBps)) / 10_000n;
+      const referralWei = referralTarget
+        ? (grossFeeBasisWei * BigInt(CONFIG.referralFeeBps)) / 10_000n
         : 0n;
-      const ownerWei = feeWei - partnerWei;
-      if (partnerWei > 0n && partner?.vaultRhWallet) {
-        partnerFeeTxHash = await rhTransferEth(keypair.secretKey, partner.vaultRhWallet, partnerWei, CONFIG.rhChainRpcUrl);
-        await recordPartnerRhFee({ programId: partner.id, token: tokenAddress, rewardWei: partnerWei, grossFeeWei: feeWei, signature: partnerFeeTxHash, userId });
+      const ownerWei = feeWei - partnerWei - referralWei;
+      if (partnerWei > 0n && cashCowProgram?.vaultRhWallet) {
+        try {
+          partnerFeeTxHash = await rhTransferEth(keypair.secretKey, cashCowProgram.vaultRhWallet, partnerWei, CONFIG.rhChainRpcUrl);
+          await recordPartnerRhFee({ programId: cashCowProgram.id, token: tokenAddress, rewardWei: partnerWei, grossFeeWei: feeWei, signature: partnerFeeTxHash, userId });
+        } catch (error) {
+          await audit("web_rh_cashcow_fee_failed", { userId, tokenAddress, partnerWei: partnerWei.toString(), error: friendlyError(error) }).catch(() => {});
+        }
+      }
+      if (referralWei > 0n && referralTarget?.address) {
+        try {
+          referralFeeTxHash = await rhTransferEth(keypair.secretKey, referralTarget.address, referralWei, CONFIG.rhChainRpcUrl);
+          await audit("referral_rh_fee_paid", {
+            userId,
+            referrerUserId: referralTarget.referrerUserId,
+            referralWallet: referralTarget.wallet,
+            referralAddress: referralTarget.address,
+            wei: referralWei.toString(),
+            signature: referralFeeTxHash
+          }).catch(() => {});
+        } catch (error) {
+          await audit("web_rh_referral_fee_failed", { userId, tokenAddress, referrerUserId: referralTarget.referrerUserId, referralWei: referralWei.toString(), error: friendlyError(error) }).catch(() => {});
+        }
       }
       if (ownerWei > 0n) feeTxHash = await rhTransferEth(keypair.secretKey, rhFeeEvmWallet(CONFIG.appSecret, CONFIG.rhChainRpcUrl).address, ownerWei, CONFIG.rhChainRpcUrl);
     } catch (error) {
@@ -55688,7 +55784,7 @@ async function webRhTradeCore(userId, body = {}, internal = {}) {
   ]);
   let recordError = "";
   try {
-    await audit("web_rh_trade", { userId, wallet: wallet.publicKey, evmAddress, side, tokenAddress, txHashes: hashes, out: quote.outFormatted, impact: quote.impactPercent, feeWei: feeWei.toString(), feeTxHash, partnerFeeTxHash, creatorFeeTxHash, holderRewardTxHashes, holderRewardCount, solFunding });
+    await audit("web_rh_trade", { userId, wallet: wallet.publicKey, evmAddress, side, tokenAddress, txHashes: hashes, out: quote.outFormatted, impact: quote.impactPercent, feeWei: feeWei.toString(), feeTxHash, partnerFeeTxHash, referralFeeTxHash, creatorFeeTxHash, holderRewardTxHashes, holderRewardCount, solFunding });
   } catch (error) {
     // The chain transaction already landed. Never turn a delayed audit write
     // into a failed response that invites the user to submit the trade again.
@@ -63874,7 +63970,7 @@ async function syncLaunchOsPartner(projectId) {
         `<b>${escapeTelegramHtml(stored.token?.name || stored.token?.symbol)} Community Rewards is live</b>`,
         "",
         "Developer <b>50%</b> Â· Top holders <b>50%</b>",
-        "The total SlimeWire trade fee remains 0.50%. Share the links below with your community."
+        "Base trade fee: 0.65% (0.50% platform + 0.15% Cash Cow rewards). Referred trades add 0.15% for the referrer."
       ].join("\n"), { inline_keyboard: [[{ text: "Live rewards dashboard", url: dashboardUrl }], [{ text: "Partner trade link", url: partnerProgramPublic(program).tradeUrl }]] });
       await mutateLaunchOs((store) => { if (store.projects[stored.id]?.partner) store.projects[stored.id].partner.notifiedAt = new Date().toISOString(); });
     } catch { /* owner can still open the dashboard from Site Maker */ }
@@ -65592,7 +65688,9 @@ async function webBrowserTradeOrder(userId, body = {}) {
   // Connected-wallet platform fee (OFF unless configured). Embedded in the
   // swap the user signs, so it works without a server-side fee transfer.
   const referralAccount = CONFIG.connectedTradeFeeBps > 0 ? CONFIG.jupiterReferralAccount : "";
-  const referralFee = referralAccount ? CONFIG.connectedTradeFeeBps : 0;
+  const referralFee = referralAccount
+    ? CONFIG.connectedTradeFeeBps + await referralTradeSurchargeBps(userId)
+    : 0;
 
   if (side === "buy") {
     inputMint = SOL_MINT;
@@ -72927,6 +73025,7 @@ async function webCashConvertCore(userId, body = {}) {
   }
 
   const referralAccount = CONFIG.connectedTradeFeeBps > 0 ? CONFIG.jupiterReferralAccount : "";
+  const tradeFeeBps = CONFIG.baseTradeFeeBps + await referralTradeSurchargeBps(userId);
   const prebuiltOrder = referralAccount
     ? await createJupiterOrder({
         taker: keypair.publicKey,
@@ -72935,7 +73034,7 @@ async function webCashConvertCore(userId, body = {}) {
         amount: String(amountRaw),
         slippageBps: 100,
         referralAccount,
-        referralFee: CONFIG.bundleFeeBps
+        referralFee: tradeFeeBps
       }).catch(() => null)
     : null;
   const swap = await executeJupiterSwap({
@@ -72953,19 +73052,14 @@ async function webCashConvertCore(userId, body = {}) {
       let feeUsd = 0;
       if (from === "SOL") {
         const solUsd = (await getSolUsdPrice({ timeoutMs: 2_000 }).catch(() => 0)) || 0;
-        feeUsd = (Number(amountRaw) / 1e9) * solUsd * CONFIG.bundleFeeBps / 10_000;
+        feeUsd = (Number(amountRaw) / 1e9) * solUsd * tradeFeeBps / 10_000;
       } else {
-        feeUsd = Number(rawCashAmountToUi(amountRaw, 6)) * CONFIG.bundleFeeBps / 10_000;
+        feeUsd = Number(rawCashAmountToUi(amountRaw, 6)) * tradeFeeBps / 10_000;
       }
       const solUsd = (await getSolUsdPrice({ timeoutMs: 2_000 }).catch(() => 0)) || 0;
       const feeLamports = solUsd > 0 ? Math.round((feeUsd / solUsd) * 1e9) : 0;
       if (feeLamports >= 5_000) {
-        const feeTx = new Transaction().add(SystemProgram.transfer({
-          fromPubkey: keypair.publicKey,
-          toPubkey: new PublicKey(CONFIG.feeWallet),
-          lamports: feeLamports
-        }));
-        await sendLegacyTransaction(feeTx, [keypair]);
+        await collectSolFee(keypair, feeLamports, { userId, tokenMint: toSpec.mint, chain: "solana", totalFeeBps: tradeFeeBps });
         feeMode = "sol";
       }
     } catch { /* best-effort - the convert itself already landed */ }
@@ -79277,11 +79371,20 @@ function solToLamports(sol) {
 }
 
 function calculateFeeLamports(amountLamports) {
-  const feeLamports = (BigInt(amountLamports) * BigInt(CONFIG.bundleFeeBps)) / 10_000n;
+  const feeLamports = (BigInt(amountLamports) * BigInt(CONFIG.baseTradeFeeBps)) / 10_000n;
   if (feeLamports > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new Error("Calculated fee is too large for this transaction.");
   }
   return Number(feeLamports);
+}
+
+async function calculateTradeFeeLamports(amountLamports, userId) {
+  const totalFeeBps = CONFIG.baseTradeFeeBps + await referralTradeSurchargeBps(userId);
+  const feeLamports = (BigInt(amountLamports) * BigInt(totalFeeBps)) / 10_000n;
+  if (feeLamports > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error("Calculated fee is too large for this transaction.");
+  }
+  return { feeLamports: Number(feeLamports), totalFeeBps };
 }
 
 function bigIntToSafeNumber(value, label) {
@@ -79356,7 +79459,7 @@ function rawTokenAmountToUi(rawAmount, decimals) {
 }
 
 function formatFeeRate() {
-  return `${(CONFIG.bundleFeeBps / 100).toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}%`;
+  return `${(CONFIG.baseTradeFeeBps / 100).toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}%`;
 }
 
 // shortMint, compareBigInt, formatPnlMultiple, sanitizeCardText, formatUsdCompact,
