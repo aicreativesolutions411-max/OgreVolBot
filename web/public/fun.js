@@ -677,7 +677,13 @@
     frame.innerHTML = `<div class="chart-loader"><span></span><p>Loading ${state.chartMode === "transactions" ? "transactions" : "live chart"}</p></div><iframe src="${src}" title="${escapeHtml(coin.symbol || "coin")} ${state.chartMode}" loading="eager" onload="this.previousElementSibling?.remove()"></iframe>`;
     document.dispatchEvent(new CustomEvent("slimewire:chart-rendered", { detail: { key, chain: frame.dataset.chain, poolAddress: frame.dataset.poolAddress } }));
   }
-  window.SlimeWireFunChart = { render: renderChart };
+  window.SlimeWireFunChart = {
+    render: renderChart,
+    setMode(mode) {
+      state.chartMode = mode === "transactions" ? "transactions" : "chart";
+      renderChart();
+    }
+  };
   function paintPositionSurfaces() {
     paintWalletPill();
     renderHomeReadiness();

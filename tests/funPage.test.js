@@ -20,7 +20,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "40", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "41", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -33,7 +33,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v31/);
+  assert.match(funWorker, /slimewire-fun-v32/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -69,9 +69,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=24/);
-  assert.match(funWorker, /slimewire-fun-v31/);
-  assert.match(funWorker, /fun\.css\?v=24/);
+  assert.match(html, /fun\.css\?v=25/);
+  assert.match(funWorker, /slimewire-fun-v32/);
+  assert.match(funWorker, /fun\.css\?v=25/);
 });
 
 test("/fun keeps the wallet funding card compact and scannable", () => {
@@ -80,8 +80,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=40/);
-  assert.match(funWorker, /fun\.js\?v=40/);
+  assert.match(html, /fun\.js\?v=41/);
+  assert.match(funWorker, /fun\.js\?v=41/);
 });
 
 test("Connect and Deposit share one simple funding flow without surprise wallet downloads", () => {
@@ -132,7 +132,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v31"/);
+  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v32"/);
   assert.match(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
   assert.match(funWorker, /self\.clients\.claim\(\)/);
@@ -546,11 +546,11 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, and MACD",
   assert.match(html, /data-indicator-status role="status" aria-live="polite"/);
   assert.match(html, /vendor\/lightweight-charts\.standalone\.production\.js/);
   assert.ok(html.indexOf("lightweight-charts.standalone.production.js") < html.indexOf("fun-indicators.js"));
-  assert.match(html, /fun-indicators\.js\?v=3/);
-  assert.match(funWorker, /fun-indicators\.js\?v=3/);
-  assert.match(funWorker, /fun\.css\?v=24/);
+  assert.match(html, /fun-indicators\.js\?v=4/);
+  assert.match(funWorker, /fun-indicators\.js\?v=4/);
+  assert.match(funWorker, /fun\.css\?v=25/);
   assert.match(indicators, /\/api\/chart\?ca=/);
-  assert.match(indicators, /api\.geckoterminal\.com\/api\/v2\/networks\/robinhood\/pools/);
+  assert.match(indicators, /api\.geckoterminal\.com\/api\/v2\/networks\/\$\{network\}\/pools/);
   assert.match(indicators, /function fibonacciPanel/);
   assert.match(indicators, /function rsiSeries\(values, period = 14\)/);
   assert.match(indicators, /function macdSeries/);
@@ -567,14 +567,23 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, and MACD",
   assert.doesNotMatch(indicators, /Math\.random/);
   assert.doesNotMatch(indicators, /completed candles/i);
   assert.match(indicators, /AUTO_REFRESH_MS = 25_000/);
-  assert.match(indicators, /REQUEST_TIMEOUT_MS = 9_000/);
+  assert.match(indicators, /CANDLE_TIMEOUT_MS = 6_500/);
   assert.match(indicators, /pendingCandleRequests/);
   assert.match(indicators, /new AbortController\(\)/);
+  assert.match(indicators, /function resolveBrowserGeckoPool/);
+  assert.match(indicators, /reserve_in_usd/);
+  assert.match(indicators, /volume_usd\?\.h24/);
   assert.match(indicators, /source: "geckoterminal browser", stale: false/);
   assert.match(indicators, /cached fallback/);
   assert.match(indicators, /key !== selectedKey\(\) \|\| timeframe !== activeTimeframe\(\)/);
   assert.match(indicators, /data-chart-mode="transactions"/);
   assert.match(indicators, /coinView\?\.classList\.contains\("active"\)/);
+  assert.match(indicators, /let analysisActive = false/);
+  assert.match(indicators, /data-analysis-back/);
+  assert.match(indicators, /Regular chart restored/);
+  assert.match(indicators, /if \(!analysisActive\) \{ clearTimeout\(autoRefreshTimer\); return; \}/);
+  assert.doesNotMatch(indicators, /if \(anyEnabled\(\)\) scheduleRender\(0\);/);
+  assert.match(js, /setMode\(mode\)/);
   assert.match(css, /\.indicator-drawer/);
   assert.match(css, /\.chart-card\.indicators-open\{height:auto\}/);
   assert.match(css, /\.indicator-button\{min-height:36px/);

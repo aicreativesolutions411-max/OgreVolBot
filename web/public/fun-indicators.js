@@ -7,15 +7,17 @@
   const STORAGE_KEY = "slimewireFunIndicators:v1";
   const TF_MAP = { "1": "1m", "5": "5m", "15": "15m", "60": "1h" };
   const AUTO_REFRESH_MS = 25_000;
-  const REQUEST_TIMEOUT_MS = 9_000;
+  const CANDLE_TIMEOUT_MS = 6_500;
   const enabled = readEnabled();
   const candleCache = new Map();
   const pendingCandleRequests = new Map();
+  const geckoPoolCache = new Map();
   let requestVersion = 0;
   let refreshTimer = null;
   let autoRefreshTimer = null;
   let nativeChart = null;
   let nativeResizeObserver = null;
+  let analysisActive = false;
 
   function readEnabled() {
     try {
@@ -53,10 +55,13 @@
       button.setAttribute("aria-pressed", String(active));
     });
     const trigger = $("[data-indicators-toggle]");
-    trigger?.classList.toggle("active", count > 0 || trigger.getAttribute("aria-expanded") === "true");
+    trigger?.classList.toggle("active", analysisActive);
+    trigger?.setAttribute("aria-pressed", String(analysisActive));
     if (trigger) trigger.textContent = count ? `⌁ Indicators · ${count}` : "⌁ Indicators";
+    const transactions = $('[data-chart-mode="transactions"]')?.classList.contains("active");
+    $('[data-chart-mode="chart"]')?.classList.toggle("active", !analysisActive && !transactions);
   }
-  function toggleDrawer(force) {
+  function toggleDrawer(force, renderWhenOpen = true) {
     const drawer = $("[data-indicator-drawer]");
     const card = drawer?.closest(".chart-card");
     const trigger = $("[data-indicators-toggle]");
@@ -66,18 +71,18 @@
     card.classList.toggle("indicators-open", open);
     trigger.setAttribute("aria-expanded", String(open));
     syncButtons();
-    if (open) void renderIndicators();
+    if (open && renderWhenOpen && analysisActive) void renderIndicators();
   }
   function scheduleRender(delay = 0) {
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => {
-      if (anyEnabled()) void renderIndicators();
+      if (analysisActive && anyEnabled()) void renderIndicators();
     }, delay);
   }
   function indicatorSurfaceActive() {
     const coinView = $(".coin-view");
     const transactions = $('[data-chart-mode="transactions"]')?.classList.contains("active");
-    return Boolean(coinView?.classList.contains("active") && !transactions && !document.hidden && anyEnabled());
+    return Boolean(analysisActive && coinView?.classList.contains("active") && !transactions && !document.hidden && anyEnabled());
   }
   function scheduleAutoRefresh() {
     clearTimeout(autoRefreshTimer);
@@ -88,7 +93,8 @@
     const transactions = $('[data-chart-mode="transactions"]')?.classList.contains("active");
     const trigger = $("[data-indicators-toggle]");
     if (trigger) trigger.hidden = Boolean(transactions);
-    if (transactions) toggleDrawer(false);
+    if (transactions) toggleDrawer(false, false);
+    syncButtons();
   }
 
   function normalizeCandles(rows) {
@@ -111,33 +117,81 @@
     const aggregate = Number.parseInt(timeframe, 10);
     return { path: "minute", aggregate: [1, 5, 15].includes(aggregate) ? aggregate : 15 };
   }
+  async function fetchCandleJson(url, timeoutMs = CANDLE_TIMEOUT_MS) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { headers: { Accept: "application/json" }, signal: controller.signal });
+      if (!response.ok) throw new Error(`Candle request failed (${response.status})`);
+      return await response.json();
+    } finally { clearTimeout(timeout); }
+  }
+  function validGeckoPool(network, value) {
+    const pool = String(value || "").trim().replace(new RegExp(`^${network}_`, "i"), "");
+    if (network === "robinhood") return /^0x[0-9a-f]{40}$/i.test(pool) ? pool.toLowerCase() : "";
+    return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(pool) ? pool : "";
+  }
+  function geckoRelationAddress(network, value) {
+    return String(value || "").trim().replace(new RegExp(`^${network}_`, "i"), "");
+  }
+  async function resolveBrowserGeckoPool(network, token) {
+    const cacheKey = `${network}:${String(token).toLowerCase()}`;
+    const cached = geckoPoolCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < 2 * 60_000) return cached.value;
+    const payload = await fetchCandleJson(`https://api.geckoterminal.com/api/v2/networks/${network}/tokens/${encodeURIComponent(token)}/pools?page=1`);
+    const target = String(token).toLowerCase();
+    const candidates = (Array.isArray(payload?.data) ? payload.data : []).map((row) => {
+      const base = geckoRelationAddress(network, row?.relationships?.base_token?.data?.id).toLowerCase();
+      const quote = geckoRelationAddress(network, row?.relationships?.quote_token?.data?.id).toLowerCase();
+      const side = base === target ? "base" : quote === target ? "quote" : "";
+      const pool = validGeckoPool(network, row?.attributes?.address || row?.id);
+      const liquidity = Number(row?.attributes?.reserve_in_usd) || 0;
+      const volume24 = Number(row?.attributes?.volume_usd?.h24) || 0;
+      return { pool, side, liquidity, volume24, score: liquidity + volume24 * 0.08 };
+    }).filter((row) => row.pool && row.side).sort((a, b) => b.score - a.score || b.liquidity - a.liquidity);
+    const value = candidates[0] || null;
+    geckoPoolCache.set(cacheKey, { at: Date.now(), value });
+    return value;
+  }
+  async function loadBrowserGeckoCandles(network, key, timeframe, knownPool, knownSide) {
+    const resolvedPool = validGeckoPool(network, knownPool);
+    const market = resolvedPool
+      ? { pool: resolvedPool, side: knownSide === "quote" ? "quote" : "base" }
+      : await resolveBrowserGeckoPool(network, key);
+    if (!market?.pool) return { candles: [], source: "geckoterminal browser", stale: false };
+    const tf = geckoTimeframe(timeframe);
+    const payload = await fetchCandleJson(`https://api.geckoterminal.com/api/v2/networks/${network}/pools/${encodeURIComponent(market.pool)}/ohlcv/${tf.path}?aggregate=${tf.aggregate}&limit=300&currency=usd&token=${market.side}`);
+    return { candles: normalizeGeckoCandles(payload?.data?.attributes?.ohlcv_list), source: "geckoterminal browser", stale: false };
+  }
   async function loadCandles(key, timeframe) {
     const frame = $("[data-chart-frame]");
-    const pool = String(frame?.dataset.poolAddress || "").trim().replace(/^robinhood_/, "");
+    const pool = String(frame?.dataset.poolAddress || "").trim();
     const side = frame?.dataset.tokenSide === "quote" ? "quote" : "base";
     const robinhood = isRobinhood(key);
-    const cacheKey = `${key.toLowerCase()}:${pool.toLowerCase()}:${side}:${timeframe}`;
+    const network = robinhood ? "robinhood" : "solana";
+    const cacheKey = `${network}:${key.toLowerCase()}:${pool.toLowerCase()}:${side}:${timeframe}`;
     const cached = candleCache.get(cacheKey);
     if (cached && Date.now() - cached.at < 12_000) return cached.payload;
     if (pendingCandleRequests.has(cacheKey)) return pendingCandleRequests.get(cacheKey);
     const pending = (async () => {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      let primaryError = null;
+      if (!robinhood) {
+        try {
+          const payload = await fetchCandleJson(`${API_BASE}/api/chart?ca=${encodeURIComponent(key)}&tf=${encodeURIComponent(timeframe)}`);
+          const nativeResult = { candles: normalizeCandles(payload?.candles), source: String(payload?.source || "native chart"), stale: false };
+          if (nativeResult.candles.length) {
+            candleCache.set(cacheKey, { at: Date.now(), payload: nativeResult });
+            return nativeResult;
+          }
+        } catch (error) { primaryError = error; }
+      }
       try {
-        if (robinhood && !/^0x[0-9a-f]{40}$/i.test(pool)) throw new Error("Robinhood pool is still loading");
-        const tf = geckoTimeframe(timeframe);
-        const url = robinhood
-          ? `https://api.geckoterminal.com/api/v2/networks/robinhood/pools/${encodeURIComponent(pool)}/ohlcv/${tf.path}?aggregate=${tf.aggregate}&limit=300&currency=usd&token=${side}`
-          : `${API_BASE}/api/chart?ca=${encodeURIComponent(key)}&tf=${encodeURIComponent(timeframe)}`;
-        const response = await fetch(url, { headers: { Accept: "application/json" }, signal: controller.signal });
-        if (!response.ok) throw new Error(`Candle request failed (${response.status})`);
-        const payload = await response.json();
-        const result = robinhood
-          ? { candles: normalizeGeckoCandles(payload?.data?.attributes?.ohlcv_list), source: "geckoterminal browser", stale: false }
-          : { candles: normalizeCandles(payload?.candles), source: String(payload?.source || "native chart"), stale: false };
-        if (result.candles.length) candleCache.set(cacheKey, { at: Date.now(), payload: result });
-        return result;
-      } finally { clearTimeout(timeout); }
+        const fallback = await loadBrowserGeckoCandles(network, key, timeframe, pool, side);
+        if (fallback.candles.length) candleCache.set(cacheKey, { at: Date.now(), payload: fallback });
+        return fallback;
+      } catch (error) {
+        throw primaryError || error;
+      }
     })();
     pendingCandleRequests.set(cacheKey, pending);
     try { return await pending; }
@@ -284,12 +338,37 @@
     if (frame?.querySelector("[data-indicator-analysis]")) window.SlimeWireFunChart?.render?.();
   }
 
+  function analysisHeader(subtitle, badge = "LIVE") {
+    return `<div class="analysis-head"><div><b>SLIME ANALYSIS</b><span>${escapeHtml(subtitle)}</span></div><div class="analysis-head-actions"><em>${escapeHtml(badge)}</em><button type="button" data-analysis-back aria-label="Return to regular chart">↩ Chart</button></div></div>`;
+  }
+
+  function activateAnalysis({ openDrawer = true } = {}) {
+    analysisActive = true;
+    requestVersion += 1;
+    clearTimeout(autoRefreshTimer);
+    window.SlimeWireFunChart?.setMode?.("chart");
+    if (openDrawer) toggleDrawer(true, false);
+    syncButtons();
+    if (anyEnabled()) void renderIndicators();
+    else setStatus("Choose one or stack all three.");
+  }
+
+  function deactivateAnalysis({ closeDrawer = true } = {}) {
+    analysisActive = false;
+    requestVersion += 1;
+    clearTimeout(refreshTimer);
+    clearTimeout(autoRefreshTimer);
+    restoreProviderChart();
+    if (closeDrawer) toggleDrawer(false, false);
+    syncButtons();
+  }
+
   function mountAnalysisLoading(timeframe) {
     const frame = $("[data-chart-frame]");
     if (!frame) return;
     destroyNativeChart();
     frame.closest(".chart-card")?.classList.add("indicator-analysis-open");
-    frame.innerHTML = `<div class="indicator-analysis indicator-analysis-loading" data-indicator-analysis><div class="analysis-head"><div><b>SLIME ANALYSIS</b><span>Native candle chart · ${escapeHtml(timeframe)}</span></div><em>LIVE</em></div><div class="analysis-loading"><span></span><b>Loading candle history</b><small>Painting your selected indicators directly on the chart…</small></div></div>`;
+    frame.innerHTML = `<div class="indicator-analysis indicator-analysis-loading" data-indicator-analysis>${analysisHeader(`Native candle chart · ${timeframe}`)}<div class="analysis-loading"><span></span><b>Loading candle history</b><small>Painting your selected indicators directly on the chart…</small></div></div>`;
   }
 
   function fibonacciPriceLines(candles) {
@@ -312,7 +391,7 @@
   function nativeAnalysisMarkup(candles, source, timeframe, stale) {
     const activeLabels = [enabled.fib && "Fibonacci", enabled.rsi && "RSI 14", enabled.macd && "MACD"].filter(Boolean);
     const panels = [enabled.rsi && rsiPanel(candles), enabled.macd && macdPanel(candles)].filter(Boolean).join("");
-    return `<div class="indicator-analysis" data-indicator-analysis><div class="analysis-head"><div><b>SLIME ANALYSIS</b><span>${escapeHtml(activeLabels.join(" + "))} · ${escapeHtml(timeframe)}</span></div><em>LIVE</em></div><div class="analysis-price" data-analysis-price aria-label="Candlestick chart with selected technical indicators"></div>${panels}<div class="analysis-source">${escapeHtml(source.replace(/[-_]/g, " "))}${stale ? " · cached fallback" : ""} · ${candles.length} candles</div></div>`;
+    return `<div class="indicator-analysis" data-indicator-analysis>${analysisHeader(`${activeLabels.join(" + ")} · ${timeframe}`)}<div class="analysis-price" data-analysis-price aria-label="Candlestick chart with selected technical indicators"></div>${panels}<div class="analysis-source">${escapeHtml(source.replace(/[-_]/g, " "))}${stale ? " · cached fallback" : ""} · ${candles.length} candles · ${Math.min(120, candles.length)}-bar Fib window</div></div>`;
   }
 
   function mountNativeAnalysis(candles, source, timeframe, stale) {
@@ -369,12 +448,15 @@
     return true;
   }
 
-  function mountAnalysisEmpty(message) {
-    const frame = $("[data-chart-frame]");
-    if (!frame) return;
-    destroyNativeChart();
-    frame.closest(".chart-card")?.classList.add("indicator-analysis-open");
-    frame.innerHTML = `<div class="indicator-analysis" data-indicator-analysis><div class="analysis-head"><div><b>SLIME ANALYSIS</b><span>Indicator data</span></div><em>WAITING</em></div><div class="analysis-empty"><b>No candle history returned</b><small>${escapeHtml(message)}</small><button type="button" data-indicator-retry>Retry candles</button></div></div>`;
+  function showProviderFallback(message) {
+    analysisActive = false;
+    clearTimeout(autoRefreshTimer);
+    restoreProviderChart();
+    syncButtons();
+    const panels = $("[data-indicator-panels]");
+    if (panels) panels.innerHTML = `<div class="analysis-fallback"><b>Regular chart restored</b><small>${escapeHtml(message)}</small><button type="button" data-indicator-retry>Retry analysis</button></div>`;
+    toggleDrawer(true, false);
+    setStatus("Regular chart is available while indicator candles catch up.", true);
   }
 
   async function renderIndicators({ background = false } = {}) {
@@ -382,13 +464,14 @@
     syncButtons();
     const panels = $("[data-indicator-panels]");
     if (!panels) return;
+    if (!analysisActive) { clearTimeout(autoRefreshTimer); return; }
     if ($('[data-chart-mode="transactions"]')?.classList.contains("active")) {
       destroyNativeChart();
       $("[data-chart-frame]")?.closest(".chart-card")?.classList.remove("indicator-analysis-open");
       clearTimeout(autoRefreshTimer);
       return;
     }
-    if (!anyEnabled()) { clearTimeout(autoRefreshTimer); panels.innerHTML = ""; setStatus("Choose one or stack all three."); restoreProviderChart(); return; }
+    if (!anyEnabled()) { analysisActive = false; clearTimeout(autoRefreshTimer); panels.innerHTML = ""; setStatus("Choose one or stack all three."); restoreProviderChart(); syncButtons(); return; }
     const key = selectedKey();
     if (!key) { clearTimeout(autoRefreshTimer); panels.innerHTML = ""; setStatus("Open a coin chart first.", true); return; }
     const timeframe = activeTimeframe();
@@ -400,43 +483,53 @@
     try {
       const payload = await loadCandles(key, timeframe);
       if (version !== requestVersion || key !== selectedKey() || timeframe !== activeTimeframe() || !indicatorSurfaceActive()) return;
-      if (!payload.candles.length) { panels.innerHTML = ""; mountAnalysisEmpty("The market-data provider is still indexing this pool. Retry in a few seconds."); setStatus("No candles returned yet. Tap Retry candles.", true); return; }
+      if (!payload.candles.length) {
+        if (background) { setStatus("Live refresh delayed — keeping the current analysis.", true); return; }
+        showProviderFallback("This pool is still being indexed. The regular chart stays usable; retry analysis in a few seconds.");
+        return;
+      }
       const freshness = payload.stale ? " · cached fallback" : "";
       mountNativeAnalysis(payload.candles, payload.source, timeframe, payload.stale);
       panels.innerHTML = `<div class="indicator-source">Painted on the chart · ${escapeHtml(payload.source.replace(/[-_]/g, " "))}${freshness} · ${payload.candles.length} candles · ${escapeHtml(timeframe)}</div>`;
       setStatus("");
     } catch {
       if (version !== requestVersion) return;
-      if (!background) panels.innerHTML = "";
-      mountAnalysisEmpty("Candle history timed out. Tap retry; your normal chart is preserved when indicators are off.");
-      setStatus("Candle history is catching up. Try again in a moment.", true);
+      if (background) { setStatus("Live refresh delayed — keeping the current analysis.", true); return; }
+      showProviderFallback("Candle history timed out. The regular chart stays usable while the analysis feed catches up.");
     } finally { if (version === requestVersion) scheduleAutoRefresh(); }
   }
 
   document.addEventListener("click", (event) => {
-    if (event.target.closest("[data-indicators-toggle]")) { toggleDrawer(); return; }
+    if (event.target.closest("[data-indicators-toggle]")) {
+      if (!analysisActive) activateAnalysis({ openDrawer: true });
+      else toggleDrawer();
+      return;
+    }
+    if (event.target.closest("[data-analysis-back]")) { deactivateAnalysis({ closeDrawer: true }); return; }
     const indicator = event.target.closest("[data-indicator-kind]");
     if (indicator) {
       const kind = indicator.dataset.indicatorKind;
       if (!(kind in enabled)) return;
       enabled[kind] = !enabled[kind];
       saveEnabled();
-      void renderIndicators();
+      if (anyEnabled()) {
+        analysisActive = true;
+        void renderIndicators();
+      } else deactivateAnalysis({ closeDrawer: false });
       return;
     }
-    if (event.target.closest("[data-indicator-retry]")) { candleCache.clear(); void renderIndicators(); return; }
+    if (event.target.closest("[data-indicator-retry]")) { candleCache.clear(); geckoPoolCache.clear(); activateAnalysis({ openDrawer: true }); return; }
     if (event.target.closest("[data-chart-interval]")) { requestVersion += 1; clearTimeout(autoRefreshTimer); scheduleRender(25); return; }
-    if (event.target.closest("[data-chart-mode]")) { syncChartMode(); if (!$("[data-indicator-drawer]")?.hidden) scheduleRender(25); }
+    if (event.target.closest("[data-chart-mode]")) { analysisActive = false; requestVersion += 1; clearTimeout(autoRefreshTimer); destroyNativeChart(); toggleDrawer(false, false); syncChartMode(); }
   });
-  window.addEventListener("hashchange", () => { requestVersion += 1; clearTimeout(autoRefreshTimer); scheduleRender(30); });
-  document.addEventListener("slimewire:chart-rendered", () => { if (anyEnabled()) scheduleRender(0); });
+  window.addEventListener("hashchange", () => { analysisActive = false; requestVersion += 1; clearTimeout(autoRefreshTimer); toggleDrawer(false, false); syncButtons(); });
+  document.addEventListener("slimewire:chart-rendered", () => { if (analysisActive && anyEnabled()) scheduleRender(0); });
   document.addEventListener("visibilitychange", () => {
     clearTimeout(autoRefreshTimer);
-    if (!document.hidden && !$('[data-indicator-drawer]')?.hidden) scheduleRender(0);
+    if (!document.hidden && analysisActive) scheduleRender(0);
   });
   const identity = $("[data-coin-mini]");
-  if (identity) new MutationObserver(() => { requestVersion += 1; clearTimeout(autoRefreshTimer); syncChartMode(); scheduleRender(30); }).observe(identity, { childList: true, subtree: true, characterData: true });
+  if (identity) new MutationObserver(() => { requestVersion += 1; clearTimeout(autoRefreshTimer); syncChartMode(); if (analysisActive) scheduleRender(30); }).observe(identity, { childList: true, subtree: true, characterData: true });
   syncChartMode();
   syncButtons();
-  if (anyEnabled()) scheduleRender(0);
 })();

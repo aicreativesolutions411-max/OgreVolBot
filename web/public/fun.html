@@ -13,12 +13,12 @@
   <link rel="icon" href="/icons/icon-192.png">
   <link rel="apple-touch-icon" href="/assets/slimewire/fun-app-icon-180.png">
   <link rel="manifest" href="/fun-manifest.webmanifest?v=2">
-  <link rel="stylesheet" href="/fun.css?v=24">
+  <link rel="stylesheet" href="/fun.css?v=25">
   <script src="/config.js"></script>
   <script defer src="/slimewire-funding.js?v=8"></script>
   <script defer src="/vendor/lightweight-charts.standalone.production.js"></script>
-  <script defer src="/fun.js?v=40"></script>
-  <script defer src="/fun-indicators.js?v=3"></script>
+  <script defer src="/fun.js?v=41"></script>
+  <script defer src="/fun-indicators.js?v=4"></script>
 </head>
 <body>
   <div class="fun-app" id="funApp">
@@ -90,7 +90,7 @@
 
       <section class="fun-view coin-view" data-view="coin" aria-label="Coin details">
         <div class="coin-topbar"><button class="icon-btn" type="button" data-coin-back aria-label="Back">‹</button><div class="coin-mini" data-coin-mini></div><button class="icon-btn" type="button" data-copy-coin aria-label="Copy contract">⧉</button></div>
-        <div class="chart-card"><div class="chart-toolbar"><div class="chart-controls"><div class="timeframes"><button type="button" data-chart-interval="1">1m</button><button type="button" data-chart-interval="5">5m</button><button class="active" type="button" data-chart-interval="15">15m</button><button type="button" data-chart-interval="60">1h</button></div><div class="chart-modes"><button class="active" type="button" data-chart-mode="chart">Chart</button><button type="button" data-chart-mode="transactions">Transactions</button></div></div><div class="chart-actions"><button class="indicator-button" type="button" data-indicators-toggle aria-expanded="false" aria-controls="slimeIndicatorDrawer">⌁ Indicators</button><button class="price-alert" type="button" data-price-alert>＋ Alert</button></div></div><div class="chart-frame" data-chart-frame><div class="chart-loader"><span></span><p>Loading live chart</p></div></div><section class="indicator-drawer" id="slimeIndicatorDrawer" data-indicator-drawer hidden aria-label="Technical indicators"><div class="indicator-picker"><button type="button" data-indicator-kind="fib" aria-pressed="false">Fibonacci</button><button type="button" data-indicator-kind="rsi" aria-pressed="false">RSI</button><button type="button" data-indicator-kind="macd" aria-pressed="false">MACD</button></div><div class="indicator-status" data-indicator-status role="status" aria-live="polite" aria-atomic="true">Choose one or stack all three.</div><div class="indicator-panels" data-indicator-panels></div><p class="indicator-note">Calculated from SlimeWire OHLC candles. Indicators are context, not a prediction.</p></section></div>
+        <div class="chart-card"><div class="chart-toolbar"><div class="chart-controls"><div class="timeframes"><button type="button" data-chart-interval="1">1m</button><button type="button" data-chart-interval="5">5m</button><button class="active" type="button" data-chart-interval="15">15m</button><button type="button" data-chart-interval="60">1h</button></div><div class="chart-modes"><button class="active" type="button" data-chart-mode="chart">Chart</button><button type="button" data-chart-mode="transactions">Transactions</button></div></div><div class="chart-actions"><button class="indicator-button" type="button" data-indicators-toggle aria-expanded="false" aria-pressed="false" aria-controls="slimeIndicatorDrawer">⌁ Indicators</button><button class="price-alert" type="button" data-price-alert>＋ Alert</button></div></div><div class="chart-frame" data-chart-frame><div class="chart-loader"><span></span><p>Loading live chart</p></div></div><section class="indicator-drawer" id="slimeIndicatorDrawer" data-indicator-drawer hidden aria-label="Technical indicators"><div class="indicator-picker"><button type="button" data-indicator-kind="fib" aria-pressed="false">Fibonacci</button><button type="button" data-indicator-kind="rsi" aria-pressed="false">RSI</button><button type="button" data-indicator-kind="macd" aria-pressed="false">MACD</button></div><div class="indicator-status" data-indicator-status role="status" aria-live="polite" aria-atomic="true">Choose one or stack all three.</div><div class="indicator-panels" data-indicator-panels></div><p class="indicator-note">Calculated from SlimeWire OHLC candles. Indicators are context, not a prediction.</p></section></div>
         <div class="coin-stats" data-coin-stats></div>
         <div class="quick-trade-card" data-quick-trade></div>
         <div class="position-card" data-position-card></div>
