@@ -5,10 +5,26 @@
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const API_BASE = window.OGRE_PORTAL_CONFIG?.apiBase || location.origin;
   const STORAGE_KEY = "slimewireFunIndicators:v1";
+  const FIB_STORAGE_KEY = "slimewireFunFibSettings:v1";
+  const DEFAULT_FIB_SETTINGS = Object.freeze({
+    lookback: 120,
+    levels: [
+      { ratio: 0, enabled: true, color: "#72ff23", style: 0 },
+      { ratio: 0.236, enabled: true, color: "#8dff52", style: 2 },
+      { ratio: 0.382, enabled: true, color: "#a5ff6f", style: 2 },
+      { ratio: 0.5, enabled: true, color: "#d1ff9c", style: 0 },
+      { ratio: 0.618, enabled: true, color: "#f2ff7a", style: 0 },
+      { ratio: 0.786, enabled: true, color: "#a5ff6f", style: 2 },
+      { ratio: 1, enabled: true, color: "#72ff23", style: 0 },
+      { ratio: 1.272, enabled: false, color: "#ffca54", style: 2 },
+      { ratio: 1.618, enabled: false, color: "#ff8b54", style: 2 }
+    ]
+  });
   const TF_MAP = { "1": "1m", "5": "5m", "15": "15m", "60": "1h" };
   const AUTO_REFRESH_MS = 25_000;
   const CANDLE_TIMEOUT_MS = 6_500;
   const enabled = readEnabled();
+  let fibSettings = readFibSettings();
   const candleCache = new Map();
   const pendingCandleRequests = new Map();
   const geckoPoolCache = new Map();
@@ -26,7 +42,43 @@
     } catch { return { fib: false, rsi: false, macd: false }; }
   }
   function saveEnabled() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(enabled)); } catch {} }
+  function defaultFibSettings() { return { lookback: DEFAULT_FIB_SETTINGS.lookback, levels: DEFAULT_FIB_SETTINGS.levels.map((level) => ({ ...level })) }; }
+  function normalizeFibLevel(level, fallback = {}) {
+    const ratio = Number(level?.ratio);
+    const color = /^#[0-9a-f]{6}$/i.test(String(level?.color || "")) ? String(level.color) : (fallback.color || "#72ff23");
+    const style = [0, 1, 2].includes(Number(level?.style)) ? Number(level.style) : Number(fallback.style || 0);
+    return { ratio: Number.isFinite(ratio) ? Math.max(-5, Math.min(10, ratio)) : Number(fallback.ratio || 0), enabled: level?.enabled !== false, color, style };
+  }
+  function readFibSettings() {
+    const defaults = defaultFibSettings();
+    try {
+      const value = JSON.parse(localStorage.getItem(FIB_STORAGE_KEY) || "null");
+      const lookback = [60, 120, 240].includes(Number(value?.lookback)) ? Number(value.lookback) : defaults.lookback;
+      const levels = Array.isArray(value?.levels) && value.levels.length
+        ? value.levels.slice(0, 12).map((level, index) => normalizeFibLevel(level, defaults.levels[index] || defaults.levels[0]))
+        : defaults.levels;
+      return { lookback, levels };
+    } catch { return defaults; }
+  }
+  function saveFibSettings() { try { localStorage.setItem(FIB_STORAGE_KEY, JSON.stringify(fibSettings)); } catch {} }
   function escapeHtml(value) { return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
+  function fibRatioLabel(ratio) { return Number.isInteger(ratio) ? String(ratio) : String(Number(ratio.toFixed(3))); }
+  function renderFibSettings() {
+    const panel = $("[data-fib-settings]");
+    if (!panel || panel.hidden) return;
+    const rows = fibSettings.levels.map((level, index) => `<div class="fib-setting-row" data-fib-level="${index}"><label class="fib-level-toggle" title="Show this level"><input type="checkbox" data-fib-field="enabled" ${level.enabled ? "checked" : ""}><span></span></label><input class="fib-ratio-input" type="number" min="-5" max="10" step="0.001" inputmode="decimal" value="${escapeHtml(fibRatioLabel(level.ratio))}" data-fib-field="ratio" aria-label="Fibonacci level ${index + 1}"><input class="fib-color-input" type="color" value="${escapeHtml(level.color)}" data-fib-field="color" aria-label="Level color"><select data-fib-field="style" aria-label="Line style"><option value="0" ${level.style === 0 ? "selected" : ""}>Solid</option><option value="2" ${level.style === 2 ? "selected" : ""}>Dashed</option><option value="1" ${level.style === 1 ? "selected" : ""}>Dotted</option></select><button type="button" class="fib-remove" data-fib-remove="${index}" aria-label="Remove level">×</button></div>`).join("");
+    panel.innerHTML = `<div class="fib-settings-head"><div><b>Fibonacci settings</b><span>Customize retracement paint</span></div><button type="button" data-fib-settings-close aria-label="Close Fibonacci settings">×</button></div><div class="fib-settings-controls"><label class="fib-show"><input type="checkbox" data-fib-enabled ${enabled.fib ? "checked" : ""}><span>Show Fibonacci on chart</span></label><label class="fib-lookback"><span>Swing window</span><select data-fib-lookback><option value="60" ${fibSettings.lookback === 60 ? "selected" : ""}>60 candles</option><option value="120" ${fibSettings.lookback === 120 ? "selected" : ""}>120 candles</option><option value="240" ${fibSettings.lookback === 240 ? "selected" : ""}>240 candles</option></select></label></div><div class="fib-level-heading"><span>On</span><span>Level</span><span>Color</span><span>Line</span><span></span></div><div class="fib-setting-rows">${rows}</div><div class="fib-settings-actions"><button type="button" data-fib-add ${fibSettings.levels.length >= 12 ? "disabled" : ""}>＋ Add level</button><button type="button" data-fib-reset>Restore defaults</button></div>`;
+  }
+  function openFibSettings() {
+    const panel = $("[data-fib-settings]");
+    if (!panel) return;
+    panel.hidden = false;
+    renderFibSettings();
+  }
+  function closeFibSettings() {
+    const panel = $("[data-fib-settings]");
+    if (panel) panel.hidden = true;
+  }
   function selectedKey() {
     const match = String(location.hash || "").match(/^#coin\/(.+)$/);
     if (match) {
@@ -372,7 +424,7 @@
   }
 
   function fibonacciPriceLines(candles) {
-    const rows = candles.slice(-120);
+    const rows = candles.slice(-fibSettings.lookback);
     if (rows.length < 2) return [];
     let highIndex = 0, lowIndex = 0;
     rows.forEach((row, index) => {
@@ -382,16 +434,16 @@
     const high = rows[highIndex].h, low = rows[lowIndex].l, span = high - low;
     if (!(span > 0)) return [];
     const risingSwing = highIndex > lowIndex;
-    return [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1].map((ratio) => ({
-      ratio,
-      price: risingSwing ? high - span * ratio : low + span * ratio
+    return fibSettings.levels.filter((level) => level.enabled).map((level) => ({
+      ...level,
+      price: risingSwing ? high - span * level.ratio : low + span * level.ratio
     }));
   }
 
   function nativeAnalysisMarkup(candles, source, timeframe, stale) {
     const activeLabels = [enabled.fib && "Fibonacci", enabled.rsi && "RSI 14", enabled.macd && "MACD"].filter(Boolean);
     const panels = [enabled.rsi && rsiPanel(candles), enabled.macd && macdPanel(candles)].filter(Boolean).join("");
-    return `<div class="indicator-analysis" data-indicator-analysis>${analysisHeader(`${activeLabels.join(" + ")} · ${timeframe}`)}<div class="analysis-price" data-analysis-price aria-label="Candlestick chart with selected technical indicators"></div>${panels}<div class="analysis-source">${escapeHtml(source.replace(/[-_]/g, " "))}${stale ? " · cached fallback" : ""} · ${candles.length} candles · ${Math.min(120, candles.length)}-bar Fib window</div></div>`;
+    return `<div class="indicator-analysis" data-indicator-analysis>${analysisHeader(`${activeLabels.join(" + ")} · ${timeframe}`)}<div class="analysis-price" data-analysis-price aria-label="Candlestick chart with selected technical indicators"></div>${panels}<div class="analysis-source">${escapeHtml(source.replace(/[-_]/g, " "))}${stale ? " · cached fallback" : ""} · ${candles.length} candles${enabled.fib ? ` · ${Math.min(fibSettings.lookback, candles.length)}-bar Fib window` : ""}</div></div>`;
   }
 
   function mountNativeAnalysis(candles, source, timeframe, stale) {
@@ -428,13 +480,13 @@
     nativeChart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
     volumeSeries.setData(candles.map((row) => ({ time: row.t, value: row.v, color: row.c >= row.o ? "rgba(114,255,35,.25)" : "rgba(255,82,111,.28)" })));
     if (enabled.fib) {
-      fibonacciPriceLines(candles).forEach(({ ratio, price }) => {
+      fibonacciPriceLines(candles).forEach(({ ratio, price, color, style }) => {
         const strong = ratio === 0.5 || ratio === 0.618;
         candleSeries.createPriceLine({
           price,
-          color: strong ? "#a8ff70" : "rgba(114,255,35,.48)",
+          color,
           lineWidth: strong ? 2 : 1,
-          lineStyle: strong ? 0 : 2,
+          lineStyle: style,
           axisLabelVisible: true,
           title: `Fib ${Math.round(ratio * 1000) / 10}%`
         });
@@ -506,11 +558,40 @@
       return;
     }
     if (event.target.closest("[data-analysis-back]")) { deactivateAnalysis({ closeDrawer: true }); return; }
+    if (event.target.closest("[data-fib-settings-close]")) { closeFibSettings(); return; }
+    if (event.target.closest("[data-fib-reset]")) {
+      fibSettings = defaultFibSettings();
+      saveFibSettings();
+      renderFibSettings();
+      scheduleRender(0);
+      return;
+    }
+    if (event.target.closest("[data-fib-add]")) {
+      if (fibSettings.levels.length < 12) {
+        fibSettings.levels.push({ ratio: 1.618, enabled: true, color: "#ffca54", style: 2 });
+        saveFibSettings();
+        renderFibSettings();
+        scheduleRender(0);
+      }
+      return;
+    }
+    const removeLevel = event.target.closest("[data-fib-remove]");
+    if (removeLevel) {
+      const index = Number(removeLevel.dataset.fibRemove);
+      if (Number.isInteger(index) && fibSettings.levels.length > 1) fibSettings.levels.splice(index, 1);
+      saveFibSettings();
+      renderFibSettings();
+      scheduleRender(0);
+      return;
+    }
     const indicator = event.target.closest("[data-indicator-kind]");
     if (indicator) {
       const kind = indicator.dataset.indicatorKind;
       if (!(kind in enabled)) return;
-      enabled[kind] = !enabled[kind];
+      if (kind === "fib") {
+        enabled.fib = true;
+        openFibSettings();
+      } else enabled[kind] = !enabled[kind];
       saveEnabled();
       if (anyEnabled()) {
         analysisActive = true;
@@ -521,6 +602,34 @@
     if (event.target.closest("[data-indicator-retry]")) { candleCache.clear(); geckoPoolCache.clear(); activateAnalysis({ openDrawer: true }); return; }
     if (event.target.closest("[data-chart-interval]")) { requestVersion += 1; clearTimeout(autoRefreshTimer); scheduleRender(25); return; }
     if (event.target.closest("[data-chart-mode]")) { analysisActive = false; requestVersion += 1; clearTimeout(autoRefreshTimer); destroyNativeChart(); toggleDrawer(false, false); syncChartMode(); }
+  });
+  document.addEventListener("change", (event) => {
+    if (event.target.matches("[data-fib-enabled]")) {
+      enabled.fib = event.target.checked;
+      saveEnabled();
+      syncButtons();
+      if (anyEnabled()) { analysisActive = true; void renderIndicators(); }
+      else deactivateAnalysis({ closeDrawer: false });
+      return;
+    }
+    if (event.target.matches("[data-fib-lookback]")) {
+      const lookback = Number(event.target.value);
+      if ([60, 120, 240].includes(lookback)) fibSettings.lookback = lookback;
+    } else {
+      const field = event.target.dataset.fibField;
+      const row = event.target.closest("[data-fib-level]");
+      if (!field || !row) return;
+      const index = Number(row.dataset.fibLevel);
+      const level = fibSettings.levels[index];
+      if (!level) return;
+      if (field === "enabled") level.enabled = event.target.checked;
+      if (field === "ratio") level.ratio = Math.max(-5, Math.min(10, Number(event.target.value) || 0));
+      if (field === "color" && /^#[0-9a-f]{6}$/i.test(event.target.value)) level.color = event.target.value;
+      if (field === "style" && [0, 1, 2].includes(Number(event.target.value))) level.style = Number(event.target.value);
+    }
+    saveFibSettings();
+    renderFibSettings();
+    scheduleRender(0);
   });
   window.addEventListener("hashchange", () => { analysisActive = false; requestVersion += 1; clearTimeout(autoRefreshTimer); toggleDrawer(false, false); syncButtons(); });
   document.addEventListener("slimewire:chart-rendered", () => { if (analysisActive && anyEnabled()) scheduleRender(0); });

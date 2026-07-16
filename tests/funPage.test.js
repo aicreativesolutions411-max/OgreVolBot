@@ -33,7 +33,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v32/);
+  assert.match(funWorker, /slimewire-fun-v33/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -69,9 +69,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=25/);
-  assert.match(funWorker, /slimewire-fun-v32/);
-  assert.match(funWorker, /fun\.css\?v=25/);
+  assert.match(html, /fun\.css\?v=26/);
+  assert.match(funWorker, /slimewire-fun-v33/);
+  assert.match(funWorker, /fun\.css\?v=26/);
 });
 
 test("/fun keeps the wallet funding card compact and scannable", () => {
@@ -132,7 +132,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v32"/);
+  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v33"/);
   assert.match(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
   assert.match(funWorker, /self\.clients\.claim\(\)/);
@@ -546,9 +546,9 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, and MACD",
   assert.match(html, /data-indicator-status role="status" aria-live="polite"/);
   assert.match(html, /vendor\/lightweight-charts\.standalone\.production\.js/);
   assert.ok(html.indexOf("lightweight-charts.standalone.production.js") < html.indexOf("fun-indicators.js"));
-  assert.match(html, /fun-indicators\.js\?v=4/);
-  assert.match(funWorker, /fun-indicators\.js\?v=4/);
-  assert.match(funWorker, /fun\.css\?v=25/);
+  assert.match(html, /fun-indicators\.js\?v=5/);
+  assert.match(funWorker, /fun-indicators\.js\?v=5/);
+  assert.match(funWorker, /fun\.css\?v=26/);
   assert.match(indicators, /\/api\/chart\?ca=/);
   assert.match(indicators, /api\.geckoterminal\.com\/api\/v2\/networks\/\$\{network\}\/pools/);
   assert.match(indicators, /function fibonacciPanel/);
@@ -557,6 +557,14 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, and MACD",
   assert.match(indicators, /function mountNativeAnalysis/);
   assert.match(indicators, /addCandlestickSeries/);
   assert.match(indicators, /createPriceLine/);
+  assert.match(html, /data-fib-settings hidden/);
+  assert.match(indicators, /slimewireFunFibSettings:v1/);
+  assert.match(indicators, /data-fib-lookback/);
+  assert.match(indicators, /data-fib-field="color"/);
+  assert.match(indicators, /data-fib-field="style"/);
+  assert.match(indicators, /data-fib-add/);
+  assert.match(indicators, /data-fib-reset/);
+  assert.match(indicators, /fibSettings\.levels\.filter/);
   assert.match(indicators, /data-analysis-price/);
   assert.match(indicators, /emaSeries\(values, 12\)/);
   assert.match(indicators, /emaSeries\(values, 26\)/);
@@ -588,6 +596,7 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, and MACD",
   assert.match(css, /\.chart-card\.indicators-open\{height:auto\}/);
   assert.match(css, /\.indicator-button\{min-height:36px/);
   assert.match(css, /\.indicator-picker button\{min-height:36px/);
+  assert.match(css, /\.fib-settings\{/);
 });
 
 test("/fun RSI, MACD, and Fibonacci calculations match known fixtures", () => {
