@@ -14,6 +14,8 @@
   let requestVersion = 0;
   let refreshTimer = null;
   let autoRefreshTimer = null;
+  let nativeChart = null;
+  let nativeResizeObserver = null;
 
   function readEnabled() {
     try {
@@ -65,23 +67,17 @@
     trigger.setAttribute("aria-expanded", String(open));
     syncButtons();
     if (open) void renderIndicators();
-    else {
-      requestVersion += 1;
-      clearTimeout(refreshTimer);
-      clearTimeout(autoRefreshTimer);
-    }
   }
   function scheduleRender(delay = 0) {
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => {
-      if (!$('[data-indicator-drawer]')?.hidden) void renderIndicators();
+      if (anyEnabled()) void renderIndicators();
     }, delay);
   }
   function indicatorSurfaceActive() {
-    const drawer = $("[data-indicator-drawer]");
     const coinView = $(".coin-view");
     const transactions = $('[data-chart-mode="transactions"]')?.classList.contains("active");
-    return Boolean(coinView?.classList.contains("active") && drawer && !drawer.hidden && !transactions && !document.hidden && anyEnabled());
+    return Boolean(coinView?.classList.contains("active") && !transactions && !document.hidden && anyEnabled());
   }
   function scheduleAutoRefresh() {
     clearTimeout(autoRefreshTimer);
@@ -105,8 +101,22 @@
       v: Number(row?.v) || 0
     })).filter((row) => row.t > 0 && row.h > 0 && row.l > 0 && row.c > 0).sort((a, b) => a.t - b.t);
   }
+  function normalizeGeckoCandles(rows) {
+    return normalizeCandles((Array.isArray(rows) ? rows : []).map((row) => ({
+      t: row?.[0], o: row?.[1], h: row?.[2], l: row?.[3], c: row?.[4], v: row?.[5]
+    })));
+  }
+  function geckoTimeframe(timeframe) {
+    if (timeframe === "1h") return { path: "hour", aggregate: 1 };
+    const aggregate = Number.parseInt(timeframe, 10);
+    return { path: "minute", aggregate: [1, 5, 15].includes(aggregate) ? aggregate : 15 };
+  }
   async function loadCandles(key, timeframe) {
-    const cacheKey = `${key.toLowerCase()}:${timeframe}`;
+    const frame = $("[data-chart-frame]");
+    const pool = String(frame?.dataset.poolAddress || "").trim().replace(/^robinhood_/, "");
+    const side = frame?.dataset.tokenSide === "quote" ? "quote" : "base";
+    const robinhood = isRobinhood(key);
+    const cacheKey = `${key.toLowerCase()}:${pool.toLowerCase()}:${side}:${timeframe}`;
     const cached = candleCache.get(cacheKey);
     if (cached && Date.now() - cached.at < 12_000) return cached.payload;
     if (pendingCandleRequests.has(cacheKey)) return pendingCandleRequests.get(cacheKey);
@@ -114,10 +124,17 @@
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       try {
-        const response = await fetch(`${API_BASE}/api/web/ohlcv?mint=${encodeURIComponent(key)}&tf=${encodeURIComponent(timeframe)}`, { headers: { Accept: "application/json" }, signal: controller.signal });
+        if (robinhood && !/^0x[0-9a-f]{40}$/i.test(pool)) throw new Error("Robinhood pool is still loading");
+        const tf = geckoTimeframe(timeframe);
+        const url = robinhood
+          ? `https://api.geckoterminal.com/api/v2/networks/robinhood/pools/${encodeURIComponent(pool)}/ohlcv/${tf.path}?aggregate=${tf.aggregate}&limit=300&currency=usd&token=${side}`
+          : `${API_BASE}/api/chart?ca=${encodeURIComponent(key)}&tf=${encodeURIComponent(timeframe)}`;
+        const response = await fetch(url, { headers: { Accept: "application/json" }, signal: controller.signal });
         if (!response.ok) throw new Error(`Candle request failed (${response.status})`);
         const payload = await response.json();
-        const result = { candles: normalizeCandles(payload?.candles), source: String(payload?.source || "live candles"), stale: Boolean(payload?.stale) };
+        const result = robinhood
+          ? { candles: normalizeGeckoCandles(payload?.data?.attributes?.ohlcv_list), source: "geckoterminal browser", stale: false }
+          : { candles: normalizeCandles(payload?.candles), source: String(payload?.source || "native chart"), stale: false };
         if (result.candles.length) candleCache.set(cacheKey, { at: Date.now(), payload: result });
         return result;
       } finally { clearTimeout(timeout); }
@@ -250,33 +267,148 @@
     return linePanel("MACD (12, 26, 9)", positive ? "MACD above signal" : "MACD below signal", `${positive ? "+" : "−"} spread`, svg);
   }
 
+  function destroyNativeChart() {
+    nativeResizeObserver?.disconnect();
+    nativeResizeObserver = null;
+    if (nativeChart) {
+      try { nativeChart.remove(); } catch {}
+      nativeChart = null;
+    }
+  }
+
+  function restoreProviderChart() {
+    const frame = $("[data-chart-frame]");
+    const card = frame?.closest(".chart-card");
+    destroyNativeChart();
+    card?.classList.remove("indicator-analysis-open");
+    if (frame?.querySelector("[data-indicator-analysis]")) window.SlimeWireFunChart?.render?.();
+  }
+
+  function mountAnalysisLoading(timeframe) {
+    const frame = $("[data-chart-frame]");
+    if (!frame) return;
+    destroyNativeChart();
+    frame.closest(".chart-card")?.classList.add("indicator-analysis-open");
+    frame.innerHTML = `<div class="indicator-analysis indicator-analysis-loading" data-indicator-analysis><div class="analysis-head"><div><b>SLIME ANALYSIS</b><span>Native candle chart · ${escapeHtml(timeframe)}</span></div><em>LIVE</em></div><div class="analysis-loading"><span></span><b>Loading candle history</b><small>Painting your selected indicators directly on the chart…</small></div></div>`;
+  }
+
+  function fibonacciPriceLines(candles) {
+    const rows = candles.slice(-120);
+    if (rows.length < 2) return [];
+    let highIndex = 0, lowIndex = 0;
+    rows.forEach((row, index) => {
+      if (row.h > rows[highIndex].h) highIndex = index;
+      if (row.l < rows[lowIndex].l) lowIndex = index;
+    });
+    const high = rows[highIndex].h, low = rows[lowIndex].l, span = high - low;
+    if (!(span > 0)) return [];
+    const risingSwing = highIndex > lowIndex;
+    return [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1].map((ratio) => ({
+      ratio,
+      price: risingSwing ? high - span * ratio : low + span * ratio
+    }));
+  }
+
+  function nativeAnalysisMarkup(candles, source, timeframe, stale) {
+    const activeLabels = [enabled.fib && "Fibonacci", enabled.rsi && "RSI 14", enabled.macd && "MACD"].filter(Boolean);
+    const panels = [enabled.rsi && rsiPanel(candles), enabled.macd && macdPanel(candles)].filter(Boolean).join("");
+    return `<div class="indicator-analysis" data-indicator-analysis><div class="analysis-head"><div><b>SLIME ANALYSIS</b><span>${escapeHtml(activeLabels.join(" + "))} · ${escapeHtml(timeframe)}</span></div><em>LIVE</em></div><div class="analysis-price" data-analysis-price aria-label="Candlestick chart with selected technical indicators"></div>${panels}<div class="analysis-source">${escapeHtml(source.replace(/[-_]/g, " "))}${stale ? " · cached fallback" : ""} · ${candles.length} candles</div></div>`;
+  }
+
+  function mountNativeAnalysis(candles, source, timeframe, stale) {
+    const frame = $("[data-chart-frame]");
+    if (!frame) return false;
+    destroyNativeChart();
+    frame.closest(".chart-card")?.classList.add("indicator-analysis-open");
+    frame.innerHTML = nativeAnalysisMarkup(candles, source, timeframe, stale);
+    const priceNode = $("[data-analysis-price]", frame);
+    if (!priceNode || typeof window.LightweightCharts?.createChart !== "function") {
+      priceNode?.insertAdjacentHTML("beforeend", '<div class="analysis-empty"><b>Chart engine unavailable</b><small>Refresh once to finish the update.</small></div>');
+      return false;
+    }
+    const last = candles.at(-1)?.c || 0;
+    const precision = last > 0 ? Math.min(10, Math.max(2, Math.ceil(-Math.log10(last)) + 3)) : 6;
+    nativeChart = window.LightweightCharts.createChart(priceNode, {
+      width: Math.max(280, priceNode.clientWidth),
+      height: priceNode.clientHeight || 250,
+      layout: { background: { color: "#030603" }, textColor: "#8ea48a", fontFamily: "Inter, system-ui, sans-serif" },
+      grid: { vertLines: { color: "rgba(114,255,35,.055)" }, horzLines: { color: "rgba(114,255,35,.055)" } },
+      crosshair: { mode: 0 },
+      rightPriceScale: { borderColor: "rgba(114,255,35,.16)", scaleMargins: { top: 0.08, bottom: 0.22 } },
+      timeScale: { borderColor: "rgba(114,255,35,.16)", timeVisible: true, secondsVisible: timeframe === "1m", rightOffset: 3, barSpacing: 7 },
+      handleScroll: true,
+      handleScale: true
+    });
+    const candleSeries = nativeChart.addCandlestickSeries({
+      upColor: "#72ff23", downColor: "#ff526f", borderUpColor: "#72ff23", borderDownColor: "#ff526f",
+      wickUpColor: "#b7ff8c", wickDownColor: "#ff7890",
+      priceFormat: { type: "price", precision, minMove: Number((1 / Math.pow(10, precision)).toFixed(precision)) }
+    });
+    candleSeries.setData(candles.map((row) => ({ time: row.t, open: row.o, high: row.h, low: row.l, close: row.c })));
+    const volumeSeries = nativeChart.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "volume", lastValueVisible: false, priceLineVisible: false });
+    nativeChart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+    volumeSeries.setData(candles.map((row) => ({ time: row.t, value: row.v, color: row.c >= row.o ? "rgba(114,255,35,.25)" : "rgba(255,82,111,.28)" })));
+    if (enabled.fib) {
+      fibonacciPriceLines(candles).forEach(({ ratio, price }) => {
+        const strong = ratio === 0.5 || ratio === 0.618;
+        candleSeries.createPriceLine({
+          price,
+          color: strong ? "#a8ff70" : "rgba(114,255,35,.48)",
+          lineWidth: strong ? 2 : 1,
+          lineStyle: strong ? 0 : 2,
+          axisLabelVisible: true,
+          title: `Fib ${Math.round(ratio * 1000) / 10}%`
+        });
+      });
+    }
+    nativeChart.timeScale().fitContent();
+    nativeResizeObserver = new ResizeObserver(() => {
+      if (nativeChart && priceNode.isConnected) nativeChart.applyOptions({ width: Math.max(280, priceNode.clientWidth) });
+    });
+    nativeResizeObserver.observe(priceNode);
+    return true;
+  }
+
+  function mountAnalysisEmpty(message) {
+    const frame = $("[data-chart-frame]");
+    if (!frame) return;
+    destroyNativeChart();
+    frame.closest(".chart-card")?.classList.add("indicator-analysis-open");
+    frame.innerHTML = `<div class="indicator-analysis" data-indicator-analysis><div class="analysis-head"><div><b>SLIME ANALYSIS</b><span>Indicator data</span></div><em>WAITING</em></div><div class="analysis-empty"><b>No candle history returned</b><small>${escapeHtml(message)}</small><button type="button" data-indicator-retry>Retry candles</button></div></div>`;
+  }
+
   async function renderIndicators({ background = false } = {}) {
     const version = ++requestVersion;
     syncButtons();
     const panels = $("[data-indicator-panels]");
     if (!panels) return;
-    if (!anyEnabled()) { clearTimeout(autoRefreshTimer); panels.innerHTML = ""; setStatus("Choose one or stack all three."); return; }
+    if ($('[data-chart-mode="transactions"]')?.classList.contains("active")) {
+      destroyNativeChart();
+      $("[data-chart-frame]")?.closest(".chart-card")?.classList.remove("indicator-analysis-open");
+      clearTimeout(autoRefreshTimer);
+      return;
+    }
+    if (!anyEnabled()) { clearTimeout(autoRefreshTimer); panels.innerHTML = ""; setStatus("Choose one or stack all three."); restoreProviderChart(); return; }
     const key = selectedKey();
     if (!key) { clearTimeout(autoRefreshTimer); panels.innerHTML = ""; setStatus("Open a coin chart first.", true); return; }
     const timeframe = activeTimeframe();
     if (!background) {
       panels.innerHTML = "";
       setStatus(`Mixing real ${isRobinhood(key) ? "Robinhood" : "Solana"} candles into Slime paint…`);
+      mountAnalysisLoading(timeframe);
     }
     try {
       const payload = await loadCandles(key, timeframe);
       if (version !== requestVersion || key !== selectedKey() || timeframe !== activeTimeframe() || !indicatorSurfaceActive()) return;
-      if (!payload.candles.length) { panels.innerHTML = ""; setStatus("No candles yet. Fresh launches will paint as history forms."); return; }
-      const output = [];
-      if (enabled.fib) output.push(fibonacciPanel(payload.candles));
-      if (enabled.rsi) output.push(rsiPanel(payload.candles));
-      if (enabled.macd) output.push(macdPanel(payload.candles));
+      if (!payload.candles.length) { panels.innerHTML = ""; mountAnalysisEmpty("The market-data provider is still indexing this pool. Retry in a few seconds."); setStatus("No candles returned yet. Tap Retry candles.", true); return; }
       const freshness = payload.stale ? " · cached fallback" : "";
-      panels.innerHTML = output.join("") + `<div class="indicator-source">${escapeHtml(payload.source.replace(/[-_]/g, " "))}${freshness} · ${payload.candles.length} candles · ${escapeHtml(timeframe)}</div>`;
+      mountNativeAnalysis(payload.candles, payload.source, timeframe, payload.stale);
+      panels.innerHTML = `<div class="indicator-source">Painted on the chart · ${escapeHtml(payload.source.replace(/[-_]/g, " "))}${freshness} · ${payload.candles.length} candles · ${escapeHtml(timeframe)}</div>`;
       setStatus("");
     } catch {
       if (version !== requestVersion) return;
       if (!background) panels.innerHTML = "";
+      mountAnalysisEmpty("Candle history timed out. Tap retry; your normal chart is preserved when indicators are off.");
       setStatus("Candle history is catching up. Try again in a moment.", true);
     } finally { if (version === requestVersion) scheduleAutoRefresh(); }
   }
@@ -292,10 +424,12 @@
       void renderIndicators();
       return;
     }
+    if (event.target.closest("[data-indicator-retry]")) { candleCache.clear(); void renderIndicators(); return; }
     if (event.target.closest("[data-chart-interval]")) { requestVersion += 1; clearTimeout(autoRefreshTimer); scheduleRender(25); return; }
     if (event.target.closest("[data-chart-mode]")) { syncChartMode(); if (!$("[data-indicator-drawer]")?.hidden) scheduleRender(25); }
   });
   window.addEventListener("hashchange", () => { requestVersion += 1; clearTimeout(autoRefreshTimer); scheduleRender(30); });
+  document.addEventListener("slimewire:chart-rendered", () => { if (anyEnabled()) scheduleRender(0); });
   document.addEventListener("visibilitychange", () => {
     clearTimeout(autoRefreshTimer);
     if (!document.hidden && !$('[data-indicator-drawer]')?.hidden) scheduleRender(0);
@@ -304,4 +438,5 @@
   if (identity) new MutationObserver(() => { requestVersion += 1; clearTimeout(autoRefreshTimer); syncChartMode(); scheduleRender(30); }).observe(identity, { childList: true, subtree: true, characterData: true });
   syncChartMode();
   syncButtons();
+  if (anyEnabled()) scheduleRender(0);
 })();

@@ -666,10 +666,18 @@
       : `https://dexscreener.com/solana/${encodeURIComponent(coin.pairAddress || key)}?embed=1&theme=dark&trades=${trades}&info=0&chartLeftToolbar=0&interval=${state.chartInterval}`;
     $$("[data-chart-interval]").forEach((button) => button.classList.toggle("active", button.dataset.chartInterval === state.chartInterval));
     $$("[data-chart-mode]").forEach((button) => button.classList.toggle("active", button.dataset.chartMode === state.chartMode));
+    frame.dataset.token = key;
+    frame.dataset.chain = coin.chain === "robinhood" ? "robinhood" : "solana";
+    frame.dataset.poolAddress = String(coin.pairAddress || "");
+    // Feed/search rows are normalized around the selected base token. Passing the
+    // known pool lets indicator candles skip a redundant provider lookup.
+    frame.dataset.tokenSide = "base";
     if (frame.dataset.src === src && frame.querySelector("iframe")) return;
     frame.dataset.src = src;
     frame.innerHTML = `<div class="chart-loader"><span></span><p>Loading ${state.chartMode === "transactions" ? "transactions" : "live chart"}</p></div><iframe src="${src}" title="${escapeHtml(coin.symbol || "coin")} ${state.chartMode}" loading="eager" onload="this.previousElementSibling?.remove()"></iframe>`;
+    document.dispatchEvent(new CustomEvent("slimewire:chart-rendered", { detail: { key, chain: frame.dataset.chain, poolAddress: frame.dataset.poolAddress } }));
   }
+  window.SlimeWireFunChart = { render: renderChart };
   function paintPositionSurfaces() {
     paintWalletPill();
     renderHomeReadiness();
