@@ -20,7 +20,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "43", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "44", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -33,7 +33,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v36/);
+  assert.match(funWorker, /slimewire-fun-v37/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -69,9 +69,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=28/);
-  assert.match(funWorker, /slimewire-fun-v36/);
-  assert.match(funWorker, /fun\.css\?v=28/);
+  assert.match(html, /fun\.css\?v=29/);
+  assert.match(funWorker, /slimewire-fun-v37/);
+  assert.match(funWorker, /fun\.css\?v=29/);
 });
 
 test("/fun keeps the wallet funding card compact and scannable", () => {
@@ -80,8 +80,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=43/);
-  assert.match(funWorker, /fun\.js\?v=43/);
+  assert.match(html, /fun\.js\?v=44/);
+  assert.match(funWorker, /fun\.js\?v=44/);
 });
 
 test("Connect and Deposit share one simple funding flow without surprise wallet downloads", () => {
@@ -132,7 +132,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v36"/);
+  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v37"/);
   assert.match(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
   assert.match(funWorker, /self\.clients\.claim\(\)/);
@@ -563,7 +563,7 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, and MACD",
   assert.ok(html.indexOf("lightweight-charts.standalone.production.js") < html.indexOf("fun-indicators.js"));
   assert.match(html, /fun-indicators\.js\?v=6/);
   assert.match(funWorker, /fun-indicators\.js\?v=6/);
-  assert.match(funWorker, /fun\.css\?v=28/);
+  assert.match(funWorker, /fun\.css\?v=29/);
   assert.match(indicators, /\/api\/chart\?ca=/);
   assert.match(indicators, /api\.geckoterminal\.com\/api\/v2\/networks\/\$\{network\}\/pools/);
   assert.match(indicators, /function fibonacciPanel/);
@@ -724,6 +724,16 @@ test("wallet manager batch-funds exact allocations and can sell or consolidate s
   assert.match(server, /Each destination wallet can appear only once/);
   assert.match(server, /The funding wallet changed after review/);
   assert.match(server, /totalSol:\s*lamportsToSol\(totalLamports\)/);
+});
+
+test("wallet manager shows SOL, priced coin positions, and total value for every wallet", () => {
+  assert.match(js, /function walletPositionAssets\(wallet = \{\}\)/);
+  assert.match(js, /Array\.isArray\(wallet\.tokens\)/);
+  assert.match(js, /totalValueSol \* Math\.min\(1, quantity \/ totalQuantity\)/);
+  for (const marker of ["wallet-value-strip", "Coin positions", "No coin positions in this wallet", "SOL", "COINS", "TOTAL"]) {
+    assert.match(js + css, new RegExp(marker));
+  }
+  assert.match(js, /await loadValuedPositions\(state\.positionLoadVersion\)/);
 });
 
 test("selected degen hero art is optimized and referenced from the v3 banner", () => {

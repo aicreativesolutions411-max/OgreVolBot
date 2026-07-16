@@ -1521,12 +1521,57 @@
     downloadText(result.data.accountBackup.filename, result.data.accountBackup.text);
     return true;
   }
+  function walletPositionAssets(wallet = {}) {
+    const quantities = new Map();
+    for (const token of Array.isArray(wallet.tokens) ? wallet.tokens : []) {
+      const mint = String(token?.mint || token?.tokenMint || "").trim();
+      const quantity = positionNumber(token?.uiAmount);
+      if (!mint || quantity == null || quantity <= 0) continue;
+      quantities.set(mint.toLowerCase(), (quantities.get(mint.toLowerCase()) || 0) + quantity);
+    }
+    return displayablePositions(state.positions).map((position) => {
+      const mint = String(position.tokenMint || "").trim();
+      const quantity = quantities.get(mint.toLowerCase()) || 0;
+      if (!mint || quantity <= 0) return null;
+      const totalQuantity = positionQuantity(position);
+      const totalValueSol = positionEstimatedSol(position);
+      const valueSol = totalValueSol != null && totalQuantity != null && totalQuantity > 0
+        ? totalValueSol * Math.min(1, quantity / totalQuantity)
+        : null;
+      return { ...position, quantity, valueSol };
+    }).filter(Boolean);
+  }
+  function walletAssetSummary(wallet = {}) {
+    const assets = walletPositionAssets(wallet);
+    const liquidSol = Math.max(0, Number(wallet.sol) || 0);
+    const coinsSol = assets.reduce((sum, asset) => sum + (asset.valueSol == null ? 0 : asset.valueSol), 0);
+    const hasPendingValue = assets.some((asset) => asset.valueSol == null);
+    const totalSol = liquidSol + coinsSol;
+    return { assets, liquidSol, coinsSol, hasPendingValue, totalSol, totalUsd: state.solUsd > 0 ? totalSol * state.solUsd : null };
+  }
+  function walletManagerRowHtml(wallet) {
+    const summary = walletAssetSummary(wallet);
+    const pendingMark = summary.hasPendingValue ? "+" : "";
+    const coinValue = summary.assets.length
+      ? (summary.coinsSol > 0 ? `${formatPositionSol(summary.coinsSol)}${pendingMark} SOL` : "Pricing...")
+      : "0 SOL";
+    const totalUsd = formatWalletUsd(summary.totalUsd);
+    const totalLabel = totalUsd === "—" ? `${formatPositionSol(summary.totalSol)}${pendingMark} SOL` : `${totalUsd}${pendingMark}`;
+    const assetRows = summary.assets.map((asset) => `<button class="wallet-asset-row" type="button" data-open-coin="${escapeHtml(asset.tokenMint)}" data-chain-kind="sol"><img ${coinImageAttrs(asset)} alt=""><span><b>${escapeHtml(asset.symbol || short(asset.tokenMint))}</b><small>${escapeHtml(formatTokenQuantity(asset.quantity))} tokens</small></span><strong>${asset.valueSol == null ? "Pricing..." : `${escapeHtml(formatPositionSol(asset.valueSol))} SOL`}</strong></button>`).join("");
+    const positionDetails = summary.assets.length
+      ? `<details class="wallet-assets"><summary><span>Coin positions</span><b>${summary.assets.length} token${summary.assets.length === 1 ? "" : "s"} ›</b></summary><div>${assetRows}</div></details>`
+      : `<div class="wallet-assets-empty">No coin positions in this wallet</div>`;
+    return `<div class="wallet-manage-row" data-wallet-manager-row="${wallet.index}"><label class="wallet-batch-check" title="Select wallet"><input type="checkbox" data-wallet-batch-select="${wallet.index}" checked><span></span></label><div class="wallet-manage-copy"><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${wallet.index === state.activeWallet && String(wallet.label || "").trim().toLowerCase() !== "main" ? " · Main" : ""}</b><span>${escapeHtml(short(wallet.publicKey))}</span><div class="wallet-value-strip"><span><small>SOL</small><b>${escapeHtml(formatPositionSol(summary.liquidSol))}</b></span><span><small>COINS</small><b>${escapeHtml(coinValue)}</b></span><span><small>TOTAL</small><b>${escapeHtml(totalLabel)}</b></span></div>${positionDetails}<span class="wallet-fund-amount"><input data-wallet-fund-amount="${wallet.index}" inputmode="decimal" placeholder="SOL for this wallet" aria-label="SOL amount for ${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}"></span><span class="wallet-rename"><input data-wallet-rename-input="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40"><button type="button" data-rename-wallet="${wallet.index}">Rename</button></span></div><div class="wallet-row-actions"><button type="button" data-select-wallet="${wallet.index}" ${wallet.index === state.activeWallet ? "disabled" : ""}>${wallet.index === state.activeWallet ? "Active" : "Main"}</button><button type="button" data-wallet-funds="${wallet.index}">Only</button><button class="danger" type="button" data-remove-wallet="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button></div></div>`;
+  }
   async function openWalletManager() {
-    if (state.token) await loadWallets();
+    if (state.token) {
+      await Promise.all([loadWallets(), loadPositions()]);
+      await loadValuedPositions(state.positionLoadVersion);
+    }
     state.pendingWalletManagerAction = null;
-    const rows = state.wallets.length ? state.wallets.map((wallet) => `<div class="wallet-manage-row" data-wallet-manager-row="${wallet.index}"><label class="wallet-batch-check" title="Select wallet"><input type="checkbox" data-wallet-batch-select="${wallet.index}" checked><span></span></label><div class="wallet-manage-copy"><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${wallet.index === state.activeWallet && String(wallet.label || "").trim().toLowerCase() !== "main" ? " · Main" : ""}</b><span>${escapeHtml(short(wallet.publicKey))} · ${Number(wallet.sol || 0).toFixed(4)} SOL</span><span class="wallet-fund-amount"><input data-wallet-fund-amount="${wallet.index}" inputmode="decimal" placeholder="SOL for this wallet" aria-label="SOL amount for ${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}"></span><span class="wallet-rename"><input data-wallet-rename-input="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40"><button type="button" data-rename-wallet="${wallet.index}">Rename</button></span></div><div class="wallet-row-actions"><button type="button" data-select-wallet="${wallet.index}" ${wallet.index === state.activeWallet ? "disabled" : ""}>${wallet.index === state.activeWallet ? "Active" : "Main"}</button><button type="button" data-wallet-funds="${wallet.index}">Only</button><button class="danger" type="button" data-remove-wallet="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button></div></div>`).join("") : '<div class="read-card"><h3>No wallet loaded</h3><p>Create a new wallet or restore one from a saved backup. Backup files download automatically.</p></div>';
+    const rows = state.wallets.length ? state.wallets.map(walletManagerRowHtml).join("") : '<div class="read-card"><h3>No wallet loaded</h3><p>Create a new wallet or restore one from a saved backup. Backup files download automatically.</p></div>';
     const walletOptions = state.wallets.map((wallet) => `<option value="${wallet.index}" ${wallet.index === state.activeWallet ? "selected" : ""}>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)} · ${Number(wallet.sol || 0).toFixed(4)} SOL</option>`).join("");
-    openSheet(`<div class="sheet-title"><img src="${slimePfp(activeWallet()?.publicKey || "wallet-manager")}" alt=""><div><h2>Wallet manager</h2><p>Create one at a time, then fund or consolidate the wallets you select.</p></div></div>
+    openSheet(`<div class="sheet-title"><img src="${slimePfp(activeWallet()?.publicKey || "wallet-manager")}" alt=""><div><h2>Wallet manager</h2><p>See SOL and coin value per wallet, then fund or consolidate the wallets you select.</p></div></div>
       <div class="wallet-select-bar"><button type="button" data-wallet-select-all>All</button><button type="button" data-wallet-select-none>None</button><span data-wallet-selected-count>${state.wallets.length} selected</span></div>
       <div class="wallet-manager-list">${rows}</div>
       <div class="wallet-manager-actions"><button type="button" data-create-wallet>+ Add one wallet</button><button type="button" data-export-wallets ${state.wallets.length ? "" : "disabled"}>Download backups</button></div>
