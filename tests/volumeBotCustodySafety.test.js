@@ -83,6 +83,36 @@ test("unknown trade outcomes stop new activity and delay balance-driven recovery
   assert.match(rolling, /volumeBotEnterRecovery\(plan, "Rolling sell"/);
 });
 
+test("Pump pool simulation failures are pre-submit and can try the next pool", () => {
+  const classify = new Function("error", functionBody("tradeFailureDefinitelyPreSubmit"));
+  assert.equal(classify(new Error("Transaction simulation failed: custom program error: 0x1788")), true);
+  assert.equal(classify(new Error("Transaction results in an account with insufficient funds")), true);
+  const landed = new Error("sell failed on-chain");
+  landed.signature = "confirmed-signature";
+  assert.equal(classify(landed), false);
+  assert.equal(classify(new Error("network timeout while sending")), false);
+
+  for (const name of ["buyTokenViaPumpPortal", "sellTokenAmountFromWalletViaPumpPortal"]) {
+    const body = functionBody(name);
+    assert.match(body, /tradeFailureDefinitelyPreSubmit\(tradeError\)/);
+    assert.match(body, /&& !definitelyPreSubmit/);
+  }
+});
+
+test("rolling volume forces sells and can replenish cleanup gas", () => {
+  const rolling = functionBody("runRollingVolumeBotStep");
+  assert.match(rolling, /plan\.pool\.length >= poolTarget \|\| consecutiveBuys >= 2/);
+  assert.match(rolling, /plan\.consecutiveBuys = consecutiveBuys \+ 1/);
+  assert.match(rolling, /plan\.consecutiveBuys = 0/);
+
+  const cleanup = functionBody("cleanupVolumeBotWallet");
+  assert.match(cleanup, /volumeBotNeedsCleanupGas\(error\)/);
+  assert.match(cleanup, /topUpVolumeCleanupGas\(plan, record, persist\)/);
+  const topUp = functionBody("topUpVolumeCleanupGas");
+  assert.match(topUp, /kind: "cleanup-gas"/);
+  assert.match(topUp, /volumeBotTransferSol\(source, record\.publicKey, needed\)/);
+});
+
 test("rolling wallets and every fixed trade checkpoint before external money moves", () => {
   const rolling = functionBody("runRollingVolumeBotStep");
   const poolAt = rolling.indexOf("plan.pool.push(poolEntry)");
@@ -113,6 +143,7 @@ test("volume actions use a locked monotonic claim and a stopped bot cannot submi
   assert.match(runner, /checkpoint\?\.volumeActionResolution/);
   assert.match(runner, /saved\.volumeActionSeq = nextSequence/);
   assert.match(runner, /botStage === "running"/);
+  assert.match(runner, /botStage === "sweeping"[\s\S]{0,100}pending\?\.kind[\s\S]{0,80}"cleanup-gas"/);
   assert.match(runner, /\["sweeping", "done", "stopped"\]/);
 
   const merge = functionBody("writeTradePlansPreservingNewPlans");
