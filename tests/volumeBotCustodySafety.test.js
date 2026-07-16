@@ -133,6 +133,15 @@ test("volume cleanup uses locked fallback exits and eventually releases a stuck 
   assert.doesNotMatch(retain, /pruneVolumeWallet/);
 });
 
+test("the durable worker lease permits every recovery action while sweeping", () => {
+  const worker = functionBody("processTradePlans");
+  assert.match(worker, /botStage === "sweeping"/);
+  assert.match(worker, /"cleanup-sell"/);
+  assert.match(worker, /"cleanup-gas"/);
+  assert.match(worker, /"cleanup-excess-sol"/);
+  assert.match(worker, /botStage === "running" \|\| cleanupClaim/);
+});
+
 test("a proven-empty rolling sweep reconciles to completed before list or restart", () => {
   const reconcile = functionBody("reconcileFinishedRollingVolumeBots");
   assert.match(reconcile, /plan\.config\?\.rollingWallets/);
@@ -175,7 +184,7 @@ test("volume actions use a locked monotonic claim and a stopped bot cannot submi
   assert.match(runner, /checkpoint\?\.volumeActionResolution/);
   assert.match(runner, /saved\.volumeActionSeq = nextSequence/);
   assert.match(runner, /botStage === "running"/);
-  assert.match(runner, /botStage === "sweeping"[\s\S]{0,100}pending\?\.kind[\s\S]{0,80}"cleanup-gas"/);
+  assert.match(runner, /botStage === "sweeping"[\s\S]{0,220}"cleanup-sell"[\s\S]{0,120}"cleanup-gas"[\s\S]{0,120}"cleanup-excess-sol"/);
   assert.match(runner, /\["sweeping", "done", "stopped"\]/);
 
   const merge = functionBody("writeTradePlansPreservingNewPlans");

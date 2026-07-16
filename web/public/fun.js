@@ -1926,9 +1926,7 @@
     button.disabled = false; button.textContent = "Start";
     if (result.ok && result.data?.ok) { toast("Volume run started"); pollFunVolume(rh); }
     else if (!rh) {
-      const latest = await request("/api/web/volume-bot");
-      const recovering = (latest.data?.bots || []).find((bot) => funVolumeRunActive(bot) && bot.stage === "sweeping");
-      toast(recovering ? "The previous run is finishing its wallet sweep. It will switch to complete automatically." : (result.data?.error || result.data?.message || "Could not start volume"), true);
+      toast(result.data?.error || result.data?.message || "Could not start volume", true);
       pollFunVolume(false);
     } else toast(result.data?.error || result.data?.message || "Could not start volume", true);
   }

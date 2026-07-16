@@ -9840,10 +9840,7 @@ async function startVolumeBot() {
   } catch (error) {
     state.volumeBotBusy = false;
     await loadVolumeBots({ silent: true }).catch(() => {});
-    const recovering = (state.volumeBots || []).find((bot) => volumeBotIsActive(bot) && bot.stage === "sweeping");
-    setVolumeBotStatus(recovering
-      ? "The previous run is completing its final wallet sweep. It will change to Finished automatically; no duplicate bot was started."
-      : error.message);
+    setVolumeBotStatus(error.message);
     render();
   }
 }
