@@ -30792,6 +30792,7 @@ async function webTokenSearch(rawQuery = "") {
   }).catch(() => null);
   const pairs = arrayFromApiData(data, ["pairs"]).filter((pair) => ["solana", "robinhood"].includes(String(pair?.chainId || "").toLowerCase()));
   const q = cleaned.toLowerCase();
+  const qn = q.replace(/\s+/g, "");
   const seen = new Set();
   const matches = [];
   for (const pair of pairs) {
@@ -30805,21 +30806,38 @@ async function webTokenSearch(rawQuery = "") {
     const name = String(base.name || "");
     const sym = symbol.toLowerCase();
     const nm = name.toLowerCase();
+    const nmn = nm.replace(/\s+/g, "");   // "cashcow" must find "Cash Cow"
     const liquidityUsd = Number(pair?.liquidity?.usd || 0);
     const volumeUsd = Number(pair?.volume?.h24 || 0);
-    let score = 0;
-    if (sym === q) score += 1000;
-    else if (sym.startsWith(q)) score += 600;
-    else if (sym.includes(q)) score += 280;
-    if (nm === q) score += 480;
-    else if (nm.startsWith(q)) score += 220;
-    else if (nm.includes(q)) score += 110;
-    if (!score) continue; // no symbol/name relevance
-    score += Math.min(220, Math.log10(Math.max(1, liquidityUsd)) * 32);
-    score += Math.min(140, Math.log10(Math.max(1, volumeUsd)) * 20);
-    matches.push({ tokenMint: mint, address: mint, chain, symbol, name, liquidityUsd, volumeUsd, score: Math.round(score), imageUrl: pair?.info?.imageUrl || "" });
+    const relevant = sym.includes(q) || nm.includes(q) || (qn && (sym.includes(qn) || nmn.includes(qn)));
+    if (!relevant) continue;
+    matches.push({ tokenMint: mint, address: mint, chain, symbol, name, liquidityUsd, volumeUsd, imageUrl: pair?.info?.imageUrl || "" });
   }
-  matches.sort((a, b) => b.score - a.score);
+  // Owner call: results order is top liquidity -> lowest, always.
+  matches.sort((a, b) => Number(b.liquidityUsd || 0) - Number(a.liquidityUsd || 0));
+  // DexScreener's search endpoint is often blocked from this host's IP. Robinhood coins
+  // live in our own warm universe cache, so name search must never come back empty for them.
+  if (!matches.length) {
+    try {
+      const rhRows = await rhPromiseTimeout(rhFeedTokens(), 2_500, []);
+      for (const row of (Array.isArray(rhRows) ? rhRows : [])) {
+        const sym = String(row.symbol || "").toLowerCase();
+        const nm = String(row.name || "").toLowerCase();
+        const nmn = nm.replace(/\s+/g, "");
+        if (!(sym.includes(q) || nm.includes(q) || (qn && (sym.includes(qn) || nmn.includes(qn))))) continue;
+        matches.push({
+          tokenMint: row.address, address: row.address, chain: "robinhood",
+          symbol: row.symbol || "", name: row.name || "",
+          liquidityUsd: Number(row.liquidityUsd || 0),
+          volumeUsd: Number(row.volume24hUsd || 0),
+          marketCapUsd: Number(row.marketCapUsd || 0),
+          imageUrl: row.iconUrl || ""
+        });
+        if (matches.length >= 8) break;
+      }
+      matches.sort((a, b) => Number(b.liquidityUsd || b.marketCapUsd || 0) - Number(a.liquidityUsd || a.marketCapUsd || 0));
+    } catch { /* best effort */ }
+  }
   return { query: cleaned, matches: matches.slice(0, 8) };
 }
 

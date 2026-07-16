@@ -987,16 +987,47 @@
   function closeSearch() { $("[data-search-overlay]").hidden = true; $("[data-search-input]").value = ""; }
   function renderSearchHome() {
     const content = $("[data-search-content]");
-    content.innerHTML = `<h3>Recent searches</h3><div class="recent-list">${state.recents.length ? state.recents.map((item) => { const rh = item.chain === "robinhood", mc = item.marketCapLabel || formatUsd(item.marketCap); return `<button type="button" data-open-coin="${escapeHtml(item.key)}" data-chain-kind="${rh ? "rh" : "sol"}"><span class="recent-avatar"><img src="${escapeHtml(item.imageUrl || mascot(item.key))}" alt=""><i class="chain-badge ${rh ? "rh" : "sol"}">${rh ? "RH" : "SOL"}</i></span><span><b>${escapeHtml(item.symbol || short(item.key))}</b><small>${escapeHtml((item.name ? `${item.name} · ` : "") + short(item.key))}</small></span><em>${mc !== "—" ? `MC ${escapeHtml(mc)}` : "recent"}</em></button>`; }).join("") : '<span style="color:var(--muted);font-size:11px">Your recent coins stay on this device.</span>'}</div><h3 style="margin-top:24px">Quick routes</h3><div class="tool-grid"><button class="tool-card" type="button" data-search-chain="solana"><b>Solana movers</b><span>Live market feed</span></button><button class="tool-card" type="button" data-search-chain="robinhood"><b>Robinhood</b><span>New chain coins</span></button><button class="tool-card" type="button" data-nav="leaders"><b>Discover traders</b><span>Follow alerts · public proof</span></button></div>`;
+    // Big names doing well: the highest-liquidity coins from the live feed, one tap to open.
+    const topLiq = (state.rows || []).filter((row) => Number(row.liquidityUsd) > 0).sort((a, b) => Number(b.liquidityUsd) - Number(a.liquidityUsd)).slice(0, 6);
+    content.innerHTML = `<h3>Recent searches</h3><div class="recent-list">${state.recents.length ? state.recents.map((item) => { const rh = item.chain === "robinhood", mc = item.marketCapLabel || formatUsd(item.marketCap); return `<button type="button" data-open-coin="${escapeHtml(item.key)}" data-chain-kind="${rh ? "rh" : "sol"}"><span class="recent-avatar"><img src="${escapeHtml(item.imageUrl || mascot(item.key))}" alt=""><i class="chain-badge ${rh ? "rh" : "sol"}">${rh ? "RH" : "SOL"}</i></span><span><b>${escapeHtml(item.symbol || short(item.key))}</b><small>${escapeHtml((item.name ? `${item.name} · ` : "") + short(item.key))}</small></span><em>${mc !== "—" ? `MC ${escapeHtml(mc)}` : "recent"}</em></button>`; }).join("") : '<span style="color:var(--muted);font-size:11px">Your recent coins stay on this device.</span>'}</div>${topLiq.length ? `<h3 style="margin-top:24px">💧 Top liquidity</h3><div class="coin-list">${topLiq.map(coinRowHtml).join("")}</div>` : ""}<h3 style="margin-top:24px">Quick routes</h3><div class="tool-grid"><button class="tool-card" type="button" data-search-chain="solana"><b>Solana movers</b><span>Live market feed</span></button><button class="tool-card" type="button" data-search-chain="robinhood"><b>Robinhood</b><span>New chain coins</span></button><button class="tool-card" type="button" data-nav="leaders"><b>Discover traders</b><span>Follow alerts · public proof</span></button></div>`;
   }
   let searchTimer = null;
+  // Name/ticker search hits DexScreener straight from the phone (the server IP is rate-limited,
+  // the user's isn't), then falls back to the backend. "cashcow" matches "Cash Cow" via
+  // space-stripped comparison; results always order top liquidity -> lowest.
+  async function clientTokenSearch(q) {
+    try {
+      const res = await fetch(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { headers: { Accept: "application/json" } });
+      const data = await res.json();
+      const qq = q.toLowerCase(), qn = qq.replace(/\s+/g, "");
+      const seen = new Set(), out = [];
+      for (const p of (data.pairs || [])) {
+        const chain = String(p.chainId || "").toLowerCase();
+        if (chain !== "solana" && chain !== "robinhood") continue;
+        const b = p.baseToken || {}; const mint = String(b.address || ""); if (!mint) continue;
+        const key = `${chain}:${mint.toLowerCase()}`; if (seen.has(key)) continue;
+        const sym = String(b.symbol || "").toLowerCase(), nm = String(b.name || "").toLowerCase(), nmn = nm.replace(/\s+/g, "");
+        if (!(sym.includes(qq) || nm.includes(qq) || (qn && (sym.includes(qn) || nmn.includes(qn))))) continue;
+        seen.add(key);
+        out.push({ tokenMint: mint, address: mint, chain, symbol: b.symbol || "", name: b.name || "", imageUrl: (p.info && p.info.imageUrl) || "", liquidityUsd: Number((p.liquidity && p.liquidity.usd) || 0), volumeUsd: Number((p.volume && p.volume.h24) || 0), marketCap: Number(p.marketCap || p.fdv || 0) });
+      }
+      out.sort((a, b) => b.liquidityUsd - a.liquidityUsd);
+      return out.slice(0, 12);
+    } catch { return null; }
+  }
   async function runSearch(query) {
     const content = $("[data-search-content]");
     if (!query.trim()) { renderSearchHome(); return; }
     content.innerHTML = '<div class="skeleton-list"></div>';
-    const result = await request(`/api/web/token-search?q=${encodeURIComponent(query.trim())}`);
-    const rows = result.ok ? (result.data?.matches || []).map((row) => (row.chain === "robinhood" ? normalizeRh({ ...row, address: row.address || row.tokenMint }) : normalizeSol(row))) : [];
-    content.innerHTML = rows.length ? `<h3>Results</h3><div class="coin-list">${rows.map(coinRowHtml).join("")}</div>` : emptyState("No exact match", "Paste the full Solana or Robinhood contract address.");
+    const direct = /^(0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$/.test(query.trim());
+    let matches = direct ? null : await clientTokenSearch(query.trim());
+    if (!matches || !matches.length) {
+      const result = await request(`/api/web/token-search?q=${encodeURIComponent(query.trim())}`);
+      matches = result.ok ? (result.data?.matches || []) : [];
+    }
+    matches = matches.slice().sort((a, b) => Number(b.liquidityUsd || 0) - Number(a.liquidityUsd || 0));
+    const rows = matches.map((row) => (row.chain === "robinhood" ? normalizeRh({ ...row, address: row.address || row.tokenMint }) : normalizeSol(row)));
+    content.innerHTML = rows.length ? `<h3>Results · by liquidity</h3><div class="coin-list">${rows.map(coinRowHtml).join("")}</div>` : emptyState("No exact match", "Paste the full Solana or Robinhood contract address.");
   }
 
   function openSheet(html) { $("[data-sheet-content]").innerHTML = html; $("[data-sheet-overlay]").hidden = false; }
