@@ -664,11 +664,19 @@ export class PumpLaunchService {
     userId,
     wallet,
     walletKeypair,
+    mintKeypair: suppliedMintKeypair = null,
+    metadata: suppliedMetadata = null,
     basePayload,
     body = {},
     config = {}
   }) {
-    if (!this.getBalanceLamports || !this.uploadMetadata || !this.requestLocalTransaction || !this.sendTransaction || !this.generateMintKeypair) {
+    if (
+      !this.getBalanceLamports
+      || (!suppliedMetadata && !this.uploadMetadata)
+      || !this.requestLocalTransaction
+      || !this.sendTransaction
+      || (!suppliedMintKeypair && !this.generateMintKeypair)
+    ) {
       throw createPumpLaunchError("PumpLaunchService is missing required backend dependencies.", "PUMP_LAUNCH_SERVICE_MISCONFIGURED", 500);
     }
     if (!wallet || !walletKeypair) {
@@ -684,7 +692,7 @@ export class PumpLaunchService {
     }
 
     const attemptId = launchAttemptId || basePayload?.clientRequestId;
-    const mintKeypair = this.generateMintKeypair();
+    const mintKeypair = suppliedMintKeypair || this.generateMintKeypair();
     const mintPublicKey = mintKeypair.publicKey.toBase58();
     const devWalletPublicKey = walletKeypair.publicKey.toBase58();
     const selectedDevWalletId = String(wallet.webIndex || body.devWalletIndex || wallet.publicKey || "").trim();
@@ -779,13 +787,17 @@ export class PumpLaunchService {
 
       let metadata;
       try {
-        await this.saveAttempt({
-          id: attemptId,
-          status: PUMP_LAUNCH_STATUS.UPLOADING_METADATA,
-          stage: PUMP_LAUNCH_STAGE.METADATA_UPLOAD,
-          updatedAt: this.now().toISOString()
-        });
-        metadata = await this.uploadMetadata(basePayload);
+        if (suppliedMetadata) {
+          metadata = { ...suppliedMetadata };
+        } else {
+          await this.saveAttempt({
+            id: attemptId,
+            status: PUMP_LAUNCH_STATUS.UPLOADING_METADATA,
+            stage: PUMP_LAUNCH_STAGE.METADATA_UPLOAD,
+            updatedAt: this.now().toISOString()
+          });
+          metadata = await this.uploadMetadata(basePayload);
+        }
         const metadataValidation = await this.validateMetadataUri(metadata.uri);
         if (metadataValidation?.uri) {
           metadata.uri = metadataValidation.uri;

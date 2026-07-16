@@ -6,18 +6,21 @@ const server = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf
 const html = fs.readFileSync(new URL("../web/public/fun.html", import.meta.url), "utf8");
 const css = fs.readFileSync(new URL("../web/public/fun.css", import.meta.url), "utf8");
 const js = fs.readFileSync(new URL("../web/public/fun.js", import.meta.url), "utf8");
+const indicators = fs.readFileSync(new URL("../web/public/fun-indicators.js", import.meta.url), "utf8");
 const redirects = fs.readFileSync(new URL("../web/public/_redirects", import.meta.url), "utf8");
 const manifest = JSON.parse(fs.readFileSync(new URL("../web/public/fun-manifest.webmanifest", import.meta.url), "utf8"));
 const funWorker = fs.readFileSync(new URL("../web/public/fun-sw.js", import.meta.url), "utf8");
 const rhChain = fs.readFileSync(new URL("../src/lib/robinhoodChain.js", import.meta.url), "utf8");
 const terminalApp = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
+const desktopHtml = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
+const desktopAliasHtml = fs.readFileSync(new URL("../web/public/gg.html", import.meta.url), "utf8");
 
 test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL support", () => {
   assert.match(server, /requestUrl\.pathname === "\/fun"[\s\S]{0,300}serveStaticHtmlPage\(response, "fun\.html", "no-store, max-age=0"\)/);
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "38", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "39", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -30,7 +33,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v27/);
+  assert.match(funWorker, /slimewire-fun-v29/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -51,15 +54,24 @@ test("/fun keeps the reference layout clean while carrying SlimeWire features", 
   assert.match(css, /\.feed-actions\{display:flex/);
 });
 
+test("Fun Launch opens the full launcher without the mobile bootstrap redirecting back", () => {
+  assert.match(js, /action === "launch"[\s\S]{0,100}location\.assign\("\/\?from=fun#launch"\)/);
+  for (const page of [desktopHtml, desktopAliasHtml]) {
+    assert.match(page, /const funLaunchHandoff = q\.get\("from"\) === "fun"/);
+    assert.match(page, /\^#launch\(\?:\\\/\|\$\)\/i\.test\(location\.hash \|\| ""\)/);
+    assert.match(page, /if \(funLaunchHandoff\) return;/);
+  }
+});
+
 test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(html, /class="cash-handoff" data-cash-handoff hidden/);
   assert.match(css, /\.cash-handoff\[hidden\]\{display:none\}/);
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=22/);
-  assert.match(funWorker, /slimewire-fun-v27/);
-  assert.match(funWorker, /fun\.css\?v=22/);
+  assert.match(html, /fun\.css\?v=23/);
+  assert.match(funWorker, /slimewire-fun-v29/);
+  assert.match(funWorker, /fun\.css\?v=23/);
 });
 
 test("/fun keeps the wallet funding card compact and scannable", () => {
@@ -68,8 +80,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=38/);
-  assert.match(funWorker, /fun\.js\?v=38/);
+  assert.match(html, /fun\.js\?v=39/);
+  assert.match(funWorker, /fun\.js\?v=39/);
 });
 
 test("Connect and Deposit share one simple funding flow without surprise wallet downloads", () => {
@@ -120,7 +132,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v27"/);
+  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v29"/);
   assert.match(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
   assert.match(funWorker, /self\.clients\.claim\(\)/);
@@ -206,16 +218,20 @@ test("forced web summary refresh waits out an older in-flight build before rebui
 test("confirmed launch buys create exact idempotent web-position provenance", () => {
   const fallback = server.slice(server.indexOf("async function firePostLaunchBuysServerSide"), server.indexOf("async function webLaunchPumpJitoBundle"));
   const jito = server.slice(server.indexOf("async function webLaunchPumpJitoBundle"), server.indexOf("async function webLaunchMeteoraDbc"));
+  const exactCandidate = server.slice(server.indexOf("async function findConfirmedJitoBundleCandidate"), server.indexOf("function provenJitoBuyEvents"));
+  const reconcile = server.slice(server.indexOf("async function reconcilePersistedJitoAttempt"), server.indexOf("async function reconcilePersistedJitoAttemptForUser"));
   const meteora = server.slice(server.indexOf("async function webLaunchMeteoraDbc"), server.indexOf("async function webLaunchPumpPortalLocal"));
   assert.match(fallback, /source: "pump_launch_raw_buy"/);
   assert.match(fallback, /walletPublicKey: keypair\.publicKey\.toBase58\(\)/);
   assert.match(fallback, /signature\s*\n\s*}\]\);/);
   assert.match(jito, /const txSignature = bs58\.encode\(tx\.signatures\[0\]\)/);
-  assert.match(jito, /submittedBundleCandidates\.push\(\{ signatures: attemptSignatures, buyEvents: attemptBuyEvents \}\)/);
-  assert.match(jito, /getSignatureStatuses\(candidate\.signatures, \{ searchTransactionHistory: true \}\)/);
+  assert.match(jito, /submittedBundleCandidates\.push\(candidate\)/);
+  assert.match(jito, /candidate\s*=\s*\{[\s\S]*signatures: attemptSignatures[\s\S]*buyEvents: attemptBuyEvents/);
+  assert.match(exactCandidate, /getSignatureStatuses\(candidate\.signatures, \{ searchTransactionHistory: true \}\)/);
   assert.match(jito, /if \(landedBuyEvents\.length\) \{[\s\S]*await recordTradeEvents\(landedBuyEvents\)/);
-  assert.match(jito, /provenanceId: `pump-jito:\$\{basePayload\.clientRequestId\}:\$\{entry\.wallet\.publicKey\}`/);
-  assert.match(jito, /if \(atomicReceipts\.length\) await recordTradeEvents\(atomicReceipts\)/);
+  assert.match(reconcile, /const missingEvents = events\.filter[\s\S]*await recordTradeEvents\(missingEvents\)/);
+  assert.match(jito, /signature: txSignature/);
+  assert.match(jito, /atomicReceiptPending: !atomicReceiptsRecorded/);
   assert.match(meteora, /if \(devBuySol > 0\) \{[\s\S]*source: "meteora_launch"/);
   assert.match(meteora, /walletPublicKey: creatorPk/);
   assert.match(server, /return `\$\{sig}:\$\{trade\.type \|\| ""}:\$\{trade\.tokenMint \|\| ""}:\$\{trade\.walletPublicKey \|\| ""}`/);
@@ -522,6 +538,78 @@ test("balanced pro chart keeps core stats visible and adds working chart/transac
   assert.match(js, /trades=\$\{trades\}/);
   assert.match(js, /interval=\$\{state\.chartInterval\}/);
   assert.match(js, /frame\.dataset\.src === src/);
+});
+
+test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, and MACD", () => {
+  for (const marker of ['data-indicators-toggle', 'data-indicator-kind="fib"', 'data-indicator-kind="rsi"', 'data-indicator-kind="macd"', 'data-indicator-panels']) assert.match(html, new RegExp(marker));
+  assert.match(html, /aria-controls="slimeIndicatorDrawer"/);
+  assert.match(html, /data-indicator-status role="status" aria-live="polite"/);
+  assert.match(html, /fun-indicators\.js\?v=1/);
+  assert.match(funWorker, /fun-indicators\.js\?v=1/);
+  assert.match(funWorker, /fun\.css\?v=23/);
+  assert.match(indicators, /\/api\/web\/ohlcv\?mint=/);
+  assert.match(indicators, /function fibonacciPanel/);
+  assert.match(indicators, /function rsiSeries\(values, period = 14\)/);
+  assert.match(indicators, /function macdSeries/);
+  assert.match(indicators, /emaSeries\(values, 12\)/);
+  assert.match(indicators, /emaSeries\(values, 26\)/);
+  assert.match(indicators, /emaSeries\(macd\.slice\(first\), 9\)/);
+  assert.doesNotMatch(indicators, /Robinhood candle history is not connected/);
+  assert.match(indicators, /function isRobinhood/);
+  assert.match(indicators, /new URLSearchParams\(location\.search\)\.get\("ca"\)/);
+  assert.doesNotMatch(indicators, /Math\.random/);
+  assert.doesNotMatch(indicators, /completed candles/i);
+  assert.match(indicators, /AUTO_REFRESH_MS = 25_000/);
+  assert.match(indicators, /REQUEST_TIMEOUT_MS = 9_000/);
+  assert.match(indicators, /pendingCandleRequests/);
+  assert.match(indicators, /new AbortController\(\)/);
+  assert.match(indicators, /stale: Boolean\(payload\?\.stale\)/);
+  assert.match(indicators, /cached fallback/);
+  assert.match(indicators, /key !== selectedKey\(\) \|\| timeframe !== activeTimeframe\(\)/);
+  assert.match(indicators, /data-chart-mode="transactions"/);
+  assert.match(indicators, /coinView\?\.classList\.contains\("active"\)/);
+  assert.match(css, /\.indicator-drawer/);
+  assert.match(css, /\.chart-card\.indicators-open\{height:auto\}/);
+  assert.match(css, /\.indicator-button\{min-height:36px/);
+  assert.match(css, /\.indicator-picker button\{min-height:36px/);
+});
+
+test("/fun RSI, MACD, and Fibonacci calculations match known fixtures", () => {
+  const functionSource = (name, nextName) => {
+    const start = indicators.indexOf(`  function ${name}`);
+    const end = indicators.indexOf(`\n  function ${nextName}`, start);
+    assert.notEqual(start, -1, `${name} source missing`);
+    assert.notEqual(end, -1, `${nextName} boundary missing`);
+    return indicators.slice(start, end);
+  };
+
+  const rsiSource = functionSource("rsiSeries", "rsiPanel");
+  const rsiSeries = Function(`${rsiSource}\nreturn rsiSeries;`)();
+  const flatRsi = rsiSeries(Array(20).fill(10));
+  const risingRsi = rsiSeries(Array.from({ length: 20 }, (_, index) => index + 1));
+  assert.equal(flatRsi.at(-1), 50);
+  assert.equal(risingRsi.at(-1), 100);
+
+  const macdSource = functionSource("emaSeries", "macdPanel");
+  const macdSeries = Function(`${macdSource}\nreturn macdSeries;`)();
+  const macd = macdSeries(Array.from({ length: 40 }, (_, index) => index + 1));
+  assert.equal(macd.signal.findIndex(Number.isFinite), 33);
+  assert.ok(Math.abs(macd.macd[33] - 7) < 1e-10);
+  assert.ok(Math.abs(macd.histogram[33]) < 1e-10);
+
+  const fibSource = functionSource("fibonacciPanel", "rsiSeries");
+  const fibonacciPanel = Function("emptyPanel", "linePanel", "fmtPrice", "pointsPath", `${fibSource}\nreturn fibonacciPanel;`)(
+    (title, message) => ({ title, message }),
+    (title, subtitle, valueLabel) => ({ title, subtitle, valueLabel }),
+    (value) => Number(value).toFixed(2),
+    () => ""
+  );
+  const upswing = fibonacciPanel([{ h: 12, l: 10, c: 11 }, { h: 15, l: 11, c: 14 }, { h: 20, l: 12, c: 19 }]);
+  const downswing = fibonacciPanel([{ h: 20, l: 15, c: 18 }, { h: 18, l: 12, c: 13 }, { h: 17, l: 10, c: 11 }]);
+  assert.match(upswing.subtitle, /Recent 3-candle upswing/);
+  assert.equal(upswing.valueLabel, "61.8% 13.82");
+  assert.match(downswing.subtitle, /Recent 3-candle downswing/);
+  assert.equal(downswing.valueLabel, "61.8% 16.18");
 });
 
 test("/fun live feeds reject stale responses and refresh only the visible view", () => {

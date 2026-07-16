@@ -402,6 +402,60 @@ test("managed funded wallet builds the correct PumpPortal Local create body", as
   assert.equal(harness.attempts.get("attempt-1").createAmountSol, 0);
 });
 
+test("supplied mint and preuploaded metadata are reused without generation or upload", async () => {
+  const keypair = Keypair.generate();
+  const wallet = managedWallet("user-7", keypair);
+  const suppliedMintKeypair = Keypair.generate();
+  let mintGenerationCalls = 0;
+  let metadataUploadCalls = 0;
+  let validatedMetadataUri = "";
+  const harness = serviceHarness({
+    generateMintKeypair: () => {
+      mintGenerationCalls += 1;
+      return Keypair.generate();
+    },
+    uploadMetadata: async () => {
+      metadataUploadCalls += 1;
+      throw new Error("preuploaded metadata should not be uploaded again");
+    },
+    validateMetadataUri: async (uri) => {
+      validatedMetadataUri = uri;
+      return { ok: true };
+    }
+  });
+  const metadata = {
+    uri: "https://ipfs.io/ipfs/preuploaded-meta",
+    imageUri: "https://ipfs.io/ipfs/preuploaded-image",
+    imageBytes: 321,
+    imageContentType: "image/png",
+    metadata: {
+      name: "Ogre Test",
+      symbol: "OGT",
+      image: "https://ipfs.io/ipfs/preuploaded-image"
+    }
+  };
+
+  const result = await harness.service.launch({
+    ...launchInput({ wallet, walletKeypair: keypair }),
+    mintKeypair: suppliedMintKeypair,
+    metadata
+  });
+
+  assert.equal(mintGenerationCalls, 0);
+  assert.equal(metadataUploadCalls, 0);
+  assert.equal(validatedMetadataUri, metadata.uri);
+  assert.equal(result.tokenMint, suppliedMintKeypair.publicKey.toBase58());
+  assert.equal(harness.requestBody().mint, suppliedMintKeypair.publicKey.toBase58());
+  assert.equal(harness.requestBody().tokenMetadata.uri, metadata.uri);
+  assert.deepEqual(harness.tx.signerPublicKeys, [
+    suppliedMintKeypair.publicKey.toBase58(),
+    keypair.publicKey.toBase58()
+  ]);
+  assert.equal(harness.attempts.get("attempt-1").metadataUri, metadata.uri);
+  assert.equal(harness.attempts.get("attempt-1").imageUri, metadata.imageUri);
+  assert.equal(harness.attempts.get("attempt-1").metadataJson.image, metadata.imageUri);
+});
+
 test("validated fast metadata URI is the URI sent to PumpPortal", async () => {
   const keypair = Keypair.generate();
   const wallet = managedWallet("user-7", keypair);

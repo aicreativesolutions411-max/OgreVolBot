@@ -67,6 +67,8 @@ test("profile login, referral tracking, and Robinhood artwork stay complete", ()
   assert.match(serverSource, /async function webReferralTracker\(/);
   assert.match(serverSource, /async function handlePlatformReferralCommand\(/);
   assert.match(serverSource, /parseCommandWithArgument\(text, \["referrals", "referralstats"\]\)/);
+  assert.match(ggSource, />𝕏 Community<\/a>/);
+  assert.doesNotMatch(ggSource, />𝕏 X Community<\/a>/);
   const funSource = fs.readFileSync(new URL("../web/public/fun.js", import.meta.url), "utf8");
   assert.match(funSource, /data-fun-account="create"/);
   assert.match(funSource, /data-save-referral-payout/);
@@ -151,6 +153,71 @@ test("the other money endpoints (send-sol, volume-bot, distribute) are idempoten
   // Dup-plan guard: never fund a 2nd bot for a coin already running.
   assert.match(functionBody(serverSource, "webStartVolumeBotCore"), /A volume bot is already running for this coin/);
   assert.match(functionBody(serverSource, "webDistributeToFreshWallets"), /runIdempotentMoneyOp\("web-distribute", userId/);
+});
+
+test("volume recovery refuses a manual sweep while a bot can still mutate ghost wallets", () => {
+  const sweep = functionBody(serverSource, "webSweepBackgroundWallets");
+  const plansRead = sweep.indexOf("readTradePlans(");
+  const walletsRead = sweep.indexOf("readWalletStore(");
+
+  assert.ok(plansRead >= 0, "background sweep must inspect the durable trade-plan store");
+  assert.ok(walletsRead >= 0, "background sweep must inspect the user's wallet store");
+  assert.ok(plansRead < walletsRead, "active-run rejection must happen before any background-wallet hydration");
+  assert.match(sweep, /web_volume_bot/);
+  assert.match(sweep, /(?:active volume|volume bot[^\n]{0,80}(?:running|stop)|stop[^\n]{0,80}volume)/i);
+  assert.match(sweep, /Token scan pending; wallet and gas were retained/);
+  assert.doesNotMatch(sweep, /getOwnedTokenAccountsWithWarningsCached\([^;]+\.catch\(\(\) => \(\{ accounts: \[\] \}\)\)/);
+  assert.match(sweep, /remaining !== null && remaining <= 20_000/);
+});
+
+test("rolling volume keeps a funded ghost wallet recoverable when buy outcome is uncertain", () => {
+  const rolling = functionBody(serverSource, "runRollingVolumeBotStep");
+  const transferAt = rolling.indexOf("await volumeBotTransferSol(");
+  const branchEnd = rolling.indexOf("if (plan.roundsDone >= maxRounds)", transferAt);
+
+  assert.ok(transferAt >= 0 && branchEnd > transferAt, "rolling buy branch is missing");
+  const fundedBuyAttempt = rolling.slice(transferAt, branchEnd);
+  const failureAt = fundedBuyAttempt.indexOf("} catch (error) {");
+  assert.ok(failureAt >= 0, "funded rolling buy must retain an explicit recovery path");
+  const uncertainFailure = fundedBuyAttempt.slice(failureAt);
+  assert.doesNotMatch(
+    uncertainFailure,
+    /pruneVolumeWallet\(/,
+    "a transfer or buy error can be outcome-unknown; never delete that funded signing key"
+  );
+  assert.match(
+    uncertainFailure,
+    /(?:plan\.pool\.push|plan\.activeWalletPublicKey\s*=|retain(?:ed)?VolumeWallet|queueVolumeWalletCleanup)/,
+    "the funded wallet must remain discoverable by stop/sweep recovery"
+  );
+});
+
+test("normal balance hydration excludes hidden volume wallets before any RPC fan-out", () => {
+  const balances = functionBody(serverSource, "webBalanceRows");
+  const hydrationAt = balances.indexOf("primeSolBalancesBatch(");
+  assert.ok(hydrationAt >= 0, "batched balance hydration is missing");
+
+  const beforeHydration = balances.slice(0, hydrationAt);
+  assert.match(
+    beforeHydration,
+    /filter\([\s\S]{0,180}wallet\.volumeBot[\s\S]{0,180}wallet\.ephemeral/,
+    "volume/ephemeral wallets must be removed before priming RPC balance reads"
+  );
+  assert.match(
+    balances,
+    /runWithConcurrency\((?:visibleWallets|wallets),/,
+    "token-account hydration must use the same already-filtered wallet list"
+  );
+});
+
+test("volume start freezes the source wallet index to the public key selected in Fun", () => {
+  const start = functionBody(serverSource, "webStartVolumeBotCore");
+  const funSource = fs.readFileSync(new URL("../web/public/fun.js", import.meta.url), "utf8");
+
+  assert.match(start, /assertFrozenManagedWallet\(/);
+  assert.match(start, /getWalletAt\(store, sourceIndex, userId\)/);
+  assert.match(start, /body\.sourceWalletPublicKey/);
+  assert.match(funSource, /sourceWalletPublicKey\s*:/);
 });
 
 test("wallet/trade-plan/web-auth stores are mutated under a per-file lock", () => {
@@ -872,11 +939,54 @@ test("launch dev + bundle presets support shared and per-wallet ladders end to e
   assert.match(fallback, /plan\.amountSol/);
   const atomic = functionBody(serverSource, "webLaunchPumpJitoBundle");
   assert.match(atomic, /amount: bundlePlan\.amountSol/);
-  assert.match(atomic, /walletIndexes: group\.plans\.map/);
+  assert.match(atomic, /walletPublicKeys: group\.plans\.map/);
+  assert.match(atomic, /returnCoverageDetails: true/);
   assert.match(atomic, /overflowBundlePlans/);
   const standard = functionBody(serverSource, "webLaunchPumpPortalLocal");
   assert.match(standard, /firePostLaunchBuysServerSide/);
   assert.match(standard, /postLaunchBuys/);
+});
+
+test("Jito fallback requires exact candidate proof before recording atomic buys", () => {
+  const atomic = functionBody(serverSource, "webLaunchPumpJitoBundle");
+  const candidateProof = functionBody(serverSource, "findConfirmedJitoBundleCandidate");
+  const provenEvents = functionBody(serverSource, "provenJitoBuyEvents");
+
+  assert.match(candidateProof, /getSignatureStatuses/);
+  assert.match(candidateProof, /statuses\.length === candidate\.signatures\.length/);
+  assert.match(candidateProof, /confirmationStatus === "confirmed"/);
+  assert.match(candidateProof, /confirmationStatus === "finalized"/);
+  assert.match(provenEvents, /signatures\.has\(signature\)/);
+  assert.match(atomic, /findConfirmedJitoBundleCandidate\([\s\S]*submittedBundleCandidates/);
+  assert.match(atomic, /pumpportal-local-fallback-partial/);
+  assert.match(atomic, /postLaunchBuysIncomplete: true/);
+  assert.match(atomic, /did not replay any uncertain buys/);
+  assert.doesNotMatch(atomic, /const atomicReceipts|provenanceId: `pump-jito:/,
+    "mint existence must never synthesize atomic buy receipts");
+});
+
+test("Jito candidates reconcile durably after submit-response loss or restart", () => {
+  const atomic = functionBody(serverSource, "webLaunchPumpJitoBundle");
+  const reconcile = functionBody(serverSource, "reconcilePersistedJitoAttempt");
+  const duplicateReconcile = functionBody(serverSource, "reconcilePersistedJitoAttemptForUser");
+
+  assert.match(atomic, /buyEvents: item\.buyEvents/);
+  assert.match(atomic, /status: "SUBMIT_UNKNOWN"/);
+  assert.match(atomic, /pump_launch_jito_submit_unknown/);
+  assert.match(atomic, /exactCandidateConfirmed/);
+  assert.match(reconcile, /findConfirmedJitoBundleCandidate\(candidates/);
+  assert.match(reconcile, /provenJitoBuyEvents\(attempt, candidate\)/);
+  assert.match(reconcile, /reconcileJitoAtomicExitIntents\(attempt, candidate\)/);
+  assert.match(reconcile, /overflow buys were not part of the all-or-none signed candidate/i);
+  assert.match(reconcile, /postLaunchBuysIncomplete: overflowBuysIncomplete > 0/);
+  assert.match(reconcile, /recoveryWorkIncomplete/);
+  assert.match(reconcile, /status: PUMP_LAUNCH_STATUS\.COMPLETE/);
+  assert.match(atomic, /recoveryIntents/);
+  assert.match(atomic, /atomicExitGroups/);
+  assert.match(atomic, /overflowBuys/);
+  assert.match(duplicateReconcile, /String\(item\.userId \|\| ""\) === String\(userId\)/);
+  assert.match(serverSource, /reconcilePersistedJitoAttemptForUser\([\s\S]{0,300}auth\.userId/);
+  assert.match(serverSource, /attempt = \(await reconcilePersistedJitoAttempt\(attempt, \{ polls: 1 \}\)/);
 });
 
 test("Fun profile clearly exposes naming, creation, and login recovery", () => {
@@ -1837,7 +1947,9 @@ test("launch Jito bundle AUTO-RETRIES with escalating tips before falling back",
   assert.match(lb, /landed = await mintLanded\(attempt === 0 \? 8_000 : 6_000\)/);
   // only after every shot misses does it fall back to the standard launch (never dead-ends)
   assert.match(lb, /if \(!landed\) \{/);
-  assert.match(lb, /webLaunchPumpPortalLocal\(userId, body, basePayload\)/);
+  // Fallback reuses the already-generated mint + metadata, so a late Jito
+  // landing cannot create a second token contract.
+  assert.match(lb, /webLaunchPumpPortalLocal\(userId, body, basePayload, \{ mintKeypair, metadata \}\)/);
 });
 test("smooth nav: DM sub-views carry a Main Menu button (no re-/start)", () => {
   for (const fn of ["showTelegramLinksMenu", "showTelegramPortfolioMenu", "showTelegramOgreToolsMenu", "showWalletMenu"]) {

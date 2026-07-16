@@ -5756,7 +5756,7 @@ function startKeepAlivePinger() {
 }
 
 function startTradePlanRunner() {
-  setTimeout(() => void processTradePlans({ forcePriceCheck: true }).catch((error) => {
+  setTimeout(() => void processTradePlansWithLease({ forcePriceCheck: true }).catch((error) => {
     console.error("Trade plan runner failed:", error.message);
   }), Math.max(1_000, Math.min(10_000, CONFIG.stopLossCheckIntervalMs)));
 
@@ -5765,7 +5765,7 @@ function startTradePlanRunner() {
     CONFIG.manualLaunchScanIntervalMs,
     CONFIG.stopLossCheckIntervalMs
   ));
-  setInterval(() => void processTradePlans({ forcePriceCheck: true }).catch((error) => {
+  setInterval(() => void processTradePlansWithLease({ forcePriceCheck: true }).catch((error) => {
     console.error("Trade plan runner failed:", error.message);
   }), intervalMs);
 }
@@ -5875,7 +5875,7 @@ async function runWebCriticalTpSlSafetyTick(reason = "interval") {
       });
     }
     if (active.activePlans) {
-      result.tradePlans = await processTradePlans({ forcePriceCheck: true });
+      result.tradePlans = await processTradePlansWithLease({ forcePriceCheck: true });
     }
     return result;
   } finally {
@@ -5914,7 +5914,7 @@ async function runTpSlBackendReconcile(reason = "manual") {
   await recordTpSlWorkerHeartbeat("reconcile_started", { reason, startedAt });
   const [webExitGuards, tradePlans, portfolioExits] = await Promise.all([
     processWebExitGuards({ forcePriceCheck: true, forceBackfill: true }),
-    processTradePlans({ forcePriceCheck: true }),
+    processTradePlansWithLease({ forcePriceCheck: true }),
     processWebPortfolioExits({ forcePriceCheck: true })
   ]);
   const result = {
@@ -8483,10 +8483,27 @@ async function handleWebApiRequest(request, response, requestUrl) {
     // indexed pools, synthesized from live PumpPortal ticks for brand-new
     // bonding-curve tokens. Free APIs, cached server-side.
     if (request.method === "GET" && pathname === "/api/web/ohlcv") {
-      const ohlcvMint = parsePublicKey(String(requestUrl.searchParams.get("mint") || "")).toBase58();
+      const rawOhlcvMint = String(requestUrl.searchParams.get("mint") || "");
+      const robinhoodCandidate = /^0x/i.test(rawOhlcvMint);
+      const robinhoodMint = robinhoodCandidate ? normalizeRobinhoodTokenAddress(rawOhlcvMint) : "";
+      if (robinhoodCandidate && !robinhoodMint) {
+        sendWebJson(request, response, 400, { ok: false, error: "invalid Robinhood token address" });
+        return;
+      }
+      let ohlcvMint = robinhoodMint;
+      let ohlcvNetwork = "robinhood";
+      if (!robinhoodCandidate) {
+        try {
+          ohlcvMint = parsePublicKey(rawOhlcvMint).toBase58();
+          ohlcvNetwork = "solana";
+        } catch {
+          sendWebJson(request, response, 400, { ok: false, error: "invalid token address" });
+          return;
+        }
+      }
       const tfRaw = String(requestUrl.searchParams.get("tf") || "1m").toLowerCase();
       const tfKey = OHLCV_TIMEFRAMES[tfRaw] ? tfRaw : "1m";
-      const payload = await webOhlcvPayload(ohlcvMint, tfKey);
+      const payload = await webOhlcvPayload(ohlcvMint, tfKey, { network: ohlcvNetwork });
       sendCachedWebJson(request, response, 200, payload, "public, max-age=10, stale-while-revalidate=30");
       return;
     }
@@ -10186,7 +10203,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     if (request.method === "POST" && pathname === "/api/web/trade/plans/run") {
       const guardResult = await processWebExitGuards({ forcePriceCheck: true });
-      const result = await processTradePlans({ forcePriceCheck: true });
+      const result = await processTradePlansWithLease({ forcePriceCheck: true });
       const portfolioResult = await processWebPortfolioExits({ forcePriceCheck: true });
       sendWebJson(request, response, 200, {
         ok: true,
@@ -10677,7 +10694,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
             .catch(() => null);
           if ((existing && String(existing.userId || "") === String(auth.userId))
             || (ledgerExisting && String(ledgerExisting.userId || "") === String(auth.userId))) {
-            return { duplicate: true };
+            return { duplicate: true, existing: existing || ledgerExisting };
           }
           setLaunchProgress(launchAttemptId, {
             status: "RUNNING", stage: "starting", stageText: "Validating launch sheet",
@@ -10686,15 +10703,53 @@ async function handleWebApiRequest(request, response, requestUrl) {
           return { duplicate: false };
         });
         if (launchClaim.duplicate) {
+          // A restart or lost HTTP response may leave a Jito attempt durably marked
+          // SUBMITTING even though its exact signed bundle confirmed. Reconcile the
+          // stored candidates before answering a retry; never launch a second mint.
+          const reconciledAttempt = await reconcilePersistedJitoAttemptForUser(
+            auth.userId,
+            launchAttemptId,
+            { polls: 1 }
+          ).catch(() => null);
+          const duplicateExisting = reconciledAttempt || launchClaim.existing;
+          const duplicateStatus = String(duplicateExisting?.status || "RUNNING").toUpperCase();
+          const duplicateComplete = duplicateStatus === "COMPLETE" && Boolean(duplicateExisting?.tokenMint || duplicateExisting?.result?.tokenMint);
           sendWebJson(request, response, 200, {
             ok: true,
-            launch: { status: "RUNNING", async: true, launchAttemptId, duplicate: true }
+            launch: duplicateComplete
+              ? {
+                status: "COMPLETE",
+                async: true,
+                launchAttemptId,
+                duplicate: true,
+                tokenMint: duplicateExisting.tokenMint || duplicateExisting.result?.tokenMint || "",
+                bundled: true,
+                recovered: true,
+                buysHandledServerSide: duplicateExisting.buysHandledServerSide !== false,
+                exitsArmed: duplicateExisting.exitsArmed !== false,
+                exitsIncomplete: Number(duplicateExisting.exitsIncomplete || 0),
+                postLaunchBuysIncomplete: Boolean(duplicateExisting.postLaunchBuysIncomplete),
+                overflowBuysIncomplete: Number(duplicateExisting.overflowBuysIncomplete || 0),
+                recoveryWorkIncomplete: Boolean(duplicateExisting.recoveryWorkIncomplete),
+                message: duplicateExisting.recoveryMessage || duplicateExisting.message || ""
+              }
+              : { status: duplicateStatus.startsWith("FAILED") ? "FAILED" : "RUNNING", async: true, launchAttemptId, duplicate: true }
           });
           return;
         }
         void webLaunchPumpCoin(auth.userId, body)
           .then((result) => {
-            setLaunchProgress(launchAttemptId, { status: "COMPLETE", stageText: "Launch complete", result, tokenMint: result?.tokenMint || "" });
+            const resultStatus = String(result?.status || "").toUpperCase();
+            const complete = resultStatus === "COMPLETE" && Boolean(result?.tokenMint || result?.mint);
+            const failed = resultStatus.startsWith("FAILED");
+            setLaunchProgress(launchAttemptId, {
+              status: complete ? "COMPLETE" : failed ? "FAILED" : "RUNNING",
+              stage: result?.stage || resultStatus.toLowerCase(),
+              stageText: complete ? "Launch complete" : failed ? "Launch failed" : "Launch submitted - confirming on-chain",
+              failureReason: failed ? String(result?.failureReason || result?.message || "Launch failed.").slice(0, 500) : "",
+              result: complete ? result : undefined,
+              tokenMint: result?.tokenMint || result?.mint || ""
+            });
           })
           .catch((error) => {
             const payload = pumpLaunchWebErrorPayload(error, body);
@@ -10916,25 +10971,44 @@ async function handleWebApiRequest(request, response, requestUrl) {
         // Memory misses after a server restart mid-launch - fall back to the
         // persistent attempts ledger so the client never polls into a void.
         const store = await readPumpLaunchAttempts().catch(() => ({ attempts: [] }));
-        const attempt = (store.attempts || []).find((item) =>
+        let attempt = (store.attempts || []).find((item) =>
           (item.id === progressId || item.launchAttemptId === progressId) && String(item.userId || "") === String(auth.userId));
         if (!attempt) {
           sendWebJson(request, response, 404, { ok: false, error: "Unknown launch attempt." });
           return;
         }
+        // Durable Jito candidates survive a Render restart. An exact all-signature
+        // confirmation is enough to finish the attempt without resubmitting it.
+        attempt = (await reconcilePersistedJitoAttempt(attempt, { polls: 1 }).catch(() => null))?.attempt || attempt;
         const attemptStatus = String(attempt.status || "").toUpperCase();
         entry = {
           userId: auth.userId,
-          status: attemptStatus === "COMPLETE" ? "COMPLETE" : attemptStatus === "FAILED" ? "FAILED" : "RUNNING",
+          status: attemptStatus === "COMPLETE" ? "COMPLETE" : attemptStatus.startsWith("FAILED") ? "FAILED" : "RUNNING",
           stage: attempt.stage || attemptStatus.toLowerCase(),
-          stageText: attemptStatus === "COMPLETE" ? "Launch complete" : attemptStatus === "FAILED" ? "Launch failed" : "Launch in progress (recovered after restart)",
+          stageText: attemptStatus === "COMPLETE"
+            ? (attempt.recoveryWorkIncomplete ? "Launch landed — review remaining setup" : "Launch complete")
+            : attemptStatus.startsWith("FAILED") ? "Launch failed" : "Launch in progress (recovered after restart)",
           failureReason: attempt.failureReason || attempt.errorMessage || "",
           startedAt: Date.parse(attempt.createdAt || "") || Date.now(),
           // bundled:true is CRITICAL here: after a restart we cannot know which
           // buys already executed, and bundled:false told the client to run its
           // own buys - the double-buy bug. The client must never re-buy on a
           // recovered launch; the user checks Positions instead.
-          result: attemptStatus === "COMPLETE" ? { status: "COMPLETE", tokenMint: attempt.tokenMint || "", mint: attempt.tokenMint || "", bundled: true, bundleFallback: true, recovered: true } : undefined
+          result: attemptStatus === "COMPLETE" ? {
+            status: "COMPLETE",
+            tokenMint: attempt.tokenMint || "",
+            mint: attempt.tokenMint || "",
+            bundled: true,
+            bundleFallback: true,
+            recovered: true,
+            buysHandledServerSide: attempt.buysHandledServerSide !== false,
+            exitsArmed: attempt.exitsArmed !== false,
+            exitsIncomplete: Number(attempt.exitsIncomplete || 0),
+            postLaunchBuysIncomplete: Boolean(attempt.postLaunchBuysIncomplete),
+            overflowBuysIncomplete: Number(attempt.overflowBuysIncomplete || 0),
+            recoveryWorkIncomplete: Boolean(attempt.recoveryWorkIncomplete),
+            message: attempt.recoveryMessage || attempt.message || ""
+          } : undefined
         };
       }
       sendWebJson(request, response, 200, {
@@ -13817,9 +13891,9 @@ async function runInternalWorkerTick(body = {}) {
   }
 
   if (includeTradeTasks && tradeTaskFlags.tradePlans) {
-    result.tradePlans = await runWorkerTask("tradePlans", () => processTradePlans({
+    result.tradePlans = await processTradePlansWithLease({
       forcePriceCheck: body.forceTradePlans !== false
-    }), { leaseMs: 20_000 });
+    });
   }
 
   if (includeTradeTasks && tradeTaskFlags.portfolioExits) {
@@ -18522,9 +18596,7 @@ async function createManualLaunchPlanFlow(chatId, session) {
 
   clearSession(chatId);
   await sendManualLaunchArmedMessage(chatId, plan);
-  setTimeout(() => void processTradePlans().catch((error) => {
-    console.error("Manual launch immediate scan failed:", error.message);
-  }), 250);
+  scheduleTradePlanProcessing("Manual launch immediate scan", [250]);
 }
 
 async function sendManualLaunchArmedMessage(chatId, plan) {
@@ -19564,11 +19636,21 @@ function recoverPlanWalletTokenOutAmount(planWallet, token) {
 }
 
 function scheduleTradePlanProcessing(label = "trade plan", delays = [500, 1500, 4000, 10000, 20000]) {
+  // When a dedicated worker owns plan execution, the web process only writes
+  // durable intent. Running the same cursor locally would race the worker.
+  if (!webLocalTpSlReconcileEnabled()) return;
   for (const delay of delays) {
-    setTimeout(() => void processTradePlans({ forcePriceCheck: true }).catch((error) => {
+    setTimeout(() => void processTradePlansWithLease({ forcePriceCheck: true }).catch((error) => {
       console.error(`${label} processing failed:`, error.message);
     }), delay);
   }
+}
+
+async function processTradePlansWithLease(options = {}) {
+  // One distributed owner across the web service and trade worker. Five
+  // minutes is comfortably above every bounded RPC/trade action; the durable
+  // per-action checkpoint remains the restart backstop.
+  return runWorkerTask("tradePlans", () => processTradePlans(options), { leaseMs: 300_000 });
 }
 
 function scheduleWebExitGuardProcessing(label = "web exit guard", delays = [500, 1500, 4000, 10000, 20000]) {
@@ -21745,17 +21827,14 @@ async function processTradePlans(options = {}) {
   if (tradePlanRunnerActive) {
     const activeForMs = tradePlanRunnerActiveSince ? Date.now() - tradePlanRunnerActiveSince : 0;
     if (activeForMs > CONFIG.tradePlanRunnerStaleMs) {
-      console.warn(`Trade plan runner was active for ${activeForMs}ms; clearing stale runner lock so TP/SL checks can continue.`);
-      tradePlanRunnerActive = false;
-      tradePlanRunnerActiveSince = 0;
-    } else {
-      return {
-        skipped: true,
-        reason: "trade_plan_runner_active",
-        activeSince: tradePlanRunnerActiveSince ? new Date(tradePlanRunnerActiveSince).toISOString() : null,
-        activeForMs
-      };
+      console.warn(`Trade plan runner has been active for ${activeForMs}ms; keeping the fail-closed lock so no money action can overlap.`);
     }
+    return {
+      skipped: true,
+      reason: activeForMs > CONFIG.tradePlanRunnerStaleMs ? "trade_plan_runner_stale_active" : "trade_plan_runner_active",
+      activeSince: tradePlanRunnerActiveSince ? new Date(tradePlanRunnerActiveSince).toISOString() : null,
+      activeForMs
+    };
   }
   tradePlanRunnerActive = true;
   tradePlanRunnerActiveSince = Date.now();
@@ -21787,10 +21866,69 @@ async function processTradePlans(options = {}) {
     for (const plan of prioritizedTradePlans(planStore.plans)) {
       summary.checkedPlans += 1;
       try {
-      const persistPlanCheckpoint = async () => {
+      const persistPlanCheckpoint = async (checkpoint = {}) => {
+        if (plan.source === "web_volume_bot" && checkpoint?.volumeActionClaim) {
+          const pending = checkpoint.volumeActionClaim;
+          return mutateTradePlans((store) => {
+            const saved = objectRows(store.plans).find((row) => row.id === plan.id);
+            const status = String(saved?.status || "").toLowerCase();
+            const botStage = String(saved?.botStage || "").toLowerCase();
+            const active = Boolean(saved
+              && !["canceled", "cancelled", "stopped", "completed", "closed"].includes(status)
+              && botStage === "running");
+            if (!active) return { claimed: false, active: false, botStage };
+            const expectedSequence = Number(pending.sequence || 0);
+            const savedSequence = Number(saved.volumeActionSeq || 0);
+            const existing = saved.pendingAction;
+            if (savedSequence !== expectedSequence
+              || (["submitting", "outcome_unknown"].includes(String(existing?.status || "").toLowerCase())
+                && existing?.claimToken !== pending.claimToken)) {
+              return { claimed: false, active: true, botStage, conflict: true, sequence: savedSequence };
+            }
+            saved.pendingAction = { ...pending };
+            saved.updatedAt = pending.startedAt || new Date().toISOString();
+            return { claimed: true, active: true, botStage, sequence: savedSequence };
+          });
+        }
+        if (plan.source === "web_volume_bot" && checkpoint?.volumeActionResolution) {
+          const resolution = checkpoint.volumeActionResolution;
+          return mutateTradePlans((store) => {
+            const saved = objectRows(store.plans).find((row) => row.id === plan.id);
+            if (!saved || saved.pendingAction?.claimToken !== resolution.claimToken) {
+              return {
+                resolved: false,
+                active: false,
+                botStage: String(saved?.botStage || "").toLowerCase(),
+                sequence: Number(saved?.volumeActionSeq || 0)
+              };
+            }
+            const nextSequence = Math.max(
+              Number(saved.volumeActionSeq || 0),
+              Number(resolution.sequence || 0) + 1
+            );
+            saved.volumeActionSeq = nextSequence;
+            saved.lastExternalAction = resolution.lastExternalAction || saved.lastExternalAction || null;
+            saved.pendingAction = resolution.pendingAction || null;
+            if (resolution.recovery) {
+              saved.botStage = "sweeping";
+              saved.sweepCursor = 0;
+              saved.recoveryReason = resolution.recovery.reason;
+              saved.recoveryNotBeforeAt = resolution.recovery.notBeforeAt;
+              saved.nextActionAt = resolution.recovery.notBeforeAt;
+            }
+            saved.updatedAt = new Date().toISOString();
+            const status = String(saved.status || "").toLowerCase();
+            const botStage = String(saved.botStage || "").toLowerCase();
+            const active = !["canceled", "cancelled", "stopped", "completed", "closed"].includes(status)
+              && botStage === "running";
+            return { resolved: true, active, botStage, sequence: nextSequence };
+          });
+        }
         const merged = await writeTradePlansPreservingNewPlans(planStore, initialPlanIds);
         const persisted = objectRows(merged.plans).find((row) => row.id === plan.id);
-        return Boolean(persisted && !["canceled", "cancelled", "stopped", "completed", "closed"].includes(String(persisted.status || "").toLowerCase()));
+        return Boolean(persisted
+          && !["canceled", "cancelled", "stopped", "completed", "closed"].includes(String(persisted.status || "").toLowerCase())
+          && !["sweeping", "done", "stopped"].includes(String(persisted.botStage || "").toLowerCase()));
       };
       if (plan.automationPermission) {
         const currentProfile = automationStore?.profiles?.[String(plan.userId)] || {};
@@ -30279,7 +30417,8 @@ const GECKO_HEADERS = {
 };
 
 async function resolveGeckoPoolForMint(mint) {
-  const cached = geckoPoolCache.get(mint);
+  const cacheKey = `solana:${mint}`;
+  const cached = geckoPoolCache.get(cacheKey);
   if (cached && Date.now() - cached.at < (cached.pool ? 10 * 60 * 1000 : 90 * 1000)) {
     return cached.pool;
   }
@@ -30306,7 +30445,65 @@ async function resolveGeckoPoolForMint(mint) {
       pool = String(bestDexPairForToken(mint, pairs)?.pairAddress || "") || null;
     }
   }
-  geckoPoolCache.set(mint, { at: Date.now(), pool });
+  geckoPoolCache.set(cacheKey, { at: Date.now(), pool });
+  if (geckoPoolCache.size > 500) {
+    const oldest = [...geckoPoolCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]?.[0];
+    if (oldest) geckoPoolCache.delete(oldest);
+  }
+  return pool;
+}
+
+function normalizeRobinhoodTokenAddress(value) {
+  const address = String(value || "");
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address) || /^0x0{40}$/i.test(address)) return "";
+  return address.toLowerCase();
+}
+
+function geckoRelationshipTokenAddress(relationship, network) {
+  const id = String(relationship?.data?.id || "").trim().toLowerCase();
+  const prefix = `${String(network || "").toLowerCase()}_`;
+  if (!prefix || !id.startsWith(prefix)) return "";
+  const address = id.slice(prefix.length);
+  return network === "robinhood" ? normalizeRobinhoodTokenAddress(address) : address;
+}
+
+function bestGeckoPoolForToken(pools, tokenAddress, network) {
+  const normalizedToken = network === "robinhood"
+    ? normalizeRobinhoodTokenAddress(tokenAddress)
+    : String(tokenAddress || "").trim();
+  if (!normalizedToken || !Array.isArray(pools)) return null;
+  return pools
+    .map((item) => {
+      const baseToken = geckoRelationshipTokenAddress(item?.relationships?.base_token, network);
+      const quoteToken = geckoRelationshipTokenAddress(item?.relationships?.quote_token, network);
+      const tokenSide = baseToken === normalizedToken ? "base" : quoteToken === normalizedToken ? "quote" : "";
+      const id = String(item?.id || "");
+      const idPrefix = `${network}_`;
+      const address = String(item?.attributes?.address || (id.startsWith(idPrefix) ? id.slice(idPrefix.length) : "")).trim();
+      return {
+        address,
+        tokenSide,
+        reserveUsd: Number(item?.attributes?.reserve_in_usd) || 0
+      };
+    })
+    .filter((item) => item.address && item.tokenSide)
+    .sort((a, b) => b.reserveUsd - a.reserveUsd)[0] || null;
+}
+
+async function resolveGeckoPoolForRobinhoodToken(tokenAddress) {
+  const token = normalizeRobinhoodTokenAddress(tokenAddress);
+  if (!token) return null;
+  const cacheKey = `robinhood:${token}`;
+  const cached = geckoPoolCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < (cached.pool ? 10 * 60 * 1000 : 90 * 1000)) {
+    return cached.pool;
+  }
+  const data = await fetchJson(
+    `https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${encodeURIComponent(token)}/pools?page=1`,
+    { headers: GECKO_HEADERS, timeoutMs: 3_500 }
+  ).catch(() => null);
+  const pool = bestGeckoPoolForToken(Array.isArray(data?.data) ? data.data : [], token, "robinhood");
+  geckoPoolCache.set(cacheKey, { at: Date.now(), pool });
   if (geckoPoolCache.size > 500) {
     const oldest = [...geckoPoolCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]?.[0];
     if (oldest) geckoPoolCache.delete(oldest);
@@ -30426,10 +30623,19 @@ async function sendCryptoChart(chatId, id, symbol, tf, messageId = null) {
 
 async function fetchGeckoOhlcv(mint, tfKey, options = {}) {
   const tf = OHLCV_TIMEFRAMES[tfKey] || OHLCV_TIMEFRAMES["1m"];
-  const pool = String(options.poolAddress || "").replace(/^solana_/, "") || await resolveGeckoPoolForMint(mint);
+  const network = options.network === "robinhood" ? "robinhood" : "solana";
+  let pool = null;
+  let tokenSide = "base";
+  if (network === "robinhood") {
+    const resolved = await resolveGeckoPoolForRobinhoodToken(mint);
+    pool = resolved?.address || null;
+    tokenSide = resolved?.tokenSide === "quote" ? "quote" : "base";
+  } else {
+    pool = String(options.poolAddress || "").replace(/^solana_/, "") || await resolveGeckoPoolForMint(mint);
+  }
   if (!pool) return { candles: [], poolAddress: null };
   const data = await fetchJson(
-    `https://api.geckoterminal.com/api/v2/networks/solana/pools/${encodeURIComponent(pool)}/ohlcv/${tf.path}?aggregate=${tf.aggregate}&limit=300&currency=usd&token=base`,
+    `https://api.geckoterminal.com/api/v2/networks/${network}/pools/${encodeURIComponent(pool)}/ohlcv/${tf.path}?aggregate=${tf.aggregate}&limit=300&currency=usd&token=${tokenSide}`,
     { headers: GECKO_HEADERS, timeoutMs: 4_000 }
   ).catch(() => null);
   const list = Array.isArray(data?.data?.attributes?.ohlcv_list) ? data.data.attributes.ohlcv_list : [];
@@ -30444,7 +30650,7 @@ async function fetchGeckoOhlcv(mint, tfKey, options = {}) {
     }))
     .filter((candle) => candle.t > 0 && candle.c > 0)
     .sort((a, b) => a.t - b.t);
-  return { candles, poolAddress: pool };
+  return { candles, poolAddress: pool, tokenSide };
 }
 
 // Bonding-curve tokens: build candles out of the live trade ticks we hold in
@@ -30479,17 +30685,20 @@ function synthCandlesFromPumpTrades(mint, tfKey) {
 }
 
 async function webOhlcvPayload(mint, tfKey, options = {}) {
-  const cacheKey = `${mint}:${tfKey}`;
+  const network = options.network === "robinhood" ? "robinhood" : "solana";
+  const normalizedMint = network === "robinhood" ? normalizeRobinhoodTokenAddress(mint) : mint;
+  const cacheKey = `${network}:${normalizedMint}:${tfKey}`;
   const cached = geckoOhlcvCache.get(cacheKey);
   if (cached && Date.now() - cached.at < 12_000) return cached.payload;
 
-  pumpPortalStream.watchMint(mint); // start collecting live ticks either way
-  let { candles, poolAddress } = await fetchGeckoOhlcv(mint, tfKey, options);
+  if (network === "solana") pumpPortalStream.watchMint(mint); // PumpPortal only streams Solana trades.
+  let { candles, poolAddress, tokenSide } = await fetchGeckoOhlcv(mint, tfKey, { ...options, network });
   let source = candles.length ? "geckoterminal" : "";
-  if (!candles.length) {
+  if (!candles.length && network === "solana") {
     candles = synthCandlesFromPumpTrades(mint, tfKey);
     source = candles.length ? "pumpportal" : "none";
   }
+  if (!candles.length && network === "robinhood") source = "none";
   // GeckoTerminal free tier rate-limits the shared Render IP now and then.
   // A slightly stale chart beats a blank one: serve the last good payload
   // for up to 10 minutes when a refresh comes back empty.
@@ -30503,7 +30712,8 @@ async function webOhlcvPayload(mint, tfKey, options = {}) {
     source,
     poolAddress: poolAddress || null,
     lastPriceUsd: candles.length ? candles[candles.length - 1].c : null,
-    candles
+    candles,
+    ...(network === "robinhood" ? { chain: "robinhood", tokenSide: tokenSide || null } : {})
   };
   // Never cache an empty answer for long - a fresh token can get its first
   // candle seconds from now.
@@ -52259,10 +52469,63 @@ async function writeTradePlansPreservingNewPlans(store, initialPlanIds = new Set
       const current = latestById.get(incoming.id);
       // A plan removed while this worker was running stays removed.
       if (initialPlanIds.has(incoming.id) && !current) continue;
+      if (current && incoming.source === "web_volume_bot") {
+        // A volume action is claimed with a monotonically increasing sequence
+        // under the trade-plans file lock. Never let a stale worker snapshot
+        // roll that sequence back or erase another worker's in-flight claim.
+        const currentSequence = Number(current.volumeActionSeq || 0);
+        const incomingSequence = Number(incoming.volumeActionSeq || 0);
+        const currentClaim = current.pendingAction;
+        const incomingClaimToken = firstString(
+          incoming.pendingAction?.claimToken,
+          incoming.lastExternalAction?.claimToken
+        );
+        if (incomingSequence < currentSequence
+          || (["submitting", "outcome_unknown"].includes(String(currentClaim?.status || "").toLowerCase())
+            && currentClaim?.claimToken
+            && incomingClaimToken !== currentClaim.claimToken)) {
+          mergedPlans.push(current);
+          continue;
+        }
+      }
       // User cancellation/stop always wins over an older worker snapshot.
       if (current && (terminal.has(String(current.status || "").toLowerCase())
         || ["sweeping", "done", "stopped"].includes(String(current.botStage || "").toLowerCase()))) {
-        mergedPlans.push(current);
+        if (incoming.source === "web_volume_bot") {
+          // A stop can arrive while the worker is funding a newly-created ghost.
+          // Preserve every wallet discovered by either snapshot, and reactivate
+          // cleanup if the older worker found one after the stop was written.
+          const currentPool = objectRows(current.pool);
+          const incomingPool = objectRows(incoming.pool);
+          const poolByKey = new Map(currentPool.map((entry) => [entry.publicKey, entry]));
+          for (const entry of incomingPool) {
+            if (!entry?.publicKey) continue;
+            poolByKey.set(entry.publicKey, { ...(poolByKey.get(entry.publicKey) || {}), ...entry });
+          }
+          const mergedKeys = uniqueStrings([
+            ...(Array.isArray(current.tradingPublicKeys) ? current.tradingPublicKeys : []),
+            ...(Array.isArray(incoming.tradingPublicKeys) ? incoming.tradingPublicKeys : []),
+            current.activeWalletPublicKey,
+            incoming.activeWalletPublicKey,
+            ...poolByKey.keys()
+          ].filter(Boolean));
+          const discoveredAfterStop = incomingPool.some((entry) => entry?.publicKey
+            && !currentPool.some((saved) => saved?.publicKey === entry.publicKey));
+          mergedPlans.push({
+            ...current,
+            pool: [...poolByKey.values()],
+            tradingPublicKeys: mergedKeys,
+            ...(discoveredAfterStop ? {
+              status: "volume_bot",
+              botStage: "sweeping",
+              completedAt: null,
+              nextActionAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            } : {})
+          });
+        } else {
+          mergedPlans.push(current);
+        }
       } else {
         mergedPlans.push(incoming);
       }
@@ -54348,22 +54611,24 @@ async function submitSwampScore(body = {}) {
 async function upsertPumpLaunchAttempt(update = {}) {
   if (!update.id && !update.launchAttemptId) return;
   const id = String(update.id || update.launchAttemptId);
-  const store = await readPumpLaunchAttempts();
-  const index = store.attempts.findIndex((attempt) => String(attempt.id || attempt.launchAttemptId) === id);
-  const next = {
-    ...(index >= 0 ? store.attempts[index] : {}),
-    ...update,
-    id,
-    launchAttemptId: id,
-    updatedAt: update.updatedAt || new Date().toISOString()
-  };
-  if (next.encryptedMintSecret) next.mintSecretStored = true;
-  if (index >= 0) {
-    store.attempts[index] = next;
-  } else {
-    store.attempts.push(next);
-  }
-  await writePumpLaunchAttempts(store);
+  await withFileLock(pumpLaunchAttemptsPath(), async () => {
+    const store = await readPumpLaunchAttempts();
+    const index = store.attempts.findIndex((attempt) => String(attempt.id || attempt.launchAttemptId) === id);
+    const next = {
+      ...(index >= 0 ? store.attempts[index] : {}),
+      ...update,
+      id,
+      launchAttemptId: id,
+      updatedAt: update.updatedAt || new Date().toISOString()
+    };
+    if (next.encryptedMintSecret) next.mintSecretStored = true;
+    if (index >= 0) {
+      store.attempts[index] = next;
+    } else {
+      store.attempts.push(next);
+    }
+    await writePumpLaunchAttempts(store);
+  });
 }
 
 // The coins THIS user launched (the "My launches & fees" tracker). De-duped by mint, newest first, with
@@ -64938,6 +65203,20 @@ async function removeWebWallets(userId, body = {}) {
       return wallet;
   });
   const selectedPublicKeys = new Set(selected.map((wallet) => wallet.publicKey));
+  const planStore = await readTradePlans();
+  const activeVolumeKeys = new Set();
+  for (const plan of (planStore.plans || []).filter((entry) => activeVolumePlanForUser(entry, userId))) {
+    if (plan.sourcePublicKey) activeVolumeKeys.add(plan.sourcePublicKey);
+    if (plan.activeWalletPublicKey) activeVolumeKeys.add(plan.activeWalletPublicKey);
+    for (const key of (plan.tradingPublicKeys || [])) activeVolumeKeys.add(key);
+    for (const entry of (plan.pool || [])) if (entry?.publicKey) activeVolumeKeys.add(entry.publicKey);
+  }
+  const activeSelection = [...selectedPublicKeys].find((key) => activeVolumeKeys.has(key));
+  if (activeSelection) {
+    const error = new Error(`Wallet ${shortMint(activeSelection)} is part of an active SlimeBot run. Stop it and wait for the automatic sweep before removing the wallet.`);
+    error.statusCode = 409;
+    throw error;
+  }
   const managedWallets = owned.filter((wallet) => !wallet.volumeBot && !wallet.ephemeral && !wallet.sessionWallet);
   const mainWallet = managedWallets[0];
   if (mainWallet && selectedPublicKeys.has(mainWallet.publicKey)) {
@@ -66101,7 +66380,7 @@ async function webArmExitsForExistingPositions(userId, body = {}) {
   const automationPermission = await requireWebAutomationPermission(userId, "Arm exits");
 
   const store = await readWalletStore();
-  const wallets = (body.walletIndexes || body.walletGroup)
+  const wallets = (body.walletIndexes || body.walletGroup || body.walletPublicKeys)
     ? webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup, { walletPublicKeys: body.walletPublicKeys })
     : walletsForOwner(store, userId);
 
@@ -66123,9 +66402,11 @@ async function webArmExitsForExistingPositions(userId, body = {}) {
   const sellAfterAt = planSellAfterAtFromNow({ sellDelaySeconds }, now);
   const planWallets = [];
   let alreadyCovered = 0;
+  const alreadyCoveredWalletPublicKeys = new Set();
   await runWithConcurrency(wallets, CONFIG.balanceConcurrency, async (wallet) => {
     if (covered.has(wallet.publicKey)) {
       alreadyCovered += 1;
+      alreadyCoveredWalletPublicKeys.add(wallet.publicKey);
       return;
     }
     try {
@@ -66174,6 +66455,22 @@ async function webArmExitsForExistingPositions(userId, body = {}) {
   });
 
   if (!planWallets.length) {
+    if (body.returnCoverageDetails === true) {
+      return {
+        planId: null,
+        walletCount: 0,
+        alreadyCovered,
+        requestedWalletCount: wallets.length,
+        walletPublicKeys: [],
+        alreadyCoveredWalletPublicKeys: [...alreadyCoveredWalletPublicKeys],
+        takeProfitPct,
+        stopLossPct,
+        sellAfterAt,
+        message: alreadyCovered
+          ? `Exits already cover ${alreadyCovered}/${wallets.length} requested wallet(s).`
+          : "No requested wallet balance was readable yet."
+      };
+    }
     const reason = alreadyCovered
       ? "Exits are already armed on every wallet holding this token."
       : "No wallet holds this token yet - balances may still be indexing; try again in a few seconds.";
@@ -66218,6 +66515,7 @@ async function webArmExitsForExistingPositions(userId, body = {}) {
   // Re-check coverage while holding the plans-store lock. Two simultaneous
   // "Arm exits" requests may both pass the earlier balance scan; only one may
   // claim each wallet/mint pair.
+  let coverageOnly = false;
   await mutateTradePlans((plans) => {
     const newlyCovered = new Set();
     for (const existing of plans.plans || []) {
@@ -66230,8 +66528,17 @@ async function webArmExitsForExistingPositions(userId, body = {}) {
       }
     }
     const unclaimed = plan.wallets.filter((wallet) => !newlyCovered.has(wallet.publicKey));
-    alreadyCovered += plan.wallets.length - unclaimed.length;
+    for (const wallet of plan.wallets) {
+      if (newlyCovered.has(wallet.publicKey)) alreadyCoveredWalletPublicKeys.add(wallet.publicKey);
+    }
+    alreadyCovered = alreadyCoveredWalletPublicKeys.size;
     if (!unclaimed.length) {
+      if (body.returnCoverageDetails === true) {
+        coverageOnly = true;
+        plan.wallets = [];
+        planWallets.splice(0, planWallets.length);
+        return;
+      }
       const error = new Error('Exits are already armed on every wallet holding this token.');
       error.statusCode = 400;
       throw error;
@@ -66242,6 +66549,20 @@ async function webArmExitsForExistingPositions(userId, body = {}) {
     planWallets.splice(0, planWallets.length, ...unclaimed);
     plans.plans.push(plan);
   });
+  if (coverageOnly) {
+    return {
+      planId: null,
+      walletCount: 0,
+      alreadyCovered,
+      requestedWalletCount: wallets.length,
+      walletPublicKeys: [],
+      alreadyCoveredWalletPublicKeys: [...alreadyCoveredWalletPublicKeys],
+      takeProfitPct,
+      stopLossPct,
+      sellAfterAt,
+      message: `Exits already cover ${alreadyCovered}/${wallets.length} requested wallet(s).`
+    };
+  }
   await audit("web_arm_exits_existing", {
     userId, planId: plan.id, tokenMint,
     wallets: planWallets.map((wallet) => wallet.publicKey),
@@ -66253,6 +66574,9 @@ async function webArmExitsForExistingPositions(userId, body = {}) {
     planId: plan.id,
     walletCount: planWallets.length,
     alreadyCovered,
+    requestedWalletCount: wallets.length,
+    walletPublicKeys: planWallets.map((wallet) => wallet.publicKey),
+    alreadyCoveredWalletPublicKeys: [...alreadyCoveredWalletPublicKeys],
     takeProfitPct,
     stopLossPct,
     sellAfterAt,
@@ -66285,7 +66609,7 @@ async function webCreateSniperEntry(userId, body = {}) {
 const VOLUME_BOT_LIMITS = {
   maxWallets: 12,
   maxCycles: 60,
-  maxRounds: 250,
+  maxRounds: 60,
   maxFundPerWalletSol: 1,
   maxBuyAmountSol: 0.5,
   minDelaySecs: 3,
@@ -66293,6 +66617,7 @@ const VOLUME_BOT_LIMITS = {
   maxLogEntries: 60,
   roundFeeBufferSol: 0.03
 };
+const VOLUME_BOT_RECOVERY_SETTLE_MS = 90_000;
 
 // Pick a randomized buy size centered on the target (60%-140%), capped.
 function volumeBotRandomBuySol(targetSol) {
@@ -66317,18 +66642,26 @@ async function createEphemeralVolumeWallet(userId, label, volumeSource = "") {
   return record;
 }
 
-// Tag already-created wallets (fixed-pool auto-create) as background volume wallets
-// with their origin, so they are hidden from the Wallets tab and always sweepable.
-async function tagVolumeBotWallets(userId, publicKeys = [], volumeSource = "") {
-  const keys = new Set((publicKeys || []).filter(Boolean));
-  if (!keys.size) return;
-  await mutateWalletStore((store) => {
-    for (const wallet of store.wallets) {
-      if (wallet.ownerId === userId && keys.has(wallet.publicKey)) {
-        if (!wallet.volumeBot) wallet.volumeBot = true;
-        if (volumeSource && wallet.volumeSource !== String(volumeSource)) wallet.volumeSource = String(volumeSource);
-      }
+// Create the whole fixed ghost set in one wallet-store mutation and stamp each
+// key with its durable plan id before the file is written. If the process dies
+// before the plan's wallet list is updated, startup recovery can still discover
+// and safely verify/prune every generated key.
+async function createFixedVolumeWalletSet(userId, { count, label, volumeSource, volumePlanId } = {}) {
+  const walletCount = clamp(Number(count || 0), 1, VOLUME_BOT_LIMITS.maxWallets);
+  const baseLabel = cleanLabel(String(label || "SlimeBot"));
+  return mutateWalletStore((store) => {
+    const created = [];
+    for (let index = 1; index <= walletCount; index += 1) {
+      const keypair = Keypair.generate();
+      const record = walletRecord(walletCount === 1 ? baseLabel : `${baseLabel} ${index}`, keypair, userId);
+      record.ephemeral = true;
+      record.volumeBot = true;
+      record.volumeSource = String(volumeSource || "");
+      record.volumePlanId = String(volumePlanId || "");
+      store.wallets.push(record);
+      created.push({ label: record.label, publicKey: record.publicKey });
     }
+    return created;
   });
 }
 
@@ -66337,6 +66670,182 @@ async function pruneVolumeWallet(publicKey) {
   await mutateWalletStore((store) => {
     store.wallets = store.wallets.filter((wallet) => !(wallet.publicKey === publicKey && wallet.ephemeral));
   });
+}
+
+function activeVolumePlanForUser(plan, userId) {
+  return plan?.source === "web_volume_bot"
+    && String(plan.userId) === String(userId)
+    && plan.status === "volume_bot"
+    && !["done", "stopped"].includes(String(plan.botStage || "").toLowerCase());
+}
+
+function volumePlanWalletPublicKeys(plan = {}) {
+  const keys = new Set();
+  const add = (value) => {
+    const key = String(value || "").trim();
+    if (key) keys.add(key);
+  };
+  add(plan.sourcePublicKey);
+  add(plan.activeWalletPublicKey);
+  for (const key of Array.isArray(plan.tradingPublicKeys) ? plan.tradingPublicKeys : []) add(key);
+  for (const entry of Array.isArray(plan.pool) ? plan.pool : []) add(typeof entry === "string" ? entry : entry?.publicKey);
+  return keys;
+}
+
+function volumePlanWalletOverlap(left, right) {
+  const rightKeys = right instanceof Set ? right : new Set(right || []);
+  return [...volumePlanWalletPublicKeys(left)].filter((key) => rightKeys.has(key));
+}
+
+function volumeBotConflict(message) {
+  const error = new Error(message);
+  error.statusCode = 409;
+  return error;
+}
+
+function assertVolumePlanCanReserve(planStore, candidate, excludePlanId = "") {
+  const candidateKeys = volumePlanWalletPublicKeys(candidate);
+  for (const existing of objectRows(planStore?.plans)) {
+    if (!activeVolumePlanForUser(existing, candidate.userId) || existing.id === excludePlanId) continue;
+    if (existing.tokenMint === candidate.tokenMint) {
+      throw volumeBotConflict("A volume bot is already running for this coin. Stop it before starting another.");
+    }
+    const overlap = volumePlanWalletOverlap(existing, candidateKeys);
+    if (overlap.length) {
+      throw volumeBotConflict(`Wallet ${shortMint(overlap[0])} is already reserved by another active volume bot. Stop that bot before reusing its source or trading wallets.`);
+    }
+  }
+}
+
+async function reserveVolumeBotPlan(candidate) {
+  return mutateTradePlans((planStore) => {
+    const replay = candidate.startAttemptId
+      ? objectRows(planStore.plans).find((plan) => plan?.source === "web_volume_bot"
+        && String(plan.userId) === String(candidate.userId)
+        && plan.startAttemptId === candidate.startAttemptId)
+      : null;
+    if (replay) return { plan: replay, replay: true };
+    assertVolumePlanCanReserve(planStore, candidate);
+    planStore.plans.push(candidate);
+    return { plan: candidate, replay: false };
+  });
+}
+
+async function completeVolumeTokenAccountRead(publicKey) {
+  const owner = publicKey instanceof PublicKey ? publicKey : new PublicKey(publicKey);
+  const lookup = await getOwnedTokenAccountsWithWarningsCached(owner, { force: true, priority: true });
+  const warnings = Array.isArray(lookup?.warnings) ? lookup.warnings.filter(Boolean) : [];
+  if (lookup?.stale || Number(lookup?.successes || 0) !== 2 || warnings.length) {
+    const reason = warnings.length ? warnings.join(" | ") : lookup?.stale ? "provider returned stale balances" : "both token programs were not read";
+    throw new Error(`Could not completely verify SPL and Token-2022 accounts: ${reason}`);
+  }
+  return Array.isArray(lookup.accounts) ? lookup.accounts : [];
+}
+
+function nonzeroVolumeTokenAccounts(accounts = []) {
+  return accounts.filter((account) => BigInt(account?.rawAmount || 0) > 0n);
+}
+
+async function closeEmptyVolumeTokenAccounts(record, verifiedAccounts = null) {
+  const keypair = decryptWallet(record);
+  const accounts = Array.isArray(verifiedAccounts) ? verifiedAccounts : await completeVolumeTokenAccountRead(keypair.publicKey);
+  if (nonzeroVolumeTokenAccounts(accounts).length) {
+    throw new Error("Refusing to close token accounts while a token balance remains.");
+  }
+  const emptyAccounts = accounts.filter((account) => BigInt(account?.rawAmount || 0) === 0n);
+  const signatures = [];
+  for (const accountBatch of chunkArray(emptyAccounts, 8)) {
+    const tx = new Transaction();
+    for (const account of accountBatch) {
+      tx.add(createCloseAccountInstruction(
+        new PublicKey(account.pubkey),
+        keypair.publicKey,
+        keypair.publicKey,
+        [],
+        new PublicKey(account.tokenProgramId)
+      ));
+    }
+    signatures.push(await sendLegacyTransaction(tx, [keypair]));
+  }
+  if (emptyAccounts.length) invalidateWalletReadCache(record.publicKey);
+  return { closed: emptyAccounts.length, signatures };
+}
+
+// A background wallet remains encrypted and recoverable until its target token,
+// token accounts, and sweepable SOL are all verified clear. Unknown RPC/swap
+// outcomes return `closed:false`; the worker retries instead of deleting keys.
+async function cleanupVolumeBotWallet(plan, record, slippageBps, noBalance) {
+  const cfg = plan.config || {};
+  const publicKey = record.publicKey;
+  try {
+    await sellTokenFromWallet(record, plan.tokenMint, volumeBotSellPercent(cfg, 100), slippageBps, { userId: plan.userId });
+  } catch (error) {
+    if (volumeBotTradeOutcomeAmbiguous(error)) {
+      volumeBotEnterRecovery(plan, "Cleanup sell", publicKey, error);
+      return { closed: false, sentLamports: 0 };
+    }
+    if (!noBalance(error)) volumeBotLogPush(plan, `Close-sell pending ${shortMint(publicKey)}: ${friendlyError(error)}`);
+  }
+
+  // Residue is explicitly recoverable: retain the encrypted wallet and enough
+  // SOL for a later sell instead of draining gas and deleting its key.
+  if (cfg.keepDust) {
+    volumeBotLogPush(plan, `Retained ${shortMint(publicKey)} with residue + cleanup gas.`);
+    return { closed: true, retained: true, sentLamports: 0 };
+  }
+
+  let tokenAccounts;
+  try {
+    tokenAccounts = await completeVolumeTokenAccountRead(publicKey);
+  } catch (error) {
+    volumeBotLogPush(plan, `Cleanup verification pending ${shortMint(publicKey)}: ${friendlyError(error)}`);
+    return { closed: false, sentLamports: 0 };
+  }
+  const remainingPositions = nonzeroVolumeTokenAccounts(tokenAccounts);
+  if (remainingPositions.length) {
+    volumeBotLogPush(plan, `${shortMint(publicKey)} still holds ${remainingPositions.length} token position(s); cleanup will retry.`);
+    return { closed: false, sentLamports: 0 };
+  }
+
+  try {
+    await closeEmptyVolumeTokenAccounts(record, tokenAccounts);
+    const afterClose = await completeVolumeTokenAccountRead(publicKey);
+    if (afterClose.length) {
+      volumeBotLogPush(plan, `${shortMint(publicKey)} still has ${afterClose.length} token account(s); wallet retained for another close pass.`);
+      return { closed: false, sentLamports: 0 };
+    }
+  } catch (error) {
+    volumeBotLogPush(plan, `Token-account close pending ${shortMint(publicKey)}: ${friendlyError(error)}`);
+    return { closed: false, sentLamports: 0 };
+  }
+
+  if (cfg.sweepBack === false || !plan.sourcePublicKey) {
+    return { closed: true, retained: true, sentLamports: 0 };
+  }
+
+  let drain;
+  try {
+    drain = await drainSolFromWallet(decryptWallet(record), new PublicKey(plan.sourcePublicKey));
+    invalidateWalletReadCache(publicKey);
+  } catch (error) {
+    volumeBotLogPush(plan, `SOL sweep pending ${shortMint(publicKey)}: ${friendlyError(error)}`);
+    return { closed: false, sentLamports: 0 };
+  }
+
+  const remainingSol = await getSolBalanceCached(new PublicKey(publicKey), { force: true }).catch(() => null);
+  let remainingAccounts;
+  try {
+    remainingAccounts = await completeVolumeTokenAccountRead(publicKey);
+  } catch {
+    volumeBotLogPush(plan, `${shortMint(publicKey)} token verification failed after sweep; wallet retained.`);
+    return { closed: false, sentLamports: Number(drain?.sentLamports || 0) };
+  }
+  if (remainingSol === null || remainingAccounts.length || remainingSol > 20_000) {
+    volumeBotLogPush(plan, `${shortMint(publicKey)} cleanup could not be fully verified; wallet retained for retry.`);
+    return { closed: false, sentLamports: Number(drain?.sentLamports || 0) };
+  }
+  await pruneVolumeWallet(publicKey);
+  return { closed: true, retained: false, sentLamports: Number(drain?.sentLamports || 0) };
 }
 
 async function volumeBotTransferSol(sourceRecord, destinationPublicKey, lamports) {
@@ -66360,6 +66869,116 @@ function volumeBotError(message) {
 function volumeBotLogPush(plan, message) {
   plan.log = [{ at: new Date().toISOString(), message: String(message || "") }, ...(plan.log || [])]
     .slice(0, VOLUME_BOT_LIMITS.maxLogEntries);
+}
+
+function volumeBotTradeOutcomeAmbiguous(error) {
+  return Boolean(error?.tradeSubmissionAmbiguous);
+}
+
+function volumeBotEnterRecovery(plan, action, publicKey, error) {
+  if (plan.pendingAction) {
+    plan.pendingAction = {
+      ...plan.pendingAction,
+      status: "outcome_unknown",
+      error: friendlyError(error).slice(0, 240),
+      updatedAt: new Date().toISOString()
+    };
+  }
+  plan.botStage = "sweeping";
+  plan.sweepCursor = 0;
+  plan.recoveryReason = `${action} outcome is unknown for ${publicKey || "a volume wallet"}: ${friendlyError(error)}`;
+  plan.recoveryNotBeforeAt = new Date(Date.now() + VOLUME_BOT_RECOVERY_SETTLE_MS).toISOString();
+  plan.nextActionAt = plan.recoveryNotBeforeAt;
+  volumeBotLogPush(plan, `${plan.recoveryReason}. New trades stopped; verifying balances and recovering wallets.`);
+}
+
+async function runVolumeBotExternalAction(plan, persist, action = {}, task) {
+  if (plan.pendingAction?.status === "submitting") {
+    throw volumeBotConflict("A prior volume action is still being reconciled; no new trade was sent.");
+  }
+  const startedAt = new Date().toISOString();
+  const sequence = Number(plan.volumeActionSeq || 0);
+  const pending = {
+    id: [plan.id, Number(plan.actionCount || 0) + 1, action.kind || "trade", action.publicKey || "wallet"].join(":"),
+    claimToken: crypto.randomUUID(),
+    sequence,
+    kind: String(action.kind || "trade"),
+    publicKey: String(action.publicKey || ""),
+    status: "submitting",
+    startedAt
+  };
+  plan.pendingAction = pending;
+  plan.updatedAt = startedAt;
+  if (typeof persist === "function") {
+    const claim = await persist({ volumeActionClaim: pending });
+    const claimed = claim === true || Boolean(claim?.claimed);
+    if (!claimed) {
+      plan.pendingAction = null;
+      if (claim?.botStage) plan.botStage = claim.botStage;
+      throw volumeBotConflict("This volume plan stopped before the next trade. Nothing new was sent.");
+    }
+  }
+  const persistResolution = async ({ pendingAction = null, lastExternalAction = null, recovery = null } = {}) => {
+    plan.volumeActionSeq = sequence + 1;
+    if (typeof persist !== "function") return { resolved: true, active: plan.botStage === "running", sequence: plan.volumeActionSeq };
+    const result = await persist({
+      volumeActionResolution: {
+        claimToken: pending.claimToken,
+        sequence,
+        pendingAction,
+        lastExternalAction,
+        recovery
+      }
+    });
+    if (Number.isFinite(Number(result?.sequence))) plan.volumeActionSeq = Number(result.sequence);
+    if (result?.botStage && result.active === false) plan.botStage = result.botStage;
+    return result;
+  };
+  let taskResult;
+  try {
+    taskResult = await task();
+  } catch (error) {
+    if (volumeBotTradeOutcomeAmbiguous(error)) {
+      const recoveryReason = `${pending.kind || "Volume action"} outcome is unknown for ${pending.publicKey || "a volume wallet"}: ${friendlyError(error)}`;
+      const recoveryNotBeforeAt = new Date(Date.now() + VOLUME_BOT_RECOVERY_SETTLE_MS).toISOString();
+      plan.pendingAction = {
+        ...pending,
+        status: "outcome_unknown",
+        error: friendlyError(error).slice(0, 240),
+        updatedAt: new Date().toISOString()
+      };
+      await persistResolution({
+        pendingAction: plan.pendingAction,
+        recovery: { reason: recoveryReason, notBeforeAt: recoveryNotBeforeAt }
+      }).catch(() => {});
+    } else {
+      plan.lastExternalAction = {
+        ...pending,
+        status: "failed_before_submission",
+        error: friendlyError(error).slice(0, 240),
+        completedAt: new Date().toISOString()
+      };
+      plan.pendingAction = null;
+      await persistResolution({ lastExternalAction: plan.lastExternalAction }).catch(() => {});
+    }
+    throw error;
+  }
+  plan.lastExternalAction = { ...pending, status: "confirmed", completedAt: new Date().toISOString() };
+  plan.pendingAction = null;
+  try {
+    const resolution = await persistResolution({ lastExternalAction: plan.lastExternalAction });
+    if (resolution && resolution.resolved === false) {
+      throw new Error("the durable volume-action claim changed before completion was recorded");
+    }
+  } catch (error) {
+    const checkpointError = markTradeSubmissionAmbiguous(
+      new Error(`Volume trade completed, but its durable checkpoint failed: ${friendlyError(error)}`),
+      "volume-action-checkpoint"
+    );
+    plan.pendingAction = { ...pending, status: "outcome_unknown", error: friendlyError(checkpointError), updatedAt: new Date().toISOString() };
+    throw checkpointError;
+  }
+  return taskResult;
 }
 
 function webVolumeBotRow(plan) {
@@ -66445,12 +67064,15 @@ async function webStartVolumeBot(userId, body = {}) {
 
 async function webStartVolumeBotCore(userId, body = {}) {
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
+  const startAttemptId = normalizeManualSellAttemptId(firstString(body.tradeAttemptId, body.volumeBotAttemptId, body.clientRequestId));
   // Dup-plan guard: never fund a SECOND bot for a coin that already has one running (catches the case the
   // attemptId replay can't — two genuinely distinct submissions). Stop the existing one first.
   const runningPlans = await readTradePlans();
-  if ((runningPlans.plans || []).some((p) => p.source === "web_volume_bot"
+  const existingPlan = (runningPlans.plans || []).find((p) => p.source === "web_volume_bot"
     && String(p.userId) === String(userId) && p.tokenMint === tokenMint
-    && p.status === "volume_bot" && p.botStage !== "done" && p.botStage !== "stopped")) {
+    && p.status === "volume_bot" && p.botStage !== "done" && p.botStage !== "stopped");
+  if (existingPlan) {
+    if (startAttemptId && existingPlan.startAttemptId === startAttemptId) return webVolumeBotRow(existingPlan);
     throw volumeBotError("A volume bot is already running for this coin. Stop it before starting another.");
   }
   const walletCount = clamp(Number.parseInt(body.walletCount || "0", 10) || 0, 1, VOLUME_BOT_LIMITS.maxWallets);
@@ -66463,10 +67085,11 @@ async function webStartVolumeBotCore(userId, body = {}) {
   const slippageBps = parseWebSlippage(body.slippageBps);
   const sweepBack = body.sweepBack === undefined ? true : Boolean(body.sweepBack);
   const rollingWallets = Boolean(body.rollingWallets);
-  const maxRounds = clamp(Number.parseInt(body.maxRounds || body.cycles || "0", 10) || 0, 1, VOLUME_BOT_LIMITS.maxRounds);
+  const requestedMaxRounds = clamp(Number.parseInt(body.maxRounds || body.cycles || "0", 10) || 0, 1, VOLUME_BOT_LIMITS.maxRounds);
   const sourceIndex = parseWebWalletIndex(body.sourceWalletIndex || body.walletIndex);
   // New SlimeBot options (all additive; defaults preserve prior behavior).
   const keepDust = Boolean(body.keepDust); // leave a dust token in recycled wallets
+  const maxRounds = Math.min(requestedMaxRounds, keepDust ? 25 : VOLUME_BOT_LIMITS.maxRounds);
   const offsetSell = Boolean(body.offsetSell); // pool mode: a different/earlier wallet sells while a fresh one buys
   const staggerPattern = ["steady", "waves", "organic", "ladder"].includes(String(body.staggerPattern || "").toLowerCase())
     ? String(body.staggerPattern).toLowerCase()
@@ -66483,7 +67106,11 @@ async function webStartVolumeBotCore(userId, body = {}) {
   }
 
   const store = await readWalletStore();
-  const sourceRecord = getWalletAt(store, sourceIndex, userId);
+  const sourceRecord = assertFrozenManagedWallet(
+    assertServerTradeWalletReady(getWalletAt(store, sourceIndex, userId), "volume bot"),
+    body.sourceWalletPublicKey,
+    "volume bot start"
+  );
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
 
@@ -66492,13 +67119,19 @@ async function webStartVolumeBotCore(userId, body = {}) {
   // to the source and discards the wallet. Runs until Stop or maxRounds. ---
   if (rollingWallets) {
     const effMaxBuy = maxBuyAmountSol > 0 ? maxBuyAmountSol : buyAmountSol;
-    const sourceBalance = await getSolBalanceCached(decryptWallet(sourceRecord).publicKey, { force: true }).catch(() => 0);
+    let sourceBalance;
+    try {
+      sourceBalance = await getSolBalanceCached(decryptWallet(sourceRecord).publicKey, { force: true });
+    } catch (error) {
+      throw volumeBotError(`Could not verify the source-wallet balance. Nothing was started: ${friendlyError(error)}`);
+    }
     const perRoundSol = effMaxBuy * 1.1 + VOLUME_BOT_LIMITS.roundFeeBufferSol;
-    if (sourceBalance > 0 && lamportsToSol(sourceBalance) < perRoundSol) {
+    if (lamportsToSol(sourceBalance) < perRoundSol) {
       throw volumeBotError(`Source wallet needs about ${perRoundSol.toFixed(3)} SOL to run a round; it has ${lamportsToSol(sourceBalance)} SOL.`);
     }
     const plan = {
       id: crypto.randomUUID(),
+      startAttemptId,
       userId,
       chatId: null,
       source: "web_volume_bot",
@@ -66516,11 +67149,13 @@ async function webStartVolumeBotCore(userId, body = {}) {
       pool: [],
       roundsDone: 0,
       currentRoundBuySol: 0,
-      nextActionAt: new Date(now + delaySecs * 1000).toISOString(),
-      stats: { buys: 0, sells: 0, errors: 0, rounds: 0, fundedSol: 0 },
+      nextActionAt: nowIso,
+      stats: { buys: 0, sells: 0, errors: 0, rounds: 0, fundedSol: 0, volumeSol: 0, sweptSol: 0 },
       log: [{ at: nowIso, message: `Rolling SlimeBot armed: ghost pool (≤${poolSize}), buys ${minBuyAmountSol > 0 ? minBuyAmountSol + "–" + effMaxBuy : "~" + buyAmountSol} SOL, partial sells from older wallets, up to ${maxRounds} buy(s).` }]
     };
-    await mutateTradePlans((s) => { s.plans.push(plan); });
+    const reservation = await reserveVolumeBotPlan(plan);
+    if (reservation.replay) return webVolumeBotRow(reservation.plan);
+    scheduleTradePlanProcessing("Volume bot immediate start", [25]);
     await audit("web_volume_bot_start", { userId, planId: plan.id, tokenMint, rollingWallets: true, maxRounds, buyAmountSol, sweepBack });
     return webVolumeBotRow(plan);
   }
@@ -66534,36 +67169,9 @@ async function webStartVolumeBotCore(userId, body = {}) {
     throw volumeBotError("Fund per wallet must cover at least the buy amount plus ~0.02 SOL for fees.");
   }
 
-  let tradingPublicKeys = [];
-  if (autoCreate) {
-    const created = await createWebWalletSet(userId, {
-      count: walletCount,
-      label: cleanLabel(String(body.walletGroup || "SlimeBot"))
-    });
-    tradingPublicKeys = (created.wallets || []).map((wallet) => wallet.publicKey).filter(Boolean);
-    // Auto-created pool wallets are background/temporary: tag them so they stay out of
-    // the Wallets tab and always sweep back to the source.
-    await tagVolumeBotWallets(userId, tradingPublicKeys, sourceRecord.publicKey);
-  } else {
-    const fresh = await readWalletStore();
-    const selected = webSelectedWallets(fresh, userId, body.walletIndexes, body.walletGroup);
-    tradingPublicKeys = selected
-      .map((wallet) => wallet.publicKey)
-      .filter((publicKey) => publicKey && publicKey !== sourceRecord.publicKey)
-      .slice(0, walletCount);
-  }
-  if (!tradingPublicKeys.length) {
-    throw volumeBotError("Select at least one trading wallet (not the source), or enable auto-create wallets.");
-  }
-
-  const fundResult = await webSendSolMany(userId, {
-    fromWalletIndex: sourceIndex,
-    destinations: tradingPublicKeys,
-    amountSol: String(fundPerWalletSol)
-  });
-
   const plan = {
     id: crypto.randomUUID(),
+    startAttemptId,
     userId,
     chatId: null,
     source: "web_volume_bot",
@@ -66572,18 +67180,133 @@ async function webStartVolumeBotCore(userId, body = {}) {
     tokenMint,
     createdAt: nowIso,
     updatedAt: nowIso,
-    config: { walletCount: tradingPublicKeys.length, autoCreate, cycles, buyAmountSol, sellPercent, buyBias, delaySecs, slippageBps, sweepBack, keepDust, offsetSell, staggerPattern, goalVolumeSol: Math.max(0, Number(body.goalVolumeSol) || 0), autoPauseLiquidity: body.autoPauseLiquidity !== false && body.autoPauseLiquidity !== "false", minLiquidityUsd: Math.max(0, Number(body.minLiquidityUsd) || 0) },
+    config: { walletCount, autoCreate, cycles, buyAmountSol, sellPercent, buyBias, delaySecs, slippageBps, sweepBack, keepDust, offsetSell, staggerPattern, goalVolumeSol: Math.max(0, Number(body.goalVolumeSol) || 0), autoPauseLiquidity: body.autoPauseLiquidity !== false && body.autoPauseLiquidity !== "false", minLiquidityUsd: Math.max(0, Number(body.minLiquidityUsd) || 0) },
     sourcePublicKey: sourceRecord.publicKey,
-    tradingPublicKeys,
-    botStage: "running",
+    tradingPublicKeys: [],
+    botStage: "starting",
+    startStage: "reserved",
     currentCycle: 0,
     actionCursor: 0,
     sweepCursor: 0,
-    nextActionAt: new Date(now + delaySecs * 1000).toISOString(),
-    stats: { buys: 0, sells: 0, errors: 0, fundedSol: Number((fundPerWalletSol * tradingPublicKeys.length).toFixed(6)) },
-    log: [{ at: nowIso, message: `Funded ${tradingPublicKeys.length} wallet(s) with ${fundPerWalletSol} SOL each${fundResult?.signature ? ` (${fundResult.signature})` : ""}.` }]
+    nextActionAt: new Date(now + 5 * 60_000).toISOString(),
+    stats: { buys: 0, sells: 0, errors: 0, fundedSol: 0, volumeSol: 0, sweptSol: 0 },
+    log: [{ at: nowIso, message: "Volume start reserved. No funding has been submitted yet." }]
   };
-  await mutateTradePlans((s) => { s.plans.push(plan); });
+  const reservation = await reserveVolumeBotPlan(plan);
+  if (reservation.replay) return webVolumeBotRow(reservation.plan);
+
+  let tradingPublicKeys = [];
+  let fundingStarted = false;
+  let fundResult = null;
+  try {
+    if (autoCreate) {
+      const created = await createFixedVolumeWalletSet(userId, {
+        count: walletCount,
+        label: cleanLabel(String(body.walletGroup || "SlimeBot")),
+        volumeSource: sourceRecord.publicKey,
+        volumePlanId: plan.id
+      });
+      tradingPublicKeys = (created || []).map((wallet) => wallet.publicKey).filter(Boolean);
+    } else {
+      const fresh = await readWalletStore();
+      const selected = webSelectedWallets(fresh, userId, body.walletIndexes, body.walletGroup);
+      tradingPublicKeys = selected
+        .map((wallet) => wallet.publicKey)
+        .filter((publicKey) => publicKey && publicKey !== sourceRecord.publicKey)
+        .slice(0, walletCount);
+    }
+    if (!tradingPublicKeys.length) {
+      throw volumeBotError("Select at least one trading wallet (not the source), or enable auto-create wallets.");
+    }
+
+    await mutateTradePlans((planStore) => {
+      const saved = objectRows(planStore.plans).find((entry) => entry.id === plan.id && String(entry.userId) === String(userId));
+      if (!saved || saved.botStage !== "starting" || saved.startStage !== "reserved") {
+        throw volumeBotConflict("Volume start state changed before funding. Nothing new was sent.");
+      }
+      const candidate = { ...saved, tradingPublicKeys };
+      assertVolumePlanCanReserve(planStore, candidate, saved.id);
+      saved.tradingPublicKeys = [...tradingPublicKeys];
+      saved.config.walletCount = tradingPublicKeys.length;
+      saved.startStage = "wallets-ready";
+      saved.updatedAt = new Date().toISOString();
+      volumeBotLogPush(saved, `${tradingPublicKeys.length} trading wallet(s) reserved; preparing one atomic funding transaction.`);
+    });
+
+    // Persist the outcome-unknown boundary before the external transfer. A
+    // crash/retry after this point recovers funds and can never fund twice.
+    await mutateTradePlans((planStore) => {
+      const saved = objectRows(planStore.plans).find((entry) => entry.id === plan.id && String(entry.userId) === String(userId));
+      if (!saved || saved.startStage !== "wallets-ready") throw volumeBotConflict("Volume funding is already submitting or recovering.");
+      saved.startStage = "funding";
+      saved.fundingStartedAt = new Date().toISOString();
+      saved.nextActionAt = new Date(Date.now() + 5 * 60_000).toISOString();
+      saved.updatedAt = new Date().toISOString();
+      volumeBotLogPush(saved, "Funding is submitting. Retries will not submit another transfer.");
+    });
+    fundingStarted = true;
+    fundResult = await webSendSolMany(userId, {
+      fromWalletIndex: sourceIndex,
+      destinations: tradingPublicKeys,
+      amountSol: String(fundPerWalletSol),
+      sendAttemptId: `volume-fund-${plan.id}`
+    });
+
+    const startedPlan = await mutateTradePlans((planStore) => {
+      const saved = objectRows(planStore.plans).find((entry) => entry.id === plan.id && String(entry.userId) === String(userId));
+      if (!saved || saved.botStage !== "starting" || saved.startStage !== "funding") {
+        throw volumeBotConflict("Volume funding state changed while the transfer was confirming.");
+      }
+      saved.startStage = "funded";
+      saved.fundingSignature = fundResult?.signature || "";
+      saved.botStage = "running";
+      saved.nextActionAt = new Date().toISOString();
+      saved.stats.fundedSol = Number((fundPerWalletSol * tradingPublicKeys.length).toFixed(6));
+      saved.updatedAt = new Date().toISOString();
+      volumeBotLogPush(saved, `Funded ${tradingPublicKeys.length} wallet(s) with ${fundPerWalletSol} SOL each${fundResult?.signature ? ` (${fundResult.signature})` : ""}.`);
+      return saved;
+    });
+    Object.assign(plan, startedPlan);
+  } catch (error) {
+    await mutateTradePlans((planStore) => {
+      const saved = objectRows(planStore.plans).find((entry) => entry.id === plan.id && String(entry.userId) === String(userId));
+      if (!saved) return;
+      saved.stats = saved.stats || {};
+      saved.stats.errors = Number(saved.stats.errors || 0) + 1;
+      saved.failureReason = friendlyError(error);
+      saved.updatedAt = new Date().toISOString();
+      if (fundingStarted || saved.startStage === "funding") {
+        saved.startStage = "funding-ambiguous";
+        saved.botStage = "sweeping";
+        saved.sweepCursor = 0;
+        saved.recoveryNotBeforeAt = new Date(Date.now() + VOLUME_BOT_RECOVERY_SETTLE_MS).toISOString();
+        saved.nextActionAt = saved.recoveryNotBeforeAt;
+        volumeBotLogPush(saved, `Funding confirmation is uncertain: ${friendlyError(error)}. New trades are blocked; recovering every reserved wallet.`);
+      } else if (autoCreate && tradingPublicKeys.length) {
+        saved.tradingPublicKeys = uniqueStrings([...(saved.tradingPublicKeys || []), ...tradingPublicKeys]);
+        saved.startStage = "failed-before-funding";
+        saved.botStage = "sweeping";
+        saved.status = "volume_bot";
+        saved.sweepCursor = 0;
+        saved.nextActionAt = new Date().toISOString();
+        volumeBotLogPush(saved, `Start stopped before funding: ${friendlyError(error)} Verifying and removing the generated ghost wallets.`);
+      } else {
+        saved.startStage = "failed-before-funding";
+        saved.botStage = "stopped";
+        saved.status = "completed";
+        saved.completedAt = new Date().toISOString();
+        volumeBotLogPush(saved, `Start stopped before funding: ${friendlyError(error)}`);
+      }
+    });
+    if (fundingStarted || (autoCreate && tradingPublicKeys.length)) {
+      scheduleTradePlanProcessing("Volume funding recovery", [25]);
+    }
+    if (fundingStarted) {
+      throw markTradeSubmissionAmbiguous(error, "volume-funding");
+    }
+    throw error;
+  }
+  scheduleTradePlanProcessing("Volume bot immediate start", [25]);
   await audit("web_volume_bot_start", {
     userId,
     planId: plan.id,
@@ -66620,6 +67343,7 @@ async function webStopVolumeBot(userId, body = {}) {
     return { plan, skip: false };
   });
   if (!row.skip) await audit("web_volume_bot_stop", { userId, planId: row.plan.id });
+  if (!row.skip) scheduleTradePlanProcessing("Volume bot immediate stop/sweep", [25]);
   return webVolumeBotRow(row.plan);
 }
 
@@ -66717,14 +67441,84 @@ async function webVolumeBotRows(userId) {
 async function processVolumeBotPlan(plan, walletStore, persist) {
   const now = Date.now();
   if (!plan || plan.status !== "volume_bot") return { changed: false };
+  const preFundingStage = ["reserved", "wallets-ready", "failed-before-funding", "expired-before-funding"]
+    .includes(String(plan.startStage || ""));
+  const shouldRecoverLinkedGhosts = plan.botStage === "starting"
+    || (plan.botStage === "sweeping" && preFundingStage);
+  const orphanedGhostKeys = shouldRecoverLinkedGhosts
+    ? walletsForOwner(walletStore, plan.userId)
+      .filter((wallet) => wallet.ephemeral && wallet.volumeBot && String(wallet.volumePlanId || "") === String(plan.id || ""))
+      .map((wallet) => wallet.publicKey)
+    : [];
+  if (orphanedGhostKeys.length) {
+    plan.tradingPublicKeys = uniqueStrings([...(plan.tradingPublicKeys || []), ...orphanedGhostKeys]);
+  }
   if (plan.botStage === "done" || plan.botStage === "stopped") {
     plan.status = "completed";
     plan.completedAt = plan.completedAt || new Date().toISOString();
     if (typeof persist === "function") await persist();
     return { changed: true };
   }
+  // A durable `submitting` marker means the previous process disappeared (or
+  // lost its response) after claiming an external buy/sell. Never replay it.
+  // Wait for settlement, then let the balance-driven sweep reconcile custody.
+  if (plan.pendingAction?.status === "submitting") {
+    const pending = plan.pendingAction;
+    volumeBotEnterRecovery(
+      plan,
+      `Recovered ${pending.kind || "volume action"}`,
+      pending.publicKey,
+      new Error("the prior process ended before the transaction outcome was recorded")
+    );
+    plan.updatedAt = new Date().toISOString();
+    if (typeof persist === "function") await persist();
+    return { changed: true };
+  }
   const dueAt = plan.nextActionAt ? Date.parse(plan.nextActionAt) : 0;
   if (Number.isFinite(dueAt) && now < dueAt) return { changed: false };
+  const recoveryNotBefore = Date.parse(plan.recoveryNotBeforeAt || "");
+  if (plan.botStage === "sweeping" && Number.isFinite(recoveryNotBefore) && now < recoveryNotBefore) return { changed: false };
+  if (Number.isFinite(recoveryNotBefore) && now >= recoveryNotBefore) plan.recoveryNotBeforeAt = null;
+
+  // A persisted fixed-pool start is deliberately fail-closed. If the process
+  // disappears before the pre-funding stages finish, no transfer was attempted.
+  // If it disappears after the `funding` boundary, never retry that transfer:
+  // the selected wallets enter balance-driven recovery instead.
+  if (plan.botStage === "starting") {
+    if (["funding", "funding-ambiguous"].includes(String(plan.startStage || ""))) {
+      plan.startStage = "funding-ambiguous";
+      plan.botStage = "sweeping";
+      plan.sweepCursor = 0;
+      // A process can disappear after the transfer is submitted but before the
+      // request's catch block records its settle window. Recreate that window
+      // here and persist it before touching balances, otherwise a late landing
+      // transfer could arrive after an apparently clean wallet was discarded.
+      plan.recoveryNotBeforeAt = new Date(now + VOLUME_BOT_RECOVERY_SETTLE_MS).toISOString();
+      plan.nextActionAt = plan.recoveryNotBeforeAt;
+      plan.updatedAt = new Date().toISOString();
+      volumeBotLogPush(plan, "Recovered an interrupted funding attempt. New trades remain blocked while wallets are verified and swept.");
+      if (typeof persist === "function") await persist();
+      return { changed: true };
+    } else if (orphanedGhostKeys.length) {
+      plan.startStage = "failed-before-funding";
+      plan.botStage = "sweeping";
+      plan.sweepCursor = 0;
+      plan.nextActionAt = new Date().toISOString();
+      plan.updatedAt = new Date().toISOString();
+      volumeBotLogPush(plan, "Recovered generated wallets from an interrupted start. No funding is being retried; verifying and removing the empty ghosts.");
+      if (typeof persist === "function") await persist();
+      return { changed: true };
+    } else {
+      plan.startStage = "expired-before-funding";
+      plan.botStage = "stopped";
+      plan.status = "completed";
+      plan.completedAt = new Date().toISOString();
+      volumeBotLogPush(plan, "Interrupted start expired before funding; nothing was sent.");
+      plan.updatedAt = new Date().toISOString();
+      if (typeof persist === "function") await persist();
+      return { changed: true };
+    }
+  }
 
   const cfg = plan.config || {};
   const delayMs = clamp(Number(cfg.delaySecs || 5), VOLUME_BOT_LIMITS.minDelaySecs, VOLUME_BOT_LIMITS.maxDelaySecs) * 1000;
@@ -66735,7 +67529,30 @@ async function processVolumeBotPlan(plan, walletStore, persist) {
 
   try {
     if (cfg.rollingWallets) {
-      await runRollingVolumeBotStep(plan, { slippageBps, noBalance });
+      if (plan.botStage === "running") {
+        const goalVol = Number(cfg.goalVolumeSol || 0);
+        const volumeSoFar = Number(plan.stats?.volumeSol || 0);
+        if (goalVol > 0 && volumeSoFar >= goalVol) {
+          plan.botStage = cfg.sweepBack === false ? "done" : "sweeping";
+          plan.autoStopReason = `Goal reached: ~${volumeSoFar.toFixed(2)} SOL volume (target ${goalVol} SOL).`;
+          volumeBotLogPush(plan, `${plan.autoStopReason} Recovering open wallets.`);
+        } else if (cfg.autoPauseLiquidity !== false) {
+          const liquidity = await volumeBotTokenLiquidityUsd(plan.tokenMint);
+          if (Number.isFinite(liquidity) && liquidity > 0) {
+            if (!plan.startLiquidityUsd) plan.startLiquidityUsd = liquidity;
+            const floor = Number(cfg.minLiquidityUsd || 0);
+            const dropFraction = plan.startLiquidityUsd > 0 ? liquidity / plan.startLiquidityUsd : 1;
+            if ((floor > 0 && liquidity < floor) || dropFraction <= 0.5) {
+              plan.botStage = cfg.sweepBack === false ? "done" : "sweeping";
+              plan.autoStopReason = floor > 0 && liquidity < floor
+                ? `Auto-paused: liquidity ${formatUsdCompact(liquidity)} fell below ${formatUsdCompact(floor)}.`
+                : `Auto-paused: liquidity dropped ${Math.round((1 - dropFraction) * 100)}% from start.`;
+              volumeBotLogPush(plan, `${plan.autoStopReason} Recovering open wallets.`);
+            }
+          }
+        }
+      }
+      if (plan.botStage !== "done") await runRollingVolumeBotStep(plan, { slippageBps, noBalance, persist });
     } else if (plan.botStage === "running") {
       // Goal-mode + auto-pause guards. Both only STOP the bot early (sweep funds back) —
       // never spend more — so the worst-case failure is stopping sooner, never overspending.
@@ -66776,25 +67593,37 @@ async function processVolumeBotPlan(plan, walletStore, persist) {
           // Offset mode: this wallet BUYS while a different, earlier wallet
           // SELLS — never the same wallet buying then selling back-to-back.
           try {
-            await buyTokenForPlan(record, plan.tokenMint, solToLamports(Number(cfg.buyAmountSol)), slippageBps, { userId: plan.userId });
+            await runVolumeBotExternalAction(plan, persist, { kind: "buy", publicKey }, () => (
+              buyTokenForPlan(record, plan.tokenMint, solToLamports(Number(cfg.buyAmountSol)), slippageBps, { userId: plan.userId })
+            ));
             plan.stats.buys = Number(plan.stats.buys || 0) + 1;
+            plan.stats.volumeSol = Number((Number(plan.stats.volumeSol || 0) + Number(cfg.buyAmountSol || 0)).toFixed(6));
             volumeBotLogPush(plan, `Buy ${cfg.buyAmountSol} SOL from ${shortMint(publicKey)}.`);
           } catch (error) {
             plan.stats.errors = Number(plan.stats.errors || 0) + 1;
-            volumeBotLogPush(plan, `Buy failed ${shortMint(publicKey)}: ${friendlyError(error)}`);
+            if (volumeBotTradeOutcomeAmbiguous(error)) volumeBotEnterRecovery(plan, "Buy", publicKey, error);
+            else volumeBotLogPush(plan, `Buy failed ${shortMint(publicKey)}: ${friendlyError(error)}`);
           }
-          const sellIdx = (cursor + Math.max(1, Math.floor(pks.length / 2))) % pks.length;
-          const sellRecord = sellIdx !== cursor ? recordByPk(pks[sellIdx]) : null;
-          if (sellRecord) {
+          if (plan.botStage === "running") {
+            const sellIdx = (cursor + Math.max(1, Math.floor(pks.length / 2))) % pks.length;
+            const sellRecord = sellIdx !== cursor ? recordByPk(pks[sellIdx]) : null;
+            if (sellRecord) {
             try {
-              await sellTokenFromWallet(sellRecord, plan.tokenMint, volumeBotSellPercent(cfg, Number(cfg.sellPercent || 100)), slippageBps, { userId: plan.userId });
+              await runVolumeBotExternalAction(plan, persist, { kind: "offset-sell", publicKey: pks[sellIdx] }, () => (
+                sellTokenFromWallet(sellRecord, plan.tokenMint, volumeBotSellPercent(cfg, Number(cfg.sellPercent || 100)), slippageBps, { userId: plan.userId })
+              ));
               plan.stats.sells = Number(plan.stats.sells || 0) + 1;
+              plan.stats.volumeSol = Number((Number(plan.stats.volumeSol || 0) + Number(cfg.buyAmountSol || 0) * Number(cfg.sellPercent || 100) / 100).toFixed(6));
               volumeBotLogPush(plan, `Sell from ${shortMint(pks[sellIdx])} (offset behind buy).`);
             } catch (error) {
-              if (!noBalance(error)) {
+              if (volumeBotTradeOutcomeAmbiguous(error)) {
+                plan.stats.errors = Number(plan.stats.errors || 0) + 1;
+                volumeBotEnterRecovery(plan, "Offset sell", pks[sellIdx], error);
+              } else if (!noBalance(error)) {
                 plan.stats.errors = Number(plan.stats.errors || 0) + 1;
                 volumeBotLogPush(plan, `Offset sell failed ${shortMint(pks[sellIdx])}: ${friendlyError(error)}`);
               }
+            }
             }
           }
         } else {
@@ -66802,39 +67631,51 @@ async function processVolumeBotPlan(plan, walletStore, persist) {
           let didSell = false;
           if (!wantBuy) {
             try {
-              await sellTokenFromWallet(record, plan.tokenMint, volumeBotSellPercent(cfg, Number(cfg.sellPercent || 100)), slippageBps, { userId: plan.userId });
+              await runVolumeBotExternalAction(plan, persist, { kind: "sell", publicKey }, () => (
+                sellTokenFromWallet(record, plan.tokenMint, volumeBotSellPercent(cfg, Number(cfg.sellPercent || 100)), slippageBps, { userId: plan.userId })
+              ));
               plan.stats.sells = Number(plan.stats.sells || 0) + 1;
+              plan.stats.volumeSol = Number((Number(plan.stats.volumeSol || 0) + Number(cfg.buyAmountSol || 0) * Number(cfg.sellPercent || 100) / 100).toFixed(6));
               didSell = true;
               volumeBotLogPush(plan, `Sell ${cfg.sellPercent}% from ${shortMint(publicKey)}.`);
             } catch (error) {
-              if (!noBalance(error)) {
+              if (volumeBotTradeOutcomeAmbiguous(error)) {
+                plan.stats.errors = Number(plan.stats.errors || 0) + 1;
+                volumeBotEnterRecovery(plan, "Sell", publicKey, error);
+              } else if (!noBalance(error)) {
                 plan.stats.errors = Number(plan.stats.errors || 0) + 1;
                 volumeBotLogPush(plan, `Sell failed ${shortMint(publicKey)}: ${friendlyError(error)}`);
               }
             }
           }
-          if (wantBuy || !didSell) {
+          if (plan.botStage === "running" && (wantBuy || !didSell)) {
             try {
-              await buyTokenForPlan(record, plan.tokenMint, solToLamports(Number(cfg.buyAmountSol)), slippageBps, { userId: plan.userId });
+              await runVolumeBotExternalAction(plan, persist, { kind: "buy", publicKey }, () => (
+                buyTokenForPlan(record, plan.tokenMint, solToLamports(Number(cfg.buyAmountSol)), slippageBps, { userId: plan.userId })
+              ));
               plan.stats.buys = Number(plan.stats.buys || 0) + 1;
+              plan.stats.volumeSol = Number((Number(plan.stats.volumeSol || 0) + Number(cfg.buyAmountSol || 0)).toFixed(6));
               volumeBotLogPush(plan, `Buy ${cfg.buyAmountSol} SOL from ${shortMint(publicKey)}.`);
             } catch (error) {
               plan.stats.errors = Number(plan.stats.errors || 0) + 1;
-              volumeBotLogPush(plan, `Buy failed ${shortMint(publicKey)}: ${friendlyError(error)}`);
+              if (volumeBotTradeOutcomeAmbiguous(error)) volumeBotEnterRecovery(plan, "Buy", publicKey, error);
+              else volumeBotLogPush(plan, `Buy failed ${shortMint(publicKey)}: ${friendlyError(error)}`);
             }
           }
         }
-        const nextCursor = cursor + 1;
-        if (nextCursor >= pks.length) {
-          plan.actionCursor = 0;
-          plan.currentCycle = Number(plan.currentCycle || 0) + 1;
-          if (plan.currentCycle >= Number(cfg.cycles || 1)) {
-            plan.botStage = cfg.sweepBack === false ? "done" : "sweeping";
-            plan.sweepCursor = 0;
-            volumeBotLogPush(plan, plan.botStage === "sweeping" ? "Cycles complete. Sweeping funds back to source." : "Cycles complete.");
+        if (plan.botStage === "running") {
+          const nextCursor = cursor + 1;
+          if (nextCursor >= pks.length) {
+            plan.actionCursor = 0;
+            plan.currentCycle = Number(plan.currentCycle || 0) + 1;
+            if (plan.currentCycle >= Number(cfg.cycles || 1)) {
+              plan.botStage = cfg.sweepBack === false ? "done" : "sweeping";
+              plan.sweepCursor = 0;
+              volumeBotLogPush(plan, plan.botStage === "sweeping" ? "Cycles complete. Sweeping funds back to source." : "Cycles complete.");
+            }
+          } else {
+            plan.actionCursor = nextCursor;
           }
-        } else {
-          plan.actionCursor = nextCursor;
         }
       }
     } else if (plan.botStage === "sweeping") {
@@ -66855,30 +67696,22 @@ async function processVolumeBotPlan(plan, walletStore, persist) {
       } else {
         const publicKey = pks[cursor];
         const record = recordByPk(publicKey);
+        let advanceSweep = true;
         if (record) {
-          try {
-            await sellTokenFromWallet(record, plan.tokenMint, volumeBotSellPercent(cfg, 100), slippageBps, { userId: plan.userId });
-            volumeBotLogPush(plan, cfg.keepDust ? `Swept ${shortMint(publicKey)} (kept dust token).` : `Swept tokens from ${shortMint(publicKey)}.`);
-          } catch (error) {
-            if (!noBalance(error)) volumeBotLogPush(plan, `Token sweep skipped ${shortMint(publicKey)}: ${friendlyError(error)}`);
-          }
-          if (cfg.sweepBack !== false && plan.sourcePublicKey) {
-            try {
-              const keypair = decryptWallet(record);
-              await drainSolFromWallet(keypair, new PublicKey(plan.sourcePublicKey));
-              invalidateWalletReadCache(record.publicKey);
-              volumeBotLogPush(plan, `Swept SOL back to source from ${shortMint(publicKey)}.`);
-            } catch (error) {
-              volumeBotLogPush(plan, `SOL sweep skipped ${shortMint(publicKey)}: ${friendlyError(error)}`);
-            }
-          }
+          const cleanup = await cleanupVolumeBotWallet(plan, record, slippageBps, noBalance);
+          advanceSweep = Boolean(cleanup.closed);
+          plan.stats.sweptSol = Number((Number(plan.stats.sweptSol || 0) + lamportsToSol(cleanup.sentLamports || 0)).toFixed(6));
+          if (cleanup.closed) volumeBotLogPush(plan, cleanup.retained
+            ? `Closed ${shortMint(publicKey)}; residue wallet retained with cleanup gas.`
+            : `Closed ${shortMint(publicKey)} token accounts and swept SOL back to source.`);
         }
-        plan.sweepCursor = cursor + 1;
+        if (advanceSweep) plan.sweepCursor = cursor + 1;
       }
     }
   } catch (error) {
     plan.stats.errors = Number(plan.stats?.errors || 0) + 1;
-    volumeBotLogPush(plan, `Tick error: ${friendlyError(error)}`);
+    if (volumeBotTradeOutcomeAmbiguous(error)) volumeBotEnterRecovery(plan, "Volume trade", plan.activeWalletPublicKey, error);
+    else volumeBotLogPush(plan, `Tick error: ${friendlyError(error)}`);
   }
 
   if (plan.botStage === "done") {
@@ -66888,7 +67721,9 @@ async function processVolumeBotPlan(plan, walletStore, persist) {
   }
   plan.actionCount = Number(plan.actionCount || 0) + 1;
   plan.updatedAt = new Date().toISOString();
-  plan.nextActionAt = new Date(Date.now() + volumeBotStaggerMs(cfg, delayMs, plan.actionCount)).toISOString();
+  const staggeredNextAt = Date.now() + volumeBotStaggerMs(cfg, delayMs, plan.actionCount);
+  const recoveryNextAt = Date.parse(plan.recoveryNotBeforeAt || "");
+  plan.nextActionAt = new Date(Number.isFinite(recoveryNextAt) ? Math.max(staggeredNextAt, recoveryNextAt) : staggeredNextAt).toISOString();
   if (typeof persist === "function") await persist();
   return { changed: true };
 }
@@ -66908,24 +67743,8 @@ function volumeBotRandomBuyInRange(minSol, maxSol, fallbackSol) {
 // Sell everything left in a ghost wallet, sweep its SOL back to the source, and discard it.
 async function rollingCloseWallet(plan, publicKey, byPk, slippageBps, noBalance) {
   const record = byPk(publicKey);
-  if (!record) return;
-  const cfg = plan.config || {};
-  try {
-    await sellTokenFromWallet(record, plan.tokenMint, volumeBotSellPercent(cfg, 100), slippageBps, { userId: plan.userId });
-  } catch (error) {
-    if (!noBalance(error)) volumeBotLogPush(plan, `Close-sell skipped ${shortMint(publicKey)}: ${friendlyError(error)}`);
-  }
-  let drained = false;
-  if (cfg.sweepBack !== false && plan.sourcePublicKey) {
-    try {
-      await drainSolFromWallet(decryptWallet(record), new PublicKey(plan.sourcePublicKey));
-      invalidateWalletReadCache(record.publicKey);
-      drained = true;
-    } catch (error) {
-      volumeBotLogPush(plan, `SOL sweep skipped ${shortMint(publicKey)}: ${friendlyError(error)}`);
-    }
-  }
-  if (!cfg.keepDust && (drained || cfg.sweepBack === false)) await pruneVolumeWallet(publicKey).catch(() => {});
+  if (!record) return { closed: true, missing: true, sentLamports: 0 };
+  return cleanupVolumeBotWallet(plan, record, slippageBps, noBalance);
 }
 
 // Rolling GHOST POOL: keeps a handful of fresh throwaway wallets open at once. Each tick it either
@@ -66933,7 +67752,7 @@ async function rollingCloseWallet(plan, publicKey, byPk, slippageBps, noBalance)
 // from the OLDEST open wallet — selling the remainder a couple of ticks later, then sweeping its SOL
 // back and discarding it. So buys and sells are always DIFFERENT wallets, sizes vary, and positions
 // clear over several transactions = an organic tape with nothing to clean up afterwards.
-async function runRollingVolumeBotStep(plan, { slippageBps, noBalance }) {
+async function runRollingVolumeBotStep(plan, { slippageBps, noBalance, persist }) {
   const cfg = plan.config || {};
   const store = await readWalletStore();
   const owner = walletsForOwner(store, plan.userId);
@@ -66950,15 +67769,41 @@ async function runRollingVolumeBotStep(plan, { slippageBps, noBalance }) {
     plan.pool.push({ publicKey: plan.activeWalletPublicKey, buySol: Number(plan.currentRoundBuySol || 0), sells: 0 });
     plan.activeWalletPublicKey = null;
   }
+  if (plan.activeWalletPublicKey && plan.pool.some((entry) => entry.publicKey === plan.activeWalletPublicKey)) {
+    plan.activeWalletPublicKey = null;
+  }
   plan.stats = plan.stats || {};
+
+  // `funding`/`funded` is persisted before the source transfer. Seeing either
+  // state at the start of a later tick proves the previous process did not
+  // finish recording the combined fund+buy outcome. Stop new activity and
+  // recover this wallet after the settlement window instead of spawning again.
+  const interrupted = plan.pool.find((entry) => ["funding", "funded"].includes(String(entry.status || "")));
+  if (plan.botStage === "running" && interrupted) {
+    interrupted.status = "recovery";
+    plan.activeWalletPublicKey = interrupted.publicKey;
+    volumeBotEnterRecovery(
+      plan,
+      "Recovered rolling fund/buy",
+      interrupted.publicKey,
+      new Error("the prior process ended before the funding or buy outcome was recorded")
+    );
+    if (typeof persist === "function") await persist();
+    return;
+  }
 
   // Graceful stop / completion: liquidate the whole pool one wallet per tick, then finish.
   if (plan.botStage === "sweeping") {
     const entry = plan.pool[0];
     if (!entry) { plan.botStage = "done"; volumeBotLogPush(plan, "Pool cleared and swept back to source. Done."); return; }
-    await rollingCloseWallet(plan, entry.publicKey, byPk, slippageBps, noBalance);
-    plan.stats.sells = Number(plan.stats.sells || 0) + 1;
-    plan.pool.shift();
+    const cleanup = await rollingCloseWallet(plan, entry.publicKey, byPk, slippageBps, noBalance);
+    if (cleanup.closed) {
+      plan.stats.sells = Number(plan.stats.sells || 0) + 1;
+      plan.stats.sweptSol = Number((Number(plan.stats.sweptSol || 0) + lamportsToSol(cleanup.sentLamports || 0)).toFixed(6));
+      plan.pool.shift();
+    } else {
+      entry.cleanupAttempts = Number(entry.cleanupAttempts || 0) + 1;
+    }
     return;
   }
 
@@ -66994,19 +67839,37 @@ async function runRollingVolumeBotStep(plan, { slippageBps, noBalance }) {
       volumeBotLogPush(plan, `Spawn failed: ${friendlyError(error)}`);
       return;
     }
+    // Retain the key in the durable plan before funding. Any uncertain transfer
+    // or buy outcome is recovered by the sweeping stage, never pruned blindly.
+    const poolEntry = { publicKey: record.publicKey, buySol, sells: 0, status: "funding" };
+    plan.pool.push(poolEntry);
+    plan.activeWalletPublicKey = record.publicKey;
+    if (typeof persist === "function") {
+      const active = await persist();
+      if (active === false) {
+        poolEntry.status = "aborted-before-funding";
+        plan.botStage = "stopped";
+        await pruneVolumeWallet(record.publicKey).catch(() => {});
+        return;
+      }
+    }
     try {
       await volumeBotTransferSol(sourceRecord, record.publicKey, solToLamports(fundSol));
+      poolEntry.status = "funded";
       await buyTokenForPlan(record, plan.tokenMint, solToLamports(buySol), slippageBps, { userId: plan.userId });
-      plan.pool.push({ publicKey: record.publicKey, buySol, sells: 0 });
+      poolEntry.status = "open";
+      plan.activeWalletPublicKey = null;
       plan.roundsDone = roundsDone + 1;
       plan.stats.buys = Number(plan.stats.buys || 0) + 1;
       plan.stats.rounds = plan.roundsDone;
       plan.stats.fundedSol = Number((Number(plan.stats.fundedSol || 0) + fundSol).toFixed(6));
+      plan.stats.volumeSol = Number((Number(plan.stats.volumeSol || 0) + buySol).toFixed(6));
       volumeBotLogPush(plan, `Round ${plan.roundsDone}: ${shortMint(record.publicKey)} bought ${buySol.toFixed(4)} SOL.`);
     } catch (error) {
       plan.stats.errors = Number(plan.stats.errors || 0) + 1;
-      await pruneVolumeWallet(record.publicKey).catch(() => {});
-      volumeBotLogPush(plan, `Buy failed ${shortMint(record.publicKey)}: ${friendlyError(error)}`);
+      poolEntry.status = "recovery";
+      plan.activeWalletPublicKey = record.publicKey;
+      volumeBotEnterRecovery(plan, "Rolling fund/buy", record.publicKey, error);
     }
     if (plan.roundsDone >= maxRounds) { plan.botStage = "sweeping"; volumeBotLogPush(plan, "Buy quota reached — winding the pool down."); }
     return;
@@ -67019,19 +67882,39 @@ async function runRollingVolumeBotStep(plan, { slippageBps, noBalance }) {
   entry.sells = Number(entry.sells || 0) + 1;
   const finish = entry.sells >= 2 || Math.random() < 0.35;
   if (finish) {
-    await rollingCloseWallet(plan, entry.publicKey, byPk, slippageBps, noBalance);
-    plan.stats.sells = Number(plan.stats.sells || 0) + 1;
-    plan.pool.shift();
-    volumeBotLogPush(plan, `${shortMint(entry.publicKey)} sold out + swept back, discarded.`);
+    const cleanup = await rollingCloseWallet(plan, entry.publicKey, byPk, slippageBps, noBalance);
+    if (cleanup.closed) {
+      plan.stats.sells = Number(plan.stats.sells || 0) + 1;
+      plan.stats.volumeSol = Number((Number(plan.stats.volumeSol || 0) + Number(entry.buySol || 0)).toFixed(6));
+      plan.stats.sweptSol = Number((Number(plan.stats.sweptSol || 0) + lamportsToSol(cleanup.sentLamports || 0)).toFixed(6));
+      plan.pool.shift();
+      volumeBotLogPush(plan, cleanup.retained
+        ? `${shortMint(entry.publicKey)} closed; residue wallet retained with cleanup gas.`
+        : `${shortMint(entry.publicKey)} sold out, token accounts closed, and SOL swept back.`);
+    } else {
+      entry.cleanupAttempts = Number(entry.cleanupAttempts || 0) + 1;
+      plan.botStage = "sweeping";
+    }
   } else {
     const pct = Math.round(40 + Math.random() * 40);
     try {
-      await sellTokenFromWallet(record, plan.tokenMint, volumeBotSellPercent(cfg, pct), slippageBps, { userId: plan.userId });
+      await runVolumeBotExternalAction(plan, persist, { kind: "rolling-sell", publicKey: record.publicKey }, () => (
+        sellTokenFromWallet(record, plan.tokenMint, volumeBotSellPercent(cfg, pct), slippageBps, { userId: plan.userId })
+      ));
       plan.stats.sells = Number(plan.stats.sells || 0) + 1;
+      plan.stats.volumeSol = Number((Number(plan.stats.volumeSol || 0) + Number(entry.buySol || 0) * pct / 100).toFixed(6));
       volumeBotLogPush(plan, `${shortMint(record.publicKey)} sold ${volumeBotSellPercent(cfg, pct)}% (partial).`);
     } catch (error) {
-      if (noBalance(error)) { await rollingCloseWallet(plan, entry.publicKey, byPk, slippageBps, noBalance); plan.pool.shift(); }
-      else { plan.stats.errors = Number(plan.stats.errors || 0) + 1; volumeBotLogPush(plan, `Sell failed ${shortMint(record.publicKey)}: ${friendlyError(error)}`); }
+      if (noBalance(error)) {
+        const cleanup = await rollingCloseWallet(plan, entry.publicKey, byPk, slippageBps, noBalance);
+        if (cleanup.closed) plan.pool.shift();
+        else plan.botStage = "sweeping";
+      }
+      else {
+        plan.stats.errors = Number(plan.stats.errors || 0) + 1;
+        if (volumeBotTradeOutcomeAmbiguous(error)) volumeBotEnterRecovery(plan, "Rolling sell", record.publicKey, error);
+        else volumeBotLogPush(plan, `Sell failed ${shortMint(record.publicKey)}: ${friendlyError(error)}`);
+      }
     }
   }
 }
@@ -69117,6 +70000,225 @@ async function submitJitoBundle(base64Txs, timeoutMs) {
   }
 }
 
+function validJitoCandidateSignatures(candidate = {}) {
+  return uniqueStrings(Array.isArray(candidate.signatures) ? candidate.signatures : [])
+    .map((signature) => String(signature || "").trim())
+    .filter((signature) => /^[1-9A-HJ-NP-Za-km-z]{80,100}$/.test(signature));
+}
+
+// Mint existence is sufficient proof that *some* create path landed, but once the
+// standard same-mint fallback has started it cannot tell us which path won. Only a
+// candidate whose complete signed transaction set is confirmed proves the atomic
+// Jito buys. This helper is shared by the live path and restart reconciliation.
+async function findConfirmedJitoBundleCandidate(candidates = [], options = {}) {
+  const rows = (Array.isArray(candidates) ? candidates : [])
+    .map((candidate) => ({ ...candidate, signatures: validJitoCandidateSignatures(candidate) }))
+    .filter((candidate) => candidate.signatures.length > 0);
+  if (!rows.length) return null;
+
+  const polls = clamp(Number(options.polls || 1), 1, 20);
+  const delayMs = clamp(Number(options.delayMs || 0), 0, 5_000);
+  const rpcClients = [connection, backupConnection]
+    .filter((client, index, list) => client && list.indexOf(client) === index);
+  for (let poll = 0; poll < polls; poll += 1) {
+    for (const client of rpcClients) {
+      for (const candidate of rows) {
+        const result = await client.getSignatureStatuses(candidate.signatures, { searchTransactionHistory: true }).catch(() => null);
+        const statuses = result?.value || [];
+        if (statuses.length === candidate.signatures.length && statuses.every((status) => (
+          status
+          && !status.err
+          && (status.confirmationStatus === "confirmed" || status.confirmationStatus === "finalized")
+        ))) {
+          return candidate;
+        }
+      }
+    }
+    if (poll < polls - 1 && delayMs > 0) await sleep(delayMs);
+  }
+  return null;
+}
+
+function provenJitoBuyEvents(attempt = {}, candidate = {}) {
+  const tokenMint = firstString(attempt.tokenMint, attempt.mintPublicKey, attempt.mint);
+  const userId = String(attempt.userId || "");
+  const signatures = new Set(validJitoCandidateSignatures(candidate));
+  if (!tokenMint || !userId || !signatures.size) return [];
+  return (Array.isArray(candidate.buyEvents) ? candidate.buyEvents : []).flatMap((event) => {
+    const signature = String(event?.signature || "").trim();
+    const walletPublicKey = String(event?.walletPublicKey || "").trim();
+    const solLamportsSpent = String(event?.solLamportsSpent || "").trim();
+    if (!signatures.has(signature)
+      || String(event?.userId || "") !== userId
+      || String(event?.tokenMint || "") !== tokenMint
+      || !/^\d+$/.test(solLamportsSpent)) return [];
+    try { new PublicKey(walletPublicKey); } catch { return []; }
+    return [{
+      userId: attempt.userId,
+      type: "buy",
+      source: String(event.source || "pump_launch_atomic_buy").slice(0, 80),
+      tokenMint,
+      walletLabel: String(event.walletLabel || "Bundle wallet").slice(0, 80),
+      walletPublicKey,
+      solLamportsSpent,
+      signature
+    }];
+  });
+}
+
+async function reconcileJitoAtomicExitIntents(attempt = {}, candidate = {}) {
+  const tokenMint = firstString(attempt.tokenMint, attempt.mintPublicKey, attempt.mint);
+  const provenWallets = new Set(provenJitoBuyEvents(attempt, candidate).map((event) => event.walletPublicKey));
+  const groups = Array.isArray(attempt.recoveryIntents?.atomicExitGroups)
+    ? attempt.recoveryIntents.atomicExitGroups
+    : [];
+  const result = { requested: 0, armed: 0, failed: 0, errors: [] };
+  if (!tokenMint || !provenWallets.size || !groups.length) return result;
+  for (const group of groups) {
+    const walletPublicKeys = uniqueStrings(Array.isArray(group?.walletPublicKeys) ? group.walletPublicKeys : [])
+      .filter((publicKey) => provenWallets.has(publicKey));
+    if (!walletPublicKeys.length) continue;
+    result.requested += walletPublicKeys.length;
+    try {
+      const armedResult = await webArmExitsForExistingPositions(attempt.userId, {
+        tokenMint,
+        ...(group.exitStrategy || {}),
+        walletPublicKeys,
+        returnCoverageDetails: true,
+        slippageBps: Math.max(Number(attempt.recoveryIntents?.slippageBps) || 300, 1_000),
+        source: "pump_launch_atomic_recovery"
+      });
+      const armed = Math.min(
+        walletPublicKeys.length,
+        Number(armedResult?.walletCount || 0) + Number(armedResult?.alreadyCovered || 0)
+      );
+      result.armed += armed;
+      result.failed += walletPublicKeys.length - armed;
+      if (armed < walletPublicKeys.length) {
+        result.errors.push(`${walletPublicKeys.length - armed} wallet balance(s) were not readable yet.`);
+      }
+    } catch (error) {
+      result.failed += walletPublicKeys.length;
+      result.errors.push(friendlyError(error).slice(0, 180));
+    }
+  }
+  return result;
+}
+
+async function reconcilePersistedJitoAttempt(attempt = {}, options = {}) {
+  const attemptId = String(attempt.id || attempt.launchAttemptId || "");
+  if (!attemptId) return { attempt, candidate: null, changed: false };
+  return withFileLock(`pump-jito-reconcile:${attemptId}`, async () => {
+    // A retry/progress poll may have queued behind another reconciliation. Refresh
+    // inside the lock so an already-recorded candidate never emits copy/funnel
+    // side effects twice even when two HTTP requests arrive together.
+    const store = await readPumpLaunchAttempts().catch(() => ({ attempts: [] }));
+    const latest = (store.attempts || []).find((item) => (
+      String(item.id || item.launchAttemptId || "") === attemptId
+      && String(item.userId || "") === String(attempt.userId || "")
+    ));
+    if (latest) attempt = latest;
+    if (String(attempt.status || "").toUpperCase() === PUMP_LAUNCH_STATUS.COMPLETE
+      && attempt.provider === "jito-bundle"
+      && attempt.atomicReceiptPending === false
+      && !attempt.recoveryWorkIncomplete) {
+      return { attempt, candidate: null, changed: false };
+    }
+
+    const candidates = Array.isArray(attempt.bundleCandidates) ? attempt.bundleCandidates : [];
+    if (!candidates.length) return { attempt, candidate: null, changed: false };
+    const candidate = await findConfirmedJitoBundleCandidate(candidates, options);
+    if (!candidate) return { attempt, candidate: null, changed: false };
+
+    const tokenMint = firstString(attempt.tokenMint, attempt.mintPublicKey, attempt.mint);
+    if (!tokenMint) return { attempt, candidate: null, changed: false };
+    const events = provenJitoBuyEvents(attempt, candidate);
+    // recordTradeEvents de-dupes its ledger writes, but it also fans out alerts,
+    // copy signals and funnel telemetry. Filter durable history first so recovery
+    // cannot replay those non-ledger side effects after a crash-response retry.
+    const history = events.length ? await readTradeHistory().catch(() => ({ trades: [] })) : { trades: [] };
+    const recordedKeys = new Set((history.trades || []).map(tradeEventDedupeKey).filter(Boolean));
+    const missingEvents = events.filter((event) => {
+      const key = tradeEventDedupeKey(event);
+      return !key || !recordedKeys.has(key);
+    });
+    let tradeEventsRecorded = missingEvents.length === 0;
+    if (missingEvents.length) {
+      try {
+        await recordTradeEvents(missingEvents);
+        tradeEventsRecorded = true;
+      } catch (error) {
+        logPumpLaunchEvent("pump_launch_jito_reconcile_receipt_failed", {
+          launchAttemptId: attempt.id || attempt.launchAttemptId,
+          userId: attempt.userId,
+          tokenMint,
+          errorMessage: friendlyError(error).slice(0, 200)
+        });
+      }
+    }
+    const exitResult = await reconcileJitoAtomicExitIntents(attempt, candidate);
+    const overflowBuys = Array.isArray(attempt.recoveryIntents?.overflowBuys)
+      ? attempt.recoveryIntents.overflowBuys
+      : [];
+    // Overflow buys were not part of the all-or-none signed candidate. Replaying
+    // them after a restart could double-spend if their original response was
+    // lost, so recovery reports them explicitly and never guesses.
+    const overflowBuysIncomplete = overflowBuys.length;
+    const exitsIncomplete = Number(exitResult.failed || 0);
+    const recoveryWorkIncomplete = overflowBuysIncomplete > 0 || exitsIncomplete > 0;
+    const recoveryMessage = recoveryWorkIncomplete
+      ? [
+          "The atomic launch landed safely.",
+          overflowBuysIncomplete ? `${overflowBuysIncomplete} overflow buy(s) were not replayed after restart; review them manually.` : "",
+          exitsIncomplete ? `${exitsIncomplete} wallet exit setup(s) still need to be armed from Positions.` : ""
+        ].filter(Boolean).join(" ")
+      : "The atomic launch and its exit setup were recovered successfully.";
+    const completedAt = attempt.completedAt || new Date().toISOString();
+    const next = {
+      ...attempt,
+      id: attempt.id || attempt.launchAttemptId,
+      status: PUMP_LAUNCH_STATUS.COMPLETE,
+      stage: PUMP_LAUNCH_STAGE.STORE_RESULT,
+      tokenMint,
+      provider: recoveryWorkIncomplete ? "jito-bundle-recovered-partial" : "jito-bundle",
+      bundleId: candidate.bundleId || attempt.bundleId || "",
+      confirmedBundleCandidate: {
+        attempt: candidate.attempt || null,
+        bundleId: candidate.bundleId || "",
+        signatures: validJitoCandidateSignatures(candidate)
+      },
+      atomicBundle: true,
+      buysHandledServerSide: overflowBuysIncomplete === 0,
+      atomicReceiptPending: !tradeEventsRecorded,
+      exitsArmed: exitResult.requested === 0 || exitsIncomplete === 0,
+      exitsIncomplete,
+      postLaunchBuysIncomplete: overflowBuysIncomplete > 0,
+      overflowBuysIncomplete,
+      recoveryWorkIncomplete,
+      recoveryMessage,
+      message: recoveryMessage,
+      recovered: true,
+      completedAt,
+      updatedAt: new Date().toISOString()
+    };
+    await upsertPumpLaunchAttempt(next);
+    return { attempt: next, candidate, changed: true };
+  });
+}
+
+async function reconcilePersistedJitoAttemptForUser(userId, launchAttemptId, options = {}) {
+  const id = String(launchAttemptId || "");
+  if (!id) return null;
+  const store = await readPumpLaunchAttempts();
+  const attempt = (store.attempts || []).find((item) => (
+    String(item.id || item.launchAttemptId || "") === id
+    && String(item.userId || "") === String(userId)
+  ));
+  if (!attempt) return null;
+  const reconciled = await reconcilePersistedJitoAttempt(attempt, options);
+  return reconciled.attempt;
+}
+
 // Canonical Jito mainnet tip accounts (public list; pick one at random per bundle to avoid contention).
 const JITO_TIP_ACCOUNTS = [
   "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5",
@@ -69360,15 +70462,11 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
       .filter((wallet) => wallet.publicKey && wallet.publicKey !== devSelection.wallet.publicKey);
   }
   const requestedBundlePlans = pumpLaunchBundlePlans(bundle, bundleWallets, body);
-  // Jito bundles allow at most 5 transactions: create + dev buy + remaining wallet buys.
-  const reserved = 1 + (devBuySol > 0 ? 1 : 0);
-  let bundlePlans = requestedBundlePlans.slice(0, Math.max(0, 5 - reserved));
-  const overflowBundlePlans = requestedBundlePlans.slice(Math.max(0, 5 - reserved));
-  bundleWallets = bundlePlans.map((plan) => plan.wallet);
 
   // Pre-flight balances: ONE underfunded wallet makes an all-or-none bundle
-  // unincludable at any tip. Check everything and name the exact problem first.
-  const maxTipSol = Math.min(0.01, CONFIG.pumpLaunchJitoTipSol * 8);
+  // unincludable at any tip. Check EVERY requested wallet, including overflow
+  // buys that execute directly after the atomic block, before minting anything.
+  const maxTipSol = Math.min(0.01, CONFIG.pumpLaunchJitoTipSol * 10);
   const devNeedsSol = 0.028 + devBuySol * 1.02 + maxTipSol + 0.005;
   const devBalanceLamports = await rpcWithRetry("read dev wallet balance for bundle", () => connection.getBalance(devKeypair.publicKey, "confirmed"), CONFIG.rpcRetries);
   if (devBalanceLamports < Math.ceil(devNeedsSol * 1e9)) {
@@ -69376,35 +70474,75 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
     error.statusCode = 400;
     throw error;
   }
-  if (bundlePlans.length) {
-    const checked = [];
-    const skipped = [];
-    for (const plan of bundlePlans) {
+  if (requestedBundlePlans.length) {
+    const underfunded = [];
+    for (const plan of requestedBundlePlans) {
       const needSol = plan.amountSol * 1.02 + 0.0045;
       const balance = await rpcWithRetry("read bundle wallet balance", () => connection.getBalance(new PublicKey(plan.wallet.publicKey), "confirmed"), CONFIG.rpcRetries).catch(() => 0);
-      if (balance < Math.ceil(needSol * 1e9)) skipped.push({ ...plan, balance, needSol });
-      else checked.push(plan);
+      if (balance < Math.ceil(needSol * 1e9)) underfunded.push({ ...plan, balance, needSol });
     }
-    // Skip an underfunded wallet instead of aborting the launch - the funded
-    // wallets (and the dev buy) still go. Only fail if NOTHING can buy.
-    if (skipped.length) {
-      logPumpLaunchEvent("pump_launch_bundle_wallet_skipped", {
-        launchAttemptId: basePayload.clientRequestId, userId,
-        skipped: skipped.map((item) => `${shortMint(item.wallet.publicKey)}:${(item.balance / 1e9).toFixed(4)}/${item.needSol.toFixed(4)}`)
-      });
-    }
-    if (!checked.length && devBuySol <= 0) {
-      const error = new Error("Every first-block bundle wallet is underfunded for its selected buy amount. Fund them or lower the wallet amounts. Nothing was spent.");
+    if (underfunded.length) {
+      const details = underfunded.slice(0, 4)
+        .map((item) => `${shortMint(item.wallet.publicKey)} has ${(item.balance / 1e9).toFixed(4)} SOL, needs ~${item.needSol.toFixed(4)}`)
+        .join("; ");
+      const error = new Error(`Bundle launch stopped before minting because ${underfunded.length} selected wallet(s) are underfunded: ${details}. Fund them, lower their amount, or remove them; nothing was spent.`);
       error.statusCode = 400;
       throw error;
     }
-    bundlePlans = checked;
-    bundleWallets = checked.map((plan) => plan.wallet);
   }
+
+  // Jito bundles allow at most 5 transactions: create + dev buy + remaining wallet buys.
+  // Extra preflighted wallets execute server-side immediately after the landed bundle.
+  const reserved = 1 + (devBuySol > 0 ? 1 : 0);
+  const bundlePlans = requestedBundlePlans.slice(0, Math.max(0, 5 - reserved));
+  const overflowBundlePlans = requestedBundlePlans.slice(Math.max(0, 5 - reserved));
+  bundleWallets = bundlePlans.map((plan) => plan.wallet);
+  const atomicExitPlans = [
+    ...(devBuySol > 0 ? [{
+      wallet: devSelection.wallet,
+      amountSol: devBuySol,
+      exitStrategy: pumpLaunchExitStrategy(body.devExitStrategy || {}, body)
+    }] : []),
+    ...bundlePlans
+  ];
+  const recoveryIntents = {
+    slippageBps: Math.max(Number(body.slippageBps) || 300, 1_000),
+    atomicExitGroups: groupPumpLaunchPlans(atomicExitPlans, false).map((group) => ({
+      walletPublicKeys: group.plans.map((entry) => entry.wallet.publicKey),
+      exitStrategy: group.exitStrategy
+    })),
+    overflowBuys: overflowBundlePlans.map((entry) => ({
+      walletPublicKey: entry.wallet.publicKey,
+      amountSol: entry.amountSol,
+      exitStrategy: entry.exitStrategy
+    }))
+  };
 
   const metadata = await uploadPumpLaunchMetadata(basePayload);
   const mintKeypair = Keypair.generate();
   const mint = mintKeypair.publicKey.toBase58();
+  // Durable claim BEFORE any transaction leaves this process. A Render restart or
+  // duplicate browser POST can now recover this exact mint instead of creating a
+  // second coin. The encrypted mint secret is never returned to the browser.
+  await upsertPumpLaunchAttempt({
+    id: basePayload.clientRequestId,
+    userId,
+    selectedDevWalletId,
+    devWalletPublicKey: devSelection.wallet.publicKey,
+    tokenName: basePayload.name,
+    symbol: basePayload.symbol,
+    tokenMint: mint,
+    encryptedMintSecret: encryptSecret(Buffer.from(mintKeypair.secretKey)),
+    holderRewards: basePayload.holderRewards || { enabled: false },
+    status: PUMP_LAUNCH_STATUS.BUILDING_TX,
+    stage: "jito_bundle_prepared",
+    provider: "jito-bundle",
+    metadataUri: metadata.uri,
+    imageUri: metadata.imageUri || metadata.imageUrl || "",
+    metadataJson: metadata.metadata || null,
+    recoveryIntents,
+    createdAt: new Date().toISOString()
+  });
 
   // Track which keypairs sign which tx. PumpPortal uses the FIRST action's priorityFee
   // as the Jito tip for the whole bundle.
@@ -69457,9 +70595,12 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
   const mintPubkey = new PublicKey(mint);
   const mintLanded = async (waitMs) => {
     const deadline = Date.now() + waitMs;
+    const rpcClients = [connection, backupConnection].filter((client, index, list) => client && list.indexOf(client) === index);
     while (Date.now() < deadline) {
-      const info = await connection.getAccountInfo(mintPubkey, "confirmed").catch(() => null);
-      if (info) return true;
+      for (const client of rpcClients) {
+        const info = await client.getAccountInfo(mintPubkey, "confirmed").catch(() => null);
+        if (info) return true;
+      }
       await new Promise((resolve) => setTimeout(resolve, 2_500));
     }
     return false;
@@ -69472,7 +70613,8 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
       const response = await fetch(connection.rpcEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "simulateBundle", params: [{ encodedTransactions: signedBase64 }] })
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "simulateBundle", params: [{ encodedTransactions: signedBase64 }] }),
+        signal: AbortSignal.timeout ? AbortSignal.timeout(Math.min(timeoutMs, 10_000)) : undefined
       });
       const data = await response.json().catch(() => null);
       if (!data || data.error) {
@@ -69500,7 +70642,17 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
 
   let bundleId = "";
   let landed = false;
+  let confirmedCandidate = null;
   const submittedBundleCandidates = [];
+  const durableBundleCandidates = () => submittedBundleCandidates.map((item) => ({
+    attempt: item.attempt,
+    tipSol: item.tipSol,
+    bundleId: item.bundleId || "",
+    signatures: item.signatures,
+    // Safe, non-secret provenance. Keeping it beside the exact signatures lets
+    // restart reconciliation record only buys that are cryptographically proven.
+    buyEvents: item.buyEvents
+  }));
   for (let attempt = 0; attempt < tipSchedule.length && !landed; attempt += 1) {
     plan[0].action.priorityFee = tipSchedule[attempt];
     const txBytes = await requestPumpPortalBundleTxs(plan.map((entry) => entry.action), timeoutMs);
@@ -69544,37 +70696,163 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
         throw error;
       }
     }
-    bundleId = await submitJitoBundle(signed, timeoutMs);
-    submittedBundleCandidates.push({ signatures: attemptSignatures, buyEvents: attemptBuyEvents });
-    logPumpLaunchEvent("pump_launch_jito_bundle_submitted", {
-      launchAttemptId: basePayload.clientRequestId, userId, mint, bundleId,
-      txCount: plan.length, attempt: attempt + 1, tipSol: tipSchedule[attempt]
+    const candidate = {
+      attempt: attempt + 1,
+      tipSol: tipSchedule[attempt],
+      signatures: attemptSignatures,
+      buyEvents: attemptBuyEvents,
+      bundleId: ""
+    };
+    submittedBundleCandidates.push(candidate);
+    // Persist signed transaction IDs before sendBundle. If the process exits after
+    // acceptance, recovery can reconcile these exact candidates instead of relaunching.
+    await upsertPumpLaunchAttempt({
+      id: basePayload.clientRequestId,
+      status: "SUBMITTING",
+      stage: "jito_bundle_submitting",
+      tokenMint: mint,
+      bundleCandidates: durableBundleCandidates()
     });
+    try {
+      bundleId = await submitJitoBundle(signed, timeoutMs);
+      candidate.bundleId = bundleId;
+      await upsertPumpLaunchAttempt({
+        id: basePayload.clientRequestId,
+        status: "SUBMITTED",
+        stage: "jito_bundle_submitted",
+        bundleId,
+        bundleCandidates: durableBundleCandidates()
+      });
+      logPumpLaunchEvent("pump_launch_jito_bundle_submitted", {
+        launchAttemptId: basePayload.clientRequestId, userId, mint, bundleId,
+        txCount: plan.length, attempt: attempt + 1, tipSol: tipSchedule[attempt]
+      });
+    } catch (submitError) {
+      candidate.submitError = friendlyError(submitError).slice(0, 240);
+      await upsertPumpLaunchAttempt({
+        id: basePayload.clientRequestId,
+        status: "SUBMIT_UNKNOWN",
+        stage: "jito_bundle_submit_unknown",
+        tokenMint: mint,
+        bundleCandidates: durableBundleCandidates(),
+        errorMessage: candidate.submitError
+      });
+      // Every regional HTTP response can be lost after accepting the bundle.
+      // Check the exact signed set first, then (pre-fallback only) the mint. A
+      // same-mint retry remains safe because at most one create can succeed.
+      confirmedCandidate = await findConfirmedJitoBundleCandidate(submittedBundleCandidates, { polls: 4, delayMs: 750 });
+      if (confirmedCandidate) {
+        bundleId = confirmedCandidate.bundleId || bundleId;
+        landed = true;
+      } else {
+        landed = await mintLanded(4_000);
+      }
+      logPumpLaunchEvent("pump_launch_jito_submit_unknown", {
+        launchAttemptId: basePayload.clientRequestId,
+        userId,
+        mint,
+        attempt: attempt + 1,
+        exactCandidateConfirmed: Boolean(confirmedCandidate),
+        mintLandedBeforeFallback: landed,
+        errorMessage: candidate.submitError
+      });
+      if (!landed) continue;
+    }
     // Pump-speed budget: a bundle that lands does so within a few blocks. Give the first shot 8s (it also
     // covers the one-time simulation), then 6s per retry — a land shows in <4s, so this keeps the whole
     // retry ladder to ~20s worst case before the instant-managed-buys fallback takes over.
-    landed = await mintLanded(attempt === 0 ? 8_000 : 6_000);
+    if (!landed) landed = await mintLanded(attempt === 0 ? 8_000 : 6_000);
+    if (landed && !confirmedCandidate) {
+      confirmedCandidate = await findConfirmedJitoBundleCandidate(submittedBundleCandidates, { polls: 4, delayMs: 500 });
+      if (confirmedCandidate?.bundleId) bundleId = confirmedCandidate.bundleId;
+    }
   }
 
   if (!landed) {
     logPumpLaunchEvent("pump_launch_jito_bundle_missed", {
       launchAttemptId: basePayload.clientRequestId, userId, mint, bundleId, attempts: tipSchedule.length, fallback: "pumpportal-local"
     });
-    // The launch must NEVER dead-end on the block lottery: fall back to the
-    // proven sequential path, then the SERVER fires the dev buy and every
-    // bundle wallet buy itself - instant, no client follow-ups to stall on.
-    const fallback = await webLaunchPumpPortalLocal(userId, body, basePayload);
-    const fallbackMint = String(fallback?.tokenMint || fallback?.mint || "");
-    const buys = fallback?.postLaunchBuys || { dev: false, wallets: 0, planned: false };
-    // bundled:true tells the client the buys are DONE - it must not re-run them.
-    return {
-      ...fallback,
-      bundled: true,
-      bundleFallback: true,
-      devBuyIncluded: buys.dev,
-      bundledWalletCount: buys.wallets,
-      message: `Atomic bundle missed the block lottery (nothing spent on it) - launched standard instead. Server fired ${buys.dev ? "the dev buy" : "no dev buy"}${buys.wallets ? ` + ${buys.wallets} bundle wallet buy(s)` : ""}${buys.planned ? " with your TP/SL/timer armed" : ""} right behind the create.`
-    };
+    // Reuse the EXACT SAME mint for fallback. A late Jito bundle and the
+    // sequential create now compete for one mint, so only one coin can exist.
+    try {
+      const fallback = await webLaunchPumpPortalLocal(userId, body, basePayload, { mintKeypair, metadata });
+      const buys = fallback?.postLaunchBuys || { dev: false, wallets: 0, planned: false };
+      return {
+        ...fallback,
+        bundled: true,
+        atomicBundle: false,
+        buysHandledServerSide: true,
+        bundleFallback: true,
+        devBuyIncluded: buys.dev,
+        bundledWalletCount: buys.wallets,
+        message: `Atomic bundle did not confirm in time, so the same mint launched through the standard path. Server handled ${buys.dev ? "the dev buy" : "no dev buy"}${buys.wallets ? ` + ${buys.wallets} bundle wallet buy(s)` : ""}${buys.planned ? " with your TP/SL/timer armed" : ""}.`
+      };
+    } catch (fallbackError) {
+      // Once fallback starts, mint existence is ambiguous: it may be the standard
+      // create rather than Jito. Only an exact all-signature candidate may be
+      // classified as atomic or receive atomic buy receipts.
+      confirmedCandidate = await findConfirmedJitoBundleCandidate(
+        submittedBundleCandidates,
+        { polls: 12, delayMs: 1_000 }
+      );
+      if (confirmedCandidate) {
+        landed = true;
+        bundleId = confirmedCandidate.bundleId || bundleId;
+        logPumpLaunchEvent("pump_launch_jito_landed_during_fallback", {
+          launchAttemptId: basePayload.clientRequestId,
+          userId,
+          mint,
+          bundleId,
+          exactCandidateConfirmed: true
+        });
+      } else {
+        const standardMintLanded = await mintLanded(3_000);
+        if (!standardMintLanded) throw fallbackError;
+
+        // The same-mint standard create exists, but its error prevented the
+        // normal post-launch buy stage from returning. Do not replay buys here:
+        // without exact Jito proof that could double-buy an indexing-lagged
+        // atomic bundle. Return the real coin with an honest partial status.
+        const partialMessage = "The coin was created through the standard fallback, but the dev/bundle buy outcome could not be proven. SlimeWire did not replay any uncertain buys; check Positions before buying again.";
+        await upsertPumpLaunchAttempt({
+          id: basePayload.clientRequestId,
+          userId,
+          tokenMint: mint,
+          status: PUMP_LAUNCH_STATUS.COMPLETE,
+          stage: PUMP_LAUNCH_STAGE.STORE_RESULT,
+          provider: "pumpportal-local-fallback-partial",
+          bundleFallback: true,
+          atomicBundle: false,
+          buysHandledServerSide: false,
+          postLaunchBuysIncomplete: true,
+          bundleCandidates: durableBundleCandidates(),
+          fallbackError: friendlyError(fallbackError).slice(0, 300),
+          completedAt: new Date().toISOString()
+        });
+        logPumpLaunchEvent("pump_launch_standard_fallback_partial", {
+          launchAttemptId: basePayload.clientRequestId,
+          userId,
+          mint,
+          candidateCount: submittedBundleCandidates.length,
+          errorMessage: friendlyError(fallbackError).slice(0, 200)
+        });
+        return {
+          status: PUMP_LAUNCH_STATUS.COMPLETE,
+          tokenMint: mint,
+          mint,
+          bundled: true,
+          atomicBundle: false,
+          bundleFallback: true,
+          buysHandledServerSide: false,
+          postLaunchBuysIncomplete: true,
+          devBuyIncluded: false,
+          bundledWalletCount: 0,
+          provider: "pumpportal-local-fallback-partial",
+          metadataUri: metadata.uri,
+          message: partialMessage
+        };
+      }
+    }
   }
 
   logPumpLaunchEvent("pump_launch_jito_bundle_landed", {
@@ -69583,82 +70861,76 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
   // A prior retry can land while a later retry is being watched. Resolve the
   // batch whose exact signed transactions actually confirmed instead of
   // assuming the most recently submitted signatures won the race.
-  const confirmedBundleBuyEvents = async () => {
-    const rpcClients = [connection, backupConnection].filter((client, index, list) => client && list.indexOf(client) === index);
-    for (let poll = 0; poll < 6; poll += 1) {
-      for (const client of rpcClients) {
-        for (const candidate of submittedBundleCandidates) {
-          const result = await client.getSignatureStatuses(candidate.signatures, { searchTransactionHistory: true }).catch(() => null);
-          const statuses = result?.value || [];
-          if (statuses.length === candidate.signatures.length && statuses.every((status) => (
-            status
-            && !status.err
-            && (status.confirmationStatus === "confirmed" || status.confirmationStatus === "finalized")
-          ))) {
-            return candidate.buyEvents;
-          }
-        }
-      }
-      if (poll < 5) await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-    return [];
-  };
-  const landedBuyEvents = await confirmedBundleBuyEvents();
-  // Mint existence after an atomic Jito bundle proves every transaction in the
-  // bundle landed.  Only now persist the per-wallet buys; missed/retried bundles
-  // never create false positions, and signature-based dedupe makes re-recording
-  // the same landed transaction harmless.
+  if (!confirmedCandidate) {
+    confirmedCandidate = await findConfirmedJitoBundleCandidate(
+      submittedBundleCandidates,
+      { polls: 6, delayMs: 500 }
+    );
+  }
+  if (confirmedCandidate?.bundleId) bundleId = confirmedCandidate.bundleId;
+  const landedBuyEvents = confirmedCandidate
+    ? provenJitoBuyEvents({ userId, tokenMint: mint }, confirmedCandidate)
+    : [];
+  let atomicReceiptsRecorded = landedBuyEvents.length === 0 && Boolean(confirmedCandidate);
+  // Only an exact all-signature confirmation may create atomic buy receipts.
+  // Mint existence alone is deliberately not enough: after fallback begins it
+  // could be a standard create with no atomic buys at all.
   if (landedBuyEvents.length) {
-    await recordTradeEvents(landedBuyEvents);
+    try {
+      await recordTradeEvents(landedBuyEvents);
+      atomicReceiptsRecorded = true;
+    } catch (error) {
+      logPumpLaunchEvent("pump_launch_atomic_receipt_write_failed", {
+        launchAttemptId: basePayload.clientRequestId,
+        userId,
+        mint,
+        errorMessage: friendlyError(error).slice(0, 200)
+      });
+    }
   } else {
-    // Mint existence proves one all-or-none candidate landed, including every
-    // planned buy, even if a shared RPC has not indexed the winning signatures
-    // yet. Persist truthful wallet/amount provenance with a deterministic
-    // internal receipt; do not attach a guessed retry signature.
-    const atomicReceipts = plan.filter((entry) => (
-      entry.action.action === "buy" && entry.wallet && Number(entry.action.amount) > 0
-    )).map((entry) => ({
-      userId,
-      type: "buy",
-      source: entry.provenanceSource || "pump_launch_atomic_buy",
-      tokenMint: mint,
-      walletLabel: entry.wallet.label,
-      walletPublicKey: entry.wallet.publicKey,
-      solLamportsSpent: String(solToLamports(Number(entry.action.amount))),
-      provenanceId: `pump-jito:${basePayload.clientRequestId}:${entry.wallet.publicKey}`,
-      bundleId
-    }));
-    if (atomicReceipts.length) await recordTradeEvents(atomicReceipts);
-    logPumpLaunchEvent("pump_launch_atomic_provenance_receipt", {
+    logPumpLaunchEvent("pump_launch_atomic_receipt_deferred", {
       launchAttemptId: basePayload.clientRequestId,
       userId,
       mint,
-      walletCount: atomicReceipts.length,
-      candidateCount: submittedBundleCandidates.length
+      candidateCount: submittedBundleCandidates.length,
+      exactCandidateConfirmed: Boolean(confirmedCandidate)
     });
   }
   // The in-block buys exist but carry no exit plans - auto-arm each strategy
   // group separately so per-wallet ladders remain exactly as selected.
-  let atomicExitsArmed = false;
-  try {
-    const atomicPlans = [
-      ...(devBuySol > 0 ? [{ wallet: devSelection.wallet, amountSol: devBuySol, exitStrategy: pumpLaunchExitStrategy(body.devExitStrategy || {}, body) }] : []),
-      ...bundlePlans
-    ];
-    for (const group of groupPumpLaunchPlans(atomicPlans, false)) {
-      await webArmExitsForExistingPositions(userId, {
+  let atomicExitsArmedCount = 0;
+  for (const group of groupPumpLaunchPlans(atomicExitPlans, false)) {
+    try {
+      const armedResult = await webArmExitsForExistingPositions(userId, {
         tokenMint: mint,
         ...group.exitStrategy,
-        walletIndexes: group.plans.map((entry) => entry.wallet.webIndex),
+        walletPublicKeys: group.plans.map((entry) => entry.wallet.publicKey),
+        returnCoverageDetails: true,
         slippageBps: Math.max(Number(body.slippageBps) || 300, 1_000),
         source: "pump_launch_atomic_arm"
       });
+      atomicExitsArmedCount += Math.min(
+        group.plans.length,
+        Number(armedResult?.walletCount || 0) + Number(armedResult?.alreadyCovered || 0)
+      );
+    } catch (error) {
+      logPumpLaunchEvent("pump_launch_atomic_exits_arm_failed", {
+        launchAttemptId: basePayload.clientRequestId,
+        userId,
+        mint,
+        walletCount: group.plans.length,
+        errorMessage: String(error.message || "").slice(0, 200)
+      });
     }
-    atomicExitsArmed = atomicPlans.length > 0;
-    logPumpLaunchEvent("pump_launch_atomic_exits_armed", { launchAttemptId: basePayload.clientRequestId, userId, mint });
-  } catch (error) {
-    logPumpLaunchEvent("pump_launch_atomic_exits_arm_failed", { launchAttemptId: basePayload.clientRequestId, userId, mint, errorMessage: String(error.message || "").slice(0, 200) });
   }
+  const atomicExitsArmed = atomicExitsArmedCount === atomicExitPlans.length;
+  logPumpLaunchEvent("pump_launch_atomic_exits_armed", {
+    launchAttemptId: basePayload.clientRequestId,
+    userId,
+    mint,
+    requested: atomicExitPlans.length,
+    armed: atomicExitsArmedCount
+  });
   // Wallets beyond Jito's five-transaction limit buy immediately after the
   // atomic launch, with their own selected amounts and exit ladders.
   let overflowBuys = { wallets: 0, planned: false };
@@ -69669,6 +70941,16 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
       launchAttemptId: basePayload.clientRequestId, userId
     }).catch(() => ({ wallets: 0, planned: false }));
   }
+  const liveOverflowBuysIncomplete = Math.max(0, overflowBundlePlans.length - Number(overflowBuys.wallets || 0));
+  const liveExitsIncomplete = Math.max(0, atomicExitPlans.length - atomicExitsArmedCount);
+  const liveRecoveryWorkIncomplete = liveOverflowBuysIncomplete > 0 || liveExitsIncomplete > 0;
+  const liveRecoveryMessage = liveRecoveryWorkIncomplete
+    ? [
+        "The atomic launch landed safely.",
+        liveOverflowBuysIncomplete ? `${liveOverflowBuysIncomplete} overflow buy(s) need manual review.` : "",
+        liveExitsIncomplete ? `${liveExitsIncomplete} wallet exit setup(s) still need to be armed from Positions.` : ""
+      ].filter(Boolean).join(" ")
+    : "Launch, first buys, and exit setup completed.";
   // Ledger entry: this is what powers the /t "LAUNCHED ON SLIMEWIRE" badge and
   // the milestone auto-posts - bundled launches were invisible to both.
   await upsertPumpLaunchAttempt({
@@ -69683,12 +70965,41 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
     status: PUMP_LAUNCH_STATUS.COMPLETE,
     provider: "jito-bundle",
     bundleId,
+    bundleCandidates: durableBundleCandidates(),
+    confirmedBundleCandidate: confirmedCandidate ? {
+      attempt: confirmedCandidate.attempt || null,
+      bundleId: confirmedCandidate.bundleId || "",
+      signatures: validJitoCandidateSignatures(confirmedCandidate)
+    } : null,
+    atomicReceiptPending: !atomicReceiptsRecorded,
+    buysHandledServerSide: liveOverflowBuysIncomplete === 0,
+    exitsArmed: liveExitsIncomplete === 0,
+    exitsIncomplete: liveExitsIncomplete,
+    postLaunchBuysIncomplete: liveOverflowBuysIncomplete > 0,
+    overflowBuysIncomplete: liveOverflowBuysIncomplete,
+    recoveryWorkIncomplete: liveRecoveryWorkIncomplete,
+    recoveryMessage: liveRecoveryMessage,
+    message: liveRecoveryMessage,
+    recoveryIntents: {
+      ...recoveryIntents,
+      atomicExitGroups: liveExitsIncomplete > 0 ? recoveryIntents.atomicExitGroups : [],
+      overflowBuys: liveOverflowBuysIncomplete > 0 ? recoveryIntents.overflowBuys : []
+    },
+    metadataUri: metadata.uri,
+    imageUri: metadata.imageUri || metadata.imageUrl || "",
+    metadataJson: metadata.metadata || null,
     completedAt: new Date().toISOString()
   }).catch((error) => console.warn(`[pump-launch] bundle ledger write failed: ${error.message}`));
   return {
     status: PUMP_LAUNCH_STATUS.COMPLETE, tokenMint: mint, mint, bundleId, bundled: true,
+    atomicBundle: true, buysHandledServerSide: liveOverflowBuysIncomplete === 0,
     bundledWalletCount: bundleWallets.length + Number(overflowBuys.wallets || 0), devBuyIncluded: devBuySol > 0,
     exitsArmed: atomicExitsArmed,
+    exitsIncomplete: liveExitsIncomplete,
+    postLaunchBuysIncomplete: liveOverflowBuysIncomplete > 0,
+    overflowBuysIncomplete: liveOverflowBuysIncomplete,
+    recoveryWorkIncomplete: liveRecoveryWorkIncomplete,
+    message: liveRecoveryMessage,
     provider: "jito-bundle", metadataUri: metadata.uri
   };
 }
@@ -69852,7 +71163,7 @@ async function webLaunchMeteoraDbc(userId, body, basePayload) {
   };
 }
 
-async function webLaunchPumpPortalLocal(userId, body, basePayload) {
+async function webLaunchPumpPortalLocal(userId, body, basePayload, options = {}) {
   const store = await readWalletStore();
   const selectedDevWalletId = firstString(
     basePayload.devBuy.walletIndex,
@@ -69957,6 +71268,8 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
     walletKeypair: creatorKeypair,
     basePayload,
     body,
+    mintKeypair: options.mintKeypair || null,
+    metadata: options.metadata || null,
     config: {
       apiUrl: CONFIG.pumpLaunchApiUrl,
       timeoutMs,
@@ -69987,6 +71300,8 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
     launchResult = {
       ...launchResult,
       bundled: true,
+      atomicBundle: false,
+      buysHandledServerSide: true,
       devBuyIncluded: postLaunchBuys.dev,
       bundledWalletCount: postLaunchBuys.wallets,
       postLaunchBuys
@@ -70179,7 +71494,11 @@ async function webLaunchPumpCoin(userId, body = {}) {
       // this is never reached, so normal launches are unchanged. When ON, the create +
       // dev buy + first-block wallet buys land together in one all-or-none Jito bundle.
       // Jito anti-snipe is pump-only for now; the bonk rail uses the clean local path.
-      const useJito = basePayload.rail === "pump" && CONFIG.pumpLaunchJitoBundle && (Number(basePayload.devBuy?.amountSol) > 0 || Number(body.bundleBuy?.amountSol) > 0);
+      const requestedAtomicDevBuy = cleanLaunchBoolean(body.antiSnipe) || cleanLaunchBoolean(body.bundleDevBuy);
+      const requestedBundleBuy = Number(body.bundleBuy?.amountSol) > 0;
+      const useJito = basePayload.rail === "pump"
+        && CONFIG.pumpLaunchJitoBundle
+        && (requestedBundleBuy || (requestedAtomicDevBuy && Number(basePayload.devBuy?.amountSol) > 0));
       const result = useJito
         ? await webLaunchPumpJitoBundle(userId, body, basePayload)
         : await webLaunchPumpPortalLocal(userId, body, basePayload);
@@ -70386,9 +71705,7 @@ async function webCreateLaunchWatch(userId, body = {}) {
     slippageBps
   }).catch(() => {});
   void refreshSnipeWatchTickers(); // arm the real-time onCreation sniper instantly
-  setTimeout(() => void processTradePlans().catch((error) => {
-    console.error("Web manual launch immediate scan failed:", error.message);
-  }), 250);
+  scheduleTradePlanProcessing("Web manual launch immediate scan", [250]);
 
   return webLaunchWatchRow(storedWatch.plan);
 }
@@ -70515,9 +71832,7 @@ async function webCreateWalletLaunchSnipe(userId, body = {}) {
     slippageBps
   }).catch(() => {});
   void refreshWalletLaunchWatchCreators();
-  setTimeout(() => void processTradePlans().catch((error) => {
-    console.error("Web wallet launch snipe immediate scan failed:", error.message);
-  }), 300);
+  scheduleTradePlanProcessing("Web wallet launch snipe immediate scan", [300]);
   return webLaunchWatchRow(storedWatch.plan);
 }
 
@@ -71018,6 +72333,14 @@ async function webReturnFundsToConnected(userId, body = {}) {
 // its stamped origin (volumeSource), or a fallback destination, then prune the ones
 // that end empty. Guarantees funds can never be stranded in hidden wallets.
 async function webSweepBackgroundWallets(userId, body = {}) {
+  const planStore = await readTradePlans();
+  const activePlan = (planStore.plans || []).find((plan) => plan?.source === "web_volume_bot"
+    && String(plan.userId) === String(userId)
+    && plan.status === "volume_bot"
+    && !["done", "stopped"].includes(String(plan.botStage || "").toLowerCase()));
+  if (activePlan) {
+    throw volumeBotError(`An active volume bot is still running for ${shortMint(activePlan.tokenMint || "")}. Stop it and wait for its automatic sweep before manual recovery.`);
+  }
   const store = await readWalletStore();
   const owned = walletsForOwner(store, userId);
   const volumeWallets = owned.filter((wallet) => wallet.volumeBot || wallet.ephemeral);
@@ -71040,11 +72363,32 @@ async function webSweepBackgroundWallets(userId, body = {}) {
       const keypair = decryptWallet(wallet);
       if (destination && keypair.publicKey.equals(destination)) destination = fallbackDest;
       if (!destination) { row.message = "No destination wallet to return to."; return; }
-      const lookup = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey, { force: true }).catch(() => ({ accounts: [] }));
-      const tokens = sellableTokensFromAccounts(lookup.accounts || []);
+      let tokenAccounts;
+      try {
+        tokenAccounts = await completeVolumeTokenAccountRead(keypair.publicKey);
+      } catch (error) {
+        row.message = `Token scan pending; wallet and gas were retained: ${friendlyError(error)}`;
+        return;
+      }
+      const tokens = sellableTokensFromAccounts(tokenAccounts);
       for (const token of tokens) {
         try { await sellTokenAmountFromWallet(wallet, token.mint, token.rawAmount, slippageBps, { userId }); row.sells += 1; }
-        catch { /* leave token if it cannot route; SOL drain still runs */ }
+        catch (error) {
+          row.message = `Token cleanup pending: ${friendlyError(error)}`;
+          if (volumeBotTradeOutcomeAmbiguous(error)) return;
+        }
+      }
+      const remainingBeforeDrain = await completeVolumeTokenAccountRead(keypair.publicKey);
+      const nonzeroBeforeDrain = nonzeroVolumeTokenAccounts(remainingBeforeDrain);
+      if (nonzeroBeforeDrain.length) {
+        row.message = row.message || `${nonzeroBeforeDrain.length} token position(s) still need a route; wallet and gas were retained.`;
+        return;
+      }
+      await closeEmptyVolumeTokenAccounts(wallet, remainingBeforeDrain);
+      const accountsAfterClose = await completeVolumeTokenAccountRead(keypair.publicKey);
+      if (accountsAfterClose.length) {
+        row.message = `${accountsAfterClose.length} empty token account(s) still need to close; wallet and rent remain recoverable.`;
+        return;
       }
       try {
         const drain = await drainSolFromWallet(keypair, destination);
@@ -71052,9 +72396,9 @@ async function webSweepBackgroundWallets(userId, body = {}) {
         sweptSol += sent;
         row.sentSol = Number(sent.toFixed(6));
       } catch (error) { row.message = friendlyError(error); }
-      const remaining = await getSolBalanceCached(keypair.publicKey, { force: true }).catch(() => 0);
-      const remainingTokens = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey, { force: true }).then((l) => sellableTokensFromAccounts(l.accounts || []).length).catch(() => 1);
-      if (remaining <= 20_000 && !remainingTokens) emptied.push(wallet.publicKey); // <= ~unsweepable dust + no tokens
+      const remaining = await getSolBalanceCached(keypair.publicKey, { force: true }).catch(() => null);
+      const accountsAfterDrain = await completeVolumeTokenAccountRead(keypair.publicKey);
+      if (remaining !== null && remaining <= 20_000 && accountsAfterDrain.length === 0) emptied.push(wallet.publicKey); // <= ~unsweepable dust + no token accounts
     } catch (error) { row.message = friendlyError(error); }
     finally { rows.push(row); }
   });
@@ -71787,16 +73131,20 @@ async function webBuyAmountLamports(wallet, body = {}) {
 
 async function webBalanceRows(userId, options = {}) {
   const store = await readWalletStore();
-  const wallets = walletsForOwner(store, userId);
+  const wallets = walletsForOwner(store, userId)
+    .map((wallet, ownerIndex) => ({ wallet, webIndex: ownerIndex + 1 }))
+    // Background volume wallets have their own status/recovery endpoints. Do
+    // not hydrate hundreds of hidden keys on every normal portfolio refresh.
+    .filter(({ wallet }) => !wallet.volumeBot && !wallet.ephemeral);
   const rows = [];
 
   // One batched RPC primes every wallet's SOL balance; the per-wallet reads
   // below then hit warm cache instead of issuing N round trips.
-  await primeSolBalancesBatch(wallets.map((wallet) => wallet.publicKey)).catch(() => 0);
+  await primeSolBalancesBatch(wallets.map(({ wallet }) => wallet.publicKey)).catch(() => 0);
 
-  await runWithConcurrency(wallets, CONFIG.balanceConcurrency, async (wallet, index) => {
+  await runWithConcurrency(wallets, CONFIG.balanceConcurrency, async ({ wallet, webIndex }, index) => {
     const row = {
-      index: index + 1,
+      index: webIndex,
       label: wallet.label,
       publicKey: wallet.publicKey,
       shortPublicKey: shortMint(wallet.publicKey),
@@ -72956,9 +74304,7 @@ async function webCreateKolCopyWallet(userId, body = {}) {
     loopDelaySeconds,
     slippageBps
   }).catch(() => {});
-  setTimeout(() => void processTradePlans().catch((error) => {
-    console.error("Web KOL copy-wallet watch failed:", error.message);
-  }), 1_000);
+  scheduleTradePlanProcessing("Web KOL copy-wallet watch", [1_000]);
 
   return {
     id: resultPlan.id,

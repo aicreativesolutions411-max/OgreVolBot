@@ -1512,9 +1512,26 @@
     if (!state.wallets.length) { await openWalletManager(); return; }
     const coin = state.selected || {}, key = coinKey(coin), rh = coin.chain === "robinhood" || isRh(key);
     if (rh) {
-      openSheet(`<div class="sheet-title"><img ${coinImageAttrs(coin)} alt=""><div><h2>Robinhood volume</h2><p>Native controls · ${escapeHtml(coin.symbol || short(key))}</p></div></div><div class="read-card"><h3>Round-trip engine</h3><p>Fund the derived Robinhood wallet from SOL, then run randomized rounds. Stop waits for the current action to finish.</p></div><div class="field"><label>Token contract</label><input data-volume-token value="${escapeHtml(key)}"></div><div class="field"><label>Wallet</label><select data-volume-wallet>${volumeWalletOptions()}</select></div><div class="field-row"><div class="field"><label>Fund from SOL first</label><input data-rh-volume-fund inputmode="decimal" value="0" placeholder="0.2"></div><div class="field"><label>Rounds</label><input data-volume-rounds inputmode="numeric" value="3"></div></div><div class="field-row"><div class="field"><label>Min ETH trade</label><input data-volume-min inputmode="decimal" value="0.002"></div><div class="field"><label>Max ETH trade</label><input data-volume-max inputmode="decimal" value="0.01"></div></div><div class="volume-actions"><button class="submit-trade" type="button" data-start-volume>Start</button><button type="button" data-stop-volume>Stop</button></div><div data-volume-status class="volume-status">Checking status…</div><p class="fineprint">Robinhood rounds use the selected derived wallet. SOL funding is converted automatically before the run when entered.</p>`);
+      openSheet(`<div class="sheet-title"><img ${coinImageAttrs(coin)} alt=""><div><h2>Robinhood volume</h2><p>Native controls · ${escapeHtml(coin.symbol || short(key))}</p></div></div>
+        <div class="read-card"><h3>Round-trip engine</h3><p>Fund the derived Robinhood wallet from SOL, then run randomized rounds. Stop waits for the current action to finish.</p></div>
+        <div class="field"><label>Token contract</label><input data-volume-token data-volume-chain="robinhood" value="${escapeHtml(key)}"></div>
+        <div class="field"><label>Wallet</label><select data-volume-wallet>${volumeWalletOptions()}</select></div>
+        <div class="field-row"><div class="field"><label>Fund from SOL first</label><input data-rh-volume-fund inputmode="decimal" value="0" placeholder="0.2"></div><div class="field"><label>Rounds</label><input data-volume-rounds inputmode="numeric" value="3"></div></div>
+        <div class="field-row"><div class="field"><label>Min ETH trade</label><input data-volume-min inputmode="decimal" value="0.002"></div><div class="field"><label>Max ETH trade</label><input data-volume-max inputmode="decimal" value="0.01"></div></div>
+        <div class="volume-actions"><button class="submit-trade" type="button" data-start-volume>Start</button><button type="button" data-stop-volume>Stop</button></div>
+        <div data-volume-status class="volume-status">Checking status…</div><p class="fineprint">Robinhood rounds use the selected derived wallet. SOL funding is converted automatically before the run when entered.</p>`);
     } else {
-      openSheet(`<div class="sheet-title"><img ${coinImageAttrs(coin)} alt=""><div><h2>Rolling wallet volume</h2><p>Fresh ghost wallets · offset sells · automatic sweep</p></div></div><div class="read-card"><h3>Natural cadence controls</h3><p>Buys and sells use different points in the rolling wallet pool, varied sizes, and the selected pattern. It keeps running server-side.</p></div><div class="field"><label>Token contract</label><input data-volume-token value="${escapeHtml(key)}" placeholder="Solana contract address"></div><div class="field"><label>Fund from wallet</label><select data-volume-wallet>${volumeWalletOptions()}</select></div><div class="field-row"><div class="field"><label>Min buy SOL</label><input data-volume-min inputmode="decimal" value="0.012"></div><div class="field"><label>Max buy SOL</label><input data-volume-max inputmode="decimal" value="0.03"></div></div><div class="field-row"><div class="field"><label>Cadence</label><select data-volume-speed><option value="20">Calm</option><option value="8" selected>Natural</option><option value="3">Fast</option></select></div><div class="field"><label>Pattern</label><select data-volume-pattern><option value="organic" selected>Organic mix</option><option value="waves">Waves</option><option value="steady">Steady</option><option value="ladder">Uptrend bias</option></select></div></div><label class="check-row"><input type="checkbox" data-volume-keep-dust checked> Leave one small token residue in each retired wallet</label><label class="check-row"><input type="checkbox" data-volume-offset checked> Offset sells to older wallets</label><div class="volume-actions"><button class="submit-trade" type="button" data-start-volume>Start</button><button type="button" data-stop-volume>Stop & sweep</button></div><button class="recovery-button" type="button" data-sweep-volume>Sweep any stranded ghost wallets</button><div data-volume-status class="volume-status">Checking status…</div><p class="fineprint">Wallet addresses cannot be burned. Empty ghost wallets are drained, removed from your list, and retired automatically. Keeping residue intentionally preserves a tiny token balance.</p>`);
+      openSheet(`<div class="sheet-title"><img ${coinImageAttrs(coin)} alt=""><div><h2>Rolling wallet volume</h2><p>Fresh ghost wallets · offset sells · automatic sweep</p></div></div>
+        <div class="read-card"><h3>Natural cadence controls</h3><p>Buys and sells use different points in the rolling wallet pool, varied sizes, and the selected pattern. It keeps running server-side.</p></div>
+        <div class="field"><label>Token contract</label><input data-volume-token data-volume-chain="solana" value="${escapeHtml(key)}" placeholder="Solana contract address"></div>
+        <div class="field"><label>Fund from wallet</label><select data-volume-wallet>${volumeWalletOptions()}</select></div>
+        <div class="field-row"><div class="field"><label>Min buy SOL</label><input data-volume-min inputmode="decimal" value="0.012"></div><div class="field"><label>Max buy SOL</label><input data-volume-max inputmode="decimal" value="0.03"></div></div>
+        <div class="field-row"><div class="field"><label>Cadence</label><select data-volume-speed><option value="20">Calm</option><option value="8" selected>Natural</option><option value="3">Fast</option></select></div><div class="field"><label>Pattern</label><select data-volume-pattern><option value="organic" selected>Organic mix</option><option value="waves">Waves</option><option value="steady">Steady</option><option value="ladder">Uptrend bias</option></select></div></div>
+        <label class="check-row"><input type="checkbox" data-volume-keep-dust> Leave one small token residue in each retired wallet</label>
+        <label class="check-row"><input type="checkbox" data-volume-offset checked> Offset sells to older wallets</label>
+        <div class="volume-actions"><button class="submit-trade" type="button" data-start-volume>Start</button><button type="button" data-stop-volume>Stop & sweep</button></div>
+        <button class="recovery-button" type="button" data-sweep-volume>Sweep any stranded ghost wallets</button>
+        <div data-volume-status class="volume-status">Checking status…</div><p class="fineprint">Wallet addresses cannot be burned. Empty ghost wallets are drained, removed from your list, and retired automatically. Keeping residue intentionally preserves a tiny token balance.</p>`);
     }
     pollFunVolume(rh);
   }
@@ -1531,8 +1548,9 @@
   }
   async function startFunVolume(button) {
     if (!(await ensureTradeReady())) return;
-    const token = String($("[data-volume-token]")?.value || "").trim(), rh = isRh(token), walletIndex = Number($("[data-volume-wallet]")?.value || state.activeWallet), min = $("[data-volume-min]")?.value || "", max = $("[data-volume-max]")?.value || "";
+    const tokenField = $("[data-volume-token]"), token = String(tokenField?.value || "").trim(), configuredRh = tokenField?.dataset.volumeChain === "robinhood", detectedRh = isRh(token), rh = configuredRh, walletIndex = Number($("[data-volume-wallet]")?.value || state.activeWallet), min = $("[data-volume-min]")?.value || "", max = $("[data-volume-max]")?.value || "";
     if (!token || !(Number(min) > 0) || !(Number(max) >= Number(min))) { toast("Check the contract and min/max size.", true); return; }
+    if (configuredRh !== detectedRh) { toast(`This volume panel is set up for ${configuredRh ? "Robinhood" : "Solana"}. Open the coin on the correct chain and try again.`, true); return; }
     button.disabled = true; button.textContent = "Starting…";
     let result;
     if (rh) {
@@ -1544,15 +1562,22 @@
       result = await post("/api/web/rh/volume/start", { tokenAddress: token, walletIndexes: [walletIndex], rounds: $("[data-volume-rounds]")?.value || "3", minEth: min, maxEth: max });
     } else {
       const pattern = $("[data-volume-pattern]")?.value || "organic", delaySecs = $("[data-volume-speed]")?.value || "8";
-      result = await post("/api/web/volume-bot/start", { tokenMint: token, sourceWalletIndex: walletIndex, rollingWallets: true, buyAmountSol: String((Number(min) + Number(max)) / 2), minBuyAmountSol: min, maxBuyAmountSol: max, poolSize: "3", maxRounds: "250", sellPercent: "100", buyBias: pattern === "ladder" ? "75" : "55", delaySecs, slippageBps: 600, sweepBack: true, keepDust: Boolean($("[data-volume-keep-dust]")?.checked), offsetSell: Boolean($("[data-volume-offset]")?.checked), staggerPattern: pattern, tradeAttemptId: attemptId("fun-volume") });
+      const sourceWallet = state.wallets.find((wallet) => Number(wallet.index) === walletIndex);
+      result = await post("/api/web/volume-bot/start", { tokenMint: token, sourceWalletIndex: walletIndex, sourceWalletPublicKey: sourceWallet?.publicKey || "", rollingWallets: true, buyAmountSol: String((Number(min) + Number(max)) / 2), minBuyAmountSol: min, maxBuyAmountSol: max, poolSize: "3", maxRounds: "60", sellPercent: "100", buyBias: pattern === "ladder" ? "75" : "55", delaySecs, slippageBps: 600, sweepBack: true, keepDust: Boolean($("[data-volume-keep-dust]")?.checked), offsetSell: Boolean($("[data-volume-offset]")?.checked), staggerPattern: pattern, tradeAttemptId: attemptId("fun-volume") });
     }
     button.disabled = false; button.textContent = "Start";
     if (result.ok && result.data?.ok) { toast("Volume run started"); pollFunVolume(rh); } else toast(result.data?.error || result.data?.message || "Could not start volume", true);
   }
   async function stopFunVolume() {
     const token = String($("[data-volume-token]")?.value || "").trim(), rh = isRh(token);
-    if (rh) await post("/api/web/rh/volume/stop", {});
-    else { const current = await request("/api/web/volume-bot"), run = (current.data?.bots || []).find((bot) => bot.status !== "completed" && !["done", "stopped"].includes(bot.stage)); if (!run) { toast("No active run.", true); return; } await post("/api/web/volume-bot/stop", { planId: run.id }); }
+    let result;
+    if (rh) result = await post("/api/web/rh/volume/stop", {});
+    else {
+      const current = await request("/api/web/volume-bot"), run = (current.data?.bots || []).find((bot) => bot.tokenMint === token && bot.status !== "completed" && !["done", "stopped"].includes(bot.stage));
+      if (!run) { toast("No active run for this coin.", true); return; }
+      result = await post("/api/web/volume-bot/stop", { planId: run.id });
+    }
+    if (!(result?.ok && result.data?.ok)) { toast(result?.data?.error || "Could not stop this run", true); return; }
     toast(rh ? "Stopping after the current action" : "Stopping, draining, and sweeping back"); pollFunVolume(rh);
   }
   async function sweepFunVolume() { const result = await post("/api/web/wallets/sweep-background", {}); toast(result.ok && result.data?.ok ? (result.data.summary || "Background wallets swept") : (result.data?.error || "Sweep failed"), !(result.ok && result.data?.ok)); pollFunVolume(false); }
@@ -1592,7 +1617,8 @@
     if (action === "watch") { ensureAccount().then((ready) => ready ? post("/api/web/watchlist", { tokenMint: key, action: "add", symbol: coin.symbol || "", name: coin.name || "", imageUrl: coin.imageUrl || "" }) : { ok: false }).then((result) => toast(result.ok ? "Saved to Watchlist" : "Could not save coin", !result.ok)); closeSheet(); return; }
     if (action === "telegram") { window.open(`https://t.me/${window.OGRE_PORTAL_CONFIG?.telegramBotUsername || "SlimeWiredBot"}?start=scan_${encodeURIComponent(key)}`, "_blank", "noopener"); return; }
     if (action === "install") { openFunInstall(); return; }
-    const routes = { copy: "copy", sniper: "sniper", launch: "launch" };
+    if (action === "launch") { location.assign("/?from=fun#launch"); return; }
+    const routes = { copy: "copy", sniper: "sniper" };
     if (routes[action]) location.href = `/#${routes[action]}`;
   }
 

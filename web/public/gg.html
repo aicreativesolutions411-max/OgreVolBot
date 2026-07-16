@@ -15,6 +15,10 @@
   (() => {
     try {
       const q = new URLSearchParams(location.search);
+      // Fun hands mobile users to this full launcher explicitly. Let that one
+      // deep link render here without changing their remembered layout choice.
+      const funLaunchHandoff = q.get("from") === "fun" && /^#launch(?:\/|$)/i.test(location.hash || "");
+      if (funLaunchHandoff) return;
       if (q.get("desktop") === "1") { localStorage.setItem("swPreferDesktop", "1"); return; }
       if (localStorage.getItem("swPreferDesktop") === "1") return;
       if (window.top !== window.self) return;                       // never redirect when embedded
@@ -3596,7 +3600,7 @@
     // Community social links — present on the wallet page for both signed-out and signed-in states.
     wrap.innerHTML+='<div class="wbox socbox"><h3>🐸 Join the SlimeWire community</h3><p class="sub">News, alpha drops and support — straight from the swamp.</p>'+
       '<div class="socrow">'+
-        '<a class="socbtn" href="https://x.com/i/communities/1930265213917425858" target="_blank" rel="noopener noreferrer">𝕏 X Community</a>'+
+        '<a class="socbtn" href="https://x.com/i/communities/1930265213917425858" target="_blank" rel="noopener noreferrer">𝕏 Community</a>'+
         '<a class="socbtn" href="https://t.me/SlimeWiredBot" target="_blank" rel="noopener noreferrer">✈ Telegram</a>'+
         '<a class="socbtn" href="https://www.slimewire.org" target="_blank" rel="noopener noreferrer">🌐 Website</a>'+
       '</div></div>';
