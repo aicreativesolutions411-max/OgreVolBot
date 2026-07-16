@@ -23,6 +23,13 @@ function functionBody(name) {
   return "";
 }
 
+function compileAsyncFunction(name, params, deps = {}) {
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const depNames = Object.keys(deps);
+  const factory = new AsyncFunction(...depNames, `return async function(${params.join(",")}) {${functionBody(name)}};`);
+  return factory(...depNames.map((key) => deps[key]));
+}
+
 test("volume cleanup requires complete fresh reads of both token programs", () => {
   const complete = functionBody("completeVolumeTokenAccountRead");
   assert.match(complete, /force: true, priority: true/);
@@ -32,12 +39,227 @@ test("volume cleanup requires complete fresh reads of both token programs", () =
 
   const cleanup = functionBody("cleanupVolumeBotWallet");
   const verifyAt = cleanup.indexOf("completeVolumeTokenAccountRead(publicKey)");
+  const sellAt = cleanup.indexOf("runVolumeBotExternalAction(plan, persist");
   const drainAt = cleanup.indexOf("drainSolFromWallet(");
   const pruneAt = cleanup.indexOf("pruneVolumeWallet(");
-  assert.ok(verifyAt >= 0 && verifyAt < drainAt && drainAt < pruneAt);
+  assert.ok(verifyAt >= 0 && verifyAt < sellAt && sellAt < drainAt && drainAt < pruneAt);
   assert.match(cleanup, /nonzeroVolumeTokenAccounts\(tokenAccounts\)/);
   assert.match(cleanup, /afterClose\.length/);
   assert.match(cleanup, /remainingAccounts\.length/);
+  assert.match(cleanup, /targetRaw > 0n && !residueAlreadyPrepared/);
+  assert.match(cleanup, /retainVolumeWalletAndReturnExcessSol\(plan, record, persist\)/);
+});
+
+test("cleanup skips a new sell claim when the screenshot wallet is already sold", async () => {
+  let actionCalls = 0;
+  let drains = 0;
+  let prunes = 0;
+  const cleanupState = (plan, publicKey) => {
+    plan.cleanupStateByWallet ||= {};
+    return (plan.cleanupStateByWallet[publicKey] ||= {});
+  };
+  const cleanup = await compileAsyncFunction("cleanupVolumeBotWallet", ["plan", "record", "slippageBps", "noBalance", "persist"], {
+    completeVolumeTokenAccountRead: async () => [],
+    volumeBotLogPush: () => {},
+    shortMint: (value) => value,
+    volumeBotCleanupWalletState: cleanupState,
+    volumeBotTargetRawAmount: () => 0n,
+    volumeBotSellPercent: () => 98,
+    runVolumeBotExternalAction: async () => { actionCalls += 1; },
+    sellVolumeCleanupToken: async () => {},
+    volumeBotTradeOutcomeAmbiguous: () => false,
+    volumeBotEnterRecovery: () => {},
+    volumeBotNeedsCleanupGas: () => false,
+    topUpVolumeCleanupGas: async () => false,
+    friendlyError: (error) => String(error?.message || error),
+    markVolumeBotCleanupTokenPhase: (plan, publicKey, phase) => Object.assign(cleanupState(plan, publicKey), { tokenPhase: phase }),
+    retainVolumeWalletAndReturnExcessSol: async () => { throw new Error("zero target must fully clean, not retain"); },
+    nonzeroVolumeTokenAccounts: () => [],
+    closeEmptyVolumeTokenAccounts: async () => {},
+    drainSolFromWallet: async () => { drains += 1; return { sentLamports: 123 }; },
+    decryptWallet: (record) => record,
+    PublicKey: class PublicKey { constructor(value) { this.value = value; } },
+    invalidateWalletReadCache: () => {},
+    getSolBalanceCached: async () => 0,
+    pruneVolumeWallet: async () => { prunes += 1; }
+  });
+  const plan = { tokenMint: "TOKEN", sourcePublicKey: "SOURCE", config: { keepDust: true, sweepBack: true } };
+  const result = await cleanup(plan, { publicKey: "GHOST" }, 600, () => false, async () => true);
+  assert.equal(actionCalls, 0);
+  assert.equal(drains, 1);
+  assert.equal(prunes, 1);
+  assert.equal(result.closed, true);
+  assert.equal(result.retained, false);
+  assert.equal(plan.cleanupStateByWallet.GHOST.tokenPhase, "empty");
+});
+
+test("keep-dust cleanup sells once, preserves residue, and returns excess SOL", async () => {
+  let read = 0;
+  let retained = 0;
+  let claimedAction = null;
+  const cleanupState = (plan, publicKey) => {
+    plan.cleanupStateByWallet ||= {};
+    return (plan.cleanupStateByWallet[publicKey] ||= {});
+  };
+  const targetRaw = (accounts) => accounts.reduce((sum, row) => sum + BigInt(row.rawAmount || 0), 0n);
+  const cleanup = await compileAsyncFunction("cleanupVolumeBotWallet", ["plan", "record", "slippageBps", "noBalance", "persist"], {
+    completeVolumeTokenAccountRead: async () => [{ mint: "TOKEN", rawAmount: read++ === 0 ? "100" : "2" }],
+    volumeBotLogPush: () => {},
+    shortMint: (value) => value,
+    volumeBotCleanupWalletState: cleanupState,
+    volumeBotTargetRawAmount: targetRaw,
+    expectedVolumeBotResidueRaw: (before, pct) => BigInt(before) - ((BigInt(before) * BigInt(pct)) / 100n),
+    applyVolumeBotCleanupStateUpdate: (plan, update) => Object.assign(cleanupState(plan, update.publicKey), update, { tokenPhase: update.tokenPhase }),
+    volumeBotSellPercent: () => 98,
+    runVolumeBotExternalAction: async (_plan, _persist, action, task) => { claimedAction = action; return task(); },
+    sellVolumeCleanupToken: async () => ({ ok: true }),
+    volumeBotTradeOutcomeAmbiguous: () => false,
+    volumeBotEnterRecovery: () => {},
+    volumeBotNeedsCleanupGas: () => false,
+    topUpVolumeCleanupGas: async () => false,
+    friendlyError: (error) => String(error?.message || error),
+    markVolumeBotCleanupTokenPhase: (plan, publicKey, phase, details = {}) => Object.assign(cleanupState(plan, publicKey), details, { tokenPhase: phase }),
+    retainVolumeWalletAndReturnExcessSol: async () => { retained += 1; return { closed: true, retained: true, sentLamports: 50 }; },
+    nonzeroVolumeTokenAccounts: () => { throw new Error("residue path must return before full cleanup"); },
+    closeEmptyVolumeTokenAccounts: async () => {},
+    drainSolFromWallet: async () => {},
+    decryptWallet: (record) => record,
+    PublicKey: class PublicKey {},
+    invalidateWalletReadCache: () => {},
+    getSolBalanceCached: async () => 0,
+    pruneVolumeWallet: async () => {}
+  });
+  const plan = { tokenMint: "TOKEN", sourcePublicKey: "SOURCE", config: { keepDust: true, sweepBack: true } };
+  const result = await cleanup(plan, { publicKey: "GHOST" }, 600, () => false, async () => true);
+  assert.equal(claimedAction.kind, "cleanup-sell");
+  assert.equal(claimedAction.tokenRawBefore, "100");
+  assert.equal(claimedAction.sellPercent, 98);
+  assert.equal(claimedAction.keepDust, true);
+  assert.equal(plan.cleanupStateByWallet.GHOST.tokenPhase, "residue");
+  assert.equal(retained, 1);
+  assert.deepEqual(result, { closed: true, retained: true, sentLamports: 50 });
+});
+
+test("a confirmed keep-dust sell survives stale balance propagation without selling twice", async () => {
+  let read = 0;
+  let sellClaims = 0;
+  let retained = 0;
+  let checkpoints = 0;
+  const cleanupState = (plan, publicKey) => {
+    plan.cleanupStateByWallet ||= {};
+    return (plan.cleanupStateByWallet[publicKey] ||= {});
+  };
+  const expectedResidue = (before, pct) => BigInt(before) - ((BigInt(before) * BigInt(pct)) / 100n);
+  const markPhase = (plan, publicKey, phase, details = {}) => Object.assign(
+    cleanupState(plan, publicKey), details, { tokenPhase: phase }
+  );
+  const cleanup = await compileAsyncFunction("cleanupVolumeBotWallet", ["plan", "record", "slippageBps", "noBalance", "persist"], {
+    completeVolumeTokenAccountRead: async () => [{ mint: "TOKEN", rawAmount: ["100", "100", "2"][read++] || "2" }],
+    volumeBotLogPush: () => {},
+    shortMint: (value) => value,
+    volumeBotCleanupWalletState: cleanupState,
+    volumeBotTargetRawAmount: (accounts) => accounts.reduce((sum, row) => sum + BigInt(row.rawAmount || 0), 0n),
+    expectedVolumeBotResidueRaw: expectedResidue,
+    applyVolumeBotCleanupStateUpdate: (plan, update) => markPhase(plan, update.publicKey, update.tokenPhase, update),
+    volumeBotSellPercent: () => 98,
+    runVolumeBotExternalAction: async (plan, _persist, action, task) => {
+      sellClaims += 1;
+      await task();
+      plan.lastExternalAction = { ...action, status: "confirmed", completedAt: new Date().toISOString() };
+    },
+    sellVolumeCleanupToken: async () => ({ tokenAmount: "98" }),
+    volumeBotTradeOutcomeAmbiguous: () => false,
+    volumeBotEnterRecovery: () => {},
+    volumeBotNeedsCleanupGas: () => false,
+    topUpVolumeCleanupGas: async () => false,
+    friendlyError: (error) => String(error?.message || error),
+    markVolumeBotCleanupTokenPhase: markPhase,
+    retainVolumeWalletAndReturnExcessSol: async () => { retained += 1; return { closed: true, retained: true, sentLamports: 50 }; },
+    nonzeroVolumeTokenAccounts: (accounts) => accounts.filter((row) => BigInt(row.rawAmount || 0) > 0n),
+    closeEmptyVolumeTokenAccounts: async () => {},
+    drainSolFromWallet: async () => {},
+    decryptWallet: (record) => record,
+    PublicKey: class PublicKey {},
+    invalidateWalletReadCache: () => {},
+    getSolBalanceCached: async () => 0,
+    pruneVolumeWallet: async () => {}
+  });
+  const plan = { tokenMint: "TOKEN", sourcePublicKey: "SOURCE", config: { keepDust: true, sweepBack: true } };
+  const persist = async () => { checkpoints += 1; return true; };
+  const first = await cleanup(plan, { publicKey: "GHOST" }, 600, () => false, persist);
+  assert.equal(first.closed, false);
+  assert.equal(sellClaims, 1);
+  assert.equal(plan.cleanupStateByWallet.GHOST?.tokenPhase, undefined);
+
+  const second = await cleanup(plan, { publicKey: "GHOST" }, 600, () => false, persist);
+  assert.equal(second.closed, true);
+  assert.equal(second.retained, true);
+  assert.equal(sellClaims, 1);
+  assert.equal(retained, 1);
+  assert.equal(plan.cleanupStateByWallet.GHOST.tokenPhase, "residue");
+  assert.ok(checkpoints >= 1);
+});
+
+test("a confirmed full cleanup sell survives stale balance propagation without selling twice", async () => {
+  let read = 0;
+  let sellClaims = 0;
+  let drains = 0;
+  let prunes = 0;
+  const rawReads = ["100", "100", "0", "0", "0"];
+  const cleanupState = (plan, publicKey) => {
+    plan.cleanupStateByWallet ||= {};
+    return (plan.cleanupStateByWallet[publicKey] ||= {});
+  };
+  const markPhase = (plan, publicKey, phase, details = {}) => Object.assign(
+    cleanupState(plan, publicKey), details, { tokenPhase: phase }
+  );
+  const cleanup = await compileAsyncFunction("cleanupVolumeBotWallet", ["plan", "record", "slippageBps", "noBalance", "persist"], {
+    completeVolumeTokenAccountRead: async () => {
+      const rawAmount = rawReads[read++] || "0";
+      return rawAmount === "0" ? [] : [{ mint: "TOKEN", rawAmount }];
+    },
+    volumeBotLogPush: () => {},
+    shortMint: (value) => value,
+    volumeBotCleanupWalletState: cleanupState,
+    volumeBotTargetRawAmount: (accounts) => accounts.reduce((sum, row) => sum + BigInt(row.rawAmount || 0), 0n),
+    expectedVolumeBotResidueRaw: (before, pct) => BigInt(before) - ((BigInt(before) * BigInt(pct)) / 100n),
+    applyVolumeBotCleanupStateUpdate: (plan, update) => markPhase(plan, update.publicKey, update.tokenPhase, update),
+    volumeBotSellPercent: () => 100,
+    runVolumeBotExternalAction: async (plan, _persist, action, task) => {
+      sellClaims += 1;
+      await task();
+      const { keepDust: _omittedFalse, ...durableAction } = action;
+      plan.lastExternalAction = { ...durableAction, status: "confirmed", completedAt: new Date().toISOString() };
+    },
+    sellVolumeCleanupToken: async () => ({ tokenAmount: "100" }),
+    volumeBotTradeOutcomeAmbiguous: () => false,
+    volumeBotEnterRecovery: () => {},
+    volumeBotNeedsCleanupGas: () => false,
+    topUpVolumeCleanupGas: async () => false,
+    friendlyError: (error) => String(error?.message || error),
+    markVolumeBotCleanupTokenPhase: markPhase,
+    retainVolumeWalletAndReturnExcessSol: async () => { throw new Error("full cleanup must not retain"); },
+    nonzeroVolumeTokenAccounts: (accounts) => accounts.filter((row) => BigInt(row.rawAmount || 0) > 0n),
+    closeEmptyVolumeTokenAccounts: async () => {},
+    drainSolFromWallet: async () => { drains += 1; return { sentLamports: 50 }; },
+    decryptWallet: (record) => record,
+    PublicKey: class PublicKey { constructor(value) { this.value = value; } },
+    invalidateWalletReadCache: () => {},
+    getSolBalanceCached: async () => 0,
+    pruneVolumeWallet: async () => { prunes += 1; }
+  });
+  const plan = { tokenMint: "TOKEN", sourcePublicKey: "SOURCE", config: { keepDust: false, sweepBack: true } };
+  const first = await cleanup(plan, { publicKey: "GHOST" }, 600, () => false, async () => true);
+  assert.equal(first.closed, false);
+  assert.equal(sellClaims, 1);
+
+  const second = await cleanup(plan, { publicKey: "GHOST" }, 600, () => false, async () => true);
+  assert.equal(second.closed, true);
+  assert.equal(second.retained, false);
+  assert.equal(sellClaims, 1);
+  assert.equal(drains, 1);
+  assert.equal(prunes, 1);
+  assert.equal(plan.cleanupStateByWallet.GHOST.tokenPhase, "empty");
 });
 
 test("fixed-pool start reserves durable state before its one funding submission", () => {
@@ -151,17 +373,53 @@ test("settled volume actions clear unknown checkpoints from complete live balanc
   assert.match(reconcile, /getSolBalanceCached/);
   assert.match(reconcile, /"sell", "offset-sell", "rolling-sell", "cleanup-sell"/);
   assert.match(reconcile, /targetStillHeld/);
-  assert.match(reconcile, /!soldOut && now < settleAt/);
+  assert.match(reconcile, /!soldOut && !cleanupSellProgressed && now < settleAt/);
+  assert.match(reconcile, /markVolumeBotCleanupTokenPhase/);
   assert.match(reconcile, /status: "reconciled_from_balances"/);
   assert.match(reconcile, /plan\.pendingAction = null/);
   assert.match(reconcile, /plan\.recoveryNotBeforeAt = null/);
   assert.match(functionBody("processVolumeBotPlan"), /await reconcileSettledVolumeAction\(plan, walletStore, persist\)/);
 });
 
+test("the legacy false cleanup claim in the screenshot reconciles immediately from zero balance", async () => {
+  let persisted = 0;
+  const cleanupState = (plan, publicKey) => {
+    plan.cleanupStateByWallet ||= {};
+    return (plan.cleanupStateByWallet[publicKey] ||= {});
+  };
+  const reconcile = await compileAsyncFunction("reconcileSettledVolumeAction", ["plan", "walletStore", "persist"], {
+    walletsForOwner: (store) => store.wallets,
+    completeVolumeTokenAccountRead: async () => [],
+    getSolBalanceCached: async () => 100,
+    PublicKey: class PublicKey { constructor(value) { this.value = value; } },
+    volumeBotTargetRawAmount: () => 0n,
+    markVolumeBotCleanupTokenPhase: (plan, publicKey, phase) => Object.assign(cleanupState(plan, publicKey), { tokenPhase: phase }),
+    VOLUME_BOT_RECOVERY_SETTLE_MS: 90_000,
+    volumeBotLogPush: () => {},
+    shortMint: (value) => value
+  });
+  const plan = {
+    botStage: "sweeping",
+    tokenMint: "TOKEN",
+    volumeActionSeq: 4,
+    recoveryNotBeforeAt: new Date(Date.now() + 60_000).toISOString(),
+    pendingAction: { kind: "cleanup-sell", status: "outcome_unknown", publicKey: "GHOST", sequence: 4, claimToken: "old-bogus-claim" }
+  };
+  const reconciled = await reconcile(plan, { wallets: [{ publicKey: "GHOST" }] }, async () => { persisted += 1; });
+  assert.equal(reconciled, true);
+  assert.equal(plan.pendingAction, null);
+  assert.equal(plan.volumeActionSeq, 5);
+  assert.equal(plan.lastExternalAction.status, "reconciled_from_balances");
+  assert.equal(plan.cleanupStateByWallet.GHOST.tokenPhase, "empty");
+  assert.equal(persisted, 1);
+});
+
 test("a proven-empty rolling sweep reconciles to completed before list or restart", () => {
   const reconcile = functionBody("reconcileFinishedRollingVolumeBots");
   assert.match(reconcile, /plan\.config\?\.rollingWallets/);
-  assert.match(reconcile, /livePoolWallets\.length/);
+  assert.match(reconcile, /planHasLiveCustody/);
+  assert.match(reconcile, /pool\.length \|\| plan\.activeWalletPublicKey \|\| plan\.pendingAction\?\.publicKey/);
+  assert.match(reconcile, /wallet\.volumePlanId/);
   assert.match(reconcile, /plan\.botStage = "done"/);
   assert.match(reconcile, /plan\.status = "completed"/);
   assert.match(reconcile, /plan\.pendingAction = null/);
@@ -202,11 +460,23 @@ test("volume actions use a locked monotonic claim and a stopped bot cannot submi
   assert.match(runner, /botStage === "running"/);
   assert.match(runner, /botStage === "sweeping"[\s\S]{0,220}"cleanup-sell"[\s\S]{0,120}"cleanup-gas"[\s\S]{0,120}"cleanup-excess-sol"/);
   assert.match(runner, /\["sweeping", "done", "stopped"\]/);
+  assert.match(runner, /processVolumeBotPlan\(plan, walletStore, persistPlanCheckpoint\)/);
+  assert.doesNotMatch(runner, /processVolumeBotPlan\(plan, walletStore, async \(\) =>/);
 
   const merge = functionBody("writeTradePlansPreservingNewPlans");
   assert.match(merge, /incomingSequence < currentSequence/);
   assert.match(merge, /currentClaim\?\.claimToken/);
   assert.match(merge, /!initialVolumePlanStates\.has\(incoming\.id\)/);
+});
+
+test("cleanup target raw balance totals every matching token account", () => {
+  const total = new Function("accounts", "tokenMint", functionBody("volumeBotTargetRawAmount"));
+  assert.equal(total([
+    { mint: "TARGET", rawAmount: "7" },
+    { mint: "OTHER", rawAmount: "999" },
+    { mint: "TARGET", rawAmount: "5" },
+    { mint: "TARGET", rawAmount: "bad" }
+  ], "TARGET"), 12n);
 });
 
 test("a sweeping worker can persist removal of a sold ghost without losing stop safety", () => {
