@@ -10476,8 +10476,8 @@ function launchCoinHtml() {
       html: `
           <div class="volume-grid">
             <label class="switch-row full-span">
-              <input data-launch-coin-dev-buy-enabled type="checkbox" ${draft.devBuyEnabled ? "checked" : ""}>
-              <span>Run Dev Wallet Initial Buy before the post-launch preset</span>
+              <input data-launch-coin-dev-buy-enabled type="checkbox" ${(Number(draft.devBuySol) > 0 || draft.devBuyEnabled) ? "checked" : ""}>
+              <span>Include a Dev Wallet Initial Buy (entering an amount turns this on)</span>
             </label>
             <label>
               Dev Wallet
@@ -10636,6 +10636,7 @@ function launchCoinHtml() {
 function readLaunchCoinDraft() {
   const draft = state.launchCoinDraft || {};
   const imageFile = $("[data-launch-coin-image]")?.files?.[0];
+  const devBuySol = normalizedQuickBuyAmount($("[data-launch-coin-dev-buy-sol]")?.value || draft.devBuySol || "") || "";
   return {
     name: ($("[data-launch-coin-name]")?.value || "").trim(),
     symbol: ($("[data-launch-coin-symbol]")?.value || "").trim().replace(/^\$/, "").toUpperCase(),
@@ -10665,9 +10666,11 @@ function readLaunchCoinDraft() {
       minHoldHours: Number($("[data-launch-coin-holder-reward-min-hours]")?.value ?? 4),
       maxRecipients: Number($("[data-launch-coin-holder-reward-max]")?.value || 100) || 100
     },
-    devBuyEnabled: Boolean($("[data-launch-coin-dev-buy-enabled]")?.checked),
+    // A positive amount always enables the dev buy. Do not make users also keep a
+    // separate switch in sync or let a stale unchecked draft silently drop the buy.
+    devBuyEnabled: Number(devBuySol) > 0,
     devWalletIndex: $("[data-launch-coin-dev-wallet]")?.value || draft.devWalletIndex || "",
-    devBuySol: normalizedQuickBuyAmount($("[data-launch-coin-dev-buy-sol]")?.value || draft.devBuySol || "") || "",
+    devBuySol,
     tokenMint: ($("[data-launch-coin-ca]")?.value || "").trim(),
     action: $("[data-launch-coin-action]")?.value || "watch",
     tradePresetId: $("[data-launch-coin-trade-preset]")?.value || "",
@@ -25038,7 +25041,7 @@ const queueLaunchDraftSave = (event) => {
     // there and silently fall back to the 0.1 default at launch time.
     if (event.target.matches("[data-launch-coin-amount], [data-launch-coin-dev-buy-sol]")) {
       const raw = String(event.target.value || "");
-      let clean = raw.replace(/[^0-9.]/g, "");
+      let clean = raw.replace(/,/g, ".").replace(/[^0-9.]/g, "");
       const dot = clean.indexOf(".");
       if (dot !== -1) clean = clean.slice(0, dot + 1) + clean.slice(dot + 1).replace(/\./g, "");
       if (clean !== raw) {
@@ -25046,6 +25049,14 @@ const queueLaunchDraftSave = (event) => {
         event.target.value = clean;
         try { event.target.setSelectionRange(pos - (raw.length - clean.length), pos - (raw.length - clean.length)); } catch {}
       }
+      if (event.target.matches("[data-launch-coin-dev-buy-sol]")) {
+        const toggle = $("[data-launch-coin-dev-buy-enabled]");
+        if (toggle) toggle.checked = Number(clean) > 0;
+      }
+    }
+    if (event.target.matches("[data-launch-coin-dev-buy-enabled]") && !event.target.checked) {
+      const amount = $("[data-launch-coin-dev-buy-sol]");
+      if (amount) amount.value = "";
     }
     if (launchDraftSaveTimer) clearTimeout(launchDraftSaveTimer);
     launchDraftSaveTimer = setTimeout(() => { launchDraftSaveTimer = null; saveLaunchCoinDraft({ silent: true }); }, 350);

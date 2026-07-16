@@ -71534,7 +71534,10 @@ async function webLaunchPumpCoin(userId, body = {}) {
   }
 
   const creatorFeeBps = cleanLaunchNumber(body.creatorFeeBps, 0, 0, 1000);
-  const devBuyEnabled = cleanLaunchBoolean(body.devBuyEnabled);
+  const devBuyAmountSol = cleanLaunchNumber(body.devBuySol, 0, 0, 1000);
+  // The amount is authoritative. Older/newer clients may omit or desync the UI
+  // enable flag, but a positive amount must never become a launch without a dev buy.
+  const devBuyEnabled = devBuyAmountSol > 0;
   const feeModeRaw = cleanLaunchText(body.feeMode, 24).toLowerCase();
   const feeMode = ["standard", "dev", "buyback", "burn", "split"].includes(feeModeRaw)
     ? feeModeRaw
@@ -71575,7 +71578,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
     creatorFeeSplit: normalizeReferralPayoutSplit(body.creatorFeeSplit) || [],
     devBuy: {
       enabled: devBuyEnabled,
-      amountSol: cleanLaunchNumber(body.devBuySol, 0, 0, 1000),
+      amountSol: devBuyAmountSol,
       walletIndex: cleanLaunchText(body.devWalletIndex || body.selectedDevWalletId || body.devWalletPublicKey, 64)
     },
     slippageBps: cleanLaunchNumber(body.slippageBps, 300, 1, 5000),

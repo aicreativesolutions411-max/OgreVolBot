@@ -4211,6 +4211,12 @@
   // typed or uploaded disappears. Snapshot on every edit; restore right after each render. Images live
   // in state.launchImg/Banner (file inputs can't be re-populated for security, so we re-show the preview).
   function lcSnapshot(){const root=$("#v-launch");if(!root)return;const f=state.launchForm||(state.launchForm={});root.querySelectorAll("input,textarea,select").forEach(el=>{if(!el.id||el.type==="file"||el.id==="lcChatCa")return;f[el.id]=(el.type==="checkbox")?el.checked:el.value;});}
+  function lcReadDevBuyAmount(){
+    const input=$("#lcDevBuy"),saved=state.launchForm&&state.launchForm.lcDevBuy;
+    const raw=String((input&&input.value)!=null?input.value:(saved||"")).trim().replace(",",".");
+    const amount=Number(raw.replace(/[^0-9.+-]/g,""));
+    return Number.isFinite(amount)&&amount>0?amount:0;
+  }
   function lcRestore(){const root=$("#v-launch");if(!root)return;const f=state.launchForm;if(f){root.querySelectorAll("input,textarea,select").forEach(el=>{if(!el.id||el.type==="file"||el.id==="lcChatCa"||!(el.id in f))return;if(el.type==="checkbox")el.checked=!!f[el.id];else if(f[el.id]!=null&&f[el.id]!=="")el.value=f[el.id];});}
     if(state.launchImg&&$("#lcImgPrev"))$("#lcImgPrev").innerHTML='<img src="'+state.launchImg.dataUrl+'" style="height:64px;width:64px;border-radius:10px;object-fit:cover;border:1px solid var(--border)">';
     if(state.launchBanner&&$("#lcBannerPrev"))$("#lcBannerPrev").innerHTML='<img src="'+state.launchBanner.dataUrl+'" style="height:40px;border-radius:10px;object-fit:cover;border:1px solid var(--border)">';
@@ -4324,8 +4330,10 @@
       }
       // No first buy set? Confirm — launching with no dev buy means empty starting liquidity + no early
       // position for you. Offer to set one (jump to the Dev tab + focus) or continue without.
-      const devRaw=($("#lcDevBuy")&&$("#lcDevBuy").value.trim())||"";
-      if(!(Number(devRaw||"0")>0)){
+      // Capture this once before any modal/auth await. A positive entered amount is the
+      // single source of truth for both the warning and the launch payload.
+      const requestedDevBuySol=lcReadDevBuyAmount();
+      if(!(requestedDevBuySol>0)){
         const cont=await confirmModal('<h3>No dev buy set</h3><p class="sub mut" style="font-size:13px;line-height:1.5">You haven\'t set a <b>first buy</b>, so this coin launches with <b>no starting buy from you</b> — it opens with empty liquidity and you hold none of the early supply. A small first buy becomes the starting liquidity and gives you an early position. Set one, or launch without?</p>','Continue without dev buy','Set a dev buy');
         if(!cont){state.launchTab="dev";document.querySelectorAll("#v-launch [data-ltab]").forEach(x=>x.classList.toggle("on",x.dataset.ltab==="dev"));document.querySelectorAll("#v-launch [data-lpanel]").forEach(p=>p.style.display=(p.dataset.lpanel==="dev"?"":"none"));const dfld=$("#lcDevBuy");if(dfld){dfld.focus();dfld.scrollIntoView({block:"center",behavior:"smooth"});}return;}
       }
@@ -4346,7 +4354,7 @@
       if(state.launchRail==="meteora"&&$("#lcCustomCurve")&&$("#lcCustomCurve").checked){body.customCurve=true;body.customInitialMcap=String(($("#lcCustomInit")&&$("#lcCustomInit").value)||"5000");body.customMigrationMcap=String(($("#lcCustomMig")&&$("#lcCustomMig").value)||"69000");}
       if(state.launchImg){body.imageDataUrl=state.launchImg.dataUrl;body.imageName=state.launchImg.name;body.imageType=state.launchImg.type;}
       if(state.launchBanner){body.bannerDataUrl=state.launchBanner.dataUrl;body.bannerName=state.launchBanner.name;body.bannerType=state.launchBanner.type;}
-      const dev=Number(($("#lcDevBuy")&&$("#lcDevBuy").value.trim())||"0");if(dev>0){body.devBuyEnabled=true;body.devBuySol=String(dev);body.bundleDevBuy=!!($("#lcBundle")&&$("#lcBundle").checked);body.antiSnipe=body.bundleDevBuy;body.devExitStrategy=lcReadExitStrategy("lcDev");Object.assign(body,body.devExitStrategy);}
+      if(requestedDevBuySol>0){body.devBuyEnabled=true;body.devBuySol=String(requestedDevBuySol);body.bundleDevBuy=!!($("#lcBundle")&&$("#lcBundle").checked);body.antiSnipe=body.bundleDevBuy;body.devExitStrategy=lcReadExitStrategy("lcDev");Object.assign(body,body.devExitStrategy);}
       // Multi-wallet launch bundle (matches the old "bundle" action): first-block buys across the user's
       // OTHER funded wallets, landed atomically with the create when the Jito bundle env is enabled.
       if($("#lcBundleWallets")&&$("#lcBundleWallets").checked){

@@ -903,7 +903,25 @@ test("launch form survives navigation + warns on no dev buy", () => {
     // "No dev buy set" confirmation before launching with an empty first buy.
     assert.match(src, /function confirmModal\(/);
     assert.match(src, /No dev buy set/);
+    // The same normalized value drives both the warning and payload, captured before
+    // modal/auth awaits can rebuild the form or leave client state out of sync.
+    assert.match(src, /function lcReadDevBuyAmount\(\)/);
+    assert.match(src, /const requestedDevBuySol=lcReadDevBuyAmount\(\)/);
+    assert.match(src, /if\(requestedDevBuySol>0\)\{body\.devBuyEnabled=true;body\.devBuySol=String\(requestedDevBuySol\)/);
   }
+});
+
+test("positive launch dev buy amount is authoritative across both web launchers and backend", () => {
+  const app = functionBody(appSource, "readLaunchCoinDraft");
+  assert.match(app, /const devBuySol = normalizedQuickBuyAmount/);
+  assert.match(app, /devBuyEnabled: Number\(devBuySol\) > 0/);
+  assert.match(appSource, /toggle\.checked = Number\(clean\) > 0/);
+  assert.match(appSource, /data-launch-coin-dev-buy-enabled[^\n]+!event\.target\.checked[\s\S]{0,180}amount\.value = ""/);
+
+  const server = functionBody(serverSource, "webLaunchPumpCoin");
+  assert.match(server, /const devBuyAmountSol = cleanLaunchNumber\(body\.devBuySol/);
+  assert.match(server, /const devBuyEnabled = devBuyAmountSol > 0/);
+  assert.match(server, /amountSol: devBuyAmountSol/);
 });
 
 test("launch UI is Pump-simple: Pump + Robinhood only, three clean tabs, dormant tools stay off-page", () => {
