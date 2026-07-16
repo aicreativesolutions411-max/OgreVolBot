@@ -32,6 +32,7 @@
     chain: FROM_CASH ? "solana" : "all",
     feed: FROM_CASH ? "new" : "movers",
     rows: [],
+    searchRows: [],
     selected: null,
     selectedDetail: null,
     view: "home",
@@ -55,6 +56,7 @@
     recents: readLocal(RECENTS_KEY, []),
     feedCache: new Map(),
     feedRequestVersion: 0,
+    searchRequestVersion: 0,
     feedTimer: null,
     imageHydrateVersion: 0,
     resolvedCoinImages: new Map(),
@@ -373,7 +375,9 @@
     return { ...row, chain: "solana", address: row.tokenMint, marketCap: Number(row.marketCap || row.marketCapUsd || row.fdv || 0), liquidity: Number(row.liquidityUsd || row.liquidity?.usd || row.reserveUsd || 0), holders: Number(row.holderCount || row.holders || row.holdersCount || 0), volume: Number(row.volumeH24 || row.volumeH1 || row.volumeUsd || row.volume5m || 0), volumeLabel: row.volumeLabel || row.volumeH1Label || row.volume5mLabel || "checking", change: Number(row.m5 ?? row.h1 ?? row.priceChange?.h1), age: ageLabel(row), imageUrl: row.imageUrl || row.avatarUrl || row.imageUri || row.logoUrl || row.meta?.imageUrl || row.metadata?.image || "" };
   }
   function normalizeRh(row) {
-    return { ...row, chain: "robinhood", tokenMint: row.address, marketCap: Number(row.marketCapUsd || row.mc || 0), liquidity: Number(row.liquidityUsd || row.liq || row.liquidity?.usd || 0), holders: Number(row.holderCount || row.holders || row.holdersCount || 0), volume: Number(row.volume24hUsd || row.vol24 || row.vol1 || 0), volumeLabel: row.volumeLabel || row.volume24hLabel || (Number(row.volume24hUsd || row.vol24 || row.vol1 || 0) > 0 ? "" : "checking"), change: Number(row.priceChange1h ?? row.ch1 ?? row.priceChange24h ?? row.ch24), age: ageLabel(row), imageUrl: row.imageUrl || row.localImagePath || row.iconUrl || row.imageUri || row.logoUrl || row.metadata?.image || "" };
+    const marketCap = Number(row.marketCapUsd || row.marketCap || row.mc || row.fdv || 0);
+    const volume = Number(row.volume24hUsd || row.volumeH24 || row.volumeUsd || row.vol24 || row.vol1 || row.volume?.h24 || 0);
+    return { ...row, chain: "robinhood", tokenMint: row.address || row.tokenMint, address: row.address || row.tokenMint, marketCap, liquidity: Number(row.liquidityUsd || row.liquidity || row.liq || row.liquidity?.usd || 0), holders: Number(row.holderCount || row.holders || row.holdersCount || 0), volume, volumeLabel: row.volumeLabel || row.volume24hLabel || (volume > 0 ? "" : "checking"), change: Number(row.priceChange1h ?? row.m5 ?? row.h1 ?? row.ch1 ?? row.priceChange24h ?? row.ch24), age: ageLabel(row), imageUrl: row.imageUrl || row.localImagePath || row.iconUrl || row.imageUri || row.logoUrl || row.metadata?.image || "" };
   }
   const FEED_CONFIG = {
     movers: { bucket: "live", sort: "best", rh: "trending", note: "Live movers ranked by signal" },
@@ -556,7 +560,7 @@
   }
   async function openCoin(key, chainHint = "", options = {}) {
     const chain = chainHint === "rh" || isRh(key) ? "robinhood" : "solana";
-    let coin = state.rows.find((row) => coinKey(row).toLowerCase() === String(key).toLowerCase()) || { address: key, tokenMint: key, chain };
+    let coin = [...state.rows, ...state.searchRows].find((row) => coinKey(row).toLowerCase() === String(key).toLowerCase()) || { address: key, tokenMint: key, chain };
     state.selected = coin;
     state.selectedDetail = null;
     state.coinCalls = [];
@@ -651,7 +655,7 @@
   }
   function renderCoinShell() {
     const coin = state.selected || {}, key = coinKey(coin), chain = coin.chain === "robinhood" ? "rh" : "sol";
-    $("[data-coin-mini]").innerHTML = `<div class="coin-identity"><img ${coinImageAttrs(coin)} style="background-image:url('${coinBadge(coin)}')" alt="" decoding="async" referrerpolicy="no-referrer"><div><b>${escapeHtml(coin.symbol || short(key))}</b><span>${chain === "rh" ? "Robinhood Chain" : "Solana"} · ${escapeHtml(short(key))}</span></div></div><div class="coin-head-quote"><b>${formatUsd(coin.marketCap || coin.mc)}</b><span class="${Number(coin.change) >= 0 ? "up" : "down"}">${formatPct(coin.change)} · 1H</span></div>`;
+    $("[data-coin-mini]").innerHTML = `<div class="coin-identity"><img ${coinImageAttrs(coin)} style="background-image:url('${coinBadge(coin)}')" alt="" decoding="async" referrerpolicy="no-referrer"><div><b>${escapeHtml(coin.symbol || short(key))}</b><button class="coin-ca-button" type="button" data-copy-coin title="Copy ${escapeHtml(key)}"><span>${chain === "rh" ? "Robinhood Chain" : "Solana"} · ${escapeHtml(short(key))}</span><i>▣</i></button></div></div><div class="coin-head-quote"><b>${formatUsd(coin.marketCap || coin.mc)}</b><span class="${Number(coin.change) >= 0 ? "up" : "down"}">${formatPct(coin.change)} · 1H</span></div>`;
     $("[data-coin-stats]").innerHTML = `<div><span>Market cap</span><b>${formatUsd(coin.marketCap || coin.mc)}</b></div><div><span>Liquidity</span><b>${formatUsd(coin.liquidity || coin.liq || coin.liquidityUsd)}</b></div><div><span>Holders</span><b>${Number(coin.holders || coin.holderCount) > 0 ? Number(coin.holders || coin.holderCount).toLocaleString() : "checking"}</b></div><div><span>Volume</span><b>${coin.volume > 0 ? formatUsd(coin.volume) : escapeHtml(coin.volumeLabel || "checking")}</b></div>`;
     renderChart();
     renderQuickTrade();
@@ -984,7 +988,7 @@
   function openSearch() {
     const overlay = $("[data-search-overlay]"), input = $("[data-search-input]"); overlay.hidden = false; renderSearchHome(); setTimeout(() => input.focus(), 30);
   }
-  function closeSearch() { $("[data-search-overlay]").hidden = true; $("[data-search-input]").value = ""; }
+  function closeSearch() { state.searchRequestVersion += 1; $("[data-search-overlay]").hidden = true; $("[data-search-input]").value = ""; }
   function renderSearchHome() {
     const content = $("[data-search-content]");
     // Big names doing well: the highest-liquidity coins from the live feed, one tap to open.
@@ -992,6 +996,66 @@
     content.innerHTML = `<h3>Recent searches</h3><div class="recent-list">${state.recents.length ? state.recents.map((item) => { const rh = item.chain === "robinhood", mc = item.marketCapLabel || formatUsd(item.marketCap); return `<button type="button" data-open-coin="${escapeHtml(item.key)}" data-chain-kind="${rh ? "rh" : "sol"}"><span class="recent-avatar"><img src="${escapeHtml(item.imageUrl || mascot(item.key))}" alt=""><i class="chain-badge ${rh ? "rh" : "sol"}">${rh ? "RH" : "SOL"}</i></span><span><b>${escapeHtml(item.symbol || short(item.key))}</b><small>${escapeHtml((item.name ? `${item.name} · ` : "") + short(item.key))}</small></span><em>${mc !== "—" ? `MC ${escapeHtml(mc)}` : "recent"}</em></button>`; }).join("") : '<span style="color:var(--muted);font-size:11px">Your recent coins stay on this device.</span>'}</div>${topLiq.length ? `<h3 style="margin-top:24px">💧 Top liquidity</h3><div class="coin-list">${topLiq.map(coinRowHtml).join("")}</div>` : ""}<h3 style="margin-top:24px">Quick routes</h3><div class="tool-grid"><button class="tool-card" type="button" data-search-chain="solana"><b>Solana movers</b><span>Live market feed</span></button><button class="tool-card" type="button" data-search-chain="robinhood"><b>Robinhood</b><span>New chain coins</span></button><button class="tool-card" type="button" data-nav="leaders"><b>Discover traders</b><span>Follow alerts · public proof</span></button></div>`;
   }
   let searchTimer = null;
+  function normalizeSearchCoin(row = {}) {
+    const key = String(row.address || row.tokenMint || row.key || "").trim();
+    const chain = String(row.chain || "").toLowerCase();
+    return chain === "robinhood" || chain === "rh" || isRh(key)
+      ? normalizeRh({ ...row, address: key, tokenMint: key })
+      : normalizeSol({ ...row, tokenMint: key, address: key });
+  }
+  function mergeSearchCoin(current, incoming) {
+    if (!current) return incoming;
+    const merged = { ...current, ...incoming };
+    for (const field of ["marketCap", "liquidity", "holders", "volume"]) {
+      merged[field] = Number(incoming[field]) > 0 ? Number(incoming[field]) : Number(current[field] || 0);
+    }
+    merged.imageUrl = directCoinImage(incoming) || directCoinImage(current) || "";
+    merged.volumeLabel = merged.volume > 0 ? "" : (incoming.volumeLabel || current.volumeLabel || "checking");
+    return merged;
+  }
+  function addSearchMatches(target, incoming) {
+    for (const raw of (incoming || [])) {
+      const coin = normalizeSearchCoin(raw), key = coinKey(coin).toLowerCase();
+      if (!key) continue;
+      const index = target.findIndex((item) => coinKey(item).toLowerCase() === key);
+      if (index >= 0) target[index] = mergeSearchCoin(target[index], coin);
+      else target.push(coin);
+    }
+  }
+  function searchRelevance(coin, rawQuery) {
+    const q = String(rawQuery || "").trim().replace(/^\$+/, "").toLowerCase(), qn = q.replace(/\s+/g, "");
+    const symbol = String(coin.symbol || "").toLowerCase(), name = String(coin.name || "").toLowerCase(), nn = name.replace(/\s+/g, "");
+    const key = coinKey(coin).toLowerCase();
+    if (key === q) return 5;
+    if (symbol === q || nn === qn) return 4;
+    if (symbol.startsWith(q) || name.startsWith(q) || nn.startsWith(qn)) return 3;
+    return symbol.includes(q) || name.includes(q) || nn.includes(qn) ? 2 : 0;
+  }
+  function sortSearchMatches(matches, query) {
+    return matches.sort((a, b) => searchRelevance(b, query) - searchRelevance(a, query) || searchRank(a, b));
+  }
+  function localSearchMatches(query) {
+    const q = String(query || "").trim().replace(/^\$+/, "").toLowerCase();
+    if (!q) return [];
+    const pool = [...state.rows];
+    for (const entry of state.feedCache.values()) pool.push(...(entry?.rows || []));
+    pool.push(...state.recents.map((item) => ({ ...item, address: item.key, tokenMint: item.key })));
+    const matches = [];
+    addSearchMatches(matches, pool.filter((row) => searchRelevance(normalizeSearchCoin(row), q) > 0));
+    return sortSearchMatches(matches, q).slice(0, 14);
+  }
+  function searchCoinRowHtml(coin, index = 0) {
+    const key = coinKey(coin), chain = coin.chain === "robinhood" ? "rh" : "sol";
+    const change = Number(coin.change), changeClass = Number.isFinite(change) ? (change >= 0 ? "up" : "down") : "";
+    return `<button class="coin-row search-coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="${chain}"><span class="coin-avatar" style="background-image:url('${coinBadge(coin)}')"><img ${coinImageAttrs(coin)} alt="" loading="${index < 8 ? "eager" : "lazy"}" decoding="async" referrerpolicy="no-referrer"><i class="chain-badge ${chain}">${chain === "rh" ? "RH" : "SOL"}</i></span><span class="coin-info"><span class="coin-title"><b>${escapeHtml(coin.symbol || short(key))}</b><span>${escapeHtml(coin.name || "")}</span></span><span class="coin-meta"><i>24h ${escapeHtml(coin.volume > 0 ? formatUsd(coin.volume) : (coin.volumeLabel || "loading"))}</i><i>Liq ${escapeHtml(formatUsd(coin.liquidity))}</i><i class="${changeClass}">${escapeHtml(formatPct(change))}</i></span></span><span class="coin-value"><b>${escapeHtml(formatUsd(coin.marketCap))}</b><span>MARKET CAP</span></span></button>`;
+  }
+  function renderSearchMatches(content, matches, query, pending = false) {
+    const rows = sortSearchMatches(matches.slice(), query).slice(0, 14);
+    state.searchRows = rows;
+    content.innerHTML = rows.length
+      ? `<h3>Results · ${pending ? "updating live data" : "live market data"}</h3><div class="coin-list">${rows.map(searchCoinRowHtml).join("")}</div>`
+      : (pending ? '<div class="skeleton-list"></div>' : emptyState("No exact match", "Paste the full Solana or Robinhood contract address."));
+  }
   // Name/ticker search hits DexScreener straight from the phone (the server IP is rate-limited,
   // the user's isn't), then falls back to the backend. "cashcow" matches "Cash Cow" via
   // space-stripped comparison; results always order top liquidity -> lowest.
@@ -1050,32 +1114,28 @@
   }
   async function runSearch(query) {
     const content = $("[data-search-content]");
-    if (!query.trim()) { renderSearchHome(); return; }
-    content.innerHTML = '<div class="skeleton-list"></div>';
-    const direct = /^(0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$/.test(query.trim());
-    // Merge BOTH sources in parallel: DexScreener direct (user IP) + backend (the Robinhood
-    // universe knows every RH coin by name, so partials like "cash" surface cashcow).
-    let matches = [];
-    if (direct) {
-      const result = await request(`/api/web/token-search?q=${encodeURIComponent(query.trim())}`);
-      matches = result.ok ? (result.data?.matches || []) : [];
-    } else {
-      const [client, server] = await Promise.all([
-        clientTokenSearch(query.trim()),
-        request(`/api/web/token-search?q=${encodeURIComponent(query.trim())}`).catch(() => ({ ok: false }))
-      ]);
-      const seenKeys = new Set();
-      for (const row of [...(client || []), ...((server?.ok && server.data?.matches) || [])]) {
-        const k = `${String(row.chain || "solana")}:${String(row.tokenMint || row.address || "").toLowerCase()}`;
-        if (!k.split(":")[1] || seenKeys.has(k)) continue;
-        seenKeys.add(k);
-        matches.push(row);
-      }
-    }
-    await enrichSearchMatches(matches);   // fill MC / volume / liquidity / pfp before render
-    matches = matches.slice().sort(searchRank);
-    const rows = matches.map((row) => (row.chain === "robinhood" ? normalizeRh({ ...row, address: row.address || row.tokenMint }) : normalizeSol(row)));
-    content.innerHTML = rows.length ? `<h3>Results · by market cap</h3><div class="coin-list">${rows.map(coinRowHtml).join("")}</div>` : emptyState("No exact match", "Paste the full Solana or Robinhood contract address.");
+    const trimmed = query.trim(), version = ++state.searchRequestVersion;
+    if (!trimmed) { renderSearchHome(); return; }
+    const matches = localSearchMatches(trimmed);
+    renderSearchMatches(content, matches, trimmed, true);
+    const stillCurrent = () => version === state.searchRequestVersion && $("[data-search-input]").value.trim() === trimmed;
+    const paint = (incoming = []) => {
+      if (!stillCurrent()) return false;
+      addSearchMatches(matches, incoming);
+      renderSearchMatches(content, matches, trimmed, true);
+      return true;
+    };
+    const direct = /^(0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$/.test(trimmed);
+    const tasks = [];
+    if (!direct) tasks.push(clientTokenSearch(trimmed).then((rows) => paint(rows || [])).catch(() => false));
+    tasks.push(request(`/api/web/token-search?q=${encodeURIComponent(trimmed)}`).then((result) => paint(result.ok ? (result.data?.matches || []) : [])).catch(() => false));
+    await Promise.allSettled(tasks);
+    if (!stillCurrent()) return;
+    await enrichSearchMatches(matches);
+    if (!stillCurrent()) return;
+    const normalized = matches.map(normalizeSearchCoin);
+    matches.splice(0, matches.length, ...normalized);
+    renderSearchMatches(content, matches, trimmed, false);
   }
 
   function openSheet(html) { $("[data-sheet-content]").innerHTML = html; $("[data-sheet-overlay]").hidden = false; }
