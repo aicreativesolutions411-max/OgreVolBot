@@ -142,16 +142,20 @@ test("the durable worker lease permits every recovery action while sweeping", ()
   assert.match(worker, /botStage === "running" \|\| cleanupClaim/);
 });
 
-test("a landed cleanup sell clears an unknown checkpoint from the proven zero balance", () => {
-  const reconcile = functionBody("reconcileLandedVolumeCleanupSell");
-  assert.match(reconcile, /pending\?\.kind \|\| ""\) !== "cleanup-sell"/);
-  assert.match(reconcile, /\["submitting", "outcome_unknown"\]/);
-  assert.match(reconcile, /getReliableTokenBalanceForMint/);
-  assert.match(reconcile, /BigInt\(token\?\.rawAmount \|\| 0\) > 0n/);
-  assert.match(reconcile, /status: "reconciled_from_balance"/);
+test("settled volume actions clear unknown checkpoints from complete live balances", () => {
+  const reconcile = functionBody("reconcileSettledVolumeAction");
+  assert.match(reconcile, /pending\?\.status[\s\S]{0,100}!== "outcome_unknown"/);
+  assert.doesNotMatch(reconcile, /\["submitting", "outcome_unknown"\]/);
+  assert.match(reconcile, /VOLUME_BOT_RECOVERY_SETTLE_MS/);
+  assert.match(reconcile, /completeVolumeTokenAccountRead/);
+  assert.match(reconcile, /getSolBalanceCached/);
+  assert.match(reconcile, /"sell", "offset-sell", "rolling-sell", "cleanup-sell"/);
+  assert.match(reconcile, /targetStillHeld/);
+  assert.match(reconcile, /!soldOut && now < settleAt/);
+  assert.match(reconcile, /status: "reconciled_from_balances"/);
   assert.match(reconcile, /plan\.pendingAction = null/);
   assert.match(reconcile, /plan\.recoveryNotBeforeAt = null/);
-  assert.match(functionBody("processVolumeBotPlan"), /await reconcileLandedVolumeCleanupSell\(plan, walletStore, persist\)/);
+  assert.match(functionBody("processVolumeBotPlan"), /await reconcileSettledVolumeAction\(plan, walletStore, persist\)/);
 });
 
 test("a proven-empty rolling sweep reconciles to completed before list or restart", () => {
@@ -202,6 +206,85 @@ test("volume actions use a locked monotonic claim and a stopped bot cannot submi
   const merge = functionBody("writeTradePlansPreservingNewPlans");
   assert.match(merge, /incomingSequence < currentSequence/);
   assert.match(merge, /currentClaim\?\.claimToken/);
+  assert.match(merge, /!initialVolumePlanStates\.has\(incoming\.id\)/);
+});
+
+test("a sweeping worker can persist removal of a sold ghost without losing stop safety", () => {
+  const merge = new Function("current", "incoming", "initial", functionBody("mergeVolumePlanAcrossStop"));
+  const current = {
+    id: "volume-1",
+    status: "volume_bot",
+    botStage: "sweeping",
+    config: { keepDust: false },
+    manualRecoveryRequestedAt: "manual",
+    pool: [{ publicKey: "sold" }, { publicKey: "remaining" }],
+    tradingPublicKeys: ["sold", "remaining"]
+  };
+  const initial = {
+    botStage: "sweeping",
+    manualRecoveryRequestedAt: "manual",
+    pool: current.pool.map((entry) => ({ ...entry }))
+  };
+  const advanced = merge(current, {
+    ...current,
+    botStage: "sweeping",
+    config: { keepDust: true },
+    pool: [{ publicKey: "remaining" }]
+  }, initial);
+  assert.deepEqual(advanced.pool.map((entry) => entry.publicKey), ["remaining"]);
+  assert.equal(advanced.config.keepDust, false);
+  assert.equal(advanced.manualRecoveryRequestedAt, "manual");
+
+  const completed = merge(current, { ...current, status: "completed", botStage: "done", pool: [] }, initial);
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.botStage, "done");
+  assert.deepEqual(completed.pool, []);
+
+  const stopped = merge(current, {
+    ...current,
+    status: "volume_bot",
+    botStage: "running",
+    pool: [...current.pool, { publicKey: "discovered" }]
+  }, initial);
+  assert.equal(stopped.botStage, "sweeping");
+  assert.deepEqual(stopped.pool.map((entry) => entry.publicKey), ["sold", "remaining", "discovered"]);
+
+  const concurrent = merge(
+    { ...current, pool: [...current.pool, { publicKey: "concurrent" }] },
+    { ...current, status: "completed", botStage: "done", pool: [] },
+    initial
+  );
+  assert.equal(concurrent.botStage, "sweeping");
+  assert.deepEqual(concurrent.pool.map((entry) => entry.publicKey), ["concurrent"]);
+  assert.deepEqual(concurrent.tradingPublicKeys, ["sold", "remaining", "concurrent"]);
+
+  const manualRecoveryWonRace = merge(
+    { ...current, manualRecoveryRequestedAt: "new-manual-sweep" },
+    { ...current, status: "completed", botStage: "done", pool: [] },
+    initial
+  );
+  assert.equal(manualRecoveryWonRace.botStage, "sweeping");
+  assert.deepEqual(manualRecoveryWonRace.pool.map((entry) => entry.publicKey), ["sold", "remaining"]);
+
+  const stopWonRace = merge(
+    current,
+    { ...current, status: "completed", botStage: "done", pool: [] },
+    { botStage: "running", pool: current.pool.map((entry) => ({ ...entry })) }
+  );
+  assert.equal(stopWonRace.botStage, "sweeping");
+  assert.deepEqual(stopWonRace.pool.map((entry) => entry.publicKey), ["sold", "remaining"]);
+
+  const fixed = merge(
+    { ...current, pool: [], sweepCursor: 0, tradingPublicKeys: ["a", "b"] },
+    { ...current, pool: [], sweepCursor: 1, tradingPublicKeys: ["a", "b"] },
+    { botStage: "sweeping", pool: [] }
+  );
+  assert.equal(fixed.sweepCursor, 1);
+});
+
+test("manual background recovery schedules an immediate safe worker pass", () => {
+  const sweep = functionBody("webSweepBackgroundWallets");
+  assert.match(sweep, /scheduleTradePlanProcessing\("Manual volume recovery", \[25, 1000, 5000\]\)/);
 });
 
 test("fixed ghost keys remain discoverable across a crash before plan attachment", () => {
