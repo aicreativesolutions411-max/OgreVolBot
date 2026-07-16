@@ -20,7 +20,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "44", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "45", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -33,7 +33,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v37/);
+  assert.match(funWorker, /slimewire-fun-v38/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -54,12 +54,19 @@ test("/fun keeps the reference layout clean while carrying SlimeWire features", 
   assert.match(css, /\.feed-actions\{display:flex/);
 });
 
-test("Fun Launch opens the full launcher without the mobile bootstrap redirecting back", () => {
-  assert.match(js, /action === "launch"[\s\S]{0,100}location\.assign\("\/\?from=fun#launch"\)/);
+test("Fun Launch keeps the complete existing launcher inside the Go layout", () => {
+  assert.match(html, /data-view="launch"[\s\S]{0,500}data-launch-frame/);
+  assert.match(js, /function openFunLaunch\(\)/);
+  assert.match(js, /frame\.src = "\/\?from=fun&embed=fun-launch#launch"/);
+  assert.match(js, /action === "launch"[\s\S]{0,100}openFunLaunch\(\)/);
+  assert.doesNotMatch(js, /location\.assign\("\/\?from=fun#launch"\)/);
+  assert.match(css, /\.launch-view\.active/);
   for (const page of [desktopHtml, desktopAliasHtml]) {
     assert.match(page, /const funLaunchHandoff = q\.get\("from"\) === "fun"/);
     assert.match(page, /\^#launch\(\?:\\\/\|\$\)\/i\.test\(location\.hash \|\| ""\)/);
     assert.match(page, /if \(funLaunchHandoff\) return;/);
+    assert.match(page, /get\("embed"\)===\"fun-launch\"/);
+    assert.match(page, /body\.fun-launch-embed \.topbar/);
   }
 });
 
@@ -69,9 +76,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=29/);
-  assert.match(funWorker, /slimewire-fun-v37/);
-  assert.match(funWorker, /fun\.css\?v=29/);
+  assert.match(html, /fun\.css\?v=30/);
+  assert.match(funWorker, /slimewire-fun-v38/);
+  assert.match(funWorker, /fun\.css\?v=30/);
 });
 
 test("/fun keeps the wallet funding card compact and scannable", () => {
@@ -80,8 +87,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=44/);
-  assert.match(funWorker, /fun\.js\?v=44/);
+  assert.match(html, /fun\.js\?v=45/);
+  assert.match(funWorker, /fun\.js\?v=45/);
 });
 
 test("Connect and Deposit share one simple funding flow without surprise wallet downloads", () => {
@@ -132,7 +139,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v37"/);
+  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v38"/);
   assert.match(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
   assert.match(funWorker, /self\.clients\.claim\(\)/);
@@ -563,7 +570,7 @@ test("/fun indicator paint uses real OHLC candles for Fibonacci, RSI, and MACD",
   assert.ok(html.indexOf("lightweight-charts.standalone.production.js") < html.indexOf("fun-indicators.js"));
   assert.match(html, /fun-indicators\.js\?v=6/);
   assert.match(funWorker, /fun-indicators\.js\?v=6/);
-  assert.match(funWorker, /fun\.css\?v=29/);
+  assert.match(funWorker, /fun\.css\?v=30/);
   assert.match(indicators, /\/api\/chart\?ca=/);
   assert.match(indicators, /api\.geckoterminal\.com\/api\/v2\/networks\/\$\{network\}\/pools/);
   assert.match(indicators, /function fibonacciPanel/);

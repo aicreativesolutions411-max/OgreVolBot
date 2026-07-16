@@ -13,11 +13,11 @@
   <link rel="icon" href="/icons/icon-192.png">
   <link rel="apple-touch-icon" href="/assets/slimewire/fun-app-icon-180.png">
   <link rel="manifest" href="/fun-manifest.webmanifest?v=2">
-  <link rel="stylesheet" href="/fun.css?v=29">
+  <link rel="stylesheet" href="/fun.css?v=30">
   <script src="/config.js"></script>
   <script defer src="/slimewire-funding.js?v=8"></script>
   <script defer src="/vendor/lightweight-charts.standalone.production.js"></script>
-  <script defer src="/fun.js?v=44"></script>
+  <script defer src="/fun.js?v=45"></script>
   <script defer src="/fun-indicators.js?v=6"></script>
 </head>
 <body>
@@ -86,6 +86,11 @@
           <button class="quick-clipboard" type="button" data-quick-clipboard>Paste from clipboard</button>
         </form>
         <div class="quick-route-content" data-quick-route-content></div>
+      </section>
+
+      <section class="fun-view launch-view" data-view="launch" aria-label="Launch a coin">
+        <header class="launch-view-head"><button class="icon-btn" type="button" data-launch-back aria-label="Back to SlimeWire Go">‹</button><div><b>Launch a coin</b><span>Same full launcher · stays inside SlimeWire Go</span></div></header>
+        <iframe class="launch-view-frame" data-launch-frame title="SlimeWire coin launcher" allow="clipboard-read; clipboard-write"></iframe>
       </section>
 
       <section class="fun-view coin-view" data-view="coin" aria-label="Coin details">

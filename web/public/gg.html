@@ -540,9 +540,17 @@
     #app{zoom:.95}
     html,body{overflow-x:hidden}
   }
+  /* Same launcher, embedded inside SlimeWire Go without Terminal chrome. */
+  body.fun-launch-embed #app{height:100dvh!important;zoom:1!important}
+  body.fun-launch-embed .topbar,body.fun-launch-embed #subbar,body.fun-launch-embed .statusbar,body.fun-launch-embed .botnav{display:none!important}
+  body.fun-launch-embed main{padding:0!important;overflow:hidden}
+  body.fun-launch-embed #v-launch{inset:0;overflow:auto;padding:0 0 24px}
+  body.fun-launch-embed #v-launch .wgrid{padding:8px 6px 24px}
+  body.fun-launch-embed #v-launch .launch-card{max-width:640px}
 </style>
 </head>
 <body>
+<script>if(new URLSearchParams(location.search).get("embed")==="fun-launch")document.body.classList.add("fun-launch-embed");</script>
 <div id="app">
   <header class="topbar">
     <a class="brand" href="#trending">

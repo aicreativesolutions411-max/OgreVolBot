@@ -69,6 +69,7 @@
     quickPanel: "trade",
     pendingSolSend: null,
     pendingWalletManagerAction: null,
+    launchReturnView: "home",
     deferredInstall: null
   };
 
@@ -545,8 +546,9 @@
     if (view !== "home") clearTimeout(state.feedTimer);
     $$("[data-view]").forEach((node) => node.classList.toggle("active", node.dataset.view === view));
     $$("[data-nav]").forEach((node) => node.classList.toggle("active", node.dataset.nav === view || (view === "coin" && node.dataset.nav === "home")));
-    $(".fun-header").style.display = ["coin", "quick"].includes(view) ? "none" : "flex";
+    $(".fun-header").style.display = ["coin", "quick", "launch"].includes(view) ? "none" : "flex";
     $(".bottom-nav").style.display = options.hideNav ? "none" : "grid";
+    $("[data-open-global-tools]")?.classList.toggle("active", view === "launch");
     window.scrollTo({ top: 0, behavior: "instant" });
     if (view === "home") loadFeed();
     if (view === "leaders") loadLeaders();
@@ -1925,9 +1927,28 @@
     if (action === "watch") { ensureAccount().then((ready) => ready ? post("/api/web/watchlist", { tokenMint: key, action: "add", symbol: coin.symbol || "", name: coin.name || "", imageUrl: coin.imageUrl || "" }) : { ok: false }).then((result) => toast(result.ok ? "Saved to Watchlist" : "Could not save coin", !result.ok)); closeSheet(); return; }
     if (action === "telegram") { window.open(`https://t.me/${window.OGRE_PORTAL_CONFIG?.telegramBotUsername || "SlimeWiredBot"}?start=scan_${encodeURIComponent(key)}`, "_blank", "noopener"); return; }
     if (action === "install") { openFunInstall(); return; }
-    if (action === "launch") { location.assign("/?from=fun#launch"); return; }
+    if (action === "launch") { openFunLaunch(); return; }
     const routes = { copy: "copy", sniper: "sniper" };
     if (routes[action]) location.href = `/#${routes[action]}`;
+  }
+
+  function openFunLaunch() {
+    if (state.view !== "launch") state.launchReturnView = state.view || "home";
+    closeSheet();
+    setView("launch");
+    const frame = $("[data-launch-frame]");
+    if (frame && !frame.dataset.loaded) {
+      frame.dataset.loaded = "true";
+      frame.setAttribute("aria-busy", "true");
+      frame.addEventListener("load", () => frame.removeAttribute("aria-busy"), { once: true });
+      frame.src = "/?from=fun&embed=fun-launch#launch";
+    }
+    history.replaceState(null, "", "#launch");
+  }
+  function closeFunLaunch() {
+    history.replaceState(null, "", "#");
+    setView(state.launchReturnView && state.launchReturnView !== "launch" ? state.launchReturnView : "home");
+    if (state.token) Promise.all([loadWallets(true), loadPositions({ force: true }), loadCreatedCoinsSilently()]).catch(() => {});
   }
 
   async function openSendSolSheet() {
@@ -2035,6 +2056,7 @@
     const feedButton = event.target.closest("[data-feed]"); if (feedButton) { state.feed = feedButton.dataset.feed; $$("[data-feed]").forEach((button) => button.classList.toggle("active", button === feedButton)); loadFeed(); return; }
     const leaderTab = event.target.closest("[data-leader-tab]"); if (leaderTab) { state.leaderTab = leaderTab.dataset.leaderTab || "top"; state.traderSearch = ""; const input = $("[data-trader-search]"); if (input) input.value = ""; syncLeaderTabs(); await loadLeaders(); return; }
     if (event.target.closest("[data-refresh-feed]")) { loadFeed(true); return; }
+    if (event.target.closest("[data-launch-back]")) { closeFunLaunch(); return; }
     if (event.target.closest("[data-coin-back]")) { history.replaceState(null, "", "#"); setView(state.previousView || "home"); return; }
     if (event.target.closest("[data-copy-coin]")) { navigator.clipboard?.writeText(coinKey(state.selected)); toast("Contract copied"); return; }
     const detail = event.target.closest("[data-detail]"); if (detail) { state.detailTab = detail.dataset.detail; $$("[data-detail]").forEach((button) => button.classList.toggle("active", button === detail)); renderDetailPanel(); return; }
@@ -2153,7 +2175,11 @@
 
   $("[data-search-input]").addEventListener("input", (event) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => runSearch(event.target.value), 130); });
   $("[data-trader-search-form]")?.addEventListener("submit", (event) => { event.preventDefault(); void searchTraders($("[data-trader-search]")?.value); });
-  window.addEventListener("hashchange", () => { const match = location.hash.match(/^#coin\/(.+)$/); if (match) openCoin(decodeURIComponent(match[1])); });
+  window.addEventListener("hashchange", () => {
+    const match = location.hash.match(/^#coin\/(.+)$/);
+    if (match) openCoin(decodeURIComponent(match[1]));
+    else if (/^#launch\/?$/i.test(location.hash)) openFunLaunch();
+  });
   async function loadCreatedCoinsSilently() { if (!state.token || state.launches.length) return; const result = await request("/api/web/launches"); if (result.ok) state.launches = result.data?.coins || []; }
 
   window.addEventListener("beforeinstallprompt", (event) => {
@@ -2185,6 +2211,7 @@
       if (ca) void loadQuickTarget(ca);
     } else {
       const match = location.hash.match(/^#coin\/(.+)$/); if (match) openCoin(decodeURIComponent(match[1]));
+      else if (/^#launch\/?$/i.test(location.hash)) openFunLaunch();
       if (routeParams.get("tab") === "wallet") setView("wallet");
       if (routeParams.get("profile") === "1") {
         state.profileTab = "social";
