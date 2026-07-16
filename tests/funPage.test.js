@@ -419,6 +419,17 @@ test("/fun reuses authenticated money APIs with idempotency and lazy user action
   assert.doesNotMatch(js, /const accountReady = await ensureAccount\(\)/);
 });
 
+test("Fun makes Pump creator fees visible and manually claimable", () => {
+  assert.match(js, /PUMP CREATOR FEES/);
+  assert.match(js, /creatorFeePendingVolumeSol/);
+  assert.match(js, /data-claim-creator-fees/);
+  assert.match(js, /async function claimFunCreatorFees/);
+  assert.match(js, /\/api\/web\/launch\/claim-fees/);
+  assert.match(css, /\.created-coin-wrap/);
+  assert.match(server, /creatorFeeStatus:/);
+  assert.match(server, /creatorFeeClaimedSol:/);
+});
+
 test("unified search and Robinhood detail support the two-chain mobile experience", () => {
   assert.ok(server.indexOf('pathname === "/api/web/token-search"') < server.indexOf("const auth = await authenticateWebRequest(request)"));
   assert.match(server, /pathname === "\/api\/web\/rh\/token"/);

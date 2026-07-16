@@ -1167,6 +1167,9 @@ test("creator fee claims auto-run only after new Pump volume, and wallet choice 
   assert.match(auto, /CONFIG\.creatorFeesAutoClaimMinVolumeSol/);
   assert.match(auto, /webClaimCreatorFeesCore/);
   assert.match(auto, /claimedWallets/);
+  const claim = functionBody(serverSource, "webClaimCreatorFeesCore");
+  assert.match(claim, /creatorFeesAutoClaimStatus: "claimed"/);
+  assert.match(claim, /creatorFeesAutoClaimSol: Number\(claimedSol \|\| 0\)/);
   const fun = fs.readFileSync(new URL("../web/public/fun.js", import.meta.url), "utf8");
   for (const src of [fun, ggSource, indexSource]) assert.match(src, /slimecashActiveWalletIndex/);
 });

@@ -1030,7 +1030,33 @@
   async function loadCreatedCoins() {
     const panel = $("[data-profile-panel]"); panel.innerHTML = '<div class="skeleton-list"></div>';
     const result = await request("/api/web/launches"); state.launches = result.ok ? (result.data?.coins || []) : [];
-    panel.innerHTML = state.launches.length ? state.launches.map((coin) => { const key = coin.mint || coin.tokenAddress || coin.address || ""; const rh = ["robinhood", "rh"].includes(String(coin.rail || "").toLowerCase()) || isRh(key); return `<button class="coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="${rh ? "rh" : "sol"}"><span class="coin-avatar"><img src="${escapeHtml(coin.imageUri || mascot(key))}" alt=""></span><span class="coin-info"><span class="coin-title"><b>${escapeHtml(coin.symbol || short(key))}</b><span>${escapeHtml(coin.name || "")}</span></span><span class="coin-meta"><i>${escapeHtml(coin.rail || "Solana")}</i><i>${escapeHtml(coin.status || "created")}</i></span></span><span class="coin-value"><b>Open</b><span>CREATOR</span></span></button>`; }).join("") : emptyState("No launches yet", "Coins launched through SlimeWire appear here with creator-only controls.");
+    if (!state.launches.length) { panel.innerHTML = emptyState("No launches yet", "Coins launched through SlimeWire appear here with creator-only controls."); return; }
+    const pumpLaunches = state.launches.filter((coin) => String(coin.rail || "pump").toLowerCase() === "pump" && coin.devWalletIndex);
+    const lastClaim = pumpLaunches.find((coin) => Number(coin.creatorFeeClaimedSol || 0) > 0);
+    const pendingVolume = pumpLaunches.reduce((sum, coin) => sum + Number(coin.creatorFeePendingVolumeSol || 0), 0);
+    const feeCard = pumpLaunches.length ? `<div class="read-card account-status"><span>PUMP CREATOR FEES</span><h3>${lastClaim ? `${Number(lastClaim.creatorFeeClaimedSol).toFixed(6)} SOL claimed last` : "Accruing on-chain"}</h3><p>Pump creator fees are separate from SlimeWire trade fees. Auto-claim watches new activity, or claim a coin now. ${pendingVolume > 0 ? `${pendingVolume.toFixed(3)} SOL of new trade volume is waiting for the next automatic check.` : "An empty claim is never shown as earnings."}</p></div>` : "";
+    panel.innerHTML = feeCard + state.launches.map((coin) => {
+      const key = coin.mint || coin.tokenAddress || coin.address || "", rh = ["robinhood", "rh"].includes(String(coin.rail || "").toLowerCase()) || isRh(key);
+      const feeStatus = rh ? "Paid during SlimeWire trades" : ({ claimed: "Claimed", watching: "Watching", nothing_to_claim: "No fees yet", failed: "Claim retry available", activity_unavailable: "Checking activity" }[String(coin.creatorFeeStatus || "watching")] || "Watching");
+      const claim = !rh && coin.devWalletIndex ? `<button class="recovery-button" type="button" data-claim-creator-fees="${Number(coin.devWalletIndex)}" data-claim-creator-mint="${escapeHtml(key)}">Claim fees</button>` : "";
+      return `<div class="created-coin-wrap"><button class="coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="${rh ? "rh" : "sol"}"><span class="coin-avatar"><img src="${escapeHtml(coin.imageUri || mascot(key))}" alt=""></span><span class="coin-info"><span class="coin-title"><b>${escapeHtml(coin.symbol || short(key))}</b><span>${escapeHtml(coin.name || "")}</span></span><span class="coin-meta"><i>${escapeHtml(coin.rail || "Solana")}</i><i>${escapeHtml(feeStatus)}</i></span></span><span class="coin-value"><b>Open</b><span>CREATOR</span></span></button>${claim}</div>`;
+    }).join("");
+  }
+
+  async function claimFunCreatorFees(button) {
+    if (!(await ensureTradeReady()) || button.disabled) return;
+    const walletIndex = Number(button.dataset.claimCreatorFees || 0), mint = String(button.dataset.claimCreatorMint || "");
+    if (!walletIndex || !mint) { toast("Creator wallet is unavailable.", true); return; }
+    button.disabled = true; button.textContent = "Claiming…";
+    const result = await post("/api/web/launch/claim-fees", { walletIndex, rail: "pump", mint, tradeAttemptId: attemptId("fun-claim-creator-fees") }, { timeout: 75_000, noRetry: true });
+    if (result.ok && result.data?.ok) {
+      const claimed = Number(result.data.claimedSol || 0);
+      toast(claimed > 0 ? `${claimed.toFixed(6)} SOL creator fees claimed` : "Creator-fee claim confirmed");
+      await loadCreatedCoins();
+    } else {
+      button.disabled = false; button.textContent = "Claim fees";
+      toast(apiMessage(result.data, "No Pump creator fees are ready yet."), true);
+    }
   }
 
   function openSearch() {
@@ -2149,6 +2175,7 @@
     const customWalletSell = event.target.closest("[data-fun-position-custom]"); if (customWalletSell) { openFunWalletPositionCustom(customWalletSell); return; }
     const customWalletPercent = event.target.closest("[data-fun-custom-percent]"); if (customWalletPercent) { const input = $("[data-fun-custom-sell-percent]"); if (input) input.value = customWalletPercent.dataset.funCustomPercent; return; }
     const walletPositionSell = event.target.closest("[data-fun-position-sell]"); if (walletPositionSell) { await sellFunWalletPosition(walletPositionSell); return; }
+    const claimCreatorFees = event.target.closest("[data-claim-creator-fees]"); if (claimCreatorFees) { await claimFunCreatorFees(claimCreatorFees); return; }
     const coinButton = event.target.closest("[data-open-coin]"); if (coinButton) { closeSearch(); closeSheet(); await openCoin(coinButton.dataset.openCoin, coinButton.dataset.chainKind); return; }
     const chainButton = event.target.closest("[data-chain]"); if (chainButton) { state.chain = chainButton.dataset.chain; $$("[data-chain]").forEach((button) => button.classList.toggle("active", button.dataset.chain === state.chain)); loadFeed(true); return; }
     const feedButton = event.target.closest("[data-feed]"); if (feedButton) { state.feed = feedButton.dataset.feed; $$("[data-feed]").forEach((button) => button.classList.toggle("active", button === feedButton)); loadFeed(); return; }
