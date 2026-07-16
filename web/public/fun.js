@@ -370,7 +370,7 @@
   }
 
   function normalizeSol(row) {
-    return { ...row, chain: "solana", address: row.tokenMint, marketCap: Number(row.marketCap || row.marketCapUsd || row.fdv || 0), liquidity: Number(row.liquidityUsd || row.liquidity?.usd || row.reserveUsd || 0), holders: Number(row.holderCount || row.holders || row.holdersCount || 0), volume: Number(row.volumeH1 || row.volumeH24 || row.volume5m || 0), volumeLabel: row.volumeLabel || row.volumeH1Label || row.volume5mLabel || "checking", change: Number(row.m5 ?? row.h1 ?? row.priceChange?.h1), age: ageLabel(row), imageUrl: row.imageUrl || row.avatarUrl || row.imageUri || row.logoUrl || row.meta?.imageUrl || row.metadata?.image || "" };
+    return { ...row, chain: "solana", address: row.tokenMint, marketCap: Number(row.marketCap || row.marketCapUsd || row.fdv || 0), liquidity: Number(row.liquidityUsd || row.liquidity?.usd || row.reserveUsd || 0), holders: Number(row.holderCount || row.holders || row.holdersCount || 0), volume: Number(row.volumeH24 || row.volumeH1 || row.volumeUsd || row.volume5m || 0), volumeLabel: row.volumeLabel || row.volumeH1Label || row.volume5mLabel || "checking", change: Number(row.m5 ?? row.h1 ?? row.priceChange?.h1), age: ageLabel(row), imageUrl: row.imageUrl || row.avatarUrl || row.imageUri || row.logoUrl || row.meta?.imageUrl || row.metadata?.image || "" };
   }
   function normalizeRh(row) {
     return { ...row, chain: "robinhood", tokenMint: row.address, marketCap: Number(row.marketCapUsd || row.mc || 0), liquidity: Number(row.liquidityUsd || row.liq || row.liquidity?.usd || 0), holders: Number(row.holderCount || row.holders || row.holdersCount || 0), volume: Number(row.volume24hUsd || row.vol24 || row.vol1 || 0), volumeLabel: row.volumeLabel || row.volume24hLabel || (Number(row.volume24hUsd || row.vol24 || row.vol1 || 0) > 0 ? "" : "checking"), change: Number(row.priceChange1h ?? row.ch1 ?? row.priceChange24h ?? row.ch24), age: ageLabel(row), imageUrl: row.imageUrl || row.localImagePath || row.iconUrl || row.imageUri || row.logoUrl || row.metadata?.image || "" };
@@ -1017,6 +1017,37 @@
   }
   // Rank by market cap (big names first), liquidity as the tiebreak for coins with no MC yet.
   function searchRank(a, b) { return (Number(b.marketCap || b.marketCapUsd || 0) || Number(b.liquidityUsd || 0)) - (Number(a.marketCap || a.marketCapUsd || 0) || Number(a.liquidityUsd || 0)); }
+  // Fresh pull of full stats (MC / volume / liquidity / pfp) straight from DexScreener for search
+  // rows, so no field is ever blank — the same data the feed shows.
+  async function funDexBatch(addrs) {
+    const list = Array.from(new Set((addrs || []).filter(Boolean))).slice(0, 30);
+    if (!list.length) return {};
+    try {
+      const j = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${list.join(",")}`).then((x) => x.ok ? x.json() : null);
+      const by = {};
+      for (const p of ((j && j.pairs) || [])) {
+        const m = p.baseToken && p.baseToken.address; if (!m) continue;
+        const liq = Number((p.liquidity && p.liquidity.usd) || 0);
+        if (by[m] && by[m]._liq >= liq) continue;
+        by[m] = { _liq: liq, mc: Number(p.marketCap || p.fdv || 0), liq, v24: Number((p.volume && p.volume.h24) || 0), v1: Number((p.volume && p.volume.h1) || 0), img: (p.info && p.info.imageUrl) || "", m5: Number((p.priceChange && (p.priceChange.m5 ?? p.priceChange.h1))) };
+      }
+      return by;
+    } catch { return {}; }
+  }
+  async function enrichSearchMatches(matches) {
+    const addrs = matches.map((m) => m.tokenMint || m.address).filter(Boolean);
+    if (!addrs.length) return;
+    const parts = await Promise.all([funDexBatch(addrs.slice(0, 30)), funDexBatch(addrs.slice(30, 60))]);
+    const by = Object.assign({}, parts[0], parts[1]);
+    for (const m of matches) {
+      const o = by[m.tokenMint || m.address]; if (!o) continue;
+      if (o.mc > 0) { m.marketCap = o.mc; m.marketCapUsd = o.mc; }
+      if (o.liq > 0) m.liquidityUsd = o.liq;
+      const v = o.v24 || o.v1; if (v > 0) { m.volumeH24 = v; m.volumeUsd = v; }
+      if (o.img && !m.imageUrl) m.imageUrl = o.img;
+      if (Number.isFinite(o.m5)) m.m5 = o.m5;
+    }
+  }
   async function runSearch(query) {
     const content = $("[data-search-content]");
     if (!query.trim()) { renderSearchHome(); return; }
@@ -1041,9 +1072,10 @@
         matches.push(row);
       }
     }
+    await enrichSearchMatches(matches);   // fill MC / volume / liquidity / pfp before render
     matches = matches.slice().sort(searchRank);
     const rows = matches.map((row) => (row.chain === "robinhood" ? normalizeRh({ ...row, address: row.address || row.tokenMint }) : normalizeSol(row)));
-    content.innerHTML = rows.length ? `<h3>Results · by liquidity</h3><div class="coin-list">${rows.map(coinRowHtml).join("")}</div>` : emptyState("No exact match", "Paste the full Solana or Robinhood contract address.");
+    content.innerHTML = rows.length ? `<h3>Results · by market cap</h3><div class="coin-list">${rows.map(coinRowHtml).join("")}</div>` : emptyState("No exact match", "Paste the full Solana or Robinhood contract address.");
   }
 
   function openSheet(html) { $("[data-sheet-content]").innerHTML = html; $("[data-sheet-overlay]").hidden = false; }
