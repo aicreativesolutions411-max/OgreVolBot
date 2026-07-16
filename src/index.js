@@ -3719,6 +3719,19 @@ const autopilotEngine = createAutopilotEngine({
       console.warn(`[autopilot] buy ${shortMint(mint)} did not deliver tokens — skipping (no phantom position).`);
       return { ok: false, error: "buy delivered no tokens", signature: res && res.signature };
     }
+    await recordTradeEvents([{
+      userId: String(autopilotWalletRecord.ownerId),
+      type: "buy",
+      source: "autopilot",
+      tokenMint: mint,
+      walletLabel: autopilotWalletRecord.label,
+      walletPublicKey: autopilotWalletRecord.publicKey,
+      solLamportsSpent: String(res.amountLamports || lamports),
+      tokenAmount: String(res.tokenDeltaAmount),
+      signature: res.signature
+    }]).catch((error) => {
+      console.warn(`[autopilot] could not save buy receipt for ${shortMint(mint)}: ${friendlyError(error)}`);
+    });
     return { ok: true, tokenAmount: res.tokenDeltaAmount, signature: res.signature };
   },
   sellPercent: async (mint, pct, pos = null) => {
@@ -3760,6 +3773,19 @@ const autopilotEngine = createAutopilotEngine({
     const gross = Number(res?.outputLamports || 0);
     const fee = Number(res?.feeLamports || 0);
     const receivedSol = gross > 0 ? Math.max(0, gross - fee) / 1_000_000_000 : null;
+    await recordTradeEvents([{
+      userId: String(autopilotWalletRecord.ownerId),
+      type: "sell",
+      source: "autopilot",
+      tokenMint: mint,
+      walletLabel: autopilotWalletRecord.label,
+      walletPublicKey: autopilotWalletRecord.publicKey,
+      tokenAmount: res?.tokenAmount,
+      solLamportsReceived: res?.outputLamports,
+      signature: res?.signature
+    }]).catch((error) => {
+      console.warn(`[autopilot] could not save sell receipt for ${shortMint(mint)}: ${friendlyError(error)}`);
+    });
     return { ok: true, signature: res?.signature, receivedSol };
   }
 });
@@ -10371,7 +10397,8 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
 
     if (request.method === "POST" && pathname === "/api/web/wallets/export") {
-      const result = await exportWebWalletBackup(auth.userId);
+      const body = await readJsonRequestBody(request);
+      const result = await exportWebWalletBackup(auth.userId, body);
       sendWebJson(request, response, 200, {
         ok: true,
         backup: result
@@ -10961,10 +10988,8 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
       const fast = parseBoolean(requestUrl.searchParams.get("fast") || "false");
       const profile = await webProfileForUser(auth.userId).catch(() => null);
-      const connectedScope = profile?.connectedWallet?.publicKey
-        ? crypto.createHash("sha1").update(String(profile.connectedWallet.publicKey)).digest("hex").slice(0, 12)
-        : "no-connected-wallet";
-      const summary = await cachedWebSummary(`${fast ? "web:positions:fast" : "web:positions"}:${connectedScope}`, auth.userId, { force }, force ? 0 : Math.min(CONFIG.displayCacheFreshMs, fast ? 750 : 1_000), async () => (
+      const connectedScope = webPositionConnectedScope(profile);
+      const summary = await cachedWebSummary(`${fast ? "web:positions:v2:fast" : "web:positions:v2"}:${connectedScope}`, auth.userId, { force }, force ? 0 : Math.min(CONFIG.displayCacheFreshMs, fast ? 750 : 1_000), async () => (
         await webPositionSummary(auth.userId, { force, fast })
       ));
       sendWebJson(request, response, 200, {
@@ -13929,9 +13954,28 @@ async function warmWorkerDisplayCaches(body = {}) {
           ]);
           return { balances, connectedWallet };
         })],
-        ["positions", () => cachedWebSummary("web:positions", userId, { force, background: true }, 0, async () => ({
-          positions: await webPositionRows(userId, { force })
-        }))],
+        ["positions", async () => {
+          const profile = await webProfileForUser(userId).catch(() => null);
+          const connectedScope = webPositionConnectedScope(profile);
+          let positionsValuePromise = null;
+          const buildPositionsValue = () => {
+            if (!positionsValuePromise) {
+              positionsValuePromise = webPositionSummary(userId, { force, fast: false });
+            }
+            return positionsValuePromise;
+          };
+          const [full, fast] = await Promise.all([
+            cachedWebSummary("web:positions:v2:" + connectedScope, userId, { force, background: true }, 0, buildPositionsValue),
+            cachedWebSummary("web:positions:v2:fast:" + connectedScope, userId, { force, background: true }, 0, buildPositionsValue)
+          ]);
+          return {
+            ...full,
+            cacheHit: Boolean(full.cacheHit && fast.cacheHit),
+            stale: Boolean(full.stale || fast.stale),
+            backgroundRefreshing: Boolean(full.backgroundRefreshing || fast.backgroundRefreshing),
+            durationMs: Math.max(Number(full.durationMs) || 0, Number(fast.durationMs) || 0)
+          };
+        }],
         ["pnl", () => cachedWebSummary("web:pnl", userId, { force, background: true }, 0, async () => ({
           pnl: await webPnlSummary(userId)
         }))]
@@ -17474,7 +17518,18 @@ function buildWalletBackupDocument(userId, note, groupLabel = "wallets", wallets
     wallets: wallets.map((wallet) => ({
       label: wallet.label,
       publicKey: wallet.publicKey,
-      secret: wallet.secret
+      secret: wallet.secret,
+      ...(wallet.sessionWallet ? {
+        sessionWallet: true,
+        sessionStatus: wallet.sessionStatus || "",
+        sourceConnectedWallet: wallet.sourceConnectedWallet || "",
+        sessionCreatedAt: wallet.sessionCreatedAt || "",
+        sessionExpiresAt: wallet.sessionExpiresAt || "",
+        sessionBudgetLamports: wallet.sessionBudgetLamports || "",
+        sessionFundedAt: wallet.sessionFundedAt || "",
+        fundingSignature: wallet.fundingSignature || "",
+        fundingAmountLamports: wallet.fundingAmountLamports || ""
+      } : {})
     }))
   });
 
@@ -27257,16 +27312,25 @@ async function showPositionCard(chatId, userId, mint, messageId = null) {
 
 async function buildPositionsOverview(userId, options = {}) {
   const store = await readWalletStore();
-  const wallets = walletsForOwner(store, userId);
+  const ownedWallets = walletsForOwner(store, userId);
+  // Telegram's raw positions/sell tools intentionally inspect every wallet.
+  // The web portfolio must never blend operational volume/session wallets into
+  // a person's holdings or spend RPC time pricing those hidden accounts.
+  const wallets = options.webPortfolioOnly
+    ? ownedWallets.filter((wallet) => !wallet.volumeBot && !wallet.ephemeral)
+    : ownedWallets;
   const history = await readTradeHistory();
   const positions = new Map();
 
   for (const trade of history.trades.filter((item) => String(item.userId) === String(userId))) {
     const position = ensurePosition(positions, trade.tokenMint);
-    if (trade.type === "buy") {
+    const tradeType = String(trade.type || "").toLowerCase();
+    const isAcquisition = tradeType === "buy"
+      || (tradeType === "launch" && positiveBigIntOrZero(trade.solLamportsSpent) > 0n);
+    if (isAcquisition) {
       position.buys += 1;
       position.spent += positiveBigIntOrZero(trade.solLamportsSpent);
-    } else if (trade.type === "sell") {
+    } else if (tradeType === "sell") {
       position.sells += 1;
       position.received += positiveBigIntOrZero(trade.solLamportsReceived);
     }
@@ -27593,8 +27657,105 @@ function ensurePosition(positions, tokenMint) {
   return created;
 }
 
+function normalizeWebTokenHolding(input = {}) {
+  let rawAmount = 0n;
+  try {
+    rawAmount = BigInt(String(input.rawAmount ?? "0"));
+  } catch {
+    rawAmount = 0n;
+  }
+  if (rawAmount < 0n) rawAmount = 0n;
+
+  const decimals = Number(input.decimals);
+  let uiAmount = Number(input.uiAmount);
+  if (Number.isInteger(decimals) && decimals >= 0 && decimals <= 255) {
+    const raw = rawAmount.toString();
+    const split = raw.length - decimals;
+    const canonical = decimals === 0
+      ? raw
+      : split > 0
+        ? `${raw.slice(0, split)}.${raw.slice(split)}`
+        : `0.${"0".repeat(-split)}${raw}`;
+    const canonicalNumber = Number(canonical);
+    if (Number.isFinite(canonicalNumber)) uiAmount = canonicalNumber;
+  }
+  if (!Number.isFinite(uiAmount) || uiAmount <= 0) uiAmount = 0;
+
+  let estimatedValueLamports = null;
+  if (input.estimatedValueLamports !== null && input.estimatedValueLamports !== undefined && input.estimatedValueLamports !== "") {
+    try {
+      const parsed = BigInt(String(input.estimatedValueLamports));
+      if (parsed >= 0n) estimatedValueLamports = parsed;
+    } catch {
+      estimatedValueLamports = null;
+    }
+  }
+
+  const ownedWalletCount = Math.max(0, Number(input.ownedWalletCount) || 0);
+  const ownedAccountCount = Math.max(0, Number(input.ownedAccountCount) || 0);
+  const hasBuyProvenance = Boolean(input.hasBuyProvenance);
+  return {
+    rawAmount,
+    uiAmount,
+    estimatedValueLamports,
+    hasBuyProvenance,
+    visible: rawAmount > 0n && uiAmount > 0 && ownedWalletCount > 0 && ownedAccountCount > 0 && hasBuyProvenance
+  };
+}
+
+function positionValueCacheKey(position) {
+  return [
+    String(position?.tokenMint || ""),
+    ...(Array.isArray(position?.accounts) ? position.accounts : [])
+      .map((account) => `${String(account?.walletPublicKey || "")}:${String(account?.rawAmount ?? "0")}`)
+  ].join("|");
+}
+
+function webPrimaryPositionProjection(position) {
+  // Visibility is user+mint provenance, not wallet+mint provenance. Internal
+  // token sweeps legitimately move a purchased bag from one managed wallet to
+  // another; requiring the destination wallet itself to have made the buy made
+  // that real position disappear. A positive SlimeWire acquisition still gates
+  // the mint, so never-bought spam/airdrop token accounts remain excluded.
+  const hasAcquisitionProvenance = Number(position?.buys || 0) > 0
+    && positiveBigIntOrZero(position?.spent) > 0n;
+  const eligibleAccounts = (Array.isArray(position?.accounts) ? position.accounts : []).filter((account) => {
+    try { return BigInt(String(account?.rawAmount ?? "0")) > 0n; } catch { return false; }
+  });
+  const eligibleWallets = new Set(eligibleAccounts.map((account) => String(account.walletPublicKey || "")).filter(Boolean));
+  const rawAmount = eligibleAccounts.reduce((total, account) => total + positiveBigIntOrZero(account.rawAmount), 0n);
+  const decimals = eligibleAccounts
+    .map((account) => Number(account?.decimals))
+    .find((value) => Number.isInteger(value) && value >= 0 && value <= 255);
+  const normalized = normalizeWebTokenHolding({
+    rawAmount,
+    decimals,
+    uiAmount: Number.NaN,
+    ownedWalletCount: eligibleWallets.size,
+    ownedAccountCount: eligibleAccounts.length,
+    hasBuyProvenance: hasAcquisitionProvenance
+  });
+  if (!normalized.visible) return null;
+
+  return {
+    ...position,
+    accounts: eligibleAccounts,
+    wallets: eligibleWallets,
+    walletCount: eligibleWallets.size,
+    rawAmount: normalized.rawAmount,
+    uiAmount: normalized.uiAmount,
+    estimatedValueLamports: null,
+    valuePending: false,
+    valueError: null
+  };
+}
+
 async function estimatePositionValueFromMarket(position, quoteError = null) {
-  const accounts = Array.isArray(position.accounts) ? position.accounts.slice(0, 8) : [];
+  // A market price is one lookup for the mint, so aggregate every owned token
+  // account.  The former slice(0, 8) silently understated positions spread over
+  // more than eight wallets even though there was no network-cost reason to cap
+  // this arithmetic.
+  const accounts = Array.isArray(position.accounts) ? position.accounts : [];
   const decimals = accounts
     .map((account) => Number(account.decimals))
     .find((value) => Number.isInteger(value) && value >= 0);
@@ -27689,10 +27850,7 @@ async function estimatePositionValueFromMarket(position, quoteError = null) {
 }
 
 async function estimatePositionValue(position) {
-  const cacheKey = [
-    position.tokenMint,
-    ...position.accounts.slice(0, 8).map((account) => `${account.walletPublicKey}:${account.rawAmount}`)
-  ].join("|");
+  const cacheKey = positionValueCacheKey(position);
   const cached = getTimedCache(positionValueCache, cacheKey);
   if (cached !== undefined) return cached;
 
@@ -27715,7 +27873,13 @@ async function estimatePositionValue(position) {
   }
 
   try {
-    for (const account of position.accounts.slice(0, 8)) {
+    // Route quotes cost one request per account.  Never quote an arbitrary
+    // prefix and label it as the whole position: if market pricing is down for
+    // a position spread over many wallets, report unavailable and retry later.
+    if (position.accounts.length > 8) {
+      throw new Error("Market value unavailable for a position spread across more than 8 wallets");
+    }
+    for (const account of position.accounts) {
       const order = await createJupiterOrder({
         taker: new PublicKey(account.walletPublicKey),
         inputMint: position.tokenMint,
@@ -43970,6 +44134,19 @@ async function fireCommunitySnipe(chatId, mint, symbol, name) {
         // Idempotent per member+mint so a stream hiccup can't double-buy.
         const buyResult = await runIdempotentMoneyOp("community-snipe", userId, `${chatId}:${mint}`,
           () => buyTokenForPlan(wallet, mint, amountLamports, slippageBps, { trackTokenDelta: true, userId }));
+        if (buyResult) {
+          await recordTradeEvents([{
+            userId,
+            type: "buy",
+            source: "community-snipe",
+            tokenMint: mint,
+            walletLabel: wallet.label,
+            walletPublicKey: wallet.publicKey,
+            solLamportsSpent: String(buyResult.amountLamports || amountLamports),
+            tokenAmount: buyResult.tokenDeltaAmount || buyResult.outputAmount || null,
+            signature: buyResult.signature
+          }]).catch((error) => console.warn(`[community-snipe] trade history write failed: ${friendlyError(error)}`));
+        }
         // Optional own TP/SL — arm the same auto-exit engine the web quick-buy uses (best-effort).
         if ((Number(m.tpPct) > 0 || Number(m.slPct) > 0) && buyResult) {
           try {
@@ -52381,8 +52558,15 @@ async function writeDcaPlans(store) {
 // signature, several events) is preserved; only an EXACT re-record collapses. No signature → never dedupe.
 function tradeEventDedupeKey(trade) {
   const sig = String(trade?.signature || "");
-  if (!sig) return null;
-  return `${sig}:${trade.type || ""}:${trade.tokenMint || ""}:${trade.walletPublicKey || ""}`;
+  if (sig) return `${sig}:${trade.type || ""}:${trade.tokenMint || ""}:${trade.walletPublicKey || ""}`;
+  // Some atomic providers confirm a whole bundle before their RPC exposes the
+  // individual transaction statuses. The acquisition is still proven by the
+  // atomic mint landing, so allow a deterministic internal receipt to make the
+  // provenance write retry-safe without pretending it is an explorer tx id.
+  const provenanceId = String(trade?.provenanceId || "").trim();
+  return provenanceId
+    ? `provenance:${provenanceId}:${trade.type || ""}:${trade.tokenMint || ""}:${trade.walletPublicKey || ""}`
+    : null;
 }
 
 async function readTradeHistory() {
@@ -60258,6 +60442,15 @@ function summaryFromCachedValue(cacheName, cached, stale, backgroundRefreshing =
   };
 }
 
+async function refreshWebSummaryAfterInflight(inflight, refresh) {
+  try {
+    await inflight;
+  } catch {
+    // A forced refresh must still get a chance after the older build fails.
+  }
+  return refresh();
+}
+
 async function cachedWebSummary(cacheName, userId, options = {}, ttlMs = CONFIG.displayCacheFreshMs, builder) {
   const key = `${cacheName}:${String(userId || "guest")}`;
   const force = Boolean(options.force);
@@ -60295,6 +60488,12 @@ async function cachedWebSummary(cacheName, userId, options = {}, ttlMs = CONFIG.
   }
 
   if (cached?.promise) {
+    if (force) {
+      logCacheEvent({ cacheName, action: "force-inflight-queued", provider: kvProviderName(), cacheHit: true, background: Boolean(options.background) });
+      return refreshWebSummaryAfterInflight(cached.promise, () => (
+        startWebSummaryRefresh(key, externalKey, cacheName, builder, ttlMs, staleMs, { background: Boolean(options.background) })
+      ));
+    }
     logCacheEvent({ cacheName, action: "inflight-shared", provider: kvProviderName(), cacheHit: true, background: Boolean(options.background) });
     return cached.promise;
   }
@@ -64523,29 +64722,76 @@ async function restoreWebWalletBackup(userId, body = {}) {
   };
 }
 
-async function exportWebWalletBackup(userId) {
+function webBackupEligibleWallet(wallet, options = {}) {
+  if (!wallet || wallet.volumeBot || wallet.ephemeral) return false;
+  if (!wallet.sessionWallet) return true;
+  // Funded session wallets are visible trade wallets and may hold user funds.
+  // Pending sessions stay out of backup-all, but an explicitly selected one is
+  // still recoverable from the balance-adjacent button.
+  return Boolean(options.exactSelection || wallet.sessionStatus === "funded");
+}
+
+async function exportWebWalletBackup(userId, body = {}) {
   const store = await readWalletStore();
-  const wallets = walletsForOwner(store, userId);
-  if (wallets.length === 0) {
-    const error = new Error("No wallets found in this web account yet.");
+  const owned = walletsForOwner(store, userId);
+  const eligible = owned.filter((wallet) => webBackupEligibleWallet(wallet));
+  const requestedPublicKey = String(body.publicKey || body.walletPublicKey || "").trim();
+  const rawRequestedIndex = body.walletIndex ?? body.index;
+  const hasRequestedIndex = rawRequestedIndex !== undefined
+    && rawRequestedIndex !== null
+    && String(rawRequestedIndex).trim() !== "";
+  const requestedIndex = hasRequestedIndex ? parseWebWalletIndex(rawRequestedIndex) : null;
+  const byPublicKey = requestedPublicKey
+    ? owned.find((wallet) => wallet.publicKey === requestedPublicKey)
+    : null;
+  const byIndex = requestedIndex ? owned[requestedIndex - 1] : null;
+
+  if (requestedPublicKey && requestedIndex && byPublicKey?.publicKey !== byIndex?.publicKey) {
+    const error = new Error("That wallet selection changed. Refresh Wallets and try again.");
+    error.statusCode = 409;
+    throw error;
+  }
+
+  const requestedWallet = byPublicKey || byIndex;
+  if ((requestedPublicKey || requestedIndex) && (!requestedWallet || !webBackupEligibleWallet(requestedWallet, { exactSelection: true }))) {
+    const error = new Error("That managed wallet is not available for backup. Refresh Wallets and try again.");
     error.statusCode = 400;
     throw error;
   }
 
+  const wallets = requestedWallet ? [requestedWallet] : eligible;
+  if (wallets.length === 0) {
+    const error = new Error("No user-facing managed wallets found in this web account yet.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const singleWallet = wallets.length === 1 && Boolean(requestedWallet);
+  const groupLabel = singleWallet
+    ? `current-web-wallet-${sanitizeFilenamePart(requestedWallet.label || shortMint(requestedWallet.publicKey))}`
+    : "current-web-wallets";
+
   await audit("web_export_wallet_backup", {
     userId,
-    walletCount: wallets.length
+    walletCount: wallets.length,
+    scope: singleWallet ? "active-wallet" : "all-managed",
+    publicKeys: wallets.map((wallet) => wallet.publicKey)
   });
 
   return {
     walletCount: wallets.length,
+    scope: singleWallet ? "active-wallet" : "all-managed",
     downloads: webBackupDownloadsForWallets(
       userId,
       wallets,
-      "current-web-wallets",
-      "Manual web backup export for all wallets currently loaded in this account."
+      groupLabel,
+      singleWallet
+        ? "Manual web recovery export for the active managed wallet."
+        : "Manual web backup export for all user-facing managed wallets currently loaded in this account."
     ),
-    message: `Backup ready: ${wallets.length} wallet(s) exported.`
+    message: singleWallet
+      ? `Backup ready for ${requestedWallet.label || shortMint(requestedWallet.publicKey)}.`
+      : `Backup ready: ${wallets.length} managed wallet(s) exported.`
   };
 }
 
@@ -68780,14 +69026,24 @@ async function sendVersionedTransaction(tx, label = "send versioned transaction"
   const raw = tx.serialize(); // already signed by the caller; reuse the same bytes everywhere
   try {
     const signature = await rpcWithRetry(label, () => connection.sendRawTransaction(raw, { skipPreflight: false, maxRetries: 10 }));
-    await rpcWithRetry("confirm versioned transaction", () => connection.confirmTransaction(signature, "confirmed"));
+    const confirmation = await rpcWithRetry("confirm versioned transaction", () => connection.confirmTransaction(signature, "confirmed"));
+    if (confirmation?.value?.err) {
+      const error = new Error(`${label} failed on-chain: ${JSON.stringify(confirmation.value.err)}`);
+      error.signature = signature;
+      throw error;
+    }
     return signature;
   } catch (error) {
     if (!backupConnection || !isTransientSendError(error)) throw error;
     console.warn(`${label}: primary RPC failed (${friendlyError(error)}); re-broadcasting same signed tx to backup RPC.`);
     rpcStats.sendFailoverCount = (rpcStats.sendFailoverCount || 0) + 1;
     const signature = await rpcWithRetry(`${label} (backup)`, () => backupConnection.sendRawTransaction(raw, { skipPreflight: false, maxRetries: 10 }));
-    await rpcWithRetry("confirm versioned transaction (backup)", () => backupConnection.confirmTransaction(signature, "confirmed"));
+    const confirmation = await rpcWithRetry("confirm versioned transaction (backup)", () => backupConnection.confirmTransaction(signature, "confirmed"));
+    if (confirmation?.value?.err) {
+      const confirmedError = new Error(`${label} failed on-chain: ${JSON.stringify(confirmation.value.err)}`);
+      confirmedError.signature = signature;
+      throw confirmedError;
+    }
     return signature;
   }
 }
@@ -68983,7 +69239,7 @@ async function firePostLaunchBuysServerSide({ mint, body, devWallet, devKeypair,
   });
   const devExitStrategy = pumpLaunchExitStrategy(body.devExitStrategy || {}, body);
   const bundlePlans = pumpLaunchBundlePlans(body.bundleBuy || { amountSol: bundleAmountSol }, bundleWallets, body);
-  const rawBuy = async (keypair, amountSol, label) => {
+  const rawBuy = async (wallet, keypair, amountSol, label) => {
     const action = {
       publicKey: keypair.publicKey.toBase58(), action: "buy", mint,
       denominatedInSol: "true", amount: amountSol, slippage: slippagePct,
@@ -68994,6 +69250,19 @@ async function firePostLaunchBuysServerSide({ mint, body, devWallet, devKeypair,
     tx.sign([keypair]);
     const signature = await sendVersionedTransaction(tx, `post-launch ${label} buy`);
     invalidateWalletReadCache(keypair.publicKey.toBase58());
+    // Unlike the managed-plan path, this emergency PumpPortal path has no plan
+    // writer to persist the fill.  Record the exact confirmed tx + wallet so it
+    // cannot be confused with an unsolicited token account in web positions.
+    await recordTradeEvents([{
+      userId,
+      type: "buy",
+      source: "pump_launch_raw_buy",
+      tokenMint: mint,
+      walletLabel: wallet?.label || label,
+      walletPublicKey: keypair.publicKey.toBase58(),
+      solLamportsSpent: String(solToLamports(amountSol)),
+      signature
+    }]);
     logPumpLaunchEvent("pump_launch_fallback_buy", { launchAttemptId, userId, mint, label, amountSol, txSignature: signature, managed: false });
   };
   const planBuy = async (wallets, amountSol, label, strategy) => {
@@ -69018,7 +69287,7 @@ async function firePostLaunchBuysServerSide({ mint, body, devWallet, devKeypair,
     } catch (error) {
       logPumpLaunchEvent("pump_launch_fallback_plan_failed", { launchAttemptId, userId, mint, label: "dev", errorMessage: String(error.message || "").slice(0, 200) });
       try {
-        await rawBuy(devKeypair, devBuySol, "dev");
+        await rawBuy(devWallet, devKeypair, devBuySol, "dev");
         outcome.dev = true;
       } catch (rawError) {
         logPumpLaunchEvent("pump_launch_fallback_buy_failed", { launchAttemptId, userId, mint, label: "dev", errorMessage: String(rawError.message || "").slice(0, 200) });
@@ -69037,7 +69306,7 @@ async function firePostLaunchBuysServerSide({ mint, body, devWallet, devKeypair,
         logPumpLaunchEvent("pump_launch_fallback_plan_failed", { launchAttemptId, userId, mint, label: `bundle-${groupIndex + 1}`, errorMessage: String(error.message || "").slice(0, 200) });
         await Promise.all(group.plans.map(async (plan) => {
           try {
-            await rawBuy(decryptWallet(plan.wallet), plan.amountSol, shortMint(plan.wallet.publicKey));
+            await rawBuy(plan.wallet, decryptWallet(plan.wallet), plan.amountSol, shortMint(plan.wallet.publicKey));
             outcome.wallets += 1;
           } catch (rawError) {
             logPumpLaunchEvent("pump_launch_fallback_buy_failed", { launchAttemptId, userId, mint, label: shortMint(plan.wallet.publicKey), errorMessage: String(rawError.message || "").slice(0, 200) });
@@ -69151,14 +69420,18 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
   if (devBuySol > 0) {
     plan.push({
       action: { publicKey: devKeypair.publicKey.toBase58(), action: "buy", mint, denominatedInSol: "true", amount: devBuySol, slippage: slippagePct, priorityFee: 0, pool: "pump" },
-      signers: [devKeypair]
+      signers: [devKeypair],
+      wallet: devSelection.wallet,
+      provenanceSource: "pump_launch_atomic_dev_buy"
     });
   }
   for (const bundlePlan of bundlePlans) {
     const keypair = decryptWallet(bundlePlan.wallet);
     plan.push({
       action: { publicKey: keypair.publicKey.toBase58(), action: "buy", mint, denominatedInSol: "true", amount: bundlePlan.amountSol, slippage: slippagePct, priorityFee: 0, pool: "pump" },
-      signers: [keypair]
+      signers: [keypair],
+      wallet: bundlePlan.wallet,
+      provenanceSource: "pump_launch_atomic_bundle_buy"
     });
   }
 
@@ -69227,12 +69500,32 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
 
   let bundleId = "";
   let landed = false;
+  const submittedBundleCandidates = [];
   for (let attempt = 0; attempt < tipSchedule.length && !landed; attempt += 1) {
     plan[0].action.priorityFee = tipSchedule[attempt];
     const txBytes = await requestPumpPortalBundleTxs(plan.map((entry) => entry.action), timeoutMs);
+    const attemptBuyEvents = [];
+    const attemptSignatures = [];
     const signed = txBytes.map((bytes, index) => {
       const tx = VersionedTransaction.deserialize(bytes);
       tx.sign(plan[index].signers);
+      const entry = plan[index];
+      const txSignature = bs58.encode(tx.signatures[0]);
+      attemptSignatures.push(txSignature);
+      if (entry.action.action === "buy" && entry.wallet && Number(entry.action.amount) > 0) {
+        attemptBuyEvents.push({
+          userId,
+          type: "buy",
+          source: entry.provenanceSource || "pump_launch_atomic_buy",
+          tokenMint: mint,
+          walletLabel: entry.wallet.label,
+          walletPublicKey: entry.wallet.publicKey,
+          solLamportsSpent: String(solToLamports(Number(entry.action.amount))),
+          // A Solana transaction id is the first signature in the signed wire
+          // transaction.  Persist that exact id so retries remain idempotent.
+          signature: txSignature
+        });
+      }
       return Buffer.from(tx.serialize()).toString("base64");
     });
     if (attempt === 0) {
@@ -69252,6 +69545,7 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
       }
     }
     bundleId = await submitJitoBundle(signed, timeoutMs);
+    submittedBundleCandidates.push({ signatures: attemptSignatures, buyEvents: attemptBuyEvents });
     logPumpLaunchEvent("pump_launch_jito_bundle_submitted", {
       launchAttemptId: basePayload.clientRequestId, userId, mint, bundleId,
       txCount: plan.length, attempt: attempt + 1, tipSol: tipSchedule[attempt]
@@ -69286,6 +69580,63 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
   logPumpLaunchEvent("pump_launch_jito_bundle_landed", {
     launchAttemptId: basePayload.clientRequestId, userId, mint, bundleId, txCount: plan.length
   });
+  // A prior retry can land while a later retry is being watched. Resolve the
+  // batch whose exact signed transactions actually confirmed instead of
+  // assuming the most recently submitted signatures won the race.
+  const confirmedBundleBuyEvents = async () => {
+    const rpcClients = [connection, backupConnection].filter((client, index, list) => client && list.indexOf(client) === index);
+    for (let poll = 0; poll < 6; poll += 1) {
+      for (const client of rpcClients) {
+        for (const candidate of submittedBundleCandidates) {
+          const result = await client.getSignatureStatuses(candidate.signatures, { searchTransactionHistory: true }).catch(() => null);
+          const statuses = result?.value || [];
+          if (statuses.length === candidate.signatures.length && statuses.every((status) => (
+            status
+            && !status.err
+            && (status.confirmationStatus === "confirmed" || status.confirmationStatus === "finalized")
+          ))) {
+            return candidate.buyEvents;
+          }
+        }
+      }
+      if (poll < 5) await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    return [];
+  };
+  const landedBuyEvents = await confirmedBundleBuyEvents();
+  // Mint existence after an atomic Jito bundle proves every transaction in the
+  // bundle landed.  Only now persist the per-wallet buys; missed/retried bundles
+  // never create false positions, and signature-based dedupe makes re-recording
+  // the same landed transaction harmless.
+  if (landedBuyEvents.length) {
+    await recordTradeEvents(landedBuyEvents);
+  } else {
+    // Mint existence proves one all-or-none candidate landed, including every
+    // planned buy, even if a shared RPC has not indexed the winning signatures
+    // yet. Persist truthful wallet/amount provenance with a deterministic
+    // internal receipt; do not attach a guessed retry signature.
+    const atomicReceipts = plan.filter((entry) => (
+      entry.action.action === "buy" && entry.wallet && Number(entry.action.amount) > 0
+    )).map((entry) => ({
+      userId,
+      type: "buy",
+      source: entry.provenanceSource || "pump_launch_atomic_buy",
+      tokenMint: mint,
+      walletLabel: entry.wallet.label,
+      walletPublicKey: entry.wallet.publicKey,
+      solLamportsSpent: String(solToLamports(Number(entry.action.amount))),
+      provenanceId: `pump-jito:${basePayload.clientRequestId}:${entry.wallet.publicKey}`,
+      bundleId
+    }));
+    if (atomicReceipts.length) await recordTradeEvents(atomicReceipts);
+    logPumpLaunchEvent("pump_launch_atomic_provenance_receipt", {
+      launchAttemptId: basePayload.clientRequestId,
+      userId,
+      mint,
+      walletCount: atomicReceipts.length,
+      candidateCount: submittedBundleCandidates.length
+    });
+  }
   // The in-block buys exist but carry no exit plans - auto-arm each strategy
   // group separately so per-wallet ladders remain exactly as selected.
   let atomicExitsArmed = false;
@@ -69460,6 +69811,25 @@ async function webLaunchMeteoraDbc(userId, body, basePayload) {
     if (poolConf?.value?.err) {
       throw createPumpLaunchError(`Meteora pool transaction failed on-chain: ${JSON.stringify(poolConf.value.err)}`, "METEORA_POOL_TX_FAILED", 502, { stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL });
     }
+  }
+
+  // The pool transaction also contains the optional first buy.  Record it only
+  // after the confirmation above reports no on-chain error; a zero-buy pool
+  // launch must not manufacture a trade position.
+  if (devBuySol > 0) {
+    await recordTradeEvents([{
+      userId,
+      type: "launch",
+      source: "meteora_launch",
+      tokenMint,
+      tokenName: basePayload.name || "",
+      symbol: basePayload.symbol || "",
+      walletLabel: creatorWallet.label,
+      walletPublicKey: creatorPk,
+      solLamportsSpent: String(solToLamports(devBuySol)),
+      signature,
+      metadataUri: metadata.uri
+    }]);
   }
 
   await upsertPumpLaunchAttempt({ id: attemptId, status: PUMP_LAUNCH_STATUS.COMPLETE, txSignature: signature, tokenMint, updatedAt: new Date().toISOString() });
@@ -71533,6 +71903,13 @@ async function webConnectedWalletBalance(userId, options = {}) {
   return row;
 }
 
+function webPositionConnectedScope(profile) {
+  const publicKey = String(profile?.connectedWallet?.publicKey || "").trim();
+  return publicKey
+    ? crypto.createHash("sha1").update(publicKey).digest("hex").slice(0, 12)
+    : "no-connected-wallet";
+}
+
 async function webPositionSummary(userId, options = {}) {
   const [positions, connectedWallet] = await Promise.all([
     webPositionRows(userId, options),
@@ -71549,8 +71926,56 @@ async function webPositionSummary(userId, options = {}) {
 }
 
 async function webPositionRows(userId, options = {}) {
-  const positions = await buildPositionsOverview(userId, options);
-  const limited = positions.slice(0, 25);
+  // The shared builder intentionally keeps every raw holding for Telegram
+  // sell/sweep support. The primary web portfolio is narrower: a live balance
+  // needs positive-cost SlimeWire acquisition history for the same user+mint.
+  // This blocks unsolicited SPL/NFT spam while preserving real bags moved
+  // between this account's managed wallets.
+  const positions = await buildPositionsOverview(userId, {
+    ...options,
+    skipValueEstimates: true,
+    webPortfolioOnly: true
+  });
+  const limited = positions
+    .filter((position) => String(position?.tokenMint || "") !== SOL_MINT)
+    .map(webPrimaryPositionProjection)
+    .filter(Boolean)
+    .slice(0, 25);
+
+  if (options.fast) {
+    // Fast means no network valuation work.  Warm values are still exact and
+    // useful, so reuse only a nonnegative BigInt from the balance-specific key.
+    for (const position of limited) {
+      const cached = getTimedCache(positionValueCache, positionValueCacheKey(position));
+      if (typeof cached === "bigint" && cached >= 0n) {
+        position.estimatedValueLamports = cached;
+        position.valuePending = false;
+        position.valueError = null;
+      } else {
+        position.estimatedValueLamports = null;
+        position.valuePending = true;
+        position.valueError = null;
+      }
+    }
+  } else {
+    await runWithConcurrency(limited.slice(0, 10), Math.min(3, Math.max(2, CONFIG.balanceConcurrency)), async (position) => {
+      try {
+        const value = await estimatePositionValue(position);
+        position.estimatedValueLamports = typeof value === "bigint" && value >= 0n ? value : null;
+        position.valueError = position.estimatedValueLamports === null ? "Value estimate unavailable" : null;
+      } catch (error) {
+        position.estimatedValueLamports = null;
+        position.valueError = friendlyError(error);
+      }
+      position.valuePending = false;
+    });
+    for (const position of limited.slice(10)) {
+      position.estimatedValueLamports = null;
+      position.valuePending = false;
+      position.valueError = "Value estimate unavailable in this response";
+    }
+  }
+
   const metadataByMint = await tokenMetadataMapForMints(limited.map((position) => position.tokenMint), {
     timeoutMs: options.fast ? 900 : 2_000,
     pumpTimeoutMs: options.fast ? 650 : 1_000
@@ -71558,7 +71983,7 @@ async function webPositionRows(userId, options = {}) {
   return limited.map((position) => {
     const metadata = metadataByMint.get(position.tokenMint) || {};
     const realized = position.received - position.spent;
-    const hasCostBasis = position.spent > 0n || position.received > 0n;
+    const hasCostBasis = position.buys > 0 && position.spent > 0n;
     const openPnl = position.estimatedValueLamports !== null && hasCostBasis
       ? position.estimatedValueLamports + position.received - position.spent
       : null;
@@ -71574,7 +71999,7 @@ async function webPositionRows(userId, options = {}) {
       metadataMissing: Boolean(metadata.metadataMissing),
       dexUrl: dexScreenerUrl(position.tokenMint),
       uiAmount: formatTokenAmount(position.uiAmount),
-      uiAmountNum: Number(position.uiAmount) || 0,   // raw token count so the client can mark-to-market live
+      uiAmountNum: Number.isFinite(Number(position.uiAmount)) && Number(position.uiAmount) > 0 ? Number(position.uiAmount) : 0,
       walletCount: position.walletCount,
       buys: position.buys,
       sells: position.sells,
@@ -76765,6 +77190,22 @@ function backupWalletList(backup) {
   throw new Error("Backup format is not valid. I could not find a wallets list in it.");
 }
 
+function backupSessionWalletMetadata(wallet) {
+  const sessionWallet = wallet?.sessionWallet === true || String(wallet?.sessionWallet || "").toLowerCase() === "true";
+  if (!sessionWallet) return {};
+  return {
+    sessionWallet: true,
+    sessionStatus: String(wallet.sessionStatus || ""),
+    sourceConnectedWallet: String(wallet.sourceConnectedWallet || ""),
+    sessionCreatedAt: String(wallet.sessionCreatedAt || ""),
+    sessionExpiresAt: String(wallet.sessionExpiresAt || ""),
+    sessionBudgetLamports: String(wallet.sessionBudgetLamports || ""),
+    sessionFundedAt: String(wallet.sessionFundedAt || ""),
+    fundingSignature: String(wallet.fundingSignature || ""),
+    fundingAmountLamports: String(wallet.fundingAmountLamports || "")
+  };
+}
+
 function walletRecordFromBackup(wallet, ownerId, index) {
   if (!wallet || typeof wallet !== "object") {
     throw new Error("Backup wallet entry is empty.");
@@ -76781,7 +77222,8 @@ function walletRecordFromBackup(wallet, ownerId, index) {
         ownerId,
         label: cleanLabel(wallet.label || wallet.name || `Restored Wallet ${index + 1}`),
         publicKey,
-        secret: encryptedSecret
+        secret: encryptedSecret,
+        ...backupSessionWalletMetadata(wallet)
       };
     } catch (error) {
       encryptedError = error;
@@ -76792,7 +77234,10 @@ function walletRecordFromBackup(wallet, ownerId, index) {
     const keypair = keypairFromBackupWallet(wallet);
     const publicKey = keypair.publicKey.toBase58();
     assertBackupPublicKey(wallet, publicKey);
-    return walletRecord(cleanLabel(wallet.label || wallet.name || `Restored Wallet ${index + 1}`), keypair, ownerId);
+    return {
+      ...walletRecord(cleanLabel(wallet.label || wallet.name || `Restored Wallet ${index + 1}`), keypair, ownerId),
+      ...backupSessionWalletMetadata(wallet)
+    };
   } catch (error) {
     if (encryptedError) {
       throw new Error(`Encrypted backup key could not be opened (${formatError(encryptedError)}) and raw-key fallback also failed (${formatError(error)}).`);

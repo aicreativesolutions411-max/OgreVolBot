@@ -17,7 +17,7 @@ test("/fun is a standalone no-store mobile surface with Cloudflare pretty-URL su
   assert.doesNotMatch(redirects, /^\/fun(?:\/\*)?\s+\/fun\.html/m);
   assert.match(html, /<script src="\/config\.js"><\/script>/);
   const scriptVersion = html.match(/<script defer src="\/fun\.js\?v=(\d+)"><\/script>/)?.[1];
-  assert.equal(scriptVersion, "37", "SlimeWire Go should publish the current app build");
+  assert.equal(scriptVersion, "38", "SlimeWire Go should publish the current app build");
   assert.match(funWorker, new RegExp(`\\/fun\\.js\\?v=${scriptVersion}`));
 });
 
@@ -30,7 +30,7 @@ test("/fun is installable as a separate PWA with a dedicated-origin escape", () 
   assert.match(js, /FUN_INSTALL_HOST = "app\.slimewire\.org"/);
   assert.match(js, /Install SlimeWire Go/);
   assert.match(js, /register\("\/fun-sw\.js", \{ scope: "\/fun\/", updateViaCache: "none" \}\)/);
-  assert.match(funWorker, /slimewire-fun-v26/);
+  assert.match(funWorker, /slimewire-fun-v27/);
   assert.match(JSON.stringify(manifest.icons), /fun-app-icon-512\.png/);
   assert.doesNotMatch(funWorker, /pathname\.startsWith\("\/api\/"\)[\s\S]{0,80}cache\.put/);
 });
@@ -47,6 +47,8 @@ test("/fun keeps the reference layout clean while carrying SlimeWire features", 
   assert.match(js, /Robinhood Chain/);
   assert.match(js, /coin\.volumeLabel \|\| "checking"/);
   assert.doesNotMatch(html, /community chat/i);
+  assert.match(html, /class="feed-search-btn"[\s\S]{0,140}data-open-search[\s\S]{0,100}Search CA/);
+  assert.match(css, /\.feed-actions\{display:flex/);
 });
 
 test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
@@ -55,9 +57,9 @@ test("/fun hides the SlimeCash handoff unless the route came from cash", () => {
   assert.match(js, /const FROM_CASH = ROUTE_PARAMS\.get\("from"\) === "cash"/);
   assert.match(js, /handoff\.hidden = !FROM_CASH/);
   assert.match(js, /SLIMECASH TO FUN/);
-  assert.match(html, /fun\.css\?v=21/);
-  assert.match(funWorker, /slimewire-fun-v26/);
-  assert.match(funWorker, /fun\.css\?v=21/);
+  assert.match(html, /fun\.css\?v=22/);
+  assert.match(funWorker, /slimewire-fun-v27/);
+  assert.match(funWorker, /fun\.css\?v=22/);
 });
 
 test("/fun keeps the wallet funding card compact and scannable", () => {
@@ -66,8 +68,8 @@ test("/fun keeps the wallet funding card compact and scannable", () => {
   assert.match(js, /<span>WALLET READY<\/span>/);
   assert.match(js, /"Add SOL to trade"/);
   assert.match(js, /"Add SOL from Phantom, Solflare, or another Solana wallet\."/);
-  assert.match(html, /fun\.js\?v=37/);
-  assert.match(funWorker, /fun\.js\?v=37/);
+  assert.match(html, /fun\.js\?v=38/);
+  assert.match(funWorker, /fun\.js\?v=38/);
 });
 
 test("Connect and Deposit share one simple funding flow without surprise wallet downloads", () => {
@@ -118,7 +120,7 @@ test("Connect and Deposit share one simple funding flow without surprise wallet 
 });
 
 test("Fun PWA refreshes exact funding assets without deleting another app's cache", () => {
-  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v26"/);
+  assert.match(funWorker, /const FUN_CACHE = "slimewire-fun-v27"/);
   assert.match(funWorker, /\/slimewire-funding\.js\?v=8/);
   assert.match(funWorker, /self\.skipWaiting\(\)/);
   assert.match(funWorker, /self\.clients\.claim\(\)/);
@@ -135,6 +137,107 @@ test("connected funding wallets stay separate from managed positions", () => {
   assert.doesNotMatch(terminalApp, /function connectedWalletTokenRows/);
   assert.match(terminalApp, /Funding wallet connected/);
   assert.match(terminalApp, /never mixed into your SlimeWire portfolio/);
+});
+
+test("web positions require user-mint acquisition proof while preserving managed-wallet sweeps", () => {
+  const shared = server.slice(server.indexOf("async function buildPositionsOverview"), server.indexOf("async function showSniperScan"));
+  const normalizer = server.slice(server.indexOf("function normalizeWebTokenHolding"), server.indexOf("function positionValueCacheKey"));
+  const projection = server.slice(server.indexOf("function webPrimaryPositionProjection"), server.indexOf("async function estimatePositionValueFromMarket"));
+  const webRows = server.slice(server.indexOf("async function webPositionRows"), server.indexOf("async function webPnlSummary"));
+  assert.match(shared, /for \(const account of accounts\.filter\(\(item\) => item\.rawAmount > 0n\)\)/);
+  assert.match(shared, /options\.webPortfolioOnly[\s\S]{0,180}!wallet\.volumeBot && !wallet\.ephemeral/);
+  assert.doesNotMatch(shared, /webPortfolioOnly[\s\S]{0,180}!wallet\.sessionWallet/);
+  assert.match(shared, /tradeType === "launch" && positiveBigIntOrZero\(trade\.solLamportsSpent\) > 0n/);
+  assert.match(projection, /hasAcquisitionProvenance = Number\(position\?\.buys \|\| 0\) > 0/);
+  assert.match(projection, /positiveBigIntOrZero\(position\?\.spent\) > 0n/);
+  assert.doesNotMatch(projection, /buyWallets/);
+  assert.match(webRows, /\.map\(webPrimaryPositionProjection\)/);
+  assert.match(webRows, /webPortfolioOnly: true/);
+  assert.match(webRows, /position\.buys > 0 && position\.spent > 0n/);
+  assert.doesNotMatch(server.slice(server.indexOf("async function estimatePositionValueFromMarket"), server.indexOf("async function pnlSummaryText")), /accounts\.slice\(0, 8\)/);
+
+  const positiveBigIntOrZero = (value) => { try { const parsed = BigInt(String(value ?? "0")); return parsed > 0n ? parsed : 0n; } catch { return 0n; } };
+  const project = Function("positiveBigIntOrZero", `${normalizer}\n${projection}\nreturn webPrimaryPositionProjection;`)(positiveBigIntOrZero);
+  const swept = project({ tokenMint: "mint", buys: 1, sells: 0, spent: 100n, received: 0n, accounts: [
+    { walletPublicKey: "destination-wallet", rawAmount: 123400n, decimals: 2 }
+  ] });
+  assert.equal(swept.walletCount, 1);
+  assert.equal(swept.rawAmount, 123400n);
+  assert.equal(swept.uiAmount, 1234);
+  assert.equal(project({ tokenMint: "spam", buys: 0, spent: 0n, accounts: [{ walletPublicKey: "wallet", rawAmount: 1n, decimals: 0 }] }), null);
+});
+
+test("position cache warmer fills the connected-wallet scoped v2 fast and full keys from one snapshot", () => {
+  const route = server.slice(server.indexOf('pathname === "/api/web/positions"'), server.indexOf('pathname === "/api/web/pnl"'));
+  const warmer = server.slice(server.indexOf("async function warmWorkerDisplayCaches"), server.indexOf("function normalizeWorkerList"));
+  assert.match(route, /webPositionConnectedScope\(profile\)/);
+  assert.match(warmer, /webPositionConnectedScope\(profile\)/);
+  assert.match(warmer, /cachedWebSummary\("web:positions:v2:" \+ connectedScope/);
+  assert.match(warmer, /cachedWebSummary\("web:positions:v2:fast:" \+ connectedScope/);
+  assert.doesNotMatch(warmer, /cachedWebSummary\("web:positions",/);
+  assert.match(warmer, /let positionsValuePromise = null/);
+  assert.match(warmer, /positionsValuePromise = webPositionSummary\(userId, \{ force, fast: false \}\)/);
+  assert.match(warmer, /Promise\.all\(\[[\s\S]*buildPositionsValue[\s\S]*buildPositionsValue/);
+});
+
+test("forced web summary refresh waits out an older in-flight build before rebuilding", async () => {
+  const helperSource = server.match(/async function refreshWebSummaryAfterInflight\(inflight, refresh\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.ok(helperSource, "refreshWebSummaryAfterInflight is missing");
+  const refreshAfterInflight = Function(`${helperSource}\nreturn refreshWebSummaryAfterInflight;`)();
+  let release;
+  let refreshes = 0;
+  const olderBuild = new Promise((resolve) => { release = resolve; });
+  const forced = refreshAfterInflight(olderBuild, () => {
+    refreshes += 1;
+    return { value: "fresh" };
+  });
+  await Promise.resolve();
+  assert.equal(refreshes, 0);
+  release({ value: "old" });
+  assert.deepEqual(await forced, { value: "fresh" });
+  assert.equal(refreshes, 1);
+  await assert.doesNotReject(() => refreshAfterInflight(Promise.reject(new Error("old failed")), () => ({ value: "recovered" })));
+
+  const cached = server.slice(server.indexOf("async function cachedWebSummary"), server.indexOf("async function sendWebLoginCode"));
+  assert.match(cached, /if \(force\) \{[\s\S]*force-inflight-queued[\s\S]*refreshWebSummaryAfterInflight\(cached\.promise/);
+  assert.match(cached, /startWebSummaryRefresh\(key, externalKey, cacheName, builder, ttlMs, staleMs/);
+});
+
+test("confirmed launch buys create exact idempotent web-position provenance", () => {
+  const fallback = server.slice(server.indexOf("async function firePostLaunchBuysServerSide"), server.indexOf("async function webLaunchPumpJitoBundle"));
+  const jito = server.slice(server.indexOf("async function webLaunchPumpJitoBundle"), server.indexOf("async function webLaunchMeteoraDbc"));
+  const meteora = server.slice(server.indexOf("async function webLaunchMeteoraDbc"), server.indexOf("async function webLaunchPumpPortalLocal"));
+  assert.match(fallback, /source: "pump_launch_raw_buy"/);
+  assert.match(fallback, /walletPublicKey: keypair\.publicKey\.toBase58\(\)/);
+  assert.match(fallback, /signature\s*\n\s*}\]\);/);
+  assert.match(jito, /const txSignature = bs58\.encode\(tx\.signatures\[0\]\)/);
+  assert.match(jito, /submittedBundleCandidates\.push\(\{ signatures: attemptSignatures, buyEvents: attemptBuyEvents \}\)/);
+  assert.match(jito, /getSignatureStatuses\(candidate\.signatures, \{ searchTransactionHistory: true \}\)/);
+  assert.match(jito, /if \(landedBuyEvents\.length\) \{[\s\S]*await recordTradeEvents\(landedBuyEvents\)/);
+  assert.match(jito, /provenanceId: `pump-jito:\$\{basePayload\.clientRequestId\}:\$\{entry\.wallet\.publicKey\}`/);
+  assert.match(jito, /if \(atomicReceipts\.length\) await recordTradeEvents\(atomicReceipts\)/);
+  assert.match(meteora, /if \(devBuySol > 0\) \{[\s\S]*source: "meteora_launch"/);
+  assert.match(meteora, /walletPublicKey: creatorPk/);
+  assert.match(server, /return `\$\{sig}:\$\{trade\.type \|\| ""}:\$\{trade\.tokenMint \|\| ""}:\$\{trade\.walletPublicKey \|\| ""}`/);
+  assert.match(server, /`provenance:\$\{provenanceId}:\$\{trade\.type \|\| ""}:\$\{trade\.tokenMint \|\| ""}:\$\{trade\.walletPublicKey \|\| ""}`/);
+});
+
+test("ordinary community snipes persist their acquired position", () => {
+  const community = server.slice(server.indexOf("async function fireCommunitySnipe(chatId"), server.indexOf("const tgQuickBuyPending"));
+  assert.match(community, /source: "community-snipe"/);
+  assert.match(community, /solLamportsSpent: String\(buyResult\.amountLamports \|\| amountLamports\)/);
+  assert.match(community, /tokenAmount: buyResult\.tokenDeltaAmount \|\| buyResult\.outputAmount \|\| null/);
+  assert.match(community, /signature: buyResult\.signature/);
+});
+
+test("live autopilot trades persist user-owned position receipts", () => {
+  const adapter = server.slice(server.indexOf("buyToken: async (mint, lamports)"), server.indexOf("async function startLiveAutopilotResume"));
+  assert.match(adapter, /userId: String\(autopilotWalletRecord\.ownerId\)/);
+  assert.match(adapter, /type: "buy",[\s\S]{0,80}source: "autopilot"/);
+  assert.match(adapter, /solLamportsSpent: String\(res\.amountLamports \|\| lamports\)/);
+  assert.match(adapter, /tokenAmount: String\(res\.tokenDeltaAmount\)/);
+  assert.match(adapter, /type: "sell",[\s\S]{0,80}source: "autopilot"/);
+  assert.match(adapter, /solLamportsReceived: res\?\.outputLamports/);
 });
 
 test("Fun exposes Send SOL and fee-aware All from wallet and positions", () => {
@@ -161,7 +264,7 @@ test("/fun and SlimeCash share the mobile shell", () => {
 test("/fun keeps SOL in the header and shows SOL plus coins as cash in the funding card", () => {
   assert.match(html, /class="wallet-pill-copy" data-wallet-balance/);
   assert.match(js, /function portfolioSolTotal\(\)/);
-  assert.match(js, /position\.estimatedValueSol/);
+  assert.match(js, /position\?\.estimatedValueSol/);
   assert.match(js, /totalSol: liquidSol \+ coinsSol/);
   assert.match(js, /compactSol\(wallet\.sol\)/);
   assert.match(js, /<small>AVAILABLE<\/small>/);
@@ -169,7 +272,114 @@ test("/fun keeps SOL in the header and shows SOL plus coins as cash in the fundi
   assert.match(js, /class="wallet-cash-total"[\s\S]{0,180}TOTAL VALUE[\s\S]{0,180}SOL \+ COINS/);
   assert.match(css, /\.readiness-summary\{display:grid;grid-template-columns:minmax\(0,1fr\) auto/);
   assert.match(server, /getSolUsdPrice\(\{ timeoutMs: 1_800 \}\)[\s\S]{0,200}return \{ balances, connectedWallet, solUsd \}/);
-  assert.match(js, /async function loadPositions\(\)[\s\S]{0,350}paintWalletPill\(\);[\s\S]{0,80}renderHomeReadiness\(\)/);
+  assert.match(js, /function paintPositionSurfaces\(\)[\s\S]{0,160}paintWalletPill\(\);[\s\S]{0,80}renderHomeReadiness\(\)/);
+  assert.match(js, /async function loadPositions\(options = \{\}\)[\s\S]{0,600}paintPositionSurfaces\(\)/);
+});
+
+test("/fun backs up the active wallet beside its SOL balance and keeps backup-all explicit", () => {
+  assert.match(js, /data-backup-wallet data-wallet-index="\$\{wallet\.index\}" data-wallet-key="\$\{escapeHtml\(wallet\.publicKey\)\}">Backup wallet/);
+  assert.match(js, /const requestBody = options\.walletPublicKey \|\| options\.walletIndex[\s\S]{0,180}publicKey: options\.walletPublicKey[\s\S]{0,100}walletIndex: options\.walletIndex/);
+  assert.match(js, /post\("\/api\/web\/wallets\/export", requestBody\)/);
+  assert.match(js, /exportWallets\(backupWallet, \{ recoveryOnly: true, walletPublicKey: backupWallet\.dataset\.walletKey[\s\S]{0,180}walletIndex: backupWallet\.dataset\.walletIndex/);
+  assert.match(js, /downloads\.recoveryKeys\?\.text[\s\S]{0,180}downloadText\(downloads\.recoveryKeys\.filename, downloads\.recoveryKeys\.text\)/);
+  assert.match(js, /Active wallet recovery key downloaded\. Keep it private\./);
+  const allFiles = js.slice(js.indexOf("function downloadWalletFiles"), js.indexOf("async function downloadFunAccountBackup"));
+  assert.match(allFiles, /downloads\.encryptedBackup, downloads\.recoveryKeys/);
+  assert.match(js, /const exportButton = event\.target\.closest\("\[data-export-wallets\]"\)[\s\S]{0,100}exportWallets\(exportButton\)/);
+  assert.match(css, /\.wallet-total-line\{display:flex/);
+  assert.match(css, /\.wallet-backup-button\{/);
+});
+
+test("web wallet exports exclude ghost wallets, retain funded sessions, and validate active key plus stable index", () => {
+  const route = server.slice(
+    server.indexOf('pathname === "/api/web/wallets/export"'),
+    server.indexOf('pathname === "/api/web/wallets/import"')
+  );
+  assert.match(route, /const body = await readJsonRequestBody\(request\)/);
+  assert.match(route, /exportWebWalletBackup\(auth\.userId, body\)/);
+
+  const eligibleSource = server.slice(
+    server.indexOf("function webBackupEligibleWallet"),
+    server.indexOf("async function exportWebWalletBackup")
+  );
+  const eligible = Function(`${eligibleSource}; return webBackupEligibleWallet;`)();
+  assert.equal(eligible({ publicKey: "managed" }), true);
+  assert.equal(eligible({ publicKey: "volume", volumeBot: true }), false);
+  assert.equal(eligible({ publicKey: "ephemeral", ephemeral: true }), false);
+  assert.equal(eligible({ publicKey: "pending-session", sessionWallet: true, sessionStatus: "pending-funding" }), false);
+  assert.equal(eligible({ publicKey: "funded-session", sessionWallet: true, sessionStatus: "funded" }), true);
+  assert.equal(eligible({ publicKey: "selected-session", sessionWallet: true }, { exactSelection: true }), true);
+
+  const exportSource = server.slice(
+    server.indexOf("async function exportWebWalletBackup"),
+    server.indexOf("async function importWebWallet")
+  );
+  assert.match(exportSource, /const eligible = owned\.filter\(\(wallet\) => webBackupEligibleWallet\(wallet\)\)/);
+  assert.match(exportSource, /body\.publicKey \|\| body\.walletPublicKey/);
+  assert.match(exportSource, /const byIndex = requestedIndex \? owned\[requestedIndex - 1\] : null/);
+  assert.match(exportSource, /byPublicKey\?\.publicKey !== byIndex\?\.publicKey/);
+  assert.match(exportSource, /!webBackupEligibleWallet\(requestedWallet, \{ exactSelection: true \}\)/);
+  assert.ok(
+    exportSource.indexOf("const wallets = requestedWallet ? [requestedWallet] : eligible")
+      < exportSource.indexOf("webBackupDownloadsForWallets"),
+    "both encrypted and recovery documents must receive only the selected/eligible wallet list"
+  );
+  assert.match(exportSource, /scope: singleWallet \? "active-wallet" : "all-managed"/);
+
+  const encryptedBackupSource = server.slice(
+    server.indexOf("function buildWalletBackupDocument"),
+    server.indexOf("function walletBackupFilename")
+  );
+  assert.match(encryptedBackupSource, /wallet\.sessionWallet \? \{/);
+  for (const field of ["sessionWallet", "sessionStatus", "sourceConnectedWallet", "sessionExpiresAt", "sessionBudgetLamports"]) {
+    assert.match(encryptedBackupSource, new RegExp(`${field}:`));
+  }
+  const restoreSource = server.slice(
+    server.indexOf("function backupSessionWalletMetadata"),
+    server.indexOf("function encryptedSecretFromBackup")
+  );
+  assert.match(restoreSource, /\.\.\.backupSessionWalletMetadata\(wallet\)/);
+});
+
+test("/fun paints real token quantities and asynchronously replaces pending SOL values", () => {
+  const numberSource = js.slice(js.indexOf("function positionNumber"), js.indexOf("function positionQuantity"));
+  const positionNumber = Function(`${numberSource}; return positionNumber;`)();
+  assert.equal(positionNumber("1,234,567"), 1_234_567);
+  assert.equal(positionNumber("NaN"), null);
+  assert.equal(positionNumber(Infinity), null);
+
+  const quantitySource = js.slice(js.indexOf("function positionNumber"), js.indexOf("function positionEstimatedSol"));
+  const positionQuantity = Function(`${quantitySource}; return positionQuantity;`)();
+  assert.equal(positionQuantity({ uiAmountNum: 1_234_567, uiAmount: "NaN" }), 1_234_567);
+  assert.equal(positionQuantity({ uiAmount: "1,234,567" }), 1_234_567);
+  assert.equal(positionQuantity({ uiAmountNum: 0, uiAmount: "NaN" }), null);
+
+  const valueSource = js.slice(js.indexOf("function positionEstimatedSol"), js.indexOf("function positionOpenPnl"));
+  const positionEstimatedSol = Function(`"use strict"; ${numberSource}; ${valueSource}; return positionEstimatedSol;`)();
+  assert.equal(positionEstimatedSol({ estimatedValueSol: "0" }), 0, "a known zero value is not an unavailable quote");
+  assert.equal(positionEstimatedSol({ estimatedValueSol: null }), null);
+
+  const loads = js.slice(js.indexOf("function paintPositionSurfaces"), js.indexOf("function currentPosition"));
+  assert.match(loads, /request\(`\/api\/web\/positions\?fast=true\$\{options\.force/);
+  assert.match(loads, /request\(`\/api\/web\/positions\$\{force \? "\?force=true"/);
+  assert.match(loads, /state\.positionValuePromise/);
+  assert.match(loads, /state\.positionValueForceRequested = true/);
+  assert.match(loads, /const force = requestedForce \|\| state\.positionValueForceRequested/);
+  assert.match(loads, /version !== state\.positionLoadVersion \|\| state\.positionValueForceRequested/);
+  assert.match(loads, /version !== state\.positionLoadVersion/);
+  assert.match(loads, /result\.data\.stale \|\| result\.data\.backgroundRefreshing/);
+  assert.match(loads, /loadValuedPositions\(version, \{ force: true \}\)/);
+  assert.match(loads, /renderWalletPositions\(\)/);
+  assert.match(loads, /renderPositionCard\(\)/);
+
+  const card = js.slice(js.indexOf("function renderPositionCard"), js.indexOf("function renderDetailPanel"));
+  const portfolio = js.slice(js.indexOf("function renderWalletPositions"), js.indexOf("async function loadWalletActivity"));
+  assert.doesNotMatch(card + portfolio, /Number\(position\.(?:uiAmount|estimatedValueSol|openPnlSol)/);
+  assert.match(js, /position\?\.valuePending \? pendingText : "Value unavailable"/);
+  assert.match(js, /pendingText = "Value updating…"/);
+  assert.match(portfolio, /"Pricing…"/);
+  assert.match(js, /position\?\.source !== "connected-wallet" && positionQuantity\(position\) != null/);
+  assert.match(js, /loadPositions\(\{ force: true \}\)/);
 });
 
 test("/fun reuses authenticated money APIs with idempotency and lazy user actions", () => {

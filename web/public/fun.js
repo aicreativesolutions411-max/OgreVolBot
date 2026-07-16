@@ -44,6 +44,9 @@
     chartMode: "chart",
     coinCalls: [],
     positions: [],
+    positionValuePromise: null,
+    positionValueForceRequested: false,
+    positionLoadVersion: 0,
     launches: [],
     tradeBusy: false,
     presets: { trade: [], bundle: [] },
@@ -258,8 +261,8 @@
   function portfolioSolTotal() {
     const liquidSol = state.wallets.reduce((sum, wallet) => sum + Math.max(0, Number(wallet.sol) || 0), 0);
     const coinsSol = state.positions.reduce((sum, position) => {
-      const value = Number(position.estimatedValueSol);
-      return sum + (Number.isFinite(value) && value > 0 ? value : 0);
+      const value = positionEstimatedSol(position);
+      return sum + (value || 0);
     }, 0);
     return { liquidSol, coinsSol, totalSol: liquidSol + coinsSol };
   }
@@ -278,6 +281,58 @@
     if (amount >= 100000) return `$${Math.round(amount / 1000)}K`;
     if (amount >= 1000) return `$${(amount / 1000).toFixed(1)}K`;
     return `$${amount.toFixed(2)}`;
+  }
+  function positionNumber(value) {
+    if (value == null || value === "") return null;
+    const number = Number(typeof value === "string" ? value.replaceAll(",", "") : value);
+    return Number.isFinite(number) ? number : null;
+  }
+  function positionQuantity(position) {
+    for (const value of [position?.uiAmountNum, position?.uiAmount]) {
+      const number = positionNumber(value);
+      if (number != null && number > 0) return number;
+    }
+    return null;
+  }
+  function positionPercent(value) {
+    const cleaned = typeof value === "string" ? value.trim().replace(/%$/, "") : value;
+    return positionNumber(cleaned);
+  }
+  function positionEstimatedSol(position) {
+    const number = positionNumber(position?.estimatedValueSol);
+    return number != null && number >= 0 ? number : null;
+  }
+  function positionOpenPnl(position) {
+    const buys = positionNumber(position?.buys), spentSol = positionNumber(position?.spentSol);
+    if (buys == null || buys <= 0 || spentSol == null || spentSol <= 0) return null;
+    return positionNumber(position?.openPnlSol);
+  }
+  function positionValueText(position, pendingText = "Value updating…") {
+    const value = positionEstimatedSol(position);
+    if (value != null) return `${formatPositionSol(value)} SOL`;
+    return position?.valuePending ? pendingText : "Value unavailable";
+  }
+  function displayablePositions(rows) {
+    return (Array.isArray(rows) ? rows : []).filter((position) => {
+      const mint = String(position?.tokenMint || "").trim();
+      return mint && position?.source !== "connected-wallet" && positionQuantity(position) != null;
+    });
+  }
+  function formatTokenQuantity(value) {
+    const number = positionNumber(value);
+    if (number == null || number <= 0) return "";
+    if (number >= 1_000_000_000) return `${(number / 1_000_000_000).toFixed(2).replace(/\.00$/, "")}B`;
+    if (number >= 1_000_000) return `${(number / 1_000_000).toFixed(2).replace(/\.00$/, "")}M`;
+    if (number >= 1_000) return number.toLocaleString("en-US", { maximumFractionDigits: 4 });
+    if (number >= 1) return number.toLocaleString("en-US", { maximumFractionDigits: 6 });
+    return number.toLocaleString("en-US", { maximumSignificantDigits: 6 });
+  }
+  function formatPositionSol(value) {
+    const number = positionNumber(value);
+    if (number == null || number < 0) return "";
+    if (number === 0) return "0";
+    if (number >= 1) return number.toLocaleString("en-US", { maximumFractionDigits: 4 });
+    return number.toLocaleString("en-US", { minimumFractionDigits: Math.min(4, Math.max(0, Math.ceil(-Math.log10(number)))), maximumSignificantDigits: 6 });
   }
   function paintWalletPill() {
     const pill = $(".wallet-pill"), label = $("[data-wallet-balance]");
@@ -311,7 +366,7 @@
     const sol = Number(wallet.sol || 0);
     const { totalSol } = portfolioSolTotal();
     const totalUsd = state.solUsd > 0 ? totalSol * state.solUsd : null;
-    target.innerHTML = `<section class="readiness-card ready"><div class="readiness-summary"><div><span>WALLET READY</span><h2>${sol > 0 ? `${sol.toFixed(3)} SOL ready` : "Add SOL to trade"}</h2><p>${sol > 0 ? "Pick a coin and choose your amount." : "Add SOL from Phantom, Solflare, or another Solana wallet."}</p></div><div class="wallet-cash-total"><span>TOTAL VALUE</span><b>${formatWalletUsd(totalUsd)}</b><small>SOL + COINS</small></div></div><div class="readiness-steps"><b class="done">OK <i>Wallet</i></b><b class="done">OK <i>Backup</i></b><b>${sol > 0 ? "OK" : "3"} <i>${sol > 0 ? "Funded" : "Add SOL"}</i></b></div><button type="button" data-deposit>${sol > 0 ? "Add more SOL" : "Add SOL"}</button></section>`;
+    target.innerHTML = `<section class="readiness-card ready"><div class="readiness-summary"><div><span>WALLET READY</span><h2>${sol > 0 ? `${sol.toFixed(3)} SOL ready` : "Add SOL to trade"}</h2><p>${sol > 0 ? "Pick a coin and choose your amount." : "Add SOL from Phantom, Solflare, or another Solana wallet."}</p></div><div class="wallet-cash-total"><span>TOTAL VALUE</span><b>${formatWalletUsd(totalUsd)}</b><small>SOL + COINS</small></div></div><div class="readiness-steps"><b class="done">OK <i>Wallet</i></b><b>2 <i>Backup</i></b><b>${sol > 0 ? "OK" : "3"} <i>${sol > 0 ? "Funded" : "Add SOL"}</i></b></div><div class="readiness-actions"><button type="button" data-deposit>${sol > 0 ? "Add more SOL" : "Add SOL"}</button><button class="secondary" type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Backup wallet</button></div></section>`;
   }
 
   function normalizeSol(row) {
@@ -615,12 +670,53 @@
     frame.dataset.src = src;
     frame.innerHTML = `<div class="chart-loader"><span></span><p>Loading ${state.chartMode === "transactions" ? "transactions" : "live chart"}</p></div><iframe src="${src}" title="${escapeHtml(coin.symbol || "coin")} ${state.chartMode}" loading="eager" onload="this.previousElementSibling?.remove()"></iframe>`;
   }
-  async function loadPositions() {
-    if (!state.token) return [];
-    const result = await request("/api/web/positions?fast=true");
-    if (result.ok && result.data?.ok) state.positions = result.data.positions || [];
+  function paintPositionSurfaces() {
     paintWalletPill();
     renderHomeReadiness();
+    if (state.view === "wallet" && state.profileTab === "positions") renderWalletPositions();
+    if (state.view === "coin") renderPositionCard();
+  }
+  async function loadValuedPositions(version, options = {}) {
+    const requestedForce = Boolean(options.force);
+    if (state.positionValuePromise) {
+      // A completed trade must not lose its forced refresh just because the
+      // initial background valuation request is still finishing. Coalesce all
+      // overlapping callers into one guaranteed follow-up.
+      if (requestedForce) state.positionValueForceRequested = true;
+      return state.positionValuePromise;
+    }
+    const force = requestedForce || state.positionValueForceRequested;
+    state.positionValueForceRequested = false;
+    const authToken = state.token;
+    let needsFreshFollowup = false;
+    const refresh = (async () => {
+      const result = await request(`/api/web/positions${force ? "?force=true" : ""}`);
+      if (!authToken || authToken !== state.token || version !== state.positionLoadVersion || !result.ok || !result.data?.ok) return state.positions;
+      needsFreshFollowup = !force && Boolean(result.data.stale || result.data.backgroundRefreshing);
+      state.positions = displayablePositions(result.data.positions);
+      paintPositionSurfaces();
+      return state.positions;
+    })();
+    state.positionValuePromise = refresh;
+    try {
+      return await refresh;
+    } finally {
+      if (state.positionValuePromise === refresh) state.positionValuePromise = null;
+      if (version !== state.positionLoadVersion || state.positionValueForceRequested) {
+        void loadValuedPositions(state.positionLoadVersion, { force: state.positionValueForceRequested });
+      }
+      else if (needsFreshFollowup && authToken === state.token) void loadValuedPositions(version, { force: true });
+    }
+  }
+  async function loadPositions(options = {}) {
+    if (!state.token) return [];
+    const authToken = state.token;
+    const version = ++state.positionLoadVersion;
+    const result = await request(`/api/web/positions?fast=true${options.force ? "&force=true" : ""}`);
+    if (authToken !== state.token || version !== state.positionLoadVersion) return state.positions;
+    if (result.ok && result.data?.ok) state.positions = displayablePositions(result.data.positions);
+    paintPositionSurfaces();
+    void loadValuedPositions(version, { force: Boolean(options.force) });
     return state.positions;
   }
   function currentPosition() { const key = coinKey(state.selected); return state.positions.find((position) => String(position.tokenMint || "").toLowerCase() === key.toLowerCase()) || null; }
@@ -633,9 +729,11 @@
   function renderPositionCard() {
     const position = currentPosition(), card = $("[data-position-card]");
     if (!position) { card.className = "position-card empty"; card.innerHTML = "No open SlimeWire position on this coin yet. Your chart and safety read stay available."; return; }
-    const pnl = Number(position.openPnlSol), pct = Number(position.openPnlPercent), cls = pnl >= 0 ? "up" : "down";
+    const quantity = positionQuantity(position);
+    if (quantity == null) { card.className = "position-card empty"; card.innerHTML = "No open SlimeWire position on this coin yet. Your chart and safety read stay available."; return; }
+    const valueSol = positionEstimatedSol(position), pnl = positionOpenPnl(position), pct = pnl == null ? null : positionPercent(position.openPnlPercent), cls = pnl == null ? "" : (pnl >= 0 ? "up" : "down");
     card.className = "position-card";
-    card.innerHTML = `<div class="pos-head"><span>YOUR POSITION</span><span>${escapeHtml(position.walletCount || 1)} wallet${Number(position.walletCount) === 1 ? "" : "s"}</span></div><div class="pos-main"><div><b>◎ ${Number(position.estimatedValueSol || 0).toFixed(4)}</b><span>${Number(position.uiAmount || 0).toLocaleString()} ${escapeHtml(position.symbol || state.selected?.symbol || "tokens")}</span></div><strong class="${cls}">${Number.isFinite(pnl) ? `${pnl >= 0 ? "+" : ""}${pnl.toFixed(4)} SOL` : "—"}<small>${Number.isFinite(pct) ? ` ${formatPct(pct)}` : ""}</small></strong></div>`;
+    card.innerHTML = `<div class="pos-head"><span>YOUR POSITION</span><span>${escapeHtml(position.walletCount || 1)} wallet${Number(position.walletCount) === 1 ? "" : "s"}</span></div><div class="pos-main"><div><b>${valueSol != null ? `◎ ${escapeHtml(formatPositionSol(valueSol))} SOL` : escapeHtml(positionValueText(position))}</b><span>${escapeHtml(formatTokenQuantity(quantity))} ${escapeHtml(position.symbol || state.selected?.symbol || "tokens")}</span></div><strong class="${cls}">${pnl != null ? `${pnl >= 0 ? "+" : ""}${pnl.toFixed(4)} SOL` : ""}<small>${pct != null ? ` ${formatPct(pct)}` : ""}</small></strong></div>`;
   }
   function renderDetailPanel() {
     const coin = state.selected || {}, detail = state.selectedDetail || {}, panel = $("[data-detail-panel]");
@@ -754,7 +852,8 @@
   function renderWalletHero() {
     const wallet = activeWallet(), hero = $("[data-wallet-hero]");
     if (!wallet) { hero.innerHTML = `<img class="wallet-pfp" src="${slimePfp("guest")}" alt=""><h1>Slime guest</h1><p>No wallet created yet</p><div class="wallet-total">Ready when you are</div>`; return; }
-    hero.innerHTML = `<img class="wallet-pfp" src="${slimePfp(wallet.publicKey)}" alt=""><h1>${escapeHtml(wallet.label || "Slime wallet")}</h1><p>${escapeHtml(short(wallet.publicKey))}</p><div class="wallet-total">◎ ${Number(wallet.sol || 0).toFixed(4)} available</div>`;
+    const sol = positionNumber(wallet.sol) ?? 0;
+    hero.innerHTML = `<img class="wallet-pfp" src="${slimePfp(wallet.publicKey)}" alt=""><h1>${escapeHtml(wallet.label || "Slime wallet")}</h1><p>${escapeHtml(short(wallet.publicKey))}</p><div class="wallet-total-line"><div class="wallet-total"><b>◎ ${sol.toFixed(4)} SOL</b><span>Available in this wallet</span></div><button class="wallet-backup-button" type="button" data-backup-wallet data-wallet-index="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Backup wallet</button></div>`;
   }
   function renderSocialProfile() {
     const panel = $("[data-profile-panel]"), user = state.user || {};
@@ -845,7 +944,12 @@
   }
   function renderWalletPositions() {
     const panel = $("[data-profile-panel]");
-    panel.innerHTML = state.positions.length ? state.positions.map((position) => { const pnl = Number(position.openPnlSol), key = position.tokenMint; return `<button class="position-row coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="sol"><img src="${escapeHtml(position.imageUrl || mascot(key))}" alt=""><span><b>${escapeHtml(position.symbol || short(key))}</b><span>${Number(position.uiAmount || 0).toLocaleString()} tokens · ${escapeHtml(position.walletCount || 1)} wallet</span></span><strong class="position-pnl ${pnl >= 0 ? "up" : "down"}">${Number.isFinite(pnl) ? `${pnl >= 0 ? "+" : ""}${pnl.toFixed(4)}◎` : "—"}</strong></button>`; }).join("") : emptyState("No open positions", "Coins you buy through SlimeWire appear here.");
+    const positions = displayablePositions(state.positions);
+    panel.innerHTML = positions.length ? positions.map((position) => {
+      const key = position.tokenMint, quantity = positionQuantity(position), pnl = positionOpenPnl(position), walletCount = Math.max(1, Number(position.walletCount) || 1);
+      const pnlClass = pnl == null ? "" : (pnl >= 0 ? "up" : "down");
+      return `<button class="position-row coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="sol"><img src="${escapeHtml(position.imageUrl || mascot(key))}" alt=""><span class="position-copy"><b>${escapeHtml(position.symbol || short(key))}</b><span>${escapeHtml(formatTokenQuantity(quantity))} tokens · ${walletCount} wallet${walletCount === 1 ? "" : "s"}</span></span><strong class="position-value"><b>${escapeHtml(positionValueText(position, "Pricing…"))}</b>${pnl != null ? `<small class="position-pnl ${pnlClass}">${pnl >= 0 ? "+" : ""}${pnl.toFixed(4)} SOL</small>` : ""}</strong></button>`;
+    }).join("") : emptyState("No open positions", "Coins you buy through SlimeWire appear here.");
     panel.insertAdjacentHTML("afterbegin", `<div class="position-actions"><button type="button" data-send-sol>Send SOL</button><button type="button" data-receive>Receive</button></div>`);
   }
   async function loadWalletActivity() {
@@ -1248,11 +1352,15 @@
     const result = await post("/api/web/wallets/create", { label: "SlimeWire Go", count: 1 });
     if (!result.ok || !result.data?.ok) { toast(result.data?.message || result.data?.error || "Wallet creation failed", true); return false; }
     const downloads = result.data.downloads || {};
-    for (const item of [downloads.encryptedBackup, downloads.recoveryKeys].filter(Boolean)) downloadText(item.filename, item.text);
+    downloadWalletFiles(downloads);
     await loadWallets(true); renderWalletHero(); renderWalletPositions(); if (state.view === "quick") renderQuickRoute(); toast("Wallet created. Backups downloaded—store them safely."); return true;
   }
   function downloadText(filename, text) { const blob = new Blob([text], { type: "text/plain" }), url = URL.createObjectURL(blob), link = document.createElement("a"); link.href = url; link.download = filename || "slimewire-backup.txt"; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000); }
-  function downloadWalletFiles(downloads = {}) { for (const item of [downloads.encryptedBackup, downloads.recoveryKeys].filter((entry) => entry?.text)) downloadText(item.filename, item.text); }
+  function downloadWalletFiles(downloads = {}) {
+    const files = [downloads.encryptedBackup, downloads.recoveryKeys].filter((entry) => entry?.text);
+    for (const item of files) downloadText(item.filename, item.text);
+    return files.length;
+  }
   async function downloadFunAccountBackup() {
     const result = await post("/api/web/cash/account-backup", {});
     if (!result.ok || !result.data?.accountBackup?.text) return false;
@@ -1271,12 +1379,39 @@
     if (!result.ok || !result.data?.ok) { toast(result.data?.error || "Could not rename wallet", true); return; }
     state.wallets = result.data.wallets || state.wallets; paintWalletPill(); renderWalletHero(); toast("Wallet renamed"); await openWalletManager();
   }
-  async function exportWallets() {
+  async function exportWallets(button = null, options = {}) {
     const status = $("[data-wallet-manager-status]"); if (status) status.textContent = "Building backup files…";
-    if (!(await ensureAccount())) { if (status) status.textContent = "Could not open your account."; return; }
-    const result = await post("/api/web/wallets/export", {});
-    if (result.ok && result.data?.ok) { downloadWalletFiles(result.data.backup?.downloads); if (status) status.textContent = result.data.backup?.message || "Backups downloaded."; }
-    else if (status) status.textContent = result.data?.error || "Backup failed.";
+    const oldLabel = button?.textContent || "";
+    if (button) { button.disabled = true; button.textContent = "Preparing…"; }
+    try {
+      if (!(await ensureAccount())) { if (status) status.textContent = "Could not open your account."; toast("Could not open your account.", true); return; }
+      const requestBody = options.walletPublicKey || options.walletIndex
+        ? { publicKey: options.walletPublicKey || "", walletIndex: options.walletIndex || "" }
+        : {};
+      const result = await post("/api/web/wallets/export", requestBody);
+      if (result.ok && result.data?.ok) {
+        const downloads = result.data.backup?.downloads || {};
+        let count = 0;
+        if (options.recoveryOnly && downloads.recoveryKeys?.text) {
+          downloadText(downloads.recoveryKeys.filename, downloads.recoveryKeys.text);
+          count = 1;
+        } else if (!options.recoveryOnly) {
+          count = downloadWalletFiles(downloads);
+        }
+        if (!count) { if (status) status.textContent = "Backup file was unavailable."; toast("Backup file was unavailable.", true); return; }
+        const message = options.recoveryOnly && count === 1
+          ? "Active wallet recovery key downloaded. Keep it private."
+          : (count === 2 ? "Both wallet backup files downloaded." : (result.data.backup?.message || "Wallet backup downloaded."));
+        if (status) status.textContent = message;
+        toast(message);
+      } else {
+        const message = result.data?.error || "Backup failed.";
+        if (status) status.textContent = message;
+        toast(message, true);
+      }
+    } finally {
+      if (button) { button.disabled = false; button.textContent = oldLabel || "Backup wallet"; }
+    }
   }
   async function restoreWallet() {
     const status = $("[data-wallet-manager-status]"), text = String($("[data-wallet-backup-text]")?.value || "").trim();
@@ -1326,7 +1461,7 @@
         else body.disableAutoExit = true;
         result = await post("/api/web/trade/buy", body);
       }
-      if (result.ok && result.data?.ok) { toast(`Bought ${coin.symbol || "coin"} · ${amount} SOL`); setTimeout(async () => { await Promise.all([loadWallets(true), loadPositions()]); renderCoinShell(); }, 1600); }
+      if (result.ok && result.data?.ok) { toast(`Bought ${coin.symbol || "coin"} · ${amount} SOL`); setTimeout(async () => { await Promise.all([loadWallets(true), loadPositions({ force: true })]); renderCoinShell(); }, 1600); }
       else toast(result.data?.message || result.data?.error || "Quick buy failed", true);
     } finally { state.quickBuyKey = ""; state.tradeBusy = false; button.disabled = false; button.textContent = oldText; }
   }
@@ -1357,7 +1492,7 @@
         } else body.percent = $("[data-trade-percent]").value;
         result = await post(`/api/web/trade/${side}`, body);
       }
-      if (result.ok && result.data?.ok) { toast(cashoutWarning ? "Sold; ETH cash-out remains available in Wallet." : `${side === "buy" ? "Buy" : "Sell"} submitted`, cashoutWarning); closeSheet(); setTimeout(async () => { await Promise.all([loadWallets(true), loadPositions()]); renderCoinShell(); }, 2200); }
+      if (result.ok && result.data?.ok) { toast(cashoutWarning ? "Sold; ETH cash-out remains available in Wallet." : `${side === "buy" ? "Buy" : "Sell"} submitted`, cashoutWarning); closeSheet(); setTimeout(async () => { await Promise.all([loadWallets(true), loadPositions({ force: true })]); renderCoinShell(); }, 2200); }
       else toast(result.data?.message || result.data?.error || `${side} failed`, true);
     } finally { state.tradeBusy = false; button.disabled = false; button.textContent = `${side === "buy" ? "Buy" : "Sell"} ${coin.symbol || "coin"}`; }
   }
@@ -1550,6 +1685,7 @@
     if (event.target.closest("[data-close-sheet]")) { closeSheet(); return; }
     if (event.target.closest("[data-wallet-entry]")) { if (state.token) await loadWallets(true); openFundingSheet(); return; }
     if (event.target.closest("[data-deposit]")) { if (state.token) await loadWallets(true); openFundingSheet(); return; }
+    const backupWallet = event.target.closest("[data-backup-wallet]"); if (backupWallet) { await exportWallets(backupWallet, { recoveryOnly: true, walletPublicKey: backupWallet.dataset.walletKey || activeWallet()?.publicKey || "", walletIndex: backupWallet.dataset.walletIndex || activeWallet()?.index || "" }); return; }
     if (event.target.closest("[data-send-sol]")) { await openSendSolSheet(); return; }
     if (event.target.closest("[data-send-sol-all]")) { selectFunSendAll(); return; }
     const sendSolChip = event.target.closest("[data-send-sol-chip]"); if (sendSolChip) { const input = $("[data-send-sol-amount]"); if (input) { input.value = sendSolChip.dataset.sendSolChip; delete input.dataset.sendAll; } $$('[data-send-sol-all]').forEach((button) => button.classList.remove("active")); return; }
@@ -1613,7 +1749,7 @@
     const saveProfile = event.target.closest("[data-save-social-profile]"); if (saveProfile) { await saveSocialProfile(saveProfile); return; }
     const enablePush = event.target.closest("[data-enable-push]"); if (enablePush) { await enableFunPush(enablePush); return; }
     if (event.target.closest("[data-create-wallet]")) { if (await createWallet()) { if (state.view === "quick") { closeSheet(); renderQuickRoute(); } else await openWalletManager(); } return; }
-    if (event.target.closest("[data-export-wallets]")) { await exportWallets(); return; }
+    const exportButton = event.target.closest("[data-export-wallets]"); if (exportButton) { await exportWallets(exportButton); return; }
     if (event.target.closest("[data-restore-wallet]")) { await restoreWallet(); return; }
     const remove = event.target.closest("[data-remove-wallet]"); if (remove) { await removeWallet(remove.dataset.removeWallet, remove.dataset.walletKey); return; }
     const select = event.target.closest("[data-select-wallet]"); if (select) { state.activeWallet = Number(select.dataset.selectWallet);localStorage.setItem(ACTIVE_WALLET_KEY,String(state.activeWallet)); paintWalletPill(); renderWalletHero(); renderQuickTrade(); if (state.view === "quick") renderQuickRoute(); await openWalletManager(); return; }

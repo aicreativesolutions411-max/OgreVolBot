@@ -1,11 +1,11 @@
 /* SlimeWire Go: focused mobile PWA shell and push worker. */
-const FUN_CACHE = "slimewire-fun-v26";
+const FUN_CACHE = "slimewire-fun-v27";
 const FUN_SHELL = [
   "/fun/",
   "/fun.html",
-  "/fun.css?v=21",
+  "/fun.css?v=22",
   "/slimewire-funding.js?v=8",
-  "/fun.js?v=37",
+  "/fun.js?v=38",
   "/fun-manifest.webmanifest?v=2",
   "/config.js",
   "/assets/slimewire/fun-app-icon-192.png",

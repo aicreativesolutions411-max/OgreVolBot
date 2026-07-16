@@ -112,7 +112,9 @@ test("web wallet, positions, and pnl summaries return cached data immediately an
   assert.match(body, /startWebSummaryRefresh\(key, externalKey, cacheName, builder, ttlMs, staleMs, \{ background: true \}\)/);
   assert.doesNotMatch(body, /await recordCacheEvent/);
   assert.match(serverSource, /cachedWebSummary\("web:balances"/);
-  assert.match(serverSource, /cachedWebSummary\("web:positions"/);
+  assert.match(serverSource, /cachedWebSummary\("web:positions:v2:" \+ connectedScope/);
+  assert.match(serverSource, /cachedWebSummary\("web:positions:v2:fast:" \+ connectedScope/);
+  assert.doesNotMatch(serverSource, /cachedWebSummary\("web:positions",/);
   assert.match(serverSource, /cachedWebSummary\("web:pnl"/);
   assert.match(serverSource, /backgroundRefreshing: summary\.backgroundRefreshing/);
   assert.match(serverSource, /stale: summary\.stale/);
