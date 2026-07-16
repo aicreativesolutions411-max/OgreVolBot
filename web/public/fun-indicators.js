@@ -102,14 +102,14 @@
   function syncButtons() {
     const count = Object.values(enabled).filter(Boolean).length;
     $$('[data-indicator-kind]').forEach((button) => {
-      const active = Boolean(enabled[button.dataset.indicatorKind]);
+      const active = Boolean(analysisActive && enabled[button.dataset.indicatorKind]);
       button.classList.toggle("active", active);
       button.setAttribute("aria-pressed", String(active));
     });
     const trigger = $("[data-indicators-toggle]");
     trigger?.classList.toggle("active", analysisActive);
     trigger?.setAttribute("aria-pressed", String(analysisActive));
-    if (trigger) trigger.textContent = count ? `⌁ Indicators · ${count}` : "⌁ Indicators";
+    if (trigger) trigger.textContent = analysisActive && count ? `⌁ Indicators · ${count}` : "⌁ Indicators";
     const transactions = $('[data-chart-mode="transactions"]')?.classList.contains("active");
     $('[data-chart-mode="chart"]')?.classList.toggle("active", !analysisActive && !transactions);
   }
@@ -391,7 +391,8 @@
   }
 
   function analysisHeader(subtitle, badge = "LIVE") {
-    return `<div class="analysis-head"><div><b>SLIME ANALYSIS</b><span>${escapeHtml(subtitle)}</span></div><div class="analysis-head-actions"><em>${escapeHtml(badge)}</em><button type="button" data-analysis-back aria-label="Return to regular chart">↩ Chart</button></div></div>`;
+    const fibControl = enabled.fib ? '<button type="button" data-fib-settings-open aria-label="Open Fibonacci settings">⚙ Fib</button>' : "";
+    return `<div class="analysis-head"><div><b>SLIME ANALYSIS</b><span>${escapeHtml(subtitle)}</span></div><div class="analysis-head-actions"><em>${escapeHtml(badge)}</em>${fibControl}<button type="button" data-analysis-back aria-label="Return to regular chart">↩ Chart</button></div></div>`;
   }
 
   function activateAnalysis({ openDrawer = true } = {}) {
@@ -506,9 +507,9 @@
     restoreProviderChart();
     syncButtons();
     const panels = $("[data-indicator-panels]");
-    if (panels) panels.innerHTML = `<div class="analysis-fallback"><b>Regular chart restored</b><small>${escapeHtml(message)}</small><button type="button" data-indicator-retry>Retry analysis</button></div>`;
+    if (panels) panels.innerHTML = `<div class="analysis-fallback"><b>Indicators are off — regular chart restored</b><small>${escapeHtml(message)} Fibonacci is only marked active when its levels are painted on candles.</small><button type="button" data-indicator-retry>Retry analysis</button></div>`;
     toggleDrawer(true, false);
-    setStatus("Regular chart is available while indicator candles catch up.", true);
+    setStatus("Saved indicators are off until candle history loads.", true);
   }
 
   async function renderIndicators({ background = false } = {}) {
@@ -557,6 +558,7 @@
       else toggleDrawer();
       return;
     }
+    if (event.target.closest("[data-fib-settings-open]")) { toggleDrawer(true, false); openFibSettings(); return; }
     if (event.target.closest("[data-analysis-back]")) { deactivateAnalysis({ closeDrawer: true }); return; }
     if (event.target.closest("[data-fib-settings-close]")) { closeFibSettings(); return; }
     if (event.target.closest("[data-fib-reset]")) {
