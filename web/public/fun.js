@@ -68,6 +68,7 @@
     quickAmount: "0.1",
     quickPanel: "trade",
     pendingSolSend: null,
+    pendingWalletManagerAction: null,
     deferredInstall: null
   };
 
@@ -1522,8 +1523,117 @@
   }
   async function openWalletManager() {
     if (state.token) await loadWallets();
-    const rows = state.wallets.length ? state.wallets.map((wallet) => `<div class="wallet-manage-row"><div><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${wallet.index === state.activeWallet ? " · Active" : ""}</b><span>${escapeHtml(short(wallet.publicKey))} · ${Number(wallet.sol || 0).toFixed(4)} SOL</span><span class="wallet-rename"><input data-wallet-rename-input="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40"><button type="button" data-rename-wallet="${wallet.index}">Rename</button></span></div><div><button type="button" data-select-wallet="${wallet.index}">Use</button> <button class="danger" type="button" data-remove-wallet="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button></div></div>`).join("") : '<div class="read-card"><h3>No wallet loaded</h3><p>Create a new wallet or restore one from a saved backup. Backup files download automatically.</p></div>';
-    openSheet(`<div class="sheet-title"><img src="${slimePfp(activeWallet()?.publicKey || "wallet-manager")}" alt=""><div><h2>Wallet manager</h2><p>Rename wallets, keep one Main wallet, and back up before removal.</p></div></div><div class="wallet-manager-list">${rows}</div><div class="wallet-manager-actions"><button type="button" data-create-wallet>+ Add wallet</button><button type="button" data-export-wallets ${state.wallets.length ? "" : "disabled"}>Download backups</button></div><div class="wallet-restore-box"><label class="file-button">Choose backup file<input type="file" data-wallet-backup-file accept=".txt,.json,application/json,text/plain" hidden></label><textarea data-wallet-backup-text placeholder="Or paste an encrypted backup, recovery file, or private key"></textarea><button class="submit-trade" type="button" data-restore-wallet>Restore / import wallet</button><p class="wallet-manager-status" data-wallet-manager-status></p></div><p class="fineprint">Each Solana wallet deterministically controls its Robinhood address. Buy with SOL; SlimeWire converts automatically. Keep both downloaded backup files private.</p>`);
+    state.pendingWalletManagerAction = null;
+    const rows = state.wallets.length ? state.wallets.map((wallet) => `<div class="wallet-manage-row" data-wallet-manager-row="${wallet.index}"><label class="wallet-batch-check" title="Select wallet"><input type="checkbox" data-wallet-batch-select="${wallet.index}" checked><span></span></label><div class="wallet-manage-copy"><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${wallet.index === state.activeWallet && String(wallet.label || "").trim().toLowerCase() !== "main" ? " · Main" : ""}</b><span>${escapeHtml(short(wallet.publicKey))} · ${Number(wallet.sol || 0).toFixed(4)} SOL</span><span class="wallet-fund-amount"><input data-wallet-fund-amount="${wallet.index}" inputmode="decimal" placeholder="SOL for this wallet" aria-label="SOL amount for ${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}"></span><span class="wallet-rename"><input data-wallet-rename-input="${wallet.index}" value="${escapeHtml(wallet.label || "")}" maxlength="40"><button type="button" data-rename-wallet="${wallet.index}">Rename</button></span></div><div class="wallet-row-actions"><button type="button" data-select-wallet="${wallet.index}" ${wallet.index === state.activeWallet ? "disabled" : ""}>${wallet.index === state.activeWallet ? "Active" : "Main"}</button><button type="button" data-wallet-funds="${wallet.index}">Only</button><button class="danger" type="button" data-remove-wallet="${wallet.index}" data-wallet-key="${escapeHtml(wallet.publicKey)}">Remove</button></div></div>`).join("") : '<div class="read-card"><h3>No wallet loaded</h3><p>Create a new wallet or restore one from a saved backup. Backup files download automatically.</p></div>';
+    const walletOptions = state.wallets.map((wallet) => `<option value="${wallet.index}" ${wallet.index === state.activeWallet ? "selected" : ""}>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)} · ${Number(wallet.sol || 0).toFixed(4)} SOL</option>`).join("");
+    openSheet(`<div class="sheet-title"><img src="${slimePfp(activeWallet()?.publicKey || "wallet-manager")}" alt=""><div><h2>Wallet manager</h2><p>Create one at a time, then fund or consolidate the wallets you select.</p></div></div>
+      <div class="wallet-select-bar"><button type="button" data-wallet-select-all>All</button><button type="button" data-wallet-select-none>None</button><span data-wallet-selected-count>${state.wallets.length} selected</span></div>
+      <div class="wallet-manager-list">${rows}</div>
+      <div class="wallet-manager-actions"><button type="button" data-create-wallet>+ Add one wallet</button><button type="button" data-export-wallets ${state.wallets.length ? "" : "disabled"}>Download backups</button></div>
+      ${state.wallets.length > 1 ? `<section class="wallet-batch-card" data-wallet-funding-card><div class="wallet-batch-heading"><div><h3>Fund selected wallets</h3><p>One review, one transaction.</p></div></div><div class="field"><label>Fund from</label><select data-wallet-fund-source>${walletOptions}</select></div><div class="wallet-mode-toggle"><button class="active" type="button" data-wallet-fund-mode="equal">Same amount each</button><button type="button" data-wallet-fund-mode="custom">Different amounts</button></div><div class="field" data-wallet-equal-funding><label>SOL per wallet</label><input data-wallet-fund-equal inputmode="decimal" value="0.1" placeholder="0.1"></div><button class="submit-trade" type="button" data-review-wallet-fund>Review funding</button><p class="fineprint">The Main/source wallet is never funded into itself. Network fees are shown by Solana when submitted.</p></section>` : ""}
+      ${state.wallets.length ? `<section class="wallet-batch-card" data-wallet-consolidate-card><div class="wallet-batch-heading"><div><h3>Sell &amp; consolidate</h3><p>Use the selected wallets, or tap Only on a wallet above.</p></div></div><div class="field"><label>Sweep SOL into</label><select data-wallet-consolidate-destination>${walletOptions}</select></div><div class="wallet-consolidate-actions"><button type="button" data-review-wallet-action="sell">Sell all tokens</button><button type="button" data-review-wallet-action="sweep">Sweep SOL</button><button class="primary" type="button" data-review-wallet-action="sell-sweep">Sell tokens + sweep</button></div><p class="fineprint">Selling swaps every sellable token to SOL. Sweeping drains transferable SOL into the wallet above and keeps network fees covered.</p></section>` : ""}
+      <details class="wallet-restore-box"><summary>Restore or import a wallet</summary><label class="file-button">Choose backup file<input type="file" data-wallet-backup-file accept=".txt,.json,application/json,text/plain" hidden></label><textarea data-wallet-backup-text placeholder="Or paste an encrypted backup, recovery file, or private key"></textarea><button class="submit-trade" type="button" data-restore-wallet>Restore / import wallet</button></details><p class="wallet-manager-status" data-wallet-manager-status></p><p class="fineprint">Each Solana wallet deterministically controls its Robinhood address. Keep downloaded backup files private.</p>`);
+    updateWalletManagerSelection();
+    updateWalletFundingSource();
+  }
+  function selectedManagerWalletIndexes() {
+    return $$('[data-wallet-batch-select]:checked').map((input) => Number(input.dataset.walletBatchSelect)).filter(Number.isInteger);
+  }
+  function updateWalletManagerSelection() {
+    const count = selectedManagerWalletIndexes().length;
+    const label = $("[data-wallet-selected-count]");
+    if (label) label.textContent = `${count} selected`;
+  }
+  function setWalletManagerSelection(indexes) {
+    const selected = new Set(indexes.map(Number));
+    $$('[data-wallet-batch-select]').forEach((input) => { input.checked = selected.has(Number(input.dataset.walletBatchSelect)); });
+    updateWalletManagerSelection();
+  }
+  function setWalletFundingMode(mode = "equal") {
+    const custom = mode === "custom";
+    $(".wallet-manager-list")?.classList.toggle("custom-funding", custom);
+    $("[data-wallet-equal-funding]")?.classList.toggle("hidden", custom);
+    $$('[data-wallet-fund-mode]').forEach((button) => button.classList.toggle("active", button.dataset.walletFundMode === mode));
+    updateWalletFundingSource();
+  }
+  function updateWalletFundingSource() {
+    const sourceIndex = Number($("[data-wallet-fund-source]")?.value || state.activeWallet);
+    $$("[data-wallet-manager-row]").forEach((row) => row.classList.toggle("funding-source", Number(row.dataset.walletManagerRow) === sourceIndex));
+  }
+  function focusWalletFunds(index) {
+    setWalletManagerSelection([Number(index)]);
+    $("[data-wallet-consolidate-card]")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  function reviewWalletFunding() {
+    const sourceWalletIndex = Number($("[data-wallet-fund-source]")?.value || state.activeWallet);
+    const mode = $("[data-wallet-fund-mode].active")?.dataset.walletFundMode || "equal";
+    const targets = selectedManagerWalletIndexes().filter((index) => index !== sourceWalletIndex);
+    if (!targets.length) { toast("Select at least one wallet other than the funding wallet.", true); return; }
+    if (targets.length > 20) { toast("Fund up to 20 wallets at a time.", true); return; }
+    const equalAmount = String($("[data-wallet-fund-equal]")?.value || "").trim();
+    const allocations = targets.map((index) => {
+      const wallet = state.wallets.find((item) => Number(item.index) === index);
+      const amountSol = mode === "equal" ? equalAmount : String($(`[data-wallet-fund-amount="${index}"]`)?.value || "").trim();
+      return { walletIndex: index, label: wallet?.label || `Wallet ${index}`, destination: wallet?.publicKey || "", amountSol };
+    });
+    if (allocations.some((allocation) => !allocation.destination || !(Number(allocation.amountSol) > 0))) {
+      toast(mode === "equal" ? "Enter a valid SOL amount per wallet." : "Enter a SOL amount for every selected wallet.", true);
+      return;
+    }
+    const source = state.wallets.find((wallet) => Number(wallet.index) === sourceWalletIndex);
+    const totalSol = allocations.reduce((sum, allocation) => sum + Number(allocation.amountSol), 0);
+    if (Number(source?.sol || 0) <= totalSol) { toast("The funding wallet needs enough SOL for the total plus network fees.", true); return; }
+    state.pendingWalletManagerAction = { kind: "fund", sourceWalletIndex, allocations, totalSol, attemptId: attemptId("wallet-batch-fund") };
+    openSheet(`<div class="sheet-title"><img src="${slimePfp(source?.publicKey || "fund-wallets")}" alt=""><div><h2>Review wallet funding</h2><p>${allocations.length} wallet${allocations.length === 1 ? "" : "s"} from ${escapeHtml(source?.label || `Wallet ${sourceWalletIndex}`)}</p></div></div><div class="read-card"><h3>${totalSol.toFixed(6).replace(/0+$/, "").replace(/\.$/, "")} SOL total</h3><p>${allocations.map((allocation) => `${escapeHtml(allocation.label)} · ${escapeHtml(allocation.amountSol)} SOL`).join("<br>")}</p></div><button class="submit-trade" type="button" data-confirm-wallet-manager-action>Fund selected wallets</button><button class="sheet-secondary" type="button" data-manage-wallets>Edit selection</button><p class="fineprint">This sends one Solana transaction containing one transfer per selected wallet. It cannot be reversed.</p>`);
+  }
+  function reviewWalletAction(kind) {
+    const destinationIndex = Number($("[data-wallet-consolidate-destination]")?.value || state.activeWallet);
+    const destinationWallet = state.wallets.find((wallet) => Number(wallet.index) === destinationIndex);
+    const selected = selectedManagerWalletIndexes();
+    if (!selected.length) { toast("Select at least one wallet.", true); return; }
+    if (!destinationWallet) { toast("Choose the wallet that should receive the SOL.", true); return; }
+    const walletIndexes = kind === "sweep" ? selected.filter((index) => index !== destinationIndex) : selected;
+    if (!walletIndexes.length && kind === "sweep") { toast("Select another wallet to sweep into this one.", true); return; }
+    const labels = selected.map((index) => state.wallets.find((wallet) => Number(wallet.index) === index)?.label || `Wallet ${index}`);
+    state.pendingWalletManagerAction = { kind, walletIndexes, selectedWalletIndexes: selected, destination: destinationWallet.publicKey, destinationIndex, attemptId: attemptId(`wallet-${kind}`) };
+    const title = kind === "sell" ? "Sell all tokens" : kind === "sweep" ? "Sweep all SOL" : "Sell tokens & sweep SOL";
+    const actionLabel = kind === "sell" ? "Sell selected token balances" : kind === "sweep" ? "Sweep selected SOL" : "Sell & sweep selected wallets";
+    openSheet(`<div class="sheet-title"><img src="${slimePfp(destinationWallet.publicKey)}" alt=""><div><h2>${title}</h2><p>${selected.length} selected wallet${selected.length === 1 ? "" : "s"}</p></div></div><div class="read-card"><h3>${escapeHtml(labels.join(", "))}</h3><p>${kind === "sell" ? "Every sellable token will be swapped to SOL." : `SOL will finish in ${escapeHtml(destinationWallet.label || `Wallet ${destinationIndex}`)} (${escapeHtml(short(destinationWallet.publicKey))}).`}</p></div><button class="submit-trade" type="button" data-confirm-wallet-manager-action>${actionLabel}</button><button class="sheet-secondary" type="button" data-manage-wallets>Edit selection</button><p class="fineprint">On-chain sells and transfers cannot be reversed. Failed or unsellable token balances stay in their original wallet and are reported in the result.</p>`);
+  }
+  async function confirmWalletManagerAction(button) {
+    const pending = state.pendingWalletManagerAction;
+    if (!pending || button.disabled) return;
+    button.disabled = true;
+    button.textContent = pending.kind === "fund" ? "Funding wallets…" : pending.kind === "sell" ? "Selling tokens…" : "Consolidating…";
+    let path, body;
+    if (pending.kind === "fund") {
+      path = "/api/web/wallets/send-sol";
+      body = { fromWalletIndex: pending.sourceWalletIndex, sourcePublicKey: state.wallets.find((wallet) => Number(wallet.index) === pending.sourceWalletIndex)?.publicKey || "", allocations: pending.allocations.map(({ destination, amountSol }) => ({ destination, amountSol })), sendAttemptId: pending.attemptId };
+    } else if (pending.kind === "sell") {
+      path = "/api/web/wallets/sell-all-tokens";
+      body = { walletIndexes: pending.walletIndexes, clientRequestId: pending.attemptId };
+    } else if (pending.kind === "sweep") {
+      path = "/api/web/wallets/sweep-sol";
+      body = { walletIndexes: pending.walletIndexes, destination: pending.destination, clientRequestId: pending.attemptId };
+    } else {
+      path = "/api/web/wallets/return-to-connected";
+      body = { walletIndexes: pending.selectedWalletIndexes, destination: pending.destination, clientRequestId: pending.attemptId };
+    }
+    const result = await post(path, body, { timeout: 180_000 });
+    if (!result.ok || !result.data?.ok) {
+      button.disabled = false;
+      button.textContent = "Try again";
+      toast(apiMessage(result.data, "Wallet action failed."), true);
+      return;
+    }
+    const summary = result.data?.sweep?.summary || result.data?.summary || "Wallet action complete.";
+    state.pendingWalletManagerAction = null;
+    await loadWallets(true);
+    await loadPositions();
+    renderWalletHero();
+    renderWalletPositions();
+    toast(summary);
+    await openWalletManager();
   }
   async function renameWallet(index) {
     const label = String($(`[data-wallet-rename-input="${index}"]`)?.value || "").trim();
@@ -1928,6 +2038,13 @@
     const saveProfile = event.target.closest("[data-save-social-profile]"); if (saveProfile) { await saveSocialProfile(saveProfile); return; }
     const enablePush = event.target.closest("[data-enable-push]"); if (enablePush) { await enableFunPush(enablePush); return; }
     if (event.target.closest("[data-create-wallet]")) { if (await createWallet()) { if (state.view === "quick") { closeSheet(); renderQuickRoute(); } else await openWalletManager(); } return; }
+    if (event.target.closest("[data-wallet-select-all]")) { setWalletManagerSelection(state.wallets.map((wallet) => wallet.index)); return; }
+    if (event.target.closest("[data-wallet-select-none]")) { setWalletManagerSelection([]); return; }
+    const walletFunds = event.target.closest("[data-wallet-funds]"); if (walletFunds) { focusWalletFunds(walletFunds.dataset.walletFunds); return; }
+    const fundingMode = event.target.closest("[data-wallet-fund-mode]"); if (fundingMode) { setWalletFundingMode(fundingMode.dataset.walletFundMode); return; }
+    if (event.target.closest("[data-review-wallet-fund]")) { reviewWalletFunding(); return; }
+    const walletAction = event.target.closest("[data-review-wallet-action]"); if (walletAction) { reviewWalletAction(walletAction.dataset.reviewWalletAction); return; }
+    const confirmWalletAction = event.target.closest("[data-confirm-wallet-manager-action]"); if (confirmWalletAction) { await confirmWalletManagerAction(confirmWalletAction); return; }
     const exportButton = event.target.closest("[data-export-wallets]"); if (exportButton) { await exportWallets(exportButton); return; }
     if (event.target.closest("[data-restore-wallet]")) { await restoreWallet(); return; }
     const remove = event.target.closest("[data-remove-wallet]"); if (remove) { await removeWallet(remove.dataset.removeWallet, remove.dataset.walletKey); return; }
@@ -1944,6 +2061,8 @@
   document.addEventListener("change", (event) => {
     if (event.target.matches("[data-quick-wallet-select]")) { state.activeWallet = Number(event.target.value);localStorage.setItem(ACTIVE_WALLET_KEY,String(state.activeWallet)); paintWalletPill(); renderQuickRoute(); return; }
     if (event.target.matches("[data-send-sol-wallet]")) { const input = $("[data-send-sol-amount]"); if (input?.dataset.sendAll === "true") selectFunSendAll(); return; }
+    if (event.target.matches("[data-wallet-batch-select]")) { updateWalletManagerSelection(); return; }
+    if (event.target.matches("[data-wallet-fund-source]")) { updateWalletFundingSource(); return; }
     if (!event.target.matches("[data-wallet-backup-file]")) return;
     const file = event.target.files?.[0], textarea = $("[data-wallet-backup-text]"), status = $("[data-wallet-manager-status]");
     if (!file || !textarea) return;

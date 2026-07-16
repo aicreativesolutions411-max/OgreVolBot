@@ -148,6 +148,12 @@ test("runIdempotentMoneyOp replays the same attempt and serializes concurrent on
 test("the other money endpoints (send-sol, volume-bot, distribute) are idempotency-wrapped", () => {
   assert.match(functionBody(serverSource, "webSendSolMany"), /runIdempotentMoneyOp\("web-send-sol", userId/);
   assert.match(serverSource, /async function webSendSolManyCore\(/);
+  assert.match(functionBody(serverSource, "webReturnFundsToConnected"), /runIdempotentMoneyOp\("web-return-funds", userId/);
+  assert.match(serverSource, /async function webReturnFundsToConnectedCore\(/);
+  assert.match(functionBody(serverSource, "webSweepSol"), /runIdempotentMoneyOp\("web-sweep-sol", userId/);
+  assert.match(serverSource, /async function webSweepSolCore\(/);
+  assert.match(functionBody(serverSource, "webSellAllTokens"), /runIdempotentMoneyOp\("web-sell-all", userId/);
+  assert.match(serverSource, /async function webSellAllTokensCore\(/);
   assert.match(functionBody(serverSource, "webStartVolumeBot"), /runIdempotentMoneyOp\("web-volume-start", userId/);
   assert.match(serverSource, /async function webStartVolumeBotCore\(/);
   // Dup-plan guard: never fund a 2nd bot for a coin already running.
@@ -252,7 +258,7 @@ test("Telegram webhook setup timeouts do not kill the web service deploy", () =>
 });
 
 test("sweeps run bounded-concurrent (not serial N+1) + referral writes are locked", () => {
-  assert.match(functionBody(serverSource, "webSweepSol"), /runWithConcurrency\(wallets,/);
+  assert.match(functionBody(serverSource, "webSweepSolCore"), /runWithConcurrency\(wallets,/);
   assert.match(functionBody(serverSource, "webSweepTokens"), /runWithConcurrency\(wallets,/);
   // Referral payout stats RMW (runs on the fee path) is locked + records every split wallet, not just #1.
   assert.match(functionBody(serverSource, "recordReferralFeePayout"), /mutateWebAuthStore\(/);

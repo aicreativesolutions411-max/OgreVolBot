@@ -72100,9 +72100,25 @@ function solTransferResultRow(wallet, result) {
 }
 
 async function webSweepSol(userId, body = {}) {
+  return runIdempotentMoneyOp("web-sweep-sol", userId,
+    firstString(body.tradeAttemptId, body.sweepAttemptId, body.clientRequestId),
+    () => webSweepSolCore(userId, body),
+    { busyMessage: "This SOL sweep is already running — SlimeWire won't drain the same wallets twice." });
+}
+
+async function webSweepSolCore(userId, body = {}) {
   const store = await readWalletStore();
   const destination = parseWebDestination(body.destination || body.destinationWallet);
-  const wallets = selectedWebSweepWallets(store, userId, body);
+  const wallets = selectedWebSweepWallets(store, userId, body)
+    .filter((wallet) => String(wallet.publicKey) !== destination.toBase58());
+  if (!wallets.length) {
+    return {
+      action: "sweep-sol",
+      destination: destination.toBase58(),
+      rows: [],
+      summary: "No other selected wallets had SOL to sweep."
+    };
+  }
 
   // Drain wallets CONCURRENTLY (bounded) instead of one-at-a-time — sweeping a big group was a slow
   // serial N+1 of (force balance + blockhash + fee probe + send + confirm) per wallet. Mirrors
@@ -72216,6 +72232,13 @@ async function webSweepTokens(userId, body = {}) {
 }
 
 async function webSellAllTokens(userId, body = {}) {
+  return runIdempotentMoneyOp("web-sell-all", userId,
+    firstString(body.tradeAttemptId, body.sellAttemptId, body.clientRequestId),
+    () => webSellAllTokensCore(userId, body),
+    { busyMessage: "This sell-all is already running — SlimeWire won't sell the same balances twice." });
+}
+
+async function webSellAllTokensCore(userId, body = {}) {
   const store = await readWalletStore();
   const tokenMint = parseOptionalWebMint(body.tokenMint || body.mint);
   const destination = String(body.destination || body.destinationWallet || "").trim()
@@ -72311,6 +72334,13 @@ async function webSellAllTokens(userId, body = {}) {
 // tokens' proceeds AND remaining SOL from the selected (session) wallets back
 // to the user's connected wallet. User-initiated; composes tested sweeps.
 async function webReturnFundsToConnected(userId, body = {}) {
+  return runIdempotentMoneyOp("web-return-funds", userId,
+    firstString(body.tradeAttemptId, body.returnAttemptId, body.clientRequestId),
+    () => webReturnFundsToConnectedCore(userId, body),
+    { busyMessage: "This consolidation is already running — SlimeWire won't sell or sweep twice." });
+}
+
+async function webReturnFundsToConnectedCore(userId, body = {}) {
   const destination = parseWebDestination(body.destination || body.destinationWallet);
   const slippageBps = parseWebSlippage(body.slippageBps || CONFIG.stopLossExitSlippageBps);
   const selector = {
@@ -72320,8 +72350,13 @@ async function webReturnFundsToConnected(userId, body = {}) {
     slippageBps
   };
 
-  // 1) Sell every token to SOL and sweep the proceeds back.
-  const sell = await webSellAllTokens(userId, selector).catch((error) => ({
+  // 1) Sell every token to SOL. Do not sweep inside the sell loop: one final
+  // fee-aware sweep below collects proceeds and any SOL that was already held.
+  const sell = await webSellAllTokens(userId, {
+    walletIndexes: selector.walletIndexes,
+    walletGroup: selector.walletGroup,
+    slippageBps
+  }).catch((error) => ({
     rows: [],
     summary: `Token sell-off skipped: ${friendlyError(error)}`
   }));
@@ -73074,30 +73109,52 @@ async function webSendSolManyCore(userId, body = {}) {
     ...getWalletAt(store, walletIndex, userId),
     webIndex: walletIndex
   };
-  const destinations = splitWebDestinationList(body.destinations || body.destinationWallets || body.destination);
+  const expectedSource = String(body.sourcePublicKey || body.fromWalletPublicKey || "").trim();
+  if (expectedSource && expectedSource !== wallet.publicKey) {
+    const error = new Error("The funding wallet changed after review. Refresh and review again; no SOL was sent.");
+    error.statusCode = 409;
+    throw error;
+  }
   const keypair = decryptWallet(wallet);
   const splitAll = Boolean(body.splitAll || body.amountMode === "splitAll");
-  let amountLamports;
+  const requestedAllocations = Array.isArray(body.allocations) ? body.allocations : [];
+  let transfers;
 
-  if (splitAll) {
-    const balance = await getSolBalanceCached(keypair.publicKey, { force: true });
-    const estimatedFeeLamports = 5000 * Math.max(1, destinations.length);
-    const reserveLamports = CONFIG.buyReserveLamports + estimatedFeeLamports;
-    const sendableLamports = balance - reserveLamports;
-    if (sendableLamports <= 0) {
-      throw new Error(`Not enough SOL after keeping ${lamportsToSol(reserveLamports)} SOL for reserve and fees.`);
-    }
-    amountLamports = Math.floor(sendableLamports / destinations.length);
+  if (requestedAllocations.length) {
+    if (splitAll) throw new Error("Choose split-all or custom wallet amounts, not both.");
+    if (requestedAllocations.length > 20) throw new Error("Fund 20 destination wallets or fewer at a time.");
+    const seen = new Set();
+    transfers = requestedAllocations.map((allocation) => {
+      const destination = parseWebDestination(allocation?.destination || allocation?.address, "destination wallet");
+      const address = destination.toBase58();
+      if (seen.has(address)) throw new Error("Each destination wallet can appear only once.");
+      seen.add(address);
+      return {
+        destination,
+        amountLamports: solToLamports(parsePositiveNumber(String(allocation?.amountSol || allocation?.amount || "")))
+      };
+    });
   } else {
-    amountLamports = solToLamports(parsePositiveNumber(String(body.amountSol || "")));
-  }
-
-  if (amountLamports <= 0) {
-    throw new Error("Enter a SOL amount greater than zero.");
+    const destinations = splitWebDestinationList(body.destinations || body.destinationWallets || body.destination);
+    let amountLamports;
+    if (splitAll) {
+      const balance = await getSolBalanceCached(keypair.publicKey, { force: true });
+      const estimatedFeeLamports = 5000 * Math.max(1, destinations.length);
+      const reserveLamports = CONFIG.buyReserveLamports + estimatedFeeLamports;
+      const sendableLamports = balance - reserveLamports;
+      if (sendableLamports <= 0) {
+        throw new Error(`Not enough SOL after keeping ${lamportsToSol(reserveLamports)} SOL for reserve and fees.`);
+      }
+      amountLamports = Math.floor(sendableLamports / destinations.length);
+    } else {
+      amountLamports = solToLamports(parsePositiveNumber(String(body.amountSol || "")));
+    }
+    transfers = destinations.map((destination) => ({ destination, amountLamports }));
   }
 
   const tx = new Transaction();
-  for (const destination of destinations) {
+  for (const { destination, amountLamports } of transfers) {
+    if (amountLamports <= 0) throw new Error("Enter a SOL amount greater than zero.");
     if (keypair.publicKey.equals(destination)) {
       throw new Error("A destination matches the source wallet.");
     }
@@ -73111,16 +73168,24 @@ async function webSendSolManyCore(userId, body = {}) {
 
   const signature = await sendLegacyTransaction(tx, [keypair]);
   invalidateWalletReadCache(wallet.publicKey);
-  destinations.forEach((destination) => invalidateWalletReadCache(destination.toBase58()));
-  await audit("web_send_sol_many", { userId, walletIndex, destinationCount: destinations.length, amountSol: lamportsToSol(amountLamports), signature });
+  transfers.forEach(({ destination }) => invalidateWalletReadCache(destination.toBase58()));
+  const totalLamports = transfers.reduce((sum, transfer) => sum + transfer.amountLamports, 0);
+  const equalAmount = transfers.every((transfer) => transfer.amountLamports === transfers[0].amountLamports);
+  const allocationRows = transfers.map(({ destination, amountLamports }) => ({
+    destination: destination.toBase58(),
+    amountSol: lamportsToSol(amountLamports)
+  }));
+  await audit("web_send_sol_many", { userId, walletIndex, destinationCount: transfers.length, totalSol: lamportsToSol(totalLamports), signature });
   return {
     action: "send-sol-many",
     source: webWalletRef(wallet),
-    amountSol: lamportsToSol(amountLamports),
-    destinationCount: destinations.length,
-    destinations: destinations.map((destination) => destination.toBase58()),
+    amountSol: equalAmount ? allocationRows[0].amountSol : null,
+    totalSol: lamportsToSol(totalLamports),
+    destinationCount: transfers.length,
+    destinations: allocationRows.map((allocation) => allocation.destination),
+    allocations: allocationRows,
     signature,
-    summary: `Sent ${lamportsToSol(amountLamports)} SOL to ${destinations.length} wallet(s).`
+    summary: `Sent ${lamportsToSol(totalLamports)} SOL across ${transfers.length} wallet(s).`
   };
 }
 
