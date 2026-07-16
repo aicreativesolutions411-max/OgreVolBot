@@ -30813,8 +30813,9 @@ async function webTokenSearch(rawQuery = "") {
     if (!relevant) continue;
     matches.push({ tokenMint: mint, address: mint, chain, symbol, name, liquidityUsd, volumeUsd, marketCapUsd: Number(pair?.marketCap || pair?.fdv || 0), imageUrl: pair?.info?.imageUrl || "" });
   }
-  // Owner call: results order is top liquidity -> lowest, always.
-  matches.sort((a, b) => Number(b.liquidityUsd || 0) - Number(a.liquidityUsd || 0));
+  // Results order: top market cap first (big names), liquidity as the tiebreak.
+  const searchRankKey = (m) => Number(m.marketCapUsd || m.marketCap || 0) || Number(m.liquidityUsd || 0);
+  matches.sort((a, b) => searchRankKey(b) - searchRankKey(a));
   // ALWAYS merge the local Robinhood universe: DexScreener's search has no prefix
   // expansion ("cash" never returns cashcow) and is often blocked from this host's IP.
   // Our warm cache knows every RH coin by name, so partials resolve from it.
@@ -30838,7 +30839,7 @@ async function webTokenSearch(rawQuery = "") {
       });
     }
   } catch { /* best effort */ }
-  matches.sort((a, b) => Number(b.liquidityUsd || b.marketCapUsd || 0) - Number(a.liquidityUsd || a.marketCapUsd || 0));
+  matches.sort((a, b) => searchRankKey(b) - searchRankKey(a));
   return { query: cleaned, matches: matches.slice(0, 12) };
 }
 

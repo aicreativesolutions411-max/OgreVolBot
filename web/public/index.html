@@ -1190,10 +1190,12 @@
         seen.add(key);
         out.push({tokenMint:mint,address:mint,key:mint,chain,symbol:b.symbol||"",name:b.name||"",imageUrl:(p.info&&p.info.imageUrl)||"",liquidityUsd:Number((p.liquidity&&p.liquidity.usd)||0),volumeUsd:Number((p.volume&&p.volume.h24)||0),marketCap:Number(p.marketCap||p.fdv||0)});
       }
-      out.sort((a,b)=>b.liquidityUsd-a.liquidityUsd);
-      return out.slice(0,12);
+      out.sort(searchRank);
+      return out.slice(0,14);
     }catch(e){return null;}
   }
+  // Rank by market cap (big names first), liquidity as the tiebreak for coins with no MC yet.
+  function searchRank(a,b){return (Number(b.marketCap||b.marketCapUsd||0)||Number(b.liquidityUsd||0))-(Number(a.marketCap||a.marketCapUsd||0)||Number(a.liquidityUsd||0));}
   async function runTradeSearch(value){const query=String(value||"").trim(),body=$("#tradeSearchBody");if(!body)return;if(!query){renderTradeSearchHome();return;}const direct=query.match(/0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44}/);const seq=++tradeSearchSeq;body.innerHTML='<div class="loading" style="padding:22px"><span class="spin sm"></span></div>';
     // Merge BOTH sources in parallel: DexScreener direct (user IP, exact-ish matches) + our
     // backend (Robinhood universe knows every RH coin by name — "cash" surfaces cashcow there).
@@ -1207,9 +1209,9 @@
         if(!k.split(":")[1]||seenKeys.has(k))continue;seenKeys.add(k);rows.push(row);
       }
     }
-    rows=rows.slice().sort((a,b)=>Number(b.liquidityUsd||b.marketCapUsd||0)-Number(a.liquidityUsd||a.marketCapUsd||0));
+    rows=rows.slice().sort(searchRank);
     if(seq!==tradeSearchSeq||!$("#tradeSearchBody"))return;tradeSearchRows=rows;if(direct&&!tradeSearchRows.some(row=>tradeSearchKey(row).toLowerCase()===direct[0].toLowerCase()))tradeSearchRows.unshift({key:direct[0],symbol:short(direct[0]),chain:isRobinhoodAddress(direct[0])?"robinhood":"solana"});body.innerHTML=tradeSearchRows.length?'<div class="trade-search-section"><span>Results · by liquidity</span><div class="trade-search-results">'+tradeSearchRows.slice(0,12).map(tradeSearchResultHtml).join("")+'</div></div>':'<div class="msg" style="padding:24px">No match. Paste the full contract address.</div>';wireTradeSearchResults();}
-  function openTradeSearch(){openModal('<h3>Trade</h3><div class="trade-search"><span>⌕</span><input id="tradeSearchInput" type="search" autocomplete="off" placeholder="Search ticker, name, Solana or 0x CA" aria-label="Search coins"></div><div id="tradeSearchBody"></div>');renderTradeSearchHome();const input=$("#tradeSearchInput");if(input){input.oninput=()=>{clearTimeout(tradeSearchTimer);tradeSearchTimer=setTimeout(()=>runTradeSearch(input.value),250);};input.onkeydown=e=>{if(e.key!=="Enter")return;e.preventDefault();const direct=input.value.trim().match(/^(0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$/);if(direct)openTradeSearchRow({key:direct[0],symbol:short(direct[0]),chain:isRobinhoodAddress(direct[0])?"robinhood":"solana"});else if(tradeSearchRows[0])openTradeSearchRow(tradeSearchRows[0]);};setTimeout(()=>input.focus(),30);}}
+  function openTradeSearch(){openModal('<h3>Trade</h3><div class="trade-search"><span>⌕</span><input id="tradeSearchInput" type="search" autocomplete="off" placeholder="Search ticker, name, Solana or 0x CA" aria-label="Search coins"></div><div id="tradeSearchBody"></div>');renderTradeSearchHome();const input=$("#tradeSearchInput");if(input){input.oninput=()=>{clearTimeout(tradeSearchTimer);tradeSearchTimer=setTimeout(()=>runTradeSearch(input.value),130);};input.onkeydown=e=>{if(e.key!=="Enter")return;e.preventDefault();const direct=input.value.trim().match(/^(0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$/);if(direct)openTradeSearchRow({key:direct[0],symbol:short(direct[0]),chain:isRobinhoodAddress(direct[0])?"robinhood":"solana"});else if(tradeSearchRows[0])openTradeSearchRow(tradeSearchRows[0]);};setTimeout(()=>input.focus(),30);}}
   const TOOLS=[
     {ic:"💬",label:"Lounge — community chat & voice",route:"lounge"},
     {ic:"🔄",label:"Swap",route:"swap"},

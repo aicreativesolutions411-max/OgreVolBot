@@ -1011,10 +1011,12 @@
         seen.add(key);
         out.push({ tokenMint: mint, address: mint, chain, symbol: b.symbol || "", name: b.name || "", imageUrl: (p.info && p.info.imageUrl) || "", liquidityUsd: Number((p.liquidity && p.liquidity.usd) || 0), volumeUsd: Number((p.volume && p.volume.h24) || 0), marketCap: Number(p.marketCap || p.fdv || 0) });
       }
-      out.sort((a, b) => b.liquidityUsd - a.liquidityUsd);
-      return out.slice(0, 12);
+      out.sort(searchRank);
+      return out.slice(0, 14);
     } catch { return null; }
   }
+  // Rank by market cap (big names first), liquidity as the tiebreak for coins with no MC yet.
+  function searchRank(a, b) { return (Number(b.marketCap || b.marketCapUsd || 0) || Number(b.liquidityUsd || 0)) - (Number(a.marketCap || a.marketCapUsd || 0) || Number(a.liquidityUsd || 0)); }
   async function runSearch(query) {
     const content = $("[data-search-content]");
     if (!query.trim()) { renderSearchHome(); return; }
@@ -1039,7 +1041,7 @@
         matches.push(row);
       }
     }
-    matches = matches.slice().sort((a, b) => Number(b.liquidityUsd || b.marketCapUsd || 0) - Number(a.liquidityUsd || a.marketCapUsd || 0));
+    matches = matches.slice().sort(searchRank);
     const rows = matches.map((row) => (row.chain === "robinhood" ? normalizeRh({ ...row, address: row.address || row.tokenMint }) : normalizeSol(row)));
     content.innerHTML = rows.length ? `<h3>Results · by liquidity</h3><div class="coin-list">${rows.map(coinRowHtml).join("")}</div>` : emptyState("No exact match", "Paste the full Solana or Robinhood contract address.");
   }
@@ -1893,7 +1895,7 @@
     }
   }, true);
 
-  $("[data-search-input]").addEventListener("input", (event) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => runSearch(event.target.value), 280); });
+  $("[data-search-input]").addEventListener("input", (event) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => runSearch(event.target.value), 130); });
   $("[data-trader-search-form]")?.addEventListener("submit", (event) => { event.preventDefault(); void searchTraders($("[data-trader-search]")?.value); });
   window.addEventListener("hashchange", () => { const match = location.hash.match(/^#coin\/(.+)$/); if (match) openCoin(decodeURIComponent(match[1])); });
   async function loadCreatedCoinsSilently() { if (!state.token || state.launches.length) return; const result = await request("/api/web/launches"); if (result.ok) state.launches = result.data?.coins || []; }
