@@ -23,6 +23,39 @@ test("every trade keeps 0.50% platform plus 0.15% Cash Cow, with referral 0.15% 
   assert.match(server, /PARTNER_HOLDER_SHARE_BPS = 5_000/);
 });
 
+test("Solana fee collection preserves a landed platform fee when optional reward legs fail", () => {
+  const start = server.indexOf("async function collectSolFee");
+  const end = server.indexOf("const PARTNER_REWARD_OWNER", start);
+  assert.ok(start >= 0 && end > start, "collectSolFee source is missing");
+  const fee = server.slice(start, end);
+  const ownerStart = fee.indexOf("const ownerTx = addSolFeeMemo(new Transaction()");
+  const ownerSend = fee.indexOf("ownerSignature = await sendLegacyTransaction(ownerTx");
+  const cashCowStart = fee.indexOf("let cashCowSignature");
+  const cashCowPreflight = fee.indexOf("await assertDestinationCanReceiveSol(new PublicKey(targets.cashCowWallet)");
+  const cashCowSend = fee.indexOf("cashCowSignature = await sendLegacyTransaction(cashCowTx");
+  const referralStart = fee.indexOf("const referralSplits");
+  const referralSend = fee.indexOf("referralSignature = await sendLegacyTransaction(referralTx");
+
+  assert.ok(ownerStart >= 0 && ownerSend > ownerStart, "platform fee must have its own transaction");
+  assert.ok(cashCowStart > ownerSend, "CashCow work must begin only after the platform send lands");
+  assert.ok(cashCowPreflight > cashCowStart && cashCowSend > cashCowPreflight, "CashCow must pass rent preflight before its isolated send");
+  assert.ok(referralStart > cashCowSend && referralSend > referralStart, "referrals must use a third, isolated transaction");
+
+  const ownerBlock = fee.slice(fee.indexOf("if (!options.skipOwner"), cashCowStart);
+  const cashCowBlock = fee.slice(cashCowStart, referralStart);
+  const referralBlock = fee.slice(referralStart);
+  assert.match(ownerBlock, /trade_fee_platform_paid/);
+  assert.match(ownerBlock, /trade_fee_platform_failed[\s\S]*throw error/);
+  assert.match(cashCowBlock, /trade_fee_cashcow_pending/);
+  assert.doesNotMatch(cashCowBlock, /trade_fee_cashcow_pending[\s\S]*throw error/);
+  assert.ok(cashCowBlock.indexOf("sendLegacyTransaction(cashCowTx") < cashCowBlock.indexOf("recordPartnerRewardFee("), "CashCow rewards must be recorded only after payment lands");
+  assert.match(referralBlock, /trade_fee_referral_pending/);
+  assert.match(referralBlock, /trade_fee_referral_failed/);
+  assert.doesNotMatch(referralBlock, /trade_fee_referral_failed[\s\S]*throw error/);
+  assert.match(fee, /sourceSignature/);
+  assert.match(fee, /return ownerSignature \|\| cashCowSignature \|\| referralSignature \|\| null/);
+});
+
 test("Cash Cow receives its holder-only 0.15% allocation across Solana and Robinhood trades", () => {
   assert.match(server, /CASH_COW_RH_TOKEN = "0x4ad72e468e38ec204c605f2e058d61e4d79e2ceb"/);
   assert.match(server, /CASH_COW_REWARD_BPS = CONFIG\.cashCowTradeFeeBps/);

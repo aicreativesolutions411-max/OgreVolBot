@@ -4046,21 +4046,29 @@
     if(ok&&d&&d.ok){toast("Volume bot started — running in the background");pollVolumeBot();}
     else toast((d&&(d.message||d.error))||"Could not start volume bot",true);
   }
-  async function stopVolumeBot(){
-    const {d}=await api("/api/web/volume-bot");const bots=(d&&d.bots)||[];
-    const run=bots.find(b=>b.status!=="completed"&&b.stage!=="done"&&b.stage!=="stopped");
-    if(!run){toast("No running volume bot.",true);return;}
-    const r=await jpost("/api/web/volume-bot/stop",{planId:run.id});
+  async function stopVolumeBot(planId){
+    let id=String(planId||"");
+    if(!id){const {d}=await api("/api/web/volume-bot");const bots=(d&&d.bots)||[];const run=bots.find(b=>b.status!=="completed"&&b.stage!=="done"&&b.stage!=="stopped");if(!run){toast("No running volume bot.",true);return;}id=run.id;}
+    const r=await jpost("/api/web/volume-bot/stop",{planId:id});
     if(r.ok&&r.d&&r.d.ok){toast("Stopping — selling + sweeping SOL back to source");pollVolumeBot();}else toast((r.d&&r.d.error)||"Could not stop",true);
+  }
+  async function haltReleaseVolumeBot(planId){
+    if(!planId)return;
+    if(!confirm("Halt this run and release its source wallet? No new trades will be sent. Any transaction already submitted may still settle, and retained ghost wallets remain recoverable."))return;
+    const r=await jpost("/api/web/volume-bot/release",{planId:planId,confirmRelease:true});
+    if(r.ok&&r.d&&r.d.ok){toast("Run halted — you can start a new volume run now");pollVolumeBot();}
+    else toast((r.d&&(r.d.message||r.d.error))||"Could not release this run yet",true);
   }
   function volBotStatusHtml(bots){
     if(!bots.length)return '<p class="mut" style="font-size:12px">No volume bot running. Start one above — it keeps going in the background.</p>';
-    return bots.slice(0,3).map(b=>{
+    const active=bots.filter(b=>b.status!=="completed"&&b.stage!=="done"&&b.stage!=="stopped");const shown=active.concat(bots.filter(b=>!active.includes(b)).slice(0,Math.max(0,3-active.length)));
+    return shown.map(b=>{
       const running=b.status!=="completed"&&b.stage!=="done"&&b.stage!=="stopped";const st=b.stats||{};
       const logs=(b.log||[]).slice(-14).reverse().map(l=>'<div style="padding:2px 0;color:var(--muted)">'+esc(typeof l==="string"?l:(l.message||l.text||JSON.stringify(l)))+'</div>').join("");
+      const action=running?(String(b.stage||"").toLowerCase()==="sweeping"?(b.canRelease===false?'<button class="wbtn ghost" style="width:100%;margin-top:8px" disabled>Settling last action…</button>':'<button class="wbtn ghost" style="width:100%;margin-top:8px" data-vl-release="'+esc(b.id)+'">Halt &amp; Release</button>'):'<button class="wbtn ghost" style="width:100%;margin-top:8px" data-vl-stop="'+esc(b.id)+'">Stop &amp; sweep</button>'):'';
       return '<div class="wbox" style="margin:0 0 10px"><div style="display:flex;align-items:center;gap:9px"><b>'+esc(b.shortMint||short(b.tokenMint))+'</b><span class="chip '+(running?"g":"")+'">'+esc(running?(b.stage||"running"):"done")+'</span><span class="mut" style="font-size:11px;margin-left:auto">round '+esc(b.currentCycle||0)+'/'+esc(b.cycles||0)+'</span></div>'+
         '<div class="mut" style="font-size:11px;margin-top:5px">buys '+esc(st.buys||0)+' · sells '+esc(st.sells||0)+' · vol ◎'+esc(Number(st.volumeSol||0).toFixed(3))+(st.sweptSol?' · swept ◎'+esc(Number(st.sweptSol).toFixed(3)):'')+'</div>'+
-        (logs?'<div style="margin-top:8px;max-height:160px;overflow:auto;font-size:11px;font-family:var(--mono)">'+logs+'</div>':'')+'</div>';
+        (logs?'<div style="margin-top:8px;max-height:160px;overflow:auto;font-size:11px;font-family:var(--mono)">'+logs+'</div>':'')+action+'</div>';
     }).join("");
   }
   function pollVolumeBot(){
@@ -4069,6 +4077,8 @@
       if(state.route!=="volume"){clearVolPoll();return;}
       const {d}=await api("/api/web/volume-bot");const box=$("#vlStatus");if(!box||state.route!=="volume")return;
       box.innerHTML=volBotStatusHtml((d&&d.bots)||[]);
+      box.querySelectorAll("[data-vl-stop]").forEach(btn=>{btn.onclick=()=>stopVolumeBot(btn.dataset.vlStop);});
+      box.querySelectorAll("[data-vl-release]").forEach(btn=>{btn.onclick=()=>haltReleaseVolumeBot(btn.dataset.vlRelease);});
     };
     tick();volBotPollT=setInterval(tick,4000);
   }

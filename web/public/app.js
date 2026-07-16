@@ -9624,7 +9624,13 @@ function volumeBotListHtml() {
             <strong>${escapeHtml(bot.shortMint || bot.tokenMint || "Token")}</strong>
             <span class="volume-bot-stage" data-stage="${escapeHtml(bot.stage || "")}">${escapeHtml(volumeBotStageLabel(bot))}</span>
           </div>
-          ${active ? `<button class="secondary" data-vbot-stop="${escapeHtml(bot.id)}">Stop & Sweep</button>` : `<a class="mini-link" href="${escapeHtml(bot.dexUrl || "#")}" target="_blank" rel="noreferrer">Dex</a>`}
+          ${active
+            ? (String(bot.stage || "").toLowerCase() === "sweeping"
+              ? (bot.canRelease === false
+                ? `<button class="secondary" type="button" disabled>Settling last action...</button>`
+                : `<button class="secondary" data-vbot-release="${escapeHtml(bot.id)}">Halt & Release</button>`)
+              : `<button class="secondary" data-vbot-stop="${escapeHtml(bot.id)}">Stop & Sweep</button>`)
+            : `<a class="mini-link" href="${escapeHtml(bot.dexUrl || "#")}" target="_blank" rel="noreferrer">Dex</a>`}
         </header>
         <div class="volume-bot-metrics">
           <div><span>Cycle</span><strong>${escapeHtml(Number(bot.currentCycle || 0))}/${escapeHtml(Number(bot.cycles || 0))}</strong></div>
@@ -9717,7 +9723,15 @@ function volumeBotPanelHtml() {
 
         <div class="ovs-actions">
           <button class="primary vbot-config-start" data-vbot-start ${state.volumeBotBusy ? "disabled" : ""}>${state.volumeBotBusy ? "Starting..." : "Start SlimeBot"}</button>
-          ${(() => { const ab = (Array.isArray(state.volumeBots) ? state.volumeBots : []).find(volumeBotIsActive); return ab ? `<button type="button" class="vbot-stop-sweep" data-vbot-stop="${escapeHtml(ab.id)}">&#9209; Stop &amp; Sweep Back</button>` : ""; })()}
+          ${(() => {
+            const ab = (Array.isArray(state.volumeBots) ? state.volumeBots : []).find(volumeBotIsActive);
+            if (!ab) return "";
+            return String(ab.stage || "").toLowerCase() === "sweeping"
+              ? (ab.canRelease === false
+                ? `<button type="button" class="vbot-stop-sweep" disabled>Settling last action...</button>`
+                : `<button type="button" class="vbot-stop-sweep" data-vbot-release="${escapeHtml(ab.id)}">Halt &amp; Release Run</button>`)
+              : `<button type="button" class="vbot-stop-sweep" data-vbot-stop="${escapeHtml(ab.id)}">&#9209; Stop &amp; Sweep Back</button>`;
+          })()}
         </div>
         <p class="trade-status" data-vbot-status>${escapeHtml(state.volumeBotStatus || "Set a token, investment, and mode, then Start. Spends real SOL from the source wallet.")}</p>
 
@@ -9859,6 +9873,37 @@ async function stopVolumeBot(planId) {
       state.volumeBots = state.volumeBots.map((bot) => (bot.id === data.bot.id ? data.bot : bot));
     }
     setVolumeBotStatus(data.bot?.message || "Stop requested.");
+    render();
+    void loadVolumeBots();
+  } catch (error) {
+    setVolumeBotStatus(error.message);
+  }
+}
+
+async function releaseVolumeBot(planId) {
+  if (!planId) return;
+  const confirmed = await slimeConfirm({
+    title: "Halt & Release Run",
+    lines: [
+      "Stops this run permanently and releases its source wallet now.",
+      "No new buys or sells will be sent. A transaction already submitted before the settlement check may still finish.",
+      "Any unresolved ghost wallet stays encrypted and can be recovered later with Sweep background wallets."
+    ],
+    confirmLabel: "Halt & Release"
+  });
+  if (!confirmed) return;
+  try {
+    setVolumeBotStatus("Halting run and releasing source wallet...");
+    const data = await api("/api/web/volume-bot/release", {
+      method: "POST",
+      body: JSON.stringify({ planId, confirmRelease: true }),
+      dedupe: false,
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
+    });
+    if (data.bot) {
+      state.volumeBots = state.volumeBots.map((bot) => (bot.id === data.bot.id ? data.bot : bot));
+    }
+    setVolumeBotStatus(data.bot?.message || "Run halted. You can start a new SlimeBot now.");
     render();
     void loadVolumeBots();
   } catch (error) {
@@ -24584,6 +24629,12 @@ document.addEventListener("click", async (event) => {
   if (vbotStopTarget) {
     event.preventDefault();
     await stopVolumeBot(vbotStopTarget.dataset.vbotStop || "");
+    return;
+  }
+  const vbotReleaseTarget = target.closest?.("[data-vbot-release]");
+  if (vbotReleaseTarget) {
+    event.preventDefault();
+    await releaseVolumeBot(vbotReleaseTarget.dataset.vbotRelease || "");
     return;
   }
   if (target.matches("[data-sniper-buy]")) {

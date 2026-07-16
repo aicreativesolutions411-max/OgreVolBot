@@ -525,6 +525,24 @@ test("fixed-pool start reserves durable state before its one funding submission"
   assert.match(functionBody("createFixedVolumeWalletSet"), /record\.ephemeral = true/);
 });
 
+test("Stop during fixed-wallet funding waits for late landing and cannot resurrect after release", () => {
+  const start = functionBody("webStartVolumeBotCore");
+  const stop = functionBody("webStopVolumeBot");
+  const release = functionBody("webHaltAndReleaseVolumeBot");
+  assert.match(stop, /const fundingRecovery = \["funding", "funding-ambiguous"\]\.includes\(startStage\)/);
+  assert.match(stop, /const sweepBack = fundingRecovery \|\| plan\.config\?\.sweepBack !== false/);
+  assert.match(stop, /plan\.startStage = "funding-ambiguous"/);
+  assert.match(stop, /plan\.recoveryNotBeforeAt = new Date\(recoveryAt\)\.toISOString\(\)/);
+  assert.match(stop, /plan\.nextActionAt = plan\.recoveryNotBeforeAt/);
+  assert.match(release, /startStage === "funding"/);
+  assert.match(release, /startStage === "funding-ambiguous" && Date\.now\(\) < settleAt/);
+  assert.match(start, /saved\.forceReleasedAt[\s\S]{0,180}saved\.status === "completed"/);
+  assert.match(start, /saved\.startStage = "funded-after-release"/);
+  assert.match(start, /saved\.startStage = "funded-after-stop"/);
+  assert.match(start, /saved\.recoveryNotBeforeAt = null/);
+  assert.match(start, /if \(!terminalAfterFunding && \(fundingStarted/);
+});
+
 test("active volume plans reject any overlapping source, trading, active, or pool wallet", () => {
   const keys = functionBody("volumePlanWalletPublicKeys");
   assert.match(keys, /sourcePublicKey/);
@@ -625,7 +643,7 @@ test("settled volume actions clear unknown checkpoints from complete live balanc
   const reconcile = functionBody("reconcileSettledVolumeAction");
   assert.match(reconcile, /pending\?\.status[\s\S]{0,100}!== "outcome_unknown"/);
   assert.doesNotMatch(reconcile, /\["submitting", "outcome_unknown"\]/);
-  assert.match(reconcile, /VOLUME_BOT_RECOVERY_SETTLE_MS/);
+  assert.match(reconcile, /volumeBotRecoverySettleAtMs\(plan, pending\)/);
   assert.match(reconcile, /completeVolumeTokenAccountRead/);
   assert.match(reconcile, /getSolBalanceCached/);
   assert.match(reconcile, /"sell", "offset-sell", "rolling-sell", "cleanup-sell"/);
@@ -651,7 +669,7 @@ test("the legacy false cleanup claim in the screenshot reconciles immediately fr
     PublicKey: class PublicKey { constructor(value) { this.value = value; } },
     volumeBotTargetRawAmount: () => 0n,
     markVolumeBotCleanupTokenPhase: (plan, publicKey, phase) => Object.assign(cleanupState(plan, publicKey), { tokenPhase: phase }),
-    VOLUME_BOT_RECOVERY_SETTLE_MS: 90_000,
+    volumeBotRecoverySettleAtMs: () => Date.now() + 90_000,
     volumeBotLogPush: () => {},
     shortMint: (value) => value
   });
@@ -689,8 +707,10 @@ test("rolling wallets and every fixed trade checkpoint before external money mov
   const rolling = functionBody("runRollingVolumeBotStep");
   const poolAt = rolling.indexOf("plan.pool.push(poolEntry)");
   const persistAt = rolling.indexOf("await persist()", poolAt);
-  const fundAt = rolling.indexOf("await volumeBotTransferSol(", poolAt);
+  const fundAt = rolling.indexOf("volumeBotTransferSol(sourceRecord", poolAt);
   assert.ok(poolAt >= 0 && persistAt > poolAt && fundAt > persistAt);
+  assert.match(rolling.slice(fundAt - 220, fundAt + 900), /kind: "rolling-fund"/);
+  assert.match(rolling.slice(fundAt, fundAt + 1_500), /kind: "rolling-buy"/);
   assert.match(rolling, /\["funding", "funded"\]/);
   assert.match(rolling, /Recovered rolling fund\/buy/);
 
@@ -853,4 +873,49 @@ test("trade-plan runners never clear a live lock or race the dedicated worker", 
   const lease = functionBody("processTradePlansWithLease");
   assert.match(lease, /runWorkerTask\("tradePlans"/);
   assert.match(lease, /leaseMs: 300_000/);
+});
+
+test("rolling ghost creation is locked, plan-stamped, and every money step is claimed", () => {
+  const create = functionBody("createEphemeralVolumeWallet");
+  assert.match(create, /return mutateWalletStore/);
+  assert.match(create, /record\.volumePlanId = String\(volumePlanId\)/);
+  assert.doesNotMatch(create, /readWalletStore\(|writeWalletStore\(/);
+
+  const rolling = functionBody("runRollingVolumeBotStep");
+  assert.match(rolling, /typeof entry === "string" \? \{ publicKey: entry/);
+  assert.match(rolling, /createEphemeralVolumeWallet\([\s\S]{0,180}plan\.id/);
+  assert.match(rolling, /kind: "rolling-fund"/);
+  assert.match(rolling, /kind: "rolling-buy"/);
+  assert.match(rolling, /if \(active === false \|\| plan\.botStage !== "running"\) return/);
+});
+
+test("manual release wins stale workers and residue recovery keeps exactly one target token", () => {
+  const merge = functionBody("mergeVolumePlanAcrossStop");
+  assert.match(merge, /if \(current\?\.forceReleasedAt\)/);
+  assert.match(merge, /pendingAction: null/);
+  assert.match(merge, /status: "completed"/);
+  assert.match(merge, /botStage: "stopped"/);
+
+  const release = functionBody("webHaltAndReleaseVolumeBot");
+  assert.match(release, /pendingStatus === "submitting"[\s\S]{0,220}throw volumeBotConflict/);
+  assert.match(release, /pending && pendingStatus === "outcome_unknown"/);
+  assert.match(release, /plan\.forceReleasedAt/);
+
+  const sweep = functionBody("webSweepBackgroundWallets");
+  assert.match(sweep, /recoveryPolicyByWallet/);
+  assert.match(sweep, /preserveOneToken/);
+  assert.match(sweep, /BigInt\(token\.rawAmount \|\| 0\) - oneTokenRaw/);
+  assert.match(sweep, /retainedTargetRaw <= retainedUnit/);
+  assert.match(sweep, /VOLUME_BOT_CLEANUP_GAS_LAMPORTS/);
+  assert.match(sweep, /row\.retainedResidue = true/);
+  assert.match(sweep, /cleared = await mutateWalletStore/);
+});
+
+test("legacy cleanup claims without a token still terminate after verified no progress", () => {
+  const reconcile = functionBody("reconcileSettledVolumeAction");
+  assert.match(reconcile, /const noProgressClaimToken = firstString/);
+  assert.match(reconcile, /pending\.id/);
+  assert.match(reconcile, /VOLUME_BOT_MAX_CLEANUP_ATTEMPTS/);
+  assert.match(reconcile, /status: "reconciled_from_balances"/);
+  assert.match(reconcile, /plan\.lastExternalAction\.status = "reconciled_no_progress"/);
 });

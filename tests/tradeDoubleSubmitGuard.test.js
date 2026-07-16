@@ -171,7 +171,10 @@ test("volume recovery queues active plans before touching ghost wallets", () => 
   assert.ok(plansRead < walletsRead, "active recovery must be queued before any direct background-wallet hydration");
   assert.match(sweep, /web_volume_bot/);
   assert.match(sweep, /plan\.botStage = "sweeping"/);
-  assert.match(sweep, /keepDust: false, sweepBack: true/);
+  assert.match(sweep, /const preserveOneToken = body\.preserveOneToken === undefined/);
+  assert.match(sweep, /keepDust: preserveOneToken/);
+  assert.match(sweep, /residuePolicy: preserveOneToken \? "one-token-v1" : "none"/);
+  assert.match(sweep, /sweepBack: true/);
   assert.match(sweep, /if \(queuedPlans\)/);
   assert.match(sweep, /Recovery started/);
   assert.match(sweep, /Token scan pending; wallet and gas were retained/);
@@ -179,13 +182,60 @@ test("volume recovery queues active plans before touching ghost wallets", () => 
   assert.match(sweep, /remaining !== null && remaining <= 20_000/);
 });
 
+test("Halt & Release only closes a settled Stop & Sweep and keeps recovery custody discoverable", () => {
+  const stop = functionBody(serverSource, "webStopVolumeBot");
+  const release = functionBody(serverSource, "webHaltAndReleaseVolumeBot");
+  const funSource = fs.readFileSync(new URL("../web/public/fun.js", import.meta.url), "utf8");
+
+  assert.match(serverSource, /pathname === "\/api\/web\/volume-bot\/release"[\s\S]{0,220}webHaltAndReleaseVolumeBot\(auth\.userId, body\)/);
+  assert.match(release, /body\.confirmRelease !== true/);
+  assert.match(release, /String\(entry\.userId\) === String\(userId\)/);
+  assert.match(release, /entry\.source === "web_volume_bot"/);
+  assert.match(release, /String\(plan\.botStage \|\| ""\)\.toLowerCase\(\) !== "sweeping"/);
+  assert.match(release, /const submitReleaseAt = volumeBotSubmittingReleaseAtMs\(plan, pending\)/);
+  assert.match(release, /pendingStatus === "submitting" && Date\.now\(\) < submitReleaseAt[\s\S]{0,220}throw volumeBotConflict/);
+  assert.match(release, /pending && pendingStatus === "outcome_unknown"/);
+  assert.match(release, /const settleAt = volumeBotRecoverySettleAtMs\(plan, plan\.pendingAction\)/);
+  assert.match(release, /Date\.now\(\) < settleAt/);
+  assert.match(release, /plan\.releasedPendingAction = \{ \.\.\.pending, releasedAt:/);
+  assert.match(release, /plan\.pendingAction = null/);
+  assert.match(release, /plan\.botStage = "stopped"/);
+  assert.match(release, /plan\.status = "completed"/);
+  assert.match(release, /plan\.recoveryWorkIncomplete = true/);
+  assert.match(release, /web_volume_bot_halt_release/);
+  assert.match(release, /plan\.tradingPublicKeys/);
+  assert.match(release, /plan\.pool/);
+  assert.match(release, /plan\.activeWalletPublicKey/);
+  assert.doesNotMatch(release, /pruneVolumeWallet|removeWebWallet|tradingPublicKeys\s*=\s*\[\]|pool\s*=\s*\[\]/);
+
+  assert.match(stop, /const alreadySweeping = String\(plan\.botStage \|\| ""\)\.toLowerCase\(\) === "sweeping"/);
+  assert.match(stop, /if \(!alreadySweeping\) plan\.sweepCursor = 0/);
+  assert.match(stop, /alreadySweeping \? "Sweep is already in progress; continuing from the current wallet\."/);
+
+  assert.match(appSource, /data-vbot-release/);
+  assert.match(appSource, /\/api\/web\/volume-bot\/release/);
+  assert.match(funSource, /data-release-volume/);
+  assert.match(funSource, /data-stop-volume-plan/);
+  assert.match(funSource, /\/api\/web\/volume-bot\/release/);
+  assert.match(ggSource, /data-vl-release/);
+  assert.match(ggSource, /data-vl-stop/);
+  assert.match(ggSource, /\/api\/web\/volume-bot\/release/);
+
+  const rows = functionBody(serverSource, "webVolumeBotRows");
+  assert.match(rows, /const active = rows\.filter\([\s\S]{0,120}activeVolumePlanForUser/);
+  assert.match(rows, /return \[\.\.\.active, \.\.\.history\.slice/);
+});
+
 test("rolling volume keeps a funded ghost wallet recoverable when buy outcome is uncertain", () => {
   const rolling = functionBody(serverSource, "runRollingVolumeBotStep");
-  const transferAt = rolling.indexOf("await volumeBotTransferSol(");
+  const transferAt = rolling.indexOf('kind: "rolling-fund"');
   const branchEnd = rolling.indexOf("if (plan.roundsDone >= maxRounds)", transferAt);
 
   assert.ok(transferAt >= 0 && branchEnd > transferAt, "rolling buy branch is missing");
   const fundedBuyAttempt = rolling.slice(transferAt, branchEnd);
+  assert.match(fundedBuyAttempt, /runVolumeBotExternalAction\(plan, persist/);
+  assert.match(fundedBuyAttempt, /kind: "rolling-buy"/);
+  assert.match(fundedBuyAttempt, /if \(active === false \|\| plan\.botStage !== "running"\) return/);
   const failureAt = fundedBuyAttempt.indexOf("} catch (error) {");
   assert.ok(failureAt >= 0, "funded rolling buy must retain an explicit recovery path");
   const uncertainFailure = fundedBuyAttempt.slice(failureAt);
@@ -966,7 +1016,9 @@ test("launch dev + bundle presets support shared and per-wallet ladders end to e
   assert.match(fallback, /groupPumpLaunchPlans\(bundlePlans\)/);
   assert.match(fallback, /plan\.amountSol/);
   const atomic = functionBody(serverSource, "webLaunchPumpJitoBundle");
-  assert.match(atomic, /amount: bundlePlan\.amountSol/);
+  assert.match(atomic, /grossAmountSol: bundlePlan\.amountSol/);
+  assert.match(atomic, /const swapLamports = grossLamports - feeLamports/);
+  assert.match(atomic, /amount: swapLamports \/ LAMPORTS_PER_SOL/);
   assert.match(atomic, /walletPublicKeys: group\.plans\.map/);
   assert.match(atomic, /returnCoverageDetails: true/);
   assert.match(atomic, /overflowBundlePlans/);
@@ -1015,6 +1067,68 @@ test("Jito candidates reconcile durably after submit-response loss or restart", 
   assert.match(duplicateReconcile, /String\(item\.userId \|\| ""\) === String\(userId\)/);
   assert.match(serverSource, /reconcilePersistedJitoAttemptForUser\([\s\S]{0,300}auth\.userId/);
   assert.match(serverSource, /attempt = \(await reconcilePersistedJitoAttempt\(attempt, \{ polls: 1 \}\)/);
+});
+
+test("Jito fee recovery atomically claims each buy and never retries outcome-unknown debits", () => {
+  const claim = functionBody(serverSource, "claimPumpLaunchAtomicFeeReceipt");
+  const settle = functionBody(serverSource, "settlePumpLaunchAtomicFeeReceipt");
+  const collect = functionBody(serverSource, "collectProvenJitoBuyFees");
+  const reconcile = functionBody(serverSource, "reconcilePersistedJitoAttempt");
+
+  assert.match(claim, /withFileLock\(pumpLaunchAttemptsPath\(\)/);
+  assert.match(claim, /\["paid", "embedded", "outcome_unknown", "allocation_invalid"\]\.includes\(status\)/);
+  assert.match(claim, /status === "submitting"/);
+  assert.match(claim, /JITO_FEE_SUBMISSION_STALE_MS/);
+  assert.match(claim, /status: "outcome_unknown"/);
+  assert.match(claim, /claimId = crypto\.randomUUID\(\)/);
+  assert.match(settle, /String\(current\.claimId \|\| ""\) !== wantedClaim/);
+  assert.ok(collect.indexOf("claimPumpLaunchAtomicFeeReceipt") < collect.indexOf("collectSolFee("),
+    "the durable claim must be written before any fee transfer can submit");
+  assert.match(collect, /settlePumpLaunchAtomicFeeReceipt/);
+  assert.match(collect, /returnDetails: true/);
+  assert.match(collect, /outcomeUnknown \? "outcome_unknown" : "failed"/);
+  assert.match(reconcile, /const nextPatch = \{/);
+  assert.doesNotMatch(reconcile, /const nextPatch = \{\s*\.\.\.attempt/,
+    "a stale attempt snapshot must not overwrite receipts written during collection");
+  assert.match(reconcile, /const refreshed = await readPumpLaunchAttempts\(\)/);
+  assert.match(reconcile, /atomicFeesIncomplete/);
+});
+
+test("Jito fee recovery persists and consumes one immutable per-leg allocation", () => {
+  const atomic = functionBody(serverSource, "webLaunchPumpJitoBundle");
+  const proven = functionBody(serverSource, "provenJitoBuyEvents");
+  const collect = functionBody(serverSource, "collectProvenJitoBuyFees");
+  const fee = functionBody(serverSource, "collectSolFee");
+
+  assert.match(atomic, /buildFrozenSolFeeAllocation\(/);
+  assert.match(atomic, /feeAllocation: entry\.feeAllocation/);
+  assert.match(proven, /validateFrozenSolFeeAllocation\(\{ feeLamports, allocation: event\?\.feeAllocation \}\)/);
+  assert.match(collect, /status: "allocation_invalid"/);
+  assert.ok(collect.indexOf("if (!event.feeAllocation)") < collect.indexOf("collectSolFee("),
+    "a missing allocation must fail closed before any recovery debit");
+  assert.match(collect, /feeAllocation: event\.feeAllocation/);
+  assert.match(fee, /options\.feeAllocation[\s\S]*feeTargetsFromFrozenAllocation/);
+  assert.match(fee, /toPubkey: new PublicKey\(targets\.ownerWallet\)/);
+});
+
+test("separate Solana fee legs are unique and expose per-leg completion", () => {
+  const fee = functionBody(serverSource, "collectSolFee");
+  const send = functionBody(serverSource, "sendLegacyTransaction");
+
+  assert.match(serverSource, /SOL_FEE_MEMO_PROGRAM_ID/);
+  assert.match(fee, /addSolFeeMemo\(new Transaction\(\), feeSourceId, "platform"\)/);
+  assert.match(fee, /addSolFeeMemo\(new Transaction\(\), feeSourceId, "cashcow"\)/);
+  assert.match(fee, /addSolFeeMemo\(new Transaction\(\), feeSourceId, "referral"\)/);
+  assert.match(fee, /skipCashCow/);
+  assert.match(fee, /skipReferral/);
+  assert.match(fee, /options\.returnDetails/);
+  assert.match(send, /classifyFeeConfirmation\(\{ confirmation \}\)/);
+  assert.match(send, /classifyFeeConfirmation\(\{ error \}\)[\s\S]*markTradeSubmissionAmbiguous/);
+  assert.match(send, /transactionFailedOnChain = true/);
+  assert.ok(send.lastIndexOf("return await confirmSigned") > send.lastIndexOf("send raw transaction (backup)"),
+    "confirmation must run after the send/failover block, never inside its retry catch");
+  assert.match(send, /markTradeSubmissionAmbiguous/);
+  assert.match(send, /partialHashes = \[signedSignature\]/);
 });
 
 test("Fun profile clearly exposes naming, creation, and login recovery", () => {

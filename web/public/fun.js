@@ -1895,7 +1895,18 @@
   }
   function volumeStatusHtml(rows = []) {
     if (!rows.length) return "No active run.";
-    return rows.slice(0, 3).map((bot) => { const stats = bot.stats || {}, running = funVolumeRunActive(bot); return `<div class="volume-run"><b>${escapeHtml(bot.shortMint || short(bot.tokenMint))}<span>${escapeHtml(running ? bot.stage || "running" : "complete")}</span></b><p>Buys ${Number(stats.buys || 0)} · sells ${Number(stats.sells || 0)} · volume ${Number(stats.volumeSol || 0).toFixed(3)} SOL${Number(stats.sweptSol || 0) ? ` · swept ${Number(stats.sweptSol).toFixed(3)}` : ""}</p>${(bot.log || []).slice(0, 4).map((row) => `<small>${escapeHtml(typeof row === "string" ? row : row.message || "")}</small>`).join("")}</div>`; }).join("");
+    const activeRows = rows.filter(funVolumeRunActive);
+    const displayRows = [...activeRows, ...rows.filter((bot) => !funVolumeRunActive(bot)).slice(0, Math.max(0, 3 - activeRows.length))];
+    return displayRows.map((bot) => {
+      const stats = bot.stats || {}, running = funVolumeRunActive(bot);
+      const sweeping = running && String(bot.stage || "").toLowerCase() === "sweeping";
+      const action = sweeping
+        ? (bot.canRelease === false
+          ? '<button class="recovery-button" type="button" disabled>Settling last action...</button>'
+          : `<button class="recovery-button danger-button" type="button" data-release-volume="${escapeHtml(bot.id)}">Halt &amp; Release</button>`)
+        : (running ? `<button class="recovery-button" type="button" data-stop-volume-plan="${escapeHtml(bot.id)}">Stop &amp; sweep</button>` : "");
+      return `<div class="volume-run"><b>${escapeHtml(bot.shortMint || short(bot.tokenMint))}<span>${escapeHtml(running ? bot.stage || "running" : "complete")}</span></b><p>Buys ${Number(stats.buys || 0)} · sells ${Number(stats.sells || 0)} · volume ${Number(stats.volumeSol || 0).toFixed(3)} SOL${Number(stats.sweptSol || 0) ? ` · swept ${Number(stats.sweptSol).toFixed(3)}` : ""}</p>${(bot.log || []).slice(0, 4).map((row) => `<small>${escapeHtml(typeof row === "string" ? row : row.message || "")}</small>`).join("")}${action}</div>`;
+    }).join("");
   }
   async function pollFunVolume(rh) {
     clearTimeout(state.volumePoll);
@@ -1937,10 +1948,29 @@
     else {
       const current = await request("/api/web/volume-bot"), run = (current.data?.bots || []).find((bot) => bot.tokenMint === token && funVolumeRunActive(bot));
       if (!run) { toast("No active run for this coin.", true); return; }
-      result = await post("/api/web/volume-bot/stop", { planId: run.id });
+      return stopFunVolumePlan(run.id);
     }
     if (!(result?.ok && result.data?.ok)) { toast(result?.data?.error || "Could not stop this run", true); return; }
     toast(rh ? "Stopping after the current action" : "Stopping, draining, and sweeping back"); pollFunVolume(rh);
+  }
+  async function stopFunVolumePlan(planId) {
+    if (!planId) return;
+    const result = await post("/api/web/volume-bot/stop", { planId });
+    if (!(result?.ok && result.data?.ok)) { toast(result?.data?.error || result?.data?.message || "Could not stop this run", true); return; }
+    toast("Stopping, draining, and sweeping back");
+    pollFunVolume(false);
+  }
+  async function releaseFunVolume(planId) {
+    if (!planId) return;
+    if (!confirm("Halt this run and release its source wallet? No new trades will be submitted. Any already-submitted transaction may still settle, and retained ghost wallets stay recoverable.")) return;
+    const result = await post("/api/web/volume-bot/release", { planId, confirmRelease: true });
+    if (!(result.ok && result.data?.ok)) {
+      toast(result.data?.error || result.data?.message || "Could not release this run yet", true);
+      pollFunVolume(false);
+      return;
+    }
+    toast("Run halted. You can start a new volume run now.");
+    pollFunVolume(false);
   }
   async function sweepFunVolume() { const result = await post("/api/web/wallets/sweep-background", {}, { timeout: 180_000, noRetry: true }); toast(result.ok && result.data?.ok ? (result.data.summary || "Background wallet recovery started") : (result.data?.error || "Sweep failed"), !(result.ok && result.data?.ok)); pollFunVolume(false); }
   async function openBundleSheet() {
@@ -2174,6 +2204,8 @@
     const rename = event.target.closest("[data-rename-wallet]"); if (rename) { await renameWallet(rename.dataset.renameWallet); return; }
     const startVolume = event.target.closest("[data-start-volume]"); if (startVolume) { await startFunVolume(startVolume); return; }
     if (event.target.closest("[data-stop-volume]")) { await stopFunVolume(); return; }
+    const stopVolumePlan = event.target.closest("[data-stop-volume-plan]"); if (stopVolumePlan) { await stopFunVolumePlan(stopVolumePlan.dataset.stopVolumePlan); return; }
+    const releaseVolume = event.target.closest("[data-release-volume]"); if (releaseVolume) { await releaseFunVolume(releaseVolume.dataset.releaseVolume); return; }
     if (event.target.closest("[data-sweep-volume]")) { await sweepFunVolume(); return; }
     const submitBundle = event.target.closest("[data-submit-bundle]"); if (submitBundle) { await submitFunBundle(submitBundle); return; }
     if (event.target.closest("[data-copy-wallet]")) { const wallet = activeWallet(); if (wallet) { await navigator.clipboard?.writeText(wallet.publicKey); toast("Wallet address copied"); } return; }
