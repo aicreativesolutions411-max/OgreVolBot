@@ -625,9 +625,54 @@ test("volume cleanup uses locked fallback exits and eventually releases a stuck 
 
   const retain = functionBody("retainVolumeWalletAndReturnExcessSol");
   assert.match(retain, /VOLUME_BOT_CLEANUP_GAS_LAMPORTS/);
+  assert.match(retain, /options\.drainAllSol/);
+  assert.match(retain, /drainSolFromWallet/);
   assert.match(retain, /kind: "cleanup-excess-sol"/);
   assert.match(retain, /retained: true/);
   assert.doesNotMatch(retain, /pruneVolumeWallet/);
+});
+
+test("a verified one-token residue drains the old 0.012 SOL cleanup reserve", async () => {
+  let drainCalls = 0;
+  let fixedTransferCalls = 0;
+  let action = null;
+  const retain = await compileAsyncFunction(
+    "retainVolumeWalletAndReturnExcessSol",
+    ["plan", "record", "persist", "options"],
+    {
+      getSolBalanceCached: async () => 12_000_000,
+      PublicKey: class PublicKey { constructor(value) { this.value = value; } },
+      runVolumeBotExternalAction: async (_plan, _persist, claimed, task) => {
+        action = claimed;
+        return task();
+      },
+      drainSolFromWallet: async () => {
+        drainCalls += 1;
+        return { signature: "drained", sentLamports: 11_995_000 };
+      },
+      decryptWallet: (record) => record,
+      invalidateWalletReadCache: () => {},
+      volumeBotTradeOutcomeAmbiguous: () => false,
+      volumeBotEnterRecovery: () => {},
+      volumeBotLogPush: () => {},
+      shortMint: (value) => value,
+      friendlyError: (error) => String(error?.message || error),
+      VOLUME_BOT_CLEANUP_GAS_LAMPORTS: 12_000_000,
+      volumeBotTransferSol: async () => { fixedTransferCalls += 1; }
+    }
+  );
+
+  const result = await retain(
+    { sourcePublicKey: "SOURCE" },
+    { publicKey: "GHOST" },
+    async () => true,
+    { drainAllSol: true }
+  );
+
+  assert.equal(action.kind, "cleanup-excess-sol");
+  assert.equal(drainCalls, 1);
+  assert.equal(fixedTransferCalls, 0);
+  assert.deepEqual(result, { closed: true, retained: true, sentLamports: 11_995_000 });
 });
 
 test("the durable worker lease permits every recovery action while sweeping", () => {
@@ -906,7 +951,7 @@ test("manual release wins stale workers and residue recovery keeps exactly one t
   assert.match(sweep, /preserveOneToken/);
   assert.match(sweep, /BigInt\(token\.rawAmount \|\| 0\) - oneTokenRaw/);
   assert.match(sweep, /retainedTargetRaw <= retainedUnit/);
-  assert.match(sweep, /VOLUME_BOT_CLEANUP_GAS_LAMPORTS/);
+  assert.match(sweep, /drainSolFromWallet\(keypair, destination\)/);
   assert.match(sweep, /row\.retainedResidue = true/);
   assert.match(sweep, /cleared = await mutateWalletStore/);
 });
