@@ -965,13 +965,58 @@
   }
   function renderWalletPositions() {
     const panel = $("[data-profile-panel]");
-    const positions = displayablePositions(state.positions);
-    panel.innerHTML = positions.length ? positions.map((position) => {
-      const key = position.tokenMint, quantity = positionQuantity(position), pnl = positionOpenPnl(position), walletCount = Math.max(1, Number(position.walletCount) || 1);
-      const pnlClass = pnl == null ? "" : (pnl >= 0 ? "up" : "down");
-      return `<button class="position-row coin-row" type="button" data-open-coin="${escapeHtml(key)}" data-chain-kind="sol"><img src="${escapeHtml(position.imageUrl || mascot(key))}" alt=""><span class="position-copy"><b>${escapeHtml(position.symbol || short(key))}</b><span>${escapeHtml(formatTokenQuantity(quantity))} tokens · ${walletCount} wallet${walletCount === 1 ? "" : "s"}</span></span><strong class="position-value"><b>${escapeHtml(positionValueText(position, "Pricing…"))}</b>${pnl != null ? `<small class="position-pnl ${pnlClass}">${pnl >= 0 ? "+" : ""}${pnl.toFixed(4)} SOL</small>` : ""}</strong></button>`;
-    }).join("") : emptyState("No open positions", "Coins you buy through SlimeWire appear here.");
-    panel.insertAdjacentHTML("afterbegin", `<div class="position-actions"><button type="button" data-send-sol>Send SOL</button><button type="button" data-receive>Receive</button></div>`);
+    const groups = state.wallets.map((wallet) => ({ wallet, summary: walletAssetSummary(wallet) })).filter((group) => group.summary.assets.length);
+    const groupsHtml = groups.map(({ wallet, summary }) => {
+      const coinValue = summary.coinsSol > 0 ? `${formatPositionSol(summary.coinsSol)} SOL` : (summary.hasPendingValue ? "Pricing…" : "0 SOL");
+      const rows = summary.assets.map((asset) => `
+        <article class="fun-wallet-position-row">
+          <button class="fun-position-coin" type="button" data-open-coin="${escapeHtml(asset.tokenMint)}" data-chain-kind="sol">
+            <img ${coinImageAttrs(asset)} alt="">
+            <span><b>${escapeHtml(asset.symbol || short(asset.tokenMint))}</b><small>${escapeHtml(formatTokenQuantity(asset.quantity))} tokens</small></span>
+            <strong>${asset.valueSol == null ? "Pricing…" : `${escapeHtml(formatPositionSol(asset.valueSol))} SOL`}</strong>
+          </button>
+          <div class="fun-position-sell-grid">
+            ${[25, 50, 100].map((percent) => `<button type="button" class="${percent === 100 ? "danger" : ""}" data-fun-position-sell="${escapeHtml(asset.tokenMint)}" data-fun-position-percent="${percent}" data-fun-position-wallet="${escapeHtml(wallet.publicKey)}" data-fun-position-wallet-label="${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}">${percent}%</button>`).join("")}
+            <button type="button" data-fun-position-custom="${escapeHtml(asset.tokenMint)}" data-fun-position-wallet="${escapeHtml(wallet.publicKey)}" data-fun-position-wallet-label="${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}" data-fun-position-symbol="${escapeHtml(asset.symbol || short(asset.tokenMint))}">Custom</button>
+          </div>
+        </article>`).join("");
+      return `<section class="fun-wallet-position-group"><header><span><b>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}</b><small>${escapeHtml(short(wallet.publicKey))}</small></span><strong>${escapeHtml(coinValue)}</strong></header>${rows}</section>`;
+    }).join("");
+    panel.innerHTML = `<div class="position-actions"><button type="button" data-send-sol>Send SOL</button><button type="button" data-receive>Receive</button></div>${groupsHtml || emptyState("No open positions", "Coins you buy through SlimeWire appear here.")}`;
+  }
+
+  function openFunWalletPositionCustom(button) {
+    const mint = String(button.dataset.funPositionCustom || "");
+    const walletPublicKey = String(button.dataset.funPositionWallet || "");
+    const walletLabel = String(button.dataset.funPositionWalletLabel || "Wallet");
+    const symbol = String(button.dataset.funPositionSymbol || short(mint));
+    openSheet(`<div class="sheet-title"><img src="${escapeHtml(mascot(mint))}" alt=""><div><h2>Custom sell</h2><p>${escapeHtml(symbol)} · ${escapeHtml(walletLabel)}</p></div></div><div class="field"><label>Percent to sell from this wallet</label><input data-fun-custom-sell-percent inputmode="numeric" type="number" min="1" max="100" step="1" value="100"><div class="amount-chips">${[10, 25, 50, 75, 100].map((percent) => `<button type="button" data-fun-custom-percent="${percent}">${percent}%</button>`).join("")}</div></div><button class="submit-trade sell" type="button" data-fun-position-sell="${escapeHtml(mint)}" data-fun-position-percent="custom" data-fun-position-wallet="${escapeHtml(walletPublicKey)}" data-fun-position-wallet-label="${escapeHtml(walletLabel)}">Review custom sell</button><p class="fineprint">Only this wallet is sold. Your other wallets holding ${escapeHtml(symbol)} stay untouched.</p>`);
+  }
+
+  async function sellFunWalletPosition(button) {
+    if (!(await ensureTradeReady())) return;
+    const tokenMint = String(button.dataset.funPositionSell || "").trim();
+    const walletPublicKey = String(button.dataset.funPositionWallet || "").trim();
+    const walletLabel = String(button.dataset.funPositionWalletLabel || "Wallet").trim();
+    const rawPercent = button.dataset.funPositionPercent === "custom" ? $("[data-fun-custom-sell-percent]")?.value : button.dataset.funPositionPercent;
+    const percent = Number.parseInt(String(rawPercent || ""), 10);
+    if (!tokenMint || !walletPublicKey || !Number.isInteger(percent) || percent < 1 || percent > 100) { toast("Choose a sell percent from 1 to 100.", true); return; }
+    if (!confirm(`Sell ${percent}% from ${walletLabel}? Other wallets stay untouched.`)) return;
+    button.disabled = true;
+    const oldText = button.textContent;
+    button.textContent = "Selling…";
+    const result = await post("/api/web/bundle/sell", { tokenMint, walletIndexes: [], walletPublicKeys: [walletPublicKey], percent, slippageBps: "400", manualSellAttemptId: attemptId("fun-wallet-sell") });
+    if (result.ok && result.data?.ok && Number(result.data.bundle?.successCount || 0) > 0) {
+      toast(`Sold ${percent}% from ${walletLabel}`);
+      closeSheet();
+      await Promise.all([loadWallets(true), loadPositions({ force: true })]);
+      renderWalletPositions();
+    } else {
+      const failure = result.data?.bundle?.results?.find((row) => !row.ok)?.message;
+      toast(failure || result.data?.message || result.data?.error || "Sell failed", true);
+      button.disabled = false;
+      button.textContent = oldText;
+    }
   }
   async function loadWalletActivity() {
     const panel = $("[data-profile-panel]"); panel.innerHTML = '<div class="skeleton-list"></div>';
@@ -1845,9 +1890,12 @@
     }
     pollFunVolume(rh);
   }
+  function funVolumeRunActive(bot) {
+    return Boolean(bot) && bot.status !== "completed" && !["done", "stopped"].includes(String(bot.stage || "").toLowerCase());
+  }
   function volumeStatusHtml(rows = []) {
     if (!rows.length) return "No active run.";
-    return rows.slice(0, 3).map((bot) => { const stats = bot.stats || {}, running = !["done", "stopped"].includes(bot.stage) && bot.status !== "completed"; return `<div class="volume-run"><b>${escapeHtml(bot.shortMint || short(bot.tokenMint))}<span>${escapeHtml(running ? bot.stage || "running" : "complete")}</span></b><p>Buys ${Number(stats.buys || 0)} · sells ${Number(stats.sells || 0)} · volume ${Number(stats.volumeSol || 0).toFixed(3)} SOL${Number(stats.sweptSol || 0) ? ` · swept ${Number(stats.sweptSol).toFixed(3)}` : ""}</p>${(bot.log || []).slice(0, 4).map((row) => `<small>${escapeHtml(typeof row === "string" ? row : row.message || "")}</small>`).join("")}</div>`; }).join("");
+    return rows.slice(0, 3).map((bot) => { const stats = bot.stats || {}, running = funVolumeRunActive(bot); return `<div class="volume-run"><b>${escapeHtml(bot.shortMint || short(bot.tokenMint))}<span>${escapeHtml(running ? bot.stage || "running" : "complete")}</span></b><p>Buys ${Number(stats.buys || 0)} · sells ${Number(stats.sells || 0)} · volume ${Number(stats.volumeSol || 0).toFixed(3)} SOL${Number(stats.sweptSol || 0) ? ` · swept ${Number(stats.sweptSol).toFixed(3)}` : ""}</p>${(bot.log || []).slice(0, 4).map((row) => `<small>${escapeHtml(typeof row === "string" ? row : row.message || "")}</small>`).join("")}</div>`; }).join("");
   }
   async function pollFunVolume(rh) {
     clearTimeout(state.volumePoll);
@@ -1876,14 +1924,20 @@
       result = await post("/api/web/volume-bot/start", { tokenMint: token, sourceWalletIndex: walletIndex, sourceWalletPublicKey: sourceWallet?.publicKey || "", rollingWallets: true, buyAmountSol: String((Number(min) + Number(max)) / 2), minBuyAmountSol: min, maxBuyAmountSol: max, poolSize: "3", maxRounds: "60", sellPercent: "100", buyBias: pattern === "ladder" ? "75" : "55", delaySecs, slippageBps: 600, sweepBack: true, keepDust: Boolean($("[data-volume-keep-dust]")?.checked), offsetSell: Boolean($("[data-volume-offset]")?.checked), staggerPattern: pattern, tradeAttemptId: attemptId("fun-volume") });
     }
     button.disabled = false; button.textContent = "Start";
-    if (result.ok && result.data?.ok) { toast("Volume run started"); pollFunVolume(rh); } else toast(result.data?.error || result.data?.message || "Could not start volume", true);
+    if (result.ok && result.data?.ok) { toast("Volume run started"); pollFunVolume(rh); }
+    else if (!rh) {
+      const latest = await request("/api/web/volume-bot");
+      const recovering = (latest.data?.bots || []).find((bot) => funVolumeRunActive(bot) && bot.stage === "sweeping");
+      toast(recovering ? "The previous run is finishing its wallet sweep. It will switch to complete automatically." : (result.data?.error || result.data?.message || "Could not start volume"), true);
+      pollFunVolume(false);
+    } else toast(result.data?.error || result.data?.message || "Could not start volume", true);
   }
   async function stopFunVolume() {
     const token = String($("[data-volume-token]")?.value || "").trim(), rh = isRh(token);
     let result;
     if (rh) result = await post("/api/web/rh/volume/stop", {});
     else {
-      const current = await request("/api/web/volume-bot"), run = (current.data?.bots || []).find((bot) => bot.tokenMint === token && bot.status !== "completed" && !["done", "stopped"].includes(bot.stage));
+      const current = await request("/api/web/volume-bot"), run = (current.data?.bots || []).find((bot) => bot.tokenMint === token && funVolumeRunActive(bot));
       if (!run) { toast("No active run for this coin.", true); return; }
       result = await post("/api/web/volume-bot/stop", { planId: run.id });
     }
@@ -2051,6 +2105,9 @@
     const fundWallet = event.target.closest("[data-fund-wallet]"); if (fundWallet) { await startWalletFunding(fundWallet.dataset.fundWallet, fundWallet); return; }
     const fundAmount = event.target.closest("[data-fund-amount]"); if (fundAmount) { const input = $("[data-fund-sol]"); if (input) input.value = fundAmount.dataset.fundAmount; return; }
     if (event.target.closest("[data-fund-copy]")) { await copyFundingAddress(); return; }
+    const customWalletSell = event.target.closest("[data-fun-position-custom]"); if (customWalletSell) { openFunWalletPositionCustom(customWalletSell); return; }
+    const customWalletPercent = event.target.closest("[data-fun-custom-percent]"); if (customWalletPercent) { const input = $("[data-fun-custom-sell-percent]"); if (input) input.value = customWalletPercent.dataset.funCustomPercent; return; }
+    const walletPositionSell = event.target.closest("[data-fun-position-sell]"); if (walletPositionSell) { await sellFunWalletPosition(walletPositionSell); return; }
     const coinButton = event.target.closest("[data-open-coin]"); if (coinButton) { closeSearch(); closeSheet(); await openCoin(coinButton.dataset.openCoin, coinButton.dataset.chainKind); return; }
     const chainButton = event.target.closest("[data-chain]"); if (chainButton) { state.chain = chainButton.dataset.chain; $$("[data-chain]").forEach((button) => button.classList.toggle("active", button.dataset.chain === state.chain)); loadFeed(true); return; }
     const feedButton = event.target.closest("[data-feed]"); if (feedButton) { state.feed = feedButton.dataset.feed; $$("[data-feed]").forEach((button) => button.classList.toggle("active", button === feedButton)); loadFeed(); return; }

@@ -1804,6 +1804,61 @@ body.launch-focus .panel-host { max-width: 1000px; margin: 0 auto; }
   gap: 10px;
 }
 
+.wallet-position-groups {
+  display: grid;
+  gap: 14px;
+}
+
+.wallet-position-group {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(114, 255, 35, 0.045), rgba(6, 12, 8, 0.84));
+}
+
+.wallet-position-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 0 2px 12px;
+}
+
+.wallet-position-head code {
+  margin-top: 4px;
+}
+
+.wallet-position-totals {
+  text-align: right;
+}
+
+.wallet-position-totals span,
+.wallet-position-totals strong {
+  display: block;
+}
+
+.wallet-position-totals span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.wallet-position-totals strong {
+  margin-top: 3px;
+  color: var(--green-2);
+}
+
+.wallet-position-row {
+  background: rgba(5, 10, 7, 0.72);
+}
+
+.wallet-position-actions {
+  flex: 0 1 420px;
+}
+
+.wallet-position-summary {
+  margin-bottom: 14px;
+}
+
 .row-card {
   display: flex;
   align-items: center;
@@ -4689,6 +4744,35 @@ code {
 
   .wallet-command-card .card-actions.compact {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .wallet-position-group {
+    padding: 11px;
+  }
+
+  .wallet-position-head {
+    align-items: flex-start;
+  }
+
+  .wallet-position-row {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .wallet-position-row .row-main {
+    min-width: calc(100% - 62px);
+  }
+
+  .wallet-position-actions {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    flex: 1 0 100%;
+    width: 100%;
+  }
+
+  .wallet-position-actions > * {
+    min-width: 0;
+    padding-inline: 7px;
   }
 }
 

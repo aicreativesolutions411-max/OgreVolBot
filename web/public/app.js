@@ -8094,7 +8094,7 @@ function ogreVolumeStageHtml() {
     </div>`;
 }
 function ogreAmbientClip(kind) {
-  if (kind === "volume") return (state.volumeBots || []).some((b) => b && b.status !== "completed") ? "running" : "idle";
+  if (kind === "volume") return (state.volumeBots || []).some(volumeBotIsActive) ? "running" : "idle";
   return "idle";
 }
 function ogreEventSfx(name) {
@@ -8127,7 +8127,7 @@ function ogreTickerTick() {
     if (hk) {
       tk.innerHTML = `<span class="os-dot"></span>` + hk.cap[1];
     } else if (ogreStage.kind === "volume") {
-      const active = (state.volumeBots || []).some((b) => b && b.status !== "completed");
+      const active = (state.volumeBots || []).some(volumeBotIsActive);
       tk.innerHTML = `<span class="os-dot"></span>` + (active ? "Swarm running — generating lifelike volume" : "SlimeBot idle — set a token and start");
     } else {
       tk.innerHTML = `<span class="os-dot"></span>` + (state.tradeToken ? "Coin loaded — set your size and SWAP" : "OgreSwap ready — paste a coin to appraise");
@@ -9582,8 +9582,13 @@ async function distributeFreshWallets() {
   }
 }
 
+function volumeBotIsActive(bot) {
+  const stage = String(bot?.stage || "").toLowerCase();
+  return Boolean(bot) && bot.status !== "completed" && !["done", "stopped"].includes(stage);
+}
+
 function volumeBotStageLabel(bot) {
-  if (bot.status === "completed") return "Finished";
+  if (!volumeBotIsActive(bot)) return "Finished";
   if (bot.stage === "sweeping") return "Sweeping back";
   if (bot.stage === "running") return "Running";
   return bot.stage || "Armed";
@@ -9610,7 +9615,7 @@ function volumeBotListHtml() {
   }
   return bgIndicator + bots.map((bot) => {
     const stats = bot.stats || {};
-    const active = bot.status !== "completed";
+    const active = volumeBotIsActive(bot);
     const log = (bot.log || []).slice(0, 6);
     return `
       <article class="volume-bot-status">
@@ -9642,7 +9647,7 @@ function slimeBotSegment(group, current, options) {
 
 function volumeBotQueueHtml() {
   const bots = Array.isArray(state.volumeBots) ? state.volumeBots : [];
-  const active = bots.filter((bot) => bot.status !== "completed");
+  const active = bots.filter(volumeBotIsActive);
   const smart = active.filter((bot) => bot.rolling);
   const spam = active.filter((bot) => !bot.rolling);
   const queued = (list) => list.reduce((sum, bot) => sum + Math.max(0, Number(bot.cycles || 0) - Number(bot.currentCycle || 0)), 0);
@@ -9712,7 +9717,7 @@ function volumeBotPanelHtml() {
 
         <div class="ovs-actions">
           <button class="primary vbot-config-start" data-vbot-start ${state.volumeBotBusy ? "disabled" : ""}>${state.volumeBotBusy ? "Starting..." : "Start SlimeBot"}</button>
-          ${(() => { const ab = (Array.isArray(state.volumeBots) ? state.volumeBots : []).find((b) => b && b.status !== "completed"); return ab ? `<button type="button" class="vbot-stop-sweep" data-vbot-stop="${escapeHtml(ab.id)}">&#9209; Stop &amp; Sweep Back</button>` : ""; })()}
+          ${(() => { const ab = (Array.isArray(state.volumeBots) ? state.volumeBots : []).find(volumeBotIsActive); return ab ? `<button type="button" class="vbot-stop-sweep" data-vbot-stop="${escapeHtml(ab.id)}">&#9209; Stop &amp; Sweep Back</button>` : ""; })()}
         </div>
         <p class="trade-status" data-vbot-status>${escapeHtml(state.volumeBotStatus || "Set a token, investment, and mode, then Start. Spends real SOL from the source wallet.")}</p>
 
@@ -9834,7 +9839,11 @@ async function startVolumeBot() {
     void loadVolumeBots();
   } catch (error) {
     state.volumeBotBusy = false;
-    setVolumeBotStatus(error.message);
+    await loadVolumeBots({ silent: true }).catch(() => {});
+    const recovering = (state.volumeBots || []).find((bot) => volumeBotIsActive(bot) && bot.stage === "sweeping");
+    setVolumeBotStatus(recovering
+      ? "The previous run is completing its final wallet sweep. It will change to Finished automatically; no duplicate bot was started."
+      : error.message);
     render();
   }
 }
@@ -15207,6 +15216,8 @@ async function sellPositionPercent(tokenMint, percentText = "100", options = {})
     }
     const position = portfolioPositions().find((item) => String(item.tokenMint) === String(tokenMint));
     const tokenLabel = position?.symbol || position?.name || shortAddress(tokenMint);
+    const scopedWalletPublicKey = String(options.walletPublicKey || "").trim();
+    const scopedWalletLabel = String(options.walletLabel || "").trim();
     const connectedPosition = Boolean(position?.source === "connected-wallet" || position?.viewOnly || String(position?.walletIndex || "").toLowerCase() === "connected");
     const connectedPublicKey = String(connectedBrowserWallet()?.publicKey || "").trim();
     if (connectedPosition && connectedPublicKey) {
@@ -15263,7 +15274,9 @@ async function sellPositionPercent(tokenMint, percentText = "100", options = {})
       lines: [
         `Exit ${percent}% of ${tokenLabel}?`,
         `Mint: ${tokenMint}`,
-        "Wallets: all managed wallets holding this token",
+        scopedWalletPublicKey
+          ? `Wallet: ${scopedWalletLabel || shortAddress(scopedWalletPublicKey)} only`
+          : "Wallets: all managed wallets holding this token",
         "Slippage: 4%",
         "Expected SOL, minimum output, and route details are shown before the sell is submitted."
       ],
@@ -15294,7 +15307,8 @@ async function sellPositionPercent(tokenMint, percentText = "100", options = {})
       method: "POST",
       body: JSON.stringify({
         tokenMint,
-        walletIndexes: "all",
+        walletIndexes: scopedWalletPublicKey ? [] : "all",
+        walletPublicKeys: scopedWalletPublicKey ? [scopedWalletPublicKey] : [],
         percent,
         slippageBps: "400",
         manualSellAttemptId,
@@ -15933,13 +15947,92 @@ function walletBalanceLine(wallet) {
   return `<span>Balance: ${escapeHtml(sol)} | ${escapeHtml(tokenText)}${escapeHtml(warnings)}</span>`;
 }
 
+function walletPositionGroups() {
+  const wallets = displayWallets();
+  const byPublicKey = new Map(wallets.map((wallet) => [String(wallet.publicKey || ""), wallet]));
+  const groups = new Map();
+  for (const position of portfolioPositions()) {
+    for (const holding of Array.isArray(position.walletPositions) ? position.walletPositions : []) {
+      const walletPublicKey = String(holding?.walletPublicKey || "").trim();
+      const wallet = byPublicKey.get(walletPublicKey);
+      const amount = Number(holding?.uiAmountNum ?? holding?.uiAmount);
+      if (!wallet || !(amount > 0)) continue;
+      if (!groups.has(walletPublicKey)) groups.set(walletPublicKey, { wallet, positions: [] });
+      groups.get(walletPublicKey).positions.push({ position, holding, amount });
+    }
+  }
+  return wallets
+    .map((wallet) => groups.get(String(wallet.publicKey || "")))
+    .filter((group) => group?.positions?.length);
+}
+
+function walletPositionValueSol(position, amount) {
+  const totalAmount = Number(position?.uiAmountNum);
+  const totalValue = Number(position?.estimatedValueSol);
+  if (!(amount > 0) || !(totalAmount > 0) || !Number.isFinite(totalValue) || totalValue < 0) return null;
+  return totalValue * (amount / totalAmount);
+}
+
+function walletPositionRowHtml(entry, wallet) {
+  const { position, holding, amount } = entry;
+  const valueSol = walletPositionValueSol(position, amount);
+  const valueLabel = valueSol === null ? (position.valuePending ? "updating" : "price unavailable") : `${valueSol.toFixed(valueSol >= 1 ? 4 : 6)} SOL`;
+  const walletPublicKey = String(wallet.publicKey || holding.walletPublicKey || "");
+  return `
+    <article class="row-card position wallet-position-row with-avatar is-clickable" data-token-chart="${escapeHtml(position.tokenMint)}" data-token-chart-source="wallet-position-row" title="Open chart and trade this position">
+      ${livePairAvatarHtml(position)}
+      <div class="row-main">
+        <strong>${escapeHtml(position.symbol || position.shortMint)}</strong>
+        ${position.name ? `<small>${escapeHtml(position.name)}</small>` : ""}
+        <span>${escapeHtml(holding.uiAmount || String(amount))} tokens</span>
+        <small>Value in this wallet: ${escapeHtml(valueLabel)}</small>
+      </div>
+      <div class="card-actions compact wallet-position-actions">
+        <button data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="25" data-position-sell-wallet="${escapeHtml(walletPublicKey)}" data-position-sell-wallet-label="${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}">25%</button>
+        <button data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="50" data-position-sell-wallet="${escapeHtml(walletPublicKey)}" data-position-sell-wallet-label="${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}">50%</button>
+        <button class="danger-lite" data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="100" data-position-sell-wallet="${escapeHtml(walletPublicKey)}" data-position-sell-wallet-label="${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}">100%</button>
+        <button data-position-sell-custom="${escapeHtml(position.tokenMint)}" data-position-sell-wallet="${escapeHtml(walletPublicKey)}" data-position-sell-wallet-label="${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}">Custom</button>
+        <button class="primary" data-smart-chart-token="${escapeHtml(position.tokenMint)}">Chart</button>
+      </div>
+    </article>`;
+}
+
+function walletPositionGroupHtml(group) {
+  const { wallet, positions } = group;
+  const balance = state.balances.find((row) => Number(row.index) === Number(wallet.index));
+  const solLabel = Number.isFinite(Number(balance?.sol)) ? `${Number(balance.sol).toFixed(4)} SOL` : "SOL updating";
+  const totalValue = positions.reduce((sum, entry) => {
+    const value = walletPositionValueSol(entry.position, entry.amount);
+    return value === null ? sum : sum + value;
+  }, 0);
+  const hasValue = positions.some((entry) => walletPositionValueSol(entry.position, entry.amount) !== null);
+  return `
+    <section class="wallet-position-group">
+      <header class="wallet-position-head">
+        <div class="wallet-row-main">
+          <div class="user-avatar mini" aria-hidden="true">${userAvatarHtml(String(wallet.index))}</div>
+          <div>
+            <strong>${escapeHtml(wallet.label || `Wallet ${wallet.index}`)}${wallet.sessionWallet ? ` <span class="session-wallet-badge">Session</span>` : ""}</strong>
+            <code>${escapeHtml(shortAddress(wallet.publicKey || ""))}</code>
+          </div>
+        </div>
+        <div class="wallet-position-totals">
+          <span>${escapeHtml(solLabel)}</span>
+          <strong>${hasValue ? `${totalValue.toFixed(totalValue >= 1 ? 4 : 6)} SOL in coins` : `${positions.length} coin${positions.length === 1 ? "" : "s"}`}</strong>
+        </div>
+      </header>
+      <div class="table-list">${positions.map((entry) => walletPositionRowHtml(entry, wallet)).join("")}</div>
+    </section>`;
+}
+
 function positionsHtml() {
   const rows = portfolioPositions();
+  const walletGroups = walletPositionGroups();
   const header = `
     <section class="account-check-card">
       <div>
         <h3>Open Positions</h3>
-        <p>Only current token holdings show here. Use Refresh after buys, sells, or transfers.</p>
+        <p>Positions are grouped by wallet. Sell 25%, 50%, 100%, or enter a custom percentage from one wallet at a time.</p>
       </div>
       <button class="primary" data-refresh-all>Refresh Positions</button>
       <a class="button" href="/cash/?tab=send&asset=SOL">Send SOL</a>
@@ -15950,11 +16043,17 @@ function positionsHtml() {
     ${bagScanSectionHtml()}
   `;
   if (!rows.length) return `${header}${emptyState("No open positions", "Current token holdings will show here after a wallet holds non-zero tokens.")}`;
+  if (!walletGroups.length) {
+    return `${header}<section class="account-check-card"><div><h3>Wallet breakdown updating</h3><p>Your positions are visible below while the per-wallet quantities finish refreshing.</p></div></section><div class="table-list">${rows.map(positionRowHtml).join("")}</div>`;
+  }
   return `
     ${header}
-    <div class="table-list">
-      ${rows.map(positionRowHtml).join("")}
-    </div>
+    <section class="pnl-summary wallet-position-summary">
+      <div><span>Wallets holding coins</span><strong>${walletGroups.length}</strong></div>
+      <div><span>Open wallet positions</span><strong>${walletGroups.reduce((sum, group) => sum + group.positions.length, 0)}</strong></div>
+      <div><span>Unique coins</span><strong>${rows.length}</strong></div>
+    </section>
+    <div class="wallet-position-groups">${walletGroups.map(walletPositionGroupHtml).join("")}</div>
   `;
 }
 
@@ -23998,7 +24097,9 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
     await sellPositionPercent(target.dataset.positionSell || "", target.dataset.positionSellPercent || "100", {
-      slippageBps: state.activeTab === "smartChart" ? ($("[data-chart-buy-slippage]")?.value || "400") : "400"
+      slippageBps: state.activeTab === "smartChart" ? ($("[data-chart-buy-slippage]")?.value || "400") : "400",
+      walletPublicKey: target.dataset.positionSellWallet || "",
+      walletLabel: target.dataset.positionSellWalletLabel || ""
     });
     return;
   }
@@ -24011,7 +24112,9 @@ document.addEventListener("click", async (event) => {
       confirmLabel: "Sell"
     });
     if (percent) await sellPositionPercent(target.dataset.positionSellCustom || "", percent, {
-      slippageBps: state.activeTab === "smartChart" ? ($("[data-chart-buy-slippage]")?.value || "400") : "400"
+      slippageBps: state.activeTab === "smartChart" ? ($("[data-chart-buy-slippage]")?.value || "400") : "400",
+      walletPublicKey: target.dataset.positionSellWallet || "",
+      walletLabel: target.dataset.positionSellWalletLabel || ""
     });
     return;
   }
@@ -25790,7 +25893,7 @@ if (!window.__slimeVolumeBotTimer) {
   window.__slimeVolumeBotTimer = setInterval(() => {
     if (document.visibilityState !== "visible") return;
     if (state.activeTab !== "volume") return;
-    const hasActive = (state.volumeBots || []).some((bot) => bot.status !== "completed");
+    const hasActive = (state.volumeBots || []).some(volumeBotIsActive);
     if (!hasActive) return;
     void loadVolumeBots();
   }, 7000);

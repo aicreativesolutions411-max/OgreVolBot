@@ -113,6 +113,18 @@ test("rolling volume forces sells and can replenish cleanup gas", () => {
   assert.match(topUp, /volumeBotTransferSol\(source, record\.publicKey, needed\)/);
 });
 
+test("a proven-empty rolling sweep reconciles to completed before list or restart", () => {
+  const reconcile = functionBody("reconcileFinishedRollingVolumeBots");
+  assert.match(reconcile, /plan\.config\?\.rollingWallets/);
+  assert.match(reconcile, /livePoolWallets\.length/);
+  assert.match(reconcile, /plan\.botStage = "done"/);
+  assert.match(reconcile, /plan\.status = "completed"/);
+  assert.match(reconcile, /plan\.pendingAction = null/);
+
+  assert.match(functionBody("webStartVolumeBotCore"), /await reconcileFinishedRollingVolumeBots\(userId\)/);
+  assert.match(functionBody("webVolumeBotRows"), /await reconcileFinishedRollingVolumeBots\(userId\)/);
+});
+
 test("rolling wallets and every fixed trade checkpoint before external money moves", () => {
   const rolling = functionBody("runRollingVolumeBotStep");
   const poolAt = rolling.indexOf("plan.pool.push(poolEntry)");
