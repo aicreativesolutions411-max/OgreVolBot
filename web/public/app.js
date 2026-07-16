@@ -15825,7 +15825,7 @@ function backgroundWalletsCtaHtml() {
     </section>`;
 }
 
-async function sweepBackgroundWallets() {
+async function sweepBackgroundWallets(attempt = 0) {
   if (state.sweepBackgroundPending) return;
   state.sweepBackgroundPending = true;
   state.sweepBackgroundStatus = "Sweeping background wallets back to your source wallet...";
@@ -15833,12 +15833,17 @@ async function sweepBackgroundWallets() {
   try {
     const data = await api("/api/web/wallets/sweep-background", {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify({ preserveOneToken: true }),
       dedupe: false,
       timeoutMs: API_LONG_ACTION_TIMEOUT_MS
     });
-    state.sweepBackgroundStatus = data?.summary || "Background wallets swept back to your source wallet.";
+    const keepFollowing = attempt < 60 && (data?.queued || (Number(data?.pending || 0) > 0 && Number(data?.soldCount || 0) > 0));
+    state.sweepBackgroundStatus = `${data?.summary || "Background wallet recovery started."}${keepFollowing ? " Finishing automatically…" : ""}`;
     await refreshWalletNow({ force: true, deep: true, reason: "sweep-background" }).catch(() => {});
+    if (keepFollowing) {
+      clearTimeout(state.sweepBackgroundFollowup);
+      state.sweepBackgroundFollowup = setTimeout(() => sweepBackgroundWallets(attempt + 1), 5_000);
+    }
   } catch (error) {
     state.sweepBackgroundStatus = error?.message ? `Sweep failed: ${error.message}` : "Sweep failed. Try again.";
   } finally {

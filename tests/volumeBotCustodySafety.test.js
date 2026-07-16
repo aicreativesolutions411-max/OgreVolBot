@@ -949,7 +949,13 @@ test("manual release wins stale workers and residue recovery keeps exactly one t
   const sweep = functionBody("webSweepBackgroundWallets");
   assert.match(sweep, /recoveryPolicyByWallet/);
   assert.match(sweep, /preserveOneToken/);
-  assert.match(sweep, /BigInt\(token\.rawAmount \|\| 0\) - oneTokenRaw/);
+  assert.match(sweep, /const tokenRaw = BigInt\(token\.rawAmount \|\| 0\)/);
+  assert.match(sweep, /sellRawAmount: tokenRaw - oneTokenRaw/);
+  assert.match(sweep, /preserveOneToken: body\.preserveOneToken === undefined[\s\S]{0,180}Boolean\(body\.preserveOneToken\)/);
+  assert.match(sweep, /waitForVolumeRecoveryBalances/);
+  assert.match(sweep, /recordTradeEvents\(tradeEvents\)/);
+  assert.match(sweep, /recoveryStatsByPlanId/);
+  assert.match(sweep, /plan\.stats\.sells = Number\(plan\.stats\.sells \|\| 0\) \+ recovered\.sells/);
   assert.match(sweep, /retainedTargetRaw <= retainedUnit/);
   assert.match(sweep, /drainSolFromWallet\(keypair, destination\)/);
   assert.match(sweep, /row\.retainedResidue = true/);

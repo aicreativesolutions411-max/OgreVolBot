@@ -1972,7 +1972,20 @@
     toast("Run halted. You can start a new volume run now.");
     pollFunVolume(false);
   }
-  async function sweepFunVolume() { const result = await post("/api/web/wallets/sweep-background", {}, { timeout: 180_000, noRetry: true }); toast(result.ok && result.data?.ok ? (result.data.summary || "Background wallet recovery started") : (result.data?.error || "Sweep failed"), !(result.ok && result.data?.ok)); pollFunVolume(false); }
+  async function sweepFunVolume(attempt = 0) {
+    if (state.volumeSweepPending) return;
+    state.volumeSweepPending = true;
+    const result = await post("/api/web/wallets/sweep-background", { preserveOneToken: true }, { timeout: 180_000, noRetry: true });
+    state.volumeSweepPending = false;
+    const ok = Boolean(result.ok && result.data?.ok);
+    const keepFollowing = ok && attempt < 60 && (result.data?.queued || (Number(result.data?.pending || 0) > 0 && Number(result.data?.soldCount || 0) > 0));
+    if (attempt === 0 || !keepFollowing) toast(ok ? (result.data.summary || "Background wallet recovery started") : (result.data?.error || "Sweep failed"), !ok);
+    pollFunVolume(false);
+    if (keepFollowing) {
+      clearTimeout(state.volumeSweepFollowup);
+      state.volumeSweepFollowup = setTimeout(() => sweepFunVolume(attempt + 1), 5_000);
+    }
+  }
   async function openBundleSheet() {
     if (!(await ensureAccount())) return;
     await loadWallets();

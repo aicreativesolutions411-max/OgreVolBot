@@ -548,7 +548,8 @@ test("coin setup exposes fast buys, ladder exits, one-wallet RH trades, and the 
   assert.match(js, /\/api\/web\/volume-bot\/start/);
   assert.match(js, /\/api\/web\/volume-bot\/stop/);
   assert.match(js, /\/api\/web\/wallets\/sweep-background/);
-  assert.match(js, /sweep-background", \{\}, \{ timeout: 180_000, noRetry: true \}/);
+  assert.match(js, /sweep-background", \{ preserveOneToken: true \}, \{ timeout: 180_000, noRetry: true \}/);
+  assert.match(js, /setTimeout\(\(\) => sweepFunVolume\(attempt \+ 1\), 5_000\)/);
   assert.match(js, /\/api\/web\/rh\/volume\/start/);
   assert.match(js, /\/api\/web\/rh\/fund-with-sol/);
 });
