@@ -142,6 +142,18 @@ test("the durable worker lease permits every recovery action while sweeping", ()
   assert.match(worker, /botStage === "running" \|\| cleanupClaim/);
 });
 
+test("a landed cleanup sell clears an unknown checkpoint from the proven zero balance", () => {
+  const reconcile = functionBody("reconcileLandedVolumeCleanupSell");
+  assert.match(reconcile, /pending\?\.kind \|\| ""\) !== "cleanup-sell"/);
+  assert.match(reconcile, /\["submitting", "outcome_unknown"\]/);
+  assert.match(reconcile, /getReliableTokenBalanceForMint/);
+  assert.match(reconcile, /BigInt\(token\?\.rawAmount \|\| 0\) > 0n/);
+  assert.match(reconcile, /status: "reconciled_from_balance"/);
+  assert.match(reconcile, /plan\.pendingAction = null/);
+  assert.match(reconcile, /plan\.recoveryNotBeforeAt = null/);
+  assert.match(functionBody("processVolumeBotPlan"), /await reconcileLandedVolumeCleanupSell\(plan, walletStore, persist\)/);
+});
+
 test("a proven-empty rolling sweep reconciles to completed before list or restart", () => {
   const reconcile = functionBody("reconcileFinishedRollingVolumeBots");
   assert.match(reconcile, /plan\.config\?\.rollingWallets/);
