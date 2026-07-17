@@ -4,6 +4,8 @@ import fs from "node:fs";
 
 const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
 const chartLabSource = fs.readFileSync(new URL("../web/public/chart-lab.html", import.meta.url), "utf8");
+const terminalSource = fs.readFileSync(new URL("../web/public/gg.html", import.meta.url), "utf8");
+const tokenPageSource = fs.readFileSync(new URL("../web/public/t.html", import.meta.url), "utf8");
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const packageSource = fs.readFileSync(new URL("../package.json", import.meta.url), "utf8");
 
@@ -105,6 +107,15 @@ test("chart bootstrap and browser fast path are chain-aware for Robinhood", () =
   assert.match(chartLabSource, /NETWORK=\/\^0x\[0-9a-f\]\{40\}\$\/i\.test\(CA\)\?'robinhood':'solana'/);
   assert.match(chartLabSource, /toLowerCase\(\)===NETWORK/);
   assert.match(functionBody(appSource, "tokenRefFromMint"), /\? "robinhood" : "solana"/);
+});
+
+test("classic mobile terminal hydrates a pasted Robinhood CA from the saved Sushi launch", () => {
+  const hydrate = functionBody(terminalSource, "rhHydrateChartRow");
+  assert.match(hydrate, /\/api\/web\/chart\/bootstrap\?token=/);
+  assert.match(hydrate, /pairAddress/);
+  assert.match(functionBody(terminalSource, "rhNativeChartFrame"), /\/chart-lab\.html\?ca=/);
+  assert.match(functionBody(terminalSource, "renderRhTrade"), /Promise\.all\(\[rhEnrichRows\(\[r\]\),rhHydrateChartRow\(r\)\]\)/);
+  assert.match(tokenPageSource, /\^0x\[0-9a-f\]\{40\}\$\/i\.test\(rawMint\)/);
 });
 
 test("chart prefetch and debug commands are wired", () => {
